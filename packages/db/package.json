@@ -1,0 +1,23 @@
+{
+  "name": "@luoome/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Drizzle schema + repository 实现 + in-memory repos（见 plan.md 跨包契约）",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@luoome/core": "workspace:*",
+    "better-sqlite3": "^12.11.1",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}

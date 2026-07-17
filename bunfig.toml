@@ -1,0 +1,6 @@
+# luoome Bun 配置
+# 文档：https://bun.sh/docs/runtime/bunfig
+
+[install]
+# 新装依赖写入精确版本号，保证 monorepo 可复现
+exact = true

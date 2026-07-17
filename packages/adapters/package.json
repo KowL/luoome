@@ -1,0 +1,19 @@
+{
+  "name": "@luoome/adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "行情 / LLM 适配器接口 + v0.1 mock 实现与 fixtures（见 plan.md 跨包契约）",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@luoome/core": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  }
+}

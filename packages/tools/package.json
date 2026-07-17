@@ -1,0 +1,21 @@
+{
+  "name": "@luoome/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "defineTool + toolRegistry + 8 个 v0.1 tool（6 read + 2 advice，见 plan.md 跨包契约）",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@luoome/adapters": "workspace:*",
+    "@luoome/core": "workspace:*",
+    "@luoome/db": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}

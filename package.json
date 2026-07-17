@@ -1,0 +1,28 @@
+{
+  "name": "luoome",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "luoome —— 本地优先的个人投资管理 advisor agent（罗网 + 织机）",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "for d in packages/* apps/*; do if find \"$d\" -maxdepth 4 -name '*.ts' -not -path '*/node_modules/*' | grep -q .; then echo \"== typecheck $d\"; (cd \"$d\" && tsc --noEmit) || exit 1; fi; done",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "build": "for d in packages/* apps/*; do if [ -f \"$d/src/index.ts\" ]; then echo \"== build $d\"; bun build \"$d/src/index.ts\" --outdir \"$d/dist\" --target bun --packages external || exit 1; fi; done"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "packageManager": "bun@1.3.11"
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@luoome/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "luoome 命令行入口：tools/advice/mcp serve/tui/web serve（mcp/tui/web 懒加载，见 plan.md 跨包契约）",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@luoome/core": "workspace:*",
+    "@luoome/mcp": "workspace:*",
+    "@luoome/tools": "workspace:*",
+    "@luoome/tui": "workspace:*",
+    "@luoome/web": "workspace:*"
+  }
+}
