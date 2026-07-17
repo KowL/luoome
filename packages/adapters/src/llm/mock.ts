@@ -1,0 +1,222 @@
+import type {
+  AdviceDecision,
+  AdviceHorizon,
+  AdviceReasoning,
+  LLMGenerateRequest,
+} from '@luoome/core';
+
+import { hashString, mulberry32, pickDeterministic } from '../internal/deterministic.js';
+import type { LLMAdapter, LLMGenerateResult } from './types.js';
+
+/** system prompt 标识（ARCHITECTURE §6.3 的两种 advice 场景）。 */
+export const MOCK_LLM_SYSTEM_ANALYZE_STOCK = 'analyze_stock';
+export const MOCK_LLM_SYSTEM_ANALYZE_POSITION = 'analyze_position';
+
+/** MockLLMAdapter 输出的结构化分析结果（analyze_stock / analyze_position 共用形状）。 */
+export interface MockAnalysisOutput {
+  readonly decision: AdviceDecision;
+  readonly confidence: number;
+  readonly horizon: AdviceHorizon;
+  readonly reasoning: AdviceReasoning;
+  readonly risks: readonly string[];
+}
+
+type MockMode = 'analyze_stock' | 'analyze_position' | 'generic';
+
+/** 仅依赖 safeParse 的最小 schema 投影（zod schema 天然满足）。 */
+interface SchemaLike {
+  safeParse(input: unknown): { success: boolean; data?: unknown; error?: unknown };
+}
+
+const isSchemaLike = (schema: unknown): schema is SchemaLike =>
+  typeof schema === 'object' &&
+  schema !== null &&
+  typeof (schema as { safeParse?: unknown }).safeParse === 'function';
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+
+/**
+ * mock 无法在类型层构造任意 T：正确性由 schema safeParse 在运行时保证
+ * （ARCHITECTURE §6.3 schema-constrained decoding），这里经 unknown 断言。
+ */
+const asGenerateResult = <T>(data: unknown, raw: string): LLMGenerateResult<T> => {
+  const base = typeof data === 'object' && data !== null ? data : {};
+  return { ...(base as object), raw } as unknown as LLMGenerateResult<T>;
+};
+
+const readString = (record: Record<string, unknown> | null, key: string): string | null => {
+  const value = record?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+};
+
+const readNumber = (record: Record<string, unknown> | null, key: string): number | null => {
+  const value = record?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+};
+
+/** 从 data 中提取 stockId：顶层 → holding/position/stock/quote 内嵌。 */
+const extractStockId = (data: unknown): string => {
+  const record = asRecord(data);
+  if (!record) return 'UNKNOWN';
+  for (const key of ['stockId', 'subjectId', 'code']) {
+    const value = readString(record, key);
+    if (value) return value;
+  }
+  for (const key of ['holding', 'position', 'stock', 'quote']) {
+    const value = readString(asRecord(record[key]), 'stockId');
+    if (value) return value;
+  }
+  return 'UNKNOWN';
+};
+
+interface PositionContext {
+  readonly avgCost: number;
+  readonly quantity: number;
+}
+
+/** 从 data 中提取持仓上下文（holding / position）。 */
+const extractPosition = (data: unknown): PositionContext | null => {
+  const record = asRecord(data);
+  if (!record) return null;
+  for (const key of ['holding', 'position']) {
+    const inner = asRecord(record[key]);
+    const avgCost = readNumber(inner, 'avgCost');
+    const quantity = readNumber(inner, 'quantity');
+    if (avgCost !== null && quantity !== null && avgCost > 0 && quantity > 0) {
+      return { avgCost, quantity };
+    }
+  }
+  return null;
+};
+
+/** 从 data 中提取最新价（quote.close / quotes[stockId].close / price）。 */
+const extractClose = (data: unknown, stockId: string): number | null => {
+  const record = asRecord(data);
+  if (!record) return null;
+  const direct = readNumber(asRecord(record.quote), 'close') ?? readNumber(record, 'price');
+  if (direct !== null) return direct;
+  const quotes = asRecord(record.quotes);
+  return readNumber(asRecord(quotes?.[stockId]), 'close');
+};
+
+const DECISIONS: readonly AdviceDecision[] = ['buy', 'sell', 'hold', 'watch', 'avoid'];
+const HORIZONS: readonly AdviceHorizon[] = ['intraday', 'short', 'medium', 'long'];
+
+const EVIDENCE_POOL = [
+  '日线 MA5/MA10/MA20 粘合，方向待选择',
+  '近 5 日成交量低于 20 日均量',
+  '近 20 日价格波动率处于历史中枢',
+  '战法扫描未触发强信号',
+] as const;
+
+const COUNTER_POOL = [
+  '所属板块近期整体回暖',
+  '大盘系统性风险尚未释放',
+  '消息面存在不确定性',
+] as const;
+
+const RISK_POOL = ['大盘系统性下行风险', '行业政策变化风险', '个股流动性风险'] as const;
+
+/**
+ * MockLLMAdapter（MVP-TASK §2.5 mock-llm）。
+ * 不调任何外部 API；generate 按 data 中的 stockId + 持仓上下文生成
+ * deterministic 分析结果（同一输入同一输出），并按传入 zod schema parse，
+ * parse 失败时返回稳定 fallback。
+ */
+export class MockLLMAdapter implements LLMAdapter {
+  readonly name = 'mock-llm';
+
+  generate<T = unknown>(request: LLMGenerateRequest): Promise<LLMGenerateResult<T>> {
+    const mode = this.detectMode(request.system);
+    const stockId = extractStockId(request.data);
+    const candidate = this.buildAnalysis(mode, stockId, request.data);
+    const raw = JSON.stringify({
+      mock: true,
+      adapter: this.name,
+      mode,
+      stockId,
+      seed: hashString(`${mode}|${stockId}`),
+      note: 'deterministic mock reasoning（v0.1 不接真实 LLM）',
+    });
+
+    const schema = request.schema;
+    if (isSchemaLike(schema)) {
+      const parsed = schema.safeParse(candidate);
+      if (parsed.success) {
+        return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
+      }
+      // parse 失败 → 稳定 fallback（同样尝试过 schema；仍失败则原样返回 fallback）
+      const fallback = this.fallbackAnalysis(stockId);
+      const reparsed = schema.safeParse(fallback);
+      return Promise.resolve(asGenerateResult<T>(reparsed.success ? reparsed.data : fallback, raw));
+    }
+
+    return Promise.resolve(asGenerateResult<T>(candidate, raw));
+  }
+
+  private detectMode(system: string): MockMode {
+    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
+    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
+    return 'generic';
+  }
+
+  /** 核心生成逻辑：decision/confidence/horizon 由 stockId hash + 持仓上下文决定。 */
+  private buildAnalysis(mode: MockMode, stockId: string, data: unknown): MockAnalysisOutput {
+    const seed = hashString(`${mode}|${stockId}`);
+    const rand = mulberry32(seed);
+
+    let decision = pickDeterministic(DECISIONS, seed);
+    let confidence = 40 + (seed % 55); // 40-94
+    const horizon = pickDeterministic(HORIZONS, hashString(`horizon|${mode}|${stockId}`));
+
+    let premise = `mock 分析（${mode}）：${stockId} 综合信号指向「${decision}」。`;
+
+    // 持仓上下文调整：浮盈 ≥15% 止盈优先；浮亏 ≥10% 转持有观望。
+    const position = extractPosition(data);
+    const close = extractClose(data, stockId);
+    if (position && close !== null) {
+      const pnlRate = (close - position.avgCost) / position.avgCost;
+      const pnlPct = (pnlRate * 100).toFixed(1);
+      if (pnlRate >= 0.15) {
+        decision = 'sell';
+        confidence = Math.max(confidence, 70);
+        premise = `mock 分析（${mode}）：${stockId} 持仓浮盈 ${pnlPct}%，建议分批止盈。`;
+      } else if (pnlRate <= -0.1) {
+        decision = 'hold';
+        premise = `mock 分析（${mode}）：${stockId} 持仓浮亏 ${pnlPct}%，建议持有等待修复。`;
+      }
+    }
+
+    const reasoning: AdviceReasoning = {
+      premise,
+      evidence: [
+        pickDeterministic(EVIDENCE_POOL, Math.floor(rand() * 1000)),
+        pickDeterministic(EVIDENCE_POOL, Math.floor(rand() * 1000) + 1),
+      ],
+      counterEvidence: [pickDeterministic(COUNTER_POOL, Math.floor(rand() * 1000))],
+    };
+
+    const risks = [
+      pickDeterministic(RISK_POOL, Math.floor(rand() * 1000)),
+      pickDeterministic(RISK_POOL, Math.floor(rand() * 1000) + 2),
+    ];
+
+    return { decision, confidence, horizon, reasoning, risks };
+  }
+
+  /** 稳定 fallback：与输入无关（除 stockId），保证 schema 失败时输出仍可预测。 */
+  private fallbackAnalysis(stockId: string): MockAnalysisOutput {
+    return {
+      decision: 'watch',
+      confidence: 50,
+      horizon: 'short',
+      reasoning: {
+        premise: `mock 兜底：暂时无法形成对 ${stockId} 的有效判断，建议观望。`,
+        evidence: ['mock 兜底：结构化输出校验未通过，降级为观望'],
+        counterEvidence: ['mock 兜底：观望本身也可能错失波动机会'],
+      },
+      risks: ['mock 兜底：本结果为降级输出，参考价值有限'],
+    };
+  }
+}
