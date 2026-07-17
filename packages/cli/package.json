@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@luoome/adapters": "workspace:*",
     "@luoome/core": "workspace:*",
+    "@luoome/db": "workspace:*",
     "@luoome/mcp": "workspace:*",
     "@luoome/tools": "workspace:*",
     "@luoome/tui": "workspace:*",
