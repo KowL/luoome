@@ -1,0 +1,442 @@
+import {
+  type Account,
+  type Advice,
+  type AdviceOutcome,
+  type Holding,
+  InvariantError,
+  money,
+  quantity,
+  type RepositoryRegistry,
+  STANDARD_DISCLAIMERS,
+  type Stock,
+  stockCode,
+  type Trade,
+} from '@luoome/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+/**
+ * 仓储契约测试套件：Drizzle 实现与 in-memory 实现必须满足同一组行为。
+ * 每个测试前通过 factory 拿到全新空库，测试后 close。
+ */
+export interface ContractHandle {
+  readonly repos: RepositoryRegistry;
+  /** 读取已回填的 outcome（具体类的扩展方法，供 recordOutcome 断言）。 */
+  readonly readOutcome: (adviceId: string) => Promise<AdviceOutcome | null>;
+  readonly close?: () => void;
+}
+
+// ---------- fixtures ----------
+
+const T0 = new Date('2026-07-01T01:00:00.000Z');
+const T1 = new Date('2026-07-02T01:00:00.000Z');
+const T2 = new Date('2026-07-03T01:00:00.000Z');
+const T3 = new Date('2026-07-04T01:00:00.000Z');
+const FAR_FUTURE = new Date('2099-01-01T00:00:00.000Z');
+const FAR_PAST = new Date('2000-01-01T00:00:00.000Z');
+
+export const makeAccount = (id: string, overrides: Partial<Account> = {}): Account => ({
+  id,
+  name: `账户-${id}`,
+  kind: 'mock',
+  currency: 'CNY',
+  initialCapital: money(1_000_000),
+  createdAt: T0,
+  ...overrides,
+});
+
+export const makeStock = (id: string, code: string, overrides: Partial<Stock> = {}): Stock => ({
+  id,
+  code: stockCode(code),
+  exchange: 'SZ',
+  name: `股票-${code}`,
+  industry: '制造业',
+  ...overrides,
+});
+
+export const makeHolding = (id: string, overrides: Partial<Holding> = {}): Holding => ({
+  id,
+  accountId: 'acc-1',
+  stockId: 'stk-1',
+  quantity: 1000,
+  availableQuantity: 800,
+  avgCost: money(12.3456),
+  openedAt: T0,
+  closedAt: null,
+  ...overrides,
+});
+
+export const makeTrade = (id: string, overrides: Partial<Trade> = {}): Trade => ({
+  id,
+  accountId: 'acc-1',
+  stockId: 'stk-1',
+  side: 'buy',
+  quantity: quantity(1000),
+  price: money(14.5),
+  fee: money(5),
+  executedAt: T1,
+  source: 'manual',
+  createdAt: T1,
+  ...overrides,
+});
+
+export const makeAdvice = (id: string, overrides: Partial<Advice> = {}): Advice => ({
+  id,
+  subjectKind: 'stock',
+  subjectId: 'stk-1',
+  decision: 'hold',
+  confidence: 65,
+  horizon: 'short',
+  reasoning: {
+    premise: '短期处于箱体震荡，等待方向选择',
+    evidence: ['日线 MA5/MA10/MA20 粘合'],
+    counterEvidence: ['板块整体回暖'],
+  },
+  risks: ['大盘系统性下行风险'],
+  disclaimers: [...STANDARD_DISCLAIMERS],
+  sourceTool: 'analyze_stock',
+  basedOn: { dataAsOf: T1 },
+  validFrom: T1,
+  validUntil: FAR_FUTURE,
+  createdAt: T1,
+  ...overrides,
+});
+
+// ---------- 契约套件 ----------
+
+export const registerRepositoryContractTests = (
+  label: string,
+  factory: () => ContractHandle,
+): void => {
+  describe(`repository contract [${label}]`, () => {
+    let handle: ContractHandle;
+    let repos: RepositoryRegistry;
+
+    beforeEach(() => {
+      handle = factory();
+      repos = handle.repos;
+    });
+
+    afterEach(() => {
+      handle.close?.();
+    });
+
+    describe('AccountRepository', () => {
+      it('save + findById 往返一致', async () => {
+        const account = makeAccount('acc-1');
+        await repos.account.save(account);
+        expect(await repos.account.findById('acc-1')).toEqual(account);
+        expect(await repos.account.findById('missing')).toBeNull();
+      });
+
+      it('list 返回全部账户（按 id 升序）', async () => {
+        await repos.account.save(makeAccount('acc-b'));
+        await repos.account.save(makeAccount('acc-a'));
+        const all = await repos.account.list();
+        expect(all.map((a) => a.id)).toEqual(['acc-a', 'acc-b']);
+      });
+
+      it('save 同 id 为 upsert', async () => {
+        await repos.account.save(makeAccount('acc-1', { name: '旧名' }));
+        await repos.account.save(makeAccount('acc-1', { name: '新名' }));
+        expect((await repos.account.findById('acc-1'))?.name).toBe('新名');
+        expect(await repos.account.list()).toHaveLength(1);
+      });
+
+      it('remove 删除后 findById 返回 null', async () => {
+        await repos.account.save(makeAccount('acc-1'));
+        await repos.account.remove('acc-1');
+        expect(await repos.account.findById('acc-1')).toBeNull();
+      });
+
+      it('违反不变量时拒绝（initialCapital < 0）', async () => {
+        const bad = makeAccount('acc-bad', { initialCapital: money(-1) });
+        await expect(repos.account.save(bad)).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('StockRepository', () => {
+      it('save + findById / findByCode 往返一致', async () => {
+        const stock = makeStock('stk-1', '002594', { name: '比亚迪' });
+        await repos.stock.save(stock);
+        expect(await repos.stock.findById('stk-1')).toEqual(stock);
+        expect(await repos.stock.findByCode('002594')).toEqual(stock);
+        expect(await repos.stock.findByCode('999999')).toBeNull();
+      });
+
+      it('industry 可选字段往返', async () => {
+        const noIndustry = makeStock('stk-2', '600519');
+        const { industry: _drop, ...withoutIndustry } = noIndustry;
+        await repos.stock.save(withoutIndustry);
+        const got = await repos.stock.findById('stk-2');
+        expect(got).toEqual(withoutIndustry);
+        expect(got?.industry).toBeUndefined();
+      });
+
+      it('search 按代码 / 名称模糊匹配，大小写不敏感', async () => {
+        await repos.stock.save(makeStock('stk-1', '002594', { name: '比亚迪' }));
+        await repos.stock.save(makeStock('stk-2', 'AAPL', { name: 'Apple', exchange: 'US' }));
+        await repos.stock.save(makeStock('stk-3', '600519', { name: '贵州茅台', exchange: 'SH' }));
+        expect((await repos.stock.search('0025')).map((s) => s.id)).toEqual(['stk-1']);
+        expect((await repos.stock.search('比亚')).map((s) => s.id)).toEqual(['stk-1']);
+        expect((await repos.stock.search('aap')).map((s) => s.id)).toEqual(['stk-2']);
+        expect((await repos.stock.search('茅台')).map((s) => s.id)).toEqual(['stk-3']);
+        expect(await repos.stock.search('不存在的')).toEqual([]);
+        expect(await repos.stock.search('   ')).toEqual([]);
+      });
+
+      it('save 同 id 为 upsert；remove 生效', async () => {
+        await repos.stock.save(makeStock('stk-1', '002594', { name: '旧' }));
+        await repos.stock.save(makeStock('stk-1', '002594', { name: '新' }));
+        expect((await repos.stock.findById('stk-1'))?.name).toBe('新');
+        await repos.stock.remove('stk-1');
+        expect(await repos.stock.findById('stk-1')).toBeNull();
+      });
+
+      it('违反不变量时拒绝（name 为空）', async () => {
+        const bad = makeStock('stk-bad', '002594', { name: '' });
+        await expect(repos.stock.save(bad)).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('HoldingRepository', () => {
+      it('save + findById / findByAccountAndStock / listByAccount 往返一致', async () => {
+        const h1 = makeHolding('h-1');
+        const h2 = makeHolding('h-2', { stockId: 'stk-2' });
+        const h3 = makeHolding('h-3', { accountId: 'acc-2' });
+        await repos.holding.save(h1);
+        await repos.holding.save(h2);
+        await repos.holding.save(h3);
+        expect(await repos.holding.findById('h-1')).toEqual(h1);
+        expect(await repos.holding.findByAccountAndStock('acc-1', 'stk-2')).toEqual(h2);
+        expect(await repos.holding.findByAccountAndStock('acc-1', 'stk-x')).toBeNull();
+        expect((await repos.holding.listByAccount('acc-1')).map((h) => h.id)).toEqual([
+          'h-1',
+          'h-2',
+        ]);
+      });
+
+      it('closedAt 非空往返（已平仓）', async () => {
+        const closed = makeHolding('h-c', { closedAt: T2 });
+        await repos.holding.save(closed);
+        expect(await repos.holding.findById('h-c')).toEqual(closed);
+      });
+
+      it('同 (accountId, stockId) 不同 id → 拒绝（holdings 无重复）', async () => {
+        await repos.holding.save(makeHolding('h-1'));
+        await expect(repos.holding.save(makeHolding('h-2'))).rejects.toThrow(InvariantError);
+      });
+
+      it('违反不变量时拒绝（availableQuantity > quantity）', async () => {
+        const bad = makeHolding('h-bad', { quantity: 100, availableQuantity: 200 });
+        await expect(repos.holding.save(bad)).rejects.toThrow(InvariantError);
+      });
+
+      it('save 同 id 为 upsert；remove 生效', async () => {
+        await repos.holding.save(makeHolding('h-1', { quantity: 100, availableQuantity: 50 }));
+        await repos.holding.save(makeHolding('h-1', { quantity: 200, availableQuantity: 150 }));
+        expect((await repos.holding.findById('h-1'))?.quantity).toBe(200);
+        await repos.holding.remove('h-1');
+        expect(await repos.holding.findById('h-1')).toBeNull();
+      });
+    });
+
+    describe('TradeRepository', () => {
+      it('save + findById 往返一致', async () => {
+        const trade = makeTrade('t-1');
+        await repos.trade.save(trade);
+        expect(await repos.trade.findById('t-1')).toEqual(trade);
+        expect(await repos.trade.findById('missing')).toBeNull();
+      });
+
+      it('listByAccount 按 executedAt 升序', async () => {
+        await repos.trade.save(makeTrade('t-2', { executedAt: T3 }));
+        await repos.trade.save(makeTrade('t-1', { executedAt: T1 }));
+        await repos.trade.save(makeTrade('t-9', { accountId: 'acc-2', executedAt: T0 }));
+        const list = await repos.trade.listByAccount('acc-1');
+        expect(list.map((t) => t.id)).toEqual(['t-1', 't-2']);
+      });
+
+      it('违反不变量时拒绝（quantity <= 0 / price <= 0 / fee < 0）', async () => {
+        await expect(
+          repos.trade.save(makeTrade('t-bad-1', { quantity: quantity(0) })),
+        ).rejects.toThrow(InvariantError);
+        await expect(repos.trade.save(makeTrade('t-bad-2', { price: money(-1) }))).rejects.toThrow(
+          InvariantError,
+        );
+        await expect(repos.trade.save(makeTrade('t-bad-3', { fee: money(-0.01) }))).rejects.toThrow(
+          InvariantError,
+        );
+      });
+
+      it('save 同 id 为 upsert；remove 生效', async () => {
+        await repos.trade.save(makeTrade('t-1', { side: 'buy' }));
+        await repos.trade.save(makeTrade('t-1', { side: 'sell' }));
+        expect((await repos.trade.findById('t-1'))?.side).toBe('sell');
+        await repos.trade.remove('t-1');
+        expect(await repos.trade.findById('t-1')).toBeNull();
+      });
+    });
+
+    describe('AdviceRepository', () => {
+      it('save + findById 往返一致（含 basedOn 快照的 Date 字段）', async () => {
+        const advice = makeAdvice('adv-1', {
+          basedOn: {
+            quotes: {
+              'stk-1': {
+                stockId: 'stk-1',
+                ts: T2,
+                open: money(10),
+                high: money(11),
+                low: money(9),
+                close: money(10.5),
+                volume: 1_234_567,
+                source: 'mock',
+              },
+            },
+            indicators: { 'stk-1': { ma5: 10.2, rsi14: 55 } },
+            tacticSignals: [
+              {
+                tacticId: 'tac-1',
+                stockId: 'stk-1',
+                ts: T3,
+                score: 80,
+                direction: 'bullish',
+                evidence: ['放量突破'],
+              },
+            ],
+            llmReasoning: '原始推理文本',
+            dataAsOf: T3,
+          },
+        });
+        await repos.advice.save(advice);
+        const got = await repos.advice.findById('adv-1');
+        expect(got).toEqual(advice);
+        expect(got?.basedOn.dataAsOf).toBeInstanceOf(Date);
+        expect(got?.basedOn.quotes?.['stk-1']?.ts).toBeInstanceOf(Date);
+        expect(got?.basedOn.tacticSignals?.[0]?.ts).toBeInstanceOf(Date);
+      });
+
+      it('sourceTool / sourceWorkflow 可选字段往返', async () => {
+        const minimal = makeAdvice('adv-min');
+        const { sourceTool: _drop, ...withoutSourceTool } = minimal;
+        await repos.advice.save(withoutSourceTool);
+        const got = await repos.advice.findById('adv-min');
+        expect(got).toEqual(withoutSourceTool);
+        expect(got?.sourceTool).toBeUndefined();
+
+        const withWorkflow = makeAdvice('adv-wf', { sourceWorkflow: 'daily-advice' });
+        await repos.advice.save(withWorkflow);
+        expect((await repos.advice.findById('adv-wf'))?.sourceWorkflow).toBe('daily-advice');
+      });
+
+      it('违反不变量时拒绝（confidence 越界 / 缺 disclaimer）', async () => {
+        await expect(
+          repos.advice.save(makeAdvice('adv-bad-1', { confidence: 101 })),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.advice.save(makeAdvice('adv-bad-2', { disclaimers: [] })),
+        ).rejects.toThrow(InvariantError);
+      });
+
+      it('query 按 subjectId / subjectKind / decision / sourceTool 过滤', async () => {
+        await repos.advice.save(makeAdvice('adv-1', { createdAt: T1 }));
+        await repos.advice.save(
+          makeAdvice('adv-2', { subjectId: 'stk-2', decision: 'buy', createdAt: T2 }),
+        );
+        await repos.advice.save(
+          makeAdvice('adv-3', {
+            subjectKind: 'market',
+            subjectId: 'A股',
+            sourceTool: 'market_outlook',
+            createdAt: T3,
+          }),
+        );
+        expect((await repos.advice.query({ subjectId: 'stk-1' })).map((a) => a.id)).toEqual([
+          'adv-1',
+        ]);
+        expect((await repos.advice.query({ subjectKind: 'market' })).map((a) => a.id)).toEqual([
+          'adv-3',
+        ]);
+        expect((await repos.advice.query({ decision: 'buy' })).map((a) => a.id)).toEqual(['adv-2']);
+        expect(
+          (await repos.advice.query({ sourceTool: 'market_outlook' })).map((a) => a.id),
+        ).toEqual(['adv-3']);
+        // 无过滤：全部按 createdAt 倒序
+        expect((await repos.advice.query({})).map((a) => a.id)).toEqual([
+          'adv-3',
+          'adv-2',
+          'adv-1',
+        ]);
+      });
+
+      it('query 按 since / until 过滤（createdAt 闭区间）', async () => {
+        await repos.advice.save(makeAdvice('adv-1', { createdAt: T1 }));
+        await repos.advice.save(makeAdvice('adv-2', { createdAt: T2 }));
+        await repos.advice.save(makeAdvice('adv-3', { createdAt: T3 }));
+        expect((await repos.advice.query({ since: T2 })).map((a) => a.id)).toEqual([
+          'adv-3',
+          'adv-2',
+        ]);
+        expect((await repos.advice.query({ until: T2 })).map((a) => a.id)).toEqual([
+          'adv-2',
+          'adv-1',
+        ]);
+        expect((await repos.advice.query({ since: T1, until: T2 })).map((a) => a.id)).toEqual([
+          'adv-2',
+          'adv-1',
+        ]);
+      });
+
+      it('query 默认不返回过期 advice；includeExpired: true 返回', async () => {
+        await repos.advice.save(makeAdvice('adv-live', { validFrom: T1, validUntil: FAR_FUTURE }));
+        await repos.advice.save(makeAdvice('adv-dead', { validFrom: FAR_PAST, validUntil: T1 }));
+        expect((await repos.advice.query({})).map((a) => a.id)).toEqual(['adv-live']);
+        expect((await repos.advice.query({ includeExpired: true })).map((a) => a.id)).toEqual([
+          'adv-live',
+          'adv-dead',
+        ]);
+      });
+
+      it('query 支持 limit', async () => {
+        await repos.advice.save(makeAdvice('adv-1', { createdAt: T1 }));
+        await repos.advice.save(makeAdvice('adv-2', { createdAt: T2 }));
+        await repos.advice.save(makeAdvice('adv-3', { createdAt: T3 }));
+        expect((await repos.advice.query({ limit: 2 })).map((a) => a.id)).toEqual([
+          'adv-3',
+          'adv-2',
+        ]);
+      });
+
+      it('save 同 id 为 upsert', async () => {
+        await repos.advice.save(makeAdvice('adv-1', { decision: 'hold' }));
+        await repos.advice.save(makeAdvice('adv-1', { decision: 'buy' }));
+        expect((await repos.advice.findById('adv-1'))?.decision).toBe('buy');
+      });
+
+      it('recordOutcome 回填 + 读取；重复回填覆盖', async () => {
+        const advice = makeAdvice('adv-1');
+        await repos.advice.save(advice);
+        expect(await handle.readOutcome('adv-1')).toBeNull();
+
+        const outcome: AdviceOutcome = {
+          adviceId: 'adv-1',
+          outcome: 'followed',
+          pnl: money(123.4567),
+          benchmarkPnl: money(50),
+          recordedAt: T3,
+        };
+        await repos.advice.recordOutcome('adv-1', outcome);
+        expect(await handle.readOutcome('adv-1')).toEqual(outcome);
+
+        const updated: AdviceOutcome = { adviceId: 'adv-1', outcome: 'ignored', recordedAt: T3 };
+        await repos.advice.recordOutcome('adv-1', updated);
+        expect(await handle.readOutcome('adv-1')).toEqual(updated);
+      });
+
+      it('recordOutcome 的 adviceId 不一致时拒绝', async () => {
+        const outcome: AdviceOutcome = { adviceId: 'adv-x', outcome: 'ignored', recordedAt: T3 };
+        await expect(repos.advice.recordOutcome('adv-y', outcome)).rejects.toThrow(InvariantError);
+      });
+    });
+  });
+};
