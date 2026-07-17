@@ -1,0 +1,389 @@
+/* luoome web 仪表盘 —— 低饱和暖色系：米白底 / 墨灰文字 / 赭石·茶色点缀。 */
+
+:root {
+  --bg: #faf7f2;
+  --panel: #fffdf9;
+  --ink: #3a352e;
+  --ink-soft: #6f675c;
+  --muted: #9a9083;
+  --line: #e8e0d2;
+  --accent: #a5642f; /* 赭石 */
+  --accent-soft: #f0e3d3;
+  --tea: #7d6a4f; /* 茶色 */
+  --pos: #b5492f; /* 红涨 */
+  --neg: #537a4b; /* 绿跌 */
+  --buy: #b5492f;
+  --sell: #537a4b;
+  --hold: #857d70;
+  --watch: #b5892f;
+  --avoid: #6b5744;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', system-ui,
+    sans-serif;
+  line-height: 1.6;
+}
+
+/* ---------- 免责声明横幅 ---------- */
+
+.disclaimer-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  align-items: baseline;
+  padding: 10px 28px;
+  background: #f3ecdf;
+  border-bottom: 1px solid var(--line);
+  color: #7a6a50;
+  font-size: 13px;
+}
+
+.disclaimer-banner strong {
+  color: var(--accent);
+  letter-spacing: 2px;
+}
+
+/* ---------- 页头 ---------- */
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  justify-content: space-between;
+  max-width: 1080px;
+  margin: 36px auto 0;
+  padding: 0 28px;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.subtitle {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+}
+
+.btn {
+  padding: 9px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--tea);
+  font-size: 14px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fdfaf5;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #8f5526;
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--tea);
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.status {
+  max-width: 1080px;
+  margin: 14px auto 0;
+  padding: 0 28px;
+  min-height: 22px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.status.error {
+  color: var(--pos);
+}
+
+/* ---------- 面板 ---------- */
+
+.container {
+  max-width: 1080px;
+  margin: 18px auto 48px;
+  padding: 0 28px;
+  display: grid;
+  gap: 28px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px 28px 28px;
+  box-shadow: 0 1px 3px rgba(90, 74, 52, 0.05);
+}
+
+.panel h2 {
+  margin: 0 0 18px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--tea);
+}
+
+/* ---------- 持仓表 ---------- */
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.holdings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.holdings-table th,
+.holdings-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.holdings-table th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.holdings-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.holdings-table tbody tr:hover {
+  background: #faf5ec;
+}
+
+.holdings-table tfoot td {
+  border-bottom: none;
+  border-top: 2px solid var(--line);
+  font-weight: 600;
+}
+
+.code {
+  color: var(--ink-soft);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 13px;
+}
+
+.pos {
+  color: var(--pos);
+}
+
+.neg {
+  color: var(--neg);
+}
+
+.flat {
+  color: var(--muted);
+}
+
+.placeholder {
+  color: var(--muted);
+  text-align: center;
+  padding: 18px 0;
+}
+
+/* ---------- 建议卡片 ---------- */
+
+.advice-list {
+  display: grid;
+  gap: 16px;
+}
+
+.advice-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 22px;
+  background: #fffefb;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.advice-card:hover {
+  border-color: #d8cbb4;
+  box-shadow: 0 2px 8px rgba(90, 74, 52, 0.07);
+}
+
+.advice-card.open {
+  border-color: var(--accent);
+}
+
+.advice-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 999px;
+  color: #fdfaf5;
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.badge-buy {
+  background: var(--buy);
+}
+
+.badge-sell {
+  background: var(--sell);
+}
+
+.badge-hold {
+  background: var(--hold);
+}
+
+.badge-watch {
+  background: var(--watch);
+}
+
+.badge-avoid {
+  background: var(--avoid);
+}
+
+.subject {
+  font-size: 15px;
+}
+
+.horizon {
+  color: var(--tea);
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.valid {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.confidence {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 10px;
+}
+
+.confidence .bar {
+  flex: 0 0 180px;
+  height: 8px;
+  border-radius: 999px;
+  background: #efe8da;
+  overflow: hidden;
+}
+
+.confidence .bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.conf-label {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.premise {
+  margin: 4px 0 0;
+  color: var(--ink);
+}
+
+.detail {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+  display: grid;
+  gap: 14px;
+  cursor: default;
+}
+
+.detail-block h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea);
+  letter-spacing: 1px;
+}
+
+.detail-block ul {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+}
+
+.detail-block.counter h4,
+.detail-block.risks h4 {
+  color: var(--pos);
+}
+
+.detail-block.disclaimers ul {
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+  list-style: none;
+}
+
+/* ---------- 页脚 ---------- */
+
+.page-footer {
+  max-width: 1080px;
+  margin: 0 auto 40px;
+  padding: 0 28px;
+  color: var(--muted);
+  font-size: 12px;
+}

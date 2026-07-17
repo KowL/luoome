@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>luoome · 个人投资仪表盘</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- 顶部固定免责声明横幅：与 @luoome/core STANDARD_DISCLAIMERS 保持一致 -->
+  <div class="disclaimer-banner" role="note" aria-label="免责声明">
+    <strong>免责声明</strong>
+    <span>本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。</span>
+    <span>投资有风险，决策需自行承担。</span>
+    <span>市场有不可预测性，过往表现不代表未来收益。</span>
+  </div>
+
+  <header class="page-header">
+    <div>
+      <h1>luoome 投资仪表盘</h1>
+      <p class="subtitle">罗网数据 · 织成建议 —— advice ≠ trade，决策权永远在人</p>
+    </div>
+    <div class="toolbar">
+      <button id="btn-refresh" class="btn btn-outline" type="button">刷新</button>
+      <button id="btn-analyze-all" class="btn btn-primary" type="button">分析全部持仓</button>
+    </div>
+  </header>
+
+  <p id="status" class="status" role="status"></p>
+
+  <main class="container">
+    <section class="panel" aria-labelledby="holdings-title">
+      <h2 id="holdings-title">持仓</h2>
+      <div class="table-wrap">
+        <table class="holdings-table">
+          <thead>
+            <tr>
+              <th>代码</th>
+              <th>名称</th>
+              <th class="num">数量</th>
+              <th class="num">成本</th>
+              <th class="num">现价</th>
+              <th class="num">市值</th>
+              <th class="num">盈亏</th>
+              <th class="num">盈亏%</th>
+            </tr>
+          </thead>
+          <tbody id="holdings-body">
+            <tr><td colspan="8" class="placeholder">加载中…</td></tr>
+          </tbody>
+          <tfoot id="holdings-foot" hidden>
+            <tr>
+              <td colspan="5">合计</td>
+              <td class="num" id="total-value"></td>
+              <td class="num" id="total-pnl"></td>
+              <td class="num" id="total-pnl-pct"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="advice-title">
+      <h2 id="advice-title">建议</h2>
+      <div id="advice-list" class="advice-list">
+        <p class="placeholder">加载中…</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="page-footer">
+    <p>luoome v0.1 · 本页面所有建议由 AI 生成，仅供复盘参考，不构成投资建议。</p>
+  </footer>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
