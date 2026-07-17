@@ -13,8 +13,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@luoome/adapters": "workspace:*",
     "@luoome/core": "workspace:*",
+    "@luoome/db": "workspace:*",
     "@luoome/tools": "workspace:*",
-    "@opentui/core": "^0.4.5"
+    "@opentui/core": "^0.4.5",
+    "zod": "^4.4.3"
   }
 }
