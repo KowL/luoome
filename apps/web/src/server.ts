@@ -141,10 +141,24 @@ export const createWebApp = (ctx: ToolContext): Hono => {
       headers: { 'content-type': contentType },
     });
   app.get('/', serveFile('index.html', 'text/html; charset=utf-8'));
-  app.get('/app.js', serveFile('app.js', 'text/javascript; charset=utf-8'));
   app.get('/style.css', serveFile('style.css', 'text/css; charset=utf-8'));
   app.get('/tactics', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/holdings', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/quotes', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/advice', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
+
+  // /js/* 静态文件（v0.4 起拆成模块；无构建步骤，直接读取 public/js/）。
+  app.get('/js/:filename', (c) => {
+    const filename = c.req.param('filename');
+    if (filename.includes('/') || filename.includes('..')) {
+      return new Response('forbidden', { status: 403 });
+    }
+    return new Response(Bun.file(join(PUBLIC_DIR, 'js', filename)), {
+      headers: { 'content-type': 'text/javascript; charset=utf-8' },
+    });
+  });
 
   // —— HTTP API（统一 ToolResult 形状）——
   const callTool = async (name: string, input: unknown): Promise<Response> => {
@@ -252,6 +266,52 @@ export const createWebApp = (ctx: ToolContext): Hono => {
       const message = error instanceof Error ? error.message : String(error);
       return jsonResult({ ok: false, error: { kind: 'internal', cause: message } });
     }
+  });
+
+  // 复盘趋势图：按天聚合命中率（confidence>=70 且 followed 且 pnl>0 占比）。
+  // 默认 30 天窗口；advice 不足则返回空序列（前端 fallback 显示 byDecision）。
+  app.get('/api/review/trend', async (c) => {
+    const daysRaw = c.req.query('days');
+    const days = daysRaw === undefined ? 30 : Math.max(1, Math.min(180, Number(daysRaw) || 30));
+    const since = new Date(Date.now() - days * 86_400_000);
+    const adviceResult = await invokeTool('get_advice', {
+      since,
+      includeExpired: true,
+      limit: 500,
+    });
+    if (!adviceResult.ok) return jsonResult(adviceResult);
+    interface AdviceRow {
+      createdAt: Date;
+      confidence: number;
+      outcome?: { outcome: string; pnl?: number };
+    }
+    const rows = adviceResult.data as { advices: AdviceRow[] };
+    // 按 createdAt.toDateString() 桶聚合
+    const buckets = new Map<string, { total: number; hits: number }>();
+    for (const a of rows.advices) {
+      const d = new Date(a.createdAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const cur = buckets.get(key) ?? { total: 0, hits: 0 };
+      cur.total += 1;
+      if (
+        a.outcome !== undefined &&
+        a.outcome.outcome === 'followed' &&
+        a.confidence >= 70 &&
+        (a.outcome.pnl ?? 0) > 0
+      ) {
+        cur.hits += 1;
+      }
+      buckets.set(key, cur);
+    }
+    const series = Array.from(buckets.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, v]) => ({
+        date,
+        total: v.total,
+        hits: v.hits,
+        hitRate: v.total === 0 ? 0 : v.hits / v.total,
+      }));
+    return jsonResult({ ok: true, data: { days, series } });
   });
 
   // 复盘页：近期 advice + 准确率统计（read）

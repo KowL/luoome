@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <!-- 顶部固定免责声明横幅：与 @luoome/core STANDARD_DISCLAIMERS 保持一致 -->
+  <!-- 1. 免责声明横幅 -->
   <div class="disclaimer-banner" role="note" aria-label="免责声明">
     <strong>免责声明</strong>
     <span>本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。</span>
@@ -15,94 +15,213 @@
     <span>市场有不可预测性，过往表现不代表未来收益。</span>
   </div>
 
-  <header class="page-header">
-    <div>
-      <h1>luoome 投资仪表盘</h1>
-      <p class="subtitle">罗网数据 · 织成建议 —— advice ≠ trade，决策权永远在人</p>
+  <!-- 2. 顶栏 -->
+  <header class="topbar" role="banner">
+    <div class="brand">
+      luoome <small>本地投资 advisor</small>
     </div>
-    <nav class="navbar" aria-label="主导航">
-      <a class="nav-link" href="#dashboard" data-route="dashboard">仪表盘</a>
-      <a class="nav-link" href="#tactics" data-route="tactics">战法</a>
-      <a class="nav-link" href="#review" data-route="review">复盘</a>
-    </nav>
-    <div class="toolbar">
-      <button id="btn-refresh" class="btn btn-outline" type="button">刷新</button>
-      <button id="btn-analyze-all" class="btn btn-primary" type="button">分析全部持仓</button>
+    <div class="topbar-meta">
+      <span id="topbar-account" class="muted"></span>
+      <span class="clock" id="topbar-clock"></span>
     </div>
   </header>
 
-  <p id="status" class="status" role="status"></p>
+  <!-- 3. 主布局：侧栏 + 内容 -->
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <ul class="nav" role="navigation">
+        <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>仪表盘</span></a></li>
+        <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
+        <li><a class="nav-item" href="#quotes" data-route="quotes"><span>行情</span></a></li>
+        <li><a class="nav-item" href="#tactics" data-route="tactics"><span>战法</span></a></li>
+        <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
+        <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
+        <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
+      </ul>
+    </aside>
 
-  <main class="container">
-    <section id="route-dashboard" class="route" data-route="dashboard">
-      <section class="panel" aria-labelledby="holdings-title">
-        <h2 id="holdings-title">持仓</h2>
-        <div class="table-wrap">
-          <table class="holdings-table">
-            <thead>
-              <tr>
-                <th>代码</th>
-                <th>名称</th>
-                <th class="num">数量</th>
-                <th class="num">成本</th>
-                <th class="num">现价</th>
-                <th class="num">市值</th>
-                <th class="num">盈亏</th>
-                <th class="num">盈亏%</th>
-              </tr>
-            </thead>
-            <tbody id="holdings-body">
-              <tr><td colspan="8" class="placeholder">加载中…</td></tr>
-            </tbody>
-            <tfoot id="holdings-foot" hidden>
-              <tr>
-                <td colspan="5">合计</td>
-                <td class="num" id="total-value"></td>
-                <td class="num" id="total-pnl"></td>
-                <td class="num" id="total-pnl-pct"></td>
-              </tr>
-            </tfoot>
-          </table>
+    <main class="content" id="content">
+      <!-- route: dashboard -->
+      <section id="route-dashboard" class="route" data-route="dashboard" hidden>
+        <div class="route-header">
+          <h1>仪表盘</h1>
+          <div class="route-meta">实时持仓 + 今日建议概览</div>
+        </div>
+        <div id="dashboard-stats" class="stat-grid">
+          <div class="stat"><div class="label">总市值</div><div class="value" id="dash-total-value">--</div></div>
+          <div class="stat"><div class="label">总盈亏</div><div class="value" id="dash-total-pnl">--</div><div class="delta" id="dash-total-pnl-pct">--</div></div>
+          <div class="stat"><div class="label">持仓数</div><div class="value" id="dash-holdings-count">--</div></div>
+          <div class="stat"><div class="label">今日建议</div><div class="value" id="dash-advice-count">--</div><div class="delta" id="dash-advice-summary">--</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>建议（高信心优先）</h2><div class="card-meta" id="dash-advice-meta"></div></div>
+          <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="advice-title">
-        <h2 id="advice-title">建议</h2>
-        <div id="advice-list" class="advice-list">
-          <p class="placeholder">加载中…</p>
+      <!-- route: holdings -->
+      <section id="route-holdings" class="route" data-route="holdings" hidden>
+        <div class="route-header">
+          <h1>持仓</h1>
+          <div class="route-meta">实时市值 · 盈亏</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2>明细</h2>
+            <div class="card-meta">
+              <button id="btn-holdings-refresh" class="btn btn-outline btn-sm" type="button">刷新</button>
+              <button id="btn-holdings-analyze" class="btn btn-primary btn-sm" type="button">分析全部</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="holdings-table">
+              <thead>
+                <tr>
+                  <th>代码</th><th>名称</th>
+                  <th class="num">数量</th><th class="num">成本</th>
+                  <th class="num">现价</th><th class="num">市值</th>
+                  <th class="num">盈亏</th><th class="num">盈亏%</th>
+                </tr>
+              </thead>
+              <tbody id="holdings-body"><tr><td colspan="8" class="placeholder">加载中…</td></tr></tbody>
+              <tfoot id="holdings-foot" hidden>
+                <tr>
+                  <td colspan="5" class="muted">合计</td>
+                  <td class="num" id="holdings-total-value">--</td>
+                  <td class="num" id="holdings-total-pnl">--</td>
+                  <td class="num" id="holdings-total-pnl-pct">--</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
         </div>
       </section>
-    </section>
 
-    <section id="route-tactics" class="route" data-route="tactics" hidden>
-      <section class="panel">
-        <h2>战法扫描</h2>
-        <div class="toolbar" style="margin-bottom: 1rem;">
-          <button id="btn-tactic-list" class="btn btn-outline" type="button">刷新战法列表</button>
-          <button id="btn-tactic-scan" class="btn btn-primary" type="button">跑战法扫描</button>
+      <!-- route: quotes -->
+      <section id="route-quotes" class="route" data-route="quotes" hidden>
+        <div class="route-header">
+          <h1>行情</h1>
+          <div class="route-meta">持仓实时报价</div>
         </div>
-        <h3>内置战法</h3>
-        <div id="tactics-list" class="tactics-list"><p class="placeholder">加载中…</p></div>
-        <h3>扫描结果 top 10</h3>
-        <div id="tactic-signals" class="advice-list"><p class="placeholder">点上面按钮开始扫描</p></div>
+        <div class="card">
+          <div class="card-header">
+            <h2>实时报价</h2>
+            <div class="card-meta">
+              <button id="btn-quotes-refresh" class="btn btn-outline btn-sm" type="button">刷新</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="quotes-table">
+              <thead>
+                <tr>
+                  <th>代码</th><th>名称</th>
+                  <th class="num">最新</th><th>来源</th><th class="num">更新时间</th>
+                </tr>
+              </thead>
+              <tbody id="quotes-body"><tr><td colspan="5" class="placeholder">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </section>
-    </section>
 
-    <section id="route-review" class="route" data-route="review" hidden>
-      <section class="panel">
-        <h2>复盘</h2>
-        <h3>准确率统计</h3>
-        <div id="review-stats" class="stats-block"><p class="placeholder">加载中…</p></div>
-        <h3>近期建议（按时间倒序）</h3>
-        <div id="review-list" class="advice-list"><p class="placeholder">加载中…</p></div>
+      <!-- route: tactics -->
+      <section id="route-tactics" class="route" data-route="tactics" hidden>
+        <div class="route-header">
+          <h1>战法</h1>
+          <div class="route-meta">战法列表 + 扫描结果</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2>战法扫描</h2>
+            <div class="card-meta">
+              <button id="btn-tactic-list" class="btn btn-outline btn-sm" type="button">刷新列表</button>
+              <button id="btn-tactic-scan" class="btn btn-primary btn-sm" type="button">跑战法扫描</button>
+            </div>
+          </div>
+          <h4>内置战法</h4>
+          <div id="tactics-list" class="mb-2"><p class="placeholder">加载中…</p></div>
+          <h4 class="mt-4">扫描结果 top 10</h4>
+          <div id="tactic-signals"><p class="placeholder">点「跑战法扫描」开始</p></div>
+        </div>
       </section>
-    </section>
-  </main>
 
-  <footer class="page-footer">
-    <p>luoome v0.1 · 本页面所有建议由 AI 生成，仅供复盘参考，不构成投资建议。</p>
-  </footer>
+      <!-- route: advice -->
+      <section id="route-advice" class="route" data-route="advice" hidden>
+        <div class="route-header">
+          <h1>建议</h1>
+          <div class="route-meta">所有建议（含已过期）· 点击卡片展开详情</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2>历史建议</h2>
+            <div class="card-meta">
+              <select id="advice-filter">
+                <option value="all">全部</option>
+                <option value="buy">买入</option>
+                <option value="sell">卖出</option>
+                <option value="hold">持有</option>
+                <option value="watch">观望</option>
+                <option value="avoid">回避</option>
+              </select>
+            </div>
+          </div>
+          <div id="advice-full-list"><p class="placeholder">加载中…</p></div>
+        </div>
+      </section>
 
-  <script src="/app.js" defer></script>
+      <!-- route: review -->
+      <section id="route-review" class="route" data-route="review" hidden>
+        <div class="route-header">
+          <h1>复盘</h1>
+          <div class="route-meta">准确率统计 + outcome 回填</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2>准确率统计</h2>
+            <div class="card-meta" id="review-stats-meta">--</div>
+          </div>
+          <div id="review-stats-grid" class="stat-grid"></div>
+          <div class="chart" id="review-trend"></div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header"><h2>近期建议</h2><div class="card-meta">点击「回填」记录 outcome</div></div>
+          <div id="review-list"><p class="placeholder">加载中…</p></div>
+        </div>
+      </section>
+
+      <!-- route: settings -->
+      <section id="route-settings" class="route" data-route="settings" hidden>
+        <div class="route-header">
+          <h1>设置</h1>
+          <div class="route-meta">账户 / 鉴权 / 数据源</div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>本地 token 鉴权</h2></div>
+          <p class="muted mb-2">
+            Web 端默认无 token 即可访问读 / 建议类 tool（read + advice）。
+            若需要回填 outcome（write），请在服务端设置 <code>LUOOME_EXPOSE_WRITE=true</code> 并在此生成 / 撤销 token。
+          </p>
+          <div class="field">
+            <label for="settings-token">当前 token（本地存储）</label>
+            <input id="settings-token" type="text" placeholder="（未设置）" readonly />
+            <span class="hint">保存在 localStorage，仅本浏览器可见。</span>
+          </div>
+          <div class="flex gap-2">
+            <button id="btn-token-generate" class="btn btn-primary btn-sm" type="button">生成 token</button>
+            <button id="btn-token-clear" class="btn btn-outline btn-sm" type="button">清除</button>
+          </div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header"><h2>账户信息</h2></div>
+          <div id="settings-account"><p class="placeholder">加载中…</p></div>
+        </div>
+      </section>
+
+      <!-- 状态行 -->
+      <p id="status" class="status" role="status" hidden></p>
+    </main>
+  </div>
+
+  <script type="module" src="/js/app.js" defer></script>
 </body>
 </html>

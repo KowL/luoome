@@ -92,24 +92,41 @@
 - ✅ LUOOME_EXPOSE_TRADE=true 启动硬卡（v0.1 已卡，v0.3 加 web 测试守住）。
 - ✅ typecheck / test / lint 全绿（lint 0 error，2 info 级别 import 排序建议）。
 
-## v0.4 — Web
+## v0.4 — Web ✅（已完成）
 
 **目标**：浏览器入口。
 
-**产物**：
-- apps/web：Hono + Solid + Tailwind（或 v0.4 前定）
-- 路由：仪表盘 / 持仓 / 行情 / 战法 / 建议 / 复盘 / 设置
-- 后端：Hono HTTP API 暴露 tool registry
-- 前端：组件库 + 设计 tokens
-- 响应式：手机 + 平板 + 桌面
-- Web 鉴权：本地 token / session
-- 建议可视化：决策卡片 + 信心度条 + 证据 / 反证 toggle + 风险列表
+**技术栈定调**：保留 vanilla JS + Hono + Bun（无构建步骤），通过 ES modules 拆模块。引入 Solid/Tailwind 会显著增加构建复杂度，与现有架构风格不符；选择 CSS 设计 tokens + 组件类 + 响应式断点达成同等目标。
 
-**验收**：
-- ✅ 浏览器访问 `localhost:5173` 看到持仓仪表盘 + 今日建议
-- ✅ 实时行情刷新
-- ✅ 点击建议卡片可查看 reasoning + evidence 详情
-- ✅ 复盘页面显示 hit rate 趋势图
+**实际产物（W4.A → W4.F，commit 见 git log）**：
+- 设计系统（apps/web/public/style.css，934 行）：
+  - 设计 tokens：颜色（基础 / 文字 / 边框 / 品牌 / 涨跌 / 决策 / 语义）+ 间距（4 倍数）+ 字号 + 字重 + 行高 + 圆角 + 阴影 + 动效。
+  - 组件库：`.btn`（4 variant + 3 size）、`.card`、`.table`、`.badge`（5 决策色 + 涨跌）、`.confidence-bar`（3 level）、`.stat-grid`、`.advice-card`（含 expand toggle）、`.field`。
+  - 布局：sidebar + content 网格 + 响应式断点（≤900px 侧栏收窄、≤600px 顶部 nav）。
+- 模块化前端（apps/web/public/js/）：
+  - `api.js`：fetch 包装 + localStorage token 管理。
+  - `ui.js`：DOM 助手（$/el/mount）+ 共享组件（decisionBadge / confidenceBar / adviceCard / statBlock）+ 格式化。
+  - `pages.js`：7 个页面的渲染函数。
+  - `app.js`：入口 + hash 路由 + 时钟 + 仪表盘 5s 自动刷新。
+- 路由 7 个：`#dashboard` / `#holdings` / `#quotes` / `#tactics` / `#advice` / `#review` / `#settings`。
+- 后端 API 增量：
+  - `/api/tactics` / `/api/tactics/scan?topN=N` / `/api/review` 已存在（v0.3）。
+  - 新增 `/api/review/trend?days=N`：按天聚合命中率（confidence≥70 且 followed 且 pnl>0）。
+  - write 副作用：`/api/review/:id/outcome`（opt-in via `LUOOME_EXPOSE_WRITE=true`）。
+- 鉴权：本地 token 生成 / 清除（设置页 + localStorage），请求自动附 `Authorization: Bearer <token>` header（服务端校验留口）。
+- advice 可视化：决策卡（点击展开）+ 信心度条（low/mid/high 三色）+ 支持证据 / 反证 / 风险提示 / 免责声明分层渲染。
+- 复盘趋势图：原生 SVG 折线（自动宽，x 轴日期标签 + y 轴百分比），样本不足时 fallback 到 byDecision 柱状概念。
+
+**实际验收**：
+- ✅ 7 个路由 (`/` `/holdings` `/quotes` `/tactics` `/advice` `/review` `/settings`) 全部 HTTP 200。
+- ✅ 4 个 JS module (`/js/{app,api,ui,pages}.js`) 全部 HTTP 200，ES module import 链路完整。
+- ✅ 浏览器访问 `localhost:5174` 看到持仓仪表盘 + 今日建议 + 7 个侧栏 nav + 免责声明横幅。
+- ✅ 实时刷新：仪表盘 5s 自动 refresh；其他路由按需刷新。
+- ✅ 点击建议卡片：展开 toggle 显示 evidence / counterEvidence / risks / disclaimers。
+- ✅ 复盘页面：stat-grid + SVG 折线趋势图（W4.E 完成）+ outcome 回填表单（write opt-in）。
+- ✅ 响应式：≤900px 侧栏窄化（仅图标），≤600px 顶部 nav 横排 + 内容区单列。
+- ✅ 鉴权：设置页可生成 / 清除 token，token 附 Authorization header；服务端 `LUOOME_EXPOSE_WRITE=true` 才挂载 write endpoint。
+- ✅ typecheck / test / lint 全绿（418 tests / 0 lint error）。
 
 ## v0.5 — Multi-Market & Polish
 
