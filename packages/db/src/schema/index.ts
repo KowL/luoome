@@ -143,6 +143,30 @@ export const priceSnapshots = sqliteTable(
   }),
 );
 
+/**
+ * 日线缓存（v0.2 起）。
+ * 行情 adapter 用 1 小时级 TTL 缓存日线；AnalyzeStockTool 拉日线时优先走这里。
+ * 复合主键 (stockId, date) → 同日重复写入视为覆盖。
+ */
+export const dailyBars = sqliteTable(
+  'daily_bars',
+  {
+    stockId: text('stock_id').notNull(),
+    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
+    open: real('open').$type<Money>().notNull(),
+    high: real('high').$type<Money>().notNull(),
+    low: real('low').$type<Money>().notNull(),
+    close: real('close').$type<Money>().notNull(),
+    volume: integer('volume').notNull(),
+    adjFactor: real('adj_factor').notNull(),
+    source: text('source').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.stockId, t.date], name: 'daily_bars_pk' }),
+    stockIdx: index('daily_bars_stock_idx').on(t.stockId),
+  }),
+);
+
 export const schema = {
   accounts,
   stocks,
@@ -151,6 +175,7 @@ export const schema = {
   advices,
   adviceOutcomes,
   priceSnapshots,
+  dailyBars,
 } as const;
 
 export type Schema = typeof schema;

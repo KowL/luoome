@@ -4,6 +4,12 @@ import type {
   AnalyzePositionOutput,
   AnalyzeStockInput,
   AnalyzeStockOutput,
+  BatchQuoteInput,
+  BatchQuoteOutput,
+  ComputeIndicatorsInput,
+  ComputeIndicatorsOutput,
+  FetchQuoteInput,
+  FetchQuoteOutput,
   GetAccountInput,
   GetAccountOutput,
   GetAdviceInput,
@@ -16,6 +22,10 @@ import type {
   ListAccountsOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
+  SearchStocksInput,
+  SearchStocksOutput,
+  SyncQuotesInput,
+  SyncQuotesOutput,
 } from '@luoome/tools';
 import { toolRegistry } from '@luoome/tools';
 import type { z } from 'zod';
@@ -45,6 +55,15 @@ export interface WorkflowToolMap {
   readonly analyze_position: ToolAccessor<
     typeof AnalyzePositionInput,
     typeof AnalyzePositionOutput
+  >;
+  // v0.2 新增
+  readonly fetch_quote: ToolAccessor<typeof FetchQuoteInput, typeof FetchQuoteOutput>;
+  readonly batch_quote: ToolAccessor<typeof BatchQuoteInput, typeof BatchQuoteOutput>;
+  readonly sync_quotes: ToolAccessor<typeof SyncQuotesInput, typeof SyncQuotesOutput>;
+  readonly search_stocks: ToolAccessor<typeof SearchStocksInput, typeof SearchStocksOutput>;
+  readonly compute_indicators: ToolAccessor<
+    typeof ComputeIndicatorsInput,
+    typeof ComputeIndicatorsOutput
   >;
 }
 

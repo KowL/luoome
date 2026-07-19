@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { type Money, MoneySchema } from '../types/branded.js';
+import { type TechnicalIndicators, TechnicalIndicatorsSchema } from './indicator-set.js';
 import { type Quote, QuoteSchema } from './quote.js';
 
 // ---------- 枚举类型（ARCHITECTURE §5.2） ----------
@@ -44,19 +45,6 @@ export interface AdviceReasoning {
   readonly premise: string; // 核心论点（一句话）
   readonly evidence: readonly string[]; // 支持证据（数据点引用）
   readonly counterEvidence: readonly string[]; // 反证
-}
-
-/** 技术指标快照（宽松结构，允许扩展指标）。 */
-export interface TechnicalIndicators {
-  readonly ma5?: number;
-  readonly ma10?: number;
-  readonly ma20?: number;
-  readonly ma60?: number;
-  readonly rsi14?: number;
-  readonly macdDif?: number;
-  readonly macdDea?: number;
-  readonly macdHist?: number;
-  readonly [key: string]: number | undefined;
 }
 
 export type TacticSignalDirection = 'bullish' | 'bearish' | 'neutral';
@@ -143,19 +131,6 @@ export const AdviceReasoningSchema = z.object({
   evidence: z.array(z.string()),
   counterEvidence: z.array(z.string()),
 });
-
-export const TechnicalIndicatorsSchema = z
-  .object({
-    ma5: z.number().optional(),
-    ma10: z.number().optional(),
-    ma20: z.number().optional(),
-    ma60: z.number().optional(),
-    rsi14: z.number().optional(),
-    macdDif: z.number().optional(),
-    macdDea: z.number().optional(),
-    macdHist: z.number().optional(),
-  })
-  .catchall(z.number());
 
 export const TacticSignalDirectionSchema = z.enum(['bullish', 'bearish', 'neutral']);
 

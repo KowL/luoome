@@ -3,12 +3,17 @@ import { z } from 'zod';
 import type { Tool } from './define-tool.js';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
+import { batchQuoteTool } from './tools/batch-quote.js';
+import { computeIndicatorsTool } from './tools/compute-indicators.js';
+import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getHoldingTool } from './tools/get-holding.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
+import { searchStocksTool } from './tools/search-stocks.js';
+import { syncQuotesTool } from './tools/sync-quotes.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {
@@ -121,4 +126,9 @@ export const toolRegistry: Registry = createRegistry([
   getAdviceStatsTool,
   analyzeStockTool,
   analyzePositionTool,
+  fetchQuoteTool,
+  batchQuoteTool,
+  syncQuotesTool,
+  searchStocksTool,
+  computeIndicatorsTool,
 ]);

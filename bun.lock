@@ -26,6 +26,7 @@
       "dependencies": {
         "@luoome/core": "workspace:*",
         "drizzle-orm": "^0.45.2",
+        "zod": "^4.0.0",
       },
     },
     "packages/cli": {

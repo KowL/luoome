@@ -235,3 +235,7 @@ $('#btn-refresh').addEventListener('click', refreshAll);
 $('#btn-analyze-all').addEventListener('click', analyzeAll);
 
 refreshAll();
+
+// v0.2 起：5s 自动刷新（plan-v0.2-v0.3 §3.9）。与 TUI 周期对齐，
+// 拉取 holdings（含最新价）+ 今日建议。setInterval 在页面关闭时由浏览器回收。
+setInterval(refreshAll, 5_000);

@@ -6,7 +6,9 @@ import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
+  DrizzleDailyBarRepository,
   DrizzleHoldingRepository,
+  DrizzleQuoteRepository,
   DrizzleStockRepository,
   DrizzleTradeRepository,
 } from './repository/drizzle/index.js';
@@ -123,6 +125,23 @@ export const ensureSchema = (db: DrizzleDb): void => {
       CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, ts)
     )
   `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS daily_bars (
+      stock_id TEXT NOT NULL,
+      date INTEGER NOT NULL,
+      open REAL NOT NULL,
+      high REAL NOT NULL,
+      low REAL NOT NULL,
+      close REAL NOT NULL,
+      volume INTEGER NOT NULL,
+      adj_factor REAL NOT NULL,
+      source TEXT NOT NULL,
+      CONSTRAINT daily_bars_pk PRIMARY KEY (stock_id, date)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
+  `);
 };
 
 /** createDrizzleRepos 的返回句柄：repos + db + close()。 */
@@ -154,6 +173,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
     advice: new DrizzleAdviceRepository(db),
+    quote: new DrizzleQuoteRepository(db),
+    dailyBar: new DrizzleDailyBarRepository(db),
   };
   return { repos, db, close: () => sqlite.close() };
 };

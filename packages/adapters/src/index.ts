@@ -2,11 +2,18 @@
 
 // 确定性工具（供 db / tools 等下游复用 mock 时钟与哈希）
 export * from './internal/deterministic.js';
-export * from './llm/mock.js';
 // LLM
+export * from './llm/anthropic.js';
+export * from './llm/manager.js';
+export * from './llm/mock.js';
+export * from './llm/openai-compatible.js';
 export * from './llm/types.js';
-export * from './market/mock.js';
 // 行情
+export * from './market/cache.js';
+export * from './market/eastmoney.js';
+export * from './market/manager.js';
+export * from './market/mock.js';
+export * from './market/tencent.js';
 export * from './market/types.js';
 
 // fixtures

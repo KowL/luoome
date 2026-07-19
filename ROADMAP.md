@@ -26,25 +26,31 @@
 - ✅ README + ARCHITECTURE + AGENTS + ROADMAP + SECURITY 齐备且反映 advisor 定位
 - ✅ Advice 实体的 6 个不变量都被 assert 覆盖
 
-## v0.2 — 真实行情 + 真实 Advice
+## v0.2 — 真实行情 + 真实 Advice ✅（已完成）
 
 **目标**：接入真实数据源 + 真实 LLM，advice 端到端可用。
 
-**产物**：
-- adapters/market：EastmoneyAdapter（主力）+ TencentAdapter（备用）+ Manager（故障降级 + 缓存 + 限速）
-- adapters/market/mocks：测试用 mock adapter
-- adapters/llm：OpenAI / Anthropic / DeepSeek / Kimi 适配 + schema-constrained decoding
-- 新 tool：`fetch_quote`, `batch_quote`, `sync_quotes`, `search_stocks`, `compute_indicators`
-- 新 advice tool：`analyze_position`（基于持仓上下文）
-- 新 workflow：`sync-quotes`, `daily-advice`
-- TUI：实时报价面板 + 今日建议面板 + 自动刷新
+**实际产物（W2.A → W2.H，commit 见 git log）**：
+- core 增量：`Market` 枚举 + `IndicatorSet`（`KNOWN_INDICATOR_KEYS` 13 项）+ `LLMProviderConfig` + env 解析
+- db 增量：`quote_snapshot` + `daily_bars` 表 + QuoteRepository / DailyBarRepository（Drizzle + in-memory 双实现）
+- adapters 增量：
+  - market：EastmoneyAdapter（A 股 + 港股）+ TencentAdapter（备用）+ QuoteCache / DailyBarCache（LRU）+ MarketDataManager（cache + rate-limit + fallback + 抑制窗口）
+  - llm：OpenAICompatibleAdapter（覆盖 OpenAI / DeepSeek / Kimi / Moonshot / Zhipu）+ AnthropicAdapter + LLMManager（mock fallback + 重试 + 规则兜底）
+- tools 增量：fetch_quote / batch_quote / sync_quotes / search_stocks / compute_indicators
+- workflows 增量：syncQuotesWorkflow（CLI 子命令 `luoome workflow run sync-quotes`）
+- tui / web：5 秒自动刷新
+- 测试：343 pass（v0.1 173 → v0.2 +170）
 
-**验收**：
-- ✅ 真实拉行情写入 SQLite
-- ✅ 数据源失败自动降级
-- ✅ `analyze_stock` 调真实 LLM 输出合规 Advice（含 disclaimers）
-- ✅ TUI 1 秒间隔刷新不卡顿
-- ✅ 缓存命中率日志可见
+**实际验收**：
+- ✅ 真实行情写入 SQLite（`quote_snapshot` / `daily_bars` 双 repo）
+- ✅ Eastmoney 失败自动切 Tencent；都失败走 mock + 30 分钟抑制窗口
+- ✅ LLMManager：mock / openai-compatible / anthropic 三 provider 路由；
+  缺 key 自动降级 mock；schema parse 失败重试 + 规则 fallback
+- ✅ TUI / Web 5 秒自动刷新（不卡顿，setInterval + onDestroy clear）
+- ✅ 缓存命中率日志可见（`QuoteCache.stats()` + `DailyBarCache.stats()`）
+- ✅ 13 个 tool 全部加载 + 2 个 workflow（sync-quotes / daily-advice）端到端跑通
+
+详细验证脚本与日志见各 commit message。
 
 ## v0.3 — Tactic + Workflow + 复盘
 

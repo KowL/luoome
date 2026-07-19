@@ -2,9 +2,11 @@ import {
   type Account,
   type Advice,
   type AdviceOutcome,
+  type DailyBar,
   type Holding,
   InvariantError,
   money,
+  type Quote,
   quantity,
   type RepositoryRegistry,
   STANDARD_DISCLAIMERS,
@@ -76,6 +78,34 @@ export const makeTrade = (id: string, overrides: Partial<Trade> = {}): Trade => 
   executedAt: T1,
   source: 'manual',
   createdAt: T1,
+  ...overrides,
+});
+
+export const makeQuote = (stockId: string, ts: Date, overrides: Partial<Quote> = {}): Quote => ({
+  stockId,
+  ts,
+  open: money(10),
+  high: money(11),
+  low: money(9),
+  close: money(10.5),
+  volume: 1_000_000,
+  source: 'mock',
+  ...overrides,
+});
+
+export const makeDailyBar = (
+  stockId: string,
+  date: Date,
+  overrides: Partial<DailyBar> = {},
+): DailyBar => ({
+  stockId,
+  date,
+  open: money(10),
+  high: money(11),
+  low: money(9),
+  close: money(10.5),
+  volume: 1_000_000,
+  adjFactor: 1.0,
   ...overrides,
 });
 
@@ -436,6 +466,116 @@ export const registerRepositoryContractTests = (
       it('recordOutcome 的 adviceId 不一致时拒绝', async () => {
         const outcome: AdviceOutcome = { adviceId: 'adv-x', outcome: 'ignored', recordedAt: T3 };
         await expect(repos.advice.recordOutcome('adv-y', outcome)).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('QuoteRepository', () => {
+      it('save + latestByStock 返回最新一条', async () => {
+        await repos.quote.save(makeQuote('stk-1', T1, { close: money(10) }));
+        await repos.quote.save(makeQuote('stk-1', T2, { close: money(11) }));
+        await repos.quote.save(makeQuote('stk-1', T3, { close: money(12) }));
+        const latest = await repos.quote.latestByStock('stk-1');
+        expect(latest?.ts.getTime()).toBe(T3.getTime());
+        expect(latest?.close).toBe(12);
+      });
+
+      it('latestByStock(since) 仅返回 ≥ since 的最新', async () => {
+        await repos.quote.save(makeQuote('stk-1', T1));
+        await repos.quote.save(makeQuote('stk-1', T3));
+        const got = await repos.quote.latestByStock('stk-1', T2);
+        expect(got?.ts.getTime()).toBe(T3.getTime());
+        const none = await repos.quote.latestByStock('stk-1', T3);
+        expect(none?.ts.getTime()).toBe(T3.getTime());
+        const empty = await repos.quote.latestByStock('stk-1', new Date('2099-01-01'));
+        expect(empty).toBeNull();
+      });
+
+      it('latestByStocks 多股一次查', async () => {
+        await repos.quote.save(makeQuote('stk-1', T1));
+        await repos.quote.save(makeQuote('stk-1', T2));
+        await repos.quote.save(makeQuote('stk-2', T3));
+        const got = await repos.quote.latestByStocks(['stk-1', 'stk-2', 'stk-missing']);
+        expect(got.get('stk-1')?.ts.getTime()).toBe(T2.getTime());
+        expect(got.get('stk-2')?.ts.getTime()).toBe(T3.getTime());
+        expect(got.has('stk-missing')).toBe(false);
+      });
+
+      it('listInRange 按 ts 升序返回区间内快照', async () => {
+        await repos.quote.save(makeQuote('stk-1', T1));
+        await repos.quote.save(makeQuote('stk-1', T2));
+        await repos.quote.save(makeQuote('stk-1', T3));
+        const got = await repos.quote.listInRange('stk-1', T1, T2);
+        expect(got.map((q) => q.ts.getTime())).toEqual([T1.getTime(), T2.getTime()]);
+      });
+
+      it('save 同 (stockId, ts) 为 upsert', async () => {
+        await repos.quote.save(makeQuote('stk-1', T2, { close: money(10) }));
+        await repos.quote.save(makeQuote('stk-1', T2, { close: money(99) }));
+        expect((await repos.quote.latestByStock('stk-1'))?.close).toBe(99);
+      });
+
+      it('removeInRange 返回删除条数；after 不动', async () => {
+        await repos.quote.save(makeQuote('stk-1', T1));
+        await repos.quote.save(makeQuote('stk-1', T2));
+        await repos.quote.save(makeQuote('stk-1', T3));
+        const removed = await repos.quote.removeInRange('stk-1', T2);
+        expect(removed).toBe(2);
+        expect((await repos.quote.latestByStock('stk-1'))?.ts.getTime()).toBe(T3.getTime());
+      });
+    });
+
+    describe('DailyBarRepository', () => {
+      it('saveMany + findInRange 按 date 升序返回', async () => {
+        await repos.dailyBar.saveMany([
+          makeDailyBar('stk-1', T1),
+          makeDailyBar('stk-1', T3),
+          makeDailyBar('stk-1', T2),
+        ]);
+        const got = await repos.dailyBar.findInRange('stk-1', T1, T3);
+        expect(got.map((b) => b.date.getTime())).toEqual([
+          T1.getTime(),
+          T2.getTime(),
+          T3.getTime(),
+        ]);
+      });
+
+      it('findInRange 空区间返回空数组（不抛错）', async () => {
+        expect(await repos.dailyBar.findInRange('stk-1', T1, T3)).toEqual([]);
+      });
+
+      it('latestBefore 取 ≤ to 的最近 N 根，按 date 升序返回', async () => {
+        await repos.dailyBar.saveMany([
+          makeDailyBar('stk-1', T1),
+          makeDailyBar('stk-1', T2),
+          makeDailyBar('stk-1', T3),
+        ]);
+        const got = await repos.dailyBar.latestBefore('stk-1', T2, 2);
+        expect(got.map((b) => b.date.getTime())).toEqual([T1.getTime(), T2.getTime()]);
+      });
+
+      it('latestBefore count=0 返回空；count<0 返回空', async () => {
+        await repos.dailyBar.saveMany([makeDailyBar('stk-1', T1)]);
+        expect(await repos.dailyBar.latestBefore('stk-1', T1, 0)).toEqual([]);
+        expect(await repos.dailyBar.latestBefore('stk-1', T1, -1)).toEqual([]);
+      });
+
+      it('saveMany 同 (stockId, date) 为 upsert', async () => {
+        await repos.dailyBar.saveMany([makeDailyBar('stk-1', T1, { close: money(10) })]);
+        await repos.dailyBar.saveMany([makeDailyBar('stk-1', T1, { close: money(99) })]);
+        const got = await repos.dailyBar.findInRange('stk-1', T1, T1);
+        expect(got[0]?.close).toBe(99);
+      });
+
+      it('removeInRange 返回删除条数', async () => {
+        await repos.dailyBar.saveMany([
+          makeDailyBar('stk-1', T1),
+          makeDailyBar('stk-1', T2),
+          makeDailyBar('stk-1', T3),
+        ]);
+        expect(await repos.dailyBar.removeInRange('stk-1', T2)).toBe(2);
+        expect(
+          (await repos.dailyBar.findInRange('stk-1', T1, T3)).map((b) => b.date.getTime()),
+        ).toEqual([T3.getTime()]);
       });
     });
   });

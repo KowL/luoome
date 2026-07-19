@@ -414,6 +414,44 @@ const runLazyEntry = async (
 };
 
 /** mcp serve：契约 startMcpServer() 来自 plan.md（stdio，env 控制暴露面）。 */
+const cmdWorkflowRun = async (
+  name: string,
+  flags: ReadonlyMap<string, string | boolean>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _json: boolean,
+): Promise<number> => {
+  const inputRaw = flagString(flags, 'input') ?? '{}';
+  let input: unknown;
+  try {
+    input = JSON.parse(inputRaw);
+  } catch (error) {
+    throw new CliUsageError(`--input 必须是合法 JSON: ${(error as Error).message}`);
+  }
+  // workflow 注册表：v0.2 起 sync-quotes / daily-advice。
+  const workflows = await import('@luoome/workflows');
+  type Wf = {
+    run: (
+      input: unknown,
+      ctx: unknown,
+    ) => Promise<{ ok: boolean; data?: unknown; error?: unknown }>;
+  };
+  const reg = workflows as unknown as Record<string, Wf>;
+  // hyphen-case → camelCase：sync-quotes → syncQuotes；lookup 时拼 Workflow 后缀
+  const camel = name.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+  const wf: Wf | undefined = reg[`${camel}Workflow`];
+  if (wf === undefined) {
+    throw new CliUsageError(`未知 workflow: "${name}"（支持 sync-quotes / daily-advice）`);
+  }
+  const handle = await createCliContext();
+  try {
+    const res = await wf.run(input, handle.ctx);
+    console.log(JSON.stringify(res, null, 2));
+    return res.ok ? 0 : 1;
+  } finally {
+    handle.close();
+  }
+};
+
 const cmdMcpServe = (): Promise<number> => runLazyEntry('@luoome/mcp', 'startMcpServer', []);
 
 /**
@@ -458,6 +496,7 @@ Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
   web serve [--port 5173]      启动 Web 仪表盘（Hono）
+  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice）
 
 环境变量:
   LUOOME_HOME   数据目录（默认 ~/.luoome）；SQLite 位于 $LUOOME_HOME/luoome.db
@@ -511,6 +550,17 @@ const run = async (argv: readonly string[]): Promise<number> => {
   if (cmd === 'mcp') {
     if (sub === 'serve') return cmdMcpServe();
     throw new CliUsageError(`未知 mcp 子命令: "${sub ?? ''}"（支持 serve）`);
+  }
+
+  if (cmd === 'workflow') {
+    if (sub === 'run') {
+      const name = rest[0];
+      if (name === undefined) {
+        throw new CliUsageError(`用法: luoome workflow run <name> [--input '<json>']`);
+      }
+      return cmdWorkflowRun(name, flags, json);
+    }
+    throw new CliUsageError(`未知 workflow 子命令: "${sub ?? ''}"（支持 run）`);
   }
 
   if (cmd === 'tui') return cmdTui();

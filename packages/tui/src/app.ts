@@ -616,6 +616,17 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   // 启动即加载（ARCHITECTURE §11 场景 B）。
   void refresh();
 
+  // v0.2 起 5s 自动刷新（plan-v0.2-v0.3 §3.8）：保持右侧「今日建议」面板新鲜；
+  // 用户按 r 也可手动刷新（走同一 refresh 路径）。setInterval 不会被 keypress
+  // handler 中断；renderer 销毁时由 onDestroy 清掉 interval。
+  const refreshIntervalMs = 5_000;
+  const intervalHandle = setInterval(() => {
+    void refresh();
+  }, refreshIntervalMs);
+  renderer.on(CliRenderEvents.DESTROY, () => {
+    clearInterval(intervalHandle);
+  });
+
   return new Promise<void>((resolve) => {
     renderer.on(CliRenderEvents.DESTROY, () => resolve());
   });

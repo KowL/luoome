@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
+// v0.2 末态：6 read + 2 advice (v0.1) + 3 external + 2 read (v0.2 新) = 13 tool
 const EXPECTED_TOOL_NAMES = [
+  // v0.1
   'list_accounts',
   'get_account',
   'list_holdings',
@@ -11,18 +13,25 @@ const EXPECTED_TOOL_NAMES = [
   'get_advice_stats',
   'analyze_stock',
   'analyze_position',
+  // v0.2 新增
+  'fetch_quote',
+  'batch_quote',
+  'sync_quotes',
+  'search_stocks',
+  'compute_indicators',
 ] as const;
 
 describe('toolRegistry', () => {
-  it('注册全部 8 个 v0.1 tool（6 read + 2 advice）', () => {
+  it(`注册全部 ${EXPECTED_TOOL_NAMES.length} 个 tool（v0.1 8 + v0.2 新增 5）`, () => {
     const all = toolRegistry.all();
-    expect(all).toHaveLength(8);
+    expect(all).toHaveLength(EXPECTED_TOOL_NAMES.length);
     expect(all.map((t) => t.name).sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
   });
 
   it('get(name) 命中 / 未命中', () => {
     expect(toolRegistry.get('analyze_stock')?.sideEffect).toBe('advice');
-    expect(toolRegistry.get('get_advice_stats')?.sideEffect).toBe('read');
+    expect(toolRegistry.get('fetch_quote')?.sideEffect).toBe('external');
+    expect(toolRegistry.get('compute_indicators')?.sideEffect).toBe('read');
     expect(toolRegistry.get('not_a_tool')).toBeUndefined();
   });
 
@@ -31,18 +40,26 @@ describe('toolRegistry', () => {
       expect(tool.sideEffect).not.toBe('trade');
     }
     const sideEffects = new Set(toolRegistry.all().map((t) => t.sideEffect));
-    expect([...sideEffects].sort()).toEqual(['advice', 'read']);
+    // v0.2 末态：read / write / external / advice / trade
+    // 当前注册表：read / advice / external
+    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read']);
     const adviceTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'advice')
       .map((t) => t.name)
       .sort();
     expect(adviceTools).toEqual(['analyze_position', 'analyze_stock']);
+    const externalTools = toolRegistry
+      .all()
+      .filter((t) => t.sideEffect === 'external')
+      .map((t) => t.name)
+      .sort();
+    expect(externalTools).toEqual(['batch_quote', 'fetch_quote', 'sync_quotes']);
   });
 
   it('toMCP()：[{ name, description, inputSchema(JSON Schema) }]', () => {
     const mcp = toolRegistry.toMCP();
-    expect(mcp).toHaveLength(8);
+    expect(mcp).toHaveLength(EXPECTED_TOOL_NAMES.length);
     for (const descriptor of mcp) {
       expect(descriptor.name.length).toBeGreaterThan(0);
       expect(descriptor.description.length).toBeGreaterThan(0);
@@ -56,7 +73,7 @@ describe('toolRegistry', () => {
 
   it('toOpenAI()：function calling 格式', () => {
     const openai = toolRegistry.toOpenAI();
-    expect(openai).toHaveLength(8);
+    expect(openai).toHaveLength(EXPECTED_TOOL_NAMES.length);
     for (const descriptor of openai) {
       expect(descriptor.type).toBe('function');
       expect(descriptor.function.name.length).toBeGreaterThan(0);
