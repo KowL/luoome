@@ -1,3 +1,4 @@
+import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, Quote } from './entity/quote.js';
 import type { RepositoryRegistry } from './repository/index.js';
 
@@ -39,12 +40,27 @@ export interface Logger {
  * 所有 tool / workflow handler 收到的 ctx（ARCHITECTURE §4.8）。
  * ctx 是唯一被允许注入依赖的方式。
  */
+/**
+ * NotificationManager 投影（v0.3 起；core 不依赖 adapters 包）：
+ * - adapters 包提供 NotificationManager 实现；core 仅暴露 send 接口。
+ */
+export interface NotificationManagerLike {
+  send(input: {
+    readonly channel: 'feishu' | 'log';
+    readonly payload: NotificationPayload;
+    readonly adviceId?: string;
+    readonly tacticSignalId?: string;
+  }): Promise<{ readonly notification: unknown }>;
+}
+
 export interface ToolContext {
   readonly repos: RepositoryRegistry;
   readonly adapters: {
     readonly market: MarketDataAdapterLike;
     readonly llm: LLMAdapterLike;
   };
+  /** v0.3 起；send_notification tool 用。装配时由 CLI/MCP 注入。 */
+  readonly notification?: NotificationManagerLike;
   readonly user: {
     readonly id: string;
     readonly defaultAccountId: string;

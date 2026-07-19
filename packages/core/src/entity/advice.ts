@@ -47,18 +47,13 @@ export interface AdviceReasoning {
   readonly counterEvidence: readonly string[]; // 反证
 }
 
-export type TacticSignalDirection = 'bullish' | 'bearish' | 'neutral';
+// TacticSignal / TacticSignalSchema v0.3 起权威定义迁到 tactic.ts；
+// 这里 import（让本地能用）+ re-export（让外部通过 advice.js 仍能拿到名字）。
+import type { TacticSignal } from './tactic.js';
+import { TacticSignalSchema } from './tactic.js';
 
-/** 战法信号（ARCHITECTURE §5.1：战法、标的、ts、分数、方向、证据）。 */
-export interface TacticSignal {
-  readonly tacticId: string;
-  readonly tacticName?: string;
-  readonly stockId: string;
-  readonly ts: Date;
-  readonly score: number; // 0-100
-  readonly direction: TacticSignalDirection;
-  readonly evidence: readonly string[];
-}
+export type { TacticSignal } from './tactic.js';
+export { TacticSignalSchema } from './tactic.js';
 
 /** 数据快照：advice 产出瞬间引用的数据，事后可复盘。 */
 export interface AdviceDataSnapshot {
@@ -85,6 +80,8 @@ export interface Advice {
   readonly validFrom: Date;
   readonly validUntil: Date; // 过期时间（不再被采纳）
   readonly createdAt: Date;
+  /** v0.3 起：可选的回填结果（事后复盘）；不存在 = 待回填。 */
+  readonly outcome?: AdviceOutcome;
 }
 
 /** 建议结果回填（事后验证，ARCHITECTURE §5.2）。 */
@@ -132,17 +129,7 @@ export const AdviceReasoningSchema = z.object({
   counterEvidence: z.array(z.string()),
 });
 
-export const TacticSignalDirectionSchema = z.enum(['bullish', 'bearish', 'neutral']);
-
-export const TacticSignalSchema = z.object({
-  tacticId: z.string().min(1),
-  tacticName: z.string().optional(),
-  stockId: z.string().min(1),
-  ts: z.coerce.date(),
-  score: z.number().min(0).max(100),
-  direction: TacticSignalDirectionSchema,
-  evidence: z.array(z.string()),
-});
+// TacticDirectionSchema 由 tactic.ts 导出并 re-export 在上面。
 
 export const AdviceDataSnapshotSchema = z.object({
   quotes: z.record(z.string(), QuoteSchema).optional(),
@@ -150,6 +137,14 @@ export const AdviceDataSnapshotSchema = z.object({
   tacticSignals: z.array(TacticSignalSchema).optional(),
   llmReasoning: z.string().optional(),
   dataAsOf: z.coerce.date(),
+});
+
+export const AdviceOutcomeSchema = z.object({
+  adviceId: z.string().min(1),
+  outcome: z.enum(['followed', 'partially_followed', 'ignored']),
+  pnl: MoneySchema.optional(),
+  benchmarkPnl: MoneySchema.optional(),
+  recordedAt: z.coerce.date(),
 });
 
 export const AdviceSchema = z.object({
@@ -168,14 +163,7 @@ export const AdviceSchema = z.object({
   validFrom: z.coerce.date(),
   validUntil: z.coerce.date(),
   createdAt: z.coerce.date(),
-});
-
-export const AdviceOutcomeSchema = z.object({
-  adviceId: z.string().min(1),
-  outcome: z.enum(['followed', 'partially_followed', 'ignored']),
-  pnl: MoneySchema.optional(),
-  benchmarkPnl: MoneySchema.optional(),
-  recordedAt: z.coerce.date(),
+  outcome: AdviceOutcomeSchema.optional(),
 });
 
 export const AdviceQuerySchema = z.object({

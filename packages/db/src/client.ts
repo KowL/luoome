@@ -8,8 +8,10 @@ import {
   DrizzleAdviceRepository,
   DrizzleDailyBarRepository,
   DrizzleHoldingRepository,
+  DrizzleNotificationRepository,
   DrizzleQuoteRepository,
   DrizzleStockRepository,
+  DrizzleTacticRepository,
   DrizzleTradeRepository,
 } from './repository/drizzle/index.js';
 import { type Schema, schema } from './schema/index.js';
@@ -142,6 +144,61 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
   `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS tactics (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      description TEXT NOT NULL,
+      trigger_when TEXT NOT NULL,
+      score_expression TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      evidence_template TEXT NOT NULL,
+      source TEXT NOT NULL,
+      defined_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS tactics_tag_idx ON tactics (tag)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS tactics_source_idx ON tactics (source)`);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS tactic_signals (
+      id TEXT PRIMARY KEY,
+      tactic_id TEXT NOT NULL,
+      tactic_name TEXT NOT NULL,
+      tactic_tag TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      score REAL NOT NULL,
+      direction TEXT NOT NULL,
+      evidence TEXT NOT NULL,
+      trigger_snapshot TEXT
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS tactic_signals_tactic_ts_idx ON tactic_signals (tactic_id, ts)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS tactic_signals_stock_ts_idx ON tactic_signals (stock_id, ts)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      channel TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      result TEXT NOT NULL,
+      error_message TEXT,
+      advice_id TEXT,
+      tactic_signal_id TEXT,
+      sent_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS notifications_advice_idx ON notifications (advice_id)`);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS notifications_signal_idx ON notifications (tactic_signal_id)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS notifications_result_idx ON notifications (result, sent_at)`,
+  );
 };
 
 /** createDrizzleRepos 的返回句柄：repos + db + close()。 */
@@ -175,6 +232,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     advice: new DrizzleAdviceRepository(db),
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),
+    tactic: new DrizzleTacticRepository(db),
+    notification: new DrizzleNotificationRepository(db),
   };
   return { repos, db, close: () => sqlite.close() };
 };

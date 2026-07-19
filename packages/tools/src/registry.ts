@@ -10,10 +10,19 @@ import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getHoldingTool } from './tools/get-holding.js';
+import { getTacticTool } from './tools/get-tactic.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
+import { listTacticsTool } from './tools/list-tactics.js';
+import { marketOutlookTool } from './tools/market-outlook.js';
+import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
+import { runTacticTool } from './tools/run-tactic.js';
+import { scoreSignalsTool } from './tools/score-signals.js';
 import { searchStocksTool } from './tools/search-stocks.js';
+import { sendNotificationTool } from './tools/send-notification.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
+import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
+import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {
@@ -131,4 +140,14 @@ export const toolRegistry: Registry = createRegistry([
   syncQuotesTool,
   searchStocksTool,
   computeIndicatorsTool,
+  // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
+  listTacticsTool,
+  getTacticTool,
+  runTacticTool,
+  scoreSignalsTool,
+  tacticSignalsByStockTool,
+  tacticSignalsByTacticTool,
+  recordAdviceOutcomeTool,
+  sendNotificationTool,
+  marketOutlookTool,
 ]);

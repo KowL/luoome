@@ -10,13 +10,18 @@ export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';
 export * from './entity/llm-provider.js';
 export * from './entity/market.js';
+export * from './entity/notification.js';
 export * from './entity/quote.js';
 export * from './entity/stock.js';
+export * from './entity/tactic.js';
 export * from './entity/trade.js';
 // 错误模型
 export * from './error/index.js';
 // 仓储接口
 export * from './repository/index.js';
+// 战法 DSL 引擎（v0.3 起）
+export * from './tactic/dsl.js';
+export * from './tactic/runner.js';
 // 基础类型
 export * from './types/branded.js';
 export * from './types/result.js';

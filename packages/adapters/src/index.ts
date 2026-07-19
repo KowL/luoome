@@ -15,6 +15,7 @@ export * from './market/manager.js';
 export * from './market/mock.js';
 export * from './market/tencent.js';
 export * from './market/types.js';
-
 // fixtures
 export * from './mocks/fixtures.js';
+// 通知（v0.3 起）
+export * from './notification/index.js';

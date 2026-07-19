@@ -6,12 +6,15 @@ import {
   type Holding,
   InvariantError,
   money,
+  type Notification,
   type Quote,
   quantity,
   type RepositoryRegistry,
   STANDARD_DISCLAIMERS,
   type Stock,
   stockCode,
+  type Tactic,
+  type TacticSignal,
   type Trade,
 } from '@luoome/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -128,6 +131,48 @@ export const makeAdvice = (id: string, overrides: Partial<Advice> = {}): Advice 
   validFrom: T1,
   validUntil: FAR_FUTURE,
   createdAt: T1,
+  ...overrides,
+});
+
+export const makeTactic = (id: string, overrides: Partial<Tactic> = {}): Tactic => ({
+  id,
+  name: `战法-${id}`,
+  tag: 'momentum',
+  description: 'fixture tactic description',
+  triggerWhen: 'true',
+  scoreExpression: '50',
+  direction: 'bullish',
+  evidenceTemplate: ['fixture-evidence'],
+  source: 'builtin',
+  definedAt: T0,
+  ...overrides,
+});
+
+export const makeTacticSignal = (
+  tacticId: string,
+  stockId: string,
+  overrides: Partial<TacticSignal> = {},
+): TacticSignal => ({
+  tacticId,
+  tacticName: `战法-${tacticId}`,
+  tacticTag: 'momentum',
+  stockId,
+  ts: T1,
+  score: 75,
+  direction: 'bullish',
+  evidence: ['fixture-evidence'],
+  ...overrides,
+});
+
+export const makeNotification = (
+  id: string,
+  overrides: Partial<Notification> = {},
+): Notification => ({
+  id,
+  channel: 'log',
+  payload: { title: 'fixture title', content: 'fixture content', level: 'info' },
+  result: 'success',
+  sentAt: T1,
   ...overrides,
 });
 
@@ -327,10 +372,12 @@ export const registerRepositoryContractTests = (
             tacticSignals: [
               {
                 tacticId: 'tac-1',
+                tacticName: '放量突破',
+                tacticTag: 'momentum' as const,
                 stockId: 'stk-1',
                 ts: T3,
                 score: 80,
-                direction: 'bullish',
+                direction: 'bullish' as const,
                 evidence: ['放量突破'],
               },
             ],
@@ -576,6 +623,122 @@ export const registerRepositoryContractTests = (
         expect(
           (await repos.dailyBar.findInRange('stk-1', T1, T3)).map((b) => b.date.getTime()),
         ).toEqual([T3.getTime()]);
+      });
+    });
+
+    describe('TacticRepository', () => {
+      it('save + findById 往返一致', async () => {
+        const t = makeTactic('momentum-1');
+        await repos.tactic.save(t);
+        expect(await repos.tactic.findById('momentum-1')).toEqual(t);
+        expect(await repos.tactic.findById('missing')).toBeNull();
+      });
+
+      it('list 默认按 id 升序；tag / source 过滤（只关心 fixture 添加的）', async () => {
+        await repos.tactic.save(makeTactic('t-2', { tag: 'volume' }));
+        await repos.tactic.save(makeTactic('t-1', { tag: 'momentum' }));
+        await repos.tactic.save(
+          makeTactic('u-1', { tag: 'risk', direction: 'bearish', source: 'user' }),
+        );
+        // v0.3 起 in-memory repos 默认灌入 5 个内置战法（不参与本测试断言）；
+        // 这里只验证 t-/u- 前缀的相对顺序与过滤。
+        const ids = (await repos.tactic.list())
+          .map((t) => t.id)
+          .filter((id) => id.startsWith('t-') || id.startsWith('u-'));
+        expect(ids).toEqual(['t-1', 't-2', 'u-1']);
+        const momentumIds = (await repos.tactic.list({ tag: 'momentum' }))
+          .map((t) => t.id)
+          .filter((id) => id.startsWith('t-') || id.startsWith('u-'));
+        expect(momentumIds).toEqual(['t-1']);
+        const builtinIds = (await repos.tactic.list({ source: 'builtin' }))
+          .map((t) => t.id)
+          .filter((id) => id.startsWith('t-') || id.startsWith('u-'));
+        expect(builtinIds).toEqual(['t-1', 't-2']);
+      });
+
+      it('违反不变量时拒绝（risk + bullish 冲突）', async () => {
+        await expect(
+          repos.tactic.save(makeTactic('bad', { tag: 'risk', direction: 'bullish' })),
+        ).rejects.toThrow();
+      });
+
+      it('saveSignal + signalsByTactic 按 ts 倒序', async () => {
+        await repos.tactic.saveSignal(makeTacticSignal('m1', '002594.SZ', { ts: T1 }));
+        await repos.tactic.saveSignal(makeTacticSignal('m1', '600519.SH', { ts: T2 }));
+        await repos.tactic.saveSignal(makeTacticSignal('v1', '002594.SZ', { ts: T3 }));
+        expect((await repos.tactic.signalsByTactic('m1')).map((s) => s.ts.getTime())).toEqual([
+          T2.getTime(),
+          T1.getTime(),
+        ]);
+        expect((await repos.tactic.signalsByStock('002594.SZ')).map((s) => s.tacticId)).toEqual([
+          'v1',
+          'm1',
+        ]);
+      });
+
+      it('saveSignal 同 (tacticId, stockId, ts) 为 upsert', async () => {
+        await repos.tactic.saveSignal(makeTacticSignal('m1', '002594.SZ', { ts: T1, score: 50 }));
+        await repos.tactic.saveSignal(makeTacticSignal('m1', '002594.SZ', { ts: T1, score: 80 }));
+        const sigs = await repos.tactic.signalsByTactic('m1');
+        expect(sigs[0]?.score).toBe(80);
+      });
+    });
+
+    describe('NotificationRepository', () => {
+      it('save + findById 往返一致（含可选字段）', async () => {
+        const n = makeNotification('n-1', {
+          adviceId: 'adv-1',
+          channel: 'feishu',
+          payload: { title: 't', content: 'c', level: 'warn', atMobiles: ['13800001111'] },
+        });
+        await repos.notification.save(n);
+        expect(await repos.notification.findById('n-1')).toEqual(n);
+      });
+
+      it('listByAdvice / listBySignal 按 sentAt 倒序', async () => {
+        await repos.notification.save(makeNotification('n-1', { adviceId: 'adv-1', sentAt: T1 }));
+        await repos.notification.save(makeNotification('n-2', { adviceId: 'adv-1', sentAt: T2 }));
+        await repos.notification.save(
+          makeNotification('n-3', { tacticSignalId: 'sig-1', sentAt: T3 }),
+        );
+        expect((await repos.notification.listByAdvice('adv-1')).map((n) => n.id)).toEqual([
+          'n-2',
+          'n-1',
+        ]);
+        expect((await repos.notification.listBySignal('sig-1')).map((n) => n.id)).toEqual(['n-3']);
+      });
+
+      it('listRecent 过滤 + limit', async () => {
+        await repos.notification.save(
+          makeNotification('n-1', { channel: 'feishu', result: 'success', sentAt: T1 }),
+        );
+        await repos.notification.save(
+          makeNotification('n-2', {
+            channel: 'feishu',
+            result: 'failed',
+            sentAt: T2,
+            errorMessage: 'x',
+          }),
+        );
+        await repos.notification.save(
+          makeNotification('n-3', { channel: 'log', result: 'success', sentAt: T3 }),
+        );
+        expect(
+          (await repos.notification.listRecent({ channel: 'feishu' })).map((n) => n.id),
+        ).toEqual(['n-2', 'n-1']);
+        expect(
+          (await repos.notification.listRecent({ result: 'success' })).map((n) => n.id),
+        ).toEqual(['n-3', 'n-1']);
+        expect((await repos.notification.listRecent({ limit: 2 })).map((n) => n.id)).toEqual([
+          'n-3',
+          'n-2',
+        ]);
+      });
+
+      it('违反不变量时拒绝（result=failed 缺 errorMessage）', async () => {
+        await expect(
+          repos.notification.save(makeNotification('bad', { result: 'failed' })),
+        ).rejects.toThrow();
       });
     });
   });

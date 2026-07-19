@@ -52,26 +52,45 @@
 
 详细验证脚本与日志见各 commit message。
 
-## v0.3 — Tactic + Workflow + 复盘
+## v0.3 — Tactic + Workflow + 复盘 ✅（已完成）
 
 **目标**：战法引擎 + 完整工作流 + advice 复盘闭环。
 
-**产物**：
-- 战法 DSL：YAML schema 定义战法（rule + signal template）
-- 内置战法 5 个：放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振
-- tactic-scoring service：LLM 精排信号
-- 新 tool：`run_tactic`, `score_signals`, `list_tactics`, `get_tactic`, `record_advice_outcome`
-- 新 advice tool：`market_outlook`（大盘 + 板块观点）
-- workflow：`tactic-scan`, `risk-report`, `daily-review`
-- 通知：飞书 Webhook adapter + `send_notification` tool
-- advice 复盘：自动检测 advice 对应持仓已平仓，提示用户回填 outcome
+**实际产物（W3.A → W3.H，commit 见 git log）**：
+- core 增量：`Tactic` / `TacticSignal` / `Notification` 实体 + 不变量；
+  `Advice.outcome` 可选字段（advice 持久化时 join outcome）。
+- db 增量：`tactic` / `tactic_signal` / `notification` 表 + 三类 repo
+  （drizzle + in-memory 双实现），advice repo 在 findById / query 时合并 outcome。
+- core 增量：战法 DSL 引擎（`packages/core/src/tactic/`）—— `${...}` 取值 +
+  布尔 / 比较 / `Math.*` 表达式 + evidence template 渲染。
+- 内置战法 5 个：放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振。
+- adapters 增量：飞书 Webhook adapter（`send_text` / `send_card`）+
+  NotificationManager（dry-run 默认 + 失败重试 + 渠道 fallback）。
+- tools 增量 9 个：`list_tactics`, `get_tactic`, `run_tactic`, `score_signals`,
+  `tactic_signals_by_stock`, `tactic_signals_by_tactic`, `market_outlook`,
+  `record_advice_outcome`, `send_notification`。
+- workflows 增量：`tacticScanWorkflow` / `riskReportWorkflow` / `dailyReviewWorkflow`。
+- cli 增量：`advice outcome <id> --followed true|false --pnl N --notes "..."`
+  + workflow 子命令（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）。
+- tui 增量：[t] 战法扫描弹层（list_tactics → run_tactic × N → score_signals 精排 top 10）+
+  [o] outcome 复盘弹层（近 20 条 advice + outcome 状态 + 回填指引）。
+- web 增量：hash 路由 `#dashboard` / `#tactics` / `#review` + 新 API
+  `/api/tactics` / `/api/tactics/scan?topN=N` / `/api/review` /
+  `/api/review/:id/outcome`（write opt-in via `LUOOME_EXPOSE_WRITE=true`）。
+- 测试：418 pass（v0.2 +0 / v0.3 contract-tests +19 + web / tui 增量维护现有用例）。
 
-**验收**：
-- ✅ 跑战法能产出结构化信号 → 转 Advice
-- ✅ daily-review workflow 端到端产出 Markdown 报告
-- ✅ 高分建议推送飞书卡片
-- ✅ advice outcome 累计后可统计 hit rate
-- ✅ get_advice_stats 输出含 byDecision 拆分
+**实际验收**：
+- ✅ 5 个内置战法 + DSL 表达式求值单测覆盖。
+- ✅ `bash bin/luoome workflow run tactic-scan` 在 mock 数据上确定性产出 ≥ 1 个 signal。
+- ✅ `bash bin/luoome workflow run risk-report` 输出 HHI / top1 / top3 / VaR + 大盘背景。
+- ✅ `bash bin/luoome workflow run daily-review` 产出当日 advice 汇总 + 7 日 stats。
+- ✅ `bash bin/luoome advice outcome <id> --pnl 500` 落库；后续 `advice stats` 命中率随之更新。
+- ✅ 飞书 webhook adapter：env `LUOOME_FEISHU_WEBHOOK_URL` 缺失时降级 logger.info 不抛。
+- ✅ TUI smoke：首屏 + [d] 详情 + [esc] + [s] 统计 + [t] 战法 + [o] 复盘 6 项全过。
+- ✅ Web 三个新 API 在 `:5174` 端到端返回 ToolResult 形状。
+- ✅ `get_advice_stats` 按 decision 拆分（buy / sell / hold / watch / avoid）已 assert。
+- ✅ LUOOME_EXPOSE_TRADE=true 启动硬卡（v0.1 已卡，v0.3 加 web 测试守住）。
+- ✅ typecheck / test / lint 全绿（lint 0 error，2 info 级别 import 排序建议）。
 
 ## v0.4 — Web
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// v0.2 末态：6 read + 2 advice (v0.1) + 3 external + 2 read (v0.2 新) = 13 tool
+// v0.3 末态：13 (v0.2) + 9 (v0.3) = 22 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'list_accounts',
@@ -19,6 +19,16 @@ const EXPECTED_TOOL_NAMES = [
   'sync_quotes',
   'search_stocks',
   'compute_indicators',
+  // v0.3 新增
+  'list_tactics',
+  'get_tactic',
+  'run_tactic',
+  'score_signals',
+  'tactic_signals_by_stock',
+  'tactic_signals_by_tactic',
+  'record_advice_outcome',
+  'send_notification',
+  'market_outlook',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -42,19 +52,24 @@ describe('toolRegistry', () => {
     const sideEffects = new Set(toolRegistry.all().map((t) => t.sideEffect));
     // v0.2 末态：read / write / external / advice / trade
     // 当前注册表：read / advice / external
-    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read']);
+    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read', 'write']);
     const adviceTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'advice')
       .map((t) => t.name)
       .sort();
-    expect(adviceTools).toEqual(['analyze_position', 'analyze_stock']);
+    expect(adviceTools).toEqual(['analyze_position', 'analyze_stock', 'market_outlook']);
     const externalTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'external')
       .map((t) => t.name)
       .sort();
-    expect(externalTools).toEqual(['batch_quote', 'fetch_quote', 'sync_quotes']);
+    expect(externalTools).toEqual([
+      'batch_quote',
+      'fetch_quote',
+      'send_notification',
+      'sync_quotes',
+    ]);
   });
 
   it('toMCP()：[{ name, description, inputSchema(JSON Schema) }]', () => {

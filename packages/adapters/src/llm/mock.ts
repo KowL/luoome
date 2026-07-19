@@ -11,6 +11,8 @@ import type { LLMAdapter, LLMGenerateResult } from './types.js';
 /** system prompt 标识（ARCHITECTURE §6.3 的两种 advice 场景）。 */
 export const MOCK_LLM_SYSTEM_ANALYZE_STOCK = 'analyze_stock';
 export const MOCK_LLM_SYSTEM_ANALYZE_POSITION = 'analyze_position';
+export const MOCK_LLM_SYSTEM_MARKET_OUTLOOK = 'market_outlook';
+export const MOCK_LLM_SYSTEM_SCORE_SIGNALS = 'score_signals';
 
 /** MockLLMAdapter 输出的结构化分析结果（analyze_stock / analyze_position 共用形状）。 */
 export interface MockAnalysisOutput {
@@ -21,7 +23,12 @@ export interface MockAnalysisOutput {
   readonly risks: readonly string[];
 }
 
-type MockMode = 'analyze_stock' | 'analyze_position' | 'generic';
+type MockMode =
+  | 'analyze_stock'
+  | 'analyze_position'
+  | 'market_outlook'
+  | 'score_signals'
+  | 'generic';
 
 /** 仅依赖 safeParse 的最小 schema 投影（zod schema 天然满足）。 */
 interface SchemaLike {
@@ -41,8 +48,16 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
  * （ARCHITECTURE §6.3 schema-constrained decoding），这里经 unknown 断言。
  */
 const asGenerateResult = <T>(data: unknown, raw: string): LLMGenerateResult<T> => {
-  const base = typeof data === 'object' && data !== null ? data : {};
-  return { ...(base as object), raw } as unknown as LLMGenerateResult<T>;
+  // 数组：保留为数组，并把 raw 作为属性挂在数组上（JS 允许 array.x = ...）
+  if (Array.isArray(data)) {
+    const arr = [...data] as unknown as LLMGenerateResult<T>;
+    (arr as unknown as { raw: string }).raw = raw;
+    return arr;
+  }
+  if (typeof data === 'object' && data !== null) {
+    return { ...(data as object), raw } as unknown as LLMGenerateResult<T>;
+  }
+  return { raw } as unknown as LLMGenerateResult<T>;
 };
 
 const readString = (record: Record<string, unknown> | null, key: string): string | null => {
@@ -127,8 +142,37 @@ const RISK_POOL = ['大盘系统性下行风险', '行业政策变化风险', '�
 export class MockLLMAdapter implements LLMAdapter {
   readonly name = 'mock-llm';
 
+  private detectMode(system: string): MockMode {
+    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
+    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
+    if (system.includes(MOCK_LLM_SYSTEM_MARKET_OUTLOOK)) return 'market_outlook';
+    if (system.includes(MOCK_LLM_SYSTEM_SCORE_SIGNALS)) return 'score_signals';
+    return 'generic';
+  }
+
+  /** 核心生成逻辑：decision/confidence/horizon 由 stockId hash + 持仓上下文决定。 */
   generate<T = unknown>(request: LLMGenerateRequest): Promise<LLMGenerateResult<T>> {
     const mode = this.detectMode(request.system);
+    // score_signals 的 schema 是 array，需要直接生成 array（绕过 MockAnalysisOutput 形状）。
+    if (mode === 'score_signals') {
+      const ranked = this.buildScoreSignalsArray(request.data);
+      const raw = JSON.stringify({ mock: true, mode, count: ranked.length });
+      const schema = request.schema;
+      if (isSchemaLike(schema)) {
+        const parsed = schema.safeParse(ranked);
+        if (parsed.success) return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
+        return Promise.resolve(asGenerateResult<T>(ranked, raw));
+      }
+      return Promise.resolve(asGenerateResult<T>(ranked, raw));
+    }
+    return Promise.resolve(this.buildStandardAnalysis(mode, request, request.schema));
+  }
+
+  private buildStandardAnalysis<T>(
+    mode: MockMode,
+    request: LLMGenerateRequest,
+    schema: unknown,
+  ): LLMGenerateResult<T> {
     const stockId = extractStockId(request.data);
     const candidate = this.buildAnalysis(mode, stockId, request.data);
     const raw = JSON.stringify({
@@ -137,32 +181,21 @@ export class MockLLMAdapter implements LLMAdapter {
       mode,
       stockId,
       seed: hashString(`${mode}|${stockId}`),
-      note: 'deterministic mock reasoning（v0.1 不接真实 LLM）',
+      note: 'deterministic mock reasoning',
     });
-
-    const schema = request.schema;
     if (isSchemaLike(schema)) {
       const parsed = schema.safeParse(candidate);
-      if (parsed.success) {
-        return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
-      }
-      // parse 失败 → 稳定 fallback（同样尝试过 schema；仍失败则原样返回 fallback）
+      if (parsed.success) return asGenerateResult<T>(parsed.data, raw);
       const fallback = this.fallbackAnalysis(stockId);
       const reparsed = schema.safeParse(fallback);
-      return Promise.resolve(asGenerateResult<T>(reparsed.success ? reparsed.data : fallback, raw));
+      return asGenerateResult<T>(reparsed.success ? reparsed.data : fallback, raw);
     }
-
-    return Promise.resolve(asGenerateResult<T>(candidate, raw));
+    return asGenerateResult<T>(candidate, raw);
   }
 
-  private detectMode(system: string): MockMode {
-    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
-    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
-    return 'generic';
-  }
-
-  /** 核心生成逻辑：decision/confidence/horizon 由 stockId hash + 持仓上下文决定。 */
   private buildAnalysis(mode: MockMode, stockId: string, data: unknown): MockAnalysisOutput {
+    if (mode === 'market_outlook') return this.buildMarketOutlook(data);
+
     const seed = hashString(`${mode}|${stockId}`);
     const rand = mulberry32(seed);
 
@@ -203,6 +236,62 @@ export class MockLLMAdapter implements LLMAdapter {
     ];
 
     return { decision, confidence, horizon, reasoning, risks };
+  }
+
+  /**
+   * 市场 / 板块观点 mock 输出：
+   * - avgChangePct ≥ +1% → bullish（buy / avoid 都不会是真实选择）
+   * - avgChangePct ≤ -1% → bearish
+   * - 其它 → neutral (hold)
+   */
+  private buildMarketOutlook(data: unknown): MockAnalysisOutput {
+    const record = asRecord(data);
+    const avgChangePct = readNumber(record, 'avgChangePct') ?? 0;
+    const evaluatedStocks = readNumber(record, 'evaluatedStocks') ?? 0;
+    const decision: AdviceDecision =
+      avgChangePct >= 0.01 ? 'buy' : avgChangePct <= -0.01 ? 'sell' : 'hold';
+    const confidence = Math.min(85, 50 + Math.floor(Math.abs(avgChangePct) * 1000));
+    return {
+      decision,
+      confidence,
+      horizon: 'short',
+      reasoning: {
+        premise: `mock 市场观点：评估 ${evaluatedStocks} 只股票，平均涨跌 ${(avgChangePct * 100).toFixed(2)}%`,
+        evidence: [
+          `市场宽度：${avgChangePct >= 0 ? '上涨家数居多' : '下跌家数居多'}`,
+          `平均涨跌幅 ${(avgChangePct * 100).toFixed(2)}%`,
+        ],
+        counterEvidence: ['样本可能含板块偏好，结论非全市场'],
+      },
+      risks: ['系统性风险', '板块集中度风险'],
+    };
+  }
+
+  /**
+   * 战法信号精排 mock 输出（v0.3）：对每个 signal 的原 score 做 ±20 微调，
+   * rationale 固定为 "mock: ..."。schema 是 Array<{tacticId, stockId, ts, llmScore, rationale}>。
+   */
+  private buildScoreSignalsArray(
+    data: unknown,
+  ): Array<{ tacticId: string; stockId: string; ts: string; llmScore: number; rationale: string }> {
+    const record = asRecord(data);
+    const signals = Array.isArray(record?.signals) ? (record.signals as readonly unknown[]) : [];
+    return signals.map((s) => {
+      const r = asRecord(s);
+      const origScore = readNumber(r, 'score') ?? 50;
+      const seed = hashString(
+        `${readString(r, 'tacticId') ?? 'x'}|${readString(r, 'stockId') ?? 'y'}|${readString(r, 'ts') ?? 'z'}`,
+      );
+      const offset = (seed % 41) - 20; // ±20
+      const llmScore = Math.max(0, Math.min(100, origScore + offset));
+      return {
+        tacticId: readString(r, 'tacticId') ?? '',
+        stockId: readString(r, 'stockId') ?? '',
+        ts: readString(r, 'ts') ?? '',
+        llmScore,
+        rationale: `mock: 基于原 score=${origScore} 微调 ${offset >= 0 ? '+' : ''}${offset}`,
+      };
+    });
   }
 
   /** 稳定 fallback：与输入无关（除 stockId），保证 schema 失败时输出仍可预测。 */

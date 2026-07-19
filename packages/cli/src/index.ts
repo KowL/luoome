@@ -13,7 +13,20 @@ const VERSION = '0.1.0';
 // ---------- argv 解析 ----------
 
 /** 需要跟值的 flag（`--key value` 或 `--key=value`）；其余 `--key` 视为 boolean 开关。 */
-const VALUE_FLAGS = new Set(['input', 'since', 'until', 'port', 'limit']);
+const VALUE_FLAGS = new Set([
+  'input',
+  'since',
+  'until',
+  'port',
+  'limit',
+  'pnl',
+  'holding-hours',
+  'notes',
+  'tactic',
+  'by',
+  'tactic-id',
+  'scope',
+]);
 
 interface ParsedArgs {
   readonly positional: readonly string[];
@@ -382,6 +395,41 @@ const cmdAdviceStats = async (
   }
 };
 
+const cmdAdviceOutcome = async (
+  args: readonly string[],
+  flags: ReadonlyMap<string, string | boolean>,
+): Promise<number> => {
+  const adviceId = args[0];
+  if (adviceId === undefined || adviceId.length === 0) {
+    throw new CliUsageError('advice outcome 需要 adviceId 作为位置参数');
+  }
+  const followedRaw = flagString(flags, 'followed') ?? 'true';
+  const followed = followedRaw === 'true' || followedRaw === '1';
+  const pnl = Number(flagString(flags, 'pnl') ?? '0');
+  const holdingHoursStr = flagString(flags, 'holding-hours');
+  const holdingHours = holdingHoursStr !== undefined ? Number(holdingHoursStr) : undefined;
+  const notes = flagString(flags, 'notes');
+  const handle = await createCliContext();
+  try {
+    const tool = toolRegistry.get('record_advice_outcome');
+    if (tool === undefined) throw unknownToolError('record_advice_outcome');
+    const res = await tool.execute(
+      {
+        adviceId,
+        followed,
+        pnl,
+        ...(holdingHours !== undefined ? { holdingHours } : {}),
+        ...(notes !== undefined ? { notes } : {}),
+      },
+      handle.ctx,
+    );
+    console.log(JSON.stringify(res, null, 2));
+    return res.ok ? 0 : 1;
+  } finally {
+    handle.close();
+  }
+};
+
 // ---------- 懒加载 surfaces（mcp / tui / web，由 W4a/W4c/W4d 并行实现） ----------
 
 const LAZY_HINT = '该 surface 包由并行 agent 实现；若持续失败请检查其导出契约与实现状态';
@@ -440,7 +488,9 @@ const cmdWorkflowRun = async (
   const camel = name.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
-    throw new CliUsageError(`未知 workflow: "${name}"（支持 sync-quotes / daily-advice）`);
+    throw new CliUsageError(
+      `未知 workflow: "${name}"（支持 sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）`,
+    );
   }
   const handle = await createCliContext();
   try {
@@ -491,12 +541,13 @@ Tools:
 Advice:
   advice list [--since 7d] [--include-expired] [--limit N]   查询历史建议
   advice stats [--since 30d]                                 建议准确率统计
+  advice outcome <id> [--followed true|false] [--pnl N]        回填建议结果
 
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
   web serve [--port 5173]      启动 Web 仪表盘（Hono）
-  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice）
+  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）
 
 环境变量:
   LUOOME_HOME   数据目录（默认 ~/.luoome）；SQLite 位于 $LUOOME_HOME/luoome.db
@@ -544,7 +595,8 @@ const run = async (argv: readonly string[]): Promise<number> => {
   if (cmd === 'advice') {
     if (sub === 'list') return cmdAdviceList(flags, json);
     if (sub === 'stats') return cmdAdviceStats(flags, json);
-    throw new CliUsageError(`未知 advice 子命令: "${sub ?? ''}"（支持 list / stats）`);
+    if (sub === 'outcome') return cmdAdviceOutcome(rest, flags);
+    throw new CliUsageError(`未知 advice 子命令: "${sub ?? ''}"（支持 list / stats / outcome）`);
   }
 
   if (cmd === 'mcp') {

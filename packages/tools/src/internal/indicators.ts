@@ -64,6 +64,16 @@ export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalInd
   assign('volMa5', sma(volumes, 5));
   assign('volMa20', sma(volumes, 20));
 
+  // v0.2 扩字段：volRatio5_20 / high20 / low20，供战法 DSL 用（见 KNOWN_INDICATOR_KEYS）。
+  if (out.volMa5 !== undefined && out.volMa20 !== undefined && out.volMa20 !== 0) {
+    assign('volRatio5_20', out.volMa5 / out.volMa20);
+  }
+  if (closes.length >= 20) {
+    const recent20 = closes.slice(closes.length - 20);
+    assign('high20', Math.max(...recent20));
+    assign('low20', Math.min(...recent20));
+  }
+
   // MACD(12,26,9)：dif = ema12 - ema26；dea = dif 的 ema9；hist = dif - dea。
   if (closes.length >= 2) {
     const ema12 = emaSeries(closes, 12);

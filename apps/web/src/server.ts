@@ -143,12 +143,24 @@ export const createWebApp = (ctx: ToolContext): Hono => {
   app.get('/', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/app.js', serveFile('app.js', 'text/javascript; charset=utf-8'));
   app.get('/style.css', serveFile('style.css', 'text/css; charset=utf-8'));
+  app.get('/tactics', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
 
   // —— HTTP API（统一 ToolResult 形状）——
   const callTool = async (name: string, input: unknown): Promise<Response> => {
     const tool = toolRegistry.get(name);
     if (tool === undefined) return jsonResult(notFound('Tool', name));
     return jsonResult(await tool.execute(input, ctx));
+  };
+
+  /**
+   * 内部组合调用：直接返回 ToolResult（不包 Response），便于在 /api/tactics/scan、
+   * /api/review 等聚合端点中串多个 tool 后再统一 wrap。
+   */
+  const invokeTool = async (name: string, input: unknown): Promise<ToolResult<unknown>> => {
+    const tool = toolRegistry.get(name);
+    if (tool === undefined) return notFound('Tool', name);
+    return tool.execute(input, ctx);
   };
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
@@ -169,6 +181,115 @@ export const createWebApp = (ctx: ToolContext): Hono => {
     if (subjectId !== undefined && subjectId.length > 0) input.subjectId = subjectId;
     return callTool('get_advice_stats', input);
   });
+
+  // 战法列表（read；调 list_tactics includeBuiltins=true）
+  app.get('/api/tactics', () => callTool('list_tactics', { includeBuiltins: true }));
+
+  // 战法扫描（read + advice）：list_tactics → 并发 run_tactic × N → score_signals 精排 → top N。
+  // 走 tool 直接串，等价 workflow tactic-scan；输出与 workflow 对齐。
+  app.get('/api/tactics/scan', async (c) => {
+    const topNRaw = c.req.query('topN');
+    const topN = topNRaw === undefined ? 10 : Math.max(1, Math.min(50, Number(topNRaw) || 10));
+    const scopeRaw = c.req.query('scope');
+    const scope = scopeRaw === 'all-stocks' || scopeRaw === 'watchlist' ? scopeRaw : 'holdings';
+    try {
+      const listResult = await invokeTool('list_tactics', { includeBuiltins: true });
+      if (!listResult.ok) return jsonResult(listResult);
+      const list = listResult.data as { tactics: Array<{ id: string }> };
+      const ids = list.tactics.map((t) => t.id);
+      if (ids.length === 0) {
+        return jsonResult({ ok: true, data: { ranked: [], totalTactics: 0, totalSignals: 0 } });
+      }
+      const runs = await Promise.all(
+        ids.map((id) => invokeTool('run_tactic', { tacticId: id, scope })),
+      );
+      const okRuns = runs.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
+      interface SignalRow {
+        tacticId: string;
+        tacticName: string;
+        tacticTag: string;
+        stockId: string;
+        ts: Date;
+        score: number;
+        direction: string;
+        evidence: string[];
+      }
+      const signals: SignalRow[] = [];
+      let totalEvaluated = 0;
+      for (const r of okRuns) {
+        const data = r.data as {
+          signals: SignalRow[];
+          evaluatedStocks: number;
+          triggeredCount: number;
+        };
+        totalEvaluated += data.evaluatedStocks;
+        for (const s of data.signals) signals.push(s);
+      }
+      if (signals.length === 0) {
+        return jsonResult({
+          ok: true,
+          data: {
+            ranked: [],
+            totalTactics: ids.length,
+            totalSignals: 0,
+            evaluatedStocks: totalEvaluated,
+          },
+        });
+      }
+      const scoreResult = await invokeTool('score_signals', { signals });
+      if (!scoreResult.ok) return jsonResult(scoreResult);
+      const ranked = (scoreResult.data as { ranked: unknown[] }).ranked.slice(0, topN);
+      return jsonResult({
+        ok: true,
+        data: {
+          ranked,
+          totalTactics: ids.length,
+          totalSignals: signals.length,
+          evaluatedStocks: new Set(signals.map((s) => s.stockId)).size,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return jsonResult({ ok: false, error: { kind: 'internal', cause: message } });
+    }
+  });
+
+  // 复盘页：近期 advice + 准确率统计（read）
+  app.get('/api/review', async () => {
+    const adviceResult = await invokeTool('get_advice', {
+      includeExpired: true,
+      limit: 20,
+    });
+    if (!adviceResult.ok) return jsonResult(adviceResult);
+    const statsResult = await invokeTool('get_advice_stats', {});
+    if (!statsResult.ok) return jsonResult(statsResult);
+    return jsonResult({
+      ok: true,
+      data: { advices: adviceResult.data, stats: statsResult.data },
+    });
+  });
+
+  // outcome 回填（write；仅当 LUOOME_EXPOSE_WRITE=true 时挂载）。
+  // 默认不暴露：避免 web 端被滥用为批量回填入口。
+  if (process.env.LUOOME_EXPOSE_WRITE === 'true') {
+    app.post('/api/review/:id/outcome', async (c) => {
+      const id = c.req.param('id');
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return jsonResult({
+          ok: false,
+          error: { kind: 'invalid_input', message: '请求体必须是 JSON', issues: [] },
+        });
+      }
+      const input =
+        typeof body === 'object' && body !== null && 'input' in body
+          ? (body as { input: object }).input
+          : {};
+      return jsonResult(await invokeTool('record_advice_outcome', { adviceId: id, ...input }));
+    });
+  }
 
   app.post('/api/tools/:name/call', async (c) => {
     const name = c.req.param('name');

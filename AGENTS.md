@@ -151,7 +151,7 @@ Agent 推理：
 > 用户："今天哪些持仓匹配到'放量突破'战法？"
 
 Agent 推理：
-1. 调 `list_tactics({ tag: "momentum" })` 找战法
+1. 调 `list_tactics({ filter: { tag: "momentum" }, includeBuiltins: true })` 找战法
 2. 调 `run_tactic({ tacticId, scope: "watchlist" })`
 3. 调 `score_signals({ signals })` LLM 精排
 4. 列 top 3 给用户

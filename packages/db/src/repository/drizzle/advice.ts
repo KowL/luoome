@@ -42,23 +42,27 @@ const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
   };
 };
 
-const toAdvice = (row: AdviceRow): Advice => ({
-  id: row.id,
-  subjectKind: row.subjectKind,
-  subjectId: row.subjectId,
-  decision: row.decision,
-  confidence: row.confidence,
-  horizon: row.horizon,
-  reasoning: row.reasoning,
-  risks: row.risks,
-  disclaimers: row.disclaimers,
-  ...(row.sourceTool !== null ? { sourceTool: row.sourceTool } : {}),
-  ...(row.sourceWorkflow !== null ? { sourceWorkflow: row.sourceWorkflow } : {}),
-  basedOn: reviveSnapshot(row.basedOn),
-  validFrom: row.validFrom,
-  validUntil: row.validUntil,
-  createdAt: row.createdAt,
-});
+const toAdvice = (row: AdviceRow, outcome: AdviceOutcome | null): Advice => {
+  const advice: Advice = {
+    id: row.id,
+    subjectKind: row.subjectKind,
+    subjectId: row.subjectId,
+    decision: row.decision,
+    confidence: row.confidence,
+    horizon: row.horizon,
+    reasoning: row.reasoning,
+    risks: row.risks,
+    disclaimers: row.disclaimers,
+    ...(row.sourceTool !== null ? { sourceTool: row.sourceTool } : {}),
+    ...(row.sourceWorkflow !== null ? { sourceWorkflow: row.sourceWorkflow } : {}),
+    basedOn: reviveSnapshot(row.basedOn),
+    validFrom: row.validFrom,
+    validUntil: row.validUntil,
+    createdAt: row.createdAt,
+    ...(outcome !== null ? { outcome } : {}),
+  };
+  return advice;
+};
 
 const toOutcome = (row: OutcomeRow): AdviceOutcome => ({
   adviceId: row.adviceId,
@@ -95,7 +99,8 @@ export class DrizzleAdviceRepository implements AdviceRepository {
 
   async findById(id: string): Promise<Advice | null> {
     const row = this.db.select().from(advices).where(eq(advices.id, id)).get();
-    return row === undefined ? null : toAdvice(row);
+    if (row === undefined) return null;
+    return toAdvice(row, await this.getOutcome(id));
   }
 
   /**
@@ -120,7 +125,8 @@ export class DrizzleAdviceRepository implements AdviceRepository {
       .where(and(...conditions))
       .orderBy(desc(advices.createdAt), desc(advices.id));
     const rows = filter.limit !== undefined ? base.limit(filter.limit).all() : base.all();
-    return rows.map(toAdvice);
+    const outcomes = await Promise.all(rows.map((r) => this.getOutcome(r.id)));
+    return rows.map((r, i) => toAdvice(r, outcomes[i] ?? null));
   }
 
   async recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void> {

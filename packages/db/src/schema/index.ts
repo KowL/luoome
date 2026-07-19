@@ -7,8 +7,10 @@ import type {
   AdviceSubjectKind,
   Exchange,
   Money,
+  Notification,
   Quantity,
   StockCode,
+  Tactic,
   TradeSide,
   TradeSource,
 } from '@luoome/core';
@@ -167,6 +169,90 @@ export const dailyBars = sqliteTable(
   }),
 );
 
+/**
+ * 战法定义（v0.3 起）。
+ * - builtin 战法由 TACTIC_BUILTIN_DEFINED_AT 固化的 definedAt 标识，不被覆盖；
+ * - user 战法由用户在 ~/.luoome/tactics/*.yml 落盘后通过 save_user_tactic 写入。
+ */
+export const tactics = sqliteTable(
+  'tactics',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    tag: text('tag').$type<Tactic['tag']>().notNull(),
+    description: text('description').notNull(),
+    triggerWhen: text('trigger_when').notNull(),
+    scoreExpression: text('score_expression').notNull(),
+    direction: text('direction').$type<Tactic['direction']>().notNull(),
+    /** evidenceTemplate 走 text + mode 'json'（字符串数组）。 */
+    evidenceTemplate: text('evidence_template', { mode: 'json' })
+      .$type<readonly string[]>()
+      .notNull(),
+    source: text('source').$type<Tactic['source']>().notNull(),
+    definedAt: integer('defined_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    /** tag 索引：list_tactics 按 tag 过滤走索引。 */
+    tagIdx: index('tactics_tag_idx').on(t.tag),
+    sourceIdx: index('tactics_source_idx').on(t.source),
+  }),
+);
+
+/**
+ * 战法信号历史（v0.3 起）。
+ * 写多读多：run_tactic 写入，tactic-scan workflow / 复盘页查询。
+ */
+export const tacticSignals = sqliteTable(
+  'tactic_signals',
+  {
+    id: text('id').primaryKey(),
+    tacticId: text('tactic_id').notNull(),
+    tacticName: text('tactic_name').notNull(),
+    tacticTag: text('tactic_tag').$type<Tactic['tag']>().notNull(),
+    stockId: text('stock_id').notNull(),
+    ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
+    score: real('score').notNull(),
+    direction: text('direction').$type<Tactic['direction']>().notNull(),
+    /** evidence 走 text + mode 'json'（字符串数组）。 */
+    evidence: text('evidence', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    /** triggerSnapshot 可选（{ expression, result }）。 */
+    triggerSnapshot: text('trigger_snapshot', { mode: 'json' }).$type<
+      { readonly expression: string; readonly result: boolean } | undefined
+    >(),
+  },
+  (t) => ({
+    /** 按 tacticId + ts 倒序：signalsByTactic 查询走索引。 */
+    tacticTsIdx: index('tactic_signals_tactic_ts_idx').on(t.tacticId, t.ts),
+    /** 按 stockId + ts 倒序：signalsByStock 查询走索引。 */
+    stockTsIdx: index('tactic_signals_stock_ts_idx').on(t.stockId, t.ts),
+  }),
+);
+
+/**
+ * 通知历史（v0.3 起）。
+ * 软关联 adviceId / tacticSignalId（text，可空；不强 FK）。
+ * result / sentAt 索引方便「最近失败通知」排查。
+ */
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: text('id').primaryKey(),
+    channel: text('channel').$type<Notification['channel']>().notNull(),
+    /** payload 是 union schema，JSON 序列化后由 Repository mapper 区分 channel 还原。 */
+    payload: text('payload', { mode: 'json' }).$type<Notification['payload']>().notNull(),
+    result: text('result').$type<Notification['result']>().notNull(),
+    errorMessage: text('error_message'),
+    adviceId: text('advice_id'),
+    tacticSignalId: text('tactic_signal_id'),
+    sentAt: integer('sent_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    adviceIdx: index('notifications_advice_idx').on(t.adviceId),
+    signalIdx: index('notifications_signal_idx').on(t.tacticSignalId),
+    resultIdx: index('notifications_result_idx').on(t.result, t.sentAt),
+  }),
+);
+
 export const schema = {
   accounts,
   stocks,
@@ -176,6 +262,9 @@ export const schema = {
   adviceOutcomes,
   priceSnapshots,
   dailyBars,
+  tactics,
+  tacticSignals,
+  notifications,
 } as const;
 
 export type Schema = typeof schema;

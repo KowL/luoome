@@ -18,14 +18,32 @@ import type {
   GetAdviceStatsOutput,
   GetHoldingInput,
   GetHoldingOutput,
+  GetTacticInput,
+  GetTacticOutput,
   ListAccountsInput,
   ListAccountsOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
+  ListTacticsInput,
+  ListTacticsOutput,
+  MarketOutlookInput,
+  MarketOutlookOutput,
+  RecordAdviceOutcomeInput,
+  RecordAdviceOutcomeOutput,
+  RunTacticInput,
+  RunTacticOutput,
+  ScoreSignalsInput,
+  ScoreSignalsOutput,
   SearchStocksInput,
   SearchStocksOutput,
+  SendNotificationInput,
+  SendNotificationOutput,
   SyncQuotesInput,
   SyncQuotesOutput,
+  TacticSignalsByStockInput,
+  TacticSignalsByStockOutput,
+  TacticSignalsByTacticInput,
+  TacticSignalsByTacticOutput,
 } from '@luoome/tools';
 import { toolRegistry } from '@luoome/tools';
 import type { z } from 'zod';
@@ -65,6 +83,28 @@ export interface WorkflowToolMap {
     typeof ComputeIndicatorsInput,
     typeof ComputeIndicatorsOutput
   >;
+  // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
+  readonly list_tactics: ToolAccessor<typeof ListTacticsInput, typeof ListTacticsOutput>;
+  readonly get_tactic: ToolAccessor<typeof GetTacticInput, typeof GetTacticOutput>;
+  readonly run_tactic: ToolAccessor<typeof RunTacticInput, typeof RunTacticOutput>;
+  readonly score_signals: ToolAccessor<typeof ScoreSignalsInput, typeof ScoreSignalsOutput>;
+  readonly tactic_signals_by_stock: ToolAccessor<
+    typeof TacticSignalsByStockInput,
+    typeof TacticSignalsByStockOutput
+  >;
+  readonly tactic_signals_by_tactic: ToolAccessor<
+    typeof TacticSignalsByTacticInput,
+    typeof TacticSignalsByTacticOutput
+  >;
+  readonly record_advice_outcome: ToolAccessor<
+    typeof RecordAdviceOutcomeInput,
+    typeof RecordAdviceOutcomeOutput
+  >;
+  readonly send_notification: ToolAccessor<
+    typeof SendNotificationInput,
+    typeof SendNotificationOutput
+  >;
+  readonly market_outlook: ToolAccessor<typeof MarketOutlookInput, typeof MarketOutlookOutput>;
 }
 
 /**

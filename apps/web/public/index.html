@@ -20,6 +20,11 @@
       <h1>luoome 投资仪表盘</h1>
       <p class="subtitle">罗网数据 · 织成建议 —— advice ≠ trade，决策权永远在人</p>
     </div>
+    <nav class="navbar" aria-label="主导航">
+      <a class="nav-link" href="#dashboard" data-route="dashboard">仪表盘</a>
+      <a class="nav-link" href="#tactics" data-route="tactics">战法</a>
+      <a class="nav-link" href="#review" data-route="review">复盘</a>
+    </nav>
     <div class="toolbar">
       <button id="btn-refresh" class="btn btn-outline" type="button">刷新</button>
       <button id="btn-analyze-all" class="btn btn-primary" type="button">分析全部持仓</button>
@@ -29,42 +34,68 @@
   <p id="status" class="status" role="status"></p>
 
   <main class="container">
-    <section class="panel" aria-labelledby="holdings-title">
-      <h2 id="holdings-title">持仓</h2>
-      <div class="table-wrap">
-        <table class="holdings-table">
-          <thead>
-            <tr>
-              <th>代码</th>
-              <th>名称</th>
-              <th class="num">数量</th>
-              <th class="num">成本</th>
-              <th class="num">现价</th>
-              <th class="num">市值</th>
-              <th class="num">盈亏</th>
-              <th class="num">盈亏%</th>
-            </tr>
-          </thead>
-          <tbody id="holdings-body">
-            <tr><td colspan="8" class="placeholder">加载中…</td></tr>
-          </tbody>
-          <tfoot id="holdings-foot" hidden>
-            <tr>
-              <td colspan="5">合计</td>
-              <td class="num" id="total-value"></td>
-              <td class="num" id="total-pnl"></td>
-              <td class="num" id="total-pnl-pct"></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+    <section id="route-dashboard" class="route" data-route="dashboard">
+      <section class="panel" aria-labelledby="holdings-title">
+        <h2 id="holdings-title">持仓</h2>
+        <div class="table-wrap">
+          <table class="holdings-table">
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th class="num">数量</th>
+                <th class="num">成本</th>
+                <th class="num">现价</th>
+                <th class="num">市值</th>
+                <th class="num">盈亏</th>
+                <th class="num">盈亏%</th>
+              </tr>
+            </thead>
+            <tbody id="holdings-body">
+              <tr><td colspan="8" class="placeholder">加载中…</td></tr>
+            </tbody>
+            <tfoot id="holdings-foot" hidden>
+              <tr>
+                <td colspan="5">合计</td>
+                <td class="num" id="total-value"></td>
+                <td class="num" id="total-pnl"></td>
+                <td class="num" id="total-pnl-pct"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="advice-title">
+        <h2 id="advice-title">建议</h2>
+        <div id="advice-list" class="advice-list">
+          <p class="placeholder">加载中…</p>
+        </div>
+      </section>
     </section>
 
-    <section class="panel" aria-labelledby="advice-title">
-      <h2 id="advice-title">建议</h2>
-      <div id="advice-list" class="advice-list">
-        <p class="placeholder">加载中…</p>
-      </div>
+    <section id="route-tactics" class="route" data-route="tactics" hidden>
+      <section class="panel">
+        <h2>战法扫描</h2>
+        <div class="toolbar" style="margin-bottom: 1rem;">
+          <button id="btn-tactic-list" class="btn btn-outline" type="button">刷新战法列表</button>
+          <button id="btn-tactic-scan" class="btn btn-primary" type="button">跑战法扫描</button>
+        </div>
+        <h3>内置战法</h3>
+        <div id="tactics-list" class="tactics-list"><p class="placeholder">加载中…</p></div>
+        <h3>扫描结果 top 10</h3>
+        <div id="tactic-signals" class="advice-list"><p class="placeholder">点上面按钮开始扫描</p></div>
+      </section>
+    </section>
+
+    <section id="route-review" class="route" data-route="review" hidden>
+      <section class="panel">
+        <h2>复盘</h2>
+        <h3>准确率统计</h3>
+        <div id="review-stats" class="stats-block"><p class="placeholder">加载中…</p></div>
+        <h3>近期建议（按时间倒序）</h3>
+        <div id="review-list" class="advice-list"><p class="placeholder">加载中…</p></div>
+      </section>
     </section>
   </main>
 

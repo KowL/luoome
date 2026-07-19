@@ -12,6 +12,9 @@ import {
   GetAdviceOutput,
   GetAdviceStatsOutput,
   ListHoldingsOutput,
+  ListTacticsOutput,
+  RunTacticOutput,
+  ScoreSignalsOutput,
   toolRegistry,
 } from '@luoome/tools';
 import {
@@ -285,7 +288,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     height: 1,
     truncate: true,
     fg: COLORS.muted,
-    content: '[r] 刷新  [q] 退出  [d] 建议详情  [s] 复盘统计  [↑/k ↓/j] 选择  [esc] 关闭弹层',
+    content: '[r] 刷新  [q] 退出  [d] 详情  [s] 统计  [t] 战法  [o] 复盘  [↑/↓] 滚动  [esc] 关闭',
   });
   renderer.root.add(footer);
 
@@ -571,6 +574,126 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     }
   };
 
+  /**
+   * 战法扫描（v0.3）：list_tactics → 并发 run_tactic × N → score_signals 精排 → top 10。
+   * 与 workflow tactic-scan 等价语义，但通过 tool 直接串（不依赖 workflows 包）。
+   */
+  const openTactics = async (): Promise<void> => {
+    openOverlay('战法扫描', [
+      '扫描中…（list_tactics → run_tactic × N → score_signals）',
+      '',
+      '[esc] 关闭',
+    ]);
+    try {
+      const listRaw = await callTool('list_tactics', { includeBuiltins: true }, ctx);
+      const list = ListTacticsOutput.parse(listRaw);
+      const tacticIds = list.tactics.map((t) => t.id);
+      if (tacticIds.length === 0) {
+        openOverlay('战法扫描', ['（无战法）', '', '[esc] 关闭']);
+        return;
+      }
+      const runs = await Promise.all(
+        tacticIds.map((id) => callTool('run_tactic', { tacticId: id, scope: 'holdings' }, ctx)),
+      );
+      const signals: Array<z.infer<typeof RunTacticOutput>['signals'][number]> = [];
+      let totalEvaluated = 0;
+      let totalTriggered = 0;
+      for (const raw of runs) {
+        const r = RunTacticOutput.parse(raw);
+        totalEvaluated += r.evaluatedStocks;
+        totalTriggered += r.triggeredCount;
+        for (const s of r.signals) signals.push(s);
+      }
+      if (signals.length === 0) {
+        openOverlay('战法扫描', [
+          `战法数：${tacticIds.length}    评估：${totalEvaluated} 股    命中：${totalTriggered}`,
+          '',
+          '（当前持仓未命中任何战法信号）',
+          '',
+          '[esc] 关闭',
+        ]);
+        return;
+      }
+      const scoreRaw = await callTool(
+        'score_signals',
+        {
+          signals: signals.map((s) => ({
+            tacticId: s.tacticId,
+            tacticName: s.tacticName,
+            tacticTag: s.tacticTag,
+            stockId: s.stockId,
+            ts: s.ts,
+            score: s.score,
+            direction: s.direction,
+            evidence: [...s.evidence],
+          })),
+        },
+        ctx,
+      );
+      const scored = ScoreSignalsOutput.parse(scoreRaw);
+      const top = scored.ranked.slice(0, 10);
+      const lines: string[] = [
+        `战法 ${tacticIds.length} 个    评估 ${totalEvaluated} 股    ` +
+          `命中 ${totalTriggered}    精排 top ${top.length}`,
+        '',
+        `${padEnd('标的', 13)}${padEnd('战法', 14)}${padEnd('方向', 8)}${padStart('评分', 6)}  依据`,
+      ];
+      for (const s of top) {
+        const code = s.stockId.split('.')[0] ?? s.stockId;
+        lines.push(
+          `${padEnd(code, 13)}${padEnd(s.tacticName, 14)}${padEnd(s.direction, 8)}` +
+            `${padStart(s.llmScore.toFixed(1), 6)}  ${s.rationale}`,
+        );
+      }
+      lines.push('', '[esc] 关闭    [↑/↓] 滚动');
+      // 若扫描期间用户已关闭弹层，不强行再打开。
+      if (state.overlay === null || state.overlay.title !== '战法扫描') return;
+      openOverlay('战法扫描', lines);
+    } catch (error) {
+      if (state.overlay === null) return;
+      openOverlay('战法扫描', [`扫描失败：${describeError(error)}`, '', '[esc] 关闭']);
+    }
+  };
+
+  /**
+   * outcome 复盘列表（v0.3）：拉最近 advice 列表，逐条标「已回填 / 待回填」状态。
+   * 真正回填走 CLI / agent（write 副作用，TUI 不直接写）。
+   */
+  const openOutcomes = async (): Promise<void> => {
+    openOverlay('outcome 复盘', ['加载中…', '', '[esc] 关闭']);
+    try {
+      const raw = await callTool('get_advice', { limit: 20, includeExpired: true }, ctx);
+      const data = GetAdviceOutput.parse(raw);
+      const lines: string[] = [
+        `近 ${data.advices.length} 条建议（按创建时间倒序）`,
+        '',
+        `${padEnd('标的', 13)}${padEnd('决策', 8)}${padStart('信心', 6)}  outcome / 盈亏`,
+      ];
+      if (data.advices.length === 0) {
+        lines.push('（暂无建议）');
+      }
+      for (const a of data.advices) {
+        const code = a.subjectId.split('.')[0] ?? a.subjectId;
+        const status = a.outcome === undefined ? '（待回填）' : a.outcome.outcome;
+        const pnl = a.outcome?.pnl !== undefined ? formatSigned(a.outcome.pnl) : '--';
+        lines.push(
+          `${padEnd(code, 13)}${padEnd(a.decision.toUpperCase(), 8)}` +
+            `${padStart(`${a.confidence}%`, 6)}  ${padEnd(status, 18)}${pnl}`,
+        );
+      }
+      lines.push(
+        '',
+        '回填方式：luoome advice outcome <id> --followed true|false --pnl <amount>',
+        '[esc] 关闭    [↑/↓] 滚动',
+      );
+      if (state.overlay === null || state.overlay.title !== 'outcome 复盘') return;
+      openOverlay('outcome 复盘', lines);
+    } catch (error) {
+      if (state.overlay === null) return;
+      openOverlay('outcome 复盘', [`加载失败：${describeError(error)}`, '', '[esc] 关闭']);
+    }
+  };
+
   // ----- 键盘 -----
 
   renderer.keyInput.on('keypress', (key: KeyEvent) => {
@@ -593,6 +716,12 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
         break;
       case 's':
         void openStats();
+        break;
+      case 't':
+        void openTactics();
+        break;
+      case 'o':
+        void openOutcomes();
         break;
       case 'up':
       case 'k':

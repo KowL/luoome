@@ -1,8 +1,10 @@
 import type { Account } from '../entity/account.js';
 import type { Advice, AdviceOutcome, AdviceQuery } from '../entity/advice.js';
 import type { Holding } from '../entity/holding.js';
+import type { Notification, NotificationResult } from '../entity/notification.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Stock } from '../entity/stock.js';
+import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
 
 /**
@@ -88,4 +90,44 @@ export interface RepositoryRegistry {
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
   readonly dailyBar: DailyBarRepository;
+  /** v0.3 起；run_tactic / list_tactics 用。 */
+  readonly tactic: TacticRepository;
+  /** v0.3 起；send_notification 落库 + 复盘查询。 */
+  readonly notification: NotificationRepository;
+}
+
+/**
+ * 战法仓储（v0.3 起）。
+ * 内存中默认装载 5 个 builtin 战法（BUILTIN_TACTICS）；user 战法由
+ * save_user_tactic 显式落库。query() 主要给 list_tactics / run_tactic 用。
+ */
+export interface TacticRepository {
+  save(tactic: Tactic): Promise<void>;
+  findById(id: string): Promise<Tactic | null>;
+  /** tag 过滤（如 'momentum'）；缺省返回全部。 */
+  list(filter?: {
+    readonly tag?: Tactic['tag'];
+    readonly source?: Tactic['source'];
+  }): Promise<readonly Tactic[]>;
+  /** 战法运行时写入信号历史；按 ts 倒序。 */
+  saveSignal(signal: TacticSignal): Promise<void>;
+  signalsByTactic(tacticId: string, since?: Date): Promise<readonly TacticSignal[]>;
+  signalsByStock(stockId: string, since?: Date): Promise<readonly TacticSignal[]>;
+}
+
+/**
+ * 通知仓储（v0.3 起）。
+ * 软关联 adviceId / tacticSignalId：通知失败 / 重复发送排查用。
+ */
+export interface NotificationRepository {
+  save(notification: Notification): Promise<void>;
+  findById(id: string): Promise<Notification | null>;
+  listByAdvice(adviceId: string): Promise<readonly Notification[]>;
+  listBySignal(tacticSignalId: string): Promise<readonly Notification[]>;
+  listRecent(filter?: {
+    readonly channel?: Notification['channel'];
+    readonly result?: NotificationResult;
+    readonly since?: Date;
+    readonly limit?: number;
+  }): Promise<readonly Notification[]>;
 }

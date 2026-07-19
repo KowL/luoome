@@ -69,11 +69,40 @@ export const buildMockContext = async (
       market: new MockMarketAdapter({ clock }),
       llm: new MockLLMAdapter(),
     },
+    notification: createMockNotificationManager(repos),
     user: { id: 'mock-user', defaultAccountId: MOCK_ACCOUNT.id },
     clock,
     logger: opts.logger ?? createSilentLogger(),
   };
 };
+
+/** 测试用 mock NotificationManager（v0.3 起 send_notification tool 依赖）。 */
+const createMockNotificationManager = (repos: RepositoryRegistry) => ({
+  async send(input: {
+    channel: 'feishu' | 'log';
+    payload: {
+      title: string;
+      content: string;
+      level: 'info' | 'warn' | 'error' | 'success';
+      atMobiles?: string[];
+    };
+    adviceId?: string;
+    tacticSignalId?: string;
+  }): Promise<{ notification: unknown }> {
+    const id = `mock-notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const notification = {
+      id,
+      channel: input.channel,
+      payload: input.payload,
+      result: 'success' as const,
+      ...(input.adviceId !== undefined ? { adviceId: input.adviceId } : {}),
+      ...(input.tacticSignalId !== undefined ? { tacticSignalId: input.tacticSignalId } : {}),
+      sentAt: new Date(),
+    };
+    await repos.notification.save(notification);
+    return { notification };
+  },
+});
 
 export interface BuildContextInput {
   readonly repos: RepositoryRegistry;

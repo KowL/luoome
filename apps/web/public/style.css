@@ -387,3 +387,88 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* v0.3 起：顶部 navbar + 战法/复盘页样式 */
+
+.navbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.nav-link {
+  display: inline-block;
+  padding: 0.35rem 0.9rem;
+  border-radius: 0.4rem;
+  text-decoration: none;
+  color: var(--text);
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.nav-link:hover {
+  background: var(--panel-alt, #f5f0e6);
+  border-color: var(--border, #e2dccd);
+}
+
+.nav-link.active {
+  background: var(--accent, #b76e3d);
+  color: #fff;
+  border-color: var(--accent, #b76e3d);
+}
+
+.tactics-list ul,
+.signal-list,
+.review-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tactic-item,
+.signal-item,
+.review-item {
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border, #e2dccd);
+  border-radius: 0.4rem;
+  background: var(--panel, #fffdf9);
+}
+
+.tactic-tag,
+.tactic-meta {
+  display: inline-block;
+  margin-left: 0.5rem;
+  color: var(--muted, #7a7568);
+  font-size: 0.85em;
+}
+
+.tactic-desc {
+  margin: 0.3rem 0 0 0;
+  color: var(--text);
+}
+
+.signal-rationale,
+.review-premise {
+  margin: 0.25rem 0 0 0;
+  color: var(--muted, #7a7568);
+  font-size: 0.9em;
+}
+
+.stats-block .stats-line {
+  margin: 0.25rem 0;
+}
+
+.by-decision {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.3rem 0;
+}
+
+.btn-sm {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.85em;
+}

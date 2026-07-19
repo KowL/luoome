@@ -21,6 +21,7 @@ import {
   mockAdviceFor,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
+import { BUILTIN_TACTICS } from '@luoome/core';
 import { createDrizzleRepos, seedMockData } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
 
@@ -61,6 +62,12 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const dbPath = join(home, 'luoome.db');
 
   const { repos, close } = createDrizzleRepos(dbPath);
+  // v0.3 起：注入 5 个内置战法（首次运行或空库）
+  for (const t of BUILTIN_TACTICS) {
+    if ((await repos.tactic.findById(t.id)) === null) {
+      await repos.tactic.save(t);
+    }
+  }
 
   const now = (): Date => new Date();
 
