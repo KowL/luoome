@@ -10,6 +10,7 @@ import {
   createMarketAdapterFromEnv,
   LLMManager,
   MOCK_ACCOUNT,
+  MOCK_ACCOUNTS,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
@@ -45,7 +46,7 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
   mkdirSync(home, { recursive: true });
   const handle = createDrizzleRepos(join(home, 'luoome.db'));
   await seedMockData(handle.repos, {
-    accounts: [MOCK_ACCOUNT],
+    accounts: MOCK_ACCOUNTS,
     stocks: MOCK_STOCKS,
     holdings: MOCK_HOLDINGS,
     trades: MOCK_TRADES,

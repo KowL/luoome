@@ -6,11 +6,17 @@
 // 注意：@opentui/core 是命令式 API（new Renderable / renderer.root.add），
 // 不是 React 式声明式 API。本文件不 import 任何 React 概念。
 
-import { type AdviceSchema, STANDARD_DISCLAIMERS, type ToolContext } from '@luoome/core';
+import {
+  type AccountSchema,
+  type AdviceSchema,
+  STANDARD_DISCLAIMERS,
+  type ToolContext,
+} from '@luoome/core';
 import {
   AnalyzeStockOutput,
   GetAdviceOutput,
   GetAdviceStatsOutput,
+  ListAccountsOutput,
   ListHoldingsOutput,
   ListTacticsOutput,
   RunTacticOutput,
@@ -51,6 +57,7 @@ const COLORS = {
  */
 type AdviceView = z.infer<typeof AdviceSchema>;
 type StatsView = z.infer<typeof GetAdviceStatsOutput>;
+type AccountView = z.infer<typeof AccountSchema>;
 
 type AdviceDecisionName = AdviceView['decision'];
 
@@ -119,6 +126,8 @@ interface Totals {
 interface OverlayState {
   readonly title: string;
   readonly lines: readonly string[];
+  /** 弹层语义分支（仅用于键盘路由：账户选择 = accounts，可用 j/k/Enter）。 */
+  readonly kind?: 'detail' | 'stats' | 'tactics' | 'outcomes' | 'accounts';
   scroll: number;
 }
 
@@ -128,7 +137,22 @@ interface AppState {
   selectedIndex: number;
   loading: boolean;
   error: string | null;
+  /** 全部账户列表（每次 refresh 同步，与 ctx 切账户语义一致）。 */
+  accounts: AccountView[];
+  /** 当前激活账户 id（与 ctxRef.current.user.defaultAccountId 同步）。 */
+  currentAccountId: string;
+  /** 账户选择弹层的高亮 cursor（overlay 打开时使用）。 */
+  accountCursor: number;
   overlay: OverlayState | null;
+}
+
+/**
+ * 用对象包裹 ctx 引用，便于运行时切换 defaultAccountId；所有 callTool 走 ctxRef.current。
+ * 切账户 = clone(ctx).user = clone(user) + 覆盖 defaultAccountId，不动 repos / adapters /
+ * notification / clock / logger。
+ */
+interface CtxRef {
+  current: ToolContext;
 }
 
 interface LineSpec {
@@ -216,12 +240,16 @@ const statsLines = (stats: StatsView): string[] => {
  * createTestRenderer 驱动同一套代码。
  */
 export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<void> => {
+  const ctxRef: CtxRef = { current: ctx };
   const state: AppState = {
     rows: [],
     totals: null,
     selectedIndex: 0,
     loading: false,
     error: null,
+    accounts: [],
+    currentAccountId: ctx.user.defaultAccountId,
+    accountCursor: 0,
     overlay: null,
   };
 
@@ -238,6 +266,17 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     content: `${STANDARD_DISCLAIMERS[0]} ${STANDARD_DISCLAIMERS[1]}`,
   });
   renderer.root.add(banner);
+
+  // TUI 顶部第二行：当前账户（紧贴 banner 下沿），默认 / 切账户后实时刷新；
+  // 始终贴左写入，右半边 footer 的快捷键提示通过 truncate 自然容纳。
+  const accountBar = new TextRenderable(renderer, {
+    id: 'account-bar',
+    height: 1,
+    truncate: true,
+    fg: COLORS.info,
+    content: '账户：--',
+  });
+  renderer.root.add(accountBar);
 
   const body = new BoxRenderable(renderer, {
     id: 'body',
@@ -288,7 +327,8 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     height: 1,
     truncate: true,
     fg: COLORS.muted,
-    content: '[r] 刷新  [q] 退出  [d] 详情  [s] 统计  [t] 战法  [o] 复盘  [↑/↓] 滚动  [esc] 关闭',
+    content:
+      '[r] 刷新  [q] 退出  [d] 详情  [s] 统计  [t] 战法  [o] 复盘  [a] 账户  [↑/↓] 滚动  [esc] 关闭',
   });
   renderer.root.add(footer);
 
@@ -296,10 +336,10 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   const overlay = new BoxRenderable(renderer, {
     id: 'overlay',
     position: 'absolute',
-    top: 2,
+    top: 3,
     left: '8%',
     width: '84%',
-    height: Math.max(10, renderer.height - 4),
+    height: Math.max(10, renderer.height - 5),
     border: true,
     backgroundColor: COLORS.overlayBg,
     borderColor: COLORS.overlayBorder,
@@ -324,6 +364,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
 
   renderer.on(CliRenderEvents.RESIZE, () => {
     overlay.height = Math.max(10, renderer.height - 4);
+    overlay.height = Math.max(10, renderer.height - 5);
     requestRender();
   });
 
@@ -449,18 +490,46 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     renderHoldings();
     renderAdvice();
     renderOverlay();
+    renderAccountBar();
     requestRender();
+  };
+
+  /** 把当前账户名渲染到顶栏 accountBar；缺省显示（未加载完）。 */
+  const renderAccountBar = (): void => {
+    const current = state.accounts.find((a) => a.id === state.currentAccountId);
+    if (current === undefined) {
+      accountBar.content = `账户：--（按 [a] 选择账户）`;
+      return;
+    }
+    const total = state.accounts.length;
+    const tally = state.rows.reduce((sum, r) => sum + r.pnl, 0);
+    const tallyStr = state.rows.length === 0 ? '' : `    浮盈 ${formatSigned(tally)}`;
+    accountBar.content =
+      `账户：[${current.name}] (${current.currency} ${formatMoney(current.initialCapital)})    ` +
+      `共 ${total} 个账户${tallyStr}    [a] 切换`;
   };
 
   // ----- 数据加载 -----
 
   const loadData = async (): Promise<void> => {
+    // 0) 账户列表（每次 refresh 同步；切账户 → 当前账户 id 跟随）
+    const accountsRaw = await callTool('list_accounts', {}, ctxRef.current);
+    const accountsData = ListAccountsOutput.parse(accountsRaw);
+    state.accounts = accountsData.accounts;
+    if (state.currentAccountId === '' && state.accounts.length > 0) {
+      const first = state.accounts[0];
+      if (first !== undefined) state.currentAccountId = first.id;
+    }
     // 1) 持仓（含现价与 PnL 汇总）
-    const holdingsRaw = await callTool('list_holdings', {}, ctx);
+    const holdingsRaw = await callTool('list_holdings', {}, ctxRef.current);
     const holdingsData = ListHoldingsOutput.parse(holdingsRaw);
 
     // 2) 已有建议（get_advice，默认不含已过期），按 subjectId 取最新一条
-    const adviceRaw = await callTool('get_advice', { subjectKind: 'stock', limit: 200 }, ctx);
+    const adviceRaw = await callTool(
+      'get_advice',
+      { subjectKind: 'stock', limit: 200 },
+      ctxRef.current,
+    );
     const adviceData = GetAdviceOutput.parse(adviceRaw);
     const latestBySubject = new Map<string, AdviceView>();
     for (const advice of adviceData.advices) {
@@ -490,7 +559,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       rows.map(async (row) => {
         if (row.advice !== null) return;
         try {
-          const raw = await callTool('analyze_stock', { stockId: row.stockId }, ctx);
+          const raw = await callTool('analyze_stock', { stockId: row.stockId }, ctxRef.current);
           row.advice = AnalyzeStockOutput.parse(raw).advice;
         } catch {
           // 单标的分析失败不拖垮整屏：该行显示 '--'。
@@ -532,6 +601,19 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     renderAll();
   };
 
+  /**
+   * openOverlay 的扩展版（v0.5 多账户切换）：允许 caller 指定 kind，
+   * 键盘 handler 据此路由 j/k/Enter 等专用按键。
+   */
+  const openOverlayWithKind = (
+    title: string,
+    lines: readonly string[],
+    kind: NonNullable<OverlayState['kind']>,
+  ): void => {
+    state.overlay = { title, lines, scroll: 0, kind };
+    renderAll();
+  };
+
   const closeOverlay = (): void => {
     state.overlay = null;
     renderAll();
@@ -563,7 +645,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   const openStats = async (): Promise<void> => {
     openOverlay('复盘统计', ['统计中…', '', '[esc] 关闭']);
     try {
-      const raw = await callTool('get_advice_stats', {}, ctx);
+      const raw = await callTool('get_advice_stats', {}, ctxRef.current);
       const stats = GetAdviceStatsOutput.parse(raw);
       // 若统计期间用户已关闭弹层，不强行再打开。
       if (state.overlay === null || state.overlay.title !== '复盘统计') return;
@@ -585,7 +667,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       '[esc] 关闭',
     ]);
     try {
-      const listRaw = await callTool('list_tactics', { includeBuiltins: true }, ctx);
+      const listRaw = await callTool('list_tactics', { includeBuiltins: true }, ctxRef.current);
       const list = ListTacticsOutput.parse(listRaw);
       const tacticIds = list.tactics.map((t) => t.id);
       if (tacticIds.length === 0) {
@@ -593,7 +675,9 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
         return;
       }
       const runs = await Promise.all(
-        tacticIds.map((id) => callTool('run_tactic', { tacticId: id, scope: 'holdings' }, ctx)),
+        tacticIds.map((id) =>
+          callTool('run_tactic', { tacticId: id, scope: 'holdings' }, ctxRef.current),
+        ),
       );
       const signals: Array<z.infer<typeof RunTacticOutput>['signals'][number]> = [];
       let totalEvaluated = 0;
@@ -628,7 +712,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
             evidence: [...s.evidence],
           })),
         },
-        ctx,
+        ctxRef.current,
       );
       const scored = ScoreSignalsOutput.parse(scoreRaw);
       const top = scored.ranked.slice(0, 10);
@@ -662,7 +746,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   const openOutcomes = async (): Promise<void> => {
     openOverlay('outcome 复盘', ['加载中…', '', '[esc] 关闭']);
     try {
-      const raw = await callTool('get_advice', { limit: 20, includeExpired: true }, ctx);
+      const raw = await callTool('get_advice', { limit: 20, includeExpired: true }, ctxRef.current);
       const data = GetAdviceOutput.parse(raw);
       const lines: string[] = [
         `近 ${data.advices.length} 条建议（按创建时间倒序）`,
@@ -696,9 +780,91 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
 
   // ----- 键盘 -----
 
+  // ----- 账户切换（v0.5 W3）-----
+
+  /**
+   * 列出所有账户，高亮当前账户，提供 j/k 移动 cursor + Enter 选中。
+   * 切账户 = 用新 defaultAccountId 构造新 ctx；repos / adapters / notification / clock /
+   * logger 全部沿用（共享内存仓）。
+   */
+  const openAccounts = (): void => {
+    if (state.accounts.length === 0) {
+      openOverlay('切换账户', ['（无可用账户，按 esc 关闭）', '', '[esc] 关闭']);
+      return;
+    }
+    // cursor 默认指向当前账户
+    const idx = state.accounts.findIndex((a) => a.id === state.currentAccountId);
+    state.accountCursor = idx >= 0 ? idx : 0;
+    openOverlayWithKind('切换账户', formatAccountsLines(state.accountCursor), 'accounts');
+  };
+
+  const formatAccountsLines = (cursor: number): string[] => {
+    const lines: string[] = [
+      '账户切换：上下移动光标，Enter 选中，esc 取消',
+      `当前账户：${state.accounts.find((a) => a.id === state.currentAccountId)?.name ?? '--'}`,
+      '',
+    ];
+    for (let i = 0; i < state.accounts.length; i++) {
+      const a = state.accounts[i];
+      if (a === undefined) continue;
+      const marker = i === cursor ? '> ' : '  ';
+      const flag = a.id === state.currentAccountId ? '  [当前]' : '';
+      lines.push(
+        `${marker}${padEnd(a.name, 14)}${padStart(`${a.kind}/${a.currency}`, 12)}  ` +
+          `${formatMoney(a.initialCapital)}${flag}`,
+      );
+    }
+    lines.push('', '[esc] 取消    [↑/↓] 移动    [Enter] 选中');
+    return lines;
+  };
+
+  /**
+   * 切换账户：构造一份新 ctx（user.defaultAccountId 替换），不重新打开 DB。
+   * 切换成功 → 关闭弹层 → 触发 refresh（持仓 / 建议 / 战法 全部按新账户重读）。
+   */
+  const setAccount = (accountId: string): void => {
+    if (accountId === state.currentAccountId) {
+      closeOverlay();
+      return;
+    }
+    const next = state.accounts.find((a) => a.id === accountId);
+    if (next === undefined) return;
+    ctxRef.current = {
+      ...ctxRef.current,
+      user: { ...ctxRef.current.user, defaultAccountId: accountId },
+    };
+    state.currentAccountId = accountId;
+    state.selectedIndex = 0;
+    state.rows = [];
+    state.totals = null;
+    closeOverlay();
+    void refresh();
+  };
+
   renderer.keyInput.on('keypress', (key: KeyEvent) => {
     if (renderer.isDestroyed) return;
     if (state.overlay !== null) {
+      // 账户选择弹层专用按键路由（v0.5 W3）：上下移动 cursor + Enter 选中，
+      // esc/q 仍走统一关闭。其他 kind（detail/stats/...）走原滚动逻辑。
+      if (state.overlay.kind === 'accounts') {
+        if (key.name === 'escape' || key.name === 'q') {
+          closeOverlay();
+        } else if (key.name === 'up' || key.name === 'k') {
+          if (state.accountCursor > 0) {
+            state.accountCursor -= 1;
+            openOverlayWithKind('切换账户', formatAccountsLines(state.accountCursor), 'accounts');
+          }
+        } else if (key.name === 'down' || key.name === 'j') {
+          if (state.accountCursor < state.accounts.length - 1) {
+            state.accountCursor += 1;
+            openOverlayWithKind('切换账户', formatAccountsLines(state.accountCursor), 'accounts');
+          }
+        } else if (key.name === 'return' || key.name === 'enter') {
+          const next = state.accounts[state.accountCursor];
+          if (next !== undefined) setAccount(next.id);
+        }
+        return;
+      }
       if (key.name === 'escape' || key.name === 'q') closeOverlay();
       else if (key.name === 'up' || key.name === 'k') scrollOverlay(-1);
       else if (key.name === 'down' || key.name === 'j') scrollOverlay(1);
@@ -722,6 +888,9 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
         break;
       case 'o':
         void openOutcomes();
+        break;
+      case 'a':
+        openAccounts();
         break;
       case 'up':
       case 'k':

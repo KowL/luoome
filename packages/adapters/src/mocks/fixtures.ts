@@ -109,6 +109,33 @@ export const MOCK_ACCOUNT: Account = {
   createdAt: new Date('2026-01-05T01:00:00.000Z'),
 };
 
+/** 长期持仓账户（W3 多账户切换演示）：初始资金 50 万，余额静置 */
+export const MOCK_ACCOUNT_LONGTERM: Account = {
+  id: 'a1b2c3d4-0001-4000-8000-000000000001',
+  name: '长期持仓',
+  kind: 'mock',
+  currency: 'CNY',
+  initialCapital: money(500_000),
+  createdAt: new Date('2026-02-01T01:00:00.000Z'),
+};
+
+/** 短线交易账户（W3 多账户切换演示）：初始资金 20 万，余额静置 */
+export const MOCK_ACCOUNT_SHORTTERM: Account = {
+  id: 'a1b2c3d4-0001-4000-8000-000000000002',
+  name: '短线交易',
+  kind: 'mock',
+  currency: 'CNY',
+  initialCapital: money(200_000),
+  createdAt: new Date('2026-03-01T01:00:00.000Z'),
+};
+
+/** 全部 mock 账户（默认账户 + 长期 + 短线），供 list_accounts / seed 使用。 */
+export const MOCK_ACCOUNTS: readonly Account[] = [
+  MOCK_ACCOUNT,
+  MOCK_ACCOUNT_LONGTERM,
+  MOCK_ACCOUNT_SHORTTERM,
+];
+
 // ---------- 持仓：6 个（引用 MOCK_STOCKS / MOCK_ACCOUNT） ----------
 
 const holding = (

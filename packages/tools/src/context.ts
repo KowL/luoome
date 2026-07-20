@@ -2,6 +2,7 @@ import {
   DEFAULT_MOCK_NOW,
   defaultMockClock,
   MOCK_ACCOUNT,
+  MOCK_ACCOUNTS,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
@@ -63,7 +64,7 @@ export const buildMockContext = async (
   const marketClock = opts.clock ?? defaultMockClock;
   const repos = createInMemoryRepos();
   await seedMockData(repos, {
-    accounts: [MOCK_ACCOUNT],
+    accounts: MOCK_ACCOUNTS,
     stocks: MOCK_STOCKS,
     holdings: MOCK_HOLDINGS,
     trades: MOCK_TRADES,

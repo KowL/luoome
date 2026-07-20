@@ -18,6 +18,7 @@ import {
   defaultMockClock,
   LLMManager,
   MOCK_ACCOUNT,
+  MOCK_ACCOUNTS,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
@@ -110,7 +111,7 @@ export const buildWebContext = async (dbPath: string): Promise<ToolContext> => {
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
   await seedMockData(handle.repos, {
-    accounts: [MOCK_ACCOUNT],
+    accounts: MOCK_ACCOUNTS,
     stocks: MOCK_STOCKS,
     holdings: MOCK_HOLDINGS,
     trades: MOCK_TRADES,
@@ -133,7 +134,16 @@ export const buildWebContext = async (dbPath: string): Promise<ToolContext> => {
 };
 
 /** 构造 Hono app（注入 ctx，便于测试与复用）。 */
-export const createWebApp = (ctx: ToolContext): Hono => {
+/**
+ * 构造 Hono app（注入 ctx，便于测试与复用）。
+ * 接受 ctx 引用对象 { current } 而非裸 ToolContext——v0.5 W3 多账户切换通过
+ * /api/account/select 改写 ctxRef.current.user.defaultAccountId，其它路由通过
+ * ctxRef.current 取最新值，不再每次请求 mutate 全量 ctx。
+ */
+export const createWebApp = (initialCtx: ToolContext): Hono => {
+  // 多账户切换（v0.5 W3）通过 ctxRef.current mutate user.defaultAccountId；
+  // 内部 callTool / invokeTool 全部走 ctxRef.current 读取最新值。
+  const ctxRef: { current: ToolContext } = { current: initialCtx };
   const app = new Hono();
 
   // —— 同源静态仪表盘（原生 HTML/JS，无构建步骤）——
@@ -165,7 +175,7 @@ export const createWebApp = (ctx: ToolContext): Hono => {
   const callTool = async (name: string, input: unknown): Promise<Response> => {
     const tool = toolRegistry.get(name);
     if (tool === undefined) return jsonResult(notFound('Tool', name));
-    return jsonResult(await tool.execute(input, ctx));
+    return jsonResult(await tool.execute(input, ctxRef.current));
   };
 
   /**
@@ -175,8 +185,63 @@ export const createWebApp = (ctx: ToolContext): Hono => {
   const invokeTool = async (name: string, input: unknown): Promise<ToolResult<unknown>> => {
     const tool = toolRegistry.get(name);
     if (tool === undefined) return notFound('Tool', name);
-    return tool.execute(input, ctx);
+    return tool.execute(input, ctxRef.current);
   };
+
+  // ===== 多账户切换（v0.5 W3）端点 =====
+  // 全部账户列表（用于顶栏下拉）。
+  app.get('/api/accounts', () => callTool('list_accounts', {}));
+
+  /**
+   * 切换当前激活账户：把 ctxRef.current.user.defaultAccountId 更新为指定账户。
+   * 单进程单 tab 假设（与现有 TUI / CLI 一致）：ctx 共享内存仓，切换是 mutate。
+   * 调用侧只需要再 reload 受影响的数据视图（持仓 / 战法扫描 / 复盘）。
+   */
+  app.post('/api/account/select', async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '请求体必须是合法 JSON',
+          issues: [],
+        },
+      });
+    }
+    const parsed = body as { accountId?: unknown };
+    if (typeof parsed.accountId !== 'string' || parsed.accountId.length === 0) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: 'accountId 必填且为非空字符串',
+          issues: [],
+        },
+      });
+    }
+    const accountResult = await invokeTool('list_accounts', {});
+    if (!accountResult.ok) return jsonResult(accountResult);
+    const accounts = (accountResult.data as { accounts: Array<{ id: string; name: string }> })
+      .accounts;
+    const target = accounts.find((a) => a.id === parsed.accountId);
+    if (target === undefined) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'not_found', entity: 'Account', id: parsed.accountId },
+      });
+    }
+    ctxRef.current = {
+      ...ctxRef.current,
+      user: { ...ctxRef.current.user, defaultAccountId: target.id },
+    };
+    return jsonResult({
+      ok: true,
+      data: { currentAccountId: target.id, account: target },
+    });
+  });
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
 
@@ -386,7 +451,7 @@ export const createWebApp = (ctx: ToolContext): Hono => {
       typeof body === 'object' && body !== null && 'input' in body
         ? (body as { input: unknown }).input
         : {};
-    return jsonResult(await tool.execute(input, ctx));
+    return jsonResult(await tool.execute(input, ctxRef.current));
   });
 
   return app;

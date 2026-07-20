@@ -18,6 +18,7 @@ import {
   defaultMockClock,
   LLMManager,
   MOCK_ACCOUNT,
+  MOCK_ACCOUNTS,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
@@ -76,7 +77,7 @@ export const createServerContext = async (
   ensureSchema(handle.db);
 
   await seedMockData(handle.repos, {
-    accounts: [MOCK_ACCOUNT],
+    accounts: MOCK_ACCOUNTS,
     stocks: MOCK_STOCKS,
     holdings: MOCK_HOLDINGS,
     trades: MOCK_TRADES,

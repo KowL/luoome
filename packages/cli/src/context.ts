@@ -15,6 +15,7 @@ import {
   createMarketAdapterFromEnv,
   LLMManager,
   MOCK_ACCOUNT,
+  MOCK_ACCOUNTS,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
@@ -74,7 +75,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const accounts = await repos.account.list();
   if (accounts.length === 0) {
     await seedMockData(repos, {
-      accounts: [MOCK_ACCOUNT],
+      accounts: MOCK_ACCOUNTS,
       stocks: MOCK_STOCKS,
       holdings: MOCK_HOLDINGS,
       trades: MOCK_TRADES,

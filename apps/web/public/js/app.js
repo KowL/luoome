@@ -1,9 +1,9 @@
-/* apps/web/public/js/app.js —— v0.4 入口：状态行 + 时钟 + 路由分发。 */
+/* apps/web/public/js/app.js —— v0.4 入口 + v0.5 W3 多账户切换。 */
 
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { callApi, getToken, setToken, TOKEN_KEY } from './api.js';
+import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } from './api.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
@@ -18,9 +18,6 @@ import {
   runTacticScan,
 } from './pages.js';
 import { $ } from './ui.js';
-
-/* 暴露 token 工具到 window（供 pages/settings 调用）。 */
-window.__luoome = { callApi, getToken, setToken, TOKEN_KEY };
 
 /* ============ 状态行 ============ */
 
@@ -53,19 +50,16 @@ const ROUTES = ['dashboard', 'holdings', 'quotes', 'tactics', 'advice', 'review'
 
 const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
-  // 切换可见性
   document.querySelectorAll('.route').forEach((node) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
   });
-  // 侧栏高亮
   document.querySelectorAll('.nav-item').forEach((node) => {
     const active = node.dataset.route === safe;
     node.classList.toggle('active', active);
     if (active) node.setAttribute('aria-current', 'page');
     else node.removeAttribute('aria-current');
   });
-  // 路由加载
   try {
     if (safe === 'dashboard') await renderDashboard(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
@@ -96,10 +90,86 @@ const onHashChange = () => {
 
 window.addEventListener('hashchange', onHashChange);
 
+/* ============ 多账户切换（v0.5 W3） ============ */
+
+/** 拉取全部账户。返回 { ok, accounts }。 */
+const getAccounts = async () => {
+  const result = await callApi('/api/accounts');
+  if (!result.ok || !('data' in result)) return { ok: false, accounts: [] };
+  const data = result.data;
+  const accounts =
+    data && typeof data === 'object' && 'accounts' in data
+      ? /** @type {Array<{id: string, name: string}>} */ (/** @type {unknown} */ (data)).accounts
+      : [];
+  return { ok: true, accounts };
+};
+
+/** 切换当前账户：POST 后端 → 成功后写 localStorage。 */
+const selectAccount = async (accountId) => {
+  if (accountId.length === 0) return { ok: false };
+  const result = await callApi('/api/account/select', {
+    method: 'POST',
+    body: JSON.stringify({ accountId }),
+  });
+  if (!result.ok) {
+    const cause =
+      result.error && typeof result.error === 'object' && 'cause' in result.error
+        ? String(/** @type {{cause: unknown}} */ (result.error).cause)
+        : '切换失败';
+    setStatus(`切换账户失败：${cause}`, true);
+    return { ok: false };
+  }
+  setAccountId(accountId);
+  setStatus('账户已切换');
+  return { ok: true };
+};
+
+/** 启动期初始化：拉账户 → 填充 <select> → 必要时把 stored id 同步到后端。 */
+const initAccountSelect = async () => {
+  const select = $('#account-select');
+  if (select === null) return;
+  const result = await getAccounts();
+  if (!result.ok || result.accounts.length === 0) {
+    select.innerHTML = '<option value="">(无账户)</option>';
+    return;
+  }
+  const stored = getAccountId();
+  const hasStored = result.accounts.some((a) => a.id === stored);
+  const initialId = hasStored ? stored : (result.accounts[0]?.id ?? '');
+  select.innerHTML = result.accounts
+    .map(
+      (a) => `<option value="${a.id}"${a.id === initialId ? ' selected' : ''}>${a.name}</option>`,
+    )
+    .join('');
+  if (initialId.length > 0 && !hasStored) {
+    await selectAccount(initialId);
+  } else if (stored.length > 0 && stored !== initialId) {
+    await selectAccount(initialId);
+  }
+};
+
+/** 绑定 change 事件：POST 后端，刷新当前路由。 */
+const bindAccountSelect = () => {
+  const select = $('#account-select');
+  if (select === null) return;
+  select.addEventListener('change', async (event) => {
+    const target = /** @type {HTMLSelectElement} */ (event.target);
+    const nextId = target.value;
+    const previous = getAccountId();
+    target.disabled = true;
+    const r = await selectAccount(nextId);
+    target.disabled = false;
+    if (!r.ok) {
+      target.value = previous;
+      return;
+    }
+    void showRoute(currentHash());
+  });
+};
+
 /* ============ 一次性绑定：跨路由的按钮 ============ */
 
 const bindGlobalActions = () => {
-  // 持仓页
   const refreshBtn = $('#btn-holdings-refresh');
   if (refreshBtn !== null)
     refreshBtn.addEventListener('click', () => void renderHoldings(setStatus));
@@ -107,28 +177,25 @@ const bindGlobalActions = () => {
   if (analyzeBtn !== null)
     analyzeBtn.addEventListener('click', () => void analyzeAllHoldings(setStatus));
 
-  // 行情页
   const quotesRefreshBtn = $('#btn-quotes-refresh');
   if (quotesRefreshBtn !== null)
     quotesRefreshBtn.addEventListener('click', () => void renderQuotes(setStatus));
 
-  // 战法页
   const tlistBtn = $('#btn-tactic-list');
   if (tlistBtn !== null)
     tlistBtn.addEventListener('click', () => void renderTacticsList(setStatus));
   const tscanBtn = $('#btn-tactic-scan');
   if (tscanBtn !== null) tscanBtn.addEventListener('click', () => void runTacticScan(setStatus));
 
-  // 建议页：decision filter
   const adviceFilter = $('#advice-filter');
   if (adviceFilter !== null)
     adviceFilter.addEventListener('change', () => void renderAdviceList(setStatus));
 
-  // 设置页
   bindSettingsActions();
+  bindAccountSelect();
 };
 
-/* ============ 自动刷新（仅仪表盘 5s 周期，路由切换即时刷新） ============ */
+/* ============ 自动刷新（仅仪表盘 5s 周期） ============ */
 
 const startDashboardAutoRefresh = () => {
   setInterval(() => {
@@ -138,7 +205,19 @@ const startDashboardAutoRefresh = () => {
 
 /* ============ 启动 ============ */
 
+window.__luoome = {
+  callApi,
+  getToken,
+  setToken,
+  TOKEN_KEY,
+  getAccountId,
+  setAccountId,
+  getAccounts,
+  selectAccount,
+};
+
 bindGlobalActions();
 startClock();
+void initAccountSelect();
 void showRoute(currentHash());
 startDashboardAutoRefresh();

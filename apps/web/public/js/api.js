@@ -5,6 +5,8 @@
 
 /** localStorage 中的 token key（设置页生成）。 */
 const TOKEN_KEY = 'luoome.token';
+/** localStorage 中的当前账户 id key（v0.5 W3 多账户切换）。 */
+const ACCOUNT_KEY = 'luoome.accountId';
 
 /** 读 token（无则返回空串）。 */
 const getToken = () => {
@@ -20,6 +22,25 @@ const setToken = (token) => {
   try {
     if (token.length > 0) localStorage.setItem(TOKEN_KEY, token);
     else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* 忽略：隐私模式或 quota */
+  }
+};
+
+/** 读当前账户 id（无则返回空串）。 */
+const getAccountId = () => {
+  try {
+    return localStorage.getItem(ACCOUNT_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
+
+/** 写当前账户 id。 */
+const setAccountId = (accountId) => {
+  try {
+    if (accountId.length > 0) localStorage.setItem(ACCOUNT_KEY, accountId);
+    else localStorage.removeItem(ACCOUNT_KEY);
   } catch {
     /* 忽略：隐私模式或 quota */
   }
@@ -53,4 +74,4 @@ const callApi = async (path, init) => {
   return body;
 };
 
-export { callApi, getToken, setToken, TOKEN_KEY };
+export { ACCOUNT_KEY, callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY };
