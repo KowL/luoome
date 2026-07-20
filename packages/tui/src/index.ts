@@ -1,6 +1,6 @@
 // @luoome/tui 入口：startTuiApp(ctx?)（CLI 懒加载调用的契约名，startTui 为别名）+ 直接运行启动。
 // ctx 缺省构造与其他 surface 一致：LUOOME_HOME/luoome.db（默认 ~/.luoome）+
-// createDrizzleRepos + seedMockData（upsert 幂等）+ 行情 factory（默认 mock）+ Mock LLM + buildContext。
+// createDrizzleRepos + seedMockData（upsert 幂等）+ 行情 factory + LLMManager（均 env 路由，默认 mock）+ buildContext。
 
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -8,11 +8,11 @@ import { join } from 'node:path';
 
 import {
   createMarketAdapterFromEnv,
+  LLMManager,
   MOCK_ACCOUNT,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
-  MockLLMAdapter,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 // 纯 Bun 运行时入口：@luoome/db 桶导出依赖 bun:sqlite driver，禁止在 node 下 import 本包。
@@ -35,7 +35,7 @@ interface DefaultContextHandle {
 }
 
 /**
- * 默认 ctx：真实 SQLite（LUOOME_HOME/luoome.db）+ 行情（默认 mock，LUOOME_MARKET_PROVIDER=real 切真实源）/Mock LLM。
+ * 默认 ctx：真实 SQLite（LUOOME_HOME/luoome.db）+ 行情/LLM（均默认 mock，LUOOME_MARKET_PROVIDER / LUOOME_LLM_PROVIDER 可切真实源）。
  * seedMockData 的 save 均为 upsert（onConflictDoUpdate），重复启动幂等。
  * 首次启动库内无建议，app 会对每个持仓调 analyze_stock 生成并持久化；
  * 后续启动 get_advice 直接读到未过期建议。
@@ -56,7 +56,8 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
     adapters: {
       // 行情源由 LUOOME_MARKET_PROVIDER 路由（默认 mock；real = Eastmoney→Tencent→Mock）
       market: createMarketAdapterFromEnv(process.env, { logger }),
-      llm: new MockLLMAdapter(),
+      // LLM 由 LUOOME_LLM_PROVIDER 路由（默认 mock；real 缺 key 启动期报错）
+      llm: new LLMManager({ logger }),
     },
     user: { id: 'local-user', defaultAccountId: MOCK_ACCOUNT.id },
     logger,
