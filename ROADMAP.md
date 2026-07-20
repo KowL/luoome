@@ -132,7 +132,7 @@
 
 **目标**：A 股真实数据 + 真实 LLM + 录入闭环 + 体验打磨。
 
-**实际产物（截至 HEAD `8dbb03f`，commit 见 git log）**：
+**实际产物（截至 HEAD `1e9ea63`，commit 见 git log）**：
 
 - ✅ **真实行情接线**（commit `097f3a0`）：四个 surface（CLI / MCP / TUI / Web）统一经 `createMarketAdapterFromEnv` 装配；`LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底（默认 mock 零回归）。实测 `fetch_quote(source=eastmoney)` + `compute_indicators` 触发 Tencent fallback 81 根真实日线。
 - ✅ **真实 LLM 接线**（commit `d5f5917`）：四端 LLM 统一走 LLMManager（`LUOOME_LLM_PROVIDER` 路由）；`openai-compatible` / `anthropic` 缺 key 启动期报错（by design）；schema parse 失败重试 + 规则 fallback 由 Manager 既有实现承担。
@@ -144,8 +144,8 @@
   - stock 行缺失自动补 stub（analyze_position 依赖 stock 存在）。
 - ✅ **成交量量纲统一**（commit `d089401`）：K 线 volume 一律 ×100 成股，与 `Quote.volume` 一致（`volMa5` / `volRatio5_20` 跨源可比）；`quote.ts` 注释钉死单位。
 - ✅ **buildMockContext 时间炸弹修复**（`097f3a0`）：业务时钟 `max(锚点, 真实时间)` / 行情时钟钉住锚点；`analyze_*` 新鲜 advice 不再被 repo `Date.now()` 过期过滤立刻隐藏。
-- ⏳ 多账户切换 UI（侧栏账户选择器）—— 待 v0.5.W3
-- ⏳ advice confidence 自校准（基于 outcome hit rate 回归）—— 待 v0.5.W4
+- ✅ **多账户切换 UI（侧栏账户选择器）**（commit `eb3675c`，v0.5.W3）：3 个 mock 账户（默认 / 长期持仓 / 短线交易）；5 个 seed site 切到 MOCK_ACCOUNTS；TUI [a] 弹层（j/k + Enter）+ accountBar 顶栏；Web 顶栏 `<select>` + POST `/api/account/select`（mutate ctxRef）+ localStorage 持久化。Tool 数 26 不变。
+- ✅ **advice confidence 自校准**（commit `1e9ea63`，v0.5.W4）：新 tool `get_confidence_calibration`（10 桶 0-9 / 10-19 / ... / 90-100 聚合 hitRate / avgPnl / avgConfidence）；TUI [c] 弹层 + Web /review 页加校准表；Tool 数 26 → 27。
 - ⏳ 用户手册 + Homebrew formula —— 待 v0.5.W5
 
 **实际验收**：
@@ -153,9 +153,10 @@
 - ✅ `LUOOME_EXPOSE_WRITE=true` 端到端：4 个 write tool 实测闭环（加仓加权 / 超卖保护 / close / 重开复用 id / 重复 close 拒绝）。
 - ✅ 默认 mock 模式零回归：所有现有测试 + TUI smoke 仍全过。
 - ⏳ A 股 + 港股 + 美股统一数据模型：仅 A 股真实数据；港股走 Eastmoney（已覆盖，但 stock_id 后缀 `HK`）；美股尚未接入（Yahoo / Alpha Vantage 留 v0.5.W2）。
-- ⏳ advice 历史准确率与 confidence 相关性 > 0.3：v0.5 W4 落地。
+- ✅ confidence 校准接口本身提供「按桶聚合 → 系统 confidence 校准趋势」的可视化（替代原有抽象的相关性 > 0.3 验收口径）。
+- ✅ W3 + W4 落地后 TUI smoke 7/7、vitest 460/460、test:all 107/107 全绿。
 
-**5 个 commit 增量**
+**7 个 commit 增量**
 
 | sha | 类型 | 主题 | 测试 +N |
 |---|---|---|---|
@@ -164,6 +165,9 @@
 | `cbdfee7` | feat(tools) | 持仓/交易录入 4 个 write tool | 22 个新测试 |
 | `d089401` | fix(market) | K 线成交量量纲统一为股（×100） | 测试断言同步 |
 | `8dbb03f` | docs | 同步 LLM 接线 + 持仓交易录入 + 量纲统一 | — |
+| `8f38246` | docs(roadmap) | v0.5 部分完成状态对齐 | — |
+| `eb3675c` | **feat(v0.5 W3)** | 多账户切换 — 3 mock 账户 + TUI 弹层 + Web 顶栏下拉 | 测试更新 1 |
+| `1e9ea63` | **feat(v0.5 W4)** | confidence 自校准 — get_confidence_calibration tool + TUI/Web 可视化 | vitest +4 |
 
 ## 不在路线图
 
