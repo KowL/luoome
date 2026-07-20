@@ -16,11 +16,11 @@ import {
   createMarketAdapterFromEnv,
   DEFAULT_MOCK_NOW,
   defaultMockClock,
+  LLMManager,
   MOCK_ACCOUNT,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
-  MockLLMAdapter,
   mockAdviceFor,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
@@ -34,15 +34,11 @@ const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice']);
 
 /**
- * v0.1 toolRegistry 只有 8 个 read/advice tool；AGENTS.md 工具清单里已命名的
- * write/external/trade tool 属于「存在但未在 web 暴露」——按契约返回
- * 403 permission_denied，而不是 404 not_found。
+ * write/external/trade tool 不通过 web 暴露：已在 registry 实现的被 sideEffect 门
+ * 拦截（403 文案准确）；本表覆盖「契约里有名字但尚未实现」的 tool——同样按契约
+ * 返回 403 permission_denied，而不是 404 not_found。
  */
 const KNOWN_UNEXPOSED_TOOLS: Readonly<Record<string, SideEffect>> = {
-  add_holding: 'write',
-  update_holding: 'write',
-  close_holding: 'write',
-  add_trade: 'write',
   set_alert: 'write',
   delete_alert: 'write',
   add_note: 'write',
@@ -103,7 +99,7 @@ const seedAdviceClock = (): Date => new Date(Math.max(DEFAULT_MOCK_NOW.getTime()
 /**
  * 组装 web 端 ToolContext（与其他 surface 同一模式）：
  * LUOOME_HOME 下的 luoome.db + createDrizzleRepos + seedMockData(fixtures)
- * + 行情 factory（LUOOME_MARKET_PROVIDER，默认 mock）/MockLLMAdapter + buildContext。
+ * + 行情 factory / LLMManager（分别由 LUOOME_MARKET_PROVIDER / LUOOME_LLM_PROVIDER 路由，默认 mock）+ buildContext。
  *
  * v0.1 演示口径：每次启动幂等重灌 mock fixtures（repo save 为 upsert、
  * fixture id 固定；advice 种子与 buildMockContext 对齐，保证首屏有数据）。
@@ -128,7 +124,8 @@ export const buildWebContext = async (dbPath: string): Promise<ToolContext> => {
     adapters: {
       // 行情源由 LUOOME_MARKET_PROVIDER 路由（默认 mock；real = Eastmoney→Tencent→Mock）
       market: createMarketAdapterFromEnv(process.env, { logger: console }),
-      llm: new MockLLMAdapter(),
+      // LLM 由 LUOOME_LLM_PROVIDER 路由（默认 mock；real 缺 key 启动期报错）
+      llm: new LLMManager({ logger: console }),
     },
     clock: defaultMockClock,
     user: { id: 'local-web-user', defaultAccountId: MOCK_ACCOUNT.id },

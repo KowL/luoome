@@ -3,7 +3,7 @@
 // 运行：export PATH="$HOME/.bun/bin:$PATH" && bun packages/mcp/src/smoke.ts
 //
 // 覆盖（spawn 真实 server 进程，MCP stdio JSON-RPC 握手）：
-//   1. initialize → tools/list：默认暴露面恰好 8 个 tool
+//   1. initialize → tools/list：默认暴露面恰好 17 个 tool（read 14 + advice 3）
 //   2. tools/call list_holdings：ok，返回非空 holdings
 //   3. tools/call analyze_stock：ok，返回含 3 条 disclaimers 的 Advice
 //   4. 相同 LUOOME_HOME 二次 spawn：种子幂等 upsert，重复启动安全
@@ -228,9 +228,10 @@ const toolsListAndCall = async (client: McpStdioClient, full: boolean): Promise<
 
   const listResult = asRecord(await client.request('tools/list', {}));
   const tools = listResult.tools;
+  // 默认暴露面 = read(14) + advice(3) = 17；write/external 需 LUOOME_EXPOSE_* opt-in。
   check(
-    Array.isArray(tools) && tools.length === 8,
-    `tools/list 默认暴露面恰好 8 个 tool（实际 ${Array.isArray(tools) ? tools.length : 'N/A'}）`,
+    Array.isArray(tools) && tools.length === 17,
+    `tools/list 默认暴露面恰好 17 个 tool（实际 ${Array.isArray(tools) ? tools.length : 'N/A'}）`,
   );
   const names = Array.isArray(tools) ? tools.map((t) => asRecord(t).name) : [];
   check(

@@ -11,6 +11,12 @@ export const errNotFound = (entity: string, id: string): ToolResult<never> => ({
   error: { kind: 'not_found', entity, id },
 });
 
+/** handler 主动返回 invalid_input 的便捷构造器（业务规则不满足：超卖 / 重复录入 / 空更新等）。 */
+export const errInvalidInput = (message: string): ToolResult<never> => ({
+  ok: false,
+  error: { kind: 'invalid_input', message, issues: [] },
+});
+
 /** defineTool 的输入定义（ARCHITECTURE §4.4：一次定义，多处生效）。 */
 export interface ToolDefinition<I, O> {
   readonly name: string;

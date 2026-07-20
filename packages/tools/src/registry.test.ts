@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// v0.3 末态：13 (v0.2) + 9 (v0.3) = 22 tool
+// v0.5 末态：22 (v0.3) + 4 (v0.5 write 录入) = 26 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'list_accounts',
@@ -29,6 +29,11 @@ const EXPECTED_TOOL_NAMES = [
   'record_advice_outcome',
   'send_notification',
   'market_outlook',
+  // v0.5 新增
+  'add_trade',
+  'add_holding',
+  'update_holding',
+  'close_holding',
 ] as const;
 
 describe('toolRegistry', () => {

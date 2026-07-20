@@ -1,9 +1,12 @@
 import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
+import { addHoldingTool } from './tools/add-holding.js';
+import { addTradeTool } from './tools/add-trade.js';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
+import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
@@ -23,6 +26,7 @@ import { sendNotificationTool } from './tools/send-notification.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
 import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
+import { updateHoldingTool } from './tools/update-holding.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {
@@ -150,4 +154,9 @@ export const toolRegistry: Registry = createRegistry([
   recordAdviceOutcomeTool,
   sendNotificationTool,
   marketOutlookTool,
+  // v0.5 新增：持仓 / 交易录入（write）
+  addTradeTool,
+  addHoldingTool,
+  updateHoldingTool,
+  closeHoldingTool,
 ]);
