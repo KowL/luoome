@@ -345,7 +345,7 @@ LUOOME_LOG=debug luoome mcp serve       # MCP server 调试日志
 ## 已知边界
 
 - 行情默认 mock 数据源；`LUOOME_MARKET_PROVIDER=real` 切真实行情（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股）
-- v0.1 advice 类工具全部返回 mock（v0.2 起接真实 LLM）
+- LLM 默认 mock；`LUOOME_LLM_PROVIDER` + `LUOOME_LLM_API_KEY` 切真实模型（openai-compatible / anthropic，缺 key 启动期报错）
 - v0.1 不支持多账户并发写
 - v0.1 没有 Web 入口（v0.4 起）
 - v0.1 没有真实券商对接（永不通过 MCP 暴露）

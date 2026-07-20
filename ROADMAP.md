@@ -135,6 +135,9 @@
 > 范围修正（2026-07-20）：多市场数据源（港/美）确认不做，A 股优先。
 > 已完成：真实行情接线——四个 surface 统一经 `createMarketAdapterFromEnv` 装配，
 > `LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底（默认 mock 零回归）。
+> 已完成：真实 LLM 接线——四端 LLM 统一走 LLMManager（`LUOOME_LLM_PROVIDER` 路由，默认 mock）。
+> 已完成：持仓/交易录入——`add_trade` / `add_holding` / `update_holding` / `close_holding` 4 个 write tool。
+> 已完成：成交量量纲统一——K 线 volume 一律 ×100 成股（与 Quote.volume 一致）。
 
 **产物**：
 - adapters/market：港股 / 美股 数据源

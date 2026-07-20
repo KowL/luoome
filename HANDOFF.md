@@ -12,11 +12,11 @@
 |---|---|
 | 已发布版本 | v0.4.0（https://github.com/KowL/luoome/releases/tag/v0.4.0） |
 | 最新 commit | `c03f1a6`（chore(repo): LICENSE + CI + version 0.4.0） |
-| 测试 | 484 pass（vitest 377 + bun test db 107）/ 53 文件 |
-| Tool 数 | 22（read 14 / advice 3 / external 4 / write 1） |
+| 测试 | 506 pass（vitest 399 + bun test db 107）/ 57 文件 |
+| Tool 数 | 26（read 14 / advice 3 / external 4 / write 5） |
 | Workflow 数 | 5（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review） |
 | 战法数 | 5 builtin（放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振） |
-| 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股）；OpenAI-Compatible / Anthropic / Mock LLM；飞书 Webhook |
+| 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股）；LLM 经 `LUOOME_LLM_PROVIDER` 路由——mock（默认）/ OpenAI-Compatible / Anthropic（缺 key 启动期报错，LLMManager 重试 + 规则兜底）；飞书 Webhook |
 | Surfaces | CLI / TUI / Web（7 路由） / MCP stdio |
 | CI | GitHub Actions · ubuntu + bun 1.3.11 · typecheck + test:all + lint 三关 |
 | License | MIT |
@@ -287,11 +287,30 @@ LUOOME_LOG=debug bash bin/luoome mcp serve 2>&1 | head -50
 - `LUOOME_HOME` 路径无权限
 - port / pipe 被占（MCP stdio 用 stdin/stdout）
 
+### 7.6 录入持仓 / 交易
+
+```bash
+# 买入（自动落 Trade + 新开/加仓 Holding，avgCost 数量加权不含 fee；stock 缺行自动补 stub）
+bash bin/luoome tools call add_trade --input '{"stockId":"601398.SH","side":"buy","quantity":500,"price":7.25,"fee":3.5}'
+
+# 卖出（超卖 / 无持仓 → invalid_input；卖光自动 closedAt）
+bash bin/luoome tools call add_trade --input '{"stockId":"601398.SH","side":"sell","quantity":100,"price":7.8}'
+
+# 无成交明细的历史持仓直录（同账户同股票不可重复）
+bash bin/luoome tools call add_holding --input '{"stockId":"601398.SH","quantity":500,"avgCost":7.25}'
+
+# 纠错 / 平仓
+bash bin/luoome tools call update_holding --input '{"holdingId":"<id>","avgCost":7.1}'
+bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
+```
+
+4 个均为 write 副作用：MCP 需 `LUOOME_EXPOSE_WRITE=true` 才暴露；web 端不暴露（403）。
+
 ## 8. 下一步（v0.5 候选）
 
 按优先级：
 
-1. ~~多市场数据源~~ → **A 股真实行情接线（已完成）**：四个 surface 统一走 `createMarketAdapterFromEnv`，`LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底；默认 mock 零回归。港 / 美市场确认不做（lijun，2026-07-20）。同类遗留缺口：真实 LLM（LLMManager + `LUOOME_LLM_PROVIDER`）也未接线，建议作为下一刀。
+1. ~~多市场数据源~~ → **A 股真实行情接线（已完成）**：四个 surface 统一走 `createMarketAdapterFromEnv`，`LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底；默认 mock 零回归。港 / 美市场确认不做（lijun，2026-07-20）。**真实 LLM 接线（已完成）**：四端统一走 `LLMManager`（`LUOOME_LLM_PROVIDER` 路由，默认 mock）。**持仓/交易录入（已完成）**：`add_trade` / `add_holding` / `update_holding` / `close_holding`，见 §7.6。**成交量量纲统一（已完成）**：K 线 volume 一律 ×100 成股。
 2. **多账户切换 UI**（侧栏加账户选择器）
 3. **confidence 自校准**（基于 outcome hit rate 反向回归 + 大盘 beta 调整）
 4. **Web push 通知**（高信心建议推送到浏览器）

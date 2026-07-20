@@ -75,7 +75,7 @@ apps/
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（`luoome.db` + `tactics/`） |
 | `LUOOME_MARKET_PROVIDER` | `mock` | 行情源：`mock` 确定性假数据；`real` 真实行情（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股） |
-| `LUOOME_LLM_PROVIDER` | `mock` | LLM 源：`mock` / `openai-compatible` / `anthropic`（真实 LLM 接线待做） |
+| `LUOOME_LLM_PROVIDER` | `mock` | LLM 源：`mock` / `openai-compatible` / `anthropic` |
 | `LUOOME_LLM_API_KEY` | — | `openai-compatible` / `anthropic` 必填 |
 | `LUOOME_LLM_BASE_URL` | 按 provider | 覆盖 LLM base URL |
 | `LUOOME_LLM_MODEL` | 按 provider | 覆盖 LLM 模型 |
