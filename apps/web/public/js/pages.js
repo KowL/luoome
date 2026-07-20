@@ -371,6 +371,36 @@ const renderReview = async (setStatus) => {
   ]);
   $('#review-stats-meta').textContent = `${stats.totalAdvices} 条（含已过期）`;
 
+  // ====== W4 confidence 自校准表 ======
+  const calR = await callApi('/api/review/calibration');
+  if (calR.ok) {
+    const cal = calR.data;
+    $('#review-calibration-meta').textContent =
+      `${cal.totalAdvices} 条 / ${cal.totalWithOutcome} 已回填 · 整体命中率 ${fmtPct(cal.overallHitRate)}`;
+    const tbody = $('#review-calibration-table tbody');
+    tbody.innerHTML = cal.buckets
+      .map((b) => {
+        const hitColor =
+          b.withOutcome === 0 ? '' : b.hitRate >= 0.7 ? 'pos' : b.hitRate <= 0.3 ? 'neg' : 'warn';
+        const pnlClass =
+          b.withOutcome === 0 ? '' : b.avgPnl > 0 ? 'pos' : b.avgPnl < 0 ? 'neg' : '';
+        return (
+          `<tr>` +
+          `<td>${b.range.min}-${b.range.max}</td>` +
+          `<td>${b.total}</td>` +
+          `<td>${b.withOutcome}</td>` +
+          `<td>${b.hits}</td>` +
+          `<td class="${hitColor}">${fmtPct(b.hitRate)}</td>` +
+          `<td class="${pnlClass}">${fmtSigned(b.avgPnl)}</td>` +
+          `<td>${b.avgConfidence.toFixed(1)}</td>` +
+          `</tr>`
+        );
+      })
+      .join('');
+  } else {
+    $('#review-calibration-meta').textContent = `加载校准失败：${calR.error.kind ?? ''}`;
+  }
+
   // 趋势图：mock 数据（W4.E 待后端给出 byDay 序列）；先用 byDecision 的 hitRate
   const decisionData = Object.entries(stats.byDecision ?? {})
     .filter(([, s]) => s.totalAdvices > 0)

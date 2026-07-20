@@ -952,3 +952,83 @@ code {
   background: var(--pos-soft);
   color: var(--pos);
 }
+
+/* ============================================================
+ * W4 confidence 自校准表（v0.5）
+ * ============================================================ */
+.calibration-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.calibration-table th,
+.calibration-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+.calibration-table th:first-child,
+.calibration-table td:first-child {
+  text-align: left;
+}
+.calibration-table thead th {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: var(--text-xs);
+  background: var(--panel-alt);
+}
+.calibration-table tbody tr:hover {
+  background: var(--panel-alt);
+}
+.calibration-table .pos {
+  color: var(--pos);
+}
+.calibration-table .neg {
+  color: var(--neg);
+}
+.calibration-table .warn {
+  color: var(--warn);
+}
+
+/* ============================================================
+ * W4 confidence 自校准表（v0.5）
+ * ============================================================ */
+.calibration-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.calibration-table th,
+.calibration-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+.calibration-table th:first-child,
+.calibration-table td:first-child {
+  text-align: left;
+}
+.calibration-table thead th {
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: var(--text-xs);
+  background: var(--panel-alt);
+}
+.calibration-table tbody tr:hover {
+  background: var(--panel-alt);
+}
+.calibration-table .pos {
+  color: var(--pos);
+}
+.calibration-table .neg {
+  color: var(--neg);
+}
+.calibration-table .warn {
+  color: var(--warn);
+}

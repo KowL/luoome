@@ -12,6 +12,7 @@ import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
+import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getHoldingTool } from './tools/get-holding.js';
 import { getTacticTool } from './tools/get-tactic.js';
 import { listAccountsTool } from './tools/list-accounts.js';
@@ -137,6 +138,7 @@ export const toolRegistry: Registry = createRegistry([
   getHoldingTool,
   getAdviceTool,
   getAdviceStatsTool,
+  getConfidenceCalibrationTool,
   analyzeStockTool,
   analyzePositionTool,
   fetchQuoteTool,

@@ -16,6 +16,8 @@ import type {
   GetAdviceOutput,
   GetAdviceStatsInput,
   GetAdviceStatsOutput,
+  GetConfidenceCalibrationInput,
+  GetConfidenceCalibrationOutput,
   GetHoldingInput,
   GetHoldingOutput,
   GetTacticInput,
@@ -69,6 +71,11 @@ export interface WorkflowToolMap {
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
   readonly get_advice: ToolAccessor<typeof GetAdviceInput, typeof GetAdviceOutput>;
   readonly get_advice_stats: ToolAccessor<typeof GetAdviceStatsInput, typeof GetAdviceStatsOutput>;
+  // v0.5 W4：confidence 自校准（advice 历史桶聚合）
+  readonly get_confidence_calibration: ToolAccessor<
+    typeof GetConfidenceCalibrationInput,
+    typeof GetConfidenceCalibrationOutput
+  >;
   readonly analyze_stock: ToolAccessor<typeof AnalyzeStockInput, typeof AnalyzeStockOutput>;
   readonly analyze_position: ToolAccessor<
     typeof AnalyzePositionInput,

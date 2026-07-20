@@ -115,6 +115,21 @@ setup.mockInput.pressEscape();
 await sleep(200);
 await setup.waitFor(() => !frame().includes('outcome 复盘'), { maxPasses: 50 });
 
+// 8) [c] confidence 校准弹层（v0.5 W4）。
+setup.mockInput.pressKey('c');
+await setup.waitFor(() => frame().includes('confidence 校准') && frame().includes('总条数'), {
+  maxPasses: 100,
+});
+const cal = frame();
+assert(cal.includes('confidence 校准'), '[c] 弹层标题应为「confidence 校准」');
+assert(cal.includes('总条数'), '[c] 弹层应包含总条数');
+assert(cal.includes('整体命中率'), '[c] 弹层应包含整体命中率');
+assert(cal.includes('信心桶'), '[c] 弹层应包含信心桶表头');
+process.stderr.write('smoke: [c] confidence 校准弹层 OK\n');
+setup.mockInput.pressEscape();
+await sleep(200);
+await setup.waitFor(() => !frame().includes('confidence 校准'), { maxPasses: 50 });
+
 setup.mockInput.pressKey('q');
 await Promise.race([
   done,

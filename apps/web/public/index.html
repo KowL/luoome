@@ -187,6 +187,30 @@
           <div class="chart" id="review-trend"></div>
         </div>
         <div class="card mt-4">
+          <div class="card-header">
+            <h2>confidence 自校准（v0.5 W4）</h2>
+            <div class="card-meta" id="review-calibration-meta">--</div>
+          </div>
+          <p class="muted" style="margin: 0 0 8px;">
+            历史 advice 按 confidence 10 一档分布后的实际命中率。横看每个桶：
+            高信心桶命中率低 = 系统 confidence 可能高估；低信心桶命中率高 = 系统偏保守。
+          </p>
+          <table class="calibration-table" id="review-calibration-table">
+            <thead>
+              <tr>
+                <th>信心桶</th>
+                <th>条</th>
+                <th>回填</th>
+                <th>命中</th>
+                <th>hitRate</th>
+                <th>avgPnl</th>
+                <th>avgConf</th>
+              </tr>
+            </thead>
+            <tbody><!-- 由 renderReview 渲染 --></tbody>
+          </table>
+        </div>
+        <div class="card mt-4">
           <div class="card-header"><h2>近期建议</h2><div class="card-meta">点击「回填」记录 outcome</div></div>
           <div id="review-list"><p class="placeholder">加载中…</p></div>
         </div>

@@ -16,6 +16,7 @@ import {
   AnalyzeStockOutput,
   GetAdviceOutput,
   GetAdviceStatsOutput,
+  GetConfidenceCalibrationOutput,
   ListAccountsOutput,
   ListHoldingsOutput,
   ListTacticsOutput,
@@ -328,7 +329,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     truncate: true,
     fg: COLORS.muted,
     content:
-      '[r] 刷新  [q] 退出  [d] 详情  [s] 统计  [t] 战法  [o] 复盘  [a] 账户  [↑/↓] 滚动  [esc] 关闭',
+      '[r] 刷新  [q] 退出  [d] 详情  [s] 统计  [c] 校准  [t] 战法  [o] 复盘  [a] 账户  [↑/↓] 滚动  [esc] 关闭',
   });
   renderer.root.add(footer);
 
@@ -787,6 +788,58 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
    * 切账户 = 用新 defaultAccountId 构造新 ctx；repos / adapters / notification / clock /
    * logger 全部沿用（共享内存仓）。
    */
+
+  // ----- confidence 自校准（v0.5 W4）-----
+
+  /**
+   * 历史 advice 按 confidence 桶聚合（10 一档：0-9 / 10-19 / ... / 90-100）。
+   * 弹层显示：每桶 total / hits / hitRate / avgPnl / avgConfidence；
+   * 用于让用户直观判断系统 confidence 是否被高估/低估，事后可在 review 阶段调 prompt。
+   */
+  const openCalibration = async (): Promise<void> => {
+    openOverlay('confidence 校准', ['统计中…', '', '[esc] 关闭']);
+    try {
+      const raw = await callTool('get_confidence_calibration', {}, ctxRef.current);
+      const data = GetConfidenceCalibrationOutput.parse(raw);
+      if (state.overlay === null || state.overlay.title !== 'confidence 校准') return;
+      openOverlay('confidence 校准', calibrationLines(data));
+    } catch (error) {
+      if (state.overlay === null) return;
+      openOverlay('confidence 校准', [`加载失败：${describeError(error)}`, '', '[esc] 关闭']);
+    }
+  };
+
+  const calibrationLines = (data: CalibrationView): string[] => {
+    const lines: string[] = [
+      `总条数：${data.totalAdvices}    已回填：${data.totalWithOutcome}    ` +
+        `整体命中率：${formatPct(data.overallHitRate)}`,
+      `生成时间：${formatDateTime(data.calibratedAt)}`,
+      '',
+      `${padEnd('信心桶', 9)}${padStart('条', 4)}  ${padStart('回填', 4)}  ` +
+        `${padStart('命中', 4)}  ${padStart('hit', 7)}  ${padStart('avgPnl', 10)}  ${padStart('avgConf', 7)}`,
+      ''.padEnd(60, '-'),
+    ];
+    for (const b of data.buckets) {
+      const range = `${b.range.min}-${b.range.max}`;
+      lines.push(
+        `${padEnd(range, 9)}${padStart(String(b.total), 4)}  ` +
+          `${padStart(String(b.withOutcome), 4)}  ${padStart(String(b.hits), 4)}  ` +
+          `${padStart(formatPct(b.hitRate), 7)}  ${padStart(formatSigned(b.avgPnl), 10)}  ` +
+          `${padStart(b.avgConfidence.toFixed(1), 7)}`,
+      );
+    }
+    lines.push(
+      '',
+      '读法：横看每个信心桶的 hitRate。',
+      '  • 高信心桶 hitRate 高 → confidence 校准有效；',
+      '  • 高信心桶 hitRate 低 → 系统 confidence 可能高估；',
+      '  • 低信心桶 hitRate 高 → 系统 confidence 偏保守。',
+      '',
+      '[esc] 关闭',
+    );
+    return lines;
+  };
+
   const openAccounts = (): void => {
     if (state.accounts.length === 0) {
       openOverlay('切换账户', ['（无可用账户，按 esc 关闭）', '', '[esc] 关闭']);
@@ -883,6 +936,9 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       case 's':
         void openStats();
         break;
+      case 'c':
+        void openCalibration();
+        break;
       case 't':
         void openTactics();
         break;
@@ -948,3 +1004,4 @@ export const runTui = async (ctx: ToolContext): Promise<void> => {
   renderer.start();
   await done;
 };
+type CalibrationView = z.infer<typeof GetConfidenceCalibrationOutput>;

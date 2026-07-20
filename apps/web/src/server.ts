@@ -395,6 +395,10 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
     });
   });
 
+  // confidence 自校准（v0.5 W4）：把历史 advice 按 confidence 桶聚合 hitRate / avgPnl，
+  // 复盘页右侧渲染成本表 + 整体命中率。
+  app.get('/api/review/calibration', async () => callTool('get_confidence_calibration', {}));
+
   // outcome 回填（write；仅当 LUOOME_EXPOSE_WRITE=true 时挂载）。
   // 默认不暴露：避免 web 端被滥用为批量回填入口。
   if (process.env.LUOOME_EXPOSE_WRITE === 'true') {

@@ -11,6 +11,7 @@ export * from './tools/fetch-quote.js';
 export * from './tools/get-account.js';
 export * from './tools/get-advice.js';
 export * from './tools/get-advice-stats.js';
+export * from './tools/get-confidence-calibration.js';
 export * from './tools/get-holding.js';
 export * from './tools/get-tactic.js';
 export * from './tools/list-accounts.js';
