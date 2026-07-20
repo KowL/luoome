@@ -146,7 +146,7 @@
 - ✅ **buildMockContext 时间炸弹修复**（`097f3a0`）：业务时钟 `max(锚点, 真实时间)` / 行情时钟钉住锚点；`analyze_*` 新鲜 advice 不再被 repo `Date.now()` 过期过滤立刻隐藏。
 - ✅ **多账户切换 UI（侧栏账户选择器）**（commit `eb3675c`，v0.5.W3）：3 个 mock 账户（默认 / 长期持仓 / 短线交易）；5 个 seed site 切到 MOCK_ACCOUNTS；TUI [a] 弹层（j/k + Enter）+ accountBar 顶栏；Web 顶栏 `<select>` + POST `/api/account/select`（mutate ctxRef）+ localStorage 持久化。Tool 数 26 不变。
 - ✅ **advice confidence 自校准**（commit `1e9ea63`，v0.5.W4）：新 tool `get_confidence_calibration`（10 桶 0-9 / 10-19 / ... / 90-100 聚合 hitRate / avgPnl / avgConfidence）；TUI [c] 弹层 + Web /review 页加校准表；Tool 数 26 → 27。
-- ⏳ 用户手册 + Homebrew formula —— 待 v0.5.W5
+- ✅ **用户手册 + Homebrew formula**（commit 待落地，v0.5.W5）：新增 docs/USER_GUIDE.md（12 节：安装 / 首次启动 / CLI / TUI / Web / MCP / 多账户 / 复盘与校准 / 数据位置 / 环境变量 / FAQ / 更多阅读）和 homebrew/luoome.rb（HEAD-only formula：依赖 Bun，运行 bin/luoome shim 转 luoome mcp/tui/web/cli 入口；test 块校验 --version + tools list 含 27 tool）；README 顶部加 v0.5.0 状态节 + 文档表更新。
 
 **实际验收**：
 - ✅ `LUOOME_MARKET_PROVIDER=real` 端到端：`fetch_quote 002594.SZ` → eastmoney 93.92 元；`batch_quote` 三股并发 OK；`compute_indicators` Eastmoney 日线失败自动切 Tencent（41 根日线）+ 13 个技术指标全产出。
@@ -154,9 +154,10 @@
 - ✅ 默认 mock 模式零回归：所有现有测试 + TUI smoke 仍全过。
 - ⏳ A 股 + 港股 + 美股统一数据模型：仅 A 股真实数据；港股走 Eastmoney（已覆盖，但 stock_id 后缀 `HK`）；美股尚未接入（Yahoo / Alpha Vantage 留 v0.5.W2）。
 - ✅ confidence 校准接口本身提供「按桶聚合 → 系统 confidence 校准趋势」的可视化（替代原有抽象的相关性 > 0.3 验收口径）。
-- ✅ W3 + W4 落地后 TUI smoke 7/7、vitest 460/460、test:all 107/107 全绿。
+- ✅ 用户手册 + Homebrew formula：docs/USER_GUIDE.md + homebrew/luoome.rb —— 贡献者与用户入门文档补齐
+- ✅ W3 + W4 + W5 落地后 TUI smoke 7/7、vitest 460/460、test:all 107/107 全绿。
 
-**7 个 commit 增量**
+**8 个 commit 增量（含 W5）**
 
 | sha | 类型 | 主题 | 测试 +N |
 |---|---|---|---|
@@ -168,6 +169,7 @@
 | `8f38246` | docs(roadmap) | v0.5 部分完成状态对齐 | — |
 | `eb3675c` | **feat(v0.5 W3)** | 多账户切换 — 3 mock 账户 + TUI 弹层 + Web 顶栏下拉 | 测试更新 1 |
 | `1e9ea63` | **feat(v0.5 W4)** | confidence 自校准 — get_confidence_calibration tool + TUI/Web 可视化 | vitest +4 |
+| `<W5>` | **docs(v0.5 W5)** | 用户手册 docs/USER_GUIDE.md + homebrew/luoome.rb + README 状态节 | — |
 
 ## 不在路线图
 
