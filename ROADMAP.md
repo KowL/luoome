@@ -128,30 +128,42 @@
 - ✅ 鉴权：设置页可生成 / 清除 token，token 附 Authorization header；服务端 `LUOOME_EXPOSE_WRITE=true` 才挂载 write endpoint。
 - ✅ typecheck / test / lint 全绿（418 tests / 0 lint error）。
 
-## v0.5 — Multi-Market & Polish
+## v0.5 — Multi-Market & Polish（部分完成）
 
-**目标**：多市场接入 + 体验打磨。
+**目标**：A 股真实数据 + 真实 LLM + 录入闭环 + 体验打磨。
 
-> 范围修正（2026-07-20）：多市场数据源（港/美）确认不做，A 股优先。
-> 已完成：真实行情接线——四个 surface 统一经 `createMarketAdapterFromEnv` 装配，
-> `LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底（默认 mock 零回归）。
-> 已完成：真实 LLM 接线——四端 LLM 统一走 LLMManager（`LUOOME_LLM_PROVIDER` 路由，默认 mock）。
-> 已完成：持仓/交易录入——`add_trade` / `add_holding` / `update_holding` / `close_holding` 4 个 write tool。
-> 已完成：成交量量纲统一——K 线 volume 一律 ×100 成股（与 Quote.volume 一致）。
+**实际产物（截至 HEAD `8dbb03f`，commit 见 git log）**：
 
-**产物**：
-- adapters/market：港股 / 美股 数据源
-- 多市场统一抽象：`Stock` 加 `market` 字段
-- 多账户：账户切换 UI
-- 性能：批量查询 + 索引优化
-- 文档：用户手册 + 视频脚本
-- 发布：Homebrew formula + 一键安装脚本
-- advice 模型优化：基于历史 outcome 自动校准 confidence
+- ✅ **真实行情接线**（commit `097f3a0`）：四个 surface（CLI / MCP / TUI / Web）统一经 `createMarketAdapterFromEnv` 装配；`LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底（默认 mock 零回归）。实测 `fetch_quote(source=eastmoney)` + `compute_indicators` 触发 Tencent fallback 81 根真实日线。
+- ✅ **真实 LLM 接线**（commit `d5f5917`）：四端 LLM 统一走 LLMManager（`LUOOME_LLM_PROVIDER` 路由）；`openai-compatible` / `anthropic` 缺 key 启动期报错（by design）；schema parse 失败重试 + 规则 fallback 由 Manager 既有实现承担。
+- ✅ **持仓 / 交易录入**（commit `cbdfee7`）：Tool 数 22→26，write 1→5。
+  - `add_trade`：录 Trade（source=manual） + 联动 Holding（新开 / 加仓加权均价 / 减仓 / 卖光自动 closedAt / 清仓重开复用旧 id）。
+  - `add_holding`：无成交明细直录；同 (accountId, stockId) 防重 → invalid_input。
+  - `update_holding`：quantity / availableQuantity / avgCost 纠错（至少一项，合并校验）。
+  - `close_holding`：软平仓；重复平仓 → invalid_input。
+  - stock 行缺失自动补 stub（analyze_position 依赖 stock 存在）。
+- ✅ **成交量量纲统一**（commit `d089401`）：K 线 volume 一律 ×100 成股，与 `Quote.volume` 一致（`volMa5` / `volRatio5_20` 跨源可比）；`quote.ts` 注释钉死单位。
+- ✅ **buildMockContext 时间炸弹修复**（`097f3a0`）：业务时钟 `max(锚点, 真实时间)` / 行情时钟钉住锚点；`analyze_*` 新鲜 advice 不再被 repo `Date.now()` 过期过滤立刻隐藏。
+- ⏳ 多账户切换 UI（侧栏账户选择器）—— 待 v0.5.W3
+- ⏳ advice confidence 自校准（基于 outcome hit rate 回归）—— 待 v0.5.W4
+- ⏳ 用户手册 + Homebrew formula —— 待 v0.5.W5
 
-**验收**：
-- ✅ A 股 + 港股 + 美股统一数据模型
-- ✅ 真实用户每日使用零障碍
-- ✅ advice 历史准确率与 confidence 相关性 > 0.3（说明置信度有意义）
+**实际验收**：
+- ✅ `LUOOME_MARKET_PROVIDER=real` 端到端：`fetch_quote 002594.SZ` → eastmoney 93.92 元；`batch_quote` 三股并发 OK；`compute_indicators` Eastmoney 日线失败自动切 Tencent（41 根日线）+ 13 个技术指标全产出。
+- ✅ `LUOOME_EXPOSE_WRITE=true` 端到端：4 个 write tool 实测闭环（加仓加权 / 超卖保护 / close / 重开复用 id / 重复 close 拒绝）。
+- ✅ 默认 mock 模式零回归：所有现有测试 + TUI smoke 仍全过。
+- ⏳ A 股 + 港股 + 美股统一数据模型：仅 A 股真实数据；港股走 Eastmoney（已覆盖，但 stock_id 后缀 `HK`）；美股尚未接入（Yahoo / Alpha Vantage 留 v0.5.W2）。
+- ⏳ advice 历史准确率与 confidence 相关性 > 0.3：v0.5 W4 落地。
+
+**5 个 commit 增量**
+
+| sha | 类型 | 主题 | 测试 +N |
+|---|---|---|---|
+| `097f3a0` | feat(market) | A 股真实行情接线 + Eastmoney/Tencent 实测修复 | — |
+| `d5f5917` | feat(llm) | 真实 LLM 接线（四端 LLMManager，默认 mock 零回归） | vitest +38 |
+| `cbdfee7` | feat(tools) | 持仓/交易录入 4 个 write tool | 22 个新测试 |
+| `d089401` | fix(market) | K 线成交量量纲统一为股（×100） | 测试断言同步 |
+| `8dbb03f` | docs | 同步 LLM 接线 + 持仓交易录入 + 量纲统一 | — |
 
 ## 不在路线图
 
