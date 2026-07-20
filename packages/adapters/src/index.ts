@@ -11,6 +11,7 @@ export * from './llm/types.js';
 // 行情
 export * from './market/cache.js';
 export * from './market/eastmoney.js';
+export * from './market/factory.js';
 export * from './market/manager.js';
 export * from './market/mock.js';
 export * from './market/tencent.js';

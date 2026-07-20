@@ -301,6 +301,12 @@ Adapter manager 提供：
 - 缓存（带 TTL）
 - 限速（per-adapter 配额）
 
+surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
+`createMarketAdapterFromEnv`（adapters/market/factory.ts），按
+`LUOOME_MARKET_PROVIDER` 路由——`mock`（默认，确定性）或 `real`
+（MarketDataManager：Eastmoney 主 → Tencent 备 → Mock 兜底，A 股）。
+非法值在启动期抛错（与 `LUOOME_LLM_PROVIDER` 同一 env 解析先例）。
+
 ### 4.8 Context
 
 所有 tool / workflow handler 收到的 `ctx`：

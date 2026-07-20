@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MOCK_NOW,
   defaultMockClock,
   MOCK_ACCOUNT,
   MOCK_HOLDINGS,
@@ -23,7 +24,7 @@ import type {
 import { createInMemoryRepos, seedMockData } from '@luoome/db/memory';
 
 export interface BuildMockContextOptions {
-  /** 固定时钟；默认 adapters 的 defaultMockClock（2026-07-17 15:00 UTC+8）。 */
+  /** 固定时钟（业务 + 行情一并钉住）；缺省见下方两个默认。 */
   readonly clock?: () => Date;
   /** 默认静音 logger（丢弃全部输出）。 */
   readonly logger?: Logger;
@@ -40,14 +41,26 @@ const createSilentLogger = (): Logger => {
 };
 
 /**
+ * 默认业务时钟：max(mock 锚点, 真实时间)（HANDOFF §6.2 口径）。
+ * 锚点钉在过去 + repo 层按 Date.now() 过滤过期 advice（memory/advice.ts），
+ * 会导致 analyze_* 新鲜产出在真实时间越过 validUntil 后立刻不可见（时间炸弹）；
+ * 取 max 保证新鲜 advice 始终落在真实时间窗口内。行情侧不走此时钟（见下），
+ * 报价 / 日线 / 指标保持全链路 deterministic。
+ */
+const defaultBusinessClock = (): Date => new Date(Math.max(DEFAULT_MOCK_NOW.getTime(), Date.now()));
+
+/**
  * 测试 / Demo 用全 mock ToolContext：
- * in-memory repos + adapters fixtures 种子 + MockMarket/MockLLM + 固定 clock +
+ * in-memory repos + adapters fixtures 种子 + MockMarket/MockLLM +
+ * 行情时钟钉住 DEFAULT_MOCK_NOW（确定性）+ 业务时钟 max(锚点, 真实时间) +
  * 静音 logger；user.defaultAccountId = MOCK_ACCOUNT.id。
+ * opts.clock 显式传入时业务 / 行情时钟一并钉住（指标数值断言类测试用）。
  */
 export const buildMockContext = async (
   opts: BuildMockContextOptions = {},
 ): Promise<ToolContext> => {
-  const clock = opts.clock ?? defaultMockClock;
+  const businessClock = opts.clock ?? defaultBusinessClock;
+  const marketClock = opts.clock ?? defaultMockClock;
   const repos = createInMemoryRepos();
   await seedMockData(repos, {
     accounts: [MOCK_ACCOUNT],
@@ -56,8 +69,8 @@ export const buildMockContext = async (
     trades: MOCK_TRADES,
   });
   const advices = opts.advices ?? [
-    mockAdviceFor('002594.SZ', clock),
-    mockAdviceFor('600519.SH', clock),
+    mockAdviceFor('002594.SZ', marketClock),
+    mockAdviceFor('600519.SH', marketClock),
   ];
   if (advices.length > 0) {
     await seedMockData(repos, { advices });
@@ -66,12 +79,12 @@ export const buildMockContext = async (
   return {
     repos,
     adapters: {
-      market: new MockMarketAdapter({ clock }),
+      market: new MockMarketAdapter({ clock: marketClock }),
       llm: new MockLLMAdapter(),
     },
     notification: createMockNotificationManager(repos),
     user: { id: 'mock-user', defaultAccountId: MOCK_ACCOUNT.id },
-    clock,
+    clock: businessClock,
     logger: opts.logger ?? createSilentLogger(),
   };
 };

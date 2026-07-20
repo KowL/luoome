@@ -10,6 +10,7 @@ export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';
 export * from './entity/llm-provider.js';
 export * from './entity/market.js';
+export * from './entity/market-provider.js';
 export * from './entity/notification.js';
 export * from './entity/quote.js';
 export * from './entity/stock.js';

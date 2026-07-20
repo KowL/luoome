@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  createMarketAdapterFromEnv,
   DEFAULT_MOCK_NOW,
   defaultMockClock,
   MOCK_ACCOUNT,
@@ -20,7 +21,6 @@ import {
   MOCK_STOCKS,
   MOCK_TRADES,
   MockLLMAdapter,
-  MockMarketAdapter,
   mockAdviceFor,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
@@ -103,7 +103,7 @@ const seedAdviceClock = (): Date => new Date(Math.max(DEFAULT_MOCK_NOW.getTime()
 /**
  * 组装 web 端 ToolContext（与其他 surface 同一模式）：
  * LUOOME_HOME 下的 luoome.db + createDrizzleRepos + seedMockData(fixtures)
- * + MockMarketAdapter/MockLLMAdapter + buildContext。
+ * + 行情 factory（LUOOME_MARKET_PROVIDER，默认 mock）/MockLLMAdapter + buildContext。
  *
  * v0.1 演示口径：每次启动幂等重灌 mock fixtures（repo save 为 upsert、
  * fixture id 固定；advice 种子与 buildMockContext 对齐，保证首屏有数据）。
@@ -125,7 +125,11 @@ export const buildWebContext = async (dbPath: string): Promise<ToolContext> => {
   });
   return buildContext({
     repos: handle.repos,
-    adapters: { market: new MockMarketAdapter(), llm: new MockLLMAdapter() },
+    adapters: {
+      // 行情源由 LUOOME_MARKET_PROVIDER 路由（默认 mock；real = Eastmoney→Tencent→Mock）
+      market: createMarketAdapterFromEnv(process.env, { logger: console }),
+      llm: new MockLLMAdapter(),
+    },
     clock: defaultMockClock,
     user: { id: 'local-web-user', defaultAccountId: MOCK_ACCOUNT.id },
   });

@@ -4,7 +4,7 @@
 //   LUOOME_HOME（默认 ~/.luoome）/luoome.db
 //   → createDrizzleRepos（bun:sqlite driver，仅 Bun 运行时可加载本模块）
 //   → 空库时 seedMockData(adapters fixtures)（首次运行）
-//   → Mock 双 adapter（v0.1 无真实行情 / LLM 源）
+//   → 行情 adapter 经 factory（LUOOME_MARKET_PROVIDER，默认 mock）+ Mock LLM
 //   → buildContext
 
 import { mkdirSync } from 'node:fs';
@@ -12,12 +12,12 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  createMarketAdapterFromEnv,
   MOCK_ACCOUNT,
   MOCK_HOLDINGS,
   MOCK_STOCKS,
   MOCK_TRADES,
   MockLLMAdapter,
-  MockMarketAdapter,
   mockAdviceFor,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
@@ -85,15 +85,17 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     });
   }
 
+  const logger = createStderrLogger();
   const ctx = buildContext({
     repos,
     adapters: {
-      market: new MockMarketAdapter({ clock: now }),
+      // 行情源由 LUOOME_MARKET_PROVIDER 路由（默认 mock；real = Eastmoney→Tencent→Mock）
+      market: createMarketAdapterFromEnv(process.env, { clock: now, logger }),
       llm: new MockLLMAdapter(),
     },
     user: { id: 'local-user', defaultAccountId: MOCK_ACCOUNT.id },
     clock: now,
-    logger: createStderrLogger(),
+    logger,
   });
 
   return { ctx, dbPath, close };

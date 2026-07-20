@@ -69,6 +69,21 @@ apps/
   web/         （后续）Web 端
 ```
 
+## 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `LUOOME_HOME` | `~/.luoome` | 数据目录（`luoome.db` + `tactics/`） |
+| `LUOOME_MARKET_PROVIDER` | `mock` | 行情源：`mock` 确定性假数据；`real` 真实行情（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股） |
+| `LUOOME_LLM_PROVIDER` | `mock` | LLM 源：`mock` / `openai-compatible` / `anthropic`（真实 LLM 接线待做） |
+| `LUOOME_LLM_API_KEY` | — | `openai-compatible` / `anthropic` 必填 |
+| `LUOOME_LLM_BASE_URL` | 按 provider | 覆盖 LLM base URL |
+| `LUOOME_LLM_MODEL` | 按 provider | 覆盖 LLM 模型 |
+| `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
+| `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
+| `LUOOME_EXPOSE_TRADE` | 关（硬卡） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
+| `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；缺失时通知降级为 log，不抛错 |
+
 ## 文档
 
 | 文档 | 用途 |

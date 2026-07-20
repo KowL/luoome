@@ -2,7 +2,8 @@
 //
 // 数据路径：LUOOME_HOME 环境变量（默认 ~/.luoome）下的 luoome.db。
 // v0.1 全 mock：fixtures 种子（drizzle save 为 onConflictDoUpdate 幂等 upsert，
-// mockAdviceFor 的 id 由 stockId 哈希决定，重复启动重复种子安全）+ Mock adapters。
+// mockAdviceFor 的 id 由 stockId 哈希决定，重复启动重复种子安全）；
+// v0.5 起行情 adapter 经 factory（LUOOME_MARKET_PROVIDER，默认 mock）+ Mock LLM。
 //
 // 运行时约束：本模块 import @luoome/db 桶导出（传递引用 bun:sqlite driver），
 // 只允许在纯 Bun 运行时下加载（MCP server 正是如此）。
@@ -12,6 +13,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  createMarketAdapterFromEnv,
   DEFAULT_MOCK_NOW,
   defaultMockClock,
   MOCK_ACCOUNT,
@@ -19,7 +21,6 @@ import {
   MOCK_STOCKS,
   MOCK_TRADES,
   MockLLMAdapter,
-  MockMarketAdapter,
   mockAdviceFor,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
@@ -61,7 +62,7 @@ const seedAdviceClock = (): Date => new Date(Math.max(DEFAULT_MOCK_NOW.getTime()
 /**
  * 组装 server 用 ToolContext：
  * createDrizzleRepos（内部已 ensureSchema，这里再显式调一次保持幂等可见）
- * → seedMockData(fixtures) → MockMarket/MockLLM → buildContext（from @luoome/tools）。
+ * → seedMockData(fixtures) → 行情 factory（默认 mock）+ MockLLM → buildContext（from @luoome/tools）。
  */
 export const createServerContext = async (
   env: NodeJS.ProcessEnv = process.env,
@@ -85,17 +86,19 @@ export const createServerContext = async (
     ],
   });
 
+  const logger = createStderrLogger();
   const ctx = buildContext({
     repos: handle.repos,
     adapters: {
-      market: new MockMarketAdapter({ clock: defaultMockClock }),
+      // 行情源由 LUOOME_MARKET_PROVIDER 路由（默认 mock；real = Eastmoney→Tencent→Mock）
+      market: createMarketAdapterFromEnv(env, { clock: defaultMockClock, logger }),
       llm: new MockLLMAdapter(),
     },
     user: { id: 'local-user', defaultAccountId: MOCK_ACCOUNT.id },
     // 固定 mock 时钟（2026-07-17 15:00 UTC+8），与 fixtures / 种子 advice 对齐，
     // 保证 v0.1 全链路确定性；v0.2 接真实数据源后切系统时钟。
     clock: defaultMockClock,
-    logger: createStderrLogger(),
+    logger,
   });
 
   return { ctx, close: handle.close };

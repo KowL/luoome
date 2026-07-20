@@ -58,14 +58,15 @@ describe('market/tencent', () => {
 
   describe('fetchDailyBars', () => {
     it('解析 fqkline day 字段；按 range 过滤', async () => {
+      // 真实 API 形状（2026-07 实测）：data 以 code 为 key，元素为字符串数组
       const data = {
-        code: 'sh600519',
-        name: '贵州茅台',
-        day: [
-          '2026-07-01,100,105,110,95,1234560',
-          '2026-07-02,105,108,109,104,1500000',
-          '2026-06-30,99,100,102,98,800000', // 早于 range.start
-        ],
+        sh600519: {
+          day: [
+            ['2026-07-01', '100', '105', '110', '95', '1234560'],
+            ['2026-07-02', '105', '108', '109', '104', '1500000'],
+            ['2026-06-30', '99', '100', '102', '98', '800000'], // 早于 range.start
+          ],
+        },
       };
       const adapter = new TencentAdapter({
         fetchImpl: (async () =>
@@ -79,9 +80,10 @@ describe('market/tencent', () => {
 
     it('qfqday 优先于 day', async () => {
       const data = {
-        code: 'sh600519',
-        qfqday: ['2026-07-01,100,105,110,95,100'],
-        day: ['2026-07-01,99,99,99,99,1'], // 不应被使用
+        sh600519: {
+          qfqday: [['2026-07-01', '100', '105', '110', '95', '100']],
+          day: [['2026-07-01', '99', '99', '99', '99', '1']], // 不应被使用
+        },
       };
       const adapter = new TencentAdapter({
         fetchImpl: (async () =>
@@ -90,6 +92,17 @@ describe('market/tencent', () => {
       const range = { start: new Date('2026-07-01'), end: new Date('2026-07-31') };
       const bars = await adapter.fetchDailyBars('600519', range);
       expect(bars[0]?.volume).toBe(100);
+    });
+
+    it('data 缺 code 节点 → 空数据抛错', async () => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () =>
+          new Response(JSON.stringify({ code: 0, data: {} }), { status: 200 })) as never,
+      });
+      const range = { start: new Date('2026-07-01'), end: new Date('2026-07-31') };
+      await expect(adapter.fetchDailyBars('600519', range)).rejects.toBeInstanceOf(
+        TencentAdapterError,
+      );
     });
 
     it('code != 0 抛错', async () => {

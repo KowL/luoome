@@ -11,9 +11,11 @@ import {
  *
  * 公开 API（无需鉴权）：
  * - 实时快照：https://push2.eastmoney.com/api/qt/stock/get
- *   参数：secid={marketId}.{code}&fields=f43,f44,f45,f46,f47,f48,f60,f169,f170
+ *   参数：secid={marketId}.{code}&fields=f43,f44,f45,f46,f47,f48,f60,f169,f170&fltt=2&invt=2
  *   - f43=最新价, f44=最高, f45=最低, f46=今开, f47=成交量(手), f48=成交额(元)
  *   - f60=昨收, f169=涨跌额, f170=涨跌幅(%)
+ *   - fltt=2&invt=2 必须带：缺省时价格字段返回 ×100 的整数分（2026-07 实测
+ *   - f43=9392 表示 93.92 元），带上后返回 float 元。
  * - 日线 K 线：https://push2his.eastmoney.com/api/qt/stock/kline/get
  *   参数：secid={marketId}.{code}&fields1=...&fields2=...&klt=101&fqt=1&beg=0&end=20500101
  *   返回 klines 是 `"YYYY-MM-DD,open,close,high,low,volume,amount,amplitude,turnoverRate"`
@@ -98,7 +100,7 @@ interface EastmoneyQuoteResponse {
   readonly full?: boolean;
   readonly dlmk?: string;
   readonly data?: {
-    readonly f43?: number; // 最新价（×100？实际是元）
+    readonly f43?: number; // 最新价（fltt=2 后为 float 元）
     readonly f44?: number; // 最高
     readonly f45?: number; // 最低
     readonly f46?: number; // 今开
@@ -148,7 +150,7 @@ export class EastmoneyAdapter {
    */
   async fetchQuote(stockCode: string): Promise<Quote> {
     const secid = toSecId(stockCode);
-    const url = `${this.baseQuoteUrl}?secid=${secid}&fields=${QUOTE_FIELDS}`;
+    const url = `${this.baseQuoteUrl}?secid=${secid}&fields=${QUOTE_FIELDS}&fltt=2&invt=2`;
     const json = await this.getJson<EastmoneyQuoteResponse>(url);
     if (json.rc !== 0 || json.data === undefined) {
       throw new EastmoneyAdapterError(`Eastmoney 快照失败: rc=${json.rc} secid=${secid}`);

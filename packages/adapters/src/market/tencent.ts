@@ -38,15 +38,17 @@ export class TencentAdapterError extends Error {
   }
 }
 
+interface TencentKlineNode {
+  /** 元素为 [date, open, close, high, low, volume] 字符串数组（2026-07 实测真实形状）。 */
+  readonly qfqday?: readonly (readonly string[])[];
+  readonly day?: readonly (readonly string[])[];
+}
+
 interface TencentKlineResponse {
   readonly code: number;
   readonly msg?: string;
-  readonly data?: {
-    readonly code?: string;
-    readonly name?: string;
-    readonly qfqday?: readonly string[];
-    readonly day?: readonly string[];
-  };
+  /** 以 prefixed code 为 key 的 map（如 data.sh600519.qfqday）。 */
+  readonly data?: Readonly<Record<string, TencentKlineNode | undefined>>;
 }
 
 const toPrefixedCode = (stockCode: string): string => {
@@ -145,7 +147,8 @@ export class TencentAdapter {
     if (json.code !== 0 || json.data === undefined) {
       throw new TencentAdapterError(`Tencent 日线失败: code=${json.code}`);
     }
-    const rawList = json.data.qfqday ?? json.data.day;
+    const node = json.data[code];
+    const rawList = node?.qfqday ?? node?.day;
     if (rawList === undefined) {
       throw new TencentAdapterError(`Tencent 日线空数据: code=${code}`);
     }
@@ -154,9 +157,8 @@ export class TencentAdapter {
     const toMs = range.end.getTime();
     const bars: DailyBar[] = [];
     for (const line of rawList) {
-      const parts = line.split(',');
-      if (parts.length < 6) continue;
-      const [dateStr, openStr, closeStr, highStr, lowStr, volumeStr] = parts;
+      if (line.length < 6) continue;
+      const [dateStr, openStr, closeStr, highStr, lowStr, volumeStr] = line;
       if (
         dateStr === undefined ||
         openStr === undefined ||

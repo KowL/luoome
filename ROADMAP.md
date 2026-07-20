@@ -132,6 +132,10 @@
 
 **目标**：多市场接入 + 体验打磨。
 
+> 范围修正（2026-07-20）：多市场数据源（港/美）确认不做，A 股优先。
+> 已完成：真实行情接线——四个 surface 统一经 `createMarketAdapterFromEnv` 装配，
+> `LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底（默认 mock 零回归）。
+
 **产物**：
 - adapters/market：港股 / 美股 数据源
 - 多市场统一抽象：`Stock` 加 `market` 字段
