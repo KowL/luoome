@@ -125,6 +125,7 @@ describe('market/eastmoney', () => {
       expect(bars[0]?.date.toISOString()).toContain('2026-07-01');
       expect(bars[0]?.open).toBe(100);
       expect(bars[1]?.close).toBe(108);
+      expect(bars[0]?.volume).toBe(123_456_000); // 手 → 股（×100）
     });
 
     it('非 6 字段行跳过；rc != 0 抛错', async () => {

@@ -10,7 +10,7 @@ export interface Quote {
   readonly high: Money;
   readonly low: Money;
   readonly close: Money; // 实时价取最近成交价，放入 close
-  readonly volume: number;
+  readonly volume: number; // 股（各源统一换算：Eastmoney/Tencent 的手 ×100）
   readonly source: string;
 }
 
@@ -22,7 +22,7 @@ export interface DailyBar {
   readonly high: Money;
   readonly low: Money;
   readonly close: Money;
-  readonly volume: number;
+  readonly volume: number; // 股（与 Quote.volume 同量纲）
   readonly adjFactor: number;
 }
 

@@ -173,7 +173,7 @@ export class TencentAdapter {
       const close = Number.parseFloat(closeStr);
       const high = Number.parseFloat(highStr);
       const low = Number.parseFloat(lowStr);
-      const volume = brandQuantity(Math.round(Number.parseFloat(volumeStr)));
+      const volume = brandQuantity(Math.round(Number.parseFloat(volumeStr)) * 100); // 手 → 股
       if ([open, close, high, low].some((n) => !Number.isFinite(n) || n <= 0)) continue;
       const dateMs = Date.parse(`${dateStr} 00:00:00 UTC`);
       if (Number.isNaN(dateMs) || dateMs < fromMs || dateMs > toMs) continue;

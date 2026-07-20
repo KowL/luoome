@@ -91,7 +91,7 @@ describe('market/tencent', () => {
       });
       const range = { start: new Date('2026-07-01'), end: new Date('2026-07-31') };
       const bars = await adapter.fetchDailyBars('600519', range);
-      expect(bars[0]?.volume).toBe(100);
+      expect(bars[0]?.volume).toBe(10_000); // 100 手 × 100 = 股
     });
 
     it('data 缺 code 节点 → 空数据抛错', async () => {
