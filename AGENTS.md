@@ -84,6 +84,7 @@ mcps:
 | `get_advice` | 查历史建议 |
 | `get_advice_stats` | 查建议准确率统计 |
 | `record_advice_outcome` | 回填建议结果（事后复盘） |
+| `list_stock_pools` | 列出股票池（v0.6 起，默认仅 enabled） |
 
 ### 建议类（advice，默认全部暴露）
 
@@ -107,6 +108,10 @@ mcps:
 | `delete_alert` | 删除预警 |
 | `add_note` | 加笔记 |
 | `update_config` | 改配置 |
+| `create_stock_pool` | 创建股票池（v0.6 起） |
+| `update_stock_pool` | 更新股票池（v0.6 起） |
+| `delete_stock_pool` | 删除股票池（v0.6 起） |
+| `save_watch_trigger` | 落库一次 watch 触发（workflow 内部使用） |
 
 ### 外部副作用（external，默认 opt-in）
 
@@ -340,6 +345,13 @@ luoome tools call analyze_stock --input '{"stockId":"002594"}'
 luoome advice list --since 7d           # 看历史建议
 luoome advice stats --since 30d         # 看准确率
 LUOOME_LOG=debug luoome mcp serve       # MCP server 调试日志
+
+# v0.6 起：盘中盯盘
+luoome watch --once --no-notify         # 跑一轮（调试 / cron）
+luoome watch --interval 60              # 长驻：盘内每 60s 一轮；非交易时段 60s 重试
+luoome watch --pool holdings-watch      # 仅盯指定池
+luoome tools call list_stock_pools --input '{}'  # 列池
+luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","source":{"kind":"manual","stockIds":["002594.SZ"]},"rules":[{"kind":"price-change","pct":0.05}]}'
 ```
 
 ## 已知边界
@@ -349,6 +361,9 @@ LUOOME_LOG=debug luoome mcp serve       # MCP server 调试日志
 - v0.1 不支持多账户并发写
 - v0.1 没有 Web 入口（v0.4 起）
 - v0.1 没有真实券商对接（永不通过 MCP 暴露）
+- v0.6 `luoome watch` 盘中盯盘：A 股交易时段 9:30–11:30 / 13:00–15:00（北京时间）。**v0.6 起内置 2026 全年休市日**（29 天；详见 [packages/cli/src/holidays.ts](packages/cli/src/holidays.ts)）。通过 `LUOOME_A_SHARE_HOLIDAYS` 环境变量追加（逗号分隔 `YYYY-MM-DD`）。2027+ 需按国务院办公厅通知手工补全；不识别「调休补班」。参考 [docs/intraday-watch-design.md](./docs/intraday-watch-design.md)
+- v0.6 `cost-threshold` 规则基于当前 avgCost（未做除权除息调整），长持老股可能误触发
+- v0.6 `price-change` 规则的"昨收"用 `quote.open` 占位（mock 行情固定）；真实行情接入 dailyBars 后取上一交易日 close（review fix #7）
 
 ## 反馈
 
