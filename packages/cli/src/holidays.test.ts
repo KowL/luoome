@@ -3,11 +3,15 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_HOLIDAYS,
   CN_A_SHARE_HOLIDAYS_2026,
+  CN_A_SHARE_HOLIDAYS_2027,
   dateInShanghai,
+  defaultHolidaysFilePath,
   isHoliday,
   isWeekend,
+  loadHolidaysFromFile,
   mergeHolidayCalendars,
   parseEnvHolidays,
+  parseHolidayObject,
 } from './holidays.js';
 
 const TUESDAY_IN_SHANGHAI = (yyyyMmDd: string, h = 10, m = 0): Date => {
@@ -127,9 +131,130 @@ describe('CN_A_SHARE_HOLIDAYS_2026 sanity', () => {
   it('总数合理：元旦 3 + 春节 7 + 清明 3 + 五一 3 + 端午 3 + 中秋 3 + 国庆 7 = 29 天', () => {
     expect(CN_A_SHARE_HOLIDAYS_2026.size).toBe(29);
   });
+});
 
-  it('内置日历只含 2026', () => {
-    expect(BUILTIN_HOLIDAYS.size).toBe(1);
+describe('CN_A_SHARE_HOLIDAYS_2027 sanity（v0.7+，best-effort placeholder）', () => {
+  it('含 2026 + 2027 两年', () => {
+    expect(BUILTIN_HOLIDAYS.size).toBe(2);
     expect(BUILTIN_HOLIDAYS.has(2026)).toBe(true);
+    expect(BUILTIN_HOLIDAYS.has(2027)).toBe(true);
+  });
+
+  it('2027 关键已知日：元旦 + 春节 + 国庆', () => {
+    expect(CN_A_SHARE_HOLIDAYS_2027.has('2027-01-01')).toBe(true); // 元旦
+    expect(CN_A_SHARE_HOLIDAYS_2027.has('2027-02-06')).toBe(true); // 除夕
+    expect(CN_A_SHARE_HOLIDAYS_2027.has('2027-02-12')).toBe(true); // 初六
+    expect(CN_A_SHARE_HOLIDAYS_2027.has('2027-10-01')).toBe(true); // 国庆
+    expect(CN_A_SHARE_HOLIDAYS_2027.has('2027-10-07')).toBe(true); // 国庆末
+  });
+
+  it('2027 总数在合理区间（20–30 天；强 placeholder 不锁死）', () => {
+    expect(CN_A_SHARE_HOLIDAYS_2027.size).toBeGreaterThanOrEqual(20);
+    expect(CN_A_SHARE_HOLIDAYS_2027.size).toBeLessThanOrEqual(30);
+  });
+});
+
+describe('parseHolidayObject（v0.7）', () => {
+  it('null / 非 object → 空 Map', () => {
+    expect(parseHolidayObject(null).size).toBe(0);
+    expect(parseHolidayObject('foo').size).toBe(0);
+    expect(parseHolidayObject(42).size).toBe(0);
+  });
+
+  it('空 object → 空 Map', () => {
+    expect(parseHolidayObject({}).size).toBe(0);
+  });
+
+  it('合法多年分桶', () => {
+    const raw = { '2026': ['2026-10-08'], '2027': ['2027-10-01', '2027-10-02'] };
+    const m = parseHolidayObject(raw);
+    expect(m.get(2026)?.has('2026-10-08')).toBe(true);
+    expect(m.get(2027)?.size).toBe(2);
+  });
+
+  it('key 不是 4 位年份 → 跳过', () => {
+    const raw = { abc: ['2026-10-08'], '26': ['2026-10-08'] };
+    expect(parseHolidayObject(raw).size).toBe(0);
+  });
+
+  it('value 不是 string[] → 跳过该 key', () => {
+    const raw = { '2026': 'not-an-array' };
+    expect(parseHolidayObject(raw).size).toBe(0);
+  });
+
+  it('日期字符串格式错误 → 跳过该元素', () => {
+    const raw = { '2026': ['2026-13-01', 'not-a-date', '2026-10-08'] };
+    const m = parseHolidayObject(raw);
+    expect(m.get(2026)?.has('2026-10-08')).toBe(true);
+    expect(m.get(2026)?.size).toBe(1);
+  });
+
+  it('日期年份与 key 不一致 → 跳过该元素', () => {
+    const raw = { '2026': ['2027-10-01', '2026-10-08'] };
+    const m = parseHolidayObject(raw);
+    expect(m.get(2026)?.has('2026-10-08')).toBe(true);
+    expect(m.get(2026)?.has('2027-10-01')).toBe(false);
+  });
+});
+
+describe('loadHolidaysFromFile（v0.7）', () => {
+  it('文件不存在 → 空 Map（静默）', () => {
+    expect(loadHolidaysFromFile('/nonexistent/holidays.json').size).toBe(0);
+  });
+
+  it('文件存在 + 合法 JSON → 解析', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-holidays-'));
+    const file = join(dir, 'holidays.json');
+    writeFileSync(file, JSON.stringify({ '2027': ['2027-09-29', '2027-10-08'] }), 'utf8');
+    try {
+      const m = loadHolidaysFromFile(file);
+      expect(m.get(2027)?.has('2027-09-29')).toBe(true);
+      expect(m.get(2027)?.size).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('文件存在 + 损坏 JSON → 空 Map（静默）', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-holidays-'));
+    const file = join(dir, 'holidays.json');
+    writeFileSync(file, '{ this is not valid json', 'utf8');
+    try {
+      expect(loadHolidaysFromFile(file).size).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('文件存在 + JSON 但不是 object（数组）→ 空 Map（静默）', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-holidays-'));
+    const file = join(dir, 'holidays.json');
+    writeFileSync(file, '["2027-10-01"]', 'utf8');
+    try {
+      expect(loadHolidaysFromFile(file).size).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('defaultHolidaysFilePath（v0.7）', () => {
+  it('拼出 <homeDir>/holidays.json', () => {
+    expect(defaultHolidaysFilePath('/some/dir')).toBe('/some/dir/holidays.json');
+  });
+
+  it('空 homeDir 也容忍（不抛，结果仍含 holidays.json）', () => {
+    // \`join('', 'holidays.json')\` 在 node:path 下产生 'holidays.json'（无前导 /），
+    // 这是预期行为：避免污染 API、上层 luoomeHome() 永远是绝对路径，这里仅防御性约束。
+    expect(defaultHolidaysFilePath('')).toContain('holidays.json');
   });
 });

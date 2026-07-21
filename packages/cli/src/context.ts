@@ -8,7 +8,6 @@
 //   → buildContext
 
 import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -26,6 +25,8 @@ import { BUILTIN_TACTICS } from '@luoome/core';
 import { createDrizzleRepos, seedMockData } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
 
+import { luoomeHome } from './paths.js';
+
 /** CLI 持有的 ctx 句柄：ToolContext + 底层资源释放。 */
 export interface CliContextHandle {
   readonly ctx: ToolContext;
@@ -35,8 +36,8 @@ export interface CliContextHandle {
   readonly close: () => void;
 }
 
-/** LUOOME_HOME：默认 ~/.luoome（AGENTS.md 快速接入口径）。 */
-export const luoomeHome = (): string => process.env.LUOOME_HOME ?? join(homedir(), '.luoome');
+/** LUOOME_HOME：默认 ~/.luoome（AGENTS.md 快速接入口径）。委托 ./paths.ts 解析。 */
+export { luoomeHome };
 
 /** warn / error 打到 stderr，避免污染 --json 的 stdout。 */
 const createStderrLogger = (): Logger => {

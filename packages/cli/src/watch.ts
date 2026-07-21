@@ -10,11 +10,14 @@ import type { Quote } from '@luoome/core';
 
 import {
   BUILTIN_HOLIDAYS,
+  defaultHolidaysFilePath,
   type Holiday,
   isHoliday as isHolidayByCalendar,
+  loadHolidaysFromFile,
   mergeHolidayCalendars,
   parseEnvHolidays,
 } from './holidays.js';
+import { luoomeHome } from './paths.js';
 
 /** Asia/Shanghai 时区偏移（+8h，无夏令时）；避免依赖 process.env.TZ / 容器时区漂移。 */
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -32,14 +35,26 @@ const shanghaiParts = (date: Date): { hour: number; minute: number; weekday: num
 };
 
 /**
- * 把环境变量 `LUOOME_A_SHARE_HOLIDAYS` 与内置节假日历合并。
+ * 把 `LUOOME_A_SHARE_HOLIDAYS` env、`$LUOOME_HOME/holidays.json`（或
+ * `LUOOME_HOLIDAYS_FILE` 指向的文件）、内置节假日历三层合并。
+ *
+ * 加载优先级（union 叠加）：
+ *   1. 内置（hardcoded，China A-share 2026–2027）
+ *   2. 文件（`~/.luoome/holidays.json`，v0.7+）
+ *   3. env（`LUOOME_A_SHARE_HOLIDAYS=2027-10-01,...`，任何时候可临时加）
+ *
  * 默认懒加载一次（模块级缓存），避免每次 isTradingHours 都解析。
+ * v0.7 取舍：不监听文件 mtime（hot path 上的 fs.watch 复杂度不值得）；
+ * 用户修改文件 / env 后需重启 watch 进程；测试可通过 `_resetHolidayCache`
+ * 强制重新加载。
  */
 let cachedCalendar: ReadonlyMap<number, ReadonlySet<Holiday>> | undefined;
 const getCalendar = (): ReadonlyMap<number, ReadonlySet<Holiday>> => {
   if (cachedCalendar === undefined) {
+    const filePath = process.env.LUOOME_HOLIDAYS_FILE ?? defaultHolidaysFilePath(luoomeHome());
     cachedCalendar = mergeHolidayCalendars(
       BUILTIN_HOLIDAYS,
+      loadHolidaysFromFile(filePath),
       parseEnvHolidays(process.env.LUOOME_A_SHARE_HOLIDAYS),
     );
   }

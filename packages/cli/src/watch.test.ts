@@ -169,3 +169,117 @@ describe('isTradingHours 节假日历（v0.6）', () => {
     }
   });
 });
+
+describe('isTradingHours 文件加载集成（v0.7）', () => {
+  // 2026-11-11 是周三，Shanghai 10:00 正常应该交易
+  const shanghaiAt = (yyyyMmDd: string, h = 10, m = 0): Date => {
+    const [y, mo, d] = yyyyMmDd.split('-').map(Number) as [number, number, number];
+    const utcMs = Date.UTC(y, mo - 1, d, h - 8, m, 0, 0);
+    return new Date(utcMs);
+  };
+
+  it('LUOOME_HOLIDAYS_FILE 指向合法文件 → 加载生效', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-watch-holidays-'));
+    const file = join(dir, 'holidays.json');
+    writeFileSync(file, JSON.stringify({ '2026': ['2026-11-11', '2026-11-12'] }), 'utf8');
+    const prevFile = process.env.LUOOME_HOLIDAYS_FILE;
+    process.env.LUOOME_HOLIDAYS_FILE = file;
+    _resetHolidayCache();
+    try {
+      expect(isTradingHours(shanghaiAt('2026-11-11', 10))).toBe(false); // 文件中 → 休市
+      expect(isTradingHours(shanghaiAt('2026-11-12', 10))).toBe(false); // 文件中 → 休市
+      // 内置 2026-01-01 不受文件影响（仍生效）
+      expect(isTradingHours(shanghaiAt('2026-01-01', 10))).toBe(false);
+      // 普通工作日不受影响
+      expect(isTradingHours(shanghaiAt('2026-09-24', 10))).toBe(true);
+    } finally {
+      if (prevFile === undefined) delete process.env.LUOOME_HOLIDAYS_FILE;
+      else process.env.LUOOME_HOLIDAYS_FILE = prevFile;
+      _resetHolidayCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('LUOOME_HOLIDAYS_FILE 指向不存在路径 → fallback 到内置', async () => {
+    const prevFile = process.env.LUOOME_HOLIDAYS_FILE;
+    process.env.LUOOME_HOLIDAYS_FILE = '/nonexistent/holidays.json';
+    _resetHolidayCache();
+    try {
+      // 内置 2026-01-01 仍生效
+      expect(isTradingHours(shanghaiAt('2026-01-01', 10))).toBe(false);
+      // 2027 元旦（v0.7 占位）也生效
+      expect(isTradingHours(shanghaiAt('2027-01-01', 10))).toBe(false);
+      // 普通工作日不受影响
+      expect(isTradingHours(shanghaiAt('2026-09-24', 10))).toBe(true);
+    } finally {
+      if (prevFile === undefined) delete process.env.LUOOME_HOLIDAYS_FILE;
+      else process.env.LUOOME_HOLIDAYS_FILE = prevFile;
+      _resetHolidayCache();
+    }
+  });
+
+  it('LUOOME_HOLIDAYS_FILE 指向损坏文件 → fallback 到内置', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-watch-holidays-'));
+    const file = join(dir, 'holidays.json');
+    writeFileSync(file, 'not valid json {', 'utf8');
+    const prevFile = process.env.LUOOME_HOLIDAYS_FILE;
+    process.env.LUOOME_HOLIDAYS_FILE = file;
+    _resetHolidayCache();
+    try {
+      // 内置仍生效
+      expect(isTradingHours(shanghaiAt('2026-01-01', 10))).toBe(false);
+      expect(isTradingHours(shanghaiAt('2026-09-24', 10))).toBe(true);
+    } finally {
+      if (prevFile === undefined) delete process.env.LUOOME_HOLIDAYS_FILE;
+      else process.env.LUOOME_HOLIDAYS_FILE = prevFile;
+      _resetHolidayCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('三层优先级：env > 文件 > 内置', async () => {
+    // 文件说 2026-12-09 休市；env 把它强制定为工作日（不会清空，只是追加，
+    // 通过 union 行为内置 + env 都生效）。这里验证三者 merge 后 set 是 union。
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-watch-holidays-'));
+    const file = join(dir, 'holidays.json');
+    writeFileSync(file, JSON.stringify({ '2026': ['2026-12-09'] }), 'utf8');
+    const prevFile = process.env.LUOOME_HOLIDAYS_FILE;
+    const prevEnv = process.env.LUOOME_A_SHARE_HOLIDAYS;
+    process.env.LUOOME_HOLIDAYS_FILE = file;
+    process.env.LUOOME_A_SHARE_HOLIDAYS = '2026-12-10'; // env 追加另一天
+    _resetHolidayCache();
+    try {
+      expect(isTradingHours(shanghaiAt('2026-12-09', 10))).toBe(false); // 文件
+      expect(isTradingHours(shanghaiAt('2026-12-10', 10))).toBe(false); // env
+      // 同日设置两次：内置 + 文件同样说 2026-01-01 休市 → union 后仍 false
+      expect(isTradingHours(shanghaiAt('2026-01-01', 10))).toBe(false);
+      // 不在三层里的 → 开市
+      expect(isTradingHours(shanghaiAt('2026-09-24', 10))).toBe(true);
+    } finally {
+      if (prevFile === undefined) delete process.env.LUOOME_HOLIDAYS_FILE;
+      else process.env.LUOOME_HOLIDAYS_FILE = prevFile;
+      if (prevEnv === undefined) delete process.env.LUOOME_A_SHARE_HOLIDAYS;
+      else process.env.LUOOME_A_SHARE_HOLIDAYS = prevEnv;
+      _resetHolidayCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('v0.7+ 内置 2027 元旦（周六）→ false', () => {
+    expect(isTradingHours(shanghaiAt('2027-01-01', 10))).toBe(false);
+  });
+
+  it('v0.7+ 内置 2027 春节（除夕 2/6）→ false', () => {
+    expect(isTradingHours(shanghaiAt('2027-02-06', 10))).toBe(false);
+    expect(isTradingHours(shanghaiAt('2027-02-12', 10))).toBe(false);
+  });
+});
