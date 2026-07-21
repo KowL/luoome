@@ -149,7 +149,7 @@ interface WatchTrigger {
   5. 逐池逐规则评估：
      - `tactic` 规则 → `run_tactic(scope='watchlist', stockIds=成员, persistSignals=false)`，score ≥ minScore 触发；direction 映射：bullish→buy、bearish→sell、neutral→watch
      - `cost-threshold` → `quote.close` 对 `holding.avgCost` 纯计算；stopLoss 触发 direction=sell、takeProfit 触发 direction=sell（止盈本身是卖）
-     - `price-change` → `(close − prevClose) / prevClose` 的绝对值 ≥ pct；`prevClose` 取 `dailyBars` 中 `date < today` 的最近一根 close（**上一交易日**，不用当日 dailyBar 避免盘中自刷新；dailyBar 1h 缓存即可，盘中只算一次）
+     - `price-change` → `(close − prevClose) / prevClose` 的绝对值 ≥ pct；`prevClose` **v0.6.1+** 取 `dailyBars` 中 `date < today` 的最近一根 close（上一交易日，不用当日 dailyBar 避免盘中自刷新；dailyBar 1h 缓存即可，盘中只算一次）。dailyBars 缺失 / close <= 0 → fallback 到 `quote.open`（v0.6 占位行为仍兼容）
   6. **cooldown 过滤**：对每个候选 trigger，构造 key=`{poolId, stockId, ruleKind}`，查 `repos.watchTrigger.lastForKey(key, since=now − cooldownMinutes)`，存在则标 `notified=false`，从推送集剔除，但仍计入返回
   7. 触发落库：对最终 fire 的每个 trigger（不论是否被 cooldown 抑制）调 `save_watch_trigger` 写入 `watchTriggers` 表
   8. notify=true 且有 `notified=true` 的 trigger → `send_notification` 聚合推送：
