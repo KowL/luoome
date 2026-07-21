@@ -330,6 +330,8 @@ interface ToolContext {
 
 **v0.6 起新增**：StockPool（股票池 = 成员来源 + 规则列表 + 冷却 + enabled）、WatchTrigger（盯盘触发 = 池 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照）。StockPool 走 CRUD（list/create/update/delete_stock_pools），WatchTrigger 通过 `save_watch_trigger` tool 落库（由 `intraday-watch` workflow 触发）。Cooldown 通过 `WatchTriggerRepository.lastForKey(poolId, stockId, ruleKind, since)` 查询，进程重启后冷却可接续。详见 [docs/intraday-watch-design.md](./docs/intraday-watch-design.md)。
 
+**v0.7 起新增**：`packages/cli/src/paths.ts`（`luoomeHome()` 从 context.ts 抽出，被 watch / holidays / future paths 共享）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
+
 ```txt
 Account          账户（真实/模拟，币种，初始资金）
 Stock            标的（代码、交易所、名称、行业）

@@ -361,6 +361,7 @@ luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","source"
 - v0.1 不支持多账户并发写
 - v0.1 没有 Web 入口（v0.4 起）
 - v0.1 没有真实券商对接（永不通过 MCP 暴露）
+- v0.7 `luoome watch` 节假日历增强：内置 2026（29 天）+ 2027 best-effort placeholder（22 天，按近 5 年规律推断，每年 12 月国办通知发布后由维护者手工同步 `CN_A_SHARE_HOLIDAYS_2027`）。加载优先级（union）：**`LUOOME_A_SHARE_HOLIDAYS` env > `$LUOOME_HOME/holidays.json` 文件 > 内置**。文件存在/损坏时静默 fallback 到内置；文件路径可通过 `LUOOME_HOLIDAYS_FILE` 覆盖。修改日历后需重启 watch（不监听 mtime）。
 - v0.6 `luoome watch` 盘中盯盘：A 股交易时段 9:30–11:30 / 13:00–15:00（北京时间）。**v0.6 起内置 2026 全年休市日**（29 天；详见 [packages/cli/src/holidays.ts](packages/cli/src/holidays.ts)）。通过 `LUOOME_A_SHARE_HOLIDAYS` 环境变量追加（逗号分隔 `YYYY-MM-DD`）。2027+ 需按国务院办公厅通知手工补全；不识别「调休补班」。参考 [docs/intraday-watch-design.md](./docs/intraday-watch-design.md)
 - v0.6 `cost-threshold` 规则基于当前 avgCost（未做除权除息调整），长持老股可能误触发
 - v0.6 `price-change` 规则的"昨收"用 `quote.open` 占位（mock 行情固定）；真实行情接入 dailyBars 后取上一交易日 close（review fix #7）

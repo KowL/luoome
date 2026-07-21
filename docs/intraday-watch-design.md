@@ -191,7 +191,14 @@ interface WatchTrigger {
 ## 明确不做（v1）
 
 - 不做 LLM 精排（盘中频率高、有成本；后续可加"高分信号触发一次 score_signals"）
-- ~~不做节假日历~~ **v0.6 起内置 2026 全年 A 股休市日**（`packages/cli/src/holidays.ts` `CN_A_SHARE_HOLIDAYS_2026`，共 29 天）；通过 `LUOOME_A_SHARE_HOLIDAYS` 环境变量追加；2027+ 维护者按国务院办公厅通知补全
+- ~~不做节假日历~~ **v0.6 起内置 2026 全年 A 股休市日**（29 天）。**v0.7 起扩展**：
+  - 内置增加 `CN_A_SHARE_HOLIDAYS_2027`（22 天，best-effort placeholder，按近 5 年规律推断；每年 12 月国办通知发布后维护者手工更新常量）
+  - 文件加载：`$LUOOME_HOME/holidays.json`（或 `LUOOME_HOLIDAYS_FILE` 指向的文件），格式 `{ "YYYY": ["YYYY-MM-DD", ...] }`
+  - 加载优先级（三层 union）：`内置 < 文件 < LUOOME_A_SHARE_HOLIDAYS env`
+  - 损坏 / 不存在文件：静默 fallback 到内置，不抛（hot path 上避免让 watch daemon crash）
+  - 不监听文件 mtime：修改后需重启 `luoome watch` 进程（测试可通过 `_resetHolidayCache` 强制重载）
+  - 不识别「调休补班」日期——A 股惯例是把假期调成连续工作日，倒过来不需要补班
+
 - 不识别「调休补班」日期——A 股惯例是把假期调成连续工作日，倒过来不需要补班
 - 不做涨跌停特殊处理（cost-threshold / price-change 都按 raw close 计算）
 - 不做通知通道扩展（复用现有 feishu/log；聚合按池切片而非按条数拆批，避免 N 大时消息爆炸）
