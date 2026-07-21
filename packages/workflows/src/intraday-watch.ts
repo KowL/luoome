@@ -20,15 +20,20 @@ import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
  *   2. seed：source.kind='tactic' 池的 tacticId 去重，每个跑一次 run_tactic(persistSignals=true) 灌 tactic_signals
  *   3. 逐池解析成员 + 取 avgCost（holdings 池）：holdings / manual / tactic（取历史 signals distinct stockId）
  *   4. 跨池去重聚合 stockIds → batch_quote
- *   5. 逐池逐规则评估 → 候选触发
- *   6. cooldown 过滤：lastForKey(now − cooldownMinutes) 存在则 notified=false
- *   7. 所有 fire 的触发都 save_watch_trigger 落库（含 notified=false 的）
- *   8. notify=true 且有 notified=true → 按池切片 send_notification（log channel 兜底）
+ *   5. 拉 dailyBars 昨收（v0.6.1+）：dailyBar.latestBefore(stockId, now, 1) → Map<stockId, prevClose>
+ *   6. 逐池逐规则评估 → 候选触发（price-change 优先用 prevCloses；fallback 到 quote.open）
+ *   7. cooldown 过滤：lastForKey(now − cooldownMinutes) 存在则 notified=false
+ *   8. 所有 fire 的触发都 save_watch_trigger 落库（含 notified=false 的）
+ *   9. notify=true 且有 notified=true → 按池切片 send_notification（log channel 兜底）
  *
- * 实现简化（v0.6）：
- * - price-change 规则：使用 quote.open 作为 prevClose 占位（mock 行情固定；真实场景接入 dailyBars 后取上一交易日 close）
- * - cost-threshold 规则：v0.6 不评估（需要 holding.avgCost，holdings 池的 members 已带 avgCost，但 v0.6 暂跳过；v0.6.1 改进）
- * - tactic 规则：调用 run_tactic(scope=watchlist, persistSignals=false)，score ≥ minScore 触发
+ * price-change v0.6.1 行为：
+ * - dailyBars 有昨日/前日 close 且 > 0 → 用作 prevClose
+ * - dailyBars 缺失 / repo throw / close ≤ 0 → fallback 到 quote.open（v0.6 兼容）
+ * - evidence 字段：原本 \`prevClose(open)=${q.open}\` → \`prevClose=${prevClose}\`，
+ *   日志端从 evidence 难以判断来源，可加前缀 \`(bar)\` / \`(open-fallback)\`（v1 再做）
+ *
+ * cost-threshold：v0.6+ 已实现（cost-threshold.test.ts 11 case 覆盖）
+ * tactic：调用 run_tactic(scope=watchlist, persistSignals=false)，score ≥ minScore 触发
  */
 
 export const IntradayWatchInput = z.object({
@@ -93,7 +98,17 @@ interface QuotesState extends MembersState {
   readonly quotes: ReadonlyMap<string, Quote>;
 }
 
-interface EvaluatedState extends QuotesState {
+/**
+ * v0.6.1 起：dailyBars 接入的昨收视图。
+ * - 通过 stepLoadPrevCloses 填充；缺失 / close <= 0 不入 map（evaluate 时 fallback）
+ * - Map<string, Money> 与 mock 行情兼容：mock 没有 seed dailyBars 时退化成空 map，
+ *   evaluate 阶段会落到 quote.open 分支（v0.6 行为）。
+ */
+interface PrevClosesState extends QuotesState {
+  readonly prevCloses: ReadonlyMap<string, Money>;
+}
+
+interface EvaluatedState extends PrevClosesState {
   readonly candidates: readonly WatchTrigger[];
 }
 
@@ -144,6 +159,7 @@ const evaluateSyncRule = (
   rule: Exclude<WatchRule, { kind: 'tactic' }>,
   members: readonly PoolMember[],
   quotes: ReadonlyMap<string, Quote>,
+  prevCloses: ReadonlyMap<string, Money>,
   ctx: { clock: () => Date; logger: { warn: (m: string, meta?: Record<string, unknown>) => void } },
 ): WatchTrigger[] => {
   const out: WatchTrigger[] = [];
@@ -153,7 +169,8 @@ const evaluateSyncRule = (
     for (const m of members) {
       const q = quotes.get(m.stockId);
       if (q === undefined) continue;
-      const prevClose = q.open; // v0.6 简化：用 open 当昨收
+      // v0.6.1：dailyBars 拉到的昨日/前日 close 优先；缺失 fallback 到 quote.open
+      const prevClose = prevCloses.get(m.stockId) ?? q.open;
       if (!(prevClose > 0)) continue;
       const change = Math.abs(q.close - prevClose) / prevClose;
       if (change < rule.pct) continue;
@@ -164,7 +181,7 @@ const evaluateSyncRule = (
         ruleKind: rule.kind,
         direction: 'watch',
         reason: `日内变动 ${(change * 100).toFixed(2)}% ≥ ${(rule.pct * 100).toFixed(2)}%`,
-        evidence: [`close=${q.close}`, `prevClose(open)=${prevClose}`],
+        evidence: [`close=${q.close}`, `prevClose=${prevClose}`],
         quote: { close: q.close, ts: q.ts },
         notified: false,
         createdAt: now,
@@ -358,8 +375,41 @@ const stepBatchQuote: WorkflowStep = async (prev, ctx) => {
   return { ...state, quotes: map } satisfies QuotesState;
 };
 
-const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
+/**
+ * v0.6.1：从 dailyBar repo 拉每个 distinct stock 的"昨收"。
+ *
+ * 行为契约：
+ * - 缺失（unseeded / repo throw / close <= 0）→ 不进 map，evaluate 阶段
+ *   自然 fallback 到 quote.open（v0.6 兼容）
+ * - 用 \`latestBefore(stockId, now, 1)\` 取 ≤ now 的最近 1 根；返回 Date[]
+ *   长度为 0 或 1，皆视为缺失
+ * - 跨池 distinct stockIds 已经在 \`state.allStockIds\` 里聚合好了（stepResolveMembers）
+ *
+ * 容错：repo throw 用 try/catch 兜住（hot path 上不应让 watch daemon crash）；
+ * 失败时 \`prevCloses\` 缺该 stock，等价于 fallback。
+ */
+const stepLoadPrevCloses: WorkflowStep = async (prev, ctx) => {
   const state = prev as QuotesState;
+  const now = ctx.clock();
+  const prevCloses = new Map<string, Money>();
+  await Promise.all(
+    [...state.allStockIds].map(async (stockId) => {
+      try {
+        const bars = await ctx.repos.dailyBar.latestBefore(stockId, now, 1);
+        const last = bars[bars.length - 1];
+        if (last !== undefined && last.close > 0) {
+          prevCloses.set(stockId, last.close);
+        }
+      } catch {
+        // 静默：repo / IO 错误 → fallback 到 quote.open
+      }
+    }),
+  );
+  return { ...state, prevCloses } satisfies PrevClosesState;
+};
+
+const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
+  const state = prev as PrevClosesState;
   const candidates: WatchTrigger[] = [];
   for (const pool of state.pools) {
     const members = state.members.get(pool.id) ?? [];
@@ -368,7 +418,14 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         const triggered = await evaluateTacticRule(pool, rule, members, state.quotes, ctx);
         for (const t of triggered) candidates.push(t);
       } else {
-        const triggered = evaluateSyncRule(pool, rule, members, state.quotes, ctx);
+        const triggered = evaluateSyncRule(
+          pool,
+          rule,
+          members,
+          state.quotes,
+          state.prevCloses,
+          ctx,
+        );
         for (const t of triggered) candidates.push(t);
       }
     }
@@ -474,6 +531,7 @@ export const intradayWatchWorkflow = defineWorkflow<
     stepSeedTacticSources,
     stepResolveMembers,
     stepBatchQuote,
+    stepLoadPrevCloses,
     stepEvaluateRules,
     stepApplyCooldownAndPersist,
     stepNotifyAndSummary,
