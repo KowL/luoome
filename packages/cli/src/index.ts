@@ -26,6 +26,9 @@ const VALUE_FLAGS = new Set([
   'by',
   'tactic-id',
   'scope',
+  // v0.6 watch 子命令
+  'interval',
+  'pool',
 ]);
 
 interface ParsedArgs {
@@ -462,6 +465,113 @@ const runLazyEntry = async (
 };
 
 /** mcp serve：契约 startMcpServer() 来自 plan.md（stdio，env 控制暴露面）。 */
+const cmdWatch = async (
+  _rest: readonly string[],
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  const intervalRaw = flagString(flags, 'interval') ?? '60';
+  const intervalSec = parsePositiveInt(intervalRaw, 'interval');
+  const intervalMs = intervalSec * 1000;
+  const poolFlag = flagString(flags, 'pool');
+  const once = flags.has('once');
+  const notify = !flags.has('no-notify');
+  const seed = !once; // 单轮默认不 seed（避免 seed 副作用污染测试）；长驻启动时 seed
+
+  // 延迟 import：workflow 包包含 LLM / context 等较重依赖
+  const { intradayWatchWorkflow } = await import('@luoome/workflows');
+  const { clampInterval, formatTriggersForLog, isTradingHours, nextRunDelayMs } = await import(
+    './watch.js'
+  );
+  const { createCliContext } = await import('./context.js');
+
+  const handle = await createCliContext();
+  const { ctx } = handle;
+
+  const clampedMs = clampInterval(intervalMs);
+  if (clampedMs !== intervalMs && !json) {
+    console.warn(
+      `interval=${intervalSec}s 被 clamp 到 ${clampedMs / 1000}s（quote 缓存 TTL 60s；< 60s 拿到的是缓存数据）`,
+    );
+  }
+
+  // 解析 poolFlag → poolIds 数组（--pool <id> 重复传多池）
+  const poolIds =
+    poolFlag === undefined ? undefined : poolFlag.split(',').filter((s) => s.length > 0);
+
+  // 单轮：跑一次即退出
+  if (once) {
+    const r = await intradayWatchWorkflow.run(
+      {
+        ...(poolIds !== undefined ? { poolIds } : {}),
+        notify,
+        seedTacticSources: seed,
+      },
+      ctx,
+    );
+    if (!r.ok) {
+      console.log(JSON.stringify(r, null, 2));
+      handle.close();
+      return 1;
+    }
+    if (json) {
+      console.log(JSON.stringify(r, null, 2));
+    } else {
+      console.log(`盘中盯盘（单轮）评估完毕`);
+      console.log(
+        `  池 ${r.data.evaluatedPools} / 股 ${r.data.evaluatedStocks} / 触发 ${r.data.triggers.length}（通知 ${r.data.notified} / 冷却 ${r.data.suppressedByCooldown}）`,
+      );
+      if (r.data.triggers.length > 0) {
+        console.log(formatTriggersForLog(r.data.triggers));
+      }
+    }
+    handle.close();
+    return 0;
+  }
+
+  // 长驻：循环
+  let stopping = false;
+  const handleSigint = (): void => {
+    stopping = true;
+    console.warn('\n收到 SIGINT，准备退出（在当前轮结束后）…');
+  };
+  process.on('SIGINT', handleSigint);
+
+  let firstIteration = true;
+  while (!stopping) {
+    const now = new Date();
+    if (!isTradingHours(now)) {
+      if (firstIteration && !json) {
+        console.warn(`当前北京时间非交易时段，跳过本轮（等 60s 重试）`);
+        firstIteration = false;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, nextRunDelayMs(now, clampedMs)));
+      continue;
+    }
+    firstIteration = false;
+    if (!json) console.warn(`[${now.toISOString()}] 跑一轮…`);
+    const r = await intradayWatchWorkflow.run(
+      {
+        ...(poolIds !== undefined ? { poolIds } : {}),
+        notify,
+        seedTacticSources: seed,
+      },
+      ctx,
+    );
+    if (!r.ok) {
+      console.error(`本轮失败: ${JSON.stringify(r, null, 2)}`);
+    } else if (!json) {
+      console.log(formatTriggersForLog(r.data.triggers));
+    }
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, nextRunDelayMs(new Date(), clampedMs)),
+    );
+  }
+  process.off('SIGINT', handleSigint);
+  handle.close();
+  return 0;
+};
+
 const cmdWorkflowRun = async (
   name: string,
   flags: ReadonlyMap<string, string | boolean>,
@@ -489,7 +599,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch）`,
     );
   }
   const handle = await createCliContext();
@@ -547,7 +657,9 @@ Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
   web serve [--port 5173]      启动 Web 仪表盘（Hono）
-  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）
+  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch）
+  watch [--interval 60] [--pool <id>] [--once] [--no-notify]
+                                盘中长驻盯盘；Ctrl+C 优雅退出
 
 环境变量:
   LUOOME_HOME   数据目录（默认 ~/.luoome）；SQLite 位于 $LUOOME_HOME/luoome.db
@@ -602,6 +714,10 @@ const run = async (argv: readonly string[]): Promise<number> => {
   if (cmd === 'mcp') {
     if (sub === 'serve') return cmdMcpServe();
     throw new CliUsageError(`未知 mcp 子命令: "${sub ?? ''}"（支持 serve）`);
+  }
+
+  if (cmd === 'watch') {
+    return cmdWatch(rest, flags, json);
   }
 
   if (cmd === 'workflow') {

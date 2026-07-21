@@ -12,10 +12,12 @@ import {
   type RepositoryRegistry,
   STANDARD_DISCLAIMERS,
   type Stock,
+  type StockPool,
   stockCode,
   type Tactic,
   type TacticSignal,
   type Trade,
+  type WatchTrigger,
 } from '@luoome/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -173,6 +175,35 @@ export const makeNotification = (
   payload: { title: 'fixture title', content: 'fixture content', level: 'info' },
   result: 'success',
   sentAt: T1,
+  ...overrides,
+});
+
+export const makeStockPool = (id: string, overrides: Partial<StockPool> = {}): StockPool => ({
+  id,
+  name: `池-${id}`,
+  source: { kind: 'manual', stockIds: ['002594.SZ'] },
+  rules: [{ kind: 'price-change', pct: 0.05 }],
+  cooldownMinutes: 30,
+  enabled: true,
+  createdAt: T0,
+  updatedAt: T0,
+  ...overrides,
+});
+
+export const makeWatchTrigger = (
+  id: string,
+  overrides: Partial<WatchTrigger> = {},
+): WatchTrigger => ({
+  id,
+  poolId: 'pool-1',
+  stockId: '002594.SZ',
+  ruleKind: 'price-change',
+  direction: 'watch',
+  reason: 'fixture reason',
+  evidence: ['close=15.2'],
+  quote: { close: money(15.2), ts: T1 },
+  notified: true,
+  createdAt: T1,
   ...overrides,
 });
 
@@ -739,6 +770,134 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.notification.save(makeNotification('bad', { result: 'failed' })),
         ).rejects.toThrow();
+      });
+    });
+
+    describe('StockPoolRepository', () => {
+      it('save + findById 往返一致（含可选 description）', async () => {
+        const p = makeStockPool('pool-1', { description: 'd' });
+        await repos.stockPool.save(p);
+        expect(await repos.stockPool.findById('pool-1')).toEqual(p);
+        expect(await repos.stockPool.findById('missing')).toBeNull();
+      });
+
+      it('list 默认全部；enabledOnly=true 仅 enabled', async () => {
+        await repos.stockPool.save(makeStockPool('p-a', { enabled: true }));
+        await repos.stockPool.save(makeStockPool('p-b', { enabled: false }));
+        const all = (await repos.stockPool.list()).map((p) => p.id);
+        expect(all).toEqual(['p-a', 'p-b']);
+        const enabledOnly = (await repos.stockPool.list(true)).map((p) => p.id);
+        expect(enabledOnly).toEqual(['p-a']);
+      });
+
+      it('update（save 同 id）覆盖字段', async () => {
+        await repos.stockPool.save(makeStockPool('p-x', { name: 'old', enabled: true }));
+        await repos.stockPool.save(
+          makeStockPool('p-x', { name: 'new', enabled: false, updatedAt: T3 }),
+        );
+        const got = await repos.stockPool.findById('p-x');
+        expect(got?.name).toBe('new');
+        expect(got?.enabled).toBe(false);
+      });
+
+      it('remove 后 findById=null', async () => {
+        await repos.stockPool.save(makeStockPool('p-z'));
+        await repos.stockPool.remove('p-z');
+        expect(await repos.stockPool.findById('p-z')).toBeNull();
+      });
+
+      it('违反不变量时拒绝（rules 为空）', async () => {
+        await expect(repos.stockPool.save(makeStockPool('bad', { rules: [] }))).rejects.toThrow();
+      });
+    });
+
+    describe('WatchTriggerRepository', () => {
+      it('save + findById 往返一致', async () => {
+        const t = makeWatchTrigger('tr-1');
+        await repos.watchTrigger.save(t);
+        expect(await repos.watchTrigger.findById('tr-1')).toEqual(t);
+        expect(await repos.watchTrigger.findById('missing')).toBeNull();
+      });
+
+      it('listByPool 按 createdAt 倒序 + since 过滤', async () => {
+        await repos.watchTrigger.save(makeWatchTrigger('tr-1', { createdAt: T1, poolId: 'p1' }));
+        await repos.watchTrigger.save(makeWatchTrigger('tr-2', { createdAt: T2, poolId: 'p1' }));
+        await repos.watchTrigger.save(makeWatchTrigger('tr-3', { createdAt: T3, poolId: 'p2' }));
+        expect((await repos.watchTrigger.listByPool('p1')).map((t) => t.id)).toEqual([
+          'tr-2',
+          'tr-1',
+        ]);
+        expect((await repos.watchTrigger.listByPool('p1', { since: T1 })).map((t) => t.id)).toEqual(
+          ['tr-2', 'tr-1'],
+        );
+      });
+
+      it('lastForKey 找 (poolId, stockId, ruleKind) 维度最近一条', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-old', {
+            createdAt: T1,
+            poolId: 'p1',
+            stockId: 's1',
+            ruleKind: 'price-change',
+          }),
+        );
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-new', {
+            createdAt: T3,
+            poolId: 'p1',
+            stockId: 's1',
+            ruleKind: 'price-change',
+          }),
+        );
+        // 不同 ruleKind → 不命中
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-other', {
+            createdAt: T3,
+            poolId: 'p1',
+            stockId: 's1',
+            ruleKind: 'tactic',
+          }),
+        );
+        const hit = await repos.watchTrigger.lastForKey(
+          { poolId: 'p1', stockId: 's1', ruleKind: 'price-change' },
+          FAR_PAST,
+        );
+        expect(hit?.id).toBe('tr-new');
+        const miss = await repos.watchTrigger.lastForKey(
+          { poolId: 'p1', stockId: 's1', ruleKind: 'cost-threshold' },
+          FAR_PAST,
+        );
+        expect(miss).toBeNull();
+        // since 过滤：T1 之前的应被剔除
+        const cutoff = await repos.watchTrigger.lastForKey(
+          { poolId: 'p1', stockId: 's1', ruleKind: 'price-change' },
+          T2,
+        );
+        expect(cutoff?.id).toBe('tr-new');
+      });
+
+      it('listRecent 支持 poolId / since / limit', async () => {
+        await repos.watchTrigger.save(makeWatchTrigger('tr-1', { createdAt: T1, poolId: 'p1' }));
+        await repos.watchTrigger.save(makeWatchTrigger('tr-2', { createdAt: T2, poolId: 'p2' }));
+        await repos.watchTrigger.save(makeWatchTrigger('tr-3', { createdAt: T3, poolId: 'p1' }));
+        expect((await repos.watchTrigger.listRecent({ poolId: 'p1' })).map((t) => t.id)).toEqual([
+          'tr-3',
+          'tr-1',
+        ]);
+        expect((await repos.watchTrigger.listRecent({ since: T2 })).map((t) => t.id)).toEqual([
+          'tr-3',
+          'tr-2',
+        ]);
+        expect((await repos.watchTrigger.listRecent({ limit: 2 })).map((t) => t.id)).toEqual([
+          'tr-3',
+          'tr-2',
+        ]);
+      });
+
+      it('remove 后 findById=null', async () => {
+        await repos.watchTrigger.save(makeWatchTrigger('tr-x'));
+        await repos.watchTrigger.remove('tr-x');
+        expect(await repos.watchTrigger.findById('tr-x')).toBeNull();
       });
     });
   });

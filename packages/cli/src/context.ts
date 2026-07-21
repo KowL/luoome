@@ -71,6 +71,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   }
 
   const now = (): Date => new Date();
+  const timestamp = new Date(); // 种子用：捕获一次「创建时间」快照
 
   const accounts = await repos.account.list();
   if (accounts.length === 0) {
@@ -83,6 +84,36 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     await seedMockData(repos, {
       // 真实时钟生成，保证 validUntil 在未来（advice list 默认过滤已过期）。
       advices: [mockAdviceFor('002594.SZ', now), mockAdviceFor('600519.SH', now)],
+    });
+    // v0.6 起：种默认 holdings-watch 池（开箱即用；必须在账户 seed 之后）
+    await repos.stockPool.save({
+      id: 'holdings-watch',
+      name: '持仓监控（默认）',
+      description: '开箱即用的池：成本阈值 ±5% + 量价背离战法',
+      source: { kind: 'holdings', accountId: MOCK_ACCOUNT.id },
+      rules: [
+        { kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 },
+        { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 },
+      ],
+      cooldownMinutes: 30,
+      enabled: true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  } else if ((await repos.stockPool.list()).length === 0) {
+    // 已有账户但首次启用 stockPool（v0.5 → v0.6 升级路径）：补种默认池
+    await repos.stockPool.save({
+      id: 'holdings-watch',
+      name: '持仓监控（默认）',
+      source: { kind: 'holdings', accountId: MOCK_ACCOUNT.id },
+      rules: [
+        { kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 },
+        { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 },
+      ],
+      cooldownMinutes: 30,
+      enabled: true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
     });
   }
 

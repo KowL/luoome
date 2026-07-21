@@ -25,6 +25,8 @@ export const RunTacticInput = z.object({
   /** scope=watchlist / scope=tactic 时必填。 */
   stockIds: z.array(z.string().min(1)).optional(),
   lookbackDays: z.number().int().positive().max(365).default(DEFAULT_LOOKBACK_DAYS),
+  /** 是否把命中的 signal 写入 tactic_signals 表。默认 true；watch 高频轮询传 false 避免打爆表。 */
+  persistSignals: z.boolean().default(true),
 });
 
 export const RunTacticOutput = z.object({
@@ -112,7 +114,8 @@ const collectScopeStocks = async (
  */
 export const runTacticTool = defineTool({
   name: 'run_tactic',
-  description: '跑单个战法生成信号（scope: holdings/watchlist/all-stocks），命中的 signal 自动落库',
+  description:
+    '跑单个战法生成信号（scope: holdings/watchlist/all-stocks）；persistSignals=false 时不写 tactic_signals（watch 高频轮询用）',
   sideEffect: 'read',
   input: RunTacticInput,
   output: RunTacticOutput,
@@ -145,10 +148,12 @@ export const runTacticTool = defineTool({
       if (outcome.triggered) {
         signals.push(TacticSignalSchema.parse(outcome.signal));
         triggered++;
-        try {
-          await ctx.repos.tactic.saveSignal(outcome.signal);
-        } catch (e) {
-          c.logger.warn('[run_tactic] saveSignal failed', { stockId: stock.id, err: String(e) });
+        if (input.persistSignals) {
+          try {
+            await ctx.repos.tactic.saveSignal(outcome.signal);
+          } catch (e) {
+            c.logger.warn('[run_tactic] saveSignal failed', { stockId: stock.id, err: String(e) });
+          }
         }
       }
     }

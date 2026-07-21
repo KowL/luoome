@@ -8,6 +8,10 @@ import type {
   BatchQuoteOutput,
   ComputeIndicatorsInput,
   ComputeIndicatorsOutput,
+  CreateStockPoolInput,
+  CreateStockPoolOutput,
+  DeleteStockPoolInput,
+  DeleteStockPoolOutput,
   FetchQuoteInput,
   FetchQuoteOutput,
   GetAccountInput,
@@ -26,6 +30,9 @@ import type {
   ListAccountsOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
+  // v0.6 起：股票池 CRUD + 触发落库
+  ListStockPoolsInput,
+  ListStockPoolsOutput,
   ListTacticsInput,
   ListTacticsOutput,
   MarketOutlookInput,
@@ -34,6 +41,8 @@ import type {
   RecordAdviceOutcomeOutput,
   RunTacticInput,
   RunTacticOutput,
+  SaveWatchTriggerInput,
+  SaveWatchTriggerOutput,
   ScoreSignalsInput,
   ScoreSignalsOutput,
   SearchStocksInput,
@@ -46,6 +55,8 @@ import type {
   TacticSignalsByStockOutput,
   TacticSignalsByTacticInput,
   TacticSignalsByTacticOutput,
+  UpdateStockPoolInput,
+  UpdateStockPoolOutput,
 } from '@luoome/tools';
 import { toolRegistry } from '@luoome/tools';
 import type { z } from 'zod';
@@ -112,6 +123,24 @@ export interface WorkflowToolMap {
     typeof SendNotificationOutput
   >;
   readonly market_outlook: ToolAccessor<typeof MarketOutlookInput, typeof MarketOutlookOutput>;
+  // v0.6 起：股票池 CRUD + 触发落库（workflow 内部使用 save_watch_trigger）
+  readonly list_stock_pools: ToolAccessor<typeof ListStockPoolsInput, typeof ListStockPoolsOutput>;
+  readonly create_stock_pool: ToolAccessor<
+    typeof CreateStockPoolInput,
+    typeof CreateStockPoolOutput
+  >;
+  readonly update_stock_pool: ToolAccessor<
+    typeof UpdateStockPoolInput,
+    typeof UpdateStockPoolOutput
+  >;
+  readonly delete_stock_pool: ToolAccessor<
+    typeof DeleteStockPoolInput,
+    typeof DeleteStockPoolOutput
+  >;
+  readonly save_watch_trigger: ToolAccessor<
+    typeof SaveWatchTriggerInput,
+    typeof SaveWatchTriggerOutput
+  >;
 }
 
 /**

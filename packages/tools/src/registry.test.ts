@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// v0.5 末态：22 (v0.3) + 4 (v0.5 write 录入) = 26 tool
-// v0.5 末态：26 (v0.3 / write 录入) + 1 (v0.5 W4 confidence 自校准) = 27 tool
+// v0.6 末态：27 (v0.5) + 5 (v0.6 stockPool / watchTrigger) = 32 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'list_accounts',
@@ -37,6 +36,12 @@ const EXPECTED_TOOL_NAMES = [
   'close_holding',
   // v0.5 W4：confidence 自校准
   'get_confidence_calibration',
+  // v0.6 新增：股票池 CRUD + 触发落库
+  'list_stock_pools',
+  'create_stock_pool',
+  'update_stock_pool',
+  'delete_stock_pool',
+  'save_watch_trigger',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -77,6 +82,22 @@ describe('toolRegistry', () => {
       'fetch_quote',
       'send_notification',
       'sync_quotes',
+    ]);
+    const writeTools = toolRegistry
+      .all()
+      .filter((t) => t.sideEffect === 'write')
+      .map((t) => t.name)
+      .sort();
+    expect(writeTools).toEqual([
+      'add_holding',
+      'add_trade',
+      'close_holding',
+      'create_stock_pool',
+      'delete_stock_pool',
+      'record_advice_outcome',
+      'save_watch_trigger',
+      'update_holding',
+      'update_stock_pool',
     ]);
   });
 

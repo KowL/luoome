@@ -5,5 +5,7 @@ export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleNotificationRepository } from './notification.js';
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleStockRepository } from './stock.js';
+export { DrizzleStockPoolRepository } from './stock-pool.js';
 export { DrizzleTacticRepository } from './tactic.js';
 export { DrizzleTradeRepository } from './trade.js';
+export { DrizzleWatchTriggerRepository } from './watch-trigger.js';

@@ -14,6 +14,7 @@ export * from './entity/market-provider.js';
 export * from './entity/notification.js';
 export * from './entity/quote.js';
 export * from './entity/stock.js';
+export * from './entity/stock-pool.js';
 export * from './entity/tactic.js';
 export * from './entity/trade.js';
 // 错误模型

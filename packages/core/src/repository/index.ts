@@ -4,6 +4,7 @@ import type { Holding } from '../entity/holding.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Stock } from '../entity/stock.js';
+import type { StockPool, WatchRule, WatchTrigger } from '../entity/stock-pool.js';
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
 
@@ -94,6 +95,10 @@ export interface RepositoryRegistry {
   readonly tactic: TacticRepository;
   /** v0.3 起；send_notification 落库 + 复盘查询。 */
   readonly notification: NotificationRepository;
+  /** v0.6 起；股票池 CRUD（list_stock_pools / create_stock_pool / ...）。 */
+  readonly stockPool: StockPoolRepository;
+  /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
+  readonly watchTrigger: WatchTriggerRepository;
 }
 
 /**
@@ -113,6 +118,52 @@ export interface TacticRepository {
   saveSignal(signal: TacticSignal): Promise<void>;
   signalsByTactic(tacticId: string, since?: Date): Promise<readonly TacticSignal[]>;
   signalsByStock(stockId: string, since?: Date): Promise<readonly TacticSignal[]>;
+}
+
+/**
+ * 股票池仓储（v0.6 起，docs/intraday-watch-design.md §2）。
+ * Key 用 pool.id（slug 唯一）。
+ */
+export interface StockPoolRepository {
+  save(pool: StockPool): Promise<void>;
+  findById(id: string): Promise<StockPool | null>;
+  /** 默认全部；enabledOnly=true 仅返回 enabled=true。 */
+  list(enabledOnly?: boolean): Promise<readonly StockPool[]>;
+  remove(id: string): Promise<void>;
+}
+
+/**
+ * 盯盘触发仓储（v0.6 起）。
+ * - 每次 watch 评估 fire 的 trigger 都写入；被 cooldown 抑制的也写（notified=false），便于事后复盘"今天压了多少条"。
+ * - lastForKey 用于 cooldown 查询（since = now − cooldownMinutes）。
+ */
+export interface WatchTriggerRepository {
+  save(trigger: WatchTrigger): Promise<void>;
+  findById(id: string): Promise<WatchTrigger | null>;
+  /** 审计 / 复盘：按 createdAt 倒序。 */
+  listByPool(
+    poolId: string,
+    opts?: { readonly since?: Date; readonly limit?: number },
+  ): Promise<readonly WatchTrigger[]>;
+  /**
+   * cooldown 查询：找 (poolId, stockId, ruleKind) 维度最近一条；since 通常 = now − cooldownMinutes。
+   * 任意一个 stockId / ruleKind 为空都不命中（避免跨池误判）。
+   */
+  lastForKey(
+    key: {
+      readonly poolId: string;
+      readonly stockId: string;
+      readonly ruleKind: WatchRule['kind'];
+    },
+    since: Date,
+  ): Promise<WatchTrigger | null>;
+  /** 最近触发（CLI / TUI / MCP 展示用）。 */
+  listRecent(opts?: {
+    readonly poolId?: string;
+    readonly since?: Date;
+    readonly limit?: number;
+  }): Promise<readonly WatchTrigger[]>;
+  remove(id: string): Promise<void>;
 }
 
 /**
