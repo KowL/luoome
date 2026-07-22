@@ -6,22 +6,23 @@
 
 ---
 
-## 1. 现状快照（v0.4.0）
+## 1. 现状快照（v0.6.2）
 
 | 维度 | 状态 |
 |---|---|
-| 已发布版本 | v0.4.0（https://github.com/KowL/luoome/releases/tag/v0.4.0） |
-| 最新 commit | `c03f1a6`（chore(repo): LICENSE + CI + version 0.4.0） |
-| 测试 | 506 pass（vitest 399 + bun test db 107）/ 57 文件 |
-| Tool 数 | 26（read 14 / advice 3 / external 4 / write 5） |
-| Workflow 数 | 5（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review） |
-| 战法数 | 5 builtin（放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振） |
-| 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股）；LLM 经 `LUOOME_LLM_PROVIDER` 路由——mock（默认）/ OpenAI-Compatible / Anthropic（缺 key 启动期报错，LLMManager 重试 + 规则兜底）；飞书 Webhook |
+| 已发布版本 | v0.5.0（v0.6 系列未单独发 tag / release；squash 合入 main，PR [#1](https://github.com/KowL/luoome/pull/1)） |
+| 最新 commit | `0777352`（intrady watch v0.6 + holiday calendar v0.7 + dailyBars v0.6.1 + manager resilience v0.6.2，squash merge） |
+| 测试 | 605 pass / 0 fail / 2387 expect / 69 文件（vitest 478 + bun test db 127） |
+| Tool 数 | 31（read 14 / advice 3 / write **10** / external 4）—— v0.6 新增 5 个 StockPool CRUD + `save_watch_trigger` |
+| Workflow 数 | 6（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / **intraday-watch**） |
+| 战法数 | 5 builtin（放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振）—— v0.3 起 |
+| 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股 + 港股）；LLM 经 `LUOOME_LLM_PROVIDER` 路由——mock / OpenAI-Compatible / Anthropic（缺 key 启动期报错）；飞书 Webhook |
 | Surfaces | CLI / TUI / Web（7 路由） / MCP stdio |
+| 节假日历 | 内置 2026（29 天）+ 2027 best-effort placeholder；`~/.luoome/holidays.json` 文件加载 + `LUOOME_A_SHARE_HOLIDAYS` env 追加 |
 | CI | GitHub Actions · ubuntu + bun 1.3.11 · typecheck + test:all + lint 三关 |
 | License | MIT |
 
-**v0.1 → v0.4 都已完成**，v0.5（多市场 + 体验打磨）待启动。
+**v0.6 长驻盘中盯盘 + 节假日文件加载 + dailyBars 真实昨收 + manager 容错深覆盖都已 squash 合入 main**。下一阶段 v0.7+ 见 §8 backlog。
 
 ## 2. 5 分钟读懂项目
 
@@ -92,26 +93,30 @@ User  ─►  MCP / CLI / TUI / Web
 
 | 我想看 / 改 | 路径 |
 |---|---|
-| 实体类型 + 不变量 | `packages/core/src/entity/` |
+| 实体类型 + 不变量 | `packages/core/src/entity/`（v0.6 起含 `stock-pool.ts`：StockPool / PoolSource / WatchRule / WatchTrigger） |
 | branded types | `packages/core/src/types/branded.ts` |
 | Tool 注册表 | `packages/tools/src/registry.ts` |
 | 加新 tool 的样板 | `packages/tools/src/tools/search-stocks.ts` |
 | Tool schema → TS / MCP / OpenAI 推导 | `packages/tools/src/define-tool.ts` |
 | 战法 DSL 引擎 | `packages/core/src/tactic/` |
 | 内置战法 | `packages/adapters/src/mocks/tactics.ts` |
-| 行情适配 | `packages/adapters/src/market/` |
+| 行情适配（含真实链路容错测试） | `packages/adapters/src/market/{factory,manager,eastmoney,tencent,mock,cache}.ts` + `manager-resilience.test.ts` |
 | LLM 适配 + fallback | `packages/adapters/src/llm/` |
 | 飞书 webhook | `packages/adapters/src/notification/` |
 | Workflow 引擎 | `packages/workflows/src/define-workflow.ts` |
-| 内置 workflow | `packages/workflows/src/{sync-quotes,daily-advice,tactic-scan,risk-report,daily-review}.ts` |
+| 内置 workflow | `packages/workflows/src/{sync-quotes,daily-advice,tactic-scan,risk-report,daily-review,intraday-watch}.ts`（v0.6 起含 `intraday-watch` 9 步编排：load→seed→members→batch_quote→loadPrevCloses→evaluate→cooldown+persist→notify+summary） |
+| 盘中盯盘 CLI | `packages/cli/src/watch.ts`（纯逻辑：isTradingHours + clampInterval + nextRunDelayMs + formatTriggersForLog）；接入点 `packages/cli/src/index.ts` `cmdWatch` |
+| 节假日历 | `packages/cli/src/holidays.ts`（2026/2027 + 文件加载 + 三层优先级 union + parseHolidayObject 容错 + loadHolidaysFromFile 静默）；路径 `packages/cli/src/paths.ts`（`luoomeHome()` 共享小工具） |
+| 测试用固定行情 | `packages/tools/src/internal/mock-adapter.ts`（`FixedQuoteAdapter` + `withFixedQuoteAdapter`） |
 | MCP server 暴露面 | `packages/mcp/src/server.ts` |
 | CLI argv 解析 | `packages/cli/src/index.ts` |
 | TUI 布局 | `packages/tui/src/app.ts` |
 | Web 路由 + API | `apps/web/src/server.ts` |
 | Web 前端模块 | `apps/web/public/js/{api,ui,pages,app}.js` |
 | Web 设计 tokens + 组件 | `apps/web/public/style.css` |
-| DB schema (Drizzle) | `packages/db/src/schema/` |
+| DB schema (Drizzle) | `packages/db/src/schema/`（v0.6 起含 `stockPools` / `watchTriggers` 双表） |
 | Repo 合约测试 | `packages/db/src/repository/contract-tests.ts` |
+| 盘中盯盘设计 doc | `docs/intraday-watch-design.md` |
 
 ## 4. 日常开发流
 
@@ -323,6 +328,85 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 
 ## 9. 致接手的人
 
+## 8. v0.6.3+ 后续 backlog
+
+> 这一节列出 v0.6.2 之后还没动的功能点，按优先级与依赖排序。
+> 每条都写明 **痛点 / 范围 / 取舍**，新接手的 agent 可以从 P0 开始按序消化。
+
+### 8.1 [P0] CLI 端真实 Eastmoney 网络 e2e
+
+- **痛点**：v0.6.2 覆盖了 `MarketDataManager` unit-level（fetchImpl 注入 mock），但
+  没从 `luoome watch --once` 入口走完 `createCliContext → batch_quote tool →
+  adapter → 真实 https://push2.eastmoney.com`。PR reviewer 会担心生产路径断。
+- **范围**：`packages/cli/` 加 `tests/watch-real.e2e.test.ts`（用 bun 自带 runner，
+  因 CLI 需 `bun:sqlite`），跳过条件 `process.env.LUOOME_REAL_E2E !== '1'`。测试
+  拉 1-2 个真实 SH/SZ 代码，验证拿到的 `quote` 字段合规、source 字段 = 'eastmoney'。
+- **取舍**：CI 默认不跑（避免外部依赖抖动），开发者本地 `LUOOME_REAL_E2E=1 bun
+  test packages/cli --watch-real` 主动验证。
+
+### 8.2 [P0] `cost-threshold` 规则仅 holdings 池生效的 invariant 强制
+
+- **痛点**：design doc §7 提到"cost-threshold 仅 holdings 池有效"，但 entity
+  invariant 没强制。manual 池成员的 `avgCost=undefined`，evaluate 静默跳过；
+  当前测试覆盖这条但代码层无保护，重构时被悄悄打破。
+- **范围**：在 `packages/core/src/entity/stock-pool.ts` 的 `assertStockPoolInvariants`
+  加 \`rule.kind === 'cost-threshold' → source.kind === 'holdings'\`；新增
+  `stock-pool-invariants.test.ts` case 2 个（误用 manual + cost-threshold → invariant
+  violation；用 holdings + cost-threshold 合法）。
+- **取舍**：会拒绝"成本阈值在 manual 池"的合法用法；这是设计意图，但需要在 commit
+  message 里明确，否则使用者会撞墙。
+
+### 8.3 [P1] `run_tactic` 的 cost-threshold `else if` 优先级文档化
+
+- **痛点**：`evaluateSyncRule` 的 cost-threshold 分支用 `else if`——双向规则
+  （take-profit + stop-loss 同时配）时只能命中其一。代码注释没写明这个语义，
+  看代码的人会以为是 bug。
+- **范围**：纯 docs，`design doc §6 step 5` 加一行"`else if` 优先级：双向
+  则优先 take-profit（止盈），stop-loss 不会同帧触发"。现有 cost-threshold
+  test 已覆盖此行为，文档补全即可。
+- **取舍**：无代码改动，零回归风险。
+
+### 8.4 [P1] 2028+ 节假日补全（按国办通知）
+
+- **痛点**：`CN_A_SHARE_HOLIDAYS_2027` 是 best-effort placeholder，到 2027 末
+  2028 国办通知发布后，维护者需在 v0.8+ 手工同步 `CN_A_SHARE_HOLIDAYS_2028`。
+- **范围**：`packages/cli/src/holidays.ts` 新增 `CN_A_SHARE_HOLIDAYS_2028` +
+  `BUILTIN_HOLIDAYS.set(2028, ...)`，并在常量顶部 disclaimer 写明发布时间窗口。
+- **时机**：每年 12 月触发（自动 reminder 暂无；CI 跑 testing 时若 2028/01/01 已
+  过且 BUILTIN_HOLIDAYS 没有 2028 entry，可加个启动期 warn）。
+
+### 8.5 [P2] price-change `prevClose` 来源标记
+
+- **痛点**：`evidence: [\`prevClose=${prevClose}\`]` 没区分 dailyBar 来源 /
+  quote.open fallback 来源；客户端看 trigger 详情时不知道是哪条路径。
+- **范围**：`evaluateSyncRule` 在 price-change 分支判断
+  `prevCloses.has(m.stockId)` 设 `(bar)` / `(open-fallback)` 前缀写进 evidence。
+ 现有 fallback 行为不变，只额外写明来源。
+- **取舍**：traceability 提升，代价一个 branch + 几个测试断言。
+
+### 8.6 [P2] dailyBars 1h 缓存层
+
+- **痛点**：`intraday-watch` 高频轮询时每次 batch_quote 后都做
+  `dailyBar.latestBefore(stockId, now, 1)`，watch 跑 1 小时就是几十次同样的查询。
+  设计 doc §6 提到"dailyBar 1h 缓存"，实现没补。`quote cache` 已有
+  （`packages/adapters/src/market/cache.ts`），复用其模式即可。
+- **范围**：在 `manager.ts` 的 `stepLoadPrevCloses` 附近加内存 `Map<stockId,
+  { close: Money; ts: Date }>`，TTL 1h；走查前先查缓存，过期重取。测试加 case
+  覆盖"60s 内同 stockId 第二次 fetch 不应再调 repo"。
+- **取舍**：内存量级可控（每 stock ~50 bytes），hot path 提速显著；代价是
+  watch 进程内 state，跨重启需要重建（v0.6 dailyBar repo 仍然持 disk）。
+
+### 8.7 [P3] 统一 v0.6.x → README + ROADMAP 时间线
+
+- **痛点**：README.md 的版本状态、ROADMAP.md 的版本完成度还没同步 v0.6 +
+  v0.7 + v0.6.1 + v0.6.2。接手的人看 ROADMAP 会以为这些没做。
+- **范围**：`README.md` 的"Currently shipping" + `ROADMAP.md` 的
+  v0.6 标记为 done（**已完成 v0.6 / v0.7 / v0.6.1 / v0.6.2**）。PR #1 已合并。
+- **取舍**：纯 doc；建议合并后立刻做（不然文档滞后代码会在 issue 里引起
+  confusion）。
+
+---
+
 luoome 不是一个"平台"，是**个人真能用的 advisor agent**。
 
 如果你的改动让它**更贴近这个目标**——更可信的建议、更清楚的复盘、更友好的体验——那就是好的方向。
@@ -331,4 +415,4 @@ luoome 不是一个"平台"，是**个人真能用的 advisor agent**。
 
 愿你在织网的过程中，享受把噪音织成信号的乐趣。
 
-— lijun, 2026-07-20
+— lijun, 2026-07-21（v0.6.2 squash 合 main + §8 backlog）
