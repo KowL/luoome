@@ -10,9 +10,12 @@ import type {
   Notification,
   Quantity,
   StockCode,
+  StockPool,
   Tactic,
   TradeSide,
   TradeSource,
+  WatchRule,
+  WatchTrigger,
 } from '@luoome/core';
 import {
   index,
@@ -253,6 +256,63 @@ export const notifications = sqliteTable(
   }),
 );
 
+/**
+ * 股票池（v0.6 起，docs/intraday-watch-design.md §3）。
+ * source / rules 走 text + mode 'json'（任意扩展字段）；enabled 用 0/1 integer。
+ */
+export const stockPools = sqliteTable(
+  'stock_pools',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    source: text('source', { mode: 'json' }).$type<StockPool['source']>().notNull(),
+    rules: text('rules', { mode: 'json' }).$type<StockPool['rules']>().notNull(),
+    cooldownMinutes: integer('cooldown_minutes').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    /** list(enabledOnly=true) 走索引。 */
+    enabledIdx: index('stock_pools_enabled_idx').on(t.enabled),
+  }),
+);
+
+/**
+ * 盯盘触发（v0.6 起）。
+ * - 每次 watch fire 即写入（含 cooldown 抑制的）；notified=false 标识被压。
+ * - evidence 走 text + mode 'json'（字符串数组）。
+ * - 主索引 (poolId, stockId, ruleKind, createdAt) 支撑 cooldown 查询 lastForKey。
+ */
+export const watchTriggers = sqliteTable(
+  'watch_triggers',
+  {
+    id: text('id').primaryKey(),
+    poolId: text('pool_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    ruleKind: text('rule_kind').$type<WatchRule['kind']>().notNull(),
+    direction: text('direction').$type<WatchTrigger['direction']>().notNull(),
+    reason: text('reason').notNull(),
+    evidence: text('evidence', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    quoteClose: real('quote_close').$type<Money>().notNull(),
+    quoteTs: integer('quote_ts', { mode: 'timestamp_ms' }).notNull(),
+    notified: integer('notified', { mode: 'boolean' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    /** cooldown 查询 lastForKey 走这条。 */
+    poolStockRuleTsIdx: index('watch_triggers_pool_stock_rule_ts_idx').on(
+      t.poolId,
+      t.stockId,
+      t.ruleKind,
+      t.createdAt,
+    ),
+    /** listByPool 按时间倒序走这条。 */
+    poolTsIdx: index('watch_triggers_pool_ts_idx').on(t.poolId, t.createdAt),
+  }),
+);
+
 export const schema = {
   accounts,
   stocks,
@@ -265,6 +325,9 @@ export const schema = {
   tactics,
   tacticSignals,
   notifications,
+  // v0.6 起
+  stockPools,
+  watchTriggers,
 } as const;
 
 export type Schema = typeof schema;

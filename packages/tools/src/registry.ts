@@ -8,6 +8,8 @@ import { analyzeStockTool } from './tools/analyze-stock.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
+import { createStockPoolTool } from './tools/create-stock-pool.js';
+import { deleteStockPoolTool } from './tools/delete-stock-pool.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
@@ -17,10 +19,12 @@ import { getHoldingTool } from './tools/get-holding.js';
 import { getTacticTool } from './tools/get-tactic.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
+import { listStockPoolsTool } from './tools/list-stock-pools.js';
 import { listTacticsTool } from './tools/list-tactics.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { runTacticTool } from './tools/run-tactic.js';
+import { saveWatchTriggerTool } from './tools/save-watch-trigger.js';
 import { scoreSignalsTool } from './tools/score-signals.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
@@ -28,6 +32,7 @@ import { syncQuotesTool } from './tools/sync-quotes.js';
 import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
 import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
 import { updateHoldingTool } from './tools/update-holding.js';
+import { updateStockPoolTool } from './tools/update-stock-pool.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {
@@ -161,4 +166,10 @@ export const toolRegistry: Registry = createRegistry([
   addHoldingTool,
   updateHoldingTool,
   closeHoldingTool,
+  // v0.6 新增：股票池 CRUD（write）+ 触发落库（write，workflow 内部）+ 列池（read）
+  listStockPoolsTool,
+  createStockPoolTool,
+  updateStockPoolTool,
+  deleteStockPoolTool,
+  saveWatchTriggerTool,
 ]);

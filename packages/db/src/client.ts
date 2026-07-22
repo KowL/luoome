@@ -10,9 +10,11 @@ import {
   DrizzleHoldingRepository,
   DrizzleNotificationRepository,
   DrizzleQuoteRepository,
+  DrizzleStockPoolRepository,
   DrizzleStockRepository,
   DrizzleTacticRepository,
   DrizzleTradeRepository,
+  DrizzleWatchTriggerRepository,
 } from './repository/drizzle/index.js';
 import { type Schema, schema } from './schema/index.js';
 
@@ -199,6 +201,43 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS notifications_result_idx ON notifications (result, sent_at)`,
   );
+  // v0.6 起：股票池
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS stock_pools (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      source TEXT NOT NULL,
+      rules TEXT NOT NULL,
+      cooldown_minutes INTEGER NOT NULL,
+      enabled INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS stock_pools_enabled_idx ON stock_pools (enabled)`);
+  // v0.6 起：盯盘触发
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS watch_triggers (
+      id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      rule_kind TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      evidence TEXT NOT NULL,
+      quote_close REAL NOT NULL,
+      quote_ts INTEGER NOT NULL,
+      notified INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_stock_rule_ts_idx ON watch_triggers (pool_id, stock_id, rule_kind, created_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_ts_idx ON watch_triggers (pool_id, created_at)`,
+  );
 };
 
 /** createDrizzleRepos 的返回句柄：repos + db + close()。 */
@@ -234,6 +273,9 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     dailyBar: new DrizzleDailyBarRepository(db),
     tactic: new DrizzleTacticRepository(db),
     notification: new DrizzleNotificationRepository(db),
+    // v0.6 起
+    stockPool: new DrizzleStockPoolRepository(db),
+    watchTrigger: new DrizzleWatchTriggerRepository(db),
   };
   return { repos, db, close: () => sqlite.close() };
 };

@@ -84,6 +84,7 @@ mcps:
 | `get_advice` | 查历史建议 |
 | `get_advice_stats` | 查建议准确率统计 |
 | `record_advice_outcome` | 回填建议结果（事后复盘） |
+| `list_stock_pools` | 列出股票池（v0.6 起，默认仅 enabled） |
 
 ### 建议类（advice，默认全部暴露）
 
@@ -107,6 +108,10 @@ mcps:
 | `delete_alert` | 删除预警 |
 | `add_note` | 加笔记 |
 | `update_config` | 改配置 |
+| `create_stock_pool` | 创建股票池（v0.6 起） |
+| `update_stock_pool` | 更新股票池（v0.6 起） |
+| `delete_stock_pool` | 删除股票池（v0.6 起） |
+| `save_watch_trigger` | 落库一次 watch 触发（workflow 内部使用） |
 
 ### 外部副作用（external，默认 opt-in）
 
@@ -340,6 +345,13 @@ luoome tools call analyze_stock --input '{"stockId":"002594"}'
 luoome advice list --since 7d           # 看历史建议
 luoome advice stats --since 30d         # 看准确率
 LUOOME_LOG=debug luoome mcp serve       # MCP server 调试日志
+
+# v0.6 起：盘中盯盘
+luoome watch --once --no-notify         # 跑一轮（调试 / cron）
+luoome watch --interval 60              # 长驻：盘内每 60s 一轮；非交易时段 60s 重试
+luoome watch --pool holdings-watch      # 仅盯指定池
+luoome tools call list_stock_pools --input '{}'  # 列池
+luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","source":{"kind":"manual","stockIds":["002594.SZ"]},"rules":[{"kind":"price-change","pct":0.05}]}'
 ```
 
 ## 已知边界
@@ -349,6 +361,12 @@ LUOOME_LOG=debug luoome mcp serve       # MCP server 调试日志
 - v0.1 不支持多账户并发写
 - v0.1 没有 Web 入口（v0.4 起）
 - v0.1 没有真实券商对接（永不通过 MCP 暴露）
+- v0.7 `luoome watch` 节假日历增强：内置 2026（29 天）+ 2027 best-effort placeholder（22 天，按近 5 年规律推断，每年 12 月国办通知发布后由维护者手工同步 `CN_A_SHARE_HOLIDAYS_2027`）。加载优先级（union）：**`LUOOME_A_SHARE_HOLIDAYS` env > `$LUOOME_HOME/holidays.json` 文件 > 内置**。文件存在/损坏时静默 fallback 到内置；文件路径可通过 `LUOOME_HOLIDAYS_FILE` 覆盖。修改日历后需重启 watch（不监听 mtime）。
+- v0.6.2 真实行情链路容错加深：`MarketDataManager` 的 `batchQuote` 部分失败 + `fetchDailyBars` 三层 fallback + `suppressMs` 自定义窗口已在 unit test 覆盖（7 case，详见 `packages/adapters/src/market/manager-resilience.test.ts`）。生产运行时 `LUOOME_MARKET_PROVIDER=real` 已可用：Eastmoney（primary）→ Tencent（fallback）→ Mock（finalFallback），单源 5xx / 网络异常 → fallback；30 分钟抑制窗口内连续失败直接走 mock，避开上游抖动。
+- v0.6.1 `luoome watch` 价格变动昨收：price-change 规则的 `prevClose` 由 `dailyBar.latestBefore(stockId, now, 1)` 拉到的真实昨收（v0.6 占位为 `quote.open`）。缺失 / close <= 0 / repo throw → fallback 到 `quote.open`（v0.6 兼容）。详见 [docs/intraday-watch-design.md §6](./docs/intraday-watch-design.md)。
+- v0.6 `luoome watch` 盘中盯盘：A 股交易时段 9:30–11:30 / 13:00–15:00（北京时间）。**v0.6 起内置 2026 全年休市日**（29 天；详见 [packages/cli/src/holidays.ts](packages/cli/src/holidays.ts)）。通过 `LUOOME_A_SHARE_HOLIDAYS` 环境变量追加（逗号分隔 `YYYY-MM-DD`）。2027+ 需按国务院办公厅通知手工补全；不识别「调休补班」。参考 [docs/intraday-watch-design.md](./docs/intraday-watch-design.md)
+- v0.6 `cost-threshold` 规则基于当前 avgCost（未做除权除息调整），长持老股可能误触发
+- v0.6 `price-change` 规则的"昨收"用 `quote.open` 占位（mock 行情固定）；真实行情接入 dailyBars 后取上一交易日 close（review fix #7）
 
 ## 反馈
 
