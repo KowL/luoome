@@ -190,6 +190,12 @@ interface WatchTrigger {
 
 ## 明确不做（v1）
 
+- v0.6 长驻盘中盯盘（基础）→ 见 §6、§7
+- v0.6.1 price-change 接入 dailyBars 真实昨收 → 见 §6 step 5
+- v0.6.2 真实行情链路容错加深：`MarketDataManager` 的 `batchQuote` 部分失败 + `fetchDailyBars` 三层 fallback + suppress 窗口验证（无新功能，纯测试覆盖；详见 [`packages/adapters/src/market/manager-resilience.test.ts`](../../packages/adapters/src/market/manager-resilience.test.ts)）
+
+## 已知边界
+
 - 不做 LLM 精排（盘中频率高、有成本；后续可加"高分信号触发一次 score_signals"）
 - ~~不做节假日历~~ **v0.6 起内置 2026 全年 A 股休市日**（29 天）。**v0.7 起扩展**：
   - 内置增加 `CN_A_SHARE_HOLIDAYS_2027`（22 天，best-effort placeholder，按近 5 年规律推断；每年 12 月国办通知发布后维护者手工更新常量）

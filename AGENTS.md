@@ -362,6 +362,7 @@ luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","source"
 - v0.1 没有 Web 入口（v0.4 起）
 - v0.1 没有真实券商对接（永不通过 MCP 暴露）
 - v0.7 `luoome watch` 节假日历增强：内置 2026（29 天）+ 2027 best-effort placeholder（22 天，按近 5 年规律推断，每年 12 月国办通知发布后由维护者手工同步 `CN_A_SHARE_HOLIDAYS_2027`）。加载优先级（union）：**`LUOOME_A_SHARE_HOLIDAYS` env > `$LUOOME_HOME/holidays.json` 文件 > 内置**。文件存在/损坏时静默 fallback 到内置；文件路径可通过 `LUOOME_HOLIDAYS_FILE` 覆盖。修改日历后需重启 watch（不监听 mtime）。
+- v0.6.2 真实行情链路容错加深：`MarketDataManager` 的 `batchQuote` 部分失败 + `fetchDailyBars` 三层 fallback + `suppressMs` 自定义窗口已在 unit test 覆盖（7 case，详见 `packages/adapters/src/market/manager-resilience.test.ts`）。生产运行时 `LUOOME_MARKET_PROVIDER=real` 已可用：Eastmoney（primary）→ Tencent（fallback）→ Mock（finalFallback），单源 5xx / 网络异常 → fallback；30 分钟抑制窗口内连续失败直接走 mock，避开上游抖动。
 - v0.6.1 `luoome watch` 价格变动昨收：price-change 规则的 `prevClose` 由 `dailyBar.latestBefore(stockId, now, 1)` 拉到的真实昨收（v0.6 占位为 `quote.open`）。缺失 / close <= 0 / repo throw → fallback 到 `quote.open`（v0.6 兼容）。详见 [docs/intraday-watch-design.md §6](./docs/intraday-watch-design.md)。
 - v0.6 `luoome watch` 盘中盯盘：A 股交易时段 9:30–11:30 / 13:00–15:00（北京时间）。**v0.6 起内置 2026 全年休市日**（29 天；详见 [packages/cli/src/holidays.ts](packages/cli/src/holidays.ts)）。通过 `LUOOME_A_SHARE_HOLIDAYS` 环境变量追加（逗号分隔 `YYYY-MM-DD`）。2027+ 需按国务院办公厅通知手工补全；不识别「调休补班」。参考 [docs/intraday-watch-design.md](./docs/intraday-watch-design.md)
 - v0.6 `cost-threshold` 规则基于当前 avgCost（未做除权除息调整），长持老股可能误触发
