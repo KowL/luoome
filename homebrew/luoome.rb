@@ -53,9 +53,8 @@ class Luoome < Formula
     SH
     (bin/"luoome").chmod 0755
 
-    # 文档：UserGuide / AGENTS / ARCHITECTURE / ROADMAP 等 md 都放到 share/doc。
-    doc.install Dir["README.md"], Dir["AGENTS.md"], Dir["ARCHITECTURE.md"],
-                Dir["ROADMAP.md"], Dir["SECURITY.md"], Dir["CONTRIBUTING.md"], Dir["HANDOFF.md"]
+    # 文档：README / AGENTS 在仓库根，其余全部文档（ARCHITECTURE / ROADMAP / USER_GUIDE 等）在 docs/。
+    doc.install Dir["README.md"], Dir["AGENTS.md"]
     doc.install Dir["docs"] if Dir["docs"].any?
   end
 

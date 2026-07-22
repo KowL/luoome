@@ -1,6 +1,6 @@
 # luoome v0.1 实施计划（TUI + WEB）
 
-> 依据 ARCHITECTURE.md / AGENTS.md / SECURITY.md / ROADMAP.md / docs/MVP-TASK.md。
+> 依据 ARCHITECTURE.md / AGENTS.md（仓库根）/ SECURITY.md / ROADMAP.md / MVP-TASK.md。
 > 用户要求：v0.1 范围 + 额外包含最小 Web 端（原 ROADMAP v0.4 的内容以 MVP 形态提前：Hono HTTP API + 同源静态仪表盘，不做完整 SPA 框架）。
 
 ## 环境

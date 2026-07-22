@@ -2,7 +2,7 @@
 
 > 欢迎加入 luoome。这份文档面向**想动手改代码的贡献者**：如何拉仓库、本地开发、跑测试、提 PR、加新 tool / 战法 / 适配器。
 >
-> 如果你只是想**调用** luoome 的 tool，请看 [AGENTS.md](./AGENTS.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)；想看路线图看 [ROADMAP.md](./ROADMAP.md)。
+> 如果你只是想**调用** luoome 的 tool，请看 [AGENTS.md](../AGENTS.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)；想看路线图看 [ROADMAP.md](./ROADMAP.md)。
 
 ## 目录
 
@@ -61,21 +61,25 @@ luoome/
 │   │   ├── llm/       OpenAI-Compatible / Anthropic / Mock LLM
 │   │   └── notification/  飞书 Webhook 等
 │   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
-│   │                  22 个内置 tool（v0.4 末）。
+│   │                  32 个内置 tool（read 16 / advice 3 / write 9 / external 4，v0.6 末）。
 │   ├── workflows/     内置编排：syncQuotes / dailyAdvice / tacticScan / riskReport / dailyReview
 │   ├── mcp/           MCP stdio server（env 控制暴露面）
 │   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
 │   └── tui/           opentui 应用
 ├── apps/
 │   └── web/           Hono + 原生 HTML/JS 仪表盘（v0.4 已 7 路由 + 设计系统）
-├── docs/              杂项文档
+├── docs/              全部文档
+│   ├── ARCHITECTURE.md    架构核心
+│   ├── ROADMAP.md         v0.1 → v0.7 演进
+│   ├── SECURITY.md        副作用分级 + advice 安全 + audit
+│   ├── CONTRIBUTING.md    本文件
+│   ├── HANDOFF.md         交接 + 功能 backlog
+│   ├── BACKLOG.md         一致性 / 工程债清单
+│   └── USER_GUIDE.md      用户手册（另有设计文档与历史 plan）
 ├── bin/luoome         bash 转发到 bun run packages/cli/src/index.ts
 ├── .github/workflows/ CI（typecheck + test:all + lint）
-├── AGENTS.md          给外部 agent harness 看的接入文档
-├── ARCHITECTURE.md    架构核心
-├── ROADMAP.md         v0.1 → v0.5 演进
-├── SECURITY.md        副作用分级 + advice 安全 + audit
-└── CONTRIBUTING.md    本文件
+├── AGENTS.md          给外部 agent harness 看的接入文档（仓库根，便于 harness 发现）
+└── README.md          项目门面
 ```
 
 **包之间的依赖方向（硬约束，禁止反向）**
@@ -99,14 +103,14 @@ workflows ──► tools ──► core
 | 命令 | 干什么 |
 |---|---|
 | `bun run typecheck` | 全 monorepo 跑 `tsc --noEmit` |
-| `bun test` | vitest（361 个 case，0 fail） |
-| `bun run test:db` | bun test（db 包 + drizzle + in-memory 合约测试，57 个 case） |
+| `bun test` | vitest（478 个 case，0 fail） |
+| `bun run test:db` | bun test（db 包 + drizzle + in-memory 合约测试，127 个 case） |
 | `bun run test:all` | 上两个一起跑（CI 用这个） |
 | `bun run lint` | biome check（lint + format 检查，0 错） |
 | `bun run format` | biome format --write（自动修格式） |
 | `bun packages/tui/src/smoke.ts` | TUI headless smoke（6 项断言） |
 | `bash bin/luoome --help` | CLI 帮助 |
-| `bash bin/luoome tools list --json` | 列 22 个 tool |
+| `bash bin/luoome tools list --json` | 列 32 个 tool |
 | `bash bin/luoome mcp serve` | 起 MCP stdio server |
 | `bash bin/luoome tui` | 跑终端仪表盘 |
 | `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |

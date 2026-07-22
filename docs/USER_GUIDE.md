@@ -1,6 +1,6 @@
 # luoome 用户手册
 
-> 给**人**看的使用文档：本地安装、运行、自定义、复盘。如果你打算把 luoome 接到 Claude Desktop / OpenClaw 这类 agent，请看 [AGENTS.md](../AGENTS.md)；想了解架构看 [ARCHITECTURE.md](../ARCHITECTURE.md)。
+> 给**人**看的使用文档：本地安装、运行、自定义、复盘。如果你打算把 luoome 接到 Claude Desktop / OpenClaw 这类 agent，请看 [AGENTS.md](../AGENTS.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
@@ -348,9 +348,10 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 
 ## 12. 更多阅读
 
-- [ARCHITECTURE.md](../ARCHITECTURE.md) — 模块 / 数据流 / advisor 模型
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — 模块 / 数据流 / advisor 模型
 - [AGENTS.md](../AGENTS.md) — agent 接入（MCP / tools 清单）
-- [ROADMAP.md](../ROADMAP.md) — 版本演进
-- [CONTRIBUTING.md](../CONTRIBUTING.md) — 贡献者指南
-- [SECURITY.md](../SECURITY.md) — 副作用分级 + advice 安全
-- [HANDOFF.md](../HANDOFF.md) — 跨上下文会话交接
+- [ROADMAP.md](./ROADMAP.md) — 版本演进
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — 贡献者指南
+- [SECURITY.md](./SECURITY.md) — 副作用分级 + advice 安全
+- [HANDOFF.md](./HANDOFF.md) — 跨上下文会话交接 + 功能 backlog
+- [BACKLOG.md](./BACKLOG.md) — 一致性 / 工程债清单

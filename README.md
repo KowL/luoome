@@ -71,6 +71,7 @@ packages/
   tui/         opentui 应用
 apps/
   web/         Hono + 同源静态仪表盘
+docs/          全部文档（架构 / 路线图 / 安全 / 交接 / 用户手册 / 设计文档 / backlog）
 homebrew/
   luoome.rb    Homebrew formula（brew tap KowL/luoome && brew install luoome）
 ```
@@ -89,6 +90,8 @@ homebrew/
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；缺失时通知降级为 log，不抛错 |
+| `LUOOME_A_SHARE_HOLIDAYS` | — | 追加 A 股休市日（逗号分隔 `YYYY-MM-DD`），与内置日历 union |
+| `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 | `LUOOME_PORT` | 5173 | Web 端口（与 `--port` 等价） |
 
@@ -97,27 +100,27 @@ homebrew/
 | 文档 | 用途 |
 |---|---|
 | [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | **用户手册**：安装 / CLI / TUI / Web / MCP / 多账户 / 复盘 / 校准 / FAQ |
-| [AGENTS.md](./AGENTS.md) | agent 接入：Claude Desktop / OpenClaw / Hermes + 27 tool 清单 |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |
-| [ROADMAP.md](./ROADMAP.md) | v0.1 → v0.5 演进路线 |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | 贡献者指南：开发环境 / 测试 / 加新 tool / 战法 |
-| [SECURITY.md](./SECURITY.md) | 副作用分级、advice 安全、密钥、audit |
-| [HANDOFF.md](./HANDOFF.md) | 跨上下文会话交接 |
+| [AGENTS.md](./AGENTS.md) | agent 接入：Claude Desktop / OpenClaw / Hermes + tool 清单 |
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |
+| [docs/ROADMAP.md](./docs/ROADMAP.md) | v0.1 → v0.7 演进路线 |
+| [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | 贡献者指南：开发环境 / 测试 / 加新 tool / 战法 |
+| [docs/SECURITY.md](./docs/SECURITY.md) | 副作用分级、advice 安全、密钥、audit |
+| [docs/HANDOFF.md](./docs/HANDOFF.md) | 跨上下文会话交接 + 功能 backlog |
+| [docs/BACKLOG.md](./docs/BACKLOG.md) | 一致性 / 工程债清单（全仓走查产出） |
 
 ## 状态
 
-**v0.5.0 — Multi-Market & Polish**（HEAD `67df4b4`）
+**v0.7 — 盘中盯盘 + 节假日历**（v0.6 系列经 PR [#1](https://github.com/KowL/luoome/pull/1) squash 合入 main）
 
-已完成 7 块（按 ROADMAP 顺序）：
+v0.6 → v0.7 增量：
 
-1. **真实行情接线**（`LUOOME_MARKET_PROVIDER=real`：A 股 Eastmoney 主 → Tencent 备 → Mock 兜底）
-2. **真实 LLM 接线**（`LUOOME_LLM_PROVIDER=openai-compatible` / `anthropic`，缺 key 启动期报错）
-3. **持仓 / 交易录入 4 个 write tool**：`add_trade` / `add_holding` / `update_holding` / `close_holding`
-4. **K 线成交量量纲统一**为股（×100）
-5. **buildMockContext 时间炸弹修复**（业务时钟 `max(锚点, 真实时间)`）
-6. **多账户切换 UI（W3）**：3 mock 账户 + TUI `[a]` 弹层 + Web 顶栏下拉 + `POST /api/account/select`
-7. **confidence 自校准（W4）**：新 tool `get_confidence_calibration`（10 桶聚合 hitRate / avgPnl / avgConfidence）+ TUI `[c]` + Web 复盘页校准表
+1. **盘中盯盘（v0.6）**：`luoome watch` 长驻进程 + StockPool / WatchTrigger 实体 + 5 个新 tool（股票池 CRUD + `save_watch_trigger`）+ `intraday-watch` workflow（池成员 → batch_quote → 规则评估 → cooldown → 落库 → 通知）
+2. **真实昨收（v0.6.1）**：price-change 规则的 prevClose 从 `quote.open` 占位切到 dailyBar 真实昨收（缺失自动 fallback）
+3. **行情容错深覆盖（v0.6.2）**：MarketDataManager 部分失败 / 三层 fallback / 抑制窗口单测 +7
+4. **节假日历（v0.7）**：内置 2026（29 天）+ 2027 best-effort placeholder；`LUOOME_A_SHARE_HOLIDAYS` env > `holidays.json` 文件 > 内置，三层 union
 
-**数据**：27 tool（read 14 / advice 3 / write 5 / external 4 / trade 0 永不暴露）
+更早的 v0.1 – v0.5（真实行情 / 真实 LLM / 录入闭环 / 多账户切换 / confidence 自校准 / Web 仪表盘）见 [docs/ROADMAP.md](./docs/ROADMAP.md)。
 
-**测试**：460 vitest + 107 test:all + 7 TUI smoke 全部通过；typecheck / lint clean
+**数据**：32 tool（read 16 / advice 3 / write 9 / external 4 / trade 0 永不暴露）
+
+**测试**：605 pass（vitest 478 + bun test db 127）+ 7 TUI smoke 全部通过；typecheck / lint clean

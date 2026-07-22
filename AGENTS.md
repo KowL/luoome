@@ -1,7 +1,7 @@
 # AGENTS.md — 接入 luoome 作为外部 Agent
 
 > 给 Claude Desktop / OpenClaw / Hermes 等 agent harness 看的接入文档。
-> 如果你是想了解 luoome 的内部架构，请看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+> 如果你是想了解 luoome 的内部架构，请看 [ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 这是什么
 
@@ -371,4 +371,4 @@ luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","source"
 ## 反馈
 
 - GitHub Issues：标 `agent` 标签
-- 安全相关：见 [SECURITY.md](./SECURITY.md)
+- 安全相关：见 [SECURITY.md](./docs/SECURITY.md)

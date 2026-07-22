@@ -1,8 +1,8 @@
-# Handoff — luoome v0.4.0
+# Handoff — luoome v0.6.2
 
 > 这份文档给**接手的工程师 / agent**：把项目当前状态、关键决策、不变量、已知坑讲清楚，让你能**在一两天内上手改东西**。
 >
-> 它不是 ARCHITECTURE.md 的替代——架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)；这不是 README——怎么接入看 [AGENTS.md](./AGENTS.md)；这不是路线图——下一步计划看 [ROADMAP.md](./ROADMAP.md)。
+> 它不是 ARCHITECTURE.md 的替代——架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)；这不是 README——怎么接入看 [AGENTS.md](../AGENTS.md)；这不是路线图——下一步计划看 [ROADMAP.md](./ROADMAP.md)。
 
 ---
 
@@ -13,7 +13,7 @@
 | 已发布版本 | v0.5.0（v0.6 系列未单独发 tag / release；squash 合入 main，PR [#1](https://github.com/KowL/luoome/pull/1)） |
 | 最新 commit | `0777352`（intrady watch v0.6 + holiday calendar v0.7 + dailyBars v0.6.1 + manager resilience v0.6.2，squash merge） |
 | 测试 | 605 pass / 0 fail / 2387 expect / 69 文件（vitest 478 + bun test db 127） |
-| Tool 数 | 31（read 14 / advice 3 / write **10** / external 4）—— v0.6 新增 5 个 StockPool CRUD + `save_watch_trigger` |
+| Tool 数 | 32（read 16 / advice 3 / write 9 / external 4）—— v0.6 新增 5 个：股票池 CRUD 4 + `save_watch_trigger` |
 | Workflow 数 | 6（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / **intraday-watch**） |
 | 战法数 | 5 builtin（放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振）—— v0.3 起 |
 | 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股 + 港股）；LLM 经 `LUOOME_LLM_PROVIDER` 路由——mock / OpenAI-Compatible / Anthropic（缺 key 启动期报错）；飞书 Webhook |
@@ -22,7 +22,7 @@
 | CI | GitHub Actions · ubuntu + bun 1.3.11 · typecheck + test:all + lint 三关 |
 | License | MIT |
 
-**v0.6 长驻盘中盯盘 + 节假日文件加载 + dailyBars 真实昨收 + manager 容错深覆盖都已 squash 合入 main**。下一阶段 v0.7+ 见 §8 backlog。
+**v0.6 长驻盘中盯盘 + 节假日文件加载 + dailyBars 真实昨收 + manager 容错深覆盖都已 squash 合入 main**。下一阶段 v0.7+ 见 §9 backlog。
 
 ## 2. 5 分钟读懂项目
 
@@ -316,8 +316,8 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 按优先级：
 
 1. ~~多市场数据源~~ → **A 股真实行情接线（已完成）**：四个 surface 统一走 `createMarketAdapterFromEnv`，`LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底；默认 mock 零回归。港 / 美市场确认不做（lijun，2026-07-20）。**真实 LLM 接线（已完成）**：四端统一走 `LLMManager`（`LUOOME_LLM_PROVIDER` 路由，默认 mock）。**持仓/交易录入（已完成）**：`add_trade` / `add_holding` / `update_holding` / `close_holding`，见 §7.6。**成交量量纲统一（已完成）**：K 线 volume 一律 ×100 成股。
-2. **多账户切换 UI**（侧栏加账户选择器）
-3. **confidence 自校准**（基于 outcome hit rate 反向回归 + 大盘 beta 调整）
+2. ~~**多账户切换 UI**~~ → **已完成（v0.5 W3）**：3 mock 账户 + TUI `[a]` 弹层 + Web 顶栏下拉 + `POST /api/account/select`
+3. ~~**confidence 自校准**~~ → **已完成（v0.5 W4）**：`get_confidence_calibration` tool + TUI `[c]` 弹层 + Web 复盘页校准表
 4. **Web push 通知**（高信心建议推送到浏览器）
 5. **CI 加 TUI smoke**（GitHub Actions 上跑）
 6. **ESLint-style import 检查**（防反向依赖）
@@ -326,14 +326,12 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 
 具体计划开 issue 讨论，不要直接开 PR（涉及大块架构调整）。
 
-## 9. 致接手的人
-
-## 8. v0.6.3+ 后续 backlog
+## 9. v0.6.3+ 后续 backlog
 
 > 这一节列出 v0.6.2 之后还没动的功能点，按优先级与依赖排序。
 > 每条都写明 **痛点 / 范围 / 取舍**，新接手的 agent 可以从 P0 开始按序消化。
 
-### 8.1 [P0] CLI 端真实 Eastmoney 网络 e2e
+### 9.1 [P0] CLI 端真实 Eastmoney 网络 e2e
 
 - **痛点**：v0.6.2 覆盖了 `MarketDataManager` unit-level（fetchImpl 注入 mock），但
   没从 `luoome watch --once` 入口走完 `createCliContext → batch_quote tool →
@@ -344,7 +342,7 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 - **取舍**：CI 默认不跑（避免外部依赖抖动），开发者本地 `LUOOME_REAL_E2E=1 bun
   test packages/cli --watch-real` 主动验证。
 
-### 8.2 [P0] `cost-threshold` 规则仅 holdings 池生效的 invariant 强制
+### 9.2 [P0] `cost-threshold` 规则仅 holdings 池生效的 invariant 强制
 
 - **痛点**：design doc §7 提到"cost-threshold 仅 holdings 池有效"，但 entity
   invariant 没强制。manual 池成员的 `avgCost=undefined`，evaluate 静默跳过；
@@ -356,7 +354,7 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 - **取舍**：会拒绝"成本阈值在 manual 池"的合法用法；这是设计意图，但需要在 commit
   message 里明确，否则使用者会撞墙。
 
-### 8.3 [P1] `run_tactic` 的 cost-threshold `else if` 优先级文档化
+### 9.3 [P1] `run_tactic` 的 cost-threshold `else if` 优先级文档化
 
 - **痛点**：`evaluateSyncRule` 的 cost-threshold 分支用 `else if`——双向规则
   （take-profit + stop-loss 同时配）时只能命中其一。代码注释没写明这个语义，
@@ -366,7 +364,7 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
   test 已覆盖此行为，文档补全即可。
 - **取舍**：无代码改动，零回归风险。
 
-### 8.4 [P1] 2028+ 节假日补全（按国办通知）
+### 9.4 [P1] 2028+ 节假日补全（按国办通知）
 
 - **痛点**：`CN_A_SHARE_HOLIDAYS_2027` 是 best-effort placeholder，到 2027 末
   2028 国办通知发布后，维护者需在 v0.8+ 手工同步 `CN_A_SHARE_HOLIDAYS_2028`。
@@ -375,7 +373,7 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 - **时机**：每年 12 月触发（自动 reminder 暂无；CI 跑 testing 时若 2028/01/01 已
   过且 BUILTIN_HOLIDAYS 没有 2028 entry，可加个启动期 warn）。
 
-### 8.5 [P2] price-change `prevClose` 来源标记
+### 9.5 [P2] price-change `prevClose` 来源标记
 
 - **痛点**：`evidence: [\`prevClose=${prevClose}\`]` 没区分 dailyBar 来源 /
   quote.open fallback 来源；客户端看 trigger 详情时不知道是哪条路径。
@@ -384,7 +382,7 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
  现有 fallback 行为不变，只额外写明来源。
 - **取舍**：traceability 提升，代价一个 branch + 几个测试断言。
 
-### 8.6 [P2] dailyBars 1h 缓存层
+### 9.6 [P2] dailyBars 1h 缓存层
 
 - **痛点**：`intraday-watch` 高频轮询时每次 batch_quote 后都做
   `dailyBar.latestBefore(stockId, now, 1)`，watch 跑 1 小时就是几十次同样的查询。
@@ -396,7 +394,9 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 - **取舍**：内存量级可控（每 stock ~50 bytes），hot path 提速显著；代价是
   watch 进程内 state，跨重启需要重建（v0.6 dailyBar repo 仍然持 disk）。
 
-### 8.7 [P3] 统一 v0.6.x → README + ROADMAP 时间线
+### 9.7 [P3] ~~统一 v0.6.x → README + ROADMAP 时间线~~ ✅ 已完成
+
+> 2026-07-22 落地：README 状态节更新到 v0.7、ROADMAP 补 v0.6/v0.6.1/v0.6.2/v0.7 小节、全部文档迁入 `docs/`。以下原始条目存档：
 
 - **痛点**：README.md 的版本状态、ROADMAP.md 的版本完成度还没同步 v0.6 +
   v0.7 + v0.6.1 + v0.6.2。接手的人看 ROADMAP 会以为这些没做。
@@ -407,6 +407,8 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 
 ---
 
+## 10. 致接手的人
+
 luoome 不是一个"平台"，是**个人真能用的 advisor agent**。
 
 如果你的改动让它**更贴近这个目标**——更可信的建议、更清楚的复盘、更友好的体验——那就是好的方向。
@@ -415,4 +417,4 @@ luoome 不是一个"平台"，是**个人真能用的 advisor agent**。
 
 愿你在织网的过程中，享受把噪音织成信号的乐趣。
 
-— lijun, 2026-07-21（v0.6.2 squash 合 main + §8 backlog）
+— lijun, 2026-07-21（v0.6.2 squash 合 main + §9 backlog）

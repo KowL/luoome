@@ -328,7 +328,7 @@ interface ToolContext {
 
 ### 5.1 基础实体
 
-**v0.6 起新增**：StockPool（股票池 = 成员来源 + 规则列表 + 冷却 + enabled）、WatchTrigger（盯盘触发 = 池 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照）。StockPool 走 CRUD（list/create/update/delete_stock_pools），WatchTrigger 通过 `save_watch_trigger` tool 落库（由 `intraday-watch` workflow 触发）。Cooldown 通过 `WatchTriggerRepository.lastForKey(poolId, stockId, ruleKind, since)` 查询，进程重启后冷却可接续。详见 [docs/intraday-watch-design.md](./docs/intraday-watch-design.md)。
+**v0.6 起新增**：StockPool（股票池 = 成员来源 + 规则列表 + 冷却 + enabled）、WatchTrigger（盯盘触发 = 池 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照）。StockPool 走 CRUD（list/create/update/delete_stock_pools），WatchTrigger 通过 `save_watch_trigger` tool 落库（由 `intraday-watch` workflow 触发）。Cooldown 通过 `WatchTriggerRepository.lastForKey(poolId, stockId, ruleKind, since)` 查询，进程重启后冷却可接续。详见 [docs/intraday-watch-design.md](./intraday-watch-design.md)。
 
 **v0.6.2 起加深**：`MarketDataManager` 容错测试覆盖增加（详见 `packages/adapters/src/market/manager-resilience.test.ts`）：`batchQuote` 部分失败（primary 局部抛错 → fallback 仅补失败的那部分，其它 ok 仍走 primary）、`fetchDailyBars` 三层 fallback（primary → fallback → finalFallback）、自定义 `finalFallbackSuppressMs` 窗口验证。无新功能，纯测试深覆盖。
 
@@ -587,7 +587,7 @@ type ToolError =
 - `risk-report`：风控指标 + 持仓建议（v0.3）
 - `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
-- `intraday-watch`：单轮盘中盯盘评估 —— 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/intraday-watch-design.md](./docs/intraday-watch-design.md)）
+- `intraday-watch`：单轮盘中盯盘评估 —— 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/intraday-watch-design.md](./intraday-watch-design.md)）
 
 ### 8.2 Workflow 与 tool 的边界
 
