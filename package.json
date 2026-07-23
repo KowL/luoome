@@ -11,7 +11,8 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "test:db": "bun test packages/db",
-    "test:all": "bun run test && bun run test:db",
+    "test:web": "bun test apps/web",
+    "test:all": "bun run test && bun run test:db && bun run test:web",
     "typecheck": "for d in packages/* apps/*; do if find \"$d\" -maxdepth 4 -name '*.ts' -not -path '*/node_modules/*' | grep -q .; then echo \"== typecheck $d\"; (cd \"$d\" && tsc --noEmit) || exit 1; fi; done",
     "lint": "biome check .",
     "format": "biome format --write .",

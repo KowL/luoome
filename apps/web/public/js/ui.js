@@ -135,7 +135,8 @@ const adviceCard = (advice) => {
     el(
       'div',
       'row-2',
-      row2Parts.map((t) => el('span', null, String(t))),
+      // confidenceBar 返回 Node，不能 String() 化（会变成 [object HTMLSpanElement]）
+      row2Parts.map((t) => (t instanceof Node ? t : el('span', null, String(t)))),
     ),
   );
 

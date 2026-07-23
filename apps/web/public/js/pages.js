@@ -4,6 +4,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { openCloseConfirm, openEditModal, openTradeModal } from './holdings-actions.js';
 import {
   $,
   adviceCard,
@@ -75,13 +76,28 @@ const renderHoldings = async (setStatus) => {
   }
   const { holdings, totalValue, totalPnL, totalPnLPct } = r.data;
   if (holdings.length === 0) {
-    mount(body, el('tr', null, el('td', { colspan: 8, class: 'placeholder' }, '（无持仓）')));
+    mount(body, el('tr', null, el('td', { colspan: 9, class: 'placeholder' }, '（无持仓）')));
   } else {
     mount(
       body,
       holdings.map((item) => {
         const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
         const pnlCls = item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '';
+        const h = {
+          id: item.holding.id,
+          stockId: item.holding.stockId,
+          stockName: item.stockName,
+          quantity: item.holding.quantity,
+          availableQuantity: item.holding.availableQuantity,
+          avgCost: item.holding.avgCost,
+          currentPrice: item.currentPrice,
+        };
+        const actionBtn = (label, onClick) => {
+          const b = el('button', 'btn btn-outline btn-sm', label);
+          b.type = 'button';
+          b.addEventListener('click', onClick);
+          return b;
+        };
         return el('tr', null, [
           el('td', null, code),
           el('td', null, item.stockName),
@@ -91,6 +107,14 @@ const renderHoldings = async (setStatus) => {
           el('td', 'num', fmtNum(item.marketValue)),
           el('td', `num ${pnlCls}`, fmtSigned(item.pnl)),
           el('td', `num ${pnlCls}`, fmtPct(item.pnlPct)),
+          el('td', null, [
+            el('div', 'row-actions', [
+              actionBtn('加仓', () => openTradeModal(h, 'buy')),
+              actionBtn('减仓', () => openTradeModal(h, 'sell')),
+              actionBtn('纠错', () => openEditModal(h)),
+              actionBtn('平仓', () => openCloseConfirm(h)),
+            ]),
+          ]),
         ]);
       }),
     );
@@ -135,49 +159,6 @@ const analyzeAllHoldings = async (setStatus) => {
   } finally {
     btn.disabled = false;
   }
-};
-
-/* ============ quotes ============ */
-
-const renderQuotes = async (setStatus) => {
-  const r = await callApi('/api/holdings');
-  const body = $('#quotes-body');
-  if (!r.ok) {
-    mount(
-      body,
-      el('tr', null, el('td', { colspan: 5, class: 'placeholder' }, `加载失败：${r.error.kind}`)),
-    );
-    setStatus(`加载失败：${r.error.kind}`, true);
-    return;
-  }
-  // 调用 list_holdings 已含 currentPrice；再调 fetch_quote 刷新最新。
-  const fetched = await Promise.all(
-    r.data.holdings.map((item) =>
-      callApi('/api/tools/fetch_quote/call', {
-        method: 'POST',
-        body: JSON.stringify({ input: { stockId: item.holding.stockId } }),
-      }).catch(() => null),
-    ),
-  );
-  mount(
-    body,
-    r.data.holdings.map((item, i) => {
-      const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
-      const f = fetched[i];
-      const fresh = f?.ok ? f.data : null;
-      const price = fresh?.price ?? item.currentPrice;
-      const ts = fresh?.ts ?? null;
-      const source = fresh?.source ?? '—';
-      return el('tr', null, [
-        el('td', null, code),
-        el('td', null, item.stockName),
-        el('td', 'num', fmtNum(price)),
-        el('td', null, source),
-        el('td', 'num', ts !== null ? fmtDateTime(ts) : '--'),
-      ]);
-    }),
-  );
-  setStatus(`行情已刷新 · ${r.data.holdings.length} 只`);
 };
 
 /* ============ tactics ============ */
@@ -534,7 +515,6 @@ export {
   renderAdviceList,
   renderDashboard,
   renderHoldings,
-  renderQuotes,
   renderReview,
   renderSettings,
   renderSettingsAccount,

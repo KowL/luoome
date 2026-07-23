@@ -1032,3 +1032,111 @@ code {
 .calibration-table .warn {
   color: var(--warn);
 }
+
+/* ============================================================
+ * 通用 modal + 持仓操作（v0.8）
+ * ============================================================ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: rgba(58, 53, 46, 0.36);
+}
+
+/* author display:flex 会盖掉 UA 的 [hidden] 规则，必须显式补回，否则关不掉 */
+.modal-overlay[hidden] {
+  display: none;
+}
+
+.modal {
+  width: 100%;
+  max-width: 460px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-6);
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  color: var(--ink);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.modal-error {
+  min-height: 1.2em;
+  margin: var(--space-2) 0 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.modal-warning {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  background: var(--pos-soft);
+  border-radius: var(--radius-md);
+  color: var(--accent-strong);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+}
+
+.modal .hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* 持仓行内操作按钮 */
+.row-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* 股票搜索联想下拉 */
+.autocomplete {
+  position: relative;
+}
+
+.autocomplete-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 110;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.autocomplete-item {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.autocomplete-item:hover {
+  background: var(--panel-alt);
+}

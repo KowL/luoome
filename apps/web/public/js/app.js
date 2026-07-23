@@ -4,13 +4,13 @@
 'use strict';
 
 import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } from './api.js';
+import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
   renderAdviceList,
   renderDashboard,
   renderHoldings,
-  renderQuotes,
   renderReview,
   renderSettings,
   renderSettingsAccount,
@@ -46,7 +46,7 @@ const startClock = () => {
 
 /* ============ 路由分发 ============ */
 
-const ROUTES = ['dashboard', 'holdings', 'quotes', 'tactics', 'advice', 'review', 'settings'];
+const ROUTES = ['dashboard', 'holdings', 'tactics', 'advice', 'review', 'settings'];
 
 const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
@@ -63,7 +63,6 @@ const showRoute = async (name) => {
   try {
     if (safe === 'dashboard') await renderDashboard(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
-    else if (safe === 'quotes') await renderQuotes(setStatus);
     else if (safe === 'tactics') {
       await renderTacticsList(setStatus);
     } else if (safe === 'advice') {
@@ -170,16 +169,17 @@ const bindAccountSelect = () => {
 /* ============ 一次性绑定：跨路由的按钮 ============ */
 
 const bindGlobalActions = () => {
+  initHoldingsActions({ refresh: () => renderHoldings(setStatus), setStatus });
+
+  const addBtn = $('#btn-holding-add');
+  if (addBtn !== null) addBtn.addEventListener('click', () => openAddHoldingModal());
+
   const refreshBtn = $('#btn-holdings-refresh');
   if (refreshBtn !== null)
     refreshBtn.addEventListener('click', () => void renderHoldings(setStatus));
   const analyzeBtn = $('#btn-holdings-analyze');
   if (analyzeBtn !== null)
     analyzeBtn.addEventListener('click', () => void analyzeAllHoldings(setStatus));
-
-  const quotesRefreshBtn = $('#btn-quotes-refresh');
-  if (quotesRefreshBtn !== null)
-    quotesRefreshBtn.addEventListener('click', () => void renderQuotes(setStatus));
 
   const tlistBtn = $('#btn-tactic-list');
   if (tlistBtn !== null)
