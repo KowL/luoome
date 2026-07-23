@@ -21,30 +21,27 @@ describe('entity/market-provider', () => {
   });
 
   describe('MarketProviderConfigSchema', () => {
-    it('accepts mock / real config', () => {
-      expect(MarketProviderConfigSchema.parse({ provider: 'mock' }).provider).toBe('mock');
+    it('accepts real config', () => {
       expect(MarketProviderConfigSchema.parse({ provider: 'real' }).provider).toBe('real');
     });
 
-    it('rejects unknown provider', () => {
+    it('rejects mock and unknown providers', () => {
+      expect(() => MarketProviderConfigSchema.parse({ provider: 'mock' })).toThrow();
       expect(() => MarketProviderConfigSchema.parse({ provider: 'eastmoney' })).toThrow();
     });
   });
 
   describe('parseMarketProviderConfigFromEnv', () => {
-    it('defaults to mock when LUOOME_MARKET_PROVIDER unset', () => {
-      expect(parseMarketProviderConfigFromEnv({}).provider).toBe('mock');
+    it('requires LUOOME_MARKET_PROVIDER', () => {
+      expect(() => parseMarketProviderConfigFromEnv({})).toThrow(/MARKET_PROVIDER/);
+      expect(() => parseMarketProviderConfigFromEnv({ LUOOME_MARKET_PROVIDER: '  ' })).toThrow(
+        /MARKET_PROVIDER/,
+      );
     });
 
-    it('treats empty / "mock" / whitespace as mock', () => {
-      expect(parseMarketProviderConfigFromEnv({ LUOOME_MARKET_PROVIDER: '' }).provider).toBe(
-        'mock',
-      );
-      expect(parseMarketProviderConfigFromEnv({ LUOOME_MARKET_PROVIDER: 'mock' }).provider).toBe(
-        'mock',
-      );
-      expect(parseMarketProviderConfigFromEnv({ LUOOME_MARKET_PROVIDER: '  ' }).provider).toBe(
-        'mock',
+    it('rejects removed mock provider', () => {
+      expect(() => parseMarketProviderConfigFromEnv({ LUOOME_MARKET_PROVIDER: 'mock' })).toThrow(
+        /real/,
       );
     });
 

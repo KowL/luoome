@@ -49,6 +49,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
           t.poolId === key.poolId &&
           t.stockId === key.stockId &&
           t.ruleKind === key.ruleKind &&
+          t.notified &&
           t.createdAt.getTime() >= sinceMs,
       )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());

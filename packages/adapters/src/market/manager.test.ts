@@ -1,9 +1,9 @@
 import type { Logger } from '@luoome/core';
 import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
+import type { FakeMarketAdapter } from '../testing/fake-market.js';
 import type { EastmoneyAdapter, EastmoneyAdapterError } from './eastmoney.js';
 import { MarketDataManager } from './manager.js';
-import type { MockMarketAdapter } from './mock.js';
 import type { TencentAdapter, TencentAdapterError } from './tencent.js';
 
 // ---- 三个测试 adapter ----
@@ -256,7 +256,7 @@ describe('market/manager', () => {
 export type {
   EastmoneyAdapter,
   EastmoneyAdapterError,
-  MockMarketAdapter,
+  FakeMarketAdapter,
   TencentAdapter,
   TencentAdapterError,
 };

@@ -32,7 +32,7 @@ export interface StockSearchCandidate {
 /** LLM 调用请求（ARCHITECTURE §6.3：system + schema + data）。 */
 export interface LLMGenerateRequest {
   readonly system: string;
-  /** Zod schema（schema-constrained decoding），v0.1 mock 可忽略。 */
+  /** Zod schema（schema-constrained decoding）。 */
   readonly schema?: unknown;
   readonly data: unknown;
 }

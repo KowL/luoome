@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { listStockPoolsTool } from './list-stock-pools.js';
 
 describe('list_stock_pools', () => {
   it('空库：enabledOnly=true 返回 total=0', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await listStockPoolsTool.execute({ enabledOnly: true }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -14,7 +14,7 @@ describe('list_stock_pools', () => {
   });
 
   it('种池后默认仅 enabled 返回；enabledOnly=false 全量', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.stockPool.save({
       id: 'p-on',
       name: 'on',

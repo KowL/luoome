@@ -4,9 +4,12 @@ import {
   type Quote,
   type Stock,
   type StockPool,
+  type ToolContext,
+  type ToolResult,
   type WatchRule,
   type WatchTrigger,
 } from '@luoome/core';
+import { recordWatchRunTool } from '@luoome/tools';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
@@ -110,7 +113,7 @@ interface QuotesState extends MembersState {
 /**
  * v0.6.1 起：dailyBars 接入的昨收视图。
  * - 通过 stepLoadPrevCloses 填充；缺失 / close <= 0 不入 map（evaluate 时 fallback）
- * - Map<string, Money> 与 mock 行情兼容：mock 没有 seed dailyBars 时退化成空 map，
+ * - Map<string, Money> 允许日线缺失时退化成空 map，
  *   evaluate 阶段会落到 quote.open 分支（v0.6 行为）。
  */
 interface PrevClosesState extends QuotesState {
@@ -462,7 +465,7 @@ const stepBatchQuote: WorkflowStep = async (prev, ctx) => {
         low: 0 as Money,
         close: 0 as Money,
         volume: 0,
-        source: 'mock-unresolved',
+        source: 'unresolved',
       });
     }
   }
@@ -531,22 +534,25 @@ interface PersistedState {
   readonly triggers: readonly WatchTrigger[];
   readonly evaluatedPools: number;
   readonly evaluatedStocks: number;
+  readonly suppressedByCooldown: number;
 }
 
 const stepApplyCooldownAndPersist: WorkflowStep = async (prev, ctx) => {
   const state = prev as EvaluatedState;
   const now = ctx.clock();
   const finalTriggers: WatchTrigger[] = [];
+  let suppressedByCooldown = 0;
   for (const cand of state.candidates) {
     const pool = state.pools.find((p) => p.id === cand.poolId);
-    let notified = true;
-    if (pool !== undefined) {
+    let notified = false;
+    if (state.input.notify && pool !== undefined) {
       const cd = new Date(now.getTime() - pool.cooldownMinutes * 60_000);
       const last = await ctx.repos.watchTrigger.lastForKey(
         { poolId: cand.poolId, stockId: cand.stockId, ruleKind: cand.ruleKind },
         cd,
       );
       notified = last === null;
+      if (last !== null) suppressedByCooldown += 1;
     }
     const persisted: WatchTrigger = { ...cand, notified };
     assertWatchTriggerInvariants(persisted);
@@ -557,6 +563,7 @@ const stepApplyCooldownAndPersist: WorkflowStep = async (prev, ctx) => {
     triggers: finalTriggers,
     evaluatedPools: state.pools.length,
     evaluatedStocks: state.allStockIds.length,
+    suppressedByCooldown,
   } satisfies PersistedState;
 };
 
@@ -599,7 +606,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     evaluatedPools: state.evaluatedPools,
     evaluatedStocks: state.evaluatedStocks,
     notified: notifiedCount,
-    suppressedByCooldown: triggers.filter((t) => !t.notified).length,
+    suppressedByCooldown: state.suppressedByCooldown,
   });
 };
 
@@ -632,3 +639,76 @@ export const intradayWatchWorkflow = defineWorkflow<
     stepNotifyAndSummary,
   ],
 });
+
+/**
+ * 带持久化心跳的单轮入口。
+ *
+ * workflow 本身保持纯编排契约；CLI/Web 的实际运行入口调用本函数，使成功、失败、
+ * 零触发三种情况都有 WatchRun 审计。record tool 失败只记日志，不覆盖原 workflow
+ * 结果，避免可观测性故障反过来阻断盯盘。
+ */
+export const runIntradayWatchObserved = async (
+  input: unknown,
+  ctx: ToolContext,
+  mode: 'once' | 'daemon',
+): Promise<ToolResult<IntradayWatchOutputT>> => {
+  const id = `watch-run-${crypto.randomUUID()}`;
+  const startedAt = ctx.clock();
+  const initial = await recordWatchRunTool.execute(
+    {
+      id,
+      mode,
+      status: 'running',
+      startedAt,
+      finishedAt: null,
+      evaluatedPools: 0,
+      evaluatedStocks: 0,
+      triggered: 0,
+      notified: 0,
+      suppressedByCooldown: 0,
+    },
+    ctx,
+  );
+  if (!initial.ok) {
+    ctx.logger.warn('[intraday-watch] 写入 running 心跳失败', { error: initial.error });
+  }
+
+  const result = await intradayWatchWorkflow.run(input, ctx);
+  const finishedAt = ctx.clock();
+  const terminal = result.ok
+    ? await recordWatchRunTool.execute(
+        {
+          id,
+          mode,
+          status: 'succeeded',
+          startedAt,
+          finishedAt,
+          evaluatedPools: result.data.evaluatedPools,
+          evaluatedStocks: result.data.evaluatedStocks,
+          triggered: result.data.triggers.length,
+          notified: result.data.notified,
+          suppressedByCooldown: result.data.suppressedByCooldown,
+        },
+        ctx,
+      )
+    : await recordWatchRunTool.execute(
+        {
+          id,
+          mode,
+          status: 'failed',
+          startedAt,
+          finishedAt,
+          evaluatedPools: 0,
+          evaluatedStocks: 0,
+          triggered: 0,
+          notified: 0,
+          suppressedByCooldown: 0,
+          error: JSON.stringify(result.error),
+        },
+        ctx,
+      );
+  if (!terminal.ok) {
+    ctx.logger.warn('[intraday-watch] 写入 terminal 心跳失败', { error: terminal.error });
+  }
+  return result;
+};

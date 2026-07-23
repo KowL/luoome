@@ -5,9 +5,8 @@ import {
   money,
 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
-
-import { MOCK_HOLDINGS, MOCK_STOCK_BASE_PRICES } from '../mocks/fixtures.js';
-import { type MockAnalysisOutput, MockLLMAdapter } from './mock.js';
+import { type FakeAnalysisOutput, FakeLLMAdapter } from './fake-llm.js';
+import { TEST_HOLDINGS, TEST_STOCK_BASE_PRICES } from './fixtures.js';
 
 /**
  * 模拟 tools 层的 AdviceLLMSchema（ARCHITECTURE §6.3）。
@@ -45,12 +44,12 @@ const AdviceLLMSchema: SafeParseSchema = {
   },
 };
 
-const makeAdapter = () => new MockLLMAdapter();
+const makeAdapter = () => new FakeLLMAdapter();
 
-describe('MockLLMAdapter.generate / analyze_stock', () => {
+describe('FakeLLMAdapter.generate / analyze_stock', () => {
   it('输出通过传入 zod schema parse，且带 raw 文本', async () => {
     const llm = makeAdapter();
-    const result = await llm.generate<MockAnalysisOutput>({
+    const result = await llm.generate<FakeAnalysisOutput>({
       system: '你是 analyze_stock 投顾分析助手',
       schema: AdviceLLMSchema,
       data: { stockId: '002594.SZ' },
@@ -68,15 +67,15 @@ describe('MockLLMAdapter.generate / analyze_stock', () => {
       schema: AdviceLLMSchema,
       data: { stockId: '00700.HK' },
     } as const;
-    const a = await llm.generate<MockAnalysisOutput>(req);
-    const b = await llm.generate<MockAnalysisOutput>(req);
+    const a = await llm.generate<FakeAnalysisOutput>(req);
+    const b = await llm.generate<FakeAnalysisOutput>(req);
     expect(b).toEqual(a);
   });
 
   it('不同 stockId 的 hash 输入参与决策（输出结构仍合法）', async () => {
     const llm = makeAdapter();
     for (const stockId of ['600519.SH', 'AAPL.US', 'NVDA.US', '00941.HK']) {
-      const result = await llm.generate<MockAnalysisOutput>({
+      const result = await llm.generate<FakeAnalysisOutput>({
         system: 'analyze_stock',
         schema: AdviceLLMSchema,
         data: { stockId },
@@ -88,17 +87,17 @@ describe('MockLLMAdapter.generate / analyze_stock', () => {
   });
 });
 
-describe('MockLLMAdapter.generate / analyze_position', () => {
+describe('FakeLLMAdapter.generate / analyze_position', () => {
   it('识别 analyze_position 标识，输出过 schema', async () => {
     const llm = makeAdapter();
-    const holding = MOCK_HOLDINGS.find((h) => h.stockId === '002594.SZ');
+    const holding = TEST_HOLDINGS.find((h) => h.stockId === '002594.SZ');
     expect(holding).toBeDefined();
-    const result = await llm.generate<MockAnalysisOutput>({
+    const result = await llm.generate<FakeAnalysisOutput>({
       system: '你是 analyze_position 持仓诊断助手',
       schema: AdviceLLMSchema,
       data: {
         holding,
-        quote: { stockId: '002594.SZ', close: MOCK_STOCK_BASE_PRICES['002594.SZ'] },
+        quote: { stockId: '002594.SZ', close: TEST_STOCK_BASE_PRICES['002594.SZ'] },
       },
     });
     const { raw: _raw, ...parsed } = result;
@@ -107,7 +106,7 @@ describe('MockLLMAdapter.generate / analyze_position', () => {
 
   it('持仓上下文生效：浮盈 ≥15% → sell 且 confidence ≥70', async () => {
     const llm = makeAdapter();
-    const result = await llm.generate<MockAnalysisOutput>({
+    const result = await llm.generate<FakeAnalysisOutput>({
       system: 'analyze_position',
       schema: AdviceLLMSchema,
       data: {
@@ -122,7 +121,7 @@ describe('MockLLMAdapter.generate / analyze_position', () => {
 
   it('持仓上下文生效：浮亏 ≥10% → hold', async () => {
     const llm = makeAdapter();
-    const result = await llm.generate<MockAnalysisOutput>({
+    const result = await llm.generate<FakeAnalysisOutput>({
       system: 'analyze_position',
       schema: AdviceLLMSchema,
       data: {
@@ -135,7 +134,7 @@ describe('MockLLMAdapter.generate / analyze_position', () => {
   });
 });
 
-describe('MockLLMAdapter.generate / fallback', () => {
+describe('FakeLLMAdapter.generate / fallback', () => {
   it('schema parse 失败时返回稳定 fallback', async () => {
     const llm = makeAdapter();
     const impossibleSchema: SafeParseSchema = {
@@ -146,8 +145,8 @@ describe('MockLLMAdapter.generate / fallback', () => {
       schema: impossibleSchema,
       data: { stockId: '002594.SZ' },
     } as const;
-    const a = await llm.generate<MockAnalysisOutput>(req);
-    const b = await llm.generate<MockAnalysisOutput>(req);
+    const a = await llm.generate<FakeAnalysisOutput>(req);
+    const b = await llm.generate<FakeAnalysisOutput>(req);
     expect(a.decision).toBe('watch');
     expect(a.confidence).toBe(50);
     expect(b).toEqual(a); // fallback 同样 deterministic
@@ -156,7 +155,7 @@ describe('MockLLMAdapter.generate / fallback', () => {
 
   it('不传 schema 时原样返回候选输出', async () => {
     const llm = makeAdapter();
-    const result = await llm.generate<MockAnalysisOutput>({
+    const result = await llm.generate<FakeAnalysisOutput>({
       system: 'analyze_stock',
       data: { stockId: 'AAPL.US' },
     });

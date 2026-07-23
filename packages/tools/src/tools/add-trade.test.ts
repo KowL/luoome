@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { addTradeTool } from './add-trade.js';
 import { analyzePositionTool } from './analyze-position.js';
 
 describe('add_trade', () => {
   it('buy 新开仓：落 trade + holding（avgCost=price）+ 自动补 stock stub', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     // 601398.SH 不在 fixtures 中
     const result = await addTradeTool.execute(
       { stockId: '601398.SH', side: 'buy', quantity: 500, price: 70.25, fee: 3.5 },
@@ -28,9 +28,25 @@ describe('add_trade', () => {
     expect(stock?.exchange).toBe('SH');
   });
 
+  it('buy 新开仓时保留搜索结果中的股票名称', async () => {
+    const ctx = await buildTestContext();
+    const result = await addTradeTool.execute(
+      {
+        stockId: '601398.SH',
+        stockName: '工商银行',
+        side: 'buy',
+        quantity: 500,
+        price: 7.25,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    expect((await ctx.repos.stock.findById('601398.SH'))?.name).toBe('工商银行');
+  });
+
   it('buy 加仓：avgCost 数量加权（不含 fee），数量/可卖累加', async () => {
-    const ctx = await buildMockContext();
-    // fixtures: mock-holding-002594 1000 @ 98.5
+    const ctx = await buildTestContext();
+    // fixtures: test-holding-002594 1000 @ 98.5
     const result = await addTradeTool.execute(
       { stockId: '002594.SZ', side: 'buy', quantity: 1000, price: 108.5, fee: 5 },
       ctx,
@@ -43,7 +59,7 @@ describe('add_trade', () => {
   });
 
   it('sell 部分减仓：数量/可卖减少，avgCost 不变，closedAt 仍为 null', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addTradeTool.execute(
       { stockId: '002594.SZ', side: 'sell', quantity: 400, price: 110 },
       ctx,
@@ -57,7 +73,7 @@ describe('add_trade', () => {
   });
 
   it('sell 清仓：quantity=0 → closedAt=executedAt', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const executedAt = new Date('2026-07-20T06:00:00.000Z');
     const result = await addTradeTool.execute(
       { stockId: '600519.SH', side: 'sell', quantity: 100, price: 1500, executedAt },
@@ -70,7 +86,7 @@ describe('add_trade', () => {
   });
 
   it('清仓后重新买入：复用旧行 id 重新开仓', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const sell = await addTradeTool.execute(
       { stockId: '600519.SH', side: 'sell', quantity: 100, price: 1500 },
       ctx,
@@ -92,7 +108,7 @@ describe('add_trade', () => {
   });
 
   it('sell 超卖 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addTradeTool.execute(
       { stockId: '002594.SZ', side: 'sell', quantity: 9999, price: 110 },
       ctx,
@@ -103,7 +119,7 @@ describe('add_trade', () => {
   });
 
   it('sell 无持仓 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addTradeTool.execute(
       { stockId: '601398.SH', side: 'sell', quantity: 100, price: 70 },
       ctx,
@@ -114,7 +130,7 @@ describe('add_trade', () => {
   });
 
   it('账户不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addTradeTool.execute(
       { stockId: '601398.SH', side: 'buy', quantity: 100, price: 70, accountId: 'no-such' },
       ctx,
@@ -126,7 +142,7 @@ describe('add_trade', () => {
   });
 
   it('stockId 缺交易所后缀 → invalid_input（schema）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addTradeTool.execute(
       { stockId: '601398', side: 'buy', quantity: 100, price: 70 },
       ctx,
@@ -137,7 +153,7 @@ describe('add_trade', () => {
   });
 
   it('联动：新开仓后 analyze_position 可用（stock stub 生效）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const added = await addTradeTool.execute(
       { stockId: '601398.SH', side: 'buy', quantity: 500, price: 70.25 },
       ctx,

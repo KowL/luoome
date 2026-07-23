@@ -1,11 +1,11 @@
 // @luoome/tui headless 冒烟：用 @opentui/core/testing 的 createTestRenderer
-// 在非 TTY 环境驱动与线上完全同一套 app 代码（createTuiApp + buildMockContext），
+// 在非 TTY 环境驱动与线上完全同一套 app 代码（createTuiApp + buildTestContext），
 // 验证：首帧布局（免责声明 / 持仓 / 建议 / 快捷键栏）、[d] 详情弹层、
 // [esc] 关闭、[s] 统计弹层、[q] 退出。
 //
 // 运行：bun packages/tui/src/smoke.ts
 
-import { buildMockContext } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
 import { createTestRenderer } from '@opentui/core/testing';
 
 import { createTuiApp } from './app.js';
@@ -24,7 +24,7 @@ const sleep = (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
-const ctx = await buildMockContext();
+const ctx = await buildTestContext();
 const setup = await createTestRenderer({ width: 110, height: 32 });
 const { renderer } = setup;
 

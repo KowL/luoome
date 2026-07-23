@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { saveWatchTriggerTool } from './save-watch-trigger.js';
 
 const T0 = new Date('2026-07-21T02:00:00.000Z');
@@ -20,7 +20,7 @@ const triggerInput = () => ({
 
 describe('save_watch_trigger', () => {
   it('落库：合法 trigger → 持久化 + 字段一致', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await saveWatchTriggerTool.execute(triggerInput(), ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -33,7 +33,7 @@ describe('save_watch_trigger', () => {
   });
 
   it('quote.close <= 0 → invariant_violation', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await saveWatchTriggerTool.execute(
       { ...triggerInput(), quote: { close: 0, ts: T0 } },
       ctx,
@@ -44,7 +44,7 @@ describe('save_watch_trigger', () => {
   });
 
   it('evidence 空 → invalid_input（zod 提前拦截）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await saveWatchTriggerTool.execute({ ...triggerInput(), evidence: [] }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -52,7 +52,7 @@ describe('save_watch_trigger', () => {
   });
 
   it('同 id 二次写为 upsert（覆盖 reason）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await saveWatchTriggerTool.execute(triggerInput(), ctx);
     const r = await saveWatchTriggerTool.execute(
       { ...triggerInput(), reason: 'updated reason' },

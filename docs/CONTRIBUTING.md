@@ -57,8 +57,9 @@ luoome/
 │   ├── db/            Drizzle schema + 双实现 repo（drizzle + in-memory）
 │   │                  依赖 bun:sqlite；只能由 Bun 运行时 import。
 │   ├── adapters/      外部依赖适配
-│   │   ├── market/    Eastmoney / Tencent / Mock 行情
-│   │   ├── llm/       OpenAI-Compatible / Anthropic / Mock LLM
+│   │   ├── market/    Eastmoney / Tencent 行情
+│   │   ├── llm/       OpenAI-Compatible / Anthropic LLM
+│   │   ├── testing/   仅测试可导入的 deterministic fixtures / fakes
 │   │   └── notification/  飞书 Webhook 等
 │   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
 │   │                  32 个内置 tool（read 16 / advice 3 / write 9 / external 4，v0.6 末）。
@@ -172,7 +173,7 @@ workflows ──► tools ──► core
 - Tool **永不抛异常**，永远返回 `ToolResult<T> = { ok: true, data } | { ok: false, error: ToolError }`
 - `ToolError.kind` ∈ `invalid_input / not_found / invariant_violation / adapter_error / llm_error / permission_denied / internal`
 - Workflow 步骤返回 `ToolResult` 时引擎自动解包（`ARCHITECTURE §4.6`），返回 `error` 时短路
-- LLM 调用失败走 fallback（mock adapter + 规则兜底，详见 plan-v0.2-v0.3 §2.3）
+- LLM 调用失败重试一次，再走明确标记的低信心规则兜底
 
 ### 格式化 / Lint
 
@@ -185,7 +186,7 @@ biome 单文件即可配置；CI 跑 `biome check .`，要求 0 error。`bun run
 - `packages/core` — entity 不变量 + 工具函数 + branded types
 - `packages/tools` — 每个 tool 至少 1 个单测（input validation + happy path + 关键 error kind）
 - `packages/cli` — argv 解析 + help 输出 + 子命令分发
-- `packages/mcp` — stdio server smoke（list tools + call mock advice）
+- `packages/mcp` — stdio server smoke（list tools + 只读调用）
 - `packages/workflows` — 引擎 + 内置 workflow（v0.4 加 5 个）
 
 `bun run test:db` 跑 bun test，专覆盖：

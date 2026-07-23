@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { createStockPoolTool } from './create-stock-pool.js';
 import { deleteStockPoolTool } from './delete-stock-pool.js';
 
 describe('delete_stock_pool', () => {
   it('删除已存在池 → removed=true', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.stockGroup.save({
       id: 'grp-manual',
       name: 'grp-manual',
@@ -33,7 +33,7 @@ describe('delete_stock_pool', () => {
   });
 
   it('池不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await deleteStockPoolTool.execute({ id: 'missing' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;

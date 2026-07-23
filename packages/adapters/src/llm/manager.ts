@@ -16,10 +16,8 @@ import type { LLMAdapter, LLMGenerateResult } from './types.js';
  * LLM 适配器编排（v0.2 起）。
  *
  * 职责：
- * 1. 从 env 解析 LLMProviderConfig（provider=mock 时直接返回 MockLLMAdapter）。
- * 2. 选 OpenAICompatibleAdapter / AnthropicAdapter；mock fallback 用于：
- *    - 真实 adapter 抛 schema 不匹配错误时，第二次重试仍失败 → 走规则 fallback；
- *    - apiKey 缺失（构造期抛）→ 直接 mock。
+ * 1. 从 env 解析真实 LLMProviderConfig。
+ * 2. 选择 OpenAICompatibleAdapter / AnthropicAdapter。
  * 3. 实现 fallback 协议（plan-v0.2-v0.3 §2.3）：
  *    - 第一次 schema parse 失败 → 自动重试一次，prompt 加「上一轮未符合 schema」提示；
  *    - 仍失败 → 走 fallbackAdvice(data)，在 reasoning.evidence 标「LLM 推理失败，使用规则 fallback」；
@@ -33,8 +31,6 @@ const FALLBACK_NOTE = 'LLM 推理失败，使用规则 fallback（v0.2 LLMManage
 export interface LLMManagerOptions {
   /** 默认 parseLlmProviderConfigFromEnv(process.env)；测试可注入。 */
   readonly config?: LLMProviderConfig;
-  /** 构造 mock adapter 的工厂；测试可注入自定义 mock。 */
-  readonly mockFactory?: () => LLMAdapter;
   readonly realFactory?: (cfg: LLMProviderConfig, fetchImpl?: typeof fetch) => LLMAdapter;
   readonly logger: Logger;
   readonly fetchImpl?: typeof fetch;
@@ -109,38 +105,18 @@ type AdviceLLMOutput = z.infer<typeof AdviceLLMSchemaForFallback>;
 export class LLMManager implements LLMAdapter {
   readonly name: string;
   private readonly inner: LLMAdapter;
-  private readonly mock: LLMAdapter;
   private readonly logger: Logger;
 
   constructor(options: LLMManagerOptions) {
     this.logger = options.logger;
     const cfg = options.config ?? parseLlmProviderConfigFromEnv(process.env);
-    this.mock = options.mockFactory ? options.mockFactory() : defaultMockFactory();
-    if (cfg.provider === 'mock') {
-      this.inner = this.mock;
-      this.name = this.mock.name; // 反映 mockFactory 的实际 adapter 名
-      return;
-    }
-    try {
-      this.inner = options.realFactory
-        ? options.realFactory(cfg, options.fetchImpl)
-        : this.buildProvider(cfg, options.fetchImpl);
-      this.name = this.inner.name;
-    } catch (error) {
-      this.logger.error('llm-manager: 构造 provider 失败，回退到 mock', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.inner = this.mock;
-      this.name = this.mock.name;
-    }
+    this.inner = options.realFactory
+      ? options.realFactory(cfg, options.fetchImpl)
+      : this.buildProvider(cfg, options.fetchImpl);
+    this.name = this.inner.name;
   }
 
   async generate<T = unknown>(request: LLMGenerateRequest): Promise<LLMGenerateResult<T>> {
-    if (this.inner === this.mock) {
-      // 已经在 mock 模式：直接返回 mock 结果，不走 fallback 协议（避免无限包装）
-      return (await this.mock.generate<T>(request)) as LLMGenerateResult<T>;
-    }
-
     // 第一次调用
     let firstError: unknown;
     try {
@@ -168,7 +144,7 @@ export class LLMManager implements LLMAdapter {
       }
     }
 
-    // 规则 fallback：用 mock 的 fixture 形状 + fallbackAdvice 标记
+    // 规则 fallback：返回明确标记的低信心确定性判断。
     const fallbackData = this.buildFallbackResult<T>(request);
     this.logger.error('llm-manager: 走规则 fallback', { decision: this.preview(fallbackData) });
     return fallbackData;
@@ -203,10 +179,6 @@ const describeError = (e: unknown): string => {
   if (e instanceof Error) return `${e.name}: ${e.message}`;
   return String(e);
 };
-
-import { MockLLMAdapter } from './mock.js';
-
-const defaultMockFactory = (): LLMAdapter => new MockLLMAdapter();
 
 export type { LLMAdapter, LLMGenerateRequest, LLMGenerateResult };
 export { AdviceDecisionSchema, AdviceHorizonSchema, AdviceReasoningSchema, STANDARD_DISCLAIMERS };

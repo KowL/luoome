@@ -9,7 +9,7 @@ import { z } from 'zod';
 
 /**
  * analyze_stock / analyze_position 共用的 LLM 输出 schema
- * （ARCHITECTURE §6.3 schema-constrained decoding；MockLLMAdapter 会按其 safeParse）。
+ * （ARCHITECTURE §6.3 schema-constrained decoding）。
  */
 export const AdviceLLMSchema = z.object({
   decision: AdviceDecisionSchema,

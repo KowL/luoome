@@ -33,7 +33,7 @@ const SCORE_SIGNALS_SYSTEM =
  * 战法信号精排（v0.3 起，read）。
  * 调用 LLM 把 run_tactic 的原始 signal 做最终排序，给出 llmScore + rationale。
  *
- * v0.3 mock 实现：保留 LLM 调用结构，但 mock adapter 按确定性 fallback 返回；
+ * 保留 LLM 调用结构；模型输出缺项时按原分数回退；
  * 真实 LLM 接入由 manager 决定（v0.2 已支持 OpenAI 兼容 + Anthropic）。
  */
 export const scoreSignalsTool = defineTool({
@@ -79,7 +79,7 @@ export const scoreSignalsTool = defineTool({
       .map((s) => {
         const r = llmMap.get(key(s.tacticId, s.stockId, s.ts.toISOString()));
         const llmScore = r?.llmScore ?? s.score;
-        const rationale = r?.rationale ?? 'mock: 与原 score 一致';
+        const rationale = r?.rationale ?? '模型未返回排序理由，与原 score 一致';
         return SCORED_SIGNAL_SCHEMA.parse({ ...s, llmScore, rationale });
       })
       .sort((a, b) => b.llmScore - a.llmScore);

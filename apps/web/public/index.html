@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>luoome · 个人投资仪表盘</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%236e3f1d'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='38' fill='%23fffaf2'%3E%E7%BD%97%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -35,6 +36,8 @@
       <ul class="nav" role="navigation">
         <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>仪表盘</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
+        <li><a class="nav-item" href="#groups" data-route="groups"><span>分组</span></a></li>
+        <li><a class="nav-item" href="#watch" data-route="watch"><span>盯盘</span></a></li>
         <li><a class="nav-item" href="#tactics" data-route="tactics"><span>战法</span></a></li>
         <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
         <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
@@ -56,9 +59,28 @@
           <div class="stat"><div class="label">持仓数</div><div class="value" id="dash-holdings-count">--</div></div>
           <div class="stat"><div class="label">今日建议</div><div class="value" id="dash-advice-count">--</div><div class="delta" id="dash-advice-summary">--</div></div>
         </div>
+        <div class="watch-rail" id="dash-watch-rail">
+          <div>
+            <span class="health-dot" id="dash-watch-dot"></span>
+            <strong id="dash-watch-state">盯盘状态 --</strong>
+            <span class="muted" id="dash-watch-time">尚未运行</span>
+          </div>
+          <div class="rail-metrics">
+            <span><b id="dash-pool-count">--</b> 个池</span>
+            <span><b id="dash-group-count">--</b> 个分组</span>
+            <span><b id="dash-stale-count">--</b> 个待刷新</span>
+          </div>
+        </div>
         <div class="card">
           <div class="card-header"><h2>建议（高信心优先）</h2><div class="card-meta" id="dash-advice-meta"></div></div>
           <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header">
+            <h2>最近盯盘触发</h2>
+            <a href="#watch" class="card-link">查看盯盘台 →</a>
+          </div>
+          <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
 
@@ -98,6 +120,69 @@
                   <td></td>
                 </tr>
               </tfoot>
+            </table>
+          </div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header"><h2>近期交易</h2><div class="card-meta">最近 50 笔</div></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>时间</th><th>代码</th><th>方向</th><th class="num">数量</th><th class="num">价格</th><th>来源</th></tr></thead>
+              <tbody id="trades-body"><tr><td colspan="6" class="placeholder">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- route: groups -->
+      <section id="route-groups" class="route" data-route="groups" hidden>
+        <div class="route-header">
+          <div>
+            <h1>股票分组</h1>
+            <div class="route-meta">成员生产者 · 手动 / 持仓 / 战法 / LLM</div>
+          </div>
+          <button id="btn-group-add" class="btn btn-primary" type="button">+ 新建分组</button>
+        </div>
+        <div class="split-pane">
+          <div class="card entity-pane">
+            <div class="card-header"><h2>分组目录</h2><div class="card-meta" id="groups-meta">--</div></div>
+            <div id="groups-list" class="entity-list"><p class="placeholder">加载中…</p></div>
+          </div>
+          <div class="card detail-pane">
+            <div id="group-detail"><p class="placeholder">从左侧选择一个分组查看成员。</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- route: watch -->
+      <section id="route-watch" class="route" data-route="watch" hidden>
+        <div class="route-header">
+          <div>
+            <h1>盯盘台</h1>
+            <div class="route-meta">运行心跳 · 规则池 · 触发审计</div>
+          </div>
+          <div class="flex gap-2">
+            <button id="btn-watch-run" class="btn btn-primary" type="button">立即跑一轮</button>
+            <button id="btn-pool-add" class="btn btn-outline" type="button">+ 新建盯盘池</button>
+          </div>
+        </div>
+        <div class="watch-console">
+          <div class="watch-console-status">
+            <span class="health-dot" id="watch-health-dot"></span>
+            <div><strong id="watch-health-state">--</strong><div class="muted" id="watch-health-meta">读取中…</div></div>
+          </div>
+          <div class="watch-console-metrics" id="watch-run-metrics"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>盯盘池</h2><div class="card-meta" id="watch-pools-meta">--</div></div>
+          <div id="watch-pools-list" class="pool-grid"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header"><h2>触发流水</h2><div class="card-meta">包含冷却抑制记录</div></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>时间</th><th>股票</th><th>规则</th><th>方向</th><th class="num">价格</th><th>原因 / 证据</th><th>通知</th></tr></thead>
+              <tbody id="watch-triggers-body"><tr><td colspan="7" class="placeholder">加载中…</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -224,21 +309,40 @@
         <div class="card">
           <div class="card-header"><h2>本地 token 鉴权</h2></div>
           <p class="muted mb-2">
-            Web 端默认无 token 即可访问读 / 建议类 tool（read + advice）。
-            若需要回填 outcome（write），请在服务端设置 <code>LUOOME_EXPOSE_WRITE=true</code> 并在此生成 / 撤销 token。
+            读 / 建议无需 token；持仓、分组、盯盘等修改必须使用服务端生成的 token。
+            启动日志会显示 token 文件位置，把文件内容粘贴到这里。
           </p>
           <div class="field">
             <label for="settings-token">当前 token（本地存储）</label>
-            <input id="settings-token" type="text" placeholder="（未设置）" readonly />
+            <input id="settings-token" type="password" placeholder="粘贴 LUOOME_WEB_TOKEN" autocomplete="off" />
             <span class="hint">保存在 localStorage，仅本浏览器可见。</span>
           </div>
           <div class="flex gap-2">
-            <button id="btn-token-generate" class="btn btn-primary btn-sm" type="button">生成 token</button>
+            <button id="btn-token-save" class="btn btn-primary btn-sm" type="button">保存 token</button>
             <button id="btn-token-clear" class="btn btn-outline btn-sm" type="button">清除</button>
           </div>
         </div>
         <div class="card mt-4">
-          <div class="card-header"><h2>账户信息</h2></div>
+          <div class="card-header"><h2>创建真实账户</h2></div>
+          <p class="muted mb-2">空数据库首次使用时先创建账户。系统不会自动填充示例持仓或交易。</p>
+          <div class="form-grid">
+            <div class="field">
+              <label for="account-create-name">账户名称</label>
+              <input id="account-create-name" type="text" placeholder="例如：主账户" maxlength="120" />
+            </div>
+            <div class="field">
+              <label for="account-create-currency">币种</label>
+              <input id="account-create-currency" type="text" value="CNY" maxlength="3" />
+            </div>
+            <div class="field">
+              <label for="account-create-capital">初始资金</label>
+              <input id="account-create-capital" type="number" value="0" min="0" step="0.01" />
+            </div>
+          </div>
+          <button id="btn-account-create" class="btn btn-primary btn-sm" type="button">创建账户</button>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header"><h2>当前账户信息</h2></div>
           <div id="settings-account"><p class="placeholder">加载中…</p></div>
         </div>
       </section>

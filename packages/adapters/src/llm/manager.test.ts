@@ -51,45 +51,11 @@ class StubAdapter implements LLMAdapter {
 }
 
 describe('llm/manager', () => {
-  describe('provider=mock', () => {
-    it('直接走 mock；name=mock', async () => {
-      const stub = new StubAdapter('mock-stub');
-      const mgr = new LLMManager({
-        config: { provider: 'mock', model: 'mock-v0' },
-        mockFactory: () => stub,
-        logger: silentLogger,
-      });
-      const out = await mgr.generate<ParsedAdvice>({
-        system: 's',
-        schema: TestSchema,
-        data: {},
-      });
-      expect(mgr.name).toBe('mock-stub'); // mockFactory 返回的 adapter name
-      expect(out.decision).toBe('hold');
-      expect(stub.callCount).toBe(1);
-    });
-
-    it('mock 抛错时不触发 fallback 协议（避免无限循环）', async () => {
-      const stub = new StubAdapter('mock-stub');
-      stub.failMode = 'throw';
-      const mgr = new LLMManager({
-        config: { provider: 'mock', model: 'mock-v0' },
-        mockFactory: () => stub,
-        logger: silentLogger,
-      });
-      await expect(
-        mgr.generate<ParsedAdvice>({ system: 's', schema: TestSchema, data: {} }),
-      ).rejects.toThrow();
-      expect(stub.callCount).toBe(1);
-    });
-  });
-
   describe('provider=openai-compatible + realFactory 注入 stub', () => {
     it('成功一次 → 直接返回，callCount=1', async () => {
       const real = new StubAdapter('real-stub');
       const mgr = new LLMManager({
         config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        mockFactory: () => new StubAdapter('unused-mock'),
         realFactory: () => real,
         logger: silentLogger,
       });
@@ -108,7 +74,6 @@ describe('llm/manager', () => {
       real.failMode = 'throw';
       const mgr = new LLMManager({
         config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        mockFactory: () => new StubAdapter('unused-mock'),
         realFactory: () => real,
         logger: silentLogger,
       });
@@ -131,7 +96,6 @@ describe('llm/manager', () => {
       real.failMode = 'throw';
       const mgr = new LLMManager({
         config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        mockFactory: () => new StubAdapter('unused'),
         realFactory: () => real,
         logger: silentLogger,
       });
@@ -149,7 +113,6 @@ describe('llm/manager', () => {
       real.failMode = 'throw';
       const mgr = new LLMManager({
         config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        mockFactory: () => new StubAdapter('unused'),
         realFactory: () => real,
         logger: silentLogger,
       });
@@ -164,25 +127,23 @@ describe('llm/manager', () => {
     });
   });
 
-  describe('realFactory 抛错时回退 mock', () => {
-    it('realFactory throw → mockFactory 接管', async () => {
-      const mockStub = new StubAdapter('mock-takeover');
-      const mgr = new LLMManager({
-        config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        mockFactory: () => mockStub,
-        realFactory: () => {
-          throw new Error('real adapter broken');
-        },
-        logger: silentLogger,
-      });
-      // 此时 mgr.inner === mock，generate 走 mock 路径（不会触发 fallback）
-      const out = await mgr.generate<ParsedAdvice>({
-        system: 's',
-        schema: TestSchema,
-        data: {},
-      });
-      expect(mgr.name).toBe('mock-takeover');
-      expect(out.decision).toBe('hold');
+  describe('realFactory 构造失败', () => {
+    it('直接抛错，不静默切换到假模型', () => {
+      expect(
+        () =>
+          new LLMManager({
+            config: {
+              provider: 'openai-compatible',
+              apiKey: 'sk',
+              baseUrl: 'https://x',
+              model: 'm',
+            },
+            realFactory: () => {
+              throw new Error('real adapter broken');
+            },
+            logger: silentLogger,
+          }),
+      ).toThrow(/real adapter broken/);
     });
   });
 });

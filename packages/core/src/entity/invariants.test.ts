@@ -65,7 +65,7 @@ const validAdvice = (): Advice => ({
 const validAccount = (): Account => ({
   id: 'acc1',
   name: '默认账户',
-  kind: 'mock',
+  kind: 'real',
   currency: 'CNY',
   initialCapital: money(1_000_000),
   createdAt: NOW,

@@ -1,7 +1,7 @@
 import type { ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { createStockPoolTool } from './create-stock-pool.js';
 import { updateStockPoolTool } from './update-stock-pool.js';
 
@@ -20,7 +20,7 @@ const seedGroup = async (ctx: ToolContext, id: string): Promise<string> => {
   return id;
 };
 
-const seedPool = async (ctx: Awaited<ReturnType<typeof buildMockContext>>) => {
+const seedPool = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
   const groupId = await seedGroup(ctx, 'grp-manual');
   await createStockPoolTool.execute(
     {
@@ -35,7 +35,7 @@ const seedPool = async (ctx: Awaited<ReturnType<typeof buildMockContext>>) => {
 
 describe('update_stock_pool', () => {
   it('改 name + enabled：未传字段保持原值', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedPool(ctx);
     const r = await updateStockPoolTool.execute({ id: 'p-1', name: '新名', enabled: false }, ctx);
     expect(r.ok).toBe(true);
@@ -49,7 +49,7 @@ describe('update_stock_pool', () => {
   });
 
   it('池不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await updateStockPoolTool.execute({ id: 'missing', name: 'x' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -57,7 +57,7 @@ describe('update_stock_pool', () => {
   });
 
   it('description=null 清空 description', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx, 'grp-manual');
     await createStockPoolTool.execute(
       {
@@ -76,7 +76,7 @@ describe('update_stock_pool', () => {
   });
 
   it('换绑到不存在的分组 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedPool(ctx);
     const r = await updateStockPoolTool.execute({ id: 'p-1', groupId: 'no-such-group' }, ctx);
     expect(r.ok).toBe(false);
@@ -85,7 +85,7 @@ describe('update_stock_pool', () => {
   });
 
   it('换绑到已存在的分组 → groupId 更新', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedPool(ctx);
     await seedGroup(ctx, 'grp-other');
     const r = await updateStockPoolTool.execute({ id: 'p-1', groupId: 'grp-other' }, ctx);
@@ -95,7 +95,7 @@ describe('update_stock_pool', () => {
   });
 
   it('merged 后分组为 formula 且 tactic 规则不一致 → invalid_input（阶段 B 跨实体不变量）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.stockGroup.save({
       id: 'grp-formula',
       name: 'f',

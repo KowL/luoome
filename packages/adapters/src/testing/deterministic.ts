@@ -1,7 +1,7 @@
 /**
- * 确定性伪随机工具（mock 专用）。
+ * 确定性伪随机工具（仅测试使用）。
  * 同一输入永远得到同一输出：不依赖 Date.now / Math.random，
- * 保证 MockMarketAdapter / MockLLMAdapter 的可重复性。
+ * 保证 FakeMarketAdapter / FakeLLMAdapter 的可重复性。
  */
 
 /** FNV-1a 32-bit 字符串哈希。 */
@@ -38,7 +38,7 @@ export const pickDeterministic = <T>(items: readonly T[], seed: number): T => {
   return item;
 };
 
-/** 默认 mock 时钟：固定到 2026-07-17 15:00（UTC+8，A 股收盘）。可注入替换。 */
-export const DEFAULT_MOCK_NOW = new Date('2026-07-17T07:00:00.000Z');
+/** 固定测试时钟：2026-07-17 15:00（UTC+8，A 股收盘）。 */
+export const DEFAULT_TEST_NOW = new Date('2026-07-17T07:00:00.000Z');
 
-export const defaultMockClock = (): Date => new Date(DEFAULT_MOCK_NOW.getTime());
+export const fixedTestClock = (): Date => new Date(DEFAULT_TEST_NOW.getTime());

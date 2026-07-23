@@ -5,7 +5,7 @@ import type { MarketDataAdapter } from './types.js';
 
 /**
  * 行情适配器类型（structural typing，Manager 只关心 fetchQuote / batchQuote / fetchDailyBars）。
- * 允许 EastmoneyAdapter / TencentAdapter / MockMarketAdapter 任意实现接入。
+ * 允许 EastmoneyAdapter / TencentAdapter 或测试替身实现接入。
  */
 type QuoteAdapter = {
   readonly name: string;
@@ -16,7 +16,7 @@ type QuoteAdapter = {
   searchStocks?(query: string): Promise<StockSearchCandidate[]>;
 };
 
-/** 错误识别：Manager 需要把异常归类（adapter / network / mock）。 */
+/** 错误识别：Manager 需要把异常归类（adapter / network）。 */
 // 错误识别：Manager 不依赖具体 adapter 错误类，用 structural check。
 // 真要 throw EastmoneyAdapterError / TencentAdapterError 的归类在 adapter 内。
 // （保留 isEastmoneyError / isTencentError 是为了 v0.3+ 测试与扩展点，暂未使用。）
@@ -58,13 +58,14 @@ class RateLimiter {
 export interface MarketDataManagerOptions {
   readonly primary: QuoteAdapter;
   readonly fallback: QuoteAdapter;
-  readonly finalFallback: QuoteAdapter;
+  /** 可选第三真实数据源；生产默认不配置。 */
+  readonly finalFallback?: QuoteAdapter;
   readonly quoteCache?: QuoteCache;
   readonly dailyBarCache?: DailyBarCache;
   readonly rateLimitPerSec?: number;
   readonly logger: Logger;
   readonly clock?: () => Date;
-  /** finalFallback 抑制窗口：此时间内不再尝试 primary/fallback，直接走 mock。默认 30 分钟。 */
+  /** 第三数据源抑制窗口。默认 30 分钟。 */
   readonly finalFallbackSuppressMs?: number;
 }
 
@@ -85,16 +86,14 @@ export interface ManagerStats {
  * 2. 未命中 → rate limiter acquire
  * 3. 调 primary.fetchQuote；成功写缓存 + 返回
  * 4. primary 失败 → logger.warn → 调 fallback.fetchQuote；成功写缓存 + 返回
- * 5. fallback 也失败：
- *    - 若 `now - lastFinalFallbackAt < suppressMs` → 直接走 finalFallback（mock）+ logger.error
- *    - 否则再尝试 primary + fallback 各一次，仍失败走 finalFallback + 记录 lastFinalFallbackAt
+ * 5. fallback 也失败：有第三真实数据源则尝试；否则明确抛错。
  */
 export class MarketDataManager implements MarketDataAdapter {
   readonly name = 'manager';
 
   private readonly primary: QuoteAdapter;
   private readonly fallback: QuoteAdapter;
-  private readonly finalFallback: QuoteAdapter;
+  private readonly finalFallback: QuoteAdapter | undefined;
   private readonly quoteCache: QuoteCache;
   private readonly dailyBarCache: DailyBarCache;
   private readonly rateLimiter: RateLimiter;
@@ -173,11 +172,14 @@ export class MarketDataManager implements MarketDataAdapter {
       }
     }
 
-    // finalFallback（mock）：mock 结果也写缓存，避免抑制窗口内反复调 mock
-    // （60s TTL 内主源恢复后会被新数据覆盖，无需担心长期污染）。
+    if (this.finalFallback === undefined) {
+      throw new Error(`all market sources failed for ${stockCode}`);
+    }
+
+    // 可选第三真实数据源：结果写缓存，避免抑制窗口内反复请求。
     this.finalFallbackCalls += 1;
     this.lastFinalFallbackAt = now.getTime();
-    this.logger.error('manager.fetchQuote all sources failed, using mock', {
+    this.logger.error('manager.fetchQuote primary and fallback failed, using final source', {
       stockCode,
       inSuppress,
     });
@@ -199,15 +201,20 @@ export class MarketDataManager implements MarketDataAdapter {
       }
     }
     if (toFetch.length === 0) return result;
-    // 并发 fetchQuote；每个独立走缓存 + 降级路径
-    const fetched = await Promise.all(toFetch.map((code) => this.fetchQuote(code)));
-    for (let i = 0; i < toFetch.length; i += 1) {
-      const code = toFetch[i];
-      const quote = fetched[i];
-      if (code !== undefined && quote !== undefined) {
-        result.set(code, quote);
-      }
-    }
+    // 并发 fetchQuote；单只全源失败只遗漏该只，不让批量读路径整体失败。
+    // list_holdings / batch_quote 会分别用成本价或“缺失项”语义降级。
+    await Promise.all(
+      toFetch.map(async (code) => {
+        try {
+          result.set(code, await this.fetchQuote(code));
+        } catch (error) {
+          this.logger.warn('manager.batchQuote omitted failed quote', {
+            stockCode: code,
+            error: errorMessage(error),
+          });
+        }
+      }),
+    );
     return result;
   }
 
@@ -244,14 +251,19 @@ export class MarketDataManager implements MarketDataAdapter {
       }
     }
 
+    if (this.finalFallback === undefined) {
+      throw new Error(`all market sources failed for daily bars: ${stockCode}`);
+    }
     this.finalFallbackCalls += 1;
     this.lastFinalFallbackAt = now.getTime();
-    this.logger.error('manager.fetchDailyBars all sources failed, using mock', { stockCode });
+    this.logger.error('manager.fetchDailyBars primary and fallback failed, using final source', {
+      stockCode,
+    });
     return await this.finalFallback.fetchDailyBars(stockCode, range);
   }
 
   /**
-   * 外部股票搜索（v0.8 起）：primary → fallback → finalFallback（mock fixtures）。
+   * 外部股票搜索（v0.8 起）：primary → fallback → 可选第三真实数据源。
    * 空数组是合法答案（该源确实没搜到），不触发降级；抛错才降级。
    * 不做缓存（搜索低频且 query 维度发散，LRU 命中率近似为零）。
    */
@@ -273,10 +285,12 @@ export class MarketDataManager implements MarketDataAdapter {
         }
       }
     }
-    if (typeof this.finalFallback.searchStocks === 'function') {
+    if (typeof this.finalFallback?.searchStocks === 'function') {
       this.finalFallbackCalls += 1;
       this.lastFinalFallbackAt = now.getTime();
-      this.logger.error('manager.searchStocks all sources failed, using mock', { query });
+      this.logger.error('manager.searchStocks primary and fallback failed, using final source', {
+        query,
+      });
       return this.finalFallback.searchStocks(query);
     }
     return [];

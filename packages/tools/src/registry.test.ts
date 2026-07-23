@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// 分组化（阶段 B）末态：32 (v0.6) + 7 (stockGroup CRUD / refresh / resolve_llm_group) = 39 tool
+// v0.8 MVP：原 43 tool + 空库初始化 create_account = 44 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'list_accounts',
+  'create_account',
   'get_account',
   'list_holdings',
   'get_holding',
+  'list_trades',
   'get_advice',
   'get_advice_stats',
   'analyze_stock',
@@ -42,6 +44,9 @@ const EXPECTED_TOOL_NAMES = [
   'update_stock_pool',
   'delete_stock_pool',
   'save_watch_trigger',
+  'list_watch_triggers',
+  'get_watch_status',
+  'record_watch_run',
   // 分组化（阶段 B）新增：分组 CRUD + 刷新 + LLM 解析
   'list_stock_groups',
   'get_stock_group',
@@ -53,7 +58,7 @@ const EXPECTED_TOOL_NAMES = [
 ] as const;
 
 describe('toolRegistry', () => {
-  it(`注册全部 ${EXPECTED_TOOL_NAMES.length} 个 tool（v0.1 8 + v0.2 新增 5）`, () => {
+  it(`注册全部 ${EXPECTED_TOOL_NAMES.length} 个 tool`, () => {
     const all = toolRegistry.all();
     expect(all).toHaveLength(EXPECTED_TOOL_NAMES.length);
     expect(all.map((t) => t.name).sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
@@ -106,11 +111,13 @@ describe('toolRegistry', () => {
       'add_holding',
       'add_trade',
       'close_holding',
+      'create_account',
       'create_stock_group',
       'create_stock_pool',
       'delete_stock_group',
       'delete_stock_pool',
       'record_advice_outcome',
+      'record_watch_run',
       'save_watch_trigger',
       'update_holding',
       'update_stock_group',

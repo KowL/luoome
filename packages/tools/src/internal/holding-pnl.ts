@@ -30,7 +30,7 @@ const clampPercentage = (rate: number): Percentage => percentage(Math.min(10, Ma
 
 /**
  * 用现价丰富单条持仓。
- * 行情缺失时降级用成本价（mock 不会缺；真实 adapter 的故障由上层错误模型兜底）。
+ * 行情缺失时降级用成本价；真实 adapter 的故障由上层错误模型兜底。
  */
 export const enrichHolding = (
   holding: Holding,

@@ -1,4 +1,4 @@
-# Handoff — luoome v0.6.2
+# Handoff — luoome v0.8
 
 > 这份文档给**接手的工程师 / agent**：把项目当前状态、关键决策、不变量、已知坑讲清楚，让你能**在一两天内上手改东西**。
 >
@@ -6,17 +6,17 @@
 
 ---
 
-## 1. 现状快照（v0.6.2）
+## 1. 现状快照（v0.8）
 
 | 维度 | 状态 |
 |---|---|
 | 已发布版本 | v0.5.0（v0.6 系列未单独发 tag / release；squash 合入 main，PR [#1](https://github.com/KowL/luoome/pull/1)） |
 | 最新 commit | `0777352`（intrady watch v0.6 + holiday calendar v0.7 + dailyBars v0.6.1 + manager resilience v0.6.2，squash merge） |
-| 测试 | 605 pass / 0 fail / 2387 expect / 69 文件（vitest 478 + bun test db 127） |
-| Tool 数 | 32（read 16 / advice 3 / write 9 / external 4）—— v0.6 新增 5 个：股票池 CRUD 4 + `save_watch_trigger` |
+| 测试 | 660 Vitest + 155 DB + 27 Web，全部通过（2026-07-23） |
+| Tool 数 | 44；新增 `create_account` 支持空库初始化 |
 | Workflow 数 | 6（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / **intraday-watch**） |
 | 战法数 | 5 builtin（放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振）—— v0.3 起 |
-| 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股 + 港股）；股票搜索同链（Eastmoney suggest 主 → Tencent smartbox 备 → mock 兜底，`search_stocks` 再降级本地库，v0.8 起）；LLM 经 `LUOOME_LLM_PROVIDER` 路由——mock / OpenAI-Compatible / Anthropic（缺 key 启动期报错）；飞书 Webhook |
+| 数据源 | 行情必须为 `real`：Eastmoney 主 → Tencent 备，全源失败报错；LLM 必须为 OpenAI-Compatible / Anthropic 且配置 key；测试 fake 仅从 `testing` 子路径导入 |
 | Surfaces | CLI / TUI / Web（6 路由） / MCP stdio |
 | 节假日历 | 内置 2026（29 天）+ 2027 best-effort placeholder；`~/.luoome/holidays.json` 文件加载 + `LUOOME_A_SHARE_HOLIDAYS` env 追加 |
 | CI | GitHub Actions · ubuntu + bun 1.3.11 · typecheck + test:all + lint 三关 |
@@ -79,7 +79,7 @@ User  ─►  MCP / CLI / TUI / Web
             │
             ├─► ctx.tools.compute_indicators  (拉日线 → 算 13 项技术指标)
             ├─► ctx.adapters.market.fetchQuote (Eastmoney / Tencent)
-            ├─► ctx.adapters.llm.analyze      (OpenAI-Compatible / Anthropic / Mock)
+            ├─► ctx.adapters.llm.analyze      (OpenAI-Compatible / Anthropic)
             └─► ctx.repos.advice.save         (写 SQLite)
             │
             ▼
@@ -99,15 +99,15 @@ User  ─►  MCP / CLI / TUI / Web
 | 加新 tool 的样板 | `packages/tools/src/tools/search-stocks.ts` |
 | Tool schema → TS / MCP / OpenAI 推导 | `packages/tools/src/define-tool.ts` |
 | 战法 DSL 引擎 | `packages/core/src/tactic/` |
-| 内置战法 | `packages/adapters/src/mocks/tactics.ts` |
-| 行情适配（含真实链路容错测试） | `packages/adapters/src/market/{factory,manager,eastmoney,tencent,mock,cache}.ts` + `manager-resilience.test.ts` |
+| 内置战法 | `packages/core/src/tactic/builtins.ts` |
+| 行情适配（含真实链路容错测试） | `packages/adapters/src/market/{factory,manager,eastmoney,tencent,cache}.ts` + `manager-resilience.test.ts` |
 | LLM 适配 + fallback | `packages/adapters/src/llm/` |
 | 飞书 webhook | `packages/adapters/src/notification/` |
 | Workflow 引擎 | `packages/workflows/src/define-workflow.ts` |
 | 内置 workflow | `packages/workflows/src/{sync-quotes,daily-advice,tactic-scan,risk-report,daily-review,intraday-watch}.ts`（v0.6 起含 `intraday-watch` 9 步编排：load→seed→members→batch_quote→loadPrevCloses→evaluate→cooldown+persist→notify+summary） |
 | 盘中盯盘 CLI | `packages/cli/src/watch.ts`（纯逻辑：isTradingHours + clampInterval + nextRunDelayMs + formatTriggersForLog）；接入点 `packages/cli/src/index.ts` `cmdWatch` |
 | 节假日历 | `packages/cli/src/holidays.ts`（2026/2027 + 文件加载 + 三层优先级 union + parseHolidayObject 容错 + loadHolidaysFromFile 静默）；路径 `packages/cli/src/paths.ts`（`luoomeHome()` 共享小工具） |
-| 测试用固定行情 | `packages/tools/src/internal/mock-adapter.ts`（`FixedQuoteAdapter` + `withFixedQuoteAdapter`） |
+| 测试 fixtures / fake adapters | `packages/adapters/src/testing/` 与 `packages/tools/src/testing/`（生产入口不导出） |
 | MCP server 暴露面 | `packages/mcp/src/server.ts` |
 | CLI argv 解析 | `packages/cli/src/index.ts` |
 | TUI 布局 | `packages/tui/src/app.ts` |
@@ -178,15 +178,11 @@ LUOOME_HOME    # 数据目录，默认 ~/.luoome
                 #   ~/.luoome/tactics/   ← 用户自定义战法（v0.3 留口，尚未实现 loader）
 ```
 
-**坑**：mock 适配器在 web 端首次启动会重灌 fixtures（`seedMockData` upsert 幂等）；真实 LLM/行情接入后才会写真实数据。
+**当前约束**：所有 surface 只建表，不自动写入业务数据。空库先调用 `create_account` 或在 Web「设置」页创建真实账户。
 
 ### 6.2 Advice 的 `basedOn.dataAsOf`
 
-mock 适配器把 `dataAsOf` 钉在 `DEFAULT_MOCK_NOW`（2026-07-19）；真实数据源是 `ctx.clock()`。两者混用时 `validUntil` 可能已过期而 advice 看着"新鲜"。
-
-**建议**：mock 数据用 `Math.max(DEFAULT_MOCK_NOW.getTime(), Date.now())` 当 clock，保证 mock 在真实时间窗口内有效（web 端 seed 时就这么做的）。
-
-**已落地（v0.5 接线时）**：`buildMockContext` 现在拆两个时钟——业务 `ctx.clock` = max(锚点, 真实时间)，行情 adapter 时钟钉住锚点（报价 / 日线 / 指标保持确定性）。这修掉了一类时间炸弹：repo 层按 `Date.now()` 过滤过期 advice，锚点钉在过去会让 analyze_* 的新鲜产出在真实时间越过 validUntil 后立刻不可见（`analyze-position` 测试在 2026-07-20 越界当天变红）。`opts.clock` 显式传入时两个时钟一并钉住（指标数值断言类测试用）。
+生产 surface 统一使用真实系统时钟；测试时钟只存在于 `packages/adapters/src/testing/`，不会由生产入口导出。
 
 ### 6.3 Workflow 引擎的 unwrap 语义
 
@@ -223,7 +219,7 @@ LLM 调用失败的处理（plan-v0.2-v0.3 §2.3）：
 2. 仍失败 → `fallbackAdvice()` 规则兜底（MA5 > MA20 → watch / confidence 30，其他 → hold / confidence 20）
 3. 永远不让 tool 抛异常
 
-要测试 fallback：mock LLM adapter 返回 invalid JSON；验证 advice 仍有合理输出，且 evidence 包含"LLM 推理失败，使用规则 fallback"。
+测试 fallback 时通过 `realFactory` 注入会抛错的 fake adapter；验证 advice 仍有低信心输出，且 evidence 包含“LLM 推理失败，使用规则 fallback”。
 
 ### 6.6 战法 DSL 的 `${meta.*}`
 
@@ -235,11 +231,10 @@ TUI smoke 需要 `@opentui/core/testing` + Bun 完整环境，CI 上跑会有兼
 
 ## 7. 紧急操作手册
 
-### 7.1 重新灌 mock fixtures
+### 7.1 初始化空数据库
 
 ```bash
-rm -rf ~/.luoome/luoome.db
-bash bin/luoome tui          # 启动时会自动 seed
+luoome tools call create_account --input '{"name":"主账户","currency":"CNY","initialCapital":100000}'
 ```
 
 ### 7.2 加新 env 变量
@@ -315,8 +310,8 @@ bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 
 按优先级：
 
-1. ~~多市场数据源~~ → **A 股真实行情接线（已完成）**：四个 surface 统一走 `createMarketAdapterFromEnv`，`LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底；默认 mock 零回归。港 / 美市场确认不做（lijun，2026-07-20）。**真实 LLM 接线（已完成）**：四端统一走 `LLMManager`（`LUOOME_LLM_PROVIDER` 路由，默认 mock）。**持仓/交易录入（已完成）**：`add_trade` / `add_holding` / `update_holding` / `close_holding`，见 §7.6。**成交量量纲统一（已完成）**：K 线 volume 一律 ×100 成股。
-2. ~~**多账户切换 UI**~~ → **已完成（v0.5 W3）**：3 mock 账户 + TUI `[a]` 弹层 + Web 顶栏下拉 + `POST /api/account/select`
+1. **真实数据链**：四个 surface 统一走 Eastmoney 主 → Tencent 备和真实 LLM；全源失败明确报错。
+2. **多账户切换 UI**：账户由用户显式创建，TUI/Web 支持切换。
 3. ~~**confidence 自校准**~~ → **已完成（v0.5 W4）**：`get_confidence_calibration` tool + TUI `[c]` 弹层 + Web 复盘页校准表
 4. **Web push 通知**（高信心建议推送到浏览器）
 5. **CI 加 TUI smoke**（GitHub Actions 上跑）

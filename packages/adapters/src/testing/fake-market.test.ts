@@ -1,21 +1,21 @@
 import { DailyBarSchema, QuoteSchema } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_MOCK_NOW } from '../internal/deterministic.js';
-import { MOCK_STOCK_BASE_PRICES, MOCK_STOCKS } from '../mocks/fixtures.js';
-import { MockMarketAdapter } from './mock.js';
+import { DEFAULT_TEST_NOW } from './deterministic.js';
+import { FakeMarketAdapter } from './fake-market.js';
+import { TEST_STOCK_BASE_PRICES, TEST_STOCKS } from './fixtures.js';
 
-const fixedClock = () => new Date(DEFAULT_MOCK_NOW.getTime());
-const makeAdapter = () => new MockMarketAdapter({ clock: fixedClock });
+const fixedClock = () => new Date(DEFAULT_TEST_NOW.getTime());
+const makeAdapter = () => new FakeMarketAdapter({ clock: fixedClock });
 
-describe('MockMarketAdapter.fetchQuote', () => {
+describe('FakeMarketAdapter.fetchQuote', () => {
   it('已知 fixture 股票：两次调用结果完全一致（deterministic）', async () => {
     const adapter = makeAdapter();
     const a = await adapter.fetchQuote('002594.SZ');
     const b = await adapter.fetchQuote('002594.SZ');
     expect(b).toEqual(a);
     expect(a.stockId).toBe('002594.SZ');
-    expect(a.close).toBe(MOCK_STOCK_BASE_PRICES['002594.SZ']);
+    expect(a.close).toBe(TEST_STOCK_BASE_PRICES['002594.SZ']);
     expect(a.ts).toEqual(fixedClock());
     expect(QuoteSchema.safeParse(a).success).toBe(true);
     // OHLC 关系
@@ -49,25 +49,25 @@ describe('MockMarketAdapter.fetchQuote', () => {
   });
 });
 
-describe('MockMarketAdapter.batchQuote', () => {
+describe('FakeMarketAdapter.batchQuote', () => {
   it('覆盖全部 20 只 fixture 股票', async () => {
     const adapter = makeAdapter();
-    const ids = MOCK_STOCKS.map((s) => s.id);
+    const ids = TEST_STOCKS.map((s) => s.id);
     const result = await adapter.batchQuote(ids);
-    expect(result.size).toBe(MOCK_STOCKS.length);
-    for (const s of MOCK_STOCKS) {
+    expect(result.size).toBe(TEST_STOCKS.length);
+    for (const s of TEST_STOCKS) {
       const quote = result.get(s.id);
       expect(quote).toBeDefined();
       expect(quote?.stockId).toBe(s.id);
-      expect(quote?.close).toBe(MOCK_STOCK_BASE_PRICES[s.id]);
+      expect(quote?.close).toBe(TEST_STOCK_BASE_PRICES[s.id]);
     }
   });
 });
 
-describe('MockMarketAdapter.fetchDailyBars', () => {
+describe('FakeMarketAdapter.fetchDailyBars', () => {
   const range = {
-    start: new Date(DEFAULT_MOCK_NOW.getTime() - 59 * 86_400_000),
-    end: new Date(DEFAULT_MOCK_NOW.getTime()),
+    start: new Date(DEFAULT_TEST_NOW.getTime() - 59 * 86_400_000),
+    end: new Date(DEFAULT_TEST_NOW.getTime()),
   };
 
   it('固定生成 60 根日线，日期升序', async () => {

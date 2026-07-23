@@ -1,7 +1,7 @@
 import type { LLMAdapterLike, StockGroup, Tactic, ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { refreshStockGroupTool } from './refresh-stock-group.js';
 
 const T0 = new Date('2026-07-22T00:00:00.000Z');
@@ -34,7 +34,7 @@ const seedGroup = (ctx: ToolContext, id: string, overrides: Partial<StockGroup> 
 
 describe('refresh_stock_group', () => {
   it('分组不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await refreshStockGroupTool.execute({ groupId: 'missing' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -42,7 +42,7 @@ describe('refresh_stock_group', () => {
   });
 
   it('manual / holdings 组 → invalid_input（无刷新动作）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-manual');
     const r = await refreshStockGroupTool.execute({ groupId: 'g-manual' }, ctx);
     expect(r.ok).toBe(false);
@@ -51,7 +51,7 @@ describe('refresh_stock_group', () => {
   });
 
   it('formula 组：run_tactic 命中 → 写新批次，entered=全部成员', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
@@ -72,7 +72,7 @@ describe('refresh_stock_group', () => {
   });
 
   it('formula 组：minScore 高于信号分 → 空结果不写空批（refreshed=false，保留旧快照）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 90 },
@@ -97,7 +97,7 @@ describe('refresh_stock_group', () => {
   });
 
   it('formula 组：第二次刷新成员集合变化 → entered / exited 正确', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
@@ -122,7 +122,7 @@ describe('refresh_stock_group', () => {
   });
 
   it('llm 组：mock LLM 产出 → 写新批次', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-l', {
       resolver: { kind: 'llm', prompt: '选出龙头', maxMembers: 3 },
     });
@@ -135,7 +135,7 @@ describe('refresh_stock_group', () => {
   });
 
   it('llm 组：LLM 失败 → refreshed=false，保留旧快照', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-l', {
       resolver: { kind: 'llm', prompt: '选出龙头', maxMembers: 3 },
     });

@@ -10,4 +10,5 @@ export { DrizzleStockGroupRepository } from './stock-group.js';
 export { DrizzleStockPoolRepository } from './stock-pool.js';
 export { DrizzleTacticRepository } from './tactic.js';
 export { DrizzleTradeRepository } from './trade.js';
+export { DrizzleWatchRunRepository } from './watch-run.js';
 export { DrizzleWatchTriggerRepository } from './watch-trigger.js';

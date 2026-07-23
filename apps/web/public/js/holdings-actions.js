@@ -91,6 +91,12 @@ const errorText = (error) => {
   return detail === '' ? String(error.kind) : `${error.kind}：${detail}`;
 };
 
+/** fetch_quote 返回 { quote }；集中解析，避免 UI 误读不存在的 data.price。 */
+export const quotePriceFromResult = (result) => {
+  const price = result?.ok ? result.data?.quote?.close : undefined;
+  return typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
+};
+
 /** 提交公共流程：禁用按钮 → 调 tool → 失败上屏 / 成功关窗 + 刷新 + 状态提示。 */
 const submitTool = async (btn, errorNode, name, input, successMessage) => {
   btn.disabled = true;
@@ -119,6 +125,8 @@ const submitTool = async (btn, errorNode, name, input, successMessage) => {
 export const openAddHoldingModal = () => {
   const stockInput = makeInput('f-stock', { placeholder: '代码或名称，如 601398 / 比亚迪' });
   let selectedStockId = '';
+  let selectedStockName = '';
+  let priceRequest = 0;
   const acList = el('div', 'autocomplete-list');
   acList.hidden = true;
   const acWrap = el('div', 'autocomplete', [stockInput, acList]);
@@ -134,25 +142,34 @@ export const openAddHoldingModal = () => {
   const feeInput = makeInput('f-fee', { type: 'number', placeholder: '0（可选）' });
   const errorNode = el('p', 'modal-error');
 
-  /** 选定股票后自动带现价（失败静默，价格仍可手填）。 */
-  const fillCurrentPrice = (stockId) => {
+  /** 选定股票后自动带现价；失败时明确提示仍可手填。 */
+  const fillCurrentPrice = (stockId, stockName = '') => {
+    const request = ++priceRequest;
+    priceHint.textContent = '正在获取现价…';
     void (async () => {
       const r = await callApi('/api/tools/fetch_quote/call', {
         method: 'POST',
-        body: JSON.stringify({ input: { stockId } }),
+        body: JSON.stringify({
+          input: { stockId, ...(stockName.length > 0 ? { stockName } : {}) },
+        }),
       });
-      if (r.ok && typeof r.data?.price === 'number' && r.data.price > 0) {
-        priceInput.value = String(r.data.price);
-        priceHint.textContent = `已填入现价 ${r.data.price}，可手动修改`;
+      if (request !== priceRequest) return;
+      const price = quotePriceFromResult(r);
+      if (price !== null) {
+        priceInput.value = String(price);
+        priceHint.textContent = `已填入现价 ${price}，可手动修改`;
+      } else {
+        priceHint.textContent = '实时行情暂不可用，请手动输入成交价';
       }
     })();
   };
 
-  const pickStock = (id, label) => {
+  const pickStock = (id, label, name = '') => {
     selectedStockId = id;
+    selectedStockName = name;
     stockInput.value = label;
     acList.hidden = true;
-    fillCurrentPrice(id);
+    fillCurrentPrice(id, name);
   };
 
   /**
@@ -169,6 +186,7 @@ export const openAddHoldingModal = () => {
   let timer = 0;
   stockInput.addEventListener('input', () => {
     selectedStockId = '';
+    selectedStockName = '';
     window.clearTimeout(timer);
     const q = stockInput.value.trim();
     if (q.length === 0) {
@@ -190,7 +208,7 @@ export const openAddHoldingModal = () => {
         const stocks = r.ok && Array.isArray(r.data?.stocks) ? r.data.stocks : [];
         const items = stocks.map((s) => {
           const item = el('div', 'autocomplete-item', `${s.id} · ${s.name}`);
-          item.addEventListener('click', () => pickStock(s.id, `${s.id} ${s.name}`));
+          item.addEventListener('click', () => pickStock(s.id, `${s.id} ${s.name}`, s.name));
           return item;
         });
         // 库内无结果时才给代码后缀兜底候选（外部源已接入，真实候选优先）
@@ -251,7 +269,14 @@ export const openAddHoldingModal = () => {
           btn,
           errorNode,
           'add_trade',
-          { stockId, side: 'buy', quantity, price, fee },
+          {
+            stockId,
+            ...(selectedStockName.length > 0 ? { stockName: selectedStockName } : {}),
+            side: 'buy',
+            quantity,
+            price,
+            fee,
+          },
           `已建仓 ${stockId} · ${quantity} 股`,
         );
       },

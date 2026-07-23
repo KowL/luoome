@@ -1,9 +1,8 @@
 import { InvariantError, type ToolContext } from '@luoome/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-
-import { buildMockContext } from './context.js';
 import { defineTool, errNotFound } from './define-tool.js';
+import { buildTestContext } from './testing/context.js';
 
 const doubleTool = defineTool({
   name: 'test_double',
@@ -18,7 +17,7 @@ describe('defineTool execute 错误模型', () => {
   let ctx: ToolContext;
 
   beforeEach(async () => {
-    ctx = await buildMockContext();
+    ctx = await buildTestContext();
   });
 
   it('正常路径：input parse → handler → output parse → Ok(data)', async () => {

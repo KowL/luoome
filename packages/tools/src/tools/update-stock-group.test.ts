@@ -1,7 +1,7 @@
 import type { StockGroup, ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { updateStockGroupTool } from './update-stock-group.js';
 
 const T0 = new Date('2026-07-22T00:00:00.000Z');
@@ -21,7 +21,7 @@ const seedGroup = (ctx: ToolContext, overrides: Partial<StockGroup> = {}) =>
 
 describe('update_stock_group', () => {
   it('改 name / description：只改传入字段，其余保持', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx);
     const r = await updateStockGroupTool.execute({ id: 'grp-1', name: '新名' }, ctx);
     expect(r.ok).toBe(true);
@@ -32,7 +32,7 @@ describe('update_stock_group', () => {
   });
 
   it('description=null 清空描述', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx);
     const r = await updateStockGroupTool.execute({ id: 'grp-1', description: null }, ctx);
     expect(r.ok).toBe(true);
@@ -41,7 +41,7 @@ describe('update_stock_group', () => {
   });
 
   it('改 resolver：合法引用 → 落库', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx);
     const r = await updateStockGroupTool.execute(
       {
@@ -56,7 +56,7 @@ describe('update_stock_group', () => {
   });
 
   it('改 resolver：tactic 不存在 → not_found，原值不变', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx);
     const r = await updateStockGroupTool.execute(
       { id: 'grp-1', resolver: { kind: 'formula', tacticId: 'nope', lookbackDays: 10 } },
@@ -70,7 +70,7 @@ describe('update_stock_group', () => {
   });
 
   it('改 refreshPolicy / enabled', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx);
     const r = await updateStockGroupTool.execute(
       { id: 'grp-1', refreshPolicy: 'daily', enabled: false },
@@ -83,7 +83,7 @@ describe('update_stock_group', () => {
   });
 
   it('id 不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await updateStockGroupTool.execute({ id: 'missing', name: 'x' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;

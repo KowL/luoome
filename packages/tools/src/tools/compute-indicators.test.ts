@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { computeIndicatorsTool } from './compute-indicators.js';
 
 describe('tool/compute_indicators', () => {
   it('正常路径：返回 indicators + barsCount + dataAsOf', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const res = await computeIndicatorsTool.execute({ stockId: '002594.SZ' }, ctx);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -17,7 +17,7 @@ describe('tool/compute_indicators', () => {
   });
 
   it('正常路径：lookbackDays 自定义', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const res = await computeIndicatorsTool.execute(
       { stockId: '002594.SZ', lookbackDays: 30 },
       ctx,
@@ -26,7 +26,7 @@ describe('tool/compute_indicators', () => {
   });
 
   it('错误路径：stock 不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const res = await computeIndicatorsTool.execute({ stockId: 'NOPE' }, ctx);
     expect(res.ok).toBe(false);
     if (res.ok) return;
@@ -34,7 +34,7 @@ describe('tool/compute_indicators', () => {
   });
 
   it('错误路径：lookbackDays > 365 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const res = await computeIndicatorsTool.execute(
       { stockId: '002594.SZ', lookbackDays: 500 },
       ctx,

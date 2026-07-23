@@ -107,7 +107,7 @@ const stepCompute: WorkflowStep = async (prev) => {
         value: totalValueNum * 0.02,
         unit: 'cny',
         level: 'mid',
-        note: '30 日 95% VaR 估算（mock: 2% × 总市值）',
+        note: '30 日 95% VaR 简化估算（2% × 总市值）',
       },
     ],
   };

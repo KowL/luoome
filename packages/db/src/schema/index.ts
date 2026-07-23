@@ -16,6 +16,7 @@ import type {
   TradeSide,
   TradeSource,
   WatchRule,
+  WatchRun,
   WatchTrigger,
 } from '@luoome/core';
 import {
@@ -364,6 +365,27 @@ export const watchTriggers = sqliteTable(
   }),
 );
 
+/** 每轮 watch 心跳/结果；无 trigger 时也写，支撑运行健康度。 */
+export const watchRuns = sqliteTable(
+  'watch_runs',
+  {
+    id: text('id').primaryKey(),
+    mode: text('mode').$type<WatchRun['mode']>().notNull(),
+    status: text('status').$type<WatchRun['status']>().notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    evaluatedPools: integer('evaluated_pools').notNull(),
+    evaluatedStocks: integer('evaluated_stocks').notNull(),
+    triggered: integer('triggered').notNull(),
+    notified: integer('notified').notNull(),
+    suppressedByCooldown: integer('suppressed_by_cooldown').notNull(),
+    error: text('error'),
+  },
+  (t) => ({
+    startedAtIdx: index('watch_runs_started_at_idx').on(t.startedAt),
+  }),
+);
+
 export const schema = {
   accounts,
   stocks,
@@ -379,6 +401,7 @@ export const schema = {
   // v0.6 起
   stockPools,
   watchTriggers,
+  watchRuns,
   // 分组化起（docs/stock-group-design.md §3）
   stockGroups,
   groupMemberSnapshots,

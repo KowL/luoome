@@ -1,20 +1,21 @@
-import { MOCK_ACCOUNT, MOCK_HOLDINGS } from '@luoome/adapters';
+import { TEST_ACCOUNT, TEST_HOLDINGS } from '@luoome/adapters/testing';
+import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { listHoldingsTool } from './list-holdings.js';
 
 describe('list_holdings', () => {
   it('正常路径：6 条持仓 + PnL 汇总自洽', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await listHoldingsTool.execute({}, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
     const data = result.data;
-    expect(data.accountId).toBe(MOCK_ACCOUNT.id);
+    expect(data.accountId).toBe(TEST_ACCOUNT.id);
     expect(data.status).toBe('active');
-    expect(data.holdings).toHaveLength(MOCK_HOLDINGS.length);
+    expect(data.holdings).toHaveLength(TEST_HOLDINGS.length);
 
     // 002594.SZ：现价 = mock 基准价 105.8，成本 98.5，数量 1000。
     const byd = data.holdings.find((h) => h.holding.stockId === '002594.SZ');
@@ -38,7 +39,7 @@ describe('list_holdings', () => {
   });
 
   it('status=closed → 空持仓 + 零汇总', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await listHoldingsTool.execute({ status: 'closed' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -50,15 +51,44 @@ describe('list_holdings', () => {
   });
 
   it('status=all → 与 active 条数一致（mock 无已平仓）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await listHoldingsTool.execute({ status: 'all' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.holdings).toHaveLength(MOCK_HOLDINGS.length);
+    expect(result.data.holdings).toHaveLength(TEST_HOLDINGS.length);
+  });
+
+  it('实时行情失败时使用本地最新快照，持仓列表仍可见', async () => {
+    const ctx = await buildTestContext();
+    const quote = await ctx.adapters.market.fetchQuote('002594.SZ');
+    await ctx.repos.quote.save({ ...quote, close: money(123.45) });
+    const failingContext = {
+      ...ctx,
+      adapters: {
+        ...ctx.adapters,
+        market: {
+          name: 'failing-market',
+          fetchQuote: async () => {
+            throw new Error('market unavailable');
+          },
+          batchQuote: async () => {
+            throw new Error('market unavailable');
+          },
+          fetchDailyBars: async () => [],
+        },
+      },
+    };
+
+    const result = await listHoldingsTool.execute({}, failingContext);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.data.holdings.find((item) => item.holding.stockId === '002594.SZ')?.currentPrice,
+    ).toBe(123.45);
   });
 
   it('错误路径：账户不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await listHoldingsTool.execute({ accountId: 'no-such-account' }, ctx);
     expect(result).toEqual({
       ok: false,
@@ -67,7 +97,7 @@ describe('list_holdings', () => {
   });
 
   it('错误路径：非法 status → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await listHoldingsTool.execute({ status: 'bogus' }, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');

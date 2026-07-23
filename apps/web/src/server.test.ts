@@ -1,25 +1,33 @@
 // apps/web 闸口矩阵测试（bun runner：server.ts 顶层 import @luoome/db → bun:sqlite，
 // node/vitest 无法解析，已在 vitest.config.ts exclude；由 `bun run test:web` 执行）。
-// ctx 用 buildMockContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
+// ctx 用 buildTestContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
 
 import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { buildMockContext } from '@luoome/tools';
+import { TEST_ACCOUNT } from '@luoome/adapters/testing';
+import { buildTestContext } from '@luoome/tools/testing';
 import type { Hono } from 'hono';
 
-import { createWebApp } from './server.js';
+import { buildWebContext, createWebApp, resolveWebToken } from './server.js';
 
 let app: Hono;
+const WEB_TOKEN = 'test-web-token';
 
 beforeAll(async () => {
-  app = createWebApp(await buildMockContext());
+  app = createWebApp(await buildTestContext(), { webToken: WEB_TOKEN });
 });
 
 const callTool = async (name: string, input: unknown): Promise<Response> =>
   app.fetch(
     new Request(`http://test/api/tools/${name}/call`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${WEB_TOKEN}`,
+      },
       body: JSON.stringify({ input }),
     }),
   );
@@ -27,7 +35,102 @@ const callTool = async (name: string, input: unknown): Promise<Response> =>
 const json = async (r: Response): Promise<{ ok: boolean; data?: never; error?: never }> =>
   (await r.json()) as { ok: boolean; data?: never; error?: never };
 
-describe('web tool 闸口：write 默认放行', () => {
+describe('Web token bootstrap', () => {
+  it('无 env 时生成并复用数据库同目录的 0600 token 文件', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-web-token-'));
+    const previous = process.env.LUOOME_WEB_TOKEN;
+    delete process.env.LUOOME_WEB_TOKEN;
+    try {
+      const first = resolveWebToken(join(dir, 'luoome.db'));
+      const second = resolveWebToken(join(dir, 'luoome.db'));
+      expect(first.filePath).toBe(join(dir, 'web-token'));
+      expect(second.token).toBe(first.token);
+      expect(readFileSync(first.filePath ?? '', 'utf8').trim()).toBe(first.token);
+      expect(statSync(first.filePath ?? '').mode & 0o777).toBe(0o600);
+    } finally {
+      if (previous === undefined) delete process.env.LUOOME_WEB_TOKEN;
+      else process.env.LUOOME_WEB_TOKEN = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Web runtime bootstrap', () => {
+  it('starts with an empty database and never inserts sample records', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-empty-runtime-'));
+    try {
+      const ctx = await buildWebContext(join(dir, 'luoome.db'), {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_LLM_PROVIDER: 'openai-compatible',
+        LUOOME_LLM_API_KEY: 'test-key-not-used',
+      });
+      expect(await ctx.repos.account.list()).toEqual([]);
+      expect(await ctx.repos.stock.search('')).toEqual([]);
+      expect(await ctx.repos.holding.listByAccount('')).toEqual([]);
+      expect(await ctx.repos.trade.listByAccount('')).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('非 loopback API 鉴权模式', () => {
+  it('read API 也要求 Bearer token', async () => {
+    const protectedApp = createWebApp(await buildTestContext(), {
+      webToken: WEB_TOKEN,
+      requireApiToken: true,
+    });
+    const denied = await protectedApp.fetch(new Request('http://lan/api/holdings'));
+    expect(denied.status).toBe(403);
+    const allowed = await protectedApp.fetch(
+      new Request('http://lan/api/holdings', {
+        headers: { authorization: `Bearer ${WEB_TOKEN}` },
+      }),
+    );
+    expect(allowed.status).toBe(200);
+  });
+});
+
+describe('web tool 闸口：write 需本地 token', () => {
+  it('write/external 缺 token → 403，read 仍可用', async () => {
+    const write = await app.fetch(
+      new Request('http://test/api/tools/add_trade/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          input: { stockId: '601398.SH', side: 'buy', quantity: 1, price: 7.25 },
+        }),
+      }),
+    );
+    expect(write.status).toBe(403);
+
+    const read = await app.fetch(
+      new Request('http://test/api/tools/list_holdings/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: {} }),
+      }),
+    );
+    expect(read.status).toBe(200);
+  });
+
+  it('跨站 Origin 即使 token 正确也拒绝 mutation', async () => {
+    const r = await app.fetch(
+      new Request('http://test/api/tools/add_trade/call', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+          origin: 'https://evil.example',
+        },
+        body: JSON.stringify({
+          input: { stockId: '601398.SH', side: 'buy', quantity: 1, price: 7.25 },
+        }),
+      }),
+    );
+    expect(r.status).toBe(403);
+  });
+
   it('add_trade（buy）建仓 → 200 且持仓可见', async () => {
     const r = await callTool('add_trade', {
       stockId: '601398.SH',
@@ -44,6 +147,46 @@ describe('web tool 闸口：write 默认放行', () => {
     };
     const mine = body.data.holdings.find((h) => h.holding.stockId === '601398.SH');
     expect(mine?.holding.quantity).toBe(500);
+  });
+
+  it('create_account → 200 且可切换为空持仓账户', async () => {
+    const created = await callTool('create_account', {
+      id: 'web-real-account',
+      name: 'Web 真实账户',
+      currency: 'CNY',
+      initialCapital: 100_000,
+    });
+    expect(created.status).toBe(200);
+    const selected = await app.fetch(
+      new Request('http://test/api/account/select', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ accountId: 'web-real-account' }),
+      }),
+    );
+    expect(selected.status).toBe(200);
+    const holdings = await app.fetch(new Request('http://test/api/holdings'));
+    const body = (await holdings.json()) as {
+      ok: boolean;
+      data: { accountId: string; holdings: unknown[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data.accountId).toBe('web-real-account');
+    expect(body.data.holdings).toEqual([]);
+    const restored = await app.fetch(
+      new Request('http://test/api/account/select', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ accountId: TEST_ACCOUNT.id }),
+      }),
+    );
+    expect(restored.status).toBe(200);
   });
 
   it('add_trade（buy）加仓 → 200 且数量累加', async () => {
@@ -130,11 +273,62 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     const r = await app.fetch(
       new Request('http://test/api/tools/add_trade/call', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
         body: 'not-json',
       }),
     );
     expect(r.status).toBe(400);
+  });
+});
+
+describe('MVP dashboard / watch API', () => {
+  it('dashboard 聚合持仓、分组、池、watch 状态与最近触发', async () => {
+    const r = await app.fetch(new Request('http://test/api/dashboard'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: {
+        holdings: { holdings: unknown[] };
+        groups: { groups: unknown[] };
+        pools: { pools: unknown[] };
+        watch: { state: string };
+        triggers: { triggers: unknown[] };
+      };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.holdings.holdings.length).toBeGreaterThan(0);
+    expect(body.data?.watch.state).toBe('never');
+  });
+
+  it('run-once 需要 token；成功后 watch status 可见', async () => {
+    const denied = await app.fetch(
+      new Request('http://test/api/watch/run-once', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ notify: false }),
+      }),
+    );
+    expect(denied.status).toBe(403);
+
+    const run = await app.fetch(
+      new Request('http://test/api/watch/run-once', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ notify: false }),
+      }),
+    );
+    expect(run.status).toBe(200);
+
+    const status = await app.fetch(new Request('http://test/api/watch/status'));
+    const body = (await status.json()) as { data?: { state: string; latest: { mode: string } } };
+    expect(body.data?.state).toBe('healthy');
+    expect(body.data?.latest.mode).toBe('once');
   });
 });
 
@@ -169,10 +363,10 @@ const fixtureMsg = (plan: object): string => `chat-fixture:${JSON.stringify(plan
 
 describe('/api/chat：对话助手', () => {
   let chatApp: Hono;
-  let chatCtx: Awaited<ReturnType<typeof buildMockContext>>;
+  let chatCtx: Awaited<ReturnType<typeof buildTestContext>>;
 
   beforeAll(async () => {
-    chatCtx = await buildMockContext();
+    chatCtx = await buildTestContext();
     chatApp = createWebApp(chatCtx);
   });
 
@@ -333,7 +527,7 @@ describe('GET /api/stocks/search', () => {
   it('未配置 ADSHARE_URL 时回退到本地 search_stocks', async () => {
     delete process.env.ADSHARE_URL;
     delete process.env.ADSHARE_API_KEY;
-    const testApp = createWebApp(await buildMockContext());
+    const testApp = createWebApp(await buildTestContext());
     const r = await testApp.fetch(new Request('http://test/api/stocks/search?q=%E8%8C%85'));
     expect(r.status).toBe(200);
     const body = (await r.json()) as { ok: boolean; data?: { stocks: unknown[]; source: string } };
@@ -362,7 +556,7 @@ describe('GET /api/stocks/search', () => {
     }) as typeof fetch;
     globalThis.fetch = mockFetch;
 
-    const testApp = createWebApp(await buildMockContext());
+    const testApp = createWebApp(await buildTestContext());
     const r = await testApp.fetch(
       new Request('http://test/api/stocks/search?q=%E8%B4%B5%E5%B7%9E%E8%8C%85%E5%8F%B0'),
     );

@@ -9,7 +9,7 @@ import { toolRegistry } from '@luoome/tools';
 import { createCliContext } from './context.js';
 import { loadProjectEnv } from './env.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.8.0';
 
 // ---------- argv 解析 ----------
 
@@ -19,6 +19,7 @@ const VALUE_FLAGS = new Set([
   'since',
   'until',
   'port',
+  'host',
   'limit',
   'pnl',
   'holding-hours',
@@ -480,7 +481,7 @@ const cmdWatch = async (
   const seed = !once; // 单轮默认不 seed（避免 seed 副作用污染测试）；长驻启动时 seed
 
   // 延迟 import：workflow 包包含 LLM / context 等较重依赖
-  const { intradayWatchWorkflow } = await import('@luoome/workflows');
+  const { runIntradayWatchObserved } = await import('@luoome/workflows');
   const { clampInterval, formatTriggersForLog, isTradingHours, nextRunDelayMs } = await import(
     './watch.js'
   );
@@ -502,13 +503,14 @@ const cmdWatch = async (
 
   // 单轮：跑一次即退出
   if (once) {
-    const r = await intradayWatchWorkflow.run(
+    const r = await runIntradayWatchObserved(
       {
         ...(poolIds !== undefined ? { poolIds } : {}),
         notify,
         seedTacticSources: seed,
       },
       ctx,
+      'once',
     );
     if (!r.ok) {
       console.log(JSON.stringify(r, null, 2));
@@ -551,13 +553,14 @@ const cmdWatch = async (
     }
     firstIteration = false;
     if (!json) console.warn(`[${now.toISOString()}] 跑一轮…`);
-    const r = await intradayWatchWorkflow.run(
+    const r = await runIntradayWatchObserved(
       {
         ...(poolIds !== undefined ? { poolIds } : {}),
         notify,
         seedTacticSources: seed,
       },
       ctx,
+      'daemon',
     );
     if (!r.ok) {
       console.error(`本轮失败: ${JSON.stringify(r, null, 2)}`);
@@ -629,7 +632,41 @@ const cmdWebServe = (flags: ReadonlyMap<string, string | boolean>): Promise<numb
   const portRaw = flagString(flags, 'port') ?? '5173';
   const port = parsePositiveInt(portRaw, 'port');
   if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
-  return runLazyEntry('@luoome/web', 'startWeb', [{ port }]);
+  const host = flagString(flags, 'host') ?? '127.0.0.1';
+  return runLazyEntry('@luoome/web', 'startWeb', [{ port, host }]);
+};
+
+/** 一键 MVP：同一进程启动 Web，并在后台职责上进入 watch 长驻循环。 */
+const cmdStart = async (
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  const port = parsePositiveInt(flagString(flags, 'port') ?? '5173', 'port');
+  if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
+  const host = flagString(flags, 'host') ?? '127.0.0.1';
+  const mod = (await import('@luoome/web')) as {
+    startWeb: (options: { port: number; host: string }) => Promise<Bun.Server<undefined>>;
+  };
+  const server = await mod.startWeb({ port, host });
+  if (!json) console.log(`MVP 已就绪：http://${host}:${server.port}`);
+
+  if (flags.has('no-watch')) {
+    await new Promise<void>((resolve) => {
+      const stop = (): void => {
+        process.off('SIGINT', stop);
+        resolve();
+      };
+      process.on('SIGINT', stop);
+    });
+    server.stop(true);
+    return 0;
+  }
+
+  try {
+    return await cmdWatch([], flags, json);
+  } finally {
+    server.stop(true);
+  }
 };
 
 // ---------- help / 分发 ----------
@@ -657,7 +694,10 @@ Advice:
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
-  web serve [--port 5173]      启动 Web 仪表盘（Hono）
+  start [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch]
+                               一键启动完整 MVP（Web + 盘中盯盘）
+  web serve [--port 5173] [--host 127.0.0.1]
+                               仅启动 Web 仪表盘
   workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups）
   watch [--interval 60] [--pool <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
@@ -721,6 +761,8 @@ const run = async (argv: readonly string[]): Promise<number> => {
   if (cmd === 'watch') {
     return cmdWatch(rest, flags, json);
   }
+
+  if (cmd === 'start') return cmdStart(flags, json);
 
   if (cmd === 'workflow') {
     if (sub === 'run') {

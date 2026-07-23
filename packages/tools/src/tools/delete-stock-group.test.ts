@@ -1,7 +1,7 @@
 import type { ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { deleteStockGroupTool } from './delete-stock-group.js';
 
 const T0 = new Date('2026-07-22T00:00:00.000Z');
@@ -19,7 +19,7 @@ const seedGroup = (ctx: ToolContext, id = 'grp-1') =>
 
 describe('delete_stock_group', () => {
   it('无 pool 引用 → 删除成功', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx);
     const r = await deleteStockGroupTool.execute({ id: 'grp-1' }, ctx);
     expect(r.ok).toBe(true);
@@ -29,7 +29,7 @@ describe('delete_stock_group', () => {
   });
 
   it('有 pool 引用 → invariant_violation（提示先解绑）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx);
     await ctx.repos.stockPool.save({
       id: 'pool-1',
@@ -53,7 +53,7 @@ describe('delete_stock_group', () => {
   });
 
   it('id 不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await deleteStockGroupTool.execute({ id: 'missing' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;

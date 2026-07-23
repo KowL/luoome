@@ -48,7 +48,7 @@ type AnalyzedAdvice = z.output<typeof AdviceSchema>;
  */
 export const dailyAdviceWorkflow = defineWorkflow<DailyAdviceInput, DailyAdviceOutput>({
   name: 'daily-advice',
-  description: '为账户全部活跃持仓生成当日建议（mock），按信心度降序输出 advices + summary',
+  description: '为账户全部活跃持仓生成当日建议，按信心度降序输出 advices + summary',
   input: DailyAdviceInput,
   steps: [
     // 1) 拉活跃持仓（含 PnL 汇总）；accountId 缺省走 ctx.user.defaultAccountId。

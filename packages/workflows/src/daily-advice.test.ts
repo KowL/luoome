@@ -1,12 +1,13 @@
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
-import { buildMockContext, listHoldingsTool } from '@luoome/tools';
+import { listHoldingsTool } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { dailyAdviceWorkflow, HIGH_CONFIDENCE_THRESHOLD } from './daily-advice.js';
 
 describe('daily-advice workflow', () => {
   it('正常路径：每个活跃持仓一条建议 + 3 条 disclaimers + summary 自洽 + 信心度降序', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     // 用 list_holdings 拿期望持仓数（避免直接依赖 adapters fixtures）。
     const holdingsResult = await listHoldingsTool.execute({}, ctx);
     expect(holdingsResult.ok).toBe(true);
@@ -43,7 +44,7 @@ describe('daily-advice workflow', () => {
   });
 
   it('显式 accountId（mock 默认账户为 uuid）路径与缺省一致', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const implicit = await dailyAdviceWorkflow.run({}, ctx);
     const explicit = await dailyAdviceWorkflow.run({ accountId: ctx.user.defaultAccountId }, ctx);
     expect(implicit.ok).toBe(true);
@@ -56,21 +57,21 @@ describe('daily-advice workflow', () => {
   });
 
   it('错误路径：accountId 非 uuid → invalid_input（run 不 throw）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await dailyAdviceWorkflow.run({ accountId: 'not-a-uuid' }, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');
   });
 
   it('错误路径：accountId 类型错误 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await dailyAdviceWorkflow.run({ accountId: 123 }, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');
   });
 
   it('错误路径：账户不存在 → not_found 短路', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await dailyAdviceWorkflow.run(
       { accountId: '00000000-0000-4000-8000-000000000000' },
       ctx,

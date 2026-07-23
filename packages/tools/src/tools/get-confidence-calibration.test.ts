@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { getConfidenceCalibrationTool } from './get-confidence-calibration.js';
 import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 describe('get_confidence_calibration', () => {
   it('正常路径：空 advice 库 → 全 0 bucket，total=0', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     const result = await getConfidenceCalibrationTool.execute({}, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -22,7 +22,7 @@ describe('get_confidence_calibration', () => {
   });
 
   it('正常路径：含 outcome 后按桶聚合（hitRate + avgPnl 不跨桶算错）', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     // 直接灌入不同 confidence 的 advice + outcome，验证桶归位与命中逻辑。
     const now = new Date('2026-07-15T08:00:00Z');
     const seedAdvices = [
@@ -154,7 +154,7 @@ describe('get_confidence_calibration', () => {
   });
 
   it('正常路径：未回填的 advice 计入 total，不污染 hitRate', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     const now = new Date('2026-07-15T08:00:00Z');
     // 灌 3 条 advice，1 条 outcome
     for (const id of ['a1', 'a2', 'a3']) {
@@ -200,7 +200,7 @@ describe('get_confidence_calibration', () => {
   });
 
   it('按 since 过滤：窗口外的 advice 不计入', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     const t0 = new Date('2026-06-01T08:00:00Z');
     const t1 = new Date('2026-07-01T08:00:00Z');
     // 在 t0 灌一条建议，t1 灌一条

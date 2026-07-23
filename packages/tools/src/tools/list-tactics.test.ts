@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { listTacticsTool } from './list-tactics.js';
 
 describe('tool/list_tactics', () => {
   it('返回 5 个内置战法（默认 includeBuiltins=true）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await listTacticsTool.execute({ filter: undefined, includeBuiltins: true }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -14,7 +14,7 @@ describe('tool/list_tactics', () => {
   });
 
   it('tag 过滤', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await listTacticsTool.execute(
       { filter: { tag: 'momentum' }, includeBuiltins: true },
       ctx,

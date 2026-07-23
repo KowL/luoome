@@ -4,18 +4,17 @@ import type {
   AdviceReasoning,
   LLMGenerateRequest,
 } from '@luoome/core';
-
-import { hashString, mulberry32, pickDeterministic } from '../internal/deterministic.js';
-import type { LLMAdapter, LLMGenerateResult } from './types.js';
+import type { LLMAdapter, LLMGenerateResult } from '../llm/types.js';
+import { hashString, mulberry32, pickDeterministic } from './deterministic.js';
 
 /** system prompt 标识（ARCHITECTURE §6.3 的两种 advice 场景）。 */
-export const MOCK_LLM_SYSTEM_ANALYZE_STOCK = 'analyze_stock';
-export const MOCK_LLM_SYSTEM_ANALYZE_POSITION = 'analyze_position';
-export const MOCK_LLM_SYSTEM_MARKET_OUTLOOK = 'market_outlook';
-export const MOCK_LLM_SYSTEM_SCORE_SIGNALS = 'score_signals';
-export const MOCK_LLM_SYSTEM_RESOLVE_LLM_GROUP = 'resolve_llm_group';
-export const MOCK_LLM_SYSTEM_CHAT_PLAN = 'chat_plan';
-export const MOCK_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
+export const TEST_LLM_SYSTEM_ANALYZE_STOCK = 'analyze_stock';
+export const TEST_LLM_SYSTEM_ANALYZE_POSITION = 'analyze_position';
+export const TEST_LLM_SYSTEM_MARKET_OUTLOOK = 'market_outlook';
+export const TEST_LLM_SYSTEM_SCORE_SIGNALS = 'score_signals';
+export const TEST_LLM_SYSTEM_RESOLVE_LLM_GROUP = 'resolve_llm_group';
+export const TEST_LLM_SYSTEM_CHAT_PLAN = 'chat_plan';
+export const TEST_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
 
 /**
  * web chat 测试注入前缀（docs/web-chat-design.md §6）：
@@ -25,10 +24,10 @@ export const MOCK_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
  * 另：plan.reply 中的 `${historyLength}` 会被替换为 data.history 实际长度
  * （服务端截断行为的可观测探针）。
  */
-export const MOCK_CHAT_FIXTURE_PREFIX = 'chat-fixture:';
+export const TEST_CHAT_FIXTURE_PREFIX = 'chat-fixture:';
 
-/** MockLLMAdapter 输出的结构化分析结果（analyze_stock / analyze_position 共用形状）。 */
-export interface MockAnalysisOutput {
+/** FakeLLMAdapter 输出的结构化分析结果（analyze_stock / analyze_position 共用形状）。 */
+export interface FakeAnalysisOutput {
   readonly decision: AdviceDecision;
   readonly confidence: number;
   readonly horizon: AdviceHorizon;
@@ -36,7 +35,7 @@ export interface MockAnalysisOutput {
   readonly risks: readonly string[];
 }
 
-type MockMode =
+type TestMode =
   | 'analyze_stock'
   | 'analyze_position'
   | 'market_outlook'
@@ -60,7 +59,7 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
 
 /**
- * mock 无法在类型层构造任意 T：正确性由 schema safeParse 在运行时保证
+ * 测试假件无法在类型层构造任意 T：正确性由 schema safeParse 在运行时保证
  * （ARCHITECTURE §6.3 schema-constrained decoding），这里经 unknown 断言。
  */
 const asGenerateResult = <T>(data: unknown, raw: string): LLMGenerateResult<T> => {
@@ -150,34 +149,34 @@ const COUNTER_POOL = [
 const RISK_POOL = ['大盘系统性下行风险', '行业政策变化风险', '个股流动性风险'] as const;
 
 /**
- * MockLLMAdapter（MVP-TASK §2.5 mock-llm）。
+ * FakeLLMAdapter（MVP-TASK §2.5 fake-llm）。
  * 不调任何外部 API；generate 按 data 中的 stockId + 持仓上下文生成
  * deterministic 分析结果（同一输入同一输出），并按传入 zod schema parse，
  * parse 失败时返回稳定 fallback。
  */
-export class MockLLMAdapter implements LLMAdapter {
-  readonly name = 'mock-llm';
+export class FakeLLMAdapter implements LLMAdapter {
+  readonly name = 'fake-llm';
 
-  private detectMode(system: string): MockMode {
+  private detectMode(system: string): TestMode {
     // chat 最先判定：chat 的 system prompt 会提及其它 tool 名（如引导文案中的
     // analyze_stock），若按内容包含匹配会被误判。
-    if (system.includes(MOCK_LLM_SYSTEM_CHAT_PLAN)) return 'chat_plan';
-    if (system.includes(MOCK_LLM_SYSTEM_CHAT_REPLY)) return 'chat_reply';
-    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
-    if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
-    if (system.includes(MOCK_LLM_SYSTEM_MARKET_OUTLOOK)) return 'market_outlook';
-    if (system.includes(MOCK_LLM_SYSTEM_SCORE_SIGNALS)) return 'score_signals';
-    if (system.includes(MOCK_LLM_SYSTEM_RESOLVE_LLM_GROUP)) return 'resolve_llm_group';
+    if (system.includes(TEST_LLM_SYSTEM_CHAT_PLAN)) return 'chat_plan';
+    if (system.includes(TEST_LLM_SYSTEM_CHAT_REPLY)) return 'chat_reply';
+    if (system.includes(TEST_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
+    if (system.includes(TEST_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
+    if (system.includes(TEST_LLM_SYSTEM_MARKET_OUTLOOK)) return 'market_outlook';
+    if (system.includes(TEST_LLM_SYSTEM_SCORE_SIGNALS)) return 'score_signals';
+    if (system.includes(TEST_LLM_SYSTEM_RESOLVE_LLM_GROUP)) return 'resolve_llm_group';
     return 'generic';
   }
 
   /** 核心生成逻辑：decision/confidence/horizon 由 stockId hash + 持仓上下文决定。 */
   generate<T = unknown>(request: LLMGenerateRequest): Promise<LLMGenerateResult<T>> {
     const mode = this.detectMode(request.system);
-    // score_signals 的 schema 是 array，需要直接生成 array（绕过 MockAnalysisOutput 形状）。
+    // score_signals 的 schema 是 array，需要直接生成 array（绕过 FakeAnalysisOutput 形状）。
     if (mode === 'score_signals') {
       const ranked = this.buildScoreSignalsArray(request.data);
-      const raw = JSON.stringify({ mock: true, mode, count: ranked.length });
+      const raw = JSON.stringify({ fixture: true, mode, count: ranked.length });
       const schema = request.schema;
       if (isSchemaLike(schema)) {
         const parsed = schema.safeParse(ranked);
@@ -189,7 +188,7 @@ export class MockLLMAdapter implements LLMAdapter {
     // resolve_llm_group：schema 是 { members: [{stockId, rationale}] }，从 candidates 确定性挑选。
     if (mode === 'resolve_llm_group') {
       const out = this.buildResolveLlmGroup(request.data);
-      const raw = JSON.stringify({ mock: true, mode, count: out.members.length });
+      const raw = JSON.stringify({ fixture: true, mode, count: out.members.length });
       const schema = request.schema;
       if (isSchemaLike(schema)) {
         const parsed = schema.safeParse(out);
@@ -200,7 +199,7 @@ export class MockLLMAdapter implements LLMAdapter {
     // chat（web 对话助手，docs/web-chat-design.md §2）：fixture 注入或稳定兜底。
     if (mode === 'chat_plan' || mode === 'chat_reply') {
       const out = this.buildChatOutput(mode, request.data);
-      const raw = JSON.stringify({ mock: true, mode });
+      const raw = JSON.stringify({ fixture: true, mode });
       const schema = request.schema;
       if (isSchemaLike(schema)) {
         const parsed = schema.safeParse(out);
@@ -213,10 +212,10 @@ export class MockLLMAdapter implements LLMAdapter {
 
   /**
    * chat 模式输出（web-chat-design §6）：
-   * - data.message 以 MOCK_CHAT_FIXTURE_PREFIX 开头 → 其余部分 JSON parse 为 plan
+   * - data.message 以 TEST_CHAT_FIXTURE_PREFIX 开头 → 其余部分 JSON parse 为 plan
    *   （pass2Reply 字段留给 chat_reply 使用；plan.reply 中 ${historyLength} 替换为实际轮数）；
    * - 无 fixture → 稳定兜底 reply（与生产「LLM 解析失败」走同一兜底文案）。
-   * fixture parse 失败按无 fixture 处理，保证 mock 永不抛。
+   * fixture parse 失败按无 fixture 处理，保证 测试假件不抛。
    */
   private buildChatOutput(
     mode: 'chat_plan' | 'chat_reply',
@@ -230,20 +229,20 @@ export class MockLLMAdapter implements LLMAdapter {
     const fixture = this.parseChatFixture(message);
     if (mode === 'chat_reply') {
       const pass2 = fixture === null ? null : readString(fixture, 'pass2Reply');
-      return { reply: pass2 ?? 'mock 兜底：暂时无法整理查询结果，请换个说法重试。' };
+      return { reply: pass2 ?? '测试兜底：暂时无法整理查询结果，请换个说法重试。' };
     }
     if (fixture !== null) {
       const reply = readString(fixture, 'reply');
       return {
         ...fixture,
         ...(reply !== null
-          ? // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符，mock fixture 的 history 长度探针
+          ? // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符，测试 fixture 的 history 长度探针
             { reply: reply.replaceAll('${historyLength}', String(historyLength)) }
           : {}),
       };
     }
     return {
-      reply: 'mock 兜底：暂时无法处理，请换个说法，或使用左侧导航的页面功能。',
+      reply: '测试兜底：暂时无法处理，请换个说法，或使用左侧导航的页面功能。',
       actions: [],
       drafts: [],
     };
@@ -251,17 +250,17 @@ export class MockLLMAdapter implements LLMAdapter {
 
   /** 解析 chat fixture；message 不带前缀或 JSON 非法时返回 null。 */
   private parseChatFixture(message: string): Record<string, unknown> | null {
-    if (!message.startsWith(MOCK_CHAT_FIXTURE_PREFIX)) return null;
+    if (!message.startsWith(TEST_CHAT_FIXTURE_PREFIX)) return null;
     try {
-      return asRecord(JSON.parse(message.slice(MOCK_CHAT_FIXTURE_PREFIX.length)));
+      return asRecord(JSON.parse(message.slice(TEST_CHAT_FIXTURE_PREFIX.length)));
     } catch {
       return null;
     }
   }
 
   /**
-   * LLM 分组解析 mock 输出（分组化起）：从 data.candidates 确定性取前
-   * min(maxMembers, candidates.length) 条，rationale 固定为 "mock: ..."。
+   * LLM 分组解析 测试输出（分组化起）：从 data.candidates 确定性取前
+   * min(maxMembers, candidates.length) 条，rationale 固定为 "fixture: ..."。
    */
   private buildResolveLlmGroup(data: unknown): {
     members: Array<{ stockId: string; rationale: string }>;
@@ -278,25 +277,25 @@ export class MockLLMAdapter implements LLMAdapter {
       .slice(0, Math.max(1, Math.min(maxMembers, 100)))
       .map((stockId) => ({
         stockId,
-        rationale: `mock: 按「${prompt.slice(0, 30)}」选中`,
+        rationale: `fixture: 按「${prompt.slice(0, 30)}」选中`,
       }));
     return { members };
   }
 
   private buildStandardAnalysis<T>(
-    mode: MockMode,
+    mode: TestMode,
     request: LLMGenerateRequest,
     schema: unknown,
   ): LLMGenerateResult<T> {
     const stockId = extractStockId(request.data);
     const candidate = this.buildAnalysis(mode, stockId, request.data);
     const raw = JSON.stringify({
-      mock: true,
+      fixture: true,
       adapter: this.name,
       mode,
       stockId,
       seed: hashString(`${mode}|${stockId}`),
-      note: 'deterministic mock reasoning',
+      note: 'deterministic test reasoning',
     });
     if (isSchemaLike(schema)) {
       const parsed = schema.safeParse(candidate);
@@ -308,7 +307,7 @@ export class MockLLMAdapter implements LLMAdapter {
     return asGenerateResult<T>(candidate, raw);
   }
 
-  private buildAnalysis(mode: MockMode, stockId: string, data: unknown): MockAnalysisOutput {
+  private buildAnalysis(mode: TestMode, stockId: string, data: unknown): FakeAnalysisOutput {
     if (mode === 'market_outlook') return this.buildMarketOutlook(data);
 
     const seed = hashString(`${mode}|${stockId}`);
@@ -318,7 +317,7 @@ export class MockLLMAdapter implements LLMAdapter {
     let confidence = 40 + (seed % 55); // 40-94
     const horizon = pickDeterministic(HORIZONS, hashString(`horizon|${mode}|${stockId}`));
 
-    let premise = `mock 分析（${mode}）：${stockId} 综合信号指向「${decision}」。`;
+    let premise = `测试分析（${mode}）：${stockId} 综合信号指向「${decision}」。`;
 
     // 持仓上下文调整：浮盈 ≥15% 止盈优先；浮亏 ≥10% 转持有观望。
     const position = extractPosition(data);
@@ -329,10 +328,10 @@ export class MockLLMAdapter implements LLMAdapter {
       if (pnlRate >= 0.15) {
         decision = 'sell';
         confidence = Math.max(confidence, 70);
-        premise = `mock 分析（${mode}）：${stockId} 持仓浮盈 ${pnlPct}%，建议分批止盈。`;
+        premise = `测试分析（${mode}）：${stockId} 持仓浮盈 ${pnlPct}%，建议分批止盈。`;
       } else if (pnlRate <= -0.1) {
         decision = 'hold';
-        premise = `mock 分析（${mode}）：${stockId} 持仓浮亏 ${pnlPct}%，建议持有等待修复。`;
+        premise = `测试分析（${mode}）：${stockId} 持仓浮亏 ${pnlPct}%，建议持有等待修复。`;
       }
     }
 
@@ -354,12 +353,12 @@ export class MockLLMAdapter implements LLMAdapter {
   }
 
   /**
-   * 市场 / 板块观点 mock 输出：
+   * 市场 / 板块观点 测试输出：
    * - avgChangePct ≥ +1% → bullish（buy / avoid 都不会是真实选择）
    * - avgChangePct ≤ -1% → bearish
    * - 其它 → neutral (hold)
    */
-  private buildMarketOutlook(data: unknown): MockAnalysisOutput {
+  private buildMarketOutlook(data: unknown): FakeAnalysisOutput {
     const record = asRecord(data);
     const avgChangePct = readNumber(record, 'avgChangePct') ?? 0;
     const evaluatedStocks = readNumber(record, 'evaluatedStocks') ?? 0;
@@ -371,7 +370,7 @@ export class MockLLMAdapter implements LLMAdapter {
       confidence,
       horizon: 'short',
       reasoning: {
-        premise: `mock 市场观点：评估 ${evaluatedStocks} 只股票，平均涨跌 ${(avgChangePct * 100).toFixed(2)}%`,
+        premise: `测试市场观点：评估 ${evaluatedStocks} 只股票，平均涨跌 ${(avgChangePct * 100).toFixed(2)}%`,
         evidence: [
           `市场宽度：${avgChangePct >= 0 ? '上涨家数居多' : '下跌家数居多'}`,
           `平均涨跌幅 ${(avgChangePct * 100).toFixed(2)}%`,
@@ -383,8 +382,8 @@ export class MockLLMAdapter implements LLMAdapter {
   }
 
   /**
-   * 战法信号精排 mock 输出（v0.3）：对每个 signal 的原 score 做 ±20 微调，
-   * rationale 固定为 "mock: ..."。schema 是 Array<{tacticId, stockId, ts, llmScore, rationale}>。
+   * 战法信号精排 测试输出（v0.3）：对每个 signal 的原 score 做 ±20 微调，
+   * rationale 固定为 "fixture: ..."。schema 是 Array<{tacticId, stockId, ts, llmScore, rationale}>。
    */
   private buildScoreSignalsArray(
     data: unknown,
@@ -404,23 +403,23 @@ export class MockLLMAdapter implements LLMAdapter {
         stockId: readString(r, 'stockId') ?? '',
         ts: readString(r, 'ts') ?? '',
         llmScore,
-        rationale: `mock: 基于原 score=${origScore} 微调 ${offset >= 0 ? '+' : ''}${offset}`,
+        rationale: `fixture: 基于原 score=${origScore} 微调 ${offset >= 0 ? '+' : ''}${offset}`,
       };
     });
   }
 
   /** 稳定 fallback：与输入无关（除 stockId），保证 schema 失败时输出仍可预测。 */
-  private fallbackAnalysis(stockId: string): MockAnalysisOutput {
+  private fallbackAnalysis(stockId: string): FakeAnalysisOutput {
     return {
       decision: 'watch',
       confidence: 50,
       horizon: 'short',
       reasoning: {
-        premise: `mock 兜底：暂时无法形成对 ${stockId} 的有效判断，建议观望。`,
-        evidence: ['mock 兜底：结构化输出校验未通过，降级为观望'],
-        counterEvidence: ['mock 兜底：观望本身也可能错失波动机会'],
+        premise: `测试兜底：暂时无法形成对 ${stockId} 的有效判断，建议观望。`,
+        evidence: ['测试兜底：结构化输出校验未通过，降级为观望'],
+        counterEvidence: ['测试兜底：观望本身也可能错失波动机会'],
       },
-      risks: ['mock 兜底：本结果为降级输出，参考价值有限'],
+      risks: ['测试兜底：本结果为降级输出，参考价值有限'],
     };
   }
 }

@@ -1,9 +1,8 @@
 import type { Logger, StockSearchCandidate } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
-
+import { FakeMarketAdapter } from '../testing/fake-market.js';
 import { EastmoneyAdapterError, parseEastmoneySuggest } from './eastmoney.js';
 import { MarketDataManager } from './manager.js';
-import { MockMarketAdapter } from './mock.js';
 import { parseTencentSearchHint } from './tencent.js';
 
 const silentLogger: Logger = {
@@ -91,9 +90,9 @@ describe('parseTencentSearchHint', () => {
   });
 });
 
-describe('MockMarketAdapter.searchStocks', () => {
+describe('FakeMarketAdapter.searchStocks', () => {
   it('按 id / code / name 模糊匹配（deterministic）', async () => {
-    const adapter = new MockMarketAdapter();
+    const adapter = new FakeMarketAdapter();
     const byCode = await adapter.searchStocks('0025');
     expect(byCode[0]?.id).toBe('002594.SZ');
     const byName = await adapter.searchStocks('茅台');
@@ -132,7 +131,7 @@ describe('MarketDataManager.searchStocks', () => {
     const manager = new MarketDataManager({
       primary: fakeSearchAdapter('p', () => Promise.resolve([fakeCandidate]), pCalls),
       fallback: fakeSearchAdapter('f', () => Promise.resolve([]), fCalls),
-      finalFallback: new MockMarketAdapter(),
+      finalFallback: new FakeMarketAdapter(),
       logger: silentLogger,
     });
     const result = await manager.searchStocks('工商');
@@ -146,7 +145,7 @@ describe('MarketDataManager.searchStocks', () => {
     const manager = new MarketDataManager({
       primary: fakeSearchAdapter('p', () => Promise.resolve([]), calls),
       fallback: fakeSearchAdapter('f', () => Promise.resolve([fakeCandidate]), { n: 0 }),
-      finalFallback: new MockMarketAdapter(),
+      finalFallback: new FakeMarketAdapter(),
       logger: silentLogger,
     });
     expect(await manager.searchStocks('不存在的股票')).toEqual([]);
@@ -157,7 +156,7 @@ describe('MarketDataManager.searchStocks', () => {
     const manager = new MarketDataManager({
       primary: fakeSearchAdapter('p', () => Promise.reject(new Error('down')), { n: 0 }),
       fallback: fakeSearchAdapter('f', () => Promise.reject(new Error('down')), { n: 0 }),
-      finalFallback: new MockMarketAdapter(),
+      finalFallback: new FakeMarketAdapter(),
       logger: silentLogger,
     });
     const result = await manager.searchStocks('茅台');

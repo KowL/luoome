@@ -1,7 +1,7 @@
 import type { ToolContext } from '@luoome/core';
 import { money } from '@luoome/core';
-import { buildMockContext } from '@luoome/tools';
-import { withFixedQuoteAdapter } from '@luoome/tools/internal/mock-adapter';
+import { buildTestContext } from '@luoome/tools/testing';
+import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import { describe, expect, it } from 'vitest';
 
 import { intradayWatchWorkflow } from './intraday-watch.js';
@@ -27,12 +27,12 @@ const T_DAY_BEFORE = new Date('2026-07-19T00:00:00.000Z');
  * 构造带固定行情 + price-change-only 池的 ctx。
  *
  * 注：withFixedQuoteAdapter 返回的是新 ctx（不修改原 ctx）；这里把 fixed ctx
- * 返回给 caller，且 pool 保存走 fixed.ctx（防 buildMockContext 的 seedMockData
+ * 返回给 caller，且 pool 保存走 fixed.ctx（防 buildTestContext 的 seedMockData
  * 把 pool 覆盖）。fixed.adapters.market 才是 FixedQuoteAdapter，workflow 调
  * batch_quote tool 会走这条路径。
  */
 const setupCtx = async (quotes: Record<string, number>) => {
-  const ctx = await buildMockContext();
+  const ctx = await buildTestContext();
   const fixed = withFixedQuoteAdapter(ctx, quotes);
   // 清掉默认池（避免干扰），新建专用 price-change 池
   await fixed.repos.stockPool.remove('holdings-watch');

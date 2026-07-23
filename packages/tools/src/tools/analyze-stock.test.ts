@@ -1,12 +1,12 @@
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { analyzeStockTool } from './analyze-stock.js';
 
 describe('analyze_stock', () => {
   it('正常路径：产出结构化 Advice 并持久化', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     const result = await analyzeStockTool.execute({ stockId: '002594.SZ' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -39,7 +39,7 @@ describe('analyze_stock', () => {
   });
 
   it('正常路径：纯代码形式也能解析标的', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     const result = await analyzeStockTool.execute({ stockId: '002594' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -49,7 +49,7 @@ describe('analyze_stock', () => {
   it('intraday horizon 截断：validUntil 仍严格晚于 validFrom', async () => {
     // mock clock 固定在 A 股收盘时刻（2026-07-17 15:00 UTC+8）；
     // 无论 LLM 给什么 horizon，都不允许 validUntil <= validFrom。
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     for (const stockId of ['600519.SH', '300750.SZ', '00700.HK', 'AAPL.US']) {
       const result = await analyzeStockTool.execute({ stockId }, ctx);
       expect(result.ok).toBe(true);
@@ -61,7 +61,7 @@ describe('analyze_stock', () => {
   });
 
   it('错误路径：标的不存在 → not_found', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     const result = await analyzeStockTool.execute({ stockId: '999999' }, ctx);
     expect(result).toEqual({
       ok: false,
@@ -70,7 +70,7 @@ describe('analyze_stock', () => {
   });
 
   it('错误路径：缺 stockId / 类型错误 → invalid_input', async () => {
-    const ctx = await buildMockContext({ advices: [] });
+    const ctx = await buildTestContext({ advices: [] });
     const missing = await analyzeStockTool.execute({}, ctx);
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.error.kind).toBe('invalid_input');

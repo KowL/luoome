@@ -1,6 +1,6 @@
 // @luoome/web —— 最小 Web 端（plan.md 跨包契约 / ARCHITECTURE §10）。
 // Hono HTTP API + 同源静态仪表盘：
-//   GET  /api/stocks/search    → adshare 优先搜索，本地 mock 兜底
+//   GET  /api/stocks/search    → adshare 优先搜索，真实行情源兜底
 //   GET  /api/holdings          → list_holdings
 //   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
@@ -9,28 +9,19 @@
 //                                   external / trade 一律 403 permission_denied。
 // 所有 /api 响应统一 ToolResult 形状；同源部署，无需 CORS。
 
-import { mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  createMarketAdapterFromEnv,
-  DEFAULT_MOCK_NOW,
-  defaultMockClock,
-  LLMManager,
-  MOCK_ACCOUNT,
-  MOCK_ACCOUNTS,
-  MOCK_HOLDINGS,
-  MOCK_STOCKS,
-  MOCK_TRADES,
-  mockAdviceFor,
-} from '@luoome/adapters';
+import { createMarketAdapterFromEnv, LLMManager } from '@luoome/adapters';
 import { AdshareClient } from '@luoome/adshare-sdk';
 import type { SideEffect, Stock, ToolContext, ToolError, ToolResult } from '@luoome/core';
-import { stockCode as brandStockCode } from '@luoome/core';
-import { createDrizzleRepos, seedMockData } from '@luoome/db';
+import { stockCode as brandStockCode, parseLlmProviderConfigFromEnv } from '@luoome/core';
+import { createDrizzleRepos } from '@luoome/db';
 import { buildContext, toolRegistry } from '@luoome/tools';
+import { runIntradayWatchObserved } from '@luoome/workflows';
 import { Hono } from 'hono';
 
 import { handleChat } from './chat.js';
@@ -48,7 +39,7 @@ const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice',
  * external 白名单：fetch_quote 仅写本地 PriceSnapshot（无外部副作用外的状态变更），
  * 持仓表单「取现价」需要；sync_quotes / send_notification 等仍 403。
  */
-const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set(['fetch_quote']);
+const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set(['fetch_quote', 'refresh_stock_group']);
 
 /**
  * external（白名单外）/trade tool 不通过 web 暴露：已在 registry 实现的被
@@ -100,49 +91,71 @@ export const resolveDbPath = (): string => {
   return join(home, 'luoome.db');
 };
 
-/**
- * 种子建议时钟：取 max(mock 锚点 DEFAULT_MOCK_NOW, 真实时间)。
- * 业务 ctx.clock 固定为 DEFAULT_MOCK_NOW（mock 行情 ts 确定性），但 advice 过期
- * 过滤在 repo 层按 Date.now() 真实时间进行；若种子按 mock 时钟生成，真实时间
- * 越过 validUntil 后 /api/advice 默认查询会看不到种子建议。取 max 保证两口径
- * 下种子建议稳定可见；id 由 stockId 哈希决定，upsert 幂等。
- */
-const seedAdviceClock = (): Date => new Date(Math.max(DEFAULT_MOCK_NOW.getTime(), Date.now()));
+interface ResolvedWebToken {
+  readonly token: string;
+  readonly filePath: string | null;
+}
+
+/** 环境变量优先；否则在数据库同目录生成并复用 0600 token 文件。 */
+export const resolveWebToken = (dbPath: string): ResolvedWebToken => {
+  const fromEnv = process.env.LUOOME_WEB_TOKEN?.trim();
+  if (fromEnv !== undefined && fromEnv.length > 0) {
+    return { token: fromEnv, filePath: null };
+  }
+  const filePath = join(dirname(dbPath), 'web-token');
+  if (existsSync(filePath)) {
+    const existing = readFileSync(filePath, 'utf8').trim();
+    if (existing.length >= 24) return { token: existing, filePath };
+  }
+  mkdirSync(dirname(filePath), { recursive: true });
+  const token = randomBytes(24).toString('hex');
+  writeFileSync(filePath, `${token}\n`, { encoding: 'utf8', mode: 0o600 });
+  chmodSync(filePath, 0o600);
+  return { token, filePath };
+};
 
 /**
  * 组装 web 端 ToolContext（与其他 surface 同一模式）：
- * LUOOME_HOME 下的 luoome.db + createDrizzleRepos + seedMockData(fixtures)
- * + 行情 factory / LLMManager（分别由 LUOOME_MARKET_PROVIDER / LUOOME_LLM_PROVIDER 路由，默认 mock）+ buildContext。
- *
- * v0.1 演示口径：每次启动幂等重灌 mock fixtures（repo save 为 upsert、
- * fixture id 固定；advice 种子与 buildMockContext 对齐，保证首屏有数据）。
- * 业务 clock 与 mock adapters 的锚点（DEFAULT_MOCK_NOW）对齐，保证 mock 行情 ts
- * 确定性；种子建议的有效期口径见 seedAdviceClock 注释。
+ * LUOOME_HOME 下的 luoome.db + createDrizzleRepos + 真实行情/LLM + buildContext。
+ * 空数据库保持为空，不自动插入任何业务记录。
  */
-export const buildWebContext = async (dbPath: string): Promise<ToolContext> => {
+export const buildWebContext = async (
+  dbPath: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<ToolContext> => {
+  const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
-  await seedMockData(handle.repos, {
-    accounts: MOCK_ACCOUNTS,
-    stocks: MOCK_STOCKS,
-    holdings: MOCK_HOLDINGS,
-    trades: MOCK_TRADES,
-    advices: [
-      mockAdviceFor('002594.SZ', seedAdviceClock),
-      mockAdviceFor('600519.SH', seedAdviceClock),
-    ],
-  });
+  const accounts = await handle.repos.account.list();
+  const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   return buildContext({
     repos: handle.repos,
     adapters: {
-      // 行情源由 LUOOME_MARKET_PROVIDER 路由（默认 mock；real = Eastmoney→Tencent→Mock）
-      market: createMarketAdapterFromEnv(process.env, { logger: console }),
-      // LLM 由 LUOOME_LLM_PROVIDER 路由（默认 mock；real 缺 key 启动期报错）
-      llm: new LLMManager({ logger: console }),
+      market: createMarketAdapterFromEnv(env, { clock: now, logger: console }),
+      llm: new LLMManager({ logger: console, config: parseLlmProviderConfigFromEnv(env) }),
     },
-    clock: defaultMockClock,
-    user: { id: 'local-web-user', defaultAccountId: MOCK_ACCOUNT.id },
+    clock: now,
+    user: { id: 'local-web-user', defaultAccountId },
   });
+};
+
+export interface CreateWebAppOptions {
+  /** 服务端认可的 Bearer token；write / external 调用必须提供。 */
+  readonly webToken?: string;
+  /** 非 loopback 监听时，read/advice API 也必须鉴权。 */
+  readonly requireApiToken?: boolean;
+}
+
+const mutationPermission = (request: Request, webToken: string): ToolResult<never> | null => {
+  const origin = request.headers.get('origin');
+  if (origin !== null && origin !== new URL(request.url).origin) {
+    return permissionDenied('跨站 Origin 不允许执行本地 mutation');
+  }
+  const authorization = request.headers.get('authorization');
+  if (webToken.length === 0 || authorization !== `Bearer ${webToken}`) {
+    return permissionDenied('write/external 操作需要有效 LUOOME_WEB_TOKEN');
+  }
+  return null;
 };
 
 /** 构造 Hono app（注入 ctx，便于测试与复用）。 */
@@ -152,11 +165,21 @@ export const buildWebContext = async (dbPath: string): Promise<ToolContext> => {
  * /api/account/select 改写 ctxRef.current.user.defaultAccountId，其它路由通过
  * ctxRef.current 取最新值，不再每次请求 mutate 全量 ctx。
  */
-export const createWebApp = (initialCtx: ToolContext): Hono => {
+export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptions = {}): Hono => {
   // 多账户切换（v0.5 W3）通过 ctxRef.current mutate user.defaultAccountId；
   // 内部 callTool / invokeTool 全部走 ctxRef.current 读取最新值。
   const ctxRef: { current: ToolContext } = { current: initialCtx };
+  const webToken = options.webToken ?? process.env.LUOOME_WEB_TOKEN ?? '';
   const app = new Hono();
+
+  if (options.requireApiToken === true) {
+    app.use('/api/*', async (c, next) => {
+      if (webToken.length === 0 || c.req.header('authorization') !== `Bearer ${webToken}`) {
+        return jsonResult(permissionDenied('非 loopback Web 的所有 API 都需要有效 token'));
+      }
+      await next();
+    });
+  }
 
   // —— 同源静态仪表盘（原生 HTML/JS，无构建步骤）——
   const serveFile = (file: string, contentType: string) => (): Response =>
@@ -167,6 +190,8 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
   app.get('/style.css', serveFile('style.css', 'text/css; charset=utf-8'));
   app.get('/tactics', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/holdings', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/groups', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/watch', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/advice', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
@@ -257,6 +282,104 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
 
+  app.get('/api/trades', (c) => {
+    const input: Record<string, unknown> = {};
+    const stockId = c.req.query('stockId');
+    const since = c.req.query('since');
+    const until = c.req.query('until');
+    const side = c.req.query('side');
+    const limit = c.req.query('limit');
+    if (stockId !== undefined) input.stockId = stockId;
+    if (since !== undefined) input.since = since;
+    if (until !== undefined) input.until = until;
+    if (side !== undefined) input.side = side;
+    if (limit !== undefined) input.limit = Number(limit);
+    return callTool('list_trades', input);
+  });
+
+  app.get('/api/groups', () =>
+    callTool('list_stock_groups', { enabledOnly: false, includeMemberCount: true }),
+  );
+  app.get('/api/groups/:id', (c) => callTool('get_stock_group', { id: c.req.param('id') }));
+
+  app.get('/api/watch/pools', () => callTool('list_stock_pools', { enabledOnly: false }));
+  app.get('/api/watch/status', (c) => {
+    const interval = Number(c.req.query('interval') ?? 60);
+    return callTool('get_watch_status', {
+      expectedIntervalSeconds: Number.isFinite(interval) ? interval : 60,
+    });
+  });
+  app.get('/api/watch/triggers', (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['poolId', 'stockId', 'ruleKind', 'since'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined) input[key] = value;
+    }
+    const notified = c.req.query('notified');
+    if (notified !== undefined) input.notified = notified === 'true' || notified === '1';
+    const limit = c.req.query('limit');
+    if (limit !== undefined) input.limit = Number(limit);
+    return callTool('list_watch_triggers', input);
+  });
+
+  app.post('/api/watch/run-once', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      body = {};
+    }
+    const input =
+      typeof body === 'object' && body !== null
+        ? { ...(body as Record<string, unknown>), seedTacticSources: false }
+        : { notify: false, seedTacticSources: false };
+    return jsonResult(await runIntradayWatchObserved(input, ctxRef.current, 'once'));
+  });
+
+  app.get('/api/dashboard', async () => {
+    const [holdings, groups, pools, watch, triggers, advice] = await Promise.all([
+      invokeTool('list_holdings', {}),
+      invokeTool('list_stock_groups', { enabledOnly: false, includeMemberCount: true }),
+      invokeTool('list_stock_pools', { enabledOnly: false }),
+      invokeTool('get_watch_status', {}),
+      invokeTool('list_watch_triggers', { limit: 8 }),
+      invokeTool('get_advice', { limit: 8 }),
+    ]);
+    if (!holdings.ok) return jsonResult(holdings);
+    if (!groups.ok) return jsonResult(groups);
+    if (!pools.ok) return jsonResult(pools);
+    if (!watch.ok) return jsonResult(watch);
+    if (!triggers.ok) return jsonResult(triggers);
+    if (!advice.ok) return jsonResult(advice);
+    const groupRows = groups.data as {
+      groups: Array<{ group: { id: string; resolver: { kind: string } } }>;
+    };
+    const dynamicIds = groupRows.groups
+      .filter(({ group }) => group.resolver.kind === 'formula' || group.resolver.kind === 'llm')
+      .map(({ group }) => group.id);
+    const dynamicDetails = await Promise.all(
+      dynamicIds.map((id) => invokeTool('get_stock_group', { id })),
+    );
+    const staleGroupCount = dynamicDetails.filter(
+      (result) => result.ok && (result.data as { stale: boolean }).stale,
+    ).length;
+    return jsonResult({
+      ok: true,
+      data: {
+        asOf: ctxRef.current.clock(),
+        holdings: holdings.data,
+        groups: groups.data,
+        pools: pools.data,
+        watch: watch.data,
+        triggers: triggers.data,
+        advice: advice.data,
+        staleGroupCount,
+      },
+    });
+  });
+
   // 对话助手（web 内部端点，不进 toolRegistry；docs/web-chat-design.md）。
   // LLM 失败 / parse 失败一律走兜底 reply，不抛 500。
   app.post('/api/chat', async (c) => {
@@ -276,7 +399,7 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
     return jsonResult(await handleChat(body, ctxRef.current, invokeTool));
   });
 
-  // 股票搜索（adshare 优先，本地 mock 兜底）
+  // 股票搜索（adshare 优先，本地数据库兜底）
   app.get('/api/stocks/search', async (c) => {
     const q = c.req.query('q');
     const limitRaw = c.req.query('limit');
@@ -518,6 +641,8 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
   // 默认不暴露：避免 web 端被滥用为批量回填入口。
   if (process.env.LUOOME_EXPOSE_WRITE === 'true') {
     app.post('/api/review/:id/outcome', async (c) => {
+      const denied = mutationPermission(c.req.raw, webToken);
+      if (denied !== null) return jsonResult(denied);
       const id = c.req.param('id');
       let body: unknown;
       try {
@@ -553,6 +678,10 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
     if (!allowed) {
       return jsonResult(permissionDenied(`web 端不暴露 ${tool.sideEffect} 类 tool（${name}）`));
     }
+    if (tool.sideEffect === 'write' || tool.sideEffect === 'external') {
+      const denied = mutationPermission(c.req.raw, webToken);
+      if (denied !== null) return jsonResult(denied);
+    }
 
     let body: unknown;
     try {
@@ -579,15 +708,35 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
 
 export interface StartWebOptions {
   readonly port: number;
+  /** 缺省仅监听本机，避免把个人投资数据意外暴露到局域网。 */
+  readonly host?: string;
   /** 缺省 resolveDbPath()（$LUOOME_HOME/luoome.db）。 */
   readonly dbPath?: string;
+  /** 显式注入 token；缺省从 env / 本地 token 文件解析。 */
+  readonly webToken?: string;
 }
 
 /** 启动 web server，返回 Bun server 句柄（调用方可 close()）。 */
 export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<undefined>> => {
-  const ctx = await buildWebContext(options.dbPath ?? resolveDbPath());
-  const app = createWebApp(ctx);
-  const server = Bun.serve({ port: options.port, fetch: app.fetch });
-  ctx.logger.info(`luoome web 已启动: http://localhost:${server.port}`);
+  const dbPath = options.dbPath ?? resolveDbPath();
+  const ctx = await buildWebContext(dbPath);
+  const resolved =
+    options.webToken !== undefined
+      ? { token: options.webToken, filePath: null }
+      : resolveWebToken(dbPath);
+  const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
+  const loopback = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  if (!loopback && resolved.token.length === 0) {
+    throw new Error('非 loopback Web 必须配置非空 LUOOME_WEB_TOKEN');
+  }
+  const app = createWebApp(ctx, {
+    webToken: resolved.token,
+    requireApiToken: !loopback,
+  });
+  const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
+  ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
+  if (resolved.filePath !== null) {
+    ctx.logger.info(`Web 写操作 token: ${resolved.filePath}（复制文件内容到 Web「设置」页）`);
+  }
   return server;
 };

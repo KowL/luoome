@@ -8,6 +8,7 @@ import { analyzeStockTool } from './tools/analyze-stock.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
+import { createAccountTool } from './tools/create-account.js';
 import { createStockGroupTool } from './tools/create-stock-group.js';
 import { createStockPoolTool } from './tools/create-stock-pool.js';
 import { deleteStockGroupTool } from './tools/delete-stock-group.js';
@@ -20,13 +21,17 @@ import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration
 import { getHoldingTool } from './tools/get-holding.js';
 import { getStockGroupTool } from './tools/get-stock-group.js';
 import { getTacticTool } from './tools/get-tactic.js';
+import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
 import { listStockGroupsTool } from './tools/list-stock-groups.js';
 import { listStockPoolsTool } from './tools/list-stock-pools.js';
 import { listTacticsTool } from './tools/list-tactics.js';
+import { listTradesTool } from './tools/list-trades.js';
+import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
+import { recordWatchRunTool } from './tools/record-watch-run.js';
 import { refreshStockGroupTool } from './tools/refresh-stock-group.js';
 import { resolveLlmGroupTool } from './tools/resolve-llm-group.js';
 import { runTacticTool } from './tools/run-tactic.js';
@@ -145,12 +150,15 @@ export const createRegistry = (tools: readonly Tool[]): Registry => {
 /** v0.1 全量工具表：6 read + 2 advice（plan.md 跨包契约）。 */
 export const toolRegistry: Registry = createRegistry([
   listAccountsTool,
+  createAccountTool,
   getAccountTool,
   listHoldingsTool,
+  listTradesTool,
   getHoldingTool,
   getAdviceTool,
   getAdviceStatsTool,
   getConfidenceCalibrationTool,
+  getWatchStatusTool,
   analyzeStockTool,
   analyzePositionTool,
   fetchQuoteTool,
@@ -166,6 +174,7 @@ export const toolRegistry: Registry = createRegistry([
   tacticSignalsByStockTool,
   tacticSignalsByTacticTool,
   recordAdviceOutcomeTool,
+  recordWatchRunTool,
   sendNotificationTool,
   marketOutlookTool,
   // v0.5 新增：持仓 / 交易录入（write）
@@ -175,6 +184,7 @@ export const toolRegistry: Registry = createRegistry([
   closeHoldingTool,
   // v0.6 新增：股票池 CRUD（write）+ 触发落库（write，workflow 内部）+ 列池（read）
   listStockPoolsTool,
+  listWatchTriggersTool,
   createStockPoolTool,
   updateStockPoolTool,
   deleteStockPoolTool,

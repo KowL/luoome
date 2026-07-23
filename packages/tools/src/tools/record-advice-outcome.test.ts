@@ -1,11 +1,11 @@
 import { type Advice, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 describe('tool/record_advice_outcome', () => {
   it('adviceId 不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await recordAdviceOutcomeTool.execute(
       { adviceId: 'nonexistent', followed: true, pnl: 100 },
       ctx,
@@ -16,7 +16,7 @@ describe('tool/record_advice_outcome', () => {
   });
 
   it('advice 存在 + 跟单盈利 → outcome.followed + pnl 落库', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     // 直接灌入一条 advice 到 advice repo
     const adv: Advice = {
       id: 'adv-test-1',

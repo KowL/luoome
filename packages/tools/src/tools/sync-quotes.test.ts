@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { syncQuotesTool } from './sync-quotes.js';
 
 describe('tool/sync_quotes', () => {
   it('正常路径：同步默认账户下所有持仓', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const res = await syncQuotesTool.execute({}, ctx);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -14,7 +14,7 @@ describe('tool/sync_quotes', () => {
   });
 
   it('正常路径：显式 accountId', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const accounts = await ctx.repos.account.list();
     const [first] = accounts;
     if (first === undefined) throw new Error('no account');
@@ -23,7 +23,7 @@ describe('tool/sync_quotes', () => {
   });
 
   it('错误路径：accountId 不是 uuid → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const res = await syncQuotesTool.execute({ accountId: 'not-uuid' }, ctx);
     expect(res.ok).toBe(false);
     if (res.ok) return;

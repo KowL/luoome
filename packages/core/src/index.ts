@@ -18,6 +18,7 @@ export * from './entity/stock-group.js';
 export * from './entity/stock-pool.js';
 export * from './entity/tactic.js';
 export * from './entity/trade.js';
+export * from './entity/watch-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';

@@ -6,17 +6,21 @@
 import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } from './api.js';
 import { initChat, renderChat } from './chat.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
+import { initMvpActions, openGroupModal, openPoolModal } from './mvp-actions.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
   renderAdviceList,
   renderDashboard,
+  renderGroups,
   renderHoldings,
   renderReview,
   renderSettings,
   renderSettingsAccount,
   renderTacticsList,
+  renderWatch,
   runTacticScan,
+  runWatchOnce,
 } from './pages.js';
 import { $ } from './ui.js';
 
@@ -47,7 +51,17 @@ const startClock = () => {
 
 /* ============ 路由分发 ============ */
 
-const ROUTES = ['dashboard', 'holdings', 'tactics', 'advice', 'review', 'chat', 'settings'];
+const ROUTES = [
+  'dashboard',
+  'holdings',
+  'groups',
+  'watch',
+  'tactics',
+  'advice',
+  'review',
+  'chat',
+  'settings',
+];
 
 const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
@@ -64,6 +78,8 @@ const showRoute = async (name) => {
   try {
     if (safe === 'dashboard') await renderDashboard(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
+    else if (safe === 'groups') await renderGroups(setStatus);
+    else if (safe === 'watch') await renderWatch(setStatus);
     else if (safe === 'tactics') {
       await renderTacticsList(setStatus);
     } else if (safe === 'advice') {
@@ -97,14 +113,18 @@ window.addEventListener('hashchange', onHashChange);
 
 /** 拉取全部账户。返回 { ok, accounts }。 */
 const getAccounts = async () => {
-  const result = await callApi('/api/accounts');
+  const [result, current] = await Promise.all([callApi('/api/accounts'), callApi('/api/holdings')]);
   if (!result.ok || !('data' in result)) return { ok: false, accounts: [] };
   const data = result.data;
   const accounts =
     data && typeof data === 'object' && 'accounts' in data
       ? /** @type {Array<{id: string, name: string}>} */ (/** @type {unknown} */ (data)).accounts
       : [];
-  return { ok: true, accounts };
+  return {
+    ok: true,
+    accounts,
+    currentAccountId: current.ok ? current.data.accountId : '',
+  };
 };
 
 /** 切换当前账户：POST 后端 → 成功后写 localStorage。 */
@@ -134,17 +154,26 @@ const initAccountSelect = async () => {
   const result = await getAccounts();
   if (!result.ok || result.accounts.length === 0) {
     select.innerHTML = '<option value="">(无账户)</option>';
+    if (result.ok) {
+      setStatus('当前是空数据库，请在设置页创建真实账户。');
+      if (currentHash() !== 'settings') window.location.hash = '#settings';
+    }
     return;
   }
   const stored = getAccountId();
   const hasStored = result.accounts.some((a) => a.id === stored);
-  const initialId = hasStored ? stored : (result.accounts[0]?.id ?? '');
+  const hasCurrent = result.accounts.some((a) => a.id === result.currentAccountId);
+  const initialId = hasStored
+    ? stored
+    : hasCurrent
+      ? result.currentAccountId
+      : (result.accounts[0]?.id ?? '');
   select.innerHTML = result.accounts
     .map(
       (a) => `<option value="${a.id}"${a.id === initialId ? ' selected' : ''}>${a.name}</option>`,
     )
     .join('');
-  if (initialId.length > 0 && !hasStored) {
+  if (initialId.length > 0 && !hasStored && initialId !== result.currentAccountId) {
     await selectAccount(initialId);
   } else if (stored.length > 0 && stored !== initialId) {
     await selectAccount(initialId);
@@ -174,6 +203,11 @@ const bindAccountSelect = () => {
 
 const bindGlobalActions = () => {
   initHoldingsActions({ refresh: () => renderHoldings(setStatus), setStatus });
+  initMvpActions({
+    onGroupsChanged: () => renderGroups(setStatus),
+    onWatchChanged: () => renderWatch(setStatus),
+    setStatus,
+  });
 
   const addBtn = $('#btn-holding-add');
   if (addBtn !== null) addBtn.addEventListener('click', () => openAddHoldingModal());
@@ -184,6 +218,10 @@ const bindGlobalActions = () => {
   const analyzeBtn = $('#btn-holdings-analyze');
   if (analyzeBtn !== null)
     analyzeBtn.addEventListener('click', () => void analyzeAllHoldings(setStatus));
+
+  $('#btn-group-add')?.addEventListener('click', () => openGroupModal());
+  $('#btn-pool-add')?.addEventListener('click', () => void openPoolModal());
+  $('#btn-watch-run')?.addEventListener('click', () => void runWatchOnce(setStatus));
 
   const tlistBtn = $('#btn-tactic-list');
   if (tlistBtn !== null)

@@ -1,7 +1,7 @@
 import type { LLMAdapterLike, ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { resolveLlmGroupTool } from './resolve-llm-group.js';
 
 /** 覆盖 ctx.adapters.llm（ToolContext 字段 readonly，整体替换 adapters 投影）。 */
@@ -12,7 +12,7 @@ const withLlm = (ctx: ToolContext, llm: LLMAdapterLike): ToolContext => ({
 
 describe('resolve_llm_group', () => {
   it('mock LLM：从候选里产出成员，全部通过存在性校验', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await resolveLlmGroupTool.execute({ prompt: '选出龙头', maxMembers: 3 }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -26,7 +26,7 @@ describe('resolve_llm_group', () => {
   });
 
   it('LLM 返回不存在的 stockId → 丢弃进 dropped；不存在的全部丢弃后 members 为空', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const stub: LLMAdapterLike = {
       name: 'stub-llm',
       generate: <T>() =>
@@ -47,7 +47,7 @@ describe('resolve_llm_group', () => {
   });
 
   it('截断到 maxMembers', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const stub: LLMAdapterLike = {
       name: 'stub-llm',
       generate: <T>() =>
@@ -66,7 +66,7 @@ describe('resolve_llm_group', () => {
   });
 
   it('LLM 调用抛异常 → llm_error（retryable）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const stub: LLMAdapterLike = {
       name: 'stub-llm',
       generate: () => Promise.reject(new Error('boom')),
@@ -81,7 +81,7 @@ describe('resolve_llm_group', () => {
   });
 
   it('LLM 输出未通过 schema 校验 → llm_error（retryable=false）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const stub: LLMAdapterLike = {
       name: 'stub-llm',
       generate: <T>() => Promise.resolve({ garbage: true } as T),

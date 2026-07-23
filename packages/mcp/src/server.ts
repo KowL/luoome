@@ -53,7 +53,7 @@ export interface StartMcpServerOptions {
   readonly env?: NodeJS.ProcessEnv;
   /** 默认 createServerContext(env)；测试可注入预建 ctx（跳过 db 与种子）。 */
   readonly context?: ServerContextHandle;
-  /** 默认 { name: 'luoome', version: '0.1.0' }。 */
+  /** 默认 { name: 'luoome', version: '0.8.0' }。 */
   readonly serverInfo?: { readonly name: string; readonly version: string };
 }
 
@@ -85,7 +85,7 @@ export const startMcpServer = async (
   const descriptors = createRegistry(allowedTools).toMCP();
   const byName = new Map(allowedTools.map((tool) => [tool.name, tool]));
 
-  const serverInfo = opts.serverInfo ?? { name: 'luoome', version: '0.1.0' };
+  const serverInfo = opts.serverInfo ?? { name: 'luoome', version: '0.8.0' };
   const server = new Server(serverInfo, { capabilities: { tools: { listChanged: false } } });
 
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: descriptors }));

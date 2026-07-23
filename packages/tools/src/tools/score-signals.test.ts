@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { scoreSignalsTool } from './score-signals.js';
 
 describe('tool/score_signals', () => {
   it('空 signals → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await scoreSignalsTool.execute({ signals: [] }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -12,7 +12,7 @@ describe('tool/score_signals', () => {
   });
 
   it('mock LLM 输出：每个 signal 拿到 llmScore + rationale', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await scoreSignalsTool.execute(
       {
         signals: [

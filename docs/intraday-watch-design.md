@@ -24,7 +24,7 @@
 
 - 无 Alert / watchlist 实体与表；DB 现有表：accounts / stocks / holdings / trades / advices / adviceOutcomes / priceSnapshots / dailyBars / tactics / tacticSignals / notifications（`packages/db/src/schema/index.ts`）
 - 战法引擎就绪：5 个内置战法 + DSL 触发表达式（`packages/core/src/entity/tactic.ts`），`run_tactic` tool 支持 scope=holdings/watchlist/all-stocks（显式 stockIds），命中信号默认落库 tactic_signals
-- `Quote` 有 open/high/low/close/volume，无 prevClose；real 行情 = Eastmoney→Tencent→Mock，quote 缓存 TTL 60s（`packages/adapters/src/market/manager.ts`）
+- `Quote` 有 open/high/low/close/volume，无 prevClose；真实行情 = Eastmoney→Tencent，quote 缓存 TTL 60s（`packages/adapters/src/market/manager.ts`）
 - `send_notification` tool 就绪（feishu/log，缺 webhook 自动降级 log）；payload 上限 title 200 / content 5000（v1 触发聚合按池切片，N 大不爆）
 - workflow 引擎：`defineWorkflow`，步骤内只能通过 `ctx.tools.*` 调 tool（ARCHITECTURE §4.6）；CLI `workflow run` 按 hyphen→camel + `Workflow` 后缀动态查找（`packages/cli/src/index.ts`）
 - `RepositoryRegistry` 在 `packages/core/src/repository/index.ts`；db 有 memory + drizzle 双实现 + contract-tests 复用
@@ -188,7 +188,7 @@ interface WatchTrigger {
 4. intraday-watch workflow + 测试（含 seed、cooldown 查 DB、prev close 用上一交易日）
 5. cli watch.ts + index.ts 接线 + context.ts 种子 + 测试
 6. 文档（AGENTS.md / ARCHITECTURE.md）
-7. 全量验证：`bun test`（vitest，含 db contract tests）、`bun test packages/db`（bun 自带 runner）、`bunx tsc --noEmit`、`bunx biome check .`；再 `luoome watch --once`（mock 行情）实跑一轮确认输出
+7. 全量验证：`bun test`（vitest，含 db contract tests）、`bun test packages/db`（bun 自带 runner）、`bunx tsc --noEmit`、`bunx biome check .`；再用真实行情执行 `luoome watch --once --no-notify`
 
 ## 明确不做（v1）
 

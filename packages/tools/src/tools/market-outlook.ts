@@ -1,4 +1,3 @@
-import { MOCK_LLM_SYSTEM_MARKET_OUTLOOK } from '@luoome/adapters';
 import {
   type Advice,
   AdviceReasoningSchema,
@@ -98,7 +97,7 @@ export const marketOutlookTool = defineTool({
     const decliners = quotes.filter((q) => q.changePct < 0).length;
 
     const llm = await ctx.adapters.llm.generate<AdviceLLMOutput>({
-      system: MOCK_LLM_SYSTEM_MARKET_OUTLOOK,
+      system: 'market_outlook',
       schema: AdviceLLMSchema,
       data: {
         theme: input.theme ?? '全市场',

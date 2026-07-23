@@ -9,19 +9,16 @@ const silentLogger = (): Logger => {
 };
 
 describe('market/factory', () => {
-  it('env 缺省 → MockMarketAdapter', () => {
-    const adapter = createMarketAdapterFromEnv({}, { logger: silentLogger() });
-    expect(adapter.name).toBe('mock-market');
+  it('env 缺省 → 启动期报配置错误', () => {
+    expect(() => createMarketAdapterFromEnv({}, { logger: silentLogger() })).toThrow(
+      /MARKET_PROVIDER/,
+    );
   });
 
-  it('空串 / "mock" → MockMarketAdapter', () => {
-    expect(
-      createMarketAdapterFromEnv({ LUOOME_MARKET_PROVIDER: '' }, { logger: silentLogger() }).name,
-    ).toBe('mock-market');
-    expect(
-      createMarketAdapterFromEnv({ LUOOME_MARKET_PROVIDER: 'mock' }, { logger: silentLogger() })
-        .name,
-    ).toBe('mock-market');
+  it('"mock" → 启动期报配置错误', () => {
+    expect(() =>
+      createMarketAdapterFromEnv({ LUOOME_MARKET_PROVIDER: 'mock' }, { logger: silentLogger() }),
+    ).toThrow(/real/);
   });
 
   it('real → MarketDataManager', () => {
@@ -88,7 +85,7 @@ describe('market/factory', () => {
     expect(urls.some((u) => u.includes('ifzq'))).toBe(true);
   });
 
-  it('real：全源失败 → Mock 兜底（不抛异常）', async () => {
+  it('real：全源失败 → 明确抛错，不生成行情', async () => {
     const adapter = createMarketAdapterFromEnv(
       { LUOOME_MARKET_PROVIDER: 'real' },
       {
@@ -96,8 +93,6 @@ describe('market/factory', () => {
         fetchImpl: (async () => new Response('down', { status: 500 })) as never,
       },
     );
-    const q = await adapter.fetchQuote('002594.SZ');
-    expect(q.source).toBe('mock');
-    expect(q.stockId).toBe('002594.SZ');
+    await expect(adapter.fetchQuote('002594.SZ')).rejects.toThrow(/all market sources failed/i);
   });
 });

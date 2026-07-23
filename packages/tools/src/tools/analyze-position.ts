@@ -1,4 +1,3 @@
-import { MOCK_LLM_SYSTEM_ANALYZE_POSITION } from '@luoome/adapters';
 import {
   type Advice,
   AdviceDataSnapshotSchema,
@@ -53,7 +52,7 @@ export const analyzePositionTool = defineTool({
     const indicators = computeSimpleIndicators(bars);
 
     const llmOutput = await ctx.adapters.llm.generate<AdviceLLMOutput>({
-      system: MOCK_LLM_SYSTEM_ANALYZE_POSITION,
+      system: 'analyze_position',
       schema: AdviceLLMSchema,
       data: {
         stockId: stock.id,

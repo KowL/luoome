@@ -11,5 +11,5 @@ export * from './repository/memory/index.js';
 // 表对象（accounts / stocks / holdings / trades / advices / adviceOutcomes / priceSnapshots）
 export * from './schema/index.js';
 
-// 种子数据：seedMockData / MockFixtures
+// 通用批量数据写入
 export * from './seed.js';

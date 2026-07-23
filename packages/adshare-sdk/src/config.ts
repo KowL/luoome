@@ -17,7 +17,7 @@ export type AdshareConfig = z.infer<typeof ConfigSchema>;
 
 /**
  * 从环境变量读取 Adshare 连接配置。
- * 远端 auth_enabled=true 时两者都必填；本地 mock 场景可用任意占位 key。
+ * 远端 auth_enabled=true 时两者都必填；本地开发服务可使用测试 key。
  */
 export const fromEnv = (env: Record<string, string | undefined> = process.env): AdshareConfig => {
   const parsed = ConfigSchema.safeParse({

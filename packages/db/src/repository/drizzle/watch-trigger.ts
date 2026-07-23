@@ -96,6 +96,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
           eq(watchTriggers.poolId, key.poolId),
           eq(watchTriggers.stockId, key.stockId),
           eq(watchTriggers.ruleKind, key.ruleKind),
+          eq(watchTriggers.notified, true),
           gte(watchTriggers.createdAt, since),
         ),
       )

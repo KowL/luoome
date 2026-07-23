@@ -21,10 +21,10 @@ describe('cli/env loadProjectEnv', () => {
     const file = join(dir, '.env');
     writeFileSync(file, 'LUOOME_LLM_PROVIDER=openai-compatible\nLUOOME_LLM_API_KEY=sk-test\n');
     const target: Record<string, string | undefined> = {
-      LUOOME_LLM_PROVIDER: 'mock', // 已设置 → 不被文件覆盖
+      LUOOME_LLM_PROVIDER: 'anthropic', // 已设置 → 不被文件覆盖
     };
     const applied = loadProjectEnv([file], target);
-    expect(target.LUOOME_LLM_PROVIDER).toBe('mock');
+    expect(target.LUOOME_LLM_PROVIDER).toBe('anthropic');
     expect(target.LUOOME_LLM_API_KEY).toBe('sk-test');
     expect(applied).toEqual(['LUOOME_LLM_API_KEY']);
   });

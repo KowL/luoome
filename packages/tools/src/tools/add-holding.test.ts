@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { addHoldingTool } from './add-holding.js';
 
 describe('add_holding', () => {
   it('直录新持仓：availableQuantity 缺省 = quantity + 自动补 stock stub', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addHoldingTool.execute(
       { stockId: '601398.SH', quantity: 500, avgCost: 70.25 },
       ctx,
@@ -22,8 +22,8 @@ describe('add_holding', () => {
   });
 
   it('同 (accountId, stockId) 已有活跃持仓 → invalid_input', async () => {
-    const ctx = await buildMockContext();
-    // fixtures: mock-holding-002594 活跃
+    const ctx = await buildTestContext();
+    // fixtures: test-holding-002594 活跃
     const result = await addHoldingTool.execute(
       { stockId: '002594.SZ', quantity: 100, avgCost: 100 },
       ctx,
@@ -34,7 +34,7 @@ describe('add_holding', () => {
   });
 
   it('availableQuantity > quantity → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addHoldingTool.execute(
       { stockId: '601398.SH', quantity: 100, avgCost: 70, availableQuantity: 200 },
       ctx,
@@ -45,7 +45,7 @@ describe('add_holding', () => {
   });
 
   it('账户不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await addHoldingTool.execute(
       { stockId: '601398.SH', quantity: 100, avgCost: 70, accountId: 'no-such' },
       ctx,

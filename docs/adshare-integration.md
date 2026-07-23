@@ -26,7 +26,7 @@ ADSHARE_MAX_RETRIES=2
 
 **必须先起 adshare 服务（或确认可达）并通过 healthcheck，再起 luoome web。**
 
-`/api/stocks/search` 在 adshare 不可达时**会自动回退到本地 mock**，单搜索请求不会失败，但会记日志 `adshare search fallback to local`，响应里 `source: "local"`。这是降级体验，不是错误——但生产隐患需排查（见 §3）。
+`/api/stocks/search` 在 adshare 不可达时会回退到真实行情搜索链，再回退本地股票库；不会生成合成股票数据。日志会记录 `adshare search fallback to local`。
 
 ### 2.1 启动 adshare 后端
 
@@ -90,7 +90,7 @@ curl -sS 'http://localhost:5173/api/stocks/search?q=%E8%B4%B5%E5%B7%9E%E8%8C%85%
 `source` 字段是关键：
 
 - `"adshare"` —— 命中远端，**集成链路完整**。
-- `"local"` 或 `"market"` —— adshare 未配置 / 不可达 / 响应非法，回退到本地 mock。功能不破，但**生产隐患**，见 §3。
+- `"local"` 或 `"market"` —— adshare 未配置 / 不可达 / 响应非法，回退到真实行情搜索或本地股票库。
 
 ## 3. 故障排查
 

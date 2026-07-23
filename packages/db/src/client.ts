@@ -16,6 +16,7 @@ import {
   DrizzleStockRepository,
   DrizzleTacticRepository,
   DrizzleTradeRepository,
+  DrizzleWatchRunRepository,
   DrizzleWatchTriggerRepository,
 } from './repository/drizzle/index.js';
 import { type Schema, schema } from './schema/index.js';
@@ -242,6 +243,22 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_ts_idx ON watch_triggers (pool_id, created_at)`,
   );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS watch_runs (
+      id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      evaluated_pools INTEGER NOT NULL,
+      evaluated_stocks INTEGER NOT NULL,
+      triggered INTEGER NOT NULL,
+      notified INTEGER NOT NULL,
+      suppressed_by_cooldown INTEGER NOT NULL,
+      error TEXT
+    )
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS watch_runs_started_at_idx ON watch_runs (started_at)`);
   // 分组化起（docs/stock-group-design.md §3）：股票分组 + 成员快照
   db.run(sql`
     CREATE TABLE IF NOT EXISTS stock_groups (
@@ -456,6 +473,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     // v0.6 起
     stockPool: new DrizzleStockPoolRepository(db),
     watchTrigger: new DrizzleWatchTriggerRepository(db),
+    watchRun: new DrizzleWatchRunRepository(db),
     // 分组化起
     stockGroup: new DrizzleStockGroupRepository(db),
     groupMember: new DrizzleGroupMemberRepository(db),

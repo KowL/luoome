@@ -1,6 +1,6 @@
 {
   "name": "luoome",
-  "version": "0.5.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "luoome —— 本地优先的个人投资管理 advisor agent（罗网 + 织机）",

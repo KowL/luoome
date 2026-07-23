@@ -5,7 +5,7 @@ import { money } from '@luoome/core';
  * 测试用可配置行情 adapter（v0.6 起，intraday-watch cost-threshold 单测专用）。
  *
  * 设计：每个 stockId → fixed close（测试断言期望值），其它字段用 close 推导。
- * 与 MockMarketAdapter 的区别：返回的价格完全由调用方指定，不依赖 fixture hash。
+ * 返回价格完全由测试调用方指定。
  */
 export interface FixedQuoteMap {
   readonly [stockId: string]: Money | number;

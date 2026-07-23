@@ -1,5 +1,6 @@
 import type { GroupResolver, ToolContext } from '@luoome/core';
-import { buildMockContext } from '@luoome/tools';
+import { seedDefaultWatch } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { intradayWatchWorkflow } from './intraday-watch.js';
@@ -20,7 +21,7 @@ const seedGroup = (ctx: ToolContext, id: string, resolver: GroupResolver) =>
 
 describe('intraday-watch workflow', () => {
   it('空池：返回空 triggers + 评估 0 池 0 股', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await intradayWatchWorkflow.run({ seedTacticSources: false }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -32,7 +33,7 @@ describe('intraday-watch workflow', () => {
   });
 
   it('poolIds 过滤：仅评估指定池', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'p-aaa-group', { kind: 'manual', stockIds: ['002594.SZ'] });
     await ctx.repos.stockPool.save({
       id: 'p-aaa',
@@ -69,7 +70,7 @@ describe('intraday-watch workflow', () => {
   });
 
   it('disabled 池不被评估', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'p-disabled-pool-group', { kind: 'manual', stockIds: ['002594.SZ'] });
     await ctx.repos.stockPool.save({
       id: 'p-disabled-pool',
@@ -88,7 +89,7 @@ describe('intraday-watch workflow', () => {
   });
 
   it('notify=false 时不调用 send_notification', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'p-notify-group', { kind: 'manual', stockIds: ['002594.SZ'] });
     await ctx.repos.stockPool.save({
       id: 'p-notify',
@@ -108,8 +109,32 @@ describe('intraday-watch workflow', () => {
     expect(after).toBe(before);
   });
 
+  it('notify=false 的试跑只落审计，不标已通知，也不占后续通知冷却', async () => {
+    const ctx = await buildTestContext();
+    await seedDefaultWatch(ctx.repos, ctx.user.defaultAccountId, ctx.clock());
+
+    const dryRun = await intradayWatchWorkflow.run(
+      { notify: false, seedTacticSources: false },
+      ctx,
+    );
+    expect(dryRun.ok).toBe(true);
+    if (!dryRun.ok) return;
+    expect(dryRun.data.triggers.length).toBeGreaterThan(0);
+    expect(dryRun.data.triggers.every((trigger) => !trigger.notified)).toBe(true);
+    expect(dryRun.data.notified).toBe(0);
+    expect(dryRun.data.suppressedByCooldown).toBe(0);
+
+    const liveRun = await intradayWatchWorkflow.run(
+      { notify: true, seedTacticSources: false },
+      ctx,
+    );
+    expect(liveRun.ok).toBe(true);
+    if (!liveRun.ok) return;
+    expect(liveRun.data.notified).toBeGreaterThan(0);
+  });
+
   it('输入校验失败（poolIds 含空串）→ invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await intradayWatchWorkflow.run({ poolIds: [''], seedTacticSources: false }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;

@@ -1,7 +1,7 @@
 import { type Advice, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { getAdviceTool } from './get-advice.js';
 
 /** 永不过期的 advice（validUntil 2099，与真实时钟无关）。 */
@@ -33,7 +33,7 @@ const expiredAdvice: Advice = {
 
 describe('get_advice', () => {
   it('正常路径：默认种子 2 条（includeExpired 显式开启，与真实时钟无关）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await getAdviceTool.execute({ includeExpired: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -41,7 +41,7 @@ describe('get_advice', () => {
   });
 
   it('默认不含已过期；includeExpired=true 才返回过期 advice', async () => {
-    const ctx = await buildMockContext({ advices: [futureAdvice, expiredAdvice] });
+    const ctx = await buildTestContext({ advices: [futureAdvice, expiredAdvice] });
 
     const activeOnly = await getAdviceTool.execute({}, ctx);
     expect(activeOnly.ok).toBe(true);
@@ -56,7 +56,7 @@ describe('get_advice', () => {
   });
 
   it('filter：subjectId / decision / since', async () => {
-    const ctx = await buildMockContext({ advices: [futureAdvice, expiredAdvice] });
+    const ctx = await buildTestContext({ advices: [futureAdvice, expiredAdvice] });
 
     const bySubject = await getAdviceTool.execute(
       { subjectId: '600519.SH', includeExpired: true },
@@ -83,14 +83,14 @@ describe('get_advice', () => {
   });
 
   it('错误路径：非法日期 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await getAdviceTool.execute({ since: 'not-a-date' }, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');
   });
 
   it('错误路径：limit 越界 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const result = await getAdviceTool.execute({ limit: 0 }, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');

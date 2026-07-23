@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { marketOutlookTool } from './market-outlook.js';
 
 describe('tool/market_outlook', () => {
   it('生成大盘观点 advice 并落库', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await marketOutlookTool.execute({}, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -15,7 +15,7 @@ describe('tool/market_outlook', () => {
   });
 
   it('theme 指定 → subjectId 包含 theme', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await marketOutlookTool.execute({ theme: '新能源' }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;

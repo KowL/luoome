@@ -8,6 +8,7 @@ import type { GroupMemberSnapshot, StockGroup } from '../entity/stock-group.js';
 import type { StockPool, WatchRule, WatchTrigger } from '../entity/stock-pool.js';
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
+import type { WatchRun } from '../entity/watch-run.js';
 
 /**
  * Repository 接口（ARCHITECTURE §2.5 / §4.3）。
@@ -100,6 +101,8 @@ export interface RepositoryRegistry {
   readonly stockPool: StockPoolRepository;
   /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
   readonly watchTrigger: WatchTriggerRepository;
+  /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
+  readonly watchRun: WatchRunRepository;
   /** 分组化起（docs/stock-group-design.md §2）；股票分组 CRUD。 */
   readonly stockGroup: StockGroupRepository;
   /** 分组化起；分组成员快照（只增不改；watch hot path 只读 currentMembers）。 */
@@ -168,7 +171,8 @@ export interface GroupMemberRepository {
 /**
  * 盯盘触发仓储（v0.6 起）。
  * - 每次 watch 评估 fire 的 trigger 都写入；被 cooldown 抑制的也写（notified=false），便于事后复盘"今天压了多少条"。
- * - lastForKey 用于 cooldown 查询（since = now − cooldownMinutes）。
+ * - lastForKey 用于通知 cooldown 查询（since = now − cooldownMinutes），只返回
+ *   notified=true 的真实通知；notify=false 的试跑审计不能占后续通知冷却。
  */
 export interface WatchTriggerRepository {
   save(trigger: WatchTrigger): Promise<void>;
@@ -196,6 +200,15 @@ export interface WatchTriggerRepository {
     readonly since?: Date;
     readonly limit?: number;
   }): Promise<readonly WatchTrigger[]>;
+  remove(id: string): Promise<void>;
+}
+
+/** 每轮 watch 的运行审计；save 同 id 为 upsert（running → terminal）。 */
+export interface WatchRunRepository {
+  save(run: WatchRun): Promise<void>;
+  findById(id: string): Promise<WatchRun | null>;
+  latest(): Promise<WatchRun | null>;
+  listRecent(limit?: number): Promise<readonly WatchRun[]>;
   remove(id: string): Promise<void>;
 }
 

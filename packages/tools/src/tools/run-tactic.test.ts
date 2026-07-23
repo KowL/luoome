@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { runTacticTool } from './run-tactic.js';
 
 describe('tool/run_tactic', () => {
   it('战法不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await runTacticTool.execute(
       { tacticId: 'nope', scope: 'holdings', lookbackDays: 120 },
       ctx,
@@ -15,7 +15,7 @@ describe('tool/run_tactic', () => {
   });
 
   it('跑内置战法：返回 signals 数组（可为空）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await runTacticTool.execute(
       { tacticId: 'breakout-volume', scope: 'holdings', lookbackDays: 120 },
       ctx,
@@ -31,7 +31,7 @@ describe('tool/run_tactic', () => {
 
 describe('run_tactic persistSignals 选项（v0.6 起）', () => {
   it('persistSignals=false 时不写 tactic_signals 表', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const before = (await ctx.repos.tactic.signalsByTactic('breakout-volume')).length;
     const r = await runTacticTool.execute(
       {
@@ -49,7 +49,7 @@ describe('run_tactic persistSignals 选项（v0.6 起）', () => {
   });
 
   it('persistSignals=true（默认）落库', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const before = (await ctx.repos.tactic.signalsByTactic('breakout-volume')).length;
     const r = await runTacticTool.execute(
       {

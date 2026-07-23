@@ -13,6 +13,7 @@ import type {
   Tactic,
   TacticSignal,
   Trade,
+  WatchRun,
   WatchTrigger,
 } from '@luoome/core';
 import { BUILTIN_TACTICS } from '@luoome/core';
@@ -28,6 +29,7 @@ import { InMemoryStockGroupRepository } from './stock-group.js';
 import { InMemoryStockPoolRepository } from './stock-pool.js';
 import { InMemoryTacticRepository } from './tactic.js';
 import { InMemoryTradeRepository } from './trade.js';
+import { InMemoryWatchRunRepository } from './watch-run.js';
 import { InMemoryWatchTriggerRepository } from './watch-trigger.js';
 
 export { InMemoryAccountRepository } from './account.js';
@@ -42,6 +44,7 @@ export { InMemoryStockGroupRepository } from './stock-group.js';
 export { InMemoryStockPoolRepository } from './stock-pool.js';
 export { InMemoryTacticRepository } from './tactic.js';
 export { InMemoryTradeRepository } from './trade.js';
+export { InMemoryWatchRunRepository } from './watch-run.js';
 export { InMemoryWatchTriggerRepository } from './watch-trigger.js';
 
 /** createInMemoryRepos 的可选种子数据（同步写入，含不变量断言）。 */
@@ -60,6 +63,7 @@ export interface InMemorySeed {
   /** v0.6 起：可选预置股票池 + 触发。 */
   readonly stockPools?: readonly StockPool[];
   readonly watchTriggers?: readonly WatchTrigger[];
+  readonly watchRuns?: readonly WatchRun[];
   /** 分组化起：可选预置分组 + 成员快照。 */
   readonly stockGroups?: readonly StockGroup[];
   readonly groupMemberSnapshots?: readonly GroupMemberSnapshot[];
@@ -79,6 +83,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   // v0.6 起
   const stockPool = new InMemoryStockPoolRepository();
   const watchTrigger = new InMemoryWatchTriggerRepository();
+  const watchRun = new InMemoryWatchRunRepository();
   // 分组化起
   const stockGroup = new InMemoryStockGroupRepository();
   const groupMember = new InMemoryGroupMemberRepository();
@@ -97,6 +102,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const n of seed.notifications ?? []) notification.put(n);
     for (const p of seed.stockPools ?? []) stockPool.put(p);
     for (const t of seed.watchTriggers ?? []) watchTrigger.put(t);
+    for (const r of seed.watchRuns ?? []) watchRun.put(r);
     for (const g of seed.stockGroups ?? []) stockGroup.put(g);
     for (const s of seed.groupMemberSnapshots ?? []) groupMember.put(s);
   }
@@ -116,6 +122,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     notification,
     stockPool,
     watchTrigger,
+    watchRun,
     stockGroup,
     groupMember,
   };

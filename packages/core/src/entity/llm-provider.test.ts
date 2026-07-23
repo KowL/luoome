@@ -29,7 +29,6 @@ describe('entity/llm-provider', () => {
       for (const p of ALL_LLM_PROVIDERS) {
         expect(p in DEFAULT_LLM_BASE_URL).toBe(true);
       }
-      expect(DEFAULT_LLM_BASE_URL.mock).toBeNull();
     });
 
     it('DEFAULT_LLM_MODEL has non-empty value for every provider', () => {
@@ -45,11 +44,6 @@ describe('entity/llm-provider', () => {
   });
 
   describe('LLMProviderConfigSchema', () => {
-    it('accepts minimal mock config', () => {
-      const cfg = LLMProviderConfigSchema.parse({ provider: 'mock', model: 'mock-v0' });
-      expect(cfg.provider).toBe('mock');
-    });
-
     it('accepts full openai-compatible config', () => {
       const cfg = LLMProviderConfigSchema.parse({
         provider: 'openai-compatible',
@@ -83,16 +77,17 @@ describe('entity/llm-provider', () => {
   });
 
   describe('parseLlmProviderConfigFromEnv', () => {
-    it('defaults to mock when LUOOME_LLM_PROVIDER unset', () => {
-      const cfg = parseLlmProviderConfigFromEnv({});
-      expect(cfg.provider).toBe('mock');
-      expect(cfg.model).toBe(DEFAULT_LLM_MODEL.mock);
+    it('requires LUOOME_LLM_PROVIDER', () => {
+      expect(() => parseLlmProviderConfigFromEnv({})).toThrow(/LLM_PROVIDER/);
+      expect(() => parseLlmProviderConfigFromEnv({ LUOOME_LLM_PROVIDER: '  ' })).toThrow(
+        /LLM_PROVIDER/,
+      );
     });
 
-    it('treats empty / "mock" / whitespace as mock', () => {
-      expect(parseLlmProviderConfigFromEnv({ LUOOME_LLM_PROVIDER: '' }).provider).toBe('mock');
-      expect(parseLlmProviderConfigFromEnv({ LUOOME_LLM_PROVIDER: 'mock' }).provider).toBe('mock');
-      expect(parseLlmProviderConfigFromEnv({ LUOOME_LLM_PROVIDER: '  ' }).provider).toBe('mock');
+    it('rejects removed mock provider', () => {
+      expect(() => parseLlmProviderConfigFromEnv({ LUOOME_LLM_PROVIDER: 'mock' })).toThrow(
+        /openai-compatible/,
+      );
     });
 
     it('throws when real provider configured without apiKey', () => {

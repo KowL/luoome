@@ -15,7 +15,7 @@ describe('entity zod schemas (z.coerce.date 约定)', () => {
       low: 95.8,
       close: 96.18,
       volume: 12_345_678,
-      source: 'mock',
+      source: 'test',
     });
     expect(q.ts).toBeInstanceOf(Date);
     expect(q.close).toBe(96.18);

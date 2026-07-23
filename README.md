@@ -5,7 +5,7 @@
 luoome 是一个本地优先的个人投资管理 **advisor agent**。它把"账户、持仓、交易、行情、战法、风控、笔记、建议"这些能力**全部以 tool 的形式**暴露出来，同时把多源数据织成结构化的、可追溯的投资建议。
 
 - 作为 **TUI** 在终端盯盘、看建议
-- 作为 **Web** 在浏览器查看仪表盘（含多账户下拉 + 校准表）
+- 作为 **Web** 管理看板、持仓、股票分组与盘中盯盘（含运行心跳和触发审计）
 - 作为 **MCP server** 被 Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
 
 ## 名字
@@ -81,8 +81,8 @@ homebrew/
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（`luoome.db` + `tactics/` + `reports/`） |
-| `LUOOME_MARKET_PROVIDER` | `mock` | 行情源：`mock` 确定性假数据；`real` 真实行情（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股） |
-| `LUOOME_LLM_PROVIDER` | `mock` | LLM 源：`mock` / `openai-compatible` / `anthropic` |
+| `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney 主 → Tencent 备；全源失败明确报错 |
+| `LUOOME_LLM_PROVIDER` | 必填 | `openai-compatible` / `anthropic` |
 | `LUOOME_LLM_API_KEY` | — | `openai-compatible` / `anthropic` 必填 |
 | `LUOOME_LLM_BASE_URL` | 按 provider | 覆盖 LLM base URL |
 | `LUOOME_LLM_MODEL` | 按 provider | 覆盖 LLM 模型 |
@@ -109,19 +109,24 @@ homebrew/
 | [docs/BACKLOG.md](./docs/BACKLOG.md) | 一致性 / 工程债清单（全仓走查产出） |
 | [docs/adshare-integration.md](./docs/adshare-integration.md) | Adshare 数据服务集成手册：环境变量 / 启动顺序 / 故障排查 |
 
+## 快速启动
+
+```bash
+bun install
+./bin/luoome start
+```
+
+浏览器打开 `http://127.0.0.1:5173`。首次启动生成 `~/.luoome/web-token`，将文件内容粘贴到 Web「设置」页即可执行修改。
+
 ## 状态
 
-**v0.7 — 盘中盯盘 + 节假日历**（v0.6 系列经 PR [#1](https://github.com/KowL/luoome/pull/1) squash 合入 main）
+**v0.8.0 MVP — 看板 + 持仓 + 分组 + 盯盘**
 
-v0.6 → v0.7 增量：
+- 看板聚合账户 PnL、建议、盯盘健康度和最近触发
+- 持仓完整录入闭环与交易流水
+- 股票分组 CRUD，支持 manual / holdings / formula / llm
+- 盯盘池 CRUD、单轮试跑、持久化心跳与触发审计
+- Web 默认仅监听 `127.0.0.1`，mutation 统一 Bearer token + 同源校验
+- `luoome start` 一键启动 Web + 长驻盯盘
 
-1. **盘中盯盘（v0.6）**：`luoome watch` 长驻进程 + StockPool / WatchTrigger 实体 + 5 个新 tool（股票池 CRUD + `save_watch_trigger`）+ `intraday-watch` workflow（池成员 → batch_quote → 规则评估 → cooldown → 落库 → 通知）
-2. **真实昨收（v0.6.1）**：price-change 规则的 prevClose 从 `quote.open` 占位切到 dailyBar 真实昨收（缺失自动 fallback）
-3. **行情容错深覆盖（v0.6.2）**：MarketDataManager 部分失败 / 三层 fallback / 抑制窗口单测 +7
-4. **节假日历（v0.7）**：内置 2026（29 天）+ 2027 best-effort placeholder；`LUOOME_A_SHARE_HOLIDAYS` env > `holidays.json` 文件 > 内置，三层 union
-
-更早的 v0.1 – v0.5（真实行情 / 真实 LLM / 录入闭环 / 多账户切换 / confidence 自校准 / Web 仪表盘）见 [docs/ROADMAP.md](./docs/ROADMAP.md)。
-
-**数据**：32 tool（read 16 / advice 3 / write 9 / external 4 / trade 0 永不暴露）
-
-**测试**：605 pass（vitest 478 + bun test db 127）+ 7 TUI smoke 全部通过；typecheck / lint clean
+历史演进见 [docs/ROADMAP.md](./docs/ROADMAP.md)。

@@ -2,8 +2,8 @@ import { z } from 'zod';
 
 import { type Money, MoneySchema } from '../types/branded.js';
 
-/** 账户类型：真实 / 模拟（ARCHITECTURE §5.1）。 */
-export type AccountKind = 'real' | 'mock';
+/** 账户类型：仅真实账户。 */
+export type AccountKind = 'real';
 
 export interface Account {
   readonly id: string;
@@ -15,7 +15,7 @@ export interface Account {
   readonly createdAt: Date;
 }
 
-export const AccountKindSchema = z.enum(['real', 'mock']);
+export const AccountKindSchema = z.literal('real');
 
 export const AccountSchema = z.object({
   id: z.string().min(1),

@@ -5,15 +5,14 @@ import {
   type Quote,
   type StockSearchCandidate,
 } from '@luoome/core';
+import type { MarketDataAdapter } from '../market/types.js';
+import { fixedTestClock, hashString, mulberry32 } from './deterministic.js';
+import { findTestStock, TEST_STOCK_BASE_PRICES, TEST_STOCKS } from './fixtures.js';
 
-import { defaultMockClock, hashString, mulberry32 } from '../internal/deterministic.js';
-import { findMockStock, MOCK_STOCK_BASE_PRICES, MOCK_STOCKS } from '../mocks/fixtures.js';
-import type { MarketDataAdapter } from './types.js';
-
-export interface MockMarketAdapterOptions {
-  /** 注入时钟：quote 的 ts 与日线端点都取自它；默认固定到 DEFAULT_MOCK_NOW。 */
+export interface FakeMarketAdapterOptions {
+  /** 注入时钟：quote 的 ts 与日线端点都取自它；默认固定到 DEFAULT_TEST_NOW。 */
   readonly clock?: () => Date;
-  /** quote.source 字段，默认 'mock'。 */
+  /** quote.source 字段，默认 'test'。 */
   readonly source?: string;
 }
 
@@ -21,25 +20,25 @@ const DAY_MS = 86_400_000;
 const DAILY_BARS_COUNT = 60;
 
 /**
- * MockMarketAdapter（MVP-TASK §2.5 / ARCHITECTURE §4.7）。
+ * FakeMarketAdapter（MVP-TASK §2.5 / ARCHITECTURE §4.7）。
  * 不接任何真实行情源，输出完全 deterministic：
- * - 已知 fixture 股票：以 MOCK_STOCK_BASE_PRICES 为基准生成固定 OHLC + 量；
+ * - 已知 fixture 股票：以 TEST_STOCK_BASE_PRICES 为基准生成固定 OHLC + 量；
  * - 未知代码：hash 代码生成稳定伪随机行情，多次调用结果一致；
  * - fetchDailyBars 固定生成 60 根 deterministic 日线（以 range.end 向前推）。
  */
-export class MockMarketAdapter implements MarketDataAdapter {
-  readonly name = 'mock-market';
+export class FakeMarketAdapter implements MarketDataAdapter {
+  readonly name = 'fake-market';
 
   private readonly clock: () => Date;
   private readonly source: string;
 
-  constructor(options: MockMarketAdapterOptions = {}) {
-    this.clock = options.clock ?? defaultMockClock;
-    this.source = options.source ?? 'mock';
+  constructor(options: FakeMarketAdapterOptions = {}) {
+    this.clock = options.clock ?? fixedTestClock;
+    this.source = options.source ?? 'test';
   }
 
   fetchQuote(stockCode: string): Promise<Quote> {
-    const stock = findMockStock(stockCode);
+    const stock = findTestStock(stockCode);
     const base = this.basePriceFor(stockCode);
     const rand = mulberry32(hashString(`quote|${stockCode}`));
 
@@ -70,7 +69,7 @@ export class MockMarketAdapter implements MarketDataAdapter {
   }
 
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]> {
-    const stock = findMockStock(stockCode);
+    const stock = findTestStock(stockCode);
     const stockId = stock ? stock.id : stockCode;
     const base = this.basePriceFor(stockCode);
     const endMs = range.end.getTime();
@@ -104,13 +103,13 @@ export class MockMarketAdapter implements MarketDataAdapter {
   }
 
   /**
-   * mock 搜索（v0.8 起）：在 fixtures 里按 id / code / name 模糊匹配，
+   * 测试搜索（v0.8 起）：在 fixtures 里按 id / code / name 模糊匹配，
    * 与 StockRepository.search 同语义、完全 deterministic（真实源全挂时的兜底）。
    */
   searchStocks(query: string): Promise<StockSearchCandidate[]> {
     const q = query.trim().toLowerCase();
     if (q.length === 0) return Promise.resolve([]);
-    const result = MOCK_STOCKS.filter(
+    const result = TEST_STOCKS.filter(
       (s) =>
         s.id.toLowerCase().includes(q) ||
         s.code.toLowerCase().includes(q) ||
@@ -121,9 +120,9 @@ export class MockMarketAdapter implements MarketDataAdapter {
 
   /** 已知 fixture 取基准价；未知代码 hash 出 [5, 500) 的稳定伪随机价。 */
   private basePriceFor(stockCode: string): number {
-    const stock = findMockStock(stockCode);
+    const stock = findTestStock(stockCode);
     if (stock) {
-      const price = MOCK_STOCK_BASE_PRICES[stock.id];
+      const price = TEST_STOCK_BASE_PRICES[stock.id];
       if (price !== undefined) return price;
     }
     return 5 + (hashString(`base|${stockCode}`) % 49_500) / 100;

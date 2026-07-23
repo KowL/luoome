@@ -1,5 +1,5 @@
 import { InvariantError } from '@luoome/core';
-import { buildMockContext } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -7,7 +7,7 @@ import { defineWorkflow } from './define-workflow.js';
 
 describe('defineWorkflow 引擎', () => {
   it('步骤顺序执行：每步收到上一步输出，末步输出即 workflow 输出', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const seen: unknown[] = [];
     const wf = defineWorkflow<{ seed: number }, number>({
       name: 'chain-test',
@@ -33,7 +33,7 @@ describe('defineWorkflow 引擎', () => {
   });
 
   it('步骤返回 ToolResult ok → 自动解包 data 传给下一步（ctx.tools 访问器可用）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const wf = defineWorkflow<Record<string, never>, string>({
       name: 'unwrap-test',
       description: 'ToolResult 自动解包',
@@ -51,7 +51,7 @@ describe('defineWorkflow 引擎', () => {
   });
 
   it('步骤返回 ToolResult error → 原样短路，后续步骤不执行', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     let reached = false;
     const wf = defineWorkflow<{ accountId: string }, unknown>({
       name: 'short-circuit-test',
@@ -78,7 +78,7 @@ describe('defineWorkflow 引擎', () => {
   });
 
   it('步骤抛 InvariantError → invariant_violation；抛其他异常 → internal（run 均不 throw）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const invariantWf = defineWorkflow<Record<string, never>, unknown>({
       name: 'invariant-test',
       description: 'InvariantError 映射',
@@ -115,7 +115,7 @@ describe('defineWorkflow 引擎', () => {
   });
 
   it('输入非法 → invalid_input（带 issues），步骤不执行', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     let reached = false;
     const wf = defineWorkflow<{ seed: number }, unknown>({
       name: 'invalid-input-test',

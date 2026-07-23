@@ -1,7 +1,7 @@
 import type { GroupResolver, ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { createStockPoolTool } from './create-stock-pool.js';
 
 const T0 = new Date('2026-07-22T00:00:00.000Z');
@@ -26,7 +26,7 @@ const seedGroup = async (
 
 describe('create_stock_pool', () => {
   it('引用已存在分组建池：合法路径 → 落库 + 字段一致', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx);
     const r = await createStockPoolTool.execute(
       {
@@ -49,7 +49,7 @@ describe('create_stock_pool', () => {
   });
 
   it('同 id 重复 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx);
     const input = {
       id: 'dup',
@@ -65,7 +65,7 @@ describe('create_stock_pool', () => {
   });
 
   it('groupId 引用的分组不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await createStockPoolTool.execute(
       {
         id: 'g-bad',
@@ -81,7 +81,7 @@ describe('create_stock_pool', () => {
   });
 
   it('tactic 规则引用不存在的 tactic → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx);
     const r = await createStockPoolTool.execute(
       {
@@ -98,7 +98,7 @@ describe('create_stock_pool', () => {
   });
 
   it('id 含大写 → invalid_input（zod parse）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx);
     const r = await createStockPoolTool.execute(
       {
@@ -115,7 +115,7 @@ describe('create_stock_pool', () => {
   });
 
   it('rules 为空 → invalid_input', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx);
     const r = await createStockPoolTool.execute(
       {
@@ -132,7 +132,7 @@ describe('create_stock_pool', () => {
   });
 
   it('formula 分组 + tactic 规则 tacticId 不一致 → invalid_input（阶段 B 跨实体不变量）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx, 'grp-formula', {
       kind: 'formula',
       tacticId: 'breakout-volume',
@@ -153,7 +153,7 @@ describe('create_stock_pool', () => {
   });
 
   it('formula 分组 + tactic 规则 tacticId 一致 → 合法', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx, 'grp-formula', {
       kind: 'formula',
       tacticId: 'breakout-volume',

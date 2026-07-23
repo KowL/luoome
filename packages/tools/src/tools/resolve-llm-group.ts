@@ -105,7 +105,7 @@ export const resolveLlmGroupTool = defineTool({
       } satisfies ToolResult<never>;
     }
 
-    // adapter 契约是「先 parse 再返回」，但 mock / 自定义 adapter 可能返回未校验 fallback；
+    // adapter 契约是「先 parse 再返回」，但自定义 adapter 可能返回未校验 fallback；
     // 这里再兜底 parse 一次，失败按 llm_error（输出校验失败，重试无意义 → retryable=false）
     const parsed = LlmGroupSchema.safeParse(llmOut);
     if (!parsed.success) {

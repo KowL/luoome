@@ -1,7 +1,8 @@
 import { type Advice, type AdviceRepository, money, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildContext, buildMockContext } from '../context.js';
+import { buildContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { getAdviceStatsTool } from './get-advice-stats.js';
 
 const makeAdvice = (id: string, decision: Advice['decision'], confidence: number): Advice => ({
@@ -28,7 +29,7 @@ const seedTwo = (): Advice[] => [
 
 describe('get_advice_stats', () => {
   it('正常路径：总数 / 平均信心度 / outcome 比例 / 命中率 / 按决策分解', async () => {
-    const ctx = await buildMockContext({ advices: seedTwo() });
+    const ctx = await buildTestContext({ advices: seedTwo() });
     await ctx.repos.advice.recordOutcome('stats-s1', {
       adviceId: 'stats-s1',
       outcome: 'followed',
@@ -60,7 +61,7 @@ describe('get_advice_stats', () => {
   });
 
   it('filter：subjectId 无命中 → 全零统计', async () => {
-    const ctx = await buildMockContext({ advices: seedTwo() });
+    const ctx = await buildTestContext({ advices: seedTwo() });
     const result = await getAdviceStatsTool.execute({ subjectId: '600519.SH' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -71,7 +72,7 @@ describe('get_advice_stats', () => {
   });
 
   it('降级路径：repo 无 getOutcome → outcome 维度按空统计（不报错）', async () => {
-    const mockCtx = await buildMockContext({ advices: seedTwo() });
+    const mockCtx = await buildTestContext({ advices: seedTwo() });
     const base = mockCtx.repos.advice;
     // 只实现 core AdviceRepository 接口的 4 个方法（无 getOutcome 便捷方法）。
     const interfaceOnlyAdviceRepo: AdviceRepository = {
@@ -97,7 +98,7 @@ describe('get_advice_stats', () => {
   });
 
   it('错误路径：非法 since → invalid_input', async () => {
-    const ctx = await buildMockContext({ advices: seedTwo() });
+    const ctx = await buildTestContext({ advices: seedTwo() });
     const result = await getAdviceStatsTool.execute({ since: 'not-a-date' }, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');

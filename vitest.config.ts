@@ -13,8 +13,10 @@ export default defineConfig({
       'packages/db/src/client.test.ts',
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',
-      // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行
+      // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
+      // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
       'apps/web/src/server.test.ts',
+      'apps/web/public/js/holdings-actions.test.js',
     ],
   },
 });

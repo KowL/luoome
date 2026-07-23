@@ -19,6 +19,7 @@ import {
   type Tactic,
   type TacticSignal,
   type Trade,
+  type WatchRun,
   type WatchTrigger,
 } from '@luoome/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,7 +47,7 @@ const FAR_PAST = new Date('2000-01-01T00:00:00.000Z');
 export const makeAccount = (id: string, overrides: Partial<Account> = {}): Account => ({
   id,
   name: `账户-${id}`,
-  kind: 'mock',
+  kind: 'real',
   currency: 'CNY',
   initialCapital: money(1_000_000),
   createdAt: T0,
@@ -96,7 +97,7 @@ export const makeQuote = (stockId: string, ts: Date, overrides: Partial<Quote> =
   low: money(9),
   close: money(10.5),
   volume: 1_000_000,
-  source: 'mock',
+  source: 'test',
   ...overrides,
 });
 
@@ -230,6 +231,20 @@ export const makeWatchTrigger = (
   quote: { close: money(15.2), ts: T1 },
   notified: true,
   createdAt: T1,
+  ...overrides,
+});
+
+export const makeWatchRun = (id: string, overrides: Partial<WatchRun> = {}): WatchRun => ({
+  id,
+  mode: 'daemon',
+  status: 'succeeded',
+  startedAt: T1,
+  finishedAt: T2,
+  evaluatedPools: 1,
+  evaluatedStocks: 6,
+  triggered: 2,
+  notified: 1,
+  suppressedByCooldown: 1,
   ...overrides,
 });
 
@@ -428,7 +443,7 @@ export const registerRepositoryContractTests = (
                 low: money(9),
                 close: money(10.5),
                 volume: 1_234_567,
-                source: 'mock',
+                source: 'test',
               },
             },
             indicators: { 'stk-1': { ma5: 10.2, rsi14: 55 } },
@@ -1037,6 +1052,32 @@ export const registerRepositoryContractTests = (
         expect(cutoff?.id).toBe('tr-new');
       });
 
+      it('lastForKey 仅返回真实通知记录，试跑审计不占 cooldown', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-notified', {
+            createdAt: T1,
+            poolId: 'p1',
+            stockId: 's1',
+            ruleKind: 'price-change',
+            notified: true,
+          }),
+        );
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-dry-run', {
+            createdAt: T3,
+            poolId: 'p1',
+            stockId: 's1',
+            ruleKind: 'price-change',
+            notified: false,
+          }),
+        );
+        const hit = await repos.watchTrigger.lastForKey(
+          { poolId: 'p1', stockId: 's1', ruleKind: 'price-change' },
+          FAR_PAST,
+        );
+        expect(hit?.id).toBe('tr-notified');
+      });
+
       it('listRecent 支持 poolId / since / limit', async () => {
         await repos.watchTrigger.save(makeWatchTrigger('tr-1', { createdAt: T1, poolId: 'p1' }));
         await repos.watchTrigger.save(makeWatchTrigger('tr-2', { createdAt: T2, poolId: 'p2' }));
@@ -1059,6 +1100,46 @@ export const registerRepositoryContractTests = (
         await repos.watchTrigger.save(makeWatchTrigger('tr-x'));
         await repos.watchTrigger.remove('tr-x');
         expect(await repos.watchTrigger.findById('tr-x')).toBeNull();
+      });
+    });
+
+    describe('WatchRunRepository', () => {
+      it('running → succeeded upsert，latest/listRecent 按 startedAt 倒序', async () => {
+        await repos.watchRun.save(
+          makeWatchRun('run-1', {
+            status: 'running',
+            startedAt: T1,
+            finishedAt: null,
+            evaluatedPools: 0,
+            evaluatedStocks: 0,
+            triggered: 0,
+            notified: 0,
+            suppressedByCooldown: 0,
+          }),
+        );
+        await repos.watchRun.save(makeWatchRun('run-1', { startedAt: T1, finishedAt: T2 }));
+        await repos.watchRun.save(
+          makeWatchRun('run-2', {
+            startedAt: T3,
+            finishedAt: T3,
+            triggered: 0,
+            notified: 0,
+            suppressedByCooldown: 0,
+          }),
+        );
+
+        expect((await repos.watchRun.findById('run-1'))?.status).toBe('succeeded');
+        expect((await repos.watchRun.latest())?.id).toBe('run-2');
+        expect((await repos.watchRun.listRecent(2)).map((run) => run.id)).toEqual([
+          'run-2',
+          'run-1',
+        ]);
+      });
+
+      it('failed 缺 error 时拒绝', async () => {
+        await expect(
+          repos.watchRun.save(makeWatchRun('run-bad', { status: 'failed', error: undefined })),
+        ).rejects.toThrow();
       });
     });
   });

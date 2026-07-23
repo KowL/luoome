@@ -1,5 +1,5 @@
 import type { LLMAdapterLike, StockGroup, Tactic, ToolContext } from '@luoome/core';
-import { buildMockContext } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { refreshGroupsWorkflow } from './refresh-groups.js';
@@ -39,7 +39,7 @@ const failingLlm: LLMAdapterLike = {
 
 describe('refresh-groups workflow', () => {
   it('formula 组成功：写新批次，refreshed + entered 正确', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
@@ -59,7 +59,7 @@ describe('refresh-groups workflow', () => {
   });
 
   it('manual / holdings 组不刷新；disabled 组不刷新', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-manual');
     await seedGroup(ctx, 'g-disabled', {
       resolver: { kind: 'llm', prompt: 'x', maxMembers: 5 },
@@ -73,7 +73,7 @@ describe('refresh-groups workflow', () => {
   });
 
   it('llm 组失败：保留旧快照，计入 failed，绝不写空批', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-l', {
       resolver: { kind: 'llm', prompt: '选出龙头', maxMembers: 3 },
     });
@@ -102,7 +102,7 @@ describe('refresh-groups workflow', () => {
   });
 
   it('成员变化检测：旧批退出 + 新批进入', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
@@ -137,7 +137,7 @@ describe('refresh-groups workflow', () => {
   });
 
   it('groupIds 子集：只刷新指定分组', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-a', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },

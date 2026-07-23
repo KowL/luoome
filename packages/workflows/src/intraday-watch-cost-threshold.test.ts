@@ -1,6 +1,6 @@
 import type { ToolContext } from '@luoome/core';
-import { buildMockContext } from '@luoome/tools';
-import { withFixedQuoteAdapter } from '@luoome/tools/internal/mock-adapter';
+import { buildTestContext } from '@luoome/tools/testing';
+import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import { describe, expect, it } from 'vitest';
 
 import { intradayWatchWorkflow } from './intraday-watch.js';
@@ -13,11 +13,11 @@ import { intradayWatchWorkflow } from './intraday-watch.js';
  * sell direction），保证不与基础路径测试相互耦合。
  *
  * 数据背景（来自 packages/adapters/src/mocks/fixtures.ts）：
- *   mock-holding-002594: stockId=002594.SZ, avgCost=98.5
- *   mock-holding-00700:   stockId=00700.HK,   avgCost=480.0
- *   mock-holding-300750:  stockId=300750.SZ,  avgCost=250.0
- *   mock-holding-600036:  stockId=600036.SH,  avgCost=39.8
- *   mock-holding-AAPL:    stockId=AAPL.US,    avgCost=195.0
+ *   test-holding-002594: stockId=002594.SZ, avgCost=98.5
+ *   test-holding-00700:   stockId=00700.HK,   avgCost=480.0
+ *   test-holding-300750:  stockId=300750.SZ,  avgCost=250.0
+ *   test-holding-600036:  stockId=600036.SH,  avgCost=39.8
+ *   test-holding-AAPL:    stockId=AAPL.US,    avgCost=195.0
  *
  * 通过 FixedQuoteAdapter 把"现价"注入到固定值，避免依赖 hash 随机。
  */
@@ -35,7 +35,7 @@ const MANUAL_GROUP_ID = 'manual-group';
 
 /** 构造带固定行情的 ctx，并把默认 holdings-watch 池替换为 cost-threshold-only 池。 */
 const setupCtx = async (quotes: Record<string, number>) => {
-  const ctx = await buildMockContext();
+  const ctx = await buildTestContext();
   const fixed = withFixedQuoteAdapter(ctx, quotes);
   // 清掉默认 holdings-watch（避免干扰），新建专用 cost-threshold 池
   await ctx.repos.stockPool.remove('holdings-watch');
@@ -325,7 +325,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r1 = await intradayWatchWorkflow.run(
-      { poolIds: ['cooldown-pool'], notify: false, seedTacticSources: false },
+      { poolIds: ['cooldown-pool'], notify: true, seedTacticSources: false },
       ctx as unknown as ToolContext,
     );
     expect(r1.ok).toBe(true);
@@ -333,7 +333,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     expect(r1.data.triggers[0]?.notified).toBe(true);
 
     const r2 = await intradayWatchWorkflow.run(
-      { poolIds: ['cooldown-pool'], notify: false, seedTacticSources: false },
+      { poolIds: ['cooldown-pool'], notify: true, seedTacticSources: false },
       ctx as unknown as ToolContext,
     );
     expect(r2.ok).toBe(true);

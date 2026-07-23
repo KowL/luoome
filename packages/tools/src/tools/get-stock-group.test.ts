@@ -1,7 +1,7 @@
 import type { StockGroup, ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { getStockGroupTool } from './get-stock-group.js';
 
 const T0 = new Date('2026-07-22T00:00:00.000Z');
@@ -42,7 +42,7 @@ const seedSnapshot = (
 
 describe('get_stock_group', () => {
   it('id 不存在 → not_found', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     const r = await getStockGroupTool.execute({ id: 'missing' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -50,7 +50,7 @@ describe('get_stock_group', () => {
   });
 
   it('manual 组：成员=固定列表，latestRefreshAt=null，stale=false', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await seedGroup(ctx, 'g-manual');
     const r = await getStockGroupTool.execute({ id: 'g-manual' }, ctx);
     expect(r.ok).toBe(true);
@@ -61,7 +61,7 @@ describe('get_stock_group', () => {
   });
 
   it('holdings 组：成员=活跃持仓现算，stale=false', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await seedGroup(ctx, 'g-holdings', {
       resolver: { kind: 'holdings', accountId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' },
     });
@@ -74,7 +74,7 @@ describe('get_stock_group', () => {
   });
 
   it('daily formula 组无快照 → stale=true', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'breakout-volume', lookbackDays: 5 },
       refreshPolicy: 'daily',
@@ -88,7 +88,7 @@ describe('get_stock_group', () => {
   });
 
   it('daily formula 组最新批次在昨日 → stale=true；在今日 → stale=false', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'breakout-volume', lookbackDays: 5 },
       refreshPolicy: 'daily',
@@ -110,7 +110,7 @@ describe('get_stock_group', () => {
   });
 
   it('refreshPolicy=manual 的 formula 组：即使无快照也 stale=false', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await seedGroup(ctx, 'g-fm', {
       resolver: { kind: 'formula', tacticId: 'breakout-volume', lookbackDays: 5 },
       refreshPolicy: 'manual',

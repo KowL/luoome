@@ -1,7 +1,7 @@
 import type { StockGroup, ToolContext } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildMockContext } from '../context.js';
+import { buildTestContext } from '../testing/context.js';
 import { listStockGroupsTool } from './list-stock-groups.js';
 
 const T0 = new Date('2026-07-22T00:00:00.000Z');
@@ -20,7 +20,7 @@ const seedGroup = (ctx: ToolContext, id: string, overrides: Partial<StockGroup> 
 
 describe('list_stock_groups', () => {
   it('默认返回全部（按 id 升序）；enabledOnly=true 仅 enabled', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-b', { enabled: false });
     await seedGroup(ctx, 'g-a');
     const r = await listStockGroupsTool.execute({}, ctx);
@@ -37,7 +37,7 @@ describe('list_stock_groups', () => {
   });
 
   it('includeMemberCount=true：manual 组 = stockIds 长度', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-manual');
     const r = await listStockGroupsTool.execute({ includeMemberCount: true }, ctx);
     expect(r.ok).toBe(true);
@@ -46,7 +46,7 @@ describe('list_stock_groups', () => {
   });
 
   it('includeMemberCount=true：formula 组 = 最新快照批成员数', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-formula', {
       resolver: { kind: 'formula', tacticId: 'breakout-volume', lookbackDays: 5 },
     });
@@ -67,7 +67,7 @@ describe('list_stock_groups', () => {
   });
 
   it('includeMemberCount=true：holdings 组 = 活跃持仓数（mock 种子 6 个活跃持仓）', async () => {
-    const ctx = await buildMockContext();
+    const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-holdings', {
       resolver: { kind: 'holdings', accountId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' },
     });

@@ -1,5 +1,5 @@
 import type { StockGroup, Tactic, ToolContext } from '@luoome/core';
-import { buildMockContext } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { intradayWatchWorkflow, resetDailyGroupRefreshFlagForTest } from './intraday-watch.js';
@@ -42,7 +42,7 @@ describe('intraday-watch daily 刷新接线（docs/stock-group-design.md §7）'
   });
 
   it('daily formula 组今日无快照 → watch 首轮前先跑 refresh-groups', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-daily');
 
@@ -54,7 +54,7 @@ describe('intraday-watch daily 刷新接线（docs/stock-group-design.md §7）'
   });
 
   it('今日已成功刷过 → watch 不再重复刷新', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-daily');
     // 预置今日批次
@@ -76,7 +76,7 @@ describe('intraday-watch daily 刷新接线（docs/stock-group-design.md §7）'
   });
 
   it('昨日批次 → 今日首轮刷新一次；同进程第二轮不再刷', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-daily');
     await ctx.repos.groupMember.saveBatch([
@@ -102,7 +102,7 @@ describe('intraday-watch daily 刷新接线（docs/stock-group-design.md §7）'
   });
 
   it('manual 组（非动态）不触发刷新；无分组时正常跑', async () => {
-    const ctx = await buildMockContext({ clock: () => NOW });
+    const ctx = await buildTestContext({ clock: () => NOW });
     await seedGroup(ctx, 'g-manual', {
       resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
       refreshPolicy: 'daily',

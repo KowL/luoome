@@ -7,6 +7,8 @@ import { ensureStockStub, manualId, STOCK_ID_PATTERN } from '../internal/manual-
 export const AddHoldingInput = z.object({
   /** 形如 002594.SZ（代码.交易所）。 */
   stockId: z.string().regex(STOCK_ID_PATTERN, 'stockId 必须形如 002594.SZ（代码.交易所）'),
+  /** 搜索候选携带的名称，用于避免新股票只显示代码。 */
+  stockName: z.string().trim().min(1).max(100).optional(),
   quantity: z.number().int().positive(),
   avgCost: z.number().positive(),
   /** 缺省 = quantity（全量可卖）。 */
@@ -51,7 +53,7 @@ export const addHoldingTool = defineTool({
       );
     }
 
-    await ensureStockStub(input.stockId, ctx);
+    await ensureStockStub(input.stockId, ctx, input.stockName);
     const now = ctx.clock();
     const holding: Holding = {
       id: manualId('holding'),

@@ -1,4 +1,3 @@
-import { MOCK_LLM_SYSTEM_ANALYZE_STOCK } from '@luoome/adapters';
 import {
   type Advice,
   AdviceDataSnapshotSchema,
@@ -20,7 +19,7 @@ import {
 import { computeSimpleIndicators } from '../internal/indicators.js';
 
 const DAY_MS = 86_400_000;
-/** 拉日线的回看窗口（MockMarketAdapter 固定返回 60 根，端点对齐 range.end）。 */
+/** 拉日线的回看窗口。 */
 const BARS_LOOKBACK_DAYS = 120;
 
 export const AnalyzeStockInput = z.object({
@@ -64,7 +63,7 @@ export const analyzeStockTool = defineTool({
     const indicators = computeSimpleIndicators(bars);
 
     const llmOutput = await ctx.adapters.llm.generate<AdviceLLMOutput>({
-      system: MOCK_LLM_SYSTEM_ANALYZE_STOCK,
+      system: 'analyze_stock',
       schema: AdviceLLMSchema,
       data: {
         stockId: stock.id,

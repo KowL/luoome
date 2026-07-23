@@ -40,7 +40,19 @@ export const listHoldingsTool = defineTool({
       return input.status === 'active' ? h.closedAt === null : h.closedAt !== null;
     });
 
-    const quotes = await ctx.adapters.market.batchQuote(holdings.map((h) => h.stockId));
+    const stockIds = holdings.map((h) => h.stockId);
+    const [storedQuotes, liveQuotes] = await Promise.all([
+      ctx.repos.quote.latestByStocks(stockIds),
+      ctx.adapters.market.batchQuote(stockIds).catch((error: unknown) => {
+        ctx.logger.warn('list_holdings live quotes unavailable, using stored snapshots', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return new Map();
+      }),
+    ]);
+    // 最新实时价优先；实时源缺失或整体失败时保留本地最后快照。
+    const quotes = new Map(storedQuotes);
+    for (const [stockId, quote] of liveQuotes) quotes.set(stockId, quote);
     const items = await Promise.all(
       holdings.map(async (holding) => {
         const stock = await ctx.repos.stock.findById(holding.stockId);

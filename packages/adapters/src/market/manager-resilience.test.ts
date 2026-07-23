@@ -151,6 +151,22 @@ const range: DateRange = {
 
 describe('market/manager 真实行情链路容错（v0.6.2）', () => {
   describe('batchQuote 部分失败', () => {
+    it('未配置最终兜底且所有实时源失败时，返回空结果而不是让持仓列表崩溃', async () => {
+      const primary = new ResilPrimary();
+      primary.failCodes = new Set(['A']);
+      const fallback = new ResilFallback();
+      fallback.fetchQuote = async () => {
+        throw new Error('fallback fail A');
+      };
+      const mgr = new MarketDataManager({
+        primary,
+        fallback,
+        logger: silentLogger,
+      });
+
+      await expect(mgr.batchQuote(['A'])).resolves.toEqual(new Map());
+    });
+
     it('primary 对 A 抛错、B 抛错；C/D OK：fallback 仅补 A/B，其它来自 primary', async () => {
       const primary = new ResilPrimary();
       primary.failCodes = new Set(['A', 'B']);
