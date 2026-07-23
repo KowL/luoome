@@ -2,7 +2,6 @@
 
 // 依赖注入上下文
 export * from './context.js';
-export * from './env-file.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/advice.js';
@@ -19,6 +18,7 @@ export * from './entity/stock-group.js';
 export * from './entity/stock-pool.js';
 export * from './entity/tactic.js';
 export * from './entity/trade.js';
+export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
 // 仓储接口

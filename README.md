@@ -107,6 +107,7 @@ homebrew/
 | [docs/SECURITY.md](./docs/SECURITY.md) | 副作用分级、advice 安全、密钥、audit |
 | [docs/HANDOFF.md](./docs/HANDOFF.md) | 跨上下文会话交接 + 功能 backlog |
 | [docs/BACKLOG.md](./docs/BACKLOG.md) | 一致性 / 工程债清单（全仓走查产出） |
+| [docs/adshare-integration.md](./docs/adshare-integration.md) | Adshare 数据服务集成手册：环境变量 / 启动顺序 / 故障排查 |
 
 ## 状态
 

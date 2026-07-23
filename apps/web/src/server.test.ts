@@ -2,7 +2,7 @@
 // node/vitest 无法解析，已在 vitest.config.ts exclude；由 `bun run test:web` 执行）。
 // ctx 用 buildMockContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
 
-import { beforeAll, describe, expect, it } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
 
 import { buildMockContext } from '@luoome/tools';
 import type { Hono } from 'hono';
@@ -306,5 +306,75 @@ describe('/api/chat：对话助手', () => {
     expect(status).toBe(200);
     expect(body.data?.drafts).toEqual([]);
     expect(await chatCtx.repos.stockGroup.findById('kind-mismatch-group')).toBeNull();
+  });
+});
+
+describe('GET /api/stocks/search', () => {
+  const originalAdshareUrl = process.env.ADSHARE_URL;
+  const originalAdshareApiKey = process.env.ADSHARE_API_KEY;
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    if (originalAdshareUrl === undefined) delete process.env.ADSHARE_URL;
+    else process.env.ADSHARE_URL = originalAdshareUrl;
+    if (originalAdshareApiKey === undefined) delete process.env.ADSHARE_API_KEY;
+    else process.env.ADSHARE_API_KEY = originalAdshareApiKey;
+    globalThis.fetch = originalFetch;
+  });
+
+  it('q 为空 → 400 invalid_input', async () => {
+    const r = await app.fetch(new Request('http://test/api/stocks/search?q='));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('未配置 ADSHARE_URL 时回退到本地 search_stocks', async () => {
+    delete process.env.ADSHARE_URL;
+    delete process.env.ADSHARE_API_KEY;
+    const testApp = createWebApp(await buildMockContext());
+    const r = await testApp.fetch(new Request('http://test/api/stocks/search?q=%E8%8C%85'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean; data?: { stocks: unknown[]; source: string } };
+    expect(body.ok).toBe(true);
+    expect(body.data?.source).not.toBe('adshare');
+    expect(body.data?.stocks.length).toBeGreaterThan(0);
+  });
+
+  it('adshare 返回结果时优先使用 adshare', async () => {
+    process.env.ADSHARE_URL = 'http://adshare.test';
+    process.env.ADSHARE_API_KEY = 'k';
+    const mockFetch = (async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/stock_basic')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [{ ts_code: '600519.SH', name: '贵州茅台', industry: '白酒' }],
+          }),
+          text: async () => '',
+          headers: new Headers(),
+        } as Response;
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    globalThis.fetch = mockFetch;
+
+    const testApp = createWebApp(await buildMockContext());
+    const r = await testApp.fetch(
+      new Request('http://test/api/stocks/search?q=%E8%B4%B5%E5%B7%9E%E8%8C%85%E5%8F%B0'),
+    );
+    globalThis.fetch = originalFetch;
+
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { stocks: Array<{ id: string }>; source: string };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.source).toBe('adshare');
+    expect(body.data?.stocks[0]?.id).toBe('600519.SH');
   });
 });

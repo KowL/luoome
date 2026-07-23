@@ -16,6 +16,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@luoome/adapters": "workspace:*",
+        "@luoome/adshare-sdk": "workspace:*",
         "@luoome/core": "workspace:*",
         "@luoome/db": "workspace:*",
         "@luoome/tools": "workspace:*",
@@ -30,6 +31,18 @@
         "@luoome/core": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "zod": "^4.0.0",
+      },
+    },
+    "packages/adshare-sdk": {
+      "name": "@luoome/adshare-sdk",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/core": "workspace:*",
+        "zod": "^4.0.0",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+        "vitest": "^4.1.10",
       },
     },
     "packages/cli": {
@@ -133,6 +146,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@luoome/adapters": ["@luoome/adapters@workspace:packages/adapters"],
+
+    "@luoome/adshare-sdk": ["@luoome/adshare-sdk@workspace:packages/adshare-sdk"],
 
     "@luoome/cli": ["@luoome/cli@workspace:packages/cli"],
 
