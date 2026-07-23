@@ -76,7 +76,7 @@ mcps:
 | `list_trades` | 查交易记录 |
 | `list_alerts` | 查预警规则 |
 | `list_notes` | 查笔记 |
-| `search_stocks` | 按代码/名称搜股票 |
+| `search_stocks` | 按代码/名称搜股票（外部数据源：Eastmoney 主 → Tencent 备 → mock 兜底；本地库再兜底） |
 | `get_quote` | 拉单只股票实时行情 |
 | `batch_quote` | 批量拉行情 |
 | `compute_pnl` | 算 PnL |

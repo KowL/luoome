@@ -86,7 +86,9 @@ luoome web
 # 默认 5173 端口；浏览器开 http://localhost:5173/
 ```
 
-页面分 7 个 tab：仪表盘 / 持仓 / 行情 / 战法 / 建议 / 复盘 / 设置。首次打开会提示 `localhost 无 token`，去**设置**页生成 token 并粘回浏览器即可（v0.4 起的本地 token 鉴权）。
+页面分 6 个 tab：仪表盘 / 持仓 / 战法 / 建议 / 复盘 / 设置。首次打开会提示 `localhost 无 token`，去**设置**页生成 token 并粘回浏览器即可（v0.4 起的本地 token 鉴权）。
+
+**持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**——加减仓写交易并自动联动加权成本与可卖数量（卖光自动平仓），纠错仅修正录入错误，平仓仅标记状态（危险按钮、需确认）。Web 端默认放行 write 类 tool；MCP 不受影响。
 
 ### 2.3 MCP 模式
 
@@ -94,7 +96,7 @@ luoome web
 luoome mcp serve    # stdio JSON-RPC
 ```
 
-按 [AGENTS.md](../AGENTS.md) 接进 Claude Desktop / OpenClaw / Hermes 后，agent 即可调用 27 个 tool。
+按 [AGENTS.md](../AGENTS.md) 接进 Claude Desktop / OpenClaw / Hermes 后，agent 即可调用 32 个 tool 中默认暴露的 read + advice 类。
 
 ---
 

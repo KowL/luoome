@@ -11,9 +11,7 @@
    - 实际 32 个 tool（read 16 / advice 3 / write 9 / external 4），以 `luoome tools list --json` 为准——清单自己也这么声明，但静态表格依然误导。
    - 建议：按运行时输出重写工具清单，或删掉静态表格只留 `luoome tools list` 指引。
 
-2. **apps/web 零测试 + 依赖声明缺失**
-   - `apps/web/src/server.ts` import `@luoome/adapters`、`@luoome/db`，但 `apps/web/package.json` 未声明，靠 workspace hoisting 才能跑。
-   - 聚合端点（`/api/tactics/scan`、`/api/review*`、`/api/account/select`）无任何测试覆盖。
+2. ~~**apps/web 零测试 + 依赖声明缺失**~~ ✅ 已修（v0.8：`package.json` 补声明 `@luoome/adapters` / `@luoome/db`；新增 `server.test.ts` 闸口矩阵 9 例，`bun run test:web` 执行并纳入 `test:all`）
 
 3. **MCP 与 CLI 时钟口径分叉**
    - `packages/mcp/src/context.ts` 业务时钟固定 mock 锚点（2026-07-17，注释自称 v0.1），CLI / TUI / Web 用真实时钟；同一 `get_advice`（默认过滤过期）在 MCP 与 CLI 下结果可能不同。

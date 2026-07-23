@@ -300,6 +300,7 @@ Adapter manager 提供：
 - 故障降级（主源失败 → 备用源）
 - 缓存（带 TTL）
 - 限速（per-adapter 配额）
+- 股票搜索路由（v0.8 起：`searchStocks` 走 primary → fallback → mock 兜底链，空数组不降级、抛错才降级）
 
 surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts），按

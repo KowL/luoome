@@ -67,7 +67,7 @@ luoome/
 │   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
 │   └── tui/           opentui 应用
 ├── apps/
-│   └── web/           Hono + 原生 HTML/JS 仪表盘（v0.4 已 7 路由 + 设计系统）
+│   └── web/           Hono + 原生 HTML/JS 仪表盘（6 路由 + 设计系统）
 ├── docs/              全部文档
 │   ├── ARCHITECTURE.md    架构核心
 │   ├── ROADMAP.md         v0.1 → v0.7 演进
@@ -105,7 +105,8 @@ workflows ──► tools ──► core
 | `bun run typecheck` | 全 monorepo 跑 `tsc --noEmit` |
 | `bun test` | vitest（478 个 case，0 fail） |
 | `bun run test:db` | bun test（db 包 + drizzle + in-memory 合约测试，127 个 case） |
-| `bun run test:all` | 上两个一起跑（CI 用这个） |
+| `bun run test:web` | bun test（apps/web 闸口矩阵，9 个 case；v0.8 起） |
+| `bun run test:all` | 上面三个一起跑（CI 用这个） |
 | `bun run lint` | biome check（lint + format 检查，0 错） |
 | `bun run format` | biome format --write（自动修格式） |
 | `bun packages/tui/src/smoke.ts` | TUI headless smoke（6 项断言） |

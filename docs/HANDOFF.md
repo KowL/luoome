@@ -16,8 +16,8 @@
 | Tool 数 | 32（read 16 / advice 3 / write 9 / external 4）—— v0.6 新增 5 个：股票池 CRUD 4 + `save_watch_trigger` |
 | Workflow 数 | 6（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / **intraday-watch**） |
 | 战法数 | 5 builtin（放量突破 / 均线多头 / 涨停回踩 / 量价背离 / 板块共振）—— v0.3 起 |
-| 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股 + 港股）；LLM 经 `LUOOME_LLM_PROVIDER` 路由——mock / OpenAI-Compatible / Anthropic（缺 key 启动期报错）；飞书 Webhook |
-| Surfaces | CLI / TUI / Web（7 路由） / MCP stdio |
+| 数据源 | 行情经 `LUOOME_MARKET_PROVIDER` 路由——mock（默认，确定性）/ real（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股 + 港股）；股票搜索同链（Eastmoney suggest 主 → Tencent smartbox 备 → mock 兜底，`search_stocks` 再降级本地库，v0.8 起）；LLM 经 `LUOOME_LLM_PROVIDER` 路由——mock / OpenAI-Compatible / Anthropic（缺 key 启动期报错）；飞书 Webhook |
+| Surfaces | CLI / TUI / Web（6 路由） / MCP stdio |
 | 节假日历 | 内置 2026（29 天）+ 2027 best-effort placeholder；`~/.luoome/holidays.json` 文件加载 + `LUOOME_A_SHARE_HOLIDAYS` env 追加 |
 | CI | GitHub Actions · ubuntu + bun 1.3.11 · typecheck + test:all + lint 三关 |
 | License | MIT |
@@ -309,7 +309,7 @@ bash bin/luoome tools call update_holding --input '{"holdingId":"<id>","avgCost"
 bash bin/luoome tools call close_holding --input '{"holdingId":"<id>"}'
 ```
 
-4 个均为 write 副作用：MCP 需 `LUOOME_EXPOSE_WRITE=true` 才暴露；web 端不暴露（403）。
+4 个均为 write 副作用：MCP 需 `LUOOME_EXPOSE_WRITE=true` 才暴露；Web 端 v0.8 起默认放行 write（持仓页新增 / 加仓 / 减仓 / 纠错 / 平仓直接可用，external 仅白名单 `fetch_quote`，详见 `apps/web/src/server.ts` 闸口）。
 
 ## 8. 下一步（v0.5 候选）
 
