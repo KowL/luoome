@@ -1,10 +1,12 @@
 export { DrizzleAccountRepository } from './account.js';
 export { DrizzleAdviceRepository } from './advice.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
+export { DrizzleGroupMemberRepository } from './group-member.js';
 export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleNotificationRepository } from './notification.js';
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleStockRepository } from './stock.js';
+export { DrizzleStockGroupRepository } from './stock-group.js';
 export { DrizzleStockPoolRepository } from './stock-pool.js';
 export { DrizzleTacticRepository } from './tactic.js';
 export { DrizzleTradeRepository } from './trade.js';

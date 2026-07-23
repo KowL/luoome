@@ -1,23 +1,7 @@
-import {
-  assertStockPoolInvariants,
-  type PoolSource,
-  StockPoolSchema,
-  type WatchRule,
-} from '@luoome/core';
+import { assertStockPoolInvariants, StockPoolSchema, type WatchRule } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
-
-const PoolSourceInputSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('holdings'), accountId: z.string().min(1) }),
-  z.object({ kind: z.literal('manual'), stockIds: z.array(z.string().min(1)).min(1) }),
-  z.object({
-    kind: z.literal('tactic'),
-    tacticId: z.string().min(1),
-    lookbackDays: z.number().int().positive().max(365),
-    minScore: z.number().min(0).max(100).optional(),
-  }),
-]);
 
 const WatchRuleInputSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -41,7 +25,8 @@ export const CreateStockPoolInput = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/, 'pool.id 必须小写 kebab-case，长度 2-64'),
   name: z.string().min(1).max(64),
   description: z.string().max(500).optional(),
-  source: PoolSourceInputSchema,
+  /** 成员分组引用（stock_groups.id）；分组必须已存在。 */
+  groupId: z.string().min(1),
   rules: z.array(WatchRuleInputSchema).min(1),
   cooldownMinutes: z.number().int().min(1).max(1440).default(30),
   enabled: z.boolean().default(true),
@@ -52,19 +37,20 @@ export const CreateStockPoolOutput = z.object({
 });
 
 /**
- * 创建股票池（v0.6 起，write）。
+ * 创建股票池（v0.6 起，write；分组化改造 docs/stock-group-design.md §5/§6）。
  *
  * 校验链：
  * 1. zod parse（schema 校验）
- * 2. tactic 引用存在性检查（repos.tactic.findById）
- * 3. holdings source 的 accountId 存在性检查（repos.account.findById）
- * 4. assertStockPoolInvariants（rules ≥ 1；tactic source 池的 rules.tactic 一致性）
- * 5. 同 id 已存在 → invalid_input
- * 6. 落库
+ * 2. 分组存在性检查（repos.stockGroup.findById）
+ * 3. formula 分组的 tacticId 与 rules 中 tactic 规则一致性（阶段 B 跨实体不变量）
+ * 4. tactic 规则引用存在性检查（repos.tactic.findById）
+ * 5. assertStockPoolInvariants（rules ≥ 1 等 pool 自身不变量）
+ * 6. 同 id 已存在 → invalid_input
+ * 7. 落库
  */
 export const createStockPoolTool = defineTool({
   name: 'create_stock_pool',
-  description: '创建股票池（write）；tactic / account 引用不存在会拒绝',
+  description: '创建股票池（write）；分组 / tactic 引用不存在会拒绝',
   sideEffect: 'write',
   input: CreateStockPoolInput,
   output: CreateStockPoolOutput,
@@ -74,9 +60,24 @@ export const createStockPoolTool = defineTool({
       return errInvalidInput(`stock pool id 已存在: ${input.id}`);
     }
 
-    // tactic 引用校验
+    // 分组存在性校验
+    const group = await ctx.repos.stockGroup.findById(input.groupId);
+    if (group === null) return errNotFound('StockGroup', input.groupId);
+
+    // 跨实体不变量（阶段 B）：formula 分组的 tacticId 必须与 rules 中 tactic 规则一致
+    if (group.resolver.kind === 'formula') {
+      for (const rule of input.rules) {
+        if (rule.kind === 'tactic' && rule.tacticId !== group.resolver.tacticId) {
+          return errInvalidInput(
+            `pool 引用 formula 分组（resolver.tacticId=${group.resolver.tacticId}）时，` +
+              `tactic 规则的 tacticId 必须一致，实际 ${rule.tacticId}`,
+          );
+        }
+      }
+    }
+
+    // tactic 规则引用校验
     const tacticIds = new Set<string>();
-    if (input.source.kind === 'tactic') tacticIds.add(input.source.tacticId);
     for (const rule of input.rules) {
       if (rule.kind === 'tactic') tacticIds.add(rule.tacticId);
     }
@@ -85,18 +86,12 @@ export const createStockPoolTool = defineTool({
       if (t === null) return errNotFound('Tactic', tid);
     }
 
-    // holdings source 的 accountId 校验
-    if (input.source.kind === 'holdings') {
-      const acc = await ctx.repos.account.findById(input.source.accountId);
-      if (acc === null) return errNotFound('Account', input.source.accountId);
-    }
-
     const now = ctx.clock();
     const pool = StockPoolSchema.parse({
       id: input.id,
       name: input.name,
       ...(input.description !== undefined ? { description: input.description } : {}),
-      source: input.source satisfies PoolSource,
+      groupId: input.groupId,
       rules: input.rules satisfies readonly WatchRule[],
       cooldownMinutes: input.cooldownMinutes,
       enabled: input.enabled,

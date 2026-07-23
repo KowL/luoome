@@ -30,6 +30,8 @@ import { createDrizzleRepos, seedMockData } from '@luoome/db';
 import { buildContext, toolRegistry } from '@luoome/tools';
 import { Hono } from 'hono';
 
+import { handleChat } from './chat.js';
+
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
 /**
@@ -165,6 +167,7 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
   app.get('/advice', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/chat', serveFile('index.html', 'text/html; charset=utf-8'));
 
   // /js/* 静态文件（v0.4 起拆成模块；无构建步骤，直接读取 public/js/）。
   app.get('/js/:filename', (c) => {
@@ -250,6 +253,25 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
   });
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
+
+  // 对话助手（web 内部端点，不进 toolRegistry；docs/web-chat-design.md）。
+  // LLM 失败 / parse 失败一律走兜底 reply，不抛 500。
+  app.post('/api/chat', async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '请求体必须是 JSON：{ "message": "...", "history"?: [...] }',
+          issues: [],
+        },
+      });
+    }
+    return jsonResult(await handleChat(body, ctxRef.current, invokeTool));
+  });
 
   app.get('/api/advice', (c) => {
     const subjectId = c.req.query('subjectId');

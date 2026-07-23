@@ -3,6 +3,7 @@ import {
   type Advice,
   type AdviceOutcome,
   type DailyBar,
+  type GroupMemberSnapshot,
   type Holding,
   InvariantError,
   money,
@@ -12,6 +13,7 @@ import {
   type RepositoryRegistry,
   STANDARD_DISCLAIMERS,
   type Stock,
+  type StockGroup,
   type StockPool,
   stockCode,
   type Tactic,
@@ -181,12 +183,36 @@ export const makeNotification = (
 export const makeStockPool = (id: string, overrides: Partial<StockPool> = {}): StockPool => ({
   id,
   name: `池-${id}`,
-  source: { kind: 'manual', stockIds: ['002594.SZ'] },
+  groupId: 'grp-1',
   rules: [{ kind: 'price-change', pct: 0.05 }],
   cooldownMinutes: 30,
   enabled: true,
   createdAt: T0,
   updatedAt: T0,
+  ...overrides,
+});
+
+export const makeStockGroup = (id: string, overrides: Partial<StockGroup> = {}): StockGroup => ({
+  id,
+  name: `分组-${id}`,
+  resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
+  refreshPolicy: 'daily',
+  enabled: true,
+  createdAt: T0,
+  updatedAt: T0,
+  ...overrides,
+});
+
+export const makeGroupMemberSnapshot = (
+  id: string,
+  overrides: Partial<GroupMemberSnapshot> = {},
+): GroupMemberSnapshot => ({
+  id,
+  groupId: 'grp-1',
+  stockId: '002594.SZ',
+  refreshId: 'rf-1',
+  reason: 'fixture reason',
+  createdAt: T1,
   ...overrides,
 });
 
@@ -287,7 +313,13 @@ export const registerRepositoryContractTests = (
         expect((await repos.stock.search('aap')).map((s) => s.id)).toEqual(['stk-2']);
         expect((await repos.stock.search('茅台')).map((s) => s.id)).toEqual(['stk-3']);
         expect(await repos.stock.search('不存在的')).toEqual([]);
-        expect(await repos.stock.search('   ')).toEqual([]);
+        // 空 / 纯空白 query → 返回全部（按 id 升序）：run_tactic(scope='all-stocks') /
+        // market_outlook / resolve_llm_group 依赖此语义做全市场扫描
+        expect((await repos.stock.search('   ')).map((s) => s.id)).toEqual([
+          'stk-1',
+          'stk-2',
+          'stk-3',
+        ]);
       });
 
       it('save 同 id 为 upsert；remove 生效', async () => {
@@ -808,6 +840,135 @@ export const registerRepositoryContractTests = (
 
       it('违反不变量时拒绝（rules 为空）', async () => {
         await expect(repos.stockPool.save(makeStockPool('bad', { rules: [] }))).rejects.toThrow();
+      });
+    });
+
+    describe('StockGroupRepository', () => {
+      it('save + findById 往返一致（含可选 description + resolver JSON）', async () => {
+        const g = makeStockGroup('grp-1', {
+          description: 'd',
+          resolver: { kind: 'formula', tacticId: 'breakout-volume', lookbackDays: 5, minScore: 60 },
+        });
+        await repos.stockGroup.save(g);
+        expect(await repos.stockGroup.findById('grp-1')).toEqual(g);
+        expect(await repos.stockGroup.findById('missing')).toBeNull();
+      });
+
+      it('llm resolver（maxMembers / model）往返一致', async () => {
+        const g = makeStockGroup('grp-llm', {
+          resolver: { kind: 'llm', prompt: '选出当前龙头', maxMembers: 20, model: 'gpt-x' },
+        });
+        await repos.stockGroup.save(g);
+        expect(await repos.stockGroup.findById('grp-llm')).toEqual(g);
+      });
+
+      it('list 默认全部（按 id 升序）；enabledOnly=true 仅 enabled', async () => {
+        await repos.stockGroup.save(makeStockGroup('g-b', { enabled: false }));
+        await repos.stockGroup.save(makeStockGroup('g-a', { enabled: true }));
+        expect((await repos.stockGroup.list()).map((g) => g.id)).toEqual(['g-a', 'g-b']);
+        expect((await repos.stockGroup.list(true)).map((g) => g.id)).toEqual(['g-a']);
+      });
+
+      it('save 同 id 为 upsert；remove 生效', async () => {
+        await repos.stockGroup.save(makeStockGroup('g-x', { name: 'old', enabled: true }));
+        await repos.stockGroup.save(
+          makeStockGroup('g-x', { name: 'new', enabled: false, updatedAt: T3 }),
+        );
+        const got = await repos.stockGroup.findById('g-x');
+        expect(got?.name).toBe('new');
+        expect(got?.enabled).toBe(false);
+        await repos.stockGroup.remove('g-x');
+        expect(await repos.stockGroup.findById('g-x')).toBeNull();
+      });
+
+      it('违反不变量时拒绝（updatedAt < createdAt）', async () => {
+        await expect(
+          repos.stockGroup.save(makeStockGroup('bad', { createdAt: T3, updatedAt: T0 })),
+        ).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('GroupMemberRepository', () => {
+      it('空分组：currentMembers=[]，latestRefreshId=null', async () => {
+        expect(await repos.groupMember.currentMembers('grp-1')).toEqual([]);
+        expect(await repos.groupMember.latestRefreshId('grp-1')).toBeNull();
+      });
+
+      it('saveBatch + currentMembers 只返回最新 refreshId 那一批', async () => {
+        await repos.groupMember.saveBatch([
+          makeGroupMemberSnapshot('s-1', {
+            refreshId: 'rf-1',
+            stockId: '002594.SZ',
+            createdAt: T1,
+          }),
+          makeGroupMemberSnapshot('s-2', {
+            refreshId: 'rf-1',
+            stockId: '600519.SH',
+            createdAt: T1,
+          }),
+        ]);
+        await repos.groupMember.saveBatch([
+          makeGroupMemberSnapshot('s-3', {
+            refreshId: 'rf-2',
+            stockId: '300750.SZ',
+            createdAt: T2,
+          }),
+        ]);
+        expect(await repos.groupMember.latestRefreshId('grp-1')).toBe('rf-2');
+        const current = await repos.groupMember.currentMembers('grp-1');
+        expect(current.map((s) => s.id)).toEqual(['s-3']);
+      });
+
+      it('currentMembers 按 stockId 升序；跨分组互不可见', async () => {
+        await repos.groupMember.saveBatch([
+          makeGroupMemberSnapshot('s-1', {
+            refreshId: 'rf-1',
+            stockId: '600519.SH',
+            createdAt: T1,
+          }),
+          makeGroupMemberSnapshot('s-2', {
+            refreshId: 'rf-1',
+            stockId: '002594.SZ',
+            createdAt: T1,
+          }),
+          makeGroupMemberSnapshot('s-3', {
+            groupId: 'grp-2',
+            refreshId: 'rf-1',
+            stockId: '00700.HK',
+            createdAt: T1,
+          }),
+        ]);
+        expect((await repos.groupMember.currentMembers('grp-1')).map((s) => s.stockId)).toEqual([
+          '002594.SZ',
+          '600519.SH',
+        ]);
+        expect((await repos.groupMember.currentMembers('grp-2')).map((s) => s.stockId)).toEqual([
+          '00700.HK',
+        ]);
+      });
+
+      it('listHistory 按 createdAt 倒序返回全部批次；since 过滤（≥）', async () => {
+        await repos.groupMember.saveBatch([
+          makeGroupMemberSnapshot('s-1', { refreshId: 'rf-1', createdAt: T1 }),
+          makeGroupMemberSnapshot('s-2', { refreshId: 'rf-2', createdAt: T2 }),
+          makeGroupMemberSnapshot('s-3', { refreshId: 'rf-3', createdAt: T3 }),
+        ]);
+        expect((await repos.groupMember.listHistory('grp-1')).map((s) => s.id)).toEqual([
+          's-3',
+          's-2',
+          's-1',
+        ]);
+        expect((await repos.groupMember.listHistory('grp-1', T2)).map((s) => s.id)).toEqual([
+          's-3',
+          's-2',
+        ]);
+      });
+
+      it('saveBatch 同 id 重复写入不报错（幂等）', async () => {
+        const s = makeGroupMemberSnapshot('s-1');
+        await repos.groupMember.saveBatch([s]);
+        await repos.groupMember.saveBatch([s]);
+        expect(await repos.groupMember.currentMembers('grp-1')).toHaveLength(1);
       });
     });
 

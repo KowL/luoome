@@ -29,12 +29,34 @@ const TWO_HOLDINGS_ACCOUNT_ID = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
 
 const T0 = new Date('2026-07-21T02:30:00.000Z');
 
+/** 测试共用分组：holdings（成本阈值现算）+ manual（无 avgCost 场景）。 */
+const HOLDINGS_GROUP_ID = 'holdings-group';
+const MANUAL_GROUP_ID = 'manual-group';
+
 /** 构造带固定行情的 ctx，并把默认 holdings-watch 池替换为 cost-threshold-only 池。 */
 const setupCtx = async (quotes: Record<string, number>) => {
   const ctx = await buildMockContext();
   const fixed = withFixedQuoteAdapter(ctx, quotes);
   // 清掉默认 holdings-watch（避免干扰），新建专用 cost-threshold 池
   await ctx.repos.stockPool.remove('holdings-watch');
+  await ctx.repos.stockGroup.save({
+    id: HOLDINGS_GROUP_ID,
+    name: '持仓分组',
+    resolver: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+    refreshPolicy: 'manual',
+    enabled: true,
+    createdAt: T0,
+    updatedAt: T0,
+  });
+  await ctx.repos.stockGroup.save({
+    id: MANUAL_GROUP_ID,
+    name: '手动分组',
+    resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
+    refreshPolicy: 'manual',
+    enabled: true,
+    createdAt: T0,
+    updatedAt: T0,
+  });
   return { ctx: fixed, businessCtx: ctx };
 };
 
@@ -50,7 +72,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'tp-only',
       name: '止盈池',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -83,7 +105,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'sl-only',
       name: '止损池',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', stopLossPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -111,7 +133,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'both-up',
       name: '双向（涨）',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -135,7 +157,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'both-down',
       name: '双向（跌）',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -158,7 +180,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'boundary-up',
       name: '边界（涨）',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -180,7 +202,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'boundary-down',
       name: '边界（跌）',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', stopLossPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -203,7 +225,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'no-hit',
       name: '不命中',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -227,7 +249,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'manual-pool',
       name: '手动池',
-      source: { kind: 'manual', stockIds: ['002594.SZ'] },
+      groupId: MANUAL_GROUP_ID,
       rules: [{ kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -249,7 +271,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'unresolved-pool',
       name: '无行情',
-      source: { kind: 'manual', stockIds: ['002594.SZ'] },
+      groupId: MANUAL_GROUP_ID,
       rules: [{ kind: 'cost-threshold', takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -270,7 +292,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'persist-check',
       name: '持久化校验',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -295,7 +317,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.stockPool.save({
       id: 'cooldown-pool',
       name: '冷却',
-      source: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
+      groupId: HOLDINGS_GROUP_ID,
       rules: [{ kind: 'cost-threshold', takeProfitPct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,

@@ -7,6 +7,7 @@ import { STANDARD_DISCLAIMERS } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
 
 import { createCliContext } from './context.js';
+import { loadProjectEnv } from './env.js';
 
 const VERSION = '0.1.0';
 
@@ -599,7 +600,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups）`,
     );
   }
   const handle = await createCliContext();
@@ -657,9 +658,10 @@ Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
   web serve [--port 5173]      启动 Web 仪表盘（Hono）
-  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch）
+  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups）
   watch [--interval 60] [--pool <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
+                                （每日首个交易轮次前自动刷新 stale 的 daily 动态分组：refresh-groups）
 
 环境变量:
   LUOOME_HOME   数据目录（默认 ~/.luoome）；SQLite 位于 $LUOOME_HOME/luoome.db
@@ -743,6 +745,7 @@ const run = async (argv: readonly string[]): Promise<number> => {
 
 const main = async (): Promise<void> => {
   try {
+    loadProjectEnv();
     process.exitCode = await run(process.argv.slice(2));
   } catch (error) {
     if (error instanceof CliUsageError) {

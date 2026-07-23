@@ -4,6 +4,7 @@
 'use strict';
 
 import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } from './api.js';
+import { initChat, renderChat } from './chat.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import {
   analyzeAllHoldings,
@@ -46,7 +47,7 @@ const startClock = () => {
 
 /* ============ 路由分发 ============ */
 
-const ROUTES = ['dashboard', 'holdings', 'tactics', 'advice', 'review', 'settings'];
+const ROUTES = ['dashboard', 'holdings', 'tactics', 'advice', 'review', 'chat', 'settings'];
 
 const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
@@ -69,6 +70,9 @@ const showRoute = async (name) => {
       await renderAdviceList(setStatus);
     } else if (safe === 'review') {
       await renderReview(setStatus);
+    } else if (safe === 'chat') {
+      initChat();
+      renderChat();
     } else if (safe === 'settings') {
       renderSettings(setStatus);
       await renderSettingsAccount();

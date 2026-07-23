@@ -4,21 +4,30 @@ import {
   type Quote,
   type Stock,
   type StockPool,
-  type TacticPoolSource,
   type WatchRule,
   type WatchTrigger,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { refreshGroupsWorkflow } from './refresh-groups.js';
 
 /**
- * intraday-watch workflow（v0.6 起，docs/intraday-watch-design.md §6）。
+ * intraday-watch workflow（v0.6 起，docs/intraday-watch-design.md §6；
+ * 分组化改造 docs/stock-group-design.md §7）。
  *
  * 单轮盯盘评估（无状态）：
+ *   0. daily 刷新检查（阶段 B）：今日（Asia/Shanghai 口径）尚未成功跑过 refresh-groups
+ *      且存在 daily 动态分组（formula / llm）→ 先跑一轮 refresh-groups（仅 stale 子集）。
+ *      判定依据：latestRefreshId 对应批次的 createdAt 日期 < 今日 或不存在。
+ *      进程内记内存 flag：一轮 watch 进程只尝试一次（失败也记，避免每 60s 重复 LLM 成本）
  *   1. 加载 enabled 池
- *   2. seed：source.kind='tactic' 池的 tacticId 去重，每个跑一次 run_tactic(persistSignals=true) 灌 tactic_signals
- *   3. 逐池解析成员 + 取 avgCost（holdings 池）：holdings / manual / tactic（取历史 signals distinct stockId）
+ *   2. seed：池引用的 formula 分组的 tacticId 去重，每个跑一次 run_tactic(persistSignals=true) 灌 tactic_signals
+ *      （成员本身读快照，不依赖本步；灌库信号供 refresh-groups / 复盘用）
+ *   3. 逐池解析成员：pool.groupId → StockGroup.resolver
+ *      manual → resolver.stockIds；holdings → list_holdings 现算（活视图，含 avgCost）；
+ *      formula / llm → repos.groupMember.currentMembers(groupId) 读最新快照
+ *      （hot path 不跑 resolver；快照由 step 0 / refresh-groups 盘外产出）
  *   4. 跨池去重聚合 stockIds → batch_quote
  *   5. 拉 dailyBars 昨收（v0.6.1+）：dailyBar.latestBefore(stockId, now, 1) → Map<stockId, prevClose>
  *   6. 逐池逐规则评估 → 候选触发（price-change 优先用 prevCloses；fallback 到 quote.open）
@@ -41,7 +50,7 @@ export const IntradayWatchInput = z.object({
   poolIds: z.array(z.string().min(1)).optional(),
   /** 是否推送通知；默认 true。--no-notify 时 CLI 传 false。 */
   notify: z.boolean().default(true),
-  /** 是否对 source.kind='tactic' 的池跑启动 seed；CLI watch 启动时 true，单轮 --once 测试时 false。 */
+  /** 是否对 formula 分组引用的 tactic 跑启动 seed；CLI watch 启动时 true，单轮 --once 测试时 false。 */
   seedTacticSources: z.boolean().default(true),
 });
 
@@ -115,10 +124,12 @@ interface EvaluatedState extends PrevClosesState {
 // ---------- helpers ----------
 
 /**
- * 解析单个池的成员。
- * - holdings: 调 list_holdings → 取活跃持仓 stockIds + avgCost
- * - manual: 原样（avgCost undefined）
- * - tactic: 调 tactic_signals_by_tactic(since = now - lookbackDays) → distinct stockIds
+ * 解析单个池的成员（分组化模型，docs/stock-group-design.md §7）。
+ * - pool.groupId → StockGroup；分组不存在 → 空成员 + warn（hot path 不 crash）
+ * - manual：resolver.stockIds 现算（avgCost undefined）
+ * - holdings：调 list_holdings 现算（活视图，无快照）→ 活跃持仓 stockIds + avgCost
+ * - formula / llm：读 repos.groupMember.currentMembers(groupId) 最新快照
+ *   （resolver 永不进 hot path；快照由 refresh-groups 盘外产出，阶段 B）
  */
 const resolveMembers = async (
   pool: StockPool,
@@ -129,28 +140,28 @@ const resolveMembers = async (
     ? C
     : never,
 ): Promise<readonly PoolMember[]> => {
-  const source = pool.source;
-  if (source.kind === 'manual') {
-    return source.stockIds.map((stockId) => ({ stockId, avgCost: undefined }));
+  const group = await ctx.repos.stockGroup.findById(pool.groupId);
+  if (group === null) {
+    ctx.logger.warn('[intraday-watch] 池引用的分组不存在', {
+      poolId: pool.id,
+      groupId: pool.groupId,
+    });
+    return [];
   }
-  if (source.kind === 'holdings') {
-    const r = await ctx.tools.list_holdings.execute({ accountId: source.accountId });
+  const resolver = group.resolver;
+  if (resolver.kind === 'manual') {
+    return resolver.stockIds.map((stockId) => ({ stockId, avgCost: undefined }));
+  }
+  if (resolver.kind === 'holdings') {
+    const r = await ctx.tools.list_holdings.execute({ accountId: resolver.accountId });
     if (!r.ok) return [];
     return r.data.holdings
       .filter((h) => h.holding.closedAt === null)
       .map((h) => ({ stockId: h.holding.stockId, avgCost: h.holding.avgCost }));
   }
-  // tactic
-  const since = new Date(ctx.clock().getTime() - source.lookbackDays * 86_400_000);
-  const r = await ctx.tools.tactic_signals_by_tactic.execute({
-    tacticId: source.tacticId,
-    since,
-    limit: 500,
-  });
-  if (!r.ok) return [];
-  const ids = new Set<string>();
-  for (const s of r.data.signals) ids.add(s.stockId);
-  return [...ids].map((stockId) => ({ stockId, avgCost: undefined }));
+  // formula / llm：读最新成员快照
+  const snapshots = await ctx.repos.groupMember.currentMembers(group.id);
+  return snapshots.map((s) => ({ stockId: s.stockId, avgCost: undefined }));
 };
 
 /** 单条规则评估（price-change / cost-threshold 同步分支）。 */
@@ -285,6 +296,88 @@ const evaluateTacticRule = async (
 
 // ---------- steps ----------
 
+/** Asia/Shanghai 时区偏移（+8h，无夏令时）；与 packages/cli/src/holidays.ts 同口径。 */
+const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/** 把 Date 转成 Asia/Shanghai 当日的 YYYY-MM-DD 字符串（不依赖 process.env.TZ）。 */
+const dateInShanghai = (date: Date): string => {
+  const d = new Date(date.getTime() + SHANGHAI_OFFSET_MS);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+/**
+ * 「本进程今日已尝试过 daily 刷新」的内存 flag（YYYY-MM-DD，Asia/Shanghai）。
+ * 长驻 watch 每 interval 跑一轮本 workflow，必须避免每轮重复触发 LLM / 全市场扫描；
+ * --once 单轮天然只跑一次。失败也记 flag（失败组保留旧快照，stale 由 get_stock_group 感知）。
+ */
+let dailyGroupRefreshAttemptedFor: string | null = null;
+
+/** 测试用：重置 daily 刷新 flag（vitest 同进程多 case 共享模块状态）。 */
+export const resetDailyGroupRefreshFlagForTest = (): void => {
+  dailyGroupRefreshAttemptedFor = null;
+};
+
+/**
+ * step 0：daily 刷新检查（docs/stock-group-design.md §7）。
+ * 今日尚未成功跑过 refresh-groups 且存在 daily 动态分组 → 先跑一轮（仅 stale 子集）。
+ * 任何异常都不阻塞盯盘主链路（hot path 容错：warn 后继续）。
+ */
+const stepDailyGroupRefresh: WorkflowStep = async (prev, ctx) => {
+  const input = prev as IntradayWatchInputT;
+  try {
+    const today = dateInShanghai(ctx.clock());
+    if (dailyGroupRefreshAttemptedFor === today) return input;
+
+    const groups = await ctx.repos.stockGroup.list(true);
+    const dailyDynamic = groups.filter(
+      (g) =>
+        g.refreshPolicy === 'daily' && (g.resolver.kind === 'formula' || g.resolver.kind === 'llm'),
+    );
+    if (dailyDynamic.length === 0) {
+      dailyGroupRefreshAttemptedFor = today;
+      return input;
+    }
+
+    const staleIds: string[] = [];
+    for (const g of dailyDynamic) {
+      const refreshId = await ctx.repos.groupMember.latestRefreshId(g.id);
+      if (refreshId === null) {
+        staleIds.push(g.id);
+        continue;
+      }
+      const members = await ctx.repos.groupMember.currentMembers(g.id);
+      const lastRefreshAt = members[0]?.createdAt;
+      if (lastRefreshAt === undefined || dateInShanghai(lastRefreshAt) < today) {
+        staleIds.push(g.id);
+      }
+    }
+
+    // 无论是否真有 stale / 刷新成败，今日都只尝试一次
+    dailyGroupRefreshAttemptedFor = today;
+    if (staleIds.length === 0) return input;
+
+    ctx.logger.info('[intraday-watch] daily 动态分组刷新', { groupIds: staleIds });
+    const r = await refreshGroupsWorkflow.run({ groupIds: staleIds }, ctx);
+    if (!r.ok) {
+      ctx.logger.warn('[intraday-watch] refresh-groups 失败（保留旧快照继续盯盘）', {
+        error: JSON.stringify(r.error),
+      });
+    } else if (r.data.failed.length > 0) {
+      ctx.logger.warn('[intraday-watch] 部分分组刷新失败（保留旧快照）', {
+        failed: r.data.failed,
+      });
+    }
+  } catch (e) {
+    ctx.logger.warn('[intraday-watch] daily 刷新检查异常（跳过，不阻塞盯盘）', {
+      err: String(e),
+    });
+  }
+  return input;
+};
+
 const stepLoadPools: WorkflowStep = async (prev, ctx) => {
   const input = prev as IntradayWatchInputT;
   const r = await ctx.tools.list_stock_pools.execute({ enabledOnly: true });
@@ -299,22 +392,23 @@ const stepLoadPools: WorkflowStep = async (prev, ctx) => {
 const stepSeedTacticSources: WorkflowStep = async (prev, ctx) => {
   const state = prev as LoadedState;
   if (!state.input.seedTacticSources) return state;
-  const tacticIds = new Set<string>();
+  // 池引用的 formula 分组：tacticId 去重 + 各取最大 lookbackDays，跑一次 run_tactic 灌 tactic_signals。
+  // 成员本身读快照不依赖本步；灌库信号供 refresh-groups（阶段 B）/ 复盘用。
+  const lookbackByTactic = new Map<string, number>();
   for (const p of state.pools) {
-    if (p.source.kind === 'tactic') tacticIds.add(p.source.tacticId);
+    const group = await ctx.repos.stockGroup.findById(p.groupId);
+    if (group === null || group.resolver.kind !== 'formula') continue;
+    const r = group.resolver;
+    lookbackByTactic.set(
+      r.tacticId,
+      Math.max(lookbackByTactic.get(r.tacticId) ?? 30, r.lookbackDays),
+    );
   }
-  for (const tid of tacticIds) {
-    let maxLookback = 30;
-    for (const p of state.pools) {
-      if (p.source.kind === 'tactic' && p.source.tacticId === tid) {
-        const ts = p.source as TacticPoolSource;
-        if (ts.lookbackDays > maxLookback) maxLookback = ts.lookbackDays;
-      }
-    }
+  for (const [tid, lookbackDays] of lookbackByTactic) {
     const r = await ctx.tools.run_tactic.execute({
       tacticId: tid,
       scope: 'all-stocks',
-      lookbackDays: maxLookback,
+      lookbackDays,
       persistSignals: true,
     });
     if (!r.ok) {
@@ -527,6 +621,7 @@ export const intradayWatchWorkflow = defineWorkflow<
     '单轮盘中盯盘评估：池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知',
   input: IntradayWatchInput,
   steps: [
+    stepDailyGroupRefresh,
     stepLoadPools,
     stepSeedTacticSources,
     stepResolveMembers,

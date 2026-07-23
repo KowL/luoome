@@ -8,7 +8,9 @@ import { analyzeStockTool } from './tools/analyze-stock.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
+import { createStockGroupTool } from './tools/create-stock-group.js';
 import { createStockPoolTool } from './tools/create-stock-pool.js';
+import { deleteStockGroupTool } from './tools/delete-stock-group.js';
 import { deleteStockPoolTool } from './tools/delete-stock-pool.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
@@ -16,13 +18,17 @@ import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getHoldingTool } from './tools/get-holding.js';
+import { getStockGroupTool } from './tools/get-stock-group.js';
 import { getTacticTool } from './tools/get-tactic.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
+import { listStockGroupsTool } from './tools/list-stock-groups.js';
 import { listStockPoolsTool } from './tools/list-stock-pools.js';
 import { listTacticsTool } from './tools/list-tactics.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
+import { refreshStockGroupTool } from './tools/refresh-stock-group.js';
+import { resolveLlmGroupTool } from './tools/resolve-llm-group.js';
 import { runTacticTool } from './tools/run-tactic.js';
 import { saveWatchTriggerTool } from './tools/save-watch-trigger.js';
 import { scoreSignalsTool } from './tools/score-signals.js';
@@ -32,6 +38,7 @@ import { syncQuotesTool } from './tools/sync-quotes.js';
 import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
 import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
 import { updateHoldingTool } from './tools/update-holding.js';
+import { updateStockGroupTool } from './tools/update-stock-group.js';
 import { updateStockPoolTool } from './tools/update-stock-pool.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
@@ -172,4 +179,12 @@ export const toolRegistry: Registry = createRegistry([
   updateStockPoolTool,
   deleteStockPoolTool,
   saveWatchTriggerTool,
+  // 分组化起（docs/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
+  listStockGroupsTool,
+  getStockGroupTool,
+  createStockGroupTool,
+  updateStockGroupTool,
+  deleteStockGroupTool,
+  refreshStockGroupTool,
+  resolveLlmGroupTool,
 ]);

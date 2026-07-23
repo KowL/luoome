@@ -15,9 +15,12 @@
       "name": "@luoome/web",
       "version": "0.1.0",
       "dependencies": {
+        "@luoome/adapters": "workspace:*",
         "@luoome/core": "workspace:*",
+        "@luoome/db": "workspace:*",
         "@luoome/tools": "workspace:*",
         "hono": "^4.12.30",
+        "zod": "^4.4.3",
       },
     },
     "packages/adapters": {

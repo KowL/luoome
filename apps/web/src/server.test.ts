@@ -137,3 +137,174 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect(r.status).toBe(400);
   });
 });
+
+/* ============ /api/chat（docs/web-chat-design.md §6） ============ */
+
+interface ChatResponseBody {
+  ok: boolean;
+  data?: {
+    reply: string;
+    drafts: Array<{ kind: string; tool: string; input: unknown; summary: string }>;
+    usedActions: Array<{ tool: string; ok: boolean; rejected?: boolean }>;
+  };
+  error?: { kind: string; message?: string };
+}
+
+const chat = async (
+  target: Hono,
+  body: { message: string; history?: Array<{ role: string; content: string }> },
+): Promise<{ status: number; body: ChatResponseBody }> => {
+  const r = await target.fetch(
+    new Request('http://test/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+  return { status: r.status, body: (await r.json()) as ChatResponseBody };
+};
+
+/** mock LLM chat fixture 注入：message 带前缀 + JSON plan（见 adapters/llm/mock.ts）。 */
+const fixtureMsg = (plan: object): string => `chat-fixture:${JSON.stringify(plan)}`;
+
+describe('/api/chat：对话助手', () => {
+  let chatApp: Hono;
+  let chatCtx: Awaited<ReturnType<typeof buildMockContext>>;
+
+  beforeAll(async () => {
+    chatCtx = await buildMockContext();
+    chatApp = createWebApp(chatCtx);
+  });
+
+  it('mock LLM（无 fixture）→ 200 + 兜底 reply，不抛 500', async () => {
+    const { status, body } = await chat(chatApp, { message: '你好' });
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.data?.reply).toContain('暂时无法处理');
+    expect(body.data?.drafts).toEqual([]);
+    expect(body.data?.usedActions).toEqual([]);
+  });
+
+  it('message 为空 / 超长 → 400 invalid_input', async () => {
+    expect((await chat(chatApp, { message: '' })).status).toBe(400);
+    expect((await chat(chatApp, { message: 'x'.repeat(2001) })).status).toBe(400);
+  });
+
+  it('plan 的 drafts（write）只进 drafts 不执行，DB 无写入', async () => {
+    const { status, body } = await chat(chatApp, {
+      message: fixtureMsg({
+        reply: '已为你拟好分组草案，请确认。',
+        actions: [],
+        drafts: [
+          {
+            kind: 'stock-group',
+            tool: 'create_stock_group',
+            input: {
+              id: 'chat-draft-group',
+              name: '对话草案分组',
+              resolver: { kind: 'llm', prompt: '选出当前龙头' },
+            },
+            summary: '创建 LLM 分组「对话草案分组」',
+          },
+        ],
+      }),
+    });
+    expect(status).toBe(200);
+    expect(body.data?.drafts.length).toBe(1);
+    expect(body.data?.drafts[0]?.tool).toBe('create_stock_group');
+    // 关键断言：draft 未被执行，库里不存在该分组
+    expect(await chatCtx.repos.stockGroup.findById('chat-draft-group')).toBeNull();
+  });
+
+  it('幻觉 action（advice / write / external）被拦截并标 rejected，DB 无写入', async () => {
+    const { status, body } = await chat(chatApp, {
+      message: fixtureMsg({
+        reply: '这几个操作我帮不了你。',
+        actions: [
+          { tool: 'analyze_stock', input: { stockId: '002594.SZ' } },
+          { tool: 'create_stock_group', input: { id: 'hallucinated-group' } },
+          { tool: 'sync_quotes', input: {} },
+        ],
+        drafts: [],
+      }),
+    });
+    expect(status).toBe(200);
+    const used = body.data?.usedActions ?? [];
+    expect(used.length).toBe(3);
+    expect(used.every((a) => a.rejected === true && a.ok === false)).toBe(true);
+    expect(body.data?.reply).toContain('不在对话可用范围');
+    expect(await chatCtx.repos.stockGroup.findById('hallucinated-group')).toBeNull();
+  });
+
+  it('read action 自动执行 + Pass 2 成文', async () => {
+    const { status, body } = await chat(chatApp, {
+      message: fixtureMsg({
+        reply: '',
+        actions: [{ tool: 'list_holdings', input: {} }],
+        drafts: [],
+        pass2Reply: '你当前持有 3 只股票。',
+      }),
+    });
+    expect(status).toBe(200);
+    expect(body.data?.usedActions).toEqual([{ tool: 'list_holdings', ok: true }]);
+    expect(body.data?.reply).toBe('你当前持有 3 只股票。');
+  });
+
+  it('history 超过 10 轮被截断到 10', async () => {
+    const history = Array.from({ length: 15 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `turn-${i}`,
+    }));
+    const { status, body } = await chat(chatApp, {
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符，由 mock LLM 替换为实际 history 轮数
+      message: fixtureMsg({ reply: 'turns:${historyLength}', actions: [], drafts: [] }),
+      history,
+    });
+    expect(status).toBe(200);
+    expect(body.data?.reply).toBe('turns:10');
+  });
+
+  it('draft 二次校验失败被丢弃，reply 中说明', async () => {
+    const { status, body } = await chat(chatApp, {
+      message: fixtureMsg({
+        reply: '拟好了草案。',
+        actions: [],
+        drafts: [
+          {
+            kind: 'stock-group',
+            tool: 'create_stock_group',
+            input: { id: 'BAD ID!!', name: '非法', resolver: { kind: 'manual', stockIds: [] } },
+            summary: '非法草案',
+          },
+        ],
+      }),
+    });
+    expect(status).toBe(200);
+    expect(body.data?.drafts).toEqual([]);
+    expect(body.data?.reply).toContain('已丢弃');
+  });
+
+  it('draft 的 kind 与 tool 不匹配被丢弃', async () => {
+    const { status, body } = await chat(chatApp, {
+      message: fixtureMsg({
+        reply: '拟好了草案。',
+        actions: [],
+        drafts: [
+          {
+            kind: 'stock-pool',
+            tool: 'create_stock_group',
+            input: {
+              id: 'kind-mismatch-group',
+              name: 'x',
+              resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
+            },
+            summary: 'kind 不匹配',
+          },
+        ],
+      }),
+    });
+    expect(status).toBe(200);
+    expect(body.data?.drafts).toEqual([]);
+    expect(await chatCtx.repos.stockGroup.findById('kind-mismatch-group')).toBeNull();
+  });
+});

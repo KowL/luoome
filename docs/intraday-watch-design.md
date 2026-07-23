@@ -2,7 +2,7 @@
 
 > 状态：**已实现**——v0.6 落地主体（股票池 + `luoome watch` + intraday-watch workflow），v0.6.1 切真实昨收（dailyBar），v0.7 补节假日历。本文档是设计唯一事实来源；实现与本文有出入处以代码为准，并在本文追记。
 >
-> **后续演进**：分组与盯盘解耦（StockGroup + 成员快照 + 动态 resolver）见 [stock-group-design.md](./stock-group-design.md)（2026-07-22 定稿，待实现）。
+> **后续演进**：分组与盯盘解耦（StockGroup + 成员快照 + 动态 resolver）见 [stock-group-design.md](./stock-group-design.md)（已实现）；web 对话助手见 [web-chat-design.md](./web-chat-design.md)（已实现）。
 
 ## 目标
 

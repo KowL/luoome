@@ -2,6 +2,7 @@
 
 // 依赖注入上下文
 export * from './context.js';
+export * from './env-file.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/advice.js';
@@ -14,6 +15,7 @@ export * from './entity/market-provider.js';
 export * from './entity/notification.js';
 export * from './entity/quote.js';
 export * from './entity/stock.js';
+export * from './entity/stock-group.js';
 export * from './entity/stock-pool.js';
 export * from './entity/tactic.js';
 export * from './entity/trade.js';

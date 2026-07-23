@@ -13,6 +13,19 @@ export const MOCK_LLM_SYSTEM_ANALYZE_STOCK = 'analyze_stock';
 export const MOCK_LLM_SYSTEM_ANALYZE_POSITION = 'analyze_position';
 export const MOCK_LLM_SYSTEM_MARKET_OUTLOOK = 'market_outlook';
 export const MOCK_LLM_SYSTEM_SCORE_SIGNALS = 'score_signals';
+export const MOCK_LLM_SYSTEM_RESOLVE_LLM_GROUP = 'resolve_llm_group';
+export const MOCK_LLM_SYSTEM_CHAT_PLAN = 'chat_plan';
+export const MOCK_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
+
+/**
+ * web chat 测试注入前缀（docs/web-chat-design.md §6）：
+ * message 以该前缀开头时，其余部分按 JSON parse 为 Pass 1 plan；
+ * plan 可额外携带 `pass2Reply` 字段作为 Pass 2（chat_reply）的输出
+ * （plan schema safeParse 会 strip 掉该未知字段，不影响 Pass 1）。
+ * 另：plan.reply 中的 `${historyLength}` 会被替换为 data.history 实际长度
+ * （服务端截断行为的可观测探针）。
+ */
+export const MOCK_CHAT_FIXTURE_PREFIX = 'chat-fixture:';
 
 /** MockLLMAdapter 输出的结构化分析结果（analyze_stock / analyze_position 共用形状）。 */
 export interface MockAnalysisOutput {
@@ -28,6 +41,9 @@ type MockMode =
   | 'analyze_position'
   | 'market_outlook'
   | 'score_signals'
+  | 'resolve_llm_group'
+  | 'chat_plan'
+  | 'chat_reply'
   | 'generic';
 
 /** 仅依赖 safeParse 的最小 schema 投影（zod schema 天然满足）。 */
@@ -143,10 +159,15 @@ export class MockLLMAdapter implements LLMAdapter {
   readonly name = 'mock-llm';
 
   private detectMode(system: string): MockMode {
+    // chat 最先判定：chat 的 system prompt 会提及其它 tool 名（如引导文案中的
+    // analyze_stock），若按内容包含匹配会被误判。
+    if (system.includes(MOCK_LLM_SYSTEM_CHAT_PLAN)) return 'chat_plan';
+    if (system.includes(MOCK_LLM_SYSTEM_CHAT_REPLY)) return 'chat_reply';
     if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
     if (system.includes(MOCK_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
     if (system.includes(MOCK_LLM_SYSTEM_MARKET_OUTLOOK)) return 'market_outlook';
     if (system.includes(MOCK_LLM_SYSTEM_SCORE_SIGNALS)) return 'score_signals';
+    if (system.includes(MOCK_LLM_SYSTEM_RESOLVE_LLM_GROUP)) return 'resolve_llm_group';
     return 'generic';
   }
 
@@ -165,7 +186,101 @@ export class MockLLMAdapter implements LLMAdapter {
       }
       return Promise.resolve(asGenerateResult<T>(ranked, raw));
     }
+    // resolve_llm_group：schema 是 { members: [{stockId, rationale}] }，从 candidates 确定性挑选。
+    if (mode === 'resolve_llm_group') {
+      const out = this.buildResolveLlmGroup(request.data);
+      const raw = JSON.stringify({ mock: true, mode, count: out.members.length });
+      const schema = request.schema;
+      if (isSchemaLike(schema)) {
+        const parsed = schema.safeParse(out);
+        if (parsed.success) return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
+      }
+      return Promise.resolve(asGenerateResult<T>(out, raw));
+    }
+    // chat（web 对话助手，docs/web-chat-design.md §2）：fixture 注入或稳定兜底。
+    if (mode === 'chat_plan' || mode === 'chat_reply') {
+      const out = this.buildChatOutput(mode, request.data);
+      const raw = JSON.stringify({ mock: true, mode });
+      const schema = request.schema;
+      if (isSchemaLike(schema)) {
+        const parsed = schema.safeParse(out);
+        if (parsed.success) return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
+      }
+      return Promise.resolve(asGenerateResult<T>(out, raw));
+    }
     return Promise.resolve(this.buildStandardAnalysis(mode, request, request.schema));
+  }
+
+  /**
+   * chat 模式输出（web-chat-design §6）：
+   * - data.message 以 MOCK_CHAT_FIXTURE_PREFIX 开头 → 其余部分 JSON parse 为 plan
+   *   （pass2Reply 字段留给 chat_reply 使用；plan.reply 中 ${historyLength} 替换为实际轮数）；
+   * - 无 fixture → 稳定兜底 reply（与生产「LLM 解析失败」走同一兜底文案）。
+   * fixture parse 失败按无 fixture 处理，保证 mock 永不抛。
+   */
+  private buildChatOutput(
+    mode: 'chat_plan' | 'chat_reply',
+    data: unknown,
+  ): Record<string, unknown> {
+    const record = asRecord(data);
+    const message = readString(record, 'message') ?? '';
+    const historyLength = Array.isArray(record?.history)
+      ? (record.history as readonly unknown[]).length
+      : 0;
+    const fixture = this.parseChatFixture(message);
+    if (mode === 'chat_reply') {
+      const pass2 = fixture === null ? null : readString(fixture, 'pass2Reply');
+      return { reply: pass2 ?? 'mock 兜底：暂时无法整理查询结果，请换个说法重试。' };
+    }
+    if (fixture !== null) {
+      const reply = readString(fixture, 'reply');
+      return {
+        ...fixture,
+        ...(reply !== null
+          ? // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符，mock fixture 的 history 长度探针
+            { reply: reply.replaceAll('${historyLength}', String(historyLength)) }
+          : {}),
+      };
+    }
+    return {
+      reply: 'mock 兜底：暂时无法处理，请换个说法，或使用左侧导航的页面功能。',
+      actions: [],
+      drafts: [],
+    };
+  }
+
+  /** 解析 chat fixture；message 不带前缀或 JSON 非法时返回 null。 */
+  private parseChatFixture(message: string): Record<string, unknown> | null {
+    if (!message.startsWith(MOCK_CHAT_FIXTURE_PREFIX)) return null;
+    try {
+      return asRecord(JSON.parse(message.slice(MOCK_CHAT_FIXTURE_PREFIX.length)));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * LLM 分组解析 mock 输出（分组化起）：从 data.candidates 确定性取前
+   * min(maxMembers, candidates.length) 条，rationale 固定为 "mock: ..."。
+   */
+  private buildResolveLlmGroup(data: unknown): {
+    members: Array<{ stockId: string; rationale: string }>;
+  } {
+    const record = asRecord(data);
+    const candidates = Array.isArray(record?.candidates)
+      ? (record.candidates as readonly unknown[])
+      : [];
+    const maxMembers = readNumber(record, 'maxMembers') ?? 20;
+    const prompt = readString(record, 'prompt') ?? '';
+    const members = candidates
+      .map((c) => readString(asRecord(c), 'stockId'))
+      .filter((id): id is string => id !== null)
+      .slice(0, Math.max(1, Math.min(maxMembers, 100)))
+      .map((stockId) => ({
+        stockId,
+        rationale: `mock: 按「${prompt.slice(0, 30)}」选中`,
+      }));
+    return { members };
   }
 
   private buildStandardAnalysis<T>(

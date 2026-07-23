@@ -8,8 +8,12 @@ import type {
   BatchQuoteOutput,
   ComputeIndicatorsInput,
   ComputeIndicatorsOutput,
+  CreateStockGroupInput,
+  CreateStockGroupOutput,
   CreateStockPoolInput,
   CreateStockPoolOutput,
+  DeleteStockGroupInput,
+  DeleteStockGroupOutput,
   DeleteStockPoolInput,
   DeleteStockPoolOutput,
   FetchQuoteInput,
@@ -24,12 +28,17 @@ import type {
   GetConfidenceCalibrationOutput,
   GetHoldingInput,
   GetHoldingOutput,
+  GetStockGroupInput,
+  GetStockGroupOutput,
   GetTacticInput,
   GetTacticOutput,
   ListAccountsInput,
   ListAccountsOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
+  // 分组化起：分组 CRUD + 刷新 + LLM 解析
+  ListStockGroupsInput,
+  ListStockGroupsOutput,
   // v0.6 起：股票池 CRUD + 触发落库
   ListStockPoolsInput,
   ListStockPoolsOutput,
@@ -39,6 +48,10 @@ import type {
   MarketOutlookOutput,
   RecordAdviceOutcomeInput,
   RecordAdviceOutcomeOutput,
+  RefreshStockGroupInput,
+  RefreshStockGroupOutput,
+  ResolveLlmGroupInput,
+  ResolveLlmGroupOutput,
   RunTacticInput,
   RunTacticOutput,
   SaveWatchTriggerInput,
@@ -55,6 +68,8 @@ import type {
   TacticSignalsByStockOutput,
   TacticSignalsByTacticInput,
   TacticSignalsByTacticOutput,
+  UpdateStockGroupInput,
+  UpdateStockGroupOutput,
   UpdateStockPoolInput,
   UpdateStockPoolOutput,
 } from '@luoome/tools';
@@ -140,6 +155,32 @@ export interface WorkflowToolMap {
   readonly save_watch_trigger: ToolAccessor<
     typeof SaveWatchTriggerInput,
     typeof SaveWatchTriggerOutput
+  >;
+  // 分组化起（docs/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
+  readonly list_stock_groups: ToolAccessor<
+    typeof ListStockGroupsInput,
+    typeof ListStockGroupsOutput
+  >;
+  readonly get_stock_group: ToolAccessor<typeof GetStockGroupInput, typeof GetStockGroupOutput>;
+  readonly create_stock_group: ToolAccessor<
+    typeof CreateStockGroupInput,
+    typeof CreateStockGroupOutput
+  >;
+  readonly update_stock_group: ToolAccessor<
+    typeof UpdateStockGroupInput,
+    typeof UpdateStockGroupOutput
+  >;
+  readonly delete_stock_group: ToolAccessor<
+    typeof DeleteStockGroupInput,
+    typeof DeleteStockGroupOutput
+  >;
+  readonly refresh_stock_group: ToolAccessor<
+    typeof RefreshStockGroupInput,
+    typeof RefreshStockGroupOutput
+  >;
+  readonly resolve_llm_group: ToolAccessor<
+    typeof ResolveLlmGroupInput,
+    typeof ResolveLlmGroupOutput
   >;
 }
 

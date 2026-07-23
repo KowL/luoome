@@ -38,6 +38,7 @@
         <li><a class="nav-item" href="#tactics" data-route="tactics"><span>战法</span></a></li>
         <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
         <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
+        <li><a class="nav-item" href="#chat" data-route="chat"><span>对话</span></a></li>
         <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
       </ul>
     </aside>
@@ -188,6 +189,29 @@
         <div class="card mt-4">
           <div class="card-header"><h2>近期建议</h2><div class="card-meta">点击「回填」记录 outcome</div></div>
           <div id="review-list"><p class="placeholder">加载中…</p></div>
+        </div>
+      </section>
+
+      <!-- route: chat（对话助手，docs/web-chat-design.md §5） -->
+      <section id="route-chat" class="route" data-route="chat" hidden>
+        <div class="route-header">
+          <h1>对话</h1>
+          <div class="route-meta">LLM 助手 · 写操作拟成草案，确认后才生效 · 历史仅存在本标签页</div>
+        </div>
+        <div class="card chat-card">
+          <div id="chat-log" class="chat-log">
+            <p class="placeholder">问点什么，例如「我的持仓今天怎么样」「帮我建一个龙头分组」。</p>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <input
+              id="chat-input"
+              type="text"
+              maxlength="2000"
+              placeholder="输入消息（Enter 发送）"
+              autocomplete="off"
+            />
+            <button id="chat-send" class="btn btn-primary" type="submit">发送</button>
+          </form>
         </div>
       </section>
 

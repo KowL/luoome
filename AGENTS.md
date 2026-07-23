@@ -85,6 +85,8 @@ mcps:
 | `get_advice_stats` | 查建议准确率统计 |
 | `record_advice_outcome` | 回填建议结果（事后复盘） |
 | `list_stock_pools` | 列出股票池（v0.6 起，默认仅 enabled） |
+| `list_stock_groups` | 列出股票分组（分组化起，可带当前成员数） |
+| `get_stock_group` | 分组详情 + 当前成员 + 最近 refresh 时间 + stale 标记 |
 
 ### 建议类（advice，默认全部暴露）
 
@@ -93,6 +95,7 @@ mcps:
 | `analyze_stock` | 对单只股票做综合分析，输出结构化 Advice |
 | `analyze_position` | 对单个持仓给出继续持有 / 加仓 / 减仓 / 清仓建议 |
 | `market_outlook` | 生成大盘 / 板块观点 |
+| `resolve_llm_group` | LLM 按提示词产出分组成员（分组化起，refresh-groups workflow 内部通道，不供日常调用） |
 
 > advice 类工具会调 LLM，可能有延迟和成本。agent 应当按需触发，不要无脑循环。
 
@@ -111,6 +114,9 @@ mcps:
 | `create_stock_pool` | 创建股票池（v0.6 起） |
 | `update_stock_pool` | 更新股票池（v0.6 起） |
 | `delete_stock_pool` | 删除股票池（v0.6 起） |
+| `create_stock_group` | 创建股票分组（分组化起；resolver 引用 tactic/account/stock 需存在） |
+| `update_stock_group` | 更新股票分组（分组化起） |
+| `delete_stock_group` | 删除股票分组（分组化起；有 pool 引用时拒绝，需先解绑） |
 | `save_watch_trigger` | 落库一次 watch 触发（workflow 内部使用） |
 
 ### 外部副作用（external，默认 opt-in）
@@ -119,6 +125,7 @@ mcps:
 |---|---|
 | `fetch_quote` | 主动刷新行情（写 PriceSnapshot） |
 | `sync_quotes` | 全量同步持仓股行情 |
+| `refresh_stock_group` | 手动触发单组刷新（分组化起；formula→run_tactic / llm→resolve_llm_group，失败保留旧快照） |
 | `send_notification` | 推送飞书等 |
 | `generate_report` | 生成并写报告文件 |
 
@@ -351,13 +358,21 @@ luoome watch --once --no-notify         # 跑一轮（调试 / cron）
 luoome watch --interval 60              # 长驻：盘内每 60s 一轮；非交易时段 60s 重试
 luoome watch --pool holdings-watch      # 仅盯指定池
 luoome tools call list_stock_pools --input '{}'  # 列池
-luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","source":{"kind":"manual","stockIds":["002594.SZ"]},"rules":[{"kind":"price-change","pct":0.05}]}'
+# 分组化起：pool 通过 groupId 引用分组（阶段 A 已落地；分组 CRUD tool 属阶段 B，当前可先用默认 holdings-default 分组）
+luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","groupId":"holdings-default","rules":[{"kind":"price-change","pct":0.05}]}'
+# 阶段 B 起：分组 CRUD + 盘外刷新
+luoome tools call list_stock_groups --input '{}'
+luoome tools call create_stock_group --input '{"id":"leaders","name":"龙头","resolver":{"kind":"llm","prompt":"选出当前龙头"}}'
+luoome workflow run refresh-groups                # 盘外刷新全部 enabled 动态分组（formula/llm）
+luoome tools call refresh_stock_group --input '{"groupId":"leaders"}'  # 手动刷单组
 ```
 
 ## 已知边界
 
+- 分组化（StockGroup，docs/stock-group-design.md）：动态分组统一「生产者 + 快照」——refresh-groups 盘外刷新写快照，盘中 watch 只读快照；llm/解析失败或空结果保留旧快照（绝不写空批），stale 状态由 `get_stock_group` 感知（refreshPolicy=daily 且最新批次非今日）。`luoome watch` 每日首个交易轮次前自动刷新 stale 的 daily 动态分组（进程内只尝试一次）。v0.6 存量 pool.source 在启动时幂等迁移为分组（id=`<poolId>-group`），tactic source 迁移后需手动跑一次 `refresh_stock_group` 落首批快照
 - 行情默认 mock 数据源；`LUOOME_MARKET_PROVIDER=real` 切真实行情（Eastmoney 主 → Tencent 备 → Mock 兜底，A 股）
 - LLM 默认 mock；`LUOOME_LLM_PROVIDER` + `LUOOME_LLM_API_KEY` 切真实模型（openai-compatible / anthropic，缺 key 启动期报错）
+- 配置可写文件而非 export：启动时自动加载 `$LUOOME_HOME/.env` 与 `<项目根>/.env`（模板见 `.env.example`；优先级：真实 env > 项目根 .env > LUOOME_HOME/.env；文件缺失/损坏静默跳过）
 - v0.1 不支持多账户并发写
 - v0.1 没有 Web 入口（v0.4 起）
 - v0.1 没有真实券商对接（永不通过 MCP 暴露）

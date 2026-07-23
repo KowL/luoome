@@ -10,6 +10,7 @@ import type {
   Notification,
   Quantity,
   StockCode,
+  StockGroup,
   StockPool,
   Tactic,
   TradeSide,
@@ -257,8 +258,13 @@ export const notifications = sqliteTable(
 );
 
 /**
- * 股票池（v0.6 起，docs/intraday-watch-design.md §3）。
- * source / rules 走 text + mode 'json'（任意扩展字段）；enabled 用 0/1 integer。
+ * 股票池（v0.6 起，docs/intraday-watch-design.md §3；
+ * 分组化改造 docs/stock-group-design.md §3/§5）。
+ * rules 走 text + mode 'json'（任意扩展字段）；enabled 用 0/1 integer。
+ * - source：@deprecated 旧 PoolSource JSON。新行恒为 NULL；旧行数据原样保留，
+ *   待阶段 B 启动迁移拆成分组（spec §5）
+ * - groupId：成员分组引用（stock_groups.id）；旧行迁移前为 NULL
+ *   （drizzle repo 读出时映射为空串占位，不 crash）
  */
 export const stockPools = sqliteTable(
   'stock_pools',
@@ -266,7 +272,8 @@ export const stockPools = sqliteTable(
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     description: text('description'),
-    source: text('source', { mode: 'json' }).$type<StockPool['source']>().notNull(),
+    source: text('source', { mode: 'json' }).$type<unknown>(),
+    groupId: text('group_id'),
     rules: text('rules', { mode: 'json' }).$type<StockPool['rules']>().notNull(),
     cooldownMinutes: integer('cooldown_minutes').notNull(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),
@@ -276,6 +283,50 @@ export const stockPools = sqliteTable(
   (t) => ({
     /** list(enabledOnly=true) 走索引。 */
     enabledIdx: index('stock_pools_enabled_idx').on(t.enabled),
+  }),
+);
+
+/**
+ * 股票分组（分组化起，docs/stock-group-design.md §3）。
+ * resolver 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
+ */
+export const stockGroups = sqliteTable(
+  'stock_groups',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    resolver: text('resolver', { mode: 'json' }).$type<StockGroup['resolver']>().notNull(),
+    refreshPolicy: text('refresh_policy').$type<StockGroup['refreshPolicy']>().notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    /** list(enabledOnly=true) 走索引。 */
+    enabledIdx: index('stock_groups_enabled_idx').on(t.enabled),
+  }),
+);
+
+/**
+ * 分组成员快照（分组化起，docs/stock-group-design.md §3）。
+ * 只增不改：一次刷新 = 一批（同一 refreshId）；当前成员 = 最新 refreshId 那一批。
+ */
+export const groupMemberSnapshots = sqliteTable(
+  'group_member_snapshots',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    refreshId: text('refresh_id').notNull(),
+    reason: text('reason').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    /** currentMembers（查最新批次）走这条。 */
+    groupRefreshIdx: index('group_members_group_refresh_idx').on(t.groupId, t.refreshId),
+    /** listHistory（历史 / 复盘）走这条。 */
+    groupTsIdx: index('group_members_group_ts_idx').on(t.groupId, t.createdAt),
   }),
 );
 
@@ -328,6 +379,9 @@ export const schema = {
   // v0.6 起
   stockPools,
   watchTriggers,
+  // 分组化起（docs/stock-group-design.md §3）
+  stockGroups,
+  groupMemberSnapshots,
 } as const;
 
 export type Schema = typeof schema;

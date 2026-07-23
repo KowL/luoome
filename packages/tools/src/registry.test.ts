@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// v0.6 末态：27 (v0.5) + 5 (v0.6 stockPool / watchTrigger) = 32 tool
+// 分组化（阶段 B）末态：32 (v0.6) + 7 (stockGroup CRUD / refresh / resolve_llm_group) = 39 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'list_accounts',
@@ -42,6 +42,14 @@ const EXPECTED_TOOL_NAMES = [
   'update_stock_pool',
   'delete_stock_pool',
   'save_watch_trigger',
+  // 分组化（阶段 B）新增：分组 CRUD + 刷新 + LLM 解析
+  'list_stock_groups',
+  'get_stock_group',
+  'create_stock_group',
+  'update_stock_group',
+  'delete_stock_group',
+  'refresh_stock_group',
+  'resolve_llm_group',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -71,7 +79,12 @@ describe('toolRegistry', () => {
       .filter((t) => t.sideEffect === 'advice')
       .map((t) => t.name)
       .sort();
-    expect(adviceTools).toEqual(['analyze_position', 'analyze_stock', 'market_outlook']);
+    expect(adviceTools).toEqual([
+      'analyze_position',
+      'analyze_stock',
+      'market_outlook',
+      'resolve_llm_group',
+    ]);
     const externalTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'external')
@@ -80,6 +93,7 @@ describe('toolRegistry', () => {
     expect(externalTools).toEqual([
       'batch_quote',
       'fetch_quote',
+      'refresh_stock_group',
       'send_notification',
       'sync_quotes',
     ]);
@@ -92,11 +106,14 @@ describe('toolRegistry', () => {
       'add_holding',
       'add_trade',
       'close_holding',
+      'create_stock_group',
       'create_stock_pool',
+      'delete_stock_group',
       'delete_stock_pool',
       'record_advice_outcome',
       'save_watch_trigger',
       'update_holding',
+      'update_stock_group',
       'update_stock_pool',
     ]);
   });

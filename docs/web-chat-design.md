@@ -1,6 +1,6 @@
 # Web 对话助手设计：`/api/chat` + draft-and-confirm
 
-> 状态：**已确认，待实现**（2026-07-22 讨论定稿）。本文档是对话助手设计的唯一事实来源。
+> 状态：**已实现**（2026-07-22 定稿并落地：`POST /api/chat` + `/chat` 前端页 + draft 确认卡片）。本文档是对话助手设计的唯一事实来源；实现与本文有出入处以代码为准，并在本文追记。
 > 关联：[stock-group-design.md](./stock-group-design.md)（对话创建分组依赖其实现；聊天端点与交互模式可并行开发，draft schema = `create_stock_group` 的 input schema）。
 
 ## 目标

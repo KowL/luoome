@@ -36,10 +36,19 @@ const setupCtx = async (quotes: Record<string, number>) => {
   const fixed = withFixedQuoteAdapter(ctx, quotes);
   // 清掉默认池（避免干扰），新建专用 price-change 池
   await fixed.repos.stockPool.remove('holdings-watch');
+  await fixed.repos.stockGroup.save({
+    id: 'p-change-group',
+    name: 'p-change-group',
+    resolver: { kind: 'manual', stockIds: ['600519.SH'] },
+    refreshPolicy: 'manual',
+    enabled: true,
+    createdAt: T0,
+    updatedAt: T0,
+  });
   await fixed.repos.stockPool.save({
     id: 'p-change',
     name: 'price-change',
-    source: { kind: 'manual', stockIds: ['600519.SH'] },
+    groupId: 'p-change-group',
     rules: [{ kind: 'price-change', pct: 0.04 }],
     cooldownMinutes: 30,
     enabled: true,
@@ -169,7 +178,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
     await ctx.repos.stockPool.save({
       id: 'p-change',
       name: 'price-change',
-      source: { kind: 'manual', stockIds: ['600519.SH'] },
+      groupId: 'p-change-group',
       rules: [{ kind: 'price-change', pct: 0.06 }],
       cooldownMinutes: 30,
       enabled: true,

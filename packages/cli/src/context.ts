@@ -20,7 +20,7 @@ import {
   MOCK_TRADES,
   mockAdviceFor,
 } from '@luoome/adapters';
-import type { Logger, ToolContext } from '@luoome/core';
+import type { Logger, RepositoryRegistry, ToolContext } from '@luoome/core';
 import { BUILTIN_TACTICS } from '@luoome/core';
 import { createDrizzleRepos, seedMockData } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
@@ -38,6 +38,44 @@ export interface CliContextHandle {
 
 /** LUOOME_HOME：默认 ~/.luoome（AGENTS.md 快速接入口径）。委托 ./paths.ts 解析。 */
 export { luoomeHome };
+
+/** 默认 holdings 分组 id（holdings-watch 池引用它）。 */
+const DEFAULT_HOLDINGS_GROUP_ID = 'holdings-default';
+
+/**
+ * 种默认 holdings 分组 + 引用它的 holdings-watch 池（分组化模型，docs/stock-group-design.md §5）。
+ * 幂等：分组已存在则跳过（save 本身是 upsert，重复执行结果一致）。
+ */
+const seedDefaultHoldingsGroupAndPool = async (
+  repos: RepositoryRegistry,
+  timestamp: Date,
+): Promise<void> => {
+  await repos.stockGroup.save({
+    id: DEFAULT_HOLDINGS_GROUP_ID,
+    name: '全部持仓（默认）',
+    description: '开箱即用的分组：默认账户的活跃持仓（活视图，无快照）',
+    resolver: { kind: 'holdings', accountId: MOCK_ACCOUNT.id },
+    // 活视图分组无刷新动作；refreshPolicy 占位 'manual'（永不自动刷新）
+    refreshPolicy: 'manual',
+    enabled: true,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  await repos.stockPool.save({
+    id: 'holdings-watch',
+    name: '持仓监控（默认）',
+    description: '开箱即用的池：成本阈值 ±5% + 量价背离战法',
+    groupId: DEFAULT_HOLDINGS_GROUP_ID,
+    rules: [
+      { kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 },
+      { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 },
+    ],
+    cooldownMinutes: 30,
+    enabled: true,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+};
 
 /** warn / error 打到 stderr，避免污染 --json 的 stdout。 */
 const createStderrLogger = (): Logger => {
@@ -86,36 +124,11 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
       // 真实时钟生成，保证 validUntil 在未来（advice list 默认过滤已过期）。
       advices: [mockAdviceFor('002594.SZ', now), mockAdviceFor('600519.SH', now)],
     });
-    // v0.6 起：种默认 holdings-watch 池（开箱即用；必须在账户 seed 之后）
-    await repos.stockPool.save({
-      id: 'holdings-watch',
-      name: '持仓监控（默认）',
-      description: '开箱即用的池：成本阈值 ±5% + 量价背离战法',
-      source: { kind: 'holdings', accountId: MOCK_ACCOUNT.id },
-      rules: [
-        { kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 },
-        { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 },
-      ],
-      cooldownMinutes: 30,
-      enabled: true,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
+    // 分组化起：种默认 holdings 分组 + 引用它的 holdings-watch 池（开箱即用；必须在账户 seed 之后）
+    await seedDefaultHoldingsGroupAndPool(repos, timestamp);
   } else if ((await repos.stockPool.list()).length === 0) {
-    // 已有账户但首次启用 stockPool（v0.5 → v0.6 升级路径）：补种默认池
-    await repos.stockPool.save({
-      id: 'holdings-watch',
-      name: '持仓监控（默认）',
-      source: { kind: 'holdings', accountId: MOCK_ACCOUNT.id },
-      rules: [
-        { kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 },
-        { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 },
-      ],
-      cooldownMinutes: 30,
-      enabled: true,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
+    // 已有账户但首次启用 stockPool（v0.5 → v0.6 升级路径）：补种默认分组 + 池
+    await seedDefaultHoldingsGroupAndPool(repos, timestamp);
   }
 
   const logger = createStderrLogger();

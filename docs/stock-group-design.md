@@ -1,6 +1,6 @@
 # 股票分组设计：StockGroup + 成员快照 + 动态 resolver
 
-> 状态：**已确认，待实现**（2026-07-22 讨论定稿）。本文档是分组设计的唯一事实来源。
+> 状态：**已实现**（2026-07-22 定稿并落地：StockGroup + 成员快照 + 7 个分组 tool + `refresh-groups` workflow + watch 每日刷新接线 + 存量数据迁移）。本文档是分组设计的唯一事实来源；实现与本文有出入处以代码为准，并在本文追记。
 > 前置文档：[intraday-watch-design.md](./intraday-watch-design.md)（股票池 + watch，已实现）。本设计在其上做一次概念升级：**分组与盯盘解耦**。
 
 ## 目标
@@ -154,5 +154,13 @@ interface GroupMemberSnapshot {
 
 - LLM 分组天然非确定：同一 prompt 两次刷新成员可能不同。靠快照 + reason 落库保证可审计，不保证可复现
 - `holdings` resolver 无快照 → 成员变化检测对它不适用（持仓变化本身有 trades 表记录）
-- 全市场股票列表 + 行情快照的 prompt 体积受限于 stocks 表规模；超阈值时按市场/流动性截断（实现时再定阈值）
+- 全市场股票列表 + 行情快照的 prompt 体积受限于 stocks 表规模；实现取 `MAX_CANDIDATES=200` 截断（`packages/tools/src/tools/resolve-llm-group.ts`），后续可按市场/流动性细化
 - llm 分组刷新失败标 stale 后，watch 继续用旧快照盯盘——用户需从 `get_stock_group` 感知 stale 状态
+
+## 实现追记（2026-07-22）
+
+- **stale 为纯计算而非存储**：`stale = refreshPolicy='daily' 且 resolver∈{formula,llm} 且 (无刷新记录 或 最近刷新日期(Asia/Shanghai) < 今日)`，由 `get_stock_group` 现算，未引入新存储
+- **刷新空结果一律不写空批**：formula 零命中 / llm 产出全被校验丢弃时，与失败同等处理（计入 failed、保留旧快照）——比 §4 最低要求更保守，防止"一次上游抖动清空分组"
+- **前置 bug 修正**：`StockRepository.search('')` 从返回空改为返回全部（id 升序）。run_tactic `scope='all-stocks'` 与 formula 全市场刷新依赖此语义；契约测试双实现同步覆盖
+- **watch 每日刷新**：`intraday-watch` step 0 按 Shanghai 日期做进程内 flag，每日首轮前自动跑 `refresh-groups`；失败也记 flag（防 60s 轮次重复 LLM 成本）
+- **迁移**：`migrateLegacyPoolSourcesToGroups` 在 `ensureSchema` 末尾幂等执行；tactic 源迁移后 console.warn 提示手动跑一次 `refresh_stock_group`（db 层拿不到 LLM/tool）

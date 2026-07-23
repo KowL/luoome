@@ -18,7 +18,7 @@ describe('list_stock_pools', () => {
     await ctx.repos.stockPool.save({
       id: 'p-on',
       name: 'on',
-      source: { kind: 'manual', stockIds: ['002594.SZ'] },
+      groupId: 'grp-manual',
       rules: [{ kind: 'price-change', pct: 0.05 }],
       cooldownMinutes: 30,
       enabled: true,
@@ -28,7 +28,7 @@ describe('list_stock_pools', () => {
     await ctx.repos.stockPool.save({
       id: 'p-off',
       name: 'off',
-      source: { kind: 'manual', stockIds: ['002594.SZ'] },
+      groupId: 'grp-manual',
       rules: [{ kind: 'price-change', pct: 0.05 }],
       cooldownMinutes: 30,
       enabled: false,

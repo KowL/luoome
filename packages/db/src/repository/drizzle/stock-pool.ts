@@ -10,7 +10,9 @@ const toStockPool = (row: PoolRow): StockPool => ({
   id: row.id,
   name: row.name,
   ...(row.description !== null ? { description: row.description } : {}),
-  source: row.source,
+  // 旧行（分组化迁移前）group_id 为 NULL → 空串占位：读出 / 序列化不 crash；
+  // 阶段 B 数据迁移后消失（docs/stock-group-design.md §5）。source 列 deprecated，不读出。
+  groupId: row.groupId ?? '',
   rules: row.rules,
   cooldownMinutes: row.cooldownMinutes,
   enabled: row.enabled,
@@ -29,7 +31,9 @@ export class DrizzleStockPoolRepository implements StockPoolRepository {
         id: pool.id,
         name: pool.name,
         description: pool.description ?? null,
-        source: pool.source,
+        // source 列 deprecated：新行恒写 NULL（旧库 source NOT NULL 已由 ensureSchema 结构升级放宽）
+        source: null,
+        groupId: pool.groupId,
         rules: pool.rules,
         cooldownMinutes: pool.cooldownMinutes,
         enabled: pool.enabled,
@@ -41,7 +45,8 @@ export class DrizzleStockPoolRepository implements StockPoolRepository {
         set: {
           name: pool.name,
           description: pool.description ?? null,
-          source: pool.source,
+          source: null,
+          groupId: pool.groupId,
           rules: pool.rules,
           cooldownMinutes: pool.cooldownMinutes,
           enabled: pool.enabled,

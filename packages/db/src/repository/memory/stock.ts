@@ -24,10 +24,15 @@ export class InMemoryStockRepository implements StockRepository {
     return match[0] ?? null;
   }
 
-  /** 按代码 / 名称模糊搜索；大小写不敏感，与 SQLite LIKE 的 ASCII 语义对齐。 */
+  /**
+   * 按代码 / 名称模糊搜索；大小写不敏感，与 SQLite LIKE 的 ASCII 语义对齐。
+   * 空 / 纯空白 query → 返回全部（按 id 升序），供 run_tactic(scope='all-stocks') 全市场扫描用。
+   */
   async search(query: string): Promise<Stock[]> {
     const q = query.trim().toLowerCase();
-    if (q.length === 0) return [];
+    if (q.length === 0) {
+      return [...this.items.values()].sort((a, b) => a.id.localeCompare(b.id));
+    }
     return [...this.items.values()]
       .filter((s) => s.code.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
       .sort((a, b) => a.id.localeCompare(b.id));

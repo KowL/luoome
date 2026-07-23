@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { InvariantError } from '../error/index.js';
 import { money } from '../types/branded.js';
 import {
   assertStockPoolInvariants,
@@ -18,7 +17,7 @@ const basePool = (overrides: Partial<StockPool> = {}): StockPool => ({
   id: 'holdings-watch',
   name: '持仓监控',
   description: '默认池',
-  source: { kind: 'manual', stockIds: ['002594.SZ'] },
+  groupId: 'holdings-default',
   rules: [{ kind: 'price-change', pct: 0.05 }],
   cooldownMinutes: 30,
   enabled: true,
@@ -51,10 +50,9 @@ describe('StockPool schema', () => {
     expect(r.success).toBe(false);
   });
 
-  it('holdings 池 + cost-threshold 规则合法', () => {
+  it('groupId 引用 + cost-threshold / tactic 规则组合合法', () => {
     const r = StockPoolSchema.safeParse(
       basePool({
-        source: { kind: 'holdings', accountId: 'acc-1' },
         rules: [
           { kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 },
           { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 },
@@ -66,18 +64,11 @@ describe('StockPool schema', () => {
 });
 
 describe('StockPool invariants', () => {
-  it('source=tactic 池：rules 中 tactic 规则 tacticId 不一致 → InvariantError', () => {
+  it('formula 分组 tacticId 一致性不在 entity 层断言（跨实体校验归 tool 层，阶段 B）', () => {
+    // rules 里 tactic 规则与分组 resolver 是否一致，entity 拿不到 repo 无法判断 → 不抛错
     const pool = basePool({
-      source: { kind: 'tactic', tacticId: 'breakout-volume', lookbackDays: 5 },
-      rules: [{ kind: 'tactic', tacticId: 'ma-bullish-alignment', minScore: 60 }],
-    });
-    expect(() => assertStockPoolInvariants(pool)).toThrow(InvariantError);
-  });
-
-  it('source=tactic 池：rules 中 tactic 规则一致 → 通过', () => {
-    const pool = basePool({
-      source: { kind: 'tactic', tacticId: 'breakout-volume', lookbackDays: 5 },
-      rules: [{ kind: 'tactic', tacticId: 'breakout-volume', minScore: 60 }],
+      groupId: 'some-formula-group',
+      rules: [{ kind: 'tactic', tacticId: 'any-tactic', minScore: 60 }],
     });
     expect(() => assertStockPoolInvariants(pool)).not.toThrow();
   });

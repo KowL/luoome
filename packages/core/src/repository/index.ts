@@ -4,6 +4,7 @@ import type { Holding } from '../entity/holding.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Stock } from '../entity/stock.js';
+import type { GroupMemberSnapshot, StockGroup } from '../entity/stock-group.js';
 import type { StockPool, WatchRule, WatchTrigger } from '../entity/stock-pool.js';
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
@@ -99,6 +100,10 @@ export interface RepositoryRegistry {
   readonly stockPool: StockPoolRepository;
   /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
   readonly watchTrigger: WatchTriggerRepository;
+  /** 分组化起（docs/stock-group-design.md §2）；股票分组 CRUD。 */
+  readonly stockGroup: StockGroupRepository;
+  /** 分组化起；分组成员快照（只增不改；watch hot path 只读 currentMembers）。 */
+  readonly groupMember: GroupMemberRepository;
 }
 
 /**
@@ -130,6 +135,34 @@ export interface StockPoolRepository {
   /** 默认全部；enabledOnly=true 仅返回 enabled=true。 */
   list(enabledOnly?: boolean): Promise<readonly StockPool[]>;
   remove(id: string): Promise<void>;
+}
+
+/**
+ * 股票分组仓储（docs/stock-group-design.md §2）。
+ * Key 用 group.id（slug 唯一）。
+ */
+export interface StockGroupRepository {
+  save(group: StockGroup): Promise<void>;
+  findById(id: string): Promise<StockGroup | null>;
+  /** 默认全部；enabledOnly=true 仅返回 enabled=true。 */
+  list(enabledOnly?: boolean): Promise<readonly StockGroup[]>;
+  remove(id: string): Promise<void>;
+}
+
+/**
+ * 分组成员快照仓储（docs/stock-group-design.md §1/§2）。
+ * - 快照只增不改：一次刷新 = 一批（同一 refreshId），历史批次全保留（复盘 / 成员变化检测用）
+ * - 当前成员语义 = 最新 refreshId 那一批；holdings resolver 是活视图，不写快照
+ */
+export interface GroupMemberRepository {
+  /** 批量写入一批快照（通常同 refreshId）；同 id 重复写入忽略。 */
+  saveBatch(snapshots: readonly GroupMemberSnapshot[]): Promise<void>;
+  /** 当前成员：最新 refreshId 那一批（按 stockId 升序）；无快照返回空数组。 */
+  currentMembers(groupId: string): Promise<readonly GroupMemberSnapshot[]>;
+  /** 历史批次（含当前批），按 createdAt 倒序；since 过滤（createdAt ≥ since）。 */
+  listHistory(groupId: string, since?: Date): Promise<readonly GroupMemberSnapshot[]>;
+  /** 最新 refreshId；无快照返回 null。 */
+  latestRefreshId(groupId: string): Promise<string | null>;
 }
 
 /**

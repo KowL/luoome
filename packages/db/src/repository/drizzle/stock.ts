@@ -54,10 +54,16 @@ export class DrizzleStockRepository implements StockRepository {
     return row === undefined ? null : toStock(row);
   }
 
-  /** 按代码 / 名称模糊搜索（SQLite LIKE 对 ASCII 大小写不敏感，与内存实现一致）。 */
+  /**
+   * 按代码 / 名称模糊搜索（SQLite LIKE 对 ASCII 大小写不敏感，与内存实现一致）。
+   * 空 / 纯空白 query → 返回全部（按 id 升序），供 run_tactic(scope='all-stocks') 全市场扫描用。
+   */
   async search(query: string): Promise<Stock[]> {
     const q = sanitizeLikeQuery(query.trim());
-    if (q.length === 0) return [];
+    if (q.length === 0) {
+      const rows = this.db.select().from(stocks).orderBy(asc(stocks.id)).all();
+      return rows.map(toStock);
+    }
     const pattern = `%${q}%`;
     const rows = this.db
       .select()

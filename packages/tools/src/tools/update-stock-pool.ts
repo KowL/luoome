@@ -1,21 +1,16 @@
-import {
-  assertStockPoolInvariants,
-  PoolSourceSchema,
-  StockPoolSchema,
-  WatchRuleSchema,
-} from '@luoome/core';
+import { assertStockPoolInvariants, StockPoolSchema, WatchRuleSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 
-const PoolSourcePatchSchema = PoolSourceSchema.optional();
 const WatchRulePatchSchema = z.array(WatchRuleSchema).min(1).optional();
 
 export const UpdateStockPoolInput = z.object({
   id: z.string().min(1),
   name: z.string().min(1).max(64).optional(),
   description: z.string().max(500).nullable().optional(),
-  source: PoolSourcePatchSchema,
+  /** 换绑成员分组（stock_groups.id）；分组必须已存在。 */
+  groupId: z.string().min(1).optional(),
   rules: WatchRulePatchSchema,
   cooldownMinutes: z.number().int().min(1).max(1440).optional(),
   enabled: z.boolean().optional(),
@@ -26,12 +21,12 @@ export const UpdateStockPoolOutput = z.object({
 });
 
 /**
- * 更新股票池（v0.6 起，write）。
+ * 更新股票池（v0.6 起，write；分组化改造 docs/stock-group-design.md §5/§6）。
  *
  * 语义：未提供的字段保持原值；description=null 表示清空。
  * 不变量（同 create_stock_pool）：
- * - tactic 引用存在性
- * - holdings source 的 accountId 存在性
+ * - groupId 提供时校验分组存在
+ * - tactic 规则引用存在性
  * - assertStockPoolInvariants
  */
 export const updateStockPoolTool = defineTool({
@@ -44,6 +39,11 @@ export const updateStockPoolTool = defineTool({
     const existing = await ctx.repos.stockPool.findById(input.id);
     if (existing === null) return errNotFound('StockPool', input.id);
 
+    if (input.groupId !== undefined) {
+      const group = await ctx.repos.stockGroup.findById(input.groupId);
+      if (group === null) return errNotFound('StockGroup', input.groupId);
+    }
+
     const merged = {
       ...existing,
       ...(input.name !== undefined ? { name: input.name } : {}),
@@ -52,16 +52,15 @@ export const updateStockPoolTool = defineTool({
           ? { description: undefined }
           : { description: input.description }
         : {}),
-      ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(input.groupId !== undefined ? { groupId: input.groupId } : {}),
       ...(input.rules !== undefined ? { rules: input.rules } : {}),
       ...(input.cooldownMinutes !== undefined ? { cooldownMinutes: input.cooldownMinutes } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       updatedAt: ctx.clock(),
     };
 
-    // tactic 引用校验（覆盖式）
+    // tactic 规则引用校验（覆盖式）
     const tacticIds = new Set<string>();
-    if (merged.source.kind === 'tactic') tacticIds.add(merged.source.tacticId);
     for (const rule of merged.rules) {
       if (rule.kind === 'tactic') tacticIds.add(rule.tacticId);
     }
@@ -69,9 +68,18 @@ export const updateStockPoolTool = defineTool({
       const t = await ctx.repos.tactic.findById(tid);
       if (t === null) return errNotFound('Tactic', tid);
     }
-    if (merged.source.kind === 'holdings') {
-      const acc = await ctx.repos.account.findById(merged.source.accountId);
-      if (acc === null) return errNotFound('Account', merged.source.accountId);
+
+    // 跨实体不变量（阶段 B）：merged 后的分组若为 formula，tactic 规则的 tacticId 必须与 resolver.tacticId 一致
+    const mergedGroup = await ctx.repos.stockGroup.findById(merged.groupId);
+    if (mergedGroup !== null && mergedGroup.resolver.kind === 'formula') {
+      for (const rule of merged.rules) {
+        if (rule.kind === 'tactic' && rule.tacticId !== mergedGroup.resolver.tacticId) {
+          return errInvalidInput(
+            `pool 引用 formula 分组（resolver.tacticId=${mergedGroup.resolver.tacticId}）时，` +
+              `tactic 规则的 tacticId 必须一致，实际 ${rule.tacticId}`,
+          );
+        }
+      }
     }
 
     const pool = StockPoolSchema.parse(merged);

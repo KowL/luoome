@@ -337,6 +337,8 @@ interface ToolContext {
 
 **v0.7 起新增**：`packages/cli/src/paths.ts`（`luoomeHome()` 从 context.ts 抽出，被 watch / holidays / future paths 共享）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
 
+**分组化起新增**：StockGroup（股票分组 = resolver(manual/holdings/formula/llm) + refreshPolicy + enabled，只回答「成员是谁」）、GroupMemberSnapshot（成员快照，一次刷新 = 一批同 refreshId，只增不改）。StockPool 从 `source` 改为 `groupId` 引用分组；启动时 `migrateLegacyPoolSourcesToGroups` 把 v0.6 旧 source JSON 幂等迁移成分组。分组 CRUD 走 list/get/create/update/delete_stock_group，刷新走 refresh_stock_group / refresh-groups workflow（盘外「生产者 + 快照」，hot path 只读快照）。详见 [docs/stock-group-design.md](./stock-group-design.md)。
+
 ```txt
 Account          账户（真实/模拟，币种，初始资金）
 Stock            标的（代码、交易所、名称、行业）
@@ -588,7 +590,8 @@ type ToolError =
 - `risk-report`：风控指标 + 持仓建议（v0.3）
 - `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
-- `intraday-watch`：单轮盘中盯盘评估 —— 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/intraday-watch-design.md](./intraday-watch-design.md)）
+- `intraday-watch`：单轮盘中盯盘评估 —— daily 分组刷新检查 → 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/intraday-watch-design.md](./intraday-watch-design.md)）
+- `refresh-groups`：盘外刷新 enabled 动态分组（formula→run_tactic / llm→resolve_llm_group），失败 / 空结果保留旧快照，输出 entered/exited（分组化起；设计：[docs/stock-group-design.md](./stock-group-design.md)）
 
 ### 8.2 Workflow 与 tool 的边界
 

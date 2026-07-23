@@ -7,11 +7,20 @@ import { deleteStockPoolTool } from './delete-stock-pool.js';
 describe('delete_stock_pool', () => {
   it('删除已存在池 → removed=true', async () => {
     const ctx = await buildMockContext();
+    await ctx.repos.stockGroup.save({
+      id: 'grp-manual',
+      name: 'grp-manual',
+      resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
+      refreshPolicy: 'manual',
+      enabled: true,
+      createdAt: new Date('2026-07-22T00:00:00Z'),
+      updatedAt: new Date('2026-07-22T00:00:00Z'),
+    });
     await createStockPoolTool.execute(
       {
         id: 'p-del',
         name: 'x',
-        source: { kind: 'manual', stockIds: ['002594.SZ'] },
+        groupId: 'grp-manual',
         rules: [{ kind: 'price-change', pct: 0.05 }],
       },
       ctx,
