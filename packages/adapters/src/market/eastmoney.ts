@@ -2,8 +2,10 @@ import {
   quantity as brandQuantity,
   type DailyBar,
   type DateRange,
+  type Exchange,
   money,
   type Quote,
+  type StockSearchCandidate,
 } from '@luoome/core';
 
 /**
@@ -86,6 +88,7 @@ export interface EastmoneyAdapterOptions {
   readonly fetchImpl?: typeof fetch;
   readonly baseQuoteUrl?: string;
   readonly baseKlineUrl?: string;
+  readonly baseSearchUrl?: string;
 }
 
 /**
@@ -123,8 +126,82 @@ interface EastmoneyKlineResponse {
   };
 }
 
+/** suggest 接口单条记录（type=14 股票；字段 2026-07 实测）。 */
+interface EastmoneySuggestItem {
+  readonly Code?: string;
+  readonly Name?: string;
+  readonly Classify?: string;
+  readonly SecurityTypeName?: string;
+  readonly QuoteID?: string;
+}
+
+interface EastmoneySuggestResponse {
+  readonly QuotationCodeTable?: {
+    readonly Status?: number;
+    readonly TotalCount?: number;
+    readonly Data?: readonly EastmoneySuggestItem[] | null;
+  };
+}
+
+/**
+ * suggest 响应 → 候选列表（纯函数，便于测试）。
+ * 交易所映射依据 QuoteID 前缀 + Classify（2026-07 实测）：
+ *   1.xxxxxx → SH；0.xxxxxx + AStock → SZ；0.xxxxxx + 京A/NEEQ → BJ；
+ *   116.xxxxx → HK；105./106./107.xxx → US。
+ * 无法映射交易所的条目丢弃（基金 / 债券 / 指数等 type=14 漏网）。
+ */
+/** Classify 白名单：AStock = A 股，HK = 港股，UsStock = 美股，NEEQ = 北交所/新三板。 */
+const ALLOWED_CLASSIFIES: ReadonlySet<string> = new Set(['AStock', 'HK', 'UsStock', 'NEEQ']);
+
+export const parseEastmoneySuggest = (json: EastmoneySuggestResponse): StockSearchCandidate[] => {
+  const table = json.QuotationCodeTable;
+  if (table?.Status !== 0) {
+    throw new EastmoneyAdapterError(`Eastmoney 搜索失败: Status=${table?.Status ?? 'null'}`);
+  }
+  const items = table.Data ?? [];
+  const result: StockSearchCandidate[] = [];
+  for (const item of items) {
+    if (item.Code === undefined || item.Name === undefined || item.QuoteID === undefined) continue;
+    // type=14 仍会漏基金 / 债券等，按 Classify 白名单再过滤一层
+    if (!ALLOWED_CLASSIFIES.has(item.Classify ?? '')) continue;
+    const exchange = suggestExchange(item);
+    if (exchange === undefined) continue;
+    result.push({
+      id: `${item.Code}.${exchange}`,
+      code: item.Code,
+      exchange,
+      name: item.Name,
+    });
+  }
+  return result;
+};
+
+const suggestExchange = (item: EastmoneySuggestItem): Exchange | undefined => {
+  const prefix = item.QuoteID?.split('.')[0];
+  switch (prefix) {
+    case '1':
+      return 'SH';
+    case '0':
+      return item.Classify === 'AStock'
+        ? 'SZ'
+        : item.SecurityTypeName?.includes('京') === true
+          ? 'BJ'
+          : undefined;
+    case '116':
+      return 'HK';
+    case '105':
+    case '106':
+    case '107':
+      return 'US';
+    default:
+      return undefined;
+  }
+};
+
 const QUOTE_FIELDS = 'f43,f44,f45,f46,f47,f48,f60,f57,f58,f169,f170';
 const KLINE_FIELDS = '1,2,3,4,5,6,8,9';
+/** suggest 接口公开 token（Eastmoney Web 前端同款，无需鉴权）。 */
+const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
 
 export class EastmoneyAdapter {
   readonly name = 'eastmoney';
@@ -134,6 +211,7 @@ export class EastmoneyAdapter {
   private readonly fetchImpl: typeof fetch;
   private readonly baseQuoteUrl: string;
   private readonly baseKlineUrl: string;
+  private readonly baseSearchUrl: string;
 
   constructor(options: EastmoneyAdapterOptions = {}) {
     this.clock = options.clock ?? ((): Date => new Date());
@@ -142,6 +220,7 @@ export class EastmoneyAdapter {
     this.baseQuoteUrl = options.baseQuoteUrl ?? 'https://push2.eastmoney.com/api/qt/stock/get';
     this.baseKlineUrl =
       options.baseKlineUrl ?? 'https://push2his.eastmoney.com/api/qt/stock/kline/get';
+    this.baseSearchUrl = options.baseSearchUrl ?? 'https://searchapi.eastmoney.com/api/suggest/get';
   }
 
   /**
@@ -236,6 +315,18 @@ export class EastmoneyAdapter {
       });
     }
     return bars;
+  }
+
+  /**
+   * 外部股票搜索（v0.8 起）：suggest 接口 type=14（股票）。
+   * 空结果返回 []（合法答案，不算失败）；HTTP 错误 / Status != 0 抛 EastmoneyAdapterError。
+   */
+  async searchStocks(query: string): Promise<StockSearchCandidate[]> {
+    const url =
+      `${this.baseSearchUrl}?input=${encodeURIComponent(query)}` +
+      `&type=14&token=${SEARCH_TOKEN}&count=20`;
+    const json = await this.getJson<EastmoneySuggestResponse>(url);
+    return parseEastmoneySuggest(json);
   }
 
   private async getJson<T>(url: string): Promise<T> {

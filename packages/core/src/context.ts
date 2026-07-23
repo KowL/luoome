@@ -1,5 +1,6 @@
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, Quote } from './entity/quote.js';
+import type { Exchange } from './entity/stock.js';
 import type { RepositoryRegistry } from './repository/index.js';
 
 /**
@@ -13,6 +14,19 @@ export interface MarketDataAdapterLike {
   fetchQuote(stockCode: string): Promise<Quote>;
   batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>>;
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
+  /**
+   * 外部数据源股票搜索（v0.8 起，可选实现）。
+   * search_stocks tool 优先走它；未实现或抛错时降级本地 StockRepository。
+   */
+  searchStocks?(query: string): Promise<StockSearchCandidate[]>;
+}
+
+/** 股票搜索候选（外部数据源统一形状；id = '<code>.<EXCHANGE>'）。 */
+export interface StockSearchCandidate {
+  readonly id: string;
+  readonly code: string;
+  readonly exchange: Exchange;
+  readonly name: string;
 }
 
 /** LLM 调用请求（ARCHITECTURE §6.3：system + schema + data）。 */

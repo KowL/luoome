@@ -2,8 +2,10 @@ import {
   quantity as brandQuantity,
   type DailyBar,
   type DateRange,
+  type Exchange,
   money,
   type Quote,
+  type StockSearchCandidate,
 } from '@luoome/core';
 
 /**
@@ -75,7 +77,47 @@ export interface TencentAdapterOptions {
   readonly fetchImpl?: typeof fetch;
   readonly baseQuoteUrl?: string;
   readonly baseKlineUrl?: string;
+  readonly baseSearchUrl?: string;
 }
+
+const TENCENT_MARKET_TO_EXCHANGE: Readonly<Record<string, Exchange>> = {
+  sh: 'SH',
+  sz: 'SZ',
+  bj: 'BJ',
+  hk: 'HK',
+  us: 'US',
+};
+
+/**
+ * smartbox `v_hint` 文本 → 候选列表（纯函数，便于测试）。
+ * 记录形如 `sh~601398~工商银行~gsyh~GP-A`，多条以 `^` 分隔；
+ * 第 5 段是类型：GP* = 股票（保留），jj = 基金等（丢弃）；
+ * 美股代码带市场后缀（aapl.oq → AAPL）；CJK 以 \uXXXX 转义出现。
+ */
+export const parseTencentSearchHint = (text: string): StockSearchCandidate[] => {
+  const unescaped = text.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+  const match = unescaped.match(/v_hint="([^"]*)"/);
+  const hint = match?.[1];
+  if (hint === undefined || hint.length === 0) return [];
+  const result: StockSearchCandidate[] = [];
+  for (const record of hint.split('^')) {
+    const parts = record.split('~');
+    if (parts.length < 5) continue;
+    const [marketRaw, codeRaw, name, , type] = parts;
+    if (type === undefined || !type.startsWith('GP')) continue;
+    const exchange = marketRaw !== undefined ? TENCENT_MARKET_TO_EXCHANGE[marketRaw] : undefined;
+    if (exchange === undefined || codeRaw === undefined || name === undefined || name === '') {
+      continue;
+    }
+    // 美股 'aapl.oq' → 'AAPL'；A 股 / 港股为纯数字代码
+    const code = codeRaw.split('.')[0]?.toUpperCase() ?? '';
+    if (code.length === 0) continue;
+    result.push({ id: `${code}.${exchange}`, code, exchange, name });
+  }
+  return result;
+};
 
 export class TencentAdapter {
   readonly name = 'tencent';
@@ -85,6 +127,7 @@ export class TencentAdapter {
   private readonly fetchImpl: typeof fetch;
   private readonly baseQuoteUrl: string;
   private readonly baseKlineUrl: string;
+  private readonly baseSearchUrl: string;
 
   constructor(options: TencentAdapterOptions = {}) {
     this.clock = options.clock ?? ((): Date => new Date());
@@ -94,6 +137,7 @@ export class TencentAdapter {
       options.baseQuoteUrl ?? 'https://web.ifzq.gtimg.cn/appstock/app/minute/query';
     this.baseKlineUrl =
       options.baseKlineUrl ?? 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get';
+    this.baseSearchUrl = options.baseSearchUrl ?? 'https://smartbox.gtimg.cn/s3/';
   }
 
   /**
@@ -189,6 +233,39 @@ export class TencentAdapter {
       });
     }
     return bars;
+  }
+
+  /**
+   * 外部股票搜索（v0.8 起）：smartbox 接口，GBK 文本 + \uXXXX 转义。
+   * 空结果返回 []；HTTP 错误抛 TencentAdapterError。
+   */
+  async searchStocks(query: string): Promise<StockSearchCandidate[]> {
+    const url = `${this.baseSearchUrl}?v=2&q=${encodeURIComponent(query)}&t=all`;
+    const text = await this.getText(url);
+    return parseTencentSearchHint(text);
+  }
+
+  private async getText(url: string): Promise<string> {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await this.fetchImpl(url, { signal: controller.signal });
+      if (!res.ok) {
+        throw new TencentAdapterError(`HTTP ${res.status} ${res.statusText} url=${url}`);
+      }
+      const buf = await res.arrayBuffer();
+      // smartbox 标称 GBK，但 CJK 实际以 \uXXXX 转义出现（ASCII 安全），
+      // utf-8 解码无损，反转义由 parseTencentSearchHint 负责。
+      return new TextDecoder('utf-8').decode(buf);
+    } catch (error) {
+      if (error instanceof TencentAdapterError) throw error;
+      throw new TencentAdapterError(
+        `fetch 失败: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      );
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   }
 
   private async getJson<T>(url: string): Promise<T> {

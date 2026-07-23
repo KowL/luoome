@@ -1,7 +1,13 @@
-import { type DailyBar, type DateRange, money, type Quote } from '@luoome/core';
+import {
+  type DailyBar,
+  type DateRange,
+  money,
+  type Quote,
+  type StockSearchCandidate,
+} from '@luoome/core';
 
 import { defaultMockClock, hashString, mulberry32 } from '../internal/deterministic.js';
-import { findMockStock, MOCK_STOCK_BASE_PRICES } from '../mocks/fixtures.js';
+import { findMockStock, MOCK_STOCK_BASE_PRICES, MOCK_STOCKS } from '../mocks/fixtures.js';
 import type { MarketDataAdapter } from './types.js';
 
 export interface MockMarketAdapterOptions {
@@ -95,6 +101,22 @@ export class MockMarketAdapter implements MarketDataAdapter {
       });
     }
     return Promise.resolve(bars);
+  }
+
+  /**
+   * mock 搜索（v0.8 起）：在 fixtures 里按 id / code / name 模糊匹配，
+   * 与 StockRepository.search 同语义、完全 deterministic（真实源全挂时的兜底）。
+   */
+  searchStocks(query: string): Promise<StockSearchCandidate[]> {
+    const q = query.trim().toLowerCase();
+    if (q.length === 0) return Promise.resolve([]);
+    const result = MOCK_STOCKS.filter(
+      (s) =>
+        s.id.toLowerCase().includes(q) ||
+        s.code.toLowerCase().includes(q) ||
+        s.name.toLowerCase().includes(q),
+    ).map((s) => ({ id: s.id, code: s.code, exchange: s.exchange, name: s.name }));
+    return Promise.resolve(result);
   }
 
   /** 已知 fixture 取基准价；未知代码 hash 出 [5, 500) 的稳定伪随机价。 */

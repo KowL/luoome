@@ -1,4 +1,4 @@
-import type { DailyBar, DateRange, Logger, Quote } from '@luoome/core';
+import type { DailyBar, DateRange, Logger, Quote, StockSearchCandidate } from '@luoome/core';
 
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
 import type { MarketDataAdapter } from './types.js';
@@ -12,6 +12,8 @@ type QuoteAdapter = {
   fetchQuote(stockCode: string): Promise<Quote>;
   batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>>;
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
+  /** 外部股票搜索（v0.8 起，可选；未实现的源在 searchStocks 路由时跳过）。 */
+  searchStocks?(query: string): Promise<StockSearchCandidate[]>;
 };
 
 /** 错误识别：Manager 需要把异常归类（adapter / network / mock）。 */
@@ -246,6 +248,38 @@ export class MarketDataManager implements MarketDataAdapter {
     this.lastFinalFallbackAt = now.getTime();
     this.logger.error('manager.fetchDailyBars all sources failed, using mock', { stockCode });
     return await this.finalFallback.fetchDailyBars(stockCode, range);
+  }
+
+  /**
+   * 外部股票搜索（v0.8 起）：primary → fallback → finalFallback（mock fixtures）。
+   * 空数组是合法答案（该源确实没搜到），不触发降级；抛错才降级。
+   * 不做缓存（搜索低频且 query 维度发散，LRU 命中率近似为零）。
+   */
+  async searchStocks(query: string): Promise<StockSearchCandidate[]> {
+    const now = this.clock();
+    const inSuppress = now.getTime() - this.lastFinalFallbackAt < this.suppressMs;
+    if (!inSuppress) {
+      for (const source of [this.primary, this.fallback]) {
+        if (typeof source.searchStocks !== 'function') continue;
+        try {
+          await this.rateLimiter.acquire();
+          return await source.searchStocks(query);
+        } catch (error) {
+          this.logger.warn('manager.searchStocks source failed', {
+            query,
+            sourceName: source.name,
+            error: errorMessage(error),
+          });
+        }
+      }
+    }
+    if (typeof this.finalFallback.searchStocks === 'function') {
+      this.finalFallbackCalls += 1;
+      this.lastFinalFallbackAt = now.getTime();
+      this.logger.error('manager.searchStocks all sources failed, using mock', { query });
+      return this.finalFallback.searchStocks(query);
+    }
+    return [];
   }
 
   stats(): ManagerStats {

@@ -1,4 +1,10 @@
-import type { DailyBar, DateRange, MarketDataAdapterLike, Quote } from '@luoome/core';
+import type {
+  DailyBar,
+  DateRange,
+  MarketDataAdapterLike,
+  Quote,
+  StockSearchCandidate,
+} from '@luoome/core';
 
 /**
  * 行情数据源接口（ARCHITECTURE §4.7）。
@@ -14,4 +20,6 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>>;
   /** 拉日线（v0.1 mock 固定返回 60 根）。 */
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
+  /** 外部股票搜索（v0.8 起；Manager 路由到实现了该方法的源）。 */
+  searchStocks?(query: string): Promise<StockSearchCandidate[]>;
 }

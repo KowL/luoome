@@ -1,3 +1,4 @@
+import type { MarketDataAdapterLike } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import { buildMockContext } from '../context.js';
 import { searchStocksTool } from './search-stocks.js';
@@ -42,5 +43,51 @@ describe('tool/search_stocks', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_input');
+  });
+
+  it('v0.8：mock ctx 走 adapter 外部搜索（source=market）', async () => {
+    const ctx = await buildMockContext();
+    const res = await searchStocksTool.execute({ query: '0025' }, ctx);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.source).toBe('market');
+    expect(res.data.stocks[0]?.id).toBe('002594.SZ');
+  });
+
+  it('v0.8：adapter 抛错 → 降级本地库（source=local）', async () => {
+    const ctx = await buildMockContext();
+    const brokenMarket: MarketDataAdapterLike = {
+      name: 'broken',
+      fetchQuote: () => Promise.reject(new Error('down')),
+      batchQuote: () => Promise.reject(new Error('down')),
+      fetchDailyBars: () => Promise.reject(new Error('down')),
+      searchStocks: () => Promise.reject(new Error('down')),
+    };
+    const res = await searchStocksTool.execute(
+      { query: '0025' },
+      { ...ctx, adapters: { ...ctx.adapters, market: brokenMarket } },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.source).toBe('local');
+    expect(res.data.stocks[0]?.id).toBe('002594.SZ');
+  });
+
+  it('v0.8：adapter 未实现 searchStocks → 本地库（source=local）', async () => {
+    const ctx = await buildMockContext();
+    const noSearchMarket: MarketDataAdapterLike = {
+      name: 'no-search',
+      fetchQuote: () => Promise.reject(new Error('not used')),
+      batchQuote: () => Promise.reject(new Error('not used')),
+      fetchDailyBars: () => Promise.reject(new Error('not used')),
+    };
+    const res = await searchStocksTool.execute(
+      { query: '茅台' },
+      { ...ctx, adapters: { ...ctx.adapters, market: noSearchMarket } },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.source).toBe('local');
+    expect(res.data.stocks[0]?.id).toBe('600519.SH');
   });
 });
