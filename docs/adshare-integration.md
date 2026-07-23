@@ -17,10 +17,8 @@ ADSHARE_MAX_RETRIES=2
 |------|------|------|---------------|------|
 | `ADSHARE_URL` | 是 | — | ✅ `fromEnv()` | adshare 服务根地址，会自动去掉末尾 `/`。**优先使用域名**（如 `https://adshare.example.internal`），不要硬编码 IP。 |
 | `ADSHARE_API_KEY` | 否 | `''` | ✅ `fromEnv()` | 同时作为 `X-API-Key` 与 `Authorization: Bearer *** 头发送。远端不强制鉴权时可留空。 |
-| `ADSHARE_TIMEOUT_MS` | 否 | `10000` | ❌ **尚未读取** | 单次请求超时（毫秒）。当前必须通过 `new AdshareClient({ timeoutMs })` 显式传入。模板里声明是为后续迭代对齐入口。 |
-| `ADSHARE_MAX_RETRIES` | 否 | `2` | ❌ **尚未读取** | 网络错误 / 5xx 时最大重试次数（不含首次尝试）。同上，需构造器传入。 |
-
-> **关于 `ADSHARE_TIMEOUT_MS` / `ADSHARE_MAX_RETRIES`**：SDK v0.1 的 `fromEnv()` 只读前两个变量（见 `packages/adshare-sdk/src/config.ts`）。如需调整超时或重试，请修改 `apps/web/src/server.ts` 里 `AdshareClient.fromEnv` 的调用，或等 SDK 升级。**模板里仍列出两者**，是给运维一个预期入口；改这两个值当前不会生效。
+| `ADSHARE_TIMEOUT_MS` | 否 | `10000` | ✅ `fromEnv()` | 单次请求尝试的超时（毫秒），必须是正整数。 |
+| `ADSHARE_MAX_RETRIES` | 否 | `2` | ✅ `fromEnv()` | 网络错误 / 5xx 时最大重试次数（不含首次尝试），必须是非负整数。 |
 
 > ⚠️ 模板里的 `http://8.148.216.30:8888` 是临时测试地址。生产部署务必替换为域名，并把模板里的 IP 行同步更新或删除。
 
@@ -177,16 +175,16 @@ time curl -fsS "$ADSHARE_URL/stock_basic?name=%E8%B4%B5%E5%B7%9E%E8%8C%85%E5%8F%
 
 # 4) 看 adshare 端日志 / 监控（CPU / DB 连接池 / 上游依赖）
 
-# 5) 临时调高 SDK 超时：改 apps/web/src/server.ts 里
-#    AdshareClient.fromEnv(process.env) → new AdshareClient({ ...fromEnv(process.env), timeoutMs: 30_000 })
+# 5) 临时调高 SDK 超时：在 .env 中设置
+ADSHARE_TIMEOUT_MS=30000
 ```
 
 **修复建议**
 
 1. 网络不通：确认 VPN / 防火墙 / 代理。开发环境固定走内网域名而非公网 IP。
 2. 对端 down：用 `docker compose ps` / `systemctl status adshare` / `pm2 list` 检查，按对方运维手册恢复；首次启动后等 5–10s 再 `curl /health`。
-3. timeout 过短：把 web 端 `timeoutMs` 调到 30000（30s）应急；**永久方案**是在 adshare 端给 `stock_basic` 加 `name` 索引，并启用网关层读缓存（Redis / CDN）。
-4. 偶发抖动：把 `ADSHARE_MAX_RETRIES`（构造器参数）从 2 调到 3–4；SDK 用指数退避 `200ms × 2^attempt`，3 次重试覆盖大约 1.4s 的窗口。
+3. timeout 过短：把 `.env` 中 `ADSHARE_TIMEOUT_MS` 调到 30000（30s）应急；**永久方案**是在 adshare 端给 `stock_basic` 加 `name` 索引，并启用网关层读缓存（Redis / CDN）。
+4. 偶发抖动：把 `ADSHARE_MAX_RETRIES` 从 2 调到 3–4；SDK 用指数退避 `200ms × 2^attempt`，3 次重试覆盖大约 1.4s 的窗口。
 
 ### 3.3 解析失败（parse_error / schema mismatch）
 

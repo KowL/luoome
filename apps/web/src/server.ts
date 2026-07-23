@@ -1,7 +1,8 @@
 // @luoome/web —— 最小 Web 端（plan.md 跨包契约 / ARCHITECTURE §10）。
 // Hono HTTP API + 同源静态仪表盘：
-//   GET  /api/holdings            → list_holdings
-//   GET  /api/advice              → get_advice（?subjectId=&includeExpired=）
+//   GET  /api/stocks/search    → adshare 优先搜索，本地 mock 兜底
+//   GET  /api/holdings          → list_holdings
+//   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
 //   POST /api/tools/:name/call    → 放行 read/advice/write（ARCHITECTURE §7.1：Web 默认
 //                                   含 write）+ 白名单 external（fetch_quote）；其余
@@ -25,7 +26,9 @@ import {
   MOCK_TRADES,
   mockAdviceFor,
 } from '@luoome/adapters';
-import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
+import { AdshareClient } from '@luoome/adshare-sdk';
+import type { SideEffect, Stock, ToolContext, ToolError, ToolResult } from '@luoome/core';
+import { stockCode as brandStockCode } from '@luoome/core';
 import { createDrizzleRepos, seedMockData } from '@luoome/db';
 import { buildContext, toolRegistry } from '@luoome/tools';
 import { Hono } from 'hono';
@@ -250,6 +253,90 @@ export const createWebApp = (initialCtx: ToolContext): Hono => {
   });
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
+
+  // 股票搜索（adshare 优先，本地 mock 兜底）
+  app.get('/api/stocks/search', async (c) => {
+    const q = c.req.query('q');
+    const limitRaw = c.req.query('limit');
+    // 契约：default 20、max 50（防御性上限，避免 agent 误传超大值把上游拖垮）。
+    const limit = limitRaw === undefined ? 20 : Math.max(1, Math.min(50, Number(limitRaw) || 20));
+    if (typeof q !== 'string' || q.trim().length === 0) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '缺少搜索参数 q',
+          issues: [],
+        },
+      });
+    }
+
+    const name = q.trim();
+    const validExchanges = new Set<Stock['exchange']>(['SH', 'SZ', 'BJ', 'HK', 'US']);
+
+    const toStock = (item: {
+      readonly ts_code: string;
+      readonly name: string;
+      readonly industry?: string | undefined;
+    }): Stock | null => {
+      const parts = item.ts_code.trim().split('.');
+      if (parts.length !== 2) return null;
+      const [code, exchange] = parts;
+      if (code === undefined || exchange === undefined) return null;
+      const upperExchange = exchange.toUpperCase() as Stock['exchange'];
+      if (!validExchanges.has(upperExchange)) return null;
+      try {
+        return item.industry === undefined
+          ? {
+              id: `${code}.${upperExchange}`,
+              code: brandStockCode(code),
+              exchange: upperExchange,
+              name: item.name,
+            }
+          : {
+              id: `${code}.${upperExchange}`,
+              code: brandStockCode(code),
+              exchange: upperExchange,
+              name: item.name,
+              industry: item.industry,
+            };
+      } catch {
+        return null;
+      }
+    };
+
+    try {
+      const adshare = AdshareClient.fromEnv(process.env);
+      const candidates = await adshare.searchStocks({
+        name,
+        fields: ['ts_code', 'name', 'industry'],
+        limit,
+      });
+      const stocks = candidates
+        .map(toStock)
+        .filter((candidate): candidate is Stock => candidate !== null);
+      if (stocks.length > 0) {
+        return jsonResult({
+          ok: true,
+          data: { stocks, total: stocks.length, source: 'adshare' as const },
+        });
+      }
+    } catch (error) {
+      ctxRef.current.logger.warn('adshare search fallback to local', { q, error: String(error) });
+    }
+
+    const localResult = await invokeTool('search_stocks', { query: name, limit });
+    if (!localResult.ok) return jsonResult(localResult);
+    const localData = localResult.data as { stocks: Stock[]; total: number; source?: string };
+    return jsonResult({
+      ok: true,
+      data: {
+        stocks: localData.stocks,
+        total: localData.total,
+        source: (localData.source as 'local' | 'market') ?? 'local',
+      },
+    });
+  });
 
   app.get('/api/advice', (c) => {
     const subjectId = c.req.query('subjectId');

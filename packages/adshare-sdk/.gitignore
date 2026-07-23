@@ -1,0 +1,19 @@
+# Local env (real .env values must not enter git). .env.example is committed.
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# Test/coverage output
+coverage/
+.nyc_output/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
