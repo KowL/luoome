@@ -35,6 +35,17 @@ const callTool = async (name: string, input: unknown): Promise<Response> =>
 const json = async (r: Response): Promise<{ ok: boolean; data?: never; error?: never }> =>
   (await r.json()) as { ok: boolean; data?: never; error?: never };
 
+describe('Web 信息架构', () => {
+  it('盯盘不再是独立导航，全局运行入口位于仪表盘', async () => {
+    const response = await app.fetch(new Request('http://test/'));
+    const html = await response.text();
+    expect(html).not.toContain('data-route="watch"');
+    expect(html).not.toContain('href="#watch"');
+    expect(html).toContain('id="btn-dashboard-watch-run"');
+    expect(html).toContain('成员与盯盘方案');
+  });
+});
+
 describe('Web token bootstrap', () => {
   it('无 env 时生成并复用数据库同目录的 0600 token 文件', () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-web-token-'));
@@ -285,6 +296,18 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
 });
 
 describe('MVP dashboard / watch API', () => {
+  it('watch plans 返回统一的盯盘方案读取模型', async () => {
+    const r = await app.fetch(new Request('http://test/api/watch/plans'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { plans: unknown[]; total: number };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.plans).toBeInstanceOf(Array);
+    expect(body.data?.total).toBe(body.data?.plans.length);
+  });
+
   it('dashboard 聚合持仓、分组、池、watch 状态与最近触发', async () => {
     const r = await app.fetch(new Request('http://test/api/dashboard'));
     expect(r.status).toBe(200);

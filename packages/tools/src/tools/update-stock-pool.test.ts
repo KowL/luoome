@@ -94,7 +94,7 @@ describe('update_stock_pool', () => {
     expect(r.data.pool.groupId).toBe('grp-other');
   });
 
-  it('merged 后分组为 formula 且 tactic 规则不一致 → invalid_input（阶段 B 跨实体不变量）', async () => {
+  it('更新时允许 formula 选股战法与 tactic 触发战法不同', async () => {
     const ctx = await buildTestContext();
     await ctx.repos.stockGroup.save({
       id: 'grp-formula',
@@ -121,8 +121,10 @@ describe('update_stock_pool', () => {
       },
       ctx,
     );
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error.kind).toBe('invalid_input');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.pool.rules).toEqual([
+      { kind: 'tactic', tacticId: 'ma-bullish-alignment', minScore: 60 },
+    ]);
   });
 });

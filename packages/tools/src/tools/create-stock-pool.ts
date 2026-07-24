@@ -42,11 +42,10 @@ export const CreateStockPoolOutput = z.object({
  * 校验链：
  * 1. zod parse（schema 校验）
  * 2. 分组存在性检查（repos.stockGroup.findById）
- * 3. formula 分组的 tacticId 与 rules 中 tactic 规则一致性（阶段 B 跨实体不变量）
- * 4. tactic 规则引用存在性检查（repos.tactic.findById）
- * 5. assertStockPoolInvariants（rules ≥ 1 等 pool 自身不变量）
- * 6. 同 id 已存在 → invalid_input
- * 7. 落库
+ * 3. tactic 规则引用存在性检查（repos.tactic.findById）
+ * 4. assertStockPoolInvariants（rules ≥ 1 等 pool 自身不变量）
+ * 5. 同 id 已存在 → invalid_input
+ * 6. 落库
  */
 export const createStockPoolTool = defineTool({
   name: 'create_stock_pool',
@@ -63,18 +62,6 @@ export const createStockPoolTool = defineTool({
     // 分组存在性校验
     const group = await ctx.repos.stockGroup.findById(input.groupId);
     if (group === null) return errNotFound('StockGroup', input.groupId);
-
-    // 跨实体不变量（阶段 B）：formula 分组的 tacticId 必须与 rules 中 tactic 规则一致
-    if (group.resolver.kind === 'formula') {
-      for (const rule of input.rules) {
-        if (rule.kind === 'tactic' && rule.tacticId !== group.resolver.tacticId) {
-          return errInvalidInput(
-            `pool 引用 formula 分组（resolver.tacticId=${group.resolver.tacticId}）时，` +
-              `tactic 规则的 tacticId 必须一致，实际 ${rule.tacticId}`,
-          );
-        }
-      }
-    }
 
     // tactic 规则引用校验
     const tacticIds = new Set<string>();

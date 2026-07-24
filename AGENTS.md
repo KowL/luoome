@@ -87,6 +87,7 @@ mcps:
 | `list_stock_pools` | 列出股票池（v0.6 起，默认仅 enabled） |
 | `list_stock_groups` | 列出股票分组（分组化起，可带当前成员数） |
 | `get_stock_group` | 分组详情 + 当前成员 + 最近 refresh 时间 + stale 标记 |
+| `list_watch_plans` | 列出盯盘方案，包含引用分组、成员数和可用状态 |
 
 ### 建议类（advice，默认全部暴露）
 
@@ -361,6 +362,7 @@ luoome watch --pool holdings-watch      # 仅盯指定池
 luoome tools call list_stock_pools --input '{}'  # 列池
 # 分组化起：pool 通过 groupId 引用分组（阶段 A 已落地；分组 CRUD tool 属阶段 B，当前可先用默认 holdings-default 分组）
 luoome tools call create_stock_pool --input '{"id":"my-pool","name":"x","groupId":"holdings-default","rules":[{"kind":"price-change","pct":0.05}]}'
+luoome tools call list_watch_plans --input '{}'     # 方案 + 分组成员状态
 # 阶段 B 起：分组 CRUD + 盘外刷新
 luoome tools call list_stock_groups --input '{}'
 luoome tools call create_stock_group --input '{"id":"leaders","name":"龙头","resolver":{"kind":"llm","prompt":"选出当前龙头"}}'

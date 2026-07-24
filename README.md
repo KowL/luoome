@@ -125,7 +125,7 @@ bun install
 - 看板聚合账户 PnL、建议、盯盘健康度和最近触发
 - 持仓完整录入闭环与交易流水
 - 股票分组 CRUD，支持 manual / holdings / formula / llm
-- 盯盘池 CRUD、单轮试跑、持久化心跳与触发审计
+- 分组详情内配置盯盘方案，仪表盘提供单轮试跑、全局心跳与最近触发审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一 Bearer token + 同源校验
 - `luoome start` 一键启动 Web + 长驻盯盘
 

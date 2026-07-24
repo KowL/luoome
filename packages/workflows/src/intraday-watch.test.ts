@@ -88,6 +88,36 @@ describe('intraday-watch workflow', () => {
     expect(r.data.triggers).toEqual([]);
   });
 
+  it('启用的盯盘方案引用停用分组时不评估其旧成员', async () => {
+    const ctx = await buildTestContext();
+    await ctx.repos.stockGroup.save({
+      id: 'paused-group',
+      name: 'paused',
+      resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
+      refreshPolicy: 'manual',
+      enabled: false,
+      createdAt: T0,
+      updatedAt: T0,
+    });
+    await ctx.repos.stockPool.save({
+      id: 'paused-plan',
+      name: 'paused plan',
+      groupId: 'paused-group',
+      rules: [{ kind: 'price-change', pct: 0.001 }],
+      cooldownMinutes: 30,
+      enabled: true,
+      createdAt: T0,
+      updatedAt: T0,
+    });
+
+    const result = await intradayWatchWorkflow.run({ seedTacticSources: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.evaluatedPools).toBe(1);
+    expect(result.data.evaluatedStocks).toBe(0);
+    expect(result.data.triggers).toEqual([]);
+  });
+
   it('notify=false 时不调用 send_notification', async () => {
     const ctx = await buildTestContext();
     await seedGroup(ctx, 'p-notify-group', { kind: 'manual', stockIds: ['002594.SZ'] });

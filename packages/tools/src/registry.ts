@@ -28,6 +28,7 @@ import { listStockGroupsTool } from './tools/list-stock-groups.js';
 import { listStockPoolsTool } from './tools/list-stock-pools.js';
 import { listTacticsTool } from './tools/list-tactics.js';
 import { listTradesTool } from './tools/list-trades.js';
+import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
@@ -184,6 +185,7 @@ export const toolRegistry: Registry = createRegistry([
   closeHoldingTool,
   // v0.6 新增：股票池 CRUD（write）+ 触发落库（write，workflow 内部）+ 列池（read）
   listStockPoolsTool,
+  listWatchPlansTool,
   listWatchTriggersTool,
   createStockPoolTool,
   updateStockPoolTool,

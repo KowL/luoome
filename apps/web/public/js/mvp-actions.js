@@ -1,4 +1,4 @@
-/* 分组与盯盘池的 mutation 表单。服务端负责最终 schema / 引用校验。 */
+/* 分组与盯盘方案的 mutation 表单。服务端负责最终 schema / 引用校验。 */
 
 import { callApi, getAccountId } from './api.js';
 import { $, el } from './ui.js';
@@ -66,6 +66,12 @@ const submit = async (button, errorNode, tool, input, after, message) => {
   notify(message);
   return true;
 };
+
+const callTool = (tool, input) =>
+  callApi(`/api/tools/${tool}/call`, {
+    method: 'POST',
+    body: JSON.stringify({ input }),
+  });
 
 const actionRow = (label, onSubmit) => {
   const errorNode = el('p', 'modal-error');
@@ -243,7 +249,7 @@ const readRule = (kind) => {
   };
 };
 
-export const openPoolModal = async (pool = null) => {
+export const openPoolModal = async (pool = null, preferredGroupId = '') => {
   const groupsResult = await callApi('/api/groups');
   if (!groupsResult.ok) {
     notify(`无法读取分组：${errorMessage(groupsResult.error)}`, true);
@@ -259,7 +265,106 @@ export const openPoolModal = async (pool = null) => {
   for (const item of groupsResult.data.groups) {
     groupId.append(option(item.group.id, `${item.group.name} · ${item.group.id}`));
   }
-  groupId.value = pool?.groupId ?? groupsResult.data.groups[0]?.group.id ?? '';
+  groupId.value =
+    pool?.groupId ?? (preferredGroupId || groupsResult.data.groups[0]?.group.id || '');
+  const targetBox = el('div');
+  let targetModeControl = null;
+  let targetMode = 'existing';
+  if (pool === null && preferredGroupId.length === 0) {
+    targetMode = groupsResult.data.groups.length > 0 ? 'existing' : 'new';
+    const modeGrid = el('div', 'target-mode-grid');
+    const targetRadio = (value, title, copy) => {
+      const radio = control('input', `pool-target-${value}`, value);
+      radio.type = 'radio';
+      radio.name = 'pool-target-mode';
+      radio.checked = targetMode === value;
+      radio.disabled = value === 'existing' && groupsResult.data.groups.length === 0;
+      const card = el('label', 'target-mode-card', [
+        radio,
+        el('span', null, [el('strong', null, title), el('small', null, copy)]),
+      ]);
+      radio.addEventListener('change', () => {
+        targetMode = value;
+        drawTarget();
+      });
+      return card;
+    };
+    modeGrid.append(
+      targetRadio('existing', '选择已有分组', '复用同一组成员，可被多个方案监控'),
+      targetRadio('new', '顺手创建分组', '先定义成员，再为它配置盯盘规则'),
+    );
+
+    const drawTarget = () => {
+      if (targetMode === 'existing') {
+        targetBox.replaceChildren(
+          field(
+            '成员分组',
+            groupId,
+            groupsResult.data.groups.length > 0
+              ? '分组只负责“看哪些股票”，可被多个盯盘方案复用。'
+              : '还没有可选分组，请改为“顺手创建分组”。',
+          ),
+        );
+        return;
+      }
+      const inlineId = control('input', 'inline-group-id', `${id.value.trim()}-group`);
+      inlineId.placeholder = '例如 momentum-watch-group';
+      const inlineName = control(
+        'input',
+        'inline-group-name',
+        name.value.trim() ? `${name.value.trim()}分组` : '',
+      );
+      const inlineKind = control('select', 'inline-group-kind', 'manual');
+      for (const [value, label] of [
+        ['manual', '手动成员'],
+        ['holdings', '账户持仓'],
+        ['formula', '战法动态选股'],
+        ['llm', 'LLM 动态选股'],
+      ]) {
+        inlineKind.append(option(value, label));
+      }
+      const inlineResolver = el('div');
+      const drawInlineResolver = () => {
+        inlineResolver.replaceChildren(groupResolverFields(inlineKind.value, null));
+      };
+      inlineKind.addEventListener('change', drawInlineResolver);
+      drawInlineResolver();
+      targetBox.replaceChildren(
+        el('div', 'inline-group-panel', [
+          el('div', 'inline-group-heading', [
+            el('span', 'eyebrow', '成员定义'),
+            el('strong', null, '新建股票分组'),
+          ]),
+          field('分组 ID', inlineId, '默认跟随方案 ID，可自行修改。'),
+          field('分组名称', inlineName),
+          field('成员来源', inlineKind),
+          inlineResolver,
+        ]),
+      );
+    };
+    id.addEventListener('input', () => {
+      const inlineId = $('#inline-group-id');
+      if (inlineId !== null && inlineId.dataset.edited !== 'true') {
+        inlineId.value = id.value.trim() ? `${id.value.trim()}-group` : '';
+      }
+    });
+    name.addEventListener('input', () => {
+      const inlineName = $('#inline-group-name');
+      if (inlineName !== null && inlineName.dataset.edited !== 'true') {
+        inlineName.value = name.value.trim() ? `${name.value.trim()}分组` : '';
+      }
+    });
+    targetBox.addEventListener('input', (event) => {
+      if (event.target.id === 'inline-group-id' || event.target.id === 'inline-group-name') {
+        event.target.dataset.edited = 'true';
+      }
+    });
+    targetModeControl = field('监控对象', modeGrid);
+    drawTarget();
+  } else {
+    if (pool === null) groupId.disabled = true;
+    targetBox.append(field('成员分组', groupId, '分组负责“看哪些股票”，盯盘方案负责“何时提醒”。'));
+  }
   const firstRule = pool?.rules[0] ?? null;
   const kind = control('select', 'pool-rule-kind', firstRule?.kind ?? 'price-change');
   for (const [value, label] of [
@@ -279,38 +384,65 @@ export const openPoolModal = async (pool = null) => {
   drawRule();
   const cooldown = control('input', 'pool-cooldown', String(pool?.cooldownMinutes ?? 30));
   form.append(
-    field('盯盘池 ID', id, '小写 kebab-case，创建后不可修改。'),
+    field('方案 ID', id, '小写 kebab-case，创建后不可修改。'),
     field('名称', name),
     field('说明', description),
-    field('成员分组', groupId),
-    field('规则类型', kind, 'MVP 表单每个池配置一条规则；可创建多个池组合规则。'),
+  );
+  if (targetModeControl !== null) form.append(targetModeControl);
+  form.append(
+    targetBox,
+    field('触发规则', kind, '成员分组决定看谁；这里决定何时提醒。'),
     ruleBox,
     field('通知冷却（分钟）', cooldown),
   );
   const [errorNode, actions] = actionRow(
-    pool ? '保存修改' : '创建盯盘池',
+    pool ? '保存修改' : '创建盯盘方案',
     async (button, error) => {
+      button.disabled = true;
+      error.textContent = '';
+      let createdGroupId = null;
+      if (pool === null && targetMode === 'new') {
+        const inlineKind = $('#inline-group-kind').value;
+        const groupInput = {
+          id: $('#inline-group-id').value.trim(),
+          name: $('#inline-group-name').value.trim(),
+          resolver: readResolver(inlineKind),
+          refreshPolicy: inlineKind === 'manual' || inlineKind === 'holdings' ? 'manual' : 'daily',
+          enabled: true,
+        };
+        const groupResult = await callTool('create_stock_group', groupInput);
+        if (!groupResult.ok) {
+          button.disabled = false;
+          error.textContent = `分组创建失败：${errorMessage(groupResult.error)}`;
+          return;
+        }
+        createdGroupId = groupInput.id;
+      }
       const input = {
         id: id.value.trim(),
         name: name.value.trim(),
         description: description.value.trim() || undefined,
-        groupId: groupId.value,
+        groupId: createdGroupId ?? groupId.value,
         rules: [readRule(kind.value), ...(pool?.rules.slice(1) ?? [])],
         cooldownMinutes: Number(cooldown.value),
         enabled: pool?.enabled ?? true,
       };
-      await submit(
-        button,
-        error,
-        pool ? 'update_stock_pool' : 'create_stock_pool',
-        input,
-        refreshWatch,
-        pool ? '盯盘池已更新' : '盯盘池已创建',
-      );
+      const result = await callTool(pool ? 'update_stock_pool' : 'create_stock_pool', input);
+      button.disabled = false;
+      if (!result.ok) {
+        if (createdGroupId !== null) {
+          await callTool('delete_stock_group', { id: createdGroupId });
+        }
+        error.textContent = errorMessage(result.error);
+        return;
+      }
+      closeModal();
+      await refreshWatch();
+      notify(pool ? '盯盘方案已更新' : '盯盘方案已创建');
     },
   );
   form.append(errorNode, actions);
-  openModal(pool ? `编辑盯盘池 · ${pool.name}` : '新建盯盘池', form);
+  openModal(pool ? `编辑盯盘方案 · ${pool.name}` : '新建盯盘方案', form);
 };
 
 export const mutateEntity = async (tool, input, after, message) => {

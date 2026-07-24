@@ -122,11 +122,7 @@ export type { Money };
  * - rules ≥ 1（schema 已 min(1)）
  * - updatedAt ≥ createdAt
  *
- * 【跨实体不变量 · 不在此断言】pool 引用的分组 resolver=formula 时，rules 中 tactic 规则的
- * tacticId 必须与 resolver.tacticId 一致（原「source=tactic 池」口径的分组化演化，
- * 避免「成员来自 A 战法 + 规则评估 B 战法」的混淆）。
- * entity 层拿不到 repo，无法把 groupId 解析成分组 → 该校验放 tool 层
- * （create_stock_pool / update_stock_pool，stock-group 阶段 B 落地）；
+ * 分组选股战法与 tactic 触发战法刻意解耦：成员可由战法 A 产出，再由战法 B 监控。
  * assertStockPoolInvariants 只断言 pool 自身可校验的不变量。
  */
 export const assertStockPoolInvariants = (pool: StockPool): void => {

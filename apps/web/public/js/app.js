@@ -6,7 +6,7 @@
 import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } from './api.js';
 import { initChat, renderChat } from './chat.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
-import { initMvpActions, openGroupModal, openPoolModal } from './mvp-actions.js';
+import { initMvpActions, openGroupModal } from './mvp-actions.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
@@ -18,7 +18,6 @@ import {
   renderSettings,
   renderSettingsAccount,
   renderTacticsList,
-  renderWatch,
   runTacticScan,
   runWatchOnce,
 } from './pages.js';
@@ -55,7 +54,6 @@ const ROUTES = [
   'dashboard',
   'holdings',
   'groups',
-  'watch',
   'tactics',
   'advice',
   'review',
@@ -79,7 +77,6 @@ const showRoute = async (name) => {
     if (safe === 'dashboard') await renderDashboard(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
     else if (safe === 'groups') await renderGroups(setStatus);
-    else if (safe === 'watch') await renderWatch(setStatus);
     else if (safe === 'tactics') {
       await renderTacticsList(setStatus);
     } else if (safe === 'advice') {
@@ -100,6 +97,7 @@ const showRoute = async (name) => {
 
 const currentHash = () => {
   const h = window.location.hash.replace(/^#/, '');
+  if (h === 'watch') return 'groups';
   return h.length > 0 ? h : 'dashboard';
 };
 
@@ -205,7 +203,7 @@ const bindGlobalActions = () => {
   initHoldingsActions({ refresh: () => renderHoldings(setStatus), setStatus });
   initMvpActions({
     onGroupsChanged: () => renderGroups(setStatus),
-    onWatchChanged: () => renderWatch(setStatus),
+    onWatchChanged: () => renderGroups(setStatus),
     setStatus,
   });
 
@@ -220,8 +218,7 @@ const bindGlobalActions = () => {
     analyzeBtn.addEventListener('click', () => void analyzeAllHoldings(setStatus));
 
   $('#btn-group-add')?.addEventListener('click', () => openGroupModal());
-  $('#btn-pool-add')?.addEventListener('click', () => void openPoolModal());
-  $('#btn-watch-run')?.addEventListener('click', () => void runWatchOnce(setStatus));
+  $('#btn-dashboard-watch-run')?.addEventListener('click', () => void runWatchOnce(setStatus));
 
   const tlistBtn = $('#btn-tactic-list');
   if (tlistBtn !== null)

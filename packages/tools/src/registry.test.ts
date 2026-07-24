@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// v0.8 MVP：原 43 tool + 空库初始化 create_account = 44 tool
+// v0.8 MVP：原 44 tool + 统一盯盘方案读取模型 = 45 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'list_accounts',
@@ -40,6 +40,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_confidence_calibration',
   // v0.6 新增：股票池 CRUD + 触发落库
   'list_stock_pools',
+  'list_watch_plans',
   'create_stock_pool',
   'update_stock_pool',
   'delete_stock_pool',

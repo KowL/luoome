@@ -303,6 +303,12 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/api/groups/:id', (c) => callTool('get_stock_group', { id: c.req.param('id') }));
 
   app.get('/api/watch/pools', () => callTool('list_stock_pools', { enabledOnly: false }));
+  app.get('/api/watch/plans', (c) =>
+    callTool('list_watch_plans', {
+      enabledOnly: false,
+      ...(c.req.query('groupId') !== undefined ? { groupId: c.req.query('groupId') } : {}),
+    }),
+  );
   app.get('/api/watch/status', (c) => {
     const interval = Number(c.req.query('interval') ?? 60);
     return callTool('get_watch_status', {

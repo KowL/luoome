@@ -69,19 +69,6 @@ export const updateStockPoolTool = defineTool({
       if (t === null) return errNotFound('Tactic', tid);
     }
 
-    // 跨实体不变量（阶段 B）：merged 后的分组若为 formula，tactic 规则的 tacticId 必须与 resolver.tacticId 一致
-    const mergedGroup = await ctx.repos.stockGroup.findById(merged.groupId);
-    if (mergedGroup !== null && mergedGroup.resolver.kind === 'formula') {
-      for (const rule of merged.rules) {
-        if (rule.kind === 'tactic' && rule.tacticId !== mergedGroup.resolver.tacticId) {
-          return errInvalidInput(
-            `pool 引用 formula 分组（resolver.tacticId=${mergedGroup.resolver.tacticId}）时，` +
-              `tactic 规则的 tacticId 必须一致，实际 ${rule.tacticId}`,
-          );
-        }
-      }
-    }
-
     const pool = StockPoolSchema.parse(merged);
     try {
       assertStockPoolInvariants(pool);

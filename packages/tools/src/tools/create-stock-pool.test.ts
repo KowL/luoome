@@ -131,7 +131,7 @@ describe('create_stock_pool', () => {
     expect(r.error.kind).toBe('invalid_input');
   });
 
-  it('formula 分组 + tactic 规则 tacticId 不一致 → invalid_input（阶段 B 跨实体不变量）', async () => {
+  it('formula 分组选股战法与 tactic 触发战法可以不同', async () => {
     const ctx = await buildTestContext();
     const groupId = await seedGroup(ctx, 'grp-formula', {
       kind: 'formula',
@@ -147,9 +147,11 @@ describe('create_stock_pool', () => {
       },
       ctx,
     );
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error.kind).toBe('invalid_input');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.pool.rules).toEqual([
+      { kind: 'tactic', tacticId: 'ma-bullish-alignment', minScore: 60 },
+    ]);
   });
 
   it('formula 分组 + tactic 规则 tacticId 一致 → 合法', async () => {

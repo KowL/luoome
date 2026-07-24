@@ -129,6 +129,7 @@ interface EvaluatedState extends PrevClosesState {
 /**
  * 解析单个池的成员（分组化模型，docs/stock-group-design.md §7）。
  * - pool.groupId → StockGroup；分组不存在 → 空成员 + warn（hot path 不 crash）
+ * - 分组 enabled=false → 空成员 + warn（pool 可保持启用，恢复分组后自动继续）
  * - manual：resolver.stockIds 现算（avgCost undefined）
  * - holdings：调 list_holdings 现算（活视图，无快照）→ 活跃持仓 stockIds + avgCost
  * - formula / llm：读 repos.groupMember.currentMembers(groupId) 最新快照
@@ -146,6 +147,13 @@ const resolveMembers = async (
   const group = await ctx.repos.stockGroup.findById(pool.groupId);
   if (group === null) {
     ctx.logger.warn('[intraday-watch] 池引用的分组不存在', {
+      poolId: pool.id,
+      groupId: pool.groupId,
+    });
+    return [];
+  }
+  if (!group.enabled) {
+    ctx.logger.warn('[intraday-watch] 盯盘方案引用的分组已停用，跳过成员评估', {
       poolId: pool.id,
       groupId: pool.groupId,
     });

@@ -20,7 +20,8 @@
 - **B 的公式引擎复用战法 DSL**：不另起基本面筛选 DSL；`run_tactic(scope='all-stocks')` 即全市场扫描能力
 - **D 走"低频生产者 + 快照"**：LLM 每日（盘外）产出 stockIds 写快照，**盘中 watch 只读快照，resolver 永不进 hot path**。LLM 的成本、延迟、不确定性全部隔离在盘外
 - **所有动态分组统一为"生产者 + 快照"模型**：B/D 只剩 resolver 不同，刷新、落库、消费机制完全一致
-- **命名**：分组 = `StockGroup`；盯盘池沿用 `StockPool`
+- **命名**：分组 = `StockGroup`；产品层称“盯盘方案（WatchPlan）”，代码与存储层暂时沿用
+  `StockPool` 以兼容已有 API 和数据
 - **LLM resolver 上下文先最小方案**：全市场股票列表 + 当日行情快照；战法信号等富化上下文后续按需扩
 - **成员快照必须持久化**：成员变化历史可审计、可复盘（"龙头池上次选得准不准"）
 
@@ -106,7 +107,8 @@ interface GroupMemberSnapshot {
   - `source.kind='holdings'` → 建 holdings 分组
   - `source.kind='tactic'` → 建 formula 分组（tacticId/lookbackDays/minScore 平移），并立即跑一次刷新落首批快照
   - 迁移幂等：已含 groupId 的行跳过
-- 不变量修订：原「source=tactic 池的 tactic 规则须与 source.tacticId 一致」改为「pool 引用的分组 resolver=formula 时，rules 中 tactic 规则的 tacticId 须与 resolver.tacticId 一致」
+- 不变量修订：解除旧的 tactic ID 强耦合。formula resolver 的战法负责“筛出成员”，方案中的
+  tactic 规则负责“盘中何时触发”，两者可引用不同战法
 
 ### 6. tools 变化
 
@@ -114,6 +116,7 @@ interface GroupMemberSnapshot {
 |---|---|---|
 | `list_stock_groups` | read | 列分组（可带当前成员数） |
 | `get_stock_group` | read | 分组详情 + 当前成员 + 最近 refresh 时间/stale 标记 |
+| `list_watch_plans` | read | 盯盘方案 + 引用分组 + 成员数 + ready/stale/empty/disabled/missing 状态 |
 | `create_stock_group` | write | 校验 resolver 引用（tactic/account 存在）→ 落库 |
 | `update_stock_group` | write | 改 resolver / refreshPolicy / enabled / name |
 | `delete_stock_group` | write | 删除；有 pool 引用时拒绝（invariant_violation，提示先解绑） |
@@ -155,7 +158,8 @@ interface GroupMemberSnapshot {
 - LLM 分组天然非确定：同一 prompt 两次刷新成员可能不同。靠快照 + reason 落库保证可审计，不保证可复现
 - `holdings` resolver 无快照 → 成员变化检测对它不适用（持仓变化本身有 trades 表记录）
 - 全市场股票列表 + 行情快照的 prompt 体积受限于 stocks 表规模；实现取 `MAX_CANDIDATES=200` 截断（`packages/tools/src/tools/resolve-llm-group.ts`），后续可按市场/流动性细化
-- llm 分组刷新失败标 stale 后，watch 继续用旧快照盯盘——用户需从 `get_stock_group` 感知 stale 状态
+- 动态分组刷新失败标 stale 后，watch 继续用旧快照盯盘；Web 通过 `list_watch_plans` 直接展示
+  stale 状态。分组被显式停用后不再读取旧成员
 
 ## 实现追记（2026-07-22）
 

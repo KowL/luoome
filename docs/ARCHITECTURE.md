@@ -339,6 +339,12 @@ interface ToolContext {
 
 **分组化起新增**：StockGroup（股票分组 = resolver(manual/holdings/formula/llm) + refreshPolicy + enabled，只回答「成员是谁」）、GroupMemberSnapshot（成员快照，一次刷新 = 一批同 refreshId，只增不改）。StockPool 从 `source` 改为 `groupId` 引用分组；启动时 `migrateLegacyPoolSourcesToGroups` 把 v0.6 旧 source JSON 幂等迁移成分组。分组 CRUD 走 list/get/create/update/delete_stock_group，刷新走 refresh_stock_group / refresh-groups workflow（盘外「生产者 + 快照」，hot path 只读快照）。详见 [docs/stock-group-design.md](./stock-group-design.md)。
 
+**v0.8 产品语义收口**：Web 将 `StockPool` 表述为“盯盘方案（WatchPlan）”。`list_watch_plans`
+提供面向界面的组合读取模型（方案、分组、成员数和可用状态），避免界面自行拼接 pool/group。
+底层实体和写 tool 暂不改名，以保持数据库与外部 Agent 兼容。
+Web 信息架构将方案配置收进分组详情；仪表盘承载跨分组运行状态、单轮试跑和最近触发，
+不再设置独立盯盘页面。
+
 ```txt
 Account          账户（真实/模拟，币种，初始资金）
 Stock            标的（代码、交易所、名称、行业）

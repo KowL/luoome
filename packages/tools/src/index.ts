@@ -32,6 +32,7 @@ export * from './tools/list-stock-pools.js';
 // v0.3 新增
 export * from './tools/list-tactics.js';
 export * from './tools/list-trades.js';
+export * from './tools/list-watch-plans.js';
 export * from './tools/list-watch-triggers.js';
 export * from './tools/market-outlook.js';
 export * from './tools/record-advice-outcome.js';
