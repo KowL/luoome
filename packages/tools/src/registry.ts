@@ -40,6 +40,7 @@ import { saveWatchTriggerTool } from './tools/save-watch-trigger.js';
 import { scoreSignalsTool } from './tools/score-signals.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
+import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
 import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
@@ -199,4 +200,6 @@ export const toolRegistry: Registry = createRegistry([
   deleteStockGroupTool,
   refreshStockGroupTool,
   resolveLlmGroupTool,
+  // v0.7 策略预警：触发反馈（write）
+  setWatchTriggerFeedbackTool,
 ]);

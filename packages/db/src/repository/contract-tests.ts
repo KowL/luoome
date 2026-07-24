@@ -185,9 +185,13 @@ export const makeStockPool = (id: string, overrides: Partial<StockPool> = {}): S
   id,
   name: `池-${id}`,
   groupId: 'grp-1',
-  rules: [{ kind: 'price-change', pct: 0.05 }],
+  rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
   cooldownMinutes: 30,
   enabled: true,
+  logic: 'ANY',
+  triggerMode: 'on-enter',
+  dailyNotificationLimit: 20,
+  notifyOnRecovery: false,
   createdAt: T0,
   updatedAt: T0,
   ...overrides,
@@ -225,7 +229,12 @@ export const makeWatchTrigger = (
   poolId: 'pool-1',
   stockId: '002594.SZ',
   ruleKind: 'price-change',
+  ruleId: 'r_fixture',
+  triggerType: 'triggered',
   direction: 'watch',
+  priority: 'normal',
+  deliveryStatus: 'sent',
+  evalSnapshot: { ruleId: 'r_fixture' },
   reason: 'fixture reason',
   evidence: ['close=15.2'],
   quote: { close: money(15.2), ts: T1 },
@@ -245,6 +254,8 @@ export const makeWatchRun = (id: string, overrides: Partial<WatchRun> = {}): Wat
   triggered: 2,
   notified: 1,
   suppressedByCooldown: 1,
+  suppressedByDailyLimit: 0,
+  notifyFailed: 0,
   ...overrides,
 });
 
@@ -1008,12 +1019,13 @@ export const registerRepositoryContractTests = (
         );
       });
 
-      it('lastForKey 找 (poolId, stockId, ruleKind) 维度最近一条', async () => {
+      it('lastForKey 找 (poolId, stockId, ruleId) 维度最近一条', async () => {
         await repos.watchTrigger.save(
           makeWatchTrigger('tr-old', {
             createdAt: T1,
             poolId: 'p1',
             stockId: 's1',
+            ruleId: 'r_a',
             ruleKind: 'price-change',
           }),
         );
@@ -1022,43 +1034,47 @@ export const registerRepositoryContractTests = (
             createdAt: T3,
             poolId: 'p1',
             stockId: 's1',
+            ruleId: 'r_a',
             ruleKind: 'price-change',
           }),
         );
-        // 不同 ruleKind → 不命中
+        // 不同 ruleId → 不命中
         await repos.watchTrigger.save(
           makeWatchTrigger('tr-other', {
             createdAt: T3,
             poolId: 'p1',
             stockId: 's1',
-            ruleKind: 'tactic',
+            ruleId: 'r_b',
+            ruleKind: 'price-change',
           }),
         );
         const hit = await repos.watchTrigger.lastForKey(
-          { poolId: 'p1', stockId: 's1', ruleKind: 'price-change' },
+          { poolId: 'p1', stockId: 's1', ruleId: 'r_a' },
           FAR_PAST,
         );
         expect(hit?.id).toBe('tr-new');
         const miss = await repos.watchTrigger.lastForKey(
-          { poolId: 'p1', stockId: 's1', ruleKind: 'cost-threshold' },
+          { poolId: 'p1', stockId: 's1', ruleId: 'r_other' },
           FAR_PAST,
         );
         expect(miss).toBeNull();
         // since 过滤：T1 之前的应被剔除
         const cutoff = await repos.watchTrigger.lastForKey(
-          { poolId: 'p1', stockId: 's1', ruleKind: 'price-change' },
+          { poolId: 'p1', stockId: 's1', ruleId: 'r_a' },
           T2,
         );
         expect(cutoff?.id).toBe('tr-new');
       });
 
-      it('lastForKey 仅返回真实通知记录，试跑审计不占 cooldown', async () => {
+      it('lastForKey 仅返回 ATTEMPTED 状态记录；试跑（not-requested）不占 cooldown', async () => {
         await repos.watchTrigger.save(
           makeWatchTrigger('tr-notified', {
             createdAt: T1,
             poolId: 'p1',
             stockId: 's1',
+            ruleId: 'r_a',
             ruleKind: 'price-change',
+            deliveryStatus: 'sent',
             notified: true,
           }),
         );
@@ -1067,15 +1083,67 @@ export const registerRepositoryContractTests = (
             createdAt: T3,
             poolId: 'p1',
             stockId: 's1',
+            ruleId: 'r_a',
             ruleKind: 'price-change',
+            deliveryStatus: 'not-requested',
             notified: false,
           }),
         );
         const hit = await repos.watchTrigger.lastForKey(
-          { poolId: 'p1', stockId: 's1', ruleKind: 'price-change' },
+          { poolId: 'p1', stockId: 's1', ruleId: 'r_a' },
           FAR_PAST,
         );
+        // ATTEMPTED 优先；T3 更新但 deliveryStatus='not-requested' → 命中通知过的旧记录
         expect(hit?.id).toBe('tr-notified');
+      });
+
+      it('lastForKey 把 failed 视为 ATTEMPTED（避免失败重试风暴）', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-failed', {
+            createdAt: T1,
+            poolId: 'p1',
+            stockId: 's1',
+            ruleId: 'r_a',
+            ruleKind: 'price-change',
+            deliveryStatus: 'failed',
+            notified: true,
+          }),
+        );
+        const hit = await repos.watchTrigger.lastForKey(
+          { poolId: 'p1', stockId: 's1', ruleId: 'r_a' },
+          FAR_PAST,
+        );
+        expect(hit?.id).toBe('tr-failed');
+      });
+
+      it('countAttemptedSince 按 poolId / 全局计数 ATTEMPTED', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-1', {
+            createdAt: T1,
+            poolId: 'p1',
+            deliveryStatus: 'sent',
+            notified: true,
+          }),
+        );
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-2', {
+            createdAt: T2,
+            poolId: 'p1',
+            deliveryStatus: 'failed',
+            notified: true,
+          }),
+        );
+        await repos.watchTrigger.save(
+          makeWatchTrigger('tr-3', {
+            createdAt: T3,
+            poolId: 'p1',
+            deliveryStatus: 'not-requested',
+            notified: false,
+          }),
+        );
+        expect(await repos.watchTrigger.countAttemptedSince(FAR_PAST, 'p1')).toBe(2);
+        expect(await repos.watchTrigger.countAttemptedSince(FAR_PAST, null)).toBe(2);
+        expect(await repos.watchTrigger.countAttemptedSince(T2, null)).toBe(1); // T2 起只有 tr-2
       });
 
       it('listRecent 支持 poolId / since / limit', async () => {

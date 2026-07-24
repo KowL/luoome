@@ -31,6 +31,8 @@ describe('get_watch_status', () => {
         triggered: 2,
         notified: 1,
         suppressedByCooldown: 1,
+        suppressedByDailyLimit: 0,
+        notifyFailed: 0,
       },
       ctx,
     );
@@ -65,6 +67,8 @@ describe('get_watch_status', () => {
         triggered: 0,
         notified: 0,
         suppressedByCooldown: 0,
+        suppressedByDailyLimit: 0,
+        notifyFailed: 0,
         error: 'adapter unavailable',
       },
       ctx,

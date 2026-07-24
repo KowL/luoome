@@ -5,7 +5,13 @@ import type { Notification, NotificationResult } from '../entity/notification.js
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Stock } from '../entity/stock.js';
 import type { GroupMemberSnapshot, StockGroup } from '../entity/stock-group.js';
-import type { StockPool, WatchRule, WatchTrigger } from '../entity/stock-pool.js';
+import type {
+  DeliveryStatus,
+  StockPool,
+  TriggerFeedback,
+  WatchRuleState,
+  WatchTrigger,
+} from '../entity/stock-pool.js';
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
@@ -101,6 +107,8 @@ export interface RepositoryRegistry {
   readonly stockPool: StockPoolRepository;
   /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
   readonly watchTrigger: WatchTriggerRepository;
+  /** v0.7 策略预警；边沿状态机持久化 + 批量加载。 */
+  readonly watchRuleState: WatchRuleStateRepository;
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
   readonly watchRun: WatchRunRepository;
   /** 分组化起（docs/stock-group-design.md §2）；股票分组 CRUD。 */
@@ -169,10 +177,11 @@ export interface GroupMemberRepository {
 }
 
 /**
- * 盯盘触发仓储（v0.6 起）。
- * - 每次 watch 评估 fire 的 trigger 都写入；被 cooldown 抑制的也写（notified=false），便于事后复盘"今天压了多少条"。
+ * 盯盘触发仓储（v0.6 起，v0.7 策略预警扩展）。
+ * - 每次 watch 评估 fire 的 trigger 都写入；被 cooldown 抑制的也写（deliveryStatus 标记），便于事后复盘"今天压了多少条"。
  * - lastForKey 用于通知 cooldown 查询（since = now − cooldownMinutes），只返回
- *   notified=true 的真实通知；notify=false 的试跑审计不能占后续通知冷却。
+ *   deliveryStatus ∈ ATTEMPTED（sent / failed / fallback-log）的真实通知；试跑审计（notified=false 等）不能占后续通知冷却。
+ * - countAttemptedSince 每日上限（方案 / 全局）计数用，poolId=null 为全局。
  */
 export interface WatchTriggerRepository {
   save(trigger: WatchTrigger): Promise<void>;
@@ -183,14 +192,14 @@ export interface WatchTriggerRepository {
     opts?: { readonly since?: Date; readonly limit?: number },
   ): Promise<readonly WatchTrigger[]>;
   /**
-   * cooldown 查询：找 (poolId, stockId, ruleKind) 维度最近一条；since 通常 = now − cooldownMinutes。
-   * 任意一个 stockId / ruleKind 为空都不命中（避免跨池误判）。
+   * cooldown 查询：找 (poolId, stockId, ruleId) 维度最近一条；since 通常 = now − cooldownMinutes。
+   * 任意一个 stockId / ruleId 为空都不命中（避免跨池误判）。
    */
   lastForKey(
     key: {
       readonly poolId: string;
       readonly stockId: string;
-      readonly ruleKind: WatchRule['kind'];
+      readonly ruleId: string;
     },
     since: Date,
   ): Promise<WatchTrigger | null>;
@@ -199,8 +208,43 @@ export interface WatchTriggerRepository {
     readonly poolId?: string;
     readonly since?: Date;
     readonly limit?: number;
+    readonly deliveryStatus?: readonly DeliveryStatus[];
+    readonly ruleId?: string;
   }): Promise<readonly WatchTrigger[]>;
+  /**
+   * 统计 since 以来 ATTEMPTED 状态的触发数。poolId 缺省 / null 为全局计数（每日上限用）。
+   */
+  countAttemptedSince(since: Date, poolId?: string | null): Promise<number>;
+  /**
+   * 发送后回写：批量更新 deliveryStatus + 可选 notificationId；is-notified 自动按 ATTEMPTED 判定。
+   */
+  setDeliveryStatus(
+    ids: readonly string[],
+    status: DeliveryStatus,
+    notificationId?: string,
+  ): Promise<void>;
+  /** 用户反馈（set_watch_trigger_feedback 写入）。 */
+  setFeedback(
+    id: string,
+    feedback: TriggerFeedback,
+    at: Date,
+  ): Promise<void>;
   remove(id: string): Promise<void>;
+}
+
+/**
+ * 边沿状态机表（v0.7 策略预警，docs/ddd/strategy-alert-detailed-design.md §3.5 / §5）。
+ * 仅 (poolId, stockId, ruleId) 维度的 active 状态；不替代 watch_triggers 历史。
+ */
+export interface WatchRuleStateRepository {
+  /** 取该池所有规则的当前状态；一般 watch 流程批量加载以减少查询。 */
+  listByPool(poolId: string): Promise<readonly WatchRuleState[]>;
+  /** upsert；同 (poolId, stockId, ruleId) 覆盖。 */
+  upsert(state: WatchRuleState): Promise<void>;
+  /** 批量 upsert（一次 watch 评估后批量写回）。 */
+  upsertMany(states: readonly WatchRuleState[]): Promise<void>;
+  /** pool 删除时级联清理（§14 倾向）。 */
+  removeByPool(poolId: string): Promise<void>;
 }
 
 /** 每轮 watch 的运行审计；save 同 id 为 upsert（running → terminal）。 */

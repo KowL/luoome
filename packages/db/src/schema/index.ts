@@ -260,12 +260,15 @@ export const notifications = sqliteTable(
 
 /**
  * 股票池（v0.6 起，docs/intraday-watch-design.md §3；
- * 分组化改造 docs/stock-group-design.md §3/§5）。
- * rules 走 text + mode 'json'（任意扩展字段）；enabled 用 0/1 integer。
- * - source：@deprecated 旧 PoolSource JSON。新行恒为 NULL；旧行数据原样保留，
- *   待阶段 B 启动迁移拆成分组（spec §5）
+ * 分组化改造 docs/stock-group-design.md §3/§5；
+ * 策略预警扩展 docs/ddd/strategy-alert-detailed-design.md §3）。
+ *
+ * rules 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
+ * - source：@deprecated 旧 PoolSource JSON。新行恒为 NULL；旧行数据原样保留
  * - groupId：成员分组引用（stock_groups.id）；旧行迁移前为 NULL
- *   （drizzle repo 读出时映射为空串占位，不 crash）
+ * - logic / triggerMode / priority / dailyNotificationLimit / notifyOnRecovery：
+ *   v0.7 策略预警新增。启动迁移补齐；旧行 logic / triggerMode 设为默认 'ANY' / 'on-enter'，
+ *   dailyNotificationLimit 默认 20，notifyOnRecovery 默认 0。priority 老行为无对应字段（NULL）。
  */
 export const stockPools = sqliteTable(
   'stock_pools',
@@ -280,6 +283,11 @@ export const stockPools = sqliteTable(
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    logic: text('logic').$type<StockPool['logic']>().notNull(),
+    triggerMode: text('trigger_mode').$type<StockPool['triggerMode']>().notNull(),
+    priority: text('priority').$type<NonNullable<StockPool['priority']>>(),
+    dailyNotificationLimit: integer('daily_notification_limit').notNull(),
+    notifyOnRecovery: integer('notify_on_recovery', { mode: 'boolean' }).notNull(),
   },
   (t) => ({
     /** list(enabledOnly=true) 走索引。 */
@@ -332,10 +340,12 @@ export const groupMemberSnapshots = sqliteTable(
 );
 
 /**
- * 盯盘触发（v0.6 起）。
- * - 每次 watch fire 即写入（含 cooldown 抑制的）；notified=false 标识被压。
+ * 盯盘触发（v0.6 起，v0.7 策略预警扩展）。
+ * - 每次 watch fire 即写入（含 cooldown 抑制的）；deliveryStatus 标识实际送达状态。
  * - evidence 走 text + mode 'json'（字符串数组）。
- * - 主索引 (poolId, stockId, ruleKind, createdAt) 支撑 cooldown 查询 lastForKey。
+ * - 主索引 (poolId, stockId, ruleId, createdAt) 支撑 cooldown 查询 lastForKey。
+ * - ruleKind 保留（展示 + 旧查询）；ALL 组合触发的 ruleKind 取组合中优先级最高的 kind，
+ *   ruleId 固定为 'composite'。
  */
 export const watchTriggers = sqliteTable(
   'watch_triggers',
@@ -351,17 +361,58 @@ export const watchTriggers = sqliteTable(
     quoteTs: integer('quote_ts', { mode: 'timestamp_ms' }).notNull(),
     notified: integer('notified', { mode: 'boolean' }).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    /** 规则实例 id（与 stock_pool.rules[].id 对齐）；ALL 组合触发固定为 'composite'。 */
+    ruleId: text('rule_id').notNull(),
+    /** 触发类型：进入（rising edge）vs 退出（recovered）；默认 'triggered'。 */
+    triggerType: text('trigger_type').notNull(),
+    /** 落库时为生效优先级，不再反推。 */
+    priority: text('priority').notNull(),
+    /** 单条送达状态机落值。 */
+    deliveryStatus: text('delivery_status').notNull(),
+    /** 关联的 Notification id，发送后回写。 */
+    notificationId: text('notification_id'),
+    /** 求值快照：输入值 / 阈值 / 窗口 / 数据时间，至少含 ruleId / kind / quoteClose / quoteTs。 */
+    evalSnapshot: text('eval_snapshot', { mode: 'json' })
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    /** 用户反馈（handled / useful / useless / ignored），由 set_watch_trigger_feedback 写入。 */
+    feedback: text('feedback'),
+    feedbackAt: integer('feedback_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     /** cooldown 查询 lastForKey 走这条。 */
     poolStockRuleTsIdx: index('watch_triggers_pool_stock_rule_ts_idx').on(
       t.poolId,
       t.stockId,
-      t.ruleKind,
+      t.ruleId,
       t.createdAt,
     ),
     /** listByPool 按时间倒序走这条。 */
     poolTsIdx: index('watch_triggers_pool_ts_idx').on(t.poolId, t.createdAt),
+  }),
+);
+
+/**
+ * 边沿状态机表（v0.7 策略预警，docs/.../§3.5 / §5）。
+ * 仅 (poolId, stockId, ruleId) 维度的 active 状态；不替代 watch_triggers 历史。
+ */
+export const watchRuleStates = sqliteTable(
+  'watch_rule_states',
+  {
+    poolId: text('pool_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    /** 含虚拟 'composite'。 */
+    ruleId: text('rule_id').notNull(),
+    active: integer('active', { mode: 'boolean' }).notNull(),
+    firstTriggeredAt: integer('first_triggered_at', { mode: 'timestamp_ms' }),
+    lastEvaluatedAt: integer('last_evaluated_at', { mode: 'timestamp_ms' }).notNull(),
+    /** 最近一次求值量（如 changePct），仅展示用。 */
+    lastValue: real('last_value'),
+    lastRecoveredAt: integer('last_recovered_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.poolId, t.stockId, t.ruleId], name: 'watch_rule_states_pk' }),
+    poolIdx: index('watch_rule_states_pool_idx').on(t.poolId),
   }),
 );
 
@@ -380,6 +431,10 @@ export const watchRuns = sqliteTable(
     notified: integer('notified').notNull(),
     suppressedByCooldown: integer('suppressed_by_cooldown').notNull(),
     error: text('error'),
+    /** v0.7 策略预警：方案 / 全局每日上限命中导致被抑制的条数。 */
+    suppressedByDailyLimit: integer('suppressed_by_daily_limit').notNull(),
+    /** v0.7 策略预警：发送失败条数（面板告警）。 */
+    notifyFailed: integer('notify_failed').notNull(),
   },
   (t) => ({
     startedAtIdx: index('watch_runs_started_at_idx').on(t.startedAt),
@@ -401,6 +456,8 @@ export const schema = {
   // v0.6 起
   stockPools,
   watchTriggers,
+  // v0.7 起：边沿状态机
+  watchRuleStates,
   watchRuns,
   // 分组化起（docs/stock-group-design.md §3）
   stockGroups,

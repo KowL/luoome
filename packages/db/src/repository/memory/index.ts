@@ -29,6 +29,7 @@ import { InMemoryStockGroupRepository } from './stock-group.js';
 import { InMemoryStockPoolRepository } from './stock-pool.js';
 import { InMemoryTacticRepository } from './tactic.js';
 import { InMemoryTradeRepository } from './trade.js';
+import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 import { InMemoryWatchRunRepository } from './watch-run.js';
 import { InMemoryWatchTriggerRepository } from './watch-trigger.js';
 
@@ -44,6 +45,7 @@ export { InMemoryStockGroupRepository } from './stock-group.js';
 export { InMemoryStockPoolRepository } from './stock-pool.js';
 export { InMemoryTacticRepository } from './tactic.js';
 export { InMemoryTradeRepository } from './trade.js';
+export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 export { InMemoryWatchRunRepository } from './watch-run.js';
 export { InMemoryWatchTriggerRepository } from './watch-trigger.js';
 
@@ -83,6 +85,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   // v0.6 起
   const stockPool = new InMemoryStockPoolRepository();
   const watchTrigger = new InMemoryWatchTriggerRepository();
+  const watchRuleState = new InMemoryWatchRuleStateRepository();
   const watchRun = new InMemoryWatchRunRepository();
   // 分组化起
   const stockGroup = new InMemoryStockGroupRepository();
@@ -122,6 +125,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     notification,
     stockPool,
     watchTrigger,
+    watchRuleState,
     watchRun,
     stockGroup,
     groupMember,
