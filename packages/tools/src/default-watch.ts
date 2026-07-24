@@ -30,6 +30,11 @@ export const seedDefaultWatch = async (
     ],
     cooldownMinutes: 30,
     enabled: true,
+    // v0.7 策略预警默认配置：on-enter + ANY，优先级走种类推导。
+    logic: 'ANY',
+    triggerMode: 'on-enter',
+    dailyNotificationLimit: 20,
+    notifyOnRecovery: false,
     createdAt: timestamp,
     updatedAt: timestamp,
   });

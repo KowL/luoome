@@ -1,11 +1,18 @@
 import {
   assertWatchTriggerInvariants,
-  type WatchRule,
+  ATTEMPTED_DELIVERY_STATUSES,
+  type DeliveryStatus,
+  type TriggerFeedback,
   type WatchTrigger,
   type WatchTriggerRepository,
 } from '@luoome/core';
 
-/** WatchTrigger 的 in-memory 实现。Key 用 trigger.id；lastForKey 走 (poolId, stockId, ruleKind) 维度扫描。 */
+const ATTEMPTED: ReadonlySet<DeliveryStatus> = new Set(ATTEMPTED_DELIVERY_STATUSES);
+
+/**
+ * WatchTrigger in-memory 实现。
+ * lastForKey 走 (poolId, stockId, ruleId) 维度 + deliveryStatus ∈ ATTEMPTED 过滤（与 drizzle 同语义）。
+ */
 export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   private readonly items = new Map<string, WatchTrigger>();
 
@@ -35,11 +42,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   async lastForKey(
-    key: {
-      readonly poolId: string;
-      readonly stockId: string;
-      readonly ruleKind: WatchRule['kind'];
-    },
+    key: { readonly poolId: string; readonly stockId: string; readonly ruleId: string },
     since: Date,
   ): Promise<WatchTrigger | null> {
     const sinceMs = since.getTime();
@@ -48,8 +51,8 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
         (t) =>
           t.poolId === key.poolId &&
           t.stockId === key.stockId &&
-          t.ruleKind === key.ruleKind &&
-          t.notified &&
+          t.ruleId === key.ruleId &&
+          ATTEMPTED.has(t.deliveryStatus) &&
           t.createdAt.getTime() >= sinceMs,
       )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -57,18 +60,59 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   async listRecent(
-    opts: { readonly poolId?: string; readonly since?: Date; readonly limit?: number } = {},
+    opts: {
+      readonly poolId?: string;
+      readonly since?: Date;
+      readonly limit?: number;
+      readonly deliveryStatus?: readonly DeliveryStatus[];
+      readonly ruleId?: string;
+    } = {},
   ): Promise<readonly WatchTrigger[]> {
     const sinceMs = opts.since?.getTime() ?? Number.NEGATIVE_INFINITY;
     const limit = opts.limit ?? 50;
+    const statusFilter = opts.deliveryStatus ? new Set(opts.deliveryStatus) : null;
     return [...this.items.values()]
       .filter((t) => {
         if (opts.poolId !== undefined && t.poolId !== opts.poolId) return false;
         if (t.createdAt.getTime() < sinceMs) return false;
+        if (statusFilter !== null && !statusFilter.has(t.deliveryStatus)) return false;
+        if (opts.ruleId !== undefined && t.ruleId !== opts.ruleId) return false;
         return true;
       })
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
+  }
+
+  async countAttemptedSince(since: Date, poolId?: string | null): Promise<number> {
+    const sinceMs = since.getTime();
+    return [...this.items.values()].filter((t) => {
+      if (t.createdAt.getTime() < sinceMs) return false;
+      if (poolId !== undefined && poolId !== null && t.poolId !== poolId) return false;
+      return ATTEMPTED.has(t.deliveryStatus);
+    }).length;
+  }
+
+  async setDeliveryStatus(
+    ids: readonly string[],
+    status: DeliveryStatus,
+    notificationId?: string,
+  ): Promise<void> {
+    for (const id of ids) {
+      const t = this.items.get(id);
+      if (t === undefined) continue;
+      this.items.set(id, {
+        ...t,
+        deliveryStatus: status,
+        ...(notificationId !== undefined ? { notificationId } : {}),
+        notified: ATTEMPTED.has(status),
+      });
+    }
+  }
+
+  async setFeedback(id: string, feedback: TriggerFeedback, at: Date): Promise<void> {
+    const t = this.items.get(id);
+    if (t === undefined) return;
+    this.items.set(id, { ...t, feedback, feedbackAt: at });
   }
 
   async remove(id: string): Promise<void> {

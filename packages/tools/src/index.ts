@@ -44,6 +44,7 @@ export * from './tools/save-watch-trigger.js';
 export * from './tools/score-signals.js';
 export * from './tools/search-stocks.js';
 export * from './tools/send-notification.js';
+export * from './tools/set-watch-trigger-feedback.js';
 export * from './tools/sync-quotes.js';
 export * from './tools/tactic-signals-by-stock.js';
 export * from './tools/tactic-signals-by-tactic.js';

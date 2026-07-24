@@ -55,6 +55,15 @@ const KNOWN_UNEXPOSED_TOOLS: Readonly<Record<string, SideEffect>> = {
   cancel_order: 'trade',
 };
 
+/** Asia/Shanghai 当日 00:00 的 Date（web 与 workflow 用同口径）。 */
+const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
+const startOfTodayShanghai = (now: Date): Date => {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  return new Date(Date.UTC(y, m, d) - SHANGHAI_OFFSET_MS);
+};
+
 /** ToolResult 错误 → HTTP 状态码（响应体仍是 ToolResult 形状）。 */
 const statusOf = (error: ToolError): number => {
   switch (error.kind) {
@@ -321,15 +330,324 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
   app.get('/api/watch/triggers', (c) => {
     const input: Record<string, unknown> = {};
-    for (const key of ['poolId', 'stockId', 'ruleKind', 'since'] as const) {
+    for (const key of ['poolId', 'stockId', 'ruleKind', 'ruleId', 'since'] as const) {
       const value = c.req.query(key);
       if (value !== undefined) input[key] = value;
     }
     const notified = c.req.query('notified');
     if (notified !== undefined) input.notified = notified === 'true' || notified === '1';
+    const priority = c.req.query('priority');
+    if (priority === 'urgent' || priority === 'important' || priority === 'normal') {
+      input.priority = priority;
+    }
+    const feedback = c.req.query('feedback');
+    if (
+      feedback === 'handled' ||
+      feedback === 'useful' ||
+      feedback === 'useless' ||
+      feedback === 'ignored'
+    ) {
+      input.feedback = feedback;
+    }
+    const triggerType = c.req.query('triggerType');
+    if (triggerType === 'triggered' || triggerType === 'recovered') {
+      input.triggerType = triggerType;
+    }
+    const deliveryStatus = c.req.query('deliveryStatus');
+    if (typeof deliveryStatus === 'string' && deliveryStatus.length > 0) {
+      input.deliveryStatus = deliveryStatus.split(',').filter((v) => v.length > 0);
+    }
     const limit = c.req.query('limit');
     if (limit !== undefined) input.limit = Number(limit);
     return callTool('list_watch_triggers', input);
+  });
+
+  /**
+   * 反馈写入（v0.7 策略预警）。
+   * 调 set_watch_trigger_feedback；幂等；triggerId 不存在 → 404。
+   */
+  app.post('/api/watch/triggers/:id/feedback', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    const id = c.req.param('id');
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      body = {};
+    }
+    const feedback = (body as { feedback?: unknown }).feedback;
+    if (
+      feedback !== 'handled' &&
+      feedback !== 'useful' &&
+      feedback !== 'useless' &&
+      feedback !== 'ignored'
+    ) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: 'feedback 必须是 handled / useful / useless / ignored',
+          issues: [],
+        },
+      });
+    }
+    return jsonResult(await invokeTool('set_watch_trigger_feedback', { triggerId: id, feedback }));
+  });
+
+  /**
+   * 盯盘方案模板（docs/ddd/strategy-alert-detailed-design.md §10）。
+   * 前端静态渲染；选择后由用户确认调 create_stock_pool。
+   */
+  app.get('/api/watch/templates', () => {
+    const templates: ReadonlyArray<{
+      readonly id: string;
+      readonly name: string;
+      readonly description: string;
+      readonly icon: string;
+      readonly draft: Record<string, unknown>;
+    }> = [
+      {
+        id: 'holdings-stop-profit-loss',
+        name: '持仓止盈止损',
+        icon: '🛡️',
+        description: '盯全部持仓，±5% 成本阈值；用户常见落地配置。',
+        draft: {
+          name: '持仓止盈止损',
+          description: '基于全部持仓的成本阈值监控',
+          logic: 'ANY',
+          triggerMode: 'on-enter',
+          dailyNotificationLimit: 20,
+          notifyOnRecovery: false,
+          rules: [{ kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 }],
+        },
+      },
+      {
+        id: 'holdings-tactic-volume-divergence',
+        name: '持仓量价背离',
+        icon: '📊',
+        description: '盯全部持仓，等内置 volume-price-divergence 战法命中（score≥60）。',
+        draft: {
+          name: '持仓量价背离',
+          logic: 'ANY',
+          triggerMode: 'on-enter',
+          dailyNotificationLimit: 20,
+          notifyOnRecovery: false,
+          rules: [{ kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 }],
+        },
+      },
+      {
+        id: 'breakout-volume',
+        name: '放量突破',
+        icon: '🚀',
+        description: '手动维护分组 + 战法 breakout-volume 命中。',
+        draft: {
+          name: '放量突破',
+          logic: 'ANY',
+          triggerMode: 'repeat',
+          dailyNotificationLimit: 30,
+          notifyOnRecovery: false,
+          rules: [{ kind: 'tactic', tacticId: 'breakout-volume', minScore: 70 }],
+        },
+      },
+      {
+        id: 'intraday-swing',
+        name: '日内异动',
+        icon: '⚡',
+        description: '手动分组 + 日内涨跌幅 ≥ 3%，on-enter 边沿 + repeat 模式避免漏发。',
+        draft: {
+          name: '日内异动',
+          logic: 'ANY',
+          triggerMode: 'repeat',
+          dailyNotificationLimit: 50,
+          notifyOnRecovery: false,
+          rules: [{ kind: 'price-change', pct: 0.03, direction: 'any' }],
+        },
+      },
+      {
+        id: 'price-level-guard',
+        name: '关键位提醒',
+        icon: '🎯',
+        description: '手动分组 + 关键价位穿越（演示用，使用前请手动调整 level 与分组）。',
+        draft: {
+          name: '关键位提醒',
+          logic: 'ANY',
+          triggerMode: 'on-enter',
+          dailyNotificationLimit: 20,
+          notifyOnRecovery: false,
+          rules: [{ kind: 'price-level', level: 100, side: 'above' }],
+        },
+      },
+      {
+        id: 'all-conditions-portfolio',
+        name: '组合一致性',
+        icon: '🧩',
+        description: 'ALL 组合：持仓 + 量价背离同时进入 active 才触发（composite ruleId）。',
+        draft: {
+          name: '组合一致性',
+          logic: 'ALL',
+          triggerMode: 'on-enter',
+          dailyNotificationLimit: 10,
+          notifyOnRecovery: false,
+          rules: [
+            { kind: 'cost-threshold', stopLossPct: 0.07, takeProfitPct: 0.1 },
+            { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 70 },
+          ],
+        },
+      },
+    ];
+    return jsonResult({ ok: true, data: { templates } });
+  });
+
+  /**
+   * 自然语言草案（§10）：LLM 把用户的口语化请求解析为 create_stock_pool 输入。
+   *
+   * - 严格 JSON schema 输出约束（系统提示 + LLMAdapterLike.schema）
+   * - tool 层仍校验 groupId / tacticId 存在性，前端回显需用户确认
+   * - LLM 失败 / 解析失败一律返回 invalid_input / llm_error（前端可走模板兜底）
+   */
+  app.post('/api/watch/draft', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '请求体必须是 JSON：{ "message": "..." }',
+          issues: [],
+        },
+      });
+    }
+    const message = (body as { message?: unknown }).message;
+    if (typeof message !== 'string' || message.trim().length === 0) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: 'message 必填且为非空字符串', issues: [] },
+      });
+    }
+
+    // 列可选分组供 LLM 选用
+    const groupsResult = await invokeTool('list_stock_groups', {
+      enabledOnly: true,
+      includeMemberCount: true,
+    });
+    const groupOptions = groupsResult.ok
+      ? (
+          groupsResult.data as {
+            groups: Array<{ group: { id: string; name: string } }>;
+          }
+        ).groups.map((g) => `${g.group.id} (${g.group.name})`)
+      : [];
+
+    // 列可用战法供 LLM 选用
+    const tacticsResult = await invokeTool('list_tactics', { includeBuiltins: true });
+    const tacticOptions = tacticsResult.ok
+      ? (
+          tacticsResult.data as {
+            tactics: Array<{ id: string; name: string }>;
+          }
+        ).tactics.map((t) => `${t.id} (${t.name})`)
+      : [];
+
+    const draftSchema = {
+      type: 'object',
+      required: ['name', 'groupId', 'rules'],
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 64 },
+        description: { type: 'string', maxLength: 500 },
+        groupId: { type: 'string', enum: groupOptions.length > 0 ? groupOptions : undefined },
+        rules: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            oneOf: [
+              {
+                type: 'object',
+                required: ['kind', 'tacticId'],
+                properties: {
+                  kind: { const: 'tactic' },
+                  tacticId: {
+                    type: 'string',
+                    enum: tacticOptions.length > 0 ? tacticOptions : undefined,
+                  },
+                  minScore: { type: 'number', minimum: 0, maximum: 100, default: 60 },
+                },
+              },
+              {
+                type: 'object',
+                required: ['kind'],
+                properties: {
+                  kind: { const: 'cost-threshold' },
+                  stopLossPct: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
+                  takeProfitPct: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
+                },
+              },
+              {
+                type: 'object',
+                required: ['kind', 'pct'],
+                properties: {
+                  kind: { const: 'price-change' },
+                  pct: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
+                  direction: { enum: ['up', 'down', 'any'] },
+                },
+              },
+              {
+                type: 'object',
+                required: ['kind', 'level', 'side'],
+                properties: {
+                  kind: { const: 'price-level' },
+                  level: { type: 'number', exclusiveMinimum: 0 },
+                  side: { enum: ['above', 'below'] },
+                },
+              },
+            ],
+          },
+        },
+        logic: { enum: ['ANY', 'ALL'] },
+        triggerMode: { enum: ['on-enter', 'repeat', 'daily-first'] },
+        priority: { enum: ['urgent', 'important', 'normal'] },
+        dailyNotificationLimit: { type: 'integer', minimum: 1, maximum: 500 },
+        notifyOnRecovery: { type: 'boolean' },
+      },
+    };
+
+    const system = `你是 luoome 盯盘方案的辅助生成器。把用户的口语化描述转成结构化的 create_stock_pool 草稿输入。\n` +
+      `- 只输出严格符合 schema 的 JSON\n` +
+      `- groupId 必须从用户提供的可选列表里选\n` +
+      `- 战法 tacticId 必须从可选战法列表里选\n` +
+      `- 不允许臆造 id`;
+
+    let raw: unknown;
+    try {
+      raw = await ctxRef.current.adapters.llm.generate({
+        system,
+        schema: draftSchema,
+        data: { message, groupOptions, tacticOptions },
+      });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'llm_error',
+          provider: ctxRef.current.adapters.llm.name,
+          cause: error instanceof Error ? error.message : String(error),
+          retryable: true,
+        },
+      });
+    }
+
+    return jsonResult({
+      ok: true,
+      data: {
+        draft: raw,
+        groupOptions,
+        tacticOptions,
+      },
+    });
   });
 
   app.post('/api/watch/run-once', async (c) => {
@@ -349,13 +667,15 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.get('/api/dashboard', async () => {
-    const [holdings, groups, pools, watch, triggers, advice] = await Promise.all([
+    const todayStart = startOfTodayShanghai(ctxRef.current.clock());
+    const [holdings, groups, pools, watch, triggers, advice, recentTriggers] = await Promise.all([
       invokeTool('list_holdings', {}),
       invokeTool('list_stock_groups', { enabledOnly: false, includeMemberCount: true }),
       invokeTool('list_stock_pools', { enabledOnly: false }),
       invokeTool('get_watch_status', {}),
       invokeTool('list_watch_triggers', { limit: 8 }),
       invokeTool('get_advice', { limit: 8 }),
+      invokeTool('list_watch_triggers', { since: todayStart, limit: 200 }),
     ]);
     if (!holdings.ok) return jsonResult(holdings);
     if (!groups.ok) return jsonResult(groups);
@@ -375,6 +695,53 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const staleGroupCount = dynamicDetails.filter(
       (result) => result.ok && (result.data as { stale: boolean }).stale,
     ).length;
+
+    // 策略预警指标（docs/.../§11 / §12）：今日优先级计数 / 送达状态分布 / 反馈分布（噪声率）
+    const todayTriggers = (
+      recentTriggers.ok
+        ? (recentTriggers.data as { triggers: Array<Record<string, unknown>> }).triggers
+        : []
+    ) as Array<{
+      priority: 'urgent' | 'important' | 'normal';
+      deliveryStatus: string;
+      feedback?: 'handled' | 'useful' | 'useless' | 'ignored';
+    }>;
+
+    const priorityCounts = todayTriggers.reduce<Record<string, number>>(
+      (acc, t) => {
+        acc[t.priority] = (acc[t.priority] ?? 0) + 1;
+        return acc;
+      },
+      {},
+    );
+    const deliveryStatusCounts = todayTriggers.reduce<Record<string, number>>(
+      (acc, t) => {
+        acc[t.deliveryStatus] = (acc[t.deliveryStatus] ?? 0) + 1;
+        return acc;
+      },
+      {},
+    );
+    const feedbackCounts = todayTriggers.reduce<Record<string, number>>(
+      (acc, t) => {
+        if (t.feedback === undefined) return acc;
+        acc[t.feedback] = (acc[t.feedback] ?? 0) + 1;
+        return acc;
+      },
+      {},
+    );
+
+    // 噪声率（§11）：样本 ≥ 30 才展示，避免误读
+    const feedbackTotal = Object.values(feedbackCounts).reduce((s, n) => s + n, 0);
+    const noiseRate =
+      feedbackTotal >= 30
+        ? ((feedbackCounts.useless ?? 0) + (feedbackCounts.ignored ?? 0)) /
+          Math.max(feedbackTotal, 1)
+        : null;
+
+    // watch.run 摘要（§11）：最近一轮的发送失败 / 抑制分项
+    const watchData = watch.data as { latest?: Record<string, unknown> | null };
+    const latestRun = watchData.latest ?? null;
+
     return jsonResult({
       ok: true,
       data: {
@@ -386,6 +753,30 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         triggers: triggers.data,
         advice: advice.data,
         staleGroupCount,
+        // v0.7 策略预警 dashboard 指标（§11）
+        metrics: {
+          todayTotal: todayTriggers.length,
+          priorityCounts,
+          deliveryStatusCounts,
+          feedbackCounts,
+          feedbackTotal,
+          noiseRate,
+          latestRun: latestRun
+            ? {
+                status: latestRun.status ?? null,
+                evaluatedPools: latestRun.evaluatedPools ?? 0,
+                evaluatedStocks: latestRun.evaluatedStocks ?? 0,
+                triggered: latestRun.triggered ?? 0,
+                notified: latestRun.notified ?? 0,
+                suppressedByCooldown: latestRun.suppressedByCooldown ?? 0,
+                suppressedByDailyLimit: latestRun.suppressedByDailyLimit ?? 0,
+                notifyFailed: latestRun.notifyFailed ?? 0,
+                startedAt: latestRun.startedAt ?? null,
+                finishedAt: latestRun.finishedAt ?? null,
+                error: latestRun.error ?? null,
+              }
+            : null,
+        },
       },
     });
   });

@@ -18,9 +18,13 @@ const basePool = (overrides: Partial<StockPool> = {}): StockPool => ({
   name: '持仓监控',
   description: '默认池',
   groupId: 'holdings-default',
-  rules: [{ kind: 'price-change', pct: 0.05 }],
+  rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
   cooldownMinutes: 30,
   enabled: true,
+  logic: 'ANY',
+  triggerMode: 'on-enter',
+  dailyNotificationLimit: 20,
+  notifyOnRecovery: false,
   createdAt: NOW,
   updatedAt: NOW,
   ...overrides,
@@ -43,6 +47,37 @@ describe('StockPool schema', () => {
   it('price-change pct=0 → parse 失败（必须 > 0）', () => {
     const r = WatchRuleSchema.safeParse({ kind: 'price-change', pct: 0 });
     expect(r.success).toBe(false);
+  });
+
+  it('price-change 缺 direction → 默认 any', () => {
+    const r = WatchRuleSchema.parse({ kind: 'price-change', pct: 0.05 });
+    expect(r.kind).toBe('price-change');
+    if (r.kind === 'price-change') {
+      expect(r.direction).toBe('any');
+    }
+  });
+
+  it('price-level level=0 → parse 失败（必须 > 0）', () => {
+    const r = WatchRuleSchema.safeParse({ kind: 'price-level', level: 0, side: 'above' });
+    expect(r.success).toBe(false);
+  });
+
+  it('price-level side 非法 → parse 失败', () => {
+    const r = WatchRuleSchema.safeParse({ kind: 'price-level', level: 10, side: 'middle' });
+    expect(r.success).toBe(false);
+  });
+
+  it('rule 接受可选 id 与 priority（v0.7 字段）', () => {
+    const r = WatchRuleSchema.parse({
+      kind: 'price-change',
+      pct: 0.05,
+      id: 'r_abc',
+      priority: 'important',
+    });
+    if (r.kind === 'price-change') {
+      expect(r.id).toBe('r_abc');
+      expect(r.priority).toBe('important');
+    }
   });
 
   it('id 含大写 → schema parse 失败', () => {
@@ -90,36 +125,38 @@ describe('StockPool invariants', () => {
 });
 
 describe('WatchTrigger schema', () => {
+  const minimalTrigger = () => ({
+    id: 't-1',
+    poolId: 'holdings-watch',
+    stockId: '002594.SZ',
+    ruleKind: 'price-change' as const,
+    ruleId: 'r_abc',
+    triggerType: 'triggered' as const,
+    direction: 'watch' as const,
+    priority: 'normal' as const,
+    deliveryStatus: 'sent' as const,
+    evalSnapshot: { ruleId: 'r_abc', kind: 'price-change' },
+    reason: '日内涨幅 5.2%',
+    evidence: ['close=15.2 prevClose=14.5'],
+    quote: { close: 15.2, ts: NOW },
+    notified: true,
+    createdAt: NOW,
+  });
+
   it('合法 trigger parse 通过', () => {
-    const t = {
-      id: 't-1',
-      poolId: 'holdings-watch',
-      stockId: '002594.SZ',
-      ruleKind: 'price-change' as const,
-      direction: 'watch' as const,
-      reason: '日内涨幅 5.2%',
-      evidence: ['close=15.2 prevClose=14.5'],
-      quote: { close: 15.2, ts: NOW },
-      notified: true,
-      createdAt: NOW,
-    };
-    const r = WatchTriggerSchema.safeParse(t);
+    const r = WatchTriggerSchema.safeParse(minimalTrigger());
     expect(r.success).toBe(true);
   });
 
+  it('triggerType 缺省时为 triggered', () => {
+    const { triggerType: _omitted, ...rest } = minimalTrigger();
+    void _omitted;
+    const r = WatchTriggerSchema.parse(rest);
+    expect(r.triggerType).toBe('triggered');
+  });
+
   it('direction 非法值 → parse 失败', () => {
-    const t = {
-      id: 't-1',
-      poolId: 'p',
-      stockId: 's',
-      ruleKind: 'price-change' as const,
-      direction: 'moon',
-      reason: 'r',
-      evidence: ['e'],
-      quote: { close: 15.2, ts: NOW },
-      notified: true,
-      createdAt: NOW,
-    };
+    const t = { ...minimalTrigger(), direction: 'moon' as never };
     const r = WatchTriggerSchema.safeParse(t);
     expect(r.success).toBe(false);
   });
@@ -131,7 +168,12 @@ describe('WatchTrigger invariants', () => {
     poolId: 'holdings-watch',
     stockId: '002594.SZ',
     ruleKind: 'price-change' as const,
+    ruleId: 'r_abc',
+    triggerType: 'triggered' as const,
     direction: 'watch' as const,
+    priority: 'normal' as const,
+    deliveryStatus: 'sent' as const,
+    evalSnapshot: { ruleId: 'r_abc' },
     reason: '日内涨幅 5.2%',
     evidence: ['close=15.2 prevClose=14.5'],
     quote: { close: money(15.2), ts: NOW },

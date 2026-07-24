@@ -3,8 +3,10 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
+import { callApi } from './api.js';
+
 const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const $$ = (sel, root = document) => Array.from(document.querySelectorAll(sel));
 
 /**
  * 构造 DOM 节点。
@@ -203,6 +205,130 @@ const statBlock = (label, value, delta) =>
       : [el('div', 'label', label), el('div', 'value', value)],
   );
 
+/** v0.7 策略预警：送达状态 + 优先级 badge 的派生样式。 */
+const PRIORITY_BADGE = {
+  urgent: 'badge-urgent',
+  important: 'badge-important',
+  normal: 'badge-normal',
+};
+const DELIVERY_STATUS_LABEL = {
+  'not-requested': '仅记录',
+  'suppressed-cooldown': '冷却抑制',
+  'suppressed-daily-limit': '日上限抑制',
+  pending: '待发送',
+  sent: '已发送',
+  failed: '发送失败',
+  'fallback-log': '降级日志',
+};
+const FEEDBACK_LABEL = {
+  handled: '已处理',
+  useful: '有用',
+  useless: '无用',
+  ignored: '忽略',
+};
+
+/**
+ * 盯盘预警完整卡片（docs/ddd/strategy-alert-detailed-design.md §10）。
+ * - 优先级 / 送达状态 badge
+ * - evalSnapshot 展开区
+ * - 四反馈按钮（handled / useful / useless / ignored）→ set_watch_trigger_feedback
+ * - 「规则太频繁」跳方案编辑
+ *
+ * @param {object} trigger WatchTrigger
+ * @param {(href: string) => void} navigate 路由跳转
+ * @returns {HTMLElement}
+ */
+const triggerCard = (trigger, navigate) => {
+  const deliveryLabel = DELIVERY_STATUS_LABEL[trigger.deliveryStatus] ?? trigger.deliveryStatus;
+  const priority = trigger.priority ?? 'normal';
+  const feedback = trigger.feedback;
+  const card = el('article', `trigger-card direction-${trigger.direction ?? 'watch'}`);
+
+  const main = el('div', 'trigger-card-main', [
+    el('strong', 'mono', trigger.stockId ?? '--'),
+    el('span', 'badge', trigger.ruleKind ?? '?'),
+    el('span', `badge ${PRIORITY_BADGE[priority] ?? ''}`, `P:${priority}`),
+    el(
+      'span',
+      `badge badge-delivery-${trigger.deliveryStatus ?? 'not-requested'}`,
+      deliveryLabel,
+    ),
+  ]);
+  card.append(main);
+  if (typeof trigger.reason === 'string' && trigger.reason.length > 0) {
+    card.append(el('p', 'reason', trigger.reason));
+  }
+  const evidence = Array.isArray(trigger.evidence) ? trigger.evidence : [];
+  if (evidence.length > 0) {
+    card.append(
+      el(
+        'div',
+        'evidence',
+        evidence.map((s) => el('small', null, String(s))),
+      ),
+    );
+  }
+  // evalSnapshot 展开
+  if (trigger.evalSnapshot && typeof trigger.evalSnapshot === 'object') {
+    const detail = el('details', 'trigger-eval');
+    detail.append(el('summary', null, '求值快照（设计 §12 可解释率来源）'));
+    detail.append(el('pre', 'mono', JSON.stringify(trigger.evalSnapshot, null, 2)));
+    card.append(detail);
+  }
+  const meta = el('small', 'muted');
+  meta.textContent = `${fmtDateTime(trigger.createdAt)} · ${trigger.notified ? '已通知' : '仅记录'}${
+    typeof trigger.poolId === 'string' ? ` · ${trigger.poolId}` : ''
+  }`;
+  card.append(meta);
+
+  // 反馈区
+  if (typeof trigger.id === 'string' && trigger.id.length > 0) {
+    const feedbackRow = el('div', 'trigger-feedback');
+    for (const f of ['handled', 'useful', 'useless', 'ignored']) {
+      const btn = el(
+        'button',
+        `feedback-btn ${f}${feedback === f ? ' active' : ''}`,
+        FEEDBACK_LABEL[f],
+      );
+      btn.type = 'button';
+      btn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        btn.disabled = true;
+        try {
+          await callApi(`/api/watch/triggers/${trigger.id}/feedback`, {
+            method: 'POST',
+            body: { feedback: f },
+          });
+          // 本地即时反馈，不刷新整列表
+          feedbackRow
+            .querySelectorAll('.feedback-btn')
+            .forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+        } catch (err) {
+          console.error('feedback failed', err);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      feedbackRow.append(btn);
+    }
+    card.append(feedbackRow);
+
+    // 「规则太频繁」跳方案编辑
+    if (typeof navigate === 'function') {
+      const tooNoisy = el('button', 'feedback-secondary');
+      tooNoisy.type = 'button';
+      tooNoisy.textContent = '规则太频繁 → 跳到方案编辑';
+      tooNoisy.addEventListener('click', (event) => {
+        event.stopPropagation();
+        navigate(`/watch?poolId=${encodeURIComponent(trigger.poolId ?? '')}`);
+      });
+      card.append(tooNoisy);
+    }
+  }
+  return card;
+};
+
 export {
   $,
   $$,
@@ -217,4 +343,5 @@ export {
   fmtSigned,
   mount,
   statBlock,
+  triggerCard,
 };

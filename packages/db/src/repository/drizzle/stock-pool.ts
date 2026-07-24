@@ -1,4 +1,8 @@
-import { assertStockPoolInvariants, type StockPool, type StockPoolRepository } from '@luoome/core';
+import {
+  assertStockPoolInvariants,
+  type StockPool,
+  type StockPoolRepository,
+} from '@luoome/core';
 import { asc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
@@ -18,6 +22,11 @@ const toStockPool = (row: PoolRow): StockPool => ({
   enabled: row.enabled,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
+  logic: row.logic,
+  triggerMode: row.triggerMode,
+  ...(row.priority !== null ? { priority: row.priority } : {}),
+  dailyNotificationLimit: row.dailyNotificationLimit,
+  notifyOnRecovery: row.notifyOnRecovery,
 });
 
 export class DrizzleStockPoolRepository implements StockPoolRepository {
@@ -39,6 +48,11 @@ export class DrizzleStockPoolRepository implements StockPoolRepository {
         enabled: pool.enabled,
         createdAt: pool.createdAt,
         updatedAt: pool.updatedAt,
+        logic: pool.logic,
+        triggerMode: pool.triggerMode,
+        priority: pool.priority ?? null,
+        dailyNotificationLimit: pool.dailyNotificationLimit,
+        notifyOnRecovery: pool.notifyOnRecovery,
       })
       .onConflictDoUpdate({
         target: stockPools.id,
@@ -51,6 +65,11 @@ export class DrizzleStockPoolRepository implements StockPoolRepository {
           cooldownMinutes: pool.cooldownMinutes,
           enabled: pool.enabled,
           updatedAt: pool.updatedAt,
+          logic: pool.logic,
+          triggerMode: pool.triggerMode,
+          priority: pool.priority ?? null,
+          dailyNotificationLimit: pool.dailyNotificationLimit,
+          notifyOnRecovery: pool.notifyOnRecovery,
         },
       })
       .run();

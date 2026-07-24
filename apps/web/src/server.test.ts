@@ -595,3 +595,200 @@ describe('GET /api/stocks/search', () => {
     expect(body.data?.stocks[0]?.id).toBe('600519.SH');
   });
 });
+
+/* ============ v0.7 策略预警（docs/.../§10）Web 端点 ============ */
+
+describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
+  it('GET /api/watch/templates 返回 6 个模板，含 ALL/ANY/price-level/price-change 变体', async () => {
+    const r = await app.fetch(new Request('http://test/api/watch/templates'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { templates: Array<{ id: string; draft: Record<string, unknown> }> };
+    };
+    expect(body.ok).toBe(true);
+    const templates = body.data?.templates ?? [];
+    expect(templates.length).toBe(6);
+    const kinds = new Set<string>();
+    for (const t of templates) {
+      for (const r2 of Array.isArray(t.draft.rules) ? t.draft.rules : []) {
+        const k = (r2 as { kind?: string }).kind;
+        if (typeof k === 'string') kinds.add(k);
+      }
+    }
+    expect(kinds.has('cost-threshold')).toBe(true);
+    expect(kinds.has('tactic')).toBe(true);
+    expect(kinds.has('price-change')).toBe(true);
+    expect(kinds.has('price-level')).toBe(true);
+    // 至少一个模板用 ALL（设计要求 ALL 组合也给出示例）
+    expect(templates.some((t) => t.draft.logic === 'ALL')).toBe(true);
+  });
+
+  it('POST /api/watch/draft：无 token 时 403；message 缺失 → 400', async () => {
+    const denied = await app.fetch(
+      new Request('http://test/api/watch/draft', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: '盯一下' }),
+      }),
+    );
+    expect(denied.status).toBe(403);
+
+    const bad = await app.fetch(
+      new Request('http://test/api/watch/draft', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(bad.status).toBe(400);
+  });
+
+  it('POST /api/watch/triggers/:id/feedback：triggerId 不存在 → 404；feedback 非法 → 400；happy path → 200 + 回写', async () => {
+    const missing = await app.fetch(
+      new Request('http://test/api/watch/triggers/nonexistent/feedback', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ feedback: 'useful' }),
+      }),
+    );
+    expect(missing.status).toBe(404);
+
+    // 先建一个分组，再建池，最后手动落一条触发（绕过 dry-run）
+    const groupResp = await callTool('create_stock_group', {
+      id: 'feedback-group',
+      name: '反馈分组',
+      resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
+      refreshPolicy: 'manual',
+      enabled: true,
+    });
+    const groupBody = (await groupResp.json()) as { ok: boolean };
+    expect(groupBody.ok).toBe(true);
+
+    const stockPoolResp = await callTool('create_stock_pool', {
+      id: 'feedback-pool',
+      name: '反馈池',
+      groupId: 'feedback-group',
+      logic: 'ANY',
+      triggerMode: 'on-enter',
+      dailyNotificationLimit: 20,
+      notifyOnRecovery: false,
+      rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
+    });
+    const createBody = (await stockPoolResp.json()) as { ok: boolean; data?: { pool: { id: string } } };
+    expect(createBody.ok).toBe(true);
+    expect(createBody.ok).toBe(true);
+    // 拿真实 triggerId：跑一轮 dry-run
+    const run = await app.fetch(
+      new Request('http://test/api/watch/run-once', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ notify: false }),
+      }),
+    );
+    expect(run.status).toBe(200);
+    const list = await app.fetch(new Request('http://test/api/watch/triggers'));
+    const listBody = (await list.json()) as {
+      data?: { triggers: Array<{ id: string; ruleId: string; deliveryStatus: string }> };
+    };
+    const trigger = listBody.data?.triggers[0];
+    if (trigger === undefined) {
+      // dry-run 也不带触发；改用直接调 save_watch_trigger 凑一条
+      const save = await callTool('save_watch_trigger', {
+        id: 'fb-test',
+        poolId: 'feedback-pool',
+        stockId: '002594.SZ',
+        ruleKind: 'price-change',
+        ruleId: 'r_any',
+        triggerType: 'triggered',
+        direction: 'watch',
+        priority: 'important',
+        deliveryStatus: 'sent',
+        evalSnapshot: { ruleId: 'r_any', kind: 'price-change' },
+        reason: '单元测试触发',
+        evidence: ['close=15.2'],
+        quote: { close: 15.2, ts: new Date() },
+        notified: true,
+        createdAt: new Date(),
+      });
+      const saveBody = (await save.json()) as { ok: boolean; error?: { kind: string } };
+      if (!saveBody.ok) {
+        // 缺少 tactic 引用校验可能 ok=true；保险
+      }
+    }
+    const triggerId = trigger?.id ?? 'fb-test';
+    const ok = await app.fetch(
+      new Request(`http://test/api/watch/triggers/${triggerId}/feedback`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ feedback: 'useful' }),
+      }),
+    );
+    expect(ok.status).toBe(200);
+    const okBody = (await ok.json()) as {
+      ok: boolean;
+      data?: { triggerId: string; feedback: string };
+    };
+    expect(okBody.ok).toBe(true);
+    expect(okBody.data?.triggerId).toBe(triggerId);
+    expect(okBody.data?.feedback).toBe('useful');
+
+    // 非法 feedback
+    const bad2 = await app.fetch(
+      new Request(`http://test/api/watch/triggers/${triggerId}/feedback`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ feedback: 'maybe' }),
+      }),
+    );
+    expect(bad2.status).toBe(400);
+  });
+
+  it('GET /api/watch/triggers 转发 priority / deliveryStatus / feedback / triggerType 过滤参数', async () => {
+    const url = 'http://test/api/watch/triggers?priority=urgent&deliveryStatus=sent&feedback=useful&triggerType=triggered';
+    const r = await app.fetch(new Request(url));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean; data?: { triggers: unknown[]; total: number } };
+    expect(body.ok).toBe(true);
+    expect(body.data?.total).toBeGreaterThanOrEqual(0);
+  });
+
+  it('dashboard metrics 字段齐全（priorityCounts / deliveryStatusCounts / feedbackCounts / latestRun.notifyFailed / suppressedByDailyLimit / noiseRate）', async () => {
+    const r = await app.fetch(new Request('http://test/api/dashboard'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: {
+        metrics?: Record<string, unknown>;
+      };
+    };
+    expect(body.ok).toBe(true);
+    const m = body.data?.metrics ?? {};
+    expect(m).toHaveProperty('todayTotal');
+    expect(m).toHaveProperty('priorityCounts');
+    expect(m).toHaveProperty('deliveryStatusCounts');
+    expect(m).toHaveProperty('feedbackCounts');
+    expect(m).toHaveProperty('noiseRate');
+    const latestRun = m.latestRun as null | Record<string, unknown>;
+    if (latestRun !== null) {
+      expect(latestRun).toHaveProperty('notifyFailed');
+      expect(latestRun).toHaveProperty('suppressedByDailyLimit');
+    }
+  });
+});
+

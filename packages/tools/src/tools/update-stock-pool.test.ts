@@ -27,7 +27,7 @@ const seedPool = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
       id: 'p-1',
       name: '原名',
       groupId,
-      rules: [{ kind: 'price-change', pct: 0.05 }],
+      rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
     },
     ctx,
   );
@@ -65,7 +65,7 @@ describe('update_stock_pool', () => {
         name: 'd',
         description: 'old',
         groupId,
-        rules: [{ kind: 'price-change', pct: 0.05 }],
+        rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
       },
       ctx,
     );
@@ -123,8 +123,14 @@ describe('update_stock_pool', () => {
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.pool.rules).toEqual([
-      { kind: 'tactic', tacticId: 'ma-bullish-alignment', minScore: 60 },
-    ]);
+    // v0.7：服务端为规则生成稳定 id（r_${uuid8}），仅校验业务字段保留。
+    expect(r.data.pool.rules).toHaveLength(1);
+    const rule = r.data.pool.rules[0]!;
+    expect(rule.kind).toBe('tactic');
+    if (rule.kind === 'tactic') {
+      expect(rule.tacticId).toBe('ma-bullish-alignment');
+      expect(rule.minScore).toBe(60);
+      expect(rule.id).toMatch(/^r_/);
+    }
   });
 });

@@ -62,6 +62,8 @@ import type {
   SearchStocksOutput,
   SendNotificationInput,
   SendNotificationOutput,
+  SetWatchTriggerFeedbackInput,
+  SetWatchTriggerFeedbackOutput,
   SyncQuotesInput,
   SyncQuotesOutput,
   TacticSignalsByStockInput,
@@ -181,6 +183,11 @@ export interface WorkflowToolMap {
   readonly resolve_llm_group: ToolAccessor<
     typeof ResolveLlmGroupInput,
     typeof ResolveLlmGroupOutput
+  >;
+  // v0.7 策略预警：触发反馈
+  readonly set_watch_trigger_feedback: ToolAccessor<
+    typeof SetWatchTriggerFeedbackInput,
+    typeof SetWatchTriggerFeedbackOutput
   >;
 }
 

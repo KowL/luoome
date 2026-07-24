@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// v0.8 MVP：原 44 tool + 统一盯盘方案读取模型 = 45 tool
+// v0.8 MVP：原 45 tool + v0.7 策略预警 set_watch_trigger_feedback = 46 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'list_accounts',
@@ -56,6 +56,8 @@ const EXPECTED_TOOL_NAMES = [
   'delete_stock_group',
   'refresh_stock_group',
   'resolve_llm_group',
+  // v0.7 策略预警（docs/ddd/strategy-alert-detailed-design.md §9.2）新增
+  'set_watch_trigger_feedback',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -120,6 +122,7 @@ describe('toolRegistry', () => {
       'record_advice_outcome',
       'record_watch_run',
       'save_watch_trigger',
+      'set_watch_trigger_feedback',
       'update_holding',
       'update_stock_group',
       'update_stock_pool',

@@ -18,7 +18,12 @@ const save = async (
     {
       ...input,
       poolId: 'holdings-watch',
+      ruleId: `r_${input.id}`,
+      triggerType: 'triggered',
       direction: input.ruleKind === 'cost-threshold' ? 'sell' : 'watch',
+      priority: 'normal',
+      deliveryStatus: input.notified ? 'sent' : 'not-requested',
+      evalSnapshot: { ruleId: `r_${input.id}` },
       reason: `trigger ${input.id}`,
       evidence: ['observable evidence'],
       quote: { close: 100, ts: input.createdAt },

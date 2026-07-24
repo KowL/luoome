@@ -21,7 +21,7 @@ describe('delete_stock_pool', () => {
         id: 'p-del',
         name: 'x',
         groupId: 'grp-manual',
-        rules: [{ kind: 'price-change', pct: 0.05 }],
+        rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
       },
       ctx,
     );

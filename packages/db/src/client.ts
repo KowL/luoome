@@ -16,6 +16,7 @@ import {
   DrizzleStockRepository,
   DrizzleTacticRepository,
   DrizzleTradeRepository,
+  DrizzleWatchRuleStateRepository,
   DrizzleWatchRunRepository,
   DrizzleWatchTriggerRepository,
 } from './repository/drizzle/index.js';
@@ -204,7 +205,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS notifications_result_idx ON notifications (result, sent_at)`,
   );
-  // v0.6 起：股票池；分组化改造后 source 可空（deprecated）+ 增 group_id 列
+  // v0.6 起：股票池；分组化改造后 source 可空（deprecated）+ 增 group_id 列；
+  // v0.7 起增 logic / trigger_mode / priority / daily_notification_limit / notify_on_recovery（§3.3 / §3.7）。
   db.run(sql`
     CREATE TABLE IF NOT EXISTS stock_pools (
       id TEXT PRIMARY KEY,
@@ -216,12 +218,20 @@ export const ensureSchema = (db: DrizzleDb): void => {
       cooldown_minutes INTEGER NOT NULL,
       enabled INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      logic TEXT NOT NULL DEFAULT 'ANY',
+      trigger_mode TEXT NOT NULL DEFAULT 'on-enter',
+      priority TEXT,
+      daily_notification_limit INTEGER NOT NULL DEFAULT 20,
+      notify_on_recovery INTEGER NOT NULL DEFAULT 0
     )
   `);
   migrateLegacyStockPools(db);
+  migrateStrategyAlertPoolColumns(db);
   db.run(sql`CREATE INDEX IF NOT EXISTS stock_pools_enabled_idx ON stock_pools (enabled)`);
-  // v0.6 起：盯盘触发
+  // v0.6 起：盯盘触发。v0.7 增 rule_id / trigger_type / priority / delivery_status /
+  // notification_id / eval_snapshot / feedback / feedback_at，并把 cooldown 索引改用 rule_id
+  // （§3.4 / §3.7）。
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_triggers (
       id TEXT PRIMARY KEY,
@@ -234,15 +244,44 @@ export const ensureSchema = (db: DrizzleDb): void => {
       quote_close REAL NOT NULL,
       quote_ts INTEGER NOT NULL,
       notified INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      rule_id TEXT NOT NULL DEFAULT '',
+      trigger_type TEXT NOT NULL DEFAULT 'triggered',
+      priority TEXT NOT NULL DEFAULT 'normal',
+      delivery_status TEXT NOT NULL DEFAULT 'not-requested',
+      notification_id TEXT,
+      eval_snapshot TEXT NOT NULL DEFAULT '{}',
+      feedback TEXT,
+      feedback_at INTEGER
     )
   `);
+  migrateStrategyAlertTriggerColumns(db);
+  // 重建索引（列从 rule_kind 改到 rule_id）
+  db.run(sql`DROP INDEX IF EXISTS watch_triggers_pool_stock_rule_ts_idx`);
   db.run(
-    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_stock_rule_ts_idx ON watch_triggers (pool_id, stock_id, rule_kind, created_at)`,
+    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_stock_rule_ts_idx ON watch_triggers (pool_id, stock_id, rule_id, created_at)`,
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_ts_idx ON watch_triggers (pool_id, created_at)`,
   );
+  // v0.7 起：边沿状态机表（§3.5）
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS watch_rule_states (
+      pool_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      rule_id TEXT NOT NULL,
+      active INTEGER NOT NULL,
+      first_triggered_at INTEGER,
+      last_evaluated_at INTEGER NOT NULL,
+      last_value REAL,
+      last_recovered_at INTEGER,
+      PRIMARY KEY (pool_id, stock_id, rule_id)
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS watch_rule_states_pool_idx ON watch_rule_states (pool_id)`,
+  );
+  // v0.6 起：每轮 watch 心跳。v0.7 增 suppressed_by_daily_limit / notify_failed（§3.6）。
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_runs (
       id TEXT PRIMARY KEY,
@@ -255,9 +294,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
       triggered INTEGER NOT NULL,
       notified INTEGER NOT NULL,
       suppressed_by_cooldown INTEGER NOT NULL,
-      error TEXT
+      error TEXT,
+      suppressed_by_daily_limit INTEGER NOT NULL DEFAULT 0,
+      notify_failed INTEGER NOT NULL DEFAULT 0
     )
   `);
+  migrateStrategyAlertRunColumns(db);
   db.run(sql`CREATE INDEX IF NOT EXISTS watch_runs_started_at_idx ON watch_runs (started_at)`);
   // 分组化起（docs/stock-group-design.md §3）：股票分组 + 成员快照
   db.run(sql`
@@ -446,6 +488,112 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
 };
 
 /**
+ * v0.7 策略预警列补齐（docs/ddd/strategy-alert-detailed-design.md §3.7）：
+ * stock_pools 缺 5 列时 ALTER TABLE ADD。幂等（启动重复执行无副作用）。
+ */
+const migrateStrategyAlertPoolColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(stock_pools)`);
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has('logic')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN logic TEXT NOT NULL DEFAULT 'ANY'`);
+  if (!have.has('trigger_mode')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'on-enter'`);
+  if (!have.has('priority')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN priority TEXT`);
+  if (!have.has('daily_notification_limit')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN daily_notification_limit INTEGER NOT NULL DEFAULT 20`);
+  if (!have.has('notify_on_recovery')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN notify_on_recovery INTEGER NOT NULL DEFAULT 0`);
+  // 回填 rules[].id：缺 id 的逐条生成并写回（参照 v0.6 分组迁移的幂等做法）。重复启动无副作用。
+  const rows = db.all<{ id: string; rules: string }>(sql`SELECT id, rules FROM stock_pools`);
+  const nowMs = Date.now();
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i]!;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.rules);
+    } catch {
+      console.warn(`[migrate] pool ${row.id} 的 rules JSON 解析失败，跳过`);
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+    let changed = false;
+    const updated = (parsed as Array<Record<string, unknown>>).map((r) => {
+      if (r.id !== undefined && r.id !== null && r.id !== '') return r;
+      changed = true;
+      return { ...r, id: `r_${row.id}-${crypto.randomUUID().slice(0, 8)}` };
+    });
+    if (changed) {
+      db.run(sql`UPDATE stock_pools SET rules = ${JSON.stringify(updated)}, updated_at = ${nowMs} WHERE id = ${row.id}`);
+    }
+  }
+};
+
+/**
+ * v0.7 策略预警列补齐：watch_triggers 缺列时 ALTER TABLE ADD；并回填
+ * rule_id / delivery_status / trigger_type / priority / eval_snapshot（§3.7）。
+ * 同类多规则时 rule_id 置空（PRD §9.2 接受的「冷却重置一轮」）；
+ * 单一行失败跳过，不阻断启动。
+ */
+const migrateStrategyAlertTriggerColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(watch_triggers)`);
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has('rule_id')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN rule_id TEXT NOT NULL DEFAULT ''`);
+  if (!have.has('trigger_type')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'triggered'`);
+  if (!have.has('priority')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`);
+  if (!have.has('delivery_status')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'not-requested'`);
+  if (!have.has('notification_id')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN notification_id TEXT`);
+  if (!have.has('eval_snapshot')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN eval_snapshot TEXT NOT NULL DEFAULT '{}'`);
+  if (!have.has('feedback')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN feedback TEXT`);
+  if (!have.has('feedback_at')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN feedback_at INTEGER`);
+
+  // 回填：delivery_status 由 notified 推；priority / trigger_type 默认 ok；eval_snapshot 由现有字段合成。
+  db.run(sql`
+    UPDATE watch_triggers
+    SET delivery_status = CASE WHEN notified = 1 THEN 'sent' ELSE 'suppressed-cooldown' END
+    WHERE delivery_status = 'not-requested' AND rule_id = ''
+  `);
+  db.run(sql`
+    UPDATE watch_triggers
+    SET eval_snapshot = json_object(
+      'ruleId', rule_id,
+      'kind', rule_kind,
+      'quoteClose', quote_close,
+      'quoteTs', quote_ts
+    )
+    WHERE eval_snapshot = '{}'
+  `);
+  // ruleId 回填：对每个 pool，找出该 rule_kind 在 pool.rules 数组中是否唯一
+  const triggers = db.all<{ id: string; pool_id: string; rule_kind: string }>(sql`
+    SELECT id, pool_id, rule_kind FROM watch_triggers WHERE rule_id = ''
+  `);
+  for (const t of triggers) {
+    const poolRow = db.all<{ rules: string }>(
+      sql`SELECT rules FROM stock_pools WHERE id = ${t.pool_id}`,
+    )[0];
+    if (poolRow === undefined) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(poolRow.rules);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+    const matches = (parsed as Array<Record<string, unknown>>).filter(
+      (r) => r.kind === t.rule_kind && typeof r.id === 'string',
+    );
+    if (matches.length === 1) {
+      db.run(sql`UPDATE watch_triggers SET rule_id = ${matches[0]!.id as string} WHERE id = ${t.id}`);
+    } // 多条规则同类 → 留空接受冷却重置一轮（PRD §9.2）
+  }
+};
+
+/**
+ * v0.7 策略预警列补齐：watch_runs 增 2 列。
+ */
+const migrateStrategyAlertRunColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(watch_runs)`);
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has('suppressed_by_daily_limit')) db.run(sql`ALTER TABLE watch_runs ADD COLUMN suppressed_by_daily_limit INTEGER NOT NULL DEFAULT 0`);
+  if (!have.has('notify_failed')) db.run(sql`ALTER TABLE watch_runs ADD COLUMN notify_failed INTEGER NOT NULL DEFAULT 0`);
+};
+
+/**
  * 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）。
  *
  * v0.5 时期 fixtures（packages/adapters/src/testing/fixtures.ts 的 MOCK_ACCOUNT 等）
@@ -505,6 +653,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     // v0.6 起
     stockPool: new DrizzleStockPoolRepository(db),
     watchTrigger: new DrizzleWatchTriggerRepository(db),
+    // v0.7 起：边沿状态机
+    watchRuleState: new DrizzleWatchRuleStateRepository(db),
     watchRun: new DrizzleWatchRunRepository(db),
     // 分组化起
     stockGroup: new DrizzleStockGroupRepository(db),

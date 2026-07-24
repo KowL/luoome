@@ -74,6 +74,39 @@
           </div>
           <button id="btn-dashboard-watch-run" class="btn btn-watch-run" type="button">立即跑一轮</button>
         </div>
+        <!-- v0.7 策略预警指标（docs/.../§11 / §12） -->
+        <div class="card mt-4" id="dash-metrics-card" hidden>
+          <div class="card-header">
+            <h2>策略预警指标（今日）</h2>
+            <div class="card-meta" id="dash-metrics-meta"></div>
+          </div>
+          <div class="metrics-grid">
+            <div class="metric-cell">
+              <div class="metric-label">今日触发</div>
+              <div class="metric-value" id="dash-metric-total">--</div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">按优先级</div>
+              <div class="metric-value" id="dash-metric-priority">--</div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">送达状态</div>
+              <div class="metric-value" id="dash-metric-delivery">--</div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">发送失败</div>
+              <div class="metric-value" id="dash-metric-failed">--</div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">日上限抑制</div>
+              <div class="metric-value" id="dash-metric-daily-cap">--</div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">噪声率</div>
+              <div class="metric-value" id="dash-metric-noise">--</div>
+            </div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-header"><h2>建议（高信心优先）</h2><div class="card-meta" id="dash-advice-meta"></div></div>
           <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
@@ -154,6 +187,23 @@
           <div class="card detail-pane">
             <div id="group-detail"><p class="placeholder">从左侧选择一个分组查看成员。</p></div>
           </div>
+        </div>
+        <!-- v0.7 策略预警：模板创建 + 自然语言草案（docs/.../§10 / §6） -->
+        <div class="card mt-4">
+          <div class="card-header">
+            <h2>新建盯盘方案</h2>
+            <div class="card-meta">6 个模板 · 或用自然语言起草</div>
+          </div>
+          <div id="plan-templates" class="template-grid"><p class="placeholder">加载模板中…</p></div>
+          <div class="draft-row mt-2">
+            <textarea
+              id="plan-draft-text"
+              rows="3"
+              placeholder="例：盯全部持仓，价格跌破成本 5% 就提醒我"
+            ></textarea>
+            <button id="btn-plan-draft" class="btn btn-primary" type="button">用自然语言起草</button>
+          </div>
+          <div id="plan-draft-result" class="draft-result mt-2" hidden></div>
         </div>
       </section>
 

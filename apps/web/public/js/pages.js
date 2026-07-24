@@ -16,9 +16,20 @@ import {
   fmtSigned,
   mount,
   statBlock,
+  triggerCard,
 } from './ui.js';
 
 /* ============ dashboard ============ */
+
+const navigateTo = (href) => {
+  window.location.hash = `#${href.replace(/^#/, '')}`;
+};
+
+const formatMetricDistribution = (counts, label) => {
+  const entries = Object.entries(counts ?? {});
+  if (entries.length === 0) return `—`;
+  return entries.map(([k, v]) => `${label?.[k] ?? k}×${v}`).join(' · ');
+};
 
 const renderDashboard = async (setStatus) => {
   const result = await callApi('/api/dashboard');
@@ -34,6 +45,7 @@ const renderDashboard = async (setStatus) => {
     watch,
     triggers,
     staleGroupCount,
+    metrics,
   } = result.data;
 
   // 总市值 / 盈亏
@@ -82,8 +94,56 @@ const renderDashboard = async (setStatus) => {
     $('#dash-trigger-list'),
     triggers.triggers.length === 0
       ? el('p', 'placeholder', '暂无触发。盯盘即使没有信号，也会记录运行心跳。')
-      : el('div', 'trigger-strip', triggers.triggers.slice(0, 5).map(triggerCard)),
+      : el(
+          'div',
+          'trigger-strip',
+          triggers.triggers.slice(0, 5).map((t) => triggerCard(t, navigateTo)),
+        ),
   );
+
+  // v0.7 策略预警指标（§11 / §12）
+  if (metrics && typeof metrics === 'object') {
+    const card = $('#dash-metrics-card');
+    if (card !== null) card.hidden = false;
+    $('#dash-metric-total').textContent = String(metrics.todayTotal ?? 0);
+    const PRIORITY_LABEL = { urgent: '急', important: '重要', normal: '普通' };
+    const DELIVERY_LABEL = {
+      'not-requested': '仅记录',
+      'suppressed-cooldown': '冷却',
+      'suppressed-daily-limit': '日上限',
+      pending: '待发',
+      sent: '已发',
+      failed: '失败',
+      'fallback-log': '降级',
+    };
+    $('#dash-metric-priority').textContent = formatMetricDistribution(
+      metrics.priorityCounts,
+      PRIORITY_LABEL,
+    );
+    $('#dash-metric-delivery').textContent = formatMetricDistribution(
+      metrics.deliveryStatusCounts,
+      DELIVERY_LABEL,
+    );
+    const lr = metrics.latestRun ?? {};
+    $('#dash-metric-failed').textContent = `${lr.notifyFailed ?? 0}`;
+    $('#dash-metric-daily-cap').textContent = `${lr.suppressedByDailyLimit ?? 0}`;
+    const noiseSample = metrics.feedbackTotal ?? 0;
+    $('#dash-metric-noise').textContent =
+      metrics.noiseRate === null
+        ? `样本 ${noiseSample}/30`
+        : `${(metrics.noiseRate * 100).toFixed(1)}%（n=${noiseSample}）`;
+    const metaParts = [];
+    if (metrics.latestRun && metrics.latestRun.notifyFailed > 0) {
+      metaParts.push(`⚠ ${metrics.latestRun.notifyFailed} 条发送失败`);
+    }
+    if (metrics.latestRun && metrics.latestRun.suppressedByDailyLimit > 0) {
+      metaParts.push(`${metrics.latestRun.suppressedByDailyLimit} 条日上限抑制`);
+    }
+    if (metrics.latestRun && metrics.latestRun.error) {
+      metaParts.push(`最近一轮失败：${metrics.latestRun.error}`);
+    }
+    $('#dash-metrics-meta').textContent = metaParts.join(' · ');
+  }
 
   setStatus('仪表盘已刷新');
 };
@@ -262,20 +322,11 @@ const resolverLabel = (resolver) => {
   return `LLM · 最多 ${resolver.maxMembers} 只`;
 };
 
-const triggerCard = (trigger) =>
-  el('article', `trigger-card direction-${trigger.direction}`, [
-    el('div', 'trigger-card-main', [
-      el('strong', 'mono', trigger.stockId),
-      el('span', 'badge', trigger.ruleKind),
-      el('span', `badge badge-${trigger.direction}`, trigger.direction),
-    ]),
-    el('p', null, trigger.reason),
-    el(
-      'small',
-      'muted',
-      `${fmtDateTime(trigger.createdAt)} · ${trigger.notified ? '已通知' : '仅记录'}`,
-    ),
-  ]);
+/**
+ * 预警卡片（v0.7 策略预警，docs/.../§10）—— 委托给 ui.js 的 triggerCard，
+ * 注入 navigate 用于「规则太频繁」跳转。
+ */
+const triggerCardLocal = (trigger, navigate) => triggerCard(trigger, navigate);
 
 const ruleLabel = (rule) => {
   if (rule.kind === 'price-change') return `日内涨跌 ≥ ${(rule.pct * 100).toFixed(1)}%`;
@@ -453,7 +504,11 @@ const showGroupDetail = async (id, setStatus) => {
     ? el('p', 'placeholder', `触发记录加载失败：${triggersResult.error.kind}`)
     : groupTriggers.length === 0
       ? el('p', 'placeholder', '暂无触发记录。')
-      : el('div', 'trigger-strip', groupTriggers.slice(0, 6).map(triggerCard));
+      : el(
+          'div',
+          'trigger-strip',
+          groupTriggers.slice(0, 6).map((t) => triggerCard(t, navigateTo)),
+        );
   mount(detail, [
     heading,
     meta,
@@ -490,6 +545,10 @@ const renderGroups = async (setStatus) => {
     }
   }
   $('#groups-meta').textContent = `${items.length} 个`;
+
+  // v0.7 策略预警：模板与自然语言草案
+  bindPlanCreator(setStatus);
+  void renderPlanCreator(setStatus);
   mount(
     list,
     items.length === 0
@@ -930,13 +989,203 @@ const renderSettingsAccount = async () => {
   );
 };
 
+/* ============ 盯盘方案模板与自然语言草案（v0.7 §10） ============ */
+
+let _planTemplatesCache = null;
+let _planTemplateGroups = null;
+
+const fetchPlanTemplates = async () => {
+  if (_planTemplatesCache !== null) return _planTemplatesCache;
+  const r = await callApi('/api/watch/templates');
+  if (!r.ok) {
+    _planTemplatesCache = [];
+    return _planTemplatesCache;
+  }
+  _planTemplatesCache = r.data.templates ?? [];
+  return _planTemplatesCache;
+};
+
+const fetchGroupOptions = async () => {
+  if (_planTemplateGroups !== null) return _planTemplateGroups;
+  const r = await callApi('/api/groups');
+  if (!r.ok) {
+    _planTemplateGroups = [];
+    return _planTemplateGroups;
+  }
+  _planTemplateGroups = (r.data.groups ?? []).map((row) => row.group) ?? [];
+  return _planTemplateGroups;
+};
+
+const ensureModalContainer = (id, anchorSelector) => {
+  let host = document.getElementById(id);
+  if (host !== null) return host;
+  host = document.createElement('div');
+  host.id = id;
+  host.className = 'modal-root';
+  const anchor = document.querySelector(anchorSelector);
+  (anchor ?? document.body).append(host);
+  return host;
+};
+
+const fillPoolFormFromDraft = (draft, suggestedName) => {
+  const form = document.querySelector('#pool-modal form');
+  if (form === null) return;
+  const setVal = (name, value) => {
+    const field = form.querySelector(`[name="${name}"]`);
+    if (field !== null && value !== undefined) field.value = String(value);
+  };
+  setVal('name', draft.name ?? suggestedName);
+  setVal('description', draft.description ?? '');
+  if (typeof draft.groupId === 'string') setVal('groupId', draft.groupId);
+  setVal('logic', draft.logic ?? 'ANY');
+  setVal('triggerMode', draft.triggerMode ?? 'on-enter');
+  setVal('priority', draft.priority ?? '');
+  setVal('dailyNotificationLimit', draft.dailyNotificationLimit ?? 20);
+  setVal('notifyOnRecovery', draft.notifyOnRecovery === true ? '1' : '0');
+  const rulesField = form.querySelector('[name="rules"]');
+  if (rulesField !== null && Array.isArray(draft.rules)) {
+    rulesField.value = JSON.stringify(draft.rules, null, 2);
+  }
+};
+
+const openPlanFromTemplate = async (template) => {
+  const groups = await fetchGroupOptions();
+  ensureModalContainer('pool-modal', '#route-groups');
+  const firstGroup = groups[0]?.id ?? '';
+  const draft = { ...template.draft, groupId: template.draft.groupId ?? firstGroup };
+  const { openPoolModal } = await import('./mvp-actions.js');
+  openPoolModal({});
+  requestAnimationFrame(() => {
+    fillPoolFormFromDraft(draft, template.name);
+  });
+};
+
+const renderPlanCreator = async (setStatus) => {
+  const container = $('#plan-templates');
+  if (container === null) return;
+  const templates = await fetchPlanTemplates();
+  if (templates.length === 0) {
+    mount(container, el('p', 'placeholder', '模板加载失败，去重新刷新页面。'));
+    return;
+  }
+  const cards = templates.map((tpl) => {
+    const card = el('article', 'plan-template-card', [
+      el('div', 'template-header', [
+        el('span', 'template-icon', tpl.icon ?? '📌'),
+        el('strong', null, tpl.name),
+      ]),
+      el('p', 'muted', tpl.description),
+      el(
+        'pre',
+        'template-rules',
+        JSON.stringify(
+          {
+            logic: tpl.draft.logic,
+            triggerMode: tpl.draft.triggerMode,
+            rules: tpl.draft.rules,
+          },
+          null,
+          2,
+        ),
+      ),
+    ]);
+    const useBtn = el('button', 'btn btn-primary btn-sm', '使用此模板');
+    useBtn.type = 'button';
+    useBtn.addEventListener('click', () => {
+      void openPlanFromTemplate(tpl);
+    });
+    card.append(useBtn);
+    return card;
+  });
+  mount(container, el('div', 'template-grid-inner', cards));
+};
+
+const renderDraftResult = (payload) => {
+  const box = $('#plan-draft-result');
+  if (box === null) return;
+  box.hidden = false;
+  // payload 可能是 {draft, raw, groupOptions, tacticOptions}，也可能是 {error}
+  const inner = el('div', 'draft-result-card');
+  if (payload && typeof payload === 'object' && 'error' in payload) {
+    inner.append(el('p', 'text-neg', `LLM 调用失败：${payload.error.kind}`));
+    const detail = payload.error.cause ?? '';
+    if (typeof detail === 'string' && detail.length > 0) {
+      inner.append(el('pre', 'mono', detail));
+    }
+    mount(box, inner);
+    return;
+  }
+  const draft = payload?.draft;
+  if (!draft || typeof draft !== 'object') {
+    inner.append(el('p', 'text-neg', 'LLM 没有给出有效草案（缺少 draft 字段）。'));
+    if (payload?.raw) inner.append(el('pre', 'mono', String(payload.raw)));
+    mount(box, inner);
+    return;
+  }
+  inner.append(el('h4', null, 'LLM 草案（确认后再保存）'));
+  inner.append(
+    el(
+      'p',
+      'muted',
+      'system prompt 强约束 + JSON schema 校验；提交时还会再校验 groupId / tacticId 存在。',
+    ),
+  );
+  inner.append(el('pre', 'mono', JSON.stringify(draft, null, 2)));
+  const btn = el('button', 'btn btn-primary btn-sm', '把草案填入编辑表单');
+  btn.type = 'button';
+  btn.addEventListener('click', () => {
+    ensureModalContainer('pool-modal', '#route-groups');
+    import('./mvp-actions.js').then(({ openPoolModal }) => {
+      openPoolModal({});
+      requestAnimationFrame(() => fillPoolFormFromDraft(draft, draft.name ?? ''));
+    });
+  });
+  inner.append(btn);
+  mount(box, inner);
+};
+
+const bindPlanCreator = (setStatus) => {
+  const btn = $('#btn-plan-draft');
+  if (btn === null) return;
+  if (btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', async () => {
+    const text = $('#plan-draft-text')?.value?.trim();
+    if (typeof text !== 'string' || text.length === 0) {
+      setStatus('请先在文本框里写一句你想盯的描述', true);
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = '生成中…';
+    try {
+      const r = await callApi('/api/watch/draft', {
+        method: 'POST',
+        body: JSON.stringify({ message: text }),
+      });
+      if (!r.ok) {
+        setStatus(`草案生成失败：${r.error?.kind ?? 'unknown'}`, true);
+        renderDraftResult({ error: r.error });
+        return;
+      }
+      renderDraftResult(r.data);
+      setStatus('草案已生成，请检查后保存');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '用自然语言起草';
+    }
+  });
+};
+
 export {
   analyzeAllHoldings,
+  bindPlanCreator,
   bindSettingsActions,
   renderAdviceList,
   renderDashboard,
+  renderDraftResult,
   renderGroups,
   renderHoldings,
+  renderPlanCreator,
   renderReview,
   renderSettings,
   renderSettingsAccount,
