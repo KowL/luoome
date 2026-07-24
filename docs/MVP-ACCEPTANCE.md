@@ -46,7 +46,7 @@ LUOOME_WEB_TOKEN=e2e-token
 
 实际完成：
 
-1. 首屏切换到默认模拟账户，看到 6 条持仓、总市值和 PnL。
+1. 创建并切换到第一个真实账户，录入 N 条 MOCK_HOLDINGS 模拟持仓后看到总市值和 PnL 汇总。
 2. 设置页保存服务端 token。
 3. 创建 manual 分组 `core-watch`，成员 `002594.SZ / 600519.SH`。
 4. 创建盯盘池 `core-price-watch`，绑定 `core-watch`，阈值 3%。

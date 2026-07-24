@@ -44,6 +44,24 @@ const option = (value, label) => {
   return node;
 };
 
+/** 战法列表缓存：下拉选择用（用户选战法而非填 id）。 */
+let tacticsCache = null;
+const loadTactics = async () => {
+  if (tacticsCache !== null) return tacticsCache;
+  const result = await callApi('/api/tactics');
+  tacticsCache = result.ok ? result.data.tactics : [];
+  return tacticsCache;
+};
+
+/** 战法下拉：value = tacticId，展示 = 战法名称。 */
+const tacticSelect = (id, tactics, selected = '') => {
+  const node = control('select', id);
+  if (tactics.length === 0) node.append(option('', '（暂无战法，请先创建）'));
+  for (const t of tactics) node.append(option(t.id, t.name));
+  if (selected) node.value = selected;
+  return node;
+};
+
 const errorMessage = (error) => {
   if (error === null || typeof error !== 'object') return '提交失败';
   return error.message ?? error.cause ?? error.kind ?? '提交失败';
@@ -84,7 +102,7 @@ const actionRow = (label, onSubmit) => {
   return [errorNode, el('div', 'modal-actions', [cancel, ok])];
 };
 
-const groupResolverFields = (kind, current) => {
+const groupResolverFields = (kind, current, tactics = []) => {
   const box = el('div');
   if (kind === 'manual') {
     const value = current?.kind === 'manual' ? current.stockIds.join(', ') : '';
@@ -96,16 +114,13 @@ const groupResolverFields = (kind, current) => {
       ),
     );
   } else if (kind === 'holdings') {
-    box.append(
-      field(
-        '账户 ID',
-        control('input', 'group-account-id', current?.accountId ?? getAccountId()),
-        '持仓分组是实时活视图，无需刷新。',
-      ),
-    );
+    // 账户跟随当前登录账户，用户无需关心账户 id：用隐藏 input 承载，仅展示说明。
+    const accountId = control('input', 'group-account-id', current?.accountId ?? getAccountId());
+    accountId.type = 'hidden';
+    box.append(accountId, el('p', 'hint', '实时跟随当前账户持仓，无需刷新。'));
   } else if (kind === 'formula') {
     box.append(
-      field('战法 ID', control('input', 'group-tactic-id', current?.tacticId ?? '')),
+      field('战法', tacticSelect('group-tactic-id', tactics, current?.tacticId), '选择一个战法'),
       field('回看天数', control('input', 'group-lookback', String(current?.lookbackDays ?? 7))),
       field('最低分数', control('input', 'group-min-score', String(current?.minScore ?? 60))),
     );
@@ -150,12 +165,10 @@ const readResolver = (kind) => {
   };
 };
 
-export const openGroupModal = (item = null) => {
+export const openGroupModal = async (item = null) => {
   const group = item?.group ?? null;
+  const tactics = await loadTactics();
   const form = el('div');
-  const id = control('input', 'group-id', group?.id ?? '');
-  id.disabled = group !== null;
-  id.placeholder = '例如 semiconductor-leaders';
   const name = control('input', 'group-name', group?.name ?? '');
   const description = control('textarea', 'group-description', group?.description ?? '');
   const kind = control('select', 'group-kind', group?.resolver.kind ?? 'manual');
@@ -171,12 +184,11 @@ export const openGroupModal = (item = null) => {
   const resolverBox = el('div');
   const drawResolver = () => {
     const current = kind.value === group?.resolver.kind ? group.resolver : null;
-    resolverBox.replaceChildren(groupResolverFields(kind.value, current));
+    resolverBox.replaceChildren(groupResolverFields(kind.value, current, tactics));
   };
   kind.addEventListener('change', drawResolver);
   drawResolver();
   form.append(
-    field('分组 ID', id, '小写 kebab-case，创建后不可修改。'),
     field('名称', name),
     field('说明', description),
     field('成员来源', kind),
@@ -184,7 +196,7 @@ export const openGroupModal = (item = null) => {
   );
   const [errorNode, actions] = actionRow(group ? '保存修改' : '创建分组', async (button, error) => {
     const input = {
-      id: id.value.trim(),
+      ...(group ? { id: group.id } : {}),
       name: name.value.trim(),
       description: description.value.trim() || undefined,
       resolver: readResolver(kind.value),
@@ -204,7 +216,7 @@ export const openGroupModal = (item = null) => {
   openModal(group ? `编辑分组 · ${group.name}` : '新建股票分组', form);
 };
 
-const poolRuleFields = (kind, current) => {
+const poolRuleFields = (kind, current, tactics = []) => {
   const box = el('div');
   if (kind === 'price-change') {
     box.append(
@@ -226,7 +238,7 @@ const poolRuleFields = (kind, current) => {
     );
   } else {
     box.append(
-      field('战法 ID', control('input', 'pool-tactic-id', current?.tacticId ?? '')),
+      field('战法', tacticSelect('pool-tactic-id', tactics, current?.tacticId), '选择一个战法'),
       field('最低分数', control('input', 'pool-min-score', String(current?.minScore ?? 60))),
     );
   }
@@ -255,15 +267,13 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
     notify(`无法读取分组：${errorMessage(groupsResult.error)}`, true);
     return;
   }
+  const tactics = await loadTactics();
   const form = el('div');
-  const id = control('input', 'pool-id', pool?.id ?? '');
-  id.disabled = pool !== null;
-  id.placeholder = '例如 momentum-watch';
   const name = control('input', 'pool-name', pool?.name ?? '');
   const description = control('textarea', 'pool-description', pool?.description ?? '');
   const groupId = control('select', 'pool-group-id');
   for (const item of groupsResult.data.groups) {
-    groupId.append(option(item.group.id, `${item.group.name} · ${item.group.id}`));
+    groupId.append(option(item.group.id, item.group.name));
   }
   groupId.value =
     pool?.groupId ?? (preferredGroupId || groupsResult.data.groups[0]?.group.id || '');
@@ -307,8 +317,6 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
         );
         return;
       }
-      const inlineId = control('input', 'inline-group-id', `${id.value.trim()}-group`);
-      inlineId.placeholder = '例如 momentum-watch-group';
       const inlineName = control(
         'input',
         'inline-group-name',
@@ -325,7 +333,7 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
       }
       const inlineResolver = el('div');
       const drawInlineResolver = () => {
-        inlineResolver.replaceChildren(groupResolverFields(inlineKind.value, null));
+        inlineResolver.replaceChildren(groupResolverFields(inlineKind.value, null, tactics));
       };
       inlineKind.addEventListener('change', drawInlineResolver);
       drawInlineResolver();
@@ -335,19 +343,12 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
             el('span', 'eyebrow', '成员定义'),
             el('strong', null, '新建股票分组'),
           ]),
-          field('分组 ID', inlineId, '默认跟随方案 ID，可自行修改。'),
           field('分组名称', inlineName),
           field('成员来源', inlineKind),
           inlineResolver,
         ]),
       );
     };
-    id.addEventListener('input', () => {
-      const inlineId = $('#inline-group-id');
-      if (inlineId !== null && inlineId.dataset.edited !== 'true') {
-        inlineId.value = id.value.trim() ? `${id.value.trim()}-group` : '';
-      }
-    });
     name.addEventListener('input', () => {
       const inlineName = $('#inline-group-name');
       if (inlineName !== null && inlineName.dataset.edited !== 'true') {
@@ -355,7 +356,7 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
       }
     });
     targetBox.addEventListener('input', (event) => {
-      if (event.target.id === 'inline-group-id' || event.target.id === 'inline-group-name') {
+      if (event.target.id === 'inline-group-name') {
         event.target.dataset.edited = 'true';
       }
     });
@@ -378,16 +379,12 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
   const ruleBox = el('div');
   const drawRule = () => {
     const current = kind.value === firstRule?.kind ? firstRule : null;
-    ruleBox.replaceChildren(poolRuleFields(kind.value, current));
+    ruleBox.replaceChildren(poolRuleFields(kind.value, current, tactics));
   };
   kind.addEventListener('change', drawRule);
   drawRule();
   const cooldown = control('input', 'pool-cooldown', String(pool?.cooldownMinutes ?? 30));
-  form.append(
-    field('方案 ID', id, '小写 kebab-case，创建后不可修改。'),
-    field('名称', name),
-    field('说明', description),
-  );
+  form.append(field('名称', name), field('说明', description));
   if (targetModeControl !== null) form.append(targetModeControl);
   form.append(
     targetBox,
@@ -403,23 +400,21 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
       let createdGroupId = null;
       if (pool === null && targetMode === 'new') {
         const inlineKind = $('#inline-group-kind').value;
-        const groupInput = {
-          id: $('#inline-group-id').value.trim(),
+        const groupResult = await callTool('create_stock_group', {
           name: $('#inline-group-name').value.trim(),
           resolver: readResolver(inlineKind),
           refreshPolicy: inlineKind === 'manual' || inlineKind === 'holdings' ? 'manual' : 'daily',
           enabled: true,
-        };
-        const groupResult = await callTool('create_stock_group', groupInput);
+        });
         if (!groupResult.ok) {
           button.disabled = false;
           error.textContent = `分组创建失败：${errorMessage(groupResult.error)}`;
           return;
         }
-        createdGroupId = groupInput.id;
+        createdGroupId = groupResult.data.group.id;
       }
       const input = {
-        id: id.value.trim(),
+        ...(pool ? { id: pool.id } : {}),
         name: name.value.trim(),
         description: description.value.trim() || undefined,
         groupId: createdGroupId ?? groupId.value,

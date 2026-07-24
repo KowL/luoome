@@ -235,6 +235,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    * 调用侧只需要再 reload 受影响的数据视图（持仓 / 战法扫描 / 复盘）。
    */
   app.post('/api/account/select', async (c) => {
+    // v0.8 起：虽然此路由只 in-memory 改 ctxRef.current.user.defaultAccountId
+    // （不写 db），但仍是 mutation，应与 /api/tools/:name/call 的 write/external 守卫一致。
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
     let body: unknown;
     try {
       body = await c.req.json();

@@ -22,7 +22,11 @@ const WatchRuleInputSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const CreateStockPoolInput = z.object({
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/, 'pool.id 必须小写 kebab-case，长度 2-64'),
+  /** slug；省略时服务端自动生成（用户无需关心 id）。 */
+  id: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{1,63}$/, 'pool.id 必须小写 kebab-case，长度 2-64')
+    .optional(),
   name: z.string().min(1).max(64),
   description: z.string().max(500).optional(),
   /** 成员分组引用（stock_groups.id）；分组必须已存在。 */
@@ -54,9 +58,10 @@ export const createStockPoolTool = defineTool({
   input: CreateStockPoolInput,
   output: CreateStockPoolOutput,
   handler: async (input, ctx) => {
-    const existing = await ctx.repos.stockPool.findById(input.id);
+    const id = input.id ?? `pool-${globalThis.crypto.randomUUID().slice(0, 8)}`;
+    const existing = await ctx.repos.stockPool.findById(id);
     if (existing !== null) {
-      return errInvalidInput(`stock pool id 已存在: ${input.id}`);
+      return errInvalidInput(`stock pool id 已存在: ${id}`);
     }
 
     // 分组存在性校验
@@ -75,7 +80,7 @@ export const createStockPoolTool = defineTool({
 
     const now = ctx.clock();
     const pool = StockPoolSchema.parse({
-      id: input.id,
+      id,
       name: input.name,
       ...(input.description !== undefined ? { description: input.description } : {}),
       groupId: input.groupId,

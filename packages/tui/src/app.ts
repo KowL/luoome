@@ -513,17 +513,40 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   // ----- 数据加载 -----
 
   const loadData = async (): Promise<void> => {
+    // v0.8 起：loadData 不再用 .parse() 抛 ZodError。web 端 `/api/account/select` 失败
+    // 会 alert；TUI 没有 alert 通道，loadData 静默 reject 会让 dashboard 永远不刷新。
+    // 这里全部用 safeParse：单条 tool 校验失败 → console.error 暴露 cause + 降级到空数据，
+    // 其它 tool 仍能正常加载。
+
     // 0) 账户列表（每次 refresh 同步；切账户 → 当前账户 id 跟随）
     const accountsRaw = await callTool('list_accounts', {}, ctxRef.current);
-    const accountsData = ListAccountsOutput.parse(accountsRaw);
-    state.accounts = accountsData.accounts;
+    const accountsData = ListAccountsOutput.safeParse(accountsRaw);
+    if (!accountsData.success) {
+      console.error(
+        '[loadData] list_accounts 输出校验失败：',
+        accountsRaw,
+        'issues:',
+        accountsData.error.issues,
+      );
+      state.accounts = [];
+    } else {
+      state.accounts = accountsData.data.accounts;
+    }
     if (state.currentAccountId === '' && state.accounts.length > 0) {
       const first = state.accounts[0];
       if (first !== undefined) state.currentAccountId = first.id;
     }
     // 1) 持仓（含现价与 PnL 汇总）
     const holdingsRaw = await callTool('list_holdings', {}, ctxRef.current);
-    const holdingsData = ListHoldingsOutput.parse(holdingsRaw);
+    const holdingsData = ListHoldingsOutput.safeParse(holdingsRaw);
+    if (!holdingsData.success) {
+      console.error(
+        '[loadData] list_holdings 输出校验失败：',
+        holdingsRaw,
+        'issues:',
+        holdingsData.error.issues,
+      );
+    }
 
     // 2) 已有建议（get_advice，默认不含已过期），按 subjectId 取最新一条
     const adviceRaw = await callTool(
@@ -531,29 +554,39 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       { subjectKind: 'stock', limit: 200 },
       ctxRef.current,
     );
-    const adviceData = GetAdviceOutput.parse(adviceRaw);
+    const adviceData = GetAdviceOutput.safeParse(adviceRaw);
+    if (!adviceData.success) {
+      console.error(
+        '[loadData] get_advice 输出校验失败：',
+        adviceRaw,
+        'issues:',
+        adviceData.error.issues,
+      );
+    }
     const latestBySubject = new Map<string, AdviceView>();
-    for (const advice of adviceData.advices) {
+    for (const advice of adviceData.success ? adviceData.data.advices : []) {
       const existing = latestBySubject.get(advice.subjectId);
       if (existing === undefined || existing.createdAt.getTime() < advice.createdAt.getTime()) {
         latestBySubject.set(advice.subjectId, advice);
       }
     }
 
-    const rows: HoldingRow[] = holdingsData.holdings.map((item) => {
-      const code = item.holding.stockId.split('.')[0] ?? item.holding.stockId;
-      return {
-        stockId: item.holding.stockId,
-        code,
-        name: item.stockName,
-        quantity: item.holding.quantity,
-        avgCost: item.holding.avgCost,
-        currentPrice: item.currentPrice,
-        pnl: item.pnl,
-        pnlPct: item.pnlPct,
-        advice: latestBySubject.get(item.holding.stockId) ?? null,
-      };
-    });
+    const rows: HoldingRow[] = (holdingsData.success ? holdingsData.data.holdings : []).map(
+      (item) => {
+        const code = item.holding.stockId.split('.')[0] ?? item.holding.stockId;
+        return {
+          stockId: item.holding.stockId,
+          code,
+          name: item.stockName,
+          quantity: item.holding.quantity,
+          avgCost: item.holding.avgCost,
+          currentPrice: item.currentPrice,
+          pnl: item.pnl,
+          pnlPct: item.pnlPct,
+          advice: latestBySubject.get(item.holding.stockId) ?? null,
+        };
+      },
+    );
 
     // 3) 没有有效建议的标的：并发 analyze_stock 生成并持久化
     await Promise.all(
@@ -570,11 +603,13 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     );
 
     state.rows = rows;
-    state.totals = {
-      totalValue: holdingsData.totalValue,
-      totalPnL: holdingsData.totalPnL,
-      totalPnLPct: holdingsData.totalPnLPct,
-    };
+    state.totals = holdingsData.success
+      ? {
+          totalValue: holdingsData.data.totalValue,
+          totalPnL: holdingsData.data.totalPnL,
+          totalPnLPct: holdingsData.data.totalPnLPct,
+        }
+      : { totalValue: 0, totalPnL: 0, totalPnLPct: 0 };
     if (state.selectedIndex >= rows.length) {
       state.selectedIndex = Math.max(0, rows.length - 1);
     }

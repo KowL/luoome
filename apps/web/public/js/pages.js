@@ -247,10 +247,18 @@ const setHealth = (selector, state) => {
 const isDynamicGroup = (group) =>
   group.resolver.kind === 'formula' || group.resolver.kind === 'llm';
 
+/** 战法 id → 名称映射（用户看名称不看 id）。renderGroups 时刷新。 */
+let tacticNames = new Map();
+const loadTacticNames = async () => {
+  const r = await callApi('/api/tactics');
+  tacticNames = new Map(r.ok ? r.data.tactics.map((t) => [t.id, t.name]) : []);
+};
+const tacticLabel = (id) => tacticNames.get(id) ?? id;
+
 const resolverLabel = (resolver) => {
   if (resolver.kind === 'manual') return `手动 · ${resolver.stockIds.length} 只`;
   if (resolver.kind === 'holdings') return '持仓活视图';
-  if (resolver.kind === 'formula') return `战法 · ${resolver.tacticId}`;
+  if (resolver.kind === 'formula') return `战法 · ${tacticLabel(resolver.tacticId)}`;
   return `LLM · 最多 ${resolver.maxMembers} 只`;
 };
 
@@ -277,7 +285,7 @@ const ruleLabel = (rule) => {
     if (rule.takeProfitPct) parts.push(`止盈 ${(rule.takeProfitPct * 100).toFixed(1)}%`);
     return parts.join(' · ');
   }
-  return `战法 ${rule.tacticId} ≥ ${rule.minScore}`;
+  return `战法 ${tacticLabel(rule.tacticId)} ≥ ${rule.minScore}`;
 };
 
 const watchPlanCard = (view, refresh) => {
@@ -303,7 +311,7 @@ const watchPlanCard = (view, refresh) => {
   });
   return el('article', `group-plan-card state-${view.state} ${pool.enabled ? '' : 'disabled'}`, [
     el('div', 'pool-card-head', [
-      el('div', null, [el('span', 'eyebrow', pool.id), el('h3', null, pool.name)]),
+      el('div', null, [el('h3', null, pool.name)]),
       el('div', 'plan-badges', [
         el(
           'span',
@@ -346,7 +354,6 @@ const showGroupDetail = async (id, setStatus) => {
   const { group, members, latestRefreshAt, stale } = result.data;
   const heading = el('div', 'detail-heading', [
     el('div', null, [
-      el('span', 'eyebrow', group.id),
       el('h2', null, group.name),
       el('p', 'muted', group.description ?? '未填写说明'),
     ]),
@@ -467,6 +474,7 @@ const renderGroups = async (setStatus) => {
   const [result, plansResult] = await Promise.all([
     callApi('/api/groups'),
     callApi('/api/watch/plans'),
+    loadTacticNames(),
   ]);
   const list = $('#groups-list');
   if (!result.ok) {
@@ -551,7 +559,7 @@ const renderTacticsList = async (setStatus) => {
       'li',
       null,
       el('div', null, [
-        el('strong', null, `${t.name}（${t.id}）`),
+        el('strong', null, t.name),
         el('span', 'badge', ` ${t.tag} `),
         el('span', 'badge', ` ${t.direction} `),
         el('span', 'badge', ` ${t.source} `),
@@ -885,7 +893,11 @@ const bindSettingsActions = () => {
       });
       if (!selected.ok) {
         createBtn.disabled = false;
-        window.alert(`账户已创建，但激活失败：${selected.error?.kind ?? 'unknown'}`);
+        // v0.8 起：把 error.cause 一并 alert（zod issues / SQL 异常都藏在这里），
+        // 否则只看 kind='internal' 永远定不到根因。
+        const e = selected.error ?? {};
+        const detail = e.cause ? `（${e.cause}）` : '';
+        window.alert(`账户已创建，但激活失败：${e.kind ?? 'unknown'}${detail}`);
         return;
       }
       window.__luoome.setAccountId(accountId);
@@ -910,7 +922,6 @@ const renderSettingsAccount = async () => {
   mount(
     box,
     el('div', null, [
-      el('p', null, `账户 ID：${r.data.accountId}`),
       el('p', null, `状态：${r.data.status}`),
       el('p', null, `持仓数：${r.data.holdings.length}`),
       el('p', null, `总市值：${fmtNum(r.data.totalValue)}`),

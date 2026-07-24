@@ -10,7 +10,11 @@ import { defineTool, errInvalidInput } from '../define-tool.js';
 import { validateGroupResolverRefs } from '../internal/stock-group.js';
 
 export const CreateStockGroupInput = z.object({
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/, 'group.id 必须小写 kebab-case，长度 2-64'),
+  /** slug；省略时服务端自动生成（用户无需关心 id）。 */
+  id: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{1,63}$/, 'group.id 必须小写 kebab-case，长度 2-64')
+    .optional(),
   name: z.string().min(1).max(64),
   description: z.string().max(500).optional(),
   /** 成员解析器：manual / holdings / formula / llm（docs/stock-group-design.md §1）。 */
@@ -41,9 +45,10 @@ export const createStockGroupTool = defineTool({
   input: CreateStockGroupInput,
   output: CreateStockGroupOutput,
   handler: async (input, ctx) => {
-    const existing = await ctx.repos.stockGroup.findById(input.id);
+    const id = input.id ?? `group-${globalThis.crypto.randomUUID().slice(0, 8)}`;
+    const existing = await ctx.repos.stockGroup.findById(id);
     if (existing !== null) {
-      return errInvalidInput(`stock group id 已存在: ${input.id}`);
+      return errInvalidInput(`stock group id 已存在: ${id}`);
     }
 
     const refError = await validateGroupResolverRefs(input.resolver, ctx);
@@ -51,7 +56,7 @@ export const createStockGroupTool = defineTool({
 
     const now = ctx.clock();
     const group = StockGroupSchema.parse({
-      id: input.id,
+      id,
       name: input.name,
       ...(input.description !== undefined ? { description: input.description } : {}),
       resolver: input.resolver,

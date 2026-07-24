@@ -291,6 +291,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   // 阶段 B 存量数据迁移：v0.6 pool.source JSON → 分组 + 回填 group_id（幂等，须在两张新表 DDL 之后）
   migrateLegacyPoolSourcesToGroups(db);
+  // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
+  migrateLegacyAccountKinds(db);
 };
 
 /**
@@ -352,6 +354,12 @@ const migrateLegacyStockPools = (db: DrizzleDb): void => {
  * - 幂等：已回填 group_id 的行跳过；分组已存在时跳过创建但仍回填（崩在中途可重入）
  */
 const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
+  // 历史迁移曾把内部审计说明写进 description（用户可见字段），清空之（幂等）。
+  db.run(sql`
+    UPDATE stock_groups SET description = NULL
+    WHERE description = ${'由 v0.6 pool.source 迁移（docs/stock-group-design.md §5）'}
+  `);
+
   const rows = db.all<{ id: string; name: string; source: unknown }>(sql`
     SELECT id, name, source FROM stock_pools
     WHERE (group_id IS NULL OR group_id = '') AND source IS NOT NULL
@@ -422,7 +430,7 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
       if (existing.length === 0) {
         tx.run(sql`
           INSERT INTO stock_groups (id, name, description, resolver, refresh_policy, enabled, created_at, updated_at)
-          VALUES (${groupId}, ${row.name}, ${'由 v0.6 pool.source 迁移（docs/stock-group-design.md §5）'}, ${resolverJson}, ${refreshPolicy}, 1, ${nowMs}, ${nowMs})
+          VALUES (${groupId}, ${row.name}, ${null}, ${resolverJson}, ${refreshPolicy}, 1, ${nowMs}, ${nowMs})
         `);
       }
       tx.run(sql`UPDATE stock_pools SET group_id = ${groupId} WHERE id = ${row.id}`);
@@ -434,6 +442,30 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
           `请手动跑一次刷新落首批快照：luoome tools call refresh_stock_group --input '{"groupId":"${groupId}"}'`,
       );
     }
+  }
+};
+
+/**
+ * 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）。
+ *
+ * v0.5 时期 fixtures（packages/adapters/src/testing/fixtures.ts 的 MOCK_ACCOUNT 等）
+ * 写入 kind='mock'，且 web 启动会自动 seedMockData(MOCK_ACCOUNTS) 把 3 条 mock 行灌入
+ * 持久库。MVP（47857cc）把 AccountKind 收窄到 z.literal('real')，同时移除 web 启动 seed，
+ * 但 ensureSchema 没有数据迁移——升级用户的 accounts 表残留 kind='mock' 行，触发
+ * list_accounts output zod 校验失败 → defineTool 返回 internal（Web alert "激活失败"、
+ * TUI 静默不刷新）。本迁移在每次 createDrizzleRepos 启动时把残留 kind='mock' 升级为
+ * 'real'，幂等。
+ */
+const migrateLegacyAccountKinds = (db: DrizzleDb): void => {
+  // drizzle-orm bun-sqlite 的 run 返回 RunResult（含 changes 数）。
+  const result = db.run(sql`UPDATE accounts SET kind = 'real' WHERE kind = 'mock'`);
+  // 类型守卫：drizzle 在不同 driver 下 result 形状略不同，保守读 changes
+  const changes =
+    typeof result === 'object' && result !== null && 'changes' in result
+      ? Number((result as { changes: unknown }).changes)
+      : 0;
+  if (changes > 0) {
+    console.warn(`[migrate] accounts: 将 ${changes} 行 kind=mock 升级为 real（v0.5 → MVP 兼容）`);
   }
 };
 
