@@ -1,4 +1,4 @@
-// @luoome/mcp —— MCP stdio server（ARCHITECTURE §9 / MVP-TASK §2.6）。
+// @luoome/mcp —— MCP stdio server（ARCHITECTURE §9 / docs/archive/MVP-TASK.md §2.6）。
 //
 // 暴露策略（AGENTS.md「副作用与权限」，硬约束）：
 //   - LUOOME_EXPOSE_TRADE==='true' → 启动立即抛错（trade 永不暴露，硬卡）

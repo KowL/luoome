@@ -5,7 +5,7 @@ import { resolveLlmGroupTool } from '../tools/resolve-llm-group.js';
 import { runTacticTool } from '../tools/run-tactic.js';
 
 /**
- * 分组共享逻辑（docs/stock-group-design.md §4/§6；阶段 B）。
+ * 分组共享逻辑（docs/ddd/stock-group-design.md §4/§6；阶段 B）。
  *
  * 供以下消费方复用：
  * - get_stock_group（stale 判定）

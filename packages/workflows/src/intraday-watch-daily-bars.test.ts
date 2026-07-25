@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { intradayWatchWorkflow } from './intraday-watch.js';
 
 /**
- * v0.6.1 dailyBars 接入测试（docs/intraday-watch-design.md §6 step 5）。
+ * v0.6.1 dailyBars 接入测试（docs/ddd/intraday-watch-design.md §6 step 5）。
  *
  * 行为契约：
  * - dailyBars.latestBefore(stockId, now, 1) 有昨日 close → prevClose = bar.close

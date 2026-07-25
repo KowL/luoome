@@ -22,8 +22,8 @@ import { refreshGroupsWorkflow } from './refresh-groups.js';
 
 /**
  * intraday-watch workflow
- * - v0.6 起（docs/intraday-watch-design.md）
- * - 分组化改造（docs/stock-group-design.md §7）
+ * - v0.6 起（docs/ddd/intraday-watch-design.md）
+ * - 分组化改造（docs/ddd/stock-group-design.md §7）
  * - v0.7 策略预警扩展（docs/ddd/strategy-alert-detailed-design.md §4-§8）
  *
  * 单轮盯盘评估管线（§4，**粗体为新增**）：
@@ -391,7 +391,7 @@ const stepStateMachine = (
   };
 };
 
-/** 解析单个池的成员（docs/stock-group-design.md §7 + §4 stale 跳过）。 */
+/** 解析单个池的成员（docs/ddd/stock-group-design.md §7 + §4 stale 跳过）。 */
 const resolveMembers = async (
   pool: StockPool,
   ctx: WorkflowContext,

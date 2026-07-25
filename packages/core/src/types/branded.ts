@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 
-/** 名义类型工具：让 number/string 在类型层不可混算（MVP-TASK §2.2）。 */
+/** 名义类型工具：让 number/string 在类型层不可混算（docs/archive/MVP-TASK.md §2.2）。 */
 export type Brand<T, B extends string> = T & { readonly __brand: B };
 
 /** 元，永远 4 位小数。 */

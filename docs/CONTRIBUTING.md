@@ -2,7 +2,7 @@
 
 > 欢迎加入 luoome。这份文档面向**想动手改代码的贡献者**：如何拉仓库、本地开发、跑测试、提 PR、加新 tool / 战法 / 适配器。
 >
-> 如果你只是想**调用** luoome 的 tool，请看 [AGENTS.md](../AGENTS.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)；想看路线图看 [ROADMAP.md](./ROADMAP.md)。
+> 如果你只是想通过外部 Agent **调用** luoome，请安装 [luoome Skill](../skills/luoome/SKILL.md)；编码 Agent 的仓库规则见 [AGENTS.md](../AGENTS.md)；架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
 ## 目录
 
@@ -62,24 +62,31 @@ luoome/
 │   │   ├── testing/   仅测试可导入的 deterministic fixtures / fakes
 │   │   └── notification/  飞书 Webhook 等
 │   ├── tools/         Tool 注册表 + Zod → TS/MCP/OpenAI 推导
-│   │                  32 个内置 tool（read 16 / advice 3 / write 9 / external 4，v0.6 末）。
+│   │                  运行时清单以 registry 与 `luoome tools list --json` 为准。
 │   ├── workflows/     内置编排：syncQuotes / dailyAdvice / tacticScan / riskReport / dailyReview
 │   ├── mcp/           MCP stdio server（env 控制暴露面）
 │   ├── cli/           `luoome` 命令入口（手写 argv 解析，无第三方 CLI 框架）
 │   └── tui/           opentui 应用
 ├── apps/
 │   └── web/           Hono + 原生 HTML/JS 仪表盘（6 路由 + 设计系统）
-├── docs/              全部文档
+├── docs/              项目文档（入口见 docs/README.md）
+│   ├── README.md          分类导航与维护约定
 │   ├── ARCHITECTURE.md    架构核心
-│   ├── ROADMAP.md         v0.1 → v0.7 演进
-│   ├── SECURITY.md        副作用分级 + advice 安全 + audit
+│   ├── USER_GUIDE.md      用户手册
+│   ├── ROADMAP.md         版本演进
+│   ├── SECURITY.md        安全与副作用分级
 │   ├── CONTRIBUTING.md    本文件
-│   ├── HANDOFF.md         交接 + 功能 backlog
-│   ├── BACKLOG.md         一致性 / 工程债清单
-│   └── USER_GUIDE.md      用户手册（另有设计文档与历史 plan）
+│   ├── HANDOFF.md         交接与关键决策
+│   ├── BACKLOG.md         一致性、测试盲区与工程债
+│   ├── prd/               产品需求文档
+│   ├── ddd/               技术详细设计
+│   ├── runbooks/          可重复执行的运维手册
+│   └── archive/           已完成计划与验收快照
+├── skills/luoome/     外部 Agent Skill（MCP 编排、示例与安全规则）
 ├── bin/luoome         bash 转发到 bun run packages/cli/src/index.ts
 ├── .github/workflows/ CI（typecheck + test:all + lint）
-├── AGENTS.md          给外部 agent harness 看的接入文档（仓库根，便于 harness 发现）
+├── AGENTS.md          编码 Agent 开发规范
+├── CLAUDE.md          Claude Code 导入 AGENTS.md 的项目入口
 └── README.md          项目门面
 ```
 
@@ -104,15 +111,15 @@ workflows ──► tools ──► core
 | 命令 | 干什么 |
 |---|---|
 | `bun run typecheck` | 全 monorepo 跑 `tsc --noEmit` |
-| `bun test` | vitest（478 个 case，0 fail） |
-| `bun run test:db` | bun test（db 包 + drizzle + in-memory 合约测试，127 个 case） |
-| `bun run test:web` | bun test（apps/web 闸口矩阵，9 个 case；v0.8 起） |
-| `bun run test:all` | 上面三个一起跑（CI 用这个） |
-| `bun run lint` | biome check（lint + format 检查，0 错） |
-| `bun run format` | biome format --write（自动修格式） |
-| `bun packages/tui/src/smoke.ts` | TUI headless smoke（6 项断言） |
+| `bun test` | Node 兼容的 Vitest 测试 |
+| `bun run test:db` | Bun 运行时的 db、drizzle 与 in-memory 合约测试 |
+| `bun run test:web` | Bun 运行时的 Web server 与前端测试 |
+| `bun run test:all` | 上面三个测试入口一起跑（CI 使用） |
+| `bun run lint` | Biome lint + format 检查 |
+| `bun run format` | Biome format --write（自动修格式） |
+| `bun packages/tui/src/smoke.ts` | TUI headless smoke |
 | `bash bin/luoome --help` | CLI 帮助 |
-| `bash bin/luoome tools list --json` | 列 32 个 tool |
+| `bash bin/luoome tools list --json` | 输出当前 registry tool 清单 |
 | `bash bin/luoome mcp serve` | 起 MCP stdio server |
 | `bash bin/luoome tui` | 跑终端仪表盘 |
 | `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |
@@ -239,8 +246,8 @@ TUI headless smoke（`bun packages/tui/src/smoke.ts`）断言：
 - [ ] `bun run test:all` 通过
 - [ ] `bun run lint` 通过
 - [ ] 如果改了 core entity，同步改了 invariants + 测试
-- [ ] 如果加了新 tool，在 AGENTS.md 工具清单登记
-- [ ] 如果改了 API/CLI/Web，更新对应 README / AGENTS.md
+- [ ] 如果新增或改变了外部 Agent 能力，同步 `skills/luoome/` 的能力分类、示例或安全规则
+- [ ] 如果改了 API/CLI/Web，更新对应 README / USER_GUIDE / 开发规范
 ```
 
 ## Commit 规范
@@ -312,7 +319,7 @@ toolRegistry.register(myTool);
 2. 在 `packages/core/src/entity/invariants.ts` 加 entity 不变量（如果是新 entity）
 3. 在 `packages/core/src/repository/index.ts` 加 repo 接口 + 在 drizzle + memory 各实现
 4. 如果改 core：在 `packages/workflows/src/define-workflow.ts` 的 `WorkflowToolMap` 同步加 accessor
-5. 在 `AGENTS.md` 工具清单登记（按 sideEffect 分类）
+5. 如果外部 Agent 的能力选择、调用顺序或安全边界变化，同步 `skills/luoome/` 对应 reference
 6. CLI `tools list` 应能见到（不需要额外改动，registry 自动）
 
 ### 加一个新战法
@@ -412,7 +419,7 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 |---|---|
 | `bug` | 缺陷 |
 | `feature` | 新功能 |
-| `agent` | 涉及 agent harness 接入 / AGENTS.md 同步 |
+| `agent` | 涉及编码 Agent 规范、外部 Skill 或 MCP 接入同步 |
 | `security` | 安全相关（详见 [SECURITY.md](./SECURITY.md)） |
 | `tool` | 加新 tool |
 | `tactic` | 加新战法 / 战法引擎改动 |

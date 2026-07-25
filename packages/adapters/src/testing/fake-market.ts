@@ -20,7 +20,7 @@ const DAY_MS = 86_400_000;
 const DAILY_BARS_COUNT = 60;
 
 /**
- * FakeMarketAdapter（MVP-TASK §2.5 / ARCHITECTURE §4.7）。
+ * FakeMarketAdapter（docs/archive/MVP-TASK.md §2.5 / ARCHITECTURE §4.7）。
  * 不接任何真实行情源，输出完全 deterministic：
  * - 已知 fixture 股票：以 TEST_STOCK_BASE_PRICES 为基准生成固定 OHLC + 量；
  * - 未知代码：hash 代码生成稳定伪随机行情，多次调用结果一致；

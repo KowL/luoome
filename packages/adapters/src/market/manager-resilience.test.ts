@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { MarketDataManager } from './manager.js';
 
 /**
- * 真实行情链路容错深度测试（v0.6.2 起，docs/intraday-watch-design.md §'后续工作'）：
+ * 真实行情链路容错深度测试（v0.6.2 起，docs/ddd/intraday-watch-design.md §'后续工作'）：
  * - batchQuote 部分失败（primary 局部抛错 → fallback 仅拉失败的那部分）
  * - fetchDailyBars primary/fallback/finalFallback 全路径
  * - 自定义 finalFallbackSuppressMs 行为

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "纯领域类型 + branded types + 不变量 + advice 模型 + repository 接口（见 plan.md 跨包契约）",
+  "description": "纯领域类型 + branded types + 不变量 + advice 模型 + repository 接口（见 docs/archive/plan.md 跨包契约）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

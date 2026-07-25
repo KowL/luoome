@@ -1,4 +1,4 @@
-// @luoome/mcp —— bin 入口（plan.md 跨包契约：startMcpServer，stdio）。
+// @luoome/mcp —— bin 入口（docs/archive/plan.md 跨包契约：startMcpServer，stdio）。
 //
 // 直接运行（bun packages/mcp/src/index.ts，或 CLI `luoome mcp serve` spawn 本文件）时
 // 启动 stdio server；被 import（如 CLI 懒加载 startMcpServer）时不自动启动。

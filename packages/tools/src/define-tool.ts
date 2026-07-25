@@ -37,7 +37,7 @@ export interface ToolDefinition<I, O> {
 }
 
 /**
- * Tool 对象（plan.md 跨包契约）。
+ * Tool 对象（docs/archive/plan.md 跨包契约）。
  * execute 永不抛异常，永远返回 ToolResult：
  * - input parse 失败          → { kind: 'invalid_input' }
  * - handler 返回 ToolResult   → 原样透传（not_found 等业务错误）

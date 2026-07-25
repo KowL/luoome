@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 /**
- * refresh-groups workflow（分组化起，docs/stock-group-design.md §4；盘外执行）。
+ * refresh-groups workflow（分组化起，docs/ddd/stock-group-design.md §4；盘外执行）。
  *
  * 单轮刷新所有 enabled 动态分组（formula / llm），也可按 groupIds 指定子集：
  *   1. 加载 enabled 且 resolver ∈ {formula, llm} 的分组（有 groupIds 取交集）

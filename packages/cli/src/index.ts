@@ -313,7 +313,7 @@ const cmdAdviceList = async (
     );
     console.log(`\n共 ${data.total} 条。`);
     // AGENTS.md 硬约束：向用户复述 advice 必须带 disclaimers。Advice 不变量保证
-    // 每条建议均含 STANDARD_DISCLAIMERS 三条，列表尾部统一展示（MVP-TASK §6 验收口径）。
+    // 每条建议均含 STANDARD_DISCLAIMERS 三条，列表尾部统一展示（docs/archive/MVP-TASK.md §6 验收口径）。
     console.log('\n免责声明（每条建议均含）:');
     for (const line of STANDARD_DISCLAIMERS) console.log(`  - ${line}`);
     return 0;
@@ -466,7 +466,7 @@ const runLazyEntry = async (
   return 0;
 };
 
-/** mcp serve：契约 startMcpServer() 来自 plan.md（stdio，env 控制暴露面）。 */
+/** mcp serve：契约 startMcpServer() 来自 docs/archive/plan.md（stdio，env 控制暴露面）。 */
 const cmdWatch = async (
   _rest: readonly string[],
   flags: ReadonlyMap<string, string | boolean>,
@@ -619,14 +619,14 @@ const cmdWorkflowRun = async (
 const cmdMcpServe = (): Promise<number> => runLazyEntry('@luoome/mcp', 'startMcpServer', []);
 
 /**
- * tui：W4c 实际导出 startTuiApp()（opentui app，布局 MVP-TASK §2.7，见 packages/tui/src/index.ts）。
+ * tui：W4c 实际导出 startTuiApp()（opentui app，布局 docs/archive/MVP-TASK.md §2.7，见 packages/tui/src/index.ts）。
  * W5 联调已核对导出名一致。
  */
 const cmdTui = (): Promise<number> => runLazyEntry('@luoome/tui', 'startTuiApp', []);
 
 /**
  * web serve：W4d 实际导出 startWeb({ port })（Hono，默认 5173，见 apps/web/src/server.ts）。
- * W5 联调已对齐：plan.md 未写死导出名，此处以 web 包实现为准。
+ * W5 联调已对齐：docs/archive/plan.md 未写死导出名，此处以 web 包实现为准。
  */
 const cmdWebServe = (flags: ReadonlyMap<string, string | boolean>): Promise<number> => {
   const portRaw = flagString(flags, 'port') ?? '5173';

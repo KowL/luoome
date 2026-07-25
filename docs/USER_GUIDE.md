@@ -1,6 +1,6 @@
 # luoome 用户手册
 
-> 给**人**看的使用文档：本地安装、运行、自定义、复盘。如果你打算把 luoome 接到 Claude Desktop / OpenClaw 这类 agent，请看 [AGENTS.md](../AGENTS.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+> 给**人**看的使用文档：本地安装、运行、自定义、复盘。如果你打算让外部 Agent 使用 luoome，请安装 [luoome Skill](../skills/luoome/SKILL.md)；想了解架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
@@ -43,8 +43,8 @@ git clone git@github.com:KowL/luoome.git
 cd luoome
 bun install              # 装工作区依赖
 bun run typecheck        # 全包静态检查
-bun test                 # vitest 单元 + 集成（~460 个）
-bun run test:all         # 端到端合约（~107 个，含 sqlite memory + drizzle）
+bun test                 # Node 兼容的 Vitest 测试
+bun run test:all         # Vitest + Bun db/web 测试
 ```
 
 ### 1.3 通过 Homebrew（macOS / Linux）
@@ -63,7 +63,7 @@ luoome tools list | head
 
 ### 1.4 不安装直接用
 
-如果只是接 MCP / agent，跳过本地 install；按 [AGENTS.md §快速接入](../AGENTS.md#快速接入) 把 `luoome mcp serve` 配进 Claude Desktop 即可。
+如果只是接 MCP / Agent，跳过本地 install；先按 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md) 连接 `luoome mcp serve`，再通过 Agent harness 的 Skill 机制安装整个 `skills/luoome/` 目录。
 
 ---
 
@@ -110,7 +110,7 @@ luoome web serve
 luoome mcp serve    # stdio JSON-RPC
 ```
 
-按 [AGENTS.md](../AGENTS.md) 接进 Claude Desktop / OpenClaw / Hermes 后，agent 即可调用 32 个 tool 中默认暴露的 read + advice 类。
+安装 [luoome Skill](../skills/luoome/SKILL.md) 并连接 MCP 后，Agent 即可发现当前版本默认暴露的 read + advice tools；完整库存以 MCP discovery 为准。
 
 ---
 
@@ -200,15 +200,15 @@ TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 
 
 ## 6. MCP 接入
 
-`luoome mcp serve` 启动 stdio JSON-RPC server。配置参考 [AGENTS.md §快速接入](../AGENTS.md#快速接入)。默认暴露：
+`luoome mcp serve` 启动 stdio JSON-RPC server。配置参考 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md)。默认暴露：
 
-- **read** 14 tool（list / search / get / compute）
-- **advice** 3 tool（analyze_*、market_outlook）
+- **read** tools（list / search / get / compute）
+- **advice** tools（个股、持仓和市场观点分析）
 
 opt-in 追加：
 
-- `LUOOME_EXPOSE_WRITE=true` → 追加 `create_account`、持仓/交易写入和 outcome 回填等 write tool
-- `LUOOME_EXPOSE_EXTERNAL=true` → + 4 tool（fetch_quote / sync_quotes / send_notification / batch_quote 走真源时）
+- `LUOOME_EXPOSE_WRITE=true` → 追加账户、持仓、交易、研究、事件和反馈等 write tools
+- `LUOOME_EXPOSE_EXTERNAL=true` → 追加行情、同步、刷新和通知等 external tools
 
 `LUOOME_EXPOSE_TRADE=true` **永远硬卡**：MCP server 启动即抛错退出；advice × trade 隔离硬约束绝不通过 MCP 暴露。
 
@@ -364,8 +364,10 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 
 ## 12. 更多阅读
 
+- [文档导航](./README.md) — 产品需求、技术设计、运维手册与历史归档
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — 模块 / 数据流 / advisor 模型
-- [AGENTS.md](../AGENTS.md) — agent 接入（MCP / tools 清单）
+- [luoome Skill](../skills/luoome/SKILL.md) — 外部 Agent 接入、工具编排与安全规则
+- [AGENTS.md](../AGENTS.md) — 编码 Agent 仓库开发规范
 - [ROADMAP.md](./ROADMAP.md) — 版本演进
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — 贡献者指南
 - [SECURITY.md](./SECURITY.md) — 副作用分级 + advice 安全

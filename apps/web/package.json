@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "最小 Web 端：Hono HTTP API + 同源静态仪表盘，端口 5173（见 plan.md 跨包契约）",
+  "description": "最小 Web 端：Hono HTTP API + 同源静态仪表盘，端口 5173（见 docs/archive/plan.md 跨包契约）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

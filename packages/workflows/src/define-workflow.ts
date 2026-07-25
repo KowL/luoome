@@ -90,7 +90,7 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
 }
 
 /**
- * ctx.tools 的静态类型映射（v0.1 共 8 个 tool，plan.md 跨包契约）。
+ * ctx.tools 的静态类型映射（v0.1 共 8 个 tool，docs/archive/plan.md 跨包契约）。
  * 运行时访问器由 toolRegistry 动态生成（见 buildWorkflowTools）；
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
@@ -164,7 +164,7 @@ export interface WorkflowToolMap {
     typeof SaveWatchTriggerInput,
     typeof SaveWatchTriggerOutput
   >;
-  // 分组化起（docs/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
+  // 分组化起（docs/ddd/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
   readonly list_stock_groups: ToolAccessor<
     typeof ListStockGroupsInput,
     typeof ListStockGroupsOutput
@@ -244,7 +244,7 @@ export interface WorkflowDefinition<I> {
 }
 
 /**
- * Workflow 对象（plan.md 跨包契约）。run 永不抛异常，永远返回 ToolResult：
+ * Workflow 对象（docs/archive/plan.md 跨包契约）。run 永不抛异常，永远返回 ToolResult：
  * - input parse 失败            → { kind: 'invalid_input' }
  * - 步骤返回 ToolResult error   → 原样透传并短路
  * - 步骤抛 InvariantError       → { kind: 'invariant_violation' }

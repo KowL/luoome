@@ -1,6 +1,6 @@
 # Adshare 集成手册
 
-luoome web 与 adshare 远端数据服务的对接约定。本文聚焦**部署、启动顺序、故障排查**；API / 字段定义见 [`packages/adshare-sdk/README.md`](../packages/adshare-sdk/README.md)。
+luoome web 与 adshare 远端数据服务的对接约定。本文聚焦**部署、启动顺序、故障排查**；API / 字段定义见 [`packages/adshare-sdk/README.md`](../../packages/adshare-sdk/README.md)。
 
 ## 1. 环境变量模板
 
@@ -245,6 +245,6 @@ jq type /tmp/body.json
 
 ## 5. 关联阅读
 
-- [`packages/adshare-sdk/README.md`](../packages/adshare-sdk/README.md) —— SDK API / 默认值 / 部署策略。
-- [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) —— luoome 与外部数据源的设计分层。
-- [`docs/HANDOFF.md`](./HANDOFF.md) —— 整体功能开关与版本状态。
+- [`packages/adshare-sdk/README.md`](../../packages/adshare-sdk/README.md) —— SDK API / 默认值 / 部署策略。
+- [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) —— luoome 与外部数据源的设计分层。
+- [`docs/HANDOFF.md`](../HANDOFF.md) —— 整体功能开关与版本状态。

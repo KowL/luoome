@@ -6,10 +6,7 @@
 
 ## P1 — 文档与实现不符（会误导使用者）
 
-1. **AGENTS.md 工具清单超前于实现**
-   - 清单列了 `compute_pnl` / `compute_risk_metrics` / `list_notes` / `list_alerts` / `set_alert` / `delete_alert` / `get_quote` / `generate_report` / `update_config` 等**不存在**的 tool；`batch_quote` 归为查询类（read）实为 `external`。
-   - 实际 32 个 tool（read 16 / advice 3 / write 9 / external 4），以 `luoome tools list --json` 为准——清单自己也这么声明，但静态表格依然误导。
-   - 建议：按运行时输出重写工具清单，或删掉静态表格只留 `luoome tools list` 指引。
+1. ~~**AGENTS.md 静态工具清单超前于实现**~~ ✅ 已修（根 AGENTS 改为编码 Agent 开发规范；外部 luoome Skill 通过 MCP discovery 与 `luoome tools list --json` 获取运行时工具库存，不再维护完整静态表）
 
 2. ~~**apps/web 零测试 + 依赖声明缺失**~~ ✅ 已修（v0.8：`package.json` 补声明 `@luoome/adapters` / `@luoome/db`；新增 `server.test.ts` 闸口矩阵 9 例，`bun run test:web` 执行并纳入 `test:all`）
 
@@ -33,8 +30,7 @@
 11. TUI `app.ts` 1007 行单文件；RESIZE handler 里 `overlay.height` 连续赋值两次（第一行死代码）；`CalibrationView` 类型定义在文件末尾却在中间使用。
 12. core：`V0_2_SUPPORTED_MARKETS` 命名陈旧（v0.5 已支持 US）；`assertExpressionSafety` 抛普通 Error 而非 `InvariantError` / `DslEvalError`。
 13. adapters：`package.json` 声明 `drizzle-orm` 依赖但 src 未使用；`eastmoney.ts` / `openai-compatible.ts` 尾部重复 re-export 与桶导出冗余；`workflows/package.json` description 仍写「v0.1 仅骨架」。
-14. 代码注释 / package.json description 里约 15 处「plan.md 跨包契约」仍按根目录命名引用（文件已迁 `docs/plan.md`）；`docs/MVP-TASK.md` 内的 `~/project/luoome/*.md` 路径为历史快照，未改。
-15. `run-tactic.ts` 有 `const c: ToolContext = ctx` 的 narrow-cast 痕迹；`intraday-watch.ts` 两处用条件类型体操推断 ctx 类型，应直接 import `WorkflowContext`。
+14. `run-tactic.ts` 有 `const c: ToolContext = ctx` 的 narrow-cast 痕迹；`intraday-watch.ts` 两处用条件类型体操推断 ctx 类型，应直接 import `WorkflowContext`。
 
 ---
 

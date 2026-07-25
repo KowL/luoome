@@ -309,7 +309,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   migrateStrategyAlertRunColumns(db);
   db.run(sql`CREATE INDEX IF NOT EXISTS watch_runs_started_at_idx ON watch_runs (started_at)`);
-  // 分组化起（docs/stock-group-design.md §3）：股票分组 + 成员快照
+  // 分组化起（docs/ddd/stock-group-design.md §3）：股票分组 + 成员快照
   db.run(sql`
     CREATE TABLE IF NOT EXISTS stock_groups (
       id TEXT PRIMARY KEY,
@@ -437,7 +437,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
  * - 新库：表已由上方 DDL 按新结构建好，直接跳过
  * - 旧库：放宽 source NOT NULL（SQLite 不支持改列约束 → 表重建）+ 补 group_id 列；
  *   存量行 source 数据原样保留、group_id 置 NULL，数据迁移（拆分组）由
- *   migrateLegacyPoolSourcesToGroups 完成（docs/stock-group-design.md §5）
+ *   migrateLegacyPoolSourcesToGroups 完成（docs/ddd/stock-group-design.md §5）
  */
 const migrateLegacyStockPools = (db: DrizzleDb): void => {
   const cols = db.all<{ name: string; notnull: number }>(sql`PRAGMA table_info(stock_pools)`);
@@ -478,7 +478,7 @@ const migrateLegacyStockPools = (db: DrizzleDb): void => {
 };
 
 /**
- * 阶段 B 存量数据迁移（docs/stock-group-design.md §5）：把 v0.6 pool.source JSON 拆成分组。
+ * 阶段 B 存量数据迁移（docs/ddd/stock-group-design.md §5）：把 v0.6 pool.source JSON 拆成分组。
  *
  * - 找 group_id 为空（NULL 或 ''）且 source 列有 JSON 的旧 pool 行
  * - 按 source.kind 建分组（id=`<poolId>-group`）：
@@ -492,7 +492,7 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
   // 历史迁移曾把内部审计说明写进 description（用户可见字段），清空之（幂等）。
   db.run(sql`
     UPDATE stock_groups SET description = NULL
-    WHERE description = ${'由 v0.6 pool.source 迁移（docs/stock-group-design.md §5）'}
+    WHERE description = ${'由 v0.6 pool.source 迁移（docs/ddd/stock-group-design.md §5）'}
   `);
 
   const rows = db.all<{ id: string; name: string; source: unknown }>(sql`

@@ -23,7 +23,7 @@ export const RefreshStockGroupOutput = z.object({
 });
 
 /**
- * 手动触发单组刷新（分组化起，external；docs/stock-group-design.md §6）。
+ * 手动触发单组刷新（分组化起，external；docs/ddd/stock-group-design.md §6）。
  *
  * 与 refresh-groups workflow 同款逻辑（共享 internal/stock-group.ts 的 refreshGroupMembers）：
  * formula 走 run_tactic、llm 走 resolve_llm_group；失败 / 空结果保留旧快照，绝不写空批。

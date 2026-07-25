@@ -355,7 +355,7 @@ describe('MVP dashboard / watch API', () => {
   });
 });
 
-/* ============ /api/chat（docs/web-chat-design.md §6） ============ */
+/* ============ /api/chat（docs/ddd/web-chat-design.md §6） ============ */
 
 interface ChatResponseBody {
   ok: boolean;

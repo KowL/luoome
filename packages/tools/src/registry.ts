@@ -160,7 +160,7 @@ export const createRegistry = (tools: readonly Tool[]): Registry => {
   };
 };
 
-/** v0.1 全量工具表：6 read + 2 advice（plan.md 跨包契约）。 */
+/** v0.1 全量工具表：6 read + 2 advice（docs/archive/plan.md 跨包契约）。 */
 export const toolRegistry: Registry = createRegistry([
   listAccountsTool,
   createAccountTool,
@@ -203,7 +203,7 @@ export const toolRegistry: Registry = createRegistry([
   updateStockPoolTool,
   deleteStockPoolTool,
   saveWatchTriggerTool,
-  // 分组化起（docs/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
+  // 分组化起（docs/ddd/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
   listStockGroupsTool,
   getStockGroupTool,
   createStockGroupTool,

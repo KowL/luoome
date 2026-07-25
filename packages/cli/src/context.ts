@@ -1,6 +1,6 @@
 // @luoome/cli —— 共享 ToolContext 构造（tools call / advice 子命令使用）。
 //
-// 组装路径（plan.md 依赖表：surface → tools → core，及 db/adapters）：
+// 组装路径（docs/archive/plan.md 依赖表：surface → tools → core，及 db/adapters）：
 //   LUOOME_HOME（默认 ~/.luoome）/luoome.db
 //   → createDrizzleRepos（bun:sqlite driver，仅 Bun 运行时可加载本模块）
 //   → 空库保持为空

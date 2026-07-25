@@ -21,7 +21,7 @@
 2. ~/project/luoome/AGENTS.md              — MCP 接入规范
 3. ~/project/luoome/SECURITY.md            — 安全约束（副作用 5 级 / advice ≠ trade）
 4. ~/project/luoome/ROADMAP.md            — v0.1 验收标准
-5. ~/project/luoome/docs/MVP-TASK.md       — 本文件（详细规格）
+5. ~/project/luoome/docs/archive/MVP-TASK.md       — 本文件（详细规格）
 
 ## 项目位置
 
@@ -354,7 +354,7 @@ v0.1 适合拆为 5-6 个 workstream 并行推进。**Phase 1 必须先完成**�
 
 - ~/project/luoome/ARCHITECTURE.md §{相关章节}
 - ~/project/luoome/AGENTS.md §{相关章节}
-- ~/project/luoome/docs/MVP-TASK.md §{相关章节}
+- ~/project/luoome/docs/archive/MVP-TASK.md §{相关章节}
 
 ## 验收
 

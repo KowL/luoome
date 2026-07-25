@@ -99,19 +99,14 @@ homebrew/
 
 | 文档 | 用途 |
 |---|---|
-| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | **用户手册**：安装 / CLI / TUI / Web / MCP / 多账户 / 复盘 / 校准 / FAQ |
-| [AGENTS.md](./AGENTS.md) | agent 接入：Claude Desktop / OpenClaw / Hermes + tool 清单 |
+| [docs/README.md](./docs/README.md) | **完整文档导航**：产品需求、技术设计、运维手册与历史归档 |
+| [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 用户手册：安装 / CLI / TUI / Web / MCP / 多账户 / 复盘 / 校准 / FAQ |
+| [skills/luoome/SKILL.md](./skills/luoome/SKILL.md) | 外部 Agent 接入：Skill 编排 + luoome MCP typed tools |
+| [AGENTS.md](./AGENTS.md) | 编码 Agent 开发规范：架构边界、实现约定、测试与安全规则 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |
-| [docs/prd/strategy-alert-product.md](./docs/prd/strategy-alert-product.md) | 策略预警产品文档：ruo 复盘、产品边界、用户流程、已确认决策与实施分期 |
-| [docs/prd/ruo-feature-migration-product-design.md](./docs/prd/ruo-feature-migration-product-design.md) | ruo 能力迁移产品文档：研究档案、公司事件、数据新鲜度、真实复盘 |
-| [docs/ddd/strategy-alert-detailed-design.md](./docs/ddd/strategy-alert-detailed-design.md) | 策略预警详细设计：schema 演进、状态机、送达矩阵、迁移与任务拆分 |
-| [docs/ddd/ruo-feature-migration-detailed-design.md](./docs/ddd/ruo-feature-migration-detailed-design.md) | ruo 迁移详细设计：ResearchNote / StockEvent / WorkflowRun、事件同步与 event-date |
-| [docs/ROADMAP.md](./docs/ROADMAP.md) | v0.1 → v0.7 演进路线 |
-| [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | 贡献者指南：开发环境 / 测试 / 加新 tool / 战法 |
-| [docs/SECURITY.md](./docs/SECURITY.md) | 副作用分级、advice 安全、密钥、audit |
-| [docs/HANDOFF.md](./docs/HANDOFF.md) | 跨上下文会话交接 + 功能 backlog |
-| [docs/BACKLOG.md](./docs/BACKLOG.md) | 一致性 / 工程债清单（全仓走查产出） |
-| [docs/adshare-integration.md](./docs/adshare-integration.md) | Adshare 数据服务集成手册：环境变量 / 启动顺序 / 故障排查 |
+| [docs/ROADMAP.md](./docs/ROADMAP.md) | 版本演进与交付状态 |
+| [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | 贡献者指南：开发环境、测试与扩展方式 |
+| [docs/SECURITY.md](./docs/SECURITY.md) | 副作用分级、鉴权、密钥与审计要求 |
 
 ## 快速启动
 

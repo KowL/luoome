@@ -23,7 +23,7 @@ export const UpdateStockGroupOutput = z.object({
 });
 
 /**
- * 更新股票分组（分组化起，write；docs/stock-group-design.md §6）。
+ * 更新股票分组（分组化起，write；docs/ddd/stock-group-design.md §6）。
  *
  * 语义：未提供的字段保持原值；description=null 表示清空。
  * 改 resolver 时做同样的跨实体引用校验（formula/holdings/manual）。

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
 
 /**
- * 股票分组 + 成员快照（docs/stock-group-design.md §1）。
+ * 股票分组 + 成员快照（docs/ddd/stock-group-design.md §1）。
  *
  * 设计要点：
  * - 分组（StockGroup）只回答「成员是谁」，与盯盘池（StockPool）解耦；pool 通过 groupId 引用 group
@@ -111,7 +111,7 @@ export type GroupMemberSnapshot = z.infer<typeof GroupMemberSnapshotSchema>;
 // ---------- 不变量 ----------
 
 /**
- * 分组不变量（docs/stock-group-design.md §1）：
+ * 分组不变量（docs/ddd/stock-group-design.md §1）：
  * - id slug 合法（schema 已 regex，runtime 兜底长度）
  * - llm.prompt 1-2000 / maxMembers ∈ [1, 100]（schema 已约束）
  * - updatedAt ≥ createdAt

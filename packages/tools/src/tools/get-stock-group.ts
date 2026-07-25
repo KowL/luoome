@@ -29,7 +29,7 @@ export const GetStockGroupOutput = z.object({
 });
 
 /**
- * 分组详情（分组化起，read；docs/stock-group-design.md §6）：
+ * 分组详情（分组化起，read；docs/ddd/stock-group-design.md §6）：
  * 分组 + 当前成员 + 最近 refresh 时间 + stale 标记。
  * llm 分组刷新失败标 stale 后，watch 继续用旧快照盯盘——用户从本工具感知 stale（spec §8）。
  */

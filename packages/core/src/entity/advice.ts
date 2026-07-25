@@ -31,7 +31,7 @@ export const adviceExpiryDays: Record<AdviceHorizon, number> = {
   long: 60, // +60 个交易日
 };
 
-// ---------- 免责声明（MVP-TASK §2.3，恰好 3 条，硬约束） ----------
+// ---------- 免责声明（docs/archive/MVP-TASK.md §2.3，恰好 3 条，硬约束） ----------
 
 export const STANDARD_DISCLAIMERS = [
   '本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。',

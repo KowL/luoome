@@ -80,7 +80,7 @@ const ensureRuleIds = (
   }));
 
 /**
- * 创建股票池（v0.6 起，write；分组化改造 docs/stock-group-design.md §5/§6；
+ * 创建股票池（v0.6 起，write；分组化改造 docs/ddd/stock-group-design.md §5/§6；
  * v0.7 策略预警扩展）。
  *
  * 校验链：

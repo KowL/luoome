@@ -1,4 +1,4 @@
-// apps/web/src/chat.ts —— POST /api/chat：web 对话助手（docs/web-chat-design.md）。
+// apps/web/src/chat.ts —— POST /api/chat：web 对话助手（docs/ddd/web-chat-design.md）。
 //
 // 两轮 generate（顺现有 LLM 抽象，不引入多轮 tool-calling）：
 //   Pass 1（规划）：system = 助手提示词；schema = ChatPlanSchema { reply, actions, drafts }

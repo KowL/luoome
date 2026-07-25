@@ -17,7 +17,7 @@ import {
 import { DEFAULT_TEST_NOW, hashString, pickDeterministic } from './deterministic.js';
 
 /**
- * 测试数据 fixtures（MVP-TASK §2.5）。
+ * 测试数据 fixtures（docs/archive/MVP-TASK.md §2.5）。
  * 全部为编译期常量：同一进程 / 不同进程多次加载结果一致。
  * id 约定：Stock.id = `${code}.${exchange}`（如 '002594.SZ'）。
  */
@@ -211,7 +211,7 @@ const ADVICE_DECISIONS: readonly AdviceDecision[] = ['buy', 'sell', 'hold', 'wat
 const ADVICE_HORIZONS: readonly AdviceHorizon[] = ['short', 'medium', 'long'];
 
 /**
- * 生成指定标的的完整 Advice fixture（MVP-TASK §2.5 fake-llm）。
+ * 生成指定标的的完整 Advice fixture（docs/archive/MVP-TASK.md §2.5 fake-llm）。
  * deterministic：同一 stockId + 同一 clock 永远得到同一结果；
  * 必含 3 条 STANDARD_DISCLAIMERS、validUntil > validFrom，可过 assertAdviceInvariants。
  */

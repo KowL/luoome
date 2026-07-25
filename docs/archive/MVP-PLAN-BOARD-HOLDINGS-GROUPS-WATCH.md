@@ -347,7 +347,7 @@ MVP 发布前必须完成：
   4. 查看 trigger → 重启 → 历史仍在。
 - 加 API 权限矩阵测试和非 loopback 启动测试。
 - 更新 USER_GUIDE、README、ROADMAP、AGENTS。
-- 形成 `docs/MVP-ACCEPTANCE.md`，记录真实验收日志。
+- 形成 `docs/archive/MVP-ACCEPTANCE.md`，记录真实验收日志。
 
 验收：
 

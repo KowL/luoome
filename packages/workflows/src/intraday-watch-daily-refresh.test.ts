@@ -36,7 +36,7 @@ const seedGroup = (ctx: ToolContext, id: string, overrides: Partial<StockGroup> 
     ...overrides,
   });
 
-describe('intraday-watch daily 刷新接线（docs/stock-group-design.md §7）', () => {
+describe('intraday-watch daily 刷新接线（docs/ddd/stock-group-design.md §7）', () => {
   beforeEach(() => {
     resetDailyGroupRefreshFlagForTest();
   });

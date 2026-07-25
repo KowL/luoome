@@ -264,8 +264,8 @@ export const notifications = sqliteTable(
 );
 
 /**
- * 股票池（v0.6 起，docs/intraday-watch-design.md §3；
- * 分组化改造 docs/stock-group-design.md §3/§5；
+ * 股票池（v0.6 起，docs/ddd/intraday-watch-design.md §3；
+ * 分组化改造 docs/ddd/stock-group-design.md §3/§5；
  * 策略预警扩展 docs/ddd/strategy-alert-detailed-design.md §3）。
  *
  * rules 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
@@ -301,7 +301,7 @@ export const stockPools = sqliteTable(
 );
 
 /**
- * 股票分组（分组化起，docs/stock-group-design.md §3）。
+ * 股票分组（分组化起，docs/ddd/stock-group-design.md §3）。
  * resolver 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
  */
 export const stockGroups = sqliteTable(
@@ -323,7 +323,7 @@ export const stockGroups = sqliteTable(
 );
 
 /**
- * 分组成员快照（分组化起，docs/stock-group-design.md §3）。
+ * 分组成员快照（分组化起，docs/ddd/stock-group-design.md §3）。
  * 只增不改：一次刷新 = 一批（同一 refreshId）；当前成员 = 最新 refreshId 那一批。
  */
 export const groupMemberSnapshots = sqliteTable(
@@ -582,7 +582,7 @@ export const schema = {
   // v0.7 起：边沿状态机
   watchRuleStates,
   watchRuns,
-  // 分组化起（docs/stock-group-design.md §3）
+  // 分组化起（docs/ddd/stock-group-design.md §3）
   stockGroups,
   groupMemberSnapshots,
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）

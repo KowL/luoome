@@ -21,7 +21,7 @@ export const ListStockGroupsOutput = z.object({
 });
 
 /**
- * 列出股票分组（分组化起，read；docs/stock-group-design.md §6）。
+ * 列出股票分组（分组化起，read；docs/ddd/stock-group-design.md §6）。
  * 默认返回全部（按 id 升序）；includeMemberCount=true 时计算当前成员数：
  * manual → resolver.stockIds 长度；holdings → 活跃持仓数（活视图现算）；
  * formula / llm → 最新快照批成员数。

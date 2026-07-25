@@ -1,5 +1,5 @@
 /**
- * A 股节假日历（v0.6 起，docs/intraday-watch-design.md "已知边界"）。
+ * A 股节假日历（v0.6 起，docs/ddd/intraday-watch-design.md "已知边界"）。
  *
  * 设计要点（v0.7 起补充文件加载）：
  * - 默认硬编码 2026 / 2027 全年节假日（YYYY-MM-DD 字符串，Asia/Shanghai 时区日期）

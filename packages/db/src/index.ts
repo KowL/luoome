@@ -1,4 +1,4 @@
-// @luoome/db —— Drizzle schema + repository 实现（plan.md 跨包契约）。
+// @luoome/db —— Drizzle schema + repository 实现（docs/archive/plan.md 跨包契约）。
 
 // 连接与建表：createDrizzleRepos / ensureSchema / DrizzleDb / DrizzleReposHandle
 export * from './client.js';

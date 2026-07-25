@@ -134,12 +134,12 @@ interface GroupMemberSnapshot {
 
 ### 8. 文档同步
 
-- `AGENTS.md`：工具清单加 7 个 group tool；已知边界加分组条目
+- `skills/luoome/references/tools.md`：补充分组查询、CRUD 与刷新能力的选择和副作用边界
 - `ARCHITECTURE.md`：§5.1 加 StockGroup / GroupMemberSnapshot；§8.1 加 `refresh-groups`
 
-## 可选二期（写入但不实施）
+## 后续演进
 
-- **Web 对话创建分组**：见 [web-chat-design.md](./web-chat-design.md)（2026-07-22 定稿，待实现）；draft schema = `create_stock_group` 的 input schema，两份设计可并行开发
+- **Web 对话创建分组（已实现）**：见 [web-chat-design.md](./web-chat-design.md)（2026-07-22 定稿并落地）；draft schema = `create_stock_group` 的 input schema
 - **`membership-change` 规则**：分组成员进出本身作为 watch trigger（「龙头池新进了 X」direction=watch/buy）。快照机制落地后几乎零成本
 - **LLM resolver 富化上下文**：当日战法命中信号、分组历史成员表现（接 watch_triggers / adviceOutcomes 复盘）
 - **strategy resolver（C）**：等真实回测/因子需求出现再立项，接口预留

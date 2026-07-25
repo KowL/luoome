@@ -175,7 +175,7 @@ interface WatchTrigger {
 
 ### 9. 文档同步
 
-- `AGENTS.md`：工具清单加 5 个 pool/trigger tool（write 类）；调试区加 `luoome watch` 用法
+- `skills/luoome/references/tools.md`：补充盯盘方案、触发查询和内部持久化 tool 的选择边界；调试命令保留在用户手册
 - `ARCHITECTURE.md` §8.1 内置 workflow 列表加 `intraday-watch`；§5.1 加 StockPool / WatchTrigger 实体说明
 
 ## 实施顺序（实现时）

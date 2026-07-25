@@ -329,7 +329,7 @@ interface ToolContext {
 
 ### 5.1 基础实体
 
-**v0.6 起新增**：StockPool（股票池 = 成员来源 + 规则列表 + 冷却 + enabled）、WatchTrigger（盯盘触发 = 池 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照）。StockPool 走 CRUD（list/create/update/delete_stock_pools），WatchTrigger 通过 `save_watch_trigger` tool 落库（由 `intraday-watch` workflow 触发）。Cooldown 通过 `WatchTriggerRepository.lastForKey(poolId, stockId, ruleKind, since)` 查询，进程重启后冷却可接续。详见 [docs/intraday-watch-design.md](./intraday-watch-design.md)。
+**v0.6 起新增**：StockPool（股票池 = 成员来源 + 规则列表 + 冷却 + enabled）、WatchTrigger（盯盘触发 = 池 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照）。StockPool 走 CRUD（list/create/update/delete_stock_pools），WatchTrigger 通过 `save_watch_trigger` tool 落库（由 `intraday-watch` workflow 触发）。Cooldown 通过 `WatchTriggerRepository.lastForKey(poolId, stockId, ruleKind, since)` 查询，进程重启后冷却可接续。详见 [docs/ddd/intraday-watch-design.md](./ddd/intraday-watch-design.md)。
 
 **v0.6.2 起加深**：`MarketDataManager` 容错测试覆盖增加（详见 `packages/adapters/src/market/manager-resilience.test.ts`）：`batchQuote` 部分失败（primary 局部抛错 → fallback 仅补失败的那部分，其它 ok 仍走 primary）、`fetchDailyBars` 三层 fallback（primary → fallback → finalFallback）、自定义 `finalFallbackSuppressMs` 窗口验证。无新功能，纯测试深覆盖。
 
@@ -337,7 +337,7 @@ interface ToolContext {
 
 **v0.7 起新增**：`packages/cli/src/paths.ts`（`luoomeHome()` 从 context.ts 抽出，被 watch / holidays / future paths 共享）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
 
-**分组化起新增**：StockGroup（股票分组 = resolver(manual/holdings/formula/llm) + refreshPolicy + enabled，只回答「成员是谁」）、GroupMemberSnapshot（成员快照，一次刷新 = 一批同 refreshId，只增不改）。StockPool 从 `source` 改为 `groupId` 引用分组；启动时 `migrateLegacyPoolSourcesToGroups` 把 v0.6 旧 source JSON 幂等迁移成分组。分组 CRUD 走 list/get/create/update/delete_stock_group，刷新走 refresh_stock_group / refresh-groups workflow（盘外「生产者 + 快照」，hot path 只读快照）。详见 [docs/stock-group-design.md](./stock-group-design.md)。
+**分组化起新增**：StockGroup（股票分组 = resolver(manual/holdings/formula/llm) + refreshPolicy + enabled，只回答「成员是谁」）、GroupMemberSnapshot（成员快照，一次刷新 = 一批同 refreshId，只增不改）。StockPool 从 `source` 改为 `groupId` 引用分组；启动时 `migrateLegacyPoolSourcesToGroups` 把 v0.6 旧 source JSON 幂等迁移成分组。分组 CRUD 走 list/get/create/update/delete_stock_group，刷新走 refresh_stock_group / refresh-groups workflow（盘外「生产者 + 快照」，hot path 只读快照）。详见 [docs/ddd/stock-group-design.md](./ddd/stock-group-design.md)。
 
 **v0.8 产品语义收口**：Web 将 `StockPool` 表述为“盯盘方案（WatchPlan）”。`list_watch_plans`
 提供面向界面的组合读取模型（方案、分组、成员数和可用状态），避免界面自行拼接 pool/group。
@@ -596,8 +596,8 @@ type ToolError =
 - `risk-report`：风控指标 + 持仓建议（v0.3）
 - `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
-- `intraday-watch`：单轮盘中盯盘评估 —— daily 分组刷新检查 → 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/intraday-watch-design.md](./intraday-watch-design.md)）
-- `refresh-groups`：盘外刷新 enabled 动态分组（formula→run_tactic / llm→resolve_llm_group），失败 / 空结果保留旧快照，输出 entered/exited（分组化起；设计：[docs/stock-group-design.md](./stock-group-design.md)）
+- `intraday-watch`：单轮盘中盯盘评估 —— daily 分组刷新检查 → 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/ddd/intraday-watch-design.md](./ddd/intraday-watch-design.md)）
+- `refresh-groups`：盘外刷新 enabled 动态分组（formula→run_tactic / llm→resolve_llm_group），失败 / 空结果保留旧快照，输出 entered/exited（分组化起；设计：[docs/ddd/stock-group-design.md](./ddd/stock-group-design.md)）
 
 ### 8.2 Workflow 与 tool 的边界
 

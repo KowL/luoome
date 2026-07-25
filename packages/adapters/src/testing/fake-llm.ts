@@ -17,7 +17,7 @@ export const TEST_LLM_SYSTEM_CHAT_PLAN = 'chat_plan';
 export const TEST_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
 
 /**
- * web chat 测试注入前缀（docs/web-chat-design.md §6）：
+ * web chat 测试注入前缀（docs/ddd/web-chat-design.md §6）：
  * message 以该前缀开头时，其余部分按 JSON parse 为 Pass 1 plan；
  * plan 可额外携带 `pass2Reply` 字段作为 Pass 2（chat_reply）的输出
  * （plan schema safeParse 会 strip 掉该未知字段，不影响 Pass 1）。
@@ -149,7 +149,7 @@ const COUNTER_POOL = [
 const RISK_POOL = ['大盘系统性下行风险', '行业政策变化风险', '个股流动性风险'] as const;
 
 /**
- * FakeLLMAdapter（MVP-TASK §2.5 fake-llm）。
+ * FakeLLMAdapter（docs/archive/MVP-TASK.md §2.5 fake-llm）。
  * 不调任何外部 API；generate 按 data 中的 stockId + 持仓上下文生成
  * deterministic 分析结果（同一输入同一输出），并按传入 zod schema parse，
  * parse 失败时返回稳定 fallback。
@@ -196,7 +196,7 @@ export class FakeLLMAdapter implements LLMAdapter {
       }
       return Promise.resolve(asGenerateResult<T>(out, raw));
     }
-    // chat（web 对话助手，docs/web-chat-design.md §2）：fixture 注入或稳定兜底。
+    // chat（web 对话助手，docs/ddd/web-chat-design.md §2）：fixture 注入或稳定兜底。
     if (mode === 'chat_plan' || mode === 'chat_reply') {
       const out = this.buildChatOutput(mode, request.data);
       const raw = JSON.stringify({ fixture: true, mode });

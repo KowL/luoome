@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Drizzle schema + repository 实现 + in-memory repos（见 plan.md 跨包契约）",
+  "description": "Drizzle schema + repository 实现 + in-memory repos（见 docs/archive/plan.md 跨包契约）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

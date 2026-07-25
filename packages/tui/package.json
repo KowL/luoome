@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "opentui 应用：左持仓右建议 + 顶部免责声明（布局见 MVP-TASK §2.7）",
+  "description": "opentui 应用：左持仓右建议 + 顶部免责声明（布局见 docs/archive/MVP-TASK.md §2.7）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

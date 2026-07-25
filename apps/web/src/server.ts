@@ -1,4 +1,4 @@
-// @luoome/web —— 最小 Web 端（plan.md 跨包契约 / ARCHITECTURE §10）。
+// @luoome/web —— 最小 Web 端（docs/archive/plan.md 跨包契约 / ARCHITECTURE §10）。
 // Hono HTTP API + 同源静态仪表盘：
 //   GET  /api/stocks/search    → adshare 优先搜索，真实行情源兜底
 //   GET  /api/holdings          → list_holdings
@@ -865,7 +865,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
 
-  // 对话助手（web 内部端点，不进 toolRegistry；docs/web-chat-design.md）。
+  // 对话助手（web 内部端点，不进 toolRegistry；docs/ddd/web-chat-design.md）。
   // LLM 失败 / parse 失败一律走兜底 reply，不抛 500。
   app.post('/api/chat', async (c) => {
     let body: unknown;

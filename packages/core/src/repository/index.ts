@@ -114,7 +114,7 @@ export interface RepositoryRegistry {
   readonly watchRuleState: WatchRuleStateRepository;
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
   readonly watchRun: WatchRunRepository;
-  /** 分组化起（docs/stock-group-design.md §2）；股票分组 CRUD。 */
+  /** 分组化起（docs/ddd/stock-group-design.md §2）；股票分组 CRUD。 */
   readonly stockGroup: StockGroupRepository;
   /** 分组化起；分组成员快照（只增不改；watch hot path 只读 currentMembers）。 */
   readonly groupMember: GroupMemberRepository;
@@ -146,7 +146,7 @@ export interface TacticRepository {
 }
 
 /**
- * 股票池仓储（v0.6 起，docs/intraday-watch-design.md §2）。
+ * 股票池仓储（v0.6 起，docs/ddd/intraday-watch-design.md §2）。
  * Key 用 pool.id（slug 唯一）。
  */
 export interface StockPoolRepository {
@@ -158,7 +158,7 @@ export interface StockPoolRepository {
 }
 
 /**
- * 股票分组仓储（docs/stock-group-design.md §2）。
+ * 股票分组仓储（docs/ddd/stock-group-design.md §2）。
  * Key 用 group.id（slug 唯一）。
  */
 export interface StockGroupRepository {
@@ -170,7 +170,7 @@ export interface StockGroupRepository {
 }
 
 /**
- * 分组成员快照仓储（docs/stock-group-design.md §1/§2）。
+ * 分组成员快照仓储（docs/ddd/stock-group-design.md §1/§2）。
  * - 快照只增不改：一次刷新 = 一批（同一 refreshId），历史批次全保留（复盘 / 成员变化检测用）
  * - 当前成员语义 = 最新 refreshId 那一批；holdings resolver 是活视图，不写快照
  */

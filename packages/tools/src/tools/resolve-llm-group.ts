@@ -47,7 +47,7 @@ const RESOLVE_LLM_GROUP_SYSTEM =
   '最多输出 maxMembers 条；只输出 JSON：{"members":[{"stockId":"...","rationale":"..."}]}。';
 
 /**
- * LLM 分组解析（分组化起，advice；workflow 内部通道，docs/stock-group-design.md §4/§6）。
+ * LLM 分组解析（分组化起，advice；workflow 内部通道，docs/ddd/stock-group-design.md §4/§6）。
  *
  * 链路：prompt + 最小上下文（本地股票列表 ≤200 条 + 当日行情快照）→ LLM generate
  * （zod schema-constrained）→ 逐条 repos.stock.findById 校验存在（丢弃不存在项，

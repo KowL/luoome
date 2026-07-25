@@ -1,4 +1,4 @@
-// @luoome/mcp —— MCP server 的 ToolContext 组装（plan.md 跨包契约 + MVP-TASK §2.6）。
+// @luoome/mcp —— MCP server 的 ToolContext 组装（docs/archive/plan.md 跨包契约 + docs/archive/MVP-TASK.md §2.6）。
 //
 // 数据路径：LUOOME_HOME 环境变量（默认 ~/.luoome）下的 luoome.db。
 // 空库保持为空；行情与 LLM 均要求显式配置真实 provider。

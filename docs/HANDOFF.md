@@ -2,7 +2,7 @@
 
 > 这份文档给**接手的工程师 / agent**：把项目当前状态、关键决策、不变量、已知坑讲清楚，让你能**在一两天内上手改东西**。
 >
-> 它不是 ARCHITECTURE.md 的替代——架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)；这不是 README——怎么接入看 [AGENTS.md](../AGENTS.md)；这不是路线图——下一步计划看 [ROADMAP.md](./ROADMAP.md)。
+> 它不是 ARCHITECTURE.md 的替代——架构看 [ARCHITECTURE.md](./ARCHITECTURE.md)；外部 Agent 接入看 [luoome Skill](../skills/luoome/SKILL.md)；编码 Agent 规则看 [AGENTS.md](../AGENTS.md)；下一步计划看 [ROADMAP.md](./ROADMAP.md)。
 
 ---
 
@@ -116,7 +116,7 @@ User  ─►  MCP / CLI / TUI / Web
 | Web 设计 tokens + 组件 | `apps/web/public/style.css` |
 | DB schema (Drizzle) | `packages/db/src/schema/`（v0.6 起含 `stockPools` / `watchTriggers` 双表） |
 | Repo 合约测试 | `packages/db/src/repository/contract-tests.ts` |
-| 盘中盯盘设计 doc | `docs/intraday-watch-design.md` |
+| 盘中盯盘设计 doc | `docs/ddd/intraday-watch-design.md` |
 
 ## 4. 日常开发流
 
@@ -166,7 +166,7 @@ LUOOME_EXPOSE_WRITE=true bash bin/luoome web serve  # Web + outcome 回填
 | advice 有 6 条不变量 | 强制 disclaimers + validUntil 让 AI 建议始终是"建议"而非"指令" |
 | 战法 DSL 自实现 mini-eval | 引第三方表达式库（jsep / expr-eval）增加包大小；只支持 13 个变量 + 简单 bool / 比较 / Math.* 完全够用 |
 | outcome 回填走 write tool | 复盘是用户主动行为；写权限 opt-in 防止 agent 误调 |
-| AGENTS.md / ARCHITECTURE.md 分两份 | ARCHITECTURE 给工程师；AGENTS 给外部 agent harness。两份不能合并（受众不同） |
+| AGENTS.md / Skill / ARCHITECTURE 分三层 | AGENTS 给编码 Agent；Skill 给外部 Agent 消费 luoome；ARCHITECTURE 记录工程事实。职责分离，避免开发规则与运行时接入说明互相污染 |
 
 ## 6. 已知坑 / 看起来怪但故意的
 

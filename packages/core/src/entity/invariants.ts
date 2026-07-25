@@ -6,7 +6,7 @@ import type { Stock } from './stock.js';
 import type { Trade } from './trade.js';
 
 /**
- * 领域不变量断言（ARCHITECTURE §4.1 / §5.3，MVP-TASK §2.3）。
+ * 领域不变量断言（ARCHITECTURE §4.1 / §5.3，docs/archive/MVP-TASK.md §2.3）。
  * 全部抛 InvariantError；tool 层负责转成 invariant_violation ToolError。
  */
 
@@ -34,7 +34,7 @@ export const assertTradeInvariants = (t: Trade): void => {
   }
 };
 
-/** Advice 不变量 5 条（MVP-TASK §2.3）。 */
+/** Advice 不变量 5 条（docs/archive/MVP-TASK.md §2.3）。 */
 export const assertAdviceInvariants = (a: Advice): void => {
   if (a.confidence < 0 || a.confidence > 100) {
     throw new InvariantError('confidence out of [0,100]');

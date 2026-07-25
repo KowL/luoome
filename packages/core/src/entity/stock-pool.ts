@@ -5,8 +5,8 @@ import { type Money, MoneySchema } from '../types/branded.js';
 import { EventImportanceSchema, StockEventKindSchema } from './stock-event.js';
 
 /**
- * 股票池 + 盯盘规则 + 触发（v0.6 起，docs/intraday-watch-design.md；
- * 分组化改造见 docs/stock-group-design.md §5；
+ * 股票池 + 盯盘规则 + 触发（v0.6 起，docs/ddd/intraday-watch-design.md；
+ * 分组化改造见 docs/ddd/stock-group-design.md §5；
  * 策略预警扩展 docs/ddd/strategy-alert-detailed-design.md §3）。
  *
  * 设计要点：
@@ -296,7 +296,7 @@ const derivePriorityByKind = (rule: WatchRule): AlertPriority => {
 // ---------- 不变量 ----------
 
 /**
- * 池不变量（docs/intraday-watch-design.md §1 + stock-group-design.md §5 + strategy-alert §3）：
+ * 池不变量（docs/ddd/intraday-watch-design.md §1 + stock-group-design.md §5 + strategy-alert §3）：
  * - id slug 合法（schema 已 regex，runtime 兜底长度）
  * - rules ≥ 1（schema 已 min(1)）
  * - updatedAt ≥ createdAt

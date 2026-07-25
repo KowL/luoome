@@ -2,7 +2,7 @@
 // node 下无法解析，这里 exclude；这些测试改由 Bun 运行时执行：
 //   bun run test:db   （= bun test packages/db，含 driver + memory 全部 65 个）
 // 或直接 bun test（仓库根，Bun 自带 vitest 兼容层，209 个全量）。
-// 详见 package.json scripts 与 docs/MVP-TASK.md §6 验收口径。
+// 详见 package.json scripts 与 docs/archive/MVP-TASK.md §6 验收口径。
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({

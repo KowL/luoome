@@ -175,7 +175,7 @@
 
 **目标**：交易时段自动盯盘——持仓买卖点 + 候选池买点提醒，纯规则零 LLM。
 
-**实际产物**（设计文档：[intraday-watch-design.md](./intraday-watch-design.md)；squash 合入 main，PR #1）：
+**实际产物**（设计文档：[intraday-watch-design.md](./ddd/intraday-watch-design.md)；squash 合入 main，PR #1）：
 - core 增量：`StockPool` / `WatchTrigger` 实体（PoolSource：holdings / manual / tactic；WatchRule：price-change / cost-threshold / tactic）
 - db 增量：`stock_pools` / `watch_triggers` 双表 + repo（drizzle + memory 双实现 + 合约测试）
 - tools 增量 5 个（27 → 32）：`list_stock_pools`（read）+ `create_stock_pool` / `update_stock_pool` / `delete_stock_pool` / `save_watch_trigger`（write）

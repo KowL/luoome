@@ -1,4 +1,4 @@
-/* apps/web/public/js/chat.js —— 对话路由（docs/web-chat-design.md §5）。
+/* apps/web/public/js/chat.js —— 对话路由（docs/ddd/web-chat-design.md §5）。
  *
  * - history 存 sessionStorage（关 tab 即清，与「服务端无 session」一致）；
  *   只持久化 user/assistant 文本轮，draft 卡片与系统消息是会话内瞬态 UI，不落 storage。

@@ -1,5 +1,5 @@
 // @luoome/tui —— opentui 应用主体（布局 + 交互 + 数据加载）。
-// 布局按 MVP-TASK §2.7：顶部固定免责声明横幅；左栏「持仓」表格；右栏「今日建议」；
+// 布局按 docs/archive/MVP-TASK.md §2.7：顶部固定免责声明横幅；左栏「持仓」表格；右栏「今日建议」；
 // 底部快捷键栏；[d]/[s] 弹层。数据流按 ARCHITECTURE §11 场景 B：
 // list_holdings → get_advice（已有建议）→ 缺失标的并发 analyze_stock。
 //
