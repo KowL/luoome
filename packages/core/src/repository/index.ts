@@ -3,7 +3,9 @@ import type { Advice, AdviceOutcome, AdviceQuery } from '../entity/advice.js';
 import type { Holding } from '../entity/holding.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
+import type { ResearchNote, ResearchNoteKind } from '../entity/research-note.js';
 import type { Stock } from '../entity/stock.js';
+import type { StockEvent, StockEventKind, StockEventStatus } from '../entity/stock-event.js';
 import type { GroupMemberSnapshot, StockGroup } from '../entity/stock-group.js';
 import type {
   DeliveryStatus,
@@ -15,6 +17,7 @@ import type {
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
+import type { WorkflowRun } from '../entity/workflow-run.js';
 
 /**
  * Repository 接口（ARCHITECTURE §2.5 / §4.3）。
@@ -115,6 +118,12 @@ export interface RepositoryRegistry {
   readonly stockGroup: StockGroupRepository;
   /** 分组化起；分组成员快照（只增不改；watch hot path 只读 currentMembers）。 */
   readonly groupMember: GroupMemberRepository;
+  /** ruo 迁移 Phase 1A；研究档案笔记 CRUD + thesis 版本链。 */
+  readonly researchNote: ResearchNoteRepository;
+  /** ruo 迁移 Phase 1B；公司事件（幂等 upsert by (provider, externalId)）。 */
+  readonly stockEvent: StockEventRepository;
+  /** ruo 迁移 Phase 1C；workflow 运行审计。 */
+  readonly workflowRun: WorkflowRunRepository;
 }
 
 /**
@@ -210,6 +219,8 @@ export interface WatchTriggerRepository {
     readonly limit?: number;
     readonly deliveryStatus?: readonly DeliveryStatus[];
     readonly ruleId?: string;
+    /** event-date 去重：按关联事件过滤。 */
+    readonly eventId?: string;
   }): Promise<readonly WatchTrigger[]>;
   /**
    * 统计 since 以来 ATTEMPTED 状态的触发数。poolId 缺省 / null 为全局计数（每日上限用）。
@@ -271,4 +282,83 @@ export interface NotificationRepository {
     readonly since?: Date;
     readonly limit?: number;
   }): Promise<readonly Notification[]>;
+}
+
+/**
+ * 研究档案笔记仓储（ruo 迁移 Phase 1A，docs/ddd/ruo-feature-migration-detailed-design.md §3.1 / §7.1）。
+ *
+ * thesis 版本链：save 一条 active=true 的 thesis 时，同 stockId 其它 thesis 必须置 active=false
+ * （实现层事务保证）。deactivateTheses 供 tool / repo 在插入新版本前停用旧版本。
+ */
+export interface ResearchNoteRepository {
+  save(note: ResearchNote): Promise<void>;
+  findById(id: string): Promise<ResearchNote | null>;
+  /** 按股票列出；kind / activeOnly / since 过滤，按 createdAt 倒序。 */
+  listByStock(
+    stockId: string,
+    opts?: {
+      readonly kind?: ResearchNoteKind;
+      readonly activeOnly?: boolean;
+      readonly since?: Date;
+      readonly limit?: number;
+    },
+  ): Promise<readonly ResearchNote[]>;
+  /** 停用某股票全部 active thesis（插入新版本前调用）；返回被停用的条数。 */
+  deactivateTheses(stockId: string): Promise<number>;
+  remove(id: string): Promise<void>;
+}
+
+/**
+ * 公司事件仓储（ruo 迁移 Phase 1B，docs/.../§3.2 / §7.2）。
+ *
+ * 幂等：upsertByExternal 按 (provider, externalId) 冲突时更新，不存在时插入。
+ * listUpcoming 供 evaluate-event-rules 求值窗口扫描。
+ */
+export interface StockEventRepository {
+  save(event: StockEvent): Promise<void>;
+  findById(id: string): Promise<StockEvent | null>;
+  /** 按 (provider, externalId) 查（幂等 upsert 前置查询）。 */
+  findByExternal(provider: string, externalId: string): Promise<StockEvent | null>;
+  /**
+   * 幂等 upsert：按 (provider, externalId) 命中则更新可变字段（title/occursAt/status/importance/stale...），
+   * 否则插入。返回 'inserted' | 'updated'。
+   */
+  upsertByExternal(event: StockEvent): Promise<'inserted' | 'updated'>;
+  list(opts?: {
+    readonly stockId?: string;
+    readonly kinds?: readonly StockEventKind[];
+    readonly status?: StockEventStatus;
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly importance?: StockEvent['importance'];
+    readonly limit?: number;
+  }): Promise<readonly StockEvent[]>;
+  /** 求值窗口扫描：某股票 [from, to] 内 status='scheduled' 的事件（kinds / 最低重要性过滤）。 */
+  listUpcoming(
+    stockId: string,
+    from: Date,
+    to: Date,
+    opts?: {
+      readonly kinds?: readonly StockEventKind[];
+      readonly minImportance?: StockEvent['importance'];
+    },
+  ): Promise<readonly StockEvent[]>;
+  /** 存在手工事件的股票 id 集合（同步范围计算用）。 */
+  listStockIdsWithEvents(): Promise<readonly string[]>;
+  /** provider 抓取失败时批量标记 stale（保留旧数据）。返回受影响条数。 */
+  markStaleByProvider(provider: string): Promise<number>;
+  remove(id: string): Promise<void>;
+}
+
+/** Workflow 运行审计仓储（ruo 迁移 Phase 1C，docs/.../§3.4）。save 同 id 为 upsert（running → terminal）。 */
+export interface WorkflowRunRepository {
+  save(run: WorkflowRun): Promise<void>;
+  findById(id: string): Promise<WorkflowRun | null>;
+  listRecent(opts?: {
+    readonly workflowName?: string;
+    readonly status?: WorkflowRun['status'];
+    readonly since?: Date;
+    readonly limit?: number;
+  }): Promise<readonly WorkflowRun[]>;
+  remove(id: string): Promise<void>;
 }

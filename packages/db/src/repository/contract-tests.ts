@@ -11,8 +11,10 @@ import {
   type Quote,
   quantity,
   type RepositoryRegistry,
+  type ResearchNote,
   STANDARD_DISCLAIMERS,
   type Stock,
+  type StockEvent,
   type StockGroup,
   type StockPool,
   stockCode,
@@ -21,6 +23,7 @@ import {
   type Trade,
   type WatchRun,
   type WatchTrigger,
+  type WorkflowRun,
 } from '@luoome/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -256,6 +259,52 @@ export const makeWatchRun = (id: string, overrides: Partial<WatchRun> = {}): Wat
   suppressedByCooldown: 1,
   suppressedByDailyLimit: 0,
   notifyFailed: 0,
+  ...overrides,
+});
+
+export const makeResearchNote = (
+  id: string,
+  overrides: Partial<ResearchNote> = {},
+): ResearchNote => ({
+  id,
+  stockId: 'stk-1',
+  kind: 'note',
+  content: `笔记内容-${id}`,
+  active: false,
+  tags: [],
+  createdAt: T1,
+  updatedAt: T1,
+  ...overrides,
+});
+
+export const makeStockEvent = (id: string, overrides: Partial<StockEvent> = {}): StockEvent => ({
+  id,
+  stockId: 'stk-1',
+  kind: 'earnings',
+  title: `事件-${id}`,
+  occursAt: T2,
+  allDay: true,
+  importance: 'important',
+  status: 'scheduled',
+  source: 'manual',
+  stale: false,
+  remindBeforeDays: [],
+  createdAt: T1,
+  updatedAt: T1,
+  ...overrides,
+});
+
+export const makeWorkflowRun = (
+  id: string,
+  overrides: Partial<WorkflowRun> = {},
+): WorkflowRun => ({
+  id,
+  workflowName: 'sync-stock-events',
+  mode: 'scheduled',
+  status: 'succeeded',
+  startedAt: T1,
+  finishedAt: T2,
+  providerStatuses: [],
   ...overrides,
 });
 
@@ -1207,6 +1256,155 @@ export const registerRepositoryContractTests = (
       it('failed 缺 error 时拒绝', async () => {
         await expect(
           repos.watchRun.save(makeWatchRun('run-bad', { status: 'failed', error: undefined })),
+        ).rejects.toThrow();
+      });
+    });
+
+    describe('ResearchNoteRepository', () => {
+      it('save + findById 往返一致；listByStock 按 createdAt 倒序 + kind/since 过滤', async () => {
+        await repos.researchNote.save(makeResearchNote('n1', { createdAt: T1, kind: 'note' }));
+        await repos.researchNote.save(
+          makeResearchNote('n2', { createdAt: T2, updatedAt: T2, kind: 'thesis', active: true }),
+        );
+        expect(await repos.researchNote.findById('n1')).toEqual(
+          makeResearchNote('n1', { createdAt: T1, kind: 'note' }),
+        );
+        const all = await repos.researchNote.listByStock('stk-1');
+        expect(all.map((n) => n.id)).toEqual(['n2', 'n1']);
+        const theses = await repos.researchNote.listByStock('stk-1', { kind: 'thesis' });
+        expect(theses.map((n) => n.id)).toEqual(['n2']);
+        const sinceT2 = await repos.researchNote.listByStock('stk-1', { since: T2 });
+        expect(sinceT2.map((n) => n.id)).toEqual(['n2']);
+      });
+
+      it('save 新 active thesis 停用同股旧 active thesis（事务）', async () => {
+        await repos.researchNote.save(
+          makeResearchNote('t1', { kind: 'thesis', active: true, createdAt: T1 }),
+        );
+        await repos.researchNote.save(
+          makeResearchNote('t2', {
+            kind: 'thesis',
+            active: true,
+            supersedesId: 't1',
+            createdAt: T2,
+            updatedAt: T2,
+          }),
+        );
+        expect((await repos.researchNote.findById('t1'))?.active).toBe(false);
+        expect((await repos.researchNote.findById('t2'))?.active).toBe(true);
+        const active = await repos.researchNote.listByStock('stk-1', {
+          kind: 'thesis',
+          activeOnly: true,
+        });
+        expect(active.map((n) => n.id)).toEqual(['t2']);
+      });
+
+      it('deactivateTheses 停用全部 active thesis 并返回条数', async () => {
+        await repos.researchNote.save(
+          makeResearchNote('t1', { kind: 'thesis', active: true, createdAt: T1 }),
+        );
+        const count = await repos.researchNote.deactivateTheses('stk-1');
+        expect(count).toBe(1);
+        expect((await repos.researchNote.findById('t1'))?.active).toBe(false);
+      });
+
+      it('source-summary 缺 sourceUrl/fetchedAt 时拒绝', async () => {
+        await expect(
+          repos.researchNote.save(
+            makeResearchNote('bad', { kind: 'source-summary', content: 'x' }),
+          ),
+        ).rejects.toThrow();
+      });
+    });
+
+    describe('StockEventRepository', () => {
+      it('upsertByExternal 幂等：同 (provider, externalId) 更新不重复插入', async () => {
+        const first = makeStockEvent('e1', {
+          source: 'external',
+          provider: 'p',
+          externalId: 'x1',
+          title: '一季报',
+        });
+        expect(await repos.stockEvent.upsertByExternal(first)).toBe('inserted');
+        const second = makeStockEvent('e2', {
+          source: 'external',
+          provider: 'p',
+          externalId: 'x1',
+          title: '一季报（改期）',
+          occursAt: T3,
+        });
+        expect(await repos.stockEvent.upsertByExternal(second)).toBe('updated');
+        const all = await repos.stockEvent.list({ stockId: 'stk-1' });
+        expect(all.length).toBe(1);
+        expect(all[0]?.title).toBe('一季报（改期）');
+        expect(all[0]?.occursAt.getTime()).toBe(T3.getTime());
+      });
+
+      it('listUpcoming 过滤 status/window/kinds/minImportance', async () => {
+        await repos.stockEvent.save(
+          makeStockEvent('u1', { occursAt: T2, importance: 'normal', kind: 'earnings' }),
+        );
+        await repos.stockEvent.save(
+          makeStockEvent('u2', { occursAt: T3, importance: 'urgent', kind: 'unlock' }),
+        );
+        await repos.stockEvent.save(
+          makeStockEvent('u3', { occursAt: T2, status: 'cancelled', importance: 'urgent' }),
+        );
+        const win = await repos.stockEvent.listUpcoming('stk-1', T1, T3, {
+          minImportance: 'important',
+        });
+        expect(win.map((e) => e.id)).toEqual(['u2']);
+        const byKind = await repos.stockEvent.listUpcoming('stk-1', T1, T3, {
+          kinds: ['earnings'],
+        });
+        expect(byKind.map((e) => e.id)).toEqual(['u1']);
+      });
+
+      it('markStaleByProvider 标记该源全部事件为 stale', async () => {
+        await repos.stockEvent.save(
+          makeStockEvent('s1', { source: 'external', provider: 'p', externalId: 'a' }),
+        );
+        await repos.stockEvent.save(
+          makeStockEvent('s2', { source: 'external', provider: 'q', externalId: 'b' }),
+        );
+        expect(await repos.stockEvent.markStaleByProvider('p')).toBe(1);
+        expect((await repos.stockEvent.findById('s1'))?.stale).toBe(true);
+        expect((await repos.stockEvent.findById('s2'))?.stale).toBe(false);
+      });
+
+      it('external 事件缺 provider/externalId 时拒绝', async () => {
+        await expect(
+          repos.stockEvent.save(makeStockEvent('bad', { source: 'external' })),
+        ).rejects.toThrow();
+      });
+    });
+
+    describe('WorkflowRunRepository', () => {
+      it('running → succeeded upsert；listRecent 按 startedAt 倒序 + 过滤', async () => {
+        await repos.workflowRun.save(
+          makeWorkflowRun('w1', { status: 'running', startedAt: T1, finishedAt: undefined }),
+        );
+        await repos.workflowRun.save(makeWorkflowRun('w1', { startedAt: T1, finishedAt: T2 }));
+        await repos.workflowRun.save(
+          makeWorkflowRun('w2', {
+            workflowName: 'evaluate-event-rules',
+            startedAt: T3,
+            finishedAt: T3,
+            status: 'partial',
+          }),
+        );
+        expect((await repos.workflowRun.findById('w1'))?.status).toBe('succeeded');
+        const recent = await repos.workflowRun.listRecent();
+        expect(recent.map((r) => r.id)).toEqual(['w2', 'w1']);
+        const byName = await repos.workflowRun.listRecent({ workflowName: 'sync-stock-events' });
+        expect(byName.map((r) => r.id)).toEqual(['w1']);
+      });
+
+      it('failed 缺 error 时拒绝', async () => {
+        await expect(
+          repos.workflowRun.save(
+            makeWorkflowRun('w-bad', { status: 'failed', error: undefined }),
+          ),
         ).rejects.toThrow();
       });
     });

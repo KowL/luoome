@@ -34,7 +34,7 @@ describe('save_watch_trigger', () => {
     const got = await ctx.repos.watchTrigger.findById('t-1');
     expect(got).toBeDefined();
     expect(got?.direction).toBe('watch');
-    expect(got?.quote.close).toBe(15.2);
+    expect(got?.quote?.close).toBe(15.2);
   });
 
   it('quote.close <= 0 → invariant_violation', async () => {

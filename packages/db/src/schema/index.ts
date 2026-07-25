@@ -5,11 +5,15 @@ import type {
   AdviceHorizon,
   AdviceReasoning,
   AdviceSubjectKind,
+  Citation,
   Exchange,
   Money,
   Notification,
+  ProviderStatus,
   Quantity,
+  ResearchNote,
   StockCode,
+  StockEvent,
   StockGroup,
   StockPool,
   Tactic,
@@ -18,6 +22,7 @@ import type {
   WatchRule,
   WatchRun,
   WatchTrigger,
+  WorkflowRun,
 } from '@luoome/core';
 import {
   index,
@@ -357,8 +362,8 @@ export const watchTriggers = sqliteTable(
     direction: text('direction').$type<WatchTrigger['direction']>().notNull(),
     reason: text('reason').notNull(),
     evidence: text('evidence', { mode: 'json' }).$type<readonly string[]>().notNull(),
-    quoteClose: real('quote_close').$type<Money>().notNull(),
-    quoteTs: integer('quote_ts', { mode: 'timestamp_ms' }).notNull(),
+    quoteClose: real('quote_close').$type<Money>(),
+    quoteTs: integer('quote_ts', { mode: 'timestamp_ms' }),
     notified: integer('notified', { mode: 'boolean' }).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     /** 规则实例 id（与 stock_pool.rules[].id 对齐）；ALL 组合触发固定为 'composite'。 */
@@ -378,6 +383,8 @@ export const watchTriggers = sqliteTable(
     /** 用户反馈（handled / useful / useless / ignored），由 set_watch_trigger_feedback 写入。 */
     feedback: text('feedback'),
     feedbackAt: integer('feedback_at', { mode: 'timestamp_ms' }),
+    /** ruo 迁移：event-date 触发关联的公司事件 id（非 event-date 触发为空）。 */
+    eventId: text('event_id'),
   },
   (t) => ({
     /** cooldown 查询 lastForKey 走这条。 */
@@ -389,6 +396,14 @@ export const watchTriggers = sqliteTable(
     ),
     /** listByPool 按时间倒序走这条。 */
     poolTsIdx: index('watch_triggers_pool_ts_idx').on(t.poolId, t.createdAt),
+    /** event-date 去重 / 按事件过滤走这条。 */
+    poolStockRuleEventIdx: index('watch_triggers_pool_stock_rule_event_idx').on(
+      t.poolId,
+      t.stockId,
+      t.ruleId,
+      t.eventId,
+      t.createdAt,
+    ),
   }),
 );
 
@@ -441,6 +456,114 @@ export const watchRuns = sqliteTable(
   }),
 );
 
+/**
+ * 研究档案笔记（ruo 迁移 Phase 1A，docs/ddd/ruo-feature-migration-detailed-design.md §3.1）。
+ * citations 走 text + mode 'json'；tags 走 text + mode 'json'（字符串数组）。
+ */
+export const researchNotes = sqliteTable(
+  'research_notes',
+  {
+    id: text('id').primaryKey(),
+    stockId: text('stock_id').notNull(),
+    kind: text('kind').$type<ResearchNote['kind']>().notNull(),
+    title: text('title'),
+    content: text('content').notNull(),
+    stance: text('stance').$type<NonNullable<ResearchNote['stance']>>(),
+    active: integer('active', { mode: 'boolean' }).notNull(),
+    supersedesId: text('supersedes_id'),
+    sourceUrl: text('source_url'),
+    sourceTitle: text('source_title'),
+    sourceStatus: text('source_status').$type<NonNullable<ResearchNote['sourceStatus']>>(),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }),
+    citations: text('citations', { mode: 'json' }).$type<readonly Citation[]>(),
+    relatedHoldingId: text('related_holding_id'),
+    relatedAdviceId: text('related_advice_id'),
+    relatedWatchTriggerId: text('related_watch_trigger_id'),
+    tags: text('tags', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    stockCreatedIdx: index('research_notes_stock_created_idx').on(t.stockId, t.createdAt),
+    stockKindActiveIdx: index('research_notes_stock_kind_active_idx').on(
+      t.stockId,
+      t.kind,
+      t.active,
+    ),
+  }),
+);
+
+/**
+ * 公司事件（ruo 迁移 Phase 1B，docs/.../§3.2）。
+ * (provider, external_id) 唯一（manual 行两列为 NULL，SQLite 唯一索引放行多 NULL）。
+ * remindBeforeDays 走 text + mode 'json'（数字数组）。
+ */
+export const stockEvents = sqliteTable(
+  'stock_events',
+  {
+    id: text('id').primaryKey(),
+    stockId: text('stock_id').notNull(),
+    kind: text('kind').$type<StockEvent['kind']>().notNull(),
+    title: text('title').notNull(),
+    description: text('description'),
+    occursAt: integer('occurs_at', { mode: 'timestamp_ms' }).notNull(),
+    allDay: integer('all_day', { mode: 'boolean' }).notNull(),
+    importance: text('importance').$type<StockEvent['importance']>().notNull(),
+    status: text('status').$type<StockEvent['status']>().notNull(),
+    source: text('source').$type<StockEvent['source']>().notNull(),
+    provider: text('provider'),
+    externalId: text('external_id'),
+    sourceUrl: text('source_url'),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }),
+    stale: integer('stale', { mode: 'boolean' }).notNull(),
+    remindBeforeDays: text('remind_before_days', { mode: 'json' })
+      .$type<readonly number[]>()
+      .notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    providerExternalUnique: uniqueIndex('stock_events_provider_external_unique').on(
+      t.provider,
+      t.externalId,
+    ),
+    stockOccursIdx: index('stock_events_stock_occurs_idx').on(t.stockId, t.occursAt),
+    occursStatusIdx: index('stock_events_occurs_status_idx').on(t.occursAt, t.status),
+    stockKindOccursIdx: index('stock_events_stock_kind_occurs_idx').on(
+      t.stockId,
+      t.kind,
+      t.occursAt,
+    ),
+  }),
+);
+
+/**
+ * Workflow 运行审计（ruo 迁移 Phase 1C，docs/.../§3.4）。
+ * inputSummary / outputSummary / providerStatuses 走 text + mode 'json'。
+ */
+export const workflowRuns = sqliteTable(
+  'workflow_runs',
+  {
+    id: text('id').primaryKey(),
+    workflowName: text('workflow_name').notNull(),
+    mode: text('mode').$type<WorkflowRun['mode']>().notNull(),
+    status: text('status').$type<WorkflowRun['status']>().notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    inputSummary: text('input_summary', { mode: 'json' }).$type<Record<string, unknown>>(),
+    outputSummary: text('output_summary', { mode: 'json' }).$type<Record<string, unknown>>(),
+    providerStatuses: text('provider_statuses', { mode: 'json' })
+      .$type<readonly ProviderStatus[]>()
+      .notNull(),
+    error: text('error'),
+  },
+  (t) => ({
+    nameStartedIdx: index('workflow_runs_name_started_idx').on(t.workflowName, t.startedAt),
+    startedIdx: index('workflow_runs_started_idx').on(t.startedAt),
+  }),
+);
+
 export const schema = {
   accounts,
   stocks,
@@ -462,6 +585,10 @@ export const schema = {
   // 分组化起（docs/stock-group-design.md §3）
   stockGroups,
   groupMemberSnapshots,
+  // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
+  researchNotes,
+  stockEvents,
+  workflowRuns,
 } as const;
 
 export type Schema = typeof schema;

@@ -31,11 +31,14 @@ const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
   stockId: row.stockId,
   ruleKind: row.ruleKind,
   ruleId: row.ruleId,
+  ...(row.eventId !== null ? { eventId: row.eventId } : {}),
   direction: row.direction,
   triggerType: row.triggerType as WatchTrigger['triggerType'],
   reason: row.reason,
   evidence: [...row.evidence],
-  quote: { close: row.quoteClose, ts: row.quoteTs },
+  ...(row.quoteClose !== null && row.quoteTs !== null
+    ? { quote: { close: row.quoteClose, ts: row.quoteTs } }
+    : {}),
   priority: row.priority as WatchTrigger['priority'],
   deliveryStatus: row.deliveryStatus as DeliveryStatus,
   ...(row.notificationId !== null ? { notificationId: row.notificationId } : {}),
@@ -69,12 +72,13 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         stockId: trigger.stockId,
         ruleKind: trigger.ruleKind,
         ruleId: trigger.ruleId,
+        eventId: trigger.eventId ?? null,
         direction: trigger.direction,
         triggerType: trigger.triggerType,
         reason: trigger.reason,
         evidence: [...trigger.evidence],
-        quoteClose: trigger.quote.close,
-        quoteTs: trigger.quote.ts,
+        quoteClose: trigger.quote?.close ?? null,
+        quoteTs: trigger.quote?.ts ?? null,
         priority: trigger.priority,
         deliveryStatus: trigger.deliveryStatus,
         notificationId: trigger.notificationId ?? null,
@@ -89,8 +93,8 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         set: {
           reason: trigger.reason,
           evidence: [...trigger.evidence],
-          quoteClose: trigger.quote.close,
-          quoteTs: trigger.quote.ts,
+          quoteClose: trigger.quote?.close ?? null,
+          quoteTs: trigger.quote?.ts ?? null,
           priority: trigger.priority,
           deliveryStatus: trigger.deliveryStatus,
           notificationId: trigger.notificationId ?? null,
@@ -152,6 +156,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
       readonly limit?: number;
       readonly deliveryStatus?: readonly DeliveryStatus[];
       readonly ruleId?: string;
+      readonly eventId?: string;
     } = {},
   ): Promise<readonly WatchTrigger[]> {
     const conditions: SQL[] = [];
@@ -161,6 +166,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
       conditions.push(inDeliveryStatuses(opts.deliveryStatus));
     }
     if (opts.ruleId !== undefined) conditions.push(eq(watchTriggers.ruleId, opts.ruleId));
+    if (opts.eventId !== undefined) conditions.push(eq(watchTriggers.eventId, opts.eventId));
     const where = conditions.length === 0 ? undefined : and(...conditions);
     const limit = opts.limit ?? 50;
     return this.db
