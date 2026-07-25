@@ -9,6 +9,8 @@
 import {
   type AccountSchema,
   type AdviceSchema,
+  LimitUpLadderQuerySchema,
+  LimitUpLadderSchema,
   STANDARD_DISCLAIMERS,
   type ToolContext,
 } from '@luoome/core';
@@ -32,6 +34,7 @@ import {
   type KeyEvent,
   TextRenderable,
 } from '@opentui/core';
+import { formatLimitUpLadderLines } from './views/limit-up-ladder.js';
 import type { z } from 'zod';
 
 // ---------- 配色（低饱和暖色系；A 股惯例：红涨绿跌） ----------
@@ -128,7 +131,13 @@ interface OverlayState {
   readonly title: string;
   readonly lines: readonly string[];
   /** 弹层语义分支（仅用于键盘路由：账户选择 = accounts，可用 j/k/Enter）。 */
-  readonly kind?: 'detail' | 'stats' | 'tactics' | 'outcomes' | 'accounts';
+  readonly kind?:
+    | 'detail'
+    | 'stats'
+    | 'tactics'
+    | 'outcomes'
+    | 'accounts'
+    | 'limit-up-ladder';
   scroll: number;
 }
 
@@ -886,6 +895,35 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     openOverlayWithKind('切换账户', formatAccountsLines(state.accountCursor), 'accounts');
   };
 
+  /**
+   * Asia/Shanghai 当日 YYYY-MM-DD（不依赖 tui→cli 循环依赖）。
+   * TUI 单端使用时区一致性优先：用户视角与 CLI/market-overview 完全相同。
+   */
+  const todayInShanghai = (): string => {
+    const now = ctxRef.current.clock();
+    const shanghaiMs = now.getTime() + 8 * 60 * 60 * 1000;
+    const sh = new Date(shanghaiMs);
+    const y = sh.getUTCFullYear();
+    const m = String(sh.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(sh.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const openLimitUpLadder = async (): Promise<void> => {
+    openOverlay('连板天梯', ['加载中…', '', '[esc] 关闭']);
+    try {
+      const today = todayInShanghai();
+      const input = LimitUpLadderQuerySchema.parse({ date: today });
+      const raw = await callTool('limit_up_ladder', input, ctxRef.current);
+      const ladder = LimitUpLadderSchema.parse(raw);
+      if (state.overlay === null || state.overlay.title !== '连板天梯') return;
+      openOverlay('连板天梯', formatLimitUpLadderLines(ladder));
+    } catch (error) {
+      if (state.overlay === null) return;
+      openOverlay('连板天梯', [`加载失败：${describeError(error)}`, '', '[esc] 关闭']);
+    }
+  };
+
   const formatAccountsLines = (cursor: number): string[] => {
     const lines: string[] = [
       '账户切换：上下移动光标，Enter 选中，esc 取消',
@@ -982,6 +1020,9 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
         break;
       case 'a':
         openAccounts();
+        break;
+      case 'l':
+        void openLimitUpLadder();
         break;
       case 'up':
       case 'k':

@@ -7,6 +7,7 @@ import { STANDARD_DISCLAIMERS } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
 
 import { createCliContext } from './context.js';
+import { cmdMarketLimitUp } from './market-limit-up.js';
 import { loadProjectEnv } from './env.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
@@ -19,6 +20,9 @@ const VALUE_FLAGS = new Set([
   'input',
   'since',
   'until',
+  'date',
+  'days',
+  'source',
   'port',
   'host',
   'limit',
@@ -811,6 +815,13 @@ const run = async (argv: readonly string[]): Promise<number> => {
   if (cmd === 'web') {
     if (sub === 'serve') return cmdWebServe(flags);
     throw new CliUsageError(`未知 web 子命令: "${sub ?? ''}"（支持 serve）`);
+  }
+
+  if (cmd === 'market') {
+    if (sub === 'limit-up') {
+      return cmdMarketLimitUp({ args: rest, flags, json });
+    }
+    throw new CliUsageError(`未知 market 子命令: "${sub ?? ''}"（支持 limit-up）`);
   }
 
   throw new CliUsageError(`未知命令: "${cmd}"（运行 luoome --help 查看用法）`);

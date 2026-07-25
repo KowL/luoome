@@ -71,6 +71,9 @@ const EXPECTED_TOOL_NAMES = [
   'sync_stock_events',
   'get_market_data_status',
   'list_workflow_runs',
+  // Phase 1：连板天梯
+  'limit_up_ladder',
+  'limit_up_ladder_compare',
 ] as const;
 
 describe('toolRegistry', () => {

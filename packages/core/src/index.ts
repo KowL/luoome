@@ -8,6 +8,7 @@ export * from './entity/advice.js';
 export * from './entity/holding.js';
 export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';
+export * from './entity/limit-up-ladder.js';
 export * from './entity/llm-provider.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';

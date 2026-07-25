@@ -357,6 +357,8 @@ TacticSignal     战法信号（战法、标的、ts、分数、方向、证据�
 Alert            预警（账户?、标的?、类型、参数、状态）
 Note             笔记（标题、内容、标签、来源）
 Config           KV 配置（user/account/global scope）
+LimitUpLadder    连板天梯快照（date, source, maxLevel, levels[]）—— Phase 1，docs/ddd/limit-up-ladder-detailed-design.md
+LimitUpLadderEntry  单 entry（price / rawClose / corrected / ladderLevel / firstTime / finalTime）
 ```
 
 ### 5.2 Advice 实体（核心）
@@ -598,6 +600,7 @@ type ToolError =
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
 - `intraday-watch`：单轮盘中盯盘评估 —— daily 分组刷新检查 → 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/ddd/intraday-watch-design.md](./ddd/intraday-watch-design.md)）
 - `refresh-groups`：盘外刷新 enabled 动态分组（formula→run_tactic / llm→resolve_llm_group），失败 / 空结果保留旧快照，输出 entered/exited（分组化起；设计：[docs/ddd/stock-group-design.md](./ddd/stock-group-design.md)）
+- **Phase 2 候选**：连板天梯联动 workflow —— 在 `daily-review` / `market-outlook` 中读 `limit_up_ladder` 与 `limit_up_ladder_compare` tool，把天梯快照作为 LLM 复盘段的事实来源（替换 ruo 旧 `market-review.chain.ts` 字符串拼接）。Phase 1 仅提供 tool；workflow 改造延后（设计：[docs/ddd/limit-up-ladder-detailed-design.md §9](./ddd/limit-up-ladder-detailed-design.md)）。
 
 ### 8.2 Workflow 与 tool 的边界
 

@@ -11,6 +11,7 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Tactics and signals: `list_tactics`, `get_tactic`, `run_tactic`, signal query/scoring tools.
 - Groups and monitoring: `list_stock_groups`, `get_stock_group`, `list_watch_plans`, `list_watch_triggers`, `get_watch_status`.
 - Research and events: `list_research_notes`, `list_stock_events`.
+- Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
 
 Prefer one filtered list or batch tool over repeated per-item calls. `batch_quote` is classified as external because it contacts a market source.

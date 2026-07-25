@@ -1,0 +1,472 @@
+import type { LimitUpLadderQuery, Logger } from '@luoome/core';
+import { LimitUpLadderQuerySchema } from '@luoome/core';
+import { describe, expect, it, vi } from 'vitest';
+
+import { LimitUpLadderManager } from './manager.js';
+import type { LimitUpLadderAdapterLike } from './types.js';
+
+const noopLogger: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
+
+import type { LimitUpLadderRawEntry } from './types.js';
+
+const mkRawEntry = (
+  partial: { code: string; close: number } & Partial<LimitUpLadderRawEntry>,
+): LimitUpLadderRawEntry => partial;
+
+const mkAdapter = (
+  name: 'adshare' | 'amazingdata',
+  impl: LimitUpLadderAdapterLike['fetchLadder'],
+): LimitUpLadderAdapterLike => ({ name, fetchLadder: impl });
+
+const query = (input: { date: string; days?: number }): LimitUpLadderQuery =>
+  LimitUpLadderQuerySchema.parse(input);
+
+const compareQuery = (): Omit<LimitUpLadderQuery, 'date'> => {
+  const full = LimitUpLadderQuerySchema.parse({ date: '2026-07-25', days: 15 });
+  const { date: _omit, ...rest } = full;
+  void _omit;
+  return rest;
+};
+
+describe('LimitUpLadderManager', () => {
+  describe('fetchLadder', () => {
+    it('主源成功：返回映射+过滤+修正后 ladder', async () => {
+      const primary = mkAdapter('adshare', async (_date, _opts) => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            code: '600519',
+            name: '贵州茅台',
+            industry: '白酒',
+            level: 2,
+            close: 1850,
+            pre_close: 1681.8,
+            change_pct: 0.1,
+            first_time: '10:30:00',
+            final_time: '14:50:00',
+            reason: '涨价',
+            limit_up_date: '2026-07-25',
+            high: 1850,
+          },
+          {
+            code: '300750',
+            name: '宁德时代',
+            industry: '锂电池',
+            level: 1,
+            close: 500,
+            pre_close: 454.5,
+            change_pct: 0.1,
+            limit_up_date: '2026-07-25',
+            high: 500,
+          },
+        ],
+      }));
+      // 2026-07-25 是周六 → 非交易日，需要把节假日历设为空且 isWeekend 返回 false
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'), // Shanghai 13:00 → 盘中
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.total).toBe(2);
+      expect(r.data.levels).toHaveLength(2);
+      expect(r.data.levels[0]?.level).toBe(2);
+      expect(r.data.levels[0]?.stocks[0]?.code).toBe('600519');
+      expect(r.data.levels[1]?.level).toBe(1);
+      expect(r.data.maxLevel).toBe(2);
+    });
+
+    it('rawClose == high 且涨幅 ∈ [9.8%, 10%) 触发 8.58% 修正', async () => {
+      const primary = mkAdapter('adshare', async (_d) => ({
+        date: '2026-07-25',
+        entries: [
+          // 触板: close=10.99, high=10.99, pre_close=10 → pct=0.099 → 修正到 10.858
+          {
+            code: '600001',
+            name: '触板股',
+            close: 10.99,
+            pre_close: 10,
+            high: 10.99,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+        ],
+      }));
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const e = r.data.levels[0]?.stocks[0];
+      expect(e).toBeDefined();
+      if (!e) return;
+      expect(e.corrected).toBe(true);
+      expect(e.price).toBeCloseTo(10 * 1.0858, 5);
+      expect(e.rawClose).toBe(10.99);
+      expect(r.data.warnings).toContainEqual(expect.stringMatching(/corrected entries/));
+    });
+
+    it('真涨停 (涨幅 >= 10%) 不触发修正', async () => {
+      const primary = mkAdapter('adshare', async (_d) => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            code: '600002',
+            name: '涨停股',
+            close: 11,
+            pre_close: 10,
+            high: 11,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+        ],
+      }));
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const e = r.data.levels[0]?.stocks[0];
+      expect(e?.corrected).toBe(false);
+      expect(e?.price).toBe(11);
+    });
+
+    it('非交易日返回空 ladder + warnings=["non-trading-day"]', async () => {
+      const primary = mkAdapter('adshare', vi.fn()); // 不应被调用
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => true, // 永远周末
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.levels).toHaveLength(0);
+      expect(r.data.total).toBe(0);
+      expect(r.data.maxLevel).toBe(0);
+      expect(r.data.warnings).toEqual(['non-trading-day']);
+      expect(primary.fetchLadder).not.toHaveBeenCalled();
+    });
+
+    it('节假日日期同样返回 non-trading-day', async () => {
+      const primary = mkAdapter('adshare', vi.fn());
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map([[2026, new Set(['2026-07-25'] as string[])]]),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.warnings).toEqual(['non-trading-day']);
+    });
+
+    it('主源失败 + 无 fallback：抛 adapter_error', async () => {
+      const primary = mkAdapter('adshare', async () => {
+        throw new Error('adshare down');
+      });
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.kind).toBe('adapter_error');
+      expect(r.error.adapter).toBe('limit-up-ladder');
+      expect(r.error.message).toMatch(/primary adshare failed/);
+    });
+
+    it('主源失败 + fallback 成功：走 fallback', async () => {
+      const primary = mkAdapter('adshare', async () => {
+        throw new Error('adshare down');
+      });
+      const fallback = mkAdapter('amazingdata', async () => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            code: '600003',
+            name: 'fallback 股',
+            close: 100,
+            pre_close: 90.91,
+            high: 100,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+        ],
+      }));
+      const m = new LimitUpLadderManager({
+        primary,
+        fallback,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.levels[0]?.stocks[0]?.code).toBe('600003');
+    });
+
+    it('主源 + fallback 双失败：抛 adapter_error', async () => {
+      const primary = mkAdapter('adshare', async () => {
+        throw new Error('adshare down');
+      });
+      const fallback = mkAdapter('amazingdata', async () => {
+        throw new Error('amazingdata not implemented yet');
+      });
+      const m = new LimitUpLadderManager({
+        primary,
+        fallback,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.message).toMatch(/primary and fallback both failed/);
+    });
+
+    it('当日盘中：60s TTL 命中', async () => {
+      const fetchMock = vi.fn(async () => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            code: '600004',
+            name: 'A',
+            close: 10,
+            pre_close: 9.09,
+            high: 10,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+        ],
+      }));
+      const primary = mkAdapter('adshare', fetchMock);
+      const clock = vi.fn(() => new Date('2026-07-25T05:00:00Z')); // Shanghai 13:00 盘中
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock,
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r1 = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      const r2 = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r1.ok && r2.ok).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1); // 第二次命中缓存
+    });
+
+    it('当日盘后：Infinity TTL 命中', async () => {
+      const fetchMock = vi.fn(async () => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            code: '600005',
+            name: 'A',
+            close: 10,
+            pre_close: 9.09,
+            high: 10,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+        ],
+      }));
+      const primary = mkAdapter('adshare', fetchMock);
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T11:00:00Z'), // Shanghai 19:00 盘后
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('跨日查询：永久命中各自 key', async () => {
+      const fetchMock = vi.fn(async (date: string) => ({
+        date,
+        entries: [
+          {
+            code: '600006',
+            name: 'A',
+            close: 10,
+            pre_close: 9.09,
+            high: 10,
+            level: 1,
+            limit_up_date: date,
+          },
+        ],
+      }));
+      const primary = mkAdapter('adshare', fetchMock);
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      await m.fetchLadder(query({ date: '2026-07-24', days: 15 }));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('科创 / 北交所 / ST 默认过滤', async () => {
+      const primary = mkAdapter('adshare', async (_d) => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            code: '600007',
+            name: '主板股',
+            close: 10,
+            high: 10,
+            pre_close: 9.09,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+          {
+            code: '688981',
+            name: '科创股',
+            close: 10,
+            high: 10,
+            pre_close: 9.09,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+          {
+            code: '830799',
+            name: '北交所股',
+            close: 10,
+            high: 10,
+            pre_close: 9.09,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+          {
+            code: '600008',
+            name: 'ST大集',
+            close: 10,
+            high: 10,
+            pre_close: 9.09,
+            level: 1,
+            limit_up_date: '2026-07-25',
+          },
+        ],
+      }));
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.total).toBe(1);
+      expect(r.data.levels[0]?.stocks[0]?.code).toBe('600007');
+      expect(r.data.warnings).toContainEqual(expect.stringMatching(/filtered: 3/));
+    });
+
+    it('空 entries 不报错，返回 warnings=[empty-ladder]', async () => {
+      const primary = mkAdapter('adshare', async (_d) => ({
+        date: '2026-07-25',
+        entries: [],
+      }));
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.warnings).toEqual(['empty-ladder']);
+      expect(r.data.total).toBe(0);
+    });
+  });
+
+  describe('compareLadder', () => {
+    const buildManager = () =>
+      new LimitUpLadderManager({
+        primary: mkAdapter('adshare', async (date: string) => ({
+          date,
+          entries:
+            date === '2026-07-25'
+              ? [
+                  mkRawEntry({
+                    code: '600010',
+                    name: 'A',
+                    close: 10,
+                    pre_close: 9.09,
+                    high: 10,
+                    level: 5,
+                    limit_up_date: date,
+                  }),
+                ]
+              : [
+                  mkRawEntry({
+                    code: '600011',
+                    name: 'B',
+                    close: 10,
+                    pre_close: 9.09,
+                    high: 10,
+                    level: 5,
+                    limit_up_date: date,
+                  }),
+                ],
+        })),
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+
+    it('curr + prev 成功：返回 diff', async () => {
+      const m = buildManager();
+      const r = await m.compareLadder('2026-07-25', '2026-07-24', compareQuery());
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.curr.levels[0]?.stocks[0]?.code).toBe('600010');
+      expect(r.data.prev.levels[0]?.stocks[0]?.code).toBe('600011');
+      expect(r.data.diff.totalDelta).toBe(0);
+      expect(r.data.diff.maxLevelDelta).toBe(0);
+      expect(r.data.diff.topLevelAdded).toEqual(['600010']);
+      expect(r.data.diff.topLevelRemoved).toEqual(['600011']);
+      expect(r.data.diff.topLevelRetained).toEqual([]);
+    });
+  });
+});

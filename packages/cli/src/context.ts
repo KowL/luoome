@@ -10,7 +10,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { createMarketAdapterFromEnv, LLMManager } from '@luoome/adapters';
+import { createMarketAdapterFromEnv, createLimitUpLadderManagerFromEnv, LLMManager } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 import { BUILTIN_TACTICS } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
@@ -65,6 +65,10 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
 
   const logger = createStderrLogger();
+  const limitUpLadder = createLimitUpLadderManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+  });
   const ctx = buildContext({
     repos,
     adapters: {
@@ -74,6 +78,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     user: { id: 'local-user', defaultAccountId },
     clock: now,
     logger,
+    limitUpLadder,
   });
 
   return { ctx, dbPath, close };

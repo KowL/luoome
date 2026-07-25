@@ -39,6 +39,7 @@ import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
+import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordWatchRunTool } from './tools/record-watch-run.js';
@@ -191,6 +192,9 @@ export const toolRegistry: Registry = createRegistry([
   recordWatchRunTool,
   sendNotificationTool,
   marketOutlookTool,
+  // Phase 1：连板天梯（docs/ddd/limit-up-ladder-detailed-design.md §7）
+  limitUpLadderTool,
+  limitUpLadderCompareTool,
   // v0.5 新增：持仓 / 交易录入（write）
   addTradeTool,
   addHoldingTool,

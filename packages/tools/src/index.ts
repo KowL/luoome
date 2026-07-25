@@ -42,6 +42,7 @@ export * from './tools/list-trades.js';
 export * from './tools/list-watch-plans.js';
 export * from './tools/list-watch-triggers.js';
 export * from './tools/list-workflow-runs.js';
+export * from './tools/limit-up-ladder.js';
 export * from './tools/market-outlook.js';
 export * from './tools/record-advice-outcome.js';
 export * from './tools/record-watch-run.js';

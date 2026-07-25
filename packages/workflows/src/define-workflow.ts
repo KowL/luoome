@@ -29,6 +29,10 @@ import type {
   GetHoldingInput,
   GetHoldingOutput,
   GetStockGroupInput,
+  LimitUpLadderCompareInput,
+  LimitUpLadderCompareOutput,
+  LimitUpLadderInput,
+  LimitUpLadderOutput,
   GetStockGroupOutput,
   GetTacticInput,
   GetTacticOutput,
@@ -194,6 +198,12 @@ export interface WorkflowToolMap {
   readonly set_watch_trigger_feedback: ToolAccessor<
     typeof SetWatchTriggerFeedbackInput,
     typeof SetWatchTriggerFeedbackOutput
+  >;
+  // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md §7）
+  readonly limit_up_ladder: ToolAccessor<typeof LimitUpLadderInput, typeof LimitUpLadderOutput>;
+  readonly limit_up_ladder_compare: ToolAccessor<
+    typeof LimitUpLadderCompareInput,
+    typeof LimitUpLadderCompareOutput
   >;
 }
 

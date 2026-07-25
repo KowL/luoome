@@ -29,6 +29,7 @@
 | 文档 | 范围 |
 |---|---|
 | [策略预警产品文档](./prd/strategy-alert-product.md) | 策略预警闭环、用户流程、产品边界与实施分期 |
+| [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照的页面、tool、与下游联动边界 |
 | [ruo 能力迁移产品设计](./prd/ruo-feature-migration-product-design.md) | 研究档案、公司事件、数据新鲜度与真实复盘 |
 
 ## 技术设计（DDD）
@@ -39,8 +40,10 @@
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | ResearchNote、StockEvent、WorkflowRun 与事件规则 |
 | [盘中盯盘设计](./ddd/intraday-watch-design.md) | 股票池、盘中求值、冷却与 `luoome watch` |
 | [股票分组设计](./ddd/stock-group-design.md) | StockGroup、成员快照与动态 resolver |
+| [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、adapter、缓存与端到端集成 |
 | [Web 对话助手设计](./ddd/web-chat-design.md) | `/api/chat` 与 draft-and-confirm 交互 |
 | [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) | chat / workflow 升级为真 agent loop 前的库选型与契约设计分析 |
+| [AI SDK 接入与 LLM 重构设计](./ddd/ai-sdk-llm-refactor-design.md) | 用 AI SDK v6 重构 LLM adapter 并实现 agent loop 的落地设计 |
 
 ## 运维手册
 

@@ -13,3 +13,9 @@ export * from './market/tencent.js';
 export * from './market/types.js';
 // 通知（v0.3 起）
 export * from './notification/index.js';
+// 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md）
+export * from './limit-up-ladder/types.js';
+export * from './limit-up-ladder/adshare.js';
+export * from './limit-up-ladder/amazingdata.js';
+export * from './limit-up-ladder/manager.js';
+export * from './limit-up-ladder/factory.js';
