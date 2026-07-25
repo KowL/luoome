@@ -1,6 +1,7 @@
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, Quote } from './entity/quote.js';
 import type { Exchange } from './entity/stock.js';
+import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { RepositoryRegistry } from './repository/index.js';
 
 /**
@@ -75,10 +76,43 @@ export interface ToolContext {
   };
   /** v0.3 起；send_notification tool 用。装配时由 CLI/MCP 注入。 */
   readonly notification?: NotificationManagerLike;
+  /**
+   * ruo 迁移 Phase 1B（docs/ddd/ruo-feature-migration-detailed-design.md §4.1）：公司事件数据源。
+   * 装配时注入；未配置（数据源选型未定，开放问题 1）时为空数组 → sync-stock-events 记 syncedStocks=0。
+   */
+  readonly eventProviders?: readonly StockEventProviderLike[];
   readonly user: {
     readonly id: string;
     readonly defaultAccountId: string;
   };
   readonly clock: () => Date;
   readonly logger: Logger;
+}
+
+/**
+ * 公司事件数据源（ruo 迁移 §4.1）。原始字段差异封装在实现内；输出结构对齐 StockEvent（无 id / stale）。
+ */
+export interface ExternalStockEvent {
+  readonly stockId: string;
+  readonly kind: StockEventKind;
+  readonly title: string;
+  readonly description?: string;
+  readonly occursAt: Date;
+  readonly allDay?: boolean;
+  readonly importance: EventImportance;
+  readonly status?: StockEventStatus;
+  /** 幂等键：provider 侧稳定 id。 */
+  readonly externalId: string;
+  readonly sourceUrl?: string;
+  readonly observedAt?: Date;
+}
+
+export interface StockEventProviderLike {
+  readonly name: string;
+  readonly supportedKinds: readonly StockEventKind[];
+  fetchEvents(input: {
+    readonly stockIds: readonly string[];
+    readonly kinds?: readonly StockEventKind[];
+    readonly windowDays: number;
+  }): Promise<readonly ExternalStockEvent[]>;
 }

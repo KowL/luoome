@@ -102,6 +102,10 @@ homebrew/
 | [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | **用户手册**：安装 / CLI / TUI / Web / MCP / 多账户 / 复盘 / 校准 / FAQ |
 | [AGENTS.md](./AGENTS.md) | agent 接入：Claude Desktop / OpenClaw / Hermes + tool 清单 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 架构核心：模块、概念、数据流、安全模型、advisor 模型 |
+| [docs/prd/strategy-alert-product.md](./docs/prd/strategy-alert-product.md) | 策略预警产品文档：ruo 复盘、产品边界、用户流程、已确认决策与实施分期 |
+| [docs/prd/ruo-feature-migration-product-design.md](./docs/prd/ruo-feature-migration-product-design.md) | ruo 能力迁移产品文档：研究档案、公司事件、数据新鲜度、真实复盘 |
+| [docs/ddd/strategy-alert-detailed-design.md](./docs/ddd/strategy-alert-detailed-design.md) | 策略预警详细设计：schema 演进、状态机、送达矩阵、迁移与任务拆分 |
+| [docs/ddd/ruo-feature-migration-detailed-design.md](./docs/ddd/ruo-feature-migration-detailed-design.md) | ruo 迁移详细设计：ResearchNote / StockEvent / WorkflowRun、事件同步与 event-date |
 | [docs/ROADMAP.md](./docs/ROADMAP.md) | v0.1 → v0.7 演进路线 |
 | [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | 贡献者指南：开发环境 / 测试 / 加新 tool / 战法 |
 | [docs/SECURITY.md](./docs/SECURITY.md) | 副作用分级、advice 安全、密钥、audit |
@@ -117,6 +121,21 @@ bun install
 ```
 
 浏览器打开 `http://127.0.0.1:5173`。首次启动生成 `~/.luoome/web-token`，将文件内容粘贴到 Web「设置」页即可执行修改。
+
+## 自动任务（cron）
+
+调度不内置：所有自动任务 = workflow + 外部 cron（每次运行落一条 `WorkflowRun` 审计，`list_workflow_runs` 可查）。建议在 crontab 中配置：
+
+```cron
+# 事件同步：每交易日 08:30（财报 / 解禁 / 分红…，按 (provider, externalId) 幂等 upsert）
+30 8 * * 1-5  luoome workflow run sync-stock-events
+# event-date 求值：每交易日 08:50（同步之后；命中提醒窗口的事件推送）
+50 8 * * 1-5  luoome workflow run evaluate-event-rules
+```
+
+- `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
+- `evaluate-event-rules`：盘前一次，`intraday-watch` 不评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 推送。
+- 含 event-date 的方案建议单独建（event-date 不参与盘中 ANY/ALL 组合判定）。
 
 ## 状态
 

@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
 import { addHoldingTool } from './tools/add-holding.js';
+import { addResearchNoteTool } from './tools/add-research-note.js';
+import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
@@ -11,6 +13,8 @@ import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
 import { createStockGroupTool } from './tools/create-stock-group.js';
 import { createStockPoolTool } from './tools/create-stock-pool.js';
+import { deleteResearchNoteTool } from './tools/delete-research-note.js';
+import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { deleteStockGroupTool } from './tools/delete-stock-group.js';
 import { deleteStockPoolTool } from './tools/delete-stock-pool.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
@@ -19,17 +23,21 @@ import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getHoldingTool } from './tools/get-holding.js';
+import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getStockGroupTool } from './tools/get-stock-group.js';
 import { getTacticTool } from './tools/get-tactic.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
+import { listResearchNotesTool } from './tools/list-research-notes.js';
+import { listStockEventsTool } from './tools/list-stock-events.js';
 import { listStockGroupsTool } from './tools/list-stock-groups.js';
 import { listStockPoolsTool } from './tools/list-stock-pools.js';
 import { listTacticsTool } from './tools/list-tactics.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
+import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordWatchRunTool } from './tools/record-watch-run.js';
@@ -42,9 +50,12 @@ import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
+import { syncStockEventsTool } from './tools/sync-stock-events.js';
 import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
 import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
 import { updateHoldingTool } from './tools/update-holding.js';
+import { updateResearchNoteTool } from './tools/update-research-note.js';
+import { updateStockEventTool } from './tools/update-stock-event.js';
 import { updateStockGroupTool } from './tools/update-stock-group.js';
 import { updateStockPoolTool } from './tools/update-stock-pool.js';
 
@@ -202,4 +213,16 @@ export const toolRegistry: Registry = createRegistry([
   resolveLlmGroupTool,
   // v0.7 策略预警：触发反馈（write）
   setWatchTriggerFeedbackTool,
+  // ruo 迁移 Phase 1：研究档案 + 公司事件 + 运行状态（docs/ddd/ruo-feature-migration-detailed-design.md §7）
+  listResearchNotesTool,
+  addResearchNoteTool,
+  updateResearchNoteTool,
+  deleteResearchNoteTool,
+  listStockEventsTool,
+  addStockEventTool,
+  updateStockEventTool,
+  deleteStockEventTool,
+  syncStockEventsTool,
+  getMarketDataStatusTool,
+  listWorkflowRunsTool,
 ]);

@@ -603,7 +603,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules）`,
     );
   }
   const handle = await createCliContext();
@@ -698,7 +698,7 @@ Surfaces:
                                一键启动完整 MVP（Web + 盘中盯盘）
   web serve [--port 5173] [--host 127.0.0.1]
                                仅启动 Web 仪表盘
-  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups）
+  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules）
   watch [--interval 60] [--pool <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
                                 （每日首个交易轮次前自动刷新 stale 的 daily 动态分组：refresh-groups）
