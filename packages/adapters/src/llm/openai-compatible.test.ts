@@ -82,6 +82,34 @@ describe('llm/openai-compatible', () => {
       expect(body.response_format.json_schema.strict).toBe(true);
     });
 
+    it('system 消息追加 JSON 输出约束与 schema 文本（覆盖忽略 response_format 的 provider）', async () => {
+      let capturedBody: unknown;
+      const adapter = new OpenAICompatibleAdapter(makeCfg(), {
+        fetchImpl: ((_url: string, init: { body?: string }) => {
+          capturedBody = JSON.parse(init.body ?? '{}');
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                choices: [
+                  {
+                    message: { role: 'assistant', content: '{"decision":"hold","confidence":65}' },
+                  },
+                ],
+              }),
+              { status: 200 },
+            ),
+          );
+        }) as never,
+      });
+      await adapter.generate({ system: 'you are an advisor', schema: TestSchema, data: {} });
+      const body = capturedBody as { messages: { role: string; content: string }[] };
+      const system = body.messages[0]?.content ?? '';
+      expect(system).toContain('you are an advisor');
+      expect(system).toContain('JSON Schema:');
+      // schema 文本与 response_format 里的 schema 同源（都经过归一化）
+      expect(system).toContain('"decision"');
+    });
+
     it('响应缺 content 时抛错', async () => {
       const adapter = new OpenAICompatibleAdapter(makeCfg(), {
         fetchImpl: (async () =>

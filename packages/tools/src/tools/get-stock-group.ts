@@ -10,6 +10,8 @@ export const GetStockGroupInput = z.object({
 
 const GroupMemberView = z.object({
   stockId: z.string().min(1),
+  /** 股票名称（来自 stock repo.findById；查不到 fallback 为 stockId）。详情页用。 */
+  name: z.string().min(1),
   /** 进入理由：快照 reason；manual / holdings 为固定说明。 */
   reason: z.string().min(1),
   refreshedAt: z.coerce.date(),
@@ -45,39 +47,36 @@ export const getStockGroupTool = defineTool({
     const now = ctx.clock();
     const resolver = group.resolver;
 
+    /** 解析单只成员的展示字段；缺失 stock 行时 name fallback 为 stockId。 */
+    const memberView = async (stockId: string, reason: string, refreshedAt: Date) => {
+      const stock = await ctx.repos.stock.findById(stockId);
+      return { stockId, name: stock?.name ?? stockId, reason, refreshedAt };
+    };
+
     if (resolver.kind === 'manual') {
-      return {
-        group,
-        members: resolver.stockIds.map((stockId) => ({
-          stockId,
-          reason: 'manual 固定成员',
-          refreshedAt: group.updatedAt,
-        })),
-        latestRefreshAt: null,
-        stale: false,
-      };
+      const members = await Promise.all(
+        resolver.stockIds.map((stockId) => memberView(stockId, 'manual 固定成员', group.updatedAt)),
+      );
+      return { group, members, latestRefreshAt: null, stale: false };
     }
     if (resolver.kind === 'holdings') {
       const holdings = await ctx.repos.holding.listByAccount(resolver.accountId);
-      return {
-        group,
-        members: holdings
+      const members = await Promise.all(
+        holdings
           .filter((h) => h.closedAt === null)
-          .map((h) => ({ stockId: h.stockId, reason: 'holdings 活视图', refreshedAt: now })),
-        latestRefreshAt: null,
-        stale: false,
-      };
+          .map((h) => memberView(h.stockId, 'holdings 活视图', now)),
+      );
+      return { group, members, latestRefreshAt: null, stale: false };
     }
 
     const snapshots = await ctx.repos.groupMember.currentMembers(group.id);
     const latestRefreshAt = snapshots[0]?.createdAt ?? null;
+    const members = await Promise.all(
+      snapshots.map((s) => memberView(s.stockId, s.reason, s.createdAt)),
+    );
     return {
       group,
-      members: snapshots.map((s) => ({
-        stockId: s.stockId,
-        reason: s.reason,
-        refreshedAt: s.createdAt,
-      })),
+      members,
       latestRefreshAt,
       stale: isGroupStale(group, latestRefreshAt, now),
     };

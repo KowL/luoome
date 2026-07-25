@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
+import { addGroupMemberTool } from './tools/add-group-member.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addResearchNoteTool } from './tools/add-research-note.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
@@ -209,6 +210,7 @@ export const toolRegistry: Registry = createRegistry([
   createStockGroupTool,
   updateStockGroupTool,
   deleteStockGroupTool,
+  addGroupMemberTool,
   refreshStockGroupTool,
   resolveLlmGroupTool,
   // v0.7 策略预警：触发反馈（write）

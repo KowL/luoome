@@ -141,31 +141,41 @@ export class TencentAdapter {
   }
 
   /**
-   * 拉快照。Tencent 公开接口的实时行情主要在 minute 端点；
-   * 真正可用的快照接口走 qt.gtimg.cn 文本（GBK），解析复杂，v0.2 直接抛错降级。
-   * 实战由 Eastmoney 主源负责；Tencent 仅作日线 fallback。
+   * 拉快照。minute 端点返回当日分钟线：data.<code>.data.data 是
+   * "HHMM price volume amount" 字符串数组（volume 单位手）。
+   * 取末行价为最新价、首行价为 open、全程最大/最小为 high/low。
    */
   async fetchQuote(stockCode: string): Promise<Quote> {
     const code = toPrefixedCode(stockCode);
     const url = `${this.baseQuoteUrl}?code=${code}`;
-    const json = await this.getJson<{ data?: { data?: { now?: number; open?: number } } }>(url);
-    const now = json.data?.data?.now;
-    if (now === undefined || now <= 0) {
+    const json = await this.getJson<{
+      data?: { [code: string]: { data?: { data?: string[] } } };
+    }>(url);
+    const minutes = json.data?.[code]?.data?.data;
+    if (minutes === undefined || minutes.length === 0) {
       throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
     }
-    const open = json.data?.data?.open ?? now;
-    if (open <= 0) {
-      throw new TencentAdapterError(`Tencent 快照 open 异常: code=${code} open=${open}`);
+    const prices: number[] = [];
+    for (const row of minutes) {
+      const price = Number(row.split(' ')[1]);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      prices.push(price);
     }
-    const stockId = stockCode.includes('.') ? stockCode.toUpperCase() : stockCode.toUpperCase();
+    const open = prices[0];
+    const close = prices.at(-1);
+    // 分钟行第三列是当日累计量（手），取末行即可，求和会重复计数
+    const lastVolume = Number(minutes.at(-1)?.split(' ')[2]);
+    if (open === undefined || close === undefined) {
+      throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
+    }
     return {
-      stockId,
+      stockId: stockCode.toUpperCase(),
       ts: this.clock(),
       open: money(open),
-      high: money(now),
-      low: money(now),
-      close: money(now),
-      volume: 0, // minute 接口不直接给量；调用方应优先走 Eastmoney
+      high: money(Math.max(...prices)),
+      low: money(Math.min(...prices)),
+      close: money(close),
+      volume: Number.isFinite(lastVolume) && lastVolume > 0 ? lastVolume * 100 : 0, // 手 → 股
       source: 'tencent',
     };
   }

@@ -10,6 +10,7 @@ import { initMvpActions, openGroupModal } from './mvp-actions.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
+  cancelAnalyzeAllHoldings,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
@@ -219,12 +220,12 @@ const bindGlobalActions = () => {
   const addBtn = $('#btn-holding-add');
   if (addBtn !== null) addBtn.addEventListener('click', () => openAddHoldingModal());
 
-  const refreshBtn = $('#btn-holdings-refresh');
-  if (refreshBtn !== null)
-    refreshBtn.addEventListener('click', () => void renderHoldings(setStatus));
   const analyzeBtn = $('#btn-holdings-analyze');
   if (analyzeBtn !== null)
     analyzeBtn.addEventListener('click', () => void analyzeAllHoldings(setStatus));
+  const analyzeCancelBtn = $('#btn-holdings-analyze-cancel');
+  if (analyzeCancelBtn !== null)
+    analyzeCancelBtn.addEventListener('click', () => cancelAnalyzeAllHoldings());
 
   $('#btn-group-add')?.addEventListener('click', () => openGroupModal());
   $('#btn-dashboard-watch-run')?.addEventListener('click', () => void runWatchOnce(setStatus));

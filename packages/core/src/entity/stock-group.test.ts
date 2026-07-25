@@ -70,9 +70,9 @@ describe('StockGroup schema', () => {
     ).toBe(false);
   });
 
-  it('manual resolver：stockIds 空数组 → parse 失败', () => {
+  it('manual resolver：stockIds 空数组 → parse 通过（加成员走 add_group_member）', () => {
     const r = GroupResolverSchema.safeParse({ kind: 'manual', stockIds: [] });
-    expect(r.success).toBe(false);
+    expect(r.success).toBe(true);
   });
 
   it('id 含大写 → schema parse 失败', () => {

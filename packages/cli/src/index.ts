@@ -8,6 +8,7 @@ import { toolRegistry } from '@luoome/tools';
 
 import { createCliContext } from './context.js';
 import { loadProjectEnv } from './env.js';
+import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
 const VERSION = '0.8.0';
 
@@ -636,6 +637,33 @@ const cmdWebServe = (flags: ReadonlyMap<string, string | boolean>): Promise<numb
   return runLazyEntry('@luoome/web', 'startWeb', [{ port, host }]);
 };
 
+/**
+ * 一键 restart：按端口反查旧 PID 优雅停掉，再 start；省去「查 PID → kill → 启动」的组合命令。
+ * 前台阻塞（语义同 `start`），调用方自行 `&` 后台化。
+ */
+const cmdRestart = async (
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  const port = parsePositiveInt(flagString(flags, 'port') ?? '5173', 'port');
+  if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
+
+  const oldPid = await findPidOnPort(port);
+  if (oldPid !== null) {
+    if (!json) console.log(`stopping pid=${oldPid} on port ${port}`);
+    killPid(oldPid, 'SIGTERM');
+    const exited = await waitForProcessExit(oldPid, 5000);
+    if (!exited) {
+      if (!json) console.log(`pid=${oldPid} 5s 未退，SIGKILL`);
+      killPid(oldPid, 'SIGKILL');
+      await waitForProcessExit(oldPid, 2000);
+    }
+  }
+
+  // start 会复用 flags 里的 host/port；旧进程已让位，端口空闲。
+  return cmdStart(flags, json);
+};
+
 /** 一键 MVP：同一进程启动 Web，并在后台职责上进入 watch 长驻循环。 */
 const cmdStart = async (
   flags: ReadonlyMap<string, string | boolean>,
@@ -696,6 +724,8 @@ Surfaces:
   tui                          启动终端 TUI
   start [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch]
                                一键启动完整 MVP（Web + 盘中盯盘）
+  restart [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch]
+                               按端口反查旧进程 SIGTERM 后再 start，无需手动 kill
   web serve [--port 5173] [--host 127.0.0.1]
                                仅启动 Web 仪表盘
   workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules）
@@ -763,6 +793,7 @@ const run = async (argv: readonly string[]): Promise<number> => {
   }
 
   if (cmd === 'start') return cmdStart(flags, json);
+  if (cmd === 'restart') return cmdRestart(flags, json);
 
   if (cmd === 'workflow') {
     if (sub === 'run') {

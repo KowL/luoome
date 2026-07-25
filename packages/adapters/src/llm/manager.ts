@@ -163,11 +163,15 @@ export class LLMManager implements LLMAdapter {
   }
 
   private buildProvider(cfg: LLMProviderConfig, fetchImpl?: typeof fetch): LLMAdapter {
+    const options = {
+      ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+      ...(cfg.timeoutMs !== undefined ? { timeoutMs: cfg.timeoutMs } : {}),
+    };
     if (cfg.provider === 'openai-compatible') {
-      return new OpenAICompatibleAdapter(cfg, fetchImpl !== undefined ? { fetchImpl } : {});
+      return new OpenAICompatibleAdapter(cfg, options);
     }
     if (cfg.provider === 'anthropic') {
-      return new AnthropicAdapter(cfg, fetchImpl !== undefined ? { fetchImpl } : {});
+      return new AnthropicAdapter(cfg, options);
     }
     throw new Error(`unknown provider: ${cfg.provider}`);
   }

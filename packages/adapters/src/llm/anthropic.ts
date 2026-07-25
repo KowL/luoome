@@ -1,4 +1,5 @@
 import type { LLMGenerateRequest, LLMProviderConfig } from '@luoome/core';
+import { LLM_CALL_TIMEOUT_MS } from '@luoome/core';
 import { z } from 'zod';
 import type { LLMAdapter, LLMGenerateResult } from './types.js';
 
@@ -12,7 +13,7 @@ import type { LLMAdapter, LLMGenerateResult } from './types.js';
  * - 不在 adapter 内做重试（fallback 协议由 Manager 处理）。
  */
 
-const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_TIMEOUT_MS = LLM_CALL_TIMEOUT_MS;
 const DEFAULT_MAX_PROMPT_CHARS = 16_000;
 const ANTHROPIC_VERSION = '2023-06-01';
 const ANTHROPIC_TOOL_NAME = 'emit_advice';

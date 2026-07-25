@@ -54,6 +54,7 @@ const EXPECTED_TOOL_NAMES = [
   'create_stock_group',
   'update_stock_group',
   'delete_stock_group',
+  'add_group_member',
   'refresh_stock_group',
   'resolve_llm_group',
   // v0.7 策略预警（docs/ddd/strategy-alert-detailed-design.md §9.2）新增
@@ -124,6 +125,7 @@ describe('toolRegistry', () => {
       .map((t) => t.name)
       .sort();
     expect(writeTools).toEqual([
+      'add_group_member',
       'add_holding',
       'add_research_note',
       'add_stock_event',

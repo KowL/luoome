@@ -1,7 +1,7 @@
 /* 分组与盯盘方案的 mutation 表单。服务端负责最终 schema / 引用校验。 */
 
 import { callApi, getAccountId } from './api.js';
-import { $, el } from './ui.js';
+import { $, el, fmtNum } from './ui.js';
 
 let refreshGroups = async () => {};
 let refreshWatch = async () => {};
@@ -13,8 +13,13 @@ export const initMvpActions = ({ onGroupsChanged, onWatchChanged, setStatus }) =
   notify = setStatus;
 };
 
-const openModal = (title, body) => {
+const openModal = (title, body, extraClass = '') => {
   $('#modal-title').textContent = title;
+  const modal = $('#modal-overlay > .modal');
+  if (modal !== null) {
+    if (extraClass.length > 0) modal.classList.add(extraClass);
+    else modal.classList.remove('modal-wide');
+  }
   $('#modal-body').replaceChildren(body);
   $('#modal-overlay').hidden = false;
 };
@@ -62,9 +67,14 @@ const tacticSelect = (id, tactics, selected = '') => {
   return node;
 };
 
-const errorMessage = (error) => {
+export const toolErrorText = (error) => {
   if (error === null || typeof error !== 'object') return '提交失败';
-  return error.message ?? error.cause ?? error.kind ?? '提交失败';
+  if (error.kind === 'permission_denied') {
+    const required = error.required ?? '写操作需要有效 Web token';
+    return `权限校验失败：${required}；请前往「设置」保存当前服务的 Web token。`;
+  }
+  const detail = error.message ?? error.cause ?? '';
+  return detail === '' ? String(error.kind) : `${error.kind}：${detail}`;
 };
 
 const submit = async (button, errorNode, tool, input, after, message) => {
@@ -76,7 +86,7 @@ const submit = async (button, errorNode, tool, input, after, message) => {
   });
   button.disabled = false;
   if (!result.ok) {
-    errorNode.textContent = errorMessage(result.error);
+    errorNode.textContent = toolErrorText(result.error);
     return false;
   }
   closeModal();
@@ -110,7 +120,7 @@ const groupResolverFields = (kind, current, tactics = []) => {
       field(
         '股票代码',
         control('textarea', 'group-stock-ids', value),
-        '逗号或换行分隔，如 002594.SZ, 600519.SH',
+        '逗号或换行分隔，如 002594.SZ, 600519.SH；可先留空，创建后到分组详情单独添加',
       ),
     );
   } else if (kind === 'holdings') {
@@ -216,6 +226,186 @@ export const openGroupModal = async (item = null) => {
   openModal(group ? `编辑分组 · ${group.name}` : '新建股票分组', form);
 };
 
+/**
+ * 向 manual 分组追加成员。复刻 holdings-actions 的搜索 + 合成候选，但每个候选行带
+ * 代码 / 名称 / 现价 / 日内涨幅（远程 batch_quote 拉行情），已选贴一张预览卡在顶部。
+ */
+export const openAddMemberModal = async (group, onAdded) => {
+  if (group.resolver.kind !== 'manual') return;
+  const existing = new Set(group.resolver.stockIds);
+  const STOCK_ID_PATTERN_UI = /^[A-Z0-9]{1,12}\.(SH|SZ|BJ|HK|US)$/;
+
+  /** 渲染 quote 行情块：现价 + 日内变化%（涨/跌染色）。 */
+  const priceBlock = (quote) => {
+    const wrap = el('div', 'quote-line');
+    if (quote === null) {
+      wrap.append(el('span', 'quote-price muted', '--'));
+      wrap.append(el('span', 'quote-pct muted', '行情暂不可用'));
+      return wrap;
+    }
+    const close = Number(quote.close);
+    const open = Number(quote.open);
+    let pctText = '—';
+    let pctClass = '';
+    if (Number.isFinite(close) && Number.isFinite(open) && open !== 0) {
+      const pct = (close - open) / open;
+      const sign = pct > 0 ? '+' : '';
+      pctText = `日内 ${sign}${fmtNum(pct * 100, 2)}%`;
+      pctClass = pct > 0 ? 'text-pos' : pct < 0 ? 'text-neg' : '';
+    }
+    wrap.append(el('span', 'quote-price', Number.isFinite(close) ? fmtNum(close, 2) : '--'));
+    wrap.append(el('span', `quote-pct ${pctClass}`, pctText));
+    return wrap;
+  };
+
+  const renderRow = (entry, quote) => {
+    const row = el('button', 'autocomplete-item autocomplete-rich');
+    row.type = 'button';
+    const main = el('div', 'ac-line-1', [
+      el('span', 'mono', entry.id),
+      el('span', 'ac-name', entry.name ?? entry.id),
+    ]);
+    const tail = priceBlock(quote);
+    row.append(main, tail);
+    row.addEventListener('click', () =>
+      pickStock(entry.id, `${entry.id} ${entry.name ?? entry.id}`, entry.name ?? ''),
+    );
+    return row;
+  };
+
+  /** 把 batch_quote 结果按 stockId 索引；不存在的返回 null。 */
+  const indexQuotes = (resp) => {
+    const m = new Map();
+    if (!resp.ok || !Array.isArray(resp.data?.quotes)) return m;
+    for (const q of resp.data.quotes) m.set(q.stockId, q);
+    return m;
+  };
+
+  let selectedStockId = '';
+  let selectedStockName = '';
+
+  const pickStock = (id, label, name) => {
+    selectedStockId = id;
+    selectedStockName = name;
+    stockInput.value = label;
+    acList.hidden = true;
+  };
+
+  const stockInput = el('input');
+  stockInput.id = 'add-member-stock';
+  stockInput.placeholder = '代码或名称，如 002594 / 比亚迪';
+  stockInput.autocomplete = 'off';
+
+  const acList = el('div', 'autocomplete-list');
+  acList.hidden = true;
+  const acWrap = el('div', 'autocomplete', [stockInput, acList]);
+
+  const syntheticCandidates = (q) => {
+    if (/^\d{6}$/.test(q)) return [`${q}.SH`, `${q}.SZ`];
+    if (/^\d{4,5}$/.test(q)) return [`${q}.HK`];
+    if (/^[A-Za-z]{1,5}$/.test(q)) return [`${q.toUpperCase()}.US`];
+    return [];
+  };
+
+  let timer = 0;
+  stockInput.addEventListener('input', () => {
+    selectedStockId = '';
+    selectedStockName = '';
+    window.clearTimeout(timer);
+    const q = stockInput.value.trim();
+    if (q.length === 0) {
+      acList.hidden = true;
+      return;
+    }
+    if (STOCK_ID_PATTERN_UI.test(q.toUpperCase())) {
+      acList.hidden = true;
+      return;
+    }
+    timer = window.setTimeout(() => {
+      void (async () => {
+        const r = await callApi('/api/tools/search_stocks/call', {
+          method: 'POST',
+          body: JSON.stringify({ input: { query: q, limit: 8 } }),
+        });
+        const stocks = r.ok && Array.isArray(r.data?.stocks) ? r.data.stocks : [];
+        const entries = stocks.map((s) => ({ id: s.id, name: s.name }));
+        const ids = entries.map((e) => e.id);
+        const quoteMap =
+          ids.length === 0
+            ? new Map()
+            : indexQuotes(
+                await callApi('/api/tools/batch_quote/call', {
+                  method: 'POST',
+                  body: JSON.stringify({ input: { stockIds: ids } }),
+                }),
+              );
+        const items = entries.map((s) => renderRow(s, quoteMap.get(s.id) ?? null));
+        const extras =
+          entries.length === 0
+            ? syntheticCandidates(q).map((id) =>
+                renderRow({ id, name: '（未入库，添加时自动登记）' }, null),
+              )
+            : [];
+        const all = [...items, ...extras];
+        if (all.length === 0) {
+          acList.hidden = true;
+          return;
+        }
+        acList.replaceChildren(...all);
+        acList.hidden = false;
+      })();
+    }, 300);
+  });
+
+  const [errorNode, actions] = actionRow('添加到分组', async (_button, errorNodeSubmit) => {
+    let stockId = selectedStockId;
+    let stockName = selectedStockName;
+    if (stockId.length === 0) {
+      const raw = stockInput.value.trim().toUpperCase();
+      if (raw.length === 0) {
+        errorNodeSubmit.textContent = '请选择候选或填写完整代码';
+        return;
+      }
+      const first = raw.split(/\s+/)[0] ?? '';
+      if (!STOCK_ID_PATTERN_UI.test(first)) {
+        errorNodeSubmit.textContent = '股票代码必须形如 002594.SZ（代码.交易所）';
+        return;
+      }
+      stockId = first;
+      stockName = '';
+    }
+    if (existing.has(stockId)) {
+      errorNodeSubmit.textContent = `${stockId} 已在分组中`;
+      return;
+    }
+    const input = { groupId: group.id, stockId, ...(stockName.length > 0 ? { stockName } : {}) };
+    const r = await callApi('/api/tools/add_group_member/call', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    });
+    if (!r.ok) {
+      errorNodeSubmit.textContent = toolErrorText(r.error);
+      return;
+    }
+    existing.add(stockId);
+    closeModal();
+    await onAdded();
+    notify(`已添加 ${stockId} 到分组「${group.name}」`);
+  });
+
+  const form = el('div', 'add-member-form');
+  form.append(
+    field(
+      '股票',
+      acWrap,
+      '输 6 位代码 / 1-5 位字母，按候选点选；已有记录的股票会自动带现价与日内涨幅；批量维护请改用「编辑分组」',
+    ),
+    errorNode,
+    actions,
+  );
+  openModal(`添加成员 · ${group.name}`, form, 'modal-wide');
+};
+
 const poolRuleFields = (kind, current, tactics = []) => {
   const box = el('div');
   if (kind === 'price-change') {
@@ -264,7 +454,7 @@ const readRule = (kind) => {
 export const openPoolModal = async (pool = null, preferredGroupId = '') => {
   const groupsResult = await callApi('/api/groups');
   if (!groupsResult.ok) {
-    notify(`无法读取分组：${errorMessage(groupsResult.error)}`, true);
+    notify(`无法读取分组：${toolErrorText(groupsResult.error)}`, true);
     return;
   }
   const tactics = await loadTactics();
@@ -408,7 +598,7 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
         });
         if (!groupResult.ok) {
           button.disabled = false;
-          error.textContent = `分组创建失败：${errorMessage(groupResult.error)}`;
+          error.textContent = `分组创建失败：${toolErrorText(groupResult.error)}`;
           return;
         }
         createdGroupId = groupResult.data.group.id;
@@ -428,7 +618,7 @@ export const openPoolModal = async (pool = null, preferredGroupId = '') => {
         if (createdGroupId !== null) {
           await callTool('delete_stock_group', { id: createdGroupId });
         }
-        error.textContent = errorMessage(result.error);
+        error.textContent = toolErrorText(result.error);
         return;
       }
       closeModal();
@@ -446,7 +636,7 @@ export const mutateEntity = async (tool, input, after, message) => {
     body: JSON.stringify({ input }),
   });
   if (!result.ok) {
-    notify(`${message}失败：${errorMessage(result.error)}`, true);
+    notify(`${message}失败：${toolErrorText(result.error)}`, true);
     return false;
   }
   await after();

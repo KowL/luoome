@@ -4,15 +4,28 @@ import { TencentAdapter, TencentAdapterError } from './tencent.js';
 
 describe('market/tencent', () => {
   describe('fetchQuote', () => {
+    // 真实 API 形状（2026-07 实测）：data 以 prefixed code 为 key，
+    // 内层 data.data 是 "HHMM price volume amount" 分钟行数组
+    const minuteBody = (code: string) =>
+      JSON.stringify({
+        code: 0,
+        data: {
+          [code]: {
+            data: { date: '20260724', data: ['0930 375 100 37500.00', '1530 380 120 45600.00'] },
+          },
+        },
+      });
+
     it('解析 minute 接口；source=tencent', async () => {
       const adapter = new TencentAdapter({
-        fetchImpl: (async () =>
-          new Response(JSON.stringify({ data: { data: { now: 380, open: 375 } } }), {
-            status: 200,
-          })) as never,
+        fetchImpl: (async () => new Response(minuteBody('hk00700'), { status: 200 })) as never,
       });
       const q = await adapter.fetchQuote('00700');
       expect(q.close).toBe(380);
+      expect(q.open).toBe(375);
+      expect(q.high).toBe(380);
+      expect(q.low).toBe(375);
+      expect(q.volume).toBe(12_000); // 分钟量为累计口径：末行 120 手 × 100 = 股
       expect(q.source).toBe('tencent');
     });
 
@@ -28,11 +41,7 @@ describe('market/tencent', () => {
       const adapter = new TencentAdapter({
         fetchImpl: ((url: string) => {
           capturedUrl = String(url);
-          return Promise.resolve(
-            new Response(JSON.stringify({ data: { data: { now: 380, open: 375 } } }), {
-              status: 200,
-            }),
-          );
+          return Promise.resolve(new Response(minuteBody('hk00700'), { status: 200 }));
         }) as never,
       });
       await adapter.fetchQuote('00700');
@@ -44,11 +53,7 @@ describe('market/tencent', () => {
       const adapter = new TencentAdapter({
         fetchImpl: ((url: string) => {
           capturedUrl = String(url);
-          return Promise.resolve(
-            new Response(JSON.stringify({ data: { data: { now: 10, open: 9.9 } } }), {
-              status: 200,
-            }),
-          );
+          return Promise.resolve(new Response(minuteBody('sh600519'), { status: 200 }));
         }) as never,
       });
       await adapter.fetchQuote('600519');

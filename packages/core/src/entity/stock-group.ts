@@ -24,10 +24,10 @@ export const GroupRefreshPolicySchema = z.enum(['daily', 'manual']);
 
 // ---------- GroupResolver（discriminated union on `kind`） ----------
 
-/** A 手动分组：固定股票列表（如「半导体」板块）。 */
+/** A 手动分组：固定股票列表（如「半导体」板块）。允许空列表：创建后单独加成员（add_group_member）。 */
 export const ManualGroupResolverSchema = z.object({
   kind: z.literal('manual'),
-  stockIds: z.array(z.string().min(1)).min(1),
+  stockIds: z.array(z.string().min(1)),
 });
 
 /** 持仓分组：活视图，查询时现算（无快照）。显式绑定账户（消除「默认账户」歧义）。 */

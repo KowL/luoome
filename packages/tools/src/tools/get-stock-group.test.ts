@@ -56,8 +56,20 @@ describe('get_stock_group', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.members.map((m) => m.stockId)).toEqual(['002594.SZ']);
+    expect(r.data.members.map((m) => m.name)).toEqual(['比亚迪']);
     expect(r.data.latestRefreshAt).toBeNull();
     expect(r.data.stale).toBe(false);
+  });
+
+  it('manual 成员中含未登记 stockId：name fallback 为 stockId', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedGroup(ctx, 'g-missing', {
+      resolver: { kind: 'manual', stockIds: ['999999.SH'] },
+    });
+    const r = await getStockGroupTool.execute({ id: 'g-missing' }, ctx);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.members[0]?.name).toBe('999999.SH');
   });
 
   it('holdings 组：成员=活跃持仓现算，stale=false', async () => {

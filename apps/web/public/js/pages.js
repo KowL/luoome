@@ -4,11 +4,17 @@
 'use strict';
 
 import { callApi } from './api.js';
-import { openCloseConfirm, openEditModal, openTradeModal } from './holdings-actions.js';
-import { mutateEntity, openGroupModal, openPoolModal } from './mvp-actions.js';
+import {
+  openCloseConfirm,
+  openConfirmModal,
+  openEditModal,
+  openTradeModal,
+} from './holdings-actions.js';
+import { mutateEntity, openAddMemberModal, openGroupModal, openPoolModal } from './mvp-actions.js';
 import {
   $,
   adviceCard,
+  decisionBadge,
   el,
   fmtDateTime,
   fmtNum,
@@ -165,6 +171,8 @@ const renderHoldings = async (setStatus) => {
     return;
   }
   const { holdings, totalValue, totalPnL, totalPnLPct } = r.data;
+  // 缓存给「分析全部」复用，批量入口不再重复拉 /api/holdings
+  currentHoldings = holdings;
   if (holdings.length === 0) {
     mount(body, el('tr', null, el('td', { colspan: 9, class: 'placeholder' }, '（无持仓）')));
   } else {
@@ -185,12 +193,12 @@ const renderHoldings = async (setStatus) => {
         const actionBtn = (label, onClick) => {
           const b = el('button', 'btn btn-outline btn-sm', label);
           b.type = 'button';
-          b.addEventListener('click', onClick);
+          b.addEventListener('click', () => onClick(b));
           return b;
         };
         return el('tr', null, [
           el('td', null, code),
-          el('td', null, item.stockName),
+          el('td', null, [item.stockName, adviceSlot(item.holding.stockId)]),
           el('td', 'num', String(item.holding.quantity)),
           el('td', 'num', fmtNum(item.holding.avgCost)),
           el('td', 'num', fmtNum(item.currentPrice)),
@@ -199,6 +207,10 @@ const renderHoldings = async (setStatus) => {
           el('td', `num ${pnlCls}`, fmtPct(item.pnlPct)),
           el('td', null, [
             el('div', 'row-actions', [
+              actionBtn(
+                '分析',
+                (btn) => void runAnalyzeStock(item.holding.stockId, setStatus, btn),
+              ),
               actionBtn('加仓', () => openTradeModal(h, 'buy')),
               actionBtn('减仓', () => openTradeModal(h, 'sell')),
               actionBtn('纠错', () => openEditModal(h)),
@@ -218,6 +230,7 @@ const renderHoldings = async (setStatus) => {
   pctNode.className = `num ${totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : ''}`;
   $('#holdings-foot').hidden = holdings.length === 0;
   renderTrades(tradesResult);
+  await backfillLatestAdvice(holdings);
   setStatus(`持仓已刷新 · ${holdings.length} 只`);
 };
 
@@ -248,35 +261,259 @@ const renderTrades = (result) => {
   );
 };
 
-const analyzeAllHoldings = async (setStatus) => {
-  const btn = $('#btn-holdings-analyze');
-  if (btn === null) return;
-  btn.disabled = true;
+/* ============ 持仓分析结果（内嵌展示，不再跳转建议页） ============ */
+
+/** ToolError.kind → 用户可读文案，状态行不再裸曝英文 kind。 */
+const ERROR_KIND_LABELS = {
+  invalid_input: '输入无效',
+  not_found: '记录不存在',
+  invariant_violation: '数据校验失败',
+  adapter_error: '行情或外部服务异常',
+  permission_denied: '权限不足',
+  llm_error: 'AI 分析服务异常',
+  internal: '内部错误',
+};
+
+const errorKindLabel = (error) => {
+  const kind = error?.kind;
+  // 不用直接索引：普通对象原型链上有 toString 等属性，会误判未知 kind
+  if (typeof kind === 'string' && Object.hasOwn(ERROR_KIND_LABELS, kind)) {
+    return ERROR_KIND_LABELS[kind];
+  }
+  return String(kind ?? '未知错误');
+};
+
+/**
+ * stockId → 最新有效 advice。
+ * 两个来源：本页点「分析」产生的；进入页面时从服务端回填的（backfillLatestAdvice）。
+ */
+const analysisResults = new Map();
+
+/** 正在分析中的 stockId：防按钮连点重复触发行情 + LLM 调用。 */
+const analyzingStocks = new Set();
+
+/** renderHoldings 缓存的持仓列表，「分析全部」直接复用。 */
+let currentHoldings = [];
+
+/** 进行中的批量分析句柄；非 null 用于防重入与取消。 */
+let analyzeAllRun = null;
+
+/** 最近一次批量分析的失败明细：[{ stockId, label }]。 */
+let analysisFailures = [];
+
+/** 批量分析并发上限：串行太慢，全开容易打爆行情 / LLM 限流。 */
+const ANALYZE_CONCURRENCY = 3;
+
+const renderAnalysisResults = () => {
+  const box = $('#holdings-analysis');
+  if (box === null) return;
+  if (analysisResults.size === 0 && analysisFailures.length === 0) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const children = [
+    el('div', 'card-header', [
+      el('h2', null, `持仓最新建议 · ${analysisResults.size}`),
+      el('div', 'card-meta', '点击卡片展开详情 · 完整记录见「建议」页'),
+    ]),
+  ];
+  if (analysisFailures.length > 0) {
+    children.push(
+      el(
+        'p',
+        'analysis-failures',
+        `失败 ${analysisFailures.length} 只：${analysisFailures
+          .map((f) => `${f.stockId}（${f.label}）`)
+          .join('、')}`,
+      ),
+    );
+  }
+  children.push(
+    el(
+      'div',
+      'advice-list',
+      [...analysisResults.values()].map((advice) => adviceCard(advice)),
+    ),
+  );
+  mount(box, children);
+};
+
+/* ============ 持仓行内建议 badge ============ */
+
+const fillAdviceSlot = (slot, advice) => {
+  if (advice === undefined) {
+    slot.replaceChildren();
+    slot.hidden = true;
+    return;
+  }
+  const badge = decisionBadge(advice.decision);
+  badge.title = `有效至 ${fmtDateTime(advice.validUntil)}`;
+  mount(slot, [badge]);
+  slot.hidden = false;
+};
+
+const adviceSlot = (stockId) => {
+  const slot = el('span', 'holding-advice');
+  slot.dataset.stockId = stockId;
+  fillAdviceSlot(slot, analysisResults.get(stockId));
+  return slot;
+};
+
+/** 分析完成后不重拉持仓，直接把行内 badge 与 analysisResults 对齐。 */
+const updateHoldingAdviceBadges = () => {
+  document.querySelectorAll('.holding-advice[data-stock-id]').forEach((slot) => {
+    fillAdviceSlot(slot, analysisResults.get(slot.dataset.stockId));
+  });
+};
+
+/**
+ * 进入持仓页时拉服务端最新有效建议回填结果区（get_advice 默认不含已过期）。
+ * 会话内刚分析出的结果更新时不覆盖；回填失败不阻塞持仓展示。
+ */
+const backfillLatestAdvice = async (holdings) => {
+  const heldIds = new Set(holdings.map((item) => item.holding.stockId));
+  // 已不在持仓里的标的建议一并清掉，保持结果区与持仓表一致
+  for (const stockId of [...analysisResults.keys()]) {
+    if (!heldIds.has(stockId)) analysisResults.delete(stockId);
+  }
+  const r = await callApi('/api/advice?subjectKind=stock&limit=200');
+  if (r.ok) {
+    const advices = Array.isArray(r.data?.advices) ? r.data.advices : [];
+    for (const advice of advices) {
+      const stockId = advice.subjectId;
+      if (!heldIds.has(stockId)) continue;
+      const existing = analysisResults.get(stockId);
+      if (existing !== undefined && new Date(existing.createdAt) >= new Date(advice.createdAt)) {
+        continue;
+      }
+      analysisResults.set(stockId, advice);
+    }
+  }
+  renderAnalysisResults();
+  // 行在回填前就已渲染，badge 槽需要手动对齐一次
+  updateHoldingAdviceBadges();
+};
+
+/* ============ 分析动作 ============ */
+
+const callAnalyzeStock = (stockId) =>
+  callApi('/api/tools/analyze_stock/call', {
+    method: 'POST',
+    body: JSON.stringify({ input: { stockId } }),
+  });
+
+const runAnalyzeStock = async (stockId, setStatus, btn, { force = false } = {}) => {
+  if (analyzingStocks.has(stockId)) return;
+  // 已有未过期建议时先确认，避免重复产生等价 Advice；force 来自确认回调，不再重复询问
+  const existing = analysisResults.get(stockId);
+  if (!force && existing !== undefined && new Date(existing.validUntil).getTime() > Date.now()) {
+    openConfirmModal({
+      title: `重新分析 · ${stockId}`,
+      message: `该股票已有有效建议（至 ${fmtDateTime(existing.validUntil)}），重新分析会再生成一条建议记录。`,
+      confirmLabel: '仍然分析',
+      onConfirm: () => void runAnalyzeStock(stockId, setStatus, btn, { force: true }),
+    });
+    return;
+  }
+  analyzingStocks.add(stockId);
+  if (btn !== undefined) {
+    btn.disabled = true;
+    btn.textContent = '分析中…';
+  }
+  setStatus(`分析中：${stockId}`);
   try {
-    const r = await callApi('/api/holdings');
-    if (!r.ok) {
-      setStatus(`加载失败：${r.error.kind}`, true);
+    const ar = await callAnalyzeStock(stockId);
+    if (!ar.ok) {
+      setStatus(`分析失败：${errorKindLabel(ar.error)}`, true);
       return;
     }
-    let done = 0;
-    let failed = 0;
-    for (const item of r.data.holdings) {
-      const stockId = item.holding.stockId;
-      setStatus(`分析中 ${done + 1}/${r.data.holdings.length}：${stockId}`);
-      const ar = await callApi('/api/tools/analyze_stock/call', {
-        method: 'POST',
-        body: JSON.stringify({ input: { stockId } }),
-      });
-      if (ar.ok) done += 1;
-      else failed += 1;
-    }
-    setStatus(
-      failed === 0 ? `分析完成：${done} 只` : `分析完成：${done} 成功 / ${failed} 失败`,
-      failed > 0,
-    );
+    analysisResults.set(stockId, ar.data.advice);
+    renderAnalysisResults();
+    updateHoldingAdviceBadges();
+    setStatus(`${stockId} 分析完成，结果已展示在下方`);
   } finally {
-    btn.disabled = false;
+    analyzingStocks.delete(stockId);
+    if (btn !== undefined) {
+      btn.disabled = false;
+      btn.textContent = '分析';
+    }
   }
+};
+
+const analyzeAllHoldings = async (setStatus) => {
+  const btn = $('#btn-holdings-analyze');
+  const cancelBtn = $('#btn-holdings-analyze-cancel');
+  if (btn === null || analyzeAllRun !== null) return;
+  btn.disabled = true;
+  if (cancelBtn !== null) cancelBtn.hidden = false;
+  const run = { cancelled: false };
+  analyzeAllRun = run;
+  try {
+    let holdings = currentHoldings;
+    if (holdings.length === 0) {
+      const r = await callApi('/api/holdings');
+      if (!r.ok) {
+        setStatus(`加载失败：${errorKindLabel(r.error)}`, true);
+        return;
+      }
+      holdings = r.data.holdings;
+    }
+    const stockIds = holdings.map((item) => item.holding.stockId);
+    if (stockIds.length === 0) {
+      setStatus('无持仓可分析');
+      return;
+    }
+    analysisFailures = [];
+    renderAnalysisResults();
+    let done = 0;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < stockIds.length && !run.cancelled) {
+        const stockId = stockIds[cursor];
+        cursor += 1;
+        analyzingStocks.add(stockId);
+        const ar = await callAnalyzeStock(stockId);
+        analyzingStocks.delete(stockId);
+        if (run.cancelled) break;
+        done += 1;
+        if (ar.ok) {
+          analysisResults.set(stockId, ar.data.advice);
+        } else {
+          analysisFailures.push({ stockId, label: errorKindLabel(ar.error) });
+        }
+        // 每完成一只就增量上屏，不等整批结束
+        renderAnalysisResults();
+        updateHoldingAdviceBadges();
+        setStatus(`分析中 ${done}/${stockIds.length}：${stockId} ${ar.ok ? '完成' : '失败'}`);
+      }
+    };
+    const lanes = Math.min(ANALYZE_CONCURRENCY, stockIds.length);
+    await Promise.all(Array.from({ length: lanes }, () => worker()));
+    if (run.cancelled) {
+      setStatus(
+        `已取消：完成 ${done}/${stockIds.length}` +
+          (analysisFailures.length > 0 ? `，失败 ${analysisFailures.length} 只` : ''),
+        analysisFailures.length > 0,
+      );
+    } else {
+      setStatus(
+        analysisFailures.length === 0
+          ? `分析完成：${done} 只，结果已展示在下方`
+          : `分析完成：${done - analysisFailures.length} 成功 / ${analysisFailures.length} 失败`,
+        analysisFailures.length > 0,
+      );
+    }
+  } finally {
+    analyzeAllRun = null;
+    btn.disabled = false;
+    if (cancelBtn !== null) cancelBtn.hidden = true;
+  }
+};
+
+/** 取消进行中的批量分析：在跑的请求收尾，不再派发新任务。 */
+const cancelAnalyzeAllHoldings = () => {
+  if (analyzeAllRun !== null) analyzeAllRun.cancelled = true;
 };
 
 /* ============ groups / watch ============ */
@@ -403,6 +640,21 @@ const showGroupDetail = async (id, setStatus) => {
     return;
   }
   const { group, members, latestRefreshAt, stale } = result.data;
+  // 拉一次行情补齐现价 / 日内变化（非交易时段 / 缺行情时大多为 null，前端降级 `--`）
+  const quoteMap = new Map();
+  const stockIds = members.map((m) => m.stockId);
+  if (stockIds.length > 0) {
+    const qResp = await callApi('/api/tools/batch_quote/call', {
+      method: 'POST',
+      body: JSON.stringify({ input: { stockIds } }),
+    });
+    if (qResp.ok && Array.isArray(qResp.data?.quotes)) {
+      for (const q of qResp.data.quotes) quoteMap.set(q.stockId, q);
+    }
+  }
+  // 公式 / LLM 这两类是快照过来的，reason 写的是「战法 …命中 / LLM rationale」，值得看；
+  // 手动 / 持仓 这两类的 reason 是系统标签（manual 固定成员 / holdings 活视图），删掉。
+  const showReason = group.resolver.kind === 'formula' || group.resolver.kind === 'llm';
   const heading = el('div', 'detail-heading', [
     el('div', null, [
       el('h2', null, group.name),
@@ -466,19 +718,62 @@ const showGroupDetail = async (id, setStatus) => {
     );
   });
   actions.append(remove);
+  const addMemberBtn =
+    group.resolver.kind === 'manual' ? el('button', 'btn btn-primary btn-sm', '+ 添加成员') : null;
+  if (addMemberBtn !== null) {
+    addMemberBtn.addEventListener(
+      'click',
+      () => void openAddMemberModal(group, () => showGroupDetail(group.id, setStatus)),
+    );
+  }
+  const emptyMembersText =
+    group.resolver.kind === 'manual'
+      ? members.length === 0
+        ? '当前没有成员。点击下方「+ 添加成员」逐只加入，或回编辑批量调整。'
+        : null
+      : members.length === 0
+        ? '当前没有成员。动态分组可点击「刷新成员」。'
+        : null;
   const membersBox =
-    members.length === 0
-      ? el('p', 'placeholder', '当前没有成员。动态分组可点击「刷新成员」。')
+    emptyMembersText !== null
+      ? el('p', 'placeholder', emptyMembersText)
       : el(
           'div',
           'member-list',
-          members.map((member) =>
-            el('div', 'member-row', [
+          members.map((member) => {
+            const quote = quoteMap.get(member.stockId) ?? null;
+            const close = quote?.close;
+            const open = quote?.open;
+            let pctText = '—';
+            let pctClass = '';
+            if (
+              typeof close === 'number' &&
+              Number.isFinite(close) &&
+              typeof open === 'number' &&
+              Number.isFinite(open) &&
+              open !== 0
+            ) {
+              const pct = (close - open) / open;
+              const sign = pct > 0 ? '+' : '';
+              pctText = `${sign}${(pct * 100).toFixed(2)}%`;
+              pctClass = pct > 0 ? 'text-pos' : pct < 0 ? 'text-neg' : '';
+            }
+            const line1 = el('div', 'member-line-1', [
               el('strong', 'mono', member.stockId),
-              el('span', 'muted', member.reason),
-              el('time', 'muted', fmtDateTime(member.refreshedAt)),
-            ]),
-          ),
+              el('span', 'member-name', member.name),
+              el(
+                'span',
+                `member-price ${typeof close === 'number' ? '' : 'muted'}`,
+                typeof close === 'number' && Number.isFinite(close) ? close.toFixed(2) : '--',
+              ),
+              el('span', `member-pct ${pctClass}`, pctText),
+            ]);
+            const row = el('div', 'member-row', [line1]);
+            if (showReason && member.reason.length > 0) {
+              row.append(el('div', 'member-line-2 muted', member.reason));
+            }
+            return row;
+          }),
         );
   const addPlan = el('button', 'btn btn-primary btn-sm', '+ 新建盯盘方案');
   addPlan.addEventListener('click', () => void openPoolModal(null, group.id));
@@ -518,7 +813,10 @@ const showGroupDetail = async (id, setStatus) => {
       addPlan,
     ]),
     plansBox,
-    el('h3', 'detail-section-title', `当前成员 · ${members.length}`),
+    el('div', 'detail-section-heading', [
+      el('h3', 'detail-section-title', `当前成员 · ${members.length}`),
+      addMemberBtn,
+    ]),
     membersBox,
     el('h3', 'detail-section-title', '最近触发'),
     triggerBox,
@@ -1060,9 +1358,7 @@ const openPlanFromTemplate = async (template) => {
   const firstGroup = groups[0]?.id ?? '';
   const groupId = template.draft.groupId ?? firstGroup;
   await openPoolModal(null, groupId);
-  requestAnimationFrame(() =>
-    fillPoolFormFromDraft({ ...template.draft, groupId }, template.name),
-  );
+  requestAnimationFrame(() => fillPoolFormFromDraft({ ...template.draft, groupId }, template.name));
 };
 
 const renderPlanCreator = async (setStatus) => {
@@ -1190,9 +1486,10 @@ const renderDataHealth = async (setStatus) => {
     body.textContent = '加载失败';
     return;
   }
-  const data = /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, groupStale: Array<{groupId: string, name: string}>}} */ (
-    r.data
-  );
+  const data =
+    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, groupStale: Array<{groupId: string, name: string}>}} */ (
+      r.data
+    );
   const providerEls = data.providers.map((p) => {
     const meta = FRESHNESS_LABEL[p.freshness] ?? FRESHNESS_LABEL.unknown;
     const observed = p.latestObservedAt
@@ -1208,14 +1505,17 @@ const renderDataHealth = async (setStatus) => {
     wh === null
       ? 'watch 从未运行'
       : `watch ${wh.state}（今日触发 ${wh.triggered ?? 0}，失败 ${wh.notifyFailed ?? 0}）`;
-  const stale = data.groupStale.length === 0 ? null : el('div', 'data-health-stale', [
-    el('h3', null, 'stale 分组'),
-    el(
-      'ul',
-      null,
-      data.groupStale.map((g) => el('li', null, `${g.name}（${g.groupId}）`)),
-    ),
-  ]);
+  const stale =
+    data.groupStale.length === 0
+      ? null
+      : el('div', 'data-health-stale', [
+          el('h3', null, 'stale 分组'),
+          el(
+            'ul',
+            null,
+            data.groupStale.map((g) => el('li', null, `${g.name}（${g.groupId}）`)),
+          ),
+        ]);
   mount(
     body,
     el('div', 'data-health-grid', [
@@ -1236,9 +1536,10 @@ const renderWorkflowRuns = async (setStatus) => {
     body.textContent = '加载失败';
     return;
   }
-  const runs = /** @type {Array<{source: string, name: string, status: string, startedAt: string, finishedAt?: string, summary?: Record<string, unknown>, error?: string}>} */ (
-    r.data
-  ).runs;
+  const runs =
+    /** @type {Array<{source: string, name: string, status: string, startedAt: string, finishedAt?: string, summary?: Record<string, unknown>, error?: string}>} */ (
+      r.data
+    ).runs;
   if (runs.length === 0) {
     body.textContent = '尚无 workflow 运行记录';
     return;
@@ -1263,7 +1564,17 @@ const renderWorkflowRuns = async (setStatus) => {
     el('details', 'collapsible', [
       el('summary', null, `最近 ${runs.length} 条运行记录（点击展开）`),
       el('table', 'workflow-runs-table mt-2', [
-        el('thead', null, el('tr', null, [el('th', null, 'workflow'), el('th', null, '源'), el('th', null, '状态'), el('th', null, '开始'), el('th', null, '摘要')])),
+        el(
+          'thead',
+          null,
+          el('tr', null, [
+            el('th', null, 'workflow'),
+            el('th', null, '源'),
+            el('th', null, '状态'),
+            el('th', null, '开始'),
+            el('th', null, '摘要'),
+          ]),
+        ),
         el('tbody', null, runs.map(row)),
       ]),
     ]),
@@ -1276,8 +1587,12 @@ const renderResearch = async (setStatus) => {
   const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
   if (detail !== null) detail.hidden = true;
 
-  const input = /** @type {HTMLInputElement | null} */ (document.getElementById('research-stock-input'));
-  const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('research-search-btn'));
+  const input = /** @type {HTMLInputElement | null} */ (
+    document.getElementById('research-stock-input')
+  );
+  const btn = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-search-btn')
+  );
   const results = document.getElementById('research-search-results');
   if (input === null || btn === null || results === null) return;
 
@@ -1295,11 +1610,7 @@ const renderResearch = async (setStatus) => {
             'research-results-list',
             list.map((c) =>
               el('li', null, [
-                el(
-                  'button',
-                  'btn btn-link',
-                  `${c.code} · ${c.name}（${c.exchange}）`,
-                ),
+                el('button', 'btn btn-link', `${c.code} · ${c.name}（${c.exchange}）`),
               ]),
             ),
           ),
@@ -1343,9 +1654,10 @@ const loadResearch = async (stockId, code, name) => {
     mount(summaryEl, el('p', 'error', r.error?.message ?? '加载失败'));
     return;
   }
-  const data = /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
-    r.data
-  );
+  const data =
+    /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
+      r.data
+    );
   summaryMeta.textContent = `${data.summary.noteCount} 笔记 · ${data.summary.eventCount} 事件`;
 
   // 摘要
@@ -1353,7 +1665,11 @@ const loadResearch = async (stockId, code, name) => {
   const thesisBlock = thesis
     ? el('div', 'card-summary-thesis', [
         el('h3', null, '当前假设'),
-        el('p', 'muted', `更新于 ${new Date(String(thesis.updatedAt)).toLocaleString('zh-CN', { hour12: false })}`),
+        el(
+          'p',
+          'muted',
+          `更新于 ${new Date(String(thesis.updatedAt)).toLocaleString('zh-CN', { hour12: false })}`,
+        ),
         el('p', null, String(thesis.content ?? '')),
         el('div', 'flex gap-2 mt-2', [
           el('button', 'btn btn-outline btn-sm', '编辑（保存为新版本）', [], {
@@ -1382,13 +1698,9 @@ const loadResearch = async (stockId, code, name) => {
   // 时间线
   const TYPES = ['note', 'event', 'trigger', 'advice'];
   const filterRow = el('div', 'research-timeline-filters-row', [
-    el(
-      'button',
-      'btn btn-outline btn-sm active',
-      '全部',
-      [],
-      { click: () => paintTimeline(data.timeline) },
-    ),
+    el('button', 'btn btn-outline btn-sm active', '全部', [], {
+      click: () => paintTimeline(data.timeline),
+    }),
     ...TYPES.map((t) =>
       el('button', 'btn btn-outline btn-sm', t, [], {
         click: () => paintTimeline(data.timeline.filter((it) => it.type === t)),
@@ -1399,7 +1711,10 @@ const loadResearch = async (stockId, code, name) => {
   paintTimeline(data.timeline);
 
   // 新增笔记表单
-  mount(addNoteEl, buildAddNoteForm(stockId, code, name, () => loadResearch(stockId, code, name)));
+  mount(
+    addNoteEl,
+    buildAddNoteForm(stockId, code, name, () => loadResearch(stockId, code, name)),
+  );
 };
 
 const paintTimeline = (items) => {
@@ -1419,9 +1734,11 @@ const paintTimeline = (items) => {
         const badge = el('span', `timeline-badge timeline-${it.type}`, it.type);
         let body;
         if (it.type === 'note') body = String(it.payload.content ?? '');
-        else if (it.type === 'event') body = `${it.payload.title ?? ''}（${it.payload.kind ?? ''}）`;
+        else if (it.type === 'event')
+          body = `${it.payload.title ?? ''}（${it.payload.kind ?? ''}）`;
         else if (it.type === 'trigger') body = String(it.payload.reason ?? '');
-        else body = `${it.payload.decision ?? ''} · ${String(it.payload.premise ?? '').slice(0, 80)}`;
+        else
+          body = `${it.payload.decision ?? ''} · ${String(it.payload.premise ?? '').slice(0, 80)}`;
         return el('li', null, [badge, el('span', 'muted', at), el('span', null, body)]);
       }),
     ),
@@ -1465,13 +1782,18 @@ const buildAddNoteForm = (stockId, code, name, onDone) => {
       stockId,
       kind,
       content: /** @type {HTMLTextAreaElement} */ (content).value,
-      ...(/** @type {HTMLSelectElement} */ (stance).value !== '—'
+      .../** @type {HTMLSelectElement} */ ((stance).value !== '—'
         ? { stance: /** @type {HTMLSelectElement} */ (stance).value }
         : {}),
-      ...(/** @type {HTMLInputElement} */ (tags).value.length > 0
-        ? { tags: /** @type {HTMLInputElement} */ (tags).value.split(',').map((s) => s.trim()).filter((s) => s.length > 0) }
+      .../** @type {HTMLInputElement} */ ((tags).value.length > 0
+        ? {
+            tags: /** @type {HTMLInputElement} */ (tags).value
+              .split(',')
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0),
+          }
         : {}),
-      ...(/** @type {HTMLInputElement} */ (sourceUrl).value.length > 0
+      .../** @type {HTMLInputElement} */ ((sourceUrl).value.length > 0
         ? { sourceUrl: /** @type {HTMLInputElement} */ (sourceUrl).value }
         : {}),
     };
@@ -1531,6 +1853,8 @@ export {
   analyzeAllHoldings,
   bindPlanCreator,
   bindSettingsActions,
+  cancelAnalyzeAllHoldings,
+  errorKindLabel,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,

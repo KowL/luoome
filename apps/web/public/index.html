@@ -135,8 +135,8 @@
             <h2>明细</h2>
             <div class="card-meta">
               <button id="btn-holding-add" class="btn btn-primary btn-sm" type="button">+ 新增持仓</button>
-              <button id="btn-holdings-refresh" class="btn btn-outline btn-sm" type="button">刷新</button>
               <button id="btn-holdings-analyze" class="btn btn-outline btn-sm" type="button">分析全部</button>
+              <button id="btn-holdings-analyze-cancel" class="btn btn-outline btn-sm" type="button" hidden>取消分析</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -163,6 +163,7 @@
             </table>
           </div>
         </div>
+        <div class="card mt-4" id="holdings-analysis" hidden></div>
         <div class="card mt-4">
           <div class="card-header"><h2>近期交易</h2><div class="card-meta">最近 50 笔</div></div>
           <div class="table-wrap">

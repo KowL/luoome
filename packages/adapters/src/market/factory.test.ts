@@ -72,9 +72,15 @@ describe('market/factory', () => {
             return Promise.resolve(new Response('boom', { status: 500 }));
           }
           return Promise.resolve(
-            new Response(JSON.stringify({ data: { data: { now: 380, open: 375 } } }), {
-              status: 200,
-            }),
+            new Response(
+              JSON.stringify({
+                code: 0,
+                data: {
+                  hk00700: { data: { data: ['0930 375 100 37500.00', '1530 380 120 45600.00'] } },
+                },
+              }),
+              { status: 200 },
+            ),
           );
         }) as never,
       },

@@ -124,6 +124,22 @@ const submitTool = async (btn, errorNode, name, input, successMessage) => {
   }
 };
 
+/* ============ 通用确认弹窗（如重复分析前的有效期提示） ============ */
+
+/** 轻量确认弹窗：确认后关窗并执行 onConfirm。 */
+export const openConfirmModal = ({ title, message, confirmLabel = '确认', onConfirm }) => {
+  const body = el('div', null, [
+    el('p', 'hint', message),
+    actionsRow(confirmLabel, {
+      onConfirm: () => {
+        closeModal();
+        onConfirm();
+      },
+    }),
+  ]);
+  openModal(title, body);
+};
+
 /* ============ 新增持仓（add_trade buy，建仓即写交易） ============ */
 
 export const openAddHoldingModal = () => {

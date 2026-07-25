@@ -261,6 +261,12 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect((await json(r)).ok).toBe(true);
   });
 
+  it('batch_quote（白名单）→ 200', async () => {
+    const r = await callTool('batch_quote', { stockIds: ['002594.SZ'] });
+    expect(r.status).toBe(200);
+    expect((await json(r)).ok).toBe(true);
+  });
+
   it('sync_quotes / send_notification（external 非白名单）→ 403', async () => {
     for (const name of ['sync_quotes', 'send_notification']) {
       const r = await callTool(name, {});
@@ -292,6 +298,29 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
       }),
     );
     expect(r.status).toBe(400);
+  });
+});
+
+describe('/api/advice 查询参数', () => {
+  it('透传 subjectKind / limit 给 get_advice：结果全部匹配过滤条件且不超上限', async () => {
+    const r = await app.fetch(new Request('http://test/api/advice?subjectKind=stock&limit=1'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { advices: Array<{ subjectKind: string }>; total: number };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.advices.length).toBeLessThanOrEqual(1);
+    for (const advice of body.data?.advices ?? []) {
+      expect(advice.subjectKind).toBe('stock');
+    }
+  });
+
+  it('非法 subjectKind 由 get_advice schema 拒绝为 invalid_input', async () => {
+    const r = await app.fetch(new Request('http://test/api/advice?subjectKind=bogus'));
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
   });
 });
 
@@ -681,7 +710,10 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
       notifyOnRecovery: false,
       rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
     });
-    const createBody = (await stockPoolResp.json()) as { ok: boolean; data?: { pool: { id: string } } };
+    const createBody = (await stockPoolResp.json()) as {
+      ok: boolean;
+      data?: { pool: { id: string } };
+    };
     expect(createBody.ok).toBe(true);
     expect(createBody.ok).toBe(true);
     // 拿真实 triggerId：跑一轮 dry-run
@@ -760,7 +792,8 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
   });
 
   it('GET /api/watch/triggers 转发 priority / deliveryStatus / feedback / triggerType 过滤参数', async () => {
-    const url = 'http://test/api/watch/triggers?priority=urgent&deliveryStatus=sent&feedback=useful&triggerType=triggered';
+    const url =
+      'http://test/api/watch/triggers?priority=urgent&deliveryStatus=sent&feedback=useful&triggerType=triggered';
     const r = await app.fetch(new Request(url));
     expect(r.status).toBe(200);
     const body = (await r.json()) as { ok: boolean; data?: { triggers: unknown[]; total: number } };
@@ -791,4 +824,3 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
     }
   });
 });
-

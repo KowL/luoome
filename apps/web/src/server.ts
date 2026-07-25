@@ -36,10 +36,15 @@ const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice', 'write']);
 
 /**
- * external 白名单：fetch_quote 仅写本地 PriceSnapshot（无外部副作用外的状态变更），
- * 持仓表单「取现价」需要；sync_quotes / send_notification 等仍 403。
+ * external 白名单：fetch_quote / batch_quote / refresh_stock_group 仅写本地
+ * PriceSnapshot 或 GroupMember（无外部副作用外的状态变更），
+ * 持仓表单「取现价」与分组详情行情需要；sync_quotes / send_notification 等仍 403。
  */
-const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set(['fetch_quote', 'refresh_stock_group']);
+const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
+  'fetch_quote',
+  'batch_quote',
+  'refresh_stock_group',
+]);
 
 /**
  * external（白名单外）/trade tool 不通过 web 暴露：已在 registry 实现的被
@@ -615,7 +620,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       },
     };
 
-    const system = `你是 luoome 盯盘方案的辅助生成器。把用户的口语化描述转成结构化的 create_stock_pool 草稿输入。\n` +
+    const system =
+      `你是 luoome 盯盘方案的辅助生成器。把用户的口语化描述转成结构化的 create_stock_pool 草稿输入。\n` +
       `- 只输出严格符合 schema 的 JSON\n` +
       `- groupId 必须从用户提供的可选列表里选\n` +
       `- 战法 tacticId 必须从可选战法列表里选\n` +
@@ -707,28 +713,19 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       feedback?: 'handled' | 'useful' | 'useless' | 'ignored';
     }>;
 
-    const priorityCounts = todayTriggers.reduce<Record<string, number>>(
-      (acc, t) => {
-        acc[t.priority] = (acc[t.priority] ?? 0) + 1;
-        return acc;
-      },
-      {},
-    );
-    const deliveryStatusCounts = todayTriggers.reduce<Record<string, number>>(
-      (acc, t) => {
-        acc[t.deliveryStatus] = (acc[t.deliveryStatus] ?? 0) + 1;
-        return acc;
-      },
-      {},
-    );
-    const feedbackCounts = todayTriggers.reduce<Record<string, number>>(
-      (acc, t) => {
-        if (t.feedback === undefined) return acc;
-        acc[t.feedback] = (acc[t.feedback] ?? 0) + 1;
-        return acc;
-      },
-      {},
-    );
+    const priorityCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
+      acc[t.priority] = (acc[t.priority] ?? 0) + 1;
+      return acc;
+    }, {});
+    const deliveryStatusCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
+      acc[t.deliveryStatus] = (acc[t.deliveryStatus] ?? 0) + 1;
+      return acc;
+    }, {});
+    const feedbackCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
+      if (t.feedback === undefined) return acc;
+      acc[t.feedback] = (acc[t.feedback] ?? 0) + 1;
+      return acc;
+    }, {});
 
     // 噪声率（§11）：样本 ≥ 30 才展示，避免误读
     const feedbackTotal = Object.values(feedbackCounts).reduce((s, n) => s + n, 0);
@@ -806,7 +803,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       ? (triggersR.data as { triggers: Array<Record<string, unknown>> }).triggers
       : [];
     const advice = adviceR.ok
-      ? (adviceR.data as { advice?: Array<Record<string, unknown>>; advices?: Array<Record<string, unknown>> })
+      ? (adviceR.data as {
+          advice?: Array<Record<string, unknown>>;
+          advices?: Array<Record<string, unknown>>;
+        })
       : {};
     const adviceList = advice.advice ?? advice.advices ?? [];
 
@@ -970,11 +970,18 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/advice', (c) => {
     const subjectId = c.req.query('subjectId');
+    const subjectKind = c.req.query('subjectKind');
     const includeExpired = c.req.query('includeExpired');
+    const limitRaw = c.req.query('limit');
     const input: Record<string, unknown> = {
       includeExpired: includeExpired === 'true' || includeExpired === '1',
     };
     if (subjectId !== undefined && subjectId.length > 0) input.subjectId = subjectId;
+    if (subjectKind !== undefined && subjectKind.length > 0) input.subjectKind = subjectKind;
+    if (limitRaw !== undefined) {
+      const limit = Number(limitRaw);
+      if (Number.isInteger(limit) && limit > 0) input.limit = limit;
+    }
     return callTool('get_advice', input);
   });
 

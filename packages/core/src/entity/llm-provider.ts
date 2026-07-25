@@ -19,7 +19,8 @@ export const DEFAULT_LLM_MODEL: Readonly<Record<LLMProviderName, string>> = {
 };
 
 export const LLM_MAX_PROMPT_TOKENS = 4000;
-export const LLM_CALL_TIMEOUT_MS = 5_000;
+/** 单次 LLM 调用超时；真实 provider 首响普遍 >5s，5s 会导致必然走规则 fallback。 */
+export const LLM_CALL_TIMEOUT_MS = 30_000;
 
 export interface LLMProviderConfig {
   readonly provider: LLMProviderName;
@@ -63,5 +64,17 @@ export const parseLlmProviderConfigFromEnv = (
     model: env.LUOOME_LLM_MODEL?.trim() || DEFAULT_LLM_MODEL[provider],
     ...(baseUrl !== undefined && baseUrl !== '' ? { baseUrl } : {}),
     apiKey,
+    ...parseTimeoutMs(env.LUOOME_LLM_TIMEOUT_MS),
   };
+};
+
+/** LUOOME_LLM_TIMEOUT_MS 缺省 → 适配器用 LLM_CALL_TIMEOUT_MS；设置时必须为正整数。 */
+const parseTimeoutMs = (raw: string | undefined): { timeoutMs?: number } => {
+  const trimmed = raw?.trim();
+  if (trimmed === undefined || trimmed === '') return {};
+  const value = Number(trimmed);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`LUOOME_LLM_TIMEOUT_MS="${trimmed}" 非法，必须是正整数（毫秒）`);
+  }
+  return { timeoutMs: value };
 };

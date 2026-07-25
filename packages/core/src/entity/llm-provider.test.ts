@@ -124,6 +124,35 @@ describe('entity/llm-provider', () => {
       expect(cfg.baseUrl).toBeUndefined();
     });
 
+    it('parses LUOOME_LLM_TIMEOUT_MS when set', () => {
+      const cfg = parseLlmProviderConfigFromEnv({
+        LUOOME_LLM_PROVIDER: 'openai-compatible',
+        LUOOME_LLM_API_KEY: 'sk-test',
+        LUOOME_LLM_TIMEOUT_MS: '60000',
+      });
+      expect(cfg.timeoutMs).toBe(60_000);
+    });
+
+    it('omits timeoutMs when LUOOME_LLM_TIMEOUT_MS not set', () => {
+      const cfg = parseLlmProviderConfigFromEnv({
+        LUOOME_LLM_PROVIDER: 'openai-compatible',
+        LUOOME_LLM_API_KEY: 'sk-test',
+      });
+      expect(cfg.timeoutMs).toBeUndefined();
+    });
+
+    it('rejects invalid LUOOME_LLM_TIMEOUT_MS', () => {
+      for (const bad of ['abc', '0', '-1000', '1.5']) {
+        expect(() =>
+          parseLlmProviderConfigFromEnv({
+            LUOOME_LLM_PROVIDER: 'openai-compatible',
+            LUOOME_LLM_API_KEY: 'sk-test',
+            LUOOME_LLM_TIMEOUT_MS: bad,
+          }),
+        ).toThrow(/LUOOME_LLM_TIMEOUT_MS/);
+      }
+    });
+
     it('throws on unknown provider string', () => {
       expect(() =>
         parseLlmProviderConfigFromEnv({

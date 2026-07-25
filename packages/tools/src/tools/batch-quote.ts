@@ -1,4 +1,4 @@
-import { QuoteSchema } from '@luoome/core';
+import { type Quote, QuoteSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -7,6 +7,7 @@ import { defineTool } from '../define-tool.js';
  * batch_quote（v0.2 起，external）。
  * 批量拉行情；stockIds 全解析为 Stock.id 后批量 fetch + 写 quote_snapshot。
  * 未找到的 stockId 静默跳过（不抛错，与 v0.1 list_holdings 容忍单条失败的语义一致）。
+ * 上游失败的标的回落 DB 内最近一次 quote_snapshot，避免一次抖动把整页行情清空。
  */
 export const BatchQuoteInput = z.object({
   stockIds: z.array(z.string().min(1)).min(1).max(100),
@@ -34,9 +35,22 @@ export const batchQuoteTool = defineTool({
       if (stock === null) unresolved.push(raw);
       else resolved.push(stock.id);
     }
-    const quotes = resolved.length === 0 ? [] : await ctx.adapters.market.batchQuote(resolved);
-    const quoteList = [...quotes.values()];
-    await Promise.all(quoteList.map((q) => ctx.repos.quote.save(q)));
+    let quoteList: Quote[] = [];
+    if (resolved.length > 0) {
+      const quotes = await ctx.adapters.market.batchQuote(resolved);
+      quoteList = [...quotes.values()];
+      await Promise.all(quoteList.map((q) => ctx.repos.quote.save(q)));
+      const fetched = new Set(quoteList.map((q) => q.stockId));
+      for (const stockId of resolved) {
+        if (fetched.has(stockId)) continue;
+        const cached = await ctx.repos.quote.latestByStock(stockId);
+        if (cached !== null) {
+          quoteList.push(cached);
+        } else {
+          unresolved.push(stockId);
+        }
+      }
+    }
     return { quotes: quoteList, unresolved };
   },
 });
