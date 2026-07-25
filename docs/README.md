@@ -40,6 +40,7 @@
 | [盘中盯盘设计](./ddd/intraday-watch-design.md) | 股票池、盘中求值、冷却与 `luoome watch` |
 | [股票分组设计](./ddd/stock-group-design.md) | StockGroup、成员快照与动态 resolver |
 | [Web 对话助手设计](./ddd/web-chat-design.md) | `/api/chat` 与 draft-and-confirm 交互 |
+| [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) | chat / workflow 升级为真 agent loop 前的库选型与契约设计分析 |
 
 ## 运维手册
 
