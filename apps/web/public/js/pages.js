@@ -1176,20 +1176,393 @@ const bindPlanCreator = (setStatus) => {
   });
 };
 
+/* ============================================================
+ * ruo 迁移：研究页 + 数据健康 + workflow 运行记录
+ * （docs/ddd/ruo-feature-migration-detailed-design.md §8）
+ * ============================================================ */
+
+const callTool = (tool, input) =>
+  callApi(`/api/tools/${tool}/call`, {
+    method: 'POST',
+    body: JSON.stringify({ input }),
+  });
+
+/** 股票搜索：复用 /api/stocks/search（优先 adshare，本地兜底）。 */
+const searchStocks = async (query) => {
+  const r = await callApi(`/api/stocks/search?query=${encodeURIComponent(query)}&limit=8`);
+  if (!r.ok) return [];
+  const data = r.data;
+  return data && Array.isArray(data.stocks) ? data.stocks : [];
+};
+
+/** 新鲜度 → 中文文案 + 颜色类（PRD §6.3）。 */
+const FRESHNESS_LABEL = {
+  fresh: { label: '新鲜', cls: 'badge-fresh' },
+  stale: { label: '过期', cls: 'badge-stale' },
+  unknown: { label: '未知', cls: 'badge-unknown' },
+  unavailable: { label: '不可用', cls: 'badge-unavailable' },
+};
+
+/** 仪表盘数据健康卡片（ruo §8 数据健康组件）。 */
+const renderDataHealth = async (setStatus) => {
+  const body = document.getElementById('data-health-body');
+  if (body === null) return;
+  const r = await callApi('/api/market-data-status');
+  if (!r.ok) {
+    body.textContent = '加载失败';
+    return;
+  }
+  const data = /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, groupStale: Array<{groupId: string, name: string}>}} */ (
+    r.data
+  );
+  const providerEls = data.providers.map((p) => {
+    const meta = FRESHNESS_LABEL[p.freshness] ?? FRESHNESS_LABEL.unknown;
+    const observed = p.latestObservedAt
+      ? new Date(p.latestObservedAt).toLocaleString('zh-CN', { hour12: false })
+      : '—';
+    return el('span', `data-health-provider ${meta.cls}`, [
+      `${p.provider} · ${meta.label}`,
+      el('span', 'muted', observed),
+    ]);
+  });
+  const wh = data.watchHealth;
+  const watchText =
+    wh === null
+      ? 'watch 从未运行'
+      : `watch ${wh.state}（今日触发 ${wh.triggered ?? 0}，失败 ${wh.notifyFailed ?? 0}）`;
+  const stale = data.groupStale.length === 0 ? null : el('div', 'data-health-stale', [
+    el('h3', null, 'stale 分组'),
+    el(
+      'ul',
+      null,
+      data.groupStale.map((g) => el('li', null, `${g.name}（${g.groupId}）`)),
+    ),
+  ]);
+  mount(
+    body,
+    el('div', 'data-health-grid', [
+      el('div', 'data-health-providers', [el('h3', null, '行情源'), ...providerEls]),
+      el('div', 'data-health-watch', [el('h3', null, 'watch 健康'), el('p', null, watchText)]),
+      ...(stale !== null ? [stale] : []),
+    ]),
+  );
+  setStatus('数据健康已更新');
+};
+
+/** 设置页 workflow 运行记录卡片。 */
+const renderWorkflowRuns = async (setStatus) => {
+  const body = document.getElementById('settings-workflow-runs');
+  if (body === null) return;
+  const r = await callApi('/api/workflow-runs?limit=30');
+  if (!r.ok) {
+    body.textContent = '加载失败';
+    return;
+  }
+  const runs = /** @type {Array<{source: string, name: string, status: string, startedAt: string, finishedAt?: string, summary?: Record<string, unknown>, error?: string}>} */ (
+    r.data
+  ).runs;
+  if (runs.length === 0) {
+    body.textContent = '尚无 workflow 运行记录';
+    return;
+  }
+  const row = (run) => {
+    const startedAt = new Date(run.startedAt).toLocaleString('zh-CN', { hour12: false });
+    const summary = run.summary
+      ? Object.entries(run.summary)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(' · ')
+      : '';
+    return el('tr', null, [
+      el('td', null, run.name),
+      el('td', null, run.source),
+      el('td', null, run.status),
+      el('td', null, startedAt),
+      el('td', 'muted', summary || run.error || '—'),
+    ]);
+  };
+  mount(
+    body,
+    el('table', 'workflow-runs-table', [
+      el('thead', null, el('tr', null, [el('th', null, 'workflow'), el('th', null, '源'), el('th', null, '状态'), el('th', null, '开始'), el('th', null, '摘要')])),
+      el('tbody', null, runs.map(row)),
+    ]),
+  );
+  setStatus('workflow 运行记录已更新');
+};
+
+/** 研究页：搜索 → 时间线 → 新增/编辑笔记。 */
+const renderResearch = async (setStatus) => {
+  const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
+  if (detail !== null) detail.hidden = true;
+
+  const input = /** @type {HTMLInputElement | null} */ (document.getElementById('research-stock-input'));
+  const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('research-search-btn'));
+  const results = document.getElementById('research-search-results');
+  if (input === null || btn === null || results === null) return;
+
+  const runSearch = async () => {
+    const q = input.value.trim();
+    if (q.length === 0) return;
+    setStatus(`搜索 ${q}…`);
+    const list = await searchStocks(q);
+    mount(
+      results,
+      list.length === 0
+        ? el('p', 'muted', '无匹配')
+        : el(
+            'ul',
+            'research-results-list',
+            list.map((c) =>
+              el('li', null, [
+                el(
+                  'button',
+                  'btn btn-link',
+                  `${c.code} · ${c.name}（${c.exchange}）`,
+                ),
+              ]),
+            ),
+          ),
+    );
+    // 绑定选择
+    const buttons = results.querySelectorAll('button');
+    buttons.forEach((button, i) => {
+      button.addEventListener('click', () => {
+        const c = list[i];
+        if (c) void loadResearch(c.id, c.code, c.name);
+      });
+    });
+    setStatus(`找到 ${list.length} 个候选`);
+  };
+
+  btn.addEventListener('click', () => void runSearch());
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') void runSearch();
+  });
+};
+
+/** 加载并渲染某只股票的研究时间线。 */
+const loadResearch = async (stockId, code, name) => {
+  const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
+  const titleEl = document.getElementById('research-title');
+  const summaryEl = document.getElementById('research-summary');
+  const summaryMeta = document.getElementById('research-summary-meta');
+  const timelineEl = document.getElementById('research-timeline');
+  const addNoteEl = document.getElementById('research-add-note');
+  if (!detail || !titleEl || !summaryEl || !summaryMeta || !timelineEl || !addNoteEl) return;
+  detail.hidden = false;
+  titleEl.textContent = `${code} · ${name} · 研究档案`;
+  summaryMeta.textContent = '加载中…';
+  mount(summaryEl, el('p', 'muted', '加载中…'));
+  mount(timelineEl, el('p', 'muted', '加载中…'));
+  mount(addNoteEl, el('p', 'muted', '加载中…'));
+
+  const r = await callApi(`/api/stocks/${encodeURIComponent(stockId)}/research-timeline`);
+  if (!r.ok) {
+    summaryMeta.textContent = '加载失败';
+    mount(summaryEl, el('p', 'error', r.error?.message ?? '加载失败'));
+    return;
+  }
+  const data = /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
+    r.data
+  );
+  summaryMeta.textContent = `${data.summary.noteCount} 笔记 · ${data.summary.eventCount} 事件`;
+
+  // 摘要
+  const thesis = data.summary.activeThesis;
+  const thesisBlock = thesis
+    ? el('div', 'card-summary-thesis', [
+        el('h3', null, '当前假设'),
+        el('p', 'muted', `更新于 ${new Date(String(thesis.updatedAt)).toLocaleString('zh-CN', { hour12: false })}`),
+        el('p', null, String(thesis.content ?? '')),
+        el('div', 'flex gap-2 mt-2', [
+          el('button', 'btn btn-outline btn-sm', '编辑（保存为新版本）', [], {
+            click: () => openEditNoteModal(stockId, /** @type {any} */ (thesis), code, name),
+          }),
+        ]),
+      ])
+    : el('div', 'muted', '无当前假设（可通过下方「新增笔记 / 假设」创建 thesis）');
+
+  const upcoming = data.summary.upcomingEvents;
+  const upcomingBlock = el('div', 'card-summary-events', [
+    el('h3', null, '未来事件'),
+    upcoming.length === 0
+      ? el('p', 'muted', '无未来 30/90 天事件')
+      : el(
+          'ul',
+          null,
+          upcoming.slice(0, 8).map((e) => {
+            const date = new Date(String(e.occursAt)).toLocaleDateString('zh-CN');
+            return el('li', null, `${date} · ${e.title}（${e.kind}，${e.importance ?? 'normal'}）`);
+          }),
+        ),
+  ]);
+  mount(summaryEl, [thesisBlock, upcomingBlock]);
+
+  // 时间线
+  const TYPES = ['note', 'event', 'trigger', 'advice'];
+  const filterRow = el('div', 'research-timeline-filters-row', [
+    el(
+      'button',
+      'btn btn-outline btn-sm active',
+      '全部',
+      [],
+      { click: () => paintTimeline(data.timeline) },
+    ),
+    ...TYPES.map((t) =>
+      el('button', 'btn btn-outline btn-sm', t, [], {
+        click: () => paintTimeline(data.timeline.filter((it) => it.type === t)),
+      }),
+    ),
+  ]);
+  mount(document.getElementById('research-timeline-filters') ?? timelineEl, filterRow);
+  paintTimeline(data.timeline);
+
+  // 新增笔记表单
+  mount(addNoteEl, buildAddNoteForm(stockId, code, name, () => loadResearch(stockId, code, name)));
+};
+
+const paintTimeline = (items) => {
+  const el2 = document.getElementById('research-timeline');
+  if (el2 === null) return;
+  if (items.length === 0) {
+    mount(el2, el('p', 'muted', '时间线为空'));
+    return;
+  }
+  mount(
+    el2,
+    el(
+      'ul',
+      'research-timeline-list',
+      items.slice(0, 200).map((it) => {
+        const at = new Date(it.at).toLocaleString('zh-CN', { hour12: false });
+        const badge = el('span', `timeline-badge timeline-${it.type}`, it.type);
+        let body;
+        if (it.type === 'note') body = String(it.payload.content ?? '');
+        else if (it.type === 'event') body = `${it.payload.title ?? ''}（${it.payload.kind ?? ''}）`;
+        else if (it.type === 'trigger') body = String(it.payload.reason ?? '');
+        else body = `${it.payload.decision ?? ''} · ${String(it.payload.premise ?? '').slice(0, 80)}`;
+        return el('li', null, [badge, el('span', 'muted', at), el('span', null, body)]);
+      }),
+    ),
+  );
+};
+
+/** 新增笔记表单：kind=thesis 自动 active；submit 后刷新。 */
+const buildAddNoteForm = (stockId, code, name, onDone) => {
+  const form = el('form', 'research-add-note-form');
+  const kindSelect = el('select', null, [
+    el('option', null, 'note（普通）'),
+    el('option', null, 'thesis（当前假设）'),
+    el('option', null, 'source-summary（来源摘要）'),
+  ]);
+  kindSelect.value = 'note';
+  const content = el('textarea', null, '', { rows: 4, placeholder: '笔记内容' });
+  const stance = el('select', null, [
+    el('option', null, '—'),
+    el('option', null, 'bullish'),
+    el('option', null, 'bearish'),
+    el('option', null, 'neutral'),
+  ]);
+  const tags = el('input', null, '', { placeholder: '标签（逗号分隔，可选）' });
+  const sourceUrl = el('input', null, '', { placeholder: '来源 URL（source-summary 必填）' });
+  const errBox = el('p', 'modal-error');
+  const submitBtn = el('button', 'btn btn-primary btn-sm', '保存', [], { type: 'submit' });
+  form.append(
+    el('div', 'field', [el('label', null, '类型'), kindSelect]),
+    el('div', 'field', [el('label', null, '内容'), content]),
+    el('div', 'field', [el('label', null, '立场'), stance]),
+    el('div', 'field', [el('label', null, '标签'), tags]),
+    el('div', 'field', [el('label', null, '来源 URL'), sourceUrl]),
+    errBox,
+    el('div', 'flex gap-2', [submitBtn]),
+  );
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errBox.textContent = '';
+    const kind = /** @type {HTMLSelectElement} */ (kindSelect).value;
+    const input = {
+      stockId,
+      kind,
+      content: /** @type {HTMLTextAreaElement} */ (content).value,
+      ...(/** @type {HTMLSelectElement} */ (stance).value !== '—'
+        ? { stance: /** @type {HTMLSelectElement} */ (stance).value }
+        : {}),
+      ...(/** @type {HTMLInputElement} */ (tags).value.length > 0
+        ? { tags: /** @type {HTMLInputElement} */ (tags).value.split(',').map((s) => s.trim()).filter((s) => s.length > 0) }
+        : {}),
+      ...(/** @type {HTMLInputElement} */ (sourceUrl).value.length > 0
+        ? { sourceUrl: /** @type {HTMLInputElement} */ (sourceUrl).value }
+        : {}),
+    };
+    const r = await callTool('add_research_note', input);
+    if (!r.ok) {
+      errBox.textContent = r.error?.message ?? '保存失败';
+      return;
+    }
+    content.value = '';
+    onDone();
+  });
+  return form;
+};
+
+/** 简化版：编辑 thesis 弹窗（保存为新版本，历史保留）。 */
+const openEditNoteModal = (stockId, thesis, code, name) => {
+  const ta = el('textarea', null, String(thesis.content ?? ''), { rows: 6 });
+  const stance = el('select', null, [
+    el('option', null, 'bullish'),
+    el('option', null, 'bearish'),
+    el('option', null, 'neutral'),
+  ]);
+  stance.value = String(thesis.stance ?? 'neutral');
+  const err = el('p', 'modal-error');
+  const save = el('button', 'btn btn-primary btn-sm', '保存为新版本', [], { type: 'button' });
+  const cancel = el('button', 'btn btn-outline btn-sm', '取消', [], { type: 'button' });
+  const modal = el('div', 'modal', [
+    el('div', 'modal-content', [
+      el('h2', null, `编辑 thesis：${code} · ${name}`),
+      el('p', 'muted', '保存后会产生新版本（supersedesId 串联），历史版本保留在时间线'),
+      el('div', 'field', [el('label', null, '立场'), stance]),
+      el('div', 'field', [el('label', null, '新版本内容'), ta]),
+      err,
+      el('div', 'flex gap-2', [save, cancel]),
+    ]),
+  ]);
+  document.body.append(modal);
+  const close = () => modal.remove();
+  cancel.addEventListener('click', close);
+  save.addEventListener('click', async () => {
+    const input = {
+      noteId: thesis.id,
+      content: ta.value,
+      stance: stance.value,
+    };
+    const r = await callTool('update_research_note', input);
+    if (!r.ok) {
+      err.textContent = r.error?.message ?? '保存失败';
+      return;
+    }
+    close();
+    void loadResearch(stockId, code, name);
+  });
+};
+
 export {
   analyzeAllHoldings,
   bindPlanCreator,
   bindSettingsActions,
   renderAdviceList,
   renderDashboard,
+  renderDataHealth,
   renderDraftResult,
   renderGroups,
   renderHoldings,
   renderPlanCreator,
+  renderResearch,
   renderReview,
   renderSettings,
   renderSettingsAccount,
   renderTacticsList,
+  renderWorkflowRuns,
   runTacticScan,
   runWatchOnce,
 };

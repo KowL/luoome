@@ -88,6 +88,10 @@ mcps:
 | `list_stock_groups` | 列出股票分组（分组化起，可带当前成员数） |
 | `get_stock_group` | 分组详情 + 当前成员 + 最近 refresh 时间 + stale 标记 |
 | `list_watch_plans` | 列出盯盘方案，包含引用分组、成员数和可用状态 |
+| `list_research_notes` | 查研究档案笔记（thesis / note / source-summary） |
+| `list_stock_events` | 查公司事件（财报 / 解禁 / 分红…） |
+| `get_market_data_status` | 数据健康读模型：行情源新鲜度 + watch 健康 + stale 分组 |
+| `list_workflow_runs` | 查 workflow 运行审计（含 intraday-watch，统一读模型） |
 
 ### 建议类（advice，默认全部暴露）
 
@@ -120,6 +124,13 @@ mcps:
 | `update_stock_group` | 更新股票分组（分组化起） |
 | `delete_stock_group` | 删除股票分组（分组化起；有 pool 引用时拒绝，需先解绑） |
 | `save_watch_trigger` | 落库一次 watch 触发（workflow 内部使用） |
+| `add_research_note` | 新增研究笔记（thesis 自动 active=true，停用旧版本） |
+| `update_research_note` | 更新笔记（thesis 内容变更插入新版本，supersedesId 串联） |
+| `delete_research_note` | 删除笔记（不连锁） |
+| `add_stock_event` | 新增手工公司事件（返回疑似重复告警） |
+| `update_stock_event` | 更新事件（external 事件不可改 occursAt） |
+| `delete_stock_event` | 删除手工事件（external 事件请改 status=cancelled） |
+| `set_watch_trigger_feedback` | 设置盯盘触发反馈（v0.7 策略预警） |
 
 ### 外部副作用（external，默认 opt-in）
 
@@ -130,6 +141,7 @@ mcps:
 | `refresh_stock_group` | 手动触发单组刷新（分组化起；formula→run_tactic / llm→resolve_llm_group，失败保留旧快照） |
 | `send_notification` | 推送飞书等 |
 | `generate_report` | 生成并写报告文件 |
+| `sync_stock_events` | 从外部数据源同步公司事件，按 (provider, externalId) 幂等 upsert；空列表不删旧 |
 
 ### 永不对外暴露
 

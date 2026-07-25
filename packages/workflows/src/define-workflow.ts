@@ -66,6 +66,8 @@ import type {
   SetWatchTriggerFeedbackOutput,
   SyncQuotesInput,
   SyncQuotesOutput,
+  SyncStockEventsInput,
+  SyncStockEventsOutput,
   TacticSignalsByStockInput,
   TacticSignalsByStockOutput,
   TacticSignalsByTacticInput,
@@ -113,6 +115,10 @@ export interface WorkflowToolMap {
   readonly fetch_quote: ToolAccessor<typeof FetchQuoteInput, typeof FetchQuoteOutput>;
   readonly batch_quote: ToolAccessor<typeof BatchQuoteInput, typeof BatchQuoteOutput>;
   readonly sync_quotes: ToolAccessor<typeof SyncQuotesInput, typeof SyncQuotesOutput>;
+  readonly sync_stock_events: ToolAccessor<
+    typeof SyncStockEventsInput,
+    typeof SyncStockEventsOutput
+  >;
   readonly search_stocks: ToolAccessor<typeof SearchStocksInput, typeof SearchStocksOutput>;
   readonly compute_indicators: ToolAccessor<
     typeof ComputeIndicatorsInput,

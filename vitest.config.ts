@@ -10,6 +10,8 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
+      // 嵌套 git worktree（.claude/worktrees/*）是其它分支的工作副本，不参与本树测试。
+      '.claude/**',
       'packages/db/src/client.test.ts',
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',

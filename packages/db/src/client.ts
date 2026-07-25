@@ -11,14 +11,17 @@ import {
   DrizzleHoldingRepository,
   DrizzleNotificationRepository,
   DrizzleQuoteRepository,
+  DrizzleResearchNoteRepository,
   DrizzleStockGroupRepository,
   DrizzleStockPoolRepository,
   DrizzleStockRepository,
+  DrizzleStockEventRepository,
   DrizzleTacticRepository,
   DrizzleTradeRepository,
   DrizzleWatchRuleStateRepository,
   DrizzleWatchRunRepository,
   DrizzleWatchTriggerRepository,
+  DrizzleWorkflowRunRepository,
 } from './repository/drizzle/index.js';
 import { type Schema, schema } from './schema/index.js';
 
@@ -241,8 +244,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
       direction TEXT NOT NULL,
       reason TEXT NOT NULL,
       evidence TEXT NOT NULL,
-      quote_close REAL NOT NULL,
-      quote_ts INTEGER NOT NULL,
+      quote_close REAL,
+      quote_ts INTEGER,
       notified INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
       rule_id TEXT NOT NULL DEFAULT '',
@@ -252,10 +255,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
       notification_id TEXT,
       eval_snapshot TEXT NOT NULL DEFAULT '{}',
       feedback TEXT,
-      feedback_at INTEGER
+      feedback_at INTEGER,
+      event_id TEXT
     )
   `);
   migrateStrategyAlertTriggerColumns(db);
+  migrateRuoTriggerColumns(db);
   // 重建索引（列从 rule_kind 改到 rule_id）
   db.run(sql`DROP INDEX IF EXISTS watch_triggers_pool_stock_rule_ts_idx`);
   db.run(
@@ -263,6 +268,9 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_ts_idx ON watch_triggers (pool_id, created_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_stock_rule_event_idx ON watch_triggers (pool_id, stock_id, rule_id, event_id, created_at)`,
   );
   // v0.7 起：边沿状态机表（§3.5）
   db.run(sql`
@@ -330,6 +338,91 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS group_members_group_ts_idx ON group_member_snapshots (group_id, created_at)`,
+  );
+  // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）：研究档案 + 公司事件 + workflow 审计
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS research_notes (
+      id TEXT PRIMARY KEY,
+      stock_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT,
+      content TEXT NOT NULL,
+      stance TEXT,
+      active INTEGER NOT NULL,
+      supersedes_id TEXT,
+      source_url TEXT,
+      source_title TEXT,
+      source_status TEXT,
+      fetched_at INTEGER,
+      citations TEXT,
+      related_holding_id TEXT,
+      related_advice_id TEXT,
+      related_watch_trigger_id TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS research_notes_stock_created_idx ON research_notes (stock_id, created_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS research_notes_stock_kind_active_idx ON research_notes (stock_id, kind, active)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS stock_events (
+      id TEXT PRIMARY KEY,
+      stock_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      occurs_at INTEGER NOT NULL,
+      all_day INTEGER NOT NULL,
+      importance TEXT NOT NULL,
+      status TEXT NOT NULL,
+      source TEXT NOT NULL,
+      provider TEXT,
+      external_id TEXT,
+      source_url TEXT,
+      observed_at INTEGER,
+      fetched_at INTEGER,
+      stale INTEGER NOT NULL,
+      remind_before_days TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS stock_events_provider_external_unique ON stock_events (provider, external_id)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS stock_events_stock_occurs_idx ON stock_events (stock_id, occurs_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS stock_events_occurs_status_idx ON stock_events (occurs_at, status)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS stock_events_stock_kind_occurs_idx ON stock_events (stock_id, kind, occurs_at)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      input_summary TEXT,
+      output_summary TEXT,
+      provider_statuses TEXT NOT NULL DEFAULT '[]',
+      error TEXT
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS workflow_runs_name_started_idx ON workflow_runs (workflow_name, started_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS workflow_runs_started_idx ON workflow_runs (started_at)`,
   );
   // 阶段 B 存量数据迁移：v0.6 pool.source JSON → 分组 + 回填 group_id（幂等，须在两张新表 DDL 之后）
   migrateLegacyPoolSourcesToGroups(db);
@@ -584,6 +677,64 @@ const migrateStrategyAlertTriggerColumns = (db: DrizzleDb): void => {
 };
 
 /**
+ * ruo 迁移列补齐（docs/ddd/ruo-feature-migration-detailed-design.md §3.6）：
+ * - watch_triggers 补 event_id 列（ALTER ADD，幂等）
+ * - 放宽 quote_close / quote_ts 的 NOT NULL（event-date 触发无实时行情）：
+ *   SQLite 不支持改列约束 → 表重建（仅当检测到旧约束时执行；索引由外层 CREATE INDEX 重建）
+ */
+const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string; notnull: number }>(
+    sql`PRAGMA table_info(watch_triggers)`,
+  );
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === 'event_id')) {
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN event_id TEXT`);
+  }
+  const quoteClose = cols.find((c) => c.name === 'quote_close');
+  const quoteTs = cols.find((c) => c.name === 'quote_ts');
+  const needRelax =
+    (quoteClose !== undefined && quoteClose.notnull === 1) ||
+    (quoteTs !== undefined && quoteTs.notnull === 1);
+  if (!needRelax) return;
+  db.transaction((tx) => {
+    tx.run(sql`
+      CREATE TABLE watch_triggers_mig (
+        id TEXT PRIMARY KEY,
+        pool_id TEXT NOT NULL,
+        stock_id TEXT NOT NULL,
+        rule_kind TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        evidence TEXT NOT NULL,
+        quote_close REAL,
+        quote_ts INTEGER,
+        notified INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        rule_id TEXT NOT NULL DEFAULT '',
+        trigger_type TEXT NOT NULL DEFAULT 'triggered',
+        priority TEXT NOT NULL DEFAULT 'normal',
+        delivery_status TEXT NOT NULL DEFAULT 'not-requested',
+        notification_id TEXT,
+        eval_snapshot TEXT NOT NULL DEFAULT '{}',
+        feedback TEXT,
+        feedback_at INTEGER,
+        event_id TEXT
+      )
+    `);
+    tx.run(sql`
+      INSERT INTO watch_triggers_mig
+      SELECT id, pool_id, stock_id, rule_kind, direction, reason, evidence,
+             quote_close, quote_ts, notified, created_at, rule_id, trigger_type,
+             priority, delivery_status, notification_id, eval_snapshot, feedback,
+             feedback_at, event_id
+      FROM watch_triggers
+    `);
+    tx.run(sql`DROP TABLE watch_triggers`);
+    tx.run(sql`ALTER TABLE watch_triggers_mig RENAME TO watch_triggers`);
+  });
+};
+
+/**
  * v0.7 策略预警列补齐：watch_runs 增 2 列。
  */
 const migrateStrategyAlertRunColumns = (db: DrizzleDb): void => {
@@ -659,6 +810,10 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     // 分组化起
     stockGroup: new DrizzleStockGroupRepository(db),
     groupMember: new DrizzleGroupMemberRepository(db),
+    // ruo 迁移起
+    researchNote: new DrizzleResearchNoteRepository(db),
+    stockEvent: new DrizzleStockEventRepository(db),
+    workflowRun: new DrizzleWorkflowRunRepository(db),
   };
   return { repos, db, close: () => sqlite.close() };
 };

@@ -693,6 +693,9 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
   for (const pool of state.pools) {
     if (state.skipped.has(pool.id)) continue;
     const rulesWithIds = ensureRuleIds(pool);
+    // event-date 规则由 evaluate-event-rules workflow 每日盘前求值，intraday 跳过：
+    // 不评估、不写触发、不参与 ANY/ALL 组合判定（ruo 迁移 §3.5）。
+    const evaluableRules = rulesWithIds.filter((r) => r.kind !== 'event-date');
     const members = state.members.get(pool.id) ?? [];
     if (members.length === 0) continue;
 
@@ -706,7 +709,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
     const activeByStockRule = new Map<string, boolean>();
 
     // 先逐规则求值（同步）
-    for (const rule of rulesWithIds) {
+    for (const rule of evaluableRules) {
       const priority = deriveRulePriority(rule, pool.priority);
 
       // 异步规则：tactic 一次跑整批
@@ -870,12 +873,12 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
     }
 
     // 6c：ALL composite 虚拟规则
-    if (pool.logic === 'ALL' && rulesWithIds.length > 0) {
+    if (pool.logic === 'ALL' && evaluableRules.length > 0) {
       for (const member of members) {
-        const allActive = rulesWithIds.every(
+        const allActive = evaluableRules.every(
           (r) => activeByStockRule.get(`${member.stockId}|${r.id}`) === true,
         );
-        const anyUnknown = rulesWithIds.some((r) => {
+        const anyUnknown = evaluableRules.some((r) => {
           const prevState = stateByKey.get(`${member.stockId}|${r.id}`);
           return prevState === undefined
             ? false
@@ -899,8 +902,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           ruleId: compositeId,
         });
         if (sm.emitTrigger && allActive) {
-          const compositeRuleKind = pickCompositeKind(rulesWithIds) as WatchRule['kind'];
-          const priority = rulesWithIds
+          const compositeRuleKind = pickCompositeKind(evaluableRules) as WatchRule['kind'];
+          const priority = evaluableRules
             .map((r) => deriveRulePriority(r, pool.priority))
             .reduce<AlertPriority>((acc, p) => (priorityRank(p) > priorityRank(acc) ? p : acc), 'normal');
           const quote = state.quotes.get(member.stockId);
@@ -914,11 +917,11 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             direction: 'watch',
             triggerType: 'triggered',
             reason: '所有规则同时进入 active',
-            evidence: rulesWithIds.map((r) => `${r.kind} active`),
+            evidence: evaluableRules.map((r) => `${r.kind} active`),
             quote: { close: quote?.close ?? (0 as Money), ts: quote?.ts ?? now },
             priority,
             deliveryStatus: 'not-requested',
-            evalSnapshot: { composite: true, rules: rulesWithIds.map((r) => r.kind) },
+            evalSnapshot: { composite: true, rules: evaluableRules.map((r) => r.kind) },
             notified: false,
             createdAt: now,
           };
@@ -1009,7 +1012,9 @@ const ruleKindThreshold = (rule: WatchRule): Record<string, unknown> => {
   if (rule.kind === 'cost-threshold')
     return { stopLossPct: rule.stopLossPct ?? null, takeProfitPct: rule.takeProfitPct ?? null };
   if (rule.kind === 'price-level') return { level: rule.level, side: rule.side };
-  return { tacticId: rule.tacticId, minScore: rule.minScore };
+  if (rule.kind === 'tactic') return { tacticId: rule.tacticId, minScore: rule.minScore };
+  // event-date：intraday 不评估（此分支不可达，仅为类型穷尽）
+  return {};
 };
 
 const makeReason = (rule: WatchRule, value: number, member: PoolMember): string => {
@@ -1187,7 +1192,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     const lines = group.map((t) => {
       const dir = t.direction === 'buy' ? '买' : t.direction === 'sell' ? '卖' : '观察';
       const prio = t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
-      return `· ${prio}[${dir}] ${t.stockId} @ ${t.quote.close.toFixed(2)} — ${t.reason}`;
+      return `· ${prio}[${dir}] ${t.stockId} @ ${t.quote ? t.quote.close.toFixed(2) : '—'} — ${t.reason}`;
     });
     const content = lines.join('\n');
     const r = await ctx.tools.send_notification.execute({
@@ -1236,7 +1241,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
       direction: t.direction,
       reason: t.reason,
       evidence: [...t.evidence],
-      quoteClose: t.quote.close,
+      quoteClose: t.quote?.close ?? (0 as Money),
       notified: t.notified,
       createdAt: t.createdAt,
     })),

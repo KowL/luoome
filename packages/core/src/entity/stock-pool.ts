@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 import { type Money, MoneySchema } from '../types/branded.js';
+import { EventImportanceSchema, StockEventKindSchema } from './stock-event.js';
 
 /**
  * 股票池 + 盯盘规则 + 触发（v0.6 起，docs/intraday-watch-design.md；
@@ -23,14 +24,20 @@ export type WatchDirection = 'buy' | 'sell' | 'watch';
 
 export const WatchDirectionSchema = z.enum(['buy', 'sell', 'watch']);
 
-/** 规则类型。Phase 1 新增 price-level；volume-ratio / drawdown-from-high 留 Phase 2。 */
-export type WatchRuleKind = 'tactic' | 'cost-threshold' | 'price-change' | 'price-level';
+/** 规则类型。Phase 1 新增 price-level；event-date（低频事件提醒，ruo 迁移）；volume-ratio / drawdown-from-high 留 Phase 2。 */
+export type WatchRuleKind =
+  | 'tactic'
+  | 'cost-threshold'
+  | 'price-change'
+  | 'price-level'
+  | 'event-date';
 
 export const WatchRuleKindSchema = z.enum([
   'tactic',
   'cost-threshold',
   'price-change',
   'price-level',
+  'event-date',
 ]);
 
 /** 方案级组合逻辑：任一规则命中即触发（默认），或所有规则同时进入 active 才触发。 */
@@ -116,11 +123,27 @@ export const PriceLevelRuleSchema = z.object({
   side: z.enum(['above', 'below']),
 });
 
+/**
+ * 事件日期型（ruo 能力迁移 §3.5）：每日 workflow（evaluate-event-rules）求值，intraday-watch 跳过。
+ * direction 固定 'watch'，priority 由事件 importance 映射（求值时覆盖）。
+ */
+export const EventDateRuleSchema = z.object({
+  ...RuleBaseFields,
+  kind: z.literal('event-date'),
+  /** 关注的事件类型；缺省 = 全部。 */
+  eventKinds: z.array(StockEventKindSchema).optional(),
+  /** 最低重要性；缺省 normal（全部）。 */
+  minImportance: EventImportanceSchema.default('normal'),
+  /** 默认提醒窗口（天）；事件级 remindBeforeDays 非空时被覆盖。 */
+  daysBefore: z.array(z.number().int().min(0).max(90)).max(8).default([7, 3, 1]),
+});
+
 export const WatchRuleSchema = z.discriminatedUnion('kind', [
   TacticRuleSchema,
   CostThresholdRuleSchema,
   PriceChangeRuleSchema,
   PriceLevelRuleSchema,
+  EventDateRuleSchema,
 ]);
 
 export type WatchRule = z.infer<typeof WatchRuleSchema>;
@@ -128,6 +151,7 @@ export type TacticRule = z.infer<typeof TacticRuleSchema>;
 export type CostThresholdRule = z.infer<typeof CostThresholdRuleSchema>;
 export type PriceChangeRule = z.infer<typeof PriceChangeRuleSchema>;
 export type PriceLevelRule = z.infer<typeof PriceLevelRuleSchema>;
+export type EventDateRule = z.infer<typeof EventDateRuleSchema>;
 
 // ---------- StockPool ----------
 
@@ -173,16 +197,23 @@ export const WatchTriggerSchema = z.object({
   ruleKind: WatchRuleKindSchema,
   /** 规则实例 id（与 stock_pool.rules[].id 对齐）；ALL 组合触发固定为 'composite'。 */
   ruleId: z.string().min(1),
+  /** event-date 触发关联的公司事件 id（非 event-date 触发为空）。 */
+  eventId: z.string().optional(),
   direction: WatchDirectionSchema,
   /** 触发的具体类型（进入 / 恢复），默认 'triggered'。 */
   triggerType: TriggerTypeSchema.default('triggered'),
   reason: z.string().min(1).max(500),
   evidence: z.array(z.string().min(1)).min(1).max(16),
-  /** 触发时的实时行情快照（review fix：触发持久化保留 quote 便于复盘）。 */
-  quote: z.object({
-    close: MoneySchema,
-    ts: z.coerce.date(),
-  }),
+  /**
+   * 触发时的实时行情快照（review fix：触发持久化保留 quote 便于复盘）。
+   * event-date 触发无实时行情，quote 可空。
+   */
+  quote: z
+    .object({
+      close: MoneySchema,
+      ts: z.coerce.date(),
+    })
+    .optional(),
   /** 落库时的生效优先级，不再反推。 */
   priority: AlertPrioritySchema,
   /** 单条送达状态机落值。 */
@@ -256,6 +287,9 @@ const derivePriorityByKind = (rule: WatchRule): AlertPriority => {
       return rule.minScore >= 70 ? 'important' : 'normal';
     case 'price-change':
       return 'normal';
+    case 'event-date':
+      // event-date 触发的实际优先级在求值时由事件 importance 映射覆盖；此处仅为回退默认。
+      return 'normal';
   }
 };
 
@@ -297,7 +331,7 @@ export const assertStockPoolInvariants = (pool: StockPool): void => {
  * notified 字段保留兼容：新写入由 workflow 派生（deliveryStatus ∈ ATTEMPTED 为 true）。
  */
 export const assertWatchTriggerInvariants = (t: WatchTrigger): void => {
-  if (!(t.quote.close > 0)) {
+  if (t.quote !== undefined && !(t.quote.close > 0)) {
     throw new InvariantError(`watch trigger quote.close 必须 > 0，实际 ${t.quote.close}`);
   }
   if (t.evidence.length === 0) {

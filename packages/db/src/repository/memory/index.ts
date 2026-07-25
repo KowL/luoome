@@ -7,7 +7,9 @@ import type {
   Notification,
   Quote,
   RepositoryRegistry,
+  ResearchNote,
   Stock,
+  StockEvent,
   StockGroup,
   StockPool,
   Tactic,
@@ -15,6 +17,7 @@ import type {
   Trade,
   WatchRun,
   WatchTrigger,
+  WorkflowRun,
 } from '@luoome/core';
 import { BUILTIN_TACTICS } from '@luoome/core';
 import { InMemoryAccountRepository } from './account.js';
@@ -24,7 +27,9 @@ import { InMemoryGroupMemberRepository } from './group-member.js';
 import { InMemoryHoldingRepository } from './holding.js';
 import { InMemoryNotificationRepository } from './notification.js';
 import { InMemoryQuoteRepository } from './quote.js';
+import { InMemoryResearchNoteRepository } from './research-note.js';
 import { InMemoryStockRepository } from './stock.js';
+import { InMemoryStockEventRepository } from './stock-event.js';
 import { InMemoryStockGroupRepository } from './stock-group.js';
 import { InMemoryStockPoolRepository } from './stock-pool.js';
 import { InMemoryTacticRepository } from './tactic.js';
@@ -32,6 +37,7 @@ import { InMemoryTradeRepository } from './trade.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 import { InMemoryWatchRunRepository } from './watch-run.js';
 import { InMemoryWatchTriggerRepository } from './watch-trigger.js';
+import { InMemoryWorkflowRunRepository } from './workflow-run.js';
 
 export { InMemoryAccountRepository } from './account.js';
 export { InMemoryAdviceRepository } from './advice.js';
@@ -40,7 +46,9 @@ export { InMemoryGroupMemberRepository } from './group-member.js';
 export { InMemoryHoldingRepository } from './holding.js';
 export { InMemoryNotificationRepository } from './notification.js';
 export { InMemoryQuoteRepository } from './quote.js';
+export { InMemoryResearchNoteRepository } from './research-note.js';
 export { InMemoryStockRepository } from './stock.js';
+export { InMemoryStockEventRepository } from './stock-event.js';
 export { InMemoryStockGroupRepository } from './stock-group.js';
 export { InMemoryStockPoolRepository } from './stock-pool.js';
 export { InMemoryTacticRepository } from './tactic.js';
@@ -48,6 +56,7 @@ export { InMemoryTradeRepository } from './trade.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 export { InMemoryWatchRunRepository } from './watch-run.js';
 export { InMemoryWatchTriggerRepository } from './watch-trigger.js';
+export { InMemoryWorkflowRunRepository } from './workflow-run.js';
 
 /** createInMemoryRepos 的可选种子数据（同步写入，含不变量断言）。 */
 export interface InMemorySeed {
@@ -69,6 +78,10 @@ export interface InMemorySeed {
   /** 分组化起：可选预置分组 + 成员快照。 */
   readonly stockGroups?: readonly StockGroup[];
   readonly groupMemberSnapshots?: readonly GroupMemberSnapshot[];
+  /** ruo 迁移起：可选预置研究笔记 + 公司事件 + workflow 运行。 */
+  readonly researchNotes?: readonly ResearchNote[];
+  readonly stockEvents?: readonly StockEvent[];
+  readonly workflowRuns?: readonly WorkflowRun[];
 }
 
 /** 构造全部 in-memory repository（v0.3 + v0.6 stockPool/watchTrigger + 分组化 stockGroup/groupMember），可选灌入种子。 */
@@ -90,6 +103,10 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   // 分组化起
   const stockGroup = new InMemoryStockGroupRepository();
   const groupMember = new InMemoryGroupMemberRepository();
+  // ruo 迁移起
+  const researchNote = new InMemoryResearchNoteRepository();
+  const stockEvent = new InMemoryStockEventRepository();
+  const workflowRun = new InMemoryWorkflowRunRepository();
   if (seed !== undefined) {
     for (const a of seed.accounts ?? []) account.put(a);
     for (const s of seed.stocks ?? []) stock.put(s);
@@ -108,6 +125,9 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const r of seed.watchRuns ?? []) watchRun.put(r);
     for (const g of seed.stockGroups ?? []) stockGroup.put(g);
     for (const s of seed.groupMemberSnapshots ?? []) groupMember.put(s);
+    for (const n of seed.researchNotes ?? []) researchNote.put(n);
+    for (const e of seed.stockEvents ?? []) stockEvent.put(e);
+    for (const r of seed.workflowRuns ?? []) workflowRun.put(r);
   }
   // v0.3 起：默认灌入 5 个内置战法（即使 seed 没指定 tactics），让 list_tactics / run_tactic 默认可用
   for (const tc of BUILTIN_TACTICS) {
@@ -129,5 +149,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     watchRun,
     stockGroup,
     groupMember,
+    researchNote,
+    stockEvent,
+    workflowRun,
   };
 };

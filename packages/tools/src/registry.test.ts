@@ -58,6 +58,18 @@ const EXPECTED_TOOL_NAMES = [
   'resolve_llm_group',
   // v0.7 策略预警（docs/ddd/strategy-alert-detailed-design.md §9.2）新增
   'set_watch_trigger_feedback',
+  // ruo 迁移 Phase 1（docs/ddd/ruo-feature-migration-detailed-design.md §7）
+  'list_research_notes',
+  'add_research_note',
+  'update_research_note',
+  'delete_research_note',
+  'list_stock_events',
+  'add_stock_event',
+  'update_stock_event',
+  'delete_stock_event',
+  'sync_stock_events',
+  'get_market_data_status',
+  'list_workflow_runs',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -104,6 +116,7 @@ describe('toolRegistry', () => {
       'refresh_stock_group',
       'send_notification',
       'sync_quotes',
+      'sync_stock_events',
     ]);
     const writeTools = toolRegistry
       .all()
@@ -112,11 +125,15 @@ describe('toolRegistry', () => {
       .sort();
     expect(writeTools).toEqual([
       'add_holding',
+      'add_research_note',
+      'add_stock_event',
       'add_trade',
       'close_holding',
       'create_account',
       'create_stock_group',
       'create_stock_pool',
+      'delete_research_note',
+      'delete_stock_event',
       'delete_stock_group',
       'delete_stock_pool',
       'record_advice_outcome',
@@ -124,6 +141,8 @@ describe('toolRegistry', () => {
       'save_watch_trigger',
       'set_watch_trigger_feedback',
       'update_holding',
+      'update_research_note',
+      'update_stock_event',
       'update_stock_group',
       'update_stock_pool',
     ]);

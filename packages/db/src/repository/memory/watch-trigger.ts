@@ -66,6 +66,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
       readonly limit?: number;
       readonly deliveryStatus?: readonly DeliveryStatus[];
       readonly ruleId?: string;
+      readonly eventId?: string;
     } = {},
   ): Promise<readonly WatchTrigger[]> {
     const sinceMs = opts.since?.getTime() ?? Number.NEGATIVE_INFINITY;
@@ -77,6 +78,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
         if (t.createdAt.getTime() < sinceMs) return false;
         if (statusFilter !== null && !statusFilter.has(t.deliveryStatus)) return false;
         if (opts.ruleId !== undefined && t.ruleId !== opts.ruleId) return false;
+        if (opts.eventId !== undefined && t.eventId !== opts.eventId) return false;
         return true;
       })
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
