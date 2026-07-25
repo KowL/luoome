@@ -4,19 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>luoome · 个人投资仪表盘</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%236e3f1d'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='38' fill='%23fffaf2'%3E%E7%BD%97%3C/text%3E%3C/svg%3E" />
+  <meta name="theme-color" content="#05070c" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b101a'/%3E%3Crect x='20' y='20' width='24' height='24' transform='rotate(45 32 32)' fill='none' stroke='%2338e1c6' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='4' fill='%2338e1c6'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <!-- 1. 免责声明横幅 -->
-  <div class="disclaimer-banner" role="note" aria-label="免责声明">
-    <strong>免责声明</strong>
-    <span>本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。</span>
-    <span>投资有风险，决策需自行承担。</span>
-    <span>市场有不可预测性，过往表现不代表未来收益。</span>
-  </div>
-
-  <!-- 2. 顶栏 -->
+  <!-- 1. 顶栏 -->
   <header class="topbar" role="banner">
     <div class="brand">
       luoome <small>本地投资 advisor</small>
@@ -196,19 +195,12 @@
         <!-- v0.7 策略预警：模板创建 + 自然语言草案（docs/.../§10 / §6） -->
         <div class="card mt-4">
           <div class="card-header">
-            <h2>新建盯盘方案</h2>
-            <div class="card-meta">6 个模板 · 或用自然语言起草</div>
+            <h2>盯盘方案</h2>
+            <div class="card-meta">
+              <button id="btn-plan-new" class="btn btn-primary btn-sm" type="button">+ 新建盯盘方案</button>
+            </div>
           </div>
           <div id="plan-templates" class="template-grid"><p class="placeholder">加载模板中…</p></div>
-          <div class="draft-row mt-2">
-            <textarea
-              id="plan-draft-text"
-              rows="3"
-              placeholder="例：盯全部持仓，价格跌破成本 5% 就提醒我"
-            ></textarea>
-            <button id="btn-plan-draft" class="btn btn-primary" type="button">用自然语言起草</button>
-          </div>
-          <div id="plan-draft-result" class="draft-result mt-2" hidden></div>
         </div>
       </section>
 
@@ -245,6 +237,11 @@
       </section>
 
       <!-- route: tactics -->
+      <section id="route-tactics" class="route" data-route="tactics" hidden>
+        <div class="route-header">
+          <h1>战法</h1>
+          <div class="route-meta">内置战法列表 · 扫描信号 top 10</div>
+        </div>
         <div class="card">
           <div class="card-header">
             <h2>战法扫描</h2>
@@ -328,7 +325,7 @@
         </div>
       </section>
 
-      <!-- route: chat（对话助手，docs/web-chat-design.md §5） -->
+      <!-- route: chat（对话助手，docs/ddd/web-chat-design.md §5） -->
       <section id="route-chat" class="route" data-route="chat" hidden>
         <div class="route-header">
           <h1>对话</h1>

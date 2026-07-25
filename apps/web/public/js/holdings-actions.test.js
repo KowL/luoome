@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { quotePriceFromResult } from './holdings-actions.js';
+import { quotePriceFromResult, toolErrorText } from './holdings-actions.js';
 
 describe('新增持仓行情价格', () => {
   it('从 fetch_quote 的 data.quote.close 中读取现价', () => {
@@ -15,5 +15,18 @@ describe('新增持仓行情价格', () => {
   it('失败或非法价格不回填', () => {
     expect(quotePriceFromResult({ ok: false, error: { kind: 'adapter_error' } })).toBeNull();
     expect(quotePriceFromResult({ ok: true, data: { quote: { close: 0 } } })).toBeNull();
+  });
+});
+
+describe('持仓写操作错误提示', () => {
+  it('permission_denied 显示服务端原因和 token 设置指引', () => {
+    expect(
+      toolErrorText({
+        kind: 'permission_denied',
+        required: 'write/external 操作需要有效 LUOOME_WEB_TOKEN',
+      }),
+    ).toBe(
+      '权限校验失败：write/external 操作需要有效 LUOOME_WEB_TOKEN；请前往「设置」保存当前服务的 Web token。',
+    );
   });
 });

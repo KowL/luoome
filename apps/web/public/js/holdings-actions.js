@@ -85,8 +85,12 @@ const parsePositiveNumber = (raw) => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
-const errorText = (error) => {
+export const toolErrorText = (error) => {
   if (error === null || typeof error !== 'object') return '提交失败';
+  if (error.kind === 'permission_denied') {
+    const required = error.required ?? '写操作需要有效 Web token';
+    return `权限校验失败：${required}；请前往「设置」保存当前服务的 Web token。`;
+  }
   const detail = error.message ?? error.cause ?? '';
   return detail === '' ? String(error.kind) : `${error.kind}：${detail}`;
 };
@@ -107,7 +111,7 @@ const submitTool = async (btn, errorNode, name, input, successMessage) => {
       body: JSON.stringify({ input }),
     });
     if (!r.ok) {
-      errorNode.textContent = errorText(r.error);
+      errorNode.textContent = toolErrorText(r.error);
       return;
     }
     closeModal();

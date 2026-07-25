@@ -1027,37 +1027,42 @@ const ensureModalContainer = (id, anchorSelector) => {
   return host;
 };
 
+/** 把模板 / 草案按真实控件 id 填入创建表单（表单只支持 3 种规则类型）。 */
 const fillPoolFormFromDraft = (draft, suggestedName) => {
-  const form = document.querySelector('#pool-modal form');
-  if (form === null) return;
-  const setVal = (name, value) => {
-    const field = form.querySelector(`[name="${name}"]`);
-    if (field !== null && value !== undefined) field.value = String(value);
+  const setVal = (id, value) => {
+    const node = document.getElementById(id);
+    if (node !== null && value !== undefined && value !== null) node.value = String(value);
   };
-  setVal('name', draft.name ?? suggestedName);
-  setVal('description', draft.description ?? '');
-  if (typeof draft.groupId === 'string') setVal('groupId', draft.groupId);
-  setVal('logic', draft.logic ?? 'ANY');
-  setVal('triggerMode', draft.triggerMode ?? 'on-enter');
-  setVal('priority', draft.priority ?? '');
-  setVal('dailyNotificationLimit', draft.dailyNotificationLimit ?? 20);
-  setVal('notifyOnRecovery', draft.notifyOnRecovery === true ? '1' : '0');
-  const rulesField = form.querySelector('[name="rules"]');
-  if (rulesField !== null && Array.isArray(draft.rules)) {
-    rulesField.value = JSON.stringify(draft.rules, null, 2);
+  setVal('pool-name', draft.name ?? suggestedName);
+  setVal('pool-description', draft.description ?? '');
+  setVal('pool-cooldown', draft.cooldownMinutes ?? 30);
+  const rule = Array.isArray(draft.rules) ? draft.rules[0] : null;
+  const kind = document.getElementById('pool-rule-kind');
+  if (rule === null || kind === null) return;
+  if (rule.kind === 'price-change' || rule.kind === 'cost-threshold' || rule.kind === 'tactic') {
+    kind.value = rule.kind;
+    kind.dispatchEvent(new Event('change'));
+    if (rule.kind === 'price-change') {
+      setVal('pool-price-pct', (rule.pct ?? 0.05) * 100);
+    } else if (rule.kind === 'cost-threshold') {
+      setVal('pool-stop-loss', (rule.stopLossPct ?? 0.08) * 100);
+      setVal('pool-take-profit', (rule.takeProfitPct ?? 0.15) * 100);
+    } else {
+      setVal('pool-tactic-id', rule.tacticId);
+      setVal('pool-min-score', rule.minScore ?? 60);
+    }
   }
+  // price-level / composite 等模板规则超出表单支持范围：只填名称与说明，规则请手动选择。
 };
 
 const openPlanFromTemplate = async (template) => {
   const groups = await fetchGroupOptions();
-  ensureModalContainer('pool-modal', '#route-groups');
   const firstGroup = groups[0]?.id ?? '';
-  const draft = { ...template.draft, groupId: template.draft.groupId ?? firstGroup };
-  const { openPoolModal } = await import('./mvp-actions.js');
-  openPoolModal({});
-  requestAnimationFrame(() => {
-    fillPoolFormFromDraft(draft, template.name);
-  });
+  const groupId = template.draft.groupId ?? firstGroup;
+  await openPoolModal(null, groupId);
+  requestAnimationFrame(() =>
+    fillPoolFormFromDraft({ ...template.draft, groupId }, template.name),
+  );
 };
 
 const renderPlanCreator = async (setStatus) => {
@@ -1075,105 +1080,78 @@ const renderPlanCreator = async (setStatus) => {
         el('strong', null, tpl.name),
       ]),
       el('p', 'muted', tpl.description),
-      el(
-        'pre',
-        'template-rules',
-        JSON.stringify(
-          {
-            logic: tpl.draft.logic,
-            triggerMode: tpl.draft.triggerMode,
-            rules: tpl.draft.rules,
-          },
-          null,
-          2,
-        ),
-      ),
     ]);
+    const actions = el('div', 'template-actions');
     const useBtn = el('button', 'btn btn-primary btn-sm', '使用此模板');
     useBtn.type = 'button';
     useBtn.addEventListener('click', () => {
       void openPlanFromTemplate(tpl);
     });
-    card.append(useBtn);
+    const detailBtn = el('button', 'btn btn-outline btn-sm', '详情');
+    detailBtn.type = 'button';
+    detailBtn.addEventListener('click', () => openTemplateDetailModal(tpl));
+    actions.append(detailBtn, useBtn);
+    card.append(actions);
     return card;
   });
   mount(container, el('div', 'template-grid-inner', cards));
 };
 
-const renderDraftResult = (payload) => {
-  const box = $('#plan-draft-result');
-  if (box === null) return;
-  box.hidden = false;
-  // payload 可能是 {draft, raw, groupOptions, tacticOptions}，也可能是 {error}
-  const inner = el('div', 'draft-result-card');
-  if (payload && typeof payload === 'object' && 'error' in payload) {
-    inner.append(el('p', 'text-neg', `LLM 调用失败：${payload.error.kind}`));
-    const detail = payload.error.cause ?? '';
-    if (typeof detail === 'string' && detail.length > 0) {
-      inner.append(el('pre', 'mono', detail));
-    }
-    mount(box, inner);
-    return;
-  }
-  const draft = payload?.draft;
-  if (!draft || typeof draft !== 'object') {
-    inner.append(el('p', 'text-neg', 'LLM 没有给出有效草案（缺少 draft 字段）。'));
-    if (payload?.raw) inner.append(el('pre', 'mono', String(payload.raw)));
-    mount(box, inner);
-    return;
-  }
-  inner.append(el('h4', null, 'LLM 草案（确认后再保存）'));
-  inner.append(
-    el(
-      'p',
-      'muted',
-      'system prompt 强约束 + JSON schema 校验；提交时还会再校验 groupId / tacticId 存在。',
-    ),
+/** 动态弹窗：复用 body > .modal + .modal-content 形态。 */
+const openDynamicModal = (contentNode) => {
+  const modal = el('div', 'modal', [el('div', 'modal-content', [contentNode])]);
+  const close = () => modal.remove();
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) close();
+  });
+  document.body.append(modal);
+  return { modal, close };
+};
+
+/** 模板详情弹窗：JSON 不直接显示在卡片上，弹窗里可查看 + 编辑后使用。 */
+const openTemplateDetailModal = (tpl) => {
+  const err = el('p', 'modal-error');
+  const editor = el('textarea', 'draft-json-editor', JSON.stringify(tpl.draft, null, 2));
+  const use = el('button', 'btn btn-primary btn-sm', '使用此模板');
+  use.type = 'button';
+  const cancel = el('button', 'btn btn-outline btn-sm', '取消');
+  cancel.type = 'button';
+  const { close } = openDynamicModal(
+    el('div', null, [
+      el('h2', null, `模板详情：${tpl.name}`),
+      el('p', 'muted', tpl.description ?? ''),
+      el('p', 'hint', '规则配置如下，可直接修改后再使用。'),
+      editor,
+      err,
+      el('div', 'modal-actions', [cancel, use]),
+    ]),
   );
-  inner.append(el('pre', 'mono', JSON.stringify(draft, null, 2)));
-  const btn = el('button', 'btn btn-primary btn-sm', '把草案填入编辑表单');
-  btn.type = 'button';
-  btn.addEventListener('click', () => {
-    ensureModalContainer('pool-modal', '#route-groups');
-    import('./mvp-actions.js').then(({ openPoolModal }) => {
-      openPoolModal({});
-      requestAnimationFrame(() => fillPoolFormFromDraft(draft, draft.name ?? ''));
+  cancel.addEventListener('click', close);
+  use.addEventListener('click', () => {
+    let draft;
+    try {
+      draft = JSON.parse(editor.value);
+    } catch {
+      err.textContent = 'JSON 格式有误，请检查后再试。';
+      return;
+    }
+    if (draft === null || typeof draft !== 'object' || !Array.isArray(draft.rules)) {
+      err.textContent = '配置缺少 rules 数组，无法使用。';
+      return;
+    }
+    close();
+    void openPoolModal(null, draft.groupId ?? '').then(() => {
+      requestAnimationFrame(() => fillPoolFormFromDraft(draft, draft.name ?? tpl.name));
     });
   });
-  inner.append(btn);
-  mount(box, inner);
 };
 
 const bindPlanCreator = (setStatus) => {
-  const btn = $('#btn-plan-draft');
-  if (btn === null) return;
-  if (btn.dataset.bound === '1') return;
-  btn.dataset.bound = '1';
-  btn.addEventListener('click', async () => {
-    const text = $('#plan-draft-text')?.value?.trim();
-    if (typeof text !== 'string' || text.length === 0) {
-      setStatus('请先在文本框里写一句你想盯的描述', true);
-      return;
-    }
-    btn.disabled = true;
-    btn.textContent = '生成中…';
-    try {
-      const r = await callApi('/api/watch/draft', {
-        method: 'POST',
-        body: JSON.stringify({ message: text }),
-      });
-      if (!r.ok) {
-        setStatus(`草案生成失败：${r.error?.kind ?? 'unknown'}`, true);
-        renderDraftResult({ error: r.error });
-        return;
-      }
-      renderDraftResult(r.data);
-      setStatus('草案已生成，请检查后保存');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '用自然语言起草';
-    }
-  });
+  const newBtn = $('#btn-plan-new');
+  if (newBtn === null) return;
+  if (newBtn.dataset.bound === '1') return;
+  newBtn.dataset.bound = '1';
+  newBtn.addEventListener('click', () => void openPoolModal());
 };
 
 /* ============================================================
@@ -1282,9 +1260,12 @@ const renderWorkflowRuns = async (setStatus) => {
   };
   mount(
     body,
-    el('table', 'workflow-runs-table', [
-      el('thead', null, el('tr', null, [el('th', null, 'workflow'), el('th', null, '源'), el('th', null, '状态'), el('th', null, '开始'), el('th', null, '摘要')])),
-      el('tbody', null, runs.map(row)),
+    el('details', 'collapsible', [
+      el('summary', null, `最近 ${runs.length} 条运行记录（点击展开）`),
+      el('table', 'workflow-runs-table mt-2', [
+        el('thead', null, el('tr', null, [el('th', null, 'workflow'), el('th', null, '源'), el('th', null, '状态'), el('th', null, '开始'), el('th', null, '摘要')])),
+        el('tbody', null, runs.map(row)),
+      ]),
     ]),
   );
   setStatus('workflow 运行记录已更新');
@@ -1553,7 +1534,6 @@ export {
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
-  renderDraftResult,
   renderGroups,
   renderHoldings,
   renderPlanCreator,
