@@ -1977,3 +1977,216 @@ code {
   outline: none;
   border-color: var(--accent);
 }
+
+/* ============================================================
+ * ruo 迁移（docs/ddd/ruo-feature-migration-detailed-design.md §8）
+ *   - 数据健康卡片 / freshness badge
+ *   - workflow 运行记录表
+ *   - 研究页：搜索 / 时间线 / thesis 编辑
+ * ============================================================ */
+
+.data-health {
+  font-size: 0.92rem;
+}
+.data-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+.data-health h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.85rem;
+  color: var(--text-muted, #6b6354);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.data-health-providers,
+.data-health-watch {
+  padding: 0.75rem 1rem;
+  background: var(--surface-soft, #f7f3ea);
+  border-radius: 6px;
+  border: 1px solid var(--border, #e8e1d2);
+}
+.data-health-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  margin-right: 0.4rem;
+  margin-top: 0.3rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e8e1d2);
+}
+.badge-fresh { color: #2d6a3e; border-color: #b8d8c1; background: #eaf5ec; }
+.badge-stale { color: #8a5a18; border-color: #e2c995; background: #faf1dd; }
+.badge-unknown { color: #5a5a5a; border-color: #d6d0c2; background: #efece4; }
+.badge-unavailable { color: #8c2f2f; border-color: #e2b0b0; background: #f6e1e1; }
+.data-health-stale {
+  grid-column: 1 / -1;
+  padding: 0.75rem 1rem;
+  background: var(--surface-soft, #f7f3ea);
+  border-radius: 6px;
+  border: 1px solid var(--border, #e8e1d2);
+}
+.data-health-stale ul {
+  margin: 0.4rem 0 0 0;
+  padding-left: 1.2rem;
+}
+
+/* workflow 运行记录表 */
+.workflow-runs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.workflow-runs-table th,
+.workflow-runs-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border, #e8e1d2);
+}
+.workflow-runs-table th {
+  font-weight: 600;
+  color: var(--text-muted, #6b6354);
+  background: var(--surface-soft, #f7f3ea);
+}
+
+/* 研究页 */
+.research-search input {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border, #e8e1d2);
+  border-radius: 4px;
+  font-size: 0.95rem;
+}
+.research-results-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.research-results-list li {
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed var(--border, #e8e1d2);
+}
+.research-results-list li:last-child {
+  border-bottom: none;
+}
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent, #8a5a18);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+.btn-link:hover { text-decoration: underline; }
+
+.card-summary-thesis,
+.card-summary-events {
+  padding: 0.75rem 1rem;
+  background: var(--surface-soft, #f7f3ea);
+  border-radius: 6px;
+  border: 1px solid var(--border, #e8e1d2);
+  margin-bottom: 0.75rem;
+}
+.card-summary-thesis h3,
+.card-summary-events h3 {
+  margin: 0 0 0.4rem 0;
+  font-size: 0.9rem;
+  color: var(--text-muted, #6b6354);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.card-summary-events ul {
+  margin: 0.3rem 0 0 0;
+  padding-left: 1.2rem;
+}
+.research-add-note-form {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 720px;
+}
+.research-add-note-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.research-add-note-form label {
+  font-size: 0.85rem;
+  color: var(--text-muted, #6b6354);
+}
+.research-add-note-form input,
+.research-add-note-form select,
+.research-add-note-form textarea {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border, #e8e1d2);
+  border-radius: 4px;
+  font: inherit;
+}
+.research-timeline-filters-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+.research-timeline-filters-row .btn.active {
+  background: var(--accent, #8a5a18);
+  color: #fff;
+  border-color: var(--accent, #8a5a18);
+}
+.research-timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.research-timeline-list li {
+  display: grid;
+  grid-template-columns: 80px 160px 1fr;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px dashed var(--border, #e8e1d2);
+  font-size: 0.92rem;
+  align-items: start;
+}
+.research-timeline-list li:last-child { border-bottom: none; }
+.timeline-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: center;
+}
+.timeline-note { background: #ece6d6; color: #5b4f33; }
+.timeline-event { background: #dde6e9; color: #2c4f5a; }
+.timeline-trigger { background: #ecdfd0; color: #7a4f1e; }
+.timeline-advice { background: #e0dbe9; color: #4a3b6a; }
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal-content {
+  background: var(--surface, #fff);
+  padding: 1.5rem;
+  border-radius: 8px;
+  min-width: 360px;
+  max-width: 640px;
+  display: grid;
+  gap: 0.6rem;
+}
+.modal-content input,
+.modal-content select,
+.modal-content textarea {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border, #e8e1d2);
+  border-radius: 4px;
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.modal-error { color: #8c2f2f; font-size: 0.88rem; margin: 0; }

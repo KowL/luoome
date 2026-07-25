@@ -781,6 +781,90 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
 
+  // ruo 迁移 §8：研究档案时间线聚合（内部组合读 tool，按时间倒序，支持类型筛选）。
+  app.get('/api/stocks/:id/research-timeline', async (c) => {
+    const stockId = c.req.param('id');
+    const typesParam = c.req.query('types');
+    const wanted =
+      typesParam !== undefined && typesParam.length > 0
+        ? new Set(typesParam.split(',').map((s) => s.trim()))
+        : null;
+    const want = (t: string): boolean => wanted === null || wanted.has(t);
+
+    const [notesR, eventsR, triggersR, adviceR] = await Promise.all([
+      invokeTool('list_research_notes', { stockId, limit: 200 }),
+      invokeTool('list_stock_events', { stockId, limit: 200 }),
+      invokeTool('list_watch_triggers', { stockId, limit: 100 }),
+      invokeTool('get_advice', { subjectKind: 'stock', subjectId: stockId, limit: 50 }),
+    ]);
+    if (!notesR.ok) return jsonResult(notesR);
+    if (!eventsR.ok) return jsonResult(eventsR);
+
+    const notes = (notesR.data as { notes: Array<Record<string, unknown>> }).notes;
+    const events = (eventsR.data as { events: Array<Record<string, unknown>> }).events;
+    const triggers = triggersR.ok
+      ? (triggersR.data as { triggers: Array<Record<string, unknown>> }).triggers
+      : [];
+    const advice = adviceR.ok
+      ? (adviceR.data as { advice?: Array<Record<string, unknown>>; advices?: Array<Record<string, unknown>> })
+      : {};
+    const adviceList = advice.advice ?? advice.advices ?? [];
+
+    type TimelineItem = { type: string; at: string; payload: Record<string, unknown> };
+    const items: TimelineItem[] = [];
+    if (want('note')) {
+      for (const n of notes) {
+        items.push({ type: 'note', at: String(n.createdAt), payload: n });
+      }
+    }
+    if (want('event')) {
+      for (const e of events) {
+        items.push({ type: 'event', at: String(e.occursAt), payload: e });
+      }
+    }
+    if (want('trigger')) {
+      for (const t of triggers) {
+        items.push({ type: 'trigger', at: String(t.createdAt), payload: t });
+      }
+    }
+    if (want('advice')) {
+      for (const a of adviceList) {
+        items.push({ type: 'advice', at: String(a.createdAt), payload: a });
+      }
+    }
+    items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+    const activeThesis = notes.find((n) => n.kind === 'thesis' && n.active === true) ?? null;
+    const now = ctxRef.current.clock().getTime();
+    const upcomingEvents = events
+      .filter((e) => e.status === 'scheduled' && new Date(String(e.occursAt)).getTime() >= now)
+      .slice(0, 10);
+
+    return jsonResult({
+      ok: true,
+      data: {
+        stockId,
+        summary: {
+          activeThesis,
+          noteCount: notes.length,
+          eventCount: events.length,
+          upcomingEvents,
+        },
+        timeline: items,
+      },
+    });
+  });
+
+  // ruo 迁移 §8：数据健康读模型 + workflow 运行审计（供仪表盘 / 设置页消费）。
+  app.get('/api/market-data-status', () => callTool('get_market_data_status', {}));
+  app.get('/api/workflow-runs', (c) => {
+    const limit = Number(c.req.query('limit') ?? '30');
+    return callTool('list_workflow_runs', {
+      limit: Number.isFinite(limit) ? limit : 30,
+      includeWatch: true,
+    });
+  });
+
   // 对话助手（web 内部端点，不进 toolRegistry；docs/web-chat-design.md）。
   // LLM 失败 / parse 失败一律走兜底 reply，不抛 500。
   app.post('/api/chat', async (c) => {

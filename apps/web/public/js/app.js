@@ -12,12 +12,15 @@ import {
   bindSettingsActions,
   renderAdviceList,
   renderDashboard,
+  renderDataHealth,
   renderGroups,
   renderHoldings,
+  renderResearch,
   renderReview,
   renderSettings,
   renderSettingsAccount,
   renderTacticsList,
+  renderWorkflowRuns,
   runTacticScan,
   runWatchOnce,
 } from './pages.js';
@@ -54,6 +57,7 @@ const ROUTES = [
   'dashboard',
   'holdings',
   'groups',
+  'research',
   'tactics',
   'advice',
   'review',
@@ -74,10 +78,14 @@ const showRoute = async (name) => {
     else node.removeAttribute('aria-current');
   });
   try {
-    if (safe === 'dashboard') await renderDashboard(setStatus);
-    else if (safe === 'holdings') await renderHoldings(setStatus);
+    if (safe === 'dashboard') {
+      await renderDashboard(setStatus);
+      await renderDataHealth(setStatus);
+    } else if (safe === 'holdings') await renderHoldings(setStatus);
     else if (safe === 'groups') await renderGroups(setStatus);
-    else if (safe === 'tactics') {
+    else if (safe === 'research') {
+      await renderResearch(setStatus);
+    } else if (safe === 'tactics') {
       await renderTacticsList(setStatus);
     } else if (safe === 'advice') {
       await renderAdviceList(setStatus);
@@ -89,6 +97,7 @@ const showRoute = async (name) => {
     } else if (safe === 'settings') {
       renderSettings(setStatus);
       await renderSettingsAccount();
+      await renderWorkflowRuns(setStatus);
     }
   } catch (error) {
     setStatus(`路由错误：${error instanceof Error ? error.message : String(error)}`, true);
