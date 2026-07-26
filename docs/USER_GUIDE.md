@@ -100,7 +100,7 @@ luoome web serve
 # 默认 5173 端口；浏览器开 http://localhost:5173/
 ```
 
-页面包含仪表盘 / 持仓 / 分组 / 盯盘 / 战法 / 建议 / 复盘 / 对话 / 设置。读操作无需 token；所有 write / external mutation 都要求服务端 token，并校验同源 `Origin`。
+页面包含仪表盘 / 持仓 / 分组 / 盯盘 / 战法 / 建议 / 复盘 / 对话 / 设置。对话页支持按账户持久化会话、新建、切换、重命名和删除；消息保存在当前项目数据库。读操作无需 token；所有 write / external mutation 都要求服务端 token，并校验同源 `Origin`。
 
 **持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作必须携带 Web token；MCP 暴露策略不受影响。
 
@@ -190,6 +190,7 @@ TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 
 | **战法** | 列表 + 一键 scan。 |
 | **建议** | 历史 + decision 过滤。 |
 | **复盘** | 准确率统计 + **confidence 校准表** + outcome 回填。 |
+| **对话** | AI SDK 流式助手；项目内持久化会话，工具执行轨迹可回看，写操作先生成确认草案。 |
 | **设置** | 鉴权 token / 数据源 / 账户。 |
 
 ### 5.3 顶栏账户下拉
@@ -304,10 +305,8 @@ luoome tools call get_confidence_calibration --input '{}'
 | `LUOOME_WEB_TOKEN` | 自动生成文件 | Web mutation Bearer token；设置后优先于 token 文件 |
 | `LUOOME_HOST` | `127.0.0.1` | Web 监听地址；默认不暴露到局域网 |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney 主 → Tencent 备，仅 A 股） |
-| `LUOOME_LLM_PROVIDER` | 必填 | `openai-compatible` / `anthropic` |
-| `LUOOME_LLM_API_KEY` | — | `openai-compatible` / `anthropic` 必填 |
-| `LUOOME_LLM_BASE_URL` | 按 provider | 覆盖 LLM base URL |
-| `LUOOME_LLM_MODEL` | 按 provider | 覆盖 LLM 模型 |
+| `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |
+| provider 密钥变量 | 由模型目录指定 | `apiKeyEnv` 引用的环境变量，密钥不写入目录 |
 | `LUOOME_EXPOSE_WRITE` | `false` | MCP 是否追加 write tool；Web 仅用它挂载 outcome 回填端点 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 是否放行外部副作用 |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |
@@ -337,9 +336,16 @@ TUI 依赖 opentui 渲染器，必须在真 TTY 跑。CI / pipe / `nohup` 都会
 
 `LUOOME_MARKET_PROVIDER=real` 使用 Eastmoney 主源、Tencent 备源。两者都失败时明确返回行情源错误，不生成价格。未覆盖的市场返回 not_supported。
 
-### 11.5 LLM `openai-compatible` 报 `provider missing key`
+### 11.5 启动时报 AI 模型目录或 provider 密钥缺失
 
-设置 `LUOOME_LLM_API_KEY`。`anthropic` 同理；缺 provider 或 key 会在启动期明确报错。
+从仓库根目录的 `ai-models.example.json` 复制到
+`$LUOOME_HOME/ai-models.json`，或设置 `LUOOME_AI_CONFIG` 指向配置文件。再设置
+每个 provider 的 `apiKeyEnv` 所引用的环境变量；缺目录、未知 provider 或缺密钥都会
+在启动期明确报错。
+
+也可以启动 Web 后进入「设置 → LLM 设置」完成可视化配置。Web 在模型尚未配置或
+配置损坏时会进入配置模式，不会阻止设置页启动；保存后配置立即生效。API Key 只写入
+本地 `0600` 密钥文件，页面只显示“已配置”状态，不会读取或回显原值。
 
 ### 11.6 `get_confidence_calibration` 全 0 桶
 

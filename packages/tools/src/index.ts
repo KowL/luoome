@@ -1,5 +1,6 @@
 // @luoome/tools 桶导出：defineTool + toolRegistry + 13 个 tool（v0.1 8 + v0.2 新增 5）。
 
+export * from './agent-whitelist.js';
 export * from './context.js';
 export * from './default-watch.js';
 export * from './define-tool.js';
@@ -8,9 +9,11 @@ export * from './tools/add-holding.js';
 export * from './tools/add-research-note.js';
 export * from './tools/add-stock-event.js';
 export * from './tools/add-trade.js';
+export * from './tools/agent-run.js';
 export * from './tools/analyze-position.js';
 export * from './tools/analyze-stock.js';
 export * from './tools/batch-quote.js';
+export * from './tools/chat-session.js';
 export * from './tools/close-holding.js';
 export * from './tools/compute-indicators.js';
 export * from './tools/create-account.js';
@@ -30,6 +33,7 @@ export * from './tools/get-market-data-status.js';
 export * from './tools/get-stock-group.js';
 export * from './tools/get-tactic.js';
 export * from './tools/get-watch-status.js';
+export * from './tools/limit-up-ladder.js';
 export * from './tools/list-accounts.js';
 export * from './tools/list-holdings.js';
 export * from './tools/list-research-notes.js';
@@ -42,7 +46,6 @@ export * from './tools/list-trades.js';
 export * from './tools/list-watch-plans.js';
 export * from './tools/list-watch-triggers.js';
 export * from './tools/list-workflow-runs.js';
-export * from './tools/limit-up-ladder.js';
 export * from './tools/market-outlook.js';
 export * from './tools/record-advice-outcome.js';
 export * from './tools/record-watch-run.js';

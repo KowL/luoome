@@ -331,22 +331,41 @@
       <section id="route-chat" class="route" data-route="chat" hidden>
         <div class="route-header">
           <h1>对话</h1>
-          <div class="route-meta">LLM 助手 · 写操作拟成草案，确认后才生效 · 历史仅存在本标签页</div>
+          <div class="route-meta">持久会话 · AI SDK 流式工具调用 · 写操作确认后才生效</div>
         </div>
-        <div class="card chat-card">
-          <div id="chat-log" class="chat-log">
-            <p class="placeholder">问点什么，例如「我的持仓今天怎么样」「帮我建一个龙头分组」。</p>
+        <div class="chat-workspace">
+          <aside class="chat-session-rail" aria-label="会话列表">
+            <div class="chat-session-head">
+              <div>
+                <span class="section-kicker">CONVERSATIONS</span>
+                <h2>会话</h2>
+              </div>
+              <button id="chat-new-session" class="chat-new-session" type="button" title="新建会话" aria-label="新建会话">＋</button>
+            </div>
+            <div id="chat-session-list" class="chat-session-list">
+              <p class="chat-session-empty">正在读取会话…</p>
+            </div>
+            <div class="chat-session-foot">
+              <span class="health-dot"></span>
+              <span>项目本地持久化</span>
+            </div>
+          </aside>
+          <div class="card chat-card">
+            <div id="chat-log" class="chat-log">
+              <p class="placeholder">正在加载会话…</p>
+            </div>
+            <form id="chat-form" class="chat-form">
+              <span class="chat-prompt-mark" aria-hidden="true">›</span>
+              <input
+                id="chat-input"
+                type="text"
+                maxlength="2000"
+                placeholder="询问持仓、行情、研究，或让助手生成配置草案…"
+                autocomplete="off"
+              />
+              <button id="chat-send" class="btn btn-primary chat-send" type="submit">发送</button>
+            </form>
           </div>
-          <form id="chat-form" class="chat-form">
-            <input
-              id="chat-input"
-              type="text"
-              maxlength="2000"
-              placeholder="输入消息（Enter 发送）"
-              autocomplete="off"
-            />
-            <button id="chat-send" class="btn btn-primary" type="submit">发送</button>
-          </form>
         </div>
       </section>
 
@@ -357,8 +376,114 @@
       <section id="route-settings" class="route" data-route="settings" hidden>
         <div class="route-header">
           <h1>设置</h1>
-          <div class="route-meta">账户 / 鉴权 / 数据源</div>
+          <div class="route-meta">AI 模型 / 账户 / 鉴权 / 数据源</div>
         </div>
+        <form id="ai-settings-form" class="ai-settings" autocomplete="off">
+          <div class="ai-settings-heading">
+            <div>
+              <span class="section-kicker">MODEL CONTROL</span>
+              <h2>LLM 设置</h2>
+              <p>选择 Agent 和建议生成使用的模型。保存后立即应用到当前 Web 进程。</p>
+            </div>
+            <div id="ai-settings-state" class="ai-settings-state" aria-live="polite">
+              <span class="health-dot"></span>
+              <span>正在读取配置</span>
+            </div>
+          </div>
+          <div class="ai-settings-grid">
+            <section class="ai-settings-panel ai-connection-panel" aria-labelledby="ai-connection-title">
+              <div class="ai-panel-title">
+                <span class="ai-panel-icon" aria-hidden="true">⌘</span>
+                <div><h3 id="ai-connection-title">连接</h3><small>Provider endpoint & credentials</small></div>
+              </div>
+              <div class="field ai-field-featured">
+                <label for="ai-provider">提供商</label>
+                <select id="ai-provider" required></select>
+                <span class="hint">切换提供商会填入推荐模型、端点与密钥变量。</span>
+              </div>
+              <div class="ai-model-row">
+                <div class="field">
+                  <label for="ai-model">模型 ID</label>
+                  <input id="ai-model" type="text" required maxlength="200" spellcheck="false" />
+                  <span class="hint">填写 provider 要求的精确模型 ID。</span>
+                </div>
+                <button id="btn-ai-provider-defaults" class="btn btn-outline ai-default-btn" type="button">
+                  ↻ 使用推荐值
+                </button>
+              </div>
+              <div class="field">
+                <label for="ai-base-url">基础 URL</label>
+                <input id="ai-base-url" type="url" required spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="ai-api-key">API Key</label>
+                <div class="secret-input-wrap">
+                  <span class="secret-key-icon" aria-hidden="true">⌁</span>
+                  <input
+                    id="ai-api-key"
+                    type="password"
+                    placeholder="保留已保存的 API Key"
+                    autocomplete="new-password"
+                  />
+                </div>
+                <div class="secret-status-row">
+                  <span id="ai-key-status" class="hint">未配置</span>
+                  <label class="check-label" for="ai-clear-key">
+                    <input id="ai-clear-key" type="checkbox" />
+                    清除已保存的 API Key
+                  </label>
+                </div>
+              </div>
+              <div class="ai-security-note">
+                <span aria-hidden="true">◈</span>
+                <span>密钥只写入权限为 0600 的本地环境文件；浏览器和读取 API 永不回显。</span>
+              </div>
+            </section>
+
+            <section class="ai-settings-panel ai-generation-panel" aria-labelledby="ai-generation-title">
+              <div class="ai-panel-title">
+                <span class="ai-panel-icon" aria-hidden="true">≡</span>
+                <div><h3 id="ai-generation-title">生成</h3><small>Runtime behavior</small></div>
+              </div>
+              <div class="ai-generation-fields">
+                <div class="field">
+                  <label for="ai-temperature">温度</label>
+                  <input id="ai-temperature" type="number" min="0" max="2" step="0.1" required />
+                  <span class="hint">越低越稳定，越高越发散。</span>
+                </div>
+                <div class="field">
+                  <label for="ai-timeout">超时（秒）</label>
+                  <input id="ai-timeout" type="number" min="1" max="600" step="1" required />
+                </div>
+                <div class="field">
+                  <label for="ai-max-retries">最大重试</label>
+                  <input id="ai-max-retries" type="number" min="0" max="5" step="1" required />
+                  <span class="hint">单轮 AI SDK 调用的网络重试次数。</span>
+                </div>
+                <div class="field">
+                  <label for="ai-reasoning-effort">推理强度</label>
+                  <select id="ai-reasoning-effort">
+                    <option value="off">关闭</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select>
+                  <span id="ai-reasoning-hint" class="hint">兼容模型会在回答前投入更多推理。</span>
+                </div>
+              </div>
+              <div class="ai-save-location">
+                <span>配置文件</span>
+                <code id="ai-config-path">--</code>
+                <span>密钥文件</span>
+                <code id="ai-secret-path">--</code>
+              </div>
+              <button id="btn-ai-save" class="btn btn-primary ai-save-btn" type="submit">
+                <span aria-hidden="true">▣</span>
+                保存并应用
+              </button>
+            </section>
+          </div>
+        </form>
         <div class="card">
           <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>

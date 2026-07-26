@@ -5,6 +5,7 @@ import { createRegistry, toolRegistry } from './registry.js';
 // v0.8 MVP：原 45 tool + v0.7 策略预警 set_watch_trigger_feedback = 46 tool
 const EXPECTED_TOOL_NAMES = [
   // v0.1
+  'agent_run',
   'list_accounts',
   'create_account',
   'get_account',
@@ -74,6 +75,13 @@ const EXPECTED_TOOL_NAMES = [
   // Phase 1：连板天梯
   'limit_up_ladder',
   'limit_up_ladder_compare',
+  // 持久化 AI 对话会话
+  'create_chat_session',
+  'list_chat_sessions',
+  'get_chat_session',
+  'rename_chat_session',
+  'delete_chat_session',
+  'append_chat_message',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -115,6 +123,7 @@ describe('toolRegistry', () => {
       .map((t) => t.name)
       .sort();
     expect(externalTools).toEqual([
+      'agent_run',
       'batch_quote',
       'fetch_quote',
       'refresh_stock_group',
@@ -133,16 +142,20 @@ describe('toolRegistry', () => {
       'add_research_note',
       'add_stock_event',
       'add_trade',
+      'append_chat_message',
       'close_holding',
       'create_account',
+      'create_chat_session',
       'create_stock_group',
       'create_stock_pool',
+      'delete_chat_session',
       'delete_research_note',
       'delete_stock_event',
       'delete_stock_group',
       'delete_stock_pool',
       'record_advice_outcome',
       'record_watch_run',
+      'rename_chat_session',
       'save_watch_trigger',
       'set_watch_trigger_feedback',
       'update_holding',

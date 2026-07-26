@@ -80,12 +80,10 @@ homebrew/
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `LUOOME_HOME` | `~/.luoome` | 数据目录（`luoome.db` + `tactics/` + `reports/`） |
+| `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`） |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney 主 → Tencent 备；全源失败明确报错 |
-| `LUOOME_LLM_PROVIDER` | 必填 | `openai-compatible` / `anthropic` |
-| `LUOOME_LLM_API_KEY` | — | `openai-compatible` / `anthropic` 必填 |
-| `LUOOME_LLM_BASE_URL` | 按 provider | 覆盖 LLM base URL |
-| `LUOOME_LLM_MODEL` | 按 provider | 覆盖 LLM 模型 |
+| `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；格式见 [`ai-models.example.json`](./ai-models.example.json) |
+| provider 密钥变量 | 由目录指定 | `apiKeyEnv` 引用环境变量名，密钥不写入模型目录 |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
@@ -94,6 +92,16 @@ homebrew/
 | `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 | `LUOOME_PORT` | 5173 | Web 端口（与 `--port` 等价） |
+
+AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers` 可声明
+`openai-compatible`、`anthropic` 或 `gateway`，`profiles.generation` 与
+`profiles.agent` 可分别选择 `provider:model`、默认生成参数和运行预算。旧
+`LUOOME_LLM_*` / `LUOOME_AGENT_*` 不再读取。
+
+Web 用户可直接进入「设置 → LLM 设置」选择提供商、模型、端点和生成参数并保存。
+配置保存后立即应用到当前 Web 进程；模型目录写入
+`$LUOOME_HOME/ai-models.json`，API Key 单独写入权限为 `0600` 的
+`$LUOOME_HOME/.env`，读取 API 永不回显密钥。CLI/TUI/MCP 仍复用同一份配置。
 
 ## 文档
 

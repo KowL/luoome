@@ -1,6 +1,8 @@
 import type {
   Account,
   Advice,
+  ChatMessage,
+  ChatSession,
   DailyBar,
   GroupMemberSnapshot,
   Holding,
@@ -22,6 +24,7 @@ import type {
 import { BUILTIN_TACTICS } from '@luoome/core';
 import { InMemoryAccountRepository } from './account.js';
 import { InMemoryAdviceRepository } from './advice.js';
+import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
 import { InMemoryGroupMemberRepository } from './group-member.js';
 import { InMemoryHoldingRepository } from './holding.js';
@@ -41,6 +44,7 @@ import { InMemoryWorkflowRunRepository } from './workflow-run.js';
 
 export { InMemoryAccountRepository } from './account.js';
 export { InMemoryAdviceRepository } from './advice.js';
+export { InMemoryChatRepository } from './chat.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
 export { InMemoryGroupMemberRepository } from './group-member.js';
 export { InMemoryHoldingRepository } from './holding.js';
@@ -65,6 +69,8 @@ export interface InMemorySeed {
   readonly holdings?: readonly Holding[];
   readonly trades?: readonly Trade[];
   readonly advices?: readonly Advice[];
+  readonly chatSessions?: readonly ChatSession[];
+  readonly chatMessages?: readonly ChatMessage[];
   readonly quotes?: readonly Quote[];
   readonly dailyBars?: readonly DailyBar[];
   /** v0.3 起：可选预置战法定义 + 信号。 */
@@ -91,6 +97,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const holding = new InMemoryHoldingRepository();
   const trade = new InMemoryTradeRepository();
   const advice = new InMemoryAdviceRepository();
+  const chat = new InMemoryChatRepository();
   const quote = new InMemoryQuoteRepository();
   const dailyBar = new InMemoryDailyBarRepository();
   const tactic = new InMemoryTacticRepository();
@@ -113,6 +120,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const h of seed.holdings ?? []) holding.put(h);
     for (const t of seed.trades ?? []) trade.put(t);
     for (const adv of seed.advices ?? []) advice.put(adv);
+    for (const session of seed.chatSessions ?? []) chat.putSession(session);
+    for (const message of seed.chatMessages ?? []) chat.putMessage(message);
     for (const q of seed.quotes ?? []) quote.put(q);
     for (const b of seed.dailyBars ?? []) dailyBar.put(b);
     for (const tc of seed.tactics ?? []) tactic.put(tc);
@@ -152,5 +161,6 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     researchNote,
     stockEvent,
     workflowRun,
+    chat,
   };
 };

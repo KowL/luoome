@@ -16,20 +16,21 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  createAgentRuntimeFromEnv,
+  createAIStackFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
-  LLMManager,
 } from '@luoome/adapters';
 import { AdshareClient } from '@luoome/adshare-sdk';
 import type { SideEffect, Stock, ToolContext, ToolError, ToolResult } from '@luoome/core';
-import { stockCode as brandStockCode, parseLlmProviderConfigFromEnv } from '@luoome/core';
+import { stockCode as brandStockCode } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { buildContext, toolRegistry } from '@luoome/tools';
 import { runIntradayWatchObserved } from '@luoome/workflows';
 import { Hono } from 'hono';
+import { ZodError } from 'zod';
 
-import { handleChat } from './chat.js';
+import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
+import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -151,13 +152,27 @@ export const buildWebContext = async (
   const handle = createDrizzleRepos(dbPath);
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
+  let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
+  try {
+    ai = createAIStackFromEnv(env, { logger: console });
+  } catch (error) {
+    console.warn('AI 模型尚未配置；Web 将以配置模式启动', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const unavailableLLM = {
+    name: 'ai-unconfigured',
+    generate: async (): Promise<never> => {
+      throw new Error('AI 模型尚未配置，请前往设置页完成 LLM 设置');
+    },
+  };
   return buildContext({
     repos: handle.repos,
     adapters: {
       market: createMarketAdapterFromEnv(env, { clock: now, logger: console }),
-      llm: new LLMManager({ logger: console, config: parseLlmProviderConfigFromEnv(env) }),
+      llm: ai?.llm ?? unavailableLLM,
     },
-    agent: createAgentRuntimeFromEnv(env, { logger: console }),
+    ...(ai === undefined ? {} : { agent: ai.agent }),
     clock: now,
     user: { id: 'local-web-user', defaultAccountId },
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
@@ -169,7 +184,23 @@ export interface CreateWebAppOptions {
   readonly webToken?: string;
   /** 非 loopback 监听时，read/advice API 也必须鉴权。 */
   readonly requireApiToken?: boolean;
+  /** LLM 设置持久化；仅生产启动注入，测试可按需提供临时 store。 */
+  readonly aiSettingsStore?: AISettingsStore;
+  /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
+  readonly chatStreamRuntime?: ChatStreamRuntime;
 }
+
+const asChatStreamRuntime = (value: unknown): ChatStreamRuntime | undefined => {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    'createUIMessageStreamResponse' in value &&
+    typeof value.createUIMessageStreamResponse === 'function'
+  ) {
+    return value as ChatStreamRuntime;
+  }
+  return undefined;
+};
 
 const mutationPermission = (request: Request, webToken: string): ToolResult<never> | null => {
   const origin = request.headers.get('origin');
@@ -194,7 +225,11 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // 多账户切换（v0.5 W3）通过 ctxRef.current mutate user.defaultAccountId；
   // 内部 callTool / invokeTool 全部走 ctxRef.current 读取最新值。
   const ctxRef: { current: ToolContext } = { current: initialCtx };
+  const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
+    current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx.agent),
+  };
   const webToken = options.webToken ?? process.env.LUOOME_WEB_TOKEN ?? '';
+  const aiSettingsStore = options.aiSettingsStore;
   const app = new Hono();
 
   if (options.requireApiToken === true) {
@@ -249,6 +284,95 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (tool === undefined) return notFound('Tool', name);
     return tool.execute(input, ctxRef.current);
   };
+
+  // ===== AI 模型设置 =====
+  app.get('/api/settings/ai', () => {
+    if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
+    try {
+      return jsonResult({ ok: true, data: aiSettingsStore.read() });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'internal',
+          cause: `AI 设置读取失败：${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
+    }
+  });
+
+  app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
+  app.post('/api/chat/sessions', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    let body: unknown = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      // 空请求体等同默认标题。
+    }
+    return callTool('create_chat_session', body);
+  });
+  app.get('/api/chat/sessions/:id', (c) =>
+    callTool('get_chat_session', { sessionId: c.req.param('id'), messageLimit: 200 }),
+  );
+  app.patch('/api/chat/sessions/:id', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    let body: { title?: unknown };
+    try {
+      body = (await c.req.json()) as { title?: unknown };
+    } catch {
+      body = {};
+    }
+    return callTool('rename_chat_session', {
+      sessionId: c.req.param('id'),
+      title: body.title,
+    });
+  });
+  app.delete('/api/chat/sessions/:id', (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    return callTool('delete_chat_session', { sessionId: c.req.param('id') });
+  });
+
+  app.post('/api/settings/ai', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
+    try {
+      const input = SaveAISettingsSchema.parse(await c.req.json());
+      const saved = aiSettingsStore.save(input);
+      const ai = createAIStackFromEnv(aiSettingsStore.runtimeEnv(), {
+        logger: ctxRef.current.logger,
+      });
+      ctxRef.current = {
+        ...ctxRef.current,
+        adapters: { ...ctxRef.current.adapters, llm: ai.llm },
+        agent: ai.agent,
+      };
+      chatRuntimeRef.current = asChatStreamRuntime(ai.agent);
+      return jsonResult({ ok: true, data: { ...saved, applied: true } });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return jsonResult({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: 'AI 设置校验失败',
+            issues: error.issues,
+          },
+        });
+      }
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'internal',
+          cause: `AI 设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
+    }
+  });
 
   // ===== 多账户切换（v0.5 W3）端点 =====
   // 全部账户列表（用于顶栏下拉）。
@@ -974,8 +1098,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
 
-  // 对话助手（web 内部端点，不进 toolRegistry；docs/ddd/web-chat-design.md）。
-  // LLM 失败 / parse 失败一律走兜底 reply，不抛 500。
+  // 对话助手：AI SDK UI Message Stream（SSE），web 内部端点，不进 toolRegistry。
   app.post('/api/chat', async (c) => {
     let body: unknown;
     try {
@@ -985,12 +1108,30 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         ok: false,
         error: {
           kind: 'invalid_input',
-          message: '请求体必须是 JSON：{ "message": "...", "history"?: [...] }',
+          message: '请求体必须是 JSON：{ "messages": [...] }',
           issues: [],
         },
       });
     }
-    return jsonResult(await handleChat(body, ctxRef.current, invokeTool));
+    const runtime = chatRuntimeRef.current;
+    if (runtime === undefined) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            kind: 'llm_error',
+            provider: ctxRef.current.adapters.llm.name,
+            cause: 'AI 模型尚未配置，请前往设置页完成 LLM 设置',
+            retryable: false,
+          },
+        }),
+        {
+          status: 503,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        },
+      );
+    }
+    return createChatStreamResponse(body, ctxRef.current, runtime, c.req.raw.signal);
   });
 
   // 股票搜索（adshare 优先，本地数据库兜底）
@@ -1321,6 +1462,7 @@ export interface StartWebOptions {
 export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<undefined>> => {
   const dbPath = options.dbPath ?? resolveDbPath();
   const ctx = await buildWebContext(dbPath);
+  const aiSettingsStore = new AISettingsStore(process.env);
   const resolved =
     options.webToken !== undefined
       ? { token: options.webToken, filePath: null }
@@ -1333,6 +1475,7 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
   const app = createWebApp(ctx, {
     webToken: resolved.token,
     requireApiToken: !loopback,
+    aiSettingsStore,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);

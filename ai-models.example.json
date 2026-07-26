@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "providers": {
+    "minimax": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.minimaxi.com/v1",
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "supportsStructuredOutputs": true,
+      "quirks": ["inject-schema", "recover-malformed-text"]
+    },
+    "anthropic": {
+      "type": "anthropic",
+      "apiKeyEnv": "ANTHROPIC_API_KEY"
+    },
+    "gateway": {
+      "type": "gateway",
+      "apiKeyEnv": "AI_GATEWAY_API_KEY"
+    }
+  },
+  "profiles": {
+    "generation": {
+      "model": "minimax:MiniMax-M3",
+      "temperature": 0.2,
+      "maxOutputTokens": 2048,
+      "timeoutMs": 30000,
+      "maxRetries": 0,
+      "reasoningEffort": "off",
+      "maxPromptChars": 16000
+    },
+    "agent": {
+      "model": "minimax:MiniMax-M3",
+      "temperature": 0.2,
+      "maxOutputTokens": 2048,
+      "timeoutMs": 120000,
+      "maxRetries": 0,
+      "reasoningEffort": "off",
+      "maxSteps": 8,
+      "maxTotalTokens": 30000
+    }
+  }
+}

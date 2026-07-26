@@ -306,7 +306,30 @@ surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts），按
 `LUOOME_MARKET_PROVIDER` 必须显式设为 `real`
 （MarketDataManager：Eastmoney 主 → Tencent 备，A 股；全源失败报错）。
-非法值在启动期抛错（与 `LUOOME_LLM_PROVIDER` 同一 env 解析先例）。
+非法值在启动期抛错。
+
+LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/TUI/Web/MCP 四个
+composition root 均调用 `createAIStackFromEnv`，一次加载
+`$LUOOME_HOME/ai-models.json`（或 `LUOOME_AI_CONFIG`），并把同一模型目录解析出的
+`generation`、`agent` profile 分别注入 `LLMAdapterLike` 与
+`AgentRuntimeLike`。provider、模型 ID、默认生成参数、超时和 agent 预算不进入 core；
+core 只保留 SDK 无关的端口。配置文件只引用 `apiKeyEnv`，不存储凭证。
+
+Web 额外提供受 mutation token 与同源 Origin 保护的 `/api/settings/ai`：
+GET 只返回 provider、模型参数及 `apiKeyConfigured`，永不返回密钥；POST 原子写入
+模型目录与权限为 `0600` 的 `$LUOOME_HOME/.env`，随后替换
+`ctxRef.current.adapters.llm` / `agent`，使新配置在当前进程立即生效。模型未配置或
+配置损坏时 Web 使用 `ai-unconfigured` 占位端口启动，允许用户从设置页修复；其它
+surface 仍保持启动期快速失败。
+
+Web 对话复用同一个 `AISDKAgentRuntime`，由 adapters 内部
+`ToolLoopAgent.stream()` + `createAgentUIStreamResponse()` 生成 AI SDK UI Message
+SSE；Web 只提供从 registry 派生的显式工具白名单并消费标准 Web `Response`，core
+不依赖 AI SDK 类型。写工具在聊天中是仅返回待确认描述的虚拟草案调用，只有用户在
+Web 点击确认后才进入真实 tool 写路径。`ChatSession` / `ChatMessage` 及
+`ChatRepository` 位于 core，memory 与 drizzle repository 位于 db；Web 会话端点经
+tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 user message，
+服务端加载最近 20 条消息并在 AI SDK `onFinish` 后保存 assistant UI message parts。
 
 ### 4.8 Context
 
@@ -315,15 +338,20 @@ surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 ```ts
 interface ToolContext {
   repos: RepositoryRegistry;
-  adapters: AdapterRegistry;
-  llm: LLMAdapter;
-  user: { id: string; accountId: string };
+  adapters: {
+    market: MarketDataAdapterLike;
+    llm: LLMAdapterLike;
+  };
+  agent?: AgentRuntimeLike;
+  user: { id: string; defaultAccountId: string };
   clock: () => Date;
   logger: Logger;
 }
 ```
 
-`ctx` 是唯一被允许注入依赖的方式。
+`ctx` 是唯一被允许注入依赖的方式。`AgentRuntimeLike` 是 SDK 无关投影；AI SDK 的
+`LanguageModel` / `ToolLoopAgent` 类型只存在于 adapters。`agent_run` 从 registry
+构造显式只读能力白名单，不能绕过 tool 契约直接访问 repository 或 adapter。
 
 ## 5. 数据模型
 

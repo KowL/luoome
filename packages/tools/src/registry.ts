@@ -6,9 +6,18 @@ import { addHoldingTool } from './tools/add-holding.js';
 import { addResearchNoteTool } from './tools/add-research-note.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
+import { agentRunTool } from './tools/agent-run.js';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
+import {
+  appendChatMessageTool,
+  createChatSessionTool,
+  deleteChatSessionTool,
+  getChatSessionTool,
+  listChatSessionsTool,
+  renameChatSessionTool,
+} from './tools/chat-session.js';
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
@@ -28,6 +37,7 @@ import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getStockGroupTool } from './tools/get-stock-group.js';
 import { getTacticTool } from './tools/get-tactic.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
+import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
 import { listResearchNotesTool } from './tools/list-research-notes.js';
@@ -39,7 +49,6 @@ import { listTradesTool } from './tools/list-trades.js';
 import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
-import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordWatchRunTool } from './tools/record-watch-run.js';
@@ -164,6 +173,13 @@ export const createRegistry = (tools: readonly Tool[]): Registry => {
 
 /** v0.1 全量工具表：6 read + 2 advice（docs/archive/plan.md 跨包契约）。 */
 export const toolRegistry: Registry = createRegistry([
+  listChatSessionsTool,
+  getChatSessionTool,
+  createChatSessionTool,
+  renameChatSessionTool,
+  deleteChatSessionTool,
+  appendChatMessageTool,
+  agentRunTool,
   listAccountsTool,
   createAccountTool,
   getAccountTool,

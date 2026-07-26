@@ -1,53 +1,15 @@
-/* apps/web/public/js/chat.js —— 对话路由（docs/ddd/web-chat-design.md §5）。
- *
- * - history 存 sessionStorage（关 tab 即清，与「服务端无 session」一致）；
- *   只持久化 user/assistant 文本轮，draft 卡片与系统消息是会话内瞬态 UI，不落 storage。
- * - draft 确认卡片：「确认」→ POST /api/tools/:tool/call（body {input}），
- *   结果作为系统消息回插对话流；「取消」丢弃。
- */
-
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { callApi } from './api.js';
+import { consumeUIMessageStream } from './ai-ui-stream.js';
+import { callApi, getToken } from './api.js';
 import { $, el, mount } from './ui.js';
 
-/** sessionStorage key（仅存 {role, content} 文本轮）。 */
-const HISTORY_KEY = 'luoome.chat.history';
-
-/** 内存 feed：msg（持久化）+ drafts / actions / note（瞬态）。 */
 const feed = [];
-let history = [];
+let sessions = [];
+let activeSessionId = null;
 let sending = false;
-
-/* ============ history 持久化 ============ */
-
-const loadHistory = () => {
-  try {
-    const raw = sessionStorage.getItem(HISTORY_KEY);
-    const parsed = raw === null ? [] : JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (t) =>
-        t !== null &&
-        typeof t === 'object' &&
-        (t.role === 'user' || t.role === 'assistant') &&
-        typeof t.content === 'string',
-    );
-  } catch {
-    return [];
-  }
-};
-
-const saveHistory = () => {
-  try {
-    sessionStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-50)));
-  } catch {
-    /* 忽略：隐私模式或 quota */
-  }
-};
-
-/* ============ 渲染 ============ */
+let initialized = false;
 
 const TOOL_LABELS = {
   create_stock_group: '创建分组',
@@ -59,14 +21,14 @@ const TOOL_LABELS = {
 };
 
 const toolLabel = (tool) => TOOL_LABELS[tool] ?? tool;
+const errorText = (result, fallback) => result?.error?.message ?? result?.error?.cause ?? fallback;
 
-/** draft 确认卡片：summary + 结构化字段 + 确认 / 取消。 */
 const draftCard = (draft) => {
   const card = el('div', 'chat-draft');
-  card.append(el('div', 'chat-draft-title', `草案 · ${toolLabel(draft.tool)}（${draft.tool}）`));
+  card.append(el('div', 'chat-draft-title', `草案 · ${toolLabel(draft.tool)}`));
   card.append(el('p', 'chat-draft-summary', String(draft.summary ?? '')));
   card.append(el('pre', 'chat-draft-input', JSON.stringify(draft.input ?? {}, null, 2)));
-  const confirmBtn = el('button', 'btn btn-primary btn-sm', '确认');
+  const confirmBtn = el('button', 'btn btn-primary btn-sm', '确认执行');
   confirmBtn.type = 'button';
   const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
   cancelBtn.type = 'button';
@@ -75,7 +37,6 @@ const draftCard = (draft) => {
   const settle = (text, ok) => {
     card.replaceChildren(el('p', ok ? 'chat-draft-settled ok' : 'chat-draft-settled', text));
   };
-
   confirmBtn.addEventListener('click', async () => {
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
@@ -84,34 +45,31 @@ const draftCard = (draft) => {
       body: JSON.stringify({ input: draft.input }),
     });
     if (result.ok) {
-      settle(`已执行 ${toolLabel(draft.tool)}：成功`, true);
-      pushNote(`已确认草案「${draft.summary}」，${toolLabel(draft.tool)} 执行成功。`);
+      settle(`${toolLabel(draft.tool)}执行成功`, true);
     } else {
-      const err = result.error ?? {};
-      settle(`执行失败：${err.message ?? err.cause ?? '未知错误'}`, false);
-      pushNote(`草案「${draft.summary}」执行失败：${err.message ?? err.cause ?? '未知错误'}`);
+      settle(`执行失败：${errorText(result, '未知错误')}`, false);
     }
   });
-  cancelBtn.addEventListener('click', () => {
-    settle('已取消该草案', false);
-  });
+  cancelBtn.addEventListener('click', () => settle('已取消该草案', false));
   return card;
 };
 
-/** usedActions 折叠展示（「查询了 batch_quote、list_holdings」；rejected 标注拦截）。 */
 const usedActionsNode = (usedActions) => {
-  const names = usedActions.map((a) => (a.rejected ? `${a.tool}（已拦截）` : a.tool));
   const details = el('details', 'chat-used-actions');
-  details.append(el('summary', null, `本轮动作：${names.join('、')}`));
+  details.append(
+    el('summary', null, `本轮动作：${usedActions.map((action) => action.tool).join('、')}`),
+  );
   details.append(
     el(
       'ul',
       null,
-      usedActions.map((a) =>
+      usedActions.map((action) =>
         el(
           'li',
           null,
-          `${a.tool} — ${a.rejected ? '已拦截（不在对话可用范围）' : a.ok ? '成功' : '失败'}`,
+          `${action.tool} — ${
+            action.status === 'running' ? '执行中…' : action.ok ? '成功' : '失败'
+          }`,
         ),
       ),
     ),
@@ -120,110 +78,332 @@ const usedActionsNode = (usedActions) => {
 };
 
 const renderEntry = (entry) => {
-  if (entry.type === 'msg') {
-    return el('div', `chat-msg ${entry.role}`, entry.content);
+  if (entry.type === 'msg') return el('div', `chat-msg ${entry.role}`, entry.content);
+  if (entry.type === 'note') return el('div', 'chat-msg system', entry.text);
+  if (entry.type === 'status') {
+    return el('div', 'chat-msg system chat-stream-status', entry.text);
   }
-  if (entry.type === 'note') {
-    return el('div', 'chat-msg system', entry.text);
-  }
-  if (entry.type === 'actions') {
-    return usedActionsNode(entry.usedActions);
-  }
-  // drafts
+  if (entry.type === 'actions') return usedActionsNode(entry.usedActions);
   return el('div', 'chat-drafts', entry.drafts.map(draftCard));
+};
+
+const emptyState = () => {
+  const suggestions = [
+    '总结我的当前持仓',
+    '查询 300857 的行情',
+    '列出最近的研究笔记',
+    '帮我创建一个观察分组',
+  ];
+  const chips = suggestions.map((text) => {
+    const button = el('button', 'chat-suggestion', text);
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      const input = $('#chat-input');
+      if (input !== null) {
+        input.value = text;
+        input.focus();
+      }
+    });
+    return button;
+  });
+  return el('div', 'chat-empty-state', [
+    el('div', 'chat-empty-mark', '◇'),
+    el('span', 'section-kicker', 'LOCAL ADVISOR'),
+    el('h2', null, '从一个问题开始'),
+    el('p', null, '会话保存在当前项目数据库中。查询会调用真实工具，写操作只生成待确认草案。'),
+    el('div', 'chat-suggestions', chips),
+  ]);
 };
 
 const renderChat = () => {
   const log = $('#chat-log');
   if (log === null) return;
-  mount(
-    log,
-    feed.length === 0
-      ? el('p', 'placeholder', '问点什么，例如「我的持仓今天怎么样」「帮我建一个龙头分组」。')
-      : feed.map(renderEntry),
-  );
+  mount(log, feed.length === 0 ? emptyState() : feed.map(renderEntry));
   log.scrollTop = log.scrollHeight;
 };
 
-/* ============ feed 操作 ============ */
+const formatSessionTime = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+};
+
+const renameSession = async (session) => {
+  if (sending) return;
+  const title = window.prompt('重命名会话', session.title)?.trim();
+  if (!title || title === session.title) return;
+  const result = await callApi(`/api/chat/sessions/${encodeURIComponent(session.id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  });
+  if (!result.ok) {
+    window.alert(`重命名失败：${errorText(result, '未知错误')}`);
+    return;
+  }
+  await refreshSessions();
+};
+
+const deleteSession = async (session) => {
+  if (sending || !window.confirm(`删除会话「${session.title}」及全部消息？`)) return;
+  const result = await callApi(`/api/chat/sessions/${encodeURIComponent(session.id)}`, {
+    method: 'DELETE',
+  });
+  if (!result.ok) {
+    window.alert(`删除失败：${errorText(result, '未知错误')}`);
+    return;
+  }
+  if (activeSessionId === session.id) {
+    activeSessionId = null;
+    feed.splice(0);
+  }
+  await refreshSessions();
+  const next = sessions[0];
+  if (next !== undefined) await selectSession(next.id);
+  else renderChat();
+};
+
+const renderSessions = () => {
+  const list = $('#chat-session-list');
+  if (list === null) return;
+  mount(
+    list,
+    sessions.length === 0
+      ? el('p', 'chat-session-empty', '还没有会话')
+      : sessions.map((session) => {
+          const open = el('button', 'chat-session-open', [
+            el('span', 'chat-session-title', session.title),
+            el('span', 'chat-session-time', formatSessionTime(session.updatedAt)),
+          ]);
+          open.type = 'button';
+          open.addEventListener('click', () => void selectSession(session.id));
+          const rename = el('button', 'chat-session-action', '✎');
+          rename.type = 'button';
+          rename.title = '重命名';
+          rename.addEventListener('click', () => void renameSession(session));
+          const remove = el('button', 'chat-session-action danger', '×');
+          remove.type = 'button';
+          remove.title = '删除';
+          remove.addEventListener('click', () => void deleteSession(session));
+          return el('div', `chat-session-item${session.id === activeSessionId ? ' active' : ''}`, [
+            open,
+            el('div', 'chat-session-actions', [rename, remove]),
+          ]);
+        }),
+  );
+};
+
+const persistedFeed = (messages) => {
+  const result = [];
+  for (const message of messages) {
+    const text = message.parts
+      .filter((part) => part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text)
+      .join('');
+    if (text.trim().length > 0) result.push({ type: 'msg', role: message.role, content: text });
+    if (message.role !== 'assistant') continue;
+    const actions = [];
+    const drafts = [];
+    for (const part of message.parts) {
+      if (typeof part.type !== 'string' || !part.type.startsWith('tool-')) continue;
+      const output = part.output;
+      actions.push({
+        toolCallId: part.toolCallId,
+        tool: part.type.slice(5),
+        status: part.state === 'input-streaming' ? 'running' : 'finished',
+        ok: part.state === 'output-available' && output?.error === undefined,
+      });
+      if (output?.__luoomeDraft === true && output.draft !== undefined) {
+        drafts.push(output.draft);
+      }
+    }
+    if (actions.length > 0) result.push({ type: 'actions', usedActions: actions });
+    if (drafts.length > 0) result.push({ type: 'drafts', drafts });
+  }
+  return result;
+};
+
+const selectSession = async (sessionId) => {
+  if (sending || sessionId === activeSessionId) return;
+  const result = await callApi(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
+  if (!result.ok) {
+    window.alert(`读取会话失败：${errorText(result, '未知错误')}`);
+    return;
+  }
+  activeSessionId = sessionId;
+  feed.splice(0, feed.length, ...persistedFeed(result.data.messages ?? []));
+  renderSessions();
+  renderChat();
+  $('#chat-input')?.focus();
+};
+
+const refreshSessions = async () => {
+  const result = await callApi('/api/chat/sessions');
+  if (!result.ok) {
+    sessions = [];
+    renderSessions();
+    return false;
+  }
+  sessions = Array.isArray(result.data?.sessions) ? result.data.sessions : [];
+  renderSessions();
+  return true;
+};
+
+const createSession = async () => {
+  const result = await callApi('/api/chat/sessions', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  if (!result.ok) {
+    window.alert(`创建会话失败：${errorText(result, '请先在设置页配置 Web token')}`);
+    return null;
+  }
+  const session = result.data.session;
+  sessions = [session, ...sessions.filter((item) => item.id !== session.id)];
+  activeSessionId = session.id;
+  feed.splice(0);
+  renderSessions();
+  renderChat();
+  $('#chat-input')?.focus();
+  return session;
+};
 
 const pushMsg = (role, content) => {
   feed.push({ type: 'msg', role, content });
-  if (role === 'user' || role === 'assistant') {
-    history.push({ role, content });
-    saveHistory();
-  }
   renderChat();
 };
 
-const pushNote = (text) => {
-  feed.push({ type: 'note', text });
-  renderChat();
+const removeEntry = (target) => {
+  const index = feed.indexOf(target);
+  if (index >= 0) feed.splice(index, 1);
 };
-
-/* ============ 发送 ============ */
 
 const send = async () => {
   const input = $('#chat-input');
   if (input === null || sending) return;
-  const message = input.value.trim();
-  if (message.length === 0) return;
+  const text = input.value.trim();
+  if (text.length === 0) return;
   sending = true;
   const sendBtn = $('#chat-send');
   if (sendBtn !== null) sendBtn.disabled = true;
 
-  // history 快照不含本轮 message（端点把 message 与 history 分开传）
-  const historySnapshot = history.slice(-10);
-  input.value = '';
-  pushMsg('user', message);
-  pushNote('…');
+  try {
+    if (activeSessionId === null && (await createSession()) === null) return;
+    const sessionId = activeSessionId;
+    if (sessionId === null) return;
+    input.value = '';
+    pushMsg('user', text);
+    const statusEntry = { type: 'status', text: '正在连接模型…' };
+    const actionsEntry = { type: 'actions', usedActions: [] };
+    const assistantEntry = { type: 'msg', role: 'assistant', content: '' };
+    const toolCalls = new Map();
+    let assistantStarted = false;
+    feed.push(statusEntry);
+    renderChat();
 
-  const result = await callApi('/api/chat', {
-    method: 'POST',
-    body: JSON.stringify({ message, history: historySnapshot }),
-  });
-
-  // 移除「…」占位
-  const idx = feed.findLastIndex((e) => e.type === 'note' && e.text === '…');
-  if (idx >= 0) feed.splice(idx, 1);
-
-  if (result.ok && result.data && typeof result.data === 'object') {
-    const data = result.data;
-    if (Array.isArray(data.usedActions) && data.usedActions.length > 0) {
-      feed.push({ type: 'actions', usedActions: data.usedActions });
-    }
-    pushMsg('assistant', String(data.reply ?? ''));
-    if (Array.isArray(data.drafts) && data.drafts.length > 0) {
-      feed.push({ type: 'drafts', drafts: data.drafts });
+    const ensureAssistant = () => {
+      if (assistantStarted) return;
+      assistantStarted = true;
+      feed.push(assistantEntry);
+    };
+    const ensureActions = () => {
+      if (!feed.includes(actionsEntry)) feed.push(actionsEntry);
+    };
+    const headers = new Headers({ 'content-type': 'application/json' });
+    const token = getToken();
+    if (token.length > 0) headers.set('authorization', `Bearer ${token}`);
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        sessionId,
+        messages: [
+          {
+            id: `user_${crypto.randomUUID()}`,
+            role: 'user',
+            parts: [{ type: 'text', text }],
+          },
+        ],
+      }),
+    });
+    await consumeUIMessageStream(response, (part) => {
+      if (part.type === 'start-step') {
+        statusEntry.text = '模型正在推理…';
+      } else if (part.type === 'tool-input-available') {
+        statusEntry.text = `正在执行 ${part.toolName}…`;
+        const action = {
+          toolCallId: part.toolCallId,
+          tool: part.toolName,
+          input: part.input,
+          status: 'running',
+          ok: false,
+        };
+        toolCalls.set(part.toolCallId, action);
+        actionsEntry.usedActions.push(action);
+        ensureActions();
+      } else if (part.type === 'tool-output-available') {
+        const action = toolCalls.get(part.toolCallId);
+        if (action !== undefined) {
+          action.status = 'finished';
+          action.ok = part.output?.error === undefined;
+        }
+        if (part.output?.__luoomeDraft === true && part.output.draft !== undefined) {
+          feed.push({ type: 'drafts', drafts: [part.output.draft] });
+        }
+      } else if (part.type === 'tool-output-error') {
+        const action = toolCalls.get(part.toolCallId);
+        if (action !== undefined) {
+          action.status = 'finished';
+          action.ok = false;
+        }
+      } else if (part.type === 'text-start') {
+        statusEntry.text = '正在生成回答…';
+        ensureAssistant();
+      } else if (part.type === 'text-delta') {
+        ensureAssistant();
+        assistantEntry.content += String(part.delta ?? '');
+      } else if (part.type === 'error') {
+        throw new Error(String(part.errorText ?? '模型流式响应失败'));
+      }
       renderChat();
+    });
+    removeEntry(statusEntry);
+    if (assistantEntry.content.trim().length === 0) {
+      assistantEntry.content = '模型没有返回文本，请重试。';
+      ensureAssistant();
     }
-  } else {
-    const err = result.error ?? {};
-    pushMsg('assistant', `请求失败：${err.message ?? err.cause ?? '未知错误'}，请稍后重试。`);
+    renderChat();
+    await refreshSessions();
+  } catch (error) {
+    const status = feed.findLast((entry) => entry.type === 'status');
+    if (status !== undefined) removeEntry(status);
+    pushMsg('assistant', `请求失败：${error instanceof Error ? error.message : '未知错误'}`);
+  } finally {
+    sending = false;
+    if (sendBtn !== null) sendBtn.disabled = false;
+    input.focus();
   }
-
-  sending = false;
-  if (sendBtn !== null) sendBtn.disabled = false;
-  input.focus();
 };
-
-/* ============ 初始化 ============ */
-
-let initialized = false;
 
 const initChat = () => {
   if (initialized) return;
   initialized = true;
-  history = loadHistory();
-  for (const turn of history) feed.push({ type: 'msg', role: turn.role, content: turn.content });
-  const form = $('#chat-form');
-  if (form !== null) {
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      void send();
-    });
-  }
-  renderChat();
+  $('#chat-new-session')?.addEventListener('click', () => void createSession());
+  $('#chat-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void send();
+  });
 };
 
-export { initChat, renderChat };
+const refreshChat = async () => {
+  activeSessionId = null;
+  feed.splice(0);
+  if (!(await refreshSessions())) {
+    renderChat();
+    return;
+  }
+  const first = sessions[0];
+  if (first !== undefined) await selectSession(first.id);
+  else renderChat();
+};
+
+export { initChat, refreshChat, renderChat };

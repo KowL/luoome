@@ -10,9 +10,8 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { createMarketAdapterFromEnv, LLMManager } from '@luoome/adapters';
+import { createAIStackFromEnv, createMarketAdapterFromEnv } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
-import { parseLlmProviderConfigFromEnv } from '@luoome/core';
 import { createDrizzleRepos, ensureSchema } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
 
@@ -52,6 +51,7 @@ export const createServerContext = async (
   ensureSchema(handle.db);
 
   const logger = createStderrLogger();
+  const ai = createAIStackFromEnv(env, { logger });
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const now = (): Date => new Date();
@@ -59,8 +59,9 @@ export const createServerContext = async (
     repos: handle.repos,
     adapters: {
       market: createMarketAdapterFromEnv(env, { clock: now, logger }),
-      llm: new LLMManager({ logger, config: parseLlmProviderConfigFromEnv(env) }),
+      llm: ai.llm,
     },
+    agent: ai.agent,
     user: { id: 'local-user', defaultAccountId },
     clock: now,
     logger,

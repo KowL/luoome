@@ -5,6 +5,7 @@ import type {
   AdviceHorizon,
   AdviceReasoning,
   AdviceSubjectKind,
+  ChatMessagePart,
   Citation,
   Exchange,
   Money,
@@ -564,6 +565,34 @@ export const workflowRuns = sqliteTable(
   }),
 );
 
+export const chatSessions = sqliteTable(
+  'chat_sessions',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    title: text('title').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    accountUpdatedIdx: index('chat_sessions_account_updated_idx').on(t.accountId, t.updatedAt),
+  }),
+);
+
+export const chatMessages = sqliteTable(
+  'chat_messages',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    role: text('role').$type<'user' | 'assistant'>().notNull(),
+    parts: text('parts', { mode: 'json' }).$type<readonly ChatMessagePart[]>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    sessionCreatedIdx: index('chat_messages_session_created_idx').on(t.sessionId, t.createdAt),
+  }),
+);
+
 export const schema = {
   accounts,
   stocks,
@@ -589,6 +618,8 @@ export const schema = {
   researchNotes,
   stockEvents,
   workflowRuns,
+  chatSessions,
+  chatMessages,
 } as const;
 
 export type Schema = typeof schema;

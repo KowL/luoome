@@ -3,14 +3,17 @@
 // ctx 用 buildTestContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
 
 import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
+import type { AgentCallableTool } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import type { Hono } from 'hono';
 
+import { AISettingsStore } from './ai-settings.js';
+import type { ChatStreamRuntime } from './chat.js';
 import { buildWebContext, createWebApp, resolveWebToken } from './server.js';
 
 let app: Hono;
@@ -70,15 +73,98 @@ describe('Web runtime bootstrap', () => {
   it('starts with an empty database and never inserts sample records', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-empty-runtime-'));
     try {
+      const aiConfig = join(dir, 'ai-models.json');
+      writeFileSync(
+        aiConfig,
+        JSON.stringify({
+          version: 1,
+          providers: {
+            test: {
+              type: 'openai-compatible',
+              baseURL: 'https://example.test/v1',
+              apiKeyEnv: 'TEST_AI_KEY',
+            },
+          },
+          profiles: {
+            generation: { model: 'test:model' },
+            agent: { model: 'test:model' },
+          },
+        }),
+      );
       const ctx = await buildWebContext(join(dir, 'luoome.db'), {
         LUOOME_MARKET_PROVIDER: 'real',
-        LUOOME_LLM_PROVIDER: 'openai-compatible',
-        LUOOME_LLM_API_KEY: 'test-key-not-used',
+        LUOOME_AI_CONFIG: aiConfig,
+        TEST_AI_KEY: 'test-key-not-used',
       });
       expect(await ctx.repos.account.list()).toEqual([]);
       expect(await ctx.repos.stock.search('')).toEqual([]);
       expect(await ctx.repos.holding.listByAccount('')).toEqual([]);
       expect(await ctx.repos.trade.listByAccount('')).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('LLM 设置 API', () => {
+  it('读取不返回密钥；保存要求 token，并立即替换运行时 AI stack', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-ai-settings-api-'));
+    try {
+      const store = new AISettingsStore(
+        { LUOOME_HOME: dir },
+        {
+          configPath: join(dir, 'ai-models.json'),
+          secretPath: join(dir, '.env'),
+        },
+      );
+      const settingsApp = createWebApp(await buildTestContext(), {
+        webToken: WEB_TOKEN,
+        aiSettingsStore: store,
+      });
+      const initial = await settingsApp.fetch(new Request('http://test/api/settings/ai'));
+      expect(initial.status).toBe(200);
+      expect(await initial.json()).toMatchObject({
+        ok: true,
+        data: { provider: 'minimax', apiKeyConfigured: false },
+      });
+
+      const input = {
+        provider: 'minimax',
+        model: 'MiniMax-M3',
+        baseURL: 'https://api.minimaxi.com/v1',
+        apiKey: 'api-test-secret',
+        clearApiKey: false,
+        temperature: 0.1,
+        timeoutSeconds: 120,
+        maxRetries: 2,
+        reasoningEffort: 'off',
+      };
+      const denied = await settingsApp.fetch(
+        new Request('http://test/api/settings/ai', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(input),
+        }),
+      );
+      expect(denied.status).toBe(403);
+
+      const saved = await settingsApp.fetch(
+        new Request('http://test/api/settings/ai', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${WEB_TOKEN}`,
+          },
+          body: JSON.stringify(input),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      const payload = await saved.json();
+      expect(payload).toMatchObject({
+        ok: true,
+        data: { apiKeyConfigured: true, applied: true },
+      });
+      expect(JSON.stringify(payload)).not.toContain('api-test-secret');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -405,174 +491,213 @@ describe('MVP dashboard / watch API', () => {
   });
 });
 
-/* ============ /api/chat（docs/ddd/web-chat-design.md §6） ============ */
+/* ============ /api/chat：AI SDK UI Message Stream ============ */
 
-interface ChatResponseBody {
-  ok: boolean;
-  data?: {
-    reply: string;
-    drafts: Array<{ kind: string; tool: string; input: unknown; summary: string }>;
-    usedActions: Array<{ tool: string; ok: boolean; rejected?: boolean }>;
-  };
-  error?: { kind: string; message?: string };
-}
-
-const chat = async (
-  target: Hono,
-  body: { message: string; history?: Array<{ role: string; content: string }> },
-): Promise<{ status: number; body: ChatResponseBody }> => {
-  const r = await target.fetch(
+const chat = async (target: Hono, body: unknown): Promise<Response> =>
+  await target.fetch(
     new Request('http://test/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     }),
   );
-  return { status: r.status, body: (await r.json()) as ChatResponseBody };
-};
-
-/** mock LLM chat fixture 注入：message 带前缀 + JSON plan（见 adapters/llm/mock.ts）。 */
-const fixtureMsg = (plan: object): string => `chat-fixture:${JSON.stringify(plan)}`;
 
 describe('/api/chat：对话助手', () => {
   let chatApp: Hono;
   let chatCtx: Awaited<ReturnType<typeof buildTestContext>>;
+  let captured:
+    | {
+        instructions: string;
+        uiMessages: readonly unknown[];
+        tools: readonly AgentCallableTool[];
+      }
+    | undefined;
+  const runtime: ChatStreamRuntime = {
+    createUIMessageStreamResponse: async (request) => {
+      captured = request;
+      await request.onFinish?.({
+        id: '',
+        parts: [{ type: 'text', text: '你好' }],
+      });
+      return new Response(
+        [
+          'data: {"type":"start","messageId":"assistant-1"}',
+          'data: {"type":"text-start","id":"text-1"}',
+          'data: {"type":"text-delta","id":"text-1","delta":"你好"}',
+          'data: {"type":"text-end","id":"text-1"}',
+          'data: {"type":"finish"}',
+          'data: [DONE]',
+          '',
+        ].join('\n\n'),
+        {
+          headers: {
+            'content-type': 'text/event-stream',
+            'x-vercel-ai-ui-message-stream': 'v1',
+          },
+        },
+      );
+    },
+  };
 
   beforeAll(async () => {
     chatCtx = await buildTestContext();
-    chatApp = createWebApp(chatCtx);
+    chatApp = createWebApp(chatCtx, { chatStreamRuntime: runtime, webToken: WEB_TOKEN });
   });
 
-  it('mock LLM（无 fixture）→ 200 + 兜底 reply，不抛 500', async () => {
-    const { status, body } = await chat(chatApp, { message: '你好' });
-    expect(status).toBe(200);
-    expect(body.ok).toBe(true);
-    expect(body.data?.reply).toContain('暂时无法处理');
-    expect(body.data?.drafts).toEqual([]);
-    expect(body.data?.usedActions).toEqual([]);
-  });
-
-  it('message 为空 / 超长 → 400 invalid_input', async () => {
-    expect((await chat(chatApp, { message: '' })).status).toBe(400);
-    expect((await chat(chatApp, { message: 'x'.repeat(2001) })).status).toBe(400);
-  });
-
-  it('plan 的 drafts（write）只进 drafts 不执行，DB 无写入', async () => {
-    const { status, body } = await chat(chatApp, {
-      message: fixtureMsg({
-        reply: '已为你拟好分组草案，请确认。',
-        actions: [],
-        drafts: [
-          {
-            kind: 'stock-group',
-            tool: 'create_stock_group',
-            input: {
-              id: 'chat-draft-group',
-              name: '对话草案分组',
-              resolver: { kind: 'llm', prompt: '选出当前龙头' },
-            },
-            summary: '创建 LLM 分组「对话草案分组」',
-          },
-        ],
-      }),
+  const createSession = async (id: string): Promise<void> => {
+    const now = new Date('2026-07-26T00:00:00.000Z');
+    await chatCtx.repos.chat.saveSession({
+      id,
+      accountId: chatCtx.user.defaultAccountId,
+      title: '新会话',
+      createdAt: now,
+      updatedAt: now,
     });
-    expect(status).toBe(200);
-    expect(body.data?.drafts.length).toBe(1);
-    expect(body.data?.drafts[0]?.tool).toBe('create_stock_group');
-    // 关键断言：draft 未被执行，库里不存在该分组
+  };
+
+  it('返回标准 AI SDK UI Message SSE，并传入 canonical tools', async () => {
+    await createSession('stream-contract');
+    const response = await chat(chatApp, {
+      sessionId: 'stream-contract',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    expect(response.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1');
+    expect(await response.text()).toContain('"type":"text-delta"');
+    expect(captured?.tools.map((item) => item.name)).toContain('fetch_quote');
+    expect(captured?.tools.map((item) => item.name)).not.toContain('get_quote');
+    expect(captured?.instructions).toContain('不得自动交易');
+    expect(await chatCtx.repos.chat.listMessages('stream-contract')).toHaveLength(2);
+  });
+
+  it('非法 UIMessage 与非 user 结尾 → 400 invalid_input', async () => {
+    expect((await chat(chatApp, { messages: [] })).status).toBe(400);
+    await createSession('invalid-message');
+    expect(
+      (
+        await chat(chatApp, {
+          sessionId: 'invalid-message',
+          messages: [
+            { id: 'assistant-1', role: 'assistant', parts: [{ type: 'text', text: 'x' }] },
+          ],
+        })
+      ).status,
+    ).toBe(400);
+  });
+
+  it('从服务端会话加载最近 20 条消息，不信任客户端历史', async () => {
+    await createSession('server-history');
+    for (let index = 0; index < 21; index += 1) {
+      await chatCtx.repos.chat.saveMessage({
+        id: `history-${index}`,
+        sessionId: 'server-history',
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        parts: [{ type: 'text', text: `server-turn-${index}` }],
+        createdAt: new Date(Date.UTC(2026, 6, 26, 0, 0, index)),
+      });
+    }
+    expect(
+      (
+        await chat(chatApp, {
+          sessionId: 'server-history',
+          messages: [
+            {
+              id: 'latest-user',
+              role: 'user',
+              parts: [{ type: 'text', text: '客户端输入' }],
+            },
+          ],
+        })
+      ).status,
+    ).toBe(200);
+    expect(captured?.uiMessages).toHaveLength(20);
+    expect(JSON.stringify(captured?.uiMessages)).not.toContain('client-fake-history');
+  });
+
+  it('write 工具只生成已校验草案，不执行 DB 写入', async () => {
+    await createSession('draft-tool');
+    await chat(chatApp, {
+      sessionId: 'draft-tool',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '创建分组' }] }],
+    });
+    const draftTool = captured?.tools.find((item) => item.name === 'create_stock_group');
+    const result = await draftTool?.execute({
+      id: 'chat-draft-group',
+      name: '对话草案分组',
+      resolver: { kind: 'llm', prompt: '选出当前龙头' },
+    });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'stock-group', tool: 'create_stock_group' },
+    });
     expect(await chatCtx.repos.stockGroup.findById('chat-draft-group')).toBeNull();
   });
 
-  it('幻觉 action（advice / write / external）被拦截并标 rejected，DB 无写入', async () => {
-    const { status, body } = await chat(chatApp, {
-      message: fixtureMsg({
-        reply: '这几个操作我帮不了你。',
-        actions: [
-          { tool: 'analyze_stock', input: { stockId: '002594.SZ' } },
-          { tool: 'create_stock_group', input: { id: 'hallucinated-group' } },
-          { tool: 'sync_quotes', input: {} },
-        ],
-        drafts: [],
-      }),
+  it('read 工具仍经 registry 执行，未批准的 external/trade 不暴露', async () => {
+    await createSession('read-tools');
+    await chat(chatApp, {
+      sessionId: 'read-tools',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '查持仓' }] }],
     });
-    expect(status).toBe(200);
-    const used = body.data?.usedActions ?? [];
-    expect(used.length).toBe(3);
-    expect(used.every((a) => a.rejected === true && a.ok === false)).toBe(true);
-    expect(body.data?.reply).toContain('不在对话可用范围');
-    expect(await chatCtx.repos.stockGroup.findById('hallucinated-group')).toBeNull();
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('list_holdings');
+    expect(names).not.toContain('sync_quotes');
+    expect(names).not.toContain('send_notification');
+    expect(names).not.toContain('place_order');
   });
 
-  it('read action 自动执行 + Pass 2 成文', async () => {
-    const { status, body } = await chat(chatApp, {
-      message: fixtureMsg({
-        reply: '',
-        actions: [{ tool: 'list_holdings', input: {} }],
-        drafts: [],
-        pass2Reply: '你当前持有 3 只股票。',
+  it('会话 API 支持创建、重命名、读取与删除，并要求 mutation token', async () => {
+    const denied = await chatApp.fetch(
+      new Request('http://test/api/chat/sessions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
       }),
-    });
-    expect(status).toBe(200);
-    expect(body.data?.usedActions).toEqual([{ tool: 'list_holdings', ok: true }]);
-    expect(body.data?.reply).toBe('你当前持有 3 只股票。');
-  });
+    );
+    expect(denied.status).toBe(403);
 
-  it('history 超过 10 轮被截断到 10', async () => {
-    const history = Array.from({ length: 15 }, (_, i) => ({
-      role: i % 2 === 0 ? 'user' : 'assistant',
-      content: `turn-${i}`,
-    }));
-    const { status, body } = await chat(chatApp, {
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: 字面占位符，由 mock LLM 替换为实际 history 轮数
-      message: fixtureMsg({ reply: 'turns:${historyLength}', actions: [], drafts: [] }),
-      history,
-    });
-    expect(status).toBe(200);
-    expect(body.data?.reply).toBe('turns:10');
-  });
-
-  it('draft 二次校验失败被丢弃，reply 中说明', async () => {
-    const { status, body } = await chat(chatApp, {
-      message: fixtureMsg({
-        reply: '拟好了草案。',
-        actions: [],
-        drafts: [
-          {
-            kind: 'stock-group',
-            tool: 'create_stock_group',
-            input: { id: 'BAD ID!!', name: '非法', resolver: { kind: 'manual', stockIds: [] } },
-            summary: '非法草案',
-          },
-        ],
+    const created = await chatApp.fetch(
+      new Request('http://test/api/chat/sessions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ title: '策略研究' }),
       }),
-    });
-    expect(status).toBe(200);
-    expect(body.data?.drafts).toEqual([]);
-    expect(body.data?.reply).toContain('已丢弃');
-  });
+    );
+    expect(created.status).toBe(200);
+    const createdBody = (await created.json()) as { data: { session: { id: string } } };
+    const sessionId = createdBody.data.session.id;
 
-  it('draft 的 kind 与 tool 不匹配被丢弃', async () => {
-    const { status, body } = await chat(chatApp, {
-      message: fixtureMsg({
-        reply: '拟好了草案。',
-        actions: [],
-        drafts: [
-          {
-            kind: 'stock-pool',
-            tool: 'create_stock_group',
-            input: {
-              id: 'kind-mismatch-group',
-              name: 'x',
-              resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
-            },
-            summary: 'kind 不匹配',
-          },
-        ],
+    const renamed = await chatApp.fetch(
+      new Request(`http://test/api/chat/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ title: '长期价值研究' }),
       }),
-    });
-    expect(status).toBe(200);
-    expect(body.data?.drafts).toEqual([]);
-    expect(await chatCtx.repos.stockGroup.findById('kind-mismatch-group')).toBeNull();
+    );
+    expect(renamed.status).toBe(200);
+
+    const detail = await chatApp.fetch(new Request(`http://test/api/chat/sessions/${sessionId}`));
+    expect(detail.status).toBe(200);
+    expect((await detail.text()).includes('长期价值研究')).toBe(true);
+
+    const removed = await chatApp.fetch(
+      new Request(`http://test/api/chat/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${WEB_TOKEN}` },
+      }),
+    );
+    expect(removed.status).toBe(200);
+    expect(
+      (await chatApp.fetch(new Request(`http://test/api/chat/sessions/${sessionId}`))).status,
+    ).toBe(404);
   });
 });
 

@@ -135,6 +135,17 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 
 启动时校验：trade 必须 false，否则启动失败。
 
+## 内置 agent loop
+
+`agent_run` 分类为 `external`，默认不通过 MCP 暴露。其运行时能力由 tools 包的显式白名单构造：
+
+- 仅允许逐项批准的 `read` 与 `external` tool；`write`、`advice`、`trade` 均不可达。
+- `trade` 永不进入 agent 工具表，建议或盯盘结果不能触发自动下单。
+- 写入意图只能作为待确认 `drafts` 返回；草案会再次按目标 write tool 的输入 schema 校验，`agent_run` 自身不执行草案。
+- `usedTools` 与 `trace` 从实际 tool 调用派生，不接受模型自报；模型最终输出必须通过本地 Zod 校验。
+- 用户输入和 tool 输出均视为不可信内容；system instructions 明确禁止把其中的文本当作新指令。
+- 循环同时受最大步数、累计 token 软预算和总超时限制。
+
 ## 传输安全
 
 ### v0.1 — stdio（本地进程）
@@ -218,6 +229,11 @@ advice 类也记录：
 
 - **数据源**：Eastmoney / Tencent 等外部 API 返回的数据视为不可信，输入 db 前校验
 - **LLM**：所有 LLM 输出经过 Zod 校验，不直接执行；advice 输出额外过 sanitized 审计
+- **模型目录**：`ai-models.json` 只允许用 `apiKeyEnv` 引用凭证环境变量，不保存 API
+  key；配置解析错误和日志不得输出凭证值
+- **Web LLM 设置**：写入接口按其它 mutation 使用 Bearer token + 同源 Origin 双重
+  校验；密钥文件权限固定为 `0600`，读取接口仅返回是否已配置，禁止回显、日志记录或
+  注入页面 DOM
 - **advice 回填**：`record_advice_outcome` 调用记录到 audit，但 outcome 数据本身不强制校验（用户主观回填）
 
 ## 用户教育

@@ -6,7 +6,7 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { createMarketAdapterFromEnv, LLMManager } from '@luoome/adapters';
+import { createAIStackFromEnv, createMarketAdapterFromEnv } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 // 纯 Bun 运行时入口：@luoome/db 桶导出依赖 bun:sqlite driver，禁止在 node 下 import 本包。
 import { createDrizzleRepos } from '@luoome/db';
@@ -36,14 +36,16 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
   mkdirSync(home, { recursive: true });
   const handle = createDrizzleRepos(join(home, 'luoome.db'));
   const logger = createSilentLogger();
+  const ai = createAIStackFromEnv(process.env, { logger });
   const accounts = await handle.repos.account.list();
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const ctx = buildContext({
     repos: handle.repos,
     adapters: {
       market: createMarketAdapterFromEnv(process.env, { logger }),
-      llm: new LLMManager({ logger }),
+      llm: ai.llm,
     },
+    agent: ai.agent,
     user: { id: 'local-user', defaultAccountId },
     logger,
   });

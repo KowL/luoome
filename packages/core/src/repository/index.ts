@@ -1,5 +1,6 @@
 import type { Account } from '../entity/account.js';
 import type { Advice, AdviceOutcome, AdviceQuery } from '../entity/advice.js';
+import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { Holding } from '../entity/holding.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
@@ -124,6 +125,17 @@ export interface RepositoryRegistry {
   readonly stockEvent: StockEventRepository;
   /** ruo 迁移 Phase 1C；workflow 运行审计。 */
   readonly workflowRun: WorkflowRunRepository;
+  /** Web AI 对话：账户隔离的会话与 UI message parts。 */
+  readonly chat: ChatRepository;
+}
+
+export interface ChatRepository {
+  saveSession(session: ChatSession): Promise<void>;
+  findSessionById(id: string): Promise<ChatSession | null>;
+  listSessions(accountId: string, limit?: number): Promise<readonly ChatSession[]>;
+  removeSession(id: string): Promise<void>;
+  saveMessage(message: ChatMessage): Promise<void>;
+  listMessages(sessionId: string, limit?: number): Promise<readonly ChatMessage[]>;
 }
 
 /**
@@ -235,11 +247,7 @@ export interface WatchTriggerRepository {
     notificationId?: string,
   ): Promise<void>;
   /** 用户反馈（set_watch_trigger_feedback 写入）。 */
-  setFeedback(
-    id: string,
-    feedback: TriggerFeedback,
-    at: Date,
-  ): Promise<void>;
+  setFeedback(id: string, feedback: TriggerFeedback, at: Date): Promise<void>;
   remove(id: string): Promise<void>;
 }
 

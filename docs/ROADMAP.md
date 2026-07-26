@@ -31,7 +31,7 @@
 **目标**：接入真实数据源 + 真实 LLM，advice 端到端可用。
 
 **实际产物（W2.A → W2.H，commit 见 git log）**：
-- core 增量：`Market` 枚举 + `IndicatorSet`（`KNOWN_INDICATOR_KEYS` 13 项）+ `LLMProviderConfig` + env 解析
+- core 增量：`Market` 枚举 + `IndicatorSet`（`KNOWN_INDICATOR_KEYS` 13 项）
 - db 增量：`quote_snapshot` + `daily_bars` 表 + QuoteRepository / DailyBarRepository（Drizzle + in-memory 双实现）
 - adapters 增量：
   - market：EastmoneyAdapter（A 股 + 港股）+ TencentAdapter（备用）+ QuoteCache / DailyBarCache（LRU）+ MarketDataManager（cache + rate-limit + fallback + 抑制窗口）
@@ -135,7 +135,7 @@
 **实际产物（截至 HEAD `1e9ea63`，commit 见 git log）**：
 
 - ✅ **真实行情接线**（commit `097f3a0`）：四个 surface（CLI / MCP / TUI / Web）统一经 `createMarketAdapterFromEnv` 装配；`LUOOME_MARKET_PROVIDER=real` 启用 Eastmoney 主 → Tencent 备 → Mock 兜底（默认 mock 零回归）。实测 `fetch_quote(source=eastmoney)` + `compute_indicators` 触发 Tencent fallback 81 根真实日线。
-- ✅ **真实 LLM 接线**（commit `d5f5917`）：四端 LLM 统一走 LLMManager（`LUOOME_LLM_PROVIDER` 路由）；`openai-compatible` / `anthropic` 缺 key 启动期报错（by design）；schema parse 失败重试 + 规则 fallback 由 Manager 既有实现承担。
+- ✅ **真实 LLM 接线**：四端统一走 AI SDK Provider Registry 和模型 profile；缺目录、未知 provider 或缺密钥启动期报错；schema parse 失败重试 + 规则 fallback 由 Manager 承担。
 - ✅ **持仓 / 交易录入**（commit `cbdfee7`）：Tool 数 22→26，write 1→5。
   - `add_trade`：录 Trade（source=manual） + 联动 Holding（新开 / 加仓加权均价 / 减仓 / 卖光自动 closedAt / 清仓重开复用旧 id）。
   - `add_holding`：无成交明细直录；同 (accountId, stockId) 防重 → invalid_input。

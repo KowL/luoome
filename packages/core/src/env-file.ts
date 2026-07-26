@@ -1,8 +1,7 @@
 /**
  * 项目 .env 文件解析（纯函数，core 不触 fs）。
  *
- * 背景：LLM / 行情等 provider 配置原本只走环境变量（parseLlmProviderConfigFromEnv
- * 等）。为支持「配置写在项目 .env 文件」，各 surface（CLI/Web）启动时读取
+ * 为支持「配置写在项目 .env 文件」，各 surface（CLI/Web）启动时读取
  * .env 文件并调用 applyEnvEntries 注入 process.env（仅填未设置的 key，
  * 真实环境变量永远优先）。
  *

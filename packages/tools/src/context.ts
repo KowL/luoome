@@ -1,6 +1,7 @@
 import type {
-  LLMAdapterLike,
+  AgentRuntimeLike,
   LimitUpLadderManagerLike,
+  LLMAdapterLike,
   Logger,
   MarketDataAdapterLike,
   RepositoryRegistry,
@@ -13,6 +14,7 @@ export interface BuildContextInput {
     readonly market: MarketDataAdapterLike;
     readonly llm: LLMAdapterLike;
   };
+  readonly agent?: AgentRuntimeLike;
   readonly clock?: () => Date;
   readonly logger?: Logger;
   readonly user?: {
@@ -31,6 +33,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     user: input.user ?? { id: 'local-user', defaultAccountId: '' },
     clock: input.clock ?? (() => new Date()),
     logger: input.logger ?? console,
+    ...(input.agent !== undefined ? { agent: input.agent } : {}),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

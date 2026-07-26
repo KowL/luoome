@@ -51,12 +51,11 @@ class StubAdapter implements LLMAdapter {
 }
 
 describe('llm/manager', () => {
-  describe('provider=openai-compatible + realFactory 注入 stub', () => {
+  describe('adapter 注入', () => {
     it('成功一次 → 直接返回，callCount=1', async () => {
       const real = new StubAdapter('real-stub');
       const mgr = new LLMManager({
-        config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        realFactory: () => real,
+        adapter: real,
         logger: silentLogger,
       });
       const out = await mgr.generate<ParsedAdvice>({
@@ -73,8 +72,7 @@ describe('llm/manager', () => {
       const real = new StubAdapter('real-stub');
       real.failMode = 'throw';
       const mgr = new LLMManager({
-        config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        realFactory: () => real,
+        adapter: real,
         logger: silentLogger,
       });
       const out = await mgr.generate<ParsedAdvice>({
@@ -95,8 +93,7 @@ describe('llm/manager', () => {
       const real = new StubAdapter('real-stub');
       real.failMode = 'throw';
       const mgr = new LLMManager({
-        config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        realFactory: () => real,
+        adapter: real,
         logger: silentLogger,
       });
       const out = await mgr.generate<ParsedAdvice>({
@@ -112,8 +109,7 @@ describe('llm/manager', () => {
       const real = new StubAdapter('real-stub');
       real.failMode = 'throw';
       const mgr = new LLMManager({
-        config: { provider: 'openai-compatible', apiKey: 'sk', baseUrl: 'https://x', model: 'm' },
-        realFactory: () => real,
+        adapter: real,
         logger: silentLogger,
       });
       const out = await mgr.generate<ParsedAdvice>({
@@ -124,53 +120,6 @@ describe('llm/manager', () => {
       expect(out.decision).toBe('hold');
       expect(out.confidence).toBe(20);
       expect(out.reasoning.evidence.some((e) => e.includes('MA5 / MA20 缺失'))).toBe(true);
-    });
-  });
-
-  describe('buildProvider 接线', () => {
-    it('cfg.timeoutMs 透传到真实适配器（超时后走规则 fallback）', async () => {
-      const mgr = new LLMManager({
-        config: {
-          provider: 'openai-compatible',
-          apiKey: 'sk',
-          baseUrl: 'https://x',
-          model: 'm',
-          timeoutMs: 50,
-        },
-        // fetch 永不返回，只能被适配器的超时 abort 掉
-        fetchImpl: ((_url: unknown, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () =>
-              reject(new DOMException('The operation was aborted.', 'AbortError')),
-            );
-          })) as unknown as typeof fetch,
-        logger: silentLogger,
-      });
-      const started = Date.now();
-      const out = await mgr.generate<ParsedAdvice>({ system: 's', schema: TestSchema, data: {} });
-      // 50ms × 2（首次 + 重试）；若没透传会走 30s 默认超时
-      expect(Date.now() - started).toBeLessThan(5_000);
-      expect(out.decision).toBe('hold');
-    });
-  });
-
-  describe('realFactory 构造失败', () => {
-    it('直接抛错，不静默切换到假模型', () => {
-      expect(
-        () =>
-          new LLMManager({
-            config: {
-              provider: 'openai-compatible',
-              apiKey: 'sk',
-              baseUrl: 'https://x',
-              model: 'm',
-            },
-            realFactory: () => {
-              throw new Error('real adapter broken');
-            },
-            logger: silentLogger,
-          }),
-      ).toThrow(/real adapter broken/);
     });
   });
 });

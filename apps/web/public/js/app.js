@@ -3,9 +3,11 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
+import { initAISettings, renderAISettings } from './ai-settings.js';
 import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } from './api.js';
-import { initChat, renderChat } from './chat.js';
+import { initChat, refreshChat } from './chat.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
+import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { initMvpActions, openGroupModal } from './mvp-actions.js';
 import {
   analyzeAllHoldings,
@@ -25,7 +27,6 @@ import {
   runTacticScan,
   runWatchOnce,
 } from './pages.js';
-import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { $ } from './ui.js';
 
 /* ============ 状态行 ============ */
@@ -98,9 +99,11 @@ const showRoute = async (name) => {
       await renderLimitUpLadder(setStatus);
     } else if (safe === 'chat') {
       initChat();
-      renderChat();
+      await refreshChat();
     } else if (safe === 'settings') {
       renderSettings(setStatus);
+      initAISettings(setStatus);
+      await renderAISettings(setStatus);
       await renderSettingsAccount();
       await renderWorkflowRuns(setStatus);
     }
@@ -112,7 +115,10 @@ const showRoute = async (name) => {
 const currentHash = () => {
   const h = window.location.hash.replace(/^#/, '');
   if (h === 'watch') return 'groups';
-  return h.length > 0 ? h : 'dashboard';
+  if (h.length > 0) return h;
+  const path = window.location.pathname.replace(/^\/|\/$/g, '');
+  if (path === 'watch') return 'groups';
+  return ROUTES.includes(path) ? path : 'dashboard';
 };
 
 const onHashChange = () => {

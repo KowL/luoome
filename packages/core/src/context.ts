@@ -1,12 +1,12 @@
-import type { NotificationPayload } from './entity/notification.js';
-import type { DailyBar, DateRange, Quote } from './entity/quote.js';
-import type { Exchange } from './entity/stock.js';
-import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type {
   LimitUpLadder,
   LimitUpLadderDiff,
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
+import type { NotificationPayload } from './entity/notification.js';
+import type { DailyBar, DateRange, Quote } from './entity/quote.js';
+import type { Exchange } from './entity/stock.js';
+import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { RepositoryRegistry } from './repository/index.js';
 
 /**
@@ -49,6 +49,51 @@ export interface LLMAdapterLike {
   generate<T = unknown>(request: LLMGenerateRequest): Promise<T>;
 }
 
+/** Agent 可调用工具的 SDK 无关投影；具体 ToolLoopAgent 类型只存在于 adapters。 */
+export interface AgentCallableTool {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: unknown;
+  execute(input: unknown): Promise<{
+    readonly ok: boolean;
+    readonly output: unknown;
+  }>;
+}
+
+export interface AgentToolTrace {
+  readonly toolName: string;
+  readonly input: unknown;
+  readonly output: unknown;
+  readonly ok: boolean;
+  readonly durationMs: number;
+}
+
+export interface AgentTokenUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+}
+
+export interface AgentRuntimeRequest {
+  readonly instructions: string;
+  readonly prompt: string;
+  readonly outputSchema: unknown;
+  readonly tools: readonly AgentCallableTool[];
+}
+
+export interface AgentRuntimeResult {
+  readonly output: unknown;
+  readonly trace: readonly AgentToolTrace[];
+  readonly usedTools: readonly string[];
+  readonly totalUsage: AgentTokenUsage;
+}
+
+/** 多步 agent runtime 的 core 侧投影；禁止出现 AI SDK 类型。 */
+export interface AgentRuntimeLike {
+  readonly name: string;
+  run(request: AgentRuntimeRequest): Promise<AgentRuntimeResult>;
+}
+
 export interface Logger {
   debug(message: string, meta?: Record<string, unknown>): void;
   info(message: string, meta?: Record<string, unknown>): void;
@@ -79,6 +124,8 @@ export interface ToolContext {
     readonly market: MarketDataAdapterLike;
     readonly llm: LLMAdapterLike;
   };
+  /** Phase 2：可选多步 agent runtime；测试或未配置 surface 可不注入。 */
+  readonly agent?: AgentRuntimeLike;
   /** v0.3 起；send_notification tool 用。装配时由 CLI/MCP 注入。 */
   readonly notification?: NotificationManagerLike;
   /**

@@ -6,16 +6,17 @@ import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
+  DrizzleChatRepository,
   DrizzleDailyBarRepository,
   DrizzleGroupMemberRepository,
   DrizzleHoldingRepository,
   DrizzleNotificationRepository,
   DrizzleQuoteRepository,
   DrizzleResearchNoteRepository,
+  DrizzleStockEventRepository,
   DrizzleStockGroupRepository,
   DrizzleStockPoolRepository,
   DrizzleStockRepository,
-  DrizzleStockEventRepository,
   DrizzleTacticRepository,
   DrizzleTradeRepository,
   DrizzleWatchRuleStateRepository,
@@ -36,6 +37,32 @@ export type DrizzleDb = BunSQLiteDatabase<Schema>;
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS chat_sessions_account_updated_idx
+    ON chat_sessions (account_id, updated_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      parts TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS chat_messages_session_created_idx
+    ON chat_messages (session_id, created_at)
+  `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY,
@@ -286,9 +313,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       PRIMARY KEY (pool_id, stock_id, rule_id)
     )
   `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS watch_rule_states_pool_idx ON watch_rule_states (pool_id)`,
-  );
+  db.run(sql`CREATE INDEX IF NOT EXISTS watch_rule_states_pool_idx ON watch_rule_states (pool_id)`);
   // v0.6 起：每轮 watch 心跳。v0.7 增 suppressed_by_daily_limit / notify_failed（§3.6）。
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_runs (
@@ -421,9 +446,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS workflow_runs_name_started_idx ON workflow_runs (workflow_name, started_at)`,
   );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS workflow_runs_started_idx ON workflow_runs (started_at)`,
-  );
+  db.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_started_idx ON workflow_runs (started_at)`);
   // 阶段 B 存量数据迁移：v0.6 pool.source JSON → 分组 + 回填 group_id（幂等，须在两张新表 DDL 之后）
   migrateLegacyPoolSourcesToGroups(db);
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
@@ -587,11 +610,17 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
 const migrateStrategyAlertPoolColumns = (db: DrizzleDb): void => {
   const cols = db.all<{ name: string }>(sql`PRAGMA table_info(stock_pools)`);
   const have = new Set(cols.map((c) => c.name));
-  if (!have.has('logic')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN logic TEXT NOT NULL DEFAULT 'ANY'`);
-  if (!have.has('trigger_mode')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'on-enter'`);
+  if (!have.has('logic'))
+    db.run(sql`ALTER TABLE stock_pools ADD COLUMN logic TEXT NOT NULL DEFAULT 'ANY'`);
+  if (!have.has('trigger_mode'))
+    db.run(sql`ALTER TABLE stock_pools ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'on-enter'`);
   if (!have.has('priority')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN priority TEXT`);
-  if (!have.has('daily_notification_limit')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN daily_notification_limit INTEGER NOT NULL DEFAULT 20`);
-  if (!have.has('notify_on_recovery')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN notify_on_recovery INTEGER NOT NULL DEFAULT 0`);
+  if (!have.has('daily_notification_limit'))
+    db.run(
+      sql`ALTER TABLE stock_pools ADD COLUMN daily_notification_limit INTEGER NOT NULL DEFAULT 20`,
+    );
+  if (!have.has('notify_on_recovery'))
+    db.run(sql`ALTER TABLE stock_pools ADD COLUMN notify_on_recovery INTEGER NOT NULL DEFAULT 0`);
   // 回填 rules[].id：缺 id 的逐条生成并写回（参照 v0.6 分组迁移的幂等做法）。重复启动无副作用。
   const rows = db.all<{ id: string; rules: string }>(sql`SELECT id, rules FROM stock_pools`);
   const nowMs = Date.now();
@@ -612,7 +641,9 @@ const migrateStrategyAlertPoolColumns = (db: DrizzleDb): void => {
       return { ...r, id: `r_${row.id}-${crypto.randomUUID().slice(0, 8)}` };
     });
     if (changed) {
-      db.run(sql`UPDATE stock_pools SET rules = ${JSON.stringify(updated)}, updated_at = ${nowMs} WHERE id = ${row.id}`);
+      db.run(
+        sql`UPDATE stock_pools SET rules = ${JSON.stringify(updated)}, updated_at = ${nowMs} WHERE id = ${row.id}`,
+      );
     }
   }
 };
@@ -626,14 +657,25 @@ const migrateStrategyAlertPoolColumns = (db: DrizzleDb): void => {
 const migrateStrategyAlertTriggerColumns = (db: DrizzleDb): void => {
   const cols = db.all<{ name: string }>(sql`PRAGMA table_info(watch_triggers)`);
   const have = new Set(cols.map((c) => c.name));
-  if (!have.has('rule_id')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN rule_id TEXT NOT NULL DEFAULT ''`);
-  if (!have.has('trigger_type')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'triggered'`);
-  if (!have.has('priority')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`);
-  if (!have.has('delivery_status')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'not-requested'`);
-  if (!have.has('notification_id')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN notification_id TEXT`);
-  if (!have.has('eval_snapshot')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN eval_snapshot TEXT NOT NULL DEFAULT '{}'`);
+  if (!have.has('rule_id'))
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN rule_id TEXT NOT NULL DEFAULT ''`);
+  if (!have.has('trigger_type'))
+    db.run(
+      sql`ALTER TABLE watch_triggers ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'triggered'`,
+    );
+  if (!have.has('priority'))
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`);
+  if (!have.has('delivery_status'))
+    db.run(
+      sql`ALTER TABLE watch_triggers ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'not-requested'`,
+    );
+  if (!have.has('notification_id'))
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN notification_id TEXT`);
+  if (!have.has('eval_snapshot'))
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN eval_snapshot TEXT NOT NULL DEFAULT '{}'`);
   if (!have.has('feedback')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN feedback TEXT`);
-  if (!have.has('feedback_at')) db.run(sql`ALTER TABLE watch_triggers ADD COLUMN feedback_at INTEGER`);
+  if (!have.has('feedback_at'))
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN feedback_at INTEGER`);
 
   // 回填：delivery_status 由 notified 推；priority / trigger_type 默认 ok；eval_snapshot 由现有字段合成。
   db.run(sql`
@@ -671,7 +713,9 @@ const migrateStrategyAlertTriggerColumns = (db: DrizzleDb): void => {
       (r) => r.kind === t.rule_kind && typeof r.id === 'string',
     );
     if (matches.length === 1) {
-      db.run(sql`UPDATE watch_triggers SET rule_id = ${matches[0]!.id as string} WHERE id = ${t.id}`);
+      db.run(
+        sql`UPDATE watch_triggers SET rule_id = ${matches[0]!.id as string} WHERE id = ${t.id}`,
+      );
     } // 多条规则同类 → 留空接受冷却重置一轮（PRD §9.2）
   }
 };
@@ -683,9 +727,7 @@ const migrateStrategyAlertTriggerColumns = (db: DrizzleDb): void => {
  *   SQLite 不支持改列约束 → 表重建（仅当检测到旧约束时执行；索引由外层 CREATE INDEX 重建）
  */
 const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
-  const cols = db.all<{ name: string; notnull: number }>(
-    sql`PRAGMA table_info(watch_triggers)`,
-  );
+  const cols = db.all<{ name: string; notnull: number }>(sql`PRAGMA table_info(watch_triggers)`);
   if (cols.length === 0) return;
   if (!cols.some((c) => c.name === 'event_id')) {
     db.run(sql`ALTER TABLE watch_triggers ADD COLUMN event_id TEXT`);
@@ -740,8 +782,12 @@ const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
 const migrateStrategyAlertRunColumns = (db: DrizzleDb): void => {
   const cols = db.all<{ name: string }>(sql`PRAGMA table_info(watch_runs)`);
   const have = new Set(cols.map((c) => c.name));
-  if (!have.has('suppressed_by_daily_limit')) db.run(sql`ALTER TABLE watch_runs ADD COLUMN suppressed_by_daily_limit INTEGER NOT NULL DEFAULT 0`);
-  if (!have.has('notify_failed')) db.run(sql`ALTER TABLE watch_runs ADD COLUMN notify_failed INTEGER NOT NULL DEFAULT 0`);
+  if (!have.has('suppressed_by_daily_limit'))
+    db.run(
+      sql`ALTER TABLE watch_runs ADD COLUMN suppressed_by_daily_limit INTEGER NOT NULL DEFAULT 0`,
+    );
+  if (!have.has('notify_failed'))
+    db.run(sql`ALTER TABLE watch_runs ADD COLUMN notify_failed INTEGER NOT NULL DEFAULT 0`);
 };
 
 /**
@@ -814,6 +860,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     researchNote: new DrizzleResearchNoteRepository(db),
     stockEvent: new DrizzleStockEventRepository(db),
     workflowRun: new DrizzleWorkflowRunRepository(db),
+    chat: new DrizzleChatRepository(db),
   };
   return { repos, db, close: () => sqlite.close() };
 };

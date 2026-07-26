@@ -5,11 +5,11 @@ export * from './context.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/advice.js';
+export * from './entity/chat-session.js';
 export * from './entity/holding.js';
 export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';
 export * from './entity/limit-up-ladder.js';
-export * from './entity/llm-provider.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';
 export * from './entity/notification.js';

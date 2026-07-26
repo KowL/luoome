@@ -12,7 +12,7 @@ export type LLMGenerateResult<T> = T & { readonly raw: string };
  *
  * 实现方约定：
  * - request.schema 为 zod schema 时，必须先 parse 再返回；
- * - parse 失败必须返回稳定 fallback，不得抛异常。
+ * - parse 失败必须抛错，由 LLMManager 执行 retry hint + 稳定 fallback。
  */
 export interface LLMAdapter extends LLMAdapterLike {
   readonly name: string;

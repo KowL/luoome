@@ -2,6 +2,8 @@ import {
   type Account,
   type Advice,
   type AdviceOutcome,
+  type ChatMessage,
+  type ChatSession,
   type DailyBar,
   type GroupMemberSnapshot,
   type Holding,
@@ -53,6 +55,28 @@ export const makeAccount = (id: string, overrides: Partial<Account> = {}): Accou
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(1_000_000),
+  createdAt: T0,
+  ...overrides,
+});
+
+const makeChatSession = (id: string, overrides: Partial<ChatSession> = {}): ChatSession => ({
+  id,
+  accountId: 'account-1',
+  title: `会话-${id}`,
+  createdAt: T0,
+  updatedAt: T0,
+  ...overrides,
+});
+
+const makeChatMessage = (
+  id: string,
+  sessionId: string,
+  overrides: Partial<ChatMessage> = {},
+): ChatMessage => ({
+  id,
+  sessionId,
+  role: 'user',
+  parts: [{ type: 'text', text: `消息-${id}` }],
   createdAt: T0,
   ...overrides,
 });
@@ -294,10 +318,7 @@ export const makeStockEvent = (id: string, overrides: Partial<StockEvent> = {}):
   ...overrides,
 });
 
-export const makeWorkflowRun = (
-  id: string,
-  overrides: Partial<WorkflowRun> = {},
-): WorkflowRun => ({
+export const makeWorkflowRun = (id: string, overrides: Partial<WorkflowRun> = {}): WorkflowRun => ({
   id,
   workflowName: 'sync-stock-events',
   mode: 'scheduled',
@@ -1402,10 +1423,41 @@ export const registerRepositoryContractTests = (
 
       it('failed 缺 error 时拒绝', async () => {
         await expect(
-          repos.workflowRun.save(
-            makeWorkflowRun('w-bad', { status: 'failed', error: undefined }),
-          ),
+          repos.workflowRun.save(makeWorkflowRun('w-bad', { status: 'failed', error: undefined })),
         ).rejects.toThrow();
+      });
+    });
+
+    describe('ChatRepository', () => {
+      it('会话按账户隔离并按 updatedAt 倒序', async () => {
+        await repos.chat.saveSession(makeChatSession('c1', { updatedAt: T1 }));
+        await repos.chat.saveSession(makeChatSession('c2', { updatedAt: T2 }));
+        await repos.chat.saveSession(
+          makeChatSession('other', { accountId: 'account-2', updatedAt: T3 }),
+        );
+        expect((await repos.chat.listSessions('account-1')).map((item) => item.id)).toEqual([
+          'c2',
+          'c1',
+        ]);
+      });
+
+      it('消息按时间升序，删除会话级联删除消息', async () => {
+        await repos.chat.saveSession(makeChatSession('c1'));
+        await repos.chat.saveMessage(makeChatMessage('m2', 'c1', { createdAt: T2 }));
+        await repos.chat.saveMessage(
+          makeChatMessage('m1', 'c1', {
+            role: 'assistant',
+            parts: [
+              { type: 'text', text: '回答' },
+              { type: 'tool-fetch_quote', toolCallId: 'call-1', state: 'output-available' },
+            ],
+            createdAt: T1,
+          }),
+        );
+        expect((await repos.chat.listMessages('c1')).map((item) => item.id)).toEqual(['m1', 'm2']);
+        await repos.chat.removeSession('c1');
+        expect(await repos.chat.findSessionById('c1')).toBeNull();
+        expect(await repos.chat.listMessages('c1')).toEqual([]);
       });
     });
   });

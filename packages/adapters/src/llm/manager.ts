@@ -3,22 +3,18 @@ import {
   AdviceDecisionSchema,
   AdviceHorizonSchema,
   AdviceReasoningSchema,
-  type LLMProviderConfig,
-  parseLlmProviderConfigFromEnv,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
+import { APICallError, NoObjectGeneratedError } from 'ai';
 import { z } from 'zod';
-import { AnthropicAdapter, AnthropicAdapterError } from './anthropic.js';
-import { OpenAICompatibleAdapter, OpenAICompatibleAdapterError } from './openai-compatible.js';
 import type { LLMAdapter, LLMGenerateResult } from './types.js';
 
 /**
  * LLM 适配器编排（v0.2 起）。
  *
  * 职责：
- * 1. 从 env 解析真实 LLMProviderConfig。
- * 2. 选择 OpenAICompatibleAdapter / AnthropicAdapter。
- * 3. 实现 fallback 协议（plan-v0.2-v0.3 §2.3）：
+ * 1. 接收模型目录已经解析好的 LLMAdapter。
+ * 2. 实现 fallback 协议（plan-v0.2-v0.3 §2.3）：
  *    - 第一次 schema parse 失败 → 自动重试一次，prompt 加「上一轮未符合 schema」提示；
  *    - 仍失败 → 走 fallbackAdvice(data)，在 reasoning.evidence 标「LLM 推理失败，使用规则 fallback」；
  *    - 永不抛异常（永远返回 LLMGenerateResult）。
@@ -29,11 +25,8 @@ import type { LLMAdapter, LLMGenerateResult } from './types.js';
 const FALLBACK_NOTE = 'LLM 推理失败，使用规则 fallback（v0.2 LLMManager）';
 
 export interface LLMManagerOptions {
-  /** 默认 parseLlmProviderConfigFromEnv(process.env)；测试可注入。 */
-  readonly config?: LLMProviderConfig;
-  readonly realFactory?: (cfg: LLMProviderConfig, fetchImpl?: typeof fetch) => LLMAdapter;
+  readonly adapter: LLMAdapter;
   readonly logger: Logger;
-  readonly fetchImpl?: typeof fetch;
 }
 
 /** Fallback 输出 schema（与 AdviceLLMSchema 对齐）。 */
@@ -109,10 +102,7 @@ export class LLMManager implements LLMAdapter {
 
   constructor(options: LLMManagerOptions) {
     this.logger = options.logger;
-    const cfg = options.config ?? parseLlmProviderConfigFromEnv(process.env);
-    this.inner = options.realFactory
-      ? options.realFactory(cfg, options.fetchImpl)
-      : this.buildProvider(cfg, options.fetchImpl);
+    this.inner = options.adapter;
     this.name = this.inner.name;
   }
 
@@ -161,25 +151,13 @@ export class LLMManager implements LLMAdapter {
     const r = result as unknown as Partial<AdviceLLMOutput>;
     return `${r.decision ?? '?'}@${r.confidence ?? '?'}`;
   }
-
-  private buildProvider(cfg: LLMProviderConfig, fetchImpl?: typeof fetch): LLMAdapter {
-    const options = {
-      ...(fetchImpl !== undefined ? { fetchImpl } : {}),
-      ...(cfg.timeoutMs !== undefined ? { timeoutMs: cfg.timeoutMs } : {}),
-    };
-    if (cfg.provider === 'openai-compatible') {
-      return new OpenAICompatibleAdapter(cfg, options);
-    }
-    if (cfg.provider === 'anthropic') {
-      return new AnthropicAdapter(cfg, options);
-    }
-    throw new Error(`unknown provider: ${cfg.provider}`);
-  }
 }
 
 const describeError = (e: unknown): string => {
-  if (e instanceof OpenAICompatibleAdapterError) return `OpenAI: ${e.message}`;
-  if (e instanceof AnthropicAdapterError) return `Anthropic: ${e.message}`;
+  if (NoObjectGeneratedError.isInstance(e)) return `输出未通过 schema 校验: ${e.message}`;
+  if (APICallError.isInstance(e)) {
+    return `API${e.statusCode === undefined ? '' : ` HTTP ${e.statusCode}`}: ${e.message}`;
+  }
   if (e instanceof Error) return `${e.name}: ${e.message}`;
   return String(e);
 };
