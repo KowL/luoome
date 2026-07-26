@@ -83,7 +83,11 @@ describe('limit_up_ladder tool', () => {
     );
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.error.kind).toBe('internal');
+    expect(r.error.kind).toBe('adapter_error');
+    if (r.error.kind === 'adapter_error') {
+      expect(r.error.adapter).toBe('limit-up-ladder');
+      expect(r.error.cause).toMatch(/down/);
+    }
   });
 });
 
@@ -136,5 +140,27 @@ describe('limit_up_ladder_compare tool', () => {
     if (!r.ok) return;
     expect(r.data.curr.date).toBe('2026-07-25');
     expect(r.data.prev.date).toBe('2026-07-24');
+  });
+
+  it('compare manager 失败 → 返回 adapter_error', async () => {
+    const manager = mkManager(
+      vi.fn(),
+      vi.fn(async () => ({
+        ok: false as const,
+        error: {
+          kind: 'adapter_error' as const,
+          adapter: 'limit-up-ladder' as const,
+          message: 'down',
+          recoverable: false,
+        },
+      })),
+    );
+    const r = await limitUpLadderCompareTool.execute(
+      { date: '2026-07-25', prevDate: '2026-07-24' },
+      makeCtx(manager),
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.kind).toBe('adapter_error');
   });
 });

@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   assembleLadder,
   assertLimitUpLadderInvariants,
+  codeToLevelMap,
   deriveBoard,
   diffTopLevel,
   filterAndDedupeEntries,
   isSTName,
+  lookupLevels,
   type LimitUpLadderEntry,
   LimitUpLadderEntrySchema,
   type LimitUpLadderQuery,
@@ -286,5 +288,52 @@ describe('diffTopLevel', () => {
     expect(d.topLevelAdded).toEqual([]);
     expect(d.topLevelRemoved).toEqual([]);
     expect(d.topLevelRetained).toEqual([]);
+  });
+});
+
+describe('codeToLevelMap / lookupLevels（下游消费者便捷函数 Phase 2）', () => {
+  it('多 level 装配后能正确产出 code → level（取深）', () => {
+    const entries: LimitUpLadderEntry[] = [
+      makeEntry({ code: '600519', ladderLevel: 1, limitUpDate: '2026-07-25' }),
+      makeEntry({ code: '000001', ladderLevel: 3, limitUpDate: '2026-07-25' }),
+      makeEntry({ code: '300750', ladderLevel: 2, limitUpDate: '2026-07-25' }),
+    ];
+    const ladder = assembleLadder('2026-07-25', 'adshare', entries, [], new Date());
+    const map = codeToLevelMap(ladder);
+    expect(map.get('600519')).toBe(1);
+    expect(map.get('000001')).toBe(3);
+    expect(map.get('300750')).toBe(2);
+    expect(map.size).toBe(3);
+  });
+
+  it('空 ladder → 空 Map（非 null，调用方用 size 判定）', () => {
+    const ladder = assembleLadder('2026-07-25', 'adshare', [], ['non-trading-day'], new Date());
+    expect(codeToLevelMap(ladder).size).toBe(0);
+  });
+
+  it('同一 code 跨 level 出现 → level 较深者胜', () => {
+    const entries: LimitUpLadderEntry[] = [
+      makeEntry({ code: '600519', ladderLevel: 1, limitUpDate: '2026-07-25' }),
+      makeEntry({ code: '600519', ladderLevel: 4, limitUpDate: '2026-07-25' }),
+    ];
+    const ladder = assembleLadder('2026-07-25', 'adshare', entries, [], new Date());
+    expect(codeToLevelMap(ladder).get('600519')).toBe(4);
+  });
+
+  it('lookupLevels 用自定义 codes 列表查询 + present 哨兵', () => {
+    const entries: LimitUpLadderEntry[] = [
+      makeEntry({ code: '600519', ladderLevel: 2, limitUpDate: '2026-07-25' }),
+    ];
+    const ladder = assembleLadder('2026-07-25', 'adshare', entries, [], new Date());
+    const map = codeToLevelMap(ladder);
+    const rows = lookupLevels(['600519', '999999'], map);
+    const first = rows[0];
+    const second = rows[1];
+    expect(first?.code).toBe('600519');
+    expect(first?.level).toBe(2);
+    expect(first?.present).toBe(true);
+    expect(second?.code).toBe('999999');
+    expect(second?.level).toBe(0);
+    expect(second?.present).toBe(false);
   });
 });

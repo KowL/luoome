@@ -15,7 +15,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createMarketAdapterFromEnv, LLMManager } from '@luoome/adapters';
+import {
+  createAgentRuntimeFromEnv,
+  createLimitUpLadderManagerFromEnv,
+  createMarketAdapterFromEnv,
+  LLMManager,
+} from '@luoome/adapters';
 import { AdshareClient } from '@luoome/adshare-sdk';
 import type { SideEffect, Stock, ToolContext, ToolError, ToolResult } from '@luoome/core';
 import { stockCode as brandStockCode, parseLlmProviderConfigFromEnv } from '@luoome/core';
@@ -41,6 +46,7 @@ const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice',
  * 持仓表单「取现价」与分组详情行情需要；sync_quotes / send_notification 等仍 403。
  */
 const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
+  'agent_run',
   'fetch_quote',
   'batch_quote',
   'refresh_stock_group',
@@ -78,6 +84,9 @@ const statusOf = (error: ToolError): number => {
       return 404;
     case 'permission_denied':
       return 403;
+    case 'adapter_error':
+      // 上游 / 解析失败 → 502 Bad Gateway，前端用此判 upstream-unavailable 文案
+      return 502;
     default:
       return 500;
   }
@@ -148,8 +157,10 @@ export const buildWebContext = async (
       market: createMarketAdapterFromEnv(env, { clock: now, logger: console }),
       llm: new LLMManager({ logger: console, config: parseLlmProviderConfigFromEnv(env) }),
     },
+    agent: createAgentRuntimeFromEnv(env, { logger: console }),
     clock: now,
     user: { id: 'local-web-user', defaultAccountId },
+    limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
   });
 };
 
@@ -299,6 +310,104 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
+
+  const intQuery = (raw: string | undefined, fallback: number, min: number): number => {
+    if (raw === undefined || raw.trim() === '') return fallback;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < min) return fallback;
+    return n;
+  };
+
+  const enumQuery = <T extends string>(
+    raw: string | undefined,
+    fallback: T,
+    allowed: readonly T[],
+  ): T => {
+    if (raw === undefined) return fallback;
+    return (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
+  };
+
+  /**
+   * 连板天梯（Phase 2，docs/ddd/limit-up-ladder-detailed-design.md §11）。
+   *
+   * 参数：
+   *   date (必填) YYYY-MM-DD
+   *   days, includeStar, includeBse, includeST, includeUncategorized (可选)
+   *
+   * 缓存：Manager 自带 LRU + 分时段 TTL;web 层不再加二级。
+   * 上游不可达：tool 返回 internal；web 包成 HTTP 502。
+   */
+  app.get('/api/market/limit-up', async (c) => {
+    const date = c.req.query('date');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: 'date 必填且为 YYYY-MM-DD',
+          issues: [],
+        },
+      });
+    }
+    const input: Record<string, unknown> = {
+      date,
+      days: intQuery(c.req.query('days'), 15, 1),
+      source: enumQuery(c.req.query('source'), 'adshare', ['adshare', 'amazingdata']),
+      includeStar: c.req.query('includeStar') === 'true',
+      includeBse: c.req.query('includeBse') === 'true',
+      includeST: c.req.query('includeST') === 'true',
+      includeUncategorized: c.req.query('includeUncategorized') === 'true',
+    };
+    const r = await invokeTool('limit_up_ladder', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 连板天梯对比（Phase 2，docs/ddd/limit-up-ladder-detailed-design.md §8.2）。
+   * 用 limit_up_ladder_compare tool，复用同一 cache。
+   */
+  app.get('/api/market/limit-up/compare', async (c) => {
+    const date = c.req.query('date');
+    const prevDate = c.req.query('prevDate');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: 'date 必填且为 YYYY-MM-DD', issues: [] },
+      });
+    }
+    if (typeof prevDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(prevDate)) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: 'prevDate 必填且为 YYYY-MM-DD', issues: [] },
+      });
+    }
+    const input: Record<string, unknown> = {
+      date,
+      prevDate,
+      days: intQuery(c.req.query('days'), 15, 1),
+      source: enumQuery(c.req.query('source'), 'adshare', ['adshare', 'amazingdata']),
+      includeStar: c.req.query('includeStar') === 'true',
+      includeBse: c.req.query('includeBse') === 'true',
+      includeST: c.req.query('includeST') === 'true',
+      includeUncategorized: c.req.query('includeUncategorized') === 'true',
+    };
+    const r = await invokeTool('limit_up_ladder_compare', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // HTML route for SPA shell
+  app.get('/market/limit-up', serveFile('index.html', 'text/html; charset=utf-8'));
 
   app.get('/api/trades', (c) => {
     const input: Record<string, unknown> = {};

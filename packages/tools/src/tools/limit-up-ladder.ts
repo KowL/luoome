@@ -6,7 +6,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errInvalidInput } from '../define-tool.js';
+import { defineTool, errAdapterError, errInvalidInput } from '../define-tool.js';
 
 /**
  * 连板天梯工具（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md §7）。
@@ -36,9 +36,9 @@ export const limitUpLadderTool = defineTool({
     }
     const r = await ctx.limitUpLadder.fetchLadder(input);
     if (!r.ok || r.data === undefined) {
-      // 返回 invariant_violation 之外的内部错误模型在 define-tool 里走 internal
-      // 这里改用 standard 业务错误：把 adapter_error 透传给 ToolError 协议
-      throw new Error(`limit_up_ladder adapter_error: ${r.error?.message ?? 'unknown error'}`);
+      // 把 manager 的 adapter_error 映射到 ToolError 'adapter_error' 而不是 throw 变 internal
+      const cause = r.error?.message ?? 'unknown error';
+      return errAdapterError('limit-up-ladder', cause, r.error?.recoverable ?? true);
     }
     return r.data;
   },
@@ -62,9 +62,8 @@ export const limitUpLadderCompareTool = defineTool({
     const { date, prevDate, ...rest } = input;
     const r = await ctx.limitUpLadder.compareLadder(date, prevDate, rest);
     if (!r.ok || r.data === undefined) {
-      throw new Error(
-        `limit_up_ladder_compare adapter_error: ${r.error?.message ?? 'unknown error'}`,
-      );
+      const cause = r.error?.message ?? 'unknown error';
+      return errAdapterError('limit-up-ladder', cause, r.error?.recoverable ?? true);
     }
     return r.data;
   },

@@ -290,6 +290,49 @@ export const diffTopLevel = (curr: LimitUpLadder, prev: LimitUpLadder): LimitUpL
   };
 };
 
+// ---------- 下游消费者便捷函数 ----------
+
+/**
+ * 把天梯快照映射成 `code → ladderLevel` 查询表（Phase 2 替换 ruo 旧 `refreshTop10` 的 `code→level` 输入）。
+ *
+ * 用法：未来 StockGroup / WatchPlan / strategy-alert 规则把 `ladderLevel` 作为 ranking 信号时，
+ * 调一次本函数缓存 map，不再每次 `limit_up_ladder` 重新组装。
+ *
+ * 注意：若 ladder 为空（含 warnings=non-trading-day）→ 返回空 Map，由调用方决定 fallback 策略。
+ */
+export const codeToLevelMap = (ladder: LimitUpLadder): ReadonlyMap<string, number> => {
+  const map = new Map<string, number>();
+  for (const lv of ladder.levels) {
+    for (const s of lv.stocks) {
+      const cur = map.get(s.code);
+      if (cur === undefined || s.ladderLevel > cur) {
+        map.set(s.code, s.ladderLevel);
+      }
+    }
+  }
+  return map;
+};
+
+/**
+ * 反向工具：把 `code → ladderLevel` 查询表与持仓 / 自选股票列表对齐，
+ * 返回每只股票的连板层级 + 缺数据哨兵（用于 ranking / 评分输入）。
+ */
+export interface CodeLevelRow {
+  readonly code: string;
+  readonly level: number;
+  readonly present: boolean;
+}
+export const lookupLevels = (
+  codes: readonly string[],
+  levels: ReadonlyMap<string, number>,
+): readonly CodeLevelRow[] =>
+  codes.map((code) => {
+    const level = levels.get(code);
+    return level === undefined
+      ? { code, level: 0, present: false }
+      : { code, level, present: true };
+  });
+
 // ---------- 不变量 ----------
 
 /**

@@ -8,18 +8,18 @@
 
 ## 目标
 
-让用户在交易日的任一时刻通过 TUI / Web / CLI 看清 A 股今天的涨停梯队（最高多少板、龙头股是谁、每个层级有谁、它们的封板时间与涨停原因），同时让报告、TOP10 排序、LLM 复盘链、未来的策略预警规则都能从同一个稳定 tool 读取结构化数据。
+让用户在交易日的任一时刻通过 TUI / Web / CLI 看清 A 股今天的涨停梯队（最高多少板、龙头股是谁、每个层级有谁、它们的封板时间与涨停原因），同时让报告、StockGroup / WatchPlan、LLM 复盘链、未来的策略预警规则都能从同一个稳定 tool 读取结构化数据。
 
 ## 已确认决策
 
-- **不落库**：天梯快照走 cache adapter，不写 DB。理由：(1) ruo 旧实现已验证现拉现算 + 修正 + 展示闭环不需要 DB；(2) 盘中数据每日刷新，落库引入"快照失效 vs 用户期望时效"的二义性；(3) 报告/TOP10/LLM 复盘链只读需求都能用 cache 满足。落库留作未来事件审计需要时另立任务。
+- **不落库**：天梯快照走 cache adapter，不写 DB。理由：(1) ruo 旧实现已验证现拉现算 + 修正 + 展示闭环不需要 DB；(2) 盘中数据每日刷新，落库引入"快照失效 vs 用户期望时效"的二义性；(3) 报告/StockGroup/LLM 复盘链只读需求都能用 cache 满足。落库留作未来事件审计需要时另立任务。
 - **不引入新环境变量**：缺省 provider 顺序为 adshare → amazingdata，沿用现有 adshare-sdk 客户端的 `ADSHARE_URL`/`ADSHARE_API_KEY`/`ADSHARE_TIMEOUT_MS`/`ADSHARE_MAX_RETRIES`。amazingdata 暂无可用 SDK，Phase 1 仅保留 adapter 接口与 mock 实现，**不**预写 scraper/parser。
 - **修正规则下沉 core**：8.58% 涨幅回推 `price` 在 core 层完成；adshare-sdk 仅做协议层解析；这与 ruo 旧实现位置一致（`adshare.adapter.ts:374-385`），但解耦便于 Phase 2 切换数据源时不重复实现。
 - **保持单一权威日期**：tool 入参 `date` 是请求方关心的交易日；adapter 不做"今天 → 昨天"自动回退（避免报告日期与数据日期错位，PRD §2.2 第一行问题）。
 - **修正字段必须可追溯**：暴露修正后 `price`、原始 `rawClose`、`corrected` 三字段；不允许静默改写（PRD §5.6）。
-- **天梯不替其它模块承担职责**：TOP10 排序、报告 LLM 输入、策略预警触发都各自有 tool，天梯只暴露只读快照，**不**为这些模块改变输出顺序或参与写入路径（PRD §4.6）。
+- **天梯不替其它模块承担职责**：StockGroup / WatchPlan、报告 LLM 输入、策略预警触发都各自有 tool，天梯只暴露只读快照，**不**为这些模块改变输出顺序或参与写入路径（PRD §4.6）。
 - **缓存策略分时段**：盘中 TTL 60s（与现有 quote 缓存一致）；收盘后 key 内嵌 `date`，只要还在同一日 + 同进程就持续命中，跨日自动失效；非交易日 / 盘前 `date ≠ today` 的请求同样长期命中（历史回看场景）。这避免了"缓存 1 小时还是 8 小时"的人为硬切（PRD §14 D3）。
-- **Web 不在 Phase 1**：避免 PRD §14 D4 的"两套数据来源并行"风险，先 TUI/CLI 单数据源跑稳。
+- **Web 不在 Phase 1**：避免 PRD §14 D4 的"两套数据来源并行"风险，先 TUI/CLI 单数据源跑稳。**Phase 2 起**：TUI/CLI 跑稳后接入 Web `apps/web/public/index.html + js/limit-up-ladder.js`，由 web 调 `/api/market/limit-up` 走同一 manager。
 
 ## 现状（已核实）
 
@@ -341,15 +341,15 @@ interface AdapterRegistry {
 }
 ```
 
-### 9. workflows：报告 / TOP10 联动（Phase 2；本文 Phase 1 仅留接口与 TODO）
+### 9. workflows：报告 / StockGroup 联动（Phase 2）
 
-PRD §10 Phase 2 要求"报告 workflow 改造 / TOP10 切本快照"。本文档 Phase 1 仅在以下位置留注解 + Phase 2 待办：
+**当前架构重审**：PRD §10 提到的 `watchlist refreshTop10` 在 v0.6+ 后已被解构为 `StockPool` + `WatchPlan` + `StockGroup`（参见 [stock-group-design.md](./stock-group-design.md)）—— 单调「TOP10 排序」不再存在。所以本节分两部分：
 
-- `market-outlook` workflow：在 §"市场概况" step 之后追加 `limitUpLadder(tool)` 的可选调用（Lark 拿 summary），**Phase 1 不接入**。
-- `watchlist refreshTop10` 排序权重中天梯 `level` 输入：仍在 `ruo-merge` 增量改造里做；Phase 1 不动算法。
-- `daily-review` workflow LLM 输入段：替换为 `limitUpLadder.compare(date, prevDate)` 的字符串化输出；Phase 2 改造。
+- `daily-review` workflow LLM 输入段：替换为 `limit_up_ladder_compare(...)` 的结构化输出。**Phase 2 实现**（已落地，见 `packages/workflows/src/daily-review.ts` stepLadder）。
+- `market-outlook` workflow：在「市场概况」step 之后追加 `limit_up_ladder` 的可选调用，把快照作为 LLM 复盘段的事实来源。Phase 2-3 评估是否做。
+- StockGroup / WatchPlan 接入：tactic / formula / llm resolver 暂未消费 ladder level；本任务 Phase 3 候选（与 [strategy-alert-detailed-design.md §"涨停规则"](./strategy-alert-detailed-design.md) 联动）。
 
-> **重要**：Phase 1 的"两套数据来源并行"窗口（PRD §14 D4）需要明确告知用户：在 Phase 2 切换报告 / TOP10 之前，**报告与 TOP10 的天梯数据仍走其原有路径**，不读 `limit_up_ladder` tool。
+> **ruo 旧实现警告**：ruo 旧 `adshare.adapter.ts` 直接 fetch adshare 后做 TOP10 排序，并在 `watchlist.refreshTop10` 中混用「页面排序 / 决策排序」同一份数据 — 是 PRD §2.2 错误隔离的反模式。luoome 把这两类用途（页面展示 vs 算法输入）解耦到不同 tool，且 TOP10 排序本身被分到 watch plans / stock groups 的语义 — **不应再有任何模块绕过 `ctx.tools.limit_up_ladder` 直接读 adshare ladder 数据**。
 
 ### 10. TUI 接入（Phase 1，README §7.2）
 
@@ -384,7 +384,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
 - **个股详情（v0.8 已有 `/stocks/:id`）**：在"事件"区追加"近 30 个交易日涨停日 + 当时 level + 原因"——实现走天梯 manager **30 天窗口**一次性拉齐，再做日期过滤。Phase 3 实现（PRD §10）。
 - **分组详情（动态分组如"涨停"）**：分组卡片顶部展示"今日在天梯中的最高 level"；同样 Phase 3。
 - **报告页**：本 PDF 报告 workflow 已在 daily-review 内；Phase 2 改造其 LLM 输入段（§9）。
-- **TOP10**：`watchlist refreshTop10` 用 `code → level` mapping，权重 `ladderLevel*20 + score*0.5` 维持现状，从 `limit_up_ladder` tool 而非 ruo 旧 adshare adapter 取数。Phase 2 改造。
+- **TOP10（旧 ruo）→ StockGroup / WatchPlan 候选**：ruo 旧 `watchlist refreshTop10` 已被 luoome v0.6+ 改写为 `StockPool` + `WatchPlan` + `StockGroup` 三层抽象（参见 [stock-group-design.md §1 / §5](./stock-group-design.md)）。天梯 `code → level` mapping 可作 formula / tactic resolver 的输入信号；Phase 3 候选，本文档不再单独跟踪「TOP10 切本快照」改造。
 
 ### 14. 调试与观测
 
@@ -436,10 +436,16 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
 9. **全量验证**
    - `bun run test` —— 包含新 vitest 文件
    - `bun run test:db` —— 不涉及新表，跳过也行；CI 跑一遍确认
-   - `bun run test:web` —— Phase 1 无 Web 改动
+   - `bun run test:web` —— Phase 1 无 Web 改动；Phase 2 起 加 `apps/web/src/server.test.ts` 的 limit-up 路由用例
    - `bun run typecheck`
    - `bun run lint`
    - smoke：`luoome market limit-up --date <某个非交易日> --json` 显式空 ladder；`luoome market limit-up --date <真实交易日> --source adshare` 拉真数据（如 ADSHARE_URL 可达）
+
+> **Phase 2 实施（已在 2026-07 完成）**：
+> 1. **web 接入** —— `apps/web/src/server.ts` 注入 manager + `GET /api/market/limit-up` 与 `/compare` 端点；`apps/web/public/js/limit-up-ladder.js` 渲染表格 + corrected `*` 角标 + vs 昨日 diff。
+> 2. **daily-review workflow** —— `packages/workflows/src/daily-review.ts` 新 step `stepLadder` 拉天梯 + diff，输出 `DailyReviewOutput.ladder: <schema> | null`。
+> 3. **TOP10 / StockGroup 接入** —— Phase 2 调研发现 ruo 旧 `watchlist refreshTop10` 在 luoome v0.6+ 已被解构为 `StockGroup` + `WatchPlan` + `StockPool` 三层抽象（无对应单一排序函数）。ladder `code → level` 可作 formula / tactic resolver 输入信号，列入 Phase 3 与策略预警联动一并实现；本文档**不再跟踪 P2-E 单独工单**。
+> 4. **factory 软失败** —— Phase 2 修订：`ADSHARE_URL` 缺失不再让 server bootstrap 抛错；返回软失败 manager，调任意 tool 都拿到 `adapter_error('upstream-unavailable')`，web 收到 502。CI 测试（`apps/web/server.test.ts` `Web runtime bootstrap`）从依赖硬抛转为依赖软失败。
 
 ## 测试矩阵
 
@@ -457,7 +463,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
 ## 明确不做（Phase 1 冻结）
 
 - 不接入 Web 页面（避免两套数据来源并行）。
-- 不联动 `daily-review` / `market-outlook` / `watchlist refreshTop10`。
+- 不联动 `daily-review` / `market-outlook` / `StockGroup` / `WatchPlan`。
 - 不实现 amazingdata 真实 adapter（保留接口与 mock，throw 占位）。
 - 不增加 `LUOOME_LIMIT_UP_LADDER_PROVIDER` 环境变量；配置面与 adshare-sdk 完全共享。
 - 不落库 `LimitUpLadder` / `LimitUpLadderEntry`。

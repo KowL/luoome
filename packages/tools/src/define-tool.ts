@@ -17,6 +17,16 @@ export const errInvalidInput = (message: string): ToolResult<never> => ({
   error: { kind: 'invalid_input', message, issues: [] },
 });
 
+/** handler 主动返回 adapter_error 的便捷构造器（上游 / 解析失败，区别于 internal）。 */
+export const errAdapterError = (
+  adapter: string,
+  cause: string,
+  recoverable = false,
+): ToolResult<never> => ({
+  ok: false,
+  error: { kind: 'adapter_error', adapter, cause, recoverable },
+});
+
 /** defineTool 的输入定义（ARCHITECTURE §4.4：一次定义，多处生效）。 */
 export interface ToolDefinition<I, O> {
   readonly name: string;

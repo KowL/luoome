@@ -255,6 +255,27 @@ describe('web tool 闸口：write 需本地 token', () => {
 });
 
 describe('web tool 闸口：external 白名单与拒绝面', () => {
+  it('agent_run 进入 external 白名单，但仍要求 token 与 runtime', async () => {
+    const withoutToken = await app.fetch(
+      new Request('http://test/api/tools/agent_run/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { message: '检查持仓' } }),
+      }),
+    );
+    expect(withoutToken.status).toBe(403);
+
+    const withoutRuntime = await callTool('agent_run', { message: '检查持仓' });
+    expect(withoutRuntime.status).toBe(403);
+    const body = (await json(withoutRuntime)) as {
+      error?: { kind: string; required?: string };
+    };
+    expect(body.error).toEqual({
+      kind: 'permission_denied',
+      required: 'agent runtime 未配置',
+    });
+  });
+
   it('fetch_quote（白名单）→ 200', async () => {
     const r = await callTool('fetch_quote', { stockId: '002594.SZ' });
     expect(r.status).toBe(200);
@@ -822,5 +843,180 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
       expect(latestRun).toHaveProperty('notifyFailed');
       expect(latestRun).toHaveProperty('suppressedByDailyLimit');
     }
+  });
+});
+
+/**
+ * 连板天梯 Web API（Phase 2，docs/ddd/limit-up-ladder-detailed-design.md §11）。
+ * 用 stub manager 隔离 adshare 实链，避免本地 SQLite / 网络依赖。
+ */
+import type {
+  LimitUpLadder,
+  LimitUpLadderCompareResultLike,
+  LimitUpLadderManagerLike,
+  LimitUpLadderResultLike,
+} from '@luoome/core';
+
+const stubLadderManager = (opts: {
+  readonly ladder?: LimitUpLadder;
+  readonly compare?: LimitUpLadderCompareResultLike;
+  readonly fail?: boolean;
+}): LimitUpLadderManagerLike => ({
+  name: 'limit-up-ladder',
+  fetchLadder: async (): Promise<LimitUpLadderResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'limit-up-ladder',
+          message: 'adshare forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    const ladder = opts.ladder ?? {
+      date: '2026-07-25',
+      total: 1,
+      maxLevel: 1,
+      source: 'adshare' as const,
+      levels: [
+        {
+          level: 1,
+          name: '首板',
+          count: 1,
+          stocks: [
+            {
+              code: '600519',
+              name: '贵州茅台',
+              industry: '白酒',
+              ladderLevel: 1,
+              uncategorized: false,
+              firstTime: '10:00:00',
+              finalTime: '10:00:00',
+              reason: '涨价',
+              price: 1850,
+              rawClose: 1850,
+              corrected: false,
+              changePct: 0.1,
+              limitUpDate: '2026-07-25',
+              board: 'main_board' as const,
+            },
+          ],
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-07-25T12:00:00Z'),
+    };
+    return { ok: true, data: ladder };
+  },
+  compareLadder: async (): Promise<LimitUpLadderCompareResultLike> => {
+    if (opts.compare !== undefined) return opts.compare;
+    return {
+      ok: false,
+      error: {
+        kind: 'adapter_error',
+        adapter: 'limit-up-ladder',
+        message: 'no stub',
+        recoverable: false,
+      },
+    };
+  },
+});
+
+describe('Web 连板天梯 API', () => {
+  it('缺少 date 必填参数 → invalid_input', async () => {
+    const testApp = createWebApp(await buildTestContext({ limitUpLadder: stubLadderManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/market/limit-up'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('date 非法格式 → invalid_input', async () => {
+    const testApp = createWebApp(await buildTestContext({ limitUpLadder: stubLadderManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/market/limit-up?date=2026/07/25'));
+    expect(r.status).toBe(400);
+  });
+
+  it('正常请求 → 200 + 与 stub 一致 ladder', async () => {
+    const testApp = createWebApp(await buildTestContext({ limitUpLadder: stubLadderManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/market/limit-up?date=2026-07-25'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { date: string; total: number; source: string };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.date).toBe('2026-07-25');
+    expect(body.data?.source).toBe('adshare');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ limitUpLadder: stubLadderManager({ fail: true }) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/market/limit-up?date=2026-07-25'));
+    expect(r.status).toBe(502);
+  });
+
+  it('HTML 路由 /market/limit-up 返回 index.html', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(new Request('http://test/market/limit-up'));
+    expect(r.status).toBe(200);
+    const ct = r.headers.get('content-type') ?? '';
+    expect(ct).toContain('text/html');
+  });
+
+  it('compare 端点:date 缺失 → 400', async () => {
+    const testApp = createWebApp(await buildTestContext({ limitUpLadder: stubLadderManager({}) }));
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/limit-up/compare?prevDate=2026-07-24'),
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it('compare 端点:正常 → 200 + diff 字段', async () => {
+    const stubCompare: LimitUpLadderCompareResultLike = {
+      ok: true,
+      data: {
+        curr: {
+          date: '2026-07-25',
+          total: 2,
+          maxLevel: 1,
+          source: 'adshare',
+          levels: [],
+          warnings: [],
+          asOf: new Date(),
+        },
+        prev: {
+          date: '2026-07-24',
+          total: 1,
+          maxLevel: 1,
+          source: 'adshare',
+          levels: [],
+          warnings: [],
+          asOf: new Date(),
+        },
+        diff: {
+          totalDelta: 1,
+          maxLevelDelta: 0,
+          topLevelAdded: ['600519'],
+          topLevelRemoved: [],
+          topLevelRetained: ['000001'],
+        },
+      },
+    };
+    const testApp = createWebApp(
+      await buildTestContext({ limitUpLadder: stubLadderManager({ compare: stubCompare }) }),
+    );
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/limit-up/compare?date=2026-07-25&prevDate=2026-07-24'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean; data?: { diff: { totalDelta: number } } };
+    expect(body.ok).toBe(true);
+    expect(body.data?.diff.totalDelta).toBe(1);
   });
 });

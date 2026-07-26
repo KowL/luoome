@@ -25,6 +25,7 @@ import {
   runTacticScan,
   runWatchOnce,
 } from './pages.js';
+import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { $ } from './ui.js';
 
 /* ============ 状态行 ============ */
@@ -62,6 +63,7 @@ const ROUTES = [
   'tactics',
   'advice',
   'review',
+  'limit-up',
   'chat',
   'settings',
 ];
@@ -92,6 +94,8 @@ const showRoute = async (name) => {
       await renderAdviceList(setStatus);
     } else if (safe === 'review') {
       await renderReview(setStatus);
+    } else if (safe === 'limit-up') {
+      await renderLimitUpLadder(setStatus);
     } else if (safe === 'chat') {
       initChat();
       renderChat();

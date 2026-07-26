@@ -33,8 +33,14 @@ export const createLimitUpLadderManagerFromEnv = (
     retries: Number(env.ADSHARE_MAX_RETRIES ?? 2),
     ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
   };
+
   if (config.url.length === 0) {
-    throw new Error('ADSHARE_URL 未配置（limit-up-ladder 需要 adshare 主源）');
+    // 软失败 manager：不抛错崩 surface 启动，所有调用直接返回 adapter_error。
+    // 这样 web / CLI / TUI 启动时即使没配 adshare 也能正常起来；调用方会得到「upstream-unavailable」。
+    deps.logger.warn('limit-up-ladder: ADSHARE_URL 未配置，所有调用将返回 adapter_error', {
+      envKeys: 'ADSHARE_URL',
+    });
+    return createUnavailableManager();
   }
   const adshareClient = new AdshareClient(config);
 
@@ -57,4 +63,33 @@ export const createLimitUpLadderManagerFromEnv = (
     logger: deps.logger,
     clock,
   });
+};
+
+/**
+ * 软失败 manager：所有 fetchLadder / compareLadder 调用直接返回 adapter_error，
+ * 不发起任何网络请求。供 ADSHARE_URL 未配置或链路上游不可达时使用。
+ */
+const createUnavailableManager = (): LimitUpLadderManagerLike => {
+  const errResult = () => ({
+    ok: false as const,
+    error: {
+      kind: 'adapter_error' as const,
+      adapter: 'limit-up-ladder' as const,
+      message: 'upstream-unavailable: ADSHARE_URL 未配置',
+      recoverable: true,
+    },
+  });
+  return {
+    name: 'limit-up-ladder',
+    fetchLadder: async () => errResult(),
+    compareLadder: async () => ({
+      ok: false as const,
+      error: {
+        kind: 'adapter_error',
+        adapter: 'limit-up-ladder',
+        message: 'upstream-unavailable: ADSHARE_URL 未配置',
+        recoverable: true,
+      },
+    }),
+  };
 };
