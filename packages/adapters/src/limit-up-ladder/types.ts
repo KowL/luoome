@@ -22,9 +22,9 @@ export type LimitUpLadderResult =
   | { readonly ok: true; readonly data: LimitUpLadderManagerResult }
   | { readonly ok: false; readonly error: LimitUpLadderError };
 
-/** 单个数据源适配器（Phase 1 实现 adshare；amazingdata 占位）。 */
+/** 单个数据源适配器（当前仅 adshare 实现；name 用于错误 / 日志标识）。 */
 export interface LimitUpLadderAdapterLike {
-  readonly name: 'adshare' | 'amazingdata';
+  readonly name: string;
   fetchLadder(
     date: string,
     opts?: { readonly days?: number },

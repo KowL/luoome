@@ -19,12 +19,15 @@ const mkRawEntry = (
 ): LimitUpLadderRawEntry => partial;
 
 const mkAdapter = (
-  name: 'adshare' | 'amazingdata',
+  name: string,
   impl: LimitUpLadderAdapterLike['fetchLadder'],
 ): LimitUpLadderAdapterLike => ({ name, fetchLadder: impl });
 
-const query = (input: { date: string; days?: number }): LimitUpLadderQuery =>
-  LimitUpLadderQuerySchema.parse(input);
+const query = (input: {
+  date: string;
+  days?: number;
+  includeUncategorized?: boolean;
+}): LimitUpLadderQuery => LimitUpLadderQuerySchema.parse(input);
 
 const compareQuery = (): Omit<LimitUpLadderQuery, 'date'> => {
   const full = LimitUpLadderQuerySchema.parse({ date: '2026-07-25', days: 15 });
@@ -207,7 +210,7 @@ describe('LimitUpLadderManager', () => {
       const primary = mkAdapter('adshare', async () => {
         throw new Error('adshare down');
       });
-      const fallback = mkAdapter('amazingdata', async () => ({
+      const fallback = mkAdapter('stub-fallback', async () => ({
         date: '2026-07-25',
         entries: [
           {
@@ -239,8 +242,8 @@ describe('LimitUpLadderManager', () => {
       const primary = mkAdapter('adshare', async () => {
         throw new Error('adshare down');
       });
-      const fallback = mkAdapter('amazingdata', async () => {
-        throw new Error('amazingdata not implemented yet');
+      const fallback = mkAdapter('stub-fallback', async () => {
+        throw new Error('stub-fallback down');
       });
       const m = new LimitUpLadderManager({
         primary,
@@ -417,6 +420,105 @@ describe('LimitUpLadderManager', () => {
       expect(r.data.warnings).toEqual(['empty-ladder']);
       expect(r.data.total).toBe(0);
     });
+
+    it('includeUncategorized 默认隐藏 level 缺失 entry，true 时显示（共享同一缓存）', async () => {
+      const fetchMock = vi.fn(async () => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            code: '600020',
+            name: '有层级',
+            close: 10,
+            high: 10,
+            pre_close: 9.09,
+            level: 2,
+            limit_up_date: '2026-07-25',
+          },
+          {
+            code: '600021',
+            name: '缺层级',
+            close: 10,
+            high: 10,
+            pre_close: 9.09,
+            limit_up_date: '2026-07-25',
+          },
+        ],
+      }));
+      const primary = mkAdapter('adshare', fetchMock);
+      const m = new LimitUpLadderManager({
+        primary,
+        logger: noopLogger,
+        clock: () => new Date('2026-07-25T05:00:00Z'),
+        holidaysProvider: async () => new Map(),
+        isWeekendFn: () => false,
+      });
+      const hidden = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(hidden.ok).toBe(true);
+      if (!hidden.ok) return;
+      expect(hidden.data.total).toBe(1);
+      expect(hidden.data.levels[0]?.stocks[0]?.code).toBe('600020');
+
+      const shown = await m.fetchLadder(
+        query({ date: '2026-07-25', days: 15, includeUncategorized: true }),
+      );
+      expect(shown.ok).toBe(true);
+      if (!shown.ok) return;
+      expect(shown.data.total).toBe(2);
+      const unc = shown.data.levels.flatMap((lv) => lv.stocks).find((s) => s.code === '600021');
+      expect(unc?.uncategorized).toBe(true);
+      expect(unc?.ladderLevel).toBe(1); // 缺 level 回退首板
+      // cache key 不含 includeUncategorized：两次查询共享一次远端拉取
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('盘前空 ladder 短 TTL：数据更新后可重新拉取', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-07-25T00:00:00Z')); // Shanghai 08:00 盘前
+        let calls = 0;
+        const fetchMock = vi.fn(async () => {
+          calls += 1;
+          return {
+            date: '2026-07-25',
+            entries:
+              calls === 1
+                ? []
+                : [
+                    {
+                      code: '600022',
+                      name: 'A',
+                      close: 10,
+                      high: 10,
+                      pre_close: 9.09,
+                      level: 1,
+                      limit_up_date: '2026-07-25',
+                    },
+                  ],
+          };
+        });
+        const primary = mkAdapter('adshare', fetchMock);
+        const m = new LimitUpLadderManager({
+          primary,
+          logger: noopLogger,
+          clock: () => new Date(),
+          holidaysProvider: async () => new Map(),
+          isWeekendFn: () => false,
+        });
+        const r1 = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+        expect(r1.ok).toBe(true);
+        if (!r1.ok) return;
+        expect(r1.data.warnings).toContain('empty-ladder');
+
+        vi.setSystemTime(new Date('2026-07-25T00:01:01Z')); // 61s 后，盘前短 TTL 已过期
+        const r2 = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(r2.ok).toBe(true);
+        if (!r2.ok) return;
+        expect(r2.data.total).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('compareLadder', () => {
@@ -467,6 +569,109 @@ describe('LimitUpLadderManager', () => {
       expect(r.data.diff.topLevelAdded).toEqual(['600010']);
       expect(r.data.diff.topLevelRemoved).toEqual(['600011']);
       expect(r.data.diff.topLevelRetained).toEqual([]);
+    });
+  });
+
+  describe('enricher', () => {
+    const baseEntry = (code: string): LimitUpLadderRawEntry => ({
+      code,
+      name: `股${code}`,
+      close: 10,
+      high: 10,
+      pre_close: 9.09,
+      level: 1,
+      limit_up_date: '2026-07-25',
+    });
+    const baseOptions = {
+      logger: noopLogger,
+      clock: () => new Date('2026-07-25T05:00:00Z'),
+      holidaysProvider: async () => new Map(),
+      isWeekendFn: () => false,
+    } as const;
+
+    it('补齐空 firstTime/finalTime/industry', async () => {
+      const primary = mkAdapter('adshare', async (_d) => ({
+        date: '2026-07-25',
+        entries: [baseEntry('600030')],
+      }));
+      const m = new LimitUpLadderManager({
+        ...baseOptions,
+        primary,
+        enricher: {
+          name: 'stub',
+          fetchPool: async () =>
+            new Map([
+              ['600030', { firstTime: '09:25:00', finalTime: '14:28:42', industry: '电网设备' }],
+            ]),
+        },
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const e = r.data.levels[0]?.stocks[0];
+      expect(e?.firstTime).toBe('09:25:00');
+      expect(e?.finalTime).toBe('14:28:42');
+      expect(e?.industry).toBe('电网设备');
+    });
+
+    it('主源已有值不被覆盖', async () => {
+      const primary = mkAdapter('adshare', async (_d) => ({
+        date: '2026-07-25',
+        entries: [
+          {
+            ...baseEntry('600031'),
+            industry: '白酒',
+            first_time: '10:30:00',
+            final_time: '14:50:00',
+          },
+        ],
+      }));
+      const m = new LimitUpLadderManager({
+        ...baseOptions,
+        primary,
+        enricher: {
+          name: 'stub',
+          fetchPool: async () =>
+            new Map([
+              ['600031', { firstTime: '09:25:00', finalTime: '09:30:00', industry: '电网设备' }],
+            ]),
+        },
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const e = r.data.levels[0]?.stocks[0];
+      expect(e?.firstTime).toBe('10:30:00');
+      expect(e?.finalTime).toBe('14:50:00');
+      expect(e?.industry).toBe('白酒');
+    });
+
+    it('enricher 抛错：只告警，ladder 正常返回', async () => {
+      const warn = vi.fn();
+      const primary = mkAdapter('adshare', async (_d) => ({
+        date: '2026-07-25',
+        entries: [baseEntry('600032')],
+      }));
+      const m = new LimitUpLadderManager({
+        ...baseOptions,
+        logger: { ...noopLogger, warn },
+        primary,
+        enricher: {
+          name: 'stub',
+          fetchPool: async () => {
+            throw new Error('eastmoney down');
+          },
+        },
+      });
+      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.total).toBe(1);
+      expect(r.data.levels[0]?.stocks[0]?.firstTime).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        'limit-up-ladder enricher failed',
+        expect.objectContaining({ enricher: 'stub' }),
+      );
     });
   });
 });

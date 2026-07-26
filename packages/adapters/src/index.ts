@@ -2,7 +2,7 @@
 // LLM
 
 export * from './limit-up-ladder/adshare.js';
-export * from './limit-up-ladder/amazingdata.js';
+export * from './limit-up-ladder/eastmoney-pool.js';
 export * from './limit-up-ladder/factory.js';
 export * from './limit-up-ladder/manager.js';
 // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md）

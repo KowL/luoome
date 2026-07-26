@@ -15,7 +15,7 @@ export const todayInShanghai = (): string => dateInShanghai(new Date());
  *
  * 入参：
  *   --date YYYY-MM-DD     基准日；缺省 = Asia/Shanghai 今天
- *   --source adshare|amazingdata   缺省 adshare
+ *   --source adshare      缺省 adshare（当前唯一数据源）
  *   --days N              样本窗口（默认 15）
  *   --include-star        允许科创板（默认排除）
  *   --include-bse         允许北交所（默认排除）
@@ -24,7 +24,7 @@ export const todayInShanghai = (): string => dateInShanghai(new Date());
  *   --json                输出与 tool schema 一致的 JSON
  */
 
-const VALID_SOURCES: ReadonlySet<string> = new Set(['adshare', 'amazingdata']);
+const VALID_SOURCES: ReadonlySet<string> = new Set(['adshare']);
 
 export interface CmdMarketLimitUpOptions {
   readonly args: readonly string[];
@@ -42,7 +42,7 @@ export const cmdMarketLimitUp = async (opts: CmdMarketLimitUpOptions): Promise<n
   let source: LimitUpLadderSource | undefined;
   if (sourceRaw !== undefined) {
     if (!VALID_SOURCES.has(sourceRaw)) {
-      throw new Error(`--source 必须是 adshare / amazingdata 之一，实际 "${sourceRaw}"`);
+      throw new Error(`--source 必须是 adshare，实际 "${sourceRaw}"`);
     }
     source = sourceRaw as LimitUpLadderSource;
   }

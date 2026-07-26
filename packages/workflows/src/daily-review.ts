@@ -1,4 +1,5 @@
 import type { LimitUpLadder, LimitUpLadderDiff, ToolResult } from '@luoome/core';
+import { LimitUpLadderSourceSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
@@ -36,7 +37,7 @@ export const DailyReviewLadderSnapshotSchema = z.object({
   date: z.string(),
   total: z.number().int().nonnegative(),
   maxLevel: z.number().int().nonnegative(),
-  source: z.enum(['adshare', 'amazingdata']),
+  source: LimitUpLadderSourceSchema,
   warnings: z.array(z.string()),
 });
 

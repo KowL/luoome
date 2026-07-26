@@ -4,7 +4,6 @@ import {
   LimitUpLadderQuerySchema,
   LimitUpLadderSchema,
 } from '@luoome/core';
-import { z } from 'zod';
 
 import { defineTool, errAdapterError, errInvalidInput } from '../define-tool.js';
 
@@ -75,6 +74,3 @@ export const _WorkflowToolMapEntries = {
   limit_up_ladder: limitUpLadderTool,
   limit_up_ladder_compare: limitUpLadderCompareTool,
 } as const satisfies Record<string, ReturnType<typeof defineTool>>;
-
-// 防止 z import unused 警告
-void z;

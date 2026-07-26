@@ -37,100 +37,158 @@ const mkHttp = (status: number, body: unknown = {}) =>
     },
   }) as unknown as Response;
 
-describe('fetchLimitUpLadder', () => {
-  it('200 + 合法 items 解析成功', async () => {
-    const body = {
-      date: '2026-07-25',
-      entries: [
+/** 远端真实响应形态（2026-07-24 实测）：已组装梯队 + camelCase entry。 */
+const mkRemoteLadder = () => ({
+  success: true,
+  message: null,
+  date: '2026-07-24',
+  total: 3,
+  maxLevel: 4,
+  levels: [
+    {
+      level: 4,
+      name: '4连板',
+      count: 2,
+      stocks: [
+        {
+          code: '002879',
+          name: '长缆科技',
+          level: 4,
+          industry: '',
+          firstTime: '',
+          finalTime: '',
+          reason: '',
+          price: 18.05,
+          changePct: 0.0999,
+          limitUpDate: '2026-07-24',
+        },
+        {
+          code: '603221',
+          name: '爱丽家居',
+          level: 4,
+          industry: '家居',
+          firstTime: '09:31:00',
+          finalTime: '09:31:00',
+          reason: '地产链',
+          price: 14.0,
+          changePct: 0.0998,
+          limitUpDate: '2026-07-24',
+        },
+      ],
+    },
+    {
+      level: 1,
+      name: '首板',
+      count: 1,
+      stocks: [
         {
           code: '600519',
           name: '贵州茅台',
           industry: '白酒',
-          level: 2,
-          first_time: '10:30:00',
-          final_time: '14:50:00',
+          firstTime: '10:30:00',
+          finalTime: '14:50:00',
           reason: '涨价',
-          close: 1850.0,
-          pre_close: 1681.8,
-          change_pct: 0.1,
-          limit_up_date: '2026-07-25',
-          high: 1850.0,
+          price: 1850.0,
+          changePct: 0.1,
+          limitUpDate: '2026-07-24',
         },
       ],
-    };
-    const fetchImpl = mkFetchMock(async () => mkOkJson(body));
+    },
+  ],
+});
+
+describe('fetchLimitUpLadder', () => {
+  it('date 以 YYYYMMDD int 形态发送', async () => {
+    const fetchImpl = mkFetchMock(async () =>
+      mkOkJson({ success: true, date: '2026-07-24', levels: [] }),
+    );
+    await fetchLimitUpLadder(
+      TEST_URL,
+      TEST_KEY,
+      fetchImpl as unknown as typeof fetch,
+      {
+        date: '2026-07-24',
+      },
+      DEFAULT_OPTS,
+    );
+    const calledUrl = fetchImpl.mock.calls[0]?.[0] as string;
+    expect(calledUrl).toContain('date=20260724');
+    expect(calledUrl).not.toContain('2026-07-24');
+  });
+
+  it('levels 梯队拍平 + camelCase 映射 + pre_close 反推', async () => {
+    const fetchImpl = mkFetchMock(async () => mkOkJson(mkRemoteLadder()));
     const result = await fetchLimitUpLadder(
       TEST_URL,
       TEST_KEY,
       fetchImpl as unknown as typeof fetch,
-      { date: '2026-07-25' },
+      { date: '2026-07-24' },
       DEFAULT_OPTS,
     );
-    expect(result.date).toBe('2026-07-25');
-    expect(result.entries).toHaveLength(1);
-    expect(result.entries[0]!.code).toBe('600519');
-    expect(result.entries[0]!.level).toBe(2);
-    expect(result.entries[0]!.close).toBe(1850.0);
-    expect(result.entries[0]!.pre_close).toBe(1681.8);
-    expect(result.entries[0]!.high).toBe(1850.0);
+    expect(result.date).toBe('2026-07-24');
+    expect(result.entries).toHaveLength(3);
+
+    const first = result.entries[0];
+    expect(first?.code).toBe('002879');
+    expect(first?.level).toBe(4);
+    expect(first?.close).toBe(18.05);
+    expect(first?.change_pct).toBe(0.0999);
+    expect(first?.pre_close).toBeCloseTo(18.05 / 1.0999, 6);
+    // 空字符串字段 → undefined（下游映射为 null / 哨兵）
+    expect(first?.first_time).toBeUndefined();
+    expect(first?.reason).toBeUndefined();
+    expect(first?.industry).toBeUndefined();
+    expect(first?.limit_up_date).toBe('2026-07-24');
+
+    // stock 缺 level 时回退父层 level
+    const third = result.entries[2];
+    expect(third?.code).toBe('600519');
+    expect(third?.level).toBe(1);
+    expect(third?.first_time).toBe('10:30:00');
+    expect(third?.reason).toBe('涨价');
   });
 
-  it('{ data: [...] } 包裹形态解析成功', async () => {
-    const body = {
-      date: '2026-07-25',
-      data: [{ code: '300750', name: '宁德时代', close: 500.0, level: 1 }],
-    };
-    const fetchImpl = mkFetchMock(async () => mkOkJson(body));
+  it('非交易日空梯队：success + levels=[] 不抛错', async () => {
+    const fetchImpl = mkFetchMock(async () =>
+      mkOkJson({ success: true, date: '2026-07-26', total: 0, maxLevel: 0, levels: [] }),
+    );
     const result = await fetchLimitUpLadder(
       TEST_URL,
       TEST_KEY,
       fetchImpl as unknown as typeof fetch,
-      { date: '2026-07-25' },
+      { date: '2026-07-26' },
       DEFAULT_OPTS,
     );
-    expect(result.entries[0]!.code).toBe('300750');
+    expect(result.entries).toHaveLength(0);
   });
 
-  it('{ fields, items } 形态解析成功', async () => {
-    const body = {
-      date: '2026-07-25',
-      fields: ['code', 'close', 'level'],
-      items: [['600519', 1850.0, 2]],
-    };
-    const fetchImpl = mkFetchMock(async () => mkOkJson(body));
-    const result = await fetchLimitUpLadder(
-      TEST_URL,
-      TEST_KEY,
-      fetchImpl as unknown as typeof fetch,
-      { date: '2026-07-25' },
-      DEFAULT_OPTS,
+  it('success=false 抛 HTTP_ERROR 并带远端 message', async () => {
+    const fetchImpl = mkFetchMock(async () =>
+      mkOkJson({ success: false, message: 'date out of range' }),
     );
-    expect(result.entries[0]!.code).toBe('600519');
-    expect(result.entries[0]!.close).toBe(1850.0);
-    expect(result.entries[0]!.level).toBe(2);
-  });
-
-  it('直接数组形态解析成功', async () => {
-    const body = [{ code: '000001', close: 10.0 }];
-    const fetchImpl = mkFetchMock(async () => mkOkJson(body));
-    const result = await fetchLimitUpLadder(
-      TEST_URL,
-      TEST_KEY,
-      fetchImpl as unknown as typeof fetch,
-      { date: '2026-07-25' },
-      DEFAULT_OPTS,
-    );
-    expect(result.entries[0]!.code).toBe('000001');
-  });
-
-  it('4xx 抛 HTTP_ERROR', async () => {
-    const fetchImpl = mkFetchMock(async () => mkHttp(404));
     await expect(
       fetchLimitUpLadder(
         TEST_URL,
         TEST_KEY,
         fetchImpl as unknown as typeof fetch,
-        { date: '2026-07-25' },
+        {
+          date: '2026-07-24',
+        },
+        DEFAULT_OPTS,
+      ),
+    ).rejects.toMatchObject({ code: 'HTTP_ERROR' });
+  });
+
+  it('4xx 抛 HTTP_ERROR', async () => {
+    const fetchImpl = mkFetchMock(async () => mkHttp(422, { detail: [] }));
+    await expect(
+      fetchLimitUpLadder(
+        TEST_URL,
+        TEST_KEY,
+        fetchImpl as unknown as typeof fetch,
+        {
+          date: '2026-07-24',
+        },
         DEFAULT_OPTS,
       ),
     ).rejects.toMatchObject({ code: 'HTTP_ERROR' });
@@ -147,33 +205,25 @@ describe('fetchLimitUpLadder', () => {
         TEST_URL,
         TEST_KEY,
         fetchImpl as unknown as typeof fetch,
-        { date: '2026-07-25' },
+        { date: '2026-07-24' },
         { timeoutMs: 1000, retries: 1 },
       ),
     ).rejects.toMatchObject({ code: 'HTTP_ERROR' });
     expect(attempts).toBe(2);
   });
 
-  it('空 items 不抛错', async () => {
-    const fetchImpl = mkFetchMock(async () => mkOkJson({ date: '2026-07-25', entries: [] }));
-    const result = await fetchLimitUpLadder(
-      TEST_URL,
-      TEST_KEY,
-      fetchImpl as unknown as typeof fetch,
-      { date: '2026-07-25' },
-      DEFAULT_OPTS,
+  it('有 stocks 但全解析失败抛 PARSE_ERROR', async () => {
+    const fetchImpl = mkFetchMock(async () =>
+      mkOkJson({ success: true, levels: [{ level: 1, stocks: [{ foo: 'bar' }] }] }),
     );
-    expect(result.entries).toHaveLength(0);
-  });
-
-  it('全条目解析失败抛 PARSE_ERROR', async () => {
-    const fetchImpl = mkFetchMock(async () => mkOkJson({ entries: [{ foo: 'bar' }] }));
     await expect(
       fetchLimitUpLadder(
         TEST_URL,
         TEST_KEY,
         fetchImpl as unknown as typeof fetch,
-        { date: '2026-07-25' },
+        {
+          date: '2026-07-24',
+        },
         DEFAULT_OPTS,
       ),
     ).rejects.toBeInstanceOf(AdshareError);
@@ -182,20 +232,28 @@ describe('fetchLimitUpLadder', () => {
         TEST_URL,
         TEST_KEY,
         fetchImpl as unknown as typeof fetch,
-        { date: '2026-07-25' },
+        {
+          date: '2026-07-24',
+        },
         DEFAULT_OPTS,
       ),
     ).rejects.toMatchObject({ code: 'PARSE_ERROR' });
   });
 
-  it('code / close 缺失的条目被跳过（不阻断整批）', async () => {
+  it('code / price 缺失的条目被跳过（不阻断整批）', async () => {
     const body = {
-      date: '2026-07-25',
-      entries: [
-        { code: '600519', close: 1850.0 },
-        { code: '', close: 100.0 },
-        { close: 200.0 },
-        { code: '000001', close: 10.0 },
+      success: true,
+      date: '2026-07-24',
+      levels: [
+        {
+          level: 1,
+          stocks: [
+            { code: '600519', price: 1850.0, changePct: 0.1 },
+            { code: '', price: 100.0 },
+            { price: 200.0 },
+            { code: '000001', price: 10.0 },
+          ],
+        },
       ],
     };
     const fetchImpl = mkFetchMock(async () => mkOkJson(body));
@@ -203,7 +261,7 @@ describe('fetchLimitUpLadder', () => {
       TEST_URL,
       TEST_KEY,
       fetchImpl as unknown as typeof fetch,
-      { date: '2026-07-25' },
+      { date: '2026-07-24' },
       DEFAULT_OPTS,
     );
     expect(result.entries).toHaveLength(2);
@@ -217,22 +275,26 @@ describe('fetchLimitUpLadder', () => {
         TEST_URL,
         TEST_KEY,
         fetchImpl as unknown as typeof fetch,
-        { date: '2026/07/25' },
+        {
+          date: '2026/07/24',
+        },
         DEFAULT_OPTS,
       ),
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
   it('days 参数透传', async () => {
-    const fetchImpl = mkFetchMock(async () => mkOkJson({ date: '2026-07-25', entries: [] }));
+    const fetchImpl = mkFetchMock(async () =>
+      mkOkJson({ success: true, date: '2026-07-24', levels: [] }),
+    );
     await fetchLimitUpLadder(
       TEST_URL,
       TEST_KEY,
       fetchImpl as unknown as typeof fetch,
-      { date: '2026-07-25', days: 20 },
+      { date: '2026-07-24', days: 20 },
       DEFAULT_OPTS,
     );
-    const calledUrl = fetchImpl.mock.calls[0]![0] as string;
+    const calledUrl = fetchImpl.mock.calls[0]?.[0] as string;
     expect(calledUrl).toContain('days=20');
   });
 });

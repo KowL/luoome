@@ -22,6 +22,7 @@ const TOOL_LABELS = {
 
 const toolLabel = (tool) => TOOL_LABELS[tool] ?? tool;
 const errorText = (result, fallback) => result?.error?.message ?? result?.error?.cause ?? fallback;
+const trimLeadingChatWhitespace = (text) => text.trimStart();
 
 const draftCard = (draft) => {
   const card = el('div', 'chat-draft');
@@ -199,7 +200,10 @@ const persistedFeed = (messages) => {
       .filter((part) => part.type === 'text' && typeof part.text === 'string')
       .map((part) => part.text)
       .join('');
-    if (text.trim().length > 0) result.push({ type: 'msg', role: message.role, content: text });
+    const visibleText = trimLeadingChatWhitespace(text);
+    if (visibleText.trim().length > 0) {
+      result.push({ type: 'msg', role: message.role, content: visibleText });
+    }
     if (message.role !== 'assistant') continue;
     const actions = [];
     const drafts = [];
@@ -360,7 +364,9 @@ const send = async () => {
         ensureAssistant();
       } else if (part.type === 'text-delta') {
         ensureAssistant();
-        assistantEntry.content += String(part.delta ?? '');
+        const delta = String(part.delta ?? '');
+        assistantEntry.content +=
+          assistantEntry.content.length === 0 ? trimLeadingChatWhitespace(delta) : delta;
       } else if (part.type === 'error') {
         throw new Error(String(part.errorText ?? '模型流式响应失败'));
       }
@@ -406,4 +412,4 @@ const refreshChat = async () => {
   else renderChat();
 };
 
-export { initChat, refreshChat, renderChat };
+export { initChat, refreshChat, renderChat, trimLeadingChatWhitespace };

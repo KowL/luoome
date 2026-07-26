@@ -5,11 +5,14 @@ import { fetchWithAuth } from './stock-basic.js';
  * adshare `/market/limit-up/ladder` endpoint（Phase 1）。
  *
  * 协议层职责（docs/ddd/limit-up-ladder-detailed-design.md §3）：
- * - 只做 HTTP GET + Zod 解析；不做修正 / 过滤 / 缓存。
- * - 字段名与 adshare 远端 JSON 一致（snake_case）；core 层映射到小写蛇形。
- * - 4xx 直接抛 `AdshareError('HTTP_ERROR')`；5xx / 网络错误由 fetchWithAuth 重试后抛
- *   `AdshareError('HTTP_ERROR')` 或 `AdshareError('NETWORK_ERROR')`。
- * - 响应 schema 校验失败抛 `AdshareError('PARSE_ERROR')`。
+ * - 只做 HTTP GET + 协议映射；不做修正 / 过滤 / 缓存。
+ * - 请求：`date` 必须是 int 形态 `YYYYMMDD`（远端 FastAPI int 解析，`YYYY-MM-DD` 会 422）。
+ * - 响应是已组装好的梯队：`{ success, date, total, maxLevel, levels: [{ level, name, count, stocks: [...] }] }`，
+ *   entry 字段为 camelCase（`firstTime` / `changePct` / `limitUpDate` / `price`）。
+ *   本层负责拍平 levels → entries、camelCase → snake_case 映射，
+ *   并由 `changePct` 反推 `pre_close`（远端不给 pre_close / high；manager 的 pct 与修正逻辑依赖 pre_close）。
+ * - `success === false` 抛 `AdshareError('HTTP_ERROR')`；4xx/5xx/网络错误由 fetchWithAuth 抛出。
+ * - 有数据但条目全部解析失败抛 `AdshareError('PARSE_ERROR')`。
  */
 
 export interface RawLimitUpEntry {
@@ -29,7 +32,7 @@ export interface RawLimitUpEntry {
 }
 
 export interface FetchLimitUpLadderQuery {
-  readonly date: string; // YYYY-MM-DD
+  readonly date: string; // YYYY-MM-DD（发送前转成 YYYYMMDD）
   readonly days?: number; // 默认 15
 }
 
@@ -37,6 +40,10 @@ export interface LimitUpLadderResponse {
   readonly date: string;
   readonly entries: RawLimitUpEntry[];
 }
+
+/** 空字符串视为缺失（远端用 '' 表示无数据）。 */
+const nonEmpty = (v: unknown): string | undefined =>
+  typeof v === 'string' && v.trim().length > 0 ? v : undefined;
 
 /**
  * 调 adshare `/market/limit-up/ladder`。
@@ -52,7 +59,7 @@ export const fetchLimitUpLadder = async (
   if (query.date && !/^\d{4}-\d{2}-\d{2}$/.test(query.date)) {
     throw new AdshareError('INVALID_INPUT', `date 必须为 YYYY-MM-DD，实际 "${query.date}"`);
   }
-  const params = new URLSearchParams({ date: query.date });
+  const params = new URLSearchParams({ date: query.date.replaceAll('-', '') });
   if (query.days !== undefined) {
     params.set('days', String(query.days));
   }
@@ -73,78 +80,57 @@ export const fetchLimitUpLadder = async (
     throw new AdshareError('PARSE_ERROR', 'limit-up/ladder 响应不是有效 JSON', { cause: error });
   }
 
-  // adshare 两种常见返回形态：{ data: { date, items: [] } } 或 { date, items: [] }
-  // 也可能是 { date, entries: [] } 或直接数组 []
   const payload = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  if (payload.success === false) {
+    throw new AdshareError(
+      'HTTP_ERROR',
+      `limit-up/ladder 远端返回 success=false：${String(payload.message ?? 'unknown')}`,
+    );
+  }
   const date = typeof payload.date === 'string' ? payload.date : query.date;
-  const fields = Array.isArray(payload.fields) ? (payload.fields as string[]) : null;
-
-  let items: unknown[];
-  if (Array.isArray(raw)) {
-    items = raw;
-  } else if (Array.isArray(payload.data)) {
-    items = payload.data;
-  } else if (Array.isArray(payload.entries)) {
-    items = payload.entries;
-  } else if (Array.isArray(payload.items)) {
-    // { fields, items } 形式（与 stock_basic 同款）
-    items = payload.items;
-  } else {
-    items = [];
-  }
-
-  if (!Array.isArray(items)) {
-    throw new AdshareError('PARSE_ERROR', 'limit-up/ladder 响应 data/items 字段不是数组');
-  }
-
-  // 逐条解析，拒绝畸形条目但不死在第一条
-  const normalizeItem = (item: unknown): Record<string, unknown> => {
-    if (item === null || typeof item !== 'object') return {};
-    if (!Array.isArray(item)) return item as Record<string, unknown>;
-    if (fields === null) return {};
-    const obj: Record<string, unknown> = {};
-    for (let j = 0; j < fields.length && j < item.length; j += 1) {
-      const key = fields[j];
-      if (key !== undefined) obj[key] = item[j];
-    }
-    return obj;
-  };
+  const levels = Array.isArray(payload.levels) ? payload.levels : [];
 
   const entries: RawLimitUpEntry[] = [];
   const parseErrors: string[] = [];
-  for (let i = 0; i < items.length; i += 1) {
-    const obj = normalizeItem(items[i]);
-    if (Object.keys(obj).length === 0) {
-      parseErrors.push(`index ${i}: not an object`);
-      continue;
+  let seen = 0;
+  for (const lv of levels) {
+    const parent = typeof lv === 'object' && lv !== null ? (lv as Record<string, unknown>) : {};
+    const parentLevel = typeof parent.level === 'number' ? parent.level : undefined;
+    const stocks = Array.isArray(parent.stocks) ? parent.stocks : [];
+    for (const item of stocks) {
+      seen += 1;
+      const obj =
+        typeof item === 'object' && item !== null ? (item as Record<string, unknown>) : {};
+      // 最少必须有 code + price
+      if (typeof obj.code !== 'string' || obj.code.trim().length === 0) {
+        parseErrors.push(`index ${seen - 1}: missing or empty code`);
+        continue;
+      }
+      if (typeof obj.price !== 'number') {
+        parseErrors.push(`index ${seen - 1}: missing or non-numeric price`);
+        continue;
+      }
+      const changePct = typeof obj.changePct === 'number' ? obj.changePct : undefined;
+      // 远端不给 pre_close：由 changePct 反推，保证 manager 的 pct / 修正式有输入
+      const preClose =
+        changePct !== undefined && 1 + changePct > 0 ? obj.price / (1 + changePct) : undefined;
+      entries.push({
+        code: obj.code.trim(),
+        name: nonEmpty(obj.name),
+        industry: nonEmpty(obj.industry),
+        level: typeof obj.level === 'number' ? obj.level : parentLevel,
+        first_time: nonEmpty(obj.firstTime),
+        final_time: nonEmpty(obj.finalTime),
+        reason: nonEmpty(obj.reason),
+        close: obj.price,
+        pre_close: preClose,
+        change_pct: changePct,
+        limit_up_date: nonEmpty(obj.limitUpDate),
+      });
     }
-    // 最少必须有 code + close
-    if (typeof obj.code !== 'string' || obj.code.trim().length === 0) {
-      parseErrors.push(`index ${i}: missing or empty code`);
-      continue;
-    }
-    if (typeof obj.close !== 'number') {
-      parseErrors.push(`index ${i}: missing or non-numeric close`);
-      continue;
-    }
-    entries.push({
-      code: String(obj.code).trim(),
-      name: typeof obj.name === 'string' ? obj.name : undefined,
-      industry: typeof obj.industry === 'string' ? obj.industry : undefined,
-      level: typeof obj.level === 'number' ? obj.level : undefined,
-      limit_up_days: typeof obj.limit_up_days === 'number' ? obj.limit_up_days : undefined,
-      first_time: typeof obj.first_time === 'string' ? obj.first_time : undefined,
-      final_time: typeof obj.final_time === 'string' ? obj.final_time : undefined,
-      reason: typeof obj.reason === 'string' ? obj.reason : undefined,
-      close: obj.close,
-      pre_close: typeof obj.pre_close === 'number' ? obj.pre_close : undefined,
-      change_pct: typeof obj.change_pct === 'number' ? obj.change_pct : undefined,
-      limit_up_date: typeof obj.limit_up_date === 'string' ? obj.limit_up_date : undefined,
-      high: typeof obj.high === 'number' ? obj.high : undefined,
-    });
   }
 
-  if (entries.length === 0 && items.length > 0) {
+  if (entries.length === 0 && seen > 0) {
     // 有数据但全解析失败 → 抛 parse_error 并附上第一行错误
     throw new AdshareError(
       'PARSE_ERROR',

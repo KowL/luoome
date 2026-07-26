@@ -476,7 +476,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const input: Record<string, unknown> = {
       date,
       days: intQuery(c.req.query('days'), 15, 1),
-      source: enumQuery(c.req.query('source'), 'adshare', ['adshare', 'amazingdata']),
+      source: enumQuery(c.req.query('source'), 'adshare', ['adshare']),
       includeStar: c.req.query('includeStar') === 'true',
       includeBse: c.req.query('includeBse') === 'true',
       includeST: c.req.query('includeST') === 'true',
@@ -515,7 +515,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       date,
       prevDate,
       days: intQuery(c.req.query('days'), 15, 1),
-      source: enumQuery(c.req.query('source'), 'adshare', ['adshare', 'amazingdata']),
+      source: enumQuery(c.req.query('source'), 'adshare', ['adshare']),
       includeStar: c.req.query('includeStar') === 'true',
       includeBse: c.req.query('includeBse') === 'true',
       includeST: c.req.query('includeST') === 'true',

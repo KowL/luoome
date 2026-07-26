@@ -13,7 +13,7 @@
 ## 已确认决策
 
 - **不落库**：天梯快照走 cache adapter，不写 DB。理由：(1) ruo 旧实现已验证现拉现算 + 修正 + 展示闭环不需要 DB；(2) 盘中数据每日刷新，落库引入"快照失效 vs 用户期望时效"的二义性；(3) 报告/StockGroup/LLM 复盘链只读需求都能用 cache 满足。落库留作未来事件审计需要时另立任务。
-- **不引入新环境变量**：缺省 provider 顺序为 adshare → amazingdata，沿用现有 adshare-sdk 客户端的 `ADSHARE_URL`/`ADSHARE_API_KEY`/`ADSHARE_TIMEOUT_MS`/`ADSHARE_MAX_RETRIES`。amazingdata 暂无可用 SDK，Phase 1 仅保留 adapter 接口与 mock 实现，**不**预写 scraper/parser。
+- **不引入新环境变量**：数据源 adshare 写死，沿用现有 adshare-sdk 客户端的 `ADSHARE_URL`/`ADSHARE_API_KEY`/`ADSHARE_TIMEOUT_MS`/`ADSHARE_MAX_RETRIES`。已确认不接 amazingdata（原 throw 占位 adapter 已删除），上游不可达时直接返回 `adapter_error`。
 - **修正规则下沉 core**：8.58% 涨幅回推 `price` 在 core 层完成；adshare-sdk 仅做协议层解析；这与 ruo 旧实现位置一致（`adshare.adapter.ts:374-385`），但解耦便于 Phase 2 切换数据源时不重复实现。
 - **保持单一权威日期**：tool 入参 `date` 是请求方关心的交易日；adapter 不做"今天 → 昨天"自动回退（避免报告日期与数据日期错位，PRD §2.2 第一行问题）。
 - **修正字段必须可追溯**：暴露修正后 `price`、原始 `rawClose`、`corrected` 三字段；不允许静默改写（PRD §5.6）。
@@ -44,7 +44,7 @@ export type LimitUpBoard =
   | 'star'            // 科创板 688x（默认排除，仅在 includeStar=true 时出现）
   | 'bse';            // 北交所 8x/4x（默认排除，仅在 includeBse=true 时出现）
 
-export type LimitUpLadderSource = 'adshare' | 'amazingdata';
+export type LimitUpLadderSource = 'adshare';   // 当前唯一数据源；保留枚举便于将来扩展
 
 export interface LimitUpLadderEntry {
   readonly code: string;                // 600xxx / 000xxx / 300xxx
@@ -104,7 +104,7 @@ export interface LimitUpLadderDiff {
   - `date` 合法 `YYYY-MM-DD`（`/^\d{4}-\d{2}-\d{2}$/`）
   - `total === 去重 entry 数`（即便某只 entry 在多个 level 出现——目前约束：同一 entry 只入最深 level）
   - `maxLevel === max(levels[].level)` 或 `maxLevel === 0` 当 `levels.length === 0`
-  - 单 entry：`ladderLevel >= 1`、`price > 0`、`rawClose > 0`、`changePct ∈ [-0.20, 0.20]`（涨停板 ±20% 容差，含创板 20%）
+  - 单 entry：`ladderLevel >= 1`、`price > 0`、`rawClose > 0`、`changePct ∈ [-0.35, 0.35]`（覆盖北交所 30% + 20cm 涨停浮点零头，实测 0.2002；原 ±0.20 硬顶会把真实 20cm 数据挡在 schema 外）
   - 单 entry：`firstTime` / `finalTime` 为 `null` 或 `HH:MM:SS`
   - 单 entry：`limitUpDate === date`（强制与请求基准日一致；若 adapter 返回不同——理论上不该发生——把这条 entry 降级到 `uncategorized=true` 且 `warnings` 追加 `"mismatched limitUpDate"`，但 **不** 静默丢弃）
 - `board` 由 code 前缀派生（表 §5.2 PRD）：
@@ -126,31 +126,37 @@ export interface LimitUpLadderDiff {
 
 ### 3. adshare-sdk：limit-up endpoint（`packages/adshare-sdk/src/endpoints/limit-up.ts`，新建）
 
-- 协议层封装，不做修正、不做过滤、不做缓存；只把 adshare 远端响应解成 `RawLimitUpEntry[]`。
-- 入参：`{ date: string; days?: number }`。
+- 协议层封装，不做修正、不过滤、不缓存；只把 adshare 远端响应解成 `RawLimitUpEntry[]`。
+- 入参：`{ date: string; days?: number }`（`date` 为 `YYYY-MM-DD`，发送前转成 `YYYYMMDD`——远端 FastAPI 按 int 解析，`YYYY-MM-DD` 会 422，2026-07-26 实测确认）。
 - 出参：`{ date: string; entries: RawLimitUpEntry[] }`。
-- `RawLimitUpEntrySchema`（与 `schemas.ts` 的 `StockBasicSchema` / `KLineBarSchema` 同风格）：
+- **远端实际响应契约**（2026-07-26 实测；Phase 1 初稿猜的 `{ entries/items: [...] }` snake_case 形态并不存在）：
 
-  ```ts
-  export const RawLimitUpEntrySchema = z.object({
-    code: z.string().min(1),
-    name: z.string().optional(),
-    industry: z.string().optional(),
-    level: z.number().int().positive().optional(),         // 缺失返回 undefined
-    limit_up_days: z.number().int().nonnegative().optional(),
-    first_time: z.string().optional(),                     // HH:MM:SS
-    final_time: z.string().optional(),
-    reason: z.string().optional(),
-    close: z.number(),
-    pre_close: z.number().optional(),
-    change_pct: z.number().optional(),
-    limit_up_date: z.string().optional(),                  // YYYY-MM-DD
-  });
+  ```jsonc
+  {
+    "success": true, "message": null, "cached": false,
+    "date": "2026-07-24", "total": 39, "maxLevel": 4,
+    "levels": [
+      {
+        "level": 4, "name": "4连板", "count": 2,
+        "stocks": [
+          {
+            "code": "002879", "name": "长缆科技", "level": 4,
+            "industry": "", "firstTime": "", "finalTime": "", "reason": "",
+            "price": 18.05, "changePct": 0.0999, "limitUpDate": "2026-07-24"
+          }
+        ]
+      }
+    ]
+  }
   ```
 
-- 远端路径：`GET /market/limit-up/ladder?date=<date>&days=<days>`（与 ruo 旧实现一致，路径在 adshare 后端固化；不在 luoome 改协议）。
+  - 响应是**已组装好的梯队**；SDK 负责拍平 `levels[].stocks[]` → `entries`，stock 缺 `level` 时回退父层 level。
+  - entry 字段为 camelCase；空字符串表示缺失（映射为 `undefined`）。
+  - 远端**不给** `pre_close` / `high`：SDK 由 `changePct` 反推 `pre_close = price / (1 + changePct)`，供 manager 的 pct 计算与 §6.4 修正使用；`high` 恒 `undefined`，修正不会触发（远端 price 已是最终收盘价）。
+  - `success === false` → 抛 `AdshareError('HTTP_ERROR')` 并带远端 `message`。
+- 远端路径：`GET /market/limit-up/ladder?date=<YYYYMMDD>&days=<days>`（与 ruo 旧实现一致，路径在 adshare 后端固化；不在 luoome 改协议）。
 - 错误处理：4xx 不重试直接抛 `AdshareError('HTTP_ERROR')`；5xx 与网络错误走 `fetchWithAuth` 的指数退避（沿用 `ADSHARE_MAX_RETRIES`）。
-- 响应 schema 校验失败抛 `AdshareError('PARSE_ERROR')`，Manager 层捕获并 fallback 到 amazingdata。
+- 有 stocks 但条目全部解析失败抛 `AdshareError('PARSE_ERROR')`，Manager 层捕获后返回 `adapter_error`（无 fallback）。
 
 ### 4. adapters：business adapter + Manager（`packages/adapters/src/limit-up-ladder/`，新建）
 
@@ -158,10 +164,10 @@ export interface LimitUpLadderDiff {
 
 ```
 adapters/src/limit-up-ladder/
-├── manager.ts            # LimitUpLadderManager: 主→备、缓存、修正
+├── manager.ts            # LimitUpLadderManager: 缓存、修正、enricher 补齐
 ├── adshare.ts            # AdshareLimitUpLadderAdapter
-├── amazingdata.ts        # AmazingdataLimitUpLadderAdapter（占位，Phase 1 仅 mock）
-├── types.ts              # LimitUpLadderAdapter 接口
+├── eastmoney-pool.ts     # EastmoneyLimitUpPoolEnricher（封板时间 / 行业补齐）
+├── types.ts              # LimitUpLadderAdapterLike 接口
 └── manager.test.ts
 ```
 
@@ -171,7 +177,7 @@ adapters/src/limit-up-ladder/
 import type { RawLimitUpEntry } from '@luoome/adshare-sdk';
 
 export interface LimitUpLadderAdapter {
-  readonly name: 'adshare' | 'amazingdata';
+  readonly name: string;                 // 错误 / 日志标识（当前仅 'adshare' 实现）
   fetchLadder(date: string, opts?: { days?: number }): Promise<{
     date: string;
     entries: RawLimitUpEntry[];
@@ -233,6 +239,8 @@ export class LimitUpLadderManager {
   > 收盘判定用 15:00 是简化值；如果当天有延迟收盘（最后交易日）由调用方负责——manager 不读国办通知。
 - 主源失败时按 ARCHITECTURE §4.7 `MarketDataManager` 的模式 (`finalFallbackSuppressMs`) 把"已失败"状态短期抑制，避免 5 秒内多次重试打到对端。
 
+**enricher（封板时间 / 行业补齐）**：adshare 天梯、明细、`/limit_list` 的 `firstTime` / `finalTime` / `industry` 实测（2026-07 多个交易日）全部为空。manager 在 map 之后调用可选的 `enricher.fetchPool(date)`（`eastmoney-pool.ts`，eastmoney 公开涨停池 `getTopicZTPool`，`fbt`/`lbt` HHMMSS int → HH:MM:SS，`hybk` → 行业），按 code 补齐——只填空字段，不覆盖主源已有值；enricher 失败降级为 `logger.warn`，不阻断主流程。factory 默认装配 `EastmoneyLimitUpPoolEnricher`。
+
 **§6 修正规则**（PRD §5.6）：
 
 ```ts
@@ -264,7 +272,7 @@ function applyCloseCorrection(
 
 - `createLimitUpLadderManagerFromEnv(env, deps)`：与 `createMarketAdapterFromEnv` 同模式。
   - 解析顺序：`ADSHARE_URL` / `ADSHARE_API_KEY` 等沿用现有 `fromEnv`。
-  - 不引入 `LUOOME_LIMIT_UP_LADDER_PROVIDER`；主源 adshare 写死，fallback 通过 `LUOOME_LIMIT_UP_LADDER_FALLBACK=amazingdata` 显式 opt-in 启用，**不**默认启用（Phase 1 没有真实 amazingdata 客户端，开了就报错）。
+  - 不引入 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK`；数据源 adshare 写死，无 fallback（已确认不接 amazingdata）。
   - 返回 `LimitUpLadderManager`。
 - `packages/adapters/src/index.ts` 桶增加 `export * from './limit-up-ladder/index.js'`。
 
@@ -302,7 +310,7 @@ export const limitUpLadderTool = defineTool({
 export const LimitUpLadderCompareInput = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   prevDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  source: z.enum(['adshare', 'amazingdata']).default('adshare'),
+  source: z.enum(['adshare']).default('adshare'),
   days: z.number().int().positive().default(15),
   includeUncategorized: z.boolean().default(false),
 });
@@ -370,7 +378,7 @@ PRD §7.1 已经给出页面骨架，本文不再重复 ASCII 简图；Phase 2 �
 ### 12. CLI 接入（Phase 1，`packages/cli/src/market-limit-up.ts`，新建）
 
 ```text
-luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
+luoome market limit-up [--date YYYY-MM-DD] [--source adshare]
                        [--days N] [--include-star] [--include-bse] [--include-st]
                        [--include-uncategorized] [--json]
 ```
@@ -394,7 +402,6 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
   - 缓存命中率（cache hit / 总请求）
   - `corrected=true` 占比（> 5% 提示 adshare 数据质量下降）
   - 字段缺失率（name / industry / firstTime / reason 各自分子）
-  - adshare → amazingdata fallback 触发率（Phase 1 始终为 0）
 - **不引入新指标体系**：复用 core 的 metrics adapter（如果存在），未存在则 Phase 1 不接；走 logger 输出 + 用户自助 grep。
 
 ## 实施顺序（实现时）
@@ -408,9 +415,8 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
    - `packages/adshare-sdk/src/index.ts` 桶导出
    - 对应 `limit-up.test.ts`（mock fetch 三场景：200/schema ok、4xx、5xx 重试）
 3. **adapters：业务 adapter + Manager**
-   - `packages/adapters/src/limit-up-ladder/{types.ts,adshare.ts,amazingdata.ts,manager.ts}`
-   - `amazingdata.ts` Phase 1 仅写 `throw new Error('amazingdata adapter not implemented')` 占位（避免 silent 失败）
-   - `manager.test.ts` 覆盖（a）空 ladder 不回退（b）修正规则（c）盘中 60s TTL（d）跨日永久命中（e）主源失败 → fallback → 主+备均失败抛错
+   - `packages/adapters/src/limit-up-ladder/{types.ts,adshare.ts,manager.ts}`
+   - `manager.test.ts` 覆盖（a）空 ladder 不回退（b）修正规则（c）盘中 60s TTL（d）跨日永久命中（e）主源失败抛 adapter_error（无 fallback）
 4. **core：surface 装配根**
    - `createLimitUpLadderManagerFromEnv` 接 adshare-sdk `fromEnv`；带节假日历注入
    - `AdapterRegistry` 加 `limitUpLadder` 字段
@@ -453,19 +459,19 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
 |---|---|
 | 单元（core） | Zod schema 合法/非法；不变量（date 格式、total/maxLevel 关系、changePct 范围）；deriveBoard 全前缀；filterAndDedupe 同 code 多 level 保留最深；ST 前缀过滤；uncategorized 传播 |
 | 单元（adshare-sdk） | mock fetch 三场景（200 schema-ok / 200 schema-bad → PARSE_ERROR / 5xx → HTTP_ERROR 后重试） |
-| 单元（adapters） | manager 空 ladder 不回退；修正规则 4 个分支；TTL 三段（盘中 60s、收盘后 Infinity、跨日 Infinity）；主源失败 → fallback 接替；双失败抛错 |
+| 单元（adapters） | manager 空 ladder 不回退；修正规则 4 个分支；TTL 三段（盘中 60s、收盘后 Infinity、跨日 Infinity）；主源失败抛 adapter_error（无 fallback）；enricher 补齐 / 不覆盖 / 失败降级 warn |
 | 单元（tools） | 入参 schema 校验；error kind 映射；空 ladder 返回与 tool 协议一致；`WorkflowToolMap` 类型映射在 typecheck 通过 |
-| 单元（CLI） | `--date` 缺省、显式；`--json` schema 严格对齐；`--source=amazingdata` 提示未实现 |
+| 单元（CLI） | `--date` 缺省、显式；`--json` schema 严格对齐；`--source` 非 adshare 报错 |
 | 集成（仓内） | CLI → tool → manager → adshare-sdk 端到端 mock；TUI 组件加载不报错（`bun --filter '@luoome/tui'` 起 tsx 渲染单测） |
-| 集成（外部） | 真实 adshare 可达时跑 `luoome market limit-up --date <最近 A 股交易日>` 与 `curl /market/limit-up/ladder` 对照；不可达时走 fallback（Phase 1 暂未启用） |
+| 集成（外部） | 真实 adshare 可达时跑 `luoome market limit-up --date <最近 A 股交易日>` 与 `curl /market/limit-up/ladder` 对照；不可达时 tool 返回 `adapter_error` |
 | 不变量回归 | ARCHITECTURE §5.3 advice 全部不变量不受影响（天梯不产出 Advice）；adapter 调用不抛 raw exception，全部经 ToolError |
 
 ## 明确不做（Phase 1 冻结）
 
 - 不接入 Web 页面（避免两套数据来源并行）。
 - 不联动 `daily-review` / `market-outlook` / `StockGroup` / `WatchPlan`。
-- 不实现 amazingdata 真实 adapter（保留接口与 mock，throw 占位）。
-- 不增加 `LUOOME_LIMIT_UP_LADDER_PROVIDER` 环境变量；配置面与 adshare-sdk 完全共享。
+- 不接 amazingdata（已确认永不接入；原 throw 占位 adapter 已删除）。
+- 不增加 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK` 环境变量；配置面与 adshare-sdk 完全共享。
 - 不落库 `LimitUpLadder` / `LimitUpLadderEntry`。
 - 不引入个股详情"近 30 日涨停事件"模块（Phase 3）。
 - 不支持跨市场（港股 / 美股）；与策略预警 §5.2 一致，仅 A 股主板 + 创板。
@@ -482,7 +488,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare|amazingdata]
 - **节假日历复用**：直接走 intraday-watch 设计 §"已知边界" 的三层 union 加载（内置 + `$LUOOME_HOME/holidays.json` + env）；不重新实现。
 - **ST 股票名称前缀判断**：仅看中文前缀"ST" 与"*ST"，与策略预警 §5.2 一致；不接英文/异形缩写。
 - **修正条件中的 `rawClose === high`**：PRD §5.6 的触发条件；本设计**不**做单边修改——只在 `rawClose === high` **且**涨幅区间匹配时才修正。否则原值通过。SPEC 文档与 ruo 旧实现逻辑对齐。
-- **amazingdata fallback 的触发条件**：Phase 1 缺省不启用；要启用需要在 `.env` 显式 `LUOOME_LIMIT_UP_LADDER_FALLBACK=amazingdata`，否则 upstream 不可达时**直接**抛 `adapter_error`。这避免了"以为是 fallback 实际是静默失败"。
+- **无 fallback**：已确认不接 amazingdata，上游不可达时**直接**返回 `adapter_error`；manager 的 fallback 接口保留在类型层但 factory 不装配任何 fallback。
 - **MCP 暴露**：默认 read 类暴露（与 ARCHITECTURE §9.2 默认策略一致），无需新 env。
 - **缓存 key 内含 `includeStar/Bse/ST`**：是因为这些是 manager 的过滤维度，可能影响返回值；不至于让 cache 把 false 与 true 的请求混在一起回错。
 - **测试覆盖率基线**：新增代码走仓库既有策略（"开发中先跑最小相关测试；交付前跑与改动范围匹配的 typecheck/test/lint"，见 [CONTRIBUTING.md](../../AGENTS.md)）。

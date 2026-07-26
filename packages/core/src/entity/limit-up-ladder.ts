@@ -23,10 +23,10 @@ export type LimitUpBoard = 'main_board' | 'chinext' | 'star' | 'bse';
 
 export const LimitUpBoardSchema = z.enum(['main_board', 'chinext', 'star', 'bse']);
 
-/** 数据源名称（与 adshare-sdk 一致，可枚举便于 Phase 1 限定选择）。 */
-export type LimitUpLadderSource = 'adshare' | 'amazingdata';
+/** 数据源名称（当前仅 adshare；保留枚举便于 schema 限定与将来扩展）。 */
+export type LimitUpLadderSource = 'adshare';
 
-export const LimitUpLadderSourceSchema = z.enum(['adshare', 'amazingdata']);
+export const LimitUpLadderSourceSchema = z.enum(['adshare']);
 
 /** HH:MM:SS 字符串或 null（null 表示缺数据，不臆造）。 */
 const timeStringOrNull = z
@@ -58,8 +58,8 @@ export const LimitUpLadderEntrySchema = z.object({
   rawClose: z.number().positive(),
   /** 是否经过 §6.4 修正；与 (rawClose, preClose) 涨幅区间匹配时 = true。 */
   corrected: z.boolean(),
-  /** 相对昨收的小数（0.10 = 10%）；区间 [-0.20, 0.20] 容差含创业板 20%。 */
-  changePct: z.number().min(-0.2).max(0.2),
+  /** 相对昨收的小数（0.10 = 10%）；区间 [-0.35, 0.35] 覆盖北交所 30% + 20cm 涨停的浮点零头（实测 0.2002）。 */
+  changePct: z.number().min(-0.35).max(0.35),
   /** YYYY-MM-DD；理论上 == 请求基准日 `date`，否则降级 uncategorized（runtime 校验）。 */
   limitUpDate: dateString,
   board: LimitUpBoardSchema,
@@ -337,7 +337,7 @@ export const lookupLevels = (
 
 /**
  * 设计文档 §1 不变量：
- * - 单 entry：changePct ∈ [-0.20, 0.20]、price > 0、rawClose > 0、firstTime/finalTime 为 null 或 HH:MM:SS
+ * - 单 entry：changePct ∈ [-0.35, 0.35]（北交所 30% + 20cm 浮点零头）、price > 0、rawClose > 0、firstTime/finalTime 为 null 或 HH:MM:SS
  * - 单 entry：limitUpDate 与请求基准日 `date` 应一致；不一致时 entry 降级为 uncategorized=true（manager 侧处理）
  * - 总 total = 各 levels[].stocks[].code 去重计数
  * - maxLevel = levels[0]?.level ?? 0
@@ -350,8 +350,6 @@ export const assertLimitUpLadderInvariants = (h: LimitUpLadder, baseDate?: strin
   if (h.maxLevel < 0 || !Number.isInteger(h.maxLevel)) {
     throw new InvariantError(`maxLevel 必须为非负整数，实际 ${h.maxLevel}`);
   }
-  const allEntryDates = new Set<string>();
-  let seenCodes = 0;
   for (const lv of h.levels) {
     if (lv.count !== lv.stocks.length) {
       throw new InvariantError(
@@ -361,9 +359,8 @@ export const assertLimitUpLadderInvariants = (h: LimitUpLadder, baseDate?: strin
     if (lv.level < 1 || !Number.isInteger(lv.level)) {
       throw new InvariantError(`level 必须为正整数，实际 ${lv.level}`);
     }
-    seenCodes += lv.stocks.length;
     for (const e of lv.stocks) {
-      if (e.changePct < -0.2 || e.changePct > 0.2) {
+      if (e.changePct < -0.35 || e.changePct > 0.35) {
         throw new InvariantError(`entry.changePct 越界 [${e.code}] = ${e.changePct}`);
       }
       if (e.price <= 0) throw new InvariantError(`entry.price 必须 > 0 [${e.code}]`);
@@ -373,7 +370,6 @@ export const assertLimitUpLadderInvariants = (h: LimitUpLadder, baseDate?: strin
           `entry.limitUpDate (${e.limitUpDate}) != date (${baseDate}) [${e.code}]`,
         );
       }
-      allEntryDates.add(e.limitUpDate);
     }
   }
   // total = levels 跨层去重数（schema 内 manager 已 dedupe；这里再验证一遍）
@@ -386,13 +382,6 @@ export const assertLimitUpLadderInvariants = (h: LimitUpLadder, baseDate?: strin
   const expectedMax = h.levels[0]?.level ?? 0;
   if (expectedMax !== h.maxLevel) {
     throw new InvariantError(`maxLevel (${h.maxLevel}) != levels[0].level (${expectedMax})`);
-  }
-  // 多 date 警告：避免静默吞下跨日数据
-  if (allEntryDates.size > 1 && baseDate === undefined) {
-    // 静默允许，调用方若关心需自检 warnings
-  }
-  if (seenCodes !== h.total && h.levels.length > 0) {
-    // 入口去重若未在 manager 内做完，需要在 assert 阶段被发现；调用方传 baseDate 时仍允许不同 limitUpDate 共存
   }
 };
 

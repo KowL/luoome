@@ -452,6 +452,10 @@ code {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 1 0 3-6.7L3 8'/%3E%3Cpath d='M3 3v5h5'/%3E%3Cpath d='M12 7v5l3 3'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 1 0 3-6.7L3 8'/%3E%3Cpath d='M3 3v5h5'/%3E%3Cpath d='M12 7v5l3 3'/%3E%3C/svg%3E");
 }
+.nav-item[data-route='limit-up']::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 3v18'/%3E%3Cpath d='M16 3v18'/%3E%3Cpath d='M8 7h8'/%3E%3Cpath d='M8 12h8'/%3E%3Cpath d='M8 17h8'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 3v18'/%3E%3Cpath d='M16 3v18'/%3E%3Cpath d='M8 7h8'/%3E%3Cpath d='M8 12h8'/%3E%3Cpath d='M8 17h8'/%3E%3C/svg%3E");
+}
 .nav-item[data-route='chat']::before {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.5 0-3-.4-4.2-1.1L3 20l1.1-5.3A8.5 8.5 0 1 1 21 11.5z'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.5 0-3-.4-4.2-1.1L3 20l1.1-5.3A8.5 8.5 0 1 1 21 11.5z'/%3E%3C/svg%3E");
@@ -3241,7 +3245,174 @@ body > .modal {
 }
 
 /* ============================================================
- * 21. 响应式
+ * 21. 涨停梯队
+ * ============================================================ */
+
+.ladder-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.ladder-controls label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ladder-controls .date-input {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  padding: 7px 10px;
+  color-scheme: dark;
+  transition:
+    border-color var(--duration) var(--ease),
+    box-shadow var(--duration) var(--ease);
+}
+
+.ladder-controls .date-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(56, 225, 198, 0.12);
+}
+
+.ladder-summary .value.has-warning {
+  color: var(--warning);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+}
+
+.ladder-levels .level {
+  margin-bottom: var(--space-5);
+}
+
+/* 各层级是独立 <table>，列宽按内容自适应会导致跨层级错位；
+ * fixed 布局 + 统一列宽保证所有层级表格列对齐（行业 / 原因列分剩余宽度）。 */
+.ladder-levels .table {
+  table-layout: fixed;
+}
+
+.ladder-levels .table th:nth-child(1) {
+  width: 96px;
+}
+
+.ladder-levels .table th:nth-child(2) {
+  width: 140px;
+}
+
+.ladder-levels .table th:nth-child(3) {
+  width: 90px;
+}
+
+.ladder-levels .table th:nth-child(4) {
+  width: 90px;
+}
+
+.ladder-levels .table th:nth-child(5) {
+  width: 110px;
+}
+
+.ladder-levels .table th:nth-child(6) {
+  width: 110px;
+}
+
+.level-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.level-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.level-chevron {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  transition: transform var(--duration) var(--ease);
+}
+
+.level-head:hover .level-chevron {
+  color: var(--ink);
+}
+
+.level.collapsed .level-chevron {
+  transform: rotate(-90deg);
+}
+
+.level.collapsed .level-head {
+  margin-bottom: 0;
+}
+
+.level.collapsed .table-wrap {
+  display: none;
+}
+
+.level-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--pos);
+  background: rgba(251, 92, 108, 0.1);
+  border: 1px solid rgba(251, 92, 108, 0.4);
+}
+
+.level-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.corrected-mark {
+  color: var(--warning);
+  cursor: help;
+}
+
+.ladder-empty {
+  padding: var(--space-6);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  text-align: center;
+}
+
+.ladder-diff {
+  margin-top: var(--space-6);
+}
+
+.ladder-diff .eyebrow {
+  display: block;
+  margin-bottom: var(--space-3);
+}
+
+.ladder-diff .value.pos {
+  color: var(--pos);
+}
+
+.ladder-diff .value.neg {
+  color: var(--neg);
+}
+
+/* ============================================================
+ * 22. 响应式
  * ============================================================ */
 
 @media (max-width: 1020px) {

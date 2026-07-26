@@ -6,8 +6,15 @@ import type {
   LimitUpLadderSource,
   Logger,
 } from '@luoome/core';
-import { assembleLadder, diffTopLevel, filterAndDedupeEntries } from '@luoome/core';
+import {
+  assembleLadder,
+  deriveBoard,
+  diffTopLevel,
+  filterAndDedupeEntries,
+  LimitUpLadderSentinels,
+} from '@luoome/core';
 
+import type { LimitUpPoolEnricherLike, LimitUpPoolEnrichment } from './eastmoney-pool.js';
 import { LRU } from './lru.js';
 import type {
   LimitUpLadderAdapterLike,
@@ -20,9 +27,13 @@ import type {
  *
  * 设计要点：
  * - 主源失败 → 捕获 → 可选 fallback → 双失败抛 adapter_error
- * - 缓存 key = (date, source, includeStar, includeBse, includeST, days)
- * - TTL：当日盘中 = 60s；当日收盘后 / 跨日 / 非当日 = Infinity
+ * - 缓存 key = (date, source, includeStar, includeBse, includeST, days)；
+ *   includeUncategorized 是 entry 级展示过滤，不进 key，返回前再应用
+ * - TTL：当日盘中 = 60s；当日收盘后 / 跨日 / 非当日 = Infinity；
+ *   空 ladder（盘前 / 数据未更新）例外，封顶 60s，避免盘前快照全天滞留
  * - 收盘价修正（§6.4）：map 阶段按 raw.high == raw.close + pct ∈ [9.8%, 10%) 触发
+ * - enricher（eastmoney 涨停池）：补齐 adshare 实测全空的 firstTime/finalTime/industry；
+ *   失败只告警不阻断
  * - 节假日历：简化版内联实现（不依赖 cli，因为 adapters 不能反向依赖 cli）
  *   ；holidaysProvider 可注入供测试替换
  */
@@ -32,6 +43,8 @@ interface ManagerOptions {
   readonly fallback?: LimitUpLadderAdapterLike;
   readonly logger: Logger;
   readonly clock: () => Date;
+  /** 可选：涨停池 enricher，按 code 补齐封板时间 / 行业。 */
+  readonly enricher?: LimitUpPoolEnricherLike;
   /** 测试用：注入节假日历避免实际环境依赖。 */
   readonly holidaysProvider?: () => Promise<ReadonlyMap<number, ReadonlySet<string>>>;
   /** 测试用：替换"今天是 YYYY-MM-DD"映射。 */
@@ -128,12 +141,6 @@ const defaultHolidaysProvider = async (): Promise<ReadonlyMap<number, ReadonlySe
 /** 单 entry 映射 + §6.4 收盘价修正。 */
 function mapAndCorrectEntry(raw: LimitUpLadderRawEntry, date: string): LimitUpLadderEntry {
   const code = raw.code;
-  let board: LimitUpLadderEntry['board'] = 'main_board';
-  if (/^(600|601|603|605|000|001|002|003)/.test(code)) board = 'main_board';
-  else if (/^(300|301)/.test(code)) board = 'chinext';
-  else if (/^(688|689)/.test(code)) board = 'star';
-  else if (/^[84]/.test(code)) board = 'bse';
-
   const preClose = raw.pre_close ?? 0;
   const pct = preClose > 0 ? (raw.close - preClose) / preClose : 0;
 
@@ -158,8 +165,19 @@ function mapAndCorrectEntry(raw: LimitUpLadderRawEntry, date: string): LimitUpLa
     corrected,
     changePct: pct,
     limitUpDate: raw.limit_up_date ?? date,
-    board,
+    board: deriveBoard(code),
   };
+}
+
+/**
+ * entry 级展示过滤（设计 §4.3：cache key 不含 includeUncategorized，
+ * 缓存里始终保留完整 ladder，返回前再按该开关剔除 uncategorized entry）。
+ */
+function applyDisplayFilter(ladder: LimitUpLadder, includeUncategorized: boolean): LimitUpLadder {
+  if (includeUncategorized) return ladder;
+  if (!ladder.levels.some((lv) => lv.stocks.some((s) => s.uncategorized))) return ladder;
+  const entries = ladder.levels.flatMap((lv) => lv.stocks).filter((s) => !s.uncategorized);
+  return assembleLadder(ladder.date, ladder.source, entries, ladder.warnings, ladder.asOf);
 }
 
 function cacheKey(query: LimitUpLadderQuery, source: LimitUpLadderSource): string {
@@ -203,6 +221,7 @@ export class LimitUpLadderManager {
   private readonly logger: Logger;
   private readonly clock: () => Date;
   private readonly cache: LRU<string, LimitUpLadder>;
+  private readonly enricher: LimitUpPoolEnricherLike | undefined;
   private readonly holidaysProvider: () => Promise<ReadonlyMap<number, ReadonlySet<string>>>;
   private readonly dateInShanghaiFn: (d: Date) => string;
   private readonly isWeekendFn: (d: Date) => boolean;
@@ -217,10 +236,38 @@ export class LimitUpLadderManager {
     this.logger = opts.logger;
     this.clock = opts.clock;
     this.cache = new LRU<string, LimitUpLadder>(512);
+    this.enricher = opts.enricher;
     this.holidaysProvider = opts.holidaysProvider ?? defaultHolidaysProvider;
     this.dateInShanghaiFn = opts.dateInShanghaiFn ?? defaultDateInShanghai;
     this.isWeekendFn = opts.isWeekendFn ?? defaultIsWeekend;
     this.isHolidayFn = opts.isHolidayFn ?? defaultIsHoliday;
+  }
+
+  /** 用涨停池按 code 补齐 firstTime/finalTime/industry；只填空字段，不覆盖主源已有值。 */
+  private async enrichEntries(entries: LimitUpLadderEntry[], date: string): Promise<void> {
+    if (this.enricher === undefined || entries.length === 0) return;
+    let pool: ReadonlyMap<string, LimitUpPoolEnrichment>;
+    try {
+      pool = await this.enricher.fetchPool(date);
+    } catch (err) {
+      this.logger.warn('limit-up-ladder enricher failed', {
+        enricher: this.enricher.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    for (const e of entries) {
+      const extra = pool.get(e.code);
+      if (extra === undefined) continue;
+      if (e.firstTime === null && extra.firstTime !== undefined) e.firstTime = extra.firstTime;
+      if (e.finalTime === null && extra.finalTime !== undefined) e.finalTime = extra.finalTime;
+      if (
+        e.industry === LimitUpLadderSentinels.BOARD_UNCLASSIFIED &&
+        extra.industry !== undefined
+      ) {
+        e.industry = extra.industry;
+      }
+    }
   }
 
   private async getHolidays(): Promise<ReadonlyMap<number, ReadonlySet<string>>> {
@@ -240,7 +287,7 @@ export class LimitUpLadderManager {
   }
 
   async fetchLadder(query: LimitUpLadderQuery): Promise<LimitUpLadderResult> {
-    const { date, source, days, includeStar, includeBse, includeST } = query;
+    const { date, source, days, includeStar, includeBse, includeST, includeUncategorized } = query;
     const key = cacheKey(query, source);
     const now = this.clock();
 
@@ -252,7 +299,7 @@ export class LimitUpLadderManager {
     // 缓存命中（LRU 内部校验 TTL；Infinity written 永不失效）
     const cached = this.cache.get(key);
     if (cached !== undefined) {
-      return { ok: true, data: cached };
+      return { ok: true, data: applyDisplayFilter(cached, includeUncategorized) };
     }
 
     const ttl = computeTtl(date, now, this.dateInShanghaiFn);
@@ -298,6 +345,7 @@ export class LimitUpLadderManager {
 
     // 映射 + 修正 + 过滤 + 去重
     const mapped = rawResult.entries.map((e) => mapAndCorrectEntry(e, date));
+    await this.enrichEntries(mapped, date);
     const filtered = filterAndDedupeEntries(mapped, {
       includeStar,
       includeBse,
@@ -314,9 +362,11 @@ export class LimitUpLadderManager {
 
     const ladder = assembleLadder(date, source, filtered, warnings, now);
 
-    this.cache.set(key, ladder, ttl === Infinity ? undefined : ttl);
+    // 空 ladder（盘前 / 数据未更新）不允许长期缓存：否则盘前查一次，全天都停留在 empty-ladder
+    const effectiveTtl = filtered.length === 0 ? Math.min(ttl, 60_000) : ttl;
+    this.cache.set(key, ladder, effectiveTtl === Infinity ? undefined : effectiveTtl);
 
-    return { ok: true, data: ladder };
+    return { ok: true, data: applyDisplayFilter(ladder, includeUncategorized) };
   }
 
   async compareLadder(

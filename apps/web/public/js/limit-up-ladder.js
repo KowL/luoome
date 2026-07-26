@@ -37,21 +37,18 @@ const dateToUrl = (date) => {
 const formatPct = (n) => `${(n * 100).toFixed(2)}%`;
 
 const formatEntry = (entry) => {
-  const priceStr = entry.corrected === true
-    ? `${entry.price.toFixed(2)}*`
-    : entry.price.toFixed(2);
-  const priceTitle = entry.corrected === true
-    ? `已修正：rawClose=${entry.rawClose}，按 8.58% 回推`
-    : '';
+  const priceStr = entry.corrected === true ? `${entry.price.toFixed(2)}*` : entry.price.toFixed(2);
+  const priceTitle =
+    entry.corrected === true ? `已修正：rawClose=${entry.rawClose}，按 8.58% 回推` : '';
   const priceCell = el('span', entry.corrected === true ? 'corrected-mark' : '', priceStr);
   if (priceTitle.length > 0) priceCell.title = priceTitle;
   return el('tr', '', [
     el('td', 'code', entry.code),
     el('td', '', entry.name ?? '--'),
     el('td', 'num', priceCell),
-    el('td', 'num pct', formatPct(entry.changePct)),
-    el('td', '', entry.firstTime ?? '--'),
-    el('td', '', entry.finalTime ?? '--'),
+    el('td', 'num pos', formatPct(entry.changePct)),
+    el('td', 'num', entry.firstTime ?? '--'),
+    el('td', 'num', entry.finalTime ?? '--'),
     el('td', '', entry.industry ?? '--'),
     el('td', '', entry.reason ?? '--'),
   ]);
@@ -62,19 +59,29 @@ const renderLevelTable = (level) => {
     el('tr', '', [
       el('th', '', '代码'),
       el('th', '', '名称'),
-      el('th', '', '现价'),
-      el('th', '', '涨跌幅'),
-      el('th', '', '首次'),
-      el('th', '', '最后'),
+      el('th', 'num', '现价'),
+      el('th', 'num', '涨跌幅'),
+      el('th', 'num', '首次'),
+      el('th', 'num', '最后'),
       el('th', '', '行业'),
       el('th', '', '原因'),
     ]),
   ]);
   const body = el('tbody', '', level.stocks.map(formatEntry));
-  return el('div', `level level-${level.level}`, [
-    el('h3', '', `${level.name}（${level.count} 只）`),
-    el('table', 'ladder-table', [header, body]),
+  const section = el('section', `level level-${level.level}`, [
+    el('div', 'level-head', [
+      el('span', 'level-chevron', '▾'),
+      el('span', 'level-badge', String(level.level)),
+      el('h3', '', level.name),
+      el('span', 'level-count', `${level.count} 只`),
+    ]),
+    el('div', 'table-wrap', [el('table', 'table', [header, body])]),
   ]);
+  // 点击层级头折叠 / 展开本层表格
+  section.querySelector('.level-head')?.addEventListener('click', () => {
+    section.classList.toggle('collapsed');
+  });
+  return section;
 };
 
 const renderEmpty = (warnings, setStatus) => {
@@ -87,53 +94,84 @@ const renderEmpty = (warnings, setStatus) => {
   return el('div', 'ladder-empty', messages.join('；'));
 };
 
+const stat = (label, value, cls = '') =>
+  el('div', 'stat', [el('div', 'label', label), el('div', `value ${cls}`.trim(), String(value))]);
+
 const renderSummary = (ladder) => {
   const total = ladder.total ?? 0;
   const maxLevel = ladder.maxLevel ?? 0;
   const flags = ladder.warnings ?? [];
-  const warningText = flags.length > 0 ? ` · warnings: ${flags.join(' / ')}` : '';
-  return el('div', 'ladder-summary', [
-    el('div', 'stat', [el('span', 'stat-label', '总计'), el('span', 'stat-value', `${total} 只`)]),
-    el('div', 'stat', [el('span', 'stat-label', '最高'), el('span', 'stat-value', `${maxLevel} 连板`)]),
-    el('div', 'stat', [el('span', 'stat-label', '来源'), el('span', 'stat-value', ladder.source ?? '--')]),
-    el('div', 'stat', [
-      el('span', 'stat-label', 'warnings'),
-      el('span', `stat-value ${flags.length > 0 ? 'has-warning' : ''}`, flags.length > 0 ? flags.join(' / ') : '无'),
+  return el('div', 'stat-grid ladder-summary', [
+    stat('总计', `${total} 只`),
+    stat('最高连板', `${maxLevel} 连板`),
+    stat('来源', ladder.source ?? '--'),
+    stat(
+      'warnings',
+      flags.length > 0 ? flags.join(' / ') : '无',
+      flags.length > 0 ? 'has-warning' : '',
+    ),
+  ]);
+};
+
+const signed = (n) => (n > 0 ? `+${n}` : String(n));
+
+const renderDiff = (compare) => {
+  const diff = compare.diff;
+  return el('section', 'ladder-diff', [
+    el('h3', 'eyebrow', `vs ${compare.prev.date}`),
+    el('div', 'stat-grid', [
+      stat(
+        '总数变化',
+        signed(diff.totalDelta),
+        diff.totalDelta > 0 ? 'pos' : diff.totalDelta < 0 ? 'neg' : '',
+      ),
+      stat(
+        '最高板变化',
+        signed(diff.maxLevelDelta),
+        diff.maxLevelDelta > 0 ? 'pos' : diff.maxLevelDelta < 0 ? 'neg' : '',
+      ),
+      stat('顶级保留', diff.topLevelRetained.length),
+      stat('顶级新增', diff.topLevelAdded.length, diff.topLevelAdded.length > 0 ? 'pos' : ''),
+      stat('顶级减少', diff.topLevelRemoved.length, diff.topLevelRemoved.length > 0 ? 'neg' : ''),
     ]),
   ]);
 };
 
-const renderDiff = (diff) => {
-  const cells = (label, value, cls = '') =>
-    el('div', 'stat', [el('span', 'stat-label', label), el('span', `stat-value ${cls}`, String(value))]);
-  return el('div', 'ladder-diff', [
-    el('h3', '', 'vs 昨日'),
-    cells('totalDelta', diff.totalDelta, diff.totalDelta > 0 ? 'pos' : diff.totalDelta < 0 ? 'neg' : ''),
-    cells('maxLevelDelta', diff.maxLevelDelta, diff.maxLevelDelta > 0 ? 'pos' : diff.maxLevelDelta < 0 ? 'neg' : ''),
-    cells('top retained', diff.topLevelRetained.length),
-    cells('top added', diff.topLevelAdded.length, diff.topLevelAdded.length > 0 ? 'pos' : ''),
-    cells('top removed', diff.topLevelRemoved.length, diff.topLevelRemoved.length > 0 ? 'neg' : ''),
-  ]);
+const prevDayOf = (date) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+};
+
+// prev 自然日可能是周末/节假日：回退到最近一个有数据的交易日，否则 diff 全是 added 失真
+const fetchCompare = async (date) => {
+  let prev = prevDayOf(date);
+  for (let i = 0; i < 10; i++) {
+    const cmpR = await callApi(
+      `/api/market/limit-up/compare?date=${encodeURIComponent(date)}&prevDate=${encodeURIComponent(prev)}`,
+    );
+    if (!cmpR.ok) return null;
+    if (!cmpR.data.prev.warnings?.includes('non-trading-day')) return cmpR.data;
+    prev = prevDayOf(prev);
+  }
+  return null;
 };
 
 const fetchLadderAndCompare = async (date) => {
   const ladderR = await callApi(`/api/market/limit-up?date=${encodeURIComponent(date)}`);
-  if (ladderR.status === 502) {
-    return { ok: false, kind: 'upstream-unavailable' };
-  }
   if (!ladderR.ok) {
-    return { ok: false, kind: ladderR.error?.kind ?? 'internal' };
+    // callApi 不回传 HTTP status；server 把上游 adshare 失败包成 error.kind='adapter_error'
+    const kind =
+      ladderR.error?.kind === 'adapter_error'
+        ? 'upstream-unavailable'
+        : (ladderR.error?.kind ?? 'internal');
+    return { ok: false, kind };
   }
-  // 找前一日（Asia/Shanghai 自然日 -1）
-  const prev = (() => {
-    const d = new Date(`${date}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() - 1);
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-  })();
-  const cmpR = await callApi(
-    `/api/market/limit-up/compare?date=${encodeURIComponent(date)}&prevDate=${encodeURIComponent(prev)}`,
-  );
-  return { ok: true, ladder: ladderR.data, compare: cmpR.ok ? cmpR.data : null };
+  // 非交易日当日快照为空，与前一交易日比 diff 没有业务意义，不拉 compare
+  const compare = ladderR.data.warnings?.includes('non-trading-day')
+    ? null
+    : await fetchCompare(date);
+  return { ok: true, ladder: ladderR.data, compare };
 };
 
 const renderDatePicker = (current, setStatus) => {
@@ -165,9 +203,10 @@ export const renderLimitUpLadder = async (setStatus) => {
   mount(root, [el('p', 'muted', '加载中…')]);
   const r = await fetchLadderAndCompare(date);
   if (!r.ok) {
-    const detail = r.kind === 'upstream-unavailable'
-      ? '请确认 ADSHARE_URL 已配置（或在 .env 中设置），并允许 luoome web 访问 adshare 服务。'
-      : '';
+    const detail =
+      r.kind === 'upstream-unavailable'
+        ? '请确认 ADSHARE_URL 已配置（或在 .env 中设置），并允许 luoome web 访问 adshare 服务。'
+        : '';
     mount(root, [
       el('h2', '', '涨停梯队'),
       el('p', 'error', `加载失败：${r.kind}（${detail}）`.trim()),
@@ -177,18 +216,20 @@ export const renderLimitUpLadder = async (setStatus) => {
   }
   const { ladder, compare } = r;
   const controls = el('div', 'ladder-controls', [
-    el('label', '', '日期：'),
+    el('label', '', '日期'),
     renderDatePicker(date, setStatus),
     renderRefreshButton(setStatus),
   ]);
   const header = el('h2', '', `涨停梯队 · ${ladder.date}`);
   const summary = renderSummary(ladder);
-  const body = ladder.levels.length === 0
-    ? renderEmpty(ladder.warnings ?? [], setStatus)
-    : el('div', 'ladder-levels', ladder.levels.map(renderLevelTable));
-  const compareSection = compare !== null
-    ? renderDiff(compare.diff)
-    : el('p', 'muted', '（vs 昨日 diff 不可用，仅展示当日快照）');
-  mount(root, [controls, header, summary, body, compareSection]);
+  const body =
+    ladder.levels.length === 0
+      ? renderEmpty(ladder.warnings ?? [], setStatus)
+      : el('div', 'ladder-levels', ladder.levels.map(renderLevelTable));
+  const compareSection =
+    compare !== null
+      ? renderDiff(compare)
+      : el('p', 'muted', '（vs 前一交易日 diff 不可用，仅展示当日快照）');
+  mount(root, [header, controls, summary, body, compareSection]);
   setStatus(`涨停梯队 ${ladder.date} 加载完成（${ladder.total} 只 / ${ladder.maxLevel} 连板）`);
 };

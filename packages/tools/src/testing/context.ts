@@ -10,13 +10,23 @@ import {
   TEST_TRADES,
   testAdviceFor,
 } from '@luoome/adapters/testing';
-import type { Advice, Logger, RepositoryRegistry, ToolContext } from '@luoome/core';
+import type {
+  Advice,
+  AgentRuntimeLike,
+  LimitUpLadderManagerLike,
+  Logger,
+  RepositoryRegistry,
+  ToolContext,
+} from '@luoome/core';
 import { createInMemoryRepos, seedData } from '@luoome/db/memory';
 
 export interface BuildTestContextOptions {
+  readonly agent?: AgentRuntimeLike;
   readonly clock?: () => Date;
   readonly logger?: Logger;
   readonly advices?: readonly Advice[];
+  /** 可选注入连板天梯 manager（Phase 2 接入 web API 测试）。 */
+  readonly limitUpLadder?: LimitUpLadderManagerLike;
 }
 
 const createSilentLogger = (): Logger => {
@@ -47,7 +57,7 @@ export const buildTestContext = async (
     await seedData(repos, { advices });
   }
 
-  return {
+  const ctx: ToolContext = {
     repos,
     adapters: {
       market: new FakeMarketAdapter({ clock: marketClock }),
@@ -57,7 +67,12 @@ export const buildTestContext = async (
     user: { id: 'test-user', defaultAccountId: TEST_ACCOUNT.id },
     clock: businessClock,
     logger: opts.logger ?? createSilentLogger(),
+    ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
   };
+  if (opts.limitUpLadder !== undefined) {
+    return { ...ctx, limitUpLadder: opts.limitUpLadder };
+  }
+  return ctx;
 };
 
 const createTestNotificationManager = (repos: RepositoryRegistry) => ({

@@ -2,7 +2,7 @@ import { AdshareClient } from '@luoome/adshare-sdk';
 import type { LimitUpLadderManagerLike, Logger } from '@luoome/core';
 
 import { AdshareLimitUpLadderAdapter } from './adshare.js';
-import { AmazingdataLimitUpLadderAdapter } from './amazingdata.js';
+import { EastmoneyLimitUpPoolEnricher } from './eastmoney-pool.js';
 import { LimitUpLadderManager } from './manager.js';
 
 /**
@@ -10,8 +10,7 @@ import { LimitUpLadderManager } from './manager.js';
  *
  * 仿 `createMarketAdapterFromEnv`（market/factory.ts）的位置与签名风格。
  * - 不引入新环境变量：沿用 adshare-sdk 的 `ADSHARE_URL` / `ADSHARE_API_KEY` / `ADSHARE_TIMEOUT_MS` / `ADSHARE_MAX_RETRIES`
- * - 主源 adshare 写死；fallback 通过 `LUOOME_LIMIT_UP_LADDER_FALLBACK=amazingdata` 显式 opt-in
- *   启用（Phase 1 amazingdata 仅 throw 占位；开了就报错以避免 silent 失败）
+ * - 数据源 adshare 写死（不接 fallback；上游不可达时返回 adapter_error）
  * - 返回的 manager 同时满足 core `LimitUpLadderManagerLike` 接口（structural typing）
  */
 
@@ -46,22 +45,16 @@ export const createLimitUpLadderManagerFromEnv = (
 
   const primaryAdapter = new AdshareLimitUpLadderAdapter(adshareClient, deps.fetchImpl);
 
-  let fallback: ConstructorParameters<typeof LimitUpLadderManager>[0]['fallback'];
-  if (env.LUOOME_LIMIT_UP_LADDER_FALLBACK === 'amazingdata') {
-    fallback = new AmazingdataLimitUpLadderAdapter() as unknown as ConstructorParameters<
-      typeof LimitUpLadderManager
-    >[0]['fallback'];
-  }
-
   const clock = deps.clock ?? (() => new Date());
 
   return new LimitUpLadderManager({
     primary: primaryAdapter as unknown as ConstructorParameters<
       typeof LimitUpLadderManager
     >[0]['primary'],
-    ...(fallback !== undefined ? { fallback } : {}),
     logger: deps.logger,
     clock,
+    // adshare 封板时间 / 行业实测全空；eastmoney 公开涨停池按 code 补齐，失败只告警
+    enricher: new EastmoneyLimitUpPoolEnricher(deps.fetchImpl),
   });
 };
 
