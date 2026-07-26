@@ -31,6 +31,7 @@ export * from './tools/get-confidence-calibration.js';
 export * from './tools/get-holding.js';
 export * from './tools/get-market-data-status.js';
 export * from './tools/get-stock-group.js';
+export * from './tools/get-stock-market-view.js';
 export * from './tools/get-tactic.js';
 export * from './tools/get-watch-status.js';
 export * from './tools/limit-up-ladder.js';

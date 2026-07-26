@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
 
-// v0.8 MVP：原 45 tool + v0.7 策略预警 set_watch_trigger_feedback = 46 tool
+// 工具库存快照：新增 tool 时同步本列表与下方 sideEffect 断言。
 const EXPECTED_TOOL_NAMES = [
   // v0.1
   'agent_run',
@@ -82,6 +82,8 @@ const EXPECTED_TOOL_NAMES = [
   'rename_chat_session',
   'delete_chat_session',
   'append_chat_message',
+  // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
+  'get_stock_market_view',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -126,6 +128,7 @@ describe('toolRegistry', () => {
       'agent_run',
       'batch_quote',
       'fetch_quote',
+      'get_stock_market_view',
       'refresh_stock_group',
       'send_notification',
       'sync_quotes',

@@ -8,6 +8,7 @@ import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } fr
 import { initChat, refreshChat } from './chat.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
+import { renderMarket, teardownMarket } from './market.js';
 import { initMvpActions, openGroupModal } from './mvp-actions.js';
 import {
   analyzeAllHoldings,
@@ -58,6 +59,7 @@ const startClock = () => {
 
 const ROUTES = [
   'dashboard',
+  'market',
   'holdings',
   'groups',
   'research',
@@ -71,6 +73,8 @@ const ROUTES = [
 
 const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
+  // 离开行情页时停止 60s 自动刷新并销毁图表（设计 §11.4）。
+  if (safe !== 'market') teardownMarket();
   document.querySelectorAll('.route').forEach((node) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
@@ -85,7 +89,8 @@ const showRoute = async (name) => {
     if (safe === 'dashboard') {
       await renderDashboard(setStatus);
       await renderDataHealth(setStatus);
-    } else if (safe === 'holdings') await renderHoldings(setStatus);
+    } else if (safe === 'market') await renderMarket(setStatus);
+    else if (safe === 'holdings') await renderHoldings(setStatus);
     else if (safe === 'groups') await renderGroups(setStatus);
     else if (safe === 'research') {
       await renderResearch(setStatus);
@@ -113,7 +118,8 @@ const showRoute = async (name) => {
 };
 
 const currentHash = () => {
-  const h = window.location.hash.replace(/^#/, '');
+  // 深链接形如 #market?stockId=002594.SZ&range=3m：? 前是 routeName（设计 §11.1）。
+  const h = window.location.hash.replace(/^#/, '').split('?')[0] ?? '';
   if (h === 'watch') return 'groups';
   if (h.length > 0) return h;
   const path = window.location.pathname.replace(/^\/|\/$/g, '');

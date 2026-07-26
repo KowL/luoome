@@ -51,7 +51,7 @@
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div class="route-header">
           <h1>仪表盘</h1>
-          <div class="route-meta">实时持仓 + 今日建议概览</div>
+          <div id="dashboard-stock-search"></div>
         </div>
         <div class="card" id="dashboard-data-health">
           <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale 分组</div></div>
@@ -122,6 +122,70 @@
             <a href="#groups" class="card-link">在分组中管理方案 →</a>
           </div>
           <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
+        </div>
+      </section>
+
+      <!-- route: market（个股行情，docs/ddd/stock-market-view-detailed-design.md §11） -->
+      <section id="route-market" class="route" data-route="market" hidden>
+        <div class="route-header">
+          <h1>行情</h1>
+          <div id="market-search"></div>
+        </div>
+        <div id="market-banner" class="status error" role="status" hidden></div>
+        <div class="card" id="market-quote-card">
+          <div class="market-quote-head">
+            <div>
+              <h2 id="market-quote-name">--</h2>
+              <div class="muted mono" id="market-quote-code">--</div>
+            </div>
+            <div class="market-quote-badges" id="market-quote-badges"></div>
+          </div>
+          <div class="market-quote-price-row">
+            <span class="market-quote-price" id="market-quote-price">--</span>
+            <span id="market-quote-change">--</span>
+            <span id="market-quote-change-pct">--</span>
+          </div>
+          <div class="market-quote-grid">
+            <div class="market-quote-cell"><span class="label">今开</span><span class="num" id="market-quote-open">--</span></div>
+            <div class="market-quote-cell"><span class="label">最高</span><span class="num" id="market-quote-high">--</span></div>
+            <div class="market-quote-cell"><span class="label">最低</span><span class="num" id="market-quote-low">--</span></div>
+            <div class="market-quote-cell"><span class="label">昨收</span><span class="num" id="market-quote-prev">--</span></div>
+            <div class="market-quote-cell"><span class="label">成交量</span><span class="num" id="market-quote-volume">--</span></div>
+          </div>
+          <div class="market-quote-meta">
+            <span id="market-quote-fetched">--</span>
+            <span id="market-quote-source">--</span>
+          </div>
+          <div id="market-recent" class="market-recent"></div>
+        </div>
+        <div id="market-empty" class="card mt-4">
+          <p class="placeholder">搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&amp;range=3m。</p>
+        </div>
+        <div id="market-main" hidden>
+          <div class="card mt-4">
+            <div class="card-header">
+              <h2>日 K</h2>
+              <div class="market-range-switch" id="market-range-switch" role="group" aria-label="周期切换">
+                <button type="button" class="btn btn-outline btn-sm" data-range="1m">1M</button>
+                <button type="button" class="btn btn-outline btn-sm" data-range="3m">3M</button>
+                <button type="button" class="btn btn-outline btn-sm" data-range="6m">6M</button>
+                <button type="button" class="btn btn-outline btn-sm" data-range="1y">1Y</button>
+              </div>
+            </div>
+            <div id="market-chart" class="market-chart"></div>
+            <p id="market-chart-empty" class="placeholder" hidden>暂无 K 线数据。</p>
+          </div>
+          <div class="card mt-4">
+            <div class="card-header">
+              <h2>指标摘要</h2>
+              <div class="card-meta" id="market-indicators-meta">--</div>
+            </div>
+            <div id="market-indicators" class="market-indicators"></div>
+          </div>
+          <div class="card mt-4">
+            <div class="card-header"><h2>关联入口</h2></div>
+            <div id="market-links" class="market-links"></div>
+          </div>
         </div>
       </section>
 

@@ -312,6 +312,7 @@ export class EastmoneyAdapter {
         close: money(close),
         volume,
         adjFactor: 1.0,
+        source: 'eastmoney',
       });
     }
     return bars;

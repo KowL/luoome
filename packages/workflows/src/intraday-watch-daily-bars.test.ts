@@ -77,6 +77,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         close: money(95),
         volume: 1_000_000,
         adjFactor: 1,
+        source: 'intraday-test',
       },
     ]);
     const r = await intradayWatchWorkflow.run(
@@ -117,6 +118,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         close: money(90),
         volume: 1_000_000,
         adjFactor: 1,
+        source: 'intraday-test',
       },
       {
         stockId: '600519.SH',
@@ -127,6 +129,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         close: money(95),
         volume: 1_000_000,
         adjFactor: 1,
+        source: 'intraday-test',
       },
     ]);
     const r = await intradayWatchWorkflow.run(
@@ -151,6 +154,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         close: money(0), // 异常：bar.close <= 0
         volume: 0,
         adjFactor: 1,
+        source: 'intraday-test',
       },
     ]);
     const r = await intradayWatchWorkflow.run(
@@ -176,6 +180,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         close: money(95),
         volume: 1_000_000,
         adjFactor: 1,
+        source: 'intraday-test',
       },
     ]);
     // 把阈值改严到 6%（> 5.26%）— StockPoolRepository.save 是 upsert，同 id 覆盖
@@ -214,6 +219,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         close: money(100),
         volume: 1_000_000,
         adjFactor: 1,
+        source: 'intraday-test',
       },
     ]);
     const r = await intradayWatchWorkflow.run(

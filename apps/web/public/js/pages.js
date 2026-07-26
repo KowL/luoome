@@ -10,7 +10,9 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
+import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
 import { mutateEntity, openAddMemberModal, openGroupModal, openPoolModal } from './mvp-actions.js';
+import { createStockSearchBox } from './search-box.js';
 import {
   $,
   adviceCard,
@@ -31,13 +33,40 @@ const navigateTo = (href) => {
   window.location.hash = `#${href.replace(/^#/, '')}`;
 };
 
+const routeStockId = (hash = window.location.hash) => {
+  const value = parseRouteHash(hash).params.get('stockId')?.trim().toUpperCase();
+  return value === undefined || value.length === 0 ? null : value;
+};
+
+const filterAdvices = (advices, decision, stockId) =>
+  advices.filter(
+    (advice) =>
+      (decision === 'all' || advice.decision === decision) &&
+      (stockId === null || advice.subjectId === stockId),
+  );
+
 const formatMetricDistribution = (counts, label) => {
   const entries = Object.entries(counts ?? {});
   if (entries.length === 0) return `—`;
   return entries.map(([k, v]) => `${label?.[k] ?? k}×${v}`).join(' · ');
 };
 
+/** 股票代码 / 名称 → 行情页锚点（持仓、分组共用）。textContent 赋值，不拼 HTML。 */
+const stockMarketLink = (stockId, text) => {
+  const a = el('a', 'stock-link', text);
+  a.setAttribute('href', buildMarketLink(stockId));
+  return a;
+};
+
+/** 仪表盘搜索框只建一次（renderDashboard 有 5s 自动刷新）；选中走行情页统一入口。 */
+const bindDashboardSearch = () => {
+  const wrap = $('#dashboard-stock-search');
+  if (wrap === null) return;
+  createStockSearchBox(wrap, { onSelect: (stock) => navigateToStock(stock) });
+};
+
 const renderDashboard = async (setStatus) => {
+  bindDashboardSearch();
   const result = await callApi('/api/dashboard');
   if (!result.ok) {
     setStatus(`仪表盘加载失败：${result.error.kind}`, true);
@@ -196,9 +225,12 @@ const renderHoldings = async (setStatus) => {
           b.addEventListener('click', () => onClick(b));
           return b;
         };
-        return el('tr', null, [
-          el('td', null, code),
-          el('td', null, [item.stockName, adviceSlot(item.holding.stockId)]),
+        const row = el('tr', null, [
+          el('td', null, stockMarketLink(item.holding.stockId, code)),
+          el('td', null, [
+            stockMarketLink(item.holding.stockId, item.stockName),
+            adviceSlot(item.holding.stockId),
+          ]),
           el('td', 'num', String(item.holding.quantity)),
           el('td', 'num', fmtNum(item.holding.avgCost)),
           el('td', 'num', fmtNum(item.currentPrice)),
@@ -218,6 +250,8 @@ const renderHoldings = async (setStatus) => {
             ]),
           ]),
         ]);
+        row.dataset.stockId = item.holding.stockId;
+        return row;
       }),
     );
   }
@@ -231,7 +265,20 @@ const renderHoldings = async (setStatus) => {
   $('#holdings-foot').hidden = holdings.length === 0;
   renderTrades(tradesResult);
   await backfillLatestAdvice(holdings);
-  setStatus(`持仓已刷新 · ${holdings.length} 只`);
+  const targetStockId = routeStockId();
+  const targetRow =
+    targetStockId === null
+      ? null
+      : [...body.querySelectorAll('tr')].find((row) => row.dataset.stockId === targetStockId);
+  if (targetRow !== null && targetRow !== undefined) {
+    targetRow.classList.add('route-target');
+    targetRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setStatus(`已定位持仓 ${targetStockId}`);
+  } else if (targetStockId !== null) {
+    setStatus(`当前账户未持有 ${targetStockId}`, true);
+  } else {
+    setStatus(`持仓已刷新 · ${holdings.length} 只`);
+  }
 };
 
 const renderTrades = (result) => {
@@ -759,8 +806,10 @@ const showGroupDetail = async (id, setStatus) => {
               pctClass = pct > 0 ? 'text-pos' : pct < 0 ? 'text-neg' : '';
             }
             const line1 = el('div', 'member-line-1', [
-              el('strong', 'mono', member.stockId),
-              el('span', 'member-name', member.name),
+              stockMarketLink(member.stockId, [
+                el('strong', 'mono', member.stockId),
+                el('span', 'member-name', member.name),
+              ]),
               el(
                 'span',
                 `member-price ${typeof close === 'number' ? '' : 'muted'}`,
@@ -990,16 +1039,29 @@ const renderAdviceList = async (setStatus) => {
   }
   const all = [...r.data.advices].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const filter = $('#advice-filter')?.value ?? 'all';
-  const filtered = filter === 'all' ? all : all.filter((a) => a.decision === filter);
+  const stockId = routeStockId();
+  const filtered = filterAdvices(all, filter, stockId);
   if (filtered.length === 0) {
     mount(
       list,
-      el('p', 'placeholder', filter === 'all' ? '（暂无建议）' : `（无 ${filter} 类建议）`),
+      el(
+        'p',
+        'placeholder',
+        stockId === null
+          ? filter === 'all'
+            ? '（暂无建议）'
+            : `（无 ${filter} 类建议）`
+          : `（${stockId} 暂无匹配建议）`,
+      ),
     );
   } else {
     mount(list, filtered.map(adviceCard));
   }
-  setStatus(`建议已刷新 · ${filtered.length} / ${all.length} 条`);
+  setStatus(
+    stockId === null
+      ? `建议已刷新 · ${filtered.length} / ${all.length} 条`
+      : `${stockId} · ${filtered.length} 条建议`,
+  );
 };
 
 /* ============ review ============ */
@@ -1461,9 +1523,9 @@ const callTool = (tool, input) =>
     body: JSON.stringify({ input }),
   });
 
-/** 股票搜索：复用 /api/stocks/search（优先 adshare，本地兜底）。 */
+/** 股票搜索：复用 /api/stocks/search（优先 adshare，本地兜底）；与行情页共用 q 参数。 */
 const searchStocks = async (query) => {
-  const r = await callApi(`/api/stocks/search?query=${encodeURIComponent(query)}&limit=8`);
+  const r = await callApi(`/api/stocks/search?q=${encodeURIComponent(query)}&limit=8`);
   if (!r.ok) return [];
   const data = r.data;
   return data && Array.isArray(data.stocks) ? data.stocks : [];
@@ -1626,10 +1688,26 @@ const renderResearch = async (setStatus) => {
     setStatus(`找到 ${list.length} 个候选`);
   };
 
-  btn.addEventListener('click', () => void runSearch());
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') void runSearch();
-  });
+  if (btn.dataset.bound !== '1') {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => void runSearch());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') void runSearch();
+    });
+  }
+
+  const stockId = routeStockId();
+  if (stockId !== null) {
+    input.value = stockId;
+    setStatus(`加载 ${stockId} 研究记录…`);
+    const candidates = await searchStocks(stockId);
+    const stock = candidates.find((candidate) => candidate.id === stockId);
+    if (stock === undefined) {
+      setStatus(`未找到股票 ${stockId}`, true);
+    } else {
+      await loadResearch(stock.id, stock.code, stock.name);
+    }
+  }
 };
 
 /** 加载并渲染某只股票的研究时间线。 */
@@ -1855,6 +1933,7 @@ export {
   bindSettingsActions,
   cancelAnalyzeAllHoldings,
   errorKindLabel,
+  filterAdvices,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
@@ -1867,6 +1946,7 @@ export {
   renderSettingsAccount,
   renderTacticsList,
   renderWorkflowRuns,
+  routeStockId,
   runTacticScan,
   runWatchOnce,
 };

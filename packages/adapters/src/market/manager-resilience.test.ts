@@ -53,6 +53,7 @@ class ResilPrimary {
         close: money(95),
         volume: 1000,
         adjFactor: 1,
+        source: 'resil-primary',
       },
     ].filter((b) => b.date >= range.start && b.date <= range.end);
   }
@@ -94,6 +95,7 @@ class ResilFallback {
         close: money(94),
         volume: 999,
         adjFactor: 1,
+        source: 'resil-fallback',
       },
     ].filter((b) => b.date >= range.start && b.date <= range.end);
   }
@@ -132,6 +134,7 @@ class ResilFinal {
         close: money(93),
         volume: 888,
         adjFactor: 1,
+        source: 'resil-final',
       },
     ];
   }

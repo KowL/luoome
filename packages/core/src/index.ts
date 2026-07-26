@@ -32,6 +32,8 @@ export * from './repository/index.js';
 // 战法 DSL 引擎（v0.3 起）
 export * from './tactic/dsl.js';
 export * from './tactic/runner.js';
+// A 股节假日历（纯计算；文件 / env 加载仍在 cli）
+export * from './trading-calendar.js';
 // 基础类型
 export * from './types/branded.js';
 export * from './types/result.js';

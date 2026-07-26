@@ -35,6 +35,20 @@ import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
 /**
+ * 行情页图表库（设计 §12.1）：固定版本 lightweight-charts 的 ESM 产物文件。
+ * 必须serve standalone 产物：包入口（lightweight-charts.production.mjs）含裸导入
+ * fancy-canvas，浏览器无 import map 无法解析，standalone 已内联全部依赖。
+ * 由 import.meta.resolve 定位已安装包的 package.json 再拼 dist 固定文件名，
+ * 不接受任何用户路径，禁止目录遍历，不暴露整个 node_modules；
+ * 升级依赖时同步改 /vendor/lightweight-charts-<version>.mjs 的 URL 版本段。
+ */
+const LIGHTWEIGHT_CHARTS_FILE = join(
+  dirname(fileURLToPath(import.meta.resolve('lightweight-charts/package.json'))),
+  'dist',
+  'lightweight-charts.standalone.production.mjs',
+);
+
+/**
  * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认放行 read + advice + write。
  * 本地单用户工具，write（持仓 / 交易录入等）是 Web 持仓管理的基础能力；
  * MCP 暴露面不受影响（仍 read+advice 默认，write 需 LUOOME_EXPOSE_WRITE）。
@@ -42,15 +56,17 @@ const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice', 'write']);
 
 /**
- * external 白名单：fetch_quote / batch_quote / refresh_stock_group 仅写本地
- * PriceSnapshot 或 GroupMember（无外部副作用外的状态变更），
- * 持仓表单「取现价」与分组详情行情需要；sync_quotes / send_notification 等仍 403。
+ * external 白名单：fetch_quote / batch_quote / refresh_stock_group /
+ * get_stock_market_view 仅写本地 PriceSnapshot / DailyBar / GroupMember
+ * （无外部副作用外的状态变更），
+ * 持仓表单「取现价」、分组详情行情与行情页需要；sync_quotes / send_notification 等仍 403。
  */
 const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'agent_run',
   'fetch_quote',
   'batch_quote',
   'refresh_stock_group',
+  'get_stock_market_view',
 ]);
 
 /**
@@ -256,6 +272,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/chat', serveFile('index.html', 'text/html; charset=utf-8'));
+  // 行情页 SPA shell（设计 §11.1：#market 深链接；/market 供直接访问）。
+  app.get('/market', serveFile('index.html', 'text/html; charset=utf-8'));
+
+  // 图表库 ESM 产物（设计 §12.1）：固定版本固定文件，长缓存；
+  // 路由不带路径参数，/vendor 下任何其它路径一律 404。
+  app.get(
+    '/vendor/lightweight-charts-5.2.0.mjs',
+    () =>
+      new Response(Bun.file(LIGHTWEIGHT_CHARTS_FILE), {
+        headers: {
+          'content-type': 'text/javascript; charset=utf-8',
+          'cache-control': 'public, max-age=31536000, immutable',
+        },
+      }),
+  );
 
   // /js/* 静态文件（v0.4 起拆成模块；无构建步骤，直接读取 public/js/）。
   app.get('/js/:filename', (c) => {

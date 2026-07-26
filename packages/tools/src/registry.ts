@@ -35,6 +35,7 @@ import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration
 import { getHoldingTool } from './tools/get-holding.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getStockGroupTool } from './tools/get-stock-group.js';
+import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getTacticTool } from './tools/get-tactic.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
@@ -247,4 +248,6 @@ export const toolRegistry: Registry = createRegistry([
   syncStockEventsTool,
   getMarketDataStatusTool,
   listWorkflowRunsTool,
+  // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
+  getStockMarketViewTool,
 ]);

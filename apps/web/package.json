@@ -20,6 +20,7 @@
     "@luoome/tools": "workspace:*",
     "@luoome/workflows": "workspace:*",
     "hono": "^4.12.30",
+    "lightweight-charts": "5.2.0",
     "zod": "^4.4.3"
   }
 }

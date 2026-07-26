@@ -1,0 +1,43 @@
+/* apps/web/public/js/entry-points.test.js —— 行情页入口结构断言。
+ *
+ * 「行情」不再有侧栏菜单项，入口改为：持仓 / 分组点击股票、仪表盘搜索；
+ * #market 路由与 #route-market section 必须保留（深链接仍可用）。
+ * 无 DOM 环境，直接对 index.html / app.js 源码做结构断言。
+ */
+
+import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+
+const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+const html = read('../index.html');
+const appJs = read('./app.js');
+
+describe('侧栏与路由结构', () => {
+  it('侧栏没有「行情」菜单项', () => {
+    expect(html).not.toContain('href="#market" data-route="market"');
+  });
+
+  it('#route-market section 保留（深链接仍可用）', () => {
+    expect(html).toContain('id="route-market"');
+    expect(html).toContain('data-route="market"');
+  });
+
+  it('app.js 的 ROUTES 仍包含 market，路由分发不报错', () => {
+    expect(appJs).toContain("'market'");
+    expect(appJs).toContain('renderMarket');
+  });
+
+  it('导航 active 逻辑只遍历已存在的 .nav-item（无行情项时是空操作）', () => {
+    expect(appJs).toContain("document.querySelectorAll('.nav-item')");
+  });
+});
+
+describe('行情页入口', () => {
+  it('行情页搜索容器保留（页内换股票）', () => {
+    expect(html).toContain('id="market-search"');
+  });
+
+  it('仪表盘有股票搜索容器', () => {
+    expect(html).toContain('id="dashboard-stock-search"');
+  });
+});

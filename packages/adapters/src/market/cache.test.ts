@@ -110,6 +110,7 @@ describe('market/cache', () => {
         close: 1 as never,
         volume: 0,
         adjFactor: 1,
+        source: 'cache-test',
       };
       const b = {
         stockId: 'X',
@@ -120,6 +121,7 @@ describe('market/cache', () => {
         close: 1 as never,
         volume: 0,
         adjFactor: 1,
+        source: 'cache-test',
       };
       c.set('X', new Date('2026-07-01'), new Date('2026-07-02'), [a]);
       c.set('X', new Date('2026-07-02'), new Date('2026-07-03'), [b]);

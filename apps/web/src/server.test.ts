@@ -374,6 +374,53 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect((await json(r)).ok).toBe(true);
   });
 
+  it('get_stock_market_view（白名单）→ 200；缺 token → 403', async () => {
+    const r = await callTool('get_stock_market_view', { stockId: '002594.SZ' });
+    expect(r.status).toBe(200);
+    const body = (await json(r)) as {
+      ok: boolean;
+      data?: { candles?: unknown[]; dataStatus?: { freshness?: string } };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.candles?.length).toBeGreaterThan(0);
+
+    const withoutToken = await app.fetch(
+      new Request('http://test/api/tools/get_stock_market_view/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
+      }),
+    );
+    expect(withoutToken.status).toBe(403);
+  });
+
+  it('get_stock_market_view 全源失败且无本地数据 → adapter_error 转 502', async () => {
+    const failingMarket = {
+      name: 'failing-market',
+      fetchQuote: () => Promise.reject(new Error('quote upstream down')),
+      batchQuote: () => Promise.resolve(new Map()),
+      fetchDailyBars: () => Promise.reject(new Error('kline upstream down')),
+    };
+    const base = await buildTestContext();
+    const testApp = createWebApp(
+      { ...base, adapters: { ...base.adapters, market: failingMarket } },
+      { webToken: WEB_TOKEN },
+    );
+    const r = await testApp.fetch(
+      new Request('http://test/api/tools/get_stock_market_view/call', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
+      }),
+    );
+    expect(r.status).toBe(502);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.error?.kind).toBe('adapter_error');
+  });
+
   it('sync_quotes / send_notification（external 非白名单）→ 403', async () => {
     for (const name of ['sync_quotes', 'send_notification']) {
       const r = await callTool(name, {});
@@ -1143,5 +1190,46 @@ describe('Web 连板天梯 API', () => {
     const body = (await r.json()) as { ok: boolean; data?: { diff: { totalDelta: number } } };
     expect(body.ok).toBe(true);
     expect(body.data?.diff.totalDelta).toBe(1);
+  });
+});
+
+describe('行情页 vendor 与 SPA 路由（stock-market-view §12.1 / §14.3）', () => {
+  it('vendor ESM 路由返回正确 content-type 与长缓存', async () => {
+    const r = await app.fetch(new Request('http://test/vendor/lightweight-charts-5.2.0.mjs'));
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toContain('text/javascript');
+    expect(r.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    const body = await r.text();
+    expect(body).toContain('createChart');
+  });
+
+  it('/vendor 下其它路径与目录遍历不可访问', async () => {
+    for (const path of [
+      '/vendor/',
+      '/vendor/other.mjs',
+      '/vendor/../src/server.ts',
+      '/vendor/%2e%2e/package.json',
+    ]) {
+      const r = await app.fetch(new Request(`http://test${path}`));
+      expect(r.status).toBe(404);
+    }
+  });
+
+  it('/market SPA 路由返回 index.html（含行情路由 section）', async () => {
+    const r = await app.fetch(new Request('http://test/market'));
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type') ?? '').toContain('text/html');
+    const html = await r.text();
+    expect(html).toContain('data-route="market"');
+    // 行情不再有侧栏菜单项，入口在持仓 / 分组 / 仪表盘搜索；深链接 section 保留。
+    expect(html).toContain('id="route-market"');
+    expect(html).not.toContain('href="#market" data-route="market"');
+  });
+
+  it('股票搜索只接受 q：旧 query= 视为缺参 → 400', async () => {
+    const r = await app.fetch(new Request('http://test/api/stocks/search?query=002594'));
+    expect(r.status).toBe(400);
+    const body = (await json(r)) as { ok: boolean; error?: { kind: string } };
+    expect(body.error?.kind).toBe('invalid_input');
   });
 });

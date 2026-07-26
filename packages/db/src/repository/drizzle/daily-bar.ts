@@ -1,5 +1,5 @@
 import type { DailyBar, DailyBarRepository } from '@luoome/core';
-import { and, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { dailyBars, type Schema } from '../../schema/index.js';
@@ -15,6 +15,7 @@ const toBar = (row: BarRow): DailyBar => ({
   close: row.close,
   volume: row.volume,
   adjFactor: row.adjFactor,
+  source: row.source,
 });
 
 /**
@@ -35,25 +36,26 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
       close: b.close,
       volume: b.volume,
       adjFactor: b.adjFactor,
-      source: 'eastmoney', // v0.2 默认源标识；调用方可在 adapter 层覆盖
+      source: b.source,
     }));
-    // onConflictDoUpdate.set 必须是「要被覆盖的列 → 新值」；
-    // 主键列 (stockId, date) 已在 target 里，set 里重复会触发 TS 报错。
-    // rows.length > 0 已在 if 分支守门；此处 destructure 后断言首元素存在。
-    const [first] = rows;
-    if (first === undefined) return; // 编译期 exhaustive；运行时永不达
-    const set = {
-      open: first.open,
-      high: first.high,
-      low: first.low,
-      close: first.close,
-      volume: first.volume,
-      adjFactor: first.adjFactor,
-    };
+    // 批量 upsert：set 用 SQLite excluded.<column> 引用「本次 VALUES 里对应行的值」，
+    // 冲突时每个 (stockId, date) 各自更新自己的 OHLCV / source；
+    // 不能用统一常量 set（首行值会覆盖整批其它日期）。
     this.db
       .insert(dailyBars)
       .values(rows)
-      .onConflictDoUpdate({ target: [dailyBars.stockId, dailyBars.date], set })
+      .onConflictDoUpdate({
+        target: [dailyBars.stockId, dailyBars.date],
+        set: {
+          open: sql`excluded."open"`,
+          high: sql`excluded."high"`,
+          low: sql`excluded."low"`,
+          close: sql`excluded."close"`,
+          volume: sql`excluded."volume"`,
+          adjFactor: sql`excluded."adj_factor"`,
+          source: sql`excluded."source"`,
+        },
+      })
       .run();
   }
 

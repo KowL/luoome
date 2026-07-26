@@ -14,7 +14,7 @@ export interface Quote {
   readonly source: string;
 }
 
-/** 日线（标的、日期、OHLC、量、复权因子）。 */
+/** 日线（标的、日期、OHLC、量、复权因子、数据源）。 */
 export interface DailyBar {
   readonly stockId: string;
   readonly date: Date;
@@ -24,6 +24,8 @@ export interface DailyBar {
   readonly close: Money;
   readonly volume: number; // 股（与 Quote.volume 同量纲）
   readonly adjFactor: number;
+  /** 实际产出该 bar 的数据源（如 eastmoney / tencent）；daily_bars.source 已有该列。 */
+  readonly source: string;
 }
 
 /** 日期区间，供 fetchDailyBars 等接口使用。 */
@@ -52,6 +54,7 @@ export const DailyBarSchema = z.object({
   close: MoneySchema,
   volume: z.number().nonnegative(),
   adjFactor: z.number().positive(),
+  source: z.string().min(1),
 });
 
 export const DateRangeSchema = z.object({

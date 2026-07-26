@@ -240,6 +240,7 @@ export class TencentAdapter {
         close: money(close),
         volume,
         adjFactor: 1.0,
+        source: 'tencent',
       });
     }
     return bars;

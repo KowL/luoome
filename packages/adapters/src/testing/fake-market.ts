@@ -97,6 +97,7 @@ export class FakeMarketAdapter implements MarketDataAdapter {
         close,
         volume,
         adjFactor: 1,
+        source: this.source,
       });
     }
     return Promise.resolve(bars);

@@ -141,6 +141,7 @@ export const makeDailyBar = (
   close: money(10.5),
   volume: 1_000_000,
   adjFactor: 1.0,
+  source: 'test',
   ...overrides,
 });
 
@@ -770,6 +771,55 @@ export const registerRepositoryContractTests = (
         await repos.dailyBar.saveMany([makeDailyBar('stk-1', T1, { close: money(99) })]);
         const got = await repos.dailyBar.findInRange('stk-1', T1, T1);
         expect(got[0]?.close).toBe(99);
+      });
+
+      it('source 字段往返一致', async () => {
+        await repos.dailyBar.saveMany([
+          makeDailyBar('stk-1', T1, { source: 'eastmoney' }),
+          makeDailyBar('stk-1', T2, { source: 'tencent' }),
+        ]);
+        const got = await repos.dailyBar.findInRange('stk-1', T1, T2);
+        expect(got.map((b) => b.source)).toEqual(['eastmoney', 'tencent']);
+      });
+
+      it('同批多根 upsert 不互相覆盖；冲突时各日期各自更新（含 source）', async () => {
+        await repos.dailyBar.saveMany([
+          makeDailyBar('stk-1', T1, { close: money(10), source: 'eastmoney' }),
+          makeDailyBar('stk-1', T2, { close: money(20), source: 'eastmoney' }),
+        ]);
+        // 同批再次 upsert：T1 与 T2 的 OHLCV / source 必须各自落到对应日期
+        await repos.dailyBar.saveMany([
+          makeDailyBar('stk-1', T1, {
+            open: money(11),
+            high: money(12),
+            low: money(10),
+            close: money(11.5),
+            volume: 2_000_000,
+            source: 'tencent',
+          }),
+          makeDailyBar('stk-1', T2, {
+            open: money(21),
+            high: money(22),
+            low: money(20),
+            close: money(21.5),
+            volume: 3_000_000,
+            source: 'tencent',
+          }),
+        ]);
+        const got = await repos.dailyBar.findInRange('stk-1', T1, T2);
+        expect(got).toHaveLength(2);
+        expect(got[0]).toMatchObject({
+          close: 11.5,
+          open: 11,
+          volume: 2_000_000,
+          source: 'tencent',
+        });
+        expect(got[1]).toMatchObject({
+          close: 21.5,
+          open: 21,
+          volume: 3_000_000,
+          source: 'tencent',
+        });
       });
 
       it('removeInRange 返回删除条数', async () => {
