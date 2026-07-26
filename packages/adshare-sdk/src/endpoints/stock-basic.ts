@@ -10,6 +10,8 @@ export interface StockBasicOptions {
  * 远端 GET 请求（带双认证头、超时、重试）。kline / quote 共用。
  * 任何非 2xx 抛 AdshareError('HTTP_ERROR')，网络错误抛 AdshareError('NETWORK_ERROR')。
  * 仅网络错误与 5xx 会重试；4xx 直接返回给调用方。
+ * GET 无请求体，不设 Content-Type：adshare 的 /tushare/* 路由会把
+ * 「Content-Type: application/json + 空 body」当作 JSON 解析失败返回 400（2026-07-26 实测）。
  */
 export const fetchWithAuth = async (
   url: string,
@@ -25,7 +27,6 @@ export const fetchWithAuth = async (
       const res = await fetchImpl(url, {
         method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
           'X-API-Key': apiKey,
           Authorization: `Bearer ${apiKey}`,
         },
@@ -102,6 +103,16 @@ export async function fetchStockBasic(
     raw = await res.json();
   } catch (error) {
     throw new AdshareError('PARSE_ERROR', 'stock_basic 响应不是有效 JSON', { cause: error });
+  }
+  if (
+    raw !== null &&
+    typeof raw === 'object' &&
+    'code' in raw &&
+    typeof raw.code === 'number' &&
+    raw.code !== 0
+  ) {
+    const message = 'msg' in raw && typeof raw.msg === 'string' ? raw.msg : 'unknown error';
+    throw new AdshareError('HTTP_ERROR', `stock_basic 远端错误 ${raw.code}: ${message}`);
   }
   const rows = normalizeRows(raw, fields);
 

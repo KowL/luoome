@@ -270,6 +270,7 @@ export class MarketDataManager implements MarketDataAdapter {
   async searchStocks(query: string): Promise<StockSearchCandidate[]> {
     const now = this.clock();
     const inSuppress = now.getTime() - this.lastFinalFallbackAt < this.suppressMs;
+    let lastError: unknown;
     if (!inSuppress) {
       for (const source of [this.primary, this.fallback]) {
         if (typeof source.searchStocks !== 'function') continue;
@@ -282,6 +283,7 @@ export class MarketDataManager implements MarketDataAdapter {
             sourceName: source.name,
             error: errorMessage(error),
           });
+          lastError = error;
         }
       }
     }
@@ -292,6 +294,9 @@ export class MarketDataManager implements MarketDataAdapter {
         query,
       });
       return this.finalFallback.searchStocks(query);
+    }
+    if (lastError !== undefined) {
+      throw lastError;
     }
     return [];
   }

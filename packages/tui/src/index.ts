@@ -42,7 +42,9 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
   const ctx = buildContext({
     repos: handle.repos,
     adapters: {
-      market: createMarketAdapterFromEnv(process.env, { logger }),
+      market: createMarketAdapterFromEnv(process.env, {
+        logger,
+      }),
       llm: ai.llm,
     },
     agent: ai.agent,

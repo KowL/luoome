@@ -58,7 +58,10 @@ export const createServerContext = async (
   const ctx = buildContext({
     repos: handle.repos,
     adapters: {
-      market: createMarketAdapterFromEnv(env, { clock: now, logger }),
+      market: createMarketAdapterFromEnv(env, {
+        clock: now,
+        logger,
+      }),
       llm: ai.llm,
     },
     agent: ai.agent,

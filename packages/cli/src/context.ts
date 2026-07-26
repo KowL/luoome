@@ -77,7 +77,10 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const ctx = buildContext({
     repos,
     adapters: {
-      market: createMarketAdapterFromEnv(process.env, { clock: now, logger }),
+      market: createMarketAdapterFromEnv(process.env, {
+        clock: now,
+        logger,
+      }),
       llm: ai.llm,
     },
     agent: ai.agent,

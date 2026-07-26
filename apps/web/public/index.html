@@ -548,6 +548,44 @@
             </section>
           </div>
         </form>
+        <form id="market-settings-form" class="market-settings" autocomplete="off">
+          <div class="market-settings-heading">
+            <div>
+              <span class="section-kicker">MARKET ROUTING</span>
+              <h2>行情数据源</h2>
+              <p>启用需要的数据源，并按顺序定义故障降级链。保存后立即应用。</p>
+            </div>
+            <div id="market-settings-state" class="ai-settings-state" aria-live="polite">
+              <span class="health-dot"></span>
+              <span>正在读取路由</span>
+            </div>
+          </div>
+          <section class="market-routing-panel" aria-labelledby="market-routing-title">
+            <div class="market-routing-rail" aria-hidden="true">
+              <span>PRIMARY</span><i></i><span>FALLBACK</span><i></i><span>FINAL</span>
+            </div>
+            <div class="ai-panel-title">
+              <span class="ai-panel-icon" aria-hidden="true">⇄</span>
+              <div>
+                <h3 id="market-routing-title">路由优先级</h3>
+                <small>Enabled sources are tried from top to bottom</small>
+              </div>
+            </div>
+            <div id="market-source-list" class="market-source-list">
+              <p class="placeholder">加载中…</p>
+            </div>
+            <div class="market-routing-footer">
+              <div>
+                <span>配置文件</span>
+                <code id="market-secret-path">--</code>
+              </div>
+              <button id="btn-market-save" class="btn btn-primary market-save-btn" type="submit">
+                <span aria-hidden="true">▣</span>
+                保存路由并应用
+              </button>
+            </div>
+          </section>
+        </form>
         <div class="card">
           <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>

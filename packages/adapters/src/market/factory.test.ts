@@ -101,4 +101,75 @@ describe('market/factory', () => {
     );
     await expect(adapter.fetchQuote('002594.SZ')).rejects.toThrow(/all market sources failed/i);
   });
+
+  it('enableAdshare=true + ADSHARE_URL：主备失败 → finalFallback 返回 source=adshare', async () => {
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        ADSHARE_URL: 'https://adshare.test',
+        ADSHARE_API_KEY: 'k',
+      },
+      {
+        logger: silentLogger(),
+        enableAdshare: true,
+        fetchImpl: ((url: string) => {
+          if (String(url).includes('/tushare/realtime/rt_k')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  code: 0,
+                  msg: '',
+                  data: {
+                    fields: ['ts_code', 'trade_time', 'price', 'open', 'high', 'low', 'vol'],
+                    items: [['002594.SZ', '2026-07-24T07:00:00.000Z', 250, 248, 251, 247, 999]],
+                  },
+                }),
+                { status: 200 },
+              ),
+            );
+          }
+          return Promise.resolve(new Response('down', { status: 500 }));
+        }) as never,
+      },
+    );
+    const q = await adapter.fetchQuote('002594.SZ');
+    expect(q.source).toBe('adshare');
+    expect(q.close).toBe(250);
+  });
+
+  it('显式启用 Adshare 但 ADSHARE_URL 缺失 → 启动期报错', () => {
+    expect(() =>
+      createMarketAdapterFromEnv(
+        { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'adshare' },
+        { logger: silentLogger() },
+      ),
+    ).toThrow(/ADSHARE_URL/);
+  });
+
+  it('LUOOME_MARKET_SOURCES 控制开关与优先级', async () => {
+    const calls: string[] = [];
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'tencent,eastmoney',
+      },
+      {
+        logger: silentLogger(),
+        fetchImpl: (async (input: string | URL | Request) => {
+          const url = String(input);
+          calls.push(url);
+          if (url.includes('web.ifzq.gtimg.cn')) {
+            return new Response(
+              JSON.stringify({ code: 0, data: { sz002594: { data: { data: ['0930 250 10'] } } } }),
+              { status: 200 },
+            );
+          }
+          return new Response('unexpected', { status: 500 });
+        }) as typeof fetch,
+      },
+    );
+    const quote = await adapter.fetchQuote('002594.SZ');
+    expect(quote.source).toBe('tencent');
+    expect(calls).toHaveLength(1);
+  });
 });

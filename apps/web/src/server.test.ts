@@ -14,6 +14,7 @@ import type { Hono } from 'hono';
 
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
+import { MarketSettingsStore } from './market-settings.js';
 import { buildWebContext, createWebApp, resolveWebToken } from './server.js';
 
 let app: Hono;
@@ -165,6 +166,62 @@ describe('LLM 设置 API', () => {
         data: { apiKeyConfigured: true, applied: true },
       });
       expect(JSON.stringify(payload)).not.toContain('api-test-secret');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('行情源设置 API', () => {
+  it('读取不暴露密钥；保存要求 token，并立即应用新顺序', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-settings-api-'));
+    try {
+      const store = new MarketSettingsStore(
+        {
+          LUOOME_HOME: dir,
+          LUOOME_MARKET_PROVIDER: 'real',
+          ADSHARE_URL: 'https://adshare.test',
+          ADSHARE_API_KEY: 'secret-market-key',
+        },
+        { secretPath: join(dir, '.env') },
+      );
+      const settingsApp = createWebApp(await buildTestContext(), {
+        webToken: WEB_TOKEN,
+        marketSettingsStore: store,
+      });
+      const initial = await settingsApp.fetch(new Request('http://test/api/settings/market'));
+      expect(initial.status).toBe(200);
+      const initialPayload = await initial.json();
+      expect(initialPayload).toMatchObject({
+        ok: true,
+        data: { activeOrder: ['eastmoney', 'tencent'] },
+      });
+      expect(JSON.stringify(initialPayload)).not.toContain('secret-market-key');
+
+      const denied = await settingsApp.fetch(
+        new Request('http://test/api/settings/market', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sources: ['tencent'] }),
+        }),
+      );
+      expect(denied.status).toBe(403);
+
+      const saved = await settingsApp.fetch(
+        new Request('http://test/api/settings/market', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${WEB_TOKEN}`,
+          },
+          body: JSON.stringify({ sources: ['tencent', 'eastmoney'] }),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({
+        ok: true,
+        data: { activeOrder: ['tencent', 'eastmoney'], applied: true },
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -20,6 +20,12 @@ ADSHARE_MAX_RETRIES=2
 | `ADSHARE_TIMEOUT_MS` | 否 | `10000` | ✅ `fromEnv()` | 单次请求尝试的超时（毫秒），必须是正整数。 |
 | `ADSHARE_MAX_RETRIES` | 否 | `2` | ✅ `fromEnv()` | 网络错误 / 5xx 时最大重试次数（不含首次尝试），必须是非负整数。 |
 
+> v0.9 起用 `LUOOME_MARKET_SOURCES` 控制启用状态和优先级，例如
+> `eastmoney,tencent,adshare`。从左到右依次映射为 primary / fallback / finalFallback，
+> 省略即关闭；也可在 Web「设置 → 行情数据源」中修改并立即应用。启用 Adshare 必须同时
+> 配置 `ADSHARE_URL`。旧 `LUOOME_MARKET_ADSHARE=true` 仅在新变量缺失时兼容生效。
+> 详见 [`docs/ddd/adshare-market-adapter-design.md`](../ddd/adshare-market-adapter-design.md)。
+
 > ⚠️ 模板里的 `http://8.148.216.30:8888` 是临时测试地址。生产部署务必替换为域名，并把模板里的 IP 行同步更新或删除。
 
 ## 2. 本地启动顺序

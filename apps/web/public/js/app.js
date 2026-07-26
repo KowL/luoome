@@ -9,6 +9,7 @@ import { initChat, refreshChat } from './chat.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { renderMarket, teardownMarket } from './market.js';
+import { initMarketSettings, renderMarketSettings } from './market-settings.js';
 import { initMvpActions, openGroupModal } from './mvp-actions.js';
 import {
   analyzeAllHoldings,
@@ -109,6 +110,8 @@ const showRoute = async (name) => {
       renderSettings(setStatus);
       initAISettings(setStatus);
       await renderAISettings(setStatus);
+      initMarketSettings(setStatus);
+      await renderMarketSettings(setStatus);
       await renderSettingsAccount();
       await renderWorkflowRuns(setStatus);
     }

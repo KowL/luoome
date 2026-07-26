@@ -16,6 +16,8 @@ export * from './llm/schema.js';
 export * from './llm/stack.js';
 export * from './llm/types.js';
 // 行情
+export * from './market/adshare.js';
+export * from './market/adshare-envelope.js';
 export * from './market/cache.js';
 export * from './market/eastmoney.js';
 export * from './market/factory.js';

@@ -39,6 +39,15 @@ describe('Adshare endpoints', () => {
     expect(stocks).toEqual([{ ts_code: '600519.SH', name: '贵州茅台', industry: '白酒' }]);
   });
 
+  it('searchStocks rejects a protocol-level error returned with HTTP 200', async () => {
+    const fetchMock = mockFetch([
+      { status: 200, body: { code: -1, msg: 'warehouse disabled', data: null } },
+    ]);
+    await expect(client(fetchMock).searchStocks({ name: '茅台' })).rejects.toMatchObject({
+      code: 'HTTP_ERROR',
+    });
+  });
+
   it('getKLine validates period and maps the response to KLineBar[]', async () => {
     const fetchMock = mockFetch([
       {

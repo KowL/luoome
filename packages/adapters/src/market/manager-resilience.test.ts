@@ -2,6 +2,7 @@ import type { DailyBar, DateRange, Logger } from '@luoome/core';
 import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
+import type { FakeMarketAdapter } from '../testing/fake-market.js';
 import { MarketDataManager } from './manager.js';
 
 /**
@@ -336,5 +337,134 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       expect(q.close).toBe(100.5);
       expect(q.source).toBe('eastmoney');
     });
+  });
+});
+
+/**
+ * finalFallback（adshare 槽位）集成测试（docs/ddd/adshare-market-adapter-design.md §11.2）。
+ * finalFallback 测试替身复用 FakeMarketAdapter（source: 'adshare'），不与真实 adapter 耦合；
+ * adshare 私有协议由 adshare.test.ts 负责。
+ */
+class AlwaysFailSource {
+  readonly name = 'always-fail';
+  quoteCalls = 0;
+  dailyBarsCalls = 0;
+  searchCalls = 0;
+  constructor(private readonly searchBehavior: 'throw' | 'empty' = 'throw') {}
+  fetchQuote(_code: string): Promise<import('@luoome/core').Quote> {
+    this.quoteCalls += 1;
+    return Promise.reject(new Error(`${this.name} quote fail`));
+  }
+  async batchQuote(codes: readonly string[]): Promise<Map<string, import('@luoome/core').Quote>> {
+    const m = new Map();
+    for (const c of codes) m.set(c, await this.fetchQuote(c));
+    return m;
+  }
+  fetchDailyBars(_code: string, _range: DateRange): Promise<DailyBar[]> {
+    this.dailyBarsCalls += 1;
+    return Promise.reject(new Error(`${this.name} dailyBars fail`));
+  }
+  searchStocks(_query: string): Promise<import('@luoome/core').StockSearchCandidate[]> {
+    this.searchCalls += 1;
+    if (this.searchBehavior === 'empty') return Promise.resolve([]);
+    return Promise.reject(new Error(`${this.name} search fail`));
+  }
+}
+
+describe('market/manager finalFallback（adshare 槽位，v0.9）', () => {
+  const makeAdshareFinal = async (): Promise<FakeMarketAdapter> => {
+    const { FakeMarketAdapter } = await import('../testing/fake-market.js');
+    return new FakeMarketAdapter({ source: 'adshare' });
+  };
+
+  it('Eastmoney + Tencent 都失败、adshare 成功 → 返回 source=adshare', async () => {
+    const primary = new AlwaysFailSource();
+    const fallback = new AlwaysFailSource();
+    const mgr = new MarketDataManager({
+      primary,
+      fallback,
+      finalFallback: await makeAdshareFinal(),
+      logger: silentLogger,
+    });
+    const q = await mgr.fetchQuote('600519.SH');
+    expect(q.source).toBe('adshare');
+    expect(mgr.stats().finalFallbackCalls).toBe(1);
+  });
+
+  it('Eastmoney + Tencent + adshare 全失败 → 抛错', async () => {
+    const mgr = new MarketDataManager({
+      primary: new AlwaysFailSource(),
+      fallback: new AlwaysFailSource(),
+      finalFallback: new AlwaysFailSource(),
+      logger: silentLogger,
+    });
+    await expect(mgr.fetchQuote('600519.SH')).rejects.toThrow(/quote fail/);
+  });
+
+  it('进入 finalFallback 后 30 分钟内跳过主备源，未命中缓存的请求直达 adshare', async () => {
+    const primary = new AlwaysFailSource();
+    const fallback = new AlwaysFailSource();
+    let nowMs = 0;
+    const mgr = new MarketDataManager({
+      primary,
+      fallback,
+      finalFallback: await makeAdshareFinal(),
+      logger: silentLogger,
+      clock: () => new Date(nowMs),
+      finalFallbackSuppressMs: 30 * 60 * 1000,
+    });
+    // 第一次：t=0，走完三层（adshare 成功并写缓存）
+    const first = await mgr.fetchQuote('600519.SH');
+    expect(first.source).toBe('adshare');
+    expect(primary.quoteCalls).toBe(1);
+    expect(fallback.quoteCalls).toBe(1);
+    // 第二次：t=10 分钟，抑制窗口内；换一只未命中缓存的代码
+    nowMs = 10 * 60 * 1000;
+    const second = await mgr.fetchQuote('000001.SZ');
+    expect(second.source).toBe('adshare');
+    expect(primary.quoteCalls).toBe(1); // 未增：跳过主备源
+    expect(fallback.quoteCalls).toBe(1);
+    expect(mgr.stats().finalFallbackCalls).toBe(2); // 尝试次数，非成功次数
+  });
+
+  it('Eastmoney 成功时 finalFallbackCalls = 0', async () => {
+    const primary = new ResilPrimary();
+    const mgr = new MarketDataManager({
+      primary,
+      fallback: new ResilFallback(),
+      finalFallback: await makeAdshareFinal(),
+      logger: silentLogger,
+    });
+    const q = await mgr.fetchQuote('600519.SH');
+    expect(q.source).toBe('eastmoney-stub');
+    expect(mgr.stats().finalFallbackCalls).toBe(0);
+  });
+
+  it('searchStocks 主源返回空数组 → 不触发 fallback 到 adshare', async () => {
+    const primary = new AlwaysFailSource('empty');
+    const fallback = new AlwaysFailSource();
+    const mgr = new MarketDataManager({
+      primary,
+      fallback,
+      finalFallback: await makeAdshareFinal(),
+      logger: silentLogger,
+    });
+    await expect(mgr.searchStocks('600519')).resolves.toEqual([]);
+    expect(primary.searchCalls).toBe(1);
+    expect(fallback.searchCalls).toBe(0);
+    expect(mgr.stats().finalFallbackCalls).toBe(0);
+  });
+
+  it('searchStocks 主备源抛错 → 触发 fallback 到 adshare', async () => {
+    const mgr = new MarketDataManager({
+      primary: new AlwaysFailSource(),
+      fallback: new AlwaysFailSource(),
+      finalFallback: await makeAdshareFinal(),
+      logger: silentLogger,
+    });
+    const candidates = await mgr.searchStocks('600519');
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.some((c) => c.id === '600519.SH')).toBe(true);
+    expect(mgr.stats().finalFallbackCalls).toBe(1);
   });
 });

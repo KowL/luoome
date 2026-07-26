@@ -31,6 +31,7 @@ import { ZodError } from 'zod';
 
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
+import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -185,7 +186,10 @@ export const buildWebContext = async (
   return buildContext({
     repos: handle.repos,
     adapters: {
-      market: createMarketAdapterFromEnv(env, { clock: now, logger: console }),
+      market: createMarketAdapterFromEnv(env, {
+        clock: now,
+        logger: console,
+      }),
       llm: ai?.llm ?? unavailableLLM,
     },
     ...(ai === undefined ? {} : { agent: ai.agent }),
@@ -202,6 +206,8 @@ export interface CreateWebAppOptions {
   readonly requireApiToken?: boolean;
   /** LLM 设置持久化；仅生产启动注入，测试可按需提供临时 store。 */
   readonly aiSettingsStore?: AISettingsStore;
+  /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
+  readonly marketSettingsStore?: MarketSettingsStore;
   /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
   readonly chatStreamRuntime?: ChatStreamRuntime;
 }
@@ -246,6 +252,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   };
   const webToken = options.webToken ?? process.env.LUOOME_WEB_TOKEN ?? '';
   const aiSettingsStore = options.aiSettingsStore;
+  const marketSettingsStore = options.marketSettingsStore;
   const app = new Hono();
 
   if (options.requireApiToken === true) {
@@ -327,6 +334,68 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         error: {
           kind: 'internal',
           cause: `AI 设置读取失败：${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
+    }
+  });
+
+  // ===== 行情数据源设置 =====
+  app.get('/api/settings/market', () => {
+    if (marketSettingsStore === undefined) {
+      return jsonResult(notFound('MarketSettingsStore', 'default'));
+    }
+    try {
+      return jsonResult({ ok: true, data: marketSettingsStore.read() });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'internal',
+          cause: `行情源设置读取失败：${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
+    }
+  });
+
+  app.post('/api/settings/market', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    if (marketSettingsStore === undefined) {
+      return jsonResult(notFound('MarketSettingsStore', 'default'));
+    }
+    try {
+      const input = SaveMarketSettingsSchema.parse(await c.req.json());
+      const candidateEnv = {
+        ...marketSettingsStore.runtimeEnv(),
+        LUOOME_MARKET_SOURCES: input.sources.join(','),
+      };
+      const market = createMarketAdapterFromEnv(candidateEnv, {
+        clock: ctxRef.current.clock,
+        logger: ctxRef.current.logger,
+      });
+      const saved = marketSettingsStore.save(input);
+      ctxRef.current = {
+        ...ctxRef.current,
+        adapters: { ...ctxRef.current.adapters, market },
+      };
+      return jsonResult({ ok: true, data: { ...saved, applied: true } });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return jsonResult({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: '行情源设置校验失败',
+            issues: error.issues,
+          },
+        });
+      }
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: error instanceof Error ? error.message : String(error),
+          issues: [],
         },
       });
     }
@@ -1494,6 +1563,7 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
   const dbPath = options.dbPath ?? resolveDbPath();
   const ctx = await buildWebContext(dbPath);
   const aiSettingsStore = new AISettingsStore(process.env);
+  const marketSettingsStore = new MarketSettingsStore(process.env);
   const resolved =
     options.webToken !== undefined
       ? { token: options.webToken, filePath: null }
@@ -1507,6 +1577,7 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
     webToken: resolved.token,
     requireApiToken: !loopback,
     aiSettingsStore,
+    marketSettingsStore,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);

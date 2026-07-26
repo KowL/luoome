@@ -162,4 +162,13 @@ describe('MarketDataManager.searchStocks', () => {
     const result = await manager.searchStocks('茅台');
     expect(result[0]?.id).toBe('600519.SH');
   });
+
+  it('没有 finalFallback 且所有已配置源失败 → 抛错给 tool 层继续本地搜索', async () => {
+    const manager = new MarketDataManager({
+      primary: fakeSearchAdapter('p', () => Promise.reject(new Error('primary down')), { n: 0 }),
+      fallback: fakeSearchAdapter('f', () => Promise.reject(new Error('fallback down')), { n: 0 }),
+      logger: silentLogger,
+    });
+    await expect(manager.searchStocks('茅台')).rejects.toThrow('fallback down');
+  });
 });
