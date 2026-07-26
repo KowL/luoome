@@ -51,3 +51,4 @@ coverage/
 .playwright-cli/
 .learnings/
 .claude/
+output/
