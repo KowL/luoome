@@ -6,15 +6,8 @@ import type {
   LimitUpLadderSource,
   Logger,
 } from '@luoome/core';
-import {
-  assembleLadder,
-  deriveBoard,
-  diffTopLevel,
-  filterAndDedupeEntries,
-  LimitUpLadderSentinels,
-} from '@luoome/core';
+import { assembleLadder, deriveBoard, diffTopLevel, filterAndDedupeEntries } from '@luoome/core';
 
-import type { LimitUpPoolEnricherLike, LimitUpPoolEnrichment } from './eastmoney-pool.js';
 import { LRU } from './lru.js';
 import type {
   LimitUpLadderAdapterLike,
@@ -32,8 +25,6 @@ import type {
  * - TTL：当日盘中 = 60s；当日收盘后 / 跨日 / 非当日 = Infinity；
  *   空 ladder（盘前 / 数据未更新）例外，封顶 60s，避免盘前快照全天滞留
  * - 收盘价修正（§6.4）：map 阶段按 raw.high == raw.close + pct ∈ [9.8%, 10%) 触发
- * - enricher（eastmoney 涨停池）：补齐 adshare 实测全空的 firstTime/finalTime/industry；
- *   失败只告警不阻断
  * - 节假日历：简化版内联实现（不依赖 cli，因为 adapters 不能反向依赖 cli）
  *   ；holidaysProvider 可注入供测试替换
  */
@@ -43,8 +34,6 @@ interface ManagerOptions {
   readonly fallback?: LimitUpLadderAdapterLike;
   readonly logger: Logger;
   readonly clock: () => Date;
-  /** 可选：涨停池 enricher，按 code 补齐封板时间 / 行业。 */
-  readonly enricher?: LimitUpPoolEnricherLike;
   /** 测试用：注入节假日历避免实际环境依赖。 */
   readonly holidaysProvider?: () => Promise<ReadonlyMap<number, ReadonlySet<string>>>;
   /** 测试用：替换"今天是 YYYY-MM-DD"映射。 */
@@ -221,7 +210,6 @@ export class LimitUpLadderManager {
   private readonly logger: Logger;
   private readonly clock: () => Date;
   private readonly cache: LRU<string, LimitUpLadder>;
-  private readonly enricher: LimitUpPoolEnricherLike | undefined;
   private readonly holidaysProvider: () => Promise<ReadonlyMap<number, ReadonlySet<string>>>;
   private readonly dateInShanghaiFn: (d: Date) => string;
   private readonly isWeekendFn: (d: Date) => boolean;
@@ -236,38 +224,10 @@ export class LimitUpLadderManager {
     this.logger = opts.logger;
     this.clock = opts.clock;
     this.cache = new LRU<string, LimitUpLadder>(512);
-    this.enricher = opts.enricher;
     this.holidaysProvider = opts.holidaysProvider ?? defaultHolidaysProvider;
     this.dateInShanghaiFn = opts.dateInShanghaiFn ?? defaultDateInShanghai;
     this.isWeekendFn = opts.isWeekendFn ?? defaultIsWeekend;
     this.isHolidayFn = opts.isHolidayFn ?? defaultIsHoliday;
-  }
-
-  /** 用涨停池按 code 补齐 firstTime/finalTime/industry；只填空字段，不覆盖主源已有值。 */
-  private async enrichEntries(entries: LimitUpLadderEntry[], date: string): Promise<void> {
-    if (this.enricher === undefined || entries.length === 0) return;
-    let pool: ReadonlyMap<string, LimitUpPoolEnrichment>;
-    try {
-      pool = await this.enricher.fetchPool(date);
-    } catch (err) {
-      this.logger.warn('limit-up-ladder enricher failed', {
-        enricher: this.enricher.name,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    for (const e of entries) {
-      const extra = pool.get(e.code);
-      if (extra === undefined) continue;
-      if (e.firstTime === null && extra.firstTime !== undefined) e.firstTime = extra.firstTime;
-      if (e.finalTime === null && extra.finalTime !== undefined) e.finalTime = extra.finalTime;
-      if (
-        e.industry === LimitUpLadderSentinels.BOARD_UNCLASSIFIED &&
-        extra.industry !== undefined
-      ) {
-        e.industry = extra.industry;
-      }
-    }
   }
 
   private async getHolidays(): Promise<ReadonlyMap<number, ReadonlySet<string>>> {
@@ -345,7 +305,6 @@ export class LimitUpLadderManager {
 
     // 映射 + 修正 + 过滤 + 去重
     const mapped = rawResult.entries.map((e) => mapAndCorrectEntry(e, date));
-    await this.enrichEntries(mapped, date);
     const filtered = filterAndDedupeEntries(mapped, {
       includeStar,
       includeBse,

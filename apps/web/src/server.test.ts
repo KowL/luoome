@@ -180,8 +180,7 @@ describe('行情源设置 API', () => {
         {
           LUOOME_HOME: dir,
           LUOOME_MARKET_PROVIDER: 'real',
-          ADSHARE_URL: 'https://adshare.test',
-          ADSHARE_API_KEY: 'secret-market-key',
+          TUSHARE_TOKEN: 'secret-market-key',
         },
         { secretPath: join(dir, '.env') },
       );
@@ -806,15 +805,15 @@ describe('/api/chat：对话助手', () => {
 });
 
 describe('GET /api/stocks/search', () => {
-  const originalAdshareUrl = process.env.ADSHARE_URL;
-  const originalAdshareApiKey = process.env.ADSHARE_API_KEY;
+  const originalTushareToken = process.env.TUSHARE_TOKEN;
+  const originalTushareUrl = process.env.TUSHARE_URL;
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
-    if (originalAdshareUrl === undefined) delete process.env.ADSHARE_URL;
-    else process.env.ADSHARE_URL = originalAdshareUrl;
-    if (originalAdshareApiKey === undefined) delete process.env.ADSHARE_API_KEY;
-    else process.env.ADSHARE_API_KEY = originalAdshareApiKey;
+    if (originalTushareToken === undefined) delete process.env.TUSHARE_TOKEN;
+    else process.env.TUSHARE_TOKEN = originalTushareToken;
+    if (originalTushareUrl === undefined) delete process.env.TUSHARE_URL;
+    else process.env.TUSHARE_URL = originalTushareUrl;
     globalThis.fetch = originalFetch;
   });
 
@@ -826,29 +825,43 @@ describe('GET /api/stocks/search', () => {
     expect(body.error?.kind).toBe('invalid_input');
   });
 
-  it('未配置 ADSHARE_URL 时回退到本地 search_stocks', async () => {
-    delete process.env.ADSHARE_URL;
-    delete process.env.ADSHARE_API_KEY;
+  it('未配置 TUSHARE_TOKEN 时回退到本地 search_stocks', async () => {
+    delete process.env.TUSHARE_TOKEN;
     const testApp = createWebApp(await buildTestContext());
     const r = await testApp.fetch(new Request('http://test/api/stocks/search?q=%E8%8C%85'));
     expect(r.status).toBe(200);
     const body = (await r.json()) as { ok: boolean; data?: { stocks: unknown[]; source: string } };
     expect(body.ok).toBe(true);
-    expect(body.data?.source).not.toBe('adshare');
+    expect(body.data?.source).not.toBe('tushare');
     expect(body.data?.stocks.length).toBeGreaterThan(0);
   });
 
-  it('adshare 返回结果时优先使用 adshare', async () => {
-    process.env.ADSHARE_URL = 'http://adshare.test';
-    process.env.ADSHARE_API_KEY = 'k';
+  it('tushare 返回结果时优先使用 tushare', async () => {
+    process.env.TUSHARE_TOKEN = 'test-tushare-token';
+    // .env 里可能配了 TUSHARE_URL 代理；固定为默认地址才能精确匹配 mock
+    process.env.TUSHARE_URL = 'http://api.tushare.pro';
     const mockFetch = (async (input, init) => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url.includes('/stock_basic')) {
+      if (url === 'http://api.tushare.pro') {
+        expect(init?.method).toBe('POST');
+        const requestBody = JSON.parse(String(init?.body)) as {
+          api_name: string;
+          token: string;
+          params: Record<string, unknown>;
+          fields: string;
+        };
+        expect(requestBody.api_name).toBe('stock_basic');
+        expect(requestBody.token).toBe('test-tushare-token');
         return {
           ok: true,
           status: 200,
           json: async () => ({
-            data: [{ ts_code: '600519.SH', name: '贵州茅台', industry: '白酒' }],
+            code: 0,
+            msg: null,
+            data: {
+              fields: ['ts_code', 'name', 'industry'],
+              items: [['600519.SH', '贵州茅台', '白酒']],
+            },
           }),
           text: async () => '',
           headers: new Headers(),
@@ -870,7 +883,7 @@ describe('GET /api/stocks/search', () => {
       data?: { stocks: Array<{ id: string }>; source: string };
     };
     expect(body.ok).toBe(true);
-    expect(body.data?.source).toBe('adshare');
+    expect(body.data?.source).toBe('tushare');
     expect(body.data?.stocks[0]?.id).toBe('600519.SH');
   });
 });
@@ -1077,7 +1090,7 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
 
 /**
  * 连板天梯 Web API（Phase 2，docs/ddd/limit-up-ladder-detailed-design.md §11）。
- * 用 stub manager 隔离 adshare 实链，避免本地 SQLite / 网络依赖。
+ * 用 stub manager 隔离 eastmoney 实链，避免本地 SQLite / 网络依赖。
  */
 import type {
   LimitUpLadder,
@@ -1099,7 +1112,7 @@ const stubLadderManager = (opts: {
         error: {
           kind: 'adapter_error',
           adapter: 'limit-up-ladder',
-          message: 'adshare forced fail',
+          message: 'eastmoney forced fail',
           recoverable: false,
         },
       };
@@ -1108,7 +1121,7 @@ const stubLadderManager = (opts: {
       date: '2026-07-25',
       total: 1,
       maxLevel: 1,
-      source: 'adshare' as const,
+      source: 'eastmoney' as const,
       levels: [
         {
           level: 1,
@@ -1179,7 +1192,7 @@ describe('Web 连板天梯 API', () => {
     };
     expect(body.ok).toBe(true);
     expect(body.data?.date).toBe('2026-07-25');
-    expect(body.data?.source).toBe('adshare');
+    expect(body.data?.source).toBe('eastmoney');
   });
 
   it('上游不可达 → 502', async () => {
@@ -1214,7 +1227,7 @@ describe('Web 连板天梯 API', () => {
           date: '2026-07-25',
           total: 2,
           maxLevel: 1,
-          source: 'adshare',
+          source: 'eastmoney',
           levels: [],
           warnings: [],
           asOf: new Date(),
@@ -1223,7 +1236,7 @@ describe('Web 连板天梯 API', () => {
           date: '2026-07-24',
           total: 1,
           maxLevel: 1,
-          source: 'adshare',
+          source: 'eastmoney',
           levels: [],
           warnings: [],
           asOf: new Date(),

@@ -13,7 +13,7 @@ const mkLadder = (date: string): LimitUpLadder => ({
   date,
   total: 1,
   maxLevel: 1,
-  source: 'adshare',
+  source: 'eastmoney',
   levels: [{ level: 1, name: '首板', count: 1, stocks: [] }],
   warnings: [],
   asOf: new Date(),

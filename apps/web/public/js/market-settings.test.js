@@ -7,7 +7,7 @@ describe('行情源路由排序', () => {
     expect(
       activeSourceIds([
         { id: 'eastmoney', enabled: true, priority: 2 },
-        { id: 'adshare', enabled: false, priority: null },
+        { id: 'tushare', enabled: false, priority: null },
         { id: 'tencent', enabled: true, priority: 1 },
       ]),
     ).toEqual(['tencent', 'eastmoney']);

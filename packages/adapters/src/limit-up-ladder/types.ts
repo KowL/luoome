@@ -22,7 +22,7 @@ export type LimitUpLadderResult =
   | { readonly ok: true; readonly data: LimitUpLadderManagerResult }
   | { readonly ok: false; readonly error: LimitUpLadderError };
 
-/** 单个数据源适配器（当前仅 adshare 实现；name 用于错误 / 日志标识）。 */
+/** 单个数据源适配器（当前仅 eastmoney 实现；name 用于错误 / 日志标识）。 */
 export interface LimitUpLadderAdapterLike {
   readonly name: string;
   fetchLadder(
@@ -31,7 +31,7 @@ export interface LimitUpLadderAdapterLike {
   ): Promise<{ readonly date: string; readonly entries: LimitUpLadderRawEntry[] }>;
 }
 
-/** adshare-sdk fetchLimitUpLadder 返回的原始条目（snake_case，协议层）。 */
+/** 数据源 adapter 返回的原始条目（snake_case，协议层）。 */
 export interface LimitUpLadderRawEntry {
   readonly code: string;
   readonly name?: string | undefined;

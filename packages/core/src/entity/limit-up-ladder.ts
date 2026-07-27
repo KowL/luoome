@@ -10,7 +10,7 @@ import { InvariantError } from '../error/index.js';
  * - `LimitUpLadderEntry` 落位唯一：同一股票在同一日只出现一次（以最深 level 为准，由 adapters 层 `filterAndDedupe` 保证）
  * - 收盘价修正：暴露 `price`（修正后）+ `rawClose`（原始）+ `corrected`（bool 标记）三个独立字段，绝不静默改写
  * - `board` 由 code 前缀派生（与策略预警 §5.2 一致）：主板 / 创业板 / 科创板 / 北交所；科创板与北交所默认被过滤
- * - `uncategorized` 区分两种来源缺失：adshare 未给 `level` 字段 / 跨日 reorg 后无法判定
+ * - `uncategorized` 区分两种来源缺失：数据源未给 `level` 字段 / 跨日 reorg 后无法判定
  *
  * 不落库：manager 自身缓存已满足下游引用需求；落库留作 Phase 3 策略预警需要"历史快照比对"时另立任务
  * （设计文档 §6）。
@@ -23,10 +23,10 @@ export type LimitUpBoard = 'main_board' | 'chinext' | 'star' | 'bse';
 
 export const LimitUpBoardSchema = z.enum(['main_board', 'chinext', 'star', 'bse']);
 
-/** 数据源名称（当前仅 adshare；保留枚举便于 schema 限定与将来扩展）。 */
-export type LimitUpLadderSource = 'adshare';
+/** 数据源名称（当前仅 eastmoney 公开涨停池；保留枚举便于 schema 限定与将来扩展）。 */
+export type LimitUpLadderSource = 'eastmoney';
 
-export const LimitUpLadderSourceSchema = z.enum(['adshare']);
+export const LimitUpLadderSourceSchema = z.enum(['eastmoney']);
 
 /** HH:MM:SS 字符串或 null（null 表示缺数据，不臆造）。 */
 const timeStringOrNull = z
@@ -46,7 +46,7 @@ export const LimitUpLadderEntrySchema = z.object({
   industry: z.string(),
   /** 连板层级 1=首板；同一股票在同一日只入最深 level。 */
   ladderLevel: z.number().int().min(1).max(20),
-  /** true = level 来源无法判定（adshare 缺字段 / 跨日 reorg）；保留在首板层级。 */
+  /** true = level 来源无法判定（数据源缺字段 / 跨日 reorg）；保留在首板层级。 */
   uncategorized: z.boolean(),
   firstTime: timeStringOrNull,
   finalTime: timeStringOrNull,
@@ -54,7 +54,7 @@ export const LimitUpLadderEntrySchema = z.object({
   reason: z.string(),
   /** 修正后的收盘价；§6.4 触发条件命中时 ≠ rawClose。 */
   price: z.number().positive(),
-  /** adshare 返回的原始 close，未经任何修正。 */
+  /** 数据源返回的原始 close，未经任何修正。 */
   rawClose: z.number().positive(),
   /** 是否经过 §6.4 修正；与 (rawClose, preClose) 涨幅区间匹配时 = true。 */
   corrected: z.boolean(),
@@ -116,8 +116,8 @@ export type LimitUpLadderDiff = z.infer<typeof LimitUpLadderDiffSchema>;
 
 export const LimitUpLadderQuerySchema = z.object({
   date: dateString,
-  source: LimitUpLadderSourceSchema.default('adshare'),
-  /** 样本窗口（默认 15）；用于 adshare 端 level 判定。 */
+  source: LimitUpLadderSourceSchema.default('eastmoney'),
+  /** 样本窗口（默认 15）；预留给需要历史窗口判定 level 的数据源，eastmoney 涨停池忽略。 */
   days: z.number().int().positive().default(15),
   /** 默认 false；false 时 uncategorized=true 的 entry 不出现。 */
   includeUncategorized: z.boolean().default(false),
@@ -134,7 +134,7 @@ export type LimitUpLadderQuery = z.infer<typeof LimitUpLadderQuerySchema>;
 export const LimitUpLadderCompareInputSchema = z.object({
   date: dateString,
   prevDate: dateString,
-  source: LimitUpLadderSourceSchema.default('adshare'),
+  source: LimitUpLadderSourceSchema.default('eastmoney'),
   days: z.number().int().positive().default(15),
   includeUncategorized: z.boolean().default(false),
   includeStar: z.boolean().default(false),

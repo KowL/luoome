@@ -1,57 +1,56 @@
-import type { AdshareConfig } from '@luoome/adshare-sdk';
-import { AdshareError, fetchStockBasic, fetchWithAuth } from '@luoome/adshare-sdk';
 import type { DailyBar, DateRange, Logger, Quote, StockSearchCandidate } from '@luoome/core';
 import { quantity as brandQuantity, money } from '@luoome/core';
 import { ZodError, z } from 'zod';
 
-import { parseTushareEnvelopeRows } from './adshare-envelope.js';
+import type { TushareConfig } from '../tushare/client.js';
+import { tushareQuery } from '../tushare/client.js';
 
 /**
- * Adshare 行情适配器（v0.9 起，MarketDataManager 的 finalFallback 第三真实源）。
- * 设计：docs/ddd/adshare-market-adapter-design.md。
+ * Tushare 行情适配器（MarketDataManager 的 finalFallback 第三真实源）。
+ * 设计：docs/ddd/tushare-market-adapter-design.md。
  *
  * 要点：
  * - 只覆盖 SH / SZ A 股；HK / US / BJ 抛 unsupported_market（manager 视作一次失败）。
- * - 实时快照走 `/tushare/realtime/rt_k`（Tushare envelope，vol 单位=股）；
- *   日线走 `/tushare/stock/daily`（vol 单位=手，×100 归一为股），
- *   复权因子单独走 `/tushare/stock/adj_factor`，缺失不阻塞整批。
- * - 所有远端调用复用 SDK fetchWithAuth（双认证头 / 超时 / 5xx+网络重试）。
- * - AdshareError 不泄漏给 manager：统一转译为带 `adshare ...` 前缀的普通 Error。
+ * - 实时快照走 `rt_k`（vol 单位=股，close 即最新价）；
+ *   日线走 `daily`（vol 单位=手，×100 归一为股），
+ *   复权因子单独走 `adj_factor`，缺失不阻塞整批。
+ * - 所有远端调用复用 tushareQuery（POST envelope / 超时 / 5xx+网络重试）。
+ * - rt_k 需单独开通权限；daily / adj_factor 需 2000 积分起（见 runbook）。
  */
 
-export interface AdshareMarketAdapterOptions {
+export interface TushareMarketAdapterOptions {
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
   readonly logger: Logger;
-  /** 由 assembly factory 从 ADSHARE_* 解析后注入；adapter 不读 process.env。 */
-  readonly config: AdshareConfig;
+  /** 由 assembly factory 从 TUSHARE_* 解析后注入；adapter 不读 process.env。 */
+  readonly config: TushareConfig;
 }
 
-/** rt_k 快照行：price 映射为 Quote.close，vol 已是股。 */
+/** rt_k 快照行：close 即最新价，映射为 Quote.close，vol 已是股。 */
 const QuoteRowSchema = z.object({
   ts_code: z.string().min(1),
   trade_time: z.string().nullish(),
-  price: z.number().positive(),
+  close: z.number().positive(),
   open: z.number().positive(),
   high: z.number().positive(),
   low: z.number().positive(),
   vol: z.number().nonnegative(),
 });
 
-const isAdshareSupported = (stockCode: string): boolean => {
+const isTushareSupported = (stockCode: string): boolean => {
   const [, suffix] = stockCode.toUpperCase().trim().split('.');
   return suffix === 'SH' || suffix === 'SZ';
 };
 
-export class AdshareMarketAdapter {
-  readonly name = 'adshare';
+export class TushareMarketAdapter {
+  readonly name = 'tushare';
 
   private readonly clock: () => Date;
   private readonly fetchImpl: typeof fetch;
   private readonly logger: Logger;
-  private readonly config: AdshareConfig;
+  private readonly config: TushareConfig;
 
-  constructor(options: AdshareMarketAdapterOptions) {
+  constructor(options: TushareMarketAdapterOptions) {
     this.clock = options.clock ?? ((): Date => new Date());
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.logger = options.logger;
@@ -59,22 +58,23 @@ export class AdshareMarketAdapter {
   }
 
   async fetchQuote(stockCode: string): Promise<Quote> {
-    if (!isAdshareSupported(stockCode)) {
-      this.logger.warn('adshare market not supported by adshare', { stockCode });
+    if (!isTushareSupported(stockCode)) {
+      this.logger.warn('tushare market not supported by tushare', { stockCode });
       throw new Error(`unsupported_market: ${stockCode}`);
     }
     const tsCode = stockCode.toUpperCase(); // 保留完整 '600519.SH'
     try {
-      const params = new URLSearchParams({ ts_code: tsCode });
-      const res = await fetchWithAuth(
-        `${this.config.url}/tushare/realtime/rt_k?${params}`,
-        this.config.apiKey,
-        this.fetchImpl,
-        { timeoutMs: this.config.timeoutMs, retries: this.config.retries },
-      );
-      const rows = parseTushareEnvelopeRows(await readJson(res));
+      const rows = await tushareQuery('rt_k', { ts_code: tsCode }, this.config, this.fetchImpl, [
+        'ts_code',
+        'trade_time',
+        'open',
+        'high',
+        'low',
+        'close',
+        'vol',
+      ]);
       const row = rows[0];
-      if (row === undefined) throw new Error(`adshare not_found: ${tsCode}`);
+      if (row === undefined) throw new Error(`tushare not_found: ${tsCode}`);
       const parsed = QuoteRowSchema.parse(row);
       const quote: Quote = {
         stockId: tsCode,
@@ -83,15 +83,15 @@ export class AdshareMarketAdapter {
         open: money(parsed.open),
         high: money(parsed.high),
         low: money(parsed.low),
-        close: money(parsed.price),
+        close: money(parsed.close),
         volume: parsed.vol,
-        source: 'adshare',
+        source: 'tushare',
       };
-      this.logger.info('adshare.fetchQuote ok', { stockCode: tsCode, source: 'adshare' });
+      this.logger.info('tushare.fetchQuote ok', { stockCode: tsCode, source: 'tushare' });
       return quote;
     } catch (error) {
-      const translated = translateAdshareError(error);
-      this.logger.warn('adshare.fetchQuote failed', {
+      const translated = translateTushareError(error);
+      this.logger.warn('tushare.fetchQuote failed', {
         stockCode: tsCode,
         kind: kindOf(translated.message),
         error: translated.message,
@@ -108,7 +108,7 @@ export class AdshareMarketAdapter {
         try {
           out.set(code, await this.fetchQuote(code));
         } catch (error) {
-          this.logger.warn('adshare.batchQuote omitted', {
+          this.logger.warn('tushare.batchQuote omitted', {
             code,
             error: errorMessage(error),
           });
@@ -119,57 +119,43 @@ export class AdshareMarketAdapter {
   }
 
   async fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]> {
-    if (!isAdshareSupported(stockCode)) {
-      this.logger.warn('adshare market not supported by adshare', { stockCode });
+    if (!isTushareSupported(stockCode)) {
+      this.logger.warn('tushare market not supported by tushare', { stockCode });
       throw new Error(`unsupported_market: ${stockCode}`);
     }
     const tsCode = stockCode.toUpperCase();
     try {
       const startDate = formatYmd(range.start);
       const endDate = formatYmd(range.end);
-      const auth = { timeoutMs: this.config.timeoutMs, retries: this.config.retries };
 
       // 日线必需、复权因子可降级：并发发起，adj_factor 失败只降级不整批失败。
       const [dailyResult, adjResult] = await Promise.allSettled([
-        fetchWithAuth(
-          `${this.config.url}/tushare/stock/daily?${new URLSearchParams({
-            ts_code: tsCode,
-            start_date: startDate,
-            end_date: endDate,
-          })}`,
-          this.config.apiKey,
+        tushareQuery(
+          'daily',
+          { ts_code: tsCode, start_date: startDate, end_date: endDate },
+          this.config,
           this.fetchImpl,
-          auth,
+          ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'vol'],
         ),
-        fetchWithAuth(
-          `${this.config.url}/tushare/stock/adj_factor?${new URLSearchParams({
-            ts_code: tsCode,
-            start_date: startDate,
-            end_date: endDate,
-          })}`,
-          this.config.apiKey,
+        tushareQuery(
+          'adj_factor',
+          { ts_code: tsCode, start_date: startDate, end_date: endDate },
+          this.config,
           this.fetchImpl,
-          auth,
+          ['ts_code', 'trade_date', 'adj_factor'],
         ),
       ]);
 
       if (dailyResult.status === 'rejected') {
         throw dailyResult.reason;
       }
-      const dailyRows = parseTushareEnvelopeRows(await readJson(dailyResult.value));
+      const dailyRows = dailyResult.value;
 
       let adjRows: Array<Record<string, unknown>> = [];
       if (adjResult.status === 'fulfilled') {
-        try {
-          adjRows = parseTushareEnvelopeRows(await readJson(adjResult.value));
-        } catch (error) {
-          this.logger.warn('adshare.fetchDailyBars adj_factor parse failed', {
-            stockCode: tsCode,
-            error: errorMessage(error),
-          });
-        }
+        adjRows = adjResult.value;
       } else {
-        this.logger.warn('adshare.fetchDailyBars adj_factor request failed', {
+        this.logger.warn('tushare.fetchDailyBars adj_factor request failed', {
           stockCode: tsCode,
           error: errorMessage(adjResult.reason),
         });
@@ -205,7 +191,7 @@ export class AdshareMarketAdapter {
         seen.add(date);
         const adj = adjByDate.get(date);
         if (adj === undefined) {
-          this.logger.warn('adshare.fetchDailyBars adj_factor missing', {
+          this.logger.warn('tushare.fetchDailyBars adj_factor missing', {
             stockCode: tsCode,
             date,
           });
@@ -219,22 +205,22 @@ export class AdshareMarketAdapter {
           close,
           volume,
           adjFactor: adj ?? 1.0,
-          source: 'adshare',
+          source: 'tushare',
         });
       }
 
       const result = bars
         .filter((b) => b.date >= range.start && b.date <= range.end)
         .sort((a, b) => a.date.getTime() - b.date.getTime());
-      this.logger.info('adshare.fetchDailyBars ok', {
+      this.logger.info('tushare.fetchDailyBars ok', {
         stockCode: tsCode,
-        source: 'adshare',
+        source: 'tushare',
         count: result.length,
       });
       return result;
     } catch (error) {
-      const translated = translateAdshareError(error);
-      this.logger.warn('adshare.fetchDailyBars failed', {
+      const translated = translateTushareError(error);
+      this.logger.warn('tushare.fetchDailyBars failed', {
         stockCode: tsCode,
         kind: kindOf(translated.message),
         error: translated.message,
@@ -244,26 +230,22 @@ export class AdshareMarketAdapter {
   }
 
   /**
-   * 复用 SDK fetchStockBasic；adshare `stock_basic.exchange` 用 SSE / SZSE，
-   * 显式映射为 core 的 SH / SZ，其它交易所剔除，避免 HK / US / BJ 漏到下游。
+   * tushare `stock_basic.exchange` 用 SSE / SZSE，显式映射为 core 的 SH / SZ，
+   * 其它交易所剔除，避免 HK / US / BJ 漏到下游。
    */
   async searchStocks(query: string): Promise<StockSearchCandidate[]> {
     const normalized = query.trim().toUpperCase();
     if (!normalized) return [];
     try {
       const tsCode = normalizeSearchTsCode(normalized);
-      const rows = await fetchStockBasic(
-        this.config.url,
-        this.config.apiKey,
+      const rows = await tushareQuery(
+        'stock_basic',
+        tsCode === null ? { name: normalized } : { ts_code: tsCode },
+        this.config,
         this.fetchImpl,
-        {
-          ...(tsCode === null ? { name: normalized } : { ts_code: tsCode }),
-          fields: ['ts_code', 'name', 'exchange'],
-          limit: 20,
-        },
-        { timeoutMs: this.config.timeoutMs, retries: this.config.retries },
+        ['ts_code', 'name', 'exchange'],
       );
-      return rows.flatMap((row) => {
+      return rows.slice(0, 20).flatMap((row) => {
         const exchange =
           row.exchange === 'SSE'
             ? ('SH' as const)
@@ -271,13 +253,14 @@ export class AdshareMarketAdapter {
               ? ('SZ' as const)
               : null;
         if (exchange === null) return [];
+        if (typeof row.ts_code !== 'string' || typeof row.name !== 'string') return [];
         const code = row.ts_code.split('.')[0];
         if (code === undefined) return [];
         return [{ id: row.ts_code, code, exchange, name: row.name }];
       });
     } catch (error) {
-      const translated = translateAdshareError(error);
-      this.logger.warn('adshare.searchStocks failed', {
+      const translated = translateTushareError(error);
+      this.logger.warn('tushare.searchStocks failed', {
         kind: kindOf(translated.message),
         error: translated.message,
       });
@@ -286,35 +269,10 @@ export class AdshareMarketAdapter {
   }
 }
 
-/** AdshareError / ZodError → 带 `adshare ...` 前缀的普通 Error（manager 不感知 SDK 错误类）。 */
-export const translateAdshareError = (error: unknown): Error => {
-  if (error instanceof AdshareError) {
-    switch (error.code) {
-      case 'NETWORK_ERROR':
-      case 'TIMEOUT':
-        return new Error(`adshare network: ${error.message}`);
-      case 'HTTP_ERROR':
-        return new Error(`adshare http: ${error.message}`);
-      case 'PARSE_ERROR':
-        return new Error(`adshare parse: ${error.message}`);
-      case 'NOT_FOUND':
-        return new Error(`adshare not_found: ${error.message}`);
-      case 'INVALID_INPUT':
-        return new Error(`adshare invalid_input: ${error.message}`);
-      default:
-        return new Error(`adshare unknown: ${error.message}`);
-    }
-  }
-  if (error instanceof ZodError) return new Error(`adshare parse: ${error.message}`);
+/** ZodError → 带 `tushare ...` 前缀的普通 Error（manager 不感知额外错误类）。 */
+export const translateTushareError = (error: unknown): Error => {
+  if (error instanceof ZodError) return new Error(`tushare parse: ${error.message}`);
   return error instanceof Error ? error : new Error(String(error));
-};
-
-const readJson = async (res: Response): Promise<unknown> => {
-  try {
-    return await res.json();
-  } catch (error) {
-    throw new AdshareError('PARSE_ERROR', '响应不是有效 JSON', { cause: error });
-  }
 };
 
 /** trade_date 归一：接受八位数字或八位字符串 → 'YYYYMMDD'；其它输入返回 null。 */
@@ -365,10 +323,10 @@ const asShares = (v: unknown): number | null =>
 
 const kindOf = (message: string): string => {
   if (message.startsWith('unsupported_market')) return 'unsupported_market';
-  if (message.startsWith('adshare network')) return 'network';
-  if (message.startsWith('adshare http')) return 'http';
-  if (message.startsWith('adshare parse')) return 'parse';
-  if (message.startsWith('adshare not_found')) return 'not_found';
+  if (message.startsWith('tushare network')) return 'network';
+  if (message.startsWith('tushare http')) return 'http';
+  if (message.startsWith('tushare parse')) return 'parse';
+  if (message.startsWith('tushare not_found')) return 'not_found';
   return 'unknown';
 };
 

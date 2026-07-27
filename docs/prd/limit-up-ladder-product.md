@@ -4,7 +4,7 @@
 > 日期：2026-07-25
 > 参考：旧项目 `ruo` 的 `market limit-up` 命令及其在 `report` / `watchlist refresh-top10` / `market-review` LLM 链中的下游用法；luoome 现有 [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) §P3、§5.2 与 [策略预警产品文档](./strategy-alert-product.md) §2.1/§5.2/§10
 > 产品边界：仅做 A 股短线方向的"看盘辅助页面 + 数据接口"；不替用户决策、不自动下单、不承诺任何"必涨/必板"语义
-> 关联产品：涨停分组同步（依赖 adshare `getLimitUpStocks`）、TOP10 自选股（依赖天梯 level 排序）、市场复盘报告（天梯是 LLM 输入段之一）
+> 关联产品：涨停分组同步（依赖行情源的涨停股票列表接口）、TOP10 自选股（依赖天梯 level 排序）、市场复盘报告（天梯是 LLM 输入段之一）
 
 ## 1. 文档结论
 
@@ -21,7 +21,7 @@ luoome 应引入**连板天梯（涨停梯队）**作为看盘辅助模块，但
 
 ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands/market.ts:111-148`），数据来源有两路：
 
-- `adshare.getLimitUpLadder(days, date)`，调用 `GET /market/limit-up/ladder`（`adshare.adapter.ts:322-407`）。
+- `getLimitUpLadder(days, date)`，调用私有行情服务 `GET /market/limit-up/ladder`（ruo 旧 adapter 实现）。
 - `amazingdata.getLimitUpLadder(days)`，从涨停股票列表按 `limitUpDays` 分组（`amazingdata.adapter.ts:301-336`）。
 
 数据结构在两条 adapter 上对齐为：
@@ -63,9 +63,9 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 
 | ruo 的做法 | 暴露出的问题 | 文档结论里怎么处理 |
 |---|---|---|
-| `market limit-up` 不传 `-d` 时，调 `adshare.getLimitUpLadder` 由 adshare 端"上海时间昨天"兜底 | 与 `-d` 指定日期错位、报告日期和实际数据日期不一致 | luoome 必须由**调用方**显式指定目标交易日，adapter 不再兜底 |
-| 收盘价有时被错填为当日最高价（盘中触板但收盘未板） | adshare 在 `getLimitUpLadder` 内做了一次 9.8%–10% 区间的回退修复（写死 8.58% 涨幅） | 在 luoome 仍由 adapter 一次性修正，但禁止把"修正值"当成"真实收盘价"暴露给外部，应保留原始 `rawClose` 与 `corrected` 标记 |
-| 同一接口 `getLimitUpLadder` 既返回 `date` 又返回 `limitUpDate`，调用方按不同字段做日期过滤 | `report.ts:360-415` 注释：probe 拿到的 `limitUpDate` 才是 adshare 实际数据的日期；调用方需主动 reconcile | luoome 天梯的"基准日"只允许一个权威字段 `date`（请求日），股票级 `limitUpDate` 仅作展示 |
+| `market limit-up` 不传 `-d` 时，由行情服务端"上海时间昨天"兜底 | 与 `-d` 指定日期错位、报告日期和实际数据日期不一致 | luoome 必须由**调用方**显式指定目标交易日，adapter 不再兜底 |
+| 收盘价有时被错填为当日最高价（盘中触板但收盘未板） | ruo 旧 adapter 在 `getLimitUpLadder` 内做了一次 9.8%–10% 区间的回退修复（写死 8.58% 涨幅） | 在 luoome 仍由 adapter 一次性修正，但禁止把"修正值"当成"真实收盘价"暴露给外部，应保留原始 `rawClose` 与 `corrected` 标记 |
+| 同一接口 `getLimitUpLadder` 既返回 `date` 又返回 `limitUpDate`，调用方按不同字段做日期过滤 | `report.ts:360-415` 注释：probe 拿到的 `limitUpDate` 才是上游实际数据的日期；调用方需主动 reconcile | luoome 天梯的"基准日"只允许一个权威字段 `date`（请求日），股票级 `limitUpDate` 仅作展示 |
 | `watchlist refreshTop10` 用 `ladderLevel*20` 把天梯等级作为综合分主项 | 当下游用同一个 level 既做"页面排序"又做"决策排序"时，TUI 和 TOP10 共享同一份数据，调权重一改两边都错 | luoome 把天梯当作"事实层"，页面排序、TOP10 排序各自维护权重 |
 | 天梯与涨停分组同步共用 `getLimitUpStocks*` 系列 | 一个调用方关注"近 15 日哪些股票涨停过"，另一个关注"今日按连板分组的快照" | luoome 拆为两个 tool：`limit_up_ladder`（结构化快照）与 `limit_up_stocks`（成员列表），共用底表不复用 API |
 
@@ -74,7 +74,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 - 没有专门的"涨停梯队"页面或 TUI 区块。
 - 已在 [策略预警产品文档](./strategy-alert-product.md) §2.1 / §5.2 / §10 把"涨停、炸板、断板规则"列为 P2 候选；天梯可以成为这些规则的"上游事实来源"，避免每个规则都自己拉数据。
 - [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) §P3 写明"连板天梯与昨日梯队表现：页面和接口较完整，外部依赖重；A 股短线方向明确时再做"——本文档是这条决策的展开。
-- 数据源仅 adshare（见 [Adshare 集成手册](../runbooks/adshare-integration.md)）；已确认不接 amazingdata，无 fallback。
+- 数据源已迁移为东方财富公开涨停池（`getTopicZTPool`，公开 API、无鉴权）；已确认不接 amazingdata，无 fallback。
 
 ### 2.4 一句话缺口
 
@@ -129,7 +129,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 | 一次"天梯快照" | `LimitUpLadder`（不可变快照） | `getLimitUpLadder` 返回值 | 同一日一份，刷新即覆盖 |
 | 某只股票在快照中的位置 | `LimitUpLadderEntry` | `levels[].stocks[]` | 一只股票在同一日只出现一次（按 level 最深的层级归类） |
 | 连板层级 | `ladderLevel` 字段 | `levels[].level` | 1 = 首板，N = N 连板 |
-| 涨停原因 | `reason` 字符串 | `reason` | 由 adshare 提供；不展示时也需保留 |
+| 涨停原因 | `reason` 字符串 | `reason` | 由数据源提供；当前主源（东方财富涨停池）无该字段，恒为缺失；不展示时也需保留 |
 | 封板时间 | `firstTime` / `finalTime` | 同 | 缺失时显示 `--`，不臆造 |
 
 ### 5.2 字段与口径
@@ -141,12 +141,12 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 | `maxLevel` | int | 所有 entry 的 `ladderLevel` 最大值 | 0 |
 | `level` | int | 1=首板，N=N 连板 | 缺失按 1 兜底并标 `uncategorized=true` |
 | `code` / `name` | string | 沪市 6/9 开头、深市 0/3 开头；名称缺失时回退到代码 | name 缺失显示 code |
-| `industry` | string | adshare 返回的行业；缺数据时回退到 `unclassified` | 不臆造 |
+| `industry` | string | 数据源返回的行业（当前为东方财富涨停池 `hybk`）；缺数据时回退到 `unclassified` | 不臆造 |
 | `firstTime` | string `HH:MM:SS` | 首次封板时间；盘中未开板显示 `--` | `--` |
 | `finalTime` | string `HH:MM:SS` | 最后封板时间；与 `firstTime` 相等表示未开板 | `--` |
 | `reason` | string | 涨停原因摘要（题材/概念） | `--` |
 | `price` | number | 收盘价（已修正，见 §5.6） | `--` |
-| `rawClose` | number | adshare 返回的原始 close，未经修正 | 与 `price` 不一致时打 `corrected=true` |
+| `rawClose` | number | 数据源返回的原始 close（东方财富涨停池 `p/1000`），未经修正 | 与 `price` 不一致时打 `corrected=true` |
 | `corrected` | bool | 收盘价是否经过 9.8%–10% 区间回退修正 | false |
 | `changePct` | number（小数，0.10 = 10%） | 相对昨收 | 缺失按 0 |
 | `limitUpDate` | string `YYYY-MM-DD` | 该股票的涨停日（理论上等于 `date`） | 等于 `date` |
@@ -162,7 +162,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 - **过滤**：默认排除科创板（688 开头）和北交所（8/4 开头）；用户不能改。
 - **ST 股票**：默认排除（名称前缀含 "ST"）。该口径与 [策略预警产品文档](./strategy-alert-product.md) §5.2 一致。
 - **去重**：同一股票在同一日只出现在一个 `level` 中；以最深 level 为准。
-- **数据修正**：若 adshare 返回的 `close == high` 且涨幅在 [9.8%, 10%)，认为"盘中触板但收盘未板"，按 8.58% 涨幅回推收盘价，详见 §5.6。
+- **数据修正**：若数据源返回的 `close == high` 且涨幅在 [9.8%, 10%)，认为"盘中触板但收盘未板"，按 8.58% 涨幅回推收盘价，详见 §5.6。当前主源（东方财富涨停池）无 `high` 字段，该修正不触发，逻辑保留。
 
 ### 5.4 时间边界
 
@@ -183,7 +183,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 ### 5.6 收盘价修正规则
 
 - 触发条件：`rawClose == high` 且 `(rawClose - preClose) / preClose ∈ [0.098, 0.10)`。
-- 修正方式：按 8.58% 涨幅回推 `price = preClose * (1 + 0.0858)`，与 ruo `adshare.adapter.ts:374-385` 一致。
+- 修正方式：按 8.58% 涨幅回推 `price = preClose * (1 + 0.0858)`，与 ruo 旧 adapter 实现一致。当前主源（东方财富涨停池）无 `high` 字段，触发条件不成立，修正逻辑保留但不触发。
 - 暴露字段：保留 `price`（修正后）和 `rawClose`（修正前），并设 `corrected=true`。
 - 拒绝范围：若涨幅 ≥ 10%（真涨停），按原值通过；若涨幅 < 9.8%（未触板），按原值通过；这两种情况下 `corrected=false`。
 
@@ -201,7 +201,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 
 1. 用户在页面顶部选择日期 `2026-07-20`。
 2. 浏览器/终端发起请求 `date=2026-07-20`。
-3. 命中缓存直接返回；未命中后端调 adshare 拉数据并按 §5.6 修正后入缓存。
+3. 命中缓存直接返回；未命中后端调东方财富涨停池拉数据并按 §5.6 修正后入缓存。
 4. 缓存策略：同 `date` + 同数据源版本，TTL 1 小时；过期或版本变化重新拉取。
 
 ### 6.3 与报告联动
@@ -222,8 +222,8 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 |---|---|
 | 请求日尚未收盘 | `levels: []`、`total: 0`、`maxLevel: 0`，UI 显示"今日暂未收盘，请稍后再看" |
 | 请求日为非交易日 | 同上，UI 显示"该日非 A 股交易日" |
-| adshare 不可用 | tool 返回 `ToolError(kind: "upstream-unavailable")`，UI 显示"行情服务暂不可用，请稍后重试" |
-| adshare 返回空 levels（盘前 9:30 之前） | 不再自动回退到昨天；UI 显示"今日数据暂未更新，最新可看日期为 <prevDate>" |
+| 行情服务（东方财富涨停池）不可用 | tool 返回 `ToolError(kind: "upstream-unavailable")`，UI 显示"行情服务暂不可用，请稍后重试"；诊断文案提示检查到东方财富行情服务的网络连通性 |
+| 数据源返回空 levels（盘前 9:30 之前） | 不再自动回退到昨天；UI 显示"今日数据暂未更新，最新可看日期为 <prevDate>" |
 | 单只股票字段缺失 | 表格显示 `--`，不阻断整个 levels 渲染 |
 
 ## 7. 页面与交互
@@ -267,12 +267,12 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 保留 ruo 的 CLI 形态作为高级入口。命令参数：
 
 ```text
-luoome market limit-up [--date YYYY-MM-DD] [--json] [--source adshare]
+luoome market limit-up [--date YYYY-MM-DD] [--json] [--source eastmoney]
 ```
 
-- 默认 `date` = 今天（Asia/Shanghai），不再走 adshare 兜底。
+- 默认 `date` = 今天（Asia/Shanghai），不再走服务端"昨天"兜底。
 - `--json` 输出与 tool schema 一致的 JSON。
-- `--source` 选择数据源；缺省且当前唯一可选值为 `adshare`（不接 amazingdata，无 fallback）。
+- `--source` 选择数据源；缺省且当前唯一可选值为 `eastmoney`（不接 amazingdata，无 fallback）。
 
 ### 7.4 与现有页面的连接
 
@@ -287,7 +287,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--json] [--source adshare]
 ```ts
 input = {
   date: string;            // YYYY-MM-DD
-  source?: "adshare";        // 默认 adshare（当前唯一数据源）
+  source?: "eastmoney";    // 默认 eastmoney（当前唯一数据源）
   days?: number;           // 默认 15
   includeUncategorized?: boolean;  // 默认 false
 }
@@ -296,7 +296,7 @@ output = {
   date: string;
   total: number;
   maxLevel: number;
-  source: "adshare";
+  source: "eastmoney";
   levels: Array<{
     level: number;
     name: string;          // "首板" / "N 连板"
@@ -312,7 +312,7 @@ output = {
 ### 8.2 Tool：`limit_up_ladder_compare`（P2）
 
 ```ts
-input = { date: string; prevDate: string; source?: "adshare" }
+input = { date: string; prevDate: string; source?: "eastmoney" }
 output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
   totalDelta, maxLevelDelta, topLevelAdded, topLevelRemoved, topLevelRetained
 }}
@@ -323,7 +323,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 ### 8.3 缓存与刷新
 
 - 同 `date` + 同 `source` 的请求 1 小时内直接命中缓存。
-- 缓存 key 含 `source`，不同数据源的 `date` 不复用同一缓存 key（当前仅 adshare 一源）。
+- 缓存 key 含 `source`，不同数据源的 `date` 不复用同一缓存 key（当前仅 eastmoney 一源）。
 - 缓存层沿用 luoome 现有 `core` 内的 cache adapter；不引入新的存储后端。
 
 ### 8.4 下游消费方清单
@@ -342,7 +342,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 ### 9.1 保留
 
-- adshare 适配器与 [Adshare 集成手册](../runbooks/adshare-integration.md)；本文档不修改 adshare 协议。已确认不接 amazingdata，无 fallback adapter。
+- 东方财富涨停池 adapter（`EastmoneyLimitUpLadderAdapter`，公开 API、无鉴权、无环境变量）；本文档不修改上游协议。已确认不接 amazingdata，无 fallback adapter。
 - 现有涨停分组同步逻辑（依赖 `getLimitUpStocks*`），与天梯解耦。
 - 现有 TOP10 排序、报告生成、LLM 复盘链；只调整它们的"输入来源"，不改它们的核心算法。
 
@@ -359,8 +359,8 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 - 不引入新的用户配置项；不接受"自定义连板规则 / 自定义首板口径"。
 - 不引入 Redis、外部 KV；用 luoome 现有 cache adapter。
-- 不让 TUI/Web 直接连 adshare；数据由 tool 统一封装。
-- 不复刻 ruo 旧 `adshare.adapter.ts:374-385` 把修正字段写回 adshare 缓存；adapter 只暴露修正后的 `price` 与保留的 `rawClose`。
+- 不让 TUI/Web 直接连行情数据源；数据由 tool 统一封装。
+- 不复刻 ruo 旧 adapter 把修正字段写回上游缓存的做法；adapter 只暴露修正后的 `price` 与保留的 `rawClose`。
 - 不在 tool 内做"今天 → 昨天"自动回退；调用方按 §6.5 处理空态。
 
 ## 10. 分阶段范围
@@ -375,7 +375,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 目标：跑通"tool → 缓存 → TUI 展示"的最小闭环。
 
-- 实现 `limit_up_ladder` tool（数据源 adshare，无 fallback）。
+- 实现 `limit_up_ladder` tool（数据源 eastmoney 公开涨停池，无 fallback）。
 - 实现 `LimitUpLadder` / `LimitUpLadderEntry` Zod schema。
 - TUI 增加 `L` 快捷键与涨停梯队子视图。
 - CLI `luoome market limit-up` 保留 ruo 形态但去掉日期兜底。
@@ -388,13 +388,13 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 - Web `/market/limit-up` 页面，含日期切换与 vs 昨日 diff。
 - 报告 workflow 改造：`market-review.chain.ts` 输入段替换为天梯快照。
-- `watchlist refreshTop10` 切换到本快照，移除其对 adshare ladder 的直接调用。
+- `watchlist refreshTop10` 切换到本快照，移除其对行情源 ladder 接口的直接调用。
 - 增加 `limit_up_ladder_compare` tool。
 
 ### Phase 3：与策略预警联动
 
 - 在 [策略预警产品文档](./strategy-alert-product.md) P2 列表中加入"涨停规则"，上游事实来源统一指向本快照。
-- 增加"炸板 / 断板"语义字段（依赖 adshare 暴露 `isBroken` / `consecutiveBoard`）。
+- 增加"炸板 / 断板"语义字段（依赖数据源暴露 `isBroken` / `consecutiveBoard`；当前东方财富涨停池无此字段）。
 - 与个股详情"事件"区打通。
 
 ## 11. 验收标准
@@ -411,7 +411,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 ### 可靠性
 
-- adshare 不可用时返回明确的 `adapter_error`（无 fallback；已确认不接 amazingdata）。
+- 行情服务（东方财富涨停池）不可用时返回明确的 `adapter_error`（无 fallback；已确认不接 amazingdata）。
 - 缓存命中失败不污染下游；回源请求有超时与重试限制。
 - 非交易日 / 盘前 / 盘后请求统一返回空 `levels` 与明确提示，**不**自动回退到昨天。
 - 跨时区统一 Asia/Shanghai；不出现 UTC 日期错位。
@@ -432,7 +432,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 |---|---|---|
 | 页面可用率 | TUI/Web 涨停梯队页正常返回的请求占比 | ≥ 99% |
 | 缓存命中率 | 同日同源二次请求命中缓存占比 | ≥ 80%（日活用户 ≥ 2 次访问时） |
-| 数据修正率 | `corrected=true` 的 entry 占比 | 观察指标；如 > 5% 提示 adshare 数据问题 |
+| 数据修正率 | `corrected=true` 的 entry 占比 | 观察指标；当前主源无 `high` 字段恒为 0，如 > 5% 提示数据源数据问题 |
 | 字段完整率 | `industry` / `reason` / `firstTime` 缺失占比 | 各字段缺失 < 30% |
 | 下游覆盖度 | 报告、TOP10、LLM 复盘链中天梯字段的引用点 | 100%（Phase 2 之后） |
 | 接口一致性 | tool schema 与 Web/API 响应字段一致 | 100% |
@@ -441,7 +441,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 | 风险 | 应对 |
 |---|---|
-| adshare 协议变化（字段重命名、缺失） | 隔离在 `core/adapter` 内部；schema 校验失败时返回 `parse_error` + 详细 warning，UI 降级展示 |
+| 上游协议变化（东方财富涨停池字段重命名、缺失） | 隔离在 `core/adapter` 内部；schema 校验失败时返回 `parse_error` + 详细 warning，UI 降级展示 |
 | "今日无数据"被误读为"系统坏了" | 明确文案 + 暴露 `prevDate` 提示；状态码区分"空态"和"上游不可用" |
 | 收盘价修正（8.58%）被引用为"真实收盘" | `corrected=true` 标记 + `rawClose` 字段保留；UI 在表格里加角标 |
 | TOP10 综合分因天梯 level 变化而抖动 | 把天梯从 TOP10 排序公式里独立出来；level 仅作"加分项"且权重可被覆盖 |
@@ -466,7 +466,7 @@ ruo `getLimitUpStocksMainAndChiNext` 已默认排除科创板和北交所。建�
 
 ### D3：缓存时长
 
-建议 1 小时；但若 adshare 同步延迟 > 1 小时，缓存应被版本号/数据时间戳作废。需确认 adshare 是否暴露数据时间戳。
+建议 1 小时；但若上游同步延迟 > 1 小时，缓存应被版本号/数据时间戳作废。需确认数据源是否暴露数据时间戳（当前东方财富涨停池未暴露）。
 
 ### D4：报告与 TOP10 是否在 Phase 1 同步切换
 

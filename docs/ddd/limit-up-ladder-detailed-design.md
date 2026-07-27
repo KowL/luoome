@@ -3,7 +3,7 @@
 > 状态：Phase 1 实施稿（PRD §10 已确认三阶段范围；本文实现 Phase 1 主体并对齐 Phase 2/3 演进路径）
 > 日期：2026-07-25
 > 需求：[连板天梯产品文档](../prd/limit-up-ladder-product.md)
-> 上游参考：[Adshare 集成手册](../runbooks/adshare-integration.md) §1-3（环境变量、启动顺序、故障排查保持不变）
+> 数据源：东方财富公开涨停池（`GET https://push2ex.eastmoney.com/getTopicZTPool`，无鉴权、无环境变量；2026-07 由原私有行情服务 `/market/limit-up/ladder` 迁移而来）
 > 关联 DDD：[盘中盯盘设计](./intraday-watch-design.md) §4.6 workflow 调用 tool 的契约（天梯同样适用——workflow 不直连 adapter/repo）
 
 ## 目标
@@ -13,8 +13,8 @@
 ## 已确认决策
 
 - **不落库**：天梯快照走 cache adapter，不写 DB。理由：(1) ruo 旧实现已验证现拉现算 + 修正 + 展示闭环不需要 DB；(2) 盘中数据每日刷新，落库引入"快照失效 vs 用户期望时效"的二义性；(3) 报告/StockGroup/LLM 复盘链只读需求都能用 cache 满足。落库留作未来事件审计需要时另立任务。
-- **不引入新环境变量**：数据源 adshare 写死，沿用现有 adshare-sdk 客户端的 `ADSHARE_URL`/`ADSHARE_API_KEY`/`ADSHARE_TIMEOUT_MS`/`ADSHARE_MAX_RETRIES`。已确认不接 amazingdata（原 throw 占位 adapter 已删除），上游不可达时直接返回 `adapter_error`。
-- **修正规则下沉 core**：8.58% 涨幅回推 `price` 在 core 层完成；adshare-sdk 仅做协议层解析；这与 ruo 旧实现位置一致（`adshare.adapter.ts:374-385`），但解耦便于 Phase 2 切换数据源时不重复实现。
+- **不引入新环境变量**：数据源 eastmoney 公开涨停池写死（`EastmoneyLimitUpLadderAdapter`，name='eastmoney'）；公开 API 无鉴权，factory 不读任何环境变量。已确认不接 amazingdata，无 fallback；上游不可达时直接返回 `adapter_error`。
+- **修正规则下沉 core**：8.58% 涨幅回推 `price` 在 core 层完成；adapter 仅做协议层解析。新主源无 `high` 字段，§6.4 修正不再触发，但逻辑保留（兼容未来重新暴露 `high` 的数据源）。
 - **保持单一权威日期**：tool 入参 `date` 是请求方关心的交易日；adapter 不做"今天 → 昨天"自动回退（避免报告日期与数据日期错位，PRD §2.2 第一行问题）。
 - **修正字段必须可追溯**：暴露修正后 `price`、原始 `rawClose`、`corrected` 三字段；不允许静默改写（PRD §5.6）。
 - **天梯不替其它模块承担职责**：StockGroup / WatchPlan、报告 LLM 输入、策略预警触发都各自有 tool，天梯只暴露只读快照，**不**为这些模块改变输出顺序或参与写入路径（PRD §4.6）。
@@ -24,7 +24,7 @@
 ## 现状（已核实）
 
 - 无 `LimitUpLadder` / `LimitUpLadderEntry` 实体与表（`packages/core/src/entity/` 现有 23 个实体，无天梯）。
-- adshare-sdk (`packages/adshare-sdk`) 当前 endpoint：`stock-basic` / `quote` / `kline`，**无** limit-up 接口；`schemas.ts` 仅有 `StockBasicSchema` / `KLineBarSchema` / `QuoteSchema`。
+- 原基于私有行情服务的 SDK 包、ladder adapter 与 `EastmoneyLimitUpPoolEnricher` 已随主源切换移除；天梯协议层由 `EastmoneyLimitUpLadderAdapter`（`packages/adapters/src/limit-up-ladder/eastmoney.ts`）直连东方财富公开涨停池承担，无独立 SDK 包。
 - adapters 市场层（`packages/adapters/src/market/`）有 `MarketDataAdapter` + `MarketDataManager`（Eastmoney 主 → Tencent 备），**不**承载天梯业务；天梯特征是"日级批量快照"而非"实时 quote 流"，合用但语义不同。
 - core 已有 `MarketDataAdapterLike`（surface 组装根统一调 `createMarketAdapterFromEnv`），天梯不通过此接口注入——独立加 `LimitUpLadderAdapter`。
 - tool 目录无天梯 tool；现 `run_tactic`、`batch_quote` 等 read 类 tool 走 `ctx.tools.*` 调用（`packages/tools/src/tools/` 已有 33 个 tool）。
@@ -44,7 +44,7 @@ export type LimitUpBoard =
   | 'star'            // 科创板 688x（默认排除，仅在 includeStar=true 时出现）
   | 'bse';            // 北交所 8x/4x（默认排除，仅在 includeBse=true 时出现）
 
-export type LimitUpLadderSource = 'adshare';   // 当前唯一数据源；保留枚举便于将来扩展
+export type LimitUpLadderSource = 'eastmoney';   // 当前唯一数据源；保留枚举便于将来扩展
 
 export interface LimitUpLadderEntry {
   readonly code: string;                // 600xxx / 000xxx / 300xxx
@@ -56,7 +56,7 @@ export interface LimitUpLadderEntry {
   readonly finalTime: string | null;    // HH:MM:SS；缺失为 null
   readonly reason: string;              // 题材/概念；缺失为 ''
   readonly price: number;               // 修正后的收盘价
-  readonly rawClose: number;            // adshare 返回的原始 close
+  readonly rawClose: number;            // 数据源返回的原始 close（eastmoney 池 `p/1000`）
   readonly corrected: boolean;          // true = 命中 §6.4 修正条件
   readonly changePct: number;           // 小数，0.10 = 10%
   readonly limitUpDate: string;         // YYYY-MM-DD；理论上 == date
@@ -82,7 +82,7 @@ export interface LimitUpLadder {
 
 export interface LimitUpLadderQuery {
   readonly date: string;                              // YYYY-MM-DD，必填
-  readonly source?: LimitUpLadderSource;              // 默认 'adshare'
+  readonly source?: LimitUpLadderSource;              // 默认 'eastmoney'
   readonly days?: number;                             // 样本窗口，默认 15
   readonly includeUncategorized?: boolean;            // 默认 false；true 时 uncategorized=true 的 entry 才出现
   readonly includeStar?: boolean;                     // 默认 false；true 时允许科创板
@@ -115,7 +115,7 @@ export interface LimitUpLadderDiff {
   | 688/689 | `star`（默认排除） |
   | 8/4 | `bse`（默认排除） |
 - `industry === 'unclassified'` 时不返回 `null`，用哨兵字符串避免 nullable 的传播；同样适用于 `name`、`reason`。
-- `uncategorized` 区分两种情况：(1) adshare 未给出 level 字段；(2) 同股票跨多日 reorg 后无法判定是否首板。两者都打 `uncategorized=true` 但保留在 `levels[0]`（首板层级）—— 这是 fallback，不让请求方零回报。
+- `uncategorized` 区分两种情况：(1) 数据源未给出 level 字段（eastmoney 池缺 `lbc`）；(2) 同股票跨多日 reorg 后无法判定是否首板。两者都打 `uncategorized=true` 但保留在 `levels[0]`（首板层级）—— 这是 fallback，不让请求方零回报。
 - 序列化输出时 entry 中已修正 `price` + 原始 `rawClose` + `corrected=true` 暴露为三个独立字段（PRD §5.2）。
 
 ### 2. core：辅助函数
@@ -124,39 +124,24 @@ export interface LimitUpLadderDiff {
 - `isLimitUpLadderTradingDay(date: string, holidays: readonly string[]): boolean`：复用 [intraday-watch 设计 §"已知边界"](./intraday-watch-design.md#已知边界) 中三层优先级 union 节假日历；非交易日早返回，`levels: []`、`total: 0`、`maxLevel: 0`、`warnings: ['non-trading-day']`。
 - `filterAndDedupe(entries, opts): LimitUpLadderEntry[]`：按 `opts.includeStar` / `includeBse` / `includeST` 过滤 ST 股票（名称前缀 `ST`/`*ST`），同一 code 只保留最深 level 的 entry；ST 股票判定**仅看名称前缀**，与策略预警产品文档 §5.2 一致。
 
-### 3. adshare-sdk：limit-up endpoint（`packages/adshare-sdk/src/endpoints/limit-up.ts`，新建）
+### 3. eastmoney 协议层：公开涨停池 `getTopicZTPool`（`packages/adapters/src/limit-up-ladder/eastmoney.ts`）
 
-- 协议层封装，不做修正、不过滤、不缓存；只把 adshare 远端响应解成 `RawLimitUpEntry[]`。
-- 入参：`{ date: string; days?: number }`（`date` 为 `YYYY-MM-DD`，发送前转成 `YYYYMMDD`——远端 FastAPI 按 int 解析，`YYYY-MM-DD` 会 422，2026-07-26 实测确认）。
-- 出参：`{ date: string; entries: RawLimitUpEntry[] }`。
-- **远端实际响应契约**（2026-07-26 实测；Phase 1 初稿猜的 `{ entries/items: [...] }` snake_case 形态并不存在）：
+- 协议层与业务 adapter 合一，不做修正、不过滤、不缓存；只把东方财富公开涨停池响应解成 `LimitUpLadderRawEntry[]`。
+- 请求：`GET https://push2ex.eastmoney.com/getTopicZTPool?ut=<公开网页端 token>&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=<YYYYMMDD>`；无鉴权（`ut` 为 eastmoney 网页端公开 token，非私有凭据）。`date` 发送前去掉 `-`，默认超时 10s。
+- **`days` 参数被忽略**：连板数由 pool 的 `lbc` 直接给出，不需要样本窗口。
+- 远端响应契约：`data.pool[]` 为涨停股票列表（非交易日 / 无数据时 `data` 为 `null` 或 `pool` 缺失 → 空梯队），单条字段映射：
 
-  ```jsonc
-  {
-    "success": true, "message": null, "cached": false,
-    "date": "2026-07-24", "total": 39, "maxLevel": 4,
-    "levels": [
-      {
-        "level": 4, "name": "4连板", "count": 2,
-        "stocks": [
-          {
-            "code": "002879", "name": "长缆科技", "level": 4,
-            "industry": "", "firstTime": "", "finalTime": "", "reason": "",
-            "price": 18.05, "changePct": 0.0999, "limitUpDate": "2026-07-24"
-          }
-        ]
-      }
-    ]
-  }
-  ```
+  | pool 字段 | 含义 | 映射 |
+  |---|---|---|
+  | `c` / `n` | 代码 / 名称 | `code` / `name`（`n` 空则缺失） |
+  | `p` | 最新价 ×1000 | `close = p / 1000`；非法值跳过该条 |
+  | `zdp` | 涨跌幅 ×100（百分数） | `change_pct = zdp / 100`；并反推 `pre_close = close / (1 + change_pct)` |
+  | `lbc` | 连板数（首板 = 1） | `level` / `limit_up_days` |
+  | `fbt` / `lbt` | 首次 / 最后封板（HHMMSS int；0/null 缺失） | `first_time` / `final_time`（`HH:MM:SS`） |
+  | `hybk` | 行业板块 | `industry` |
 
-  - 响应是**已组装好的梯队**；SDK 负责拍平 `levels[].stocks[]` → `entries`，stock 缺 `level` 时回退父层 level。
-  - entry 字段为 camelCase；空字符串表示缺失（映射为 `undefined`）。
-  - 远端**不给** `pre_close` / `high`：SDK 由 `changePct` 反推 `pre_close = price / (1 + changePct)`，供 manager 的 pct 计算与 §6.4 修正使用；`high` 恒 `undefined`，修正不会触发（远端 price 已是最终收盘价）。
-  - `success === false` → 抛 `AdshareError('HTTP_ERROR')` 并带远端 `message`。
-- 远端路径：`GET /market/limit-up/ladder?date=<YYYYMMDD>&days=<days>`（与 ruo 旧实现一致，路径在 adshare 后端固化；不在 luoome 改协议）。
-- 错误处理：4xx 不重试直接抛 `AdshareError('HTTP_ERROR')`；5xx 与网络错误走 `fetchWithAuth` 的指数退避（沿用 `ADSHARE_MAX_RETRIES`）。
-- 有 stocks 但条目全部解析失败抛 `AdshareError('PARSE_ERROR')`，Manager 层捕获后返回 `adapter_error`（无 fallback）。
+- **无涨停原因字段**：`reason` 由 manager 归一为 `'--'` 哨兵；**无 `high`**：§6.4 收盘价修正不再触发（逻辑保留，见 §4.3）。
+- 错误处理：网络错误 / 非 2xx / 非 JSON 响应直接抛错，Manager 层捕获后返回 `adapter_error`（无 fallback）；单条字段非法（缺 `c`、非法 `p`）跳过该条，不阻断整体。
 
 ### 4. adapters：business adapter + Manager（`packages/adapters/src/limit-up-ladder/`，新建）
 
@@ -164,43 +149,35 @@ export interface LimitUpLadderDiff {
 
 ```
 adapters/src/limit-up-ladder/
-├── manager.ts            # LimitUpLadderManager: 缓存、修正、enricher 补齐
-├── adshare.ts            # AdshareLimitUpLadderAdapter
-├── eastmoney-pool.ts     # EastmoneyLimitUpPoolEnricher（封板时间 / 行业补齐）
+├── manager.ts            # LimitUpLadderManager: 缓存、修正、过滤去重
+├── eastmoney.ts          # EastmoneyLimitUpLadderAdapter（主源，协议层见 §3）
+├── factory.ts            # createLimitUpLadderManagerFromEnv 装配根（§5）
+├── lru.ts                # TTL/LRU 缓存实现
 ├── types.ts              # LimitUpLadderAdapterLike 接口
-└── manager.test.ts
+└── manager.test.ts / eastmoney.test.ts / factory.test.ts
 ```
 
 #### 4.1 `types.ts`
 
 ```ts
-import type { RawLimitUpEntry } from '@luoome/adshare-sdk';
-
 export interface LimitUpLadderAdapter {
-  readonly name: string;                 // 错误 / 日志标识（当前仅 'adshare' 实现）
+  readonly name: string;                 // 错误 / 日志标识（当前仅 'eastmoney' 实现）
   fetchLadder(date: string, opts?: { days?: number }): Promise<{
     date: string;
-    entries: RawLimitUpEntry[];
+    entries: LimitUpLadderRawEntry[];
   }>;
 }
 ```
 
-#### 4.2 `adshare.ts`：薄封装，**不**做修正
+#### 4.2 `eastmoney.ts`：薄封装，**不**做修正
 
 ```ts
-export class AdshareLimitUpLadderAdapter implements LimitUpLadderAdapter {
-  readonly name = 'adshare' as const;
-  constructor(private readonly deps: { client: AdshareClient; fetchImpl?: typeof fetch }) {}
+export class EastmoneyLimitUpLadderAdapter implements LimitUpLadderAdapter {
+  readonly name = 'eastmoney' as const;
+  constructor(fetchImpl?: typeof fetch, timeoutMs = 10_000) {}
 
-  async fetchLadder(date: string, opts?: { days?: number }): Promise<...> {
-    return fetchLimitUpLadder({
-      url: this.deps.client.baseUrl,
-      apiKey: this.deps.client.apiKey,
-      fetchImpl: this.deps.fetchImpl ?? fetch,
-      query: { date, days: opts?.days ?? 15 },
-      options: { timeoutMs: this.deps.client.timeoutMs, retries: this.deps.client.maxRetries },
-    });
-  }
+  // fetchLadder 契约见 §3：直连 getTopicZTPool，字段天然齐全
+  // （close/pre_close/level/first_time/final_time/industry），days 参数忽略
 }
 ```
 
@@ -239,7 +216,7 @@ export class LimitUpLadderManager {
   > 收盘判定用 15:00 是简化值；如果当天有延迟收盘（最后交易日）由调用方负责——manager 不读国办通知。
 - 主源失败时按 ARCHITECTURE §4.7 `MarketDataManager` 的模式 (`finalFallbackSuppressMs`) 把"已失败"状态短期抑制，避免 5 秒内多次重试打到对端。
 
-**enricher（封板时间 / 行业补齐）**：adshare 天梯、明细、`/limit_list` 的 `firstTime` / `finalTime` / `industry` 实测（2026-07 多个交易日）全部为空。manager 在 map 之后调用可选的 `enricher.fetchPool(date)`（`eastmoney-pool.ts`，eastmoney 公开涨停池 `getTopicZTPool`，`fbt`/`lbt` HHMMSS int → HH:MM:SS，`hybk` → 行业），按 code 补齐——只填空字段，不覆盖主源已有值；enricher 失败降级为 `logger.warn`，不阻断主流程。factory 默认装配 `EastmoneyLimitUpPoolEnricher`。
+**enricher 已随主源切换移除**：原 `EastmoneyLimitUpPoolEnricher`（`eastmoney-pool.ts`）用于补齐旧主源缺失的 `firstTime` / `finalTime` / `industry`；切换后 `EastmoneyLimitUpLadderAdapter` 天然带齐这些字段（`fbt`/`lbt`/`hybk`，见 §3），manager 不再有 enricher 选项，factory 也不再装配。
 
 **§6 修正规则**（PRD §5.6）：
 
@@ -260,19 +237,21 @@ function applyCloseCorrection(
 }
 ```
 
+> 新主源 eastmoney 涨停池无 `high` 字段（raw entry 的 `high` 恒缺失），触发条件 `rawClose === high` 不成立，§6.4 修正在当前数据源下不触发；逻辑保留以兼容未来重新暴露 `high` 的数据源。
+
 **去重与过滤**：调用 §2 的 `filterAndDedupe`。
 
 **§6.5 异常与空态映射**（PRD §6.5）：
-- 远端返回空 `entries[]`：直接返回 `{ date, total: 0, maxLevel: 0, levels: [], warnings: ['empty-ladder'], ... }`，manager **不**自动回退到昨天。
-- 请求日 = 非交易日：在解析 `RawLimitUpEntry[]` 之前判定 `isTradingDay(date)`，直接返回空 ladder + `warnings: ['non-trading-day']`。
-- 主源抛错：捕获 `AdshareError`，log warn，继续尝试 `fallback`；两者都失败则向上抛 `ToolError(kind: 'adapter_error', adapter: 'limit-up-ladder', ...)`。
+- 远端返回空 `entries[]`（`data` 为 `null` 或 `pool` 为空）：直接返回 `{ date, total: 0, maxLevel: 0, levels: [], warnings: ['empty-ladder'], ... }`，manager **不**自动回退到昨天。
+- 请求日 = 非交易日：在解析 `LimitUpLadderRawEntry[]` 之前判定 `isTradingDay(date)`，直接返回空 ladder + `warnings: ['non-trading-day']`。
+- 主源抛错：捕获 adapter 错误，log warn；无 fallback 可尝试，直接向上抛 `ToolError(kind: 'adapter_error', adapter: 'limit-up-ladder', ...)`。面向用户的诊断文案为"请检查到东方财富行情服务的网络连通性"。
 - 字段缺失（`name` / `industry` / `firstTime` / `reason` 等）：不抛错，按 §1 哨兵字符串填充，并在 entry 旁附 `uncategorized` / `warnings`。
 
-### 5. core：cache 与 surface 装配根（`packages/core/src/limit-up-ladder/`，新建）
+### 5. surface 装配根（`packages/adapters/src/limit-up-ladder/factory.ts`）
 
-- `createLimitUpLadderManagerFromEnv(env, deps)`：与 `createMarketAdapterFromEnv` 同模式。
-  - 解析顺序：`ADSHARE_URL` / `ADSHARE_API_KEY` 等沿用现有 `fromEnv`。
-  - 不引入 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK`；数据源 adshare 写死，无 fallback（已确认不接 amazingdata）。
+- `createLimitUpLadderManagerFromEnv(env, deps)`：与 `createMarketAdapterFromEnv` 同模式（位置与签名风格对齐）。
+  - **不读任何环境变量**（`env` 参数仅为对齐签名保留）：主源为东方财富公开涨停池，无鉴权；不引入 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK`，单源写死、无 fallback。
+  - **始终装配真实 manager**：原 Phase 2 的"私有服务 URL 缺失 → 软失败 manager"行为已随主源切换移除（公开 API 无配置前置条件）；上游不可达在调用期以 `adapter_error` 表现。
   - 返回 `LimitUpLadderManager`。
 - `packages/adapters/src/index.ts` 桶增加 `export * from './limit-up-ladder/index.js'`。
 
@@ -310,7 +289,7 @@ export const limitUpLadderTool = defineTool({
 export const LimitUpLadderCompareInput = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   prevDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  source: z.enum(['adshare']).default('adshare'),
+  source: z.enum(['eastmoney']).default('eastmoney'),
   days: z.number().int().positive().default(15),
   includeUncategorized: z.boolean().default(false),
 });
@@ -333,8 +312,8 @@ export const limitUpLadderCompareTool = defineTool({
 
 - ToolError 映射：
   - `parse_error` → 请求 `date` 不合法 → `invalid_input`
-  - adshare 5xx 重试耗尽且无 fallback → `adapter_error(adapter='limit-up-ladder', recoverable=true)`
-  - adshare 4xx → `adapter_error(adapter='limit-up-ladder', recoverable=false)`
+  - eastmoney 涨停池网络错误 / 超时（无 fallback）→ `adapter_error(adapter='limit-up-ladder', recoverable=true)`
+  - eastmoney 涨停池非 2xx 响应 → `adapter_error(adapter='limit-up-ladder', recoverable=false)`
   - 空 ladder 不是错误，**不**抛 ToolError。
 - 注册到 `toolRegistry`，并 `WorkflowToolMap` 补 2 行类型映射（MCP 默认 read 类暴露，落地即可被对话侧用上）。
 
@@ -357,7 +336,7 @@ interface AdapterRegistry {
 - `market-outlook` workflow：在「市场概况」step 之后追加 `limit_up_ladder` 的可选调用，把快照作为 LLM 复盘段的事实来源。Phase 2-3 评估是否做。
 - StockGroup / WatchPlan 接入：tactic / formula / llm resolver 暂未消费 ladder level；本任务 Phase 3 候选（与 [strategy-alert-detailed-design.md §"涨停规则"](./strategy-alert-detailed-design.md) 联动）。
 
-> **ruo 旧实现警告**：ruo 旧 `adshare.adapter.ts` 直接 fetch adshare 后做 TOP10 排序，并在 `watchlist.refreshTop10` 中混用「页面排序 / 决策排序」同一份数据 — 是 PRD §2.2 错误隔离的反模式。luoome 把这两类用途（页面展示 vs 算法输入）解耦到不同 tool，且 TOP10 排序本身被分到 watch plans / stock groups 的语义 — **不应再有任何模块绕过 `ctx.tools.limit_up_ladder` 直接读 adshare ladder 数据**。
+> **ruo 旧实现警告**：ruo 旧 adapter 直接 fetch 私有行情服务后做 TOP10 排序，并在 `watchlist.refreshTop10` 中混用「页面排序 / 决策排序」同一份数据 — 是 PRD §2.2 错误隔离的反模式。luoome 把这两类用途（页面展示 vs 算法输入）解耦到不同 tool，且 TOP10 排序本身被分到 watch plans / stock groups 的语义 — **不应再有任何模块绕过 `ctx.tools.limit_up_ladder` 直接读天梯上游数据（现为东方财富涨停池）**。
 
 ### 10. TUI 接入（Phase 1，README §7.2）
 
@@ -378,13 +357,13 @@ PRD §7.1 已经给出页面骨架，本文不再重复 ASCII 简图；Phase 2 �
 ### 12. CLI 接入（Phase 1，`packages/cli/src/market-limit-up.ts`，新建）
 
 ```text
-luoome market limit-up [--date YYYY-MM-DD] [--source adshare]
+luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
                        [--days N] [--include-star] [--include-bse] [--include-st]
                        [--include-uncategorized] [--json]
 ```
 
 - 默认 `date` = Asia/Shanghai 今天；与 PRD §7.3 一致。
-- `--json` 输出 tool schema 一致的 JSON；非 `--json` 走 ruo 兼容的终端表格（`market.ts:111-148` 风格但去除 adshare 兜底）。
+- `--json` 输出 tool schema 一致的 JSON；非 `--json` 走 ruo 兼容的终端表格（`market.ts:111-148` 风格但去除服务端日期兜底）。
 - 在 `packages/cli/src/index.ts` 注册 `market` 子命令并复用 `market-overview` 共享的 `parseTradingDate` helper（arch 现有 utility）。
 
 ### 13. 与现有页面 / 工具的连接点
@@ -398,9 +377,9 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare]
 
 - **诊断命令**：`luoome market limit-up --json --date <YYYY-MM-DD>` 直接看 tool 返回；与 web 端响应字段一致便于核对 PRD §11.3 验收。
 - **日志**：manager 层 `logger.warn` 记录 (a) 主源失败/重试；(b) rawClose 修正条目比例；(c) 节假日历判定结果；(d) cache hit/miss。
-- **埋点**（与 [Adshare 集成手册 §3.3](../runbooks/adshare-integration.md) 共享 schema 思路）：
+- **埋点**（自建轻量计数，schema 思路与行情源观测一致）：
   - 缓存命中率（cache hit / 总请求）
-  - `corrected=true` 占比（> 5% 提示 adshare 数据质量下降）
+  - `corrected=true` 占比（当前主源无 `high`，占比恒为 0；若 > 5% 提示数据源行为变化或数据质量下降）
   - 字段缺失率（name / industry / firstTime / reason 各自分子）
 - **不引入新指标体系**：复用 core 的 metrics adapter（如果存在），未存在则 Phase 1 不接；走 logger 输出 + 用户自助 grep。
 
@@ -409,61 +388,56 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare]
 1. **core：实体 + 不变量 + 派生 schema + 辅助函数**
    - `packages/core/src/entity/limit-up-ladder.ts`（schema + assert + deriveBoard + filterAndDedupe + isTradingDay 接入）
    - 对应 `limit-up-ladder.test.ts`（Zod 合法/非法 + 不变量 + 过滤/去重）
-2. **adshare-sdk：endpoint**
-   - `packages/adshare-sdk/src/endpoints/limit-up.ts`（fetch + Zod 解析 + 错误映射）
-   - `packages/adshare-sdk/src/schemas.ts` 增加 `RawLimitUpEntrySchema`
-   - `packages/adshare-sdk/src/index.ts` 桶导出
-   - 对应 `limit-up.test.ts`（mock fetch 三场景：200/schema ok、4xx、5xx 重试）
-3. **adapters：业务 adapter + Manager**
-   - `packages/adapters/src/limit-up-ladder/{types.ts,adshare.ts,manager.ts}`
-   - `manager.test.ts` 覆盖（a）空 ladder 不回退（b）修正规则（c）盘中 60s TTL（d）跨日永久命中（e）主源失败抛 adapter_error（无 fallback）
-4. **core：surface 装配根**
-   - `createLimitUpLadderManagerFromEnv` 接 adshare-sdk `fromEnv`；带节假日历注入
+2. **adapters：业务 adapter + Manager**
+   - `packages/adapters/src/limit-up-ladder/{types.ts,eastmoney.ts,manager.ts,factory.ts}`（无独立 SDK 包，协议层与 adapter 合一）
+   - `manager.test.ts` 覆盖（a）空 ladder 不回退（b）修正规则（c）盘中 60s TTL（d）跨日永久命中（e）主源失败抛 adapter_error（无 fallback）；`eastmoney.test.ts` 覆盖 pool 字段映射与空态
+3. **core：surface 装配根**
+   - `createLimitUpLadderManagerFromEnv` 不读环境变量，直接装配 `EastmoneyLimitUpLadderAdapter`；带节假日历注入
    - `AdapterRegistry` 加 `limitUpLadder` 字段
    - 同步 `ToolContext.adapters` 类型
-5. **tools：tool 主体 + 注册**
+4. **tools：tool 主体 + 注册**
    - `packages/tools/src/tools/limit-up-ladder.ts`（两个 tool + Zod）
    - `packages/tools/src/registry.ts` 注册
    - `WorkflowToolMap` 补 2 行
    - 单元测试 `limit-up-ladder.test.ts`：mock manager，验证入参校验、错误映射、空 ladder 行为
-6. **TUI 子视图**
+5. **TUI 子视图**
    - 新增 `packages/tui/src/views/limit-up-ladder.ts`，主面板 `L` 快捷键绑定
    - 写最小可视化 + `r` 键刷新
    - 验证：起 TUI 跑 mock manager（`bun --filter '@luoome/tui'`)
-7. **CLI 命令**
+6. **CLI 命令**
    - `packages/cli/src/market-limit-up.ts` + `index.ts` 注册
    - 单元测试覆盖 `--date`、`--source`、`--json`、`非交易日空态`
    - smoke：`luoome market limit-up --date 2026-07-20 --json` 输出与 tool 完全一致
-8. **文档同步**
+7. **文档同步**
    - `ARCHITECTURE.md` §5.1 数据模型补充 `LimitUpLadder` / `LimitUpLadderEntry` 实体说明
    - `ARCHITECTURE.md` §8.1 列 Phase 1 不引入新 workflow，Phase 2 起 `daily-review` 改造
    - `docs/README.md` 在 DDD 表增加一行
    - `skills/luoome/references/tools.md` 补充 `limit_up_ladder` 与 `limit_up_ladder_compare` 在"市场数据"桶下
-9. **全量验证**
+8. **全量验证**
    - `bun run test` —— 包含新 vitest 文件
    - `bun run test:db` —— 不涉及新表，跳过也行；CI 跑一遍确认
    - `bun run test:web` —— Phase 1 无 Web 改动；Phase 2 起 加 `apps/web/src/server.test.ts` 的 limit-up 路由用例
    - `bun run typecheck`
    - `bun run lint`
-   - smoke：`luoome market limit-up --date <某个非交易日> --json` 显式空 ladder；`luoome market limit-up --date <真实交易日> --source adshare` 拉真数据（如 ADSHARE_URL 可达）
+   - smoke：`luoome market limit-up --date <某个非交易日> --json` 显式空 ladder；`luoome market limit-up --date <真实交易日> --source eastmoney` 拉真数据（需到东方财富行情服务的网络连通）
 
 > **Phase 2 实施（已在 2026-07 完成）**：
-> 1. **web 接入** —— `apps/web/src/server.ts` 注入 manager + `GET /api/market/limit-up` 与 `/compare` 端点；`apps/web/public/js/limit-up-ladder.js` 渲染表格 + corrected `*` 角标 + vs 昨日 diff。
+> 1. **web 接入** —— `apps/web/src/server.ts` 注入 manager + `GET /api/market/limit-up` 与 `/compare` 端点（`source` 查询参数只接受 `eastmoney`）；`apps/web/public/js/limit-up-ladder.js` 渲染表格 + corrected `*` 角标 + vs 昨日 diff。
 > 2. **daily-review workflow** —— `packages/workflows/src/daily-review.ts` 新 step `stepLadder` 拉天梯 + diff，输出 `DailyReviewOutput.ladder: <schema> | null`。
 > 3. **TOP10 / StockGroup 接入** —— Phase 2 调研发现 ruo 旧 `watchlist refreshTop10` 在 luoome v0.6+ 已被解构为 `StockGroup` + `WatchPlan` + `StockPool` 三层抽象（无对应单一排序函数）。ladder `code → level` 可作 formula / tactic resolver 输入信号，列入 Phase 3 与策略预警联动一并实现；本文档**不再跟踪 P2-E 单独工单**。
-> 4. **factory 软失败** —— Phase 2 修订：`ADSHARE_URL` 缺失不再让 server bootstrap 抛错；返回软失败 manager，调任意 tool 都拿到 `adapter_error('upstream-unavailable')`，web 收到 502。CI 测试（`apps/web/server.test.ts` `Web runtime bootstrap`）从依赖硬抛转为依赖软失败。
+> 4. **数据源迁移（私有行情服务 → eastmoney 涨停池）** —— 主源切换后：factory 不再读任何环境变量、不再有软失败 manager，始终装配真实 manager；enricher（`eastmoney-pool.ts`）删除；CLI / Web 的 `source` 只接受 `eastmoney`；上游不可达时 tool 返回 `adapter_error`，诊断文案改为检查到东方财富行情服务的网络连通性。
 
 ## 测试矩阵
 
 | 测试类型 | 覆盖点 |
 |---|---|
 | 单元（core） | Zod schema 合法/非法；不变量（date 格式、total/maxLevel 关系、changePct 范围）；deriveBoard 全前缀；filterAndDedupe 同 code 多 level 保留最深；ST 前缀过滤；uncategorized 传播 |
-| 单元（adshare-sdk） | mock fetch 三场景（200 schema-ok / 200 schema-bad → PARSE_ERROR / 5xx → HTTP_ERROR 后重试） |
-| 单元（adapters） | manager 空 ladder 不回退；修正规则 4 个分支；TTL 三段（盘中 60s、收盘后 Infinity、跨日 Infinity）；主源失败抛 adapter_error（无 fallback）；enricher 补齐 / 不覆盖 / 失败降级 warn |
+| 单元（adapters/eastmoney） | mock fetch 场景（pool 字段映射 c/n/p/zdp/lbc/fbt/lbt/hybk；`data: null` → 空梯队；非 2xx / 非 JSON → 抛错）；`p/1000`、`zdp` 反推 `pre_close`、HHMMSS → `HH:MM:SS` |
+| 单元（adapters/manager） | manager 空 ladder 不回退；修正规则 4 个分支；TTL 三段（盘中 60s、收盘后 Infinity、跨日 Infinity）；主源失败抛 adapter_error（无 fallback） |
 | 单元（tools） | 入参 schema 校验；error kind 映射；空 ladder 返回与 tool 协议一致；`WorkflowToolMap` 类型映射在 typecheck 通过 |
-| 单元（CLI） | `--date` 缺省、显式；`--json` schema 严格对齐；`--source` 非 adshare 报错 |
-| 集成（仓内） | CLI → tool → manager → adshare-sdk 端到端 mock；TUI 组件加载不报错（`bun --filter '@luoome/tui'` 起 tsx 渲染单测） |
-| 集成（外部） | 真实 adshare 可达时跑 `luoome market limit-up --date <最近 A 股交易日>` 与 `curl /market/limit-up/ladder` 对照；不可达时 tool 返回 `adapter_error` |
+| 单元（CLI） | `--date` 缺省、显式；`--json` schema 严格对齐；`--source` 非 eastmoney 报错 |
+| 集成（仓内） | CLI → tool → manager → eastmoney adapter 端到端 mock；TUI 组件加载不报错（`bun --filter '@luoome/tui'` 起 tsx 渲染单测） |
+| 集成（外部） | 到东方财富行情服务连通时跑 `luoome market limit-up --date <最近 A 股交易日>` 与 `curl 'https://push2ex.eastmoney.com/getTopicZTPool?...'` 对照；不可达时 tool 返回 `adapter_error` |
 | 不变量回归 | ARCHITECTURE §5.3 advice 全部不变量不受影响（天梯不产出 Advice）；adapter 调用不抛 raw exception，全部经 ToolError |
 
 ## 明确不做（Phase 1 冻结）
@@ -471,7 +445,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare]
 - 不接入 Web 页面（避免两套数据来源并行）。
 - 不联动 `daily-review` / `market-outlook` / `StockGroup` / `WatchPlan`。
 - 不接 amazingdata（已确认永不接入；原 throw 占位 adapter 已删除）。
-- 不增加 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK` 环境变量；配置面与 adshare-sdk 完全共享。
+- 不增加 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK` 环境变量；主源 eastmoney 公开涨停池无鉴权，factory 不读任何环境变量。
 - 不落库 `LimitUpLadder` / `LimitUpLadderEntry`。
 - 不引入个股详情"近 30 日涨停事件"模块（Phase 3）。
 - 不支持跨市场（港股 / 美股）；与策略预警 §5.2 一致，仅 A 股主板 + 创板。
@@ -487,7 +461,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source adshare]
 - **D5 LLM 复盘链**：Phase 2 一起做，Phase 1 不预先改造 prompt。本文档不预先固化 LLM prompt 模板。
 - **节假日历复用**：直接走 intraday-watch 设计 §"已知边界" 的三层 union 加载（内置 + `$LUOOME_HOME/holidays.json` + env）；不重新实现。
 - **ST 股票名称前缀判断**：仅看中文前缀"ST" 与"*ST"，与策略预警 §5.2 一致；不接英文/异形缩写。
-- **修正条件中的 `rawClose === high`**：PRD §5.6 的触发条件；本设计**不**做单边修改——只在 `rawClose === high` **且**涨幅区间匹配时才修正。否则原值通过。SPEC 文档与 ruo 旧实现逻辑对齐。
+- **修正条件中的 `rawClose === high`**：PRD §5.6 的触发条件；本设计**不**做单边修改——只在 `rawClose === high` **且**涨幅区间匹配时才修正。否则原值通过。SPEC 文档与 ruo 旧实现逻辑对齐。当前主源（eastmoney 涨停池）无 `high` 字段，该条件不成立，修正不触发；逻辑保留。
 - **无 fallback**：已确认不接 amazingdata，上游不可达时**直接**返回 `adapter_error`；manager 的 fallback 接口保留在类型层但 factory 不装配任何 fallback。
 - **MCP 暴露**：默认 read 类暴露（与 ARCHITECTURE §9.2 默认策略一致），无需新 env。
 - **缓存 key 内含 `includeStar/Bse/ST`**：是因为这些是 manager 的过滤维度，可能影响返回值；不至于让 cache 把 false 与 true 的请求混在一起回错。

@@ -160,7 +160,7 @@ const fetchCompare = async (date) => {
 const fetchLadderAndCompare = async (date) => {
   const ladderR = await callApi(`/api/market/limit-up?date=${encodeURIComponent(date)}`);
   if (!ladderR.ok) {
-    // callApi 不回传 HTTP status；server 把上游 adshare 失败包成 error.kind='adapter_error'
+    // callApi 不回传 HTTP status；server 把上游涨停池失败包成 error.kind='adapter_error'
     const kind =
       ladderR.error?.kind === 'adapter_error'
         ? 'upstream-unavailable'
@@ -204,9 +204,7 @@ export const renderLimitUpLadder = async (setStatus) => {
   const r = await fetchLadderAndCompare(date);
   if (!r.ok) {
     const detail =
-      r.kind === 'upstream-unavailable'
-        ? '请确认 ADSHARE_URL 已配置（或在 .env 中设置），并允许 luoome web 访问 adshare 服务。'
-        : '';
+      r.kind === 'upstream-unavailable' ? '请检查 luoome web 到东方财富行情服务的网络连通性。' : '';
     mount(root, [
       el('h2', '', '涨停梯队'),
       el('p', 'error', `加载失败：${r.kind}（${detail}）`.trim()),

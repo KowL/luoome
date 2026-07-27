@@ -39,7 +39,7 @@ const compareQuery = (): Omit<LimitUpLadderQuery, 'date'> => {
 describe('LimitUpLadderManager', () => {
   describe('fetchLadder', () => {
     it('主源成功：返回映射+过滤+修正后 ladder', async () => {
-      const primary = mkAdapter('adshare', async (_date, _opts) => ({
+      const primary = mkAdapter('eastmoney', async (_date, _opts) => ({
         date: '2026-07-25',
         entries: [
           {
@@ -89,7 +89,7 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('rawClose == high 且涨幅 ∈ [9.8%, 10%) 触发 8.58% 修正', async () => {
-      const primary = mkAdapter('adshare', async (_d) => ({
+      const primary = mkAdapter('eastmoney', async (_d) => ({
         date: '2026-07-25',
         entries: [
           // 触板: close=10.99, high=10.99, pre_close=10 → pct=0.099 → 修正到 10.858
@@ -124,7 +124,7 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('真涨停 (涨幅 >= 10%) 不触发修正', async () => {
-      const primary = mkAdapter('adshare', async (_d) => ({
+      const primary = mkAdapter('eastmoney', async (_d) => ({
         date: '2026-07-25',
         entries: [
           {
@@ -154,7 +154,7 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('非交易日返回空 ladder + warnings=["non-trading-day"]', async () => {
-      const primary = mkAdapter('adshare', vi.fn()); // 不应被调用
+      const primary = mkAdapter('eastmoney', vi.fn()); // 不应被调用
       const m = new LimitUpLadderManager({
         primary,
         logger: noopLogger,
@@ -173,7 +173,7 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('节假日日期同样返回 non-trading-day', async () => {
-      const primary = mkAdapter('adshare', vi.fn());
+      const primary = mkAdapter('eastmoney', vi.fn());
       const m = new LimitUpLadderManager({
         primary,
         logger: noopLogger,
@@ -188,8 +188,8 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('主源失败 + 无 fallback：抛 adapter_error', async () => {
-      const primary = mkAdapter('adshare', async () => {
-        throw new Error('adshare down');
+      const primary = mkAdapter('eastmoney', async () => {
+        throw new Error('eastmoney down');
       });
       const m = new LimitUpLadderManager({
         primary,
@@ -203,12 +203,12 @@ describe('LimitUpLadderManager', () => {
       if (r.ok) return;
       expect(r.error.kind).toBe('adapter_error');
       expect(r.error.adapter).toBe('limit-up-ladder');
-      expect(r.error.message).toMatch(/primary adshare failed/);
+      expect(r.error.message).toMatch(/primary eastmoney failed/);
     });
 
     it('主源失败 + fallback 成功：走 fallback', async () => {
-      const primary = mkAdapter('adshare', async () => {
-        throw new Error('adshare down');
+      const primary = mkAdapter('eastmoney', async () => {
+        throw new Error('eastmoney down');
       });
       const fallback = mkAdapter('stub-fallback', async () => ({
         date: '2026-07-25',
@@ -239,8 +239,8 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('主源 + fallback 双失败：抛 adapter_error', async () => {
-      const primary = mkAdapter('adshare', async () => {
-        throw new Error('adshare down');
+      const primary = mkAdapter('eastmoney', async () => {
+        throw new Error('eastmoney down');
       });
       const fallback = mkAdapter('stub-fallback', async () => {
         throw new Error('stub-fallback down');
@@ -274,7 +274,7 @@ describe('LimitUpLadderManager', () => {
           },
         ],
       }));
-      const primary = mkAdapter('adshare', fetchMock);
+      const primary = mkAdapter('eastmoney', fetchMock);
       const clock = vi.fn(() => new Date('2026-07-25T05:00:00Z')); // Shanghai 13:00 盘中
       const m = new LimitUpLadderManager({
         primary,
@@ -304,7 +304,7 @@ describe('LimitUpLadderManager', () => {
           },
         ],
       }));
-      const primary = mkAdapter('adshare', fetchMock);
+      const primary = mkAdapter('eastmoney', fetchMock);
       const m = new LimitUpLadderManager({
         primary,
         logger: noopLogger,
@@ -332,7 +332,7 @@ describe('LimitUpLadderManager', () => {
           },
         ],
       }));
-      const primary = mkAdapter('adshare', fetchMock);
+      const primary = mkAdapter('eastmoney', fetchMock);
       const m = new LimitUpLadderManager({
         primary,
         logger: noopLogger,
@@ -346,7 +346,7 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('科创 / 北交所 / ST 默认过滤', async () => {
-      const primary = mkAdapter('adshare', async (_d) => ({
+      const primary = mkAdapter('eastmoney', async (_d) => ({
         date: '2026-07-25',
         entries: [
           {
@@ -403,7 +403,7 @@ describe('LimitUpLadderManager', () => {
     });
 
     it('空 entries 不报错，返回 warnings=[empty-ladder]', async () => {
-      const primary = mkAdapter('adshare', async (_d) => ({
+      const primary = mkAdapter('eastmoney', async (_d) => ({
         date: '2026-07-25',
         entries: [],
       }));
@@ -444,7 +444,7 @@ describe('LimitUpLadderManager', () => {
           },
         ],
       }));
-      const primary = mkAdapter('adshare', fetchMock);
+      const primary = mkAdapter('eastmoney', fetchMock);
       const m = new LimitUpLadderManager({
         primary,
         logger: noopLogger,
@@ -496,7 +496,7 @@ describe('LimitUpLadderManager', () => {
                   ],
           };
         });
-        const primary = mkAdapter('adshare', fetchMock);
+        const primary = mkAdapter('eastmoney', fetchMock);
         const m = new LimitUpLadderManager({
           primary,
           logger: noopLogger,
@@ -524,7 +524,7 @@ describe('LimitUpLadderManager', () => {
   describe('compareLadder', () => {
     const buildManager = () =>
       new LimitUpLadderManager({
-        primary: mkAdapter('adshare', async (date: string) => ({
+        primary: mkAdapter('eastmoney', async (date: string) => ({
           date,
           entries:
             date === '2026-07-25'
@@ -569,109 +569,6 @@ describe('LimitUpLadderManager', () => {
       expect(r.data.diff.topLevelAdded).toEqual(['600010']);
       expect(r.data.diff.topLevelRemoved).toEqual(['600011']);
       expect(r.data.diff.topLevelRetained).toEqual([]);
-    });
-  });
-
-  describe('enricher', () => {
-    const baseEntry = (code: string): LimitUpLadderRawEntry => ({
-      code,
-      name: `股${code}`,
-      close: 10,
-      high: 10,
-      pre_close: 9.09,
-      level: 1,
-      limit_up_date: '2026-07-25',
-    });
-    const baseOptions = {
-      logger: noopLogger,
-      clock: () => new Date('2026-07-25T05:00:00Z'),
-      holidaysProvider: async () => new Map(),
-      isWeekendFn: () => false,
-    } as const;
-
-    it('补齐空 firstTime/finalTime/industry', async () => {
-      const primary = mkAdapter('adshare', async (_d) => ({
-        date: '2026-07-25',
-        entries: [baseEntry('600030')],
-      }));
-      const m = new LimitUpLadderManager({
-        ...baseOptions,
-        primary,
-        enricher: {
-          name: 'stub',
-          fetchPool: async () =>
-            new Map([
-              ['600030', { firstTime: '09:25:00', finalTime: '14:28:42', industry: '电网设备' }],
-            ]),
-        },
-      });
-      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
-      expect(r.ok).toBe(true);
-      if (!r.ok) return;
-      const e = r.data.levels[0]?.stocks[0];
-      expect(e?.firstTime).toBe('09:25:00');
-      expect(e?.finalTime).toBe('14:28:42');
-      expect(e?.industry).toBe('电网设备');
-    });
-
-    it('主源已有值不被覆盖', async () => {
-      const primary = mkAdapter('adshare', async (_d) => ({
-        date: '2026-07-25',
-        entries: [
-          {
-            ...baseEntry('600031'),
-            industry: '白酒',
-            first_time: '10:30:00',
-            final_time: '14:50:00',
-          },
-        ],
-      }));
-      const m = new LimitUpLadderManager({
-        ...baseOptions,
-        primary,
-        enricher: {
-          name: 'stub',
-          fetchPool: async () =>
-            new Map([
-              ['600031', { firstTime: '09:25:00', finalTime: '09:30:00', industry: '电网设备' }],
-            ]),
-        },
-      });
-      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
-      expect(r.ok).toBe(true);
-      if (!r.ok) return;
-      const e = r.data.levels[0]?.stocks[0];
-      expect(e?.firstTime).toBe('10:30:00');
-      expect(e?.finalTime).toBe('14:50:00');
-      expect(e?.industry).toBe('白酒');
-    });
-
-    it('enricher 抛错：只告警，ladder 正常返回', async () => {
-      const warn = vi.fn();
-      const primary = mkAdapter('adshare', async (_d) => ({
-        date: '2026-07-25',
-        entries: [baseEntry('600032')],
-      }));
-      const m = new LimitUpLadderManager({
-        ...baseOptions,
-        logger: { ...noopLogger, warn },
-        primary,
-        enricher: {
-          name: 'stub',
-          fetchPool: async () => {
-            throw new Error('eastmoney down');
-          },
-        },
-      });
-      const r = await m.fetchLadder(query({ date: '2026-07-25', days: 15 }));
-      expect(r.ok).toBe(true);
-      if (!r.ok) return;
-      expect(r.data.total).toBe(1);
-      expect(r.data.levels[0]?.stocks[0]?.firstTime).toBeNull();
-      expect(warn).toHaveBeenCalledWith(
-        'limit-up-ladder enricher failed',
-        expect.objectContaining({ enricher: 'stub' }),
-      );
     });
   });
 });

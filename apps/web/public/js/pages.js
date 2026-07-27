@@ -1552,7 +1552,7 @@ const callTool = (tool, input) =>
     body: JSON.stringify({ input }),
   });
 
-/** 股票搜索：复用 /api/stocks/search（优先 adshare，本地兜底）；与行情页共用 q 参数。 */
+/** 股票搜索：复用 /api/stocks/search（优先 tushare，本地兜底）；与行情页共用 q 参数。 */
 const searchStocks = async (query) => {
   const r = await callApi(`/api/stocks/search?q=${encodeURIComponent(query)}&limit=8`);
   if (!r.ok) return [];

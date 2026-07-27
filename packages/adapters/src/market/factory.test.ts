@@ -102,26 +102,25 @@ describe('market/factory', () => {
     await expect(adapter.fetchQuote('002594.SZ')).rejects.toThrow(/all market sources failed/i);
   });
 
-  it('enableAdshare=true + ADSHARE_URL：主备失败 → finalFallback 返回 source=adshare', async () => {
+  it('LUOOME_MARKET_SOURCES 含 tushare + TUSHARE_TOKEN：主备失败 → finalFallback 返回 source=tushare', async () => {
     const adapter = createMarketAdapterFromEnv(
       {
         LUOOME_MARKET_PROVIDER: 'real',
-        ADSHARE_URL: 'https://adshare.test',
-        ADSHARE_API_KEY: 'k',
+        LUOOME_MARKET_SOURCES: 'eastmoney,tencent,tushare',
+        TUSHARE_TOKEN: 'test-token',
       },
       {
         logger: silentLogger(),
-        enableAdshare: true,
         fetchImpl: ((url: string) => {
-          if (String(url).includes('/tushare/realtime/rt_k')) {
+          if (String(url).includes('api.tushare.pro')) {
             return Promise.resolve(
               new Response(
                 JSON.stringify({
                   code: 0,
                   msg: '',
                   data: {
-                    fields: ['ts_code', 'trade_time', 'price', 'open', 'high', 'low', 'vol'],
-                    items: [['002594.SZ', '2026-07-24T07:00:00.000Z', 250, 248, 251, 247, 999]],
+                    fields: ['ts_code', 'trade_time', 'open', 'high', 'low', 'close', 'vol'],
+                    items: [['002594.SZ', '2026-07-24T07:00:00.000Z', 248, 251, 247, 250, 999]],
                   },
                 }),
                 { status: 200 },
@@ -133,17 +132,29 @@ describe('market/factory', () => {
       },
     );
     const q = await adapter.fetchQuote('002594.SZ');
-    expect(q.source).toBe('adshare');
+    expect(q.source).toBe('tushare');
     expect(q.close).toBe(250);
   });
 
-  it('显式启用 Adshare 但 ADSHARE_URL 缺失 → 启动期报错', () => {
+  it('LUOOME_MARKET_SOURCES 含 tushare 但 TUSHARE_TOKEN 缺失 → 启动期报错', () => {
     expect(() =>
       createMarketAdapterFromEnv(
-        { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'adshare' },
+        { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'tushare' },
         { logger: silentLogger() },
       ),
-    ).toThrow(/ADSHARE_URL/);
+    ).toThrow(/TUSHARE_TOKEN/);
+  });
+
+  it('LUOOME_MARKET_SOURCES 含 tushare 且 TUSHARE_TOKEN 已配置 → 装配成功', () => {
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'tushare',
+        TUSHARE_TOKEN: 'test-token',
+      },
+      { logger: silentLogger() },
+    );
+    expect(adapter.name).toBe('manager');
   });
 
   it('LUOOME_MARKET_SOURCES 控制开关与优先级', async () => {

@@ -26,33 +26,41 @@ afterEach(() => {
 });
 
 describe('MarketSettingsStore', () => {
-  it('默认启用 Eastmoney → Tencent，并标记未配置的 Adshare', () => {
+  it('默认启用 Eastmoney → Tencent，并标记未配置的 Tushare', () => {
     const { store } = createStore();
     expect(store.read()).toMatchObject({
       activeOrder: ['eastmoney', 'tencent'],
       sources: [
         { id: 'eastmoney', enabled: true, priority: 1, configured: true },
         { id: 'tencent', enabled: true, priority: 2, configured: true },
-        { id: 'adshare', enabled: false, priority: null, configured: false },
+        {
+          id: 'tushare',
+          enabled: false,
+          priority: null,
+          configured: false,
+          configurationHint: '需要先配置 TUSHARE_TOKEN',
+        },
       ],
     });
   });
 
   it('保存开关与优先级到 .env，保留其它变量并立即更新 runtime env', () => {
-    const { store } = createStore({ ADSHARE_URL: 'https://adshare.test' });
+    const { store } = createStore({ TUSHARE_TOKEN: 'test-tushare-token' });
     writeFileSync(store.secretPath, 'MINIMAX_API_KEY=keep\n');
-    const view = store.save({ sources: ['adshare', 'tencent'] });
-    expect(view.activeOrder).toEqual(['adshare', 'tencent']);
-    expect(store.runtimeEnv().LUOOME_MARKET_SOURCES).toBe('adshare,tencent');
-    expect(readFileSync(store.secretPath, 'utf8')).toBe(
-      'MINIMAX_API_KEY=keep\nLUOOME_MARKET_SOURCES=adshare,tencent\nLUOOME_MARKET_ADSHARE=true\n',
-    );
+    const view = store.save({ sources: ['tushare', 'tencent'] });
+    expect(view.activeOrder).toEqual(['tushare', 'tencent']);
+    expect(store.runtimeEnv().LUOOME_MARKET_SOURCES).toBe('tushare,tencent');
+    const content = readFileSync(store.secretPath, 'utf8');
+    expect(content).toBe('MINIMAX_API_KEY=keep\nLUOOME_MARKET_SOURCES=tushare,tencent\n');
+    expect(content).not.toContain('LUOOME_MARKET_ADSHARE');
     expect(statSync(store.secretPath).mode & 0o777).toBe(0o600);
   });
 
-  it('未配置 URL 时拒绝启用 Adshare；不能关闭全部源或重复源', () => {
+  it('未配置 TUSHARE_TOKEN 时拒绝启用 Tushare；不能关闭全部源或重复源', () => {
     const { store } = createStore();
-    expect(() => store.save({ sources: ['adshare'] })).toThrow(/ADSHARE_URL/);
+    expect(() => store.save({ sources: ['tushare'] })).toThrow(
+      '启用 Tushare 前必须配置 TUSHARE_TOKEN',
+    );
     expect(() => SaveMarketSettingsSchema.parse({ sources: [] })).toThrow(/至少启用一个/);
     expect(() => SaveMarketSettingsSchema.parse({ sources: ['eastmoney', 'eastmoney'] })).toThrow(
       /不能重复/,

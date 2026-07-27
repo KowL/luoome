@@ -169,7 +169,7 @@ describe('assembleLadder', () => {
     const e1 = makeEntry({ code: '600519', ladderLevel: 1 });
     const e2 = makeEntry({ code: '000001', ladderLevel: 3 });
     const e3 = makeEntry({ code: '300750', ladderLevel: 2 });
-    const ladder = assembleLadder('2026-07-25', 'adshare', [e1, e2, e3], [], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', [e1, e2, e3], [], new Date());
     expect(ladder.levels.map((lv) => lv.level)).toEqual([3, 2, 1]);
     expect(ladder.levels[0]?.name).toBe('3 连板');
     expect(ladder.levels[2]?.name).toBe('首板');
@@ -178,7 +178,7 @@ describe('assembleLadder', () => {
   });
 
   it('空 entries → maxLevel=0', () => {
-    const ladder = assembleLadder('2026-07-25', 'adshare', [], ['empty-ladder'], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', [], ['empty-ladder'], new Date());
     expect(ladder.levels).toHaveLength(0);
     expect(ladder.total).toBe(0);
     expect(ladder.maxLevel).toBe(0);
@@ -188,21 +188,21 @@ describe('assembleLadder', () => {
   it('同 level 内按 changePct DESC', () => {
     const e1 = makeEntry({ code: '600519', ladderLevel: 2, changePct: 0.05 });
     const e2 = makeEntry({ code: '000001', ladderLevel: 2, changePct: 0.09 });
-    const ladder = assembleLadder('2026-07-25', 'adshare', [e1, e2], [], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', [e1, e2], [], new Date());
     expect(ladder.levels[0]?.stocks[0]?.code).toBe('000001');
   });
 });
 
 describe('assertLimitUpLadderInvariants', () => {
   it('合法 ladder 通过', () => {
-    const ladder = assembleLadder('2026-07-25', 'adshare', [makeEntry()], [], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', [makeEntry()], [], new Date());
     expect(() => assertLimitUpLadderInvariants(ladder, '2026-07-25')).not.toThrow();
   });
 
   it('changePct 越界抛错', () => {
     const ladder = assembleLadder(
       '2026-07-25',
-      'adshare',
+      'eastmoney',
       [makeEntry({ changePct: 0.5 })],
       [],
       new Date(),
@@ -213,7 +213,7 @@ describe('assertLimitUpLadderInvariants', () => {
   it('price <= 0 抛错', () => {
     const ladder = assembleLadder(
       '2026-07-25',
-      'adshare',
+      'eastmoney',
       [makeEntry({ price: 0 })],
       [],
       new Date(),
@@ -226,7 +226,7 @@ describe('assertLimitUpLadderInvariants', () => {
       date: '2026-07-25',
       total: 1,
       maxLevel: 1,
-      source: 'adshare' as const,
+      source: 'eastmoney' as const,
       asOf: new Date(),
       warnings: [],
       levels: [{ level: 1, name: '首板', count: 5, stocks: [makeEntry()] }],
@@ -237,7 +237,7 @@ describe('assertLimitUpLadderInvariants', () => {
   it('limitUpDate 与 baseDate 不一致抛错', () => {
     const ladder = assembleLadder(
       '2026-07-25',
-      'adshare',
+      'eastmoney',
       [makeEntry({ limitUpDate: '2026-07-26' })],
       [],
       new Date(),
@@ -250,7 +250,7 @@ describe('assertLimitUpLadderInvariants', () => {
       date: '2026-07-25',
       total: 5,
       maxLevel: 1,
-      source: 'adshare' as const,
+      source: 'eastmoney' as const,
       asOf: new Date(),
       warnings: [],
       levels: [{ level: 1, name: '首板', count: 1, stocks: [makeEntry()] }],
@@ -263,7 +263,7 @@ describe('diffTopLevel', () => {
   const mkLadder = (date: string, topCodes: readonly string[]): ReturnType<typeof assembleLadder> =>
     assembleLadder(
       date,
-      'adshare',
+      'eastmoney',
       topCodes.map((code) => makeEntry({ code, ladderLevel: 5, changePct: 0.1 })),
       [],
       new Date(),
@@ -281,7 +281,7 @@ describe('diffTopLevel', () => {
   });
 
   it('两者均无 top → diff 全空', () => {
-    const empty = assembleLadder('2026-07-25', 'adshare', [], [], new Date());
+    const empty = assembleLadder('2026-07-25', 'eastmoney', [], [], new Date());
     const d = diffTopLevel(empty, empty);
     expect(d.totalDelta).toBe(0);
     expect(d.maxLevelDelta).toBe(0);
@@ -298,7 +298,7 @@ describe('codeToLevelMap / lookupLevels（下游消费者便捷函数 Phase 2）
       makeEntry({ code: '000001', ladderLevel: 3, limitUpDate: '2026-07-25' }),
       makeEntry({ code: '300750', ladderLevel: 2, limitUpDate: '2026-07-25' }),
     ];
-    const ladder = assembleLadder('2026-07-25', 'adshare', entries, [], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', entries, [], new Date());
     const map = codeToLevelMap(ladder);
     expect(map.get('600519')).toBe(1);
     expect(map.get('000001')).toBe(3);
@@ -307,7 +307,7 @@ describe('codeToLevelMap / lookupLevels（下游消费者便捷函数 Phase 2）
   });
 
   it('空 ladder → 空 Map（非 null，调用方用 size 判定）', () => {
-    const ladder = assembleLadder('2026-07-25', 'adshare', [], ['non-trading-day'], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', [], ['non-trading-day'], new Date());
     expect(codeToLevelMap(ladder).size).toBe(0);
   });
 
@@ -316,7 +316,7 @@ describe('codeToLevelMap / lookupLevels（下游消费者便捷函数 Phase 2）
       makeEntry({ code: '600519', ladderLevel: 1, limitUpDate: '2026-07-25' }),
       makeEntry({ code: '600519', ladderLevel: 4, limitUpDate: '2026-07-25' }),
     ];
-    const ladder = assembleLadder('2026-07-25', 'adshare', entries, [], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', entries, [], new Date());
     expect(codeToLevelMap(ladder).get('600519')).toBe(4);
   });
 
@@ -324,7 +324,7 @@ describe('codeToLevelMap / lookupLevels（下游消费者便捷函数 Phase 2）
     const entries: LimitUpLadderEntry[] = [
       makeEntry({ code: '600519', ladderLevel: 2, limitUpDate: '2026-07-25' }),
     ];
-    const ladder = assembleLadder('2026-07-25', 'adshare', entries, [], new Date());
+    const ladder = assembleLadder('2026-07-25', 'eastmoney', entries, [], new Date());
     const map = codeToLevelMap(ladder);
     const rows = lookupLevels(['600519', '999999'], map);
     const first = rows[0];

@@ -17,7 +17,6 @@
     "@ai-sdk/anthropic": "3.0.x",
     "@ai-sdk/openai-compatible": "2.0.x",
     "@ai-sdk/provider": "3.0.x",
-    "@luoome/adshare-sdk": "workspace:*",
     "@luoome/core": "workspace:*",
     "ai": "6.0.x",
     "drizzle-orm": "^0.45.2",

@@ -306,10 +306,14 @@ surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及 `primary → fallback → finalFallback` 优先级，可选
-`eastmoney`、`tencent`、`adshare`。未配置时默认 Eastmoney → Tencent，并兼容旧
-`LUOOME_MARKET_ADSHARE=true`。显式启用 Adshare 时必须配置 `ADSHARE_URL`，非法配置
-在启动期抛错。
-详见 [adshare-market-adapter-design](./ddd/adshare-market-adapter-design.md)。
+`eastmoney`、`tencent`、`tushare`。未配置时默认 Eastmoney → Tencent。显式启用
+Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网关
+`http://api.tushare.pro`），非法配置在启动期抛错。
+详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md)。
+
+连板天梯不走 `MarketDataManager`，由 `createLimitUpLadderManagerFromEnv`
+（adapters/limit-up-ladder/factory.ts）独立装配：主源为东方财富公开涨停池
+（`getTopicZTPool`，无鉴权、不读环境变量），单源写死、无 fallback。
 
 Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优先级与配置就绪状态，
 不返回密钥；受 mutation token 与同源 Origin 保护的 POST 将配置原子写入权限为

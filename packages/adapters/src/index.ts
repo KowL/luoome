@@ -1,8 +1,7 @@
 // @luoome/adapters 生产入口：只导出真实行情、真实 LLM 与通知适配器。
 // LLM
 
-export * from './limit-up-ladder/adshare.js';
-export * from './limit-up-ladder/eastmoney-pool.js';
+export * from './limit-up-ladder/eastmoney.js';
 export * from './limit-up-ladder/factory.js';
 export * from './limit-up-ladder/manager.js';
 // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md）
@@ -16,13 +15,15 @@ export * from './llm/schema.js';
 export * from './llm/stack.js';
 export * from './llm/types.js';
 // 行情
-export * from './market/adshare.js';
-export * from './market/adshare-envelope.js';
 export * from './market/cache.js';
 export * from './market/eastmoney.js';
 export * from './market/factory.js';
 export * from './market/manager.js';
 export * from './market/tencent.js';
+export * from './market/tushare.js';
 export * from './market/types.js';
 // 通知（v0.3 起）
 export * from './notification/index.js';
+// tushare 官方 HTTP API 客户端
+export * from './tushare/client.js';
+export * from './tushare/envelope.js';

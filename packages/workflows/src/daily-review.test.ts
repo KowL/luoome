@@ -15,7 +15,7 @@ const mkLadderManager = (
     date: '2026-07-25',
     total: 2,
     maxLevel: 3,
-    source: 'adshare',
+    source: 'eastmoney',
     levels: [
       { level: 3, name: '3 连板', count: 1, stocks: [] },
       { level: 1, name: '首板', count: 1, stocks: [] },
@@ -27,7 +27,7 @@ const mkLadderManager = (
     date: '2026-07-24',
     total: 1,
     maxLevel: 3,
-    source: 'adshare',
+    source: 'eastmoney',
     levels: [{ level: 3, name: '3 连板', count: 1, stocks: [] }],
     warnings: [],
     asOf: new Date('2026-07-24T12:00:00Z'),

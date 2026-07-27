@@ -1,6 +1,6 @@
 // @luoome/web —— 最小 Web 端（docs/archive/plan.md 跨包契约 / ARCHITECTURE §10）。
 // Hono HTTP API + 同源静态仪表盘：
-//   GET  /api/stocks/search    → adshare 优先搜索，真实行情源兜底
+//   GET  /api/stocks/search    → tushare 优先搜索（TUSHARE_TOKEN 配置后），本地行情源兜底
 //   GET  /api/holdings          → list_holdings
 //   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
@@ -19,8 +19,9 @@ import {
   createAIStackFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  tushareConfigFromEnv,
+  tushareQuery,
 } from '@luoome/adapters';
-import { AdshareClient } from '@luoome/adshare-sdk';
 import type { SideEffect, Stock, ToolContext, ToolError, ToolResult } from '@luoome/core';
 import { stockCode as brandStockCode } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
@@ -578,7 +579,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const input: Record<string, unknown> = {
       date,
       days: intQuery(c.req.query('days'), 15, 1),
-      source: enumQuery(c.req.query('source'), 'adshare', ['adshare']),
+      source: enumQuery(c.req.query('source'), 'eastmoney', ['eastmoney']),
       includeStar: c.req.query('includeStar') === 'true',
       includeBse: c.req.query('includeBse') === 'true',
       includeST: c.req.query('includeST') === 'true',
@@ -617,7 +618,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       date,
       prevDate,
       days: intQuery(c.req.query('days'), 15, 1),
-      source: enumQuery(c.req.query('source'), 'adshare', ['adshare']),
+      source: enumQuery(c.req.query('source'), 'eastmoney', ['eastmoney']),
       includeStar: c.req.query('includeStar') === 'true',
       includeBse: c.req.query('includeBse') === 'true',
       includeST: c.req.query('includeST') === 'true',
@@ -1236,7 +1237,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return createChatStreamResponse(body, ctxRef.current, runtime, c.req.raw.signal);
   });
 
-  // 股票搜索（adshare 优先，本地数据库兜底）
+  // 股票搜索（tushare 优先，本地数据库兜底）
   app.get('/api/stocks/search', async (c) => {
     const q = c.req.query('q');
     const limitRaw = c.req.query('limit');
@@ -1287,24 +1288,37 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       }
     };
 
-    try {
-      const adshare = AdshareClient.fromEnv(process.env);
-      const candidates = await adshare.searchStocks({
-        name,
-        fields: ['ts_code', 'name', 'industry'],
-        limit,
-      });
-      const stocks = candidates
-        .map(toStock)
-        .filter((candidate): candidate is Stock => candidate !== null);
-      if (stocks.length > 0) {
-        return jsonResult({
-          ok: true,
-          data: { stocks, total: stocks.length, source: 'adshare' as const },
-        });
+    const tushareToken = process.env.TUSHARE_TOKEN?.trim();
+    if (tushareToken !== undefined && tushareToken.length > 0) {
+      try {
+        const rows = await tushareQuery(
+          'stock_basic',
+          { name },
+          tushareConfigFromEnv(process.env),
+          fetch,
+          ['ts_code', 'name', 'industry'],
+        );
+        const stocks = rows
+          .slice(0, limit)
+          .map((row) =>
+            typeof row.ts_code === 'string' && typeof row.name === 'string'
+              ? toStock({
+                  ts_code: row.ts_code,
+                  name: row.name,
+                  ...(typeof row.industry === 'string' ? { industry: row.industry } : {}),
+                })
+              : null,
+          )
+          .filter((candidate): candidate is Stock => candidate !== null);
+        if (stocks.length > 0) {
+          return jsonResult({
+            ok: true,
+            data: { stocks, total: stocks.length, source: 'tushare' as const },
+          });
+        }
+      } catch (error) {
+        ctxRef.current.logger.warn('tushare search fallback to local', { q, error: String(error) });
       }
-    } catch (error) {
-      ctxRef.current.logger.warn('adshare search fallback to local', { q, error: String(error) });
     }
 
     const localResult = await invokeTool('search_stocks', { query: name, limit });

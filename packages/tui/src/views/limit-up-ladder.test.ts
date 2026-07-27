@@ -7,7 +7,7 @@ const baseLadder = (overrides: Partial<LimitUpLadder> = {}): LimitUpLadder => ({
   date: '2026-07-25',
   total: 0,
   maxLevel: 0,
-  source: 'adshare',
+  source: 'eastmoney',
   levels: [],
   warnings: [],
   asOf: new Date(),

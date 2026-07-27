@@ -341,9 +341,9 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
 });
 
 /**
- * finalFallback（adshare 槽位）集成测试（docs/ddd/adshare-market-adapter-design.md §11.2）。
- * finalFallback 测试替身复用 FakeMarketAdapter（source: 'adshare'），不与真实 adapter 耦合；
- * adshare 私有协议由 adshare.test.ts 负责。
+ * finalFallback（tushare 槽位）集成测试（docs/ddd/tushare-market-adapter-design.md §11.2）。
+ * finalFallback 测试替身复用 FakeMarketAdapter（source: 'tushare'），不与真实 adapter 耦合；
+ * tushare 私有协议由 tushare.test.ts 负责。
  */
 class AlwaysFailSource {
   readonly name = 'always-fail';
@@ -371,27 +371,27 @@ class AlwaysFailSource {
   }
 }
 
-describe('market/manager finalFallback（adshare 槽位，v0.9）', () => {
-  const makeAdshareFinal = async (): Promise<FakeMarketAdapter> => {
+describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
+  const makeTushareFinal = async (): Promise<FakeMarketAdapter> => {
     const { FakeMarketAdapter } = await import('../testing/fake-market.js');
-    return new FakeMarketAdapter({ source: 'adshare' });
+    return new FakeMarketAdapter({ source: 'tushare' });
   };
 
-  it('Eastmoney + Tencent 都失败、adshare 成功 → 返回 source=adshare', async () => {
+  it('Eastmoney + Tencent 都失败、tushare 成功 → 返回 source=tushare', async () => {
     const primary = new AlwaysFailSource();
     const fallback = new AlwaysFailSource();
     const mgr = new MarketDataManager({
       primary,
       fallback,
-      finalFallback: await makeAdshareFinal(),
+      finalFallback: await makeTushareFinal(),
       logger: silentLogger,
     });
     const q = await mgr.fetchQuote('600519.SH');
-    expect(q.source).toBe('adshare');
+    expect(q.source).toBe('tushare');
     expect(mgr.stats().finalFallbackCalls).toBe(1);
   });
 
-  it('Eastmoney + Tencent + adshare 全失败 → 抛错', async () => {
+  it('Eastmoney + Tencent + tushare 全失败 → 抛错', async () => {
     const mgr = new MarketDataManager({
       primary: new AlwaysFailSource(),
       fallback: new AlwaysFailSource(),
@@ -401,27 +401,27 @@ describe('market/manager finalFallback（adshare 槽位，v0.9）', () => {
     await expect(mgr.fetchQuote('600519.SH')).rejects.toThrow(/quote fail/);
   });
 
-  it('进入 finalFallback 后 30 分钟内跳过主备源，未命中缓存的请求直达 adshare', async () => {
+  it('进入 finalFallback 后 30 分钟内跳过主备源，未命中缓存的请求直达 tushare', async () => {
     const primary = new AlwaysFailSource();
     const fallback = new AlwaysFailSource();
     let nowMs = 0;
     const mgr = new MarketDataManager({
       primary,
       fallback,
-      finalFallback: await makeAdshareFinal(),
+      finalFallback: await makeTushareFinal(),
       logger: silentLogger,
       clock: () => new Date(nowMs),
       finalFallbackSuppressMs: 30 * 60 * 1000,
     });
-    // 第一次：t=0，走完三层（adshare 成功并写缓存）
+    // 第一次：t=0，走完三层（tushare 成功并写缓存）
     const first = await mgr.fetchQuote('600519.SH');
-    expect(first.source).toBe('adshare');
+    expect(first.source).toBe('tushare');
     expect(primary.quoteCalls).toBe(1);
     expect(fallback.quoteCalls).toBe(1);
     // 第二次：t=10 分钟，抑制窗口内；换一只未命中缓存的代码
     nowMs = 10 * 60 * 1000;
     const second = await mgr.fetchQuote('000001.SZ');
-    expect(second.source).toBe('adshare');
+    expect(second.source).toBe('tushare');
     expect(primary.quoteCalls).toBe(1); // 未增：跳过主备源
     expect(fallback.quoteCalls).toBe(1);
     expect(mgr.stats().finalFallbackCalls).toBe(2); // 尝试次数，非成功次数
@@ -432,7 +432,7 @@ describe('market/manager finalFallback（adshare 槽位，v0.9）', () => {
     const mgr = new MarketDataManager({
       primary,
       fallback: new ResilFallback(),
-      finalFallback: await makeAdshareFinal(),
+      finalFallback: await makeTushareFinal(),
       logger: silentLogger,
     });
     const q = await mgr.fetchQuote('600519.SH');
@@ -440,13 +440,13 @@ describe('market/manager finalFallback（adshare 槽位，v0.9）', () => {
     expect(mgr.stats().finalFallbackCalls).toBe(0);
   });
 
-  it('searchStocks 主源返回空数组 → 不触发 fallback 到 adshare', async () => {
+  it('searchStocks 主源返回空数组 → 不触发 fallback 到 tushare', async () => {
     const primary = new AlwaysFailSource('empty');
     const fallback = new AlwaysFailSource();
     const mgr = new MarketDataManager({
       primary,
       fallback,
-      finalFallback: await makeAdshareFinal(),
+      finalFallback: await makeTushareFinal(),
       logger: silentLogger,
     });
     await expect(mgr.searchStocks('600519')).resolves.toEqual([]);
@@ -455,11 +455,11 @@ describe('market/manager finalFallback（adshare 槽位，v0.9）', () => {
     expect(mgr.stats().finalFallbackCalls).toBe(0);
   });
 
-  it('searchStocks 主备源抛错 → 触发 fallback 到 adshare', async () => {
+  it('searchStocks 主备源抛错 → 触发 fallback 到 tushare', async () => {
     const mgr = new MarketDataManager({
       primary: new AlwaysFailSource(),
       fallback: new AlwaysFailSource(),
-      finalFallback: await makeAdshareFinal(),
+      finalFallback: await makeTushareFinal(),
       logger: silentLogger,
     });
     const candidates = await mgr.searchStocks('600519');

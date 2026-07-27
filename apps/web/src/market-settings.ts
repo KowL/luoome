@@ -37,7 +37,7 @@ const SOURCE_META: Readonly<
 > = {
   eastmoney: { label: '东方财富', description: '公开实时行情与日线，默认主源' },
   tencent: { label: '腾讯行情', description: '公开行情备源，覆盖沪深 A 股' },
-  adshare: { label: 'Adshare', description: '私有服务，支持实时快照、日线与复权因子' },
+  tushare: { label: 'Tushare', description: 'tushare.pro 数据服务，支持实时快照、日线与复权因子' },
 };
 
 const readText = (path: string): string => {
@@ -94,11 +94,11 @@ export class MarketSettingsStore {
     } catch (error) {
       configError = error instanceof Error ? error.message : String(error);
     }
-    const adshareConfigured = (env.ADSHARE_URL?.trim().length ?? 0) > 0;
+    const tushareConfigured = (env.TUSHARE_TOKEN?.trim().length ?? 0) > 0;
     return {
       sources: (Object.keys(SOURCE_META) as MarketSourceId[]).map((id) => {
         const priorityIndex = activeOrder.indexOf(id);
-        const configured = id !== 'adshare' || adshareConfigured;
+        const configured = id !== 'tushare' || tushareConfigured;
         return {
           id,
           label: SOURCE_META[id].label,
@@ -106,7 +106,7 @@ export class MarketSettingsStore {
           enabled: priorityIndex >= 0,
           priority: priorityIndex >= 0 ? priorityIndex + 1 : null,
           configured,
-          ...(configured ? {} : { configurationHint: '需要先配置 ADSHARE_URL' }),
+          ...(configured ? {} : { configurationHint: '需要先配置 TUSHARE_TOKEN' }),
         };
       }),
       activeOrder,
@@ -118,18 +118,15 @@ export class MarketSettingsStore {
   save(input: SaveMarketSettings): MarketSettingsView {
     const settings = SaveMarketSettingsSchema.parse(input);
     const env = this.runtimeEnv();
-    if (settings.sources.includes('adshare') && (env.ADSHARE_URL?.trim().length ?? 0) === 0) {
-      throw new Error('启用 Adshare 前必须配置 ADSHARE_URL');
+    if (settings.sources.includes('tushare') && (env.TUSHARE_TOKEN?.trim().length ?? 0) === 0) {
+      throw new Error('启用 Tushare 前必须配置 TUSHARE_TOKEN');
     }
     const serialized = settings.sources.join(',');
     this.sessionEnv.LUOOME_MARKET_SOURCES = serialized;
-    this.sessionEnv.LUOOME_MARKET_ADSHARE = settings.sources.includes('adshare') ? 'true' : 'false';
-    let content = readText(this.secretPath);
-    content = updateEnvContent(content, 'LUOOME_MARKET_SOURCES', serialized);
-    content = updateEnvContent(
-      content,
-      'LUOOME_MARKET_ADSHARE',
-      settings.sources.includes('adshare') ? 'true' : 'false',
+    const content = updateEnvContent(
+      readText(this.secretPath),
+      'LUOOME_MARKET_SOURCES',
+      serialized,
     );
     atomicWrite(this.secretPath, content);
     return this.read();
