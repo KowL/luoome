@@ -73,6 +73,7 @@ export const analyzePositionTool = defineTool({
       id: globalThis.crypto.randomUUID(),
       subjectKind: 'position',
       subjectId: holding.id,
+      stockName: stock.name,
       decision: llmOutput.decision,
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,

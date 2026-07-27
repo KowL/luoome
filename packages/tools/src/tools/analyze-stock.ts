@@ -83,6 +83,7 @@ export const analyzeStockTool = defineTool({
       id: globalThis.crypto.randomUUID(),
       subjectKind: 'stock',
       subjectId: stock.id,
+      stockName: stock.name,
       decision: llmOutput.decision,
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,

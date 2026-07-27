@@ -68,6 +68,8 @@ export interface Advice {
   readonly id: string;
   readonly subjectKind: AdviceSubjectKind;
   readonly subjectId: string; // stockId / accountId / sectorName ...
+  /** 标的名称（如股票名称），生成时快照保存，避免历史建议回显时依赖外部查询。 */
+  readonly stockName?: string;
   readonly decision: AdviceDecision;
   readonly confidence: number; // 0-100
   readonly horizon: AdviceHorizon;
@@ -151,6 +153,7 @@ export const AdviceSchema = z.object({
   id: z.string().min(1),
   subjectKind: AdviceSubjectKindSchema,
   subjectId: z.string().min(1),
+  stockName: z.string().optional(),
   decision: AdviceDecisionSchema,
   confidence: z.number().min(0).max(100),
   horizon: AdviceHorizonSchema,

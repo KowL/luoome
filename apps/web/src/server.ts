@@ -189,6 +189,8 @@ export const buildWebContext = async (
       market: createMarketAdapterFromEnv(env, {
         clock: now,
         logger: console,
+        // Web 持仓 / 分组页盘中 10s 轮询；TTL 不调小的话拿到的都是缓存
+        quoteCacheTtlMs: 10_000,
       }),
       llm: ai?.llm ?? unavailableLLM,
     },

@@ -15,6 +15,7 @@ import {
   analyzeAllHoldings,
   bindSettingsActions,
   cancelAnalyzeAllHoldings,
+  refreshSelectedGroupDetail,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
@@ -263,12 +264,23 @@ const bindGlobalActions = () => {
   bindAccountSelect();
 };
 
-/* ============ 自动刷新（仅仪表盘 5s 周期） ============ */
+/* ============ 自动刷新（仪表盘 5s；持仓 / 分组行情 10s） ============ */
 
 const startDashboardAutoRefresh = () => {
   setInterval(() => {
     if (currentHash() === 'dashboard') void renderDashboard(setStatus);
   }, 5000);
+};
+
+/** 持仓 / 分组页盘中行情轮询；页面隐藏或弹窗打开时暂停，避免后台空跑和打断编辑。 */
+const startQuoteAutoRefresh = () => {
+  setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if ($('#modal-overlay')?.hidden === false) return;
+    const route = currentHash();
+    if (route === 'holdings') void renderHoldings(setStatus);
+    else if (route === 'groups') void refreshSelectedGroupDetail(setStatus);
+  }, 10_000);
 };
 
 /* ============ 启动 ============ */
@@ -286,6 +298,7 @@ window.__luoome = {
 
 bindGlobalActions();
 startClock();
+startDashboardAutoRefresh();
+startQuoteAutoRefresh();
 void initAccountSelect();
 void showRoute(currentHash());
-startDashboardAutoRefresh();

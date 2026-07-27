@@ -745,6 +745,28 @@ code {
   text-decoration: none;
 }
 
+/* 可折叠卡片区域（如持仓最新建议） */
+.collapsible-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.collapsible-header h2::after {
+  content: '▾';
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  transition: transform var(--duration) var(--ease);
+}
+
+.collapsed .collapsible-header h2::after {
+  transform: rotate(-90deg);
+}
+
+.collapsed .collapsible-content {
+  display: none;
+}
+
 /* ============================================================
  * 8. 表格
  * ============================================================ */

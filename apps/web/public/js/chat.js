@@ -24,9 +24,56 @@ const toolLabel = (tool) => TOOL_LABELS[tool] ?? tool;
 const errorText = (result, fallback) => result?.error?.message ?? result?.error?.cause ?? fallback;
 const trimLeadingChatWhitespace = (text) => text.trimStart();
 
+// 草案确认/取消结果以该前缀作为 user 文本消息持久化到会话：
+// 刷新后能把历史草案渲染为已结算，模型下一轮也能看到处理结果而不重复提议。
+const DRAFT_SETTLED_PREFIX = '[草案处理记录]';
+
+const formatDraftSettlement = (tool, ok, text) =>
+  `${DRAFT_SETTLED_PREFIX} ${ok ? 'ok' : 'fail'} ${tool} ${text}`;
+
+const parseDraftSettlement = (text) => {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith(DRAFT_SETTLED_PREFIX)) return null;
+  const rest = trimmed.slice(DRAFT_SETTLED_PREFIX.length).trimStart();
+  const ok = rest.startsWith('ok ');
+  if (!ok && !rest.startsWith('fail ')) return null;
+  const body = rest.slice(ok ? 3 : 5);
+  const splitAt = body.indexOf(' ');
+  return {
+    ok,
+    tool: splitAt < 0 ? body : body.slice(0, splitAt),
+    text: splitAt < 0 ? '' : body.slice(splitAt + 1),
+  };
+};
+
+const recordDraftSettlement = async (draft, text, ok) => {
+  if (activeSessionId === null) return;
+  const result = await callApi('/api/tools/append_chat_message/call', {
+    method: 'POST',
+    body: JSON.stringify({
+      input: {
+        sessionId: activeSessionId,
+        role: 'user',
+        parts: [{ type: 'text', text: formatDraftSettlement(draft.tool, ok, text) }],
+      },
+    }),
+  });
+  if (!result.ok) console.warn('[chat] 草案处理记录写入失败', result.error);
+};
+
 const draftCard = (draft) => {
   const card = el('div', 'chat-draft');
   card.append(el('div', 'chat-draft-title', `草案 · ${toolLabel(draft.tool)}`));
+  if (draft.settled !== undefined) {
+    card.append(
+      el(
+        'p',
+        draft.settled.ok ? 'chat-draft-settled ok' : 'chat-draft-settled',
+        draft.settled.text,
+      ),
+    );
+    return card;
+  }
   card.append(el('p', 'chat-draft-summary', String(draft.summary ?? '')));
   card.append(el('pre', 'chat-draft-input', JSON.stringify(draft.input ?? {}, null, 2)));
   const confirmBtn = el('button', 'btn btn-primary btn-sm', '确认执行');
@@ -36,7 +83,9 @@ const draftCard = (draft) => {
   card.append(el('div', 'chat-draft-actions', [confirmBtn, cancelBtn]));
 
   const settle = (text, ok) => {
-    card.replaceChildren(el('p', ok ? 'chat-draft-settled ok' : 'chat-draft-settled', text));
+    draft.settled = { text, ok };
+    renderChat();
+    void recordDraftSettlement(draft, text, ok);
   };
   confirmBtn.addEventListener('click', async () => {
     confirmBtn.disabled = true;
@@ -195,11 +244,22 @@ const renderSessions = () => {
 
 const persistedFeed = (messages) => {
   const result = [];
+  const pendingDrafts = [];
   for (const message of messages) {
     const text = message.parts
       .filter((part) => part.type === 'text' && typeof part.text === 'string')
       .map((part) => part.text)
       .join('');
+    const settlement = parseDraftSettlement(text);
+    if (settlement !== null) {
+      for (const draft of pendingDrafts) {
+        if (draft.settled === undefined)
+          draft.settled = { text: settlement.text, ok: settlement.ok };
+      }
+      pendingDrafts.length = 0;
+      result.push({ type: 'note', text: settlement.text });
+      continue;
+    }
     const visibleText = trimLeadingChatWhitespace(text);
     if (visibleText.trim().length > 0) {
       result.push({ type: 'msg', role: message.role, content: visibleText });
@@ -218,6 +278,7 @@ const persistedFeed = (messages) => {
       });
       if (output?.__luoomeDraft === true && output.draft !== undefined) {
         drafts.push(output.draft);
+        pendingDrafts.push(output.draft);
       }
     }
     if (actions.length > 0) result.push({ type: 'actions', usedActions: actions });
@@ -412,4 +473,11 @@ const refreshChat = async () => {
   else renderChat();
 };
 
-export { initChat, refreshChat, renderChat, trimLeadingChatWhitespace };
+export {
+  formatDraftSettlement,
+  initChat,
+  parseDraftSettlement,
+  refreshChat,
+  renderChat,
+  trimLeadingChatWhitespace,
+};

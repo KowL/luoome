@@ -121,6 +121,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       id TEXT PRIMARY KEY,
       subject_kind TEXT NOT NULL,
       subject_id TEXT NOT NULL,
+      stock_name TEXT,
       decision TEXT NOT NULL,
       confidence REAL NOT NULL,
       horizon TEXT NOT NULL,
@@ -135,6 +136,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       created_at INTEGER NOT NULL
     )
   `);
+  migrateAdviceStockNameColumn(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS advices_subject_idx ON advices (subject_kind, subject_id)
   `);
@@ -451,6 +453,18 @@ export const ensureSchema = (db: DrizzleDb): void => {
   migrateLegacyPoolSourcesToGroups(db);
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
+};
+
+/**
+ * advices 表补 stock_name 列（v0.8 起，幂等）。
+ * 旧库无此列时 ALTER ADD；新库 DDL 已含，直接跳过。
+ */
+const migrateAdviceStockNameColumn = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(advices)`);
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === 'stock_name')) {
+    db.run(sql`ALTER TABLE advices ADD COLUMN stock_name TEXT`);
+  }
 };
 
 /**

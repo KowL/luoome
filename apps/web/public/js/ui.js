@@ -102,6 +102,13 @@ const fmtDateTime = (d) => {
  * @param {object} advice
  * @returns {HTMLElement}
  */
+const HORIZON_LABELS = {
+  intraday: '盘中',
+  short: '短期',
+  medium: '中期',
+  long: '长期',
+};
+
 const adviceCard = (advice) => {
   const code = String(advice.subjectId ?? '').split('.')[0] || String(advice.subjectId ?? '');
   const card = el('article', 'advice-card');
@@ -114,8 +121,10 @@ const adviceCard = (advice) => {
   const disclaimers = Array.isArray(advice.disclaimers) ? advice.disclaimers : [];
 
   // row-1: 标的 + 决策 badge
+  const primaryLabel =
+    typeof advice.stockName === 'string' && advice.stockName.length > 0 ? advice.stockName : code;
   const row1 = el('div', 'row-1', [
-    el('div', 'subject', [el('span', 'code', code), String(advice.subjectId ?? '')]),
+    el('div', 'subject', [el('span', 'code', primaryLabel), String(advice.subjectId ?? '')]),
     decisionBadge(advice.decision),
   ]);
   card.append(row1);
@@ -123,8 +132,12 @@ const adviceCard = (advice) => {
   // premise
   if (premise.length > 0) card.append(el('p', 'premise', premise));
 
-  // row-2: 信心度 + 周期 + validUntil + outcome
-  const row2Parts = [confidenceBar(advice.confidence), `周期 ${advice.horizon ?? '--'}`];
+  // row-2: 信心度 + 周期 + 建议时间 + validUntil + outcome
+  const horizonLabel = HORIZON_LABELS[advice.horizon] ?? advice.horizon ?? '--';
+  const row2Parts = [confidenceBar(advice.confidence), `周期 ${horizonLabel}`];
+  if (advice.createdAt !== undefined) {
+    row2Parts.push(`建议时间 ${fmtDateTime(advice.createdAt)}`);
+  }
   if (advice.validUntil !== undefined) {
     row2Parts.push(`有效至 ${fmtDateTime(advice.validUntil)}`);
   }
@@ -185,7 +198,7 @@ const adviceCard = (advice) => {
   }
   card.append(toggle);
 
-  // 点击展开
+  // 点击展开 / 收起
   card.addEventListener('click', (event) => {
     if (event.target instanceof HTMLButtonElement) return;
     card.classList.toggle('expanded');

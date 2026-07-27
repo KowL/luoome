@@ -11,7 +11,13 @@ import {
   openTradeModal,
 } from './holdings-actions.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
-import { mutateEntity, openAddMemberModal, openGroupModal, openPoolModal } from './mvp-actions.js';
+import {
+  mutateEntity,
+  openAddMemberModal,
+  openGroupModal,
+  openPoolModal,
+  toolErrorText,
+} from './mvp-actions.js';
 import { createStockSearchBox } from './search-box.js';
 import {
   $,
@@ -359,17 +365,19 @@ const renderAnalysisResults = () => {
     return;
   }
   box.hidden = false;
-  const children = [
-    el('div', 'card-header', [
-      el('h2', null, `持仓最新建议 · ${analysisResults.size}`),
-      el('div', 'card-meta', '点击卡片展开详情 · 完整记录见「建议」页'),
-    ]),
-  ];
+  const header = el('div', 'card-header collapsible-header', [
+    el('h2', null, `持仓最新建议 · ${analysisResults.size}`),
+    el('div', 'card-meta', '点击卡片展开详情 · 完整记录见「建议」页'),
+  ]);
+  header.addEventListener('click', () => {
+    box.classList.toggle('collapsed');
+  });
+  const children = [header];
   if (analysisFailures.length > 0) {
     children.push(
       el(
         'p',
-        'analysis-failures',
+        'analysis-failures collapsible-content',
         `失败 ${analysisFailures.length} 只：${analysisFailures
           .map((f) => `${f.stockId}（${f.label}）`)
           .join('、')}`,
@@ -379,7 +387,7 @@ const renderAnalysisResults = () => {
   children.push(
     el(
       'div',
-      'advice-list',
+      'advice-list collapsible-content',
       [...analysisResults.values()].map((advice) => adviceCard(advice)),
     ),
   );
@@ -739,16 +747,31 @@ const showGroupDetail = async (id, setStatus) => {
   actions.append(edit, toggle);
   if (isDynamicGroup(group)) {
     const refresh = el('button', 'btn btn-primary btn-sm', '刷新成员');
-    refresh.addEventListener(
-      'click',
-      () =>
-        void mutateEntity(
-          'refresh_stock_group',
-          { groupId: group.id },
-          () => renderGroups(setStatus),
-          '分组刷新完成',
-        ),
-    );
+    refresh.addEventListener('click', async () => {
+      refresh.disabled = true;
+      refresh.textContent = '刷新中…';
+      setStatus('正在刷新分组成员…');
+      const result = await callApi('/api/tools/refresh_stock_group/call', {
+        method: 'POST',
+        body: JSON.stringify({ input: { groupId: group.id } }),
+      });
+      refresh.disabled = false;
+      refresh.textContent = '刷新成员';
+      if (!result.ok) {
+        setStatus(`分组刷新失败：${toolErrorText(result.error)}`, true);
+        return;
+      }
+      // tool 对失败/空结果也返回 ok:true（保留旧快照不写空批），必须看 refreshed/failureReason
+      const data = result.data;
+      await renderGroups(setStatus);
+      if (data.refreshed === false) {
+        setStatus(`分组未刷新：${data.failureReason ?? '未知原因'}`, true);
+        return;
+      }
+      setStatus(
+        `分组刷新完成 · ${data.memberCount} 只成员（新进 ${data.entered.length} / 退出 ${data.exited.length}）`,
+      );
+    });
     actions.append(refresh);
   }
   const remove = el('button', 'btn btn-ghost btn-sm', '删除');
@@ -922,6 +945,12 @@ const renderGroups = async (setStatus) => {
   if (target !== undefined) await showGroupDetail(target, setStatus);
   else mount($('#group-detail'), el('p', 'placeholder', '创建分组后，可在这里查看成员。'));
   setStatus(`分组已刷新 · ${items.length} 个`);
+};
+
+/** 盘中 10s 轮询用：只重刷选中分组的详情（含行情），不动列表与方案创建表单。 */
+const refreshSelectedGroupDetail = async (setStatus) => {
+  if (selectedGroupId === '') return;
+  await showGroupDetail(selectedGroupId, setStatus);
 };
 
 const runWatchOnce = async (setStatus) => {
@@ -1860,20 +1889,24 @@ const buildAddNoteForm = (stockId, code, name, onDone) => {
       stockId,
       kind,
       content: /** @type {HTMLTextAreaElement} */ (content).value,
-      .../** @type {HTMLSelectElement} */ ((stance).value !== '—'
-        ? { stance: /** @type {HTMLSelectElement} */ (stance).value }
-        : {}),
-      .../** @type {HTMLInputElement} */ ((tags).value.length > 0
-        ? {
-            tags: /** @type {HTMLInputElement} */ (tags).value
-              .split(',')
-              .map((s) => s.trim())
-              .filter((s) => s.length > 0),
-          }
-        : {}),
-      .../** @type {HTMLInputElement} */ ((sourceUrl).value.length > 0
-        ? { sourceUrl: /** @type {HTMLInputElement} */ (sourceUrl).value }
-        : {}),
+      .../** @type {HTMLSelectElement} */ (
+        stance.value !== '—' ? { stance: /** @type {HTMLSelectElement} */ (stance).value } : {}
+      ),
+      .../** @type {HTMLInputElement} */ (
+        tags.value.length > 0
+          ? {
+              tags: /** @type {HTMLInputElement} */ (tags).value
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0),
+            }
+          : {}
+      ),
+      .../** @type {HTMLInputElement} */ (
+        sourceUrl.value.length > 0
+          ? { sourceUrl: /** @type {HTMLInputElement} */ (sourceUrl).value }
+          : {}
+      ),
     };
     const r = await callTool('add_research_note', input);
     if (!r.ok) {
@@ -1934,6 +1967,7 @@ export {
   cancelAnalyzeAllHoldings,
   errorKindLabel,
   filterAdvices,
+  refreshSelectedGroupDetail,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,

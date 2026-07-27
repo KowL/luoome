@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "providers": {
+    "minimax": {
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "baseURL": "https://api.minimaxi.com/v1",
+      "quirks": [
+        "inject-schema",
+        "recover-malformed-text"
+      ],
+      "type": "openai-compatible",
+      "supportsStructuredOutputs": true
+    }
+  },
+  "profiles": {
+    "generation": {
+      "model": "minimax:MiniMax-M3",
+      "temperature": 0.2,
+      "maxOutputTokens": 2048,
+      "timeoutMs": 120000,
+      "maxRetries": 5,
+      "reasoningEffort": "medium",
+      "maxPromptChars": 16000,
+      "maxSteps": 8,
+      "maxTotalTokens": 30000
+    },
+    "agent": {
+      "model": "minimax:MiniMax-M3",
+      "temperature": 0.2,
+      "maxOutputTokens": 2048,
+      "timeoutMs": 120000,
+      "maxRetries": 5,
+      "reasoningEffort": "medium",
+      "maxPromptChars": 16000,
+      "maxSteps": 8,
+      "maxTotalTokens": 30000
+    }
+  }
+}

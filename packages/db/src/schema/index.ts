@@ -110,6 +110,7 @@ export const advices = sqliteTable(
     id: text('id').primaryKey(),
     subjectKind: text('subject_kind').$type<AdviceSubjectKind>().notNull(),
     subjectId: text('subject_id').notNull(),
+    stockName: text('stock_name'),
     decision: text('decision').$type<AdviceDecision>().notNull(),
     confidence: real('confidence').notNull(),
     horizon: text('horizon').$type<AdviceHorizon>().notNull(),

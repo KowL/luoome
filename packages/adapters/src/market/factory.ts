@@ -4,6 +4,7 @@ import { parseMarketProviderConfigFromEnv } from '@luoome/core';
 import { z } from 'zod';
 
 import { AdshareMarketAdapter } from './adshare.js';
+import { QuoteCache } from './cache.js';
 import { EastmoneyAdapter } from './eastmoney.js';
 import { MarketDataManager } from './manager.js';
 import { TencentAdapter } from './tencent.js';
@@ -30,6 +31,8 @@ export interface CreateMarketAdapterDeps {
   readonly enableAdshare?: boolean;
   /** 显式覆盖行情源顺序；省略时从 LUOOME_MARKET_SOURCES / 旧开关解析。 */
   readonly sourceOrder?: readonly MarketSourceId[];
+  /** 覆盖 QuoteCache TTL（默认 60s）；盘中高频刷新的 surface（如 Web）可调小。 */
+  readonly quoteCacheTtlMs?: number;
 }
 
 export const MarketSourceIdSchema = z.enum(['eastmoney', 'tencent', 'adshare']);
@@ -101,6 +104,9 @@ export const createMarketAdapterFromEnv = (
     primary,
     fallback,
     ...(finalFallback === undefined ? {} : { finalFallback }),
+    ...(deps.quoteCacheTtlMs === undefined
+      ? {}
+      : { quoteCache: new QuoteCache(1024, deps.quoteCacheTtlMs) }),
     logger: deps.logger,
     ...clockOpt,
   });
