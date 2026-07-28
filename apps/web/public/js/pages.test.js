@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'bun:test';
 
-import { errorKindLabel, filterAdvices, routeStockId } from './pages.js';
+import {
+  boardStats,
+  errorKindLabel,
+  filterAdvices,
+  memberChangePct,
+  routeStockId,
+  sortBoardItems,
+} from './pages.js';
+
+describe('成员涨跌幅（昨收基准）', () => {
+  it('有昨收：(close − prevClose) / prevClose', () => {
+    expect(memberChangePct({ close: 11, prevClose: 10 })).toBeCloseTo(0.1, 10);
+    expect(memberChangePct({ close: 9, prevClose: 10 })).toBeCloseTo(-0.1, 10);
+  });
+
+  it('缺昨收 / 昨收非正 / 无 quote → null（不回退今开基准）', () => {
+    expect(memberChangePct({ close: 11, open: 10 })).toBeNull();
+    expect(memberChangePct({ close: 11, prevClose: 0 })).toBeNull();
+    expect(memberChangePct({ close: 11, prevClose: Number.NaN })).toBeNull();
+    expect(memberChangePct(null)).toBeNull();
+    expect(memberChangePct(undefined)).toBeNull();
+  });
+});
 
 describe('分析错误提示中文化', () => {
   it('已知 kind 映射为中文文案', () => {
@@ -36,5 +58,36 @@ describe('行情关联深链接', () => {
     expect(filterAdvices(advices, 'all', '002594.SZ')).toHaveLength(2);
     expect(filterAdvices(advices, 'buy', '002594.SZ')).toEqual([advices[0]]);
     expect(filterAdvices(advices, 'buy', null)).toEqual([advices[0], advices[2]]);
+  });
+});
+
+describe('看板纯函数', () => {
+  const item = (stockId, changePct, holding = null) => ({
+    stockId,
+    name: stockId,
+    quote: null,
+    changePct,
+    holding,
+    groups: [],
+    todayTrigger: null,
+  });
+
+  it('持仓置顶（保持原顺序），其余按 |changePct| 降序，null 排最后', () => {
+    const input = [
+      item('A', 1.5),
+      item('H1', -0.2, { quantity: 100 }),
+      item('B', null),
+      item('H2', 3.0, { quantity: 200 }),
+      item('C', -5.0),
+      item('D', 0),
+    ];
+    expect(sortBoardItems(input).map((i) => i.stockId)).toEqual(['H1', 'H2', 'C', 'A', 'D', 'B']);
+    // 不改动原数组
+    expect(input[0].stockId).toBe('A');
+  });
+
+  it('涨 / 跌 / 平计数（null 计入平）', () => {
+    const stats = boardStats([item('A', 1.5), item('B', -2), item('C', 0), item('D', null)]);
+    expect(stats).toEqual({ up: 1, down: 1, flat: 2 });
   });
 });

@@ -35,7 +35,7 @@ TUSHARE_TOKEN=replace-me-with-real-token
 |------|------|------|
 | `daily` | 日 K 线（vol 单位=手） | 2000 积分起 |
 | `adj_factor` | 复权因子 | 2000 积分起 |
-| `rt_k` | 实时快照（close 即最新价，vol 单位=股） | **需单独开通权限**，见 [文档 doc_id=290](https://tushare.pro/document/1?doc_id=290) |
+| `rt_k` | 实时快照（price 即最新价，vol 单位=股） | **需单独开通权限**，见 [文档 doc_id=290](https://tushare.pro/document/1?doc_id=290) |
 | `stock_basic` | 股票列表 / 搜索 | 2000 积分 |
 
 未开通或积分不足的接口，tushare 返回 `code≠0`（常见 `2002`，msg 类似「抱歉，您没有权限访问该接口」），luoome 侧表现为 `tushare upstream_error` 日志与降级到下一数据源。`fetchDailyBars` 中 `adj_factor` 失败只降级（复权因子按 1.0 占位并打 warn），不会拖垮日线。

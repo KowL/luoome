@@ -33,7 +33,7 @@
   <div class="app-shell">
     <aside class="sidebar" aria-label="主导航">
       <ul class="nav" role="navigation">
-        <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>仪表盘</span></a></li>
+        <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>看盘</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
         <li><a class="nav-item" href="#groups" data-route="groups"><span>分组</span></a></li>
         <li><a class="nav-item" href="#research" data-route="research"><span>研究</span></a></li>
@@ -47,37 +47,35 @@
     </aside>
 
     <main class="content" id="content">
-      <!-- route: dashboard -->
+      <!-- route: dashboard（看盘主页） -->
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div class="route-header">
-          <h1>仪表盘</h1>
+          <h1>看盘</h1>
           <div id="dashboard-stock-search"></div>
         </div>
-        <div class="card" id="dashboard-data-health">
-          <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale 分组</div></div>
-          <div id="data-health-body" class="data-health">加载中…</div>
-        </div>
+        <div id="dashboard-indices" class="index-strip" hidden></div>
         <div id="dashboard-stats" class="stat-grid">
           <div class="stat"><div class="label">总市值</div><div class="value" id="dash-total-value">--</div></div>
           <div class="stat"><div class="label">总盈亏</div><div class="value" id="dash-total-pnl">--</div><div class="delta" id="dash-total-pnl-pct">--</div></div>
           <div class="stat"><div class="label">持仓数</div><div class="value" id="dash-holdings-count">--</div></div>
           <div class="stat"><div class="label">今日建议</div><div class="value" id="dash-advice-count">--</div><div class="delta" id="dash-advice-summary">--</div></div>
         </div>
-        <div class="watch-rail" id="dash-watch-rail">
-          <div class="watch-rail-state">
-            <div>
-              <span class="health-dot" id="dash-watch-dot"></span>
-              <strong id="dash-watch-state">盯盘状态 --</strong>
-              <span class="muted" id="dash-watch-time">尚未运行</span>
+        <div class="card" id="dashboard-board-card">
+          <div class="card-header"><h2>实时看板</h2><div class="card-meta" id="dashboard-board-meta"></div></div>
+          <div id="dashboard-board"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="dashboard-cols">
+          <div class="card">
+            <div class="card-header">
+              <h2>今日预警</h2>
+              <a href="#groups" class="card-link">在分组中管理方案 →</a>
             </div>
-            <div class="watch-run-summary" id="dash-watch-run-summary">跑一轮后显示评估指标</div>
+            <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
           </div>
-          <div class="rail-metrics">
-            <span><b id="dash-pool-count">--</b> 个方案</span>
-            <span><b id="dash-group-count">--</b> 个分组</span>
-            <span><b id="dash-stale-count">--</b> 个待刷新</span>
+          <div class="card">
+            <div class="card-header"><h2>建议 Top 3</h2><div class="card-meta" id="dash-advice-meta"></div></div>
+            <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
           </div>
-          <button id="btn-dashboard-watch-run" class="btn btn-watch-run" type="button">立即跑一轮</button>
         </div>
         <!-- v0.7 策略预警指标（docs/.../§11 / §12） -->
         <div class="card mt-4" id="dash-metrics-card" hidden>
@@ -112,16 +110,25 @@
             </div>
           </div>
         </div>
-        <div class="card">
-          <div class="card-header"><h2>建议（高信心优先）</h2><div class="card-meta" id="dash-advice-meta"></div></div>
-          <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
-        </div>
-        <div class="card mt-4">
-          <div class="card-header">
-            <h2>最近盯盘触发</h2>
-            <a href="#groups" class="card-link">在分组中管理方案 →</a>
+        <div class="watch-rail" id="dash-watch-rail">
+          <div class="watch-rail-state">
+            <div>
+              <span class="health-dot" id="dash-watch-dot"></span>
+              <strong id="dash-watch-state">盯盘状态 --</strong>
+              <span class="muted" id="dash-watch-time">尚未运行</span>
+            </div>
+            <div class="watch-run-summary" id="dash-watch-run-summary">跑一轮后显示评估指标</div>
           </div>
-          <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
+          <div class="rail-metrics">
+            <span><b id="dash-pool-count">--</b> 个方案</span>
+            <span><b id="dash-group-count">--</b> 个分组</span>
+            <span><b id="dash-stale-count">--</b> 个待刷新</span>
+          </div>
+          <button id="btn-dashboard-watch-run" class="btn btn-watch-run" type="button">立即跑一轮</button>
+        </div>
+        <div class="card" id="dashboard-data-health">
+          <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale 分组</div></div>
+          <div id="data-health-body" class="data-health">加载中…</div>
         </div>
       </section>
 
@@ -208,20 +215,20 @@
             <table class="table" id="holdings-table">
               <thead>
                 <tr>
-                  <th>代码</th><th>名称</th>
+                  <th>名称 / 代码</th>
                   <th class="num">数量</th><th class="num">成本</th>
                   <th class="num">现价</th><th class="num">市值</th>
-                  <th class="num">盈亏</th><th class="num">盈亏%</th>
+                  <th class="num">今日盈亏</th><th class="num">盈亏</th>
                   <th>操作</th>
                 </tr>
               </thead>
-              <tbody id="holdings-body"><tr><td colspan="9" class="placeholder">加载中…</td></tr></tbody>
+              <tbody id="holdings-body"><tr><td colspan="8" class="placeholder">加载中…</td></tr></tbody>
               <tfoot id="holdings-foot" hidden>
                 <tr>
-                  <td colspan="5" class="muted">合计</td>
+                  <td colspan="4" class="muted">合计</td>
                   <td class="num" id="holdings-total-value">--</td>
+                  <td class="num" id="holdings-total-today-pnl">--</td>
                   <td class="num" id="holdings-total-pnl">--</td>
-                  <td class="num" id="holdings-total-pnl-pct">--</td>
                   <td></td>
                 </tr>
               </tfoot>

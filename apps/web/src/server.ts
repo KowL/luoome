@@ -67,6 +67,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'agent_run',
   'fetch_quote',
   'batch_quote',
+  'fetch_index_quotes',
   'refresh_stock_group',
   'get_stock_market_view',
 ]);
@@ -324,6 +325,33 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const tool = toolRegistry.get(name);
     if (tool === undefined) return notFound('Tool', name);
     return tool.execute(input, ctxRef.current);
+  };
+
+  // 指数行情缓存：dashboard 5s 轮询，push2 对高频请求突发限流（2026-07 实测），
+  // 15s TTL 把请求量降到 1/3；调用失败时回退最近成功值（60s 内），避免指数条闪空。
+  const INDEX_QUOTES_TTL_MS = 15_000;
+  const INDEX_QUOTES_STALE_MS = 60_000;
+  let indexQuotesCache: {
+    readonly at: number;
+    readonly value: { indices: unknown[]; unsupported?: boolean };
+  } | null = null;
+  const invokeIndexQuotes = async (): Promise<ToolResult<unknown>> => {
+    const now = Date.now();
+    if (indexQuotesCache !== null && now - indexQuotesCache.at < INDEX_QUOTES_TTL_MS) {
+      return { ok: true, data: indexQuotesCache.value };
+    }
+    const result = await invokeTool('fetch_index_quotes', {});
+    if (result.ok) {
+      indexQuotesCache = {
+        at: now,
+        value: result.data as { indices: unknown[]; unsupported?: boolean },
+      };
+      return result;
+    }
+    if (indexQuotesCache !== null && now - indexQuotesCache.at < INDEX_QUOTES_STALE_MS) {
+      return { ok: true, data: indexQuotesCache.value };
+    }
+    return result;
   };
 
   // ===== AI 模型设置 =====
@@ -1010,30 +1038,51 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/dashboard', async () => {
     const todayStart = startOfTodayShanghai(ctxRef.current.clock());
-    const [holdings, groups, pools, watch, triggers, advice, recentTriggers] = await Promise.all([
-      invokeTool('list_holdings', {}),
-      invokeTool('list_stock_groups', { enabledOnly: false, includeMemberCount: true }),
-      invokeTool('list_stock_pools', { enabledOnly: false }),
-      invokeTool('get_watch_status', {}),
-      invokeTool('list_watch_triggers', { limit: 8 }),
-      invokeTool('get_advice', { limit: 8 }),
-      invokeTool('list_watch_triggers', { since: todayStart, limit: 200 }),
-    ]);
+    const [holdings, groups, pools, watch, triggers, advice, recentTriggers, indexQuotes] =
+      await Promise.all([
+        invokeTool('list_holdings', {}),
+        invokeTool('list_stock_groups', { enabledOnly: false, includeMemberCount: true }),
+        invokeTool('list_stock_pools', { enabledOnly: false }),
+        invokeTool('get_watch_status', {}),
+        invokeTool('list_watch_triggers', { limit: 8 }),
+        invokeTool('get_advice', { limit: 8 }),
+        invokeTool('list_watch_triggers', { since: todayStart, limit: 200 }),
+        invokeIndexQuotes(),
+      ]);
     if (!holdings.ok) return jsonResult(holdings);
     if (!groups.ok) return jsonResult(groups);
     if (!pools.ok) return jsonResult(pools);
     if (!watch.ok) return jsonResult(watch);
     if (!triggers.ok) return jsonResult(triggers);
     if (!advice.ok) return jsonResult(advice);
+
+    // 单项失败降级为警告，不拖垮整个 dashboard（指数条 / 看板仍可空态呈现）。
+    const warnings: string[] = [];
+    let indices: { indices: unknown[]; unsupported?: boolean } = { indices: [] };
+    if (indexQuotes.ok) {
+      indices = indexQuotes.data as typeof indices;
+    } else {
+      warnings.push(`fetch_index_quotes 失败（${indexQuotes.error.kind}），指数行情降级为空`);
+    }
+
     const groupRows = groups.data as {
-      groups: Array<{ group: { id: string; resolver: { kind: string } } }>;
+      groups: Array<{
+        group: { id: string; name: string; enabled: boolean; resolver: { kind: string } };
+      }>;
+    };
+    // get_stock_group 结果在一次请求内复用：stale 统计与实时看板可能查同一分组。
+    const groupDetailCache = new Map<string, Promise<ToolResult<unknown>>>();
+    const groupDetail = (id: string): Promise<ToolResult<unknown>> => {
+      const cached = groupDetailCache.get(id);
+      if (cached !== undefined) return cached;
+      const pending = invokeTool('get_stock_group', { id });
+      groupDetailCache.set(id, pending);
+      return pending;
     };
     const dynamicIds = groupRows.groups
       .filter(({ group }) => group.resolver.kind === 'formula' || group.resolver.kind === 'llm')
       .map(({ group }) => group.id);
-    const dynamicDetails = await Promise.all(
-      dynamicIds.map((id) => invokeTool('get_stock_group', { id })),
-    );
+    const dynamicDetails = await Promise.all(dynamicIds.map((id) => groupDetail(id)));
     const staleGroupCount = dynamicDetails.filter(
       (result) => result.ok && (result.data as { stale: boolean }).stale,
     ).length;
@@ -1044,10 +1093,122 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         ? (recentTriggers.data as { triggers: Array<Record<string, unknown>> }).triggers
         : []
     ) as Array<{
+      stockId: string;
       priority: 'urgent' | 'important' | 'normal';
       deliveryStatus: string;
       feedback?: 'handled' | 'useful' | 'useless' | 'ignored';
     }>;
+
+    // —— 实时看板：持仓 ∪ 启用盯盘分组（关联 enabled WatchPlan 且分组启用）成员 ——
+    interface BoardItem {
+      stockId: string;
+      name: string;
+      quote: { close: number; ts: unknown } | null;
+      /** 股价涨跌幅（%）；持仓股由 list_holdings 今日涨跌幅换算，其余无昨收基准为 null。 */
+      changePct: number | null;
+      holding: {
+        quantity: number;
+        marketValue: number;
+        todayPnl: number | null;
+        todayPnlPct: number | null;
+      } | null;
+      groups: string[];
+      todayTrigger: { count: number; maxPriority: 'urgent' | 'important' | 'normal' } | null;
+    }
+    const BOARD_CAP = 40;
+    const holdingRows = (
+      holdings.data as {
+        holdings: Array<{
+          holding: { stockId: string; quantity: number };
+          stockName: string;
+          marketValue: number;
+          todayPnl: number | null;
+          todayPnlPct: number | null;
+        }>;
+      }
+    ).holdings;
+    const board = new Map<string, BoardItem>();
+    for (const row of holdingRows) {
+      if (board.size >= BOARD_CAP) break;
+      board.set(row.holding.stockId, {
+        stockId: row.holding.stockId,
+        name: row.stockName,
+        quote: null,
+        changePct: row.todayPnlPct === null ? null : row.todayPnlPct * 100,
+        holding: {
+          quantity: row.holding.quantity,
+          marketValue: row.marketValue,
+          todayPnl: row.todayPnl,
+          todayPnlPct: row.todayPnlPct,
+        },
+        groups: [],
+        todayTrigger: null,
+      });
+    }
+    const poolRows = (pools.data as { pools: Array<{ groupId: string; enabled: boolean }> }).pools;
+    const groupById = new Map(groupRows.groups.map(({ group }) => [group.id, group]));
+    const watchedGroupIds = [
+      ...new Set(
+        poolRows
+          .filter((p) => p.enabled && p.groupId.length > 0)
+          .map((p) => p.groupId)
+          .filter((id) => groupById.get(id)?.enabled === true),
+      ),
+    ];
+    const watchedDetails = await Promise.all(watchedGroupIds.map((id) => groupDetail(id)));
+    for (const [index, detail] of watchedDetails.entries()) {
+      if (!detail.ok) {
+        warnings.push(
+          `get_stock_group(${watchedGroupIds[index]}) 失败（${detail.error.kind}），看板跳过该分组`,
+        );
+        continue;
+      }
+      const { group, members } = detail.data as {
+        group: { name: string };
+        members: Array<{ stockId: string; name: string }>;
+      };
+      for (const member of members) {
+        const existing = board.get(member.stockId);
+        if (existing !== undefined) {
+          existing.groups.push(group.name);
+        } else if (board.size < BOARD_CAP) {
+          board.set(member.stockId, {
+            stockId: member.stockId,
+            name: member.name,
+            quote: null,
+            changePct: null,
+            holding: null,
+            groups: [group.name],
+            todayTrigger: null,
+          });
+        }
+      }
+    }
+    if (board.size > 0) {
+      const quotesResult = await invokeTool('batch_quote', { stockIds: [...board.keys()] });
+      if (quotesResult.ok) {
+        const { quotes } = quotesResult.data as {
+          quotes: Array<{ stockId: string; close: number; ts: unknown }>;
+        };
+        for (const q of quotes) {
+          const item = board.get(q.stockId);
+          if (item !== undefined) item.quote = { close: q.close, ts: q.ts };
+        }
+      } else {
+        warnings.push(`batch_quote 失败（${quotesResult.error.kind}），看板行情降级为空`);
+      }
+    }
+    const PRIORITY_RANK = { urgent: 0, important: 1, normal: 2 } as const;
+    for (const t of todayTriggers) {
+      const item = board.get(t.stockId);
+      if (item === undefined) continue;
+      const entry = item.todayTrigger ?? { count: 0, maxPriority: 'normal' as const };
+      entry.count += 1;
+      if (PRIORITY_RANK[t.priority] < PRIORITY_RANK[entry.maxPriority]) {
+        entry.maxPriority = t.priority;
+      }
+      item.todayTrigger = entry;
+    }
 
     const priorityCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
       acc[t.priority] = (acc[t.priority] ?? 0) + 1;
@@ -1086,6 +1247,11 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         triggers: triggers.data,
         advice: advice.data,
         staleGroupCount,
+        // 看盘主页：指数条 + 实时看板 + 今日预警列表
+        indices,
+        board: [...board.values()],
+        todayTriggers,
+        meta: { warnings },
         // v0.7 策略预警 dashboard 指标（§11）
         metrics: {
           todayTotal: todayTriggers.length,
@@ -1238,6 +1404,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   // 股票搜索（tushare 优先，本地数据库兜底）
+  // stock_basic 全量清单进程内缓存：TUSHARE_URL 代理网关会忽略 name 参数返回全表，
+  // 所以拉全量后在本地按 code/name 子串过滤，不能直接依赖上游参数过滤。
+  let tushareStockListCache: {
+    readonly stocks: readonly Stock[];
+    readonly fetchedAt: number;
+  } | null = null;
+  const TUSHARE_STOCK_LIST_TTL_MS = 24 * 60 * 60 * 1000;
+
   app.get('/api/stocks/search', async (c) => {
     const q = c.req.query('q');
     const limitRaw = c.req.query('limit');
@@ -1291,30 +1465,49 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const tushareToken = process.env.TUSHARE_TOKEN?.trim();
     if (tushareToken !== undefined && tushareToken.length > 0) {
       try {
-        const rows = await tushareQuery(
-          'stock_basic',
-          { name },
-          tushareConfigFromEnv(process.env),
-          fetch,
-          ['ts_code', 'name', 'industry'],
-        );
-        const stocks = rows
-          .slice(0, limit)
-          .map((row) =>
-            typeof row.ts_code === 'string' && typeof row.name === 'string'
-              ? toStock({
-                  ts_code: row.ts_code,
-                  name: row.name,
-                  ...(typeof row.industry === 'string' ? { industry: row.industry } : {}),
-                })
-              : null,
-          )
-          .filter((candidate): candidate is Stock => candidate !== null);
-        if (stocks.length > 0) {
-          return jsonResult({
-            ok: true,
-            data: { stocks, total: stocks.length, source: 'tushare' as const },
-          });
+        if (
+          tushareStockListCache === null ||
+          Date.now() - tushareStockListCache.fetchedAt > TUSHARE_STOCK_LIST_TTL_MS
+        ) {
+          const rows = await tushareQuery(
+            'stock_basic',
+            {},
+            tushareConfigFromEnv(process.env),
+            fetch,
+            ['ts_code', 'name', 'industry'],
+          );
+          const stocks = rows
+            .map((row) =>
+              typeof row.ts_code === 'string' && typeof row.name === 'string'
+                ? toStock({
+                    ts_code: row.ts_code,
+                    name: row.name,
+                    ...(typeof row.industry === 'string' ? { industry: row.industry } : {}),
+                  })
+                : null,
+            )
+            .filter((candidate): candidate is Stock => candidate !== null);
+          // 空清单不缓存（上游抖动时下次请求重拉），否则 24h 内搜索全空。
+          if (stocks.length > 0) tushareStockListCache = { stocks, fetchedAt: Date.now() };
+        }
+        if (tushareStockListCache !== null) {
+          const keyword = name.toLowerCase();
+          const matched = tushareStockListCache.stocks.filter(
+            (s) =>
+              s.code.includes(name) ||
+              s.id.toLowerCase().includes(keyword) ||
+              s.name.toLowerCase().includes(keyword),
+          );
+          if (matched.length > 0) {
+            return jsonResult({
+              ok: true,
+              data: {
+                stocks: matched.slice(0, limit),
+                total: matched.length,
+                source: 'tushare' as const,
+              },
+            });
+          }
         }
       } catch (error) {
         ctxRef.current.logger.warn('tushare search fallback to local', { q, error: String(error) });
@@ -1577,9 +1770,10 @@ export interface StartWebOptions {
 /** 启动 web server，返回 Bun server 句柄（调用方可 close()）。 */
 export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<undefined>> => {
   const dbPath = options.dbPath ?? resolveDbPath();
-  const ctx = await buildWebContext(dbPath);
-  const aiSettingsStore = new AISettingsStore(process.env);
+  // 行情源以设置页持久化的值为准（含启动装配），不能只读 process.env。
   const marketSettingsStore = new MarketSettingsStore(process.env);
+  const ctx = await buildWebContext(dbPath, marketSettingsStore.runtimeEnv());
+  const aiSettingsStore = new AISettingsStore(process.env);
   const resolved =
     options.webToken !== undefined
       ? { token: options.webToken, filePath: null }

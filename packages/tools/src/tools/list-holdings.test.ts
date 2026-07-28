@@ -27,6 +27,13 @@ describe('list_holdings', () => {
     expect(byd?.pnl).toBe(7300);
     expect(byd?.pnlPct).toBeCloseTo(7300 / 98500, 6);
 
+    // 今日盈亏：FakeMarketAdapter 日线最后一根（昨日）close 为昨收基准。
+    expect(byd?.previousClose).not.toBeNull();
+    const prevClose = byd?.previousClose ?? 0;
+    expect(prevClose).toBeGreaterThan(0);
+    expect(byd?.todayPnl).toBeCloseTo((105.8 - prevClose) * 1000, 4);
+    expect(byd?.todayPnlPct).toBeCloseTo((105.8 - prevClose) / prevClose, 6);
+
     // 汇总 = 各项之和（Money 4 位小数不变量）。
     const sumValue = data.holdings.reduce((s, h) => s + h.marketValue, 0);
     const sumCost = data.holdings.reduce((s, h) => s + h.cost, 0);
@@ -36,6 +43,11 @@ describe('list_holdings', () => {
     expect(data.totalPnLPct).toBeCloseTo((sumValue - sumCost) / sumCost, 6);
     expect(data.totalPnLPct).toBeGreaterThanOrEqual(-1);
     expect(data.totalPnLPct).toBeLessThanOrEqual(10);
+
+    // 今日盈亏合计 = 各持仓今日盈亏之和；涨跌幅基准 = 总市值 − 今日合计（昨收市值）。
+    const sumToday = data.holdings.reduce((s, h) => s + (h.todayPnl ?? 0), 0);
+    expect(data.totalTodayPnl).toBeCloseTo(sumToday, 4);
+    expect(data.totalTodayPnlPct).toBeCloseTo(sumToday / (sumValue - sumToday), 6);
   });
 
   it('status=closed → 空持仓 + 零汇总', async () => {
@@ -82,9 +94,13 @@ describe('list_holdings', () => {
     const result = await listHoldingsTool.execute({}, failingContext);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(
-      result.data.holdings.find((item) => item.holding.stockId === '002594.SZ')?.currentPrice,
-    ).toBe(123.45);
+    const item = result.data.holdings.find((h) => h.holding.stockId === '002594.SZ');
+    expect(item?.currentPrice).toBe(123.45);
+    // 日线不可用（返回空）→ 昨收与今日盈亏为 null，而不是伪造基准
+    expect(item?.previousClose).toBeNull();
+    expect(item?.todayPnl).toBeNull();
+    expect(item?.todayPnlPct).toBeNull();
+    expect(result.data.totalTodayPnl).toBeNull();
   });
 
   it('错误路径：账户不存在 → not_found', async () => {

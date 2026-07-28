@@ -142,6 +142,8 @@ export const deriveQuoteChange = (
  * 1. 历史 candle 只取 date < today 的 bar，completeness='closed'；
  * 2. Quote 对应当前上海自然日时，用 Quote 生成当天 candle（completeness='live'，
  *    收盘后仍 'live'：Quote.ts 是抓取时间，无法证明是交易所最终结算 K）；
+ *    前提：当日已有交易。盘前 / 非交易日 Quote.ts 只是抓取时间，调用方应传 null，
+ *    否则会伪造一根未开盘的当日 K 线；
  * 3. 远端当日 bar 被 Quote candle 替换，不同日两根；
  * 4. Quote 是历史本地回退（非今日）时不伪造当日 candle。
  * 输入须为 normalizeDailyBars 的输出（升序）。

@@ -41,3 +41,29 @@ describe('行情页入口', () => {
     expect(html).toContain('id="dashboard-stock-search"');
   });
 });
+
+describe('看盘主页结构', () => {
+  it('指数条 / 实时看板 / 今日预警容器齐全', () => {
+    expect(html).toContain('id="dashboard-indices"');
+    expect(html).toContain('id="dashboard-board"');
+    expect(html).toContain('id="dashboard-board-meta"');
+    expect(html).toContain('id="dash-trigger-list"');
+    expect(html).toContain('id="dash-advice-list"');
+  });
+
+  it('区块顺序：指数条 → 统计 → 看板 → 两栏 → watch rail → 数据健康（页底）', () => {
+    const order = [
+      'id="dashboard-indices"',
+      'id="dashboard-stats"',
+      'id="dashboard-board"',
+      'id="dash-trigger-list"',
+      'id="dash-watch-rail"',
+      'id="dashboard-data-health"',
+    ];
+    const positions = order.map((marker) => html.indexOf(marker));
+    for (const pos of positions) expect(pos).toBeGreaterThan(-1);
+    for (let i = 1; i < positions.length; i += 1) {
+      expect(positions[i]).toBeGreaterThan(positions[i - 1]);
+    }
+  });
+});

@@ -362,6 +362,33 @@ describe('tool/get_stock_market_view', () => {
     }
   });
 
+  it('19. 盘前 / 非交易日：live Quote 不生成当日 candle（quote.ts 只是抓取时间）', async () => {
+    const cases = [
+      // 周二 09:00 Shanghai → 盘前
+      { now: '2026-07-21T01:00:00.000Z', session: 'pre-open' },
+      // 周六 10:30 Shanghai → 非交易日
+      { now: '2026-07-25T02:30:00.000Z', session: 'non-trading-day' },
+    ] as const;
+    for (const c of cases) {
+      const clockNow = new Date(c.now);
+      const today = c.now.slice(0, 10);
+      const yesterday = new Date(clockNow.getTime() - DAY_MS).toISOString().slice(0, 10);
+      const quote = makeQuote(STOCK_ID, clockNow); // 盘前抓到的快照，ts 是今天
+      const bars = makeBars(STOCK_ID, yesterday, 30);
+      const ctx = await buildCtx(new StubMarketAdapter({ quote, bars }), () => clockNow);
+      const res = await callView(ctx, {});
+      expect(res.ok).toBe(true);
+      if (!res.ok) continue;
+      expect(res.data.dataStatus.marketSession).toBe(c.session);
+      expect(res.data.candles.some((candle) => candle.date === today)).toBe(false);
+      expect(res.data.candles.at(-1)?.date).toBe(yesterday);
+      expect(res.data.candles.at(-1)?.completeness).toBe('closed');
+      expect(res.data.dataStatus.barsAsOf).toBe(yesterday);
+      // quote 卡片照常展示，只是不拼成 K 线
+      expect(res.data.quote.quote.close).toBe(106);
+    }
+  });
+
   it('错误路径：range 不合法 → invalid_input', async () => {
     const ctx = await buildCtx(new StubMarketAdapter());
     const res = await callView(ctx, { range: '5m' });

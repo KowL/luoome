@@ -409,11 +409,13 @@ changePct = previousClose > 0 ? change / previousClose : null
 远端日线可能包含当天未收盘 K，也可能只返回历史收盘 K。Market View 输出采用统一规则：
 
 1. 历史 candle：只取 `date < today` 的 DailyBar，`completeness='closed'`；
-2. 当 Quote 对应当前上海自然日时，用 Quote 生成当天 candle：
+2. 当 Quote 对应当前上海自然日且当日已有交易（session 为 `trading` / `midday-break` / `closed`）时，用 Quote 生成当天 candle：
    - open/high/low/close/volume 来自 Quote；
    - source 来自 Quote；
-   - 盘中、午休、盘前已有有效 Quote 时 `completeness='live'`；
+   - 盘中、午休 `completeness='live'`；
    - 收盘后仍标记 `live`，因为 Quote 的 `ts` 是抓取时间，无法证明这是交易所最终结算 K；
+   - 盘前 / 非交易日不生成当天 candle：Quote 的 `ts` 只是抓取时间，当日尚无成交，
+     拼成蜡烛会伪造一根未开盘的 K 线（此时 quote 卡片照常展示，K 线止于上一交易日）；
 3. 不同时保留远端当天 DailyBar 和 Quote candle，避免同日两根；
 4. Quote 是历史本地回退且日期不是 today 时，不生成伪造的当天 candle。
 

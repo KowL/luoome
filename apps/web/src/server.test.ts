@@ -430,6 +430,19 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect((await json(r)).ok).toBe(true);
   });
 
+  it('fetch_index_quotes（白名单）→ 200；数据源不支持时 unsupported 降级', async () => {
+    const r = await callTool('fetch_index_quotes', {});
+    expect(r.status).toBe(200);
+    const body = (await json(r)) as {
+      ok: boolean;
+      data?: { indices: unknown[]; unsupported?: boolean };
+    };
+    expect(body.ok).toBe(true);
+    // FakeMarketAdapter 未实现 fetchIndexQuotes → 合法降级而非报错
+    expect(body.data?.indices).toEqual([]);
+    expect(body.data?.unsupported).toBe(true);
+  });
+
   it('get_stock_market_view（白名单）→ 200；缺 token → 403', async () => {
     const r = await callTool('get_stock_market_view', { stockId: '002594.SZ' });
     expect(r.status).toBe(200);
@@ -563,6 +576,42 @@ describe('MVP dashboard / watch API', () => {
     expect(body.ok).toBe(true);
     expect(body.data?.holdings.holdings.length).toBeGreaterThan(0);
     expect(body.data?.watch.state).toBe('never');
+  });
+
+  it('dashboard 含指数条 / 实时看板 / 今日预警；指数不支持时仍 200 且 indices 为空', async () => {
+    const r = await app.fetch(new Request('http://test/api/dashboard'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: {
+        indices: { indices: unknown[]; unsupported?: boolean };
+        board: Array<{
+          stockId: string;
+          name: string;
+          quote: { close: number; ts: string } | null;
+          changePct: number | null;
+          holding: { quantity: number; marketValue: number } | null;
+          groups: string[];
+          todayTrigger: { count: number; maxPriority: string } | null;
+        }>;
+        todayTriggers: unknown[];
+        meta: { warnings: string[] };
+      };
+    };
+    expect(body.ok).toBe(true);
+    // FakeMarketAdapter 未实现 fetchIndexQuotes → 降级为空而不是拖垮 dashboard
+    expect(body.data?.indices.indices).toEqual([]);
+    expect(body.data?.indices.unsupported).toBe(true);
+    expect(body.data?.meta.warnings).toEqual([]);
+    expect(body.data?.todayTriggers).toBeInstanceOf(Array);
+    const board = body.data?.board ?? [];
+    expect(board.length).toBeGreaterThan(0);
+    const held = board.find((item) => item.holding !== null);
+    expect(held).toBeDefined();
+    expect(typeof held?.stockId).toBe('string');
+    expect(typeof held?.name).toBe('string');
+    expect(held?.quote?.close).toBeGreaterThan(0);
+    expect(held?.groups).toBeInstanceOf(Array);
   });
 
   it('run-once 需要 token；成功后 watch status 可见', async () => {
@@ -885,6 +934,50 @@ describe('GET /api/stocks/search', () => {
     expect(body.ok).toBe(true);
     expect(body.data?.source).toBe('tushare');
     expect(body.data?.stocks[0]?.id).toBe('600519.SH');
+  });
+
+  it('代理忽略查询参数返回全表时，本地按 code/name 过滤', async () => {
+    process.env.TUSHARE_TOKEN = 'test-tushare-token';
+    process.env.TUSHARE_URL = 'http://api.tushare.pro';
+    const mockFetch = (async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === 'http://api.tushare.pro') {
+        const requestBody = JSON.parse(String(init?.body)) as { params: Record<string, unknown> };
+        expect(requestBody.params).toEqual({});
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 0,
+            msg: null,
+            data: {
+              fields: ['ts_code', 'name', 'industry'],
+              items: [
+                ['000001.SZ', '平安银行', '银行'],
+                ['300857.SZ', '协创数据', ''],
+              ],
+            },
+          }),
+          text: async () => '',
+          headers: new Headers(),
+        } as Response;
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    globalThis.fetch = mockFetch;
+
+    const testApp = createWebApp(await buildTestContext());
+    const byCode = (await (
+      await testApp.fetch(new Request('http://test/api/stocks/search?q=300857'))
+    ).json()) as { data?: { stocks: Array<{ id: string }>; source: string } };
+    expect(byCode.data?.source).toBe('tushare');
+    expect(byCode.data?.stocks.map((s) => s.id)).toEqual(['300857.SZ']);
+
+    const byName = (await (
+      await testApp.fetch(new Request('http://test/api/stocks/search?q=%E5%8D%8F%E5%88%9B'))
+    ).json()) as { data?: { stocks: Array<{ id: string }>; source: string } };
+    expect(byName.data?.stocks.map((s) => s.id)).toEqual(['300857.SZ']);
+    globalThis.fetch = originalFetch;
   });
 });
 

@@ -3,6 +3,7 @@ import type { GroupMemberSnapshot, StockGroup, ToolContext, ToolResult } from '@
 import { errNotFound } from '../define-tool.js';
 import { resolveLlmGroupTool } from '../tools/resolve-llm-group.js';
 import { runTacticTool } from '../tools/run-tactic.js';
+import { ensureStockStub } from './manual-entry.js';
 
 /**
  * 分组共享逻辑（docs/ddd/stock-group-design.md §4/§6；阶段 B）。
@@ -104,9 +105,10 @@ const failure = (failureReason: string, oldMemberCount: number): GroupRefreshOut
 
 /**
  * 单组刷新（spec §4「生产者 + 快照」）：
- * - formula → run_tactic(scope='all-stocks', persistSignals=true, lookbackDays)，
- *   命中且 score ≥ minScore（缺省 60）→ 成员，reason=`战法 <id> 命中，score=<n>`
- * - llm → resolve_llm_group（LLM 产出 + 逐条存在性校验 + 截断）
+ * - formula → run_tactic(scope='all-stocks'，全市场快照降级本地库, persistSignals=true,
+ *   lookbackDays)，命中且 score ≥ minScore（缺省 60）→ 成员，reason=`战法 <id> 命中，score=<n>`
+ * - llm → resolve_llm_group（LLM 产出 + 候选全集校验 + 截断）
+ * - 成员逐条 ensureStockStub（全市场成员多数不在本地 stocks 表，下游展示依赖 stock 行）
  * - 成功且非空：写新批次（同一 refreshId=uuid）；失败 / 空结果：保留旧快照，绝不写空批
  * - 成员变化检测：对比新旧批次 stockId 集合 → entered / exited
  */
@@ -173,6 +175,12 @@ export const refreshGroupMembers = async (
   if (members.length === 0) {
     ctx.logger.warn('[refresh-group] 解析结果为空，保留旧快照（不写空批）', { groupId: group.id });
     return failure('解析结果为空，未写空批（保留旧快照）', oldIds.length);
+  }
+
+  // 全市场刷新的成员多数不在本地 stocks 表：逐条补 stub（幂等 upsert；
+  // llm 路径已带名称落过，这里兜底 formula 路径），下游展示依赖 stock 行存在。
+  for (const m of members) {
+    await ensureStockStub(m.stockId, ctx);
   }
 
   const refreshId = globalThis.crypto.randomUUID();

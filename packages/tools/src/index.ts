@@ -23,6 +23,7 @@ export * from './tools/delete-research-note.js';
 export * from './tools/delete-stock-event.js';
 export * from './tools/delete-stock-group.js';
 export * from './tools/delete-stock-pool.js';
+export * from './tools/fetch-index-quotes.js';
 export * from './tools/fetch-quote.js';
 export * from './tools/get-account.js';
 export * from './tools/get-advice.js';

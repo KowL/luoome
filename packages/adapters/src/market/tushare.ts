@@ -1,4 +1,11 @@
-import type { DailyBar, DateRange, Logger, Quote, StockSearchCandidate } from '@luoome/core';
+import type {
+  DailyBar,
+  DateRange,
+  IndexQuote,
+  Logger,
+  Quote,
+  StockSearchCandidate,
+} from '@luoome/core';
 import { quantity as brandQuantity, money } from '@luoome/core';
 import { ZodError, z } from 'zod';
 
@@ -11,7 +18,7 @@ import { tushareQuery } from '../tushare/client.js';
  *
  * 要点：
  * - 只覆盖 SH / SZ A 股；HK / US / BJ 抛 unsupported_market（manager 视作一次失败）。
- * - 实时快照走 `rt_k`（vol 单位=股，close 即最新价）；
+ * - 实时快照走 `rt_k`（vol 单位=股，price 即最新价）；
  *   日线走 `daily`（vol 单位=手，×100 归一为股），
  *   复权因子单独走 `adj_factor`，缺失不阻塞整批。
  * - 所有远端调用复用 tushareQuery（POST envelope / 超时 / 5xx+网络重试）。
@@ -26,21 +33,41 @@ export interface TushareMarketAdapterOptions {
   readonly config: TushareConfig;
 }
 
-/** rt_k 快照行：close 即最新价，映射为 Quote.close，vol 已是股。 */
+/** rt_k 快照行：price 即最新价，映射为 Quote.close，vol 已是股。 */
 const QuoteRowSchema = z.object({
   ts_code: z.string().min(1),
   trade_time: z.string().nullish(),
-  close: z.number().positive(),
+  price: z.number().positive(),
   open: z.number().positive(),
   high: z.number().positive(),
   low: z.number().positive(),
   vol: z.number().nonnegative(),
+  pre_close: z.number().positive().nullish(),
 });
 
 const isTushareSupported = (stockCode: string): boolean => {
   const [, suffix] = stockCode.toUpperCase().trim().split('.');
   return suffix === 'SH' || suffix === 'SZ';
 };
+
+/** rt_k 快照行 OHLC+最新价 是否全零（盘前 / 停牌无成交的标志）。 */
+const isZeroQuoteRow = (row: Record<string, unknown>): boolean =>
+  ['open', 'high', 'low', 'price'].every((key) => row[key] === 0);
+
+/**
+ * 主要大盘指数清单（对齐 eastmoney MAJOR_INDICES）。
+ * index_daily 不返回名称，用 ts_code → 中文名常量映射。
+ */
+const MAJOR_INDICES: ReadonlyArray<{ readonly tsCode: string; readonly name: string }> = [
+  { tsCode: '000001.SH', name: '上证指数' },
+  { tsCode: '399001.SZ', name: '深证成指' },
+  { tsCode: '399006.SZ', name: '创业板指' },
+  { tsCode: '000300.SH', name: '沪深300' },
+  { tsCode: '000688.SH', name: '科创50' },
+];
+
+/** 指数行情回看窗口：覆盖长假，取窗口内每只股票最新一根日线。 */
+const INDEX_LOOKBACK_DAYS = 10;
 
 export class TushareMarketAdapter {
   readonly name = 'tushare';
@@ -64,17 +91,21 @@ export class TushareMarketAdapter {
     }
     const tsCode = stockCode.toUpperCase(); // 保留完整 '600519.SH'
     try {
-      const rows = await tushareQuery('rt_k', { ts_code: tsCode }, this.config, this.fetchImpl, [
-        'ts_code',
-        'trade_time',
-        'open',
-        'high',
-        'low',
-        'close',
-        'vol',
-      ]);
+      // rt_k 在限流 / 上游抖动时会返回 code=0 但 items 为空（实测代理网关如此），
+      // 属于瞬时故障而非股票不存在：先原地重试一次，仍为空才按无数据抛错走降级。
+      let rows = await this.queryQuoteRows(tsCode);
+      if (rows[0] === undefined) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        rows = await this.queryQuoteRows(tsCode);
+      }
       const row = rows[0];
-      if (row === undefined) throw new Error(`tushare not_found: ${tsCode}`);
+      if (row === undefined)
+        throw new Error(`tushare no_data: ${tsCode} 快照为空（远端限流或抖动）`);
+      // rt_k 盘前 / 停牌尚未有成交时价格全 0：不是合法 Quote，按无数据抛错走降级，
+      // 避免 Zod 校验炸出冗长 parse 错误。
+      if (isZeroQuoteRow(row)) {
+        throw new Error(`tushare no_data: ${tsCode} 快照价格全零（盘前或停牌无成交）`);
+      }
       const parsed = QuoteRowSchema.parse(row);
       const quote: Quote = {
         stockId: tsCode,
@@ -83,8 +114,11 @@ export class TushareMarketAdapter {
         open: money(parsed.open),
         high: money(parsed.high),
         low: money(parsed.low),
-        close: money(parsed.close),
+        close: money(parsed.price), // rt_k 的 price 即最新价
         volume: parsed.vol,
+        ...(parsed.pre_close !== null && parsed.pre_close !== undefined
+          ? { prevClose: money(parsed.pre_close) }
+          : {}),
         source: 'tushare',
       };
       this.logger.info('tushare.fetchQuote ok', { stockCode: tsCode, source: 'tushare' });
@@ -98,6 +132,20 @@ export class TushareMarketAdapter {
       });
       throw translated;
     }
+  }
+
+  /** rt_k 单股快照行；fields 固定（price 即最新价）。 */
+  private queryQuoteRows(tsCode: string): Promise<Array<Record<string, unknown>>> {
+    return tushareQuery('rt_k', { ts_code: tsCode }, this.config, this.fetchImpl, [
+      'ts_code',
+      'trade_time',
+      'open',
+      'high',
+      'low',
+      'price',
+      'vol',
+      'pre_close',
+    ]);
   }
 
   /** 并行 fetchQuote；单只失败只丢弃该只，不让批量读路径整体失败。 */
@@ -116,6 +164,75 @@ export class TushareMarketAdapter {
       }),
     );
     return out;
+  }
+
+  /**
+   * 大盘指数行情：index_daily 一次请求（ts_code 逗号分隔 5 只）取最近
+   * INDEX_LOOKBACK_DAYS 天日线，每只取最新一根。
+   * 注意：这是日线口径而非盘中实时——盘中调用返回的是最近交易日收盘数据
+   * （tushare 指数实时分钟接口权限门槛高，v0.x 不引入）。
+   * 容错对齐 eastmoney 实现：单只缺数据 / close 非法跳过（warn），全部缺失抛 no_data。
+   */
+  async fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
+    const end = this.clock();
+    const start = new Date(end.getTime() - INDEX_LOOKBACK_DAYS * 86_400_000);
+    try {
+      const rows = await tushareQuery(
+        'index_daily',
+        {
+          ts_code: MAJOR_INDICES.map((i) => i.tsCode).join(','),
+          start_date: formatYmd(start),
+          end_date: formatYmd(end),
+        },
+        this.config,
+        this.fetchImpl,
+        ['ts_code', 'trade_date', 'close', 'pre_close', 'change', 'pct_chg'],
+      );
+      // 每只指数保留窗口内最新一行（trade_date 归一化为 'YYYYMMDD' 后字符串可比）。
+      const latestByCode = new Map<string, { date: string; row: Record<string, unknown> }>();
+      for (const row of rows) {
+        if (typeof row.ts_code !== 'string') continue;
+        const date = normalizeTradeDate(row.trade_date);
+        if (date === null) continue;
+        const prev = latestByCode.get(row.ts_code);
+        if (prev === undefined || date > prev.date) {
+          latestByCode.set(row.ts_code, { date, row });
+        }
+      }
+      const indices: IndexQuote[] = [];
+      for (const { tsCode, name } of MAJOR_INDICES) {
+        const latest = latestByCode.get(tsCode);
+        const close = latest === undefined ? null : asMoney(latest.row.close);
+        if (latest === undefined || close === null) {
+          this.logger.warn('tushare.fetchIndexQuotes index missing', { tsCode });
+          continue;
+        }
+        indices.push({
+          code: tsCode,
+          name,
+          close,
+          change: asFiniteNumber(latest.row.change) ?? 0,
+          changePct: asFiniteNumber(latest.row.pct_chg) ?? 0,
+          ts: parseYmd(latest.date), // UTC 00:00，与 DailyBar.date 同约定
+          source: 'tushare',
+        });
+      }
+      if (indices.length === 0) {
+        throw new Error('tushare no_data: 指数行情全部缺失（index_daily 无有效行）');
+      }
+      this.logger.info('tushare.fetchIndexQuotes ok', {
+        source: 'tushare',
+        count: indices.length,
+      });
+      return indices;
+    } catch (error) {
+      const translated = translateTushareError(error);
+      this.logger.warn('tushare.fetchIndexQuotes failed', {
+        kind: kindOf(translated.message),
+        error: translated.message,
+      });
+      throw translated;
+    }
   }
 
   async fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]> {
@@ -317,6 +434,10 @@ const parseTradeTime = (raw: string | null | undefined): Date | undefined => {
 const asMoney = (v: unknown): ReturnType<typeof money> | null =>
   typeof v === 'number' && Number.isFinite(v) && v > 0 ? money(v) : null;
 
+/** 涨跌额 / 涨跌幅：任意有限 number 合法（可负可零），其它输入返回 null。 */
+const asFiniteNumber = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
 /** 日线 vol（手）→ 股：拒绝非有限值与负成交量。 */
 const asShares = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? brandQuantity(Math.round(v * 100)) : null;
@@ -327,6 +448,7 @@ const kindOf = (message: string): string => {
   if (message.startsWith('tushare http')) return 'http';
   if (message.startsWith('tushare parse')) return 'parse';
   if (message.startsWith('tushare not_found')) return 'not_found';
+  if (message.startsWith('tushare no_data')) return 'no_data';
   return 'unknown';
 };
 

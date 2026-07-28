@@ -3,6 +3,8 @@ import {
   type DailyBar,
   type DateRange,
   type Exchange,
+  type IndexQuote,
+  type MarketSnapshotItem,
   money,
   type Quote,
   type StockSearchCandidate,
@@ -22,6 +24,8 @@ import {
  *   参数：secid={marketId}.{code}&fields1=...&fields2=...&klt=101&fqt=1&beg=0&end=20500101
  *   返回 klines 是 `"YYYY-MM-DD,open,close,high,low,volume,amount,amplitude,turnoverRate"`
  *   字符串数组。
+ * - 全市场快照：https://push2.eastmoney.com/api/qt/clist/get
+ *   参数：pn/pz 分页 + fs（市场过滤）+ fields=f12,f13,f14,f2,f3（代码/市场/名称/最新价/涨跌幅）。
  *
  * 设计要点：
  * - 内部抛出 EastmoneyAdapterError（继承 Error），由 Manager 接住 + 路由到 fallback。
@@ -89,6 +93,7 @@ export interface EastmoneyAdapterOptions {
   readonly baseQuoteUrl?: string;
   readonly baseKlineUrl?: string;
   readonly baseSearchUrl?: string;
+  readonly baseClistUrl?: string;
 }
 
 /**
@@ -142,6 +147,52 @@ interface EastmoneySuggestResponse {
     readonly Data?: readonly EastmoneySuggestItem[] | null;
   };
 }
+
+/** clist 单条记录（fields=f12,f13,f14,f2,f3；f2/f3 停牌时返回 '-'）。 */
+interface EastmoneyClistItem {
+  readonly f12?: string; // 代码
+  readonly f13?: number; // 市场 id（1=SH，0=SZ）
+  readonly f14?: string; // 名称
+  readonly f2?: number | string; // 最新价（fltt=2 后为 float 元；'-' 表示无报价）
+  readonly f3?: number | string; // 涨跌幅%
+}
+
+interface EastmoneyClistResponse {
+  readonly rc: number;
+  readonly data?: {
+    readonly total?: number;
+    readonly diff?: readonly EastmoneyClistItem[] | null;
+  } | null;
+}
+
+/**
+ * clist 响应 → 全市场快照条目（纯函数，便于测试）。
+ * 本接口 fs 限定沪深 A 股，marketId 只应出现 1/0；其它值（B 股等漏网）丢弃。
+ * f2 缺失 / '-' / 非正（停牌）不丢弃条目，仅省略 close/changePct。
+ */
+export const parseEastmoneyClist = (json: EastmoneyClistResponse): MarketSnapshotItem[] => {
+  if (json.rc !== 0) {
+    throw new EastmoneyAdapterError(`Eastmoney 全市场快照失败: rc=${json.rc}`);
+  }
+  const items = json.data?.diff ?? [];
+  const result: MarketSnapshotItem[] = [];
+  for (const item of items) {
+    if (item.f12 === undefined || item.f14 === undefined) continue;
+    const exchange = item.f13 === 1 ? 'SH' : item.f13 === 0 ? 'SZ' : undefined;
+    if (exchange === undefined) continue;
+    const close = typeof item.f2 === 'number' && item.f2 > 0 ? item.f2 : undefined;
+    const changePct = typeof item.f3 === 'number' ? item.f3 : undefined;
+    result.push({
+      id: `${item.f12}.${exchange}`,
+      code: item.f12,
+      exchange,
+      name: item.f14,
+      ...(close !== undefined ? { close } : {}),
+      ...(changePct !== undefined ? { changePct } : {}),
+    });
+  }
+  return result;
+};
 
 /**
  * suggest 响应 → 候选列表（纯函数，便于测试）。
@@ -203,6 +254,26 @@ const KLINE_FIELDS = '1,2,3,4,5,6,8,9';
 /** suggest 接口公开 token（Eastmoney Web 前端同款，无需鉴权）。 */
 const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
 
+/**
+ * clist（全市场快照）参数：fs 覆盖深主板(t:6)+创业板(t:80)+沪主板(t:2)+科创板(t:23)。
+ * fid=f3 = 按涨跌幅降序（分组刷新的 llm 候选取前 N 条时偏向强势股，见 stock-group-design §4）。
+ */
+const CLIST_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23';
+const CLIST_FIELDS = 'f12,f13,f14,f2,f3';
+const CLIST_PAGE_SIZE = 500;
+
+/**
+ * 主要大盘指数（secid 用 Eastmoney marketId 约定：1=SH，0=SZ）。
+ * 名称不写死，以接口 f58 返回为准。
+ */
+const MAJOR_INDICES = [
+  { secid: '1.000001' }, // 上证指数
+  { secid: '0.399001' }, // 深证成指
+  { secid: '0.399006' }, // 创业板指
+  { secid: '1.000300' }, // 沪深300
+  { secid: '1.000688' }, // 科创50
+] as const;
+
 export class EastmoneyAdapter {
   readonly name = 'eastmoney';
 
@@ -212,6 +283,7 @@ export class EastmoneyAdapter {
   private readonly baseQuoteUrl: string;
   private readonly baseKlineUrl: string;
   private readonly baseSearchUrl: string;
+  private readonly baseClistUrl: string;
 
   constructor(options: EastmoneyAdapterOptions = {}) {
     this.clock = options.clock ?? ((): Date => new Date());
@@ -221,6 +293,7 @@ export class EastmoneyAdapter {
     this.baseKlineUrl =
       options.baseKlineUrl ?? 'https://push2his.eastmoney.com/api/qt/stock/kline/get';
     this.baseSearchUrl = options.baseSearchUrl ?? 'https://searchapi.eastmoney.com/api/suggest/get';
+    this.baseClistUrl = options.baseClistUrl ?? 'https://push2.eastmoney.com/api/qt/clist/get';
   }
 
   /**
@@ -248,6 +321,7 @@ export class EastmoneyAdapter {
       low: money(d.f45 && d.f45 > 0 ? d.f45 : closeRaw),
       close: money(closeRaw),
       volume,
+      ...(typeof d.f60 === 'number' && d.f60 > 0 ? { prevClose: money(d.f60) } : {}),
       source: 'eastmoney',
     };
   }
@@ -267,6 +341,55 @@ export class EastmoneyAdapter {
       }),
     );
     return result;
+  }
+
+  /**
+   * 大盘指数实时行情：顺序拉 MAJOR_INDICES 快照（复用 quote 接口）。
+   * 容错对齐 batchQuote：单只失败（含 f43 缺失 / <=0）跳过，全部失败抛
+   * EastmoneyAdapterError。不用并发：push2 对 5 只齐发会偶发整批拒绝
+   * （2026-07 实测）；偶发瞬时拒绝按只原地重试一次。指数低频且调用方
+   * 有缓存，顺序 + 重试的耗时可接受。
+   */
+  async fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
+    const indices: IndexQuote[] = [];
+    for (const { secid } of MAJOR_INDICES) {
+      try {
+        indices.push(await this.fetchIndexQuote(secid));
+      } catch (error) {
+        if (!(error instanceof EastmoneyAdapterError)) throw error;
+        try {
+          indices.push(await this.fetchIndexQuote(secid));
+        } catch (retryError) {
+          if (!(retryError instanceof EastmoneyAdapterError)) throw retryError;
+        }
+      }
+    }
+    if (indices.length === 0) {
+      throw new EastmoneyAdapterError('Eastmoney 指数行情全部失败');
+    }
+    return indices;
+  }
+
+  /** 拉单只指数快照；f43 缺失或 <=0 视为该只失败。 */
+  private async fetchIndexQuote(secid: string): Promise<IndexQuote> {
+    const url = `${this.baseQuoteUrl}?secid=${secid}&fields=${QUOTE_FIELDS}&fltt=2&invt=2`;
+    const json = await this.getJson<EastmoneyQuoteResponse>(url);
+    if (json.rc !== 0 || json.data === undefined) {
+      throw new EastmoneyAdapterError(`Eastmoney 指数快照失败: rc=${json.rc} secid=${secid}`);
+    }
+    const d = json.data;
+    if (d.f43 === undefined || d.f43 <= 0) {
+      throw new EastmoneyAdapterError(`Eastmoney 指数快照缺价: secid=${secid} f43=${d.f43}`);
+    }
+    return {
+      code: d.f57 ?? secid.split('.')[1] ?? secid,
+      name: d.f58 ?? secid,
+      close: money(d.f43),
+      change: d.f169 ?? 0,
+      changePct: d.f170 ?? 0,
+      ts: this.clock(),
+      source: 'eastmoney',
+    };
   }
 
   /** 拉日线。range 端点对齐 Eastmoney beg/end 参数。 */
@@ -330,6 +453,29 @@ export class EastmoneyAdapter {
     return parseEastmoneySuggest(json);
   }
 
+  /**
+   * 全市场快照（沪深 A 股，分组刷新候选全集）：clist 分页拉取，一页 500 条，
+   * 某页不足页大小或累计达到 total 时停止（全量约 11 页）。
+   * 顺序翻页不并发：push2 并发齐发偶发整批拒绝（同 fetchIndexQuotes 实测）。
+   * 任一页失败直接抛 EastmoneyAdapterError：返回半拉子全集会让分组刷新误算退出成员。
+   */
+  async fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]> {
+    const items: MarketSnapshotItem[] = [];
+    for (let page = 1; ; page++) {
+      const url =
+        `${this.baseClistUrl}?pn=${page}&pz=${CLIST_PAGE_SIZE}&po=1&np=1` +
+        `&fltt=2&invt=2&fid=f3&fs=${encodeURIComponent(CLIST_FS)}&fields=${CLIST_FIELDS}`;
+      const json = await this.getJson<EastmoneyClistResponse>(url);
+      const pageItems = parseEastmoneyClist(json);
+      items.push(...pageItems);
+      const total = json.data?.total;
+      if (pageItems.length < CLIST_PAGE_SIZE || (total !== undefined && items.length >= total)) {
+        break;
+      }
+    }
+    return items;
+  }
+
   private async getJson<T>(url: string): Promise<T> {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -360,4 +506,4 @@ const formatYmd = (d: Date): string => {
 };
 
 // Re-export 类型供 Manager 用
-export type { DailyBar, DateRange, Quote };
+export type { DailyBar, DateRange, IndexQuote, Quote };

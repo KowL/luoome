@@ -4,7 +4,7 @@ import type {
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
 import type { NotificationPayload } from './entity/notification.js';
-import type { DailyBar, DateRange, Quote } from './entity/quote.js';
+import type { DailyBar, DateRange, IndexQuote, Quote } from './entity/quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { RepositoryRegistry } from './repository/index.js';
@@ -25,6 +25,17 @@ export interface MarketDataAdapterLike {
    * search_stocks tool 优先走它；未实现或抛错时降级本地 StockRepository。
    */
   searchStocks?(query: string): Promise<StockSearchCandidate[]>;
+  /**
+   * 大盘指数实时行情（可选实现）。
+   * 数据源不支持指数行情时不实现该方法；调用方按「不支持」降级处理
+   * （fetch_index_quotes tool 返回 { indices: [], unsupported: true }）。
+   */
+  fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
+  /**
+   * 全市场快照（可选实现；分组刷新 / run_tactic scope=all-stocks 的候选全集来源）。
+   * 数据源不支持时不实现该方法；未实现或抛错时调用方降级本地 StockRepository。
+   */
+  fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
 }
 
 /** 股票搜索候选（外部数据源统一形状；id = '<code>.<EXCHANGE>'）。 */
@@ -33,6 +44,16 @@ export interface StockSearchCandidate {
   readonly code: string;
   readonly exchange: Exchange;
   readonly name: string;
+}
+
+/** 全市场快照条目（id 约定同 StockSearchCandidate）；close/changePct 缺失表示无报价。 */
+export interface MarketSnapshotItem {
+  readonly id: string;
+  readonly code: string;
+  readonly exchange: Exchange;
+  readonly name: string;
+  readonly close?: number;
+  readonly changePct?: number;
 }
 
 /** LLM 调用请求（ARCHITECTURE §6.3：system + schema + data）。 */

@@ -7,8 +7,9 @@ import { STANDARD_DISCLAIMERS } from '@luoome/core';
 import { toolRegistry } from '@luoome/tools';
 
 import { createCliContext } from './context.js';
-import { cmdMarketLimitUp } from './market-limit-up.js';
+import { isDaemonized, respawnDetached } from './daemon.js';
 import { loadProjectEnv } from './env.js';
+import { cmdMarketLimitUp } from './market-limit-up.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
 const VERSION = '0.8.0';
@@ -632,18 +633,21 @@ const cmdTui = (): Promise<number> => runLazyEntry('@luoome/tui', 'startTuiApp',
 /**
  * web serve：W4d 实际导出 startWeb({ port })（Hono，默认 5173，见 apps/web/src/server.ts）。
  * W5 联调已对齐：docs/archive/plan.md 未写死导出名，此处以 web 包实现为准。
+ * 默认后台运行（同 start），--foreground 保持前台。
  */
 const cmdWebServe = (flags: ReadonlyMap<string, string | boolean>): Promise<number> => {
   const portRaw = flagString(flags, 'port') ?? '5173';
   const port = parsePositiveInt(portRaw, 'port');
   if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
   const host = flagString(flags, 'host') ?? '127.0.0.1';
+  const daemon = maybeDaemonize(flags, false);
+  if (daemon !== null) return Promise.resolve(daemon);
   return runLazyEntry('@luoome/web', 'startWeb', [{ port, host }]);
 };
 
 /**
  * 一键 restart：按端口反查旧 PID 优雅停掉，再 start；省去「查 PID → kill → 启动」的组合命令。
- * 前台阻塞（语义同 `start`），调用方自行 `&` 后台化。
+ * 默认后台运行（见 maybeDaemonize），--foreground 保持前台阻塞。
  */
 const cmdRestart = async (
   flags: ReadonlyMap<string, string | boolean>,
@@ -668,6 +672,21 @@ const cmdRestart = async (
   return cmdStart(flags, json);
 };
 
+/** 未显式 --foreground 时后台重开当前命令；返回退出码 0，或 null 表示继续前台跑。 */
+const maybeDaemonize = (
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): number | null => {
+  if (flags.has('foreground') || isDaemonized()) return null;
+  const { pid, logPath } = respawnDetached();
+  if (json) {
+    console.log(JSON.stringify({ pid, logPath }));
+  } else {
+    console.log(`已在后台启动 pid=${pid}，日志：tail -f ${logPath}（前台运行加 --foreground）`);
+  }
+  return 0;
+};
+
 /** 一键 MVP：同一进程启动 Web，并在后台职责上进入 watch 长驻循环。 */
 const cmdStart = async (
   flags: ReadonlyMap<string, string | boolean>,
@@ -676,6 +695,8 @@ const cmdStart = async (
   const port = parsePositiveInt(flagString(flags, 'port') ?? '5173', 'port');
   if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
   const host = flagString(flags, 'host') ?? '127.0.0.1';
+  const daemon = maybeDaemonize(flags, json);
+  if (daemon !== null) return daemon;
   const mod = (await import('@luoome/web')) as {
     startWeb: (options: { port: number; host: string }) => Promise<Bun.Server<undefined>>;
   };
@@ -726,12 +747,13 @@ Advice:
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
-  start [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch]
-                               一键启动完整 MVP（Web + 盘中盯盘）
-  restart [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch]
+  start [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch] [--foreground]
+                               一键启动完整 MVP（Web + 盘中盯盘）；默认后台运行，日志
+                               追加到 $LUOOME_HOME/logs/luoome.log，--foreground 前台跑
+  restart [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch] [--foreground]
                                按端口反查旧进程 SIGTERM 后再 start，无需手动 kill
-  web serve [--port 5173] [--host 127.0.0.1]
-                               仅启动 Web 仪表盘
+  web serve [--port 5173] [--host 127.0.0.1] [--foreground]
+                               仅启动 Web 仪表盘；默认后台运行（同 start）
   workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules）
   watch [--interval 60] [--pool <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出

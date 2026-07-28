@@ -3,6 +3,7 @@ import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import type { FakeMarketAdapter } from '../testing/fake-market.js';
+import { QuoteCache } from './cache.js';
 import { MarketDataManager } from './manager.js';
 
 /**
@@ -401,7 +402,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
     await expect(mgr.fetchQuote('600519.SH')).rejects.toThrow(/quote fail/);
   });
 
-  it('进入 finalFallback 后 30 分钟内跳过主备源，未命中缓存的请求直达 tushare', async () => {
+  it('进入 finalFallback 后 30 分钟内仅该股票跳过主备源（per-key 隔离），其它股票不受影响', async () => {
     const primary = new AlwaysFailSource();
     const fallback = new AlwaysFailSource();
     let nowMs = 0;
@@ -411,20 +412,27 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
       finalFallback: await makeTushareFinal(),
       logger: silentLogger,
       clock: () => new Date(nowMs),
+      // TTL=0 让缓存立即过期，逐次穿透到降级链，便于观察主备源调用次数
+      quoteCache: new QuoteCache(1024, 0),
       finalFallbackSuppressMs: 30 * 60 * 1000,
     });
-    // 第一次：t=0，走完三层（tushare 成功并写缓存）
+    // 第一次：t=0，走完三层（tushare 成功）
     const first = await mgr.fetchQuote('600519.SH');
     expect(first.source).toBe('tushare');
     expect(primary.quoteCalls).toBe(1);
     expect(fallback.quoteCalls).toBe(1);
-    // 第二次：t=10 分钟，抑制窗口内；换一只未命中缓存的代码
+    // 第二次：t=10 分钟，同一只股票在抑制窗口内 → 直达第三源
     nowMs = 10 * 60 * 1000;
-    const second = await mgr.fetchQuote('000001.SZ');
+    const second = await mgr.fetchQuote('600519.SH');
     expect(second.source).toBe('tushare');
-    expect(primary.quoteCalls).toBe(1); // 未增：跳过主备源
+    expect(primary.quoteCalls).toBe(1); // 未增：窗口内跳过主备源
     expect(fallback.quoteCalls).toBe(1);
-    expect(mgr.stats().finalFallbackCalls).toBe(2); // 尝试次数，非成功次数
+    // 同一时刻换一只股票：不在该股的窗口内，主备源照常尝试（不熔断全池）
+    const third = await mgr.fetchQuote('000001.SZ');
+    expect(third.source).toBe('tushare');
+    expect(primary.quoteCalls).toBe(2);
+    expect(fallback.quoteCalls).toBe(2);
+    expect(mgr.stats().finalFallbackCalls).toBe(3); // 尝试次数，非成功次数
   });
 
   it('Eastmoney 成功时 finalFallbackCalls = 0', async () => {

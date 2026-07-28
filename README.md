@@ -125,6 +125,8 @@ bun install
 
 浏览器打开 `http://127.0.0.1:5173`。首次启动生成 `~/.luoome/web-token`，将文件内容粘贴到 Web「设置」页即可执行修改。
 
+`start` / `restart` / `web serve` 默认后台运行，终端立即解放，日志追加到 `~/.luoome/logs/luoome.log`（`tail -f` 查看）；需要前台调试时加 `--foreground`。
+
 ## 自动任务（cron）
 
 调度不内置：所有自动任务 = workflow + 外部 cron（每次运行落一条 `WorkflowRun` 审计，`list_workflow_runs` 可查）。建议在 crontab 中配置：

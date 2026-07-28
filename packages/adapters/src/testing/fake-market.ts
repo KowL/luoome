@@ -1,6 +1,7 @@
 import {
   type DailyBar,
   type DateRange,
+  type MarketSnapshotItem,
   money,
   type Quote,
   type StockSearchCandidate,
@@ -56,6 +57,7 @@ export class FakeMarketAdapter implements MarketDataAdapter {
       low,
       close,
       volume,
+      prevClose: money(base), // deterministic 昨收：与基准价一致（涨幅≈0）
       source: this.source,
     });
   }
@@ -117,6 +119,22 @@ export class FakeMarketAdapter implements MarketDataAdapter {
         s.name.toLowerCase().includes(q),
     ).map((s) => ({ id: s.id, code: s.code, exchange: s.exchange, name: s.name }));
     return Promise.resolve(result);
+  }
+
+  /**
+   * 全市场快照（测试投影）：返回 TEST_STOCKS 全集（与种子 stocks 一致，
+   * 保证走快照路径与走本地库降级的测试行为相同），close 取基准价。
+   */
+  fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]> {
+    return Promise.resolve(
+      TEST_STOCKS.map((s) => ({
+        id: s.id,
+        code: s.code,
+        exchange: s.exchange,
+        name: s.name,
+        close: this.basePriceFor(s.id),
+      })),
+    );
   }
 
   /** 已知 fixture 取基准价；未知代码 hash 出 [5, 500) 的稳定伪随机价。 */

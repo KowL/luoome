@@ -301,6 +301,10 @@ Adapter manager 提供：
 - 缓存（带 TTL）
 - 限速（per-adapter 配额）
 - 股票搜索路由（v0.8 起：`searchStocks` 走 primary → fallback，空数组不降级、抛错才降级）
+- 全市场快照路由（可选方法 `fetchMarketSnapshot`：分组刷新 / run_tactic `scope='all-stocks'`
+  的候选全集来源；Manager 路由到实现了该方法的源，带 TTL 缓存默认 5 分钟——
+  一轮 refresh-groups 内多个分组共享同一份快照；所有源都不支持时调用方降级本地 stocks 表。
+  eastmoney 实现走 `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板）
 
 surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`

@@ -1,9 +1,10 @@
-import type { ToolResult } from '@luoome/core';
+import type { ToolContext, ToolResult } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import { ensureStockStub } from '../internal/manual-entry.js';
 
-/** LLM 上下文里候选股票的最大条数（spec §8 已知边界：prompt 体积受限，超阈值截断）。 */
+/** LLM 上下文里候选股票的最大条数（spec §8 已知边界：prompt 体积受限，超阈值截断；取自全市场快照前 N 条）。 */
 const MAX_CANDIDATES = 200;
 
 export const ResolveLlmGroupInput = z.object({
@@ -25,7 +26,7 @@ export const ResolveLlmGroupOutput = z.object({
   ),
   /** LLM 原始返回条数（校验丢弃前）。 */
   rawCount: z.number().int().nonnegative(),
-  /** 因本地股票库不存在而被丢弃的 stockId。 */
+  /** 不在候选全集中（幻觉 stockId）而被丢弃的 stockId。 */
   dropped: z.array(z.string()),
 });
 
@@ -46,12 +47,65 @@ const RESOLVE_LLM_GROUP_SYSTEM =
   '按提示词选出最符合的股票。要求：只从 candidates 里选；每条给出一句中文 rationale（≤ 80 字）；' +
   '最多输出 maxMembers 条；只输出 JSON：{"members":[{"stockId":"...","rationale":"..."}]}。';
 
+/** LLM 候选条目（快照或本地库的统一投影）。 */
+interface LlmCandidate {
+  readonly stockId: string;
+  readonly code: string;
+  readonly name: string;
+  readonly industry?: string;
+  readonly close?: number;
+}
+
+/**
+ * 候选全集：全市场快照优先（clist 涨幅降序，取前 MAX_CANDIDATES 条，自带 close）；
+ * adapter 未实现 fetchMarketSnapshot 或失败时降级本地股票库 + batchQuote 补报价
+ * （报价失败再降级为无报价上下文）。
+ */
+const collectCandidates = async (ctx: ToolContext): Promise<LlmCandidate[]> => {
+  if (typeof ctx.adapters.market.fetchMarketSnapshot === 'function') {
+    try {
+      const items = await ctx.adapters.market.fetchMarketSnapshot();
+      return items.slice(0, MAX_CANDIDATES).map((item) => ({
+        stockId: item.id,
+        code: item.code,
+        name: item.name,
+        ...(item.close !== undefined ? { close: item.close } : {}),
+      }));
+    } catch (e) {
+      ctx.logger.warn('[resolve_llm_group] fetchMarketSnapshot 失败，降级本地股票库', {
+        err: String(e),
+      });
+    }
+  }
+  const stocks = [...(await ctx.repos.stock.search(''))].slice(0, MAX_CANDIDATES);
+  const closeByStock = new Map<string, number>();
+  try {
+    const quotes = await ctx.adapters.market.batchQuote(stocks.map((s) => s.id));
+    for (const [id, q] of quotes) closeByStock.set(id, q.close);
+  } catch (e) {
+    ctx.logger.warn('[resolve_llm_group] batchQuote 失败，降级为无报价上下文', {
+      err: String(e),
+    });
+  }
+  return stocks.map((s) => {
+    const close = closeByStock.get(s.id);
+    return {
+      stockId: s.id,
+      code: s.code,
+      name: s.name,
+      ...(s.industry !== undefined ? { industry: s.industry } : {}),
+      ...(close !== undefined ? { close } : {}),
+    };
+  });
+};
+
 /**
  * LLM 分组解析（分组化起，advice；workflow 内部通道，docs/ddd/stock-group-design.md §4/§6）。
  *
- * 链路：prompt + 最小上下文（本地股票列表 ≤200 条 + 当日行情快照）→ LLM generate
- * （zod schema-constrained）→ 逐条 repos.stock.findById 校验存在（丢弃不存在项，
- * spec「明确不做：LLM 输出未校验直接入库」）→ 截断 maxMembers → [{stockId, reason}]。
+ * 链路：prompt + 候选上下文（全市场快照前 200 条，降级本地股票列表 + 当日行情快照）→
+ * LLM generate（zod schema-constrained）→ 以候选全集逐条校验（幻觉 id 丢弃，
+ * 命中者自动落 stock stub，spec「明确不做：LLM 输出未校验直接入库」）→
+ * 截断 maxMembers → [{stockId, reason}]。
  *
  * LLM 调用异常 / 输出校验失败 → 返回 llm_error ToolResult（不抛）。
  */
@@ -63,17 +117,7 @@ export const resolveLlmGroupTool = defineTool({
   input: ResolveLlmGroupInput,
   output: ResolveLlmGroupOutput,
   handler: async (input, ctx) => {
-    // 最小上下文：全市场股票列表（截断）+ 当日行情快照（失败降级为无报价）
-    const stocks = [...(await ctx.repos.stock.search(''))].slice(0, MAX_CANDIDATES);
-    const closeByStock = new Map<string, number>();
-    try {
-      const quotes = await ctx.adapters.market.batchQuote(stocks.map((s) => s.id));
-      for (const [id, q] of quotes) closeByStock.set(id, q.close);
-    } catch (e) {
-      ctx.logger.warn('[resolve_llm_group] batchQuote 失败，降级为无报价上下文', {
-        err: String(e),
-      });
-    }
+    const candidates = await collectCandidates(ctx);
 
     let llmOut: unknown;
     try {
@@ -84,12 +128,12 @@ export const resolveLlmGroupTool = defineTool({
           prompt: input.prompt,
           maxMembers: input.maxMembers,
           ...(input.model !== undefined ? { model: input.model } : {}),
-          candidates: stocks.map((s) => ({
-            stockId: s.id,
-            code: s.code,
-            name: s.name,
-            ...(s.industry !== undefined ? { industry: s.industry } : {}),
-            ...(closeByStock.has(s.id) ? { close: closeByStock.get(s.id) } : {}),
+          candidates: candidates.map((c) => ({
+            stockId: c.stockId,
+            code: c.code,
+            name: c.name,
+            ...(c.industry !== undefined ? { industry: c.industry } : {}),
+            ...(c.close !== undefined ? { close: c.close } : {}),
           })),
         },
       });
@@ -120,17 +164,22 @@ export const resolveLlmGroupTool = defineTool({
       } satisfies ToolResult<never>;
     }
 
+    // 以候选全集为权威校验：不在 candidates 的 stockId 视为幻觉丢弃；
+    // 在 candidates 中的自动落 stock stub（全市场成员多数不在本地库，
+    // ensureStockStub 幂等 upsert，下游展示依赖 stock 行存在）。
+    const candidateById = new Map(candidates.map((c) => [c.stockId, c]));
     const members: Array<{ stockId: string; reason: string }> = [];
     const dropped: string[] = [];
     const seen = new Set<string>();
     for (const m of parsed.data.members) {
       if (seen.has(m.stockId)) continue;
       seen.add(m.stockId);
-      const stock = await ctx.repos.stock.findById(m.stockId);
-      if (stock === null) {
+      const candidate = candidateById.get(m.stockId);
+      if (candidate === undefined) {
         dropped.push(m.stockId);
         continue;
       }
+      await ensureStockStub(m.stockId, ctx, candidate.name);
       members.push({ stockId: m.stockId, reason: m.rationale });
     }
     const truncated = members.slice(0, input.maxMembers);

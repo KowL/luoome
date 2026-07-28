@@ -65,6 +65,48 @@ describe('resolve_llm_group', () => {
     expect(r.data.members.map((m) => m.stockId)).toEqual(['002594.SZ', '600519.SH']);
   });
 
+  it('候选来自全市场快照：成员不在本地 stocks 表 → 自动落 stub 并收入 members', async () => {
+    const ctx = await buildTestContext();
+    const base = ctx.adapters.market;
+    const market = {
+      name: 'stub-market',
+      fetchQuote: (code: string) => base.fetchQuote(code),
+      batchQuote: (codes: readonly string[]) => base.batchQuote(codes),
+      fetchDailyBars: (code: string, range: { start: Date; end: Date }) =>
+        base.fetchDailyBars(code, range),
+      fetchMarketSnapshot: () =>
+        Promise.resolve([
+          {
+            id: '000001.SZ',
+            code: '000001',
+            exchange: 'SZ' as const,
+            name: '平安银行',
+            close: 11.5,
+          },
+        ]),
+    };
+    const ctx2: ToolContext = { ...ctx, adapters: { ...ctx.adapters, market } };
+    const stub: LLMAdapterLike = {
+      name: 'stub-llm',
+      generate: <T>() =>
+        Promise.resolve({
+          members: [
+            { stockId: '000001.SZ', rationale: '快照里的银行股' },
+            { stockId: '999999.SZ', rationale: '不在快照里' },
+          ],
+        } as T),
+    };
+    const r = await resolveLlmGroupTool.execute({ prompt: 'x' }, withLlm(ctx2, stub));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.members).toEqual([{ stockId: '000001.SZ', reason: '快照里的银行股' }]);
+    expect(r.data.dropped).toEqual(['999999.SZ']);
+    // 自动落 stub（带快照里的名称）
+    const saved = await ctx.repos.stock.findById('000001.SZ');
+    expect(saved?.name).toBe('平安银行');
+    expect(await ctx.repos.stock.findById('999999.SZ')).toBeNull();
+  });
+
   it('LLM 调用抛异常 → llm_error（retryable）', async () => {
     const ctx = await buildTestContext();
     const stub: LLMAdapterLike = {

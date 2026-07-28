@@ -78,9 +78,11 @@ export class MarketSettingsStore {
   }
 
   runtimeEnv(): Record<string, string | undefined> {
+    // secret 文件里是用户在设置页显式保存的值，必须优先于启动环境（baseEnv）：
+    // 否则项目 .env 被 Bun 加载进 process.env 后，同名键会让 UI 保存静默失效。
     return {
-      ...parseEnvFile(readText(this.secretPath)),
       ...this.baseEnv,
+      ...parseEnvFile(readText(this.secretPath)),
       ...this.sessionEnv,
     };
   }

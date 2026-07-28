@@ -55,7 +55,7 @@ Content-Type: application/json
 
 | 能力 | api_name | 备注 |
 |---|---|---|
-| `fetchQuote` | `rt_k` | 实时 Level-1 快照，close 即最新价，vol 单位=股；**需单独开通权限**（[doc_id=290](https://tushare.pro/document/1?doc_id=290)） |
+| `fetchQuote` | `rt_k` | 实时 Level-1 快照，price 即最新价，vol 单位=股；**需单独开通权限**（[doc_id=290](https://tushare.pro/document/1?doc_id=290)） |
 | `fetchDailyBars` | `daily` + `adj_factor` | 日线 vol 单位=手；复权因子单独请求并合并；均需 2000 积分起 |
 | `searchStocks` | `stock_basic` | `exchange` 用 `SSE` / `SZSE`；客户端截断 20 条 |
 
@@ -70,8 +70,10 @@ Eastmoney → Tencent；显式启用 Tushare 后，它可以处于任意优先�
 
 - 窗口外：按配置依次尝试 primary → fallback → finalFallback；
 - 窗口内：跳过前两个槽位，直接调用 finalFallback；
-- `lastFinalFallbackAt` 在每次准备调用 finalFallback 时更新，即使调用最终失败也会刷新窗口；
-- 窗口状态由 manager 全局共享，不按股票代码或 quote / daily / search 操作隔离。
+- 每个 key（股票代码；搜索按 query）的窗口时间在每次准备调用 finalFallback 时更新，
+  即使调用最终失败也会刷新该 key 的窗口；
+- 窗口按 key 隔离：某只股票启用第三源只抑制该股票，不再全局熔断整个股票池
+  （避免一只港股 / 故障股把全池打进第三源 30 分钟）。
 
 成功结果写入对应内存缓存；相同 cache key 在缓存 TTL 内不会再次发起远端请求。本设计
 保留这一既有语义，不把抑制窗口描述成某个具体数据源的冷却窗口。
@@ -123,7 +125,8 @@ tushare 失败必须保留可检索的错误前缀。Manager 当前不按错误�
 - envelope `code≠0` → `tushare upstream_error: <code> <msg>`（token / 积分 / 权限问题都在这里，常见 2002）；
 - Schema 解析失败 → `tushare parse: ...`；
 - 不支持的市场 → `unsupported_market: <code>`；
-- 报价命中但空 → 抛 `tushare not_found: <code>`；
+- 报价命中但空（多为远端限流 / 抖动的瞬时空响应）→ 原地重试一次，仍空抛 `tushare no_data: <code>`；
+- 报价行 OHLC 全零（盘前 / 停牌尚无成交，`rt_k` 返回全 0）→ 抛 `tushare no_data: <code>`，走既有降级链，不进入 Zod 校验；
 - 日线或搜索命中但空 → 返回空数组，由现有调用方按其契约处理。
 
 ### 3.7 不改 core 实体
@@ -152,7 +155,7 @@ MarketDataManager.fetchQuote / fetchDailyBars / searchStocks
   │       ├─ TushareMarketAdapter.fetchQuote
   │       │     ├─ 不支持的市场 → 抛 unsupported_market
   │       │     ├─ tushareQuery('rt_k', {ts_code: 完整代码})
-  │       │     ├─ 解析 envelope → Quote（close 即最新价，vol=shares）
+  │       │     ├─ 解析 envelope → Quote（price 即最新价，vol=shares）
   │       │     └─ 失败 → 转译为 Error(tushare network/timeout/http/upstream_error/parse)
   │       ├─ 成功 → 写缓存 → 返回 source='tushare'
   │       └─ 失败 → 抛 Error，manager 视作最终失败
@@ -250,10 +253,12 @@ async fetchQuote(stockCode: string): Promise<Quote> {
     { ts_code: tsCode },
     this.config,
     this.fetchImpl,
-    ['ts_code', 'trade_time', 'open', 'high', 'low', 'close', 'vol'],
+    ['ts_code', 'trade_time', 'open', 'high', 'low', 'price', 'vol'],
   );
   const row = rows[0];
   if (row === undefined) throw new Error(`tushare not_found: ${tsCode}`);
+  // rt_k 盘前 / 停牌尚未有成交时价格全 0：不是合法 Quote，按无数据抛错走降级。
+  if (isZeroQuoteRow(row)) throw new Error(`tushare no_data: ${tsCode} 快照价格全零`);
   const parsed = QuoteRowSchema.parse(row);
 
   return {
@@ -263,16 +268,17 @@ async fetchQuote(stockCode: string): Promise<Quote> {
     open: money(parsed.open),
     high: money(parsed.high),
     low: money(parsed.low),
-    close: money(parsed.close), // rt_k 的 close 即最新价
+    close: money(parsed.price), // rt_k 的 price 即最新价（接口没有 close 列）
     volume: parsed.vol,         // rt_k 的 vol 已是股
     source: 'tushare',
   };
 }
 ```
 
-`QuoteRowSchema` 显式校验 `ts_code` / `trade_time` / `open` / `high` / `low` / `close` /
-`vol`；`close` 映射到 `Quote.close`。优先使用远端成交时间（无时区按 +08:00 解释），
-远端缺失或不可解析时才使用本地抓取时间。
+`QuoteRowSchema` 显式校验 `ts_code` / `trade_time` / `open` / `high` / `low` / `price` /
+`vol`；`price` 映射到 `Quote.close`。注意 `rt_k` 的最新价列名是 `price`，请求 `close`
+会被接口静默丢弃（盘中响应缺列，盘前则返回全零行）——这是实盘踩过的坑。优先使用
+远端成交时间（无时区按 +08:00 解释），远端缺失或不可解析时才使用本地抓取时间。
 
 ### 5.5 batchQuote
 
@@ -550,8 +556,9 @@ logger.info('tushare.fetchDailyBars ok', { stockCode, source: 'tushare', count: 
 `packages/adapters/src/tushare/{client,envelope}.test.ts` 覆盖：
 
 1. 不支持的市场（HK / US / BJ）抛 `unsupported_market`；
-2. `fetchQuote` 正常响应 → 使用完整 `ts_code` 请求 `rt_k`，把 `close` 映射为最新价、
-   `vol` 映射为 shares、优先使用远端 `trade_time`，返回 source='tushare'；
+2. `fetchQuote` 正常响应 → 使用完整 `ts_code` 请求 `rt_k`，把 `price` 映射为最新价、
+   `vol` 映射为 shares、优先使用远端 `trade_time`，返回 source='tushare'；价格全零行
+   （盘前 / 停牌）→ 抛 `tushare no_data`；
 3. `fetchQuote` 4xx → 转译为 `tushare http` 错误且不重试；
 4. `fetchQuote` 5xx → 重试耗尽后抛错；
 5. `fetchQuote` 网络错误 / 超时 → 转译为 `tushare network` / `tushare timeout`；

@@ -1,4 +1,12 @@
-import type { DailyBar, DateRange, Logger, Quote, StockSearchCandidate } from '@luoome/core';
+import type {
+  DailyBar,
+  DateRange,
+  IndexQuote,
+  Logger,
+  MarketSnapshotItem,
+  Quote,
+  StockSearchCandidate,
+} from '@luoome/core';
 
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
 import type { MarketDataAdapter } from './types.js';
@@ -14,6 +22,10 @@ type QuoteAdapter = {
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
   /** 外部股票搜索（v0.8 起，可选；未实现的源在 searchStocks 路由时跳过）。 */
   searchStocks?(query: string): Promise<StockSearchCandidate[]>;
+  /** 大盘指数行情（可选；未实现的源在 fetchIndexQuotes 路由时跳过）。 */
+  fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
+  /** 全市场快照（可选；未实现的源在 fetchMarketSnapshot 路由时跳过）。 */
+  fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
 };
 
 /** 错误识别：Manager 需要把异常归类（adapter / network）。 */
@@ -60,13 +72,23 @@ export interface MarketDataManagerOptions {
   readonly fallback: QuoteAdapter;
   /** 可选第三真实数据源；生产默认不配置。 */
   readonly finalFallback?: QuoteAdapter;
+  /**
+   * 指数行情专用兜底源（可选）：仅 fetchIndexQuotes 路由使用，
+   * 不参与 fetchQuote / batchQuote / fetchDailyBars / searchStocks 路由。
+   */
+  readonly indexFallback?: QuoteAdapter;
   readonly quoteCache?: QuoteCache;
   readonly dailyBarCache?: DailyBarCache;
   readonly rateLimitPerSec?: number;
   readonly logger: Logger;
   readonly clock?: () => Date;
-  /** 第三数据源抑制窗口。默认 30 分钟。 */
+  /** 第三数据源抑制窗口（按股票 / 搜索 query 隔离）。默认 30 分钟。 */
   readonly finalFallbackSuppressMs?: number;
+  /**
+   * 全市场快照缓存 TTL。默认 5 分钟：refresh-groups 逐组刷新会在一轮运行内
+   * 反复取候选全集，TTL 内复用同一份快照，避免每组都全量拉一遍。
+   */
+  readonly marketSnapshotTtlMs?: number;
 }
 
 export interface ManagerStats {
@@ -75,6 +97,7 @@ export interface ManagerStats {
   readonly fallbackCalls: number;
   readonly fallbackFailures: number;
   readonly finalFallbackCalls: number;
+  readonly indexFallbackCalls: number;
   readonly cache: { readonly quote: LRUStats; readonly dailyBar: LRUStats };
 }
 
@@ -87,6 +110,9 @@ export interface ManagerStats {
  * 3. 调 primary.fetchQuote；成功写缓存 + 返回
  * 4. primary 失败 → logger.warn → 调 fallback.fetchQuote；成功写缓存 + 返回
  * 5. fallback 也失败：有第三真实数据源则尝试；否则明确抛错。
+ *
+ * 第三源抑制窗口是 per-key（股票 / 搜索 query）隔离的：某只股票主备失败启用第三源后，
+ * 只有该股票在窗口内跳过主备源，不影响池内其它股票——避免一只港股 / 故障股熔断全池。
  */
 export class MarketDataManager implements MarketDataAdapter {
   readonly name = 'manager';
@@ -94,30 +120,60 @@ export class MarketDataManager implements MarketDataAdapter {
   private readonly primary: QuoteAdapter;
   private readonly fallback: QuoteAdapter;
   private readonly finalFallback: QuoteAdapter | undefined;
+  private readonly indexFallback: QuoteAdapter | undefined;
   private readonly quoteCache: QuoteCache;
   private readonly dailyBarCache: DailyBarCache;
   private readonly rateLimiter: RateLimiter;
   private readonly logger: Logger;
   private readonly clock: () => Date;
   private readonly suppressMs: number;
+  private readonly marketSnapshotTtlMs: number;
+  /** 全市场快照 TTL 缓存（单 key：全市场只有一份）。 */
+  private marketSnapshotCache:
+    | { readonly at: number; readonly items: readonly MarketSnapshotItem[] }
+    | undefined;
 
   private primaryCalls = 0;
   private primaryFailures = 0;
   private fallbackCalls = 0;
   private fallbackFailures = 0;
   private finalFallbackCalls = 0;
-  private lastFinalFallbackAt = Number.NEGATIVE_INFINITY;
+  private indexFallbackCalls = 0;
+  /** 各 key（股票代码 / 搜索 query）最近一次启用第三源的时间；窗口是 per-key 隔离的。 */
+  private readonly finalFallbackAtByKey = new Map<string, number>();
 
   constructor(options: MarketDataManagerOptions) {
     this.primary = options.primary;
     this.fallback = options.fallback;
     this.finalFallback = options.finalFallback;
+    this.indexFallback = options.indexFallback;
     this.quoteCache = options.quoteCache ?? new QuoteCache();
     this.dailyBarCache = options.dailyBarCache ?? new DailyBarCache();
     this.rateLimiter = new RateLimiter(options.rateLimitPerSec ?? 10);
     this.logger = options.logger;
     this.clock = options.clock ?? ((): Date => new Date());
     this.suppressMs = options.finalFallbackSuppressMs ?? 30 * 60 * 1000;
+    this.marketSnapshotTtlMs = options.marketSnapshotTtlMs ?? 5 * 60 * 1000;
+  }
+
+  /** 该 key 是否处于第三源抑制窗口内（窗口内跳过主备源，直达第三源）。 */
+  private inSuppressWindow(key: string, now: Date): boolean {
+    const at = this.finalFallbackAtByKey.get(key);
+    return at !== undefined && now.getTime() - at < this.suppressMs;
+  }
+
+  /** 记录一次第三源启用并刷新该 key 的抑制窗口；日志区分「真实失败」与「窗口内跳过」。 */
+  private noteFinalFallback(key: string, now: Date, what: string): void {
+    this.finalFallbackCalls += 1;
+    const wasSuppressed = this.inSuppressWindow(key, now);
+    this.finalFallbackAtByKey.set(key, now.getTime());
+    if (wasSuppressed) {
+      this.logger.warn(`manager.${what} 抑制窗口内跳过主备源，直接使用第三源`, { key });
+    } else {
+      this.logger.error(`manager.${what} primary and fallback failed, using final source`, {
+        key,
+      });
+    }
   }
 
   /** 拉单股快照（带缓存 + 限速 + fallback + 静默降级）。 */
@@ -129,7 +185,7 @@ export class MarketDataManager implements MarketDataAdapter {
     }
 
     const now = this.clock();
-    const inSuppress = now.getTime() - this.lastFinalFallbackAt < this.suppressMs;
+    const inSuppress = this.inSuppressWindow(stockCode, now);
 
     // 主源
     if (!inSuppress) {
@@ -177,12 +233,7 @@ export class MarketDataManager implements MarketDataAdapter {
     }
 
     // 可选第三真实数据源：结果写缓存，避免抑制窗口内反复请求。
-    this.finalFallbackCalls += 1;
-    this.lastFinalFallbackAt = now.getTime();
-    this.logger.error('manager.fetchQuote primary and fallback failed, using final source', {
-      stockCode,
-      inSuppress,
-    });
+    this.noteFinalFallback(stockCode, now, 'fetchQuote');
     const quote = await this.finalFallback.fetchQuote(stockCode);
     this.quoteCache.set(quote);
     return quote;
@@ -223,7 +274,7 @@ export class MarketDataManager implements MarketDataAdapter {
     if (cached !== undefined) return [...cached];
 
     const now = this.clock();
-    const inSuppress = now.getTime() - this.lastFinalFallbackAt < this.suppressMs;
+    const inSuppress = this.inSuppressWindow(stockCode, now);
 
     if (!inSuppress) {
       try {
@@ -254,11 +305,7 @@ export class MarketDataManager implements MarketDataAdapter {
     if (this.finalFallback === undefined) {
       throw new Error(`all market sources failed for daily bars: ${stockCode}`);
     }
-    this.finalFallbackCalls += 1;
-    this.lastFinalFallbackAt = now.getTime();
-    this.logger.error('manager.fetchDailyBars primary and fallback failed, using final source', {
-      stockCode,
-    });
+    this.noteFinalFallback(stockCode, now, 'fetchDailyBars');
     return await this.finalFallback.fetchDailyBars(stockCode, range);
   }
 
@@ -269,7 +316,7 @@ export class MarketDataManager implements MarketDataAdapter {
    */
   async searchStocks(query: string): Promise<StockSearchCandidate[]> {
     const now = this.clock();
-    const inSuppress = now.getTime() - this.lastFinalFallbackAt < this.suppressMs;
+    const inSuppress = this.inSuppressWindow(query, now);
     let lastError: unknown;
     if (!inSuppress) {
       for (const source of [this.primary, this.fallback]) {
@@ -288,17 +335,105 @@ export class MarketDataManager implements MarketDataAdapter {
       }
     }
     if (typeof this.finalFallback?.searchStocks === 'function') {
-      this.finalFallbackCalls += 1;
-      this.lastFinalFallbackAt = now.getTime();
-      this.logger.error('manager.searchStocks primary and fallback failed, using final source', {
-        query,
-      });
+      this.noteFinalFallback(query, now, 'searchStocks');
       return this.finalFallback.searchStocks(query);
     }
     if (lastError !== undefined) {
       throw lastError;
     }
     return [];
+  }
+
+  /**
+   * 全市场快照（分组刷新候选全集）：primary → fallback → 可选第三真实数据源，
+   * 跳过未实现该方法的源（路由规则同 searchStocks）。带 TTL 缓存：一轮
+   * refresh-groups 内多个分组共享同一份快照。所有实现的源都失败时抛最后那个错误；
+   * 没有任何源实现时抛错，由调用方降级本地股票库。
+   */
+  async fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]> {
+    const now = this.clock();
+    if (
+      this.marketSnapshotCache !== undefined &&
+      now.getTime() - this.marketSnapshotCache.at < this.marketSnapshotTtlMs
+    ) {
+      return this.marketSnapshotCache.items;
+    }
+    let lastError: unknown;
+    for (const source of [this.primary, this.fallback]) {
+      if (typeof source.fetchMarketSnapshot !== 'function') continue;
+      try {
+        await this.rateLimiter.acquire();
+        const items = await source.fetchMarketSnapshot();
+        this.marketSnapshotCache = { at: now.getTime(), items };
+        return items;
+      } catch (error) {
+        this.logger.warn('manager.fetchMarketSnapshot source failed', {
+          sourceName: source.name,
+          error: errorMessage(error),
+        });
+        lastError = error;
+      }
+    }
+    if (typeof this.finalFallback?.fetchMarketSnapshot === 'function') {
+      this.noteFinalFallback('__market_snapshot__', now, 'fetchMarketSnapshot');
+      const items = await this.finalFallback.fetchMarketSnapshot();
+      this.marketSnapshotCache = { at: now.getTime(), items };
+      return items;
+    }
+    if (lastError !== undefined) {
+      throw lastError;
+    }
+    throw new Error('no market data source supports fetchMarketSnapshot');
+  }
+
+  /**
+   * 大盘指数实时行情：primary → fallback → 可选第三真实数据源，
+   * 跳过未实现该方法的源（路由规则同 searchStocks；指数快照低频，不做缓存）。
+   * 所有实现的源都失败时抛最后那个错误；没有任何源实现时明确抛错，
+   * 由调用方（fetch_index_quotes tool）按错误模型转译。
+   */
+  async fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
+    let lastError: unknown;
+    for (const source of [this.primary, this.fallback]) {
+      if (typeof source.fetchIndexQuotes !== 'function') continue;
+      try {
+        await this.rateLimiter.acquire();
+        return await source.fetchIndexQuotes();
+      } catch (error) {
+        this.logger.warn('manager.fetchIndexQuotes source failed', {
+          sourceName: source.name,
+          error: errorMessage(error),
+        });
+        lastError = error;
+      }
+    }
+    if (typeof this.finalFallback?.fetchIndexQuotes === 'function') {
+      this.noteFinalFallback('__indices__', this.clock(), 'fetchIndexQuotes');
+      return this.finalFallback.fetchIndexQuotes();
+    }
+    // 指数专用兜底源：链路全失败 / 未实现后才启用；它自己失败时直接抛它的错误。
+    if (typeof this.indexFallback?.fetchIndexQuotes === 'function') {
+      this.indexFallbackCalls += 1;
+      try {
+        await this.rateLimiter.acquire();
+        const indices = await this.indexFallback.fetchIndexQuotes();
+        this.logger.warn('manager.fetchIndexQuotes chain failed, indexFallback ok', {
+          sourceName: this.indexFallback.name,
+        });
+        return indices;
+      } catch (error) {
+        this.logger.warn('manager.fetchIndexQuotes indexFallback failed', {
+          sourceName: this.indexFallback.name,
+          error: errorMessage(error),
+        });
+        throw error;
+      }
+    }
+    if (lastError !== undefined) {
+      throw lastError;
+    }
+    // 走到这里说明没有任何源实现该方法（每个实现的源要么已返回、要么置了 lastError）。
+    throw new Error('no market data source supports fetchIndexQuotes');
   }
 
   stats(): ManagerStats {
@@ -308,6 +443,7 @@ export class MarketDataManager implements MarketDataAdapter {
       fallbackCalls: this.fallbackCalls,
       fallbackFailures: this.fallbackFailures,
       finalFallbackCalls: this.finalFallbackCalls,
+      indexFallbackCalls: this.indexFallbackCalls,
       cache: {
         quote: this.quoteCache.stats(),
         dailyBar: this.dailyBarCache.stats(),
@@ -322,7 +458,9 @@ export class MarketDataManager implements MarketDataAdapter {
     this.fallbackCalls = 0;
     this.fallbackFailures = 0;
     this.finalFallbackCalls = 0;
-    this.lastFinalFallbackAt = Number.NEGATIVE_INFINITY;
+    this.indexFallbackCalls = 0;
+    this.finalFallbackAtByKey.clear();
+    this.marketSnapshotCache = undefined;
     this.quoteCache.clear();
     this.dailyBarCache.clear();
     this.rateLimiter.reset();

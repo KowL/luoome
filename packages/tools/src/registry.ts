@@ -27,6 +27,7 @@ import { deleteResearchNoteTool } from './tools/delete-research-note.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { deleteStockGroupTool } from './tools/delete-stock-group.js';
 import { deleteStockPoolTool } from './tools/delete-stock-pool.js';
+import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
@@ -195,6 +196,7 @@ export const toolRegistry: Registry = createRegistry([
   analyzePositionTool,
   fetchQuoteTool,
   batchQuoteTool,
+  fetchIndexQuotesTool,
   syncQuotesTool,
   searchStocksTool,
   computeIndicatorsTool,

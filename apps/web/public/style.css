@@ -509,6 +509,10 @@ code {
 }
 
 .route-header {
+  /* 进场动画 fill-mode both 让每个 route 直接子节点都成为叠加上下文，
+     不给 header 抬层的话，搜索下拉会被后面的 card 盖住。 */
+  position: relative;
+  z-index: 5;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -834,6 +838,11 @@ code {
   color: var(--neg);
 }
 
+/* 单元格内第二行（涨跌幅 / 代码等辅助信息），颜色继承父格 */
+.table .cell-sub {
+  font-size: var(--text-sm, 12px);
+}
+
 .table tfoot td {
   border-top: 1px solid var(--line-strong);
   border-bottom: none;
@@ -1078,6 +1087,144 @@ code {
 
 .stat .delta.neg {
   color: var(--neg);
+}
+
+/* 指数条 */
+.index-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.index-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-variant-numeric: tabular-nums;
+}
+
+.index-chip .index-name {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.index-chip .index-close {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.index-chip .index-change {
+  font-size: var(--text-sm);
+}
+
+.index-chip.pos .index-change,
+.index-chip.pos .index-close {
+  color: var(--pos);
+}
+
+.index-chip.neg .index-change,
+.index-chip.neg .index-close {
+  color: var(--neg);
+}
+
+.index-chip.flat .index-change {
+  color: var(--neutral);
+}
+
+.index-asof {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* 实时看板 */
+.board-table .board-row {
+  cursor: pointer;
+}
+
+.board-table .board-holding {
+  background: var(--accent-soft);
+}
+
+.board-table .board-holding:hover {
+  background: rgba(56, 225, 198, 0.16);
+}
+
+.board-name-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.badge-holding {
+  color: var(--accent);
+  border-color: rgba(56, 225, 198, 0.4);
+  background: var(--accent-soft);
+}
+
+.board-group-tag {
+  margin-right: 4px;
+  color: var(--tea);
+  border-color: rgba(111, 141, 255, 0.35);
+  background: var(--tea-soft);
+}
+
+.board-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+/* 今日预警 / 建议两栏 */
+.dashboard-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.alert-row {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(146, 163, 190, 0.03);
+  font-size: var(--text-sm);
+}
+
+.alert-row .alert-time {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.alert-row .alert-reason {
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alert-row.alert-urgent {
+  border-color: rgba(251, 92, 108, 0.45);
+  background: var(--pos-soft);
 }
 
 /* 数据健康 */
@@ -1726,6 +1873,8 @@ code {
 }
 
 .plan-template-card {
+  display: flex;
+  flex-direction: column;
   text-align: left;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -1769,7 +1918,8 @@ code {
 .template-actions {
   display: flex;
   gap: 8px;
-  margin-top: var(--space-3);
+  margin-top: auto;
+  padding-top: var(--space-3);
 }
 
 /* 弹窗内 JSON 编辑区 */

@@ -190,10 +190,13 @@ export const getStockMarketViewTool = defineTool({
 
     const quoteDateStart = new Date(`${dateInShanghai(quote.ts)}T00:00:00.000Z`);
     const previousClose = derivePreviousClose(bars, quoteDateStart);
-    const candles = buildMarketCandles(bars, quote, end);
+    const session = computeMarketSession(now);
+    // 盘前 / 非交易日当日尚无成交；Quote.ts 是抓取时间而非成交时间，
+    // 此时把 Quote 拼成当日蜡烛会伪造一根未开盘的 K 线（§8.5 前提：当日已有交易）。
+    const quoteForCandle = session === 'pre-open' || session === 'non-trading-day' ? null : quote;
+    const candles = buildMarketCandles(bars, quoteForCandle, end);
     const { change, changePct } = deriveQuoteChange(quote, previousClose);
     const indicators = computeSimpleIndicators(candlesToBars(stock.id, candles));
-    const session = computeMarketSession(now);
     const sources = [...new Set([quote.source, ...candles.map((c) => c.source)])];
     const status = buildMarketDataStatus({
       quoteLive,

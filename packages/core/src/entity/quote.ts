@@ -11,6 +11,8 @@ export interface Quote {
   readonly low: Money;
   readonly close: Money; // 实时价取最近成交价，放入 close
   readonly volume: number; // 股（各源统一换算：Eastmoney/Tencent 的手 ×100）
+  /** 昨收（可选）：数据源给得出才填（eastmoney f60 / tushare pre_close；tencent 分钟端点无此字段）。 */
+  readonly prevClose?: Money | undefined;
   readonly source: string;
 }
 
@@ -34,6 +36,17 @@ export interface DateRange {
   readonly end: Date;
 }
 
+/** 大盘指数实时行情（代码、名称、最新点位、涨跌、时间、源；点位复用 Money 精度不变量）。 */
+export interface IndexQuote {
+  readonly code: string;
+  readonly name: string;
+  readonly close: Money; // 指数最新点位
+  readonly change: number; // 涨跌额（点）
+  readonly changePct: number; // 涨跌幅（%）
+  readonly ts: Date;
+  readonly source: string;
+}
+
 export const QuoteSchema = z.object({
   stockId: z.string().min(1),
   ts: z.coerce.date(),
@@ -42,6 +55,7 @@ export const QuoteSchema = z.object({
   low: MoneySchema,
   close: MoneySchema,
   volume: z.number().nonnegative(),
+  prevClose: MoneySchema.optional(),
   source: z.string().min(1),
 });
 
@@ -60,4 +74,14 @@ export const DailyBarSchema = z.object({
 export const DateRangeSchema = z.object({
   start: z.coerce.date(),
   end: z.coerce.date(),
+});
+
+export const IndexQuoteSchema = z.object({
+  code: z.string().min(1),
+  name: z.string().min(1),
+  close: MoneySchema,
+  change: z.number(),
+  changePct: z.number(),
+  ts: z.coerce.date(),
+  source: z.string().min(1),
 });

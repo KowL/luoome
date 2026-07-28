@@ -71,6 +71,199 @@ const bindDashboardSearch = () => {
   createStockSearchBox(wrap, { onSelect: (stock) => navigateToStock(stock) });
 };
 
+/* ---- 看板纯函数（pages.test.js 直接单测） ---- */
+
+/**
+ * 成员涨跌幅（小数）：昨收基准 (close − prevClose) / prevClose。
+ * quote 缺 prevClose（如 tencent 分钟端点无昨收）时返回 null，前端显示「—」，
+ * 不回退今开基准——(close−open)/open 不是市场口径的涨跌幅。
+ */
+const memberChangePct = (quote) => {
+  const close = quote?.close;
+  const prevClose = quote?.prevClose;
+  if (
+    typeof close === 'number' &&
+    Number.isFinite(close) &&
+    typeof prevClose === 'number' &&
+    Number.isFinite(prevClose) &&
+    prevClose > 0
+  ) {
+    return (close - prevClose) / prevClose;
+  }
+  return null;
+};
+
+/**
+ * 看板排序：持仓行置顶（保持服务端返回顺序），其余按 |changePct| 降序，
+ * 无涨跌幅（null）排最后。
+ */
+const sortBoardItems = (items) => {
+  const holdings = items.filter((item) => item.holding !== null && item.holding !== undefined);
+  const rest = items.filter((item) => item.holding === null || item.holding === undefined);
+  rest.sort((a, b) => {
+    if (a.changePct === null && b.changePct === null) return 0;
+    if (a.changePct === null) return 1;
+    if (b.changePct === null) return -1;
+    return Math.abs(b.changePct) - Math.abs(a.changePct);
+  });
+  return [...holdings, ...rest];
+};
+
+/** 看板涨跌平统计；无行情 / 无基准（changePct 为 null）计入平。 */
+const boardStats = (items) => ({
+  up: items.filter((item) => typeof item.changePct === 'number' && item.changePct > 0).length,
+  down: items.filter((item) => typeof item.changePct === 'number' && item.changePct < 0).length,
+  flat: items.filter((item) => item.changePct === null || item.changePct === 0).length,
+});
+
+/* ---- 看板 / 指数条 / 今日预警渲染 ---- */
+
+const fmtTime = (d) => {
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleTimeString('zh-CN', { hour12: false });
+};
+
+const ALERT_PRIORITY_LABEL = { urgent: '急', important: '重要', normal: '普通' };
+const ALERT_PRIORITY_BADGE = {
+  urgent: 'badge-urgent',
+  important: 'badge-important',
+  normal: 'badge-normal',
+};
+const ALERT_PRIORITY_ORDER = { urgent: 0, important: 1, normal: 2 };
+const ALERT_DIRECTION_BADGE = {
+  buy: { cls: 'badge-buy', label: '买入' },
+  sell: { cls: 'badge-sell', label: '卖出' },
+  watch: { cls: 'badge-watch', label: '关注' },
+};
+
+/** 指数条：unsupported 或空数组时整条隐藏；红涨绿跌沿用 --pos/--neg。 */
+const renderIndices = (indicesData, asOf) => {
+  const strip = $('#dashboard-indices');
+  if (strip === null) return;
+  const list = Array.isArray(indicesData?.indices) ? indicesData.indices : [];
+  if (indicesData?.unsupported === true || list.length === 0) {
+    strip.hidden = true;
+    strip.replaceChildren();
+    return;
+  }
+  strip.hidden = false;
+  const chips = list.map((idx) => {
+    const cls = idx.change > 0 ? 'pos' : idx.change < 0 ? 'neg' : 'flat';
+    return el('span', `index-chip ${cls}`, [
+      el('span', 'index-name', idx.name),
+      el('span', 'index-close mono', fmtNum(idx.close)),
+      el('span', 'index-change mono', `${fmtSigned(idx.change)}（${fmtSigned(idx.changePct)}%）`),
+    ]);
+  });
+  mount(strip, [...chips, el('span', 'index-asof', `截至 ${fmtTime(asOf)}`)]);
+};
+
+const boardAlertCell = (todayTrigger) => {
+  if (todayTrigger === null || todayTrigger === undefined) return el('span', 'muted', '—');
+  return el('span', 'board-alert', [
+    el('span', 'mono', `${todayTrigger.count} 次`),
+    el(
+      'span',
+      `badge ${ALERT_PRIORITY_BADGE[todayTrigger.maxPriority] ?? ''}`,
+      ALERT_PRIORITY_LABEL[todayTrigger.maxPriority] ?? todayTrigger.maxPriority,
+    ),
+  ]);
+};
+
+const boardRow = (item) => {
+  const chgCls =
+    item.changePct === null ? '' : item.changePct > 0 ? 'pos' : item.changePct < 0 ? 'neg' : '';
+  const row = el('tr', item.holding !== null ? 'board-row board-holding' : 'board-row');
+  const nameChildren = [el('span', 'board-name', item.name)];
+  if (item.holding !== null) nameChildren.push(el('span', 'badge badge-holding', '持仓'));
+  row.append(
+    el('td', null, [
+      el('div', 'board-name-cell', nameChildren),
+      el('div', 'cell-sub mono', item.stockId),
+    ]),
+    el('td', `num ${chgCls}`, item.quote === null ? '--' : fmtNum(item.quote.close)),
+    el('td', `num ${chgCls}`, item.changePct === null ? '--' : `${fmtSigned(item.changePct)}%`),
+    el(
+      'td',
+      'num',
+      item.holding === null || item.holding.todayPnl === null
+        ? '—'
+        : fmtSigned(item.holding.todayPnl),
+    ),
+    el('td', 'num', item.holding === null ? '—' : fmtNum(item.holding.marketValue)),
+    el(
+      'td',
+      null,
+      item.groups.length === 0
+        ? el('span', 'muted', '—')
+        : item.groups.map((g) => el('span', 'badge board-group-tag', g)),
+    ),
+    el('td', null, boardAlertCell(item.todayTrigger)),
+  );
+  row.addEventListener('click', () => navigateTo(buildMarketLink(item.stockId)));
+  return row;
+};
+
+const renderBoard = (items) => {
+  const wrap = $('#dashboard-board');
+  if (wrap === null) return;
+  const meta = $('#dashboard-board-meta');
+  if (items.length === 0) {
+    if (meta !== null) meta.textContent = '';
+    mount(wrap, el('p', 'placeholder', '看板为空：添加持仓，或在「成员与盯盘方案」启用盯盘分组。'));
+    return;
+  }
+  const stats = boardStats(items);
+  if (meta !== null) {
+    meta.textContent = `${items.length} 只 · 涨${stats.up} 跌${stats.down} 平${stats.flat}`;
+  }
+  mount(
+    wrap,
+    el('table', 'table board-table', [
+      el(
+        'thead',
+        null,
+        el('tr', null, [
+          el('th', null, '名称'),
+          el('th', 'num', '现价'),
+          el('th', 'num', '涨跌幅'),
+          el('th', 'num', '今日盈亏'),
+          el('th', 'num', '市值'),
+          el('th', null, '分组'),
+          el('th', null, '预警'),
+        ]),
+      ),
+      el('tbody', null, sortBoardItems(items).map(boardRow)),
+    ]),
+  );
+};
+
+/** 今日预警紧凑行：时间 / 股票 / 方向 / 原因 / 优先级 badge；urgent 行高亮。 */
+const alertRow = (t) => {
+  const priority = t.priority ?? 'normal';
+  const dir = ALERT_DIRECTION_BADGE[t.direction] ?? { cls: '', label: t.direction ?? '--' };
+  return el('div', `alert-row${priority === 'urgent' ? ' alert-urgent' : ''}`, [
+    el('span', 'alert-time mono', fmtTime(t.createdAt)),
+    stockMarketLink(t.stockId, t.stockId),
+    el('span', `badge ${dir.cls}`, dir.label),
+    el('span', 'alert-reason', typeof t.reason === 'string' ? t.reason : ''),
+    el(
+      'span',
+      `badge ${ALERT_PRIORITY_BADGE[priority] ?? ''}`,
+      ALERT_PRIORITY_LABEL[priority] ?? priority,
+    ),
+  ]);
+};
+
+const sortAlerts = (triggers) =>
+  [...triggers].sort((a, b) => {
+    const pa = ALERT_PRIORITY_ORDER[a.priority] ?? ALERT_PRIORITY_ORDER.normal;
+    const pb = ALERT_PRIORITY_ORDER[b.priority] ?? ALERT_PRIORITY_ORDER.normal;
+    if (pa !== pb) return pa - pb;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+
 const renderDashboard = async (setStatus) => {
   bindDashboardSearch();
   const result = await callApi('/api/dashboard');
@@ -79,15 +272,22 @@ const renderDashboard = async (setStatus) => {
     return;
   }
   const {
+    asOf,
     holdings: d,
     advice: adviceData,
     groups,
     pools,
     watch,
-    triggers,
     staleGroupCount,
     metrics,
+    indices,
+    board,
+    todayTriggers,
   } = result.data;
+
+  // 指数条 + 实时看板
+  renderIndices(indices, asOf);
+  renderBoard(Array.isArray(board) ? board : []);
 
   // 总市值 / 盈亏
   $('#dash-total-value').textContent = fmtNum(d.totalValue);
@@ -99,7 +299,7 @@ const renderDashboard = async (setStatus) => {
   pnlPctNode.className = `delta ${d.totalPnL > 0 ? 'pos' : d.totalPnL < 0 ? 'neg' : ''}`;
   $('#dash-holdings-count').textContent = String(d.holdings.length);
 
-  // 今日建议
+  // 今日建议 Top 3
   const advices = adviceData.advices;
   $('#dash-advice-count').textContent = String(advices.length);
   const top = [...advices].sort((a, b) => b.confidence - a.confidence).slice(0, 3);
@@ -131,15 +331,14 @@ const renderDashboard = async (setStatus) => {
   $('#dash-pool-count').textContent = String(pools.total);
   $('#dash-group-count').textContent = String(groups.total);
   $('#dash-stale-count').textContent = String(staleGroupCount);
+
+  // 今日预警（urgent 置顶，至多 8 条）
+  const alerts = sortAlerts(Array.isArray(todayTriggers) ? todayTriggers : []).slice(0, 8);
   mount(
     $('#dash-trigger-list'),
-    triggers.triggers.length === 0
-      ? el('p', 'placeholder', '暂无触发。盯盘即使没有信号，也会记录运行心跳。')
-      : el(
-          'div',
-          'trigger-strip',
-          triggers.triggers.slice(0, 5).map((t) => triggerCard(t, navigateTo)),
-        ),
+    alerts.length === 0
+      ? el('p', 'placeholder', '今日暂无触发。盯盘即使没有信号，也会记录运行心跳。')
+      : el('div', 'alert-list', alerts.map(alertRow)),
   );
 
   // v0.7 策略预警指标（§11 / §12）
@@ -147,7 +346,7 @@ const renderDashboard = async (setStatus) => {
     const card = $('#dash-metrics-card');
     if (card !== null) card.hidden = false;
     $('#dash-metric-total').textContent = String(metrics.todayTotal ?? 0);
-    const PRIORITY_LABEL = { urgent: '急', important: '重要', normal: '普通' };
+    const PRIORITY_LABEL = ALERT_PRIORITY_LABEL;
     const DELIVERY_LABEL = {
       'not-requested': '仅记录',
       'suppressed-cooldown': '冷却',
@@ -205,17 +404,19 @@ const renderHoldings = async (setStatus) => {
     setStatus(`加载失败：${r.error.kind}`, true);
     return;
   }
-  const { holdings, totalValue, totalPnL, totalPnLPct } = r.data;
+  const { holdings, totalValue, totalPnL, totalPnLPct, totalTodayPnl, totalTodayPnlPct } = r.data;
   // 缓存给「分析全部」复用，批量入口不再重复拉 /api/holdings
   currentHoldings = holdings;
   if (holdings.length === 0) {
-    mount(body, el('tr', null, el('td', { colspan: 9, class: 'placeholder' }, '（无持仓）')));
+    mount(body, el('tr', null, el('td', { colspan: 8, class: 'placeholder' }, '（无持仓）')));
   } else {
     mount(
       body,
       holdings.map((item) => {
         const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
         const pnlCls = item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '';
+        const todayCls =
+          item.todayPnl === null ? '' : item.todayPnl > 0 ? 'pos' : item.todayPnl < 0 ? 'neg' : '';
         const h = {
           id: item.holding.id,
           stockId: item.holding.stockId,
@@ -232,17 +433,25 @@ const renderHoldings = async (setStatus) => {
           return b;
         };
         const row = el('tr', null, [
-          el('td', null, stockMarketLink(item.holding.stockId, code)),
           el('td', null, [
-            stockMarketLink(item.holding.stockId, item.stockName),
-            adviceSlot(item.holding.stockId),
+            el('div', null, [
+              stockMarketLink(item.holding.stockId, item.stockName),
+              adviceSlot(item.holding.stockId),
+            ]),
+            el('div', 'cell-sub muted', stockMarketLink(item.holding.stockId, code)),
           ]),
           el('td', 'num', String(item.holding.quantity)),
           el('td', 'num', fmtNum(item.holding.avgCost)),
           el('td', 'num', fmtNum(item.currentPrice)),
           el('td', 'num', fmtNum(item.marketValue)),
-          el('td', `num ${pnlCls}`, fmtSigned(item.pnl)),
-          el('td', `num ${pnlCls}`, fmtPct(item.pnlPct)),
+          el('td', `num ${todayCls}`, [
+            el('div', null, item.todayPnl === null ? '--' : fmtSigned(item.todayPnl)),
+            el('div', 'cell-sub', item.todayPnlPct === null ? '' : fmtPct(item.todayPnlPct)),
+          ]),
+          el('td', `num ${pnlCls}`, [
+            el('div', null, fmtSigned(item.pnl)),
+            el('div', 'cell-sub', fmtPct(item.pnlPct)),
+          ]),
           el('td', null, [
             el('div', 'row-actions', [
               actionBtn(
@@ -262,12 +471,21 @@ const renderHoldings = async (setStatus) => {
     );
   }
   $('#holdings-total-value').textContent = fmtNum(totalValue);
-  const pnlNode = $('#holdings-total-pnl');
-  pnlNode.textContent = fmtSigned(totalPnL);
-  pnlNode.className = `num ${totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : ''}`;
-  const pctNode = $('#holdings-total-pnl-pct');
-  pctNode.textContent = fmtPct(totalPnLPct);
-  pctNode.className = `num ${totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : ''}`;
+  const totalPnlCls = totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : '';
+  mount($('#holdings-total-pnl'), [
+    el('div', totalPnlCls, fmtSigned(totalPnL)),
+    el('div', 'cell-sub', fmtPct(totalPnLPct)),
+  ]);
+  const todayTotalNode = $('#holdings-total-today-pnl');
+  if (totalTodayPnl === null) {
+    todayTotalNode.textContent = '--';
+  } else {
+    const totalTodayCls = totalTodayPnl > 0 ? 'text-pos' : totalTodayPnl < 0 ? 'text-neg' : '';
+    mount(todayTotalNode, [
+      el('div', totalTodayCls, fmtSigned(totalTodayPnl)),
+      el('div', 'cell-sub', totalTodayPnlPct === null ? '' : fmtPct(totalTodayPnlPct)),
+    ]);
+  }
   $('#holdings-foot').hidden = holdings.length === 0;
   renderTrades(tradesResult);
   await backfillLatestAdvice(holdings);
@@ -813,21 +1031,9 @@ const showGroupDetail = async (id, setStatus) => {
           members.map((member) => {
             const quote = quoteMap.get(member.stockId) ?? null;
             const close = quote?.close;
-            const open = quote?.open;
-            let pctText = '—';
-            let pctClass = '';
-            if (
-              typeof close === 'number' &&
-              Number.isFinite(close) &&
-              typeof open === 'number' &&
-              Number.isFinite(open) &&
-              open !== 0
-            ) {
-              const pct = (close - open) / open;
-              const sign = pct > 0 ? '+' : '';
-              pctText = `${sign}${(pct * 100).toFixed(2)}%`;
-              pctClass = pct > 0 ? 'text-pos' : pct < 0 ? 'text-neg' : '';
-            }
+            const pct = memberChangePct(quote);
+            const pctText = pct === null ? '—' : `${pct > 0 ? '+' : ''}${(pct * 100).toFixed(2)}%`;
+            const pctClass = pct === null ? '' : pct > 0 ? 'text-pos' : pct < 0 ? 'text-neg' : '';
             const line1 = el('div', 'member-line-1', [
               stockMarketLink(member.stockId, [
                 el('strong', 'mono', member.stockId),
@@ -1964,9 +2170,11 @@ export {
   analyzeAllHoldings,
   bindPlanCreator,
   bindSettingsActions,
+  boardStats,
   cancelAnalyzeAllHoldings,
   errorKindLabel,
   filterAdvices,
+  memberChangePct,
   refreshSelectedGroupDetail,
   renderAdviceList,
   renderDashboard,
@@ -1983,4 +2191,5 @@ export {
   routeStockId,
   runTacticScan,
   runWatchOnce,
+  sortBoardItems,
 };

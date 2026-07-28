@@ -19,6 +19,7 @@ const EXPECTED_TOOL_NAMES = [
   // v0.2 新增
   'fetch_quote',
   'batch_quote',
+  'fetch_index_quotes',
   'sync_quotes',
   'search_stocks',
   'compute_indicators',
@@ -127,6 +128,7 @@ describe('toolRegistry', () => {
     expect(externalTools).toEqual([
       'agent_run',
       'batch_quote',
+      'fetch_index_quotes',
       'fetch_quote',
       'get_stock_market_view',
       'refresh_stock_group',

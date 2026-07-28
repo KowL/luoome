@@ -66,4 +66,14 @@ describe('MarketSettingsStore', () => {
       /不能重复/,
     );
   });
+
+  it('secret 文件里已保存的设置优先于启动环境（项目 .env 残留同名键不影响生效）', () => {
+    const { store } = createStore({
+      LUOOME_MARKET_SOURCES: 'tushare,eastmoney,tencent',
+      TUSHARE_TOKEN: 'test-tushare-token',
+    });
+    writeFileSync(store.secretPath, 'LUOOME_MARKET_SOURCES=tushare\n');
+    expect(store.runtimeEnv().LUOOME_MARKET_SOURCES).toBe('tushare');
+    expect(store.read().activeOrder).toEqual(['tushare']);
+  });
 });

@@ -52,7 +52,7 @@ const tushareEnvelope = (
 ): Response =>
   new Response(JSON.stringify({ code: 0, msg: '', data: { fields, items } }), { status: 200 });
 
-const QUOTE_FIELDS = ['ts_code', 'trade_time', 'open', 'high', 'low', 'close', 'vol'];
+const QUOTE_FIELDS = ['ts_code', 'trade_time', 'open', 'high', 'low', 'price', 'vol'];
 const QUOTE_ROW = ['600519.SH', '2026-07-24T07:00:00.000Z', 1690, 1710, 1685, 1700.5, 123_456];
 
 interface CapturedRequest {
@@ -121,7 +121,7 @@ describe('TushareMarketAdapter 市场支持范围', () => {
 });
 
 describe('TushareMarketAdapter.fetchQuote', () => {
-  it('正常响应：rt_k + 完整 ts_code；close 即最新价、vol 已是股、优先远端 trade_time、source=tushare', async () => {
+  it('正常响应：rt_k + 完整 ts_code；price 即最新价、vol 已是股、优先远端 trade_time、source=tushare', async () => {
     const { adapter, requests, infos } = makeAdapter(() =>
       Promise.resolve(tushareEnvelope(QUOTE_FIELDS, [QUOTE_ROW])),
     );
@@ -139,8 +139,22 @@ describe('TushareMarketAdapter.fetchQuote', () => {
     expect(infos.some((l) => l.message === 'tushare.fetchQuote ok')).toBe(true);
   });
 
+  it('rt_k 返回 pre_close → Quote.prevClose 填充；缺省时无 prevClose', async () => {
+    const fields = [...QUOTE_FIELDS, 'pre_close'];
+    const row = [...QUOTE_ROW, 1680];
+    const { adapter } = makeAdapter(() => Promise.resolve(tushareEnvelope(fields, [row])));
+    const quote = await adapter.fetchQuote('600519.SH');
+    expect(quote.prevClose).toBe(1680);
+
+    const { adapter: adapter2 } = makeAdapter(() =>
+      Promise.resolve(tushareEnvelope(QUOTE_FIELDS, [QUOTE_ROW])),
+    );
+    const quote2 = await adapter2.fetchQuote('600519.SH');
+    expect(quote2.prevClose).toBeUndefined();
+  });
+
   it('trade_time 缺失时退回本地抓取时间', async () => {
-    const fields = ['ts_code', 'open', 'high', 'low', 'close', 'vol'];
+    const fields = ['ts_code', 'open', 'high', 'low', 'price', 'vol'];
     const row = ['600519.SH', 99, 101, 98, 100, 1000];
     const { adapter } = makeAdapter(() => Promise.resolve(tushareEnvelope(fields, [row])));
     const quote = await adapter.fetchQuote('600519.SH');
@@ -202,12 +216,36 @@ describe('TushareMarketAdapter.fetchQuote', () => {
     await expect(adapter.fetchQuote('600519.SH')).rejects.toThrow(/tushare upstream_error/);
   });
 
-  it('items 为空 → 抛 not_found', async () => {
-    const { adapter } = makeAdapter(() => Promise.resolve(tushareEnvelope(QUOTE_FIELDS, [])));
-    await expect(adapter.fetchQuote('600519.SH')).rejects.toThrow(/tushare not_found/);
+  it('items 为空（远端限流/抖动）→ 原地重试一次，仍空抛 no_data', async () => {
+    const { adapter, requests, warns } = makeAdapter(() =>
+      Promise.resolve(tushareEnvelope(QUOTE_FIELDS, [])),
+    );
+    await expect(adapter.fetchQuote('600519.SH')).rejects.toThrow(/tushare no_data/);
+    expect(requests).toHaveLength(2); // 首次 + 一次重试
+    expect(warns.at(-1)?.meta?.kind).toBe('no_data');
   });
 
-  it('行字段缺 close → 抛 parse 错误', async () => {
+  it('items 首次为空但重试命中 → 正常返回 Quote', async () => {
+    let calls = 0;
+    const { adapter, requests } = makeAdapter(() => {
+      calls += 1;
+      return Promise.resolve(tushareEnvelope(QUOTE_FIELDS, calls === 1 ? [] : [QUOTE_ROW]));
+    });
+    const quote = await adapter.fetchQuote('600519.SH');
+    expect(quote.close).toBe(1700.5);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('rt_k 盘前 / 停牌价格全零 → 抛 no_data，而不是冗长的 parse 错误', async () => {
+    const zeroRow = ['300857.SZ', null, 0, 0, 0, 0, 0];
+    const { adapter, warns } = makeAdapter(() =>
+      Promise.resolve(tushareEnvelope(QUOTE_FIELDS, [zeroRow])),
+    );
+    await expect(adapter.fetchQuote('300857.SZ')).rejects.toThrow(/tushare no_data/);
+    expect(warns.at(-1)?.meta?.kind).toBe('no_data');
+  });
+
+  it('响应行缺 price 列（rt_k 最新价字段被请求错）→ 抛 parse 错误', async () => {
     const fields = ['ts_code', 'trade_time', 'open', 'high', 'low', 'vol'];
     const row = ['600519.SH', '2026-07-24T07:00:00.000Z', 1690, 1710, 1685, 1234];
     const { adapter } = makeAdapter(() => Promise.resolve(tushareEnvelope(fields, [row])));
@@ -338,6 +376,77 @@ describe('TushareMarketAdapter.batchQuote', () => {
     const result = await adapter.batchQuote(['600519.SH', '000001.SZ', '00700.HK']);
     expect(result.size).toBe(1);
     expect(result.get('600519.SH')?.source).toBe('tushare');
+  });
+});
+
+describe('TushareMarketAdapter.fetchIndexQuotes', () => {
+  const INDEX_FIELDS = ['ts_code', 'trade_date', 'close', 'pre_close', 'change', 'pct_chg'];
+  const INDEX_ITEMS = [
+    ['000001.SH', '20260724', 3500.5, 3488.2, 12.3, 0.35],
+    // 同一指数的旧行：应被最新行覆盖
+    ['000001.SH', '20260723', 3488.2, 3470.0, 18.2, 0.52],
+    ['399001.SZ', '20260724', 11000.1, 10900.0, 100.1, 0.92],
+    ['399006.SZ', '20260724', 2200.2, 2180.0, 20.2, 0.93],
+    ['000300.SH', '20260724', 4100.3, 4080.0, 20.3, 0.5],
+    ['000688.SH', '20260724', 980.4, 970.0, 10.4, 1.07],
+  ];
+
+  it('正常解析：一次 index_daily 请求拿 5 只，每只取最新日线，名称用常量映射', async () => {
+    const { adapter, requests, infos } = makeAdapter(() =>
+      Promise.resolve(tushareEnvelope(INDEX_FIELDS, INDEX_ITEMS)),
+    );
+    const indices = await adapter.fetchIndexQuotes();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.apiName).toBe('index_daily');
+    expect(String(requests[0]?.params.ts_code)).toBe(
+      '000001.SH,399001.SZ,399006.SZ,000300.SH,000688.SH',
+    );
+    expect(indices.map((q) => q.code)).toEqual([
+      '000001.SH',
+      '399001.SZ',
+      '399006.SZ',
+      '000300.SH',
+      '000688.SH',
+    ]);
+    const first = indices[0];
+    expect(first?.name).toBe('上证指数');
+    expect(first?.close).toBe(3500.5);
+    expect(first?.change).toBe(12.3);
+    expect(first?.changePct).toBe(0.35);
+    expect(first?.ts).toEqual(new Date('2026-07-24T00:00:00.000Z'));
+    expect(first?.source).toBe('tushare');
+    expect(infos.some((l) => l.message === 'tushare.fetchIndexQuotes ok')).toBe(true);
+  });
+
+  it('部分缺失：缺行或 close 非法的指数跳过，其余按清单顺序返回', async () => {
+    const { adapter, warns } = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(INDEX_FIELDS, [
+          ['000001.SH', '20260724', 3500.5, 3488.2, 12.3, 0.35],
+          // 399001.SZ / 000300.SH 整只缺行
+          ['399006.SZ', '20260724', 0, 2180.0, 20.2, 0.93], // close=0 → 非法跳过
+          ['000688.SH', '20260724', 980.4, 970.0, 10.4, 1.07],
+        ]),
+      ),
+    );
+    const indices = await adapter.fetchIndexQuotes();
+    expect(indices.map((q) => q.code)).toEqual(['000001.SH', '000688.SH']);
+    expect(
+      warns.filter((w) => w.message === 'tushare.fetchIndexQuotes index missing'),
+    ).toHaveLength(3);
+  });
+
+  it('全部缺失 → 抛 tushare no_data', async () => {
+    const { adapter, warns } = makeAdapter(() =>
+      Promise.resolve(tushareEnvelope(INDEX_FIELDS, [])),
+    );
+    await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/tushare no_data/);
+    expect(warns.at(-1)?.meta?.kind).toBe('no_data');
+  });
+
+  it('请求失败（HTTP 5xx）→ 转译为 tushare http 错误', async () => {
+    const { adapter } = makeAdapter(() => Promise.resolve(new Response('boom', { status: 500 })));
+    await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/tushare http/);
   });
 });
 

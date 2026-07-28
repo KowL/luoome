@@ -1,7 +1,9 @@
 import type {
   DailyBar,
   DateRange,
+  IndexQuote,
   MarketDataAdapterLike,
+  MarketSnapshotItem,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
@@ -22,4 +24,8 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
   /** 外部股票搜索（v0.8 起；Manager 路由到实现了该方法的源）。 */
   searchStocks?(query: string): Promise<StockSearchCandidate[]>;
+  /** 大盘指数实时行情（可选；Manager 路由到实现了该方法的源）。 */
+  fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
+  /** 全市场快照（可选；Manager 路由到实现了该方法的源）。 */
+  fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
 }

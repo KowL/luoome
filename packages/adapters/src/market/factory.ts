@@ -92,10 +92,18 @@ export const createMarketAdapterFromEnv = (
   const fallback = sources[1] ?? unavailableMarketSource;
   const finalFallback = sources[2];
 
+  // 指数行情专用兜底：指数条是仪表盘辅助数据，eastmoney 公开接口无需凭据，
+  // 独立于用户股票行情源配置兜底（如 tushare 代理网关未实现 index_daily 的场景）。
+  // 链路里已有 eastmoney 实例时不重复构造（指数路由本就会命中它）。
+  const indexFallback = sources.some((s) => s instanceof EastmoneyAdapter)
+    ? undefined
+    : new EastmoneyAdapter(sourceOpts);
+
   return new MarketDataManager({
     primary,
     fallback,
     ...(finalFallback === undefined ? {} : { finalFallback }),
+    ...(indexFallback === undefined ? {} : { indexFallback }),
     ...(deps.quoteCacheTtlMs === undefined
       ? {}
       : { quoteCache: new QuoteCache(1024, deps.quoteCacheTtlMs) }),

@@ -1,10 +1,21 @@
-import { MoneySchema, PercentageSchema } from '@luoome/core';
+import {
+  dateInShanghai,
+  type Money,
+  MoneySchema,
+  PercentageSchema,
+  type ToolContext,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
 import { enrichHolding, HoldingPnlSchema, summarizePnl } from '../internal/holding-pnl.js';
+import { derivePreviousClose, normalizeDailyBars } from '../internal/market-view.js';
 
 const HoldingStatusSchema = z.enum(['active', 'closed', 'all']);
+
+/** 昨收回看窗口：覆盖长假（春节 / 国庆）足够。 */
+const PREVIOUS_CLOSE_LOOKBACK_DAYS = 15;
+const DAY_MS = 86_400_000;
 
 export const ListHoldingsInput = z.object({
   /** 账户 id；缺省为当前用户默认账户。 */
@@ -21,6 +32,9 @@ export const ListHoldingsOutput = z.object({
   totalCost: MoneySchema,
   totalPnL: MoneySchema,
   totalPnLPct: PercentageSchema,
+  /** 今日盈亏合计；任一持仓缺昨收时为 null。 */
+  totalTodayPnl: MoneySchema.nullable(),
+  totalTodayPnlPct: PercentageSchema.nullable(),
 });
 
 export const listHoldingsTool = defineTool({
@@ -53,13 +67,55 @@ export const listHoldingsTool = defineTool({
     // 最新实时价优先；实时源缺失或整体失败时保留本地最后快照。
     const quotes = new Map(storedQuotes);
     for (const [stockId, quote] of liveQuotes) quotes.set(stockId, quote);
+    const previousCloses = await resolvePreviousCloses(ctx, stockIds);
     const items = await Promise.all(
       holdings.map(async (holding) => {
         const stock = await ctx.repos.stock.findById(holding.stockId);
-        return enrichHolding(holding, quotes.get(holding.stockId), stock?.name ?? holding.stockId);
+        return enrichHolding(
+          holding,
+          quotes.get(holding.stockId),
+          stock?.name ?? holding.stockId,
+          previousCloses.get(holding.stockId) ?? null,
+        );
       }),
     );
 
     return { accountId, status: input.status, holdings: items, ...summarizePnl(items) };
   },
 });
+
+/** 逐股取昨收：实时日线优先，失败回退本地缓存；都取不到为 null（今日盈亏留空）。 */
+const resolvePreviousCloses = async (
+  ctx: ToolContext,
+  stockIds: readonly string[],
+): Promise<Map<string, Money | null>> => {
+  const todayStart = new Date(`${dateInShanghai(ctx.clock())}T00:00:00.000Z`);
+  const start = new Date(todayStart.getTime() - PREVIOUS_CLOSE_LOOKBACK_DAYS * DAY_MS);
+  const uniqueIds = [...new Set(stockIds)];
+  const entries = await Promise.all(
+    uniqueIds.map(async (stockId): Promise<readonly [string, Money | null]> => {
+      try {
+        const bars = await ctx.adapters.market.fetchDailyBars(stockId, {
+          start,
+          end: todayStart,
+        });
+        const close = derivePreviousClose(
+          normalizeDailyBars(bars, start, todayStart).bars,
+          todayStart,
+        );
+        if (close !== null) return [stockId, close];
+      } catch (error) {
+        ctx.logger.warn('list_holdings live daily bars unavailable, using stored bars', {
+          stockId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const cached = await ctx.repos.dailyBar.findInRange(stockId, start, todayStart);
+      return [
+        stockId,
+        derivePreviousClose(normalizeDailyBars(cached, start, todayStart).bars, todayStart),
+      ];
+    }),
+  );
+  return new Map(entries);
+};

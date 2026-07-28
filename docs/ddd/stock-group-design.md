@@ -92,7 +92,8 @@ interface GroupMemberSnapshot {
   1. 加载 enabled 且 resolver ∈ {formula, llm} 的分组
   2. 逐组刷新：
      - `formula` → `run_tactic(scope='all-stocks', persistSignals=true, lookbackDays)`；命中且 score ≥ minScore（缺省 60）→ 写新批次，reason = `战法 <id> 命中，score=<n>`
-     - `llm` → 新 tool `resolve_llm_group`（见 §6）：prompt + 最小上下文（全市场股票列表 + 当日行情快照）→ LLM 输出 stockIds + rationale → 逐条 `search_stocks` 校验存在 → 截断到 maxMembers → 写新批次
+     - `llm` → 新 tool `resolve_llm_group`（见 §6）：prompt + 候选上下文（全市场快照前 200 条 + 当日行情）→ LLM 输出 stockIds + rationale → 以候选全集逐条校验（幻觉 id 丢弃，命中者自动落 stock stub）→ 截断到 maxMembers → 写新批次
+     - 成员逐条 `ensureStockStub`：全市场刷新的成员多数不在本地 stocks 表，下游展示依赖 stock 行存在（幂等 upsert）
      - **llm 失败（llm_error / 输出校验失败）→ 保留旧快照 + 记录 stale，绝不清空**
   3. 成员变化检测：对比新旧批次，输出 `entered / exited` 列表（供通知与未来的 membership-change 规则）
 - output：`{ refreshed, failed, staleGroups, entered, exited }`
@@ -157,9 +158,22 @@ interface GroupMemberSnapshot {
 
 - LLM 分组天然非确定：同一 prompt 两次刷新成员可能不同。靠快照 + reason 落库保证可审计，不保证可复现
 - `holdings` resolver 无快照 → 成员变化检测对它不适用（持仓变化本身有 trades 表记录）
-- 全市场股票列表 + 行情快照的 prompt 体积受限于 stocks 表规模；实现取 `MAX_CANDIDATES=200` 截断（`packages/tools/src/tools/resolve-llm-group.ts`），后续可按市场/流动性细化
+- 全市场候选全集 = adapter `fetchMarketSnapshot`（eastmoney clist，沪深 A 股，涨幅降序）；llm 候选取前 `MAX_CANDIDATES=200` 条（`packages/tools/src/tools/resolve-llm-group.ts`），排序偏强势股，后续可按市场/流动性细化；adapter 未实现或失败时降级本地 stocks 表
 - 动态分组刷新失败标 stale 后，watch 继续用旧快照盯盘；Web 通过 `list_watch_plans` 直接展示
   stale 状态。分组被显式停用后不再读取旧成员
+
+## 实现追记（2026-07-28，全市场刷新）
+
+- **候选全集从本地 stocks 表改为真全市场**：adapter 层新增可选方法 `fetchMarketSnapshot`
+  （eastmoney `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板；Manager 路由 + TTL 缓存默认
+  5 分钟，一轮 refresh-groups 共享一份快照）。此前「全市场扫描」实际是本地 stocks 表
+  （仅手工录入/持仓 stub）。adapter 未实现 / 失败时保留旧语义（降级本地表）
+- **formula 全市场性能**：快照价在战法 DSL 不引用 `quote.open/high/low/volume` 时直接合成
+  quote，免 ~5400 次逐股 `fetchQuote`；K 线仍需逐股拉，评估循环改小并发池（8），
+  Manager rate limiter（默认 10/s）仍是硬上限，全量扫描分钟级
+- **llm 校验语义变更**：从「逐条 `repos.stock.findById` 存在性校验」改为「以候选全集为权威」
+  ——全市场成员多数不在本地 stocks 表，旧语义会把它们几乎全部丢弃。幻觉 id（不在候选里）
+  仍丢弃；命中者 `ensureStockStub` 自动落库（带快照名称）
 
 ## 实现追记（2026-07-22）
 
