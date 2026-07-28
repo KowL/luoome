@@ -135,6 +135,9 @@ describe('TushareMarketAdapter.fetchQuote', () => {
     expect(quote.low).toBe(1685);
     expect(quote.volume).toBe(123_456);
     expect(quote.ts).toEqual(new Date('2026-07-24T07:00:00.000Z'));
+    expect(quote.observedAt).toEqual(new Date('2026-07-24T07:00:00.000Z'));
+    expect(quote.fetchedAt).toEqual(FIXED_NOW);
+    expect(quote.timestampSource).toBe('upstream');
     expect(quote.source).toBe('tushare');
     expect(infos.some((l) => l.message === 'tushare.fetchQuote ok')).toBe(true);
   });
@@ -159,6 +162,9 @@ describe('TushareMarketAdapter.fetchQuote', () => {
     const { adapter } = makeAdapter(() => Promise.resolve(tushareEnvelope(fields, [row])));
     const quote = await adapter.fetchQuote('600519.SH');
     expect(quote.ts).toEqual(FIXED_NOW);
+    expect(quote.observedAt).toEqual(FIXED_NOW);
+    expect(quote.fetchedAt).toEqual(FIXED_NOW);
+    expect(quote.timestampSource).toBe('retrieval');
   });
 
   it('trade_time=null 时退回本地时钟；无时区时间按 Asia/Shanghai 解释', async () => {
@@ -260,7 +266,7 @@ describe('TushareMarketAdapter.fetchDailyBars', () => {
     ['600519.SH', 20_260_721, 96, 97, 95, 96.5, 1500, 14_470_000],
   ];
 
-  it('日线 + 复权因子都成功：按 trade_date 合并、vol×100、source=tushare', async () => {
+  it('日线 + 复权因子都成功：换算为 qfq、vol×100、保留 source factor', async () => {
     const { adapter, requests, warns, infos } = makeAdapter(
       dailyFetch(DAILY_ITEMS, [
         ['600519.SH', '20260720', 1.5],
@@ -274,34 +280,28 @@ describe('TushareMarketAdapter.fetchDailyBars', () => {
     expect(requests[0]?.params.end_date).toBe('20260721');
     expect(bars).toHaveLength(2);
     expect(bars[0]?.date).toEqual(new Date('2026-07-20T00:00:00.000Z'));
-    expect(bars[0]?.close).toBe(95.5);
+    expect(bars[0]?.close).toBe(89.5313);
     expect(bars[0]?.volume).toBe(123_400); // 手 → 股
-    expect(bars[0]?.adjFactor).toBe(1.5);
-    expect(bars[1]?.adjFactor).toBe(1.6);
+    expect(bars[0]?.adjustment).toBe('qfq');
+    expect(bars[0]?.sourceAdjFactor).toBe(1.5);
+    expect(bars[1]?.sourceAdjFactor).toBe(1.6);
     expect(bars[0]?.source).toBe('tushare');
     expect(warns.some((w) => w.message.includes('adj_factor missing'))).toBe(false);
     expect(infos.some((l) => l.message === 'tushare.fetchDailyBars ok')).toBe(true);
   });
 
-  it('部分日期缺复权因子 → 该 bar 用 1.0 占位并打 warn', async () => {
-    const { adapter, warns } = makeAdapter(
-      dailyFetch(DAILY_ITEMS, [['600519.SH', '20260720', 1.5]]),
+  it('部分日期缺复权因子 → 拒绝把 raw 日线伪装成 qfq', async () => {
+    const { adapter } = makeAdapter(dailyFetch(DAILY_ITEMS, [['600519.SH', '20260720', 1.5]]));
+    await expect(adapter.fetchDailyBars('600519.SH', DAILY_RANGE)).rejects.toThrow(
+      /unsupported_adjustment/,
     );
-    const bars = await adapter.fetchDailyBars('600519.SH', DAILY_RANGE);
-    expect(bars).toHaveLength(2);
-    expect(bars[0]?.adjFactor).toBe(1.5);
-    expect(bars[1]?.adjFactor).toBe(1.0);
-    expect(
-      warns.some((w) => w.message.includes('adj_factor missing') && w.meta?.date === '20260721'),
-    ).toBe(true);
   });
 
-  it('复权因子完全缺失（空 items）→ 不抛错，全部 1.0', async () => {
-    const { adapter, warns } = makeAdapter(dailyFetch(DAILY_ITEMS, []));
-    const bars = await adapter.fetchDailyBars('600519.SH', DAILY_RANGE);
-    expect(bars).toHaveLength(2);
-    expect(bars.every((b) => b.adjFactor === 1.0)).toBe(true);
-    expect(warns.filter((w) => w.message.includes('adj_factor missing'))).toHaveLength(2);
+  it('复权因子完全缺失（空 items）→ unsupported_adjustment', async () => {
+    const { adapter } = makeAdapter(dailyFetch(DAILY_ITEMS, []));
+    await expect(adapter.fetchDailyBars('600519.SH', DAILY_RANGE)).rejects.toThrow(
+      /unsupported_adjustment/,
+    );
   });
 
   it('非正或非有限复权因子按缺失处理', async () => {
@@ -311,38 +311,39 @@ describe('TushareMarketAdapter.fetchDailyBars', () => {
         ['600519.SH', '20260721', -1],
       ]),
     );
-    const bars = await adapter.fetchDailyBars('600519.SH', DAILY_RANGE);
-    expect(bars.map((bar) => bar.adjFactor)).toEqual([1, 1]);
+    await expect(adapter.fetchDailyBars('600519.SH', DAILY_RANGE)).rejects.toThrow(
+      /unsupported_adjustment/,
+    );
   });
 
-  it('复权因子请求失败 → 日线仍返回，warn 日志', async () => {
-    const { adapter, warns } = makeAdapter((req) => {
+  it('复权因子请求失败 → 整批失败', async () => {
+    const { adapter } = makeAdapter((req) => {
       if (req.apiName === 'adj_factor') {
         return Promise.resolve(new Response('boom', { status: 500 }));
       }
       return dailyFetch(DAILY_ITEMS, [])(req);
     });
-    const bars = await adapter.fetchDailyBars('600519.SH', DAILY_RANGE);
-    expect(bars).toHaveLength(2);
-    expect(bars.every((b) => b.adjFactor === 1.0)).toBe(true);
-    expect(warns.some((w) => w.message.includes('adj_factor request failed'))).toBe(true);
+    await expect(adapter.fetchDailyBars('600519.SH', DAILY_RANGE)).rejects.toThrow(/tushare http/);
   });
 
-  it('复权因子响应解析失败 → 日线仍返回，warn 日志', async () => {
-    const { adapter, warns } = makeAdapter((req) => {
+  it('复权因子响应解析失败 → 整批失败', async () => {
+    const { adapter } = makeAdapter((req) => {
       if (req.apiName === 'adj_factor') {
         return Promise.resolve(new Response('not-json', { status: 200 }));
       }
       return dailyFetch(DAILY_ITEMS, [])(req);
     });
-    const bars = await adapter.fetchDailyBars('600519.SH', DAILY_RANGE);
-    expect(bars).toHaveLength(2);
-    expect(warns.some((w) => w.message.includes('adj_factor request failed'))).toBe(true);
+    await expect(adapter.fetchDailyBars('600519.SH', DAILY_RANGE)).rejects.toThrow(/tushare parse/);
   });
 
   it('日线成功但越界 → 范围外 bar 丢弃', async () => {
     const items = [['600519.SH', '20260719', 94, 95, 93, 94.5, 1000, 9_400_000], ...DAILY_ITEMS];
-    const { adapter } = makeAdapter(dailyFetch(items, []));
+    const { adapter } = makeAdapter(
+      dailyFetch(items, [
+        ['600519.SH', '20260720', 1.5],
+        ['600519.SH', '20260721', 1.6],
+      ]),
+    );
     const bars = await adapter.fetchDailyBars('600519.SH', DAILY_RANGE);
     expect(bars).toHaveLength(2);
     expect(bars[0]?.date).toEqual(new Date('2026-07-20T00:00:00.000Z'));

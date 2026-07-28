@@ -1,7 +1,6 @@
+import type { WatchRuleState, WatchRuleStateRepository } from '@luoome/core';
 import { asc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-
-import type { WatchRuleState, WatchRuleStateRepository } from '@luoome/core';
 
 import { type Schema, watchRuleStates } from '../../schema/index.js';
 

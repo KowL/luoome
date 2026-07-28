@@ -8,10 +8,10 @@ import {
   diffTopLevel,
   filterAndDedupeEntries,
   isSTName,
-  lookupLevels,
   type LimitUpLadderEntry,
   LimitUpLadderEntrySchema,
   type LimitUpLadderQuery,
+  lookupLevels,
 } from './limit-up-ladder.js';
 
 // 便捷构造一个合法 entry（默认值齐全），输入参数覆盖常见差异

@@ -36,6 +36,7 @@ describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', 
     const ctx = await buildTestContext();
     const base = ctx.adapters.market;
     const market: MarketDataAdapterLike = {
+      ...base,
       name: 'stub-market',
       fetchQuote: (code) => base.fetchQuote(code),
       batchQuote: (codes) => base.batchQuote(codes),
@@ -60,10 +61,13 @@ describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', 
     const ctx = await buildTestContext();
     const base = ctx.adapters.market;
     const market: MarketDataAdapterLike = {
+      ...base,
       name: 'stub-market',
       fetchQuote: (code) => base.fetchQuote(code),
       batchQuote: (codes) => base.batchQuote(codes),
       fetchDailyBars: (code, range) => base.fetchDailyBars(code, range),
+      fetchMarketSnapshot: () =>
+        Promise.reject(new Error('unsupported_capability: market-snapshot')),
     };
     const ctx2 = { ...ctx, adapters: { ...ctx.adapters, market } };
     const r = await runTacticTool.execute(
@@ -79,6 +83,7 @@ describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', 
     const ctx = await buildTestContext();
     const base = ctx.adapters.market;
     const market: MarketDataAdapterLike = {
+      ...base,
       name: 'stub-market',
       fetchQuote: (code) => base.fetchQuote(code),
       batchQuote: (codes) => base.batchQuote(codes),

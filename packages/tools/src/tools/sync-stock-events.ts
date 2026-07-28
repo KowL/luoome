@@ -1,8 +1,4 @@
-import {
-  type ExternalStockEvent,
-  type StockEvent,
-  type ToolContext,
-} from '@luoome/core';
+import type { ExternalStockEvent, StockEvent, ToolContext } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -64,11 +60,7 @@ export const SyncStockEventsOutput = z.object({
   providerStatuses: z.array(SyncProviderStatusSchema),
 });
 
-const toStockEvent = (
-  ext: ExternalStockEvent,
-  providerName: string,
-  now: Date,
-): StockEvent => {
+const toStockEvent = (ext: ExternalStockEvent, providerName: string, now: Date): StockEvent => {
   const allDay = ext.allDay ?? true;
   const occursAt = allDay ? toShanghaiMidnight(ext.occursAt) : ext.occursAt;
   return {
@@ -106,7 +98,8 @@ const toStockEvent = (
  */
 export const syncStockEventsTool = defineTool({
   name: 'sync_stock_events',
-  description: '从外部数据源同步公司事件（财报 / 解禁 / 分红 …），按 (provider, externalId) 幂等 upsert',
+  description:
+    '从外部数据源同步公司事件（财报 / 解禁 / 分红 …），按 (provider, externalId) 幂等 upsert',
   sideEffect: 'external',
   input: SyncStockEventsInput,
   output: SyncStockEventsOutput,

@@ -1,4 +1,11 @@
-import type { DailyBar, DateRange, MarketDataAdapterLike, Money, Quote } from '@luoome/core';
+import type {
+  DailyBar,
+  DateRange,
+  MarketDataAdapterLike,
+  MarketSourceStatus,
+  Money,
+  Quote,
+} from '@luoome/core';
 import { money } from '@luoome/core';
 
 /**
@@ -36,9 +43,13 @@ export class FixedQuoteAdapter implements MarketDataAdapterLike {
       throw new Error(`FixedQuoteAdapter: 未配置 stockCode=${stockCode} 的价格`);
     }
     const close = money(Number(raw));
+    const fetchedAt = this.clock();
     return Promise.resolve({
       stockId: stockCode,
-      ts: this.clock(),
+      observedAt: fetchedAt,
+      fetchedAt,
+      timestampSource: 'retrieval',
+      ts: fetchedAt,
       open: close,
       high: close,
       low: close,
@@ -63,13 +74,39 @@ export class FixedQuoteAdapter implements MarketDataAdapterLike {
   fetchDailyBars(_stockCode: string, _range: DateRange): Promise<DailyBar[]> {
     return Promise.resolve([]);
   }
+
+  searchStocks(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: search'));
+  }
+
+  fetchIndexQuotes(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: realtime-index'));
+  }
+
+  fetchMarketSnapshot(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: market-snapshot'));
+  }
+
+  marketSourceStatus(): readonly MarketSourceStatus[] {
+    return [
+      {
+        dataset: 'quote',
+        source: this.source,
+        coverage: ['CN_A_SHARES_SH_SZ'],
+        capabilityEnabled: true,
+        configurationReady: true,
+      },
+    ];
+  }
 }
 
 /** 把 ctx 的 market adapter 替换为 FixedQuoteAdapter，返回新 ctx（不修改原 ctx）。 */
-export const withFixedQuoteAdapter = <T extends { adapters: { market: MarketDataAdapterLike } }>(
+export const withFixedQuoteAdapter = <
+  T extends { adapters: { market: MarketDataAdapterLike }; clock: () => Date },
+>(
   ctx: T,
   quotes: FixedQuoteMap,
 ): T => ({
   ...ctx,
-  adapters: { ...ctx.adapters, market: new FixedQuoteAdapter({ quotes }) },
+  adapters: { ...ctx.adapters, market: new FixedQuoteAdapter({ quotes, clock: ctx.clock }) },
 });

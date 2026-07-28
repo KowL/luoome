@@ -28,14 +28,18 @@ import type {
   GetConfidenceCalibrationOutput,
   GetHoldingInput,
   GetHoldingOutput,
+  GetPreviousClosesInput,
+  GetPreviousClosesOutput,
   GetStockGroupInput,
+  GetStockGroupOutput,
+  GetStockUniverseStatusInput,
+  GetStockUniverseStatusOutput,
+  GetTacticInput,
+  GetTacticOutput,
   LimitUpLadderCompareInput,
   LimitUpLadderCompareOutput,
   LimitUpLadderInput,
   LimitUpLadderOutput,
-  GetStockGroupOutput,
-  GetTacticInput,
-  GetTacticOutput,
   ListAccountsInput,
   ListAccountsOutput,
   ListHoldingsInput,
@@ -68,10 +72,14 @@ import type {
   SendNotificationOutput,
   SetWatchTriggerFeedbackInput,
   SetWatchTriggerFeedbackOutput,
+  SyncDailyBarsInput,
+  SyncDailyBarsOutput,
   SyncQuotesInput,
   SyncQuotesOutput,
   SyncStockEventsInput,
   SyncStockEventsOutput,
+  SyncStockUniverseInput,
+  SyncStockUniverseOutput,
   TacticSignalsByStockInput,
   TacticSignalsByStockOutput,
   TacticSignalsByTacticInput,
@@ -119,9 +127,22 @@ export interface WorkflowToolMap {
   readonly fetch_quote: ToolAccessor<typeof FetchQuoteInput, typeof FetchQuoteOutput>;
   readonly batch_quote: ToolAccessor<typeof BatchQuoteInput, typeof BatchQuoteOutput>;
   readonly sync_quotes: ToolAccessor<typeof SyncQuotesInput, typeof SyncQuotesOutput>;
+  readonly sync_daily_bars: ToolAccessor<typeof SyncDailyBarsInput, typeof SyncDailyBarsOutput>;
+  readonly get_previous_closes: ToolAccessor<
+    typeof GetPreviousClosesInput,
+    typeof GetPreviousClosesOutput
+  >;
+  readonly get_stock_universe_status: ToolAccessor<
+    typeof GetStockUniverseStatusInput,
+    typeof GetStockUniverseStatusOutput
+  >;
   readonly sync_stock_events: ToolAccessor<
     typeof SyncStockEventsInput,
     typeof SyncStockEventsOutput
+  >;
+  readonly sync_stock_universe: ToolAccessor<
+    typeof SyncStockUniverseInput,
+    typeof SyncStockUniverseOutput
   >;
   readonly search_stocks: ToolAccessor<typeof SearchStocksInput, typeof SearchStocksOutput>;
   readonly compute_indicators: ToolAccessor<

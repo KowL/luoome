@@ -169,7 +169,7 @@ export const buildMarketCandles = (
       completeness: 'closed',
     });
   }
-  if (quote !== null && dateInShanghai(quote.ts) === today) {
+  if (quote !== null && dateInShanghai(quote.observedAt) === today) {
     candles.push({
       date: today,
       open: quote.open,
@@ -194,7 +194,7 @@ export const candlesToBars = (stockId: string, candles: readonly MarketCandle[])
     low: c.low,
     close: c.close,
     volume: c.volume,
-    adjFactor: 1,
+    adjustment: 'qfq',
     source: c.source,
   }));
 

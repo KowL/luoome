@@ -14,6 +14,7 @@ import {
   createAIStackFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 import { BUILTIN_TACTICS } from '@luoome/core';
@@ -78,6 +79,10 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     repos,
     adapters: {
       market: createMarketAdapterFromEnv(process.env, {
+        clock: now,
+        logger,
+      }),
+      stockUniverse: createStockUniverseManagerFromEnv(process.env, {
         clock: now,
         logger,
       }),

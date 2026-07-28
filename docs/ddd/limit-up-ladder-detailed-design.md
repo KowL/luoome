@@ -3,7 +3,7 @@
 > 状态：Phase 1 实施稿（PRD §10 已确认三阶段范围；本文实现 Phase 1 主体并对齐 Phase 2/3 演进路径）
 > 日期：2026-07-25
 > 需求：[连板天梯产品文档](../prd/limit-up-ladder-product.md)
-> 数据源：东方财富公开涨停池（`GET https://push2ex.eastmoney.com/getTopicZTPool`，无鉴权、无环境变量；2026-07 由原私有行情服务 `/market/limit-up/ladder` 迁移而来）
+> 数据源：东方财富公开涨停池（`GET https://push2ex.eastmoney.com/getTopicZTPool`，无鉴权；2026-07 由原私有行情服务 `/market/limit-up/ladder` 迁移而来）
 > 关联 DDD：[盘中盯盘设计](./intraday-watch-design.md) §4.6 workflow 调用 tool 的契约（天梯同样适用——workflow 不直连 adapter/repo）
 
 ## 目标
@@ -13,7 +13,7 @@
 ## 已确认决策
 
 - **不落库**：天梯快照走 cache adapter，不写 DB。理由：(1) ruo 旧实现已验证现拉现算 + 修正 + 展示闭环不需要 DB；(2) 盘中数据每日刷新，落库引入"快照失效 vs 用户期望时效"的二义性；(3) 报告/StockGroup/LLM 复盘链只读需求都能用 cache 满足。落库留作未来事件审计需要时另立任务。
-- **不引入新环境变量**：数据源 eastmoney 公开涨停池写死（`EastmoneyLimitUpLadderAdapter`，name='eastmoney'）；公开 API 无鉴权，factory 不读任何环境变量。已确认不接 amazingdata，无 fallback；上游不可达时直接返回 `adapter_error`。
+- **来源显式注册**：Phase 4 起由 `LUOOME_LIMIT_UP_LADDER_SOURCES` 列出实际来源，默认且当前唯一注册值为 `eastmoney`；公开 API 无鉴权。已确认不接 amazingdata，无隐藏 fallback；未知来源启动失败，上游不可达时返回 `adapter_error`。
 - **修正规则下沉 core**：8.58% 涨幅回推 `price` 在 core 层完成；adapter 仅做协议层解析。新主源无 `high` 字段，§6.4 修正不再触发，但逻辑保留（兼容未来重新暴露 `high` 的数据源）。
 - **保持单一权威日期**：tool 入参 `date` 是请求方关心的交易日；adapter 不做"今天 → 昨天"自动回退（避免报告日期与数据日期错位，PRD §2.2 第一行问题）。
 - **修正字段必须可追溯**：暴露修正后 `price`、原始 `rawClose`、`corrected` 三字段；不允许静默改写（PRD §5.6）。
@@ -250,7 +250,8 @@ function applyCloseCorrection(
 ### 5. surface 装配根（`packages/adapters/src/limit-up-ladder/factory.ts`）
 
 - `createLimitUpLadderManagerFromEnv(env, deps)`：与 `createMarketAdapterFromEnv` 同模式（位置与签名风格对齐）。
-  - **不读任何环境变量**（`env` 参数仅为对齐签名保留）：主源为东方财富公开涨停池，无鉴权；不引入 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK`，单源写死、无 fallback。
+  - Phase 4 起读取 `LUOOME_LIMIT_UP_LADDER_SOURCES`，默认 `eastmoney`。当前只注册东方财富公开涨停池且无鉴权；未知来源在启动期失败，不做隐式 Eastmoney fallback。
+  - 不引入 provider/fallback 两套变量；来源顺序统一由一个显式列表表达。
   - **始终装配真实 manager**：原 Phase 2 的"私有服务 URL 缺失 → 软失败 manager"行为已随主源切换移除（公开 API 无配置前置条件）；上游不可达在调用期以 `adapter_error` 表现。
   - 返回 `LimitUpLadderManager`。
 - `packages/adapters/src/index.ts` 桶增加 `export * from './limit-up-ladder/index.js'`。
@@ -445,7 +446,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
 - 不接入 Web 页面（避免两套数据来源并行）。
 - 不联动 `daily-review` / `market-outlook` / `StockGroup` / `WatchPlan`。
 - 不接 amazingdata（已确认永不接入；原 throw 占位 adapter 已删除）。
-- 不增加 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK` 环境变量；主源 eastmoney 公开涨停池无鉴权，factory 不读任何环境变量。
+- 不增加 `LUOOME_LIMIT_UP_LADDER_PROVIDER` / `LUOOME_LIMIT_UP_LADDER_FALLBACK` 两套环境变量；Phase 4 后由 `LUOOME_LIMIT_UP_LADDER_SOURCES` 显式列出来源，当前仅支持无需鉴权的 eastmoney。
 - 不落库 `LimitUpLadder` / `LimitUpLadderEntry`。
 - 不引入个股详情"近 30 日涨停事件"模块（Phase 3）。
 - 不支持跨市场（港股 / 美股）；与策略预警 §5.2 一致，仅 A 股主板 + 创板。

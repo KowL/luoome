@@ -19,6 +19,7 @@ import {
   type StockEvent,
   type StockGroup,
   type StockPool,
+  type StockUniverseEntry,
   stockCode,
   type Tactic,
   type TacticSignal,
@@ -118,6 +119,9 @@ export const makeTrade = (id: string, overrides: Partial<Trade> = {}): Trade => 
 
 export const makeQuote = (stockId: string, ts: Date, overrides: Partial<Quote> = {}): Quote => ({
   stockId,
+  observedAt: ts,
+  fetchedAt: ts,
+  timestampSource: 'retrieval',
   ts,
   open: money(10),
   high: money(11),
@@ -140,7 +144,7 @@ export const makeDailyBar = (
   low: money(9),
   close: money(10.5),
   volume: 1_000_000,
-  adjFactor: 1.0,
+  adjustment: 'qfq',
   source: 'test',
   ...overrides,
 });
@@ -433,6 +437,275 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('StockUniverseRepository', () => {
+      it('完整快照提交后创建规范 Stock，并可读取当前目录', async () => {
+        const observedAt = new Date('2026-07-28T08:20:00.000Z');
+        const summary = await repos.stockUniverse.applySnapshot({
+          syncId: 'sync-1',
+          appliedAt: new Date('2026-07-28T08:21:00.000Z'),
+          snapshot: {
+            source: 'eastmoney',
+            coverage: 'CN_A_SHARES_SH_SZ',
+            observedAt,
+            complete: true,
+            reportedTotal: 2,
+            entries: [
+              {
+                stockId: '600519.SH',
+                code: stockCode('600519'),
+                exchange: 'SH',
+                name: '贵州茅台',
+                listingStatus: 'listed',
+              },
+              {
+                stockId: '002594.SZ',
+                code: stockCode('002594'),
+                exchange: 'SZ',
+                name: '比亚迪',
+                listingStatus: 'listed',
+              },
+            ],
+          },
+        });
+
+        expect(summary).toEqual({
+          observedCount: 2,
+          createdStocks: 2,
+          updatedStocks: 0,
+          reactivated: 0,
+          markedMissing: 0,
+        });
+        expect((await repos.stock.findById('600519.SH'))?.name).toBe('贵州茅台');
+        expect(
+          (
+            await repos.stockUniverse.listCurrent({
+              coverage: 'CN_A_SHARES_SH_SZ',
+              status: 'active',
+            })
+          ).map((stock) => stock.id),
+        ).toEqual(['002594.SZ', '600519.SH']);
+
+        const latest = await repos.stockUniverse.latestSuccessfulSync({
+          source: 'eastmoney',
+          coverage: 'CN_A_SHARES_SH_SZ',
+        });
+        expect(latest?.status).toBe('succeeded');
+        expect(latest?.observedCount).toBe(2);
+        expect(latest?.observedAt).toEqual(observedAt);
+      });
+
+      it('同一 syncId 重放幂等', async () => {
+        const input = {
+          syncId: 'sync-replay',
+          appliedAt: new Date('2026-07-28T08:21:00.000Z'),
+          snapshot: {
+            source: 'eastmoney',
+            coverage: 'CN_A_SHARES_SH_SZ' as const,
+            observedAt: new Date('2026-07-28T08:20:00.000Z'),
+            complete: true as const,
+            reportedTotal: 1,
+            entries: [
+              {
+                stockId: '600519.SH',
+                code: stockCode('600519'),
+                exchange: 'SH' as const,
+                name: '贵州茅台',
+                listingStatus: 'listed' as const,
+              },
+            ],
+          },
+        };
+
+        const first = await repos.stockUniverse.applySnapshot(input);
+        const replay = await repos.stockUniverse.applySnapshot(input);
+
+        expect(replay).toEqual(first);
+        expect(
+          await repos.stockUniverse.listCurrent({
+            coverage: 'CN_A_SHARES_SH_SZ',
+          }),
+        ).toHaveLength(1);
+      });
+
+      it('完整快照缺失只标记 missing，再次出现时 reactivated', async () => {
+        const entryA = {
+          stockId: '600519.SH',
+          code: stockCode('600519'),
+          exchange: 'SH' as const,
+          name: '贵州茅台',
+          listingStatus: 'listed' as const,
+        };
+        const entryB = {
+          stockId: '002594.SZ',
+          code: stockCode('002594'),
+          exchange: 'SZ' as const,
+          name: '比亚迪',
+          listingStatus: 'listed' as const,
+        };
+        const apply = (syncId: string, observedAt: string, entries: StockUniverseEntry[]) =>
+          repos.stockUniverse.applySnapshot({
+            syncId,
+            appliedAt: new Date(observedAt),
+            snapshot: {
+              source: 'eastmoney',
+              coverage: 'CN_A_SHARES_SH_SZ',
+              observedAt: new Date(observedAt),
+              complete: true,
+              reportedTotal: entries.length,
+              entries,
+            },
+          });
+
+        await apply('sync-full', '2026-07-27T08:20:00.000Z', [entryA, entryB]);
+        const missing = await apply('sync-missing', '2026-07-28T08:20:00.000Z', [entryA]);
+
+        expect(missing.markedMissing).toBe(1);
+        expect(
+          (
+            await repos.stockUniverse.listCurrent({
+              coverage: 'CN_A_SHARES_SH_SZ',
+              status: 'missing',
+            })
+          ).map((stock) => stock.id),
+        ).toEqual(['002594.SZ']);
+        expect(await repos.stock.findById('002594.SZ')).not.toBeNull();
+
+        const restored = await apply('sync-restored', '2026-07-29T08:20:00.000Z', [entryA, entryB]);
+        expect(restored.reactivated).toBe(1);
+        expect(
+          await repos.stockUniverse.listCurrent({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            status: 'missing',
+          }),
+        ).toEqual([]);
+      });
+
+      it('按代码和交易所复用既有 Stock 身份，并保留手工名称', async () => {
+        await repos.stock.save(
+          makeStock('legacy-stock-id', '600519', {
+            exchange: 'SH',
+            name: '我的茅台',
+          }),
+        );
+
+        const summary = await repos.stockUniverse.applySnapshot({
+          syncId: 'sync-existing',
+          appliedAt: new Date('2026-07-28T08:21:00.000Z'),
+          snapshot: {
+            source: 'eastmoney',
+            coverage: 'CN_A_SHARES_SH_SZ',
+            observedAt: new Date('2026-07-28T08:20:00.000Z'),
+            complete: true,
+            reportedTotal: 1,
+            entries: [
+              {
+                stockId: '600519.SH',
+                code: stockCode('600519'),
+                exchange: 'SH',
+                name: '贵州茅台',
+                listingStatus: 'listed',
+              },
+            ],
+          },
+        });
+
+        expect(summary.createdStocks).toBe(0);
+        expect(await repos.stock.findById('600519.SH')).toBeNull();
+        expect((await repos.stock.findById('legacy-stock-id'))?.name).toBe('我的茅台');
+        expect(
+          (
+            await repos.stockUniverse.listCurrent({
+              coverage: 'CN_A_SHARES_SH_SZ',
+            })
+          ).map((stock) => stock.id),
+        ).toEqual(['legacy-stock-id']);
+      });
+
+      it('目录名称升级 stub，并可在后续完整快照中更新', async () => {
+        await repos.stock.save(
+          makeStock('600519.SH', '600519', {
+            exchange: 'SH',
+            name: '600519',
+          }),
+        );
+        const apply = (syncId: string, name: string) =>
+          repos.stockUniverse.applySnapshot({
+            syncId,
+            appliedAt: new Date('2026-07-28T08:21:00.000Z'),
+            snapshot: {
+              source: 'eastmoney',
+              coverage: 'CN_A_SHARES_SH_SZ',
+              observedAt: new Date('2026-07-28T08:20:00.000Z'),
+              complete: true,
+              reportedTotal: 1,
+              entries: [
+                {
+                  stockId: '600519.SH',
+                  code: stockCode('600519'),
+                  exchange: 'SH',
+                  name,
+                  listingStatus: 'listed',
+                },
+              ],
+            },
+          });
+
+        expect((await apply('sync-stub-upgrade', '贵州茅台')).updatedStocks).toBe(1);
+        expect((await repos.stock.findById('600519.SH'))?.name).toBe('贵州茅台');
+        expect((await apply('sync-universe-rename', '贵州茅台股份')).updatedStocks).toBe(1);
+        expect((await repos.stock.findById('600519.SH'))?.name).toBe('贵州茅台股份');
+      });
+
+      it('一个数据源 missing、另一个数据源 active 时聚合目录仍为 active', async () => {
+        const stockA: StockUniverseEntry = {
+          stockId: '600519.SH',
+          code: stockCode('600519'),
+          exchange: 'SH',
+          name: '贵州茅台',
+          listingStatus: 'listed',
+        };
+        const stockB: StockUniverseEntry = {
+          stockId: '002594.SZ',
+          code: stockCode('002594'),
+          exchange: 'SZ',
+          name: '比亚迪',
+          listingStatus: 'listed',
+        };
+        const apply = (syncId: string, source: string, entries: StockUniverseEntry[]) =>
+          repos.stockUniverse.applySnapshot({
+            syncId,
+            appliedAt: T2,
+            snapshot: {
+              source,
+              coverage: 'CN_A_SHARES_SH_SZ',
+              observedAt: T2,
+              complete: true,
+              reportedTotal: entries.length,
+              entries,
+            },
+          });
+
+        await apply('sync-eastmoney-a', 'eastmoney', [stockA]);
+        await apply('sync-tushare-a', 'tushare', [stockA]);
+        await apply('sync-eastmoney-b', 'eastmoney', [stockB]);
+
+        expect(
+          (
+            await repos.stockUniverse.listCurrent({
+              coverage: 'CN_A_SHARES_SH_SZ',
+              status: 'active',
+            })
+          ).map((stock) => stock.id),
+        ).toEqual(['002594.SZ', '600519.SH']);
+        expect(
+          await repos.stockUniverse.listCurrent({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            status: 'missing',
+          }),
+        ).toEqual([]);
+      });
+    });
+
     describe('HoldingRepository', () => {
       it('save + findById / findByAccountAndStock / listByAccount 往返一致', async () => {
         const h1 = makeHolding('h-1');
@@ -519,6 +792,9 @@ export const registerRepositoryContractTests = (
             quotes: {
               'stk-1': {
                 stockId: 'stk-1',
+                observedAt: T2,
+                fetchedAt: T2,
+                timestampSource: 'retrieval',
                 ts: T2,
                 open: money(10),
                 high: money(11),
@@ -715,10 +991,30 @@ export const registerRepositoryContractTests = (
         expect(got.map((q) => q.ts.getTime())).toEqual([T1.getTime(), T2.getTime()]);
       });
 
-      it('save 同 (stockId, ts) 为 upsert', async () => {
+      it('save 同 (stockId, observedAt, source) 为 upsert', async () => {
         await repos.quote.save(makeQuote('stk-1', T2, { close: money(10) }));
         await repos.quote.save(makeQuote('stk-1', T2, { close: money(99) }));
         expect((await repos.quote.latestByStock('stk-1'))?.close).toBe(99);
+      });
+
+      it('同一 observedAt 的不同 source 共存，latest 取 fetchedAt 更新者', async () => {
+        await repos.quote.save(
+          makeQuote('stk-1', T2, {
+            source: 'source-a',
+            fetchedAt: T2,
+            close: money(10),
+          }),
+        );
+        await repos.quote.save(
+          makeQuote('stk-1', T2, {
+            source: 'source-b',
+            fetchedAt: T3,
+            timestampSource: 'upstream',
+            close: money(11),
+          }),
+        );
+        expect(await repos.quote.listInRange('stk-1', T2, T2)).toHaveLength(2);
+        expect((await repos.quote.latestByStock('stk-1'))?.source).toBe('source-b');
       });
 
       it('removeInRange 返回删除条数；after 不动', async () => {
@@ -780,6 +1076,18 @@ export const registerRepositoryContractTests = (
         ]);
         const got = await repos.dailyBar.findInRange('stk-1', T1, T2);
         expect(got.map((b) => b.source)).toEqual(['eastmoney', 'tencent']);
+      });
+
+      it('只接受 qfq，并让 sourceAdjFactor 往返一致', async () => {
+        await repos.dailyBar.saveMany([makeDailyBar('stk-1', T1, { sourceAdjFactor: 1.2345 })]);
+        expect((await repos.dailyBar.findInRange('stk-1', T1, T1))[0]?.sourceAdjFactor).toBe(
+          1.2345,
+        );
+        await expect(
+          repos.dailyBar.saveMany([
+            { ...makeDailyBar('stk-1', T2), adjustment: 'raw' } as unknown as DailyBar,
+          ]),
+        ).rejects.toThrow();
       });
 
       it('同批多根 upsert 不互相覆盖；冲突时各日期各自更新（含 source）', async () => {
@@ -1377,6 +1685,13 @@ export const registerRepositoryContractTests = (
         const count = await repos.researchNote.deactivateTheses('stk-1');
         expect(count).toBe(1);
         expect((await repos.researchNote.findById('t1'))?.active).toBe(false);
+      });
+
+      it('listStockIdsWithNotes 返回去重排序后的研究股票集合', async () => {
+        await repos.researchNote.save(makeResearchNote('n1', { stockId: 'stk-2' }));
+        await repos.researchNote.save(makeResearchNote('n2', { stockId: 'stk-1' }));
+        await repos.researchNote.save(makeResearchNote('n3', { stockId: 'stk-2' }));
+        expect(await repos.researchNote.listStockIdsWithNotes()).toEqual(['stk-1', 'stk-2']);
       });
 
       it('source-summary 缺 sourceUrl/fetchedAt 时拒绝', async () => {

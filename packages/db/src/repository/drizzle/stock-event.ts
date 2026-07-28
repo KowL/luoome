@@ -25,7 +25,12 @@ const importanceAtLeast = (min: EventImportance): SQL => {
     (v) => IMPORTANCE_RANK[v] >= IMPORTANCE_RANK[min],
   );
   const conds = allowed.map((v) => eq(stockEvents.importance, v));
-  return conds.length === 1 ? conds[0]! : or(...conds)!;
+  const [first, ...rest] = conds;
+  if (first === undefined) throw new Error('importance filter requires at least one condition');
+  if (rest.length === 0) return first;
+  const combined = or(first, ...rest);
+  if (combined === undefined) throw new Error('failed to combine importance conditions');
+  return combined;
 };
 
 const toStockEvent = (row: EventRow): StockEvent => ({
@@ -79,10 +84,14 @@ export class DrizzleStockEventRepository implements StockEventRepository {
   async save(event: StockEvent): Promise<void> {
     assertStockEventInvariants(event);
     const row = toRow(event);
-    this.db.insert(stockEvents).values(row).onConflictDoUpdate({
-      target: stockEvents.id,
-      set: row,
-    }).run();
+    this.db
+      .insert(stockEvents)
+      .values(row)
+      .onConflictDoUpdate({
+        target: stockEvents.id,
+        set: row,
+      })
+      .run();
   }
 
   async findById(id: string): Promise<StockEvent | null> {
@@ -193,10 +202,7 @@ export class DrizzleStockEventRepository implements StockEventRepository {
   }
 
   async listStockIdsWithEvents(): Promise<readonly string[]> {
-    const rows = this.db
-      .selectDistinct({ stockId: stockEvents.stockId })
-      .from(stockEvents)
-      .all();
+    const rows = this.db.selectDistinct({ stockId: stockEvents.stockId }).from(stockEvents).all();
     return rows.map((r) => r.stockId);
   }
 

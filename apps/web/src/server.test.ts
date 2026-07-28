@@ -464,13 +464,14 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
   });
 
   it('get_stock_market_view 全源失败且无本地数据 → adapter_error 转 502', async () => {
+    const base = await buildTestContext();
     const failingMarket = {
+      ...base.adapters.market,
       name: 'failing-market',
       fetchQuote: () => Promise.reject(new Error('quote upstream down')),
       batchQuote: () => Promise.resolve(new Map()),
       fetchDailyBars: () => Promise.reject(new Error('kline upstream down')),
     };
-    const base = await buildTestContext();
     const testApp = createWebApp(
       { ...base, adapters: { ...base.adapters, market: failingMarket } },
       { webToken: WEB_TOKEN },
@@ -885,46 +886,17 @@ describe('GET /api/stocks/search', () => {
     expect(body.data?.stocks.length).toBeGreaterThan(0);
   });
 
-  it('tushare 返回结果时优先使用 tushare', async () => {
+  it('配置 TUSHARE_TOKEN 也只通过 search_stocks 的 adapter registry 搜索', async () => {
     process.env.TUSHARE_TOKEN = 'test-tushare-token';
-    // .env 里可能配了 TUSHARE_URL 代理；固定为默认地址才能精确匹配 mock
-    process.env.TUSHARE_URL = 'http://api.tushare.pro';
-    const mockFetch = (async (input, init) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url === 'http://api.tushare.pro') {
-        expect(init?.method).toBe('POST');
-        const requestBody = JSON.parse(String(init?.body)) as {
-          api_name: string;
-          token: string;
-          params: Record<string, unknown>;
-          fields: string;
-        };
-        expect(requestBody.api_name).toBe('stock_basic');
-        expect(requestBody.token).toBe('test-tushare-token');
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            code: 0,
-            msg: null,
-            data: {
-              fields: ['ts_code', 'name', 'industry'],
-              items: [['600519.SH', '贵州茅台', '白酒']],
-            },
-          }),
-          text: async () => '',
-          headers: new Headers(),
-        } as Response;
-      }
-      return originalFetch(input, init);
-    }) as typeof fetch;
-    globalThis.fetch = mockFetch;
-
+    let directFetchCalls = 0;
+    globalThis.fetch = (async () => {
+      directFetchCalls += 1;
+      throw new Error('Web route must not call Tushare directly');
+    }) as unknown as typeof fetch;
     const testApp = createWebApp(await buildTestContext());
     const r = await testApp.fetch(
       new Request('http://test/api/stocks/search?q=%E8%B4%B5%E5%B7%9E%E8%8C%85%E5%8F%B0'),
     );
-    globalThis.fetch = originalFetch;
 
     expect(r.status).toBe(200);
     const body = (await r.json()) as {
@@ -932,52 +904,9 @@ describe('GET /api/stocks/search', () => {
       data?: { stocks: Array<{ id: string }>; source: string };
     };
     expect(body.ok).toBe(true);
-    expect(body.data?.source).toBe('tushare');
+    expect(body.data?.source).toBe('external');
     expect(body.data?.stocks[0]?.id).toBe('600519.SH');
-  });
-
-  it('代理忽略查询参数返回全表时，本地按 code/name 过滤', async () => {
-    process.env.TUSHARE_TOKEN = 'test-tushare-token';
-    process.env.TUSHARE_URL = 'http://api.tushare.pro';
-    const mockFetch = (async (input, init) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url === 'http://api.tushare.pro') {
-        const requestBody = JSON.parse(String(init?.body)) as { params: Record<string, unknown> };
-        expect(requestBody.params).toEqual({});
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            code: 0,
-            msg: null,
-            data: {
-              fields: ['ts_code', 'name', 'industry'],
-              items: [
-                ['000001.SZ', '平安银行', '银行'],
-                ['300857.SZ', '协创数据', ''],
-              ],
-            },
-          }),
-          text: async () => '',
-          headers: new Headers(),
-        } as Response;
-      }
-      return originalFetch(input, init);
-    }) as typeof fetch;
-    globalThis.fetch = mockFetch;
-
-    const testApp = createWebApp(await buildTestContext());
-    const byCode = (await (
-      await testApp.fetch(new Request('http://test/api/stocks/search?q=300857'))
-    ).json()) as { data?: { stocks: Array<{ id: string }>; source: string } };
-    expect(byCode.data?.source).toBe('tushare');
-    expect(byCode.data?.stocks.map((s) => s.id)).toEqual(['300857.SZ']);
-
-    const byName = (await (
-      await testApp.fetch(new Request('http://test/api/stocks/search?q=%E5%8D%8F%E5%88%9B'))
-    ).json()) as { data?: { stocks: Array<{ id: string }>; source: string } };
-    expect(byName.data?.stocks.map((s) => s.id)).toEqual(['300857.SZ']);
-    globalThis.fetch = originalFetch;
+    expect(directFetchCalls).toBe(0);
   });
 });
 
@@ -1198,6 +1127,7 @@ const stubLadderManager = (opts: {
   readonly fail?: boolean;
 }): LimitUpLadderManagerLike => ({
   name: 'limit-up-ladder',
+  sources: ['eastmoney'],
   fetchLadder: async (): Promise<LimitUpLadderResultLike> => {
     if (opts.fail === true) {
       return {

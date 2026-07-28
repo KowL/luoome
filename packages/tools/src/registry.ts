@@ -35,8 +35,10 @@ import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getHoldingTool } from './tools/get-holding.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
+import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getStockGroupTool } from './tools/get-stock-group.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
+import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
 import { getTacticTool } from './tools/get-tactic.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
@@ -62,8 +64,10 @@ import { scoreSignalsTool } from './tools/score-signals.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
+import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
+import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
 import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
 import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
 import { updateHoldingTool } from './tools/update-holding.js';
@@ -198,6 +202,8 @@ export const toolRegistry: Registry = createRegistry([
   batchQuoteTool,
   fetchIndexQuotesTool,
   syncQuotesTool,
+  syncDailyBarsTool,
+  getPreviousClosesTool,
   searchStocksTool,
   computeIndicatorsTool,
   // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
@@ -248,8 +254,10 @@ export const toolRegistry: Registry = createRegistry([
   updateStockEventTool,
   deleteStockEventTool,
   syncStockEventsTool,
+  syncStockUniverseTool,
   getMarketDataStatusTool,
   listWorkflowRunsTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
+  getStockUniverseStatusTool,
 ]);

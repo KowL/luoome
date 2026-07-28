@@ -82,6 +82,10 @@ homebrew/
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`） |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney 主 → Tencent 备；全源失败明确报错 |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent` | 行情数据源启用顺序；可显式加入 `tushare` |
+| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney` | 股票目录数据源顺序；支持 `eastmoney,tushare` |
+| `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
+| `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；格式见 [`ai-models.example.json`](./ai-models.example.json) |
 | provider 密钥变量 | 由目录指定 | `apiKeyEnv` 引用环境变量名，密钥不写入模型目录 |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
@@ -136,10 +140,14 @@ bun install
 30 8 * * 1-5  luoome workflow run sync-stock-events
 # event-date 求值：每交易日 08:50（同步之后；命中提醒窗口的事件推送）
 50 8 * * 1-5  luoome workflow run evaluate-event-rules
+# 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
+30 16 * * 1-5  luoome workflow run post-market-data
 ```
 
 - `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
 - `evaluate-event-rules`：盘前一次，`intraday-watch` 不评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 推送。
+- `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
+- `sync-stock-universe` 仍可单独人工执行；完整分页通过校验后原子提交，12 小时内有成功版本时默认跳过。
 - 含 event-date 的方案建议单独建（event-date 不参与盘中 ANY/ALL 组合判定）。
 
 ## 状态

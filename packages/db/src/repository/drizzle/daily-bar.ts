@@ -1,4 +1,4 @@
-import type { DailyBar, DailyBarRepository } from '@luoome/core';
+import { type DailyBar, type DailyBarRepository, DailyBarSchema } from '@luoome/core';
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
@@ -14,7 +14,8 @@ const toBar = (row: BarRow): DailyBar => ({
   low: row.low,
   close: row.close,
   volume: row.volume,
-  adjFactor: row.adjFactor,
+  adjustment: 'qfq',
+  ...(row.sourceAdjFactor === null ? {} : { sourceAdjFactor: row.sourceAdjFactor }),
   source: row.source,
 });
 
@@ -27,17 +28,22 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
 
   async saveMany(bars: readonly DailyBar[]): Promise<void> {
     if (bars.length === 0) return;
-    const rows = bars.map((b) => ({
-      stockId: b.stockId,
-      date: b.date,
-      open: b.open,
-      high: b.high,
-      low: b.low,
-      close: b.close,
-      volume: b.volume,
-      adjFactor: b.adjFactor,
-      source: b.source,
-    }));
+    const rows = bars.map((input) => {
+      const b = DailyBarSchema.parse(input);
+      return {
+        stockId: b.stockId,
+        date: b.date,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        volume: b.volume,
+        legacyAdjFactor: b.sourceAdjFactor ?? 1,
+        adjustment: b.adjustment,
+        sourceAdjFactor: b.sourceAdjFactor,
+        source: b.source,
+      };
+    });
     // 批量 upsert：set 用 SQLite excluded.<column> 引用「本次 VALUES 里对应行的值」，
     // 冲突时每个 (stockId, date) 各自更新自己的 OHLCV / source；
     // 不能用统一常量 set（首行值会覆盖整批其它日期）。
@@ -52,7 +58,9 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
           low: sql`excluded."low"`,
           close: sql`excluded."close"`,
           volume: sql`excluded."volume"`,
-          adjFactor: sql`excluded."adj_factor"`,
+          legacyAdjFactor: sql`excluded."adj_factor"`,
+          adjustment: sql`excluded."adjustment"`,
+          sourceAdjFactor: sql`excluded."source_adj_factor"`,
           source: sql`excluded."source"`,
         },
       })
@@ -64,7 +72,12 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
       .select()
       .from(dailyBars)
       .where(
-        and(eq(dailyBars.stockId, stockId), gte(dailyBars.date, from), lte(dailyBars.date, to)),
+        and(
+          eq(dailyBars.stockId, stockId),
+          eq(dailyBars.adjustment, 'qfq'),
+          gte(dailyBars.date, from),
+          lte(dailyBars.date, to),
+        ),
       )
       .orderBy(dailyBars.date)
       .all()
@@ -76,7 +89,13 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
     const descRows = this.db
       .select()
       .from(dailyBars)
-      .where(and(eq(dailyBars.stockId, stockId), lte(dailyBars.date, to)))
+      .where(
+        and(
+          eq(dailyBars.stockId, stockId),
+          eq(dailyBars.adjustment, 'qfq'),
+          lte(dailyBars.date, to),
+        ),
+      )
       .orderBy(desc(dailyBars.date))
       .limit(count)
       .all()

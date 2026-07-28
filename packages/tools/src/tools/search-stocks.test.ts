@@ -45,18 +45,19 @@ describe('tool/search_stocks', () => {
     expect(res.error.kind).toBe('invalid_input');
   });
 
-  it('v0.8：mock ctx 走 adapter 外部搜索（source=market）', async () => {
+  it('目录尚未同步时走 adapter 外部搜索（source=external）', async () => {
     const ctx = await buildTestContext();
     const res = await searchStocksTool.execute({ query: '0025' }, ctx);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.data.source).toBe('market');
+    expect(res.data.source).toBe('external');
     expect(res.data.stocks[0]?.id).toBe('002594.SZ');
   });
 
-  it('v0.8：adapter 抛错 → 降级本地库（source=local）', async () => {
+  it('adapter 抛错 → 降级本地历史（source=local-history）', async () => {
     const ctx = await buildTestContext();
     const brokenMarket: MarketDataAdapterLike = {
+      ...ctx.adapters.market,
       name: 'broken',
       fetchQuote: () => Promise.reject(new Error('down')),
       batchQuote: () => Promise.reject(new Error('down')),
@@ -69,17 +70,19 @@ describe('tool/search_stocks', () => {
     );
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.data.source).toBe('local');
+    expect(res.data.source).toBe('local-history');
     expect(res.data.stocks[0]?.id).toBe('002594.SZ');
   });
 
-  it('v0.8：adapter 未实现 searchStocks → 本地库（source=local）', async () => {
+  it('adapter 未实现 searchStocks → 本地历史（source=local-history）', async () => {
     const ctx = await buildTestContext();
     const noSearchMarket: MarketDataAdapterLike = {
+      ...ctx.adapters.market,
       name: 'no-search',
       fetchQuote: () => Promise.reject(new Error('not used')),
       batchQuote: () => Promise.reject(new Error('not used')),
       fetchDailyBars: () => Promise.reject(new Error('not used')),
+      searchStocks: () => Promise.reject(new Error('unsupported_capability: search')),
     };
     const res = await searchStocksTool.execute(
       { query: '茅台' },
@@ -87,7 +90,51 @@ describe('tool/search_stocks', () => {
     );
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.data.source).toBe('local');
+    expect(res.data.source).toBe('local-history');
     expect(res.data.stocks[0]?.id).toBe('600519.SH');
+  });
+
+  it('新鲜本地目录命中时不访问外部搜索', async () => {
+    const now = new Date('2026-07-28T08:30:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await ctx.repos.stockUniverse.applySnapshot({
+      syncId: 'sync-search',
+      appliedAt: now,
+      snapshot: {
+        source: 'eastmoney',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        observedAt: now,
+        complete: true,
+        reportedTotal: 1,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: '600519' as never,
+            exchange: 'SH',
+            name: '贵州茅台',
+            listingStatus: 'listed',
+          },
+        ],
+      },
+    });
+    let externalCalls = 0;
+    const market: MarketDataAdapterLike = {
+      ...ctx.adapters.market,
+      searchStocks: async () => {
+        externalCalls += 1;
+        return [];
+      },
+    };
+
+    const res = await searchStocksTool.execute(
+      { query: '茅台' },
+      { ...ctx, adapters: { ...ctx.adapters, market } },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.source).toBe('local-universe');
+    expect(res.data.stocks.map((stock) => stock.id)).toEqual(['600519.SH']);
+    expect(externalCalls).toBe(0);
   });
 });

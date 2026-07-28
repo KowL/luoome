@@ -1,4 +1,4 @@
-import { TriggerFeedbackSchema, type TriggerFeedback } from '@luoome/core';
+import { type TriggerFeedback, TriggerFeedbackSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
@@ -32,7 +32,11 @@ export const setWatchTriggerFeedbackTool = defineTool({
     const existing = await ctx.repos.watchTrigger.findById(input.triggerId);
     if (existing === null) return errNotFound('WatchTrigger', input.triggerId);
     const at = ctx.clock();
-    await ctx.repos.watchTrigger.setFeedback(input.triggerId, input.feedback as TriggerFeedback, at);
+    await ctx.repos.watchTrigger.setFeedback(
+      input.triggerId,
+      input.feedback as TriggerFeedback,
+      at,
+    );
     return {
       ok: true as const,
       triggerId: input.triggerId,

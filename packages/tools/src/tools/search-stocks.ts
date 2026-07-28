@@ -18,39 +18,64 @@ export const SearchStocksInput = z.object({
 export const SearchStocksOutput = z.object({
   stocks: z.array(StockSchema),
   total: z.number().int().nonnegative(),
-  /** 结果来源：market = 外部数据源；local = 本地库兜底。 */
-  source: z.enum(['market', 'local']),
+  source: z.enum(['local-universe', 'external', 'local-history']),
 });
 
 export const searchStocksTool = defineTool({
   name: 'search_stocks',
   description:
-    '按代码 / 名称搜股票（外部数据源：Eastmoney 主 → Tencent 备，本地库兜底）；query 留空返回空数组；limit 默认 20',
+    '按代码 / 名称搜股票（新鲜本地股票目录优先，外部数据源补充，本地历史兜底）；limit 默认 20',
   sideEffect: 'read',
   input: SearchStocksInput,
   output: SearchStocksOutput,
   handler: async (input, ctx) => {
     const query = input.query.trim();
-    if (query.length === 0) return { stocks: [], total: 0, source: 'local' as const };
+    if (query.length === 0) {
+      return { stocks: [], total: 0, source: 'local-history' as const };
+    }
+
+    const latest = await ctx.repos.stockUniverse.latestSuccessfulSync({
+      coverage: 'CN_A_SHARES_SH_SZ',
+    });
+    const directoryFresh =
+      latest?.finishedAt !== null &&
+      latest?.finishedAt !== undefined &&
+      ctx.clock().getTime() - latest.finishedAt.getTime() < 12 * 60 * 60 * 1000;
+    if (directoryFresh) {
+      const [matches, activeStocks] = await Promise.all([
+        ctx.repos.stock.search(query),
+        ctx.repos.stockUniverse.listCurrent({
+          coverage: 'CN_A_SHARES_SH_SZ',
+          status: 'active',
+        }),
+      ]);
+      const activeIds = new Set(activeStocks.map((stock) => stock.id));
+      const localUniverseMatches = matches.filter((stock) => activeIds.has(stock.id));
+      if (localUniverseMatches.length > 0) {
+        return {
+          stocks: localUniverseMatches.slice(0, input.limit),
+          total: localUniverseMatches.length,
+          source: 'local-universe' as const,
+        };
+      }
+    }
 
     const { market } = ctx.adapters;
-    if (typeof market.searchStocks === 'function') {
-      try {
-        const candidates = await market.searchStocks(query);
-        const stocks = candidates.slice(0, input.limit).map((c) => ({
-          id: c.id,
-          code: brandStockCode(c.code),
-          exchange: c.exchange,
-          name: c.name,
-        }));
-        return { stocks, total: candidates.length, source: 'market' as const };
-      } catch {
-        // 外部源失败 → 降级本地库（search 是读路径，永不因搜索源挂掉而报错）
-      }
+    try {
+      const candidates = await market.searchStocks(query);
+      const stocks = candidates.slice(0, input.limit).map((c) => ({
+        id: c.id,
+        code: brandStockCode(c.code),
+        exchange: c.exchange,
+        name: c.name,
+      }));
+      return { stocks, total: candidates.length, source: 'external' as const };
+    } catch {
+      // 外部源失败 → 降级本地库（search 是读路径，永不因搜索源挂掉而报错）
     }
 
     const stocks = await ctx.repos.stock.search(query);
     const limited = stocks.slice(0, input.limit);
-    return { stocks: limited, total: stocks.length, source: 'local' as const };
+    return { stocks: limited, total: stocks.length, source: 'local-history' as const };
   },
 });

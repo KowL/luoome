@@ -69,6 +69,7 @@ describe('resolve_llm_group', () => {
     const ctx = await buildTestContext();
     const base = ctx.adapters.market;
     const market = {
+      ...base,
       name: 'stub-market',
       fetchQuote: (code: string) => base.fetchQuote(code),
       batchQuote: (codes: readonly string[]) => base.batchQuote(codes),

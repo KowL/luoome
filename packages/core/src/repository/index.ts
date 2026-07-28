@@ -15,6 +15,12 @@ import type {
   WatchRuleState,
   WatchTrigger,
 } from '../entity/stock-pool.js';
+import type {
+  MarketCoverage,
+  StockUniverseApplySummary,
+  StockUniverseSnapshot,
+  StockUniverseSyncRun,
+} from '../entity/stock-universe.js';
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
@@ -39,6 +45,22 @@ export interface StockRepository {
   /** 按代码 / 名称模糊搜索，供 search_stocks tool 使用。 */
   search(query: string): Promise<Stock[]>;
   remove(id: string): Promise<void>;
+}
+
+export interface StockUniverseRepository {
+  applySnapshot(input: {
+    readonly syncId: string;
+    readonly snapshot: StockUniverseSnapshot;
+    readonly appliedAt: Date;
+  }): Promise<StockUniverseApplySummary>;
+  latestSuccessfulSync(input?: {
+    readonly source?: string;
+    readonly coverage?: MarketCoverage;
+  }): Promise<StockUniverseSyncRun | null>;
+  listCurrent(input: {
+    readonly coverage: MarketCoverage;
+    readonly status?: 'active' | 'missing' | 'all';
+  }): Promise<readonly Stock[]>;
 }
 
 export interface HoldingRepository {
@@ -96,6 +118,8 @@ export interface AdviceRepository {
 export interface RepositoryRegistry {
   readonly account: AccountRepository;
   readonly stock: StockRepository;
+  /** 本地股票目录完整快照与同步审计。 */
+  readonly stockUniverse: StockUniverseRepository;
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
   readonly advice: AdviceRepository;
@@ -311,6 +335,8 @@ export interface ResearchNoteRepository {
       readonly limit?: number;
     },
   ): Promise<readonly ResearchNote[]>;
+  /** 存在研究档案的股票 id 集合（盘后日线相关范围计算用）。 */
+  listStockIdsWithNotes(): Promise<readonly string[]>;
   /** 停用某股票全部 active thesis（插入新版本前调用）；返回被停用的条数。 */
   deactivateTheses(stockId: string): Promise<number>;
   remove(id: string): Promise<void>;

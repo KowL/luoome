@@ -130,10 +130,7 @@ describe('add_group_member', () => {
 
   it('groupId 不存在 → not_found', async () => {
     const ctx = await buildTestContext();
-    const r = await addGroupMemberTool.execute(
-      { groupId: 'missing', stockId: '002594.SZ' },
-      ctx,
-    );
+    const r = await addGroupMemberTool.execute({ groupId: 'missing', stockId: '002594.SZ' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.kind).toBe('not_found');
@@ -142,10 +139,7 @@ describe('add_group_member', () => {
   it('stockId 格式非法 → invalid_input（zod）', async () => {
     const ctx = await buildTestContext();
     await seedManualGroup(ctx);
-    const r = await addGroupMemberTool.execute(
-      { groupId: 'watch-list', stockId: '002594' },
-      ctx,
-    );
+    const r = await addGroupMemberTool.execute({ groupId: 'watch-list', stockId: '002594' }, ctx);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.kind).toBe('invalid_input');

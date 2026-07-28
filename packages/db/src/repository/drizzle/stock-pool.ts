@@ -1,8 +1,4 @@
-import {
-  assertStockPoolInvariants,
-  type StockPool,
-  type StockPoolRepository,
-} from '@luoome/core';
+import { assertStockPoolInvariants, type StockPool, type StockPoolRepository } from '@luoome/core';
 import { asc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 

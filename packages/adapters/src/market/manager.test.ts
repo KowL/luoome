@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { FakeMarketAdapter } from '../testing/fake-market.js';
 import { QuoteCache } from './cache.js';
 import type { EastmoneyAdapter, EastmoneyAdapterError } from './eastmoney.js';
-import { MarketDataManager } from './manager.js';
+import { createTestMarketDataManager } from './manager.test-helper.js';
 import type { TencentAdapter, TencentAdapterError } from './tencent.js';
 
 // ---- 三个测试 adapter ----
@@ -16,9 +16,13 @@ class StubPrimary {
   async fetchQuote(code: string) {
     this.callCount += 1;
     if (this.failMode === 'throw') throw new Error('primary fail');
+    const fetchedAt = new Date();
     return {
       stockId: code,
-      ts: new Date(),
+      observedAt: fetchedAt,
+      fetchedAt,
+      timestampSource: 'retrieval' as const,
+      ts: fetchedAt,
       open: money(100),
       high: money(101),
       low: money(99),
@@ -44,9 +48,13 @@ class StubFallback {
   async fetchQuote(code: string) {
     this.callCount += 1;
     if (this.failMode === 'throw') throw new Error('fallback fail');
+    const fetchedAt = new Date();
     return {
       stockId: code,
-      ts: new Date(),
+      observedAt: fetchedAt,
+      fetchedAt,
+      timestampSource: 'retrieval' as const,
+      ts: fetchedAt,
       open: money(100),
       high: money(101),
       low: money(99),
@@ -70,9 +78,13 @@ class StubFinal {
   callCount = 0;
   async fetchQuote(code: string) {
     this.callCount += 1;
+    const fetchedAt = new Date();
     return {
       stockId: code,
-      ts: new Date(),
+      observedAt: fetchedAt,
+      fetchedAt,
+      timestampSource: 'retrieval' as const,
+      ts: fetchedAt,
       open: money(100),
       high: money(101),
       low: money(99),
@@ -104,7 +116,7 @@ describe('market/manager', () => {
       const primary = new StubPrimary();
       const fallback = new StubFallback();
       const final = new StubFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -127,7 +139,7 @@ describe('market/manager', () => {
       const fallback = new StubFallback();
       fallback.failMode = 'ok';
       const final = new StubFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -146,7 +158,7 @@ describe('market/manager', () => {
       const fallback = new StubFallback();
       fallback.failMode = 'throw';
       const final = new StubFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -165,7 +177,7 @@ describe('market/manager', () => {
       fallback.failMode = 'throw';
       const final = new StubFinal();
       let nowMs = 0;
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -199,7 +211,7 @@ describe('market/manager', () => {
       const primary = new StubPrimary();
       const fallback = new StubFallback();
       const final = new StubFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -220,7 +232,7 @@ describe('market/manager', () => {
       const primary = new StubPrimary();
       const fallback = new StubFallback();
       const final = new StubFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -243,7 +255,7 @@ describe('market/manager', () => {
       const fallback = new StubFallback();
       fallback.failMode = 'throw'; // fallback 也失败 → finalFallback
       const final = new StubFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -286,7 +298,7 @@ describe('market/manager', () => {
     it('primary 实现时直接用 primary，不触碰 fallback', async () => {
       const primary = indexCapable('stub-primary', 'ok');
       const fallback = indexCapable('stub-fallback', 'ok');
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         logger: silentLogger,
@@ -300,7 +312,7 @@ describe('market/manager', () => {
     it('primary 失败 → 路由到 fallback；fallback 未实现则跳过', async () => {
       const primary = indexCapable('stub-primary', 'throw');
       const fallback = new StubFallback(); // 未实现 fetchIndexQuotes
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         logger: silentLogger,
@@ -309,7 +321,7 @@ describe('market/manager', () => {
 
       const primary2 = indexCapable('stub-primary', 'throw');
       const fallback2 = indexCapable('stub-fallback', 'ok');
-      const mgr2 = new MarketDataManager({
+      const mgr2 = createTestMarketDataManager({
         primary: primary2,
         fallback: fallback2,
         logger: silentLogger,
@@ -319,54 +331,51 @@ describe('market/manager', () => {
     });
 
     it('所有源都未实现 → 明确抛错', async () => {
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary: new StubPrimary(),
         fallback: new StubFallback(),
         logger: silentLogger,
       });
       await expect(mgr.fetchIndexQuotes()).rejects.toThrow(
-        'no market data source supports fetchIndexQuotes',
+        'unsupported_capability: realtime-index',
       );
     });
 
-    it('链全失败 / 未实现 → indexFallback 兜底成功；链已成功则不调用 indexFallback', async () => {
+    it('显式第三 realtime source 可兜底；前序成功则不调用', async () => {
       const primary = indexCapable('stub-primary', 'throw');
-      const indexFallback = indexCapable('index-fallback', 'ok');
-      const mgr = new MarketDataManager({
+      const additionalSource = indexCapable('explicit-index-source', 'ok');
+      const mgr = createTestMarketDataManager({
         primary,
         fallback: new StubFallback(), // 未实现 fetchIndexQuotes
-        indexFallback,
+        additionalSource,
         logger: silentLogger,
       });
       const indices = await mgr.fetchIndexQuotes();
-      expect(indices[0]?.source).toBe('index-fallback');
-      expect(indexFallback.callCount).toBe(1);
-      expect(mgr.stats().indexFallbackCalls).toBe(1);
+      expect(indices[0]?.source).toBe('explicit-index-source');
+      expect(additionalSource.callCount).toBe(1);
 
-      // 链上已成功：indexFallback 不被触碰
+      // 链上已成功：后续显式来源不被触碰
       const primary2 = indexCapable('stub-primary', 'ok');
-      const indexFallback2 = indexCapable('index-fallback', 'ok');
-      const mgr2 = new MarketDataManager({
+      const additionalSource2 = indexCapable('explicit-index-source', 'ok');
+      const mgr2 = createTestMarketDataManager({
         primary: primary2,
         fallback: new StubFallback(),
-        indexFallback: indexFallback2,
+        additionalSource: additionalSource2,
         logger: silentLogger,
       });
       const indices2 = await mgr2.fetchIndexQuotes();
       expect(indices2[0]?.source).toBe('stub-primary');
-      expect(indexFallback2.callCount).toBe(0);
-      expect(mgr2.stats().indexFallbackCalls).toBe(0);
+      expect(additionalSource2.callCount).toBe(0);
     });
 
-    it('indexFallback 也失败 → 抛 indexFallback 的错误', async () => {
-      const mgr = new MarketDataManager({
+    it('显式第三 realtime source 也失败 → 抛最后错误', async () => {
+      const mgr = createTestMarketDataManager({
         primary: indexCapable('stub-primary', 'throw'),
         fallback: new StubFallback(),
-        indexFallback: indexCapable('index-fallback', 'throw'),
+        additionalSource: indexCapable('explicit-index-source', 'throw'),
         logger: silentLogger,
       });
-      await expect(mgr.fetchIndexQuotes()).rejects.toThrow('index-fallback fail');
-      expect(mgr.stats().indexFallbackCalls).toBe(1);
+      await expect(mgr.fetchIndexQuotes()).rejects.toThrow('explicit-index-source fail');
     });
   });
 });
@@ -402,7 +411,7 @@ describe('market/manager fetchMarketSnapshot', () => {
   it('primary 实现 → 用 primary；TTL 内第二次调用走缓存', async () => {
     const primary = new SnapshotSource('p');
     const fallback = new SnapshotSource('f');
-    const mgr = new MarketDataManager({ primary, fallback, logger: silentLogger });
+    const mgr = createTestMarketDataManager({ primary, fallback, logger: silentLogger });
     const a = await mgr.fetchMarketSnapshot();
     expect(a).toEqual(SNAPSHOT);
     const b = await mgr.fetchMarketSnapshot();
@@ -413,7 +422,7 @@ describe('market/manager fetchMarketSnapshot', () => {
 
   it('marketSnapshotTtlMs=0 → 不缓存，每次重新拉取', async () => {
     const primary = new SnapshotSource('p');
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary,
       fallback: new SnapshotSource('f'),
       logger: silentLogger,
@@ -427,7 +436,7 @@ describe('market/manager fetchMarketSnapshot', () => {
   it('primary 未实现该方法 → 路由到 fallback', async () => {
     const primary = new StubPrimary();
     const fallback = new SnapshotSource('f');
-    const mgr = new MarketDataManager({ primary, fallback, logger: silentLogger });
+    const mgr = createTestMarketDataManager({ primary, fallback, logger: silentLogger });
     const items = await mgr.fetchMarketSnapshot();
     expect(items).toEqual(SNAPSHOT);
     expect(fallback.callCount).toBe(1);
@@ -437,20 +446,20 @@ describe('market/manager fetchMarketSnapshot', () => {
     const primary = new SnapshotSource('p');
     primary.fail = true;
     const fallback = new SnapshotSource('f');
-    const mgr = new MarketDataManager({ primary, fallback, logger: silentLogger });
+    const mgr = createTestMarketDataManager({ primary, fallback, logger: silentLogger });
     const items = await mgr.fetchMarketSnapshot();
     expect(items).toEqual(SNAPSHOT);
     expect(fallback.callCount).toBe(1);
   });
 
   it('没有任何源实现 → 明确抛错（调用方降级本地股票库）', async () => {
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary: new StubPrimary(),
       fallback: new StubFallback(),
       logger: silentLogger,
     });
     await expect(mgr.fetchMarketSnapshot()).rejects.toThrow(
-      'no market data source supports fetchMarketSnapshot',
+      'unsupported_capability: market-snapshot',
     );
   });
 });

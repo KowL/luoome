@@ -68,6 +68,9 @@ describe('market/cache', () => {
       const c = new QuoteCache();
       const q = {
         stockId: '002594.SZ',
+        observedAt: new Date(),
+        fetchedAt: new Date(),
+        timestampSource: 'retrieval' as const,
         ts: new Date(),
         open: 1 as never,
         high: 1 as never,
@@ -85,6 +88,9 @@ describe('market/cache', () => {
       const c = new QuoteCache(1024, 10);
       c.set({
         stockId: 'X',
+        observedAt: new Date(),
+        fetchedAt: new Date(),
+        timestampSource: 'retrieval',
         ts: new Date(),
         open: 1 as never,
         high: 1 as never,
@@ -109,7 +115,7 @@ describe('market/cache', () => {
         low: 1 as never,
         close: 1 as never,
         volume: 0,
-        adjFactor: 1,
+        adjustment: 'qfq' as const,
         source: 'cache-test',
       };
       const b = {
@@ -120,7 +126,7 @@ describe('market/cache', () => {
         low: 1 as never,
         close: 1 as never,
         volume: 0,
-        adjFactor: 1,
+        adjustment: 'qfq' as const,
         source: 'cache-test',
       };
       c.set('X', new Date('2026-07-01'), new Date('2026-07-02'), [a]);

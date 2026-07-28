@@ -13,6 +13,7 @@ const makeQuoteOk = () => ({
   f47: 123456, // volume 手
   f48: 987654321,
   f60: 10400,
+  f124: 1784876400,
   f57: '002594',
   f58: '比亚迪',
   f169: 100,
@@ -24,11 +25,15 @@ describe('market/eastmoney', () => {
     it('成功解析 quote；source=eastmoney', async () => {
       const adapter = new EastmoneyAdapter({
         fetchImpl: (async () => new Response(okJson(makeQuoteOk()), { status: 200 })) as never,
+        clock: () => new Date('2026-07-24T07:00:05.000Z'),
       });
       const q = await adapter.fetchQuote('002594');
       expect(q.close).toBeGreaterThan(0);
       expect(q.source).toBe('eastmoney');
       expect(q.volume).toBe(123456 * 100); // 手 → 股
+      expect(q.observedAt).toEqual(new Date('2026-07-24T07:00:00.000Z'));
+      expect(q.fetchedAt).toEqual(new Date('2026-07-24T07:00:05.000Z'));
+      expect(q.timestampSource).toBe('upstream');
     });
 
     it('f60 昨收 → prevClose 填充；f60 缺失 → 无 prevClose', async () => {
@@ -205,6 +210,8 @@ describe('market/eastmoney', () => {
       expect(bars[0]?.open).toBe(100);
       expect(bars[1]?.close).toBe(108);
       expect(bars[0]?.volume).toBe(123_456_000); // 手 → 股（×100）
+      expect(bars.every((bar) => bar.adjustment === 'qfq')).toBe(true);
+      expect(bars.every((bar) => bar.sourceAdjFactor === undefined)).toBe(true);
     });
 
     it('非 6 字段行跳过；rc != 0 抛错', async () => {

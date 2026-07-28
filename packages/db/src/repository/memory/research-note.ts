@@ -65,6 +65,10 @@ export class InMemoryResearchNoteRepository implements ResearchNoteRepository {
     return count;
   }
 
+  async listStockIdsWithNotes(): Promise<readonly string[]> {
+    return [...new Set([...this.items.values()].map((note) => note.stockId))].sort();
+  }
+
   async remove(id: string): Promise<void> {
     this.items.delete(id);
   }

@@ -1,19 +1,20 @@
-import type { Quote, QuoteRepository } from '@luoome/core';
+import { type Quote, type QuoteRepository, QuoteSchema } from '@luoome/core';
 
 /** Quote 的 in-memory 实现。Key 形如 `${stockId}|${tsMs}`，与 Drizzle 行为对齐（upsert）。 */
 export class InMemoryQuoteRepository implements QuoteRepository {
   private readonly items = new Map<string, Quote>();
 
   put(quote: Quote): void {
-    this.items.set(this.keyOf(quote.stockId, quote.ts), quote);
+    const parsed = QuoteSchema.parse(quote);
+    this.items.set(this.keyOf(parsed.stockId, parsed.observedAt, parsed.source), parsed);
   }
 
   async save(quote: Quote): Promise<void> {
     this.put(quote);
   }
 
-  private keyOf(stockId: string, ts: Date): string {
-    return `${stockId}|${ts.getTime()}`;
+  private keyOf(stockId: string, observedAt: Date, source: string): string {
+    return `${stockId}|${observedAt.getTime()}|${source}`;
   }
 
   async latestByStock(stockId: string, since?: Date): Promise<Quote | null> {
@@ -21,9 +22,15 @@ export class InMemoryQuoteRepository implements QuoteRepository {
     let best: Quote | null = null;
     for (const q of this.items.values()) {
       if (q.stockId !== stockId) continue;
-      const tsMs = q.ts.getTime();
+      const tsMs = q.observedAt.getTime();
       if (tsMs < sinceMs) continue;
-      if (best === null || tsMs > best.ts.getTime()) best = q;
+      if (
+        best === null ||
+        tsMs > best.observedAt.getTime() ||
+        (tsMs === best.observedAt.getTime() && q.fetchedAt > best.fetchedAt)
+      ) {
+        best = q;
+      }
     }
     return best;
   }
@@ -34,7 +41,11 @@ export class InMemoryQuoteRepository implements QuoteRepository {
     for (const q of this.items.values()) {
       if (!wanted.has(q.stockId)) continue;
       const cur = result.get(q.stockId);
-      if (cur === undefined || q.ts.getTime() > cur.ts.getTime()) {
+      if (
+        cur === undefined ||
+        q.observedAt > cur.observedAt ||
+        (q.observedAt.getTime() === cur.observedAt.getTime() && q.fetchedAt > cur.fetchedAt)
+      ) {
         result.set(q.stockId, q);
       }
     }
@@ -45,15 +56,23 @@ export class InMemoryQuoteRepository implements QuoteRepository {
     const fromMs = from.getTime();
     const toMs = to.getTime();
     return [...this.items.values()]
-      .filter((q) => q.stockId === stockId && q.ts.getTime() >= fromMs && q.ts.getTime() <= toMs)
-      .sort((a, b) => a.ts.getTime() - b.ts.getTime());
+      .filter(
+        (q) =>
+          q.stockId === stockId &&
+          q.observedAt.getTime() >= fromMs &&
+          q.observedAt.getTime() <= toMs,
+      )
+      .sort(
+        (a, b) =>
+          a.observedAt.getTime() - b.observedAt.getTime() || a.source.localeCompare(b.source),
+      );
   }
 
   async removeInRange(stockId: string, before: Date): Promise<number> {
     const cutoff = before.getTime();
     let removed = 0;
     for (const [k, q] of this.items) {
-      if (q.stockId === stockId && q.ts.getTime() <= cutoff) {
+      if (q.stockId === stockId && q.observedAt.getTime() <= cutoff) {
         this.items.delete(k);
         removed += 1;
       }

@@ -10,7 +10,11 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { createAIStackFromEnv, createMarketAdapterFromEnv } from '@luoome/adapters';
+import {
+  createAIStackFromEnv,
+  createMarketAdapterFromEnv,
+  createStockUniverseManagerFromEnv,
+} from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 import { createDrizzleRepos, ensureSchema } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
@@ -59,6 +63,10 @@ export const createServerContext = async (
     repos: handle.repos,
     adapters: {
       market: createMarketAdapterFromEnv(env, {
+        clock: now,
+        logger,
+      }),
+      stockUniverse: createStockUniverseManagerFromEnv(env, {
         clock: now,
         logger,
       }),

@@ -68,21 +68,19 @@ const resolveStock = async (
  * 未实现或失败时降级本地 stocks 表（v0.8 前的行为）。
  */
 const collectUniverse = async (c: ToolContext): Promise<EvalTarget[]> => {
-  if (typeof c.adapters.market.fetchMarketSnapshot === 'function') {
-    try {
-      const items = await c.adapters.market.fetchMarketSnapshot();
-      return items.map((item) => ({
-        stock: {
-          id: item.id,
-          code: stockCode(item.code),
-          exchange: item.exchange,
-          name: item.name,
-        },
-        ...(item.close !== undefined ? { snapshotClose: item.close } : {}),
-      }));
-    } catch (e) {
-      c.logger.warn('[run_tactic] fetchMarketSnapshot 失败，降级本地股票库', { err: String(e) });
-    }
+  try {
+    const items = await c.adapters.market.fetchMarketSnapshot();
+    return items.map((item) => ({
+      stock: {
+        id: item.id,
+        code: stockCode(item.code),
+        exchange: item.exchange,
+        name: item.name,
+      },
+      ...(item.close !== undefined ? { snapshotClose: item.close } : {}),
+    }));
+  } catch (e) {
+    c.logger.warn('[run_tactic] fetchMarketSnapshot 失败，降级本地股票库', { err: String(e) });
   }
   return [...(await c.repos.stock.search(''))].map((stock) => ({ stock }));
 };
@@ -131,6 +129,9 @@ const tacticNeedsFullQuote = (tactic: Tactic): boolean =>
 /** 快照价合成 quote：OHLC 同价、volume=0；仅在 DSL 不引用这些字段时使用。 */
 const quoteFromSnapshot = (stockId: string, close: number, now: Date): Quote => ({
   stockId,
+  observedAt: now,
+  fetchedAt: now,
+  timestampSource: 'retrieval',
   ts: now,
   open: money(close),
   high: money(close),

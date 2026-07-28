@@ -22,10 +22,12 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>>;
   /** 拉取指定区间日线。 */
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
-  /** 外部股票搜索（v0.8 起；Manager 路由到实现了该方法的源）。 */
-  searchStocks?(query: string): Promise<StockSearchCandidate[]>;
-  /** 大盘指数实时行情（可选；Manager 路由到实现了该方法的源）。 */
-  fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
-  /** 全市场快照（可选；Manager 路由到实现了该方法的源）。 */
-  fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
+  /** 外部股票搜索 Gateway；具体来源由 capability registry 路由。 */
+  searchStocks(query: string): Promise<StockSearchCandidate[]>;
+  /** 大盘指数实时行情 Gateway；无实时来源时拒绝 unsupported_capability。 */
+  fetchIndexQuotes(): Promise<readonly IndexQuote[]>;
+  /** 指数能力的数据时效；delayed 不能进入 realtime 路由。 */
+  readonly indexQuoteMode?: 'realtime' | 'delayed';
+  /** 全市场快照 Gateway；具体来源由 capability registry 路由。 */
+  fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
 }

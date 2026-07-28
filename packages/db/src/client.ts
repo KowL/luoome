@@ -17,6 +17,7 @@ import {
   DrizzleStockGroupRepository,
   DrizzleStockPoolRepository,
   DrizzleStockRepository,
+  DrizzleStockUniverseRepository,
   DrizzleTacticRepository,
   DrizzleTradeRepository,
   DrizzleWatchRuleStateRepository,
@@ -79,12 +80,63 @@ export const ensureSchema = (db: DrizzleDb): void => {
       code TEXT NOT NULL,
       exchange TEXT NOT NULL,
       name TEXT NOT NULL,
-      industry TEXT
+      industry TEXT,
+      name_source TEXT NOT NULL DEFAULT 'manual',
+      name_updated_at INTEGER,
+      updated_at INTEGER NOT NULL DEFAULT 0
     )
   `);
+  migrateStockProvenanceColumns(db);
   db.run(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS stocks_code_exchange_unique
     ON stocks (code, exchange)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS stock_universe_memberships (
+      source TEXT NOT NULL,
+      coverage TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      observed_name TEXT NOT NULL,
+      listing_status TEXT NOT NULL,
+      state TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      missing_since INTEGER,
+      last_sync_id TEXT NOT NULL,
+      metadata TEXT,
+      CONSTRAINT stock_universe_memberships_pk PRIMARY KEY (source, coverage, stock_id)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS stock_universe_memberships_coverage_state_idx
+    ON stock_universe_memberships (coverage, state, stock_id)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS stock_universe_memberships_stock_idx
+    ON stock_universe_memberships (stock_id)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS stock_universe_sync_runs (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      coverage TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      observed_at INTEGER,
+      reported_total INTEGER,
+      observed_count INTEGER NOT NULL DEFAULT 0,
+      created_stocks INTEGER NOT NULL DEFAULT 0,
+      updated_stocks INTEGER NOT NULL DEFAULT 0,
+      reactivated INTEGER NOT NULL DEFAULT 0,
+      marked_missing INTEGER NOT NULL DEFAULT 0,
+      error_kind TEXT,
+      error_message TEXT
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS stock_universe_sync_runs_source_coverage_finished_idx
+    ON stock_universe_sync_runs (source, coverage, finished_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS holdings (
@@ -155,15 +207,22 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS price_snapshots (
       stock_id TEXT NOT NULL,
-      ts INTEGER NOT NULL,
+      observed_at INTEGER NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      timestamp_source TEXT NOT NULL,
       open REAL NOT NULL,
       high REAL NOT NULL,
       low REAL NOT NULL,
       close REAL NOT NULL,
       volume INTEGER NOT NULL,
       source TEXT NOT NULL,
-      CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, ts)
+      CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, observed_at, source)
     )
+  `);
+  migratePriceSnapshotTimeColumns(db);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS price_snapshots_stock_observed_idx
+    ON price_snapshots (stock_id, observed_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS daily_bars (
@@ -175,10 +234,13 @@ export const ensureSchema = (db: DrizzleDb): void => {
       close REAL NOT NULL,
       volume INTEGER NOT NULL,
       adj_factor REAL NOT NULL,
+      adjustment TEXT NOT NULL DEFAULT 'raw',
+      source_adj_factor REAL,
       source TEXT NOT NULL,
       CONSTRAINT daily_bars_pk PRIMARY KEY (stock_id, date)
     )
   `);
+  migrateDailyBarAdjustmentColumns(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
   `);
@@ -467,6 +529,72 @@ const migrateAdviceStockNameColumn = (db: DrizzleDb): void => {
   }
 };
 
+const migrateStockProvenanceColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(stocks)`);
+  if (cols.length === 0) return;
+  const have = new Set(cols.map((column) => column.name));
+  if (!have.has('name_source')) {
+    db.run(sql`ALTER TABLE stocks ADD COLUMN name_source TEXT NOT NULL DEFAULT 'manual'`);
+    db.run(sql`UPDATE stocks SET name_source = 'stub' WHERE name = code`);
+  }
+  if (!have.has('name_updated_at')) {
+    db.run(sql`ALTER TABLE stocks ADD COLUMN name_updated_at INTEGER`);
+  }
+  if (!have.has('updated_at')) {
+    db.run(sql`ALTER TABLE stocks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`);
+  }
+};
+
+const migratePriceSnapshotTimeColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(price_snapshots)`);
+  const have = new Set(cols.map((column) => column.name));
+  if (have.has('observed_at') && have.has('fetched_at') && have.has('timestamp_source')) {
+    return;
+  }
+  if (!have.has('ts')) return;
+
+  db.transaction((tx) => {
+    tx.run(sql`
+      CREATE TABLE price_snapshots_mig (
+        stock_id TEXT NOT NULL,
+        observed_at INTEGER NOT NULL,
+        fetched_at INTEGER NOT NULL,
+        timestamp_source TEXT NOT NULL,
+        open REAL NOT NULL,
+        high REAL NOT NULL,
+        low REAL NOT NULL,
+        close REAL NOT NULL,
+        volume INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        CONSTRAINT price_snapshots_mig_pk PRIMARY KEY (stock_id, observed_at, source)
+      )
+    `);
+    tx.run(sql`
+      INSERT INTO price_snapshots_mig (
+        stock_id, observed_at, fetched_at, timestamp_source,
+        open, high, low, close, volume, source
+      )
+      SELECT
+        stock_id, ts, ts, 'retrieval',
+        open, high, low, close, volume, source
+      FROM price_snapshots
+    `);
+    tx.run(sql`DROP TABLE price_snapshots`);
+    tx.run(sql`ALTER TABLE price_snapshots_mig RENAME TO price_snapshots`);
+  });
+};
+
+const migrateDailyBarAdjustmentColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(daily_bars)`);
+  const have = new Set(cols.map((column) => column.name));
+  if (!have.has('adjustment')) {
+    db.run(sql`ALTER TABLE daily_bars ADD COLUMN adjustment TEXT NOT NULL DEFAULT 'raw'`);
+  }
+  if (!have.has('source_adj_factor')) {
+    db.run(sql`ALTER TABLE daily_bars ADD COLUMN source_adj_factor REAL`);
+  }
+};
+
 /**
  * 旧版 stock_pools（v0.6：`source TEXT NOT NULL`、无 `group_id` 列）结构升级。
  *
@@ -638,8 +766,7 @@ const migrateStrategyAlertPoolColumns = (db: DrizzleDb): void => {
   // 回填 rules[].id：缺 id 的逐条生成并写回（参照 v0.6 分组迁移的幂等做法）。重复启动无副作用。
   const rows = db.all<{ id: string; rules: string }>(sql`SELECT id, rules FROM stock_pools`);
   const nowMs = Date.now();
-  for (let i = 0; i < rows.length; i += 1) {
-    const row = rows[i]!;
+  for (const row of rows) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(row.rules);
@@ -726,10 +853,9 @@ const migrateStrategyAlertTriggerColumns = (db: DrizzleDb): void => {
     const matches = (parsed as Array<Record<string, unknown>>).filter(
       (r) => r.kind === t.rule_kind && typeof r.id === 'string',
     );
-    if (matches.length === 1) {
-      db.run(
-        sql`UPDATE watch_triggers SET rule_id = ${matches[0]!.id as string} WHERE id = ${t.id}`,
-      );
+    const [match] = matches;
+    if (matches.length === 1 && match !== undefined) {
+      db.run(sql`UPDATE watch_triggers SET rule_id = ${match.id as string} WHERE id = ${t.id}`);
     } // 多条规则同类 → 留空接受冷却重置一轮（PRD §9.2）
   }
 };
@@ -854,6 +980,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     stock: new DrizzleStockRepository(db),
+    stockUniverse: new DrizzleStockUniverseRepository(db),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
     advice: new DrizzleAdviceRepository(db),

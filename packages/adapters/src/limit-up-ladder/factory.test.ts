@@ -56,6 +56,16 @@ describe('createLimitUpLadderManagerFromEnv', () => {
     expect(m.name).toBe('limit-up-ladder');
     expect(typeof m.fetchLadder).toBe('function');
     expect(typeof m.compareLadder).toBe('function');
+    expect(m.sources).toEqual(['eastmoney']);
+  });
+
+  it('配置未注册数据源时启动期失败，不做隐式 Eastmoney fallback', () => {
+    expect(() =>
+      createLimitUpLadderManagerFromEnv(
+        { LUOOME_LIMIT_UP_LADDER_SOURCES: 'tushare' },
+        { logger: noopLogger },
+      ),
+    ).toThrow();
   });
 
   it('fetchImpl 返回涨停池 fixture 时 fetchLadder 返回映射后的天梯', async () => {

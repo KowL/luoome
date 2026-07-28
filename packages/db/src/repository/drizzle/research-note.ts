@@ -79,10 +79,13 @@ export class DrizzleResearchNoteRepository implements ResearchNoteRepository {
           )
           .run();
       }
-      tx.insert(researchNotes).values(row).onConflictDoUpdate({
-        target: researchNotes.id,
-        set: row,
-      }).run();
+      tx.insert(researchNotes)
+        .values(row)
+        .onConflictDoUpdate({
+          target: researchNotes.id,
+          set: row,
+        })
+        .run();
     });
   }
 
@@ -129,6 +132,15 @@ export class DrizzleResearchNoteRepository implements ResearchNoteRepository {
     return typeof result === 'object' && result !== null && 'changes' in result
       ? Number((result as { changes: unknown }).changes)
       : 0;
+  }
+
+  async listStockIdsWithNotes(): Promise<readonly string[]> {
+    return this.db
+      .selectDistinct({ stockId: researchNotes.stockId })
+      .from(researchNotes)
+      .orderBy(researchNotes.stockId)
+      .all()
+      .map((row) => row.stockId);
   }
 
   async remove(id: string): Promise<void> {

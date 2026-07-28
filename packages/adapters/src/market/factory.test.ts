@@ -27,6 +27,18 @@ describe('market/factory', () => {
       { logger: silentLogger() },
     );
     expect(adapter.name).toBe('manager');
+    expect(
+      adapter.marketSourceStatus().map(({ dataset, source }) => `${source}:${dataset}`),
+    ).toEqual([
+      'eastmoney:quote',
+      'eastmoney:daily-bars',
+      'eastmoney:search',
+      'eastmoney:market-snapshot',
+      'eastmoney:realtime-index',
+      'tencent:quote',
+      'tencent:daily-bars',
+      'tencent:search',
+    ]);
   });
 
   it('非法 provider → 启动期抛错', () => {
@@ -184,7 +196,8 @@ describe('market/factory', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('activeOrder 仅 tushare：装配 eastmoney 指数兜底；index_daily 未实现时仍拿到指数行情', async () => {
+  it('activeOrder 仅 tushare：realtime index 明确不支持，且不会隐式调用 Eastmoney', async () => {
+    const urls: string[] = [];
     const adapter = createMarketAdapterFromEnv(
       {
         LUOOME_MARKET_PROVIDER: 'real',
@@ -194,51 +207,38 @@ describe('market/factory', () => {
       {
         logger: silentLogger(),
         fetchImpl: ((url: string) => {
-          // tushare 代理网关：index_daily 未实现 → upstream_error
-          if (String(url).includes('api.tushare.pro')) {
-            return Promise.resolve(
-              new Response(
-                JSON.stringify({
-                  code: -1,
-                  msg: 'index_daily is not yet implemented',
-                  data: { fields: [], items: [] },
-                }),
-                { status: 200 },
-              ),
-            );
-          }
-          // eastmoney 公开接口（indexFallback）：返回指数快照
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                rc: 0,
-                data: { f43: 3500.5, f57: '000001', f58: '上证指数', f169: 12.3, f170: 0.35 },
-              }),
-              { status: 200 },
-            ),
-          );
+          urls.push(String(url));
+          return Promise.resolve(new Response('unexpected request', { status: 500 }));
         }) as never,
       },
     );
-    // 结构性断言：tushare 链路无 eastmoney → 装配了独立 indexFallback
-    const mgr = adapter as unknown as { indexFallback?: { name: string } };
-    expect(mgr.indexFallback?.name).toBe('eastmoney');
-    // 行为断言：tushare 指数失败 → eastmoney 兜底成功
-    const indices = await adapter.fetchIndexQuotes?.();
-    expect(indices?.[0]?.source).toBe('eastmoney');
-    expect(indices?.[0]?.name).toBe('上证指数');
+    await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/unsupported_capability/);
+    expect(
+      adapter.marketSourceStatus().map(({ dataset, source }) => `${source}:${dataset}`),
+    ).toEqual(['tushare:quote', 'tushare:daily-bars', 'tushare:search', 'tushare:delayed-index']);
+    expect(urls).toEqual([]);
   });
 
-  it('activeOrder 含 eastmoney：不重复装配指数兜底源', () => {
+  it('activeOrder 含 eastmoney：realtime index 能力来自显式启用源', async () => {
     const adapter = createMarketAdapterFromEnv(
       {
         LUOOME_MARKET_PROVIDER: 'real',
         LUOOME_MARKET_SOURCES: 'eastmoney,tushare',
         TUSHARE_TOKEN: 'test-token',
       },
-      { logger: silentLogger() },
+      {
+        logger: silentLogger(),
+        fetchImpl: (async () =>
+          new Response(
+            JSON.stringify({
+              rc: 0,
+              data: { f43: 3500.5, f57: '000001', f58: '上证指数', f169: 12.3, f170: 0.35 },
+            }),
+            { status: 200 },
+          )) as never,
+      },
     );
-    const mgr = adapter as unknown as { indexFallback?: { name: string } };
-    expect(mgr.indexFallback).toBeUndefined();
+    const indices = await adapter.fetchIndexQuotes();
+    expect(indices[0]?.source).toBe('eastmoney');
   });
 });

@@ -125,7 +125,8 @@ describe('update_stock_pool', () => {
     if (!r.ok) return;
     // v0.7：服务端为规则生成稳定 id（r_${uuid8}），仅校验业务字段保留。
     expect(r.data.pool.rules).toHaveLength(1);
-    const rule = r.data.pool.rules[0]!;
+    const rule = r.data.pool.rules[0];
+    if (rule === undefined) throw new Error('expected one generated rule');
     expect(rule.kind).toBe('tactic');
     if (rule.kind === 'tactic') {
       expect(rule.tacticId).toBe('ma-bullish-alignment');

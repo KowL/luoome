@@ -1,6 +1,6 @@
 import {
-  assertWatchTriggerInvariants,
   ATTEMPTED_DELIVERY_STATUSES,
+  assertWatchTriggerInvariants,
   type DeliveryStatus,
   type WatchTrigger,
   type WatchTriggerRepository,
@@ -15,12 +15,21 @@ const inAttempted = (): SQL => {
   const conditions = (ATTEMPTED_DELIVERY_STATUSES as readonly string[]).map((v) =>
     eq(watchTriggers.deliveryStatus, v),
   );
-  return conditions.length === 1 ? conditions[0]! : or(...conditions)!;
+  return combineConditions(conditions);
 };
 const inDeliveryStatuses = (values: readonly DeliveryStatus[]): SQL => {
   if (values.length === 0) return eq(watchTriggers.deliveryStatus, '__none__');
   const conditions = values.map((v) => eq(watchTriggers.deliveryStatus, v));
-  return conditions.length === 1 ? conditions[0]! : or(...conditions)!;
+  return combineConditions(conditions);
+};
+
+const combineConditions = (conditions: readonly SQL[]): SQL => {
+  const [first, ...rest] = conditions;
+  if (first === undefined) throw new Error('SQL filter requires at least one condition');
+  if (rest.length === 0) return first;
+  const combined = or(first, ...rest);
+  if (combined === undefined) throw new Error('failed to combine SQL filter conditions');
+  return combined;
 };
 
 type TriggerRow = typeof watchTriggers.$inferSelect;
@@ -43,9 +52,7 @@ const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
   deliveryStatus: row.deliveryStatus as DeliveryStatus,
   ...(row.notificationId !== null ? { notificationId: row.notificationId } : {}),
   evalSnapshot: row.evalSnapshot as Record<string, unknown>,
-  ...(row.feedback !== null
-    ? { feedback: row.feedback as WatchTrigger['feedback'] & string }
-    : {}),
+  ...(row.feedback !== null ? { feedback: row.feedback as WatchTrigger['feedback'] & string } : {}),
   ...(row.feedbackAt !== null ? { feedbackAt: row.feedbackAt } : {}),
   notified: row.notified,
   createdAt: row.createdAt,
@@ -202,9 +209,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     notificationId?: string,
   ): Promise<void> {
     if (ids.length === 0) return;
-    const isAttempted = (
-      ATTEMPTED as readonly DeliveryStatus[]
-    ).includes(status);
+    const isAttempted = (ATTEMPTED as readonly DeliveryStatus[]).includes(status);
     this.db
       .update(watchTriggers)
       .set({

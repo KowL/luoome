@@ -16,6 +16,7 @@ import type {
   LimitUpLadderManagerLike,
   Logger,
   RepositoryRegistry,
+  StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
 import { createInMemoryRepos, seedData } from '@luoome/db/memory';
@@ -27,6 +28,7 @@ export interface BuildTestContextOptions {
   readonly advices?: readonly Advice[];
   /** 可选注入连板天梯 manager（Phase 2 接入 web API 测试）。 */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
+  readonly stockUniverse?: StockUniverseManagerLike;
 }
 
 const createSilentLogger = (): Logger => {
@@ -61,6 +63,7 @@ export const buildTestContext = async (
     repos,
     adapters: {
       market: new FakeMarketAdapter({ clock: marketClock }),
+      ...(opts.stockUniverse === undefined ? {} : { stockUniverse: opts.stockUniverse }),
       llm: new FakeLLMAdapter(),
     },
     notification: createTestNotificationManager(repos),

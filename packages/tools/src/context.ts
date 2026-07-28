@@ -5,6 +5,7 @@ import type {
   Logger,
   MarketDataAdapterLike,
   RepositoryRegistry,
+  StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
 
@@ -12,6 +13,7 @@ export interface BuildContextInput {
   readonly repos: RepositoryRegistry;
   readonly adapters: {
     readonly market: MarketDataAdapterLike;
+    readonly stockUniverse?: StockUniverseManagerLike;
     readonly llm: LLMAdapterLike;
   };
   readonly agent?: AgentRuntimeLike;

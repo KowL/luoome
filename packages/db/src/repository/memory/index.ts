@@ -35,6 +35,7 @@ import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
 import { InMemoryStockGroupRepository } from './stock-group.js';
 import { InMemoryStockPoolRepository } from './stock-pool.js';
+import { InMemoryStockUniverseRepository } from './stock-universe.js';
 import { InMemoryTacticRepository } from './tactic.js';
 import { InMemoryTradeRepository } from './trade.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
@@ -55,6 +56,7 @@ export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
 export { InMemoryStockGroupRepository } from './stock-group.js';
 export { InMemoryStockPoolRepository } from './stock-pool.js';
+export { InMemoryStockUniverseRepository } from './stock-universe.js';
 export { InMemoryTacticRepository } from './tactic.js';
 export { InMemoryTradeRepository } from './trade.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
@@ -94,6 +96,7 @@ export interface InMemorySeed {
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
   const stock = new InMemoryStockRepository();
+  const stockUniverse = new InMemoryStockUniverseRepository(stock);
   const holding = new InMemoryHoldingRepository();
   const trade = new InMemoryTradeRepository();
   const advice = new InMemoryAdviceRepository();
@@ -145,6 +148,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   return {
     account,
     stock,
+    stockUniverse,
     holding,
     trade,
     advice,

@@ -50,9 +50,14 @@ export const addStockEventTool = defineTool({
     const allDay = input.allDay ?? true;
     const occursAt = allDay ? shanghaiMidnight(input.occursAt) : input.occursAt;
 
-    const existing = await ctx.repos.stockEvent.list({ stockId: input.stockId, kinds: [input.kind] });
+    const existing = await ctx.repos.stockEvent.list({
+      stockId: input.stockId,
+      kinds: [input.kind],
+    });
     const dup = existing.find((e) =>
-      allDay ? shanghaiDay(e.occursAt) === shanghaiDay(occursAt) : e.occursAt.getTime() === occursAt.getTime(),
+      allDay
+        ? shanghaiDay(e.occursAt) === shanghaiDay(occursAt)
+        : e.occursAt.getTime() === occursAt.getTime(),
     );
 
     const event: StockEvent = {

@@ -2,7 +2,7 @@ import type { Logger, StockSearchCandidate } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import { FakeMarketAdapter } from '../testing/fake-market.js';
 import { EastmoneyAdapterError, parseEastmoneySuggest } from './eastmoney.js';
-import { MarketDataManager } from './manager.js';
+import { createTestMarketDataManager } from './manager.test-helper.js';
 import { parseTencentSearchHint } from './tencent.js';
 
 const silentLogger: Logger = {
@@ -128,7 +128,7 @@ describe('MarketDataManager.searchStocks', () => {
   it('primary 成功 → 不调 fallback', async () => {
     const pCalls = { n: 0 };
     const fCalls = { n: 0 };
-    const manager = new MarketDataManager({
+    const manager = createTestMarketDataManager({
       primary: fakeSearchAdapter('p', () => Promise.resolve([fakeCandidate]), pCalls),
       fallback: fakeSearchAdapter('f', () => Promise.resolve([]), fCalls),
       finalFallback: new FakeMarketAdapter(),
@@ -142,7 +142,7 @@ describe('MarketDataManager.searchStocks', () => {
 
   it('primary 返回空数组 → 不降级（空是合法答案）', async () => {
     const calls = { n: 0 };
-    const manager = new MarketDataManager({
+    const manager = createTestMarketDataManager({
       primary: fakeSearchAdapter('p', () => Promise.resolve([]), calls),
       fallback: fakeSearchAdapter('f', () => Promise.resolve([fakeCandidate]), { n: 0 }),
       finalFallback: new FakeMarketAdapter(),
@@ -153,7 +153,7 @@ describe('MarketDataManager.searchStocks', () => {
   });
 
   it('primary + fallback 都抛错 → 降级 mock fixtures', async () => {
-    const manager = new MarketDataManager({
+    const manager = createTestMarketDataManager({
       primary: fakeSearchAdapter('p', () => Promise.reject(new Error('down')), { n: 0 }),
       fallback: fakeSearchAdapter('f', () => Promise.reject(new Error('down')), { n: 0 }),
       finalFallback: new FakeMarketAdapter(),
@@ -164,7 +164,7 @@ describe('MarketDataManager.searchStocks', () => {
   });
 
   it('没有 finalFallback 且所有已配置源失败 → 抛错给 tool 层继续本地搜索', async () => {
-    const manager = new MarketDataManager({
+    const manager = createTestMarketDataManager({
       primary: fakeSearchAdapter('p', () => Promise.reject(new Error('primary down')), { n: 0 }),
       fallback: fakeSearchAdapter('f', () => Promise.reject(new Error('fallback down')), { n: 0 }),
       logger: silentLogger,

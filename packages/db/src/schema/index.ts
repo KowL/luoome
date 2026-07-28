@@ -8,6 +8,8 @@ import type {
   ChatMessagePart,
   Citation,
   Exchange,
+  ListingStatus,
+  MarketCoverage,
   Money,
   Notification,
   ProviderStatus,
@@ -25,6 +27,7 @@ import type {
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
+import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
@@ -65,10 +68,73 @@ export const stocks = sqliteTable(
     exchange: text('exchange').$type<Exchange>().notNull(),
     name: text('name').notNull(),
     industry: text('industry'),
+    nameSource: text('name_source')
+      .$type<'stub' | 'manual' | 'universe'>()
+      .notNull()
+      .default('manual'),
+    nameUpdatedAt: integer('name_updated_at', { mode: 'timestamp_ms' }),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().default(sql`0`),
   },
   (t) => ({
     /** 同一交易所内代码唯一；跨交易所代码可重复（如 SH/SZ 都有 000001）。 */
     codeExchangeUnique: uniqueIndex('stocks_code_exchange_unique').on(t.code, t.exchange),
+  }),
+);
+
+export const stockUniverseMemberships = sqliteTable(
+  'stock_universe_memberships',
+  {
+    source: text('source').notNull(),
+    coverage: text('coverage').$type<MarketCoverage>().notNull(),
+    stockId: text('stock_id').notNull(),
+    observedName: text('observed_name').notNull(),
+    listingStatus: text('listing_status').$type<ListingStatus>().notNull(),
+    state: text('state').$type<'active' | 'missing'>().notNull(),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    missingSince: integer('missing_since', { mode: 'timestamp_ms' }),
+    lastSyncId: text('last_sync_id').notNull(),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.source, t.coverage, t.stockId],
+      name: 'stock_universe_memberships_pk',
+    }),
+    coverageStateIdx: index('stock_universe_memberships_coverage_state_idx').on(
+      t.coverage,
+      t.state,
+      t.stockId,
+    ),
+    stockIdx: index('stock_universe_memberships_stock_idx').on(t.stockId),
+  }),
+);
+
+export const stockUniverseSyncRuns = sqliteTable(
+  'stock_universe_sync_runs',
+  {
+    id: text('id').primaryKey(),
+    source: text('source').notNull(),
+    coverage: text('coverage').$type<MarketCoverage>().notNull(),
+    status: text('status').$type<'running' | 'succeeded' | 'failed'>().notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
+    reportedTotal: integer('reported_total'),
+    observedCount: integer('observed_count').notNull().default(0),
+    createdStocks: integer('created_stocks').notNull().default(0),
+    updatedStocks: integer('updated_stocks').notNull().default(0),
+    reactivated: integer('reactivated').notNull().default(0),
+    markedMissing: integer('marked_missing').notNull().default(0),
+    errorKind: text('error_kind'),
+    errorMessage: text('error_message'),
+  },
+  (t) => ({
+    sourceCoverageFinishedIdx: index('stock_universe_sync_runs_source_coverage_finished_idx').on(
+      t.source,
+      t.coverage,
+      t.finishedAt,
+    ),
   }),
 );
 
@@ -144,7 +210,9 @@ export const priceSnapshots = sqliteTable(
   'price_snapshots',
   {
     stockId: text('stock_id').notNull(),
-    ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
+    timestampSource: text('timestamp_source').$type<'upstream' | 'retrieval'>().notNull(),
     open: real('open').$type<Money>().notNull(),
     high: real('high').$type<Money>().notNull(),
     low: real('low').$type<Money>().notNull(),
@@ -153,7 +221,11 @@ export const priceSnapshots = sqliteTable(
     source: text('source').notNull(),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.stockId, t.ts], name: 'price_snapshots_pk' }),
+    pk: primaryKey({
+      columns: [t.stockId, t.observedAt, t.source],
+      name: 'price_snapshots_pk',
+    }),
+    stockObservedIdx: index('price_snapshots_stock_observed_idx').on(t.stockId, t.observedAt),
   }),
 );
 
@@ -172,7 +244,10 @@ export const dailyBars = sqliteTable(
     low: real('low').$type<Money>().notNull(),
     close: real('close').$type<Money>().notNull(),
     volume: integer('volume').notNull(),
-    adjFactor: real('adj_factor').notNull(),
+    /** 旧列保留，方便存量库幂等升级；规范读取以 adjustment/sourceAdjFactor 为准。 */
+    legacyAdjFactor: real('adj_factor').notNull(),
+    adjustment: text('adjustment').$type<'raw' | 'qfq' | 'hfq'>().notNull().default('raw'),
+    sourceAdjFactor: real('source_adj_factor'),
     source: text('source').notNull(),
   },
   (t) => ({
@@ -597,6 +672,8 @@ export const chatMessages = sqliteTable(
 export const schema = {
   accounts,
   stocks,
+  stockUniverseMemberships,
+  stockUniverseSyncRuns,
   holdings,
   trades,
   advices,

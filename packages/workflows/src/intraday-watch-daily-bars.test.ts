@@ -10,8 +10,8 @@ import { intradayWatchWorkflow } from './intraday-watch.js';
  * v0.6.1 dailyBars 接入测试（docs/ddd/intraday-watch-design.md §6 step 5）。
  *
  * 行为契约：
- * - dailyBars.latestBefore(stockId, now, 1) 有昨日 close → prevClose = bar.close
- * - 缺失 / repo throw / close <= 0 → fallback 到 quote.open（v0.6 兼容）
+ * - get_previous_closes 有昨日 close → prevClose = bar.close
+ * - 缺失 / close <= 0 → price-change 为 unknown，不使用 quote.open
  *
  * 测试策略：
  * - 用 withFixedQuoteAdapter 把现价固定（close = open = high = low = 100）
@@ -32,7 +32,7 @@ const T_DAY_BEFORE = new Date('2026-07-19T00:00:00.000Z');
  * batch_quote tool 会走这条路径。
  */
 const setupCtx = async (quotes: Record<string, number>) => {
-  const ctx = await buildTestContext();
+  const ctx = await buildTestContext({ clock: () => T0 });
   const fixed = withFixedQuoteAdapter(ctx, quotes);
   // 清掉默认池（避免干扰），新建专用 price-change 池
   await fixed.repos.stockPool.remove('holdings-watch');
@@ -51,10 +51,10 @@ const setupCtx = async (quotes: Record<string, number>) => {
     groupId: 'p-change-group',
     rules: [{ kind: 'price-change', pct: 0.04, direction: 'any' }],
     cooldownMinutes: 30,
-  logic: 'ANY',
-  triggerMode: 'on-enter',
-  dailyNotificationLimit: 20,
-  notifyOnRecovery: false,
+    logic: 'ANY',
+    triggerMode: 'on-enter',
+    dailyNotificationLimit: 20,
+    notifyOnRecovery: false,
     enabled: true,
     createdAt: T0,
     updatedAt: T0,
@@ -76,7 +76,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         low: money(95),
         close: money(95),
         volume: 1_000_000,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: 'intraday-test',
       },
     ]);
@@ -92,8 +92,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
     // intraday-watch.output 不暴露 evidence 也不暴露 prevCloses，所以这里只验证 trigger 数量 + 实际取的现价。
   });
 
-  it('dailyBars 缺失：fallback 到 quote.open（v0.6 兼容 → 0 触发）', async () => {
-    // 现价固定 = 100；open = close = 100；prevClose = open = 100；change = 0 → 不触发
+  it('dailyBars 缺失：price-change 为 unknown，不使用 quote.open', async () => {
     const ctx = await setupCtx({ '600519.SH': 100 });
     // 不 seed dailyBars
     const r = await intradayWatchWorkflow.run(
@@ -117,7 +116,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         low: money(90),
         close: money(90),
         volume: 1_000_000,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: 'intraday-test',
       },
       {
@@ -128,7 +127,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         low: money(95),
         close: money(95),
         volume: 1_000_000,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: 'intraday-test',
       },
     ]);
@@ -142,7 +141,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
     expect(r.data.triggers).toHaveLength(1);
   });
 
-  it('dailyBars close = 0（异常数据）→ fallback 到 quote.open → 0 触发', async () => {
+  it('dailyBars close = 0（异常数据）→ price-change 为 unknown', async () => {
     const ctx = await setupCtx({ '600519.SH': 100 });
     await ctx.repos.dailyBar.saveMany([
       {
@@ -153,7 +152,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         low: money(0),
         close: money(0), // 异常：bar.close <= 0
         volume: 0,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: 'intraday-test',
       },
     ]);
@@ -163,8 +162,6 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    // prevCloses 是空 map（close <= 0 不入），evaluate 走 fallback：open=100,
-    // prevClose=100, change=0 → 不触发
     expect(r.data.triggers).toEqual([]);
   });
 
@@ -179,7 +176,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         low: money(95),
         close: money(95),
         volume: 1_000_000,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: 'intraday-test',
       },
     ]);
@@ -190,10 +187,10 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
       groupId: 'p-change-group',
       rules: [{ kind: 'price-change', pct: 0.06, direction: 'any' }],
       cooldownMinutes: 30,
-  logic: 'ANY',
-  triggerMode: 'on-enter',
-  dailyNotificationLimit: 20,
-  notifyOnRecovery: false,
+      logic: 'ANY',
+      triggerMode: 'on-enter',
+      dailyNotificationLimit: 20,
+      notifyOnRecovery: false,
       enabled: true,
       createdAt: T0,
       updatedAt: T0,
@@ -218,7 +215,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         low: money(100),
         close: money(100),
         volume: 1_000_000,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: 'intraday-test',
       },
     ]);

@@ -71,6 +71,7 @@ const INDEX_LOOKBACK_DAYS = 10;
 
 export class TushareMarketAdapter {
   readonly name = 'tushare';
+  readonly indexQuoteMode = 'delayed' as const;
 
   private readonly clock: () => Date;
   private readonly fetchImpl: typeof fetch;
@@ -107,10 +108,18 @@ export class TushareMarketAdapter {
         throw new Error(`tushare no_data: ${tsCode} 快照价格全零（盘前或停牌无成交）`);
       }
       const parsed = QuoteRowSchema.parse(row);
+      const fetchedAt = this.clock();
+      const upstreamAt = parseTradeTime(parsed.trade_time);
+      const observedAt =
+        upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
+          ? upstreamAt
+          : fetchedAt;
       const quote: Quote = {
         stockId: tsCode,
-        // trade_time 缺失或不可解析时才退回本地抓取时间。
-        ts: parseTradeTime(parsed.trade_time) ?? this.clock(),
+        observedAt,
+        fetchedAt,
+        timestampSource: observedAt === fetchedAt ? 'retrieval' : 'upstream',
+        ts: observedAt,
         open: money(parsed.open),
         high: money(parsed.high),
         low: money(parsed.low),
@@ -245,8 +254,7 @@ export class TushareMarketAdapter {
       const startDate = formatYmd(range.start);
       const endDate = formatYmd(range.end);
 
-      // 日线必需、复权因子可降级：并发发起，adj_factor 失败只降级不整批失败。
-      const [dailyResult, adjResult] = await Promise.allSettled([
+      const [dailyRows, adjRows] = await Promise.all([
         tushareQuery(
           'daily',
           { ts_code: tsCode, start_date: startDate, end_date: endDate },
@@ -263,21 +271,6 @@ export class TushareMarketAdapter {
         ),
       ]);
 
-      if (dailyResult.status === 'rejected') {
-        throw dailyResult.reason;
-      }
-      const dailyRows = dailyResult.value;
-
-      let adjRows: Array<Record<string, unknown>> = [];
-      if (adjResult.status === 'fulfilled') {
-        adjRows = adjResult.value;
-      } else {
-        this.logger.warn('tushare.fetchDailyBars adj_factor request failed', {
-          stockCode: tsCode,
-          error: errorMessage(adjResult.reason),
-        });
-      }
-
       const adjByDate = new Map<string, number>();
       for (const row of adjRows) {
         const date = normalizeTradeDate(row.trade_date);
@@ -290,6 +283,12 @@ export class TushareMarketAdapter {
           adjByDate.set(date, row.adj_factor);
         }
       }
+      const latestAdjFactor = [...adjByDate.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .at(-1)?.[1];
+      if (dailyRows.length > 0 && latestAdjFactor === undefined) {
+        throw new Error(`unsupported_adjustment: adj_factor missing for ${tsCode}`);
+      }
 
       const seen = new Set<string>();
       const bars: DailyBar[] = [];
@@ -297,6 +296,8 @@ export class TushareMarketAdapter {
         // server 可能把 YYYYMMDD 序列化为 number 或 string。
         const date = normalizeTradeDate(row.trade_date);
         if (date === null || seen.has(date)) continue;
+        const tradeDate = parseYmd(date);
+        if (tradeDate < range.start || tradeDate > range.end) continue;
         const open = asMoney(row.open);
         const high = asMoney(row.high);
         const low = asMoney(row.low);
@@ -308,20 +309,19 @@ export class TushareMarketAdapter {
         seen.add(date);
         const adj = adjByDate.get(date);
         if (adj === undefined) {
-          this.logger.warn('tushare.fetchDailyBars adj_factor missing', {
-            stockCode: tsCode,
-            date,
-          });
+          throw new Error(`unsupported_adjustment: adj_factor missing for ${tsCode} ${date}`);
         }
+        const ratio = adj / (latestAdjFactor as number);
         bars.push({
           stockId: tsCode,
-          date: parseYmd(date), // UTC 00:00
-          open,
-          high,
-          low,
-          close,
+          date: tradeDate, // UTC 00:00
+          open: money(open * ratio),
+          high: money(high * ratio),
+          low: money(low * ratio),
+          close: money(close * ratio),
           volume,
-          adjFactor: adj ?? 1.0,
+          adjustment: 'qfq',
+          sourceAdjFactor: adj,
           source: 'tushare',
         });
       }

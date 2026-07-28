@@ -1,11 +1,12 @@
-import type { DailyBar, DailyBarRepository } from '@luoome/core';
+import { type DailyBar, type DailyBarRepository, DailyBarSchema } from '@luoome/core';
 
 /** DailyBar 的 in-memory 实现。Key 形如 `${stockId}|${dateMs}`，upsert 语义对齐 Drizzle。 */
 export class InMemoryDailyBarRepository implements DailyBarRepository {
   private readonly items = new Map<string, DailyBar>();
 
   put(bar: DailyBar): void {
-    this.items.set(this.keyOf(bar.stockId, bar.date), bar);
+    const parsed = DailyBarSchema.parse(bar);
+    this.items.set(this.keyOf(parsed.stockId, parsed.date), parsed);
   }
 
   async saveMany(bars: readonly DailyBar[]): Promise<void> {

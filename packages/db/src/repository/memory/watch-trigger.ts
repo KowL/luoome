@@ -1,6 +1,6 @@
 import {
-  assertWatchTriggerInvariants,
   ATTEMPTED_DELIVERY_STATUSES,
+  assertWatchTriggerInvariants,
   type DeliveryStatus,
   type TriggerFeedback,
   type WatchTrigger,

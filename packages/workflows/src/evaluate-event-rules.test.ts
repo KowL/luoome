@@ -1,9 +1,4 @@
-import {
-  type StockEvent,
-  StockGroupSchema,
-  StockPoolSchema,
-  type ToolContext,
-} from '@luoome/core';
+import { type StockEvent, StockGroupSchema, StockPoolSchema, type ToolContext } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -69,10 +64,12 @@ describe('evaluate-event-rules workflow', () => {
     expect(r.data.notified).toBe(1);
     const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-pool' });
     expect(triggers.length).toBe(1);
-    expect(triggers[0]?.eventId).toBe('evt-1');
-    expect(triggers[0]?.ruleKind).toBe('event-date');
-    expect(triggers[0]?.deliveryStatus).toBe('sent');
-    expect((triggers[0]?.evalSnapshot as { remindDay?: number }).remindDay).toBe(3);
+    const trigger = triggers[0];
+    if (trigger === undefined) throw new Error('expected one event trigger');
+    expect(trigger.eventId).toBe('evt-1');
+    expect(trigger.ruleKind).toBe('event-date');
+    expect(trigger.deliveryStatus).toBe('sent');
+    expect((trigger.evalSnapshot as { remindDay?: number }).remindDay).toBe(3);
   });
 
   it('重复执行 → (event, remindDay) 去重', async () => {

@@ -1,9 +1,9 @@
 import {
-  assertWatchTriggerInvariants,
-  ATTEMPTED_DELIVERY_STATUSES,
-  deriveRulePriority,
   type AlertPriority,
+  ATTEMPTED_DELIVERY_STATUSES,
+  assertWatchTriggerInvariants,
   type DeliveryStatus,
+  deriveRulePriority,
   type Money,
   type Quote,
   type Stock,
@@ -135,7 +135,11 @@ interface PrevClosesState extends QuotesState {
  */
 type EvalResult =
   | { readonly kind: 'true'; readonly evaluatedValue: number; readonly evidence: readonly string[] }
-  | { readonly kind: 'false'; readonly evaluatedValue: number; readonly evidence: readonly string[] }
+  | {
+      readonly kind: 'false';
+      readonly evaluatedValue: number;
+      readonly evidence: readonly string[];
+    }
   | { readonly kind: 'unknown' };
 
 interface EvaluatedState extends PrevClosesState {
@@ -148,9 +152,7 @@ interface EvaluatedState extends PrevClosesState {
 // ---------- helpers ----------
 
 /** 把每个 rule.id 缺省的补上稳定的临时 id（用于本轮评估；落库时也是 pool 内稳定 id）。 */
-const ensureRuleIds = (
-  pool: StockPool,
-): readonly (WatchRule & { id: string })[] => {
+const ensureRuleIds = (pool: StockPool): readonly (WatchRule & { id: string })[] => {
   const seen = new Set<string>();
   return pool.rules.map((r) => {
     const id = r.id ?? `r_${globalThis.crypto.randomUUID().slice(0, 8)}`;
@@ -183,7 +185,7 @@ const buildEvalSnapshot = (args: {
   threshold: Record<string, unknown>;
   evaluatedValue: number;
   prevClose?: Money;
-  prevCloseSource?: 'bar' | 'open-fallback';
+  prevCloseSource?: 'bar';
   avgCost?: Money;
   pnlPct?: number;
 }): Record<string, unknown> => ({
@@ -214,10 +216,8 @@ const evaluateRule = (
 
   if (rule.kind === 'price-change') {
     const prevClose = prevCloses.get(member.stockId);
-    const prevCloseSource: 'bar' | 'open-fallback' | undefined =
-      prevClose !== undefined ? 'bar' : quote.open > 0 ? 'open-fallback' : undefined;
-    const pc = prevClose !== undefined && prevClose > 0 ? prevClose : quote.open;
-    if (!(pc > 0)) return { kind: 'unknown' };
+    if (prevClose === undefined || !(prevClose > 0)) return { kind: 'unknown' };
+    const pc = prevClose;
     const change = (quote.close - pc) / pc;
     const pct = rule.pct;
     const pass =
@@ -229,11 +229,7 @@ const evaluateRule = (
     return {
       kind: pass ? 'true' : 'false',
       evaluatedValue: change,
-      evidence: [
-        `close=${quote.close}`,
-        `prevClose=${pc}`,
-        ...(prevCloseSource !== undefined ? [`prevCloseSource=${prevCloseSource}`] : []),
-      ],
+      evidence: [`close=${quote.close}`, `prevClose=${pc}`, 'prevCloseSource=bar'],
     };
   }
 
@@ -252,8 +248,7 @@ const evaluateRule = (
   }
 
   if (rule.kind === 'price-level') {
-    const pass =
-      rule.side === 'above' ? quote.close >= rule.level : quote.close <= rule.level;
+    const pass = rule.side === 'above' ? quote.close >= rule.level : quote.close <= rule.level;
     return {
       kind: pass ? 'true' : 'false',
       evaluatedValue: quote.close - rule.level,
@@ -312,9 +307,7 @@ const stepStateMachine = (
         ruleId: rule.id,
         active: false,
         lastEvaluatedAt: now,
-        ...(evaluation.kind === 'false'
-          ? { lastValue: evaluation.evaluatedValue }
-          : {}),
+        ...(evaluation.kind === 'false' ? { lastValue: evaluation.evaluatedValue } : {}),
       },
       emitTrigger: false,
       emitRecovered: false,
@@ -338,9 +331,7 @@ const stepStateMachine = (
       next: {
         ...prev,
         active: true,
-        ...(prev.firstTriggeredAt === undefined
-          ? { firstTriggeredAt: now }
-          : {}),
+        ...(prev.firstTriggeredAt === undefined ? { firstTriggeredAt: now } : {}),
         lastEvaluatedAt: now,
         lastValue: evaluation.evaluatedValue,
       },
@@ -381,9 +372,7 @@ const stepStateMachine = (
     next: {
       ...prev,
       lastEvaluatedAt: now,
-      ...(evaluation.kind === 'false'
-        ? { lastValue: evaluation.evaluatedValue }
-        : {}),
+      ...(evaluation.kind === 'false' ? { lastValue: evaluation.evaluatedValue } : {}),
     },
     emitTrigger: false,
     emitRecovered: false,
@@ -398,7 +387,10 @@ const resolveMembers = async (
 ): Promise<{ members: readonly PoolMember[]; skipReason?: string }> => {
   const group = await ctx.repos.stockGroup.findById(pool.groupId);
   if (group === null) {
-    ctx.logger.warn('[intraday-watch] 池引用的分组不存在', { poolId: pool.id, groupId: pool.groupId });
+    ctx.logger.warn('[intraday-watch] 池引用的分组不存在', {
+      poolId: pool.id,
+      groupId: pool.groupId,
+    });
     return { members: [], skipReason: 'group-missing' };
   }
   if (!group.enabled) {
@@ -432,9 +424,7 @@ const resolveMembers = async (
     if (!r.ok) return { members: [], skipReason: 'holdings-error' };
     return {
       members: r.data.holdings
-        .filter(
-          (h: { holding: { closedAt: Date | null } }) => h.holding.closedAt === null,
-        )
+        .filter((h: { holding: { closedAt: Date | null } }) => h.holding.closedAt === null)
         .map((h: { holding: { stockId: string; avgCost: Money } }) => ({
           stockId: h.holding.stockId,
           avgCost: h.holding.avgCost,
@@ -455,11 +445,22 @@ const evaluateTacticRuleMember = async (
   quotes: ReadonlyMap<string, Quote>,
   ctx: WorkflowContext,
 ): Promise<
-  ReadonlyMap<string, EvalResult & { score: number; direction: 'buy' | 'sell' | 'watch'; sigEvidence: readonly string[] }>
+  ReadonlyMap<
+    string,
+    EvalResult & {
+      score: number;
+      direction: 'buy' | 'sell' | 'watch';
+      sigEvidence: readonly string[];
+    }
+  >
 > => {
   const out = new Map<
     string,
-    EvalResult & { score: number; direction: 'buy' | 'sell' | 'watch'; sigEvidence: readonly string[] }
+    EvalResult & {
+      score: number;
+      direction: 'buy' | 'sell' | 'watch';
+      sigEvidence: readonly string[];
+    }
   >();
   if (members.length === 0) return out;
   const r = await ctx.tools.run_tactic.execute({
@@ -485,11 +486,7 @@ const evaluateTacticRuleMember = async (
       evidence: [...sig.evidence],
       score: sig.score,
       direction:
-        sig.direction === 'bullish'
-          ? 'buy'
-          : sig.direction === 'bearish'
-            ? 'sell'
-            : 'watch',
+        sig.direction === 'bullish' ? 'buy' : sig.direction === 'bearish' ? 'sell' : 'watch',
       sigEvidence: [...sig.evidence],
     });
   }
@@ -517,8 +514,7 @@ const stepDailyGroupRefresh: WorkflowStep = async (prev, ctx) => {
     const groups = await ctx.repos.stockGroup.list(true);
     const dailyDynamic = groups.filter(
       (g) =>
-        g.refreshPolicy === 'daily' &&
-        (g.resolver.kind === 'formula' || g.resolver.kind === 'llm'),
+        g.refreshPolicy === 'daily' && (g.resolver.kind === 'formula' || g.resolver.kind === 'llm'),
     );
     if (dailyDynamic.length === 0) {
       dailyGroupRefreshAttemptedFor = today;
@@ -631,23 +627,15 @@ const stepBatchQuote: WorkflowStep = async (prev, ctx) => {
   if (state.allStockIds.length === 0) {
     return { ...state, quotes: new Map<string, Quote>() } satisfies QuotesState;
   }
-  const r = await ctx.tools.batch_quote.execute({ stockIds: [...state.allStockIds] });
+  const r = await ctx.tools.batch_quote.execute({
+    stockIds: [...state.allStockIds],
+    context: 'intraday-rule',
+  });
   if (!r.ok) return r;
   const map = new Map<string, Quote>();
-  for (const q of r.data.quotes) map.set(q.stockId, q);
-  const now = ctx.clock();
-  for (const id of r.data.unresolved) {
-    if (!map.has(id)) {
-      map.set(id, {
-        stockId: id,
-        ts: now,
-        open: 0 as Money,
-        high: 0 as Money,
-        low: 0 as Money,
-        close: 0 as Money,
-        volume: 0,
-        source: 'unresolved',
-      });
+  for (const item of r.data.items) {
+    if (item.status === 'ok' && item.freshness === 'fresh') {
+      map.set(item.stockId, item.quote);
     }
   }
   return { ...state, quotes: map } satisfies QuotesState;
@@ -655,21 +643,15 @@ const stepBatchQuote: WorkflowStep = async (prev, ctx) => {
 
 const stepLoadPrevCloses: WorkflowStep = async (prev, ctx) => {
   const state = prev as QuotesState;
-  const now = ctx.clock();
   const prevCloses = new Map<string, Money>();
-  await Promise.all(
-    [...state.allStockIds].map(async (stockId) => {
-      try {
-        const bars = await ctx.repos.dailyBar.latestBefore(stockId, now, 1);
-        const last = bars[bars.length - 1];
-        if (last !== undefined && last.close > 0) {
-          prevCloses.set(stockId, last.close);
-        }
-      } catch {
-        // 静默：repo / IO 错误 → fallback 到 quote.open
-      }
-    }),
-  );
+  const result = await ctx.tools.get_previous_closes.execute({
+    stockIds: [...state.allStockIds],
+  });
+  if (result.ok) {
+    for (const item of result.data.items) {
+      if (item.status === 'ok' && item.close > 0) prevCloses.set(item.stockId, item.close);
+    }
+  }
   return { ...state, prevCloses } satisfies PrevClosesState;
 };
 
@@ -715,7 +697,11 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
       // 异步规则：tactic 一次跑整批
       let tacticResults: ReadonlyMap<
         string,
-        EvalResult & { score: number; direction: 'buy' | 'sell' | 'watch'; sigEvidence: readonly string[] }
+        EvalResult & {
+          score: number;
+          direction: 'buy' | 'sell' | 'watch';
+          sigEvidence: readonly string[];
+        }
       > | null = null;
       if (rule.kind === 'tactic') {
         tacticResults = await evaluateTacticRuleMember(rule, members, state.quotes, ctx);
@@ -726,7 +712,13 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         const evaluation: EvalResult =
           rule.kind === 'tactic' && tacticResults !== null
             ? (tacticResults.get(member.stockId) ?? { kind: 'unknown' })
-            : evaluateRule(rule, member, quote, state.prevCloses, state.avgCostByStock.get(member.stockId));
+            : evaluateRule(
+                rule,
+                member,
+                quote,
+                state.prevCloses,
+                state.avgCostByStock.get(member.stockId),
+              );
         if (evaluation.kind === 'unknown') {
           unknownCount += 1;
           // 状态保持：bootstrap 此前若无状态则初始化为 false，否则保留
@@ -747,7 +739,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         const sm = stepStateMachine(prevState, evaluation, rule, now);
         // dry-run（notify=false）下，bootstrap=true 也视作 emit（§11：试跑可见当前命中）
         const isDryRun = state.input.notify === false;
-        const bootstrapEmits = sm.emitTrigger || (isDryRun && prevState === undefined && evaluation.kind === 'true');
+        const bootstrapEmits =
+          sm.emitTrigger || (isDryRun && prevState === undefined && evaluation.kind === 'true');
 
         const nextState: WatchRuleState = {
           ...sm.next,
@@ -837,7 +830,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           prevState.active &&
           // sm.next.active 也应当为 true（保留）
           (pool.triggerMode === 'repeat' ||
-            (pool.triggerMode === 'daily-first' && !alreadyTriggeredToday(state, pool.id, member.stockId, rule.id, now)))
+            (pool.triggerMode === 'daily-first' &&
+              !alreadyTriggeredToday(state, pool.id, member.stockId, rule.id, now)))
         ) {
           const direction = deriveDirection(rule, evaluation, !!quote);
           const snapshot = buildEvalSnapshot({
@@ -905,7 +899,10 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           const compositeRuleKind = pickCompositeKind(evaluableRules) as WatchRule['kind'];
           const priority = evaluableRules
             .map((r) => deriveRulePriority(r, pool.priority))
-            .reduce<AlertPriority>((acc, p) => (priorityRank(p) > priorityRank(acc) ? p : acc), 'normal');
+            .reduce<AlertPriority>(
+              (acc, p) => (priorityRank(p) > priorityRank(acc) ? p : acc),
+              'normal',
+            );
           const quote = state.quotes.get(member.stockId);
           const id = makeTriggerId(pool.id, member.stockId, compositeId, now, 'cmp');
           const trigger: WatchTrigger = {
@@ -962,11 +959,12 @@ const alreadyTriggeredToday = (
   return false;
 };
 
-const priorityRank = (p: AlertPriority): number =>
-  p === 'urgent' ? 2 : p === 'important' ? 1 : 0;
+const priorityRank = (p: AlertPriority): number => (p === 'urgent' ? 2 : p === 'important' ? 1 : 0);
 
 const pickCompositeKind = (rules: readonly (WatchRule & { id: string })[]): WatchRule['kind'] => {
-  let best: WatchRule = rules[0]!;
+  const first = rules[0];
+  if (first === undefined) throw new Error('composite watch rule requires at least one rule');
+  let best: WatchRule = first;
   let bestP = -1;
   for (const r of rules) {
     const kind = r.kind;
@@ -995,9 +993,17 @@ const deriveDirection = (
     return evaluation.kind !== 'unknown' && evaluation.evaluatedValue >= 0 ? 'buy' : 'sell';
   }
   if (rule.kind === 'cost-threshold') {
-    if (rule.stopLossPct !== undefined && evaluation.kind !== 'unknown' && evaluation.evaluatedValue <= -rule.stopLossPct)
+    if (
+      rule.stopLossPct !== undefined &&
+      evaluation.kind !== 'unknown' &&
+      evaluation.evaluatedValue <= -rule.stopLossPct
+    )
       return 'sell';
-    if (rule.takeProfitPct !== undefined && evaluation.kind !== 'unknown' && evaluation.evaluatedValue >= rule.takeProfitPct)
+    if (
+      rule.takeProfitPct !== undefined &&
+      evaluation.kind !== 'unknown' &&
+      evaluation.evaluatedValue >= rule.takeProfitPct
+    )
       return 'buy';
     return 'watch';
   }
@@ -1023,8 +1029,10 @@ const makeReason = (rule: WatchRule, value: number, member: PoolMember): string 
   }
   if (rule.kind === 'cost-threshold') {
     const v = (value * 100).toFixed(2);
-    if (rule.stopLossPct !== undefined && value <= -rule.stopLossPct) return `止损 收益 ${v}% ≤ -${rule.stopLossPct * 100}%`;
-    if (rule.takeProfitPct !== undefined && value >= rule.takeProfitPct) return `止盈 收益 ${v}% ≥ ${rule.takeProfitPct * 100}%`;
+    if (rule.stopLossPct !== undefined && value <= -rule.stopLossPct)
+      return `止损 收益 ${v}% ≤ -${rule.stopLossPct * 100}%`;
+    if (rule.takeProfitPct !== undefined && value >= rule.takeProfitPct)
+      return `止盈 收益 ${v}% ≥ ${rule.takeProfitPct * 100}%`;
     return `成本阈值 收益 ${v}%`;
   }
   if (rule.kind === 'price-level') {
@@ -1075,14 +1083,18 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
   const now = ctx.clock();
   const todayStart = startOfTodayShanghai(now);
   const globalLimit =
-    Number((ctx as unknown as { config?: { globalDailyLimit?: number } }).config?.globalDailyLimit) ||
-    GLOBAL_DAILY_LIMIT_DEFAULT;
+    Number(
+      (ctx as unknown as { config?: { globalDailyLimit?: number } }).config?.globalDailyLimit,
+    ) || GLOBAL_DAILY_LIMIT_DEFAULT;
 
   // 已用额度（读库，避免本轮自己写入后被重复计入；先读一次，后续本轮新写入也要算）
   const baselineGlobal = await ctx.repos.watchTrigger.countAttemptedSince(todayStart, null);
   const baselineByPool = new Map<string, number>();
   for (const pool of state.pools) {
-    baselineByPool.set(pool.id, await ctx.repos.watchTrigger.countAttemptedSince(todayStart, pool.id));
+    baselineByPool.set(
+      pool.id,
+      await ctx.repos.watchTrigger.countAttemptedSince(todayStart, pool.id),
+    );
   }
 
   const out: WatchTrigger[] = [];
@@ -1103,10 +1115,7 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     let deliveryStatus: DeliveryStatus = 'pending';
 
     // 9. 优先级映射（normal → not-requested；试跑 / recovered + 默认关 → not-requested）
-    if (
-      cand.triggerType === 'recovered' &&
-      !(pool.notifyOnRecovery === true)
-    ) {
+    if (cand.triggerType === 'recovered' && !(pool.notifyOnRecovery === true)) {
       deliveryStatus = 'not-requested';
     } else if (cand.priority === 'normal') {
       // Phase 1 不做 15 分钟聚合，普通优先级只记录（§8 表格）
@@ -1130,7 +1139,7 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
 
     // 与 pickup 配额相关的占位：先按照 ATTEMPTED_STATUSES 决定哪些会让配额增 1
     if (
-      (deliveryStatus === 'pending') &&
+      deliveryStatus === 'pending' &&
       cand.priority !== 'normal' &&
       cand.triggerType !== 'recovered' &&
       cooldownHit === null
@@ -1191,7 +1200,8 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     notifiedCount += group.length;
     const lines = group.map((t) => {
       const dir = t.direction === 'buy' ? '买' : t.direction === 'sell' ? '卖' : '观察';
-      const prio = t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
+      const prio =
+        t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
       return `· ${prio}[${dir}] ${t.stockId} @ ${t.quote ? t.quote.close.toFixed(2) : '—'} — ${t.reason}`;
     });
     const content = lines.join('\n');

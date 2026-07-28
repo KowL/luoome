@@ -204,6 +204,7 @@ function errorResult(message: string): LimitUpLadderResult {
 
 export class LimitUpLadderManager {
   readonly name = 'limit-up-ladder' as const;
+  readonly sources: readonly string[];
 
   private readonly primary: LimitUpLadderAdapterLike;
   private readonly fallback: LimitUpLadderAdapterLike | undefined;
@@ -221,6 +222,10 @@ export class LimitUpLadderManager {
   constructor(opts: ManagerOptions) {
     this.primary = opts.primary;
     this.fallback = opts.fallback;
+    this.sources = [
+      opts.primary.name,
+      ...(opts.fallback === undefined ? [] : [opts.fallback.name]),
+    ];
     this.logger = opts.logger;
     this.clock = opts.clock;
     this.cache = new LRU<string, LimitUpLadder>(512);

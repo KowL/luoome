@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { FakeMarketAdapter } from '../testing/fake-market.js';
 import { QuoteCache } from './cache.js';
-import { MarketDataManager } from './manager.js';
+import { createTestMarketDataManager } from './manager.test-helper.js';
 
 /**
  * 真实行情链路容错深度测试（v0.6.2 起，docs/ddd/intraday-watch-design.md §'后续工作'）：
@@ -26,6 +26,9 @@ class ResilPrimary {
     if (this.failCodes.has(code)) throw new Error(`primary fail ${code}`);
     return {
       stockId: code,
+      observedAt: new Date('2026-07-21T02:30:00.000Z'),
+      fetchedAt: new Date('2026-07-21T02:30:00.000Z'),
+      timestampSource: 'retrieval' as const,
       ts: new Date('2026-07-21T02:30:00.000Z'),
       open: money(100),
       high: money(101),
@@ -42,9 +45,11 @@ class ResilPrimary {
   }
   fetchDailyBarsCalls = 0;
   failDailyBars = false;
+  emptyDailyBars = false;
   async fetchDailyBars(_code: string, range: DateRange): Promise<DailyBar[]> {
     this.fetchDailyBarsCalls += 1;
     if (this.failDailyBars) throw new Error('primary dailyBars fail');
+    if (this.emptyDailyBars) return [];
     return [
       {
         stockId: '600519.SH',
@@ -54,7 +59,7 @@ class ResilPrimary {
         low: money(94),
         close: money(95),
         volume: 1000,
-        adjFactor: 1,
+        adjustment: 'qfq' as const,
         source: 'resil-primary',
       },
     ].filter((b) => b.date >= range.start && b.date <= range.end);
@@ -69,6 +74,9 @@ class ResilFallback {
     this.callCount += 1;
     return {
       stockId: code,
+      observedAt: new Date('2026-07-21T02:30:00.000Z'),
+      fetchedAt: new Date('2026-07-21T02:30:00.000Z'),
+      timestampSource: 'retrieval' as const,
       ts: new Date('2026-07-21T02:30:00.000Z'),
       open: money(100),
       high: money(101),
@@ -96,7 +104,7 @@ class ResilFallback {
         low: money(93),
         close: money(94),
         volume: 999,
-        adjFactor: 1,
+        adjustment: 'qfq' as const,
         source: 'resil-fallback',
       },
     ].filter((b) => b.date >= range.start && b.date <= range.end);
@@ -106,10 +114,14 @@ class ResilFallback {
 class ResilFinal {
   readonly name = 'resil-final';
   callCount = 0;
+  failDailyBars = false;
   async fetchQuote(code: string) {
     this.callCount += 1;
     return {
       stockId: code,
+      observedAt: new Date('2026-07-21T02:30:00.000Z'),
+      fetchedAt: new Date('2026-07-21T02:30:00.000Z'),
+      timestampSource: 'retrieval' as const,
       ts: new Date('2026-07-21T02:30:00.000Z'),
       open: money(100),
       high: money(101),
@@ -126,6 +138,7 @@ class ResilFinal {
   }
   async fetchDailyBars(_code: string, _range: DateRange): Promise<DailyBar[]> {
     this.callCount += 1;
+    if (this.failDailyBars) throw new Error('final dailyBars fail');
     return [
       {
         stockId: '600519.SH',
@@ -135,7 +148,7 @@ class ResilFinal {
         low: money(92),
         close: money(93),
         volume: 888,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: 'resil-final',
       },
     ];
@@ -163,7 +176,7 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       fallback.fetchQuote = async () => {
         throw new Error('fallback fail A');
       };
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         logger: silentLogger,
@@ -177,7 +190,7 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       primary.failCodes = new Set(['A', 'B']);
       const fallback = new ResilFallback();
       const final = new ResilFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -212,7 +225,7 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
         return stubFetchQuote(code);
       };
       const final = new ResilFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -232,7 +245,7 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       const primary = new ResilPrimary();
       const fallback = new ResilFallback();
       const final = new ResilFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -251,7 +264,7 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       primary.failDailyBars = true;
       const fallback = new ResilFallback();
       const final = new ResilFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -265,13 +278,30 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       expect(final.callCount).toBe(0);
     });
 
+    it('交易日区间内 primary 返回空数组 → 视为 no_data 并 fallback', async () => {
+      const primary = new ResilPrimary();
+      primary.emptyDailyBars = true;
+      const fallback = new ResilFallback();
+      const mgr = createTestMarketDataManager({
+        primary,
+        fallback,
+        logger: silentLogger,
+      });
+
+      const bars = await mgr.fetchDailyBars('600519.SH', range);
+
+      expect(bars[0]?.source).toBe('resil-fallback');
+      expect(primary.fetchDailyBarsCalls).toBe(1);
+      expect(fallback.fetchDailyBarsCalls).toBe(1);
+    });
+
     it('primary + fallback 都抛 → finalFallback（mock）', async () => {
       const primary = new ResilPrimary();
       primary.failDailyBars = true;
       const fallback = new ResilFallback();
       fallback.failDailyBars = true;
       const final = new ResilFinal();
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -292,7 +322,7 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       fallback.failDailyBars = true;
       const final = new ResilFinal();
       let nowMs = 0;
-      const mgr = new MarketDataManager({
+      const mgr = createTestMarketDataManager({
         primary,
         fallback,
         finalFallback: final,
@@ -310,7 +340,29 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       await mgr.fetchDailyBars('600519.SH', range);
       expect(primary.fetchDailyBarsCalls).toBe(1); // 未增
       expect(fallback.fetchDailyBarsCalls).toBe(1); // 未增
-      expect(final.callCount).toBe(afterFirst + 1); // 直接 mock
+      expect(final.callCount).toBe(afterFirst); // final 成功也进入统一缓存
+    });
+
+    it('final source 失败不建立 suppress，下一次仍完整尝试主备源', async () => {
+      const primary = new ResilPrimary();
+      primary.failDailyBars = true;
+      const fallback = new ResilFallback();
+      fallback.failDailyBars = true;
+      const final = new ResilFinal();
+      final.failDailyBars = true;
+      const mgr = createTestMarketDataManager({
+        primary,
+        fallback,
+        finalFallback: final,
+        logger: silentLogger,
+      });
+
+      await expect(mgr.fetchDailyBars('600519.SH', range)).rejects.toThrow('final dailyBars fail');
+      await expect(mgr.fetchDailyBars('600519.SH', range)).rejects.toThrow('final dailyBars fail');
+
+      expect(primary.fetchDailyBarsCalls).toBe(2);
+      expect(fallback.fetchDailyBarsCalls).toBe(2);
+      expect(final.callCount).toBe(2);
     });
   });
 
@@ -381,7 +433,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
   it('Eastmoney + Tencent 都失败、tushare 成功 → 返回 source=tushare', async () => {
     const primary = new AlwaysFailSource();
     const fallback = new AlwaysFailSource();
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary,
       fallback,
       finalFallback: await makeTushareFinal(),
@@ -393,7 +445,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
   });
 
   it('Eastmoney + Tencent + tushare 全失败 → 抛错', async () => {
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary: new AlwaysFailSource(),
       fallback: new AlwaysFailSource(),
       finalFallback: new AlwaysFailSource(),
@@ -406,7 +458,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
     const primary = new AlwaysFailSource();
     const fallback = new AlwaysFailSource();
     let nowMs = 0;
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary,
       fallback,
       finalFallback: await makeTushareFinal(),
@@ -437,7 +489,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
 
   it('Eastmoney 成功时 finalFallbackCalls = 0', async () => {
     const primary = new ResilPrimary();
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary,
       fallback: new ResilFallback(),
       finalFallback: await makeTushareFinal(),
@@ -451,7 +503,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
   it('searchStocks 主源返回空数组 → 不触发 fallback 到 tushare', async () => {
     const primary = new AlwaysFailSource('empty');
     const fallback = new AlwaysFailSource();
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary,
       fallback,
       finalFallback: await makeTushareFinal(),
@@ -464,7 +516,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
   });
 
   it('searchStocks 主备源抛错 → 触发 fallback 到 tushare', async () => {
-    const mgr = new MarketDataManager({
+    const mgr = createTestMarketDataManager({
       primary: new AlwaysFailSource(),
       fallback: new AlwaysFailSource(),
       finalFallback: await makeTushareFinal(),

@@ -81,11 +81,7 @@ const stepRun: WorkflowStep = async (prev, ctx: WorkflowContext) => {
   const { synced, upserted, staleMarked, providerStatuses } = r.data;
   const anyFailed = providerStatuses.some((p) => !p.ok);
   const allFailed = providerStatuses.length > 0 && providerStatuses.every((p) => !p.ok);
-  const status: WorkflowRun['status'] = allFailed
-    ? 'failed'
-    : anyFailed
-      ? 'partial'
-      : 'succeeded';
+  const status: WorkflowRun['status'] = allFailed ? 'failed' : anyFailed ? 'partial' : 'succeeded';
 
   const runProviderStatuses: ProviderStatus[] = providerStatuses.map((p) => ({
     provider: p.provider,

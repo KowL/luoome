@@ -50,6 +50,54 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
+  it('旧版 price_snapshots(ts) 幂等迁移为双时间并保留数据', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { Database } = await import('bun:sqlite');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luoome-quote-migration-'));
+    const dbPath = path.join(dir, 'legacy.sqlite');
+    try {
+      const sqlite = new Database(dbPath);
+      sqlite.exec(`
+        CREATE TABLE price_snapshots (
+          stock_id TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          open REAL NOT NULL,
+          high REAL NOT NULL,
+          low REAL NOT NULL,
+          close REAL NOT NULL,
+          volume INTEGER NOT NULL,
+          source TEXT NOT NULL,
+          PRIMARY KEY (stock_id, ts)
+        );
+        INSERT INTO price_snapshots
+          (stock_id, ts, open, high, low, close, volume, source)
+        VALUES
+          ('600519.SH', 1784591400000, 100, 101, 99, 100.5, 1234, 'legacy');
+      `);
+      sqlite.close();
+
+      const handle = createDrizzleRepos(dbPath);
+      const migrated = await handle.repos.quote.latestByStock('600519.SH');
+      expect(migrated).toMatchObject({
+        stockId: '600519.SH',
+        timestampSource: 'retrieval',
+        source: 'legacy',
+        close: 100.5,
+      });
+      expect(migrated?.observedAt.getTime()).toBe(1784591400000);
+      expect(migrated?.fetchedAt.getTime()).toBe(1784591400000);
+      ensureSchema(handle.db);
+      expect(
+        await handle.repos.quote.listInRange('600519.SH', new Date(0), new Date(8.64e15)),
+      ).toHaveLength(1);
+      handle.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('旧版 stock_pools（source NOT NULL、无 group_id）→ ensureSchema 结构升级：旧行可读、新行可写', async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');

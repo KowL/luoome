@@ -1,3 +1,4 @@
+import type { MarketSourceStatus } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -6,9 +7,6 @@ import { computeRelevantStockIds } from './sync-stock-events.js';
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const shanghaiDay = (date: Date): string =>
   new Date(date.getTime() + SHANGHAI_OFFSET_MS).toISOString().slice(0, 10);
-
-/** 已知行情 provider（Eastmoney 主 → Tencent 备）。 */
-const KNOWN_PROVIDERS = ['eastmoney', 'tencent'] as const;
 
 /** 新鲜度阈值：最新快照超过 15 分钟视为 stale（Phase 1 简化，不区分盘中/盘后）。 */
 const STALE_AFTER_MS = 15 * 60 * 1000;
@@ -19,10 +17,24 @@ export const ProviderFreshnessSchema = z.object({
   latestObservedAt: z.coerce.date().optional(),
 });
 
+const DatasetStatusSchema = z.object({
+  dataset: z.string(),
+  source: z.string(),
+  coverage: z.array(z.string()),
+  capabilityEnabled: z.boolean(),
+  configurationReady: z.boolean(),
+  lastAttemptAt: z.coerce.date().optional(),
+  lastSuccessAt: z.coerce.date().optional(),
+  dataAsOf: z.coerce.date().optional(),
+  freshness: z.enum(['fresh', 'stale', 'unknown', 'unavailable']),
+  lastErrorKind: z.string().optional(),
+});
+
 export const GetMarketDataStatusInput = z.object({});
 
 export const GetMarketDataStatusOutput = z.object({
   providers: z.array(ProviderFreshnessSchema),
+  datasets: z.array(DatasetStatusSchema),
   watchHealth: z
     .object({
       state: z.enum(['never', 'running', 'healthy', 'failed']),
@@ -57,12 +69,52 @@ export const getMarketDataStatusTool = defineTool({
       const quotes = await ctx.repos.quote.latestByStocks(stockIds);
       for (const q of quotes.values()) {
         const prev = latestBySource.get(q.source);
-        if (prev === undefined || q.ts.getTime() > prev.getTime()) {
-          latestBySource.set(q.source, q.ts);
+        if (prev === undefined || q.observedAt.getTime() > prev.getTime()) {
+          latestBySource.set(q.source, q.observedAt);
         }
       }
     }
-    const providers = KNOWN_PROVIDERS.map((provider) => {
+    const marketInventory = ctx.adapters.market.marketSourceStatus();
+    const universeInventory: MarketSourceStatus[] = await Promise.all(
+      (ctx.adapters.stockUniverse?.sources ?? []).map(async (source) => {
+        const latest = await ctx.repos.stockUniverse.latestSuccessfulSync({
+          source,
+          coverage: 'CN_A_SHARES_SH_SZ',
+        });
+        return {
+          dataset: 'stock-universe' as const,
+          source,
+          coverage: ['CN_A_SHARES_SH_SZ'] as const,
+          capabilityEnabled: true,
+          configurationReady: true,
+          ...(latest === null ? {} : { lastAttemptAt: latest.startedAt }),
+          ...(latest?.finishedAt === null || latest?.finishedAt === undefined
+            ? {}
+            : { lastSuccessAt: latest.finishedAt }),
+          ...(latest?.observedAt === null || latest?.observedAt === undefined
+            ? {}
+            : { dataAsOf: latest.observedAt }),
+        };
+      }),
+    );
+    const ladderInventory: MarketSourceStatus[] = (ctx.limitUpLadder?.sources ?? []).map(
+      (source) => ({
+        dataset: 'limit-up-ladder' as const,
+        source,
+        coverage: ['CN_A_SHARES_SH_SZ'] as const,
+        capabilityEnabled: true,
+        configurationReady: true,
+      }),
+    );
+    const inventory: readonly MarketSourceStatus[] = [
+      ...marketInventory,
+      ...universeInventory,
+      ...ladderInventory,
+    ];
+    const sourceIds = [
+      ...new Set([...inventory.map((item) => item.source), ...latestBySource.keys()]),
+    ];
+    const providers = sourceIds.map((provider) => {
       const latest = latestBySource.get(provider);
       if (latest === undefined) {
         return { provider, freshness: 'unknown' as const };
@@ -73,6 +125,24 @@ export const getMarketDataStatusTool = defineTool({
         freshness: fresh ? ('fresh' as const) : ('stale' as const),
         latestObservedAt: latest,
       };
+    });
+    const datasets = inventory.map((item) => {
+      const dataAt = item.dataAsOf ?? item.lastSuccessAt;
+      const thresholdMs =
+        item.dataset === 'quote' ||
+        item.dataset === 'realtime-index' ||
+        item.dataset === 'market-snapshot'
+          ? STALE_AFTER_MS
+          : 36 * 60 * 60 * 1000;
+      const freshness =
+        dataAt !== undefined
+          ? now.getTime() - dataAt.getTime() <= thresholdMs
+            ? ('fresh' as const)
+            : ('stale' as const)
+          : item.lastErrorKind !== undefined
+            ? ('unavailable' as const)
+            : ('unknown' as const);
+      return { ...item, coverage: [...item.coverage], freshness };
     });
 
     // watch 健康
@@ -108,6 +178,6 @@ export const getMarketDataStatusTool = defineTool({
       }
     }
 
-    return { providers, watchHealth, groupStale };
+    return { providers, datasets, watchHealth, groupStale };
   },
 });

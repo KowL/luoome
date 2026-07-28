@@ -48,10 +48,14 @@ export class DrizzleWorkflowRunRepository implements WorkflowRunRepository {
   async save(run: WorkflowRun): Promise<void> {
     assertWorkflowRunInvariants(run);
     const row = toRow(run);
-    this.db.insert(workflowRuns).values(row).onConflictDoUpdate({
-      target: workflowRuns.id,
-      set: row,
-    }).run();
+    this.db
+      .insert(workflowRuns)
+      .values(row)
+      .onConflictDoUpdate({
+        target: workflowRuns.id,
+        set: row,
+      })
+      .run();
   }
 
   async findById(id: string): Promise<WorkflowRun | null> {

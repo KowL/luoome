@@ -21,6 +21,8 @@ const EXPECTED_TOOL_NAMES = [
   'batch_quote',
   'fetch_index_quotes',
   'sync_quotes',
+  'sync_daily_bars',
+  'get_previous_closes',
   'search_stocks',
   'compute_indicators',
   // v0.3 新增
@@ -71,6 +73,7 @@ const EXPECTED_TOOL_NAMES = [
   'update_stock_event',
   'delete_stock_event',
   'sync_stock_events',
+  'sync_stock_universe',
   'get_market_data_status',
   'list_workflow_runs',
   // Phase 1：连板天梯
@@ -85,6 +88,7 @@ const EXPECTED_TOOL_NAMES = [
   'append_chat_message',
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   'get_stock_market_view',
+  'get_stock_universe_status',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -133,8 +137,10 @@ describe('toolRegistry', () => {
       'get_stock_market_view',
       'refresh_stock_group',
       'send_notification',
+      'sync_daily_bars',
       'sync_quotes',
       'sync_stock_events',
+      'sync_stock_universe',
     ]);
     const writeTools = toolRegistry
       .all()

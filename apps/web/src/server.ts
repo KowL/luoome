@@ -1,6 +1,6 @@
 // @luoome/web —— 最小 Web 端（docs/archive/plan.md 跨包契约 / ARCHITECTURE §10）。
 // Hono HTTP API + 同源静态仪表盘：
-//   GET  /api/stocks/search    → tushare 优先搜索（TUSHARE_TOKEN 配置后），本地行情源兜底
+//   GET  /api/stocks/search    → search_stocks tool（本地股票目录优先，外部行情源补充）
 //   GET  /api/holdings          → list_holdings
 //   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
@@ -19,11 +19,9 @@ import {
   createAIStackFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
-  tushareConfigFromEnv,
-  tushareQuery,
+  createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
-import type { SideEffect, Stock, ToolContext, ToolError, ToolResult } from '@luoome/core';
-import { stockCode as brandStockCode } from '@luoome/core';
+import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { buildContext, toolRegistry } from '@luoome/tools';
 import { runIntradayWatchObserved } from '@luoome/workflows';
@@ -70,6 +68,8 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'fetch_index_quotes',
   'refresh_stock_group',
   'get_stock_market_view',
+  'sync_stock_universe',
+  'sync_daily_bars',
 ]);
 
 /**
@@ -193,6 +193,10 @@ export const buildWebContext = async (
         logger: console,
         // Web 持仓 / 分组页盘中 10s 轮询；TTL 不调小的话拿到的都是缓存
         quoteCacheTtlMs: 10_000,
+      }),
+      stockUniverse: createStockUniverseManagerFromEnv(env, {
+        clock: now,
+        logger: console,
       }),
       llm: ai?.llm ?? unavailableLLM,
     },
@@ -1103,7 +1107,12 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     interface BoardItem {
       stockId: string;
       name: string;
-      quote: { close: number; ts: unknown } | null;
+      quote: {
+        close: number;
+        observedAt: unknown;
+        retrieval: 'live' | 'local-fallback';
+        freshness: 'fresh' | 'stale';
+      } | null;
       /** 股价涨跌幅（%）；持仓股由 list_holdings 今日涨跌幅换算，其余无昨收基准为 null。 */
       changePct: number | null;
       holding: {
@@ -1185,14 +1194,34 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       }
     }
     if (board.size > 0) {
-      const quotesResult = await invokeTool('batch_quote', { stockIds: [...board.keys()] });
+      const quotesResult = await invokeTool('batch_quote', {
+        stockIds: [...board.keys()],
+        context: 'display',
+      });
       if (quotesResult.ok) {
-        const { quotes } = quotesResult.data as {
-          quotes: Array<{ stockId: string; close: number; ts: unknown }>;
+        const { items } = quotesResult.data as {
+          items: Array<
+            | {
+                stockId: string;
+                status: 'ok';
+                quote: { close: number; observedAt: unknown };
+                retrieval: 'live' | 'local-fallback';
+                freshness: 'fresh' | 'stale';
+              }
+            | { stockId: string; status: 'unresolved' | 'unavailable'; reason: string }
+          >;
         };
-        for (const q of quotes) {
-          const item = board.get(q.stockId);
-          if (item !== undefined) item.quote = { close: q.close, ts: q.ts };
+        for (const result of items) {
+          if (result.status !== 'ok') continue;
+          const item = board.get(result.stockId);
+          if (item !== undefined) {
+            item.quote = {
+              close: result.quote.close,
+              observedAt: result.quote.observedAt,
+              retrieval: result.retrieval,
+              freshness: result.freshness,
+            };
+          }
         }
       } else {
         warnings.push(`batch_quote 失败（${quotesResult.error.kind}），看板行情降级为空`);
@@ -1403,15 +1432,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return createChatStreamResponse(body, ctxRef.current, runtime, c.req.raw.signal);
   });
 
-  // 股票搜索（tushare 优先，本地数据库兜底）
-  // stock_basic 全量清单进程内缓存：TUSHARE_URL 代理网关会忽略 name 参数返回全表，
-  // 所以拉全量后在本地按 code/name 子串过滤，不能直接依赖上游参数过滤。
-  let tushareStockListCache: {
-    readonly stocks: readonly Stock[];
-    readonly fetchedAt: number;
-  } | null = null;
-  const TUSHARE_STOCK_LIST_TTL_MS = 24 * 60 * 60 * 1000;
-
   app.get('/api/stocks/search', async (c) => {
     const q = c.req.query('q');
     const limitRaw = c.req.query('limit');
@@ -1428,103 +1448,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       });
     }
 
-    const name = q.trim();
-    const validExchanges = new Set<Stock['exchange']>(['SH', 'SZ', 'BJ', 'HK', 'US']);
-
-    const toStock = (item: {
-      readonly ts_code: string;
-      readonly name: string;
-      readonly industry?: string | undefined;
-    }): Stock | null => {
-      const parts = item.ts_code.trim().split('.');
-      if (parts.length !== 2) return null;
-      const [code, exchange] = parts;
-      if (code === undefined || exchange === undefined) return null;
-      const upperExchange = exchange.toUpperCase() as Stock['exchange'];
-      if (!validExchanges.has(upperExchange)) return null;
-      try {
-        return item.industry === undefined
-          ? {
-              id: `${code}.${upperExchange}`,
-              code: brandStockCode(code),
-              exchange: upperExchange,
-              name: item.name,
-            }
-          : {
-              id: `${code}.${upperExchange}`,
-              code: brandStockCode(code),
-              exchange: upperExchange,
-              name: item.name,
-              industry: item.industry,
-            };
-      } catch {
-        return null;
-      }
-    };
-
-    const tushareToken = process.env.TUSHARE_TOKEN?.trim();
-    if (tushareToken !== undefined && tushareToken.length > 0) {
-      try {
-        if (
-          tushareStockListCache === null ||
-          Date.now() - tushareStockListCache.fetchedAt > TUSHARE_STOCK_LIST_TTL_MS
-        ) {
-          const rows = await tushareQuery(
-            'stock_basic',
-            {},
-            tushareConfigFromEnv(process.env),
-            fetch,
-            ['ts_code', 'name', 'industry'],
-          );
-          const stocks = rows
-            .map((row) =>
-              typeof row.ts_code === 'string' && typeof row.name === 'string'
-                ? toStock({
-                    ts_code: row.ts_code,
-                    name: row.name,
-                    ...(typeof row.industry === 'string' ? { industry: row.industry } : {}),
-                  })
-                : null,
-            )
-            .filter((candidate): candidate is Stock => candidate !== null);
-          // 空清单不缓存（上游抖动时下次请求重拉），否则 24h 内搜索全空。
-          if (stocks.length > 0) tushareStockListCache = { stocks, fetchedAt: Date.now() };
-        }
-        if (tushareStockListCache !== null) {
-          const keyword = name.toLowerCase();
-          const matched = tushareStockListCache.stocks.filter(
-            (s) =>
-              s.code.includes(name) ||
-              s.id.toLowerCase().includes(keyword) ||
-              s.name.toLowerCase().includes(keyword),
-          );
-          if (matched.length > 0) {
-            return jsonResult({
-              ok: true,
-              data: {
-                stocks: matched.slice(0, limit),
-                total: matched.length,
-                source: 'tushare' as const,
-              },
-            });
-          }
-        }
-      } catch (error) {
-        ctxRef.current.logger.warn('tushare search fallback to local', { q, error: String(error) });
-      }
-    }
-
-    const localResult = await invokeTool('search_stocks', { query: name, limit });
-    if (!localResult.ok) return jsonResult(localResult);
-    const localData = localResult.data as { stocks: Stock[]; total: number; source?: string };
-    return jsonResult({
-      ok: true,
-      data: {
-        stocks: localData.stocks,
-        total: localData.total,
-        source: (localData.source as 'local' | 'market') ?? 'local',
-      },
-    });
+    return jsonResult(await invokeTool('search_stocks', { query: q.trim(), limit }));
   });
 
   app.get('/api/advice', (c) => {

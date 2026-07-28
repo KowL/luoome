@@ -7,6 +7,7 @@ import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, Quote } from './entity/quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
+import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { RepositoryRegistry } from './repository/index.js';
 
 /**
@@ -20,22 +21,43 @@ export interface MarketDataAdapterLike {
   fetchQuote(stockCode: string): Promise<Quote>;
   batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>>;
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
-  /**
-   * 外部数据源股票搜索（v0.8 起，可选实现）。
-   * search_stocks tool 优先走它；未实现或抛错时降级本地 StockRepository。
-   */
-  searchStocks?(query: string): Promise<StockSearchCandidate[]>;
-  /**
-   * 大盘指数实时行情（可选实现）。
-   * 数据源不支持指数行情时不实现该方法；调用方按「不支持」降级处理
-   * （fetch_index_quotes tool 返回 { indices: [], unsupported: true }）。
-   */
-  fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
-  /**
-   * 全市场快照（可选实现；分组刷新 / run_tactic scope=all-stocks 的候选全集来源）。
-   * 数据源不支持时不实现该方法；未实现或抛错时调用方降级本地 StockRepository。
-   */
-  fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
+  /** 外部数据源股票搜索；不支持时以 unsupported_capability 拒绝。 */
+  searchStocks(query: string): Promise<StockSearchCandidate[]>;
+  /** 大盘指数实时行情；不支持时以 unsupported_capability 拒绝。 */
+  fetchIndexQuotes(): Promise<readonly IndexQuote[]>;
+  /** 全市场快照；不支持时以 unsupported_capability 拒绝。 */
+  fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
+  /** 启用数据源与能力的动态库存及进程内健康观测。 */
+  marketSourceStatus(): readonly MarketSourceStatus[];
+}
+
+export interface MarketSourceStatus {
+  readonly dataset:
+    | 'quote'
+    | 'daily-bars'
+    | 'search'
+    | 'market-snapshot'
+    | 'realtime-index'
+    | 'delayed-index'
+    | 'stock-universe'
+    | 'limit-up-ladder';
+  readonly source: string;
+  readonly coverage: readonly MarketCoverage[];
+  readonly capabilityEnabled: boolean;
+  readonly configurationReady: boolean;
+  readonly lastAttemptAt?: Date;
+  readonly lastSuccessAt?: Date;
+  readonly dataAsOf?: Date;
+  readonly lastErrorKind?: string;
+}
+
+export interface StockUniverseManagerLike {
+  readonly name: 'stock-universe';
+  readonly sources: readonly string[];
+  fetchStockUniverse(input: {
+    readonly coverage: MarketCoverage;
+    readonly source?: string;
+  }): Promise<StockUniverseSnapshot>;
 }
 
 /** 股票搜索候选（外部数据源统一形状；id = '<code>.<EXCHANGE>'）。 */
@@ -143,6 +165,7 @@ export interface ToolContext {
   readonly repos: RepositoryRegistry;
   readonly adapters: {
     readonly market: MarketDataAdapterLike;
+    readonly stockUniverse?: StockUniverseManagerLike;
     readonly llm: LLMAdapterLike;
   };
   /** Phase 2：可选多步 agent runtime；测试或未配置 surface 可不注入。 */
@@ -230,6 +253,7 @@ export interface LimitUpLadderCompareResultLike {
 
 export interface LimitUpLadderManagerLike {
   readonly name: 'limit-up-ladder';
+  readonly sources: readonly string[];
   fetchLadder(query: LimitUpLadderQuery): Promise<LimitUpLadderResultLike>;
   compareLadder(
     date: string,

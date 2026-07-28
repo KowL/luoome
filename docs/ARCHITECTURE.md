@@ -283,41 +283,58 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 
 ### 4.7 Adapter（adapters 包）
 
-每个外部依赖是一个 adapter，统一接口。
+每个外部依赖通过 adapter 接入。行情对外暴露稳定的 `MarketDataAdapterLike` Gateway，
+内部按 capability 拆分注册，caller 不探测 provider 的可选方法。
 
 ```ts
-// adapters/market/types.ts
-export interface MarketDataAdapter {
-  readonly name: string;
-  fetchQuote(stockCode: string): Promise<Quote>;
-  batchQuote(stockCodes: string[]): Promise<Map<string, Quote>>;
-  fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
+type MarketCapability =
+  | 'quote'
+  | 'daily-bars'
+  | 'search'
+  | 'market-snapshot'
+  | 'realtime-index'
+  | 'delayed-index';
+
+interface MarketCapabilityBinding<C extends MarketCapability> {
+  readonly capability: C;
+  readonly source: string;
+  readonly coverage: readonly MarketCoverage[];
+  readonly configurationReady: boolean;
+  execute(input: CapabilityRequestMap[C]): Promise<CapabilityResultMap[C]>;
 }
 ```
 
 Adapter manager 提供：
-- 健康检查
-- 故障降级（主源失败 → 备用源）
+
+- 从同一 Registry 派生启用状态、顺序、覆盖范围和进程内健康观测
+- 按 capability 路由和故障降级；所有来源均来自显式配置
 - 缓存（带 TTL）
 - 限速（per-adapter 配额）
-- 股票搜索路由（v0.8 起：`searchStocks` 走 primary → fallback，空数组不降级、抛错才降级）
-- 全市场快照路由（可选方法 `fetchMarketSnapshot`：分组刷新 / run_tactic `scope='all-stocks'`
-  的候选全集来源；Manager 路由到实现了该方法的源，带 TTL 缓存默认 5 分钟——
+- 股票搜索路由（空数组不降级、抛错才降级）
+- 全市场快照路由（分组刷新 / run_tactic `scope='all-stocks'` 的候选全集来源；
+  Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟——
   一轮 refresh-groups 内多个分组共享同一份快照；所有源都不支持时调用方降级本地 stocks 表。
   eastmoney 实现走 `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板）
+- 指数行情严格区分 `realtime-index` 与 `delayed-index`；Tushare 日线型指数数据不能进入实时接口
+
+`MarketDataManager` 构造时必须传入 `MarketSourceRegistry`，不存在接受 provider 宽接口的兼容
+构造路径，也不得在 Registry 之外临时实例化 Eastmoney 等隐藏来源。新增或替换来源时，在
+composition root 将 adapter 的实际能力绑定到 Registry；tool、workflow 和 surface 不改。
 
 surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
-启用源及 `primary → fallback → finalFallback` 优先级，可选
+启用源及各 capability 的尝试优先级，可选
 `eastmoney`、`tencent`、`tushare`。未配置时默认 Eastmoney → Tencent。显式启用
 Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网关
 `http://api.tushare.pro`），非法配置在启动期抛错。
 详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md)。
 
 连板天梯不走 `MarketDataManager`，由 `createLimitUpLadderManagerFromEnv`
-（adapters/limit-up-ladder/factory.ts）独立装配：主源为东方财富公开涨停池
-（`getTopicZTPool`，无鉴权、不读环境变量），单源写死、无 fallback。
+（adapters/limit-up-ladder/factory.ts）独立装配。`LUOOME_LIMIT_UP_LADDER_SOURCES`
+显式声明来源，当前唯一注册值为 `eastmoney`（`getTopicZTPool`，无鉴权）；未知来源在
+启动期失败，不做隐式 Eastmoney fallback。Manager 暴露实际 sources，健康读模型据此生成
+`limit-up-ladder` 数据集库存。
 
 Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优先级与配置就绪状态，
 不返回密钥；受 mutation token 与同源 Origin 保护的 POST 将配置原子写入权限为
@@ -377,7 +394,21 @@ interface ToolContext {
 
 **v0.6.2 起加深**：`MarketDataManager` 容错测试覆盖增加（详见 `packages/adapters/src/market/manager-resilience.test.ts`）：`batchQuote` 部分失败（primary 局部抛错 → fallback 仅补失败的那部分，其它 ok 仍走 primary）、`fetchDailyBars` 三层 fallback（primary → fallback → finalFallback）、自定义 `finalFallbackSuppressMs` 窗口验证。无新功能，纯测试深覆盖。
 
-**v0.6.1 起新增**：intraday-watch workflow 多一个 `stepLoadPrevCloses`：在 batch_quote 之后用 `dailyBar.latestBefore(stockId, now, 1)` 给每个 distinct stock 拉真实昨收；价格变动评估（`price-change`）从 v0.6 的 `q.open` 占位切到 `prevCloses.get(stockId) ?? q.open`，缺失自然 fallback。
+**行情底座 Phase 2 起收口**：intraday-watch 在 batch_quote 之后通过
+`get_previous_closes` tool 批量读取严格早于目标交易日的 qfq 收盘价；`price-change`
+缺昨收时为 `unknown`，不再直接访问 DailyBarRepository，也不使用 `quote.open` 兜底。
+
+**行情底座 Phase 3 起收口**：`Quote` 区分市场观测时间 `observedAt` 与抓取时间
+`fetchedAt`，并记录时间来源；price snapshot 以 `(stockId, observedAt, source)` 唯一。
+`batch_quote` 逐股票返回 live/local-fallback、fresh/stale、unresolved/unavailable 状态，
+display、intraday-rule、post-market 三类 caller 使用不同有效性边界。盘中规则只消费当日且
+在允许延迟内的 fresh Quote，不再为缺失行情合成 `close=0` 快照。
+
+**行情底座 Phase 4 起收口**：`MarketSourceRegistry` 是行情来源启用顺序、capability、
+coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManager` 只接受 Registry；
+`realtime-index` 与 `delayed-index` 分路，Tushare 不再通过隐藏 Eastmoney 旁路提供实时
+指数。`get_market_data_status` 从 Registry、股票目录 checkpoint 和连板天梯显式来源动态
+生成数据集状态，不维护固定 provider 常量。
 
 **v0.7 起新增**：`packages/cli/src/paths.ts`（`luoomeHome()` 从 context.ts 抽出，被 watch / holidays / future paths 共享）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
 
@@ -395,7 +426,7 @@ Stock            标的（代码、交易所、名称、行业）
 Holding          持仓（账户、标的、数量、成本、开/平仓时间）
 Trade            交易记录（买/卖、数量、价、费、时间、来源）
 PriceSnapshot    实时行情快照（标的、ts、OHLC、量、源）
-DailyBar         日线（标的、日期、OHLC、量、复权因子）
+DailyBar         规范前复权日线（标的、日期、qfq OHLC、量、来源、可选原始复权因子）
 Tactic           战法定义（名称、版本、YAML/JSON spec、标签）
 TacticSignal     战法信号（战法、标的、ts、分数、方向、证据）
 Alert            预警（账户?、标的?、类型、参数、状态）
@@ -641,8 +672,9 @@ type ToolError =
 - `market-outlook`：拉大盘指数 + 板块涨跌 → LLM 综合 → 市场观点（v0.3）
 - `risk-report`：风控指标 + 持仓建议（v0.3）
 - `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
+- `post-market-data`：交易日盘后同步股票目录与相关股票 qfq 日线，目录或单股失败时保留成功项并返回 partial
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
-- `intraday-watch`：单轮盘中盯盘评估 —— daily 分组刷新检查 → 池成员 → batch_quote → 规则评估 → cooldown 过滤 → 触发落库 → 通知（v0.6 起；设计：[docs/ddd/intraday-watch-design.md](./ddd/intraday-watch-design.md)）
+- `intraday-watch`：单轮盘中盯盘评估 —— daily 分组刷新检查 → 池成员 → batch_quote → get_previous_closes → 规则评估 → cooldown 过滤 → 触发落库 → 通知；昨收不可用时 price-change 为 unknown，不使用 quote.open（v0.6 起；设计：[docs/ddd/intraday-watch-design.md](./ddd/intraday-watch-design.md)）
 - `refresh-groups`：盘外刷新 enabled 动态分组（formula→run_tactic / llm→resolve_llm_group），失败 / 空结果保留旧快照，输出 entered/exited（分组化起；设计：[docs/ddd/stock-group-design.md](./ddd/stock-group-design.md)）
 - **Phase 2 候选**：连板天梯联动 workflow —— 在 `daily-review` / `market-outlook` 中读 `limit_up_ladder` 与 `limit_up_ladder_compare` tool，把天梯快照作为 LLM 复盘段的事实来源（替换 ruo 旧 `market-review.chain.ts` 字符串拼接）。Phase 1 仅提供 tool；workflow 改造延后（设计：[docs/ddd/limit-up-ladder-detailed-design.md §9](./ddd/limit-up-ladder-detailed-design.md)）。
 

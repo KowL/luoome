@@ -44,8 +44,10 @@ export const addResearchNoteTool = defineTool({
   output: AddResearchNoteOutput,
   handler: async (input, ctx) => {
     if (input.kind === 'source-summary') {
-      if (input.sourceUrl === undefined) return errInvalidInput('source-summary 笔记必须提供 sourceUrl');
-      if (input.fetchedAt === undefined) return errInvalidInput('source-summary 笔记必须提供 fetchedAt');
+      if (input.sourceUrl === undefined)
+        return errInvalidInput('source-summary 笔记必须提供 sourceUrl');
+      if (input.fetchedAt === undefined)
+        return errInvalidInput('source-summary 笔记必须提供 fetchedAt');
     }
     const now = ctx.clock();
     const note: ResearchNote = {

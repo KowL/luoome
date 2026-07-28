@@ -34,8 +34,8 @@ import {
   type KeyEvent,
   TextRenderable,
 } from '@opentui/core';
-import { formatLimitUpLadderLines } from './views/limit-up-ladder.js';
 import type { z } from 'zod';
+import { formatLimitUpLadderLines } from './views/limit-up-ladder.js';
 
 // ---------- 配色（低饱和暖色系；A 股惯例：红涨绿跌） ----------
 
@@ -131,13 +131,7 @@ interface OverlayState {
   readonly title: string;
   readonly lines: readonly string[];
   /** 弹层语义分支（仅用于键盘路由：账户选择 = accounts，可用 j/k/Enter）。 */
-  readonly kind?:
-    | 'detail'
-    | 'stats'
-    | 'tactics'
-    | 'outcomes'
-    | 'accounts'
-    | 'limit-up-ladder';
+  readonly kind?: 'detail' | 'stats' | 'tactics' | 'outcomes' | 'accounts' | 'limit-up-ladder';
   scroll: number;
 }
 

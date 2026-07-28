@@ -27,14 +27,14 @@ export const fetchIndexQuotesTool = defineTool({
   output: FetchIndexQuotesOutput,
   handler: async (_input, ctx) => {
     const market = ctx.adapters.market;
-    if (typeof market.fetchIndexQuotes !== 'function') {
-      return { indices: [], unsupported: true };
-    }
     try {
       const indices = await market.fetchIndexQuotes();
       return { indices: [...indices] };
     } catch (error) {
       const cause = error instanceof Error ? error.message : String(error);
+      if (cause.includes('unsupported_capability')) {
+        return { indices: [], unsupported: true };
+      }
       return errAdapterError(market.name, cause, true);
     }
   },

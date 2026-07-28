@@ -6,7 +6,7 @@
 import { callApi } from './api.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(document.querySelectorAll(sel));
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 /**
  * 构造 DOM 节点。
@@ -261,11 +261,7 @@ const triggerCard = (trigger, navigate) => {
     el('strong', 'mono', trigger.stockId ?? '--'),
     el('span', 'badge', trigger.ruleKind ?? '?'),
     el('span', `badge ${PRIORITY_BADGE[priority] ?? ''}`, `P:${priority}`),
-    el(
-      'span',
-      `badge badge-delivery-${trigger.deliveryStatus ?? 'not-requested'}`,
-      deliveryLabel,
-    ),
+    el('span', `badge badge-delivery-${trigger.deliveryStatus ?? 'not-requested'}`, deliveryLabel),
   ]);
   card.append(main);
   if (typeof trigger.reason === 'string' && trigger.reason.length > 0) {
@@ -313,9 +309,9 @@ const triggerCard = (trigger, navigate) => {
             body: { feedback: f },
           });
           // 本地即时反馈，不刷新整列表
-          feedbackRow
-            .querySelectorAll('.feedback-btn')
-            .forEach((b) => b.classList.remove('active'));
+          feedbackRow.querySelectorAll('.feedback-btn').forEach((b) => {
+            b.classList.remove('active');
+          });
           btn.classList.add('active');
         } catch (err) {
           console.error('feedback failed', err);

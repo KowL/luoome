@@ -115,6 +115,7 @@ interface EastmoneyQuoteResponse {
     readonly f47?: number; // 成交量（手）
     readonly f48?: number; // 成交额（元）
     readonly f60?: number; // 昨收
+    readonly f124?: number; // 行情更新时间（Unix 秒）
     readonly f57?: string; // 代码
     readonly f58?: string; // 名称
     readonly f169?: number; // 涨跌额
@@ -249,7 +250,7 @@ const suggestExchange = (item: EastmoneySuggestItem): Exchange | undefined => {
   }
 };
 
-const QUOTE_FIELDS = 'f43,f44,f45,f46,f47,f48,f60,f57,f58,f169,f170';
+const QUOTE_FIELDS = 'f43,f44,f45,f46,f47,f48,f60,f57,f58,f124,f169,f170';
 const KLINE_FIELDS = '1,2,3,4,5,6,8,9';
 /** suggest 接口公开 token（Eastmoney Web 前端同款，无需鉴权）。 */
 const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
@@ -276,6 +277,7 @@ const MAJOR_INDICES = [
 
 export class EastmoneyAdapter {
   readonly name = 'eastmoney';
+  readonly indexQuoteMode = 'realtime' as const;
 
   private readonly clock: () => Date;
   private readonly timeoutMs: number;
@@ -313,9 +315,19 @@ export class EastmoneyAdapter {
       throw new EastmoneyAdapterError(`Eastmoney 快照缺价: secid=${secid} f43=${closeRaw}`);
     }
     const volume = typeof d.f47 === 'number' && d.f47 > 0 ? d.f47 * 100 : 0; // 手 → 股
+    const fetchedAt = this.clock();
+    const upstreamAt =
+      typeof d.f124 === 'number' && d.f124 > 0 ? new Date(d.f124 * 1000) : undefined;
+    const observedAt =
+      upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
+        ? upstreamAt
+        : fetchedAt;
     return {
       stockId: stockCode.includes('.') ? stockCode.toUpperCase() : stockCode.toUpperCase(),
-      ts: this.clock(),
+      observedAt,
+      fetchedAt,
+      timestampSource: observedAt === fetchedAt ? 'retrieval' : 'upstream',
+      ts: observedAt,
       open: money(d.f46 && d.f46 > 0 ? d.f46 : closeRaw),
       high: money(d.f44 && d.f44 > 0 ? d.f44 : closeRaw),
       low: money(d.f45 && d.f45 > 0 ? d.f45 : closeRaw),
@@ -434,7 +446,7 @@ export class EastmoneyAdapter {
         low: money(low),
         close: money(close),
         volume,
-        adjFactor: 1.0,
+        adjustment: 'qfq',
         source: 'eastmoney',
       });
     }

@@ -7,6 +7,7 @@ import {
   assertAdviceInvariants,
   InvariantError,
   type Quote,
+  QuoteSchema,
   type TacticSignal,
 } from '@luoome/core';
 import { and, desc, eq, gt, gte, lte } from 'drizzle-orm';
@@ -27,7 +28,7 @@ const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
     raw.quotes === undefined
       ? undefined
       : Object.fromEntries(
-          Object.entries(raw.quotes).map(([stockId, q]) => [stockId, { ...q, ts: new Date(q.ts) }]),
+          Object.entries(raw.quotes).map(([stockId, quote]) => [stockId, QuoteSchema.parse(quote)]),
         );
   const tacticSignals: TacticSignal[] | undefined =
     raw.tacticSignals === undefined

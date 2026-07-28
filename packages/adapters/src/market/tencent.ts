@@ -88,6 +88,15 @@ const TENCENT_MARKET_TO_EXCHANGE: Readonly<Record<string, Exchange>> = {
   us: 'US',
 };
 
+const parseTencentMinuteTime = (date: string, time: string): Date | undefined => {
+  if (!/^\d{8}$/.test(date) || !/^\d{4}$/.test(time)) return undefined;
+  const iso =
+    `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` +
+    `T${time.slice(0, 2)}:${time.slice(2, 4)}:00+08:00`;
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
 /**
  * smartbox `v_hint` 文本 → 候选列表（纯函数，便于测试）。
  * 记录形如 `sh~601398~工商银行~gsyh~GP-A`，多条以 `^` 分隔；
@@ -149,9 +158,10 @@ export class TencentAdapter {
     const code = toPrefixedCode(stockCode);
     const url = `${this.baseQuoteUrl}?code=${code}`;
     const json = await this.getJson<{
-      data?: { [code: string]: { data?: { data?: string[] } } };
+      data?: { [code: string]: { data?: { date?: string; data?: string[] } } };
     }>(url);
-    const minutes = json.data?.[code]?.data?.data;
+    const minuteNode = json.data?.[code]?.data;
+    const minutes = minuteNode?.data;
     if (minutes === undefined || minutes.length === 0) {
       throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
     }
@@ -168,9 +178,22 @@ export class TencentAdapter {
     if (open === undefined || close === undefined) {
       throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
     }
+    const fetchedAt = this.clock();
+    const lastTime = minutes.at(-1)?.split(' ')[0];
+    const upstreamAt =
+      minuteNode?.date === undefined || lastTime === undefined
+        ? undefined
+        : parseTencentMinuteTime(minuteNode.date, lastTime);
+    const observedAt =
+      upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
+        ? upstreamAt
+        : fetchedAt;
     return {
       stockId: stockCode.toUpperCase(),
-      ts: this.clock(),
+      observedAt,
+      fetchedAt,
+      timestampSource: observedAt === fetchedAt ? 'retrieval' : 'upstream',
+      ts: observedAt,
       open: money(open),
       high: money(Math.max(...prices)),
       low: money(Math.min(...prices)),
@@ -202,9 +225,9 @@ export class TencentAdapter {
       throw new TencentAdapterError(`Tencent 日线失败: code=${json.code}`);
     }
     const node = json.data[code];
-    const rawList = node?.qfqday ?? node?.day;
+    const rawList = node?.qfqday;
     if (rawList === undefined) {
-      throw new TencentAdapterError(`Tencent 日线空数据: code=${code}`);
+      throw new TencentAdapterError(`unsupported_adjustment: Tencent qfq 日线不可用 code=${code}`);
     }
     const stockId = stockCode.includes('.') ? stockCode.toUpperCase() : stockCode.toUpperCase();
     const fromMs = range.start.getTime();
@@ -239,7 +262,7 @@ export class TencentAdapter {
         low: money(low),
         close: money(close),
         volume,
-        adjFactor: 1.0,
+        adjustment: 'qfq',
         source: 'tencent',
       });
     }

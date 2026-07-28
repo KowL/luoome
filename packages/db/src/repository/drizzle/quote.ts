@@ -1,4 +1,4 @@
-import type { Quote, QuoteRepository } from '@luoome/core';
+import { type Quote, type QuoteRepository, QuoteSchema } from '@luoome/core';
 import { and, desc, eq, gte, inArray, lte, max } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
@@ -9,7 +9,10 @@ type QuoteRow = typeof priceSnapshots.$inferSelect;
 /** 行 ↔ 实体映射（Date ↔ timestamp_ms 自动转换由 schema 声明完成）。 */
 const toQuote = (row: QuoteRow): Quote => ({
   stockId: row.stockId,
-  ts: row.ts,
+  observedAt: row.observedAt,
+  fetchedAt: row.fetchedAt,
+  timestampSource: row.timestampSource,
+  ts: row.observedAt,
   open: row.open,
   high: row.high,
   low: row.low,
@@ -26,27 +29,31 @@ export class DrizzleQuoteRepository implements QuoteRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
   async save(quote: Quote): Promise<void> {
+    const parsed = QuoteSchema.parse(quote);
     this.db
       .insert(priceSnapshots)
       .values({
-        stockId: quote.stockId,
-        ts: quote.ts,
-        open: quote.open,
-        high: quote.high,
-        low: quote.low,
-        close: quote.close,
-        volume: quote.volume,
-        source: quote.source,
+        stockId: parsed.stockId,
+        observedAt: parsed.observedAt,
+        fetchedAt: parsed.fetchedAt,
+        timestampSource: parsed.timestampSource,
+        open: parsed.open,
+        high: parsed.high,
+        low: parsed.low,
+        close: parsed.close,
+        volume: parsed.volume,
+        source: parsed.source,
       })
       .onConflictDoUpdate({
-        target: [priceSnapshots.stockId, priceSnapshots.ts],
+        target: [priceSnapshots.stockId, priceSnapshots.observedAt, priceSnapshots.source],
         set: {
-          open: quote.open,
-          high: quote.high,
-          low: quote.low,
-          close: quote.close,
-          volume: quote.volume,
-          source: quote.source,
+          fetchedAt: parsed.fetchedAt,
+          timestampSource: parsed.timestampSource,
+          open: parsed.open,
+          high: parsed.high,
+          low: parsed.low,
+          close: parsed.close,
+          volume: parsed.volume,
         },
       })
       .run();
@@ -56,12 +63,12 @@ export class DrizzleQuoteRepository implements QuoteRepository {
     const conditions =
       since === undefined
         ? eq(priceSnapshots.stockId, stockId)
-        : and(eq(priceSnapshots.stockId, stockId), gte(priceSnapshots.ts, since));
+        : and(eq(priceSnapshots.stockId, stockId), gte(priceSnapshots.observedAt, since));
     const row = this.db
       .select()
       .from(priceSnapshots)
       .where(conditions)
-      .orderBy(desc(priceSnapshots.ts))
+      .orderBy(desc(priceSnapshots.observedAt), desc(priceSnapshots.fetchedAt))
       .limit(1)
       .get();
     return row === undefined ? null : toQuote(row);
@@ -70,9 +77,12 @@ export class DrizzleQuoteRepository implements QuoteRepository {
   async latestByStocks(stockIds: readonly string[]): Promise<Map<string, Quote>> {
     const result = new Map<string, Quote>();
     if (stockIds.length === 0) return result;
-    // 单次 SQL：GROUP BY stockId 取 max(ts)，再 join 取完整行。
+    // 单次 SQL：GROUP BY stockId 取 max(observedAt)，再 join 取完整行。
     const maxTsSubquery = this.db
-      .select({ stockId: priceSnapshots.stockId, maxTs: max(priceSnapshots.ts).as('max_ts') })
+      .select({
+        stockId: priceSnapshots.stockId,
+        maxTs: max(priceSnapshots.observedAt).as('max_observed_at'),
+      })
       .from(priceSnapshots)
       .where(inArray(priceSnapshots.stockId, [...stockIds]))
       .groupBy(priceSnapshots.stockId)
@@ -84,12 +94,16 @@ export class DrizzleQuoteRepository implements QuoteRepository {
         maxTsSubquery,
         and(
           eq(priceSnapshots.stockId, maxTsSubquery.stockId),
-          eq(priceSnapshots.ts, maxTsSubquery.maxTs),
+          eq(priceSnapshots.observedAt, maxTsSubquery.maxTs),
         ),
       )
       .all();
     for (const joined of rows) {
-      result.set(joined.price_snapshots.stockId, toQuote(joined.price_snapshots));
+      const quote = toQuote(joined.price_snapshots);
+      const current = result.get(quote.stockId);
+      if (current === undefined || quote.fetchedAt > current.fetchedAt) {
+        result.set(quote.stockId, quote);
+      }
     }
     return result;
   }
@@ -101,11 +115,11 @@ export class DrizzleQuoteRepository implements QuoteRepository {
       .where(
         and(
           eq(priceSnapshots.stockId, stockId),
-          gte(priceSnapshots.ts, from),
-          lte(priceSnapshots.ts, to),
+          gte(priceSnapshots.observedAt, from),
+          lte(priceSnapshots.observedAt, to),
         ),
       )
-      .orderBy(priceSnapshots.ts)
+      .orderBy(priceSnapshots.observedAt, priceSnapshots.source)
       .all()
       .map(toQuote);
   }
@@ -113,13 +127,13 @@ export class DrizzleQuoteRepository implements QuoteRepository {
   async removeInRange(stockId: string, before: Date): Promise<number> {
     // 先 count（drizzle bun-sqlite 的 .run() 不返回 changes；用 select count 兜底）
     const beforeRows = this.db
-      .select({ stockId: priceSnapshots.stockId, ts: priceSnapshots.ts })
+      .select({ stockId: priceSnapshots.stockId, observedAt: priceSnapshots.observedAt })
       .from(priceSnapshots)
-      .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.ts, before)))
+      .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.observedAt, before)))
       .all();
     this.db
       .delete(priceSnapshots)
-      .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.ts, before)))
+      .where(and(eq(priceSnapshots.stockId, stockId), lte(priceSnapshots.observedAt, before)))
       .run();
     return beforeRows.length;
   }

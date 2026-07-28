@@ -23,19 +23,20 @@ const withProviders = (
   providers: readonly StockEventProviderLike[],
 ): ToolContext => ({ ...ctx, eventProviders: providers });
 
-const oneEarnings = (stockIds: readonly string[]): readonly ExternalStockEvent[] =>
-  stockIds.length === 0
-    ? []
-    : [
-        {
-          stockId: stockIds[0]!,
-          kind: 'earnings',
-          title: 'Q2 财报',
-          occursAt: new Date('2026-08-01T00:00:00.000Z'),
-          importance: 'important',
-          externalId: 'ext-q2',
-        },
-      ];
+const oneEarnings = (stockIds: readonly string[]): readonly ExternalStockEvent[] => {
+  const stockId = stockIds[0];
+  if (stockId === undefined) return [];
+  return [
+    {
+      stockId,
+      kind: 'earnings',
+      title: 'Q2 财报',
+      occursAt: new Date('2026-08-01T00:00:00.000Z'),
+      importance: 'important',
+      externalId: 'ext-q2',
+    },
+  ];
+};
 
 describe('sync-stock-events workflow', () => {
   it('provider 成功 → upsert 事件，WorkflowRun succeeded', async () => {

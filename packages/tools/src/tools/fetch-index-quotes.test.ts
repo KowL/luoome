@@ -23,11 +23,9 @@ const withIndexQuotes = (
   adapters: {
     ...ctx.adapters,
     market: {
+      ...ctx.adapters.market,
       name: 'stub-market',
-      fetchQuote: (code) => ctx.adapters.market.fetchQuote(code),
-      batchQuote: (codes) => ctx.adapters.market.batchQuote(codes),
-      fetchDailyBars: (code, range) => ctx.adapters.market.fetchDailyBars(code, range),
-      ...(fetchIndexQuotes === undefined ? {} : { fetchIndexQuotes }),
+      fetchIndexQuotes,
     },
   },
 });
@@ -53,8 +51,8 @@ describe('tool/fetch_index_quotes', () => {
     expect(res.data.indices[0]?.close).toBe(3500.5);
   });
 
-  it('降级路径：数据源未实现 fetchIndexQuotes → unsupported: true', async () => {
-    const ctx = await buildTestContext(); // FakeMarketAdapter 不实现该方法
+  it('降级路径：数据源不支持 realtime index → unsupported: true', async () => {
+    const ctx = await buildTestContext();
     const res = await fetchIndexQuotesTool.execute({}, ctx);
     expect(res.ok).toBe(true);
     if (!res.ok) return;

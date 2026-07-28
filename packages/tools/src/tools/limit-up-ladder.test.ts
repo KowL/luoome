@@ -1,9 +1,7 @@
 import {
   type LimitUpLadder,
-  type LimitUpLadderCompareResultLike,
   type LimitUpLadderManagerLike,
   LimitUpLadderQuerySchema,
-  type LimitUpLadderResultLike,
 } from '@luoome/core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -20,10 +18,11 @@ const mkLadder = (date: string): LimitUpLadder => ({
 });
 
 const mkManager = (
-  fetchImpl: (q: any) => Promise<LimitUpLadderResultLike>,
-  compareImpl: (d: string, pd: string, q: any) => Promise<LimitUpLadderCompareResultLike>,
+  fetchImpl: LimitUpLadderManagerLike['fetchLadder'],
+  compareImpl: LimitUpLadderManagerLike['compareLadder'],
 ): LimitUpLadderManagerLike => ({
   name: 'limit-up-ladder',
+  sources: ['eastmoney'],
   fetchLadder: fetchImpl,
   compareLadder: compareImpl,
 });

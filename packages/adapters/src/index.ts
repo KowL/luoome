@@ -19,11 +19,17 @@ export * from './market/cache.js';
 export * from './market/eastmoney.js';
 export * from './market/factory.js';
 export * from './market/manager.js';
+export * from './market/source-registry.js';
 export * from './market/tencent.js';
 export * from './market/tushare.js';
 export * from './market/types.js';
 // 通知（v0.3 起）
 export * from './notification/index.js';
+// 股票目录
+export * from './stock-universe/eastmoney.js';
+export * from './stock-universe/factory.js';
+export * from './stock-universe/manager.js';
+export * from './stock-universe/tushare.js';
 // tushare 官方 HTTP API 客户端
 export * from './tushare/client.js';
 export * from './tushare/envelope.js';

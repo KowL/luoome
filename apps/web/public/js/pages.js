@@ -379,7 +379,7 @@ const renderDashboard = async (setStatus) => {
     if (metrics.latestRun && metrics.latestRun.suppressedByDailyLimit > 0) {
       metaParts.push(`${metrics.latestRun.suppressedByDailyLimit} 条日上限抑制`);
     }
-    if (metrics.latestRun && metrics.latestRun.error) {
+    if (metrics.latestRun?.error) {
       metaParts.push(`最近一轮失败：${metrics.latestRun.error}`);
     }
     $('#dash-metrics-meta').textContent = metaParts.join(' · ');
@@ -832,12 +832,6 @@ const resolverLabel = (resolver) => {
   return `LLM · 最多 ${resolver.maxMembers} 只`;
 };
 
-/**
- * 预警卡片（v0.7 策略预警，docs/.../§10）—— 委托给 ui.js 的 triggerCard，
- * 注入 navigate 用于「规则太频繁」跳转。
- */
-const triggerCardLocal = (trigger, navigate) => triggerCard(trigger, navigate);
-
 const ruleLabel = (rule) => {
   if (rule.kind === 'price-change') return `日内涨跌 ≥ ${(rule.pct * 100).toFixed(1)}%`;
   if (rule.kind === 'cost-threshold') {
@@ -1123,8 +1117,8 @@ const renderGroups = async (setStatus) => {
   $('#groups-meta').textContent = `${items.length} 个`;
 
   // v0.7 策略预警：模板与自然语言草案
-  bindPlanCreator(setStatus);
-  void renderPlanCreator(setStatus);
+  bindPlanCreator();
+  void renderPlanCreator();
   mount(
     list,
     items.length === 0
@@ -1611,17 +1605,6 @@ const fetchGroupOptions = async () => {
   return _planTemplateGroups;
 };
 
-const ensureModalContainer = (id, anchorSelector) => {
-  let host = document.getElementById(id);
-  if (host !== null) return host;
-  host = document.createElement('div');
-  host.id = id;
-  host.className = 'modal-root';
-  const anchor = document.querySelector(anchorSelector);
-  (anchor ?? document.body).append(host);
-  return host;
-};
-
 /** 把模板 / 草案按真实控件 id 填入创建表单（表单只支持 3 种规则类型）。 */
 const fillPoolFormFromDraft = (draft, suggestedName) => {
   const setVal = (id, value) => {
@@ -1658,7 +1641,7 @@ const openPlanFromTemplate = async (template) => {
   requestAnimationFrame(() => fillPoolFormFromDraft({ ...template.draft, groupId }, template.name));
 };
 
-const renderPlanCreator = async (setStatus) => {
+const renderPlanCreator = async () => {
   const container = $('#plan-templates');
   if (container === null) return;
   const templates = await fetchPlanTemplates();
@@ -1739,7 +1722,7 @@ const openTemplateDetailModal = (tpl) => {
   });
 };
 
-const bindPlanCreator = (setStatus) => {
+const bindPlanCreator = () => {
   const newBtn = $('#btn-plan-new');
   if (newBtn === null) return;
   if (newBtn.dataset.bound === '1') return;
@@ -2026,7 +2009,7 @@ const loadResearch = async (stockId, code, name) => {
   // 新增笔记表单
   mount(
     addNoteEl,
-    buildAddNoteForm(stockId, code, name, () => loadResearch(stockId, code, name)),
+    buildAddNoteForm(stockId, () => loadResearch(stockId, code, name)),
   );
 };
 
@@ -2059,7 +2042,7 @@ const paintTimeline = (items) => {
 };
 
 /** 新增笔记表单：kind=thesis 自动 active；submit 后刷新。 */
-const buildAddNoteForm = (stockId, code, name, onDone) => {
+const buildAddNoteForm = (stockId, onDone) => {
   const form = el('form', 'research-add-note-form');
   const kindSelect = el('select', null, [
     el('option', null, 'note（普通）'),

@@ -1,4 +1,4 @@
-import type { Logger, MarketDataAdapterLike } from '@luoome/core';
+import type { Logger, MarketCoverage, MarketDataAdapterLike } from '@luoome/core';
 import { parseMarketProviderConfigFromEnv } from '@luoome/core';
 import { z } from 'zod';
 
@@ -6,6 +6,7 @@ import { tushareConfigFromEnv } from '../tushare/client.js';
 import { QuoteCache } from './cache.js';
 import { EastmoneyAdapter } from './eastmoney.js';
 import { MarketDataManager } from './manager.js';
+import { type AnyMarketCapabilityBinding, MarketSourceRegistry } from './source-registry.js';
 import { TencentAdapter } from './tencent.js';
 import { TushareMarketAdapter } from './tushare.js';
 
@@ -75,49 +76,35 @@ export const createMarketAdapterFromEnv = (
     deps.sourceOrder === undefined
       ? marketSourceOrderFromEnv(env)
       : MarketSourceOrderSchema.parse(deps.sourceOrder);
-  const sources = sourceOrder.map((source) => {
+  const bindings = sourceOrder.flatMap((source) => {
     switch (source) {
-      case 'eastmoney':
-        return new EastmoneyAdapter(sourceOpts);
-      case 'tencent':
-        return new TencentAdapter(sourceOpts);
-      case 'tushare':
-        return buildTushare(env, sourceOpts, deps.logger);
+      case 'eastmoney': {
+        const adapter = new EastmoneyAdapter(sourceOpts);
+        return eastmoneyBindings(adapter);
+      }
+      case 'tencent': {
+        const adapter = new TencentAdapter(sourceOpts);
+        return tencentBindings(adapter);
+      }
+      case 'tushare': {
+        const adapter = buildTushare(env, sourceOpts, deps.logger);
+        return tushareBindings(adapter);
+      }
       default:
         throw new Error(`不支持的行情数据源：${String(source satisfies never)}`);
     }
   });
-  const primary = sources[0];
-  if (primary === undefined) throw new Error('至少启用一个行情数据源');
-  const fallback = sources[1] ?? unavailableMarketSource;
-  const finalFallback = sources[2];
-
-  // 指数行情专用兜底：指数条是仪表盘辅助数据，eastmoney 公开接口无需凭据，
-  // 独立于用户股票行情源配置兜底（如 tushare 代理网关未实现 index_daily 的场景）。
-  // 链路里已有 eastmoney 实例时不重复构造（指数路由本就会命中它）。
-  const indexFallback = sources.some((s) => s instanceof EastmoneyAdapter)
-    ? undefined
-    : new EastmoneyAdapter(sourceOpts);
+  const clock = deps.clock ?? ((): Date => new Date());
+  const registry = new MarketSourceRegistry(bindings, clock);
 
   return new MarketDataManager({
-    primary,
-    fallback,
-    ...(finalFallback === undefined ? {} : { finalFallback }),
-    ...(indexFallback === undefined ? {} : { indexFallback }),
+    registry,
     ...(deps.quoteCacheTtlMs === undefined
       ? {}
       : { quoteCache: new QuoteCache(1024, deps.quoteCacheTtlMs) }),
     logger: deps.logger,
-    ...clockOpt,
+    clock,
   });
-};
-
-const unavailableMarketSource: MarketDataAdapterLike = {
-  name: 'disabled',
-  fetchQuote: () => Promise.reject(new Error('no secondary market source enabled')),
-  batchQuote: () => Promise.resolve(new Map()),
-  fetchDailyBars: () => Promise.reject(new Error('no secondary market source enabled')),
-  searchStocks: () => Promise.reject(new Error('no secondary market source enabled')),
 };
 
 /** Tushare 被显式排入路由时要求配置完整，避免 UI 显示已启用但运行时静默跳过。 */
@@ -133,3 +120,85 @@ const buildTushare = (
   const config = tushareConfigFromEnv(env);
   return new TushareMarketAdapter({ ...sourceOpts, config, logger });
 };
+
+const CN_SH_SZ = ['CN_A_SHARES_SH_SZ'] as const satisfies readonly MarketCoverage[];
+const CN_ALL = ['CN_A_SHARES_SH_SZ', 'CN_A_SHARES_BJ'] as const satisfies readonly MarketCoverage[];
+
+const commonBindings = (
+  adapter: {
+    readonly name: string;
+    fetchQuote(stockId: string): ReturnType<EastmoneyAdapter['fetchQuote']>;
+    fetchDailyBars(
+      stockId: string,
+      range: Parameters<EastmoneyAdapter['fetchDailyBars']>[1],
+    ): ReturnType<EastmoneyAdapter['fetchDailyBars']>;
+    searchStocks(query: string): ReturnType<EastmoneyAdapter['searchStocks']>;
+  },
+  coverage: readonly MarketCoverage[],
+): AnyMarketCapabilityBinding[] => [
+  {
+    capability: 'quote',
+    source: adapter.name,
+    coverage,
+    configurationReady: true,
+    execute: ({ stockId }) => adapter.fetchQuote(stockId),
+    dataAsOf: (quote) => quote.observedAt,
+  },
+  {
+    capability: 'daily-bars',
+    source: adapter.name,
+    coverage,
+    configurationReady: true,
+    execute: ({ stockId, range }) => adapter.fetchDailyBars(stockId, range),
+    dataAsOf: (bars) => bars.at(-1)?.date,
+  },
+  {
+    capability: 'search',
+    source: adapter.name,
+    coverage,
+    configurationReady: true,
+    execute: ({ query }) => adapter.searchStocks(query),
+  },
+];
+
+const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBinding[] => [
+  ...commonBindings(adapter, CN_ALL),
+  {
+    capability: 'market-snapshot',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchMarketSnapshot(),
+  },
+  {
+    capability: 'realtime-index',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchIndexQuotes(),
+    dataAsOf: (indices) =>
+      indices.reduce<Date | undefined>(
+        (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
+        undefined,
+      ),
+  },
+];
+
+const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] =>
+  commonBindings(adapter, CN_ALL);
+
+const tushareBindings = (adapter: TushareMarketAdapter): AnyMarketCapabilityBinding[] => [
+  ...commonBindings(adapter, CN_SH_SZ),
+  {
+    capability: 'delayed-index',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchIndexQuotes(),
+    dataAsOf: (indices) =>
+      indices.reduce<Date | undefined>(
+        (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
+        undefined,
+      ),
+  },
+];

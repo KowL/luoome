@@ -1,8 +1,4 @@
-import type {
-  LimitUpLadder,
-  LimitUpLadderDiff,
-  LimitUpLadderManagerLike,
-} from '@luoome/core';
+import type { LimitUpLadder, LimitUpLadderDiff, LimitUpLadderManagerLike } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -41,18 +37,29 @@ const mkLadderManager = (
   };
   return {
     name: 'limit-up-ladder',
+    sources: ['eastmoney'],
     fetchLadder: async () =>
       opts.fail === true
         ? {
             ok: false,
-            error: { kind: 'adapter_error', adapter: 'limit-up-ladder', message: 'x', recoverable: false },
+            error: {
+              kind: 'adapter_error',
+              adapter: 'limit-up-ladder',
+              message: 'x',
+              recoverable: false,
+            },
           }
         : { ok: true, data: fakeLadder },
     compareLadder: async () =>
       opts.fail === true
         ? {
             ok: false,
-            error: { kind: 'adapter_error', adapter: 'limit-up-ladder', message: 'x', recoverable: false },
+            error: {
+              kind: 'adapter_error',
+              adapter: 'limit-up-ladder',
+              message: 'x',
+              recoverable: false,
+            },
           }
         : { ok: true, data: { curr: fakeLadder, prev: fakePrev, diff: fakeDiff } },
   };

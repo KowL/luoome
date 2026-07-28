@@ -4,10 +4,7 @@
     "minimax": {
       "apiKeyEnv": "MINIMAX_API_KEY",
       "baseURL": "https://api.minimaxi.com/v1",
-      "quirks": [
-        "inject-schema",
-        "recover-malformed-text"
-      ],
+      "quirks": ["inject-schema", "recover-malformed-text"],
       "type": "openai-compatible",
       "supportsStructuredOutputs": true
     }

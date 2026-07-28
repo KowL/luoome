@@ -19,6 +19,9 @@ const STOCK_ID = '002594.SZ';
 
 const makeQuote = (stockId: string, ts: Date, overrides: Partial<Quote> = {}): Quote => ({
   stockId,
+  observedAt: ts,
+  fetchedAt: ts,
+  timestampSource: 'retrieval',
   ts,
   open: money(104),
   high: money(107),
@@ -42,7 +45,7 @@ const makeBar = (
   low: money(close - 1),
   close: money(close),
   volume: 1_000_000,
-  adjFactor: 1,
+  adjustment: 'qfq',
   source: 'eastmoney',
   ...overrides,
 });
@@ -96,6 +99,22 @@ class StubMarketAdapter implements MarketDataAdapterLike {
     this.lastBarsRange = range;
     if (this.opts.barsError !== undefined) return Promise.reject(this.opts.barsError);
     return Promise.resolve([...(this.opts.bars ?? makeBars(stockCode, TODAY, 60))]);
+  }
+
+  searchStocks(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: search'));
+  }
+
+  fetchIndexQuotes(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: realtime-index'));
+  }
+
+  fetchMarketSnapshot(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: market-snapshot'));
+  }
+
+  marketSourceStatus(): readonly [] {
+    return [];
   }
 }
 
@@ -362,7 +381,7 @@ describe('tool/get_stock_market_view', () => {
     }
   });
 
-  it('19. 盘前 / 非交易日：live Quote 不生成当日 candle（quote.ts 只是抓取时间）', async () => {
+  it('19. 盘前 / 非交易日：live Quote 不生成当日 candle（retrieval 时间不代表成交）', async () => {
     const cases = [
       // 周二 09:00 Shanghai → 盘前
       { now: '2026-07-21T01:00:00.000Z', session: 'pre-open' },

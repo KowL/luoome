@@ -79,6 +79,7 @@ describe('list_holdings', () => {
       adapters: {
         ...ctx.adapters,
         market: {
+          ...ctx.adapters.market,
           name: 'failing-market',
           fetchQuote: async () => {
             throw new Error('market unavailable');

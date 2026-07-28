@@ -1,4 +1,4 @@
-import { type Quote, QuoteSchema } from '@luoome/core';
+import { dateInShanghai, type Quote, QuoteSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -11,9 +11,32 @@ import { defineTool } from '../define-tool.js';
  */
 export const BatchQuoteInput = z.object({
   stockIds: z.array(z.string().min(1)).min(1).max(100),
+  context: z.enum(['display', 'intraday-rule', 'post-market']).default('display'),
+  watchIntervalSeconds: z.number().int().positive().max(3600).default(60),
 });
 
+const BatchQuoteItem = z.discriminatedUnion('status', [
+  z.object({
+    stockId: z.string(),
+    status: z.literal('ok'),
+    quote: QuoteSchema,
+    retrieval: z.enum(['live', 'local-fallback']),
+    freshness: z.enum(['fresh', 'stale']),
+  }),
+  z.object({
+    stockId: z.string(),
+    status: z.literal('unresolved'),
+    reason: z.string(),
+  }),
+  z.object({
+    stockId: z.string(),
+    status: z.literal('unavailable'),
+    reason: z.string(),
+  }),
+]);
+
 export const BatchQuoteOutput = z.object({
+  items: z.array(BatchQuoteItem),
   quotes: z.array(QuoteSchema),
   /** 请求了但未找到 / 未解析的 stockId 列表，方便调用方对齐。 */
   unresolved: z.array(z.string()),
@@ -27,30 +50,68 @@ export const batchQuoteTool = defineTool({
   output: BatchQuoteOutput,
   handler: async (input, ctx) => {
     const resolved: string[] = [];
-    const unresolved: string[] = [];
+    const items: z.infer<typeof BatchQuoteItem>[] = [];
     for (const raw of input.stockIds) {
       const stock =
         (await ctx.repos.stock.findById(raw)) ??
         (await ctx.repos.stock.findByCode(raw.trim().toUpperCase()));
-      if (stock === null) unresolved.push(raw);
-      else resolved.push(stock.id);
+      if (stock === null) {
+        items.push({ stockId: raw, status: 'unresolved', reason: 'stock_not_found' });
+      } else if (!resolved.includes(stock.id)) {
+        resolved.push(stock.id);
+      }
     }
-    let quoteList: Quote[] = [];
+    const now = ctx.clock();
+    const freshAfterMs = Math.max(input.watchIntervalSeconds * 2_000, 180_000);
+    const classify = (
+      stockId: string,
+      quote: Quote,
+      retrieval: 'live' | 'local-fallback',
+    ): z.infer<typeof BatchQuoteItem> => {
+      const ageMs = now.getTime() - quote.observedAt.getTime();
+      const sameTradingDay = dateInShanghai(now) === dateInShanghai(quote.observedAt);
+      const fresh = ageMs >= 0 && ageMs <= freshAfterMs;
+      const accepted =
+        input.context === 'display' ||
+        (input.context === 'intraday-rule' && sameTradingDay && fresh) ||
+        (input.context === 'post-market' && sameTradingDay);
+      if (!accepted) {
+        return {
+          stockId,
+          status: 'unavailable',
+          reason: sameTradingDay ? 'quote_stale' : 'quote_not_current_trading_day',
+        };
+      }
+      return {
+        stockId,
+        status: 'ok',
+        quote,
+        retrieval,
+        freshness: fresh ? 'fresh' : 'stale',
+      };
+    };
+
     if (resolved.length > 0) {
       const quotes = await ctx.adapters.market.batchQuote(resolved);
-      quoteList = [...quotes.values()];
-      await Promise.all(quoteList.map((q) => ctx.repos.quote.save(q)));
-      const fetched = new Set(quoteList.map((q) => q.stockId));
+      const liveQuotes = [...quotes.values()].map((quote) => QuoteSchema.parse(quote));
+      await Promise.all(liveQuotes.map((q) => ctx.repos.quote.save(q)));
+      const fetched = new Map(liveQuotes.map((q) => [q.stockId, q]));
       for (const stockId of resolved) {
-        if (fetched.has(stockId)) continue;
+        const live = fetched.get(stockId);
+        if (live !== undefined) {
+          items.push(classify(stockId, live, 'live'));
+          continue;
+        }
         const cached = await ctx.repos.quote.latestByStock(stockId);
         if (cached !== null) {
-          quoteList.push(cached);
+          items.push(classify(stockId, cached, 'local-fallback'));
         } else {
-          unresolved.push(stockId);
+          items.push({ stockId, status: 'unavailable', reason: 'quote_unavailable' });
         }
       }
     }
-    return { quotes: quoteList, unresolved };
+    const quotes = items.flatMap((item) => (item.status === 'ok' ? [item.quote] : []));
+    const unresolved = items.flatMap((item) => (item.status === 'ok' ? [] : [item.stockId]));
+    return { items, quotes, unresolved };
   },
 });

@@ -20,6 +20,7 @@ export * from './entity/stock.js';
 export * from './entity/stock-event.js';
 export * from './entity/stock-group.js';
 export * from './entity/stock-pool.js';
+export * from './entity/stock-universe.js';
 export * from './entity/tactic.js';
 export * from './entity/trade.js';
 export * from './entity/watch-run.js';

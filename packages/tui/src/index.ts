@@ -6,7 +6,11 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { createAIStackFromEnv, createMarketAdapterFromEnv } from '@luoome/adapters';
+import {
+  createAIStackFromEnv,
+  createMarketAdapterFromEnv,
+  createStockUniverseManagerFromEnv,
+} from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 // 纯 Bun 运行时入口：@luoome/db 桶导出依赖 bun:sqlite driver，禁止在 node 下 import 本包。
 import { createDrizzleRepos } from '@luoome/db';
@@ -43,6 +47,9 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
     repos: handle.repos,
     adapters: {
       market: createMarketAdapterFromEnv(process.env, {
+        logger,
+      }),
+      stockUniverse: createStockUniverseManagerFromEnv(process.env, {
         logger,
       }),
       llm: ai.llm,

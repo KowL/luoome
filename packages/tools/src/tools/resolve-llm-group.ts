@@ -62,20 +62,18 @@ interface LlmCandidate {
  * （报价失败再降级为无报价上下文）。
  */
 const collectCandidates = async (ctx: ToolContext): Promise<LlmCandidate[]> => {
-  if (typeof ctx.adapters.market.fetchMarketSnapshot === 'function') {
-    try {
-      const items = await ctx.adapters.market.fetchMarketSnapshot();
-      return items.slice(0, MAX_CANDIDATES).map((item) => ({
-        stockId: item.id,
-        code: item.code,
-        name: item.name,
-        ...(item.close !== undefined ? { close: item.close } : {}),
-      }));
-    } catch (e) {
-      ctx.logger.warn('[resolve_llm_group] fetchMarketSnapshot 失败，降级本地股票库', {
-        err: String(e),
-      });
-    }
+  try {
+    const items = await ctx.adapters.market.fetchMarketSnapshot();
+    return items.slice(0, MAX_CANDIDATES).map((item) => ({
+      stockId: item.id,
+      code: item.code,
+      name: item.name,
+      ...(item.close !== undefined ? { close: item.close } : {}),
+    }));
+  } catch (e) {
+    ctx.logger.warn('[resolve_llm_group] fetchMarketSnapshot 失败，降级本地股票库', {
+      err: String(e),
+    });
   }
   const stocks = [...(await ctx.repos.stock.search(''))].slice(0, MAX_CANDIDATES);
   const closeByStock = new Map<string, number>();

@@ -34,6 +34,9 @@ export class DrizzleStockRepository implements StockRepository {
       exchange: stock.exchange,
       name: stock.name,
       industry: stock.industry ?? null,
+      nameSource: stock.name === stock.code ? ('stub' as const) : ('manual' as const),
+      nameUpdatedAt: null,
+      updatedAt: new Date(0),
     };
     this.db.insert(stocks).values(row).onConflictDoUpdate({ target: stocks.id, set: row }).run();
   }

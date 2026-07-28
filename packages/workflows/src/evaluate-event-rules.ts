@@ -215,11 +215,16 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
   }
   for (const [poolId, group] of byPool) {
     const lines = group.map((t) => {
-      const prio = t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
+      const prio =
+        t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
       return `· ${prio}${t.stockId} — ${t.reason}`;
     });
     const r = await ctx.tools.send_notification.execute({
-      log: { title: `事件提醒 池-${poolId} ${group.length} 条`, content: lines.join('\n'), level: 'info' },
+      log: {
+        title: `事件提醒 池-${poolId} ${group.length} 条`,
+        content: lines.join('\n'),
+        level: 'info',
+      },
     });
     let status: WatchTrigger['deliveryStatus'] = 'sent';
     let notificationId: string | undefined;

@@ -33,7 +33,10 @@ export class LRU<K, V> {
   private missesCount = 0;
   private evictionsCount = 0;
 
-  constructor(private readonly capacityValue: number = 1024) {
+  constructor(
+    private readonly capacityValue: number = 1024,
+    private readonly clock: () => number = Date.now,
+  ) {
     if (capacityValue <= 0) throw new Error('LRU capacity must be > 0');
   }
 
@@ -44,7 +47,7 @@ export class LRU<K, V> {
       this.missesCount += 1;
       return undefined;
     }
-    if (entry.expiresAt <= Date.now()) {
+    if (entry.expiresAt <= this.clock()) {
       this.items.delete(key);
       this.missesCount += 1;
       return undefined;
@@ -58,7 +61,7 @@ export class LRU<K, V> {
 
   /** O(1) set，必要时淘汰队首。ttlMs 缺省 = 不过期。 */
   set(key: K, value: V, ttlMs?: number): void {
-    const expiresAt = ttlMs === undefined ? Number.POSITIVE_INFINITY : Date.now() + ttlMs;
+    const expiresAt = ttlMs === undefined ? Number.POSITIVE_INFINITY : this.clock() + ttlMs;
     if (this.items.has(key)) {
       this.items.delete(key);
     } else if (this.items.size >= this.capacityValue) {
@@ -106,8 +109,9 @@ export class QuoteCache {
   constructor(
     capacity: number = 1024,
     private readonly ttlMs: number = 60_000,
+    clock: () => Date = (): Date => new Date(),
   ) {
-    this.lru = new LRU<string, Quote>(capacity);
+    this.lru = new LRU<string, Quote>(capacity, () => clock().getTime());
   }
 
   get(stockCode: string): Quote | undefined {
@@ -138,8 +142,9 @@ export class DailyBarCache {
   constructor(
     capacity: number = 512,
     private readonly ttlMs: number = 3_600_000,
+    clock: () => Date = (): Date => new Date(),
   ) {
-    this.lru = new LRU<string, readonly DailyBar[]>(capacity);
+    this.lru = new LRU<string, readonly DailyBar[]>(capacity, () => clock().getTime());
   }
 
   private keyOf(stockCode: string, from: Date, to: Date): string {

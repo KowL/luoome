@@ -2,6 +2,7 @@ import {
   type DailyBar,
   type DateRange,
   type MarketSnapshotItem,
+  type MarketSourceStatus,
   money,
   type Quote,
   type StockSearchCandidate,
@@ -49,9 +50,13 @@ export class FakeMarketAdapter implements MarketDataAdapter {
     const low = money(Math.min(open, close) * (0.99 + rand() * 0.005));
     const volume = 1_000_000 + (hashString(`volume|${stockCode}`) % 9_000_000);
 
+    const fetchedAt = this.clock();
     return Promise.resolve({
       stockId: stock ? stock.id : stockCode,
-      ts: this.clock(),
+      observedAt: fetchedAt,
+      fetchedAt,
+      timestampSource: 'retrieval',
+      ts: fetchedAt,
       open,
       high,
       low,
@@ -98,7 +103,7 @@ export class FakeMarketAdapter implements MarketDataAdapter {
         low,
         close,
         volume,
-        adjFactor: 1,
+        adjustment: 'qfq',
         source: this.source,
       });
     }
@@ -135,6 +140,21 @@ export class FakeMarketAdapter implements MarketDataAdapter {
         close: this.basePriceFor(s.id),
       })),
     );
+  }
+
+  fetchIndexQuotes(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: realtime-index'));
+  }
+
+  marketSourceStatus(): readonly MarketSourceStatus[] {
+    const coverage = ['CN_A_SHARES_SH_SZ'] as const;
+    return (['quote', 'daily-bars', 'search', 'market-snapshot'] as const).map((dataset) => ({
+      dataset,
+      source: this.source,
+      coverage,
+      capabilityEnabled: true,
+      configurationReady: true,
+    }));
   }
 
   /** 已知 fixture 取基准价；未知代码 hash 出 [5, 500) 的稳定伪随机价。 */

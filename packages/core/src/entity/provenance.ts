@@ -7,7 +7,8 @@ import { z } from 'zod';
  * - StockEvent（展开为列：provider / observedAt / fetchedAt / stale）
  * - 行情状态读模型（get_market_data_status）
  *
- * 不进 Quote 实体、不回填历史（PRD 决策 13）。
+ * Quote 自 Phase 3 起直接携带 observedAt / fetchedAt / timestampSource；
+ * 此值对象继续承载需要 freshness、fallback 和错误信息的读模型。
  */
 
 export const DataFreshnessSchema = z.enum(['fresh', 'stale', 'unknown', 'unavailable']);
