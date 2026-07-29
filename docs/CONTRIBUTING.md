@@ -76,7 +76,6 @@ luoome/
 │   ├── ROADMAP.md         版本演进
 │   ├── SECURITY.md        安全与副作用分级
 │   ├── CONTRIBUTING.md    本文件
-│   ├── HANDOFF.md         交接与关键决策
 │   ├── BACKLOG.md         一致性、测试盲区与工程债
 │   ├── prd/               产品需求文档
 │   ├── ddd/               技术详细设计
@@ -123,7 +122,7 @@ workflows ──► tools ──► core
 | `bash bin/luoome mcp serve` | 起 MCP stdio server |
 | `bash bin/luoome tui` | 跑终端仪表盘 |
 | `bash bin/luoome web serve --port 5173` | 起 Web 仪表盘 |
-| `bash bin/luoome workflow run tactic-scan --input '{}'` | 跑战法扫描 |
+| `bash bin/luoome workflow run run-strategies --input '{}'` | 跑已发布 Strategy |
 
 **CI 三关必须全绿**：`typecheck` + `test:all` + `lint`。本地跑通再 push。
 
@@ -355,7 +354,7 @@ toolRegistry.register(myTool);
 - 表达式结果：true / false / number
 - score 表达式支持 `Math.min / max / abs / round`
 
-新加战法后跑 `bash bin/luoome workflow run tactic-scan --tactic-id my-tactic` 验证。
+新加 Strategy 后跑 `bash bin/luoome strategy run <strategyId>` 验证。
 
 ### 加一个新数据源
 
@@ -374,7 +373,7 @@ toolRegistry.register(myTool);
 
 ### 加一个新 workflow
 
-参考 `packages/workflows/src/tactic-scan.ts`（最有代表性的聚合 workflow）：
+参考 `packages/workflows/src/run-strategies.ts`（最有代表性的聚合 workflow）：
 
 ```ts
 // packages/workflows/src/my-workflow.ts

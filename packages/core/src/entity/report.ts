@@ -61,6 +61,10 @@ const ListBlockSchema = z.object({
         entityKind: z
           .enum([
             'stock',
+            'strategy',
+            'watchlist',
+            'alert-plan',
+            // deprecated：仅为读取存量报告保留，新报告不再产生这两种 kind
             'stock-group',
             'watch-plan',
             'watch-trigger',

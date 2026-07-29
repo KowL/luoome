@@ -2,7 +2,7 @@
 
 > 状态：草稿（Phase 0 调研完成，未确认实施范围与分期）
 > 日期：2026-07-25
-> 参考：旧项目 `ruo` 的 `market limit-up` 命令及其在 `report` / `watchlist refresh-top10` / `market-review` LLM 链中的下游用法；luoome 现有 [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) §P3、§5.2 与 [策略预警产品文档](./strategy-alert-product.md) §2.1/§5.2/§10
+> 参考：旧项目 `ruo` 的 `market limit-up` 命令及 luoome [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) 与 [统一 Watchlist](./watchlist.md)。
 > 产品边界：仅做 A 股短线方向的"看盘辅助页面 + 数据接口"；不替用户决策、不自动下单、不承诺任何"必涨/必板"语义
 > 关联产品：涨停分组同步（依赖行情源的涨停股票列表接口）、TOP10 自选股（依赖天梯 level 排序）、市场复盘报告（天梯是 LLM 输入段之一）
 
@@ -72,7 +72,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 ### 2.3 luoome 现状
 
 - 没有专门的"涨停梯队"页面或 TUI 区块。
-- 已在 [策略预警产品文档](./strategy-alert-product.md) §2.1 / §5.2 / §10 把"涨停、炸板、断板规则"列为 P2 候选；天梯可以成为这些规则的"上游事实来源"，避免每个规则都自己拉数据。
+- 涨停、炸板、断板事实可作为未来 Strategy 的上游数据源，避免各规则重复拉取。
 - [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) §P3 写明"连板天梯与昨日梯队表现：页面和接口较完整，外部依赖重；A 股短线方向明确时再做"——本文档是这条决策的展开。
 - 数据源已迁移为东方财富公开涨停池（`getTopicZTPool`，公开 API、无鉴权）；已确认不接 amazingdata，无 fallback。
 
@@ -109,7 +109,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 - 不做"打板胜率/连板成功率"等量化统计；这属于 P3 [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) §Phase 3 的真实复盘范围。
 - 不做实时推送（盘中秒级）；刷新节奏由调用方控制（见 §6.4）。
 - 不引入新的用户配置项（用户不能改 level 分组规则或定义新的连板口径）；数据口径由代码与文档固定。
-- 不做跨市场、跨品种；只服务沪深 A 股主板+创业板（与 [策略预警产品文档](./strategy-alert-product.md) §5.2 的涨停规则过滤口径一致）。
+- 不做跨市场、跨品种；只服务沪深 A 股主板+创业板。
 
 ## 4. 产品原则
 
@@ -160,7 +160,7 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 - **level = N（N ≥ 2）**：该股票当日涨停，且最近一次涨停发生在前一交易日（中间不出现跌停或未涨停日）。
 - **样本窗口**：默认 15 个交易日，与 ruo `days=15` 保持一致。窗口外不计。
 - **过滤**：默认排除科创板（688 开头）和北交所（8/4 开头）；用户不能改。
-- **ST 股票**：默认排除（名称前缀含 "ST"）。该口径与 [策略预警产品文档](./strategy-alert-product.md) §5.2 一致。
+- **ST 股票**：默认排除（名称前缀含 "ST"）。
 - **去重**：同一股票在同一日只出现在一个 `level` 中；以最深 level 为准。
 - **数据修正**：若数据源返回的 `close == high` 且涨幅在 [9.8%, 10%)，认为"盘中触板但收盘未板"，按 8.58% 涨幅回推收盘价，详见 §5.6。当前主源（东方财富涨停池）无 `high` 字段，该修正不触发，逻辑保留。
 
@@ -393,7 +393,7 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 
 ### Phase 3：与策略预警联动
 
-- 在 [策略预警产品文档](./strategy-alert-product.md) P2 列表中加入"涨停规则"，上游事实来源统一指向本快照。
+- 未来 Strategy 的涨停类字段统一引用本快照。
 - 增加"炸板 / 断板"语义字段（依赖数据源暴露 `isBroken` / `consecutiveBoard`；当前东方财富涨停池无此字段）。
 - 与个股详情"事件"区打通。
 

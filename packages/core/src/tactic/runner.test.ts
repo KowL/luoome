@@ -143,6 +143,44 @@ describe('tactic/runner', () => {
     });
   });
 
+  describe('score 严格语义', () => {
+    it('score 越界 → triggered:false + score_invalid（不再 clamp 到 0-100）', () => {
+      const tactic: Tactic = {
+        id: 'score-overflow',
+        name: 'score 越界',
+        tag: 'momentum',
+        description: '锁定 score_invalid 严格语义',
+        triggerWhen: 'true',
+        scoreExpression: '150',
+        direction: 'bullish',
+        evidenceTemplate: ['evidence'],
+        source: 'user',
+        definedAt: T,
+      };
+      const r = runTacticForStock(tactic, 'x', T, { indicators: baseIndicators });
+      expect(r.triggered).toBe(false);
+      if (!r.triggered) expect(r.reason).toBe('score_invalid');
+    });
+
+    it('when 已命中但 score 求值抛错 → score_invalid 而非 dsl_error', () => {
+      const tactic: Tactic = {
+        id: 'score-throws',
+        name: 'score 抛错',
+        tag: 'momentum',
+        description: '锁定 score 阶段失败的 reason 判定',
+        triggerWhen: 'true',
+        scoreExpression: 'Math.abs(1, 2)',
+        direction: 'bullish',
+        evidenceTemplate: ['evidence'],
+        source: 'user',
+        definedAt: T,
+      };
+      const r = runTacticForStock(tactic, 'x', T, { indicators: baseIndicators });
+      expect(r.triggered).toBe(false);
+      if (!r.triggered) expect(r.reason).toBe('score_invalid');
+    });
+  });
+
   describe('Vibe trend_timing 映射 golden fixture', () => {
     it('趋势多头且放量突破时由两个既有战法分别产出可共振的 bullish 事实', () => {
       const context = {

@@ -80,29 +80,12 @@ assert(stats.includes('平均信心度'), '[s] 弹层应包含平均信心度');
 assert(stats.includes('按决策分解'), '[s] 弹层应包含按决策分解');
 process.stderr.write('smoke: [s] 复盘统计弹层 OK\n');
 
-// 5) [esc] 关闭后 [q] 退出：done 必须 resolve。
+// 5) [esc] 关闭统计弹层。
 setup.mockInput.pressEscape();
 await sleep(200);
 await setup.waitFor(() => !frame().includes('总条数'), { maxPasses: 50 });
 
-// 6) [t] 战法扫描弹层（list_tactics → run_tactic × N → score_signals）。
-setup.mockInput.pressKey('t');
-await setup.waitFor(
-  () => frame().includes('战法') && (frame().includes('精排 top') || frame().includes('未命中')),
-  { maxPasses: 200 },
-);
-const tac = frame();
-assert(tac.includes('战法扫描'), '[t] 弹层标题应为「战法扫描」');
-assert(
-  tac.includes('精排 top') || tac.includes('未命中'),
-  '[t] 弹层应包含「精排 top」或「未命中」分支',
-);
-process.stderr.write('smoke: [t] 战法扫描弹层 OK\n');
-setup.mockInput.pressEscape();
-await sleep(200);
-await setup.waitFor(() => !frame().includes('战法扫描'), { maxPasses: 50 });
-
-// 7) [o] outcome 复盘弹层。
+// 6) [o] outcome 复盘弹层。
 setup.mockInput.pressKey('o');
 await setup.waitFor(
   () => frame().includes('outcome') && (frame().includes('近') || frame().includes('暂无')),
@@ -115,7 +98,7 @@ setup.mockInput.pressEscape();
 await sleep(200);
 await setup.waitFor(() => !frame().includes('outcome 复盘'), { maxPasses: 50 });
 
-// 8) [c] confidence 校准弹层（v0.5 W4）。
+// 7) [c] confidence 校准弹层（v0.5 W4）。
 setup.mockInput.pressKey('c');
 await setup.waitFor(() => frame().includes('confidence 校准') && frame().includes('总条数'), {
   maxPasses: 100,

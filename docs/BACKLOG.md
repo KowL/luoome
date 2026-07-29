@@ -1,7 +1,7 @@
 # Backlog — 一致性 & 工程债
 
 > 来源：2026-07-22 全仓代码走查（packages/\* + apps/web + 文档）。
-> 功能演进 backlog 见 [HANDOFF.md](./HANDOFF.md) §9；本清单只收「文档与实现不一致 / 测试盲区 / 代码债」。
+> 功能演进见 [ROADMAP.md](./ROADMAP.md)；本清单只收「文档与实现不一致 / 测试盲区 / 代码债」。
 > 每条附定位，按优先级排序；修完一条删一条。
 
 ## P1 — 文档与实现不符（会误导使用者）
@@ -18,7 +18,7 @@
 
 ## P2 — 测试盲区 / 硬编码
 
-5. **workflows 三个无测试**：`tactic-scan` / `risk-report` / `daily-review`；且 `risk-report` 的 VaR 是 mock 固定值（2% × 总市值），`sync-quotes` 用 `new Date()` 而非 `ctx.clock()`。
+5. **workflows 三个无测试**：`run-strategies` / `risk-report` / `daily-review`；且 `risk-report` 的 VaR 是 mock 固定值（2% × 总市值），`sync-quotes` 用 `new Date()` 而非 `ctx.clock()`。
 6. **版本号三处口径互相对不上**：CLI `VERSION = '0.1.0'`（`packages/cli/src/index.ts`）、MCP serverInfo 同、homebrew formula test 断言 `0.5.x`——而实际已 v0.6.2。
 7. **MCP smoke 硬编码 17 tool**：`packages/mcp/src/smoke.ts` 新增 read/advice tool 会脆断；smoke 无 CI / script 挂载，只能手跑。
 8. **db DDL 与 Drizzle schema 双份手写**：`ensureSchema` 编程式 DDL 与 `schema/index.ts` 靠纪律同步（唯一索引 / 复合主键两处都有），漂移风险，代码注释自认应被 migrate 取代；`createDrizzleRepos` docstring 残留「5 个 repository」（实际 11）。

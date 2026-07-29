@@ -2,7 +2,7 @@
 
 ## Advice is not trade
 
-- Advice, tactic signals, watch triggers and event reminders are information for a human decision.
+- Advice, StrategySignal, WatchTrigger and event reminders are information for a human decision.
 - Never place or cancel an order, call a broker, or interpret a local holding/trade record as market execution.
 - Never hide counter-evidence, risks, disclaimers or expiry because confidence is high.
 - Encourage outcome recording only after the user reports what actually happened.

@@ -5,9 +5,9 @@ import { type Money, MoneySchema } from '../types/branded.js';
 import { EventImportanceSchema, StockEventKindSchema } from './stock-event.js';
 
 /**
- * 股票池 + 盯盘规则 + 触发（v0.6 起，docs/ddd/intraday-watch-design.md；
- * 分组化改造见 docs/ddd/stock-group-design.md §5；
- * 策略预警扩展 docs/ddd/strategy-alert-detailed-design.md §3）。
+ * 股票池 + 盯盘规则 + 触发（v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md；
+ * 分组化改造见 docs/ddd/strategy-watchlist-unification-detailed-design.md §5；
+ * 策略预警扩展 docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
  *
  * 设计要点：
  * - 池（StockPool）= 成员分组引用（groupId → StockGroup）+ 规则列表（WatchRule）+ 冷却 + enabled
@@ -27,6 +27,7 @@ export const WatchDirectionSchema = z.enum(['buy', 'sell', 'watch']);
 /** 规则类型。Phase 1 新增 price-level；event-date（低频事件提醒，ruo 迁移）；volume-ratio / drawdown-from-high 留 Phase 2。 */
 export type WatchRuleKind =
   | 'tactic'
+  | 'strategy-signal'
   | 'cost-threshold'
   | 'price-change'
   | 'price-level'
@@ -34,6 +35,7 @@ export type WatchRuleKind =
 
 export const WatchRuleKindSchema = z.enum([
   'tactic',
+  'strategy-signal',
   'cost-threshold',
   'price-change',
   'price-level',
@@ -56,7 +58,7 @@ export type AlertPriority = z.infer<typeof AlertPrioritySchema>;
 export const TriggerTypeSchema = z.enum(['triggered', 'recovered']);
 export type TriggerType = z.infer<typeof TriggerTypeSchema>;
 
-/** 单条触发的送达状态（详细语义见 docs/ddd/strategy-alert-detailed-design.md §8）。 */
+/** 单条触发的送达状态（详细语义见 docs/ddd/strategy-watchlist-unification-detailed-design.md §8）。 */
 export const DeliveryStatusSchema = z.enum([
   'not-requested',
   'suppressed-cooldown',
@@ -192,6 +194,7 @@ export type StockPool = z.infer<typeof StockPoolSchema>;
 
 export const WatchTriggerSchema = z.object({
   id: z.string().min(1),
+  alertPlanId: z.string().min(1).optional(),
   poolId: z.string().min(1),
   stockId: z.string().min(1),
   ruleKind: WatchRuleKindSchema,
@@ -234,13 +237,14 @@ export type WatchTrigger = z.infer<typeof WatchTriggerSchema>;
 // ---------- WatchRuleState（边沿状态机） ----------
 
 /**
- * 边沿状态（docs/ddd/strategy-alert-detailed-design.md §3.5 / §5）：
+ * 边沿状态（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.5 / §5）：
  * - 每个 (poolId, stockId, ruleId) 一行
  * - 仅 active: boolean 参与求值判定；firstTriggeredAt / lastEvaluatedAt 用于观察与恢复文案
  * - virtual ruleId `'composite'` 用于 ALL 组合方案
  * - 不替代 watch_triggers 历史
  */
 export const WatchRuleStateSchema = z.object({
+  alertPlanId: z.string().min(1).optional(),
   poolId: z.string().min(1),
   stockId: z.string().min(1),
   ruleId: z.string().min(1),
@@ -296,7 +300,7 @@ const derivePriorityByKind = (rule: WatchRule): AlertPriority => {
 // ---------- 不变量 ----------
 
 /**
- * 池不变量（docs/ddd/intraday-watch-design.md §1 + stock-group-design.md §5 + strategy-alert §3）：
+ * Legacy 池不变量；仅供迁移 decoder 与只读回滚路径使用。
  * - id slug 合法（schema 已 regex，runtime 兜底长度）
  * - rules ≥ 1（schema 已 min(1)）
  * - updatedAt ≥ createdAt

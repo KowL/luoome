@@ -12,12 +12,20 @@ let sending = false;
 let initialized = false;
 
 const TOOL_LABELS = {
-  create_stock_group: '创建分组',
-  update_stock_group: '更新分组',
-  delete_stock_group: '删除分组',
-  create_stock_pool: '创建盯盘池',
-  update_stock_pool: '更新盯盘池',
-  delete_stock_pool: '删除盯盘池',
+  create_strategy: '创建 Strategy',
+  create_strategy_version: '创建 Strategy 版本',
+  publish_strategy_version: '发布 Strategy 版本',
+  pause_strategy: '暂停 Strategy',
+  run_strategy: '试跑 Strategy',
+  create_watchlist: '创建 Watchlist',
+  update_watchlist: '更新 Watchlist',
+  archive_watchlist: '归档 Watchlist',
+  add_watchlist_member: '添加 Watchlist 成员',
+  update_watchlist_member: '更新 Watchlist 成员',
+  archive_watchlist_member: '归档 Watchlist 成员',
+  create_alert_plan: '创建 AlertPlan',
+  update_alert_plan: '更新 AlertPlan',
+  delete_alert_plan: '删除 AlertPlan',
 };
 
 const toolLabel = (tool) => TOOL_LABELS[tool] ?? tool;
@@ -142,7 +150,7 @@ const emptyState = () => {
     '总结我的当前持仓',
     '查询 300857 的行情',
     '列出最近的研究笔记',
-    '帮我创建一个观察分组',
+    '帮我创建一个观察 Watchlist',
   ];
   const chips = suggestions.map((text) => {
     const button = el('button', 'chat-suggestion', text);

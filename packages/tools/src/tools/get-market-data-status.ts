@@ -4,10 +4,6 @@ import { z } from 'zod';
 import { defineTool } from '../define-tool.js';
 import { computeRelevantStockIds } from './sync-stock-events.js';
 
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
-const shanghaiDay = (date: Date): string =>
-  new Date(date.getTime() + SHANGHAI_OFFSET_MS).toISOString().slice(0, 10);
-
 /** 新鲜度阈值：最新快照超过 15 分钟视为 stale（Phase 1 简化，不区分盘中/盘后）。 */
 const STALE_AFTER_MS = 15 * 60 * 1000;
 
@@ -43,7 +39,7 @@ export const GetMarketDataStatusOutput = z.object({
       notifyFailed: z.number().int().nonnegative().optional(),
     })
     .nullable(),
-  groupStale: z.array(z.object({ groupId: z.string(), name: z.string() })),
+  watchlistStale: z.array(z.object({ watchlistId: z.string(), name: z.string() })),
 });
 
 /**
@@ -51,11 +47,11 @@ export const GetMarketDataStatusOutput = z.object({
  *
  * - providers：按 PriceSnapshot 最新一条推断新鲜度（fresh / stale / unknown）
  * - watchHealth：最近 WatchRun 摘要
- * - groupStale：enabled 且 refreshPolicy=daily、最新快照非今日的分组（PRD §6.3 stale 语义）
+ * - watchlistStale：存在 stale 成员来源的启用 Watchlist
  */
 export const getMarketDataStatusTool = defineTool({
   name: 'get_market_data_status',
-  description: '行情数据健康读模型：各源新鲜度 + watch 运行健康 + stale 分组',
+  description: '行情数据健康读模型：各源新鲜度 + watch 运行健康 + stale Watchlist',
   sideEffect: 'read',
   input: GetMarketDataStatusInput,
   output: GetMarketDataStatusOutput,
@@ -162,22 +158,17 @@ export const getMarketDataStatusTool = defineTool({
             notifyFailed: latestRun.notifyFailed,
           };
 
-    // stale 分组：daily 且最新快照非今日
-    const today = shanghaiDay(now);
-    const groups = await ctx.repos.stockGroup.list(true);
-    const groupStale: Array<{ groupId: string; name: string }> = [];
-    for (const g of groups) {
-      if (g.refreshPolicy !== 'daily') continue;
-      const members = await ctx.repos.groupMember.currentMembers(g.id);
-      const latestSnap = members.reduce<Date | null>(
-        (acc, m) => (acc === null || m.createdAt.getTime() > acc.getTime() ? m.createdAt : acc),
-        null,
-      );
-      if (latestSnap === null || shanghaiDay(latestSnap) !== today) {
-        groupStale.push({ groupId: g.id, name: g.name });
+    const watchlistStale: Array<{ watchlistId: string; name: string }> = [];
+    for (const watchlist of await ctx.repos.watchlist.list({ enabledOnly: true })) {
+      const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
+      const sources = (
+        await Promise.all(members.map((member) => ctx.repos.watchlistMember.listSources(member.id)))
+      ).flat();
+      if (sources.some((source) => source.status === 'stale')) {
+        watchlistStale.push({ watchlistId: watchlist.id, name: watchlist.name });
       }
     }
 
-    return { providers, datasets, watchHealth, groupStale };
+    return { providers, datasets, watchHealth, watchlistStale };
   },
 });

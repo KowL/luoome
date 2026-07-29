@@ -1,4 +1,4 @@
-import type { ToolContext } from '@luoome/core';
+import type { StockPool, ToolContext } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import { describe, expect, it } from 'vitest';
@@ -57,6 +57,66 @@ const setupCtx = async (quotes: Record<string, number>) => {
     createdAt: T0,
     updatedAt: T0,
   });
+  await ctx.repos.watchlist.save({
+    id: HOLDINGS_GROUP_ID,
+    name: '持仓观察',
+    kind: 'portfolio',
+    membershipPolicy: 'synced',
+    enabled: true,
+    createdAt: T0,
+    updatedAt: T0,
+  });
+  for (const holding of await ctx.repos.holding.listByAccount(TWO_HOLDINGS_ACCOUNT_ID)) {
+    if (holding.closedAt !== null) continue;
+    await ctx.repos.watchlistMember.saveMember({
+      id: `${HOLDINGS_GROUP_ID}:${holding.stockId}`,
+      watchlistId: HOLDINGS_GROUP_ID,
+      stockId: holding.stockId,
+      stage: 'discovered',
+      priority: 'normal',
+      firstAddedAt: T0,
+      lastActivityAt: T0,
+    });
+  }
+  await ctx.repos.watchlist.save({
+    id: MANUAL_GROUP_ID,
+    name: '手工观察',
+    kind: 'personal',
+    membershipPolicy: 'manual',
+    enabled: true,
+    createdAt: T0,
+    updatedAt: T0,
+  });
+  await ctx.repos.watchlistMember.saveMember({
+    id: `${MANUAL_GROUP_ID}:002594.SZ`,
+    watchlistId: MANUAL_GROUP_ID,
+    stockId: '002594.SZ',
+    stage: 'watching',
+    priority: 'normal',
+    firstAddedAt: T0,
+    lastActivityAt: T0,
+  });
+  ctx.repos.stockPool.save = async (pool: StockPool) => {
+    await ctx.repos.alertPlan.save({
+      id: pool.id,
+      name: pool.name,
+      ...(pool.description === undefined ? {} : { description: pool.description }),
+      watchlistId: pool.groupId,
+      rules: pool.rules.map((rule, index) => ({
+        ...rule,
+        id: rule.id ?? `rule-${index + 1}`,
+      })) as never,
+      logic: pool.logic,
+      triggerMode: pool.triggerMode,
+      ...(pool.priority === undefined ? {} : { priority: pool.priority }),
+      cooldownMinutes: pool.cooldownMinutes,
+      dailyNotificationLimit: pool.dailyNotificationLimit,
+      notifyOnRecovery: pool.notifyOnRecovery,
+      enabled: pool.enabled,
+      createdAt: pool.createdAt,
+      updatedAt: pool.updatedAt,
+    });
+  };
   return { ctx: fixed, businessCtx: ctx };
 };
 
@@ -270,10 +330,9 @@ describe('intraday-watch cost-threshold 规则', () => {
     expect(r.data.triggers).toEqual([]);
   });
 
-  it('avgCost = 0 的持仓被跳过（避免除零）→ 0 触发', async () => {
-    // 用 manual 池（avgCost 始终 undefined）模拟"无 avgCost"的场景
+  it('personal Watchlist 中仍为当前持仓的成员可使用 avgCost', async () => {
     const { ctx } = await setupCtx({
-      '002594.SZ': 108.35, // 即便大涨也无 avgCost → 不触发
+      '002594.SZ': 108.35,
     });
     await ctx.repos.stockPool.save({
       id: 'manual-pool',
@@ -295,7 +354,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.triggers).toEqual([]);
+    expect(r.data.triggers).toHaveLength(1);
   });
 
   it('行情 unresolved（stock 不在 batch_quote 结果）→ 不触发、不报错', async () => {

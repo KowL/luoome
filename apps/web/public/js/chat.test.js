@@ -14,27 +14,27 @@ describe('chat message whitespace', () => {
 
 describe('草案处理记录', () => {
   it('格式化后可解析回 tool / ok / 文本', () => {
-    const record = formatDraftSettlement('create_stock_group', true, '创建分组执行成功');
+    const record = formatDraftSettlement('create_watchlist', true, '创建 Watchlist 执行成功');
     expect(parseDraftSettlement(record)).toEqual({
       ok: true,
-      tool: 'create_stock_group',
-      text: '创建分组执行成功',
+      tool: 'create_watchlist',
+      text: '创建 Watchlist 执行成功',
     });
-    const failed = formatDraftSettlement('delete_stock_pool', false, '已取消该草案');
+    const failed = formatDraftSettlement('archive_watchlist', false, '已取消该草案');
     expect(parseDraftSettlement(failed)).toEqual({
       ok: false,
-      tool: 'delete_stock_pool',
+      tool: 'archive_watchlist',
       text: '已取消该草案',
     });
   });
 
   it('容忍持久化文本的开头空白', () => {
     expect(
-      parseDraftSettlement('\n  [草案处理记录] ok update_stock_group 更新分组执行成功'),
+      parseDraftSettlement('\n  [草案处理记录] ok update_watchlist 更新 Watchlist 执行成功'),
     ).toEqual({
       ok: true,
-      tool: 'update_stock_group',
-      text: '更新分组执行成功',
+      tool: 'update_watchlist',
+      text: '更新 Watchlist 执行成功',
     });
   });
 

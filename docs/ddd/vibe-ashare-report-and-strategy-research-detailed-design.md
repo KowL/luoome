@@ -5,10 +5,10 @@
 > 日期：2026-07-29
 >
 > 产品输入：[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)、
-> [策略预警产品文档](../prd/strategy-alert-product.md)
+> [统一 Watchlist](../prd/watchlist.md)
 >
 > 技术依赖：[行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)、
-> [股票分组设计](./stock-group-design.md)、
+> [Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、
 > [ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md)、
 > [连板天梯详细设计](./limit-up-ladder-detailed-design.md)
 >
@@ -791,8 +791,8 @@ WorkflowRun.inputSummary 和 Report evidence 中，不额外增加用户可编�
 # 交易日目录/日线/事件等数据准备
 30 16 * * 1-5  luoome workflow run post-market-data --mode scheduled
 
-# 动态分组在收盘数据准备完成后刷新
-0 17 * * 1-5   luoome workflow run refresh-groups --mode scheduled
+# Watchlist 在收盘数据准备完成后刷新
+0 17 * * 1-5   luoome workflow run sync-portfolio-watchlists --mode scheduled
 
 # 收盘复盘
 0 18 * * 1-5   luoome workflow run closing-report --mode scheduled --input '{"notify":true}'

@@ -1,4 +1,10 @@
-import { type StockEvent, StockGroupSchema, StockPoolSchema, type ToolContext } from '@luoome/core';
+import {
+  AlertPlanSchema,
+  type StockEvent,
+  type ToolContext,
+  WatchlistMemberSchema,
+  WatchlistSchema,
+} from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -8,32 +14,47 @@ const CLOCK = () => new Date('2026-07-25T01:00:00.000Z');
 /** now 的 Asia/Shanghai 当日 = 07-25；+3 自然日 = 07-28 00:00 SH = 07-27T16:00Z。 */
 const EVENT_IN_3_DAYS = new Date('2026-07-27T16:00:00.000Z');
 
-const seedPoolWithEventRule = async (
+const seedAlertPlanWithEventRule = async (
   ctx: ToolContext,
   opts: { importance?: 'normal' | 'important' | 'urgent'; daysBefore?: number[] } = {},
 ): Promise<StockEvent> => {
   const now = CLOCK();
-  const group = StockGroupSchema.parse({
-    id: 'evt-grp',
-    name: '事件组',
-    resolver: { kind: 'manual', stockIds: ['stk-evt'] },
-    refreshPolicy: 'manual',
+  const watchlist = WatchlistSchema.parse({
+    id: 'evt-watchlist',
+    name: '事件 Watchlist',
+    kind: 'personal',
+    membershipPolicy: 'manual',
     enabled: true,
     createdAt: now,
     updatedAt: now,
   });
-  await ctx.repos.stockGroup.save(group);
-  const pool = StockPoolSchema.parse({
-    id: 'evt-pool',
-    name: '事件方案',
-    groupId: 'evt-grp',
+  await ctx.repos.watchlist.save(watchlist);
+  await ctx.repos.watchlistMember.saveMember(
+    WatchlistMemberSchema.parse({
+      id: 'evt-watchlist:stk-evt',
+      watchlistId: watchlist.id,
+      stockId: 'stk-evt',
+      stage: 'watching',
+      priority: 'normal',
+      firstAddedAt: now,
+      lastActivityAt: now,
+    }),
+  );
+  const plan = AlertPlanSchema.parse({
+    id: 'evt-alert',
+    name: '事件 AlertPlan',
+    watchlistId: watchlist.id,
     rules: [{ kind: 'event-date', id: 'r1', daysBefore: opts.daysBefore ?? [3] }],
+    logic: 'ANY',
+    triggerMode: 'on-enter',
     cooldownMinutes: 30,
+    dailyNotificationLimit: 20,
+    notifyOnRecovery: false,
     enabled: true,
     createdAt: now,
     updatedAt: now,
   });
-  await ctx.repos.stockPool.save(pool);
+  await ctx.repos.alertPlan.save(plan);
   const event: StockEvent = {
     id: 'evt-1',
     stockId: 'stk-evt',
@@ -56,13 +77,13 @@ const seedPoolWithEventRule = async (
 describe('evaluate-event-rules workflow', () => {
   it('窗口命中 (d=3) → 生成 WatchTrigger；important → sent', async () => {
     const ctx = await buildTestContext({ clock: CLOCK });
-    await seedPoolWithEventRule(ctx, { importance: 'important' });
+    await seedAlertPlanWithEventRule(ctx, { importance: 'important' });
     const r = await evaluateEventRulesWorkflow.run({}, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggered).toBe(1);
     expect(r.data.notified).toBe(1);
-    const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-pool' });
+    const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' });
     expect(triggers.length).toBe(1);
     const trigger = triggers[0];
     if (trigger === undefined) throw new Error('expected one event trigger');
@@ -74,7 +95,7 @@ describe('evaluate-event-rules workflow', () => {
 
   it('重复执行 → (event, remindDay) 去重', async () => {
     const ctx = await buildTestContext({ clock: CLOCK });
-    await seedPoolWithEventRule(ctx);
+    await seedAlertPlanWithEventRule(ctx);
     await evaluateEventRulesWorkflow.run({}, ctx);
     const second = await evaluateEventRulesWorkflow.run({}, ctx);
     expect(second.ok).toBe(true);
@@ -85,19 +106,19 @@ describe('evaluate-event-rules workflow', () => {
 
   it('normal 优先级 → not-requested（仅记录，不发送）', async () => {
     const ctx = await buildTestContext({ clock: CLOCK });
-    await seedPoolWithEventRule(ctx, { importance: 'normal' });
+    await seedAlertPlanWithEventRule(ctx, { importance: 'normal' });
     const r = await evaluateEventRulesWorkflow.run({}, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggered).toBe(1);
     expect(r.data.notified).toBe(0);
-    const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-pool' });
+    const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' });
     expect(triggers[0]?.deliveryStatus).toBe('not-requested');
   });
 
   it('窗口外事件不触发', async () => {
     const ctx = await buildTestContext({ clock: CLOCK });
-    await seedPoolWithEventRule(ctx, { daysBefore: [1] }); // 事件在 3 天后，规则只提醒 1 天前
+    await seedAlertPlanWithEventRule(ctx, { daysBefore: [1] }); // 事件在 3 天后，规则只提醒 1 天前
     const r = await evaluateEventRulesWorkflow.run({}, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;

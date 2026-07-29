@@ -14,7 +14,7 @@ const toShanghaiMidnight = (date: Date): Date => {
 };
 
 /**
- * 同步范围 = 持仓 ∪ enabled 分组成员快照 ∪ 存在手工事件的股票（去重，ruo 迁移 §4.2）。
+ * 同步范围 = 持仓 ∪ enabled Watchlist 当前成员 ∪ 存在手工事件的股票（去重）。
  * 无关注股票时返回空数组（workflow 记 succeeded、syncedStocks=0）。
  */
 export const computeRelevantStockIds = async (ctx: ToolContext): Promise<string[]> => {
@@ -26,9 +26,9 @@ export const computeRelevantStockIds = async (ctx: ToolContext): Promise<string[
       if (h.closedAt === null) set.add(h.stockId);
     }
   }
-  const groups = await ctx.repos.stockGroup.list(true);
-  for (const g of groups) {
-    const members = await ctx.repos.groupMember.currentMembers(g.id);
+  const watchlists = await ctx.repos.watchlist.list({ enabledOnly: true });
+  for (const watchlist of watchlists) {
+    const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
     for (const m of members) set.add(m.stockId);
   }
   for (const stockId of await ctx.repos.stockEvent.listStockIdsWithEvents()) {
@@ -38,7 +38,7 @@ export const computeRelevantStockIds = async (ctx: ToolContext): Promise<string[
 };
 
 export const SyncStockEventsInput = z.object({
-  /** 缺省 = 持仓 ∪ enabled 分组成员 ∪ 手工事件股票。 */
+  /** 缺省 = 持仓 ∪ enabled Watchlist 当前成员 ∪ 手工事件股票。 */
   stockIds: z.array(z.string().min(1)).optional(),
   /** 仅同步指定 provider；缺省 = 全部已配置 provider。 */
   provider: z.string().min(1).optional(),

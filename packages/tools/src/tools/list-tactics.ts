@@ -19,6 +19,8 @@ export const ListTacticsInput = z.object({
 export const ListTacticsOutput = z.object({
   tactics: z.array(TacticSchema),
   total: z.number().int().nonnegative(),
+  deprecated: z.literal(true),
+  replacement: z.literal('list_strategies'),
 });
 
 /**
@@ -44,6 +46,11 @@ export const listTacticsTool = defineTool({
       ...(sourceFilter !== undefined ? { source: sourceFilter } : {}),
     });
     const tactics: readonly Tactic[] = list;
-    return { tactics: z.array(TacticSchema).parse(tactics), total: tactics.length };
+    return {
+      tactics: z.array(TacticSchema).parse(tactics),
+      total: tactics.length,
+      deprecated: true,
+      replacement: 'list_strategies',
+    };
   },
 });

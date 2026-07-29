@@ -3,16 +3,21 @@
 // 子命令清单见 printHelp()；mcp / tui / web 为懒加载（对应包由 W4a/W4c/W4d 并行实现，
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
+import { verifyStrategyWatchlistDatabase } from '@luoome/db';
 import { toolRegistry } from '@luoome/tools';
 
 import { createCliContext } from './context.js';
 import { isDaemonized, respawnDetached } from './daemon.js';
 import { loadProjectEnv } from './env.js';
 import { cmdMarketLimitUp } from './market-limit-up.js';
+import { luoomeHome } from './paths.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 
 // ---------- argv 解析 ----------
 
@@ -36,7 +41,7 @@ const VALUE_FLAGS = new Set([
   'scope',
   // v0.6 watch 子命令
   'interval',
-  'pool',
+  'alert-plan',
 ]);
 
 interface ParsedArgs {
@@ -217,10 +222,22 @@ const cmdToolsInspect = (name: string): void => {
   printJson(descriptor.inputSchema);
 };
 
+const cmdMigrationVerifyStrategyWatchlist = (): number => {
+  const dbPath = join(luoomeHome(), 'luoome.db');
+  if (!existsSync(dbPath)) {
+    // 库不存在是运行时状态（尚未初始化），不是用法错误：exit 1 而非 CliUsageError 的 2。
+    console.error(`数据库不存在: ${dbPath}（先运行 luoome start 或 luoome web serve 初始化）`);
+    return 1;
+  }
+  printJson(verifyStrategyWatchlistDatabase(dbPath));
+  return 0;
+};
+
 const cmdToolsCall = async (
   name: string,
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
+  requiredInput: Readonly<Record<string, unknown>> = {},
 ): Promise<number> => {
   const tool = toolRegistry.get(name);
   if (tool === undefined) throw unknownToolError(name);
@@ -232,6 +249,10 @@ const cmdToolsCall = async (
   } catch {
     throw new CliUsageError(`--input 不是合法 JSON: ${rawInput}`);
   }
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new CliUsageError('--input 必须是 JSON 对象');
+  }
+  input = { ...input, ...requiredInput };
 
   const handle = await createCliContext();
   try {
@@ -250,6 +271,63 @@ const cmdToolsCall = async (
   } finally {
     handle.close();
   }
+};
+
+const requireId = (value: string | undefined, usage: string): string => {
+  if (value === undefined) throw new CliUsageError(usage);
+  return value;
+};
+
+const cmdStrategy = async (
+  sub: string | undefined,
+  rest: readonly string[],
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  if (sub === 'list') return cmdToolsCall('list_strategies', flags, json);
+  if (sub === 'get') {
+    return cmdToolsCall('get_strategy', flags, json, {
+      strategyId: requireId(rest[0], '用法: luoome strategy get <strategyId>'),
+    });
+  }
+  if (sub === 'validate') {
+    return cmdToolsCall('validate_strategy_version', flags, json, {
+      versionId: requireId(rest[0], '用法: luoome strategy validate <versionId>'),
+    });
+  }
+  if (sub === 'run') {
+    return cmdToolsCall('run_strategy', flags, json, {
+      strategyId: requireId(rest[0], '用法: luoome strategy run <strategyId>'),
+    });
+  }
+  throw new CliUsageError(
+    `未知 strategy 子命令: "${sub ?? ''}"（支持 list / get / validate / run）`,
+  );
+};
+
+const cmdWatchlist = async (
+  sub: string | undefined,
+  rest: readonly string[],
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  if (sub === 'list') return cmdToolsCall('list_watchlists', flags, json);
+  if (sub === 'get') {
+    return cmdToolsCall('get_watchlist', flags, json, {
+      watchlistId: requireId(rest[0], '用法: luoome watchlist get <watchlistId>'),
+    });
+  }
+  if (sub === 'sync') return cmdWorkflowRun('sync-portfolio-watchlists', flags, json);
+  throw new CliUsageError(`未知 watchlist 子命令: "${sub ?? ''}"（支持 list / get / sync）`);
+};
+
+const cmdAlert = (
+  sub: string | undefined,
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => {
+  if (sub === 'list') return cmdToolsCall('list_alert_plans', flags, json);
+  throw new CliUsageError(`未知 alert 子命令: "${sub ?? ''}"（支持 list）`);
 };
 
 // ---------- advice 子命令 ----------
@@ -481,10 +559,14 @@ const cmdWatch = async (
   const intervalRaw = flagString(flags, 'interval') ?? '60';
   const intervalSec = parsePositiveInt(intervalRaw, 'interval');
   const intervalMs = intervalSec * 1000;
-  const poolFlag = flagString(flags, 'pool');
+  // --pool 是旧 stock-pool 模型的残留 flag，已随 strategy-watchlist 迁移移除；
+  // 不在 VALUE_FLAGS 会被静默吞掉，这里显式报错并指向替代 flag。
+  if (flags.has('pool')) {
+    throw new CliUsageError('--pool 已移除：盯盘对象改为 AlertPlan，请使用 --alert-plan <id>');
+  }
+  const alertPlanFlag = flagString(flags, 'alert-plan');
   const once = flags.has('once');
   const notify = !flags.has('no-notify');
-  const seed = !once; // 单轮默认不 seed（避免 seed 副作用污染测试）；长驻启动时 seed
 
   // 延迟 import：workflow 包包含 LLM / context 等较重依赖
   const { runIntradayWatchObserved } = await import('@luoome/workflows');
@@ -503,17 +585,17 @@ const cmdWatch = async (
     );
   }
 
-  // 解析 poolFlag → poolIds 数组（--pool <id> 重复传多池）
-  const poolIds =
-    poolFlag === undefined ? undefined : poolFlag.split(',').filter((s) => s.length > 0);
+  const alertPlanIds =
+    alertPlanFlag === undefined
+      ? undefined
+      : alertPlanFlag.split(',').filter((value) => value.length > 0);
 
   // 单轮：跑一次即退出
   if (once) {
     const r = await runIntradayWatchObserved(
       {
-        ...(poolIds !== undefined ? { poolIds } : {}),
+        ...(alertPlanIds !== undefined ? { alertPlanIds } : {}),
         notify,
-        seedTacticSources: seed,
       },
       ctx,
       'once',
@@ -528,7 +610,7 @@ const cmdWatch = async (
     } else {
       console.log(`盘中盯盘（单轮）评估完毕`);
       console.log(
-        `  池 ${r.data.evaluatedPools} / 股 ${r.data.evaluatedStocks} / 触发 ${r.data.triggers.length}（通知 ${r.data.notified} / 冷却 ${r.data.suppressedByCooldown}）`,
+        `  AlertPlan ${r.data.evaluatedPlans} / 股票 ${r.data.evaluatedStocks} / 触发 ${r.data.triggers.length}（通知 ${r.data.notified} / 冷却 ${r.data.suppressedByCooldown}）`,
       );
       if (r.data.triggers.length > 0) {
         console.log(formatTriggersForLog(r.data.triggers));
@@ -561,9 +643,8 @@ const cmdWatch = async (
     if (!json) console.warn(`[${now.toISOString()}] 跑一轮…`);
     const r = await runIntradayWatchObserved(
       {
-        ...(poolIds !== undefined ? { poolIds } : {}),
+        ...(alertPlanIds !== undefined ? { alertPlanIds } : {}),
         notify,
-        seedTacticSources: seed,
       },
       ctx,
       'daemon',
@@ -619,7 +700,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / run-strategies / sync-portfolio-watchlists / risk-report / daily-review / intraday-watch / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report）`,
     );
   }
   const handle = await createCliContext();
@@ -749,6 +830,14 @@ Tools:
   tools inspect <name>                  输出 tool 的 input JSON Schema
   tools call <name> --input '<json>'    调用 tool，打印 data 或 error JSON
 
+Strategy / Watchlist / Alert:
+  strategy list|get|validate|run         查询、校验或运行 Strategy
+  watchlist list|get|sync                查询 Watchlist 或同步持仓来源
+  alert list                             查询 AlertPlan
+
+Migration:
+  migration verify strategy-watchlist   只读输出旧模型迁移基线与引用完整性
+
 Advice:
   advice list [--since 7d] [--include-expired] [--limit N]   查询历史建议
   advice stats [--since 30d]                                 建议准确率统计
@@ -765,9 +854,9 @@ Surfaces:
   web serve [--port 5173] [--host 127.0.0.1] [--foreground]
                                仅启动 Web 仪表盘；默认后台运行（同 start）
   workflow run <name>          跑内置 workflow（含 opening-report / closing-report / weekly-report）
-  watch [--interval 60] [--pool <id>] [--once] [--no-notify]
+  watch [--interval 60] [--alert-plan <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
-                                （每日首个交易轮次前自动刷新 stale 的 daily 动态分组：refresh-groups）
+                                仅扫描启用的 AlertPlan 与其 Watchlist 成员
 
 环境变量:
   LUOOME_HOME   数据目录（默认 ~/.luoome）；SQLite 位于 $LUOOME_HOME/luoome.db
@@ -811,6 +900,19 @@ const run = async (argv: readonly string[]): Promise<number> => {
     }
     throw new CliUsageError(`未知 tools 子命令: "${sub ?? ''}"（支持 list / inspect / call）`);
   }
+
+  if (cmd === 'migration') {
+    if (sub === 'verify' && rest[0] === 'strategy-watchlist') {
+      return cmdMigrationVerifyStrategyWatchlist();
+    }
+    throw new CliUsageError(
+      `未知 migration 子命令: "${[sub, ...rest].filter(Boolean).join(' ')}"（支持 verify strategy-watchlist）`,
+    );
+  }
+
+  if (cmd === 'strategy') return cmdStrategy(sub, rest, flags, json);
+  if (cmd === 'watchlist') return cmdWatchlist(sub, rest, flags, json);
+  if (cmd === 'alert') return cmdAlert(sub, flags, json);
 
   if (cmd === 'advice') {
     if (sub === 'list') return cmdAdviceList(flags, json);

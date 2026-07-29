@@ -21,14 +21,12 @@
 | [ROADMAP.md](./ROADMAP.md) | 版本演进、已交付能力和后续方向 |
 | [SECURITY.md](./SECURITY.md) | 副作用分级、鉴权、密钥与审计要求 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、测试、代码规范和贡献流程 |
-| [HANDOFF.md](./HANDOFF.md) | 当前能力、关键决策和跨会话交接信息 |
 | [BACKLOG.md](./BACKLOG.md) | 文档一致性、测试盲区和工程债 |
 
 ## 产品需求（PRD）
 
 | 文档 | 范围 |
 |---|---|
-| [策略预警产品文档](./prd/strategy-alert-product.md) | 策略预警闭环、用户流程、产品边界与实施分期 |
 | [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照的页面、tool、与下游联动边界 |
 | [ruo 能力迁移产品设计](./prd/ruo-feature-migration-product-design.md) | 研究档案、公司事件、数据新鲜度与真实复盘 |
 | [AI 投资决策闭环产品总纲](./prd/ai-investment-decision-loop.md) | 发现、研究、观察、Advice、行动与复盘的整体对象关系 |
@@ -40,10 +38,7 @@
 
 | 文档 | 范围 |
 |---|---|
-| [策略预警详细设计](./ddd/strategy-alert-detailed-design.md) | schema 演进、状态机、送达矩阵与迁移 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | ResearchNote、StockEvent、WorkflowRun 与事件规则 |
-| [盘中盯盘设计](./ddd/intraday-watch-design.md) | 股票池、盘中求值、冷却与 `luoome watch` |
-| [股票分组设计](./ddd/stock-group-design.md) | StockGroup、成员快照与动态 resolver |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
 | [个股行情查看详细设计](./ddd/stock-market-view-detailed-design.md) | Market View Tool、日 K 数据契约、Web 图表与降级语义 |
 | [Tushare 行情适配器设计](./ddd/tushare-market-adapter-design.md) | Tushare 作为 `MarketDataManager` 第三真实源的契约、字段映射与抑制窗口 |

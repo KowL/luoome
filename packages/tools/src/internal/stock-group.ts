@@ -6,7 +6,7 @@ import { runTacticTool } from '../tools/run-tactic.js';
 import { ensureStockStub } from './manual-entry.js';
 
 /**
- * 分组共享逻辑（docs/ddd/stock-group-design.md §4/§6；阶段 B）。
+ * 分组共享逻辑（docs/ddd/strategy-watchlist-unification-detailed-design.md §4/§6；阶段 B）。
  *
  * 供以下消费方复用：
  * - get_stock_group（stale 判定）

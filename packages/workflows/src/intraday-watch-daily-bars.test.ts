@@ -1,4 +1,4 @@
-import type { ToolContext } from '@luoome/core';
+import type { StockPool, ToolContext } from '@luoome/core';
 import { money } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { intradayWatchWorkflow } from './intraday-watch.js';
 
 /**
- * v0.6.1 dailyBars 接入测试（docs/ddd/intraday-watch-design.md §6 step 5）。
+ * v0.6.1 dailyBars 接入测试（docs/ddd/strategy-watchlist-unification-detailed-design.md §6 step 5）。
  *
  * 行为契约：
  * - get_previous_closes 有昨日 close → prevClose = bar.close
@@ -45,6 +45,43 @@ const setupCtx = async (quotes: Record<string, number>) => {
     createdAt: T0,
     updatedAt: T0,
   });
+  await fixed.repos.watchlist.save({
+    id: 'p-change-group',
+    name: 'price-change',
+    kind: 'personal',
+    membershipPolicy: 'manual',
+    enabled: true,
+    createdAt: T0,
+    updatedAt: T0,
+  });
+  await fixed.repos.watchlistMember.saveMember({
+    id: 'p-change-group:600519.SH',
+    watchlistId: 'p-change-group',
+    stockId: '600519.SH',
+    stage: 'watching',
+    priority: 'normal',
+    firstAddedAt: T0,
+    lastActivityAt: T0,
+  });
+  fixed.repos.stockPool.save = async (pool: StockPool) => {
+    await fixed.repos.alertPlan.save({
+      id: pool.id,
+      name: pool.name,
+      watchlistId: pool.groupId,
+      rules: pool.rules.map((rule, index) => ({
+        ...rule,
+        id: rule.id ?? `rule-${index + 1}`,
+      })) as never,
+      logic: pool.logic,
+      triggerMode: pool.triggerMode,
+      cooldownMinutes: pool.cooldownMinutes,
+      dailyNotificationLimit: pool.dailyNotificationLimit,
+      notifyOnRecovery: pool.notifyOnRecovery,
+      enabled: pool.enabled,
+      createdAt: pool.createdAt,
+      updatedAt: pool.updatedAt,
+    });
+  };
   await fixed.repos.stockPool.save({
     id: 'p-change',
     name: 'price-change',

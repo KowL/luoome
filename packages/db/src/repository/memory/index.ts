@@ -1,6 +1,7 @@
 import type {
   Account,
   Advice,
+  AlertPlan,
   ChatMessage,
   ChatSession,
   DailyBar,
@@ -16,6 +17,11 @@ import type {
   StockEvent,
   StockGroup,
   StockPool,
+  Strategy,
+  StrategyResult,
+  StrategyRun,
+  StrategySignal,
+  StrategyVersion,
   Tactic,
   TacticSignal,
   Trade,
@@ -26,6 +32,7 @@ import type {
 import { BUILTIN_TACTICS } from '@luoome/core';
 import { InMemoryAccountRepository } from './account.js';
 import { InMemoryAdviceRepository } from './advice.js';
+import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
 import { InMemoryGroupMemberRepository } from './group-member.js';
@@ -40,15 +47,18 @@ import { InMemoryStockEventRepository } from './stock-event.js';
 import { InMemoryStockGroupRepository } from './stock-group.js';
 import { InMemoryStockPoolRepository } from './stock-pool.js';
 import { InMemoryStockUniverseRepository } from './stock-universe.js';
+import { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
 import { InMemoryTacticRepository } from './tactic.js';
 import { InMemoryTradeRepository } from './trade.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 import { InMemoryWatchRunRepository } from './watch-run.js';
 import { InMemoryWatchTriggerRepository } from './watch-trigger.js';
+import { InMemoryWatchlistMemberRepository, InMemoryWatchlistRepository } from './watchlist.js';
 import { InMemoryWorkflowRunRepository } from './workflow-run.js';
 
 export { InMemoryAccountRepository } from './account.js';
 export { InMemoryAdviceRepository } from './advice.js';
+export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
 export { InMemoryGroupMemberRepository } from './group-member.js';
@@ -63,11 +73,13 @@ export { InMemoryStockEventRepository } from './stock-event.js';
 export { InMemoryStockGroupRepository } from './stock-group.js';
 export { InMemoryStockPoolRepository } from './stock-pool.js';
 export { InMemoryStockUniverseRepository } from './stock-universe.js';
+export { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
 export { InMemoryTacticRepository } from './tactic.js';
 export { InMemoryTradeRepository } from './trade.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 export { InMemoryWatchRunRepository } from './watch-run.js';
 export { InMemoryWatchTriggerRepository } from './watch-trigger.js';
+export { InMemoryWatchlistMemberRepository, InMemoryWatchlistRepository } from './watchlist.js';
 export { InMemoryWorkflowRunRepository } from './workflow-run.js';
 
 /** createInMemoryRepos 的可选种子数据（同步写入，含不变量断言）。 */
@@ -86,9 +98,15 @@ export interface InMemorySeed {
   /** v0.3 起：可选预置战法定义 + 信号。 */
   readonly tactics?: readonly Tactic[];
   readonly tacticSignals?: readonly TacticSignal[];
+  readonly strategies?: readonly Strategy[];
+  readonly strategyVersions?: readonly StrategyVersion[];
+  readonly strategyRuns?: readonly StrategyRun[];
+  readonly strategyResults?: readonly StrategyResult[];
+  readonly strategySignals?: readonly StrategySignal[];
   readonly notifications?: readonly Notification[];
   /** v0.6 起：可选预置股票池 + 触发。 */
   readonly stockPools?: readonly StockPool[];
+  readonly alertPlans?: readonly AlertPlan[];
   readonly watchTriggers?: readonly WatchTrigger[];
   readonly watchRuns?: readonly WatchRun[];
   /** 分组化起：可选预置分组 + 成员快照。 */
@@ -114,9 +132,14 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const dailyBar = new InMemoryDailyBarRepository();
   const signalObservation = new InMemorySignalObservationRepository();
   const tactic = new InMemoryTacticRepository();
+  const strategy = new InMemoryStrategyRepository();
+  const strategyRun = new InMemoryStrategyRunRepository(strategy);
+  const watchlist = new InMemoryWatchlistRepository();
+  const watchlistMember = new InMemoryWatchlistMemberRepository(watchlist);
   const notification = new InMemoryNotificationRepository();
   // v0.6 起
   const stockPool = new InMemoryStockPoolRepository();
+  const alertPlan = new InMemoryAlertPlanRepository();
   const watchTrigger = new InMemoryWatchTriggerRepository();
   const watchRuleState = new InMemoryWatchRuleStateRepository();
   const watchRun = new InMemoryWatchRunRepository();
@@ -143,8 +166,14 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const s of seed.tacticSignals ?? []) {
       void tactic.saveSignal(s);
     }
+    for (const item of seed.strategies ?? []) void strategy.save(item);
+    for (const item of seed.strategyVersions ?? []) void strategy.saveVersion(item);
+    for (const item of seed.strategyRuns ?? []) void strategyRun.saveRun(item);
+    void strategyRun.saveResults(seed.strategyResults ?? []);
+    void strategyRun.saveSignals(seed.strategySignals ?? []);
     for (const n of seed.notifications ?? []) notification.put(n);
     for (const p of seed.stockPools ?? []) stockPool.put(p);
+    for (const p of seed.alertPlans ?? []) void alertPlan.save(p);
     for (const t of seed.watchTriggers ?? []) watchTrigger.put(t);
     for (const r of seed.watchRuns ?? []) watchRun.put(r);
     for (const g of seed.stockGroups ?? []) stockGroup.put(g);
@@ -169,8 +198,13 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     dailyBar,
     signalObservation,
     tactic,
+    strategy,
+    strategyRun,
+    watchlist,
+    watchlistMember,
     notification,
     stockPool,
+    alertPlan,
     watchTrigger,
     watchRuleState,
     watchRun,

@@ -3,7 +3,7 @@
 > 状态：目标模型草案；需要从现有 StockGroup 渐进迁移
 > 日期：2026-07-29
 > 上位文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)
-> 关联文档：[Strategy DSL](./strategy-dsl.md)、[策略预警产品文档](./strategy-alert-product.md)
+> 关联文档：[Strategy DSL](./strategy-dsl.md)、[AI 投资决策闭环](./ai-investment-decision-loop.md)
 
 ## 1. 文档结论
 

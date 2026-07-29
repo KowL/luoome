@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 
 /**
- * 规则入参（docs/ddd/strategy-alert-detailed-design.md §9.1）：
+ * 规则入参（docs/ddd/strategy-watchlist-unification-detailed-design.md §9.1）：
  * - 接受可选 id（缺省服务端生成 `r_${uuid8}`）与 priority
  * - price-change 增加 direction（默认 'any' 兼容旧配置）
  * - 新增 price-level 变体
@@ -80,7 +80,7 @@ const ensureRuleIds = (
   }));
 
 /**
- * 创建股票池（v0.6 起，write；分组化改造 docs/ddd/stock-group-design.md §5/§6；
+ * 创建股票池（v0.6 起，write；分组化改造 docs/ddd/strategy-watchlist-unification-detailed-design.md §5/§6；
  * v0.7 策略预警扩展）。
  *
  * 校验链：

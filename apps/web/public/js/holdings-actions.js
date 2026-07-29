@@ -1,5 +1,5 @@
 /* apps/web/public/js/holdings-actions.js —— 持仓操作弹窗（新增 / 加仓 / 减仓 / 纠错 / 平仓）。
- * 写操作统一走 /api/tools/<name>/call（web 默认放行 write + fetch_quote 白名单）。
+ * 写操作统一走 /api/tools/<name>/call（web 需 LUOOME_EXPOSE_WRITE=true 才放行 write）。
  * 刷新与状态提示通过 initHoldingsActions 注入，避免反向 import pages.js。 */
 
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式

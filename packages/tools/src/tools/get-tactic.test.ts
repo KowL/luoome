@@ -9,6 +9,7 @@ describe('tool/get_tactic', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.tactic.name).toContain('放量');
+    expect(r.data).toMatchObject({ deprecated: true, replacement: 'get_strategy' });
   });
 
   it('未命中：返回 not_found', async () => {

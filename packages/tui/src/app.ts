@@ -21,9 +21,6 @@ import {
   GetConfidenceCalibrationOutput,
   ListAccountsOutput,
   ListHoldingsOutput,
-  ListTacticsOutput,
-  RunTacticOutput,
-  ScoreSignalsOutput,
   toolRegistry,
 } from '@luoome/tools';
 import {
@@ -131,7 +128,7 @@ interface OverlayState {
   readonly title: string;
   readonly lines: readonly string[];
   /** 弹层语义分支（仅用于键盘路由：账户选择 = accounts，可用 j/k/Enter）。 */
-  readonly kind?: 'detail' | 'stats' | 'tactics' | 'outcomes' | 'accounts' | 'limit-up-ladder';
+  readonly kind?: 'detail' | 'stats' | 'outcomes' | 'accounts' | 'limit-up-ladder';
   scroll: number;
 }
 
@@ -332,7 +329,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
     truncate: true,
     fg: COLORS.muted,
     content:
-      '[r] 刷新  [q] 退出  [d] 详情  [s] 统计  [c] 校准  [t] 战法  [o] 复盘  [a] 账户  [↑/↓] 滚动  [esc] 关闭',
+      '[r] 刷新  [q] 退出  [d] 详情  [s] 统计  [c] 校准  [o] 复盘  [a] 账户  [↑/↓] 滚动  [esc] 关闭',
   });
   renderer.root.add(footer);
 
@@ -696,89 +693,6 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   };
 
   /**
-   * 战法扫描（v0.3）：list_tactics → 并发 run_tactic × N → score_signals 精排 → top 10。
-   * 与 workflow tactic-scan 等价语义，但通过 tool 直接串（不依赖 workflows 包）。
-   */
-  const openTactics = async (): Promise<void> => {
-    openOverlay('战法扫描', [
-      '扫描中…（list_tactics → run_tactic × N → score_signals）',
-      '',
-      '[esc] 关闭',
-    ]);
-    try {
-      const listRaw = await callTool('list_tactics', { includeBuiltins: true }, ctxRef.current);
-      const list = ListTacticsOutput.parse(listRaw);
-      const tacticIds = list.tactics.map((t) => t.id);
-      if (tacticIds.length === 0) {
-        openOverlay('战法扫描', ['（无战法）', '', '[esc] 关闭']);
-        return;
-      }
-      const runs = await Promise.all(
-        tacticIds.map((id) =>
-          callTool('run_tactic', { tacticId: id, scope: 'holdings' }, ctxRef.current),
-        ),
-      );
-      const signals: Array<z.infer<typeof RunTacticOutput>['signals'][number]> = [];
-      let totalEvaluated = 0;
-      let totalTriggered = 0;
-      for (const raw of runs) {
-        const r = RunTacticOutput.parse(raw);
-        totalEvaluated += r.evaluatedStocks;
-        totalTriggered += r.triggeredCount;
-        for (const s of r.signals) signals.push(s);
-      }
-      if (signals.length === 0) {
-        openOverlay('战法扫描', [
-          `战法数：${tacticIds.length}    评估：${totalEvaluated} 股    命中：${totalTriggered}`,
-          '',
-          '（当前持仓未命中任何战法信号）',
-          '',
-          '[esc] 关闭',
-        ]);
-        return;
-      }
-      const scoreRaw = await callTool(
-        'score_signals',
-        {
-          signals: signals.map((s) => ({
-            tacticId: s.tacticId,
-            tacticName: s.tacticName,
-            tacticTag: s.tacticTag,
-            stockId: s.stockId,
-            ts: s.ts,
-            score: s.score,
-            direction: s.direction,
-            evidence: [...s.evidence],
-          })),
-        },
-        ctxRef.current,
-      );
-      const scored = ScoreSignalsOutput.parse(scoreRaw);
-      const top = scored.ranked.slice(0, 10);
-      const lines: string[] = [
-        `战法 ${tacticIds.length} 个    评估 ${totalEvaluated} 股    ` +
-          `命中 ${totalTriggered}    精排 top ${top.length}`,
-        '',
-        `${padEnd('标的', 13)}${padEnd('战法', 14)}${padEnd('方向', 8)}${padStart('评分', 6)}  依据`,
-      ];
-      for (const s of top) {
-        const code = s.stockId.split('.')[0] ?? s.stockId;
-        lines.push(
-          `${padEnd(code, 13)}${padEnd(s.tacticName, 14)}${padEnd(s.direction, 8)}` +
-            `${padStart(s.llmScore.toFixed(1), 6)}  ${s.rationale}`,
-        );
-      }
-      lines.push('', '[esc] 关闭    [↑/↓] 滚动');
-      // 若扫描期间用户已关闭弹层，不强行再打开。
-      if (state.overlay === null || state.overlay.title !== '战法扫描') return;
-      openOverlay('战法扫描', lines);
-    } catch (error) {
-      if (state.overlay === null) return;
-      openOverlay('战法扫描', [`扫描失败：${describeError(error)}`, '', '[esc] 关闭']);
-    }
-  };
-
-  /**
    * outcome 复盘列表（v0.3）：拉最近 advice 列表，逐条标「已回填 / 待回填」状态。
    * 真正回填走 CLI / agent（write 副作用，TUI 不直接写）。
    */
@@ -940,7 +854,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
 
   /**
    * 切换账户：构造一份新 ctx（user.defaultAccountId 替换），不重新打开 DB。
-   * 切换成功 → 关闭弹层 → 触发 refresh（持仓 / 建议 / 战法 全部按新账户重读）。
+   * 切换成功 → 关闭弹层 → 触发 refresh（持仓 / 建议全部按新账户重读）。
    */
   const setAccount = (accountId: string): void => {
     if (accountId === state.currentAccountId) {
@@ -1005,9 +919,6 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
         break;
       case 'c':
         void openCalibration();
-        break;
-      case 't':
-        void openTactics();
         break;
       case 'o':
         void openOutcomes();

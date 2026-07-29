@@ -1,5 +1,5 @@
 /**
- * A 股节假日历（IO 部分，v0.6 起，docs/ddd/intraday-watch-design.md "已知边界"）。
+ * A 股节假日历（IO 部分，v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md "已知边界"）。
  *
  * 纯计算部分（内置数据 / dateInShanghai / isHoliday / isWeekend / merge 等）
  * 已下沉到 @luoome/core 的 trading-calendar（供 tools 复用），此处 re-export

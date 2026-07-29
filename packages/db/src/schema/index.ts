@@ -5,12 +5,14 @@ import type {
   AdviceHorizon,
   AdviceReasoning,
   AdviceSubjectKind,
+  AlertPlan,
   ChatMessagePart,
   Citation,
   DeliveryStatus,
   Exchange,
   ListingStatus,
   MarketCoverage,
+  MembershipSnapshot,
   Money,
   Notification,
   ProviderStatus,
@@ -22,10 +24,18 @@ import type {
   StockEvent,
   StockGroup,
   StockPool,
+  Strategy,
+  StrategyResult,
+  StrategyRun,
+  StrategySignal,
+  StrategyVersion,
   Tactic,
   TradeSide,
   TradeSource,
-  WatchRule,
+  Watchlist,
+  WatchlistMember,
+  WatchlistMemberSource,
+  WatchlistSyncRun,
   WatchRun,
   WatchTrigger,
   WorkflowRun,
@@ -40,6 +50,14 @@ import {
   text,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
+
+/** 跨多表数据迁移登记；迁移逻辑由 repository-free runner 执行。 */
+export const schemaMigrations = sqliteTable('schema_migrations', {
+  id: text('id').primaryKey(),
+  appliedAt: integer('applied_at', { mode: 'timestamp_ms' }).notNull(),
+  checksum: text('checksum').notNull(),
+  details: text('details_json', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+});
 
 /**
  * Drizzle schema（ARCHITECTURE §4.3 / §5，MVP-TASK Phase 3）。
@@ -320,6 +338,133 @@ export const tacticSignals = sqliteTable(
   }),
 );
 
+export const strategies = sqliteTable(
+  'strategies',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    owner: text('owner').$type<Strategy['owner']>().notNull(),
+    status: text('status').$type<Strategy['status']>().notNull(),
+    currentVersionId: text('current_version_id'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => ({
+    statusIdx: index('strategies_status_idx').on(table.status),
+    ownerIdx: index('strategies_owner_idx').on(table.owner),
+  }),
+);
+
+export const strategyVersions = sqliteTable(
+  'strategy_versions',
+  {
+    id: text('id').primaryKey(),
+    strategyId: text('strategy_id').notNull(),
+    version: integer('version').notNull(),
+    definition: text('definition_json', { mode: 'json' })
+      .$type<StrategyVersion['definition']>()
+      .notNull(),
+    definitionHash: text('definition_hash').notNull(),
+    parentVersionId: text('parent_version_id'),
+    changeSummary: text('change_summary'),
+    validationStatus: text('validation_status')
+      .$type<StrategyVersion['validationStatus']>()
+      .notNull(),
+    validationErrors: text('validation_errors_json', { mode: 'json' })
+      .$type<readonly string[]>()
+      .notNull(),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => ({
+    strategyVersionUnique: uniqueIndex('strategy_versions_strategy_version_unique').on(
+      table.strategyId,
+      table.version,
+    ),
+    hashIdx: index('strategy_versions_hash_idx').on(table.definitionHash),
+  }),
+);
+
+export const strategyRuns = sqliteTable(
+  'strategy_runs',
+  {
+    id: text('id').primaryKey(),
+    strategyId: text('strategy_id').notNull(),
+    strategyVersionId: text('strategy_version_id').notNull(),
+    mode: text('mode').$type<StrategyRun['mode']>().notNull(),
+    coverage: text('coverage').$type<StrategyRun['coverage']>().notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    status: text('status').$type<StrategyRun['status']>().notNull(),
+    inputSnapshot: text('input_snapshot_json', { mode: 'json' })
+      .$type<StrategyRun['inputSnapshot']>()
+      .notNull(),
+    providerStatuses: text('provider_statuses_json', { mode: 'json' })
+      .$type<StrategyRun['providerStatuses']>()
+      .notNull(),
+    summary: text('summary_json', { mode: 'json' }).$type<StrategyRun['summary']>(),
+    error: text('error'),
+  },
+  (table) => ({
+    strategyStartedIdx: index('strategy_runs_strategy_started_idx').on(
+      table.strategyId,
+      table.startedAt,
+    ),
+    statusStartedIdx: index('strategy_runs_status_started_idx').on(table.status, table.startedAt),
+  }),
+);
+
+export const strategyResults = sqliteTable(
+  'strategy_results',
+  {
+    runId: text('run_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    selected: integer('selected', { mode: 'boolean' }).notNull(),
+    score: real('score'),
+    rank: integer('rank'),
+    ruleEvaluations: text('rule_evaluations_json', { mode: 'json' })
+      .$type<StrategyResult['ruleEvaluations']>()
+      .notNull(),
+    evidence: text('evidence_json', { mode: 'json' }).$type<StrategyResult['evidence']>().notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.runId, table.stockId], name: 'strategy_results_pk' }),
+    runRankIdx: index('strategy_results_run_rank_idx').on(table.runId, table.rank),
+  }),
+);
+
+export const strategySignals = sqliteTable(
+  'strategy_signals',
+  {
+    id: text('id').primaryKey(),
+    strategyId: text('strategy_id').notNull(),
+    strategyVersionId: text('strategy_version_id').notNull(),
+    runId: text('run_id').notNull(),
+    ruleId: text('rule_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
+    score: real('score').notNull(),
+    direction: text('direction').$type<StrategySignal['direction']>().notNull(),
+    evidence: text('evidence_json', { mode: 'json' }).$type<StrategySignal['evidence']>().notNull(),
+    evaluationSnapshot: text('evaluation_snapshot_json', { mode: 'json' })
+      .$type<StrategySignal['evaluationSnapshot']>()
+      .notNull(),
+  },
+  (table) => ({
+    identityUnique: uniqueIndex('strategy_signals_identity_unique').on(
+      table.strategyVersionId,
+      table.ruleId,
+      table.stockId,
+      table.ts,
+    ),
+    strategyTsIdx: index('strategy_signals_strategy_ts_idx').on(table.strategyId, table.ts),
+    stockTsIdx: index('strategy_signals_stock_ts_idx').on(table.stockId, table.ts),
+  }),
+);
+
 export const signalObservations = sqliteTable(
   'signal_observations',
   {
@@ -377,9 +522,9 @@ export const notifications = sqliteTable(
 );
 
 /**
- * 股票池（v0.6 起，docs/ddd/intraday-watch-design.md §3；
- * 分组化改造 docs/ddd/stock-group-design.md §3/§5；
- * 策略预警扩展 docs/ddd/strategy-alert-detailed-design.md §3）。
+ * 股票池（v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md §3；
+ * 分组化改造 docs/ddd/strategy-watchlist-unification-detailed-design.md §3/§5；
+ * 策略预警扩展 docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
  *
  * rules 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
  * - source：@deprecated 旧 PoolSource JSON。新行恒为 NULL；旧行数据原样保留
@@ -413,8 +558,32 @@ export const stockPools = sqliteTable(
   }),
 );
 
+export const alertPlans = sqliteTable(
+  'alert_plans',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    watchlistId: text('watchlist_id').notNull(),
+    rules: text('rules', { mode: 'json' }).$type<AlertPlan['rules']>().notNull(),
+    logic: text('logic').$type<AlertPlan['logic']>().notNull(),
+    triggerMode: text('trigger_mode').$type<AlertPlan['triggerMode']>().notNull(),
+    priority: text('priority').$type<NonNullable<AlertPlan['priority']>>(),
+    cooldownMinutes: integer('cooldown_minutes').notNull(),
+    dailyNotificationLimit: integer('daily_notification_limit').notNull(),
+    notifyOnRecovery: integer('notify_on_recovery', { mode: 'boolean' }).notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    watchlistIdx: index('alert_plans_watchlist_idx').on(t.watchlistId),
+    enabledIdx: index('alert_plans_enabled_idx').on(t.enabled),
+  }),
+);
+
 /**
- * 股票分组（分组化起，docs/ddd/stock-group-design.md §3）。
+ * 股票分组（分组化起，docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
  * resolver 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
  */
 export const stockGroups = sqliteTable(
@@ -436,7 +605,7 @@ export const stockGroups = sqliteTable(
 );
 
 /**
- * 分组成员快照（分组化起，docs/ddd/stock-group-design.md §3）。
+ * 分组成员快照（分组化起，docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
  * 只增不改：一次刷新 = 一批（同一 refreshId）；当前成员 = 最新 refreshId 那一批。
  */
 export const groupMemberSnapshots = sqliteTable(
@@ -465,6 +634,123 @@ export const groupMemberSnapshots = sqliteTable(
   }),
 );
 
+export const watchlists = sqliteTable(
+  'watchlists',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    kind: text('kind').$type<Watchlist['kind']>().notNull(),
+    membershipPolicy: text('membership_policy').$type<Watchlist['membershipPolicy']>().notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    enabledIdx: index('watchlists_enabled_idx').on(t.enabled),
+    kindIdx: index('watchlists_kind_idx').on(t.kind),
+  }),
+);
+
+export const watchlistMembers = sqliteTable(
+  'watchlist_members',
+  {
+    id: text('id').primaryKey(),
+    watchlistId: text('watchlist_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    stage: text('stage').$type<WatchlistMember['stage']>().notNull(),
+    priority: text('priority').$type<WatchlistMember['priority']>().notNull(),
+    firstAddedAt: integer('first_added_at', { mode: 'timestamp_ms' }).notNull(),
+    lastActivityAt: integer('last_activity_at', { mode: 'timestamp_ms' }).notNull(),
+    archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    watchlistStockUnique: uniqueIndex('watchlist_members_watchlist_stock_unique').on(
+      t.watchlistId,
+      t.stockId,
+    ),
+    watchlistStageIdx: index('watchlist_members_watchlist_stage_idx').on(t.watchlistId, t.stage),
+  }),
+);
+
+export const watchlistMemberSources = sqliteTable(
+  'watchlist_member_sources',
+  {
+    id: text('id').primaryKey(),
+    memberId: text('member_id').notNull(),
+    kind: text('kind').$type<WatchlistMemberSource['kind']>().notNull(),
+    sourceKey: text('source_key').notNull(),
+    sourceId: text('source_id'),
+    sourceVersionId: text('source_version_id'),
+    syncRunId: text('sync_run_id'),
+    reason: text('reason').notNull(),
+    score: real('score'),
+    rank: integer('rank'),
+    status: text('status').$type<WatchlistMemberSource['status']>().notNull(),
+    evidence: text('evidence_json', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
+    validFrom: integer('valid_from', { mode: 'timestamp_ms' }).notNull(),
+    validUntil: integer('valid_until', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    memberStatusIdx: index('watchlist_sources_member_status_idx').on(t.memberId, t.status),
+    sourceKeyStatusIdx: index('watchlist_sources_key_status_idx').on(t.sourceKey, t.status),
+    /** 同一 member 的同一 sourceKey 只允许一个非 ended 来源（DDL 见 client.ts ensureSchema）。 */
+    currentUnique: uniqueIndex('watchlist_sources_current_unique')
+      .on(t.memberId, t.sourceKey)
+      .where(sql`status <> 'ended'`),
+  }),
+);
+
+export const watchlistSyncRuns = sqliteTable(
+  'watchlist_sync_runs',
+  {
+    id: text('id').primaryKey(),
+    watchlistId: text('watchlist_id').notNull(),
+    sourceKind: text('source_kind').$type<WatchlistSyncRun['sourceKind']>().notNull(),
+    sourceKey: text('source_key').notNull(),
+    producerRunId: text('producer_run_id'),
+    status: text('status').$type<WatchlistSyncRun['status']>().notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    enteredCount: integer('entered_count').notNull(),
+    exitedCount: integer('exited_count').notNull(),
+    unchangedCount: integer('unchanged_count').notNull(),
+    missingDimensions: text('missing_dimensions_json', { mode: 'json' })
+      .$type<WatchlistSyncRun['missingDimensions']>()
+      .notNull(),
+    error: text('error'),
+  },
+  (t) => ({
+    watchlistStartedIdx: index('watchlist_sync_runs_watchlist_started_idx').on(
+      t.watchlistId,
+      t.startedAt,
+    ),
+    producerIdx: index('watchlist_sync_runs_producer_idx').on(t.producerRunId),
+  }),
+);
+
+export const membershipSnapshots = sqliteTable(
+  'membership_snapshots',
+  {
+    id: text('id').primaryKey(),
+    syncRunId: text('sync_run_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    selected: integer('selected', { mode: 'boolean' }).notNull(),
+    change: text('change').$type<MembershipSnapshot['change']>().notNull(),
+    reason: text('reason').notNull(),
+    score: real('score'),
+    rank: integer('rank'),
+    evidence: text('evidence_json', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    runStockUnique: uniqueIndex('membership_snapshots_run_stock_unique').on(t.syncRunId, t.stockId),
+    runChangeIdx: index('membership_snapshots_run_change_idx').on(t.syncRunId, t.change),
+  }),
+);
+
 /**
  * 盯盘触发（v0.6 起，v0.7 策略预警扩展）。
  * - 每次 watch fire 即写入（含 cooldown 抑制的）；deliveryStatus 标识实际送达状态。
@@ -477,9 +763,10 @@ export const watchTriggers = sqliteTable(
   'watch_triggers',
   {
     id: text('id').primaryKey(),
+    alertPlanId: text('alert_plan_id'),
     poolId: text('pool_id').notNull(),
     stockId: text('stock_id').notNull(),
-    ruleKind: text('rule_kind').$type<WatchRule['kind']>().notNull(),
+    ruleKind: text('rule_kind').$type<WatchTrigger['ruleKind']>().notNull(),
     direction: text('direction').$type<WatchTrigger['direction']>().notNull(),
     reason: text('reason').notNull(),
     evidence: text('evidence', { mode: 'json' }).$type<readonly string[]>().notNull(),
@@ -535,6 +822,7 @@ export const watchTriggers = sqliteTable(
 export const watchRuleStates = sqliteTable(
   'watch_rule_states',
   {
+    alertPlanId: text('alert_plan_id'),
     poolId: text('pool_id').notNull(),
     stockId: text('stock_id').notNull(),
     /** 含虚拟 'composite'。 */
@@ -751,6 +1039,7 @@ export const chatMessages = sqliteTable(
 );
 
 export const schema = {
+  schemaMigrations,
   accounts,
   stocks,
   stockUniverseMemberships,
@@ -763,17 +1052,28 @@ export const schema = {
   dailyBars,
   tactics,
   tacticSignals,
+  strategies,
+  strategyVersions,
+  strategyRuns,
+  strategyResults,
+  strategySignals,
   signalObservations,
   notifications,
   // v0.6 起
   stockPools,
+  alertPlans,
   watchTriggers,
   // v0.7 起：边沿状态机
   watchRuleStates,
   watchRuns,
-  // 分组化起（docs/ddd/stock-group-design.md §3）
+  // 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §3）
   stockGroups,
   groupMemberSnapshots,
+  watchlists,
+  watchlistMembers,
+  watchlistMemberSources,
+  watchlistSyncRuns,
+  membershipSnapshots,
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
   researchNotes,
   stockEvents,

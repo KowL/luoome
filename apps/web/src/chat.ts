@@ -39,10 +39,16 @@ const CHAT_READ_TOOL_NAMES = [
   'batch_quote',
   'list_holdings',
   'get_holding',
-  'list_tactics',
-  'list_stock_groups',
-  'get_stock_group',
-  'list_stock_pools',
+  'list_strategies',
+  'get_strategy',
+  'list_strategy_runs',
+  'get_strategy_run',
+  'strategy_signals_by_stock',
+  'list_watchlists',
+  'get_watchlist',
+  'list_watchlist_changes',
+  'list_alert_plans',
+  'list_watch_triggers',
   'get_advice',
   'get_advice_stats',
   'list_trades',
@@ -50,23 +56,36 @@ const CHAT_READ_TOOL_NAMES = [
 ] as const;
 
 const CHAT_DRAFT_TOOL_KINDS = {
-  create_stock_group: 'stock-group',
-  update_stock_group: 'stock-group',
-  delete_stock_group: 'stock-group',
-  create_stock_pool: 'stock-pool',
-  update_stock_pool: 'stock-pool',
-  delete_stock_pool: 'stock-pool',
+  create_strategy: 'strategy',
+  create_strategy_version: 'strategy',
+  publish_strategy_version: 'strategy',
+  pause_strategy: 'strategy',
+  run_strategy: 'strategy',
+  create_watchlist: 'watchlist',
+  update_watchlist: 'watchlist',
+  archive_watchlist: 'watchlist',
+  add_watchlist_member: 'watchlist',
+  update_watchlist_member: 'watchlist',
+  archive_watchlist_member: 'watchlist',
+  create_alert_plan: 'alert-plan',
+  update_alert_plan: 'alert-plan',
+  delete_alert_plan: 'alert-plan',
 } as const;
 
 interface ChatContextSummary {
   readonly account: { readonly id: string; readonly name: string } | null;
-  readonly groups: readonly {
+  readonly watchlists: readonly {
     readonly id: string;
     readonly name: string;
-    readonly resolverKind: string;
-    readonly memberCount: number;
+    readonly kind: string;
+    readonly membershipPolicy: string;
   }[];
-  readonly tactics: readonly { readonly id: string; readonly name: string; readonly tag: string }[];
+  readonly strategies: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly status: string;
+  }[];
+  readonly alertPlans: readonly { readonly id: string; readonly name: string }[];
   readonly holdingStockIds: readonly string[];
 }
 
@@ -86,26 +105,44 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
     const value = await ctx.repos.account.findById(accountId);
     return value === null ? null : { id: value.id, name: value.name };
   }, null);
-  const groups = await safe(async () => {
-    const values = await ctx.repos.stockGroup.list();
-    return Promise.all(
-      values.slice(0, 50).map(async (group) => ({
-        id: group.id,
-        name: group.name,
-        resolverKind: group.resolver.kind,
-        memberCount: (await ctx.repos.groupMember.currentMembers(group.id)).length,
-      })),
-    );
+  const executeRead = async (name: string, input: unknown): Promise<Record<string, unknown>> => {
+    const tool = toolRegistry.get(name);
+    if (tool === undefined) throw new Error(`chat 上下文 tool 未注册: ${name}`);
+    const result = await tool.execute(input, ctx);
+    if (!result.ok) throw new Error(`${name}: ${result.error.kind}`);
+    return result.data as Record<string, unknown>;
+  };
+  const watchlists = await safe(async () => {
+    const data = await executeRead('list_watchlists', {});
+    return z
+      .array(
+        z.object({
+          watchlist: z.object({
+            id: z.string(),
+            name: z.string(),
+            kind: z.string(),
+            membershipPolicy: z.string(),
+          }),
+        }),
+      )
+      .parse(data.items)
+      .slice(0, 50)
+      .map(({ watchlist }) => watchlist);
   }, []);
-  const tactics = await safe(
-    async () =>
-      (await ctx.repos.tactic.list()).map((item) => ({
-        id: item.id,
-        name: item.name,
-        tag: item.tag,
-      })),
-    [],
-  );
+  const strategies = await safe(async () => {
+    const data = await executeRead('list_strategies', {});
+    return z
+      .array(z.object({ id: z.string(), name: z.string(), status: z.string() }))
+      .parse(data.strategies)
+      .slice(0, 50);
+  }, []);
+  const alertPlans = await safe(async () => {
+    const data = await executeRead('list_alert_plans', {});
+    return z
+      .array(z.object({ id: z.string(), name: z.string() }))
+      .parse(data.plans)
+      .slice(0, 50);
+  }, []);
   const holdingStockIds = await safe(async () => {
     if (accountId.length === 0) return [];
     return (await ctx.repos.holding.listByAccount(accountId))
@@ -113,7 +150,7 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
       .map((holding) => holding.stockId);
   }, []);
 
-  return { account, groups, tactics, holdingStockIds };
+  return { account, watchlists, strategies, alertPlans, holdingStockIds };
 };
 
 const buildChatTools = (ctx: ToolContext): AgentCallableTool[] => {
@@ -178,9 +215,11 @@ const buildInstructions = (context: ChatContextSummary): string => `你是 luoom
 当前本地上下文：${JSON.stringify(context)}
 
 规则：
-- 需要具体行情、持仓、分组、战法、建议、交易或笔记数据时，必须调用提供的工具，不得编造。
+- 需要具体行情、持仓、Strategy、Watchlist、AlertPlan、建议、交易或笔记数据时，必须调用提供的工具，不得编造。
 - 工具返回 error 时如实解释，不得把失败描述成成功。
 - create/update/delete 工具在此对话中只生成待用户确认的草案；调用它们不代表已经执行。
+- 只使用 Strategy、Watchlist、AlertPlan；不得生成或调用旧 Tactic、StockGroup、StockPool。
+- Strategy 发布、正式 persist 运行、Watchlist/AlertPlan 写入必须先生成草案并等待确认；不得调用内部 sync/migration 或 trade。
 - 历史消息中以「[草案处理记录]」开头的是用户在确认面板中的真实处理结果（ok 表示写入已执行，fail 表示已取消或执行失败）；已处理的草案不要再次提议。
 - 不得自动交易，也不得声称已经完成任何真实交易。
 - 涉及投资判断时必须审慎，保留风险、反证和「不构成投资建议」免责声明。

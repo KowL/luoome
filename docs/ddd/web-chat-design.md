@@ -1,7 +1,7 @@
 # Web 对话助手设计：`/api/chat` + draft-and-confirm
 
 > 状态：**已实现**（2026-07-26 迁移为 AI SDK `ToolLoopAgent` + UI Message Stream，并加入项目数据库持久化会话；保留 draft 确认卡片）。本文档是对话助手设计的唯一事实来源。
-> 关联：[stock-group-design.md](./stock-group-design.md)（对话创建分组依赖其实现；聊天端点与交互模式可并行开发，draft schema = `create_stock_group` 的 input schema）。
+> 关联：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)（聊天只生成目标模型 draft）。
 
 ## 目标
 
@@ -80,9 +80,9 @@ sessionId + 本轮 user message
 
 ### 4. 动作白名单与门控
 
-- **自动执行**：`search_stocks` / `fetch_quote` / `batch_quote` / `list_holdings` / `get_holding` / `list_tactics` / `list_stock_groups` / `get_stock_group` / `list_stock_pools` / `get_advice` / `get_advice_stats` / `list_trades` / `list_research_notes`
+- **自动执行**：`search_stocks` / `fetch_quote` / `batch_quote` / `list_holdings` / `get_holding` / `list_strategies` / `get_strategy` / `list_strategy_runs` / `get_strategy_run` / `strategy_signals_by_stock` / `list_watchlists` / `get_watchlist` / `list_watchlist_changes` / `list_alert_plans` / `list_watch_triggers` / `get_advice` / `get_advice_stats` / `list_trades` / `list_research_notes`
 - **自动执行（advice，有 LLM 成本，v1.1 再开）**：`analyze_stock` / `analyze_position` / `market_outlook` —— v1 先不开，避免 chat→advice 嵌套 LLM 的延迟与成本失控；回复中引导用户去对应页面
-- **draft（write，确认后执行）**：`create_stock_group` / `update_stock_group` / `delete_stock_group` / `create_stock_pool` / `update_stock_pool` / `delete_stock_pool`
+- **draft（write，确认后执行）**：`create_strategy` / `create_strategy_version` / `publish_strategy_version` / `pause_strategy` / `run_strategy` / `create_watchlist` / `update_watchlist` / `archive_watchlist` / `add_watchlist_member` / `update_watchlist_member` / `archive_watchlist_member` / `create_alert_plan` / `update_alert_plan` / `delete_alert_plan`
 - **拒绝**：除 `fetch_quote` / `batch_quote` 外的 external、advice 与所有 trade 工具不传给 agent，模型无法调用
 - 执行门控复用 web 现有 sideEffect 规则；chat 不新增特权通道
 

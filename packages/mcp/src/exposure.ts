@@ -1,5 +1,15 @@
 import type { SideEffect } from '@luoome/core';
 
+// 内部 tool（record_watch_run / save_report / sync_watchlist_source / migration_* 等）
+// 不进 toolRegistry（见 packages/tools/src/registry.ts），MCP 只需按 sideEffect 过滤，
+// 不再有按名字的排除清单。
+export const selectMcpTools = <
+  T extends { readonly name: string; readonly sideEffect: SideEffect },
+>(
+  tools: readonly T[],
+  allowedSideEffects: ReadonlySet<SideEffect>,
+): readonly T[] => tools.filter((tool) => allowedSideEffects.has(tool.sideEffect));
+
 /**
  * 从 env 解析暴露面。LUOOME_EXPOSE_TRADE==='true' 直接抛错：
  * trade 永不通过 MCP 暴露（AGENTS.md 硬约束，非配置项）。

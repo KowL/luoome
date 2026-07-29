@@ -4,9 +4,10 @@
 //   GET  /api/holdings          → list_holdings
 //   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
-//   POST /api/tools/:name/call    → 放行 read/advice/write（ARCHITECTURE §7.1：Web 默认
-//                                   含 write）+ 白名单 external（fetch_quote）；其余
-//                                   external / trade 一律 403 permission_denied。
+//   POST /api/tools/:name/call    → 默认只放行 read/advice（ARCHITECTURE §7.1）；
+//                                   write 需 LUOOME_EXPOSE_WRITE=true，external 需
+//                                   LUOOME_EXPOSE_EXTERNAL=true 且命中白名单
+//                                   （fetch_quote 等）；trade 一律 403 permission_denied。
 // 所有 /api 响应统一 ToolResult 形状；同源部署，无需 CORS。
 
 import { randomBytes } from 'node:crypto';
@@ -24,12 +25,11 @@ import {
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, ensureBuiltinTactics, toolRegistry } from '@luoome/tools';
+import { buildContext, ensureBuiltinStrategies, toolRegistry } from '@luoome/tools';
 import {
   closingReportWorkflow,
   openingReportWorkflow,
   runIntradayWatchObserved,
-  tacticScanWorkflow,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
 import { Hono } from 'hono';
@@ -56,17 +56,16 @@ const LIGHTWEIGHT_CHARTS_FILE = join(
 );
 
 /**
- * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认放行 read + advice + write。
- * 本地单用户工具，write（持仓 / 交易录入等）是 Web 持仓管理的基础能力；
- * MCP 暴露面不受影响（仍 read+advice 默认，write 需 LUOOME_EXPOSE_WRITE）。
+ * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认只放行 read + advice。
+ * write 需 LUOOME_EXPOSE_WRITE=true、external 需 LUOOME_EXPOSE_EXTERNAL=true 且命中
+ * WEB_ALLOWED_EXTERNAL 白名单才放行（见 /api/tools/:name/call 的门控）；
+ * MCP 暴露面同样默认只读（write 需 LUOOME_EXPOSE_WRITE）。
  */
 const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice', 'write']);
 
 /**
- * external 白名单：fetch_quote / batch_quote / refresh_stock_group /
- * get_stock_market_view 仅写本地 PriceSnapshot / DailyBar / GroupMember
- * （无外部副作用外的状态变更），
- * 持仓表单「取现价」、分组详情行情与行情页需要；sync_quotes / send_notification 等仍 403。
+ * external 白名单仅包含目标模型运行、行情读取与显式同步；
+ * sync_quotes / send_notification 等仍不对通用 Web tool call 开放。
  */
 const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'agent_run',
@@ -74,17 +73,18 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'batch_quote',
   'fetch_index_quotes',
   'get_ashare_sentiment',
-  'refresh_stock_group',
   'get_stock_market_view',
   'sync_stock_universe',
   'sync_daily_bars',
+  'run_strategy',
+  'validate_strategy_version',
 ]);
 
 /**
  * external（白名单外）/trade tool 不通过 web 暴露：已在 registry 实现的被
  * sideEffect 门拦截（403 文案准确）；本表覆盖「契约里有名字但尚未实现」的
  * tool——同样按契约返回 403 permission_denied，而不是 404 not_found。
- * （write 已默认放行，未实现的 write 类契约 tool 走 not_found。）
+ * （write 默认不放行；未实现的 write 类契约 tool 走 not_found。）
  */
 const KNOWN_UNEXPOSED_TOOLS: Readonly<Record<string, SideEffect>> = {
   sync_quotes: 'external',
@@ -177,7 +177,7 @@ export const buildWebContext = async (
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
-  await ensureBuiltinTactics(handle.repos);
+  await ensureBuiltinStrategies(handle.repos);
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
@@ -200,7 +200,7 @@ export const buildWebContext = async (
       market: createMarketAdapterFromEnv(env, {
         clock: now,
         logger: console,
-        // Web 持仓 / 分组页盘中 10s 轮询；TTL 不调小的话拿到的都是缓存
+        // Web 持仓与 Watchlist 盘中轮询；TTL 不调小的话拿到的都是缓存
         quoteCacheTtlMs: 10_000,
       }),
       stockUniverse: createStockUniverseManagerFromEnv(env, {
@@ -222,6 +222,10 @@ export interface CreateWebAppOptions {
   readonly webToken?: string;
   /** 非 loopback 监听时，read/advice API 也必须鉴权。 */
   readonly requireApiToken?: boolean;
+  /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
+  readonly exposeWrite?: boolean;
+  /** external tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_EXTERNAL。 */
+  readonly exposeExternal?: boolean;
   /** LLM 设置持久化；仅生产启动注入，测试可按需提供临时 store。 */
   readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
@@ -269,6 +273,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx.agent),
   };
   const webToken = options.webToken ?? process.env.LUOOME_WEB_TOKEN ?? '';
+  const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
+  const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
   const app = new Hono();
@@ -291,6 +297,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/style.css', serveFile('style.css', 'text/css; charset=utf-8'));
   app.get('/tactics', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/holdings', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/strategies', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/watchlists', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/alerts', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/groups', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/watch', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/advice', serveFile('index.html', 'text/html; charset=utf-8'));
@@ -333,13 +342,55 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   };
 
   /**
-   * 内部组合调用：直接返回 ToolResult（不包 Response），便于在 /api/tactics/scan、
-   * /api/review 等聚合端点中串多个 tool 后再统一 wrap。
+   * 内部组合调用：直接返回 ToolResult（不包 Response），便于聚合端点统一 wrap。
    */
   const invokeTool = async (name: string, input: unknown): Promise<ToolResult<unknown>> => {
     const tool = toolRegistry.get(name);
     if (tool === undefined) return notFound('Tool', name);
     return tool.execute(input, ctxRef.current);
+  };
+
+  const parseJsonObject = async (
+    request: Request,
+  ): Promise<
+    { readonly parsed: true; readonly data: Record<string, unknown> } | ToolResult<never>
+  > => {
+    try {
+      const value: unknown = await request.json();
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        return {
+          ok: false,
+          error: { kind: 'invalid_input', message: '请求体必须是 JSON 对象', issues: [] },
+        };
+      }
+      return { parsed: true, data: value as Record<string, unknown> };
+    } catch {
+      return {
+        ok: false,
+        error: { kind: 'invalid_input', message: '请求体必须是 JSON 对象', issues: [] },
+      };
+    }
+  };
+
+  const targetMutation = async (
+    request: Request,
+    sideEffect: 'write' | 'external',
+    toolName: string,
+    fixedInput: Readonly<Record<string, unknown>> = {},
+  ): Promise<Response> => {
+    const exposed = sideEffect === 'write' ? exposeWrite : exposeExternal;
+    if (!exposed) {
+      return jsonResult(
+        permissionDenied(
+          `${sideEffect} 操作未开启；设置 LUOOME_EXPOSE_${sideEffect.toUpperCase()}=true`,
+        ),
+      );
+    }
+    const denied = mutationPermission(request, webToken);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(request);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(await invokeTool(toolName, { ...body.data, ...fixedInput }));
   };
 
   // 指数行情缓存：dashboard 5s 轮询，push2 对高频请求突发限流（2026-07 实测），
@@ -527,7 +578,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   /**
    * 切换当前激活账户：把 ctxRef.current.user.defaultAccountId 更新为指定账户。
    * 单进程单 tab 假设（与现有 TUI / CLI 一致）：ctx 共享内存仓，切换是 mutate。
-   * 调用侧只需要再 reload 受影响的数据视图（持仓 / 战法扫描 / 复盘）。
+   * 调用侧只需要再 reload 受影响的数据视图（持仓 / Strategy / 复盘）。
    */
   app.post('/api/account/select', async (c) => {
     // v0.8 起：虽然此路由只 in-memory 改 ctxRef.current.user.defaultAccountId
@@ -694,18 +745,70 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return callTool('list_trades', input);
   });
 
-  app.get('/api/groups', () =>
-    callTool('list_stock_groups', { enabledOnly: false, includeMemberCount: true }),
+  app.get('/api/strategies', (c) => {
+    const status = c.req.query('status');
+    const owner = c.req.query('owner');
+    const filter = {
+      ...(status === undefined ? {} : { status }),
+      ...(owner === undefined ? {} : { owner }),
+    };
+    return callTool('list_strategies', {
+      ...(Object.keys(filter).length === 0 ? {} : { filter }),
+    });
+  });
+  app.post('/api/strategies', (c) => targetMutation(c.req.raw, 'write', 'create_strategy'));
+  app.get('/api/strategies/:id', (c) =>
+    callTool('get_strategy', { strategyId: c.req.param('id') }),
   );
-  app.get('/api/groups/:id', (c) => callTool('get_stock_group', { id: c.req.param('id') }));
-
-  app.get('/api/watch/pools', () => callTool('list_stock_pools', { enabledOnly: false }));
-  app.get('/api/watch/plans', (c) =>
-    callTool('list_watch_plans', {
-      enabledOnly: false,
-      ...(c.req.query('groupId') !== undefined ? { groupId: c.req.query('groupId') } : {}),
+  app.post('/api/strategies/:id/versions', (c) =>
+    targetMutation(c.req.raw, 'write', 'create_strategy_version', {
+      strategyId: c.req.param('id'),
     }),
   );
+  app.post('/api/strategies/:id/validate', (c) =>
+    targetMutation(c.req.raw, 'external', 'validate_strategy_version'),
+  );
+  app.post('/api/strategies/:id/publish', (c) =>
+    targetMutation(c.req.raw, 'write', 'publish_strategy_version'),
+  );
+  app.post('/api/strategies/:id/run', (c) =>
+    targetMutation(c.req.raw, 'external', 'run_strategy', {
+      strategyId: c.req.param('id'),
+    }),
+  );
+
+  app.get('/api/watchlists', () => callTool('list_watchlists', {}));
+  app.post('/api/watchlists', (c) => targetMutation(c.req.raw, 'write', 'create_watchlist'));
+  app.get('/api/watchlists/:id', (c) =>
+    callTool('get_watchlist', { watchlistId: c.req.param('id') }),
+  );
+  app.patch('/api/watchlists/:id', (c) =>
+    targetMutation(c.req.raw, 'write', 'update_watchlist', {
+      watchlistId: c.req.param('id'),
+    }),
+  );
+  app.post('/api/watchlists/:id/members', (c) =>
+    targetMutation(c.req.raw, 'write', 'add_watchlist_member', {
+      watchlistId: c.req.param('id'),
+    }),
+  );
+  app.patch('/api/watchlists/:id/members/:stockId', (c) =>
+    targetMutation(c.req.raw, 'write', 'update_watchlist_member', {
+      watchlistId: c.req.param('id'),
+      stockId: c.req.param('stockId'),
+    }),
+  );
+
+  app.get('/api/alert-plans', (c) =>
+    callTool('list_alert_plans', {
+      enabledOnly: c.req.query('enabledOnly') === 'true',
+      ...(c.req.query('watchlistId') === undefined
+        ? {}
+        : { watchlistId: c.req.query('watchlistId') }),
+    }),
+  );
+  app.post('/api/alert-plans', (c) => targetMutation(c.req.raw, 'write', 'create_alert_plan'));
+
   app.get('/api/watch/status', (c) => {
     const interval = Number(c.req.query('interval') ?? 60);
     return callTool('get_watch_status', {
@@ -714,7 +817,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
   app.get('/api/watch/triggers', (c) => {
     const input: Record<string, unknown> = {};
-    for (const key of ['poolId', 'stockId', 'ruleKind', 'ruleId', 'since'] as const) {
+    for (const key of ['alertPlanId', 'stockId', 'ruleKind', 'ruleId', 'since'] as const) {
       const value = c.req.query(key);
       if (value !== undefined) input[key] = value;
     }
@@ -779,263 +882,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult(await invokeTool('set_watch_trigger_feedback', { triggerId: id, feedback }));
   });
 
-  /**
-   * 盯盘方案模板（docs/ddd/strategy-alert-detailed-design.md §10）。
-   * 前端静态渲染；选择后由用户确认调 create_stock_pool。
-   */
-  app.get('/api/watch/templates', () => {
-    const templates: ReadonlyArray<{
-      readonly id: string;
-      readonly name: string;
-      readonly description: string;
-      readonly icon: string;
-      readonly draft: Record<string, unknown>;
-    }> = [
-      {
-        id: 'holdings-stop-profit-loss',
-        name: '持仓止盈止损',
-        icon: '🛡️',
-        description: '盯全部持仓，±5% 成本阈值；用户常见落地配置。',
-        draft: {
-          name: '持仓止盈止损',
-          description: '基于全部持仓的成本阈值监控',
-          logic: 'ANY',
-          triggerMode: 'on-enter',
-          dailyNotificationLimit: 20,
-          notifyOnRecovery: false,
-          rules: [{ kind: 'cost-threshold', stopLossPct: 0.05, takeProfitPct: 0.05 }],
-        },
-      },
-      {
-        id: 'holdings-tactic-volume-divergence',
-        name: '持仓量价背离',
-        icon: '📊',
-        description: '盯全部持仓，等内置 volume-price-divergence 战法命中（score≥60）。',
-        draft: {
-          name: '持仓量价背离',
-          logic: 'ANY',
-          triggerMode: 'on-enter',
-          dailyNotificationLimit: 20,
-          notifyOnRecovery: false,
-          rules: [{ kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 60 }],
-        },
-      },
-      {
-        id: 'breakout-volume',
-        name: '放量突破',
-        icon: '🚀',
-        description: '手动维护分组 + 战法 breakout-volume 命中。',
-        draft: {
-          name: '放量突破',
-          logic: 'ANY',
-          triggerMode: 'repeat',
-          dailyNotificationLimit: 30,
-          notifyOnRecovery: false,
-          rules: [{ kind: 'tactic', tacticId: 'breakout-volume', minScore: 70 }],
-        },
-      },
-      {
-        id: 'intraday-swing',
-        name: '日内异动',
-        icon: '⚡',
-        description: '手动分组 + 日内涨跌幅 ≥ 3%，on-enter 边沿 + repeat 模式避免漏发。',
-        draft: {
-          name: '日内异动',
-          logic: 'ANY',
-          triggerMode: 'repeat',
-          dailyNotificationLimit: 50,
-          notifyOnRecovery: false,
-          rules: [{ kind: 'price-change', pct: 0.03, direction: 'any' }],
-        },
-      },
-      {
-        id: 'price-level-guard',
-        name: '关键位提醒',
-        icon: '🎯',
-        description: '手动分组 + 关键价位穿越（演示用，使用前请手动调整 level 与分组）。',
-        draft: {
-          name: '关键位提醒',
-          logic: 'ANY',
-          triggerMode: 'on-enter',
-          dailyNotificationLimit: 20,
-          notifyOnRecovery: false,
-          rules: [{ kind: 'price-level', level: 100, side: 'above' }],
-        },
-      },
-      {
-        id: 'all-conditions-portfolio',
-        name: '组合一致性',
-        icon: '🧩',
-        description: 'ALL 组合：持仓 + 量价背离同时进入 active 才触发（composite ruleId）。',
-        draft: {
-          name: '组合一致性',
-          logic: 'ALL',
-          triggerMode: 'on-enter',
-          dailyNotificationLimit: 10,
-          notifyOnRecovery: false,
-          rules: [
-            { kind: 'cost-threshold', stopLossPct: 0.07, takeProfitPct: 0.1 },
-            { kind: 'tactic', tacticId: 'volume-price-divergence', minScore: 70 },
-          ],
-        },
-      },
-    ];
-    return jsonResult({ ok: true, data: { templates } });
-  });
-
-  /**
-   * 自然语言草案（§10）：LLM 把用户的口语化请求解析为 create_stock_pool 输入。
-   *
-   * - 严格 JSON schema 输出约束（系统提示 + LLMAdapterLike.schema）
-   * - tool 层仍校验 groupId / tacticId 存在性，前端回显需用户确认
-   * - LLM 失败 / 解析失败一律返回 invalid_input / llm_error（前端可走模板兜底）
-   */
-  app.post('/api/watch/draft', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
-    if (denied !== null) return jsonResult(denied);
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'invalid_input',
-          message: '请求体必须是 JSON：{ "message": "..." }',
-          issues: [],
-        },
-      });
-    }
-    const message = (body as { message?: unknown }).message;
-    if (typeof message !== 'string' || message.trim().length === 0) {
-      return jsonResult({
-        ok: false,
-        error: { kind: 'invalid_input', message: 'message 必填且为非空字符串', issues: [] },
-      });
-    }
-
-    // 列可选分组供 LLM 选用
-    const groupsResult = await invokeTool('list_stock_groups', {
-      enabledOnly: true,
-      includeMemberCount: true,
-    });
-    const groupOptions = groupsResult.ok
-      ? (
-          groupsResult.data as {
-            groups: Array<{ group: { id: string; name: string } }>;
-          }
-        ).groups.map((g) => `${g.group.id} (${g.group.name})`)
-      : [];
-
-    // 列可用战法供 LLM 选用
-    const tacticsResult = await invokeTool('list_tactics', { includeBuiltins: true });
-    const tacticOptions = tacticsResult.ok
-      ? (
-          tacticsResult.data as {
-            tactics: Array<{ id: string; name: string }>;
-          }
-        ).tactics.map((t) => `${t.id} (${t.name})`)
-      : [];
-
-    const draftSchema = {
-      type: 'object',
-      required: ['name', 'groupId', 'rules'],
-      properties: {
-        name: { type: 'string', minLength: 1, maxLength: 64 },
-        description: { type: 'string', maxLength: 500 },
-        groupId: { type: 'string', enum: groupOptions.length > 0 ? groupOptions : undefined },
-        rules: {
-          type: 'array',
-          minItems: 1,
-          items: {
-            oneOf: [
-              {
-                type: 'object',
-                required: ['kind', 'tacticId'],
-                properties: {
-                  kind: { const: 'tactic' },
-                  tacticId: {
-                    type: 'string',
-                    enum: tacticOptions.length > 0 ? tacticOptions : undefined,
-                  },
-                  minScore: { type: 'number', minimum: 0, maximum: 100, default: 60 },
-                },
-              },
-              {
-                type: 'object',
-                required: ['kind'],
-                properties: {
-                  kind: { const: 'cost-threshold' },
-                  stopLossPct: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
-                  takeProfitPct: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
-                },
-              },
-              {
-                type: 'object',
-                required: ['kind', 'pct'],
-                properties: {
-                  kind: { const: 'price-change' },
-                  pct: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
-                  direction: { enum: ['up', 'down', 'any'] },
-                },
-              },
-              {
-                type: 'object',
-                required: ['kind', 'level', 'side'],
-                properties: {
-                  kind: { const: 'price-level' },
-                  level: { type: 'number', exclusiveMinimum: 0 },
-                  side: { enum: ['above', 'below'] },
-                },
-              },
-            ],
-          },
-        },
-        logic: { enum: ['ANY', 'ALL'] },
-        triggerMode: { enum: ['on-enter', 'repeat', 'daily-first'] },
-        priority: { enum: ['urgent', 'important', 'normal'] },
-        dailyNotificationLimit: { type: 'integer', minimum: 1, maximum: 500 },
-        notifyOnRecovery: { type: 'boolean' },
-      },
-    };
-
-    const system =
-      `你是 luoome 盯盘方案的辅助生成器。把用户的口语化描述转成结构化的 create_stock_pool 草稿输入。\n` +
-      `- 只输出严格符合 schema 的 JSON\n` +
-      `- groupId 必须从用户提供的可选列表里选\n` +
-      `- 战法 tacticId 必须从可选战法列表里选\n` +
-      `- 不允许臆造 id`;
-
-    let raw: unknown;
-    try {
-      raw = await ctxRef.current.adapters.llm.generate({
-        system,
-        schema: draftSchema,
-        data: { message, groupOptions, tacticOptions },
-      });
-    } catch (error) {
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'llm_error',
-          provider: ctxRef.current.adapters.llm.name,
-          cause: error instanceof Error ? error.message : String(error),
-          retryable: true,
-        },
-      });
-    }
-
-    return jsonResult({
-      ok: true,
-      data: {
-        draft: raw,
-        groupOptions,
-        tacticOptions,
-      },
-    });
-  });
-
   app.post('/api/watch/run-once', async (c) => {
+    if (!exposeExternal) {
+      return jsonResult(permissionDenied('external 操作未开启；设置 LUOOME_EXPOSE_EXTERNAL=true'));
+    }
     const denied = mutationPermission(c.req.raw, webToken);
     if (denied !== null) return jsonResult(denied);
     let body: unknown;
@@ -1045,19 +895,19 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       body = {};
     }
     const input =
-      typeof body === 'object' && body !== null
-        ? { ...(body as Record<string, unknown>), seedTacticSources: false }
-        : { notify: false, seedTacticSources: false };
+      typeof body === 'object' && body !== null && !Array.isArray(body)
+        ? { ...(body as Record<string, unknown>) }
+        : { notify: false };
     return jsonResult(await runIntradayWatchObserved(input, ctxRef.current, 'once'));
   });
 
   app.get('/api/dashboard', async () => {
     const todayStart = startOfTodayShanghai(ctxRef.current.clock());
-    const [holdings, groups, pools, watch, triggers, advice, recentTriggers, indexQuotes] =
+    const [holdings, watchlists, alertPlans, watch, triggers, advice, recentTriggers, indexQuotes] =
       await Promise.all([
         invokeTool('list_holdings', {}),
-        invokeTool('list_stock_groups', { enabledOnly: false, includeMemberCount: true }),
-        invokeTool('list_stock_pools', { enabledOnly: false }),
+        invokeTool('list_watchlists', {}),
+        invokeTool('list_alert_plans', { enabledOnly: false }),
         invokeTool('get_watch_status', {}),
         invokeTool('list_watch_triggers', { limit: 8 }),
         invokeTool('get_advice', { limit: 8 }),
@@ -1065,8 +915,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         invokeIndexQuotes(),
       ]);
     if (!holdings.ok) return jsonResult(holdings);
-    if (!groups.ok) return jsonResult(groups);
-    if (!pools.ok) return jsonResult(pools);
+    if (!watchlists.ok) return jsonResult(watchlists);
+    if (!alertPlans.ok) return jsonResult(alertPlans);
     if (!watch.ok) return jsonResult(watch);
     if (!triggers.ok) return jsonResult(triggers);
     if (!advice.ok) return jsonResult(advice);
@@ -1080,26 +930,25 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       warnings.push(`fetch_index_quotes 失败（${indexQuotes.error.kind}），指数行情降级为空`);
     }
 
-    const groupRows = groups.data as {
-      groups: Array<{
-        group: { id: string; name: string; enabled: boolean; resolver: { kind: string } };
-      }>;
-    };
-    // get_stock_group 结果在一次请求内复用：stale 统计与实时看板可能查同一分组。
-    const groupDetailCache = new Map<string, Promise<ToolResult<unknown>>>();
-    const groupDetail = (id: string): Promise<ToolResult<unknown>> => {
-      const cached = groupDetailCache.get(id);
+    const watchlistRows = (
+      watchlists.data as {
+        items: Array<{
+          watchlist: { id: string; name: string; enabled: boolean };
+          sourceHealth: { stale: number };
+        }>;
+      }
+    ).items;
+    // Watchlist 详情在一次请求内复用。
+    const watchlistDetailCache = new Map<string, Promise<ToolResult<unknown>>>();
+    const watchlistDetail = (id: string): Promise<ToolResult<unknown>> => {
+      const cached = watchlistDetailCache.get(id);
       if (cached !== undefined) return cached;
-      const pending = invokeTool('get_stock_group', { id });
-      groupDetailCache.set(id, pending);
+      const pending = invokeTool('get_watchlist', { watchlistId: id });
+      watchlistDetailCache.set(id, pending);
       return pending;
     };
-    const dynamicIds = groupRows.groups
-      .filter(({ group }) => group.resolver.kind === 'formula' || group.resolver.kind === 'llm')
-      .map(({ group }) => group.id);
-    const dynamicDetails = await Promise.all(dynamicIds.map((id) => groupDetail(id)));
-    const staleGroupCount = dynamicDetails.filter(
-      (result) => result.ok && (result.data as { stale: boolean }).stale,
+    const staleWatchlistCount = watchlistRows.filter(
+      ({ sourceHealth }) => sourceHealth.stale > 0,
     ).length;
 
     // 策略预警指标（docs/.../§11 / §12）：今日优先级计数 / 送达状态分布 / 反馈分布（噪声率）
@@ -1114,7 +963,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       feedback?: 'handled' | 'useful' | 'useless' | 'ignored';
     }>;
 
-    // —— 实时看板：持仓 ∪ 启用盯盘分组（关联 enabled WatchPlan 且分组启用）成员 ——
+    // —— 实时看板：持仓 ∪ 被启用 AlertPlan 引用的 Watchlist 成员 ——
     interface BoardItem {
       stockId: string;
       name: string;
@@ -1132,7 +981,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         todayPnl: number | null;
         todayPnlPct: number | null;
       } | null;
-      groups: string[];
+      watchlists: string[];
       todayTrigger: { count: number; maxPriority: 'urgent' | 'important' | 'normal' } | null;
     }
     const BOARD_CAP = 40;
@@ -1161,44 +1010,46 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           todayPnl: row.todayPnl,
           todayPnlPct: row.todayPnlPct,
         },
-        groups: [],
+        watchlists: [],
         todayTrigger: null,
       });
     }
-    const poolRows = (pools.data as { pools: Array<{ groupId: string; enabled: boolean }> }).pools;
-    const groupById = new Map(groupRows.groups.map(({ group }) => [group.id, group]));
-    const watchedGroupIds = [
+    const planRows = (
+      alertPlans.data as { plans: Array<{ watchlistId: string; enabled: boolean }> }
+    ).plans;
+    const watchlistById = new Map(watchlistRows.map(({ watchlist }) => [watchlist.id, watchlist]));
+    const watchedWatchlistIds = [
       ...new Set(
-        poolRows
-          .filter((p) => p.enabled && p.groupId.length > 0)
-          .map((p) => p.groupId)
-          .filter((id) => groupById.get(id)?.enabled === true),
+        planRows
+          .filter((plan) => plan.enabled && plan.watchlistId.length > 0)
+          .map((plan) => plan.watchlistId)
+          .filter((id) => watchlistById.get(id)?.enabled === true),
       ),
     ];
-    const watchedDetails = await Promise.all(watchedGroupIds.map((id) => groupDetail(id)));
+    const watchedDetails = await Promise.all(watchedWatchlistIds.map((id) => watchlistDetail(id)));
     for (const [index, detail] of watchedDetails.entries()) {
       if (!detail.ok) {
         warnings.push(
-          `get_stock_group(${watchedGroupIds[index]}) 失败（${detail.error.kind}），看板跳过该分组`,
+          `get_watchlist(${watchedWatchlistIds[index]}) 失败（${detail.error.kind}），看板跳过该 Watchlist`,
         );
         continue;
       }
-      const { group, members } = detail.data as {
-        group: { name: string };
-        members: Array<{ stockId: string; name: string }>;
+      const { watchlist, members } = detail.data as {
+        watchlist: { name: string };
+        members: Array<{ member: { stockId: string } }>;
       };
-      for (const member of members) {
+      for (const { member } of members) {
         const existing = board.get(member.stockId);
         if (existing !== undefined) {
-          existing.groups.push(group.name);
+          existing.watchlists.push(watchlist.name);
         } else if (board.size < BOARD_CAP) {
           board.set(member.stockId, {
             stockId: member.stockId,
-            name: member.name,
+            name: member.stockId,
             quote: null,
             changePct: null,
             holding: null,
-            groups: [group.name],
+            watchlists: [watchlist.name],
             todayTrigger: null,
           });
         }
@@ -1232,7 +1083,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
             retrieval: result.retrieval,
             freshness: result.freshness,
           };
-          // 涨跌幅全行统一口径：昨收基准换算（持仓/分组仅标签差异）
+          // 涨跌幅全行统一口径：昨收基准换算
           const prevClose = result.quote.prevClose;
           if (item.changePct === null && typeof prevClose === 'number' && prevClose > 0) {
             item.changePct = ((result.quote.close - prevClose) / prevClose) * 100;
@@ -1285,12 +1136,12 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       data: {
         asOf: ctxRef.current.clock(),
         holdings: holdings.data,
-        groups: groups.data,
-        pools: pools.data,
+        watchlists: watchlists.data,
+        alertPlans: alertPlans.data,
         watch: watch.data,
         triggers: triggers.data,
         advice: advice.data,
-        staleGroupCount,
+        staleWatchlistCount,
         // 看盘主页：指数条 + 实时看板 + 今日预警列表
         indices,
         board: [...board.values()],
@@ -1307,7 +1158,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           latestRun: latestRun
             ? {
                 status: latestRun.status ?? null,
-                evaluatedPools: latestRun.evaluatedPools ?? 0,
+                evaluatedPlans: latestRun.evaluatedPools ?? 0,
                 evaluatedStocks: latestRun.evaluatedStocks ?? 0,
                 triggered: latestRun.triggered ?? 0,
                 notified: latestRun.notified ?? 0,
@@ -1334,11 +1185,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         : null;
     const want = (t: string): boolean => wanted === null || wanted.has(t);
 
-    const [notesR, eventsR, triggersR, adviceR] = await Promise.all([
+    const [notesR, eventsR, triggersR, adviceR, signalsR, watchlistsR] = await Promise.all([
       invokeTool('list_research_notes', { stockId, limit: 200 }),
       invokeTool('list_stock_events', { stockId, limit: 200 }),
       invokeTool('list_watch_triggers', { stockId, limit: 100 }),
       invokeTool('get_advice', { subjectKind: 'stock', subjectId: stockId, limit: 50 }),
+      invokeTool('strategy_signals_by_stock', { stockId, limit: 100 }),
+      invokeTool('list_watchlists', {}),
     ]);
     if (!notesR.ok) return jsonResult(notesR);
     if (!eventsR.ok) return jsonResult(eventsR);
@@ -1355,6 +1208,35 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         })
       : {};
     const adviceList = advice.advice ?? advice.advices ?? [];
+    const strategySignals = signalsR.ok
+      ? (signalsR.data as { signals: Array<Record<string, unknown>> }).signals
+      : [];
+    const watchlistItems = watchlistsR.ok
+      ? (
+          watchlistsR.data as {
+            items: Array<{ watchlist: { id: string; name: string } }>;
+          }
+        ).items
+      : [];
+    const watchlistMemberships = (
+      await Promise.all(
+        watchlistItems.map(async ({ watchlist }) => {
+          const detail = await invokeTool('get_watchlist', { watchlistId: watchlist.id });
+          if (!detail.ok) return [];
+          const members = (
+            detail.data as {
+              members: Array<{
+                member: { stockId: string; stage: string; priority: string };
+                sources: Array<Record<string, unknown>>;
+              }>;
+            }
+          ).members;
+          return members
+            .filter(({ member }) => member.stockId === stockId)
+            .map(({ member, sources }) => ({ watchlist, member, sources }));
+        }),
+      )
+    ).flat();
 
     type TimelineItem = { type: string; at: string; payload: Record<string, unknown> };
     const items: TimelineItem[] = [];
@@ -1395,6 +1277,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           noteCount: notes.length,
           eventCount: events.length,
           upcomingEvents,
+          strategySignals,
+          watchlistMemberships,
         },
         timeline: items,
       },
@@ -1549,28 +1433,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/reports/:id', (c) => callTool('get_report', { id: c.req.param('id') }));
 
-  // 战法列表（read；调 list_tactics includeBuiltins=true）
-  app.get('/api/tactics', () => callTool('list_tactics', { includeBuiltins: true }));
-  app.get('/api/tactics/consensus', (c) => {
-    const input: Record<string, unknown> = {};
-    const marketDate = c.req.query('marketDate');
-    const minGroups = Number(c.req.query('minGroups'));
-    const topN = Number(c.req.query('topN'));
-    if (marketDate !== undefined) input.marketDate = marketDate;
-    if (Number.isInteger(minGroups) && minGroups > 0) input.minGroups = minGroups;
-    if (Number.isInteger(topN) && topN > 0) input.topN = topN;
-    return callTool('get_tactic_consensus', input);
-  });
-
-  // 战法扫描（read + advice）：统一走 tactic-scan workflow，避免 surface 复制编排与统计口径。
-  app.get('/api/tactics/scan', async (c) => {
-    const topNRaw = c.req.query('topN');
-    const topN = topNRaw === undefined ? 10 : Math.max(1, Math.min(50, Number(topNRaw) || 10));
-    const scopeRaw = c.req.query('scope');
-    const scope = scopeRaw === 'all-stocks' || scopeRaw === 'watchlist' ? scopeRaw : 'holdings';
-    return jsonResult(await tacticScanWorkflow.run({ scope, topN }, ctxRef.current));
-  });
-
   // 复盘趋势图：按天聚合命中率（confidence>=70 且 followed 且 pnl>0 占比）。
   // 默认 30 天窗口；advice 不足则返回空序列（前端 fallback 显示 byDecision）。
   app.get('/api/review/trend', async (c) => {
@@ -1636,9 +1498,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // 复盘页右侧渲染成本表 + 整体命中率。
   app.get('/api/review/calibration', async () => callTool('get_confidence_calibration', {}));
 
-  // outcome 回填（write；仅当 LUOOME_EXPOSE_WRITE=true 时挂载）。
+  // outcome 回填（write；仅当 exposeWrite 开启时挂载）。
   // 默认不暴露：避免 web 端被滥用为批量回填入口。
-  if (process.env.LUOOME_EXPOSE_WRITE === 'true') {
+  if (exposeWrite) {
     app.post('/api/review/:id/outcome', async (c) => {
       const denied = mutationPermission(c.req.raw, webToken);
       if (denied !== null) return jsonResult(denied);
@@ -1672,8 +1534,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       return jsonResult(notFound('Tool', name));
     }
     const allowed =
-      EXPOSED_SIDE_EFFECTS.has(tool.sideEffect) ||
-      (tool.sideEffect === 'external' && WEB_ALLOWED_EXTERNAL.has(name));
+      (EXPOSED_SIDE_EFFECTS.has(tool.sideEffect) && (tool.sideEffect !== 'write' || exposeWrite)) ||
+      (tool.sideEffect === 'external' && exposeExternal && WEB_ALLOWED_EXTERNAL.has(name));
     if (!allowed) {
       return jsonResult(permissionDenied(`web 端不暴露 ${tool.sideEffect} 类 tool（${name}）`));
     }
@@ -1741,6 +1603,16 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
   if (resolved.filePath !== null) {
     ctx.logger.info(`Web 写操作 token: ${resolved.filePath}（复制文件内容到 Web「设置」页）`);
+  }
+  if (process.env.LUOOME_EXPOSE_WRITE !== 'true') {
+    ctx.logger.info(
+      'write 能力未开启：设置 LUOOME_EXPOSE_WRITE=true 后重启可启用持仓/预警等写操作',
+    );
+  }
+  if (process.env.LUOOME_EXPOSE_EXTERNAL !== 'true') {
+    ctx.logger.info(
+      'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
+    );
   }
   return server;
 };

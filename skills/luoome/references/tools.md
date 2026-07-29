@@ -9,10 +9,10 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Accounts and positions: `list_accounts`, `get_account`, `list_holdings`, `get_holding`, `list_trades`.
 - Stock discovery and calculations: `search_stocks`, `compute_indicators`. Indicators include
   RSI14, MA20/MA60 distance and cross recency, plus Bollinger 20-day bands, bandwidth and position.
-- Tactics and signals: `list_tactics`, `get_tactic`, `run_tactic`, `get_tactic_consensus`,
-  signal query/scoring tools. Consensus is same-day persisted-fact aggregation; its rank score is
-  only for ordering and is not a win rate, confidence or recommendation.
-- Groups and monitoring: `list_stock_groups`, `get_stock_group`, `list_watch_plans`, `list_watch_triggers`, `get_watch_status`.
+- Strategies and signals: `list_strategies`, `get_strategy`, `list_strategy_runs`,
+  `get_strategy_run`, `strategy_signals_by_stock`.
+- Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
+  `list_alert_plans`, `list_watch_triggers`, `get_watch_status`.
 - Research and events: `list_research_notes`, `list_stock_events`.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
@@ -27,11 +27,10 @@ Use advice tools only for an explicit analysis request:
 - `analyze_position` for a recommendation grounded in an existing holding.
 - `market_outlook` for a market or sector view.
 
-`resolve_llm_group` is primarily an internal workflow channel, not a general recommendation tool. Advice may invoke an LLM and incur latency or cost; do not call it speculatively or in an unbounded loop.
-
 ## Write
 
-Write tools create or change local records, including accounts, holdings, trades, stock groups, watch plans, research notes, stock events and feedback. Before calling one:
+Write tools create or change local records, including accounts, holdings, trades, Strategies,
+Watchlists, AlertPlans, research notes, stock events and feedback. Before calling one:
 
 1. Read the target state and resolve stable IDs.
 2. Restate exact values, especially stock, side, quantity, price, time and account.
@@ -43,7 +42,9 @@ Internal persistence tools such as watch-run or trigger recording are intended f
 
 ## External
 
-External tools fetch market/event data, refresh dynamic groups, synchronize data or send notifications. They can incur network access and may persist results. Explain the action and obtain confirmation before calling them.
+External tools fetch market/event data, validate or run Strategies, synchronize data or send
+notifications. Full-market or persisted Strategy runs require confirmation; bounded
+`run_strategy` dry-runs must use `persist=false`.
 
 ## Never exposed
 

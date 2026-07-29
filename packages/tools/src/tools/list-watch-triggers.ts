@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { defineTool } from '../define-tool.js';
 
 export const ListWatchTriggersInput = z.object({
+  alertPlanId: z.string().min(1).optional(),
   poolId: z.string().min(1).optional(),
   stockId: z.string().min(1).optional(),
   ruleKind: WatchRuleKindSchema.optional(),
@@ -27,18 +28,27 @@ export const ListWatchTriggersOutput = z.object({
  */
 export const listWatchTriggersTool = defineTool({
   name: 'list_watch_triggers',
-  description: '查询最近盯盘触发（可按池/股票/规则/通知状态过滤，按时间倒序）',
+  description: '查询最近 AlertPlan 触发（可按计划/股票/规则/通知状态过滤，按时间倒序）',
   sideEffect: 'read',
   input: ListWatchTriggersInput,
   output: ListWatchTriggersOutput,
   handler: async (input, ctx) => {
     const recent = await ctx.repos.watchTrigger.listRecent({
-      ...(input.poolId !== undefined ? { poolId: input.poolId } : {}),
+      ...(input.alertPlanId !== undefined
+        ? { poolId: input.alertPlanId }
+        : input.poolId !== undefined
+          ? { poolId: input.poolId }
+          : {}),
       ...(input.since !== undefined ? { since: input.since } : {}),
       limit: 10_000,
     });
     const filtered = recent
       .filter((trigger) => input.stockId === undefined || trigger.stockId === input.stockId)
+      .filter(
+        (trigger) =>
+          input.alertPlanId === undefined ||
+          (trigger.alertPlanId ?? trigger.poolId) === input.alertPlanId,
+      )
       .filter((trigger) => input.ruleKind === undefined || trigger.ruleKind === input.ruleKind)
       .filter((trigger) => input.notified === undefined || trigger.notified === input.notified)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));

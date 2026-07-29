@@ -20,7 +20,7 @@ export const AddGroupMemberOutput = z.object({
 });
 
 /**
- * 把一只股票追加到 manual 分组的固定成员列表（write；docs/ddd/stock-group-design.md §1 / §6）。
+ * 把一只股票追加到 manual 分组的固定成员列表（write；docs/ddd/strategy-watchlist-unification-detailed-design.md §1 / §6）。
  *
  * 仅 manual kind 支持；formula/llm 由刷新机制产出成员，holdings 是活视图。
  * 实现走 update_stock_group 同款 merge 路径，只是只动 resolver.stockIds。

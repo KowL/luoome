@@ -1,6 +1,6 @@
 import { toolRegistry } from '@luoome/tools';
 import { describe, expect, it } from 'vitest';
-import { resolveAllowedSideEffects } from './exposure.js';
+import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
 describe('MCP sideEffect 暴露门控', () => {
   it('agent_run 默认不暴露，仅在 external 显式开启后可见', () => {
@@ -20,5 +20,38 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(() => resolveAllowedSideEffects({ LUOOME_EXPOSE_TRADE: 'true' })).toThrow(
       /trade tools are never exposed/,
     );
+  });
+
+  it('默认发现新 read，write/external 需 opt-in，内部 commit/sync/migration 永不暴露', () => {
+    const defaults = selectMcpTools(toolRegistry.all(), resolveAllowedSideEffects({}));
+    const defaultNames = defaults.map((tool) => tool.name);
+    expect(defaultNames).toContain('list_strategies');
+    expect(defaultNames).toContain('list_watchlists');
+    expect(defaultNames).toContain('list_alert_plans');
+    expect(defaultNames).not.toContain('create_strategy');
+    expect(defaultNames).not.toContain('run_strategy');
+
+    const optedIn = selectMcpTools(
+      toolRegistry.all(),
+      resolveAllowedSideEffects({
+        LUOOME_EXPOSE_WRITE: 'true',
+        LUOOME_EXPOSE_EXTERNAL: 'true',
+      }),
+    );
+    const optedInNames = optedIn.map((tool) => tool.name);
+    expect(optedInNames).toContain('create_strategy');
+    expect(optedInNames).toContain('run_strategy');
+    for (const internalName of [
+      'sync_watchlist_source',
+      'record_watch_run',
+      'record_workflow_run',
+      'save_report',
+      'save_watch_trigger',
+      'set_report_delivery_status',
+    ]) {
+      expect(optedInNames).not.toContain(internalName);
+    }
+    expect(optedInNames.some((name) => name.startsWith('migration_'))).toBe(false);
+    expect(optedIn.some((tool) => tool.sideEffect === 'trade')).toBe(false);
   });
 });

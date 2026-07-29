@@ -10,27 +10,28 @@ import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js'
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { renderMarket, teardownMarket } from './market.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
-import { initMvpActions, openGroupModal } from './mvp-actions.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
   cancelAnalyzeAllHoldings,
-  refreshSelectedGroupDetail,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
-  renderGroups,
   renderHoldings,
   renderReports,
   renderResearch,
   renderReview,
   renderSettings,
   renderSettingsAccount,
-  renderTacticsList,
   renderWorkflowRuns,
-  runTacticScan,
   runWatchOnce,
 } from './pages.js';
+import {
+  initTargetActions,
+  renderAlerts,
+  renderStrategies,
+  renderWatchlists,
+} from './target-pages.js';
 import { $ } from './ui.js';
 
 /* ============ 状态行 ============ */
@@ -64,9 +65,10 @@ const ROUTES = [
   'dashboard',
   'market',
   'holdings',
-  'groups',
+  'strategies',
+  'watchlists',
+  'alerts',
   'research',
-  'tactics',
   'advice',
   'reports',
   'review',
@@ -95,11 +97,11 @@ const showRoute = async (name) => {
       await renderDataHealth(setStatus);
     } else if (safe === 'market') await renderMarket(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
-    else if (safe === 'groups') await renderGroups(setStatus);
+    else if (safe === 'strategies') await renderStrategies(setStatus);
+    else if (safe === 'watchlists') await renderWatchlists(setStatus);
+    else if (safe === 'alerts') await renderAlerts(setStatus);
     else if (safe === 'research') {
       await renderResearch(setStatus);
-    } else if (safe === 'tactics') {
-      await renderTacticsList(setStatus);
     } else if (safe === 'advice') {
       await renderAdviceList(setStatus);
     } else if (safe === 'reports') {
@@ -128,10 +130,12 @@ const showRoute = async (name) => {
 const currentHash = () => {
   // 深链接形如 #market?stockId=002594.SZ&range=3m：? 前是 routeName（设计 §11.1）。
   const h = window.location.hash.replace(/^#/, '').split('?')[0] ?? '';
-  if (h === 'watch') return 'groups';
+  if (h === 'watch' || h === 'groups') return 'alerts';
+  if (h === 'tactics') return 'strategies';
   if (h.length > 0) return h;
   const path = window.location.pathname.replace(/^\/|\/$/g, '');
-  if (path === 'watch') return 'groups';
+  if (path === 'watch' || path === 'groups') return 'alerts';
+  if (path === 'tactics') return 'strategies';
   return ROUTES.includes(path) ? path : 'dashboard';
 };
 
@@ -235,11 +239,7 @@ const bindAccountSelect = () => {
 
 const bindGlobalActions = () => {
   initHoldingsActions({ refresh: () => renderHoldings(setStatus), setStatus });
-  initMvpActions({
-    onGroupsChanged: () => renderGroups(setStatus),
-    onWatchChanged: () => renderGroups(setStatus),
-    setStatus,
-  });
+  initTargetActions({ setStatus, refresh: showRoute });
 
   const addBtn = $('#btn-holding-add');
   if (addBtn !== null) addBtn.addEventListener('click', () => openAddHoldingModal());
@@ -251,14 +251,7 @@ const bindGlobalActions = () => {
   if (analyzeCancelBtn !== null)
     analyzeCancelBtn.addEventListener('click', () => cancelAnalyzeAllHoldings());
 
-  $('#btn-group-add')?.addEventListener('click', () => openGroupModal());
   $('#btn-dashboard-watch-run')?.addEventListener('click', () => void runWatchOnce(setStatus));
-
-  const tlistBtn = $('#btn-tactic-list');
-  if (tlistBtn !== null)
-    tlistBtn.addEventListener('click', () => void renderTacticsList(setStatus));
-  const tscanBtn = $('#btn-tactic-scan');
-  if (tscanBtn !== null) tscanBtn.addEventListener('click', () => void runTacticScan(setStatus));
 
   const adviceFilter = $('#advice-filter');
   if (adviceFilter !== null)
@@ -268,7 +261,7 @@ const bindGlobalActions = () => {
   bindAccountSelect();
 };
 
-/* ============ 自动刷新（仪表盘 5s；持仓 / 分组行情 10s） ============ */
+/* ============ 自动刷新（仪表盘 5s；持仓行情 10s） ============ */
 
 const startDashboardAutoRefresh = () => {
   setInterval(() => {
@@ -276,14 +269,12 @@ const startDashboardAutoRefresh = () => {
   }, 5000);
 };
 
-/** 持仓 / 分组页盘中行情轮询；页面隐藏或弹窗打开时暂停，避免后台空跑和打断编辑。 */
+/** 持仓页盘中行情轮询；页面隐藏或弹窗打开时暂停，避免后台空跑和打断编辑。 */
 const startQuoteAutoRefresh = () => {
   setInterval(() => {
     if (document.visibilityState !== 'visible') return;
     if ($('#modal-overlay')?.hidden === false) return;
-    const route = currentHash();
-    if (route === 'holdings') void renderHoldings(setStatus);
-    else if (route === 'groups') void refreshSelectedGroupDetail(setStatus);
+    if (currentHash() === 'holdings') void renderHoldings(setStatus);
   }, 10_000);
 };
 

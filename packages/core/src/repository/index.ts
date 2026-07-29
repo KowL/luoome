@@ -1,5 +1,6 @@
 import type { Account } from '../entity/account.js';
 import type { Advice, AdviceOutcome, AdviceQuery } from '../entity/advice.js';
+import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { Holding } from '../entity/holding.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
@@ -23,9 +24,25 @@ import type {
   StockUniverseSnapshot,
   StockUniverseSyncRun,
 } from '../entity/stock-universe.js';
+import type {
+  Strategy,
+  StrategyResult,
+  StrategyRun,
+  StrategySignal,
+  StrategyVersion,
+} from '../entity/strategy.js';
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
+import type {
+  MembershipSnapshot,
+  Watchlist,
+  WatchlistKind,
+  WatchlistMember,
+  WatchlistMemberSource,
+  WatchlistSyncCommit,
+  WatchlistSyncRun,
+} from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
 
 /**
@@ -155,6 +172,13 @@ export interface RepositoryRegistry {
   readonly signalObservation: SignalObservationRepository;
   /** v0.3 起；run_tactic / list_tactics 用。 */
   readonly tactic: TacticRepository;
+  /** Strategy 目标模型身份与不可变版本；W1 起内部可读写，W2 才开放 tools。 */
+  readonly strategy: StrategyRepository;
+  /** Strategy 运行、结果和信号。 */
+  readonly strategyRun: StrategyRunRepository;
+  readonly watchlist: WatchlistRepository;
+  readonly watchlistMember: WatchlistMemberRepository;
+  readonly alertPlan: AlertPlanRepository;
   /** v0.3 起；send_notification 落库 + 复盘查询。 */
   readonly notification: NotificationRepository;
   /** v0.6 起；股票池 CRUD（list_stock_pools / create_stock_pool / ...）。 */
@@ -165,7 +189,7 @@ export interface RepositoryRegistry {
   readonly watchRuleState: WatchRuleStateRepository;
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
   readonly watchRun: WatchRunRepository;
-  /** 分组化起（docs/ddd/stock-group-design.md §2）；股票分组 CRUD。 */
+  /** 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §2）；股票分组 CRUD。 */
   readonly stockGroup: StockGroupRepository;
   /** 分组化起；分组成员快照（只增不改；watch hot path 只读 currentMembers）。 */
   readonly groupMember: GroupMemberRepository;
@@ -219,8 +243,84 @@ export interface TacticRepository {
   signalsByStock(stockId: string, since?: Date): Promise<readonly TacticSignal[]>;
 }
 
+export interface StrategyRepository {
+  save(strategy: Strategy): Promise<void>;
+  findById(id: string): Promise<Strategy | null>;
+  list(filter?: {
+    readonly status?: Strategy['status'];
+    readonly owner?: Strategy['owner'];
+  }): Promise<readonly Strategy[]>;
+  saveVersion(version: StrategyVersion): Promise<void>;
+  findVersionById(id: string): Promise<StrategyVersion | null>;
+  listVersions(strategyId: string): Promise<readonly StrategyVersion[]>;
+  /**
+   * 切换到同 Strategy 下「已发布且 valid」的 version（回滚/换版本用）。
+   * 不允许激活未 publish 的版本；只改 Strategy.currentVersionId 并置 status=active，不动 publishedAt。
+   */
+  activateVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
+  /**
+   * 首发语义：给 valid version 补 publishedAt（已发布则保留原值），同时切 currentVersionId 并置 status=active。
+   * 与 activateVersion 的差异就在「是否允许未 publish 版本」：publish 允许并负责签发，activate 拒绝。
+   */
+  publishVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
+}
+
+export interface StrategyRunRepository {
+  saveRun(run: StrategyRun): Promise<void>;
+  findRunById(id: string): Promise<StrategyRun | null>;
+  listRuns(filter?: {
+    readonly strategyId?: string;
+    readonly status?: StrategyRun['status'];
+    readonly since?: Date;
+    /** 按 startedAt 倒序取前 N 条，避免全量拉取。 */
+    readonly limit?: number;
+  }): Promise<readonly StrategyRun[]>;
+  saveResults(results: readonly StrategyResult[]): Promise<void>;
+  listResults(runId: string): Promise<readonly StrategyResult[]>;
+  saveSignals(signals: readonly StrategySignal[]): Promise<void>;
+  signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]>;
+  signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
+  /** 终态 run 与其 results/signals 原子提交。 */
+  commitRun(bundle: {
+    readonly run: StrategyRun;
+    readonly results: readonly StrategyResult[];
+    readonly signals: readonly StrategySignal[];
+  }): Promise<void>;
+}
+
+export interface WatchlistRepository {
+  save(watchlist: Watchlist): Promise<void>;
+  findById(id: string): Promise<Watchlist | null>;
+  list(filter?: {
+    readonly enabledOnly?: boolean;
+    readonly kind?: WatchlistKind;
+  }): Promise<readonly Watchlist[]>;
+  archive(id: string, at: Date): Promise<void>;
+}
+
+export interface WatchlistMemberRepository {
+  saveMember(member: WatchlistMember): Promise<void>;
+  findMember(watchlistId: string, stockId: string): Promise<WatchlistMember | null>;
+  listMembers(
+    watchlistId: string,
+    filter?: {
+      readonly stage?: WatchlistMember['stage'];
+      readonly priority?: WatchlistMember['priority'];
+      readonly includeArchived?: boolean;
+    },
+  ): Promise<readonly WatchlistMember[]>;
+  saveSource(source: WatchlistMemberSource): Promise<void>;
+  listSources(memberId: string, includeEnded?: boolean): Promise<readonly WatchlistMemberSource[]>;
+  currentSource(memberId: string, sourceKey: string): Promise<WatchlistMemberSource | null>;
+  saveSyncRun(run: WatchlistSyncRun): Promise<void>;
+  saveSnapshots(rows: readonly MembershipSnapshot[]): Promise<void>;
+  listSyncRuns(watchlistId: string, limit?: number): Promise<readonly WatchlistSyncRun[]>;
+  listSnapshots(syncRunId: string): Promise<readonly MembershipSnapshot[]>;
+  commitWatchlistSync(input: WatchlistSyncCommit): Promise<WatchlistSyncRun>;
+}
+
 /**
- * 股票池仓储（v0.6 起，docs/ddd/intraday-watch-design.md §2）。
+ * 股票池仓储（v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md §2）。
  * Key 用 pool.id（slug 唯一）。
  */
 export interface StockPoolRepository {
@@ -231,8 +331,18 @@ export interface StockPoolRepository {
   remove(id: string): Promise<void>;
 }
 
+export interface AlertPlanRepository {
+  save(plan: AlertPlan): Promise<void>;
+  findById(id: string): Promise<AlertPlan | null>;
+  list(filter?: {
+    readonly enabledOnly?: boolean;
+    readonly watchlistId?: string;
+  }): Promise<readonly AlertPlan[]>;
+  remove(id: string): Promise<void>;
+}
+
 /**
- * 股票分组仓储（docs/ddd/stock-group-design.md §2）。
+ * 股票分组仓储（docs/ddd/strategy-watchlist-unification-detailed-design.md §2）。
  * Key 用 group.id（slug 唯一）。
  */
 export interface StockGroupRepository {
@@ -244,7 +354,7 @@ export interface StockGroupRepository {
 }
 
 /**
- * 分组成员快照仓储（docs/ddd/stock-group-design.md §1/§2）。
+ * 分组成员快照仓储（docs/ddd/strategy-watchlist-unification-detailed-design.md §1/§2）。
  * - 快照只增不改：一次刷新 = 一批（同一 refreshId），历史批次全保留（复盘 / 成员变化检测用）
  * - 当前成员语义 = 最新 refreshId 那一批；holdings resolver 是活视图，不写快照
  */
@@ -314,7 +424,7 @@ export interface WatchTriggerRepository {
 }
 
 /**
- * 边沿状态机表（v0.7 策略预警，docs/ddd/strategy-alert-detailed-design.md §3.5 / §5）。
+ * 边沿状态机表（v0.7 策略预警，docs/ddd/strategy-watchlist-unification-detailed-design.md §3.5 / §5）。
  * 仅 (poolId, stockId, ruleId) 维度的 active 状态；不替代 watch_triggers 历史。
  */
 export interface WatchRuleStateRepository {

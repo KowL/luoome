@@ -25,13 +25,34 @@ const EXPECTED_TOOL_NAMES = [
   'get_previous_closes',
   'search_stocks',
   'compute_indicators',
-  // v0.3 新增
-  'list_tactics',
-  'get_tactic',
-  'run_tactic',
-  'score_signals',
-  'tactic_signals_by_stock',
-  'tactic_signals_by_tactic',
+  // Strategy + 统一 Watchlist W2
+  'list_strategies',
+  'get_strategy',
+  'create_strategy',
+  'create_strategy_version',
+  'validate_strategy_version',
+  'publish_strategy_version',
+  'pause_strategy',
+  'resume_strategy',
+  'run_strategy',
+  'list_strategy_runs',
+  'get_strategy_run',
+  'strategy_signals_by_stock',
+  // Strategy + 统一 Watchlist W3
+  'list_watchlists',
+  'get_watchlist',
+  'create_watchlist',
+  'update_watchlist',
+  'archive_watchlist',
+  'add_watchlist_member',
+  'update_watchlist_member',
+  'archive_watchlist_member',
+  'list_watchlist_changes',
+  // Strategy + 统一 Watchlist W4
+  'list_alert_plans',
+  'create_alert_plan',
+  'update_alert_plan',
+  'delete_alert_plan',
   'record_advice_outcome',
   'send_notification',
   'market_outlook',
@@ -42,27 +63,9 @@ const EXPECTED_TOOL_NAMES = [
   'close_holding',
   // v0.5 W4：confidence 自校准
   'get_confidence_calibration',
-  // v0.6 新增：股票池 CRUD + 触发落库
-  'list_stock_pools',
-  'list_watch_plans',
-  'create_stock_pool',
-  'update_stock_pool',
-  'delete_stock_pool',
-  'save_watch_trigger',
   'list_watch_triggers',
   'get_watch_status',
-  'record_watch_run',
-  // 分组化（阶段 B）新增：分组 CRUD + 刷新 + LLM 解析
-  'list_stock_groups',
-  'get_stock_group',
-  'get_tactic_consensus',
-  'create_stock_group',
-  'update_stock_group',
-  'delete_stock_group',
-  'add_group_member',
-  'refresh_stock_group',
-  'resolve_llm_group',
-  // v0.7 策略预警（docs/ddd/strategy-alert-detailed-design.md §9.2）新增
+  // v0.7 策略预警（docs/ddd/strategy-watchlist-unification-detailed-design.md §9.2）新增
   'set_watch_trigger_feedback',
   // ruo 迁移 Phase 1（docs/ddd/ruo-feature-migration-detailed-design.md §7）
   'list_research_notes',
@@ -78,12 +81,9 @@ const EXPECTED_TOOL_NAMES = [
   'get_market_data_status',
   'get_ashare_sentiment',
   'list_workflow_runs',
-  'record_workflow_run',
   // Vibe A 股报告迁移 Phase 1
   'get_report',
   'list_reports',
-  'save_report',
-  'set_report_delivery_status',
   'render_report',
   // Phase 1：连板天梯
   'limit_up_ladder',
@@ -98,9 +98,6 @@ const EXPECTED_TOOL_NAMES = [
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   'get_stock_market_view',
   'get_stock_universe_status',
-  // Vibe A 股报告迁移 Phase 6：信号后续事实观察（无回测曲线）
-  'get_signal_observation_stats',
-  'refresh_signal_observations',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -117,6 +114,29 @@ describe('toolRegistry', () => {
     expect(toolRegistry.get('not_a_tool')).toBeUndefined();
   });
 
+  it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
+    const names = toolRegistry.all().map((tool) => tool.name);
+    expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);
+    for (const hidden of [
+      'sync_watchlist_source',
+      'record_watch_run',
+      'record_workflow_run',
+      'save_report',
+      'save_watch_trigger',
+      'set_report_delivery_status',
+      'list_tactics',
+      'get_tactic',
+      'run_tactic',
+      'list_stock_groups',
+      'get_stock_group',
+      'list_stock_pools',
+      'list_watch_plans',
+    ]) {
+      expect(names).not.toContain(hidden);
+    }
+    expect(toolRegistry.all().filter((tool) => tool.sideEffect === 'trade')).toEqual([]);
+  });
+
   it('AUDIT：工具表不含 trade 副作用（advice × trade 隔离硬约束）', () => {
     for (const tool of toolRegistry.all()) {
       expect(tool.sideEffect).not.toBe('trade');
@@ -130,12 +150,7 @@ describe('toolRegistry', () => {
       .filter((t) => t.sideEffect === 'advice')
       .map((t) => t.name)
       .sort();
-    expect(adviceTools).toEqual([
-      'analyze_position',
-      'analyze_stock',
-      'market_outlook',
-      'resolve_llm_group',
-    ]);
+    expect(adviceTools).toEqual(['analyze_position', 'analyze_stock', 'market_outlook']);
     const externalTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'external')
@@ -148,7 +163,7 @@ describe('toolRegistry', () => {
       'fetch_quote',
       'get_ashare_sentiment',
       'get_stock_market_view',
-      'refresh_stock_group',
+      'run_strategy',
       'send_notification',
       'sync_daily_bars',
       'sync_quotes',
@@ -161,36 +176,38 @@ describe('toolRegistry', () => {
       .map((t) => t.name)
       .sort();
     expect(writeTools).toEqual([
-      'add_group_member',
       'add_holding',
       'add_research_note',
       'add_stock_event',
       'add_trade',
+      'add_watchlist_member',
       'append_chat_message',
+      'archive_watchlist',
+      'archive_watchlist_member',
       'close_holding',
       'create_account',
+      'create_alert_plan',
       'create_chat_session',
-      'create_stock_group',
-      'create_stock_pool',
+      'create_strategy',
+      'create_strategy_version',
+      'create_watchlist',
+      'delete_alert_plan',
       'delete_chat_session',
       'delete_research_note',
       'delete_stock_event',
-      'delete_stock_group',
-      'delete_stock_pool',
+      'pause_strategy',
+      'publish_strategy_version',
       'record_advice_outcome',
-      'record_watch_run',
-      'record_workflow_run',
-      'refresh_signal_observations',
       'rename_chat_session',
-      'save_report',
-      'save_watch_trigger',
-      'set_report_delivery_status',
+      'resume_strategy',
       'set_watch_trigger_feedback',
+      'update_alert_plan',
       'update_holding',
       'update_research_note',
       'update_stock_event',
-      'update_stock_group',
-      'update_stock_pool',
+      'update_watchlist',
+      'update_watchlist_member',
+      'validate_strategy_version',
     ]);
   });
 

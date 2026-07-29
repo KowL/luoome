@@ -108,8 +108,8 @@ describe('opening-report workflow', () => {
       'market-pulse',
       'upcoming-events',
       'overnight-portfolio',
-      'watch-plans',
-      'group-health',
+      'alert-plans',
+      'watchlist-health',
       'research-follow-ups',
     ]);
 

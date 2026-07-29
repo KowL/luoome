@@ -11,13 +11,6 @@ import {
   openTradeModal,
 } from './holdings-actions.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
-import {
-  mutateEntity,
-  openAddMemberModal,
-  openGroupModal,
-  openPoolModal,
-  toolErrorText,
-} from './mvp-actions.js';
 import { createStockSearchBox } from './search-box.js';
 import {
   $,
@@ -30,7 +23,6 @@ import {
   fmtSigned,
   mount,
   statBlock,
-  triggerCard,
 } from './ui.js';
 
 /* ============ dashboard ============ */
@@ -57,7 +49,7 @@ const formatMetricDistribution = (counts, label) => {
   return entries.map(([k, v]) => `${label?.[k] ?? k}×${v}`).join(' · ');
 };
 
-/** 股票代码 / 名称 → 行情页锚点（持仓、分组共用）。textContent 赋值，不拼 HTML。 */
+/** 股票代码 / 名称 → 行情页锚点。textContent 赋值，不拼 HTML。 */
 const stockMarketLink = (stockId, text) => {
   const a = el('a', 'stock-link', text);
   a.setAttribute('href', buildMarketLink(stockId));
@@ -115,6 +107,13 @@ const boardStats = (items) => ({
   down: items.filter((item) => typeof item.changePct === 'number' && item.changePct < 0).length,
   flat: items.filter((item) => item.changePct === null || item.changePct === 0).length,
 });
+
+/** 盯盘最近一轮评估摘要；字段名与 WatchRunSchema（evaluatedPools 等）对齐。 */
+const watchRunSummaryText = (latest) =>
+  latest === null
+    ? '跑一轮后显示评估指标'
+    : `评估 ${latest.evaluatedPools} 个方案 / ${latest.evaluatedStocks} 只股票 · ` +
+      `触发 ${latest.triggered} · 通知 ${latest.notified}`;
 
 /* ---- 看板 / 指数条 / 今日预警渲染 ---- */
 
@@ -187,9 +186,9 @@ const boardRow = (item) => {
     el(
       'td',
       null,
-      item.groups.length === 0
+      item.watchlists.length === 0
         ? el('span', 'muted', '—')
-        : item.groups.map((g) => el('span', 'badge board-group-tag', g)),
+        : item.watchlists.map((name) => el('span', 'badge board-group-tag', name)),
     ),
     el('td', null, boardAlertCell(item.todayTrigger)),
   );
@@ -203,7 +202,7 @@ const renderBoard = (items) => {
   const meta = $('#dashboard-board-meta');
   if (items.length === 0) {
     if (meta !== null) meta.textContent = '';
-    mount(wrap, el('p', 'placeholder', '看板为空：添加持仓，或在「成员与盯盘方案」启用盯盘分组。'));
+    mount(wrap, el('p', 'placeholder', '看板为空：添加持仓，或启用引用 Watchlist 的 AlertPlan。'));
     return;
   }
   const stats = boardStats(items);
@@ -220,7 +219,7 @@ const renderBoard = (items) => {
           el('th', null, '名称'),
           el('th', 'num', '现价'),
           el('th', 'num', '涨跌幅'),
-          el('th', null, '分组'),
+          el('th', null, 'Watchlist'),
           el('th', null, '预警'),
         ]),
       ),
@@ -265,10 +264,10 @@ const renderDashboard = async (setStatus) => {
     asOf,
     holdings: d,
     advice: adviceData,
-    groups,
-    pools,
+    watchlists,
+    alertPlans,
     watch,
-    staleGroupCount,
+    staleWatchlistCount,
     metrics,
     indices,
     board,
@@ -313,14 +312,10 @@ const renderDashboard = async (setStatus) => {
     watch.latest === null
       ? '尚未运行'
       : `最近 ${fmtDateTime(watch.latest.finishedAt ?? watch.latest.startedAt)}`;
-  $('#dash-watch-run-summary').textContent =
-    watch.latest === null
-      ? '跑一轮后显示评估指标'
-      : `评估 ${watch.latest.evaluatedPools} 个方案 / ${watch.latest.evaluatedStocks} 只股票 · ` +
-        `触发 ${watch.latest.triggered} · 通知 ${watch.latest.notified}`;
-  $('#dash-pool-count').textContent = String(pools.total);
-  $('#dash-group-count').textContent = String(groups.total);
-  $('#dash-stale-count').textContent = String(staleGroupCount);
+  $('#dash-watch-run-summary').textContent = watchRunSummaryText(watch.latest);
+  $('#dash-alert-count').textContent = String(alertPlans.total);
+  $('#dash-watchlist-count').textContent = String(watchlists.total);
+  $('#dash-stale-count').textContent = String(staleWatchlistCount);
 
   // 今日预警（urgent 置顶，至多 8 条）
   const alerts = sortAlerts(Array.isArray(todayTriggers) ? todayTriggers : []).slice(0, 8);
@@ -779,7 +774,7 @@ const cancelAnalyzeAllHoldings = () => {
   if (analyzeAllRun !== null) analyzeAllRun.cancelled = true;
 };
 
-/* ============ groups / watch ============ */
+/* ============ watch ============ */
 
 const HEALTH_LABELS = {
   never: '尚未运行',
@@ -791,559 +786,28 @@ const HEALTH_LABELS = {
 
 const healthLabel = (state) => HEALTH_LABELS[state] ?? state;
 
-const WATCH_PLAN_STATES = {
-  ready: ['成员就绪', 'badge-pos'],
-  stale: ['成员已过期', 'badge-warn'],
-  empty: ['暂无成员', 'badge-neutral'],
-  'group-disabled': ['分组已停用', 'badge-neg'],
-  'group-missing': ['分组不存在', 'badge-neg'],
-};
-
 const setHealth = (selector, state) => {
   const node = $(selector);
   if (node !== null) node.className = `health-dot health-${state}`;
-};
-
-const isDynamicGroup = (group) =>
-  group.resolver.kind === 'formula' || group.resolver.kind === 'llm';
-
-/** 战法 id → 名称映射（用户看名称不看 id）。renderGroups 时刷新。 */
-let tacticNames = new Map();
-const loadTacticNames = async () => {
-  const r = await callApi('/api/tactics');
-  tacticNames = new Map(r.ok ? r.data.tactics.map((t) => [t.id, t.name]) : []);
-};
-const tacticLabel = (id) => tacticNames.get(id) ?? id;
-
-const resolverLabel = (resolver) => {
-  if (resolver.kind === 'manual') return `手动 · ${resolver.stockIds.length} 只`;
-  if (resolver.kind === 'holdings') return '持仓活视图';
-  if (resolver.kind === 'formula') return `战法 · ${tacticLabel(resolver.tacticId)}`;
-  return `LLM · 最多 ${resolver.maxMembers} 只`;
-};
-
-const ruleLabel = (rule) => {
-  if (rule.kind === 'price-change') return `日内涨跌 ≥ ${(rule.pct * 100).toFixed(1)}%`;
-  if (rule.kind === 'cost-threshold') {
-    const parts = [];
-    if (rule.stopLossPct) parts.push(`止损 ${(rule.stopLossPct * 100).toFixed(1)}%`);
-    if (rule.takeProfitPct) parts.push(`止盈 ${(rule.takeProfitPct * 100).toFixed(1)}%`);
-    return parts.join(' · ');
-  }
-  return `战法 ${tacticLabel(rule.tacticId)} ≥ ${rule.minScore}`;
-};
-
-const watchPlanCard = (view, refresh) => {
-  const pool = view.plan;
-  const [stateLabel, stateClass] = WATCH_PLAN_STATES[view.state] ?? [view.state, 'badge-neutral'];
-  const edit = el('button', 'btn btn-outline btn-sm', '编辑');
-  edit.addEventListener('click', () => void openPoolModal(pool, pool.groupId));
-  const toggle = el('button', 'btn btn-outline btn-sm', pool.enabled ? '停用' : '启用');
-  toggle.addEventListener(
-    'click',
-    () =>
-      void mutateEntity(
-        'update_stock_pool',
-        { id: pool.id, enabled: !pool.enabled },
-        refresh,
-        pool.enabled ? '盯盘方案已停用' : '盯盘方案已启用',
-      ),
-  );
-  const remove = el('button', 'btn btn-ghost btn-sm', '删除');
-  remove.addEventListener('click', () => {
-    if (!window.confirm(`删除盯盘方案「${pool.name}」？历史触发会保留。`)) return;
-    void mutateEntity('delete_stock_pool', { id: pool.id }, refresh, '盯盘方案已删除');
-  });
-  return el('article', `group-plan-card state-${view.state} ${pool.enabled ? '' : 'disabled'}`, [
-    el('div', 'pool-card-head', [
-      el('div', null, [el('h3', null, pool.name)]),
-      el('div', 'plan-badges', [
-        el(
-          'span',
-          `badge ${pool.enabled ? 'badge-pos' : 'badge-neutral'}`,
-          pool.enabled ? '运行中' : '已停用',
-        ),
-        el('span', `badge ${stateClass}`, stateLabel),
-      ]),
-    ]),
-    el('p', 'muted', pool.description ?? '未填写方案说明'),
-    el(
-      'div',
-      'rule-list',
-      pool.rules.map((rule) => el('span', 'rule-chip', ruleLabel(rule))),
-    ),
-    el('div', 'pool-foot', [
-      el('span', 'muted', `冷却 ${pool.cooldownMinutes} 分钟 · ${view.memberCount} 只成员`),
-      el('div', 'row-actions', [edit, toggle, remove]),
-    ]),
-  ]);
-};
-
-let selectedGroupId = '';
-
-const showGroupDetail = async (id, setStatus) => {
-  selectedGroupId = id;
-  document.querySelectorAll('.entity-row').forEach((node) => {
-    node.classList.toggle('selected', node.dataset.id === id);
-  });
-  const [result, plansResult, triggersResult] = await Promise.all([
-    callApi(`/api/groups/${encodeURIComponent(id)}`),
-    callApi(`/api/watch/plans?groupId=${encodeURIComponent(id)}`),
-    callApi('/api/watch/triggers?limit=100'),
-  ]);
-  const detail = $('#group-detail');
-  if (!result.ok) {
-    mount(detail, el('p', 'placeholder', `分组详情加载失败：${result.error.kind}`));
-    return;
-  }
-  const { group, members, latestRefreshAt, stale, changes } = result.data;
-  // 拉一次行情补齐现价 / 日内变化（非交易时段 / 缺行情时大多为 null，前端降级 `--`）
-  const quoteMap = new Map();
-  const stockIds = members.map((m) => m.stockId);
-  if (stockIds.length > 0) {
-    const qResp = await callApi('/api/tools/batch_quote/call', {
-      method: 'POST',
-      body: JSON.stringify({ input: { stockIds } }),
-    });
-    if (qResp.ok && Array.isArray(qResp.data?.quotes)) {
-      for (const q of qResp.data.quotes) quoteMap.set(q.stockId, q);
-    }
-  }
-  // 公式 / LLM 这两类是快照过来的，reason 写的是「战法 …命中 / LLM rationale」，值得看；
-  // 手动 / 持仓 这两类的 reason 是系统标签（manual 固定成员 / holdings 活视图），删掉。
-  const showReason = group.resolver.kind === 'formula' || group.resolver.kind === 'llm';
-  const heading = el('div', 'detail-heading', [
-    el('div', null, [
-      el('h2', null, group.name),
-      el('p', 'muted', group.description ?? '未填写说明'),
-    ]),
-    el(
-      'span',
-      `badge ${group.enabled ? 'badge-pos' : 'badge-neutral'}`,
-      group.enabled ? '启用' : '停用',
-    ),
-  ]);
-  const meta = el('div', 'detail-meta', [
-    el('span', null, `来源：${resolverLabel(group.resolver)}`),
-    el('span', null, `刷新：${group.refreshPolicy}`),
-    el(
-      'span',
-      stale ? 'text-neg' : 'muted',
-      stale ? '快照已过期' : `最近：${fmtDateTime(latestRefreshAt)}`,
-    ),
-  ]);
-  const actions = el('div', 'row-actions');
-  const edit = el('button', 'btn btn-outline btn-sm', '编辑');
-  edit.addEventListener('click', () => openGroupModal({ group }));
-  const toggle = el('button', 'btn btn-outline btn-sm', group.enabled ? '停用' : '启用');
-  toggle.addEventListener(
-    'click',
-    () =>
-      void mutateEntity(
-        'update_stock_group',
-        { id: group.id, enabled: !group.enabled },
-        () => renderGroups(setStatus),
-        group.enabled ? '分组已停用' : '分组已启用',
-      ),
-  );
-  actions.append(edit, toggle);
-  if (isDynamicGroup(group)) {
-    const refresh = el('button', 'btn btn-primary btn-sm', '刷新成员');
-    refresh.addEventListener('click', async () => {
-      refresh.disabled = true;
-      refresh.textContent = '刷新中…';
-      setStatus('正在刷新分组成员…');
-      const result = await callApi('/api/tools/refresh_stock_group/call', {
-        method: 'POST',
-        body: JSON.stringify({ input: { groupId: group.id } }),
-      });
-      refresh.disabled = false;
-      refresh.textContent = '刷新成员';
-      if (!result.ok) {
-        setStatus(`分组刷新失败：${toolErrorText(result.error)}`, true);
-        return;
-      }
-      // tool 对失败/空结果也返回 ok:true（保留旧快照不写空批），必须看 refreshed/failureReason
-      const data = result.data;
-      await renderGroups(setStatus);
-      if (data.refreshed === false) {
-        setStatus(`分组未刷新：${data.failureReason ?? '未知原因'}`, true);
-        return;
-      }
-      setStatus(
-        `分组刷新完成 · ${data.memberCount} 只成员（新进 ${data.entered.length} / 退出 ${data.exited.length}）`,
-      );
-    });
-    actions.append(refresh);
-  }
-  const remove = el('button', 'btn btn-ghost btn-sm', '删除');
-  remove.addEventListener('click', () => {
-    if (!window.confirm(`删除分组「${group.name}」？被盯盘方案引用时系统会拒绝。`)) return;
-    void mutateEntity(
-      'delete_stock_group',
-      { id: group.id },
-      () => {
-        selectedGroupId = '';
-        return renderGroups(setStatus);
-      },
-      '分组已删除',
-    );
-  });
-  actions.append(remove);
-  const addMemberBtn =
-    group.resolver.kind === 'manual' ? el('button', 'btn btn-primary btn-sm', '+ 添加成员') : null;
-  if (addMemberBtn !== null) {
-    addMemberBtn.addEventListener(
-      'click',
-      () => void openAddMemberModal(group, () => showGroupDetail(group.id, setStatus)),
-    );
-  }
-  const emptyMembersText =
-    group.resolver.kind === 'manual'
-      ? members.length === 0
-        ? '当前没有成员。点击下方「+ 添加成员」逐只加入，或回编辑批量调整。'
-        : null
-      : members.length === 0
-        ? '当前没有成员。动态分组可点击「刷新成员」。'
-        : null;
-  const membersBox =
-    emptyMembersText !== null
-      ? el('p', 'placeholder', emptyMembersText)
-      : el(
-          'div',
-          'member-list',
-          members.map((member) => {
-            const quote = quoteMap.get(member.stockId) ?? null;
-            const close = quote?.close;
-            const pct = memberChangePct(quote);
-            const pctText = pct === null ? '—' : `${pct > 0 ? '+' : ''}${(pct * 100).toFixed(2)}%`;
-            const pctClass = pct === null ? '' : pct > 0 ? 'text-pos' : pct < 0 ? 'text-neg' : '';
-            const line1 = el('div', 'member-line-1', [
-              stockMarketLink(member.stockId, [
-                el('strong', 'mono', member.stockId),
-                el('span', 'member-name', member.name),
-              ]),
-              el(
-                'span',
-                `member-price ${typeof close === 'number' ? '' : 'muted'}`,
-                typeof close === 'number' && Number.isFinite(close) ? close.toFixed(2) : '--',
-              ),
-              el('span', `member-pct ${pctClass}`, pctText),
-              typeof member.score === 'number'
-                ? el('span', 'member-score', `排序分 ${member.score.toFixed(1)}`)
-                : '',
-            ]);
-            const row = el('div', 'member-row', [line1]);
-            if (showReason && member.reason.length > 0) {
-              row.append(el('div', 'member-line-2 muted', member.reason));
-            }
-            if (showReason && Array.isArray(member.evidence) && member.evidence.length > 0) {
-              row.append(
-                el(
-                  'div',
-                  'member-evidence',
-                  member.evidence.map((item) => el('span', null, item)),
-                ),
-              );
-            }
-            if (showReason && member.dataAsOf !== undefined) {
-              row.append(
-                el('time', 'member-data-asof', `数据截至 ${fmtDateTime(member.dataAsOf)}`),
-              );
-            }
-            return row;
-          }),
-        );
-  const changesBox =
-    changes.entered.length === 0 && changes.exited.length === 0
-      ? null
-      : el('div', 'group-change-strip', [
-          ...changes.entered.map((stockId) => el('span', 'group-change-entered', `＋ ${stockId}`)),
-          ...changes.exited.map((stockId) => el('span', 'group-change-exited', `－ ${stockId}`)),
-        ]);
-  const addPlan = el('button', 'btn btn-primary btn-sm', '+ 新建盯盘方案');
-  addPlan.addEventListener('click', () => void openPoolModal(null, group.id));
-  const plans = plansResult.ok ? plansResult.data.plans : [];
-  const plansBox = !plansResult.ok
-    ? el('p', 'placeholder', `方案加载失败：${plansResult.error.kind}`)
-    : plans.length === 0
-      ? el(
-          'div',
-          'plan-empty',
-          el('p', 'placeholder', '这个分组还没有盯盘方案。添加规则后才会进入盘中评估。'),
-        )
-      : el(
-          'div',
-          'group-plan-grid',
-          plans.map((view) => watchPlanCard(view, () => showGroupDetail(group.id, setStatus))),
-        );
-  const planIds = new Set(plans.map(({ plan }) => plan.id));
-  const groupTriggers = triggersResult.ok
-    ? triggersResult.data.triggers.filter((trigger) => planIds.has(trigger.poolId))
-    : [];
-  const triggerBox = !triggersResult.ok
-    ? el('p', 'placeholder', `触发记录加载失败：${triggersResult.error.kind}`)
-    : groupTriggers.length === 0
-      ? el('p', 'placeholder', '暂无触发记录。')
-      : el(
-          'div',
-          'trigger-strip',
-          groupTriggers.slice(0, 6).map((t) => triggerCard(t, navigateTo)),
-        );
-  mount(detail, [
-    heading,
-    meta,
-    actions,
-    el('div', 'detail-section-heading', [
-      el('h3', 'detail-section-title', `盯盘方案 · ${plans.length}`),
-      addPlan,
-    ]),
-    plansBox,
-    el('div', 'detail-section-heading', [
-      el('h3', 'detail-section-title', `当前成员 · ${members.length}`),
-      addMemberBtn,
-    ]),
-    changesBox,
-    membersBox,
-    el('h3', 'detail-section-title', '最近触发'),
-    triggerBox,
-  ]);
-};
-
-const renderGroups = async (setStatus) => {
-  const [result, plansResult] = await Promise.all([
-    callApi('/api/groups'),
-    callApi('/api/watch/plans'),
-    loadTacticNames(),
-  ]);
-  const list = $('#groups-list');
-  if (!result.ok) {
-    mount(list, el('p', 'placeholder', `加载失败：${result.error.kind}`));
-    setStatus(`分组加载失败：${result.error.kind}`, true);
-    return;
-  }
-  const items = result.data.groups;
-  const planCounts = new Map();
-  if (plansResult.ok) {
-    for (const { plan } of plansResult.data.plans) {
-      planCounts.set(plan.groupId, (planCounts.get(plan.groupId) ?? 0) + 1);
-    }
-  }
-  $('#groups-meta').textContent = `${items.length} 个`;
-
-  // v0.7 策略预警：模板与自然语言草案
-  bindPlanCreator();
-  void renderPlanCreator();
-  mount(
-    list,
-    items.length === 0
-      ? el('p', 'placeholder', '暂无分组，先创建一个成员来源。')
-      : items.map((item) => {
-          const row = el('button', 'entity-row', [
-            el('span', 'entity-row-main', [
-              el('strong', null, item.group.name),
-              el('small', 'muted', resolverLabel(item.group.resolver)),
-              item.dataAsOf === undefined
-                ? ''
-                : el('small', item.stale ? 'text-neg' : 'muted', [
-                    item.stale ? '快照已过期 · ' : '',
-                    `数据截至 ${fmtDateTime(item.dataAsOf)}`,
-                  ]),
-            ]),
-            el('span', 'entity-stats', [
-              el('span', 'entity-count', `${item.memberCount ?? 0} 股`),
-              el('span', 'entity-plan-count', `${planCounts.get(item.group.id) ?? 0} 方案`),
-            ]),
-          ]);
-          row.type = 'button';
-          row.dataset.id = item.group.id;
-          row.addEventListener('click', () => void showGroupDetail(item.group.id, setStatus));
-          return row;
-        }),
-  );
-  const target =
-    items.find((item) => item.group.id === selectedGroupId)?.group.id ?? items[0]?.group.id;
-  if (target !== undefined) await showGroupDetail(target, setStatus);
-  else mount($('#group-detail'), el('p', 'placeholder', '创建分组后，可在这里查看成员。'));
-  setStatus(`分组已刷新 · ${items.length} 个`);
-};
-
-/** 盘中 10s 轮询用：只重刷选中分组的详情（含行情），不动列表与方案创建表单。 */
-const refreshSelectedGroupDetail = async (setStatus) => {
-  if (selectedGroupId === '') return;
-  await showGroupDetail(selectedGroupId, setStatus);
 };
 
 const runWatchOnce = async (setStatus) => {
   const button = $('#btn-dashboard-watch-run');
   if (button === null) return;
   button.disabled = true;
-  setStatus('正在执行一轮盯盘…');
+  setStatus('正在执行一轮 AlertPlan 评估…');
   const result = await callApi('/api/watch/run-once', {
     method: 'POST',
     body: JSON.stringify({ notify: false }),
   });
   button.disabled = false;
   if (!result.ok) {
-    setStatus(`盯盘失败：${result.error.message ?? result.error.kind}`, true);
+    setStatus(`AlertPlan 评估失败：${result.error.message ?? result.error.kind}`, true);
     return;
   }
   await renderDashboard(setStatus);
-  setStatus(`盯盘完成 · ${result.data.triggers.length} 条触发`);
+  setStatus(`AlertPlan 评估完成 · ${result.data.triggers.length} 条触发`);
 };
-
-/* ============ tactics ============ */
-
-const renderTacticsList = async (setStatus) => {
-  const r = await callApi('/api/tactics');
-  const list = $('#tactics-list');
-  await renderTacticConsensus();
-  if (!r.ok) {
-    mount(list, el('p', 'placeholder', `加载失败：${r.error.kind}`));
-    setStatus(`加载失败：${r.error.kind}`, true);
-    return;
-  }
-  if (r.data.tactics.length === 0) {
-    mount(list, el('p', 'placeholder', '（暂无战法）'));
-    return;
-  }
-  const ul = el('ul');
-  ul.style.listStyle = 'none';
-  ul.style.padding = '0';
-  ul.style.margin = '0';
-  for (const t of r.data.tactics) {
-    const li = el(
-      'li',
-      null,
-      el('div', null, [
-        el('strong', null, t.name),
-        el('span', 'badge', ` ${t.tag} `),
-        el('span', 'badge', ` ${t.direction} `),
-        el('span', 'badge', ` ${t.source} `),
-        el('p', 'muted', t.description),
-      ]),
-    );
-    li.style.padding = 'var(--space-3) 0';
-    li.style.borderBottom = '1px solid var(--line)';
-    ul.append(li);
-  }
-  mount(list, ul);
-  setStatus(`战法列表已刷新 · ${r.data.tactics.length} 个`);
-};
-
-const renderTacticConsensus = async () => {
-  const box = $('#tactic-consensus');
-  if (box === null) return;
-  const result = await callApi('/api/tactics/consensus?minGroups=2&topN=20');
-  if (!result.ok) {
-    mount(
-      box,
-      el(
-        'p',
-        'placeholder',
-        '暂无可比较的同日公式分组；至少刷新两个使用完整沪深 A 股覆盖的公式分组。',
-      ),
-    );
-    return;
-  }
-  const { matches, groups, excludedGroups, marketDate, dataAsOf } = result.data;
-  const meta = el('div', 'consensus-meta', [
-    el('strong', null, marketDate),
-    el('span', null, `${groups.length} 个有效分组`),
-    el('span', null, `数据截至 ${fmtDateTime(dataAsOf)}`),
-  ]);
-  const excluded =
-    excludedGroups.length === 0
-      ? null
-      : el(
-          'div',
-          'consensus-excluded',
-          excludedGroups.map((group) => el('span', null, `${group.groupId} · ${group.reason}`)),
-        );
-  if (matches.length === 0) {
-    mount(box, [
-      meta,
-      excluded,
-      el('p', 'placeholder', '有效分组中没有达到最小支持分组数的股票。'),
-    ]);
-    return;
-  }
-  const cards = matches.map((match, index) =>
-    el('article', 'consensus-card', [
-      el('span', 'consensus-rank', String(index + 1).padStart(2, '0')),
-      el('div', 'consensus-stock', [
-        stockMarketLink(match.stockId, el('strong', 'mono', match.stockId)),
-        el('span', 'consensus-score', `排序分 ${match.rankScore.toFixed(1)}`),
-      ]),
-      el(
-        'div',
-        'consensus-signals',
-        match.supportingSignals.map((signal) =>
-          el('span', 'signal-support', `＋ ${signal.tacticName} ${signal.score.toFixed(1)}`),
-        ),
-      ),
-      match.opposingSignals.length === 0
-        ? ''
-        : el(
-            'div',
-            'consensus-signals',
-            match.opposingSignals.map((signal) =>
-              el('span', 'signal-oppose', `冲突 · ${signal.tacticName} ${signal.score.toFixed(1)}`),
-            ),
-          ),
-      el('span', 'consensus-groups', match.groupIds.join(' · ')),
-    ]),
-  );
-  mount(box, [meta, excluded, el('div', 'consensus-grid', cards)]);
-};
-
-const runTacticScan = async (setStatus) => {
-  const btn = $('#btn-tactic-scan');
-  if (btn !== null) btn.disabled = true;
-  setStatus('扫描中…（list_tactics → run_tactic × N → score_signals）');
-  const r = await callApi('/api/tactics/scan?topN=10&scope=holdings');
-  const box = $('#tactic-signals');
-  if (!r.ok) {
-    mount(box, el('p', 'placeholder', `扫描失败：${r.error.kind}`));
-    setStatus(`扫描失败：${r.error.kind}`, true);
-    if (btn !== null) btn.disabled = false;
-    return;
-  }
-  const d = r.data;
-  const head = el(
-    'p',
-    'muted',
-    `战法 ${d.totalTactics} · 评估 ${d.evaluatedStocks ?? 0} 股 · 命中 ${d.ranked.length}`,
-  );
-  if (d.ranked.length === 0) {
-    mount(box, [head, el('p', 'placeholder', '（未命中任何战法信号）')]);
-    setStatus('扫描完成（无信号）');
-    if (btn !== null) btn.disabled = false;
-    return;
-  }
-  const ul = el('ul');
-  ul.style.listStyle = 'none';
-  ul.style.padding = '0';
-  for (const s of d.ranked) {
-    const code = String(s.stockId ?? '').split('.')[0] || s.stockId;
-    const li = el(
-      'li',
-      null,
-      el('div', null, [
-        el('strong', null, `${code} · ${s.tacticName}`),
-        el('p', null, `方向 ${s.direction} · 评分 ${(s.llmScore ?? 0).toFixed(1)}`),
-        el('p', 'muted', s.rationale ?? ''),
-      ]),
-    );
-    li.style.padding = 'var(--space-3) 0';
-    li.style.borderBottom = '1px solid var(--line)';
-    ul.append(li);
-  }
-  mount(box, [head, ul]);
-  setStatus(`扫描完成 · top ${d.ranked.length}`);
-  if (btn !== null) btn.disabled = false;
-};
-
 /* ============ advice ============ */
 
 const renderAdviceList = async (setStatus) => {
@@ -1941,158 +1405,6 @@ const renderSettingsAccount = async () => {
   );
 };
 
-/* ============ 盯盘方案模板与自然语言草案（v0.7 §10） ============ */
-
-let _planTemplatesCache = null;
-let _planTemplateGroups = null;
-
-const fetchPlanTemplates = async () => {
-  if (_planTemplatesCache !== null) return _planTemplatesCache;
-  const r = await callApi('/api/watch/templates');
-  if (!r.ok) {
-    _planTemplatesCache = [];
-    return _planTemplatesCache;
-  }
-  _planTemplatesCache = r.data.templates ?? [];
-  return _planTemplatesCache;
-};
-
-const fetchGroupOptions = async () => {
-  if (_planTemplateGroups !== null) return _planTemplateGroups;
-  const r = await callApi('/api/groups');
-  if (!r.ok) {
-    _planTemplateGroups = [];
-    return _planTemplateGroups;
-  }
-  _planTemplateGroups = (r.data.groups ?? []).map((row) => row.group) ?? [];
-  return _planTemplateGroups;
-};
-
-/** 把模板 / 草案按真实控件 id 填入创建表单（表单只支持 3 种规则类型）。 */
-const fillPoolFormFromDraft = (draft, suggestedName) => {
-  const setVal = (id, value) => {
-    const node = document.getElementById(id);
-    if (node !== null && value !== undefined && value !== null) node.value = String(value);
-  };
-  setVal('pool-name', draft.name ?? suggestedName);
-  setVal('pool-description', draft.description ?? '');
-  setVal('pool-cooldown', draft.cooldownMinutes ?? 30);
-  const rule = Array.isArray(draft.rules) ? draft.rules[0] : null;
-  const kind = document.getElementById('pool-rule-kind');
-  if (rule === null || kind === null) return;
-  if (rule.kind === 'price-change' || rule.kind === 'cost-threshold' || rule.kind === 'tactic') {
-    kind.value = rule.kind;
-    kind.dispatchEvent(new Event('change'));
-    if (rule.kind === 'price-change') {
-      setVal('pool-price-pct', (rule.pct ?? 0.05) * 100);
-    } else if (rule.kind === 'cost-threshold') {
-      setVal('pool-stop-loss', (rule.stopLossPct ?? 0.08) * 100);
-      setVal('pool-take-profit', (rule.takeProfitPct ?? 0.15) * 100);
-    } else {
-      setVal('pool-tactic-id', rule.tacticId);
-      setVal('pool-min-score', rule.minScore ?? 60);
-    }
-  }
-  // price-level / composite 等模板规则超出表单支持范围：只填名称与说明，规则请手动选择。
-};
-
-const openPlanFromTemplate = async (template) => {
-  const groups = await fetchGroupOptions();
-  const firstGroup = groups[0]?.id ?? '';
-  const groupId = template.draft.groupId ?? firstGroup;
-  await openPoolModal(null, groupId);
-  requestAnimationFrame(() => fillPoolFormFromDraft({ ...template.draft, groupId }, template.name));
-};
-
-const renderPlanCreator = async () => {
-  const container = $('#plan-templates');
-  if (container === null) return;
-  const templates = await fetchPlanTemplates();
-  if (templates.length === 0) {
-    mount(container, el('p', 'placeholder', '模板加载失败，去重新刷新页面。'));
-    return;
-  }
-  const cards = templates.map((tpl) => {
-    const card = el('article', 'plan-template-card', [
-      el('div', 'template-header', [
-        el('span', 'template-icon', tpl.icon ?? '📌'),
-        el('strong', null, tpl.name),
-      ]),
-      el('p', 'muted', tpl.description),
-    ]);
-    const actions = el('div', 'template-actions');
-    const useBtn = el('button', 'btn btn-primary btn-sm', '使用此模板');
-    useBtn.type = 'button';
-    useBtn.addEventListener('click', () => {
-      void openPlanFromTemplate(tpl);
-    });
-    const detailBtn = el('button', 'btn btn-outline btn-sm', '详情');
-    detailBtn.type = 'button';
-    detailBtn.addEventListener('click', () => openTemplateDetailModal(tpl));
-    actions.append(detailBtn, useBtn);
-    card.append(actions);
-    return card;
-  });
-  mount(container, el('div', 'template-grid-inner', cards));
-};
-
-/** 动态弹窗：复用 body > .modal + .modal-content 形态。 */
-const openDynamicModal = (contentNode) => {
-  const modal = el('div', 'modal', [el('div', 'modal-content', [contentNode])]);
-  const close = () => modal.remove();
-  modal.addEventListener('click', (event) => {
-    if (event.target === modal) close();
-  });
-  document.body.append(modal);
-  return { modal, close };
-};
-
-/** 模板详情弹窗：JSON 不直接显示在卡片上，弹窗里可查看 + 编辑后使用。 */
-const openTemplateDetailModal = (tpl) => {
-  const err = el('p', 'modal-error');
-  const editor = el('textarea', 'draft-json-editor', JSON.stringify(tpl.draft, null, 2));
-  const use = el('button', 'btn btn-primary btn-sm', '使用此模板');
-  use.type = 'button';
-  const cancel = el('button', 'btn btn-outline btn-sm', '取消');
-  cancel.type = 'button';
-  const { close } = openDynamicModal(
-    el('div', null, [
-      el('h2', null, `模板详情：${tpl.name}`),
-      el('p', 'muted', tpl.description ?? ''),
-      el('p', 'hint', '规则配置如下，可直接修改后再使用。'),
-      editor,
-      err,
-      el('div', 'modal-actions', [cancel, use]),
-    ]),
-  );
-  cancel.addEventListener('click', close);
-  use.addEventListener('click', () => {
-    let draft;
-    try {
-      draft = JSON.parse(editor.value);
-    } catch {
-      err.textContent = 'JSON 格式有误，请检查后再试。';
-      return;
-    }
-    if (draft === null || typeof draft !== 'object' || !Array.isArray(draft.rules)) {
-      err.textContent = '配置缺少 rules 数组，无法使用。';
-      return;
-    }
-    close();
-    void openPoolModal(null, draft.groupId ?? '').then(() => {
-      requestAnimationFrame(() => fillPoolFormFromDraft(draft, draft.name ?? tpl.name));
-    });
-  });
-};
-
-const bindPlanCreator = () => {
-  const newBtn = $('#btn-plan-new');
-  if (newBtn === null) return;
-  if (newBtn.dataset.bound === '1') return;
-  newBtn.dataset.bound = '1';
-  newBtn.addEventListener('click', () => void openPoolModal());
-};
-
 /* ============================================================
  * ruo 迁移：研究页 + 数据健康 + workflow 运行记录
  * （docs/ddd/ruo-feature-migration-detailed-design.md §8）
@@ -2130,7 +1442,7 @@ const renderDataHealth = async (setStatus) => {
     return;
   }
   const data =
-    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, groupStale: Array<{groupId: string, name: string}>}} */ (
+    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
       r.data
     );
   const providerEls = data.providers.map((p) => {
@@ -2149,14 +1461,16 @@ const renderDataHealth = async (setStatus) => {
       ? 'watch 从未运行'
       : `watch ${wh.state}（今日触发 ${wh.triggered ?? 0}，失败 ${wh.notifyFailed ?? 0}）`;
   const stale =
-    data.groupStale.length === 0
+    data.watchlistStale.length === 0
       ? null
       : el('div', 'data-health-stale', [
-          el('h3', null, 'stale 分组'),
+          el('h3', null, 'stale Watchlist'),
           el(
             'ul',
             null,
-            data.groupStale.map((g) => el('li', null, `${g.name}（${g.groupId}）`)),
+            data.watchlistStale.map((item) =>
+              el('li', null, `${item.name}（${item.watchlistId}）`),
+            ),
           ),
         ]);
   mount(
@@ -2314,7 +1628,7 @@ const loadResearch = async (stockId, code, name) => {
     return;
   }
   const data =
-    /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
+    /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>, strategySignals: Array<Record<string, unknown>>, watchlistMemberships: Array<{watchlist: {name: string}, member: {stage: string, priority: string}, sources: Array<Record<string, unknown>>}>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
       r.data
     );
   summaryMeta.textContent = `${data.summary.noteCount} 笔记 · ${data.summary.eventCount} 事件`;
@@ -2352,7 +1666,41 @@ const loadResearch = async (stockId, code, name) => {
           }),
         ),
   ]);
-  mount(summaryEl, [thesisBlock, upcomingBlock]);
+  const strategyBlock = el('div', 'card-summary-events', [
+    el('h3', null, 'StrategySignal'),
+    data.summary.strategySignals.length === 0
+      ? el('p', 'muted', '暂无 StrategySignal')
+      : el(
+          'ul',
+          null,
+          data.summary.strategySignals
+            .slice(0, 8)
+            .map((signal) =>
+              el(
+                'li',
+                null,
+                `${signal.strategyId} · ${signal.ruleId} · ${signal.direction} · score ${signal.score} · data ${new Date(String(signal.ts)).toLocaleString('zh-CN', { hour12: false })} · ${(signal.evidence ?? []).join('；')}`,
+              ),
+            ),
+        ),
+  ]);
+  const watchlistBlock = el('div', 'card-summary-events', [
+    el('h3', null, 'Watchlist 来源'),
+    data.summary.watchlistMemberships.length === 0
+      ? el('p', 'muted', '不在任何 Watchlist')
+      : el(
+          'ul',
+          null,
+          data.summary.watchlistMemberships.map(({ watchlist, member, sources }) =>
+            el(
+              'li',
+              null,
+              `${watchlist.name} · ${member.stage}/${member.priority} · ${sources.map((source) => `${source.kind}:${source.status}`).join('、')}`,
+            ),
+          ),
+        ),
+  ]);
+  mount(summaryEl, [thesisBlock, upcomingBlock, strategyBlock, watchlistBlock]);
 
   // 时间线
   const TYPES = ['note', 'event', 'trigger', 'advice'];
@@ -2514,29 +1862,24 @@ const openEditNoteModal = (stockId, thesis, code, name) => {
 
 export {
   analyzeAllHoldings,
-  bindPlanCreator,
   bindSettingsActions,
   boardStats,
   cancelAnalyzeAllHoldings,
   errorKindLabel,
   filterAdvices,
   memberChangePct,
-  refreshSelectedGroupDetail,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
-  renderGroups,
   renderHoldings,
-  renderPlanCreator,
   renderReports,
   renderResearch,
   renderReview,
   renderSettings,
   renderSettingsAccount,
-  renderTacticsList,
   renderWorkflowRuns,
   routeStockId,
-  runTacticScan,
   runWatchOnce,
   sortBoardItems,
+  watchRunSummaryText,
 };

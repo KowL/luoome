@@ -6,8 +6,7 @@
 > `StockUniverse` 本地同步、搜索与全市场扫描的数据关系
 > 关联文档：[领域语言](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、
 > [个股行情查看详细设计](./stock-market-view-detailed-design.md)、
-> [盘中盯盘设计](./intraday-watch-design.md)、
-> [股票分组设计](./stock-group-design.md)、
+> [Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、
 > [Tushare 行情适配器设计](./tushare-market-adapter-design.md)
 
 ## 1. 背景

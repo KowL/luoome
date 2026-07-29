@@ -7,7 +7,24 @@ import {
   memberChangePct,
   routeStockId,
   sortBoardItems,
+  watchRunSummaryText,
 } from './pages.js';
+
+describe('盯盘最近一轮摘要', () => {
+  it('读取 WatchRunSchema 的 evaluatedPools 字段', () => {
+    const latest = {
+      evaluatedPools: 3,
+      evaluatedStocks: 12,
+      triggered: 2,
+      notified: 1,
+    };
+    expect(watchRunSummaryText(latest)).toBe('评估 3 个方案 / 12 只股票 · 触发 2 · 通知 1');
+  });
+
+  it('尚无运行记录时给占位文案', () => {
+    expect(watchRunSummaryText(null)).toBe('跑一轮后显示评估指标');
+  });
+});
 
 describe('成员涨跌幅（昨收基准）', () => {
   it('有昨收：(close − prevClose) / prevClose', () => {
@@ -68,7 +85,7 @@ describe('看板纯函数', () => {
     quote: null,
     changePct,
     holding,
-    groups: [],
+    watchlists: [],
     todayTrigger: null,
   });
 
