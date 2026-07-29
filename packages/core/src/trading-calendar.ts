@@ -1,5 +1,5 @@
 /**
- * A 股节假日历（纯计算部分，v0.6 起，docs/ddd/intraday-watch-design.md "已知边界"）。
+ * A 股节假日历（纯计算部分，v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md "已知边界"）。
  *
  * 原位于 packages/cli/src/holidays.ts；个股行情查看 Phase 1 起下沉到 core，
  * 供 tools（get_stock_market_view 的 marketSession）与 cli（watch 时段判断）复用，

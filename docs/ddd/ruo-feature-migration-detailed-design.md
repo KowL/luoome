@@ -3,7 +3,7 @@
 > 状态：Phase 1 已实现（2026-07-25）
 > 日期：2026-07-24
 > 输入：[ruo 能力迁移产品设计文档（PRD）](../prd/ruo-feature-migration-product-design.md)
-> 关联：[策略预警详细设计](./strategy-alert-detailed-design.md)（WatchTrigger / 送达状态共用演进）
+> 关联：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)
 > 范围：Phase 1A（研究档案）、1B（公司事件）、1C（可信度与运行状态）。Phase 2/3 只定义接口预留。
 
 ## 1. 设计目标与约束

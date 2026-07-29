@@ -85,23 +85,6 @@ setup.mockInput.pressEscape();
 await sleep(200);
 await setup.waitFor(() => !frame().includes('总条数'), { maxPasses: 50 });
 
-// 6) [t] 战法扫描弹层（list_tactics → run_tactic × N → score_signals）。
-setup.mockInput.pressKey('t');
-await setup.waitFor(
-  () => frame().includes('战法') && (frame().includes('精排 top') || frame().includes('未命中')),
-  { maxPasses: 200 },
-);
-const tac = frame();
-assert(tac.includes('战法扫描'), '[t] 弹层标题应为「战法扫描」');
-assert(
-  tac.includes('精排 top') || tac.includes('未命中'),
-  '[t] 弹层应包含「精排 top」或「未命中」分支',
-);
-process.stderr.write('smoke: [t] 战法扫描弹层 OK\n');
-setup.mockInput.pressEscape();
-await sleep(200);
-await setup.waitFor(() => !frame().includes('战法扫描'), { maxPasses: 50 });
-
 // 7) [o] outcome 复盘弹层。
 setup.mockInput.pressKey('o');
 await setup.waitFor(

@@ -5,10 +5,10 @@
 > 日期：2026-07-29
 >
 > 产品输入：[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)、
-> [策略预警产品文档](../prd/strategy-alert-product.md)
+> [统一 Watchlist](../prd/watchlist.md)
 >
 > 技术依赖：[行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)、
-> [股票分组设计](./stock-group-design.md)、
+> [Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、
 > [ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md)、
 > [连板天梯详细设计](./limit-up-ladder-detailed-design.md)
 >

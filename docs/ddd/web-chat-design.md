@@ -1,7 +1,7 @@
 # Web 对话助手设计：`/api/chat` + draft-and-confirm
 
 > 状态：**已实现**（2026-07-26 迁移为 AI SDK `ToolLoopAgent` + UI Message Stream，并加入项目数据库持久化会话；保留 draft 确认卡片）。本文档是对话助手设计的唯一事实来源。
-> 关联：[stock-group-design.md](./stock-group-design.md)（对话创建分组依赖其实现；聊天端点与交互模式可并行开发，draft schema = `create_stock_group` 的 input schema）。
+> 关联：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)（聊天只生成目标模型 draft）。
 
 ## 目标
 

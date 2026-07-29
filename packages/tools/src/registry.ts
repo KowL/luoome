@@ -1,12 +1,17 @@
 import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
-import { addGroupMemberTool } from './tools/add-group-member.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addResearchNoteTool } from './tools/add-research-note.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
 import { agentRunTool } from './tools/agent-run.js';
+import {
+  createAlertPlanTool,
+  deleteAlertPlanTool,
+  listAlertPlansTool,
+  updateAlertPlanTool,
+} from './tools/alert-plan.js';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
@@ -21,12 +26,8 @@ import {
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
-import { createStockGroupTool } from './tools/create-stock-group.js';
-import { createStockPoolTool } from './tools/create-stock-pool.js';
 import { deleteResearchNoteTool } from './tools/delete-research-note.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
-import { deleteStockGroupTool } from './tools/delete-stock-group.js';
-import { deleteStockPoolTool } from './tools/delete-stock-pool.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
@@ -38,12 +39,8 @@ import { getHoldingTool } from './tools/get-holding.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
-import { getSignalObservationStatsTool } from './tools/get-signal-observation-stats.js';
-import { getStockGroupTool } from './tools/get-stock-group.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
-import { getTacticTool } from './tools/get-tactic.js';
-import { getTacticConsensusTool } from './tools/get-tactic-consensus.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listAccountsTool } from './tools/list-accounts.js';
@@ -51,40 +48,48 @@ import { listHoldingsTool } from './tools/list-holdings.js';
 import { listReportsTool } from './tools/list-reports.js';
 import { listResearchNotesTool } from './tools/list-research-notes.js';
 import { listStockEventsTool } from './tools/list-stock-events.js';
-import { listStockGroupsTool } from './tools/list-stock-groups.js';
-import { listStockPoolsTool } from './tools/list-stock-pools.js';
-import { listTacticsTool } from './tools/list-tactics.js';
 import { listTradesTool } from './tools/list-trades.js';
-import { listWatchPlansTool } from './tools/list-watch-plans.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
-import { recordWatchRunTool } from './tools/record-watch-run.js';
-import { recordWorkflowRunTool } from './tools/record-workflow-run.js';
-import { refreshSignalObservationsTool } from './tools/refresh-signal-observations.js';
-import { refreshStockGroupTool } from './tools/refresh-stock-group.js';
 import { renderReportTool } from './tools/render-report.js';
-import { resolveLlmGroupTool } from './tools/resolve-llm-group.js';
-import { runTacticTool } from './tools/run-tactic.js';
-import { saveReportTool } from './tools/save-report.js';
-import { saveWatchTriggerTool } from './tools/save-watch-trigger.js';
-import { scoreSignalsTool } from './tools/score-signals.js';
+import { runStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
-import { setReportDeliveryStatusTool } from './tools/set-report-delivery-status.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
+import {
+  createStrategyTool,
+  createStrategyVersionTool,
+  getStrategyTool,
+  listStrategiesTool,
+  pauseStrategyTool,
+  publishStrategyVersionTool,
+  validateStrategyVersionTool,
+} from './tools/strategy-lifecycle.js';
+import {
+  getStrategyRunTool,
+  listStrategyRunsTool,
+  strategySignalsByStockTool,
+} from './tools/strategy-query.js';
 import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
 import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
-import { tacticSignalsByStockTool } from './tools/tactic-signals-by-stock.js';
-import { tacticSignalsByTacticTool } from './tools/tactic-signals-by-tactic.js';
 import { updateHoldingTool } from './tools/update-holding.js';
 import { updateResearchNoteTool } from './tools/update-research-note.js';
 import { updateStockEventTool } from './tools/update-stock-event.js';
-import { updateStockGroupTool } from './tools/update-stock-group.js';
-import { updateStockPoolTool } from './tools/update-stock-pool.js';
+import {
+  addWatchlistMemberTool,
+  archiveWatchlistMemberTool,
+  archiveWatchlistTool,
+  createWatchlistTool,
+  getWatchlistTool,
+  listWatchlistChangesTool,
+  listWatchlistsTool,
+  updateWatchlistMemberTool,
+  updateWatchlistTool,
+} from './tools/watchlist.js';
 
 /** MCP tools/list 的单个工具描述（inputSchema 为 JSON Schema draft 2020-12）。 */
 export interface McpToolDescriptor {
@@ -216,15 +221,32 @@ export const toolRegistry: Registry = createRegistry([
   getPreviousClosesTool,
   searchStocksTool,
   computeIndicatorsTool,
-  // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
-  listTacticsTool,
-  getTacticTool,
-  runTacticTool,
-  scoreSignalsTool,
-  tacticSignalsByStockTool,
-  tacticSignalsByTacticTool,
+  // Strategy / Watchlist / AlertPlan 是唯一公开研究与盯盘模型。
+  listStrategiesTool,
+  getStrategyTool,
+  createStrategyTool,
+  createStrategyVersionTool,
+  validateStrategyVersionTool,
+  publishStrategyVersionTool,
+  pauseStrategyTool,
+  runStrategyTool,
+  listStrategyRunsTool,
+  getStrategyRunTool,
+  strategySignalsByStockTool,
+  listWatchlistsTool,
+  getWatchlistTool,
+  createWatchlistTool,
+  updateWatchlistTool,
+  archiveWatchlistTool,
+  addWatchlistMemberTool,
+  updateWatchlistMemberTool,
+  archiveWatchlistMemberTool,
+  listWatchlistChangesTool,
+  listAlertPlansTool,
+  createAlertPlanTool,
+  updateAlertPlanTool,
+  deleteAlertPlanTool,
   recordAdviceOutcomeTool,
-  recordWatchRunTool,
   sendNotificationTool,
   marketOutlookTool,
   // Phase 1：连板天梯（docs/ddd/limit-up-ladder-detailed-design.md §7）
@@ -235,26 +257,7 @@ export const toolRegistry: Registry = createRegistry([
   addHoldingTool,
   updateHoldingTool,
   closeHoldingTool,
-  // v0.6 新增：股票池 CRUD（write）+ 触发落库（write，workflow 内部）+ 列池（read）
-  listStockPoolsTool,
-  listWatchPlansTool,
   listWatchTriggersTool,
-  createStockPoolTool,
-  updateStockPoolTool,
-  deleteStockPoolTool,
-  saveWatchTriggerTool,
-  // 分组化起（docs/ddd/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
-  listStockGroupsTool,
-  getStockGroupTool,
-  getTacticConsensusTool,
-  getSignalObservationStatsTool,
-  createStockGroupTool,
-  updateStockGroupTool,
-  deleteStockGroupTool,
-  addGroupMemberTool,
-  refreshStockGroupTool,
-  refreshSignalObservationsTool,
-  resolveLlmGroupTool,
   // v0.7 策略预警：触发反馈（write）
   setWatchTriggerFeedbackTool,
   // ruo 迁移 Phase 1：研究档案 + 公司事件 + 运行状态（docs/ddd/ruo-feature-migration-detailed-design.md §7）
@@ -271,11 +274,8 @@ export const toolRegistry: Registry = createRegistry([
   getMarketDataStatusTool,
   getAShareSentimentTool,
   listWorkflowRunsTool,
-  recordWorkflowRunTool,
   getReportTool,
   listReportsTool,
-  saveReportTool,
-  setReportDeliveryStatusTool,
   renderReportTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,

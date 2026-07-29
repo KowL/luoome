@@ -98,7 +98,7 @@ const collectCandidates = async (ctx: ToolContext): Promise<LlmCandidate[]> => {
 };
 
 /**
- * LLM 分组解析（分组化起，advice；workflow 内部通道，docs/ddd/stock-group-design.md §4/§6）。
+ * LLM 分组解析（分组化起，advice；workflow 内部通道，docs/ddd/strategy-watchlist-unification-detailed-design.md §4/§6）。
  *
  * 链路：prompt + 候选上下文（全市场快照前 200 条，降级本地股票列表 + 当日行情快照）→
  * LLM generate（zod schema-constrained）→ 以候选全集逐条校验（幻觉 id 丢弃，

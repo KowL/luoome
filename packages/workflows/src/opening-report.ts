@@ -306,38 +306,38 @@ export const portfolioSection = async (
   };
 };
 
-const plansSection = async (
+const alertPlansSection = async (
   now: Date,
   ctx: WorkflowContext,
 ): Promise<{ section: ReportSection; evidence: ReportEvidence[] }> => {
-  const result = await ctx.tools.list_watch_plans.execute({ enabledOnly: true });
+  const result = await ctx.tools.list_alert_plans.execute({ enabledOnly: true });
   if (!result.ok) {
     return unavailableSection(
-      'watch-plans',
-      '盯盘方案',
+      'alert-plans',
+      'AlertPlan',
       true,
       now,
-      'watch-plans',
+      'alert-plans',
       result.error.kind,
     );
   }
-  const evidence = [localEvidence('watch-plans:0', 'watch-plans', now, 'local/watch-plans')];
+  const evidence = [localEvidence('alert-plans:0', 'alert-plans', now, 'local/alert-plans')];
   return {
     evidence,
     section: {
-      key: 'watch-plans',
-      title: '盯盘方案',
+      key: 'alert-plans',
+      title: 'AlertPlan',
       required: true,
       status: 'complete',
       dataAsOf: now,
       blocks: [
         {
           kind: 'list',
-          items: result.data.plans.map((view) => ({
-            title: view.plan.name,
-            detail: `${view.state} · ${view.memberCount} 个成员`,
-            entityKind: 'watch-plan' as const,
-            entityId: view.plan.id,
+          items: result.data.plans.map((plan) => ({
+            title: plan.name,
+            detail: `${plan.enabled ? 'enabled' : 'disabled'} · ${plan.rules.length} rules`,
+            entityKind: 'alert-plan' as const,
+            entityId: plan.id,
           })),
         },
       ],
@@ -347,41 +347,40 @@ const plansSection = async (
   };
 };
 
-const groupsSection = async (
+const watchlistsSection = async (
   now: Date,
   ctx: WorkflowContext,
 ): Promise<{ section: ReportSection; evidence: ReportEvidence[] }> => {
-  const result = await ctx.tools.list_stock_groups.execute({
-    enabledOnly: true,
-    includeMemberCount: true,
-  });
+  const result = await ctx.tools.list_watchlists.execute({ enabledOnly: true });
   if (!result.ok) {
     return unavailableSection(
-      'group-health',
-      '分组健康',
+      'watchlist-health',
+      'Watchlist 健康',
       true,
       now,
-      'stock-groups',
+      'watchlists',
       result.error.kind,
     );
   }
-  const evidence = [localEvidence('group-health:0', 'group-health', now, 'local/stock-groups')];
+  const evidence = [
+    localEvidence('watchlist-health:0', 'watchlist-health', now, 'local/watchlists'),
+  ];
   return {
     evidence,
     section: {
-      key: 'group-health',
-      title: '分组健康',
+      key: 'watchlist-health',
+      title: 'Watchlist 健康',
       required: true,
       status: 'complete',
       dataAsOf: now,
       blocks: [
         {
           kind: 'list',
-          items: result.data.groups.map(({ group, memberCount }) => ({
-            title: group.name,
-            detail: `${group.resolver.kind} · ${memberCount ?? 0} 个成员`,
-            entityKind: 'stock-group' as const,
-            entityId: group.id,
+          items: result.data.items.map(({ watchlist, memberCount, sourceHealth }) => ({
+            title: watchlist.name,
+            detail: `${watchlist.kind} · ${memberCount} members · ${sourceHealth.stale} stale`,
+            entityKind: 'watchlist' as const,
+            entityId: watchlist.id,
           })),
         },
       ],
@@ -475,13 +474,13 @@ const runOpeningReport = async (
               'ashare-sentiment',
               sentimentResult.error.kind,
             );
-        const [events, portfolio, plans, groups] = await Promise.all([
+        const [events, portfolio, plans, watchlists] = await Promise.all([
           eventsSection(date, generatedAt, ctx),
           portfolioSection(input.scope, generatedAt, ctx),
-          plansSection(generatedAt, ctx),
-          groupsSection(generatedAt, ctx),
+          alertPlansSection(generatedAt, ctx),
+          watchlistsSection(generatedAt, ctx),
         ]);
-        return [market, events, portfolio, plans, groups, researchSection(generatedAt)];
+        return [market, events, portfolio, plans, watchlists, researchSection(generatedAt)];
       },
     },
     ctx,

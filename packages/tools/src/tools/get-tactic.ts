@@ -9,6 +9,8 @@ export const GetTacticInput = z.object({
 
 export const GetTacticOutput = z.object({
   tactic: TacticSchema,
+  deprecated: z.literal(true),
+  replacement: z.literal('get_strategy'),
 });
 
 /**
@@ -23,6 +25,10 @@ export const getTacticTool = defineTool({
   handler: async (input, ctx) => {
     const t = await ctx.repos.tactic.findById(input.tacticId);
     if (t === null) return errNotFound('Tactic', input.tacticId);
-    return { tactic: TacticSchema.parse(t) };
+    return {
+      tactic: TacticSchema.parse(t),
+      deprecated: true,
+      replacement: 'get_strategy',
+    };
   },
 });

@@ -61,8 +61,9 @@ const ListBlockSchema = z.object({
         entityKind: z
           .enum([
             'stock',
-            'stock-group',
-            'watch-plan',
+            'strategy',
+            'watchlist',
+            'alert-plan',
             'watch-trigger',
             'stock-event',
             'research-note',

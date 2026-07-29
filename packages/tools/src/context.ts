@@ -9,7 +9,7 @@ import type {
   StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
-import { BUILTIN_TACTICS } from '@luoome/core';
+import { BUILTIN_TACTICS, mapLegacyTacticToStrategy } from '@luoome/core';
 
 export interface BuildContextInput {
   readonly repos: RepositoryRegistry;
@@ -30,12 +30,28 @@ export interface BuildContextInput {
   readonly ashareSentiment?: AShareSentimentManagerLike;
 }
 
-/** 幂等装载领域内置战法；各 surface 在开放 tool 前统一调用。 */
-export const ensureBuiltinTactics = async (
-  repos: Pick<RepositoryRegistry, 'tactic'>,
+/** 幂等装载内置 Strategy；不再向只读 legacy Tactic 表写入。 */
+export const ensureBuiltinStrategies = async (
+  repos: Pick<RepositoryRegistry, 'strategy'>,
 ): Promise<void> => {
+  const strategies = await repos.strategy.list();
+  const occupied = new Set(strategies.map((strategy) => strategy.id));
+  const nextTargetId = (tacticId: string): string => {
+    if (!occupied.has(tacticId)) return tacticId;
+    const base = `legacy-tactic-${tacticId}`;
+    if (!occupied.has(base)) return base;
+    let suffix = 2;
+    while (occupied.has(`${base}-${suffix}`)) suffix += 1;
+    return `${base}-${suffix}`;
+  };
+
   for (const tactic of BUILTIN_TACTICS) {
-    await repos.tactic.save(tactic);
+    const existing = strategies.find((strategy) => strategy.id === tactic.id);
+    if (existing?.currentVersionId !== undefined) continue;
+    const bundle = mapLegacyTacticToStrategy(tactic, nextTargetId(tactic.id));
+    occupied.add(bundle.strategy.id);
+    await repos.strategy.save(bundle.strategy);
+    await repos.strategy.saveVersion(bundle.version);
   }
 };
 

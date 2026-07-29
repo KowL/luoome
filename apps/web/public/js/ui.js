@@ -241,7 +241,7 @@ const FEEDBACK_LABEL = {
 };
 
 /**
- * 盯盘预警完整卡片（docs/ddd/strategy-alert-detailed-design.md §10）。
+ * 盯盘预警完整卡片（docs/ddd/strategy-watchlist-unification-detailed-design.md §10）。
  * - 优先级 / 送达状态 badge
  * - evalSnapshot 展开区
  * - 四反馈按钮（handled / useful / useless / ignored）→ set_watch_trigger_feedback

@@ -13,6 +13,7 @@ describe('tool/list_tactics', () => {
     expect(r.data.tactics.map((t) => t.id)).toContain('early-breakout');
     expect(r.data.tactics.map((t) => t.id)).toContain('bollinger-band');
     expect(r.data.tactics.every((t) => t.source === 'builtin')).toBe(true);
+    expect(r.data).toMatchObject({ deprecated: true, replacement: 'list_strategies' });
   });
 
   it('tag 过滤', async () => {

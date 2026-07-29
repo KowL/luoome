@@ -76,7 +76,6 @@ luoome/
 │   ├── ROADMAP.md         版本演进
 │   ├── SECURITY.md        安全与副作用分级
 │   ├── CONTRIBUTING.md    本文件
-│   ├── HANDOFF.md         交接与关键决策
 │   ├── BACKLOG.md         一致性、测试盲区与工程债
 │   ├── prd/               产品需求文档
 │   ├── ddd/               技术详细设计

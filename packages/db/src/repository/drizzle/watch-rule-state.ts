@@ -7,6 +7,7 @@ import { type Schema, watchRuleStates } from '../../schema/index.js';
 type Row = typeof watchRuleStates.$inferSelect;
 
 const toDomain = (row: Row): WatchRuleState => ({
+  ...(row.alertPlanId === null ? {} : { alertPlanId: row.alertPlanId }),
   poolId: row.poolId,
   stockId: row.stockId,
   ruleId: row.ruleId,
@@ -18,6 +19,7 @@ const toDomain = (row: Row): WatchRuleState => ({
 });
 
 const fromDomain = (s: WatchRuleState): Row => ({
+  alertPlanId: s.alertPlanId ?? s.poolId,
   poolId: s.poolId,
   stockId: s.stockId,
   ruleId: s.ruleId,
@@ -28,7 +30,7 @@ const fromDomain = (s: WatchRuleState): Row => ({
   lastRecoveredAt: s.lastRecoveredAt ?? null,
 });
 
-/** WatchRuleState Drizzle 实现（docs/ddd/strategy-alert-detailed-design.md §3.5 / §9.3）。 */
+/** WatchRuleState Drizzle 实现（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.5 / §9.3）。 */
 export class DrizzleWatchRuleStateRepository implements WatchRuleStateRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 

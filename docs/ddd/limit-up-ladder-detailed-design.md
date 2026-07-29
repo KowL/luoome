@@ -4,7 +4,7 @@
 > 日期：2026-07-25
 > 需求：[连板天梯产品文档](../prd/limit-up-ladder-product.md)
 > 数据源：东方财富公开涨停池（`GET https://push2ex.eastmoney.com/getTopicZTPool`，无鉴权；2026-07 由原私有行情服务 `/market/limit-up/ladder` 迁移而来）
-> 关联 DDD：[盘中盯盘设计](./intraday-watch-design.md) §4.6 workflow 调用 tool 的契约（天梯同样适用——workflow 不直连 adapter/repo）
+> 关联 DDD：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)
 
 ## 目标
 
@@ -121,7 +121,7 @@ export interface LimitUpLadderDiff {
 ### 2. core：辅助函数
 
 - `deriveBoard(code: string): LimitUpBoard`：基于 code 前缀的三字符判定，与 §1 同表，**不**引入外部依赖。
-- `isLimitUpLadderTradingDay(date: string, holidays: readonly string[]): boolean`：复用 [intraday-watch 设计 §"已知边界"](./intraday-watch-design.md#已知边界) 中三层优先级 union 节假日历；非交易日早返回，`levels: []`、`total: 0`、`maxLevel: 0`、`warnings: ['non-trading-day']`。
+- `isLimitUpLadderTradingDay(date: string, holidays: readonly string[]): boolean`：复用统一交易日日历；非交易日早返回，`levels: []`、`total: 0`、`maxLevel: 0`、`warnings: ['non-trading-day']`。
 - `filterAndDedupe(entries, opts): LimitUpLadderEntry[]`：按 `opts.includeStar` / `includeBse` / `includeST` 过滤 ST 股票（名称前缀 `ST`/`*ST`），同一 code 只保留最深 level 的 entry；ST 股票判定**仅看名称前缀**，与策略预警产品文档 §5.2 一致。
 
 ### 3. eastmoney 协议层：公开涨停池 `getTopicZTPool`（`packages/adapters/src/limit-up-ladder/eastmoney.ts`）
@@ -331,11 +331,11 @@ interface AdapterRegistry {
 
 ### 9. workflows：报告 / StockGroup 联动（Phase 2）
 
-**当前架构重审**：PRD §10 提到的 `watchlist refreshTop10` 在 v0.6+ 后已被解构为 `StockPool` + `WatchPlan` + `StockGroup`（参见 [stock-group-design.md](./stock-group-design.md)）—— 单调「TOP10 排序」不再存在。所以本节分两部分：
+**当前架构重审**：PRD §10 提到的 `watchlist refreshTop10` 已由 Strategy → Watchlist source sync 替代，单独的「TOP10 排序」不再存在。
 
 - `daily-review` workflow LLM 输入段：替换为 `limit_up_ladder_compare(...)` 的结构化输出。**Phase 2 实现**（已落地，见 `packages/workflows/src/daily-review.ts` stepLadder）。
 - `market-outlook` workflow：在「市场概况」step 之后追加 `limit_up_ladder` 的可选调用，把快照作为 LLM 复盘段的事实来源。Phase 2-3 评估是否做。
-- StockGroup / WatchPlan 接入：tactic / formula / llm resolver 暂未消费 ladder level；本任务 Phase 3 候选（与 [strategy-alert-detailed-design.md §"涨停规则"](./strategy-alert-detailed-design.md) 联动）。
+- Strategy / AlertPlan 接入：ladder level 可作为未来 Strategy 数据字段；本任务不实现。
 
 > **ruo 旧实现警告**：ruo 旧 adapter 直接 fetch 私有行情服务后做 TOP10 排序，并在 `watchlist.refreshTop10` 中混用「页面排序 / 决策排序」同一份数据 — 是 PRD §2.2 错误隔离的反模式。luoome 把这两类用途（页面展示 vs 算法输入）解耦到不同 tool，且 TOP10 排序本身被分到 watch plans / stock groups 的语义 — **不应再有任何模块绕过 `ctx.tools.limit_up_ladder` 直接读天梯上游数据（现为东方财富涨停池）**。
 
@@ -372,7 +372,7 @@ luoome market limit-up [--date YYYY-MM-DD] [--source eastmoney]
 - **个股详情（v0.8 已有 `/stocks/:id`）**：在"事件"区追加"近 30 个交易日涨停日 + 当时 level + 原因"——实现走天梯 manager **30 天窗口**一次性拉齐，再做日期过滤。Phase 3 实现（PRD §10）。
 - **分组详情（动态分组如"涨停"）**：分组卡片顶部展示"今日在天梯中的最高 level"；同样 Phase 3。
 - **报告页**：本 PDF 报告 workflow 已在 daily-review 内；Phase 2 改造其 LLM 输入段（§9）。
-- **TOP10（旧 ruo）→ StockGroup / WatchPlan 候选**：ruo 旧 `watchlist refreshTop10` 已被 luoome v0.6+ 改写为 `StockPool` + `WatchPlan` + `StockGroup` 三层抽象（参见 [stock-group-design.md §1 / §5](./stock-group-design.md)）。天梯 `code → level` mapping 可作 formula / tactic resolver 的输入信号；Phase 3 候选，本文档不再单独跟踪「TOP10 切本快照」改造。
+- **TOP10（旧 ruo）→ Strategy 候选**：天梯 `code → level` mapping 可作为未来 Strategy 输入字段；本文档不再单独跟踪旧刷新链。
 
 ### 14. 调试与观测
 

@@ -1,7 +1,8 @@
 import type { TechnicalIndicators } from '../entity/indicator-set.js';
 import type { Quote } from '../entity/quote.js';
 import { assertTacticInvariants, type Tactic, type TacticSignal } from '../entity/tactic.js';
-import { evaluateExpression, interpolate } from './dsl.js';
+import { evaluateStrategyStock } from '../strategy/evaluator.js';
+import { mapLegacyTacticToStrategy } from '../strategy/legacy-mapper.js';
 
 /**
  * 战法运行结果（run_tactic 工具的核心返回）。
@@ -45,56 +46,34 @@ export const runTacticForStock = (
   context: TacticContext,
 ): TacticRunOutcome => {
   assertTacticInvariants(tactic);
-  const dslContext: Record<string, unknown> = {
-    quote: context.quote,
-    indicators: context.indicators,
-    meta: context.meta ?? {},
-  };
-
-  // 1) trigger：先 interpolate 把 ${expr} 替换为字面量，再 evaluate 求值
-  let triggered: boolean;
-  try {
-    const triggerSrc = interpolate(tactic.triggerWhen, dslContext);
-    triggered = Boolean(evaluateExpression(triggerSrc, dslContext));
-  } catch (e) {
+  const mapped = mapLegacyTacticToStrategy(tactic);
+  const evaluated = evaluateStrategyStock({
+    strategyId: mapped.strategy.id,
+    version: mapped.version,
+    runId: `legacy-runtime:${tactic.id}`,
+    stockId,
+    ts,
+    dataAsOf: ts,
+    context,
+  });
+  const evaluation = evaluated.result.ruleEvaluations[0];
+  const strategySignal = evaluated.signals[0];
+  if (strategySignal === undefined) {
+    if (evaluation?.status === 'unknown') {
+      return {
+        triggered: false,
+        reason: 'indicator_missing',
+        ...(evaluation.error === undefined ? {} : { message: evaluation.error }),
+      };
+    }
+    if (evaluation?.status === 'not-matched') {
+      return { triggered: false, reason: 'trigger_false' };
+    }
+    const message = evaluated.errors.join('; ') || evaluation?.error;
     return {
       triggered: false,
-      reason: 'dsl_error',
-      message: e instanceof Error ? e.message : String(e),
-    };
-  }
-  if (!triggered) {
-    return { triggered: false, reason: 'trigger_false' };
-  }
-
-  // 2) score：同理先 interpolate
-  let score: number;
-  try {
-    const scoreSrc = interpolate(tactic.scoreExpression, dslContext);
-    const raw = evaluateExpression(scoreSrc, dslContext);
-    score = Number(raw);
-  } catch (e) {
-    return {
-      triggered: false,
-      reason: 'dsl_error',
-      message: e instanceof Error ? e.message : String(e),
-    };
-  }
-  if (!Number.isFinite(score)) {
-    return { triggered: false, reason: 'score_invalid', message: `score=${score}` };
-  }
-  // 限制 0-100
-  score = Math.max(0, Math.min(100, score));
-
-  // 3) evidence：用 interpolate 把 ${} 替换为字符串
-  let evidence: string[];
-  try {
-    evidence = tactic.evidenceTemplate.map((tpl) => interpolate(tpl, dslContext));
-  } catch (e) {
-    return {
-      triggered: false,
-      reason: 'dsl_error',
-      message: e instanceof Error ? e.message : String(e),
+      reason: message?.includes('score') ? 'score_invalid' : 'dsl_error',
+      ...(message === undefined ? {} : { message }),
     };
   }
 
@@ -104,12 +83,12 @@ export const runTacticForStock = (
     tacticTag: tactic.tag,
     stockId,
     ts,
-    score,
-    direction: tactic.direction,
-    evidence,
+    score: strategySignal.score,
+    direction: strategySignal.direction,
+    evidence: [...strategySignal.evidence],
     triggerSnapshot: {
       expression: tactic.triggerWhen,
-      result: triggered,
+      result: true,
     },
   };
 

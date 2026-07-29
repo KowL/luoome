@@ -17,7 +17,7 @@ export const CreateStockGroupInput = z.object({
     .optional(),
   name: z.string().min(1).max(64),
   description: z.string().max(500).optional(),
-  /** 成员解析器：manual / holdings / formula / llm（docs/ddd/stock-group-design.md §1）。 */
+  /** 成员解析器：manual / holdings / formula / llm（docs/ddd/strategy-watchlist-unification-detailed-design.md §1）。 */
   resolver: GroupResolverSchema,
   refreshPolicy: GroupRefreshPolicySchema.default('daily'),
   enabled: z.boolean().default(true),
@@ -28,7 +28,7 @@ export const CreateStockGroupOutput = z.object({
 });
 
 /**
- * 创建股票分组（分组化起，write；docs/ddd/stock-group-design.md §6）。
+ * 创建股票分组（分组化起，write；docs/ddd/strategy-watchlist-unification-detailed-design.md §6）。
  *
  * 校验链：
  * 1. zod parse（resolver 形状 / llm.prompt 长度 / maxMembers 区间等 schema 约束）

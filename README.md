@@ -2,17 +2,18 @@
 
 > **织机 + 罗网 — 汇聚网罗有价值的信息数据，在面对变化的市场时提供准确的建议。**
 
-luoome 是一个本地优先的个人投资管理 **advisor agent**。它把"账户、持仓、交易、行情、战法、风控、笔记、建议"这些能力**全部以 tool 的形式**暴露出来，同时把多源数据织成结构化的、可追溯的投资建议。
+luoome 是一个本地优先的个人投资管理 **advisor agent**。它把账户、持仓、交易、行情、
+Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，并把多源数据织成可追溯事实。
 
 - 作为 **TUI** 在终端盯盘、看建议
-- 作为 **Web** 管理看板、持仓、股票分组与盘中盯盘（含运行心跳和触发审计）
+- 作为 **Web** 管理看板、持仓、Strategy、Watchlist 与 AlertPlan
 - 作为 **MCP server** 被 Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
 
 ## 名字
 
 **luoome = 织机 + 罗网**
 
-- **织**：把分散的行情、财报、新闻、战法信号、历史持仓织成一张连贯的认知
+- **织**：把分散的行情、财报、新闻、StrategySignal、历史持仓织成一张连贯的认知
 - **罗**：把市场里有价值的信息数据罗（网）进来，不漏关键信号
 - **me**：me，你（用户）是这一切的中心，不是旁观者
 
@@ -35,19 +36,20 @@ luoome 是一个本地优先的个人投资管理 **advisor agent**。它把"账
 - 账户（多账户、真实/模拟）
 - 持仓、交易、笔记、预警
 - 行情快照、日线、技术指标
-- 战法规则 + 战法信号
+- 版本化 Strategy + StrategyResult / StrategySignal
+- 多来源 Watchlist + AlertPlan / WatchTrigger
 - 风控指标（VaR、Sharpe、最大回撤、集中度）
 
 ### 分析维度（只读）
 
 - PnL、风险敞口、行业暴露
-- 战法扫描 + 信号评分
+- Strategy 扫描、评分与可解释规则结果
 - 多源行情交叉验证
 - LLM 推理总结（每日复盘、个股分析）
 
 ### 建议维度（核心）
 
-- **个股建议**：基于技术面 + 基本面 + 战法信号 + LLM 综合判断，输出 buy / sell / hold / watch / avoid 决策
+- **个股建议**：基于技术面、基本面、StrategySignal 与 LLM 综合判断，输出 buy / sell / hold / watch / avoid 决策
 - **持仓建议**：每个持仓的继续持有 / 加仓 / 减仓 / 清仓建议
 - **市场观点**：每日大盘观点、行业轮动、热点板块
 - **风险预警**：跌破止损位、触发风控规则、异常波动
@@ -159,15 +161,13 @@ bun install
 
 ## 状态
 
-**v0.8.0 MVP — 看板 + 持仓 + 分组 + 盯盘**
+**当前模型 — Strategy + 统一 Watchlist + AlertPlan**
 
-- 看板聚合账户 PnL、建议、盯盘健康度和最近触发
+- 看板聚合账户 PnL、建议、AlertPlan 健康度和最近触发
 - 持仓完整录入闭环与交易流水
-- 股票分组 CRUD，支持 manual / holdings / formula / llm
-- formula 分组持久化规则分数、证据与数据截止时间；战法页提供同日共振事实视图
-- 第二批策略新增早期突破与 Bollinger 下轨均值回复，并补齐 RSI、MA 距离/上穿新鲜度、
-  Bollinger 轨道/带宽/位置等可复现指标
-- 分组详情内配置盯盘方案，仪表盘提供单轮试跑、全局心跳与最近触发审计
+- Strategy 不可变版本、校验、发布、dry-run/正式运行与信号事实
+- Watchlist 支持 manual / strategy / ai / portfolio / import 多来源与研究阶段
+- AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一 Bearer token + 同源校验
 - `luoome start` 一键启动 Web + 长驻盯盘
 

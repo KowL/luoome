@@ -44,6 +44,8 @@ import type {
   LimitUpLadderOutput,
   ListAccountsInput,
   ListAccountsOutput,
+  ListAlertPlansInput,
+  ListAlertPlansOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
   ListStockEventsInput,
@@ -54,8 +56,12 @@ import type {
   // v0.6 起：股票池 CRUD + 触发落库
   ListStockPoolsInput,
   ListStockPoolsOutput,
+  ListStrategiesInput,
+  ListStrategiesOutput,
   ListTacticsInput,
   ListTacticsOutput,
+  ListWatchlistsInput,
+  ListWatchlistsOutput,
   ListWatchPlansInput,
   ListWatchPlansOutput,
   ListWatchTriggersInput,
@@ -72,6 +78,8 @@ import type {
   RenderReportOutput,
   ResolveLlmGroupInput,
   ResolveLlmGroupOutput,
+  RunStrategyInput,
+  RunStrategyOutput,
   RunTacticInput,
   RunTacticOutput,
   SaveReportInput,
@@ -88,6 +96,8 @@ import type {
   SetReportDeliveryStatusOutput,
   SetWatchTriggerFeedbackInput,
   SetWatchTriggerFeedbackOutput,
+  StrategySignalsByStockInput,
+  StrategySignalsByStockOutput,
   SyncDailyBarsInput,
   SyncDailyBarsOutput,
   SyncQuotesInput,
@@ -96,6 +106,8 @@ import type {
   SyncStockEventsOutput,
   SyncStockUniverseInput,
   SyncStockUniverseOutput,
+  SyncWatchlistSourceInput,
+  SyncWatchlistSourceOutput,
   TacticSignalsByStockInput,
   TacticSignalsByStockOutput,
   TacticSignalsByTacticInput,
@@ -105,7 +117,15 @@ import type {
   UpdateStockPoolInput,
   UpdateStockPoolOutput,
 } from '@luoome/tools';
-import { toolRegistry } from '@luoome/tools';
+import {
+  recordWatchRunTool,
+  recordWorkflowRunTool,
+  saveReportTool,
+  saveWatchTriggerTool,
+  setReportDeliveryStatusTool,
+  syncWatchlistSourceTool,
+  toolRegistry,
+} from '@luoome/tools';
 import type { z } from 'zod';
 
 /**
@@ -124,6 +144,7 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  */
 export interface WorkflowToolMap {
   readonly list_accounts: ToolAccessor<typeof ListAccountsInput, typeof ListAccountsOutput>;
+  readonly list_alert_plans: ToolAccessor<typeof ListAlertPlansInput, typeof ListAlertPlansOutput>;
   readonly get_account: ToolAccessor<typeof GetAccountInput, typeof GetAccountOutput>;
   readonly list_holdings: ToolAccessor<typeof ListHoldingsInput, typeof ListHoldingsOutput>;
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
@@ -173,6 +194,18 @@ export interface WorkflowToolMap {
   readonly list_tactics: ToolAccessor<typeof ListTacticsInput, typeof ListTacticsOutput>;
   readonly get_tactic: ToolAccessor<typeof GetTacticInput, typeof GetTacticOutput>;
   readonly run_tactic: ToolAccessor<typeof RunTacticInput, typeof RunTacticOutput>;
+  readonly list_strategies: ToolAccessor<typeof ListStrategiesInput, typeof ListStrategiesOutput>;
+  readonly run_strategy: ToolAccessor<typeof RunStrategyInput, typeof RunStrategyOutput>;
+  readonly strategy_signals_by_stock: ToolAccessor<
+    typeof StrategySignalsByStockInput,
+    typeof StrategySignalsByStockOutput
+  >;
+  readonly list_watchlists: ToolAccessor<typeof ListWatchlistsInput, typeof ListWatchlistsOutput>;
+  /** workflow-only；不进入公共 registry/MCP discovery。 */
+  readonly sync_watchlist_source: ToolAccessor<
+    typeof SyncWatchlistSourceInput,
+    typeof SyncWatchlistSourceOutput
+  >;
   readonly score_signals: ToolAccessor<typeof ScoreSignalsInput, typeof ScoreSignalsOutput>;
   readonly tactic_signals_by_stock: ToolAccessor<
     typeof TacticSignalsByStockInput,
@@ -219,7 +252,7 @@ export interface WorkflowToolMap {
     typeof SaveWatchTriggerInput,
     typeof SaveWatchTriggerOutput
   >;
-  // 分组化起（docs/ddd/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
+  // 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §6）：分组 CRUD + 刷新 + LLM 解析
   readonly list_stock_groups: ToolAccessor<
     typeof ListStockGroupsInput,
     typeof ListStockGroupsOutput
@@ -288,6 +321,20 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
   > = {};
   for (const tool of toolRegistry.all()) {
     accessors[tool.name] = { execute: (input) => tool.execute(input, ctx) };
+  }
+  accessors[syncWatchlistSourceTool.name] = {
+    execute: (input) => syncWatchlistSourceTool.execute(input, ctx),
+  };
+  for (const internalTool of [
+    recordWatchRunTool,
+    recordWorkflowRunTool,
+    saveReportTool,
+    saveWatchTriggerTool,
+    setReportDeliveryStatusTool,
+  ]) {
+    accessors[internalTool.name] = {
+      execute: (input) => internalTool.execute(input, ctx),
+    };
   }
   return accessors as unknown as WorkflowToolMap;
 };

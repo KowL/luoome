@@ -68,7 +68,7 @@ describe('看板纯函数', () => {
     quote: null,
     changePct,
     holding,
-    groups: [],
+    watchlists: [],
     todayTrigger: null,
   });
 

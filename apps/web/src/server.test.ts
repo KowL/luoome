@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
-import type { AgentCallableTool } from '@luoome/core';
+import type { AgentCallableTool, ToolContext } from '@luoome/core';
+import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import type { Hono } from 'hono';
 
@@ -18,10 +19,16 @@ import { MarketSettingsStore } from './market-settings.js';
 import { buildWebContext, createWebApp, resolveWebToken } from './server.js';
 
 let app: Hono;
+let appCtx: ToolContext;
 const WEB_TOKEN = 'test-web-token';
 
 beforeAll(async () => {
-  app = createWebApp(await buildTestContext(), { webToken: WEB_TOKEN });
+  appCtx = await buildTestContext();
+  app = createWebApp(appCtx, {
+    webToken: WEB_TOKEN,
+    exposeWrite: true,
+    exposeExternal: true,
+  });
 });
 
 const callTool = async (name: string, input: unknown): Promise<Response> =>
@@ -40,40 +47,17 @@ const json = async (r: Response): Promise<{ ok: boolean; data?: never; error?: n
   (await r.json()) as { ok: boolean; data?: never; error?: never };
 
 describe('Web 信息架构', () => {
-  it('盯盘不再是独立导航，全局运行入口位于仪表盘', async () => {
+  it('一级产品语言统一为 Strategy / Watchlist / AlertPlan', async () => {
     const response = await app.fetch(new Request('http://test/'));
     const html = await response.text();
     expect(html).not.toContain('data-route="watch"');
     expect(html).not.toContain('href="#watch"');
+    expect(html).not.toContain('data-route="groups"');
+    expect(html).not.toContain('data-route="tactics"');
+    expect(html).toContain('data-route="strategies"');
+    expect(html).toContain('data-route="watchlists"');
+    expect(html).toContain('data-route="alerts"');
     expect(html).toContain('id="btn-dashboard-watch-run"');
-    expect(html).toContain('成员与盯盘方案');
-  });
-});
-
-describe('战法扫描 API', () => {
-  it('evaluatedStocks 统计实际求值股票数，不按战法数重复累计', async () => {
-    const ctx = await buildTestContext();
-    const testApp = createWebApp(ctx);
-    const holdings = await ctx.repos.holding.listByAccount(ctx.user.defaultAccountId);
-    const expectedStocks = new Set(holdings.map((holding) => holding.stockId)).size;
-
-    const response = await testApp.fetch(
-      new Request('http://test/api/tactics/scan?scope=holdings&topN=10'),
-    );
-    const body = (await response.json()) as {
-      ok: boolean;
-      data?: { evaluatedStocks: number };
-    };
-
-    expect(body.ok).toBe(true);
-    expect(body.data?.evaluatedStocks).toBe(expectedStocks);
-  });
-
-  it('共振端点走 read tool，缺少可用公式快照时返回明确 invalid_input', async () => {
-    const response = await app.fetch(new Request('http://test/api/tactics/consensus'));
-    const body = (await response.json()) as { ok: boolean; error?: { kind: string } };
-    expect(response.status).toBe(400);
-    expect(body.error?.kind).toBe('invalid_input');
   });
 });
 
@@ -108,8 +92,8 @@ describe('报告 API', () => {
       createdAt: now,
       updatedAt: now,
     };
-    const saved = await callTool('save_report', { report });
-    expect(saved.status).toBe(200);
+    const saved = await saveReportTool.execute({ report }, appCtx);
+    expect(saved.ok).toBe(true);
 
     const history = await app.fetch(new Request('http://test/api/reports?kind=closing&limit=30'));
     const historyBody = (await history.json()) as {
@@ -221,8 +205,9 @@ describe('Web runtime bootstrap', () => {
       expect(await ctx.repos.stock.search('')).toEqual([]);
       expect(await ctx.repos.holding.listByAccount('')).toEqual([]);
       expect(await ctx.repos.trade.listByAccount('')).toEqual([]);
+      expect(await ctx.repos.tactic.list({ source: 'builtin' })).toEqual([]);
       expect(
-        (await ctx.repos.tactic.list({ source: 'builtin' })).map((tactic) => tactic.id),
+        (await ctx.repos.strategy.list({ owner: 'builtin' })).map((strategy) => strategy.id),
       ).toEqual(expect.arrayContaining(['early-breakout', 'bollinger-band']));
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -364,6 +349,129 @@ describe('非 loopback API 鉴权模式', () => {
       }),
     );
     expect(allowed.status).toBe(200);
+  });
+});
+
+describe('Strategy / Watchlist / AlertPlan API', () => {
+  const targetRequest = (path: string, body: unknown, token = WEB_TOKEN): Request =>
+    new Request(`http://test${path}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+        origin: 'http://test',
+      },
+      body: JSON.stringify(body),
+    });
+
+  it('四个 surface 的 Web 路由复用目标 tool contract', async () => {
+    const strategyId = 'web-target-strategy';
+    const watchlistId = 'web-target-watchlist';
+    const alertPlanId = 'web-target-alert';
+
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: 'Web Strategy',
+            description: 'W5 target API',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await app.fetch(new Request(`http://test/api/strategies/${strategyId}`))).status).toBe(
+      200,
+    );
+
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/watchlists', {
+            id: watchlistId,
+            name: 'Web Watchlist',
+            kind: 'personal',
+            membershipPolicy: 'mixed',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await app.fetch(new Request(`http://test/api/watchlists/${watchlistId}`))).status).toBe(
+      200,
+    );
+
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/alert-plans', {
+            id: alertPlanId,
+            name: 'Web AlertPlan',
+            watchlistId,
+            rules: [
+              {
+                id: 'price-rule',
+                kind: 'price-level',
+                side: 'above',
+                level: 10,
+              },
+            ],
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const alerts = (await (await app.fetch(new Request('http://test/api/alert-plans'))).json()) as {
+      data?: { plans?: Array<{ id: string }> };
+    };
+    expect(alerts.data?.plans?.some((plan) => plan.id === alertPlanId)).toBe(true);
+  });
+
+  it('目标 mutation 同时要求显式 opt-in、token 与同源 Origin', async () => {
+    const guarded = createWebApp(await buildTestContext(), {
+      webToken: WEB_TOKEN,
+      exposeWrite: false,
+      exposeExternal: false,
+    });
+    const disabled = await guarded.fetch(
+      targetRequest('/api/watchlists', {
+        id: 'disabled-write',
+        name: 'disabled',
+        kind: 'personal',
+        membershipPolicy: 'manual',
+      }),
+    );
+    expect(disabled.status).toBe(403);
+
+    const missingToken = await app.fetch(
+      targetRequest(
+        '/api/watchlists',
+        {
+          id: 'missing-token',
+          name: 'missing',
+          kind: 'personal',
+          membershipPolicy: 'manual',
+        },
+        '',
+      ),
+    );
+    expect(missingToken.status).toBe(403);
+
+    const crossOrigin = await app.fetch(
+      new Request('http://test/api/watchlists', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+          origin: 'https://evil.example',
+        },
+        body: JSON.stringify({
+          id: 'cross-origin',
+          name: 'cross',
+          kind: 'personal',
+          membershipPolicy: 'manual',
+        }),
+      }),
+    );
+    expect(crossOrigin.status).toBe(403);
   });
 });
 
@@ -597,7 +705,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     };
     const testApp = createWebApp(
       { ...base, adapters: { ...base.adapters, market: failingMarket } },
-      { webToken: WEB_TOKEN },
+      { webToken: WEB_TOKEN, exposeExternal: true },
     );
     const r = await testApp.fetch(
       new Request('http://test/api/tools/get_stock_market_view/call', {
@@ -672,27 +780,15 @@ describe('/api/advice 查询参数', () => {
 });
 
 describe('MVP dashboard / watch API', () => {
-  it('watch plans 返回统一的盯盘方案读取模型', async () => {
-    const r = await app.fetch(new Request('http://test/api/watch/plans'));
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      ok: boolean;
-      data?: { plans: unknown[]; total: number };
-    };
-    expect(body.ok).toBe(true);
-    expect(body.data?.plans).toBeInstanceOf(Array);
-    expect(body.data?.total).toBe(body.data?.plans.length);
-  });
-
-  it('dashboard 聚合持仓、分组、池、watch 状态与最近触发', async () => {
+  it('dashboard 聚合持仓、Watchlist、AlertPlan、watch 状态与最近触发', async () => {
     const r = await app.fetch(new Request('http://test/api/dashboard'));
     expect(r.status).toBe(200);
     const body = (await r.json()) as {
       ok: boolean;
       data?: {
         holdings: { holdings: unknown[] };
-        groups: { groups: unknown[] };
-        pools: { pools: unknown[] };
+        watchlists: { items: unknown[] };
+        alertPlans: { plans: unknown[] };
         watch: { state: string };
         triggers: { triggers: unknown[] };
       };
@@ -715,7 +811,7 @@ describe('MVP dashboard / watch API', () => {
           quote: { close: number; ts: string } | null;
           changePct: number | null;
           holding: { quantity: number; marketValue: number } | null;
-          groups: string[];
+          watchlists: string[];
           todayTrigger: { count: number; maxPriority: string } | null;
         }>;
         todayTriggers: unknown[];
@@ -735,48 +831,7 @@ describe('MVP dashboard / watch API', () => {
     expect(typeof held?.stockId).toBe('string');
     expect(typeof held?.name).toBe('string');
     expect(held?.quote?.close).toBeGreaterThan(0);
-    expect(held?.groups).toBeInstanceOf(Array);
-  });
-
-  it('dashboard 看板：分组成员用 batch_quote 昨收基准补算 changePct', async () => {
-    const ctx = await buildTestContext();
-    const now = new Date('2026-07-22T01:00:00.000Z');
-    await ctx.repos.stockGroup.save({
-      id: 'grp-board',
-      name: '看板分组',
-      resolver: { kind: 'manual', stockIds: ['000858.SZ'] },
-      refreshPolicy: 'manual',
-      enabled: true,
-      createdAt: now,
-      updatedAt: now,
-    });
-    await ctx.repos.stockPool.save({
-      id: 'pool-board',
-      name: '看板方案',
-      groupId: 'grp-board',
-      rules: [{ kind: 'price-level', level: 1, side: 'above' }],
-      cooldownMinutes: 30,
-      enabled: true,
-      logic: 'ANY',
-      triggerMode: 'on-enter',
-      dailyNotificationLimit: 20,
-      notifyOnRecovery: false,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const boardApp = createWebApp(ctx, { webToken: WEB_TOKEN });
-    const r = await boardApp.fetch(new Request('http://test/api/dashboard'));
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      data?: {
-        board?: Array<{ stockId: string; holding: unknown; changePct: number | null }>;
-      };
-    };
-    // 000858.SZ 非持仓：changePct 只能来自 batch_quote 的 prevClose 基准（FakeMarketAdapter 给确定性昨收）
-    const member = body.data?.board?.find((item) => item.stockId === '000858.SZ');
-    expect(member).toBeDefined();
-    expect(member?.holding).toBeNull();
-    expect(typeof member?.changePct).toBe('number');
+    expect(held?.watchlists).toBeInstanceOf(Array);
   });
 
   it('run-once 需要 token；成功后 watch status 可见', async () => {
@@ -858,7 +913,12 @@ describe('/api/chat：对话助手', () => {
 
   beforeAll(async () => {
     chatCtx = await buildTestContext();
-    chatApp = createWebApp(chatCtx, { chatStreamRuntime: runtime, webToken: WEB_TOKEN });
+    chatApp = createWebApp(chatCtx, {
+      chatStreamRuntime: runtime,
+      webToken: WEB_TOKEN,
+      exposeWrite: true,
+      exposeExternal: true,
+    });
   });
 
   const createSession = async (id: string): Promise<void> => {
@@ -932,24 +992,24 @@ describe('/api/chat：对话助手', () => {
     expect(JSON.stringify(captured?.uiMessages)).not.toContain('client-fake-history');
   });
 
-  it('write 工具只生成已校验草案，不执行 DB 写入', async () => {
+  it('目标模型 write 工具只生成已校验草案，不执行 DB 写入', async () => {
     await createSession('draft-tool');
     await chat(chatApp, {
       sessionId: 'draft-tool',
-      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '创建分组' }] }],
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '创建 Strategy' }] }],
     });
-    const draftTool = captured?.tools.find((item) => item.name === 'create_stock_group');
+    const draftTool = captured?.tools.find((item) => item.name === 'create_strategy');
     const result = await draftTool?.execute({
-      id: 'chat-draft-group',
-      name: '对话草案分组',
-      resolver: { kind: 'llm', prompt: '选出当前龙头' },
+      id: 'chat-draft-strategy',
+      name: '对话草案 Strategy',
+      description: '仅用于验证目标模型草案',
     });
     expect(result?.ok).toBe(true);
     expect(result?.output).toMatchObject({
       __luoomeDraft: true,
-      draft: { kind: 'stock-group', tool: 'create_stock_group' },
+      draft: { kind: 'strategy', tool: 'create_strategy' },
     });
-    expect(await chatCtx.repos.stockGroup.findById('chat-draft-group')).toBeNull();
+    expect(await chatCtx.repos.strategy.findById('chat-draft-strategy')).toBeNull();
   });
 
   it('read 工具仍经 registry 执行，未批准的 external/trade 不暴露', async () => {
@@ -960,6 +1020,12 @@ describe('/api/chat：对话助手', () => {
     });
     const names = captured?.tools.map((item) => item.name) ?? [];
     expect(names).toContain('list_holdings');
+    expect(names).toContain('list_strategies');
+    expect(names).toContain('list_watchlists');
+    expect(names).toContain('list_alert_plans');
+    expect(names).not.toContain('list_tactics');
+    expect(names).not.toContain('list_stock_groups');
+    expect(names).not.toContain('list_stock_pools');
     expect(names).not.toContain('sync_quotes');
     expect(names).not.toContain('send_notification');
     expect(names).not.toContain('place_order');
@@ -1077,54 +1143,6 @@ describe('GET /api/stocks/search', () => {
 /* ============ v0.7 策略预警（docs/.../§10）Web 端点 ============ */
 
 describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
-  it('GET /api/watch/templates 返回 6 个模板，含 ALL/ANY/price-level/price-change 变体', async () => {
-    const r = await app.fetch(new Request('http://test/api/watch/templates'));
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      ok: boolean;
-      data?: { templates: Array<{ id: string; draft: Record<string, unknown> }> };
-    };
-    expect(body.ok).toBe(true);
-    const templates = body.data?.templates ?? [];
-    expect(templates.length).toBe(6);
-    const kinds = new Set<string>();
-    for (const t of templates) {
-      for (const r2 of Array.isArray(t.draft.rules) ? t.draft.rules : []) {
-        const k = (r2 as { kind?: string }).kind;
-        if (typeof k === 'string') kinds.add(k);
-      }
-    }
-    expect(kinds.has('cost-threshold')).toBe(true);
-    expect(kinds.has('tactic')).toBe(true);
-    expect(kinds.has('price-change')).toBe(true);
-    expect(kinds.has('price-level')).toBe(true);
-    // 至少一个模板用 ALL（设计要求 ALL 组合也给出示例）
-    expect(templates.some((t) => t.draft.logic === 'ALL')).toBe(true);
-  });
-
-  it('POST /api/watch/draft：无 token 时 403；message 缺失 → 400', async () => {
-    const denied = await app.fetch(
-      new Request('http://test/api/watch/draft', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: '盯一下' }),
-      }),
-    );
-    expect(denied.status).toBe(403);
-
-    const bad = await app.fetch(
-      new Request('http://test/api/watch/draft', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-        },
-        body: JSON.stringify({}),
-      }),
-    );
-    expect(bad.status).toBe(400);
-  });
-
   it('POST /api/watch/triggers/:id/feedback：triggerId 不存在 → 404；feedback 非法 → 400；happy path → 200 + 回写', async () => {
     const missing = await app.fetch(
       new Request('http://test/api/watch/triggers/nonexistent/feedback', {
@@ -1138,75 +1156,51 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
     );
     expect(missing.status).toBe(404);
 
-    // 先建一个分组，再建池，最后手动落一条触发（绕过 dry-run）
-    const groupResp = await callTool('create_stock_group', {
-      id: 'feedback-group',
-      name: '反馈分组',
-      resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
-      refreshPolicy: 'manual',
-      enabled: true,
-    });
-    const groupBody = (await groupResp.json()) as { ok: boolean };
-    expect(groupBody.ok).toBe(true);
-
-    const stockPoolResp = await callTool('create_stock_pool', {
-      id: 'feedback-pool',
-      name: '反馈池',
-      groupId: 'feedback-group',
-      logic: 'ANY',
-      triggerMode: 'on-enter',
-      dailyNotificationLimit: 20,
-      notifyOnRecovery: false,
-      rules: [{ kind: 'price-change', pct: 0.05, direction: 'any' }],
-    });
-    const createBody = (await stockPoolResp.json()) as {
-      ok: boolean;
-      data?: { pool: { id: string } };
-    };
-    expect(createBody.ok).toBe(true);
-    expect(createBody.ok).toBe(true);
-    // 拿真实 triggerId：跑一轮 dry-run
-    const run = await app.fetch(
-      new Request('http://test/api/watch/run-once', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-        },
-        body: JSON.stringify({ notify: false }),
-      }),
-    );
-    expect(run.status).toBe(200);
-    const list = await app.fetch(new Request('http://test/api/watch/triggers'));
-    const listBody = (await list.json()) as {
-      data?: { triggers: Array<{ id: string; ruleId: string; deliveryStatus: string }> };
-    };
-    const trigger = listBody.data?.triggers[0];
-    if (trigger === undefined) {
-      // dry-run 也不带触发；改用直接调 save_watch_trigger 凑一条
-      const save = await callTool('save_watch_trigger', {
+    const watchlistId = 'feedback-watchlist';
+    const alertPlanId = 'feedback-alert';
+    expect(
+      (
+        await callTool('create_watchlist', {
+          id: watchlistId,
+          name: '反馈 Watchlist',
+          kind: 'personal',
+          membershipPolicy: 'manual',
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await callTool('create_alert_plan', {
+          id: alertPlanId,
+          name: '反馈 AlertPlan',
+          watchlistId,
+          rules: [{ id: 'feedback-rule', kind: 'price-level', side: 'above', level: 15 }],
+        })
+      ).status,
+    ).toBe(200);
+    const saved = await saveWatchTriggerTool.execute(
+      {
         id: 'fb-test',
-        poolId: 'feedback-pool',
+        alertPlanId,
+        poolId: alertPlanId,
         stockId: '002594.SZ',
-        ruleKind: 'price-change',
-        ruleId: 'r_any',
+        ruleKind: 'price-level',
+        ruleId: 'feedback-rule',
         triggerType: 'triggered',
         direction: 'watch',
         priority: 'important',
         deliveryStatus: 'sent',
-        evalSnapshot: { ruleId: 'r_any', kind: 'price-change' },
+        evalSnapshot: { ruleId: 'feedback-rule', kind: 'price-level' },
         reason: '单元测试触发',
         evidence: ['close=15.2'],
         quote: { close: 15.2, ts: new Date() },
         notified: true,
         createdAt: new Date(),
-      });
-      const saveBody = (await save.json()) as { ok: boolean; error?: { kind: string } };
-      if (!saveBody.ok) {
-        // 缺少 tactic 引用校验可能 ok=true；保险
-      }
-    }
-    const triggerId = trigger?.id ?? 'fb-test';
+      },
+      appCtx,
+    );
+    expect(saved.ok).toBe(true);
+    const triggerId = 'fb-test';
     const ok = await app.fetch(
       new Request(`http://test/api/watch/triggers/${triggerId}/feedback`, {
         method: 'POST',

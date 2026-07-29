@@ -142,7 +142,7 @@ export interface FormatTriggerLogOptions {
  * 通过 'quoteClose' in t 做运行时判别；类型上是个松散结构（必填字段都列，quoteClose 可选）。
  */
 export interface WatchTriggerLogInput {
-  readonly poolId: string;
+  readonly alertPlanId: string;
   readonly stockId: string;
   readonly ruleKind: string;
   readonly direction: string;
@@ -160,7 +160,7 @@ export const formatTriggersForLog = (
   const suppressedLabel = opts.suppressedLabel ?? '[cool]';
   if (triggers.length === 0) return '（无触发）';
   const lines: string[] = [
-    `${pad('时间', 19)}  ${pad('池', 24)}  ${pad('股票', 12)}  ${pad('规则', 14)}  ${pad('方向', 6)}  现价    理由`,
+    `${pad('时间', 19)}  ${pad('AlertPlan', 24)}  ${pad('股票', 12)}  ${pad('规则', 14)}  ${pad('方向', 6)}  现价    理由`,
   ];
   for (const t of triggers) {
     const time = t.createdAt.toISOString().slice(11, 19);
@@ -173,7 +173,7 @@ export const formatTriggersForLog = (
       : suppressedLabel;
     const close = typeof t.quoteClose === 'number' ? t.quoteClose : (t.quote?.close ?? 0);
     lines.push(
-      `${pad(time, 19)}  ${pad(t.poolId, 24)}  ${pad(t.stockId, 12)}  ${pad(t.ruleKind, 14)}  ${pad(dir, 6)}  ${close.toFixed(2).padStart(6)}    ${t.reason}`,
+      `${pad(time, 19)}  ${pad(t.alertPlanId, 24)}  ${pad(t.stockId, 12)}  ${pad(t.ruleKind, 14)}  ${pad(dir, 6)}  ${close.toFixed(2).padStart(6)}    ${t.reason}`,
     );
   }
   return lines.join('\n');

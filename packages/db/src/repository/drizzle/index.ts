@@ -1,5 +1,6 @@
 export { DrizzleAccountRepository } from './account.js';
 export { DrizzleAdviceRepository } from './advice.js';
+export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
 export { DrizzleGroupMemberRepository } from './group-member.js';
@@ -14,9 +15,11 @@ export { DrizzleStockEventRepository } from './stock-event.js';
 export { DrizzleStockGroupRepository } from './stock-group.js';
 export { DrizzleStockPoolRepository } from './stock-pool.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';
+export { DrizzleStrategyRepository, DrizzleStrategyRunRepository } from './strategy.js';
 export { DrizzleTacticRepository } from './tactic.js';
 export { DrizzleTradeRepository } from './trade.js';
 export { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';
 export { DrizzleWatchRunRepository } from './watch-run.js';
 export { DrizzleWatchTriggerRepository } from './watch-trigger.js';
+export { DrizzleWatchlistMemberRepository, DrizzleWatchlistRepository } from './watchlist.js';
 export { DrizzleWorkflowRunRepository } from './workflow-run.js';

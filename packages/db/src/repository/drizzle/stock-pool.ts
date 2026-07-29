@@ -11,7 +11,7 @@ const toStockPool = (row: PoolRow): StockPool => ({
   name: row.name,
   ...(row.description !== null ? { description: row.description } : {}),
   // 旧行（分组化迁移前）group_id 为 NULL → 空串占位：读出 / 序列化不 crash；
-  // 阶段 B 数据迁移后消失（docs/ddd/stock-group-design.md §5）。source 列 deprecated，不读出。
+  // 阶段 B 数据迁移后消失（docs/ddd/strategy-watchlist-unification-detailed-design.md §5）。source 列 deprecated，不读出。
   groupId: row.groupId ?? '',
   rules: row.rules,
   cooldownMinutes: row.cooldownMinutes,

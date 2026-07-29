@@ -2,6 +2,9 @@
 
 // 连接与建表：createDrizzleRepos / ensureSchema / DrizzleDb / DrizzleReposHandle
 export * from './client.js';
+export * from './migrations/runner.js';
+export * from './migrations/strategy.js';
+export * from './migrations/verify-strategy-watchlist.js';
 
 // Drizzle repository 实现
 export * from './repository/drizzle/index.js';

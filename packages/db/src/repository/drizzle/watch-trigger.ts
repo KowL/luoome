@@ -36,6 +36,7 @@ type TriggerRow = typeof watchTriggers.$inferSelect;
 
 const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
   id: row.id,
+  ...(row.alertPlanId === null ? {} : { alertPlanId: row.alertPlanId }),
   poolId: row.poolId,
   stockId: row.stockId,
   ruleKind: row.ruleKind,
@@ -61,7 +62,7 @@ const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
 const ATTEMPTED: readonly DeliveryStatus[] = [...ATTEMPTED_DELIVERY_STATUSES];
 
 /**
- * 策略预警 Drizzle 实现（docs/ddd/strategy-alert-detailed-design.md §9.3）：
+ * 策略预警 Drizzle 实现（docs/ddd/strategy-watchlist-unification-detailed-design.md §9.3）：
  * - lastForKey 改用 ruleId 维度 + deliveryStatus ∈ ATTEMPTED 过滤
  * - 新增 countAttemptedSince / setDeliveryStatus / setFeedback
  * - save 写新字段（含 deliveryStatus / priority / evalSnapshot 等）
@@ -75,6 +76,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
       .insert(watchTriggers)
       .values({
         id: trigger.id,
+        alertPlanId: trigger.alertPlanId ?? trigger.poolId,
         poolId: trigger.poolId,
         stockId: trigger.stockId,
         ruleKind: trigger.ruleKind,

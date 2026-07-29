@@ -19,7 +19,7 @@ import {
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, ensureBuiltinTactics } from '@luoome/tools';
+import { buildContext, ensureBuiltinStrategies } from '@luoome/tools';
 
 import { luoomeHome } from './paths.js';
 
@@ -58,7 +58,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const dbPath = join(home, 'luoome.db');
 
   const { repos, close } = createDrizzleRepos(dbPath);
-  await ensureBuiltinTactics(repos);
+  await ensureBuiltinStrategies(repos);
 
   const now = (): Date => new Date();
   const accounts = await repos.account.list();

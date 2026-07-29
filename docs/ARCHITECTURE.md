@@ -6,7 +6,7 @@
 
 ### 1.1 我们要解决的问题
 
-普通个人投资者每天被淹没在数据里：行情、新闻、财报、研报、战法信号、自选股、持仓变化。**最大的痛点不是缺数据，而是没有一个可信的"罗网 + 织机"**：
+普通个人投资者每天被淹没在数据里：行情、新闻、财报、研报、StrategySignal、Watchlist、持仓变化。**最大的痛点不是缺数据，而是没有一个可信的"罗网 + 织机"**：
 
 - 不知道哪些信息是真信号、哪些是噪音
 - 不知道这些信号对自己的持仓意味着什么
@@ -27,7 +27,7 @@ luoome = 织机 + 罗网：**罗**进来所有有价值的数据，**织**成一
 ### 1.3 显式要做的事
 
 - ✅ **生成可执行的投资建议**（buy / sell / hold / watch / avoid），带理由 + 证据 + 风险 + 信心度 + 免责声明
-- ✅ **建议可追溯**：每条建议都能回到当时的数据快照、战法信号、LLM 推理
+- ✅ **建议可追溯**：每条建议都能回到当时的数据快照、StrategySignal、LLM 推理
 - ✅ **建议可复盘**：事后能验证"按这个建议做，结果如何"
 - ✅ 把建议当作数据存储在本地 SQLite，可被任意 tool / workflow / agent 检索
 
@@ -46,7 +46,7 @@ luoome = 织机 + 罗网：**罗**进来所有有价值的数据，**织**成一
 任何用户能做的事，agent 也应该能做。包括：
 - ✅ 查询持仓 → tool
 - ✅ 添加持仓 → tool
-- ✅ 跑战法扫描 → tool
+- ✅ 校验、发布和试跑 Strategy → tool
 - ✅ 生成建议 → tool / workflow
 - ✅ 查看历史建议 → tool
 - ❌ 隐藏在 UI 菜单里、没有 tool 对应的功能 → 不允许
@@ -266,7 +266,11 @@ export const dailyAdviceWorkflow = defineWorkflow({
     step('fetch-holdings', (input, ctx) => ctx.tools.list_holdings.execute({ accountId: input.accountId })),
     step('fetch-quotes', (holdings, ctx) => ctx.adapters.market.batchQuote(holdings.map(h => h.stockId))),
     step('compute-pnl', ([holdings, quotes], ctx) => ctx.tools.compute_pnl.execute({ holdings, quotes })),
-    step('run-tactics', (data, ctx) => ctx.workflows.runTacticScan({ scope: 'holdings' })),
+    step('run-strategies', (data, ctx) => ctx.tools.run_strategy.execute({
+      strategyId: data.strategyId,
+      universe: { kind: 'holdings', accountId: input.accountId },
+      persist: true,
+    })),
     step('analyze-each', (data, ctx) => parallel(data.holdings.map(h =>
       ctx.tools.analyze_stock.execute({ stockId: h.stockId, context: data })
     ))),
@@ -403,7 +407,10 @@ interface ToolContext {
 
 ### 5.1 基础实体
 
-**v0.6 起新增**：StockPool（股票池 = 成员来源 + 规则列表 + 冷却 + enabled）、WatchTrigger（盯盘触发 = 池 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照）。StockPool 走 CRUD（list/create/update/delete_stock_pools），WatchTrigger 通过 `save_watch_trigger` tool 落库（由 `intraday-watch` workflow 触发）。Cooldown 通过 `WatchTriggerRepository.lastForKey(poolId, stockId, ruleKind, since)` 查询，进程重启后冷却可接续。详见 [docs/ddd/intraday-watch-design.md](./ddd/intraday-watch-design.md)。
+**当前研究与观察模型**：Strategy 是版本化研究规则；StrategyRun 产出可追溯的
+StrategyResult/StrategySignal。Watchlist 统一 manual/strategy/ai/portfolio/import 来源和成员
+生命周期。AlertPlan 引用 Watchlist 并产生 WatchTrigger。公开 surface 只读写这三个模型；
+旧表仅供 migration decoder 与只读回滚。
 
 **v0.6.2 起加深**：`MarketDataManager` 容错测试覆盖增加（详见 `packages/adapters/src/market/manager-resilience.test.ts`）：`batchQuote` 部分失败（primary 局部抛错 → fallback 仅补失败的那部分，其它 ok 仍走 primary）、`fetchDailyBars` 三层 fallback（primary → fallback → finalFallback）、自定义 `finalFallbackSuppressMs` 窗口验证。无新功能，纯测试深覆盖。
 
@@ -425,13 +432,9 @@ coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManag
 
 **v0.7 起新增**：`packages/cli/src/paths.ts`（`luoomeHome()` 从 context.ts 抽出，被 watch / holidays / future paths 共享）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
 
-**分组化起新增**：StockGroup（股票分组 = resolver(manual/holdings/formula/llm) + refreshPolicy + enabled，只回答「成员是谁」）、GroupMemberSnapshot（成员快照，一次刷新 = 一批同 refreshId，只增不改）。StockPool 从 `source` 改为 `groupId` 引用分组；启动时 `migrateLegacyPoolSourcesToGroups` 把 v0.6 旧 source JSON 幂等迁移成分组。分组 CRUD 走 list/get/create/update/delete_stock_group，刷新走 refresh_stock_group / refresh-groups workflow（盘外「生产者 + 快照」，hot path 只读快照）。详见 [docs/ddd/stock-group-design.md](./ddd/stock-group-design.md)。
-
-**v0.8 产品语义收口**：Web 将 `StockPool` 表述为“盯盘方案（WatchPlan）”。`list_watch_plans`
-提供面向界面的组合读取模型（方案、分组、成员数和可用状态），避免界面自行拼接 pool/group。
-底层实体和写 tool 暂不改名，以保持数据库与外部 Agent 兼容。
-Web 信息架构将方案配置收进分组详情；仪表盘承载跨分组运行状态、单轮试跑和最近触发，
-不再设置独立盯盘页面。
+**迁移与兼容**：`schema_migrations` runner 按事务运行幂等迁移，依次迁移 Strategy、
+Watchlist 与 AlertPlan。`luoome migration verify strategy-watchlist` 只读核对映射、成员集合、
+规则和引用。切换后只写目标表，不双写。
 
 **Vibe A 股报告迁移 Phase 1**：新增 `Report` 结构化事实简报，按
 `(kind, scopeKey, periodStart, periodEnd)` 逻辑键幂等保存。正文只允许受限
@@ -453,18 +456,9 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 记为 `failed`、运行审计记为 `partial`。CLI 通过 `workflow run ... --mode` 触发，
 Web 通过带 mutation token 与同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
 
-**Vibe A 股策略研究迁移 Phase 4**：`GroupMemberSnapshot` 增加可选 score、evidence、
-dataAsOf 与 TacticSignal 引用，旧 SQLite 行经幂等增量迁移读取为无证据快照。formula 分组
-刷新使用 active `CN_A_SHARES_SH_SZ` StockUniverse 和本地规范 qfq 日线，覆盖不完整时保留
-旧批次。`get_tactic_consensus` 只聚合同交易日、非 stale 的持久信号，保留 bullish/neutral
-支持信号与 bearish 反向信号；rankScore 只用于同批排序，不表示胜率或置信度。Web 研究视图
-复用现有分组与战法页面，不新增 Strategy 聚合根或自动 Advice/Trade 路径。
-
-**Vibe A 股策略研究迁移 Phase 5**：指标快照增加最新价、20 日动量、MA20/MA60 距离、
-上穿距今天数、连续站上 MA20 天数，以及 Bollinger 20 日上下轨、带宽和位置。新增
-`early-breakout` 与 `bollinger-band` 两个确定性内置 Tactic；后者只表达下轨超跌且
-MA60 长期趋势未破的 bullish 均值回复事实，不把上轨风险信号混为共振支持。各 surface
-通过统一装载函数幂等更新内置定义，业务空库仍不插入账户、股票、交易或 Advice。
+**Strategy 研究事实**：指标快照可包含最新价、动量、均线与 Bollinger 字段。规则求值的
+unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal 只表达事实，
+不表示胜率、Advice 或交易。
 
 ```txt
 Account          账户（真实，币种，初始资金）
@@ -473,8 +467,15 @@ Holding          持仓（账户、标的、数量、成本、开/平仓时间�
 Trade            交易记录（买/卖、数量、价、费、时间、来源）
 PriceSnapshot    实时行情快照（标的、ts、OHLC、量、源）
 DailyBar         规范前复权日线（标的、日期、qfq OHLC、量、来源、可选原始复权因子）
-Tactic           战法定义（名称、版本、YAML/JSON spec、标签）
-TacticSignal     战法信号（战法、标的、ts、分数、方向、证据）
+Strategy         版本化研究规则身份
+StrategyVersion  不可变 DSL 定义、hash、校验与发布时间
+StrategyRun      一次运行的 coverage、dataAsOf、状态和 provider 状态
+StrategyResult   逐股规则结果、分数、排名、证据
+StrategySignal   按规则产生的方向、分数、证据事实
+Watchlist        统一观察集合
+WatchlistMember  股票、研究阶段、优先级
+AlertPlan        引用 Watchlist 的规则、冷却和通知策略
+WatchTrigger     AlertPlan 命中事实与送达状态
 Alert            预警（账户?、标的?、类型、参数、状态）
 Note             笔记（标题、内容、标签、来源）
 Config           KV 配置（user/account/global scope）
@@ -520,7 +521,7 @@ export interface Advice {
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
-  readonly tacticSignals?: readonly TacticSignal[];
+  readonly strategySignals?: readonly StrategySignal[];
   readonly llmReasoning?: string;        // LLM 原始推理（用于审计）
   readonly dataAsOf: Date;               // 数据截止时间
 }
@@ -558,7 +559,9 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 来源：
 - **行情**：实时报价、日线、技术指标（多源交叉）
 - **基本面**：财报、估值、行业地位
-- **战法**：自定义规则扫描 + 评分
+- **Strategy**：版本化规则定义、校验、运行结果与可追溯信号
+- **Watchlist**：跨 Strategy、AI、组合与手工来源的统一关注集合
+- **AlertPlan**：引用 Watchlist 的提醒规则与送达策略
 - **持仓**：自己的交易历史、成本、盈亏
 - **笔记 / RAG**：用户自己的研究笔记 + 公开资料
 - **LLM**：综合推理（受控输入，Zod 校验输出）
@@ -572,8 +575,8 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 | `compute_pnl` | holdings + quotes | PnL breakdown |
 | `compute_risk_metrics` | holdings + history | VaR / Sharpe / 最大回撤 |
 | `compute_indicators` | daily bars | MA / RSI / MACD / BOLL |
-| `run_tactic` | tactic + scope | signals |
-| `score_signals` | signals + context | scored signals (LLM) |
+| `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
+| `sync_watchlist_source` | source candidates | membership diff + sync audit |
 | `analyze_stock` | stock + 上下文 | **Advice[]**（buy/sell/hold/...） |
 
 ### 6.3 建议层
@@ -593,8 +596,8 @@ export const analyzeStockTool = defineTool({
     const bars = await ctx.adapters.market.fetchDailyBars(input.stockId, last60Days);
     const indicators = computeIndicators(bars);
 
-    // 2. 跑战法
-    const signals = await ctx.tools.run_tactic.execute({ stockId: input.stockId });
+    // 2. 读取已持久化的 StrategySignal
+    const signals = await ctx.repos.strategyRun.signalsByStock(input.stockId);
 
     // 3. 拉持仓上下文（如有）
     const position = await ctx.repos.holding.findByAccountAndStock(ctx.user.accountId, input.stockId);
@@ -716,14 +719,15 @@ type ToolError =
 ### 8.1 内置 workflow
 
 - `daily-advice`：每个持仓股 → `analyze_stock` → 持久化 → 推送高分建议（v0.2）
-- `tactic-scan`：跑战法 → 评分 → 转建议（v0.3）
+- `run-strategies`：运行已发布 Strategy，并可将完整结果同步到目标 Watchlist
+- `sync-portfolio-watchlists`：按账户同步 portfolio 来源
 - `market-outlook`：拉大盘指数 + 板块涨跌 → LLM 综合 → 市场观点（v0.3）
 - `risk-report`：风控指标 + 持仓建议（v0.3）
 - `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
 - `post-market-data`：交易日盘后同步股票目录与相关股票 qfq 日线，目录或单股失败时保留成功项并返回 partial
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
-- `intraday-watch`：单轮盘中盯盘评估 —— daily 分组刷新检查 → 池成员 → batch_quote → get_previous_closes → 规则评估 → cooldown 过滤 → 触发落库 → 通知；昨收不可用时 price-change 为 unknown，不使用 quote.open（v0.6 起；设计：[docs/ddd/intraday-watch-design.md](./ddd/intraday-watch-design.md)）
-- `refresh-groups`：盘外刷新 enabled 动态分组（formula→run_tactic / llm→resolve_llm_group），失败 / 空结果保留旧快照，输出 entered/exited（分组化起；设计：[docs/ddd/stock-group-design.md](./ddd/stock-group-design.md)）
+- `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
+  StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
 - **Phase 2 候选**：连板天梯联动 workflow —— 在 `daily-review` / `market-outlook` 中读 `limit_up_ladder` 与 `limit_up_ladder_compare` tool，把天梯快照作为 LLM 复盘段的事实来源（替换 ruo 旧 `market-review.chain.ts` 字符串拼接）。Phase 1 仅提供 tool；workflow 改造延后（设计：[docs/ddd/limit-up-ladder-detailed-design.md §9](./ddd/limit-up-ladder-detailed-design.md)）。
 
 ### 8.2 Workflow 与 tool 的边界
@@ -794,7 +798,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
                     ├──► list_holdings (read)         ──► HoldingRepo ──► SQLite
                     ├──► batch_quote (read)           ──► MarketAdapter ──► Eastmoney
                     ├──► compute_pnl (read)           ──► 纯计算
-                    └──► analyze_stock (advice) ×N    ──► LLM + 战法 + 数据
+                    └──► analyze_stock (advice) ×N    ──► LLM + StrategySignal + 数据
                     │
                     ▼
 [MCP stdio] ◄── { pnl: {...}, advices: [Advice, ...] }

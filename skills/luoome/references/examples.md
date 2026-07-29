@@ -21,12 +21,12 @@ User gives a stock, side, quantity, price and execution time:
 4. Invoke `add_trade` using its discovered schema.
 5. Re-read the holding/trade record and report the persisted result.
 
-## Run a tactic scan
+## Run a Strategy sample
 
-1. Use `list_tactics` or `get_tactic` to identify the tactic.
-2. Invoke `run_tactic` with a bounded scope supported by its schema.
-3. Use signal query/scoring tools only if the user asks for ranking or evidence.
-4. Explain that a tactic signal is evidence, not an order or guaranteed outcome.
+1. Use `list_strategies` or `get_strategy` to identify a published Strategy and exact version.
+2. For an automatic sample, invoke `run_strategy` with explicit `stockIds` and `persist=false`.
+3. A persisted or full-market run requires an explicit confirmation.
+4. Explain that StrategyResult and StrategySignal are evidence, not an order or guaranteed outcome.
 
 ## Analyze a stock
 

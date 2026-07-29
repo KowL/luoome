@@ -24,8 +24,8 @@ class StubAgentRuntime implements AgentRuntimeLike {
         disclaimers: ['模型输出可能有误'],
         drafts: [
           {
-            kind: 'stock-group',
-            tool: 'create_stock_group',
+            kind: 'strategy',
+            tool: 'create_strategy',
             input: {},
             summary: '缺少必填字段的无效草案',
           },
@@ -87,6 +87,9 @@ describe('agent_run', () => {
 
   it('白名单中的每个名字都已注册且不包含 agent_run 自身', () => {
     expect(AGENT_V1_TOOL_NAMES).not.toContain('agent_run');
+    expect(AGENT_V1_TOOL_NAMES).not.toContain('list_tactics');
+    expect(AGENT_V1_TOOL_NAMES).not.toContain('list_stock_groups');
+    expect(AGENT_V1_TOOL_NAMES).not.toContain('list_stock_pools');
     for (const name of AGENT_V1_TOOL_NAMES) {
       expect(toolRegistry.get(name), name).toBeDefined();
     }

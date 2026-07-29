@@ -16,7 +16,7 @@ export const WatchRunSchema = z.object({
   triggered: z.number().int().nonnegative(),
   notified: z.number().int().nonnegative(),
   suppressedByCooldown: z.number().int().nonnegative(),
-  /** v0.7 策略预警（docs/ddd/strategy-alert-detailed-design.md §3.6/§4/§11）：方案 / 全局每日上限命中被抑制条数。 */
+  /** v0.7 策略预警（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.6/§4/§11）：方案 / 全局每日上限命中被抑制条数。 */
   suppressedByDailyLimit: z.number().int().nonnegative(),
   /** v0.7 策略预警：deliveryStatus='failed' 条数（仪表盘告警）。 */
   notifyFailed: z.number().int().nonnegative(),

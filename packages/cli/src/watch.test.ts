@@ -85,7 +85,7 @@ describe('formatTriggersForLog', () => {
     overrides: Partial<Parameters<typeof formatTriggersForLog>[0][number] & { id: string }> = {},
   ) => ({
     id: 't-1',
-    poolId: 'holdings-watch',
+    alertPlanId: 'holdings-watch',
     stockId: '002594.SZ',
     ruleKind: 'price-change' as const,
     direction: 'watch' as const,

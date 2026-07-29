@@ -2,10 +2,12 @@ import { Database } from 'bun:sqlite';
 import type { RepositoryRegistry } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
-
+import { runSchemaMigrations } from './migrations/runner.js';
+import { STRATEGY_MIGRATIONS } from './migrations/strategy.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
+  DrizzleAlertPlanRepository,
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
   DrizzleGroupMemberRepository,
@@ -20,8 +22,12 @@ import {
   DrizzleStockPoolRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
+  DrizzleStrategyRepository,
+  DrizzleStrategyRunRepository,
   DrizzleTacticRepository,
   DrizzleTradeRepository,
+  DrizzleWatchlistMemberRepository,
+  DrizzleWatchlistRepository,
   DrizzleWatchRuleStateRepository,
   DrizzleWatchRunRepository,
   DrizzleWatchTriggerRepository,
@@ -40,6 +46,14 @@ export type DrizzleDb = BunSQLiteDatabase<Schema>;
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL,
+      checksum TEXT NOT NULL,
+      details_json TEXT NOT NULL
+    )
+  `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS signal_observations (
       id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
@@ -300,6 +314,106 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS tactic_signals_stock_ts_idx ON tactic_signals (stock_id, ts)`,
   );
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      status TEXT NOT NULL,
+      current_version_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS strategies_status_idx ON strategies (status)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS strategies_owner_idx ON strategies (owner)`);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_versions (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      definition_json TEXT NOT NULL,
+      definition_hash TEXT NOT NULL,
+      parent_version_id TEXT,
+      change_summary TEXT,
+      validation_status TEXT NOT NULL,
+      validation_errors_json TEXT NOT NULL,
+      published_at INTEGER,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS strategy_versions_strategy_version_unique
+    ON strategy_versions (strategy_id, version)
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_versions_hash_idx ON strategy_versions (definition_hash)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_runs (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL,
+      strategy_version_id TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      coverage TEXT NOT NULL,
+      data_as_of INTEGER NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      status TEXT NOT NULL,
+      input_snapshot_json TEXT NOT NULL,
+      provider_statuses_json TEXT NOT NULL,
+      summary_json TEXT,
+      error TEXT
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_runs_strategy_started_idx ON strategy_runs (strategy_id, started_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_runs_status_started_idx ON strategy_runs (status, started_at)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_results (
+      run_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      selected INTEGER NOT NULL,
+      score REAL,
+      rank INTEGER,
+      rule_evaluations_json TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      data_as_of INTEGER NOT NULL,
+      PRIMARY KEY (run_id, stock_id)
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_results_run_rank_idx ON strategy_results (run_id, rank)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_signals (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL,
+      strategy_version_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      rule_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      score REAL NOT NULL,
+      direction TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      evaluation_snapshot_json TEXT NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS strategy_signals_identity_unique
+    ON strategy_signals (strategy_version_id, rule_id, stock_id, ts)
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_signals_strategy_ts_idx ON strategy_signals (strategy_id, ts)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_signals_stock_ts_idx ON strategy_signals (stock_id, ts)`,
+  );
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       channel TEXT NOT NULL,
@@ -342,12 +456,24 @@ export const ensureSchema = (db: DrizzleDb): void => {
   migrateLegacyStockPools(db);
   migrateStrategyAlertPoolColumns(db);
   db.run(sql`CREATE INDEX IF NOT EXISTS stock_pools_enabled_idx ON stock_pools (enabled)`);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS alert_plans (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+      watchlist_id TEXT NOT NULL, rules TEXT NOT NULL, logic TEXT NOT NULL,
+      trigger_mode TEXT NOT NULL, priority TEXT, cooldown_minutes INTEGER NOT NULL,
+      daily_notification_limit INTEGER NOT NULL, notify_on_recovery INTEGER NOT NULL,
+      enabled INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS alert_plans_watchlist_idx ON alert_plans (watchlist_id)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS alert_plans_enabled_idx ON alert_plans (enabled)`);
   // v0.6 起：盯盘触发。v0.7 增 rule_id / trigger_type / priority / delivery_status /
   // notification_id / eval_snapshot / feedback / feedback_at，并把 cooldown 索引改用 rule_id
   // （§3.4 / §3.7）。
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_triggers (
       id TEXT PRIMARY KEY,
+      alert_plan_id TEXT,
       pool_id TEXT NOT NULL,
       stock_id TEXT NOT NULL,
       rule_kind TEXT NOT NULL,
@@ -385,6 +511,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   // v0.7 起：边沿状态机表（§3.5）
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_rule_states (
+      alert_plan_id TEXT,
       pool_id TEXT NOT NULL,
       stock_id TEXT NOT NULL,
       rule_id TEXT NOT NULL,
@@ -397,6 +524,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
     )
   `);
   db.run(sql`CREATE INDEX IF NOT EXISTS watch_rule_states_pool_idx ON watch_rule_states (pool_id)`);
+  migrateAlertPlanReferenceColumns(db);
   // v0.6 起：每轮 watch 心跳。v0.7 增 suppressed_by_daily_limit / notify_failed（§3.6）。
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_runs (
@@ -417,7 +545,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   migrateStrategyAlertRunColumns(db);
   db.run(sql`CREATE INDEX IF NOT EXISTS watch_runs_started_at_idx ON watch_runs (started_at)`);
-  // 分组化起（docs/ddd/stock-group-design.md §3）：股票分组 + 成员快照
+  // 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §3）：股票分组 + 成员快照
   db.run(sql`
     CREATE TABLE IF NOT EXISTS stock_groups (
       id TEXT PRIMARY KEY,
@@ -453,6 +581,82 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS group_members_group_ts_idx ON group_member_snapshots (group_id, created_at)`,
   );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS watchlists (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL,
+      membership_policy TEXT NOT NULL, enabled INTEGER NOT NULL,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_enabled_idx ON watchlists (enabled)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_kind_idx ON watchlists (kind)`);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS watchlist_members (
+      id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+      stage TEXT NOT NULL, priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
+      last_activity_at INTEGER NOT NULL, archived_at INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS watchlist_members_watchlist_stock_unique
+    ON watchlist_members (watchlist_id, stock_id)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS watchlist_members_watchlist_stage_idx
+    ON watchlist_members (watchlist_id, stage)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS watchlist_member_sources (
+      id TEXT PRIMARY KEY, member_id TEXT NOT NULL, kind TEXT NOT NULL, source_key TEXT NOT NULL,
+      source_id TEXT, source_version_id TEXT, sync_run_id TEXT, reason TEXT NOT NULL,
+      score REAL, rank INTEGER, status TEXT NOT NULL, evidence_json TEXT NOT NULL,
+      data_as_of INTEGER, valid_from INTEGER NOT NULL, valid_until INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS watchlist_sources_member_status_idx
+    ON watchlist_member_sources (member_id, status)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS watchlist_sources_key_status_idx
+    ON watchlist_member_sources (source_key, status)
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS watchlist_sources_current_unique
+    ON watchlist_member_sources (member_id, source_key) WHERE status <> 'ended'
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS watchlist_sync_runs (
+      id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, source_kind TEXT NOT NULL,
+      source_key TEXT NOT NULL, producer_run_id TEXT, status TEXT NOT NULL, data_as_of INTEGER,
+      started_at INTEGER NOT NULL, finished_at INTEGER, entered_count INTEGER NOT NULL,
+      exited_count INTEGER NOT NULL, unchanged_count INTEGER NOT NULL,
+      missing_dimensions_json TEXT NOT NULL, error TEXT
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS watchlist_sync_runs_watchlist_started_idx
+    ON watchlist_sync_runs (watchlist_id, started_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS watchlist_sync_runs_producer_idx
+    ON watchlist_sync_runs (producer_run_id)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS membership_snapshots (
+      id TEXT PRIMARY KEY, sync_run_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+      selected INTEGER NOT NULL, change TEXT NOT NULL, reason TEXT NOT NULL,
+      score REAL, rank INTEGER, evidence_json TEXT NOT NULL, data_as_of INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS membership_snapshots_run_stock_unique
+    ON membership_snapshots (sync_run_id, stock_id)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS membership_snapshots_run_change_idx
+    ON membership_snapshots (sync_run_id, change)
+  `);
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）：研究档案 + 公司事件 + workflow 审计
   db.run(sql`
     CREATE TABLE IF NOT EXISTS research_notes (
@@ -691,7 +895,7 @@ const migratePriceSnapshotPrevCloseColumn = (db: DrizzleDb): void => {
  * - 新库：表已由上方 DDL 按新结构建好，直接跳过
  * - 旧库：放宽 source NOT NULL（SQLite 不支持改列约束 → 表重建）+ 补 group_id 列；
  *   存量行 source 数据原样保留、group_id 置 NULL，数据迁移（拆分组）由
- *   migrateLegacyPoolSourcesToGroups 完成（docs/ddd/stock-group-design.md §5）
+ *   migrateLegacyPoolSourcesToGroups 完成（docs/ddd/strategy-watchlist-unification-detailed-design.md §5）
  */
 const migrateLegacyStockPools = (db: DrizzleDb): void => {
   const cols = db.all<{ name: string; notnull: number }>(sql`PRAGMA table_info(stock_pools)`);
@@ -732,7 +936,7 @@ const migrateLegacyStockPools = (db: DrizzleDb): void => {
 };
 
 /**
- * 阶段 B 存量数据迁移（docs/ddd/stock-group-design.md §5）：把 v0.6 pool.source JSON 拆成分组。
+ * 阶段 B 存量数据迁移（docs/ddd/strategy-watchlist-unification-detailed-design.md §5）：把 v0.6 pool.source JSON 拆成分组。
  *
  * - 找 group_id 为空（NULL 或 ''）且 source 列有 JSON 的旧 pool 行
  * - 按 source.kind 建分组（id=`<poolId>-group`）：
@@ -746,7 +950,7 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
   // 历史迁移曾把内部审计说明写进 description（用户可见字段），清空之（幂等）。
   db.run(sql`
     UPDATE stock_groups SET description = NULL
-    WHERE description = ${'由 v0.6 pool.source 迁移（docs/ddd/stock-group-design.md §5）'}
+    WHERE description = ${'由 v0.6 pool.source 迁移（docs/ddd/strategy-watchlist-unification-detailed-design.md §5）'}
   `);
 
   const rows = db.all<{ id: string; name: string; source: unknown }>(sql`
@@ -835,7 +1039,7 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
 };
 
 /**
- * v0.7 策略预警列补齐（docs/ddd/strategy-alert-detailed-design.md §3.7）：
+ * v0.7 策略预警列补齐（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.7）：
  * stock_pools 缺 5 列时 ALTER TABLE ADD。幂等（启动重复执行无副作用）。
  */
 const migrateStrategyAlertPoolColumns = (db: DrizzleDb): void => {
@@ -947,6 +1151,23 @@ const migrateStrategyAlertTriggerColumns = (db: DrizzleDb): void => {
       db.run(sql`UPDATE watch_triggers SET rule_id = ${match.id as string} WHERE id = ${t.id}`);
     } // 多条规则同类 → 留空接受冷却重置一轮（PRD §9.2）
   }
+};
+
+const migrateAlertPlanReferenceColumns = (db: DrizzleDb): void => {
+  const triggerColumns = new Set(
+    db.all<{ name: string }>(sql`PRAGMA table_info(watch_triggers)`).map((row) => row.name),
+  );
+  if (!triggerColumns.has('alert_plan_id')) {
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN alert_plan_id TEXT`);
+  }
+  const stateColumns = new Set(
+    db.all<{ name: string }>(sql`PRAGMA table_info(watch_rule_states)`).map((row) => row.name),
+  );
+  if (!stateColumns.has('alert_plan_id')) {
+    db.run(sql`ALTER TABLE watch_rule_states ADD COLUMN alert_plan_id TEXT`);
+  }
+  db.run(sql`UPDATE watch_triggers SET alert_plan_id = pool_id WHERE alert_plan_id IS NULL`);
+  db.run(sql`UPDATE watch_rule_states SET alert_plan_id = pool_id WHERE alert_plan_id IS NULL`);
 };
 
 /**
@@ -1066,6 +1287,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   }
   const db = drizzle(sqlite, { schema });
   ensureSchema(db);
+  runSchemaMigrations(sqlite, STRATEGY_MIGRATIONS);
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     stock: new DrizzleStockRepository(db),
@@ -1078,9 +1300,14 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     dailyBar: new DrizzleDailyBarRepository(db),
     signalObservation: new DrizzleSignalObservationRepository(db),
     tactic: new DrizzleTacticRepository(db),
+    strategy: new DrizzleStrategyRepository(db),
+    strategyRun: new DrizzleStrategyRunRepository(db),
+    watchlist: new DrizzleWatchlistRepository(db),
+    watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),
     // v0.6 起
     stockPool: new DrizzleStockPoolRepository(db),
+    alertPlan: new DrizzleAlertPlanRepository(db),
     watchTrigger: new DrizzleWatchTriggerRepository(db),
     // v0.7 起：边沿状态机
     watchRuleState: new DrizzleWatchRuleStateRepository(db),

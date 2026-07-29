@@ -2,7 +2,7 @@
 
 > 状态：产品方案已确认；Phase 1 已实现（2026-07-25）
 > 日期：2026-07-24
-> 参考：旧项目 `ruo` 源码审计、[策略预警产品文档](./strategy-alert-product.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)
+> 参考：旧项目 `ruo` 源码审计、[统一 Watchlist](./watchlist.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)
 > 产品边界：本地单用户、Web 为主入口、CLI/MCP 为高级入口；只提供研究、提醒、建议和复盘，不自动下单
 
 ## 1. 文档结论
@@ -348,7 +348,7 @@ StockEvent
 - 每个（事件, 提醒日）组合在同一方案下最多产生一条触发，去重携带事件身份（`WatchTrigger` 增加 `eventId`，cooldown/去重键对 event-date 扩展为 `(poolId, stockId, ruleId, eventId)`，避免同一股票的两个不同事件互相抑制）；
 - 事件改期（`occursAt` 变更）视为新的事实：按新日期重新计算提醒窗口，已发提醒保留历史，不因改期撤回。
 
-事件提醒仍遵循策略预警文档中的优先级、送达状态和 handled/useful 反馈；`WatchTrigger` 加 `eventId` 的 schema 变更需与策略预警详细设计（docs/ddd/strategy-alert-detailed-design.md）的迁移方案对齐，同属一次 watch_triggers 演进。
+事件提醒遵循 AlertPlan 的优先级、送达状态和 handled/useful 反馈；`WatchTrigger` 的事件引用按统一迁移 runner 演进。
 
 ### 6.3 数据来源与新鲜度
 

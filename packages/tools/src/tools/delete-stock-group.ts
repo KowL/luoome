@@ -12,7 +12,7 @@ export const DeleteStockGroupOutput = z.object({
 });
 
 /**
- * 删除股票分组（分组化起，write；docs/ddd/stock-group-design.md §6）。
+ * 删除股票分组（分组化起，write；docs/ddd/strategy-watchlist-unification-detailed-design.md §6）。
  *
  * 有 pool 引用时拒绝（invariant_violation，提示先解绑）。
  * 历史成员快照不级联删除（groupId 字段保留作为审计线索，同 delete_stock_pool 口径）。

@@ -33,7 +33,11 @@ describe('runIntradayWatchObserved', () => {
     const ctx = await buildTestContext({
       clock: () => new Date('2026-07-23T02:00:00.000Z'),
     });
-    const result = await runIntradayWatchObserved({ poolIds: [''], notify: false }, ctx, 'once');
+    const result = await runIntradayWatchObserved(
+      { alertPlanIds: [''], notify: false },
+      ctx,
+      'once',
+    );
 
     expect(result.ok).toBe(false);
     const latest = await ctx.repos.watchRun.latest();

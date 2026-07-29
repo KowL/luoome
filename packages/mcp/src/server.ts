@@ -16,7 +16,7 @@
 //   与 CLI/OpenAI 面共用同一转换），tools/call 统一走 tool.execute 的
 //   校验与错误模型。传输层仍是 StdioServerTransport，协议行为不变。
 
-import { createRegistry, type Tool, toolRegistry } from '@luoome/tools';
+import { createRegistry, toolRegistry } from '@luoome/tools';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -27,9 +27,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { createServerContext, type ServerContextHandle } from './context.js';
-import { resolveAllowedSideEffects } from './exposure.js';
+import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
-export { resolveAllowedSideEffects } from './exposure.js';
+export { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
 export interface StartMcpServerOptions {
   /** 默认 process.env；测试可注入。 */
@@ -60,9 +60,7 @@ export const startMcpServer = async (
 
   const { ctx, close: closeCtx } = opts.context ?? (await createServerContext(env));
 
-  const allowedTools: readonly Tool[] = toolRegistry
-    .all()
-    .filter((tool) => allowedSideEffects.has(tool.sideEffect));
+  const allowedTools = selectMcpTools(toolRegistry.all(), allowedSideEffects);
   // createRegistry(...).toMCP() 复用 tools 包的 JSON Schema 转换
   //（z.toJSONSchema(io:'input', unrepresentable:'any')），并顺带做重名检查。
   const descriptors = createRegistry(allowedTools).toMCP();

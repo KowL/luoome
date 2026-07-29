@@ -7,7 +7,7 @@ import { QuoteCache } from './cache.js';
 import { createTestMarketDataManager } from './manager.test-helper.js';
 
 /**
- * 真实行情链路容错深度测试（v0.6.2 起，docs/ddd/intraday-watch-design.md §'后续工作'）：
+ * 真实行情链路容错深度测试（v0.6.2 起，docs/ddd/strategy-watchlist-unification-detailed-design.md §'后续工作'）：
  * - batchQuote 部分失败（primary 局部抛错 → fallback 仅拉失败的那部分）
  * - fetchDailyBars primary/fallback/finalFallback 全路径
  * - 自定义 finalFallbackSuppressMs 行为

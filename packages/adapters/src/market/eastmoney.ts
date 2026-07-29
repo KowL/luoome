@@ -257,7 +257,7 @@ const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
 
 /**
  * clist（全市场快照）参数：fs 覆盖深主板(t:6)+创业板(t:80)+沪主板(t:2)+科创板(t:23)。
- * fid=f3 = 按涨跌幅降序（分组刷新的 llm 候选取前 N 条时偏向强势股，见 stock-group-design §4）。
+ * fid=f3 = 按涨跌幅降序；若 AI 来源只取前 N 条，会产生强势股抽样偏置。
  */
 const CLIST_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23';
 const CLIST_FIELDS = 'f12,f13,f14,f2,f3';

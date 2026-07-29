@@ -1,9 +1,9 @@
 import {
+  type AlertPlan,
   type AlertPriority,
+  type AlertRule,
   eventImportanceToPriority,
   type StockEvent,
-  type StockPool,
-  type WatchRule,
   type WatchTrigger,
   type WorkflowRun,
 } from '@luoome/core';
@@ -14,12 +14,12 @@ import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './defin
 /**
  * evaluate-event-rules workflow（ruo 迁移 §5，每日盘前，不复用 intraday-watch）。
  *
- *   1. 加载 enabled pool 中所有 event-date 规则（pool × rule）
- *   2. 解析 pool 分组成员
+ *   1. 加载 enabled AlertPlan 中所有 event-date 规则
+ *   2. 解析其 Watchlist 当前成员
  *   3. listUpcoming(stockId, now, now+max(daysBefore)) 过滤 kinds / minImportance
  *   4. effectiveDays = event.remindBeforeDays 非空 ? 事件级 : 规则 daysBefore
  *      d = event.occursAt − 今日（Asia/Shanghai 自然日差）；d ∈ effectiveDays 且未发过
- *      (poolId, stockId, ruleId, eventId, d) → 生成 WatchTrigger
+ *      (alertPlanId, stockId, ruleId, eventId, d) → 生成 WatchTrigger
  *   5. 送达矩阵：normal → not-requested（仅记录）；important/urgent → pending → 发送
  *
  * 用法：`luoome workflow run evaluate-event-rules`（cron 每交易日 08:50，同步之后）。
@@ -50,35 +50,27 @@ export type EvaluateEventRulesInputT = z.infer<typeof EvaluateEventRulesInput>;
 export const EvaluateEventRulesOutput = z.object({
   runId: z.string(),
   status: z.enum(['succeeded', 'partial', 'failed']),
-  evaluatedPools: z.number().int().nonnegative(),
+  evaluatedPlans: z.number().int().nonnegative(),
   triggered: z.number().int().nonnegative(),
   notified: z.number().int().nonnegative(),
   deduped: z.number().int().nonnegative(),
 });
 
-/** 解析 pool 分组成员的 stockId 集合（复用现有读路径）。 */
+/** 解析 AlertPlan 所属 Watchlist 的当前非归档成员。 */
 const resolveMemberStockIds = async (
-  pool: StockPool,
+  plan: AlertPlan,
   ctx: WorkflowContext,
 ): Promise<readonly string[]> => {
-  const group = await ctx.repos.stockGroup.findById(pool.groupId);
-  if (group === null || !group.enabled) return [];
-  if (group.resolver.kind === 'manual') return group.resolver.stockIds;
-  if (group.resolver.kind === 'holdings') {
-    const r = await ctx.tools.list_holdings.execute({ accountId: group.resolver.accountId });
-    return r.ok ? r.data.holdings.map((h) => h.holding.stockId) : [];
-  }
-  // formula / llm → 当前快照
-  const members = await ctx.repos.groupMember.currentMembers(group.id);
+  const watchlist = await ctx.repos.watchlist.findById(plan.watchlistId);
+  if (watchlist === null || !watchlist.enabled) return [];
+  const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
   return members.map((m) => m.stockId);
 };
 
-const eventDateRules = (
-  pool: StockPool,
-): readonly (Extract<WatchRule, { kind: 'event-date' }> & { id: string })[] =>
-  pool.rules
-    .filter((r): r is Extract<WatchRule, { kind: 'event-date' }> => r.kind === 'event-date')
-    .map((r) => ({ ...r, id: r.id ?? `r_${globalThis.crypto.randomUUID().slice(0, 8)}` }));
+const eventDateRules = (plan: AlertPlan): readonly Extract<AlertRule, { kind: 'event-date' }>[] =>
+  plan.rules.filter(
+    (rule): rule is Extract<AlertRule, { kind: 'event-date' }> => rule.kind === 'event-date',
+  );
 
 const buildReason = (event: StockEvent, d: number): string => {
   const when = d === 0 ? '今日' : `${d} 天后`;
@@ -108,18 +100,18 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
   };
   await ctx.repos.workflowRun.save(runningRun);
 
-  const pools = await ctx.repos.stockPool.list(true);
-  let evaluatedPools = 0;
+  const plans = await ctx.repos.alertPlan.list({ enabledOnly: true });
+  let evaluatedPlans = 0;
   let triggered = 0;
   let deduped = 0;
   const pending: WatchTrigger[] = [];
 
   try {
-    for (const pool of pools) {
-      const rules = eventDateRules(pool);
+    for (const plan of plans) {
+      const rules = eventDateRules(plan);
       if (rules.length === 0) continue;
-      evaluatedPools += 1;
-      const stockIds = await resolveMemberStockIds(pool, ctx);
+      evaluatedPlans += 1;
+      const stockIds = await resolveMemberStockIds(plan, ctx);
 
       for (const rule of rules) {
         const maxDays = Math.max(0, ...(rule.daysBefore.length > 0 ? rule.daysBefore : [7, 3, 1]));
@@ -135,9 +127,9 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
             const d = dayDiff(event.occursAt, now);
             if (!effectiveDays.includes(d)) continue;
 
-            // 去重：(poolId, stockId, ruleId, eventId, remindDay) 最多一条
+            // 去重：(alertPlanId, stockId, ruleId, eventId, remindDay) 最多一条
             const existing = await ctx.repos.watchTrigger.listRecent({
-              poolId: pool.id,
+              poolId: plan.id,
               ruleId: rule.id,
               eventId: event.id,
               limit: 100,
@@ -157,7 +149,8 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
 
             const trigger: WatchTrigger = {
               id: `wt_${globalThis.crypto.randomUUID().slice(0, 8)}`,
-              poolId: pool.id,
+              alertPlanId: plan.id,
+              poolId: plan.id,
               stockId,
               ruleKind: 'event-date',
               ruleId: rule.id,
@@ -197,23 +190,23 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
     return EvaluateEventRulesOutput.parse({
       runId,
       status: 'failed',
-      evaluatedPools,
+      evaluatedPlans,
       triggered,
       notified: 0,
       deduped,
     });
   }
 
-  // 发送 pending（按池分组），回写 deliveryStatus
+  // 发送 pending（按 AlertPlan 分组），回写 deliveryStatus
   let notified = 0;
   let sendFailed = false;
-  const byPool = new Map<string, WatchTrigger[]>();
+  const byPlan = new Map<string, WatchTrigger[]>();
   for (const t of pending) {
-    const arr = byPool.get(t.poolId) ?? [];
+    const arr = byPlan.get(t.poolId) ?? [];
     arr.push(t);
-    byPool.set(t.poolId, arr);
+    byPlan.set(t.poolId, arr);
   }
-  for (const [poolId, group] of byPool) {
+  for (const [alertPlanId, group] of byPlan) {
     const lines = group.map((t) => {
       const prio =
         t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
@@ -221,7 +214,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
     });
     const r = await ctx.tools.send_notification.execute({
       log: {
-        title: `事件提醒 池-${poolId} ${group.length} 条`,
+        title: `事件提醒 ${alertPlanId} ${group.length} 条`,
         content: lines.join('\n'),
         level: 'info',
       },
@@ -253,14 +246,14 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
     ...runningRun,
     status,
     finishedAt: ctx.clock(),
-    outputSummary: { evaluatedPools, triggered, notified, deduped },
+    outputSummary: { evaluatedPlans, triggered, notified, deduped },
   };
   await ctx.repos.workflowRun.save(terminal);
 
   return EvaluateEventRulesOutput.parse({
     runId,
     status,
-    evaluatedPools,
+    evaluatedPlans,
     triggered,
     notified,
     deduped,

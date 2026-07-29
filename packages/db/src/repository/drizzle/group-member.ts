@@ -22,7 +22,7 @@ const toSnapshot = (row: GroupMemberRow): GroupMemberSnapshot => ({
 });
 
 /**
- * 成员快照的 Drizzle 实现（docs/ddd/stock-group-design.md §1）。
+ * 成员快照的 Drizzle 实现（docs/ddd/strategy-watchlist-unification-detailed-design.md §1）。
  * 快照只增不改：saveBatch 同 id 冲突忽略；currentMembers = 最新 refreshId 那一批。
  */
 export class DrizzleGroupMemberRepository implements GroupMemberRepository {

@@ -34,7 +34,7 @@ const parseRouteHash = (hash) => {
 const buildMarketHash = (stockId, range) =>
   `market?stockId=${encodeURIComponent(stockId)}&range=${encodeURIComponent(range)}`;
 
-/** 持仓 / 分组等页面跳行情页的锚点 href：默认 3m，与深链接口径一致。 */
+/** 业务页面跳行情页的锚点 href：默认 3m，与深链接口径一致。 */
 const buildMarketLink = (stockId) => `#${buildMarketHash(stockId, '3m')}`;
 
 /** range 归一化：非法值回退 3m（Tool input 默认口径一致）。 */

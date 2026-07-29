@@ -35,9 +35,10 @@
       <ul class="nav" role="navigation">
         <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>看盘</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
-        <li><a class="nav-item" href="#groups" data-route="groups"><span>分组</span></a></li>
+        <li><a class="nav-item" href="#strategies" data-route="strategies"><span>Strategy</span></a></li>
+        <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>Watchlist</span></a></li>
+        <li><a class="nav-item" href="#alerts" data-route="alerts"><span>AlertPlan</span></a></li>
         <li><a class="nav-item" href="#research" data-route="research"><span>研究</span></a></li>
-        <li><a class="nav-item" href="#tactics" data-route="tactics"><span>战法</span></a></li>
         <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
         <li><a class="nav-item" href="#reports" data-route="reports"><span>报告</span></a></li>
         <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
@@ -69,7 +70,7 @@
           <div class="card">
             <div class="card-header">
               <h2>今日预警</h2>
-              <a href="#groups" class="card-link">在分组中管理方案 →</a>
+              <a href="#alerts" class="card-link">管理 AlertPlan →</a>
             </div>
             <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
           </div>
@@ -121,14 +122,14 @@
             <div class="watch-run-summary" id="dash-watch-run-summary">跑一轮后显示评估指标</div>
           </div>
           <div class="rail-metrics">
-            <span><b id="dash-pool-count">--</b> 个方案</span>
-            <span><b id="dash-group-count">--</b> 个分组</span>
+            <span><b id="dash-alert-count">--</b> 个 AlertPlan</span>
+            <span><b id="dash-watchlist-count">--</b> 个 Watchlist</span>
             <span><b id="dash-stale-count">--</b> 个待刷新</span>
           </div>
           <button id="btn-dashboard-watch-run" class="btn btn-watch-run" type="button">立即跑一轮</button>
         </div>
         <div class="card" id="dashboard-data-health">
-          <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale 分组</div></div>
+          <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale Watchlist</div></div>
           <div id="data-health-body" class="data-health">加载中…</div>
         </div>
       </section>
@@ -248,33 +249,62 @@
         </div>
       </section>
 
-      <!-- route: groups -->
-      <section id="route-groups" class="route" data-route="groups" hidden>
+      <section id="route-strategies" class="route" data-route="strategies" hidden>
         <div class="route-header">
           <div>
-            <h1>股票分组</h1>
-            <div class="route-meta">成员与盯盘方案 · 手动 / 持仓 / 战法 / LLM</div>
+            <h1>Strategy</h1>
+            <div class="route-meta">版本化定义 · 校验 · 发布 · 运行</div>
           </div>
-          <button id="btn-group-add" class="btn btn-primary" type="button">+ 新建分组</button>
+          <button id="btn-strategy-create" class="btn btn-primary" type="button">+ 从模板创建</button>
         </div>
         <div class="split-pane">
           <div class="card entity-pane">
-            <div class="card-header"><h2>分组目录</h2><div class="card-meta" id="groups-meta">--</div></div>
-            <div id="groups-list" class="entity-list"><p class="placeholder">加载中…</p></div>
+            <div class="card-header"><h2>Strategy 目录</h2><div id="strategies-meta" class="card-meta">--</div></div>
+            <div id="strategies-list" class="entity-list"><p class="placeholder">加载中…</p></div>
           </div>
           <div class="card detail-pane">
-            <div id="group-detail"><p class="placeholder">从左侧选择一个分组查看成员。</p></div>
+            <div id="strategy-detail"><p class="placeholder">选择 Strategy 查看版本和运行操作。</p></div>
           </div>
         </div>
-        <!-- v0.7 策略预警：模板创建 + 自然语言草案（docs/.../§10 / §6） -->
-        <div class="card mt-4">
-          <div class="card-header">
-            <h2>盯盘方案</h2>
-            <div class="card-meta">
-              <button id="btn-plan-new" class="btn btn-primary btn-sm" type="button">+ 新建盯盘方案</button>
-            </div>
+      </section>
+
+      <section id="route-watchlists" class="route" data-route="watchlists" hidden>
+        <div class="route-header">
+          <div>
+            <h1>Watchlist</h1>
+            <div class="route-meta">统一成员 · 多来源 · 研究阶段 · 优先级</div>
           </div>
-          <div id="plan-templates" class="template-grid"><p class="placeholder">加载模板中…</p></div>
+          <button id="btn-watchlist-create" class="btn btn-primary" type="button">+ 新建 Watchlist</button>
+        </div>
+        <div class="split-pane">
+          <div class="card entity-pane">
+            <div class="card-header"><h2>Watchlist 目录</h2><div id="watchlists-meta" class="card-meta">--</div></div>
+            <div id="watchlists-list" class="entity-list"><p class="placeholder">加载中…</p></div>
+          </div>
+          <div class="card detail-pane">
+            <div id="watchlist-detail"><p class="placeholder">选择 Watchlist 查看成员和来源。</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="route-alerts" class="route" data-route="alerts" hidden>
+        <div class="route-header">
+          <div>
+            <h1>AlertPlan</h1>
+            <div class="route-meta">引用 Watchlist · 稳定规则 ID · 盘中试跑</div>
+          </div>
+          <div class="flex gap-2">
+            <button id="btn-alert-run" class="btn btn-outline" type="button">试跑一轮</button>
+            <button id="btn-alert-create" class="btn btn-primary" type="button">+ 新建 AlertPlan</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>AlertPlan 目录</h2><div id="alerts-meta" class="card-meta">--</div></div>
+          <div id="alerts-list" class="entity-list"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header"><h2>Trigger 历史</h2><div class="card-meta">包含 Strategy evidence 与数据时间</div></div>
+          <div id="alerts-triggers"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
 
@@ -307,41 +337,6 @@
             </div>
             <div id="research-timeline"></div>
           </div>
-        </div>
-      </section>
-
-      <!-- route: tactics -->
-      <section id="route-tactics" class="route" data-route="tactics" hidden>
-        <div class="route-header">
-          <h1>战法</h1>
-          <div class="route-meta">内置战法列表 · 扫描信号 top 10</div>
-        </div>
-        <div class="card">
-          <div class="card-header">
-            <h2>战法扫描</h2>
-            <div class="card-meta">
-              <button id="btn-tactic-list" class="btn btn-outline btn-sm" type="button">刷新列表</button>
-              <button id="btn-tactic-scan" class="btn btn-primary btn-sm" type="button">跑战法扫描</button>
-            </div>
-          </div>
-          <h4>内置战法</h4>
-          <div id="tactics-list" class="mb-2"><p class="placeholder">加载中…</p></div>
-          <h4 class="mt-4">扫描结果 top 10</h4>
-          <div id="tactic-signals"><p class="placeholder">点「跑战法扫描」开始</p></div>
-        </div>
-        <div class="card mt-4 tactic-consensus-panel">
-          <div class="card-header">
-            <div>
-              <span class="section-kicker">SAME-DAY RESONANCE</span>
-              <h2>同日共振</h2>
-            </div>
-            <div class="card-meta">持久信号聚合 · 不调用 LLM</div>
-          </div>
-          <p class="consensus-formula">
-            排序分 = 支持信号均分 − 反向信号均分 × 0.5 + 有限共振加分；仅用于同批排序，
-            不表示胜率或投资建议。
-          </p>
-          <div id="tactic-consensus"><p class="placeholder">正在读取公式分组快照…</p></div>
         </div>
       </section>
 
@@ -678,7 +673,7 @@
         <div class="card">
           <div class="card-header"><h2>本地 token 鉴权</h2></div>
           <p class="muted mb-2">
-            读 / 建议无需 token；持仓、分组、盯盘等修改必须使用服务端生成的 token。
+            读 / 建议无需 token；持仓、Strategy、Watchlist、AlertPlan 等修改必须使用服务端生成的 token。
             启动日志会显示 token 文件位置，把文件内容粘贴到这里。
           </p>
           <div class="field">

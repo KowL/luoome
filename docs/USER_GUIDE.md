@@ -5,9 +5,9 @@
 luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
 - 在**终端（TUI）**盯盘、看今日建议
-- 在**浏览器（Web）**翻仪表盘、复盘、跑战法扫描
+- 在**浏览器（Web）**管理 Strategy、Watchlist、AlertPlan 与复盘
 - 作为 **MCP server** 把全部能力暴露给 Claude Desktop / OpenClaw 等 AI agent
-- 通过**工作流**做自动复盘、风险报告、战法扫描
+- 通过**工作流**运行 Strategy、同步 Watchlist、盯盘与生成报告
 
 但 luoome **不会**替你下单。所有建议都带 `decision / confidence / horizon / reasoning / risks / disclaimers / validUntil`，人最终拍板。
 
@@ -69,7 +69,8 @@ luoome tools list | head
 
 ## 2. 第一次启动
 
-luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行只自动建表和安装内置战法，业务数据库保持为空，不会灌入账户、股票、持仓、交易或建议。打开 Web 后进入「设置」，使用 token 创建第一个真实账户。
+luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行自动建表和安装内置 Strategy，
+不会灌入账户、持仓、交易或建议。打开 Web 后进入「设置」，使用 token 创建第一个真实账户。
 
 ### 2.1 一键启动完整 MVP
 
@@ -100,7 +101,8 @@ luoome web serve
 # 默认 5173 端口；浏览器开 http://localhost:5173/
 ```
 
-页面包含仪表盘 / 持仓 / 分组 / 盯盘 / 战法 / 建议 / 复盘 / 对话 / 设置。对话页支持按账户持久化会话、新建、切换、重命名和删除；消息保存在当前项目数据库。读操作无需 token；所有 write / external mutation 都要求服务端 token，并校验同源 `Origin`。
+页面包含看盘、持仓、Strategy、Watchlist、AlertPlan、研究、建议、报告、复盘、对话和设置。
+所有 write/external mutation 同时要求显式环境开关、服务端 token 与同源 `Origin`。
 
 **持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作必须携带 Web token；MCP 暴露策略不受影响。
 
@@ -123,7 +125,11 @@ luoome mcp serve    # stdio JSON-RPC
 | `luoome start [--port 5173] [--interval 60]` | 启动完整 MVP（Web + 长驻盯盘） |
 | `luoome tui` | 终端全屏应用（依赖 opentui） |
 | `luoome web serve [--port 5173]` | 仅启动 Web |
-| `luoome watch [--interval 60] [--once]` | 仅启动盯盘或执行单轮 |
+| `luoome watch [--interval 60] [--alert-plan ID] [--once]` | 启动 AlertPlan 盯盘或执行单轮 |
+| `luoome strategy list|get|validate|run` | 查询、校验或运行 Strategy |
+| `luoome watchlist list|get|sync` | 查询 Watchlist 或同步 portfolio 来源 |
+| `luoome alert list` | 查询 AlertPlan |
+| `luoome migration verify strategy-watchlist` | 只读验证迁移完整性 |
 | `luoome mcp serve` | 启动 MCP stdio server |
 | `luoome tools list [--json]` | 列全部注册 tool（含 sideEffect） |
 | `luoome tools inspect <name>` | 看 tool 的 input/output schema |
@@ -134,8 +140,6 @@ luoome mcp serve    # stdio JSON-RPC
 | `luoome advice list [--since 7d] [--limit 50]` | 历史建议 |
 | `luoome advice stats [--since 30d]` | 准确率统计（命中率、跟单盈亏） |
 | `luoome advice outcome <id> --followed true --pnl 100` | 回填 advice 结果（write） |
-| `luoome tactics list [--tag X]` | 战法规则列表 |
-| `luoome tactics run <tacticId>` | 跑战法（作用于当前账户持仓） |
 | `luoome sync-quotes` | 全量同步当前账户持仓行情（写库） |
 | `luoome daily-review [--since 7d]` | 触发 daily-review workflow，写入报告文件 |
 
@@ -161,7 +165,7 @@ luoome mcp serve    # stdio JSON-RPC
 | `[d]` | 当前持仓详细建议（核心论点 / 支持 / 反证 / 风险 / 免责声明） |
 | `[s]` | **复盘统计**：命中率、跟单盈亏、按决策分解 |
 | `[c]` | **confidence 自校准**：每 10 一档，看到底 confidence 被高估还是低估 |
-| `[t]` | 战法扫描：所有战法跑当前持仓 → score_signals 精排 top 10 |
+| `[t]` | 旧 TUI 扫描入口已停用；请在 Web Strategy 页面运行 |
 | `[o]` | outcome 复盘：最近 20 条建议的状态（已回填 / 待回填） |
 | `[a]` | **账户切换**：j/k 上下移动 + Enter 选中 |
 | `[↑/↓]` 或 `[j/k]` | 滚动列表 / 弹层 / 账户光标（取决于当前激活视图） |
@@ -183,11 +187,11 @@ TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 
 
 | Tab | 内容 |
 |---|---|
-| **仪表盘** | 市值 / 盈亏 / 建议 + 盯盘健康度、分组/池数量和最近触发。5 s 自动刷新。 |
+| **仪表盘** | 市值 / 盈亏 / 建议 + AlertPlan 健康度和最近 Trigger。 |
 | **持仓** | 建仓、加仓、减仓、纠错、平仓 + 近期交易流水。 |
-| **分组** | manual / holdings / formula / llm 四类成员来源；formula 成员展示排序分、证据、数据截止、进入/退出和 stale 状态。 |
-| **盯盘** | 健康心跳、规则池 CRUD、手动试跑、触发审计。手动试跑不发送通知。 |
-| **战法** | 7 个内置战法（含早期突破、Bollinger 下轨均值回复）、一键 scan，以及同交易日公式分组的事实共振；共振排序分不表示胜率或投资建议。 |
+| **Strategy** | 从模板创建、版本校验、发布、dry-run 与运行结果。 |
+| **Watchlist** | 多来源成员、stage/priority、来源健康与变化历史。 |
+| **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
 | **建议** | 历史 + decision 过滤。 |
 | **复盘** | 准确率统计 + **confidence 校准表** + outcome 回填。 |
 | **对话** | AI SDK 流式助手；项目内持久化会话，工具执行轨迹可回看，写操作先生成确认草案。 |
@@ -288,8 +292,7 @@ luoome tools call get_confidence_calibration --input '{}'
 
 | 路径 | 内容 |
 |---|---|
-| `~/.luoome/luoome.db` | SQLite 主库（账户 / 持仓 / 交易 / 行情 / 战法 / advice / notification） |
-| `~/.luoome/tactics/` | （预留）自定义战法规则文件 |
+| `~/.luoome/luoome.db` | SQLite 主库（账户 / 持仓 / 行情 / Strategy / Watchlist / AlertPlan / Advice） |
 | `~/.luoome/reports/` | workflow 产物（日报 / 周报 / 诊断） |
 | `~/.luoome/luoome.log` | （如果开启 `LUOOME_LOG=info`） |
 
@@ -377,5 +380,4 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 - [ROADMAP.md](./ROADMAP.md) — 版本演进
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — 贡献者指南
 - [SECURITY.md](./SECURITY.md) — 副作用分级 + advice 安全
-- [HANDOFF.md](./HANDOFF.md) — 跨上下文会话交接 + 功能 backlog
 - [BACKLOG.md](./BACKLOG.md) — 一致性 / 工程债清单

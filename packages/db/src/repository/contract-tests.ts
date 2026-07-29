@@ -2,6 +2,7 @@ import {
   type Account,
   type Advice,
   type AdviceOutcome,
+  type AlertPlan,
   type ChatMessage,
   type ChatSession,
   type DailyBar,
@@ -21,10 +22,19 @@ import {
   type StockGroup,
   type StockPool,
   type StockUniverseEntry,
+  type Strategy,
+  type StrategyResult,
+  type StrategyRun,
+  type StrategySignal,
+  type StrategyVersion,
   stockCode,
+  strategyDefinitionHash,
   type Tactic,
   type TacticSignal,
   type Trade,
+  type Watchlist,
+  type WatchlistMemberSource,
+  type WatchlistSyncRun,
   type WatchRun,
   type WatchTrigger,
   type WorkflowRun,
@@ -50,6 +60,22 @@ const T2 = new Date('2026-07-03T01:00:00.000Z');
 const T3 = new Date('2026-07-04T01:00:00.000Z');
 const FAR_FUTURE = new Date('2099-01-01T00:00:00.000Z');
 const FAR_PAST = new Date('2000-01-01T00:00:00.000Z');
+
+const makeAlertPlan = (id: string, overrides: Partial<AlertPlan> = {}): AlertPlan => ({
+  id,
+  name: `提醒-${id}`,
+  watchlistId: 'watchlist-1',
+  rules: [{ id: 'price', kind: 'price-change', pct: 0.05, direction: 'any' }],
+  logic: 'ANY',
+  triggerMode: 'on-enter',
+  cooldownMinutes: 30,
+  dailyNotificationLimit: 20,
+  notifyOnRecovery: false,
+  enabled: true,
+  createdAt: T0,
+  updatedAt: T0,
+  ...overrides,
+});
 
 export const makeAccount = (id: string, overrides: Partial<Account> = {}): Account => ({
   id,
@@ -202,6 +228,127 @@ export const makeTacticSignal = (
   ...overrides,
 });
 
+export const makeStrategy = (id: string, overrides: Partial<Strategy> = {}): Strategy => ({
+  id,
+  name: `策略-${id}`,
+  description: 'fixture strategy',
+  owner: 'user',
+  status: 'draft',
+  createdAt: T0,
+  updatedAt: T0,
+  ...overrides,
+});
+
+export const makeStrategyVersion = (
+  strategyId: string,
+  version = 1,
+  overrides: Partial<StrategyVersion> = {},
+): StrategyVersion => {
+  const definition: StrategyVersion['definition'] = {
+    schemaVersion: 1,
+    metadata: { style: 'momentum' },
+    universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+    selection: {
+      logic: 'all',
+      rules: [{ id: 'rule-1', name: 'Rule', when: 'true', evidence: ['matched'] }],
+    },
+    signals: { entry: [], exit: [], risk: [] },
+  };
+  return {
+    id: `${strategyId}-v${version}`,
+    strategyId,
+    version,
+    definition,
+    definitionHash: strategyDefinitionHash(definition),
+    validationStatus: 'valid',
+    validationErrors: [],
+    publishedAt: T1,
+    createdAt: T0,
+    ...overrides,
+  };
+};
+
+export const makeStrategyRun = (id: string, overrides: Partial<StrategyRun> = {}): StrategyRun => ({
+  id,
+  strategyId: 'strategy-1',
+  strategyVersionId: 'strategy-1-v1',
+  mode: 'scan',
+  coverage: 'CN_A_SHARES_SH_SZ',
+  dataAsOf: T1,
+  startedAt: T1,
+  finishedAt: T2,
+  status: 'complete',
+  inputSnapshot: { fixture: true },
+  providerStatuses: [],
+  summary: { selected: 1 },
+  ...overrides,
+});
+
+const makeStrategyResult = (
+  runId: string,
+  stockId: string,
+  overrides: Partial<StrategyResult> = {},
+): StrategyResult => ({
+  runId,
+  stockId,
+  selected: true,
+  score: 80,
+  rank: 1,
+  ruleEvaluations: [{ ruleId: 'rule-1', status: 'matched', value: true, evidence: ['matched'] }],
+  evidence: ['matched'],
+  dataAsOf: T1,
+  ...overrides,
+});
+
+const makeStrategySignal = (
+  id: string,
+  stockId: string,
+  overrides: Partial<StrategySignal> = {},
+): StrategySignal => ({
+  id,
+  strategyId: 'strategy-1',
+  strategyVersionId: 'strategy-1-v1',
+  runId: 'run-1',
+  ruleId: 'signal-1',
+  stockId,
+  ts: T2,
+  score: 80,
+  direction: 'bullish',
+  evidence: ['matched'],
+  evaluationSnapshot: { matched: true },
+  ...overrides,
+});
+
+const makeWatchlist = (id: string, overrides: Partial<Watchlist> = {}): Watchlist => ({
+  id,
+  name: `观察-${id}`,
+  kind: 'strategy',
+  membershipPolicy: 'synced',
+  enabled: true,
+  createdAt: T0,
+  updatedAt: T0,
+  ...overrides,
+});
+
+const makeWatchlistSyncRun = (
+  id: string,
+  overrides: Partial<WatchlistSyncRun> = {},
+): WatchlistSyncRun => ({
+  id,
+  watchlistId: 'watchlist-1',
+  sourceKind: 'strategy',
+  sourceKey: 'strategy:strategy-1',
+  status: 'complete',
+  dataAsOf: T1,
+  startedAt: T1,
+  finishedAt: T2,
+  enteredCount: 0,
+  exitedCount: 0,
+  unchangedCount: 0,
+  missingDimensions: [],
+  ...overrides,
+});
+
 export const makeNotification = (
   id: string,
   overrides: Partial<Notification> = {},
@@ -260,6 +407,7 @@ export const makeWatchTrigger = (
   overrides: Partial<WatchTrigger> = {},
 ): WatchTrigger => ({
   id,
+  alertPlanId: 'pool-1',
   poolId: 'pool-1',
   stockId: '002594.SZ',
   ruleKind: 'price-change',
@@ -1252,6 +1400,327 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('StrategyRepository', () => {
+      it('Strategy 与版本往返、过滤和版本排序一致', async () => {
+        await repos.strategy.save(makeStrategy('strategy-2', { owner: 'builtin' }));
+        await repos.strategy.save(makeStrategy('strategy-1'));
+        await repos.strategy.saveVersion(makeStrategyVersion('strategy-1', 1));
+        await repos.strategy.saveVersion(makeStrategyVersion('strategy-1', 2));
+        expect(await repos.strategy.findById('strategy-1')).toEqual(makeStrategy('strategy-1'));
+        expect((await repos.strategy.list()).map((strategy) => strategy.id)).toEqual([
+          'strategy-1',
+          'strategy-2',
+        ]);
+        expect(
+          (await repos.strategy.list({ owner: 'builtin' })).map((strategy) => strategy.id),
+        ).toEqual(['strategy-2']);
+        expect(
+          (await repos.strategy.listVersions('strategy-1')).map((version) => version.version),
+        ).toEqual([1, 2]);
+      });
+
+      it('activateVersion 只接受同 Strategy 的 published valid version', async () => {
+        await repos.strategy.save(makeStrategy('strategy-1'));
+        const version = makeStrategyVersion('strategy-1');
+        await repos.strategy.saveVersion(version);
+        await repos.strategy.activateVersion('strategy-1', version.id, T2);
+        expect(await repos.strategy.findById('strategy-1')).toEqual(
+          makeStrategy('strategy-1', {
+            status: 'active',
+            currentVersionId: version.id,
+            updatedAt: T2,
+          }),
+        );
+
+        await repos.strategy.save(makeStrategy('strategy-2'));
+        await expect(repos.strategy.activateVersion('strategy-2', version.id, T2)).rejects.toThrow(
+          InvariantError,
+        );
+      });
+
+      it('publishVersion 原子发布 valid version 并切换 currentVersion', async () => {
+        await repos.strategy.save(makeStrategy('strategy-1'));
+        const publishedFixture = makeStrategyVersion('strategy-1');
+        const { publishedAt: _publishedAt, ...draftVersion } = publishedFixture;
+        await repos.strategy.saveVersion(draftVersion);
+        await repos.strategy.publishVersion('strategy-1', draftVersion.id, T2);
+        expect(await repos.strategy.findVersionById(draftVersion.id)).toMatchObject({
+          publishedAt: T2,
+        });
+        expect(await repos.strategy.findById('strategy-1')).toMatchObject({
+          status: 'active',
+          currentVersionId: draftVersion.id,
+          updatedAt: T2,
+        });
+      });
+
+      it('published version definition 不可变，(strategyId, version) 唯一', async () => {
+        await repos.strategy.save(makeStrategy('strategy-1'));
+        const version = makeStrategyVersion('strategy-1');
+        await repos.strategy.saveVersion(version);
+        const changedDefinition = {
+          ...version.definition,
+          metadata: { style: 'changed' },
+        };
+        await expect(
+          repos.strategy.saveVersion({
+            ...version,
+            definition: changedDefinition,
+            definitionHash: strategyDefinitionHash(changedDefinition),
+          }),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.strategy.saveVersion({
+            ...makeStrategyVersion('strategy-1'),
+            id: 'another-id',
+          }),
+        ).rejects.toThrow();
+      });
+    });
+
+    describe('StrategyRunRepository', () => {
+      beforeEach(async () => {
+        await repos.strategy.save(makeStrategy('strategy-1'));
+        await repos.strategy.saveVersion(makeStrategyVersion('strategy-1'));
+        await repos.strategy.activateVersion('strategy-1', 'strategy-1-v1', T1);
+      });
+
+      it('run 往返和过滤排序一致', async () => {
+        await repos.strategyRun.saveRun(
+          makeStrategyRun('run-1', { startedAt: T1, finishedAt: T2 }),
+        );
+        await repos.strategyRun.saveRun(
+          makeStrategyRun('run-2', { startedAt: T2, finishedAt: T3 }),
+        );
+        expect(await repos.strategyRun.findRunById('run-1')).toEqual(
+          makeStrategyRun('run-1', { startedAt: T1, finishedAt: T2 }),
+        );
+        expect(
+          (await repos.strategyRun.listRuns({ strategyId: 'strategy-1' })).map((run) => run.id),
+        ).toEqual(['run-2', 'run-1']);
+      });
+
+      it('active Strategy 可运行显式 pinned 的历史 published valid version', async () => {
+        const version2 = makeStrategyVersion('strategy-1', 2, {
+          id: 'strategy-1-v2',
+          createdAt: T2,
+          publishedAt: T2,
+        });
+        await repos.strategy.saveVersion(version2);
+        await repos.strategy.activateVersion('strategy-1', version2.id, T2);
+        const pinned = makeStrategyRun('run-pinned-v1', {
+          strategyVersionId: 'strategy-1-v1',
+        });
+        await repos.strategyRun.commitRun({ run: pinned, results: [], signals: [] });
+        expect(await repos.strategyRun.findRunById(pinned.id)).toEqual(pinned);
+      });
+
+      it('results 按 rank/stock 排序并按 (run, stock) upsert', async () => {
+        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
+        await repos.strategyRun.saveResults([
+          makeStrategyResult('run-1', '600519.SH', { rank: 2 }),
+          makeStrategyResult('run-1', '002594.SZ', { rank: 1 }),
+        ]);
+        await repos.strategyRun.saveResults([
+          makeStrategyResult('run-1', '600519.SH', { rank: 2, score: 90 }),
+        ]);
+        const results = await repos.strategyRun.listResults('run-1');
+        expect(results.map((result) => result.stockId)).toEqual(['002594.SZ', '600519.SH']);
+        expect(results[1]?.score).toBe(90);
+      });
+
+      it('signals 按目标唯一键幂等并支持 strategy/stock 查询', async () => {
+        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
+        const first = makeStrategySignal('signal-1', '600519.SH', { ts: T1 });
+        const duplicateIdentity = makeStrategySignal('signal-duplicate', '600519.SH', { ts: T1 });
+        const second = makeStrategySignal('signal-2', '002594.SZ', { ts: T2 });
+        await repos.strategyRun.saveSignals([first, duplicateIdentity, second]);
+        expect(
+          (await repos.strategyRun.signalsByStrategy('strategy-1')).map((signal) => signal.id),
+        ).toEqual(['signal-2', 'signal-1']);
+        expect(await repos.strategyRun.signalsByStock('600519.SH')).toEqual([first]);
+      });
+
+      it('commitRun 原子提交；引用不匹配时不留下 run/result/signal', async () => {
+        const run = makeStrategyRun('run-atomic');
+        await repos.strategyRun.commitRun({
+          run,
+          results: [makeStrategyResult(run.id, '600519.SH')],
+          signals: [
+            makeStrategySignal('signal-atomic', '600519.SH', {
+              runId: run.id,
+              strategyId: run.strategyId,
+              strategyVersionId: run.strategyVersionId,
+            }),
+          ],
+        });
+        expect(await repos.strategyRun.findRunById(run.id)).toEqual(run);
+        expect(await repos.strategyRun.listResults(run.id)).toHaveLength(1);
+
+        const invalidRun = makeStrategyRun('run-invalid');
+        await expect(
+          repos.strategyRun.commitRun({
+            run: invalidRun,
+            results: [makeStrategyResult('another-run', '002594.SZ')],
+            signals: [],
+          }),
+        ).rejects.toThrow(InvariantError);
+        expect(await repos.strategyRun.findRunById(invalidRun.id)).toBeNull();
+        expect(await repos.strategyRun.listResults(invalidRun.id)).toEqual([]);
+      });
+    });
+
+    describe('Watchlist repositories', () => {
+      beforeEach(async () => {
+        await repos.watchlist.save(makeWatchlist('watchlist-1'));
+      });
+
+      it('Watchlist 往返、过滤与 archive 一致', async () => {
+        await repos.watchlist.save(
+          makeWatchlist('portfolio-1', {
+            kind: 'portfolio',
+            membershipPolicy: 'synced',
+          }),
+        );
+        expect((await repos.watchlist.list({ enabledOnly: true })).map((item) => item.id)).toEqual([
+          'portfolio-1',
+          'watchlist-1',
+        ]);
+        expect((await repos.watchlist.list({ kind: 'portfolio' })).map((item) => item.id)).toEqual([
+          'portfolio-1',
+        ]);
+        await repos.watchlist.archive('watchlist-1', T2);
+        expect(await repos.watchlist.findById('watchlist-1')).toMatchObject({
+          enabled: false,
+          updatedAt: T2,
+        });
+      });
+
+      it('complete sync 支持 entered/unchanged/exited，多来源不会互相删除', async () => {
+        const first = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-1'),
+          candidates: [
+            { stockId: '600519.SH', reason: 'first', score: 90, evidence: ['a'] },
+            { stockId: '002594.SZ', reason: 'first', score: 80, evidence: ['b'] },
+          ],
+          sourceId: 'strategy-1',
+          sourceVersionId: 'strategy-1-v1',
+        });
+        expect(first).toMatchObject({ enteredCount: 2, exitedCount: 0, unchangedCount: 0 });
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        await repos.watchlistMember.saveMember({
+          ...member,
+          stage: 'watching',
+          lastActivityAt: T2,
+        });
+        const manual: WatchlistMemberSource = {
+          id: 'manual-source',
+          memberId: member.id,
+          kind: 'manual',
+          sourceKey: `manual:${member.id}`,
+          reason: '用户保留',
+          status: 'active',
+          evidence: [],
+          validFrom: T2,
+        };
+        await repos.watchlistMember.saveSource(manual);
+
+        const second = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-2', { startedAt: T2, finishedAt: T3, dataAsOf: T2 }),
+          candidates: [
+            { stockId: '002594.SZ', reason: 'again', score: 82, evidence: ['b2'] },
+            { stockId: '000001.SZ', reason: 'new', score: 70, evidence: ['c'] },
+          ],
+          sourceId: 'strategy-1',
+        });
+        expect(second).toMatchObject({ enteredCount: 1, exitedCount: 1, unchangedCount: 1 });
+        expect(
+          (await repos.watchlistMember.listSnapshots('sync-2')).map((item) => [
+            item.stockId,
+            item.change,
+          ]),
+        ).toEqual([
+          ['000001.SZ', 'entered'],
+          ['002594.SZ', 'unchanged'],
+          ['600519.SH', 'exited'],
+        ]);
+        expect(await repos.watchlistMember.findMember('watchlist-1', '600519.SH')).toMatchObject({
+          stage: 'watching',
+        });
+        expect(await repos.watchlistMember.listSources(member.id)).toEqual([manual]);
+        expect(await repos.watchlistMember.listSources(member.id, true)).toHaveLength(2);
+      });
+
+      it('partial/failed 不退出来源；complete 空结果才结束并归档自动成员', async () => {
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-1'),
+          candidates: [{ stockId: '600519.SH', reason: 'first', evidence: [] }],
+        });
+        const partial = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-partial', {
+            status: 'partial',
+            startedAt: T2,
+            finishedAt: T3,
+          }),
+          candidates: [],
+        });
+        expect(partial.exitedCount).toBe(0);
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        expect(
+          await repos.watchlistMember.currentSource(member.id, 'strategy:strategy-1'),
+        ).toMatchObject({ status: 'stale' });
+
+        const complete = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-empty', {
+            startedAt: T3,
+            finishedAt: new Date(T3.getTime() + 1),
+          }),
+          candidates: [],
+        });
+        expect(complete.exitedCount).toBe(1);
+        expect(await repos.watchlistMember.findMember('watchlist-1', '600519.SH')).toMatchObject({
+          stage: 'archived',
+        });
+      });
+
+      it('ended 后重新进入创建新来源并 revive；非法 bundle 原子回滚', async () => {
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-1'),
+          candidates: [{ stockId: '600519.SH', reason: 'first', evidence: [] }],
+        });
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-2', { startedAt: T2, finishedAt: T3 }),
+          candidates: [],
+        });
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-3', {
+            startedAt: T3,
+            finishedAt: new Date(T3.getTime() + 1),
+          }),
+          candidates: [{ stockId: '600519.SH', reason: 'return', evidence: [] }],
+        });
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        expect(member.stage).toBe('discovered');
+        expect(await repos.watchlistMember.listSources(member.id, true)).toHaveLength(2);
+
+        await expect(
+          repos.watchlistMember.commitWatchlistSync({
+            run: makeWatchlistSyncRun('sync-invalid'),
+            candidates: [
+              { stockId: '002594.SZ', reason: 'duplicate', evidence: [] },
+              { stockId: '002594.SZ', reason: 'duplicate', evidence: [] },
+            ],
+          }),
+        ).rejects.toThrow(InvariantError);
+        expect(await repos.watchlistMember.listSyncRuns('watchlist-1')).not.toContainEqual(
+          expect.objectContaining({ id: 'sync-invalid' }),
+        );
+      });
+    });
+
     describe('NotificationRepository', () => {
       it('save + findById 往返一致（含可选字段）', async () => {
         const n = makeNotification('n-1', {
@@ -1345,6 +1814,27 @@ export const registerRepositoryContractTests = (
 
       it('违反不变量时拒绝（rules 为空）', async () => {
         await expect(repos.stockPool.save(makeStockPool('bad', { rules: [] }))).rejects.toThrow();
+      });
+    });
+
+    describe('AlertPlanRepository', () => {
+      it('CRUD、enabled/watchlist 过滤在双实现一致', async () => {
+        const first = makeAlertPlan('alert-a');
+        const second = makeAlertPlan('alert-b', {
+          watchlistId: 'watchlist-2',
+          enabled: false,
+        });
+        await repos.alertPlan.save(first);
+        await repos.alertPlan.save(second);
+        expect(await repos.alertPlan.findById(first.id)).toEqual(first);
+        expect((await repos.alertPlan.list({ enabledOnly: true })).map((p) => p.id)).toEqual([
+          'alert-a',
+        ]);
+        expect(
+          (await repos.alertPlan.list({ watchlistId: 'watchlist-2' })).map((p) => p.id),
+        ).toEqual(['alert-b']);
+        await repos.alertPlan.remove(first.id);
+        expect(await repos.alertPlan.findById(first.id)).toBeNull();
       });
     });
 

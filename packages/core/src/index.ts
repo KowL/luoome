@@ -5,6 +5,7 @@ export * from './context.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/advice.js';
+export * from './entity/alert-plan.js';
 export * from './entity/ashare-sentiment.js';
 export * from './entity/chat-session.js';
 export * from './entity/holding.js';
@@ -24,15 +25,23 @@ export * from './entity/stock-event.js';
 export * from './entity/stock-group.js';
 export * from './entity/stock-pool.js';
 export * from './entity/stock-universe.js';
+export * from './entity/strategy.js';
 export * from './entity/tactic.js';
 export * from './entity/trade.js';
 export * from './entity/watch-run.js';
+export * from './entity/watchlist.js';
 export * from './entity/workflow-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
 // 仓储接口
 export * from './repository/index.js';
+export * from './strategy/evaluator.js';
+export * from './strategy/expression.js';
+export * from './strategy/field-registry.js';
+export * from './strategy/legacy-mapper.js';
+// Strategy / Watchlist 重构的跨阶段决策约束（W0 起）
+export * from './strategy-watchlist-policy.js';
 // 战法 DSL 引擎（v0.3 起）
 export * from './tactic/dsl.js';
 export * from './tactic/runner.js';
