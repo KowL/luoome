@@ -218,6 +218,8 @@ export const priceSnapshots = sqliteTable(
     low: real('low').$type<Money>().notNull(),
     close: real('close').$type<Money>().notNull(),
     volume: integer('volume').notNull(),
+    /** 昨收（可选）：数据源给得出才填；缓存保留后，DB 降级路径不再丢涨幅基准。 */
+    prevClose: real('prev_close').$type<Money>(),
     source: text('source').notNull(),
   },
   (t) => ({

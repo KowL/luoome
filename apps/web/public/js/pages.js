@@ -186,14 +186,6 @@ const boardRow = (item) => {
     el('td', `num ${chgCls}`, item.changePct === null ? '--' : `${fmtSigned(item.changePct)}%`),
     el(
       'td',
-      'num',
-      item.holding === null || item.holding.todayPnl === null
-        ? '—'
-        : fmtSigned(item.holding.todayPnl),
-    ),
-    el('td', 'num', item.holding === null ? '—' : fmtNum(item.holding.marketValue)),
-    el(
-      'td',
       null,
       item.groups.length === 0
         ? el('span', 'muted', '—')
@@ -228,8 +220,6 @@ const renderBoard = (items) => {
           el('th', null, '名称'),
           el('th', 'num', '现价'),
           el('th', 'num', '涨跌幅'),
-          el('th', 'num', '今日盈亏'),
-          el('th', 'num', '市值'),
           el('th', null, '分组'),
           el('th', null, '预警'),
         ]),

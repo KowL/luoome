@@ -15,7 +15,7 @@ export interface Quote {
   readonly low: Money;
   readonly close: Money; // 实时价取最近成交价，放入 close
   readonly volume: number; // 股（各源统一换算：Eastmoney/Tencent 的手 ×100）
-  /** 昨收（可选）：数据源给得出才填（eastmoney f60 / tushare pre_close；tencent 分钟端点无此字段）。 */
+  /** 昨收（可选）：数据源给得出才填（eastmoney f60 / tushare pre_close / tencent qt 快照）。 */
   readonly prevClose?: Money | undefined;
   readonly source: string;
 }

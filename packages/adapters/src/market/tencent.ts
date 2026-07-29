@@ -78,6 +78,8 @@ export interface TencentAdapterOptions {
   readonly baseQuoteUrl?: string;
   readonly baseKlineUrl?: string;
   readonly baseSearchUrl?: string;
+  /** qt.gtimg.cn 快照（GBK 文本）：仅用于补昨收，分钟端点无此字段。 */
+  readonly baseRtQuoteUrl?: string;
 }
 
 const TENCENT_MARKET_TO_EXCHANGE: Readonly<Record<string, Exchange>> = {
@@ -137,6 +139,7 @@ export class TencentAdapter {
   private readonly baseQuoteUrl: string;
   private readonly baseKlineUrl: string;
   private readonly baseSearchUrl: string;
+  private readonly baseRtQuoteUrl: string;
 
   constructor(options: TencentAdapterOptions = {}) {
     this.clock = options.clock ?? ((): Date => new Date());
@@ -147,6 +150,7 @@ export class TencentAdapter {
     this.baseKlineUrl =
       options.baseKlineUrl ?? 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get';
     this.baseSearchUrl = options.baseSearchUrl ?? 'https://smartbox.gtimg.cn/s3/';
+    this.baseRtQuoteUrl = options.baseRtQuoteUrl ?? 'https://qt.gtimg.cn/q';
   }
 
   /**
@@ -188,6 +192,7 @@ export class TencentAdapter {
       upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
         ? upstreamAt
         : fetchedAt;
+    const prevClose = await this.fetchPrevClose(code);
     return {
       stockId: stockCode.toUpperCase(),
       observedAt,
@@ -199,8 +204,33 @@ export class TencentAdapter {
       low: money(Math.min(...prices)),
       close: money(close),
       volume: Number.isFinite(lastVolume) && lastVolume > 0 ? lastVolume * 100 : 0, // 手 → 股
+      ...(prevClose !== undefined ? { prevClose: money(prevClose) } : {}),
       source: 'tencent',
     };
+  }
+
+  /**
+   * 昨收（best-effort）：qt.gtimg.cn 快照（GBK 文本，~ 分隔，第 4 段为昨收）。
+   * 分钟端点无此字段；失败返回 undefined，不拖垮主快照流程。
+   */
+  private async fetchPrevClose(code: string): Promise<number | undefined> {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await this.fetchImpl(`${this.baseRtQuoteUrl}=${code}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) return undefined;
+      const buf = await res.arrayBuffer();
+      // TS 的 Encoding 联合不含 'gbk'，Bun 运行时支持；qt.gtimg.cn 是 GBK 文本
+      const text = new TextDecoder('gbk' as never).decode(buf);
+      const prev = Number(text.match(/="([^"]*)"/)?.[1]?.split('~')[4]);
+      return Number.isFinite(prev) && prev > 0 ? prev : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   }
 
   async batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>> {

@@ -1113,7 +1113,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         retrieval: 'live' | 'local-fallback';
         freshness: 'fresh' | 'stale';
       } | null;
-      /** 股价涨跌幅（%）；持仓股由 list_holdings 今日涨跌幅换算，其余无昨收基准为 null。 */
+      /** 股价涨跌幅（%）：全行统一由 batch_quote 昨收基准换算，无昨收基准为 null。 */
       changePct: number | null;
       holding: {
         quantity: number;
@@ -1143,7 +1143,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         stockId: row.holding.stockId,
         name: row.stockName,
         quote: null,
-        changePct: row.todayPnlPct === null ? null : row.todayPnlPct * 100,
+        changePct: null,
         holding: {
           quantity: row.holding.quantity,
           marketValue: row.marketValue,
@@ -1204,7 +1204,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
             | {
                 stockId: string;
                 status: 'ok';
-                quote: { close: number; observedAt: unknown };
+                quote: { close: number; prevClose?: number; observedAt: unknown };
                 retrieval: 'live' | 'local-fallback';
                 freshness: 'fresh' | 'stale';
               }
@@ -1214,13 +1214,17 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         for (const result of items) {
           if (result.status !== 'ok') continue;
           const item = board.get(result.stockId);
-          if (item !== undefined) {
-            item.quote = {
-              close: result.quote.close,
-              observedAt: result.quote.observedAt,
-              retrieval: result.retrieval,
-              freshness: result.freshness,
-            };
+          if (item === undefined) continue;
+          item.quote = {
+            close: result.quote.close,
+            observedAt: result.quote.observedAt,
+            retrieval: result.retrieval,
+            freshness: result.freshness,
+          };
+          // 涨跌幅全行统一口径：昨收基准换算（持仓/分组仅标签差异）
+          const prevClose = result.quote.prevClose;
+          if (item.changePct === null && typeof prevClose === 'number' && prevClose > 0) {
+            item.changePct = ((result.quote.close - prevClose) / prevClose) * 100;
           }
         }
       } else {

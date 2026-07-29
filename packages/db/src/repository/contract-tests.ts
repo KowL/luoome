@@ -1017,6 +1017,13 @@ export const registerRepositoryContractTests = (
         expect((await repos.quote.latestByStock('stk-1'))?.source).toBe('source-b');
       });
 
+      it('prevClose 随快照持久化；缺省读回为 undefined', async () => {
+        await repos.quote.save(makeQuote('stk-1', T1, { prevClose: money(9.8) }));
+        await repos.quote.save(makeQuote('stk-2', T1));
+        expect((await repos.quote.latestByStock('stk-1'))?.prevClose).toBe(9.8);
+        expect((await repos.quote.latestByStock('stk-2'))?.prevClose).toBeUndefined();
+      });
+
       it('removeInRange 返回删除条数；after 不动', async () => {
         await repos.quote.save(makeQuote('stk-1', T1));
         await repos.quote.save(makeQuote('stk-1', T2));

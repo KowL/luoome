@@ -18,6 +18,7 @@ const toQuote = (row: QuoteRow): Quote => ({
   low: row.low,
   close: row.close,
   volume: row.volume,
+  ...(row.prevClose !== null ? { prevClose: row.prevClose } : {}),
   source: row.source,
 });
 
@@ -42,6 +43,7 @@ export class DrizzleQuoteRepository implements QuoteRepository {
         low: parsed.low,
         close: parsed.close,
         volume: parsed.volume,
+        prevClose: parsed.prevClose ?? null,
         source: parsed.source,
       })
       .onConflictDoUpdate({
@@ -54,6 +56,7 @@ export class DrizzleQuoteRepository implements QuoteRepository {
           low: parsed.low,
           close: parsed.close,
           volume: parsed.volume,
+          prevClose: parsed.prevClose ?? null,
         },
       })
       .run();

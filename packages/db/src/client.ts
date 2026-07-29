@@ -215,11 +215,13 @@ export const ensureSchema = (db: DrizzleDb): void => {
       low REAL NOT NULL,
       close REAL NOT NULL,
       volume INTEGER NOT NULL,
+      prev_close REAL,
       source TEXT NOT NULL,
       CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, observed_at, source)
     )
   `);
   migratePriceSnapshotTimeColumns(db);
+  migratePriceSnapshotPrevCloseColumn(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS price_snapshots_stock_observed_idx
     ON price_snapshots (stock_id, observed_at)
@@ -592,6 +594,18 @@ const migrateDailyBarAdjustmentColumns = (db: DrizzleDb): void => {
   }
   if (!have.has('source_adj_factor')) {
     db.run(sql`ALTER TABLE daily_bars ADD COLUMN source_adj_factor REAL`);
+  }
+};
+
+/**
+ * price_snapshots 表补 prev_close 列（幂等）。
+ * 旧库无此列时 ALTER ADD；新库 DDL 已含，直接跳过。
+ */
+const migratePriceSnapshotPrevCloseColumn = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(price_snapshots)`);
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === 'prev_close')) {
+    db.run(sql`ALTER TABLE price_snapshots ADD COLUMN prev_close REAL`);
   }
 };
 

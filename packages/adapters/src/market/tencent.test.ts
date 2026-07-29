@@ -40,28 +40,54 @@ describe('market/tencent', () => {
       await expect(adapter.fetchQuote('00700')).rejects.toBeInstanceOf(TencentAdapterError);
     });
 
+    it('qt 快照第 4 段为昨收 → prevClose 填充；qt 失败 → 无 prevClose 不抛错', async () => {
+      const rtBody = (code: string) =>
+        `v_${code}="1~贵州茅台~600519~380~370~376~53135~31245~21890~~20260728161459~";`;
+      const withRt = new TencentAdapter({
+        fetchImpl: ((url: string) =>
+          Promise.resolve(
+            new Response(
+              String(url).includes('qt.gtimg.cn') ? rtBody('sh600519') : minuteBody('sh600519'),
+              { status: 200 },
+            ),
+          )) as never,
+      });
+      const q1 = await withRt.fetchQuote('600519');
+      expect(q1.prevClose).toBe(370);
+
+      const rtDown = new TencentAdapter({
+        fetchImpl: ((url: string) =>
+          String(url).includes('qt.gtimg.cn')
+            ? Promise.reject(new Error('rt down'))
+            : Promise.resolve(new Response(minuteBody('sh600519'), { status: 200 }))) as never,
+      });
+      const q2 = await rtDown.fetchQuote('600519');
+      expect(q2.close).toBe(380);
+      expect(q2.prevClose).toBeUndefined();
+    });
+
     it('港股代码 → hk 前缀', async () => {
-      let capturedUrl = '';
+      const capturedUrls: string[] = [];
       const adapter = new TencentAdapter({
         fetchImpl: ((url: string) => {
-          capturedUrl = String(url);
+          capturedUrls.push(String(url));
           return Promise.resolve(new Response(minuteBody('hk00700'), { status: 200 }));
         }) as never,
       });
       await adapter.fetchQuote('00700');
-      expect(capturedUrl).toContain('code=hk00700');
+      expect(capturedUrls[0]).toContain('code=hk00700');
     });
 
     it('SH 代码 → sh 前缀', async () => {
-      let capturedUrl = '';
+      const capturedUrls: string[] = [];
       const adapter = new TencentAdapter({
         fetchImpl: ((url: string) => {
-          capturedUrl = String(url);
+          capturedUrls.push(String(url));
           return Promise.resolve(new Response(minuteBody('sh600519'), { status: 200 }));
         }) as never,
       });
       await adapter.fetchQuote('600519');
-      expect(capturedUrl).toContain('code=sh600519');
+      expect(capturedUrls[0]).toContain('code=sh600519');
     });
   });
 

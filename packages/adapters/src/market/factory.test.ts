@@ -193,7 +193,9 @@ describe('market/factory', () => {
     );
     const quote = await adapter.fetchQuote('002594.SZ');
     expect(quote.source).toBe('tencent');
-    expect(calls).toHaveLength(1);
+    // tencent 分钟快照 + qt 昨收补取各一次；全程不触达 eastmoney
+    expect(calls.filter((u) => u.includes('web.ifzq.gtimg.cn'))).toHaveLength(1);
+    expect(calls.some((u) => u.includes('eastmoney'))).toBe(false);
   });
 
   it('activeOrder 仅 tushare：realtime index 明确不支持，且不会隐式调用 Eastmoney', async () => {

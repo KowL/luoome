@@ -131,7 +131,7 @@ const groupResolverFields = (kind, current, tactics = []) => {
   } else if (kind === 'formula') {
     box.append(
       field('战法', tacticSelect('group-tactic-id', tactics, current?.tacticId), '选择一个战法'),
-      field('回看天数', control('input', 'group-lookback', String(current?.lookbackDays ?? 7))),
+      field('回看天数', control('input', 'group-lookback', String(current?.lookbackDays ?? 120))),
       field('最低分数', control('input', 'group-min-score', String(current?.minScore ?? 60))),
     );
   } else {

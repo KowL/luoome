@@ -615,6 +615,47 @@ describe('MVP dashboard / watch API', () => {
     expect(held?.groups).toBeInstanceOf(Array);
   });
 
+  it('dashboard 看板：分组成员用 batch_quote 昨收基准补算 changePct', async () => {
+    const ctx = await buildTestContext();
+    const now = new Date('2026-07-22T01:00:00.000Z');
+    await ctx.repos.stockGroup.save({
+      id: 'grp-board',
+      name: '看板分组',
+      resolver: { kind: 'manual', stockIds: ['000858.SZ'] },
+      refreshPolicy: 'manual',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.stockPool.save({
+      id: 'pool-board',
+      name: '看板方案',
+      groupId: 'grp-board',
+      rules: [{ kind: 'price-level', level: 1, side: 'above' }],
+      cooldownMinutes: 30,
+      enabled: true,
+      logic: 'ANY',
+      triggerMode: 'on-enter',
+      dailyNotificationLimit: 20,
+      notifyOnRecovery: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const boardApp = createWebApp(ctx, { webToken: WEB_TOKEN });
+    const r = await boardApp.fetch(new Request('http://test/api/dashboard'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      data?: {
+        board?: Array<{ stockId: string; holding: unknown; changePct: number | null }>;
+      };
+    };
+    // 000858.SZ 非持仓：changePct 只能来自 batch_quote 的 prevClose 基准（FakeMarketAdapter 给确定性昨收）
+    const member = body.data?.board?.find((item) => item.stockId === '000858.SZ');
+    expect(member).toBeDefined();
+    expect(member?.holding).toBeNull();
+    expect(typeof member?.changePct).toBe('number');
+  });
+
   it('run-once 需要 token；成功后 watch status 可见', async () => {
     const denied = await app.fetch(
       new Request('http://test/api/watch/run-once', {
