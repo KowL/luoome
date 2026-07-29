@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { createDrizzleRepos } from '../client.js';
@@ -119,15 +120,33 @@ describe('strategy-watchlist migration verify baseline', () => {
 
       const handle = createDrizzleRepos(dbPath);
       try {
-        expect(await handle.repos.tactic.findById('fixture-user')).not.toBeNull();
-        expect(await handle.repos.tactic.signalsByStock('002594.SZ')).toHaveLength(1);
-        expect(await handle.repos.stockGroup.list()).toHaveLength(4);
+        // legacy repo 层已下掉，旧表可读性用 raw SQL 验证
         expect(
-          (await handle.repos.groupMember.currentMembers('fixture-formula')).map(
-            (member) => member.stockId,
+          handle.db.all<{ id: string }>(sql`SELECT id FROM tactics WHERE id = 'fixture-user'`),
+        ).toHaveLength(1);
+        expect(
+          handle.db.all<{ id: string }>(
+            sql`SELECT id FROM tactic_signals WHERE stock_id = '002594.SZ'`,
           ),
+        ).toHaveLength(1);
+        expect(handle.db.all<{ id: string }>(sql`SELECT id FROM stock_groups`)).toHaveLength(4);
+        // currentMembers 语义 = 最新 refreshId 那一批（按 created_at 最新判定）
+        expect(
+          handle.db
+            .all<{ stock_id: string }>(sql`
+              SELECT stock_id FROM group_member_snapshots
+              WHERE group_id = 'fixture-formula' AND refresh_id = (
+                SELECT refresh_id FROM group_member_snapshots
+                WHERE group_id = 'fixture-formula'
+                ORDER BY created_at DESC LIMIT 1
+              )
+              ORDER BY stock_id
+            `)
+            .map((row) => row.stock_id),
         ).toEqual(['002594.SZ', '600519.SH']);
-        expect(await handle.repos.stockPool.findById('fixture-pool')).not.toBeNull();
+        expect(
+          handle.db.all<{ id: string }>(sql`SELECT id FROM stock_pools WHERE id = 'fixture-pool'`),
+        ).toHaveLength(1);
         expect(await handle.repos.watchTrigger.listByPool('fixture-pool')).toHaveLength(2);
         expect(await handle.repos.watchRuleState.listByPool('fixture-pool')).toHaveLength(2);
       } finally {

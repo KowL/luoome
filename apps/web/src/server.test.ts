@@ -2,6 +2,7 @@
 // node/vitest 无法解析，已在 vitest.config.ts exclude；由 `bun run test:web` 执行）。
 // ctx 用 buildTestContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
 
+import { Database } from 'bun:sqlite';
 import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -205,7 +206,17 @@ describe('Web runtime bootstrap', () => {
       expect(await ctx.repos.stock.search('')).toEqual([]);
       expect(await ctx.repos.holding.listByAccount('')).toEqual([]);
       expect(await ctx.repos.trade.listByAccount('')).toEqual([]);
-      expect(await ctx.repos.tactic.list({ source: 'builtin' })).toEqual([]);
+      // legacy repo 层已下掉；fresh DB 的 tactics 旧表不落任何行（raw SQL 验证）
+      const sqlite = new Database(join(dir, 'luoome.db'), { readonly: true });
+      try {
+        expect(
+          sqlite
+            .query<{ readonly count: number }, []>('SELECT count(*) AS count FROM tactics')
+            .get()?.count,
+        ).toBe(0);
+      } finally {
+        sqlite.close();
+      }
       expect(
         (await ctx.repos.strategy.list({ owner: 'builtin' })).map((strategy) => strategy.id),
       ).toEqual(expect.arrayContaining(['early-breakout', 'bollinger-band']));

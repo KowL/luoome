@@ -106,11 +106,9 @@ describe('Strategy lifecycle tools', () => {
 
   it('seeds builtin Strategies without writing legacy Tactic or import runs', async () => {
     const ctx = await buildTestContext();
-    const legacyBefore = await ctx.repos.tactic.list();
     await ensureBuiltinStrategies(ctx.repos);
     const strategy = await ctx.repos.strategy.findById('breakout-volume');
     expect(strategy).toMatchObject({ owner: 'builtin', status: 'active' });
-    expect(await ctx.repos.tactic.list()).toEqual(legacyBefore);
     const run = await ctx.repos.strategyRun.findRunById('legacy-signal-import-breakout-volume');
     expect(run).toBeNull();
   });

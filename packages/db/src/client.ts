@@ -10,7 +10,6 @@ import {
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
-  DrizzleGroupMemberRepository,
   DrizzleHoldingRepository,
   DrizzleNotificationRepository,
   DrizzleQuoteRepository,
@@ -18,13 +17,10 @@ import {
   DrizzleResearchNoteRepository,
   DrizzleSignalObservationRepository,
   DrizzleStockEventRepository,
-  DrizzleStockGroupRepository,
-  DrizzleStockPoolRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
   DrizzleStrategyRepository,
   DrizzleStrategyRunRepository,
-  DrizzleTacticRepository,
   DrizzleTradeRepository,
   DrizzleWatchlistMemberRepository,
   DrizzleWatchlistRepository,
@@ -1032,7 +1028,7 @@ const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
     if (s.kind === 'tactic') {
       console.warn(
         `[migrate] pool ${row.id} 的 tactic source 已迁移为 formula 分组 ${groupId}；` +
-          `请手动跑一次刷新落首批快照：luoome tools call refresh_stock_group --input '{"groupId":"${groupId}"}'`,
+          '该分组属旧模型，仅作迁移审计保留，不再参与刷新。',
       );
     }
   }
@@ -1305,22 +1301,17 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),
     signalObservation: new DrizzleSignalObservationRepository(db),
-    tactic: new DrizzleTacticRepository(db),
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),
     // v0.6 起
-    stockPool: new DrizzleStockPoolRepository(db),
     alertPlan: new DrizzleAlertPlanRepository(db),
     watchTrigger: new DrizzleWatchTriggerRepository(db),
     // v0.7 起：边沿状态机
     watchRuleState: new DrizzleWatchRuleStateRepository(db),
     watchRun: new DrizzleWatchRunRepository(db),
-    // 分组化起
-    stockGroup: new DrizzleStockGroupRepository(db),
-    groupMember: new DrizzleGroupMemberRepository(db),
     // ruo 迁移起
     researchNote: new DrizzleResearchNoteRepository(db),
     stockEvent: new DrizzleStockEventRepository(db),

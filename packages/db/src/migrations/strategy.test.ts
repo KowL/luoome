@@ -29,7 +29,6 @@ describe('20260729_02_migrate_tactics', () => {
       legacy.close();
 
       const first = createDrizzleRepos(dbPath);
-      expect(await first.repos.tactic.findById('fixture-user')).not.toBeNull();
       const strategies = await first.repos.strategy.list();
       expect(strategies).toHaveLength(2);
       for (const strategy of strategies) {
@@ -46,6 +45,14 @@ describe('20260729_02_migrate_tactics', () => {
       first.close();
 
       const raw = new Database(dbPath);
+      // legacy 旧表行保留可读（repo 层已下掉，用 raw SQL 验证旧读取路径）
+      expect(
+        raw
+          .query<{ readonly count: number }, []>(
+            `SELECT count(*) AS count FROM tactics WHERE id = 'fixture-user'`,
+          )
+          .get()?.count,
+      ).toBe(1);
       expect(tableCount(raw, 'strategies')).toBe(2);
       expect(tableCount(raw, 'strategy_versions')).toBe(2);
       expect(tableCount(raw, 'strategy_runs')).toBe(2);

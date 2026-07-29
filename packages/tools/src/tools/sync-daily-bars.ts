@@ -64,18 +64,10 @@ async function syncRelevantStockIds(ctx: ToolContext): Promise<string[]> {
     for (const stockId of await activeHoldingIds(account.id, ctx)) result.add(stockId);
   }
 
-  const groups = await ctx.repos.stockGroup.list(true);
-  for (const group of groups) {
-    if (group.resolver.kind === 'manual') {
-      for (const stockId of group.resolver.stockIds) result.add(stockId);
-    } else if (group.resolver.kind === 'holdings') {
-      for (const stockId of await activeHoldingIds(group.resolver.accountId, ctx)) {
-        result.add(stockId);
-      }
-    } else {
-      for (const member of await ctx.repos.groupMember.currentMembers(group.id)) {
-        result.add(member.stockId);
-      }
+  const watchlists = await ctx.repos.watchlist.list({ enabledOnly: true });
+  for (const watchlist of watchlists) {
+    for (const member of await ctx.repos.watchlistMember.listMembers(watchlist.id)) {
+      result.add(member.stockId);
     }
   }
 

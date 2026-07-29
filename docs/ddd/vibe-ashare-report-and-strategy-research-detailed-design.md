@@ -1293,8 +1293,6 @@ packages/db/src/repository/contract-tests.ts
 packages/db/src/repository/{drizzle,memory}/index.ts
 packages/tools/src/context.ts
 packages/tools/src/registry.ts
-packages/tools/src/tools/run-tactic.ts
-packages/tools/src/internal/stock-group.ts
 packages/workflows/src/index.ts
 packages/workflows/src/tactic-scan.ts
 packages/workflows/src/refresh-groups.ts

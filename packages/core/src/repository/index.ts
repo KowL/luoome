@@ -10,10 +10,8 @@ import type { ResearchNote, ResearchNoteKind } from '../entity/research-note.js'
 import type { SignalObservation, SignalObservationStatus } from '../entity/signal-observation.js';
 import type { Stock } from '../entity/stock.js';
 import type { StockEvent, StockEventKind, StockEventStatus } from '../entity/stock-event.js';
-import type { GroupMemberSnapshot, StockGroup } from '../entity/stock-group.js';
 import type {
   DeliveryStatus,
-  StockPool,
   TriggerFeedback,
   WatchRuleState,
   WatchTrigger,
@@ -31,7 +29,6 @@ import type {
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
-import type { Tactic, TacticSignal } from '../entity/tactic.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
 import type {
@@ -170,8 +167,6 @@ export interface RepositoryRegistry {
   readonly dailyBar: DailyBarRepository;
   /** Phase 6：信号后的事实表现观察，不包含回测交易。 */
   readonly signalObservation: SignalObservationRepository;
-  /** v0.3 起；run_tactic / list_tactics 用。 */
-  readonly tactic: TacticRepository;
   /** Strategy 目标模型身份与不可变版本；W1 起内部可读写，W2 才开放 tools。 */
   readonly strategy: StrategyRepository;
   /** Strategy 运行、结果和信号。 */
@@ -181,18 +176,12 @@ export interface RepositoryRegistry {
   readonly alertPlan: AlertPlanRepository;
   /** v0.3 起；send_notification 落库 + 复盘查询。 */
   readonly notification: NotificationRepository;
-  /** v0.6 起；股票池 CRUD（list_stock_pools / create_stock_pool / ...）。 */
-  readonly stockPool: StockPoolRepository;
   /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
   readonly watchTrigger: WatchTriggerRepository;
   /** v0.7 策略预警；边沿状态机持久化 + 批量加载。 */
   readonly watchRuleState: WatchRuleStateRepository;
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
   readonly watchRun: WatchRunRepository;
-  /** 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §2）；股票分组 CRUD。 */
-  readonly stockGroup: StockGroupRepository;
-  /** 分组化起；分组成员快照（只增不改；watch hot path 只读 currentMembers）。 */
-  readonly groupMember: GroupMemberRepository;
   /** ruo 迁移 Phase 1A；研究档案笔记 CRUD + thesis 版本链。 */
   readonly researchNote: ResearchNoteRepository;
   /** ruo 迁移 Phase 1B；公司事件（幂等 upsert by (provider, externalId)）。 */
@@ -222,25 +211,6 @@ export interface ChatRepository {
   removeSession(id: string): Promise<void>;
   saveMessage(message: ChatMessage): Promise<void>;
   listMessages(sessionId: string, limit?: number): Promise<readonly ChatMessage[]>;
-}
-
-/**
- * 战法仓储（v0.3 起）。
- * 内存中默认装载 5 个 builtin 战法（BUILTIN_TACTICS）；user 战法由
- * save_user_tactic 显式落库。query() 主要给 list_tactics / run_tactic 用。
- */
-export interface TacticRepository {
-  save(tactic: Tactic): Promise<void>;
-  findById(id: string): Promise<Tactic | null>;
-  /** tag 过滤（如 'momentum'）；缺省返回全部。 */
-  list(filter?: {
-    readonly tag?: Tactic['tag'];
-    readonly source?: Tactic['source'];
-  }): Promise<readonly Tactic[]>;
-  /** 战法运行时写入信号历史；按 ts 倒序。 */
-  saveSignal(signal: TacticSignal): Promise<void>;
-  signalsByTactic(tacticId: string, since?: Date): Promise<readonly TacticSignal[]>;
-  signalsByStock(stockId: string, since?: Date): Promise<readonly TacticSignal[]>;
 }
 
 export interface StrategyRepository {
@@ -319,18 +289,6 @@ export interface WatchlistMemberRepository {
   commitWatchlistSync(input: WatchlistSyncCommit): Promise<WatchlistSyncRun>;
 }
 
-/**
- * 股票池仓储（v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md §2）。
- * Key 用 pool.id（slug 唯一）。
- */
-export interface StockPoolRepository {
-  save(pool: StockPool): Promise<void>;
-  findById(id: string): Promise<StockPool | null>;
-  /** 默认全部；enabledOnly=true 仅返回 enabled=true。 */
-  list(enabledOnly?: boolean): Promise<readonly StockPool[]>;
-  remove(id: string): Promise<void>;
-}
-
 export interface AlertPlanRepository {
   save(plan: AlertPlan): Promise<void>;
   findById(id: string): Promise<AlertPlan | null>;
@@ -339,34 +297,6 @@ export interface AlertPlanRepository {
     readonly watchlistId?: string;
   }): Promise<readonly AlertPlan[]>;
   remove(id: string): Promise<void>;
-}
-
-/**
- * 股票分组仓储（docs/ddd/strategy-watchlist-unification-detailed-design.md §2）。
- * Key 用 group.id（slug 唯一）。
- */
-export interface StockGroupRepository {
-  save(group: StockGroup): Promise<void>;
-  findById(id: string): Promise<StockGroup | null>;
-  /** 默认全部；enabledOnly=true 仅返回 enabled=true。 */
-  list(enabledOnly?: boolean): Promise<readonly StockGroup[]>;
-  remove(id: string): Promise<void>;
-}
-
-/**
- * 分组成员快照仓储（docs/ddd/strategy-watchlist-unification-detailed-design.md §1/§2）。
- * - 快照只增不改：一次刷新 = 一批（同一 refreshId），历史批次全保留（复盘 / 成员变化检测用）
- * - 当前成员语义 = 最新 refreshId 那一批；holdings resolver 是活视图，不写快照
- */
-export interface GroupMemberRepository {
-  /** 批量写入一批快照（通常同 refreshId）；同 id 重复写入忽略。 */
-  saveBatch(snapshots: readonly GroupMemberSnapshot[]): Promise<void>;
-  /** 当前成员：最新 refreshId 那一批（按 stockId 升序）；无快照返回空数组。 */
-  currentMembers(groupId: string): Promise<readonly GroupMemberSnapshot[]>;
-  /** 历史批次（含当前批），按 createdAt 倒序；since 过滤（createdAt ≥ since）。 */
-  listHistory(groupId: string, since?: Date): Promise<readonly GroupMemberSnapshot[]>;
-  /** 最新 refreshId；无快照返回 null。 */
-  latestRefreshId(groupId: string): Promise<string | null>;
 }
 
 /**

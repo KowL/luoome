@@ -33,30 +33,33 @@ const T0 = new Date('2026-07-21T02:30:00.000Z');
 const HOLDINGS_GROUP_ID = 'holdings-group';
 const MANUAL_GROUP_ID = 'manual-group';
 
-/** 构造带固定行情的 ctx，并把默认 holdings-watch 池替换为 cost-threshold-only 池。 */
+/** 旧 StockPool 形参 → AlertPlan 落库（迁移后测试沿用原 pool 形状，统一在此转换）。 */
+const savePlan = async (ctx: ToolContext, pool: StockPool): Promise<void> => {
+  await ctx.repos.alertPlan.save({
+    id: pool.id,
+    name: pool.name,
+    ...(pool.description === undefined ? {} : { description: pool.description }),
+    watchlistId: pool.groupId,
+    rules: pool.rules.map((rule, index) => ({
+      ...rule,
+      id: rule.id ?? `rule-${index + 1}`,
+    })) as never,
+    logic: pool.logic,
+    triggerMode: pool.triggerMode,
+    ...(pool.priority === undefined ? {} : { priority: pool.priority }),
+    cooldownMinutes: pool.cooldownMinutes,
+    dailyNotificationLimit: pool.dailyNotificationLimit,
+    notifyOnRecovery: pool.notifyOnRecovery,
+    enabled: pool.enabled,
+    createdAt: pool.createdAt,
+    updatedAt: pool.updatedAt,
+  });
+};
+
+/** 构造带固定行情的 ctx，并预置 cost-threshold 用的 holdings / manual Watchlist。 */
 const setupCtx = async (quotes: Record<string, number>) => {
   const ctx = await buildTestContext();
   const fixed = withFixedQuoteAdapter(ctx, quotes);
-  // 清掉默认 holdings-watch（避免干扰），新建专用 cost-threshold 池
-  await ctx.repos.stockPool.remove('holdings-watch');
-  await ctx.repos.stockGroup.save({
-    id: HOLDINGS_GROUP_ID,
-    name: '持仓分组',
-    resolver: { kind: 'holdings', accountId: TWO_HOLDINGS_ACCOUNT_ID },
-    refreshPolicy: 'manual',
-    enabled: true,
-    createdAt: T0,
-    updatedAt: T0,
-  });
-  await ctx.repos.stockGroup.save({
-    id: MANUAL_GROUP_ID,
-    name: '手动分组',
-    resolver: { kind: 'manual', stockIds: ['002594.SZ'] },
-    refreshPolicy: 'manual',
-    enabled: true,
-    createdAt: T0,
-    updatedAt: T0,
-  });
   await ctx.repos.watchlist.save({
     id: HOLDINGS_GROUP_ID,
     name: '持仓观察',
@@ -96,27 +99,6 @@ const setupCtx = async (quotes: Record<string, number>) => {
     firstAddedAt: T0,
     lastActivityAt: T0,
   });
-  ctx.repos.stockPool.save = async (pool: StockPool) => {
-    await ctx.repos.alertPlan.save({
-      id: pool.id,
-      name: pool.name,
-      ...(pool.description === undefined ? {} : { description: pool.description }),
-      watchlistId: pool.groupId,
-      rules: pool.rules.map((rule, index) => ({
-        ...rule,
-        id: rule.id ?? `rule-${index + 1}`,
-      })) as never,
-      logic: pool.logic,
-      triggerMode: pool.triggerMode,
-      ...(pool.priority === undefined ? {} : { priority: pool.priority }),
-      cooldownMinutes: pool.cooldownMinutes,
-      dailyNotificationLimit: pool.dailyNotificationLimit,
-      notifyOnRecovery: pool.notifyOnRecovery,
-      enabled: pool.enabled,
-      createdAt: pool.createdAt,
-      updatedAt: pool.updatedAt,
-    });
-  };
   return { ctx: fixed, businessCtx: ctx };
 };
 
@@ -129,7 +111,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       '600036.SH': 43.78, // 39.8 × 1.10
       'AAPL.US': 214.5, // 195 × 1.10
     });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'tp-only',
       name: '止盈池',
       groupId: HOLDINGS_GROUP_ID,
@@ -167,7 +149,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       '600036.SH': 35.82, // 39.8 × 0.90
       'AAPL.US': 175.5, // 195 × 0.90
     });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'sl-only',
       name: '止损池',
       groupId: HOLDINGS_GROUP_ID,
@@ -199,7 +181,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     const { ctx } = await setupCtx({
       '002594.SZ': 108.35, // +10% → 止盈
     });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'both-up',
       name: '双向（涨）',
       groupId: HOLDINGS_GROUP_ID,
@@ -227,7 +209,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     const { ctx } = await setupCtx({
       '002594.SZ': 88.65, // -10% → 止损
     });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'both-down',
       name: '双向（跌）',
       groupId: HOLDINGS_GROUP_ID,
@@ -254,7 +236,7 @@ describe('intraday-watch cost-threshold 规则', () => {
   it('边界：close = avgCost × 1.05（恰等于 takeProfitPct）→ 触发（>= 包含）', async () => {
     // 选 00700.HK：avgCost=480 → 480 × 1.05 = 504（浮点精确，规避 98.5 之类的精度漂移）
     const { ctx } = await setupCtx({ '00700.HK': 504 });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'boundary-up',
       name: '边界（涨）',
       groupId: HOLDINGS_GROUP_ID,
@@ -280,7 +262,7 @@ describe('intraday-watch cost-threshold 规则', () => {
   it('边界：close = avgCost × 0.95（恰等于 stopLossPct）→ 触发（<= 包含）', async () => {
     // 480 × 0.95 = 456（精确）
     const { ctx } = await setupCtx({ '00700.HK': 456 });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'boundary-down',
       name: '边界（跌）',
       groupId: HOLDINGS_GROUP_ID,
@@ -307,7 +289,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     const { ctx } = await setupCtx({
       '002594.SZ': 100.47, // 98.5 × 1.02
     });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'no-hit',
       name: '不命中',
       groupId: HOLDINGS_GROUP_ID,
@@ -334,7 +316,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     const { ctx } = await setupCtx({
       '002594.SZ': 108.35,
     });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'manual-pool',
       name: '手动池',
       groupId: MANUAL_GROUP_ID,
@@ -360,7 +342,7 @@ describe('intraday-watch cost-threshold 规则', () => {
   it('行情 unresolved（stock 不在 batch_quote 结果）→ 不触发、不报错', async () => {
     // 不传 002594.SZ 的报价 → 视为 unresolved → 不命中 cost-threshold
     const { ctx } = await setupCtx({});
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'unresolved-pool',
       name: '无行情',
       groupId: MANUAL_GROUP_ID,
@@ -385,7 +367,7 @@ describe('intraday-watch cost-threshold 规则', () => {
 
   it('每次触发都落库 watchTriggers', async () => {
     const { ctx } = await setupCtx({ '002594.SZ': 108.35 }); // +10% vs avgCost 98.5 → 触发
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'persist-check',
       name: '持久化校验',
       groupId: HOLDINGS_GROUP_ID,
@@ -415,7 +397,7 @@ describe('intraday-watch cost-threshold 规则', () => {
 
   it('cooldown：30 分钟内第二次跑同样价格 → notified=false，但仍落库', async () => {
     const { ctx } = await setupCtx({ '002594.SZ': 108.35 });
-    await ctx.repos.stockPool.save({
+    await savePlan(ctx, {
       id: 'cooldown-pool',
       name: '冷却',
       groupId: HOLDINGS_GROUP_ID,

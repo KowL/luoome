@@ -5,7 +5,6 @@ import type {
   ChatMessage,
   ChatSession,
   DailyBar,
-  GroupMemberSnapshot,
   Holding,
   Notification,
   Quote,
@@ -15,27 +14,21 @@ import type {
   SignalObservation,
   Stock,
   StockEvent,
-  StockGroup,
-  StockPool,
   Strategy,
   StrategyResult,
   StrategyRun,
   StrategySignal,
   StrategyVersion,
-  Tactic,
-  TacticSignal,
   Trade,
   WatchRun,
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
-import { BUILTIN_TACTICS } from '@luoome/core';
 import { InMemoryAccountRepository } from './account.js';
 import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
-import { InMemoryGroupMemberRepository } from './group-member.js';
 import { InMemoryHoldingRepository } from './holding.js';
 import { InMemoryNotificationRepository } from './notification.js';
 import { InMemoryQuoteRepository } from './quote.js';
@@ -44,11 +37,8 @@ import { InMemoryResearchNoteRepository } from './research-note.js';
 import { InMemorySignalObservationRepository } from './signal-observation.js';
 import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
-import { InMemoryStockGroupRepository } from './stock-group.js';
-import { InMemoryStockPoolRepository } from './stock-pool.js';
 import { InMemoryStockUniverseRepository } from './stock-universe.js';
 import { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
-import { InMemoryTacticRepository } from './tactic.js';
 import { InMemoryTradeRepository } from './trade.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 import { InMemoryWatchRunRepository } from './watch-run.js';
@@ -61,7 +51,6 @@ export { InMemoryAdviceRepository } from './advice.js';
 export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
-export { InMemoryGroupMemberRepository } from './group-member.js';
 export { InMemoryHoldingRepository } from './holding.js';
 export { InMemoryNotificationRepository } from './notification.js';
 export { InMemoryQuoteRepository } from './quote.js';
@@ -70,11 +59,8 @@ export { InMemoryResearchNoteRepository } from './research-note.js';
 export { InMemorySignalObservationRepository } from './signal-observation.js';
 export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
-export { InMemoryStockGroupRepository } from './stock-group.js';
-export { InMemoryStockPoolRepository } from './stock-pool.js';
 export { InMemoryStockUniverseRepository } from './stock-universe.js';
 export { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
-export { InMemoryTacticRepository } from './tactic.js';
 export { InMemoryTradeRepository } from './trade.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 export { InMemoryWatchRunRepository } from './watch-run.js';
@@ -95,30 +81,22 @@ export interface InMemorySeed {
   readonly reports?: readonly Report[];
   readonly signalObservations?: readonly SignalObservation[];
   readonly dailyBars?: readonly DailyBar[];
-  /** v0.3 起：可选预置战法定义 + 信号。 */
-  readonly tactics?: readonly Tactic[];
-  readonly tacticSignals?: readonly TacticSignal[];
   readonly strategies?: readonly Strategy[];
   readonly strategyVersions?: readonly StrategyVersion[];
   readonly strategyRuns?: readonly StrategyRun[];
   readonly strategyResults?: readonly StrategyResult[];
   readonly strategySignals?: readonly StrategySignal[];
   readonly notifications?: readonly Notification[];
-  /** v0.6 起：可选预置股票池 + 触发。 */
-  readonly stockPools?: readonly StockPool[];
   readonly alertPlans?: readonly AlertPlan[];
   readonly watchTriggers?: readonly WatchTrigger[];
   readonly watchRuns?: readonly WatchRun[];
-  /** 分组化起：可选预置分组 + 成员快照。 */
-  readonly stockGroups?: readonly StockGroup[];
-  readonly groupMemberSnapshots?: readonly GroupMemberSnapshot[];
   /** ruo 迁移起：可选预置研究笔记 + 公司事件 + workflow 运行。 */
   readonly researchNotes?: readonly ResearchNote[];
   readonly stockEvents?: readonly StockEvent[];
   readonly workflowRuns?: readonly WorkflowRun[];
 }
 
-/** 构造全部 in-memory repository（v0.3 + v0.6 stockPool/watchTrigger + 分组化 stockGroup/groupMember），可选灌入种子。 */
+/** 构造全部 in-memory repository，可选灌入种子。 */
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
   const stock = new InMemoryStockRepository();
@@ -131,21 +109,16 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const quote = new InMemoryQuoteRepository();
   const dailyBar = new InMemoryDailyBarRepository();
   const signalObservation = new InMemorySignalObservationRepository();
-  const tactic = new InMemoryTacticRepository();
   const strategy = new InMemoryStrategyRepository();
   const strategyRun = new InMemoryStrategyRunRepository(strategy);
   const watchlist = new InMemoryWatchlistRepository();
   const watchlistMember = new InMemoryWatchlistMemberRepository(watchlist);
   const notification = new InMemoryNotificationRepository();
   // v0.6 起
-  const stockPool = new InMemoryStockPoolRepository();
   const alertPlan = new InMemoryAlertPlanRepository();
   const watchTrigger = new InMemoryWatchTriggerRepository();
   const watchRuleState = new InMemoryWatchRuleStateRepository();
   const watchRun = new InMemoryWatchRunRepository();
-  // 分组化起
-  const stockGroup = new InMemoryStockGroupRepository();
-  const groupMember = new InMemoryGroupMemberRepository();
   // ruo 迁移起
   const researchNote = new InMemoryResearchNoteRepository();
   const stockEvent = new InMemoryStockEventRepository();
@@ -162,29 +135,18 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const q of seed.quotes ?? []) quote.put(q);
     for (const b of seed.dailyBars ?? []) dailyBar.put(b);
     for (const observation of seed.signalObservations ?? []) signalObservation.put(observation);
-    for (const tc of seed.tactics ?? []) tactic.put(tc);
-    for (const s of seed.tacticSignals ?? []) {
-      void tactic.saveSignal(s);
-    }
     for (const item of seed.strategies ?? []) void strategy.save(item);
     for (const item of seed.strategyVersions ?? []) void strategy.saveVersion(item);
     for (const item of seed.strategyRuns ?? []) void strategyRun.saveRun(item);
     void strategyRun.saveResults(seed.strategyResults ?? []);
     void strategyRun.saveSignals(seed.strategySignals ?? []);
     for (const n of seed.notifications ?? []) notification.put(n);
-    for (const p of seed.stockPools ?? []) stockPool.put(p);
     for (const p of seed.alertPlans ?? []) void alertPlan.save(p);
     for (const t of seed.watchTriggers ?? []) watchTrigger.put(t);
     for (const r of seed.watchRuns ?? []) watchRun.put(r);
-    for (const g of seed.stockGroups ?? []) stockGroup.put(g);
-    for (const s of seed.groupMemberSnapshots ?? []) groupMember.put(s);
     for (const n of seed.researchNotes ?? []) researchNote.put(n);
     for (const e of seed.stockEvents ?? []) stockEvent.put(e);
     for (const r of seed.workflowRuns ?? []) workflowRun.put(r);
-  }
-  // 默认灌入内置战法（即使 seed 没指定 tactics），让 list_tactics / run_tactic 默认可用
-  for (const tc of BUILTIN_TACTICS) {
-    if (tactic.findByIdSync(tc.id) === null) tactic.put(tc);
   }
   return {
     account,
@@ -197,19 +159,15 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     quote,
     dailyBar,
     signalObservation,
-    tactic,
     strategy,
     strategyRun,
     watchlist,
     watchlistMember,
     notification,
-    stockPool,
     alertPlan,
     watchTrigger,
     watchRuleState,
     watchRun,
-    stockGroup,
-    groupMember,
     researchNote,
     stockEvent,
     workflowRun,

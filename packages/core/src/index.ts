@@ -42,9 +42,6 @@ export * from './strategy/field-registry.js';
 export * from './strategy/legacy-mapper.js';
 // Strategy / Watchlist 重构的跨阶段决策约束（W0 起）
 export * from './strategy-watchlist-policy.js';
-// 战法 DSL 引擎（v0.3 起）
-export * from './tactic/dsl.js';
-export * from './tactic/runner.js';
 // A 股节假日历（纯计算；文件 / env 加载仍在 cli）
 export * from './trading-calendar.js';
 // 基础类型

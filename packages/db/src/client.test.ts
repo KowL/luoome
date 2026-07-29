@@ -1,8 +1,8 @@
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos, ensureSchema } from './client.js';
-import { makeAccount, makeReport, makeStockPool } from './repository/contract-tests.js';
-import { accounts, stockPools } from './schema/index.js';
+import { makeAccount, makeReport } from './repository/contract-tests.js';
+import { accounts, stockGroups, stockPools } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
   it('createDrizzleRepos(:memory:) 自动建表，repos 可读写，close 正常', async () => {
@@ -127,11 +127,22 @@ describe('createDrizzleRepos / ensureSchema', () => {
       sqlite.close();
 
       const handle = createDrizzleRepos(dbPath);
-      const old = await handle.repos.groupMember.currentMembers('legacy-group');
-      expect(old).toMatchObject([{ id: 'legacy-member', evidence: [] }]);
-      expect(old[0]?.score).toBeUndefined();
+      // legacy repo 层已下掉，迁移行为直接用 raw SQL 断言
+      const old = handle.db
+        .all<{ id: string; evidence_json: string; score: number | null }>(
+          sql`SELECT id, evidence_json, score FROM group_member_snapshots WHERE group_id = 'legacy-group'`,
+        )
+        .toSorted((a, b) => a.id.localeCompare(b.id));
+      expect(old).toHaveLength(1);
+      expect(old[0]?.id).toBe('legacy-member');
+      expect(old[0]?.evidence_json).toBe('[]');
+      expect(old[0]?.score).toBeNull();
       ensureSchema(handle.db);
-      expect(await handle.repos.groupMember.currentMembers('legacy-group')).toHaveLength(1);
+      expect(
+        handle.db.all<{ id: string }>(
+          sql`SELECT id FROM group_member_snapshots WHERE group_id = 'legacy-group'`,
+        ),
+      ).toHaveLength(1);
       handle.close();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -175,20 +186,24 @@ describe('createDrizzleRepos / ensureSchema', () => {
       const handle = createDrizzleRepos(dbPath);
       try {
         // 旧行读出：source 数据仍在表里；阶段 B 数据迁移已把它拆成分组并回填 groupId
-        const legacy = await handle.repos.stockPool.findById('legacy-pool');
-        expect(legacy).not.toBeNull();
-        expect(legacy?.groupId).toBe('legacy-pool-group');
-        const migratedGroup = await handle.repos.stockGroup.findById('legacy-pool-group');
-        expect(migratedGroup?.resolver).toEqual({ kind: 'holdings', accountId: 'acc-1' });
-        const raw = handle.db.select().from(stockPools).all();
-        expect(raw).toHaveLength(1);
-        expect(raw[0]?.source).toEqual({ kind: 'holdings', accountId: 'acc-1' });
+        // （legacy repo 层已下掉，迁移行为直接用 raw SQL / drizzle select 断言）
+        const legacy = handle.db.select().from(stockPools).all();
+        expect(legacy).toHaveLength(1);
+        expect(legacy[0]?.groupId).toBe('legacy-pool-group');
+        const migratedGroup = handle.db.select().from(stockGroups).all();
+        expect(migratedGroup).toHaveLength(1);
+        expect(migratedGroup[0]?.resolver).toEqual({ kind: 'holdings', accountId: 'acc-1' });
+        expect(legacy[0]?.source).toEqual({ kind: 'holdings', accountId: 'acc-1' });
         // 新行写入：source 恒 NULL、groupId 落库（旧结构 NOT NULL 已放宽）
-        await handle.repos.stockPool.save(makeStockPool('new-pool', { groupId: 'grp-1' }));
-        expect((await handle.repos.stockPool.findById('new-pool'))?.groupId).toBe('grp-1');
+        handle.db.run(sql`
+          INSERT INTO stock_pools (id, name, description, source, group_id, rules, cooldown_minutes, enabled, created_at, updated_at)
+          VALUES ('new-pool', '新池', NULL, NULL, 'grp-1', ${'[{"kind":"price-change","pct":0.05}]'}, 30, 1, 1750000000000, 1750000000000)
+        `);
+        const inserted = handle.db.select().from(stockPools).all();
+        expect(inserted.find((p) => p.id === 'new-pool')?.groupId).toBe('grp-1');
         // 幂等：再跑一次 ensureSchema 不报错、数据保留
         ensureSchema(handle.db);
-        expect(await handle.repos.stockPool.list()).toHaveLength(2);
+        expect(handle.db.select().from(stockPools).all()).toHaveLength(2);
       } finally {
         handle.close();
       }
@@ -226,15 +241,20 @@ describe('createDrizzleRepos / ensureSchema', () => {
       ensureSchema(handle.db);
 
       // 三类分组按 source.kind 建好（id=<poolId>-group，resolver 平移）
-      const gManual = await handle.repos.stockGroup.findById('lp-manual-group');
+      // （legacy repo 层已下掉，迁移行为直接用 drizzle select 断言）
+      const groups = handle.db.select().from(stockGroups).all();
+      const groupById = (id: string) => groups.find((g) => g.id === id);
+      const gManual = groupById('lp-manual-group');
       expect(gManual?.resolver).toEqual({
         kind: 'manual',
         stockIds: ['002594.SZ', '600519.SH'],
       });
       expect(gManual?.refreshPolicy).toBe('manual');
-      const gHoldings = await handle.repos.stockGroup.findById('lp-holdings-group');
-      expect(gHoldings?.resolver).toEqual({ kind: 'holdings', accountId: 'acc-1' });
-      const gTactic = await handle.repos.stockGroup.findById('lp-tactic-group');
+      expect(groupById('lp-holdings-group')?.resolver).toEqual({
+        kind: 'holdings',
+        accountId: 'acc-1',
+      });
+      const gTactic = groupById('lp-tactic-group');
       expect(gTactic?.resolver).toEqual({
         kind: 'formula',
         tacticId: 'breakout-volume',
@@ -244,27 +264,26 @@ describe('createDrizzleRepos / ensureSchema', () => {
       expect(gTactic?.refreshPolicy).toBe('daily');
 
       // pool.groupId 回填；已迁移行 / 新行不动
-      expect((await handle.repos.stockPool.findById('lp-manual'))?.groupId).toBe('lp-manual-group');
-      expect((await handle.repos.stockPool.findById('lp-holdings'))?.groupId).toBe(
-        'lp-holdings-group',
-      );
-      expect((await handle.repos.stockPool.findById('lp-tactic'))?.groupId).toBe('lp-tactic-group');
-      expect((await handle.repos.stockPool.findById('lp-done'))?.groupId).toBe('lp-done-group');
-      expect((await handle.repos.stockPool.findById('lp-new'))?.groupId).toBe('grp-1');
+      const pools = handle.db.select().from(stockPools).all();
+      const poolById = (id: string) => pools.find((p) => p.id === id);
+      expect(poolById('lp-manual')?.groupId).toBe('lp-manual-group');
+      expect(poolById('lp-holdings')?.groupId).toBe('lp-holdings-group');
+      expect(poolById('lp-tactic')?.groupId).toBe('lp-tactic-group');
+      expect(poolById('lp-done')?.groupId).toBe('lp-done-group');
+      expect(poolById('lp-new')?.groupId).toBe('grp-1');
       // 已迁移行的 source 不会被误建分组
-      expect(await handle.repos.stockGroup.findById('lp-done-group')).toBeNull();
+      expect(groupById('lp-done-group')).toBeUndefined();
 
       // source 列数据保留不删
-      const raw = handle.db.select().from(stockPools).all();
-      expect(raw.find((p) => p.id === 'lp-manual')?.source).toEqual({
+      expect(poolById('lp-manual')?.source).toEqual({
         kind: 'manual',
         stockIds: ['002594.SZ', '600519.SH'],
       });
 
       // 幂等：再跑一次 ensureSchema，分组不重复、行数不变
       ensureSchema(handle.db);
-      expect(await handle.repos.stockGroup.list()).toHaveLength(3);
-      expect(await handle.repos.stockPool.list()).toHaveLength(5);
+      expect(handle.db.select().from(stockGroups).all()).toHaveLength(3);
+      expect(handle.db.select().from(stockPools).all()).toHaveLength(5);
     } finally {
       handle.close();
     }

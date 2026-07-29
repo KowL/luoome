@@ -24,27 +24,36 @@ const T_YESTERDAY = new Date('2026-07-20T00:00:00.000Z'); // 上一交易日
 const T_DAY_BEFORE = new Date('2026-07-19T00:00:00.000Z');
 
 /**
- * 构造带固定行情 + price-change-only 池的 ctx。
+ * 构造带固定行情 + price-change-only AlertPlan 的 ctx。
  *
  * 注：withFixedQuoteAdapter 返回的是新 ctx（不修改原 ctx）；这里把 fixed ctx
- * 返回给 caller，且 pool 保存走 fixed.ctx（防 buildTestContext 的 seedMockData
- * 把 pool 覆盖）。fixed.adapters.market 才是 FixedQuoteAdapter，workflow 调
+ * 返回给 caller，且 AlertPlan 保存走 fixed.ctx（防 buildTestContext 的 seedMockData
+ * 把 plan 覆盖）。fixed.adapters.market 才是 FixedQuoteAdapter，workflow 调
  * batch_quote tool 会走这条路径。
  */
+const savePlan = async (ctx: ToolContext, pool: StockPool): Promise<void> => {
+  await ctx.repos.alertPlan.save({
+    id: pool.id,
+    name: pool.name,
+    watchlistId: pool.groupId,
+    rules: pool.rules.map((rule, index) => ({
+      ...rule,
+      id: rule.id ?? `rule-${index + 1}`,
+    })) as never,
+    logic: pool.logic,
+    triggerMode: pool.triggerMode,
+    cooldownMinutes: pool.cooldownMinutes,
+    dailyNotificationLimit: pool.dailyNotificationLimit,
+    notifyOnRecovery: pool.notifyOnRecovery,
+    enabled: pool.enabled,
+    createdAt: pool.createdAt,
+    updatedAt: pool.updatedAt,
+  });
+};
+
 const setupCtx = async (quotes: Record<string, number>) => {
   const ctx = await buildTestContext({ clock: () => T0 });
   const fixed = withFixedQuoteAdapter(ctx, quotes);
-  // 清掉默认池（避免干扰），新建专用 price-change 池
-  await fixed.repos.stockPool.remove('holdings-watch');
-  await fixed.repos.stockGroup.save({
-    id: 'p-change-group',
-    name: 'p-change-group',
-    resolver: { kind: 'manual', stockIds: ['600519.SH'] },
-    refreshPolicy: 'manual',
-    enabled: true,
-    createdAt: T0,
-    updatedAt: T0,
-  });
   await fixed.repos.watchlist.save({
     id: 'p-change-group',
     name: 'price-change',
@@ -63,26 +72,7 @@ const setupCtx = async (quotes: Record<string, number>) => {
     firstAddedAt: T0,
     lastActivityAt: T0,
   });
-  fixed.repos.stockPool.save = async (pool: StockPool) => {
-    await fixed.repos.alertPlan.save({
-      id: pool.id,
-      name: pool.name,
-      watchlistId: pool.groupId,
-      rules: pool.rules.map((rule, index) => ({
-        ...rule,
-        id: rule.id ?? `rule-${index + 1}`,
-      })) as never,
-      logic: pool.logic,
-      triggerMode: pool.triggerMode,
-      cooldownMinutes: pool.cooldownMinutes,
-      dailyNotificationLimit: pool.dailyNotificationLimit,
-      notifyOnRecovery: pool.notifyOnRecovery,
-      enabled: pool.enabled,
-      createdAt: pool.createdAt,
-      updatedAt: pool.updatedAt,
-    });
-  };
-  await fixed.repos.stockPool.save({
+  await savePlan(fixed, {
     id: 'p-change',
     name: 'price-change',
     groupId: 'p-change-group',
@@ -217,8 +207,8 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         source: 'intraday-test',
       },
     ]);
-    // 把阈值改严到 6%（> 5.26%）— StockPoolRepository.save 是 upsert，同 id 覆盖
-    await ctx.repos.stockPool.save({
+    // 把阈值改严到 6%（> 5.26%）— AlertPlanRepository.save 是 upsert，同 id 覆盖
+    await savePlan(ctx, {
       id: 'p-change',
       name: 'price-change',
       groupId: 'p-change-group',

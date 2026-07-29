@@ -57,5 +57,6 @@ StrategySignal，不临时运行全市场 Strategy。
 - Advice 与真实交易严格分离；Strategy、AlertPlan、WatchTrigger 都不会自动下单。
 - write/external 必须显式 opt-in；Agent 的持久化、发布、正式运行和同步必须先确认。
 
-旧 Tactic、StockGroup、StockPool 只作为只读迁移来源保留在 SQLite 与 migration decoder 中，
+旧 Tactic、StockGroup、StockPool 的 tool 与 repository 层已彻底下掉；只剩 SQLite 旧表
+DDL/schema、migration decoder，以及 entity/tactic.ts（legacy-mapper 迁移映射用）。
 不得作为新 surface、Agent 或写入口的领域模型。

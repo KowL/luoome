@@ -48,7 +48,7 @@ workflows ──► tools ──► core
 - 使用 Bun workspace、TypeScript strict、ESM 与 `.js` import 后缀；格式和 lint 以 Biome 为准。
 - 信任内部类型和框架保证，只在用户输入、HTTP、MCP、外部 API 等系统边界校验。
 - 不变量放在 core 的 schema/assertion 中，不在各 surface 重复实现。
-- 不新增自动交易路径；`StockGroup`、`WatchPlan`、`WatchTrigger` 等产品语义以 `CONTEXT.md` 为准。
+- 不新增自动交易路径；`Watchlist`、`AlertPlan`、`WatchTrigger` 等产品语义以 `CONTEXT.md` 为准。
 - Web 保持 Hono + 原生 HTML/CSS/JS 的现有技术栈；UI 改动除自动测试外必须实际启动并用浏览器验证。
 - 默认不写解释代码“做什么”的注释；仅在隐藏约束、非显然原因或必要 workaround 处说明“为什么”。
 - 不为无法发生的内部状态增加 fallback；外部依赖失败按已有错误模型处理。

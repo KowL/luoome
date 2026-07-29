@@ -35,10 +35,6 @@ const VALUE_FLAGS = new Set([
   'pnl',
   'holding-hours',
   'notes',
-  'tactic',
-  'by',
-  'tactic-id',
-  'scope',
   // v0.6 watch 子命令
   'interval',
   'alert-plan',

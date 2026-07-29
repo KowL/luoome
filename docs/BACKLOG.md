@@ -30,7 +30,7 @@
 11. TUI `app.ts` 1007 行单文件；RESIZE handler 里 `overlay.height` 连续赋值两次（第一行死代码）；`CalibrationView` 类型定义在文件末尾却在中间使用。
 12. core：`V0_2_SUPPORTED_MARKETS` 命名陈旧（v0.5 已支持 US）；`assertExpressionSafety` 抛普通 Error 而非 `InvariantError` / `DslEvalError`。
 13. adapters：`package.json` 声明 `drizzle-orm` 依赖但 src 未使用；`eastmoney.ts` / `openai-compatible.ts` 尾部重复 re-export 与桶导出冗余；`workflows/package.json` description 仍写「v0.1 仅骨架」。
-14. `run-tactic.ts` 有 `const c: ToolContext = ctx` 的 narrow-cast 痕迹；`intraday-watch.ts` 两处用条件类型体操推断 ctx 类型，应直接 import `WorkflowContext`。
+14. `intraday-watch.ts` 两处用条件类型体操推断 ctx 类型，应直接 import `WorkflowContext`。
 
 ---
 
