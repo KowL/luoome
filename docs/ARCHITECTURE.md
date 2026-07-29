@@ -311,9 +311,10 @@ Adapter manager 提供：
 - 缓存（带 TTL）
 - 限速（per-adapter 配额）
 - 股票搜索路由（空数组不降级、抛错才降级）
-- 全市场快照路由（分组刷新 / run_tactic `scope='all-stocks'` 的候选全集来源；
-  Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟——
-  一轮 refresh-groups 内多个分组共享同一份快照；所有源都不支持时调用方降级本地 stocks 表。
+- 全市场快照路由（为扫描候选补充可选快照价，也供 LLM 分组生成候选上下文；
+  `run_tactic scope='all-stocks'` 的候选身份全集必须来自
+  `StockUniverse coverage='CN_A_SHARES_SH_SZ' status='active'`，快照不得增删候选。
+  Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟；
   eastmoney 实现走 `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板）
 - 指数行情严格区分 `realtime-index` 与 `delayed-index`；Tushare 日线型指数数据不能进入实时接口
 
@@ -335,6 +336,14 @@ Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网
 显式声明来源，当前唯一注册值为 `eastmoney`（`getTopicZTPool`，无鉴权）；未知来源在
 启动期失败，不做隐式 Eastmoney fallback。Manager 暴露实际 sources，健康读模型据此生成
 `limit-up-ladder` 数据集库存。
+
+A 股日级情绪同样不扩宽 `MarketDataAdapterLike`。`AShareSentimentManager` 通过
+`createAShareSentimentManagerFromEnv` 独立装配东方财富封板池和炸板池，隐藏跨池去重、
+维度级 partial/unavailable、provenance、fallback 与短 TTL 缓存；指数由
+`get_ashare_sentiment` 组合现有 `fetchIndexQuotes`。只有指数观测日与请求交易日一致时才
+进入快照。`MarketSnapshot` 尚无 coverage/source/asOf/completeness 信封，因此 breadth
+固定 unavailable，禁止从部分实时报价推算全市场宽度。详见
+[Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
 
 Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优先级与配置就绪状态，
 不返回密钥；受 mutation token 与同源 Origin 保护的 POST 将配置原子写入权限为
@@ -376,6 +385,8 @@ interface ToolContext {
     llm: LLMAdapterLike;
   };
   agent?: AgentRuntimeLike;
+  limitUpLadder?: LimitUpLadderManagerLike;
+  ashareSentiment?: AShareSentimentManagerLike;
   user: { id: string; defaultAccountId: string };
   clock: () => Date;
   logger: Logger;
@@ -385,6 +396,8 @@ interface ToolContext {
 `ctx` 是唯一被允许注入依赖的方式。`AgentRuntimeLike` 是 SDK 无关投影；AI SDK 的
 `LanguageModel` / `ToolLoopAgent` 类型只存在于 adapters。`agent_run` 从 registry
 构造显式只读能力白名单，不能绕过 tool 契约直接访问 repository 或 adapter。
+`limitUpLadder` 与 `ashareSentiment` 是日级批量快照 manager，保持为顶层可选端口，
+不混入逐标的实时行情 Gateway。
 
 ## 5. 数据模型
 
@@ -420,6 +433,39 @@ coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManag
 Web 信息架构将方案配置收进分组详情；仪表盘承载跨分组运行状态、单轮试跑和最近触发，
 不再设置独立盯盘页面。
 
+**Vibe A 股报告迁移 Phase 1**：新增 `Report` 结构化事实简报，按
+`(kind, scopeKey, periodStart, periodEnd)` 逻辑键幂等保存。正文只允许受限
+section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺失时必须为
+`partial` 并保存原因。`ReportRepository` 同时提供 in-memory 与 Drizzle 实现；
+`get_report` / `list_reports` / `render_report` 为 read，`save_report` /
+`set_report_delivery_status` 为 write。Web 报告历史、详情和导出统一调用这些 tool，
+不复制 partial 判定或 renderer。详细设计见
+[Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
+
+**Vibe A 股报告迁移 Phase 2**：新增 `AShareSentimentSnapshot` 与
+`get_ashare_sentiment` external tool。东方财富封板/炸板端点独立失败、独立 provenance；
+完整结果按跨池去重后的真实样本计算炸板率，封单或开板字段缺失保留 null。实时指数只在
+观测日匹配请求日时组合；行情完整性信封落地前 breadth 保持 unavailable。
+
+**Vibe A 股报告迁移 Phase 3**：`opening-report`、`closing-report` 与
+`weekly-report` 共用报告 runner，经 `ctx.tools.*` 采集证据、保存 Report、记录
+`WorkflowRun` 并执行通知状态迁移。定时模式默认通知；通知失败不回滚报告，只把投递状态
+记为 `failed`、运行审计记为 `partial`。CLI 通过 `workflow run ... --mode` 触发，
+Web 通过带 mutation token 与同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
+
+**Vibe A 股策略研究迁移 Phase 4**：`GroupMemberSnapshot` 增加可选 score、evidence、
+dataAsOf 与 TacticSignal 引用，旧 SQLite 行经幂等增量迁移读取为无证据快照。formula 分组
+刷新使用 active `CN_A_SHARES_SH_SZ` StockUniverse 和本地规范 qfq 日线，覆盖不完整时保留
+旧批次。`get_tactic_consensus` 只聚合同交易日、非 stale 的持久信号，保留 bullish/neutral
+支持信号与 bearish 反向信号；rankScore 只用于同批排序，不表示胜率或置信度。Web 研究视图
+复用现有分组与战法页面，不新增 Strategy 聚合根或自动 Advice/Trade 路径。
+
+**Vibe A 股策略研究迁移 Phase 5**：指标快照增加最新价、20 日动量、MA20/MA60 距离、
+上穿距今天数、连续站上 MA20 天数，以及 Bollinger 20 日上下轨、带宽和位置。新增
+`early-breakout` 与 `bollinger-band` 两个确定性内置 Tactic；后者只表达下轨超跌且
+MA60 长期趋势未破的 bullish 均值回复事实，不把上轨风险信号混为共振支持。各 surface
+通过统一装载函数幂等更新内置定义，业务空库仍不插入账户、股票、交易或 Advice。
+
 ```txt
 Account          账户（真实，币种，初始资金）
 Stock            标的（代码、交易所、名称、行业）
@@ -434,6 +480,8 @@ Note             笔记（标题、内容、标签、来源）
 Config           KV 配置（user/account/global scope）
 LimitUpLadder    连板天梯快照（date, source, maxLevel, levels[]）—— Phase 1，docs/ddd/limit-up-ladder-detailed-design.md
 LimitUpLadderEntry  单 entry（price / rawClose / corrected / ladderLevel / firstTime / finalTime）
+Report           个性化结构化事实简报（周期、scope、section/block、provenance、partial）
+AShareSentimentSnapshot  沪深 A 股日级指数/宽度/封板/炸板/热点证据（维度级完整性）
 ```
 
 ### 5.2 Advice 实体（核心）

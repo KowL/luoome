@@ -7,6 +7,7 @@ import type {
   AdviceSubjectKind,
   ChatMessagePart,
   Citation,
+  DeliveryStatus,
   Exchange,
   ListingStatus,
   MarketCoverage,
@@ -14,7 +15,9 @@ import type {
   Notification,
   ProviderStatus,
   Quantity,
+  Report,
   ResearchNote,
+  SignalObservation,
   StockCode,
   StockEvent,
   StockGroup,
@@ -317,6 +320,37 @@ export const tacticSignals = sqliteTable(
   }),
 );
 
+export const signalObservations = sqliteTable(
+  'signal_observations',
+  {
+    id: text('id').primaryKey(),
+    sourceKind: text('source_kind').$type<SignalObservation['sourceKind']>().notNull(),
+    sourceId: text('source_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    baselinePrice: real('baseline_price'),
+    baselineAt: integer('baseline_at', { mode: 'timestamp_ms' }),
+    horizon: text('horizon').$type<SignalObservation['horizon']>().notNull(),
+    closePrice: real('close_price'),
+    returnPct: real('return_pct'),
+    maxFavorableExcursionPct: real('max_favorable_excursion_pct'),
+    maxAdverseExcursionPct: real('max_adverse_excursion_pct'),
+    benchmarkReturnPct: real('benchmark_return_pct'),
+    benchmarkStatus: text('benchmark_status')
+      .$type<SignalObservation['benchmarkStatus']>()
+      .notNull(),
+    status: text('status').$type<SignalObservation['status']>().notNull(),
+    provenance: text('provenance', { mode: 'json' })
+      .$type<SignalObservation['provenance']>()
+      .notNull(),
+    unavailableReason: text('unavailable_reason'),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    statusBaselineIdx: index('signal_observations_status_baseline_idx').on(t.status, t.baselineAt),
+    sourceIdx: index('signal_observations_source_idx').on(t.sourceKind, t.sourceId),
+  }),
+);
+
 /**
  * 通知历史（v0.3 起）。
  * 软关联 adviceId / tacticSignalId（text，可空；不强 FK）。
@@ -413,6 +447,14 @@ export const groupMemberSnapshots = sqliteTable(
     stockId: text('stock_id').notNull(),
     refreshId: text('refresh_id').notNull(),
     reason: text('reason').notNull(),
+    score: real('score'),
+    evidence: text('evidence_json', { mode: 'json' })
+      .$type<readonly string[]>()
+      .notNull()
+      .default([]),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
+    tacticId: text('tactic_id'),
+    signalTs: integer('signal_ts', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
@@ -643,6 +685,43 @@ export const workflowRuns = sqliteTable(
   }),
 );
 
+export const reports = sqliteTable(
+  'reports',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').$type<Report['kind']>().notNull(),
+    scopeKey: text('scope_key').notNull(),
+    scope: text('scope_json', { mode: 'json' }).$type<Report['scope']>().notNull(),
+    periodStart: text('period_start').notNull(),
+    periodEnd: text('period_end').notNull(),
+    title: text('title').notNull(),
+    generatedAt: integer('generated_at', { mode: 'timestamp_ms' }).notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    status: text('status').$type<Report['status']>().notNull(),
+    sections: text('sections_json', { mode: 'json' }).$type<Report['sections']>().notNull(),
+    evidence: text('evidence_json', { mode: 'json' }).$type<Report['evidence']>().notNull(),
+    missingDimensions: text('missing_dimensions_json', { mode: 'json' })
+      .$type<Report['missingDimensions']>()
+      .notNull(),
+    deliveryStatus: text('delivery_status').$type<DeliveryStatus>().notNull(),
+    workflowRunId: text('workflow_run_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    periodUnique: uniqueIndex('reports_period_unique').on(
+      t.kind,
+      t.scopeKey,
+      t.periodStart,
+      t.periodEnd,
+    ),
+    periodEndIdx: index('reports_period_end_idx').on(t.periodEnd),
+    kindPeriodEndIdx: index('reports_kind_period_end_idx').on(t.kind, t.periodEnd),
+    statusPeriodEndIdx: index('reports_status_period_end_idx').on(t.status, t.periodEnd),
+    workflowRunIdx: index('reports_workflow_run_idx').on(t.workflowRunId),
+  }),
+);
+
 export const chatSessions = sqliteTable(
   'chat_sessions',
   {
@@ -684,6 +763,7 @@ export const schema = {
   dailyBars,
   tactics,
   tacticSignals,
+  signalObservations,
   notifications,
   // v0.6 起
   stockPools,
@@ -698,6 +778,7 @@ export const schema = {
   researchNotes,
   stockEvents,
   workflowRuns,
+  reports,
   chatSessions,
   chatMessages,
 } as const;

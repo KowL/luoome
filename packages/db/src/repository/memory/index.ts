@@ -8,8 +8,10 @@ import type {
   Holding,
   Notification,
   Quote,
+  Report,
   RepositoryRegistry,
   ResearchNote,
+  SignalObservation,
   Stock,
   StockEvent,
   StockGroup,
@@ -30,7 +32,9 @@ import { InMemoryGroupMemberRepository } from './group-member.js';
 import { InMemoryHoldingRepository } from './holding.js';
 import { InMemoryNotificationRepository } from './notification.js';
 import { InMemoryQuoteRepository } from './quote.js';
+import { InMemoryReportRepository } from './report.js';
 import { InMemoryResearchNoteRepository } from './research-note.js';
+import { InMemorySignalObservationRepository } from './signal-observation.js';
 import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
 import { InMemoryStockGroupRepository } from './stock-group.js';
@@ -51,7 +55,9 @@ export { InMemoryGroupMemberRepository } from './group-member.js';
 export { InMemoryHoldingRepository } from './holding.js';
 export { InMemoryNotificationRepository } from './notification.js';
 export { InMemoryQuoteRepository } from './quote.js';
+export { InMemoryReportRepository } from './report.js';
 export { InMemoryResearchNoteRepository } from './research-note.js';
+export { InMemorySignalObservationRepository } from './signal-observation.js';
 export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
 export { InMemoryStockGroupRepository } from './stock-group.js';
@@ -74,6 +80,8 @@ export interface InMemorySeed {
   readonly chatSessions?: readonly ChatSession[];
   readonly chatMessages?: readonly ChatMessage[];
   readonly quotes?: readonly Quote[];
+  readonly reports?: readonly Report[];
+  readonly signalObservations?: readonly SignalObservation[];
   readonly dailyBars?: readonly DailyBar[];
   /** v0.3 起：可选预置战法定义 + 信号。 */
   readonly tactics?: readonly Tactic[];
@@ -100,9 +108,11 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const holding = new InMemoryHoldingRepository();
   const trade = new InMemoryTradeRepository();
   const advice = new InMemoryAdviceRepository();
+  const report = new InMemoryReportRepository();
   const chat = new InMemoryChatRepository();
   const quote = new InMemoryQuoteRepository();
   const dailyBar = new InMemoryDailyBarRepository();
+  const signalObservation = new InMemorySignalObservationRepository();
   const tactic = new InMemoryTacticRepository();
   const notification = new InMemoryNotificationRepository();
   // v0.6 起
@@ -123,10 +133,12 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const h of seed.holdings ?? []) holding.put(h);
     for (const t of seed.trades ?? []) trade.put(t);
     for (const adv of seed.advices ?? []) advice.put(adv);
+    for (const r of seed.reports ?? []) report.put(r);
     for (const session of seed.chatSessions ?? []) chat.putSession(session);
     for (const message of seed.chatMessages ?? []) chat.putMessage(message);
     for (const q of seed.quotes ?? []) quote.put(q);
     for (const b of seed.dailyBars ?? []) dailyBar.put(b);
+    for (const observation of seed.signalObservations ?? []) signalObservation.put(observation);
     for (const tc of seed.tactics ?? []) tactic.put(tc);
     for (const s of seed.tacticSignals ?? []) {
       void tactic.saveSignal(s);
@@ -141,7 +153,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const e of seed.stockEvents ?? []) stockEvent.put(e);
     for (const r of seed.workflowRuns ?? []) workflowRun.put(r);
   }
-  // v0.3 起：默认灌入 5 个内置战法（即使 seed 没指定 tactics），让 list_tactics / run_tactic 默认可用
+  // 默认灌入内置战法（即使 seed 没指定 tactics），让 list_tactics / run_tactic 默认可用
   for (const tc of BUILTIN_TACTICS) {
     if (tactic.findByIdSync(tc.id) === null) tactic.put(tc);
   }
@@ -152,8 +164,10 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     holding,
     trade,
     advice,
+    report,
     quote,
     dailyBar,
+    signalObservation,
     tactic,
     notification,
     stockPool,

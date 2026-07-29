@@ -142,4 +142,133 @@ describe('tactic/runner', () => {
       }
     });
   });
+
+  describe('Vibe trend_timing 映射 golden fixture', () => {
+    it('趋势多头且放量突破时由两个既有战法分别产出可共振的 bullish 事实', () => {
+      const context = {
+        indicators: {
+          ...baseIndicators,
+          ma5: 13,
+          ma10: 11,
+          ma20: 10,
+          volRatio5_20: 2,
+          close: 12,
+          high20: 11.8,
+        },
+      };
+      const outcomes = ['ma-bullish-alignment', 'breakout-volume'].map((id) =>
+        runTacticForStock(findTactic(id), '002594.SZ', T, context),
+      );
+
+      expect(outcomes.every((outcome) => outcome.triggered)).toBe(true);
+      expect(
+        outcomes.map((outcome) => (outcome.triggered ? outcome.signal.direction : null)),
+      ).toEqual(['bullish', 'bullish']);
+    });
+  });
+
+  describe('Vibe early_breakout 映射', () => {
+    it('温和动量、RSI 未超买、量能确认且刚站上 MA20 时生成 bullish 研究信号', () => {
+      const outcome = runTacticForStock(findTactic('early-breakout'), '002594.SZ', T, {
+        indicators: {
+          close: 11,
+          ma5: 10.8,
+          ma20: 10,
+          ma60: 9.5,
+          momentum20Pct: 8,
+          volRatio5_20: 1.5,
+          rsi14: 60,
+          maDistance20Pct: 10,
+          daysSinceMa20CrossUp: 1,
+          daysAboveMa20: 2,
+        },
+      });
+
+      expect(outcome.triggered).toBe(true);
+      if (!outcome.triggered) return;
+      expect(outcome.signal.direction).toBe('bullish');
+      expect(outcome.signal.evidence.some((item) => item.includes('20日动量'))).toBe(true);
+      expect(outcome.signal.evidence.some((item) => item.includes('MA20'))).toBe(true);
+    });
+
+    it('RSI 已超买时不把上涨标的误报为早期突破', () => {
+      const outcome = runTacticForStock(findTactic('early-breakout'), '002594.SZ', T, {
+        indicators: {
+          close: 11,
+          ma5: 10.8,
+          ma20: 10,
+          momentum20Pct: 8,
+          volRatio5_20: 1.5,
+          rsi14: 75,
+          maDistance20Pct: 10,
+          daysSinceMa20CrossUp: 1,
+          daysAboveMa20: 2,
+        },
+      });
+
+      expect(outcome.triggered).toBe(false);
+    });
+
+    it('最新收盘仍在 MA20 下方时不视为刚站上均线', () => {
+      const outcome = runTacticForStock(findTactic('early-breakout'), '002594.SZ', T, {
+        indicators: {
+          close: 9.9,
+          ma5: 10.1,
+          ma20: 10,
+          momentum20Pct: 5,
+          volRatio5_20: 1.5,
+          rsi14: 55,
+          maDistance20Pct: -1,
+          daysAboveMa20: 0,
+        },
+      });
+
+      expect(outcome.triggered).toBe(false);
+    });
+  });
+
+  describe('Vibe bollinger_band 映射', () => {
+    it('长期趋势未破且缩量回撤到 Bollinger 下轨时生成 bullish 均值回复信号', () => {
+      const outcome = runTacticForStock(findTactic('bollinger-band'), '002594.SZ', T, {
+        indicators: {
+          close: 8.5,
+          ma20: 10,
+          ma60: 8,
+          momentum20Pct: -5,
+          volRatio5_20: 1.1,
+          rsi14: 35,
+          maDistance20Pct: -15,
+          bollMiddle20: 10,
+          bollUpper20: 11.2,
+          bollLower20: 8.8,
+          bollBandwidth20Pct: 24,
+          bollPosition20: -0.125,
+        },
+      });
+
+      expect(outcome.triggered).toBe(true);
+      if (!outcome.triggered) return;
+      expect(outcome.signal.direction).toBe('bullish');
+      expect(outcome.signal.evidence.some((item) => item.includes('Bollinger下轨'))).toBe(true);
+      expect(outcome.signal.evidence.some((item) => item.includes('长期趋势'))).toBe(true);
+    });
+
+    it('价格已跌破 MA60 时拒绝把下轨破位误报为均值回复', () => {
+      const outcome = runTacticForStock(findTactic('bollinger-band'), '002594.SZ', T, {
+        indicators: {
+          close: 7.8,
+          ma20: 10,
+          ma60: 8,
+          momentum20Pct: -10,
+          volRatio5_20: 1.1,
+          rsi14: 30,
+          maDistance20Pct: -22,
+          bollLower20: 8.2,
+          bollPosition20: -0.1,
+        },
+      });
+
+      expect(outcome.triggered).toBe(false);
+    });
+  });
 });

@@ -36,6 +36,7 @@ const seedSnapshot = (
       stockId,
       refreshId,
       reason: 'test reason',
+      evidence: [],
       createdAt,
     })),
   );
@@ -131,5 +132,44 @@ describe('get_stock_group', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.stale).toBe(false);
+  });
+
+  it('formula 详情返回成员分数、证据、dataAsOf 与相邻批次变化', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedGroup(ctx, 'g-research', {
+      resolver: { kind: 'formula', tacticId: 'breakout-volume', lookbackDays: 20 },
+      refreshPolicy: 'daily',
+    });
+    await seedSnapshot(ctx, 'g-research', 'rf-old', ['600519.SH'], YESTERDAY);
+    await ctx.repos.groupMember.saveBatch([
+      {
+        id: 'rf-new-0',
+        groupId: 'g-research',
+        stockId: '002594.SZ',
+        refreshId: 'rf-new',
+        reason: '放量突破',
+        score: 86,
+        evidence: ['量比 1.8', '突破 20 日高点'],
+        dataAsOf: NOW,
+        tacticSignalRef: { tacticId: 'breakout-volume', ts: NOW },
+        createdAt: NOW,
+      },
+    ]);
+
+    const result = await getStockGroupTool.execute({ id: 'g-research' }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]).toMatchObject({
+      stockId: '002594.SZ',
+      score: 86,
+      evidence: ['量比 1.8', '突破 20 日高点'],
+      dataAsOf: NOW,
+      tacticSignalRef: { tacticId: 'breakout-volume', ts: NOW },
+    });
+    expect(result.data.changes).toEqual({
+      entered: ['002594.SZ'],
+      exited: ['600519.SH'],
+    });
   });
 });

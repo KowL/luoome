@@ -49,6 +49,7 @@ describe('list_stock_groups', () => {
     const ctx = await buildTestContext();
     await seedGroup(ctx, 'g-formula', {
       resolver: { kind: 'formula', tacticId: 'breakout-volume', lookbackDays: 5 },
+      refreshPolicy: 'daily',
     });
     await ctx.repos.groupMember.saveBatch([
       {
@@ -57,6 +58,8 @@ describe('list_stock_groups', () => {
         stockId: '002594.SZ',
         refreshId: 'rf-1',
         reason: 'r',
+        evidence: [],
+        dataAsOf: T0,
         createdAt: T0,
       },
     ]);
@@ -64,6 +67,11 @@ describe('list_stock_groups', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.groups[0]?.memberCount).toBe(1);
+    expect(r.data.groups[0]).toMatchObject({
+      latestRefreshAt: T0,
+      dataAsOf: T0,
+      stale: true,
+    });
   });
 
   it('includeMemberCount=true：holdings 组 = 活跃持仓数（mock 种子 6 个活跃持仓）', async () => {

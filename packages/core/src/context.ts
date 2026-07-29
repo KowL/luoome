@@ -1,3 +1,4 @@
+import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
 import type {
   LimitUpLadder,
   LimitUpLadderDiff,
@@ -184,12 +185,32 @@ export interface ToolContext {
    * tools 层通过 ctx.limitUpLadder.fetchLadder / compareLadder 访问。
    */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
+  /** A 股日级情绪证据聚合器；外部源与维度降级封装在 adapters。 */
+  readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly user: {
     readonly id: string;
     readonly defaultAccountId: string;
   };
   readonly clock: () => Date;
   readonly logger: Logger;
+}
+
+export type AShareSentimentManagerResult =
+  | { readonly ok: true; readonly data: AShareSentimentSnapshot }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly kind: 'invalid_input' | 'adapter_error';
+        readonly message: string;
+        readonly recoverable: boolean;
+      };
+    };
+
+export interface AShareSentimentManagerLike {
+  fetch(input: {
+    readonly date: string;
+    readonly coverage: 'CN_A_SHARES_SH_SZ';
+  }): Promise<AShareSentimentManagerResult>;
 }
 
 /**

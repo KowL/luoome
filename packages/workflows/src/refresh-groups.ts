@@ -47,7 +47,12 @@ interface LoadedState {
 
 const stepLoadGroups: WorkflowStep = async (prev, ctx) => {
   const input = prev as RefreshGroupsInputT;
-  const all = await ctx.repos.stockGroup.list(true);
+  const listed = await ctx.tools.list_stock_groups.execute({
+    enabledOnly: true,
+    includeMemberCount: false,
+  });
+  if (!listed.ok) return listed;
+  const all = listed.data.groups.map((item) => item.group);
   const dynamic = all.filter((g) => g.resolver.kind === 'formula' || g.resolver.kind === 'llm');
   const groups =
     input.groupIds === undefined || input.groupIds.length === 0

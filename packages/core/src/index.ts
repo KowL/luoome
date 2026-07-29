@@ -5,6 +5,7 @@ export * from './context.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/advice.js';
+export * from './entity/ashare-sentiment.js';
 export * from './entity/chat-session.js';
 export * from './entity/holding.js';
 export * from './entity/indicator-set.js';
@@ -15,7 +16,9 @@ export * from './entity/market-provider.js';
 export * from './entity/notification.js';
 export * from './entity/provenance.js';
 export * from './entity/quote.js';
+export * from './entity/report.js';
 export * from './entity/research-note.js';
+export * from './entity/signal-observation.js';
 export * from './entity/stock.js';
 export * from './entity/stock-event.js';
 export * from './entity/stock-group.js';

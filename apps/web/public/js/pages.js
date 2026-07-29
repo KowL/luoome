@@ -896,7 +896,7 @@ const showGroupDetail = async (id, setStatus) => {
     mount(detail, el('p', 'placeholder', `分组详情加载失败：${result.error.kind}`));
     return;
   }
-  const { group, members, latestRefreshAt, stale } = result.data;
+  const { group, members, latestRefreshAt, stale, changes } = result.data;
   // 拉一次行情补齐现价 / 日内变化（非交易时段 / 缺行情时大多为 null，前端降级 `--`）
   const quoteMap = new Map();
   const stockIds = members.map((m) => m.stockId);
@@ -1029,14 +1029,38 @@ const showGroupDetail = async (id, setStatus) => {
                 typeof close === 'number' && Number.isFinite(close) ? close.toFixed(2) : '--',
               ),
               el('span', `member-pct ${pctClass}`, pctText),
+              typeof member.score === 'number'
+                ? el('span', 'member-score', `排序分 ${member.score.toFixed(1)}`)
+                : '',
             ]);
             const row = el('div', 'member-row', [line1]);
             if (showReason && member.reason.length > 0) {
               row.append(el('div', 'member-line-2 muted', member.reason));
             }
+            if (showReason && Array.isArray(member.evidence) && member.evidence.length > 0) {
+              row.append(
+                el(
+                  'div',
+                  'member-evidence',
+                  member.evidence.map((item) => el('span', null, item)),
+                ),
+              );
+            }
+            if (showReason && member.dataAsOf !== undefined) {
+              row.append(
+                el('time', 'member-data-asof', `数据截至 ${fmtDateTime(member.dataAsOf)}`),
+              );
+            }
             return row;
           }),
         );
+  const changesBox =
+    changes.entered.length === 0 && changes.exited.length === 0
+      ? null
+      : el('div', 'group-change-strip', [
+          ...changes.entered.map((stockId) => el('span', 'group-change-entered', `＋ ${stockId}`)),
+          ...changes.exited.map((stockId) => el('span', 'group-change-exited', `－ ${stockId}`)),
+        ]);
   const addPlan = el('button', 'btn btn-primary btn-sm', '+ 新建盯盘方案');
   addPlan.addEventListener('click', () => void openPoolModal(null, group.id));
   const plans = plansResult.ok ? plansResult.data.plans : [];
@@ -1079,6 +1103,7 @@ const showGroupDetail = async (id, setStatus) => {
       el('h3', 'detail-section-title', `当前成员 · ${members.length}`),
       addMemberBtn,
     ]),
+    changesBox,
     membersBox,
     el('h3', 'detail-section-title', '最近触发'),
     triggerBox,
@@ -1118,6 +1143,12 @@ const renderGroups = async (setStatus) => {
             el('span', 'entity-row-main', [
               el('strong', null, item.group.name),
               el('small', 'muted', resolverLabel(item.group.resolver)),
+              item.dataAsOf === undefined
+                ? ''
+                : el('small', item.stale ? 'text-neg' : 'muted', [
+                    item.stale ? '快照已过期 · ' : '',
+                    `数据截至 ${fmtDateTime(item.dataAsOf)}`,
+                  ]),
             ]),
             el('span', 'entity-stats', [
               el('span', 'entity-count', `${item.memberCount ?? 0} 股`),
@@ -1166,6 +1197,7 @@ const runWatchOnce = async (setStatus) => {
 const renderTacticsList = async (setStatus) => {
   const r = await callApi('/api/tactics');
   const list = $('#tactics-list');
+  await renderTacticConsensus();
   if (!r.ok) {
     mount(list, el('p', 'placeholder', `加载失败：${r.error.kind}`));
     setStatus(`加载失败：${r.error.kind}`, true);
@@ -1197,6 +1229,72 @@ const renderTacticsList = async (setStatus) => {
   }
   mount(list, ul);
   setStatus(`战法列表已刷新 · ${r.data.tactics.length} 个`);
+};
+
+const renderTacticConsensus = async () => {
+  const box = $('#tactic-consensus');
+  if (box === null) return;
+  const result = await callApi('/api/tactics/consensus?minGroups=2&topN=20');
+  if (!result.ok) {
+    mount(
+      box,
+      el(
+        'p',
+        'placeholder',
+        '暂无可比较的同日公式分组；至少刷新两个使用完整沪深 A 股覆盖的公式分组。',
+      ),
+    );
+    return;
+  }
+  const { matches, groups, excludedGroups, marketDate, dataAsOf } = result.data;
+  const meta = el('div', 'consensus-meta', [
+    el('strong', null, marketDate),
+    el('span', null, `${groups.length} 个有效分组`),
+    el('span', null, `数据截至 ${fmtDateTime(dataAsOf)}`),
+  ]);
+  const excluded =
+    excludedGroups.length === 0
+      ? null
+      : el(
+          'div',
+          'consensus-excluded',
+          excludedGroups.map((group) => el('span', null, `${group.groupId} · ${group.reason}`)),
+        );
+  if (matches.length === 0) {
+    mount(box, [
+      meta,
+      excluded,
+      el('p', 'placeholder', '有效分组中没有达到最小支持分组数的股票。'),
+    ]);
+    return;
+  }
+  const cards = matches.map((match, index) =>
+    el('article', 'consensus-card', [
+      el('span', 'consensus-rank', String(index + 1).padStart(2, '0')),
+      el('div', 'consensus-stock', [
+        stockMarketLink(match.stockId, el('strong', 'mono', match.stockId)),
+        el('span', 'consensus-score', `排序分 ${match.rankScore.toFixed(1)}`),
+      ]),
+      el(
+        'div',
+        'consensus-signals',
+        match.supportingSignals.map((signal) =>
+          el('span', 'signal-support', `＋ ${signal.tacticName} ${signal.score.toFixed(1)}`),
+        ),
+      ),
+      match.opposingSignals.length === 0
+        ? ''
+        : el(
+            'div',
+            'consensus-signals',
+            match.opposingSignals.map((signal) =>
+              el('span', 'signal-oppose', `冲突 · ${signal.tacticName} ${signal.score.toFixed(1)}`),
+            ),
+          ),
+      el('span', 'consensus-groups', match.groupIds.join(' · ')),
+    ]),
+  );
+  mount(box, [meta, excluded, el('div', 'consensus-grid', cards)]);
 };
 
 const runTacticScan = async (setStatus) => {
@@ -1281,6 +1379,281 @@ const renderAdviceList = async (setStatus) => {
       ? `建议已刷新 · ${filtered.length} / ${all.length} 条`
       : `${stockId} · ${filtered.length} 条建议`,
   );
+};
+
+/* ============ reports ============ */
+
+const REPORT_KIND_LABEL = {
+  opening: '开盘简报',
+  closing: '收盘复盘',
+  weekly: '周报',
+};
+
+let selectedReportId = null;
+let reportPollTimer = null;
+let reportRunBound = false;
+
+const reportStatusBadge = (status) =>
+  el(
+    'span',
+    `badge ${status === 'partial' ? 'badge-warn' : 'badge-fresh'}`,
+    status === 'partial' ? '部分可用' : '完整',
+  );
+
+const reportEntityHref = (item) => {
+  if (item.entityKind === 'stock') return buildMarketLink(item.entityId);
+  if (item.entityKind === 'stock-group' || item.entityKind === 'watch-plan') return '#groups';
+  if (item.entityKind === 'advice') return '#advice';
+  if (item.entityKind === 'research-note' || item.entityKind === 'stock-event') return '#research';
+  return null;
+};
+
+const reportBlockNode = (block) => {
+  if (block.kind === 'text') {
+    return el('p', block.tone === 'warning' ? 'report-warning' : 'report-prose', block.text);
+  }
+  if (block.kind === 'metrics') {
+    return el(
+      'div',
+      'report-metrics',
+      block.items.map((item) =>
+        el('div', 'report-metric', [
+          el('span', 'report-metric-label', item.label),
+          el(
+            'strong',
+            'report-metric-value',
+            `${item.displayValue ?? item.value ?? '不可用'}${item.unit ?? ''}`,
+          ),
+        ]),
+      ),
+    );
+  }
+  if (block.kind === 'list') {
+    return el(
+      'ul',
+      'report-list',
+      block.items.map((item) => {
+        const href = reportEntityHref(item);
+        const title =
+          href === null
+            ? el('strong', null, item.title)
+            : Object.assign(el('a', 'stock-link', item.title), { href });
+        return el('li', null, [
+          title,
+          item.detail === undefined ? '' : el('span', 'muted', ` — ${item.detail}`),
+        ]);
+      }),
+    );
+  }
+  const table = el('table', 'report-table');
+  table.append(
+    el(
+      'thead',
+      null,
+      el(
+        'tr',
+        null,
+        block.columns.map((column) => el('th', null, column.label)),
+      ),
+    ),
+  );
+  table.append(
+    el(
+      'tbody',
+      null,
+      block.rows.map((row) =>
+        el(
+          'tr',
+          null,
+          block.columns.map((column) =>
+            el('td', null, row[column.key] === null ? '不可用' : String(row[column.key] ?? '—')),
+          ),
+        ),
+      ),
+    ),
+  );
+  return el('div', 'report-table-wrap', table);
+};
+
+const downloadReport = async (reportId, format) => {
+  const result = await callApi(`/api/reports/${reportId}/render?format=${format}`);
+  if (!result.ok) return;
+  const blob = new Blob([result.data.content], { type: result.data.contentType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${reportId}.${format === 'markdown' ? 'md' : 'txt'}`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
+
+const loadReportDetail = async (reportId, setStatus) => {
+  selectedReportId = reportId;
+  const result = await callApi(`/api/reports/${reportId}`);
+  if (!result.ok) {
+    setStatus(`报告加载失败：${result.error.kind}`, true);
+    return;
+  }
+  const report = result.data.report;
+  const detail = $('#report-detail');
+  const markdown = el('button', 'btn btn-outline btn-sm', '导出 Markdown');
+  const plain = el('button', 'btn btn-outline btn-sm', '导出纯文本');
+  markdown.type = 'button';
+  plain.type = 'button';
+  markdown.addEventListener('click', () => void downloadReport(report.id, 'markdown'));
+  plain.addEventListener('click', () => void downloadReport(report.id, 'plain-text'));
+
+  const nodes = [
+    el('header', 'report-sheet-header', [
+      el('div', null, [
+        el('span', 'section-kicker', REPORT_KIND_LABEL[report.kind] ?? report.kind),
+        el('h2', null, report.title),
+        el(
+          'p',
+          'report-period',
+          `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}`,
+        ),
+      ]),
+      el('div', 'report-sheet-actions', [reportStatusBadge(report.status), markdown, plain]),
+    ]),
+    el('div', 'report-asof', [
+      el('span', null, `DATA AS OF ${fmtDateTime(report.dataAsOf)}`),
+      el('span', null, `GENERATED ${fmtDateTime(report.generatedAt)}`),
+    ]),
+  ];
+  for (const section of report.sections) {
+    const sectionNode = el('section', `report-section report-section-${section.status}`, [
+      el('div', 'report-section-head', [
+        el('div', null, [
+          el('span', 'report-section-key', section.key),
+          el('h3', null, section.title),
+        ]),
+        el(
+          'span',
+          `badge ${section.status === 'complete' ? 'badge-fresh' : 'badge-warn'}`,
+          section.status,
+        ),
+      ]),
+      ...section.blocks.map(reportBlockNode),
+      ...section.missingDimensions.map((missing) =>
+        el(
+          'div',
+          'report-missing',
+          `${missing.dimension} · ${missing.reason}${missing.retryable ? ' · 可重试' : ''}`,
+        ),
+      ),
+    ]);
+    nodes.push(sectionNode);
+  }
+  if (report.evidence.length > 0) {
+    nodes.push(
+      el('section', 'report-provenance', [
+        el('span', 'section-kicker', 'PROVENANCE'),
+        el('h3', null, '数据来源'),
+        ...report.evidence.map((evidence) =>
+          el('div', 'report-source-row', [
+            el('strong', null, evidence.dimension),
+            el('span', null, evidence.provenance.provider),
+            el('span', 'muted', evidence.provenance.freshness),
+            el('time', null, fmtDateTime(evidence.provenance.observedAt)),
+          ]),
+        ),
+      ]),
+    );
+  }
+  mount(detail, nodes);
+  document.querySelectorAll('.report-history-item').forEach((node) => {
+    node.classList.toggle('active', node.dataset.reportId === reportId);
+  });
+};
+
+const renderReports = async (setStatus) => {
+  const dateInput = $('#report-run-date');
+  if (dateInput !== null && dateInput.value.length === 0) {
+    dateInput.value = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  }
+  if (!reportRunBound) {
+    reportRunBound = true;
+    document.querySelectorAll('[data-report-run]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const kind = button.dataset.reportRun;
+        const date = $('#report-run-date')?.value;
+        const state = $('#report-run-state');
+        if (kind === undefined || date === undefined || date.length === 0 || state === null) return;
+        state.textContent = '生成中…';
+        button.disabled = true;
+        const generated = await callApi(`/api/reports/run/${kind}`, {
+          method: 'POST',
+          body: JSON.stringify({ date, notify: false }),
+        });
+        button.disabled = false;
+        if (!generated.ok) {
+          state.textContent = `失败 · ${generated.error.kind}`;
+          setStatus(`报告生成失败：${generated.error.kind}`, true);
+          return;
+        }
+        selectedReportId = generated.data.report.id;
+        state.textContent =
+          generated.data.report.status === 'partial' ? '已生成 · 部分可用' : '已生成 · 完整';
+        await renderReports(setStatus);
+      });
+    });
+  }
+  const kind = $('#report-kind-filter')?.value ?? '';
+  const status = $('#report-status-filter')?.value ?? '';
+  const params = new URLSearchParams({ limit: '30' });
+  if (kind.length > 0) params.set('kind', kind);
+  if (status.length > 0) params.set('status', status);
+  const result = await callApi(`/api/reports?${params.toString()}`);
+  if (!result.ok) {
+    setStatus(`报告历史加载失败：${result.error.kind}`, true);
+    return;
+  }
+  const reports = result.data.reports ?? [];
+  $('#report-history-meta').textContent = `${reports.length} 份`;
+  const history = $('#report-history');
+  if (reports.length === 0) {
+    mount(history, el('p', 'placeholder', '暂无报告；报告 workflow 接入后会在这里形成历史。'));
+  } else {
+    mount(
+      history,
+      reports.map((report) => {
+        const button = el('button', 'report-history-item', [
+          el('span', 'report-history-kind', REPORT_KIND_LABEL[report.kind] ?? report.kind),
+          el('strong', null, report.title),
+          el('span', 'report-history-period', report.periodEnd),
+          reportStatusBadge(report.status),
+          el('span', 'report-history-asof', `截至 ${fmtDateTime(report.dataAsOf)}`),
+        ]);
+        button.type = 'button';
+        button.dataset.reportId = report.id;
+        button.addEventListener('click', () => void loadReportDetail(report.id, setStatus));
+        return button;
+      }),
+    );
+    const nextId =
+      reports.some((report) => report.id === selectedReportId) && selectedReportId !== null
+        ? selectedReportId
+        : reports[0].id;
+    await loadReportDetail(nextId, setStatus);
+  }
+  for (const id of ['report-kind-filter', 'report-status-filter']) {
+    const select = $(`#${id}`);
+    if (select !== null && select.dataset.bound !== 'true') {
+      select.dataset.bound = 'true';
+      select.addEventListener('change', () => void renderReports(setStatus));
+    }
+  }
+  if (reportPollTimer === null) {
+    reportPollTimer = setInterval(() => {
+      if (window.location.hash.startsWith('#reports')) void renderReports(setStatus);
+    }, 60_000);
+  }
 };
 
 /* ============ review ============ */
@@ -2155,6 +2528,7 @@ export {
   renderGroups,
   renderHoldings,
   renderPlanCreator,
+  renderReports,
   renderResearch,
   renderReview,
   renderSettings,

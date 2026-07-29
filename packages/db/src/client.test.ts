@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos, ensureSchema } from './client.js';
-import { makeAccount, makeStockPool } from './repository/contract-tests.js';
+import { makeAccount, makeReport, makeStockPool } from './repository/contract-tests.js';
 import { accounts, stockPools } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
@@ -40,10 +40,14 @@ describe('createDrizzleRepos / ensureSchema', () => {
     try {
       const h1 = createDrizzleRepos(dbPath);
       await h1.repos.account.save(makeAccount('acc-persist'));
+      await h1.repos.report.upsertForPeriod(makeReport('report-persist'));
       h1.close();
 
       const h2 = createDrizzleRepos(dbPath);
       expect(await h2.repos.account.findById('acc-persist')).not.toBeNull();
+      expect((await h2.repos.report.findById('report-persist'))?.title).toBe(
+        '收盘复盘-report-persist',
+      );
       h2.close();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -92,6 +96,42 @@ describe('createDrizzleRepos / ensureSchema', () => {
       expect(
         await handle.repos.quote.listInRange('600519.SH', new Date(0), new Date(8.64e15)),
       ).toHaveLength(1);
+      handle.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('旧版 group_member_snapshots 增量补齐策略研究列并保留旧行', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { Database } = await import('bun:sqlite');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luoome-group-member-migration-'));
+    const dbPath = path.join(dir, 'legacy.sqlite');
+    try {
+      const sqlite = new Database(dbPath);
+      sqlite.exec(`
+        CREATE TABLE group_member_snapshots (
+          id TEXT PRIMARY KEY,
+          group_id TEXT NOT NULL,
+          stock_id TEXT NOT NULL,
+          refresh_id TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        INSERT INTO group_member_snapshots
+          (id, group_id, stock_id, refresh_id, reason, created_at)
+        VALUES ('legacy-member', 'legacy-group', '600519.SH', 'legacy-refresh', '旧快照', 1785312000000);
+      `);
+      sqlite.close();
+
+      const handle = createDrizzleRepos(dbPath);
+      const old = await handle.repos.groupMember.currentMembers('legacy-group');
+      expect(old).toMatchObject([{ id: 'legacy-member', evidence: [] }]);
+      expect(old[0]?.score).toBeUndefined();
+      ensureSchema(handle.db);
+      expect(await handle.repos.groupMember.currentMembers('legacy-group')).toHaveLength(1);
       handle.close();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

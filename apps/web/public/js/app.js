@@ -21,6 +21,7 @@ import {
   renderDataHealth,
   renderGroups,
   renderHoldings,
+  renderReports,
   renderResearch,
   renderReview,
   renderSettings,
@@ -67,6 +68,7 @@ const ROUTES = [
   'research',
   'tactics',
   'advice',
+  'reports',
   'review',
   'limit-up',
   'chat',
@@ -100,6 +102,8 @@ const showRoute = async (name) => {
       await renderTacticsList(setStatus);
     } else if (safe === 'advice') {
       await renderAdviceList(setStatus);
+    } else if (safe === 'reports') {
+      await renderReports(setStatus);
     } else if (safe === 'review') {
       await renderReview(setStatus);
     } else if (safe === 'limit-up') {

@@ -8,11 +8,11 @@ export class InMemoryGroupMemberRepository implements GroupMemberRepository {
   private readonly items = new Map<string, GroupMemberSnapshot>();
 
   put(snapshot: GroupMemberSnapshot): void {
-    this.items.set(snapshot.id, snapshot);
+    this.items.set(snapshot.id, { ...snapshot, evidence: snapshot.evidence ?? [] });
   }
 
   async saveBatch(snapshots: readonly GroupMemberSnapshot[]): Promise<void> {
-    for (const s of snapshots) this.items.set(s.id, s);
+    for (const s of snapshots) this.items.set(s.id, { ...s, evidence: s.evidence ?? [] });
   }
 
   async latestRefreshId(groupId: string): Promise<string | null> {

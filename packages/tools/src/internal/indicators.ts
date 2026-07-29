@@ -12,6 +12,51 @@ const sma = (values: readonly number[], period: number): number | undefined => {
   return slice.reduce((sum, v) => sum + v, 0) / period;
 };
 
+const smaAt = (values: readonly number[], period: number, endIndex: number): number | undefined => {
+  const start = endIndex - period + 1;
+  if (period <= 0 || start < 0 || endIndex >= values.length) return undefined;
+  let sum = 0;
+  for (let index = start; index <= endIndex; index += 1) {
+    const value = values[index];
+    if (value === undefined) return undefined;
+    sum += value;
+  }
+  return sum / period;
+};
+
+const daysSinceCrossUp = (closes: readonly number[], period: number): number | undefined => {
+  let latestCrossIndex: number | undefined;
+  for (let index = period; index < closes.length; index += 1) {
+    const current = closes[index];
+    const previous = closes[index - 1];
+    const currentMa = smaAt(closes, period, index);
+    const previousMa = smaAt(closes, period, index - 1);
+    if (
+      current !== undefined &&
+      previous !== undefined &&
+      currentMa !== undefined &&
+      previousMa !== undefined &&
+      current > currentMa &&
+      previous <= previousMa
+    ) {
+      latestCrossIndex = index;
+    }
+  }
+  return latestCrossIndex === undefined ? undefined : closes.length - 1 - latestCrossIndex;
+};
+
+const consecutiveDaysAboveMa = (closes: readonly number[], period: number): number | undefined => {
+  if (closes.length < period) return undefined;
+  let count = 0;
+  for (let index = closes.length - 1; index >= period - 1; index -= 1) {
+    const close = closes[index];
+    const average = smaAt(closes, period, index);
+    if (close === undefined || average === undefined || close <= average) break;
+    count += 1;
+  }
+  return count;
+};
+
 /** EMA 序列（与 values 等长，首元素以 values[0] 为种子递推）。 */
 const emaSeries = (values: readonly number[], period: number): number[] => {
   const first = values[0];
@@ -46,7 +91,7 @@ const rsi = (closes: readonly number[], period: number): number | undefined => {
   return 100 - 100 / (1 + rs);
 };
 
-/** 由日线序列计算 MA / RSI / MACD / 量能均线快照。 */
+/** 由日线序列计算 MA / RSI / MACD / 量能 / 均线交叉 / Bollinger 快照。 */
 export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalIndicators => {
   const closes = bars.map((b) => b.close);
   const volumes = bars.map((b) => b.volume);
@@ -60,6 +105,23 @@ export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalInd
   assign('ma10', sma(closes, 10));
   assign('ma20', sma(closes, 20));
   assign('ma60', sma(closes, 60));
+  const close = closes.at(-1);
+  assign('close', close);
+  if (close !== undefined) {
+    const close20 = closes.at(-20);
+    if (close20 !== undefined && close20 !== 0) {
+      assign('momentum20Pct', (close / close20 - 1) * 100);
+    }
+    if (out.ma20 !== undefined && out.ma20 !== 0) {
+      assign('maDistance20Pct', ((close - out.ma20) / out.ma20) * 100);
+    }
+    if (out.ma60 !== undefined && out.ma60 !== 0) {
+      assign('maDistance60Pct', ((close - out.ma60) / out.ma60) * 100);
+    }
+  }
+  assign('daysSinceMa20CrossUp', daysSinceCrossUp(closes, 20));
+  assign('daysSinceMa60CrossUp', daysSinceCrossUp(closes, 60));
+  assign('daysAboveMa20', consecutiveDaysAboveMa(closes, 20));
   assign('rsi14', rsi(closes, 14));
   assign('volMa5', sma(volumes, 5));
   assign('volMa20', sma(volumes, 20));
@@ -72,6 +134,20 @@ export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalInd
     const recent20 = closes.slice(closes.length - 20);
     assign('high20', Math.max(...recent20));
     assign('low20', Math.min(...recent20));
+    const middle = recent20.reduce((sum, value) => sum + value, 0) / recent20.length;
+    const variance =
+      recent20.reduce((sum, value) => sum + (value - middle) ** 2, 0) / (recent20.length - 1);
+    const standardDeviation = Math.sqrt(variance);
+    const upper = middle + 2 * standardDeviation;
+    const lower = middle - 2 * standardDeviation;
+    const width = upper - lower;
+    assign('bollMiddle20', middle);
+    assign('bollUpper20', upper);
+    assign('bollLower20', lower);
+    if (middle !== 0) assign('bollBandwidth20Pct', (width / middle) * 100);
+    if (close !== undefined) {
+      assign('bollPosition20', width === 0 ? 0.5 : (close - lower) / width);
+    }
   }
 
   // MACD(12,26,9)：dif = ema12 - ema26；dea = dif 的 ema9；hist = dif - dea。

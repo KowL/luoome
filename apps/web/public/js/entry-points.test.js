@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const html = read('../index.html');
 const appJs = read('./app.js');
+const pagesJs = read('./pages.js');
 
 describe('侧栏与路由结构', () => {
   it('侧栏没有「行情」菜单项', () => {
@@ -39,6 +40,36 @@ describe('行情页入口', () => {
 
   it('仪表盘有股票搜索容器', () => {
     expect(html).toContain('id="dashboard-stock-search"');
+  });
+});
+
+describe('报告页入口', () => {
+  it('侧栏、路由和历史/详情容器齐全', () => {
+    expect(html).toContain('href="#reports" data-route="reports"');
+    expect(html).toContain('id="route-reports"');
+    expect(html).toContain('id="report-history"');
+    expect(html).toContain('id="report-detail"');
+    expect(appJs).toContain("'reports'");
+    expect(appJs).toContain('renderReports');
+  });
+});
+
+describe('策略研究入口', () => {
+  it('战法页包含同日共振容器，且不出现越界投资文案', () => {
+    expect(html).toContain('id="tactic-consensus"');
+    for (const phrase of ['AI 胜率', '重点买入', '追涨']) {
+      expect(html).not.toContain(phrase);
+    }
+  });
+
+  it('空战法列表也会加载同日共振结果', () => {
+    const tacticsRenderer = pagesJs.slice(
+      pagesJs.indexOf('const renderTacticsList'),
+      pagesJs.indexOf('const renderTacticConsensus'),
+    );
+    expect(tacticsRenderer.indexOf('await renderTacticConsensus()')).toBeLessThan(
+      tacticsRenderer.indexOf('r.data.tactics.length === 0'),
+    );
   });
 });
 

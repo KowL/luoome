@@ -1,6 +1,10 @@
 // @luoome/adapters 生产入口：只导出真实行情、真实 LLM 与通知适配器。
 // LLM
 
+export * from './ashare-sentiment/eastmoney.js';
+export * from './ashare-sentiment/factory.js';
+export * from './ashare-sentiment/manager.js';
+export * from './ashare-sentiment/types.js';
 export * from './limit-up-ladder/eastmoney.js';
 export * from './limit-up-ladder/factory.js';
 export * from './limit-up-ladder/manager.js';

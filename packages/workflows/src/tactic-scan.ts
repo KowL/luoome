@@ -31,11 +31,18 @@ export const ScoredSignalSchema = z.object({
   rationale: z.string(),
 });
 
+export const TacticScanUniverseSchema = z.object({
+  coverage: z.literal('CN_A_SHARES_SH_SZ'),
+  observedAt: z.coerce.date().nullable(),
+  activeStocks: z.number().int().positive(),
+});
+
 export const TacticScanOutput = z.object({
   ranked: z.array(ScoredSignalSchema),
   totalTactics: z.number().int().nonnegative(),
   totalSignals: z.number().int().nonnegative(),
   evaluatedStocks: z.number().int().nonnegative(),
+  universe: TacticScanUniverseSchema.optional(),
 });
 
 export type TacticScanOutputT = z.infer<typeof TacticScanOutput>;
@@ -49,6 +56,7 @@ interface ScoreState extends RunState {
   readonly signals: readonly TacticSignal[];
   readonly ranked: ReadonlyArray<z.infer<typeof ScoredSignalSchema>> | null;
   readonly evaluatedStocks: number;
+  readonly universe?: z.infer<typeof TacticScanUniverseSchema>;
 }
 
 const stepListTactics: WorkflowStep = async (prev, ctx) => {
@@ -75,6 +83,10 @@ const stepRunTactics: WorkflowStep = async (prev, ctx) => {
     ),
   );
   const okResults = runs.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
+  if (okResults.length === 0) {
+    const failure = runs.find((result) => !result.ok);
+    if (failure !== undefined) return failure as ToolResult<ScoreState>;
+  }
   const signals: TacticSignal[] = [];
   for (const r of okResults) {
     for (const s of r.data.signals) {
@@ -95,7 +107,15 @@ const stepRunTactics: WorkflowStep = async (prev, ctx) => {
       );
     }
   }
-  return { ...state, signals, ranked: null, evaluatedStocks: 0 } satisfies ScoreState;
+  const evaluatedStocks = Math.max(0, ...okResults.map((result) => result.data.evaluatedStocks));
+  const universe = okResults.find((result) => result.data.universe !== undefined)?.data.universe;
+  return {
+    ...state,
+    signals,
+    ranked: null,
+    evaluatedStocks,
+    ...(universe === undefined ? {} : { universe }),
+  } satisfies ScoreState;
 };
 
 const stepScoreSignals: WorkflowStep = async (prev, ctx) => {
@@ -103,8 +123,17 @@ const stepScoreSignals: WorkflowStep = async (prev, ctx) => {
   if (state.signals.length === 0) {
     return state;
   }
+  const candidates = [...state.signals]
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.stockId.localeCompare(b.stockId) ||
+        a.tacticId.localeCompare(b.tacticId) ||
+        a.ts.getTime() - b.ts.getTime(),
+    )
+    .slice(0, 50);
   const r = await ctx.tools.score_signals.execute({
-    signals: state.signals.map((s) => ({
+    signals: candidates.map((s) => ({
       tacticId: s.tacticId,
       tacticName: s.tacticName,
       tacticTag: s.tacticTag,
@@ -117,11 +146,9 @@ const stepScoreSignals: WorkflowStep = async (prev, ctx) => {
     })),
   });
   if (!r.ok) return r as unknown as ToolResult<ScoreState>;
-  const allStockIds = new Set(r.data.ranked.map((s) => s.stockId));
   return {
     ...state,
     ranked: r.data.ranked,
-    evaluatedStocks: allStockIds.size,
   } satisfies ScoreState;
 };
 
@@ -132,8 +159,9 @@ const stepFinalize: WorkflowStep = async (prev) => {
   return TacticScanOutput.parse({
     ranked: ranked.slice(0, topN),
     totalTactics: state.tacticIds.length,
-    totalSignals: ranked.length,
+    totalSignals: state.signals.length,
     evaluatedStocks: state.evaluatedStocks,
+    ...(state.universe === undefined ? {} : { universe: state.universe }),
   });
 };
 

@@ -14,6 +14,15 @@ const GroupMemberView = z.object({
   name: z.string().min(1),
   /** 进入理由：快照 reason；manual / holdings 为固定说明。 */
   reason: z.string().min(1),
+  score: z.number().min(0).max(100).optional(),
+  evidence: z.array(z.string()).default([]),
+  dataAsOf: z.coerce.date().optional(),
+  tacticSignalRef: z
+    .object({
+      tacticId: z.string(),
+      ts: z.coerce.date(),
+    })
+    .optional(),
   refreshedAt: z.coerce.date(),
 });
 
@@ -28,6 +37,10 @@ export const GetStockGroupOutput = z.object({
    * 且（从未刷新成功 或 最新批次的 Shanghai 日期 < 今日）。
    */
   stale: z.boolean(),
+  changes: z.object({
+    entered: z.array(z.string()),
+    exited: z.array(z.string()),
+  }),
 });
 
 /**
@@ -48,16 +61,43 @@ export const getStockGroupTool = defineTool({
     const resolver = group.resolver;
 
     /** 解析单只成员的展示字段；缺失 stock 行时 name fallback 为 stockId。 */
-    const memberView = async (stockId: string, reason: string, refreshedAt: Date) => {
+    const memberView = async (
+      stockId: string,
+      reason: string,
+      refreshedAt: Date,
+      research: {
+        score?: number;
+        evidence?: readonly string[];
+        dataAsOf?: Date;
+        tacticSignalRef?: { tacticId: string; ts: Date };
+      } = {},
+    ) => {
       const stock = await ctx.repos.stock.findById(stockId);
-      return { stockId, name: stock?.name ?? stockId, reason, refreshedAt };
+      return {
+        stockId,
+        name: stock?.name ?? stockId,
+        reason,
+        ...(research.score === undefined ? {} : { score: research.score }),
+        evidence: [...(research.evidence ?? [])],
+        ...(research.dataAsOf === undefined ? {} : { dataAsOf: research.dataAsOf }),
+        ...(research.tacticSignalRef === undefined
+          ? {}
+          : { tacticSignalRef: research.tacticSignalRef }),
+        refreshedAt,
+      };
     };
 
     if (resolver.kind === 'manual') {
       const members = await Promise.all(
         resolver.stockIds.map((stockId) => memberView(stockId, 'manual 固定成员', group.updatedAt)),
       );
-      return { group, members, latestRefreshAt: null, stale: false };
+      return {
+        group,
+        members,
+        latestRefreshAt: null,
+        stale: false,
+        changes: { entered: [], exited: [] },
+      };
     }
     if (resolver.kind === 'holdings') {
       const holdings = await ctx.repos.holding.listByAccount(resolver.accountId);
@@ -66,19 +106,57 @@ export const getStockGroupTool = defineTool({
           .filter((h) => h.closedAt === null)
           .map((h) => memberView(h.stockId, 'holdings 活视图', now)),
       );
-      return { group, members, latestRefreshAt: null, stale: false };
+      return {
+        group,
+        members,
+        latestRefreshAt: null,
+        stale: false,
+        changes: { entered: [], exited: [] },
+      };
     }
 
     const snapshots = await ctx.repos.groupMember.currentMembers(group.id);
     const latestRefreshAt = snapshots[0]?.createdAt ?? null;
     const members = await Promise.all(
-      snapshots.map((s) => memberView(s.stockId, s.reason, s.createdAt)),
+      snapshots.map((s) =>
+        memberView(s.stockId, s.reason, s.createdAt, {
+          ...(s.score === undefined ? {} : { score: s.score }),
+          evidence: s.evidence,
+          ...(s.dataAsOf === undefined ? {} : { dataAsOf: s.dataAsOf }),
+          ...(s.tacticSignalRef === undefined ? {} : { tacticSignalRef: s.tacticSignalRef }),
+        }),
+      ),
     );
+    const latestRefreshId = snapshots[0]?.refreshId;
+    const history = await ctx.repos.groupMember.listHistory(group.id);
+    const previousRefreshId = history.find(
+      (snapshot) => snapshot.refreshId !== latestRefreshId,
+    )?.refreshId;
+    const previousIds = new Set(
+      previousRefreshId === undefined
+        ? []
+        : history
+            .filter((snapshot) => snapshot.refreshId === previousRefreshId)
+            .map((snapshot) => snapshot.stockId),
+    );
+    const currentIds = new Set(snapshots.map((snapshot) => snapshot.stockId));
     return {
       group,
       members,
       latestRefreshAt,
       stale: isGroupStale(group, latestRefreshAt, now),
+      changes: {
+        entered:
+          previousRefreshId === undefined
+            ? []
+            : snapshots
+                .map((snapshot) => snapshot.stockId)
+                .filter((stockId) => !previousIds.has(stockId)),
+        exited:
+          previousRefreshId === undefined
+            ? []
+            : [...previousIds].filter((stockId) => !currentIds.has(stockId)).sort(),
+      },
     };
   },
 });

@@ -39,6 +39,7 @@
         <li><a class="nav-item" href="#research" data-route="research"><span>研究</span></a></li>
         <li><a class="nav-item" href="#tactics" data-route="tactics"><span>战法</span></a></li>
         <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
+        <li><a class="nav-item" href="#reports" data-route="reports"><span>报告</span></a></li>
         <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
         <li><a class="nav-item" href="#limit-up" data-route="limit-up"><span>涨停梯队</span></a></li>
         <li><a class="nav-item" href="#chat" data-route="chat"><span>对话</span></a></li>
@@ -328,6 +329,20 @@
           <h4 class="mt-4">扫描结果 top 10</h4>
           <div id="tactic-signals"><p class="placeholder">点「跑战法扫描」开始</p></div>
         </div>
+        <div class="card mt-4 tactic-consensus-panel">
+          <div class="card-header">
+            <div>
+              <span class="section-kicker">SAME-DAY RESONANCE</span>
+              <h2>同日共振</h2>
+            </div>
+            <div class="card-meta">持久信号聚合 · 不调用 LLM</div>
+          </div>
+          <p class="consensus-formula">
+            排序分 = 支持信号均分 − 反向信号均分 × 0.5 + 有限共振加分；仅用于同批排序，
+            不表示胜率或投资建议。
+          </p>
+          <div id="tactic-consensus"><p class="placeholder">正在读取公式分组快照…</p></div>
+        </div>
       </section>
 
       <!-- route: advice -->
@@ -351,6 +366,69 @@
             </div>
           </div>
           <div id="advice-full-list"><p class="placeholder">加载中…</p></div>
+        </div>
+      </section>
+
+      <!-- route: reports -->
+      <section id="route-reports" class="route" data-route="reports" hidden>
+        <div class="route-header">
+          <div>
+            <span class="section-kicker">MARKET BRIEFING ARCHIVE</span>
+            <h1>报告</h1>
+            <div class="route-meta">结构化事实简报 · 数据截止与缺失维度透明可见</div>
+          </div>
+          <div class="report-filters" aria-label="报告筛选">
+            <select id="report-kind-filter" aria-label="报告类型">
+              <option value="">全部类型</option>
+              <option value="opening">开盘简报</option>
+              <option value="closing">收盘复盘</option>
+              <option value="weekly">周报</option>
+            </select>
+            <select id="report-status-filter" aria-label="报告状态">
+              <option value="">全部状态</option>
+              <option value="complete">完整</option>
+              <option value="partial">部分可用</option>
+            </select>
+          </div>
+        </div>
+        <div class="report-generator card" aria-label="手动生成报告">
+          <div class="report-generator-copy">
+            <span class="section-kicker">NEW RUN</span>
+            <strong>生成今日简报</strong>
+            <span>选择交易日；周报将以该日作为周期终点。</span>
+          </div>
+          <label class="report-date-field">
+            <span>交易日</span>
+            <input id="report-run-date" type="date" />
+          </label>
+          <div class="report-run-actions">
+            <button class="btn btn-outline btn-sm" type="button" data-report-run="opening">
+              开盘
+            </button>
+            <button class="btn btn-outline btn-sm" type="button" data-report-run="closing">
+              收盘
+            </button>
+            <button class="btn btn-primary btn-sm" type="button" data-report-run="weekly">
+              周报
+            </button>
+          </div>
+          <span id="report-run-state" class="report-run-state" aria-live="polite"></span>
+        </div>
+        <div class="report-workspace">
+          <aside class="card report-ledger" aria-label="报告历史">
+            <div class="card-header">
+              <h2>历史账簿</h2>
+              <div class="card-meta" id="report-history-meta">--</div>
+            </div>
+            <div id="report-history"><p class="placeholder">加载中…</p></div>
+          </aside>
+          <article class="card report-sheet" id="report-detail">
+            <div class="report-empty">
+              <span class="report-empty-mark">R</span>
+              <h2>选择一份报告</h2>
+              <p>查看事实区块、数据来源、缺失维度与导出内容。</p>
+            </div>
+          </article>
         </div>
       </section>
 

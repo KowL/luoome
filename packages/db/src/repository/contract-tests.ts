@@ -12,6 +12,7 @@ import {
   type Notification,
   type Quote,
   quantity,
+  type Report,
   type RepositoryRegistry,
   type ResearchNote,
   STANDARD_DISCLAIMERS,
@@ -249,6 +250,7 @@ export const makeGroupMemberSnapshot = (
   stockId: '002594.SZ',
   refreshId: 'rf-1',
   reason: 'fixture reason',
+  evidence: [],
   createdAt: T1,
   ...overrides,
 });
@@ -331,6 +333,48 @@ export const makeWorkflowRun = (id: string, overrides: Partial<WorkflowRun> = {}
   startedAt: T1,
   finishedAt: T2,
   providerStatuses: [],
+  ...overrides,
+});
+
+export const makeReport = (id: string, overrides: Partial<Report> = {}): Report => ({
+  id,
+  kind: 'closing',
+  scope: { kind: 'all-accounts' },
+  periodStart: '2026-07-02',
+  periodEnd: '2026-07-02',
+  title: `收盘复盘-${id}`,
+  generatedAt: T2,
+  dataAsOf: T1,
+  status: 'complete',
+  sections: [
+    {
+      key: 'market-pulse',
+      title: '市场脉搏',
+      required: true,
+      status: 'complete',
+      dataAsOf: T1,
+      blocks: [{ kind: 'text', text: '市场平稳', tone: 'factual' }],
+      evidenceIds: ['market'],
+      missingDimensions: [],
+    },
+  ],
+  evidence: [
+    {
+      id: 'market',
+      dimension: 'market.index',
+      provenance: {
+        provider: 'fixture',
+        observedAt: T1,
+        fetchedAt: T2,
+        freshness: 'fresh',
+      },
+    },
+  ],
+  missingDimensions: [],
+  deliveryStatus: 'not-requested',
+  workflowRunId: 'workflow-run-1',
+  createdAt: T2,
+  updatedAt: T2,
   ...overrides,
 });
 
@@ -1164,7 +1208,7 @@ export const registerRepositoryContractTests = (
         await repos.tactic.save(
           makeTactic('u-1', { tag: 'risk', direction: 'bearish', source: 'user' }),
         );
-        // v0.3 起 in-memory repos 默认灌入 5 个内置战法（不参与本测试断言）；
+        // in-memory repos 默认灌入内置战法（不参与本测试断言）；
         // 这里只验证 t-/u- 前缀的相对顺序与过滤。
         const ids = (await repos.tactic.list())
           .map((t) => t.id)
@@ -1430,6 +1474,32 @@ export const registerRepositoryContractTests = (
         await repos.groupMember.saveBatch([s]);
         await repos.groupMember.saveBatch([s]);
         expect(await repos.groupMember.currentMembers('grp-1')).toHaveLength(1);
+      });
+
+      it('策略研究字段 roundtrip，旧快照 evidence 兼容为空数组', async () => {
+        const signalAt = new Date('2026-07-23T07:00:00.000Z');
+        await repos.groupMember.saveBatch([
+          makeGroupMemberSnapshot('s-research', {
+            score: 88,
+            evidence: ['量比 1.8', '突破 20 日高点'],
+            dataAsOf: signalAt,
+            tacticSignalRef: { tacticId: 'breakout-volume', ts: signalAt },
+          }),
+        ]);
+        expect(await repos.groupMember.currentMembers('grp-1')).toEqual([
+          makeGroupMemberSnapshot('s-research', {
+            score: 88,
+            evidence: ['量比 1.8', '突破 20 日高点'],
+            dataAsOf: signalAt,
+            tacticSignalRef: { tacticId: 'breakout-volume', ts: signalAt },
+          }),
+        ]);
+
+        await repos.groupMember.saveBatch([
+          makeGroupMemberSnapshot('s-legacy', { groupId: 'grp-legacy' }),
+        ]);
+        const latest = await repos.groupMember.currentMembers('grp-legacy');
+        expect(latest[0]?.evidence).toEqual([]);
       });
     });
 
@@ -1797,6 +1867,82 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.workflowRun.save(makeWorkflowRun('w-bad', { status: 'failed', error: undefined })),
         ).rejects.toThrow();
+      });
+    });
+
+    describe('ReportRepository', () => {
+      it('upsertForPeriod 后可按 id 和逻辑周期读取', async () => {
+        const saved = await repos.report.upsertForPeriod(makeReport('report-1'));
+
+        expect((await repos.report.findById(saved.id))?.title).toBe('收盘复盘-report-1');
+        expect(
+          await repos.report.findByPeriod({
+            kind: 'closing',
+            scopeKey: 'all-accounts',
+            periodStart: '2026-07-02',
+            periodEnd: '2026-07-02',
+          }),
+        ).toEqual(saved);
+      });
+
+      it('相同逻辑周期重跑保留 id/createdAt，只更新正文与运行引用', async () => {
+        await repos.report.upsertForPeriod(makeReport('report-original'));
+        const rerun = await repos.report.upsertForPeriod(
+          makeReport('report-new-id', {
+            title: '重跑后的收盘复盘',
+            workflowRunId: 'workflow-run-2',
+            generatedAt: T3,
+            updatedAt: T3,
+          }),
+        );
+
+        expect(rerun.id).toBe('report-original');
+        expect(rerun.createdAt).toEqual(T2);
+        expect(rerun.title).toBe('重跑后的收盘复盘');
+        expect(rerun.workflowRunId).toBe('workflow-run-2');
+      });
+
+      it('list 按周期倒序并支持 kind/scope/status/date/limit 过滤', async () => {
+        await repos.report.upsertForPeriod(makeReport('r1'));
+        await repos.report.upsertForPeriod(
+          makeReport('r2', {
+            kind: 'opening',
+            periodStart: '2026-07-03',
+            periodEnd: '2026-07-03',
+          }),
+        );
+        await repos.report.upsertForPeriod(
+          makeReport('r3', {
+            scope: { kind: 'account', accountId: 'acc-1' },
+            periodStart: '2026-07-04',
+            periodEnd: '2026-07-04',
+          }),
+        );
+
+        expect((await repos.report.list({ limit: 2 })).map((report) => report.id)).toEqual([
+          'r3',
+          'r2',
+        ]);
+        expect(
+          (
+            await repos.report.list({
+              kind: 'closing',
+              scopeKey: 'account:acc-1',
+              status: 'complete',
+              from: '2026-07-04',
+              to: '2026-07-04',
+            })
+          ).map((report) => report.id),
+        ).toEqual(['r3']);
+      });
+
+      it('sent 不得回退为 pending', async () => {
+        const saved = await repos.report.upsertForPeriod(
+          makeReport('report-sent', { deliveryStatus: 'sent' }),
+        );
+
+        await expect(repos.report.setDeliveryStatus(saved.id, 'pending')).rejects.toThrow();
+        expect((await repos.report.findById(saved.id))?.deliveryStatus).toBe('sent');
       });
     });
 

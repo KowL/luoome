@@ -1,8 +1,30 @@
 import { TEST_STOCKS } from '@luoome/adapters/testing';
-import type { MarketDataAdapterLike } from '@luoome/core';
+import { type DailyBar, type MarketDataAdapterLike, money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
-import { buildTestContext } from '../testing/context.js';
+import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 import { runTacticTool } from './run-tactic.js';
+
+const A_SHARE_TEST_STOCKS = TEST_STOCKS.filter(
+  (stock) => stock.exchange === 'SH' || stock.exchange === 'SZ',
+);
+
+const earlyBreakoutBars = (stockId: string): DailyBar[] => {
+  const tail = [
+    9.9, 10.1, 9.9, 10.1, 9.9, 10.1, 9.9, 10.1, 9.9, 10.1, 9.9, 10.1, 9.9, 10.1, 9.9, 10.2, 10.1,
+    9.8, 9.8, 10.5,
+  ];
+  return [...Array<number>(45).fill(10), ...tail].map((close, index) => ({
+    stockId,
+    date: new Date(Date.UTC(2026, 0, index + 1)),
+    open: money(close),
+    high: money(close + 0.2),
+    low: money(close - 0.2),
+    close: money(close),
+    volume: index < 60 ? 1_000_000 : 2_000_000,
+    adjustment: 'qfq',
+    source: 'early-breakout-test',
+  }));
+};
 
 describe('tool/run_tactic', () => {
   it('战法不存在 → not_found', async () => {
@@ -29,11 +51,53 @@ describe('tool/run_tactic', () => {
     expect(typeof r.data.evaluatedStocks).toBe('number');
     expect(typeof r.data.triggeredCount).toBe('number');
   });
+
+  it('从规范日线计算指标并命中 early-breakout', async () => {
+    const base = await buildTestContext();
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      fetchQuote: (stockId) => base.adapters.market.fetchQuote(stockId),
+      fetchDailyBars: async (stockId) => earlyBreakoutBars(stockId),
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
+
+    const result = await runTacticTool.execute(
+      {
+        tacticId: 'early-breakout',
+        scope: 'watchlist',
+        stockIds: ['002594.SZ'],
+        persistSignals: false,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.evaluatedStocks).toBe(1);
+    expect(result.data.triggeredCount).toBe(1);
+    expect(result.data.signals[0]).toMatchObject({
+      tacticId: 'early-breakout',
+      stockId: '002594.SZ',
+      direction: 'bullish',
+    });
+  });
 });
 
-describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', () => {
-  it('adapter 有快照 → 候选=快照全集（非本地 stocks 表）', async () => {
+describe('run_tactic scope=all-stocks 候选全集（StockUniverse 是身份事实源）', () => {
+  it('没有成功同步的 StockUniverse 时拒绝把行情快照冒充全市场', async () => {
     const ctx = await buildTestContext();
+    const r = await runTacticTool.execute(
+      { tacticId: 'breakout-volume', scope: 'all-stocks', lookbackDays: 60, persistSignals: false },
+      ctx,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.kind).toBe('invalid_input');
+  });
+
+  it('候选来自 active StockUniverse，行情快照只提供可选价格', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 2 });
     const base = ctx.adapters.market;
     const market: MarketDataAdapterLike = {
       ...base,
@@ -44,7 +108,6 @@ describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', 
       fetchMarketSnapshot: () =>
         Promise.resolve([
           { id: '000001.SZ', code: '000001', exchange: 'SZ', name: '平安银行', close: 11.5 },
-          { id: '000002.SZ', code: '000002', exchange: 'SZ', name: '万科A', close: 7.2 },
         ]),
     };
     const ctx2 = { ...ctx, adapters: { ...ctx.adapters, market } };
@@ -54,11 +117,17 @@ describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', 
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.evaluatedStocks).toBe(2); // 快照 2 只，而非本地 20 只
+    expect(r.data.evaluatedStocks).toBe(2);
+    expect(r.data.universe).toEqual({
+      coverage: 'CN_A_SHARES_SH_SZ',
+      observedAt: new Date('2026-07-28T08:00:00.000Z'),
+      activeStocks: 2,
+    });
   });
 
-  it('adapter 无快照方法 → 降级本地 stocks 表', async () => {
+  it('行情快照能力不可用时仍使用 active StockUniverse 身份', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 2 });
     const base = ctx.adapters.market;
     const market: MarketDataAdapterLike = {
       ...base,
@@ -76,11 +145,12 @@ describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', 
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.evaluatedStocks).toBe(TEST_STOCKS.length);
+    expect(r.data.evaluatedStocks).toBe(2);
   });
 
-  it('快照方法抛错 → 降级本地 stocks 表', async () => {
+  it('行情快照抛错时仍使用 active StockUniverse 身份', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 2 });
     const base = ctx.adapters.market;
     const market: MarketDataAdapterLike = {
       ...base,
@@ -97,18 +167,19 @@ describe('run_tactic scope=all-stocks 候选全集（全市场快照优先）', 
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.evaluatedStocks).toBe(TEST_STOCKS.length);
+    expect(r.data.evaluatedStocks).toBe(2);
   });
 
-  it('Fake adapter 快照 == 种子 stocks：默认上下文 evaluatedStocks = TEST_STOCKS 数', async () => {
+  it('目录包含全部沪深测试股票时 evaluatedStocks = active 目录数量', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx);
     const r = await runTacticTool.execute(
       { tacticId: 'breakout-volume', scope: 'all-stocks', lookbackDays: 60, persistSignals: false },
       ctx,
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.evaluatedStocks).toBe(TEST_STOCKS.length);
+    expect(r.data.evaluatedStocks).toBe(A_SHARE_TEST_STOCKS.length);
   });
 });
 

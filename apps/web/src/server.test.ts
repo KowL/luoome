@@ -50,6 +50,126 @@ describe('Web 信息架构', () => {
   });
 });
 
+describe('战法扫描 API', () => {
+  it('evaluatedStocks 统计实际求值股票数，不按战法数重复累计', async () => {
+    const ctx = await buildTestContext();
+    const testApp = createWebApp(ctx);
+    const holdings = await ctx.repos.holding.listByAccount(ctx.user.defaultAccountId);
+    const expectedStocks = new Set(holdings.map((holding) => holding.stockId)).size;
+
+    const response = await testApp.fetch(
+      new Request('http://test/api/tactics/scan?scope=holdings&topN=10'),
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      data?: { evaluatedStocks: number };
+    };
+
+    expect(body.ok).toBe(true);
+    expect(body.data?.evaluatedStocks).toBe(expectedStocks);
+  });
+
+  it('共振端点走 read tool，缺少可用公式快照时返回明确 invalid_input', async () => {
+    const response = await app.fetch(new Request('http://test/api/tactics/consensus'));
+    const body = (await response.json()) as { ok: boolean; error?: { kind: string } };
+    expect(response.status).toBe(400);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+});
+
+describe('报告 API', () => {
+  it('保存报告后可通过历史、详情和 Markdown 导出端点读取', async () => {
+    const now = '2026-07-29T10:00:00.000Z';
+    const report = {
+      id: 'web-report-1',
+      kind: 'closing',
+      scope: { kind: 'all-accounts' },
+      periodStart: '2026-07-29',
+      periodEnd: '2026-07-29',
+      title: 'Web 收盘复盘',
+      generatedAt: now,
+      dataAsOf: '2026-07-29T08:00:00.000Z',
+      status: 'complete',
+      sections: [
+        {
+          key: 'market-pulse',
+          title: '市场脉搏',
+          required: true,
+          status: 'complete',
+          blocks: [{ kind: 'text', text: '市场平稳', tone: 'factual' }],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+      evidence: [],
+      missingDimensions: [],
+      deliveryStatus: 'not-requested',
+      workflowRunId: 'web-workflow-1',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const saved = await callTool('save_report', { report });
+    expect(saved.status).toBe(200);
+
+    const history = await app.fetch(new Request('http://test/api/reports?kind=closing&limit=30'));
+    const historyBody = (await history.json()) as {
+      ok: boolean;
+      data?: { reports: Array<{ id: string }> };
+    };
+    expect(historyBody.data?.reports.some((item) => item.id === report.id)).toBe(true);
+
+    const detail = await app.fetch(new Request(`http://test/api/reports/${report.id}`));
+    const detailBody = (await detail.json()) as {
+      ok: boolean;
+      data?: { report: { title: string } };
+    };
+    expect(detailBody.data?.report.title).toBe('Web 收盘复盘');
+
+    const rendered = await app.fetch(
+      new Request(`http://test/api/reports/${report.id}/render?format=markdown`),
+    );
+    const renderedBody = (await rendered.json()) as {
+      ok: boolean;
+      data?: { content: string };
+    };
+    expect(renderedBody.data?.content).toContain('# Web 收盘复盘');
+  });
+
+  it('手动生成端点要求 mutation token，并保存可查询的开盘简报', async () => {
+    const denied = await app.fetch(
+      new Request('http://test/api/reports/run/opening', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ date: '2026-07-29', notify: false }),
+      }),
+    );
+    expect(denied.status).toBe(403);
+
+    const generated = await app.fetch(
+      new Request('http://test/api/reports/run/opening', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+          origin: 'http://test',
+        },
+        body: JSON.stringify({ date: '2026-07-29', notify: false }),
+      }),
+    );
+    const body = (await generated.json()) as {
+      ok: boolean;
+      data?: { report: { id: string; kind: string } };
+    };
+    expect(generated.status).toBe(200);
+    expect(body.data?.report.kind).toBe('opening');
+
+    const detail = await app.fetch(
+      new Request(`http://test/api/reports/${body.data?.report.id ?? ''}`),
+    );
+    expect(detail.status).toBe(200);
+  });
+});
+
 describe('Web token bootstrap', () => {
   it('无 env 时生成并复用数据库同目录的 0600 token 文件', () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-web-token-'));
@@ -101,6 +221,9 @@ describe('Web runtime bootstrap', () => {
       expect(await ctx.repos.stock.search('')).toEqual([]);
       expect(await ctx.repos.holding.listByAccount('')).toEqual([]);
       expect(await ctx.repos.trade.listByAccount('')).toEqual([]);
+      expect(
+        (await ctx.repos.tactic.list({ source: 'builtin' })).map((tactic) => tactic.id),
+      ).toEqual(expect.arrayContaining(['early-breakout', 'bollinger-band']));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

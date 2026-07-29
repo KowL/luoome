@@ -7,7 +7,7 @@ import { computeSimpleIndicators } from '../internal/indicators.js';
 /**
  * compute_indicators（v0.2 起，read）。
  * 给定 stockId + dateRange 拉日线 → 算指标快照，不落库（与 analyze_stock 不同；
- * analyze 会落库到 advice.basedOn.indicators）。
+ * analyze 会落库到 advice.basedOn.indicators）。包含趋势、交叉新鲜度与 Bollinger 研究指标。
  * range.lookbackDays 给默认值 120（与 v0.1 analyze-stock 一致）。
  */
 const DAY_MS = 86_400_000;

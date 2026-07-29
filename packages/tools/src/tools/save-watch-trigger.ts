@@ -2,6 +2,10 @@ import { assertWatchTriggerInvariants, WatchTriggerSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import {
+  observationsForWatchTrigger,
+  saveObservationCandidates,
+} from '../internal/signal-observation.js';
 
 export const SaveWatchTriggerInput = WatchTriggerSchema;
 
@@ -26,6 +30,15 @@ export const saveWatchTriggerTool = defineTool({
     const trigger = WatchTriggerSchema.parse(input);
     assertWatchTriggerInvariants(trigger);
     await ctx.repos.watchTrigger.save(trigger);
+    await saveObservationCandidates(
+      observationsForWatchTrigger(trigger, {
+        provider: trigger.quote === undefined ? 'watch-trigger' : 'quote',
+        observedAt: trigger.createdAt,
+        fetchedAt: ctx.clock(),
+        freshness: trigger.quote === undefined ? 'unavailable' : 'fresh',
+      }),
+      ctx.repos.signalObservation,
+    );
     return { trigger };
   },
 });

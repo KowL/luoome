@@ -1,5 +1,5 @@
 import type { StockGroup, Tactic, ToolContext } from '@luoome/core';
-import { buildTestContext } from '@luoome/tools/testing';
+import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '@luoome/tools/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { intradayWatchWorkflow, resetDailyGroupRefreshFlagForTest } from './intraday-watch.js';
@@ -43,6 +43,8 @@ describe('intraday-watch daily 刷新接线（docs/ddd/stock-group-design.md §7
 
   it('daily formula 组今日无快照 → watch 首轮前先跑 refresh-groups', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { observedAt: NOW });
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-daily');
 
@@ -65,6 +67,7 @@ describe('intraday-watch daily 刷新接线（docs/ddd/stock-group-design.md §7
         stockId: '002594.SZ',
         refreshId: 'rf-today',
         reason: 'today',
+        evidence: [],
         createdAt: NOW,
       },
     ]);
@@ -77,6 +80,8 @@ describe('intraday-watch daily 刷新接线（docs/ddd/stock-group-design.md §7
 
   it('昨日批次 → 今日首轮刷新一次；同进程第二轮不再刷', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { observedAt: NOW });
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-daily');
     await ctx.repos.groupMember.saveBatch([
@@ -86,6 +91,7 @@ describe('intraday-watch daily 刷新接线（docs/ddd/stock-group-design.md §7
         stockId: '002594.SZ',
         refreshId: 'rf-yesterday',
         reason: 'old',
+        evidence: [],
         createdAt: YESTERDAY,
       },
     ]);

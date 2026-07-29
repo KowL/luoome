@@ -17,14 +17,21 @@ import { fileURLToPath } from 'node:url';
 
 import {
   createAIStackFromEnv,
+  createAShareSentimentManagerFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, toolRegistry } from '@luoome/tools';
-import { runIntradayWatchObserved } from '@luoome/workflows';
+import { buildContext, ensureBuiltinTactics, toolRegistry } from '@luoome/tools';
+import {
+  closingReportWorkflow,
+  openingReportWorkflow,
+  runIntradayWatchObserved,
+  tacticScanWorkflow,
+  weeklyReportWorkflow,
+} from '@luoome/workflows';
 import { Hono } from 'hono';
 import { ZodError } from 'zod';
 
@@ -66,6 +73,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'fetch_quote',
   'batch_quote',
   'fetch_index_quotes',
+  'get_ashare_sentiment',
   'refresh_stock_group',
   'get_stock_market_view',
   'sync_stock_universe',
@@ -169,6 +177,7 @@ export const buildWebContext = async (
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
+  await ensureBuiltinTactics(handle.repos);
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
@@ -204,6 +213,7 @@ export const buildWebContext = async (
     clock: now,
     user: { id: 'local-web-user', defaultAccountId },
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
+    ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger: console }),
   });
 };
 
@@ -284,6 +294,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/groups', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/watch', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/advice', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/reports', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/chat', serveFile('index.html', 'text/html; charset=utf-8'));
@@ -1479,76 +1490,85 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return callTool('get_advice_stats', input);
   });
 
+  app.get('/api/reports', (c) => {
+    const input: Record<string, unknown> = {};
+    for (const key of ['kind', 'from', 'to', 'status'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.length > 0) input[key] = value;
+    }
+    const scopeKind = c.req.query('scope');
+    const accountId = c.req.query('accountId');
+    if (scopeKind === 'all-accounts') input.scope = { kind: 'all-accounts' };
+    if (scopeKind === 'account' && accountId !== undefined) {
+      input.scope = { kind: 'account', accountId };
+    }
+    const limit = Number(c.req.query('limit'));
+    if (Number.isInteger(limit) && limit > 0) input.limit = limit;
+    return callTool('list_reports', input);
+  });
+
+  app.post('/api/reports/run/:kind', async (c) => {
+    const denied = mutationPermission(c.req.raw, webToken);
+    if (denied !== null) return jsonResult(denied);
+    const kind = c.req.param('kind');
+    const workflow =
+      kind === 'opening'
+        ? openingReportWorkflow
+        : kind === 'closing'
+          ? closingReportWorkflow
+          : kind === 'weekly'
+            ? weeklyReportWorkflow
+            : undefined;
+    if (workflow === undefined) return jsonResult(notFound('ReportWorkflow', kind));
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      body = {};
+    }
+    const raw =
+      typeof body === 'object' && body !== null && !Array.isArray(body)
+        ? (body as Record<string, unknown>)
+        : {};
+    const input = {
+      ...raw,
+      mode: 'manual' as const,
+      ...(kind === 'weekly' && typeof raw.date === 'string'
+        ? { periodEnd: raw.date, date: undefined }
+        : {}),
+    };
+    return jsonResult(await workflow.run(input, ctxRef.current));
+  });
+
+  app.get('/api/reports/:id/render', (c) =>
+    callTool('render_report', {
+      reportId: c.req.param('id'),
+      format: c.req.query('format') === 'plain-text' ? 'plain-text' : 'markdown',
+    }),
+  );
+
+  app.get('/api/reports/:id', (c) => callTool('get_report', { id: c.req.param('id') }));
+
   // 战法列表（read；调 list_tactics includeBuiltins=true）
   app.get('/api/tactics', () => callTool('list_tactics', { includeBuiltins: true }));
+  app.get('/api/tactics/consensus', (c) => {
+    const input: Record<string, unknown> = {};
+    const marketDate = c.req.query('marketDate');
+    const minGroups = Number(c.req.query('minGroups'));
+    const topN = Number(c.req.query('topN'));
+    if (marketDate !== undefined) input.marketDate = marketDate;
+    if (Number.isInteger(minGroups) && minGroups > 0) input.minGroups = minGroups;
+    if (Number.isInteger(topN) && topN > 0) input.topN = topN;
+    return callTool('get_tactic_consensus', input);
+  });
 
-  // 战法扫描（read + advice）：list_tactics → 并发 run_tactic × N → score_signals 精排 → top N。
-  // 走 tool 直接串，等价 workflow tactic-scan；输出与 workflow 对齐。
+  // 战法扫描（read + advice）：统一走 tactic-scan workflow，避免 surface 复制编排与统计口径。
   app.get('/api/tactics/scan', async (c) => {
     const topNRaw = c.req.query('topN');
     const topN = topNRaw === undefined ? 10 : Math.max(1, Math.min(50, Number(topNRaw) || 10));
     const scopeRaw = c.req.query('scope');
     const scope = scopeRaw === 'all-stocks' || scopeRaw === 'watchlist' ? scopeRaw : 'holdings';
-    try {
-      const listResult = await invokeTool('list_tactics', { includeBuiltins: true });
-      if (!listResult.ok) return jsonResult(listResult);
-      const list = listResult.data as { tactics: Array<{ id: string }> };
-      const ids = list.tactics.map((t) => t.id);
-      if (ids.length === 0) {
-        return jsonResult({ ok: true, data: { ranked: [], totalTactics: 0, totalSignals: 0 } });
-      }
-      const runs = await Promise.all(
-        ids.map((id) => invokeTool('run_tactic', { tacticId: id, scope })),
-      );
-      const okRuns = runs.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
-      interface SignalRow {
-        tacticId: string;
-        tacticName: string;
-        tacticTag: string;
-        stockId: string;
-        ts: Date;
-        score: number;
-        direction: string;
-        evidence: string[];
-      }
-      const signals: SignalRow[] = [];
-      let totalEvaluated = 0;
-      for (const r of okRuns) {
-        const data = r.data as {
-          signals: SignalRow[];
-          evaluatedStocks: number;
-          triggeredCount: number;
-        };
-        totalEvaluated += data.evaluatedStocks;
-        for (const s of data.signals) signals.push(s);
-      }
-      if (signals.length === 0) {
-        return jsonResult({
-          ok: true,
-          data: {
-            ranked: [],
-            totalTactics: ids.length,
-            totalSignals: 0,
-            evaluatedStocks: totalEvaluated,
-          },
-        });
-      }
-      const scoreResult = await invokeTool('score_signals', { signals });
-      if (!scoreResult.ok) return jsonResult(scoreResult);
-      const ranked = (scoreResult.data as { ranked: unknown[] }).ranked.slice(0, topN);
-      return jsonResult({
-        ok: true,
-        data: {
-          ranked,
-          totalTactics: ids.length,
-          totalSignals: signals.length,
-          evaluatedStocks: new Set(signals.map((s) => s.stockId)).size,
-        },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return jsonResult({ ok: false, error: { kind: 'internal', cause: message } });
-    }
+    return jsonResult(await tacticScanWorkflow.run({ scope, topN }, ctxRef.current));
   });
 
   // 复盘趋势图：按天聚合命中率（confidence>=70 且 followed 且 pnl>0 占比）。

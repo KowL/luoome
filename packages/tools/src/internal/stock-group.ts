@@ -86,26 +86,37 @@ export interface GroupRefreshOutcome {
   readonly failureReason?: string;
   /** 新批次 refreshId；未写批次为 null。 */
   readonly refreshId: string | null;
+  readonly dataAsOf?: Date;
+  readonly coverage?: 'CN_A_SHARES_SH_SZ';
+  readonly evaluatedStocks: number;
   /** 刷新后当前成员数（未写批次时为旧批成员数）。 */
   readonly memberCount: number;
   /** 相对旧批新进的 stockId（按新批顺序）。 */
   readonly entered: readonly string[];
   /** 相对旧批退出的 stockId（按旧批 stockId 升序）。 */
   readonly exited: readonly string[];
+  readonly warnings: readonly string[];
 }
 
-const failure = (failureReason: string, oldMemberCount: number): GroupRefreshOutcome => ({
+const failure = (
+  failureReason: string,
+  oldMemberCount: number,
+  evaluatedStocks = 0,
+  warnings: readonly string[] = [],
+): GroupRefreshOutcome => ({
   refreshed: false,
   failureReason,
   refreshId: null,
+  evaluatedStocks,
   memberCount: oldMemberCount,
   entered: [],
   exited: [],
+  warnings,
 });
 
 /**
  * 单组刷新（spec §4「生产者 + 快照」）：
- * - formula → run_tactic(scope='all-stocks'，全市场快照降级本地库, persistSignals=true,
+ * - formula → run_tactic(scope='all-stocks'，active StockUniverse 为候选事实源, persistSignals=true,
  *   lookbackDays)，命中且 score ≥ minScore（缺省 60）→ 成员，reason=`战法 <id> 命中，score=<n>`
  * - llm → resolve_llm_group（LLM 产出 + 候选全集校验 + 截断）
  * - 成员逐条 ensureStockStub（全市场成员多数不在本地 stocks 表，下游展示依赖 stock 行）
@@ -121,7 +132,17 @@ export const refreshGroupMembers = async (
   const oldMembers = await ctx.repos.groupMember.currentMembers(group.id);
   const oldIds = oldMembers.map((m) => m.stockId);
 
-  let resolved: readonly { stockId: string; reason: string }[];
+  let resolved: readonly {
+    stockId: string;
+    reason: string;
+    score?: number;
+    evidence: readonly string[];
+    dataAsOf?: Date;
+    tacticSignalRef?: { tacticId: string; ts: Date };
+  }[];
+  let evaluatedStocks = 0;
+  let coverage: 'CN_A_SHARES_SH_SZ' | undefined;
+  const warnings: string[] = [];
   if (resolver.kind === 'formula') {
     const r = await runTacticTool.execute(
       {
@@ -129,6 +150,7 @@ export const refreshGroupMembers = async (
         scope: 'all-stocks',
         lookbackDays: resolver.lookbackDays,
         persistSignals: true,
+        localDataOnly: true,
       },
       ctx,
     );
@@ -138,12 +160,27 @@ export const refreshGroupMembers = async (
         oldIds.length,
       );
     }
+    evaluatedStocks = r.data.evaluatedStocks;
+    coverage = r.data.universe?.coverage;
+    if (r.data.universe !== undefined && r.data.evaluatedStocks !== r.data.universe.activeStocks) {
+      const warning = `本地规范日线 coverage 不完整：expected=${r.data.universe.activeStocks}, available=${r.data.evaluatedStocks}`;
+      return failure(warning, oldIds.length, r.data.evaluatedStocks, [warning]);
+    }
+    if (r.data.triggeredCount > r.data.signals.length) {
+      warnings.push(
+        `run_tactic 命中 ${r.data.triggeredCount} 只返回前 ${r.data.signals.length} 条`,
+      );
+    }
     const minScore = resolver.minScore ?? 60;
     resolved = r.data.signals
       .filter((s) => s.score >= minScore)
       .map((s) => ({
         stockId: s.stockId,
         reason: `战法 ${resolver.tacticId} 命中，score=${s.score.toFixed(1)}`,
+        score: s.score,
+        evidence: s.evidence,
+        dataAsOf: s.ts,
+        tacticSignalRef: { tacticId: s.tacticId, ts: s.ts },
       }));
   } else if (resolver.kind === 'llm') {
     const r = await resolveLlmGroupTool.execute(
@@ -157,14 +194,15 @@ export const refreshGroupMembers = async (
     if (!r.ok) {
       return failure(`resolve_llm_group 失败: ${JSON.stringify(r.error)}`, oldIds.length);
     }
-    resolved = r.data.members;
+    resolved = r.data.members.map((member) => ({ ...member, evidence: [] }));
+    warnings.push('LLM 分组基于有限候选集，存在强势股抽样偏置，不参与全市场共振');
   } else {
     return failure(`resolver kind=${resolver.kind} 无刷新动作`, oldIds.length);
   }
 
   // 去重（同一 stockId 保留第一条 reason）
   const seen = new Set<string>();
-  const members: Array<{ stockId: string; reason: string }> = [];
+  const members: Array<(typeof resolved)[number]> = [];
   for (const m of resolved) {
     if (seen.has(m.stockId)) continue;
     seen.add(m.stockId);
@@ -174,7 +212,12 @@ export const refreshGroupMembers = async (
   // 空结果不写空批（防上游抖动 / LLM 输出全被丢弃时清空分组；spec §4「绝不清空」）
   if (members.length === 0) {
     ctx.logger.warn('[refresh-group] 解析结果为空，保留旧快照（不写空批）', { groupId: group.id });
-    return failure('解析结果为空，未写空批（保留旧快照）', oldIds.length);
+    return failure(
+      '解析结果为空，未写空批（保留旧快照）',
+      oldIds.length,
+      evaluatedStocks,
+      warnings,
+    );
   }
 
   // 全市场刷新的成员多数不在本地 stocks 表：逐条补 stub（幂等 upsert；
@@ -204,6 +247,10 @@ export const refreshGroupMembers = async (
     stockId: m.stockId,
     refreshId,
     reason: m.reason.slice(0, 500),
+    ...(m.score === undefined ? {} : { score: m.score }),
+    evidence: [...m.evidence],
+    ...(m.dataAsOf === undefined ? {} : { dataAsOf: m.dataAsOf }),
+    ...(m.tacticSignalRef === undefined ? {} : { tacticSignalRef: m.tacticSignalRef }),
     createdAt: now,
   }));
   await ctx.repos.groupMember.saveBatch(snapshots);
@@ -215,8 +262,22 @@ export const refreshGroupMembers = async (
   return {
     refreshed: true,
     refreshId,
+    ...(members[0]?.dataAsOf === undefined
+      ? {}
+      : {
+          dataAsOf: new Date(
+            Math.min(
+              ...members
+                .map((member) => member.dataAsOf?.getTime())
+                .filter((value): value is number => value !== undefined),
+            ),
+          ),
+        }),
+    ...(coverage === undefined ? {} : { coverage }),
+    evaluatedStocks,
     memberCount: members.length,
     entered,
     exited,
+    warnings,
   };
 };

@@ -1,8 +1,13 @@
-import type { LLMAdapterLike, StockGroup, Tactic, ToolContext } from '@luoome/core';
-import { stockCode } from '@luoome/core';
+import type {
+  LLMAdapterLike,
+  MarketDataAdapterLike,
+  StockGroup,
+  Tactic,
+  ToolContext,
+} from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildTestContext } from '../testing/context.js';
+import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
 import { refreshStockGroupTool } from './refresh-stock-group.js';
 
 const T0 = new Date('2026-07-22T00:00:00.000Z');
@@ -53,11 +58,23 @@ describe('refresh_stock_group', () => {
 
   it('formula 组：run_tactic 命中 → 写新批次，entered=全部成员', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { observedAt: T0, limit: 2 });
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
     });
-    const r = await refreshStockGroupTool.execute({ groupId: 'g-f' }, ctx);
+    let onlineDailyBarCalls = 0;
+    const market: MarketDataAdapterLike = {
+      ...ctx.adapters.market,
+      name: 'must-not-fetch-online',
+      fetchDailyBars: () => {
+        onlineDailyBarCalls += 1;
+        return Promise.reject(new Error('formula refresh must use local daily bars'));
+      },
+    };
+    const ctx2 = { ...ctx, adapters: { ...ctx.adapters, market } };
+    const r = await refreshStockGroupTool.execute({ groupId: 'g-f' }, ctx2);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.refreshed).toBe(true);
@@ -65,15 +82,29 @@ describe('refresh_stock_group', () => {
     expect(r.data.memberCount).toBeGreaterThan(0);
     expect(r.data.entered.length).toBe(r.data.memberCount);
     expect(r.data.exited).toEqual([]);
+    expect(onlineDailyBarCalls).toBe(0);
 
     const current = await ctx.repos.groupMember.currentMembers('g-f');
     expect(current.length).toBe(r.data.memberCount);
     expect(current[0]?.refreshId).toBe(r.data.refreshId);
     expect(current[0]?.reason).toContain('战法 always-trigger 命中');
+    expect(current[0]).toMatchObject({
+      score: 80,
+      evidence: ['恒触发'],
+      tacticSignalRef: { tacticId: 'always-trigger' },
+    });
+    expect(current[0]?.dataAsOf).toBeInstanceOf(Date);
+    expect(r.data).toMatchObject({
+      coverage: 'CN_A_SHARES_SH_SZ',
+      evaluatedStocks: 2,
+      warnings: [],
+    });
   });
 
   it('formula 组：minScore 高于信号分 → 空结果不写空批（refreshed=false，保留旧快照）', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { observedAt: T0, limit: 2 });
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 90 },
@@ -85,6 +116,7 @@ describe('refresh_stock_group', () => {
         stockId: '002594.SZ',
         refreshId: 'rf-old',
         reason: 'old',
+        evidence: [],
         createdAt: T0,
       },
     ]);
@@ -97,8 +129,41 @@ describe('refresh_stock_group', () => {
     expect(await ctx.repos.groupMember.latestRefreshId('g-f')).toBe('rf-old');
   });
 
+  it('formula 组：本地日线 coverage 不完整时不写部分批次', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { observedAt: T0, limit: 2 });
+    const stocks = await ctx.repos.stockUniverse.listCurrent({
+      coverage: 'CN_A_SHARES_SH_SZ',
+      status: 'active',
+    });
+    const first = stocks[0];
+    if (first === undefined) throw new Error('missing test universe');
+    const end = ctx.clock();
+    const bars = await ctx.adapters.market.fetchDailyBars(first.id, {
+      start: new Date(end.getTime() - 365 * 86_400_000),
+      end,
+    });
+    await ctx.repos.dailyBar.saveMany(bars);
+    await ctx.repos.tactic.save(ALWAYS_TACTIC);
+    await seedGroup(ctx, 'g-f', {
+      resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
+    });
+
+    const result = await refreshStockGroupTool.execute({ groupId: 'g-f' }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.refreshed).toBe(false);
+    expect(result.data.evaluatedStocks).toBe(1);
+    expect(result.data.failureReason).toContain('coverage');
+    expect(result.data.warnings[0]).toContain('expected=2');
+    expect(await ctx.repos.groupMember.latestRefreshId('g-f')).toBeNull();
+  });
+
   it('formula 组：第二次刷新成员集合变化 → entered / exited 正确', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { observedAt: T0, limit: 2 });
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
@@ -111,6 +176,7 @@ describe('refresh_stock_group', () => {
         stockId: '000001.SZ',
         refreshId: 'rf-old',
         reason: 'old',
+        evidence: [],
         createdAt: T0,
       },
     ]);
@@ -120,29 +186,6 @@ describe('refresh_stock_group', () => {
     expect(r.data.refreshed).toBe(true);
     expect(r.data.exited).toEqual(['000001.SZ']);
     expect(r.data.entered.length).toBe(r.data.memberCount);
-  });
-
-  it('formula 组：成员补 stub 时用全市场快照名称；既有代码名 stub 也被改正', async () => {
-    const ctx = await buildTestContext();
-    await ctx.repos.tactic.save(ALWAYS_TACTIC);
-    await seedGroup(ctx, 'g-f', {
-      resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
-    });
-    // 情形一：快照里有、本地 stocks 表没有 → 新建的 stub 必须带真名
-    await ctx.repos.stock.remove('002594.SZ');
-    // 情形二：早期只存了代码名的 stub → 刷新时改正为真名
-    await ctx.repos.stock.save({
-      id: '000858.SZ',
-      code: stockCode('000858'),
-      exchange: 'SZ',
-      name: '000858',
-    });
-    const r = await refreshStockGroupTool.execute({ groupId: 'g-f' }, ctx);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.data.refreshed).toBe(true);
-    expect((await ctx.repos.stock.findById('002594.SZ'))?.name).toBe('比亚迪');
-    expect((await ctx.repos.stock.findById('000858.SZ'))?.name).toBe('五粮液');
   });
 
   it('llm 组：mock LLM 产出 → 写新批次', async () => {
@@ -170,6 +213,7 @@ describe('refresh_stock_group', () => {
         stockId: '002594.SZ',
         refreshId: 'rf-old',
         reason: 'old',
+        evidence: [],
         createdAt: T0,
       },
     ]);

@@ -13,6 +13,7 @@ import {
 import type {
   Advice,
   AgentRuntimeLike,
+  AShareSentimentManagerLike,
   LimitUpLadderManagerLike,
   Logger,
   RepositoryRegistry,
@@ -29,6 +30,7 @@ export interface BuildTestContextOptions {
   /** 可选注入连板天梯 manager（Phase 2 接入 web API 测试）。 */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
   readonly stockUniverse?: StockUniverseManagerLike;
+  readonly ashareSentiment?: AShareSentimentManagerLike;
 }
 
 const createSilentLogger = (): Logger => {
@@ -71,11 +73,59 @@ export const buildTestContext = async (
     clock: businessClock,
     logger: opts.logger ?? createSilentLogger(),
     ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
+    ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
   };
   if (opts.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: opts.limitUpLadder };
   }
   return ctx;
+};
+
+export const seedTestStockUniverse = async (
+  ctx: ToolContext,
+  input: {
+    readonly syncId?: string;
+    readonly observedAt?: Date;
+    readonly limit?: number;
+  } = {},
+): Promise<void> => {
+  const observedAt = input.observedAt ?? new Date('2026-07-28T08:00:00.000Z');
+  const stocks = TEST_STOCKS.filter(
+    (stock) => stock.exchange === 'SH' || stock.exchange === 'SZ',
+  ).slice(0, input.limit);
+  await ctx.repos.stockUniverse.applySnapshot({
+    syncId: input.syncId ?? 'sync-test-stock-universe',
+    appliedAt: observedAt,
+    snapshot: {
+      source: 'test-universe',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      observedAt,
+      complete: true,
+      reportedTotal: stocks.length,
+      entries: stocks.map((stock) => ({
+        stockId: stock.id,
+        code: stock.code,
+        exchange: stock.exchange,
+        name: stock.name,
+        listingStatus: 'listed' as const,
+        ...(stock.industry === undefined ? {} : { industry: stock.industry }),
+      })),
+    },
+  });
+};
+
+/** 为 active 测试目录预置规范 qfq 日线，供 localDataOnly 的盘外研究刷新使用。 */
+export const seedTestDailyBars = async (ctx: ToolContext): Promise<void> => {
+  const stocks = await ctx.repos.stockUniverse.listCurrent({
+    coverage: 'CN_A_SHARES_SH_SZ',
+    status: 'active',
+  });
+  const end = ctx.clock();
+  const start = new Date(end.getTime() - 365 * 86_400_000);
+  for (const stock of stocks) {
+    const bars = await ctx.adapters.market.fetchDailyBars(stock.id, { start, end });
+    await ctx.repos.dailyBar.saveMany(bars);
+  }
 };
 
 const createTestNotificationManager = (repos: RepositoryRegistry) => ({

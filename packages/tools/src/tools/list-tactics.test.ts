@@ -3,13 +3,15 @@ import { buildTestContext } from '../testing/context.js';
 import { listTacticsTool } from './list-tactics.js';
 
 describe('tool/list_tactics', () => {
-  it('返回 5 个内置战法（默认 includeBuiltins=true）', async () => {
+  it('返回包含第二批策略的 7 个内置战法（默认 includeBuiltins=true）', async () => {
     const ctx = await buildTestContext();
     const r = await listTacticsTool.execute({ filter: undefined, includeBuiltins: true }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.data.tactics.length).toBeGreaterThanOrEqual(5);
+    expect(r.data.tactics.length).toBeGreaterThanOrEqual(7);
     expect(r.data.tactics.map((t) => t.id)).toContain('breakout-volume');
+    expect(r.data.tactics.map((t) => t.id)).toContain('early-breakout');
+    expect(r.data.tactics.map((t) => t.id)).toContain('bollinger-band');
     expect(r.data.tactics.every((t) => t.source === 'builtin')).toBe(true);
   });
 

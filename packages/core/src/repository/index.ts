@@ -4,7 +4,9 @@ import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { Holding } from '../entity/holding.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
+import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
 import type { ResearchNote, ResearchNoteKind } from '../entity/research-note.js';
+import type { SignalObservation, SignalObservationStatus } from '../entity/signal-observation.js';
 import type { Stock } from '../entity/stock.js';
 import type { StockEvent, StockEventKind, StockEventStatus } from '../entity/stock-event.js';
 import type { GroupMemberSnapshot, StockGroup } from '../entity/stock-group.js';
@@ -115,6 +117,26 @@ export interface AdviceRepository {
   recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void>;
 }
 
+export interface ReportRepository {
+  upsertForPeriod(report: Report): Promise<Report>;
+  findById(id: string): Promise<Report | null>;
+  findByPeriod(input: {
+    readonly kind: ReportKind;
+    readonly scopeKey: string;
+    readonly periodStart: string;
+    readonly periodEnd: string;
+  }): Promise<Report | null>;
+  list(input?: {
+    readonly kind?: ReportKind;
+    readonly scopeKey?: string;
+    readonly from?: string;
+    readonly to?: string;
+    readonly status?: ReportStatus;
+    readonly limit?: number;
+  }): Promise<readonly Report[]>;
+  setDeliveryStatus(id: string, status: DeliveryStatus): Promise<void>;
+}
+
 export interface RepositoryRegistry {
   readonly account: AccountRepository;
   readonly stock: StockRepository;
@@ -123,10 +145,14 @@ export interface RepositoryRegistry {
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
   readonly advice: AdviceRepository;
+  /** A 股个性化简报历史；按 kind/scope/period 逻辑键幂等更新。 */
+  readonly report: ReportRepository;
   /** v0.2 起；MarketDataManager 等会调 save / latestByStock。 */
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
   readonly dailyBar: DailyBarRepository;
+  /** Phase 6：信号后的事实表现观察，不包含回测交易。 */
+  readonly signalObservation: SignalObservationRepository;
   /** v0.3 起；run_tactic / list_tactics 用。 */
   readonly tactic: TacticRepository;
   /** v0.3 起；send_notification 落库 + 复盘查询。 */
@@ -151,6 +177,18 @@ export interface RepositoryRegistry {
   readonly workflowRun: WorkflowRunRepository;
   /** Web AI 对话：账户隔离的会话与 UI message parts。 */
   readonly chat: ChatRepository;
+}
+
+export interface SignalObservationRepository {
+  save(observation: SignalObservation): Promise<void>;
+  findById(id: string): Promise<SignalObservation | null>;
+  list(input?: {
+    readonly status?: SignalObservationStatus;
+    readonly sourceKind?: SignalObservation['sourceKind'];
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly limit?: number;
+  }): Promise<readonly SignalObservation[]>;
 }
 
 export interface ChatRepository {

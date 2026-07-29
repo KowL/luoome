@@ -2,6 +2,7 @@ import { StockGroupSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import { isGroupStale } from '../internal/stock-group.js';
 
 export const ListStockGroupsInput = z.object({
   /** true 仅返回 enabled=true；默认 false 返回全部。 */
@@ -15,6 +16,9 @@ export const ListStockGroupsOutput = z.object({
     z.object({
       group: StockGroupSchema,
       memberCount: z.number().int().nonnegative().optional(),
+      latestRefreshAt: z.coerce.date().optional(),
+      dataAsOf: z.coerce.date().optional(),
+      stale: z.boolean().optional(),
     }),
   ),
   total: z.number().int().nonnegative(),
@@ -34,7 +38,13 @@ export const listStockGroupsTool = defineTool({
   output: ListStockGroupsOutput,
   handler: async (input, ctx) => {
     const groups = await ctx.repos.stockGroup.list(input.enabledOnly);
-    const out: Array<{ group: (typeof groups)[number]; memberCount?: number }> = [];
+    const out: Array<{
+      group: (typeof groups)[number];
+      memberCount?: number;
+      latestRefreshAt?: Date;
+      dataAsOf?: Date;
+      stale?: boolean;
+    }> = [];
     for (const group of groups) {
       if (!input.includeMemberCount) {
         out.push({ group });
@@ -48,7 +58,20 @@ export const listStockGroupsTool = defineTool({
         const holdings = await ctx.repos.holding.listByAccount(resolver.accountId);
         memberCount = holdings.filter((h) => h.closedAt === null).length;
       } else {
-        memberCount = (await ctx.repos.groupMember.currentMembers(group.id)).length;
+        const members = await ctx.repos.groupMember.currentMembers(group.id);
+        memberCount = members.length;
+        const latestRefreshAt = members[0]?.createdAt;
+        const dataTimes = members
+          .map((member) => member.dataAsOf?.getTime())
+          .filter((value): value is number => value !== undefined);
+        out.push({
+          group,
+          memberCount,
+          ...(latestRefreshAt === undefined ? {} : { latestRefreshAt }),
+          ...(dataTimes.length === 0 ? {} : { dataAsOf: new Date(Math.min(...dataTimes)) }),
+          stale: isGroupStale(group, latestRefreshAt ?? null, ctx.clock()),
+        });
+        continue;
       }
       out.push({ group, memberCount });
     }

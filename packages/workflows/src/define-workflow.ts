@@ -24,6 +24,8 @@ import type {
   GetAdviceOutput,
   GetAdviceStatsInput,
   GetAdviceStatsOutput,
+  GetAShareSentimentInput,
+  GetAShareSentimentOutput,
   GetConfidenceCalibrationInput,
   GetConfidenceCalibrationOutput,
   GetHoldingInput,
@@ -44,6 +46,8 @@ import type {
   ListAccountsOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
+  ListStockEventsInput,
+  ListStockEventsOutput,
   // 分组化起：分组 CRUD + 刷新 + LLM 解析
   ListStockGroupsInput,
   ListStockGroupsOutput,
@@ -52,16 +56,26 @@ import type {
   ListStockPoolsOutput,
   ListTacticsInput,
   ListTacticsOutput,
+  ListWatchPlansInput,
+  ListWatchPlansOutput,
+  ListWatchTriggersInput,
+  ListWatchTriggersOutput,
   MarketOutlookInput,
   MarketOutlookOutput,
   RecordAdviceOutcomeInput,
   RecordAdviceOutcomeOutput,
+  RecordWorkflowRunInput,
+  RecordWorkflowRunOutput,
   RefreshStockGroupInput,
   RefreshStockGroupOutput,
+  RenderReportInput,
+  RenderReportOutput,
   ResolveLlmGroupInput,
   ResolveLlmGroupOutput,
   RunTacticInput,
   RunTacticOutput,
+  SaveReportInput,
+  SaveReportOutput,
   SaveWatchTriggerInput,
   SaveWatchTriggerOutput,
   ScoreSignalsInput,
@@ -70,6 +84,8 @@ import type {
   SearchStocksOutput,
   SendNotificationInput,
   SendNotificationOutput,
+  SetReportDeliveryStatusInput,
+  SetReportDeliveryStatusOutput,
   SetWatchTriggerFeedbackInput,
   SetWatchTriggerFeedbackOutput,
   SyncDailyBarsInput,
@@ -113,6 +129,10 @@ export interface WorkflowToolMap {
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
   readonly get_advice: ToolAccessor<typeof GetAdviceInput, typeof GetAdviceOutput>;
   readonly get_advice_stats: ToolAccessor<typeof GetAdviceStatsInput, typeof GetAdviceStatsOutput>;
+  readonly get_ashare_sentiment: ToolAccessor<
+    typeof GetAShareSentimentInput,
+    typeof GetAShareSentimentOutput
+  >;
   // v0.5 W4：confidence 自校准（advice 历史桶聚合）
   readonly get_confidence_calibration: ToolAccessor<
     typeof GetConfidenceCalibrationInput,
@@ -166,6 +186,16 @@ export interface WorkflowToolMap {
     typeof RecordAdviceOutcomeInput,
     typeof RecordAdviceOutcomeOutput
   >;
+  readonly record_workflow_run: ToolAccessor<
+    typeof RecordWorkflowRunInput,
+    typeof RecordWorkflowRunOutput
+  >;
+  readonly save_report: ToolAccessor<typeof SaveReportInput, typeof SaveReportOutput>;
+  readonly render_report: ToolAccessor<typeof RenderReportInput, typeof RenderReportOutput>;
+  readonly set_report_delivery_status: ToolAccessor<
+    typeof SetReportDeliveryStatusInput,
+    typeof SetReportDeliveryStatusOutput
+  >;
   readonly send_notification: ToolAccessor<
     typeof SendNotificationInput,
     typeof SendNotificationOutput
@@ -193,6 +223,15 @@ export interface WorkflowToolMap {
   readonly list_stock_groups: ToolAccessor<
     typeof ListStockGroupsInput,
     typeof ListStockGroupsOutput
+  >;
+  readonly list_stock_events: ToolAccessor<
+    typeof ListStockEventsInput,
+    typeof ListStockEventsOutput
+  >;
+  readonly list_watch_plans: ToolAccessor<typeof ListWatchPlansInput, typeof ListWatchPlansOutput>;
+  readonly list_watch_triggers: ToolAccessor<
+    typeof ListWatchTriggersInput,
+    typeof ListWatchTriggersOutput
   >;
   readonly get_stock_group: ToolAccessor<typeof GetStockGroupInput, typeof GetStockGroupOutput>;
   readonly create_stock_group: ToolAccessor<

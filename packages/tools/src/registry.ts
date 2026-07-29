@@ -32,18 +32,23 @@ import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
+import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getHoldingTool } from './tools/get-holding.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
+import { getReportTool } from './tools/get-report.js';
+import { getSignalObservationStatsTool } from './tools/get-signal-observation-stats.js';
 import { getStockGroupTool } from './tools/get-stock-group.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
 import { getTacticTool } from './tools/get-tactic.js';
+import { getTacticConsensusTool } from './tools/get-tactic-consensus.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
+import { listReportsTool } from './tools/list-reports.js';
 import { listResearchNotesTool } from './tools/list-research-notes.js';
 import { listStockEventsTool } from './tools/list-stock-events.js';
 import { listStockGroupsTool } from './tools/list-stock-groups.js';
@@ -56,13 +61,18 @@ import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { recordWatchRunTool } from './tools/record-watch-run.js';
+import { recordWorkflowRunTool } from './tools/record-workflow-run.js';
+import { refreshSignalObservationsTool } from './tools/refresh-signal-observations.js';
 import { refreshStockGroupTool } from './tools/refresh-stock-group.js';
+import { renderReportTool } from './tools/render-report.js';
 import { resolveLlmGroupTool } from './tools/resolve-llm-group.js';
 import { runTacticTool } from './tools/run-tactic.js';
+import { saveReportTool } from './tools/save-report.js';
 import { saveWatchTriggerTool } from './tools/save-watch-trigger.js';
 import { scoreSignalsTool } from './tools/score-signals.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
+import { setReportDeliveryStatusTool } from './tools/set-report-delivery-status.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
@@ -236,11 +246,14 @@ export const toolRegistry: Registry = createRegistry([
   // 分组化起（docs/ddd/stock-group-design.md §6）：分组 CRUD + 刷新 + LLM 解析
   listStockGroupsTool,
   getStockGroupTool,
+  getTacticConsensusTool,
+  getSignalObservationStatsTool,
   createStockGroupTool,
   updateStockGroupTool,
   deleteStockGroupTool,
   addGroupMemberTool,
   refreshStockGroupTool,
+  refreshSignalObservationsTool,
   resolveLlmGroupTool,
   // v0.7 策略预警：触发反馈（write）
   setWatchTriggerFeedbackTool,
@@ -256,7 +269,14 @@ export const toolRegistry: Registry = createRegistry([
   syncStockEventsTool,
   syncStockUniverseTool,
   getMarketDataStatusTool,
+  getAShareSentimentTool,
   listWorkflowRunsTool,
+  recordWorkflowRunTool,
+  getReportTool,
+  listReportsTool,
+  saveReportTool,
+  setReportDeliveryStatusTool,
+  renderReportTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
   getStockUniverseStatusTool,

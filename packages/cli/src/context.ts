@@ -12,14 +12,14 @@ import { join } from 'node:path';
 
 import {
   createAIStackFromEnv,
+  createAShareSentimentManagerFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
-import { BUILTIN_TACTICS } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext } from '@luoome/tools';
+import { buildContext, ensureBuiltinTactics } from '@luoome/tools';
 
 import { luoomeHome } from './paths.js';
 
@@ -58,12 +58,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const dbPath = join(home, 'luoome.db');
 
   const { repos, close } = createDrizzleRepos(dbPath);
-  // v0.3 起：注入 5 个内置战法（首次运行或空库）
-  for (const t of BUILTIN_TACTICS) {
-    if ((await repos.tactic.findById(t.id)) === null) {
-      await repos.tactic.save(t);
-    }
-  }
+  await ensureBuiltinTactics(repos);
 
   const now = (): Date => new Date();
   const accounts = await repos.account.list();
@@ -93,6 +88,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     clock: now,
     logger,
     limitUpLadder,
+    ashareSentiment: createAShareSentimentManagerFromEnv(process.env, { clock: now, logger }),
   });
 
   return { ctx, dbPath, close };

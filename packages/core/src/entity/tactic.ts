@@ -131,12 +131,12 @@ export const assertTacticSignalInvariants = (signal: TacticSignal): void => {
   }
 };
 
-// ---------- 内置战法（v0.3 全部 5 个；fixtures 与 DSL 引擎同时使用） ----------
+// ---------- 内置战法（fixtures 与 DSL 引擎同时使用） ----------
 
 /** builtin 战法定义时间（固化，避免每次 new Date 漂移）。 */
 export const TACTIC_BUILTIN_DEFINED_AT = new Date('2026-07-01T00:00:00.000Z');
 
-/** 5 个内置战法（fixture，详见 plan-v0.2-v0.3 §3.4 / DSL 示例 §2.4）。 */
+/** 内置战法（fixture，详见迁移详细设计 §12.5 / DSL 示例 §2.4）。 */
 export const BUILTIN_TACTICS: readonly Tactic[] = [
   {
     id: 'breakout-volume',
@@ -231,6 +231,52 @@ export const BUILTIN_TACTICS: readonly Tactic[] = [
       '板块 3 日均涨 ${meta.sectorAvgChange3d}',
       // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
       '个股 3 日涨幅 ${meta.stockChange3d}',
+    ],
+    source: 'builtin',
+    definedAt: TACTIC_BUILTIN_DEFINED_AT,
+  },
+  {
+    id: 'early-breakout',
+    name: '早期突破',
+    tag: 'momentum',
+    description: '价格刚站上 MA20/MA60，20 日动量 2%～15%、RSI14 处于 45～70，且量能温和放大',
+    triggerWhen:
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '${indicators.close} > ${indicators.ma20} && ${indicators.ma5} > ${indicators.ma20} && ${indicators.momentum20Pct} >= 2 && ${indicators.momentum20Pct} <= 15 && ${indicators.volRatio5_20} >= 1.2 && ${indicators.rsi14} >= 45 && ${indicators.rsi14} <= 70 && ${indicators.maDistance20Pct} <= 12 && (${indicators.daysSinceMa20CrossUp} <= 2 || ${indicators.daysSinceMa60CrossUp} <= 2 || ${indicators.daysAboveMa20} <= 3)',
+    scoreExpression:
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      'Math.min(100, 40 + Math.min(20, (${indicators.volRatio5_20} - 1.2) * 10) + Math.max(0, 20 - Math.abs(${indicators.momentum20Pct} - 8) * 2) + Math.max(0, 20 - Math.abs(${indicators.rsi14} - 60) * 0.8))',
+    direction: 'bullish',
+    evidenceTemplate: [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '20日动量=${indicators.momentum20Pct}%，RSI14=${indicators.rsi14}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '量比=${indicators.volRatio5_20}，MA20距离=${indicators.maDistance20Pct}%',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      'MA20上穿距今=${indicators.daysSinceMa20CrossUp}日，连续站上MA20=${indicators.daysAboveMa20}日',
+    ],
+    source: 'builtin',
+    definedAt: TACTIC_BUILTIN_DEFINED_AT,
+  },
+  {
+    id: 'bollinger-band',
+    name: '布林带均值回复',
+    tag: 'mean-reversion',
+    description: '价格跌至 Bollinger 20 日下轨、RSI14 低于 45，但仍位于 MA60 上方的超跌研究信号',
+    triggerWhen:
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '${indicators.close} < ${indicators.ma20} && ${indicators.close} > ${indicators.ma60} && ${indicators.rsi14} < 45 && ${indicators.momentum20Pct} > -15 && ${indicators.volRatio5_20} >= 1 && ${indicators.bollPosition20} <= 0',
+    scoreExpression:
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      'Math.min(100, Math.abs(${indicators.maDistance20Pct}) * 3 + ${indicators.volRatio5_20} * 15 + (45 - ${indicators.rsi14}))',
+    direction: 'bullish',
+    evidenceTemplate: [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '收盘=${indicators.close} ≤ Bollinger下轨=${indicators.bollLower20}，位置=${indicators.bollPosition20}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      'RSI14=${indicators.rsi14}，MA20距离=${indicators.maDistance20Pct}%',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '长期趋势未破：收盘=${indicators.close} > MA60=${indicators.ma60}',
     ],
     source: 'builtin',
     definedAt: TACTIC_BUILTIN_DEFINED_AT,

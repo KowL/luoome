@@ -103,6 +103,17 @@ export const GroupMemberSnapshotSchema = z.object({
   /** 同一批刷新共享；当前成员 = 最新 refreshId 那一批。 */
   refreshId: z.string().min(1),
   reason: z.string().min(1).max(500),
+  /** 确定性规则排序分，不是收益概率或置信度。 */
+  score: z.number().min(0).max(100).optional(),
+  evidence: z.array(z.string().min(1)).max(16).default([]),
+  /** 产生成员时所用行情的截止时间；旧快照允许缺失。 */
+  dataAsOf: z.coerce.date().optional(),
+  tacticSignalRef: z
+    .object({
+      tacticId: z.string().min(1),
+      ts: z.coerce.date(),
+    })
+    .optional(),
   createdAt: z.coerce.date(),
 });
 

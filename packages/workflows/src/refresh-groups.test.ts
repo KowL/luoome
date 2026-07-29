@@ -1,5 +1,5 @@
 import type { LLMAdapterLike, StockGroup, Tactic, ToolContext } from '@luoome/core';
-import { buildTestContext } from '@luoome/tools/testing';
+import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { refreshGroupsWorkflow } from './refresh-groups.js';
@@ -40,6 +40,8 @@ const failingLlm: LLMAdapterLike = {
 describe('refresh-groups workflow', () => {
   it('formula 组成功：写新批次，refreshed + entered 正确', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx);
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
@@ -84,6 +86,7 @@ describe('refresh-groups workflow', () => {
         stockId: '002594.SZ',
         refreshId: 'rf-old',
         reason: 'old',
+        evidence: [],
         createdAt: T0,
       },
     ]);
@@ -103,6 +106,8 @@ describe('refresh-groups workflow', () => {
 
   it('成员变化检测：旧批退出 + 新批进入', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx);
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-f', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
@@ -115,6 +120,7 @@ describe('refresh-groups workflow', () => {
         stockId: '000001.SZ',
         refreshId: 'rf-old',
         reason: 'old',
+        evidence: [],
         createdAt: T0,
       },
       {
@@ -123,6 +129,7 @@ describe('refresh-groups workflow', () => {
         stockId: '002594.SZ',
         refreshId: 'rf-old',
         reason: 'old',
+        evidence: [],
         createdAt: T0,
       },
     ]);
@@ -138,6 +145,8 @@ describe('refresh-groups workflow', () => {
 
   it('groupIds 子集：只刷新指定分组', async () => {
     const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx);
+    await seedTestDailyBars(ctx);
     await ctx.repos.tactic.save(ALWAYS_TACTIC);
     await seedGroup(ctx, 'g-a', {
       resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },

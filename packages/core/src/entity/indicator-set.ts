@@ -6,17 +6,24 @@ import { z } from 'zod';
  * 设计要点：
  * - `TechnicalIndicators`（同名 schema）保留 `Record<string, number>` 风格以承接
  *   v0.1 的 `computeSimpleIndicators` 输出与 `AdviceDataSnapshot.indicators` 形状。
- * - 新增 `KNOWN_INDICATOR_KEYS`：战法 DSL（v0.3）+ LLM 提示词可以枚举已知指标名，
+ * - `KNOWN_INDICATOR_KEYS`：战法 DSL + LLM 提示词可以枚举已知指标名，
  *   不再依赖字符串拼写，避免「vol_ratio_5_20」vs「volRatio5_20」的笔误事故。
  * - 不变量保持：每个值必须有限数（拒绝 NaN / Infinity）。
  */
 
 /** 已知指标名集合（顺序固定，便于文档 / prompt / 战法 DSL 枚举）。 */
 export const KNOWN_INDICATOR_KEYS = [
+  'close',
   'ma5',
   'ma10',
   'ma20',
   'ma60',
+  'momentum20Pct',
+  'maDistance20Pct',
+  'maDistance60Pct',
+  'daysSinceMa20CrossUp',
+  'daysSinceMa60CrossUp',
+  'daysAboveMa20',
   'rsi14',
   'macdDif',
   'macdDea',
@@ -26,16 +33,28 @@ export const KNOWN_INDICATOR_KEYS = [
   'volRatio5_20', // (volMa5 / volMa20)，v0.2 新增，供「放量突破」战法用
   'high20', // 近 20 日最高收盘，v0.2 新增
   'low20', // 近 20 日最低收盘，v0.2 新增
+  'bollMiddle20',
+  'bollUpper20',
+  'bollLower20',
+  'bollBandwidth20Pct',
+  'bollPosition20',
 ] as const;
 
 export type KnownIndicatorKey = (typeof KNOWN_INDICATOR_KEYS)[number];
 
 /** 类型层暴露「已知指标 key 的有限类型」 + 任意额外 number 字段。 */
 export interface TechnicalIndicators {
+  readonly close?: number;
   readonly ma5?: number;
   readonly ma10?: number;
   readonly ma20?: number;
   readonly ma60?: number;
+  readonly momentum20Pct?: number;
+  readonly maDistance20Pct?: number;
+  readonly maDistance60Pct?: number;
+  readonly daysSinceMa20CrossUp?: number;
+  readonly daysSinceMa60CrossUp?: number;
+  readonly daysAboveMa20?: number;
   readonly rsi14?: number;
   readonly macdDif?: number;
   readonly macdDea?: number;
@@ -45,15 +64,27 @@ export interface TechnicalIndicators {
   readonly volRatio5_20?: number;
   readonly high20?: number;
   readonly low20?: number;
+  readonly bollMiddle20?: number;
+  readonly bollUpper20?: number;
+  readonly bollLower20?: number;
+  readonly bollBandwidth20Pct?: number;
+  readonly bollPosition20?: number;
   readonly [key: string]: number | undefined;
 }
 
 export const TechnicalIndicatorsSchema = z
   .object({
+    close: z.number().optional(),
     ma5: z.number().optional(),
     ma10: z.number().optional(),
     ma20: z.number().optional(),
     ma60: z.number().optional(),
+    momentum20Pct: z.number().optional(),
+    maDistance20Pct: z.number().optional(),
+    maDistance60Pct: z.number().optional(),
+    daysSinceMa20CrossUp: z.number().optional(),
+    daysSinceMa60CrossUp: z.number().optional(),
+    daysAboveMa20: z.number().optional(),
     rsi14: z.number().optional(),
     macdDif: z.number().optional(),
     macdDea: z.number().optional(),
@@ -63,6 +94,11 @@ export const TechnicalIndicatorsSchema = z
     volRatio5_20: z.number().optional(),
     high20: z.number().optional(),
     low20: z.number().optional(),
+    bollMiddle20: z.number().optional(),
+    bollUpper20: z.number().optional(),
+    bollLower20: z.number().optional(),
+    bollBandwidth20Pct: z.number().optional(),
+    bollPosition20: z.number().optional(),
   })
   .catchall(z.number().optional());
 

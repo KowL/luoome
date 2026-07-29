@@ -14,12 +14,16 @@ export const RefreshStockGroupOutput = z.object({
   failureReason: z.string().optional(),
   /** 新批次 refreshId；未写批次为 null。 */
   refreshId: z.string().nullable(),
+  dataAsOf: z.coerce.date().optional(),
+  coverage: z.literal('CN_A_SHARES_SH_SZ').optional(),
+  evaluatedStocks: z.number().int().nonnegative(),
   /** 刷新后当前成员数（未写批次时为旧批成员数）。 */
   memberCount: z.number().int().nonnegative(),
   /** 相对旧批新进的 stockId。 */
   entered: z.array(z.string()),
   /** 相对旧批退出的 stockId。 */
   exited: z.array(z.string()),
+  warnings: z.array(z.string()),
 });
 
 /**
@@ -51,9 +55,13 @@ export const refreshStockGroupTool = defineTool({
       refreshed: outcome.refreshed,
       ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
       refreshId: outcome.refreshId,
+      ...(outcome.dataAsOf === undefined ? {} : { dataAsOf: outcome.dataAsOf }),
+      ...(outcome.coverage === undefined ? {} : { coverage: outcome.coverage }),
+      evaluatedStocks: outcome.evaluatedStocks,
       memberCount: outcome.memberCount,
       entered: [...outcome.entered],
       exited: [...outcome.exited],
+      warnings: [...outcome.warnings],
     };
   },
 });

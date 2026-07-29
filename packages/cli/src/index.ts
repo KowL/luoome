@@ -595,6 +595,16 @@ const cmdWorkflowRun = async (
   } catch (error) {
     throw new CliUsageError(`--input 必须是合法 JSON: ${(error as Error).message}`);
   }
+  const mode = flagString(flags, 'mode');
+  if (mode !== undefined) {
+    if (mode !== 'manual' && mode !== 'scheduled') {
+      throw new CliUsageError('--mode 仅支持 manual / scheduled');
+    }
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      throw new CliUsageError('使用 --mode 时，--input 必须是 JSON 对象');
+    }
+    input = { ...input, mode };
+  }
   // workflow 注册表：v0.2 起 sync-quotes / daily-advice。
   const workflows = await import('@luoome/workflows');
   type Wf = {
@@ -609,7 +619,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report）`,
     );
   }
   const handle = await createCliContext();
@@ -754,7 +764,7 @@ Surfaces:
                                按端口反查旧进程 SIGTERM 后再 start，无需手动 kill
   web serve [--port 5173] [--host 127.0.0.1] [--foreground]
                                仅启动 Web 仪表盘；默认后台运行（同 start）
-  workflow run <name>          跑内置 workflow（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review / intraday-watch / refresh-groups / sync-stock-events / evaluate-event-rules）
+  workflow run <name>          跑内置 workflow（含 opening-report / closing-report / weekly-report）
   watch [--interval 60] [--pool <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
                                 （每日首个交易轮次前自动刷新 stale 的 daily 动态分组：refresh-groups）
@@ -825,7 +835,9 @@ const run = async (argv: readonly string[]): Promise<number> => {
     if (sub === 'run') {
       const name = rest[0];
       if (name === undefined) {
-        throw new CliUsageError(`用法: luoome workflow run <name> [--input '<json>']`);
+        throw new CliUsageError(
+          `用法: luoome workflow run <name> [--input '<json>'] [--mode manual|scheduled]`,
+        );
       }
       return cmdWorkflowRun(name, flags, json);
     }

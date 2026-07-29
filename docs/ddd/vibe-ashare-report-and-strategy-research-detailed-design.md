@@ -1,8 +1,8 @@
 # Vibe A 股市场报告与策略研究迁移详细设计
 
-> 状态：**设计评审通过，待实现**
+> 状态：**实施中（Phase 0、Phase 1、Phase 2、Phase 3、Phase 4、Phase 5 已完成）**
 >
-> 日期：2026-07-28
+> 日期：2026-07-29
 >
 > 产品输入：[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)、
 > [策略预警产品文档](../prd/strategy-alert-product.md)
@@ -539,9 +539,15 @@ interface AShareSentimentSource {
 
 首期 Implementation：
 
-- `EastmoneyAShareSentimentAdapter`：封板池、炸板池、连板、封单、行业和概念。
+- `EastmoneyAShareSentimentAdapter`：封板池、炸板池、连板、封单和行业；概念字段需另选
+  已验证来源。
 - `TushareAShareSentimentAdapter`：仅在配置 token 且相应 Interface 已验证时注册为 fallback。
 - 指数与宽度不塞入此 Adapter；由现有 MarketData Adapter 和全市场快照/日线归档提供。
+
+Phase 2 实施事实：东方财富涨停池只提供可靠的行业字段，没有可验证的概念字段，因此
+`themes` 返回行业统计、空 concepts、`status='partial'` 与明确 warning，不把行业冒充概念。
+炸板池只支持近期交易日；超出上游可查询范围时 `limitUp` 按维度降级为 partial，不用 0
+伪装炸板家数。待验证独立概念来源后再把 `themes` 提升为 complete。
 
 `AShareSentimentManager` 隐藏：
 
@@ -1207,47 +1213,49 @@ Vibe 当前快照仅在进程内，默认没有可靠存量可导入。旧设计
 
 ### Phase 1：Report core 与历史
 
-- `Report` schema、不变量和导出。
-- ReportRepository 双 Adapter、SQLite schema、ensureSchema。
-- get/list/save/render report tools。
-- repository、tool 和 renderer 测试。
-- Web 历史/详情只读页面。
+- [x] `Report` schema、不变量和导出。
+- [x] ReportRepository 双 Adapter、SQLite schema、ensureSchema。
+- [x] get/list/save/render report tools。
+- [x] repository、tool 和 renderer 测试。
+- [x] Web 历史/详情只读页面。
 
 ### Phase 2：A 股情绪证据
 
-- `AShareSentimentSnapshot` schema。
-- Eastmoney sentiment Adapter/Manager。
-- 封板/炸板/封单/热点 fixture。
-- get_ashare_sentiment tool。
-- 与 IndexQuote、MarketSnapshot/DailyBar breadth 组合。
+- [x] `AShareSentimentSnapshot` schema。
+- [x] Eastmoney sentiment Adapter/Manager。
+- [x] 封板/炸板/封单/热点 fixture。
+- [x] get_ashare_sentiment tool。
+- [x] 组合请求交易日一致的 IndexQuote；MarketSnapshot/DailyBar 完整性信封落地前，
+  breadth 按 §8.3 明确返回 unavailable。
 
 ### Phase 3：三类报告 workflow
 
-- opening-report。
-- closing-report。
-- weekly-report。
-- WorkflowRun、partial、幂等、通知和 cron 文档。
-- Web 手动生成、状态与导出。
+- [x] opening-report。
+- [x] closing-report。
+- [x] weekly-report。
+- [x] WorkflowRun、partial、幂等、通知和 cron 文档。
+- [x] Web 手动生成、状态与导出。
 
 ### Phase 4：策略研究首期
 
-- GroupMemberSnapshot 增量字段和兼容迁移。
-- formula refresh 保存 score/evidence/dataAsOf。
-- get_tactic_consensus。
-- 战法/分组页面研究视图。
-- `trend_timing` 到现有 Tactic 组合的 golden tests。
+- [x] GroupMemberSnapshot 增量字段和兼容迁移。
+- [x] formula refresh 保存 score/evidence/dataAsOf。
+- [x] get_tactic_consensus。
+- [x] 战法/分组页面研究视图。
+- [x] `trend_timing` 到现有 Tactic 组合的 golden tests。
 
 ### Phase 5：第二批策略
 
-- RSI、MA 交叉距离、Bollinger 指标。
-- `early_breakout`、`bollinger_band` Tactic。
-- 两个以上复杂算法准备完成后再启用 strategy resolver。
+- [x] RSI、20 日动量、MA20/MA60 距离与上穿新鲜度指标。
+- [x] Bollinger 20 日上下轨、带宽和位置指标。
+- [x] `early-breakout`、`bollinger-band` Tactic。
+- [x] 复杂横截面算法尚未达到两个，保持 strategy resolver 关闭。
 
 ### Phase 6：真实观察与回测
 
-- SignalObservation。
-- 样本统计和共振后续表现。
-- 满足 §17.3 后才建设回测 Module 和曲线。
+- [x] SignalObservation：WatchTrigger / TacticSignal 建立 T+1/3/5/20 的可审计观察记录。
+- [x] 本地日线完成观察，样本统计返回样本数、时间范围、缺失率及收益描述统计。
+- [x] benchmark 未接入时显式标为 unavailable；满足 §17.3 后才建设回测 Module 和曲线。
 
 ## 19. 文件影响范围
 
@@ -1387,40 +1395,42 @@ Drizzle/in-memory 共用：
 
 ### 报告
 
-- [ ] 同一 kind/scope/period 重跑只有一条 Report。
-- [ ] 开盘、收盘、周报使用正确上海交易日。
-- [ ] generatedAt 与 dataAsOf 分离展示。
-- [ ] required 维度缺失时 Report 为 partial 且原因可见。
-- [ ] provider 失败不显示正常 0 值。
-- [ ] 报告重启后仍可查询和导出。
-- [ ] Markdown 由结构化 block 派生。
-- [ ] 外部 cron 重复运行不产生重复报告。
-- [ ] 通知失败不丢报告。
-- [ ] 自动报告不调用 Advice 或 Trade。
+- [x] 同一 kind/scope/period 重跑只有一条 Report。
+- [x] 开盘、收盘、周报使用正确上海交易日。
+- [x] generatedAt 与 dataAsOf 分离展示。
+- [x] required 维度缺失时 Report 为 partial 且原因可见。
+- [x] provider 失败不显示正常 0 值。
+- [x] 报告重启后仍可查询和导出。
+- [x] Markdown 由结构化 block 派生。
+- [x] 外部 cron 重复运行不产生重复报告。
+- [x] 通知失败不丢报告。
+- [x] 自动报告不生成 Advice，也不调用 Trade。
 
 ### 策略研究
 
-- [ ] formula group 保存 score/evidence/dataAsOf。
-- [ ] 刷新重启后结果仍存在。
-- [ ] all-stocks coverage 明确为沪深 A 股。
-- [ ] coverage 不会混入北交所或用 `Market='cn-a'` 替代。
-- [ ] 刷新不执行逐股在线 K 线请求。
-- [ ] 同日共振排除 stale 和不同 marketDate 批次。
-- [ ] 支持和反对信号同时可见。
-- [ ] rankScore 不标注为 confidence/胜率。
-- [ ] action suggestion 只通过用户主动 Advice 产生。
-- [ ] Vibe 五个策略按 §12.5 分批，不为齐功能绕过数据门禁。
-- [ ] 回测指标在 §17.3 前不展示。
+- [x] formula group 保存 score/evidence/dataAsOf。
+- [x] 刷新重启后结果仍存在。
+- [x] all-stocks coverage 明确为沪深 A 股。
+- [x] coverage 不会混入北交所或用 `Market='cn-a'` 替代。
+- [x] 刷新不执行逐股在线 K 线请求。
+- [x] 同日共振排除 stale 和不同 marketDate 批次。
+- [x] 支持和反对信号同时可见。
+- [x] rankScore 不标注为 confidence/胜率。
+- [x] action suggestion 只通过用户主动 Advice 产生。
+- [x] early-breakout 拒绝 RSI 超买、过度延伸和陈旧突破。
+- [x] bollinger-band 仅输出长期趋势未破的下轨均值回复事实。
+- [x] Vibe 五个策略按 §12.5 分批，不为齐功能绕过数据门禁。
+- [x] 回测指标在 §17.3 前不展示。
 
 ### 工程
 
-- [ ] core 零 IO，依赖方向符合 ARCHITECTURE。
-- [ ] repository 有 Drizzle/in-memory 双 Adapter 和 contract tests。
+- [x] core 零 IO，依赖方向符合 ARCHITECTURE。
+- [x] repository 有 Drizzle/in-memory 双 Adapter 和 contract tests。
 - [ ] Workflow 只通过 `ctx.tools.*` 编排。
-- [ ] Tool sideEffect 和 MCP exposure 正确。
-- [ ] Drizzle schema 与 ensureSchema 同步且迁移幂等。
-- [ ] `bun run typecheck` 通过。
-- [ ] 相关 test、`bun run lint`、`git diff --check` 通过。
+- [x] Tool sideEffect 和 MCP exposure 正确。
+- [x] Drizzle schema 与 ensureSchema 同步且迁移幂等。
+- [x] `bun run typecheck` 通过。
+- [x] 相关 test、`bun run lint`、`git diff --check` 通过。
 
 ## 22. 已冻结决策
 

@@ -117,7 +117,7 @@ export const runTacticForStock = (
 };
 
 /**
- * 5 个内置战法的 metadata（用户复盘 / list_tactics 用）。
+ * 内置战法的 metadata（用户复盘 / list_tactics 用）。
  */
 export const BUILTIN_TACTIC_IDS = [
   'breakout-volume',
@@ -125,6 +125,8 @@ export const BUILTIN_TACTIC_IDS = [
   'pullback-after-limit-up',
   'volume-price-divergence',
   'sector-resonance',
+  'early-breakout',
+  'bollinger-band',
 ] as const;
 
 export type BuiltinTacticId = (typeof BUILTIN_TACTIC_IDS)[number];

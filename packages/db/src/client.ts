@@ -12,7 +12,9 @@ import {
   DrizzleHoldingRepository,
   DrizzleNotificationRepository,
   DrizzleQuoteRepository,
+  DrizzleReportRepository,
   DrizzleResearchNoteRepository,
+  DrizzleSignalObservationRepository,
   DrizzleStockEventRepository,
   DrizzleStockGroupRepository,
   DrizzleStockPoolRepository,
@@ -38,6 +40,21 @@ export type DrizzleDb = BunSQLiteDatabase<Schema>;
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS signal_observations (
+      id TEXT PRIMARY KEY, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+      baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL, close_price REAL, return_pct REAL,
+      max_favorable_excursion_pct REAL, max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
+      benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
+      unavailable_reason TEXT, observed_at INTEGER
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS signal_observations_status_baseline_idx ON signal_observations (status, baseline_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS signal_observations_source_idx ON signal_observations (source_kind, source_id)`,
+  );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
@@ -421,9 +438,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
       stock_id TEXT NOT NULL,
       refresh_id TEXT NOT NULL,
       reason TEXT NOT NULL,
+      score REAL,
+      evidence_json TEXT NOT NULL DEFAULT '[]',
+      data_as_of INTEGER,
+      tactic_id TEXT,
+      signal_ts INTEGER,
       created_at INTEGER NOT NULL
     )
   `);
+  migrateGroupMemberResearchColumns(db);
   db.run(
     sql`CREATE INDEX IF NOT EXISTS group_members_group_refresh_idx ON group_member_snapshots (group_id, refresh_id)`,
   );
@@ -513,6 +536,37 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS workflow_runs_name_started_idx ON workflow_runs (workflow_name, started_at)`,
   );
   db.run(sql`CREATE INDEX IF NOT EXISTS workflow_runs_started_idx ON workflow_runs (started_at)`);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS reports (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      scope_json TEXT NOT NULL,
+      period_start TEXT NOT NULL,
+      period_end TEXT NOT NULL,
+      title TEXT NOT NULL,
+      generated_at INTEGER NOT NULL,
+      data_as_of INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      sections_json TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      missing_dimensions_json TEXT NOT NULL DEFAULT '[]',
+      delivery_status TEXT NOT NULL DEFAULT 'not-requested',
+      workflow_run_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS reports_period_unique
+    ON reports (kind, scope_key, period_start, period_end)
+  `);
+  db.run(sql`CREATE INDEX IF NOT EXISTS reports_period_end_idx ON reports (period_end)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS reports_kind_period_end_idx ON reports (kind, period_end)`);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS reports_status_period_end_idx ON reports (status, period_end)`,
+  );
+  db.run(sql`CREATE INDEX IF NOT EXISTS reports_workflow_run_idx ON reports (workflow_run_id)`);
   // 阶段 B 存量数据迁移：v0.6 pool.source JSON → 分组 + 回填 group_id（幂等，须在两张新表 DDL 之后）
   migrateLegacyPoolSourcesToGroups(db);
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
@@ -544,6 +598,27 @@ const migrateStockProvenanceColumns = (db: DrizzleDb): void => {
   }
   if (!have.has('updated_at')) {
     db.run(sql`ALTER TABLE stocks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`);
+  }
+};
+
+const migrateGroupMemberResearchColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(group_member_snapshots)`);
+  if (cols.length === 0) return;
+  const have = new Set(cols.map((column) => column.name));
+  if (!have.has('score')) db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN score REAL`);
+  if (!have.has('evidence_json')) {
+    db.run(
+      sql`ALTER TABLE group_member_snapshots ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'`,
+    );
+  }
+  if (!have.has('data_as_of')) {
+    db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN data_as_of INTEGER`);
+  }
+  if (!have.has('tactic_id')) {
+    db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN tactic_id TEXT`);
+  }
+  if (!have.has('signal_ts')) {
+    db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN signal_ts INTEGER`);
   }
 };
 
@@ -998,8 +1073,10 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
     advice: new DrizzleAdviceRepository(db),
+    report: new DrizzleReportRepository(db),
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),
+    signalObservation: new DrizzleSignalObservationRepository(db),
     tactic: new DrizzleTacticRepository(db),
     notification: new DrizzleNotificationRepository(db),
     // v0.6 起

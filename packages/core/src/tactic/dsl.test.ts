@@ -40,6 +40,11 @@ describe('tactic/dsl', () => {
       // 宽松等于在数字场景下的表现：0 == false 为 true（DSL 行为与 JS 弱类型一致）
       expect(evaluateExpression('0 == false', ctx)).toBe(true);
     });
+
+    it('逻辑结果已确定时仍完整解析右侧分支', () => {
+      expect(evaluateExpression('true || (false && false)', ctx)).toBe(true);
+      expect(evaluateExpression('false && (true || true)', ctx)).toBe(false);
+    });
   });
 
   describe('evaluateExpression — context 路径', () => {

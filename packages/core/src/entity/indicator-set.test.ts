@@ -10,13 +10,16 @@ import {
 
 describe('entity/indicator-set', () => {
   describe('KNOWN_INDICATOR_KEYS', () => {
-    it('contains v0.2 known keys (momentum + volume + range)', () => {
+    it('包含趋势、交叉与 Bollinger 战法依赖的已知 key', () => {
       expect(KNOWN_INDICATOR_KEYS).toContain('ma5');
       expect(KNOWN_INDICATOR_KEYS).toContain('ma20');
       expect(KNOWN_INDICATOR_KEYS).toContain('rsi14');
       expect(KNOWN_INDICATOR_KEYS).toContain('macdDif');
       expect(KNOWN_INDICATOR_KEYS).toContain('volRatio5_20');
       expect(KNOWN_INDICATOR_KEYS).toContain('high20');
+      expect(KNOWN_INDICATOR_KEYS).toContain('daysSinceMa20CrossUp');
+      expect(KNOWN_INDICATOR_KEYS).toContain('maDistance60Pct');
+      expect(KNOWN_INDICATOR_KEYS).toContain('bollPosition20');
     });
   });
 

@@ -55,6 +55,7 @@ const EXPECTED_TOOL_NAMES = [
   // 分组化（阶段 B）新增：分组 CRUD + 刷新 + LLM 解析
   'list_stock_groups',
   'get_stock_group',
+  'get_tactic_consensus',
   'create_stock_group',
   'update_stock_group',
   'delete_stock_group',
@@ -75,7 +76,15 @@ const EXPECTED_TOOL_NAMES = [
   'sync_stock_events',
   'sync_stock_universe',
   'get_market_data_status',
+  'get_ashare_sentiment',
   'list_workflow_runs',
+  'record_workflow_run',
+  // Vibe A 股报告迁移 Phase 1
+  'get_report',
+  'list_reports',
+  'save_report',
+  'set_report_delivery_status',
+  'render_report',
   // Phase 1：连板天梯
   'limit_up_ladder',
   'limit_up_ladder_compare',
@@ -89,6 +98,9 @@ const EXPECTED_TOOL_NAMES = [
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   'get_stock_market_view',
   'get_stock_universe_status',
+  // Vibe A 股报告迁移 Phase 6：信号后续事实观察（无回测曲线）
+  'get_signal_observation_stats',
+  'refresh_signal_observations',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -134,6 +146,7 @@ describe('toolRegistry', () => {
       'batch_quote',
       'fetch_index_quotes',
       'fetch_quote',
+      'get_ashare_sentiment',
       'get_stock_market_view',
       'refresh_stock_group',
       'send_notification',
@@ -166,8 +179,12 @@ describe('toolRegistry', () => {
       'delete_stock_pool',
       'record_advice_outcome',
       'record_watch_run',
+      'record_workflow_run',
+      'refresh_signal_observations',
       'rename_chat_session',
+      'save_report',
       'save_watch_trigger',
+      'set_report_delivery_status',
       'set_watch_trigger_feedback',
       'update_holding',
       'update_research_note',

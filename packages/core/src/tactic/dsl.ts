@@ -220,7 +220,8 @@ const parseOr = (c: Cursor, ctx: CtxObj): unknown => {
   let left: unknown = parseAnd(c, ctx);
   while (peek(c).kind === 'op' && peek(c).value === '||') {
     eat(c, 'op', '||');
-    left = Boolean(left) || Boolean(parseAnd(c, ctx));
+    const right = parseAnd(c, ctx);
+    left = Boolean(left) || Boolean(right);
   }
   return left;
 };

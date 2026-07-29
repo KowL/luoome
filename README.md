@@ -142,11 +142,18 @@ bun install
 50 8 * * 1-5  luoome workflow run evaluate-event-rules
 # 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
 30 16 * * 1-5  luoome workflow run post-market-data
+# 收盘复盘与周报：报告先保存，通知失败只会把 WorkflowRun 降为 partial
+0 18 * * 1-5   luoome workflow run closing-report --mode scheduled
+0 19 * * 5     luoome workflow run weekly-report --mode scheduled
+# 开盘简报：周一会自动读取前一交易日，而不是自然日前一天
+0 9 * * 1-5    luoome workflow run opening-report --mode scheduled
 ```
 
 - `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
 - `evaluate-event-rules`：盘前一次，`intraday-watch` 不评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 推送。
 - `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
+- 三类报告 workflow 在 `scheduled` 模式默认通知；可在 `--input` 中显式传
+  `{"notify":false}` 关闭。相同类型、范围与周期重复运行会更新同一份 Report。
 - `sync-stock-universe` 仍可单独人工执行；完整分页通过校验后原子提交，12 小时内有成功版本时默认跳过。
 - 含 event-date 的方案建议单独建（event-date 不参与盘中 ANY/ALL 组合判定）。
 
@@ -157,6 +164,9 @@ bun install
 - 看板聚合账户 PnL、建议、盯盘健康度和最近触发
 - 持仓完整录入闭环与交易流水
 - 股票分组 CRUD，支持 manual / holdings / formula / llm
+- formula 分组持久化规则分数、证据与数据截止时间；战法页提供同日共振事实视图
+- 第二批策略新增早期突破与 Bollinger 下轨均值回复，并补齐 RSI、MA 距离/上穿新鲜度、
+  Bollinger 轨道/带宽/位置等可复现指标
 - 分组详情内配置盯盘方案，仪表盘提供单轮试跑、全局心跳与最近触发审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一 Bearer token + 同源校验
 - `luoome start` 一键启动 Web + 长驻盯盘

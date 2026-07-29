@@ -119,6 +119,26 @@ describe('GroupMemberSnapshot schema', () => {
     expect(r.success).toBe(true);
   });
 
+  it('策略研究字段可解析，旧快照缺省 evidence 为空数组', () => {
+    const researched = GroupMemberSnapshotSchema.parse({
+      ...baseSnapshot,
+      score: 82,
+      evidence: ['放量突破', 'MA5 > MA10 > MA20'],
+      dataAsOf: '2026-07-22T07:00:00.000Z',
+      tacticSignalRef: {
+        tacticId: 'breakout-volume',
+        ts: '2026-07-22T07:00:00.000Z',
+      },
+    });
+    expect(researched).toMatchObject({
+      score: 82,
+      evidence: ['放量突破', 'MA5 > MA10 > MA20'],
+      tacticSignalRef: { tacticId: 'breakout-volume' },
+    });
+    expect(researched.dataAsOf).toBeInstanceOf(Date);
+    expect(GroupMemberSnapshotSchema.parse(baseSnapshot).evidence).toEqual([]);
+  });
+
   it('refreshId / reason 为空 → parse 失败', () => {
     expect(GroupMemberSnapshotSchema.safeParse({ ...baseSnapshot, refreshId: '' }).success).toBe(
       false,
