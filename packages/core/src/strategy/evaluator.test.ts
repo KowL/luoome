@@ -180,6 +180,79 @@ describe('Strategy evaluator', () => {
     ]);
   });
 
+  it('drops partial stocks without score from selection under top truncation', () => {
+    const scoring = definition().scoring;
+    if (scoring === undefined) throw new Error('fixture scoring is required');
+    const dsl = definition({
+      ...definition(),
+      scoring: { ...scoring, top: 1 },
+    });
+    const scored = evaluate('000001.SZ', { close: 12, ma20: 10, rsi14: 80 }, dsl);
+    // selection 通过但 rsi14 缺失 → scoring partial，无 score
+    const partial = evaluate('000002.SZ', { close: 12, ma20: 10 }, dsl);
+    expect(partial.result.selected).toBe(true);
+    expect(partial.result.score).toBeUndefined();
+    expect(partial.partial).toBe(true);
+
+    const ranked = assignStableStrategyRanks([scored, partial], dsl);
+    expect(ranked[0]?.result).toMatchObject({ stockId: '000001.SZ', selected: true, rank: 1 });
+    // 无 score 的 partial 股票不得保持入选绕过 top 截断
+    expect(ranked[1]?.result.selected).toBe(false);
+    expect(ranked[1]?.result.rank).toBeUndefined();
+  });
+
+  it('collects signal rule when-evaluation errors like selection errors', () => {
+    const dsl = definition({
+      ...definition(),
+      scoring: undefined,
+      signals: {
+        entry: [
+          {
+            id: 'broken-signal',
+            name: '坏信号',
+            when: 'Math.abs(1, 2) > 0',
+            score: '50',
+            direction: 'bullish',
+            evidence: ['broken'],
+          },
+        ],
+        exit: [],
+        risk: [],
+      },
+    });
+    const result = evaluate('000001.SZ', { close: 12, ma20: 10 }, dsl);
+    expect(result.result.ruleEvaluations.at(-1)).toMatchObject({
+      ruleId: 'broken-signal',
+      status: 'error',
+    });
+    expect(result.errors.some((error) => error.includes('Math.abs'))).toBe(true);
+    expect(result.partial).toBe(true);
+  });
+
+  it('keeps matched when when-expression is truthy on missing fields and evidence resolves', () => {
+    // 语义锁定：when 引用缺失字段但求值为真、且 evidence 不缺时仍算 matched（不归 unknown）
+    const dsl = definition({
+      ...definition(),
+      scoring: undefined,
+      selection: {
+        logic: 'all',
+        rules: [
+          {
+            id: 'absence-check',
+            name: '缺席检查',
+            when: 'indicators.ma60 === undefined',
+            evidence: ['no-ma60'],
+          },
+        ],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    });
+    const result = evaluate('000001.SZ', { close: 12 }, dsl);
+    expect(result.result.ruleEvaluations[0]).toMatchObject({ status: 'matched' });
+    expect(result.result.selected).toBe(true);
+    expect(result.partial).toBe(false);
+  });
+
   it('reports unregistered static paths and data requirements', () => {
     const dsl = definition({
       ...definition(),

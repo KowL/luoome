@@ -1474,7 +1474,7 @@ export const registerRepositoryContractTests = (
             ...makeStrategyVersion('strategy-1'),
             id: 'another-id',
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(InvariantError);
       });
     });
 
@@ -1498,6 +1498,11 @@ export const registerRepositoryContractTests = (
         expect(
           (await repos.strategyRun.listRuns({ strategyId: 'strategy-1' })).map((run) => run.id),
         ).toEqual(['run-2', 'run-1']);
+        expect(
+          (await repos.strategyRun.listRuns({ strategyId: 'strategy-1', limit: 1 })).map(
+            (run) => run.id,
+          ),
+        ).toEqual(['run-2']);
       });
 
       it('active Strategy 可运行显式 pinned 的历史 published valid version', async () => {
@@ -1529,6 +1534,41 @@ export const registerRepositoryContractTests = (
         expect(results[1]?.score).toBe(90);
       });
 
+      it('listResults 无 rank 的结果排在最后', async () => {
+        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
+        await repos.strategyRun.saveResults([
+          makeStrategyResult('run-1', '600519.SH', { rank: undefined }),
+          makeStrategyResult('run-1', '002594.SZ', { rank: 1 }),
+        ]);
+        const results = await repos.strategyRun.listResults('run-1');
+        expect(results.map((result) => result.stockId)).toEqual(['002594.SZ', '600519.SH']);
+        expect(results[1]?.rank).toBeUndefined();
+      });
+
+      it('saveRun 重复保存只更新运行态列，身份列保持首次值', async () => {
+        await repos.strategyRun.saveRun(makeStrategyRun('run-1', { startedAt: T1 }));
+        await repos.strategyRun.saveRun(
+          makeStrategyRun('run-1', {
+            startedAt: T3,
+            finishedAt: T3,
+            mode: 'backtest',
+            status: 'failed',
+            summary: undefined,
+            error: 'boom',
+          }),
+        );
+        const got = await repos.strategyRun.findRunById('run-1');
+        expect(got).toMatchObject({
+          id: 'run-1',
+          startedAt: T1,
+          finishedAt: T3,
+          mode: 'scan',
+          status: 'failed',
+          error: 'boom',
+        });
+        expect(got?.summary).toBeUndefined();
+      });
+
       it('signals 按目标唯一键幂等并支持 strategy/stock 查询', async () => {
         await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
         const first = makeStrategySignal('signal-1', '600519.SH', { ts: T1 });
@@ -1539,6 +1579,14 @@ export const registerRepositoryContractTests = (
           (await repos.strategyRun.signalsByStrategy('strategy-1')).map((signal) => signal.id),
         ).toEqual(['signal-2', 'signal-1']);
         expect(await repos.strategyRun.signalsByStock('600519.SH')).toEqual([first]);
+      });
+
+      it('saveSignals 主键 id 冲突也忽略（与身份唯一索引同语义）', async () => {
+        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
+        const first = makeStrategySignal('signal-1', '600519.SH', { ts: T1 });
+        const sameIdOtherIdentity = makeStrategySignal('signal-1', '002594.SZ', { ts: T2 });
+        await repos.strategyRun.saveSignals([first, sameIdOtherIdentity]);
+        expect(await repos.strategyRun.signalsByStrategy('strategy-1')).toEqual([first]);
       });
 
       it('commitRun 原子提交；引用不匹配时不留下 run/result/signal', async () => {
@@ -1718,6 +1766,94 @@ export const registerRepositoryContractTests = (
         expect(await repos.watchlistMember.listSyncRuns('watchlist-1')).not.toContainEqual(
           expect.objectContaining({ id: 'sync-invalid' }),
         );
+      });
+
+      it('saveSyncRun 要求 Watchlist 存在', async () => {
+        await expect(
+          repos.watchlistMember.saveSyncRun(
+            makeWatchlistSyncRun('sync-orphan', { watchlistId: 'missing-watchlist' }),
+          ),
+        ).rejects.toThrow(InvariantError);
+      });
+
+      it('saveMember 重复 (watchlistId, stockId) 不同 id 拒绝', async () => {
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-1'),
+          candidates: [{ stockId: '600519.SH', reason: 'first', evidence: [] }],
+        });
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        await expect(
+          repos.watchlistMember.saveMember({ ...member, id: 'another-member-id' }),
+        ).rejects.toThrow(InvariantError);
+      });
+
+      it('saveSource 同 (memberId, sourceKey) 只允许一个非 ended 来源', async () => {
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-1'),
+          candidates: [{ stockId: '600519.SH', reason: 'first', evidence: [] }],
+        });
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        const current = await repos.watchlistMember.currentSource(member.id, 'strategy:strategy-1');
+        if (current === null) throw new Error('fixture source missing');
+        await expect(
+          repos.watchlistMember.saveSource({
+            ...current,
+            id: 'duplicate-source',
+            validFrom: T3,
+          }),
+        ).rejects.toThrow(InvariantError);
+        // ended 来源不占唯一约束，可以再写一条 active。
+        await repos.watchlistMember.saveSource({ ...current, status: 'ended', validUntil: T3 });
+        await repos.watchlistMember.saveSource({
+          ...current,
+          id: 'successor-source',
+          validFrom: T3,
+        });
+        expect(await repos.watchlistMember.listSources(member.id)).toHaveLength(1);
+      });
+
+      it('unchanged 候选缺省 score/rank/dataAsOf 时保留旧值', async () => {
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-1'),
+          candidates: [
+            {
+              stockId: '600519.SH',
+              reason: 'first',
+              score: 90,
+              rank: 1,
+              evidence: [],
+              dataAsOf: T1,
+            },
+          ],
+        });
+        await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-2', { startedAt: T2, finishedAt: T3 }),
+          candidates: [{ stockId: '600519.SH', reason: 'again', evidence: [] }],
+        });
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        expect(
+          await repos.watchlistMember.currentSource(member.id, 'strategy:strategy-1'),
+        ).toMatchObject({ score: 90, rank: 1, dataAsOf: T1 });
+      });
+
+      it('saveSnapshots 按 (syncRunId, stockId) upsert', async () => {
+        await repos.watchlistMember.saveSyncRun(makeWatchlistSyncRun('sync-1'));
+        const base = {
+          syncRunId: 'sync-1',
+          stockId: '600519.SH',
+          selected: true,
+          change: 'entered' as const,
+          reason: 'first',
+          evidence: [],
+        };
+        await repos.watchlistMember.saveSnapshots([{ id: 'snap-1', ...base }]);
+        await repos.watchlistMember.saveSnapshots([{ id: 'snap-2', ...base, reason: 'updated' }]);
+        const snapshots = await repos.watchlistMember.listSnapshots('sync-1');
+        expect(snapshots).toHaveLength(1);
+        expect(snapshots[0]?.reason).toBe('updated');
       });
     });
 
@@ -1999,6 +2135,14 @@ export const registerRepositoryContractTests = (
         await repos.watchTrigger.save(t);
         expect(await repos.watchTrigger.findById('tr-1')).toEqual(t);
         expect(await repos.watchTrigger.findById('missing')).toBeNull();
+      });
+
+      it('save 缺省 alertPlanId 时回填 poolId', async () => {
+        const { alertPlanId: _alertPlanId, ...legacy } = makeWatchTrigger('tr-legacy', {
+          poolId: 'pool-legacy',
+        });
+        await repos.watchTrigger.save(legacy);
+        expect((await repos.watchTrigger.findById('tr-legacy'))?.alertPlanId).toBe('pool-legacy');
       });
 
       it('listByPool 按 createdAt 倒序 + since 过滤', async () => {

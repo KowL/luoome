@@ -268,7 +268,6 @@ export const dailyAdviceWorkflow = defineWorkflow({
     step('compute-pnl', ([holdings, quotes], ctx) => ctx.tools.compute_pnl.execute({ holdings, quotes })),
     step('run-strategies', (data, ctx) => ctx.tools.run_strategy.execute({
       strategyId: data.strategyId,
-      universe: { kind: 'holdings', accountId: input.accountId },
       persist: true,
     })),
     step('analyze-each', (data, ctx) => parallel(data.holdings.map(h =>
@@ -316,7 +315,7 @@ Adapter manager 提供：
 - 限速（per-adapter 配额）
 - 股票搜索路由（空数组不降级、抛错才降级）
 - 全市场快照路由（为扫描候选补充可选快照价，也供 LLM 分组生成候选上下文；
-  `run_tactic scope='all-stocks'` 的候选身份全集必须来自
+  `run_strategy` 全市场扫描的候选身份全集必须来自
   `StockUniverse coverage='CN_A_SHARES_SH_SZ' status='active'`，快照不得增删候选。
   Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟；
   eastmoney 实现走 `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板）
@@ -678,7 +677,7 @@ interface AdviceStats {
 | 等级 | tool 例 | MCP 默认 | Web 默认 | CLI/TUI 默认 |
 |---|---|---|---|---|
 | `read` | `list_holdings`, `get_quote`, `get_advice` | ✅ | ✅ | ✅ |
-| `write` | `add_holding`, `add_trade` | ⚠️ opt-in | ✅ | ✅ |
+| `write` | `add_holding`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
 | `external` | `fetch_quote`, `send_notify` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
 | `advice` | `analyze_stock`, `daily_advice` | ✅ | ✅ | ✅ |
 | `trade` | `place_order` | ❌ | ❌ | ⚠️ opt-in |
@@ -719,7 +718,7 @@ type ToolError =
 ### 8.1 内置 workflow
 
 - `daily-advice`：每个持仓股 → `analyze_stock` → 持久化 → 推送高分建议（v0.2）
-- `run-strategies`：运行已发布 Strategy，并可将完整结果同步到目标 Watchlist
+- `run-strategies`：运行已发布 Strategy（同步到目标 Watchlist 的能力未交付，后续迭代）
 - `sync-portfolio-watchlists`：按账户同步 portfolio 来源
 - `market-outlook`：拉大盘指数 + 板块涨跌 → LLM 综合 → 市场观点（v0.3）
 - `risk-report`：风控指标 + 持仓建议（v0.3）
@@ -817,7 +816,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
                   │
                   ├──► list_holdings
                   ├──► batch_quote
-                  ├──► run_tactic (持仓范围)
+                  ├──► run_strategy (持仓范围)
                   └──► analyze_stock ×N (并发)
                   │
                   ▼
@@ -838,7 +837,7 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
                                   │
                                   ├──► tools.list_holdings
                                   ├──► tools.batch_quote
-                                  ├──► tools.run_tactic
+                                  ├──► tools.run_strategy
                                   ├──► tools.analyze_stock ×N
                                   └──► tools.send_notification
                                   │

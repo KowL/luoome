@@ -69,10 +69,12 @@ export const runTacticForStock = (
     if (evaluation?.status === 'not-matched') {
       return { triggered: false, reason: 'trigger_false' };
     }
+    // when 已求值出结果（value 存在）却没有产出 signal，说明失败发生在 score 阶段
+    const scoreStageFailed = evaluation?.status === 'error' && evaluation.value !== undefined;
     const message = evaluated.errors.join('; ') || evaluation?.error;
     return {
       triggered: false,
-      reason: message?.includes('score') ? 'score_invalid' : 'dsl_error',
+      reason: scoreStageFailed ? 'score_invalid' : 'dsl_error',
       ...(message === undefined ? {} : { message }),
     };
   }

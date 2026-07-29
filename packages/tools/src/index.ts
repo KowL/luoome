@@ -1,4 +1,6 @@
-// @luoome/tools 桶导出：defineTool + toolRegistry + 13 个 tool（v0.1 8 + v0.2 新增 5）。
+// @luoome/tools 桶导出：defineTool + toolRegistry + 全部公开/内部 tool。
+// 旧 Tactic / StockGroup / StockPool / WatchPlan tool 已按 CONTEXT.md 口径下线，
+// 只作为只读迁移来源保留在 db 与 migration decoder 中，不再导出。
 
 export * from './agent-whitelist.js';
 export * from './context.js';
@@ -17,12 +19,8 @@ export * from './tools/chat-session.js';
 export * from './tools/close-holding.js';
 export * from './tools/compute-indicators.js';
 export * from './tools/create-account.js';
-export * from './tools/create-stock-group.js';
-export * from './tools/create-stock-pool.js';
 export * from './tools/delete-research-note.js';
 export * from './tools/delete-stock-event.js';
-export * from './tools/delete-stock-group.js';
-export * from './tools/delete-stock-pool.js';
 export * from './tools/fetch-index-quotes.js';
 export * from './tools/fetch-quote.js';
 export * from './tools/get-account.js';
@@ -35,11 +33,8 @@ export * from './tools/get-market-data-status.js';
 export * from './tools/get-previous-closes.js';
 export * from './tools/get-report.js';
 export * from './tools/get-signal-observation-stats.js';
-export * from './tools/get-stock-group.js';
 export * from './tools/get-stock-market-view.js';
 export * from './tools/get-stock-universe-status.js';
-export * from './tools/get-tactic.js';
-export * from './tools/get-tactic-consensus.js';
 export * from './tools/get-watch-status.js';
 export * from './tools/limit-up-ladder.js';
 export * from './tools/list-accounts.js';
@@ -47,12 +42,7 @@ export * from './tools/list-holdings.js';
 export * from './tools/list-reports.js';
 export * from './tools/list-research-notes.js';
 export * from './tools/list-stock-events.js';
-export * from './tools/list-stock-groups.js';
-export * from './tools/list-stock-pools.js';
-// v0.3 新增
-export * from './tools/list-tactics.js';
 export * from './tools/list-trades.js';
-export * from './tools/list-watch-plans.js';
 export * from './tools/list-watch-triggers.js';
 export * from './tools/list-workflow-runs.js';
 export * from './tools/market-outlook.js';
@@ -60,14 +50,10 @@ export * from './tools/record-advice-outcome.js';
 export * from './tools/record-watch-run.js';
 export * from './tools/record-workflow-run.js';
 export * from './tools/refresh-signal-observations.js';
-export * from './tools/refresh-stock-group.js';
 export * from './tools/render-report.js';
-export * from './tools/resolve-llm-group.js';
 export * from './tools/run-strategy.js';
-export * from './tools/run-tactic.js';
 export * from './tools/save-report.js';
 export * from './tools/save-watch-trigger.js';
-export * from './tools/score-signals.js';
 export * from './tools/search-stocks.js';
 export * from './tools/send-notification.js';
 export * from './tools/set-report-delivery-status.js';
@@ -78,11 +64,7 @@ export * from './tools/sync-daily-bars.js';
 export * from './tools/sync-quotes.js';
 export * from './tools/sync-stock-events.js';
 export * from './tools/sync-stock-universe.js';
-export * from './tools/tactic-signals-by-stock.js';
-export * from './tools/tactic-signals-by-tactic.js';
 export * from './tools/update-holding.js';
 export * from './tools/update-research-note.js';
 export * from './tools/update-stock-event.js';
-export * from './tools/update-stock-group.js';
-export * from './tools/update-stock-pool.js';
 export * from './tools/watchlist.js';

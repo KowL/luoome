@@ -1,6 +1,6 @@
 # Strategy 与统一 Watchlist 开发计划
 
-> 状态：待执行
+> 状态：已执行（实际为一次性 big-bang 合入：新旧模型同分支切换，未走设计中的两版本兼容期）
 > 日期：2026-07-29
 > 详细设计：[Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md)
 > 产品输入：[Strategy DSL PRD](./prd/strategy-dsl.md)、[统一 Watchlist PRD](./prd/watchlist.md)

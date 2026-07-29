@@ -1,6 +1,11 @@
 import type { Database } from 'bun:sqlite';
 
-import { defineSchemaMigration, resolveLegacyTargetId, type SchemaMigration } from './runner.js';
+import {
+  defineSchemaMigration,
+  resolveLegacyTargetId,
+  type SchemaMigration,
+  TARGET_ID_PATTERN,
+} from './runner.js';
 
 const migrationMappings = (db: Database, id: string): Readonly<Record<string, string>> => {
   const row = db
@@ -61,6 +66,7 @@ const migrateStockPools = (db: Database): Record<string, unknown> => {
   );
   const mappings: Record<string, string> = {};
   const warnings: string[] = [];
+  let alertPlansWritten = 0;
   const pools = db.query<PoolRow, []>('SELECT * FROM stock_pools ORDER BY id').all();
   const insert = db.prepare(`
     INSERT INTO alert_plans
@@ -69,6 +75,11 @@ const migrateStockPools = (db: Database): Record<string, unknown> => {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
   for (const pool of pools) {
+    // 单行脏数据（非法 id / 损坏的 rules JSON）记 warning 并跳过或禁用，不阻塞整库启动。
+    if (!TARGET_ID_PATTERN.test(pool.id)) {
+      warnings.push(`pool id 不符合统一 slug 规则，已跳过: "${pool.id}"`);
+      continue;
+    }
     const resolution = resolveLegacyTargetId({
       legacyId: pool.id,
       targetKind: 'alert-plan',
@@ -76,13 +87,23 @@ const migrateStockPools = (db: Database): Record<string, unknown> => {
     });
     occupied.add(resolution.targetId);
     mappings[pool.id] = resolution.targetId;
-    const watchlistId = pool.group_id === null ? undefined : watchlistMappings[pool.group_id];
+    // 部分存量库 group_id 为空串而非 NULL，同样视为未绑定分组。
+    const watchlistId =
+      pool.group_id === null || pool.group_id === '' ? undefined : watchlistMappings[pool.group_id];
     let enabled = pool.enabled;
     if (watchlistId === undefined) {
       enabled = 0;
       warnings.push(`pool ${pool.id} 找不到 Watchlist 映射，目标已禁用`);
     }
-    const rules = (JSON.parse(pool.rules) as Record<string, unknown>[]).map((rule) => {
+    let parsedRules: Record<string, unknown>[];
+    try {
+      parsedRules = JSON.parse(pool.rules) as Record<string, unknown>[];
+    } catch {
+      enabled = 0;
+      parsedRules = [];
+      warnings.push(`pool ${pool.id} rules JSON 损坏，目标已禁用`);
+    }
+    const rules = parsedRules.map((rule) => {
       if (rule.kind !== 'tactic') return rule;
       const tacticId = typeof rule.tacticId === 'string' ? rule.tacticId : undefined;
       const strategyId = tacticId === undefined ? undefined : strategyMappings[tacticId];
@@ -102,7 +123,8 @@ const migrateStockPools = (db: Database): Record<string, unknown> => {
       resolution.targetId,
       pool.name,
       pool.description,
-      watchlistId ?? `missing:${pool.group_id ?? 'group'}`,
+      watchlistId ??
+        `missing:${pool.group_id === null || pool.group_id === '' ? 'group' : pool.group_id}`,
       JSON.stringify(rules),
       pool.logic,
       pool.trigger_mode,
@@ -114,6 +136,7 @@ const migrateStockPools = (db: Database): Record<string, unknown> => {
       pool.created_at,
       pool.updated_at,
     );
+    alertPlansWritten += 1;
     db.prepare('UPDATE watch_triggers SET alert_plan_id=? WHERE pool_id=?').run(
       resolution.targetId,
       pool.id,
@@ -123,7 +146,7 @@ const migrateStockPools = (db: Database): Record<string, unknown> => {
       pool.id,
     );
   }
-  return { poolsScanned: pools.length, alertPlansWritten: pools.length, mappings, warnings };
+  return { poolsScanned: pools.length, alertPlansWritten, mappings, warnings };
 };
 
 export const ALERT_PLAN_MIGRATIONS: readonly SchemaMigration[] = [

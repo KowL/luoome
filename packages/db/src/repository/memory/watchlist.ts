@@ -155,7 +155,7 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
       if (!this.runs.has(row.syncRunId)) {
         throw new InvariantError(`WatchlistSyncRun 不存在: ${row.syncRunId}`);
       }
-      this.snapshots.set(row.id, row);
+      this.snapshots.set(`${row.syncRunId}\0${row.stockId}`, row);
     }
   }
 
@@ -265,11 +265,12 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
                 : { sourceVersionId: input.sourceVersionId }),
               syncRunId: input.run.id,
               reason: candidate.reason,
-              score: candidate.score,
-              rank: candidate.rank,
               status: 'active',
               evidence: candidate.evidence,
-              dataAsOf: candidate.dataAsOf,
+              // 候选缺省时保留旧 score/rank/dataAsOf（与 drizzle 实现一致）。
+              ...(candidate.score === undefined ? {} : { score: candidate.score }),
+              ...(candidate.rank === undefined ? {} : { rank: candidate.rank }),
+              ...(candidate.dataAsOf === undefined ? {} : { dataAsOf: candidate.dataAsOf }),
             };
       assertWatchlistMemberSourceInvariants(source);
       nextSources.set(source.id, source);
@@ -332,7 +333,9 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
     this.sources.clear();
     for (const [id, source] of nextSources) this.sources.set(id, source);
     this.runs.set(run.id, run);
-    for (const snapshot of snapshots) this.snapshots.set(snapshot.id, snapshot);
+    for (const snapshot of snapshots) {
+      this.snapshots.set(`${snapshot.syncRunId}\0${snapshot.stockId}`, snapshot);
+    }
     return run;
   }
 }

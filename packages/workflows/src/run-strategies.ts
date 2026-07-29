@@ -30,12 +30,15 @@ export type RunStrategiesOutputT = z.infer<typeof RunStrategiesOutput>;
 
 const runAll: WorkflowStep = async (previous, ctx) => {
   const input = previous as RunStrategiesInputT;
-  const listed = await ctx.tools.list_strategies.execute({ filter: { status: 'active' } });
-  if (!listed.ok) return listed;
-  const ids =
-    input.strategyIds === undefined
-      ? listed.data.strategies.map((strategy) => strategy.id)
-      : [...new Set(input.strategyIds)];
+  // 显式 strategyIds 时不依赖 list_strategies（其失败不应阻断显式运行）
+  let ids: readonly string[];
+  if (input.strategyIds === undefined) {
+    const listed = await ctx.tools.list_strategies.execute({ filter: { status: 'active' } });
+    if (!listed.ok) return listed;
+    ids = listed.data.strategies.map((strategy) => strategy.id);
+  } else {
+    ids = [...new Set(input.strategyIds)];
+  }
   const items: z.infer<typeof RunStrategiesItemSchema>[] = [];
   for (const strategyId of ids) {
     const result = await ctx.tools.run_strategy.execute({

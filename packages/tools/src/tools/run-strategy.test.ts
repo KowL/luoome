@@ -7,7 +7,7 @@ import {
 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
+import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
 import { runStrategyTool } from './run-strategy.js';
 
 const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): Promise<void> => {
@@ -179,5 +179,43 @@ describe('run_strategy', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('invalid_input');
+  });
+
+  it('rejects scan with asOf（历史 bars 与实时 quote 时点不一致）', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        stockIds: ['600519.SH'],
+        asOf: new Date('2026-07-01T00:00:00Z'),
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('invalid_input');
+  });
+
+  it('replay 的 providerStatuses 只报本地 dailyBar，不以 market adapter 名义上报', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedTestDailyBars(ctx);
+    await seedStrategy(ctx);
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        mode: 'replay',
+        asOf: new Date('2026-07-01T00:00:00Z'),
+        stockIds: ['600519.SH'],
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.run.providerStatuses.map((status) => status.provider)).toEqual([
+      'local:daily-bars',
+    ]);
   });
 });

@@ -181,8 +181,8 @@ export const ValidateStrategyVersionOutput = z.object({
 
 export const validateStrategyVersionTool = defineTool({
   name: 'validate_strategy_version',
-  description: '静态校验 StrategyVersion 的字段路径与数据需求（不会运行交易）',
-  sideEffect: 'external',
+  description: '静态校验 StrategyVersion 的字段路径与数据需求并回写校验结果（不会运行交易）',
+  sideEffect: 'write',
   input: ValidateStrategyVersionInput,
   output: ValidateStrategyVersionOutput,
   handler: async (input, ctx) => {
@@ -219,7 +219,8 @@ export const PublishStrategyVersionOutput = z.object({
 
 export const publishStrategyVersionTool = defineTool({
   name: 'publish_strategy_version',
-  description: '发布 valid StrategyVersion 并原子切换 currentVersion',
+  description:
+    '发布 valid StrategyVersion 并原子切换 currentVersion；发布会把 paused 的 Strategy 置回 active（与 resume_strategy 等价效果）',
   sideEffect: 'write',
   input: PublishStrategyVersionInput,
   output: PublishStrategyVersionOutput,
@@ -258,5 +259,36 @@ export const pauseStrategyTool = defineTool({
     const paused = StrategySchema.parse({ ...strategy, status: 'paused', updatedAt: ctx.clock() });
     await ctx.repos.strategy.save(paused);
     return { strategy: paused };
+  },
+});
+
+export const ResumeStrategyInput = z.object({ strategyId: z.string().min(1) });
+export const ResumeStrategyOutput = z.object({ strategy: StrategySchema });
+
+export const resumeStrategyTool = defineTool({
+  name: 'resume_strategy',
+  description:
+    '恢复 paused 的用户 Strategy 为 active；publish_strategy_version 发布新版本也会隐式置回 active',
+  sideEffect: 'write',
+  input: ResumeStrategyInput,
+  output: ResumeStrategyOutput,
+  handler: async (input, ctx) => {
+    const strategy = await ctx.repos.strategy.findById(input.strategyId);
+    if (strategy === null) return errNotFound('Strategy', input.strategyId);
+    if (strategy.owner === 'builtin') return errInvalidInput('builtin Strategy 不可修改');
+    if (strategy.status !== 'paused') {
+      return errInvalidInput(`只有 paused 的 Strategy 可恢复: ${strategy.id}`);
+    }
+    if (strategy.currentVersionId === undefined) {
+      return errInvalidInput('恢复 active 需要先 publish 一个 valid StrategyVersion');
+    }
+    const resumed = StrategySchema.parse({
+      ...strategy,
+      status: 'active',
+      updatedAt: ctx.clock(),
+    });
+    assertStrategyInvariants(resumed);
+    await ctx.repos.strategy.save(resumed);
+    return { strategy: resumed };
   },
 });

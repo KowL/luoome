@@ -47,16 +47,26 @@ describe('AlertPlan tools', () => {
     );
     expect(protectedResult.ok).toBe(false);
     if (protectedResult.ok) return;
-    expect(protectedResult.error.kind).toBe('invariant_violation');
+    expect(protectedResult.error.kind).toBe('invalid_input');
 
     const updated = await updateAlertPlanTool.execute(
       { alertPlanId: 'price-alert', enabled: false, cooldownMinutes: 10 },
       ctx,
     );
     expect(updated.ok).toBe(true);
+    // 遗留 watch_rule_states 应随 delete_alert_plan 级联清理
+    await ctx.repos.watchRuleState.upsert({
+      alertPlanId: 'price-alert',
+      poolId: 'price-alert',
+      stockId: '002594.SZ',
+      ruleId: 'move',
+      active: true,
+      lastEvaluatedAt: new Date('2026-07-28T02:00:00Z'),
+    });
     const removed = await deleteAlertPlanTool.execute({ alertPlanId: 'price-alert' }, ctx);
     expect(removed.ok).toBe(true);
     expect(await ctx.repos.alertPlan.findById('price-alert')).toBeNull();
+    expect(await ctx.repos.watchRuleState.listByPool('price-alert')).toEqual([]);
   });
 
   it('strategy-signal rule 拒绝不存在的 Strategy', async () => {

@@ -12,6 +12,7 @@ import {
   strategyDefinitionHash,
 } from '../entity/strategy.js';
 import type { Tactic, TacticSignal } from '../entity/tactic.js';
+import { inspectStrategyDefinitionReferences } from './field-registry.js';
 
 export interface LegacyTacticStrategyBundle {
   readonly strategy: Strategy;
@@ -52,6 +53,9 @@ export const mapLegacyTacticToStrategy = (
   });
   const versionId = `${strategyId}-v1`;
   const runId = `legacy-signal-import-${strategyId}`;
+  // 迁移不能盲签 valid：triggerWhen/scoreExpression/evidence 语法与字段注册都要过静态校验
+  const validationErrors = [...inspectStrategyDefinitionReferences(definition).validationErrors];
+  const valid = validationErrors.length === 0;
   const version: StrategyVersion = {
     id: versionId,
     strategyId,
@@ -59,9 +63,10 @@ export const mapLegacyTacticToStrategy = (
     definition,
     definitionHash: strategyDefinitionHash(definition),
     changeSummary: '从 legacy Tactic 迁移',
-    validationStatus: 'valid',
-    validationErrors: [],
-    publishedAt: tactic.definedAt,
+    validationStatus: valid ? 'valid' : 'invalid',
+    validationErrors,
+    // published 必须 valid（assertStrategyVersionInvariants），invalid 版本不签 publishedAt
+    ...(valid ? { publishedAt: tactic.definedAt } : {}),
     createdAt: tactic.definedAt,
   };
   const strategy: Strategy = {

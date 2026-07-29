@@ -791,8 +791,8 @@ WorkflowRun.inputSummary 和 Report evidence 中，不额外增加用户可编�
 # 交易日目录/日线/事件等数据准备
 30 16 * * 1-5  luoome workflow run post-market-data --mode scheduled
 
-# 动态分组在收盘数据准备完成后刷新
-0 17 * * 1-5   luoome workflow run refresh-groups --mode scheduled
+# Watchlist 在收盘数据准备完成后刷新
+0 17 * * 1-5   luoome workflow run sync-portfolio-watchlists --mode scheduled
 
 # 收盘复盘
 0 18 * * 1-5   luoome workflow run closing-report --mode scheduled --input '{"notify":true}'

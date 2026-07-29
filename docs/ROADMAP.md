@@ -85,7 +85,7 @@
 
 **实际验收**：
 - ✅ 5 个内置战法 + DSL 表达式求值单测覆盖。
-- ✅ `bash bin/luoome workflow run tactic-scan` 在 mock 数据上确定性产出 ≥ 1 个 signal。
+- ✅ `bash bin/luoome workflow run tactic-scan` 在 mock 数据上确定性产出 ≥ 1 个 signal（v0.2 验收时记录；该 workflow 已在 strategy-watchlist 迁移中被 `run-strategies` 取代）。
 - ✅ `bash bin/luoome workflow run risk-report` 输出 HHI / top1 / top3 / VaR + 大盘背景。
 - ✅ `bash bin/luoome workflow run daily-review` 产出当日 advice 汇总 + 7 日 stats。
 - ✅ `bash bin/luoome advice outcome <id> --pnl 500` 落库；后续 `advice stats` 命中率随之更新。

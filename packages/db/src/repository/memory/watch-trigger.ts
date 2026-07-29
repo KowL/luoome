@@ -18,7 +18,11 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
 
   put(trigger: WatchTrigger): void {
     assertWatchTriggerInvariants(trigger);
-    this.items.set(trigger.id, trigger);
+    // alertPlanId 缺省时回填 poolId（与 drizzle save 的写入语义一致）。
+    this.items.set(
+      trigger.id,
+      trigger.alertPlanId === undefined ? { ...trigger, alertPlanId: trigger.poolId } : trigger,
+    );
   }
 
   async save(trigger: WatchTrigger): Promise<void> {

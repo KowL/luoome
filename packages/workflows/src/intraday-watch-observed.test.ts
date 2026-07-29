@@ -29,6 +29,28 @@ describe('runIntradayWatchObserved', () => {
     expect(latest?.finishedAt).not.toBeNull();
   });
 
+  it('running 心跳符合 WatchRunSchema，不静默写库失败', async () => {
+    const warnings: string[] = [];
+    const noop = (): void => {};
+    const ctx = await buildTestContext({
+      clock: () => new Date('2026-07-23T02:00:00.000Z'),
+      logger: {
+        debug: noop,
+        info: noop,
+        warn: (message: string) => warnings.push(message),
+        error: noop,
+      },
+    });
+
+    const result = await runIntradayWatchObserved({ notify: false }, ctx, 'once');
+
+    expect(result.ok).toBe(true);
+    expect(warnings.filter((message) => message.includes('心跳'))).toEqual([]);
+    const runs = await ctx.repos.watchRun.listRecent();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe('succeeded');
+  });
+
   it('workflow 输入失败也写入 failed 轮次', async () => {
     const ctx = await buildTestContext({
       clock: () => new Date('2026-07-23T02:00:00.000Z'),

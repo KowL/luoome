@@ -148,6 +148,8 @@ export const deleteAlertPlanTool = defineTool({
       return errNotFound('AlertPlan', input.alertPlanId);
     }
     await ctx.repos.alertPlan.remove(input.alertPlanId);
+    // 级联清理该计划遗留的 watch_rule_states（poolId = plan.id），避免孤儿状态
+    await ctx.repos.watchRuleState.removeByPool(input.alertPlanId);
     return { deleted: true };
   },
 });

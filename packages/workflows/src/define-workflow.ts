@@ -8,14 +8,6 @@ import type {
   BatchQuoteOutput,
   ComputeIndicatorsInput,
   ComputeIndicatorsOutput,
-  CreateStockGroupInput,
-  CreateStockGroupOutput,
-  CreateStockPoolInput,
-  CreateStockPoolOutput,
-  DeleteStockGroupInput,
-  DeleteStockGroupOutput,
-  DeleteStockPoolInput,
-  DeleteStockPoolOutput,
   FetchQuoteInput,
   FetchQuoteOutput,
   GetAccountInput,
@@ -32,12 +24,8 @@ import type {
   GetHoldingOutput,
   GetPreviousClosesInput,
   GetPreviousClosesOutput,
-  GetStockGroupInput,
-  GetStockGroupOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
-  GetTacticInput,
-  GetTacticOutput,
   LimitUpLadderCompareInput,
   LimitUpLadderCompareOutput,
   LimitUpLadderInput,
@@ -50,20 +38,10 @@ import type {
   ListHoldingsOutput,
   ListStockEventsInput,
   ListStockEventsOutput,
-  // 分组化起：分组 CRUD + 刷新 + LLM 解析
-  ListStockGroupsInput,
-  ListStockGroupsOutput,
-  // v0.6 起：股票池 CRUD + 触发落库
-  ListStockPoolsInput,
-  ListStockPoolsOutput,
   ListStrategiesInput,
   ListStrategiesOutput,
-  ListTacticsInput,
-  ListTacticsOutput,
   ListWatchlistsInput,
   ListWatchlistsOutput,
-  ListWatchPlansInput,
-  ListWatchPlansOutput,
   ListWatchTriggersInput,
   ListWatchTriggersOutput,
   MarketOutlookInput,
@@ -72,22 +50,14 @@ import type {
   RecordAdviceOutcomeOutput,
   RecordWorkflowRunInput,
   RecordWorkflowRunOutput,
-  RefreshStockGroupInput,
-  RefreshStockGroupOutput,
   RenderReportInput,
   RenderReportOutput,
-  ResolveLlmGroupInput,
-  ResolveLlmGroupOutput,
   RunStrategyInput,
   RunStrategyOutput,
-  RunTacticInput,
-  RunTacticOutput,
   SaveReportInput,
   SaveReportOutput,
   SaveWatchTriggerInput,
   SaveWatchTriggerOutput,
-  ScoreSignalsInput,
-  ScoreSignalsOutput,
   SearchStocksInput,
   SearchStocksOutput,
   SendNotificationInput,
@@ -108,14 +78,6 @@ import type {
   SyncStockUniverseOutput,
   SyncWatchlistSourceInput,
   SyncWatchlistSourceOutput,
-  TacticSignalsByStockInput,
-  TacticSignalsByStockOutput,
-  TacticSignalsByTacticInput,
-  TacticSignalsByTacticOutput,
-  UpdateStockGroupInput,
-  UpdateStockGroupOutput,
-  UpdateStockPoolInput,
-  UpdateStockPoolOutput,
 } from '@luoome/tools';
 import {
   recordWatchRunTool,
@@ -191,9 +153,6 @@ export interface WorkflowToolMap {
     typeof ComputeIndicatorsOutput
   >;
   // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
-  readonly list_tactics: ToolAccessor<typeof ListTacticsInput, typeof ListTacticsOutput>;
-  readonly get_tactic: ToolAccessor<typeof GetTacticInput, typeof GetTacticOutput>;
-  readonly run_tactic: ToolAccessor<typeof RunTacticInput, typeof RunTacticOutput>;
   readonly list_strategies: ToolAccessor<typeof ListStrategiesInput, typeof ListStrategiesOutput>;
   readonly run_strategy: ToolAccessor<typeof RunStrategyInput, typeof RunStrategyOutput>;
   readonly strategy_signals_by_stock: ToolAccessor<
@@ -205,15 +164,6 @@ export interface WorkflowToolMap {
   readonly sync_watchlist_source: ToolAccessor<
     typeof SyncWatchlistSourceInput,
     typeof SyncWatchlistSourceOutput
-  >;
-  readonly score_signals: ToolAccessor<typeof ScoreSignalsInput, typeof ScoreSignalsOutput>;
-  readonly tactic_signals_by_stock: ToolAccessor<
-    typeof TacticSignalsByStockInput,
-    typeof TacticSignalsByStockOutput
-  >;
-  readonly tactic_signals_by_tactic: ToolAccessor<
-    typeof TacticSignalsByTacticInput,
-    typeof TacticSignalsByTacticOutput
   >;
   readonly record_advice_outcome: ToolAccessor<
     typeof RecordAdviceOutcomeInput,
@@ -234,58 +184,18 @@ export interface WorkflowToolMap {
     typeof SendNotificationOutput
   >;
   readonly market_outlook: ToolAccessor<typeof MarketOutlookInput, typeof MarketOutlookOutput>;
-  // v0.6 起：股票池 CRUD + 触发落库（workflow 内部使用 save_watch_trigger）
-  readonly list_stock_pools: ToolAccessor<typeof ListStockPoolsInput, typeof ListStockPoolsOutput>;
-  readonly create_stock_pool: ToolAccessor<
-    typeof CreateStockPoolInput,
-    typeof CreateStockPoolOutput
-  >;
-  readonly update_stock_pool: ToolAccessor<
-    typeof UpdateStockPoolInput,
-    typeof UpdateStockPoolOutput
-  >;
-  readonly delete_stock_pool: ToolAccessor<
-    typeof DeleteStockPoolInput,
-    typeof DeleteStockPoolOutput
-  >;
+  // v0.6 起：股票池触发落库（workflow 内部使用 save_watch_trigger）
   readonly save_watch_trigger: ToolAccessor<
     typeof SaveWatchTriggerInput,
     typeof SaveWatchTriggerOutput
-  >;
-  // 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §6）：分组 CRUD + 刷新 + LLM 解析
-  readonly list_stock_groups: ToolAccessor<
-    typeof ListStockGroupsInput,
-    typeof ListStockGroupsOutput
   >;
   readonly list_stock_events: ToolAccessor<
     typeof ListStockEventsInput,
     typeof ListStockEventsOutput
   >;
-  readonly list_watch_plans: ToolAccessor<typeof ListWatchPlansInput, typeof ListWatchPlansOutput>;
   readonly list_watch_triggers: ToolAccessor<
     typeof ListWatchTriggersInput,
     typeof ListWatchTriggersOutput
-  >;
-  readonly get_stock_group: ToolAccessor<typeof GetStockGroupInput, typeof GetStockGroupOutput>;
-  readonly create_stock_group: ToolAccessor<
-    typeof CreateStockGroupInput,
-    typeof CreateStockGroupOutput
-  >;
-  readonly update_stock_group: ToolAccessor<
-    typeof UpdateStockGroupInput,
-    typeof UpdateStockGroupOutput
-  >;
-  readonly delete_stock_group: ToolAccessor<
-    typeof DeleteStockGroupInput,
-    typeof DeleteStockGroupOutput
-  >;
-  readonly refresh_stock_group: ToolAccessor<
-    typeof RefreshStockGroupInput,
-    typeof RefreshStockGroupOutput
-  >;
-  readonly resolve_llm_group: ToolAccessor<
-    typeof ResolveLlmGroupInput,
-    typeof ResolveLlmGroupOutput
   >;
   // v0.7 策略预警：触发反馈
   readonly set_watch_trigger_feedback: ToolAccessor<

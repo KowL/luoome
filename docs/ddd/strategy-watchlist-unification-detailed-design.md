@@ -714,7 +714,7 @@ load active StrategyVersion
   → evaluate selection/scoring/signals per stock
   → assign stable ranks
   → commit StrategyRun + Results + Signals
-  → optional sync target Watchlist
+  → （未交付，后续迭代）optional sync target Watchlist
 ```
 
 输入：
@@ -726,7 +726,7 @@ load active StrategyVersion
   mode?: 'scan' | 'replay';
   asOf?: Date;              // replay 必填
   stockIds?: string[];      // 试算子集；正式 scheduled 不允许
-  targetWatchlistId?: string;
+  targetWatchlistId?: string; // 未交付，后续迭代（schema 已不含该字段）
   persist?: boolean;        // 默认 true；试算 false
 }
 ```
@@ -933,7 +933,7 @@ load enabled AlertPlans
 1. `list_strategies(status=active)`。
 2. 过滤 schedule=after-market 的 currentVersion。
 3. 对每个 Strategy 调 `run_strategy`。
-4. 有 target Watchlist 时调用内部 sync tool。
+4. （未交付，后续迭代）有 target Watchlist 时调用内部 sync tool。
 5. 记录每项 complete/partial/failed 和 providerStatuses。
 6. 不生成 Advice、不发送买卖结论。
 
@@ -999,7 +999,7 @@ luoome migration verify strategy-watchlist
 - 新 read tools 默认可暴露。
 - write/external 遵循现有 opt-in。
 - `sync_watchlist_source`、migration 和内部 commit tools 不暴露。
-- 旧 tactic/group/pool tools 在兼容期可保留 discovery，但 description 标 deprecated 和替代工具。
+- 实际执行为一次性硬切：旧 tactic/group/pool tools 已随迁移从 registry 移除，无兼容期 discovery。
 
 ### 13.4 Agent
 
@@ -1010,7 +1010,10 @@ luoome migration verify strategy-watchlist
 
 ## 14. 兼容与弃用
 
-兼容期建议两个发布版本：
+> 实际执行记录：设计原建议两个发布版本的兼容期（见下），落地时改为一次性
+> big-bang 硬切——新旧模型同分支切换，legacy tools 直接移除、不做转译层。
+
+原设计（未按此执行，仅供追溯）：
 
 ### 版本 N
 
@@ -1025,7 +1028,11 @@ luoome migration verify strategy-watchlist
 - 旧表保持只读回滚来源。
 - legacy entity 文件只保留类型 re-export 和 migration decoder。
 
-物理删除旧表、列和兼容代码属于未来 N+2 专项，不与功能迁移同时做。
+实际执行（一次性硬切）：
+
+- legacy tools 随迁移同版本从 registry 移除，不保留 discovery，不做 deprecated 过渡。
+- 旧数据经 `luoome migration verify strategy-watchlist` 一次性迁移校验。
+- 物理删除旧表、列和兼容代码属于未来专项，不与功能迁移同时做。
 
 ## 15. 安全与隐私
 
@@ -1128,7 +1135,7 @@ git diff --check
    或 researching。
 3. 首期不新增永久 AgentRun 领域实体。AI source 使用现有 chat message/tool trace id；未来只有
    在 Agent run 形成独立查询、保留和权限生命周期时再立项。
-4. legacy tools 保留两个发布版本：版本 N 标 deprecated 并转译，版本 N+1 默认移除；旧表继续
-   只读保留到未来 N+2 清理专项。
+4. legacy tools 的兼容期未执行：实际为一次性 big-bang 硬切，迁移版本直接移除 legacy
+   tools（不转译、不保留 discovery）；旧表数据经迁移命令处理，物理清理留给未来专项。
 5. Strategy selection 零规则只允许 migration/builtin Strategy；普通用户创建和发布至少需要
    一条 selection rule。

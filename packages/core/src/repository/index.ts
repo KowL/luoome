@@ -253,8 +253,15 @@ export interface StrategyRepository {
   saveVersion(version: StrategyVersion): Promise<void>;
   findVersionById(id: string): Promise<StrategyVersion | null>;
   listVersions(strategyId: string): Promise<readonly StrategyVersion[]>;
+  /**
+   * 切换到同 Strategy 下「已发布且 valid」的 version（回滚/换版本用）。
+   * 不允许激活未 publish 的版本；只改 Strategy.currentVersionId 并置 status=active，不动 publishedAt。
+   */
   activateVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
-  /** 原子设置 publishedAt 并切换 Strategy.currentVersionId/status。 */
+  /**
+   * 首发语义：给 valid version 补 publishedAt（已发布则保留原值），同时切 currentVersionId 并置 status=active。
+   * 与 activateVersion 的差异就在「是否允许未 publish 版本」：publish 允许并负责签发，activate 拒绝。
+   */
   publishVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
 }
 
@@ -265,6 +272,8 @@ export interface StrategyRunRepository {
     readonly strategyId?: string;
     readonly status?: StrategyRun['status'];
     readonly since?: Date;
+    /** 按 startedAt 倒序取前 N 条，避免全量拉取。 */
+    readonly limit?: number;
   }): Promise<readonly StrategyRun[]>;
   saveResults(results: readonly StrategyResult[]): Promise<void>;
   listResults(runId: string): Promise<readonly StrategyResult[]>;

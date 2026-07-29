@@ -25,7 +25,6 @@ export const RunStrategyInput = z.object({
   mode: z.enum(['scan', 'replay']).default('scan'),
   asOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
-  targetWatchlistId: z.string().min(1).optional(),
   persist: z.boolean().default(true),
 });
 
@@ -108,8 +107,10 @@ export const runStrategyTool = defineTool({
         '历史 StockUniverse snapshot 尚未提供；mode=replay 仅允许显式 stockIds 子集',
       );
     }
-    if (input.targetWatchlistId !== undefined) {
-      return errInvalidInput('targetWatchlistId 将在 W3 Watchlist repository 就绪后开放');
+    if (input.mode === 'scan' && input.asOf !== undefined) {
+      return errInvalidInput(
+        'mode=scan 不支持 asOf：bars 会取历史而 quote 仍是实时，时点不一致；需要历史时点请用 mode=replay + 显式 stockIds',
+      );
     }
     const resolved = await resolveVersion(input.strategyId, input.versionId, ctx);
     if ('ok' in resolved) return resolved;
@@ -240,13 +241,33 @@ export const runStrategyTool = defineTool({
         subset: input.stockIds !== undefined,
         persist: input.persist,
       },
-      providerStatuses: [
-        ...(needsQuote ? [{ provider: ctx.adapters.market.name, ok: failures.length === 0 }] : []),
-        ...(needsDailyBars
-          ? [{ provider: `${ctx.adapters.market.name}:daily-bars`, ok: failures.length === 0 }]
-          : []),
-        ...(needsMeta ? [{ provider: 'strategy-meta', ok: false, errorKind: 'unsupported' }] : []),
-      ],
+      providerStatuses:
+        input.mode === 'replay'
+          ? [
+              // replay 只读本地 dailyBar，不以 market adapter 名义上报
+              ...(needsQuote || needsDailyBars
+                ? [{ provider: 'local:daily-bars', ok: failures.length === 0 }]
+                : []),
+              ...(needsMeta
+                ? [{ provider: 'strategy-meta', ok: false, errorKind: 'unsupported' }]
+                : []),
+            ]
+          : [
+              ...(needsQuote
+                ? [{ provider: ctx.adapters.market.name, ok: failures.length === 0 }]
+                : []),
+              ...(needsDailyBars
+                ? [
+                    {
+                      provider: `${ctx.adapters.market.name}:daily-bars`,
+                      ok: failures.length === 0,
+                    },
+                  ]
+                : []),
+              ...(needsMeta
+                ? [{ provider: 'strategy-meta', ok: false, errorKind: 'unsupported' }]
+                : []),
+            ],
       summary: {
         candidates: candidateIds.length,
         evaluated: results.length,

@@ -17,7 +17,7 @@ import { cmdMarketLimitUp } from './market-limit-up.js';
 import { luoomeHome } from './paths.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 
 // ---------- argv 解析 ----------
 
@@ -225,7 +225,9 @@ const cmdToolsInspect = (name: string): void => {
 const cmdMigrationVerifyStrategyWatchlist = (): number => {
   const dbPath = join(luoomeHome(), 'luoome.db');
   if (!existsSync(dbPath)) {
-    throw new CliUsageError(`数据库不存在: ${dbPath}`);
+    // 库不存在是运行时状态（尚未初始化），不是用法错误：exit 1 而非 CliUsageError 的 2。
+    console.error(`数据库不存在: ${dbPath}（先运行 luoome start 或 luoome web serve 初始化）`);
+    return 1;
   }
   printJson(verifyStrategyWatchlistDatabase(dbPath));
   return 0;
@@ -557,6 +559,11 @@ const cmdWatch = async (
   const intervalRaw = flagString(flags, 'interval') ?? '60';
   const intervalSec = parsePositiveInt(intervalRaw, 'interval');
   const intervalMs = intervalSec * 1000;
+  // --pool 是旧 stock-pool 模型的残留 flag，已随 strategy-watchlist 迁移移除；
+  // 不在 VALUE_FLAGS 会被静默吞掉，这里显式报错并指向替代 flag。
+  if (flags.has('pool')) {
+    throw new CliUsageError('--pool 已移除：盯盘对象改为 AlertPlan，请使用 --alert-plan <id>');
+  }
   const alertPlanFlag = flagString(flags, 'alert-plan');
   const once = flags.has('once');
   const notify = !flags.has('no-notify');

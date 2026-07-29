@@ -70,7 +70,8 @@ luoome tools list | head
 ## 2. 第一次启动
 
 luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行自动建表和安装内置 Strategy，
-不会灌入账户、持仓、交易或建议。打开 Web 后进入「设置」，使用 token 创建第一个真实账户。
+不会灌入账户、持仓、交易或建议。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
+Web（严格默认，见 §10 环境变量）；然后打开 Web 进入「设置」，使用 token 创建第一个真实账户。
 
 ### 2.1 一键启动完整 MVP
 
@@ -84,7 +85,7 @@ luoome start
 - 创建默认「全部持仓」分组和「持仓监控」盯盘池
 - 生成 `~/.luoome/web-token`（权限 `0600`）
 
-打开 `http://127.0.0.1:5173/`，到「设置」页粘贴 `web-token` 文件内容后，即可执行持仓、分组和盯盘修改。只想开 Web 时使用 `luoome start --no-watch` 或 `luoome web serve`。
+打开 `http://127.0.0.1:5173/`，到「设置」页粘贴 `web-token` 文件内容后，即可执行持仓、分组和盯盘修改（前提是以 `LUOOME_EXPOSE_WRITE=true` 启动；行情同步等外部调用还需 `LUOOME_EXPOSE_EXTERNAL=true`）。只想开 Web 时使用 `luoome start --no-watch` 或 `luoome web serve`。
 
 ### 2.2 终端全屏
 
@@ -165,7 +166,6 @@ luoome mcp serve    # stdio JSON-RPC
 | `[d]` | 当前持仓详细建议（核心论点 / 支持 / 反证 / 风险 / 免责声明） |
 | `[s]` | **复盘统计**：命中率、跟单盈亏、按决策分解 |
 | `[c]` | **confidence 自校准**：每 10 一档，看到底 confidence 被高估还是低估 |
-| `[t]` | 旧 TUI 扫描入口已停用；请在 Web Strategy 页面运行 |
 | `[o]` | outcome 复盘：最近 20 条建议的状态（已回填 / 待回填） |
 | `[a]` | **账户切换**：j/k 上下移动 + Enter 选中 |
 | `[↑/↓]` 或 `[j/k]` | 滚动列表 / 弹层 / 账户光标（取决于当前激活视图） |
@@ -310,8 +310,8 @@ luoome tools call get_confidence_calibration --input '{}'
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney 主 → Tencent 备，仅 A 股） |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |
 | provider 密钥变量 | 由模型目录指定 | `apiKeyEnv` 引用的环境变量，密钥不写入目录 |
-| `LUOOME_EXPOSE_WRITE` | `false` | MCP 是否追加 write tool；Web 仅用它挂载 outcome 回填端点 |
-| `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 是否放行外部副作用 |
+| `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行 write tool 与 outcome 回填端点 |
+| `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；缺失降级为 log channel |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |

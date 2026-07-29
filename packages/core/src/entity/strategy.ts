@@ -176,7 +176,8 @@ const canonicalizeValue = (value: unknown): unknown => {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .filter(([, item]) => item !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
+        // definitionHash 是落库 identity：必须 code-unit 排序，不依赖 locale
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(([key, item]) => [key, canonicalizeValue(item)]),
     );
   }

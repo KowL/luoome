@@ -7,6 +7,7 @@ import {
   MigrationChecksumMismatchError,
   resolveLegacyTargetId,
   runSchemaMigrations,
+  TARGET_ID_PATTERN,
 } from './runner.js';
 
 const clock = (): Date => new Date('2026-07-29T00:00:00.000Z');
@@ -101,5 +102,37 @@ describe('schema migration runner', () => {
       targetId: 'strategy-trend-following',
       conflict: true,
     });
+  });
+
+  it('前缀候选也被占用时追加稳定 hash', () => {
+    const occupied = new Set(['trend-following', 'strategy-trend-following']);
+    const resolution = resolveLegacyTargetId({
+      legacyId: 'trend-following',
+      targetKind: 'strategy',
+      occupiedIds: occupied,
+    });
+    expect(resolution.conflict).toBe(true);
+    expect(resolution.targetId).toMatch(/^strategy-trend-following-[0-9a-f]{8}$/);
+    // 稳定：同一输入输出同一 id
+    expect(
+      resolveLegacyTargetId({
+        legacyId: 'trend-following',
+        targetKind: 'strategy',
+        occupiedIds: occupied,
+      }).targetId,
+    ).toBe(resolution.targetId);
+  });
+
+  it('截断候选以 - 结尾时去掉尾部 -，仍符合 slug 规则', () => {
+    // 'strategy-'(9) + 54 个 'a' + '-' 正好截断在第 64 字符的 '-' 上
+    const legacyId = `${'a'.repeat(54)}-${'b'.repeat(9)}`;
+    const resolution = resolveLegacyTargetId({
+      legacyId,
+      targetKind: 'strategy',
+      occupiedIds: new Set([legacyId]),
+    });
+    expect(resolution.targetId.endsWith('-')).toBe(false);
+    expect(resolution.targetId.length).toBeLessThanOrEqual(64);
+    expect(TARGET_ID_PATTERN.test(resolution.targetId)).toBe(true);
   });
 });

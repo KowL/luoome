@@ -40,4 +40,42 @@ describe('tool/get_market_data_status', () => {
       expect.arrayContaining(['test', 'universe-test', 'ladder-test']),
     );
   });
+
+  it('watchlistStale 报告存在 stale 成员来源的启用 Watchlist', async () => {
+    const ctx = await buildTestContext();
+    const now = new Date('2026-07-28T02:00:00.000Z');
+    await ctx.repos.watchlist.save({
+      id: 'stale-watch',
+      name: '过期观察',
+      kind: 'personal',
+      membershipPolicy: 'manual',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.watchlistMember.saveMember({
+      id: 'stale-watch:002594.SZ',
+      watchlistId: 'stale-watch',
+      stockId: '002594.SZ',
+      stage: 'watching',
+      priority: 'normal',
+      firstAddedAt: now,
+      lastActivityAt: now,
+    });
+    await ctx.repos.watchlistMember.saveSource({
+      id: 'stale-watch:002594.SZ:manual-1',
+      memberId: 'stale-watch:002594.SZ',
+      kind: 'manual',
+      sourceKey: 'manual:stale-watch:002594.SZ',
+      reason: '测试 stale',
+      status: 'stale',
+      evidence: [],
+      validFrom: now,
+    });
+
+    const result = await getMarketDataStatusTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.watchlistStale).toEqual([{ watchlistId: 'stale-watch', name: '过期观察' }]);
+  });
 });

@@ -33,6 +33,7 @@ const EXPECTED_TOOL_NAMES = [
   'validate_strategy_version',
   'publish_strategy_version',
   'pause_strategy',
+  'resume_strategy',
   'run_strategy',
   'list_strategy_runs',
   'get_strategy_run',
@@ -168,7 +169,6 @@ describe('toolRegistry', () => {
       'sync_quotes',
       'sync_stock_events',
       'sync_stock_universe',
-      'validate_strategy_version',
     ]);
     const writeTools = toolRegistry
       .all()
@@ -199,6 +199,7 @@ describe('toolRegistry', () => {
       'publish_strategy_version',
       'record_advice_outcome',
       'rename_chat_session',
+      'resume_strategy',
       'set_watch_trigger_feedback',
       'update_alert_plan',
       'update_holding',
@@ -206,6 +207,7 @@ describe('toolRegistry', () => {
       'update_stock_event',
       'update_watchlist',
       'update_watchlist_member',
+      'validate_strategy_version',
     ]);
   });
 

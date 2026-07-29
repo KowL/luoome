@@ -104,7 +104,7 @@ interface MembersState {
   readonly members: ReadonlyMap<string, readonly PoolMember[]>;
   /** 跨池 distinct stockIds。 */
   readonly allStockIds: readonly string[];
-  /** stockId → avgCost（多池合并；同一 stock 在多池取第一条）。 */
+  /** stockId → avgCost（来自全活跃持仓，所有池共享）。 */
   readonly avgCostByStock: ReadonlyMap<string, Money>;
   /** skipped 原因（§4 step 3）：stale 动态分组 / group-missing / group-disabled。 */
   readonly skipped: ReadonlyMap<string, string>;
@@ -374,21 +374,13 @@ const stepStateMachine = (
 /** 解析 AlertPlan 的 Watchlist 当前成员；disabled/archived 不进入扫描。 */
 const resolveMembers = async (
   pool: AlertPlan,
+  avgCostByStock: ReadonlyMap<string, Money>,
   ctx: WorkflowContext,
 ): Promise<{ members: readonly PoolMember[]; skipReason?: string }> => {
   const watchlist = await ctx.repos.watchlist.findById(pool.watchlistId);
   if (watchlist === null) return { members: [], skipReason: 'watchlist-missing' };
   if (!watchlist.enabled) return { members: [], skipReason: 'watchlist-disabled' };
-  const [members, holdings] = await Promise.all([
-    ctx.repos.watchlistMember.listMembers(watchlist.id),
-    ctx.tools.list_holdings.execute({ status: 'active' }),
-  ]);
-  const avgCostByStock = new Map<string, Money>();
-  if (holdings.ok) {
-    for (const item of holdings.data.holdings) {
-      avgCostByStock.set(item.holding.stockId, item.holding.avgCost);
-    }
-  }
+  const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
   return {
     members: members.map((member) => ({
       stockId: member.stockId,
@@ -397,10 +389,15 @@ const resolveMembers = async (
   };
 };
 
-/** strategy-signal 只读取持久化事实，不在盘中运行 Strategy。 */
+/**
+ * strategy-signal 只读取持久化事实，不在盘中运行 Strategy。
+ * 信号窗口 since 取当日 Asia/Shanghai 00:00：Strategy 按日（盘前/盘中）运行产出信号，
+ * 只看当日信号，避免历史信号命中后永远 active。
+ */
 const evaluateStrategySignalRuleMember = async (
   rule: AlertRule & { kind: 'strategy-signal' },
   members: readonly PoolMember[],
+  since: Date,
   ctx: WorkflowContext,
 ): Promise<
   ReadonlyMap<
@@ -424,6 +421,7 @@ const evaluateStrategySignalRuleMember = async (
   for (const member of members) {
     const result = await ctx.tools.strategy_signals_by_stock.execute({
       stockId: member.stockId,
+      since,
       limit: 50,
     });
     if (!result.ok) continue;
@@ -453,8 +451,6 @@ const evaluateStrategySignalRuleMember = async (
 
 // ---------- steps ----------
 
-export const resetDailyGroupRefreshFlagForTest = (): void => {};
-
 const stepLoadPlans: WorkflowStep = async (prev, ctx) => {
   const input = prev as IntradayWatchInputT;
   const r = await ctx.tools.list_alert_plans.execute({ enabledOnly: true });
@@ -468,12 +464,19 @@ const stepLoadPlans: WorkflowStep = async (prev, ctx) => {
 
 const stepResolveMembers: WorkflowStep = async (prev, ctx) => {
   const state = prev as LoadedState;
+  // 全活跃持仓只查一次，供所有池共享 avgCost（避免逐池重复 list_holdings）
+  const holdings = await ctx.tools.list_holdings.execute({ status: 'active' });
+  const avgCostByStock = new Map<string, Money>();
+  if (holdings.ok) {
+    for (const item of holdings.data.holdings) {
+      avgCostByStock.set(item.holding.stockId, item.holding.avgCost);
+    }
+  }
   const members = new Map<string, readonly PoolMember[]>();
   const allIds = new Set<string>();
-  const avgCostByStock = new Map<string, Money>();
   const skipped = new Map<string, string>();
   for (const pool of state.pools) {
-    const { members: list, skipReason } = await resolveMembers(pool, ctx);
+    const { members: list, skipReason } = await resolveMembers(pool, avgCostByStock, ctx);
     if (skipReason !== undefined) {
       skipped.set(pool.id, skipReason);
       members.set(pool.id, []);
@@ -482,9 +485,6 @@ const stepResolveMembers: WorkflowStep = async (prev, ctx) => {
     members.set(pool.id, list);
     for (const m of list) {
       allIds.add(m.stockId);
-      if (m.avgCost !== undefined && !avgCostByStock.has(m.stockId)) {
-        avgCostByStock.set(m.stockId, m.avgCost);
-      }
     }
   }
   return {
@@ -579,7 +579,12 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         }
       > | null = null;
       if (rule.kind === 'strategy-signal') {
-        tacticResults = await evaluateStrategySignalRuleMember(rule, members, ctx);
+        tacticResults = await evaluateStrategySignalRuleMember(
+          rule,
+          members,
+          startOfTodayShanghai(now),
+          ctx,
+        );
       }
 
       for (const member of members) {
@@ -636,7 +641,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             evaluation.kind === 'true'
               ? evaluation
               : { kind: 'true', evaluatedValue: 0, evidence: [] };
-          const direction = deriveDirection(rule, evalTrue, !!quote);
+          const direction = resolveTriggerDirection(rule, evalTrue, !!quote);
           const snapshot = buildEvalSnapshot({
             ruleId: rule.id,
             kind: rule.kind,
@@ -657,7 +662,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             triggerType: 'triggered',
             reason: makeReason(rule, evaluation.evaluatedValue, member),
             evidence: [...evaluation.evidence],
-            quote: { close: quote?.close ?? (0 as Money), ts: quote?.ts ?? now },
+            // quote 缺失时按 schema 允许省略 quote 字段，而不是写 close=0 触发不变量
+            ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
             priority,
             deliveryStatus: 'not-requested', // placeholder, stepResolveDelivery 会覆盖
             evalSnapshot: snapshot,
@@ -669,7 +675,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         }
 
         if (sm.emitRecovered && pool.notifyOnRecovery) {
-          const direction = deriveDirection(rule, evaluation, !!quote);
+          const direction = resolveTriggerDirection(rule, evaluation, !!quote);
           const snapshot = buildEvalSnapshot({
             ruleId: rule.id,
             kind: rule.kind,
@@ -690,7 +696,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             triggerType: 'recovered',
             reason: `已退出 active：${makeReason(rule, evaluation.evaluatedValue, member)}`,
             evidence: [...evaluation.evidence],
-            quote: { close: quote?.close ?? (0 as Money), ts: quote?.ts ?? now },
+            // quote 缺失时按 schema 允许省略 quote 字段，而不是写 close=0 触发不变量
+            ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
             // recovered 优先级固定 normal（§5）
             priority: 'normal',
             deliveryStatus: 'not-requested',
@@ -712,7 +719,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             (pool.triggerMode === 'daily-first' &&
               !alreadyTriggeredToday(state, pool.id, member.stockId, rule.id, now)))
         ) {
-          const direction = deriveDirection(rule, evaluation, !!quote);
+          const direction = resolveTriggerDirection(rule, evaluation, !!quote);
           const snapshot = buildEvalSnapshot({
             ruleId: rule.id,
             kind: rule.kind,
@@ -733,7 +740,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             triggerType: 'triggered',
             reason: makeReason(rule, evaluation.evaluatedValue, member),
             evidence: [...evaluation.evidence],
-            quote: { close: quote?.close ?? (0 as Money), ts: quote?.ts ?? now },
+            // quote 缺失时按 schema 允许省略 quote 字段，而不是写 close=0 触发不变量
+            ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
             priority: priority as AlertPriority,
             deliveryStatus: 'not-requested',
             evalSnapshot: snapshot,
@@ -797,7 +805,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             triggerType: 'triggered',
             reason: '所有规则同时进入 active',
             evidence: evaluableRules.map((r) => `${r.kind} active`),
-            quote: { close: quote?.close ?? (0 as Money), ts: quote?.ts ?? now },
+            // quote 缺失时按 schema 允许省略 quote 字段，而不是写 close=0 触发不变量
+            ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
             priority,
             deliveryStatus: 'not-requested',
             evalSnapshot: { composite: true, rules: evaluableRules.map((r) => r.kind) },
@@ -906,6 +915,22 @@ const deriveDirection = (
   return 'watch';
 };
 
+/**
+ * 触发方向：strategy-signal 规则取信号自身的 bullish/bearish 映射（buy/sell/watch），
+ * 其它规则按行情派生；无行情时一律 watch。
+ */
+const resolveTriggerDirection = (
+  rule: AlertRule,
+  evaluation: EvalResult,
+  hasQuote: boolean,
+): WatchTrigger['direction'] => {
+  if (rule.kind === 'strategy-signal' && 'direction' in evaluation) {
+    const signalDirection = (evaluation as { direction?: WatchTrigger['direction'] }).direction;
+    if (signalDirection !== undefined) return signalDirection;
+  }
+  return deriveDirection(rule, evaluation, hasQuote);
+};
+
 const ruleKindThreshold = (rule: AlertRule): Record<string, unknown> => {
   if (rule.kind === 'price-change') return { pct: rule.pct, direction: rule.direction };
   if (rule.kind === 'cost-threshold')
@@ -932,7 +957,7 @@ const makeReason = (rule: AlertRule, value: number, member: PoolMember): string 
   if (rule.kind === 'price-level') {
     return `价位穿越 level=${rule.level} side=${rule.side} diff=${value.toFixed(2)}`;
   }
-  return `战法命中 score=${value.toFixed(1)}`;
+  return `策略命中 score=${value.toFixed(1)}`;
 };
 
 const makeTriggerId = (
@@ -1199,7 +1224,7 @@ export const runIntradayWatchObserved = async (
       status: 'running',
       startedAt,
       finishedAt: null,
-      evaluatedPlans: 0,
+      evaluatedPools: 0,
       evaluatedStocks: 0,
       triggered: 0,
       notified: 0,
@@ -1247,7 +1272,8 @@ export const runIntradayWatchObserved = async (
           suppressedByCooldown: 0,
           suppressedByDailyLimit: 0,
           notifyFailed: 0,
-          error: JSON.stringify(result.error),
+          // WatchRun.error 上限 2000 字；超长序列化截断，避免心跳写库失败
+          error: JSON.stringify(result.error).slice(0, 2000),
         },
         ctx,
       );

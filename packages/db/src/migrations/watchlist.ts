@@ -1,6 +1,11 @@
 import type { Database } from 'bun:sqlite';
 
-import { defineSchemaMigration, resolveLegacyTargetId, type SchemaMigration } from './runner.js';
+import {
+  defineSchemaMigration,
+  resolveLegacyTargetId,
+  type SchemaMigration,
+  TARGET_ID_PATTERN,
+} from './runner.js';
 
 interface GroupRow {
   readonly id: string;
@@ -68,6 +73,7 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
   );
   const mappings: Record<string, string> = {};
   const warnings: string[] = [];
+  let watchlistsWritten = 0;
   let membersWritten = 0;
   let sourcesWritten = 0;
   let runsWritten = 0;
@@ -102,6 +108,23 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
   `);
 
   for (const group of groups) {
+    // 单行脏数据（非法 id / 损坏的 resolver JSON）只记 warning 并跳过，不阻塞整库启动。
+    if (!TARGET_ID_PATTERN.test(group.id)) {
+      warnings.push(`group id 不符合统一 slug 规则，已跳过: "${group.id}"`);
+      continue;
+    }
+    let resolver: {
+      kind?: string;
+      stockIds?: string[];
+      accountId?: string;
+      tacticId?: string;
+    };
+    try {
+      resolver = JSON.parse(group.resolver) as typeof resolver;
+    } catch {
+      warnings.push(`group ${group.id} resolver JSON 损坏，已跳过`);
+      continue;
+    }
     const resolution = resolveLegacyTargetId({
       legacyId: group.id,
       targetKind: 'watchlist',
@@ -109,12 +132,6 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
     });
     occupied.add(resolution.targetId);
     mappings[group.id] = resolution.targetId;
-    const resolver = JSON.parse(group.resolver) as {
-      kind?: string;
-      stockIds?: string[];
-      accountId?: string;
-      tacticId?: string;
-    };
     const kind =
       resolver.kind === 'holdings'
         ? 'portfolio'
@@ -133,6 +150,7 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
       group.created_at,
       group.updated_at,
     );
+    watchlistsWritten += 1;
 
     const addCurrent = (input: {
       stockId: string;
@@ -292,7 +310,7 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
           row.created_at,
           null,
         );
-        insertSnapshot.run(
+        const snapshotResult = insertSnapshot.run(
           `${runId}:${row.stock_id}`,
           runId,
           row.stock_id,
@@ -304,10 +322,10 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
           row.evidence_json,
           row.data_as_of,
         );
-        snapshotsWritten += 1;
+        snapshotsWritten += snapshotResult.changes;
       }
       for (const stockId of exited) {
-        insertSnapshot.run(
+        const exitedResult = insertSnapshot.run(
           `${runId}:${stockId}`,
           runId,
           stockId,
@@ -319,7 +337,7 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
           '[]',
           dataAsOf,
         );
-        snapshotsWritten += 1;
+        snapshotsWritten += exitedResult.changes;
       }
       previous = current;
       latestRows = batch;
@@ -358,7 +376,7 @@ const migrateStockGroups = (db: Database): Record<string, unknown> => {
 
   return {
     groupsScanned: groups.length,
-    watchlistsWritten: groups.length,
+    watchlistsWritten,
     membersWritten,
     sourcesWritten,
     runsWritten,

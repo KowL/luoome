@@ -4,9 +4,10 @@
 //   GET  /api/holdings          → list_holdings
 //   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
-//   POST /api/tools/:name/call    → 放行 read/advice/write（ARCHITECTURE §7.1：Web 默认
-//                                   含 write）+ 白名单 external（fetch_quote）；其余
-//                                   external / trade 一律 403 permission_denied。
+//   POST /api/tools/:name/call    → 默认只放行 read/advice（ARCHITECTURE §7.1）；
+//                                   write 需 LUOOME_EXPOSE_WRITE=true，external 需
+//                                   LUOOME_EXPOSE_EXTERNAL=true 且命中白名单
+//                                   （fetch_quote 等）；trade 一律 403 permission_denied。
 // 所有 /api 响应统一 ToolResult 形状；同源部署，无需 CORS。
 
 import { randomBytes } from 'node:crypto';
@@ -55,9 +56,10 @@ const LIGHTWEIGHT_CHARTS_FILE = join(
 );
 
 /**
- * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认放行 read + advice + write。
- * 本地单用户工具，write（持仓 / 交易录入等）是 Web 持仓管理的基础能力；
- * MCP 暴露面不受影响（仍 read+advice 默认，write 需 LUOOME_EXPOSE_WRITE）。
+ * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认只放行 read + advice。
+ * write 需 LUOOME_EXPOSE_WRITE=true、external 需 LUOOME_EXPOSE_EXTERNAL=true 且命中
+ * WEB_ALLOWED_EXTERNAL 白名单才放行（见 /api/tools/:name/call 的门控）；
+ * MCP 暴露面同样默认只读（write 需 LUOOME_EXPOSE_WRITE）。
  */
 const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice', 'write']);
 
@@ -82,7 +84,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
  * external（白名单外）/trade tool 不通过 web 暴露：已在 registry 实现的被
  * sideEffect 门拦截（403 文案准确）；本表覆盖「契约里有名字但尚未实现」的
  * tool——同样按契约返回 403 permission_denied，而不是 404 not_found。
- * （write 已默认放行，未实现的 write 类契约 tool 走 not_found。）
+ * （write 默认不放行；未实现的 write 类契约 tool 走 not_found。）
  */
 const KNOWN_UNEXPOSED_TOOLS: Readonly<Record<string, SideEffect>> = {
   sync_quotes: 'external',
@@ -893,7 +895,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       body = {};
     }
     const input =
-      typeof body === 'object' && body !== null
+      typeof body === 'object' && body !== null && !Array.isArray(body)
         ? { ...(body as Record<string, unknown>) }
         : { notify: false };
     return jsonResult(await runIntradayWatchObserved(input, ctxRef.current, 'once'));
@@ -1496,9 +1498,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // 复盘页右侧渲染成本表 + 整体命中率。
   app.get('/api/review/calibration', async () => callTool('get_confidence_calibration', {}));
 
-  // outcome 回填（write；仅当 LUOOME_EXPOSE_WRITE=true 时挂载）。
+  // outcome 回填（write；仅当 exposeWrite 开启时挂载）。
   // 默认不暴露：避免 web 端被滥用为批量回填入口。
-  if (process.env.LUOOME_EXPOSE_WRITE === 'true') {
+  if (exposeWrite) {
     app.post('/api/review/:id/outcome', async (c) => {
       const denied = mutationPermission(c.req.raw, webToken);
       if (denied !== null) return jsonResult(denied);
@@ -1601,6 +1603,16 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
   if (resolved.filePath !== null) {
     ctx.logger.info(`Web 写操作 token: ${resolved.filePath}（复制文件内容到 Web「设置」页）`);
+  }
+  if (process.env.LUOOME_EXPOSE_WRITE !== 'true') {
+    ctx.logger.info(
+      'write 能力未开启：设置 LUOOME_EXPOSE_WRITE=true 后重启可启用持仓/预警等写操作',
+    );
+  }
+  if (process.env.LUOOME_EXPOSE_EXTERNAL !== 'true') {
+    ctx.logger.info(
+      'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
+    );
   }
   return server;
 };

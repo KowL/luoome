@@ -88,6 +88,18 @@ const syncPortfolioWatchlists: WorkflowStep = async (previous, ctx) => {
       });
       continue;
     }
+    // 显式 watchlistIds 也要校验 enabled（默认路径已过滤，显式传入需兜底）
+    if (!watchlist.enabled) {
+      items.push({
+        watchlistId,
+        status: 'failed',
+        entered: 0,
+        exited: 0,
+        unchanged: 0,
+        error: `Watchlist 已停用: ${watchlistId}`,
+      });
+      continue;
+    }
     const result = await ctx.tools.sync_watchlist_source.execute({
       watchlistId,
       sourceKind: 'portfolio',

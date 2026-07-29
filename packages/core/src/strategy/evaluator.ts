@@ -139,7 +139,13 @@ const evaluateSignal = (
   readonly error?: string;
 } => {
   const evaluation = evaluateRule(rule, context);
-  if (evaluation.status !== 'matched') return { evaluation };
+  if (evaluation.status !== 'matched') {
+    // 与 selection rule 对齐：when 求值抛错的 error 也要进 errors 收集
+    if (evaluation.status === 'error') {
+      return { evaluation, error: evaluation.error ?? `信号规则 ${rule.id} 求值失败` };
+    }
+    return { evaluation };
+  }
   const scored = evaluateScore(rule.score, context);
   if (scored.score === undefined) {
     const error = scored.error ?? 'signal score 无效';
@@ -246,7 +252,11 @@ export const assignStableStrategyRanks = (
   const top = definition.scoring.top;
   return evaluations.map((evaluation) => {
     const rank = ranks.get(evaluation.result.stockId);
-    if (rank === undefined) return evaluation;
+    if (rank === undefined) {
+      // 有 scoring 时无 score 的 selected 是 partial 结果，不得保持入选绕过 top 截断
+      if (!evaluation.result.selected) return evaluation;
+      return { ...evaluation, result: { ...evaluation.result, selected: false } };
+    }
     return {
       ...evaluation,
       result: {

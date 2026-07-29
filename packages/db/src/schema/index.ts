@@ -695,6 +695,10 @@ export const watchlistMemberSources = sqliteTable(
   (t) => ({
     memberStatusIdx: index('watchlist_sources_member_status_idx').on(t.memberId, t.status),
     sourceKeyStatusIdx: index('watchlist_sources_key_status_idx').on(t.sourceKey, t.status),
+    /** 同一 member 的同一 sourceKey 只允许一个非 ended 来源（DDL 见 client.ts ensureSchema）。 */
+    currentUnique: uniqueIndex('watchlist_sources_current_unique')
+      .on(t.memberId, t.sourceKey)
+      .where(sql`status <> 'ended'`),
   }),
 );
 

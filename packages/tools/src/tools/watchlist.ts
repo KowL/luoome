@@ -3,7 +3,6 @@ import {
   assertWatchlistInvariants,
   assertWatchlistMemberInvariants,
   assertWatchlistMemberSourceInvariants,
-  InvariantError,
   MembershipSnapshotSchema,
   ReportMissingDimensionSchema,
   WatchlistMemberSchema,
@@ -202,7 +201,7 @@ export const archiveWatchlistTool = defineTool({
     if (current === null) return errNotFound('Watchlist', input.watchlistId);
     if (current.kind === 'system') return errInvalidInput('system Watchlist 不允许用户归档');
     if ((await ctx.repos.alertPlan.list({ watchlistId: current.id })).length > 0) {
-      throw new InvariantError('存在引用该 Watchlist 的 AlertPlan，不能归档');
+      return errInvalidInput('存在引用该 Watchlist 的 AlertPlan，不能归档');
     }
     await ctx.repos.watchlist.archive(current.id, ctx.clock());
     const watchlist = await ctx.repos.watchlist.findById(current.id);

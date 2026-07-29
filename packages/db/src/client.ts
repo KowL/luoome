@@ -1286,8 +1286,14 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     sqlite.exec('PRAGMA journal_mode = WAL');
   }
   const db = drizzle(sqlite, { schema });
-  ensureSchema(db);
-  runSchemaMigrations(sqlite, STRATEGY_MIGRATIONS);
+  try {
+    ensureSchema(db);
+    runSchemaMigrations(sqlite, STRATEGY_MIGRATIONS);
+  } catch (error) {
+    // 迁移失败时释放 sqlite 句柄，避免调用方重试时泄漏文件锁。
+    sqlite.close();
+    throw error;
+  }
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     stock: new DrizzleStockRepository(db),

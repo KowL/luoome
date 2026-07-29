@@ -10,6 +10,10 @@ const errorText = (result) => {
 const post = (path, input, method = 'POST') =>
   callApi(path, { method, body: JSON.stringify(input) });
 
+/** 触发条目时间行；字段名与 WatchTriggerSchema（只有 createdAt）对齐。 */
+export const triggerMetaText = (trigger) =>
+  `${trigger.alertPlanId} · data ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
+
 const actionButton = (label, action, primary = false) => {
   const button = el('button', `btn ${primary ? 'btn-primary' : 'btn-outline'} btn-sm`, label);
   button.type = 'button';
@@ -286,11 +290,7 @@ export const renderAlerts = async (setStatus) => {
         ? triggers.map((trigger) =>
             el('div', 'entity-item', [
               el('strong', null, `${trigger.stockId} · ${trigger.ruleKind}`),
-              el(
-                'div',
-                'muted',
-                `${trigger.alertPlanId} · data ${new Date(trigger.triggeredAt).toLocaleString('zh-CN')}`,
-              ),
+              el('div', 'muted', triggerMetaText(trigger)),
               el('div', null, (trigger.evidence ?? []).join('；')),
             ]),
           )

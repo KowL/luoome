@@ -235,6 +235,11 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
     ) {
       throw new InvariantError(`Watchlist 不存在: ${member.watchlistId}`);
     }
+    // 预检唯一约束，避免把 SQLite UNIQUE 错误泄漏给调用方（与 memory 实现对齐）。
+    const duplicate = await this.findMember(member.watchlistId, member.stockId);
+    if (duplicate !== null && duplicate.id !== member.id) {
+      throw new InvariantError('(watchlistId, stockId) 必须唯一');
+    }
     this.db
       .insert(watchlistMembers)
       .values(memberValues(member))
@@ -295,6 +300,13 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
     ) {
       throw new InvariantError(`WatchlistMember 不存在: ${source.memberId}`);
     }
+    // 预检部分唯一索引 watchlist_sources_current_unique，避免泄漏 SQLite 错误（与 memory 对齐）。
+    if (source.status !== 'ended') {
+      const current = await this.currentSource(source.memberId, source.sourceKey);
+      if (current !== null && current.id !== source.id) {
+        throw new InvariantError('(memberId, sourceKey) 只能有一个非 ended 来源');
+      }
+    }
     this.db
       .insert(watchlistMemberSources)
       .values(sourceValues(source))
@@ -339,6 +351,12 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
 
   async saveSyncRun(run: WatchlistSyncRun): Promise<void> {
     assertWatchlistSyncRunInvariants(run);
+    if (
+      this.db.select().from(watchlists).where(eq(watchlists.id, run.watchlistId)).get() ===
+      undefined
+    ) {
+      throw new InvariantError(`Watchlist 不存在: ${run.watchlistId}`);
+    }
     this.db
       .insert(watchlistSyncRuns)
       .values(runValues(run))

@@ -11,12 +11,11 @@ export const ListStrategyRunsInput = z.object({
 });
 export const ListStrategyRunsOutput = z.object({
   runs: z.array(StrategyRunSchema),
-  total: z.number().int().nonnegative(),
 });
 
 export const listStrategyRunsTool = defineTool({
   name: 'list_strategy_runs',
-  description: '查询 StrategyRun 历史',
+  description: '查询 StrategyRun 历史（按开始时间倒序，最多返回 limit 条）',
   sideEffect: 'read',
   input: ListStrategyRunsInput,
   output: ListStrategyRunsOutput,
@@ -25,8 +24,9 @@ export const listStrategyRunsTool = defineTool({
       ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
       ...(input.status === undefined ? {} : { status: input.status }),
       ...(input.since === undefined ? {} : { since: input.since }),
+      limit: input.limit,
     });
-    return { runs: runs.slice(0, input.limit), total: runs.length };
+    return { runs };
   },
 });
 

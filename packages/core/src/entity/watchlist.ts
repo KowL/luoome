@@ -115,6 +115,7 @@ export interface WatchlistSyncCommit {
   readonly candidates: readonly WatchlistSourceCandidate[];
   readonly sourceId?: string;
   readonly sourceVersionId?: string;
+  /** archived Member 的恢复目标：自动来源默认 discovered；仅用户手工恢复可选 watching。 */
   readonly reviveStage?: 'discovered' | 'watching';
 }
 
@@ -160,7 +161,9 @@ export const assertWatchlistSyncRunInvariants = (run: WatchlistSyncRun): void =>
     throw new InvariantError('WatchlistSyncRun.sourceKey 前缀必须与 sourceKind 一致');
   }
   if ((run.status === 'running') !== (run.finishedAt === undefined)) {
-    throw new InvariantError('WatchlistSyncRun 只有 running 状态不得有 finishedAt');
+    throw new InvariantError(
+      'WatchlistSyncRun running 不得有 finishedAt，complete/partial/failed 必须有 finishedAt',
+    );
   }
   if (run.finishedAt !== undefined && run.finishedAt < run.startedAt) {
     throw new InvariantError('WatchlistSyncRun.finishedAt 不能早于 startedAt');

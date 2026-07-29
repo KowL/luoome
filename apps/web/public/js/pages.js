@@ -108,6 +108,13 @@ const boardStats = (items) => ({
   flat: items.filter((item) => item.changePct === null || item.changePct === 0).length,
 });
 
+/** 盯盘最近一轮评估摘要；字段名与 WatchRunSchema（evaluatedPools 等）对齐。 */
+const watchRunSummaryText = (latest) =>
+  latest === null
+    ? '跑一轮后显示评估指标'
+    : `评估 ${latest.evaluatedPools} 个方案 / ${latest.evaluatedStocks} 只股票 · ` +
+      `触发 ${latest.triggered} · 通知 ${latest.notified}`;
+
 /* ---- 看板 / 指数条 / 今日预警渲染 ---- */
 
 const fmtTime = (d) => {
@@ -305,11 +312,7 @@ const renderDashboard = async (setStatus) => {
     watch.latest === null
       ? '尚未运行'
       : `最近 ${fmtDateTime(watch.latest.finishedAt ?? watch.latest.startedAt)}`;
-  $('#dash-watch-run-summary').textContent =
-    watch.latest === null
-      ? '跑一轮后显示评估指标'
-      : `评估 ${watch.latest.evaluatedPlans} 个方案 / ${watch.latest.evaluatedStocks} 只股票 · ` +
-        `触发 ${watch.latest.triggered} · 通知 ${watch.latest.notified}`;
+  $('#dash-watch-run-summary').textContent = watchRunSummaryText(watch.latest);
   $('#dash-alert-count').textContent = String(alertPlans.total);
   $('#dash-watchlist-count').textContent = String(watchlists.total);
   $('#dash-stale-count').textContent = String(staleWatchlistCount);
@@ -1878,4 +1881,5 @@ export {
   routeStockId,
   runWatchOnce,
   sortBoardItems,
+  watchRunSummaryText,
 };

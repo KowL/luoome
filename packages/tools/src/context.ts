@@ -34,24 +34,15 @@ export interface BuildContextInput {
 export const ensureBuiltinStrategies = async (
   repos: Pick<RepositoryRegistry, 'strategy'>,
 ): Promise<void> => {
-  const strategies = await repos.strategy.list();
-  const occupied = new Set(strategies.map((strategy) => strategy.id));
-  const nextTargetId = (tacticId: string): string => {
-    if (!occupied.has(tacticId)) return tacticId;
-    const base = `legacy-tactic-${tacticId}`;
-    if (!occupied.has(base)) return base;
-    let suffix = 2;
-    while (occupied.has(`${base}-${suffix}`)) suffix += 1;
-    return `${base}-${suffix}`;
-  };
-
+  const strategies = [...(await repos.strategy.list())];
   for (const tactic of BUILTIN_TACTICS) {
-    const existing = strategies.find((strategy) => strategy.id === tactic.id);
-    if (existing?.currentVersionId !== undefined) continue;
-    const bundle = mapLegacyTacticToStrategy(tactic, nextTargetId(tactic.id));
-    occupied.add(bundle.strategy.id);
+    // tactic.id 已被任何 Strategy 占用（含用户自建 draft）时跳过：
+    // 不覆盖用户策略，也不重复制造 legacy-tactic-<id>-N 副本
+    if (strategies.some((strategy) => strategy.id === tactic.id)) continue;
+    const bundle = mapLegacyTacticToStrategy(tactic, tactic.id);
     await repos.strategy.save(bundle.strategy);
     await repos.strategy.saveVersion(bundle.version);
+    strategies.push(bundle.strategy);
   }
 };
 

@@ -65,6 +65,7 @@ import {
   listStrategiesTool,
   pauseStrategyTool,
   publishStrategyVersionTool,
+  resumeStrategyTool,
   validateStrategyVersionTool,
 } from './tools/strategy-lifecycle.js';
 import {
@@ -229,6 +230,7 @@ export const toolRegistry: Registry = createRegistry([
   validateStrategyVersionTool,
   publishStrategyVersionTool,
   pauseStrategyTool,
+  resumeStrategyTool,
   runStrategyTool,
   listStrategyRunsTool,
   getStrategyRunTool,

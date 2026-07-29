@@ -166,11 +166,12 @@ export const resolveLegacyTargetId = (input: {
   }
 
   const prefixed = `${input.targetKind}-${input.legacyId}`;
-  const candidate = prefixed.slice(0, 64);
-  if (!input.occupiedIds.has(candidate)) {
+  // 截断可能以 '-' 结尾；去掉尾部 '-' 并验证仍符合 slug 规则，否则落到 hash 路径。
+  const candidate = prefixed.slice(0, 64).replace(/-+$/, '');
+  if (TARGET_ID_PATTERN.test(candidate) && !input.occupiedIds.has(candidate)) {
     return { legacyId: input.legacyId, targetId: candidate, conflict: true };
   }
   const suffix = migrationChecksum(`${input.targetKind}:${input.legacyId}`).slice(0, 8);
-  const targetId = `${prefixed.slice(0, 55)}-${suffix}`;
-  return { legacyId: input.legacyId, targetId, conflict: true };
+  const base = prefixed.slice(0, 55).replace(/-+$/, '');
+  return { legacyId: input.legacyId, targetId: `${base}-${suffix}`, conflict: true };
 };

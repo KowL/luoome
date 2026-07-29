@@ -288,7 +288,7 @@ interface StockEventProvider {
   freshness：盘中且 ts 在 2 个扫描周期内 → fresh；
             超过 → stale；当日无快照 → unknown；provider 连续失败 → unavailable
   fallbackFrom：最近一次 WatchRun / sync-quotes 中记录的降级来源
-输出：{ providers: [...], watchHealth: 最近 WatchRun 摘要, groupStale: stale 分组列表 }
+输出：{ providers: [...], watchHealth: 最近 WatchRun 摘要, watchlistStale: stale Watchlist 列表 }
 ```
 
 数据源复用现有 `PriceSnapshot`、`WatchRun`、分组 stale 语义（PRD §6.3 新鲜度规则）。

@@ -95,4 +95,46 @@ describe('list_watch_triggers', () => {
     expect(result.data.total).toBe(2);
     expect(result.data.triggers[0]?.id).toBe('trigger-new');
   });
+
+  it('alertPlanId 过滤命中 alertPlanId，缺省回填 poolId', async () => {
+    const ctx = await buildTestContext();
+    const base = {
+      stockId: '002594.SZ',
+      ruleKind: 'price-change' as const,
+      notified: true,
+      createdAt: new Date('2026-07-23T01:00:00.000Z'),
+    };
+    // 新模型：alertPlanId 与 poolId 同值
+    const saved = await saveWatchTriggerTool.execute(
+      {
+        id: 'trigger-plan-a',
+        alertPlanId: 'plan-a',
+        poolId: 'plan-a',
+        ruleId: 'r_1',
+        triggerType: 'triggered',
+        direction: 'watch',
+        priority: 'normal',
+        deliveryStatus: 'sent',
+        evalSnapshot: { ruleId: 'r_1' },
+        reason: 'trigger plan-a',
+        evidence: ['observable evidence'],
+        quote: { close: 100, ts: base.createdAt },
+        ...base,
+      },
+      ctx,
+    );
+    expect(saved.ok).toBe(true);
+    // 迁移期旧数据：只有 poolId
+    await save(ctx, { id: 'trigger-legacy', ...base });
+
+    const byPlan = await listWatchTriggersTool.execute({ alertPlanId: 'plan-a' }, ctx);
+    expect(byPlan.ok).toBe(true);
+    if (!byPlan.ok) return;
+    expect(byPlan.data.triggers.map((trigger) => trigger.id)).toEqual(['trigger-plan-a']);
+
+    const legacy = await listWatchTriggersTool.execute({ alertPlanId: 'holdings-watch' }, ctx);
+    expect(legacy.ok).toBe(true);
+    if (!legacy.ok) return;
+    expect(legacy.data.triggers.map((trigger) => trigger.id)).toEqual(['trigger-legacy']);
+  });
 });

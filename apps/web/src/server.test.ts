@@ -1484,3 +1484,126 @@ describe('行情页 vendor 与 SPA 路由（stock-market-view §12.1 / §14.3）
     expect(body.error?.kind).toBe('invalid_input');
   });
 });
+
+describe('dashboard 看板 Watchlist 合并路径', () => {
+  interface BoardItem {
+    stockId: string;
+    quote: { close: number } | null;
+    changePct: number | null;
+    holding: unknown;
+    watchlists: string[];
+  }
+  interface DashboardBody {
+    ok: boolean;
+    data?: { board: BoardItem[]; meta: { warnings: string[] } };
+  }
+
+  const BOARD_RULES = [{ id: 'board-rule', kind: 'price-level', side: 'above', level: 15 }];
+
+  it('plan.enabled / watchlist.enabled 过滤、成员去重与 changePct 补全', async () => {
+    // 两个启用 Watchlist 引用同一成员（去重合并）；一个停用方案引用启用池
+    // （plan.enabled 过滤）；一个启用方案引用停用池（watchlist.enabled 过滤）。
+    for (const [id, name, enabled] of [
+      ['board-wl-a', '看板 A', true],
+      ['board-wl-b', '看板 B', true],
+      ['board-wl-c', '看板 C', true],
+      ['board-wl-off', '看板停用', false],
+    ] as const) {
+      expect(
+        (
+          await callTool('create_watchlist', {
+            id,
+            name,
+            kind: 'personal',
+            membershipPolicy: 'manual',
+            enabled,
+          })
+        ).status,
+      ).toBe(200);
+    }
+    for (const [watchlistId, stockId] of [
+      ['board-wl-a', '000063.SZ'],
+      ['board-wl-b', '000063.SZ'],
+      ['board-wl-a', '002415.SZ'],
+      ['board-wl-c', '688981.SH'],
+      ['board-wl-off', '600900.SH'],
+    ] as const) {
+      expect((await callTool('add_watchlist_member', { watchlistId, stockId })).status).toBe(200);
+    }
+    for (const [id, watchlistId, enabled] of [
+      ['board-plan-a', 'board-wl-a', true],
+      ['board-plan-b', 'board-wl-b', true],
+      ['board-plan-off', 'board-wl-c', false],
+      ['board-plan-wl-off', 'board-wl-off', true],
+    ] as const) {
+      expect(
+        (
+          await callTool('create_alert_plan', {
+            id,
+            name: `方案 ${id}`,
+            watchlistId,
+            rules: BOARD_RULES,
+            enabled,
+          })
+        ).status,
+      ).toBe(200);
+    }
+
+    const r = await app.fetch(new Request('http://test/api/dashboard'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as DashboardBody;
+    const board = body.data?.board ?? [];
+    const byStock = (stockId: string) => board.filter((item) => item.stockId === stockId);
+
+    // 同一成员被两个启用 Watchlist 引用 → 仅一行，名单合并
+    const merged = byStock('000063.SZ');
+    expect(merged).toHaveLength(1);
+    const mergedItem = merged[0];
+    expect(mergedItem).toBeDefined();
+    expect([...(mergedItem?.watchlists ?? [])].sort()).toEqual(['看板 A', '看板 B']);
+    // changePct 由 batch_quote 昨收基准补全（FakeMarketAdapter prevClose > 0）
+    expect(mergedItem?.quote).not.toBeNull();
+    expect(typeof mergedItem?.changePct).toBe('number');
+    // 非持仓成员不占 holding 槽
+    expect(mergedItem?.holding).toBeNull();
+
+    expect(byStock('002415.SZ').map((item) => item.watchlists)).toEqual([['看板 A']]);
+    // 停用方案引用的成员不进看板（plan.enabled 过滤）
+    expect(byStock('688981.SH')).toHaveLength(0);
+    // 停用 Watchlist 的成员不进看板（watchlist.enabled 过滤）
+    expect(byStock('600900.SH')).toHaveLength(0);
+  });
+
+  it('get_watchlist 失败降级为 warning，看板跳过该 Watchlist', async () => {
+    // findById 只被 get_watchlist 使用；list_watchlists 走 list，不受影响的
+    // Watchlist 行仍会通过 enabled 过滤进入待拉详情列表。
+    // repo 是类实例，不能用展开（丢原型方法）；用原型保持的包装覆写 findById。
+    const watchlistRepo = Object.create(
+      Object.getPrototypeOf(appCtx.repos.watchlist),
+      Object.getOwnPropertyDescriptors(appCtx.repos.watchlist),
+    ) as typeof appCtx.repos.watchlist;
+    watchlistRepo.findById = async (id: string) => {
+      if (id.startsWith('board-wl-')) {
+        throw new Error('forced findById failure');
+      }
+      return appCtx.repos.watchlist.findById(id);
+    };
+    const brokenCtx: ToolContext = {
+      ...appCtx,
+      repos: { ...appCtx.repos, watchlist: watchlistRepo },
+    };
+    const brokenApp = createWebApp(brokenCtx, {
+      webToken: WEB_TOKEN,
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    const r = await brokenApp.fetch(new Request('http://test/api/dashboard'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as DashboardBody;
+    expect(body.ok).toBe(true);
+    const warnings = body.data?.meta.warnings ?? [];
+    expect(warnings.some((w) => w.includes('get_watchlist(board-wl-a)'))).toBe(true);
+    const board = body.data?.board ?? [];
+    expect(board.some((item) => item.stockId === '000063.SZ')).toBe(false);
+  });
+});

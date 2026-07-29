@@ -13,7 +13,7 @@ import {
   StrategySignalSchema,
   type StrategyVersion,
 } from '@luoome/core';
-import { and, asc, desc, eq, gte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
@@ -159,6 +159,11 @@ export class DrizzleStrategyRepository implements StrategyRepository {
     }
     const existing = await this.findVersionById(version.id);
     const versions = await this.listVersions(version.strategyId);
+    // 预检唯一索引 strategy_versions_strategy_version_unique，避免泄漏 SQLite 错误（与 memory 对齐）。
+    const sameNumber = versions.find(
+      (candidate) => candidate.version === version.version && candidate.id !== version.id,
+    );
+    if (sameNumber !== undefined) throw new InvariantError('(strategyId, version) 必须唯一');
     const maxVersion = versions.at(-1)?.version ?? 0;
     if (existing === null && version.version <= maxVersion) {
       throw new InvariantError('新 StrategyVersion.version 必须严格递增');
@@ -310,6 +315,7 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       readonly strategyId?: string;
       readonly status?: StrategyRun['status'];
       readonly since?: Date;
+      readonly limit?: number;
     } = {},
   ): Promise<readonly StrategyRun[]> {
     const conditions = [];
@@ -318,13 +324,13 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     }
     if (filter.status !== undefined) conditions.push(eq(strategyRuns.status, filter.status));
     if (filter.since !== undefined) conditions.push(gte(strategyRuns.startedAt, filter.since));
-    return this.db
+    const query = this.db
       .select()
       .from(strategyRuns)
       .where(conditions.length === 0 ? undefined : and(...conditions))
-      .orderBy(desc(strategyRuns.startedAt), desc(strategyRuns.id))
-      .all()
-      .map(toRun);
+      .orderBy(desc(strategyRuns.startedAt), desc(strategyRuns.id));
+    const rows = filter.limit === undefined ? query.all() : query.limit(filter.limit).all();
+    return rows.map(toRun);
   }
 
   async saveResults(results: readonly StrategyResult[]): Promise<void> {
@@ -362,13 +368,20 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   }
 
   async listResults(runId: string): Promise<readonly StrategyResult[]> {
-    return this.db
-      .select()
-      .from(strategyResults)
-      .where(eq(strategyResults.runId, runId))
-      .orderBy(asc(strategyResults.rank), asc(strategyResults.stockId))
-      .all()
-      .map(toResult);
+    return (
+      this.db
+        .select()
+        .from(strategyResults)
+        .where(eq(strategyResults.runId, runId))
+        // rank 为 NULL 的无排名结果排最后（与 memory 实现一致）。
+        .orderBy(
+          sql`${strategyResults.rank} IS NULL`,
+          asc(strategyResults.rank),
+          asc(strategyResults.stockId),
+        )
+        .all()
+        .map(toResult)
+    );
   }
 
   async saveSignals(signals: readonly StrategySignal[]): Promise<void> {

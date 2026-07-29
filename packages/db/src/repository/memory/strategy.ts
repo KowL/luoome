@@ -151,7 +151,25 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     if (!this.strategyRepository.isRunnableVersion(run.strategyId, run.strategyVersionId)) {
       throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
     }
-    this.runs.set(run.id, run);
+    // 重复保存只更新运行态列（与 drizzle onConflictDoUpdate 的更新列一致，缺省即清空）。
+    const existing = this.runs.get(run.id);
+    if (existing === undefined) {
+      this.runs.set(run.id, run);
+      return;
+    }
+    const merged: StrategyRun = {
+      ...existing,
+      dataAsOf: run.dataAsOf,
+      status: run.status,
+      providerStatuses: run.providerStatuses,
+      ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
+      ...(run.summary === undefined ? {} : { summary: run.summary }),
+      ...(run.error === undefined ? {} : { error: run.error }),
+    };
+    if (run.finishedAt === undefined) delete (merged as { finishedAt?: Date }).finishedAt;
+    if (run.summary === undefined) delete (merged as { summary?: StrategyRun['summary'] }).summary;
+    if (run.error === undefined) delete (merged as { error?: string }).error;
+    this.runs.set(run.id, merged);
   }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
@@ -163,9 +181,10 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       readonly strategyId?: string;
       readonly status?: StrategyRun['status'];
       readonly since?: Date;
+      readonly limit?: number;
     } = {},
   ): Promise<readonly StrategyRun[]> {
-    return [...this.runs.values()]
+    const sorted = [...this.runs.values()]
       .filter(
         (run) =>
           (filter.strategyId === undefined || run.strategyId === filter.strategyId) &&
@@ -176,6 +195,7 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
         (left, right) =>
           right.startedAt.getTime() - left.startedAt.getTime() || right.id.localeCompare(left.id),
       );
+    return filter.limit === undefined ? sorted : sorted.slice(0, filter.limit);
   }
 
   async saveResults(results: readonly StrategyResult[]): Promise<void> {
@@ -202,10 +222,7 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       StrategySignalSchema.parse(signal);
       if (!this.runs.has(signal.runId))
         throw new InvariantError(`StrategyRun 不存在: ${signal.runId}`);
-      const identity = `${signal.strategyVersionId}\0${signal.ruleId}\0${signal.stockId}\0${signal.ts.getTime()}`;
-      if (!this.signals.has(identity)) {
-        this.signals.set(identity, signal);
-      }
+      this.addSignal(signal);
     }
   }
 
@@ -245,9 +262,16 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       this.results.set(`${result.runId}\0${result.stockId}`, result);
     }
     for (const signal of bundle.signals) {
-      const identity = `${signal.strategyVersionId}\0${signal.ruleId}\0${signal.stockId}\0${signal.ts.getTime()}`;
-      if (!this.signals.has(identity)) this.signals.set(identity, signal);
+      this.addSignal(signal);
     }
+  }
+
+  /** 去重维度与 drizzle 对齐：主键 id 或身份唯一索引任一冲突即忽略。 */
+  private addSignal(signal: StrategySignal): void {
+    const identity = `${signal.strategyVersionId}\0${signal.ruleId}\0${signal.stockId}\0${signal.ts.getTime()}`;
+    if (this.signals.has(identity)) return;
+    if ([...this.signals.values()].some((existing) => existing.id === signal.id)) return;
+    this.signals.set(identity, signal);
   }
 
   async signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]> {

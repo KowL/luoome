@@ -79,4 +79,38 @@ describe('20260729_04_migrate_stock_groups', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('非法 id 或损坏 resolver JSON 的分组记 warning 跳过，不阻塞其余分组迁移', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luoome-watchlist-dirty-'));
+    const dbPath = path.join(dir, 'legacy.sqlite');
+    try {
+      const legacy = new Database(dbPath);
+      seedLegacyStrategyWatchlistFixture(legacy);
+      legacy.exec(`
+        INSERT INTO stock_groups VALUES
+          ('Bad_Id', 'Bad id', NULL, '{"kind":"manual","stockIds":["600519.SH"]}',
+           'manual', 1, 1785254400000, 1785254400000),
+          ('broken-resolver', 'Broken', NULL, '{not-json',
+           'manual', 1, 1785254400000, 1785254400000);
+      `);
+      legacy.close();
+
+      const handle = createDrizzleRepos(dbPath);
+      expect(await handle.repos.watchlist.list()).toHaveLength(4);
+      handle.close();
+
+      const raw = new Database(dbPath);
+      const details = listAppliedSchemaMigrations(raw).find(
+        (migration) => migration.id === '20260729_04_migrate_stock_groups',
+      )?.details;
+      expect(details).toMatchObject({ groupsScanned: 6, watchlistsWritten: 4 });
+      expect(details?.warnings).toEqual([
+        'group id 不符合统一 slug 规则，已跳过: "Bad_Id"',
+        'group broken-resolver resolver JSON 损坏，已跳过',
+      ]);
+      raw.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
