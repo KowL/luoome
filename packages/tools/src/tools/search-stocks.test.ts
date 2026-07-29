@@ -54,6 +54,28 @@ describe('tool/search_stocks', () => {
     expect(res.data.stocks[0]?.id).toBe('002594.SZ');
   });
 
+  it('外部搜索只保留 A 股（SH/SZ），港美股候选被过滤', async () => {
+    const ctx = await buildTestContext();
+    const mixedMarket: MarketDataAdapterLike = {
+      ...ctx.adapters.market,
+      searchStocks: () =>
+        Promise.resolve([
+          { id: '002594.SZ', code: '002594', exchange: 'SZ', name: '比亚迪' },
+          { id: '01211.HK', code: '01211', exchange: 'HK', name: '比亚迪股份' },
+          { id: 'BYDDF.US', code: 'BYDDF', exchange: 'US', name: 'BYD' },
+        ]),
+    };
+    const res = await searchStocksTool.execute(
+      { query: '比亚迪' },
+      { ...ctx, adapters: { ...ctx.adapters, market: mixedMarket } },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.source).toBe('external');
+    expect(res.data.stocks.map((s) => s.id)).toEqual(['002594.SZ']);
+    expect(res.data.total).toBe(1);
+  });
+
   it('adapter 抛错 → 降级本地历史（source=local-history）', async () => {
     const ctx = await buildTestContext();
     const brokenMarket: MarketDataAdapterLike = {

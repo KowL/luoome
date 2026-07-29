@@ -1,4 +1,5 @@
 import type { LLMAdapterLike, StockGroup, Tactic, ToolContext } from '@luoome/core';
+import { stockCode } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
@@ -119,6 +120,29 @@ describe('refresh_stock_group', () => {
     expect(r.data.refreshed).toBe(true);
     expect(r.data.exited).toEqual(['000001.SZ']);
     expect(r.data.entered.length).toBe(r.data.memberCount);
+  });
+
+  it('formula 组：成员补 stub 时用全市场快照名称；既有代码名 stub 也被改正', async () => {
+    const ctx = await buildTestContext();
+    await ctx.repos.tactic.save(ALWAYS_TACTIC);
+    await seedGroup(ctx, 'g-f', {
+      resolver: { kind: 'formula', tacticId: 'always-trigger', lookbackDays: 5, minScore: 60 },
+    });
+    // 情形一：快照里有、本地 stocks 表没有 → 新建的 stub 必须带真名
+    await ctx.repos.stock.remove('002594.SZ');
+    // 情形二：早期只存了代码名的 stub → 刷新时改正为真名
+    await ctx.repos.stock.save({
+      id: '000858.SZ',
+      code: stockCode('000858'),
+      exchange: 'SZ',
+      name: '000858',
+    });
+    const r = await refreshStockGroupTool.execute({ groupId: 'g-f' }, ctx);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.refreshed).toBe(true);
+    expect((await ctx.repos.stock.findById('002594.SZ'))?.name).toBe('比亚迪');
+    expect((await ctx.repos.stock.findById('000858.SZ'))?.name).toBe('五粮液');
   });
 
   it('llm 组：mock LLM 产出 → 写新批次', async () => {

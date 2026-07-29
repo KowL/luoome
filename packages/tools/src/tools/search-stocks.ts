@@ -21,10 +21,13 @@ export const SearchStocksOutput = z.object({
   source: z.enum(['local-universe', 'external', 'local-history']),
 });
 
+/** 产品边界：搜索只面向 A 股（SH/SZ），与股票目录 coverage CN_A_SHARES_SH_SZ 一致。 */
+const isAShare = (exchange: string): boolean => exchange === 'SH' || exchange === 'SZ';
+
 export const searchStocksTool = defineTool({
   name: 'search_stocks',
   description:
-    '按代码 / 名称搜股票（新鲜本地股票目录优先，外部数据源补充，本地历史兜底）；limit 默认 20',
+    '按代码 / 名称搜 A 股（SH/SZ；新鲜本地股票目录优先，外部数据源补充，本地历史兜底）；limit 默认 20',
   sideEffect: 'read',
   input: SearchStocksInput,
   output: SearchStocksOutput,
@@ -63,18 +66,21 @@ export const searchStocksTool = defineTool({
     const { market } = ctx.adapters;
     try {
       const candidates = await market.searchStocks(query);
-      const stocks = candidates.slice(0, input.limit).map((c) => ({
+      const aShares = candidates.filter((c) => isAShare(c.exchange));
+      const stocks = aShares.slice(0, input.limit).map((c) => ({
         id: c.id,
         code: brandStockCode(c.code),
         exchange: c.exchange,
         name: c.name,
       }));
-      return { stocks, total: candidates.length, source: 'external' as const };
+      return { stocks, total: aShares.length, source: 'external' as const };
     } catch {
       // 外部源失败 → 降级本地库（search 是读路径，永不因搜索源挂掉而报错）
     }
 
-    const stocks = await ctx.repos.stock.search(query);
+    const stocks = (await ctx.repos.stock.search(query)).filter((stock) =>
+      isAShare(stock.exchange),
+    );
     const limited = stocks.slice(0, input.limit);
     return { stocks: limited, total: stocks.length, source: 'local-history' as const };
   },

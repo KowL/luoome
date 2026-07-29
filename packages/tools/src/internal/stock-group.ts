@@ -179,8 +179,22 @@ export const refreshGroupMembers = async (
 
   // 全市场刷新的成员多数不在本地 stocks 表：逐条补 stub（幂等 upsert；
   // llm 路径已带名称落过，这里兜底 formula 路径），下游展示依赖 stock 行存在。
+  // 全市场快照自带名称（真实部署里 manager TTL 缓存与 run_tactic 共享同一份快照，
+  // 不增加外呼）；快照失败不阻塞刷新，名称回退为代码（ensureStockStub 既有行为）。
+  let snapshotNames: Map<string, string> | undefined;
+  try {
+    const items = await ctx.adapters.market.fetchMarketSnapshot();
+    snapshotNames = new Map(items.map((item) => [item.id, item.name]));
+  } catch {
+    snapshotNames = undefined;
+  }
   for (const m of members) {
-    await ensureStockStub(m.stockId, ctx);
+    const snapshotName = snapshotNames?.get(m.stockId);
+    await ensureStockStub(
+      m.stockId,
+      ctx,
+      snapshotName !== undefined && snapshotName.length > 0 ? snapshotName : undefined,
+    );
   }
 
   const refreshId = globalThis.crypto.randomUUID();
