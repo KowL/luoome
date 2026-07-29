@@ -31,6 +31,10 @@
 | [策略预警产品文档](./prd/strategy-alert-product.md) | 策略预警闭环、用户流程、产品边界与实施分期 |
 | [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照的页面、tool、与下游联动边界 |
 | [ruo 能力迁移产品设计](./prd/ruo-feature-migration-product-design.md) | 研究档案、公司事件、数据新鲜度与真实复盘 |
+| [AI 投资决策闭环产品总纲](./prd/ai-investment-decision-loop.md) | 发现、研究、观察、Advice、行动与复盘的整体对象关系 |
+| [AI 投资 Agent 协作体验](./prd/ai-investment-agent.md) | Agent 场景、工具编排、权限确认与外部能力边界 |
+| [Strategy DSL](./prd/strategy-dsl.md) | 将现有 Tactic 重构为版本化 Strategy、运行结果与信号模型 |
+| [统一 Watchlist](./prd/watchlist.md) | 统一手工、Strategy、AI 与 Portfolio 来源的机会观察和生命周期 |
 
 ## 技术设计（DDD）
 
@@ -48,6 +52,13 @@
 | [Web 对话助手设计](./ddd/web-chat-design.md) | `/api/chat` 与 draft-and-confirm 交互 |
 | [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) | chat / workflow 升级为真 agent loop 前的库选型与契约设计分析 |
 | [AI SDK 接入与 LLM 重构设计](./ddd/ai-sdk-llm-refactor-design.md) | 用 AI SDK v6 重构 LLM adapter 并实现 agent loop 的落地设计 |
+| [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md) | Strategy、Watchlist、AlertPlan 的领域模型、存储、迁移与跨端契约 |
+
+## 当前开发计划
+
+| 文档 | 范围 |
+|---|---|
+| [Strategy 与统一 Watchlist 开发计划](./strategy-watchlist-development-plan.md) | 从 Tactic/StockGroup/StockPool 迁移到目标模型的阶段、依赖与验收门槛 |
 
 ## 运维手册
 
