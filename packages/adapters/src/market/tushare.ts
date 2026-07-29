@@ -349,6 +349,10 @@ export class TushareMarketAdapter {
   /**
    * tushare `stock_basic.exchange` 用 SSE / SZSE，显式映射为 core 的 SH / SZ，
    * 其它交易所剔除，避免 HK / US / BJ 漏到下游。
+   *
+   * stock_basic 的 name 参数是精确匹配（部分代理甚至直接忽略该参数返回默认首页），
+   * 都服务不了 UI 的模糊搜索；因此按 query 相关性过滤结果，过滤后为空时抛错让
+   * manager 降级到支持模糊搜索的源，而不是把默认首页当搜索结果返回。
    */
   async searchStocks(query: string): Promise<StockSearchCandidate[]> {
     const normalized = query.trim().toUpperCase();
@@ -362,7 +366,7 @@ export class TushareMarketAdapter {
         this.fetchImpl,
         ['ts_code', 'name', 'exchange'],
       );
-      return rows.slice(0, 20).flatMap((row) => {
+      const candidates = rows.slice(0, 20).flatMap((row) => {
         const exchange =
           row.exchange === 'SSE'
             ? ('SH' as const)
@@ -375,6 +379,13 @@ export class TushareMarketAdapter {
         if (code === undefined) return [];
         return [{ id: row.ts_code, code, exchange, name: row.name }];
       });
+      const relevant = candidates.filter(
+        (c) => c.name.toUpperCase().includes(normalized) || c.id.startsWith(normalized),
+      );
+      if (relevant.length === 0) {
+        throw new Error(`tushare no_data: search no relevant match for ${normalized}`);
+      }
+      return relevant;
     } catch (error) {
       const translated = translateTushareError(error);
       this.logger.warn('tushare.searchStocks failed', {

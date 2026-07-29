@@ -459,7 +459,7 @@ describe('TushareMarketAdapter.searchStocks', () => {
       Promise.resolve(
         tushareEnvelope(SEARCH_FIELDS, [
           ['600519.SH', '贵州茅台', 'SSE'],
-          ['000001.SZ', '平安银行', 'SZSE'],
+          ['000001.SZ', '茅指数', 'SZSE'],
           ['00700.HK', '腾讯控股', 'HKEX'],
         ]),
       ),
@@ -467,7 +467,7 @@ describe('TushareMarketAdapter.searchStocks', () => {
     const candidates = await adapter.searchStocks('茅');
     expect(candidates).toEqual([
       { id: '600519.SH', code: '600519', exchange: 'SH', name: '贵州茅台' },
-      { id: '000001.SZ', code: '000001', exchange: 'SZ', name: '平安银行' },
+      { id: '000001.SZ', code: '000001', exchange: 'SZ', name: '茅指数' },
     ]);
   });
 
@@ -486,9 +486,22 @@ describe('TushareMarketAdapter.searchStocks', () => {
     expect(requests[0]?.params.name).toBeUndefined();
   });
 
-  it('搜索命中但空 → 返回空数组', async () => {
+  it('名称与代码都不相关的行被过滤；过滤后为空 → 抛 no_data 让 manager 降级', async () => {
+    // 代理忽略 name 参数时返回默认首页（000001/000002…），不能当搜索结果透传
+    const { adapter } = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(SEARCH_FIELDS, [
+          ['000001.SZ', '平安银行', 'SZSE'],
+          ['000002.SZ', '万科A', 'SZSE'],
+        ]),
+      ),
+    );
+    await expect(adapter.searchStocks('茅台')).rejects.toThrow(/tushare no_data/);
+  });
+
+  it('搜索命中但空 → 抛 no_data 让 manager 降级', async () => {
     const { adapter } = makeAdapter(() => Promise.resolve(tushareEnvelope(SEARCH_FIELDS, [])));
-    await expect(adapter.searchStocks('不存在')).resolves.toEqual([]);
+    await expect(adapter.searchStocks('不存在')).rejects.toThrow(/tushare no_data/);
   });
 });
 
