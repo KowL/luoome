@@ -11,6 +11,7 @@ import {
   openTradeModal,
 } from './holdings-actions.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
+import { alertDialog, promptDialog } from './modal.js';
 import { createStockSearchBox } from './search-box.js';
 import {
   $,
@@ -1277,22 +1278,33 @@ const renderReview = async (setStatus) => {
 };
 
 const fillOutcomeForm = async (adviceId, decision) => {
-  const followedText = window.prompt(
-    `回填 ${adviceId.slice(0, 8)}（决策 ${decision}）\n输入: followed / partially_followed / ignored`,
-    'followed',
-  );
-  if (followedText === null) return;
-  const pnlText = window.prompt('实际盈亏（人民币，可负）', '0');
-  if (pnlText === null) return;
-  const pnl = Number(pnlText);
-  const notes = window.prompt('备注（可选）', '') ?? '';
+  const values = await promptDialog({
+    title: `回填 outcome（${adviceId.slice(0, 8)} · 决策 ${decision}）`,
+    fields: [
+      {
+        key: 'followed',
+        label: '执行情况',
+        value: 'followed',
+        options: [
+          { value: 'followed', label: '跟随' },
+          { value: 'partially_followed', label: '部分跟随' },
+          { value: 'ignored', label: '忽略' },
+        ],
+      },
+      { key: 'pnl', label: '实际盈亏（人民币，可负）', value: '0' },
+      { key: 'notes', label: '备注（可选）', placeholder: '选填' },
+    ],
+    confirmLabel: '回填',
+  });
+  if (values === null) return;
+  const pnl = Number(values.pnl);
   const r = await callApi(`/api/review/${adviceId}/outcome`, {
     method: 'POST',
     body: JSON.stringify({
       input: {
-        followed: followedText === 'followed' || followedText === '1',
+        followed: values.followed === 'followed',
         pnl: Number.isFinite(pnl) ? pnl : 0,
-        ...(notes.length > 0 ? { notes } : {}),
+        ...(values.notes.length > 0 ? { notes: values.notes } : {}),
       },
     }),
   });
@@ -1348,7 +1360,7 @@ const bindSettingsActions = () => {
         !Number.isFinite(initialCapital) ||
         initialCapital < 0
       ) {
-        window.alert('请填写账户名称、3 位币种代码和非负初始资金。');
+        await alertDialog('无法创建账户', '请填写账户名称、3 位币种代码和非负初始资金。');
         return;
       }
       createBtn.disabled = true;
@@ -1358,7 +1370,7 @@ const bindSettingsActions = () => {
       });
       if (!created.ok) {
         createBtn.disabled = false;
-        window.alert(`创建失败：${created.error?.kind ?? 'unknown'}。请先保存有效 token。`);
+        await alertDialog('创建失败', `${created.error?.kind ?? 'unknown'}。请先保存有效 token。`);
         return;
       }
       const accountId = created.data.account.id;
@@ -1368,11 +1380,11 @@ const bindSettingsActions = () => {
       });
       if (!selected.ok) {
         createBtn.disabled = false;
-        // v0.8 起：把 error.cause 一并 alert（zod issues / SQL 异常都藏在这里），
+        // v0.8 起：把 error.cause 一并提示（zod issues / SQL 异常都藏在这里），
         // 否则只看 kind='internal' 永远定不到根因。
         const e = selected.error ?? {};
         const detail = e.cause ? `（${e.cause}）` : '';
-        window.alert(`账户已创建，但激活失败：${e.kind ?? 'unknown'}${detail}`);
+        await alertDialog('激活失败', `账户已创建，但激活失败：${e.kind ?? 'unknown'}${detail}`);
         return;
       }
       window.__luoome.setAccountId(accountId);

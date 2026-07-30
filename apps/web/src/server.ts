@@ -24,6 +24,7 @@ import {
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
+import { BUILTIN_STRATEGIES } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { buildContext, ensureBuiltinStrategies, toolRegistry } from '@luoome/tools';
 import {
@@ -756,6 +757,19 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       ...(Object.keys(filter).length === 0 ? {} : { filter }),
     });
   });
+  app.get('/api/strategy-templates', (c) =>
+    c.json({
+      ok: true,
+      data: {
+        templates: BUILTIN_STRATEGIES.map(({ strategy, version }) => ({
+          id: strategy.id,
+          name: strategy.name,
+          description: strategy.description,
+          definition: version.definition,
+        })),
+      },
+    }),
+  );
   app.post('/api/strategies', (c) => targetMutation(c.req.raw, 'write', 'create_strategy'));
   app.get('/api/strategies/:id', (c) =>
     callTool('get_strategy', { strategyId: c.req.param('id') }),

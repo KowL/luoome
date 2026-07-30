@@ -10,6 +10,7 @@ import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js'
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { renderMarket, teardownMarket } from './market.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
+import { initModal } from './modal.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
@@ -238,6 +239,7 @@ const bindAccountSelect = () => {
 /* ============ 一次性绑定：跨路由的按钮 ============ */
 
 const bindGlobalActions = () => {
+  initModal();
   initHoldingsActions({ refresh: () => renderHoldings(setStatus), setStatus });
   initTargetActions({ setStatus, refresh: showRoute });
 

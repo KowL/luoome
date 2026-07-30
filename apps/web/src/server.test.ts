@@ -437,6 +437,27 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(alerts.data?.plans?.some((plan) => plan.id === alertPlanId)).toBe(true);
   });
 
+  it('GET /api/strategy-templates 返回内置模板目录', async () => {
+    const res = await app.fetch(new Request('http://test/api/strategy-templates'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      data?: {
+        templates?: Array<{
+          id: string;
+          name: string;
+          description: string;
+          definition: { schemaVersion: number };
+        }>;
+      };
+    };
+    expect(body.ok).toBe(true);
+    const templates = body.data?.templates;
+    expect(templates?.length).toBe(7);
+    expect(templates?.every((template) => template.definition?.schemaVersion === 1)).toBe(true);
+    expect(templates?.some((template) => template.name === '布林带均值回复')).toBe(true);
+  });
+
   it('目标 mutation 同时要求显式 opt-in、token 与同源 Origin', async () => {
     const guarded = createWebApp(await buildTestContext(), {
       webToken: WEB_TOKEN,

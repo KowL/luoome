@@ -3,6 +3,7 @@
 
 import { consumeUIMessageStream } from './ai-ui-stream.js';
 import { callApi, getToken } from './api.js';
+import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { $, el, mount } from './ui.js';
 
 const feed = [];
@@ -188,26 +189,38 @@ const formatSessionTime = (value) => {
 
 const renameSession = async (session) => {
   if (sending) return;
-  const title = window.prompt('重命名会话', session.title)?.trim();
-  if (!title || title === session.title) return;
+  const values = await promptDialog({
+    title: '重命名会话',
+    fields: [{ key: 'title', label: '会话名称', value: session.title }],
+    confirmLabel: '重命名',
+  });
+  const title = values?.title;
+  if (title === undefined || title.length === 0 || title === session.title) return;
   const result = await callApi(`/api/chat/sessions/${encodeURIComponent(session.id)}`, {
     method: 'PATCH',
     body: JSON.stringify({ title }),
   });
   if (!result.ok) {
-    window.alert(`重命名失败：${errorText(result, '未知错误')}`);
+    await alertDialog('重命名失败', errorText(result, '未知错误'));
     return;
   }
   await refreshSessions();
 };
 
 const deleteSession = async (session) => {
-  if (sending || !window.confirm(`删除会话「${session.title}」及全部消息？`)) return;
+  if (sending) return;
+  const confirmed = await confirmDialog({
+    title: '删除会话',
+    message: `删除会话「${session.title}」及全部消息？`,
+    confirmLabel: '删除',
+    danger: true,
+  });
+  if (!confirmed) return;
   const result = await callApi(`/api/chat/sessions/${encodeURIComponent(session.id)}`, {
     method: 'DELETE',
   });
   if (!result.ok) {
-    window.alert(`删除失败：${errorText(result, '未知错误')}`);
+    await alertDialog('删除失败', errorText(result, '未知错误'));
     return;
   }
   if (activeSessionId === session.id) {
@@ -299,7 +312,7 @@ const selectSession = async (sessionId) => {
   if (sending || sessionId === activeSessionId) return;
   const result = await callApi(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
   if (!result.ok) {
-    window.alert(`读取会话失败：${errorText(result, '未知错误')}`);
+    await alertDialog('读取会话失败', errorText(result, '未知错误'));
     return;
   }
   activeSessionId = sessionId;
@@ -327,7 +340,7 @@ const createSession = async () => {
     body: JSON.stringify({}),
   });
   if (!result.ok) {
-    window.alert(`创建会话失败：${errorText(result, '请先在设置页配置 Web token')}`);
+    await alertDialog('创建会话失败', errorText(result, '请先在设置页配置 Web token'));
     return null;
   }
   const session = result.data.session;

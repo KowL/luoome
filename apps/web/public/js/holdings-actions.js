@@ -6,7 +6,8 @@
 'use strict';
 
 import { callApi } from './api.js';
-import { $, el, fmtNum } from './ui.js';
+import { closeModal, openModal } from './modal.js';
+import { el, fmtNum } from './ui.js';
 
 /* ============ 依赖注入 ============ */
 
@@ -16,30 +17,6 @@ let notify = () => {};
 export const initHoldingsActions = ({ refresh, setStatus }) => {
   onRefresh = refresh;
   notify = setStatus;
-  $('#modal-close')?.addEventListener('click', closeModal);
-  $('#modal-overlay')?.addEventListener('click', (event) => {
-    if (event.target === event.currentTarget) closeModal();
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeModal();
-  });
-};
-
-/* ============ modal 基础 ============ */
-
-const openModal = (title, body) => {
-  const titleNode = $('#modal-title');
-  const bodyNode = $('#modal-body');
-  const overlay = $('#modal-overlay');
-  if (titleNode === null || bodyNode === null || overlay === null) return;
-  titleNode.textContent = title;
-  bodyNode.replaceChildren(body);
-  overlay.hidden = false;
-};
-
-const closeModal = () => {
-  const overlay = $('#modal-overlay');
-  if (overlay !== null) overlay.hidden = true;
 };
 
 /* ============ 表单小件 ============ */
