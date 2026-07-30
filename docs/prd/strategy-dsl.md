@@ -1,9 +1,9 @@
 # Strategy DSL（策略标准化语言）PRD
 
-> 状态：目标模型草案；需要从现有 Tactic 渐进迁移
+> 状态：已落地（Tactic → Strategy 迁移与旧模型收尾均已完成）
 > 日期：2026-07-29
 > 上位文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)
-> 当前实现：`packages/core/src/entity/tactic.ts`、`packages/core/src/tactic/dsl.ts`
+> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/`
 
 ## 1. 文档结论
 

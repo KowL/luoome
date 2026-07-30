@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 import { DataProvenanceSchema } from './provenance.js';
-import { DeliveryStatusSchema } from './stock-pool.js';
+import { DeliveryStatusSchema } from './watch-trigger.js';
 
 export const ReportKindSchema = z.enum(['opening', 'closing', 'weekly']);
 export type ReportKind = z.infer<typeof ReportKindSchema>;

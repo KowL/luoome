@@ -2,8 +2,6 @@ import { Database } from 'bun:sqlite';
 import type { RepositoryRegistry } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
-import { runSchemaMigrations } from './migrations/runner.js';
-import { STRATEGY_MIGRATIONS } from './migrations/strategy.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -274,42 +272,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
   `);
   db.run(sql`
-    CREATE TABLE IF NOT EXISTS tactics (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      tag TEXT NOT NULL,
-      description TEXT NOT NULL,
-      trigger_when TEXT NOT NULL,
-      score_expression TEXT NOT NULL,
-      direction TEXT NOT NULL,
-      evidence_template TEXT NOT NULL,
-      source TEXT NOT NULL,
-      defined_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`CREATE INDEX IF NOT EXISTS tactics_tag_idx ON tactics (tag)`);
-  db.run(sql`CREATE INDEX IF NOT EXISTS tactics_source_idx ON tactics (source)`);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS tactic_signals (
-      id TEXT PRIMARY KEY,
-      tactic_id TEXT NOT NULL,
-      tactic_name TEXT NOT NULL,
-      tactic_tag TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      ts INTEGER NOT NULL,
-      score REAL NOT NULL,
-      direction TEXT NOT NULL,
-      evidence TEXT NOT NULL,
-      trigger_snapshot TEXT
-    )
-  `);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS tactic_signals_tactic_ts_idx ON tactic_signals (tactic_id, ts)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS tactic_signals_stock_ts_idx ON tactic_signals (stock_id, ts)`,
-  );
-  db.run(sql`
     CREATE TABLE IF NOT EXISTS strategies (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -428,30 +390,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS notifications_result_idx ON notifications (result, sent_at)`,
   );
-  // v0.6 起：股票池；分组化改造后 source 可空（deprecated）+ 增 group_id 列；
-  // v0.7 起增 logic / trigger_mode / priority / daily_notification_limit / notify_on_recovery（§3.3 / §3.7）。
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS stock_pools (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      source TEXT,
-      group_id TEXT,
-      rules TEXT NOT NULL,
-      cooldown_minutes INTEGER NOT NULL,
-      enabled INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      logic TEXT NOT NULL DEFAULT 'ANY',
-      trigger_mode TEXT NOT NULL DEFAULT 'on-enter',
-      priority TEXT,
-      daily_notification_limit INTEGER NOT NULL DEFAULT 20,
-      notify_on_recovery INTEGER NOT NULL DEFAULT 0
-    )
-  `);
-  migrateLegacyStockPools(db);
-  migrateStrategyAlertPoolColumns(db);
-  db.run(sql`CREATE INDEX IF NOT EXISTS stock_pools_enabled_idx ON stock_pools (enabled)`);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS alert_plans (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
@@ -541,42 +479,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   migrateStrategyAlertRunColumns(db);
   db.run(sql`CREATE INDEX IF NOT EXISTS watch_runs_started_at_idx ON watch_runs (started_at)`);
-  // 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §3）：股票分组 + 成员快照
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS stock_groups (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      resolver TEXT NOT NULL,
-      refresh_policy TEXT NOT NULL,
-      enabled INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`CREATE INDEX IF NOT EXISTS stock_groups_enabled_idx ON stock_groups (enabled)`);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS group_member_snapshots (
-      id TEXT PRIMARY KEY,
-      group_id TEXT NOT NULL,
-      stock_id TEXT NOT NULL,
-      refresh_id TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      score REAL,
-      evidence_json TEXT NOT NULL DEFAULT '[]',
-      data_as_of INTEGER,
-      tactic_id TEXT,
-      signal_ts INTEGER,
-      created_at INTEGER NOT NULL
-    )
-  `);
-  migrateGroupMemberResearchColumns(db);
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS group_members_group_refresh_idx ON group_member_snapshots (group_id, refresh_id)`,
-  );
-  db.run(
-    sql`CREATE INDEX IF NOT EXISTS group_members_group_ts_idx ON group_member_snapshots (group_id, created_at)`,
-  );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watchlists (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, kind TEXT NOT NULL,
@@ -767,8 +669,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS reports_status_period_end_idx ON reports (status, period_end)`,
   );
   db.run(sql`CREATE INDEX IF NOT EXISTS reports_workflow_run_idx ON reports (workflow_run_id)`);
-  // 阶段 B 存量数据迁移：v0.6 pool.source JSON → 分组 + 回填 group_id（幂等，须在两张新表 DDL 之后）
-  migrateLegacyPoolSourcesToGroups(db);
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
 };
@@ -798,27 +698,6 @@ const migrateStockProvenanceColumns = (db: DrizzleDb): void => {
   }
   if (!have.has('updated_at')) {
     db.run(sql`ALTER TABLE stocks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`);
-  }
-};
-
-const migrateGroupMemberResearchColumns = (db: DrizzleDb): void => {
-  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(group_member_snapshots)`);
-  if (cols.length === 0) return;
-  const have = new Set(cols.map((column) => column.name));
-  if (!have.has('score')) db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN score REAL`);
-  if (!have.has('evidence_json')) {
-    db.run(
-      sql`ALTER TABLE group_member_snapshots ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'`,
-    );
-  }
-  if (!have.has('data_as_of')) {
-    db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN data_as_of INTEGER`);
-  }
-  if (!have.has('tactic_id')) {
-    db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN tactic_id TEXT`);
-  }
-  if (!have.has('signal_ts')) {
-    db.run(sql`ALTER TABLE group_member_snapshots ADD COLUMN signal_ts INTEGER`);
   }
 };
 
@@ -881,200 +760,6 @@ const migratePriceSnapshotPrevCloseColumn = (db: DrizzleDb): void => {
   if (cols.length === 0) return;
   if (!cols.some((c) => c.name === 'prev_close')) {
     db.run(sql`ALTER TABLE price_snapshots ADD COLUMN prev_close REAL`);
-  }
-};
-
-/**
- * 旧版 stock_pools（v0.6：`source TEXT NOT NULL`、无 `group_id` 列）结构升级。
- *
- * 仅做结构兼容（沿用 v1 迁移形态，幂等）：
- * - 新库：表已由上方 DDL 按新结构建好，直接跳过
- * - 旧库：放宽 source NOT NULL（SQLite 不支持改列约束 → 表重建）+ 补 group_id 列；
- *   存量行 source 数据原样保留、group_id 置 NULL，数据迁移（拆分组）由
- *   migrateLegacyPoolSourcesToGroups 完成（docs/ddd/strategy-watchlist-unification-detailed-design.md §5）
- */
-const migrateLegacyStockPools = (db: DrizzleDb): void => {
-  const cols = db.all<{ name: string; notnull: number }>(sql`PRAGMA table_info(stock_pools)`);
-  if (cols.length === 0) return;
-  const hasGroupId = cols.some((c) => c.name === 'group_id');
-  const sourceCol = cols.find((c) => c.name === 'source');
-  const legacySourceNotNull = sourceCol !== undefined && sourceCol.notnull === 1;
-  if (!legacySourceNotNull) {
-    // 已是新结构但缺 group_id（理论上的中间态）→ 仅补列
-    if (!hasGroupId) {
-      db.run(sql`ALTER TABLE stock_pools ADD COLUMN group_id TEXT`);
-    }
-    return;
-  }
-  db.transaction((tx) => {
-    tx.run(sql`
-      CREATE TABLE stock_pools_mig (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        source TEXT,
-        group_id TEXT,
-        rules TEXT NOT NULL,
-        cooldown_minutes INTEGER NOT NULL,
-        enabled INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `);
-    tx.run(sql`
-      INSERT INTO stock_pools_mig (id, name, description, source, group_id, rules, cooldown_minutes, enabled, created_at, updated_at)
-      SELECT id, name, description, source, NULL, rules, cooldown_minutes, enabled, created_at, updated_at
-      FROM stock_pools
-    `);
-    tx.run(sql`DROP TABLE stock_pools`);
-    tx.run(sql`ALTER TABLE stock_pools_mig RENAME TO stock_pools`);
-  });
-};
-
-/**
- * 阶段 B 存量数据迁移（docs/ddd/strategy-watchlist-unification-detailed-design.md §5）：把 v0.6 pool.source JSON 拆成分组。
- *
- * - 找 group_id 为空（NULL 或 ''）且 source 列有 JSON 的旧 pool 行
- * - 按 source.kind 建分组（id=`<poolId>-group`）：
- *   manual → manual resolver；holdings → holdings resolver；
- *   tactic → formula resolver（tacticId/lookbackDays/minScore 平移，lookbackDays 缺省 30）
- * - 回填 pool.group_id；source 列数据保留不删（审计线索）
- * - tactic source 迁移后不立即跑刷新（db 层拿不到 LLM/tool），console.warn 提示用户手动跑
- * - 幂等：已回填 group_id 的行跳过；分组已存在时跳过创建但仍回填（崩在中途可重入）
- */
-const migrateLegacyPoolSourcesToGroups = (db: DrizzleDb): void => {
-  // 历史迁移曾把内部审计说明写进 description（用户可见字段），清空之（幂等）。
-  db.run(sql`
-    UPDATE stock_groups SET description = NULL
-    WHERE description = ${'由 v0.6 pool.source 迁移（docs/ddd/strategy-watchlist-unification-detailed-design.md §5）'}
-  `);
-
-  const rows = db.all<{ id: string; name: string; source: unknown }>(sql`
-    SELECT id, name, source FROM stock_pools
-    WHERE (group_id IS NULL OR group_id = '') AND source IS NOT NULL
-  `);
-  if (rows.length === 0) return;
-  const nowMs = Date.now();
-
-  for (const row of rows) {
-    let source: unknown = row.source;
-    if (typeof source === 'string') {
-      try {
-        source = JSON.parse(source);
-      } catch {
-        console.warn(`[migrate] pool ${row.id} 的 source JSON 解析失败，跳过`);
-        continue;
-      }
-    }
-    const s = source as {
-      kind?: unknown;
-      stockIds?: unknown;
-      accountId?: unknown;
-      tacticId?: unknown;
-      lookbackDays?: unknown;
-      minScore?: unknown;
-    };
-
-    let resolver: unknown;
-    let refreshPolicy = 'manual';
-    if (s.kind === 'manual') {
-      const stockIds = Array.isArray(s.stockIds)
-        ? s.stockIds.filter((x): x is string => typeof x === 'string' && x.length > 0)
-        : [];
-      if (stockIds.length === 0) {
-        console.warn(`[migrate] pool ${row.id} 的 manual source stockIds 为空，跳过`);
-        continue;
-      }
-      resolver = { kind: 'manual', stockIds };
-    } else if (s.kind === 'holdings') {
-      if (typeof s.accountId !== 'string' || s.accountId.length === 0) {
-        console.warn(`[migrate] pool ${row.id} 的 holdings source 缺 accountId，跳过`);
-        continue;
-      }
-      resolver = { kind: 'holdings', accountId: s.accountId };
-    } else if (s.kind === 'tactic') {
-      if (typeof s.tacticId !== 'string' || s.tacticId.length === 0) {
-        console.warn(`[migrate] pool ${row.id} 的 tactic source 缺 tacticId，跳过`);
-        continue;
-      }
-      resolver = {
-        kind: 'formula',
-        tacticId: s.tacticId,
-        lookbackDays:
-          typeof s.lookbackDays === 'number' && s.lookbackDays > 0 ? s.lookbackDays : 30,
-        ...(typeof s.minScore === 'number' ? { minScore: s.minScore } : {}),
-      };
-      refreshPolicy = 'daily';
-    } else {
-      console.warn(`[migrate] pool ${row.id} 的 source kind 无法识别（${String(s.kind)}），跳过`);
-      continue;
-    }
-
-    const groupId = `${row.id}-group`;
-    const resolverJson = JSON.stringify(resolver);
-    db.transaction((tx) => {
-      const existing = tx.all<{ id: string }>(
-        sql`SELECT id FROM stock_groups WHERE id = ${groupId}`,
-      );
-      if (existing.length === 0) {
-        tx.run(sql`
-          INSERT INTO stock_groups (id, name, description, resolver, refresh_policy, enabled, created_at, updated_at)
-          VALUES (${groupId}, ${row.name}, ${null}, ${resolverJson}, ${refreshPolicy}, 1, ${nowMs}, ${nowMs})
-        `);
-      }
-      tx.run(sql`UPDATE stock_pools SET group_id = ${groupId} WHERE id = ${row.id}`);
-    });
-
-    if (s.kind === 'tactic') {
-      console.warn(
-        `[migrate] pool ${row.id} 的 tactic source 已迁移为 formula 分组 ${groupId}；` +
-          '该分组属旧模型，仅作迁移审计保留，不再参与刷新。',
-      );
-    }
-  }
-};
-
-/**
- * v0.7 策略预警列补齐（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.7）：
- * stock_pools 缺 5 列时 ALTER TABLE ADD。幂等（启动重复执行无副作用）。
- */
-const migrateStrategyAlertPoolColumns = (db: DrizzleDb): void => {
-  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(stock_pools)`);
-  const have = new Set(cols.map((c) => c.name));
-  if (!have.has('logic'))
-    db.run(sql`ALTER TABLE stock_pools ADD COLUMN logic TEXT NOT NULL DEFAULT 'ANY'`);
-  if (!have.has('trigger_mode'))
-    db.run(sql`ALTER TABLE stock_pools ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'on-enter'`);
-  if (!have.has('priority')) db.run(sql`ALTER TABLE stock_pools ADD COLUMN priority TEXT`);
-  if (!have.has('daily_notification_limit'))
-    db.run(
-      sql`ALTER TABLE stock_pools ADD COLUMN daily_notification_limit INTEGER NOT NULL DEFAULT 20`,
-    );
-  if (!have.has('notify_on_recovery'))
-    db.run(sql`ALTER TABLE stock_pools ADD COLUMN notify_on_recovery INTEGER NOT NULL DEFAULT 0`);
-  // 回填 rules[].id：缺 id 的逐条生成并写回（参照 v0.6 分组迁移的幂等做法）。重复启动无副作用。
-  const rows = db.all<{ id: string; rules: string }>(sql`SELECT id, rules FROM stock_pools`);
-  const nowMs = Date.now();
-  for (const row of rows) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.rules);
-    } catch {
-      console.warn(`[migrate] pool ${row.id} 的 rules JSON 解析失败，跳过`);
-      continue;
-    }
-    if (!Array.isArray(parsed)) continue;
-    let changed = false;
-    const updated = (parsed as Array<Record<string, unknown>>).map((r) => {
-      if (r.id !== undefined && r.id !== null && r.id !== '') return r;
-      changed = true;
-      return { ...r, id: `r_${row.id}-${crypto.randomUUID().slice(0, 8)}` };
-    });
-    if (changed) {
-      db.run(
-        sql`UPDATE stock_pools SET rules = ${JSON.stringify(updated)}, updated_at = ${nowMs} WHERE id = ${row.id}`,
-      );
-    }
   }
 };
 
@@ -1284,7 +969,6 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   const db = drizzle(sqlite, { schema });
   try {
     ensureSchema(db);
-    runSchemaMigrations(sqlite, STRATEGY_MIGRATIONS);
   } catch (error) {
     // 迁移失败时释放 sqlite 句柄，避免调用方重试时泄漏文件锁。
     sqlite.close();

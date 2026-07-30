@@ -1,4 +1,4 @@
-import type { StockPool, ToolContext } from '@luoome/core';
+import type { AlertPlan, ToolContext } from '@luoome/core';
 import { money } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
@@ -31,7 +31,13 @@ const T_DAY_BEFORE = new Date('2026-07-19T00:00:00.000Z');
  * 把 plan 覆盖）。fixed.adapters.market 才是 FixedQuoteAdapter，workflow 调
  * batch_quote tool 会走这条路径。
  */
-const savePlan = async (ctx: ToolContext, pool: StockPool): Promise<void> => {
+/** 测试沿用旧 pool 字段形状（groupId / 可缺省 rule.id）；统一在此转换为 AlertPlan 落库。 */
+type TestPlanInput = Omit<AlertPlan, 'watchlistId' | 'rules'> & {
+  readonly groupId: string;
+  readonly rules: readonly Record<string, unknown>[];
+};
+
+const savePlan = async (ctx: ToolContext, pool: TestPlanInput): Promise<void> => {
   await ctx.repos.alertPlan.save({
     id: pool.id,
     name: pool.name,
@@ -39,7 +45,7 @@ const savePlan = async (ctx: ToolContext, pool: StockPool): Promise<void> => {
     rules: pool.rules.map((rule, index) => ({
       ...rule,
       id: rule.id ?? `rule-${index + 1}`,
-    })) as never,
+    })) as unknown as AlertPlan['rules'],
     logic: pool.logic,
     triggerMode: pool.triggerMode,
     cooldownMinutes: pool.cooldownMinutes,

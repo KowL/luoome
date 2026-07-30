@@ -295,7 +295,7 @@ export const diffTopLevel = (curr: LimitUpLadder, prev: LimitUpLadder): LimitUpL
 /**
  * 把天梯快照映射成 `code → ladderLevel` 查询表（Phase 2 替换 ruo 旧 `refreshTop10` 的 `code→level` 输入）。
  *
- * 用法：未来 StockGroup / WatchPlan / strategy-alert 规则把 `ladderLevel` 作为 ranking 信号时，
+ * 用法：未来 Watchlist / AlertPlan / strategy-alert 规则把 `ladderLevel` 作为 ranking 信号时，
  * 调一次本函数缓存 map，不再每次 `limit_up_ladder` 重新组装。
  *
  * 注意：若 ladder 为空（含 warnings=non-trading-day）→ 返回空 Map，由调用方决定 fallback 策略。

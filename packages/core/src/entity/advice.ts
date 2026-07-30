@@ -47,19 +47,10 @@ export interface AdviceReasoning {
   readonly counterEvidence: readonly string[]; // 反证
 }
 
-// TacticSignal / TacticSignalSchema v0.3 起权威定义迁到 tactic.ts；
-// 这里 import（让本地能用）+ re-export（让外部通过 advice.js 仍能拿到名字）。
-import type { TacticSignal } from './tactic.js';
-import { TacticSignalSchema } from './tactic.js';
-
-export type { TacticSignal } from './tactic.js';
-export { TacticSignalSchema } from './tactic.js';
-
 /** 数据快照：advice 产出瞬间引用的数据，事后可复盘。 */
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
-  readonly tacticSignals?: readonly TacticSignal[];
   readonly llmReasoning?: string; // LLM 原始推理（用于审计）
   readonly dataAsOf: Date; // 数据截止时间
 }
@@ -131,12 +122,12 @@ export const AdviceReasoningSchema = z.object({
   counterEvidence: z.array(z.string()),
 });
 
-// TacticDirectionSchema 由 tactic.ts 导出并 re-export 在上面。
+// 存量 basedOn JSON 可能仍含已下线的 tacticSignals key；zod object 默认 strip，
+// 读出时静默忽略，不需要保留旧 schema。
 
 export const AdviceDataSnapshotSchema = z.object({
   quotes: z.record(z.string(), QuoteSchema).optional(),
   indicators: z.record(z.string(), TechnicalIndicatorsSchema).optional(),
-  tacticSignals: z.array(TacticSignalSchema).optional(),
   llmReasoning: z.string().optional(),
   dataAsOf: z.coerce.date(),
 });

@@ -130,7 +130,6 @@ luoome mcp serve    # stdio JSON-RPC
 | `luoome strategy list|get|validate|run` | 查询、校验或运行 Strategy |
 | `luoome watchlist list|get|sync` | 查询 Watchlist 或同步 portfolio 来源 |
 | `luoome alert list` | 查询 AlertPlan |
-| `luoome migration verify strategy-watchlist` | 只读验证迁移完整性 |
 | `luoome mcp serve` | 启动 MCP stdio server |
 | `luoome tools list [--json]` | 列全部注册 tool（含 sideEffect） |
 | `luoome tools inspect <name>` | 看 tool 的 input/output schema |

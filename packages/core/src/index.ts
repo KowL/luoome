@@ -22,13 +22,11 @@ export * from './entity/research-note.js';
 export * from './entity/signal-observation.js';
 export * from './entity/stock.js';
 export * from './entity/stock-event.js';
-export * from './entity/stock-group.js';
-export * from './entity/stock-pool.js';
 export * from './entity/stock-universe.js';
 export * from './entity/strategy.js';
-export * from './entity/tactic.js';
 export * from './entity/trade.js';
 export * from './entity/watch-run.js';
+export * from './entity/watch-trigger.js';
 export * from './entity/watchlist.js';
 export * from './entity/workflow-run.js';
 export * from './env-file.js';
@@ -36,10 +34,10 @@ export * from './env-file.js';
 export * from './error/index.js';
 // 仓储接口
 export * from './repository/index.js';
+export * from './strategy/builtin.js';
 export * from './strategy/evaluator.js';
 export * from './strategy/expression.js';
 export * from './strategy/field-registry.js';
-export * from './strategy/legacy-mapper.js';
 // Strategy / Watchlist 重构的跨阶段决策约束（W0 起）
 export * from './strategy-watchlist-policy.js';
 // A 股节假日历（纯计算；文件 / env 加载仍在 cli）

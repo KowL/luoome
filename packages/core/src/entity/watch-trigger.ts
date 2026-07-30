@@ -5,16 +5,13 @@ import { type Money, MoneySchema } from '../types/branded.js';
 import { EventImportanceSchema, StockEventKindSchema } from './stock-event.js';
 
 /**
- * 股票池 + 盯盘规则 + 触发（v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md；
- * 分组化改造见 docs/ddd/strategy-watchlist-unification-detailed-design.md §5；
- * 策略预警扩展 docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
+ * 盯盘触发 + 边沿状态 + AlertPlan 共享的规则 schema
+ * （docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
  *
- * 设计要点：
- * - 池（StockPool）= 成员分组引用（groupId → StockGroup）+ 规则列表（WatchRule）+ 冷却 + enabled
- *   「成员是谁」由 StockGroup 回答（见 entity/stock-group.ts），pool 只管盯盘规则
- * - 触发（WatchTrigger）= 池 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照
- * - 评估时机：每条 rule 独立判断，stockPool.logic 决定 ANY（默认）/ ALL
- * - 落库：StockPool / WatchTrigger / WatchRuleState 都走各自 Repository，规则不变量在此断言
+ * 旧 StockPool 实体已随 strategy-watchlist 迁移下线；本文件保留：
+ * - 触发（WatchTrigger）= 方案 + 股票 + 规则 + 方向 + 理由 + 证据 + 行情快照
+ * - WatchRuleState 边沿状态机
+ * - AlertPlan（entity/alert-plan.ts）复用的规则 schema 与枚举
  */
 
 // ---------- 枚举 ----------
@@ -24,7 +21,10 @@ export type WatchDirection = 'buy' | 'sell' | 'watch';
 
 export const WatchDirectionSchema = z.enum(['buy', 'sell', 'watch']);
 
-/** 规则类型。Phase 1 新增 price-level；event-date（低频事件提醒，ruo 迁移）；volume-ratio / drawdown-from-high 留 Phase 2。 */
+/**
+ * 规则类型。'tactic' 仅为存量 watch_triggers 行的读兼容保留（旧池规则的
+ * rule_kind 落库值），新规则不再产生。
+ */
 export type WatchRuleKind =
   | 'tactic'
   | 'strategy-signal'
@@ -50,7 +50,7 @@ export type PlanLogic = z.infer<typeof PlanLogicSchema>;
 export const TriggerModeSchema = z.enum(['on-enter', 'repeat', 'daily-first']);
 export type TriggerMode = z.infer<typeof TriggerModeSchema>;
 
-/** 告警优先级；方案级 / 规则级可覆盖，按 pool.priority ?? rule.priority ?? 种类推导生效。 */
+/** 告警优先级；方案级 / 规则级可覆盖，按 plan.priority ?? rule.priority ?? 种类推导生效。 */
 export const AlertPrioritySchema = z.enum(['urgent', 'important', 'normal']);
 export type AlertPriority = z.infer<typeof AlertPrioritySchema>;
 
@@ -77,23 +77,14 @@ export type AttemptedDeliveryStatus = (typeof ATTEMPTED_DELIVERY_STATUSES)[numbe
 export const TriggerFeedbackSchema = z.enum(['handled', 'useful', 'useless', 'ignored']);
 export type TriggerFeedback = z.infer<typeof TriggerFeedbackSchema>;
 
-// ---------- WatchRule（discriminated union on `kind`） ----------
+// ---------- AlertPlan 共享规则 schema ----------
 
 const RuleBaseFields = {
-  /** 稳定 ruleId，pool 内唯一。缺省时 tool 层创建生成（`r_${crypto.randomUUID().slice(0, 8)}`）。 */
+  /** 稳定 ruleId，方案内唯一。缺省时 tool 层创建生成（`r_${crypto.randomUUID().slice(0, 8)}`）。 */
   id: z.string().min(1).optional(),
   /** 规则级优先级，缺省走方案默认 / 种类推导。 */
   priority: AlertPrioritySchema.optional(),
 };
-
-/** 战法命中：bullish→buy / bearish→sell / neutral→watch；score ≥ minScore 才触发。 */
-export const TacticRuleSchema = z.object({
-  ...RuleBaseFields,
-  kind: z.literal('tactic'),
-  tacticId: z.string().min(1),
-  /** 缺省 60，避免裸配置噪声；区间 [0, 100]。 */
-  minScore: z.number().min(0).max(100).default(60),
-});
 
 /** 持仓成本阈值：现价 vs avgCost 触发止盈 / 止损；pct ∈ (0, 1]（5% → 0.05）。 */
 export const CostThresholdRuleSchema = z
@@ -140,55 +131,10 @@ export const EventDateRuleSchema = z.object({
   daysBefore: z.array(z.number().int().min(0).max(90)).max(8).default([7, 3, 1]),
 });
 
-export const WatchRuleSchema = z.discriminatedUnion('kind', [
-  TacticRuleSchema,
-  CostThresholdRuleSchema,
-  PriceChangeRuleSchema,
-  PriceLevelRuleSchema,
-  EventDateRuleSchema,
-]);
-
-export type WatchRule = z.infer<typeof WatchRuleSchema>;
-export type TacticRule = z.infer<typeof TacticRuleSchema>;
 export type CostThresholdRule = z.infer<typeof CostThresholdRuleSchema>;
 export type PriceChangeRule = z.infer<typeof PriceChangeRuleSchema>;
 export type PriceLevelRule = z.infer<typeof PriceLevelRuleSchema>;
 export type EventDateRule = z.infer<typeof EventDateRuleSchema>;
-
-// ---------- StockPool ----------
-
-export const StockPoolSchema = z.object({
-  /** slug，kebab-case（与战法 id 规则一致）。 */
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/, {
-    message: 'pool.id 必须小写 kebab-case，长度 2-64',
-  }),
-  name: z.string().min(1).max(64),
-  description: z.string().max(500).optional(),
-  /**
-   * 成员分组引用（stock_groups.id）。
-   * 不做 min(1)：旧库（分组化迁移前）的行 groupId 为空串占位，读出 / 序列化不 crash；
-   * 新写入由 tool 层校验分组存在（create_stock_pool / update_stock_pool）。
-   */
-  groupId: z.string(),
-  rules: z.array(WatchRuleSchema).min(1),
-  /** 同 (poolId, stockId, ruleId) 通知冷却分钟数；区间 [1, 1440]。 */
-  cooldownMinutes: z.number().int().min(1).max(1440).default(30),
-  enabled: z.boolean().default(true),
-  /** 方案级组合逻辑（默认 ANY）。 */
-  logic: PlanLogicSchema.default('ANY'),
-  /** 方案级触发模式（默认 on-enter）；price-level 永远走 on-enter，忽略此设置。 */
-  triggerMode: TriggerModeSchema.default('on-enter'),
-  /** 方案级默认优先级；规则级 priority 缺省时回退到此。 */
-  priority: AlertPrioritySchema.optional(),
-  /** 单方案每日触发上限（仅 ATTEMPTED 状态计数），默认 20。 */
-  dailyNotificationLimit: z.number().int().min(1).max(500).default(20),
-  /** true 时规则退出 active 也会产生 recovered 候选（默认 false）。 */
-  notifyOnRecovery: z.boolean().default(false),
-  createdAt: z.coerce.date(),
-  updatedAt: z.coerce.date(),
-});
-
-export type StockPool = z.infer<typeof StockPoolSchema>;
 
 // ---------- WatchTrigger ----------
 
@@ -198,7 +144,7 @@ export const WatchTriggerSchema = z.object({
   poolId: z.string().min(1),
   stockId: z.string().min(1),
   ruleKind: WatchRuleKindSchema,
-  /** 规则实例 id（与 stock_pool.rules[].id 对齐）；ALL 组合触发固定为 'composite'。 */
+  /** 规则实例 id（与 alert_plan.rules[].id 对齐）；ALL 组合触发固定为 'composite'。 */
   ruleId: z.string().min(1),
   /** event-date 触发关联的公司事件 id（非 event-date 触发为空）。 */
   eventId: z.string().optional(),
@@ -258,76 +204,7 @@ export const WatchRuleStateSchema = z.object({
 
 export type WatchRuleState = z.infer<typeof WatchRuleStateSchema>;
 
-// ---------- 优先级推导 ----------
-
-/**
- * 优先级生效顺序：rule.priority ?? pool.priority ?? 种类推导（docs/.../§3.3）。
- *
- * | 规则 | 推导优先级 |
- * |---|---|
- * | cost-threshold 止损侧 | urgent |
- * | cost-threshold 止盈侧 | important |
- * | price-level | important |
- * | tactic（minScore ≥ 70） | important |
- * | price-change / tactic（minScore < 70） / recovered | normal |
- */
-export const deriveRulePriority = (
-  rule: WatchRule,
-  poolPriority?: AlertPriority,
-): AlertPriority => {
-  if (rule.priority !== undefined) return rule.priority;
-  if (poolPriority !== undefined) return poolPriority;
-  return derivePriorityByKind(rule);
-};
-
-const derivePriorityByKind = (rule: WatchRule): AlertPriority => {
-  switch (rule.kind) {
-    case 'cost-threshold':
-      if (rule.stopLossPct !== undefined) return 'urgent';
-      return 'important';
-    case 'price-level':
-      return 'important';
-    case 'tactic':
-      return rule.minScore >= 70 ? 'important' : 'normal';
-    case 'price-change':
-      return 'normal';
-    case 'event-date':
-      // event-date 触发的实际优先级在求值时由事件 importance 映射覆盖；此处仅为回退默认。
-      return 'normal';
-  }
-};
-
 // ---------- 不变量 ----------
-
-/**
- * Legacy 池不变量；仅供迁移 decoder 与只读回滚路径使用。
- * - id slug 合法（schema 已 regex，runtime 兜底长度）
- * - rules ≥ 1（schema 已 min(1)）
- * - updatedAt ≥ createdAt
- * - rules[].id 在 pool 内唯一（缺省 id 也视为合法的「未生成」状态，不参与唯一性校验）
- *
- * 分组选股战法与 tactic 触发战法刻意解耦：成员可由战法 A 产出，再由战法 B 监控。
- * assertStockPoolInvariants 只断言 pool 自身可校验的不变量。
- */
-export const assertStockPoolInvariants = (pool: StockPool): void => {
-  if (pool.id.length < 2 || pool.id.length > 64) {
-    throw new InvariantError(`pool.id 长度 2-64，实际 ${pool.id.length}`);
-  }
-  if (pool.rules.length === 0) {
-    throw new InvariantError('pool.rules 不能为空');
-  }
-  if (pool.updatedAt.getTime() < pool.createdAt.getTime()) {
-    throw new InvariantError(`pool.updatedAt < pool.createdAt`);
-  }
-  const seenIds = new Set<string>();
-  for (const r of pool.rules) {
-    if (r.id === undefined) continue;
-    if (seenIds.has(r.id)) {
-      throw new InvariantError(`pool.rules[].id 重复：${r.id}`);
-    }
-    seenIds.add(r.id);
-  }
-};
 
 /**
  * 触发不变量：quote.close > 0；evidence 非空（schema 已约束，runtime 兜底）；evalSnapshot 非空。

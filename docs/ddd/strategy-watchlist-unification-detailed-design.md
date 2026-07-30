@@ -677,7 +677,7 @@ formula/llm 历史 group_member_snapshots：
 
 ### 7.5 双读校验与切换
 
-切换前提供只读校验命令：
+切换前提供只读校验命令（该命令与 migration decoder 已在旧模型收尾中移除，本节保留为切换期设计记录）：
 
 ```text
 luoome migration verify strategy-watchlist
@@ -991,7 +991,6 @@ luoome strategy list|get|validate|run
 luoome watchlist list|get|sync
 luoome alert list
 luoome watch                         # 现有常驻 runner 保留
-luoome migration verify strategy-watchlist
 ```
 
 ### 13.3 MCP
@@ -1031,8 +1030,9 @@ luoome migration verify strategy-watchlist
 实际执行（一次性硬切）：
 
 - legacy tools 随迁移同版本从 registry 移除，不保留 discovery，不做 deprecated 过渡。
-- 旧数据经 `luoome migration verify strategy-watchlist` 一次性迁移校验。
-- 物理删除旧表、列和兼容代码属于未来专项，不与功能迁移同时做。
+- 旧数据经一次性 migration decoder 迁移校验；收尾阶段用户确认不再需要数据迁移后，
+  migration decoder、verify 命令、旧表 DDL/schema 与 legacy entity 已整体移除，
+  存量库的旧物理表不再维护（不 DROP、不读取）。
 
 ## 15. 安全与隐私
 

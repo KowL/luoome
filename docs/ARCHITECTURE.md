@@ -409,7 +409,8 @@ interface ToolContext {
 **当前研究与观察模型**：Strategy 是版本化研究规则；StrategyRun 产出可追溯的
 StrategyResult/StrategySignal。Watchlist 统一 manual/strategy/ai/portfolio/import 来源和成员
 生命周期。AlertPlan 引用 Watchlist 并产生 WatchTrigger。公开 surface 只读写这三个模型；
-旧表仅供 migration decoder 与只读回滚。
+旧 Tactic/StockGroup/StockPool 模型（含 migration decoder 与旧表 DDL）已整体移除，
+存量库的旧物理表不再维护（不 DROP、不读取）。
 
 **v0.6.2 起加深**：`MarketDataManager` 容错测试覆盖增加（详见 `packages/adapters/src/market/manager-resilience.test.ts`）：`batchQuote` 部分失败（primary 局部抛错 → fallback 仅补失败的那部分，其它 ok 仍走 primary）、`fetchDailyBars` 三层 fallback（primary → fallback → finalFallback）、自定义 `finalFallbackSuppressMs` 窗口验证。无新功能，纯测试深覆盖。
 
@@ -431,9 +432,9 @@ coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManag
 
 **v0.7 起新增**：`packages/cli/src/paths.ts`（`luoomeHome()` 从 context.ts 抽出，被 watch / holidays / future paths 共享）；节假日历支持文件加载（`holidays.ts` 新增 `parseHolidayObject` / `loadHolidaysFromFile` / `defaultHolidaysFilePath`），三层优先级 union 合并：内置 < 文件 < env。
 
-**迁移与兼容**：`schema_migrations` runner 按事务运行幂等迁移，依次迁移 Strategy、
-Watchlist 与 AlertPlan。`luoome migration verify strategy-watchlist` 只读核对映射、成员集合、
-规则和引用。切换后只写目标表，不双写。
+**迁移与兼容**：Strategy/Watchlist/AlertPlan 切换早已完成，只写目标表，不双写。
+一次性 migration decoder（`schema_migrations` runner 与 verify 命令）已随旧模型整体移除；
+ensureSchema 只保留活表的幂等启动迁移（加列 / 结构演进），存量库的旧物理表不再维护。
 
 **Vibe A 股报告迁移 Phase 1**：新增 `Report` 结构化事实简报，按
 `(kind, scopeKey, periodStart, periodEnd)` 逻辑键幂等保存。正文只允许受限
@@ -620,7 +621,7 @@ export const analyzeStockTool = defineTool({
       risks: llmOutput.risks,
       disclaimers: STANDARD_DISCLAIMERS,
       sourceTool: 'analyze_stock',
-      basedOn: { quotes: { [input.stockId]: quote }, indicators: { [input.stockId]: indicators }, tacticSignals: signals, llmReasoning: llmOutput.raw, dataAsOf: ctx.clock() },
+      basedOn: { quotes: { [input.stockId]: quote }, indicators: { [input.stockId]: indicators }, llmReasoning: llmOutput.raw, dataAsOf: ctx.clock() },
       validFrom: ctx.clock(),
       validUntil: addDays(ctx.clock(), adviceExpiryDays[llmOutput.horizon]),
       createdAt: ctx.clock(),

@@ -8,7 +8,6 @@ import {
   InvariantError,
   type Quote,
   QuoteSchema,
-  type TacticSignal,
 } from '@luoome/core';
 import { and, desc, eq, gt, gte, lte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
@@ -20,8 +19,10 @@ type OutcomeRow = typeof adviceOutcomes.$inferSelect;
 
 /**
  * basedOn 走 text + json 存储，JSON.stringify 会把 Date 序列化为 ISO 字符串。
- * 读出时必须把快照里的 Date 字段（dataAsOf / quotes.*.ts / tacticSignals.*.ts）
- * revive 回 Date；其余字段（numbers / strings）JSON 往返无损。
+ * 读出时必须把快照里的 Date 字段（dataAsOf / quotes.*.ts）revive 回 Date；
+ * 其余字段（numbers / strings）JSON 往返无损。
+ * 存量行的 basedOn 可能仍含已下线的 tacticSignals key：这里不读取它，
+ * 落库对象不再携带该字段即可（读兼容 = 不 crash、不 resurrect）。
  */
 const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
   const quotes: Record<string, Quote> | undefined =
@@ -30,14 +31,9 @@ const reviveSnapshot = (raw: AdviceDataSnapshot): AdviceDataSnapshot => {
       : Object.fromEntries(
           Object.entries(raw.quotes).map(([stockId, quote]) => [stockId, QuoteSchema.parse(quote)]),
         );
-  const tacticSignals: TacticSignal[] | undefined =
-    raw.tacticSignals === undefined
-      ? undefined
-      : raw.tacticSignals.map((s) => ({ ...s, ts: new Date(s.ts) }));
   return {
     ...(quotes !== undefined ? { quotes } : {}),
     ...(raw.indicators !== undefined ? { indicators: raw.indicators } : {}),
-    ...(tacticSignals !== undefined ? { tacticSignals } : {}),
     ...(raw.llmReasoning !== undefined ? { llmReasoning: raw.llmReasoning } : {}),
     dataAsOf: new Date(raw.dataAsOf),
   };

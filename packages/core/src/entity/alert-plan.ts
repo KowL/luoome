@@ -9,7 +9,7 @@ import {
   PriceChangeRuleSchema,
   PriceLevelRuleSchema,
   TriggerModeSchema,
-} from './stock-pool.js';
+} from './watch-trigger.js';
 
 const AlertRuleBaseFields = {
   id: z.string().min(1),

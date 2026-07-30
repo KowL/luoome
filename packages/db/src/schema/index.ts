@@ -22,14 +22,11 @@ import type {
   SignalObservation,
   StockCode,
   StockEvent,
-  StockGroup,
-  StockPool,
   Strategy,
   StrategyResult,
   StrategyRun,
   StrategySignal,
   StrategyVersion,
-  Tactic,
   TradeSide,
   TradeSource,
   Watchlist,
@@ -279,65 +276,6 @@ export const dailyBars = sqliteTable(
   }),
 );
 
-/**
- * 战法定义（v0.3 起）。
- * - builtin 战法由 TACTIC_BUILTIN_DEFINED_AT 固化的 definedAt 标识，不被覆盖；
- * - user 战法由用户在 ~/.luoome/tactics/*.yml 落盘后通过 save_user_tactic 写入。
- */
-export const tactics = sqliteTable(
-  'tactics',
-  {
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    tag: text('tag').$type<Tactic['tag']>().notNull(),
-    description: text('description').notNull(),
-    triggerWhen: text('trigger_when').notNull(),
-    scoreExpression: text('score_expression').notNull(),
-    direction: text('direction').$type<Tactic['direction']>().notNull(),
-    /** evidenceTemplate 走 text + mode 'json'（字符串数组）。 */
-    evidenceTemplate: text('evidence_template', { mode: 'json' })
-      .$type<readonly string[]>()
-      .notNull(),
-    source: text('source').$type<Tactic['source']>().notNull(),
-    definedAt: integer('defined_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    /** tag 索引：list_tactics 按 tag 过滤走索引。 */
-    tagIdx: index('tactics_tag_idx').on(t.tag),
-    sourceIdx: index('tactics_source_idx').on(t.source),
-  }),
-);
-
-/**
- * 战法信号历史（v0.3 起）。
- * 写多读多：run_tactic 写入，tactic-scan workflow / 复盘页查询。
- */
-export const tacticSignals = sqliteTable(
-  'tactic_signals',
-  {
-    id: text('id').primaryKey(),
-    tacticId: text('tactic_id').notNull(),
-    tacticName: text('tactic_name').notNull(),
-    tacticTag: text('tactic_tag').$type<Tactic['tag']>().notNull(),
-    stockId: text('stock_id').notNull(),
-    ts: integer('ts', { mode: 'timestamp_ms' }).notNull(),
-    score: real('score').notNull(),
-    direction: text('direction').$type<Tactic['direction']>().notNull(),
-    /** evidence 走 text + mode 'json'（字符串数组）。 */
-    evidence: text('evidence', { mode: 'json' }).$type<readonly string[]>().notNull(),
-    /** triggerSnapshot 可选（{ expression, result }）。 */
-    triggerSnapshot: text('trigger_snapshot', { mode: 'json' }).$type<
-      { readonly expression: string; readonly result: boolean } | undefined
-    >(),
-  },
-  (t) => ({
-    /** 按 tacticId + ts 倒序：signalsByTactic 查询走索引。 */
-    tacticTsIdx: index('tactic_signals_tactic_ts_idx').on(t.tacticId, t.ts),
-    /** 按 stockId + ts 倒序：signalsByStock 查询走索引。 */
-    stockTsIdx: index('tactic_signals_stock_ts_idx').on(t.stockId, t.ts),
-  }),
-);
-
 export const strategies = sqliteTable(
   'strategies',
   {
@@ -521,43 +459,6 @@ export const notifications = sqliteTable(
   }),
 );
 
-/**
- * 股票池（v0.6 起，docs/ddd/strategy-watchlist-unification-detailed-design.md §3；
- * 分组化改造 docs/ddd/strategy-watchlist-unification-detailed-design.md §3/§5；
- * 策略预警扩展 docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
- *
- * rules 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
- * - source：@deprecated 旧 PoolSource JSON。新行恒为 NULL；旧行数据原样保留
- * - groupId：成员分组引用（stock_groups.id）；旧行迁移前为 NULL
- * - logic / triggerMode / priority / dailyNotificationLimit / notifyOnRecovery：
- *   v0.7 策略预警新增。启动迁移补齐；旧行 logic / triggerMode 设为默认 'ANY' / 'on-enter'，
- *   dailyNotificationLimit 默认 20，notifyOnRecovery 默认 0。priority 老行为无对应字段（NULL）。
- */
-export const stockPools = sqliteTable(
-  'stock_pools',
-  {
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    description: text('description'),
-    source: text('source', { mode: 'json' }).$type<unknown>(),
-    groupId: text('group_id'),
-    rules: text('rules', { mode: 'json' }).$type<StockPool['rules']>().notNull(),
-    cooldownMinutes: integer('cooldown_minutes').notNull(),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
-    logic: text('logic').$type<StockPool['logic']>().notNull(),
-    triggerMode: text('trigger_mode').$type<StockPool['triggerMode']>().notNull(),
-    priority: text('priority').$type<NonNullable<StockPool['priority']>>(),
-    dailyNotificationLimit: integer('daily_notification_limit').notNull(),
-    notifyOnRecovery: integer('notify_on_recovery', { mode: 'boolean' }).notNull(),
-  },
-  (t) => ({
-    /** list(enabledOnly=true) 走索引。 */
-    enabledIdx: index('stock_pools_enabled_idx').on(t.enabled),
-  }),
-);
-
 export const alertPlans = sqliteTable(
   'alert_plans',
   {
@@ -579,58 +480,6 @@ export const alertPlans = sqliteTable(
   (t) => ({
     watchlistIdx: index('alert_plans_watchlist_idx').on(t.watchlistId),
     enabledIdx: index('alert_plans_enabled_idx').on(t.enabled),
-  }),
-);
-
-/**
- * 股票分组（分组化起，docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
- * resolver 走 text + mode 'json'（discriminated union）；enabled 用 0/1 integer。
- */
-export const stockGroups = sqliteTable(
-  'stock_groups',
-  {
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    description: text('description'),
-    resolver: text('resolver', { mode: 'json' }).$type<StockGroup['resolver']>().notNull(),
-    refreshPolicy: text('refresh_policy').$type<StockGroup['refreshPolicy']>().notNull(),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    /** list(enabledOnly=true) 走索引。 */
-    enabledIdx: index('stock_groups_enabled_idx').on(t.enabled),
-  }),
-);
-
-/**
- * 分组成员快照（分组化起，docs/ddd/strategy-watchlist-unification-detailed-design.md §3）。
- * 只增不改：一次刷新 = 一批（同一 refreshId）；当前成员 = 最新 refreshId 那一批。
- */
-export const groupMemberSnapshots = sqliteTable(
-  'group_member_snapshots',
-  {
-    id: text('id').primaryKey(),
-    groupId: text('group_id').notNull(),
-    stockId: text('stock_id').notNull(),
-    refreshId: text('refresh_id').notNull(),
-    reason: text('reason').notNull(),
-    score: real('score'),
-    evidence: text('evidence_json', { mode: 'json' })
-      .$type<readonly string[]>()
-      .notNull()
-      .default([]),
-    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
-    tacticId: text('tactic_id'),
-    signalTs: integer('signal_ts', { mode: 'timestamp_ms' }),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    /** currentMembers（查最新批次）走这条。 */
-    groupRefreshIdx: index('group_members_group_refresh_idx').on(t.groupId, t.refreshId),
-    /** listHistory（历史 / 复盘）走这条。 */
-    groupTsIdx: index('group_members_group_ts_idx').on(t.groupId, t.createdAt),
   }),
 );
 
@@ -1050,8 +899,6 @@ export const schema = {
   adviceOutcomes,
   priceSnapshots,
   dailyBars,
-  tactics,
-  tacticSignals,
   strategies,
   strategyVersions,
   strategyRuns,
@@ -1060,15 +907,11 @@ export const schema = {
   signalObservations,
   notifications,
   // v0.6 起
-  stockPools,
   alertPlans,
   watchTriggers,
   // v0.7 起：边沿状态机
   watchRuleStates,
   watchRuns,
-  // 分组化起（docs/ddd/strategy-watchlist-unification-detailed-design.md §3）
-  stockGroups,
-  groupMemberSnapshots,
   watchlists,
   watchlistMembers,
   watchlistMemberSources,

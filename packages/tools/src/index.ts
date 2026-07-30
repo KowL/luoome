@@ -1,6 +1,5 @@
 // @luoome/tools 桶导出：defineTool + toolRegistry + 全部公开/内部 tool。
-// 旧 Tactic / StockGroup / StockPool / WatchPlan tool 已按 CONTEXT.md 口径下线，
-// 只作为只读迁移来源保留在 db 与 migration decoder 中，不再导出。
+// 旧 Tactic / StockGroup / StockPool / WatchPlan tool 已按 CONTEXT.md 口径下线。
 
 export * from './agent-whitelist.js';
 export * from './context.js';
@@ -32,7 +31,6 @@ export * from './tools/get-holding.js';
 export * from './tools/get-market-data-status.js';
 export * from './tools/get-previous-closes.js';
 export * from './tools/get-report.js';
-export * from './tools/get-signal-observation-stats.js';
 export * from './tools/get-stock-market-view.js';
 export * from './tools/get-stock-universe-status.js';
 export * from './tools/get-watch-status.js';
@@ -49,7 +47,6 @@ export * from './tools/market-outlook.js';
 export * from './tools/record-advice-outcome.js';
 export * from './tools/record-watch-run.js';
 export * from './tools/record-workflow-run.js';
-export * from './tools/refresh-signal-observations.js';
 export * from './tools/render-report.js';
 export * from './tools/run-strategy.js';
 export * from './tools/save-report.js';

@@ -921,18 +921,6 @@ export const registerRepositoryContractTests = (
               },
             },
             indicators: { 'stk-1': { ma5: 10.2, rsi14: 55 } },
-            tacticSignals: [
-              {
-                tacticId: 'tac-1',
-                tacticName: '放量突破',
-                tacticTag: 'momentum' as const,
-                stockId: 'stk-1',
-                ts: T3,
-                score: 80,
-                direction: 'bullish' as const,
-                evidence: ['放量突破'],
-              },
-            ],
             llmReasoning: '原始推理文本',
             dataAsOf: T3,
           },
@@ -942,7 +930,6 @@ export const registerRepositoryContractTests = (
         expect(got).toEqual(advice);
         expect(got?.basedOn.dataAsOf).toBeInstanceOf(Date);
         expect(got?.basedOn.quotes?.['stk-1']?.ts).toBeInstanceOf(Date);
-        expect(got?.basedOn.tacticSignals?.[0]?.ts).toBeInstanceOf(Date);
       });
 
       it('sourceTool / sourceWorkflow 可选字段往返', async () => {

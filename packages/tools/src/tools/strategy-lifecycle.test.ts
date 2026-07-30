@@ -104,7 +104,7 @@ describe('Strategy lifecycle tools', () => {
     expect(published.ok).toBe(false);
   });
 
-  it('seeds builtin Strategies without writing legacy Tactic or import runs', async () => {
+  it('seeds builtin Strategies without writing import runs', async () => {
     const ctx = await buildTestContext();
     await ensureBuiltinStrategies(ctx.repos);
     const strategy = await ctx.repos.strategy.findById('breakout-volume');
@@ -179,7 +179,7 @@ describe('Strategy lifecycle tools', () => {
     expect(result.error.kind).toBe('invalid_input');
   });
 
-  it('用户自建与 builtin tactic 同 id 的 draft Strategy 时不重复造 legacy 副本', async () => {
+  it('用户自建与内置策略同 id 的 draft Strategy 时不重复播种', async () => {
     const ctx = await buildTestContext();
     await createStrategyTool.execute(
       { id: 'breakout-volume', name: '用户同名策略', description: '占用 builtin tactic id' },

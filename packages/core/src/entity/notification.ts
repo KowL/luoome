@@ -60,7 +60,7 @@ export interface Notification {
   readonly errorMessage?: string;
   /** 软关联：被通知的 Advice id（高信心度建议推送场景）。 */
   readonly adviceId?: string;
-  /** 软关联：被通知的 TacticSignal id（战法信号推送场景）。 */
+  /** 软关联：被通知的信号 id（列名为历史遗留；旧值为 TacticSignal id，新值为 StrategySignal / WatchTrigger id）。 */
   readonly tacticSignalId?: string;
   readonly sentAt: Date;
 }

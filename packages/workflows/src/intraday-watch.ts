@@ -247,7 +247,7 @@ const evaluateRule = (
     };
   }
 
-  // tactic 由 evaluateTacticRule 单独处理（异步），不应进 sync 路径。
+  // strategy-signal 由 evaluateStrategySignalRuleMember 单独处理（异步），不应进 sync 路径。
   return { kind: 'unknown' };
 };
 

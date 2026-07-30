@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { DataProvenanceSchema } from './provenance.js';
 
 /** 信号发生后的事实观察；不是回测交易或投资建议。 */
+// 'tactic-signal'：旧 Tactic 模型已下线，枚举值为存量 signal_observations 行的读兼容保留。
 export const SignalObservationSourceKindSchema = z.enum(['watch-trigger', 'tactic-signal']);
 export type SignalObservationSourceKind = z.infer<typeof SignalObservationSourceKindSchema>;
 
@@ -41,12 +42,6 @@ export const SIGNAL_OBSERVATION_HORIZON_DAYS: Record<SignalObservationHorizon, n
   t5: 5,
   t20: 20,
 };
-
-export const signalObservationSourceIdForTacticSignal = (input: {
-  readonly tacticId: string;
-  readonly stockId: string;
-  readonly ts: Date;
-}): string => `${input.tacticId}:${input.stockId}:${input.ts.getTime()}`;
 
 export const signalObservationId = (
   sourceKind: SignalObservationSourceKind,

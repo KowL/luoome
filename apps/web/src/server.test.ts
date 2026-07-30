@@ -206,14 +206,15 @@ describe('Web runtime bootstrap', () => {
       expect(await ctx.repos.stock.search('')).toEqual([]);
       expect(await ctx.repos.holding.listByAccount('')).toEqual([]);
       expect(await ctx.repos.trade.listByAccount('')).toEqual([]);
-      // legacy repo 层已下掉；fresh DB 的 tactics 旧表不落任何行（raw SQL 验证）
+      // legacy repo 层已下掉；fresh DB 不再创建旧模型表（raw SQL 验证）
       const sqlite = new Database(join(dir, 'luoome.db'), { readonly: true });
       try {
-        expect(
-          sqlite
-            .query<{ readonly count: number }, []>('SELECT count(*) AS count FROM tactics')
-            .get()?.count,
-        ).toBe(0);
+        const legacyTables = sqlite
+          .query<{ readonly name: string }, []>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tactics', 'tactic_signals', 'stock_groups', 'group_member_snapshots', 'stock_pools')",
+          )
+          .all();
+        expect(legacyTables).toEqual([]);
       } finally {
         sqlite.close();
       }

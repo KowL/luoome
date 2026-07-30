@@ -3,18 +3,13 @@
 // 子命令清单见 printHelp()；mcp / tui / web 为懒加载（对应包由 W4a/W4c/W4d 并行实现，
 // 未就绪时给出友好错误而非栈追踪，联调存疑点见各 runLazy* 调用处注释）。
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
-import { verifyStrategyWatchlistDatabase } from '@luoome/db';
 import { toolRegistry } from '@luoome/tools';
 
 import { createCliContext } from './context.js';
 import { isDaemonized, respawnDetached } from './daemon.js';
 import { loadProjectEnv } from './env.js';
 import { cmdMarketLimitUp } from './market-limit-up.js';
-import { luoomeHome } from './paths.js';
 import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
 
 const VERSION = '0.9.0';
@@ -216,17 +211,6 @@ const cmdToolsInspect = (name: string): void => {
   const descriptor = toolRegistry.toMCP().find((d) => d.name === name);
   if (descriptor === undefined) throw unknownToolError(name);
   printJson(descriptor.inputSchema);
-};
-
-const cmdMigrationVerifyStrategyWatchlist = (): number => {
-  const dbPath = join(luoomeHome(), 'luoome.db');
-  if (!existsSync(dbPath)) {
-    // 库不存在是运行时状态（尚未初始化），不是用法错误：exit 1 而非 CliUsageError 的 2。
-    console.error(`数据库不存在: ${dbPath}（先运行 luoome start 或 luoome web serve 初始化）`);
-    return 1;
-  }
-  printJson(verifyStrategyWatchlistDatabase(dbPath));
-  return 0;
 };
 
 const cmdToolsCall = async (
@@ -831,9 +815,6 @@ Strategy / Watchlist / Alert:
   watchlist list|get|sync                查询 Watchlist 或同步持仓来源
   alert list                             查询 AlertPlan
 
-Migration:
-  migration verify strategy-watchlist   只读输出旧模型迁移基线与引用完整性
-
 Advice:
   advice list [--since 7d] [--include-expired] [--limit N]   查询历史建议
   advice stats [--since 30d]                                 建议准确率统计
@@ -895,15 +876,6 @@ const run = async (argv: readonly string[]): Promise<number> => {
       return cmdToolsCall(name, flags, json);
     }
     throw new CliUsageError(`未知 tools 子命令: "${sub ?? ''}"（支持 list / inspect / call）`);
-  }
-
-  if (cmd === 'migration') {
-    if (sub === 'verify' && rest[0] === 'strategy-watchlist') {
-      return cmdMigrationVerifyStrategyWatchlist();
-    }
-    throw new CliUsageError(
-      `未知 migration 子命令: "${[sub, ...rest].filter(Boolean).join(' ')}"（支持 verify strategy-watchlist）`,
-    );
   }
 
   if (cmd === 'strategy') return cmdStrategy(sub, rest, flags, json);

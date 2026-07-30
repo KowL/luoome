@@ -3,8 +3,6 @@ import {
   SIGNAL_OBSERVATION_HORIZON_DAYS,
   type SignalObservation,
   signalObservationId,
-  signalObservationSourceIdForTacticSignal,
-  type TacticSignal,
   type WatchTrigger,
 } from '@luoome/core';
 
@@ -31,19 +29,6 @@ const pending = (
     benchmarkStatus: 'unavailable',
     provenance,
   }));
-export const observationsForTacticSignal = (
-  signal: TacticSignal,
-  baselinePrice: number,
-  provenance: DataProvenance,
-): SignalObservation[] =>
-  pending(
-    'tactic-signal',
-    signalObservationSourceIdForTacticSignal(signal),
-    signal.stockId,
-    baselinePrice,
-    signal.ts,
-    provenance,
-  );
 export const observationsForWatchTrigger = (
   trigger: WatchTrigger,
   provenance: DataProvenance,

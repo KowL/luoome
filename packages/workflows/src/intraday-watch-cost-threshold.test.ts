@@ -1,4 +1,4 @@
-import type { StockPool, ToolContext } from '@luoome/core';
+import type { AlertPlan, ToolContext } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import { describe, expect, it } from 'vitest';
@@ -33,8 +33,13 @@ const T0 = new Date('2026-07-21T02:30:00.000Z');
 const HOLDINGS_GROUP_ID = 'holdings-group';
 const MANUAL_GROUP_ID = 'manual-group';
 
-/** 旧 StockPool 形参 → AlertPlan 落库（迁移后测试沿用原 pool 形状，统一在此转换）。 */
-const savePlan = async (ctx: ToolContext, pool: StockPool): Promise<void> => {
+/** 测试沿用旧 pool 字段形状（groupId / 可缺省 rule.id）；统一在此转换为 AlertPlan 落库。 */
+type TestPlanInput = Omit<AlertPlan, 'watchlistId' | 'rules'> & {
+  readonly groupId: string;
+  readonly rules: readonly Record<string, unknown>[];
+};
+
+const savePlan = async (ctx: ToolContext, pool: TestPlanInput): Promise<void> => {
   await ctx.repos.alertPlan.save({
     id: pool.id,
     name: pool.name,
@@ -43,7 +48,7 @@ const savePlan = async (ctx: ToolContext, pool: StockPool): Promise<void> => {
     rules: pool.rules.map((rule, index) => ({
       ...rule,
       id: rule.id ?? `rule-${index + 1}`,
-    })) as never,
+    })) as unknown as AlertPlan['rules'],
     logic: pool.logic,
     triggerMode: pool.triggerMode,
     ...(pool.priority === undefined ? {} : { priority: pool.priority }),

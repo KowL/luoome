@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { InvariantError } from '../error/index.js';
-import { mapLegacyTacticToStrategy } from '../strategy/legacy-mapper.js';
 import {
   assertStrategyInvariants,
   assertStrategyRunInvariants,
   assertStrategyVersionInvariants,
   canonicalStrategyDefinitionJson,
   type StrategyDslV1,
+  type StrategyVersion,
   strategyDefinitionHash,
 } from './strategy.js';
-import type { Tactic } from './tactic.js';
 
 const definition = (): StrategyDslV1 => ({
   schemaVersion: 1,
@@ -52,24 +51,24 @@ describe('Strategy entity', () => {
     ).toThrow(InvariantError);
   });
 
-  it('用户 version 不能零 selection，migration 可以', () => {
-    const tactic: Tactic = {
-      id: 'legacy-tactic',
-      name: 'Legacy',
-      tag: 'momentum',
-      description: 'legacy tactic',
-      triggerWhen: 'true',
-      scoreExpression: '80',
-      direction: 'bullish',
-      evidenceTemplate: ['evidence'],
-      source: 'builtin',
-      definedAt: new Date('2026-07-01T00:00:00.000Z'),
+  it('用户 version 不能零 selection，builtin/migration 来源可以', () => {
+    const emptySelection: StrategyDslV1 = {
+      ...definition(),
+      selection: { logic: 'all', rules: [] },
     };
-    const bundle = mapLegacyTacticToStrategy(tactic);
-    expect(bundle.version.definition.selection.rules).toEqual([]);
-    expect(() => assertStrategyVersionInvariants(bundle.version, 'migration')).not.toThrow();
-    expect(() => assertStrategyVersionInvariants(bundle.version, 'user')).toThrow(/至少需要一条/);
-    expect(bundle.version.definition.signals.entry[0]?.id).toBe('legacy-signal');
+    const version: StrategyVersion = {
+      id: 'strategy-1-v1',
+      strategyId: 'strategy-1',
+      version: 1,
+      definition: emptySelection,
+      definitionHash: strategyDefinitionHash(emptySelection),
+      validationStatus: 'pending',
+      validationErrors: [],
+      createdAt: new Date(0),
+    };
+    expect(() => assertStrategyVersionInvariants(version, 'builtin')).not.toThrow();
+    expect(() => assertStrategyVersionInvariants(version, 'migration')).not.toThrow();
+    expect(() => assertStrategyVersionInvariants(version, 'user')).toThrow(/至少需要一条/);
   });
 
   it('终态 run 必须 finished，failed 必须 error', () => {

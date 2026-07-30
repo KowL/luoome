@@ -11,12 +11,6 @@ import type { SignalObservation, SignalObservationStatus } from '../entity/signa
 import type { Stock } from '../entity/stock.js';
 import type { StockEvent, StockEventKind, StockEventStatus } from '../entity/stock-event.js';
 import type {
-  DeliveryStatus,
-  TriggerFeedback,
-  WatchRuleState,
-  WatchTrigger,
-} from '../entity/stock-pool.js';
-import type {
   MarketCoverage,
   StockUniverseApplySummary,
   StockUniverseSnapshot,
@@ -31,6 +25,12 @@ import type {
 } from '../entity/strategy.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
+import type {
+  DeliveryStatus,
+  TriggerFeedback,
+  WatchRuleState,
+  WatchTrigger,
+} from '../entity/watch-trigger.js';
 import type {
   MembershipSnapshot,
   Watchlist,
