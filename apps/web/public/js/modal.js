@@ -91,9 +91,10 @@ export const confirmDialog = ({
 /**
  * 输入对话框（替代 window.prompt，支持多字段与下拉）。
  * fields: [{ key, label, value?, placeholder?, options?: [{ value, label }] }]
+ * note: 字段上方的 muted 说明行（可选）。
  * @returns {Promise<object|null>} 确认返回 { key: 文本 }；取消/关闭返回 null。
  */
-export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = false }) =>
+export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = false, note }) =>
   new Promise((resolve) => {
     activeResolve = resolve;
     const controls = fields.map((field) => {
@@ -122,6 +123,7 @@ export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = 
     openModal(
       title,
       el('div', null, [
+        ...(note === undefined ? [] : [el('p', 'muted', note)]),
         ...controls.map(({ control }, index) => {
           const wrap = el('div', 'field');
           wrap.append(el('label', null, fields[index].label));

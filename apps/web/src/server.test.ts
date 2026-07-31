@@ -508,6 +508,306 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
   });
 });
 
+describe('Watchlist 页增强 API（PRD §10）', () => {
+  const watchMutation = (path: string, body: unknown, method = 'POST'): Request =>
+    new Request(`http://test${path}`, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${WEB_TOKEN}`,
+        origin: 'http://test',
+      },
+      body: JSON.stringify(body),
+    });
+
+  it('编辑 / 成员 stage+priority / 归档成员 / 归档列表 全链路', async () => {
+    const wid = 'web-watchlist-prd10';
+    expect(
+      (
+        await app.fetch(
+          watchMutation('/api/watchlists', {
+            id: wid,
+            name: 'PRD10 测试',
+            kind: 'personal',
+            membershipPolicy: 'mixed',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const patched = await app.fetch(
+      watchMutation(`/api/watchlists/${wid}`, { name: 'PRD10 改名', enabled: true }, 'PATCH'),
+    );
+    expect(patched.status).toBe(200);
+    const detail = (await (
+      await app.fetch(new Request(`http://test/api/watchlists/${wid}`))
+    ).json()) as { data?: { watchlist: { name: string } } };
+    expect(detail.data?.watchlist.name).toBe('PRD10 改名');
+
+    expect(
+      (
+        await app.fetch(
+          watchMutation(`/api/watchlists/${wid}/members`, {
+            stockId: '002594.SZ',
+            reason: '测试加入',
+            stage: 'discovered',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const memberPatched = await app.fetch(
+      watchMutation(
+        `/api/watchlists/${wid}/members/002594.SZ`,
+        { stage: 'researching', priority: 'urgent' },
+        'PATCH',
+      ),
+    );
+    expect(memberPatched.status).toBe(200);
+    const memberBody = (await memberPatched.json()) as {
+      data?: { member: { stage: string; priority: string } };
+    };
+    expect(memberBody.data?.member).toMatchObject({ stage: 'researching', priority: 'urgent' });
+
+    expect(
+      (
+        await app.fetch(
+          watchMutation(`/api/watchlists/${wid}/members`, {
+            stockId: '600519.SH',
+            reason: '待归档',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (await app.fetch(watchMutation(`/api/watchlists/${wid}/members/600519.SH/archive`, {})))
+        .status,
+    ).toBe(200);
+    expect((await app.fetch(watchMutation(`/api/watchlists/${wid}/archive`, {}))).status).toBe(200);
+
+    // 归档结果经 overview 验证：列表停用进入已归档列表，成员进入已归档成员
+    const overview = (await (
+      await app.fetch(new Request('http://test/api/watchlists/overview'))
+    ).json()) as {
+      data?: {
+        archived: {
+          lists: Array<{ id: string; enabled: boolean }>;
+          members: Array<{ watchlistId: string; member: { stockId: string } }>;
+        };
+      };
+    };
+    const archivedList = overview.data?.archived.lists.find((list) => list.id === wid);
+    expect(archivedList?.enabled).toBe(false);
+    expect(
+      overview.data?.archived.members.some(
+        (item) => item.watchlistId === wid && item.member.stockId === '600519.SH',
+      ),
+    ).toBe(true);
+  });
+
+  it('GET /api/watchlist-changes 缺 watchlistId → 400；合法参数 → 200', async () => {
+    const missing = await app.fetch(new Request('http://test/api/watchlist-changes'));
+    expect(missing.status).toBe(400);
+    const body = (await missing.json()) as { error?: { kind: string } };
+    expect(body.error?.kind).toBe('invalid_input');
+
+    const ok = await app.fetch(
+      new Request('http://test/api/watchlist-changes?watchlistId=web-watchlist-prd10&limit=10'),
+    );
+    expect(ok.status).toBe(200);
+  });
+
+  it('GET /api/watchlists/overview 聚合 discovered/holding/今日变化/触发摘要', async () => {
+    const wid = 'web-overview-list';
+    expect(
+      (
+        await app.fetch(
+          watchMutation('/api/watchlists', {
+            id: wid,
+            name: '总览测试',
+            kind: 'personal',
+            membershipPolicy: 'mixed',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.fetch(
+          watchMutation(`/api/watchlists/${wid}/members`, {
+            stockId: '002594.SZ',
+            stage: 'discovered',
+            reason: '总览测试',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    // 持仓来源成员 + 今日策略同步 + 一条 urgent 触发，直接播种 in-memory repos
+    const now = appCtx.clock();
+    await appCtx.repos.watchlistMember.saveMember({
+      id: `${wid}:600519.SH`,
+      watchlistId: wid,
+      stockId: '600519.SH',
+      stage: 'watching',
+      priority: 'normal',
+      firstAddedAt: now,
+      lastActivityAt: now,
+    });
+    await appCtx.repos.watchlistMember.saveSource({
+      id: 'web-overview-src-portfolio',
+      memberId: `${wid}:600519.SH`,
+      kind: 'portfolio',
+      sourceKey: 'portfolio:test-account',
+      reason: '持仓同步',
+      status: 'active',
+      evidence: [],
+      validFrom: now,
+    });
+    await appCtx.repos.watchlistMember.commitWatchlistSync({
+      run: {
+        id: 'web-overview-run-1',
+        watchlistId: wid,
+        sourceKind: 'strategy',
+        sourceKey: 'strategy:test-strategy',
+        status: 'complete',
+        startedAt: now,
+        finishedAt: now,
+        enteredCount: 1,
+        exitedCount: 0,
+        unchangedCount: 0,
+        missingDimensions: [],
+      },
+      candidates: [{ stockId: '002594.SZ', reason: '策略入选', evidence: [] }],
+    });
+    await appCtx.repos.watchTrigger.save({
+      id: 'web-overview-trigger-1',
+      poolId: wid,
+      stockId: '002594.SZ',
+      ruleKind: 'price-level',
+      ruleId: 'r1',
+      direction: 'buy',
+      triggerType: 'triggered',
+      reason: '价格上穿',
+      evidence: ['收盘价上穿阈值'],
+      priority: 'urgent',
+      deliveryStatus: 'not-requested',
+      evalSnapshot: { ruleId: 'r1' },
+      notified: false,
+      createdAt: now,
+    });
+
+    const response = await app.fetch(new Request('http://test/api/watchlists/overview'));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      ok: boolean;
+      data?: {
+        lists: Array<{
+          watchlist: { id: string };
+          discoveredCount: number;
+          todayEntered: number;
+        }>;
+        stocks: Array<{
+          stockId: string;
+          memberships: Array<{ watchlistId: string; holding: boolean }>;
+        }>;
+        todayChanges: Array<{ watchlistId: string; stockId: string; direction: string }>;
+        archived: { lists: unknown[]; members: unknown[] };
+        triggers: {
+          urgentImportantCount: number;
+          latestByStock: Record<string, { priority: string }>;
+        };
+        meta: { warnings: string[] };
+      };
+    };
+    expect(body.ok).toBe(true);
+    const data = body.data;
+    expect(data).toBeDefined();
+    const row = data?.lists.find((list) => list.watchlist.id === wid);
+    expect(row?.discoveredCount).toBe(1);
+    expect(row?.todayEntered).toBeGreaterThanOrEqual(1);
+    const holding = data?.stocks.find((stock) => stock.stockId === '600519.SH');
+    expect(
+      holding?.memberships.some(
+        (membership) => membership.watchlistId === wid && membership.holding,
+      ),
+    ).toBe(true);
+    expect(
+      data?.todayChanges.some(
+        (change) => change.watchlistId === wid && change.direction === 'entered',
+      ),
+    ).toBe(true);
+    expect(data?.archived.lists).toBeInstanceOf(Array);
+    expect(data?.archived.members).toBeInstanceOf(Array);
+    expect(data?.triggers.urgentImportantCount).toBeGreaterThanOrEqual(1);
+    expect(data?.triggers.latestByStock['002594.SZ']?.priority).toBe('urgent');
+    expect(data?.meta.warnings).toEqual([]);
+  });
+
+  it('归档路由走 targetMutation 三重闸口', async () => {
+    const guarded = createWebApp(await buildTestContext(), {
+      webToken: WEB_TOKEN,
+      exposeWrite: false,
+      exposeExternal: false,
+    });
+    expect(
+      (await guarded.fetch(watchMutation('/api/watchlists/some-list/archive', {}))).status,
+    ).toBe(403);
+    expect(
+      (
+        await guarded.fetch(
+          watchMutation('/api/watchlists/some-list/members/002594.SZ/archive', {}),
+        )
+      ).status,
+    ).toBe(403);
+
+    const noToken = await app.fetch(
+      new Request('http://test/api/watchlists/some-list/archive', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }),
+    );
+    expect(noToken.status).toBe(403);
+  });
+});
+
+describe('loopback mutation 免 token', () => {
+  it('无 token 可执行 write mutation，跨站 Origin 仍拒绝', async () => {
+    const lax = createWebApp(await buildTestContext(), {
+      webToken: WEB_TOKEN,
+      exposeWrite: true,
+      allowLoopbackMutation: true,
+    });
+    const created = await lax.fetch(
+      new Request('http://test/api/watchlists', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'loopback-open',
+          name: 'loopback',
+          kind: 'personal',
+          membershipPolicy: 'manual',
+        }),
+      }),
+    );
+    expect(created.status).toBe(200);
+
+    const crossOrigin = await lax.fetch(
+      new Request('http://test/api/watchlists', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+        body: JSON.stringify({
+          id: 'loopback-cross',
+          name: 'cross',
+          kind: 'personal',
+          membershipPolicy: 'manual',
+        }),
+      }),
+    );
+    expect(crossOrigin.status).toBe(403);
+  });
+});
+
 describe('web tool 闸口：write 需本地 token', () => {
   it('write/external 缺 token → 403，read 仍可用', async () => {
     const write = await app.fetch(

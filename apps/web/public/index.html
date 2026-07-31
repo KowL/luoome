@@ -255,7 +255,7 @@
             <h1>策略</h1>
             <div class="route-meta">版本化定义 · 校验 · 发布 · 运行</div>
           </div>
-          <button id="btn-strategy-create" class="btn btn-primary" type="button">+ 从模板创建</button>
+          <button id="btn-strategy-create" class="btn btn-primary" type="button">+ 新增策略</button>
         </div>
         <div class="split-pane">
           <div class="card entity-pane">
@@ -276,10 +276,12 @@
           </div>
           <button id="btn-watchlist-create" class="btn btn-primary" type="button">+ 新建关注列表</button>
         </div>
-        <div class="split-pane">
+        <div class="stat-grid" id="watchlists-summary"></div>
+        <div class="split-pane mt-4">
           <div class="card entity-pane">
-            <div class="card-header"><h2>关注列表目录</h2><div id="watchlists-meta" class="card-meta">--</div></div>
-            <div id="watchlists-list" class="entity-list"><p class="placeholder">加载中…</p></div>
+            <div class="card-header"><h2>总览</h2><div id="watchlists-meta" class="card-meta">--</div></div>
+            <div id="watchlists-tabs" class="flex gap-2"></div>
+            <div id="watchlists-view" class="entity-list"><p class="placeholder">加载中…</p></div>
           </div>
           <div class="card detail-pane">
             <div id="watchlist-detail"><p class="placeholder">选择关注列表查看成员和来源。</p></div>
@@ -673,12 +675,12 @@
         <div class="card">
           <div class="card-header"><h2>本地 token 鉴权</h2></div>
           <p class="muted mb-2">
-            读 / 建议无需 token；持仓、Strategy、Watchlist、AlertPlan 等修改必须使用服务端生成的 token。
-            启动日志会显示 token 文件位置，把文件内容粘贴到这里。
+            本机（127.0.0.1）访问时读 / 写均无需 token；仅当服务绑定非 loopback 地址时，
+            所有 API 才需要 token，把服务端生成的 token 文件内容粘贴到这里。
           </p>
           <div class="field">
             <label for="settings-token">当前 token（本地存储）</label>
-            <input id="settings-token" type="password" placeholder="粘贴 LUOOME_WEB_TOKEN" autocomplete="off" />
+            <input id="settings-token" type="password" placeholder="仅非 loopback 部署需要" autocomplete="off" />
             <span class="hint">保存在 localStorage，仅本浏览器可见。</span>
           </div>
           <div class="flex gap-2">

@@ -8,13 +8,13 @@ import { BUILTIN_STRATEGIES, STRATEGY_BUILTIN_DEFINED_AT } from './builtin.js';
  * 新旧定义会并存漂移）。改动内置策略 DSL 时必须同步更新本表并评估存量影响。
  */
 const EXPECTED: Readonly<Record<string, string>> = {
-  'breakout-volume': '5cf7de88bc0d4121d058c29c77b5ea262ddcf5560da454f9bfa6408c746f4af5',
-  'ma-bullish-alignment': 'ee7cead5d5a15540df19f46be970dc0aaf67ca6428762852d871473d5864b942',
-  'pullback-after-limit-up': 'e4dd29e4c114fdeaad450933757a627093359caefcbbe98af63d95bcdad4cf9d',
-  'volume-price-divergence': 'c9870687e694cec18b7bf4692c6043928a52ce8713c5b387d4fbc659a112c0ce',
-  'sector-resonance': 'e9c5866c37082421b4aac4c6d472c2ffa18e6aa07ed256df3eba6c0488fd20ec',
-  'early-breakout': '7cb3081861389bd768a57f353df8a25e72c68f83b824b6fd69987f759a96f84d',
-  'bollinger-band': 'cf1d293fc6d39f50c22f8e88f399517166fcde4e0d49b6aaf830f9b7a8b47512',
+  'breakout-volume': '4f23bdc54ab884c347adf148d8602aab0ccf455b60b7553bf77ef9d8919d0776',
+  'ma-bullish-alignment': '8c32bc2dd726f69a1882a24d72d5a50caea867fd64c131c80e7a2db10842e37a',
+  'pullback-after-limit-up': 'c73250519d739f125dc46f6aaf0fa7e1915b3db52fd4ccdda0a9680c14fe9679',
+  'volume-price-divergence': '7e8b967af053f09025de71a22101d460d5d2cb0a69e7b3f1f20e8b7c2dd0f422',
+  'sector-resonance': 'd5205e1ac84e7811ea3374c1b71db99525063f152fd467cb975b823184015ab5',
+  'early-breakout': 'efe694ddb49b06f118c557b729df3463d2819d58232083b9e89ab35730f25cd9',
+  'bollinger-band': 'dcb7ed51b4eeaa7695eb471af287b09ea982499c2eb1737c6dd3df6b47fc23bc',
 };
 
 describe('BUILTIN_STRATEGIES', () => {

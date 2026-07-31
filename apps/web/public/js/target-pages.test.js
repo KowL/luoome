@@ -1,9 +1,15 @@
 /* apps/web/public/js/target-pages.test.js —— Strategy / Watchlist / AlertPlan 页纯函数测试。
- * DOM 交互由浏览器验收覆盖，这里只测渲染文案的字段口径。 */
+ * 覆盖 renderAlerts 触发时间行、run_strategy 命中抽取、Watchlist 六视图派生与来源健康摘要；
+ * DOM 渲染与交互由浏览器验收覆盖，不在此处断言。 */
 
 import { describe, expect, it } from 'bun:test';
 
-import { extractRunHits, triggerMetaText } from './target-pages.js';
+import {
+  deriveWatchlistViews,
+  extractRunHits,
+  summarizeMemberSources,
+  triggerMetaText,
+} from './target-pages.js';
 
 describe('触发条目时间行', () => {
   it('读取 WatchTriggerSchema 的 createdAt 字段', () => {
@@ -33,5 +39,159 @@ describe('extractRunHits', () => {
   it('空输入返回空数组', () => {
     expect(extractRunHits(undefined)).toEqual([]);
     expect(extractRunHits([])).toEqual([]);
+  });
+});
+
+const overviewFixture = {
+  lists: [
+    {
+      watchlist: { id: 'wl-a', name: '研究候选', kind: 'personal', enabled: true },
+      memberCount: 2,
+      discoveredCount: 1,
+      sourceHealth: { active: 2, stale: 1 },
+      todayEntered: 1,
+      todayExited: 0,
+    },
+  ],
+  stocks: [
+    {
+      stockId: '600519.SH',
+      memberships: [
+        {
+          watchlistId: 'wl-a',
+          watchlistName: '研究候选',
+          stage: 'watching',
+          priority: 'normal',
+          holding: true,
+        },
+      ],
+    },
+    {
+      stockId: '002594.SZ',
+      memberships: [
+        {
+          watchlistId: 'wl-a',
+          watchlistName: '研究候选',
+          stage: 'discovered',
+          priority: 'important',
+          holding: false,
+        },
+      ],
+    },
+  ],
+  todayChanges: [
+    {
+      watchlistId: 'wl-a',
+      watchlistName: '研究候选',
+      stockId: '600519.SH',
+      direction: 'entered',
+      reason: '策略入选',
+      at: '2026-07-31T01:00:00.000Z',
+    },
+    {
+      watchlistId: 'wl-a',
+      watchlistName: '研究候选',
+      stockId: '000001.SZ',
+      direction: 'exited',
+      reason: '跌出候选',
+      at: '2026-07-31T02:00:00.000Z',
+    },
+  ],
+  archived: {
+    lists: [{ id: 'wl-old', name: '旧列表', kind: 'personal', enabled: false }],
+    members: [
+      {
+        watchlistId: 'wl-a',
+        watchlistName: '研究候选',
+        member: { stockId: '601398.SH', stage: 'archived', archivedAt: '2026-07-30T08:00:00.000Z' },
+      },
+    ],
+  },
+  triggers: { urgentImportantCount: 2, latestByStock: {} },
+};
+
+describe('deriveWatchlistViews', () => {
+  it('listCards 提取列表卡片字段并兜底缺省计数', () => {
+    const views = deriveWatchlistViews(overviewFixture);
+    expect(views.listCards).toEqual([
+      {
+        watchlist: overviewFixture.lists[0]?.watchlist,
+        memberCount: 2,
+        discoveredCount: 1,
+        staleSources: 1,
+        todayEntered: 1,
+        todayExited: 0,
+      },
+    ]);
+    expect(deriveWatchlistViews({ lists: [{ watchlist: { id: 'x' } }] }).listCards).toEqual([
+      {
+        watchlist: { id: 'x' },
+        memberCount: 0,
+        discoveredCount: 0,
+        staleSources: 0,
+        todayEntered: 0,
+        todayExited: 0,
+      },
+    ]);
+  });
+
+  it('stocks 按 stockId 排序；todayChanges 按时间倒序', () => {
+    const views = deriveWatchlistViews(overviewFixture);
+    expect(views.stocks.map((stock) => stock.stockId)).toEqual(['002594.SZ', '600519.SH']);
+    expect(views.todayChanges.map((change) => change.stockId)).toEqual(['000001.SZ', '600519.SH']);
+  });
+
+  it('pending 只收 stage=discovered 的成员；holdings 只收有持仓来源的股票', () => {
+    const views = deriveWatchlistViews(overviewFixture);
+    expect(views.pending).toEqual([
+      {
+        watchlistId: 'wl-a',
+        watchlistName: '研究候选',
+        stockId: '002594.SZ',
+        priority: 'important',
+      },
+    ]);
+    expect(views.holdings.map((stock) => stock.stockId)).toEqual(['600519.SH']);
+  });
+
+  it('archived 透传已归档列表与成员；空 overview 全视图兜底为空', () => {
+    const views = deriveWatchlistViews(overviewFixture);
+    expect(views.archived.lists).toHaveLength(1);
+    expect(views.archived.members[0]?.member.stockId).toBe('601398.SH');
+    expect(deriveWatchlistViews(undefined)).toEqual({
+      listCards: [],
+      stocks: [],
+      todayChanges: [],
+      pending: [],
+      holdings: [],
+      archived: { lists: [], members: [] },
+    });
+  });
+});
+
+describe('summarizeMemberSources', () => {
+  it('统计 active/stale 并取最大 dataAsOf', () => {
+    const summary = summarizeMemberSources([
+      { status: 'active', dataAsOf: '2026-07-30T08:00:00.000Z' },
+      { status: 'stale', dataAsOf: '2026-07-31T08:00:00.000Z' },
+      { status: 'ended' },
+      { status: 'active', dataAsOf: '2026-07-29T08:00:00.000Z' },
+    ]);
+    expect(summary.active).toBe(2);
+    expect(summary.stale).toBe(1);
+    expect(summary.latestDataAsOf?.toISOString()).toBe('2026-07-31T08:00:00.000Z');
+  });
+
+  it('无来源 / 无有效时间时 latestDataAsOf 为 null', () => {
+    expect(summarizeMemberSources(undefined)).toEqual({
+      active: 0,
+      stale: 0,
+      latestDataAsOf: null,
+    });
+    expect(summarizeMemberSources([{ status: 'active', dataAsOf: 'not-a-date' }])).toEqual({
+      active: 1,
+      stale: 0,
+      latestDataAsOf: null,
+    });
   });
 });

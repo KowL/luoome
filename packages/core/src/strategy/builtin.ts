@@ -4,6 +4,7 @@ import {
   type Strategy,
   type StrategyDslV1,
   StrategyDslV1Schema,
+  type StrategyRule,
   type StrategySignalRule,
   type StrategyVersion,
   strategyDefinitionHash,
@@ -18,6 +19,12 @@ import { inspectStrategyDefinitionReferences } from './field-registry.js';
  *   legacy-mapper 时代的播种产物保持一致——definitionHash 是落库 identity，
  *   存量库已按这些值播种，改动等于给内置策略换身份。
  * - 播种幂等由调用方（ensureBuiltinStrategies）按 strategy.id 跳过保证。
+ *
+ * 2026-07-31：为每个种子补 selection rule（`legacy-selection`，与 signal 同条件），
+ * 让「从模板导入」创建的用户策略满足普通用户至少一条 selection rule 的不变量；
+ * 同时让内置策略运行结果的 selected 从恒 true 变为按条件过滤（signals 求值不受影响）。
+ * definitionHash 随之变化，builtin.test.ts 的 EXPECTED 表已同步；存量库按 id 跳过
+ * 播种，保留旧定义，与新定义并存漂移（仅影响模板列表与新建库）。
  */
 export interface BuiltinStrategyBundle {
   readonly strategy: Strategy;
@@ -190,11 +197,18 @@ const buildBuiltinBundle = (seed: BuiltinStrategySeed): BuiltinStrategyBundle =>
     direction: seed.direction,
     evidence: [...seed.evidence],
   };
+  // selection 与 signal 同条件：模板导入的用户策略必须至少一条 selection rule
+  const selectionRule: StrategyRule = {
+    id: 'legacy-selection',
+    name: seed.name,
+    when: seed.when,
+    evidence: [...seed.evidence],
+  };
   const definition: StrategyDslV1 = StrategyDslV1Schema.parse({
     schemaVersion: 1,
     metadata: { style: seed.style },
     universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
-    selection: { logic: 'all', rules: [] },
+    selection: { logic: 'all', rules: [selectionRule] },
     signals: {
       entry: seed.bucket === 'entry' ? [signalRule] : [],
       exit: seed.bucket === 'exit' ? [signalRule] : [],

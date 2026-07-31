@@ -223,6 +223,8 @@ export interface CreateWebAppOptions {
   readonly webToken?: string;
   /** 非 loopback 监听时，read/advice API 也必须鉴权。 */
   readonly requireApiToken?: boolean;
+  /** loopback 监听时 mutation 免 token（仍保留同源 Origin 校验）；默认 false。 */
+  readonly allowLoopbackMutation?: boolean;
   /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
   readonly exposeWrite?: boolean;
   /** external tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_EXTERNAL。 */
@@ -247,11 +249,17 @@ const asChatStreamRuntime = (value: unknown): ChatStreamRuntime | undefined => {
   return undefined;
 };
 
-const mutationPermission = (request: Request, webToken: string): ToolResult<never> | null => {
+const mutationPermission = (
+  request: Request,
+  webToken: string,
+  allowLoopbackMutation: boolean,
+): ToolResult<never> | null => {
+  // 同源 Origin 校验不受 loopback 放行影响：挡住浏览器被恶意站点带着打本机。
   const origin = request.headers.get('origin');
   if (origin !== null && origin !== new URL(request.url).origin) {
     return permissionDenied('跨站 Origin 不允许执行本地 mutation');
   }
+  if (allowLoopbackMutation) return null;
   const authorization = request.headers.get('authorization');
   if (webToken.length === 0 || authorization !== `Bearer ${webToken}`) {
     return permissionDenied('write/external 操作需要有效 LUOOME_WEB_TOKEN');
@@ -274,6 +282,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx.agent),
   };
   const webToken = options.webToken ?? process.env.LUOOME_WEB_TOKEN ?? '';
+  const allowLoopbackMutation = options.allowLoopbackMutation === true;
   const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
   const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const aiSettingsStore = options.aiSettingsStore;
@@ -387,7 +396,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         ),
       );
     }
-    const denied = mutationPermission(request, webToken);
+    const denied = mutationPermission(request, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     const body = await parseJsonObject(request);
     if (!('parsed' in body)) return jsonResult(body);
@@ -456,7 +465,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.post('/api/settings/market', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     if (marketSettingsStore === undefined) {
       return jsonResult(notFound('MarketSettingsStore', 'default'));
@@ -501,7 +510,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
   app.post('/api/chat/sessions', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     let body: unknown = {};
     try {
@@ -515,7 +524,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     callTool('get_chat_session', { sessionId: c.req.param('id'), messageLimit: 200 }),
   );
   app.patch('/api/chat/sessions/:id', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     let body: { title?: unknown };
     try {
@@ -529,13 +538,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
   app.delete('/api/chat/sessions/:id', (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     return callTool('delete_chat_session', { sessionId: c.req.param('id') });
   });
 
   app.post('/api/settings/ai', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
     try {
@@ -584,7 +593,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.post('/api/account/select', async (c) => {
     // v0.8 起：虽然此路由只 in-memory 改 ctxRef.current.user.defaultAccountId
     // （不写 db），但仍是 mutation，应与 /api/tools/:name/call 的 write/external 守卫一致。
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     let body: unknown;
     try {
@@ -793,11 +802,241 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/watchlists', () => callTool('list_watchlists', {}));
   app.post('/api/watchlists', (c) => targetMutation(c.req.raw, 'write', 'create_watchlist'));
+
+  /**
+   * Watchlist 总览聚合（PRD §10.1）：一次请求组装六种视图所需数据，
+   * 前端按 tab 派生，切换视图不重复拉取。照 /api/dashboard 模式：
+   * invokeTool + 请求内缓存；单列表 detail/changes 失败降级为警告，不拖垮整个端点。
+   * 「已归档列表」= enabled=false：core Watchlist 无 archivedAt，repo.archive 即停用。
+   */
+  app.get('/api/watchlists/overview', async () => {
+    interface OverviewWatchlist {
+      id: string;
+      name: string;
+      kind: string;
+      membershipPolicy: string;
+      enabled: boolean;
+    }
+    interface OverviewMember {
+      member: {
+        id: string;
+        watchlistId: string;
+        stockId: string;
+        stage: string;
+        priority: string;
+        archivedAt?: unknown;
+      };
+      sources: Array<{ kind: string; status: string; dataAsOf?: unknown }>;
+    }
+    interface OverviewRun {
+      run: { startedAt: string; finishedAt?: string };
+      snapshots: Array<{ stockId: string; change: string; reason: string }>;
+    }
+    const warnings: string[] = [];
+    // 「今日」按服务器本地日期（与快照的落库时间同一口径）。
+    const now = ctxRef.current.clock();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const [watchlistsResult, triggersResult] = await Promise.all([
+      invokeTool('list_watchlists', {}),
+      invokeTool('list_watch_triggers', { limit: 200 }),
+    ]);
+    if (!watchlistsResult.ok) return jsonResult(watchlistsResult);
+    const rows = (
+      watchlistsResult.data as {
+        items: Array<{
+          watchlist: OverviewWatchlist;
+          memberCount: number;
+          sourceHealth: { active: number; stale: number };
+        }>;
+      }
+    ).items;
+
+    // Watchlist 详情 / 同步变化在一次请求内复用。
+    const detailCache = new Map<string, Promise<ToolResult<unknown>>>();
+    const detailOf = (id: string): Promise<ToolResult<unknown>> => {
+      const cached = detailCache.get(id);
+      if (cached !== undefined) return cached;
+      const pending = invokeTool('get_watchlist', {
+        watchlistId: id,
+        includeArchivedMembers: true,
+      });
+      detailCache.set(id, pending);
+      return pending;
+    };
+    const changesCache = new Map<string, Promise<ToolResult<unknown>>>();
+    const changesOf = (id: string): Promise<ToolResult<unknown>> => {
+      const cached = changesCache.get(id);
+      if (cached !== undefined) return cached;
+      const pending = invokeTool('list_watchlist_changes', { watchlistId: id, limit: 50 });
+      changesCache.set(id, pending);
+      return pending;
+    };
+
+    interface TodayChange {
+      watchlistId: string;
+      watchlistName: string;
+      stockId: string;
+      direction: 'entered' | 'exited';
+      reason: string;
+      at: string;
+    }
+    interface StockMembership {
+      watchlistId: string;
+      watchlistName: string;
+      stage: string;
+      priority: string;
+      sources: OverviewMember['sources'];
+      holding: boolean;
+    }
+    const lists: Array<Record<string, unknown>> = [];
+    const stocksById = new Map<string, { stockId: string; memberships: StockMembership[] }>();
+    const todayChanges: TodayChange[] = [];
+    const archivedLists: OverviewWatchlist[] = [];
+    const archivedMembers: Array<Record<string, unknown>> = [];
+
+    for (const { watchlist, memberCount, sourceHealth } of rows) {
+      if (!watchlist.enabled) archivedLists.push(watchlist);
+      let members: OverviewMember[] = [];
+      const detail = await detailOf(watchlist.id);
+      if (detail.ok) {
+        members = (detail.data as { members: OverviewMember[] }).members;
+      } else {
+        warnings.push(
+          `get_watchlist(${watchlist.id}) 失败（${detail.error.kind}），总览跳过该列表成员`,
+        );
+      }
+      let todayEntered = 0;
+      let todayExited = 0;
+      const changes = await changesOf(watchlist.id);
+      if (changes.ok) {
+        for (const { run, snapshots } of (changes.data as { runs: OverviewRun[] }).runs) {
+          const at = new Date(run.finishedAt ?? run.startedAt);
+          if (at < todayStart) continue;
+          for (const snapshot of snapshots) {
+            if (snapshot.change !== 'entered' && snapshot.change !== 'exited') continue;
+            if (snapshot.change === 'entered') todayEntered += 1;
+            else todayExited += 1;
+            todayChanges.push({
+              watchlistId: watchlist.id,
+              watchlistName: watchlist.name,
+              stockId: snapshot.stockId,
+              direction: snapshot.change,
+              reason: snapshot.reason,
+              at: at.toISOString(),
+            });
+          }
+        }
+      } else if (changes.error.kind !== 'not_found') {
+        warnings.push(
+          `list_watchlist_changes(${watchlist.id}) 失败（${changes.error.kind}），今日变化降级为空`,
+        );
+      }
+      const activeMembers = members.filter(({ member }) => member.stage !== 'archived');
+      lists.push({
+        watchlist,
+        memberCount,
+        discoveredCount: activeMembers.filter(({ member }) => member.stage === 'discovered').length,
+        sourceHealth,
+        todayEntered,
+        todayExited,
+      });
+      for (const { member, sources } of members) {
+        if (member.stage === 'archived') {
+          archivedMembers.push({
+            watchlistId: watchlist.id,
+            watchlistName: watchlist.name,
+            member,
+          });
+          continue;
+        }
+        const entry = stocksById.get(member.stockId) ?? {
+          stockId: member.stockId,
+          memberships: [],
+        };
+        entry.memberships.push({
+          watchlistId: watchlist.id,
+          watchlistName: watchlist.name,
+          stage: member.stage,
+          priority: member.priority,
+          sources,
+          holding: sources.some(
+            (source) => source.kind === 'portfolio' && source.status === 'active',
+          ),
+        });
+        stocksById.set(member.stockId, entry);
+      }
+    }
+
+    interface OverviewTrigger {
+      stockId: string;
+      priority: string;
+      ruleKind: string;
+      reason: string;
+      createdAt: string;
+    }
+    let triggers: OverviewTrigger[] = [];
+    if (triggersResult.ok) {
+      triggers = (triggersResult.data as { triggers: OverviewTrigger[] }).triggers;
+    } else {
+      warnings.push(`list_watch_triggers 失败（${triggersResult.error.kind}），触发摘要降级为空`);
+    }
+    // list_watch_triggers 按 createdAt 倒序，首次出现即该股最新一条。
+    const latestByStock: Record<
+      string,
+      { at: string; ruleKind: string; priority: string; reason: string }
+    > = {};
+    for (const trigger of triggers) {
+      if (latestByStock[trigger.stockId] !== undefined) continue;
+      latestByStock[trigger.stockId] = {
+        at: trigger.createdAt,
+        ruleKind: trigger.ruleKind,
+        priority: trigger.priority,
+        reason: trigger.reason,
+      };
+    }
+
+    return jsonResult({
+      ok: true,
+      data: {
+        lists,
+        stocks: [...stocksById.values()],
+        todayChanges,
+        archived: { lists: archivedLists, members: archivedMembers },
+        triggers: {
+          urgentImportantCount: triggers.filter(
+            (trigger) => trigger.priority === 'urgent' || trigger.priority === 'important',
+          ).length,
+          latestByStock,
+        },
+        meta: { warnings },
+      },
+    });
+  });
+
+  app.get('/api/watchlist-changes', (c) => {
+    const watchlistId = c.req.query('watchlistId');
+    if (typeof watchlistId !== 'string' || watchlistId.trim().length === 0) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: '缺少 watchlistId 参数', issues: [] },
+      });
+    }
+    return callTool('list_watchlist_changes', {
+      watchlistId,
+      limit: intQuery(c.req.query('limit'), 50, 1),
+    });
+  });
+
   app.get('/api/watchlists/:id', (c) =>
     callTool('get_watchlist', { watchlistId: c.req.param('id') }),
   );
   app.patch('/api/watchlists/:id', (c) =>
     targetMutation(c.req.raw, 'write', 'update_watchlist', {
+      watchlistId: c.req.param('id'),
+    }),
+  );
+  app.post('/api/watchlists/:id/archive', (c) =>
+    targetMutation(c.req.raw, 'write', 'archive_watchlist', {
       watchlistId: c.req.param('id'),
     }),
   );
@@ -808,6 +1047,12 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   );
   app.patch('/api/watchlists/:id/members/:stockId', (c) =>
     targetMutation(c.req.raw, 'write', 'update_watchlist_member', {
+      watchlistId: c.req.param('id'),
+      stockId: c.req.param('stockId'),
+    }),
+  );
+  app.post('/api/watchlists/:id/members/:stockId/archive', (c) =>
+    targetMutation(c.req.raw, 'write', 'archive_watchlist_member', {
       watchlistId: c.req.param('id'),
       stockId: c.req.param('stockId'),
     }),
@@ -868,7 +1113,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    * 调 set_watch_trigger_feedback；幂等；triggerId 不存在 → 404。
    */
   app.post('/api/watch/triggers/:id/feedback', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     const id = c.req.param('id');
     let body: unknown;
@@ -900,7 +1145,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (!exposeExternal) {
       return jsonResult(permissionDenied('external 操作未开启；设置 LUOOME_EXPOSE_EXTERNAL=true'));
     }
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     let body: unknown;
     try {
@@ -1406,7 +1651,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.post('/api/reports/run/:kind', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken);
+    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
     if (denied !== null) return jsonResult(denied);
     const kind = c.req.param('kind');
     const workflow =
@@ -1516,7 +1761,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // 默认不暴露：避免 web 端被滥用为批量回填入口。
   if (exposeWrite) {
     app.post('/api/review/:id/outcome', async (c) => {
-      const denied = mutationPermission(c.req.raw, webToken);
+      const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
       if (denied !== null) return jsonResult(denied);
       const id = c.req.param('id');
       let body: unknown;
@@ -1554,7 +1799,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       return jsonResult(permissionDenied(`web 端不暴露 ${tool.sideEffect} 类 tool（${name}）`));
     }
     if (tool.sideEffect === 'write' || tool.sideEffect === 'external') {
-      const denied = mutationPermission(c.req.raw, webToken);
+      const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
       if (denied !== null) return jsonResult(denied);
     }
 
@@ -1587,7 +1832,7 @@ export interface StartWebOptions {
   readonly host?: string;
   /** 缺省 resolveDbPath()（$LUOOME_HOME/luoome.db）。 */
   readonly dbPath?: string;
-  /** 显式注入 token；缺省从 env / 本地 token 文件解析。 */
+  /** 显式注入 token；缺省从 env 解析，非 loopback 时回落到本地 token 文件。 */
   readonly webToken?: string;
 }
 
@@ -1598,18 +1843,21 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
   const marketSettingsStore = new MarketSettingsStore(process.env);
   const ctx = await buildWebContext(dbPath, marketSettingsStore.runtimeEnv());
   const aiSettingsStore = new AISettingsStore(process.env);
+  const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
+  const loopback = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
   const resolved =
     options.webToken !== undefined
       ? { token: options.webToken, filePath: null }
-      : resolveWebToken(dbPath);
-  const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
-  const loopback = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+      : loopback
+        ? { token: process.env.LUOOME_WEB_TOKEN?.trim() ?? '', filePath: null }
+        : resolveWebToken(dbPath);
   if (!loopback && resolved.token.length === 0) {
     throw new Error('非 loopback Web 必须配置非空 LUOOME_WEB_TOKEN');
   }
   const app = createWebApp(ctx, {
     webToken: resolved.token,
     requireApiToken: !loopback,
+    allowLoopbackMutation: loopback,
     aiSettingsStore,
     marketSettingsStore,
   });
