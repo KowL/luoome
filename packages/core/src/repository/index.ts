@@ -265,18 +265,17 @@ export interface WatchlistRepository {
     readonly enabledOnly?: boolean;
     readonly kind?: WatchlistKind;
   }): Promise<readonly Watchlist[]>;
-  archive(id: string, at: Date): Promise<void>;
+  remove(id: string): Promise<void>;
 }
 
 export interface WatchlistMemberRepository {
   saveMember(member: WatchlistMember): Promise<void>;
+  removeMember(memberId: string): Promise<void>;
   findMember(watchlistId: string, stockId: string): Promise<WatchlistMember | null>;
   listMembers(
     watchlistId: string,
     filter?: {
-      readonly stage?: WatchlistMember['stage'];
       readonly priority?: WatchlistMember['priority'];
-      readonly includeArchived?: boolean;
     },
   ): Promise<readonly WatchlistMember[]>;
   saveSource(source: WatchlistMemberSource): Promise<void>;

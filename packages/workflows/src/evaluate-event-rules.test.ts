@@ -34,7 +34,6 @@ const seedAlertPlanWithEventRule = async (
       id: 'evt-watchlist:stk-evt',
       watchlistId: watchlist.id,
       stockId: 'stk-evt',
-      stage: 'watching',
       priority: 'normal',
       firstAddedAt: now,
       lastActivityAt: now,

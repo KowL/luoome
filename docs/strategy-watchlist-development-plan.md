@@ -179,7 +179,7 @@ StockPool   → AlertPlan
 - 新增五张表及索引。
 - 新增 WatchlistRepository、WatchlistMemberRepository 双实现。
 - 实现 `commitWatchlistSync` 原子事务。
-- contract tests 覆盖多来源、stale、ended、re-entry 和 archive/revive。
+- contract tests 覆盖多来源、stale、ended、re-entry 和成员删除。
 
 ### 7.3 迁移
 
@@ -193,8 +193,8 @@ StockPool   → AlertPlan
 
 ### 7.4 Tools
 
-- Watchlist list/get/create/update/archive。
-- member add/update/archive。
+- Watchlist list/get/create/update/delete。
+- member add/update/delete。
 - changes 查询。
 - 内部 `sync_watchlist_source`。
 - `sync-portfolio-watchlists` workflow。
@@ -253,7 +253,7 @@ StockPool   → AlertPlan
 ### 9.1 Web
 
 - 策略列表、详情、版本、校验、发布、运行。
-- Watchlist 总览、详情、多来源、stage/priority、变化历史。
+- Watchlist 总览、详情、多来源、priority/删除、变化历史。
 - AlertPlan 管理与试跑。
 - 股票研究档案展示 StrategyResult/Signal 和 Watchlist 来源。
 - mutation token、Origin、write opt-in 测试。
@@ -281,7 +281,7 @@ StockPool   → AlertPlan
 2. dry-run 并查看 rule errors/partial。
 3. 发布并运行。
 4. 结果同步到 Watchlist。
-5. 用户将 discovered 改为 researching。
+5. 用户查看成员来源与 priority，必要时删除成员关系。
 6. 创建 AlertPlan 并试跑。
 7. 查看 Trigger、Strategy evidence 和数据时间。
 

@@ -1640,7 +1640,7 @@ const loadResearch = async (stockId, code, name) => {
     return;
   }
   const data =
-    /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>, strategySignals: Array<Record<string, unknown>>, watchlistMemberships: Array<{watchlist: {name: string}, member: {stage: string, priority: string}, sources: Array<Record<string, unknown>>}>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
+    /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>, strategySignals: Array<Record<string, unknown>>, watchlistMemberships: Array<{watchlist: {name: string}, member: {priority: string}, sources: Array<Record<string, unknown>>}>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
       r.data
     );
   summaryMeta.textContent = `${data.summary.noteCount} 笔记 · ${data.summary.eventCount} 事件`;
@@ -1707,7 +1707,7 @@ const loadResearch = async (stockId, code, name) => {
             el(
               'li',
               null,
-              `${watchlist.name} · ${member.stage}/${member.priority} · ${sources.map((source) => `${source.kind}:${source.status}`).join('、')}`,
+              `${watchlist.name} · ${member.priority} · ${sources.map((source) => `${source.kind}:${source.status}`).join('、')}`,
             ),
           ),
         ),

@@ -371,7 +371,7 @@ const stepStateMachine = (
   };
 };
 
-/** 解析 AlertPlan 的 Watchlist 当前成员；disabled/archived 不进入扫描。 */
+/** 解析 AlertPlan 的 Watchlist 当前成员；disabled Watchlist 不进入扫描。 */
 const resolveMembers = async (
   pool: AlertPlan,
   avgCostByStock: ReadonlyMap<string, Money>,

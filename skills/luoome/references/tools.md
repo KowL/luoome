@@ -13,6 +13,7 @@ Use read tools to identify subjects and inspect current state before deeper anal
   `get_strategy_run`, `strategy_signals_by_stock`.
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`.
+- WatchlistMember 只表达当前成员关系、来源与 priority；删除后不展示归档状态，也不要请求或猜测研究阶段字段。
 - Research and events: `list_research_notes`, `list_stock_events`.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.

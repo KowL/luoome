@@ -106,13 +106,6 @@ const WATCHLIST_KIND_TEXT = {
 
 const MEMBERSHIP_POLICY_TEXT = { manual: '手动', synced: '同步', mixed: '混合' };
 
-const MEMBER_STAGE_TEXT = {
-  discovered: '已发现',
-  watching: '观察中',
-  researching: '研究中',
-  confirmed: '已确认',
-};
-
 const MEMBER_SOURCE_KIND_TEXT = {
   manual: '手动',
   strategy: '策略',
@@ -132,13 +125,6 @@ const RULE_KIND_TEXT = {
   'price-change': '涨跌幅',
   'price-level': '价格位',
   'event-date': '事件日期',
-};
-
-const priorityBadge = (priority) => {
-  const variant =
-    { urgent: 'badge-urgent', important: 'badge-important', normal: 'badge-normal' }[priority] ??
-    'badge-neutral';
-  return el('span', `badge ${variant}`, MEMBER_PRIORITY_TEXT[priority] ?? priority);
 };
 
 const DIRECTION_TEXT = { bullish: '看多', bearish: '看空', neutral: '中性' };
@@ -370,14 +356,13 @@ export const renderStrategies = async (setStatus) => {
 };
 
 /**
- * 六种视图（PRD §10.1）的行数据：全部从 /api/watchlists/overview 一次拉取的数据派生，
+ * 四种视图（PRD §10.1）的行数据：全部从 /api/watchlists/overview 一次拉取的数据派生，
  * 切换视图不重复请求。
  */
 export const deriveWatchlistViews = (overview) => {
   const listCards = (overview?.lists ?? []).map((row) => ({
     watchlist: row.watchlist,
     memberCount: row.memberCount ?? 0,
-    discoveredCount: row.discoveredCount ?? 0,
     staleSources: row.sourceHealth?.stale ?? 0,
     todayEntered: row.todayEntered ?? 0,
     todayExited: row.todayExited ?? 0,
@@ -386,31 +371,16 @@ export const deriveWatchlistViews = (overview) => {
   const todayChanges = [...(overview?.todayChanges ?? [])].sort(
     (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
   );
-  const pending = [];
   const holdings = [];
   for (const stock of stocks) {
     const memberships = stock.memberships ?? [];
     if (memberships.some((membership) => membership.holding)) holdings.push(stock);
-    for (const membership of memberships) {
-      if (membership.stage !== 'discovered') continue;
-      pending.push({
-        watchlistId: membership.watchlistId,
-        watchlistName: membership.watchlistName,
-        stockId: stock.stockId,
-        priority: membership.priority,
-      });
-    }
   }
   return {
     listCards,
     stocks,
     todayChanges,
-    pending,
     holdings,
-    archived: {
-      lists: overview?.archived?.lists ?? [],
-      members: overview?.archived?.members ?? [],
-    },
   };
 };
 
@@ -434,9 +404,7 @@ const WATCHLIST_VIEW_TABS = [
   { key: 'byList', label: '按列表' },
   { key: 'stocks', label: '全部股票' },
   { key: 'today', label: '今日变化' },
-  { key: 'pending', label: '待研究' },
   { key: 'holdings', label: '当前持仓' },
-  { key: 'archived', label: '已归档' },
 ];
 
 /** 当前总览 tab 与最近一次 overview 数据：切换 tab 由前端派生，不重复拉取。 */
@@ -462,7 +430,7 @@ const patchMember = (watchlistId, stockId, input) =>
     'PATCH',
   );
 
-const archiveMember = (watchlistId, stockId) =>
+const removeMember = (watchlistId, stockId) =>
   post(
     `/api/watchlists/${encodeURIComponent(watchlistId)}/members/${encodeURIComponent(stockId)}/archive`,
     {},
@@ -478,7 +446,7 @@ const renderByListView = (views, setStatus) =>
             el(
               'small',
               null,
-              `${card.memberCount} 成员 · 待研究 ${card.discoveredCount} · 过期来源 ${card.staleSources} · 今日 +${card.todayEntered}/-${card.todayExited}`,
+              `${card.memberCount} 成员 · 过期来源 ${card.staleSources} · 今日 +${card.todayEntered}/-${card.todayExited}`,
             ),
           ]),
           el('span', 'flex gap-2', [
@@ -522,7 +490,7 @@ const renderStocksView = (views) =>
               el(
                 'span',
                 'badge badge-neutral',
-                `${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}·${MEMBER_PRIORITY_TEXT[membership.priority] ?? membership.priority}`,
+                MEMBER_PRIORITY_TEXT[membership.priority] ?? membership.priority,
               ),
             ),
           ),
@@ -546,38 +514,6 @@ const renderTodayView = (views) =>
         ]),
       );
 
-const renderPendingView = (views, setStatus) =>
-  views.pending.length === 0
-    ? [el('p', 'placeholder', '暂无待研究成员。')]
-    : views.pending.map((item) =>
-        el('div', 'entity-item', [
-          el('div', 'flex gap-2', [
-            el('strong', null, item.stockId),
-            priorityBadge(item.priority),
-            el('span', 'muted', item.watchlistName),
-          ]),
-          el('div', 'flex gap-2', [
-            actionButton('开始研究', async (button) => {
-              button.disabled = true;
-              const updated = await patchMember(item.watchlistId, item.stockId, {
-                stage: 'researching',
-              });
-              setStatus(
-                updated.ok ? `${item.stockId} 已开始研究` : errorText(updated),
-                !updated.ok,
-              );
-              await renderWatchlists(setStatus);
-            }),
-            actionButton('归档', async (button) => {
-              button.disabled = true;
-              const archived = await archiveMember(item.watchlistId, item.stockId);
-              setStatus(archived.ok ? `${item.stockId} 已归档` : errorText(archived), !archived.ok);
-              await renderWatchlists(setStatus);
-            }),
-          ]),
-        ]),
-      );
-
 const renderHoldingsView = (views) =>
   views.holdings.length === 0
     ? [el('p', 'placeholder', '暂无持仓成员。')]
@@ -593,41 +529,12 @@ const renderHoldingsView = (views) =>
             stock.memberships
               .map(
                 (membership) =>
-                  `${membership.watchlistName}（${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}）`,
+                  `${membership.watchlistName}（${MEMBER_PRIORITY_TEXT[membership.priority] ?? membership.priority}）`,
               )
               .join(' · '),
           ),
         ]),
       );
-
-const renderArchivedView = (views) => [
-  el('p', 'muted', '列表归档即停用，成员与历史保留。'),
-  el('h3', null, `已归档列表 ${views.archived.lists.length}`),
-  ...(views.archived.lists.length === 0
-    ? [el('p', 'placeholder', '暂无已归档列表。')]
-    : views.archived.lists.map((watchlist) =>
-        el('div', 'entity-item', [
-          el('div', 'flex gap-2', [
-            el('strong', null, watchlist.name),
-            el(
-              'span',
-              'badge badge-neutral',
-              WATCHLIST_KIND_TEXT[watchlist.kind] ?? watchlist.kind,
-            ),
-            el('span', 'badge badge-paused', '停用'),
-          ]),
-        ]),
-      )),
-  el('h3', 'mt-4', `已归档成员 ${views.archived.members.length}`),
-  ...(views.archived.members.length === 0
-    ? [el('p', 'placeholder', '暂无已归档成员。')]
-    : views.archived.members.map((item) =>
-        el('div', 'entity-item', [
-          el('strong', null, `${item.watchlistName} · ${item.member.stockId}`),
-          el('div', 'muted', `归档于 ${fmtDateTime(item.member.archivedAt)}`),
-        ]),
-      )),
-];
 
 const renderWatchlistOverview = (setStatus) => {
   const overview = lastWatchlistOverview;
@@ -643,7 +550,6 @@ const renderWatchlistOverview = (setStatus) => {
         '今日变化',
         `+${sum((card) => card.todayEntered)} / -${sum((card) => card.todayExited)}`,
       ),
-      statBlock('待研究', String(views.pending.length)),
       statBlock('过期来源', String(sum((card) => card.staleSources))),
       statBlock('紧急/重要触发', String(overview.triggers?.urgentImportantCount ?? 0)),
     ]);
@@ -678,13 +584,9 @@ const renderWatchlistOverview = (setStatus) => {
       ? renderStocksView(views)
       : watchlistView === 'today'
         ? renderTodayView(views)
-        : watchlistView === 'pending'
-          ? renderPendingView(views, setStatus)
-          : watchlistView === 'holdings'
-            ? renderHoldingsView(views)
-            : watchlistView === 'archived'
-              ? renderArchivedView(views)
-              : renderByListView(views, setStatus);
+        : watchlistView === 'holdings'
+          ? renderHoldingsView(views)
+          : renderByListView(views, setStatus);
   mount(view, content);
 };
 
@@ -732,21 +634,21 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
     await renderWatchlists(setStatus);
   });
 
-  const archiveList = actionButton('归档列表', async () => {
+  const removeList = actionButton('删除列表', async () => {
     const confirmed = await confirmDialog({
-      title: '归档关注列表',
-      message: `归档后列表「${watchlist.name}」将停用，成员与历史保留。确认归档？`,
-      confirmLabel: '归档',
+      title: '删除关注列表',
+      message: `删除后列表「${watchlist.name}」及当前成员关系将移除，来源与同步历史保留。确认删除？`,
+      confirmLabel: '删除',
       danger: true,
     });
     if (!confirmed) return;
-    const archived = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/archive`, {});
-    if (!archived.ok) {
-      setStatus(errorText(archived), true);
+    const removed = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/archive`, {});
+    if (!removed.ok) {
+      setStatus(errorText(removed), true);
       return;
     }
     selectedWatchlistId = '';
-    setStatus('关注列表已归档');
+    setStatus('关注列表已删除');
     mount(root, el('p', 'placeholder', '选择关注列表查看成员和来源。'));
     await renderWatchlists(setStatus);
   });
@@ -773,15 +675,6 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
   const latestByStock = lastWatchlistOverview?.triggers?.latestByStock ?? {};
 
   const rows = members.map(({ member, sources }) => {
-    const stage = memberSelect(
-      ['discovered', 'watching', 'researching', 'confirmed'],
-      member.stage,
-      MEMBER_STAGE_TEXT,
-    );
-    stage.addEventListener('change', async () => {
-      const updated = await patchMember(watchlist.id, member.stockId, { stage: stage.value });
-      setStatus(updated.ok ? '研究阶段已更新' : errorText(updated), !updated.ok);
-    });
     const priority = memberSelect(
       ['normal', 'important', 'urgent'],
       member.priority,
@@ -795,7 +688,7 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
     });
     const trigger = latestByStock[member.stockId];
     return el('div', 'entity-item', [
-      el('div', 'flex gap-2', [el('strong', null, member.stockId), stage, priority]),
+      el('div', 'flex gap-2', [el('strong', null, member.stockId), priority]),
       el(
         'div',
         'flex gap-2',
@@ -818,10 +711,10 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
               `最近触发：${RULE_KIND_TEXT[trigger.ruleKind] ?? trigger.ruleKind} · ${MEMBER_PRIORITY_TEXT[trigger.priority] ?? trigger.priority} · ${fmtDateTime(trigger.at)}`,
             ),
           ]),
-      actionButton('归档', async (button) => {
+      actionButton('删除', async (button) => {
         button.disabled = true;
-        const archived = await archiveMember(watchlist.id, member.stockId);
-        setStatus(archived.ok ? `${member.stockId} 已归档` : errorText(archived), !archived.ok);
+        const removed = await removeMember(watchlist.id, member.stockId);
+        setStatus(removed.ok ? `${member.stockId} 已删除` : errorText(removed), !removed.ok);
         await renderWatchlists(setStatus);
       }),
     ]);
@@ -842,7 +735,7 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
       'muted',
       `来源健康：活跃 ${health.active} · 过期 ${health.stale}${health.latestDataAsOf === null ? '' : ` · 最近数据 ${fmtDateTime(health.latestDataAsOf)}`}`,
     ),
-    el('div', 'flex gap-2', [edit, archiveList, add]),
+    el('div', 'flex gap-2', [edit, removeList, add]),
     el('h3', 'mt-4', `成员 ${members.length}`),
     ...(rows.length === 0 ? [el('p', 'placeholder', '暂无成员。')] : rows),
     el('h3', 'mt-4', `预警计划 ${alertPlans.length}`),
