@@ -2746,6 +2746,15 @@ textarea::placeholder {
   color: var(--muted-2);
 }
 
+/* 策略定义 JSON 编辑：不折行，横向滚动 */
+.strategy-def-input {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
+
 .field .hint,
 .hint {
   color: var(--muted);
@@ -4018,6 +4027,17 @@ body > .modal {
   padding: var(--space-5);
 }
 
+.modal-body input,
+.modal-body select,
+.modal-body textarea {
+  width: 100%;
+}
+
+.modal-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -4432,6 +4452,319 @@ body > .modal {
  * 22. 响应式
  * ============================================================ */
 
+/* ============================================================
+ * Shared stock identity · name over code, linked to Market View
+ * ============================================================ */
+
+.stock-identity-link {
+  display: inline-grid;
+  gap: 2px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.stock-identity-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-identity-code {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stock-identity-link:hover .stock-identity-name,
+.stock-identity-link:hover .stock-identity-code {
+  color: var(--accent);
+}
+
+.stock-identity-link:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* ============================================================
+ * Strategy Workspace · quant research console
+ * ============================================================ */
+
+.strategy-workspace {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.strategy-workspace-head,
+.strategy-tab-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.strategy-workspace-head h2,
+.strategy-tab-heading h3 {
+  margin: 0;
+}
+
+.strategy-workspace-meta {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.strategy-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.strategy-tabs button {
+  flex: none;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.strategy-tabs button:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.strategy-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.strategy-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.strategy-tab-panel {
+  min-width: 0;
+}
+
+.strategy-summary-grid,
+.strategy-diff-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.strategy-metric {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+}
+
+.strategy-metric-label {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.strategy-metric-value {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+}
+
+.strategy-health-banner {
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-md);
+  color: var(--warning);
+  background: rgba(255, 180, 84, 0.08);
+}
+
+.strategy-health-banner.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--pos-soft);
+}
+
+.strategy-health-banner p {
+  margin: 0;
+}
+
+.strategy-overview-audit {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.strategy-overview-audit > div {
+  display: grid;
+  gap: 4px;
+}
+
+.strategy-candidate-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.strategy-result-table th:first-child,
+.strategy-result-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 132px;
+  background: var(--panel);
+}
+
+.strategy-rule-row td {
+  position: static !important;
+  background: var(--panel-2) !important;
+}
+
+.strategy-rule-evaluation {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.strategy-rule-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.strategy-rule-item p {
+  margin: 0;
+}
+
+.strategy-expression,
+.strategy-definition-json {
+  display: block;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--tea);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  white-space: pre;
+}
+
+.strategy-rule-inputs {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.strategy-diff {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+/* 运行详情弹窗（strategy-workspace）：结果列表 + StrategySignal */
+.strategy-run-detail {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.strategy-run-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.strategy-run-detail-results {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* 单条结果默认折叠为一行，点击行展开规则详情（advice-card 同款交互） */
+.strategy-run-result {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.strategy-run-result:hover {
+  border-color: var(--line-strong);
+}
+
+.strategy-run-result-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.strategy-run-result-detail {
+  display: none;
+}
+
+.strategy-run-result.expanded .strategy-run-result-detail {
+  display: block;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.strategy-run-pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.strategy-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  padding: var(--space-6);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  background: rgba(146, 163, 190, 0.025);
+}
+
+.strategy-empty-state.compact {
+  min-height: 120px;
+  margin-top: var(--space-4);
+}
+
+.strategy-empty-state > * {
+  margin: 0;
+}
+
+.strategy-version-item .mono {
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1020px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -4469,6 +4802,11 @@ body > .modal {
     grid-template-columns: 1fr;
   }
 
+  .strategy-summary-grid,
+  .strategy-diff-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .ai-settings-grid {
     grid-template-columns: 1fr;
   }
@@ -4503,6 +4841,20 @@ body > .modal {
     flex-direction: column;
     gap: var(--space-2);
     margin-bottom: var(--space-4);
+  }
+
+  .strategy-workspace-head,
+  .strategy-tab-heading {
+    flex-direction: column;
+  }
+
+  .strategy-workspace-head .row-actions,
+  .strategy-tab-heading .row-actions {
+    width: 100%;
+  }
+
+  .strategy-overview-audit {
+    grid-template-columns: 1fr;
   }
 
   .route-header h1 {
