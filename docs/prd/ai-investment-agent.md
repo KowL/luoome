@@ -4,6 +4,7 @@
 > 日期：2026-07-29
 > 上位文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)
 > 技术基线：[ARCHITECTURE.md](../ARCHITECTURE.md)、[AI SDK 接入与 LLM 重构设计](../ddd/ai-sdk-llm-refactor-design.md)
+> 研究模型更新：Agent 读取、引用和保存研究的契约以[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)为准；原 `ResearchNote` 草案改为 Topic/Document/SubjectLink 草案
 
 ## 1. 文档结论
 

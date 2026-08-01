@@ -121,6 +121,7 @@ const seedSignalSetup = async (ctx: ToolContext, signalTs: Date): Promise<void> 
     id: `sig-watch:${STOCK}`,
     watchlistId: 'sig-watch',
     stockId: STOCK,
+    stage: 'watching',
     priority: 'normal',
     firstAddedAt: T0,
     lastActivityAt: T0,

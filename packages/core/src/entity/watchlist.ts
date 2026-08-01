@@ -21,14 +21,23 @@ export const WatchlistSchema = z.object({
 });
 export type Watchlist = z.infer<typeof WatchlistSchema>;
 
+export const WatchlistMemberStageSchema = z.enum([
+  'discovered',
+  'watching',
+  'researching',
+  'confirmed',
+  'archived',
+]);
 export const WatchlistMemberPrioritySchema = z.enum(['normal', 'important', 'urgent']);
 export const WatchlistMemberSchema = z.object({
   id: z.string().min(1),
   watchlistId: z.string().min(1),
   stockId: z.string().min(1),
+  stage: WatchlistMemberStageSchema,
   priority: WatchlistMemberPrioritySchema,
   firstAddedAt: z.coerce.date(),
   lastActivityAt: z.coerce.date(),
+  archivedAt: z.coerce.date().optional(),
 });
 export type WatchlistMember = z.infer<typeof WatchlistMemberSchema>;
 
@@ -106,6 +115,8 @@ export interface WatchlistSyncCommit {
   readonly candidates: readonly WatchlistSourceCandidate[];
   readonly sourceId?: string;
   readonly sourceVersionId?: string;
+  /** archived Member 的恢复目标：自动来源默认 discovered；仅用户手工恢复可选 watching。 */
+  readonly reviveStage?: 'discovered' | 'watching';
 }
 
 export const assertWatchlistInvariants = (watchlist: Watchlist): void => {
@@ -125,6 +136,9 @@ export const assertWatchlistMemberInvariants = (member: WatchlistMember): void =
   WatchlistMemberSchema.parse(member);
   if (member.lastActivityAt < member.firstAddedAt) {
     throw new InvariantError('WatchlistMember.lastActivityAt 不能早于 firstAddedAt');
+  }
+  if ((member.stage === 'archived') !== (member.archivedAt !== undefined)) {
+    throw new InvariantError('archived WatchlistMember 与 archivedAt 必须同时出现');
   }
 };
 

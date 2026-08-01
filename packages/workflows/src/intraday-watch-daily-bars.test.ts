@@ -73,6 +73,7 @@ const setupCtx = async (quotes: Record<string, number>) => {
     id: 'p-change-group:600519.SH',
     watchlistId: 'p-change-group',
     stockId: '600519.SH',
+    stage: 'watching',
     priority: 'normal',
     firstAddedAt: T0,
     lastActivityAt: T0,

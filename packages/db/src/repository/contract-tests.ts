@@ -1456,6 +1456,26 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.signalsByStock('600519.SH')).toEqual([first]);
       });
 
+      it('signalsByRun 只返回指定运行并保持时间倒序', async () => {
+        await repos.strategyRun.saveRun(makeStrategyRun('run-1', { startedAt: T1 }));
+        await repos.strategyRun.saveRun(
+          makeStrategyRun('run-2', { startedAt: T2, finishedAt: T3 }),
+        );
+        const older = makeStrategySignal('signal-old', '600519.SH', { runId: 'run-1', ts: T1 });
+        const newer = makeStrategySignal('signal-new', '002594.SZ', { runId: 'run-1', ts: T2 });
+        const otherRun = makeStrategySignal('signal-other', '300750.SZ', {
+          runId: 'run-2',
+          ts: T3,
+        });
+        await repos.strategyRun.saveSignals([older, newer, otherRun]);
+
+        expect((await repos.strategyRun.signalsByRun('run-1')).map((signal) => signal.id)).toEqual([
+          'signal-new',
+          'signal-old',
+        ]);
+        expect(await repos.strategyRun.signalsByRun('missing')).toEqual([]);
+      });
+
       it('saveSignals 主键 id 冲突也忽略（与身份唯一索引同语义）', async () => {
         await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
         const first = makeStrategySignal('signal-1', '600519.SH', { ts: T1 });
@@ -1498,7 +1518,7 @@ export const registerRepositoryContractTests = (
         await repos.watchlist.save(makeWatchlist('watchlist-1'));
       });
 
-      it('Watchlist 往返、过滤与删除一致', async () => {
+      it('Watchlist 往返、过滤与 archive 一致', async () => {
         await repos.watchlist.save(
           makeWatchlist('portfolio-1', {
             kind: 'portfolio',
@@ -1512,8 +1532,11 @@ export const registerRepositoryContractTests = (
         expect((await repos.watchlist.list({ kind: 'portfolio' })).map((item) => item.id)).toEqual([
           'portfolio-1',
         ]);
-        await repos.watchlist.remove('watchlist-1');
-        expect(await repos.watchlist.findById('watchlist-1')).toBeNull();
+        await repos.watchlist.archive('watchlist-1', T2);
+        expect(await repos.watchlist.findById('watchlist-1')).toMatchObject({
+          enabled: false,
+          updatedAt: T2,
+        });
       });
 
       it('complete sync 支持 entered/unchanged/exited，多来源不会互相删除', async () => {
@@ -1531,6 +1554,7 @@ export const registerRepositoryContractTests = (
         if (member === null) throw new Error('fixture member missing');
         await repos.watchlistMember.saveMember({
           ...member,
+          stage: 'watching',
           lastActivityAt: T2,
         });
         const manual: WatchlistMemberSource = {
@@ -1565,13 +1589,13 @@ export const registerRepositoryContractTests = (
           ['600519.SH', 'exited'],
         ]);
         expect(await repos.watchlistMember.findMember('watchlist-1', '600519.SH')).toMatchObject({
-          stockId: '600519.SH',
+          stage: 'watching',
         });
         expect(await repos.watchlistMember.listSources(member.id)).toEqual([manual]);
         expect(await repos.watchlistMember.listSources(member.id, true)).toHaveLength(2);
       });
 
-      it('partial/failed 不退出来源；complete 空结果结束并删除自动成员关系', async () => {
+      it('partial/failed 不退出来源；complete 空结果才结束并归档自动成员', async () => {
         await repos.watchlistMember.commitWatchlistSync({
           run: makeWatchlistSyncRun('sync-1'),
           candidates: [{ stockId: '600519.SH', reason: 'first', evidence: [] }],
@@ -1591,22 +1615,20 @@ export const registerRepositoryContractTests = (
           await repos.watchlistMember.currentSource(member.id, 'strategy:strategy-1'),
         ).toMatchObject({ status: 'stale' });
 
-        const completeAt = new Date(T3.getTime() + 1);
         const complete = await repos.watchlistMember.commitWatchlistSync({
           run: makeWatchlistSyncRun('sync-empty', {
             startedAt: T3,
-            finishedAt: completeAt,
+            finishedAt: new Date(T3.getTime() + 1),
           }),
           candidates: [],
         });
         expect(complete.exitedCount).toBe(1);
-        expect(await repos.watchlistMember.findMember('watchlist-1', '600519.SH')).toBeNull();
-        expect(
-          await repos.watchlistMember.listSources('watchlist-1:600519.SH', true),
-        ).toMatchObject([{ status: 'ended', validUntil: completeAt }]);
+        expect(await repos.watchlistMember.findMember('watchlist-1', '600519.SH')).toMatchObject({
+          stage: 'archived',
+        });
       });
 
-      it('ended 后重新进入创建新来源；非法 bundle 原子回滚', async () => {
+      it('ended 后重新进入创建新来源并 revive；非法 bundle 原子回滚', async () => {
         await repos.watchlistMember.commitWatchlistSync({
           run: makeWatchlistSyncRun('sync-1'),
           candidates: [{ stockId: '600519.SH', reason: 'first', evidence: [] }],
@@ -1624,6 +1646,7 @@ export const registerRepositoryContractTests = (
         });
         const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
         if (member === null) throw new Error('fixture member missing');
+        expect(member.stage).toBe('discovered');
         expect(await repos.watchlistMember.listSources(member.id, true)).toHaveLength(2);
 
         await expect(

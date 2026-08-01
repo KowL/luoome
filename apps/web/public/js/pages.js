@@ -13,6 +13,7 @@ import {
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
 import { alertDialog, promptDialog } from './modal.js';
 import { createStockSearchBox } from './search-box.js';
+import { stockIdentityLink } from './stock-link.js';
 import {
   $,
   adviceCard,
@@ -175,13 +176,10 @@ const boardRow = (item) => {
   const chgCls =
     item.changePct === null ? '' : item.changePct > 0 ? 'pos' : item.changePct < 0 ? 'neg' : '';
   const row = el('tr', item.holding !== null ? 'board-row board-holding' : 'board-row');
-  const nameChildren = [el('span', 'board-name', item.name)];
+  const nameChildren = [stockIdentityLink({ stockId: item.stockId, stockName: item.name })];
   if (item.holding !== null) nameChildren.push(el('span', 'badge badge-holding', '持仓'));
   row.append(
-    el('td', null, [
-      el('div', 'board-name-cell', nameChildren),
-      el('div', 'cell-sub mono', item.stockId),
-    ]),
+    el('td', null, el('div', 'board-name-cell', nameChildren)),
     el('td', `num ${chgCls}`, item.quote === null ? '--' : fmtNum(item.quote.close)),
     el('td', `num ${chgCls}`, item.changePct === null ? '--' : `${fmtSigned(item.changePct)}%`),
     el(
@@ -193,7 +191,10 @@ const boardRow = (item) => {
     ),
     el('td', null, boardAlertCell(item.todayTrigger)),
   );
-  row.addEventListener('click', () => navigateTo(buildMarketLink(item.stockId)));
+  row.addEventListener('click', (event) => {
+    if (event.target.closest('a, button, input, select, textarea') !== null) return;
+    navigateTo(buildMarketLink(item.stockId));
+  });
   return row;
 };
 

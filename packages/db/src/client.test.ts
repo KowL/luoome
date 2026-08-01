@@ -31,58 +31,6 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
-  it('WatchlistMember 旧生命周期列迁移幂等，删除旧归档关系并保留来源历史', async () => {
-    const handle = createDrizzleRepos(':memory:');
-    try {
-      handle.db.run(sql`DROP TABLE watchlist_members`);
-      handle.db.run(sql`
-        CREATE TABLE watchlist_members (
-          id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-          stage TEXT NOT NULL, priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
-          last_activity_at INTEGER NOT NULL, archived_at INTEGER
-        )
-      `);
-      handle.db.run(sql`
-        INSERT INTO watchlist_members
-          (id, watchlist_id, stock_id, stage, priority, first_added_at, last_activity_at, archived_at)
-        VALUES ('legacy-watch:600519.SH', 'legacy-watch', '600519.SH', 'researching', 'important', 1000, 2000, NULL)
-      `);
-      handle.db.run(sql`
-        INSERT INTO watchlist_members
-          (id, watchlist_id, stock_id, stage, priority, first_added_at, last_activity_at, archived_at)
-        VALUES ('legacy-watch:002594.SZ', 'legacy-watch', '002594.SZ', 'confirmed', 'normal', 1000, 2000, 3000)
-      `);
-      handle.db.run(sql`
-        INSERT INTO watchlist_member_sources
-          (id, member_id, kind, source_key, reason, status, evidence_json, valid_from)
-        VALUES ('legacy-source', 'legacy-watch:600519.SH', 'manual', 'manual:legacy', 'legacy', 'active', '[]', 1000)
-      `);
-
-      ensureSchema(handle.db);
-      ensureSchema(handle.db);
-
-      const columns = handle.db.all<{ name: string }>(sql`PRAGMA table_info(watchlist_members)`);
-      expect(columns.map((column) => column.name)).not.toContain('stage');
-      expect(columns.map((column) => column.name)).not.toContain('archived_at');
-      expect(await handle.repos.watchlistMember.findMember('legacy-watch', '600519.SH')).toEqual({
-        id: 'legacy-watch:600519.SH',
-        watchlistId: 'legacy-watch',
-        stockId: '600519.SH',
-        priority: 'important',
-        firstAddedAt: new Date(1000),
-        lastActivityAt: new Date(2000),
-      });
-      expect(await handle.repos.watchlistMember.findMember('legacy-watch', '002594.SZ')).toBeNull();
-      expect(
-        handle.db.all<{ count: number }>(
-          sql`SELECT count(*) AS count FROM watchlist_member_sources WHERE id = 'legacy-source'`,
-        )[0]?.count,
-      ).toBe(1);
-    } finally {
-      handle.close();
-    }
-  });
-
   it('文件库：写入后重开数据仍在', async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');

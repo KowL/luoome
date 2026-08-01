@@ -39,9 +39,10 @@ export class InMemoryWatchlistRepository implements WatchlistRepository {
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
-  async remove(id: string): Promise<void> {
-    if (!this.items.has(id)) throw new InvariantError(`Watchlist 不存在: ${id}`);
-    this.items.delete(id);
+  async archive(id: string, at: Date): Promise<void> {
+    const item = this.items.get(id);
+    if (item === undefined) throw new InvariantError(`Watchlist 不存在: ${id}`);
+    this.items.set(id, { ...item, enabled: false, updatedAt: at });
   }
 }
 
@@ -68,13 +69,6 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
     this.members.set(member.id, member);
   }
 
-  async removeMember(memberId: string): Promise<void> {
-    if (!this.members.has(memberId))
-      throw new InvariantError(`WatchlistMember 不存在: ${memberId}`);
-    // 只删除当前成员关系；来源与同步快照保留，作为历史记录。
-    this.members.delete(memberId);
-  }
-
   async findMember(watchlistId: string, stockId: string): Promise<WatchlistMember | null> {
     return (
       [...this.members.values()].find(
@@ -86,13 +80,17 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
   async listMembers(
     watchlistId: string,
     filter: {
+      readonly stage?: WatchlistMember['stage'];
       readonly priority?: WatchlistMember['priority'];
+      readonly includeArchived?: boolean;
     } = {},
   ): Promise<readonly WatchlistMember[]> {
     return [...this.members.values()]
       .filter(
         (member) =>
           member.watchlistId === watchlistId &&
+          (filter.includeArchived || member.stage !== 'archived') &&
+          (filter.stage === undefined || member.stage === filter.stage) &&
           (filter.priority === undefined || member.priority === filter.priority),
       )
       .sort((left, right) => left.stockId.localeCompare(right.stockId));
@@ -222,10 +220,18 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
           id: `${input.run.watchlistId}:${candidate.stockId}`,
           watchlistId: input.run.watchlistId,
           stockId: candidate.stockId,
+          stage: input.reviveStage ?? 'discovered',
           priority: 'normal',
           firstAddedAt: now,
           lastActivityAt: now,
         };
+      } else if (member.stage === 'archived') {
+        member = {
+          ...member,
+          stage: input.reviveStage ?? 'discovered',
+          lastActivityAt: now,
+          archivedAt: undefined,
+        } as WatchlistMember;
       } else {
         member = { ...member, lastActivityAt: now };
       }
@@ -303,9 +309,13 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
         const otherCurrent = [...nextSources.values()].some(
           (item) => item.memberId === member.id && item.status !== 'ended',
         );
-        if (!otherCurrent) {
-          // 成员关系删除，来源和快照仍保留以支持历史查询。
-          nextMembers.delete(member.id);
+        if (!otherCurrent && member.stage === 'discovered') {
+          nextMembers.set(member.id, {
+            ...member,
+            stage: 'archived',
+            lastActivityAt: now,
+            archivedAt: now,
+          });
         }
       }
     }

@@ -509,6 +509,66 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(templates?.some((template) => template.name === '布林带均值回复')).toBe(true);
   });
 
+  it('策略工作台 read routes 复用 workspace/result-view/diff tool contract', async () => {
+    const strategyId = 'web-strategy-workspace-routes';
+    const created = await app.fetch(
+      targetRequest('/api/strategies', {
+        id: strategyId,
+        name: 'Web Workspace Strategy',
+        description: '验证策略工作台路由',
+      }),
+    );
+    expect(created.status).toBe(200);
+
+    const workspace = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/workspace`),
+    );
+    expect(workspace.status).toBe(200);
+    expect(await workspace.json()).toMatchObject({
+      ok: true,
+      data: { strategy: { id: strategyId }, overview: { health: 'never-run' } },
+    });
+
+    const results = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/results?view=selected`),
+    );
+    expect(results.status).toBe(404);
+
+    const diff = await app.fetch(
+      new Request(`http://test/api/strategy-runs/compare?strategyId=${strategyId}`),
+    );
+    expect(diff.status).toBe(404);
+  });
+
+  it('策略工作台 pause/resume routes 复用生命周期 tool 并保留 mutation 防护', async () => {
+    const strategyId = 'web-strategy-lifecycle-routes';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: 'Web Lifecycle Strategy',
+            description: '验证暂停和恢复路由',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const paused = await app.fetch(targetRequest(`/api/strategies/${strategyId}/pause`, {}));
+    expect(paused.status).toBe(200);
+    expect(await paused.json()).toMatchObject({
+      ok: true,
+      data: { strategy: { id: strategyId, status: 'paused' } },
+    });
+
+    const resumed = await app.fetch(targetRequest(`/api/strategies/${strategyId}/resume`, {}));
+    expect(resumed.status).toBe(400);
+    expect(await resumed.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+  });
+
   it('目标 mutation 同时要求显式 opt-in、token 与同源 Origin', async () => {
     const guarded = createWebApp(await buildTestContext(), {
       webToken: WEB_TOKEN,
@@ -571,7 +631,7 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
       body: JSON.stringify(body),
     });
 
-  it('编辑 / 成员 priority / 删除成员 / 停用列表 全链路', async () => {
+  it('编辑 / 成员 stage+priority / 归档成员 / 归档列表 全链路', async () => {
     const wid = 'web-watchlist-prd10';
     expect(
       (
@@ -601,25 +661,30 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
           watchMutation(`/api/watchlists/${wid}/members`, {
             stockId: '002594.SZ',
             reason: '测试加入',
+            stage: 'discovered',
           }),
         )
       ).status,
     ).toBe(200);
     const memberPatched = await app.fetch(
-      watchMutation(`/api/watchlists/${wid}/members/002594.SZ`, { priority: 'urgent' }, 'PATCH'),
+      watchMutation(
+        `/api/watchlists/${wid}/members/002594.SZ`,
+        { stage: 'researching', priority: 'urgent' },
+        'PATCH',
+      ),
     );
     expect(memberPatched.status).toBe(200);
     const memberBody = (await memberPatched.json()) as {
-      data?: { member: { priority: string } };
+      data?: { member: { stage: string; priority: string } };
     };
-    expect(memberBody.data?.member).toMatchObject({ priority: 'urgent' });
+    expect(memberBody.data?.member).toMatchObject({ stage: 'researching', priority: 'urgent' });
 
     expect(
       (
         await app.fetch(
           watchMutation(`/api/watchlists/${wid}/members`, {
             stockId: '600519.SH',
-            reason: '待删除',
+            reason: '待归档',
           }),
         )
       ).status,
@@ -628,25 +693,26 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
       (await app.fetch(watchMutation(`/api/watchlists/${wid}/members/600519.SH/archive`, {})))
         .status,
     ).toBe(200);
-    const afterMemberDelete = (await (
-      await app.fetch(new Request(`http://test/api/watchlists/${wid}`))
-    ).json()) as { data?: { members: Array<{ member: { stockId: string } }> } };
-    expect(
-      afterMemberDelete.data?.members.some((item) => item.member.stockId === '600519.SH'),
-    ).toBe(false);
     expect((await app.fetch(watchMutation(`/api/watchlists/${wid}/archive`, {}))).status).toBe(200);
 
-    // 停用列表不进入当前总览，也不再返回已归档成员视图。
+    // 归档结果经 overview 验证：列表停用进入已归档列表，成员进入已归档成员
     const overview = (await (
       await app.fetch(new Request('http://test/api/watchlists/overview'))
     ).json()) as {
       data?: {
-        lists: Array<{ watchlist: { id: string; enabled: boolean } }>;
-        archived?: unknown;
+        archived: {
+          lists: Array<{ id: string; enabled: boolean }>;
+          members: Array<{ watchlistId: string; member: { stockId: string } }>;
+        };
       };
     };
-    expect(overview.data?.lists.some((list) => list.watchlist.id === wid)).toBe(false);
-    expect(overview.data?.archived).toBeUndefined();
+    const archivedList = overview.data?.archived.lists.find((list) => list.id === wid);
+    expect(archivedList?.enabled).toBe(false);
+    expect(
+      overview.data?.archived.members.some(
+        (item) => item.watchlistId === wid && item.member.stockId === '600519.SH',
+      ),
+    ).toBe(true);
   });
 
   it('GET /api/watchlist-changes 缺 watchlistId → 400；合法参数 → 200', async () => {
@@ -655,25 +721,13 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
     const body = (await missing.json()) as { error?: { kind: string } };
     expect(body.error?.kind).toBe('invalid_input');
 
-    expect(
-      (
-        await app.fetch(
-          watchMutation('/api/watchlists', {
-            id: 'web-watchlist-changes',
-            name: '变化查询',
-            kind: 'personal',
-            membershipPolicy: 'mixed',
-          }),
-        )
-      ).status,
-    ).toBe(200);
     const ok = await app.fetch(
-      new Request('http://test/api/watchlist-changes?watchlistId=web-watchlist-changes&limit=10'),
+      new Request('http://test/api/watchlist-changes?watchlistId=web-watchlist-prd10&limit=10'),
     );
     expect(ok.status).toBe(200);
   });
 
-  it('GET /api/watchlists/overview 聚合成员/holding/今日变化/触发摘要', async () => {
+  it('GET /api/watchlists/overview 聚合 discovered/holding/今日变化/触发摘要', async () => {
     const wid = 'web-overview-list';
     expect(
       (
@@ -692,6 +746,7 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
         await app.fetch(
           watchMutation(`/api/watchlists/${wid}/members`, {
             stockId: '002594.SZ',
+            stage: 'discovered',
             reason: '总览测试',
           }),
         )
@@ -704,6 +759,7 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
       id: `${wid}:600519.SH`,
       watchlistId: wid,
       stockId: '600519.SH',
+      stage: 'watching',
       priority: 'normal',
       firstAddedAt: now,
       lastActivityAt: now,
@@ -758,6 +814,7 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
       data?: {
         lists: Array<{
           watchlist: { id: string };
+          discoveredCount: number;
           todayEntered: number;
         }>;
         stocks: Array<{
@@ -765,6 +822,7 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
           memberships: Array<{ watchlistId: string; holding: boolean }>;
         }>;
         todayChanges: Array<{ watchlistId: string; stockId: string; direction: string }>;
+        archived: { lists: unknown[]; members: unknown[] };
         triggers: {
           urgentImportantCount: number;
           latestByStock: Record<string, { priority: string }>;
@@ -776,6 +834,7 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
     const data = body.data;
     expect(data).toBeDefined();
     const row = data?.lists.find((list) => list.watchlist.id === wid);
+    expect(row?.discoveredCount).toBe(1);
     expect(row?.todayEntered).toBeGreaterThanOrEqual(1);
     const holding = data?.stocks.find((stock) => stock.stockId === '600519.SH');
     expect(
@@ -788,6 +847,8 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
         (change) => change.watchlistId === wid && change.direction === 'entered',
       ),
     ).toBe(true);
+    expect(data?.archived.lists).toBeInstanceOf(Array);
+    expect(data?.archived.members).toBeInstanceOf(Array);
     expect(data?.triggers.urgentImportantCount).toBeGreaterThanOrEqual(1);
     expect(data?.triggers.latestByStock['002594.SZ']?.priority).toBe('urgent');
     expect(data?.meta.warnings).toEqual([]);

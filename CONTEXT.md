@@ -20,9 +20,9 @@ StrategySignal 是可供后续观察的信号。Signal 不等于 Advice，更不
 
 ### Watchlist
 
-回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护当前成员关系与
-优先级。成员可同时具有 manual、strategy、ai、portfolio、import 多个来源；一个来源结束不应删除
-仍被其他来源关注的成员；没有其它来源时删除成员关系，来源和同步历史仍保留。
+回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护
+`discovered → watching → researching → confirmed → archived` 阶段与优先级。成员可同时具有
+manual、strategy、ai、portfolio、import 多个来源；一个来源结束不应删除仍被其他来源关注的成员。
 
 ### AlertPlan
 

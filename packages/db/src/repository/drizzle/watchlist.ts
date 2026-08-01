@@ -47,9 +47,11 @@ const toMember = (row: MemberRow): WatchlistMember => ({
   id: row.id,
   watchlistId: row.watchlistId,
   stockId: row.stockId,
+  stage: row.stage,
   priority: row.priority,
   firstAddedAt: row.firstAddedAt,
   lastActivityAt: row.lastActivityAt,
+  ...(row.archivedAt === null ? {} : { archivedAt: row.archivedAt }),
 });
 
 const toSource = (row: SourceRow): WatchlistMemberSource => ({
@@ -104,9 +106,11 @@ const memberValues = (member: WatchlistMember) => ({
   id: member.id,
   watchlistId: member.watchlistId,
   stockId: member.stockId,
+  stage: member.stage,
   priority: member.priority,
   firstAddedAt: member.firstAddedAt,
   lastActivityAt: member.lastActivityAt,
+  archivedAt: member.archivedAt ?? null,
 });
 
 const sourceValues = (source: WatchlistMemberSource) => ({
@@ -208,11 +212,15 @@ export class DrizzleWatchlistRepository implements WatchlistRepository {
       .map(toWatchlist);
   }
 
-  async remove(id: string): Promise<void> {
+  async archive(id: string, at: Date): Promise<void> {
     if (this.db.select().from(watchlists).where(eq(watchlists.id, id)).get() === undefined) {
       throw new InvariantError(`Watchlist 不存在: ${id}`);
     }
-    this.db.delete(watchlists).where(eq(watchlists.id, id)).run();
+    this.db
+      .update(watchlists)
+      .set({ enabled: false, updatedAt: at })
+      .where(eq(watchlists.id, id))
+      .run();
   }
 }
 
@@ -238,22 +246,13 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
       .onConflictDoUpdate({
         target: watchlistMembers.id,
         set: {
+          stage: member.stage,
           priority: member.priority,
           lastActivityAt: member.lastActivityAt,
+          archivedAt: member.archivedAt ?? null,
         },
       })
       .run();
-  }
-
-  async removeMember(memberId: string): Promise<void> {
-    if (
-      this.db.select().from(watchlistMembers).where(eq(watchlistMembers.id, memberId)).get() ===
-      undefined
-    ) {
-      throw new InvariantError(`WatchlistMember 不存在: ${memberId}`);
-    }
-    // 只删除当前成员关系；来源与同步快照保留，作为历史记录。
-    this.db.delete(watchlistMembers).where(eq(watchlistMembers.id, memberId)).run();
   }
 
   async findMember(watchlistId: string, stockId: string): Promise<WatchlistMember | null> {
@@ -270,10 +269,14 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
   async listMembers(
     watchlistId: string,
     filter: {
+      readonly stage?: WatchlistMember['stage'];
       readonly priority?: WatchlistMember['priority'];
+      readonly includeArchived?: boolean;
     } = {},
   ): Promise<readonly WatchlistMember[]> {
     const conditions = [eq(watchlistMembers.watchlistId, watchlistId)];
+    if (!filter.includeArchived) conditions.push(ne(watchlistMembers.stage, 'archived'));
+    if (filter.stage !== undefined) conditions.push(eq(watchlistMembers.stage, filter.stage));
     if (filter.priority !== undefined) {
       conditions.push(eq(watchlistMembers.priority, filter.priority));
     }
@@ -478,10 +481,18 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
             id: `${input.run.watchlistId}:${candidate.stockId}`,
             watchlistId: input.run.watchlistId,
             stockId: candidate.stockId,
+            stage: input.reviveStage ?? 'discovered',
             priority: 'normal',
             firstAddedAt: now,
             lastActivityAt: now,
           };
+        } else if (member.stage === 'archived') {
+          member = {
+            ...member,
+            stage: input.reviveStage ?? 'discovered',
+            lastActivityAt: now,
+          };
+          delete (member as { archivedAt?: Date }).archivedAt;
         } else {
           member = { ...member, lastActivityAt: now };
         }
@@ -491,8 +502,10 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
           .onConflictDoUpdate({
             target: watchlistMembers.id,
             set: {
+              stage: member.stage,
               priority: member.priority,
               lastActivityAt: member.lastActivityAt,
+              archivedAt: member.archivedAt ?? null,
             },
           })
           .run();
@@ -583,9 +596,11 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
               ),
             )
             .get();
-          if (other === undefined) {
-            // 成员关系删除，来源和快照仍保留以支持历史查询。
-            tx.delete(watchlistMembers).where(eq(watchlistMembers.id, member.id)).run();
+          if (other === undefined && member.stage === 'discovered') {
+            tx.update(watchlistMembers)
+              .set({ stage: 'archived', lastActivityAt: now, archivedAt: now })
+              .where(eq(watchlistMembers.id, member.id))
+              .run();
           }
         }
       }

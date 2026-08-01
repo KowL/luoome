@@ -415,6 +415,16 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       .map(toSignal);
   }
 
+  async signalsByRun(runId: string): Promise<readonly StrategySignal[]> {
+    return this.db
+      .select()
+      .from(strategySignals)
+      .where(eq(strategySignals.runId, runId))
+      .orderBy(desc(strategySignals.ts), desc(strategySignals.id))
+      .all()
+      .map(toSignal);
+  }
+
   async signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]> {
     const where =
       since === undefined

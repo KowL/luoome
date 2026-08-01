@@ -23,17 +23,18 @@ describe('Watchlist invariants', () => {
     ).toThrow('portfolio');
   });
 
-  it('keeps WatchlistMember focused on the active relationship', () => {
+  it('couples archived member with archivedAt', () => {
     expect(() =>
       assertWatchlistMemberInvariants({
         id: 'member-1',
         watchlistId: 'watchlist-1',
         stockId: '600519.SH',
+        stage: 'archived',
         priority: 'normal',
         firstAddedAt: T,
         lastActivityAt: T,
       }),
-    ).not.toThrow();
+    ).toThrow('archivedAt');
   });
 
   it('requires source key prefix and ended validity', () => {

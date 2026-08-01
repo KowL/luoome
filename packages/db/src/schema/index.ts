@@ -399,6 +399,7 @@ export const strategySignals = sqliteTable(
       table.ts,
     ),
     strategyTsIdx: index('strategy_signals_strategy_ts_idx').on(table.strategyId, table.ts),
+    runTsIdx: index('strategy_signals_run_ts_idx').on(table.runId, table.ts),
     stockTsIdx: index('strategy_signals_stock_ts_idx').on(table.stockId, table.ts),
   }),
 );
@@ -507,15 +508,18 @@ export const watchlistMembers = sqliteTable(
     id: text('id').primaryKey(),
     watchlistId: text('watchlist_id').notNull(),
     stockId: text('stock_id').notNull(),
+    stage: text('stage').$type<WatchlistMember['stage']>().notNull(),
     priority: text('priority').$type<WatchlistMember['priority']>().notNull(),
     firstAddedAt: integer('first_added_at', { mode: 'timestamp_ms' }).notNull(),
     lastActivityAt: integer('last_activity_at', { mode: 'timestamp_ms' }).notNull(),
+    archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     watchlistStockUnique: uniqueIndex('watchlist_members_watchlist_stock_unique').on(
       t.watchlistId,
       t.stockId,
     ),
+    watchlistStageIdx: index('watchlist_members_watchlist_stage_idx').on(t.watchlistId, t.stage),
   }),
 );
 

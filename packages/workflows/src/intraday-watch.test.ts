@@ -33,6 +33,7 @@ describe('intraday-watch workflow', () => {
       id: 'paused-watchlist:002594.SZ',
       watchlistId: 'paused-watchlist',
       stockId: '002594.SZ',
+      stage: 'watching',
       priority: 'normal',
       firstAddedAt: T0,
       lastActivityAt: T0,

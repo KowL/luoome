@@ -75,7 +75,10 @@ import {
   validateStrategyVersionTool,
 } from './tools/strategy-lifecycle.js';
 import {
+  compareStrategyRunsTool,
   getStrategyRunTool,
+  getStrategyWorkspaceTool,
+  listStrategyResultViewsTool,
   listStrategyRunsTool,
   strategySignalsByStockTool,
 } from './tools/strategy-query.js';
@@ -239,6 +242,9 @@ export const toolRegistry: Registry = createRegistry([
   runStrategyTool,
   listStrategyRunsTool,
   getStrategyRunTool,
+  listStrategyResultViewsTool,
+  getStrategyWorkspaceTool,
+  compareStrategyRunsTool,
   strategySignalsByStockTool,
   listWatchlistsTool,
   getWatchlistTool,

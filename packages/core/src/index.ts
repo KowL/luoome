@@ -39,6 +39,8 @@ export * from './strategy/builtin.js';
 export * from './strategy/evaluator.js';
 export * from './strategy/expression.js';
 export * from './strategy/field-registry.js';
+export * from './strategy/result-view.js';
+export * from './strategy/run-diff.js';
 // Strategy / Watchlist 重构的跨阶段决策约束（W0 起）
 export * from './strategy-watchlist-policy.js';
 // A 股节假日历（纯计算；文件 / env 加载仍在 cli）
