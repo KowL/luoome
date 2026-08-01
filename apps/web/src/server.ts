@@ -196,6 +196,7 @@ export const buildWebContext = async (
       throw new Error('AI 模型尚未配置，请前往设置页完成 LLM 设置');
     },
   };
+  const researchVault = createResearchVaultAdapterFromEnv(env);
   return buildContext({
     repos: handle.repos,
     adapters: {
@@ -216,7 +217,7 @@ export const buildWebContext = async (
     user: { id: 'local-web-user', defaultAccountId },
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger: console }),
-    researchVault: createResearchVaultAdapterFromEnv(env),
+    ...(researchVault ? { researchVault } : {}),
   });
 };
 
@@ -371,7 +372,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       limit: Number(c.req.query('limit') ?? '50'),
     }),
   );
-  app.get('/api/research/topics/:id', (c) => callTool('get_research_topic', { topicId: c.req.param('id') }));
+  app.get('/api/research/topics/:id', (c) =>
+    callTool('get_research_topic', { topicId: c.req.param('id') }),
+  );
   app.get('/api/research/documents', (c) =>
     callTool('list_research_documents', {
       topicId: c.req.query('topicId') || undefined,
@@ -381,9 +384,17 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     }),
   );
   app.get('/api/research/documents/:id', (c) =>
-    callTool('get_research_document', { documentId: c.req.param('id'), includeContent: c.req.query('content') === '1' }),
+    callTool('get_research_document', {
+      documentId: c.req.param('id'),
+      includeContent: c.req.query('content') === '1',
+    }),
   );
-  app.get('/api/research/search', (c) => callTool('search_research_documents', { text: c.req.query('q') ?? '', limit: Number(c.req.query('limit') ?? '50') }));
+  app.get('/api/research/search', (c) =>
+    callTool('search_research_documents', {
+      text: c.req.query('q') ?? '',
+      limit: Number(c.req.query('limit') ?? '50'),
+    }),
+  );
 
   const parseJsonObject = async (
     request: Request,
@@ -1459,119 +1470,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
 
-  // ruo 迁移 §8：研究档案时间线聚合（内部组合读 tool，按时间倒序，支持类型筛选）。
-  app.get('/api/stocks/:id/research-timeline', async (c) => {
-    const stockId = c.req.param('id');
-    const researchView = await invokeTool('get_stock_research_view', { stockId, limit: 200 });
-    if (!researchView.ok) return jsonResult(researchView);
-    return jsonResult(researchView);
-    /* Legacy timeline assembly intentionally retired with ResearchNote. */
-    const typesParam = c.req.query('types');
-    const wanted =
-      typesParam !== undefined && typesParam.length > 0
-        ? new Set(typesParam.split(',').map((s) => s.trim()))
-        : null;
-    const want = (t: string): boolean => wanted === null || wanted.has(t);
-
-    const [notesR, eventsR, triggersR, adviceR, signalsR, watchlistsR] = await Promise.all([
-      invokeTool('list_research_notes', { stockId, limit: 200 }),
-      invokeTool('list_stock_events', { stockId, limit: 200 }),
-      invokeTool('list_watch_triggers', { stockId, limit: 100 }),
-      invokeTool('get_advice', { subjectKind: 'stock', subjectId: stockId, limit: 50 }),
-      invokeTool('strategy_signals_by_stock', { stockId, limit: 100 }),
-      invokeTool('list_watchlists', {}),
-    ]);
-    if (!notesR.ok) return jsonResult(notesR);
-    if (!eventsR.ok) return jsonResult(eventsR);
-
-    const notes = (notesR.data as { notes: Array<Record<string, unknown>> }).notes;
-    const events = (eventsR.data as { events: Array<Record<string, unknown>> }).events;
-    const triggers = triggersR.ok
-      ? (triggersR.data as { triggers: Array<Record<string, unknown>> }).triggers
-      : [];
-    const advice = adviceR.ok
-      ? (adviceR.data as {
-          advice?: Array<Record<string, unknown>>;
-          advices?: Array<Record<string, unknown>>;
-        })
-      : {};
-    const adviceList = advice.advice ?? advice.advices ?? [];
-    const strategySignals = signalsR.ok
-      ? (signalsR.data as { signals: Array<Record<string, unknown>> }).signals
-      : [];
-    const watchlistItems = watchlistsR.ok
-      ? (
-          watchlistsR.data as {
-            items: Array<{ watchlist: { id: string; name: string } }>;
-          }
-        ).items
-      : [];
-    const watchlistMemberships = (
-      await Promise.all(
-        watchlistItems.map(async ({ watchlist }) => {
-          const detail = await invokeTool('get_watchlist', { watchlistId: watchlist.id });
-          if (!detail.ok) return [];
-          const members = (
-            detail.data as {
-              members: Array<{
-                member: { stockId: string; stage: string; priority: string };
-                sources: Array<Record<string, unknown>>;
-              }>;
-            }
-          ).members;
-          return members
-            .filter(({ member }) => member.stockId === stockId)
-            .map(({ member, sources }) => ({ watchlist, member, sources }));
-        }),
-      )
-    ).flat();
-
-    type TimelineItem = { type: string; at: string; payload: Record<string, unknown> };
-    const items: TimelineItem[] = [];
-    if (want('note')) {
-      for (const n of notes) {
-        items.push({ type: 'note', at: String(n.createdAt), payload: n });
-      }
-    }
-    if (want('event')) {
-      for (const e of events) {
-        items.push({ type: 'event', at: String(e.occursAt), payload: e });
-      }
-    }
-    if (want('trigger')) {
-      for (const t of triggers) {
-        items.push({ type: 'trigger', at: String(t.createdAt), payload: t });
-      }
-    }
-    if (want('advice')) {
-      for (const a of adviceList) {
-        items.push({ type: 'advice', at: String(a.createdAt), payload: a });
-      }
-    }
-    items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-
-    const activeThesis = notes.find((n) => n.kind === 'thesis' && n.active === true) ?? null;
-    const now = ctxRef.current.clock().getTime();
-    const upcomingEvents = events
-      .filter((e) => e.status === 'scheduled' && new Date(String(e.occursAt)).getTime() >= now)
-      .slice(0, 10);
-
-    return jsonResult({
-      ok: true,
-      data: {
-        stockId,
-        summary: {
-          activeThesis,
-          noteCount: notes.length,
-          eventCount: events.length,
-          upcomingEvents,
-          strategySignals,
-          watchlistMemberships,
-        },
-        timeline: items,
-      },
-    });
-  });
+  app.get('/api/research/stocks/:id', (c) =>
+    callTool('get_stock_research_view', { stockId: c.req.param('id'), limit: 200 }),
+  );
 
   // ruo 迁移 §8：数据健康读模型 + workflow 运行审计（供仪表盘 / 设置页消费）。
   app.get('/api/market-data-status', () => callTool('get_market_data_status', {}));

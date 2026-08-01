@@ -180,7 +180,6 @@ describe('toolRegistry', () => {
       .sort();
     expect(writeTools).toEqual([
       'add_holding',
-      'add_research_note',
       'add_stock_event',
       'add_trade',
       'add_watchlist_member',
@@ -196,7 +195,6 @@ describe('toolRegistry', () => {
       'create_watchlist',
       'delete_alert_plan',
       'delete_chat_session',
-      'delete_research_note',
       'delete_stock_event',
       'pause_strategy',
       'publish_strategy_version',
@@ -204,9 +202,9 @@ describe('toolRegistry', () => {
       'rename_chat_session',
       'resume_strategy',
       'set_watch_trigger_feedback',
+      'sync_research_vault',
       'update_alert_plan',
       'update_holding',
-      'update_research_note',
       'update_stock_event',
       'update_watchlist',
       'update_watchlist_member',

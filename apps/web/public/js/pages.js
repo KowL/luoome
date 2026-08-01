@@ -1422,20 +1422,6 @@ const renderSettingsAccount = async () => {
  * （docs/ddd/ruo-feature-migration-detailed-design.md §8）
  * ============================================================ */
 
-const callTool = (tool, input) =>
-  callApi(`/api/tools/${tool}/call`, {
-    method: 'POST',
-    body: JSON.stringify({ input }),
-  });
-
-/** 股票搜索：复用 /api/stocks/search（优先 tushare，本地兜底）；与行情页共用 q 参数。 */
-const searchStocks = async (query) => {
-  const r = await callApi(`/api/stocks/search?q=${encodeURIComponent(query)}&limit=8`);
-  if (!r.ok) return [];
-  const data = r.data;
-  return data && Array.isArray(data.stocks) ? data.stocks : [];
-};
-
 /** 新鲜度 → 中文文案 + 颜色类（PRD §6.3）。 */
 const FRESHNESS_LABEL = {
   fresh: { label: '新鲜', cls: 'badge-fresh' },
@@ -1551,344 +1537,147 @@ const renderWorkflowRuns = async (setStatus) => {
   setStatus('workflow 运行记录已更新');
 };
 
-/** 研究页：搜索 → 时间线 → 新增/编辑笔记。 */
+/** 研究页：主题浏览、全文搜索和显式股票投影。 */
 const renderResearch = async (setStatus) => {
-  const topicInput = /** @type {HTMLInputElement | null} */ (document.getElementById('research-topic-input'));
-  if (topicInput !== null) {
-    const results = document.getElementById('research-search-results');
-    const detail = document.getElementById('research-detail');
-    const renderTopics = async (query = '') => {
-      setStatus('加载研究主题…');
-      const path = query ? `/api/research/search?q=${encodeURIComponent(query)}` : '/api/research/topics';
-      const response = await callApi(path);
-      if (!response.ok) { if (results) mount(results, el('p', 'muted', response.error?.message ?? '研究索引不可用')); return; }
-      const rows = query ? (response.data?.hits ?? []).map((hit) => hit.document) : (response.data?.topics ?? []);
-      if (results) mount(results, rows.length === 0 ? el('p', 'muted', '暂无研究资料；请先同步 Vault') : el('div', 'research-results-list', rows.map((row) => el('article', 'card research-topic-card', [el('h3', null, row.title), el('p', 'muted', `${row.kind} · ${row.availability}`), el('p', null, row.excerpt ?? row.summary ?? ''), row.obsidianUri ? el('a', null, '在 Obsidian 中打开', { href: row.obsidianUri }) : null]))));
-      if (detail) detail.hidden = true;
-      setStatus(`${rows.length} 条研究结果`);
-    };
-    const button = document.getElementById('research-search-btn');
-    if (button && button.dataset.bound !== 'vault') { button.dataset.bound = 'vault'; button.addEventListener('click', () => void renderTopics(topicInput.value.trim())); topicInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') void renderTopics(topicInput.value.trim()); }); }
-    await renderTopics(topicInput.value.trim());
-    return;
-  }
-  const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
-  if (detail !== null) detail.hidden = true;
-
   const input = /** @type {HTMLInputElement | null} */ (
-    document.getElementById('research-stock-input')
+    document.getElementById('research-topic-input')
   );
-  const btn = /** @type {HTMLButtonElement | null} */ (
+  const button = /** @type {HTMLButtonElement | null} */ (
     document.getElementById('research-search-btn')
   );
   const results = document.getElementById('research-search-results');
-  if (input === null || btn === null || results === null) return;
+  const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
+  if (input === null || button === null || results === null || detail === null) return;
 
-  const runSearch = async () => {
-    const q = input.value.trim();
-    if (q.length === 0) return;
-    setStatus(`搜索 ${q}…`);
-    const list = await searchStocks(q);
-    mount(
-      results,
-      list.length === 0
-        ? el('p', 'muted', '无匹配')
-        : el(
-            'ul',
-            'research-results-list',
-            list.map((c) =>
-              el('li', null, [
-                el('button', 'btn btn-link', `${c.code} · ${c.name}（${c.exchange}）`),
-              ]),
-            ),
-          ),
+  const showDocument = async (documentId) => {
+    setStatus('加载研究资料…');
+    const response = await callApi(
+      `/api/research/documents/${encodeURIComponent(documentId)}?content=1`,
     );
-    // 绑定选择
-    const buttons = results.querySelectorAll('button');
-    buttons.forEach((button, i) => {
-      button.addEventListener('click', () => {
-        const c = list[i];
-        if (c) void loadResearch(c.id, c.code, c.name);
-      });
-    });
-    setStatus(`找到 ${list.length} 个候选`);
+    if (!response.ok) {
+      mount(detail, el('p', 'error', response.error?.message ?? '研究资料不可用'));
+      detail.hidden = false;
+      return;
+    }
+    const row = response.data.document;
+    const children = [
+      el('h2', null, row.title),
+      el('p', 'muted', `${row.kind} · ${row.availability}`),
+      response.data.content ? el('pre', 'research-document-content', response.data.content) : null,
+      researchObsidianLink(response.data.obsidianUri),
+    ];
+    if (response.data.truncated) children.push(el('p', 'muted', '正文已按安全窗口截断'));
+    mount(detail, children);
+    detail.hidden = false;
+    setStatus(`已加载 ${row.title}`);
   };
 
-  if (btn.dataset.bound !== '1') {
-    btn.dataset.bound = '1';
-    btn.addEventListener('click', () => void runSearch());
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') void runSearch();
+  const showTopic = async (topicId) => {
+    setStatus('加载研究主题…');
+    const response = await callApi(`/api/research/topics/${encodeURIComponent(topicId)}`);
+    if (!response.ok) {
+      mount(detail, el('p', 'error', response.error?.message ?? '研究主题不可用'));
+      detail.hidden = false;
+      return;
+    }
+    const topic = response.data.topic;
+    mount(detail, [
+      el('h2', null, topic.title),
+      el('p', 'muted', `${topic.kind} · ${topic.availability}`),
+      topic.summary ? el('p', null, topic.summary) : null,
+      researchObsidianLink(response.data.obsidianUri),
+      el(
+        'div',
+        'research-results-list mt-2',
+        response.data.documents.map((document) =>
+          researchResultCard(document, 'document', () => void showDocument(document.id)),
+        ),
+      ),
+    ]);
+    detail.hidden = false;
+    setStatus(`已加载 ${topic.title}`);
+  };
+
+  const paint = (topics, documents) => {
+    const cards = [
+      ...topics.map((topic) => researchResultCard(topic, 'topic', () => void showTopic(topic.id))),
+      ...documents.map((document) =>
+        researchResultCard(document, 'document', () => void showDocument(document.id)),
+      ),
+    ];
+    mount(
+      results,
+      cards.length === 0
+        ? el('p', 'muted', '暂无研究资料；请先同步 Vault')
+        : el('div', 'research-results-list', cards),
+    );
+    detail.hidden = true;
+    setStatus(`${cards.length} 条研究结果`);
+  };
+
+  const load = async () => {
+    const query = input.value.trim();
+    setStatus(query ? `搜索 ${query}…` : '加载研究主题…');
+    if (query) {
+      const response = await callApi(`/api/research/search?q=${encodeURIComponent(query)}`);
+      if (!response.ok) {
+        mount(results, el('p', 'error', response.error?.message ?? '研究索引不可用'));
+        return;
+      }
+      paint(
+        [],
+        (response.data.hits ?? []).map((hit) => hit.document),
+      );
+      return;
+    }
+    const response = await callApi('/api/research/topics');
+    if (!response.ok) {
+      mount(results, el('p', 'error', response.error?.message ?? '研究索引不可用'));
+      return;
+    }
+    paint(response.data.topics ?? [], []);
+  };
+
+  if (button.dataset.bound !== 'vault') {
+    button.dataset.bound = 'vault';
+    button.addEventListener('click', () => void load());
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') void load();
     });
   }
 
   const stockId = routeStockId();
   if (stockId !== null) {
-    input.value = stockId;
-    setStatus(`加载 ${stockId} 研究记录…`);
-    const candidates = await searchStocks(stockId);
-    const stock = candidates.find((candidate) => candidate.id === stockId);
-    if (stock === undefined) {
-      setStatus(`未找到股票 ${stockId}`, true);
-    } else {
-      await loadResearch(stock.id, stock.code, stock.name);
-    }
-  }
-};
-
-/** 加载并渲染某只股票的研究时间线。 */
-const loadResearch = async (stockId, code, name) => {
-  const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
-  const titleEl = document.getElementById('research-title');
-  const summaryEl = document.getElementById('research-summary');
-  const summaryMeta = document.getElementById('research-summary-meta');
-  const timelineEl = document.getElementById('research-timeline');
-  const addNoteEl = document.getElementById('research-add-note');
-  if (!detail || !titleEl || !summaryEl || !summaryMeta || !timelineEl || !addNoteEl) return;
-  detail.hidden = false;
-  titleEl.textContent = `${code} · ${name} · 研究档案`;
-  summaryMeta.textContent = '加载中…';
-  mount(summaryEl, el('p', 'muted', '加载中…'));
-  mount(timelineEl, el('p', 'muted', '加载中…'));
-  mount(addNoteEl, el('p', 'muted', '加载中…'));
-
-  const r = await callApi(`/api/stocks/${encodeURIComponent(stockId)}/research-timeline`);
-  if (!r.ok) {
-    summaryMeta.textContent = '加载失败';
-    mount(summaryEl, el('p', 'error', r.error?.message ?? '加载失败'));
-    return;
-  }
-  const data =
-    /** @type {{summary: {activeThesis: Record<string, unknown>|null, noteCount: number, eventCount: number, upcomingEvents: Array<Record<string, unknown>>, strategySignals: Array<Record<string, unknown>>, watchlistMemberships: Array<{watchlist: {name: string}, member: {stage: string, priority: string}, sources: Array<Record<string, unknown>>}>}, timeline: Array<{type: string, at: string, payload: Record<string, unknown>}>}} */ (
-      r.data
-    );
-  summaryMeta.textContent = `${data.summary.noteCount} 笔记 · ${data.summary.eventCount} 事件`;
-
-  // 摘要
-  const thesis = data.summary.activeThesis;
-  const thesisBlock = thesis
-    ? el('div', 'card-summary-thesis', [
-        el('h3', null, '当前假设'),
-        el(
-          'p',
-          'muted',
-          `更新于 ${new Date(String(thesis.updatedAt)).toLocaleString('zh-CN', { hour12: false })}`,
-        ),
-        el('p', null, String(thesis.content ?? '')),
-        el('div', 'flex gap-2 mt-2', [
-          el('button', 'btn btn-outline btn-sm', '编辑（保存为新版本）', [], {
-            click: () => openEditNoteModal(stockId, /** @type {any} */ (thesis), code, name),
-          }),
-        ]),
-      ])
-    : el('div', 'muted', '无当前假设（可通过下方「新增笔记 / 假设」创建 thesis）');
-
-  const upcoming = data.summary.upcomingEvents;
-  const upcomingBlock = el('div', 'card-summary-events', [
-    el('h3', null, '未来事件'),
-    upcoming.length === 0
-      ? el('p', 'muted', '无未来 30/90 天事件')
-      : el(
-          'ul',
-          null,
-          upcoming.slice(0, 8).map((e) => {
-            const date = new Date(String(e.occursAt)).toLocaleDateString('zh-CN');
-            return el('li', null, `${date} · ${e.title}（${e.kind}，${e.importance ?? 'normal'}）`);
-          }),
-        ),
-  ]);
-  const strategyBlock = el('div', 'card-summary-events', [
-    el('h3', null, 'StrategySignal'),
-    data.summary.strategySignals.length === 0
-      ? el('p', 'muted', '暂无 StrategySignal')
-      : el(
-          'ul',
-          null,
-          data.summary.strategySignals
-            .slice(0, 8)
-            .map((signal) =>
-              el(
-                'li',
-                null,
-                `${signal.strategyId} · ${signal.ruleId} · ${signal.direction} · score ${signal.score} · data ${new Date(String(signal.ts)).toLocaleString('zh-CN', { hour12: false })} · ${(signal.evidence ?? []).join('；')}`,
-              ),
-            ),
-        ),
-  ]);
-  const watchlistBlock = el('div', 'card-summary-events', [
-    el('h3', null, 'Watchlist 来源'),
-    data.summary.watchlistMemberships.length === 0
-      ? el('p', 'muted', '不在任何 Watchlist')
-      : el(
-          'ul',
-          null,
-          data.summary.watchlistMemberships.map(({ watchlist, member, sources }) =>
-            el(
-              'li',
-              null,
-              `${watchlist.name} · ${member.stage}/${member.priority} · ${sources.map((source) => `${source.kind}:${source.status}`).join('、')}`,
-            ),
-          ),
-        ),
-  ]);
-  mount(summaryEl, [thesisBlock, upcomingBlock, strategyBlock, watchlistBlock]);
-
-  // 时间线
-  const TYPES = ['note', 'event', 'trigger', 'advice'];
-  const filterRow = el('div', 'research-timeline-filters-row', [
-    el('button', 'btn btn-outline btn-sm active', '全部', [], {
-      click: () => paintTimeline(data.timeline),
-    }),
-    ...TYPES.map((t) =>
-      el('button', 'btn btn-outline btn-sm', t, [], {
-        click: () => paintTimeline(data.timeline.filter((it) => it.type === t)),
-      }),
-    ),
-  ]);
-  mount(document.getElementById('research-timeline-filters') ?? timelineEl, filterRow);
-  paintTimeline(data.timeline);
-
-  // 新增笔记表单
-  mount(
-    addNoteEl,
-    buildAddNoteForm(stockId, () => loadResearch(stockId, code, name)),
-  );
-};
-
-const paintTimeline = (items) => {
-  const el2 = document.getElementById('research-timeline');
-  if (el2 === null) return;
-  if (items.length === 0) {
-    mount(el2, el('p', 'muted', '时间线为空'));
-    return;
-  }
-  mount(
-    el2,
-    el(
-      'ul',
-      'research-timeline-list',
-      items.slice(0, 200).map((it) => {
-        const at = new Date(it.at).toLocaleString('zh-CN', { hour12: false });
-        const badge = el('span', `timeline-badge timeline-${it.type}`, it.type);
-        let body;
-        if (it.type === 'note') body = String(it.payload.content ?? '');
-        else if (it.type === 'event')
-          body = `${it.payload.title ?? ''}（${it.payload.kind ?? ''}）`;
-        else if (it.type === 'trigger') body = String(it.payload.reason ?? '');
-        else
-          body = `${it.payload.decision ?? ''} · ${String(it.payload.premise ?? '').slice(0, 80)}`;
-        return el('li', null, [badge, el('span', 'muted', at), el('span', null, body)]);
-      }),
-    ),
-  );
-};
-
-/** 新增笔记表单：kind=thesis 自动 active；submit 后刷新。 */
-const buildAddNoteForm = (stockId, onDone) => {
-  const form = el('form', 'research-add-note-form');
-  const kindSelect = el('select', null, [
-    el('option', null, 'note（普通）'),
-    el('option', null, 'thesis（当前假设）'),
-    el('option', null, 'source-summary（来源摘要）'),
-  ]);
-  kindSelect.value = 'note';
-  const content = el('textarea', null, '', { rows: 4, placeholder: '笔记内容' });
-  const stance = el('select', null, [
-    el('option', null, '—'),
-    el('option', null, 'bullish'),
-    el('option', null, 'bearish'),
-    el('option', null, 'neutral'),
-  ]);
-  const tags = el('input', null, '', { placeholder: '标签（逗号分隔，可选）' });
-  const sourceUrl = el('input', null, '', { placeholder: '来源 URL（source-summary 必填）' });
-  const errBox = el('p', 'modal-error');
-  const submitBtn = el('button', 'btn btn-primary btn-sm', '保存', [], { type: 'submit' });
-  form.append(
-    el('div', 'field', [el('label', null, '类型'), kindSelect]),
-    el('div', 'field', [el('label', null, '内容'), content]),
-    el('div', 'field', [el('label', null, '立场'), stance]),
-    el('div', 'field', [el('label', null, '标签'), tags]),
-    el('div', 'field', [el('label', null, '来源 URL'), sourceUrl]),
-    errBox,
-    el('div', 'flex gap-2', [submitBtn]),
-  );
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    errBox.textContent = '';
-    const kind = /** @type {HTMLSelectElement} */ (kindSelect).value;
-    const input = {
-      stockId,
-      kind,
-      content: /** @type {HTMLTextAreaElement} */ (content).value,
-      .../** @type {HTMLSelectElement} */ (
-        stance.value !== '—' ? { stance: /** @type {HTMLSelectElement} */ (stance).value } : {}
-      ),
-      .../** @type {HTMLInputElement} */ (
-        tags.value.length > 0
-          ? {
-              tags: /** @type {HTMLInputElement} */ (tags).value
-                .split(',')
-                .map((s) => s.trim())
-                .filter((s) => s.length > 0),
-            }
-          : {}
-      ),
-      .../** @type {HTMLInputElement} */ (
-        sourceUrl.value.length > 0
-          ? { sourceUrl: /** @type {HTMLInputElement} */ (sourceUrl).value }
-          : {}
-      ),
-    };
-    const r = await callTool('add_research_note', input);
-    if (!r.ok) {
-      errBox.textContent = r.error?.message ?? '保存失败';
+    setStatus(`加载 ${stockId} 的显式研究关联…`);
+    const response = await callApi(`/api/research/stocks/${encodeURIComponent(stockId)}`);
+    if (!response.ok) {
+      mount(results, el('p', 'error', response.error?.message ?? '股票研究投影不可用'));
       return;
     }
-    content.value = '';
-    onDone();
-  });
-  return form;
+    paint(response.data.topics ?? [], response.data.documents ?? []);
+    return;
+  }
+  await load();
 };
 
-/** 简化版：编辑 thesis 弹窗（保存为新版本，历史保留）。 */
-const openEditNoteModal = (stockId, thesis, code, name) => {
-  const ta = el('textarea', null, String(thesis.content ?? ''), { rows: 6 });
-  const stance = el('select', null, [
-    el('option', null, 'bullish'),
-    el('option', null, 'bearish'),
-    el('option', null, 'neutral'),
+const researchObsidianLink = (uri) => {
+  if (!uri) return null;
+  const link = el('a', 'btn btn-outline btn-sm', '在 Obsidian 中打开');
+  link.setAttribute('href', uri);
+  link.setAttribute('target', '_blank');
+  link.setAttribute('rel', 'noreferrer');
+  return link;
+};
+
+const researchResultCard = (row, kind, onOpen) => {
+  const open = el('button', 'btn btn-link', row.title);
+  open.setAttribute('type', 'button');
+  open.addEventListener('click', onOpen);
+  return el('article', 'card research-topic-card', [
+    open,
+    el('p', 'muted', `${kind} · ${row.kind} · ${row.availability}`),
+    row.excerpt || row.summary ? el('p', null, row.excerpt ?? row.summary) : null,
   ]);
-  stance.value = String(thesis.stance ?? 'neutral');
-  const err = el('p', 'modal-error');
-  const save = el('button', 'btn btn-primary btn-sm', '保存为新版本', [], { type: 'button' });
-  const cancel = el('button', 'btn btn-outline btn-sm', '取消', [], { type: 'button' });
-  const modal = el('div', 'modal', [
-    el('div', 'modal-content', [
-      el('h2', null, `编辑 thesis：${code} · ${name}`),
-      el('p', 'muted', '保存后会产生新版本（supersedesId 串联），历史版本保留在时间线'),
-      el('div', 'field', [el('label', null, '立场'), stance]),
-      el('div', 'field', [el('label', null, '新版本内容'), ta]),
-      err,
-      el('div', 'flex gap-2', [save, cancel]),
-    ]),
-  ]);
-  document.body.append(modal);
-  const close = () => modal.remove();
-  cancel.addEventListener('click', close);
-  save.addEventListener('click', async () => {
-    const input = {
-      noteId: thesis.id,
-      content: ta.value,
-      stance: stance.value,
-    };
-    const r = await callTool('update_research_note', input);
-    if (!r.ok) {
-      err.textContent = r.error?.message ?? '保存失败';
-      return;
-    }
-    close();
-    void loadResearch(stockId, code, name);
-  });
 };
 
 export {

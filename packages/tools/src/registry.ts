@@ -51,6 +51,15 @@ import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { renderReportTool } from './tools/render-report.js';
+import {
+  getResearchDocumentTool,
+  getResearchTopicTool,
+  getStockResearchViewTool,
+  listResearchDocumentsTool,
+  listResearchTopicsTool,
+  searchResearchDocumentsTool,
+  syncResearchVaultTool,
+} from './tools/research-vault.js';
 import { runStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
@@ -76,7 +85,6 @@ import { syncStockEventsTool } from './tools/sync-stock-events.js';
 import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
 import { updateHoldingTool } from './tools/update-holding.js';
 import { updateStockEventTool } from './tools/update-stock-event.js';
-import { getResearchDocumentTool, getResearchTopicTool, getStockResearchViewTool, listResearchDocumentsTool, listResearchTopicsTool, searchResearchDocumentsTool, syncResearchVaultTool } from './tools/research-vault.js';
 import {
   addWatchlistMemberTool,
   archiveWatchlistMemberTool,

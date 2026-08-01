@@ -6,9 +6,9 @@ import type {
   Logger,
   MarketDataAdapterLike,
   RepositoryRegistry,
+  ResearchVaultAdapterLike,
   StockUniverseManagerLike,
   ToolContext,
-  ResearchVaultAdapterLike,
 } from '@luoome/core';
 import { BUILTIN_STRATEGIES } from '@luoome/core';
 

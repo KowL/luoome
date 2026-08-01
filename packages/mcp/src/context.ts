@@ -62,6 +62,7 @@ export const createServerContext = async (
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const now = (): Date => new Date();
+  const researchVault = createResearchVaultAdapterFromEnv(env);
   const ctx = buildContext({
     repos: handle.repos,
     adapters: {
@@ -80,7 +81,7 @@ export const createServerContext = async (
     clock: now,
     logger,
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger }),
-    researchVault: createResearchVaultAdapterFromEnv(env),
+    ...(researchVault ? { researchVault } : {}),
   });
 
   return { ctx, close: handle.close };
