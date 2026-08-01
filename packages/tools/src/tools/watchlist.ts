@@ -74,7 +74,6 @@ export const listWatchlistsTool = defineTool({
 
 export const GetWatchlistInput = z.object({
   watchlistId: z.string().min(1),
-  includeArchivedMembers: z.boolean().default(false),
 });
 export const GetWatchlistOutput = z.object({
   watchlist: WatchlistSchema,
@@ -91,9 +90,7 @@ export const getWatchlistTool = defineTool({
   handler: async (input, ctx) => {
     const watchlist = await ctx.repos.watchlist.findById(input.watchlistId);
     if (watchlist === null) return errNotFound('Watchlist', input.watchlistId);
-    const members = await ctx.repos.watchlistMember.listMembers(watchlist.id, {
-      includeArchived: input.includeArchivedMembers,
-    });
+    const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
     return {
       watchlist,
       members: await Promise.all(
@@ -192,21 +189,21 @@ export const ArchiveWatchlistOutput = z.object({ watchlist: WatchlistSchema });
 
 export const archiveWatchlistTool = defineTool({
   name: 'archive_watchlist',
-  description: '软归档 Watchlist；不会删除成员、来源或同步历史',
+  description: '删除 Watchlist 及当前成员关系；保留来源与同步历史',
   sideEffect: 'write',
   input: ArchiveWatchlistInput,
   output: ArchiveWatchlistOutput,
   handler: async (input, ctx) => {
     const current = await ctx.repos.watchlist.findById(input.watchlistId);
     if (current === null) return errNotFound('Watchlist', input.watchlistId);
-    if (current.kind === 'system') return errInvalidInput('system Watchlist 不允许用户归档');
+    if (current.kind === 'system') return errInvalidInput('system Watchlist 不允许用户删除');
     if ((await ctx.repos.alertPlan.list({ watchlistId: current.id })).length > 0) {
-      return errInvalidInput('存在引用该 Watchlist 的 AlertPlan，不能归档');
+      return errInvalidInput('存在引用该 Watchlist 的 AlertPlan，不能删除');
     }
-    await ctx.repos.watchlist.archive(current.id, ctx.clock());
-    const watchlist = await ctx.repos.watchlist.findById(current.id);
-    if (watchlist === null) return errNotFound('Watchlist', current.id);
-    return { watchlist };
+    const members = await ctx.repos.watchlistMember.listMembers(current.id);
+    for (const member of members) await ctx.repos.watchlistMember.removeMember(member.id);
+    await ctx.repos.watchlist.remove(current.id);
+    return { watchlist: current };
   },
 });
 
@@ -214,7 +211,6 @@ export const AddWatchlistMemberInput = z.object({
   watchlistId: z.string().min(1),
   stockId: z.string().min(1),
   reason: z.string().min(1).max(1000).default('用户手工添加'),
-  stage: z.enum(['discovered', 'watching', 'researching', 'confirmed']).default('watching'),
   priority: WatchlistMemberSchema.shape.priority.default('normal'),
 });
 export const AddWatchlistMemberOutput = WatchlistMemberViewSchema;
@@ -242,17 +238,14 @@ export const addWatchlistMemberTool = defineTool({
             id: `${watchlist.id}:${input.stockId}`,
             watchlistId: watchlist.id,
             stockId: input.stockId,
-            stage: input.stage,
             priority: input.priority,
             firstAddedAt: now,
             lastActivityAt: now,
           }
         : {
             ...existing,
-            stage: existing.stage === 'archived' ? input.stage : existing.stage,
             priority: input.priority,
             lastActivityAt: now,
-            archivedAt: undefined,
           },
     );
     const sourceKey = `manual:${member.id}`;
@@ -287,17 +280,16 @@ export const UpdateWatchlistMemberInput = z
   .object({
     watchlistId: z.string().min(1),
     stockId: z.string().min(1),
-    stage: WatchlistMemberSchema.shape.stage.exclude(['archived']).optional(),
     priority: WatchlistMemberSchema.shape.priority.optional(),
   })
-  .refine((input) => input.stage !== undefined || input.priority !== undefined, {
-    message: '至少提供 stage 或 priority',
+  .refine((input) => input.priority !== undefined, {
+    message: '至少提供 priority',
   });
 export const UpdateWatchlistMemberOutput = WatchlistMemberViewSchema;
 
 export const updateWatchlistMemberTool = defineTool({
   name: 'update_watchlist_member',
-  description: '更新 WatchlistMember 的研究阶段或优先级',
+  description: '更新 WatchlistMember 的优先级',
   sideEffect: 'write',
   input: UpdateWatchlistMemberInput,
   output: UpdateWatchlistMemberOutput,
@@ -308,10 +300,8 @@ export const updateWatchlistMemberTool = defineTool({
     }
     const updated = WatchlistMemberSchema.parse({
       ...member,
-      ...(input.stage === undefined ? {} : { stage: input.stage }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),
       lastActivityAt: ctx.clock(),
-      archivedAt: undefined,
     });
     assertWatchlistMemberInvariants(updated);
     await ctx.repos.watchlistMember.saveMember(updated);
@@ -333,7 +323,7 @@ export const ArchiveWatchlistMemberOutput = z.object({
 
 export const archiveWatchlistMemberTool = defineTool({
   name: 'archive_watchlist_member',
-  description: '结束成员的 manual source；无其它来源时归档成员',
+  description: '结束成员的 manual source；无其它来源时删除成员关系',
   sideEffect: 'write',
   input: ArchiveWatchlistMemberInput,
   output: ArchiveWatchlistMemberOutput,
@@ -356,12 +346,9 @@ export const archiveWatchlistMemberTool = defineTool({
     }
     if (!endedManual) return errInvalidInput('成员没有可结束的 manual source');
     const current = await ctx.repos.watchlistMember.listSources(member.id);
-    const updated = WatchlistMemberSchema.parse(
-      current.length === 0
-        ? { ...member, stage: 'archived', lastActivityAt: now, archivedAt: now }
-        : { ...member, lastActivityAt: now },
-    );
-    await ctx.repos.watchlistMember.saveMember(updated);
+    const updated = WatchlistMemberSchema.parse({ ...member, lastActivityAt: now });
+    if (current.length === 0) await ctx.repos.watchlistMember.removeMember(member.id);
+    else await ctx.repos.watchlistMember.saveMember(updated);
     return {
       member: updated,
       sources: await ctx.repos.watchlistMember.listSources(member.id, true),

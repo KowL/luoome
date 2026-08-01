@@ -320,9 +320,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/chat', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/research', serveFile('index.html', 'text/html; charset=utf-8'));
   // 行情页 SPA shell（设计 §11.1：#market 深链接；/market 供直接访问）。
   app.get('/market', serveFile('index.html', 'text/html; charset=utf-8'));
-  app.get('/research', serveFile('index.html', 'text/html; charset=utf-8'));
 
   // 图表库 ESM 产物（设计 §12.1）：固定版本固定文件，长缓存；
   // 路由不带路径参数，/vendor 下任何其它路径一律 404。
@@ -364,7 +364,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return tool.execute(input, ctxRef.current);
   };
 
-  // Research Vault read surface: Web consumes the same typed tools as CLI/MCP.
   app.get('/api/research/topics', (c) =>
     callTool('list_research_topics', {
       kind: c.req.query('kind') || undefined,
@@ -840,10 +839,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.post('/api/watchlists', (c) => targetMutation(c.req.raw, 'write', 'create_watchlist'));
 
   /**
-   * Watchlist 总览聚合（PRD §10.1）：一次请求组装六种视图所需数据，
+   * Watchlist 总览聚合（PRD §10.1）：一次请求组装四种视图所需数据，
    * 前端按 tab 派生，切换视图不重复拉取。照 /api/dashboard 模式：
    * invokeTool + 请求内缓存；单列表 detail/changes 失败降级为警告，不拖垮整个端点。
-   * 「已归档列表」= enabled=false：core Watchlist 无 archivedAt，repo.archive 即停用。
    */
   app.get('/api/watchlists/overview', async () => {
     interface OverviewWatchlist {
@@ -858,9 +856,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         id: string;
         watchlistId: string;
         stockId: string;
-        stage: string;
         priority: string;
-        archivedAt?: unknown;
       };
       sources: Array<{ kind: string; status: string; dataAsOf?: unknown }>;
     }
@@ -873,7 +869,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const now = ctxRef.current.clock();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const [watchlistsResult, triggersResult] = await Promise.all([
-      invokeTool('list_watchlists', {}),
+      invokeTool('list_watchlists', { enabledOnly: true }),
       invokeTool('list_watch_triggers', { limit: 200 }),
     ]);
     if (!watchlistsResult.ok) return jsonResult(watchlistsResult);
@@ -894,7 +890,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       if (cached !== undefined) return cached;
       const pending = invokeTool('get_watchlist', {
         watchlistId: id,
-        includeArchivedMembers: true,
       });
       detailCache.set(id, pending);
       return pending;
@@ -919,7 +914,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     interface StockMembership {
       watchlistId: string;
       watchlistName: string;
-      stage: string;
       priority: string;
       sources: OverviewMember['sources'];
       holding: boolean;
@@ -927,11 +921,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const lists: Array<Record<string, unknown>> = [];
     const stocksById = new Map<string, { stockId: string; memberships: StockMembership[] }>();
     const todayChanges: TodayChange[] = [];
-    const archivedLists: OverviewWatchlist[] = [];
-    const archivedMembers: Array<Record<string, unknown>> = [];
 
     for (const { watchlist, memberCount, sourceHealth } of rows) {
-      if (!watchlist.enabled) archivedLists.push(watchlist);
       let members: OverviewMember[] = [];
       const detail = await detailOf(watchlist.id);
       if (detail.ok) {
@@ -967,24 +958,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           `list_watchlist_changes(${watchlist.id}) 失败（${changes.error.kind}），今日变化降级为空`,
         );
       }
-      const activeMembers = members.filter(({ member }) => member.stage !== 'archived');
       lists.push({
         watchlist,
         memberCount,
-        discoveredCount: activeMembers.filter(({ member }) => member.stage === 'discovered').length,
         sourceHealth,
         todayEntered,
         todayExited,
       });
       for (const { member, sources } of members) {
-        if (member.stage === 'archived') {
-          archivedMembers.push({
-            watchlistId: watchlist.id,
-            watchlistName: watchlist.name,
-            member,
-          });
-          continue;
-        }
         const entry = stocksById.get(member.stockId) ?? {
           stockId: member.stockId,
           memberships: [],
@@ -992,7 +973,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         entry.memberships.push({
           watchlistId: watchlist.id,
           watchlistName: watchlist.name,
-          stage: member.stage,
           priority: member.priority,
           sources,
           holding: sources.some(
@@ -1037,7 +1017,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         lists,
         stocks: [...stocksById.values()],
         todayChanges,
-        archived: { lists: archivedLists, members: archivedMembers },
         triggers: {
           urgentImportantCount: triggers.filter(
             (trigger) => trigger.priority === 'urgent' || trigger.priority === 'important',

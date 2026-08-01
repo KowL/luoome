@@ -166,7 +166,7 @@ bun install
 - 看板聚合账户 PnL、建议、AlertPlan 健康度和最近触发
 - 持仓完整录入闭环与交易流水
 - Strategy 不可变版本、校验、发布、dry-run/正式运行与信号事实
-- Watchlist 支持 manual / strategy / ai / portfolio / import 多来源与研究阶段
+- Watchlist 支持 manual / strategy / ai / portfolio / import 多来源与优先级；删除成员或列表不展示归档状态
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一 Bearer token + 同源校验
 - `luoome start` 一键启动 Web + 长驻盯盘

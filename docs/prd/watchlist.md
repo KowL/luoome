@@ -19,7 +19,7 @@ Stock                       唯一股票身份
 Watchlist                   观察容器
   │
   ▼
-WatchlistMember             股票与 Watchlist 的当前关系和研究阶段
+WatchlistMember             股票与 Watchlist 的当前关系、优先级
   │
   ├── WatchlistMemberSource 手工、Strategy、AI、Portfolio 等多来源
   └── MembershipSnapshot    每次自动刷新时的可审计快照
@@ -50,7 +50,7 @@ Watchlist ──► AlertPlan ──► WatchTrigger
 如果分别建模，会产生：
 
 - 同一股票在多个列表中重复保存；
-- 关注原因和研究状态无法统一；
+- 关注原因和来源事实无法统一；
 - 策略退出时不知道是否应该删除用户手工关注；
 - 持仓、AI 和策略来源互相覆盖；
 - Agent 需要理解多套 CRUD 和状态语义。
@@ -60,7 +60,7 @@ Watchlist ──► AlertPlan ──► WatchTrigger
 - 一个股票在一个 Watchlist 内只有一个当前成员关系。
 - 一个成员可以同时拥有多个来源。
 - 来源退出不会误删其它来源。
-- 用户研究阶段、提醒和研究档案有统一入口。
+- 用户优先级、提醒和研究档案有统一入口。
 - Strategy、Agent 和 Portfolio 都通过相同契约向 Watchlist 提供来源。
 - 跨 Watchlist 仍可通过“全部观察”视图去重聚合。
 
@@ -68,7 +68,7 @@ Watchlist ──► AlertPlan ──► WatchTrigger
 
 ### 3.1 一句话定位
 
-> 统一管理投资机会从发现、研究、重点观察到归档的全过程，并保留它为什么进入、发生过什么以及当前是否仍值得关注。
+> 统一管理投资机会的持续观察关系，并保留它为什么进入、发生过什么以及当前是否仍值得关注。
 
 ### 3.2 目标用户
 
@@ -105,7 +105,7 @@ Watchlist
 
 - `kind` 用于默认交互和系统约束，不限制成员只能有哪一种来源。
 - personal 通常允许 mixed；strategy 通常由一个主 Strategy 同步；portfolio 由账户持仓同步。
-- 用户可以创建多个 Watchlist，例如“长期价值”“短线观察”“待研究”。
+- 用户可以创建多个 Watchlist，例如“长期价值”“短线观察”“候选股票”。
 - 系统提供“全部观察”聚合视图，但它可以是读模型，不必成为可写 Watchlist。
 
 ### 4.2 WatchlistMember
@@ -115,27 +115,15 @@ WatchlistMember
 - id
 - watchlistId
 - stockId
-- stage: discovered | watching | researching | confirmed | archived
 - priority: normal | important | urgent
 - firstAddedAt
 - lastActivityAt
-- archivedAt?
 ```
 
 同一 `(watchlistId, stockId)` 只有一条当前成员关系。
 
-阶段语义：
-
-| stage | 含义 |
-|---|---|
-| discovered | 自动来源刚发现，尚未人工处理 |
-| watching | 用户决定持续观察 |
-| researching | 正在收集证据或完善 thesis |
-| confirmed | 用户确认其为重点机会，仍不等于买入 Advice |
-| archived | 当前不再观察，保留历史 |
-
-`holding` 不进入这个状态机。股票可以处于任一研究阶段，同时在 Portfolio 中持有；持仓作为独立
-事实覆盖展示。
+成员记录只表示当前有效关系；删除成员关系不影响 `holding`、来源结束记录或同步快照。
+`holding` 是独立事实，股票可以同时在 Portfolio Watchlist 中持有。
 
 ### 4.3 WatchlistMemberSource
 
@@ -163,12 +151,9 @@ WatchlistMemberSource
 - portfolio：指向 Account/Holding，由持仓同步维护。
 - import：保留导入批次和来源。
 
-成员存在条件：
+成员存在条件：至少一个 active/stale source。
 
-- 至少一个 active/stale source；或
-- 用户将成员保留为 watching/researching/confirmed。
-
-所有自动来源结束且用户未保留时，可以自动归档，但不能物理删除历史。
+所有来源结束且无其它来源时删除成员关系，但不物理删除来源结束记录和同步历史。
 
 ### 4.4 MembershipSnapshot
 
@@ -200,7 +185,7 @@ MembershipSnapshot
 Watchlist: 重点研究
 Stock: 600519.SH 贵州茅台
 
-Member stage: researching
+Member priority: important
 Sources:
   - manual：用户 2026-07-01 加入，原因“白酒龙头”
   - strategy：价值成长 V3，score=92，rank=3
@@ -229,7 +214,7 @@ StrategyRun 输出结构化 StrategyResult：
 - evidence；
 - dataAsOf。
 
-Watchlist 同步器根据结果更新 strategy source，不让 Strategy 直接改写成员的人工 stage 或笔记。
+Watchlist 同步器根据结果更新 strategy source，不让 Strategy 直接改写成员的 priority 或笔记。
 
 ### 6.2 同步策略
 
@@ -240,7 +225,6 @@ Strategy: 价值成长
 Target Watchlist: 价值成长候选
 Enter: selected=true 且 rank<=30
 Exit: 连续 2 次 complete run 未入选
-On enter stage: discovered
 ```
 
 退出可配置确认窗口，避免一次数据抖动造成频繁进出。
@@ -263,7 +247,7 @@ Agent 可以：
 - 根据用户意图创建 Watchlist 草案；
 - 基于已注册 Strategy 或受控研究结果生成成员草案；
 - 解释成员来源和变化；
-- 帮用户把 discovered 成员推进到 researching；
+- 帮用户解释成员来源并决定是否删除成员关系；
 - 创建 ResearchNote 或 Advice 草案。
 
 AI 来源的硬约束：
@@ -272,7 +256,7 @@ AI 来源的硬约束：
 - reason 和 evidence 必填。
 - AI 只能生成草案，用户确认后才能 active。
 - 模型失败或输出为空不结束旧成员。
-- AI 不能直接把成员 stage 设为 confirmed。
+- AI 不能跳过用户确认直接改变成员关系或 priority。
 
 ## 8. Portfolio 与 Watchlist
 
@@ -282,7 +266,7 @@ Portfolio Watchlist 是统一 Watchlist 的一种系统配置：
 - 新开持仓增加 portfolio source；
 - 平仓结束 portfolio source；
 - 用户手工或策略来源仍在时成员继续存在；
-- 平仓后可以提示用户是否归档或进入复盘阶段。
+- 平仓后可以提示用户是否删除成员关系或进入复盘阶段。
 
 Portfolio 事实展示：
 
@@ -327,7 +311,6 @@ Strategy DSL。
 
 - Watchlist 卡片和成员数；
 - 今日 entered/exited；
-- discovered 待处理数；
 - urgent/important 触发；
 - stale/failed 来源；
 - Watch Runner 健康状态。
@@ -337,9 +320,7 @@ Strategy DSL。
 - 按 Watchlist；
 - 全部股票去重；
 - 今日变化；
-- 待研究；
-- 当前持仓；
-- 已归档。
+- 当前持仓。
 
 ### 10.2 Watchlist 详情
 
@@ -352,7 +333,7 @@ Strategy DSL。
 成员表：
 
 - 股票和行情时间；
-- stage、priority；
+- priority 与删除操作；
 - 来源徽标；
 - 策略评分/排名变化；
 - active thesis；
@@ -364,7 +345,6 @@ Strategy DSL。
 成员详情聚合：
 
 - 当前和历史来源；
-- stage 变更时间线；
 - entered/exited 原因；
 - ResearchNote；
 - StrategyResult / StrategySignal；
@@ -372,37 +352,18 @@ Strategy DSL。
 - Holding / Trade；
 - Advice / Outcome。
 
-### 10.4 待处理工作台
-
-任务包括：
-
-- 新发现成员：保留、研究或归档；
-- 来源冲突：策略看多但风险信号增强；
-- stale 来源：重试或检查数据；
-- 重要预警：查看证据、生成 Advice 或调整 AlertPlan；
-- 平仓股票：继续观察或归档。
-
-## 11. 成员生命周期
-
-### 11.1 自动发现
+### 10.4 成员生命周期
 
 ```text
 Strategy/AI source active
-  → 创建 WatchlistMember(stage=discovered)
-  → 用户选择 watching / researching / archived
+  → 创建或更新 WatchlistMember
+  → 成员关系保留 priority
 ```
 
-### 11.2 研究推进
+成员删除操作或所有来源结束且无其它来源时删除当前成员关系；旧来源和同步历史仍保留。
+后续再次出现 active source 时创建新的当前成员关系。研究内容独立写入 ResearchNote。
 
-- watching → researching：开始 thesis 或笔记。
-- researching → confirmed：用户确认重点机会。
-- confirmed → watching：证据减弱但仍观察。
-- 任意非 archived → archived：用户归档或所有来源结束且未保留。
-- archived → watching/researching：重新激活，保留旧历史。
-
-阶段变化只能由用户明确操作或可撤销的规则草案触发，Agent/Strategy 不自动“确认机会”。
-
-### 11.3 来源生命周期
+### 10.5 来源生命周期
 
 ```text
 active → active    刷新分数、排名和证据
@@ -418,8 +379,8 @@ ended  → active    后续再次进入
 - `WatchlistMember` 唯一键为 `(watchlistId, stockId)`。
 - source 使用独立行，不把多个来源压成不可查询 JSON。
 - 自动同步按 run 原子提交；部分失败不能制造错误退出。
-- stage 与 source 解耦，策略同步不能覆盖人工状态。
-- 历史快照和来源结束记录不物理删除。
+- priority 与 source 解耦，策略同步不能覆盖人工优先级。
+- 历史快照和来源结束记录不物理删除；成员关系删除后不展示归档状态。
 - 删除被 AlertPlan 引用的 Watchlist 必须拒绝或先显式迁移引用。
 - 停用 Watchlist 后不参与扫描，但历史仍可查看。
 
@@ -453,10 +414,10 @@ list_watchlists
 get_watchlist
 create_watchlist
 update_watchlist
-archive_watchlist
+archive_watchlist（删除 Watchlist）
 add_watchlist_member
 update_watchlist_member
-archive_watchlist_member
+archive_watchlist_member（删除成员关系）
 sync_watchlist_source
 list_alert_plans
 create_alert_plan
@@ -480,7 +441,7 @@ update_alert_plan
 - manual 和 portfolio source；
 - 当前 StockGroup 数据迁移；
 - 全部观察去重视图；
-- stage 和 priority；
+- priority 和删除；
 - AlertPlan 引用迁移。
 
 ### Phase 2：Strategy 同步
@@ -493,7 +454,7 @@ update_alert_plan
 ### Phase 3：AI 与研究工作台
 
 - AI 成员草案和确认；
-- discovered 待处理；
+- 成员关系与来源确认；
 - ResearchNote、StockEvent、Advice 和 Portfolio 聚合；
 - Agent 创建 Watchlist/AlertPlan 草案。
 
@@ -501,7 +462,7 @@ update_alert_plan
 
 - 成员来源留存与后续表现；
 - AlertPlan 有用率和噪声统计；
-- 平仓后的继续观察/归档流程；
+- 平仓后的继续观察/删除流程；
 - 基于真实样本提出调整草案。
 
 ## 15. 验收标准
@@ -510,7 +471,7 @@ update_alert_plan
 - 同一 Watchlist 中同一股票只有一个当前 Member，允许多个独立 Source。
 - Strategy、AI、Portfolio 任一来源退出不会误删其它来源。
 - 策略同步失败不会制造全量退出，旧来源明确标记 stale。
-- stage 不覆盖 Holding 事实，也不自动等同于 Advice。
+- 删除成员关系不覆盖 Holding 事实，也不自动等同于 Advice。
 - 每次自动成员变化可追溯 run、版本、数据时间、reason 和 evidence。
 - AlertPlan 与 Watchlist 成员解耦，提醒不会自动交易。
 - 旧 StockGroup/StockPool 数据能够幂等迁移且不丢历史。

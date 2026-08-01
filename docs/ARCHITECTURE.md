@@ -473,7 +473,7 @@ StrategyRun      一次运行的 coverage、dataAsOf、状态和 provider 状态
 StrategyResult   逐股规则结果、分数、排名、证据
 StrategySignal   按规则产生的方向、分数、证据事实
 Watchlist        统一观察集合
-WatchlistMember  股票、研究阶段、优先级
+WatchlistMember  股票、优先级；无成员归档状态
 AlertPlan        引用 Watchlist 的规则、冷却和通知策略
 WatchTrigger     AlertPlan 命中事实与送达状态
 Alert            预警（账户?、标的?、类型、参数、状态）

@@ -1,5 +1,5 @@
 /* apps/web/public/js/target-pages.test.js —— Strategy / Watchlist / AlertPlan 页纯函数测试。
- * 覆盖 renderAlerts 触发时间行、run_strategy 命中抽取、Watchlist 六视图派生与来源健康摘要；
+ * 覆盖 renderAlerts 触发时间行、run_strategy 命中抽取、Watchlist 总览视图派生与来源健康摘要；
  * DOM 渲染与交互由浏览器验收覆盖，不在此处断言。 */
 
 import { describe, expect, it } from 'bun:test';
@@ -47,7 +47,6 @@ const overviewFixture = {
     {
       watchlist: { id: 'wl-a', name: '研究候选', kind: 'personal', enabled: true },
       memberCount: 2,
-      discoveredCount: 1,
       sourceHealth: { active: 2, stale: 1 },
       todayEntered: 1,
       todayExited: 0,
@@ -60,7 +59,6 @@ const overviewFixture = {
         {
           watchlistId: 'wl-a',
           watchlistName: '研究候选',
-          stage: 'watching',
           priority: 'normal',
           holding: true,
         },
@@ -72,7 +70,6 @@ const overviewFixture = {
         {
           watchlistId: 'wl-a',
           watchlistName: '研究候选',
-          stage: 'discovered',
           priority: 'important',
           holding: false,
         },
@@ -97,16 +94,6 @@ const overviewFixture = {
       at: '2026-07-31T02:00:00.000Z',
     },
   ],
-  archived: {
-    lists: [{ id: 'wl-old', name: '旧列表', kind: 'personal', enabled: false }],
-    members: [
-      {
-        watchlistId: 'wl-a',
-        watchlistName: '研究候选',
-        member: { stockId: '601398.SH', stage: 'archived', archivedAt: '2026-07-30T08:00:00.000Z' },
-      },
-    ],
-  },
   triggers: { urgentImportantCount: 2, latestByStock: {} },
 };
 
@@ -117,7 +104,6 @@ describe('deriveWatchlistViews', () => {
       {
         watchlist: overviewFixture.lists[0]?.watchlist,
         memberCount: 2,
-        discoveredCount: 1,
         staleSources: 1,
         todayEntered: 1,
         todayExited: 0,
@@ -127,7 +113,6 @@ describe('deriveWatchlistViews', () => {
       {
         watchlist: { id: 'x' },
         memberCount: 0,
-        discoveredCount: 0,
         staleSources: 0,
         todayEntered: 0,
         todayExited: 0,
@@ -141,30 +126,17 @@ describe('deriveWatchlistViews', () => {
     expect(views.todayChanges.map((change) => change.stockId)).toEqual(['000001.SZ', '600519.SH']);
   });
 
-  it('pending 只收 stage=discovered 的成员；holdings 只收有持仓来源的股票', () => {
+  it('holdings 只收有持仓来源的股票', () => {
     const views = deriveWatchlistViews(overviewFixture);
-    expect(views.pending).toEqual([
-      {
-        watchlistId: 'wl-a',
-        watchlistName: '研究候选',
-        stockId: '002594.SZ',
-        priority: 'important',
-      },
-    ]);
     expect(views.holdings.map((stock) => stock.stockId)).toEqual(['600519.SH']);
   });
 
-  it('archived 透传已归档列表与成员；空 overview 全视图兜底为空', () => {
-    const views = deriveWatchlistViews(overviewFixture);
-    expect(views.archived.lists).toHaveLength(1);
-    expect(views.archived.members[0]?.member.stockId).toBe('601398.SH');
+  it('空 overview 全视图兜底为空', () => {
     expect(deriveWatchlistViews(undefined)).toEqual({
       listCards: [],
       stocks: [],
       todayChanges: [],
-      pending: [],
       holdings: [],
-      archived: { lists: [], members: [] },
     });
   });
 });
