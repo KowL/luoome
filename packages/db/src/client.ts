@@ -369,6 +369,9 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS strategy_signals_strategy_ts_idx ON strategy_signals (strategy_id, ts)`,
   );
   db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_signals_run_ts_idx ON strategy_signals (run_id, ts)`,
+  );
+  db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_signals_stock_ts_idx ON strategy_signals (stock_id, ts)`,
   );
   db.run(sql`
@@ -491,14 +494,17 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watchlist_members (
       id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-      priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
-      last_activity_at INTEGER NOT NULL
+      stage TEXT NOT NULL, priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
+      last_activity_at INTEGER NOT NULL, archived_at INTEGER
     )
   `);
-  migrateWatchlistMemberLifecycleColumns(db);
   db.run(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS watchlist_members_watchlist_stock_unique
     ON watchlist_members (watchlist_id, stock_id)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS watchlist_members_watchlist_stage_idx
+    ON watchlist_members (watchlist_id, stage)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watchlist_member_sources (
@@ -758,44 +764,6 @@ const migratePriceSnapshotPrevCloseColumn = (db: DrizzleDb): void => {
   if (!cols.some((c) => c.name === 'prev_close')) {
     db.run(sql`ALTER TABLE price_snapshots ADD COLUMN prev_close REAL`);
   }
-};
-
-/**
- * WatchlistMember 不再维护研究阶段或归档状态。SQLite 无法直接删除列，因此对旧表做一次幂等重建，
- * 只复制仍然有效的成员关系、priority 和时间；来源、同步快照和其它历史表不受影响。
- */
-const migrateWatchlistMemberLifecycleColumns = (db: DrizzleDb): void => {
-  const columns = db.all<{ name: string }>(sql`PRAGMA table_info(watchlist_members)`);
-  const names = new Set(columns.map((column) => column.name));
-  if (columns.length === 0 || (!names.has('stage') && !names.has('archived_at'))) return;
-
-  db.transaction((tx) => {
-    tx.run(sql`
-      CREATE TABLE watchlist_members_mig (
-        id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, stock_id TEXT NOT NULL,
-        priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
-        last_activity_at INTEGER NOT NULL
-      )
-    `);
-    if (names.has('archived_at')) {
-      tx.run(sql`
-        INSERT INTO watchlist_members_mig
-          (id, watchlist_id, stock_id, priority, first_added_at, last_activity_at)
-        SELECT id, watchlist_id, stock_id, priority, first_added_at, last_activity_at
-        FROM watchlist_members
-        WHERE archived_at IS NULL
-      `);
-    } else {
-      tx.run(sql`
-        INSERT INTO watchlist_members_mig
-          (id, watchlist_id, stock_id, priority, first_added_at, last_activity_at)
-        SELECT id, watchlist_id, stock_id, priority, first_added_at, last_activity_at
-        FROM watchlist_members
-      `);
-    }
-    tx.run(sql`DROP TABLE watchlist_members`);
-    tx.run(sql`ALTER TABLE watchlist_members_mig RENAME TO watchlist_members`);
-  });
 };
 
 /**

@@ -37,6 +37,9 @@ const EXPECTED_TOOL_NAMES = [
   'run_strategy',
   'list_strategy_runs',
   'get_strategy_run',
+  'get_strategy_workspace',
+  'list_strategy_result_views',
+  'compare_strategy_runs',
   'strategy_signals_by_stock',
   // Strategy + 统一 Watchlist W3
   'list_watchlists',

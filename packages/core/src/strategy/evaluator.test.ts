@@ -75,6 +75,33 @@ const evaluate = (
   });
 
 describe('Strategy evaluator', () => {
+  it('persists auditable V2 explanations and referenced input facts', () => {
+    const matched = evaluate('000001.SZ', { close: 12, ma20: 10, rsi14: 63 });
+    expect(matched.result.ruleEvaluations[0]).toMatchObject({
+      schemaVersion: 2,
+      ruleId: 'trend',
+      scope: 'selection',
+      expression: 'indicators.close > indicators.ma20',
+      status: 'matched',
+      inputs: [
+        { path: 'indicators.close', status: 'available', value: 12 },
+        { path: 'indicators.ma20', status: 'available', value: 10 },
+      ],
+      explanation: { code: 'matched', message: '规则「趋势」已命中' },
+    });
+
+    const notMatched = evaluate('000001.SZ', { close: 8, ma20: 10, rsi14: 40 });
+    expect(notMatched.result.ruleEvaluations[0]).toMatchObject({
+      schemaVersion: 2,
+      status: 'not-matched',
+      value: false,
+      explanation: {
+        code: 'not-matched',
+        message: '规则「趋势」未命中：表达式求值为 false',
+      },
+    });
+  });
+
   it('evaluates selection, scoring and signals deterministically', () => {
     const result = evaluate('000001.SZ', { close: 12, ma20: 10, rsi14: 63 });
     expect(result.partial).toBe(false);
@@ -226,6 +253,36 @@ describe('Strategy evaluator', () => {
       status: 'error',
     });
     expect(result.errors.some((error) => error.includes('Math.abs'))).toBe(true);
+    expect(result.partial).toBe(true);
+  });
+
+  it('records an evaluation-error explanation when a matched signal has an invalid score', () => {
+    const dsl = definition({
+      ...definition(),
+      scoring: undefined,
+      signals: {
+        entry: [
+          {
+            id: 'invalid-score-signal',
+            name: '分数异常信号',
+            when: 'indicators.close > indicators.ma20',
+            score: '101',
+            direction: 'bullish',
+            evidence: ['should-not-survive'],
+          },
+        ],
+        exit: [],
+        risk: [],
+      },
+    });
+    const result = evaluate('000001.SZ', { close: 12, ma20: 10 }, dsl);
+    expect(result.result.ruleEvaluations.at(-1)).toMatchObject({
+      ruleId: 'invalid-score-signal',
+      status: 'error',
+      explanation: { code: 'evaluation-error', message: 'score 越界: 101' },
+      evidence: [],
+    });
+    expect(result.signals).toHaveLength(0);
     expect(result.partial).toBe(true);
   });
 

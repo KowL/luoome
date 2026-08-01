@@ -117,6 +117,49 @@ export const StrategyVersionSchema = z.object({
 });
 export type StrategyVersion = z.infer<typeof StrategyVersionSchema>;
 
+export const StrategyRunInputSnapshotV2Schema = z.object({
+  schemaVersion: z.literal(2),
+  strategyVersionId: z.string().min(1),
+  definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
+  evaluatorVersion: z.string().min(1),
+  coverage: z.literal('CN_A_SHARES_SH_SZ'),
+  stockIds: z.array(z.string().min(1)),
+  stockIdChecksum: z.string().regex(/^[a-f0-9]{64}$/),
+  requestedBy: z.enum(['manual', 'scheduled', 'replay']),
+  universeCheckpoint: z
+    .object({
+      provider: z.string().min(1),
+      syncedAt: z.coerce.date(),
+    })
+    .optional(),
+});
+export type StrategyRunInputSnapshotV2 = z.infer<typeof StrategyRunInputSnapshotV2Schema>;
+
+export const StrategyRunSummaryV2Schema = z.object({
+  schemaVersion: z.literal(2),
+  universeCount: z.number().int().nonnegative(),
+  evaluatedCount: z.number().int().nonnegative(),
+  selectedCount: z.number().int().nonnegative(),
+  signalCount: z.number().int().nonnegative(),
+  partialCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  failureSamples: z
+    .array(z.object({ stockId: z.string().min(1), error: z.string().min(1) }))
+    .max(20)
+    .default([]),
+});
+export type StrategyRunSummaryV2 = z.infer<typeof StrategyRunSummaryV2Schema>;
+
+const LegacyStrategyRunRecordSchema = z.record(z.string(), z.unknown());
+export const StrategyRunInputSnapshotSchema = z.union([
+  StrategyRunInputSnapshotV2Schema,
+  LegacyStrategyRunRecordSchema,
+]);
+export const StrategyRunSummarySchema = z.union([
+  StrategyRunSummaryV2Schema,
+  LegacyStrategyRunRecordSchema,
+]);
+
 export const StrategyRunSchema = z.object({
   id: z.string().min(1),
   strategyId: z.string().min(1),
@@ -127,20 +170,45 @@ export const StrategyRunSchema = z.object({
   startedAt: z.coerce.date(),
   finishedAt: z.coerce.date().optional(),
   status: z.enum(['running', 'complete', 'partial', 'failed']),
-  inputSnapshot: z.record(z.string(), z.unknown()),
+  inputSnapshot: StrategyRunInputSnapshotSchema,
   providerStatuses: z.array(ProviderStatusSchema),
-  summary: z.record(z.string(), z.unknown()).optional(),
+  summary: StrategyRunSummarySchema.optional(),
   error: z.string().min(1).optional(),
 });
 export type StrategyRun = z.infer<typeof StrategyRunSchema>;
 
-export const RuleEvaluationSchema = z.object({
+export const LegacyRuleEvaluationSchema = z.object({
   ruleId: z.string().min(1),
   status: z.enum(['matched', 'not-matched', 'unknown', 'error']),
   value: z.unknown().optional(),
   evidence: z.array(z.string()),
   error: z.string().optional(),
 });
+
+export const RuleInputFactSchema = z.object({
+  path: z.string().min(1),
+  status: z.enum(['available', 'missing']),
+  value: z.unknown().optional(),
+});
+export type RuleInputFact = z.infer<typeof RuleInputFactSchema>;
+
+export const RuleExplanationSchema = z.object({
+  code: z.enum(['matched', 'not-matched', 'missing-input', 'evaluation-error']),
+  message: z.string().min(1),
+});
+export type RuleExplanation = z.infer<typeof RuleExplanationSchema>;
+
+export const RuleEvaluationV2Schema = LegacyRuleEvaluationSchema.extend({
+  schemaVersion: z.literal(2),
+  scope: z.enum(['selection', 'entry', 'exit', 'risk']),
+  expression: z.string().min(1),
+  inputs: z.array(RuleInputFactSchema),
+  explanation: RuleExplanationSchema,
+});
+export type RuleEvaluationV2 = z.infer<typeof RuleEvaluationV2Schema>;
+
+/** 旧运行仍需可读；新 evaluator 只写 RuleEvaluationV2。 */
+export const RuleEvaluationSchema = z.union([RuleEvaluationV2Schema, LegacyRuleEvaluationSchema]);
 export type RuleEvaluation = z.infer<typeof RuleEvaluationSchema>;
 
 export const StrategyResultSchema = z.object({

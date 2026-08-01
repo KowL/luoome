@@ -53,6 +53,9 @@ export class TushareStockUniverseAdapter implements StockUniverseSourceLike {
     }
 
     const entries: StockUniverseEntry[] = [];
+    // 部分网关忽略 list_status、三种状态都返回同一全集；L→P→D 先出现的状态优先去重，
+    // 官方接口 L/P/D 本就互斥，去重不影响正常数据。
+    const seen = new Set<string>();
     for (const status of ['L', 'P', 'D'] as const) {
       let rows: Array<Record<string, unknown>>;
       try {
@@ -68,7 +71,9 @@ export class TushareStockUniverseAdapter implements StockUniverseSourceLike {
       }
       for (const row of rows) {
         const entry = mapRow(row, STATUS_MAP[status]);
-        if (entry !== null) entries.push(entry);
+        if (entry === null || seen.has(entry.stockId)) continue;
+        seen.add(entry.stockId);
+        entries.push(entry);
       }
     }
 

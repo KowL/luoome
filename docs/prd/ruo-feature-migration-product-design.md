@@ -4,6 +4,7 @@
 > 日期：2026-07-24
 > 参考：旧项目 `ruo` 源码审计、[统一 Watchlist](./watchlist.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)
 > 产品边界：本地单用户、Web 为主入口、CLI/MCP 为高级入口；只提供研究、提醒、建议和复盘，不自动下单
+> 研究模型更新：本文以 Stock/ResearchNote 为主体的研究档案部分已由[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)替代；公司事件、来源可信度、报告与复盘需求继续有效
 
 ## 1. 文档结论
 

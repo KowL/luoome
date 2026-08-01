@@ -57,6 +57,7 @@ describe('tool/get_market_data_status', () => {
       id: 'stale-watch:002594.SZ',
       watchlistId: 'stale-watch',
       stockId: '002594.SZ',
+      stage: 'watching',
       priority: 'normal',
       firstAddedAt: now,
       lastActivityAt: now,

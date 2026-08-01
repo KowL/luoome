@@ -2,6 +2,7 @@ import type { TechnicalIndicators } from '../entity/indicator-set.js';
 import type { Quote } from '../entity/quote.js';
 import type {
   RuleEvaluation,
+  RuleEvaluationV2,
   StrategyDslV1,
   StrategyResult,
   StrategySignal,
@@ -54,12 +55,25 @@ const missingPaths = (
   );
 
 const evaluateRule = (
-  rule: { readonly id: string; readonly when: string; readonly evidence: readonly string[] },
+  rule: {
+    readonly id: string;
+    readonly name: string;
+    readonly when: string;
+    readonly evidence: readonly string[];
+  },
+  scope: RuleEvaluationV2['scope'],
   context: Readonly<Record<string, unknown>>,
-): RuleEvaluation => {
-  const missingWhen = extractExpressionPaths(rule.when).filter(
-    (path) => resolveExpressionPath(path, context) === undefined,
-  );
+): RuleEvaluationV2 => {
+  const expressionPaths = [...new Set(extractExpressionPaths(rule.when))].sort();
+  const inputs = expressionPaths.map((path) => {
+    const value = resolveExpressionPath(path, context);
+    return value === undefined
+      ? { path, status: 'missing' as const }
+      : { path, status: 'available' as const, value };
+  });
+  const missingWhen = inputs
+    .filter((input) => input.status === 'missing')
+    .map((input) => input.path);
   try {
     const value = evaluateExpression(interpolate(rule.when, context), context);
     const matched = Boolean(value);
@@ -71,25 +85,49 @@ const evaluateRule = (
     const missing = [...new Set([...missingWhen, ...missingEvidence])].sort();
     if (missing.length > 0 && (!matched || missingEvidence.length > 0)) {
       return {
+        schemaVersion: 2,
         ruleId: rule.id,
+        scope,
+        expression: rule.when,
         status: 'unknown',
         value,
+        inputs,
+        explanation: {
+          code: 'missing-input',
+          message: `缺少字段：${missing.join(', ')}`,
+        },
         evidence: [],
         error: `缺少字段: ${missing.join(', ')}`,
       };
     }
     return {
+      schemaVersion: 2,
       ruleId: rule.id,
+      scope,
+      expression: rule.when,
       status: matched ? 'matched' : 'not-matched',
       value,
+      inputs,
+      explanation: matched
+        ? { code: 'matched', message: `规则「${rule.name}」已命中` }
+        : {
+            code: 'not-matched',
+            message: `规则「${rule.name}」未命中：表达式求值为 false`,
+          },
       evidence: matched ? rule.evidence.map((template) => interpolate(template, context)) : [],
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
+      schemaVersion: 2,
       ruleId: rule.id,
+      scope,
+      expression: rule.when,
       status: 'error',
+      inputs,
+      explanation: { code: 'evaluation-error', message },
       evidence: [],
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
     };
   }
 };
@@ -132,13 +170,14 @@ const selectionOutcome = (
 const evaluateSignal = (
   input: EvaluateStrategyStockInput,
   rule: StrategySignalRule,
+  scope: Exclude<RuleEvaluationV2['scope'], 'selection'>,
   context: Readonly<Record<string, unknown>>,
 ): {
   readonly evaluation: RuleEvaluation;
   readonly signal?: StrategySignal;
   readonly error?: string;
 } => {
-  const evaluation = evaluateRule(rule, context);
+  const evaluation = evaluateRule(rule, scope, context);
   if (evaluation.status !== 'matched') {
     // 与 selection rule 对齐：when 求值抛错的 error 也要进 errors 收集
     if (evaluation.status === 'error') {
@@ -150,7 +189,13 @@ const evaluateSignal = (
   if (scored.score === undefined) {
     const error = scored.error ?? 'signal score 无效';
     return {
-      evaluation: { ...evaluation, status: 'error', error, evidence: [] },
+      evaluation: {
+        ...evaluation,
+        status: 'error',
+        explanation: { code: 'evaluation-error', message: error },
+        error,
+        evidence: [],
+      },
       error,
     };
   }
@@ -178,7 +223,7 @@ export const evaluateStrategyStock = (
   const context = dslContext(input.context);
   const definition = input.version.definition;
   const selectionEvaluations = definition.selection.rules.map((rule) =>
-    evaluateRule(rule, context),
+    evaluateRule(rule, 'selection', context),
   );
   const selection = selectionOutcome(definition, selectionEvaluations);
   const errors = selectionEvaluations.flatMap((evaluation) =>
@@ -200,10 +245,10 @@ export const evaluateStrategyStock = (
   }
 
   const signalOutcomes = [
-    ...definition.signals.entry,
-    ...definition.signals.exit,
-    ...definition.signals.risk,
-  ].map((rule) => evaluateSignal(input, rule, context));
+    ...definition.signals.entry.map((rule) => ({ rule, scope: 'entry' as const })),
+    ...definition.signals.exit.map((rule) => ({ rule, scope: 'exit' as const })),
+    ...definition.signals.risk.map((rule) => ({ rule, scope: 'risk' as const })),
+  ].map(({ rule, scope }) => evaluateSignal(input, rule, scope, context));
   const signalEvaluations = signalOutcomes.map((outcome) => outcome.evaluation);
   errors.push(
     ...signalOutcomes.flatMap((outcome) => (outcome.error === undefined ? [] : [outcome.error])),

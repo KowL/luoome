@@ -1,5 +1,6 @@
 import { callApi } from './api.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
+import { renderStrategyWorkspacePage } from './strategy-workspace.js';
 import { $, el, fmtDateTime, mount, statBlock } from './ui.js';
 
 const errorText = (result) => {
@@ -106,6 +107,13 @@ const WATCHLIST_KIND_TEXT = {
 
 const MEMBERSHIP_POLICY_TEXT = { manual: '手动', synced: '同步', mixed: '混合' };
 
+const MEMBER_STAGE_TEXT = {
+  discovered: '已发现',
+  watching: '观察中',
+  researching: '研究中',
+  confirmed: '已确认',
+};
+
 const MEMBER_SOURCE_KIND_TEXT = {
   manual: '手动',
   strategy: '策略',
@@ -125,6 +133,13 @@ const RULE_KIND_TEXT = {
   'price-change': '涨跌幅',
   'price-level': '价格位',
   'event-date': '事件日期',
+};
+
+const priorityBadge = (priority) => {
+  const variant =
+    { urgent: 'badge-urgent', important: 'badge-important', normal: 'badge-normal' }[priority] ??
+    'badge-neutral';
+  return el('span', `badge ${variant}`, MEMBER_PRIORITY_TEXT[priority] ?? priority);
 };
 
 const DIRECTION_TEXT = { bullish: '看多', bearish: '看空', neutral: '中性' };
@@ -156,14 +171,15 @@ let lastRunHits = { strategyId: '', items: [] };
 let selectedStrategyId = '';
 let selectedWatchlistId = '';
 
-/** 最近运行命中区块：逐股命中 + 目标关注列表下拉 + 一键加入。 */
-const renderRunHits = async (strategy, setStatus) => {
-  if (lastRunHits.strategyId !== strategy.id || lastRunHits.items.length === 0) return [];
+/** 运行记录里当前展开的历史 run；切换策略时重置。 */
+let selectedRunId = '';
+
+/** 命中条目渲染：目标关注列表下拉 + 逐股命中与一键加入。 */
+const renderHitsItems = async (strategy, setStatus, items) => {
   const watchlistsResult = await callApi('/api/watchlists');
   const watchlistItems = watchlistsResult.ok ? (watchlistsResult.data.items ?? []) : [];
-  const header = el('h3', 'mt-4', `最近运行命中 ${lastRunHits.items.length}`);
   if (watchlistItems.length === 0) {
-    return [header, el('p', 'placeholder', '暂无关注列表，请先创建。')];
+    return [el('p', 'placeholder', '暂无关注列表，请先创建。')];
   }
   const select = document.createElement('select');
   for (const { watchlist } of watchlistItems) {
@@ -173,9 +189,8 @@ const renderRunHits = async (strategy, setStatus) => {
     select.append(option);
   }
   return [
-    header,
     el('div', 'flex gap-2', [el('span', 'muted', '目标关注列表'), select]),
-    ...lastRunHits.items.map((hit) =>
+    ...items.map((hit) =>
       el('div', 'entity-item', [
         el('div', 'flex gap-2', [
           el('strong', null, hit.stockId),
@@ -196,7 +211,71 @@ const renderRunHits = async (strategy, setStatus) => {
   ];
 };
 
+/** 最近运行命中区块：逐股命中 + 目标关注列表下拉 + 一键加入。 */
+const renderRunHits = async (strategy, setStatus) => {
+  if (lastRunHits.strategyId !== strategy.id || lastRunHits.items.length === 0) return [];
+  return [
+    el('h3', 'mt-4', '最近运行命中'),
+    ...(await renderHitsItems(strategy, setStatus, lastRunHits.items)),
+  ];
+};
+
+const RUN_MODE_TEXT = { scan: '扫描', scheduled: '定时', replay: '回放', backtest: '回测' };
+
+const runStatusBadge = (status) => {
+  const variant = { complete: 'badge-active', partial: 'badge-neutral', failed: 'badge-neg' }[
+    status
+  ];
+  return el('span', `badge ${variant ?? 'badge-neutral'}`, RUN_STATUS_TEXT[status] ?? status);
+};
+
+/** 历史运行记录：点击查看当次命中信号；试跑（persist=false）不落库不在此列。 */
+const renderRunHistory = async (strategy, setStatus) => {
+  const result = await callApi(`/api/strategies/${encodeURIComponent(strategy.id)}/runs`);
+  if (!result.ok) return [];
+  const runs = result.data.runs ?? [];
+  if (runs.length === 0) return [];
+  const rows = runs.map((run) => {
+    const summary = run.summary ?? {};
+    const button = el('button', 'entity-row', [
+      el('span', 'entity-row-main', [
+        el('strong', null, new Date(run.startedAt).toLocaleString('zh-CN')),
+        el(
+          'small',
+          null,
+          `${RUN_MODE_TEXT[run.mode] ?? run.mode} · 候选 ${summary.candidates ?? 0} · 信号 ${summary.signals ?? 0}`,
+        ),
+      ]),
+      runStatusBadge(run.status),
+    ]);
+    button.type = 'button';
+    if (run.id === selectedRunId) button.classList.add('selected');
+    button.addEventListener('click', () => {
+      selectedRunId = run.id;
+      void renderStrategyDetail(strategy.id, setStatus);
+    });
+    return button;
+  });
+  const nodes = [el('h3', 'mt-4', '运行记录'), ...rows];
+  if (selectedRunId !== '' && runs.some((run) => run.id === selectedRunId)) {
+    const detail = await callApi(`/api/strategy-runs/${encodeURIComponent(selectedRunId)}`);
+    if (!detail.ok) {
+      nodes.push(el('p', 'status error', errorText(detail)));
+    } else {
+      const items = extractRunHits(detail.data.signals);
+      nodes.push(
+        el('h4', 'mt-4', '当次命中'),
+        ...(items.length === 0
+          ? [el('p', 'placeholder', '该次运行无命中信号。')]
+          : await renderHitsItems(strategy, setStatus, items)),
+      );
+    }
+  }
+  return nodes;
+};
+
 const renderStrategyDetail = async (strategyId, setStatus) => {
+  if (selectedStrategyId !== strategyId) selectedRunId = '';
   selectedStrategyId = strategyId;
   const result = await callApi(`/api/strategies/${encodeURIComponent(strategyId)}`);
   const root = $('#strategy-detail');
@@ -289,6 +368,7 @@ const renderStrategyDetail = async (strategyId, setStatus) => {
     );
   }
   const hitsBlock = await renderRunHits(strategy, setStatus);
+  const historyBlock = await renderRunHistory(strategy, setStatus);
   const versionRows =
     versions.length === 0
       ? [el('p', 'placeholder', '尚无版本。')]
@@ -318,51 +398,31 @@ const renderStrategyDetail = async (strategyId, setStatus) => {
     ),
     actions,
     ...hitsBlock,
-    el('h3', 'mt-4', `版本 ${versions.length}`),
+    ...historyBlock,
+    el('h3', 'mt-4', '版本'),
     ...versionRows,
   ]);
 };
 
 export const renderStrategies = async (setStatus) => {
-  const result = await callApi('/api/strategies');
-  const list = $('#strategies-list');
-  if (list === null) return;
-  if (!result.ok) {
-    mount(list, el('p', 'status error', errorText(result)));
-    return;
-  }
-  const strategies = result.data.strategies ?? [];
-  const meta = $('#strategies-meta');
-  if (meta !== null) meta.textContent = `${strategies.length} 个`;
-  mount(
-    list,
-    strategies.length === 0
-      ? el('p', 'placeholder', '尚无策略。')
-      : strategies.map((strategy) => {
-          const button = el('button', 'entity-row', [
-            el('span', 'entity-row-main', [
-              el('strong', null, strategy.name),
-              el('small', null, strategy.description),
-            ]),
-            strategyStatusBadge(strategy.status),
-          ]);
-          button.type = 'button';
-          if (strategy.id === selectedStrategyId) button.classList.add('selected');
-          button.addEventListener('click', () => void renderStrategyDetail(strategy.id, setStatus));
-          return button;
-        }),
-  );
-  if (selectedStrategyId.length > 0) await renderStrategyDetail(selectedStrategyId, setStatus);
+  await renderStrategyWorkspacePage({
+    setStatus,
+    preferredStrategyId: selectedStrategyId,
+    onSelect: (strategyId) => {
+      selectedStrategyId = strategyId;
+    },
+  });
 };
 
 /**
- * 四种视图（PRD §10.1）的行数据：全部从 /api/watchlists/overview 一次拉取的数据派生，
+ * 六种视图（PRD §10.1）的行数据：全部从 /api/watchlists/overview 一次拉取的数据派生，
  * 切换视图不重复请求。
  */
 export const deriveWatchlistViews = (overview) => {
   const listCards = (overview?.lists ?? []).map((row) => ({
     watchlist: row.watchlist,
     memberCount: row.memberCount ?? 0,
+    discoveredCount: row.discoveredCount ?? 0,
     staleSources: row.sourceHealth?.stale ?? 0,
     todayEntered: row.todayEntered ?? 0,
     todayExited: row.todayExited ?? 0,
@@ -371,16 +431,31 @@ export const deriveWatchlistViews = (overview) => {
   const todayChanges = [...(overview?.todayChanges ?? [])].sort(
     (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
   );
+  const pending = [];
   const holdings = [];
   for (const stock of stocks) {
     const memberships = stock.memberships ?? [];
     if (memberships.some((membership) => membership.holding)) holdings.push(stock);
+    for (const membership of memberships) {
+      if (membership.stage !== 'discovered') continue;
+      pending.push({
+        watchlistId: membership.watchlistId,
+        watchlistName: membership.watchlistName,
+        stockId: stock.stockId,
+        priority: membership.priority,
+      });
+    }
   }
   return {
     listCards,
     stocks,
     todayChanges,
+    pending,
     holdings,
+    archived: {
+      lists: overview?.archived?.lists ?? [],
+      members: overview?.archived?.members ?? [],
+    },
   };
 };
 
@@ -404,7 +479,9 @@ const WATCHLIST_VIEW_TABS = [
   { key: 'byList', label: '按列表' },
   { key: 'stocks', label: '全部股票' },
   { key: 'today', label: '今日变化' },
+  { key: 'pending', label: '待研究' },
   { key: 'holdings', label: '当前持仓' },
+  { key: 'archived', label: '已归档' },
 ];
 
 /** 当前总览 tab 与最近一次 overview 数据：切换 tab 由前端派生，不重复拉取。 */
@@ -430,7 +507,7 @@ const patchMember = (watchlistId, stockId, input) =>
     'PATCH',
   );
 
-const removeMember = (watchlistId, stockId) =>
+const archiveMember = (watchlistId, stockId) =>
   post(
     `/api/watchlists/${encodeURIComponent(watchlistId)}/members/${encodeURIComponent(stockId)}/archive`,
     {},
@@ -446,7 +523,7 @@ const renderByListView = (views, setStatus) =>
             el(
               'small',
               null,
-              `${card.memberCount} 成员 · 过期来源 ${card.staleSources} · 今日 +${card.todayEntered}/-${card.todayExited}`,
+              `${card.memberCount} 成员 · 待研究 ${card.discoveredCount} · 过期来源 ${card.staleSources} · 今日 +${card.todayEntered}/-${card.todayExited}`,
             ),
           ]),
           el('span', 'flex gap-2', [
@@ -490,7 +567,7 @@ const renderStocksView = (views) =>
               el(
                 'span',
                 'badge badge-neutral',
-                MEMBER_PRIORITY_TEXT[membership.priority] ?? membership.priority,
+                `${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}·${MEMBER_PRIORITY_TEXT[membership.priority] ?? membership.priority}`,
               ),
             ),
           ),
@@ -514,6 +591,38 @@ const renderTodayView = (views) =>
         ]),
       );
 
+const renderPendingView = (views, setStatus) =>
+  views.pending.length === 0
+    ? [el('p', 'placeholder', '暂无待研究成员。')]
+    : views.pending.map((item) =>
+        el('div', 'entity-item', [
+          el('div', 'flex gap-2', [
+            el('strong', null, item.stockId),
+            priorityBadge(item.priority),
+            el('span', 'muted', item.watchlistName),
+          ]),
+          el('div', 'flex gap-2', [
+            actionButton('开始研究', async (button) => {
+              button.disabled = true;
+              const updated = await patchMember(item.watchlistId, item.stockId, {
+                stage: 'researching',
+              });
+              setStatus(
+                updated.ok ? `${item.stockId} 已开始研究` : errorText(updated),
+                !updated.ok,
+              );
+              await renderWatchlists(setStatus);
+            }),
+            actionButton('归档', async (button) => {
+              button.disabled = true;
+              const archived = await archiveMember(item.watchlistId, item.stockId);
+              setStatus(archived.ok ? `${item.stockId} 已归档` : errorText(archived), !archived.ok);
+              await renderWatchlists(setStatus);
+            }),
+          ]),
+        ]),
+      );
+
 const renderHoldingsView = (views) =>
   views.holdings.length === 0
     ? [el('p', 'placeholder', '暂无持仓成员。')]
@@ -529,12 +638,41 @@ const renderHoldingsView = (views) =>
             stock.memberships
               .map(
                 (membership) =>
-                  `${membership.watchlistName}（${MEMBER_PRIORITY_TEXT[membership.priority] ?? membership.priority}）`,
+                  `${membership.watchlistName}（${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}）`,
               )
               .join(' · '),
           ),
         ]),
       );
+
+const renderArchivedView = (views) => [
+  el('p', 'muted', '列表归档即停用，成员与历史保留。'),
+  el('h3', null, `已归档列表 ${views.archived.lists.length}`),
+  ...(views.archived.lists.length === 0
+    ? [el('p', 'placeholder', '暂无已归档列表。')]
+    : views.archived.lists.map((watchlist) =>
+        el('div', 'entity-item', [
+          el('div', 'flex gap-2', [
+            el('strong', null, watchlist.name),
+            el(
+              'span',
+              'badge badge-neutral',
+              WATCHLIST_KIND_TEXT[watchlist.kind] ?? watchlist.kind,
+            ),
+            el('span', 'badge badge-paused', '停用'),
+          ]),
+        ]),
+      )),
+  el('h3', 'mt-4', `已归档成员 ${views.archived.members.length}`),
+  ...(views.archived.members.length === 0
+    ? [el('p', 'placeholder', '暂无已归档成员。')]
+    : views.archived.members.map((item) =>
+        el('div', 'entity-item', [
+          el('strong', null, `${item.watchlistName} · ${item.member.stockId}`),
+          el('div', 'muted', `归档于 ${fmtDateTime(item.member.archivedAt)}`),
+        ]),
+      )),
+];
 
 const renderWatchlistOverview = (setStatus) => {
   const overview = lastWatchlistOverview;
@@ -550,6 +688,7 @@ const renderWatchlistOverview = (setStatus) => {
         '今日变化',
         `+${sum((card) => card.todayEntered)} / -${sum((card) => card.todayExited)}`,
       ),
+      statBlock('待研究', String(views.pending.length)),
       statBlock('过期来源', String(sum((card) => card.staleSources))),
       statBlock('紧急/重要触发', String(overview.triggers?.urgentImportantCount ?? 0)),
     ]);
@@ -584,9 +723,13 @@ const renderWatchlistOverview = (setStatus) => {
       ? renderStocksView(views)
       : watchlistView === 'today'
         ? renderTodayView(views)
-        : watchlistView === 'holdings'
-          ? renderHoldingsView(views)
-          : renderByListView(views, setStatus);
+        : watchlistView === 'pending'
+          ? renderPendingView(views, setStatus)
+          : watchlistView === 'holdings'
+            ? renderHoldingsView(views)
+            : watchlistView === 'archived'
+              ? renderArchivedView(views)
+              : renderByListView(views, setStatus);
   mount(view, content);
 };
 
@@ -634,21 +777,21 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
     await renderWatchlists(setStatus);
   });
 
-  const removeList = actionButton('删除列表', async () => {
+  const archiveList = actionButton('归档列表', async () => {
     const confirmed = await confirmDialog({
-      title: '删除关注列表',
-      message: `删除后列表「${watchlist.name}」及当前成员关系将移除，来源与同步历史保留。确认删除？`,
-      confirmLabel: '删除',
+      title: '归档关注列表',
+      message: `归档后列表「${watchlist.name}」将停用，成员与历史保留。确认归档？`,
+      confirmLabel: '归档',
       danger: true,
     });
     if (!confirmed) return;
-    const removed = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/archive`, {});
-    if (!removed.ok) {
-      setStatus(errorText(removed), true);
+    const archived = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/archive`, {});
+    if (!archived.ok) {
+      setStatus(errorText(archived), true);
       return;
     }
     selectedWatchlistId = '';
-    setStatus('关注列表已删除');
+    setStatus('关注列表已归档');
     mount(root, el('p', 'placeholder', '选择关注列表查看成员和来源。'));
     await renderWatchlists(setStatus);
   });
@@ -675,6 +818,15 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
   const latestByStock = lastWatchlistOverview?.triggers?.latestByStock ?? {};
 
   const rows = members.map(({ member, sources }) => {
+    const stage = memberSelect(
+      ['discovered', 'watching', 'researching', 'confirmed'],
+      member.stage,
+      MEMBER_STAGE_TEXT,
+    );
+    stage.addEventListener('change', async () => {
+      const updated = await patchMember(watchlist.id, member.stockId, { stage: stage.value });
+      setStatus(updated.ok ? '研究阶段已更新' : errorText(updated), !updated.ok);
+    });
     const priority = memberSelect(
       ['normal', 'important', 'urgent'],
       member.priority,
@@ -688,7 +840,7 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
     });
     const trigger = latestByStock[member.stockId];
     return el('div', 'entity-item', [
-      el('div', 'flex gap-2', [el('strong', null, member.stockId), priority]),
+      el('div', 'flex gap-2', [el('strong', null, member.stockId), stage, priority]),
       el(
         'div',
         'flex gap-2',
@@ -711,10 +863,10 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
               `最近触发：${RULE_KIND_TEXT[trigger.ruleKind] ?? trigger.ruleKind} · ${MEMBER_PRIORITY_TEXT[trigger.priority] ?? trigger.priority} · ${fmtDateTime(trigger.at)}`,
             ),
           ]),
-      actionButton('删除', async (button) => {
+      actionButton('归档', async (button) => {
         button.disabled = true;
-        const removed = await removeMember(watchlist.id, member.stockId);
-        setStatus(removed.ok ? `${member.stockId} 已删除` : errorText(removed), !removed.ok);
+        const archived = await archiveMember(watchlist.id, member.stockId);
+        setStatus(archived.ok ? `${member.stockId} 已归档` : errorText(archived), !archived.ok);
         await renderWatchlists(setStatus);
       }),
     ]);
@@ -735,7 +887,7 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
       'muted',
       `来源健康：活跃 ${health.active} · 过期 ${health.stale}${health.latestDataAsOf === null ? '' : ` · 最近数据 ${fmtDateTime(health.latestDataAsOf)}`}`,
     ),
-    el('div', 'flex gap-2', [edit, removeList, add]),
+    el('div', 'flex gap-2', [edit, archiveList, add]),
     el('h3', 'mt-4', `成员 ${members.length}`),
     ...(rows.length === 0 ? [el('p', 'placeholder', '暂无成员。')] : rows),
     el('h3', 'mt-4', `预警计划 ${alertPlans.length}`),
@@ -821,80 +973,60 @@ export const renderAlerts = async (setStatus) => {
 };
 
 const openStrategyCreateModal = (setStatus, refresh) => {
-  let mode = 'custom';
   const nameInput = el('input');
   nameInput.type = 'text';
   nameInput.placeholder = '策略名称';
   const descInput = el('input');
   descInput.type = 'text';
   descInput.placeholder = '策略描述';
-  const defInput = el('textarea');
+  const defInput = el('textarea', 'strategy-def-input');
   defInput.rows = 16;
   defInput.spellcheck = false;
+  defInput.wrap = 'off';
   defInput.value = JSON.stringify(templateDefinition, null, 2);
-  const customSection = el('div', null, [
-    el('p', 'hint', '策略定义（JSON，DSL v1；selection 至少一条规则，scoring 权重之和为 1）'),
-    defInput,
-  ]);
-  const templateSection = el('div', null, [el('p', 'placeholder', '加载模板中…')]);
-  templateSection.hidden = true;
 
-  let templatesLoaded = false;
+  const templateSelect = el('select');
+  const customOption = document.createElement('option');
+  customOption.value = '';
+  customOption.textContent = '自定义策略（空白模板）';
+  templateSelect.append(customOption);
+  const templateHint = el('p', 'hint', '加载模板中…');
+
   let selectedTemplate = null;
+  templateSelect.addEventListener('change', () => {
+    const template = templates.find((item) => item.id === templateSelect.value) ?? null;
+    selectedTemplate = template;
+    if (template === null) {
+      defInput.value = JSON.stringify(templateDefinition, null, 2);
+      return;
+    }
+    nameInput.value = template.name;
+    descInput.value = template.description;
+    defInput.value = JSON.stringify(template.definition, null, 2);
+  });
+
+  let templates = [];
   const loadTemplates = async () => {
-    templatesLoaded = true;
     const result = await callApi('/api/strategy-templates');
     if (!result.ok) {
-      mount(templateSection, el('p', 'status error', errorText(result)));
+      templateHint.textContent = errorText(result);
+      templateHint.className = 'status error';
       return;
     }
-    const templates = result.data.templates ?? [];
-    if (templates.length === 0) {
-      mount(templateSection, el('p', 'placeholder', '暂无可用模板'));
-      return;
+    templates = result.data.templates ?? [];
+    templateHint.textContent =
+      templates.length === 0
+        ? '暂无可用模板，将使用空白模板'
+        : '选择模板后自动带出策略定义，可继续编辑';
+    for (const template of templates) {
+      const option = document.createElement('option');
+      option.value = template.id;
+      const style = STRATEGY_STYLE_TEXT[template.definition?.metadata?.style];
+      option.textContent = style === undefined ? template.name : `${template.name}（${style}）`;
+      templateSelect.append(option);
     }
-    selectedTemplate = templates[0];
-    nameInput.value = selectedTemplate.name;
-    descInput.value = selectedTemplate.description;
-    const cards = templates.map((template) => {
-      const card = el('button', 'entity-row', [
-        el('span', 'entity-row-main', [
-          el('strong', null, template.name),
-          el('small', null, template.description),
-        ]),
-        el(
-          'span',
-          'badge badge-neutral',
-          STRATEGY_STYLE_TEXT[template.definition?.metadata?.style] ?? '模板',
-        ),
-      ]);
-      card.type = 'button';
-      if (template.id === selectedTemplate.id) card.classList.add('selected');
-      card.addEventListener('click', () => {
-        selectedTemplate = template;
-        nameInput.value = template.name;
-        descInput.value = template.description;
-        for (const other of cards) other.classList.toggle('selected', other === card);
-      });
-      return card;
-    });
-    mount(templateSection, el('div', 'entity-list', cards));
   };
-
-  const modeCustomBtn = el('button', 'btn btn-primary btn-sm', '自定义策略');
-  const modeTemplateBtn = el('button', 'btn btn-outline btn-sm', '从模板导入');
-  modeCustomBtn.type = 'button';
-  modeTemplateBtn.type = 'button';
-  const switchMode = (next) => {
-    mode = next;
-    modeCustomBtn.className = `btn btn-sm ${next === 'custom' ? 'btn-primary' : 'btn-outline'}`;
-    modeTemplateBtn.className = `btn btn-sm ${next === 'template' ? 'btn-primary' : 'btn-outline'}`;
-    customSection.hidden = next !== 'custom';
-    templateSection.hidden = next !== 'template';
-    if (next === 'template' && !templatesLoaded) void loadTemplates();
-  };
-  modeCustomBtn.addEventListener('click', () => switchMode('custom'));
-  modeTemplateBtn.addEventListener('click', () => switchMode('template'));
+  void loadTemplates();
 
   const submit = actionButton(
     '创建',
@@ -910,23 +1042,14 @@ const openStrategyCreateModal = (setStatus, refresh) => {
         return;
       }
       let definition;
-      let changeSummary;
-      if (mode === 'custom') {
-        try {
-          definition = JSON.parse(defInput.value);
-        } catch {
-          setStatus('策略定义不是合法 JSON', true);
-          return;
-        }
-        changeSummary = '自定义创建';
-      } else {
-        if (selectedTemplate === null) {
-          setStatus('请选择模板', true);
-          return;
-        }
-        definition = selectedTemplate.definition;
-        changeSummary = `从模板「${selectedTemplate.name}」创建`;
+      try {
+        definition = JSON.parse(defInput.value);
+      } catch {
+        setStatus('策略定义不是合法 JSON', true);
+        return;
       }
+      const changeSummary =
+        selectedTemplate === null ? '自定义创建' : `从模板「${selectedTemplate.name}」创建`;
       button.disabled = true;
       const created = await post('/api/strategies', { name, description });
       if (!created.ok) {
@@ -945,21 +1068,24 @@ const openStrategyCreateModal = (setStatus, refresh) => {
       }
       closeModal();
       selectedStrategyId = created.data.strategy.id;
-      setStatus(mode === 'custom' ? '策略已创建' : '策略已从模板创建');
+      window.location.hash = `#strategies?strategyId=${encodeURIComponent(selectedStrategyId)}&tab=settings&view=rule-near-miss`;
+      setStatus(selectedTemplate === null ? '策略已创建' : '策略已从模板创建');
       await refresh('strategies');
     },
     true,
   );
   openModal(
     '新增策略',
-    el('div', null, [
-      el('div', 'flex gap-2', [modeCustomBtn, modeTemplateBtn]),
+    el('div', 'modal-form', [
+      el('p', 'hint', '模板'),
+      templateSelect,
+      templateHint,
       el('p', 'hint', '名称'),
       nameInput,
       el('p', 'hint', '描述'),
       descInput,
-      customSection,
-      templateSection,
+      el('p', 'hint', '策略定义（JSON，DSL v1；selection 至少一条规则，scoring 权重之和为 1）'),
+      defInput,
       el('div', 'modal-actions', [submit]),
     ]),
   );

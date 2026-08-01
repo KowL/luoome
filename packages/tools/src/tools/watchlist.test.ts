@@ -42,6 +42,7 @@ describe('Watchlist tools', () => {
       {
         watchlistId: 'quality-watch',
         stockId: '600519.SH',
+        stage: 'researching',
         priority: 'important',
       },
       ctx,
@@ -53,6 +54,7 @@ describe('Watchlist tools', () => {
     if (!detail.ok) return;
     expect(detail.data.members[0]?.member).toMatchObject({
       stockId: '600519.SH',
+      stage: 'researching',
       priority: 'important',
     });
 
@@ -137,7 +139,7 @@ describe('Watchlist tools', () => {
     expect(changes.data.runs[0]?.run.status).toBe('partial');
   });
 
-  it('归档 manual source 后删除无其它来源的 member 关系', async () => {
+  it('归档 manual source 后归档无其它来源的 member', async () => {
     const ctx = await buildTestContext({ clock: () => T0 });
     await createWatchlistTool.execute(
       { id: 'manual-watch', name: '手工', kind: 'personal', membershipPolicy: 'manual' },
@@ -153,12 +155,8 @@ describe('Watchlist tools', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.member).toMatchObject({
-      watchlistId: 'manual-watch',
-      stockId: '600519.SH',
-    });
+    expect(result.data.member.stage).toBe('archived');
     expect(result.data.sources[0]?.status).toBe('ended');
-    expect(await ctx.repos.watchlistMember.findMember('manual-watch', '600519.SH')).toBeNull();
   });
 
   it('failed 同步不能携带候选，避免把失败结果写成 active source', async () => {

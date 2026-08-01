@@ -326,19 +326,22 @@ export const WatchlistMemberSchema = z.object({
   id: z.string().min(1),
   watchlistId: z.string().min(1),
   stockId: z.string().min(1),
+  stage: z.enum(['discovered', 'watching', 'researching', 'confirmed', 'archived']),
   priority: z.enum(['normal', 'important', 'urgent']),
   firstAddedAt: z.coerce.date(),
   lastActivityAt: z.coerce.date(),
+  archivedAt: z.coerce.date().optional(),
 });
 ```
 
 不变量：
 
 - `(watchlistId, stockId)` 唯一。
-- 成员记录只表示当前有效关系；删除后不产生归档状态。
+- archived 必须有 archivedAt；其它 stage 不得有。
 - `lastActivityAt >= firstAddedAt`。
-- Strategy/AI/Portfolio 同步不能覆盖 priority。
-- 所有来源结束且无其它来源时删除成员关系，不删除来源结束记录和同步快照。
+- Strategy/AI/Portfolio 同步不能覆盖 stage 和 priority。
+- archived member 收到新 active source 时默认恢复为 discovered；如历史上由用户明确保留，可恢复为
+  watching，具体值由同步输入显式提供并记录审计。
 
 ### 4.9 WatchlistMemberSource
 
@@ -477,12 +480,11 @@ interface WatchlistRepository {
   save(watchlist: Watchlist): Promise<void>;
   findById(id: string): Promise<Watchlist | null>;
   list(filter?: { enabledOnly?: boolean; kind?: WatchlistKind }): Promise<readonly Watchlist[]>;
-  remove(id: string): Promise<void>; // 删除 Watchlist；来源/同步历史由成员仓储保留
+  archive(id: string, at: Date): Promise<void>;
 }
 
 interface WatchlistMemberRepository {
   saveMember(member: WatchlistMember): Promise<void>;
-  removeMember(memberId: string): Promise<void>;
   findMember(watchlistId: string, stockId: string): Promise<WatchlistMember | null>;
   listMembers(watchlistId: string, filter?: WatchlistMemberQuery): Promise<readonly WatchlistMember[]>;
   saveSource(source: WatchlistMemberSource): Promise<void>;
@@ -507,7 +509,7 @@ interface AlertPlanRepository {
 - `activateVersion` 在同一事务中校验 version、更新 currentVersionId/status。
 - StrategyRun 终态、results/signals 的提交由 tool 以 repository 事务方法完成，不能出现 complete run
   没有结果。
-- Watchlist complete sync 的 snapshots、source enter/update/end、member deletion 和统计在同一事务。
+- Watchlist complete sync 的 snapshots、source enter/update/end、member archive/revive 和统计在同一事务。
 - memory 与 drizzle 的行为由同一 contract suite 验证。
 
 为保证事务边界，最终接口可以将上述多个写方法收口为：
@@ -531,7 +533,7 @@ commitWatchlistSync(bundle: WatchlistSyncCommit): Promise<void>;
 | `strategy_results` | run_id, stock_id, selected, score, rank, evaluations_json | unique(run_id, stock_id)；run+rank |
 | `strategy_signals` | id, strategy/version/run/rule/stock, ts, score | unique(version,rule,stock,ts)；stock+ts |
 | `watchlists` | id, name, kind, policy, enabled, timestamps | enabled；kind |
-| `watchlist_members` | id, watchlist_id, stock_id, priority | unique(watchlist_id,stock_id) |
+| `watchlist_members` | id, watchlist_id, stock_id, stage, priority | unique(watchlist_id,stock_id)；stage |
 | `watchlist_member_sources` | id, member_id, kind, source_key, status, validity | member+status；source_key+status |
 | `watchlist_sync_runs` | id, watchlist/source, producer_run, status, counts | watchlist+started；producer_run |
 | `membership_snapshots` | id, sync_run_id, stock_id, selected, change, evidence | unique(sync_run_id,stock_id)；run+change |
@@ -646,7 +648,7 @@ schema_migrations
 
 manual resolver 的 stockIds：
 
-- 为每个 stockId 创建或复用 WatchlistMember，并保留其 priority。
+- 为每个 stockId 创建或复用 WatchlistMember(stage=watching)。
 - 创建 manual source，reason=`从手工分组迁移`。
 
 holdings：
@@ -806,9 +808,9 @@ interface SyncWatchlistSourceInput {
 3. 计算 entered/unchanged/exited。
 4. 写 WatchlistSyncRun 和 MembershipSnapshot。
 5. complete：
-   - entered：创建 Member，创建 active source。
+   - entered：创建/恢复 Member，创建 active source。
    - unchanged：更新当前 source 的 score/rank/evidence/dataAsOf。
-   - exited：结束 source；若无其它 active/stale source，删除 Member 关系。
+   - exited：结束 source；若无其它 active/stale source 且用户未保留，归档 Member。
 6. partial/failed：
    - 不处理 exited；
    - 现有 source 标 stale；
@@ -840,7 +842,7 @@ Portfolio Watchlist 每次持仓写操作后或启动同步：
 - sourceKey=`portfolio:<accountId>`。
 - reason 包含账户和持仓状态，不包含敏感数量的通知文本。
 - complete 只基于本地 repository，不依赖外部行情。
-- 平仓结束 portfolio source，不删除仍被用户/Strategy 关注的 Member。
+- 平仓结束 portfolio source，不自动归档仍被用户/Strategy 关注的 Member。
 
 ## 10. AlertPlan 与盘中链路
 
@@ -859,7 +861,7 @@ load enabled AlertPlans
 
 约束：
 
-- 已删除的 Member 不进入扫描。
+- archived Member 不进入扫描。
 - Watchlist disabled 时所有关联 AlertPlan 视为 not-ready，不使用旧成员。
 - stale strategy/ai source 不等于 Member 不可扫描；页面和触发证据必须显示 stale。
 - strategy-signal rule 只读取持久化 StrategySignal，不在盘中临时跑全市场 Strategy。
@@ -892,10 +894,10 @@ load enabled AlertPlans
 | `get_watchlist` | read | Member + current sources + AlertPlans |
 | `create_watchlist` | write | 创建 |
 | `update_watchlist` | write | 改基础字段/启停 |
-| `archive_watchlist` | write | 删除 Watchlist；有 AlertPlan 引用时拒绝 |
+| `archive_watchlist` | write | 软归档；有 AlertPlan 引用时拒绝 |
 | `add_watchlist_member` | write | 添加 manual source |
-| `update_watchlist_member` | write | 修改 priority |
-| `archive_watchlist_member` | write | 结束 manual source；无其它来源时删除成员关系 |
+| `update_watchlist_member` | write | 修改 stage/priority |
+| `archive_watchlist_member` | write | 结束 manual source/归档 |
 | `sync_watchlist_source` | write | 内部原子同步；不直接暴露给日常 Agent |
 | `list_watchlist_changes` | read | sync runs/snapshots |
 
@@ -1050,7 +1052,7 @@ luoome watch                         # 现有常驻 runner 保留
 - canonical JSON/hash 稳定性。
 - expression 字段静态校验、安全关键字和 unknown/error。
 - StrategyEvaluator 的 all/any、score、rank、signal。
-- Watchlist 成员关系、priority、删除与 source 生命周期。
+- Watchlist stage/source 状态机。
 - complete/partial/failed 同步算法。
 - legacy decoder 映射。
 
@@ -1095,7 +1097,7 @@ fixture 数据库覆盖：
 
 - API 鉴权/Origin/write opt-in。
 - Strategy 草案、校验、发布、运行。
-- Watchlist 多来源、priority 和删除操作。
+- Watchlist 多来源和 stage 操作。
 - AlertPlan CRUD 与试跑。
 - 浏览器真实启动验证：页面、确认、错误、stale/partial 展示。
 
@@ -1129,7 +1131,8 @@ git diff --check
 
 1. StrategyVersion 的 `definition_json` 是运行时唯一事实源。YAML 只作为导入/导出格式，解析并
    canonicalize 后才可进入校验和发布流程；原始 YAML 不参与运行。
-2. Member 只表示当前有效关系；来源再次出现时创建新的 Member，历史来源与同步快照仍保留。
+2. archived Member 收到新的自动来源时恢复为 discovered；用户手工恢复时可明确选择 watching
+   或 researching。
 3. 首期不新增永久 AgentRun 领域实体。AI source 使用现有 chat message/tool trace id；未来只有
    在 Agent run 形成独立查询、保留和权限生命周期时再立项。
 4. legacy tools 的兼容期未执行：实际为一次性 big-bang 硬切，迁移版本直接移除 legacy

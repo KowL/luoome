@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   assignStableStrategyRanks,
   type DailyBar,
@@ -18,6 +19,7 @@ import { computeSimpleIndicators } from '../internal/indicators.js';
 
 const DAY_MS = 86_400_000;
 const EVALUATION_CONCURRENCY = 8;
+const EVALUATOR_VERSION = 'strategy-evaluator-v2';
 
 export const RunStrategyInput = z.object({
   strategyId: z.string().min(1),
@@ -125,10 +127,10 @@ export const runStrategyTool = defineTool({
       coverage: 'CN_A_SHARES_SH_SZ',
       status: 'active',
     });
+    const successfulSync = await ctx.repos.stockUniverse.latestSuccessfulSync({
+      coverage: 'CN_A_SHARES_SH_SZ',
+    });
     if (input.stockIds === undefined) {
-      const successfulSync = await ctx.repos.stockUniverse.latestSuccessfulSync({
-        coverage: 'CN_A_SHARES_SH_SZ',
-      });
       if (successfulSync === null) {
         return errInvalidInput('全市场运行需要已成功同步的 StockUniverse');
       }
@@ -237,9 +239,22 @@ export const runStrategyTool = defineTool({
       finishedAt,
       status,
       inputSnapshot: {
-        candidateStockIds: candidateIds,
-        subset: input.stockIds !== undefined,
-        persist: input.persist,
+        schemaVersion: 2,
+        strategyVersionId: version.id,
+        definitionHash: version.definitionHash,
+        evaluatorVersion: EVALUATOR_VERSION,
+        coverage: 'CN_A_SHARES_SH_SZ',
+        stockIds: candidateIds,
+        stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
+        requestedBy: input.mode === 'replay' ? 'replay' : 'manual',
+        ...(successfulSync === null
+          ? {}
+          : {
+              universeCheckpoint: {
+                provider: successfulSync.source,
+                syncedAt: successfulSync.finishedAt ?? successfulSync.startedAt,
+              },
+            }),
       },
       providerStatuses:
         input.mode === 'replay'
@@ -269,13 +284,16 @@ export const runStrategyTool = defineTool({
                 : []),
             ],
       summary: {
-        candidates: candidateIds.length,
-        evaluated: results.length,
-        selected: results.filter((result) => result.selected).length,
-        signals: signals.length,
-        partial: partialCount,
-        failed: failures.length,
-        failures: failures.slice(0, 20),
+        schemaVersion: 2,
+        universeCount: candidateIds.length,
+        evaluatedCount: results.length,
+        selectedCount: results.filter((result) => result.selected).length,
+        signalCount: signals.length,
+        partialCount,
+        failedCount: failures.length,
+        failureSamples: failures
+          .slice(0, 20)
+          .map(({ stockId, error: failureError }) => ({ stockId, error: failureError })),
       },
       ...(error === undefined ? {} : { error }),
     });

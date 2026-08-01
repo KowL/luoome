@@ -4,6 +4,7 @@
 > 日期：2026-07-29
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)、[SECURITY.md](../SECURITY.md)
 > 关联 PRD：[Agent 协作体验](./ai-investment-agent.md)、[策略定义与研究](./strategy-dsl.md)、[投资观察中心](./watchlist.md)
+> 研究模型更新：研究主体、正文存储和时间线契约以[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)为准；本总纲中的决策闭环和 Advice 边界继续有效
 
 ## 1. 文档结论
 
@@ -234,7 +235,7 @@ Web 保持少量稳定入口：
 | 本文 | 整体闭环、对象关系、阶段和指标 | 具体页面字段与技术 schema |
 | Agent 协作体验 | AI 如何调用能力、解释结果和确认副作用 | 新建平行业务模型 |
 | Strategy DSL | 如何标准化策略定义、运行、信号、版本和评估 | 自动交易 |
-| 统一 Watchlist | 如何统一成员来源、priority、归档、变化与提醒 | 复制股票、持仓、建议或事件 |
+| 统一 Watchlist | 如何统一成员来源、研究阶段、变化与提醒 | 复制股票、持仓、建议或事件 |
 
 ## 10. 验收原则
 

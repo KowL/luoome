@@ -10,6 +10,7 @@
 - [仓库结构](#仓库结构)
 - [日常命令](#日常命令)
 - [代码规范](#代码规范)
+  - [Web UI 规范](#web-ui-规范)
 - [测试](#测试)
 - [PR 流程](#pr-流程)
 - [Commit 规范](#commit-规范)
@@ -146,6 +147,24 @@ workflows ──► tools ──► core
 - `StockCode` — 1-12 位大写字母数字
 
 裸 `number` / `string` 不能直接当 `Money` / `StockCode` 用；走 `money(n)` / `quantity(n)` / `percentage(n)` / `stockCode(s)` 构造。Tool 输入的 zod schema 用 `MoneySchema` / `StockCodeSchema` 等自动校验 + transform。
+
+### Web UI 规范
+
+Web 页面展示股票身份时统一复用首页看板的两行样式，不允许各页面自行拼接名称和代码：
+
+```text
+比亚迪
+002594.SZ
+```
+
+- 第一行展示股票名称，第二行展示带交易所后缀的完整代码；不得只显示代码，也不得挤在同一行。
+- 两行必须放在同一个真实 `<a>` 中，整个股票标识区域都可点击，默认跳转
+  `#market?stockId={stockId}&range=3m`。
+- 使用 `apps/web/public/js/stock-link.js` 的 `stockIdentityLink`，不复制链接、样式或 fallback 逻辑。
+- 股票名称由 Tool/API 从本地股票目录解析，前端不得从代码猜名称；无法解析时显示“名称暂缺”，保留代码和行情入口。
+- 链接需支持键盘焦点、复制链接、浏览器返回/前进以及修饰键新开标签页。
+- 存在展开、Watchlist、Advice 等行内操作时，只让股票标识区域跳转，避免把整行设为链接造成嵌套交互或误触。
+- 新增或修改股票列表时，应测试名称/代码层级、行情深链接和名称缺失降级，并在浏览器中检查桌面与移动端表现。
 
 ### 副作用五级
 

@@ -88,6 +88,23 @@ describe('run_strategy', () => {
       ['600519.SH', 2],
     ]);
     expect(result.data.signals).toHaveLength(2);
+    expect(result.data.run.inputSnapshot).toMatchObject({
+      schemaVersion: 2,
+      strategyVersionId: 'scan-strategy-v1',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      stockIds: ['300750.SZ', '600519.SH'],
+      requestedBy: 'manual',
+    });
+    expect(result.data.run.inputSnapshot.stockIdChecksum).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.data.run.summary).toMatchObject({
+      schemaVersion: 2,
+      universeCount: 2,
+      evaluatedCount: 2,
+      selectedCount: 2,
+      signalCount: 2,
+      partialCount: 0,
+      failedCount: 0,
+    });
     expect(await ctx.repos.strategyRun.findRunById(result.data.run.id)).not.toBeNull();
     expect(await ctx.repos.strategyRun.listResults(result.data.run.id)).toHaveLength(2);
   });
@@ -126,7 +143,7 @@ describe('run_strategy', () => {
     if (!result.ok) return;
     expect(result.data.run.status).toBe('partial');
     expect(result.data.results).toHaveLength(1);
-    expect(result.data.run.summary).toMatchObject({ failed: 1, evaluated: 1 });
+    expect(result.data.run.summary).toMatchObject({ failedCount: 1, evaluatedCount: 1 });
   });
 
   it('all candidate data failures yield failed without partial persistence', async () => {

@@ -282,6 +282,10 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     );
   }
 
+  async signalsByRun(runId: string): Promise<readonly StrategySignal[]> {
+    return this.sortedSignals((signal) => signal.runId === runId);
+  }
+
   async signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]> {
     return this.sortedSignals(
       (signal) =>

@@ -248,6 +248,7 @@ export interface StrategyRunRepository {
   saveResults(results: readonly StrategyResult[]): Promise<void>;
   listResults(runId: string): Promise<readonly StrategyResult[]>;
   saveSignals(signals: readonly StrategySignal[]): Promise<void>;
+  signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
   signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]>;
   signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
   /** 终态 run 与其 results/signals 原子提交。 */
@@ -265,17 +266,18 @@ export interface WatchlistRepository {
     readonly enabledOnly?: boolean;
     readonly kind?: WatchlistKind;
   }): Promise<readonly Watchlist[]>;
-  remove(id: string): Promise<void>;
+  archive(id: string, at: Date): Promise<void>;
 }
 
 export interface WatchlistMemberRepository {
   saveMember(member: WatchlistMember): Promise<void>;
-  removeMember(memberId: string): Promise<void>;
   findMember(watchlistId: string, stockId: string): Promise<WatchlistMember | null>;
   listMembers(
     watchlistId: string,
     filter?: {
+      readonly stage?: WatchlistMember['stage'];
       readonly priority?: WatchlistMember['priority'];
+      readonly includeArchived?: boolean;
     },
   ): Promise<readonly WatchlistMember[]>;
   saveSource(source: WatchlistMemberSource): Promise<void>;

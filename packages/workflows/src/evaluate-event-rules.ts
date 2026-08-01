@@ -56,7 +56,7 @@ export const EvaluateEventRulesOutput = z.object({
   deduped: z.number().int().nonnegative(),
 });
 
-/** 解析 AlertPlan 所属 Watchlist 的当前成员。 */
+/** 解析 AlertPlan 所属 Watchlist 的当前非归档成员。 */
 const resolveMemberStockIds = async (
   plan: AlertPlan,
   ctx: WorkflowContext,
