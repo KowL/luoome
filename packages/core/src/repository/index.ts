@@ -7,6 +7,13 @@ import type { Notification, NotificationResult } from '../entity/notification.js
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
 import type { ResearchNote, ResearchNoteKind } from '../entity/research-note.js';
+import type {
+  ResearchDocumentChunk, ResearchDocumentIndex, ResearchDocumentKind, ResearchAvailability,
+  ResearchSubjectLink, ResearchTopicDocument, ResearchTopicIndex,
+  ResearchTopicKind,
+  ResearchVaultSyncRun,
+} from '../entity/research-vault.js';
+import type { ResearchSearchHit } from '../research-vault.js';
 import type { SignalObservation, SignalObservationStatus } from '../entity/signal-observation.js';
 import type { Stock } from '../entity/stock.js';
 import type { StockEvent, StockEventKind, StockEventStatus } from '../entity/stock-event.js';
@@ -184,6 +191,8 @@ export interface RepositoryRegistry {
   readonly watchRun: WatchRunRepository;
   /** ruo 迁移 Phase 1A；研究档案笔记 CRUD + thesis 版本链。 */
   readonly researchNote: ResearchNoteRepository;
+  readonly researchIndex: ResearchIndexRepository;
+  readonly researchVaultSyncRun: ResearchVaultSyncRunRepository;
   /** ruo 迁移 Phase 1B；公司事件（幂等 upsert by (provider, externalId)）。 */
   readonly stockEvent: StockEventRepository;
   /** ruo 迁移 Phase 1C；workflow 运行审计。 */
@@ -191,6 +200,18 @@ export interface RepositoryRegistry {
   /** Web AI 对话：账户隔离的会话与 UI message parts。 */
   readonly chat: ChatRepository;
 }
+
+export interface ResearchTopicQuery { readonly kind?: ResearchTopicKind; readonly subject?: string; readonly tags?: readonly string[]; readonly includeArchived?: boolean; readonly availability?: ResearchAvailability; readonly limit?: number; readonly cursor?: string; }
+export interface ResearchDocumentQuery { readonly topicId?: string; readonly subject?: string; readonly kind?: ResearchDocumentKind; readonly tags?: readonly string[]; readonly availability?: ResearchAvailability; readonly limit?: number; readonly cursor?: string; readonly publishedFrom?: Date; readonly publishedTo?: Date; }
+export interface ResearchSearchQuery { readonly text: string; readonly topicId?: string; readonly subject?: string; readonly kind?: ResearchDocumentKind; readonly limit?: number; }
+export interface ResearchIndexApplySummary { readonly added: number; readonly updated: number; readonly unchanged: number; readonly missing: number; readonly invalid: number; readonly conflicts: number; }
+export interface ResearchIndexRepository {
+  applyIndexBatch(input: { readonly vaultId: string; readonly completeness: 'complete' | 'partial'; readonly topics: readonly ResearchTopicIndex[]; readonly documents: readonly ResearchDocumentIndex[]; readonly topicDocuments: readonly ResearchTopicDocument[]; readonly subjectLinks: readonly ResearchSubjectLink[]; readonly chunks: readonly ResearchDocumentChunk[]; readonly seenTopicIds: ReadonlySet<string>; readonly seenDocumentIds: ReadonlySet<string>; readonly indexedAt: Date; }): Promise<ResearchIndexApplySummary>;
+  findTopic(id: string): Promise<ResearchTopicIndex | null>; findDocument(id: string): Promise<ResearchDocumentIndex | null>;
+  listTopics(query: ResearchTopicQuery): Promise<readonly ResearchTopicIndex[]>; listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]>;
+  searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]>;
+}
+export interface ResearchVaultSyncRunRepository { save(run: ResearchVaultSyncRun): Promise<void>; findById(id: string): Promise<ResearchVaultSyncRun | null>; list(vaultId: string, limit?: number): Promise<readonly ResearchVaultSyncRun[]>; }
 
 export interface SignalObservationRepository {
   save(observation: SignalObservation): Promise<void>;

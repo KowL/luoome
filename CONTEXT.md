@@ -45,6 +45,10 @@ StrategySignal，不临时运行全市场 Strategy。
 指定沪深 A 股交易日的市场情绪事实集合。每个维度独立记录数据截止时间、来源与可用状态；
 数据不可用不等于正常零值。
 
+### ResearchTopic / ResearchDocument
+
+研究以 `ResearchTopic` 为持续上下文，以 `ResearchDocument` 为资料索引；Topic 可不关联股票，也可通过显式 SubjectLink 关联多只股票、产业、事件、主题或宏观问题。正文权威来源是本地 Obsidian Vault，SQLite 只保存可重建的索引、关系、分块和同步审计。研究资料不自动生成 Advice 或交易动作。
+
 ## 关键约束
 
 - 首期全市场覆盖固定为沪深 A 股，不暗示港股、美股或北交所。

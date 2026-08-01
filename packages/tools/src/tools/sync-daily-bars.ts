@@ -72,7 +72,14 @@ async function syncRelevantStockIds(ctx: ToolContext): Promise<string[]> {
   }
 
   for (const stockId of await ctx.repos.stockEvent.listStockIdsWithEvents()) result.add(stockId);
-  for (const stockId of await ctx.repos.researchNote.listStockIdsWithNotes()) result.add(stockId);
+  for (const stock of await ctx.repos.stock.list()) {
+    const subject = `stock:${stock.id}`;
+    const [topics, documents] = await Promise.all([
+      ctx.repos.researchIndex.listTopics({ subject, limit: 1 }),
+      ctx.repos.researchIndex.listDocuments({ subject, limit: 1 }),
+    ]);
+    if (topics.length > 0 || documents.length > 0) result.add(stock.id);
+  }
   return [...result].sort();
 }
 

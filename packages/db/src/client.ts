@@ -13,6 +13,8 @@ import {
   DrizzleQuoteRepository,
   DrizzleReportRepository,
   DrizzleResearchNoteRepository,
+  DrizzleResearchIndexRepository,
+  DrizzleResearchVaultSyncRunRepository,
   DrizzleSignalObservationRepository,
   DrizzleStockEventRepository,
   DrizzleStockRepository,
@@ -40,6 +42,27 @@ export type DrizzleDb = BunSQLiteDatabase<Schema>;
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS research_topic_index (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT, tags TEXT NOT NULL,
+      vault_id TEXT NOT NULL, relative_path TEXT NOT NULL, content_hash TEXT NOT NULL, archived_at INTEGER,
+      file_modified_at INTEGER NOT NULL, indexed_at INTEGER NOT NULL, availability TEXT NOT NULL, diagnostic TEXT
+    )
+  `);
+  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS research_topic_index_vault_path_unique ON research_topic_index (vault_id, relative_path)`);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS research_document_index (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, author TEXT, source_url TEXT, source_status TEXT,
+      published_at INTEGER, observed_at INTEGER, imported_at INTEGER NOT NULL, tags TEXT NOT NULL, vault_id TEXT NOT NULL,
+      relative_path TEXT NOT NULL, attachment_paths TEXT NOT NULL, content_hash TEXT NOT NULL, excerpt TEXT,
+      file_modified_at INTEGER NOT NULL, indexed_at INTEGER NOT NULL, availability TEXT NOT NULL, diagnostic TEXT
+    )
+  `);
+  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS research_document_index_vault_path_unique ON research_document_index (vault_id, relative_path)`);
+  db.run(sql`CREATE TABLE IF NOT EXISTS research_topic_documents (topic_id TEXT NOT NULL, document_id TEXT NOT NULL, relation TEXT NOT NULL, sort_order INTEGER, PRIMARY KEY (topic_id, document_id, relation))`);
+  db.run(sql`CREATE TABLE IF NOT EXISTS research_subject_links (owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, subject_kind TEXT NOT NULL, subject_key TEXT NOT NULL, relation TEXT NOT NULL, PRIMARY KEY (owner_kind, owner_id, subject_kind, subject_key, relation))`);
+  db.run(sql`CREATE TABLE IF NOT EXISTS research_document_chunks (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, heading_path TEXT NOT NULL, content_hash TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (document_id, ordinal))`);
+  db.run(sql`CREATE TABLE IF NOT EXISTS research_vault_sync_runs (id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL, scanned INTEGER NOT NULL, added INTEGER NOT NULL, updated INTEGER NOT NULL, unchanged INTEGER NOT NULL, missing INTEGER NOT NULL, invalid INTEGER NOT NULL, conflicts INTEGER NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER, error TEXT)`);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -998,6 +1021,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     watchRun: new DrizzleWatchRunRepository(db),
     // ruo 迁移起
     researchNote: new DrizzleResearchNoteRepository(db),
+    researchIndex: new DrizzleResearchIndexRepository(db),
+    researchVaultSyncRun: new DrizzleResearchVaultSyncRunRepository(db),
     stockEvent: new DrizzleStockEventRepository(db),
     workflowRun: new DrizzleWorkflowRunRepository(db),
     chat: new DrizzleChatRepository(db),

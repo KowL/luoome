@@ -19,6 +19,8 @@ export * from './entity/provenance.js';
 export * from './entity/quote.js';
 export * from './entity/report.js';
 export * from './entity/research-note.js';
+export * from './entity/research-vault.js';
+export * from './research-vault.js';
 export * from './entity/signal-observation.js';
 export * from './entity/stock.js';
 export * from './entity/stock-event.js';

@@ -37,6 +37,7 @@ import type {
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
+import type { ResearchDocumentIndex, ResearchTopicIndex, ResearchVaultSyncRun } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import {
   index,
@@ -751,6 +752,18 @@ export const researchNotes = sqliteTable(
   }),
 );
 
+export const researchTopicIndex = sqliteTable('research_topic_index', {
+  id: text('id').primaryKey(), title: text('title').notNull(), kind: text('kind').$type<ResearchTopicIndex['kind']>().notNull(), summary: text('summary'), tags: text('tags', { mode: 'json' }).$type<readonly string[]>().notNull(), vaultId: text('vault_id').notNull(), relativePath: text('relative_path').notNull(), contentHash: text('content_hash').notNull(), archivedAt: integer('archived_at', { mode: 'timestamp_ms' }), fileModifiedAt: integer('file_modified_at', { mode: 'timestamp_ms' }).notNull(), indexedAt: integer('indexed_at', { mode: 'timestamp_ms' }).notNull(), availability: text('availability').notNull(), diagnostic: text('diagnostic'),
+}, (t) => ({ pathUnique: uniqueIndex('research_topic_index_vault_path_unique').on(t.vaultId, t.relativePath), kindArchiveIdx: index('research_topic_index_kind_archive_idx').on(t.kind, t.archivedAt) }));
+
+export const researchDocumentIndex = sqliteTable('research_document_index', {
+  id: text('id').primaryKey(), kind: text('kind').notNull(), title: text('title').notNull(), author: text('author'), sourceUrl: text('source_url'), sourceStatus: text('source_status'), publishedAt: integer('published_at', { mode: 'timestamp_ms' }), observedAt: integer('observed_at', { mode: 'timestamp_ms' }), importedAt: integer('imported_at', { mode: 'timestamp_ms' }).notNull(), tags: text('tags', { mode: 'json' }).$type<readonly string[]>().notNull(), vaultId: text('vault_id').notNull(), relativePath: text('relative_path').notNull(), attachmentPaths: text('attachment_paths', { mode: 'json' }).$type<readonly string[]>().notNull(), contentHash: text('content_hash').notNull(), excerpt: text('excerpt'), fileModifiedAt: integer('file_modified_at', { mode: 'timestamp_ms' }).notNull(), indexedAt: integer('indexed_at', { mode: 'timestamp_ms' }).notNull(), availability: text('availability').notNull(), diagnostic: text('diagnostic'),
+}, (t) => ({ pathUnique: uniqueIndex('research_document_index_vault_path_unique').on(t.vaultId, t.relativePath), publishedIdx: index('research_document_index_published_idx').on(t.publishedAt), observedIdx: index('research_document_index_observed_idx').on(t.observedAt) }));
+export const researchTopicDocuments = sqliteTable('research_topic_documents', { topicId: text('topic_id').notNull(), documentId: text('document_id').notNull(), relation: text('relation').notNull(), sortOrder: integer('sort_order') }, (t) => ({ pk: primaryKey({ columns: [t.topicId, t.documentId, t.relation], name: 'research_topic_documents_pk' }), docIdx: index('research_topic_documents_document_idx').on(t.documentId) }));
+export const researchSubjectLinks = sqliteTable('research_subject_links', { ownerKind: text('owner_kind').notNull(), ownerId: text('owner_id').notNull(), subjectKind: text('subject_kind').notNull(), subjectKey: text('subject_key').notNull(), relation: text('relation').notNull() }, (t) => ({ pk: primaryKey({ columns: [t.ownerKind, t.ownerId, t.subjectKind, t.subjectKey, t.relation], name: 'research_subject_links_pk' }), subjectIdx: index('research_subject_links_subject_idx').on(t.subjectKind, t.subjectKey, t.ownerKind) }));
+export const researchDocumentChunks = sqliteTable('research_document_chunks', { documentId: text('document_id').notNull(), ordinal: integer('ordinal').notNull(), headingPath: text('heading_path').notNull(), contentHash: text('content_hash').notNull(), body: text('body').notNull() }, (t) => ({ pk: primaryKey({ columns: [t.documentId, t.ordinal], name: 'research_document_chunks_pk' }) }));
+export const researchVaultSyncRuns = sqliteTable('research_vault_sync_runs', { id: text('id').primaryKey(), vaultId: text('vault_id').notNull(), mode: text('mode').$type<ResearchVaultSyncRun['mode']>().notNull(), status: text('status').$type<ResearchVaultSyncRun['status']>().notNull(), scanned: integer('scanned').notNull(), added: integer('added').notNull(), updated: integer('updated').notNull(), unchanged: integer('unchanged').notNull(), missing: integer('missing').notNull(), invalid: integer('invalid').notNull(), conflicts: integer('conflicts').notNull(), startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(), finishedAt: integer('finished_at', { mode: 'timestamp_ms' }), error: text('error') }, (t) => ({ vaultStartedIdx: index('research_vault_sync_runs_vault_started_idx').on(t.vaultId, t.startedAt) }));
+
 /**
  * 公司事件（ruo 迁移 Phase 1B，docs/.../§3.2）。
  * (provider, external_id) 唯一（manual 行两列为 NULL，SQLite 唯一索引放行多 NULL）。
@@ -919,6 +932,12 @@ export const schema = {
   membershipSnapshots,
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
   researchNotes,
+  researchTopicIndex,
+  researchDocumentIndex,
+  researchTopicDocuments,
+  researchSubjectLinks,
+  researchDocumentChunks,
+  researchVaultSyncRuns,
   stockEvents,
   workflowRuns,
   reports,

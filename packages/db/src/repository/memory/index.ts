@@ -34,6 +34,8 @@ import { InMemoryNotificationRepository } from './notification.js';
 import { InMemoryQuoteRepository } from './quote.js';
 import { InMemoryReportRepository } from './report.js';
 import { InMemoryResearchNoteRepository } from './research-note.js';
+import { InMemoryResearchIndexRepository } from './research-index.js';
+import { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 import { InMemorySignalObservationRepository } from './signal-observation.js';
 import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
@@ -56,6 +58,8 @@ export { InMemoryNotificationRepository } from './notification.js';
 export { InMemoryQuoteRepository } from './quote.js';
 export { InMemoryReportRepository } from './report.js';
 export { InMemoryResearchNoteRepository } from './research-note.js';
+export { InMemoryResearchIndexRepository } from './research-index.js';
+export { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { InMemorySignalObservationRepository } from './signal-observation.js';
 export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
@@ -121,6 +125,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const watchRun = new InMemoryWatchRunRepository();
   // ruo 迁移起
   const researchNote = new InMemoryResearchNoteRepository();
+  const researchIndex = new InMemoryResearchIndexRepository();
+  const researchVaultSyncRun = new InMemoryResearchVaultSyncRunRepository();
   const stockEvent = new InMemoryStockEventRepository();
   const workflowRun = new InMemoryWorkflowRunRepository();
   if (seed !== undefined) {
@@ -169,6 +175,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     watchRuleState,
     watchRun,
     researchNote,
+    researchIndex,
+    researchVaultSyncRun,
     stockEvent,
     workflowRun,
     chat,

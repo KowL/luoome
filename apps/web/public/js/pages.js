@@ -1553,6 +1553,25 @@ const renderWorkflowRuns = async (setStatus) => {
 
 /** 研究页：搜索 → 时间线 → 新增/编辑笔记。 */
 const renderResearch = async (setStatus) => {
+  const topicInput = /** @type {HTMLInputElement | null} */ (document.getElementById('research-topic-input'));
+  if (topicInput !== null) {
+    const results = document.getElementById('research-search-results');
+    const detail = document.getElementById('research-detail');
+    const renderTopics = async (query = '') => {
+      setStatus('加载研究主题…');
+      const path = query ? `/api/research/search?q=${encodeURIComponent(query)}` : '/api/research/topics';
+      const response = await callApi(path);
+      if (!response.ok) { if (results) mount(results, el('p', 'muted', response.error?.message ?? '研究索引不可用')); return; }
+      const rows = query ? (response.data?.hits ?? []).map((hit) => hit.document) : (response.data?.topics ?? []);
+      if (results) mount(results, rows.length === 0 ? el('p', 'muted', '暂无研究资料；请先同步 Vault') : el('div', 'research-results-list', rows.map((row) => el('article', 'card research-topic-card', [el('h3', null, row.title), el('p', 'muted', `${row.kind} · ${row.availability}`), el('p', null, row.excerpt ?? row.summary ?? ''), row.obsidianUri ? el('a', null, '在 Obsidian 中打开', { href: row.obsidianUri }) : null]))));
+      if (detail) detail.hidden = true;
+      setStatus(`${rows.length} 条研究结果`);
+    };
+    const button = document.getElementById('research-search-btn');
+    if (button && button.dataset.bound !== 'vault') { button.dataset.bound = 'vault'; button.addEventListener('click', () => void renderTopics(topicInput.value.trim())); topicInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') void renderTopics(topicInput.value.trim()); }); }
+    await renderTopics(topicInput.value.trim());
+    return;
+  }
   const detail = /** @type {HTMLElement | null} */ (document.getElementById('research-detail'));
   if (detail !== null) detail.hidden = true;
 

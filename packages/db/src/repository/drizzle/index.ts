@@ -8,6 +8,8 @@ export { DrizzleNotificationRepository } from './notification.js';
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
 export { DrizzleResearchNoteRepository } from './research-note.js';
+export { DrizzleResearchIndexRepository } from './research-index.js';
+export { DrizzleResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';
 export { DrizzleStockRepository } from './stock.js';
 export { DrizzleStockEventRepository } from './stock-event.js';

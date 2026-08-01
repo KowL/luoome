@@ -14,6 +14,7 @@ import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
   createMarketAdapterFromEnv,
+  createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
@@ -79,6 +80,7 @@ export const createServerContext = async (
     clock: now,
     logger,
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger }),
+    researchVault: createResearchVaultAdapterFromEnv(env),
   });
 
   return { ctx, close: handle.close };

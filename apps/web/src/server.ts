@@ -21,6 +21,7 @@ import {
   createAShareSentimentManagerFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
@@ -215,6 +216,7 @@ export const buildWebContext = async (
     user: { id: 'local-web-user', defaultAccountId },
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger: console }),
+    researchVault: createResearchVaultAdapterFromEnv(env),
   });
 };
 
@@ -319,6 +321,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/chat', serveFile('index.html', 'text/html; charset=utf-8'));
   // 行情页 SPA shell（设计 §11.1：#market 深链接；/market 供直接访问）。
   app.get('/market', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/research', serveFile('index.html', 'text/html; charset=utf-8'));
 
   // 图表库 ESM 产物（设计 §12.1）：固定版本固定文件，长缓存；
   // 路由不带路径参数，/vendor 下任何其它路径一律 404。
@@ -359,6 +362,28 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (tool === undefined) return notFound('Tool', name);
     return tool.execute(input, ctxRef.current);
   };
+
+  // Research Vault read surface: Web consumes the same typed tools as CLI/MCP.
+  app.get('/api/research/topics', (c) =>
+    callTool('list_research_topics', {
+      kind: c.req.query('kind') || undefined,
+      subject: c.req.query('subject') || undefined,
+      limit: Number(c.req.query('limit') ?? '50'),
+    }),
+  );
+  app.get('/api/research/topics/:id', (c) => callTool('get_research_topic', { topicId: c.req.param('id') }));
+  app.get('/api/research/documents', (c) =>
+    callTool('list_research_documents', {
+      topicId: c.req.query('topicId') || undefined,
+      subject: c.req.query('subject') || undefined,
+      kind: c.req.query('kind') || undefined,
+      limit: Number(c.req.query('limit') ?? '50'),
+    }),
+  );
+  app.get('/api/research/documents/:id', (c) =>
+    callTool('get_research_document', { documentId: c.req.param('id'), includeContent: c.req.query('content') === '1' }),
+  );
+  app.get('/api/research/search', (c) => callTool('search_research_documents', { text: c.req.query('q') ?? '', limit: Number(c.req.query('limit') ?? '50') }));
 
   const parseJsonObject = async (
     request: Request,
@@ -1437,6 +1462,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // ruo 迁移 §8：研究档案时间线聚合（内部组合读 tool，按时间倒序，支持类型筛选）。
   app.get('/api/stocks/:id/research-timeline', async (c) => {
     const stockId = c.req.param('id');
+    const researchView = await invokeTool('get_stock_research_view', { stockId, limit: 200 });
+    if (!researchView.ok) return jsonResult(researchView);
+    return jsonResult(researchView);
+    /* Legacy timeline assembly intentionally retired with ResearchNote. */
     const typesParam = c.req.query('types');
     const wanted =
       typesParam !== undefined && typesParam.length > 0

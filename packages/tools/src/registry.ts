@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
 import { addHoldingTool } from './tools/add-holding.js';
-import { addResearchNoteTool } from './tools/add-research-note.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
 import { agentRunTool } from './tools/agent-run.js';
@@ -26,7 +25,6 @@ import {
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
-import { deleteResearchNoteTool } from './tools/delete-research-note.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
@@ -46,7 +44,6 @@ import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-la
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
 import { listReportsTool } from './tools/list-reports.js';
-import { listResearchNotesTool } from './tools/list-research-notes.js';
 import { listStockEventsTool } from './tools/list-stock-events.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
@@ -78,8 +75,8 @@ import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
 import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
 import { updateHoldingTool } from './tools/update-holding.js';
-import { updateResearchNoteTool } from './tools/update-research-note.js';
 import { updateStockEventTool } from './tools/update-stock-event.js';
+import { getResearchDocumentTool, getResearchTopicTool, getStockResearchViewTool, listResearchDocumentsTool, listResearchTopicsTool, searchResearchDocumentsTool, syncResearchVaultTool } from './tools/research-vault.js';
 import {
   addWatchlistMemberTool,
   archiveWatchlistMemberTool,
@@ -263,13 +260,16 @@ export const toolRegistry: Registry = createRegistry([
   // v0.7 策略预警：触发反馈（write）
   setWatchTriggerFeedbackTool,
   // ruo 迁移 Phase 1：研究档案 + 公司事件 + 运行状态（docs/ddd/ruo-feature-migration-detailed-design.md §7）
-  listResearchNotesTool,
-  addResearchNoteTool,
-  updateResearchNoteTool,
-  deleteResearchNoteTool,
   listStockEventsTool,
   addStockEventTool,
   updateStockEventTool,
+  listResearchTopicsTool,
+  getResearchTopicTool,
+  listResearchDocumentsTool,
+  getResearchDocumentTool,
+  searchResearchDocumentsTool,
+  getStockResearchViewTool,
+  syncResearchVaultTool,
   deleteStockEventTool,
   syncStockEventsTool,
   syncStockUniverseTool,

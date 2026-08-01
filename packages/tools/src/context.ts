@@ -8,6 +8,7 @@ import type {
   RepositoryRegistry,
   StockUniverseManagerLike,
   ToolContext,
+  ResearchVaultAdapterLike,
 } from '@luoome/core';
 import { BUILTIN_STRATEGIES } from '@luoome/core';
 
@@ -28,6 +29,7 @@ export interface BuildContextInput {
   /** Phase 1：连板天梯 manager（docs/ddd/limit-up-ladder-detailed-design.md §5）。 */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
+  readonly researchVault?: ResearchVaultAdapterLike;
 }
 
 /** 幂等装载内置 Strategy 静态种子（同 id 已存在则跳过，不覆盖用户同名策略）。 */
@@ -53,6 +55,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     logger: input.logger ?? console,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
     ...(input.ashareSentiment === undefined ? {} : { ashareSentiment: input.ashareSentiment }),
+    ...(input.researchVault === undefined ? {} : { researchVault: input.researchVault }),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

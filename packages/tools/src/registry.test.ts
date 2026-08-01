@@ -68,10 +68,13 @@ const EXPECTED_TOOL_NAMES = [
   // v0.7 策略预警（docs/ddd/strategy-watchlist-unification-detailed-design.md §9.2）新增
   'set_watch_trigger_feedback',
   // ruo 迁移 Phase 1（docs/ddd/ruo-feature-migration-detailed-design.md §7）
-  'list_research_notes',
-  'add_research_note',
-  'update_research_note',
-  'delete_research_note',
+  'list_research_topics',
+  'get_research_topic',
+  'list_research_documents',
+  'get_research_document',
+  'search_research_documents',
+  'get_stock_research_view',
+  'sync_research_vault',
   'list_stock_events',
   'add_stock_event',
   'update_stock_event',

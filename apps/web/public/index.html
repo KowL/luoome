@@ -314,31 +314,15 @@
       <section id="route-research" class="route" data-route="research" hidden>
         <div class="route-header">
           <h1>研究</h1>
-          <div class="route-meta">研究档案 · 时间线 · 当前假设 · 公司事件</div>
+          <div class="route-meta">研究主题 · Vault 索引 · 显式对象关联</div>
         </div>
         <div class="card">
-          <div class="card-header"><h2>选择股票</h2></div>
+          <div class="card-header"><h2>研究主题与资料</h2></div>
           <div class="research-search flex gap-2">
-            <input id="research-stock-input" type="text" placeholder="代码或名称，如 002594 / 比亚迪" />
+            <input id="research-topic-input" type="search" placeholder="搜索研究主题或资料" />
             <button id="research-search-btn" class="btn btn-primary btn-sm" type="button">搜索</button>
           </div>
           <div id="research-search-results" class="research-results mt-2"></div>
-        </div>
-        <div id="research-detail" hidden>
-          <div class="card mt-4">
-            <div class="card-header"><h2 id="research-title">研究档案</h2><div class="card-meta" id="research-summary-meta">--</div></div>
-            <div id="research-summary"></div>
-          </div>
-          <div class="card mt-4">
-            <div class="card-header"><h2>新增笔记 / 假设</h2></div>
-            <div id="research-add-note"></div>
-          </div>
-          <div class="card mt-4">
-            <div class="card-header"><h2>时间线</h2>
-              <div class="card-meta" id="research-timeline-filters"></div>
-            </div>
-            <div id="research-timeline"></div>
-          </div>
         </div>
       </section>
 
