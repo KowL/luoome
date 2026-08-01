@@ -13,7 +13,7 @@ Use read tools to identify subjects and inspect current state before deeper anal
   `get_strategy_run`, `strategy_signals_by_stock`.
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`.
-- Research and events: `list_research_notes`, `list_stock_events`.
+- Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `list_stock_events`.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
 
@@ -30,7 +30,7 @@ Use advice tools only for an explicit analysis request:
 ## Write
 
 Write tools create or change local records, including accounts, holdings, trades, Strategies,
-Watchlists, AlertPlans, research notes, stock events and feedback. Before calling one:
+Watchlists, AlertPlans, stock events and feedback. Before calling one:
 
 1. Read the target state and resolve stable IDs.
 2. Restate exact values, especially stock, side, quantity, price, time and account.

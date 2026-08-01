@@ -72,7 +72,7 @@ async function syncRelevantStockIds(ctx: ToolContext): Promise<string[]> {
   }
 
   for (const stockId of await ctx.repos.stockEvent.listStockIdsWithEvents()) result.add(stockId);
-  for (const stockId of await ctx.repos.researchNote.listStockIdsWithNotes()) result.add(stockId);
+  for (const stockId of await ctx.repos.researchIndex.listStockSubjectKeys()) result.add(stockId);
   return [...result].sort();
 }
 

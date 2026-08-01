@@ -18,7 +18,12 @@ export const AGENT_V1_TOOL_NAMES = [
   'get_advice',
   'get_advice_stats',
   'list_trades',
-  'list_research_notes',
+  'list_research_topics',
+  'get_research_topic',
+  'list_research_documents',
+  'get_research_document',
+  'search_research_documents',
+  'get_stock_research_view',
 ] as const;
 
 const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set(['batch_quote']);

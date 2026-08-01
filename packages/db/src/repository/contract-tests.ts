@@ -14,7 +14,8 @@ import {
   quantity,
   type Report,
   type RepositoryRegistry,
-  type ResearchNote,
+  type ResearchDocumentIndex,
+  type ResearchTopicIndex,
   STANDARD_DISCLAIMERS,
   type Stock,
   type StockEvent,
@@ -365,18 +366,39 @@ export const makeWatchRun = (id: string, overrides: Partial<WatchRun> = {}): Wat
   ...overrides,
 });
 
-export const makeResearchNote = (
+const makeResearchTopic = (
   id: string,
-  overrides: Partial<ResearchNote> = {},
-): ResearchNote => ({
-  id,
-  stockId: 'stk-1',
-  kind: 'note',
-  content: `笔记内容-${id}`,
-  active: false,
+  overrides: Partial<ResearchTopicIndex> = {},
+): ResearchTopicIndex => ({
+  id: `topic_${id}`,
+  title: id,
+  kind: 'industry',
   tags: [],
-  createdAt: T1,
-  updatedAt: T1,
+  vaultId: 'vault-test',
+  relativePath: `Research/${id}.md`,
+  contentHash: 'a'.repeat(64),
+  fileModifiedAt: T1,
+  indexedAt: T1,
+  availability: 'available',
+  ...overrides,
+});
+
+const makeResearchDocument = (
+  id: string,
+  overrides: Partial<ResearchDocumentIndex> = {},
+): ResearchDocumentIndex => ({
+  id: `doc_${id}`,
+  title: id,
+  kind: 'report',
+  importedAt: T1,
+  tags: [],
+  vaultId: 'vault-test',
+  relativePath: `Research/${id}.md`,
+  attachmentPaths: [],
+  contentHash: 'b'.repeat(64),
+  fileModifiedAt: T1,
+  indexedAt: T1,
+  availability: 'available',
   ...overrides,
 });
 
@@ -2030,67 +2052,106 @@ export const registerRepositoryContractTests = (
       });
     });
 
-    describe('ResearchNoteRepository', () => {
-      it('save + findById 往返一致；listByStock 按 createdAt 倒序 + kind/since 过滤', async () => {
-        await repos.researchNote.save(makeResearchNote('n1', { createdAt: T1, kind: 'note' }));
-        await repos.researchNote.save(
-          makeResearchNote('n2', { createdAt: T2, updatedAt: T2, kind: 'thesis', active: true }),
-        );
-        expect(await repos.researchNote.findById('n1')).toEqual(
-          makeResearchNote('n1', { createdAt: T1, kind: 'note' }),
-        );
-        const all = await repos.researchNote.listByStock('stk-1');
-        expect(all.map((n) => n.id)).toEqual(['n2', 'n1']);
-        const theses = await repos.researchNote.listByStock('stk-1', { kind: 'thesis' });
-        expect(theses.map((n) => n.id)).toEqual(['n2']);
-        const sinceT2 = await repos.researchNote.listByStock('stk-1', { since: T2 });
-        expect(sinceT2.map((n) => n.id)).toEqual(['n2']);
-      });
-
-      it('save 新 active thesis 停用同股旧 active thesis（事务）', async () => {
-        await repos.researchNote.save(
-          makeResearchNote('t1', { kind: 'thesis', active: true, createdAt: T1 }),
-        );
-        await repos.researchNote.save(
-          makeResearchNote('t2', {
-            kind: 'thesis',
-            active: true,
-            supersedesId: 't1',
-            createdAt: T2,
-            updatedAt: T2,
-          }),
-        );
-        expect((await repos.researchNote.findById('t1'))?.active).toBe(false);
-        expect((await repos.researchNote.findById('t2'))?.active).toBe(true);
-        const active = await repos.researchNote.listByStock('stk-1', {
-          kind: 'thesis',
-          activeOnly: true,
+    describe('ResearchIndexRepository', () => {
+      it('upsert 后按 topic、subject 和正文搜索，并投影关联股票', async () => {
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'complete',
+          topics: [makeResearchTopic('industry')],
+          documents: [makeResearchDocument('report')],
+          topicDocuments: [
+            {
+              topicId: 'topic_industry',
+              documentId: 'doc_report',
+              relation: 'supporting',
+            },
+          ],
+          subjectLinks: [
+            {
+              ownerKind: 'topic',
+              ownerId: 'topic_industry',
+              subjectKind: 'stock',
+              subjectKey: '600519.SH',
+              relation: 'primary',
+            },
+            {
+              ownerKind: 'document',
+              ownerId: 'doc_report',
+              subjectKind: 'stock',
+              subjectKey: '000001.SZ',
+              relation: 'related',
+            },
+          ],
+          chunks: [
+            {
+              documentId: 'doc_report',
+              ordinal: 0,
+              headingPath: '摘要',
+              contentHash: 'b'.repeat(64),
+              body: '库存周期改善',
+            },
+          ],
+          seenTopicIds: new Set(['topic_industry']),
+          seenDocumentIds: new Set(['doc_report']),
+          indexedAt: T1,
         });
-        expect(active.map((n) => n.id)).toEqual(['t2']);
-      });
 
-      it('deactivateTheses 停用全部 active thesis 并返回条数', async () => {
-        await repos.researchNote.save(
-          makeResearchNote('t1', { kind: 'thesis', active: true, createdAt: T1 }),
+        expect(await repos.researchIndex.listTopics({ subject: 'stock:600519.SH' })).toHaveLength(
+          1,
         );
-        const count = await repos.researchNote.deactivateTheses('stk-1');
-        expect(count).toBe(1);
-        expect((await repos.researchNote.findById('t1'))?.active).toBe(false);
+        expect(await repos.researchIndex.listDocuments({ topicId: 'topic_industry' })).toHaveLength(
+          1,
+        );
+        expect(await repos.researchIndex.searchDocuments({ text: '库存' })).toHaveLength(1);
+        expect(await repos.researchIndex.listStockSubjectKeys()).toEqual([
+          '000001.SZ',
+          '600519.SH',
+        ]);
       });
 
-      it('listStockIdsWithNotes 返回去重排序后的研究股票集合', async () => {
-        await repos.researchNote.save(makeResearchNote('n1', { stockId: 'stk-2' }));
-        await repos.researchNote.save(makeResearchNote('n2', { stockId: 'stk-1' }));
-        await repos.researchNote.save(makeResearchNote('n3', { stockId: 'stk-2' }));
-        expect(await repos.researchNote.listStockIdsWithNotes()).toEqual(['stk-1', 'stk-2']);
-      });
-
-      it('source-summary 缺 sourceUrl/fetchedAt 时拒绝', async () => {
-        await expect(
-          repos.researchNote.save(
-            makeResearchNote('bad', { kind: 'source-summary', content: 'x' }),
-          ),
-        ).rejects.toThrow();
+      it('只在完整扫描中把未见条目标记为 missing', async () => {
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'complete',
+          topics: [makeResearchTopic('industry')],
+          documents: [],
+          topicDocuments: [],
+          subjectLinks: [],
+          chunks: [],
+          seenTopicIds: new Set(['topic_industry']),
+          seenDocumentIds: new Set(),
+          indexedAt: T1,
+        });
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'partial',
+          topics: [],
+          documents: [],
+          topicDocuments: [],
+          subjectLinks: [],
+          chunks: [],
+          seenTopicIds: new Set(),
+          seenDocumentIds: new Set(),
+          indexedAt: T2,
+        });
+        expect((await repos.researchIndex.findTopic('topic_industry'))?.availability).toBe(
+          'available',
+        );
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'complete',
+          topics: [],
+          documents: [],
+          topicDocuments: [],
+          subjectLinks: [],
+          chunks: [],
+          seenTopicIds: new Set(),
+          seenDocumentIds: new Set(),
+          indexedAt: T3,
+        });
+        expect((await repos.researchIndex.findTopic('topic_industry'))?.availability).toBe(
+          'missing',
+        );
       });
     });
 

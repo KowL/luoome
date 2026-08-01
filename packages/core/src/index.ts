@@ -18,7 +18,7 @@ export * from './entity/notification.js';
 export * from './entity/provenance.js';
 export * from './entity/quote.js';
 export * from './entity/report.js';
-export * from './entity/research-note.js';
+export * from './entity/research-vault.js';
 export * from './entity/signal-observation.js';
 export * from './entity/stock.js';
 export * from './entity/stock-event.js';
@@ -34,6 +34,7 @@ export * from './env-file.js';
 export * from './error/index.js';
 // 仓储接口
 export * from './repository/index.js';
+export * from './research-vault.js';
 export * from './strategy/builtin.js';
 export * from './strategy/evaluator.js';
 export * from './strategy/expression.js';
