@@ -103,16 +103,17 @@ tushare 各接口 vol 字段单位不一致：
 `daily` 的日线数据本身不包含 `DailyBar.adjFactor`，必须额外请求：
 
 ```text
-POST {"api_name": "adj_factor", "params": {"ts_code": "...", "start_date": "...", "end_date": "..."}}
+POST {"api_name": "adj_factor", "params": {"ts_code": "...", "end_date": "..."}}
 ```
 
-按 `(ts_code, trade_date)` 与日线 join。Adapter 在 `fetchDailyBars` 内：
+`adj_factor` 不带 `start_date` 取全量历史（≤ end_date）：官方源按交易日逐日返回，但部分代理
+网关只返回因子变动日的稀疏行。Adapter 在 `fetchDailyBars` 内：
 
-1. 并发请求 `daily` 与 `adj_factor`；
-2. `daily` 失败 → 整体失败；
-3. `adj_factor` 失败 → warn，使用空因子集合继续（只降级不整批失败）；
-4. 按 `trade_date` 合并；
-5. 缺复权因子的 bar 用 1.0 占位并打 warn 日志。
+1. 并发请求 `daily` 与 `adj_factor`；任一失败 → 整体失败；
+2. 因子行过滤为有效变动点（有限且 > 0）并按日期升序；
+3. 每个 bar 日的当日因子 = 最后一个 ≤ 当日的变动点因子（前向填充；密集逐日源等价于精确匹配）；
+4. qfq 换算：`ratio = 当日因子 / 最新变动点因子`，OHLC × ratio；
+5. 因子完全缺失，或 bar 日早于首个变动日 → 抛 `unsupported_adjustment` 走降级。
 
 ### 3.6 Adapter 失败必须有可恢复语义
 
@@ -173,13 +174,12 @@ TushareMarketAdapter.fetchDailyBars(code, range)
   ├─ 把 range 拆成 (start_date, end_date)
   ├─ 并发发起：
   │   ├─ 必需：tushareQuery('daily', {ts_code, start_date, end_date})
-  │   └─ 可降级：tushareQuery('adj_factor', {ts_code, start_date, end_date})
-  ├─ daily 失败 → 整体失败
-  ├─ adj_factor 失败 → warn，使用空因子集合继续
+  │   └─ 必需：tushareQuery('adj_factor', {ts_code, end_date})（全量历史）
+  ├─ daily / adj_factor 任一失败 → 整体失败
   ├─ 解析 envelope → rows
   ├─ 单位归一：vol 手 → 股（×100）
-  ├─ 按 trade_date join adj_factor
-  ├─ 缺 adj_factor → 1.0 占位 + warn 日志
+  ├─ 因子变动点前向填充出逐日因子，OHLC ×（当日因子 / 最新因子）换算 qfq
+  ├─ 因子完全缺失或 bar 日早于首个变动日 → unsupported_adjustment
   ├─ 按 date 升序、去重、丢弃范围外
   └─ 返回 DailyBar[]（source='tushare'）
 ```
@@ -564,9 +564,9 @@ logger.info('tushare.fetchDailyBars ok', { stockCode, source: 'tushare', count: 
 5. `fetchQuote` 网络错误 / 超时 → 转译为 `tushare network` / `tushare timeout`；
 6. envelope code≠0 → 抛 `tushare upstream_error`（含权限类 2002）；
 7. `fetchQuote` items 为空 → 抛 `tushare not_found`；
-8. `fetchDailyBars` 日线 + 复权因子都成功 → 按 trade_date 合并、vol × 100、缺因子 1.0 占位；
-9. `fetchDailyBars` 复权因子完全缺失 → 不抛错，warn 日志，全部 1.0；
-10. `fetchDailyBars` 复权因子请求或 envelope 解析失败 → 日线仍返回，warn 日志；
+8. `fetchDailyBars` 日线 + 复权因子都成功 → 变动点前向填充出逐日因子、换算 qfq、vol × 100；
+9. `fetchDailyBars` 复权因子完全缺失，或 bar 日早于首个变动日 → 抛 `unsupported_adjustment`；
+10. `fetchDailyBars` 复权因子请求或 envelope 解析失败 → 整批失败；
 11. `fetchDailyBars` 日线成功但越界 → 范围外 bar 丢弃；
 12. `batchQuote` 部分失败 → 只保留成功项；
 13. `searchStocks` 把 `SSE` / `SZSE` 映射为 `SH` / `SZ`，并剔除其它交易所候选、截断 20 条；
@@ -679,7 +679,7 @@ docs/ddd/adshare-market-adapter-design.md
 - 传输层为 tushare 官方 POST envelope 单一协议，token 随 body 发送，不引入私有代理；
 - A 股覆盖范围显式声明；HK / US / BJ 由 adapter 拒绝而非静默失败；
 - 成交量单位按接口分别归一为股（`daily` 手×100，`rt_k` 已是股）；
-- 复权因子走单独接口，缺失不阻塞整批；
+- 复权因子走单独接口全量历史，按变动点前向填充；完全缺失或早于首个变动日才降级失败；
 - manager 不感知额外错误类，错误统一前缀 `tushare ...`；
 - 不引入自动交易、不写入 Trade / Advice / WatchTrigger；
 - 抑制窗口沿用“窗口内跳过主备、直达第三源”的现有语义，不宣称它会冷却 Tushare；

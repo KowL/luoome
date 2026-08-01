@@ -290,8 +290,29 @@ describe('TushareMarketAdapter.fetchDailyBars', () => {
     expect(infos.some((l) => l.message === 'tushare.fetchDailyBars ok')).toBe(true);
   });
 
-  it('部分日期缺复权因子 → 拒绝把 raw 日线伪装成 qfq', async () => {
-    const { adapter } = makeAdapter(dailyFetch(DAILY_ITEMS, [['600519.SH', '20260720', 1.5]]));
+  it('稀疏复权因子（仅变动日）→ 前向填充为逐日因子，与密集源结果一致', async () => {
+    const { adapter, requests, warns } = makeAdapter(
+      dailyFetch(DAILY_ITEMS, [
+        // 区间前的变动点：0720 无精确行，应继承 0710 的因子
+        ['600519.SH', '20260710', 1.5],
+        ['600519.SH', '20260721', 1.6],
+      ]),
+    );
+    const bars = await adapter.fetchDailyBars('600519.SH', DAILY_RANGE);
+    const adjRequest = requests.find((r) => r.apiName === 'adj_factor');
+    // 稀疏源需全量历史（≤ end_date）才能前向填充，不下发 start_date
+    expect(adjRequest?.params.start_date).toBeUndefined();
+    expect(adjRequest?.params.end_date).toBe('20260721');
+    expect(bars).toHaveLength(2);
+    expect(bars[0]?.sourceAdjFactor).toBe(1.5);
+    expect(bars[0]?.close).toBe(89.5313); // 95.5 × 1.5/1.6，与密集逐日源一致
+    expect(bars[1]?.sourceAdjFactor).toBe(1.6);
+    expect(bars[1]?.close).toBe(96.5);
+    expect(warns.some((w) => w.message.includes('adj_factor missing'))).toBe(false);
+  });
+
+  it('bar 日早于首个因子变动日 → 无法确定复权口径，unsupported_adjustment', async () => {
+    const { adapter } = makeAdapter(dailyFetch(DAILY_ITEMS, [['600519.SH', '20260722', 1.5]]));
     await expect(adapter.fetchDailyBars('600519.SH', DAILY_RANGE)).rejects.toThrow(
       /unsupported_adjustment/,
     );

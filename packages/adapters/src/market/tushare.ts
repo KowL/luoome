@@ -20,7 +20,8 @@ import { tushareQuery } from '../tushare/client.js';
  * - 只覆盖 SH / SZ A 股；HK / US / BJ 抛 unsupported_market（manager 视作一次失败）。
  * - 实时快照走 `rt_k`（vol 单位=股，price 即最新价）；
  *   日线走 `daily`（vol 单位=手，×100 归一为股），
- *   复权因子单独走 `adj_factor`，缺失不阻塞整批。
+ *   复权因子走 `adj_factor` 全量历史（≤ end_date），按变动点前向填充出逐日因子；
+ *   因子完全缺失或 bar 日早于首个变动日时抛 unsupported_adjustment 走降级。
  * - 所有远端调用复用 tushareQuery（POST envelope / 超时 / 5xx+网络重试）。
  * - rt_k 需单独开通权限；daily / adj_factor 需 2000 积分起（见 runbook）。
  */
@@ -254,6 +255,8 @@ export class TushareMarketAdapter {
       const startDate = formatYmd(range.start);
       const endDate = formatYmd(range.end);
 
+      // adj_factor 不带 start_date：官方源按交易日逐日返回，但部分代理网关只返回
+      // 因子变动日的稀疏行；拿全量历史（≤ end_date）才能对每个 bar 日前向填充出当日因子。
       const [dailyRows, adjRows] = await Promise.all([
         tushareQuery(
           'daily',
@@ -264,14 +267,15 @@ export class TushareMarketAdapter {
         ),
         tushareQuery(
           'adj_factor',
-          { ts_code: tsCode, start_date: startDate, end_date: endDate },
+          { ts_code: tsCode, end_date: endDate },
           this.config,
           this.fetchImpl,
           ['ts_code', 'trade_date', 'adj_factor'],
         ),
       ]);
 
-      const adjByDate = new Map<string, number>();
+      // 复权因子变动点（升序）：因子自变动日起生效，直到下一个变动日。
+      const adjChangePoints: Array<{ readonly date: string; readonly factor: number }> = [];
       for (const row of adjRows) {
         const date = normalizeTradeDate(row.trade_date);
         if (
@@ -280,15 +284,32 @@ export class TushareMarketAdapter {
           Number.isFinite(row.adj_factor) &&
           row.adj_factor > 0
         ) {
-          adjByDate.set(date, row.adj_factor);
+          adjChangePoints.push({ date, factor: row.adj_factor });
         }
       }
-      const latestAdjFactor = [...adjByDate.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .at(-1)?.[1];
+      adjChangePoints.sort((left, right) => left.date.localeCompare(right.date));
+      const latestAdjFactor = adjChangePoints.at(-1)?.factor;
       if (dailyRows.length > 0 && latestAdjFactor === undefined) {
         throw new Error(`unsupported_adjustment: adj_factor missing for ${tsCode}`);
       }
+      // 当日因子 = 最后一个 ≤ 当日的变动点因子（密集逐日源等价于精确匹配）。
+      const adjFactorAt = (date: string): number | undefined => {
+        let low = 0;
+        let high = adjChangePoints.length - 1;
+        let found = -1;
+        while (low <= high) {
+          const middle = (low + high) >> 1;
+          const point = adjChangePoints[middle];
+          if (point === undefined) break;
+          if (point.date <= date) {
+            found = middle;
+            low = middle + 1;
+          } else {
+            high = middle - 1;
+          }
+        }
+        return found === -1 ? undefined : adjChangePoints[found]?.factor;
+      };
 
       const seen = new Set<string>();
       const bars: DailyBar[] = [];
@@ -307,8 +328,9 @@ export class TushareMarketAdapter {
           continue;
         }
         seen.add(date);
-        const adj = adjByDate.get(date);
+        const adj = adjFactorAt(date);
         if (adj === undefined) {
+          // bar 日早于历史上首个因子变动日，无法确定当日复权口径
           throw new Error(`unsupported_adjustment: adj_factor missing for ${tsCode} ${date}`);
         }
         const ratio = adj / (latestAdjFactor as number);
