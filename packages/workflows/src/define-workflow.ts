@@ -24,6 +24,10 @@ import type {
   GetHoldingOutput,
   GetPreviousClosesInput,
   GetPreviousClosesOutput,
+  GetResearchDocumentInput,
+  GetResearchDocumentOutput,
+  GetResearchTopicInput,
+  GetResearchTopicOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
   LimitUpLadderCompareInput,
@@ -36,6 +40,10 @@ import type {
   ListAlertPlansOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
+  ListResearchDocumentsInput,
+  ListResearchDocumentsOutput,
+  ListResearchTopicsInput,
+  ListResearchTopicsOutput,
   ListStockEventsInput,
   ListStockEventsOutput,
   ListStrategiesInput,
@@ -58,6 +66,8 @@ import type {
   SaveReportOutput,
   SaveWatchTriggerInput,
   SaveWatchTriggerOutput,
+  SearchResearchDocumentsInput,
+  SearchResearchDocumentsOutput,
   SearchStocksInput,
   SearchStocksOutput,
   SendNotificationInput,
@@ -72,6 +82,8 @@ import type {
   SyncDailyBarsOutput,
   SyncQuotesInput,
   SyncQuotesOutput,
+  SyncResearchVaultInput,
+  SyncResearchVaultOutput,
   SyncStockEventsInput,
   SyncStockEventsOutput,
   SyncStockUniverseInput,
@@ -105,6 +117,30 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
 export interface WorkflowToolMap {
+  readonly list_research_topics: ToolAccessor<
+    typeof ListResearchTopicsInput,
+    typeof ListResearchTopicsOutput
+  >;
+  readonly get_research_topic: ToolAccessor<
+    typeof GetResearchTopicInput,
+    typeof GetResearchTopicOutput
+  >;
+  readonly list_research_documents: ToolAccessor<
+    typeof ListResearchDocumentsInput,
+    typeof ListResearchDocumentsOutput
+  >;
+  readonly get_research_document: ToolAccessor<
+    typeof GetResearchDocumentInput,
+    typeof GetResearchDocumentOutput
+  >;
+  readonly search_research_documents: ToolAccessor<
+    typeof SearchResearchDocumentsInput,
+    typeof SearchResearchDocumentsOutput
+  >;
+  readonly sync_research_vault: ToolAccessor<
+    typeof SyncResearchVaultInput,
+    typeof SyncResearchVaultOutput
+  >;
   readonly list_accounts: ToolAccessor<typeof ListAccountsInput, typeof ListAccountsOutput>;
   readonly list_alert_plans: ToolAccessor<typeof ListAlertPlansInput, typeof ListAlertPlansOutput>;
   readonly get_account: ToolAccessor<typeof GetAccountInput, typeof GetAccountOutput>;

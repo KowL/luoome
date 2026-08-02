@@ -10,7 +10,6 @@ import type {
   Quote,
   Report,
   RepositoryRegistry,
-  ResearchNote,
   SignalObservation,
   Stock,
   StockEvent,
@@ -33,7 +32,8 @@ import { InMemoryHoldingRepository } from './holding.js';
 import { InMemoryNotificationRepository } from './notification.js';
 import { InMemoryQuoteRepository } from './quote.js';
 import { InMemoryReportRepository } from './report.js';
-import { InMemoryResearchNoteRepository } from './research-note.js';
+import { InMemoryResearchIndexRepository } from './research-index.js';
+import { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 import { InMemorySignalObservationRepository } from './signal-observation.js';
 import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
@@ -55,7 +55,8 @@ export { InMemoryHoldingRepository } from './holding.js';
 export { InMemoryNotificationRepository } from './notification.js';
 export { InMemoryQuoteRepository } from './quote.js';
 export { InMemoryReportRepository } from './report.js';
-export { InMemoryResearchNoteRepository } from './research-note.js';
+export { InMemoryResearchIndexRepository } from './research-index.js';
+export { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { InMemorySignalObservationRepository } from './signal-observation.js';
 export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
@@ -90,8 +91,7 @@ export interface InMemorySeed {
   readonly alertPlans?: readonly AlertPlan[];
   readonly watchTriggers?: readonly WatchTrigger[];
   readonly watchRuns?: readonly WatchRun[];
-  /** ruo 迁移起：可选预置研究笔记 + 公司事件 + workflow 运行。 */
-  readonly researchNotes?: readonly ResearchNote[];
+  /** ruo 迁移起：可选预置公司事件 + workflow 运行。 */
   readonly stockEvents?: readonly StockEvent[];
   readonly workflowRuns?: readonly WorkflowRun[];
 }
@@ -120,7 +120,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const watchRuleState = new InMemoryWatchRuleStateRepository();
   const watchRun = new InMemoryWatchRunRepository();
   // ruo 迁移起
-  const researchNote = new InMemoryResearchNoteRepository();
+  const researchIndex = new InMemoryResearchIndexRepository();
+  const researchVaultSyncRun = new InMemoryResearchVaultSyncRunRepository();
   const stockEvent = new InMemoryStockEventRepository();
   const workflowRun = new InMemoryWorkflowRunRepository();
   if (seed !== undefined) {
@@ -144,7 +145,6 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const p of seed.alertPlans ?? []) void alertPlan.save(p);
     for (const t of seed.watchTriggers ?? []) watchTrigger.put(t);
     for (const r of seed.watchRuns ?? []) watchRun.put(r);
-    for (const n of seed.researchNotes ?? []) researchNote.put(n);
     for (const e of seed.stockEvents ?? []) stockEvent.put(e);
     for (const r of seed.workflowRuns ?? []) workflowRun.put(r);
   }
@@ -168,7 +168,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     watchTrigger,
     watchRuleState,
     watchRun,
-    researchNote,
+    researchIndex,
+    researchVaultSyncRun,
     stockEvent,
     workflowRun,
     chat,

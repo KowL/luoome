@@ -60,7 +60,9 @@ export const startMcpServer = async (
 
   const { ctx, close: closeCtx } = opts.context ?? (await createServerContext(env));
 
-  const allowedTools = selectMcpTools(toolRegistry.all(), allowedSideEffects);
+  const allowedTools = selectMcpTools(toolRegistry.all(), allowedSideEffects).filter(
+    (tool) => env.LUOOME_EXPOSE_RESEARCH === 'true' || !tool.name.includes('research'),
+  );
   // createRegistry(...).toMCP() 复用 tools 包的 JSON Schema 转换
   //（z.toJSONSchema(io:'input', unrepresentable:'any')），并顺带做重名检查。
   const descriptors = createRegistry(allowedTools).toMCP();

@@ -6,7 +6,17 @@ import type { Holding } from '../entity/holding.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
-import type { ResearchNote, ResearchNoteKind } from '../entity/research-note.js';
+import type {
+  ResearchAvailability,
+  ResearchDocumentChunk,
+  ResearchDocumentIndex,
+  ResearchDocumentKind,
+  ResearchSubjectLink,
+  ResearchTopicDocument,
+  ResearchTopicIndex,
+  ResearchTopicKind,
+  ResearchVaultSyncRun,
+} from '../entity/research-vault.js';
 import type { SignalObservation, SignalObservationStatus } from '../entity/signal-observation.js';
 import type { Stock } from '../entity/stock.js';
 import type { StockEvent, StockEventKind, StockEventStatus } from '../entity/stock-event.js';
@@ -41,6 +51,7 @@ import type {
   WatchlistSyncRun,
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
+import type { ResearchSearchHit } from '../research-vault.js';
 
 /**
  * Repository 接口（ARCHITECTURE §2.5 / §4.3）。
@@ -182,14 +193,75 @@ export interface RepositoryRegistry {
   readonly watchRuleState: WatchRuleStateRepository;
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
   readonly watchRun: WatchRunRepository;
-  /** ruo 迁移 Phase 1A；研究档案笔记 CRUD + thesis 版本链。 */
-  readonly researchNote: ResearchNoteRepository;
+  readonly researchIndex: ResearchIndexRepository;
+  readonly researchVaultSyncRun: ResearchVaultSyncRunRepository;
   /** ruo 迁移 Phase 1B；公司事件（幂等 upsert by (provider, externalId)）。 */
   readonly stockEvent: StockEventRepository;
   /** ruo 迁移 Phase 1C；workflow 运行审计。 */
   readonly workflowRun: WorkflowRunRepository;
   /** Web AI 对话：账户隔离的会话与 UI message parts。 */
   readonly chat: ChatRepository;
+}
+
+export interface ResearchTopicQuery {
+  readonly kind?: ResearchTopicKind;
+  readonly subject?: string;
+  readonly tags?: readonly string[];
+  readonly includeArchived?: boolean;
+  readonly availability?: ResearchAvailability;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+export interface ResearchDocumentQuery {
+  readonly topicId?: string;
+  readonly subject?: string;
+  readonly kind?: ResearchDocumentKind;
+  readonly tags?: readonly string[];
+  readonly availability?: ResearchAvailability;
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly publishedFrom?: Date;
+  readonly publishedTo?: Date;
+}
+export interface ResearchSearchQuery {
+  readonly text: string;
+  readonly topicId?: string;
+  readonly subject?: string;
+  readonly kind?: ResearchDocumentKind;
+  readonly limit?: number;
+}
+export interface ResearchIndexApplySummary {
+  readonly added: number;
+  readonly updated: number;
+  readonly unchanged: number;
+  readonly missing: number;
+  readonly invalid: number;
+  readonly conflicts: number;
+}
+export interface ResearchIndexRepository {
+  applyIndexBatch(input: {
+    readonly vaultId: string;
+    readonly completeness: 'complete' | 'partial';
+    readonly topics: readonly ResearchTopicIndex[];
+    readonly documents: readonly ResearchDocumentIndex[];
+    readonly topicDocuments: readonly ResearchTopicDocument[];
+    readonly subjectLinks: readonly ResearchSubjectLink[];
+    readonly chunks: readonly ResearchDocumentChunk[];
+    readonly seenTopicIds: ReadonlySet<string>;
+    readonly seenDocumentIds: ReadonlySet<string>;
+    readonly indexedAt: Date;
+  }): Promise<ResearchIndexApplySummary>;
+  findTopic(id: string): Promise<ResearchTopicIndex | null>;
+  findDocument(id: string): Promise<ResearchDocumentIndex | null>;
+  listTopics(query: ResearchTopicQuery): Promise<readonly ResearchTopicIndex[]>;
+  listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]>;
+  searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]>;
+  listStockSubjectKeys(): Promise<readonly string[]>;
+}
+export interface ResearchVaultSyncRunRepository {
+  save(run: ResearchVaultSyncRun): Promise<void>;
+  findById(id: string): Promise<ResearchVaultSyncRun | null>;
+  list(vaultId: string, limit?: number): Promise<readonly ResearchVaultSyncRun[]>;
 }
 
 export interface SignalObservationRepository {
@@ -393,32 +465,6 @@ export interface NotificationRepository {
     readonly since?: Date;
     readonly limit?: number;
   }): Promise<readonly Notification[]>;
-}
-
-/**
- * 研究档案笔记仓储（ruo 迁移 Phase 1A，docs/ddd/ruo-feature-migration-detailed-design.md §3.1 / §7.1）。
- *
- * thesis 版本链：save 一条 active=true 的 thesis 时，同 stockId 其它 thesis 必须置 active=false
- * （实现层事务保证）。deactivateTheses 供 tool / repo 在插入新版本前停用旧版本。
- */
-export interface ResearchNoteRepository {
-  save(note: ResearchNote): Promise<void>;
-  findById(id: string): Promise<ResearchNote | null>;
-  /** 按股票列出；kind / activeOnly / since 过滤，按 createdAt 倒序。 */
-  listByStock(
-    stockId: string,
-    opts?: {
-      readonly kind?: ResearchNoteKind;
-      readonly activeOnly?: boolean;
-      readonly since?: Date;
-      readonly limit?: number;
-    },
-  ): Promise<readonly ResearchNote[]>;
-  /** 存在研究档案的股票 id 集合（盘后日线相关范围计算用）。 */
-  listStockIdsWithNotes(): Promise<readonly string[]>;
-  /** 停用某股票全部 active thesis（插入新版本前调用）；返回被停用的条数。 */
-  deactivateTheses(stockId: string): Promise<number>;
-  remove(id: string): Promise<void>;
 }
 
 /**

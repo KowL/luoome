@@ -5,7 +5,7 @@ import { InvariantError } from '../error/index.js';
 /**
  * 公司事件（ruo 能力迁移 Phase 1B，docs/ddd/ruo-feature-migration-detailed-design.md §3.2）。
  *
- * 事实层：财报 / 解禁 / 分红 / 股东大会 / 公告 / 手工事件。与 ResearchNote（观点）解耦。
+ * 事实层：财报 / 解禁 / 分红 / 股东大会 / 公告 / 手工事件。与 Vault 研究正文解耦。
  *
  * - source='external' → provider / externalId 必填；(provider, externalId) 唯一（幂等 upsert）。
  * - source='manual' → provider / externalId 为空（SQLite 唯一索引天然放行多 NULL）。

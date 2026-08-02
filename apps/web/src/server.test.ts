@@ -62,6 +62,57 @@ describe('Web 信息架构', () => {
   });
 });
 
+describe('研究 Vault API', () => {
+  it('按主题和显式股票 SubjectLink 查询可重建索引', async () => {
+    const now = new Date('2026-08-01T00:00:00.000Z');
+    await appCtx.repos.researchIndex.applyIndexBatch({
+      vaultId: 'vault-web',
+      completeness: 'complete',
+      topics: [
+        {
+          id: 'topic_web_industry',
+          title: '白酒库存周期',
+          kind: 'industry',
+          tags: ['白酒'],
+          vaultId: 'vault-web',
+          relativePath: 'Research/Topics/白酒库存周期.md',
+          contentHash: 'a'.repeat(64),
+          fileModifiedAt: now,
+          indexedAt: now,
+          availability: 'available',
+        },
+      ],
+      documents: [],
+      topicDocuments: [],
+      subjectLinks: [
+        {
+          ownerKind: 'topic',
+          ownerId: 'topic_web_industry',
+          subjectKind: 'stock',
+          subjectKey: '600519.SH',
+          relation: 'related',
+        },
+      ],
+      chunks: [],
+      seenTopicIds: new Set(['topic_web_industry']),
+      seenDocumentIds: new Set(),
+      indexedAt: now,
+    });
+
+    const topics = (await (
+      await app.fetch(new Request('http://test/api/research/topics'))
+    ).json()) as { ok: boolean; data?: { topics: Array<{ id: string }> } };
+    expect(topics.ok).toBe(true);
+    expect(topics.data?.topics.some((topic) => topic.id === 'topic_web_industry')).toBe(true);
+
+    const stockView = (await (
+      await app.fetch(new Request('http://test/api/research/stocks/600519.SH'))
+    ).json()) as { ok: boolean; data?: { topics: Array<{ id: string }> } };
+    expect(stockView.ok).toBe(true);
+    expect(stockView.data?.topics.map((topic) => topic.id)).toContain('topic_web_industry');
+  });
+});
+
 describe('报告 API', () => {
   it('保存报告后可通过历史、详情和 Markdown 导出端点读取', async () => {
     const now = '2026-07-29T10:00:00.000Z';

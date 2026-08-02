@@ -117,6 +117,47 @@ describe('tool/sync_daily_bars', () => {
     expect(calls).not.toContain('601318.SH');
   });
 
+  it('relevant 范围纳入显式关联研究 Topic 或 Document 的股票', async () => {
+    const calls: string[] = [];
+    const now = new Date('2026-07-28T08:30:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await base.repos.researchIndex.applyIndexBatch({
+      vaultId: 'vault-test',
+      completeness: 'complete',
+      topics: [],
+      documents: [],
+      topicDocuments: [],
+      subjectLinks: [
+        {
+          ownerKind: 'topic',
+          ownerId: 'topic_industry',
+          subjectKind: 'stock',
+          subjectKey: '600519.SH',
+          relation: 'related',
+        },
+      ],
+      chunks: [],
+      seenTopicIds: new Set(),
+      seenDocumentIds: new Set(),
+      indexedAt: now,
+    });
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      fetchDailyBars: async (stockId) => {
+        calls.push(stockId);
+        return [qfqBar(stockId, '2026-07-27')];
+      },
+    };
+
+    const result = await syncDailyBarsTool.execute(
+      { scope: 'relevant' },
+      { ...base, adapters: { ...base.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls).toContain('600519.SH');
+  });
+
   it('单股失败返回 partial，并保留其它股票已成功的日线', async () => {
     const base = await buildTestContext({
       clock: () => new Date('2026-07-28T08:30:00.000Z'),

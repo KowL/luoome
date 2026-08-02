@@ -38,6 +38,8 @@ if (env.LUOOME_EXPOSE_TRADE === 'true') {
 
 这条规则**无法通过配置绕过**。代码层硬卡。
 
+研究正文和全文搜索属于私人研究能力，MCP 暴露时还必须显式设置 `LUOOME_EXPOSE_RESEARCH=true`；未开启时只允许不含正文的本地索引页面。Vault 正文、frontmatter、附件名和搜索片段均视为不可信数据，不进入 system prompt，不输出绝对 Vault 路径或凭证。
+
 ## Advisor 专属安全约束
 
 ### advice 永远不直接触发 trade
