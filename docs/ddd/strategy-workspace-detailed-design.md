@@ -310,12 +310,12 @@ interface StrategyRunDiff {
 |---|---|---|
 | complete + selected>0 | 是 | 正常股票池 |
 | complete + selected=0 | 是 | 有效空结果，不显示错误 |
-| partial | 否 | 执行记录可见；当前股票池继续使用上一 complete run |
+| partial | 是（可用基准） | 少数 unknown/error 股票不影响整体结果；结果直接作为当前股票池 |
 | failed | 否 | 执行记录和异常提示可见；当前股票池不变 |
 | running | 否 | 显示进行中；禁止重复提交同策略同版本的正式运行 |
 
-“当前有效运行”的唯一规则是：该 Strategy 最新一条持久化 `status=complete` 的 run。不能使用最新尝试、
-最新 startedAt 或 Web 内存中的试跑结果代替。
+“当前有效运行”的唯一规则是：该 Strategy 最新一条持久化 `status=complete` 或 `partial` 的 run。不能使用最新尝试、
+最新 startedAt 或 Web 内存中的试跑结果代替；最近尝试为 failed/running 时回退到更早一条可用运行并给出 warning。
 
 ## 6. Repository 与存储
 
@@ -339,9 +339,9 @@ signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
 - StockPoolRepository；
 - CandidatePoolRepository；
 - StrategyDiffRepository；
-- LatestCompleteRunRepository。
+- LatestUsableRunRepository（complete 或 partial）。
 
-最后一项可由现有 `listRuns({ strategyId, status: 'complete', limit: 2 })` 表达，无需额外接口。
+最后一项可由现有 `listRuns({ strategyId, limit: 10 })` 拉取后在代码里过滤 complete|partial 表达，无需额外接口。
 
 ### 6.2 持久化与事务
 
@@ -547,11 +547,15 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 └── 策略工作台
     ├── 概览
     ├── 股票池
-    ├── 候选池
     ├── 执行记录
     ├── AI 洞察
     └── 设置
 ```
+
+> 2026-08-02：候选池 tab 已从工作台下线（用户拍板「只看股票池」），
+> 后端 view kind（rule-near-miss / ranking-near-miss）与 core 派生保留，仅前端下线。
+> 同日第二次修订：「数据不完整」视图一并下线，股票池为纯入选列表（分页 + 搜索），
+> kind（incomplete）仍保留供 API 与未来 UI 使用。
 
 “创建策略”和“模板中心”继续通过现有 modal 进入，不新增一级侧栏项。
 
@@ -614,9 +618,9 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 │ 策略 / Strategy Workspace                         [+ 新增策略]              │
 ├───────────────────┬─────────────────────────────────────────────────────────┤
 │ 策略目录          │ 趋势动量 v4   [运行中]        [样本试跑] [正式运行]      │
-│ ┌───────────────┐ │ 数据截止 08-01 15:10 · 最近完整运行 15:13               │
+│ ┌───────────────┐ │ 数据截止 08-01 15:10 · 最近可用运行 15:13               │
 │ │ 趋势动量  ●   │ ├─────────────────────────────────────────────────────────┤
-│ │ 低波红利      │ │ 概览  股票池  候选池  执行记录  AI 洞察  设置           │
+│ │ 低波红利      │ │ 概览  股票池  执行记录  AI 洞察  设置           │
 │ │ 事件反转      │ ├─────────────────────────────────────────────────────────┤
 │ └───────────────┘ │ [当前 38] [规则近失 12] [排名近失 20] [新增 4/退出 2]   │
 │                   │                                                         │
@@ -637,7 +641,7 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 - 名称；
 - active/draft/paused/archived badge；
 - 当前版本；
-- 当前股票数或 `尚无完整运行`；
+- 当前股票数或 `尚无可用运行`；
 - 最近尝试异常时显示带文字的 warning 标记。
 
 交互：
@@ -650,7 +654,7 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 
 ### 10.5 工作台头部与概览
 
-头部展示：名称、描述、owner、状态、当前版本、definitionHash 短值、dataAsOf、最近完整运行和最近尝试。
+头部展示：名称、描述、owner、状态、当前版本、definitionHash 短值、dataAsOf、最近可用运行和最近尝试。
 
 概览首行四个核心统计：
 
@@ -662,17 +666,21 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 第二层展示 provider 完整度、partial/failed 计数和最大排名变化。无有效 run 时显示一块明确空状态：
 
 ```text
-尚无完整运行
+尚无可用运行
 发布有效版本后可进行样本试跑或正式运行。试跑不会成为当前股票池。
 ```
 
-若最新尝试失败但存在旧 complete run，页面同时展示：
+若最新尝试失败或进行中但存在旧的可运行（complete 或 partial），页面同时展示：
 
-- 顶部 warning：`最近运行失败，当前结果仍来自 2026-08-01 15:13 的完整运行`；
-- 统计继续来自 current complete run；
+- 顶部 warning：`最近运行失败，当前结果仍来自 2026-08-01 15:13 的运行`；
+- 统计继续来自 current run；
 - “查看失败详情”跳到执行记录并选中失败 run。
 
 ### 10.6 股票池 tab
+
+> 2026-08-02（第二次修订）：股票池不再细分，「数据不完整」视图也已从工作台下线；
+> 池区域为纯入选（selected）股票列表，保留分页（每页 50）与代码/名称搜索。
+> 后端 view kind（rule-near-miss / ranking-near-miss / incomplete）与 core 派生全部保留，仅前端无 UI 入口。
 
 默认列：
 
@@ -697,9 +705,12 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 “加入 Watchlist”继续调用现有手工成员路径，source 为 manual，不写 StrategyResult，也不结束其他来源。
 “研究档案”保留为独立操作；点击名称或代码始终进入行情页。
 
-### 10.7 候选池 tab
+### 10.7 候选池视图（已从工作台下线）
 
-tab 内使用次级 segmented tabs：
+> 2026-08-02：候选池 tab 下线，随后「数据不完整」视图也一并下线（股票池为纯入选列表）；
+> near-miss 与 incomplete 两类视图均不再有 UI 入口，本节与 10.6 的交互描述保留作 kind 语义存档。
+
+原 tab 使用次级 segmented tabs：
 
 ```text
 [规则近失 12] [排名近失 20] [数据不完整 7]

@@ -4620,11 +4620,16 @@ body > .modal {
   gap: 4px;
 }
 
-.strategy-candidate-tabs {
-  display: flex;
-  flex-wrap: wrap;
+.strategy-pool-list {
+  display: grid;
   gap: var(--space-2);
-  margin-bottom: var(--space-4);
+}
+
+.strategy-pool-pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .strategy-result-table th:first-child,
@@ -4685,60 +4690,10 @@ body > .modal {
   border-top: 1px solid var(--line);
 }
 
-/* 运行详情弹窗（strategy-workspace）：结果列表 + StrategySignal */
+/* 运行详情弹窗（strategy-workspace）：StrategySignal 信号列表 */
 .strategy-run-detail {
   display: grid;
   gap: var(--space-3);
-}
-
-.strategy-run-detail-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.strategy-run-detail-results {
-  display: grid;
-  gap: var(--space-2);
-}
-
-/* 单条结果默认折叠为一行，点击行展开规则详情（advice-card 同款交互） */
-.strategy-run-result {
-  display: grid;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--panel);
-  cursor: pointer;
-}
-
-.strategy-run-result:hover {
-  border-color: var(--line-strong);
-}
-
-.strategy-run-result-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-.strategy-run-result-detail {
-  display: none;
-}
-
-.strategy-run-result.expanded .strategy-run-result-detail {
-  display: block;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line);
-}
-
-.strategy-run-pagination {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
 }
 
 .strategy-empty-state {

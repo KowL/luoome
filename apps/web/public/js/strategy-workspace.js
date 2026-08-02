@@ -1,23 +1,20 @@
 import { callApi } from './api.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
-import { $, el, fmtDateTime, mount } from './ui.js';
+import { $, el, fmtDateTime, fmtNum, mount } from './ui.js';
 
-const STRATEGY_TABS = new Set(['overview', 'pool', 'candidates', 'runs', 'insights', 'settings']);
-const CANDIDATE_VIEWS = new Set(['rule-near-miss', 'ranking-near-miss', 'incomplete']);
+const STRATEGY_TABS = new Set(['overview', 'pool', 'runs', 'insights', 'settings']);
 
 export const parseStrategyHash = (hash) => {
   const raw = String(hash ?? '').replace(/^#/, '');
   const queryIndex = raw.indexOf('?');
   const params = new URLSearchParams(queryIndex === -1 ? '' : raw.slice(queryIndex + 1));
   const tab = params.get('tab') ?? 'overview';
-  const candidateView = params.get('view') ?? 'rule-near-miss';
   return {
     strategyId: params.get('strategyId') ?? '',
     tab: STRATEGY_TABS.has(tab) ? tab : 'overview',
     ...(params.has('runId') ? { runId: params.get('runId') ?? '' } : {}),
     ...(params.has('compareRunId') ? { compareRunId: params.get('compareRunId') ?? '' } : {}),
-    candidateView: CANDIDATE_VIEWS.has(candidateView) ? candidateView : 'rule-near-miss',
   };
 };
 
@@ -27,17 +24,12 @@ export const buildStrategyHash = (state) => {
   params.set('tab', STRATEGY_TABS.has(state.tab) ? state.tab : 'overview');
   if (state.runId) params.set('runId', state.runId);
   if (state.compareRunId) params.set('compareRunId', state.compareRunId);
-  params.set(
-    'view',
-    CANDIDATE_VIEWS.has(state.candidateView) ? state.candidateView : 'rule-near-miss',
-  );
   return `#strategies?${params.toString()}`;
 };
 
 const TAB_LABELS = {
   overview: '概览',
   pool: '股票池',
-  candidates: '候选池',
   runs: '执行记录',
   insights: 'AI 洞察',
   settings: '设置',
@@ -60,15 +52,8 @@ const RULE_STATUS = {
   unknown: ['数据缺失', 'badge-important'],
   error: ['求值错误', 'badge-pos'],
 };
-const CANDIDATE_LABELS = {
-  'rule-near-miss': '规则近失',
-  'ranking-near-miss': '排名近失',
-  incomplete: '数据不完整',
-};
 const RESULT_VIEW_STATUS = {
   selected: ['入选', 'badge-active'],
-  'rule-near-miss': ['规则近失', 'badge-important'],
-  'ranking-near-miss': ['排名近失', 'badge-neutral'],
   incomplete: ['数据不完整', 'badge-important'],
   excluded: ['未入选', 'badge-neutral'],
 };
@@ -276,16 +261,14 @@ const renderOverview = (workspace, state) => {
     settings.type = 'button';
     settings.addEventListener('click', () => navigate(state, { tab: 'settings' }));
     return el('div', 'strategy-empty-state', [
-      el('span', 'section-kicker', 'NO COMPLETE RUN'),
-      el('h3', null, '尚无完整运行'),
+      el('span', 'section-kicker', 'NO USABLE RUN'),
+      el('h3', null, '尚无可用运行'),
       el('p', null, '发布有效版本后可进行样本试跑或正式运行。试跑不会成为当前股票池。'),
       settings,
     ]);
   }
   const grid = el('div', 'strategy-summary-grid', [
     metric('当前股票', overview.selectedCount),
-    metric('规则近失', overview.ruleNearMissCount),
-    metric('排名近失', overview.rankingNearMissCount),
     metric(
       '新增 / 退出',
       overview.enteredCount === undefined
@@ -316,61 +299,89 @@ const renderOverview = (workspace, state) => {
   ]);
 };
 
+const POOL_PAGE_SIZE = 50;
+
 const renderPool = async (strategyId, setStatus) => {
-  const result = await cachedGet(
-    `/api/strategies/${encodeURIComponent(strategyId)}/results?view=selected&sort=rank&order=asc&limit=200`,
-  );
-  if (!result.ok) return el('p', 'status error', errorText(result));
-  return el('div', null, [
+  const search = el('input');
+  search.type = 'search';
+  search.placeholder = '搜索代码或名称';
+  const searchBtn = el('button', 'btn btn-primary btn-sm', '搜索');
+  searchBtn.type = 'button';
+  const count = el('span', 'entity-count', '--');
+  const list = el('div', 'strategy-pool-list');
+  const pager = el('div', 'strategy-pool-pagination');
+  const prev = el('button', 'btn btn-outline btn-sm', '上一页');
+  const next = el('button', 'btn btn-outline btn-sm', '下一页');
+  const pageInfo = el('span', 'muted mono', '');
+  prev.type = 'button';
+  next.type = 'button';
+  pager.append(prev, pageInfo, next);
+  let page = 1;
+  let query = '';
+  let epoch = 0;
+  const render = async () => {
+    const current = ++epoch;
+    const params = new URLSearchParams({
+      view: 'selected',
+      sort: 'rank',
+      order: 'asc',
+      offset: String((page - 1) * POOL_PAGE_SIZE),
+      limit: String(POOL_PAGE_SIZE),
+    });
+    if (query.length > 0) params.set('query', query);
+    const result = await cachedGet(
+      `/api/strategies/${encodeURIComponent(strategyId)}/results?${params.toString()}`,
+    );
+    if (epoch !== current) return;
+    if (!result.ok) {
+      mount(list, el('p', 'status error', errorText(result)));
+      return;
+    }
+    const pageCount = Math.max(1, Math.ceil(result.data.total / POOL_PAGE_SIZE));
+    if (page > pageCount) {
+      // 快速翻页越过末页时，按钳制后的页码重取（offset 已随 page 变化）
+      page = pageCount;
+      return void render();
+    }
+    count.textContent = `${result.data.total} 只`;
+    prev.disabled = page <= 1;
+    next.disabled = page >= pageCount;
+    pageInfo.textContent = `第 ${page} / ${pageCount} 页 · 共 ${result.data.total} 条`;
+    pager.hidden = result.data.total === 0;
+    mount(list, renderResultTable(result.data, setStatus));
+  };
+  const doSearch = () => {
+    query = search.value.trim();
+    page = 1;
+    void render();
+  };
+  searchBtn.addEventListener('click', doSearch);
+  search.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    doSearch();
+  });
+  prev.addEventListener('click', () => {
+    page -= 1;
+    void render();
+  });
+  next.addEventListener('click', () => {
+    page += 1;
+    void render();
+  });
+  const root = el('div', null, [
     el('div', 'strategy-tab-heading', [
       el('div', null, [
         el('h3', null, '当前股票池'),
-        el('p', 'muted', '来自最近一次持久化完整运行'),
+        el('p', 'muted', '来自最近一次持久化可用运行'),
       ]),
-      el('span', 'entity-count', `${result.data.total} 只`),
+      el('div', 'row-actions', [search, searchBtn, count]),
     ]),
-    renderResultTable(result.data, setStatus),
+    list,
+    pager,
   ]);
-};
-
-const renderCandidates = async (strategyId, state, setStatus) => {
-  const tabs = el('div', 'strategy-candidate-tabs');
-  tabs.setAttribute('role', 'tablist');
-  for (const [kind, label] of Object.entries(CANDIDATE_LABELS)) {
-    const button = el(
-      'button',
-      `btn btn-sm ${state.candidateView === kind ? 'btn-primary' : 'btn-outline'}`,
-      label,
-    );
-    button.type = 'button';
-    button.setAttribute('role', 'tab');
-    button.setAttribute('aria-selected', String(state.candidateView === kind));
-    button.addEventListener('click', () => navigate(state, { candidateView: kind }));
-    tabs.append(button);
-  }
-  const result = await cachedGet(
-    `/api/strategies/${encodeURIComponent(strategyId)}/results?view=${encodeURIComponent(state.candidateView)}&rankingWindow=20&sort=rank&order=asc&limit=200`,
-  );
-  if (!result.ok) return el('div', null, [tabs, el('p', 'status error', errorText(result))]);
-  return el('div', null, [
-    tabs,
-    el('div', 'strategy-tab-heading', [
-      el('div', null, [
-        el('h3', null, CANDIDATE_LABELS[state.candidateView]),
-        el(
-          'p',
-          'muted',
-          state.candidateView === 'incomplete'
-            ? '不计入候选数量，仅披露数据和解释缺口'
-            : state.candidateView === 'ranking-near-miss'
-              ? '展示 Top N 之后 20 名'
-              : '仅包含 logic=all 且唯一确定性阻断规则',
-        ),
-      ]),
-      el('span', 'entity-count', `${result.data.total} 只`),
-    ]),
-    renderResultTable(result.data, setStatus),
-  ]);
+  await render();
+  return root;
 };
 
 const runSummaryText = (run) => {
@@ -382,121 +393,23 @@ const runSummaryText = (run) => {
 };
 
 /**
- * 运行详情弹窗内容：逐股结果 + StrategySignal。
- * 结果列表默认只展示命中的（selected === true），
- * 通过「只看命中 / 全部 N 条」切换查看全部；信号区保持不变。
- * 每条结果默认折叠为一行（股票 + rank + score），点击行展开规则详情；
- * 结果列表按页展示（默认每页 50 条），切换筛选回到第一页。
+ * 运行详情弹窗内容：StrategySignal 信号列表。
  * @param {object} data GET /api/strategy-runs/:id 的 data
- * @param {object} [options] { pageSize?: number } 每页条数（测试可缩小）
  * @returns {HTMLElement} 可直接放入弹窗 body 的节点
  */
-export const buildRunDetailContent = (data, { pageSize = 50 } = {}) => {
+export const buildRunDetailContent = (data) => {
   const identityById = new Map((data.stocks ?? []).map((stock) => [stock.stockId, stock]));
   const identity = (stockId) =>
     identityById.get(stockId) ?? { stockId, stockName: '名称暂缺', nameStatus: 'unavailable' };
-  const results = data.results ?? [];
   const signals = data.signals ?? [];
-  const resultRow = (result) => {
-    const detail = el('div', 'strategy-run-result-detail', ruleEvaluationPanel(result));
-    const row = el('article', 'strategy-run-result', [
-      el('div', 'strategy-run-result-head', [
-        stockIdentityLink(identity(result.stockId)),
-        el('span', 'mono', `rank ${result.rank ?? '--'}`),
-        el(
-          'span',
-          'mono',
-          `score ${typeof result.score === 'number' ? result.score.toFixed(2) : '--'}`,
-        ),
-      ]),
-      detail,
-    ]);
-    // 行本身即展开开关；点击行内股票链接不触发展开（沿用 advice-card 模式）
-    row.setAttribute('role', 'button');
-    row.setAttribute('tabindex', '0');
-    row.setAttribute('aria-expanded', 'false');
-    const toggle = () => {
-      const expanded = row.classList.toggle('expanded');
-      row.setAttribute('aria-expanded', String(expanded));
-    };
-    row.addEventListener('click', (event) => {
-      if (event.target instanceof HTMLAnchorElement) return;
-      toggle();
-    });
-    row.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      if (event.target instanceof HTMLAnchorElement) return;
-      event.preventDefault();
-      toggle();
-    });
-    return row;
-  };
   const signalRow = (signal) =>
     el('div', 'entity-item', [
       stockIdentityLink(identity(signal.stockId)),
-      el('span', 'mono', `${signal.direction} · score ${signal.score}`),
+      el('span', 'mono', `${signal.direction} · score ${fmtNum(signal.score)}`),
       el('p', 'muted', (signal.evidence ?? []).join('；')),
     ]);
-  const selected = results.filter((result) => result.selected === true);
-  const list = el('div', 'strategy-run-detail-results');
-  const pager = el('div', 'strategy-run-pagination');
-  const prev = el('button', 'btn btn-outline btn-sm', '上一页');
-  const next = el('button', 'btn btn-outline btn-sm', '下一页');
-  const pageInfo = el('span', 'muted mono', '');
-  prev.type = 'button';
-  next.type = 'button';
-  let page = 1;
-  let currentRows = selected;
-  const pageCount = (rows) => Math.max(1, Math.ceil(rows.length / pageSize));
-  const renderList = (rows) => {
-    page = Math.min(page, pageCount(rows));
-    const start = (page - 1) * pageSize;
-    const slice = rows.slice(start, start + pageSize);
-    list.replaceChildren(
-      ...(slice.length === 0 ? [el('p', 'placeholder', '无逐股结果')] : slice.map(resultRow)),
-    );
-    prev.disabled = page <= 1;
-    next.disabled = page >= pageCount(rows);
-    pageInfo.textContent = `第 ${page} / ${pageCount(rows)} 页 · 共 ${rows.length} 条`;
-    pager.hidden = rows.length === 0;
-  };
-  prev.addEventListener('click', () => {
-    page -= 1;
-    renderList(currentRows);
-  });
-  next.addEventListener('click', () => {
-    page += 1;
-    renderList(currentRows);
-  });
-  pager.append(prev, pageInfo, next);
-  renderList(currentRows);
-  const tabs = el('div', 'strategy-run-detail-tabs');
-  const tab = (label, rows, active) => {
-    const button = el('button', `btn btn-sm ${active ? 'btn-primary' : 'btn-outline'}`, label);
-    button.type = 'button';
-    button.addEventListener('click', () => {
-      for (const other of tabs.children) {
-        other.classList.remove('btn-primary');
-        other.classList.add('btn-outline');
-      }
-      button.classList.remove('btn-outline');
-      button.classList.add('btn-primary');
-      // 切换筛选回到第一页
-      page = 1;
-      currentRows = rows;
-      renderList(currentRows);
-    });
-    return button;
-  };
-  tabs.append(
-    tab(`只看命中（${selected.length}）`, selected, true),
-    tab(`全部 ${results.length} 条`, results, false),
-  );
   return el('div', 'strategy-run-detail', [
-    el('p', 'muted', `结果 ${results.length} · 信号 ${signals.length}`),
-    tabs,
-    list,
-    pager,
+    el('p', 'muted', `信号 ${signals.length}`),
     el('h4', null, 'StrategySignal'),
     ...(signals.length === 0 ? [el('p', 'placeholder', '无信号')] : signals.map(signalRow)),
   ]);
@@ -515,7 +428,7 @@ const renderDiff = async (strategyId) => {
   const result = await cachedGet(
     `/api/strategy-runs/compare?strategyId=${encodeURIComponent(strategyId)}`,
   );
-  if (!result.ok) return el('p', 'placeholder', '至少需要两次完整运行后才能比较。');
+  if (!result.ok) return el('p', 'placeholder', '至少需要两次可用运行后才能比较。');
   const { diff, warnings } = result.data;
   const strip = el('div', 'strategy-diff-strip', [
     metric('新增', diff.summary.entered),
@@ -526,7 +439,7 @@ const renderDiff = async (strategyId) => {
   const rows = diff.rows.filter((row) => !row.changes.includes('stayed') || row.changes.length > 1);
   const table =
     rows.length === 0
-      ? el('p', 'placeholder', '两次完整运行没有实质变化。')
+      ? el('p', 'placeholder', '两次可用运行没有实质变化。')
       : el('div', 'table-wrap', [
           el('table', 'table', [
             el(
@@ -555,7 +468,7 @@ const renderDiff = async (strategyId) => {
         ]);
   return el('section', 'strategy-diff', [
     el('div', 'strategy-tab-heading', [
-      el('h3', null, '最近两次完整运行 Diff'),
+      el('h3', null, '最近两次可用运行 Diff'),
       el('span', 'mono muted', `${diff.fromRunId} → ${diff.toRunId}`),
     ]),
     ...(warnings ?? []).map((warning) => el('p', 'status warning', warning)),
@@ -767,9 +680,6 @@ const renderSettings = async (strategyId, setStatus, refresh) => {
 const renderTabContent = async (workspace, state, setStatus, refresh) => {
   if (state.tab === 'overview') return renderOverview(workspace, state);
   if (state.tab === 'pool') return renderPool(workspace.strategy.id, setStatus);
-  if (state.tab === 'candidates') {
-    return renderCandidates(workspace.strategy.id, state, setStatus);
-  }
   if (state.tab === 'runs') return renderRuns(workspace.strategy.id);
   if (state.tab === 'insights') return renderInsights();
   return renderSettings(workspace.strategy.id, setStatus, refresh);
@@ -888,8 +798,8 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
             'div',
             'strategy-workspace-meta',
             workspace.currentRun
-              ? `数据截止 ${fmtDateTime(workspace.currentRun.dataAsOf)} · 完整运行 ${fmtDateTime(workspace.currentRun.finishedAt ?? workspace.currentRun.startedAt)}`
-              : '尚无完整运行',
+              ? `数据截止 ${fmtDateTime(workspace.currentRun.dataAsOf)} · 可用运行 ${fmtDateTime(workspace.currentRun.finishedAt ?? workspace.currentRun.startedAt)}`
+              : '尚无可用运行',
           ),
         ]),
         headerActions,

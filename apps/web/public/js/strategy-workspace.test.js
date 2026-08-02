@@ -122,12 +122,6 @@ class FakeElement extends FakeNode {
     for (const listener of this._listeners.click ?? []) listener.call(this, { target: this });
   }
 
-  dispatch(type, event = {}) {
-    for (const listener of this._listeners[type] ?? []) {
-      listener.call(this, { target: this, ...event, preventDefault: () => {} });
-    }
-  }
-
   querySelectorAll(selector) {
     const matches = [];
     const visit = (node) => {
@@ -148,13 +142,10 @@ class FakeElement extends FakeNode {
   }
 }
 
-class FakeAnchor extends FakeElement {}
-
 const byId = new Map();
 globalThis.Node = FakeNode;
-globalThis.HTMLAnchorElement = FakeAnchor;
 globalThis.document = {
-  createElement: (tag) => (tag === 'a' ? new FakeAnchor(tag) : new FakeElement(tag)),
+  createElement: (tag) => new FakeElement(tag),
   createTextNode: (data) => new FakeText(data),
   querySelector: (selector) =>
     selector.startsWith('#') ? (byId.get(selector.slice(1)) ?? null) : null,
@@ -179,61 +170,7 @@ const detailData = {
   stocks: [
     { stockId: '000001.SZ', stockName: '平安银行', nameStatus: 'resolved' },
     { stockId: '000009.SZ', stockName: '中国宝安', nameStatus: 'resolved' },
-    { stockId: '300169.SZ', stockName: '东宝生物', nameStatus: 'resolved' },
-    { stockId: '600519.SH', stockName: '贵州茅台', nameStatus: 'resolved' },
-    { stockId: '601398.SH', stockName: '工商银行', nameStatus: 'resolved' },
-  ],
-  results: [
-    {
-      runId: 'run-1',
-      stockId: '000001.SZ',
-      selected: true,
-      rank: 1,
-      score: 92.5,
-      ruleEvaluations: [],
-      evidence: [],
-      dataAsOf: '2026-07-31T15:00:00+08:00',
-    },
-    {
-      runId: 'run-1',
-      stockId: '000009.SZ',
-      selected: true,
-      rank: 2,
-      score: 88.1,
-      ruleEvaluations: [],
-      evidence: [],
-      dataAsOf: '2026-07-31T15:00:00+08:00',
-    },
-    {
-      runId: 'run-1',
-      stockId: '300169.SZ',
-      selected: false,
-      rank: 3,
-      score: 60.0,
-      ruleEvaluations: [],
-      evidence: [],
-      dataAsOf: '2026-07-31T15:00:00+08:00',
-    },
-    {
-      runId: 'run-1',
-      stockId: '600519.SH',
-      selected: false,
-      rank: 4,
-      score: 55.0,
-      ruleEvaluations: [],
-      evidence: [],
-      dataAsOf: '2026-07-31T15:00:00+08:00',
-    },
-    {
-      runId: 'run-1',
-      stockId: '601398.SH',
-      selected: false,
-      rank: 5,
-      score: 50.0,
-      ruleEvaluations: [],
-      evidence: [],
-      dataAsOf: '2026-07-31T15:00:00+08:00',
-    },
+    { stockId: '300169.SZ', stockName: '天晟新材', nameStatus: 'resolved' },
   ],
   signals: [
     {
@@ -241,7 +178,7 @@ const detailData = {
       strategyId: 'breakout-volume',
       stockId: '000001.SZ',
       direction: 'long',
-      score: 90,
+      score: 67.60499999999999,
       evidence: ['放量突破 20 日均线'],
     },
     {
@@ -249,8 +186,8 @@ const detailData = {
       strategyId: 'breakout-volume',
       stockId: '000009.SZ',
       direction: 'long',
-      score: 85,
-      evidence: ['放量突破 20 日均线'],
+      score: 54.963,
+      evidence: ['量比 volRatio5_20=1.8321'],
     },
   ],
 };
@@ -283,30 +220,35 @@ afterEach(() => {
 });
 
 describe('strategy workspace route state', () => {
-  it('round-trips durable strategy/tab/run/candidate selection and normalizes invalid values', () => {
+  it('round-trips durable strategy/tab/run selection and normalizes invalid values', () => {
     const parsed = parseStrategyHash(
-      '#strategies?strategyId=trend-v2&tab=candidates&runId=run-2&compareRunId=run-1&view=ranking-near-miss',
+      '#strategies?strategyId=trend-v2&tab=pool&runId=run-2&compareRunId=run-1',
     );
     expect(parsed).toEqual({
       strategyId: 'trend-v2',
-      tab: 'candidates',
+      tab: 'pool',
       runId: 'run-2',
       compareRunId: 'run-1',
-      candidateView: 'ranking-near-miss',
     });
     expect(buildStrategyHash(parsed)).toBe(
-      '#strategies?strategyId=trend-v2&tab=candidates&runId=run-2&compareRunId=run-1&view=ranking-near-miss',
+      '#strategies?strategyId=trend-v2&tab=pool&runId=run-2&compareRunId=run-1',
     );
     expect(parseStrategyHash('#strategies?tab=unknown&view=nope')).toMatchObject({
       strategyId: '',
       tab: 'overview',
-      candidateView: 'rule-near-miss',
     });
+    // 已下线的候选池 tab 与 view 参数回退到默认值且不再写回 hash
+    expect(parseStrategyHash('#strategies?tab=candidates&view=incomplete')).toMatchObject({
+      tab: 'overview',
+    });
+    expect(buildStrategyHash({ strategyId: 's1', tab: 'pool' })).toBe(
+      '#strategies?strategyId=s1&tab=pool',
+    );
   });
 });
 
 describe('运行记录「查看」弹窗', () => {
-  it('点击查看打开弹窗展示运行详情，而非在表格下方内联展开', async () => {
+  it('点击查看打开弹窗只展示信号列表，而非在表格下方内联展开', async () => {
     globalThis.fetch = async (path) => {
       const url = String(path);
       if (url.includes('/api/strategies/breakout-volume/runs')) {
@@ -324,11 +266,15 @@ describe('运行记录「查看」弹窗', () => {
     expect(view).toBeDefined();
     view.click();
     await flush();
-    // 弹窗打开并展示详情内容
+    // 弹窗打开，内容只有信号列表：无筛选 tab / 结果行 / 分页栏
     expect(modalOverlay.hidden).toBe(false);
-    expect(modalBody.textContent).toContain('结果 5 · 信号 2');
-    expect(modalBody.textContent).toContain('只看命中（2）');
+    expect(modalBody.querySelectorAll('.strategy-run-detail-tabs').length).toBe(0);
+    expect(modalBody.querySelectorAll('.strategy-run-result').length).toBe(0);
+    expect(modalBody.querySelectorAll('.strategy-run-pagination').length).toBe(0);
+    expect(modalBody.textContent).toContain('信号 2');
     expect(modalBody.textContent).toContain('StrategySignal');
+    expect(modalBody.textContent).toContain('平安银行');
+    expect(modalBody.textContent).toContain('放量突破 20 日均线');
   });
 
   it('openRunDetail 拉取失败时在弹窗内展示错误', async () => {
@@ -340,142 +286,22 @@ describe('运行记录「查看」弹窗', () => {
   });
 });
 
-describe('运行详情弹窗内容', () => {
-  it('默认只渲染命中的结果，切换到全部后渲染全部', () => {
+describe('运行详情弹窗信号列表', () => {
+  it('渲染股票 / direction · score / evidence，score 保留两位小数', () => {
     const node = buildRunDetailContent(detailData);
-    const list = node.querySelectorAll('.strategy-run-detail-results')[0];
-    expect(list).toBeDefined();
-    const itemCount = () => list.querySelectorAll('.strategy-run-result').length;
-    // 默认只看命中（2 条）
-    expect(itemCount()).toBe(2);
-    // 信号区不受结果筛选影响
-    expect(node.textContent).toContain('放量突破 20 日均线');
-    // 切到全部
-    node
-      .querySelectorAll('button')
-      .find((button) => button.textContent === '全部 5 条')
-      .click();
-    expect(itemCount()).toBe(5);
-    // 切回只看命中
-    node
-      .querySelectorAll('button')
-      .find((button) => button.textContent === '只看命中（2）')
-      .click();
-    expect(itemCount()).toBe(2);
+    const rows = node.querySelectorAll('.entity-item');
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain('平安银行');
+    expect(rows[0].textContent).toContain('000001.SZ');
+    expect(rows[0].textContent).toContain('long · score 67.60');
+    expect(rows[0].textContent).toContain('放量突破 20 日均线');
+    expect(rows[1].textContent).toContain('long · score 54.96');
+    expect(rows[1].textContent).toContain('量比 volRatio5_20=1.8321');
   });
 
-  it('结果行默认折叠：一行展示股票/rank/score，点击行展开规则详情', () => {
-    const node = buildRunDetailContent(detailData);
-    const list = node.querySelectorAll('.strategy-run-detail-results')[0];
-    const row = list.querySelectorAll('.strategy-run-result')[0];
-    // 折叠默认态：无 expanded 类、aria-expanded=false、详情区不显示
-    expect(row.classList.contains('expanded')).toBe(false);
-    expect(row.getAttribute('aria-expanded')).toBe('false');
-    expect(row.getAttribute('role')).toBe('button');
-    expect(row.getAttribute('tabindex')).toBe('0');
-    // 一行内是 股票（名称+代码）+ rank + score，规则详情不在行首
-    const head = row.querySelectorAll('.strategy-run-result-head')[0];
-    expect(head.textContent).toContain('平安银行');
-    expect(head.textContent).toContain('000001.SZ');
-    expect(head.textContent).toContain('rank 1');
-    expect(head.textContent).toContain('score 92.50');
-    // 点击行展开
-    row.click();
-    expect(row.classList.contains('expanded')).toBe(true);
-    expect(row.getAttribute('aria-expanded')).toBe('true');
-    // 再点折叠
-    row.click();
-    expect(row.classList.contains('expanded')).toBe(false);
-  });
-
-  it('点击行内股票链接不触发展开；Enter/Space 可展开', () => {
-    const node = buildRunDetailContent(detailData);
-    const list = node.querySelectorAll('.strategy-run-detail-results')[0];
-    const row = list.querySelectorAll('.strategy-run-result')[0];
-    const link = row.querySelectorAll('.stock-identity-link')[0];
-    link.click();
-    expect(row.classList.contains('expanded')).toBe(false);
-    row.dispatch('keydown', { key: 'Enter' });
-    expect(row.classList.contains('expanded')).toBe(true);
-    row.dispatch('keydown', { key: ' ' });
-    expect(row.classList.contains('expanded')).toBe(false);
-    row.dispatch('keydown', { key: 'x' });
-    expect(row.classList.contains('expanded')).toBe(false);
-  });
-
-  it('结果列表分页：翻页 + 切换筛选回到第一页', () => {
-    const node = buildRunDetailContent(detailData, { pageSize: 2 });
-    const list = node.querySelectorAll('.strategy-run-detail-results')[0];
-    const pager = node.querySelectorAll('.strategy-run-pagination')[0];
-    const pageInfo = pager.querySelectorAll('span.mono')[0];
-    const prev = pager.querySelectorAll('button').find((button) => button.textContent === '上一页');
-    const next = pager.querySelectorAll('button').find((button) => button.textContent === '下一页');
-    const stockIds = () =>
-      list.querySelectorAll('.strategy-run-result').map((row) => row.textContent);
-    // 默认命中视图 2 条只有 1 页
-    expect(pageInfo.textContent).toBe('第 1 / 1 页 · 共 2 条');
-    // 切到全部：第 1 页显示前 2 条
-    node
-      .querySelectorAll('button')
-      .find((button) => button.textContent === '全部 5 条')
-      .click();
-    expect(list.querySelectorAll('.strategy-run-result').length).toBe(2);
-    expect(pageInfo.textContent).toBe('第 1 / 3 页 · 共 5 条');
-    expect(stockIds()[0]).toContain('000001.SZ');
-    expect(stockIds()[1]).toContain('000009.SZ');
-    expect(prev.disabled).toBe(true);
-    // 下一页 → 第 2 页
-    next.click();
-    expect(pageInfo.textContent).toBe('第 2 / 3 页 · 共 5 条');
-    expect(stockIds()[0]).toContain('300169.SZ');
-    expect(stockIds()[1]).toContain('600519.SH');
-    // 再下一页 → 第 3 页（1 条，下一页禁用）
-    next.click();
-    expect(pageInfo.textContent).toBe('第 3 / 3 页 · 共 5 条');
-    expect(stockIds().length).toBe(1);
-    expect(stockIds()[0]).toContain('601398.SH');
-    expect(next.disabled).toBe(true);
-    // 上一页 → 第 2 页
-    prev.click();
-    expect(pageInfo.textContent).toBe('第 2 / 3 页 · 共 5 条');
-    // 在非第一页切换筛选：回到第一页，且按命中筛选
-    node
-      .querySelectorAll('button')
-      .find((button) => button.textContent === '只看命中（2）')
-      .click();
-    expect(pageInfo.textContent).toBe('第 1 / 1 页 · 共 2 条');
-    expect(list.querySelectorAll('.strategy-run-result').length).toBe(2);
-    // 切回全部：也从第一页开始
-    node
-      .querySelectorAll('button')
-      .find((button) => button.textContent === '全部 5 条')
-      .click();
-    expect(pageInfo.textContent).toBe('第 1 / 3 页 · 共 5 条');
-    expect(stockIds()[0]).toContain('000001.SZ');
-  });
-
-  it('全部未命中时默认显示占位文案', () => {
-    const node = buildRunDetailContent({
-      stocks: [],
-      results: [
-        {
-          runId: 'run-2',
-          stockId: '300169.SZ',
-          selected: false,
-          ruleEvaluations: [],
-          evidence: [],
-          dataAsOf: '2026-07-31T15:00:00+08:00',
-        },
-      ],
-      signals: [],
-    });
-    const list = node.querySelectorAll('.strategy-run-detail-results')[0];
-    expect(list.querySelectorAll('.strategy-run-result').length).toBe(0);
-    expect(list.textContent).toContain('无逐股结果');
-    node
-      .querySelectorAll('button')
-      .find((button) => button.textContent === '全部 1 条')
-      .click();
-    expect(list.querySelectorAll('.strategy-run-result').length).toBe(1);
+  it('无信号时显示占位文案', () => {
+    const node = buildRunDetailContent({ stocks: [], signals: [] });
+    expect(node.textContent).toContain('信号 0');
+    expect(node.textContent).toContain('无信号');
   });
 });
