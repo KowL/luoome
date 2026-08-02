@@ -8,13 +8,13 @@ import { BUILTIN_STRATEGIES, STRATEGY_BUILTIN_DEFINED_AT } from './builtin.js';
  * 新旧定义会并存漂移）。改动内置策略 DSL 时必须同步更新本表并评估存量影响。
  */
 const EXPECTED: Readonly<Record<string, string>> = {
-  'breakout-volume': '4f23bdc54ab884c347adf148d8602aab0ccf455b60b7553bf77ef9d8919d0776',
-  'ma-bullish-alignment': '8c32bc2dd726f69a1882a24d72d5a50caea867fd64c131c80e7a2db10842e37a',
-  'pullback-after-limit-up': 'c73250519d739f125dc46f6aaf0fa7e1915b3db52fd4ccdda0a9680c14fe9679',
-  'volume-price-divergence': '7e8b967af053f09025de71a22101d460d5d2cb0a69e7b3f1f20e8b7c2dd0f422',
-  'sector-resonance': 'd5205e1ac84e7811ea3374c1b71db99525063f152fd467cb975b823184015ab5',
-  'early-breakout': 'efe694ddb49b06f118c557b729df3463d2819d58232083b9e89ab35730f25cd9',
-  'bollinger-band': 'dcb7ed51b4eeaa7695eb471af287b09ea982499c2eb1737c6dd3df6b47fc23bc',
+  'breakout-volume': '63d8fb42b272ab65b8104a2216eca3780b37844b5656e1094cc4d8097d390540',
+  'ma-bullish-alignment': '272f82c753cb34641118f4b1e391b401d7bb30d187c092a49d05bcb8711360b1',
+  'pullback-after-limit-up': '11b17d7cb555b6662ae3cce3058471773397e5a1b4e7b758dd07d1eba90231a3',
+  'volume-price-divergence': '947f839d471f8b99040b85e1022af77b19649fb5930b32b8ea7a2c31ebc0be7c',
+  'sector-resonance': '3baf763c7f7504549c6791a878932473dffa2fe31405dc3589e8e97aa771a692',
+  'early-breakout': 'c5ae295e819135c657d5fe771ecfbc41edf0d5c86aa54bc0af52558024b96500',
+  'bollinger-band': '00f49673bb05654a09a0e3e4736e4a27a340a995dba5ea5fe392f7276b6e27a0',
 };
 
 describe('BUILTIN_STRATEGIES', () => {
@@ -37,6 +37,23 @@ describe('BUILTIN_STRATEGIES', () => {
       expect(bundle.version.validationStatus).toBe('valid');
       expect(bundle.version.publishedAt).toEqual(STRATEGY_BUILTIN_DEFINED_AT);
       expect(bundle.strategy.createdAt).toEqual(STRATEGY_BUILTIN_DEFINED_AT);
+    }
+  });
+
+  it('种子 definition 带 scoring：组件引用 selection rule 且权重和为 1、不设 top', () => {
+    for (const bundle of BUILTIN_STRATEGIES) {
+      const { definition } = bundle.version;
+      expect(definition.scoring).toBeDefined();
+      const scoring = definition.scoring;
+      expect(scoring?.method).toBe('weighted-sum');
+      expect(scoring?.top).toBeUndefined();
+      const selectionIds = new Set(definition.selection.rules.map((rule) => rule.id));
+      const totalWeight =
+        scoring?.components.reduce((sum, component) => sum + component.weight, 0) ?? 0;
+      expect(Math.abs(totalWeight - 1)).toBeLessThan(1e-9);
+      for (const component of scoring?.components ?? []) {
+        expect(selectionIds.has(component.ruleId)).toBe(true);
+      }
     }
   });
 });

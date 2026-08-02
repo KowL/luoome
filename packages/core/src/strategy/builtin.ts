@@ -25,6 +25,12 @@ import { inspectStrategyDefinitionReferences } from './field-registry.js';
  * 同时让内置策略运行结果的 selected 从恒 true 变为按条件过滤（signals 求值不受影响）。
  * definitionHash 随之变化，builtin.test.ts 的 EXPECTED 表已同步；存量库按 id 跳过
  * 播种，保留旧定义，与新定义并存漂移（仅影响模板列表与新建库）。
+ *
+ * 2026-08-02：为每个种子补 scoring（weighted-sum，单组件引用 `legacy-selection`，
+ * score 沿用 seed.score，weight=1；不设 top 避免截断 selected）。此前种子 DSL 无
+ * scoring 块，股票池 rank/score 恒为 '--'；补上后运行结果才有 score 与稳定排名。
+ * definitionHash 再次变化，builtin.test.ts 的 EXPECTED 表已同步；存量库按 id 跳过
+ * 播种保留旧定义，需重播运行后股票池才有 rank/score。
  */
 export interface BuiltinStrategyBundle {
   readonly strategy: Strategy;
@@ -209,6 +215,11 @@ const buildBuiltinBundle = (seed: BuiltinStrategySeed): BuiltinStrategyBundle =>
     metadata: { style: seed.style },
     universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
     selection: { logic: 'all', rules: [selectionRule] },
+    // 单组件加权：让运行结果带 score 与稳定排名；不设 top 避免截断 selected
+    scoring: {
+      method: 'weighted-sum',
+      components: [{ ruleId: 'legacy-selection', score: seed.score, weight: 1 }],
+    },
     signals: {
       entry: seed.bucket === 'entry' ? [signalRule] : [],
       exit: seed.bucket === 'exit' ? [signalRule] : [],

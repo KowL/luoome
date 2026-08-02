@@ -1,6 +1,7 @@
 import {
   type Strategy,
   type StrategyDslV1,
+  type StrategyRun,
   type StrategyVersion,
   strategyDefinitionHash,
 } from '@luoome/core';
@@ -76,6 +77,176 @@ const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): 
   await ctx.repos.strategy.save(strategy);
   await ctx.repos.strategy.saveVersion(version);
 };
+
+/** 从一次真实运行派生同版本的后续 run（改 id/时间/状态/摘要）。 */
+const deriveRun = (
+  base: StrategyRun,
+  patch: Partial<StrategyRun> & { id: string; startedAt: Date },
+): StrategyRun => ({ ...base, ...patch });
+
+const partialSummary = {
+  schemaVersion: 2 as const,
+  universeCount: 1,
+  evaluatedCount: 1,
+  selectedCount: 1,
+  signalCount: 0,
+  partialCount: 1,
+  failedCount: 0,
+  failureSamples: [{ stockId: '600519.SH', error: '行情数据不足' }],
+};
+
+const failedSummary = {
+  schemaVersion: 2 as const,
+  universeCount: 1,
+  evaluatedCount: 0,
+  selectedCount: 0,
+  signalCount: 0,
+  partialCount: 0,
+  failedCount: 1,
+  failureSamples: [{ stockId: '600519.SH', error: 'provider down' }],
+};
+
+describe('complete|partial 可用运行基准', () => {
+  it('最新一次为 partial 时，视图与工作台以它为基准且不警告', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const complete = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+      ctx,
+    );
+    if (!complete.ok) throw new Error('run_strategy 前置失败');
+    const laterAt = new Date(complete.data.run.startedAt.getTime() + 1_000);
+    const partial = deriveRun(complete.data.run, {
+      id: 'strategy-run-partial-latest',
+      startedAt: laterAt,
+      finishedAt: laterAt,
+      dataAsOf: laterAt,
+      status: 'partial',
+      summary: partialSummary,
+    });
+    await ctx.repos.strategyRun.commitRun({
+      run: partial,
+      results: complete.data.results.map((result) => ({ ...result, runId: partial.id })),
+      signals: [],
+    });
+
+    const views = await listStrategyResultViewsTool.execute(
+      { strategyId: 'scan-strategy', view: 'selected' },
+      ctx,
+    );
+    expect(views.ok).toBe(true);
+    if (!views.ok) return;
+    expect(views.data.run.id).toBe(partial.id);
+    expect(views.data.total).toBe(1);
+
+    const workspace = await getStrategyWorkspaceTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(workspace.ok).toBe(true);
+    if (!workspace.ok) return;
+    expect(workspace.data.currentRun?.id).toBe(partial.id);
+    expect(workspace.data.latestAttempt?.id).toBe(partial.id);
+    expect(workspace.data.overview).toMatchObject({ health: 'partial', selectedCount: 1 });
+    expect(workspace.data.warnings.length).toBe(0);
+  });
+
+  it('最新一次 failed、更早 partial 时回退到 partial 基准并带 warning', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const complete = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+      ctx,
+    );
+    if (!complete.ok) throw new Error('run_strategy 前置失败');
+    const partialAt = new Date(complete.data.run.startedAt.getTime() + 1_000);
+    const partial = deriveRun(complete.data.run, {
+      id: 'strategy-run-partial-mid',
+      startedAt: partialAt,
+      finishedAt: partialAt,
+      dataAsOf: partialAt,
+      status: 'partial',
+      summary: partialSummary,
+    });
+    await ctx.repos.strategyRun.commitRun({
+      run: partial,
+      results: complete.data.results.map((result) => ({ ...result, runId: partial.id })),
+      signals: [],
+    });
+    const failedAt = new Date(partialAt.getTime() + 1_000);
+    const failed = deriveRun(complete.data.run, {
+      id: 'strategy-run-failed-latest',
+      startedAt: failedAt,
+      finishedAt: failedAt,
+      dataAsOf: failedAt,
+      status: 'failed',
+      error: '全部 candidate 数据准备失败',
+      summary: failedSummary,
+    });
+    await ctx.repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });
+
+    const workspace = await getStrategyWorkspaceTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(workspace.ok).toBe(true);
+    if (!workspace.ok) return;
+    expect(workspace.data.currentRun?.id).toBe(partial.id);
+    expect(workspace.data.latestAttempt?.id).toBe(failed.id);
+    expect(workspace.data.overview).toMatchObject({ health: 'failed', selectedCount: 1 });
+    expect(workspace.data.warnings[0]).toContain('当前结果仍来自');
+    expect(workspace.data.warnings[0]).not.toContain('完整运行');
+
+    const views = await listStrategyResultViewsTool.execute(
+      { strategyId: 'scan-strategy', view: 'selected' },
+      ctx,
+    );
+    expect(views.ok).toBe(true);
+    if (!views.ok) return;
+    expect(views.data.run.id).toBe(partial.id);
+  });
+
+  it('compare 默认取最近两次 complete|partial，中间夹 failed 被跳过', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const base = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+      ctx,
+    );
+    if (!base.ok) throw new Error('run_strategy 前置失败');
+    const failedAt = new Date(base.data.run.startedAt.getTime() + 1_000);
+    const failed = deriveRun(base.data.run, {
+      id: 'strategy-run-failed-mid',
+      startedAt: failedAt,
+      finishedAt: failedAt,
+      dataAsOf: failedAt,
+      status: 'failed',
+      error: '全部 candidate 数据准备失败',
+      summary: failedSummary,
+    });
+    await ctx.repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });
+    const partialAt = new Date(failedAt.getTime() + 1_000);
+    const partial = deriveRun(base.data.run, {
+      id: 'strategy-run-partial-latest',
+      startedAt: partialAt,
+      finishedAt: partialAt,
+      dataAsOf: partialAt,
+      status: 'partial',
+      summary: partialSummary,
+    });
+    await ctx.repos.strategyRun.commitRun({
+      run: partial,
+      results: base.data.results.map((result) => ({ ...result, runId: partial.id })),
+      signals: [],
+    });
+
+    const compared = await compareStrategyRunsTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(compared.ok).toBe(true);
+    if (!compared.ok) return;
+    expect(compared.data.fromRun.id).toBe(base.data.run.id);
+    expect(compared.data.toRun.id).toBe(partial.id);
+    expect(compared.data.warnings.some((warning) => warning.includes('非 complete 运行'))).toBe(
+      true,
+    );
+  });
+});
 
 describe('strategy-query', () => {
   it('lists the current complete selected view with stock name/code identities', async () => {
@@ -203,7 +374,6 @@ describe('strategy-query', () => {
       maxAbsRankDelta: 0,
     });
   });
-
   it('list_strategy_runs 按策略过滤，get_strategy_run 返回该 run 的 results 与 signals', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 2 });
