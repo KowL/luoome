@@ -79,7 +79,6 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'sync_stock_universe',
   'sync_daily_bars',
   'run_strategy',
-  'validate_strategy_version',
 ]);
 
 /**
@@ -848,10 +847,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     }),
   );
   app.post('/api/strategies/:id/validate', (c) =>
-    targetMutation(c.req.raw, 'external', 'validate_strategy_version'),
+    targetMutation(c.req.raw, 'write', 'validate_strategy_version', {
+      strategyId: c.req.param('id'),
+    }),
   );
   app.post('/api/strategies/:id/publish', (c) =>
-    targetMutation(c.req.raw, 'write', 'publish_strategy_version'),
+    targetMutation(c.req.raw, 'write', 'publish_strategy_version', {
+      strategyId: c.req.param('id'),
+    }),
   );
   app.post('/api/strategies/:id/pause', (c) =>
     targetMutation(c.req.raw, 'write', 'pause_strategy', {

@@ -1,4 +1,4 @@
-import type { StrategyDslV1 } from '@luoome/core';
+import { BUILTIN_STRATEGIES, type StrategyDslV1 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { ensureBuiltinStrategies } from '../context.js';
@@ -104,6 +104,28 @@ describe('Strategy lifecycle tools', () => {
     expect(published.ok).toBe(false);
   });
 
+  it('validate/publish 可绑定 Strategy，拒绝跨策略 versionId', async () => {
+    const ctx = await buildTestContext();
+    await createStrategyTool.execute({ id: 'strategy-a', name: '策略 A', description: 'A' }, ctx);
+    await createStrategyTool.execute({ id: 'strategy-b', name: '策略 B', description: 'B' }, ctx);
+    const version = await createStrategyVersionTool.execute(
+      { strategyId: 'strategy-a', definition: validDefinition() },
+      ctx,
+    );
+    expect(version.ok).toBe(true);
+    if (!version.ok) return;
+    const validated = await validateStrategyVersionTool.execute(
+      { strategyId: 'strategy-b', versionId: version.data.version.id },
+      ctx,
+    );
+    expect(validated.ok).toBe(false);
+    const published = await publishStrategyVersionTool.execute(
+      { strategyId: 'strategy-b', versionId: version.data.version.id },
+      ctx,
+    );
+    expect(published.ok).toBe(false);
+  });
+
   it('seeds builtin Strategies without writing import runs', async () => {
     const ctx = await buildTestContext();
     await ensureBuiltinStrategies(ctx.repos);
@@ -119,6 +141,16 @@ describe('Strategy lifecycle tools', () => {
       { id: 'pause-publish', name: '暂停发布', description: '测试暂停后发布' },
       ctx,
     );
+    const first = await createStrategyVersionTool.execute(
+      { strategyId: 'pause-publish', definition: validDefinition() },
+      ctx,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await validateStrategyVersionTool.execute({ versionId: first.data.version.id }, ctx);
+    await publishStrategyVersionTool.execute({ versionId: first.data.version.id }, ctx);
+    const paused = await pauseStrategyTool.execute({ strategyId: 'pause-publish' }, ctx);
+    expect(paused.ok).toBe(true);
     const version = await createStrategyVersionTool.execute(
       { strategyId: 'pause-publish', definition: validDefinition() },
       ctx,
@@ -126,8 +158,6 @@ describe('Strategy lifecycle tools', () => {
     expect(version.ok).toBe(true);
     if (!version.ok) return;
     await validateStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
-    const paused = await pauseStrategyTool.execute({ strategyId: 'pause-publish' }, ctx);
-    expect(paused.ok).toBe(true);
     const published = await publishStrategyVersionTool.execute(
       { versionId: version.data.version.id },
       ctx,
@@ -148,6 +178,8 @@ describe('Strategy lifecycle tools', () => {
     expect(draftResume.ok).toBe(false);
     if (draftResume.ok) return;
     expect(draftResume.error.kind).toBe('invalid_input');
+    const draftPause = await pauseStrategyTool.execute({ strategyId: 'resume-me' }, ctx);
+    expect(draftPause.ok).toBe(false);
 
     const version = await createStrategyVersionTool.execute(
       { strategyId: 'resume-me', definition: validDefinition() },
@@ -190,5 +222,39 @@ describe('Strategy lifecycle tools', () => {
     const strategies = await ctx.repos.strategy.list();
     expect(strategies.filter((s) => s.id === 'breakout-volume')).toHaveLength(1);
     expect(strategies.filter((s) => s.id.startsWith('legacy-tactic-'))).toEqual([]);
+  });
+
+  it('把存量 builtin v1 协调到固定 v3 revision，重复执行保持幂等', async () => {
+    const ctx = await buildTestContext();
+    const current = BUILTIN_STRATEGIES.find((bundle) => bundle.strategy.id === 'breakout-volume');
+    if (current === undefined) throw new Error('builtin fixture missing');
+    const legacyVersion = {
+      ...current.version,
+      id: 'breakout-volume-v1',
+      version: 1,
+      changeSummary: 'legacy builtin',
+    };
+    await ctx.repos.strategy.create({
+      ...current.strategy,
+      currentVersionId: legacyVersion.id,
+    });
+    await ctx.repos.strategy.createVersion(legacyVersion);
+
+    await ensureBuiltinStrategies(ctx.repos);
+    await ensureBuiltinStrategies(ctx.repos);
+
+    expect(await ctx.repos.strategy.findById(current.strategy.id)).toMatchObject({
+      currentVersionId: current.version.id,
+      status: 'active',
+    });
+    expect(await ctx.repos.strategy.listVersions(current.strategy.id)).toMatchObject([
+      { id: legacyVersion.id, version: 1 },
+      {
+        id: current.version.id,
+        version: 3,
+        parentVersionId: legacyVersion.id,
+        definitionHash: current.version.definitionHash,
+      },
+    ]);
   });
 });

@@ -41,8 +41,8 @@ describe('run-strategies workflow', () => {
       createdAt: now,
       updatedAt: now,
     };
-    await ctx.repos.strategy.save(strategy);
-    await ctx.repos.strategy.saveVersion(version);
+    await ctx.repos.strategy.create(strategy);
+    await ctx.repos.strategy.createVersion(version);
 
     const result = await runStrategiesWorkflow.run(
       {
@@ -54,10 +54,66 @@ describe('run-strategies workflow', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data).toMatchObject({ complete: 1, partial: 0, failed: 1 });
+    expect(result.data).toMatchObject({ complete: 1, dataPartial: 0, failed: 1 });
     expect(result.data.items.map((item) => [item.strategyId, item.status])).toEqual([
       ['missing-strategy', 'failed'],
       ['workflow-strategy', 'complete'],
     ]);
+  });
+
+  it('maps workflow scheduled mode to auditable scheduled StrategyRun', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    const now = new Date('2026-07-28T09:00:00Z');
+    const definition: StrategyDslV1 = {
+      schemaVersion: 1,
+      metadata: {},
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [{ id: 'price', name: '价格', when: 'quote.close > 0', evidence: ['价格有效'] }],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    const version: StrategyVersion = {
+      id: 'scheduled-strategy-v1',
+      strategyId: 'scheduled-strategy',
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: now,
+      createdAt: now,
+    };
+    await ctx.repos.strategy.create({
+      id: 'scheduled-strategy',
+      name: '调度策略',
+      description: 'scheduled workflow test',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: version.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.strategy.createVersion(version);
+
+    const result = await runStrategiesWorkflow.run(
+      {
+        strategyIds: ['scheduled-strategy'],
+        mode: 'scheduled',
+        stockIds: ['600519.SH'],
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const runId = result.data.items[0]?.runId;
+    expect(runId).toBeDefined();
+    const run = runId === undefined ? null : await ctx.repos.strategyRun.findRunById(runId);
+    expect(run).toMatchObject({
+      mode: 'scheduled',
+      inputSnapshot: { schemaVersion: 2, requestedBy: 'scheduled' },
+    });
   });
 });

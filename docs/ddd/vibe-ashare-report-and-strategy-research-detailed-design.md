@@ -1253,7 +1253,8 @@ Vibe 当前快照仅在进程内，默认没有可靠存量可导入。旧设计
 
 ### Phase 6：真实观察与回测
 
-- [x] SignalObservation：WatchTrigger / TacticSignal 建立 T+1/3/5/20 的可审计观察记录。
+- [x] SignalObservation：WatchTrigger / StrategySignal 建立 T+1/3/5/20 的可审计观察记录；
+  `tactic-signal` 仅保留历史读取兼容。
 - [x] 本地日线完成观察，样本统计返回样本数、时间范围、缺失率及收益描述统计。
 - [x] benchmark 未接入时显式标为 unavailable；满足 §17.3 后才建设回测 Module 和曲线。
 

@@ -18,6 +18,12 @@
 版本必须先校验再发布。StrategyRun 记录一次执行，StrategyResult 是逐股规则事实，
 StrategySignal 是可供后续观察的信号。Signal 不等于 Advice，更不等于交易。
 
+StrategyRun 的 `status` 只表达执行生命周期：`running / complete / failed`。`complete` 表示执行已结束且
+结果包已原子提交，不要求每只股票的数据都可用；数据覆盖质量由 Summary 的
+`dataHealth=complete / partial / unavailable` 与失败计数表达。存量 `status=partial` 只作为旧记录读取，
+语义等同“执行已完成、数据部分可用”。当前股票池使用最近一次结果可用的完成运行中
+`selected=true` 的 StrategyResult。
+
 ### Watchlist
 
 回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护

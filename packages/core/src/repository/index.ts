@@ -30,6 +30,7 @@ import type {
   Strategy,
   StrategyResult,
   StrategyRun,
+  StrategyRunBundle,
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
@@ -286,13 +287,20 @@ export interface ChatRepository {
 }
 
 export interface StrategyRepository {
-  save(strategy: Strategy): Promise<void>;
+  create(strategy: Strategy): Promise<void>;
   findById(id: string): Promise<Strategy | null>;
   list(filter?: {
     readonly status?: Strategy['status'];
     readonly owner?: Strategy['owner'];
   }): Promise<readonly Strategy[]>;
-  saveVersion(version: StrategyVersion): Promise<void>;
+  createVersion(version: StrategyVersion): Promise<void>;
+  setVersionValidation(
+    versionId: string,
+    validation: {
+      readonly status: 'valid' | 'invalid';
+      readonly errors: readonly string[];
+    },
+  ): Promise<void>;
   findVersionById(id: string): Promise<StrategyVersion | null>;
   listVersions(strategyId: string): Promise<readonly StrategyVersion[]>;
   /**
@@ -305,10 +313,11 @@ export interface StrategyRepository {
    * 与 activateVersion 的差异就在「是否允许未 publish 版本」：publish 允许并负责签发，activate 拒绝。
    */
   publishVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
+  pause(strategyId: string, at: Date): Promise<void>;
+  resume(strategyId: string, at: Date): Promise<void>;
 }
 
 export interface StrategyRunRepository {
-  saveRun(run: StrategyRun): Promise<void>;
   findRunById(id: string): Promise<StrategyRun | null>;
   listRuns(filter?: {
     readonly strategyId?: string;
@@ -317,18 +326,12 @@ export interface StrategyRunRepository {
     /** 按 startedAt 倒序取前 N 条，避免全量拉取。 */
     readonly limit?: number;
   }): Promise<readonly StrategyRun[]>;
-  saveResults(results: readonly StrategyResult[]): Promise<void>;
   listResults(runId: string): Promise<readonly StrategyResult[]>;
-  saveSignals(signals: readonly StrategySignal[]): Promise<void>;
   signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
   signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]>;
   signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
-  /** 终态 run 与其 results/signals 原子提交。 */
-  commitRun(bundle: {
-    readonly run: StrategyRun;
-    readonly results: readonly StrategyResult[];
-    readonly signals: readonly StrategySignal[];
-  }): Promise<void>;
+  /** 终态 run 与其 facts 原子、只追加提交；runId 重复必须拒绝。 */
+  commitRun(bundle: StrategyRunBundle): Promise<void>;
 }
 
 export interface WatchlistRepository {

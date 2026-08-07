@@ -150,12 +150,69 @@ export const StrategyRunSummaryV2Schema = z.object({
 });
 export type StrategyRunSummaryV2 = z.infer<typeof StrategyRunSummaryV2Schema>;
 
+export const StrategyRunDataHealthSchema = z.enum(['complete', 'partial', 'unavailable']);
+export type StrategyRunDataHealth = z.infer<typeof StrategyRunDataHealthSchema>;
+
+export const StrategyRunSummaryV3Schema = z
+  .object({
+    schemaVersion: z.literal(3),
+    dataHealth: StrategyRunDataHealthSchema,
+    universeCount: z.number().int().nonnegative(),
+    evaluatedCount: z.number().int().nonnegative(),
+    selectedCount: z.number().int().nonnegative(),
+    signalCount: z.number().int().nonnegative(),
+    incompleteCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+    failureSamples: z
+      .array(z.object({ stockId: z.string().min(1), error: z.string().min(1) }))
+      .max(20)
+      .default([]),
+  })
+  .superRefine((summary, ctx) => {
+    if (summary.evaluatedCount + summary.failedCount !== summary.universeCount) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evaluatedCount'],
+        message: 'evaluatedCount + failedCount 必须等于 universeCount',
+      });
+    }
+    if (summary.selectedCount > summary.evaluatedCount) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['selectedCount'],
+        message: 'selectedCount 不能大于 evaluatedCount',
+      });
+    }
+    if (summary.incompleteCount > summary.evaluatedCount) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['incompleteCount'],
+        message: 'incompleteCount 不能大于 evaluatedCount',
+      });
+    }
+    const expectedHealth =
+      summary.failedCount === summary.universeCount && summary.universeCount > 0
+        ? 'unavailable'
+        : summary.failedCount > 0 || summary.incompleteCount > 0
+          ? 'partial'
+          : 'complete';
+    if (summary.dataHealth !== expectedHealth) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dataHealth'],
+        message: `dataHealth 应为 ${expectedHealth}`,
+      });
+    }
+  });
+export type StrategyRunSummaryV3 = z.infer<typeof StrategyRunSummaryV3Schema>;
+
 const LegacyStrategyRunRecordSchema = z.record(z.string(), z.unknown());
 export const StrategyRunInputSnapshotSchema = z.union([
   StrategyRunInputSnapshotV2Schema,
   LegacyStrategyRunRecordSchema,
 ]);
 export const StrategyRunSummarySchema = z.union([
+  StrategyRunSummaryV3Schema,
   StrategyRunSummaryV2Schema,
   LegacyStrategyRunRecordSchema,
 ]);
@@ -176,6 +233,31 @@ export const StrategyRunSchema = z.object({
   error: z.string().min(1).optional(),
 });
 export type StrategyRun = z.infer<typeof StrategyRunSchema>;
+
+const isStrategyRunSummaryV2 = (summary: StrategyRun['summary']): summary is StrategyRunSummaryV2 =>
+  summary !== undefined && summary.schemaVersion === 2;
+
+const isStrategyRunSummaryV3 = (summary: StrategyRun['summary']): summary is StrategyRunSummaryV3 =>
+  summary !== undefined && summary.schemaVersion === 3;
+
+/** 运行是否结束由 status 表达；数据覆盖质量单独从 summary 读取。 */
+export const getStrategyRunDataHealth = (run: StrategyRun): StrategyRunDataHealth | undefined => {
+  if (run.status === 'running') return undefined;
+  if (run.status === 'failed') return 'unavailable';
+  if (isStrategyRunSummaryV3(run.summary)) return run.summary.dataHealth;
+  if (run.status === 'partial') return 'partial';
+  if (
+    isStrategyRunSummaryV2(run.summary) &&
+    (run.summary.partialCount > 0 || run.summary.failedCount > 0)
+  ) {
+    return 'partial';
+  }
+  return 'complete';
+};
+
+/** 新 complete 运行和旧 partial 运行都可派生股票池；running/failed 不可用。 */
+export const isUsableStrategyRun = (run: StrategyRun): boolean =>
+  run.status === 'complete' || run.status === 'partial';
 
 export const LegacyRuleEvaluationSchema = z.object({
   ruleId: z.string().min(1),
@@ -237,6 +319,59 @@ export const StrategySignalSchema = z.object({
   evaluationSnapshot: z.record(z.string(), z.unknown()),
 });
 export type StrategySignal = z.infer<typeof StrategySignalSchema>;
+
+export interface StrategyRunBundle {
+  readonly run: StrategyRun;
+  readonly results: readonly StrategyResult[];
+  readonly signals: readonly StrategySignal[];
+}
+
+export const assertStrategyRunBundleInvariants = (bundle: StrategyRunBundle): void => {
+  assertStrategyRunInvariants(bundle.run);
+  if (bundle.run.status === 'running') {
+    throw new InvariantError('StrategyRun bundle 只接受终态 run');
+  }
+  const resultStockIds = new Set<string>();
+  for (const result of bundle.results) {
+    StrategyResultSchema.parse(result);
+    if (result.runId !== bundle.run.id) throw new InvariantError('StrategyResult.runId 不匹配');
+    if (resultStockIds.has(result.stockId)) {
+      throw new InvariantError('StrategyRun bundle 内 StrategyResult.stockId 必须唯一');
+    }
+    resultStockIds.add(result.stockId);
+  }
+  const signalIds = new Set<string>();
+  const signalIdentities = new Set<string>();
+  for (const signal of bundle.signals) {
+    StrategySignalSchema.parse(signal);
+    if (
+      signal.runId !== bundle.run.id ||
+      signal.strategyId !== bundle.run.strategyId ||
+      signal.strategyVersionId !== bundle.run.strategyVersionId
+    ) {
+      throw new InvariantError('StrategySignal 引用与 run 不匹配');
+    }
+    const identity = `${signal.runId}\0${signal.ruleId}\0${signal.stockId}\0${signal.ts.toISOString()}`;
+    if (signalIds.has(signal.id) || signalIdentities.has(identity)) {
+      throw new InvariantError('StrategyRun bundle 内 StrategySignal identity 必须唯一');
+    }
+    signalIds.add(signal.id);
+    signalIdentities.add(identity);
+  }
+  if (bundle.run.status === 'failed' && (bundle.results.length > 0 || bundle.signals.length > 0)) {
+    throw new InvariantError('failed StrategyRun 不得提交 results/signals');
+  }
+  if (isStrategyRunSummaryV3(bundle.run.summary)) {
+    const summary = bundle.run.summary;
+    if (
+      summary.evaluatedCount !== bundle.results.length ||
+      summary.selectedCount !== bundle.results.filter((result) => result.selected).length ||
+      summary.signalCount !== bundle.signals.length
+    ) {
+      throw new InvariantError('StrategyRun Summary V3 计数必须与 bundle facts 一致');
+    }
+  }
+};
 
 const canonicalizeValue = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonicalizeValue);
@@ -304,5 +439,18 @@ export const assertStrategyRunInvariants = (run: StrategyRun): void => {
   }
   if (run.status === 'complete' && run.error !== undefined) {
     throw new InvariantError('complete StrategyRun 不得有 error');
+  }
+  if (isStrategyRunSummaryV3(run.summary)) {
+    if (run.status === 'partial') {
+      throw new InvariantError(
+        'Summary V3 使用 dataHealth 表达部分数据，run.status 不得为 partial',
+      );
+    }
+    if (run.status === 'failed' && run.summary.dataHealth !== 'unavailable') {
+      throw new InvariantError('failed StrategyRun 的 dataHealth 必须为 unavailable');
+    }
+    if (run.status === 'complete' && run.summary.dataHealth === 'unavailable') {
+      throw new InvariantError('complete StrategyRun 的 dataHealth 不得为 unavailable');
+    }
   }
 };

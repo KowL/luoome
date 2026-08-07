@@ -14,9 +14,7 @@ import type {
   Stock,
   StockEvent,
   Strategy,
-  StrategyResult,
-  StrategyRun,
-  StrategySignal,
+  StrategyRunBundle,
   StrategyVersion,
   Trade,
   WatchRun,
@@ -84,9 +82,7 @@ export interface InMemorySeed {
   readonly dailyBars?: readonly DailyBar[];
   readonly strategies?: readonly Strategy[];
   readonly strategyVersions?: readonly StrategyVersion[];
-  readonly strategyRuns?: readonly StrategyRun[];
-  readonly strategyResults?: readonly StrategyResult[];
-  readonly strategySignals?: readonly StrategySignal[];
+  readonly strategyRunBundles?: readonly StrategyRunBundle[];
   readonly notifications?: readonly Notification[];
   readonly alertPlans?: readonly AlertPlan[];
   readonly watchTriggers?: readonly WatchTrigger[];
@@ -136,11 +132,9 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const q of seed.quotes ?? []) quote.put(q);
     for (const b of seed.dailyBars ?? []) dailyBar.put(b);
     for (const observation of seed.signalObservations ?? []) signalObservation.put(observation);
-    for (const item of seed.strategies ?? []) void strategy.save(item);
-    for (const item of seed.strategyVersions ?? []) void strategy.saveVersion(item);
-    for (const item of seed.strategyRuns ?? []) void strategyRun.saveRun(item);
-    void strategyRun.saveResults(seed.strategyResults ?? []);
-    void strategyRun.saveSignals(seed.strategySignals ?? []);
+    for (const item of seed.strategies ?? []) void strategy.create(item);
+    for (const item of seed.strategyVersions ?? []) void strategy.createVersion(item);
+    for (const bundle of seed.strategyRunBundles ?? []) void strategyRun.commitRun(bundle);
     for (const n of seed.notifications ?? []) notification.put(n);
     for (const p of seed.alertPlans ?? []) void alertPlan.save(p);
     for (const t of seed.watchTriggers ?? []) watchTrigger.put(t);

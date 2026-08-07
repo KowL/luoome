@@ -1,5 +1,8 @@
 import {
+  BUILTIN_STRATEGIES,
+  type DailyBar,
   type MarketDataAdapterLike,
+  money,
   type Strategy,
   type StrategyDslV1,
   type StrategyVersion,
@@ -67,8 +70,8 @@ const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): 
     createdAt: now,
     updatedAt: now,
   };
-  await ctx.repos.strategy.save(strategy);
-  await ctx.repos.strategy.saveVersion(version);
+  await ctx.repos.strategy.create(strategy);
+  await ctx.repos.strategy.createVersion(version);
 };
 
 describe('run_strategy', () => {
@@ -97,16 +100,25 @@ describe('run_strategy', () => {
     });
     expect(result.data.run.inputSnapshot.stockIdChecksum).toMatch(/^[a-f0-9]{64}$/);
     expect(result.data.run.summary).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      dataHealth: 'complete',
       universeCount: 2,
       evaluatedCount: 2,
       selectedCount: 2,
       signalCount: 2,
-      partialCount: 0,
+      incompleteCount: 0,
       failedCount: 0,
     });
     expect(await ctx.repos.strategyRun.findRunById(result.data.run.id)).not.toBeNull();
     expect(await ctx.repos.strategyRun.listResults(result.data.run.id)).toHaveLength(2);
+    const observations = await ctx.repos.signalObservation.list({
+      sourceKind: 'strategy-signal',
+    });
+    expect(observations).toHaveLength(8);
+    expect(observations[0]).toMatchObject({
+      status: 'pending',
+      benchmarkStatus: 'unavailable',
+    });
   });
 
   it('dry-run does not persist', async () => {
@@ -121,9 +133,40 @@ describe('run_strategy', () => {
     if (!result.ok) return;
     expect(result.data.persisted).toBe(false);
     expect(await ctx.repos.strategyRun.findRunById(result.data.run.id)).toBeNull();
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
   });
 
-  it('one stock data failure yields partial without blocking other stocks', async () => {
+  it('keeps a committed run successful when derived observation persistence fails', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 1 });
+    await seedStrategy(base);
+    const observationRepo = base.repos.signalObservation;
+    const warnings: unknown[] = [];
+    const ctx = {
+      ...base,
+      repos: {
+        ...base.repos,
+        signalObservation: {
+          findById: observationRepo.findById.bind(observationRepo),
+          list: observationRepo.list.bind(observationRepo),
+          save: () => Promise.reject(new Error('observation storage unavailable')),
+        },
+      },
+      logger: { ...base.logger, warn: (...args: unknown[]) => warnings.push(args) },
+    };
+
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(await base.repos.strategyRun.findRunById(result.data.run.id)).not.toBeNull();
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('one stock data failure completes the run and exposes partial data health', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 2 });
     await seedStrategy(base);
@@ -141,9 +184,67 @@ describe('run_strategy', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.run.status).toBe('partial');
+    expect(result.data.run.status).toBe('complete');
     expect(result.data.results).toHaveLength(1);
-    expect(result.data.run.summary).toMatchObject({ failedCount: 1, evaluatedCount: 1 });
+    expect(result.data.run.summary).toMatchObject({
+      schemaVersion: 3,
+      dataHealth: 'partial',
+      failedCount: 1,
+      evaluatedCount: 1,
+    });
+  });
+
+  it('prepares derived meta fields required by builtin strategies', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 1 });
+    const builtin = BUILTIN_STRATEGIES.find(
+      (bundle) => bundle.strategy.id === 'pullback-after-limit-up',
+    );
+    if (builtin === undefined) throw new Error('builtin fixture missing');
+    await base.repos.strategy.create(builtin.strategy);
+    await base.repos.strategy.createVersion(builtin.version);
+    const closes = [...Array.from({ length: 16 }, () => 100), 110, 111, 112, 113];
+    const bars: DailyBar[] = closes.map((close, index) => ({
+      stockId: '600519.SH',
+      date: new Date(Date.UTC(2026, 6, index + 1)),
+      open: money(close),
+      high: money(close),
+      low: money(close),
+      close: money(close),
+      volume: 1_000_000,
+      adjustment: 'qfq',
+      source: 'meta-fixture',
+    }));
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      fetchDailyBars: () => Promise.resolve(bars),
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
+
+    const result = await runStrategyTool.execute(
+      { strategyId: builtin.strategy.id, stockIds: ['600519.SH'] },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.run).toMatchObject({
+      status: 'complete',
+      summary: { schemaVersion: 3, dataHealth: 'complete' },
+    });
+    expect(result.data.results[0]).toMatchObject({ selected: true, score: 75 });
+    expect(
+      result.data.results[0]?.ruleEvaluations.flatMap((evaluation) =>
+        'inputs' in evaluation ? evaluation.inputs : [],
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'meta.recentLimitUp', status: 'available', value: true }),
+      ]),
+    );
+    expect(result.data.results[0]?.evidence).toContain('近 3 日内涨停');
+    expect(
+      result.data.run.providerStatuses.some((status) => status.provider === 'strategy-meta'),
+    ).toBe(false);
   });
 
   it('all candidate data failures yield failed without partial persistence', async () => {

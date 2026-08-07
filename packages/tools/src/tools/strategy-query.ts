@@ -1,6 +1,8 @@
 import {
   classifyStrategyResult,
   diffStrategyRunViews,
+  getStrategyRunDataHealth,
+  isUsableStrategyRun,
   StrategyResultSchema,
   StrategyResultViewKindSchema,
   StrategyResultViewSchema,
@@ -49,10 +51,6 @@ export const listStrategyRunsTool = defineTool({
     return { runs };
   },
 });
-
-/** 可作视图/工作台/比较基准的运行：求值完整或部分数据不足但结果可用的终态。 */
-const isUsableBaseline = (run: StrategyRun): boolean =>
-  run.status === 'complete' || run.status === 'partial';
 
 export const GetStrategyRunInput = z.object({ runId: z.string().min(1) });
 export const GetStrategyRunOutput = z.object({
@@ -143,7 +141,7 @@ export const ListStrategyResultViewsOutput = z.object({
 export const listStrategyResultViewsTool = defineTool({
   name: 'list_strategy_result_views',
   description:
-    '查询 Strategy 当前或指定运行的股票池、候选池及数据不完整视图；默认基准为最近一次 complete 或 partial 运行',
+    '查询 Strategy 当前或指定运行的股票池、候选池及数据不完整视图；默认基准为最近一次已完成且结果可用的运行',
   sideEffect: 'read',
   input: ListStrategyResultViewsInput,
   output: ListStrategyResultViewsOutput,
@@ -153,11 +151,11 @@ export const listStrategyResultViewsTool = defineTool({
     const run =
       input.runId === undefined
         ? (await ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, limit: 10 })).find(
-            (candidate) => isUsableBaseline(candidate),
+            (candidate) => isUsableStrategyRun(candidate),
           )
         : await ctx.repos.strategyRun.findRunById(input.runId);
     if (run === undefined || run === null) {
-      return errNotFound('可用的 StrategyRun（complete/partial）', input.runId ?? strategy.id);
+      return errNotFound('可用的完成运行', input.runId ?? strategy.id);
     }
     if (run.strategyId !== strategy.id) {
       return errInvalidInput(`StrategyRun 不属于 Strategy: ${run.id}`);
@@ -229,7 +227,7 @@ export const GetStrategyWorkspaceOutput = z.object({
   currentVersion: StrategyVersionSchema.optional(),
   latestAttempt: StrategyRunSchema.optional(),
   currentRun: StrategyRunSchema.optional(),
-  previousCompleteRun: StrategyRunSchema.optional(),
+  previousRun: StrategyRunSchema.optional(),
   overview: z.object({
     selectedCount: z.number().int().nonnegative().optional(),
     ruleNearMissCount: z.number().int().nonnegative().optional(),
@@ -245,7 +243,7 @@ export const GetStrategyWorkspaceOutput = z.object({
 
 export const getStrategyWorkspaceTool = defineTool({
   name: 'get_strategy_workspace',
-  description: '查询 Strategy 工作台摘要；最近失败或部分运行不会覆盖上一条可用运行',
+  description: '查询 Strategy 工作台摘要；已完成运行始终发布明确结果，执行失败才回退上一条可用运行',
   sideEffect: 'read',
   input: GetStrategyWorkspaceInput,
   output: GetStrategyWorkspaceOutput,
@@ -257,9 +255,9 @@ export const getStrategyWorkspaceTool = defineTool({
       ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, limit: 10 }),
     ]);
     const latest = latestAttempt[0];
-    const usableRuns = recentRuns.filter((run) => isUsableBaseline(run));
+    const usableRuns = recentRuns.filter((run) => isUsableStrategyRun(run));
     const currentRun = usableRuns[0];
-    const previousCompleteRun = usableRuns[1];
+    const previousRun = usableRuns[1];
     const currentVersion =
       strategy.currentVersionId === undefined
         ? undefined
@@ -268,12 +266,14 @@ export const getStrategyWorkspaceTool = defineTool({
     const health =
       latest === undefined
         ? ('never-run' as const)
-        : latest.status === 'complete'
-          ? ('ready' as const)
-          : latest.status;
+        : latest.status === 'running' || latest.status === 'failed'
+          ? latest.status
+          : getStrategyRunDataHealth(latest) === 'partial'
+            ? ('partial' as const)
+            : ('ready' as const);
     // 仅当最近尝试不可用作基准（失败/进行中）且存在更早的可用运行时才警告；
     // latest 本身是 partial 且被用作基准时属于正常状态，不警告。
-    if (latest !== undefined && currentRun !== undefined && !isUsableBaseline(latest)) {
+    if (latest !== undefined && currentRun !== undefined && !isUsableStrategyRun(latest)) {
       warnings.push(
         `最近运行${latest.status}，当前结果仍来自 ${currentRun.finishedAt?.toISOString() ?? currentRun.startedAt.toISOString()} 的运行`,
       );
@@ -292,16 +292,16 @@ export const getStrategyWorkspaceTool = defineTool({
         (view) => view.kind === 'ranking-near-miss',
       ).length;
       overview.incompleteCount = views.filter((view) => view.kind === 'incomplete').length;
-      if (previousCompleteRun !== undefined) {
+      if (previousRun !== undefined) {
         const [previousVersion, previousResults] = await Promise.all([
-          ctx.repos.strategy.findVersionById(previousCompleteRun.strategyVersionId),
-          ctx.repos.strategyRun.listResults(previousCompleteRun.id),
+          ctx.repos.strategy.findVersionById(previousRun.strategyVersionId),
+          ctx.repos.strategyRun.listResults(previousRun.id),
         ]);
         if (previousVersion === null) {
-          return errNotFound('StrategyVersion', previousCompleteRun.strategyVersionId);
+          return errNotFound('StrategyVersion', previousRun.strategyVersionId);
         }
         const diff = diffStrategyRunViews({
-          fromRun: previousCompleteRun,
+          fromRun: previousRun,
           toRun: currentRun,
           fromViews: previousResults.map((result) =>
             classifyStrategyResult(previousVersion.definition, result),
@@ -321,7 +321,7 @@ export const getStrategyWorkspaceTool = defineTool({
       ...(currentVersion === undefined || currentVersion === null ? {} : { currentVersion }),
       ...(latest === undefined ? {} : { latestAttempt: latest }),
       ...(currentRun === undefined ? {} : { currentRun }),
-      ...(previousCompleteRun === undefined ? {} : { previousCompleteRun }),
+      ...(previousRun === undefined ? {} : { previousRun }),
       overview,
       warnings,
     };
@@ -356,7 +356,7 @@ export const CompareStrategyRunsOutput = z.object({
 
 export const compareStrategyRunsTool = defineTool({
   name: 'compare_strategy_runs',
-  description: '比较同一 Strategy 的两次持久化运行；默认取最近两次可用运行（complete 或 partial）',
+  description: '比较同一 Strategy 的两次持久化可用运行；数据缺失不会被推断为股票池进出',
   sideEffect: 'read',
   input: CompareStrategyRunsInput,
   output: CompareStrategyRunsOutput,
@@ -368,7 +368,7 @@ export const compareStrategyRunsTool = defineTool({
     if (input.fromRunId === undefined || input.toRunId === undefined) {
       const runs = (
         await ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, limit: 10 })
-      ).filter((run) => isUsableBaseline(run));
+      ).filter((run) => isUsableStrategyRun(run));
       toRun = runs[0];
       fromRun = runs[1];
       if (fromRun === undefined || toRun === undefined) {
@@ -414,8 +414,11 @@ export const compareStrategyRunsTool = defineTool({
     if (diff.definitionChanged) {
       warnings.push('定义已变化，以下差异不能单独归因于市场');
     }
-    if (fromRun.status !== 'complete' || toRun.status !== 'complete') {
-      warnings.push('比较包含非 complete 运行，差异可能不完整');
+    if (
+      getStrategyRunDataHealth(fromRun) !== 'complete' ||
+      getStrategyRunDataHealth(toRun) !== 'complete'
+    ) {
+      warnings.push('比较包含数据不完整运行；缺失标的只标记 data-unavailable，不推断进出股票池');
     }
     return {
       fromRun,

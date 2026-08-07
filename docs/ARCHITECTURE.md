@@ -458,7 +458,10 @@ Web 通过带 mutation token 与同源 Origin 校验的 `/api/reports/run/:kind`
 
 **Strategy 研究事实**：指标快照可包含最新价、动量、均线与 Bollinger 字段。规则求值的
 unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal 只表达事实，
-不表示胜率、Advice 或交易。
+不表示胜率、Advice 或交易。StrategyRun 的执行状态与数据完整度分离：新运行只写
+`running / complete / failed`，其中 `complete` 表示结果包已原子提交；Summary V3 通过
+`dataHealth=complete / partial / unavailable`、evaluated/incomplete/failed 计数描述覆盖质量。
+旧 `status=partial` 记录继续可读，并按“执行完成、数据部分可用”参与当前结果视图。
 
 ```txt
 Account          账户（真实，币种，初始资金）
@@ -469,7 +472,7 @@ PriceSnapshot    实时行情快照（标的、ts、OHLC、量、源）
 DailyBar         规范前复权日线（标的、日期、qfq OHLC、量、来源、可选原始复权因子）
 Strategy         版本化研究规则身份
 StrategyVersion  不可变 DSL 定义、hash、校验与发布时间
-StrategyRun      一次运行的 coverage、dataAsOf、状态和 provider 状态
+StrategyRun      一次运行的 coverage、dataAsOf、执行状态、数据完整度和 provider 状态
 StrategyResult   逐股规则结果、分数、排名、证据
 StrategySignal   按规则产生的方向、分数、证据事实
 Watchlist        统一观察集合

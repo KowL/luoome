@@ -554,6 +554,43 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       ).status,
     ).toBe(200);
 
+    const versionResponse = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/versions`, {
+        definition: {
+          schemaVersion: 1,
+          metadata: { horizon: 'short' },
+          universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+          selection: {
+            logic: 'all',
+            rules: [
+              {
+                id: 'positive-price',
+                name: '价格有效',
+                when: 'quote.close > 0',
+                evidence: ['价格有效'],
+              },
+            ],
+          },
+          signals: { entry: [], exit: [], risk: [] },
+        },
+      }),
+    );
+    expect(versionResponse.status).toBe(200);
+    const versionBody = (await versionResponse.json()) as {
+      data?: { version?: { id: string } };
+    };
+    const versionId = versionBody.data?.version?.id;
+    expect(versionId).toBeString();
+    if (versionId === undefined) return;
+    expect(
+      (await app.fetch(targetRequest(`/api/strategies/${strategyId}/validate`, { versionId })))
+        .status,
+    ).toBe(200);
+    expect(
+      (await app.fetch(targetRequest(`/api/strategies/${strategyId}/publish`, { versionId })))
+        .status,
+    ).toBe(200);
+
     const paused = await app.fetch(targetRequest(`/api/strategies/${strategyId}/pause`, {}));
     expect(paused.status).toBe(200);
     expect(await paused.json()).toMatchObject({
@@ -562,10 +599,10 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     });
 
     const resumed = await app.fetch(targetRequest(`/api/strategies/${strategyId}/resume`, {}));
-    expect(resumed.status).toBe(400);
+    expect(resumed.status).toBe(200);
     expect(await resumed.json()).toMatchObject({
-      ok: false,
-      error: { kind: 'invalid_input' },
+      ok: true,
+      data: { strategy: { id: strategyId, status: 'active' } },
     });
   });
 

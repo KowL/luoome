@@ -1,16 +1,15 @@
 import {
   assertStrategyInvariants,
-  assertStrategyRunInvariants,
+  assertStrategyRunBundleInvariants,
   assertStrategyVersionInvariants,
   InvariantError,
   type Strategy,
   type StrategyRepository,
   type StrategyResult,
-  StrategyResultSchema,
   type StrategyRun,
+  type StrategyRunBundle,
   type StrategyRunRepository,
   type StrategySignal,
-  StrategySignalSchema,
   type StrategyVersion,
 } from '@luoome/core';
 import { and, asc, desc, eq, gte, sql } from 'drizzle-orm';
@@ -100,8 +99,11 @@ const toSignal = (row: SignalRow): StrategySignal => ({
 export class DrizzleStrategyRepository implements StrategyRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
-  async save(strategy: Strategy): Promise<void> {
+  async create(strategy: Strategy): Promise<void> {
     assertStrategyInvariants(strategy);
+    if ((await this.findById(strategy.id)) !== null) {
+      throw new InvariantError(`Strategy 已存在: ${strategy.id}`);
+    }
     this.db
       .insert(strategies)
       .values({
@@ -113,16 +115,6 @@ export class DrizzleStrategyRepository implements StrategyRepository {
         currentVersionId: strategy.currentVersionId ?? null,
         createdAt: strategy.createdAt,
         updatedAt: strategy.updatedAt,
-      })
-      .onConflictDoUpdate({
-        target: strategies.id,
-        set: {
-          name: strategy.name,
-          description: strategy.description,
-          status: strategy.status,
-          currentVersionId: strategy.currentVersionId ?? null,
-          updatedAt: strategy.updatedAt,
-        },
       })
       .run();
   }
@@ -147,7 +139,7 @@ export class DrizzleStrategyRepository implements StrategyRepository {
       .map(toStrategy);
   }
 
-  async saveVersion(version: StrategyVersion): Promise<void> {
+  async createVersion(version: StrategyVersion): Promise<void> {
     const strategy = await this.findById(version.strategyId);
     if (strategy === null) throw new InvariantError(`Strategy 不存在: ${version.strategyId}`);
     assertStrategyVersionInvariants(version, strategy.owner);
@@ -158,6 +150,7 @@ export class DrizzleStrategyRepository implements StrategyRepository {
       }
     }
     const existing = await this.findVersionById(version.id);
+    if (existing !== null) throw new InvariantError(`StrategyVersion 已存在: ${version.id}`);
     const versions = await this.listVersions(version.strategyId);
     // 预检唯一索引 strategy_versions_strategy_version_unique，避免泄漏 SQLite 错误（与 memory 对齐）。
     const sameNumber = versions.find(
@@ -167,9 +160,6 @@ export class DrizzleStrategyRepository implements StrategyRepository {
     const maxVersion = versions.at(-1)?.version ?? 0;
     if (existing === null && version.version <= maxVersion) {
       throw new InvariantError('新 StrategyVersion.version 必须严格递增');
-    }
-    if (existing?.publishedAt !== undefined && existing.definitionHash !== version.definitionHash) {
-      throw new InvariantError('published StrategyVersion 的 definition 不可修改');
     }
     this.db
       .insert(strategyVersions)
@@ -186,19 +176,37 @@ export class DrizzleStrategyRepository implements StrategyRepository {
         publishedAt: version.publishedAt ?? null,
         createdAt: version.createdAt,
       })
-      .onConflictDoUpdate({
-        target: strategyVersions.id,
-        set: {
-          definition: version.definition,
-          definitionHash: version.definitionHash,
-          parentVersionId: version.parentVersionId ?? null,
-          changeSummary: version.changeSummary ?? null,
-          validationStatus: version.validationStatus,
-          validationErrors: [...version.validationErrors],
-          publishedAt: version.publishedAt ?? null,
-        },
-      })
       .run();
+  }
+
+  async setVersionValidation(
+    versionId: string,
+    validation: { readonly status: 'valid' | 'invalid'; readonly errors: readonly string[] },
+  ): Promise<void> {
+    this.db.transaction((tx) => {
+      const version = tx
+        .select()
+        .from(strategyVersions)
+        .where(eq(strategyVersions.id, versionId))
+        .get();
+      if (version === undefined) throw new InvariantError(`StrategyVersion 不存在: ${versionId}`);
+      const strategy = tx
+        .select()
+        .from(strategies)
+        .where(eq(strategies.id, version.strategyId))
+        .get();
+      if (strategy?.owner !== 'user') throw new InvariantError('builtin StrategyVersion 不可修改');
+      if (version.publishedAt !== null) {
+        throw new InvariantError('published StrategyVersion 不可重新校验修改');
+      }
+      tx.update(strategyVersions)
+        .set({
+          validationStatus: validation.status,
+          validationErrors: [...validation.errors],
+        })
+        .where(eq(strategyVersions.id, versionId))
+        .run();
+    });
   }
 
   async findVersionById(id: string): Promise<StrategyVersion | null> {
@@ -250,6 +258,7 @@ export class DrizzleStrategyRepository implements StrategyRepository {
         .where(eq(strategyVersions.id, versionId))
         .get();
       if (
+        strategy.owner !== 'user' ||
         version === undefined ||
         version.strategyId !== strategyId ||
         version.validationStatus !== 'valid'
@@ -266,44 +275,51 @@ export class DrizzleStrategyRepository implements StrategyRepository {
         .run();
     });
   }
+
+  async pause(strategyId: string, at: Date): Promise<void> {
+    this.db.transaction((tx) => {
+      const strategy = tx.select().from(strategies).where(eq(strategies.id, strategyId)).get();
+      if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${strategyId}`);
+      if (strategy.owner !== 'user' || strategy.status !== 'active') {
+        throw new InvariantError('只有 active 的用户 Strategy 可暂停');
+      }
+      tx.update(strategies)
+        .set({ status: 'paused', updatedAt: at })
+        .where(eq(strategies.id, strategyId))
+        .run();
+    });
+  }
+
+  async resume(strategyId: string, at: Date): Promise<void> {
+    this.db.transaction((tx) => {
+      const strategy = tx.select().from(strategies).where(eq(strategies.id, strategyId)).get();
+      if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${strategyId}`);
+      const version =
+        strategy.currentVersionId === null
+          ? undefined
+          : tx
+              .select()
+              .from(strategyVersions)
+              .where(eq(strategyVersions.id, strategy.currentVersionId))
+              .get();
+      if (
+        strategy.owner !== 'user' ||
+        strategy.status !== 'paused' ||
+        version?.validationStatus !== 'valid' ||
+        version.publishedAt === null
+      ) {
+        throw new InvariantError('恢复需要 paused 用户 Strategy 及已发布 valid currentVersion');
+      }
+      tx.update(strategies)
+        .set({ status: 'active', updatedAt: at })
+        .where(eq(strategies.id, strategyId))
+        .run();
+    });
+  }
 }
 
 export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
-
-  async saveRun(run: StrategyRun): Promise<void> {
-    assertStrategyRunInvariants(run);
-    this.assertRunnableVersion(run.strategyId, run.strategyVersionId);
-    this.db
-      .insert(strategyRuns)
-      .values({
-        id: run.id,
-        strategyId: run.strategyId,
-        strategyVersionId: run.strategyVersionId,
-        mode: run.mode,
-        coverage: run.coverage,
-        dataAsOf: run.dataAsOf,
-        startedAt: run.startedAt,
-        finishedAt: run.finishedAt ?? null,
-        status: run.status,
-        inputSnapshot: run.inputSnapshot,
-        providerStatuses: [...run.providerStatuses],
-        summary: run.summary ?? null,
-        error: run.error ?? null,
-      })
-      .onConflictDoUpdate({
-        target: strategyRuns.id,
-        set: {
-          dataAsOf: run.dataAsOf,
-          finishedAt: run.finishedAt ?? null,
-          status: run.status,
-          providerStatuses: [...run.providerStatuses],
-          summary: run.summary ?? null,
-          error: run.error ?? null,
-        },
-      })
-      .run();
-  }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
     const row = this.db.select().from(strategyRuns).where(eq(strategyRuns.id, id)).get();
@@ -333,40 +349,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     return rows.map(toRun);
   }
 
-  async saveResults(results: readonly StrategyResult[]): Promise<void> {
-    if (results.length === 0) return;
-    for (const result of results) StrategyResultSchema.parse(result);
-    for (const result of results) {
-      if ((await this.findRunById(result.runId)) === null) {
-        throw new InvariantError(`StrategyRun 不存在: ${result.runId}`);
-      }
-      this.db
-        .insert(strategyResults)
-        .values({
-          runId: result.runId,
-          stockId: result.stockId,
-          selected: result.selected,
-          score: result.score ?? null,
-          rank: result.rank ?? null,
-          ruleEvaluations: [...result.ruleEvaluations],
-          evidence: [...result.evidence],
-          dataAsOf: result.dataAsOf,
-        })
-        .onConflictDoUpdate({
-          target: [strategyResults.runId, strategyResults.stockId],
-          set: {
-            selected: result.selected,
-            score: result.score ?? null,
-            rank: result.rank ?? null,
-            ruleEvaluations: [...result.ruleEvaluations],
-            evidence: [...result.evidence],
-            dataAsOf: result.dataAsOf,
-          },
-        })
-        .run();
-    }
-  }
-
   async listResults(runId: string): Promise<readonly StrategyResult[]> {
     return (
       this.db
@@ -382,23 +364,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         .all()
         .map(toResult)
     );
-  }
-
-  async saveSignals(signals: readonly StrategySignal[]): Promise<void> {
-    for (const signal of signals) {
-      StrategySignalSchema.parse(signal);
-      if ((await this.findRunById(signal.runId)) === null) {
-        throw new InvariantError(`StrategyRun 不存在: ${signal.runId}`);
-      }
-      this.db
-        .insert(strategySignals)
-        .values({
-          ...signal,
-          evidence: [...signal.evidence],
-        })
-        .onConflictDoNothing()
-        .run();
-    }
   }
 
   async signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]> {
@@ -439,30 +404,8 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       .map(toSignal);
   }
 
-  async commitRun(bundle: {
-    readonly run: StrategyRun;
-    readonly results: readonly StrategyResult[];
-    readonly signals: readonly StrategySignal[];
-  }): Promise<void> {
-    assertStrategyRunInvariants(bundle.run);
-    if (bundle.run.status === 'running') {
-      throw new InvariantError('commitRun 只接受终态 StrategyRun');
-    }
-    for (const result of bundle.results) {
-      StrategyResultSchema.parse(result);
-      if (result.runId !== bundle.run.id) throw new InvariantError('StrategyResult.runId 不匹配');
-    }
-    for (const signal of bundle.signals) {
-      StrategySignalSchema.parse(signal);
-      if (
-        signal.runId !== bundle.run.id ||
-        signal.strategyId !== bundle.run.strategyId ||
-        signal.strategyVersionId !== bundle.run.strategyVersionId
-      ) {
-        throw new InvariantError('StrategySignal 引用与 run 不匹配');
-      }
-    }
-
+  async commitRun(bundle: StrategyRunBundle): Promise<void> {
+    assertStrategyRunBundleInvariants(bundle);
     this.db.transaction((tx) => {
       const strategy = tx
         .select()
@@ -498,17 +441,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
           summary: bundle.run.summary ?? null,
           error: bundle.run.error ?? null,
         })
-        .onConflictDoUpdate({
-          target: strategyRuns.id,
-          set: {
-            dataAsOf: bundle.run.dataAsOf,
-            finishedAt: bundle.run.finishedAt ?? null,
-            status: bundle.run.status,
-            providerStatuses: [...bundle.run.providerStatuses],
-            summary: bundle.run.summary ?? null,
-            error: bundle.run.error ?? null,
-          },
-        })
         .run();
       for (const result of bundle.results) {
         tx.insert(strategyResults)
@@ -522,42 +454,13 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
             evidence: [...result.evidence],
             dataAsOf: result.dataAsOf,
           })
-          .onConflictDoUpdate({
-            target: [strategyResults.runId, strategyResults.stockId],
-            set: {
-              selected: result.selected,
-              score: result.score ?? null,
-              rank: result.rank ?? null,
-              ruleEvaluations: [...result.ruleEvaluations],
-              evidence: [...result.evidence],
-              dataAsOf: result.dataAsOf,
-            },
-          })
           .run();
       }
       for (const signal of bundle.signals) {
         tx.insert(strategySignals)
           .values({ ...signal, evidence: [...signal.evidence] })
-          .onConflictDoNothing()
           .run();
       }
     });
-  }
-
-  private assertRunnableVersion(strategyId: string, versionId: string): void {
-    const strategy = this.db.select().from(strategies).where(eq(strategies.id, strategyId)).get();
-    const version = this.db
-      .select()
-      .from(strategyVersions)
-      .where(eq(strategyVersions.id, versionId))
-      .get();
-    if (
-      strategy?.status !== 'active' ||
-      version?.strategyId !== strategyId ||
-      version.validationStatus !== 'valid' ||
-      version.publishedAt === null
-    ) {
-      throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
-    }
   }
 }

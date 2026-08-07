@@ -41,10 +41,15 @@ const STRATEGY_STATUS = {
   archived: ['已归档', 'badge-neutral'],
 };
 const RUN_STATUS = {
-  complete: ['完整', 'badge-active'],
-  partial: ['部分可用', 'badge-important'],
+  complete: ['已完成', 'badge-active'],
+  partial: ['已完成（历史）', 'badge-important'],
   failed: ['失败', 'badge-pos'],
   running: ['运行中', 'badge-neutral'],
+};
+const DATA_HEALTH = {
+  complete: '完整',
+  partial: '部分可用',
+  unavailable: '不可用',
 };
 const RULE_STATUS = {
   matched: ['命中', 'badge-active'],
@@ -97,11 +102,15 @@ const metric = (label, value, note = '') =>
   ]);
 
 const renderHealthBanner = (workspace) => {
-  if ((workspace.warnings ?? []).length === 0) return null;
+  const warnings = [...(workspace.warnings ?? [])];
+  if (workspace.overview.health === 'partial') {
+    warnings.unshift('本次运行已完成；部分标的数据不可用，股票池仅展示已明确命中的标的。');
+  }
+  if (warnings.length === 0) return null;
   return el(
     'div',
     `strategy-health-banner ${workspace.overview.health === 'failed' ? 'danger' : 'warning'}`,
-    workspace.warnings.map((warning) => el('p', null, warning)),
+    warnings.map((warning) => el('p', null, warning)),
   );
 };
 
@@ -284,7 +293,7 @@ const renderOverview = (workspace, state) => {
     grid,
     el('section', 'strategy-overview-audit', [
       el('div', null, [
-        el('span', 'strategy-metric-label', '当前有效运行'),
+        el('span', 'strategy-metric-label', '当前完成运行'),
         el('strong', 'mono', fmtDateTime(current.finishedAt ?? current.startedAt)),
       ]),
       el('div', null, [
@@ -386,6 +395,9 @@ const renderPool = async (strategyId, setStatus) => {
 
 const runSummaryText = (run) => {
   const summary = run.summary ?? {};
+  if (summary.schemaVersion === 3) {
+    return `数据 ${DATA_HEALTH[summary.dataHealth] ?? summary.dataHealth} · 覆盖 ${summary.universeCount} · 求值 ${summary.evaluatedCount} · 入选 ${summary.selectedCount} · 信号 ${summary.signalCount} · 不完整 ${summary.incompleteCount} · 失败 ${summary.failedCount}`;
+  }
   if (summary.schemaVersion === 2) {
     return `覆盖 ${summary.universeCount} · 求值 ${summary.evaluatedCount} · 入选 ${summary.selectedCount} · 信号 ${summary.signalCount} · 不完整 ${summary.partialCount} · 失败 ${summary.failedCount}`;
   }
@@ -435,6 +447,7 @@ const renderDiff = async (strategyId) => {
     metric('退出', diff.summary.exited),
     metric('候选转正', diff.summary.candidatePromoted),
     metric('排名变化', diff.summary.rankChanged),
+    metric('数据待确认', diff.summary.dataUnavailable ?? 0),
   ]);
   const rows = diff.rows.filter((row) => !row.changes.includes('stayed') || row.changes.length > 1);
   const table =
@@ -699,7 +712,8 @@ const runAction = async (strategy, persist, setStatus, refresh) => {
   } else {
     const confirmed = await confirmDialog({
       title: '正式运行',
-      message: '将执行全市场扫描并原子落库；失败或部分运行不会覆盖上一份有效股票池。',
+      message:
+        '将执行全市场扫描并原子落库；部分标的数据不可用时，仍会发布已明确命中的股票并单独标记数据完整度。只有执行失败才保留上一份股票池。',
       confirmLabel: '开始运行',
     });
     if (!confirmed) return;
@@ -714,10 +728,14 @@ const runAction = async (strategy, persist, setStatus, refresh) => {
     return;
   }
   responseCache.clear();
+  const dataHealth =
+    result.data.run.summary?.schemaVersion === 3
+      ? `，数据${DATA_HEALTH[result.data.run.summary.dataHealth] ?? result.data.run.summary.dataHealth}`
+      : '';
   setStatus(
     persist
-      ? `运行${RUN_STATUS[result.data.run.status]?.[0] ?? result.data.run.status}；结果 ${result.data.results.length}，信号 ${result.data.signals.length}`
-      : `试跑${RUN_STATUS[result.data.run.status]?.[0] ?? result.data.run.status}；结果 ${result.data.results.length}（未落库）`,
+      ? `运行${RUN_STATUS[result.data.run.status]?.[0] ?? result.data.run.status}${dataHealth}；结果 ${result.data.results.length}，信号 ${result.data.signals.length}`
+      : `试跑${RUN_STATUS[result.data.run.status]?.[0] ?? result.data.run.status}${dataHealth}；结果 ${result.data.results.length}（未落库）`,
   );
   await refresh();
 };

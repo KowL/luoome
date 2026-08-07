@@ -131,7 +131,7 @@ StockPool   → AlertPlan
 - 旧 tactic DSL 从新模块 re-export，确保测试不回退。
 - 新增 StrategyFieldRegistry 和静态路径检查。
 - 实现 selection all/any、scoring、stable rank 和 signals。
-- 定义 unknown/error/partial 传播。
+- 定义 unknown/error 传播，并将逐股不完整汇总为 run 的 dataHealth/incompleteCount。
 - 增加单股纯 evaluator 测试。
 
 ### 6.3 数据准备与运行
@@ -163,7 +163,7 @@ StockPool   → AlertPlan
 
 - 迁移 Strategy 与原 Tactic 在同一 fixture/context 产生相同 signal。
 - 同一 version/input 得到相同 selected/score/rank。
-- 全市场 run 的 partial/failed 状态正确。
+- 全市场 run 的 complete/failed 执行状态与 dataHealth 分离正确；存量 partial 可读。
 - workflow 一项失败不阻塞其它 Strategy。
 - `bun run test`、`test:db`、typecheck、lint 通过。
 

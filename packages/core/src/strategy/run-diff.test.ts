@@ -79,4 +79,31 @@ describe('Strategy run diff', () => {
       changes: ['exited', 'selected-demoted'],
     });
   });
+
+  it('does not report entry or exit when either run lacks reliable stock data', () => {
+    const diff = diffStrategyRunViews({
+      fromRun: run('run-1', 'version-1'),
+      toRun: run('run-2', 'version-1'),
+      fromViews: [
+        view(result('run-1', '000001.SZ', true, 1, 90), 'selected'),
+        view(result('run-1', '000002.SZ', false), 'incomplete'),
+      ],
+      toViews: [
+        view(result('run-2', '000002.SZ', true, 1, 92), 'selected'),
+        view(result('run-2', '000003.SZ', true, 2, 80), 'selected'),
+      ],
+    });
+
+    expect(diff.summary).toMatchObject({
+      entered: 0,
+      exited: 0,
+      selectedDemoted: 0,
+      dataUnavailable: 3,
+    });
+    expect(diff.rows.map((row) => [row.stockId, row.changes])).toEqual([
+      ['000001.SZ', ['data-unavailable']],
+      ['000002.SZ', ['data-unavailable']],
+      ['000003.SZ', ['data-unavailable']],
+    ]);
+  });
 });

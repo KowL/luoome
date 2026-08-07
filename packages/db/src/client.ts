@@ -413,9 +413,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
       evaluation_snapshot_json TEXT NOT NULL
     )
   `);
+  db.run(sql`DROP INDEX IF EXISTS strategy_signals_identity_unique`);
+  db.run(sql`DROP INDEX IF EXISTS strategy_signals_run_identity_unique`);
   db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS strategy_signals_identity_unique
-    ON strategy_signals (strategy_version_id, rule_id, stock_id, ts)
+    CREATE UNIQUE INDEX IF NOT EXISTS strategy_signals_run_event_unique
+    ON strategy_signals (run_id, rule_id, stock_id, ts)
   `);
   db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_signals_strategy_ts_idx ON strategy_signals (strategy_id, ts)`,

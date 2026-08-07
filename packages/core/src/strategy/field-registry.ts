@@ -102,11 +102,29 @@ const indicatorFields: readonly StrategyFieldDefinition[] = KNOWN_INDICATOR_KEYS
 }));
 
 const metaFields: readonly StrategyFieldDefinition[] = [
-  { path: 'meta.recentLimitUp', type: 'boolean', dataSource: 'meta' },
-  { path: 'meta.daysSinceLimitUp', type: 'number', unit: 'trading-day', dataSource: 'meta' },
-  { path: 'meta.priceUp', type: 'boolean', dataSource: 'meta' },
-  { path: 'meta.sectorAvgChange3d', type: 'number', unit: 'ratio', dataSource: 'meta' },
-  { path: 'meta.stockChange3d', type: 'number', unit: 'ratio', dataSource: 'meta' },
+  { path: 'meta.recentLimitUp', type: 'boolean', dataSource: 'daily-bars', requiredLookback: 6 },
+  {
+    path: 'meta.daysSinceLimitUp',
+    type: 'number',
+    unit: 'trading-day',
+    dataSource: 'daily-bars',
+    requiredLookback: 6,
+  },
+  { path: 'meta.priceUp', type: 'boolean', dataSource: 'daily-bars', requiredLookback: 4 },
+  {
+    path: 'meta.sectorAvgChange3d',
+    type: 'number',
+    unit: 'ratio',
+    dataSource: 'daily-bars',
+    requiredLookback: 4,
+  },
+  {
+    path: 'meta.stockChange3d',
+    type: 'number',
+    unit: 'ratio',
+    dataSource: 'daily-bars',
+    requiredLookback: 4,
+  },
 ].map((field) => ({ ...field, availableForCoverage: coverage })) as StrategyFieldDefinition[];
 
 export const STRATEGY_FIELD_REGISTRY: readonly StrategyFieldDefinition[] = [

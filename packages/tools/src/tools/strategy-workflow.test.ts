@@ -141,8 +141,8 @@ describe('strategy workspace full flow', () => {
     if (!workspace.ok) return;
     expect(workspace.data).toMatchObject({
       currentRun: { id: second.data.run.id },
-      previousCompleteRun: { id: first.data.run.id },
-      overview: { health: 'ready', selectedCount: 2, enteredCount: 1, exitedCount: 0 },
+      previousRun: { id: first.data.run.id },
+      overview: { health: 'ready', selectedCount: 2, enteredCount: 0, exitedCount: 0 },
     });
 
     const pool = await listStrategyResultViewsTool.execute(
@@ -165,7 +165,11 @@ describe('strategy workspace full flow', () => {
     const diff = await compareStrategyRunsTool.execute({ strategyId: 'full-flow-strategy' }, ctx);
     expect(diff.ok).toBe(true);
     if (!diff.ok) return;
-    expect(diff.data.diff.summary).toMatchObject({ entered: 1, exited: 0 });
+    expect(diff.data.diff.summary).toMatchObject({
+      entered: 0,
+      exited: 0,
+      dataUnavailable: 1,
+    });
 
     const paused = await pauseStrategyTool.execute({ strategyId: 'full-flow-strategy' }, ctx);
     expect(paused.ok).toBe(true);

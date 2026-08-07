@@ -392,8 +392,8 @@ export const strategySignals = sqliteTable(
       .notNull(),
   },
   (table) => ({
-    identityUnique: uniqueIndex('strategy_signals_identity_unique').on(
-      table.strategyVersionId,
+    identityUnique: uniqueIndex('strategy_signals_run_event_unique').on(
+      table.runId,
       table.ruleId,
       table.stockId,
       table.ts,

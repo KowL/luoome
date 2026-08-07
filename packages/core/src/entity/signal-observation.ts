@@ -4,7 +4,11 @@ import { DataProvenanceSchema } from './provenance.js';
 
 /** 信号发生后的事实观察；不是回测交易或投资建议。 */
 // 'tactic-signal'：旧 Tactic 模型已下线，枚举值为存量 signal_observations 行的读兼容保留。
-export const SignalObservationSourceKindSchema = z.enum(['watch-trigger', 'tactic-signal']);
+export const SignalObservationSourceKindSchema = z.enum([
+  'watch-trigger',
+  'strategy-signal',
+  'tactic-signal',
+]);
 export type SignalObservationSourceKind = z.infer<typeof SignalObservationSourceKindSchema>;
 
 export const SignalObservationHorizonSchema = z.enum(['t1', 't3', 't5', 't20']);

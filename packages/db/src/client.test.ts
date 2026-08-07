@@ -31,6 +31,56 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
+  it('策略信号索引迁移保留同一 replay run 的不同时点事实', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { Database } = await import('bun:sqlite');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luoome-signal-index-migration-'));
+    const dbPath = path.join(dir, 'legacy.sqlite');
+    try {
+      const sqlite = new Database(dbPath);
+      sqlite.exec(`
+        CREATE TABLE strategy_signals (
+          id TEXT PRIMARY KEY,
+          strategy_id TEXT NOT NULL,
+          strategy_version_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          rule_id TEXT NOT NULL,
+          stock_id TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          score REAL NOT NULL,
+          direction TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          evaluation_snapshot_json TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX strategy_signals_identity_unique
+          ON strategy_signals (strategy_version_id, rule_id, stock_id, ts);
+        INSERT INTO strategy_signals VALUES
+          ('signal-1', 'strategy-1', 'version-1', 'replay-run-1', 'entry', '600519.SH',
+           1784821818933, 84, 'bullish', '["first"]', '{"matched":true}'),
+          ('signal-2', 'strategy-1', 'version-1', 'replay-run-1', 'entry', '600519.SH',
+           1784970090970, 86, 'bullish', '["second"]', '{"matched":true}');
+      `);
+      sqlite.close();
+
+      const handle = createDrizzleRepos(dbPath);
+      expect(await handle.repos.strategyRun.signalsByRun('replay-run-1')).toHaveLength(2);
+      handle.close();
+
+      const migrated = new Database(dbPath, { readonly: true });
+      expect(
+        migrated
+          .query('PRAGMA index_info(strategy_signals_run_event_unique)')
+          .all()
+          .map((column) => (column as { name: string }).name),
+      ).toEqual(['run_id', 'rule_id', 'stock_id', 'ts']);
+      migrated.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('文件库：写入后重开数据仍在', async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');

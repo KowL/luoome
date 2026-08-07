@@ -246,6 +246,9 @@ export const StrategyRunSchema = z.object({
 - failed 必须有 error，complete 不得有 error。
 - `dataAsOf <= finishedAt`（终态）。
 - run 永远绑定发布且 valid 的 StrategyVersion，replay 也不例外。
+- 新写入只使用 `running/complete/failed`；`partial` 仅用于读取存量记录。
+- `complete` 只表达执行结束与事实包提交成功，覆盖质量由 Summary V3 的
+  `dataHealth=complete/partial/unavailable` 表达。
 
 ### 4.5 StrategyResult
 
@@ -273,7 +276,8 @@ export const StrategyResultSchema = z.object({
 selected 语义：
 
 - `logic=all`：所有 selection rule matched 才为 true。
-- `logic=any`：至少一条 matched；但存在会改变结论的 unknown/error 时 run/result 标 partial。
+- `logic=any`：至少一条 matched；若 unknown/error 会改变结论，则该股票求值不完整，并汇总到
+  run 的 `incompleteCount` 与 `dataHealth`。
 - 零 selection rule 表示 universe 全部入选，仅允许 builtin/migration Strategy；普通创建接口要求至少一条。
 - rank 只给 selected 且存在 scoring 的结果。
 
@@ -295,7 +299,9 @@ export const StrategySignalSchema = z.object({
 });
 ```
 
-唯一性为 `(strategyVersionId, ruleId, stockId, ts)`。signal 是事实，不等于 Advice。
+唯一性为 `(runId, ruleId, stockId, ts)`；不同运行即使使用同一版本、同一数据时点，也必须各自保存
+信号事实；长周期 replay run 内同一规则在不同时点产生的信号也必须保留。
+signal 是事实，不等于 Advice。
 
 ### 4.7 Watchlist
 
@@ -456,22 +462,28 @@ export const AlertPlanSchema = z.object({
 
 ```ts
 interface StrategyRepository {
-  save(strategy: Strategy): Promise<void>;
+  create(strategy: Strategy): Promise<void>;
   findById(id: string): Promise<Strategy | null>;
   list(filter?: { status?: StrategyStatus; owner?: StrategyOwner }): Promise<readonly Strategy[]>;
-  saveVersion(version: StrategyVersion): Promise<void>;
+  createVersion(version: StrategyVersion): Promise<void>;
+  setVersionValidation(
+    versionId: string,
+    validation: { status: 'valid' | 'invalid'; errors: readonly string[] },
+  ): Promise<void>;
   findVersionById(id: string): Promise<StrategyVersion | null>;
   listVersions(strategyId: string): Promise<readonly StrategyVersion[]>;
   activateVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
+  publishVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
+  pause(strategyId: string, at: Date): Promise<void>;
+  resume(strategyId: string, at: Date): Promise<void>;
 }
 
 interface StrategyRunRepository {
-  saveRun(run: StrategyRun): Promise<void>;
   findRunById(id: string): Promise<StrategyRun | null>;
   listRuns(filter?: StrategyRunQuery): Promise<readonly StrategyRun[]>;
-  saveResults(results: readonly StrategyResult[]): Promise<void>;
   listResults(runId: string): Promise<readonly StrategyResult[]>;
-  saveSignals(signals: readonly StrategySignal[]): Promise<void>;
+  commitRun(bundle: StrategyRunBundle): Promise<void>; // terminal facts，原子且 append-only
+  signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
   signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]>;
   signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
 }
@@ -763,7 +775,8 @@ interface StrategyFieldDefinition {
 - 股票求值使用有上限并发池，初始 8；adapter rate limiter 仍是硬限制。
 - 每 100 只汇总进度，不为每只股票写 WorkflowRun。
 - results 批量事务提交，单批建议 500 行。
-- 单股表达式错误不阻塞其它股票，run 标 partial。
+- 单股表达式错误不阻塞其它股票；run 仍可 `complete`，并以
+  `summary.dataHealth=partial`、`incompleteCount` 记录覆盖质量。
 
 ### 8.4 排名稳定性
 
@@ -934,7 +947,7 @@ load enabled AlertPlans
 2. 过滤 schedule=after-market 的 currentVersion。
 3. 对每个 Strategy 调 `run_strategy`。
 4. （未交付，后续迭代）有 target Watchlist 时调用内部 sync tool。
-5. 记录每项 complete/partial/failed 和 providerStatuses。
+5. 记录每项执行状态 complete/failed、dataHealth 和 providerStatuses；历史 partial 按完成读取。
 6. 不生成 Advice、不发送买卖结论。
 
 ### 12.2 `sync-portfolio-watchlists`
@@ -1120,7 +1133,7 @@ git diff --check
 
 日志和 WorkflowRun 至少包含：
 
-- strategyId/version/runId、候选数、结果数、partial/failed 原因、耗时。
+- strategyId/version/runId、候选数、结果数、dataHealth/incomplete/failed 原因、耗时。
 - watchlistId/sourceKey/syncRunId、entered/exited/unchanged/stale。
 - alertPlanId、评估成员数、unknown 数、触发与送达统计。
 - migration id、扫描/写入/跳过/冲突数。

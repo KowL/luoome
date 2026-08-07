@@ -1,16 +1,15 @@
 import {
   assertStrategyInvariants,
-  assertStrategyRunInvariants,
+  assertStrategyRunBundleInvariants,
   assertStrategyVersionInvariants,
   InvariantError,
   type Strategy,
   type StrategyRepository,
   type StrategyResult,
-  StrategyResultSchema,
   type StrategyRun,
+  type StrategyRunBundle,
   type StrategyRunRepository,
   type StrategySignal,
-  StrategySignalSchema,
   type StrategyVersion,
 } from '@luoome/core';
 
@@ -18,13 +17,12 @@ export class InMemoryStrategyRepository implements StrategyRepository {
   private readonly strategies = new Map<string, Strategy>();
   private readonly versions = new Map<string, StrategyVersion>();
 
-  async save(strategy: Strategy): Promise<void> {
+  async create(strategy: Strategy): Promise<void> {
     assertStrategyInvariants(strategy);
-    const existing = this.strategies.get(strategy.id);
-    this.strategies.set(
-      strategy.id,
-      existing === undefined ? strategy : { ...strategy, owner: existing.owner },
-    );
+    if (this.strategies.has(strategy.id)) {
+      throw new InvariantError(`Strategy 已存在: ${strategy.id}`);
+    }
+    this.strategies.set(strategy.id, strategy);
   }
 
   async findById(id: string): Promise<Strategy | null> {
@@ -43,7 +41,7 @@ export class InMemoryStrategyRepository implements StrategyRepository {
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
-  async saveVersion(version: StrategyVersion): Promise<void> {
+  async createVersion(version: StrategyVersion): Promise<void> {
     const strategy = this.strategies.get(version.strategyId);
     if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${version.strategyId}`);
     assertStrategyVersionInvariants(version, strategy.owner);
@@ -61,6 +59,7 @@ export class InMemoryStrategyRepository implements StrategyRepository {
     );
     if (sameNumber !== undefined) throw new InvariantError('(strategyId, version) 必须唯一');
     const existing = this.versions.get(version.id);
+    if (existing !== undefined) throw new InvariantError(`StrategyVersion 已存在: ${version.id}`);
     const maxVersion = Math.max(
       0,
       ...[...this.versions.values()]
@@ -70,10 +69,25 @@ export class InMemoryStrategyRepository implements StrategyRepository {
     if (existing === undefined && version.version <= maxVersion) {
       throw new InvariantError('新 StrategyVersion.version 必须严格递增');
     }
-    if (existing?.publishedAt !== undefined && existing.definitionHash !== version.definitionHash) {
-      throw new InvariantError('published StrategyVersion 的 definition 不可修改');
-    }
     this.versions.set(version.id, version);
+  }
+
+  async setVersionValidation(
+    versionId: string,
+    validation: { readonly status: 'valid' | 'invalid'; readonly errors: readonly string[] },
+  ): Promise<void> {
+    const version = this.versions.get(versionId);
+    if (version === undefined) throw new InvariantError(`StrategyVersion 不存在: ${versionId}`);
+    const strategy = this.strategies.get(version.strategyId);
+    if (strategy?.owner !== 'user') throw new InvariantError('builtin StrategyVersion 不可修改');
+    if (version.publishedAt !== undefined) {
+      throw new InvariantError('published StrategyVersion 不可重新校验修改');
+    }
+    this.versions.set(versionId, {
+      ...version,
+      validationStatus: validation.status,
+      validationErrors: [...validation.errors],
+    });
   }
 
   isRunnableVersion(strategyId: string, versionId: string): boolean {
@@ -123,6 +137,7 @@ export class InMemoryStrategyRepository implements StrategyRepository {
     const version = this.versions.get(versionId);
     if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${strategyId}`);
     if (
+      strategy.owner !== 'user' ||
       version === undefined ||
       version.strategyId !== strategyId ||
       version.validationStatus !== 'valid'
@@ -137,6 +152,33 @@ export class InMemoryStrategyRepository implements StrategyRepository {
       updatedAt: at,
     });
   }
+
+  async pause(strategyId: string, at: Date): Promise<void> {
+    const strategy = this.strategies.get(strategyId);
+    if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${strategyId}`);
+    if (strategy.owner !== 'user' || strategy.status !== 'active') {
+      throw new InvariantError('只有 active 的用户 Strategy 可暂停');
+    }
+    this.strategies.set(strategyId, { ...strategy, status: 'paused', updatedAt: at });
+  }
+
+  async resume(strategyId: string, at: Date): Promise<void> {
+    const strategy = this.strategies.get(strategyId);
+    if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${strategyId}`);
+    const version =
+      strategy.currentVersionId === undefined
+        ? undefined
+        : this.versions.get(strategy.currentVersionId);
+    if (
+      strategy.owner !== 'user' ||
+      strategy.status !== 'paused' ||
+      version?.validationStatus !== 'valid' ||
+      version.publishedAt === undefined
+    ) {
+      throw new InvariantError('恢复需要 paused 用户 Strategy 及已发布 valid currentVersion');
+    }
+    this.strategies.set(strategyId, { ...strategy, status: 'active', updatedAt: at });
+  }
 }
 
 export class InMemoryStrategyRunRepository implements StrategyRunRepository {
@@ -145,32 +187,6 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
   private readonly signals = new Map<string, StrategySignal>();
 
   constructor(private readonly strategyRepository: InMemoryStrategyRepository) {}
-
-  async saveRun(run: StrategyRun): Promise<void> {
-    assertStrategyRunInvariants(run);
-    if (!this.strategyRepository.isRunnableVersion(run.strategyId, run.strategyVersionId)) {
-      throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
-    }
-    // 重复保存只更新运行态列（与 drizzle onConflictDoUpdate 的更新列一致，缺省即清空）。
-    const existing = this.runs.get(run.id);
-    if (existing === undefined) {
-      this.runs.set(run.id, run);
-      return;
-    }
-    const merged: StrategyRun = {
-      ...existing,
-      dataAsOf: run.dataAsOf,
-      status: run.status,
-      providerStatuses: run.providerStatuses,
-      ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
-      ...(run.summary === undefined ? {} : { summary: run.summary }),
-      ...(run.error === undefined ? {} : { error: run.error }),
-    };
-    if (run.finishedAt === undefined) delete (merged as { finishedAt?: Date }).finishedAt;
-    if (run.summary === undefined) delete (merged as { summary?: StrategyRun['summary'] }).summary;
-    if (run.error === undefined) delete (merged as { error?: string }).error;
-    this.runs.set(run.id, merged);
-  }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
     return this.runs.get(id) ?? null;
@@ -198,15 +214,6 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     return filter.limit === undefined ? sorted : sorted.slice(0, filter.limit);
   }
 
-  async saveResults(results: readonly StrategyResult[]): Promise<void> {
-    for (const result of results) {
-      StrategyResultSchema.parse(result);
-      if (!this.runs.has(result.runId))
-        throw new InvariantError(`StrategyRun 不存在: ${result.runId}`);
-      this.results.set(`${result.runId}\0${result.stockId}`, result);
-    }
-  }
-
   async listResults(runId: string): Promise<readonly StrategyResult[]> {
     return [...this.results.values()]
       .filter((result) => result.runId === runId)
@@ -217,24 +224,8 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       );
   }
 
-  async saveSignals(signals: readonly StrategySignal[]): Promise<void> {
-    for (const signal of signals) {
-      StrategySignalSchema.parse(signal);
-      if (!this.runs.has(signal.runId))
-        throw new InvariantError(`StrategyRun 不存在: ${signal.runId}`);
-      this.addSignal(signal);
-    }
-  }
-
-  async commitRun(bundle: {
-    readonly run: StrategyRun;
-    readonly results: readonly StrategyResult[];
-    readonly signals: readonly StrategySignal[];
-  }): Promise<void> {
-    assertStrategyRunInvariants(bundle.run);
-    if (bundle.run.status === 'running') {
-      throw new InvariantError('commitRun 只接受终态 StrategyRun');
-    }
+  async commitRun(bundle: StrategyRunBundle): Promise<void> {
+    assertStrategyRunBundleInvariants(bundle);
     if (
       !this.strategyRepository.isRunnableVersion(
         bundle.run.strategyId,
@@ -243,18 +234,16 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     ) {
       throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
     }
-    for (const result of bundle.results) {
-      StrategyResultSchema.parse(result);
-      if (result.runId !== bundle.run.id) throw new InvariantError('StrategyResult.runId 不匹配');
+    if (this.runs.has(bundle.run.id)) {
+      throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
     }
     for (const signal of bundle.signals) {
-      StrategySignalSchema.parse(signal);
+      const identity = this.signalIdentity(signal);
       if (
-        signal.runId !== bundle.run.id ||
-        signal.strategyId !== bundle.run.strategyId ||
-        signal.strategyVersionId !== bundle.run.strategyVersionId
+        this.signals.has(identity) ||
+        [...this.signals.values()].some((existing) => existing.id === signal.id)
       ) {
-        throw new InvariantError('StrategySignal 引用与 run 不匹配');
+        throw new InvariantError(`StrategySignal identity 已存在: ${signal.id}`);
       }
     }
     this.runs.set(bundle.run.id, bundle.run);
@@ -262,16 +251,12 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       this.results.set(`${result.runId}\0${result.stockId}`, result);
     }
     for (const signal of bundle.signals) {
-      this.addSignal(signal);
+      this.signals.set(this.signalIdentity(signal), signal);
     }
   }
 
-  /** 去重维度与 drizzle 对齐：主键 id 或身份唯一索引任一冲突即忽略。 */
-  private addSignal(signal: StrategySignal): void {
-    const identity = `${signal.strategyVersionId}\0${signal.ruleId}\0${signal.stockId}\0${signal.ts.getTime()}`;
-    if (this.signals.has(identity)) return;
-    if ([...this.signals.values()].some((existing) => existing.id === signal.id)) return;
-    this.signals.set(identity, signal);
+  private signalIdentity(signal: StrategySignal): string {
+    return `${signal.runId}\0${signal.ruleId}\0${signal.stockId}\0${signal.ts.toISOString()}`;
   }
 
   async signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]> {

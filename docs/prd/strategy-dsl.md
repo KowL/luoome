@@ -134,13 +134,13 @@ StrategyRun
 - dataAsOf
 - startedAt
 - completedAt?
-- status: running | complete | partial | failed
-- dataStatus
+- status: running | complete | failed（存量记录可能为 partial）
+- summary.dataHealth: complete | partial | unavailable
 - inputSnapshot
 - summary
 ```
 
-运行失败、部分数据不可用和零命中必须区分。
+执行失败、数据部分可用和零命中必须区分；数据问题不再阻止已明确结果发布。
 
 ### 3.5 StrategyResult
 

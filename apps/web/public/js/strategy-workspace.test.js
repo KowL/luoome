@@ -177,7 +177,7 @@ const detailData = {
       id: 'sig-1',
       strategyId: 'breakout-volume',
       stockId: '000001.SZ',
-      direction: 'long',
+      direction: 'bullish',
       score: 67.60499999999999,
       evidence: ['放量突破 20 日均线'],
     },
@@ -185,7 +185,7 @@ const detailData = {
       id: 'sig-2',
       strategyId: 'breakout-volume',
       stockId: '000009.SZ',
-      direction: 'long',
+      direction: 'bullish',
       score: 54.963,
       evidence: ['量比 volRatio5_20=1.8321'],
     },
@@ -195,16 +195,17 @@ const detailData = {
 const run = {
   id: 'run-1',
   startedAt: '2026-07-31T09:30:00+08:00',
-  mode: 'formal',
+  mode: 'scan',
   strategyVersionId: 'v3',
   status: 'complete',
   summary: {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    dataHealth: 'partial',
     universeCount: 5,
     evaluatedCount: 5,
     selectedCount: 2,
     signalCount: 2,
-    partialCount: 0,
+    incompleteCount: 1,
     failedCount: 0,
   },
 };
@@ -260,6 +261,9 @@ describe('运行记录「查看」弹窗', () => {
       return jsonResponse({ ok: false, error: { kind: 'not_found', message: '无数据' } });
     };
     const section = await renderRuns('breakout-volume');
+    expect(section.textContent).toContain('已完成');
+    expect(section.textContent).toContain('数据 部分可用');
+    expect(section.textContent).toContain('不完整 1');
     // 运行列表不再内联渲染详情区
     expect(section.querySelectorAll('.strategy-run-detail').length).toBe(0);
     const view = section.querySelectorAll('button').find((button) => button.textContent === '查看');
@@ -293,9 +297,9 @@ describe('运行详情弹窗信号列表', () => {
     expect(rows.length).toBe(2);
     expect(rows[0].textContent).toContain('平安银行');
     expect(rows[0].textContent).toContain('000001.SZ');
-    expect(rows[0].textContent).toContain('long · score 67.60');
+    expect(rows[0].textContent).toContain('bullish · score 67.60');
     expect(rows[0].textContent).toContain('放量突破 20 日均线');
-    expect(rows[1].textContent).toContain('long · score 54.96');
+    expect(rows[1].textContent).toContain('bullish · score 54.96');
     expect(rows[1].textContent).toContain('量比 volRatio5_20=1.8321');
   });
 

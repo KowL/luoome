@@ -16,6 +16,12 @@ import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
+import {
+  observationsForStrategySignal,
+  type StrategySignalBaseline,
+  saveObservationCandidates,
+} from '../internal/signal-observation.js';
+import { deriveStrategyMetaByStock } from '../internal/strategy-meta.js';
 
 const DAY_MS = 86_400_000;
 const EVALUATION_CONCURRENCY = 8;
@@ -24,7 +30,7 @@ const EVALUATOR_VERSION = 'strategy-evaluator-v2';
 export const RunStrategyInput = z.object({
   strategyId: z.string().min(1),
   versionId: z.string().min(1).optional(),
-  mode: z.enum(['scan', 'replay']).default('scan'),
+  mode: z.enum(['scan', 'scheduled', 'replay']).default('scan'),
   asOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
   persist: z.boolean().default(true),
@@ -109,9 +115,9 @@ export const runStrategyTool = defineTool({
         '历史 StockUniverse snapshot 尚未提供；mode=replay 仅允许显式 stockIds 子集',
       );
     }
-    if (input.mode === 'scan' && input.asOf !== undefined) {
+    if (input.mode !== 'replay' && input.asOf !== undefined) {
       return errInvalidInput(
-        'mode=scan 不支持 asOf：bars 会取历史而 quote 仍是实时，时点不一致；需要历史时点请用 mode=replay + 显式 stockIds',
+        'mode=scan/scheduled 不支持 asOf：bars 会取历史而 quote 仍是实时，时点不一致；需要历史时点请用 mode=replay + 显式 stockIds',
       );
     }
     const resolved = await resolveVersion(input.strategyId, input.versionId, ctx);
@@ -154,16 +160,21 @@ export const runStrategyTool = defineTool({
     const runId = `strategy-run-${globalThis.crypto.randomUUID()}`;
     const needsQuote = references.dataSources.includes('quote');
     const needsDailyBars = references.dataSources.includes('daily-bars');
-    const needsMeta = references.dataSources.includes('meta');
+    const needsDerivedMeta = references.paths.some((path) => path.startsWith('meta.'));
     const lookback = Math.max(1, references.requiredLookback);
 
-    const evaluated = await mapWithConcurrency(
+    const prepared = await mapWithConcurrency(
       candidateIds,
       EVALUATION_CONCURRENCY,
       async (
         stockId,
       ): Promise<
-        | { readonly ok: true; readonly evaluation: StrategyStockEvaluation }
+        | {
+            readonly ok: true;
+            readonly stockId: string;
+            readonly bars: readonly DailyBar[];
+            readonly quote?: Quote;
+          }
         | { readonly ok: false; readonly stockId: string; readonly error: string }
       > => {
         try {
@@ -188,18 +199,9 @@ export const runStrategyTool = defineTool({
           }
           return {
             ok: true,
-            evaluation: evaluateStrategyStock({
-              strategyId: input.strategyId,
-              version,
-              runId,
-              stockId,
-              ts: dataAsOf,
-              dataAsOf,
-              context: {
-                ...(quote === undefined ? {} : { quote }),
-                indicators: computeSimpleIndicators(bars),
-              },
-            }),
+            stockId,
+            bars,
+            ...(quote === undefined ? {} : { quote }),
           };
         } catch (error) {
           return {
@@ -211,19 +213,74 @@ export const runStrategyTool = defineTool({
       },
     );
 
-    const failures = evaluated.filter(
-      (item): item is Extract<(typeof evaluated)[number], { ok: false }> => !item.ok,
+    const failures = prepared.filter(
+      (item): item is Extract<(typeof prepared)[number], { ok: false }> => !item.ok,
     );
-    const successful = evaluated.flatMap((item) => (item.ok ? [item.evaluation] : []));
+    const preparedStocks = prepared.flatMap((item) => (item.ok ? [item] : []));
+    const baselineByStock = new Map<string, StrategySignalBaseline>(
+      preparedStocks.flatMap((item) => {
+        if (item.quote !== undefined) {
+          return [
+            [
+              item.stockId,
+              {
+                price: item.quote.close,
+                at: item.quote.ts,
+                provider: item.quote.source,
+              },
+            ] as const,
+          ];
+        }
+        const latestBar = item.bars.at(-1);
+        return latestBar === undefined
+          ? []
+          : [
+              [
+                item.stockId,
+                {
+                  price: latestBar.close,
+                  at: latestBar.date,
+                  provider: latestBar.source,
+                },
+              ] as const,
+            ];
+      }),
+    );
+    const metaByStock = needsDerivedMeta
+      ? deriveStrategyMetaByStock(
+          preparedStocks.map((item) => ({
+            stockId: item.stockId,
+            industry: activeById.get(item.stockId)?.industry,
+            bars: item.bars,
+          })),
+        )
+      : new Map<string, Readonly<Record<string, unknown>>>();
+    const successful: StrategyStockEvaluation[] = preparedStocks.map((item) =>
+      evaluateStrategyStock({
+        strategyId: input.strategyId,
+        version,
+        runId,
+        stockId: item.stockId,
+        ts: dataAsOf,
+        dataAsOf,
+        context: {
+          ...(item.quote === undefined ? {} : { quote: item.quote }),
+          indicators: computeSimpleIndicators(item.bars),
+          ...(needsDerivedMeta ? { meta: metaByStock.get(item.stockId) ?? {} } : {}),
+        },
+      }),
+    );
     const ranked = assignStableStrategyRanks(successful, definition);
     const results = ranked.map((item) => item.result);
     const signals = ranked.flatMap((item) => item.signals);
-    const partialCount = ranked.filter((item) => item.partial).length;
+    const incompleteCount = ranked.filter((item) => item.partial).length;
     const finishedAt = ctx.clock();
     const status =
-      candidateIds.length > 0 && failures.length === candidateIds.length
-        ? 'failed'
-        : failures.length > 0 || partialCount > 0 || needsMeta
+      candidateIds.length > 0 && failures.length === candidateIds.length ? 'failed' : 'complete';
+    const dataHealth =
+      status === 'failed'
+        ? 'unavailable'
+        : failures.length > 0 || incompleteCount > 0
           ? 'partial'
           : 'complete';
     const error =
@@ -246,7 +303,8 @@ export const runStrategyTool = defineTool({
         coverage: 'CN_A_SHARES_SH_SZ',
         stockIds: candidateIds,
         stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
-        requestedBy: input.mode === 'replay' ? 'replay' : 'manual',
+        requestedBy:
+          input.mode === 'replay' ? 'replay' : input.mode === 'scheduled' ? 'scheduled' : 'manual',
         ...(successfulSync === null
           ? {}
           : {
@@ -263,9 +321,6 @@ export const runStrategyTool = defineTool({
               ...(needsQuote || needsDailyBars
                 ? [{ provider: 'local:daily-bars', ok: failures.length === 0 }]
                 : []),
-              ...(needsMeta
-                ? [{ provider: 'strategy-meta', ok: false, errorKind: 'unsupported' }]
-                : []),
             ]
           : [
               ...(needsQuote
@@ -279,17 +334,15 @@ export const runStrategyTool = defineTool({
                     },
                   ]
                 : []),
-              ...(needsMeta
-                ? [{ provider: 'strategy-meta', ok: false, errorKind: 'unsupported' }]
-                : []),
             ],
       summary: {
-        schemaVersion: 2,
+        schemaVersion: 3,
+        dataHealth,
         universeCount: candidateIds.length,
         evaluatedCount: results.length,
         selectedCount: results.filter((result) => result.selected).length,
         signalCount: signals.length,
-        partialCount,
+        incompleteCount,
         failedCount: failures.length,
         failureSamples: failures
           .slice(0, 20)
@@ -297,7 +350,23 @@ export const runStrategyTool = defineTool({
       },
       ...(error === undefined ? {} : { error }),
     });
-    if (input.persist) await ctx.repos.strategyRun.commitRun({ run, results, signals });
+    if (input.persist) {
+      await ctx.repos.strategyRun.commitRun({ run, results, signals });
+      try {
+        await saveObservationCandidates(
+          signals.flatMap((signal) =>
+            observationsForStrategySignal(signal, baselineByStock.get(signal.stockId), finishedAt),
+          ),
+          ctx.repos.signalObservation,
+        );
+      } catch (observationError) {
+        ctx.logger.warn('run_strategy: 后续表现观测候选写入失败，运行结果已提交', {
+          runId,
+          error:
+            observationError instanceof Error ? observationError.message : String(observationError),
+        });
+      }
+    }
     return { run, results, signals, persisted: input.persist };
   },
 });

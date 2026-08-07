@@ -6,7 +6,10 @@ import {
   assertStrategyRunInvariants,
   assertStrategyVersionInvariants,
   canonicalStrategyDefinitionJson,
+  getStrategyRunDataHealth,
+  isUsableStrategyRun,
   type StrategyDslV1,
+  type StrategyRun,
   type StrategyVersion,
   strategyDefinitionHash,
 } from './strategy.js';
@@ -86,5 +89,51 @@ describe('Strategy entity', () => {
         providerStatuses: [],
       }),
     ).toThrow(InvariantError);
+  });
+
+  it('separates terminal execution status from data health and normalizes legacy partial runs', () => {
+    const base: StrategyRun = {
+      id: 'run-1',
+      strategyId: 'strategy-1',
+      strategyVersionId: 'strategy-1-v1',
+      mode: 'scan',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: new Date(0),
+      startedAt: new Date(0),
+      finishedAt: new Date(0),
+      status: 'complete',
+      inputSnapshot: {},
+      providerStatuses: [],
+      summary: {
+        schemaVersion: 3,
+        dataHealth: 'partial',
+        universeCount: 2,
+        evaluatedCount: 1,
+        selectedCount: 1,
+        signalCount: 1,
+        incompleteCount: 0,
+        failedCount: 1,
+        failureSamples: [{ stockId: '000002.SZ', error: 'quote unavailable' }],
+      },
+    };
+    expect(getStrategyRunDataHealth(base)).toBe('partial');
+    expect(isUsableStrategyRun(base)).toBe(true);
+
+    const legacyPartial: StrategyRun = {
+      ...base,
+      status: 'partial',
+      summary: {
+        schemaVersion: 2,
+        universeCount: 2,
+        evaluatedCount: 1,
+        selectedCount: 1,
+        signalCount: 1,
+        partialCount: 0,
+        failedCount: 1,
+        failureSamples: [],
+      },
+    };
+    expect(getStrategyRunDataHealth(legacyPartial)).toBe('partial');
+    expect(isUsableStrategyRun(legacyPartial)).toBe(true);
   });
 });

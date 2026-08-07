@@ -13,6 +13,7 @@ export const StrategyRunDiffChangeSchema = z.enum([
   'rank-changed',
   'score-changed',
   'blocking-rule-changed',
+  'data-unavailable',
 ]);
 export type StrategyRunDiffChange = z.infer<typeof StrategyRunDiffChangeSchema>;
 
@@ -34,6 +35,7 @@ export const StrategyRunDiffSummarySchema = z.object({
   rankChanged: z.number().int().nonnegative(),
   scoreChanged: z.number().int().nonnegative(),
   blockingRuleChanged: z.number().int().nonnegative(),
+  dataUnavailable: z.number().int().nonnegative(),
 });
 
 export const StrategyRunDiffSchema = z.object({
@@ -80,34 +82,45 @@ export const diffStrategyRunViews = (input: {
   const rows = stockIds.flatMap((stockId) => {
     const before = fromByStock.get(stockId);
     const after = toByStock.get(stockId);
-    const beforeSelected = before?.kind === 'selected';
-    const afterSelected = after?.kind === 'selected';
     const changes: StrategyRunDiffChange[] = [];
-    if (!beforeSelected && afterSelected) changes.push('entered');
-    else if (beforeSelected && !afterSelected) changes.push('exited');
-    else if (beforeSelected && afterSelected) changes.push('stayed');
-    if (isCandidate(before) && afterSelected) changes.push('candidate-promoted');
-    if (beforeSelected && !afterSelected) changes.push('selected-demoted');
+    const dataUnavailable =
+      before === undefined ||
+      after === undefined ||
+      before.kind === 'incomplete' ||
+      after.kind === 'incomplete';
+    let rankDelta: number | undefined;
+    let scoreDelta: number | undefined;
+    if (dataUnavailable) {
+      changes.push('data-unavailable');
+    } else {
+      const beforeSelected = before.kind === 'selected';
+      const afterSelected = after.kind === 'selected';
+      if (!beforeSelected && afterSelected) changes.push('entered');
+      else if (beforeSelected && !afterSelected) changes.push('exited');
+      else if (beforeSelected && afterSelected) changes.push('stayed');
+      if (isCandidate(before) && afterSelected) changes.push('candidate-promoted');
+      if (beforeSelected && !afterSelected) changes.push('selected-demoted');
 
-    const beforeRank = before?.result.rank;
-    const afterRank = after?.result.rank;
-    const rankDelta =
-      beforeRank !== undefined && afterRank !== undefined && beforeRank !== afterRank
-        ? afterRank - beforeRank
-        : undefined;
-    if (rankDelta !== undefined) changes.push('rank-changed');
+      const beforeRank = before.result.rank;
+      const afterRank = after.result.rank;
+      rankDelta =
+        beforeRank !== undefined && afterRank !== undefined && beforeRank !== afterRank
+          ? afterRank - beforeRank
+          : undefined;
+      if (rankDelta !== undefined) changes.push('rank-changed');
 
-    const beforeScore = before?.result.score;
-    const afterScore = after?.result.score;
-    const scoreDelta =
-      beforeScore !== undefined && afterScore !== undefined && beforeScore !== afterScore
-        ? afterScore - beforeScore
-        : undefined;
-    if (scoreDelta !== undefined) changes.push('score-changed');
+      const beforeScore = before.result.score;
+      const afterScore = after.result.score;
+      scoreDelta =
+        beforeScore !== undefined && afterScore !== undefined && beforeScore !== afterScore
+          ? afterScore - beforeScore
+          : undefined;
+      if (scoreDelta !== undefined) changes.push('score-changed');
 
-    const beforeBlockers = [...(before?.blockingRuleIds ?? [])].sort();
-    const afterBlockers = [...(after?.blockingRuleIds ?? [])].sort();
-    if (!sameStrings(beforeBlockers, afterBlockers)) changes.push('blocking-rule-changed');
+      const beforeBlockers = [...before.blockingRuleIds].sort();
+      const afterBlockers = [...after.blockingRuleIds].sort();
+      if (!sameStrings(beforeBlockers, afterBlockers)) changes.push('blocking-rule-changed');
+    }
     if (changes.length === 0) return [];
     return [
       {
@@ -141,6 +154,7 @@ export const diffStrategyRunViews = (input: {
       scoreChanged: rows.filter((row) => row.changes.includes('score-changed')).length,
       blockingRuleChanged: rows.filter((row) => row.changes.includes('blocking-rule-changed'))
         .length,
+      dataUnavailable: rows.filter((row) => row.changes.includes('data-unavailable')).length,
     },
     rows,
   });

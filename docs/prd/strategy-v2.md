@@ -72,7 +72,7 @@ V2 的交付顺序：
 1. 提供围绕单个 Strategy 的稳定工作台；
 2. 从已持久化 StrategyRun/StrategyResult 派生股票池、候选池和 Diff；
 3. 保存足够的未命中解释，让 UI 和 Agent 不需要重新猜测规则原因；
-4. 区分 complete、partial、failed 和 complete-but-empty；
+4. 区分执行完成/失败、数据完整/部分可用/不可用和 complete-but-empty；
 5. 通过 SignalObservation 展示真实信号后续表现及样本质量；
 6. 允许 Agent 生成 StrategyVersion 草案，但发布必须由用户确认。
 
@@ -105,12 +105,16 @@ V2 的交付顺序：
 
 ### 4.2 当前有效运行
 
-股票池、候选池和概览只使用该 Strategy 最近一次 `status=complete` 的持久化运行。
+股票池、候选池和概览使用该 Strategy 最近一次结果可用且已持久化的完成运行。
 
-- `partial` 和 `failed` 进入执行记录与数据健康提示，但不覆盖上一版有效视图；
-- `complete` 且零入选是合法空结果，必须显示“本次完整运行，零入选”；
+- 新运行的 `status` 只表达执行生命周期：`running / complete / failed`；
+- `complete` 表示执行结束且结果包已原子提交，即使部分股票数据不可用也会成为当前视图；
+- Summary V3 以 `dataHealth=complete / partial / unavailable` 和计数表达数据覆盖质量；
+- 存量 `status=partial` 记录按“执行完成、数据部分可用”读取，仍可作为当前视图；
+- `failed` 不覆盖上一版有效视图；
+- `complete` 且零入选是合法空结果，必须显示“本次运行已完成，零入选”；
 - `persist=false` 的样本试算不进入历史列表，也不替换当前视图；
-- 当前没有 complete run 时，工作台显示“尚无有效运行”，不得展示空股票池造成误解。
+- 当前没有结果可用的完成运行时，工作台显示“尚无可用运行”，不得展示空股票池造成误解。
 
 ### 4.3 股票池
 
@@ -176,7 +180,7 @@ V2 支持两类确定性候选：
 
 ### 4.6 运行 Diff
 
-Diff 默认比较同一 Strategy 最近两次 complete run，输出：
+Diff 默认比较同一 Strategy 最近两次结果可用的完成运行，输出：
 
 - entered：本次进入股票池；
 - exited：本次退出股票池；
@@ -186,18 +190,21 @@ Diff 默认比较同一 Strategy 最近两次 complete run，输出：
 - rankChanged；
 - scoreChanged；
 - blockingRuleChanged。
+- data-unavailable：任一侧缺少该股票的可靠结果，不能判断进出。
 
 规则：
 
 - 默认优先比较相同 StrategyVersion；
 - 若两次运行版本不同，页面必须标记“定义已变化”，同时展示 from/to version；
 - 跨版本 Diff 可以展示事实变化，但不得把变化单独归因于市场；
-- partial/failed run 不参与当前视图的默认相邻比较；
+- `failed/running` 不参与当前视图的默认相邻比较；存量 `partial` 可参与；
+- 任一侧结果缺失或为 unknown/error 时，只输出 `data-unavailable`，不得推断 entered/exited；
 - `REMOVED` 是 Diff 输出，不是 StrategyResult 的持久化状态。
 
 ### 4.7 StrategyRun 审计事实
 
-V2 将 `StrategyRun.summary` 和 `inputSnapshot` 从自由 record 收口为稳定、可展示的事实。
+V2 将 `StrategyRun.summary` 和 `inputSnapshot` 从自由 record 收口为稳定、可展示的事实；
+Summary V3 进一步把执行状态与数据完整度分离。
 
 摘要至少包含：
 
@@ -205,7 +212,8 @@ V2 将 `StrategyRun.summary` 和 `inputSnapshot` 从自由 record 收口为稳�
 - evaluated 数；
 - selected 数；
 - signal 数；
-- partial 数；
+- dataHealth；
+- incomplete 数；
 - failed 数。
 
 输入审计至少能够还原：
@@ -322,13 +330,14 @@ AI 对话；研究档案作为独立行内操作保留。
 按 StrategyRun 倒序展示：
 
 - 时间、mode、version；
-- complete/partial/failed；
-- universe/evaluated/selected/signal/partial/failed 计数；
+- 执行状态 complete/failed（历史记录可能为 partial）；
+- dataHealth complete/partial/unavailable；
+- universe/evaluated/selected/signal/incomplete/failed 计数；
 - provider 状态；
 - persisted 与试算语义；
 - 查看 results、signals 和 Diff 的入口。
 
-Diff 可以选择任意两次持久化运行，但默认选择最近两次 complete run。
+Diff 可以选择任意两次持久化运行，但默认选择最近两次结果可用的完成运行。
 
 ### 6.7 AI 洞察
 
@@ -449,7 +458,7 @@ AlertPlan 继续消费持久化 StrategySignal：
 
 | 目标 | 指标 |
 |---|---|
-| 可用性 | complete run 比例、partial/failed 原因分布 |
+| 可用性 | 执行完成率、dataHealth 分布、incomplete/failed 原因分布 |
 | 可解释 | selected/candidate 条目中具备完整规则解释的比例 |
 | 发现价值 | 候选转入选数量、结果被加入 Watchlist 的比例 |
 | 持续使用 | 每周查看执行记录或 Diff 的活跃 Strategy 数 |
@@ -465,7 +474,7 @@ AlertPlan 继续消费持久化 StrategySignal：
 - 未命中规则保存可审计解释；
 - StrategyRun summary/inputSnapshot 结构化；
 - 执行记录展示 results、signals、provider 状态；
-- complete/partial/failed/empty 的页面语义收口。
+- 执行 complete/failed、数据完整度和 empty 的页面语义收口。
 
 ### Phase A1：派生视图
 
@@ -505,20 +514,20 @@ AlertPlan 继续消费持久化 StrategySignal：
 
 - 每条 selection rule 都能展示 matched/not-matched/unknown/error 和原因；
 - UI 与 Agent 不需要重新解析表达式猜测失败原因；
-- complete 空结果与 failed/partial 明确区分；
+- complete 空结果、执行失败与数据部分可用明确区分；
 - StrategyRun 可追溯 version、definitionHash、dataAsOf、coverage 和 provider 状态；
 - 执行记录能查看对应 StrategyResult 与 StrategySignal。
 
 ### 11.2 Phase A1
 
-- 股票池来自最近一次持久化 complete run 的 `selected=true` 结果；
+- 股票池来自最近一次持久化且结果可用的完成运行中的 `selected=true` 结果；
 - 股票池、候选池、运行结果、signal 和 Diff 中的股票均以上方名称、下方完整代码展示，且股票标识区域可进入行情页；
 - rule-near-miss 只适用于 `logic=all` 且恰好一个确定性阻断规则；
 - ranking-near-miss 能解释 rank 与 top 的差；
 - unknown/error 不计入候选池；
 - Diff 可从两个 run 确定性重算，不持久化 REMOVED/PoolStatus；
 - 跨版本 Diff 明示版本变化，不把变化单独归因于市场；
-- partial/failed run 不覆盖上一版有效视图。
+- 数据部分可用的完成运行仍发布明确结果；failed run 不覆盖上一版有效视图；
 
 ### 11.3 Phase B/C
 

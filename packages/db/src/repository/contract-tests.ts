@@ -1277,10 +1277,10 @@ export const registerRepositoryContractTests = (
 
     describe('StrategyRepository', () => {
       it('Strategy 与版本往返、过滤和版本排序一致', async () => {
-        await repos.strategy.save(makeStrategy('strategy-2', { owner: 'builtin' }));
-        await repos.strategy.save(makeStrategy('strategy-1'));
-        await repos.strategy.saveVersion(makeStrategyVersion('strategy-1', 1));
-        await repos.strategy.saveVersion(makeStrategyVersion('strategy-1', 2));
+        await repos.strategy.create(makeStrategy('strategy-2', { owner: 'builtin' }));
+        await repos.strategy.create(makeStrategy('strategy-1'));
+        await repos.strategy.createVersion(makeStrategyVersion('strategy-1', 1));
+        await repos.strategy.createVersion(makeStrategyVersion('strategy-1', 2));
         expect(await repos.strategy.findById('strategy-1')).toEqual(makeStrategy('strategy-1'));
         expect((await repos.strategy.list()).map((strategy) => strategy.id)).toEqual([
           'strategy-1',
@@ -1295,9 +1295,9 @@ export const registerRepositoryContractTests = (
       });
 
       it('activateVersion 只接受同 Strategy 的 published valid version', async () => {
-        await repos.strategy.save(makeStrategy('strategy-1'));
+        await repos.strategy.create(makeStrategy('strategy-1'));
         const version = makeStrategyVersion('strategy-1');
-        await repos.strategy.saveVersion(version);
+        await repos.strategy.createVersion(version);
         await repos.strategy.activateVersion('strategy-1', version.id, T2);
         expect(await repos.strategy.findById('strategy-1')).toEqual(
           makeStrategy('strategy-1', {
@@ -1307,17 +1307,17 @@ export const registerRepositoryContractTests = (
           }),
         );
 
-        await repos.strategy.save(makeStrategy('strategy-2'));
+        await repos.strategy.create(makeStrategy('strategy-2'));
         await expect(repos.strategy.activateVersion('strategy-2', version.id, T2)).rejects.toThrow(
           InvariantError,
         );
       });
 
       it('publishVersion 原子发布 valid version 并切换 currentVersion', async () => {
-        await repos.strategy.save(makeStrategy('strategy-1'));
+        await repos.strategy.create(makeStrategy('strategy-1'));
         const publishedFixture = makeStrategyVersion('strategy-1');
         const { publishedAt: _publishedAt, ...draftVersion } = publishedFixture;
-        await repos.strategy.saveVersion(draftVersion);
+        await repos.strategy.createVersion(draftVersion);
         await repos.strategy.publishVersion('strategy-1', draftVersion.id, T2);
         expect(await repos.strategy.findVersionById(draftVersion.id)).toMatchObject({
           publishedAt: T2,
@@ -1329,44 +1329,73 @@ export const registerRepositoryContractTests = (
         });
       });
 
-      it('published version definition 不可变，(strategyId, version) 唯一', async () => {
-        await repos.strategy.save(makeStrategy('strategy-1'));
-        const version = makeStrategyVersion('strategy-1');
-        await repos.strategy.saveVersion(version);
+      it('StrategyVersion 定义只追加；校验只更新 validation 字段', async () => {
+        await repos.strategy.create(makeStrategy('strategy-1'));
+        const publishedFixture = makeStrategyVersion('strategy-1');
+        const { publishedAt: _publishedAt, ...version } = publishedFixture;
+        await repos.strategy.createVersion(version);
+        await repos.strategy.setVersionValidation(version.id, {
+          status: 'invalid',
+          errors: ['bad'],
+        });
+        expect(await repos.strategy.findVersionById(version.id)).toEqual({
+          ...version,
+          validationStatus: 'invalid',
+          validationErrors: ['bad'],
+        });
         const changedDefinition = {
           ...version.definition,
           metadata: { style: 'changed' },
         };
         await expect(
-          repos.strategy.saveVersion({
+          repos.strategy.createVersion({
             ...version,
             definition: changedDefinition,
             definitionHash: strategyDefinitionHash(changedDefinition),
           }),
         ).rejects.toThrow(InvariantError);
         await expect(
-          repos.strategy.saveVersion({
+          repos.strategy.createVersion({
             ...makeStrategyVersion('strategy-1'),
             id: 'another-id',
           }),
         ).rejects.toThrow(InvariantError);
       });
+
+      it('pause/resume 只允许 active ↔ paused 用户 Strategy', async () => {
+        await repos.strategy.create(makeStrategy('strategy-1'));
+        await expect(repos.strategy.pause('strategy-1', T1)).rejects.toThrow(InvariantError);
+        const version = makeStrategyVersion('strategy-1');
+        await repos.strategy.createVersion(version);
+        await repos.strategy.activateVersion('strategy-1', version.id, T1);
+        await repos.strategy.pause('strategy-1', T2);
+        expect(await repos.strategy.findById('strategy-1')).toMatchObject({ status: 'paused' });
+        await repos.strategy.resume('strategy-1', T3);
+        expect(await repos.strategy.findById('strategy-1')).toMatchObject({
+          status: 'active',
+          updatedAt: T3,
+        });
+      });
     });
 
     describe('StrategyRunRepository', () => {
       beforeEach(async () => {
-        await repos.strategy.save(makeStrategy('strategy-1'));
-        await repos.strategy.saveVersion(makeStrategyVersion('strategy-1'));
+        await repos.strategy.create(makeStrategy('strategy-1'));
+        await repos.strategy.createVersion(makeStrategyVersion('strategy-1'));
         await repos.strategy.activateVersion('strategy-1', 'strategy-1-v1', T1);
       });
 
       it('run 往返和过滤排序一致', async () => {
-        await repos.strategyRun.saveRun(
-          makeStrategyRun('run-1', { startedAt: T1, finishedAt: T2 }),
-        );
-        await repos.strategyRun.saveRun(
-          makeStrategyRun('run-2', { startedAt: T2, finishedAt: T3 }),
-        );
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-1', { startedAt: T1, finishedAt: T2 }),
+          results: [],
+          signals: [],
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-2', { startedAt: T2, finishedAt: T3 }),
+          results: [],
+          signals: [],
+        });
         expect(await repos.strategyRun.findRunById('run-1')).toEqual(
           makeStrategyRun('run-1', { startedAt: T1, finishedAt: T2 }),
         );
@@ -1386,7 +1415,7 @@ export const registerRepositoryContractTests = (
           createdAt: T2,
           publishedAt: T2,
         });
-        await repos.strategy.saveVersion(version2);
+        await repos.strategy.createVersion(version2);
         await repos.strategy.activateVersion('strategy-1', version2.id, T2);
         const pinned = makeStrategyRun('run-pinned-v1', {
           strategyVersionId: 'strategy-1-v1',
@@ -1395,93 +1424,85 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.findRunById(pinned.id)).toEqual(pinned);
       });
 
-      it('results 按 rank/stock 排序并按 (run, stock) upsert', async () => {
-        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
-        await repos.strategyRun.saveResults([
-          makeStrategyResult('run-1', '600519.SH', { rank: 2 }),
-          makeStrategyResult('run-1', '002594.SZ', { rank: 1 }),
-        ]);
-        await repos.strategyRun.saveResults([
-          makeStrategyResult('run-1', '600519.SH', { rank: 2, score: 90 }),
-        ]);
+      it('commitRun 原子写入后 results 按 rank/stock 排序', async () => {
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-1'),
+          results: [
+            makeStrategyResult('run-1', '600519.SH', { rank: 2, score: 90 }),
+            makeStrategyResult('run-1', '002594.SZ', { rank: 1 }),
+          ],
+          signals: [],
+        });
         const results = await repos.strategyRun.listResults('run-1');
         expect(results.map((result) => result.stockId)).toEqual(['002594.SZ', '600519.SH']);
         expect(results[1]?.score).toBe(90);
       });
 
       it('listResults 无 rank 的结果排在最后', async () => {
-        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
-        await repos.strategyRun.saveResults([
-          makeStrategyResult('run-1', '600519.SH', { rank: undefined }),
-          makeStrategyResult('run-1', '002594.SZ', { rank: 1 }),
-        ]);
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-1'),
+          results: [
+            makeStrategyResult('run-1', '600519.SH', { rank: undefined }),
+            makeStrategyResult('run-1', '002594.SZ', { rank: 1 }),
+          ],
+          signals: [],
+        });
         const results = await repos.strategyRun.listResults('run-1');
         expect(results.map((result) => result.stockId)).toEqual(['002594.SZ', '600519.SH']);
         expect(results[1]?.rank).toBeUndefined();
       });
 
-      it('saveRun 重复保存只更新运行态列，身份列保持首次值', async () => {
-        await repos.strategyRun.saveRun(makeStrategyRun('run-1', { startedAt: T1 }));
-        await repos.strategyRun.saveRun(
-          makeStrategyRun('run-1', {
-            startedAt: T3,
-            finishedAt: T3,
-            mode: 'backtest',
-            status: 'failed',
-            summary: undefined,
-            error: 'boom',
-          }),
-        );
-        const got = await repos.strategyRun.findRunById('run-1');
-        expect(got).toMatchObject({
-          id: 'run-1',
-          startedAt: T1,
-          finishedAt: T3,
-          mode: 'scan',
-          status: 'failed',
-          error: 'boom',
+      it('signals 以 run/rule/stock/ts 唯一，跨运行同一时点和同运行不同时点都能保存', async () => {
+        const first = makeStrategySignal('signal-1', '600519.SH', { runId: 'run-1', ts: T1 });
+        const second = makeStrategySignal('signal-2', '600519.SH', {
+          runId: 'run-2',
+          ts: T1,
         });
-        expect(got?.summary).toBeUndefined();
-      });
-
-      it('signals 按目标唯一键幂等并支持 strategy/stock 查询', async () => {
-        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
-        const first = makeStrategySignal('signal-1', '600519.SH', { ts: T1 });
-        const duplicateIdentity = makeStrategySignal('signal-duplicate', '600519.SH', { ts: T1 });
-        const second = makeStrategySignal('signal-2', '002594.SZ', { ts: T2 });
-        await repos.strategyRun.saveSignals([first, duplicateIdentity, second]);
+        const laterInSameRun = makeStrategySignal('signal-3', '600519.SH', {
+          runId: 'run-1',
+          ts: T2,
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-1', { startedAt: T1, finishedAt: T2 }),
+          results: [],
+          signals: [first, laterInSameRun],
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-2', { startedAt: T1, finishedAt: T2 }),
+          results: [],
+          signals: [second],
+        });
         expect(
           (await repos.strategyRun.signalsByStrategy('strategy-1')).map((signal) => signal.id),
-        ).toEqual(['signal-2', 'signal-1']);
-        expect(await repos.strategyRun.signalsByStock('600519.SH')).toEqual([first]);
+        ).toEqual(['signal-3', 'signal-2', 'signal-1']);
+        expect(
+          (await repos.strategyRun.signalsByStock('600519.SH')).map((item) => item.id),
+        ).toEqual(['signal-3', 'signal-2', 'signal-1']);
       });
 
       it('signalsByRun 只返回指定运行并保持时间倒序', async () => {
-        await repos.strategyRun.saveRun(makeStrategyRun('run-1', { startedAt: T1 }));
-        await repos.strategyRun.saveRun(
-          makeStrategyRun('run-2', { startedAt: T2, finishedAt: T3 }),
-        );
         const older = makeStrategySignal('signal-old', '600519.SH', { runId: 'run-1', ts: T1 });
         const newer = makeStrategySignal('signal-new', '002594.SZ', { runId: 'run-1', ts: T2 });
         const otherRun = makeStrategySignal('signal-other', '300750.SZ', {
           runId: 'run-2',
           ts: T3,
         });
-        await repos.strategyRun.saveSignals([older, newer, otherRun]);
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-1', { startedAt: T1 }),
+          results: [],
+          signals: [older, newer],
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-2', { startedAt: T2, finishedAt: T3 }),
+          results: [],
+          signals: [otherRun],
+        });
 
         expect((await repos.strategyRun.signalsByRun('run-1')).map((signal) => signal.id)).toEqual([
           'signal-new',
           'signal-old',
         ]);
         expect(await repos.strategyRun.signalsByRun('missing')).toEqual([]);
-      });
-
-      it('saveSignals 主键 id 冲突也忽略（与身份唯一索引同语义）', async () => {
-        await repos.strategyRun.saveRun(makeStrategyRun('run-1'));
-        const first = makeStrategySignal('signal-1', '600519.SH', { ts: T1 });
-        const sameIdOtherIdentity = makeStrategySignal('signal-1', '002594.SZ', { ts: T2 });
-        await repos.strategyRun.saveSignals([first, sameIdOtherIdentity]);
-        expect(await repos.strategyRun.signalsByStrategy('strategy-1')).toEqual([first]);
       });
 
       it('commitRun 原子提交；引用不匹配时不留下 run/result/signal', async () => {
@@ -1510,6 +1531,35 @@ export const registerRepositoryContractTests = (
         ).rejects.toThrow(InvariantError);
         expect(await repos.strategyRun.findRunById(invalidRun.id)).toBeNull();
         expect(await repos.strategyRun.listResults(invalidRun.id)).toEqual([]);
+      });
+
+      it('commitRun 是 append-only；重复 runId 或包内重复事实不会覆盖已有运行', async () => {
+        const run = makeStrategyRun('run-append-only');
+        const original = makeStrategyResult(run.id, '600519.SH', { score: 80 });
+        await repos.strategyRun.commitRun({ run, results: [original], signals: [] });
+
+        await expect(
+          repos.strategyRun.commitRun({
+            run: { ...run, dataAsOf: T3 },
+            results: [makeStrategyResult(run.id, '600519.SH', { score: 99 })],
+            signals: [],
+          }),
+        ).rejects.toThrow();
+        expect(await repos.strategyRun.findRunById(run.id)).toEqual(run);
+        expect(await repos.strategyRun.listResults(run.id)).toEqual([original]);
+
+        const invalidRun = makeStrategyRun('run-duplicate-facts');
+        await expect(
+          repos.strategyRun.commitRun({
+            run: invalidRun,
+            results: [
+              makeStrategyResult(invalidRun.id, '600519.SH'),
+              makeStrategyResult(invalidRun.id, '600519.SH'),
+            ],
+            signals: [],
+          }),
+        ).rejects.toThrow(InvariantError);
+        expect(await repos.strategyRun.findRunById(invalidRun.id)).toBeNull();
       });
     });
 

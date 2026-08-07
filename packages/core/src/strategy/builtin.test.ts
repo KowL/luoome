@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { BUILTIN_STRATEGIES, STRATEGY_BUILTIN_DEFINED_AT } from './builtin.js';
+import {
+  BUILTIN_STRATEGIES,
+  STRATEGY_BUILTIN_DEFINED_AT,
+  STRATEGY_BUILTIN_REVISION,
+} from './builtin.js';
 
 /**
  * 内置策略身份锁定：definitionHash 是 StrategyVersion 的落库 identity，
@@ -31,9 +35,11 @@ describe('BUILTIN_STRATEGIES', () => {
     for (const bundle of BUILTIN_STRATEGIES) {
       expect(bundle.strategy.owner).toBe('builtin');
       expect(bundle.strategy.status).toBe('active');
-      expect(bundle.strategy.currentVersionId).toBe(`${bundle.strategy.id}-v1`);
-      expect(bundle.version.id).toBe(`${bundle.strategy.id}-v1`);
-      expect(bundle.version.version).toBe(1);
+      expect(bundle.strategy.currentVersionId).toBe(
+        `${bundle.strategy.id}-v${STRATEGY_BUILTIN_REVISION}`,
+      );
+      expect(bundle.version.id).toBe(`${bundle.strategy.id}-v${STRATEGY_BUILTIN_REVISION}`);
+      expect(bundle.version.version).toBe(STRATEGY_BUILTIN_REVISION);
       expect(bundle.version.validationStatus).toBe('valid');
       expect(bundle.version.publishedAt).toEqual(STRATEGY_BUILTIN_DEFINED_AT);
       expect(bundle.strategy.createdAt).toEqual(STRATEGY_BUILTIN_DEFINED_AT);

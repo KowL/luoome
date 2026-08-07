@@ -15,22 +15,19 @@ import { inspectStrategyDefinitionReferences } from './field-registry.js';
  * 内置 Strategy 静态种子（替代 v0.3 内置战法 + legacy-mapper 的运行时转换）。
  *
  * 身份约束：
- * - strategy.id / version.id（`<id>-v1`）/ signal rule id（`legacy-signal`）与
- *   legacy-mapper 时代的播种产物保持一致——definitionHash 是落库 identity，
- *   存量库已按这些值播种，改动等于给内置策略换身份。
- * - 播种幂等由调用方（ensureBuiltinStrategies）按 strategy.id 跳过保证。
+ * - strategy.id 稳定；每次内置定义升级必须发布固定的新 revision，不能原地改写旧版本。
+ * - signal rule id（`legacy-signal`）沿用旧映射身份；definitionHash 锁定该 revision 的定义。
+ * - 调用方（ensureBuiltinStrategies）负责把存量 builtin 协调到本 revision，不覆盖用户同名 Strategy。
  *
  * 2026-07-31：为每个种子补 selection rule（`legacy-selection`，与 signal 同条件），
  * 让「从模板导入」创建的用户策略满足普通用户至少一条 selection rule 的不变量；
  * 同时让内置策略运行结果的 selected 从恒 true 变为按条件过滤（signals 求值不受影响）。
- * definitionHash 随之变化，builtin.test.ts 的 EXPECTED 表已同步；存量库按 id 跳过
- * 播种，保留旧定义，与新定义并存漂移（仅影响模板列表与新建库）。
+ * definitionHash 随之变化，builtin.test.ts 的 EXPECTED 表已同步。
  *
  * 2026-08-02：为每个种子补 scoring（weighted-sum，单组件引用 `legacy-selection`，
  * score 沿用 seed.score，weight=1；不设 top 避免截断 selected）。此前种子 DSL 无
  * scoring 块，股票池 rank/score 恒为 '--'；补上后运行结果才有 score 与稳定排名。
- * definitionHash 再次变化，builtin.test.ts 的 EXPECTED 表已同步；存量库按 id 跳过
- * 播种保留旧定义，需重播运行后股票池才有 rank/score。
+ * definitionHash 再次变化，builtin.test.ts 的 EXPECTED 表已同步。
  */
 export interface BuiltinStrategyBundle {
   readonly strategy: Strategy;
@@ -39,6 +36,7 @@ export interface BuiltinStrategyBundle {
 
 /** builtin 种子时间（固化，避免每次 new Date 漂移；与历史播种值一致）。 */
 export const STRATEGY_BUILTIN_DEFINED_AT = new Date('2026-07-01T00:00:00.000Z');
+export const STRATEGY_BUILTIN_REVISION = 3;
 
 interface BuiltinStrategySeed {
   readonly id: string;
@@ -230,12 +228,12 @@ const buildBuiltinBundle = (seed: BuiltinStrategySeed): BuiltinStrategyBundle =>
   const validationErrors = [...inspectStrategyDefinitionReferences(definition).validationErrors];
   const valid = validationErrors.length === 0;
   const version: StrategyVersion = {
-    id: `${seed.id}-v1`,
+    id: `${seed.id}-v${STRATEGY_BUILTIN_REVISION}`,
     strategyId: seed.id,
-    version: 1,
+    version: STRATEGY_BUILTIN_REVISION,
     definition,
     definitionHash: strategyDefinitionHash(definition),
-    changeSummary: '内置策略初始版本',
+    changeSummary: '内置策略 revision 3：selection、scoring 与派生 meta 上下文',
     validationStatus: valid ? 'valid' : 'invalid',
     validationErrors,
     ...(valid ? { publishedAt: STRATEGY_BUILTIN_DEFINED_AT } : {}),

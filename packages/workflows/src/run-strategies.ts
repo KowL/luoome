@@ -1,11 +1,11 @@
+import { getStrategyRunDataHealth } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 export const RunStrategiesInput = z.object({
   strategyIds: z.array(z.string().min(1)).optional(),
-  mode: z.enum(['scan', 'replay']).default('scan'),
-  asOf: z.coerce.date().optional(),
+  mode: z.enum(['manual', 'scheduled']).default('manual'),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
   persist: z.boolean().default(true),
 });
@@ -13,7 +13,8 @@ export type RunStrategiesInputT = z.infer<typeof RunStrategiesInput>;
 
 const RunStrategiesItemSchema = z.object({
   strategyId: z.string(),
-  status: z.enum(['complete', 'partial', 'failed']),
+  status: z.enum(['complete', 'failed']),
+  dataHealth: z.enum(['complete', 'partial', 'unavailable']),
   runId: z.string().optional(),
   selected: z.number().int().nonnegative(),
   signals: z.number().int().nonnegative(),
@@ -23,7 +24,7 @@ const RunStrategiesItemSchema = z.object({
 export const RunStrategiesOutput = z.object({
   items: z.array(RunStrategiesItemSchema),
   complete: z.number().int().nonnegative(),
-  partial: z.number().int().nonnegative(),
+  dataPartial: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
 });
 export type RunStrategiesOutputT = z.infer<typeof RunStrategiesOutput>;
@@ -43,8 +44,7 @@ const runAll: WorkflowStep = async (previous, ctx) => {
   for (const strategyId of ids) {
     const result = await ctx.tools.run_strategy.execute({
       strategyId,
-      mode: input.mode,
-      ...(input.asOf === undefined ? {} : { asOf: input.asOf }),
+      mode: input.mode === 'scheduled' ? 'scheduled' : 'scan',
       ...(input.stockIds === undefined ? {} : { stockIds: input.stockIds }),
       persist: input.persist,
     });
@@ -57,12 +57,20 @@ const runAll: WorkflowStep = async (previous, ctx) => {
             : 'required' in result.error
               ? `permission required: ${result.error.required}`
               : `${result.error.entity} not found: ${result.error.id}`;
-      items.push({ strategyId, status: 'failed', selected: 0, signals: 0, error });
+      items.push({
+        strategyId,
+        status: 'failed',
+        dataHealth: 'unavailable',
+        selected: 0,
+        signals: 0,
+        error,
+      });
       continue;
     }
     items.push({
       strategyId,
-      status: result.data.run.status === 'running' ? 'failed' : result.data.run.status,
+      status: result.data.run.status === 'failed' ? 'failed' : 'complete',
+      dataHealth: getStrategyRunDataHealth(result.data.run) ?? 'unavailable',
       runId: result.data.run.id,
       selected: result.data.results.filter((candidate) => candidate.selected).length,
       signals: result.data.signals.length,
@@ -72,7 +80,7 @@ const runAll: WorkflowStep = async (previous, ctx) => {
   return RunStrategiesOutput.parse({
     items,
     complete: items.filter((item) => item.status === 'complete').length,
-    partial: items.filter((item) => item.status === 'partial').length,
+    dataPartial: items.filter((item) => item.dataHealth === 'partial').length,
     failed: items.filter((item) => item.status === 'failed').length,
   });
 };

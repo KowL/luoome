@@ -6,6 +6,28 @@ import {
 } from './signal-observation.js';
 
 describe('SignalObservation', () => {
+  it('accepts StrategySignal as the current strategy observation source', () => {
+    expect(
+      SignalObservationSchema.parse({
+        id: 'signal-observation:strategy-signal:run-1:entry:stock-1:t1',
+        sourceKind: 'strategy-signal',
+        sourceId: 'run-1:entry:stock-1',
+        stockId: 'stock-1',
+        baselinePrice: 10,
+        baselineAt: new Date('2026-01-02T00:00:00Z'),
+        horizon: 't1',
+        benchmarkStatus: 'unavailable',
+        status: 'pending',
+        provenance: {
+          provider: 'quote',
+          observedAt: new Date('2026-01-02T00:00:00Z'),
+          fetchedAt: new Date('2026-01-02T00:01:00Z'),
+          freshness: 'unknown',
+        },
+      }).sourceKind,
+    ).toBe('strategy-signal');
+  });
+
   it('requires a factual baseline and full outcome before completion', () => {
     const observation = SignalObservationSchema.parse({
       id: 'signal-observation:tactic-signal:breakout:000001:1:t1',

@@ -112,7 +112,7 @@ export const createStrategyTool = defineTool({
       updatedAt: now,
     });
     assertStrategyInvariants(strategy);
-    await ctx.repos.strategy.save(strategy);
+    await ctx.repos.strategy.create(strategy);
 
     if (sourceVersion === undefined || sourceId === undefined) return { strategy };
     const copiedVersion = StrategyVersionSchema.parse({
@@ -126,7 +126,7 @@ export const createStrategyTool = defineTool({
       validationErrors: [],
       createdAt: now,
     });
-    await ctx.repos.strategy.saveVersion(copiedVersion);
+    await ctx.repos.strategy.createVersion(copiedVersion);
     return { strategy, copiedVersion };
   },
 });
@@ -167,12 +167,15 @@ export const createStrategyVersionTool = defineTool({
       createdAt: now,
     });
     assertStrategyVersionInvariants(version, 'user');
-    await ctx.repos.strategy.saveVersion(version);
+    await ctx.repos.strategy.createVersion(version);
     return { version };
   },
 });
 
-export const ValidateStrategyVersionInput = z.object({ versionId: z.string().min(1) });
+export const ValidateStrategyVersionInput = z.object({
+  versionId: z.string().min(1),
+  strategyId: z.string().min(1).optional(),
+});
 export const ValidateStrategyVersionOutput = z.object({
   version: StrategyVersionSchema,
   referencedFields: z.array(z.string()),
@@ -188,6 +191,9 @@ export const validateStrategyVersionTool = defineTool({
   handler: async (input, ctx) => {
     const existing = await ctx.repos.strategy.findVersionById(input.versionId);
     if (existing === null) return errNotFound('StrategyVersion', input.versionId);
+    if (input.strategyId !== undefined && existing.strategyId !== input.strategyId) {
+      return errInvalidInput('StrategyVersion 不属于请求中的 Strategy');
+    }
     const strategy = await ctx.repos.strategy.findById(existing.strategyId);
     if (strategy === null) return errNotFound('Strategy', existing.strategyId);
     if (strategy.owner === 'builtin') {
@@ -197,12 +203,12 @@ export const validateStrategyVersionTool = defineTool({
       return errInvalidInput('published StrategyVersion 不可重新校验修改');
     }
     const inspected = inspectStrategyDefinitionReferences(existing.definition);
-    const version = StrategyVersionSchema.parse({
-      ...existing,
-      validationStatus: inspected.validationErrors.length === 0 ? 'valid' : 'invalid',
-      validationErrors: inspected.validationErrors,
+    await ctx.repos.strategy.setVersionValidation(existing.id, {
+      status: inspected.validationErrors.length === 0 ? 'valid' : 'invalid',
+      errors: inspected.validationErrors,
     });
-    await ctx.repos.strategy.saveVersion(version);
+    const version = await ctx.repos.strategy.findVersionById(existing.id);
+    if (version === null) return errNotFound('StrategyVersion', existing.id);
     return {
       version,
       referencedFields: inspected.paths,
@@ -211,7 +217,10 @@ export const validateStrategyVersionTool = defineTool({
   },
 });
 
-export const PublishStrategyVersionInput = z.object({ versionId: z.string().min(1) });
+export const PublishStrategyVersionInput = z.object({
+  versionId: z.string().min(1),
+  strategyId: z.string().min(1).optional(),
+});
 export const PublishStrategyVersionOutput = z.object({
   strategy: StrategySchema,
   version: StrategyVersionSchema,
@@ -227,6 +236,9 @@ export const publishStrategyVersionTool = defineTool({
   handler: async (input, ctx) => {
     const existing = await ctx.repos.strategy.findVersionById(input.versionId);
     if (existing === null) return errNotFound('StrategyVersion', input.versionId);
+    if (input.strategyId !== undefined && existing.strategyId !== input.strategyId) {
+      return errInvalidInput('StrategyVersion 不属于请求中的 Strategy');
+    }
     const strategy = await ctx.repos.strategy.findById(existing.strategyId);
     if (strategy === null) return errNotFound('Strategy', existing.strategyId);
     if (strategy.owner === 'builtin') return errInvalidInput('builtin StrategyVersion 不可修改');
@@ -256,8 +268,12 @@ export const pauseStrategyTool = defineTool({
     const strategy = await ctx.repos.strategy.findById(input.strategyId);
     if (strategy === null) return errNotFound('Strategy', input.strategyId);
     if (strategy.owner === 'builtin') return errInvalidInput('builtin Strategy 不可修改');
-    const paused = StrategySchema.parse({ ...strategy, status: 'paused', updatedAt: ctx.clock() });
-    await ctx.repos.strategy.save(paused);
+    if (strategy.status !== 'active') {
+      return errInvalidInput(`只有 active 的 Strategy 可暂停: ${strategy.id}`);
+    }
+    await ctx.repos.strategy.pause(strategy.id, ctx.clock());
+    const paused = await ctx.repos.strategy.findById(strategy.id);
+    if (paused === null) return errNotFound('Strategy', strategy.id);
     return { strategy: paused };
   },
 });
@@ -282,13 +298,9 @@ export const resumeStrategyTool = defineTool({
     if (strategy.currentVersionId === undefined) {
       return errInvalidInput('恢复 active 需要先 publish 一个 valid StrategyVersion');
     }
-    const resumed = StrategySchema.parse({
-      ...strategy,
-      status: 'active',
-      updatedAt: ctx.clock(),
-    });
-    assertStrategyInvariants(resumed);
-    await ctx.repos.strategy.save(resumed);
+    await ctx.repos.strategy.resume(strategy.id, ctx.clock());
+    const resumed = await ctx.repos.strategy.findById(strategy.id);
+    if (resumed === null) return errNotFound('Strategy', strategy.id);
     return { strategy: resumed };
   },
 });

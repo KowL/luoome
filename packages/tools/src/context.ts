@@ -10,7 +10,7 @@ import type {
   StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
-import { BUILTIN_STRATEGIES } from '@luoome/core';
+import { BUILTIN_STRATEGIES, InvariantError } from '@luoome/core';
 
 export interface BuildContextInput {
   readonly repos: RepositoryRegistry;
@@ -32,16 +32,43 @@ export interface BuildContextInput {
   readonly researchVault?: ResearchVaultAdapterLike;
 }
 
-/** 幂等装载内置 Strategy 静态种子（同 id 已存在则跳过，不覆盖用户同名策略）。 */
+/** 幂等装载并协调 builtin revision；不覆盖用户同名 Strategy。 */
 export const ensureBuiltinStrategies = async (
   repos: Pick<RepositoryRegistry, 'strategy'>,
 ): Promise<void> => {
-  const strategies = [...(await repos.strategy.list())];
   for (const bundle of BUILTIN_STRATEGIES) {
-    if (strategies.some((strategy) => strategy.id === bundle.strategy.id)) continue;
-    await repos.strategy.save(bundle.strategy);
-    await repos.strategy.saveVersion(bundle.version);
-    strategies.push(bundle.strategy);
+    const existing = await repos.strategy.findById(bundle.strategy.id);
+    if (existing === null) {
+      await repos.strategy.create(bundle.strategy);
+      await repos.strategy.createVersion(bundle.version);
+      continue;
+    }
+    if (existing.owner !== 'builtin') continue;
+
+    const versions = await repos.strategy.listVersions(existing.id);
+    const target = versions.find((version) => version.id === bundle.version.id);
+    if (target !== undefined && target.definitionHash !== bundle.version.definitionHash) {
+      throw new InvariantError(`builtin revision hash 冲突: ${bundle.version.id}`);
+    }
+    if (target === undefined) {
+      const latest = versions.at(-1);
+      if (latest !== undefined && latest.version >= bundle.version.version) {
+        throw new InvariantError(`builtin revision 序号冲突: ${bundle.version.id}`);
+      }
+      await repos.strategy.createVersion({
+        ...bundle.version,
+        ...(existing.currentVersionId === undefined
+          ? {}
+          : { parentVersionId: existing.currentVersionId }),
+      });
+    }
+    if (existing.currentVersionId !== bundle.version.id) {
+      await repos.strategy.activateVersion(
+        existing.id,
+        bundle.version.id,
+        bundle.strategy.updatedAt,
+      );
+    }
   }
 };
 

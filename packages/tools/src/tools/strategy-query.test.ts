@@ -1,4 +1,5 @@
 import {
+  type MarketDataAdapterLike,
   type Strategy,
   type StrategyDslV1,
   type StrategyRun,
@@ -74,8 +75,8 @@ const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): 
     createdAt: now,
     updatedAt: now,
   };
-  await ctx.repos.strategy.save(strategy);
-  await ctx.repos.strategy.saveVersion(version);
+  await ctx.repos.strategy.create(strategy);
+  await ctx.repos.strategy.createVersion(version);
 };
 
 /** 从一次真实运行派生同版本的后续 run（改 id/时间/状态/摘要）。 */
@@ -107,6 +108,65 @@ const failedSummary = {
 };
 
 describe('complete|partial 可用运行基准', () => {
+  it('无运行时使用统一完成语义，不向用户暴露 legacy partial 状态', async () => {
+    const ctx = await buildTestContext();
+    await seedStrategy(ctx);
+
+    const views = await listStrategyResultViewsTool.execute(
+      { strategyId: 'scan-strategy', view: 'selected' },
+      ctx,
+    );
+
+    expect(views.ok).toBe(false);
+    if (views.ok) return;
+    expect(views.error).toEqual({
+      kind: 'not_found',
+      entity: '可用的完成运行',
+      id: 'scan-strategy',
+    });
+    expect(JSON.stringify(views.error)).not.toContain('partial');
+  });
+
+  it('数据部分缺失的 complete 运行仍成为当前股票池基准', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      fetchQuote: (stockId) =>
+        stockId === '300750.SZ'
+          ? Promise.reject(new Error('quote unavailable'))
+          : base.adapters.market.fetchQuote(stockId),
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
+
+    const run = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['300750.SZ', '600519.SH'] },
+      ctx,
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.data.run).toMatchObject({
+      status: 'complete',
+      summary: { schemaVersion: 3, dataHealth: 'partial' },
+    });
+
+    const views = await listStrategyResultViewsTool.execute(
+      { strategyId: 'scan-strategy', view: 'selected' },
+      ctx,
+    );
+    expect(views.ok).toBe(true);
+    if (!views.ok) return;
+    expect(views.data.run.id).toBe(run.data.run.id);
+    expect(views.data.rows.map((row) => row.stock.stockId)).toEqual(['600519.SH']);
+
+    const workspace = await getStrategyWorkspaceTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(workspace.ok).toBe(true);
+    if (!workspace.ok) return;
+    expect(workspace.data.currentRun?.id).toBe(run.data.run.id);
+    expect(workspace.data.overview.health).toBe('partial');
+  });
+
   it('最新一次为 partial 时，视图与工作台以它为基准且不警告', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
@@ -242,9 +302,7 @@ describe('complete|partial 可用运行基准', () => {
     if (!compared.ok) return;
     expect(compared.data.fromRun.id).toBe(base.data.run.id);
     expect(compared.data.toRun.id).toBe(partial.id);
-    expect(compared.data.warnings.some((warning) => warning.includes('非 complete 运行'))).toBe(
-      true,
-    );
+    expect(compared.data.warnings.some((warning) => warning.includes('数据不完整运行'))).toBe(true);
   });
 });
 

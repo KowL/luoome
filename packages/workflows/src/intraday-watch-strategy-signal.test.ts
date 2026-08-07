@@ -50,7 +50,7 @@ const DEFINITION: StrategyDslV1 = {
 
 const seedSignalSetup = async (ctx: ToolContext, signalTs: Date): Promise<void> => {
   // StrategyRun 落库要求绑定 active Strategy 的 published valid version
-  await ctx.repos.strategy.save({
+  await ctx.repos.strategy.create({
     id: 'sig-strategy',
     name: '信号策略',
     description: '测试策略',
@@ -60,7 +60,7 @@ const seedSignalSetup = async (ctx: ToolContext, signalTs: Date): Promise<void> 
     createdAt: T0,
     updatedAt: T0,
   });
-  await ctx.repos.strategy.saveVersion({
+  await ctx.repos.strategy.createVersion({
     id: 'sig-strategy-v1',
     strategyId: 'sig-strategy',
     version: 1,
@@ -71,43 +71,46 @@ const seedSignalSetup = async (ctx: ToolContext, signalTs: Date): Promise<void> 
     publishedAt: T0,
     createdAt: T0,
   });
-  await ctx.repos.strategyRun.saveRun({
-    id: 'run-1',
-    strategyId: 'sig-strategy',
-    strategyVersionId: 'sig-strategy-v1',
-    mode: 'scan',
-    coverage: 'CN_A_SHARES_SH_SZ',
-    dataAsOf: signalTs,
-    startedAt: signalTs,
-    finishedAt: signalTs,
-    status: 'complete',
-    inputSnapshot: { candidateStockIds: [STOCK], subset: true, persist: true },
-    providerStatuses: [],
-    summary: {
-      candidates: 1,
-      evaluated: 1,
-      selected: 0,
-      signals: 1,
-      partial: 0,
-      failed: 0,
-      failures: [],
-    },
-  });
-  await ctx.repos.strategyRun.saveSignals([
-    {
-      id: `signal-${STOCK}`,
+  await ctx.repos.strategyRun.commitRun({
+    run: {
+      id: 'run-1',
       strategyId: 'sig-strategy',
       strategyVersionId: 'sig-strategy-v1',
-      runId: 'run-1',
-      ruleId: 'entry',
-      stockId: STOCK,
-      ts: signalTs,
-      score: 80,
-      direction: 'bullish',
-      evidence: ['放量突破'],
-      evaluationSnapshot: {},
+      mode: 'scan',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: signalTs,
+      startedAt: signalTs,
+      finishedAt: signalTs,
+      status: 'complete',
+      inputSnapshot: { candidateStockIds: [STOCK], subset: true, persist: true },
+      providerStatuses: [],
+      summary: {
+        candidates: 1,
+        evaluated: 1,
+        selected: 0,
+        signals: 1,
+        partial: 0,
+        failed: 0,
+        failures: [],
+      },
     },
-  ]);
+    results: [],
+    signals: [
+      {
+        id: `signal-${STOCK}`,
+        strategyId: 'sig-strategy',
+        strategyVersionId: 'sig-strategy-v1',
+        runId: 'run-1',
+        ruleId: 'entry',
+        stockId: STOCK,
+        ts: signalTs,
+        score: 80,
+        direction: 'bullish',
+        evidence: ['放量突破'],
+        evaluationSnapshot: {},
+      },
+    ],
+  });
   await ctx.repos.watchlist.save({
     id: 'sig-watch',
     name: '信号观察',
