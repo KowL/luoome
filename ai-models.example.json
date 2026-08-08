@@ -15,6 +15,20 @@
     "gateway": {
       "type": "gateway",
       "apiKeyEnv": "AI_GATEWAY_API_KEY"
+    },
+    "kimi": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.moonshot.cn/v1",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "supportsStructuredOutputs": false,
+      "quirks": ["inject-schema", "recover-malformed-text"]
+    },
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.deepseek.com",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "supportsStructuredOutputs": false,
+      "quirks": ["inject-schema", "recover-malformed-text"]
     }
   },
   "profiles": {

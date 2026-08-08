@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
@@ -53,7 +53,7 @@ const ProfileConfigSchema = z.object({
   maxOutputTokens: positiveInt.default(2_048),
   timeoutMs: positiveInt.default(30_000),
   maxRetries: z.number().int().min(0).max(5).default(0),
-  reasoningEffort: z.enum(['off', 'low', 'medium', 'high']).default('off'),
+  reasoningEffort: z.enum(['off', 'low', 'medium', 'high', 'max']).default('off'),
   maxPromptChars: positiveInt.default(16_000),
   maxSteps: positiveInt.default(8),
   maxTotalTokens: positiveInt.default(30_000),
@@ -68,6 +68,65 @@ export const AIModelCatalogConfigSchema = z.object({
       timeoutMs: positiveInt.default(120_000),
     }),
   }),
+});
+
+export const DEFAULT_AI_MODEL_CATALOG_CONFIG = AIModelCatalogConfigSchema.parse({
+  version: 1,
+  providers: {
+    minimax: {
+      type: 'openai-compatible',
+      baseURL: 'https://api.minimaxi.com/v1',
+      apiKeyEnv: 'MINIMAX_API_KEY',
+      supportsStructuredOutputs: true,
+      quirks: ['inject-schema', 'recover-malformed-text'],
+    },
+    anthropic: {
+      type: 'anthropic',
+      apiKeyEnv: 'ANTHROPIC_API_KEY',
+    },
+    gateway: {
+      type: 'gateway',
+      apiKeyEnv: 'AI_GATEWAY_API_KEY',
+    },
+    kimi: {
+      type: 'openai-compatible',
+      baseURL: 'https://api.moonshot.cn/v1',
+      apiKeyEnv: 'MOONSHOT_API_KEY',
+      supportsStructuredOutputs: false,
+      quirks: ['inject-schema', 'recover-malformed-text'],
+    },
+    deepseek: {
+      type: 'openai-compatible',
+      baseURL: 'https://api.deepseek.com',
+      apiKeyEnv: 'DEEPSEEK_API_KEY',
+      supportsStructuredOutputs: false,
+      quirks: ['inject-schema', 'recover-malformed-text'],
+    },
+  },
+  profiles: {
+    generation: {
+      model: 'minimax:MiniMax-M3',
+      temperature: 0.2,
+      maxOutputTokens: 2_048,
+      timeoutMs: 30_000,
+      maxRetries: 0,
+      reasoningEffort: 'off',
+      maxPromptChars: 16_000,
+      maxSteps: 8,
+      maxTotalTokens: 30_000,
+    },
+    agent: {
+      model: 'minimax:MiniMax-M3',
+      temperature: 0.2,
+      maxOutputTokens: 2_048,
+      timeoutMs: 120_000,
+      maxRetries: 0,
+      reasoningEffort: 'off',
+      maxPromptChars: 16_000,
+      maxSteps: 8,
+      maxTotalTokens: 30_000,
+    },
+  },
 });
 
 export type AIModelCatalogConfig = z.infer<typeof AIModelCatalogConfigSchema>;
@@ -204,6 +263,22 @@ export const resolveAIModelCatalogPath = (
   return join(env.LUOOME_HOME?.trim() || join(homedir(), '.luoome'), 'ai-models.json');
 };
 
+const isFileSystemError = (error: unknown, code: string): boolean =>
+  error instanceof Error && 'code' in error && error.code === code;
+
+const createDefaultAIModelCatalog = (path: string): void => {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    writeFileSync(path, `${JSON.stringify(DEFAULT_AI_MODEL_CATALOG_CONFIG, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (!isFileSystemError(error, 'EEXIST')) throw error;
+  }
+};
+
 export const loadAIModelCatalog = (
   env: Readonly<Record<string, string | undefined>>,
   options: {
@@ -212,11 +287,21 @@ export const loadAIModelCatalog = (
   } = {},
 ): AIModelCatalog => {
   const path = resolveAIModelCatalogPath(env);
+  const readFile = options.readFile ?? ((target: string) => readFileSync(target, 'utf8'));
   let content: string;
   try {
-    content = (options.readFile ?? ((target) => readFileSync(target, 'utf8')))(path);
+    content = readFile(path);
   } catch (error) {
-    throw new Error(`无法读取 AI 模型目录 ${path}`, { cause: error });
+    const usesExplicitPath = (env.LUOOME_AI_CONFIG?.trim().length ?? 0) > 0;
+    if (usesExplicitPath || !isFileSystemError(error, 'ENOENT')) {
+      throw new Error(`无法读取 AI 模型目录 ${path}`, { cause: error });
+    }
+    try {
+      createDefaultAIModelCatalog(path);
+      content = readFile(path);
+    } catch (createError) {
+      throw new Error(`无法生成默认 AI 模型目录 ${path}`, { cause: createError });
+    }
   }
   let input: unknown;
   try {

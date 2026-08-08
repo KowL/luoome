@@ -580,7 +580,7 @@
                 <div class="field">
                   <label for="ai-temperature">温度</label>
                   <input id="ai-temperature" type="number" min="0" max="2" step="0.1" required />
-                  <span class="hint">越低越稳定，越高越发散。</span>
+                  <span id="ai-temperature-hint" class="hint">越低越稳定，越高越发散。</span>
                 </div>
                 <div class="field">
                   <label for="ai-timeout">超时（秒）</label>
@@ -594,10 +594,11 @@
                 <div class="field">
                   <label for="ai-reasoning-effort">推理强度</label>
                   <select id="ai-reasoning-effort">
-                    <option value="off">关闭</option>
+                    <option value="off">默认（不传）</option>
                     <option value="low">低</option>
                     <option value="medium">中</option>
                     <option value="high">高</option>
+                    <option value="max">最高</option>
                   </select>
                   <span id="ai-reasoning-hint" class="hint">兼容模型会在回答前投入更多推理。</span>
                 </div>

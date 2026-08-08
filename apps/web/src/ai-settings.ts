@@ -10,8 +10,16 @@ import {
 import { parseEnvFile } from '@luoome/core';
 import { z } from 'zod';
 
-const ProviderIdSchema = z.enum(['minimax', 'openai-compatible', 'anthropic', 'gateway']);
+const ProviderIdSchema = z.enum([
+  'minimax',
+  'kimi',
+  'deepseek',
+  'openai-compatible',
+  'anthropic',
+  'gateway',
+]);
 export type AISettingsProviderId = z.infer<typeof ProviderIdSchema>;
+type AIReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
 
 export interface AIProviderPreset {
   readonly id: AISettingsProviderId;
@@ -19,8 +27,12 @@ export interface AIProviderPreset {
   readonly type: 'openai-compatible' | 'anthropic' | 'gateway';
   readonly defaultModel: string;
   readonly defaultBaseURL: string;
+  readonly defaultTemperature: number;
+  readonly fixedTemperature?: number;
   readonly apiKeyEnv: string;
+  readonly supportsStructuredOutputs: boolean;
   readonly supportsReasoningEffort: boolean;
+  readonly supportedReasoningEfforts: readonly AIReasoningEffort[];
   readonly quirks: readonly ('inject-schema' | 'recover-malformed-text')[];
 }
 
@@ -31,8 +43,38 @@ export const AI_PROVIDER_PRESETS: readonly AIProviderPreset[] = [
     type: 'openai-compatible',
     defaultModel: 'MiniMax-M3',
     defaultBaseURL: 'https://api.minimaxi.com/v1',
+    defaultTemperature: 0.2,
     apiKeyEnv: 'MINIMAX_API_KEY',
+    supportsStructuredOutputs: true,
     supportsReasoningEffort: true,
+    supportedReasoningEfforts: ['off', 'low', 'medium', 'high'],
+    quirks: ['inject-schema', 'recover-malformed-text'],
+  },
+  {
+    id: 'kimi',
+    label: 'Kimi',
+    type: 'openai-compatible',
+    defaultModel: 'kimi-k3',
+    defaultBaseURL: 'https://api.moonshot.cn/v1',
+    defaultTemperature: 1,
+    fixedTemperature: 1,
+    apiKeyEnv: 'MOONSHOT_API_KEY',
+    supportsStructuredOutputs: false,
+    supportsReasoningEffort: true,
+    supportedReasoningEfforts: ['off', 'low', 'high', 'max'],
+    quirks: ['inject-schema', 'recover-malformed-text'],
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    type: 'openai-compatible',
+    defaultModel: 'deepseek-v4-pro',
+    defaultBaseURL: 'https://api.deepseek.com',
+    defaultTemperature: 0.2,
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    supportsStructuredOutputs: false,
+    supportsReasoningEffort: true,
+    supportedReasoningEfforts: ['off', 'low', 'high', 'max'],
     quirks: ['inject-schema', 'recover-malformed-text'],
   },
   {
@@ -41,8 +83,11 @@ export const AI_PROVIDER_PRESETS: readonly AIProviderPreset[] = [
     type: 'openai-compatible',
     defaultModel: 'gpt-4o-mini',
     defaultBaseURL: 'https://api.openai.com/v1',
+    defaultTemperature: 0.2,
     apiKeyEnv: 'OPENAI_API_KEY',
+    supportsStructuredOutputs: true,
     supportsReasoningEffort: true,
+    supportedReasoningEfforts: ['off', 'low', 'medium', 'high', 'max'],
     quirks: ['recover-malformed-text'],
   },
   {
@@ -51,8 +96,11 @@ export const AI_PROVIDER_PRESETS: readonly AIProviderPreset[] = [
     type: 'anthropic',
     defaultModel: 'claude-sonnet-4-5',
     defaultBaseURL: 'https://api.anthropic.com/v1',
+    defaultTemperature: 0.2,
     apiKeyEnv: 'ANTHROPIC_API_KEY',
+    supportsStructuredOutputs: true,
     supportsReasoningEffort: false,
+    supportedReasoningEfforts: ['off'],
     quirks: [],
   },
   {
@@ -61,8 +109,11 @@ export const AI_PROVIDER_PRESETS: readonly AIProviderPreset[] = [
     type: 'gateway',
     defaultModel: 'anthropic/claude-sonnet-4.5',
     defaultBaseURL: 'https://ai-gateway.vercel.sh/v1/ai',
+    defaultTemperature: 0.2,
     apiKeyEnv: 'AI_GATEWAY_API_KEY',
+    supportsStructuredOutputs: true,
     supportsReasoningEffort: false,
+    supportedReasoningEfforts: ['off'],
     quirks: [],
   },
 ];
@@ -81,15 +132,22 @@ export const SaveAISettingsSchema = z
     temperature: z.number().min(0).max(2),
     timeoutSeconds: z.number().int().min(1).max(600),
     maxRetries: z.number().int().min(0).max(5),
-    reasoningEffort: z.enum(['off', 'low', 'medium', 'high']),
+    reasoningEffort: z.enum(['off', 'low', 'medium', 'high', 'max']),
   })
   .superRefine((value, ctx) => {
     const preset = AI_PROVIDER_PRESETS.find(({ id }) => id === value.provider);
-    if (preset?.supportsReasoningEffort === false && value.reasoningEffort !== 'off') {
+    if (preset !== undefined && !preset.supportedReasoningEfforts.includes(value.reasoningEffort)) {
       ctx.addIssue({
         code: 'custom',
         path: ['reasoningEffort'],
-        message: `${preset.label} 当前不支持统一推理强度参数`,
+        message: `${preset.label} 不支持推理强度 ${value.reasoningEffort}`,
+      });
+    }
+    if (preset?.fixedTemperature !== undefined && value.temperature !== preset.fixedTemperature) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['temperature'],
+        message: `${preset.label} 的 temperature 必须为 ${preset.fixedTemperature}`,
       });
     }
   });
@@ -104,7 +162,7 @@ export interface AISettingsView {
   readonly temperature: number;
   readonly timeoutSeconds: number;
   readonly maxRetries: number;
-  readonly reasoningEffort: 'off' | 'low' | 'medium' | 'high';
+  readonly reasoningEffort: AIReasoningEffort;
   readonly configPath: string;
   readonly secretPath: string;
   readonly providers: readonly AIProviderPreset[];
@@ -147,6 +205,8 @@ const inferProviderId = (
   provider: AIModelCatalogConfig['providers'][string],
 ): AISettingsProviderId => {
   if (providerName === 'minimax') return 'minimax';
+  if (providerName === 'kimi') return 'kimi';
+  if (providerName === 'deepseek') return 'deepseek';
   if (provider.type === 'anthropic') return 'anthropic';
   if (provider.type === 'gateway') return 'gateway';
   return 'openai-compatible';
@@ -234,7 +294,9 @@ export class AISettingsStore {
       type: preset.type,
       baseURL: settings.baseURL,
       apiKeyEnv: preset.apiKeyEnv,
-      ...(preset.type === 'openai-compatible' ? { supportsStructuredOutputs: true } : {}),
+      ...(preset.type === 'openai-compatible'
+        ? { supportsStructuredOutputs: preset.supportsStructuredOutputs }
+        : {}),
       ...(preset.quirks.length === 0 ? {} : { quirks: preset.quirks }),
     };
     const commonProfile = {

@@ -88,7 +88,7 @@ homebrew/
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney` | 股票目录数据源顺序；支持 `eastmoney,tushare` |
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
-| `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；格式见 [`ai-models.example.json`](./ai-models.example.json) |
+| `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |
 | provider 密钥变量 | 由目录指定 | `apiKeyEnv` 引用环境变量名，密钥不写入模型目录 |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
@@ -103,6 +103,11 @@ AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers`
 `openai-compatible`、`anthropic` 或 `gateway`，`profiles.generation` 与
 `profiles.agent` 可分别选择 `provider:model`、默认生成参数和运行预算。旧
 `LUOOME_LLM_*` / `LUOOME_AGENT_*` 不再读取。
+
+Web 内置 Kimi 与 DeepSeek preset：Kimi 默认使用 `kimi-k3`、
+`https://api.moonshot.cn/v1` 和 `MOONSHOT_API_KEY`；DeepSeek 默认使用
+`deepseek-v4-pro`、`https://api.deepseek.com` 和 `DEEPSEEK_API_KEY`。两者均通过
+OpenAI-compatible Chat Completions 接入。
 
 Web 用户可直接进入「设置 → LLM 设置」选择提供商、模型、端点和生成参数并保存。
 配置保存后立即应用到当前 Web 进程；模型目录写入

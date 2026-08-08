@@ -295,10 +295,19 @@ describe('LLM 设置 API', () => {
       });
       const initial = await settingsApp.fetch(new Request('http://test/api/settings/ai'));
       expect(initial.status).toBe(200);
-      expect(await initial.json()).toMatchObject({
+      const initialBody = (await initial.json()) as {
+        readonly data: { readonly providers: unknown };
+      };
+      expect(initialBody).toMatchObject({
         ok: true,
         data: { provider: 'minimax', apiKeyConfigured: false },
       });
+      expect(initialBody.data.providers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: 'kimi', defaultModel: 'kimi-k3' }),
+          expect.objectContaining({ id: 'deepseek', defaultModel: 'deepseek-v4-pro' }),
+        ]),
+      );
 
       const input = {
         provider: 'minimax',

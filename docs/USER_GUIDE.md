@@ -342,10 +342,14 @@ TUI 依赖 opentui 渲染器，必须在真 TTY 跑。CI / pipe / `nohup` 都会
 
 ### 11.5 启动时报 AI 模型目录或 provider 密钥缺失
 
-从仓库根目录的 `ai-models.example.json` 复制到
-`$LUOOME_HOME/ai-models.json`，或设置 `LUOOME_AI_CONFIG` 指向配置文件。再设置
-每个 provider 的 `apiKeyEnv` 所引用的环境变量；缺目录、未知 provider 或缺密钥都会
-在启动期明确报错。
+首次启动会自动生成 `$LUOOME_HOME/ai-models.json`，内置默认值与格式可参考仓库根目录的
+`ai-models.example.json`；也可以设置 `LUOOME_AI_CONFIG` 指向自定义配置文件。再设置当前
+profile 所用 provider 的 `apiKeyEnv` 引用的环境变量；显式配置的目录缺失、未知 provider
+或缺密钥都会在启动期明确报错。
+
+Web 设置页已内置 Kimi（`kimi-k3` / `MOONSHOT_API_KEY`）与 DeepSeek
+（`deepseek-v4-pro` / `DEEPSEEK_API_KEY`）推荐值；切换 provider 后点击保存即可写入同一份
+模型目录和本地密钥文件。
 
 也可以启动 Web 后进入「设置 → LLM 设置」完成可视化配置。Web 在模型尚未配置或
 配置损坏时会进入配置模式，不会阻止设置页启动；保存后配置立即生效。API Key 只写入

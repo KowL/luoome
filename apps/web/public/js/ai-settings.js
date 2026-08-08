@@ -23,12 +23,33 @@ const applyReasoningCapability = () => {
   const select = $('#ai-reasoning-effort');
   const hint = $('#ai-reasoning-hint');
   if (select === null || hint === null || preset === null) return;
+  const supported = Array.isArray(preset.supportedReasoningEfforts)
+    ? preset.supportedReasoningEfforts
+    : ['off'];
+  for (const option of select.options) option.disabled = !supported.includes(option.value);
+  if (!supported.includes(select.value)) select.value = supported[0] ?? 'off';
   select.disabled = !preset.supportsReasoningEffort;
   if (!preset.supportsReasoningEffort) {
     select.value = 'off';
     hint.textContent = `${preset.label} 不使用统一 reasoningEffort 参数。`;
   } else {
-    hint.textContent = '兼容模型会在回答前投入更多推理。';
+    hint.textContent = `${preset.label} 支持：${supported.join(' / ')}。`;
+  }
+};
+
+const applyTemperatureCapability = () => {
+  const preset = selectedProvider();
+  const input = $('#ai-temperature');
+  const hint = $('#ai-temperature-hint');
+  if (input === null || hint === null || preset === null) return;
+  const fixed = Number(preset.fixedTemperature);
+  if (Number.isFinite(fixed)) {
+    input.value = String(fixed);
+    input.disabled = true;
+    hint.textContent = `${preset.label} 要求固定为 ${fixed}。`;
+  } else {
+    input.disabled = false;
+    hint.textContent = '越低越稳定，越高越发散。';
   }
 };
 
@@ -37,7 +58,9 @@ const applyProviderDefaults = () => {
   if (preset === null) return;
   $('#ai-model').value = preset.defaultModel;
   $('#ai-base-url').value = preset.defaultBaseURL;
+  $('#ai-temperature').value = String(preset.defaultTemperature);
   applyReasoningCapability();
+  applyTemperatureCapability();
 };
 
 const mountProviderOptions = (selected) => {
@@ -84,6 +107,7 @@ const renderAISettings = async (setStatus) => {
   $('#ai-secret-path').textContent = data.secretPath;
   $('#ai-secret-path').title = data.secretPath;
   applyReasoningCapability();
+  applyTemperatureCapability();
   if (data.configError) {
     setPanelState('配置需要修复', 'error');
     setStatus('现有 AI 配置无法解析；页面已载入推荐值，保存即可覆盖修复。', true);
