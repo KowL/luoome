@@ -53,6 +53,34 @@ describe('报告页入口', () => {
   });
 });
 
+describe('主题皮肤入口', () => {
+  it('顶栏存在主题抽屉按钮，抽屉面板与主题卡片齐全', () => {
+    expect(html).toContain('id="theme-drawer-toggle"');
+    expect(html).toContain('id="theme-drawer"');
+    expect(html).toContain('id="theme-grid"');
+    expect(html).toContain('class="theme-card"');
+    expect(html).toContain('data-theme="teal"');
+    expect(html).toContain('data-theme="crimson"');
+    expect(html).toContain('data-theme="blue"');
+    expect(html).toContain('data-theme="violet"');
+    expect(html).toContain('data-theme="rose"');
+    expect(html).toContain('data-theme="amber"');
+    expect(html).toContain('data-theme="sage"');
+    expect(html).toContain('data-theme="slate"');
+    expect(html).toContain('data-theme="dark"');
+    expect(html).toContain('id="bg-layer"');
+    expect(html).toContain('id="bg-file-input"');
+    expect(html).toContain('id="bg-upload-btn"');
+    expect(html).toContain('id="bg-clear-btn"');
+  });
+
+  it('app.js 初始化并绑定顶栏主题', () => {
+    expect(appJs).toContain("import { bindTopbarTheme, initTheme } from './theme.js'");
+    expect(appJs).toContain('initTheme();');
+    expect(appJs).toContain('bindTopbarTheme();');
+  });
+});
+
 describe('看盘主页结构', () => {
   it('指数条 / 实时看板 / 今日预警容器齐全', () => {
     expect(html).toContain('id="dashboard-indices"');

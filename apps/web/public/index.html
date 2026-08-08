@@ -5,6 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>luoome · 个人投资仪表盘</title>
   <meta name="theme-color" content="#05070c" />
+  <script>
+    (function () {
+      try {
+        var theme = localStorage.getItem('luoome-theme') || 'teal';
+        if (
+          ['teal', 'crimson', 'blue', 'violet', 'rose', 'amber', 'sage', 'slate', 'dark'].indexOf(theme) !== -1
+        ) {
+          document.documentElement.setAttribute('data-theme', theme);
+        }
+      } catch {}
+    })();
+  </script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b101a'/%3E%3Crect x='20' y='20' width='24' height='24' transform='rotate(45 32 32)' fill='none' stroke='%2338e1c6' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='4' fill='%2338e1c6'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -15,6 +27,8 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <div class="bg-layer" id="bg-layer" aria-hidden="true"></div>
+
   <!-- 1. 顶栏 -->
   <header class="topbar" role="banner">
     <div class="brand">
@@ -25,6 +39,10 @@
         <span class="muted">账户</span>
         <select id="account-select" class="account-select" aria-label="切换账户"></select>
       </label>
+      <button id="theme-drawer-toggle" class="btn btn-ghost btn-sm" type="button" aria-label="切换皮肤颜色">
+        <span aria-hidden="true">◈</span>
+        <span>主题</span>
+      </button>
       <span class="clock" id="topbar-clock"></span>
     </div>
   </header>
@@ -712,6 +730,42 @@
         <button id="modal-close" class="btn btn-ghost btn-sm" type="button" aria-label="关闭">✕</button>
       </div>
       <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- 主题抽屉（右侧滑出） -->
+  <div id="theme-drawer" class="drawer">
+    <div class="drawer-backdrop" aria-hidden="true"></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="theme-drawer-title">
+      <div class="drawer-header">
+        <h2 id="theme-drawer-title">切换皮肤</h2>
+        <button id="theme-drawer-close" class="btn btn-ghost btn-sm" type="button" aria-label="关闭">✕</button>
+      </div>
+      <div class="drawer-body">
+        <p class="muted mb-3">选择一套配色，背景色与品牌色会同时切换。</p>
+        <div class="theme-grid" id="theme-grid">
+          <button type="button" class="theme-card" data-theme="teal" style="--swatch: #0d9e88;" title="青碧" aria-label="青碧"></button>
+          <button type="button" class="theme-card" data-theme="crimson" style="--swatch: #dc2626;" title="彤阳" aria-label="彤阳"></button>
+          <button type="button" class="theme-card" data-theme="blue" style="--swatch: #2563eb;" title="海蓝" aria-label="海蓝"></button>
+          <button type="button" class="theme-card" data-theme="violet" style="--swatch: #7c3aed;" title="藤紫" aria-label="藤紫"></button>
+          <button type="button" class="theme-card" data-theme="rose" style="--swatch: #db2777;" title="玫红" aria-label="玫红"></button>
+          <button type="button" class="theme-card" data-theme="amber" style="--swatch: #d97706;" title="琥珀" aria-label="琥珀"></button>
+          <button type="button" class="theme-card" data-theme="sage" style="--swatch: #15803d;" title="苍绿" aria-label="苍绿"></button>
+          <button type="button" class="theme-card" data-theme="slate" style="--swatch: #475569;" title="岩灰" aria-label="岩灰"></button>
+          <button type="button" class="theme-card" data-theme="dark" style="--swatch: #111827;" title="暗夜" aria-label="暗夜"></button>
+        </div>
+
+        <div class="bg-section">
+          <h3>自定义背景</h3>
+          <p class="muted mb-3">选择本地图片作为页面背景，支持 GIF 动图。</p>
+          <input type="file" id="bg-file-input" accept="image/*" hidden />
+          <div class="bg-actions">
+            <button id="bg-upload-btn" class="btn btn-ghost btn-sm" type="button">选择图片</button>
+            <button id="bg-clear-btn" class="btn btn-ghost btn-sm" type="button">清除背景</button>
+          </div>
+          <p id="bg-status" class="bg-status muted" aria-live="polite"></p>
+        </div>
+      </div>
     </div>
   </div>
 
