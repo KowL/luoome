@@ -1206,6 +1206,23 @@ html.has-bg-image .bg-layer {
   opacity: 0.62;
 }
 
+/* 暗夜主题 + 自定义背景：面板调透明、薄纱减轻，让背景图透出来 */
+[data-theme='dark'].has-bg-image {
+  --panel: rgba(17, 24, 39, 0.68);
+  --panel-solid: rgba(17, 24, 39, 0.82);
+  --panel-alt: rgba(15, 21, 33, 0.6);
+  --panel-hover: rgba(26, 35, 52, 0.78);
+  --bg-elev: rgba(17, 24, 39, 0.75);
+}
+
+[data-theme='dark'].has-bg-image .bg-layer::after {
+  opacity: 0.45;
+}
+
+[data-theme='dark'].has-bg-image .topbar {
+  background: rgba(17, 24, 39, 0.6);
+}
+
 /* 抽屉 · 自定义背景 */
 .bg-section {
   margin-top: var(--space-5);
