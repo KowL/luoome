@@ -321,6 +321,44 @@ export class DrizzleStrategyRepository implements StrategyRepository {
 export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
+  async acquireRunLease(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean> {
+    const result = this.db.run(sql`
+      INSERT INTO strategy_run_leases (strategy_id, strategy_version_id, owner, lease_until)
+      VALUES (
+        ${input.strategyId}, ${input.strategyVersionId}, ${input.owner}, ${input.leaseUntil.getTime()}
+      )
+      ON CONFLICT (strategy_id, strategy_version_id) DO UPDATE SET
+        owner = excluded.owner,
+        lease_until = excluded.lease_until
+      WHERE strategy_run_leases.lease_until <= ${input.now.getTime()}
+    `);
+    return (
+      typeof result === 'object' &&
+      result !== null &&
+      'changes' in result &&
+      Number((result as { readonly changes: unknown }).changes) === 1
+    );
+  }
+
+  async releaseRunLease(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+  }): Promise<void> {
+    this.db.run(sql`
+      DELETE FROM strategy_run_leases
+      WHERE strategy_id = ${input.strategyId}
+        AND strategy_version_id = ${input.strategyVersionId}
+        AND owner = ${input.owner}
+    `);
+  }
+
   async findRunById(id: string): Promise<StrategyRun | null> {
     const row = this.db.select().from(strategyRuns).where(eq(strategyRuns.id, id)).get();
     return row === undefined ? null : toRun(row);

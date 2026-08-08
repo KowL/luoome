@@ -79,6 +79,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'sync_stock_universe',
   'sync_daily_bars',
   'run_strategy',
+  'generate_strategy_insight',
 ]);
 
 /**
@@ -819,6 +820,26 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   );
   app.get('/api/strategies/:id/workspace', (c) =>
     callTool('get_strategy_workspace', { strategyId: c.req.param('id') }),
+  );
+  app.get('/api/strategies/:id/insights', (c) => {
+    const windowDays = c.req.query('windowDays');
+    return callTool('get_strategy_insight_facts', {
+      strategyId: c.req.param('id'),
+      ...(windowDays === undefined ? {} : { windowDays: Number(windowDays) }),
+    });
+  });
+  app.post('/api/strategies/:id/insights/generate', (c) =>
+    targetMutation(c.req.raw, 'external', 'generate_strategy_insight', {
+      strategyId: c.req.param('id'),
+    }),
+  );
+  app.get('/api/strategies/:id/schedule', (c) =>
+    callTool('get_strategy_schedule', { strategyId: c.req.param('id') }),
+  );
+  app.post('/api/strategies/:id/schedule', (c) =>
+    targetMutation(c.req.raw, 'write', 'set_strategy_schedule', {
+      strategyId: c.req.param('id'),
+    }),
   );
   app.get('/api/strategies/:id/results', (c) => {
     const runId = c.req.query('runId');

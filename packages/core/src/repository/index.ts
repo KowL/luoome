@@ -34,6 +34,7 @@ import type {
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
+import type { StrategySchedule } from '../entity/strategy-schedule.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
 import type {
@@ -181,6 +182,8 @@ export interface RepositoryRegistry {
   readonly signalObservation: SignalObservationRepository;
   /** Strategy 目标模型身份与不可变版本；W1 起内部可读写，W2 才开放 tools。 */
   readonly strategy: StrategyRepository;
+  /** Phase B：可修改的策略自动运行配置与多实例 lease。 */
+  readonly strategySchedule: StrategyScheduleRepository;
   /** Strategy 运行、结果和信号。 */
   readonly strategyRun: StrategyRunRepository;
   readonly watchlist: WatchlistRepository;
@@ -271,6 +274,8 @@ export interface SignalObservationRepository {
   list(input?: {
     readonly status?: SignalObservationStatus;
     readonly sourceKind?: SignalObservation['sourceKind'];
+    readonly sourceIds?: readonly string[];
+    readonly horizons?: readonly SignalObservation['horizon'][];
     readonly from?: Date;
     readonly to?: Date;
     readonly limit?: number;
@@ -318,6 +323,18 @@ export interface StrategyRepository {
 }
 
 export interface StrategyRunRepository {
+  acquireRunLease(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean>;
+  releaseRunLease(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+  }): Promise<void>;
   findRunById(id: string): Promise<StrategyRun | null>;
   listRuns(filter?: {
     readonly strategyId?: string;
@@ -332,6 +349,28 @@ export interface StrategyRunRepository {
   signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
   /** 终态 run 与其 facts 原子、只追加提交；runId 重复必须拒绝。 */
   commitRun(bundle: StrategyRunBundle): Promise<void>;
+}
+
+export interface StrategyScheduleRepository {
+  save(schedule: StrategySchedule): Promise<void>;
+  findById(id: string): Promise<StrategySchedule | null>;
+  findByStrategyId(strategyId: string): Promise<StrategySchedule | null>;
+  list(input?: { readonly enabledOnly?: boolean }): Promise<readonly StrategySchedule[]>;
+  /** 原子抢占已到期且 lease 可用的配置；返回值只包含抢占成功的行。 */
+  claimDue(input: {
+    readonly now: Date;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+    readonly limit: number;
+  }): Promise<readonly StrategySchedule[]>;
+  /** 只有当前 lease owner 可完成抢占；每次 tick 最多补跑一次并把 nextRunAt 推进到未来。 */
+  finishClaim(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly nextRunAt: Date;
+    readonly updatedAt: Date;
+    readonly lastRunId?: string;
+  }): Promise<void>;
 }
 
 export interface WatchlistRepository {

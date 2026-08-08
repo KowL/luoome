@@ -6,10 +6,16 @@ import type {
   AnalyzeStockOutput,
   BatchQuoteInput,
   BatchQuoteOutput,
+  ClaimDueStrategySchedulesInput,
+  ClaimDueStrategySchedulesOutput,
+  CompleteStrategyObservationsInput,
+  CompleteStrategyObservationsOutput,
   ComputeIndicatorsInput,
   ComputeIndicatorsOutput,
   FetchQuoteInput,
   FetchQuoteOutput,
+  FinishStrategyScheduleClaimInput,
+  FinishStrategyScheduleClaimOutput,
   GetAccountInput,
   GetAccountOutput,
   GetAdviceInput,
@@ -40,6 +46,8 @@ import type {
   ListAlertPlansOutput,
   ListHoldingsInput,
   ListHoldingsOutput,
+  ListPendingStrategyObservationsInput,
+  ListPendingStrategyObservationsOutput,
   ListResearchDocumentsInput,
   ListResearchDocumentsOutput,
   ListResearchTopicsInput,
@@ -92,6 +100,8 @@ import type {
   SyncWatchlistSourceOutput,
 } from '@luoome/tools';
 import {
+  claimDueStrategySchedulesTool,
+  finishStrategyScheduleClaimTool,
   recordWatchRunTool,
   recordWorkflowRunTool,
   saveReportTool,
@@ -195,6 +205,22 @@ export interface WorkflowToolMap {
     typeof StrategySignalsByStockInput,
     typeof StrategySignalsByStockOutput
   >;
+  readonly list_pending_strategy_observations: ToolAccessor<
+    typeof ListPendingStrategyObservationsInput,
+    typeof ListPendingStrategyObservationsOutput
+  >;
+  readonly complete_strategy_observations: ToolAccessor<
+    typeof CompleteStrategyObservationsInput,
+    typeof CompleteStrategyObservationsOutput
+  >;
+  readonly claim_due_strategy_schedules: ToolAccessor<
+    typeof ClaimDueStrategySchedulesInput,
+    typeof ClaimDueStrategySchedulesOutput
+  >;
+  readonly finish_strategy_schedule_claim: ToolAccessor<
+    typeof FinishStrategyScheduleClaimInput,
+    typeof FinishStrategyScheduleClaimOutput
+  >;
   readonly list_watchlists: ToolAccessor<typeof ListWatchlistsInput, typeof ListWatchlistsOutput>;
   /** workflow-only；不进入公共 registry/MCP discovery。 */
   readonly sync_watchlist_source: ToolAccessor<
@@ -277,6 +303,8 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     saveReportTool,
     saveWatchTriggerTool,
     setReportDeliveryStatusTool,
+    claimDueStrategySchedulesTool,
+    finishStrategyScheduleClaimTool,
   ]) {
     accessors[internalTool.name] = {
       execute: (input) => internalTool.execute(input, ctx),

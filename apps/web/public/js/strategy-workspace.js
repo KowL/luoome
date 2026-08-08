@@ -532,16 +532,166 @@ export const renderRuns = async (strategyId) => {
   ]);
 };
 
-const renderInsights = () =>
-  el('div', 'strategy-empty-state', [
-    el('span', 'section-kicker', 'FACT-BASED INSIGHTS'),
-    el('h3', null, '真实信号观察将在 Phase B 启用'),
-    el(
-      'p',
-      null,
-      '届时只展示 SignalObservation 的样本数、窗口、缺失率和 benchmarkStatus，不展示收益承诺或未来概率。',
+const pct = (value) => (value === undefined ? '--' : `${fmtNum(value * 100, 2)}%`);
+
+const renderInsightNarrative = (insight) =>
+  el('section', 'strategy-insight-narrative', [
+    el('span', 'section-kicker', 'AI EXPLANATION'),
+    el('h3', null, insight.headline),
+    el('p', null, insight.summary),
+    ...(insight.findings ?? []).map((finding) =>
+      el('article', 'strategy-insight-finding', [
+        el('div', 'flex gap-2', [
+          el('strong', null, finding.title),
+          badge(
+            finding.kind === 'risk'
+              ? ['风险', 'badge-important']
+              : finding.kind === 'limitation'
+                ? ['限制', 'badge-neutral']
+                : ['趋势', 'badge-active'],
+            finding.kind,
+          ),
+        ]),
+        el('p', null, finding.detail),
+        el('small', 'mono muted', `事实引用：${finding.factRefs.join(' · ')}`),
+      ]),
     ),
+    ...(insight.risks?.length
+      ? [el('p', 'status warning', `风险：${insight.risks.join('；')}`)]
+      : []),
+    el('p', 'muted', insight.disclaimer),
   ]);
+
+export const renderInsights = async (strategyId, setStatus = () => {}) => {
+  const path = `/api/strategies/${encodeURIComponent(strategyId)}/insights`;
+  const result = await cachedGet(path);
+  if (!result.ok) return el('p', 'status error', errorText(result));
+  const facts = result.data;
+  const output = el('div', 'strategy-insight-output');
+  const generate = el('button', 'btn btn-primary btn-sm', '生成 AI 解读');
+  generate.type = 'button';
+  generate.addEventListener('click', async () => {
+    generate.disabled = true;
+    setStatus('正在基于已核验事实生成解读…');
+    const generated = await post(
+      `/api/strategies/${encodeURIComponent(strategyId)}/insights/generate`,
+      { windowDays: facts.window.days },
+    );
+    generate.disabled = false;
+    if (!generated.ok) {
+      setStatus(errorText(generated), true);
+      return;
+    }
+    output.replaceChildren(renderInsightNarrative(generated.data.insight));
+    setStatus(`AI 解读已生成 · ${generated.data.provider}`);
+  });
+  const observationRows = facts.observations.map((item) =>
+    el('tr', null, [
+      el('td', 'mono', item.horizon.toUpperCase()),
+      el('td', null, `${item.complete}/${item.total}`),
+      el('td', null, pct(item.averageReturnPct)),
+      el('td', null, pct(item.averageMaxFavorableExcursionPct)),
+      el('td', null, pct(item.averageMaxAdverseExcursionPct)),
+      el('td', null, item.total === 0 ? '--' : pct(item.missingRate)),
+      el('td', null, item.benchmarkStatus === 'complete' ? '可用' : '不可用'),
+      el('td', null, item.observedAsOf ? fmtDateTime(item.observedAsOf) : '--'),
+    ]),
+  );
+  return el('div', 'strategy-insight-grid', [
+    el('div', 'strategy-tab-heading', [
+      el('div', null, [
+        el('span', 'section-kicker', 'FACT-BASED INSIGHTS'),
+        el('h3', null, '策略事实与真实表现'),
+        el(
+          'p',
+          'muted',
+          `近 ${facts.window.days} 天 · 事实截止 ${fmtDateTime(facts.factsAsOf)} · 观察截止 ${facts.observationAsOf ? fmtDateTime(facts.observationAsOf) : '暂无'}`,
+        ),
+      ]),
+      generate,
+    ]),
+    el('div', 'strategy-summary-grid', [
+      metric('运行次数', facts.runs.total, `可用 ${facts.runs.usable} · 失败 ${facts.runs.failed}`),
+      metric('当前明确命中', facts.currentSelection.selectedCount),
+      metric(
+        '平均评分',
+        facts.currentSelection.averageScore === undefined
+          ? '--'
+          : fmtNum(facts.currentSelection.averageScore, 2),
+      ),
+      metric('关联预警', facts.alertPlans.length),
+    ]),
+    el('section', 'strategy-insight-section', [
+      el('h4', null, '真实信号观察'),
+      el('div', 'table-wrap', [
+        el('table', 'table', [
+          el(
+            'thead',
+            null,
+            el(
+              'tr',
+              null,
+              [
+                '周期',
+                '完整样本',
+                '平均收益',
+                '平均最大有利',
+                '平均最大不利',
+                '缺失率',
+                '基准',
+                '观察截止',
+              ].map((label) => el('th', null, label)),
+            ),
+          ),
+          el('tbody', null, observationRows),
+        ]),
+      ]),
+      el('p', 'muted', '事后事实观察不是回测；未包含成交、费用、滑点和可交易性假设。'),
+    ]),
+    el('div', 'strategy-insight-columns', [
+      el('section', 'strategy-insight-section', [
+        el('h4', null, '高频规则阻断'),
+        ...(facts.blockers.length === 0
+          ? [el('p', 'placeholder', '暂无明确阻断事实。')]
+          : facts.blockers.map((item) =>
+              el('article', 'entity-item', [
+                el('strong', null, item.ruleName),
+                el('span', 'mono muted', `${item.count} 次 · ${item.ruleId}`),
+              ]),
+            )),
+      ]),
+      el('section', 'strategy-insight-section', [
+        el('h4', null, '当前行业分布'),
+        ...(facts.currentSelection.industries.length === 0
+          ? [el('p', 'placeholder', '当前没有明确命中标的。')]
+          : facts.currentSelection.industries.map((item) =>
+              el('article', 'entity-item', [
+                el('strong', null, item.name),
+                el('span', 'mono muted', `${item.count} 只 · ${pct(item.share)}`),
+              ]),
+            )),
+      ]),
+      el('section', 'strategy-insight-section', [
+        el('h4', null, '关联 AlertPlan'),
+        ...(facts.alertPlans.length === 0
+          ? [el('p', 'placeholder', '尚未关联预警方案。')]
+          : facts.alertPlans.map((item) =>
+              el('article', 'entity-item', [
+                el('strong', null, item.name),
+                badge(item.enabled ? ['已启用', 'badge-active'] : ['已停用', 'badge-neutral'], ''),
+                el('span', 'mono muted', `${item.ruleCount} 条策略信号规则`),
+              ]),
+            )),
+      ]),
+    ]),
+    el(
+      'div',
+      'strategy-health-banner warning',
+      facts.limitations.map((limitation) => el('p', null, limitation)),
+    ),
+    output,
+  ]);
+};
 
 const openVersionEditor = (strategy, latest, setStatus, refresh) => {
   const input = el('textarea', 'strategy-def-input');
@@ -586,9 +736,65 @@ const openVersionEditor = (strategy, latest, setStatus, refresh) => {
   );
 };
 
-const renderSettings = async (strategyId, setStatus, refresh) => {
-  const result = await cachedGet(`/api/strategies/${encodeURIComponent(strategyId)}`);
+const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
+  const cron = el('input');
+  cron.value = schedule?.cron ?? '0 18 * * 1-5';
+  cron.placeholder = '0 18 * * 1-5';
+  const timezone = el('input');
+  timezone.value = schedule?.timezone ?? 'Asia/Shanghai';
+  const enabled = el('input');
+  enabled.type = 'checkbox';
+  enabled.checked = schedule?.enabled ?? true;
+  const save = el('button', 'btn btn-primary btn-sm', '保存调度');
+  save.type = 'button';
+  save.disabled = strategy.status !== 'active' || strategy.currentVersionId === undefined;
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    const result = await post(`/api/strategies/${encodeURIComponent(strategy.id)}/schedule`, {
+      cron: cron.value.trim(),
+      timezone: timezone.value.trim(),
+      enabled: enabled.checked,
+    });
+    save.disabled = false;
+    if (!result.ok) {
+      setStatus(errorText(result), true);
+      return;
+    }
+    responseCache.clear();
+    setStatus(`调度已保存，下次运行 ${fmtDateTime(result.data.schedule.nextRunAt)}`);
+    await refresh();
+  });
+  return el('section', 'strategy-schedule-panel', [
+    el('div', 'strategy-tab-heading', [
+      el('div', null, [
+        el('h3', null, '自动调度'),
+        el('p', 'muted', '标准 5 段 cron；由外部 cron 每分钟唤醒 due-schedule 工作流。'),
+      ]),
+      save,
+    ]),
+    el('div', 'strategy-schedule-form', [
+      el('label', null, ['Cron 表达式', cron]),
+      el('label', null, ['时区', timezone]),
+      el('label', 'strategy-schedule-toggle', [enabled, '启用']),
+    ]),
+    el(
+      'p',
+      'mono muted',
+      schedule?.nextRunAt
+        ? `下次计划 ${fmtDateTime(schedule.nextRunAt)}${schedule.lastRunId ? ` · 上次运行 ${schedule.lastRunId}` : ''}`
+        : '保存后计算下次运行时间；策略暂停时调度会跳过并推进。',
+    ),
+    ...(save.disabled ? [el('p', 'status warning', '只有已发布且运行中的策略可以启用调度。')] : []),
+  ]);
+};
+
+export const renderSettings = async (strategyId, setStatus, refresh) => {
+  const [result, scheduleResult] = await Promise.all([
+    cachedGet(`/api/strategies/${encodeURIComponent(strategyId)}`),
+    cachedGet(`/api/strategies/${encodeURIComponent(strategyId)}/schedule`),
+  ]);
   if (!result.ok) return el('p', 'status error', errorText(result));
+  if (!scheduleResult.ok) return el('p', 'status error', errorText(scheduleResult));
   const { strategy, versions } = result.data;
   const latest = versions.at(-1);
   const actions = el('div', 'row-actions');
@@ -679,14 +885,7 @@ const renderSettings = async (strategyId, setStatus, refresh) => {
     ...(versionRows.length === 0
       ? [el('p', 'placeholder', '尚无版本，请创建第一个版本草案。')]
       : versionRows),
-    el('section', 'strategy-empty-state compact', [
-      el('strong', null, '调度尚未启用'),
-      el(
-        'p',
-        'muted',
-        '调度属于独立 StrategySchedule；在 Phase B 实现前不展示不可生效的 cron 设置。',
-      ),
-    ]),
+    renderScheduleSettings(strategy, scheduleResult.data.schedule, setStatus, refresh),
   ]);
 };
 
@@ -694,7 +893,7 @@ const renderTabContent = async (workspace, state, setStatus, refresh) => {
   if (state.tab === 'overview') return renderOverview(workspace, state);
   if (state.tab === 'pool') return renderPool(workspace.strategy.id, setStatus);
   if (state.tab === 'runs') return renderRuns(workspace.strategy.id);
-  if (state.tab === 'insights') return renderInsights();
+  if (state.tab === 'insights') return renderInsights(workspace.strategy.id, setStatus);
   return renderSettings(workspace.strategy.id, setStatus, refresh);
 };
 

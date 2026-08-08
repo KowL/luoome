@@ -144,6 +144,10 @@ bun install
 50 8 * * 1-5  luoome workflow run evaluate-event-rules
 # 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
 30 16 * * 1-5  luoome workflow run post-market-data
+# 策略调度 tick：原子抢占各 StrategySchedule；只有到期配置才会运行
+* * * * *       luoome workflow run run-strategy-schedules
+# 盘后补齐信号 T+1/T+3/T+5/T+20 真实表现（未到期样本保持 pending）
+10 18 * * 1-5   luoome workflow run complete-strategy-observations
 # 收盘复盘与周报：报告先保存，通知失败只会把 WorkflowRun 降为 partial
 0 18 * * 1-5   luoome workflow run closing-report --mode scheduled
 0 19 * * 5     luoome workflow run weekly-report --mode scheduled
@@ -154,6 +158,10 @@ bun install
 - `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
 - `evaluate-event-rules`：盘前一次，`intraday-watch` 不评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 推送。
 - `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
+- `run-strategy-schedules`：每次 tick 原子抢占到期配置；非交易日或暂停策略跳过并推进，
+  多实例与手工正式运行由租约防重。调度只执行 Strategy，不生成 Advice、不发通知、不交易。
+- `complete-strategy-observations`：以信号基准后的第 N 根 qfq 日线补齐事实观察；日线不足时
+  保持 `pending`，当前无指数日线时 benchmark 明确标记 unavailable。
 - 三类报告 workflow 在 `scheduled` 模式默认通知；可在 `--input` 中显式传
   `{"notify":false}` 关闭。相同类型、范围与周期重复运行会更新同一份 Report。
 - `sync-stock-universe` 仍可单独人工执行；完整分页通过校验后原子提交，12 小时内有成功版本时默认跳过。

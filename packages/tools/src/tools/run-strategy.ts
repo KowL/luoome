@@ -26,6 +26,7 @@ import { deriveStrategyMetaByStock } from '../internal/strategy-meta.js';
 const DAY_MS = 86_400_000;
 const EVALUATION_CONCURRENCY = 8;
 const EVALUATOR_VERSION = 'strategy-evaluator-v2';
+const RUN_LEASE_MS = 2 * 60 * 60 * 1000;
 
 export const RunStrategyInput = z.object({
   strategyId: z.string().min(1),
@@ -123,250 +124,282 @@ export const runStrategyTool = defineTool({
     const resolved = await resolveVersion(input.strategyId, input.versionId, ctx);
     if ('ok' in resolved) return resolved;
     const version = resolved;
-    const definition = version.definition;
-    const references = inspectStrategyDefinitionReferences(definition);
-    if (references.validationErrors.length > 0) {
-      return errInvalidInput(references.validationErrors.join('; '));
+    const leaseOwner = `run-strategy:${globalThis.crypto.randomUUID()}`;
+    if (input.persist) {
+      const leaseStartedAt = ctx.clock();
+      const acquired = await ctx.repos.strategyRun.acquireRunLease({
+        strategyId: input.strategyId,
+        strategyVersionId: version.id,
+        owner: leaseOwner,
+        now: leaseStartedAt,
+        leaseUntil: new Date(leaseStartedAt.getTime() + RUN_LEASE_MS),
+      });
+      if (!acquired) return errInvalidInput('同一 StrategyVersion 已有正式运行执行中');
     }
-
-    const activeStocks = await ctx.repos.stockUniverse.listCurrent({
-      coverage: 'CN_A_SHARES_SH_SZ',
-      status: 'active',
-    });
-    const successfulSync = await ctx.repos.stockUniverse.latestSuccessfulSync({
-      coverage: 'CN_A_SHARES_SH_SZ',
-    });
-    if (input.stockIds === undefined) {
-      if (successfulSync === null) {
-        return errInvalidInput('全市场运行需要已成功同步的 StockUniverse');
+    try {
+      const definition = version.definition;
+      const references = inspectStrategyDefinitionReferences(definition);
+      if (references.validationErrors.length > 0) {
+        return errInvalidInput(references.validationErrors.join('; '));
       }
-    }
-    const activeById = new Map(activeStocks.map((stock) => [stock.id, stock]));
-    const requestedIds = input.stockIds ?? activeStocks.map((stock) => stock.id);
-    const unknownIds = requestedIds.filter((stockId) => !activeById.has(stockId));
-    if (unknownIds.length > 0) {
-      return errInvalidInput(`stockIds 不属于 active StockUniverse: ${unknownIds.join(', ')}`);
-    }
-    const include = definition.universe.includeStockIds;
-    const includeSet = include === undefined ? undefined : new Set(include);
-    const excludeSet = new Set(definition.universe.excludeStockIds);
-    const candidateIds = [...new Set(requestedIds)]
-      .filter((stockId) => includeSet === undefined || includeSet.has(stockId))
-      .filter((stockId) => !excludeSet.has(stockId))
-      .sort();
 
-    const startedAt = ctx.clock();
-    const dataAsOf = input.asOf ?? startedAt;
-    const runId = `strategy-run-${globalThis.crypto.randomUUID()}`;
-    const needsQuote = references.dataSources.includes('quote');
-    const needsDailyBars = references.dataSources.includes('daily-bars');
-    const needsDerivedMeta = references.paths.some((path) => path.startsWith('meta.'));
-    const lookback = Math.max(1, references.requiredLookback);
-
-    const prepared = await mapWithConcurrency(
-      candidateIds,
-      EVALUATION_CONCURRENCY,
-      async (
-        stockId,
-      ): Promise<
-        | {
-            readonly ok: true;
-            readonly stockId: string;
-            readonly bars: readonly DailyBar[];
-            readonly quote?: Quote;
-          }
-        | { readonly ok: false; readonly stockId: string; readonly error: string }
-      > => {
-        try {
-          let bars: readonly DailyBar[] = [];
-          let quote: Quote | undefined;
-          if (input.mode === 'replay') {
-            if (needsDailyBars || needsQuote) {
-              bars = await ctx.repos.dailyBar.latestBefore(stockId, dataAsOf, lookback);
-            }
-            const latestBar = bars.at(-1);
-            if (needsQuote && latestBar !== undefined) {
-              quote = quoteFromDailyBar(latestBar, startedAt);
-            }
-          } else {
-            if (needsDailyBars) {
-              bars = await ctx.adapters.market.fetchDailyBars(stockId, {
-                start: new Date(dataAsOf.getTime() - Math.max(lookback * 2, 30) * DAY_MS),
-                end: dataAsOf,
-              });
-            }
-            if (needsQuote) quote = await ctx.adapters.market.fetchQuote(stockId);
-          }
-          return {
-            ok: true,
-            stockId,
-            bars,
-            ...(quote === undefined ? {} : { quote }),
-          };
-        } catch (error) {
-          return {
-            ok: false,
-            stockId,
-            error: error instanceof Error ? error.message : String(error),
-          };
+      const activeStocks = await ctx.repos.stockUniverse.listCurrent({
+        coverage: 'CN_A_SHARES_SH_SZ',
+        status: 'active',
+      });
+      const successfulSync = await ctx.repos.stockUniverse.latestSuccessfulSync({
+        coverage: 'CN_A_SHARES_SH_SZ',
+      });
+      if (input.stockIds === undefined) {
+        if (successfulSync === null) {
+          return errInvalidInput('全市场运行需要已成功同步的 StockUniverse');
         }
-      },
-    );
+      }
+      const activeById = new Map(activeStocks.map((stock) => [stock.id, stock]));
+      const requestedIds = input.stockIds ?? activeStocks.map((stock) => stock.id);
+      const unknownIds = requestedIds.filter((stockId) => !activeById.has(stockId));
+      if (unknownIds.length > 0) {
+        return errInvalidInput(`stockIds 不属于 active StockUniverse: ${unknownIds.join(', ')}`);
+      }
+      const include = definition.universe.includeStockIds;
+      const includeSet = include === undefined ? undefined : new Set(include);
+      const excludeSet = new Set(definition.universe.excludeStockIds);
+      const candidateIds = [...new Set(requestedIds)]
+        .filter((stockId) => includeSet === undefined || includeSet.has(stockId))
+        .filter((stockId) => !excludeSet.has(stockId))
+        .sort();
 
-    const failures = prepared.filter(
-      (item): item is Extract<(typeof prepared)[number], { ok: false }> => !item.ok,
-    );
-    const preparedStocks = prepared.flatMap((item) => (item.ok ? [item] : []));
-    const baselineByStock = new Map<string, StrategySignalBaseline>(
-      preparedStocks.flatMap((item) => {
-        if (item.quote !== undefined) {
-          return [
-            [
-              item.stockId,
-              {
-                price: item.quote.close,
-                at: item.quote.ts,
-                provider: item.quote.source,
-              },
-            ] as const,
-          ];
-        }
-        const latestBar = item.bars.at(-1);
-        return latestBar === undefined
-          ? []
-          : [
+      const startedAt = ctx.clock();
+      const dataAsOf = input.asOf ?? startedAt;
+      const runId = `strategy-run-${globalThis.crypto.randomUUID()}`;
+      const needsQuote = references.dataSources.includes('quote');
+      const needsDailyBars = references.dataSources.includes('daily-bars');
+      const needsDerivedMeta = references.paths.some((path) => path.startsWith('meta.'));
+      const lookback = Math.max(1, references.requiredLookback);
+
+      const prepared = await mapWithConcurrency(
+        candidateIds,
+        EVALUATION_CONCURRENCY,
+        async (
+          stockId,
+        ): Promise<
+          | {
+              readonly ok: true;
+              readonly stockId: string;
+              readonly bars: readonly DailyBar[];
+              readonly quote?: Quote;
+            }
+          | { readonly ok: false; readonly stockId: string; readonly error: string }
+        > => {
+          try {
+            let bars: readonly DailyBar[] = [];
+            let quote: Quote | undefined;
+            if (input.mode === 'replay') {
+              if (needsDailyBars || needsQuote) {
+                bars = await ctx.repos.dailyBar.latestBefore(stockId, dataAsOf, lookback);
+              }
+              const latestBar = bars.at(-1);
+              if (needsQuote && latestBar !== undefined) {
+                quote = quoteFromDailyBar(latestBar, startedAt);
+              }
+            } else {
+              if (needsDailyBars) {
+                bars = await ctx.adapters.market.fetchDailyBars(stockId, {
+                  start: new Date(dataAsOf.getTime() - Math.max(lookback * 2, 30) * DAY_MS),
+                  end: dataAsOf,
+                });
+              }
+              if (needsQuote) quote = await ctx.adapters.market.fetchQuote(stockId);
+            }
+            return {
+              ok: true,
+              stockId,
+              bars,
+              ...(quote === undefined ? {} : { quote }),
+            };
+          } catch (error) {
+            return {
+              ok: false,
+              stockId,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        },
+      );
+
+      const failures = prepared.filter(
+        (item): item is Extract<(typeof prepared)[number], { ok: false }> => !item.ok,
+      );
+      const preparedStocks = prepared.flatMap((item) => (item.ok ? [item] : []));
+      const baselineByStock = new Map<string, StrategySignalBaseline>(
+        preparedStocks.flatMap((item) => {
+          if (item.quote !== undefined) {
+            return [
               [
                 item.stockId,
                 {
-                  price: latestBar.close,
-                  at: latestBar.date,
-                  provider: latestBar.source,
+                  price: item.quote.close,
+                  at: item.quote.ts,
+                  provider: item.quote.source,
                 },
               ] as const,
             ];
-      }),
-    );
-    const metaByStock = needsDerivedMeta
-      ? deriveStrategyMetaByStock(
-          preparedStocks.map((item) => ({
-            stockId: item.stockId,
-            industry: activeById.get(item.stockId)?.industry,
-            bars: item.bars,
-          })),
-        )
-      : new Map<string, Readonly<Record<string, unknown>>>();
-    const successful: StrategyStockEvaluation[] = preparedStocks.map((item) =>
-      evaluateStrategyStock({
-        strategyId: input.strategyId,
-        version,
-        runId,
-        stockId: item.stockId,
-        ts: dataAsOf,
-        dataAsOf,
-        context: {
-          ...(item.quote === undefined ? {} : { quote: item.quote }),
-          indicators: computeSimpleIndicators(item.bars),
-          ...(needsDerivedMeta ? { meta: metaByStock.get(item.stockId) ?? {} } : {}),
-        },
-      }),
-    );
-    const ranked = assignStableStrategyRanks(successful, definition);
-    const results = ranked.map((item) => item.result);
-    const signals = ranked.flatMap((item) => item.signals);
-    const incompleteCount = ranked.filter((item) => item.partial).length;
-    const finishedAt = ctx.clock();
-    const status =
-      candidateIds.length > 0 && failures.length === candidateIds.length ? 'failed' : 'complete';
-    const dataHealth =
-      status === 'failed'
-        ? 'unavailable'
-        : failures.length > 0 || incompleteCount > 0
-          ? 'partial'
-          : 'complete';
-    const error =
-      status === 'failed' ? `全部 ${failures.length} 个 candidate 数据准备失败` : undefined;
-    const run = StrategyRunSchema.parse({
-      id: runId,
-      strategyId: input.strategyId,
-      strategyVersionId: version.id,
-      mode: input.mode,
-      coverage: 'CN_A_SHARES_SH_SZ',
-      dataAsOf,
-      startedAt,
-      finishedAt,
-      status,
-      inputSnapshot: {
-        schemaVersion: 2,
-        strategyVersionId: version.id,
-        definitionHash: version.definitionHash,
-        evaluatorVersion: EVALUATOR_VERSION,
-        coverage: 'CN_A_SHARES_SH_SZ',
-        stockIds: candidateIds,
-        stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
-        requestedBy:
-          input.mode === 'replay' ? 'replay' : input.mode === 'scheduled' ? 'scheduled' : 'manual',
-        ...(successfulSync === null
-          ? {}
-          : {
-              universeCheckpoint: {
-                provider: successfulSync.source,
-                syncedAt: successfulSync.finishedAt ?? successfulSync.startedAt,
-              },
-            }),
-      },
-      providerStatuses:
-        input.mode === 'replay'
-          ? [
-              // replay 只读本地 dailyBar，不以 market adapter 名义上报
-              ...(needsQuote || needsDailyBars
-                ? [{ provider: 'local:daily-bars', ok: failures.length === 0 }]
-                : []),
-            ]
-          : [
-              ...(needsQuote
-                ? [{ provider: ctx.adapters.market.name, ok: failures.length === 0 }]
-                : []),
-              ...(needsDailyBars
-                ? [
-                    {
-                      provider: `${ctx.adapters.market.name}:daily-bars`,
-                      ok: failures.length === 0,
-                    },
-                  ]
-                : []),
-            ],
-      summary: {
-        schemaVersion: 3,
-        dataHealth,
-        universeCount: candidateIds.length,
-        evaluatedCount: results.length,
-        selectedCount: results.filter((result) => result.selected).length,
-        signalCount: signals.length,
-        incompleteCount,
-        failedCount: failures.length,
-        failureSamples: failures
-          .slice(0, 20)
-          .map(({ stockId, error: failureError }) => ({ stockId, error: failureError })),
-      },
-      ...(error === undefined ? {} : { error }),
-    });
-    if (input.persist) {
-      await ctx.repos.strategyRun.commitRun({ run, results, signals });
-      try {
-        await saveObservationCandidates(
-          signals.flatMap((signal) =>
-            observationsForStrategySignal(signal, baselineByStock.get(signal.stockId), finishedAt),
-          ),
-          ctx.repos.signalObservation,
-        );
-      } catch (observationError) {
-        ctx.logger.warn('run_strategy: 后续表现观测候选写入失败，运行结果已提交', {
+          }
+          const latestBar = item.bars.at(-1);
+          return latestBar === undefined
+            ? []
+            : [
+                [
+                  item.stockId,
+                  {
+                    price: latestBar.close,
+                    at: latestBar.date,
+                    provider: latestBar.source,
+                  },
+                ] as const,
+              ];
+        }),
+      );
+      const metaByStock = needsDerivedMeta
+        ? deriveStrategyMetaByStock(
+            preparedStocks.map((item) => ({
+              stockId: item.stockId,
+              industry: activeById.get(item.stockId)?.industry,
+              bars: item.bars,
+            })),
+          )
+        : new Map<string, Readonly<Record<string, unknown>>>();
+      const successful: StrategyStockEvaluation[] = preparedStocks.map((item) =>
+        evaluateStrategyStock({
+          strategyId: input.strategyId,
+          version,
           runId,
-          error:
-            observationError instanceof Error ? observationError.message : String(observationError),
+          stockId: item.stockId,
+          ts: dataAsOf,
+          dataAsOf,
+          context: {
+            ...(item.quote === undefined ? {} : { quote: item.quote }),
+            indicators: computeSimpleIndicators(item.bars),
+            ...(needsDerivedMeta ? { meta: metaByStock.get(item.stockId) ?? {} } : {}),
+          },
+        }),
+      );
+      const ranked = assignStableStrategyRanks(successful, definition);
+      const results = ranked.map((item) => item.result);
+      const signals = ranked.flatMap((item) => item.signals);
+      const incompleteCount = ranked.filter((item) => item.partial).length;
+      const finishedAt = ctx.clock();
+      const status =
+        candidateIds.length > 0 && failures.length === candidateIds.length ? 'failed' : 'complete';
+      const dataHealth =
+        status === 'failed'
+          ? 'unavailable'
+          : failures.length > 0 || incompleteCount > 0
+            ? 'partial'
+            : 'complete';
+      const error =
+        status === 'failed' ? `全部 ${failures.length} 个 candidate 数据准备失败` : undefined;
+      const run = StrategyRunSchema.parse({
+        id: runId,
+        strategyId: input.strategyId,
+        strategyVersionId: version.id,
+        mode: input.mode,
+        coverage: 'CN_A_SHARES_SH_SZ',
+        dataAsOf,
+        startedAt,
+        finishedAt,
+        status,
+        inputSnapshot: {
+          schemaVersion: 2,
+          strategyVersionId: version.id,
+          definitionHash: version.definitionHash,
+          evaluatorVersion: EVALUATOR_VERSION,
+          coverage: 'CN_A_SHARES_SH_SZ',
+          stockIds: candidateIds,
+          stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
+          requestedBy:
+            input.mode === 'replay'
+              ? 'replay'
+              : input.mode === 'scheduled'
+                ? 'scheduled'
+                : 'manual',
+          ...(successfulSync === null
+            ? {}
+            : {
+                universeCheckpoint: {
+                  provider: successfulSync.source,
+                  syncedAt: successfulSync.finishedAt ?? successfulSync.startedAt,
+                },
+              }),
+        },
+        providerStatuses:
+          input.mode === 'replay'
+            ? [
+                // replay 只读本地 dailyBar，不以 market adapter 名义上报
+                ...(needsQuote || needsDailyBars
+                  ? [{ provider: 'local:daily-bars', ok: failures.length === 0 }]
+                  : []),
+              ]
+            : [
+                ...(needsQuote
+                  ? [{ provider: ctx.adapters.market.name, ok: failures.length === 0 }]
+                  : []),
+                ...(needsDailyBars
+                  ? [
+                      {
+                        provider: `${ctx.adapters.market.name}:daily-bars`,
+                        ok: failures.length === 0,
+                      },
+                    ]
+                  : []),
+              ],
+        summary: {
+          schemaVersion: 3,
+          dataHealth,
+          universeCount: candidateIds.length,
+          evaluatedCount: results.length,
+          selectedCount: results.filter((result) => result.selected).length,
+          signalCount: signals.length,
+          incompleteCount,
+          failedCount: failures.length,
+          failureSamples: failures
+            .slice(0, 20)
+            .map(({ stockId, error: failureError }) => ({ stockId, error: failureError })),
+        },
+        ...(error === undefined ? {} : { error }),
+      });
+      if (input.persist) {
+        await ctx.repos.strategyRun.commitRun({ run, results, signals });
+        try {
+          await saveObservationCandidates(
+            signals.flatMap((signal) =>
+              observationsForStrategySignal(
+                signal,
+                baselineByStock.get(signal.stockId),
+                finishedAt,
+              ),
+            ),
+            ctx.repos.signalObservation,
+          );
+        } catch (observationError) {
+          ctx.logger.warn('run_strategy: 后续表现观测候选写入失败，运行结果已提交', {
+            runId,
+            error:
+              observationError instanceof Error
+                ? observationError.message
+                : String(observationError),
+          });
+        }
+      }
+      return { run, results, signals, persisted: input.persist };
+    } finally {
+      if (input.persist) {
+        await ctx.repos.strategyRun.releaseRunLease({
+          strategyId: input.strategyId,
+          strategyVersionId: version.id,
+          owner: leaseOwner,
         });
       }
     }
-    return { run, results, signals, persisted: input.persist };
   },
 });

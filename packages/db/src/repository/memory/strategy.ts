@@ -185,8 +185,32 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
   private readonly runs = new Map<string, StrategyRun>();
   private readonly results = new Map<string, StrategyResult>();
   private readonly signals = new Map<string, StrategySignal>();
+  private readonly runLeases = new Map<string, { readonly owner: string; readonly until: Date }>();
 
   constructor(private readonly strategyRepository: InMemoryStrategyRepository) {}
+
+  async acquireRunLease(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean> {
+    const key = `${input.strategyId}\0${input.strategyVersionId}`;
+    const existing = this.runLeases.get(key);
+    if (existing !== undefined && existing.until.getTime() > input.now.getTime()) return false;
+    this.runLeases.set(key, { owner: input.owner, until: input.leaseUntil });
+    return true;
+  }
+
+  async releaseRunLease(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+  }): Promise<void> {
+    const key = `${input.strategyId}\0${input.strategyVersionId}`;
+    if (this.runLeases.get(key)?.owner === input.owner) this.runLeases.delete(key);
+  }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
     return this.runs.get(id) ?? null;

@@ -23,6 +23,7 @@ import {
   type Strategy,
   type StrategyResult,
   type StrategyRun,
+  type StrategySchedule,
   type StrategySignal,
   type StrategyVersion,
   stockCode,
@@ -233,6 +234,21 @@ export const makeStrategyVersion = (
     ...overrides,
   };
 };
+
+export const makeStrategySchedule = (
+  strategyId: string,
+  overrides: Partial<StrategySchedule> = {},
+): StrategySchedule => ({
+  id: `strategy-schedule:${strategyId}`,
+  strategyId,
+  cron: '0 18 * * 1-5',
+  timezone: 'Asia/Shanghai',
+  enabled: true,
+  nextRunAt: T1,
+  createdAt: T0,
+  updatedAt: T0,
+  ...overrides,
+});
 
 export const makeStrategyRun = (id: string, overrides: Partial<StrategyRun> = {}): StrategyRun => ({
   id,
@@ -1378,11 +1394,125 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('StrategyScheduleRepository', () => {
+      it('save/find/list 往返且每个 Strategy 只允许一条配置', async () => {
+        const schedule = makeStrategySchedule('strategy-1');
+        await repos.strategySchedule.save(schedule);
+        expect(await repos.strategySchedule.findById(schedule.id)).toEqual(schedule);
+        expect(await repos.strategySchedule.findByStrategyId('strategy-1')).toEqual(schedule);
+        expect(await repos.strategySchedule.list({ enabledOnly: true })).toEqual([schedule]);
+        await expect(
+          repos.strategySchedule.save({ ...schedule, id: 'conflicting-schedule' }),
+        ).rejects.toThrow();
+      });
+
+      it('claimDue 原子抢占，只有 owner 可完成并推进 nextRunAt', async () => {
+        const schedule = makeStrategySchedule('strategy-1');
+        await repos.strategySchedule.save(schedule);
+        expect(
+          await repos.strategySchedule.claimDue({
+            now: T1,
+            owner: 'worker-1',
+            leaseUntil: T3,
+            limit: 10,
+          }),
+        ).toEqual([schedule]);
+        expect(
+          await repos.strategySchedule.claimDue({
+            now: T2,
+            owner: 'worker-2',
+            leaseUntil: T3,
+            limit: 10,
+          }),
+        ).toEqual([]);
+        await expect(
+          repos.strategySchedule.finishClaim({
+            id: schedule.id,
+            owner: 'worker-2',
+            nextRunAt: T3,
+            updatedAt: T2,
+          }),
+        ).rejects.toThrow(InvariantError);
+        await repos.strategySchedule.finishClaim({
+          id: schedule.id,
+          owner: 'worker-1',
+          nextRunAt: T3,
+          updatedAt: T2,
+          lastRunId: 'run-1',
+        });
+        expect(await repos.strategySchedule.findById(schedule.id)).toEqual({
+          ...schedule,
+          nextRunAt: T3,
+          updatedAt: T2,
+          lastRunId: 'run-1',
+        });
+      });
+
+      it('过期 lease 可被其他 owner 接管', async () => {
+        const schedule = makeStrategySchedule('strategy-1');
+        await repos.strategySchedule.save(schedule);
+        await repos.strategySchedule.claimDue({
+          now: T1,
+          owner: 'worker-1',
+          leaseUntil: T2,
+          limit: 1,
+        });
+        expect(
+          await repos.strategySchedule.claimDue({
+            now: T2,
+            owner: 'worker-2',
+            leaseUntil: T3,
+            limit: 1,
+          }),
+        ).toEqual([schedule]);
+      });
+    });
+
     describe('StrategyRunRepository', () => {
       beforeEach(async () => {
         await repos.strategy.create(makeStrategy('strategy-1'));
         await repos.strategy.createVersion(makeStrategyVersion('strategy-1'));
         await repos.strategy.activateVersion('strategy-1', 'strategy-1-v1', T1);
+      });
+
+      it('同 StrategyVersion 正式运行 lease 互斥，过期或释放后可接管', async () => {
+        const base = {
+          strategyId: 'strategy-1',
+          strategyVersionId: 'strategy-1-v1',
+        };
+        expect(
+          await repos.strategyRun.acquireRunLease({
+            ...base,
+            owner: 'worker-1',
+            now: T1,
+            leaseUntil: T3,
+          }),
+        ).toBe(true);
+        expect(
+          await repos.strategyRun.acquireRunLease({
+            ...base,
+            owner: 'worker-2',
+            now: T2,
+            leaseUntil: T3,
+          }),
+        ).toBe(false);
+        await repos.strategyRun.releaseRunLease({ ...base, owner: 'worker-1' });
+        expect(
+          await repos.strategyRun.acquireRunLease({
+            ...base,
+            owner: 'worker-2',
+            now: T2,
+            leaseUntil: T3,
+          }),
+        ).toBe(true);
+        expect(
+          await repos.strategyRun.acquireRunLease({
+            ...base,
+            owner: 'worker-3',
+            now: T3,
+            leaseUntil: FAR_FUTURE,
+          }),
+        ).toBe(true);
       });
 
       it('run 往返和过滤排序一致', async () => {

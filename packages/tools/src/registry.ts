@@ -65,6 +65,14 @@ import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import {
+  completeStrategyObservationsTool,
+  listPendingStrategyObservationsTool,
+} from './tools/signal-observation.js';
+import {
+  generateStrategyInsightTool,
+  getStrategyInsightFactsTool,
+} from './tools/strategy-insight.js';
+import {
   createStrategyTool,
   createStrategyVersionTool,
   getStrategyTool,
@@ -82,6 +90,7 @@ import {
   listStrategyRunsTool,
   strategySignalsByStockTool,
 } from './tools/strategy-query.js';
+import { getStrategyScheduleTool, setStrategyScheduleTool } from './tools/strategy-schedule.js';
 import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
@@ -246,6 +255,12 @@ export const toolRegistry: Registry = createRegistry([
   getStrategyWorkspaceTool,
   compareStrategyRunsTool,
   strategySignalsByStockTool,
+  listPendingStrategyObservationsTool,
+  completeStrategyObservationsTool,
+  getStrategyInsightFactsTool,
+  generateStrategyInsightTool,
+  getStrategyScheduleTool,
+  setStrategyScheduleTool,
   listWatchlistsTool,
   getWatchlistTool,
   createWatchlistTool,

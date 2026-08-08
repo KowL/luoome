@@ -284,6 +284,15 @@ export const dailyAdviceWorkflow = defineWorkflow({
 
 Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（advice 持久化通过专用 `persist` tool 暴露，不绕过层级）。
 
+策略 Phase B 使用两个可由外部 cron 唤醒的 workflow：
+
+- `run-strategy-schedules` 原子抢占到期 `StrategySchedule`，再调用 `run_strategy`；调度租约负责
+  多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行；
+- `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
+  SignalObservation。样本未到期保持 pending，不阻塞其他样本。
+
+进程内不常驻调度线程；外部 cron 只负责唤醒 workflow。两个 workflow 都不直接访问 repository。
+
 ### 4.7 Adapter（adapters 包）
 
 每个外部依赖通过 adapter 接入。行情对外暴露稳定的 `MarketDataAdapterLike` Gateway，
@@ -579,6 +588,8 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 | `compute_risk_metrics` | holdings + history | VaR / Sharpe / 最大回撤 |
 | `compute_indicators` | daily bars | MA / RSI / MACD / BOLL |
 | `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
+| `get_strategy_insight_facts` | Strategy runs + signals + observations | 可引用的确定性 facts |
+| `generate_strategy_insight` | 已校验 facts | 带 factRefs 的解释性洞察（非 Advice） |
 | `sync_watchlist_source` | source candidates | membership diff + sync audit |
 | `analyze_stock` | stock + 上下文 | **Advice[]**（buy/sell/hold/...） |
 

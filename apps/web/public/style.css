@@ -4690,6 +4690,80 @@ body > .modal {
   border-top: 1px solid var(--line);
 }
 
+.strategy-insight-grid,
+.strategy-insight-output,
+.strategy-insight-narrative,
+.strategy-insight-section,
+.strategy-schedule-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.strategy-insight-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.strategy-insight-section,
+.strategy-insight-narrative,
+.strategy-schedule-panel {
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel-2);
+}
+
+.strategy-insight-section h4,
+.strategy-insight-narrative h3,
+.strategy-schedule-panel h3,
+.strategy-insight-finding p {
+  margin: 0;
+}
+
+.strategy-insight-finding {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.strategy-schedule-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.strategy-schedule-form > label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.strategy-schedule-form input:not([type='checkbox']) {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--panel);
+  font: inherit;
+}
+
+.strategy-schedule-form input:not([type='checkbox']):focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+}
+
+.strategy-schedule-toggle {
+  display: flex !important;
+  align-items: center;
+  min-height: 40px;
+}
+
 /* 运行详情弹窗（strategy-workspace）：StrategySignal 信号列表 */
 .strategy-run-detail {
   display: grid;
@@ -4760,6 +4834,11 @@ body > .modal {
   .strategy-summary-grid,
   .strategy-diff-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .strategy-insight-columns,
+  .strategy-schedule-form {
+    grid-template-columns: 1fr;
   }
 
   .ai-settings-grid {

@@ -20,6 +20,7 @@ import {
   DrizzleStockUniverseRepository,
   DrizzleStrategyRepository,
   DrizzleStrategyRunRepository,
+  DrizzleStrategyScheduleRepository,
   DrizzleTradeRepository,
   DrizzleWatchlistMemberRepository,
   DrizzleWatchlistRepository,
@@ -381,6 +382,42 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_runs_status_started_idx ON strategy_runs (status, started_at)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_schedules (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL,
+      cron TEXT NOT NULL,
+      timezone TEXT NOT NULL,
+      enabled INTEGER NOT NULL,
+      next_run_at INTEGER,
+      last_run_id TEXT,
+      lease_owner TEXT,
+      lease_until INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS strategy_schedules_strategy_unique ON strategy_schedules (strategy_id)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_schedules_due_idx ON strategy_schedules (enabled, next_run_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_schedules_lease_idx ON strategy_schedules (lease_until)`,
+  );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_run_leases (
+      strategy_id TEXT NOT NULL,
+      strategy_version_id TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      lease_until INTEGER NOT NULL,
+      PRIMARY KEY (strategy_id, strategy_version_id)
+    )
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_run_leases_until_idx ON strategy_run_leases (lease_until)`,
   );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS strategy_results (
@@ -1015,6 +1052,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     signalObservation: new DrizzleSignalObservationRepository(db),
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db),
+    strategySchedule: new DrizzleStrategyScheduleRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),

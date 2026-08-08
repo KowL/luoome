@@ -15,6 +15,7 @@ export const TEST_LLM_SYSTEM_SCORE_SIGNALS = 'score_signals';
 export const TEST_LLM_SYSTEM_RESOLVE_LLM_GROUP = 'resolve_llm_group';
 export const TEST_LLM_SYSTEM_CHAT_PLAN = 'chat_plan';
 export const TEST_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
+export const TEST_LLM_SYSTEM_STRATEGY_INSIGHT = 'strategy_insight';
 
 /**
  * web chat 测试注入前缀（docs/ddd/web-chat-design.md §6）：
@@ -43,6 +44,7 @@ type TestMode =
   | 'resolve_llm_group'
   | 'chat_plan'
   | 'chat_reply'
+  | 'strategy_insight'
   | 'generic';
 
 /** 仅依赖 safeParse 的最小 schema 投影（zod schema 天然满足）。 */
@@ -162,6 +164,7 @@ export class FakeLLMAdapter implements LLMAdapter {
     // analyze_stock），若按内容包含匹配会被误判。
     if (system.includes(TEST_LLM_SYSTEM_CHAT_PLAN)) return 'chat_plan';
     if (system.includes(TEST_LLM_SYSTEM_CHAT_REPLY)) return 'chat_reply';
+    if (system.includes(TEST_LLM_SYSTEM_STRATEGY_INSIGHT)) return 'strategy_insight';
     if (system.includes(TEST_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
     if (system.includes(TEST_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
     if (system.includes(TEST_LLM_SYSTEM_MARKET_OUTLOOK)) return 'market_outlook';
@@ -207,7 +210,41 @@ export class FakeLLMAdapter implements LLMAdapter {
       }
       return Promise.resolve(asGenerateResult<T>(out, raw));
     }
+    if (mode === 'strategy_insight') {
+      const out = this.buildStrategyInsight(request.data);
+      const raw = JSON.stringify({ fixture: true, mode });
+      const schema = request.schema;
+      if (isSchemaLike(schema)) {
+        const parsed = schema.safeParse(out);
+        if (parsed.success) return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
+      }
+      return Promise.resolve(asGenerateResult<T>(out, raw));
+    }
     return Promise.resolve(this.buildStandardAnalysis(mode, request, request.schema));
+  }
+
+  private buildStrategyInsight(data: unknown): Record<string, unknown> {
+    const record = asRecord(data);
+    const facts = Array.isArray(record?.facts) ? (record.facts as readonly unknown[]) : [];
+    const refs = facts
+      .map((fact) => readString(asRecord(fact), 'id'))
+      .filter((id): id is string => id !== null);
+    const firstRef = refs[0] ?? 'runs:window';
+    return {
+      headline: '策略事实观察',
+      summary: '依据当前运行记录与事后观察汇总，仅描述已有数据，不构成投资建议。',
+      findings: [
+        {
+          kind: 'trend',
+          title: '近期运行概览',
+          detail: '当前结论来自已落库的策略运行与信号观察。',
+          factRefs: [firstRef],
+        },
+      ],
+      risks: ['数据缺失和样本量会影响描述的稳定性。'],
+      limitations: ['这是事实观察，不是包含交易成本与成交假设的回测。'],
+      disclaimer: '仅供研究记录，不构成投资建议。',
+    };
   }
 
   /**

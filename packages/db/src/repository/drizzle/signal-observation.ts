@@ -3,7 +3,7 @@ import {
   type SignalObservation,
   type SignalObservationRepository,
 } from '@luoome/core';
-import { and, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { type Schema, signalObservations } from '../../schema/index.js';
 
@@ -68,6 +68,14 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
     if (input.status !== undefined) conditions.push(eq(signalObservations.status, input.status));
     if (input.sourceKind !== undefined)
       conditions.push(eq(signalObservations.sourceKind, input.sourceKind));
+    if (input.sourceIds !== undefined) {
+      if (input.sourceIds.length === 0) return [];
+      conditions.push(inArray(signalObservations.sourceId, [...input.sourceIds]));
+    }
+    if (input.horizons !== undefined) {
+      if (input.horizons.length === 0) return [];
+      conditions.push(inArray(signalObservations.horizon, [...input.horizons]));
+    }
     if (input.from !== undefined) conditions.push(gte(signalObservations.baselineAt, input.from));
     if (input.to !== undefined) conditions.push(lte(signalObservations.baselineAt, input.to));
     return this.db

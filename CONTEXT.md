@@ -24,6 +24,20 @@ StrategyRun 的 `status` 只表达执行生命周期：`running / complete / fai
 语义等同“执行已完成、数据部分可用”。当前股票池使用最近一次结果可用的完成运行中
 `selected=true` 的 StrategyResult。
 
+### StrategySchedule
+
+回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
+cron、IANA 时区、启停状态和 nextRunAt；修改调度不改变 definitionHash。外部 cron 只负责唤醒
+到期调度 workflow，实例间通过调度租约和正式运行租约防重。非交易日与暂停策略不运行，调度
+也不会生成 Advice、通知或交易。
+
+### StrategyInsight
+
+回答“策略最近实际发生了什么”。确定性事实层汇总运行变化、规则阻断、当前行业分布、关联
+AlertPlan，以及 StrategySignal 的 T+1/T+3/T+5/T+20 事后观察。AI 只解释事实层并必须引用存在的
+fact id；不得把观察称为回测，不得给出收益承诺、未来概率或买卖建议。事实截止时间、观察截止
+时间、缺失率和小样本限制必须保留。
+
 ### Watchlist
 
 回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护

@@ -15,6 +15,7 @@ import type {
   StockEvent,
   Strategy,
   StrategyRunBundle,
+  StrategySchedule,
   StrategyVersion,
   Trade,
   WatchRun,
@@ -37,6 +38,7 @@ import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
 import { InMemoryStockUniverseRepository } from './stock-universe.js';
 import { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
+import { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
 import { InMemoryTradeRepository } from './trade.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 import { InMemoryWatchRunRepository } from './watch-run.js';
@@ -60,6 +62,7 @@ export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
 export { InMemoryStockUniverseRepository } from './stock-universe.js';
 export { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
+export { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
 export { InMemoryTradeRepository } from './trade.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 export { InMemoryWatchRunRepository } from './watch-run.js';
@@ -81,6 +84,7 @@ export interface InMemorySeed {
   readonly signalObservations?: readonly SignalObservation[];
   readonly dailyBars?: readonly DailyBar[];
   readonly strategies?: readonly Strategy[];
+  readonly strategySchedules?: readonly StrategySchedule[];
   readonly strategyVersions?: readonly StrategyVersion[];
   readonly strategyRunBundles?: readonly StrategyRunBundle[];
   readonly notifications?: readonly Notification[];
@@ -106,6 +110,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const dailyBar = new InMemoryDailyBarRepository();
   const signalObservation = new InMemorySignalObservationRepository();
   const strategy = new InMemoryStrategyRepository();
+  const strategySchedule = new InMemoryStrategyScheduleRepository();
   const strategyRun = new InMemoryStrategyRunRepository(strategy);
   const watchlist = new InMemoryWatchlistRepository();
   const watchlistMember = new InMemoryWatchlistMemberRepository(watchlist);
@@ -133,6 +138,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const b of seed.dailyBars ?? []) dailyBar.put(b);
     for (const observation of seed.signalObservations ?? []) signalObservation.put(observation);
     for (const item of seed.strategies ?? []) void strategy.create(item);
+    for (const item of seed.strategySchedules ?? []) strategySchedule.put(item);
     for (const item of seed.strategyVersions ?? []) void strategy.createVersion(item);
     for (const bundle of seed.strategyRunBundles ?? []) void strategyRun.commitRun(bundle);
     for (const n of seed.notifications ?? []) notification.put(n);
@@ -154,6 +160,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     dailyBar,
     signalObservation,
     strategy,
+    strategySchedule,
     strategyRun,
     watchlist,
     watchlistMember,

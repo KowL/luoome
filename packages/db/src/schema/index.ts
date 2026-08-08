@@ -354,6 +354,45 @@ export const strategyRuns = sqliteTable(
   }),
 );
 
+export const strategySchedules = sqliteTable(
+  'strategy_schedules',
+  {
+    id: text('id').primaryKey(),
+    strategyId: text('strategy_id').notNull(),
+    cron: text('cron').notNull(),
+    timezone: text('timezone').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    nextRunAt: integer('next_run_at', { mode: 'timestamp_ms' }),
+    lastRunId: text('last_run_id'),
+    leaseOwner: text('lease_owner'),
+    leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => ({
+    strategyUnique: uniqueIndex('strategy_schedules_strategy_unique').on(table.strategyId),
+    dueIdx: index('strategy_schedules_due_idx').on(table.enabled, table.nextRunAt),
+    leaseIdx: index('strategy_schedules_lease_idx').on(table.leaseUntil),
+  }),
+);
+
+export const strategyRunLeases = sqliteTable(
+  'strategy_run_leases',
+  {
+    strategyId: text('strategy_id').notNull(),
+    strategyVersionId: text('strategy_version_id').notNull(),
+    owner: text('owner').notNull(),
+    leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.strategyId, table.strategyVersionId],
+      name: 'strategy_run_leases_pk',
+    }),
+    untilIdx: index('strategy_run_leases_until_idx').on(table.leaseUntil),
+  }),
+);
+
 export const strategyResults = sqliteTable(
   'strategy_results',
   {
@@ -996,6 +1035,8 @@ export const schema = {
   strategies,
   strategyVersions,
   strategyRuns,
+  strategySchedules,
+  strategyRunLeases,
   strategyResults,
   strategySignals,
   signalObservations,

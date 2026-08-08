@@ -5,7 +5,9 @@ import {
   buildStrategyHash,
   openRunDetail,
   parseStrategyHash,
+  renderInsights,
   renderRuns,
+  renderSettings,
 } from './strategy-workspace.js';
 
 /* ============================================================
@@ -307,5 +309,120 @@ describe('运行详情弹窗信号列表', () => {
     const node = buildRunDetailContent({ stocks: [], signals: [] });
     expect(node.textContent).toContain('信号 0');
     expect(node.textContent).toContain('无信号');
+  });
+});
+
+describe('Phase B 洞察与调度', () => {
+  it('先展示确定性事实，再由显式按钮生成带事实引用的 AI 解读', async () => {
+    globalThis.fetch = async (path, init) => {
+      const url = String(path);
+      if (url.includes('/insights/generate') && init?.method === 'POST') {
+        return jsonResponse({
+          ok: true,
+          data: {
+            provider: 'fixture',
+            insight: {
+              headline: '策略事实观察',
+              summary: '只解释已有事实。',
+              findings: [
+                {
+                  kind: 'trend',
+                  title: '运行稳定',
+                  detail: '近期有一条可用运行。',
+                  factRefs: ['runs:window'],
+                },
+              ],
+              risks: ['样本少'],
+              limitations: ['不是回测'],
+              disclaimer: '仅供研究，不构成投资建议。',
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          window: { days: 30 },
+          factsAsOf: '2026-08-08T10:00:00.000Z',
+          runs: { total: 1, usable: 1, failed: 0 },
+          currentSelection: {
+            selectedCount: 1,
+            averageScore: 82,
+            industries: [{ name: '食品饮料', count: 1, share: 1 }],
+          },
+          blockers: [{ ruleId: 'quality', ruleName: '质量门槛', count: 1 }],
+          observations: [
+            {
+              horizon: 't1',
+              total: 1,
+              complete: 1,
+              missingRate: 0,
+              benchmarkStatus: 'unavailable',
+              averageReturnPct: 0.05,
+            },
+          ],
+          alertPlans: [{ name: '质量预警', enabled: true, ruleCount: 1 }],
+          limitations: ['事实观察不是回测。'],
+        },
+      });
+    };
+    const statuses = [];
+    const node = await renderInsights('phase-b-insight', (message) => statuses.push(message));
+    expect(node.textContent).toContain('真实信号观察');
+    expect(node.textContent).toContain('5.00%');
+    expect(node.textContent).toContain('质量门槛');
+    expect(node.textContent).not.toContain('运行稳定');
+
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '生成 AI 解读')
+      .click();
+    await flush();
+    expect(node.textContent).toContain('运行稳定');
+    expect(node.textContent).toContain('runs:window');
+    expect(statuses.at(-1)).toContain('fixture');
+  });
+
+  it('设置页展示可生效的 cron、时区和下一次计划', async () => {
+    globalThis.fetch = async (path) => {
+      const url = String(path);
+      if (url.endsWith('/schedule')) {
+        return jsonResponse({
+          ok: true,
+          data: {
+            schedule: {
+              cron: '0 18 * * 1-5',
+              timezone: 'Asia/Shanghai',
+              enabled: true,
+              nextRunAt: '2026-08-10T10:00:00.000Z',
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          strategy: {
+            id: 'phase-b-schedule',
+            name: '调度策略',
+            status: 'active',
+            currentVersionId: 'v1',
+          },
+          versions: [],
+        },
+      });
+    };
+    const node = await renderSettings(
+      'phase-b-schedule',
+      () => {},
+      async () => {},
+    );
+    expect(node.textContent).toContain('自动调度');
+    expect(node.textContent).toContain('标准 5 段 cron');
+    expect(node.querySelectorAll('input').map((input) => input.value)).toEqual([
+      '0 18 * * 1-5',
+      'Asia/Shanghai',
+      '',
+    ]);
   });
 });

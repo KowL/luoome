@@ -529,6 +529,21 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       data: { strategy: { id: strategyId }, overview: { health: 'never-run' } },
     });
 
+    const insights = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/insights`),
+    );
+    expect(insights.status).toBe(200);
+    expect(await insights.json()).toMatchObject({
+      ok: true,
+      data: { strategy: { id: strategyId }, runs: { total: 0, usable: 0 } },
+    });
+
+    const schedule = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/schedule`),
+    );
+    expect(schedule.status).toBe(200);
+    expect(await schedule.json()).toMatchObject({ ok: true, data: { schedule: null } });
+
     const results = await app.fetch(
       new Request(`http://test/api/strategies/${strategyId}/results?view=selected`),
     );
@@ -591,6 +606,19 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
         .status,
     ).toBe(200);
 
+    const schedule = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/schedule`, {
+        cron: '0 18 * * 1-5',
+        timezone: 'Asia/Shanghai',
+        enabled: true,
+      }),
+    );
+    expect(schedule.status).toBe(200);
+    expect(await schedule.json()).toMatchObject({
+      ok: true,
+      data: { schedule: { strategyId, cron: '0 18 * * 1-5', enabled: true } },
+    });
+
     const paused = await app.fetch(targetRequest(`/api/strategies/${strategyId}/pause`, {}));
     expect(paused.status).toBe(200);
     expect(await paused.json()).toMatchObject({
@@ -603,6 +631,15 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(await resumed.json()).toMatchObject({
       ok: true,
       data: { strategy: { id: strategyId, status: 'active' } },
+    });
+
+    const insight = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/insights/generate`, {}),
+    );
+    expect(insight.status).toBe(200);
+    expect(await insight.json()).toMatchObject({
+      ok: true,
+      data: { provider: 'fake-llm', insight: { findings: [{ factRefs: ['runs:window'] }] } },
     });
   });
 

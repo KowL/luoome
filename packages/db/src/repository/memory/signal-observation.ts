@@ -28,6 +28,8 @@ export class InMemorySignalObservationRepository implements SignalObservationRep
         (item) =>
           (input.status === undefined || item.status === input.status) &&
           (input.sourceKind === undefined || item.sourceKind === input.sourceKind) &&
+          (input.sourceIds === undefined || input.sourceIds.includes(item.sourceId)) &&
+          (input.horizons === undefined || input.horizons.includes(item.horizon)) &&
           (item.baselineAt?.getTime() ?? 0) >= from &&
           (item.baselineAt?.getTime() ?? 0) <= to,
       )

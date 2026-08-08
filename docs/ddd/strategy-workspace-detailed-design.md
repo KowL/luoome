@@ -376,7 +376,17 @@ interface StrategySchedule {
 ```
 
 调度器只触发 `run_strategy`，并生成 `mode='scheduled'` 的 StrategyRun；不得创建 Advice 或交易。
-具体 cron 解析、抢占和多实例锁另立 Phase B 实施设计，不在 Phase A 建表。
+Phase B 已实现标准 5 段 cron 与 IANA 时区解析、`nextRunAt` 推进、跨实例调度租约，以及
+`strategyId + strategyVersionId` 正式运行租约。外部 cron 每分钟唤醒
+`run-strategy-schedules`；错过的周期最多补跑一次，非交易日与暂停策略跳过并推进。
+
+### 6.4 Phase B 事实观察与 AI 洞察
+
+- `complete-strategy-observations` 同步本地 qfq 日线，以基准后的第 N 根可用日线完成观察；
+- benchmark 在指数日线接入前明确为 unavailable，不以个股或大盘报价替代；
+- `get_strategy_insight_facts` 汇总 30 天运行、Diff、阻断、行业、AlertPlan 与四个观察周期；
+- `generate_strategy_insight` 仅向 LLM 提供白名单 facts，并校验每条 finding 的 factRefs；
+- AI 洞察不持久化 Advice，不生成策略草案，不触发 Watchlist、通知或交易。
 
 ## 7. Tool 契约
 
