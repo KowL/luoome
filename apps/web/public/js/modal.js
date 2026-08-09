@@ -90,7 +90,7 @@ export const confirmDialog = ({
 
 /**
  * 输入对话框（替代 window.prompt，支持多字段与下拉）。
- * fields: [{ key, label, value?, placeholder?, options?: [{ value, label }] }]
+ * fields: [{ key, label, value?, placeholder?, multiline?, options?: [{ value, label }] }]
  * note: 字段上方的 muted 说明行（可选）。
  * @returns {Promise<object|null>} 确认返回 { key: 文本 }；取消/关闭返回 null。
  */
@@ -98,11 +98,20 @@ export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = 
   new Promise((resolve) => {
     activeResolve = resolve;
     const controls = fields.map((field) => {
-      const control = field.options === undefined ? el('input') : document.createElement('select');
+      const control =
+        field.options === undefined
+          ? field.multiline === true
+            ? document.createElement('textarea')
+            : el('input')
+          : document.createElement('select');
       if (field.options === undefined) {
-        control.type = 'text';
+        if (field.multiline !== true) control.type = 'text';
         control.value = field.value ?? '';
         if (field.placeholder !== undefined) control.placeholder = field.placeholder;
+        if (field.multiline === true) {
+          control.rows = field.rows ?? 8;
+          control.wrap = 'soft';
+        }
       } else {
         for (const option of field.options) {
           const node = document.createElement('option');

@@ -7,6 +7,7 @@ export const AGENT_V1_TOOL_NAMES = [
   'batch_quote',
   'list_strategies',
   'get_strategy',
+  'compare_strategy_definitions',
   'list_strategy_runs',
   'get_strategy_run',
   'strategy_signals_by_stock',
@@ -23,6 +24,7 @@ export const AGENT_V1_TOOL_NAMES = [
   'list_research_documents',
   'get_research_document',
   'search_research_documents',
+  'build_research_brief',
   'get_stock_research_view',
 ] as const;
 

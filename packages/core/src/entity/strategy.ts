@@ -110,6 +110,21 @@ export const StrategyVersionSchema = z.object({
   definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
   parentVersionId: z.string().min(1).optional(),
   changeSummary: z.string().max(500).optional(),
+  /** AI 草案审计：只保存事实标识，不保存完整研究正文。 */
+  factReferences: z.array(z.string().min(1).max(200)).max(50).optional(),
+  /** AI / agent 工具轨迹；输入输出保留为不透明 JSON，受数量上限约束。 */
+  agentTrace: z
+    .array(
+      z.object({
+        toolName: z.string().min(1),
+        input: z.unknown(),
+        output: z.unknown(),
+        ok: z.boolean(),
+        durationMs: z.number().nonnegative(),
+      }),
+    )
+    .max(100)
+    .optional(),
   validationStatus: z.enum(['pending', 'valid', 'invalid']),
   validationErrors: z.array(z.string()).default([]),
   publishedAt: z.coerce.date().optional(),

@@ -1,6 +1,6 @@
 # 研究主题与 Obsidian Vault 详细设计
 
-> 状态：设计确认，待实施
+> 状态：Phase A/B、Phase C、Phase D(M3 managed 创建/导入) 与 Phase E(M4 FTS/ResearchBrief/Agent 草案门控) 已实施
 > 日期：2026-08-01
 > 范围：研究主题、研究文档、研究对象关联、Obsidian Vault、可重建索引、全文检索、研究时间线与 Agent 检索
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)、[AI 投资决策闭环](../prd/ai-investment-decision-loop.md)、[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)
@@ -726,7 +726,7 @@ research_vault_sync_runs
 - TopicDocument：`(document_id)`；
 - VaultRun：`(vault_id, started_at)`。
 
-全文检索使用 SQLite FTS5 虚表 `research_document_fts`，索引 `title + heading_path + body`。FTS 表不进入 core entity，不作为权威来源；`ensureSchema` 创建失败时显式降级为 metadata 搜索并报告 capability unavailable，不能伪装成全文零结果。
+全文检索使用 SQLite FTS5 虚表 `research_document_fts`，索引 `title + heading_path + body`。FTS 表不作为权威正文；`ensureSchema` 或查询失败时显式降级为 metadata 搜索并报告 `capability=metadata`，不能伪装成全文零结果。FTS 命中携带 chunk ordinal，供 EvidenceRef 追溯。
 
 ### 8.2 Repository 接口
 
@@ -750,6 +750,7 @@ export interface ResearchIndexRepository {
   findDocument(id: string): Promise<ResearchDocumentIndex | null>;
   listTopics(query: ResearchTopicQuery): Promise<readonly ResearchTopicIndex[]>;
   listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]>;
+  searchCapability(): 'fts' | 'metadata';
   searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]>;
 }
 ```
@@ -813,7 +814,8 @@ Tool 不感知 Drizzle transaction 类型。
 5. 若索引失败，文件仍是权威结果，Tool 返回 partial diagnostic；下一次完整扫描修复；
 6. 不尝试跨文件系统与 SQLite 的两阶段提交。
 
-已有 managed 文件的正文仍不由 Tool 任意覆盖。需要修改时在 Obsidian 编辑；未来若增加 frontmatter patch，必须做基于 expected contentHash 的乐观并发检查。
+已有 managed 文件的正文仍不由 Tool 任意覆盖。当前仅允许关系字段和 `archived_at` 等机器字段
+通过 `expectedContentHash` 乐观并发检查后 patch；正文修改仍应在 Obsidian 编辑。
 
 ### 9.4 调度
 
@@ -1106,6 +1108,7 @@ UI 同时显示所采用字段，不能把导入时间误写成事件发生时�
 研究 Agent 可调用：
 
 - list/get/search research topics/documents；
+- `build_research_brief`：返回带真实 EvidenceRef 的结构化研究摘要；
 - Stock、行情、Strategy、Watchlist、事件、触发、Advice 和交易的只读 Tool；
 - 数据状态 Tool。
 
@@ -1308,7 +1311,7 @@ drizzle 与 memory 共同覆盖：
 - 附件 hash 去重；
 - 三步确认和权限门控。
 
-### Phase E：Agent 检索
+### Phase E：Agent 检索（已实施，2026-08-09）
 
 - chunks + FTS；
 - ResearchBrief；

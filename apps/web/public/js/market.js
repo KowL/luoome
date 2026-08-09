@@ -31,8 +31,10 @@ const parseRouteHash = (hash) => {
 };
 
 /** 行情页深链接序列化（§11.1）。 */
-const buildMarketHash = (stockId, range) =>
-  `market?stockId=${encodeURIComponent(stockId)}&range=${encodeURIComponent(range)}`;
+const buildMarketHash = (stockId, range, date = null) =>
+  `market?stockId=${encodeURIComponent(stockId)}&range=${encodeURIComponent(range)}${
+    date ? `&date=${encodeURIComponent(date)}` : ''
+  }`;
 
 /** 业务页面跳行情页的锚点 href：默认 3m，与深链接口径一致。 */
 const buildMarketLink = (stockId) => `#${buildMarketHash(stockId, '3m')}`;
@@ -125,6 +127,7 @@ const REFRESH_MS = 60_000;
 const state = {
   stockId: null,
   range: '3m',
+  date: null,
   tracker: createRequestTracker(),
   data: null,
   chart: null,
@@ -170,6 +173,7 @@ const teardownMarket = () => {
   destroyChart();
   state.stockId = null;
   state.data = null;
+  state.date = null;
   state.tracker.next();
 };
 
@@ -184,7 +188,7 @@ const navigateToStock = (stock) => {
     exchange: stock.exchange,
   });
   saveRecent(recent);
-  window.location.hash = buildMarketHash(stock.id, state.range);
+  window.location.hash = buildMarketHash(stock.id, state.range, state.date);
 };
 
 const bindSearch = () => {
@@ -333,6 +337,77 @@ const renderLinks = (data) => {
   );
 };
 
+const markerLabel = (marker) => {
+  const kind =
+    marker.factKind === 'trade'
+      ? '交易'
+      : marker.factKind === 'advice'
+        ? 'Advice'
+        : marker.factKind === 'watch-trigger'
+          ? '触发'
+          : marker.factKind === 'strategy-signal'
+            ? '信号'
+            : marker.factKind === 'report'
+              ? '报告'
+              : marker.factKind === 'limit-up'
+                ? '涨停'
+                : '研究';
+  return `${marker.date} · ${kind} · ${marker.title}`;
+};
+
+const renderLimitUpFacts = (data) => {
+  const wrap = $('#market-limit-up');
+  if (wrap === null) return;
+  const facts = data.limitUp;
+  if (facts === undefined || facts.status === 'unavailable') {
+    mount(wrap, el('span', 'muted', '历史天梯不可用；未将不可用伪装成空结果。'));
+    setText('#market-limit-up-status', '不可用');
+    return;
+  }
+  setText(
+    '#market-limit-up-status',
+    facts.asOf === null
+      ? '可用 · 时间未知'
+      : `可用 · ${new Date(facts.asOf).toLocaleDateString('zh-CN')}`,
+  );
+  mount(
+    wrap,
+    facts.recent.length === 0
+      ? el('span', 'muted', '可获得范围内暂无涨停记录')
+      : el(
+          'div',
+          'market-limit-up-list',
+          facts.recent.map((item) =>
+            el('div', 'market-limit-up-row', [
+              el('span', 'mono', item.date),
+              el('strong', null, `${item.ladderLevel} 连板`),
+              el('span', 'muted', item.reason === '--' ? '原因暂缺' : item.reason),
+            ]),
+          ),
+        ),
+  );
+};
+
+const renderMarkers = (data) => {
+  const wrap = $('#market-markers');
+  if (wrap === null) return;
+  const markers = Array.isArray(data.markers) ? data.markers : [];
+  mount(
+    wrap,
+    markers.length === 0
+      ? el('span', 'muted', '当前周期暂无关联事实')
+      : [
+          el('span', 'muted', '图表事实：'),
+          ...markers.map((marker) => {
+            const link = el('a', `market-marker market-marker-${marker.tone}`, markerLabel(marker));
+            link.setAttribute('href', marker.href);
+            link.dataset.factId = marker.factId;
+            return link;
+          }),
+        ],
+  );
+};
+
 /* ============ 加载与渲染 ============ */
 
 const showBanner = (message) => {
@@ -365,7 +440,7 @@ const bindRangeSwitch = () => {
     if (target === null || state.stockId === null) return;
     const range = normalizeMarketRange(target.getAttribute('data-range'));
     if (range === state.range) return;
-    window.location.hash = buildMarketHash(state.stockId, range);
+    window.location.hash = buildMarketHash(state.stockId, range, state.date);
   });
 };
 
@@ -378,6 +453,8 @@ const renderData = async (data, requestId) => {
   renderQuoteHeader(data);
   renderIndicators(data);
   renderLinks(data);
+  renderMarkers(data);
+  renderLimitUpFacts(data);
   paintRangeSwitch();
 
   const chartContainer = $('#market-chart');
@@ -407,6 +484,7 @@ const renderData = async (data, requestId) => {
     ma5: computeMaSeries(data.candles, 5),
     ma10: computeMaSeries(data.candles, 10),
     ma20: computeMaSeries(data.candles, 20),
+    markers: data.markers ?? [],
   });
 };
 
@@ -441,8 +519,17 @@ const loadMarketView = async () => {
   const known = loadRecent().find((s) => s.id === state.stockId);
   const input =
     known === undefined
-      ? { stockId: state.stockId, range: state.range }
-      : { stockId: state.stockId, range: state.range, stockName: known.name };
+      ? {
+          stockId: state.stockId,
+          range: state.range,
+          ...(state.date === null ? {} : { date: state.date }),
+        }
+      : {
+          stockId: state.stockId,
+          range: state.range,
+          stockName: known.name,
+          ...(state.date === null ? {} : { date: state.date }),
+        };
   const r = await callApi('/api/tools/get_stock_market_view/call', {
     method: 'POST',
     body: JSON.stringify({ input }),
@@ -485,11 +572,14 @@ const renderMarket = async (setStatus) => {
   const { params } = parseRouteHash(window.location.hash);
   const stockId = params.get('stockId');
   const range = normalizeMarketRange(params.get('range'));
+  const rawDate = params.get('date');
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate ?? '') ? rawDate : null;
   // 无 stockId → 搜索空态（§11.1）。
   if (stockId === null || stockId.trim().length === 0) {
     clearRefreshTimer();
     destroyChart();
     state.stockId = null;
+    state.date = null;
     state.data = null;
     state.tracker.next();
     showBanner(null);
@@ -500,9 +590,10 @@ const renderMarket = async (setStatus) => {
     if (main !== null) main.hidden = true;
     return;
   }
-  const changed = state.stockId !== stockId || state.range !== range;
+  const changed = state.stockId !== stockId || state.range !== range || state.date !== date;
   state.stockId = stockId;
   state.range = range;
+  state.date = date;
   if (!changed && state.data !== null) {
     paintRangeSwitch();
     return;
@@ -520,10 +611,12 @@ export {
   createRequestTracker,
   fetchedAtLabel,
   formatVolume,
+  markerLabel,
   navigateToStock,
   normalizeMarketRange,
   parseRouteHash,
   pushRecentView,
+  renderMarkers,
   renderMarket,
   sessionLabel,
   sourceLabel,

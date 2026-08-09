@@ -57,12 +57,15 @@ const CHAT_READ_TOOL_NAMES = [
   'list_research_documents',
   'get_research_document',
   'search_research_documents',
+  'build_research_brief',
   'get_stock_research_view',
 ] as const;
 
 const CHAT_DRAFT_TOOL_KINDS = {
   create_strategy: 'strategy',
   create_strategy_version: 'strategy',
+  propose_strategy_version_draft: 'strategy',
+  trial_strategy_version: 'strategy',
   publish_strategy_version: 'strategy',
   pause_strategy: 'strategy',
   run_strategy: 'strategy',
@@ -75,6 +78,9 @@ const CHAT_DRAFT_TOOL_KINDS = {
   create_alert_plan: 'alert-plan',
   update_alert_plan: 'alert-plan',
   delete_alert_plan: 'alert-plan',
+  create_research_topic: 'research',
+  create_research_document: 'research',
+  link_research_document: 'research',
 } as const;
 
 interface ChatContextSummary {
@@ -223,6 +229,7 @@ const buildInstructions = (context: ChatContextSummary): string => `你是 luoom
 - 需要具体行情、持仓、Strategy、Watchlist、AlertPlan、建议、交易或笔记数据时，必须调用提供的工具，不得编造。
 - 工具返回 error 时如实解释，不得把失败描述成成功。
 - create/update/delete 工具在此对话中只生成待用户确认的草案；调用它们不代表已经执行。
+- 研究 Topic/Document/SubjectLink 也只能生成待确认草案；用户确认前不得写 Vault 或索引。
 - 只使用 Strategy、Watchlist、AlertPlan；不得生成或调用旧 Tactic、StockGroup、StockPool。
 - Strategy 发布、正式 persist 运行、Watchlist/AlertPlan 写入必须先生成草案并等待确认；不得调用内部 sync/migration 或 trade。
 - 历史消息中以「[草案处理记录]」开头的是用户在确认面板中的真实处理结果（ok 表示写入已执行，fail 表示已取消或执行失败）；已处理的草案不要再次提议。

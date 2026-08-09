@@ -2279,6 +2279,37 @@ export const registerRepositoryContractTests = (
         expect(await repos.researchIndex.listTopics({ subject: 'stock:600519.SH' })).toHaveLength(
           1,
         );
+        expect(
+          await repos.researchIndex.listSubjectLinks({
+            ownerKind: 'topic',
+            ownerId: 'topic_industry',
+          }),
+        ).toEqual([
+          {
+            ownerKind: 'topic',
+            ownerId: 'topic_industry',
+            subjectKind: 'stock',
+            subjectKey: '600519.SH',
+            relation: 'primary',
+          },
+        ]);
+        expect(await repos.researchIndex.listTopicDocuments('topic_industry')).toEqual([
+          { topicId: 'topic_industry', documentId: 'doc_report', relation: 'supporting' },
+        ]);
+        expect(
+          await repos.researchIndex.listSubjectLinks({
+            ownerKind: 'document',
+            ownerId: 'doc_report',
+          }),
+        ).toEqual([
+          {
+            ownerKind: 'document',
+            ownerId: 'doc_report',
+            subjectKind: 'stock',
+            subjectKey: '000001.SZ',
+            relation: 'related',
+          },
+        ]);
         expect(await repos.researchIndex.listDocuments({ topicId: 'topic_industry' })).toHaveLength(
           1,
         );

@@ -5,7 +5,7 @@
 > 输入：[ruo 能力迁移产品设计文档（PRD）](../prd/ruo-feature-migration-product-design.md)
 > 关联：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)
 > 范围：Phase 1A（研究档案）、1B（公司事件）、1C（可信度与运行状态）。Phase 2/3 只定义接口预留。
-> 更新：`ResearchNote`、股票中心研究档案及对应 Tool/Web 设计已由[研究主题与 Obsidian Vault 详细设计](./research-vault-detailed-design.md)替代；本文只继续作为 `StockEvent`、`DataProvenance`、`WorkflowRun` 与事件规则的契约
+> 更新：`ResearchNote`、股票中心研究档案及对应 Tool/Web 设计已由[研究主题与 Obsidian Vault 详细设计](./research-vault-detailed-design.md)替代；本文只继续作为 `StockEvent`、`DataProvenance`、`WorkflowRun` 与事件规则的契约。其余旧模型片段仅用于迁移追溯
 
 ## 1. 设计目标与约束
 

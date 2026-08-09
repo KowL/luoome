@@ -6,12 +6,18 @@ import {
   MoneySchema,
   type Quote,
   QuoteSchema,
+  type ReportSchema,
   TechnicalIndicatorsSchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
+import {
+  currentLimitUpDate,
+  loadStockLimitUpFacts,
+  StockLimitUpFactsSchema,
+} from '../internal/limit-up-facts.js';
 import { ensureStockStub, STOCK_ID_PATTERN } from '../internal/manual-entry.js';
 import {
   buildMarketCandles,
@@ -38,6 +44,10 @@ export const GetStockMarketViewInput = z.object({
   /** 搜索候选带回的股票名；完整 stockId 尚未入库时一并登记。 */
   stockName: z.string().trim().min(1).max(100).optional(),
   range: MarketViewRangeSchema.default('3m'),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
 });
 
 export const MarketCandleSchema = z.object({
@@ -77,6 +87,23 @@ const MarketDataStatusSchema = z.object({
   ),
 });
 
+export const MarketFactMarkerSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  factKind: z.enum([
+    'trade',
+    'advice',
+    'watch-trigger',
+    'strategy-signal',
+    'report',
+    'research',
+    'limit-up',
+  ]),
+  factId: z.string().min(1),
+  title: z.string().min(1).max(200),
+  href: z.string().min(1),
+  tone: z.enum(['action', 'advice', 'fact']),
+});
+
 export const GetStockMarketViewOutput = z.object({
   stock: z.object({
     id: z.string(),
@@ -89,7 +116,29 @@ export const GetStockMarketViewOutput = z.object({
   indicators: TechnicalIndicatorsSchema,
   indicatorsAsOf: z.string().nullable(),
   dataStatus: MarketDataStatusSchema,
+  markers: z.array(MarketFactMarkerSchema),
+  limitUp: StockLimitUpFactsSchema,
 });
+
+const factDateKey = (date: Date): string => dateInShanghai(date);
+
+const markerInRange = (date: Date, start: Date, end: Date): boolean => {
+  const key = factDateKey(date);
+  return key >= start.toISOString().slice(0, 10) && key <= end.toISOString().slice(0, 10);
+};
+
+const reportStockIds = (report: z.infer<typeof ReportSchema>): Set<string> => {
+  const ids = new Set<string>();
+  for (const section of report.sections) {
+    for (const block of section.blocks) {
+      if (block.kind !== 'list') continue;
+      for (const item of block.items) {
+        if (item.entityKind === 'stock' && item.entityId !== undefined) ids.add(item.entityId);
+      }
+    }
+  }
+  return ids;
+};
 
 export const getStockMarketViewTool = defineTool({
   name: 'get_stock_market_view',
@@ -113,7 +162,8 @@ export const getStockMarketViewTool = defineTool({
     if (stock === null) return errNotFound('Stock', input.stockId);
 
     const now = ctx.clock();
-    const { start, end } = normalizeMarketRange(input.range, now);
+    const rangeAnchor = input.date === undefined ? now : new Date(`${input.date}T00:00:00.000Z`);
+    const { start, end } = normalizeMarketRange(input.range, rangeAnchor);
     const market = ctx.adapters.market;
 
     // Quote 与 bars 在股票解析后并行拉取，失败各自回退 DB（§8.2）。
@@ -208,6 +258,129 @@ export const getStockMarketViewTool = defineTool({
     });
     const lastCandleDate = candles.at(-1)?.date ?? null;
 
+    const [trades, advices, triggers, signals, reports, researchLinks, limitUp] = await Promise.all(
+      [
+        ctx.user.defaultAccountId === ''
+          ? Promise.resolve([])
+          : ctx.repos.trade
+              .listByAccount(ctx.user.defaultAccountId)
+              .then((items) =>
+                items.filter(
+                  (trade) =>
+                    trade.stockId === stock.id && markerInRange(trade.executedAt, start, end),
+                ),
+              ),
+        ctx.repos.advice.query({
+          subjectKind: 'stock',
+          subjectId: stock.id,
+          includeExpired: true,
+          limit: 200,
+        }),
+        ctx.repos.watchTrigger
+          .listRecent({ limit: 10_000 })
+          .then((items) => items.filter((trigger) => trigger.stockId === stock.id).slice(0, 200)),
+        ctx.repos.strategyRun.signalsByStock(stock.id),
+        ctx.repos.report.list({
+          ...(ctx.user.defaultAccountId === ''
+            ? {}
+            : { scopeKey: `account:${ctx.user.defaultAccountId}` }),
+          limit: 200,
+        }),
+        ctx.repos.researchIndex.listSubjectLinks({
+          subjectKind: 'stock',
+          subjectKey: stock.id,
+        }),
+        loadStockLimitUpFacts(stock.id, stock.code, input.date ?? currentLimitUpDate(ctx), ctx),
+      ],
+    );
+    const markers = [
+      ...trades.map((trade) => ({
+        date: factDateKey(trade.executedAt),
+        factKind: 'trade' as const,
+        factId: trade.id,
+        title: `交易 ${trade.side}`,
+        href: `#holdings?stockId=${encodeURIComponent(stock.id)}`,
+        tone: 'action' as const,
+        at: trade.executedAt,
+      })),
+      ...advices
+        .filter((advice) => markerInRange(advice.createdAt, start, end))
+        .map((advice) => ({
+          date: factDateKey(advice.createdAt),
+          factKind: 'advice' as const,
+          factId: advice.id,
+          title: `Advice ${advice.decision}`,
+          href: `#advice?stockId=${encodeURIComponent(stock.id)}`,
+          tone: 'advice' as const,
+          at: advice.createdAt,
+        })),
+      ...triggers
+        .filter((trigger) => markerInRange(trigger.createdAt, start, end))
+        .map((trigger) => ({
+          date: factDateKey(trigger.createdAt),
+          factKind: 'watch-trigger' as const,
+          factId: trigger.id,
+          title: trigger.reason,
+          href: `#alerts?stockId=${encodeURIComponent(stock.id)}`,
+          tone: 'fact' as const,
+          at: trigger.createdAt,
+        })),
+      ...signals
+        .filter((signal) => markerInRange(signal.ts, start, end))
+        .map((signal) => ({
+          date: factDateKey(signal.ts),
+          factKind: 'strategy-signal' as const,
+          factId: signal.id,
+          title: `策略信号 ${signal.direction}`,
+          href: `#strategies?stockId=${encodeURIComponent(stock.id)}`,
+          tone: 'fact' as const,
+          at: signal.ts,
+        })),
+      ...reports
+        .filter(
+          (report) =>
+            reportStockIds(report).has(stock.id) &&
+            markerInRange(new Date(`${report.periodEnd}T00:00:00.000Z`), start, end),
+        )
+        .map((report) => ({
+          date: report.periodEnd,
+          factKind: 'report' as const,
+          factId: report.id,
+          title: report.title,
+          href: `#reports?stockId=${encodeURIComponent(stock.id)}`,
+          tone: 'fact' as const,
+          at: new Date(`${report.periodEnd}T00:00:00.000Z`),
+        })),
+      ...researchLinks
+        .filter(
+          (link) =>
+            (link.ownerKind === 'topic' || link.ownerKind === 'document') &&
+            markerInRange(now, start, end),
+        )
+        .map((link) => ({
+          date: factDateKey(now),
+          factKind: 'research' as const,
+          factId: link.ownerId,
+          title: `研究关联（${link.relation}）`,
+          href: `#research?stockId=${encodeURIComponent(stock.id)}`,
+          tone: 'fact' as const,
+          at: now,
+        })),
+      ...limitUp.recent
+        .filter((item) => markerInRange(new Date(`${item.date}T00:00:00.000Z`), start, end))
+        .map((item) => ({
+          date: item.date,
+          factKind: 'limit-up' as const,
+          factId: `${stock.id}:${item.date}`,
+          title: `${item.ladderLevel} 连板${item.reason === '--' ? '' : ` · ${item.reason}`}`,
+          href: `#market?stockId=${encodeURIComponent(stock.id)}&range=${encodeURIComponent(input.range)}&date=${encodeURIComponent(item.date)}`,
+          tone: 'fact' as const,
+          at: new Date(`${item.date}T00:00:00.000Z`),
+        })),
+    ]
+      .sort((a, b) => a.at.getTime() - b.at.getTime() || a.factId.localeCompare(b.factId))
+      .map(({ at: _at, ...marker }) => marker);
+
     return {
       stock: { id: stock.id, code: stock.code, name: stock.name, exchange: stock.exchange },
       quote: { quote, previousClose, change, changePct },
@@ -223,6 +396,8 @@ export const getStockMarketViewTool = defineTool({
         marketSession: session,
         warnings: status.warnings,
       },
+      markers,
+      limitUp,
     };
   },
 });

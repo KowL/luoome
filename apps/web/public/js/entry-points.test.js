@@ -53,6 +53,22 @@ describe('报告页入口', () => {
   });
 });
 
+describe('研究 managed 写入入口', () => {
+  it('提供创建主题、导入资料和写入状态容器', () => {
+    expect(html).toContain('id="research-create-topic-btn"');
+    expect(html).toContain('id="research-import-document-btn"');
+    expect(html).toContain('id="research-import-remote-btn"');
+    expect(html).toContain('id="research-write-status"');
+  });
+
+  it('页面写入经过预览确认和统一 tool call', () => {
+    expect(read('./pages.js')).toContain('确认写入 managed Vault');
+    expect(read('./pages.js')).toContain('/api/tools/${' + 'toolName}/call');
+    expect(read('./pages.js')).toContain('import_local_research_document');
+    expect(read('./pages.js')).toContain('import_remote_research_document');
+  });
+});
+
 describe('看盘主页结构', () => {
   it('指数条 / 实时看板 / 今日预警容器齐全', () => {
     expect(html).toContain('id="dashboard-indices"');

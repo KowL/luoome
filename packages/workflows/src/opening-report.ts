@@ -160,6 +160,63 @@ export const marketPulse = (
   };
 };
 
+const ladderStockId = (code: string): string =>
+  `${code}.${code.startsWith('6') ? 'SH' : code.startsWith('8') || code.startsWith('4') ? 'BJ' : 'SZ'}`;
+
+const attachLadderFacts = async (
+  base: { section: ReportSection; evidence: ReportEvidence[] },
+  date: string,
+  now: Date,
+  ctx: WorkflowContext,
+): Promise<{ section: ReportSection; evidence: ReportEvidence[] }> => {
+  const result = await ctx.tools.limit_up_ladder.execute({ date, days: 15 });
+  const evidence = localEvidence(
+    'market-pulse:limit-up-ladder',
+    'market-pulse.limit-up-ladder',
+    now,
+    'limit-up-ladder',
+  );
+  if (!result.ok) {
+    return {
+      evidence: [...base.evidence, evidence],
+      section: {
+        ...base.section,
+        status: base.section.status === 'complete' ? 'partial' : base.section.status,
+        evidenceIds: [...base.section.evidenceIds, evidence.id],
+        missingDimensions: [
+          ...base.section.missingDimensions,
+          missing(
+            'market-pulse.limit-up-ladder',
+            'message' in result.error ? result.error.message : result.error.kind,
+            result.error.kind,
+          ),
+        ],
+      },
+    };
+  }
+  const entries = result.data.levels
+    .flatMap((level) => level.stocks.map((stock) => ({ level: level.level, stock })))
+    .slice(0, 20);
+  const list = {
+    kind: 'list' as const,
+    items: entries.map(({ level, stock }) => ({
+      title: `${stock.name} · ${level} 连板`,
+      detail: stock.reason === '--' ? '原因暂缺' : stock.reason,
+      entityKind: 'stock' as const,
+      entityId: ladderStockId(stock.code),
+    })),
+  };
+  return {
+    evidence: [...base.evidence, evidence],
+    section: {
+      ...base.section,
+      dataAsOf: result.data.asOf,
+      blocks: [...base.section.blocks, list],
+      evidenceIds: [...base.section.evidenceIds, evidence.id],
+    },
+  };
+};
+
 const eventsSection = async (
   date: string,
   now: Date,
@@ -464,7 +521,7 @@ const runOpeningReport = async (
         const sentimentResult = await ctx.tools.get_ashare_sentiment.execute({
           date: marketDate,
         });
-        const market = sentimentResult.ok
+        const marketBase = sentimentResult.ok
           ? marketPulse(sentimentResult.data.snapshot)
           : unavailableSection(
               'market-pulse',
@@ -474,7 +531,8 @@ const runOpeningReport = async (
               'ashare-sentiment',
               sentimentResult.error.kind,
             );
-        const [events, portfolio, plans, watchlists] = await Promise.all([
+        const [market, events, portfolio, plans, watchlists] = await Promise.all([
+          attachLadderFacts(marketBase, marketDate, generatedAt, ctx),
           eventsSection(date, generatedAt, ctx),
           portfolioSection(input.scope, generatedAt, ctx),
           alertPlansSection(generatedAt, ctx),

@@ -377,10 +377,10 @@ const resolveMembers = async (
   avgCostByStock: ReadonlyMap<string, Money>,
   ctx: WorkflowContext,
 ): Promise<{ members: readonly PoolMember[]; skipReason?: string }> => {
-  const watchlist = await ctx.repos.watchlist.findById(pool.watchlistId);
-  if (watchlist === null) return { members: [], skipReason: 'watchlist-missing' };
-  if (!watchlist.enabled) return { members: [], skipReason: 'watchlist-disabled' };
-  const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
+  const result = await ctx.tools.get_watchlist.execute({ watchlistId: pool.watchlistId });
+  if (!result.ok) return { members: [], skipReason: 'watchlist-missing' };
+  if (!result.data.watchlist.enabled) return { members: [], skipReason: 'watchlist-disabled' };
+  const members = result.data.members.map((item) => item.member);
   return {
     members: members.map((member) => ({
       stockId: member.stockId,
@@ -556,7 +556,9 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
     const members = state.members.get(pool.id) ?? [];
     if (members.length === 0) continue;
 
-    const allStates = await ctx.repos.watchRuleState.listByPool(pool.id);
+    const statesResult = await ctx.tools.list_watch_rule_states.execute({ poolId: pool.id });
+    if (!statesResult.ok) return statesResult;
+    const allStates = statesResult.data.states;
     const stateByKey = new Map<string, WatchRuleState>();
     for (const s of allStates) {
       stateByKey.set(`${s.stockId}|${s.ruleId}`, s);
@@ -1005,16 +1007,33 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     Number(
       (ctx as unknown as { config?: { globalDailyLimit?: number } }).config?.globalDailyLimit,
     ) || GLOBAL_DAILY_LIMIT_DEFAULT;
+  const cooldownSince = state.pools.reduce((earliest, pool) => {
+    const cutoff = new Date(now.getTime() - pool.cooldownMinutes * 60_000);
+    return cutoff < earliest ? cutoff : earliest;
+  }, now);
 
-  // 已用额度（读库，避免本轮自己写入后被重复计入；先读一次，后续本轮新写入也要算）
-  const baselineGlobal = await ctx.repos.watchTrigger.countAttemptedSince(todayStart, null);
-  const baselineByPool = new Map<string, number>();
-  for (const pool of state.pools) {
-    baselineByPool.set(
-      pool.id,
-      await ctx.repos.watchTrigger.countAttemptedSince(todayStart, pool.id),
-    );
-  }
+  // 已用额度与 cooldown 一次性通过 workflow-only tool 快照，避免 workflow 直连 repo。
+  const deliveryStats = await ctx.tools.get_watch_trigger_delivery_stats.execute({
+    since: todayStart,
+    cooldownSince,
+    poolIds: state.pools.map((pool) => pool.id),
+    cooldownKeys: state.candidates.map((candidate) => ({
+      poolId: candidate.poolId,
+      stockId: candidate.stockId,
+      ruleId: candidate.ruleId,
+    })),
+  });
+  if (!deliveryStats.ok) return deliveryStats;
+  const baselineGlobal = deliveryStats.data.globalAttempted;
+  const baselineByPool = new Map(
+    deliveryStats.data.byPool.map((item) => [item.poolId, item.attempted] as const),
+  );
+  const cooldownByKey = new Map(
+    deliveryStats.data.cooldowns.map((item) => [
+      `${item.key.poolId}|${item.key.stockId}|${item.key.ruleId}`,
+      item.trigger,
+    ]),
+  );
 
   const out: WatchTrigger[] = [];
   let suppressedByCooldown = 0;
@@ -1027,10 +1046,11 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     if (pool === undefined) continue;
     // 7. cooldown（先于 daily limit，§4 关键顺序约束；试跑 notify=false 同样询问，但命中只落抑制不占配额）
     const cdCutoff = new Date(now.getTime() - pool.cooldownMinutes * 60_000);
-    const cooldownHit = await ctx.repos.watchTrigger.lastForKey(
-      { poolId: cand.poolId, stockId: cand.stockId, ruleId: cand.ruleId },
-      cdCutoff,
-    );
+    const cooldown = cooldownByKey.get(`${cand.poolId}|${cand.stockId}|${cand.ruleId}`);
+    const cooldownHit =
+      cooldown !== undefined && cooldown !== null && cooldown.createdAt >= cdCutoff
+        ? cooldown
+        : null;
     let deliveryStatus: DeliveryStatus = 'pending';
 
     // 9. 优先级映射（normal → not-requested；试跑 / recovered + 默认关 → not-requested）
@@ -1084,13 +1104,17 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
       notified: (ATTEMPTED_DELIVERY_STATUSES as readonly string[]).includes(deliveryStatus),
     };
     assertWatchTriggerInvariants(persisted);
-    await ctx.repos.watchTrigger.save(persisted);
+    const saved = await ctx.tools.save_watch_trigger.execute(persisted);
+    if (!saved.ok) return saved;
     out.push(persisted);
   }
 
   // 写回 WatchRuleState
   if (state.nextStates.length > 0) {
-    await ctx.repos.watchRuleState.upsertMany(state.nextStates);
+    const savedStates = await ctx.tools.save_watch_rule_states.execute({
+      states: [...state.nextStates],
+    });
+    if (!savedStates.ok) return savedStates;
   }
 
   return {
@@ -1150,11 +1174,12 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     } else {
       notificationId = r.data.notification.id;
     }
-    await ctx.repos.watchTrigger.setDeliveryStatus(
-      group.map((t) => t.id),
-      deliveryStatus,
-      notificationId,
-    );
+    const delivery = await ctx.tools.set_watch_trigger_delivery_status.execute({
+      triggerIds: group.map((t) => t.id),
+      status: deliveryStatus,
+      ...(notificationId === undefined ? {} : { notificationId }),
+    });
+    if (!delivery.ok) return delivery;
   }
 
   return IntradayWatchOutput.parse({

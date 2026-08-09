@@ -1,6 +1,6 @@
 # 个股行情查看详细设计：Market View + Web 图表
 
-> 状态：设计稿（待实施）
+> 状态：Phase 1/2 已实施；Phase 3 的事实关联、图表标记与日期深链接已实施
 > 日期：2026-07-26
 > 范围：个股实时快照、日 K、成交量、指标摘要、数据来源与新鲜度；不包含完整分时和分钟 K
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md) §6、[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)

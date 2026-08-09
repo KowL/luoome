@@ -79,6 +79,7 @@ const quoteFromDailyBar = (bar: DailyBar, fetchedAt: Date): Quote => ({
 const resolveVersion = async (
   strategyId: string,
   requestedVersionId: string | undefined,
+  allowDraft: boolean,
   ctx: ToolContext,
 ): Promise<
   StrategyVersion | ReturnType<typeof errInvalidInput> | ReturnType<typeof errNotFound>
@@ -90,12 +91,11 @@ const resolveVersion = async (
   if (versionId === undefined) return errInvalidInput('active Strategy 缺少 currentVersionId');
   const version = await ctx.repos.strategy.findVersionById(versionId);
   if (version === null) return errNotFound('StrategyVersion', versionId);
-  if (
-    version.strategyId !== strategy.id ||
-    version.validationStatus !== 'valid' ||
-    version.publishedAt === undefined
-  ) {
-    return errInvalidInput('run_strategy 只能运行同一 Strategy 的 published valid version');
+  if (version.strategyId !== strategy.id || version.validationStatus !== 'valid') {
+    return errInvalidInput('run_strategy 只能运行同一 Strategy 的 valid version');
+  }
+  if (!allowDraft && version.publishedAt === undefined) {
+    return errInvalidInput('persist=true 只能运行同一 Strategy 的 published valid version');
   }
   return version;
 };
@@ -121,7 +121,7 @@ export const runStrategyTool = defineTool({
         'mode=scan/scheduled 不支持 asOf：bars 会取历史而 quote 仍是实时，时点不一致；需要历史时点请用 mode=replay + 显式 stockIds',
       );
     }
-    const resolved = await resolveVersion(input.strategyId, input.versionId, ctx);
+    const resolved = await resolveVersion(input.strategyId, input.versionId, !input.persist, ctx);
     if ('ok' in resolved) return resolved;
     const version = resolved;
     const leaseOwner = `run-strategy:${globalThis.crypto.randomUUID()}`;

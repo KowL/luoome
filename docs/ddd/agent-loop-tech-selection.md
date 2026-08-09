@@ -1,6 +1,6 @@
 # Agent Loop 技术选型分析
 
-> 状态：**草案**（待决策）。本文档是 chat/工作流升级为真 agent loop 之前的库选型与契约设计分析；不承诺实现计划，亦不替代后续具体设计稿。实现以代码为准。
+> 状态：**历史分析**。本文记录 chat/工作流升级为真 agent loop 之前的库选型；当前 AI SDK 接入与 Web chat 实现是事实来源，不按本文的旧缺口重复建设。
 > 关联：[web-chat-design.md](./web-chat-design.md)（v1 实现的「两轮 generate + draft-and-confirm」基线）、[ARCHITECTURE.md](../ARCHITECTURE.md)（LlmManager 与 tool 抽象边界）、[SECURITY.md](../SECURITY.md)（advice ≠ trade 硬边界）。
 > 不关联：`apps/web/src/chat.ts` 当前实现——它是本文档要替换的对象，不是事实来源。
 

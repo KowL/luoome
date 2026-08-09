@@ -3444,6 +3444,78 @@ textarea::placeholder {
   flex: 1;
 }
 
+.research-toolbar {
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.research-index-fresh {
+  color: var(--pos);
+}
+
+.research-index-stale,
+.research-index-unavailable {
+  color: var(--warning, #f5c542);
+}
+
+.research-inbox {
+  min-height: 1.2rem;
+}
+
+.research-write-status {
+  min-height: 1.2rem;
+  margin-top: 0.55rem;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  white-space: pre-line;
+}
+
+.research-write-status.success {
+  color: var(--pos);
+}
+
+.research-write-status.error {
+  color: var(--danger);
+}
+
+.market-markers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.market-marker {
+  display: inline-flex;
+  max-width: 22rem;
+  overflow: hidden;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-marker-action {
+  border-color: rgba(251, 92, 108, 0.45);
+}
+
+.market-marker-advice {
+  border-color: rgba(245, 197, 66, 0.55);
+}
+
+.market-marker-fact {
+  border-color: rgba(94, 168, 255, 0.45);
+}
+
 .research-results-list {
   list-style: none;
   margin: 0;
@@ -4060,6 +4132,7 @@ body > .modal {
 .modal .hint {
   color: var(--muted);
   font-size: var(--text-xs);
+  white-space: pre-line;
 }
 
 @keyframes modal-in {
@@ -5221,6 +5294,18 @@ body > .modal {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2, 8px);
+}
+
+.market-limit-up-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.market-limit-up-row {
+  display: grid;
+  grid-template-columns: 7rem 6rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: baseline;
 }
 
 @media (max-width: 720px) {

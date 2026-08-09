@@ -306,6 +306,12 @@ export const strategyVersions = sqliteTable(
     definitionHash: text('definition_hash').notNull(),
     parentVersionId: text('parent_version_id'),
     changeSummary: text('change_summary'),
+    factReferences: text('fact_references_json', { mode: 'json' }).$type<
+      readonly string[] | null
+    >(),
+    agentTrace: text('agent_trace_json', { mode: 'json' }).$type<
+      StrategyVersion['agentTrace'] | null
+    >(),
     validationStatus: text('validation_status')
       .$type<StrategyVersion['validationStatus']>()
       .notNull(),
@@ -861,6 +867,16 @@ export const researchDocumentChunks = sqliteTable(
     pk: primaryKey({ columns: [t.documentId, t.ordinal], name: 'research_document_chunks_pk' }),
   }),
 );
+// FTS5 virtual table is created by ensureSchema; this declaration only supplies
+// Drizzle's typed query surface and does not create a second ordinary table.
+export const researchDocumentFts = sqliteTable('research_document_fts', {
+  documentId: text('document_id').notNull(),
+  ordinal: integer('ordinal').notNull(),
+  contentHash: text('content_hash').notNull(),
+  title: text('title').notNull(),
+  headingPath: text('heading_path').notNull(),
+  body: text('body').notNull(),
+});
 export const researchVaultSyncRuns = sqliteTable(
   'research_vault_sync_runs',
   {
@@ -1058,6 +1074,7 @@ export const schema = {
   researchTopicDocuments,
   researchSubjectLinks,
   researchDocumentChunks,
+  researchDocumentFts,
   researchVaultSyncRuns,
   stockEvents,
   workflowRuns,

@@ -49,6 +49,10 @@ const toVersion = (row: VersionRow): StrategyVersion => ({
   definitionHash: row.definitionHash,
   ...(row.parentVersionId === null ? {} : { parentVersionId: row.parentVersionId }),
   ...(row.changeSummary === null ? {} : { changeSummary: row.changeSummary }),
+  ...(row.factReferences === null ? {} : { factReferences: [...row.factReferences] }),
+  ...(row.agentTrace === null || row.agentTrace === undefined
+    ? {}
+    : { agentTrace: [...row.agentTrace] }),
   validationStatus: row.validationStatus,
   validationErrors: [...row.validationErrors],
   ...(row.publishedAt === null ? {} : { publishedAt: row.publishedAt }),
@@ -171,6 +175,8 @@ export class DrizzleStrategyRepository implements StrategyRepository {
         definitionHash: version.definitionHash,
         parentVersionId: version.parentVersionId ?? null,
         changeSummary: version.changeSummary ?? null,
+        factReferences: version.factReferences ?? null,
+        agentTrace: version.agentTrace ?? null,
         validationStatus: version.validationStatus,
         validationErrors: [...version.validationErrors],
         publishedAt: version.publishedAt ?? null,

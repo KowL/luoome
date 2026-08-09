@@ -234,6 +234,7 @@ export interface ResearchSearchQuery {
   readonly kind?: ResearchDocumentKind;
   readonly limit?: number;
 }
+export type ResearchSearchCapability = 'fts' | 'metadata';
 export interface ResearchIndexApplySummary {
   readonly added: number;
   readonly updated: number;
@@ -259,8 +260,16 @@ export interface ResearchIndexRepository {
   findDocument(id: string): Promise<ResearchDocumentIndex | null>;
   listTopics(query: ResearchTopicQuery): Promise<readonly ResearchTopicIndex[]>;
   listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]>;
+  searchCapability(): ResearchSearchCapability;
   searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]>;
   listStockSubjectKeys(): Promise<readonly string[]>;
+  listSubjectLinks(input?: {
+    readonly ownerKind?: ResearchSubjectLink['ownerKind'];
+    readonly ownerId?: string;
+    readonly subjectKind?: ResearchSubjectLink['subjectKind'];
+    readonly subjectKey?: string;
+  }): Promise<readonly ResearchSubjectLink[]>;
+  listTopicDocuments(topicId: string): Promise<readonly ResearchTopicDocument[]>;
 }
 export interface ResearchVaultSyncRunRepository {
   save(run: ResearchVaultSyncRun): Promise<void>;

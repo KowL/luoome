@@ -52,8 +52,30 @@ export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
   readonly llmReasoning?: string; // LLM 原始推理（用于审计）
+  readonly ladder?: AdviceLadderSnapshot;
   readonly dataAsOf: Date; // 数据截止时间
 }
+
+/** 市场观点引用的天梯摘要，避免把完整快照复制进 Advice JSON。 */
+export interface AdviceLadderSnapshot {
+  readonly date: string;
+  readonly total: number;
+  readonly maxLevel: number;
+  readonly source: string;
+  readonly levels: readonly { readonly level: number; readonly count: number }[];
+  readonly warnings: readonly string[];
+}
+
+export const AdviceLadderSnapshotSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  total: z.number().int().nonnegative(),
+  maxLevel: z.number().int().nonnegative(),
+  source: z.string().min(1),
+  levels: z.array(
+    z.object({ level: z.number().int().positive(), count: z.number().int().nonnegative() }),
+  ),
+  warnings: z.array(z.string()),
+});
 
 export interface Advice {
   readonly id: string;
@@ -129,6 +151,7 @@ export const AdviceDataSnapshotSchema = z.object({
   quotes: z.record(z.string(), QuoteSchema).optional(),
   indicators: z.record(z.string(), TechnicalIndicatorsSchema).optional(),
   llmReasoning: z.string().optional(),
+  ladder: AdviceLadderSnapshotSchema.optional(),
   dataAsOf: z.coerce.date(),
 });
 

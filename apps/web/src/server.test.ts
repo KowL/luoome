@@ -562,6 +562,11 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       new Request(`http://test/api/strategy-runs/compare?strategyId=${strategyId}`),
     );
     expect(diff.status).toBe(404);
+
+    const definitionDiff = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/definition-diff`),
+    );
+    expect(definitionDiff.status).toBe(400);
   });
 
   it('策略工作台 pause/resume routes 复用生命周期 tool 并保留 mutation 防护', async () => {

@@ -1,23 +1,40 @@
+import { createHash } from 'node:crypto';
+
 import { parseResearchMarkdown } from '@luoome/adapters';
 import {
+  AdviceSchema,
+  EvidenceRefSchema,
   normalizeResearchSubject,
+  ResearchBriefSchema,
   type ResearchDocumentChunk,
   type ResearchDocumentIndex,
   ResearchDocumentIndexSchema,
   ResearchDocumentKindSchema,
   type ResearchIndexStatus,
   type ResearchSubjectLink,
+  ResearchSubjectLinkSchema,
   type ResearchTopicDocument,
+  ResearchTopicDocumentSchema,
   type ResearchTopicIndex,
   ResearchTopicIndexSchema,
   ResearchTopicKindSchema,
   type ResearchVaultEntry,
   type ResearchVaultSyncRun,
+  researchDocumentDate,
+  StockEventSchema,
+  StrategySignalSchema,
   type ToolContext,
+  TradeSchema,
+  WatchTriggerSchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
+import { defineTool, errAdapterError, errInvalidInput, errNotFound } from '../define-tool.js';
+import {
+  currentLimitUpDate,
+  loadStockLimitUpFacts,
+  StockLimitUpFactsSchema,
+} from '../internal/limit-up-facts.js';
 
 const availability = z.enum(['available', 'missing', 'invalid', 'conflict']);
 const indexStatusSchema = z.object({
@@ -28,6 +45,55 @@ const indexStatusSchema = z.object({
 });
 const topicSummary = ResearchTopicIndexSchema;
 const documentSummary = ResearchDocumentIndexSchema;
+const timelineItem = z.object({
+  id: z.string().min(1),
+  kind: z.enum([
+    'topic',
+    'document',
+    'stock-event',
+    'strategy-signal',
+    'watch-trigger',
+    'advice',
+    'trade',
+    'limit-up',
+  ]),
+  occurredAt: z.coerce.date(),
+  title: z.string().min(1),
+  summary: z.string().optional(),
+});
+const topicSections = z.object({
+  evidence: z.array(z.string().max(500)).max(20),
+  counterEvidence: z.array(z.string().max(500)).max(20),
+  unresolved: z.array(z.string().max(500)).max(20),
+});
+
+const extractTopicSections = (body: string): z.infer<typeof topicSections> => {
+  const sections: Record<keyof z.infer<typeof topicSections>, string[]> = {
+    evidence: [],
+    counterEvidence: [],
+    unresolved: [],
+  };
+  let current: keyof z.infer<typeof topicSections> | null = null;
+  const headingMap: Record<string, keyof z.infer<typeof topicSections>> = {
+    支持证据: 'evidence',
+    证据: 'evidence',
+    反证与风险: 'counterEvidence',
+    反证: 'counterEvidence',
+    待验证问题: 'unresolved',
+    未解决问题: 'unresolved',
+  };
+  for (const rawLine of body.split('\n')) {
+    const heading = rawLine.match(/^#{1,6}\s+(.+)$/)?.[1]?.trim();
+    if (heading !== undefined) {
+      current = headingMap[heading] ?? null;
+      continue;
+    }
+    if (current === null) continue;
+    const value = rawLine.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, '').trim();
+    if (value.length > 0 && !value.startsWith('```')) sections[current].push(value.slice(0, 500));
+  }
+  return topicSections.parse(sections);
+};
 type Frontmatter = Record<string, string | string[] | undefined>;
 
 const vaultRequired = (ctx: ToolContext) =>
@@ -158,6 +224,11 @@ const parseEntry = async (
         documentId,
         relation: 'counter-evidence' as const,
       })),
+      ...listValue(field(frontmatter, 'update_documents')).map((documentId) => ({
+        topicId: id,
+        documentId,
+        relation: 'update' as const,
+      })),
     ];
     return {
       topic,
@@ -220,9 +291,16 @@ const currentIndexStatus = async (
   }
   return {
     vaultId,
-    freshness: latest?.status === 'partial' || latest?.status === 'failed' ? 'stale' : 'fresh',
+    freshness:
+      latest === undefined || latest.status === 'partial' || latest.status === 'failed'
+        ? 'stale'
+        : 'fresh',
     ...(latest?.finishedAt ? { lastSyncAt: latest.finishedAt } : {}),
-    ...(latest?.error ? { diagnostic: latest.error } : {}),
+    ...(latest?.error
+      ? { diagnostic: latest.error }
+      : latest === undefined
+        ? { diagnostic: '尚未完成一次 Vault 同步' }
+        : {}),
   };
 };
 
@@ -268,7 +346,11 @@ export const GetResearchTopicInput = z.object({ topicId: z.string().min(1) });
 export const GetResearchTopicOutput = z.object({
   topic: topicSummary,
   documents: z.array(documentSummary),
-  subjects: z.array(z.record(z.string(), z.unknown())),
+  subjects: z.array(ResearchSubjectLinkSchema),
+  documentRelations: z.array(ResearchTopicDocumentSchema),
+  currentThesis: documentSummary.optional(),
+  sections: topicSections,
+  timeline: z.array(timelineItem),
   obsidianUri: z.string().optional(),
   indexStatus: indexStatusSchema,
 });
@@ -285,10 +367,50 @@ export const getResearchTopicTool = defineTool({
       topicId: input.topicId,
       limit: 200,
     });
+    const [subjects, documentRelations] = await Promise.all([
+      ctx.repos.researchIndex.listSubjectLinks({ ownerKind: 'topic', ownerId: topic.id }),
+      ctx.repos.researchIndex.listTopicDocuments(topic.id),
+    ]);
+    let sections = topicSections.parse({ evidence: [], counterEvidence: [], unresolved: [] });
+    if (ctx.researchVault) {
+      try {
+        const content = await ctx.researchVault.readText({
+          relativePath: topic.relativePath,
+          maxBytes: 64 * 1024,
+        });
+        sections = extractTopicSections(parseResearchMarkdown(content).body);
+      } catch (error) {
+        ctx.logger.warn('get_research_topic: 主题正文不可读，保留索引结果', {
+          topicId: topic.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const currentThesis = documents.find((document) => document.kind === 'thesis');
+    const timeline = [
+      {
+        id: topic.id,
+        kind: 'topic' as const,
+        occurredAt: topic.indexedAt,
+        title: topic.title,
+        ...(topic.summary === undefined ? {} : { summary: topic.summary }),
+      },
+      ...documents.map((document) => ({
+        id: document.id,
+        kind: 'document' as const,
+        occurredAt: researchDocumentDate(document),
+        title: document.title,
+        ...(document.excerpt === undefined ? {} : { summary: document.excerpt }),
+      })),
+    ].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || a.id.localeCompare(b.id));
     return {
       topic,
       documents: [...documents],
-      subjects: [],
+      subjects: [...subjects],
+      documentRelations: [...documentRelations],
+      ...(currentThesis === undefined ? {} : { currentThesis }),
+      sections,
+      timeline,
       ...(ctx.researchVault
         ? { obsidianUri: ctx.researchVault.buildOpenUri(topic.relativePath) }
         : {}),
@@ -401,6 +523,7 @@ export const SearchResearchDocumentsOutput = z.object({
   hits: z.array(
     z.object({
       document: documentSummary,
+      ordinal: z.number().int().nonnegative().optional(),
       headingPath: z.string().optional(),
       snippet: z.string(),
       score: z.number().optional(),
@@ -425,9 +548,184 @@ export const searchResearchDocumentsTool = defineTool({
     });
     return {
       hits: [...hits],
-      capability: 'metadata' as const,
+      capability: ctx.repos.researchIndex.searchCapability(),
       indexStatus: await currentIndexStatus(ctx, hits[0]?.document.vaultId),
     };
+  },
+});
+
+export const BuildResearchBriefInput = z.object({
+  scope: z.string().trim().min(1).max(500),
+  stockId: z.string().min(1).optional(),
+  topicId: z.string().min(1).optional(),
+  subject: z.string().trim().min(1).optional(),
+  limit: z.number().int().positive().max(20).default(10),
+});
+export const BuildResearchBriefOutput = ResearchBriefSchema;
+
+const boundedEvidenceText = (parts: readonly (string | undefined)[]): string =>
+  parts
+    .filter((part): part is string => part !== undefined && part.trim().length > 0)
+    .join('；')
+    .trim()
+    .slice(0, 500);
+
+/**
+ * 生成只含真实对象引用的确定性 ResearchBrief。
+ * 这里不调用 LLM，也不写入任何仓储；Agent 可以在此结果之上提出草案，但不能伪造引用。
+ */
+export const buildResearchBriefTool = defineTool({
+  name: 'build_research_brief',
+  description: '按研究范围聚合可审计事实并生成结构化 ResearchBrief；不写入研究资料',
+  sideEffect: 'read',
+  input: BuildResearchBriefInput,
+  output: BuildResearchBriefOutput,
+  handler: async (input, ctx) => {
+    const failures: string[] = [];
+    const safe = async <T>(label: string, run: () => Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await run();
+      } catch (error) {
+        failures.push(label);
+        ctx.logger.warn('build_research_brief: 事实源读取失败，保留部分结果', {
+          source: label,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return fallback;
+      }
+    };
+
+    const hits = await safe(
+      'research-documents',
+      () =>
+        ctx.repos.researchIndex.searchDocuments({
+          text: input.scope,
+          ...(input.topicId ? { topicId: input.topicId } : {}),
+          ...(input.subject ? { subject: input.subject } : {}),
+          limit: input.limit,
+        }),
+      [],
+    );
+    const refs: z.infer<typeof EvidenceRefSchema>[] = hits.map((hit) =>
+      EvidenceRefSchema.parse({
+        kind: 'document-chunk',
+        id: `${hit.document.id}:${hit.ordinal ?? 0}`,
+        documentId: hit.document.id,
+        ordinal: hit.ordinal ?? 0,
+        relativePath: hit.document.relativePath,
+        headingPath: hit.headingPath ?? '',
+        quote: hit.snippet.slice(0, 500),
+        occurredAt: researchDocumentDate(hit.document),
+      }),
+    );
+    const documentStatuses = hits.map((hit) =>
+      hit.document.sourceStatus === 'verified' ? 'verified' : 'unverified',
+    );
+
+    const stockId = input.stockId;
+    if (stockId !== undefined) {
+      const [events, signals, triggers, advices] = await Promise.all([
+        safe('stock-events', () => ctx.repos.stockEvent.list({ stockId, limit: input.limit }), []),
+        safe('strategy-signals', () => ctx.repos.strategyRun.signalsByStock(stockId), []),
+        safe(
+          'watch-triggers',
+          () =>
+            ctx.repos.watchTrigger
+              .listRecent({ limit: 10_000 })
+              .then((items) =>
+                items.filter((item) => item.stockId === stockId).slice(0, input.limit),
+              ),
+          [],
+        ),
+        safe(
+          'advices',
+          () =>
+            ctx.repos.advice.query({
+              subjectKind: 'stock',
+              subjectId: stockId,
+              includeExpired: true,
+              limit: input.limit,
+            }),
+          [],
+        ),
+      ]);
+      refs.push(
+        ...events.slice(0, input.limit).map((event) =>
+          EvidenceRefSchema.parse({
+            kind: 'stock-event',
+            id: event.id,
+            occurredAt: event.occursAt,
+            quote: boundedEvidenceText([event.title, event.description]),
+          }),
+        ),
+        ...signals.slice(0, input.limit).map((signal) =>
+          EvidenceRefSchema.parse({
+            kind: 'strategy-signal',
+            id: signal.id,
+            occurredAt: signal.ts,
+            quote: boundedEvidenceText(signal.evidence),
+          }),
+        ),
+        ...triggers.slice(0, input.limit).map((trigger) =>
+          EvidenceRefSchema.parse({
+            kind: 'watch-trigger',
+            id: trigger.id,
+            occurredAt: trigger.createdAt,
+            quote: boundedEvidenceText([trigger.reason, ...trigger.evidence]),
+          }),
+        ),
+        ...advices.slice(0, input.limit).map((advice) =>
+          EvidenceRefSchema.parse({
+            kind: 'advice',
+            id: advice.id,
+            occurredAt: advice.createdAt,
+            quote: boundedEvidenceText([advice.reasoning.premise, ...advice.reasoning.evidence]),
+          }),
+        ),
+      );
+    }
+
+    const facts = refs.slice(0, 50);
+    const sourceStatus =
+      facts.length === 0
+        ? ('unavailable' as const)
+        : documentStatuses.length === 0 || documentStatuses.every((status) => status === 'verified')
+          ? ('verified' as const)
+          : documentStatuses.every((status) => status === 'unverified')
+            ? ('unverified' as const)
+            : ('mixed' as const);
+    const unknowns = [
+      ...(facts.length === 0 ? ['未找到与当前 scope 匹配的可引用事实'] : []),
+      ...failures.map((source) => `事实源 ${source} 不可用，结果可能不完整`),
+      ...(sourceStatus === 'unverified' || sourceStatus === 'mixed'
+        ? ['部分研究资料缺少可验证来源']
+        : []),
+    ];
+    return ResearchBriefSchema.parse({
+      scope: input.scope,
+      conclusion:
+        facts.length === 0
+          ? '当前范围没有足够的可引用事实，不能形成完整结论。'
+          : `已聚合 ${facts.length} 条可审计事实；结论仅基于这些引用，仍需结合未知项核验。`,
+      facts,
+      inferences: [],
+      counterEvidence: [],
+      risks: [
+        ...(sourceStatus === 'unverified' || sourceStatus === 'mixed'
+          ? ['研究资料来源未全部验证']
+          : []),
+        ...(failures.length > 0 ? ['部分事实源读取失败'] : []),
+      ],
+      unknowns,
+      dataAsOf: ctx.clock(),
+      sourceStatus,
+      suggestedFollowUps:
+        facts.length === 0
+          ? ['扩大研究范围或先同步 Research Vault', '补充结构化事件、信号或 Advice 事实']
+          : sourceStatus === 'verified'
+            ? ['检查反证与风险是否有新的结构化事实']
+            : ['核验未验证资料的来源与发布时间'],
+    });
   },
 });
 
@@ -439,6 +737,13 @@ export const GetStockResearchViewOutput = z.object({
   stockId: z.string(),
   topics: z.array(topicSummary),
   documents: z.array(documentSummary),
+  events: z.array(StockEventSchema),
+  signals: z.array(StrategySignalSchema),
+  triggers: z.array(WatchTriggerSchema),
+  advices: z.array(AdviceSchema),
+  trades: z.array(TradeSchema),
+  timeline: z.array(timelineItem),
+  limitUp: StockLimitUpFactsSchema,
   indexStatus: indexStatusSchema,
 });
 export const getStockResearchViewTool = defineTool({
@@ -449,14 +754,126 @@ export const getStockResearchViewTool = defineTool({
   output: GetStockResearchViewOutput,
   handler: async (input, ctx) => {
     const subject = `stock:${input.stockId}`;
-    const [topics, documents] = await Promise.all([
-      ctx.repos.researchIndex.listTopics({ subject, limit: input.limit }),
-      ctx.repos.researchIndex.listDocuments({ subject, limit: input.limit }),
-    ]);
+    const [topics, directDocuments, events, signals, triggers, advices, trades] = await Promise.all(
+      [
+        ctx.repos.researchIndex.listTopics({ subject, limit: input.limit }),
+        ctx.repos.researchIndex.listDocuments({ subject, limit: input.limit }),
+        ctx.repos.stockEvent.list({ stockId: input.stockId, limit: input.limit }),
+        ctx.repos.strategyRun.signalsByStock(input.stockId),
+        ctx.repos.watchTrigger
+          .listRecent({ limit: 10_000 })
+          .then((items) =>
+            items.filter((trigger) => trigger.stockId === input.stockId).slice(0, input.limit),
+          ),
+        ctx.repos.advice.query({
+          subjectKind: 'stock',
+          subjectId: input.stockId,
+          includeExpired: true,
+          limit: input.limit,
+        }),
+        ctx.user.defaultAccountId === ''
+          ? Promise.resolve([])
+          : ctx.repos.trade
+              .listByAccount(ctx.user.defaultAccountId)
+              .then((items) =>
+                items.filter((trade) => trade.stockId === input.stockId).slice(0, input.limit),
+              ),
+      ],
+    );
+    const stock = await ctx.repos.stock.findById(input.stockId);
+    const code = stock?.code ?? input.stockId.split('.')[0] ?? '';
+    const limitUp = /^\d{6}$/.test(code)
+      ? await loadStockLimitUpFacts(input.stockId, code, currentLimitUpDate(ctx), ctx)
+      : StockLimitUpFactsSchema.parse({
+          stockId: input.stockId,
+          code: '000000',
+          status: 'unavailable',
+          today: null,
+          recent: [],
+          asOf: null,
+          warnings: ['stock-code-unavailable'],
+        });
+    const topicDocuments = await Promise.all(
+      topics.map((topic) =>
+        ctx.repos.researchIndex.listDocuments({ topicId: topic.id, limit: input.limit }),
+      ),
+    );
+    const documents = [
+      ...new Map(
+        [...directDocuments, ...topicDocuments.flat()].map((document) => [document.id, document]),
+      ).values(),
+    ].slice(0, input.limit);
+    const timeline = [
+      ...topics.map((topic) => ({
+        id: topic.id,
+        kind: 'topic' as const,
+        occurredAt: topic.indexedAt,
+        title: topic.title,
+        ...(topic.summary === undefined ? {} : { summary: topic.summary }),
+      })),
+      ...documents.map((document) => ({
+        id: document.id,
+        kind: 'document' as const,
+        occurredAt: researchDocumentDate(document),
+        title: document.title,
+        ...(document.excerpt === undefined ? {} : { summary: document.excerpt }),
+      })),
+      ...events.map((event) => ({
+        id: event.id,
+        kind: 'stock-event' as const,
+        occurredAt: event.occursAt,
+        title: event.title,
+        ...(event.description === undefined ? {} : { summary: event.description }),
+      })),
+      ...signals.map((signal) => ({
+        id: signal.id,
+        kind: 'strategy-signal' as const,
+        occurredAt: signal.ts,
+        title: `策略信号 ${signal.direction}`,
+        summary: `score=${signal.score}`,
+      })),
+      ...triggers.map((trigger) => ({
+        id: trigger.id,
+        kind: 'watch-trigger' as const,
+        occurredAt: trigger.createdAt,
+        title: trigger.reason,
+        summary: trigger.deliveryStatus,
+      })),
+      ...advices.map((advice) => ({
+        id: advice.id,
+        kind: 'advice' as const,
+        occurredAt: advice.createdAt,
+        title: `Advice ${advice.decision}`,
+        summary: advice.reasoning.premise,
+      })),
+      ...trades.map((trade) => ({
+        id: trade.id,
+        kind: 'trade' as const,
+        occurredAt: trade.executedAt,
+        title: `交易 ${trade.side}`,
+        summary: `${trade.quantity} @ ${trade.price}`,
+      })),
+      ...limitUp.recent.map((item) => ({
+        id: `${input.stockId}:${item.date}`,
+        kind: 'limit-up' as const,
+        occurredAt: new Date(`${item.date}T00:00:00.000Z`),
+        title: `${item.ladderLevel} 连板 · ${item.date}`,
+        ...(item.reason === '--' ? {} : { summary: item.reason }),
+      })),
+    ]
+      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || a.id.localeCompare(b.id))
+      .slice(0, input.limit * 3);
     return {
       stockId: input.stockId,
       topics: [...topics],
       documents: [...documents],
+      events: [...events],
+      signals: [...signals],
+      triggers: [...triggers],
+      advices: advices.map((advice) => AdviceSchema.parse(advice)),
+      trades: [...trades],
+      timeline,
+      limitUp,
       indexStatus: await currentIndexStatus(ctx, topics[0]?.vaultId ?? documents[0]?.vaultId),
     };
   },
@@ -600,5 +1017,642 @@ export const syncResearchVaultTool = defineTool({
       });
       return errAdapterError('research-vault', message, true);
     }
+  },
+});
+
+const researchId = (prefix: 'topic' | 'doc'): string =>
+  `${prefix}_${globalThis.crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`;
+
+const singleLine = (value: string, label: string): string => {
+  if (value.includes('\n') || value.includes('\r') || value.includes('\0')) {
+    throw new Error(`${label} must be a single line`);
+  }
+  return value.trim();
+};
+
+const yamlScalar = (value: string): string => {
+  const normalized = singleLine(value, 'frontmatter value');
+  return normalized.length === 0 ? '""' : normalized;
+};
+
+const yamlList = (values: readonly string[]): string[] =>
+  values.map((value) => `  - ${yamlScalar(value)}`);
+
+const renderFrontmatter = (
+  values: Readonly<Record<string, string | readonly string[] | undefined>>,
+): string => {
+  const lines = ['---'];
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      lines.push(`${key}:`, ...yamlList(value));
+    } else if (typeof value === 'string') {
+      lines.push(`${key}: ${yamlScalar(value)}`);
+    }
+  }
+  lines.push('---');
+  return `${lines.join('\n')}\n`;
+};
+
+const managedRoot = (ctx: ToolContext): string =>
+  ctx.researchVault?.managedRoot ?? 'Research/Luoome';
+
+const slug = (value: string): string => {
+  const normalized = value
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return normalized || 'research';
+};
+
+const missingResearchVault = () => ({
+  ok: false as const,
+  error: { kind: 'permission_denied' as const, required: 'LUOOME_RESEARCH_VAULT' },
+});
+
+const syncStatusAfterWrite = async (ctx: ToolContext) => {
+  const result = await syncResearchVaultTool.execute({ mode: 'manual' }, ctx);
+  if (result.ok) {
+    return {
+      indexed: result.data.status === 'succeeded',
+      syncStatus: result.data.status,
+      ...(result.data.status === 'succeeded'
+        ? {}
+        : { diagnostic: `索引${result.data.status === 'partial' ? '部分' : '未'}完成` }),
+    };
+  }
+  const error = result.error;
+  return {
+    indexed: false,
+    syncStatus: 'failed' as const,
+    diagnostic:
+      error.kind === 'adapter_error'
+        ? error.cause
+        : error.kind === 'permission_denied'
+          ? `需要 ${error.required}`
+          : '索引失败，下次同步将修复',
+  };
+};
+
+const ManagedWriteStatusSchema = z.object({
+  vaultId: z.string().min(1),
+  relativePath: z.string().min(1),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  indexed: z.boolean(),
+  syncStatus: z.enum(['succeeded', 'partial', 'failed']),
+  diagnostic: z.string().optional(),
+});
+
+const TopicSubjectsInput = z.array(z.string().trim().min(3).max(200)).max(64).default([]);
+
+const normalizeSubjects = (values: readonly string[]): string[] => {
+  const output = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeResearchSubject(value);
+    output.add(`${normalized.kind}:${normalized.key}`);
+  }
+  return [...output];
+};
+
+const TopicTagsInput = z.array(z.string().trim().min(1).max(64)).max(32).default([]);
+
+const CreateResearchTopicInput = z.object({
+  title: z.string().trim().min(1).max(200),
+  kind: ResearchTopicKindSchema,
+  summary: z.string().trim().max(1000).optional(),
+  subjects: TopicSubjectsInput,
+  tags: TopicTagsInput,
+});
+export const CreateResearchTopicOutput = ManagedWriteStatusSchema.extend({
+  topicId: z.string().regex(/^topic_[A-Za-z0-9_-]+$/),
+});
+export const createResearchTopicTool = defineTool({
+  name: 'create_research_topic',
+  description: '在 managed Vault 中创建研究主题 Markdown',
+  sideEffect: 'write',
+  input: CreateResearchTopicInput,
+  output: CreateResearchTopicOutput,
+  handler: async (input, ctx) => {
+    if (!ctx.researchVault) return missingResearchVault();
+    const topicId = researchId('topic');
+    const subjects = normalizeSubjects(input.subjects);
+    const relativePath = `${managedRoot(ctx)}/Topics/${slug(input.title)}-${topicId}.md`;
+    const content = `${renderFrontmatter({
+      luoome_schema: '1',
+      luoome_type: 'research-topic',
+      luoome_id: topicId,
+      title: input.title,
+      topic_kind: input.kind,
+      ...(input.summary === undefined ? {} : { summary: input.summary }),
+      ...(subjects.length === 0 ? {} : { subjects }),
+      ...(input.tags.length === 0 ? {} : { tags: input.tags }),
+    })}\n# ${input.title}\n\n## 当前判断\n\n## 支持证据\n\n## 反证与风险\n\n## 待验证问题\n`;
+    const entry = await ctx.researchVault.createManagedDocument({ relativePath, content });
+    const indexed = await syncStatusAfterWrite(ctx);
+    return {
+      vaultId: ctx.researchVault.vaultId,
+      topicId,
+      relativePath: entry.relativePath,
+      contentHash: entry.contentHash,
+      ...indexed,
+    };
+  },
+});
+
+const DocumentMetadataInput = z.object({
+  title: z.string().trim().min(1).max(300),
+  kind: ResearchDocumentKindSchema,
+  body: z.string().max(200_000),
+  author: z.string().trim().max(200).optional(),
+  sourceUrl: z.string().url().optional(),
+  sourceStatus: z.enum(['verified', 'unverified']).optional(),
+  publishedAt: z.coerce.date().optional(),
+  observedAt: z.coerce.date().optional(),
+  topicIds: z
+    .array(z.string().regex(/^topic_[A-Za-z0-9_-]+$/))
+    .max(64)
+    .default([]),
+  subjects: TopicSubjectsInput,
+  tags: TopicTagsInput,
+});
+
+const validateDocumentMetadata = (input: z.infer<typeof DocumentMetadataInput>): string[] => {
+  if (input.sourceStatus === 'verified' && input.sourceUrl === undefined) {
+    throw new Error('sourceStatus=verified requires sourceUrl');
+  }
+  return normalizeSubjects(input.subjects);
+};
+
+const documentContent = (
+  input: z.infer<typeof DocumentMetadataInput>,
+  id: string,
+  now: Date,
+  attachmentPaths: readonly string[] = [],
+) => {
+  const subjects = validateDocumentMetadata(input);
+  return `${renderFrontmatter({
+    luoome_schema: '1',
+    luoome_type: 'research-document',
+    luoome_id: id,
+    title: input.title,
+    document_kind: input.kind,
+    ...(input.author === undefined ? {} : { author: input.author }),
+    ...(input.sourceUrl === undefined ? {} : { source_url: input.sourceUrl }),
+    ...(input.sourceStatus === undefined ? {} : { source_status: input.sourceStatus }),
+    ...(input.publishedAt === undefined ? {} : { published_at: input.publishedAt.toISOString() }),
+    ...(input.observedAt === undefined ? {} : { observed_at: input.observedAt.toISOString() }),
+    imported_at: now.toISOString(),
+    ...(input.topicIds.length === 0 ? {} : { topic_ids: input.topicIds }),
+    ...(subjects.length === 0 ? {} : { subjects }),
+    ...(input.tags.length === 0 ? {} : { tags: input.tags }),
+    ...(attachmentPaths.length === 0 ? {} : { attachments: [...attachmentPaths] }),
+  })}\n${input.body.trim()}\n`;
+};
+
+const decodeHtmlEntities = (value: string): string =>
+  value
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([\da-f]+);/gi, (_, code: string) =>
+      String.fromCodePoint(Number.parseInt(code, 16)),
+    );
+
+const extractHtml = (bytes: Uint8Array): { readonly title?: string; readonly body: string } => {
+  const html = new TextDecoder().decode(bytes);
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  const body = decodeHtmlEntities(
+    html
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<br\s*\/?\s*>/gi, '\n')
+      .replace(/<\/(p|div|li|h[1-6]|tr|section|article)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' '),
+  )
+    .replace(/[ \t\r\f]+/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return {
+    ...(title === undefined
+      ? {}
+      : { title: decodeHtmlEntities(title).replace(/\s+/g, ' ').trim() }),
+    body,
+  };
+};
+
+const pdfLiteral = (value: string): string =>
+  value
+    .replace(/\\([\\()])/g, '$1')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\([0-7]{1,3})/g, (_, octal: string) =>
+      String.fromCharCode(Number.parseInt(octal, 8)),
+    );
+
+const extractPdf = (bytes: Uint8Array): string => {
+  // PDF operators and simple literal strings are ASCII; compressed/CMap text is
+  // intentionally reported unavailable rather than guessed.
+  const source = new TextDecoder().decode(bytes);
+  const text: string[] = [];
+  for (const match of source.matchAll(/\(((?:\\.|[^\\()])*)\)\s*T[Jj]/g)) {
+    if (match[1] !== undefined) text.push(pdfLiteral(match[1]));
+  }
+  for (const match of source.matchAll(/<([\da-fA-F\s]+)>\s*T[Jj]/g)) {
+    if (match[1] === undefined) continue;
+    const hex = match[1].replace(/\s/g, '');
+    if (hex.length % 2 !== 0) continue;
+    const decoded = new Uint8Array(hex.length / 2);
+    for (let index = 0; index < decoded.length; index += 1) {
+      decoded[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+    }
+    text.push(new TextDecoder('utf-8', { fatal: false }).decode(decoded));
+  }
+  return text
+    .join('\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+const remoteBody = (
+  mediaType: string,
+  content: Uint8Array,
+): {
+  readonly title?: string;
+  readonly body: string;
+  readonly extractionStatus: 'extracted' | 'unavailable';
+} => {
+  if (mediaType === 'application/pdf') {
+    const body = extractPdf(content);
+    return body.length > 0
+      ? { body, extractionStatus: 'extracted' }
+      : {
+          body: 'PDF 原件已保存，但当前运行环境无法提取其正文；请在 Obsidian 中查看附件。',
+          extractionStatus: 'unavailable',
+        };
+  }
+  if (mediaType === 'text/html' || mediaType === 'application/xhtml+xml') {
+    const extracted = extractHtml(content);
+    return { ...extracted, extractionStatus: 'extracted' };
+  }
+  return { body: new TextDecoder().decode(content).trim(), extractionStatus: 'extracted' };
+};
+
+export const CreateResearchDocumentInput = DocumentMetadataInput;
+export const CreateResearchDocumentOutput = ManagedWriteStatusSchema.extend({
+  documentId: z.string().regex(/^doc_[A-Za-z0-9_-]+$/),
+});
+export const createResearchDocumentTool = defineTool({
+  name: 'create_research_document',
+  description: '在 managed Vault 中创建研究文档',
+  sideEffect: 'write',
+  input: CreateResearchDocumentInput,
+  output: CreateResearchDocumentOutput,
+  handler: async (input, ctx) => {
+    if (!ctx.researchVault) return missingResearchVault();
+    const documentId = researchId('doc');
+    const relativePath = `${managedRoot(ctx)}/Documents/${slug(input.title)}-${documentId}.md`;
+    const content = documentContent(input, documentId, ctx.clock());
+    const entry = await ctx.researchVault.createManagedDocument({ relativePath, content });
+    const indexed = await syncStatusAfterWrite(ctx);
+    return {
+      vaultId: ctx.researchVault.vaultId,
+      documentId,
+      relativePath: entry.relativePath,
+      contentHash: entry.contentHash,
+      ...indexed,
+    };
+  },
+});
+
+export const ImportLocalResearchDocumentInput = DocumentMetadataInput.extend({
+  format: z.enum(['markdown', 'text']).default('markdown'),
+});
+export const importLocalResearchDocumentTool = defineTool({
+  name: 'import_local_research_document',
+  description: '把用户明确提供的 Markdown/TXT 内容复制为 managed ResearchDocument',
+  sideEffect: 'write',
+  input: ImportLocalResearchDocumentInput,
+  output: CreateResearchDocumentOutput,
+  handler: async (input, ctx) => {
+    if (!ctx.researchVault) return missingResearchVault();
+    const body = input.format === 'markdown' ? parseResearchMarkdown(input.body).body : input.body;
+    const normalized = { ...input, body };
+    const documentId = researchId('doc');
+    const relativePath = `${managedRoot(ctx)}/Documents/${slug(input.title)}-${documentId}.md`;
+    const content = documentContent(normalized, documentId, ctx.clock());
+    const entry = await ctx.researchVault.createManagedDocument({ relativePath, content });
+    const indexed = await syncStatusAfterWrite(ctx);
+    return {
+      vaultId: ctx.researchVault.vaultId,
+      documentId,
+      relativePath: entry.relativePath,
+      contentHash: entry.contentHash,
+      ...indexed,
+    };
+  },
+});
+
+export const ImportRemoteResearchDocumentInput = z.object({
+  url: z.string().url(),
+  title: z.string().trim().min(1).max(300).optional(),
+  kind: ResearchDocumentKindSchema.default('article'),
+  sourceStatus: z.enum(['verified', 'unverified']).default('unverified'),
+  topicIds: z
+    .array(z.string().regex(/^topic_[A-Za-z0-9_-]+$/))
+    .max(64)
+    .default([]),
+  subjects: TopicSubjectsInput,
+  tags: TopicTagsInput,
+  maxBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(20 * 1024 * 1024)
+    .default(20 * 1024 * 1024),
+  timeoutMs: z.number().int().positive().max(30_000).default(15_000),
+  maxRedirects: z.number().int().nonnegative().max(5).default(3),
+});
+export const ImportRemoteResearchDocumentOutput = CreateResearchDocumentOutput.extend({
+  requestedUrl: z.string().url(),
+  finalUrl: z.string().url(),
+  mediaType: z.string().min(1),
+  attachmentPath: z.string().min(1),
+  extractionStatus: z.enum(['extracted', 'unavailable']),
+});
+export const importRemoteResearchDocumentTool = defineTool({
+  name: 'import_remote_research_document',
+  description: '抓取经安全校验的 URL 研究资料，保存原件并创建 untrusted managed Document',
+  sideEffect: 'external',
+  input: ImportRemoteResearchDocumentInput,
+  output: ImportRemoteResearchDocumentOutput,
+  handler: async (input, ctx) => {
+    if (!ctx.researchVault) return missingResearchVault();
+    if (!ctx.researchRemote) {
+      return errAdapterError('research-remote', '未配置远程资料 adapter', false);
+    }
+    let remote: Awaited<ReturnType<NonNullable<typeof ctx.researchRemote>['fetchDocument']>>;
+    try {
+      remote = await ctx.researchRemote.fetchDocument({
+        url: input.url,
+        maxBytes: input.maxBytes,
+        timeoutMs: input.timeoutMs,
+        maxRedirects: input.maxRedirects,
+      });
+    } catch (error) {
+      return errAdapterError(
+        'research-remote',
+        error instanceof Error ? error.message : String(error),
+        true,
+      );
+    }
+    const extracted = remoteBody(remote.mediaType, remote.content);
+    const title =
+      input.title ??
+      extracted.title ??
+      (decodeURIComponent(
+        new URL(remote.finalUrl).pathname.split('/').filter(Boolean).at(-1) ?? '远程研究资料',
+      )
+        .replace(/\.[a-z0-9]+$/i, '')
+        .slice(0, 300) ||
+        '远程研究资料');
+    const extension =
+      remote.mediaType === 'application/pdf'
+        ? '.pdf'
+        : remote.mediaType === 'text/plain'
+          ? '.txt'
+          : '.html';
+    let attachment: ResearchVaultEntry;
+    try {
+      attachment = await ctx.researchVault.importAttachment({
+        suggestedName: `source${extension}`,
+        content: remote.content,
+        mediaType: remote.mediaType,
+      });
+    } catch (error) {
+      return errAdapterError(
+        'research-vault',
+        error instanceof Error ? error.message : String(error),
+        false,
+      );
+    }
+    const documentId = researchId('doc');
+    const metadata = {
+      title,
+      kind: input.kind,
+      body: extracted.body,
+      sourceUrl: input.url,
+      sourceStatus: input.sourceStatus,
+      observedAt: remote.fetchedAt,
+      topicIds: input.topicIds,
+      subjects: input.subjects,
+      tags: input.tags,
+    };
+    const relativePath = `${managedRoot(ctx)}/Documents/${slug(title)}-${documentId}.md`;
+    let entry: ResearchVaultEntry;
+    try {
+      entry = await ctx.researchVault.createManagedDocument({
+        relativePath,
+        content: documentContent(metadata, documentId, ctx.clock(), [attachment.relativePath]),
+      });
+    } catch (error) {
+      return errAdapterError(
+        'research-vault',
+        error instanceof Error ? error.message : String(error),
+        false,
+      );
+    }
+    const indexed = await syncStatusAfterWrite(ctx);
+    return {
+      vaultId: ctx.researchVault.vaultId,
+      documentId,
+      relativePath: entry.relativePath,
+      contentHash: entry.contentHash,
+      requestedUrl: remote.requestedUrl,
+      finalUrl: remote.finalUrl,
+      mediaType: remote.mediaType,
+      attachmentPath: attachment.relativePath,
+      extractionStatus: extracted.extractionStatus,
+      ...indexed,
+    };
+  },
+});
+
+const LinkResearchDocumentInput = z.object({
+  topicId: z.string().regex(/^topic_[A-Za-z0-9_-]+$/),
+  documentId: z.string().regex(/^doc_[A-Za-z0-9_-]+$/),
+  relation: z.enum(['primary', 'supporting', 'counter-evidence', 'update']),
+  expectedContentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+});
+export const LinkResearchDocumentOutput = ManagedWriteStatusSchema.extend({
+  topicId: z.string(),
+  documentId: z.string(),
+  relation: z.enum(['primary', 'supporting', 'counter-evidence', 'update']),
+});
+
+const isManagedPath = (ctx: ToolContext, relativePath: string): boolean =>
+  relativePath.startsWith(`${managedRoot(ctx)}/`);
+
+const patchManagedFrontmatter = async (
+  ctx: ToolContext,
+  relativePath: string,
+  expectedContentHash: string | undefined,
+  patch: (frontmatter: Frontmatter) => void,
+): Promise<{ readonly entry: ResearchVaultEntry; readonly contentHash: string }> => {
+  if (!ctx.researchVault) throw new Error('research vault unavailable');
+  if (!isManagedPath(ctx, relativePath)) throw new Error('unmanaged file is read-only');
+  const content = await ctx.researchVault.readText({ relativePath, maxBytes: 10 * 1024 * 1024 });
+  const currentHash = createHash('sha256').update(content).digest('hex');
+  if (expectedContentHash !== undefined && expectedContentHash !== currentHash) {
+    throw new Error('content hash mismatch');
+  }
+  const parsed = parseResearchMarkdown(content);
+  patch(parsed.frontmatter);
+  const next = `${renderFrontmatter(parsed.frontmatter)}${parsed.body}`;
+  const updater = ctx.researchVault.updateManagedDocument;
+  if (updater === undefined)
+    throw new Error('research vault adapter does not support managed updates');
+  const entry = await updater({
+    relativePath,
+    content: next,
+    expectedContentHash: expectedContentHash ?? currentHash,
+  });
+  return { entry, contentHash: entry.contentHash };
+};
+
+export const linkResearchDocumentTool = defineTool({
+  name: 'link_research_document',
+  description: '在 managed Topic/Document 之间建立研究资料关系（带乐观并发校验）',
+  sideEffect: 'write',
+  input: LinkResearchDocumentInput,
+  output: LinkResearchDocumentOutput,
+  handler: async (input, ctx) => {
+    if (!ctx.researchVault) return missingResearchVault();
+    const [topic, document] = await Promise.all([
+      ctx.repos.researchIndex.findTopic(input.topicId),
+      ctx.repos.researchIndex.findDocument(input.documentId),
+    ]);
+    if (topic === null) return errNotFound('ResearchTopic', input.topicId);
+    if (document === null) return errNotFound('ResearchDocument', input.documentId);
+    const target =
+      input.relation === 'primary' ||
+      input.relation === 'counter-evidence' ||
+      input.relation === 'update'
+        ? topic
+        : document;
+    if (!isManagedPath(ctx, target.relativePath)) {
+      return {
+        ok: false as const,
+        error: { kind: 'permission_denied' as const, required: 'managed research file' },
+      };
+    }
+    const key =
+      input.relation === 'primary'
+        ? 'primary_documents'
+        : input.relation === 'counter-evidence'
+          ? 'counter_evidence_documents'
+          : input.relation === 'update'
+            ? 'update_documents'
+            : 'topic_ids';
+    const value = target.id === topic.id ? document.id : topic.id;
+    let patched: { readonly entry: ResearchVaultEntry; readonly contentHash: string };
+    try {
+      patched = await patchManagedFrontmatter(
+        ctx,
+        target.relativePath,
+        input.expectedContentHash,
+        (frontmatter) => {
+          frontmatter[key] = [...new Set([...listValue(frontmatter[key]), value])];
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === 'unmanaged file is read-only') {
+        return {
+          ok: false as const,
+          error: { kind: 'permission_denied' as const, required: 'managed research file' },
+        };
+      }
+      if (message === 'content hash mismatch')
+        return errInvalidInput('研究文件已被修改，请重新同步后重试');
+      throw error;
+    }
+    const indexed = await syncStatusAfterWrite(ctx);
+    return {
+      vaultId: ctx.researchVault.vaultId,
+      relativePath: patched.entry.relativePath,
+      contentHash: patched.contentHash,
+      topicId: input.topicId,
+      documentId: input.documentId,
+      relation: input.relation,
+      ...indexed,
+    };
+  },
+});
+
+const ArchiveResearchTopicInput = z.object({
+  topicId: z.string().regex(/^topic_[A-Za-z0-9_-]+$/),
+  expectedContentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+});
+export const archiveResearchTopicTool = defineTool({
+  name: 'archive_research_topic',
+  description: '归档 managed ResearchTopic，不删除正文、关系或历史索引',
+  sideEffect: 'write',
+  input: ArchiveResearchTopicInput,
+  output: ManagedWriteStatusSchema.extend({ topicId: z.string() }),
+  handler: async (input, ctx) => {
+    if (!ctx.researchVault) return missingResearchVault();
+    const topic = await ctx.repos.researchIndex.findTopic(input.topicId);
+    if (topic === null) return errNotFound('ResearchTopic', input.topicId);
+    if (!isManagedPath(ctx, topic.relativePath)) {
+      return {
+        ok: false as const,
+        error: { kind: 'permission_denied' as const, required: 'managed research file' },
+      };
+    }
+    let patched: { readonly entry: ResearchVaultEntry; readonly contentHash: string };
+    try {
+      patched = await patchManagedFrontmatter(
+        ctx,
+        topic.relativePath,
+        input.expectedContentHash,
+        (frontmatter) => {
+          frontmatter.archived_at = ctx.clock().toISOString();
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === 'unmanaged file is read-only') {
+        return {
+          ok: false as const,
+          error: { kind: 'permission_denied' as const, required: 'managed research file' },
+        };
+      }
+      if (message === 'content hash mismatch')
+        return errInvalidInput('研究文件已被修改，请重新同步后重试');
+      throw error;
+    }
+    const indexed = await syncStatusAfterWrite(ctx);
+    return {
+      vaultId: ctx.researchVault.vaultId,
+      topicId: input.topicId,
+      relativePath: patched.entry.relativePath,
+      contentHash: patched.contentHash,
+      ...indexed,
+    };
   },
 });

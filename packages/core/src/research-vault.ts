@@ -8,11 +8,18 @@ export interface ResearchVaultEntry {
 export interface ResearchVaultAdapterLike {
   readonly name: string;
   readonly vaultId: string;
+  /** POSIX path relative to the Vault root where luoome may create managed files. */
+  readonly managedRoot?: string;
   scan(input?: { readonly roots?: readonly string[] }): Promise<readonly ResearchVaultEntry[]>;
   readText(input: { readonly relativePath: string; readonly maxBytes: number }): Promise<string>;
   createManagedDocument(input: {
     readonly relativePath: string;
     readonly content: string;
+  }): Promise<ResearchVaultEntry>;
+  updateManagedDocument?(input: {
+    readonly relativePath: string;
+    readonly content: string;
+    readonly expectedContentHash: string;
   }): Promise<ResearchVaultEntry>;
   importAttachment(input: {
     readonly suggestedName: string;
@@ -20,6 +27,28 @@ export interface ResearchVaultAdapterLike {
     readonly mediaType: string;
   }): Promise<ResearchVaultEntry>;
   buildOpenUri(relativePath: string): string;
+}
+
+/**
+ * 外部研究资料抓取的 core 侧契约。网络策略（SSRF、重定向、大小、超时和媒体类型）
+ * 必须封装在 adapter 内，Tool 只消费已校验的有限字节内容。
+ */
+export interface ResearchRemoteDocument {
+  readonly requestedUrl: string;
+  readonly finalUrl: string;
+  readonly mediaType: string;
+  readonly content: Uint8Array;
+  readonly fetchedAt: Date;
+}
+
+export interface ResearchRemoteImportAdapterLike {
+  readonly name: string;
+  fetchDocument(input: {
+    readonly url: string;
+    readonly maxBytes: number;
+    readonly timeoutMs: number;
+    readonly maxRedirects: number;
+  }): Promise<ResearchRemoteDocument>;
 }
 export interface ResearchIndexStatus {
   readonly vaultId: string;
@@ -29,6 +58,8 @@ export interface ResearchIndexStatus {
 }
 export type ResearchSearchHit = {
   readonly document: ResearchDocumentIndex;
+  /** 具体 chunk ordinal；用于把检索结果变成可审计 EvidenceRef。 */
+  readonly ordinal?: number;
   readonly headingPath?: string;
   readonly snippet: string;
   readonly score?: number;

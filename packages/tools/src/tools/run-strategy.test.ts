@@ -136,6 +136,41 @@ describe('run_strategy', () => {
     expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
   });
 
+  it('allows a validated unpublished version only for persist=false trial', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const base = await ctx.repos.strategy.findVersionById('scan-strategy-v1');
+    if (base === null) throw new Error('fixture version missing');
+    const draft = {
+      ...base,
+      id: 'scan-strategy-v2-draft',
+      version: 2,
+      publishedAt: undefined,
+      parentVersionId: base.id,
+      validationStatus: 'valid' as const,
+    };
+    await ctx.repos.strategy.createVersion(draft);
+    const trial = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        versionId: draft.id,
+        stockIds: ['600519.SH'],
+        persist: false,
+      },
+      ctx,
+    );
+    expect(trial.ok).toBe(true);
+    if (!trial.ok) return;
+    expect(trial.data.persisted).toBe(false);
+    expect(trial.data.run.strategyVersionId).toBe(draft.id);
+    const formal = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', versionId: draft.id, stockIds: ['600519.SH'] },
+      ctx,
+    );
+    expect(formal.ok).toBe(false);
+  });
+
   it('keeps a committed run successful when derived observation persistence fails', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 1 });

@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import {
   createAIStackFromEnv,
   createMarketAdapterFromEnv,
+  createResearchRemoteDocumentAdapter,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
@@ -58,6 +59,7 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
     agent: ai.agent,
     user: { id: 'local-user', defaultAccountId },
     logger,
+    researchRemote: createResearchRemoteDocumentAdapter(),
   });
   return { ctx, close: handle.close };
 };

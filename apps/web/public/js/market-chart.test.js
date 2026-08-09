@@ -9,6 +9,7 @@ import {
   computeMaSeries,
   DOWN_COLOR,
   toCandleData,
+  toMarkerData,
   toVolumeData,
   UP_COLOR,
   volumeColor,
@@ -71,5 +72,45 @@ describe('MA5/MA10/MA20 计算', () => {
 
   it('空 candles 输出空序列', () => {
     expect(computeMaSeries([], 5)).toEqual([]);
+  });
+});
+
+describe('关联事实 marker 转换', () => {
+  it('按事实语义映射位置、形状和颜色', () => {
+    expect(
+      toMarkerData([
+        {
+          date: '2026-07-24',
+          factKind: 'trade',
+          factId: 'trade-1',
+          title: '交易 buy',
+          href: '#holdings',
+          tone: 'action',
+        },
+        {
+          date: '2026-07-25',
+          factKind: 'advice',
+          factId: 'advice-1',
+          title: 'Advice buy',
+          href: '#advice',
+          tone: 'advice',
+        },
+      ]),
+    ).toEqual([
+      {
+        time: '2026-07-24',
+        position: 'belowBar',
+        shape: 'arrowUp',
+        color: UP_COLOR,
+        text: '交易 buy',
+      },
+      {
+        time: '2026-07-25',
+        position: 'aboveBar',
+        shape: 'circle',
+        color: '#f5c542',
+        text: 'Advice buy',
+      },
+    ]);
   });
 });

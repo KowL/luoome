@@ -11,6 +11,11 @@ import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './define-workflow.js';
 
+const recordRun = async (ctx: WorkflowContext, run: WorkflowRun): Promise<void> => {
+  const result = await ctx.tools.record_workflow_run.execute({ run });
+  if (!result.ok) throw new Error(JSON.stringify(result.error));
+};
+
 /**
  * evaluate-event-rules workflow（ruo 迁移 §5，每日盘前，不复用 intraday-watch）。
  *
@@ -61,10 +66,9 @@ const resolveMemberStockIds = async (
   plan: AlertPlan,
   ctx: WorkflowContext,
 ): Promise<readonly string[]> => {
-  const watchlist = await ctx.repos.watchlist.findById(plan.watchlistId);
-  if (watchlist === null || !watchlist.enabled) return [];
-  const members = await ctx.repos.watchlistMember.listMembers(watchlist.id);
-  return members.map((m) => m.stockId);
+  const result = await ctx.tools.get_watchlist.execute({ watchlistId: plan.watchlistId });
+  if (!result.ok || !result.data.watchlist.enabled) return [];
+  return result.data.members.map((item) => item.member.stockId);
 };
 
 const eventDateRules = (plan: AlertPlan): readonly Extract<AlertRule, { kind: 'event-date' }>[] =>
@@ -98,9 +102,11 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
     startedAt: now,
     providerStatuses: [],
   };
-  await ctx.repos.workflowRun.save(runningRun);
+  await recordRun(ctx, runningRun);
 
-  const plans = await ctx.repos.alertPlan.list({ enabledOnly: true });
+  const plansResult = await ctx.tools.list_alert_plans.execute({ enabledOnly: true });
+  if (!plansResult.ok) return plansResult;
+  const plans = plansResult.data.plans;
   let evaluatedPlans = 0;
   let triggered = 0;
   let deduped = 0;
@@ -117,10 +123,19 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
         const maxDays = Math.max(0, ...(rule.daysBefore.length > 0 ? rule.daysBefore : [7, 3, 1]));
         const windowEnd = new Date(shanghaiMidnightMs(now) + (maxDays + 1) * DAY_MS);
         for (const stockId of stockIds) {
-          const events = await ctx.repos.stockEvent.listUpcoming(stockId, now, windowEnd, {
+          const eventsResult = await ctx.tools.list_stock_events.execute({
+            stockId,
+            status: 'scheduled',
+            from: now,
+            to: windowEnd,
             ...(rule.eventKinds !== undefined ? { kinds: rule.eventKinds } : {}),
-            minImportance: rule.minImportance,
+            limit: 500,
           });
+          if (!eventsResult.ok) return eventsResult;
+          const importanceRank = { normal: 0, important: 1, urgent: 2 } as const;
+          const events = eventsResult.data.events.filter(
+            (event) => importanceRank[event.importance] >= importanceRank[rule.minImportance],
+          );
           for (const event of events) {
             const effectiveDays =
               event.remindBeforeDays.length > 0 ? event.remindBeforeDays : rule.daysBefore;
@@ -128,12 +143,16 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
             if (!effectiveDays.includes(d)) continue;
 
             // 去重：(alertPlanId, stockId, ruleId, eventId, remindDay) 最多一条
-            const existing = await ctx.repos.watchTrigger.listRecent({
+            const existingResult = await ctx.tools.list_watch_triggers.execute({
               poolId: plan.id,
-              ruleId: rule.id,
-              eventId: event.id,
-              limit: 100,
+              stockId: event.stockId,
+              ruleKind: 'event-date',
+              limit: 500,
             });
+            if (!existingResult.ok) return existingResult;
+            const existing = existingResult.data.triggers.filter(
+              (trigger) => trigger.ruleId === rule.id && trigger.eventId === event.id,
+            );
             const already = existing.some(
               (t) => (t.evalSnapshot as { remindDay?: number }).remindDay === d,
             );
@@ -172,7 +191,8 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
               notified: false,
               createdAt: now,
             };
-            await ctx.repos.watchTrigger.save(trigger);
+            const saved = await ctx.tools.save_watch_trigger.execute(trigger);
+            if (!saved.ok) return saved;
             triggered += 1;
             if (deliveryStatus === 'pending') pending.push(trigger);
           }
@@ -186,7 +206,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
       finishedAt: ctx.clock(),
       error: error instanceof Error ? error.message.slice(0, 500) : 'unknown',
     };
-    await ctx.repos.workflowRun.save(failed);
+    await recordRun(ctx, failed);
     return EvaluateEventRulesOutput.parse({
       runId,
       status: 'failed',
@@ -234,11 +254,12 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
       notificationId = r.data.notification.id;
       notified += group.length;
     }
-    await ctx.repos.watchTrigger.setDeliveryStatus(
-      group.map((t) => t.id),
+    const delivery = await ctx.tools.set_watch_trigger_delivery_status.execute({
+      triggerIds: group.map((t) => t.id),
       status,
-      notificationId,
-    );
+      ...(notificationId === undefined ? {} : { notificationId }),
+    });
+    if (!delivery.ok) return delivery;
   }
 
   const status: WorkflowRun['status'] = sendFailed ? 'partial' : 'succeeded';
@@ -248,7 +269,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
     finishedAt: ctx.clock(),
     outputSummary: { evaluatedPlans, triggered, notified, deduped },
   };
-  await ctx.repos.workflowRun.save(terminal);
+  await recordRun(ctx, terminal);
 
   return EvaluateEventRulesOutput.parse({
     runId,

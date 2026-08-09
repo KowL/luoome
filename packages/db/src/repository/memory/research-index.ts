@@ -4,6 +4,7 @@ import type {
   ResearchDocumentQuery,
   ResearchIndexApplySummary,
   ResearchIndexRepository,
+  ResearchSearchCapability,
   ResearchSearchHit,
   ResearchSearchQuery,
   ResearchSubjectLink,
@@ -20,6 +21,10 @@ export class InMemoryResearchIndexRepository implements ResearchIndexRepository 
   private topicDocuments: ResearchTopicDocument[] = [];
   private subjectLinks: ResearchSubjectLink[] = [];
   private chunks: ResearchDocumentChunk[] = [];
+
+  searchCapability(): ResearchSearchCapability {
+    return 'metadata';
+  }
 
   async applyIndexBatch(
     input: Parameters<ResearchIndexRepository['applyIndexBatch']>[0],
@@ -210,6 +215,7 @@ export class InMemoryResearchIndexRepository implements ResearchIndexRepository 
           ? [
               {
                 document: copy(document),
+                ordinal: chunk.ordinal,
                 headingPath: chunk.headingPath,
                 snippet: chunk.body.slice(0, 500),
                 score: 1,
@@ -227,5 +233,20 @@ export class InMemoryResearchIndexRepository implements ResearchIndexRepository 
           .map((link) => link.subjectKey),
       ),
     ].sort();
+  }
+
+  async listSubjectLinks(
+    input: Parameters<ResearchIndexRepository['listSubjectLinks']>[0] = {},
+  ): Promise<readonly ResearchSubjectLink[]> {
+    return this.subjectLinks
+      .filter((link) => input.ownerKind === undefined || link.ownerKind === input.ownerKind)
+      .filter((link) => input.ownerId === undefined || link.ownerId === input.ownerId)
+      .filter((link) => input.subjectKind === undefined || link.subjectKind === input.subjectKind)
+      .filter((link) => input.subjectKey === undefined || link.subjectKey === input.subjectKey)
+      .map(copy);
+  }
+
+  async listTopicDocuments(topicId: string): Promise<readonly ResearchTopicDocument[]> {
+    return this.topicDocuments.filter((relation) => relation.topicId === topicId).map(copy);
   }
 }

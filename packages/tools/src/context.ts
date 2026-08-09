@@ -6,6 +6,7 @@ import type {
   Logger,
   MarketDataAdapterLike,
   RepositoryRegistry,
+  ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
   StockUniverseManagerLike,
   ToolContext,
@@ -30,6 +31,7 @@ export interface BuildContextInput {
   readonly limitUpLadder?: LimitUpLadderManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly researchVault?: ResearchVaultAdapterLike;
+  readonly researchRemote?: ResearchRemoteImportAdapterLike;
 }
 
 /** 幂等装载并协调 builtin revision；不覆盖用户同名 Strategy。 */
@@ -83,6 +85,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
     ...(input.ashareSentiment === undefined ? {} : { ashareSentiment: input.ashareSentiment }),
     ...(input.researchVault === undefined ? {} : { researchVault: input.researchVault }),
+    ...(input.researchRemote === undefined ? {} : { researchRemote: input.researchRemote }),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

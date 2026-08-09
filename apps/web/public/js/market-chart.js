@@ -29,6 +29,16 @@ const toCandleData = (candles) =>
 const toVolumeData = (candles) =>
   candles.map((c) => ({ time: c.date, value: c.volume, color: volumeColor(c) }));
 
+/** MarketFactMarker[] → Lightweight Charts series markers. */
+const toMarkerData = (markers) =>
+  markers.map((marker) => ({
+    time: marker.date,
+    position: marker.tone === 'action' ? 'belowBar' : 'aboveBar',
+    shape: marker.tone === 'action' ? 'arrowUp' : marker.tone === 'advice' ? 'circle' : 'square',
+    color: marker.tone === 'action' ? UP_COLOR : marker.tone === 'advice' ? '#f5c542' : '#5ea8ff',
+    text: marker.title.slice(0, 24),
+  }));
+
 /**
  * 从 candles 纯计算 MA 序列（§12.2：前端计算仅用于绘制，指标摘要以 Tool 输出为权威）。
  * 窗口不足 period 的前期点不输出。
@@ -114,6 +124,8 @@ const createMarketChart = async (container, options = {}) => {
     1,
   );
   chart.priceScale('volume', 1).applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+  const markerApi =
+    typeof lc.createSeriesMarkers === 'function' ? lc.createSeriesMarkers(candleSeries, []) : null;
 
   const observer = new ResizeObserver((entries) => {
     const entry = entries[0];
@@ -123,12 +135,13 @@ const createMarketChart = async (container, options = {}) => {
   observer.observe(container);
 
   return {
-    setData({ candles, ma5, ma10, ma20 }) {
+    setData({ candles, ma5, ma10, ma20, markers = [] }) {
       candleSeries.setData(toCandleData(candles));
       maSeries.ma5.setData(ma5);
       maSeries.ma10.setData(ma10);
       maSeries.ma20.setData(ma20);
       volumeSeries.setData(toVolumeData(candles));
+      markerApi?.setMarkers(toMarkerData(markers));
       chart.timeScale().fitContent();
     },
     resize(width, nextHeight) {
@@ -149,6 +162,7 @@ export {
   createMarketChart,
   DOWN_COLOR,
   toCandleData,
+  toMarkerData,
   toVolumeData,
   UP_COLOR,
   volumeColor,

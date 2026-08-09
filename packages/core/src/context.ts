@@ -10,7 +10,10 @@ import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { RepositoryRegistry } from './repository/index.js';
-import type { ResearchVaultAdapterLike } from './research-vault.js';
+import type {
+  ResearchRemoteImportAdapterLike,
+  ResearchVaultAdapterLike,
+} from './research-vault.js';
 
 /**
  * core 不能 import adapters 包（ARCHITECTURE §3 依赖方向），
@@ -195,6 +198,7 @@ export interface ToolContext {
   readonly clock: () => Date;
   readonly logger: Logger;
   readonly researchVault?: ResearchVaultAdapterLike;
+  readonly researchRemote?: ResearchRemoteImportAdapterLike;
 }
 
 export type AShareSentimentManagerResult =
