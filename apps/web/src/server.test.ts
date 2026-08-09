@@ -250,6 +250,7 @@ describe('LLM 设置 API', () => {
       );
       const settingsApp = createWebApp(await buildTestContext(), {
         aiSettingsStore: store,
+        exposeWrite: true,
       });
       const initial = await settingsApp.fetch(new Request('http://test/api/settings/ai'));
       expect(initial.status).toBe(200);
@@ -312,6 +313,7 @@ describe('行情源设置 API', () => {
       );
       const settingsApp = createWebApp(await buildTestContext(), {
         marketSettingsStore: store,
+        exposeWrite: true,
       });
       const initial = await settingsApp.fetch(new Request('http://test/api/settings/market'));
       expect(initial.status).toBe(200);
@@ -910,6 +912,37 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
 });
 
 describe('mutation 鉴权', () => {
+  it('默认关闭能力开关时拒绝自定义 write / external mutation', async () => {
+    const guarded = createWebApp(await buildTestContext());
+    const settings = await guarded.fetch(
+      new Request('http://test/api/settings/ai', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(settings.status).toBe(403);
+
+    const chat = await guarded.fetch(
+      new Request('http://test/api/chat/sessions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'guarded' }),
+      }),
+    );
+    expect(chat.status).toBe(403);
+
+    const reportApp = createWebApp(await buildTestContext(), { exposeWrite: true });
+    const report = await reportApp.fetch(
+      new Request('http://test/api/reports/run/opening', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ date: '2026-07-29', notify: false }),
+      }),
+    );
+    expect(report.status).toBe(403);
+  });
+
   it('无需 token 可执行 write mutation，跨站 Origin 仍拒绝', async () => {
     const lax = createWebApp(await buildTestContext(), {
       exposeWrite: true,
@@ -946,7 +979,8 @@ describe('mutation 鉴权', () => {
 
 describe('web tool 闸口：能力开关', () => {
   it('write 无需 token，read 仍可用', async () => {
-    const write = await app.fetch(
+    const tokenlessApp = createWebApp(await buildTestContext(), { exposeWrite: true });
+    const write = await tokenlessApp.fetch(
       new Request('http://test/api/tools/add_trade/call', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -955,9 +989,9 @@ describe('web tool 闸口：能力开关', () => {
         }),
       }),
     );
-    expect(write.status).not.toBe(403);
+    expect(write.status).toBe(200);
 
-    const read = await app.fetch(
+    const read = await tokenlessApp.fetch(
       new Request('http://test/api/tools/list_holdings/call', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
