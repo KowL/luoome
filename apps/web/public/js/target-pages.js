@@ -1,7 +1,8 @@
 import { callApi } from './api.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
+import { stockIdentityLink } from './stock-link.js';
 import { renderStrategyWorkspacePage } from './strategy-workspace.js';
-import { $, el, fmtDateTime, mount, statBlock } from './ui.js';
+import { $, el, fmtDateTime, fmtNum, fmtSigned, mount, statBlock } from './ui.js';
 
 const errorText = (result) => {
   const error = result?.error;
@@ -168,6 +169,17 @@ export const deriveWatchlistViews = (overview) => {
   };
 };
 
+/** 股票视图排序：与首页看板同口径，按 |changePct| 降序，无行情（非数值）排最后。 */
+export const sortStocksByQuote = (stocks) =>
+  [...stocks].sort((a, b) => {
+    const av = typeof a.changePct === 'number' ? Math.abs(a.changePct) : null;
+    const bv = typeof b.changePct === 'number' ? Math.abs(b.changePct) : null;
+    if (av === null && bv === null) return 0;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return bv - av;
+  });
+
 /** 成员来源健康摘要：active/stale 计数 + 最近 dataAsOf（无有效时间返回 null）。 */
 export const summarizeMemberSources = (sources) => {
   let active = 0;
@@ -229,11 +241,7 @@ const renderByListView = (views, setStatus) =>
         const button = el('button', 'entity-row', [
           el('span', 'entity-row-main', [
             el('strong', null, card.watchlist.name),
-            el(
-              'small',
-              null,
-              `${card.memberCount} 成员 · 待研究 ${card.discoveredCount} · 过期来源 ${card.staleSources} · 今日 +${card.todayEntered}/-${card.todayExited}`,
-            ),
+            el('small', null, `${card.memberCount} 成员 · 待研究 ${card.discoveredCount}`),
           ]),
           el('span', 'flex gap-2', [
             el(
@@ -253,35 +261,79 @@ const renderByListView = (views, setStatus) =>
         return button;
       });
 
-const renderStocksView = (views) =>
-  views.stocks.length === 0
-    ? [el('p', 'placeholder', '暂无成员股票。')]
-    : views.stocks.map((stock) =>
-        el('div', 'entity-item', [
-          el('div', 'flex gap-2', [
-            el('strong', null, stock.stockId),
-            ...(stock.memberships.some((membership) => membership.holding)
-              ? [el('span', 'badge badge-holding', '持仓')]
-              : []),
-          ]),
-          el(
-            'div',
-            'muted',
-            stock.memberships.map((membership) => membership.watchlistName).join(' · '),
-          ),
-          el(
-            'div',
-            'flex gap-2',
-            stock.memberships.map((membership) =>
-              el(
-                'span',
-                'badge badge-neutral',
-                `${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}·${MEMBER_PRIORITY_TEXT[membership.priority] ?? membership.priority}`,
-              ),
-            ),
-          ),
+/** 股票行情单元：现价 + 涨跌幅，红涨绿跌；无行情统一「--」。 */
+const quoteCell = (stock) => {
+  const chgCls =
+    typeof stock.changePct !== 'number'
+      ? ''
+      : stock.changePct > 0
+        ? 'pos'
+        : stock.changePct < 0
+          ? 'neg'
+          : '';
+  return [
+    el(
+      'td',
+      `num ${chgCls}`,
+      stock.quote === null || stock.quote === undefined ? '--' : fmtNum(stock.quote.close),
+    ),
+    el(
+      'td',
+      `num ${chgCls}`,
+      typeof stock.changePct !== 'number' ? '--' : `${fmtSigned(stock.changePct)}%`,
+    ),
+  ];
+};
+
+/**
+ * 全部股票 / 当前持仓视图的行情表：名称（链接行情页）/ 现价 / 涨跌幅 / 所属列表，
+ * 列口径与首页实时看板一致。
+ */
+const renderStockTable = (stocks, emptyText) => {
+  if (stocks.length === 0) return [el('p', 'placeholder', emptyText)];
+  const rows = sortStocksByQuote(stocks).map((stock) => {
+    const holding = stock.memberships.some((membership) => membership.holding);
+    return el('tr', null, [
+      el(
+        'td',
+        null,
+        el('div', 'board-name-cell', [
+          stockIdentityLink({ stockId: stock.stockId, stockName: stock.name }),
+          ...(holding ? [el('span', 'badge badge-holding', '持仓')] : []),
         ]),
-      );
+      ),
+      ...quoteCell(stock),
+      el(
+        'td',
+        null,
+        stock.memberships.map((membership) =>
+          el(
+            'span',
+            'badge board-group-tag',
+            `${membership.watchlistName}·${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}`,
+          ),
+        ),
+      ),
+    ]);
+  });
+  return [
+    el('table', 'table board-table', [
+      el(
+        'thead',
+        null,
+        el('tr', null, [
+          el('th', null, '名称'),
+          el('th', 'num', '现价'),
+          el('th', 'num', '涨跌幅'),
+          el('th', null, '关注列表·阶段'),
+        ]),
+      ),
+      el('tbody', null, rows),
+    ]),
+  ];
+};
+
+const renderStocksView = (views) => renderStockTable(views.stocks, '暂无成员股票。');
 
 const renderTodayView = (views) =>
   views.todayChanges.length === 0
@@ -300,13 +352,14 @@ const renderTodayView = (views) =>
         ]),
       );
 
-const renderPendingView = (views, setStatus) =>
-  views.pending.length === 0
+const renderPendingView = (views, setStatus) => {
+  const nameOf = (stockId) => views.stocks.find((stock) => stock.stockId === stockId)?.name;
+  return views.pending.length === 0
     ? [el('p', 'placeholder', '暂无待研究成员。')]
     : views.pending.map((item) =>
         el('div', 'entity-item', [
           el('div', 'flex gap-2', [
-            el('strong', null, item.stockId),
+            stockIdentityLink({ stockId: item.stockId, stockName: nameOf(item.stockId) }),
             priorityBadge(item.priority),
             el('span', 'muted', item.watchlistName),
           ]),
@@ -331,28 +384,9 @@ const renderPendingView = (views, setStatus) =>
           ]),
         ]),
       );
+};
 
-const renderHoldingsView = (views) =>
-  views.holdings.length === 0
-    ? [el('p', 'placeholder', '暂无持仓成员。')]
-    : views.holdings.map((stock) =>
-        el('div', 'entity-item', [
-          el('div', 'flex gap-2', [
-            el('strong', null, stock.stockId),
-            el('span', 'badge badge-holding', '持仓'),
-          ]),
-          el(
-            'div',
-            'muted',
-            stock.memberships
-              .map(
-                (membership) =>
-                  `${membership.watchlistName}（${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}）`,
-              )
-              .join(' · '),
-          ),
-        ]),
-      );
+const renderHoldingsView = (views) => renderStockTable(views.holdings, '暂无持仓成员。');
 
 const renderArchivedView = (views) => [
   el('p', 'muted', '列表归档即停用，成员与历史保留。'),
@@ -387,9 +421,9 @@ const renderWatchlistOverview = (setStatus) => {
   const overview = lastWatchlistOverview;
   if (overview === null) return;
   const views = deriveWatchlistViews(overview);
+  const sum = (pick) => views.listCards.reduce((total, card) => total + pick(card), 0);
   const summary = $('#watchlists-summary');
   if (summary !== null) {
-    const sum = (pick) => views.listCards.reduce((total, card) => total + pick(card), 0);
     mount(summary, [
       statBlock('关注列表', String(views.listCards.length)),
       statBlock('成员', String(sum((card) => card.memberCount))),
@@ -398,9 +432,19 @@ const renderWatchlistOverview = (setStatus) => {
         `+${sum((card) => card.todayEntered)} / -${sum((card) => card.todayExited)}`,
       ),
       statBlock('待研究', String(views.pending.length)),
-      statBlock('过期来源', String(sum((card) => card.staleSources))),
-      statBlock('紧急/重要触发', String(overview.triggers?.urgentImportantCount ?? 0)),
     ]);
+  }
+  // 异常提示降级为 tab 栏右侧一行小字，只在非 0 时出现，不占 stat 首屏
+  const hints = $('#watchlists-hints');
+  if (hints !== null) {
+    const stale = sum((card) => card.staleSources);
+    const urgentImportant = overview.triggers?.urgentImportantCount ?? 0;
+    const parts = [
+      ...(stale > 0 ? [`过期来源 ${stale}`] : []),
+      ...(urgentImportant > 0 ? [`紧急/重要触发 ${urgentImportant}`] : []),
+    ];
+    hints.hidden = parts.length === 0;
+    hints.textContent = parts.join(' · ');
   }
   const tabs = $('#watchlists-tabs');
   if (tabs !== null) {
@@ -421,10 +465,8 @@ const renderWatchlistOverview = (setStatus) => {
       }),
     );
   }
-  const meta = $('#watchlists-meta');
-  if (meta !== null) {
-    meta.textContent = `${views.listCards.length} 个列表 · ${views.stocks.length} 只股票`;
-  }
+  // 「按列表」是主从双栏；其余股票类视图通栏单栏，给行情表留足宽度
+  $('#watchlists-pane')?.classList.toggle('single-pane', watchlistView !== 'byList');
   const view = $('#watchlists-view');
   if (view === null) return;
   const content =
@@ -525,6 +567,8 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
 
   const health = summarizeMemberSources(members.flatMap(({ sources }) => sources));
   const latestByStock = lastWatchlistOverview?.triggers?.latestByStock ?? {};
+  const nameOf = (stockId) =>
+    lastWatchlistOverview?.stocks?.find((stock) => stock.stockId === stockId)?.name;
 
   const rows = members.map(({ member, sources }) => {
     const stage = memberSelect(
@@ -548,8 +592,20 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
       setStatus(updated.ok ? '优先级已更新' : errorText(updated), !updated.ok);
     });
     const trigger = latestByStock[member.stockId];
+    const archive = actionButton('归档', async (button) => {
+      button.disabled = true;
+      const archived = await archiveMember(watchlist.id, member.stockId);
+      setStatus(archived.ok ? `${member.stockId} 已归档` : errorText(archived), !archived.ok);
+      await renderWatchlists(setStatus);
+    });
+    archive.classList.add('member-archive');
     return el('div', 'entity-item', [
-      el('div', 'flex gap-2', [el('strong', null, member.stockId), stage, priority]),
+      el('div', 'flex gap-2 member-row-head', [
+        stockIdentityLink({ stockId: member.stockId, stockName: nameOf(member.stockId) }),
+        stage,
+        priority,
+        archive,
+      ]),
       el(
         'div',
         'flex gap-2',
@@ -572,12 +628,6 @@ const renderWatchlistDetail = async (watchlistId, setStatus) => {
               `最近触发：${RULE_KIND_TEXT[trigger.ruleKind] ?? trigger.ruleKind} · ${MEMBER_PRIORITY_TEXT[trigger.priority] ?? trigger.priority} · ${fmtDateTime(trigger.at)}`,
             ),
           ]),
-      actionButton('归档', async (button) => {
-        button.disabled = true;
-        const archived = await archiveMember(watchlist.id, member.stockId);
-        setStatus(archived.ok ? `${member.stockId} 已归档` : errorText(archived), !archived.ok);
-        await renderWatchlists(setStatus);
-      }),
     ]);
   });
 

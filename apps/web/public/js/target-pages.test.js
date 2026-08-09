@@ -4,7 +4,12 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { deriveWatchlistViews, summarizeMemberSources, triggerMetaText } from './target-pages.js';
+import {
+  deriveWatchlistViews,
+  sortStocksByQuote,
+  summarizeMemberSources,
+  triggerMetaText,
+} from './target-pages.js';
 
 describe('触发条目时间行', () => {
   it('读取 WatchTriggerSchema 的 createdAt 字段', () => {
@@ -142,6 +147,21 @@ describe('deriveWatchlistViews', () => {
       holdings: [],
       archived: { lists: [], members: [] },
     });
+  });
+});
+
+describe('sortStocksByQuote', () => {
+  it('按 |changePct| 降序，无行情排最后；不改原数组', () => {
+    const stocks = [
+      { stockId: 'a', changePct: 1.2 },
+      { stockId: 'b', changePct: null },
+      { stockId: 'c', changePct: -5.4 },
+      { stockId: 'd' },
+      { stockId: 'e', changePct: 3.1 },
+    ];
+    const sorted = sortStocksByQuote(stocks);
+    expect(sorted.map((s) => s.stockId)).toEqual(['c', 'e', 'a', 'b', 'd']);
+    expect(stocks.map((s) => s.stockId)).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
 });
 

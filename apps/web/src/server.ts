@@ -1023,7 +1023,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       holding: boolean;
     }
     const lists: Array<Record<string, unknown>> = [];
-    const stocksById = new Map<string, { stockId: string; memberships: StockMembership[] }>();
+    interface OverviewStock {
+      stockId: string;
+      /** 股票名称；batch_quote 成功前暂为 stockId。 */
+      name: string;
+      quote: {
+        close: number;
+        observedAt: unknown;
+        retrieval: 'live' | 'local-fallback';
+        freshness: 'fresh' | 'stale';
+      } | null;
+      /** 涨跌幅（%）：与 dashboard 看板同口径，batch_quote 昨收基准换算，无基准为 null。 */
+      changePct: number | null;
+      memberships: StockMembership[];
+    }
+    const stocksById = new Map<string, OverviewStock>();
     const todayChanges: TodayChange[] = [];
     const archivedLists: OverviewWatchlist[] = [];
     const archivedMembers: Array<Record<string, unknown>> = [];
@@ -1085,6 +1099,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         }
         const entry = stocksById.get(member.stockId) ?? {
           stockId: member.stockId,
+          name: member.stockId,
+          quote: null,
+          changePct: null,
           memberships: [],
         };
         entry.memberships.push({
@@ -1127,6 +1144,49 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         priority: trigger.priority,
         reason: trigger.reason,
       };
+    }
+
+    // 成员股票行情：照 /api/dashboard 看板模式一次 batch_quote 聚合，
+    // 整体失败降级为 quote=null，不拖垮总览端点。batch_quote 上限 100 只。
+    const stockIds = [...stocksById.keys()].slice(0, 100);
+    if (stockIds.length > 0) {
+      const quotesResult = await invokeTool('batch_quote', {
+        stockIds,
+        context: 'display',
+      });
+      if (quotesResult.ok) {
+        const { items } = quotesResult.data as {
+          items: Array<
+            | {
+                stockId: string;
+                stockName: string;
+                status: 'ok';
+                quote: { close: number; prevClose?: number; observedAt: unknown };
+                retrieval: 'live' | 'local-fallback';
+                freshness: 'fresh' | 'stale';
+              }
+            | { stockId: string; status: 'unresolved' | 'unavailable'; reason: string }
+          >;
+        };
+        for (const result of items) {
+          if (result.status !== 'ok') continue;
+          const entry = stocksById.get(result.stockId);
+          if (entry === undefined) continue;
+          entry.name = result.stockName;
+          entry.quote = {
+            close: result.quote.close,
+            observedAt: result.quote.observedAt,
+            retrieval: result.retrieval,
+            freshness: result.freshness,
+          };
+          const prevClose = result.quote.prevClose;
+          if (typeof prevClose === 'number' && prevClose > 0) {
+            entry.changePct = ((result.quote.close - prevClose) / prevClose) * 100;
+          }
+        }
+      } else {
+        warnings.push(`batch_quote 失败（${quotesResult.error.kind}），总览行情降级为空`);
+      }
     }
 
     return jsonResult({

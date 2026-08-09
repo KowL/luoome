@@ -18,6 +18,8 @@ export const BatchQuoteInput = z.object({
 const BatchQuoteItem = z.discriminatedUnion('status', [
   z.object({
     stockId: z.string(),
+    /** 股票目录里的名称，聚合页（dashboard 看板 / 关注总览）直接展示，不再二次解析。 */
+    stockName: z.string(),
     status: z.literal('ok'),
     quote: QuoteSchema,
     retrieval: z.enum(['live', 'local-fallback']),
@@ -49,7 +51,7 @@ export const batchQuoteTool = defineTool({
   input: BatchQuoteInput,
   output: BatchQuoteOutput,
   handler: async (input, ctx) => {
-    const resolved: string[] = [];
+    const resolved: Array<{ id: string; name: string }> = [];
     const items: z.infer<typeof BatchQuoteItem>[] = [];
     for (const raw of input.stockIds) {
       const stock =
@@ -57,14 +59,15 @@ export const batchQuoteTool = defineTool({
         (await ctx.repos.stock.findByCode(raw.trim().toUpperCase()));
       if (stock === null) {
         items.push({ stockId: raw, status: 'unresolved', reason: 'stock_not_found' });
-      } else if (!resolved.includes(stock.id)) {
-        resolved.push(stock.id);
+      } else if (!resolved.some((s) => s.id === stock.id)) {
+        resolved.push({ id: stock.id, name: stock.name });
       }
     }
     const now = ctx.clock();
     const freshAfterMs = Math.max(input.watchIntervalSeconds * 2_000, 180_000);
     const classify = (
       stockId: string,
+      stockName: string,
       quote: Quote,
       retrieval: 'live' | 'local-fallback',
     ): z.infer<typeof BatchQuoteItem> => {
@@ -84,6 +87,7 @@ export const batchQuoteTool = defineTool({
       }
       return {
         stockId,
+        stockName,
         status: 'ok',
         quote,
         retrieval,
@@ -92,21 +96,21 @@ export const batchQuoteTool = defineTool({
     };
 
     if (resolved.length > 0) {
-      const quotes = await ctx.adapters.market.batchQuote(resolved);
+      const quotes = await ctx.adapters.market.batchQuote(resolved.map((s) => s.id));
       const liveQuotes = [...quotes.values()].map((quote) => QuoteSchema.parse(quote));
       await Promise.all(liveQuotes.map((q) => ctx.repos.quote.save(q)));
       const fetched = new Map(liveQuotes.map((q) => [q.stockId, q]));
-      for (const stockId of resolved) {
-        const live = fetched.get(stockId);
+      for (const { id, name } of resolved) {
+        const live = fetched.get(id);
         if (live !== undefined) {
-          items.push(classify(stockId, live, 'live'));
+          items.push(classify(id, name, live, 'live'));
           continue;
         }
-        const cached = await ctx.repos.quote.latestByStock(stockId);
+        const cached = await ctx.repos.quote.latestByStock(id);
         if (cached !== null) {
-          items.push(classify(stockId, cached, 'local-fallback'));
+          items.push(classify(id, name, cached, 'local-fallback'));
         } else {
-          items.push({ stockId, status: 'unavailable', reason: 'quote_unavailable' });
+          items.push({ stockId: id, status: 'unavailable', reason: 'quote_unavailable' });
         }
       }
     }

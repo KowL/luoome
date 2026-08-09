@@ -57,7 +57,7 @@
         <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>看盘</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
         <li><a class="nav-item" href="#strategies" data-route="strategies"><span>策略</span></a></li>
-        <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>关注列表</span></a></li>
+        <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>关注</span></a></li>
         <li><a class="nav-item" href="#alerts" data-route="alerts"><span>预警计划</span></a></li>
         <li><a class="nav-item" href="#research" data-route="research"><span>研究</span></a></li>
         <li><a class="nav-item" href="#advice" data-route="advice"><span>建议</span></a></li>
@@ -297,16 +297,18 @@
       <section id="route-watchlists" class="route" data-route="watchlists" hidden>
         <div class="route-header">
           <div>
-            <h1>关注列表</h1>
+            <h1>关注</h1>
             <div class="route-meta">统一成员 · 多来源 · 研究阶段 · 优先级</div>
           </div>
-          <button id="btn-watchlist-create" class="btn btn-primary" type="button">+ 新建关注列表</button>
+          <button id="btn-watchlist-create" class="btn btn-primary" type="button">+ 新建关注</button>
         </div>
         <div class="stat-grid" id="watchlists-summary"></div>
-        <div class="split-pane mt-4">
+        <div class="watchlist-tabbar mt-4">
+          <div id="watchlists-tabs" class="flex gap-2"></div>
+          <div id="watchlists-hints" class="watchlist-hints" hidden></div>
+        </div>
+        <div class="split-pane mt-4" id="watchlists-pane">
           <div class="card entity-pane">
-            <div class="card-header"><h2>总览</h2><div id="watchlists-meta" class="card-meta">--</div></div>
-            <div id="watchlists-tabs" class="flex gap-2"></div>
             <div id="watchlists-view" class="entity-list"><p class="placeholder">加载中…</p></div>
           </div>
           <div class="card detail-pane">

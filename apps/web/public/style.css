@@ -2753,6 +2753,37 @@ html.has-bg-image .bg-layer {
   font-variant-numeric: tabular-nums;
 }
 
+/* 关注页：视图 tab 通栏一行，异常提示靠右；股票类视图单栏通栏 */
+.watchlist-tabbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.watchlist-hints {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.split-pane.single-pane {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.split-pane.single-pane .detail-pane {
+  display: none;
+}
+
+.member-row-head {
+  align-items: center;
+}
+
+.member-row-head .member-archive {
+  margin-left: auto;
+}
+
 .entity-stats {
   font-family: var(--font-mono);
   font-size: var(--text-xs);

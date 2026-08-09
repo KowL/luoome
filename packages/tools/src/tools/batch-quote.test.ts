@@ -11,6 +11,13 @@ describe('tool/batch_quote', () => {
     if (!res.ok) return;
     expect(res.data.quotes).toHaveLength(2);
     expect(res.data.unresolved).toEqual(['NOPE']);
+    // 名称随 ok 项返回，聚合页不再二次解析
+    expect(res.data.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stockId: '600519.SH', status: 'ok', stockName: '贵州茅台' }),
+        expect.objectContaining({ stockId: '002594.SZ', status: 'ok', stockName: '比亚迪' }),
+      ]),
+    );
     // 两条都落库
     expect(await ctx.repos.quote.latestByStock('002594.SZ')).not.toBeNull();
     expect(await ctx.repos.quote.latestByStock('600519.SH')).not.toBeNull();

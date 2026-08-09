@@ -907,6 +907,9 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
         }>;
         stocks: Array<{
           stockId: string;
+          name: string;
+          quote: { close: number } | null;
+          changePct: number | null;
           memberships: Array<{ watchlistId: string; holding: boolean }>;
         }>;
         todayChanges: Array<{ watchlistId: string; stockId: string; direction: string }>;
@@ -930,6 +933,9 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
         (membership) => membership.watchlistId === wid && membership.holding,
       ),
     ).toBe(true);
+    // 行情聚合：名称/现价随股票返回（FakeMarketAdapter 覆盖全部种子 A 股）
+    expect(holding?.name).toBe('贵州茅台');
+    expect(typeof holding?.quote?.close).toBe('number');
     expect(
       data?.todayChanges.some(
         (change) => change.watchlistId === wid && change.direction === 'entered',
