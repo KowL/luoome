@@ -65,8 +65,8 @@ const parsePositiveNumber = (raw) => {
 export const toolErrorText = (error) => {
   if (error === null || typeof error !== 'object') return '提交失败';
   if (error.kind === 'permission_denied') {
-    const required = error.required ?? '写操作需要有效 Web token';
-    return `权限校验失败：${required}；请前往「设置」保存当前服务的 Web token。`;
+    const required = error.required ?? '当前操作未开启';
+    return `权限校验失败：${required}`;
   }
   const detail = error.message ?? error.cause ?? '';
   return detail === '' ? String(error.kind) : `${error.kind}：${detail}`;

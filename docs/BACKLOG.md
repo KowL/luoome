@@ -22,7 +22,7 @@
 6. **版本号三处口径互相对不上**：CLI `VERSION = '0.1.0'`（`packages/cli/src/index.ts`）、MCP serverInfo 同、homebrew formula test 断言 `0.5.x`——而实际已 v0.6.2。
 7. **MCP smoke 硬编码 17 tool**：`packages/mcp/src/smoke.ts` 新增 read/advice tool 会脆断；smoke 无 CI / script 挂载，只能手跑。
 8. **db DDL 与 Drizzle schema 双份手写**：`ensureSchema` 编程式 DDL 与 `schema/index.ts` 靠纪律同步（唯一索引 / 复合主键两处都有），漂移风险，代码注释自认应被 migrate 取代；`createDrizzleRepos` docstring 残留「5 个 repository」（实际 11）。
-9. **Web 鉴权是装饰**：前端 `api.js` 附 `Bearer token`，服务端无鉴权中间件；多账户切换是 `ctxRef.current` 内存 mutate（单进程单 tab 假设；监听非 localhost 时需注意暴露面）。
+9. **Web 暴露面仍需收敛**：Web 不做账户级鉴权；多账户切换是 `ctxRef.current` 内存 mutate（单进程单 tab 假设；监听非 localhost 时需注意暴露面）。
 
 ## P3 — 代码气味（不阻塞）
 

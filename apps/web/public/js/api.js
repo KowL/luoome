@@ -3,29 +3,8 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-/** localStorage 中的 token key（设置页生成）。 */
-const TOKEN_KEY = 'luoome.token';
 /** localStorage 中的当前账户 id key（v0.5 W3 多账户切换）。 */
 const ACCOUNT_KEY = 'luoome.accountId';
-
-/** 读 token（无则返回空串）。 */
-const getToken = () => {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? '';
-  } catch {
-    return '';
-  }
-};
-
-/** 写 token。 */
-const setToken = (token) => {
-  try {
-    if (token.length > 0) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* 忽略：隐私模式或 quota */
-  }
-};
 
 /** 读当前账户 id（无则返回空串）。 */
 const getAccountId = () => {
@@ -54,8 +33,6 @@ const setAccountId = (accountId) => {
  */
 const callApi = async (path, init) => {
   const headers = new Headers(init?.headers);
-  const token = getToken();
-  if (token.length > 0) headers.set('authorization', `Bearer ${token}`);
   if (init?.body !== undefined && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }
@@ -74,4 +51,4 @@ const callApi = async (path, init) => {
   return body;
 };
 
-export { ACCOUNT_KEY, callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY };
+export { ACCOUNT_KEY, callApi, getAccountId, setAccountId };

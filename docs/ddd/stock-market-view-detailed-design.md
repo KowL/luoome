@@ -707,7 +707,7 @@ volume 颜色根据 `close >= open` 决定。MA 序列从 candles 在前端纯�
 ## 13. 安全与副作用
 
 - 浏览器只访问同源 Web server，不直接调用 Eastmoney/Tencent；
-- 所有请求继续要求现有 Web token；
+- 所有写请求继续受显式能力开关和同源 Origin 校验保护；
 - `get_stock_market_view` 只写行情缓存表和必要的 Stock stub；
 - 不写 Holding、Trade、Advice、WatchTrigger；
 - 不引入任何下单路径；

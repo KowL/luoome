@@ -134,7 +134,7 @@ bun install
 ./bin/luoome start
 ```
 
-浏览器打开 `http://127.0.0.1:5173`。首次启动生成 `~/.luoome/web-token`，将文件内容粘贴到 Web「设置」页即可执行修改。
+浏览器打开 `http://127.0.0.1:5173`。执行写操作前需以 `LUOOME_EXPOSE_WRITE=true` 启动 Web。
 
 `start` / `restart` / `web serve` 默认后台运行，终端立即解放，日志追加到 `~/.luoome/logs/luoome.log`（`tail -f` 查看）；需要前台调试时加 `--foreground`。
 
@@ -181,7 +181,7 @@ bun install
 - Strategy 不可变版本、校验、发布、dry-run/正式运行与信号事实
 - Watchlist 支持 manual / strategy / ai / portfolio / import 多来源与研究阶段
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
-- Web 默认仅监听 `127.0.0.1`，mutation 统一 Bearer token + 同源校验
+- Web 默认仅监听 `127.0.0.1`，mutation 统一显式能力开关 + 同源校验
 - `luoome start` 一键启动 Web + 长驻盯盘
 
 历史演进见 [docs/ROADMAP.md](./docs/ROADMAP.md)。
