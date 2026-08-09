@@ -147,7 +147,7 @@ export interface WatchTriggerLogInput {
   readonly ruleKind: string;
   readonly direction: string;
   readonly reason: string;
-  readonly quoteClose?: number;
+  readonly quoteClose?: number | undefined;
   readonly quote?: { readonly close: number; readonly ts: Date };
   readonly notified: boolean;
   readonly createdAt: Date;
@@ -171,9 +171,10 @@ export const formatTriggersForLog = (
           ? '卖'
           : '观察'
       : suppressedLabel;
-    const close = typeof t.quoteClose === 'number' ? t.quoteClose : (t.quote?.close ?? 0);
+    const close = typeof t.quoteClose === 'number' ? t.quoteClose : t.quote?.close;
+    const closeText = close === undefined ? '—'.padStart(6) : close.toFixed(2).padStart(6);
     lines.push(
-      `${pad(time, 19)}  ${pad(t.alertPlanId, 24)}  ${pad(t.stockId, 12)}  ${pad(t.ruleKind, 14)}  ${pad(dir, 6)}  ${close.toFixed(2).padStart(6)}    ${t.reason}`,
+      `${pad(time, 19)}  ${pad(t.alertPlanId, 24)}  ${pad(t.stockId, 12)}  ${pad(t.ruleKind, 14)}  ${pad(dir, 6)}  ${closeText}    ${t.reason}`,
     );
   }
   return lines.join('\n');

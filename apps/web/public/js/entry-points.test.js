@@ -30,6 +30,11 @@ describe('侧栏与路由结构', () => {
   it('导航 active 逻辑只遍历已存在的 .nav-item（无行情项时是空操作）', () => {
     expect(appJs).toContain("document.querySelectorAll('.nav-item')");
   });
+
+  it('预警页面菜单使用简化文案「预警」', () => {
+    expect(html).toMatch(/href="#alerts" data-route="alerts"><span>预警<\/span>/);
+    expect(html).not.toMatch(/href="#alerts" data-route="alerts"><span>预警计划<\/span>/);
+  });
 });
 
 describe('行情页入口', () => {

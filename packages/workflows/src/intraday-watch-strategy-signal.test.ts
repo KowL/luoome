@@ -188,6 +188,7 @@ describe('intraday-watch strategy-signal 规则', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggers).toHaveLength(1);
+    expect(r.data.triggers[0]?.quoteClose).toBeUndefined();
     const persisted = await base.repos.watchTrigger.listRecent({ poolId: 'sig-plan' });
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.quote).toBeUndefined();

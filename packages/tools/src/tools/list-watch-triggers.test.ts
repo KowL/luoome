@@ -61,6 +61,7 @@ describe('list_watch_triggers', () => {
         poolId: 'holdings-watch',
         stockId: '002594.SZ',
         ruleKind: 'cost-threshold',
+        ruleId: 'r_trigger-2',
         notified: false,
       },
       ctx,

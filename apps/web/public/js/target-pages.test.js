@@ -5,11 +5,61 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  buildAlertPlanMutationInput,
   deriveWatchlistViews,
   sortStocksByQuote,
   summarizeMemberSources,
   triggerMetaText,
 } from './target-pages.js';
+
+describe('预警表单', () => {
+  it('解析完整配置而不是生成固定价格阈值', () => {
+    expect(
+      buildAlertPlanMutationInput({
+        name: '重要价位',
+        watchlistId: 'watch-a',
+        rulesJson: '[{"id":"level","kind":"price-level","level":88,"side":"above"}]',
+        logic: 'ALL',
+        triggerMode: 'daily-first',
+        priority: 'important',
+        cooldownMinutes: '15',
+        dailyNotificationLimit: '5',
+        notifyOnRecovery: 'true',
+        enabled: 'true',
+      }),
+    ).toMatchObject({
+      name: '重要价位',
+      watchlistId: 'watch-a',
+      rules: [{ id: 'level', kind: 'price-level', level: 88, side: 'above' }],
+      logic: 'ALL',
+      triggerMode: 'daily-first',
+      priority: 'important',
+      cooldownMinutes: 15,
+      dailyNotificationLimit: 5,
+      notifyOnRecovery: true,
+      enabled: true,
+    });
+  });
+
+  it('拒绝空规则和非法通知上限', () => {
+    const base = {
+      name: '预警',
+      watchlistId: 'watch-a',
+      rulesJson: '[]',
+      logic: 'ANY',
+      triggerMode: 'on-enter',
+      priority: '',
+      cooldownMinutes: '30',
+      dailyNotificationLimit: '20',
+      notifyOnRecovery: 'false',
+      enabled: 'true',
+    };
+    expect(() => buildAlertPlanMutationInput(base)).toThrow('至少配置一条规则');
+    expect(() =>
+      buildAlertPlanMutationInput({ ...base, rulesJson: '[{}]', dailyNotificationLimit: '0' }),
+    ).toThrow('每日通知上限');
+  });
+});
 
 describe('触发条目时间行', () => {
   it('读取 WatchTriggerSchema 的 createdAt 字段', () => {

@@ -38,6 +38,8 @@ const requireToolData = <T>(toolName: string, result: ToolResult<T>): T => {
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const EVENT_LOOKAHEAD_DAYS = 90;
+const GLOBAL_DAILY_LIMIT_DEFAULT = 50;
 
 /** Asia/Shanghai 当日 00:00 的 UTC 毫秒。 */
 const shanghaiMidnightMs = (date: Date): number => {
@@ -124,6 +126,22 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
       'list_alert_plans',
       await ctx.tools.list_alert_plans.execute({ enabledOnly: true }),
     ).plans;
+    const todayStart = new Date(shanghaiMidnightMs(now));
+    const deliveryStats = requireToolData(
+      'get_watch_trigger_delivery_stats',
+      await ctx.tools.get_watch_trigger_delivery_stats.execute({
+        since: todayStart,
+        poolIds: plans.map((plan) => plan.id),
+      }),
+    );
+    const globalLimit =
+      Number(
+        (ctx as unknown as { config?: { globalDailyLimit?: number } }).config?.globalDailyLimit,
+      ) || GLOBAL_DAILY_LIMIT_DEFAULT;
+    let usedGlobal = deliveryStats.globalAttempted;
+    const usedByPlan = new Map(
+      deliveryStats.byPool.map((item) => [item.poolId, item.attempted] as const),
+    );
     for (const plan of plans) {
       const rules = eventDateRules(plan);
       if (rules.length === 0) continue;
@@ -131,15 +149,14 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
       const stockIds = await resolveMemberStockIds(plan, ctx);
 
       for (const rule of rules) {
-        const maxDays = Math.max(0, ...(rule.daysBefore.length > 0 ? rule.daysBefore : [7, 3, 1]));
-        const windowEnd = new Date(shanghaiMidnightMs(now) + (maxDays + 1) * DAY_MS);
+        const windowEnd = new Date(shanghaiMidnightMs(now) + (EVENT_LOOKAHEAD_DAYS + 1) * DAY_MS);
         for (const stockId of stockIds) {
           const events = requireToolData(
             'list_stock_events',
             await ctx.tools.list_stock_events.execute({
               stockId,
               status: 'scheduled',
-              from: now,
+              from: todayStart,
               to: windowEnd,
               ...(rule.eventKinds !== undefined ? { kinds: rule.eventKinds } : {}),
               limit: 500,
@@ -167,9 +184,10 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
             ).triggers.filter(
               (trigger) => trigger.ruleId === rule.id && trigger.eventId === event.id,
             );
-            const already = existing.some(
-              (t) => (t.evalSnapshot as { remindDay?: number }).remindDay === d,
-            );
+            const already = existing.some((t) => {
+              const snapshot = t.evalSnapshot as { remindDay?: number; occursAt?: string };
+              return snapshot.remindDay === d && snapshot.occursAt === event.occursAt.toISOString();
+            });
             if (already) {
               deduped += 1;
               continue;
@@ -177,8 +195,19 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
 
             const priority: AlertPriority =
               rule.priority ?? eventImportanceToPriority(event.importance);
-            const deliveryStatus =
-              input.dryRun || priority === 'normal' ? 'not-requested' : 'pending';
+            let deliveryStatus: WatchTrigger['deliveryStatus'] = 'not-requested';
+            if (!input.dryRun && priority !== 'normal') {
+              if (
+                (usedByPlan.get(plan.id) ?? 0) >= plan.dailyNotificationLimit ||
+                usedGlobal >= globalLimit
+              ) {
+                deliveryStatus = 'suppressed-daily-limit';
+              } else {
+                deliveryStatus = 'pending';
+                usedByPlan.set(plan.id, (usedByPlan.get(plan.id) ?? 0) + 1);
+                usedGlobal += 1;
+              }
+            }
 
             const trigger: WatchTrigger = {
               id: `wt_${globalThis.crypto.randomUUID().slice(0, 8)}`,

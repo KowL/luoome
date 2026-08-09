@@ -67,7 +67,7 @@ export const WatchTriggerSummarySchema = z.object({
   direction: z.string(),
   reason: z.string(),
   evidence: z.array(z.string()),
-  quoteClose: z.number(),
+  quoteClose: z.number().optional(),
   notified: z.boolean(),
   createdAt: z.coerce.date(),
 });
@@ -171,8 +171,8 @@ const dateInShanghai = (date: Date): string => {
 const buildEvalSnapshot = (args: {
   ruleId: string;
   kind: AlertRule['kind'];
-  quoteClose: Money;
-  quoteTs: Date;
+  quoteClose?: Money;
+  quoteTs?: Date;
   threshold: Record<string, unknown>;
   evaluatedValue: number;
   prevClose?: Money;
@@ -182,8 +182,8 @@ const buildEvalSnapshot = (args: {
 }): Record<string, unknown> => ({
   ruleId: args.ruleId,
   kind: args.kind,
-  quoteClose: args.quoteClose,
-  quoteTs: args.quoteTs,
+  ...(args.quoteClose === undefined ? {} : { quoteClose: args.quoteClose }),
+  ...(args.quoteTs === undefined ? {} : { quoteTs: args.quoteTs }),
   threshold: args.threshold,
   evaluatedValue: args.evaluatedValue,
   ...(args.prevClose !== undefined ? { prevClose: args.prevClose } : {}),
@@ -545,6 +545,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
   const candidates: WatchTrigger[] = [];
   const nextStates: WatchRuleState[] = [];
   let unknownCount = 0;
+  const triggeredToday = new Set<string>();
 
   // 6a：批量加载该池状态（按 pool 进行顺序处理；池数一般 O(10)）
   for (const pool of state.pools) {
@@ -556,6 +557,20 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
     const members = state.members.get(pool.id) ?? [];
     if (members.length === 0) continue;
 
+    if (pool.triggerMode === 'daily-first') {
+      const recent = await ctx.tools.list_watch_triggers.execute({
+        alertPlanId: pool.id,
+        since: startOfTodayShanghai(now),
+        limit: 10_000,
+      });
+      if (!recent.ok) return recent;
+      for (const trigger of recent.data.triggers) {
+        if (trigger.triggerType === 'triggered') {
+          triggeredToday.add(`${pool.id}|${trigger.stockId}|${trigger.ruleId}`);
+        }
+      }
+    }
+
     const statesResult = await ctx.tools.list_watch_rule_states.execute({ poolId: pool.id });
     if (!statesResult.ok) return statesResult;
     const allStates = statesResult.data.states;
@@ -566,6 +581,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
 
     // 按 (stockId, ruleId) 累积 active 结果，给 composite 用
     const activeByStockRule = new Map<string, boolean>();
+    const evaluationByStockRule = new Map<string, EvalResult>();
 
     // 先逐规则求值（同步）
     for (const rule of evaluableRules) {
@@ -601,10 +617,13 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
                 state.prevCloses,
                 state.avgCostByStock.get(member.stockId),
               );
+        const stateKey = `${member.stockId}|${rule.id}`;
+        evaluationByStockRule.set(stateKey, evaluation);
         if (evaluation.kind === 'unknown') {
           unknownCount += 1;
           // 状态保持：bootstrap 此前若无状态则初始化为 false，否则保留
-          const prevState = stateByKey.get(`${member.stockId}|${rule.id}`);
+          const prevState = stateByKey.get(stateKey);
+          activeByStockRule.set(stateKey, prevState?.active ?? false);
           if (prevState === undefined) {
             nextStates.push({
               alertPlanId: pool.id,
@@ -618,7 +637,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           continue;
         }
 
-        const prevState = stateByKey.get(`${member.stockId}|${rule.id}`);
+        const prevState = stateByKey.get(stateKey);
         const sm = stepStateMachine(prevState, evaluation, rule, now);
         // dry-run（notify=false）下，bootstrap=true 也视作 emit（§11：试跑可见当前命中）
         const isDryRun = state.input.notify === false;
@@ -637,7 +656,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         // 记录给 composite 用
         activeByStockRule.set(`${member.stockId}|${rule.id}`, nextState.active);
 
-        if (bootstrapEmits) {
+        if (pool.logic === 'ANY' && bootstrapEmits) {
           // bootstrapEmits 仅在 evaluation.kind='true' 时成立（state machine 保证）
           const evalTrue: EvalResult =
             evaluation.kind === 'true'
@@ -647,8 +666,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           const snapshot = buildEvalSnapshot({
             ruleId: rule.id,
             kind: rule.kind,
-            quoteClose: quote?.close ?? (0 as Money),
-            quoteTs: quote?.ts ?? now,
+            ...(quote === undefined ? {} : { quoteClose: quote.close, quoteTs: quote.ts }),
             threshold: ruleKindThreshold(rule),
             evaluatedValue: evalTrue.evaluatedValue,
           });
@@ -674,15 +692,15 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           };
           assertWatchTriggerInvariants(trigger);
           candidates.push(trigger);
+          triggeredToday.add(`${pool.id}|${member.stockId}|${rule.id}`);
         }
 
-        if (sm.emitRecovered && pool.notifyOnRecovery) {
+        if (pool.logic === 'ANY' && sm.emitRecovered && pool.notifyOnRecovery) {
           const direction = resolveTriggerDirection(rule, evaluation, !!quote);
           const snapshot = buildEvalSnapshot({
             ruleId: rule.id,
             kind: rule.kind,
-            quoteClose: quote?.close ?? (0 as Money),
-            quoteTs: quote?.ts ?? now,
+            ...(quote === undefined ? {} : { quoteClose: quote.close, quoteTs: quote.ts }),
             threshold: ruleKindThreshold(rule),
             evaluatedValue: evaluation.evaluatedValue,
           });
@@ -716,17 +734,17 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           evaluation.kind === 'true' &&
           prevState !== undefined &&
           prevState.active &&
+          pool.logic === 'ANY' &&
           // sm.next.active 也应当为 true（保留）
           (pool.triggerMode === 'repeat' ||
             (pool.triggerMode === 'daily-first' &&
-              !alreadyTriggeredToday(state, pool.id, member.stockId, rule.id, now)))
+              !alreadyTriggeredToday(triggeredToday, pool.id, member.stockId, rule.id)))
         ) {
           const direction = resolveTriggerDirection(rule, evaluation, !!quote);
           const snapshot = buildEvalSnapshot({
             ruleId: rule.id,
             kind: rule.kind,
-            quoteClose: quote?.close ?? (0 as Money),
-            quoteTs: quote?.ts ?? now,
+            ...(quote === undefined ? {} : { quoteClose: quote.close, quoteTs: quote.ts }),
             threshold: ruleKindThreshold(rule),
             evaluatedValue: evaluation.evaluatedValue,
           });
@@ -752,6 +770,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           };
           assertWatchTriggerInvariants(trigger);
           candidates.push(trigger);
+          triggeredToday.add(`${pool.id}|${member.stockId}|${rule.id}`);
         }
       }
     }
@@ -762,12 +781,9 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         const allActive = evaluableRules.every(
           (r) => activeByStockRule.get(`${member.stockId}|${r.id}`) === true,
         );
-        const anyUnknown = evaluableRules.some((r) => {
-          const prevState = stateByKey.get(`${member.stockId}|${r.id}`);
-          return prevState === undefined
-            ? false
-            : prevState.lastValue === undefined && !prevState.active; // 启发式：未评估过为 unknown
-        });
+        const anyUnknown = evaluableRules.some(
+          (r) => evaluationByStockRule.get(`${member.stockId}|${r.id}`)?.kind === 'unknown',
+        );
         const compositeId = 'composite';
         const prev = stateByKey.get(`${member.stockId}|${compositeId}`);
         const evaluation: EvalResult = anyUnknown
@@ -786,7 +802,15 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           stockId: member.stockId,
           ruleId: compositeId,
         });
-        if (sm.emitTrigger && allActive) {
+        const compositeKey = `${pool.id}|${member.stockId}|${compositeId}`;
+        const emitCompositeTrigger =
+          allActive &&
+          (sm.emitTrigger ||
+            (state.input.notify === false && prev === undefined) ||
+            (prev?.active === true &&
+              (pool.triggerMode === 'repeat' ||
+                (pool.triggerMode === 'daily-first' && !triggeredToday.has(compositeKey)))));
+        if (emitCompositeTrigger) {
           const compositeRuleKind = pickCompositeKind(evaluableRules);
           const priority = evaluableRules
             .map((r) => deriveAlertRulePriority(r, pool.priority))
@@ -817,6 +841,34 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           };
           assertWatchTriggerInvariants(trigger);
           candidates.push(trigger);
+          triggeredToday.add(compositeKey);
+        }
+        if (sm.emitRecovered && pool.notifyOnRecovery) {
+          const quote = state.quotes.get(member.stockId);
+          const trigger: WatchTrigger = {
+            id: makeTriggerId(pool.id, member.stockId, compositeId, now, 'cmp-rec'),
+            alertPlanId: pool.id,
+            poolId: pool.id,
+            stockId: member.stockId,
+            ruleKind: pickCompositeKind(evaluableRules),
+            ruleId: compositeId,
+            direction: 'watch',
+            triggerType: 'recovered',
+            reason: '已退出所有规则同时 active',
+            evidence: evaluableRules.map((r) => `${r.kind} state changed`),
+            ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
+            priority: 'normal',
+            deliveryStatus: 'not-requested',
+            evalSnapshot: {
+              ruleId: compositeId,
+              composite: true,
+              rules: evaluableRules.map((r) => r.kind),
+            },
+            notified: false,
+            createdAt: now,
+          };
+          assertWatchTriggerInvariants(trigger);
+          candidates.push(trigger);
         }
       }
     }
@@ -830,27 +882,13 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
   return { ...state, candidates, nextStates } satisfies EvaluatedState;
 };
 
-/** 已当天触发过：扫一遍候选（同 (pool, stock, rule) createdAt 当日）。 */
+/** 已当天触发过：读取本轮开始前的持久化 key，并随本轮候选追加。 */
 const alreadyTriggeredToday = (
-  state: PrevClosesState,
+  keys: ReadonlySet<string>,
   poolId: string,
   stockId: string,
   ruleId: string,
-  now: Date,
-): boolean => {
-  const todayStr = dateInShanghai(now);
-  for (const c of (state as unknown as EvaluatedState).candidates ?? []) {
-    if (
-      c.poolId === poolId &&
-      c.stockId === stockId &&
-      c.ruleId === ruleId &&
-      dateInShanghai(c.createdAt) === todayStr
-    ) {
-      return true;
-    }
-  }
-  return false;
-};
+): boolean => keys.has(`${poolId}|${stockId}|${ruleId}`);
 
 const priorityRank = (p: AlertPriority): number => (p === 'urgent' ? 2 : p === 'important' ? 1 : 0);
 
@@ -1054,9 +1092,10 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     let deliveryStatus: DeliveryStatus = 'pending';
 
     // 9. 优先级映射（normal → not-requested；试跑 / recovered + 默认关 → not-requested）
-    if (cand.triggerType === 'recovered' && !(pool.notifyOnRecovery === true)) {
+    const recoveryRequested = cand.triggerType === 'recovered' && pool.notifyOnRecovery === true;
+    if (cand.triggerType === 'recovered' && !recoveryRequested) {
       deliveryStatus = 'not-requested';
-    } else if (cand.priority === 'normal') {
+    } else if (cand.priority === 'normal' && !recoveryRequested) {
       // Phase 1 不做 15 分钟聚合，普通优先级只记录（§8 表格）
       deliveryStatus = 'not-requested';
     } else if (cooldownHit !== null) {
@@ -1079,8 +1118,7 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     // 与 pickup 配额相关的占位：先按照 ATTEMPTED_STATUSES 决定哪些会让配额增 1
     if (
       deliveryStatus === 'pending' &&
-      cand.priority !== 'normal' &&
-      cand.triggerType !== 'recovered' &&
+      (cand.priority !== 'normal' || recoveryRequested) &&
       cooldownHit === null
     ) {
       // 标记为「将要发生 ATTEMPT」—— 实际发送后再回写 deliveryStatus，notifyFailed 时不计数
@@ -1130,6 +1168,10 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
   const triggers = state.triggers;
   let notifiedCount = 0;
   let notifyFailed = 0;
+  const finalDelivery = new Map<
+    string,
+    { status: DeliveryStatus; notificationId?: string; notified: boolean }
+  >();
 
   // 仅发送 status='pending' 的；按 pool 切片聚合（保留每只股票方向与原因，§8）
   const byPool = new Map<string, WatchTrigger[]>();
@@ -1180,25 +1222,35 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
       ...(notificationId === undefined ? {} : { notificationId }),
     });
     if (!delivery.ok) return delivery;
+    for (const trigger of group) {
+      finalDelivery.set(trigger.id, {
+        status: deliveryStatus,
+        ...(notificationId === undefined ? {} : { notificationId }),
+        notified: (ATTEMPTED_DELIVERY_STATUSES as readonly string[]).includes(deliveryStatus),
+      });
+    }
   }
 
   return IntradayWatchOutput.parse({
-    triggers: triggers.map((t) => ({
-      id: t.id,
-      alertPlanId: t.alertPlanId ?? t.poolId,
-      stockId: t.stockId,
-      ruleKind: t.ruleKind,
-      ruleId: t.ruleId,
-      triggerType: t.triggerType,
-      priority: t.priority,
-      deliveryStatus: t.deliveryStatus,
-      direction: t.direction,
-      reason: t.reason,
-      evidence: [...t.evidence],
-      quoteClose: t.quote?.close ?? (0 as Money),
-      notified: t.notified,
-      createdAt: t.createdAt,
-    })),
+    triggers: triggers.map((t) => {
+      const resolved = finalDelivery.get(t.id);
+      return {
+        id: t.id,
+        alertPlanId: t.alertPlanId ?? t.poolId,
+        stockId: t.stockId,
+        ruleKind: t.ruleKind,
+        ruleId: t.ruleId,
+        triggerType: t.triggerType,
+        priority: t.priority,
+        deliveryStatus: resolved?.status ?? t.deliveryStatus,
+        direction: t.direction,
+        reason: t.reason,
+        evidence: [...t.evidence],
+        ...(t.quote === undefined ? {} : { quoteClose: t.quote.close }),
+        notified: resolved?.notified ?? t.notified,
+        createdAt: t.createdAt,
+      };
+    }),
     evaluatedPlans: state.pools.length,
     evaluatedStocks: state.allStockIds.length,
     notified: notifiedCount,

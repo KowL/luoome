@@ -8,9 +8,10 @@ export const ListWatchTriggersInput = z.object({
   poolId: z.string().min(1).optional(),
   stockId: z.string().min(1).optional(),
   ruleKind: WatchRuleKindSchema.optional(),
+  ruleId: z.string().min(1).optional(),
   notified: z.boolean().optional(),
   since: z.coerce.date().optional(),
-  limit: z.number().int().positive().max(500).default(50),
+  limit: z.number().int().positive().max(10_000).default(50),
 });
 
 export const ListWatchTriggersOutput = z.object({
@@ -50,6 +51,7 @@ export const listWatchTriggersTool = defineTool({
           (trigger.alertPlanId ?? trigger.poolId) === input.alertPlanId,
       )
       .filter((trigger) => input.ruleKind === undefined || trigger.ruleKind === input.ruleKind)
+      .filter((trigger) => input.ruleId === undefined || trigger.ruleId === input.ruleId)
       .filter((trigger) => input.notified === undefined || trigger.notified === input.notified)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));
     return {

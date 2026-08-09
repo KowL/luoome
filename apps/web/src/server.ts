@@ -1218,6 +1218,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     }),
   );
   app.post('/api/alert-plans', (c) => targetMutation(c.req.raw, 'write', 'create_alert_plan'));
+  app.patch('/api/alert-plans/:id', (c) =>
+    targetMutation(c.req.raw, 'write', 'update_alert_plan', {
+      alertPlanId: c.req.param('id'),
+    }),
+  );
+  app.delete('/api/alert-plans/:id', (c) =>
+    targetMutation(c.req.raw, 'write', 'delete_alert_plan', {
+      alertPlanId: c.req.param('id'),
+    }),
+  );
 
   app.get('/api/watch/status', (c) => {
     const interval = Number(c.req.query('interval') ?? 60);
