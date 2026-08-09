@@ -149,6 +149,7 @@ export const setFollowSystem = (enabled) => {
     if (enabled) {
       localStorage.setItem(FOLLOW_KEY, '1');
     } else {
+      localStorage.setItem(THEME_KEY, getTheme());
       localStorage.removeItem(FOLLOW_KEY);
     }
   } catch {
