@@ -119,6 +119,13 @@ describe('formatTriggersForLog', () => {
     expect(out).toContain('[冷却]');
     expect(out).not.toContain('[cool]');
   });
+
+  it('缺少行情时显示不可用，不伪造 0 元价格', () => {
+    const { quote: _quote, ...withoutQuote } = trigger();
+    const out = formatTriggersForLog([withoutQuote]);
+    expect(out).toContain('—');
+    expect(out).not.toContain('0.00');
+  });
 });
 
 describe('isTradingHours 节假日历（v0.6）', () => {

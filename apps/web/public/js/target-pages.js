@@ -20,6 +20,48 @@ const post = (path, input, method = 'POST') =>
 export const triggerMetaText = (trigger) =>
   `${trigger.alertPlanId} · 数据 ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
 
+export const buildAlertPlanMutationInput = (values, { editing = false } = {}) => {
+  let rules;
+  try {
+    rules = JSON.parse(values.rulesJson);
+  } catch {
+    throw new Error('规则必须是合法 JSON');
+  }
+  if (!Array.isArray(rules) || rules.length === 0) throw new Error('至少配置一条规则');
+  const cooldownMinutes = Number(values.cooldownMinutes);
+  const dailyNotificationLimit = Number(values.dailyNotificationLimit);
+  if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0) {
+    throw new Error('冷却分钟数必须是非负整数');
+  }
+  if (
+    !Number.isInteger(dailyNotificationLimit) ||
+    dailyNotificationLimit < 1 ||
+    dailyNotificationLimit > 500
+  ) {
+    throw new Error('每日通知上限必须是 1～500 的整数');
+  }
+  const name = values.name.trim();
+  const watchlistId = values.watchlistId.trim();
+  if (name.length === 0) throw new Error('请输入预警名称');
+  if (watchlistId.length === 0) throw new Error('请输入关注列表 ID');
+  return {
+    name,
+    watchlistId,
+    rules,
+    logic: values.logic,
+    triggerMode: values.triggerMode,
+    ...(values.priority.length === 0
+      ? editing
+        ? { priority: null }
+        : {}
+      : { priority: values.priority }),
+    cooldownMinutes,
+    dailyNotificationLimit,
+    notifyOnRecovery: values.notifyOnRecovery === 'true',
+    enabled: values.enabled === 'true',
+  };
+};
+
 const actionButton = (label, action, primary = false) => {
   const button = el('button', `btn ${primary ? 'btn-primary' : 'btn-outline'} btn-sm`, label);
   button.type = 'button';
@@ -682,6 +724,114 @@ export const renderWatchlists = async (setStatus) => {
   renderWatchlistOverview(setStatus);
 };
 
+const editAlertPlan = async (plan, setStatus) => {
+  const creating = plan === null;
+  const watchlistId = creating
+    ? watchlistStockTab === 'all'
+      ? ''
+      : watchlistStockTab
+    : plan.watchlistId;
+  const values = await promptDialog({
+    title: creating ? '新建预警' : '编辑预警',
+    note: '规则使用 AlertRule JSON 数组；每条规则必须保留稳定且唯一的 id。',
+    fields: [
+      {
+        key: 'name',
+        label: '名称',
+        value: creating ? `${watchlistId || '关注列表'} 价格预警` : plan.name,
+      },
+      { key: 'watchlistId', label: '关注列表 ID', value: watchlistId },
+      {
+        key: 'rulesJson',
+        label: '规则 JSON',
+        multiline: true,
+        rows: 10,
+        value: JSON.stringify(
+          creating
+            ? [{ id: 'price-level-1', kind: 'price-level', level: 10, side: 'above' }]
+            : plan.rules,
+          null,
+          2,
+        ),
+      },
+      {
+        key: 'logic',
+        label: '组合逻辑',
+        value: creating ? 'ANY' : plan.logic,
+        options: [
+          { value: 'ANY', label: '任一规则命中' },
+          { value: 'ALL', label: '全部规则命中' },
+        ],
+      },
+      {
+        key: 'triggerMode',
+        label: '触发模式',
+        value: creating ? 'on-enter' : plan.triggerMode,
+        options: [
+          { value: 'on-enter', label: '进入条件时' },
+          { value: 'daily-first', label: '每日首次' },
+          { value: 'repeat', label: '持续重复' },
+        ],
+      },
+      {
+        key: 'priority',
+        label: '默认优先级',
+        value: creating ? '' : (plan.priority ?? ''),
+        options: [
+          { value: '', label: '按规则推导' },
+          { value: 'normal', label: '普通' },
+          { value: 'important', label: '重要' },
+          { value: 'urgent', label: '紧急' },
+        ],
+      },
+      {
+        key: 'cooldownMinutes',
+        label: '冷却分钟数',
+        value: String(creating ? 30 : plan.cooldownMinutes),
+      },
+      {
+        key: 'dailyNotificationLimit',
+        label: '每日通知上限',
+        value: String(creating ? 20 : plan.dailyNotificationLimit),
+      },
+      {
+        key: 'notifyOnRecovery',
+        label: '恢复时通知',
+        value: String(creating ? false : plan.notifyOnRecovery),
+        options: [
+          { value: 'false', label: '否' },
+          { value: 'true', label: '是' },
+        ],
+      },
+      {
+        key: 'enabled',
+        label: '状态',
+        value: String(creating ? true : plan.enabled),
+        options: [
+          { value: 'true', label: '启用' },
+          { value: 'false', label: '停用' },
+        ],
+      },
+    ],
+    confirmLabel: creating ? '创建' : '保存',
+  });
+  if (values === null) return false;
+  let input;
+  try {
+    input = buildAlertPlanMutationInput(values, { editing: !creating });
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : '预警配置无效', true);
+    return false;
+  }
+  const result = await post(
+    creating ? '/api/alert-plans' : `/api/alert-plans/${encodeURIComponent(plan.id)}`,
+    input,
+    creating ? 'POST' : 'PATCH',
+  );
+  setStatus(result.ok ? (creating ? '预警已创建' : '预警已更新') : errorText(result), !result.ok);
+  return result.ok;
+};
+
 export const renderAlerts = async (setStatus) => {
   const [plansResult, triggersResult] = await Promise.all([
     callApi('/api/alert-plans'),
@@ -696,12 +846,41 @@ export const renderAlerts = async (setStatus) => {
     mount(
       plansRoot,
       plansResult.ok
-        ? plans.map((plan) =>
-            el('div', 'entity-item', [
+        ? plans.map((plan) => {
+            const edit = actionButton('编辑', async () => {
+              if (await editAlertPlan(plan, setStatus)) await renderAlerts(setStatus);
+            });
+            const remove = actionButton('删除', async () => {
+              const confirmed = await confirmDialog({
+                title: '删除预警',
+                message: `确认删除「${plan.name}」？历史触发记录会保留。`,
+                confirmLabel: '删除',
+                danger: true,
+              });
+              if (!confirmed) return;
+              const result = await post(
+                `/api/alert-plans/${encodeURIComponent(plan.id)}`,
+                {},
+                'DELETE',
+              );
+              setStatus(result.ok ? '预警已删除' : errorText(result), !result.ok);
+              if (result.ok) await renderAlerts(setStatus);
+            });
+            return el('div', 'entity-item', [
               el('strong', null, plan.name),
-              el('span', 'muted', `${plan.watchlistId} · ${plan.rules.length} 条规则`),
-            ]),
-          )
+              el(
+                'span',
+                'muted',
+                `${plan.watchlistId} · ${plan.rules.length} 条规则 · ${plan.logic} · ${plan.triggerMode} · 冷却 ${plan.cooldownMinutes} 分钟 · 日上限 ${plan.dailyNotificationLimit}`,
+              ),
+              el(
+                'span',
+                `badge ${plan.enabled ? 'badge-active' : 'badge-neutral'}`,
+                plan.enabled ? '启用' : '停用',
+              ),
+              el('div', 'flex gap-2', [edit, remove]),
+            ]);
+          })
         : el('p', 'status error', errorText(plansResult)),
     );
   }
@@ -868,27 +1047,7 @@ export const initTargetActions = ({ setStatus, refresh }) => {
     await refresh('watchlists');
   });
   $('#btn-alert-create')?.addEventListener('click', async () => {
-    const values = await promptDialog({
-      title: '新建预警计划',
-      // 当前停在某个列表 tab 时预填该列表 ID
-      fields: [
-        {
-          key: 'watchlistId',
-          label: '引用的关注列表 ID',
-          value: watchlistStockTab === 'all' ? '' : watchlistStockTab,
-        },
-      ],
-      confirmLabel: '创建',
-    });
-    const watchlistId = values?.watchlistId;
-    if (watchlistId === undefined || watchlistId.length === 0) return;
-    const result = await post('/api/alert-plans', {
-      name: `${watchlistId} 价格提醒`,
-      watchlistId,
-      rules: [{ id: 'price-level-1', kind: 'price-level', level: 1, side: 'above' }],
-    });
-    setStatus(result.ok ? '预警计划已创建' : errorText(result), !result.ok);
-    await refresh('alerts');
+    if (await editAlertPlan(null, setStatus)) await refresh('alerts');
   });
   $('#btn-alert-run')?.addEventListener('click', async () => {
     const result = await post('/api/watch/run-once', { notify: false });

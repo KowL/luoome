@@ -473,6 +473,31 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       data?: { plans?: Array<{ id: string }> };
     };
     expect(alerts.data?.plans?.some((plan) => plan.id === alertPlanId)).toBe(true);
+
+    const updated = await app.fetch(
+      new Request(`http://test/api/alert-plans/${alertPlanId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ name: 'Web AlertPlan Updated', enabled: false }),
+      }),
+    );
+    expect(updated.status).toBe(200);
+    expect(
+      (await updated.json()) as { data?: { plan?: { name?: string; enabled?: boolean } } },
+    ).toMatchObject({ data: { plan: { name: 'Web AlertPlan Updated', enabled: false } } });
+
+    const removed = await app.fetch(
+      new Request(`http://test/api/alert-plans/${alertPlanId}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(removed.status).toBe(200);
+    const afterDelete = (await (
+      await app.fetch(new Request('http://test/api/alert-plans'))
+    ).json()) as { data?: { plans?: Array<{ id: string }> } };
+    expect(afterDelete.data?.plans?.some((plan) => plan.id === alertPlanId)).toBe(false);
   });
 
   it('GET /api/strategy-templates 返回内置模板目录', async () => {

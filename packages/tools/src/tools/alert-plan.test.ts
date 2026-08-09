@@ -100,4 +100,37 @@ describe('AlertPlan tools', () => {
     if (result.ok) return;
     expect(result.error.kind).toBe('not_found');
   });
+
+  it('更新时 priority=null 清除计划级优先级', async () => {
+    const ctx = await buildTestContext();
+    await createWatchlistTool.execute(
+      {
+        id: 'priority-watchlist',
+        name: '优先级观察',
+        kind: 'personal',
+        membershipPolicy: 'manual',
+      },
+      ctx,
+    );
+    await createAlertPlanTool.execute(
+      {
+        id: 'priority-alert',
+        name: '优先级提醒',
+        watchlistId: 'priority-watchlist',
+        priority: 'urgent',
+        rules: [{ id: 'level', kind: 'price-level', level: 10, side: 'above' }],
+      },
+      ctx,
+    );
+
+    const result = await updateAlertPlanTool.execute(
+      { alertPlanId: 'priority-alert', priority: null },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.plan.priority).toBeUndefined();
+    expect((await ctx.repos.alertPlan.findById('priority-alert'))?.priority).toBeUndefined();
+  });
 });

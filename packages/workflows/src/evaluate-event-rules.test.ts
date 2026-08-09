@@ -16,7 +16,14 @@ const EVENT_IN_3_DAYS = new Date('2026-07-27T16:00:00.000Z');
 
 const seedAlertPlanWithEventRule = async (
   ctx: ToolContext,
-  opts: { importance?: 'normal' | 'important' | 'urgent'; daysBefore?: number[] } = {},
+  opts: {
+    importance?: 'normal' | 'important' | 'urgent';
+    daysBefore?: number[];
+    occursAt?: Date;
+    remindBeforeDays?: number[];
+    dailyNotificationLimit?: number;
+    planPriority?: 'normal' | 'important' | 'urgent';
+  } = {},
 ): Promise<StockEvent> => {
   const now = CLOCK();
   const watchlist = WatchlistSchema.parse({
@@ -48,7 +55,8 @@ const seedAlertPlanWithEventRule = async (
     logic: 'ANY',
     triggerMode: 'on-enter',
     cooldownMinutes: 30,
-    dailyNotificationLimit: 20,
+    dailyNotificationLimit: opts.dailyNotificationLimit ?? 20,
+    ...(opts.planPriority === undefined ? {} : { priority: opts.planPriority }),
     notifyOnRecovery: false,
     enabled: true,
     createdAt: now,
@@ -60,13 +68,13 @@ const seedAlertPlanWithEventRule = async (
     stockId: 'stk-evt',
     kind: 'earnings',
     title: 'Q2 财报',
-    occursAt: EVENT_IN_3_DAYS,
+    occursAt: opts.occursAt ?? EVENT_IN_3_DAYS,
     allDay: true,
     importance: opts.importance ?? 'important',
     status: 'scheduled',
     source: 'manual',
     stale: false,
-    remindBeforeDays: [],
+    remindBeforeDays: opts.remindBeforeDays ?? [],
     createdAt: now,
     updatedAt: now,
   };
@@ -116,6 +124,19 @@ describe('evaluate-event-rules workflow', () => {
     expect(triggers[0]?.deliveryStatus).toBe('not-requested');
   });
 
+  it('事件规则未指定优先级时继承 AlertPlan 默认优先级', async () => {
+    const ctx = await buildTestContext({ clock: CLOCK });
+    await seedAlertPlanWithEventRule(ctx, { importance: 'normal', planPriority: 'urgent' });
+
+    const result = await evaluateEventRulesWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.notified).toBe(1);
+    const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' });
+    expect(triggers[0]).toMatchObject({ priority: 'urgent', deliveryStatus: 'sent' });
+  });
+
   it('窗口外事件不触发', async () => {
     const ctx = await buildTestContext({ clock: CLOCK });
     await seedAlertPlanWithEventRule(ctx, { daysBefore: [1] }); // 事件在 3 天后，规则只提醒 1 天前
@@ -123,6 +144,76 @@ describe('evaluate-event-rules workflow', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggered).toBe(0);
+  });
+
+  it('daysBefore=[0] 可命中今天 00:00 的全天事件', async () => {
+    const ctx = await buildTestContext({ clock: CLOCK });
+    await seedAlertPlanWithEventRule(ctx, {
+      daysBefore: [0],
+      occursAt: new Date('2026-07-24T16:00:00.000Z'),
+    });
+
+    const result = await evaluateEventRulesWorkflow.run({ dryRun: true }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.triggered).toBe(1);
+  });
+
+  it('事件级 remindBeforeDays 可覆盖规则默认窗口', async () => {
+    const ctx = await buildTestContext({ clock: CLOCK });
+    await seedAlertPlanWithEventRule(ctx, {
+      daysBefore: [7, 3, 1],
+      occursAt: new Date('2026-08-23T16:00:00.000Z'),
+      remindBeforeDays: [30],
+    });
+
+    const result = await evaluateEventRulesWorkflow.run({ dryRun: true }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.triggered).toBe(1);
+  });
+
+  it('事件改期后相同 remindDay 仍生成新的提醒事实', async () => {
+    let now = CLOCK();
+    const ctx = await buildTestContext({ clock: () => now });
+    const event = await seedAlertPlanWithEventRule(ctx);
+    await evaluateEventRulesWorkflow.run({ dryRun: true }, ctx);
+    now = new Date('2026-07-29T01:00:00.000Z');
+    await ctx.repos.stockEvent.save({
+      ...event,
+      occursAt: new Date('2026-07-31T16:00:00.000Z'),
+      updatedAt: now,
+    });
+
+    const second = await evaluateEventRulesWorkflow.run({ dryRun: true }, ctx);
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.triggered).toBe(1);
+    expect(await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' })).toHaveLength(2);
+  });
+
+  it('事件提醒遵守 AlertPlan 每日通知上限', async () => {
+    const ctx = await buildTestContext({ clock: CLOCK });
+    const first = await seedAlertPlanWithEventRule(ctx, { dailyNotificationLimit: 1 });
+    await ctx.repos.stockEvent.save({
+      ...first,
+      id: 'evt-2',
+      title: 'Q2 业绩说明会',
+    });
+
+    const result = await evaluateEventRulesWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.triggered).toBe(2);
+    expect(result.data.notified).toBe(1);
+    const statuses = (await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' }))
+      .map((trigger) => trigger.deliveryStatus)
+      .sort();
+    expect(statuses).toEqual(['sent', 'suppressed-daily-limit']);
   });
 
   it('tool 返回错误时把已开始的 WorkflowRun 更新为 failed', async () => {
