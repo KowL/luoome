@@ -964,7 +964,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.post('/api/watchlists', (c) => targetMutation(c.req.raw, 'write', 'create_watchlist'));
 
   /**
-   * Watchlist 总览聚合（PRD §10.1）：一次请求组装六种视图所需数据，
+   * Watchlist 总览聚合（PRD §10.1）：一次请求组装主视图与已归档弹窗所需数据，
    * 前端按 tab 派生，切换视图不重复拉取。照 /api/dashboard 模式：
    * invokeTool + 请求内缓存；单列表 detail/changes 失败降级为警告，不拖垮整个端点。
    * 「已归档列表」= enabled=false：core Watchlist 无 archivedAt，repo.archive 即停用。

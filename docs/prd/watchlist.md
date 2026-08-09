@@ -323,23 +323,19 @@ Strategy DSL。
 
 ### 10.1 Watchlist 总览
 
-展示：
+页面自上而下四个层级：
 
-- Watchlist 卡片和成员数；
-- 今日 entered/exited；
-- discovered 待处理数；
-- urgent/important 触发；
-- stale/failed 来源；
-- Watch Runner 健康状态。
+1. **状态统计卡片**：列表数、成员数、今日 entered/exited、待研究数；今日变化与待研究卡片
+   可点击跳转到页面同名区块。stale 来源与 urgent/important 触发非 0 时以提示小字展示。
+2. **分组列表（股票区）**：tab 为「全部 + 每个 Watchlist」。「全部」展示所有列表去重后的
+   股票行情表（名称/现价/涨跌幅，持仓 badge）；单个列表 tab 展示该列表的信息条
+   （kind/策略/来源健康/编辑/归档/加成员/关联 AlertPlan 入口）与成员行情表
+   （阶段、优先级行内修改，来源，成员归档）。
+3. **今日变化**：各来源同步运行产生的当日 entered/exited 流水。
+4. **待研究**：跨列表 stage=discovered 成员，可一键开始研究或归档。
 
-支持视图：
-
-- 按 Watchlist；
-- 全部股票去重；
-- 今日变化；
-- 待研究；
-- 当前持仓；
-- 已归档。
+已归档（列表与成员）经页头按钮弹窗查看，不占主视图；持仓身份通过股票区的持仓 badge 表达，
+不单设视图。
 
 ### 10.2 Watchlist 详情
 
