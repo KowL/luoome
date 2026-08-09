@@ -3552,12 +3552,10 @@ textarea::placeholder {
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 249, 252, 0.96)),
+    linear-gradient(180deg, var(--panel), var(--panel-alt)),
     var(--panel-solid);
   padding: 26px 28px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.6),
-    var(--shadow-md);
+  box-shadow: var(--shadow-md);
 }
 
 .ai-settings-panel::after {
@@ -3782,11 +3780,9 @@ textarea::placeholder {
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(247, 249, 252, 0.98)),
+    linear-gradient(145deg, var(--panel), var(--panel-alt)),
     var(--panel-solid);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.6),
-    var(--shadow-md);
+  box-shadow: var(--shadow-md);
 }
 
 .market-routing-panel::after {
