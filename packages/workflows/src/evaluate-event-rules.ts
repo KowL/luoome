@@ -4,6 +4,7 @@ import {
   type AlertRule,
   eventImportanceToPriority,
   type StockEvent,
+  type ToolResult,
   type WatchTrigger,
   type WorkflowRun,
 } from '@luoome/core';
@@ -14,6 +15,11 @@ import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './defin
 const recordRun = async (ctx: WorkflowContext, run: WorkflowRun): Promise<void> => {
   const result = await ctx.tools.record_workflow_run.execute({ run });
   if (!result.ok) throw new Error(JSON.stringify(result.error));
+};
+
+const requireToolData = <T>(toolName: string, result: ToolResult<T>): T => {
+  if (!result.ok) throw new Error(`${toolName}: ${JSON.stringify(result.error)}`);
+  return result.data;
 };
 
 /**
@@ -66,9 +72,12 @@ const resolveMemberStockIds = async (
   plan: AlertPlan,
   ctx: WorkflowContext,
 ): Promise<readonly string[]> => {
-  const result = await ctx.tools.get_watchlist.execute({ watchlistId: plan.watchlistId });
-  if (!result.ok || !result.data.watchlist.enabled) return [];
-  return result.data.members.map((item) => item.member.stockId);
+  const data = requireToolData(
+    'get_watchlist',
+    await ctx.tools.get_watchlist.execute({ watchlistId: plan.watchlistId }),
+  );
+  if (!data.watchlist.enabled) return [];
+  return data.members.map((item) => item.member.stockId);
 };
 
 const eventDateRules = (plan: AlertPlan): readonly Extract<AlertRule, { kind: 'event-date' }>[] =>
@@ -104,15 +113,17 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
   };
   await recordRun(ctx, runningRun);
 
-  const plansResult = await ctx.tools.list_alert_plans.execute({ enabledOnly: true });
-  if (!plansResult.ok) return plansResult;
-  const plans = plansResult.data.plans;
   let evaluatedPlans = 0;
   let triggered = 0;
+  let notified = 0;
   let deduped = 0;
   const pending: WatchTrigger[] = [];
 
   try {
+    const plans = requireToolData(
+      'list_alert_plans',
+      await ctx.tools.list_alert_plans.execute({ enabledOnly: true }),
+    ).plans;
     for (const plan of plans) {
       const rules = eventDateRules(plan);
       if (rules.length === 0) continue;
@@ -123,34 +134,37 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
         const maxDays = Math.max(0, ...(rule.daysBefore.length > 0 ? rule.daysBefore : [7, 3, 1]));
         const windowEnd = new Date(shanghaiMidnightMs(now) + (maxDays + 1) * DAY_MS);
         for (const stockId of stockIds) {
-          const eventsResult = await ctx.tools.list_stock_events.execute({
-            stockId,
-            status: 'scheduled',
-            from: now,
-            to: windowEnd,
-            ...(rule.eventKinds !== undefined ? { kinds: rule.eventKinds } : {}),
-            limit: 500,
-          });
-          if (!eventsResult.ok) return eventsResult;
+          const events = requireToolData(
+            'list_stock_events',
+            await ctx.tools.list_stock_events.execute({
+              stockId,
+              status: 'scheduled',
+              from: now,
+              to: windowEnd,
+              ...(rule.eventKinds !== undefined ? { kinds: rule.eventKinds } : {}),
+              limit: 500,
+            }),
+          ).events;
           const importanceRank = { normal: 0, important: 1, urgent: 2 } as const;
-          const events = eventsResult.data.events.filter(
+          const eligibleEvents = events.filter(
             (event) => importanceRank[event.importance] >= importanceRank[rule.minImportance],
           );
-          for (const event of events) {
+          for (const event of eligibleEvents) {
             const effectiveDays =
               event.remindBeforeDays.length > 0 ? event.remindBeforeDays : rule.daysBefore;
             const d = dayDiff(event.occursAt, now);
             if (!effectiveDays.includes(d)) continue;
 
             // 去重：(alertPlanId, stockId, ruleId, eventId, remindDay) 最多一条
-            const existingResult = await ctx.tools.list_watch_triggers.execute({
-              poolId: plan.id,
-              stockId: event.stockId,
-              ruleKind: 'event-date',
-              limit: 500,
-            });
-            if (!existingResult.ok) return existingResult;
-            const existing = existingResult.data.triggers.filter(
+            const existing = requireToolData(
+              'list_watch_triggers',
+              await ctx.tools.list_watch_triggers.execute({
+                poolId: plan.id,
+                stockId: event.stockId,
+                ruleKind: 'event-date',
+                limit: 500,
+              }),
+            ).triggers.filter(
               (trigger) => trigger.ruleId === rule.id && trigger.eventId === event.id,
             );
             const already = existing.some(
@@ -191,14 +205,80 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
               notified: false,
               createdAt: now,
             };
-            const saved = await ctx.tools.save_watch_trigger.execute(trigger);
-            if (!saved.ok) return saved;
+            requireToolData(
+              'save_watch_trigger',
+              await ctx.tools.save_watch_trigger.execute(trigger),
+            );
             triggered += 1;
             if (deliveryStatus === 'pending') pending.push(trigger);
           }
         }
       }
     }
+
+    // 发送 pending（按 AlertPlan 分组），回写 deliveryStatus
+    let sendFailed = false;
+    const byPlan = new Map<string, WatchTrigger[]>();
+    for (const t of pending) {
+      const arr = byPlan.get(t.poolId) ?? [];
+      arr.push(t);
+      byPlan.set(t.poolId, arr);
+    }
+    for (const [alertPlanId, group] of byPlan) {
+      const lines = group.map((t) => {
+        const prio =
+          t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
+        return `· ${prio}${t.stockId} — ${t.reason}`;
+      });
+      const r = await ctx.tools.send_notification.execute({
+        log: {
+          title: `事件提醒 ${alertPlanId} ${group.length} 条`,
+          content: lines.join('\n'),
+          level: 'info',
+        },
+      });
+      let status: WatchTrigger['deliveryStatus'] = 'sent';
+      let notificationId: string | undefined;
+      if (!r.ok) {
+        status = 'failed';
+        sendFailed = true;
+      } else if (r.data.notification.result === 'suppressed') {
+        status = 'fallback-log';
+        notificationId = r.data.notification.id;
+      } else if (r.data.notification.result === 'failed') {
+        status = 'failed';
+        sendFailed = true;
+      } else {
+        notificationId = r.data.notification.id;
+        notified += group.length;
+      }
+      requireToolData(
+        'set_watch_trigger_delivery_status',
+        await ctx.tools.set_watch_trigger_delivery_status.execute({
+          triggerIds: group.map((t) => t.id),
+          status,
+          ...(notificationId === undefined ? {} : { notificationId }),
+        }),
+      );
+    }
+
+    const status: WorkflowRun['status'] = sendFailed ? 'partial' : 'succeeded';
+    const terminal: WorkflowRun = {
+      ...runningRun,
+      status,
+      finishedAt: ctx.clock(),
+      outputSummary: { evaluatedPlans, triggered, notified, deduped },
+    };
+    await recordRun(ctx, terminal);
+
+    return EvaluateEventRulesOutput.parse({
+      runId,
+      status,
+      evaluatedPlans,
+      triggered,
+      notified,
+      deduped,
+    });
   } catch (error) {
     const failed: WorkflowRun = {
       ...runningRun,
@@ -212,73 +292,10 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
       status: 'failed',
       evaluatedPlans,
       triggered,
-      notified: 0,
+      notified,
       deduped,
     });
   }
-
-  // 发送 pending（按 AlertPlan 分组），回写 deliveryStatus
-  let notified = 0;
-  let sendFailed = false;
-  const byPlan = new Map<string, WatchTrigger[]>();
-  for (const t of pending) {
-    const arr = byPlan.get(t.poolId) ?? [];
-    arr.push(t);
-    byPlan.set(t.poolId, arr);
-  }
-  for (const [alertPlanId, group] of byPlan) {
-    const lines = group.map((t) => {
-      const prio =
-        t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
-      return `· ${prio}${t.stockId} — ${t.reason}`;
-    });
-    const r = await ctx.tools.send_notification.execute({
-      log: {
-        title: `事件提醒 ${alertPlanId} ${group.length} 条`,
-        content: lines.join('\n'),
-        level: 'info',
-      },
-    });
-    let status: WatchTrigger['deliveryStatus'] = 'sent';
-    let notificationId: string | undefined;
-    if (!r.ok) {
-      status = 'failed';
-      sendFailed = true;
-    } else if (r.data.notification.result === 'suppressed') {
-      status = 'fallback-log';
-      notificationId = r.data.notification.id;
-    } else if (r.data.notification.result === 'failed') {
-      status = 'failed';
-      sendFailed = true;
-    } else {
-      notificationId = r.data.notification.id;
-      notified += group.length;
-    }
-    const delivery = await ctx.tools.set_watch_trigger_delivery_status.execute({
-      triggerIds: group.map((t) => t.id),
-      status,
-      ...(notificationId === undefined ? {} : { notificationId }),
-    });
-    if (!delivery.ok) return delivery;
-  }
-
-  const status: WorkflowRun['status'] = sendFailed ? 'partial' : 'succeeded';
-  const terminal: WorkflowRun = {
-    ...runningRun,
-    status,
-    finishedAt: ctx.clock(),
-    outputSummary: { evaluatedPlans, triggered, notified, deduped },
-  };
-  await recordRun(ctx, terminal);
-
-  return EvaluateEventRulesOutput.parse({
-    runId,
-    status,
-    evaluatedPlans,
-    triggered,
-    notified,
-    deduped,
-  });
 };
 
 export const evaluateEventRulesWorkflow = defineWorkflow<

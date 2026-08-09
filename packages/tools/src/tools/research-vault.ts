@@ -115,21 +115,45 @@ const documentChunks = (
   contentHash: string,
   body: string,
 ): ResearchDocumentChunk[] => {
+  const targetSize = 2000;
+  const overlap = 100;
   const output: ResearchDocumentChunk[] = [];
   let heading = '';
   let buffer: string[] = [];
-  const flush = (): void => {
-    const text = buffer.join('\n').trim();
+  const push = (text: string): void => {
     if (text) {
       output.push({
         documentId,
         ordinal: output.length,
         headingPath: heading,
         contentHash,
-        body: text.slice(0, 2500),
+        body: text,
       });
     }
+  };
+  const flush = (): void => {
+    push(buffer.join('\n').trim());
     buffer = [];
+  };
+  const append = (line: string): void => {
+    const lineChars = [...line];
+    if (lineChars.length > targetSize) {
+      flush();
+      for (let start = 0; start < lineChars.length; start += targetSize - overlap) {
+        push(
+          lineChars
+            .slice(start, start + targetSize)
+            .join('')
+            .trim(),
+        );
+        if (start + targetSize >= lineChars.length) break;
+      }
+      return;
+    }
+    const nextLength =
+      buffer.length === 0 ? lineChars.length : buffer.join('\n').length + 1 + lineChars.length;
+    if (nextLength > targetSize) flush();
+    buffer.push(line);
   };
   for (const line of body.split('\n')) {
     const match = line.match(/^(#{1,6})\s+(.+)$/);
@@ -137,8 +161,7 @@ const documentChunks = (
       flush();
       heading = match[2].trim();
     }
-    buffer.push(line);
-    if (buffer.join('\n').length >= 2000) flush();
+    append(line);
   }
   flush();
   return output;
@@ -1392,6 +1415,7 @@ export const importRemoteResearchDocumentTool = defineTool({
   name: 'import_remote_research_document',
   description: '抓取经安全校验的 URL 研究资料，保存原件并创建 untrusted managed Document',
   sideEffect: 'external',
+  requiredCapabilities: ['write', 'external'],
   input: ImportRemoteResearchDocumentInput,
   output: ImportRemoteResearchDocumentOutput,
   handler: async (input, ctx) => {

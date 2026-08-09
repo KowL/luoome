@@ -137,6 +137,13 @@ describe('toolRegistry', () => {
     expect(toolRegistry.get('not_a_tool')).toBeUndefined();
   });
 
+  it('远程研究导入声明 write + external 组合能力', () => {
+    expect(toolRegistry.get('import_remote_research_document')?.requiredCapabilities).toEqual([
+      'write',
+      'external',
+    ]);
+  });
+
   it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
     const names = toolRegistry.all().map((tool) => tool.name);
     expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);

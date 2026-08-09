@@ -1,4 +1,11 @@
-import { dateInShanghai, type LimitUpLadderEntry, type ToolContext } from '@luoome/core';
+import {
+  BUILTIN_HOLIDAYS,
+  dateInShanghai,
+  isHoliday,
+  isWeekend,
+  type LimitUpLadderEntry,
+  type ToolContext,
+} from '@luoome/core';
 import { z } from 'zod';
 
 const RecentLimitUpSchema = z.object({
@@ -26,6 +33,16 @@ const toDate = (base: string, delta: number): string => {
   const date = new Date(`${base}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() - delta);
   return date.toISOString().slice(0, 10);
+};
+
+const recentTradingDates = (anchorDate: string, count: number): string[] => {
+  const dates: string[] = [];
+  for (let offset = 0; dates.length < count; offset += 1) {
+    const value = toDate(anchorDate, offset);
+    const instant = new Date(`${value}T00:00:00.000Z`);
+    if (!isWeekend(instant) && !isHoliday(instant, BUILTIN_HOLIDAYS)) dates.push(value);
+  }
+  return dates;
 };
 
 const entryFor = (entry: LimitUpLadderEntry): z.infer<typeof RecentLimitUpSchema> => ({
@@ -62,31 +79,40 @@ export const loadStockLimitUpFacts = async (
   const rows: Array<z.infer<typeof RecentLimitUpSchema>> = [];
   let successful = 0;
   let latestAsOf: Date | null = null;
-  for (let offset = 0; offset < 30; offset += 1) {
-    const date = toDate(anchorDate, offset);
-    const result = await ctx.limitUpLadder.fetchLadder({
-      date,
-      source: 'eastmoney',
-      days: 30,
-      includeUncategorized: false,
-      includeStar: false,
-      includeBse: false,
-      includeST: false,
-    });
-    if (!result.ok || result.data === undefined) {
-      warnings.push(`${date}: ${result.error?.message ?? 'history-unavailable'}`);
-      continue;
+  const dates = recentTradingDates(anchorDate, 30);
+  const concurrency = 4;
+  for (let start = 0; start < dates.length; start += concurrency) {
+    const batch = dates.slice(start, start + concurrency);
+    const results = await Promise.all(
+      batch.map(async (date) => ({
+        date,
+        result: await ctx.limitUpLadder?.fetchLadder({
+          date,
+          source: 'eastmoney',
+          days: 30,
+          includeUncategorized: false,
+          includeStar: false,
+          includeBse: false,
+          includeST: false,
+        }),
+      })),
+    );
+    for (const { date, result } of results) {
+      if (result === undefined || !result.ok || result.data === undefined) {
+        warnings.push(`${date}: ${result?.error?.message ?? 'history-unavailable'}`);
+        continue;
+      }
+      successful += 1;
+      if (latestAsOf === null || result.data.asOf.getTime() > latestAsOf.getTime()) {
+        latestAsOf = result.data.asOf;
+      }
+      const match = result.data.levels
+        .flatMap((level) => level.stocks)
+        .find((entry) => entry.code === code);
+      if (match !== undefined) rows.push(entryFor(match));
+      if (result.data.warnings.length > 0)
+        warnings.push(`${date}: ${result.data.warnings.join(', ')}`);
     }
-    successful += 1;
-    if (latestAsOf === null || result.data.asOf.getTime() > latestAsOf.getTime()) {
-      latestAsOf = result.data.asOf;
-    }
-    const match = result.data.levels
-      .flatMap((level) => level.stocks)
-      .find((entry) => entry.code === code);
-    if (match !== undefined) rows.push(entryFor(match));
-    if (result.data.warnings.length > 0)
-      warnings.push(`${date}: ${result.data.warnings.join(', ')}`);
   }
   const recent = [...new Map(rows.map((row) => [row.date, row])).values()]
     .sort((left, right) => right.date.localeCompare(left.date))

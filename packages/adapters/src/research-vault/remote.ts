@@ -1,5 +1,8 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { isIP, type LookupFunction } from 'node:net';
+import { Readable } from 'node:stream';
 
 import type { ResearchRemoteDocument, ResearchRemoteImportAdapterLike } from '@luoome/core';
 
@@ -15,9 +18,15 @@ const ALLOWED_MEDIA_TYPES = new Set([
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 
 type LookupResult = readonly { readonly address: string; readonly family: number }[];
+type ResolvedAddress = { readonly address: string; readonly family: 4 | 6 };
+type RemoteFetch = (
+  input: string | Request | URL,
+  init: RequestInit | undefined,
+  resolvedAddress: ResolvedAddress,
+) => Promise<Response>;
 
 export interface ResearchRemoteDocumentAdapterOptions {
-  readonly fetchImpl?: (input: string | Request | URL, init?: RequestInit) => Promise<Response>;
+  readonly fetchImpl?: RemoteFetch;
   readonly lookupImpl?: (hostname: string) => Promise<LookupResult>;
   readonly maxBytes?: number;
   readonly timeoutMs?: number;
@@ -95,10 +104,10 @@ const isPrivateAddress = (value: string): boolean => {
   return true;
 };
 
-const safeUrl = async (
+const safeTarget = async (
   raw: string,
   lookupImpl: (hostname: string) => Promise<LookupResult>,
-): Promise<URL> => {
+): Promise<{ readonly url: URL; readonly resolvedAddress: ResolvedAddress }> => {
   let url: URL;
   try {
     url = new URL(raw);
@@ -112,18 +121,39 @@ const safeUrl = async (
     throw new Error('URL 不允许携带用户凭据');
   }
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  if (isIP(hostname) !== 0) {
+  const literalFamily = isIP(hostname);
+  if (literalFamily === 4 || literalFamily === 6) {
     if (isPrivateAddress(hostname)) throw new Error('URL 指向受保护的网络地址');
-    return url;
+    return { url, resolvedAddress: { address: hostname, family: literalFamily } };
   }
   const addresses = await lookupImpl(hostname);
   if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
     throw new Error('URL 解析到受保护的网络地址');
   }
-  return url;
+  const selected = addresses[0];
+  if (selected === undefined) throw new Error('URL 未解析到可用地址');
+  const family = isIP(selected.address);
+  if (family !== 4 && family !== 6) throw new Error('URL 未解析到有效 IP 地址');
+  return { url, resolvedAddress: { address: selected.address, family } };
 };
 
-const readLimitedBody = async (response: Response, maxBytes: number): Promise<Uint8Array> => {
+const abortReason = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error ? signal.reason : new Error('远程资料请求超时');
+
+const withAbort = async <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> => {
+  if (signal.aborted) throw abortReason(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+};
+
+const readLimitedBody = async (
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<Uint8Array> => {
   const advertised = response.headers.get('content-length');
   if (advertised !== null && Number(advertised) > maxBytes) {
     throw new Error('远程响应超过大小限制');
@@ -138,7 +168,7 @@ const readLimitedBody = async (response: Response, maxBytes: number): Promise<Ui
   let total = 0;
   try {
     for (;;) {
-      const next = await reader.read();
+      const next = await withAbort(reader.read(), signal);
       if (next.done) break;
       total += next.value.byteLength;
       if (total > maxBytes) {
@@ -147,6 +177,9 @@ const readLimitedBody = async (response: Response, maxBytes: number): Promise<Ui
       }
       chunks.push(next.value);
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }
@@ -157,6 +190,64 @@ const readLimitedBody = async (response: Response, maxBytes: number): Promise<Ui
     offset += chunk.byteLength;
   }
   return output;
+};
+
+const responseHeaders = (headers: NodeJS.Dict<string | string[]>): Headers => {
+  const result = new Headers();
+  for (const [name, value] of Object.entries(headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) result.append(name, item);
+    } else if (value !== undefined) {
+      result.set(name, value);
+    }
+  }
+  return result;
+};
+
+/** 使用预检得到的公网地址连接，同时保留原 hostname 供 Host/SNI/证书校验使用。 */
+const pinnedFetch: RemoteFetch = async (input, init, resolvedAddress) => {
+  const url = input instanceof Request ? new URL(input.url) : new URL(input.toString());
+  // Bun 的 https.request 会传 options.all=true 并期待地址数组；Node 的 LookupFunction
+  // 类型只表达单地址回调。两种路径都固定返回同一个已通过预检的地址。
+  const pinnedLookup = ((
+    _hostname: string,
+    options: { readonly all?: boolean },
+    callback: (
+      error: Error | null,
+      address: string | readonly ResolvedAddress[],
+      family?: number,
+    ) => void,
+  ): void => {
+    if (options.all === true) {
+      callback(null, [resolvedAddress]);
+      return;
+    }
+    callback(null, resolvedAddress.address, resolvedAddress.family);
+  }) as LookupFunction;
+  return new Promise<Response>((resolve, reject) => {
+    const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const nodeRequest = request(
+      url,
+      {
+        method: init?.method ?? 'GET',
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        lookup: pinnedLookup,
+        ...(init?.signal === undefined || init.signal === null ? {} : { signal: init.signal }),
+      },
+      (incoming) => {
+        const status = incoming.statusCode ?? 500;
+        resolve(
+          new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>, {
+            status,
+            ...(incoming.statusMessage === undefined ? {} : { statusText: incoming.statusMessage }),
+            headers: responseHeaders(incoming.headers),
+          }),
+        );
+      },
+    );
+    nodeRequest.on('error', reject);
+    nodeRequest.end();
+  });
 };
 
 const mediaTypeOf = (response: Response, url: URL): string => {
@@ -170,10 +261,7 @@ const mediaTypeOf = (response: Response, url: URL): string => {
 
 export class ResearchRemoteDocumentAdapter implements ResearchRemoteImportAdapterLike {
   readonly name = 'safe-research-remote';
-  private readonly fetchImpl: (
-    input: string | Request | URL,
-    init?: RequestInit,
-  ) => Promise<Response>;
+  private readonly fetchImpl: RemoteFetch;
   private readonly lookupImpl: (hostname: string) => Promise<LookupResult>;
   private readonly maxBytes: number;
   private readonly timeoutMs: number;
@@ -181,7 +269,7 @@ export class ResearchRemoteDocumentAdapter implements ResearchRemoteImportAdapte
   private readonly userAgent: string;
 
   constructor(options: ResearchRemoteDocumentAdapterOptions = {}) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? pinnedFetch;
     this.lookupImpl = options.lookupImpl ?? defaultLookup;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -204,44 +292,60 @@ export class ResearchRemoteDocumentAdapter implements ResearchRemoteImportAdapte
     const maxBytes = Math.min(input.maxBytes, this.maxBytes);
     const timeoutMs = Math.min(input.timeoutMs, this.timeoutMs);
     const maxRedirects = Math.min(input.maxRedirects, this.maxRedirects);
-    let current = await safeUrl(input.url, this.lookupImpl);
-    for (let redirects = 0; ; redirects += 1) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      let response: Response;
-      try {
-        response = await this.fetchImpl(current, {
-          redirect: 'manual',
-          signal: controller.signal,
-          headers: {
-            accept: 'text/html, application/xhtml+xml, text/plain, application/pdf',
-            'user-agent': this.userAgent,
-          },
-        });
-      } catch (error) {
-        throw new Error(
-          `远程资料请求失败: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      } finally {
-        clearTimeout(timer);
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error(`远程资料请求超时（${timeoutMs}ms）`)),
+      timeoutMs,
+    );
+    try {
+      let current = await withAbort(safeTarget(input.url, this.lookupImpl), controller.signal);
+      for (let redirects = 0; ; redirects += 1) {
+        let response: Response;
+        try {
+          response = await this.fetchImpl(
+            current.url,
+            {
+              redirect: 'manual',
+              signal: controller.signal,
+              headers: {
+                accept: 'text/html, application/xhtml+xml, text/plain, application/pdf',
+                'user-agent': this.userAgent,
+              },
+            },
+            current.resolvedAddress,
+          );
+        } catch (error) {
+          throw new Error(
+            `远程资料请求失败: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        if (REDIRECT_STATUS.has(response.status)) {
+          await response.body?.cancel().catch(() => undefined);
+          if (redirects >= maxRedirects) throw new Error('远程资料重定向次数超过限制');
+          const location = response.headers.get('location');
+          if (location === null) throw new Error('远程资料重定向缺少 Location');
+          current = await withAbort(
+            safeTarget(new URL(location, current.url).toString(), this.lookupImpl),
+            controller.signal,
+          );
+          continue;
+        }
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new Error(`远程资料 HTTP ${response.status}`);
+        }
+        const mediaType = mediaTypeOf(response, current.url);
+        const content = await readLimitedBody(response, maxBytes, controller.signal);
+        return {
+          requestedUrl: input.url,
+          finalUrl: current.url.toString(),
+          mediaType,
+          content,
+          fetchedAt: new Date(),
+        };
       }
-      if (REDIRECT_STATUS.has(response.status)) {
-        if (redirects >= maxRedirects) throw new Error('远程资料重定向次数超过限制');
-        const location = response.headers.get('location');
-        if (location === null) throw new Error('远程资料重定向缺少 Location');
-        current = await safeUrl(new URL(location, current).toString(), this.lookupImpl);
-        continue;
-      }
-      if (!response.ok) throw new Error(`远程资料 HTTP ${response.status}`);
-      const mediaType = mediaTypeOf(response, current);
-      const content = await readLimitedBody(response, maxBytes);
-      return {
-        requestedUrl: input.url,
-        finalUrl: current.toString(),
-        mediaType,
-        content,
-        fetchedAt: new Date(),
-      };
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

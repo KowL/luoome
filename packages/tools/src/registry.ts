@@ -162,7 +162,7 @@ const renderTypeScript = (tools: readonly Tool[]): string => {
     .map(
       (t) =>
         `    '${t.name}': { description: ${JSON.stringify(t.description)}, ` +
-        `sideEffect: '${t.sideEffect}' },`,
+        `sideEffect: '${t.sideEffect}', requiredCapabilities: ${JSON.stringify(t.requiredCapabilities)} },`,
     )
     .join('\n');
 
@@ -177,6 +177,7 @@ export type LuoomeSideEffect = 'read' | 'write' | 'external' | 'advice' | 'trade
 export interface LuoomeToolMeta {
   readonly description: string;
   readonly sideEffect: LuoomeSideEffect;
+  readonly requiredCapabilities: readonly LuoomeSideEffect[];
 }
 
 export declare const luoomeToolMeta: {

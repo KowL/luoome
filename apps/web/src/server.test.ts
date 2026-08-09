@@ -1160,6 +1160,29 @@ describe('web tool 闸口：write 需本地 token', () => {
 });
 
 describe('web tool 闸口：external 白名单与拒绝面', () => {
+  it('远程研究导入在仅开启 external、未开启 write 时拒绝', async () => {
+    const guarded = createWebApp(await buildTestContext(), {
+      webToken: WEB_TOKEN,
+      exposeWrite: false,
+      exposeExternal: true,
+    });
+    const response = await guarded.fetch(
+      new Request('http://test/api/tools/import_remote_research_document/call', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${WEB_TOKEN}`,
+        },
+        body: JSON.stringify({ input: { url: 'https://example.test/research' } }),
+      }),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'permission_denied' },
+    });
+  });
+
   it('agent_run 进入 external 白名单，但仍要求 token 与 runtime', async () => {
     const withoutToken = await app.fetch(
       new Request('http://test/api/tools/agent_run/call', {

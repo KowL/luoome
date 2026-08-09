@@ -578,6 +578,35 @@ topic_kind: custom
     });
   });
 
+  it('超长单段继续分块且尾部内容仍可全文检索', async () => {
+    const sentinel = 'TAIL_SENTINEL_RESEARCH_CHUNK';
+    const content = `---
+luoome_schema: "1"
+luoome_type: research-document
+luoome_id: doc_long_chunk
+title: 超长资料
+document_kind: note
+imported_at: 2026-08-01T00:00:00.000Z
+---
+# 正文
+${'长'.repeat(9000)}${sentinel}
+`;
+    const base = await buildTestContext({
+      clock: () => new Date('2026-08-01T00:00:00.000Z'),
+    });
+    const ctx = { ...base, researchVault: vault(content) };
+
+    const synced = await syncResearchVaultTool.execute({}, ctx);
+
+    expect(synced.ok).toBe(true);
+    const hits = await ctx.repos.researchIndex.searchDocuments({ text: sentinel, limit: 10 });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      document: { id: 'doc_long_chunk' },
+      headingPath: '正文',
+    });
+  });
+
   it('Vault 扫描失败时把 running 更新为 failed', async () => {
     const base = await buildTestContext({
       clock: () => new Date('2026-08-01T00:00:00.000Z'),

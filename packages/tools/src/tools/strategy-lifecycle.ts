@@ -165,14 +165,19 @@ export const createStrategyVersionTool = defineTool({
       return errInvalidInput('builtin Strategy 不可修改；请先用 create_strategy 复制');
     }
     const versions = await ctx.repos.strategy.listVersions(strategy.id);
+    const latest = versions.reduce<StrategyVersion | undefined>(
+      (current, version) =>
+        current === undefined || version.version > current.version ? version : current,
+      undefined,
+    );
     const parent =
       input.parentVersionId === undefined
-        ? versions.at(-1)
+        ? latest
         : versions.find((version) => version.id === input.parentVersionId);
     if (input.parentVersionId !== undefined && parent === undefined) {
       return errNotFound('StrategyVersion', input.parentVersionId);
     }
-    const number = (parent?.version ?? 0) + 1;
+    const number = (latest?.version ?? 0) + 1;
     const now = ctx.clock();
     const version = StrategyVersionSchema.parse({
       id: `${strategy.id}-v${number}-${globalThis.crypto.randomUUID().slice(0, 8)}`,

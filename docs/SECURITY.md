@@ -26,6 +26,10 @@ luoome 是本地工具 + MCP server + advisor agent。五类潜在威胁：
 | `external` | 触发第三方副作用 | ⚠️ opt-in |
 | `trade` | 触发真实资金动作 | ❌ 永不 |
 
+一个 tool 同时需要多类授权时，通过 `requiredCapabilities` 声明组合能力，Web 与 MCP
+必须逐项满足后才能暴露。例如 `import_remote_research_document` 会访问外部网络并写入
+本地 Vault，因此同时要求 `write` 与 `external`，只开启其中任一能力都不能调用。
+
 ### trade 永不暴露（硬约束）
 
 MCP server 启动时检查 `LUOOME_EXPOSE_TRADE`：

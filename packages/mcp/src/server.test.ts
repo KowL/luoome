@@ -16,6 +16,23 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(optedIn.has(agentRun?.sideEffect ?? 'external')).toBe(true);
   });
 
+  it('远程研究导入同时要求 write 与 external', () => {
+    const externalOnly = selectMcpTools(
+      toolRegistry.all(),
+      resolveAllowedSideEffects({ LUOOME_EXPOSE_EXTERNAL: 'true' }),
+    );
+    expect(externalOnly.map((tool) => tool.name)).not.toContain('import_remote_research_document');
+
+    const both = selectMcpTools(
+      toolRegistry.all(),
+      resolveAllowedSideEffects({
+        LUOOME_EXPOSE_WRITE: 'true',
+        LUOOME_EXPOSE_EXTERNAL: 'true',
+      }),
+    );
+    expect(both.map((tool) => tool.name)).toContain('import_remote_research_document');
+  });
+
   it('trade 硬卡不能由环境变量开启', () => {
     expect(() => resolveAllowedSideEffects({ LUOOME_EXPOSE_TRADE: 'true' })).toThrow(
       /trade tools are never exposed/,

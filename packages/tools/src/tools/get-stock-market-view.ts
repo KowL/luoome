@@ -241,10 +241,15 @@ export const getStockMarketViewTool = defineTool({
     const quoteDateStart = new Date(`${dateInShanghai(quote.observedAt)}T00:00:00.000Z`);
     const previousClose = derivePreviousClose(bars, quoteDateStart);
     const session = computeMarketSession(now);
+    const anchorIsToday = input.date === undefined || input.date === dateInShanghai(now);
     // 盘前 / 非交易日当日尚无成交；retrieval 时间不能证明已有市场观测，
     // 此时把 Quote 拼成当日蜡烛会伪造一根未开盘的 K 线（§8.5 前提：当日已有交易）。
-    const quoteForCandle = session === 'pre-open' || session === 'non-trading-day' ? null : quote;
-    const candles = buildMarketCandles(bars, quoteForCandle, end);
+    // 历史锚点没有对应实时 Quote：保留 end 当日的 closed DailyBar；仅当前日期视图才
+    // 用 Quote 替换 end 当日 bar。
+    const quoteForCandle =
+      anchorIsToday && session !== 'pre-open' && session !== 'non-trading-day' ? quote : null;
+    const candleCutoff = anchorIsToday ? end : new Date(end.getTime() + 86_400_000);
+    const candles = buildMarketCandles(bars, quoteForCandle, candleCutoff);
     const { change, changePct } = deriveQuoteChange(quote, previousClose);
     const indicators = computeSimpleIndicators(candlesToBars(stock.id, candles));
     const sources = [...new Set([quote.source, ...candles.map((c) => c.source)])];

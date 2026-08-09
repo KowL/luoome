@@ -1820,10 +1820,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       }
       return jsonResult(notFound('Tool', name));
     }
-    const allowed =
+    const primaryAllowed =
       (EXPOSED_SIDE_EFFECTS.has(tool.sideEffect) && (tool.sideEffect !== 'write' || exposeWrite)) ||
       (tool.sideEffect === 'external' && exposeExternal && WEB_ALLOWED_EXTERNAL.has(name));
-    if (!allowed) {
+    const capabilitiesAllowed = tool.requiredCapabilities.every(
+      (capability) =>
+        (capability !== 'write' || exposeWrite) &&
+        (capability !== 'external' || exposeExternal) &&
+        capability !== 'trade',
+    );
+    if (!primaryAllowed || !capabilitiesAllowed) {
       return jsonResult(permissionDenied(`web 端不暴露 ${tool.sideEffect} 类 tool（${name}）`));
     }
     if (tool.sideEffect === 'write' || tool.sideEffect === 'external') {
