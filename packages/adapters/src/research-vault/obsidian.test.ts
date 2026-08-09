@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { createResearchVaultAdapterFromEnv } from './factory.js';
 import { ObsidianVaultAdapter, parseResearchMarkdown } from './obsidian.js';
 
 const makeVault = async (): Promise<string> => {
@@ -13,6 +14,22 @@ const makeVault = async (): Promise<string> => {
 };
 
 describe('ObsidianVaultAdapter', () => {
+  it('从环境变量应用附件大小上限', async () => {
+    const root = await makeVault();
+    const adapter = createResearchVaultAdapterFromEnv({
+      LUOOME_RESEARCH_VAULT: root,
+      LUOOME_RESEARCH_MAX_ATTACHMENT_MB: '1',
+    });
+    expect(adapter).toBeDefined();
+    await expect(
+      adapter?.importAttachment({
+        suggestedName: 'oversized.pdf',
+        content: new Uint8Array(1024 * 1024 + 1),
+        mediaType: 'application/pdf',
+      }),
+    ).rejects.toThrow('attachment exceeds configured size limit');
+  });
+
   it('parses flat YAML lists and reads a safe relative path', async () => {
     const root = await makeVault();
     await writeFile(

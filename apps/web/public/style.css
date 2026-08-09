@@ -2753,7 +2753,7 @@ html.has-bg-image .bg-layer {
   font-variant-numeric: tabular-nums;
 }
 
-/* 关注页：视图 tab 通栏一行，异常提示靠右；股票类视图单栏通栏 */
+/* 关注页：股票区 tab 通栏一行，异常提示靠右 */
 .watchlist-tabbar {
   display: flex;
   align-items: center;
@@ -2768,20 +2768,22 @@ html.has-bg-image .bg-layer {
   font-size: var(--text-xs);
 }
 
-.split-pane.single-pane {
-  grid-template-columns: minmax(0, 1fr);
+/* 「今日变化」「待研究」stat 卡片可点击跳转对应区块 */
+.stat-clickable {
+  cursor: pointer;
 }
 
-.split-pane.single-pane .detail-pane {
-  display: none;
+.stat-clickable:hover {
+  border-color: var(--accent);
 }
 
-.member-row-head {
+/* 单列表面板头：名称居左，操作按钮居右 */
+.watchlist-pane-head {
+  display: flex;
   align-items: center;
-}
-
-.member-row-head .member-archive {
-  margin-left: auto;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .entity-stats {
@@ -4167,6 +4169,78 @@ textarea::placeholder {
 
 .research-search input {
   flex: 1;
+}
+
+.vault-settings-card {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: var(--space-4);
+}
+
+.vault-settings-card::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--accent);
+  content: '';
+}
+
+.vault-state {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.vault-state.configured {
+  border-color: color-mix(in srgb, var(--pos) 45%, var(--line));
+  color: var(--pos);
+}
+
+.vault-state.invalid {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+.vault-settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+
+.vault-settings-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.vault-settings-form input {
+  width: 100%;
+}
+
+.vault-settings-form .vault-path-field,
+.vault-settings-actions {
+  grid-column: 1 / -1;
+}
+
+.vault-settings-form small {
+  color: var(--muted);
+}
+
+.vault-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  .vault-settings-form {
+    grid-template-columns: 1fr;
+  }
 }
 
 .research-toolbar {

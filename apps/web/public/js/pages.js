@@ -1518,6 +1518,14 @@ const renderWorkflowRuns = async (setStatus) => {
 
 /** 研究页：主题浏览、全文搜索和显式股票投影。 */
 const renderResearch = async (setStatus) => {
+  const vaultForm = /** @type {HTMLFormElement | null} */ (
+    document.getElementById('research-vault-settings-form')
+  );
+  const vaultState = document.getElementById('research-vault-config-state');
+  const vaultSettingsStatus = document.getElementById('research-vault-settings-status');
+  const vaultSaveButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-vault-save-btn')
+  );
   const input = /** @type {HTMLInputElement | null} */ (
     document.getElementById('research-topic-input')
   );
@@ -1553,6 +1561,98 @@ const renderResearch = async (setStatus) => {
     syncButton === null
   )
     return;
+
+  const setVaultSettingsStatus = (message, kind = '') => {
+    if (vaultSettingsStatus === null) return;
+    vaultSettingsStatus.textContent = message;
+    vaultSettingsStatus.className = `card-meta ${kind}`.trim();
+  };
+
+  const loadVaultSettings = async () => {
+    if (vaultForm === null) return;
+    const response = await callApi('/api/settings/research-vault');
+    if (!response.ok) {
+      setVaultSettingsStatus(response.error?.cause ?? 'Vault 设置不可用', 'error');
+      return;
+    }
+    const data = response.data;
+    const setValue = (id, value) => {
+      const field = /** @type {HTMLInputElement | null} */ (document.getElementById(id));
+      if (field !== null) field.value = String(value ?? '');
+    };
+    const vaultPathField = /** @type {HTMLInputElement | null} */ (
+      document.getElementById('research-vault-path')
+    );
+    if (vaultPathField !== null) {
+      vaultPathField.value = '';
+      vaultPathField.required = !data.configured;
+      vaultPathField.placeholder = data.configured
+        ? `已连接 ${data.vaultName ?? 'Vault'}；留空保持当前路径`
+        : '/Users/me/Documents/Investment Vault';
+    }
+    setValue('research-vault-root', data.researchRoot);
+    setValue('research-vault-managed-root', data.managedRoot);
+    setValue('research-vault-id', data.vaultId);
+    setValue('research-vault-max-text', data.maxTextMb);
+    setValue('research-vault-max-attachment', data.maxAttachmentMb);
+    if (vaultState !== null) {
+      vaultState.textContent = data.configError
+        ? '配置无效'
+        : data.configured
+          ? `已连接 · ${data.effectiveVaultId ?? 'Vault'}`
+          : '未配置';
+      vaultState.className =
+        `vault-state ${data.configError ? 'invalid' : data.configured ? 'configured' : ''}`.trim();
+    }
+    setVaultSettingsStatus(data.configError ?? (data.configured ? '配置已加载' : '填写路径后保存'));
+  };
+
+  const saveVaultSettings = async () => {
+    if (vaultForm === null || vaultSaveButton === null) return;
+    const value = (id) =>
+      /** @type {HTMLInputElement} */ (document.getElementById(id)).value.trim();
+    const input = {
+      vaultPath: value('research-vault-path'),
+      researchRoot: value('research-vault-root'),
+      managedRoot: value('research-vault-managed-root'),
+      vaultId: value('research-vault-id'),
+      maxTextMb: Number(value('research-vault-max-text')),
+      maxAttachmentMb: Number(value('research-vault-max-attachment')),
+    };
+    vaultSaveButton.disabled = true;
+    setVaultSettingsStatus('正在验证路径并保存…');
+    try {
+      const saved = await callApi('/api/settings/research-vault', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+      if (!saved.ok) {
+        setVaultSettingsStatus(saved.error?.message ?? saved.error?.cause ?? '保存失败', 'error');
+        return;
+      }
+      setVaultSettingsStatus('配置已生效，正在建立索引…');
+      const synced = await callApi('/api/tools/sync_research_vault/call', {
+        method: 'POST',
+        body: JSON.stringify({ input: { mode: 'manual' } }),
+      });
+      if (!synced.ok) {
+        await loadVaultSettings();
+        setVaultSettingsStatus(
+          `配置已保存；同步失败：${synced.error?.message ?? synced.error?.cause ?? synced.error?.kind}`,
+          'error',
+        );
+        return;
+      }
+      await loadVaultSettings();
+      await load();
+      setVaultSettingsStatus(
+        `已保存并同步：扫描 ${synced.data.scanned} 个 Markdown 文件`,
+        'success',
+      );
+    } finally {
+      vaultSaveButton.disabled = false;
+    }
+  };
 
   const paintIndexStatus = (status) => {
     if (indexStatus === null) return;
@@ -2021,7 +2121,13 @@ const renderResearch = async (setStatus) => {
     createTopicButton?.addEventListener('click', () => void openCreateTopic());
     importDocumentButton?.addEventListener('click', () => void openImportDocument());
     importRemoteButton?.addEventListener('click', () => void openImportRemote());
+    vaultForm?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      void saveVaultSettings();
+    });
   }
+
+  await loadVaultSettings();
 
   const stockId = routeStockId();
   if (stockId !== null) {

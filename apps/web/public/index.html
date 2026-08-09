@@ -300,20 +300,26 @@
             <h1>关注</h1>
             <div class="route-meta">统一成员 · 多来源 · 研究阶段 · 优先级</div>
           </div>
-          <button id="btn-watchlist-create" class="btn btn-primary" type="button">+ 新建关注</button>
+          <div class="flex gap-2">
+            <button id="btn-watchlist-archived" class="btn btn-outline" type="button">已归档</button>
+            <button id="btn-watchlist-create" class="btn btn-primary" type="button">+ 新建关注</button>
+          </div>
         </div>
         <div class="stat-grid" id="watchlists-summary"></div>
         <div class="watchlist-tabbar mt-4">
           <div id="watchlists-tabs" class="flex gap-2"></div>
           <div id="watchlists-hints" class="watchlist-hints" hidden></div>
         </div>
-        <div class="split-pane mt-4" id="watchlists-pane">
-          <div class="card entity-pane">
-            <div id="watchlists-view" class="entity-list"><p class="placeholder">加载中…</p></div>
-          </div>
-          <div class="card detail-pane">
-            <div id="watchlist-detail"><p class="placeholder">选择关注列表查看成员和来源。</p></div>
-          </div>
+        <div class="card mt-4">
+          <div id="watchlists-view" class="entity-list"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="card mt-4" id="watchlists-today-pane">
+          <div class="card-header"><h2>今日变化</h2></div>
+          <div id="watchlists-today" class="entity-list"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="card mt-4" id="watchlists-pending-pane">
+          <div class="card-header"><h2>待研究</h2></div>
+          <div id="watchlists-pending" class="entity-list"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
 
@@ -343,6 +349,46 @@
         <div class="route-header">
           <h1>研究</h1>
           <div class="route-meta">研究主题 · Vault 索引 · 显式对象关联</div>
+        </div>
+        <div class="card vault-settings-card">
+          <div class="card-header">
+            <div>
+              <h2>本地 Research Vault</h2>
+              <div class="card-meta">连接 Obsidian 文件夹；正文留在本机，SQLite 只保存可重建索引</div>
+            </div>
+            <span id="research-vault-config-state" class="vault-state">未配置</span>
+          </div>
+          <form id="research-vault-settings-form" class="vault-settings-form">
+            <label class="vault-path-field">
+              <span>Vault 绝对路径</span>
+              <input id="research-vault-path" name="vaultPath" type="text" autocomplete="off" placeholder="/Users/me/Documents/Investment Vault" required />
+              <small>填写 Vault 根目录，不要填写其中的 .obsidian 目录。</small>
+            </label>
+            <label>
+              <span>扫描目录</span>
+              <input id="research-vault-root" name="researchRoot" type="text" value="Research" required />
+            </label>
+            <label>
+              <span>受管目录</span>
+              <input id="research-vault-managed-root" name="managedRoot" type="text" value="Research/Luoome" required />
+            </label>
+            <label>
+              <span>稳定 Vault ID <span class="muted">可选</span></span>
+              <input id="research-vault-id" name="vaultId" type="text" autocomplete="off" placeholder="investment-vault" />
+            </label>
+            <label>
+              <span>Markdown 上限（MB）</span>
+              <input id="research-vault-max-text" name="maxTextMb" type="number" min="1" max="100" value="10" required />
+            </label>
+            <label>
+              <span>附件上限（MB）</span>
+              <input id="research-vault-max-attachment" name="maxAttachmentMb" type="number" min="1" max="1024" value="100" required />
+            </label>
+            <div class="vault-settings-actions">
+              <button id="research-vault-save-btn" class="btn btn-primary btn-sm" type="submit">保存并同步</button>
+              <span id="research-vault-settings-status" class="card-meta" role="status" aria-live="polite"></span>
+            </div>
+          </form>
         </div>
         <div class="card">
           <div class="card-header"><h2>研究主题与资料</h2></div>

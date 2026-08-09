@@ -1,5 +1,5 @@
 /* apps/web/public/js/target-pages.test.js —— Watchlist / AlertPlan 页纯函数测试。
- * 覆盖 renderAlerts 触发时间行、Watchlist 六视图派生与来源健康摘要；
+ * 覆盖 renderAlerts 触发时间行、Watchlist 视图派生、列表股票过滤与来源健康摘要；
  * DOM 渲染与交互由浏览器验收覆盖，不在此处断言。 */
 
 import { describe, expect, it } from 'bun:test';
@@ -8,6 +8,7 @@ import {
   buildAlertPlanMutationInput,
   deriveWatchlistViews,
   sortStocksByQuote,
+  stocksOfList,
   summarizeMemberSources,
   triggerMetaText,
 } from './target-pages.js';
@@ -192,7 +193,7 @@ describe('deriveWatchlistViews', () => {
     expect(views.todayChanges.map((change) => change.stockId)).toEqual(['000001.SZ', '600519.SH']);
   });
 
-  it('pending 只收 stage=discovered 的成员；holdings 只收有持仓来源的股票', () => {
+  it('pending 只收 stage=discovered 的成员', () => {
     const views = deriveWatchlistViews(overviewFixture);
     expect(views.pending).toEqual([
       {
@@ -202,7 +203,6 @@ describe('deriveWatchlistViews', () => {
         priority: 'important',
       },
     ]);
-    expect(views.holdings.map((stock) => stock.stockId)).toEqual(['600519.SH']);
   });
 
   it('archived 透传已归档列表与成员；空 overview 全视图兜底为空', () => {
@@ -214,9 +214,23 @@ describe('deriveWatchlistViews', () => {
       stocks: [],
       todayChanges: [],
       pending: [],
-      holdings: [],
       archived: { lists: [], members: [] },
     });
+  });
+});
+
+describe('stocksOfList', () => {
+  const stocks = [
+    { stockId: '600519.SH', memberships: [{ watchlistId: 'wl-a' }, { watchlistId: 'wl-b' }] },
+    { stockId: '002594.SZ', memberships: [{ watchlistId: 'wl-b' }] },
+    { stockId: '000001.SZ', memberships: [] },
+  ];
+
+  it('只保留 memberships 含目标列表的股票；无匹配返回空', () => {
+    expect(stocksOfList(stocks, 'wl-a').map((s) => s.stockId)).toEqual(['600519.SH']);
+    expect(stocksOfList(stocks, 'wl-b').map((s) => s.stockId)).toEqual(['600519.SH', '002594.SZ']);
+    expect(stocksOfList(stocks, 'wl-none')).toEqual([]);
+    expect(stocksOfList(undefined, 'wl-a')).toEqual([]);
   });
 });
 

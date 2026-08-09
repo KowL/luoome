@@ -4,7 +4,7 @@
 
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,7 @@ import type { Hono } from 'hono';
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
 import { MarketSettingsStore } from './market-settings.js';
+import { ResearchVaultSettingsStore } from './research-vault-settings.js';
 import { buildWebContext, createWebApp } from './server.js';
 
 let app: Hono;
@@ -335,6 +336,58 @@ describe('行情源设置 API', () => {
       expect(await saved.json()).toMatchObject({
         ok: true,
         data: { activeOrder: ['tencent', 'eastmoney'], applied: true },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Research Vault 设置 API', () => {
+  it('保存后立即挂载 Vault，后续同步可直接使用', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-vault-settings-api-'));
+    const vaultPath = join(dir, 'Investment Vault');
+    try {
+      mkdirSync(join(vaultPath, 'Research'), { recursive: true });
+      const store = new ResearchVaultSettingsStore(
+        { LUOOME_HOME: dir },
+        { secretPath: join(dir, '.env') },
+      );
+      const settingsApp = createWebApp(await buildTestContext(), {
+        researchVaultSettingsStore: store,
+        exposeWrite: true,
+      });
+      const saved = await settingsApp.fetch(
+        new Request('http://test/api/settings/research-vault', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            vaultPath,
+            researchRoot: 'Research',
+            managedRoot: 'Research/Luoome',
+            vaultId: 'test-vault',
+            maxTextMb: 10,
+            maxAttachmentMb: 100,
+          }),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({
+        ok: true,
+        data: { configured: true, effectiveVaultId: 'test-vault', applied: true },
+      });
+
+      const synced = await settingsApp.fetch(
+        new Request('http://test/api/tools/sync_research_vault/call', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ input: { mode: 'manual' } }),
+        }),
+      );
+      expect(synced.status).toBe(200);
+      expect(await synced.json()).toMatchObject({
+        ok: true,
+        data: { vaultId: 'test-vault', scanned: 0, status: 'succeeded' },
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
