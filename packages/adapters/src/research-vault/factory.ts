@@ -14,6 +14,9 @@ export const createResearchVaultAdapterFromEnv = (
     ...(env.LUOOME_RESEARCH_MAX_TEXT_MB
       ? { maxTextBytes: Number(env.LUOOME_RESEARCH_MAX_TEXT_MB) * 1024 * 1024 }
       : {}),
+    ...(env.LUOOME_RESEARCH_MAX_ATTACHMENT_MB
+      ? { maxAttachmentBytes: Number(env.LUOOME_RESEARCH_MAX_ATTACHMENT_MB) * 1024 * 1024 }
+      : {}),
   });
 };
 
