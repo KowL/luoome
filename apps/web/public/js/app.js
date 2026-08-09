@@ -33,6 +33,7 @@ import {
   renderStrategies,
   renderWatchlists,
 } from './target-pages.js';
+import { bindTopbarTheme, initTheme } from './theme.js';
 import { $ } from './ui.js';
 
 /* ============ 状态行 ============ */
@@ -293,6 +294,8 @@ window.__luoome = {
   selectAccount,
 };
 
+initTheme();
+bindTopbarTheme();
 bindGlobalActions();
 startClock();
 startDashboardAutoRefresh();

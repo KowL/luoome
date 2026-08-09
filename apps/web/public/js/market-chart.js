@@ -14,9 +14,9 @@
 const LIGHTWEIGHT_CHARTS_URL = '/vendor/lightweight-charts-5.2.0.mjs';
 
 /* A 股红涨绿跌，与 style.css 的 --pos / --neg 同值。 */
-const UP_COLOR = '#fb5c6c';
-const DOWN_COLOR = '#34d399';
-const MA_COLORS = { ma5: '#f5c542', ma10: '#5ea8ff', ma20: '#c792ea' };
+const UP_COLOR = '#e0484f';
+const DOWN_COLOR = '#0f9d58';
+const MA_COLORS = { ma5: '#d97706', ma10: '#3f66d8', ma20: '#9333ea' };
 
 /** volume 柱配色：close >= open 记涨（红），否则跌（绿）（§12.2）。 */
 const volumeColor = (candle) => (candle.close >= candle.open ? UP_COLOR : DOWN_COLOR);
@@ -82,15 +82,15 @@ const createMarketChart = async (container, options = {}) => {
     height,
     layout: {
       background: { type: 'solid', color: 'transparent' },
-      textColor: '#9aa5b1',
+      textColor: '#76849a',
       attributionLogo: true, // 保留 TradingView attribution（§3.4 NOTICE 要求）
     },
     grid: {
-      vertLines: { color: 'rgba(154, 165, 177, 0.08)' },
-      horzLines: { color: 'rgba(154, 165, 177, 0.08)' },
+      vertLines: { color: 'rgba(72, 86, 108, 0.1)' },
+      horzLines: { color: 'rgba(72, 86, 108, 0.1)' },
     },
-    timeScale: { borderColor: 'rgba(154, 165, 177, 0.2)' },
-    rightPriceScale: { borderColor: 'rgba(154, 165, 177, 0.2)' },
+    timeScale: { borderColor: 'rgba(72, 86, 108, 0.24)' },
+    rightPriceScale: { borderColor: 'rgba(72, 86, 108, 0.24)' },
   });
 
   const candleSeries = chart.addSeries(lc.CandlestickSeries, {
