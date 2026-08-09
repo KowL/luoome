@@ -256,6 +256,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const marketSettingsStore = options.marketSettingsStore;
   const app = new Hono();
 
+  const requireMutationCapabilities = (
+    request: Request,
+    capabilities: readonly ('write' | 'external')[],
+  ): ToolResult<never> | null => {
+    for (const capability of capabilities) {
+      const exposed = capability === 'write' ? exposeWrite : exposeExternal;
+      if (!exposed) {
+        return permissionDenied(
+          `${capability} 操作未开启；设置 LUOOME_EXPOSE_${capability.toUpperCase()}=true`,
+        );
+      }
+    }
+    return mutationPermission(request);
+  };
+
   // —— 同源静态仪表盘（原生 HTML/JS，无构建步骤）——
   const serveFile = (file: string, contentType: string) => (): Response =>
     new Response(Bun.file(join(PUBLIC_DIR, file)), {
@@ -378,15 +393,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     toolName: string,
     fixedInput: Readonly<Record<string, unknown>> = {},
   ): Promise<Response> => {
-    const exposed = sideEffect === 'write' ? exposeWrite : exposeExternal;
-    if (!exposed) {
-      return jsonResult(
-        permissionDenied(
-          `${sideEffect} 操作未开启；设置 LUOOME_EXPOSE_${sideEffect.toUpperCase()}=true`,
-        ),
-      );
-    }
-    const denied = mutationPermission(request);
+    const denied = requireMutationCapabilities(request, [sideEffect]);
     if (denied !== null) return jsonResult(denied);
     const body = await parseJsonObject(request);
     if (!('parsed' in body)) return jsonResult(body);
@@ -455,7 +462,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.post('/api/settings/market', async (c) => {
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);
     if (marketSettingsStore === undefined) {
       return jsonResult(notFound('MarketSettingsStore', 'default'));
@@ -500,7 +507,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
   app.post('/api/chat/sessions', async (c) => {
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);
     let body: unknown = {};
     try {
@@ -514,7 +521,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     callTool('get_chat_session', { sessionId: c.req.param('id'), messageLimit: 200 }),
   );
   app.patch('/api/chat/sessions/:id', async (c) => {
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);
     let body: { title?: unknown };
     try {
@@ -528,13 +535,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
   app.delete('/api/chat/sessions/:id', (c) => {
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);
     return callTool('delete_chat_session', { sessionId: c.req.param('id') });
   });
 
   app.post('/api/settings/ai', async (c) => {
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);
     if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
     try {
@@ -1257,7 +1264,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    * 调 set_watch_trigger_feedback；幂等；triggerId 不存在 → 404。
    */
   app.post('/api/watch/triggers/:id/feedback', async (c) => {
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);
     const id = c.req.param('id');
     let body: unknown;
@@ -1286,10 +1293,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.post('/api/watch/run-once', async (c) => {
-    if (!exposeExternal) {
-      return jsonResult(permissionDenied('external 操作未开启；设置 LUOOME_EXPOSE_EXTERNAL=true'));
-    }
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['external']);
     if (denied !== null) return jsonResult(denied);
     let body: unknown;
     try {
@@ -1689,7 +1693,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.post('/api/reports/run/:kind', async (c) => {
-    const denied = mutationPermission(c.req.raw);
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
     if (denied !== null) return jsonResult(denied);
     const kind = c.req.param('kind');
     const workflow =
