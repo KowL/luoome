@@ -6,6 +6,7 @@ import { loadProjectEnv } from './env.js';
 import { startWeb } from './server.js';
 
 export * from './server.js';
+export * from './strategy-scheduler.js';
 
 if (import.meta.main) {
   loadProjectEnv();

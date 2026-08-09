@@ -58,6 +58,10 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
       .run();
   }
 
+  async removeByStrategyId(strategyId: string): Promise<void> {
+    this.db.delete(strategySchedules).where(eq(strategySchedules.strategyId, strategyId)).run();
+  }
+
   async findById(id: string): Promise<StrategySchedule | null> {
     const row = this.db.select().from(strategySchedules).where(eq(strategySchedules.id, id)).get();
     return row === undefined ? null : toSchedule(row);

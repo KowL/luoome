@@ -16,6 +16,7 @@ import {
   type RepositoryRegistry,
   type ResearchDocumentIndex,
   type ResearchTopicIndex,
+  type SignalObservation,
   STANDARD_DISCLAIMERS,
   type Stock,
   type StockEvent,
@@ -247,6 +248,29 @@ export const makeStrategySchedule = (
   nextRunAt: T1,
   createdAt: T0,
   updatedAt: T0,
+  ...overrides,
+});
+
+const makeSignalObservation = (
+  id: string,
+  sourceId: string,
+  overrides: Partial<SignalObservation> = {},
+): SignalObservation => ({
+  id,
+  sourceKind: 'strategy-signal',
+  sourceId,
+  stockId: '600519.SH',
+  baselinePrice: 10,
+  baselineAt: T1,
+  horizon: 't1',
+  benchmarkStatus: 'unavailable',
+  status: 'pending',
+  provenance: {
+    provider: 'fixture',
+    observedAt: T1,
+    fetchedAt: T1,
+    freshness: 'fresh',
+  },
   ...overrides,
 });
 
@@ -1392,6 +1416,14 @@ export const registerRepositoryContractTests = (
           updatedAt: T3,
         });
       });
+
+      it('remove 删除 Strategy 身份与全部版本', async () => {
+        await repos.strategy.create(makeStrategy('strategy-remove'));
+        await repos.strategy.createVersion(makeStrategyVersion('strategy-remove'));
+        await repos.strategy.remove('strategy-remove');
+        expect(await repos.strategy.findById('strategy-remove')).toBeNull();
+        expect(await repos.strategy.listVersions('strategy-remove')).toEqual([]);
+      });
     });
 
     describe('StrategyScheduleRepository', () => {
@@ -1465,6 +1497,19 @@ export const registerRepositoryContractTests = (
             limit: 1,
           }),
         ).toEqual([schedule]);
+      });
+
+      it('removeByStrategyId 删除配置及其 lease', async () => {
+        const schedule = makeStrategySchedule('strategy-remove');
+        await repos.strategySchedule.save(schedule);
+        await repos.strategySchedule.claimDue({
+          now: T1,
+          owner: 'worker-1',
+          leaseUntil: T3,
+          limit: 1,
+        });
+        await repos.strategySchedule.removeByStrategyId('strategy-remove');
+        expect(await repos.strategySchedule.findByStrategyId('strategy-remove')).toBeNull();
       });
     });
 
@@ -1690,6 +1735,45 @@ export const registerRepositoryContractTests = (
           }),
         ).rejects.toThrow(InvariantError);
         expect(await repos.strategyRun.findRunById(invalidRun.id)).toBeNull();
+      });
+
+      it('removeByStrategyId 删除运行、结果、信号和 lease', async () => {
+        const run = makeStrategyRun('run-remove');
+        await repos.strategyRun.acquireRunLease({
+          strategyId: 'strategy-1',
+          strategyVersionId: 'strategy-1-v1',
+          owner: 'worker-1',
+          now: T1,
+          leaseUntil: T3,
+        });
+        await repos.strategyRun.commitRun({
+          run,
+          results: [makeStrategyResult(run.id, '600519.SH')],
+          signals: [makeStrategySignal('signal-remove', '600519.SH', { runId: run.id })],
+        });
+        await repos.strategyRun.removeByStrategyId('strategy-1');
+        expect(await repos.strategyRun.findRunById(run.id)).toBeNull();
+        expect(await repos.strategyRun.listResults(run.id)).toEqual([]);
+        expect(await repos.strategyRun.signalsByStrategy('strategy-1')).toEqual([]);
+        expect(
+          await repos.strategyRun.acquireRunLease({
+            strategyId: 'strategy-1',
+            strategyVersionId: 'strategy-1-v1',
+            owner: 'worker-2',
+            now: T2,
+            leaseUntil: T3,
+          }),
+        ).toBe(true);
+      });
+    });
+
+    describe('SignalObservationRepository', () => {
+      it('removeBySources 只删除指定来源的观察', async () => {
+        await repos.signalObservation.save(makeSignalObservation('observation-1', 'signal-1'));
+        await repos.signalObservation.save(makeSignalObservation('observation-2', 'signal-2'));
+        await repos.signalObservation.removeBySources('strategy-signal', ['signal-1']);
+        expect(await repos.signalObservation.findById('observation-1')).toBeNull();
+        expect(await repos.signalObservation.findById('observation-2')).not.toBeNull();
       });
     });
 

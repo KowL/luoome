@@ -69,8 +69,9 @@ luoome tools list | head
 
 ## 2. 第一次启动
 
-luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行自动建表和安装内置 Strategy，
-不会灌入账户、持仓、交易或建议。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
+luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行只自动建表；内置策略作为模板目录
+展示，不会写成 Strategy，也不会灌入账户、持仓、交易或建议。从模板创建的是独立用户策略，
+可以继续修改或删除。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
 Web（严格默认，见 §10 环境变量）；然后打开 Web 进入「设置」创建第一个真实账户。
 
 ### 2.1 一键启动完整 MVP
@@ -189,7 +190,7 @@ Web API 不做 token 校验。写操作仍需显式设置 `LUOOME_EXPOSE_WRITE=t
 |---|---|
 | **仪表盘** | 市值 / 盈亏 / 建议 + AlertPlan 健康度和最近 Trigger。 |
 | **持仓** | 建仓、加仓、减仓、纠错、平仓 + 近期交易流水。 |
-| **Strategy** | 从模板创建、版本校验、发布、dry-run 与运行结果。 |
+| **Strategy** | 从模板创建、版本校验、发布、删除、自动调度、dry-run 与运行结果。 |
 | **Watchlist** | 总览卡片 + 六种视图（按列表 / 全部股票 / 今日变化 / 待研究 / 当前持仓 / 已归档）；成员 stage/priority 编辑与归档、列表编辑/归档、来源健康与关联 AlertPlan 联动。 |
 | **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
 | **建议** | 历史 + decision 过滤。 |

@@ -63,6 +63,43 @@ export const getStrategyTool = defineTool({
   },
 });
 
+export const DeleteStrategyInput = z.object({ strategyId: z.string().min(1) });
+export const DeleteStrategyOutput = z.object({ deleted: z.boolean() });
+
+export const deleteStrategyTool = defineTool({
+  name: 'delete_strategy',
+  description: '删除 Strategy 及其版本、调度、运行结果、信号和信号观察；不删除内置模板',
+  sideEffect: 'write',
+  input: DeleteStrategyInput,
+  output: DeleteStrategyOutput,
+  handler: async (input, ctx) => {
+    const strategy = await ctx.repos.strategy.findById(input.strategyId);
+    if (strategy === null) return errNotFound('Strategy', input.strategyId);
+
+    const referencedBy = (await ctx.repos.alertPlan.list())
+      .filter((plan) =>
+        plan.rules.some(
+          (rule) => rule.kind === 'strategy-signal' && rule.strategyId === strategy.id,
+        ),
+      )
+      .map((plan) => plan.id);
+    if (referencedBy.length > 0) {
+      return errInvalidInput(
+        `Strategy 正被 AlertPlan 引用，请先修改或删除这些方案: ${referencedBy.join(', ')}`,
+      );
+    }
+
+    const signalIds = (await ctx.repos.strategyRun.signalsByStrategy(strategy.id)).map(
+      (signal) => signal.id,
+    );
+    await ctx.repos.signalObservation.removeBySources('strategy-signal', signalIds);
+    await ctx.repos.strategySchedule.removeByStrategyId(strategy.id);
+    await ctx.repos.strategyRun.removeByStrategyId(strategy.id);
+    await ctx.repos.strategy.remove(strategy.id);
+    return { deleted: true };
+  },
+});
+
 export const CreateStrategyInput = z.object({
   id: z
     .string()

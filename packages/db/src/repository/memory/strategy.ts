@@ -25,6 +25,13 @@ export class InMemoryStrategyRepository implements StrategyRepository {
     this.strategies.set(strategy.id, strategy);
   }
 
+  async remove(strategyId: string): Promise<void> {
+    for (const [id, version] of this.versions) {
+      if (version.strategyId === strategyId) this.versions.delete(id);
+    }
+    this.strategies.delete(strategyId);
+  }
+
   async findById(id: string): Promise<Strategy | null> {
     return this.strategies.get(id) ?? null;
   }
@@ -210,6 +217,24 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
   }): Promise<void> {
     const key = `${input.strategyId}\0${input.strategyVersionId}`;
     if (this.runLeases.get(key)?.owner === input.owner) this.runLeases.delete(key);
+  }
+
+  async removeByStrategyId(strategyId: string): Promise<void> {
+    const runIds = new Set(
+      [...this.runs.values()].filter((run) => run.strategyId === strategyId).map((run) => run.id),
+    );
+    for (const [id, run] of this.runs) {
+      if (run.strategyId === strategyId) this.runs.delete(id);
+    }
+    for (const [id, result] of this.results) {
+      if (runIds.has(result.runId)) this.results.delete(id);
+    }
+    for (const [id, signal] of this.signals) {
+      if (signal.strategyId === strategyId) this.signals.delete(id);
+    }
+    for (const key of this.runLeases.keys()) {
+      if (key.startsWith(`${strategyId}\0`)) this.runLeases.delete(key);
+    }
   }
 
   async findRunById(id: string): Promise<StrategyRun | null> {

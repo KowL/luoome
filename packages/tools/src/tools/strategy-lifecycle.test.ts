@@ -1,16 +1,18 @@
-import { BUILTIN_STRATEGIES, type StrategyDslV1 } from '@luoome/core';
+import { BUILTIN_STRATEGY_TEMPLATES, type StrategyDslV1 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { ensureBuiltinStrategies } from '../context.js';
-import { buildTestContext } from '../testing/context.js';
+import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
+import { runStrategyTool } from './run-strategy.js';
 import {
   createStrategyTool,
   createStrategyVersionTool,
+  deleteStrategyTool,
   pauseStrategyTool,
   publishStrategyVersionTool,
   resumeStrategyTool,
   validateStrategyVersionTool,
 } from './strategy-lifecycle.js';
+import { setStrategyScheduleTool } from './strategy-schedule.js';
 
 const validDefinition = (): StrategyDslV1 => ({
   schemaVersion: 1,
@@ -162,13 +164,12 @@ describe('Strategy lifecycle tools', () => {
     expect(published.ok).toBe(false);
   });
 
-  it('seeds builtin Strategies without writing import runs', async () => {
+  it('builtin 内容只存在于模板目录，不写入 Strategy repository', async () => {
     const ctx = await buildTestContext();
-    await ensureBuiltinStrategies(ctx.repos);
-    const strategy = await ctx.repos.strategy.findById('breakout-volume');
-    expect(strategy).toMatchObject({ owner: 'builtin', status: 'active' });
-    const run = await ctx.repos.strategyRun.findRunById('legacy-signal-import-breakout-volume');
-    expect(run).toBeNull();
+    expect(BUILTIN_STRATEGY_TEMPLATES.some((template) => template.id === 'breakout-volume')).toBe(
+      true,
+    );
+    expect(await ctx.repos.strategy.list()).toEqual([]);
   });
 
   it('publish 会把 paused 的 Strategy 隐式置回 active（锁定该语义）', async () => {
@@ -238,59 +239,83 @@ describe('Strategy lifecycle tools', () => {
     expect(resumed.data.strategy.currentVersionId).toBe(version.data.version.id);
   });
 
-  it('resume_strategy 拒绝 builtin Strategy', async () => {
+  it('delete_strategy 级联删除版本、调度、运行、信号和观察数据', async () => {
     const ctx = await buildTestContext();
-    await ensureBuiltinStrategies(ctx.repos);
-    const result = await resumeStrategyTool.execute({ strategyId: 'breakout-volume' }, ctx);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.kind).toBe('invalid_input');
-  });
-
-  it('用户自建与内置策略同 id 的 draft Strategy 时不重复播种', async () => {
-    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
     await createStrategyTool.execute(
-      { id: 'breakout-volume', name: '用户同名策略', description: '占用 builtin tactic id' },
+      { id: 'delete-me', name: '待删除策略', description: '验证级联删除' },
       ctx,
     );
-    await ensureBuiltinStrategies(ctx.repos);
-    await ensureBuiltinStrategies(ctx.repos);
-    const strategies = await ctx.repos.strategy.list();
-    expect(strategies.filter((s) => s.id === 'breakout-volume')).toHaveLength(1);
-    expect(strategies.filter((s) => s.id.startsWith('legacy-tactic-'))).toEqual([]);
+    const definition = validDefinition();
+    definition.signals.entry = [
+      {
+        id: 'entry',
+        name: '入场信号',
+        when: 'quote.close > 0',
+        score: '80',
+        direction: 'bullish',
+        evidence: ['价格有效'],
+      },
+    ];
+    const version = await createStrategyVersionTool.execute(
+      { strategyId: 'delete-me', definition },
+      ctx,
+    );
+    expect(version.ok).toBe(true);
+    if (!version.ok) return;
+    await validateStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
+    await publishStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
+    await setStrategyScheduleTool.execute({ strategyId: 'delete-me', cron: '0 18 * * 1-5' }, ctx);
+    const run = await runStrategyTool.execute(
+      { strategyId: 'delete-me', stockIds: ['600519.SH'], persist: true },
+      ctx,
+    );
+    if (!run.ok) throw new Error(JSON.stringify(run.error));
+    expect(run).toMatchObject({ ok: true });
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).not.toEqual(
+      [],
+    );
+
+    const deleted = await deleteStrategyTool.execute({ strategyId: 'delete-me' }, ctx);
+    expect(deleted).toEqual({ ok: true, data: { deleted: true } });
+    expect(await ctx.repos.strategy.findById('delete-me')).toBeNull();
+    expect(await ctx.repos.strategy.listVersions('delete-me')).toEqual([]);
+    expect(await ctx.repos.strategySchedule.findByStrategyId('delete-me')).toBeNull();
+    expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'delete-me' })).toEqual([]);
+    expect(await ctx.repos.strategyRun.signalsByStrategy('delete-me')).toEqual([]);
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
   });
 
-  it('把存量 builtin v1 协调到固定 v3 revision，重复执行保持幂等', async () => {
+  it('delete_strategy 拒绝删除仍被 AlertPlan 引用的策略', async () => {
     const ctx = await buildTestContext();
-    const current = BUILTIN_STRATEGIES.find((bundle) => bundle.strategy.id === 'breakout-volume');
-    if (current === undefined) throw new Error('builtin fixture missing');
-    const legacyVersion = {
-      ...current.version,
-      id: 'breakout-volume-v1',
-      version: 1,
-      changeSummary: 'legacy builtin',
-    };
-    await ctx.repos.strategy.create({
-      ...current.strategy,
-      currentVersionId: legacyVersion.id,
+    await createStrategyTool.execute(
+      { id: 'referenced-strategy', name: '被引用策略', description: '验证引用保护' },
+      ctx,
+    );
+    const now = ctx.clock();
+    await ctx.repos.alertPlan.save({
+      id: 'strategy-reference-plan',
+      name: '策略引用方案',
+      watchlistId: 'watchlist-placeholder',
+      rules: [
+        {
+          id: 'signal',
+          kind: 'strategy-signal',
+          strategyId: 'referenced-strategy',
+          minScore: 60,
+        },
+      ],
+      logic: 'ANY',
+      triggerMode: 'on-enter',
+      cooldownMinutes: 30,
+      dailyNotificationLimit: 20,
+      notifyOnRecovery: false,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
     });
-    await ctx.repos.strategy.createVersion(legacyVersion);
-
-    await ensureBuiltinStrategies(ctx.repos);
-    await ensureBuiltinStrategies(ctx.repos);
-
-    expect(await ctx.repos.strategy.findById(current.strategy.id)).toMatchObject({
-      currentVersionId: current.version.id,
-      status: 'active',
-    });
-    expect(await ctx.repos.strategy.listVersions(current.strategy.id)).toMatchObject([
-      { id: legacyVersion.id, version: 1 },
-      {
-        id: current.version.id,
-        version: 3,
-        parentVersionId: legacyVersion.id,
-        definitionHash: current.version.definitionHash,
-      },
-    ]);
+    const deleted = await deleteStrategyTool.execute({ strategyId: 'referenced-strategy' }, ctx);
+    expect(deleted.ok).toBe(false);
+    expect(await ctx.repos.strategy.findById('referenced-strategy')).not.toBeNull();
   });
 });

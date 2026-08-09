@@ -27,8 +27,8 @@ StrategyRun 的 `status` 只表达执行生命周期：`running / complete / fai
 ### StrategySchedule
 
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
-cron、IANA 时区、启停状态和 nextRunAt；修改调度不改变 definitionHash。外部 cron 只负责唤醒
-到期调度 workflow，实例间通过调度租约和正式运行租约防重。非交易日与暂停策略不运行，调度
+cron、IANA 时区、启停状态和 nextRunAt；修改调度不改变 definitionHash。`luoome start` / Web
+长期运行进程每分钟自动唤醒到期调度 workflow，实例间通过调度租约和正式运行租约防重。非交易日与暂停策略不运行，调度
 也不会生成 Advice、通知或交易。
 
 ### StrategyInsight

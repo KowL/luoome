@@ -87,6 +87,7 @@ import {
 import {
   createStrategyTool,
   createStrategyVersionTool,
+  deleteStrategyTool,
   getStrategyTool,
   listStrategiesTool,
   pauseStrategyTool,
@@ -256,6 +257,7 @@ export const toolRegistry: Registry = createRegistry([
   listStrategiesTool,
   getStrategyTool,
   createStrategyTool,
+  deleteStrategyTool,
   createStrategyVersionTool,
   compareStrategyDefinitionsTool,
   proposeStrategyVersionDraftTool,

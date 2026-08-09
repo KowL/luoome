@@ -747,6 +747,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`CREATE INDEX IF NOT EXISTS reports_workflow_run_idx ON reports (workflow_run_id)`);
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
+  // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
+  migrateLegacyBuiltinStrategyOwners(db);
 };
 
 /**
@@ -1031,6 +1033,19 @@ const migrateLegacyAccountKinds = (db: DrizzleDb): void => {
       : 0;
   if (changes > 0) {
     console.warn(`[migrate] accounts: 将 ${changes} 行 kind=mock 升级为 real（v0.5 → MVP 兼容）`);
+  }
+};
+
+const migrateLegacyBuiltinStrategyOwners = (db: DrizzleDb): void => {
+  const result = db.run(sql`UPDATE strategies SET owner = 'user' WHERE owner = 'builtin'`);
+  const changes =
+    typeof result === 'object' && result !== null && 'changes' in result
+      ? Number((result as { changes: unknown }).changes)
+      : 0;
+  if (changes > 0) {
+    console.warn(
+      `[migrate] strategies: 将 ${changes} 个旧 builtin Strategy 转为可编辑、可删除的 user 实例`,
+    );
   }
 };
 

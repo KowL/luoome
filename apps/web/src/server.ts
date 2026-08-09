@@ -25,9 +25,9 @@ import {
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
-import { BUILTIN_STRATEGIES } from '@luoome/core';
+import { BUILTIN_STRATEGY_TEMPLATES } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, ensureBuiltinStrategies, toolRegistry } from '@luoome/tools';
+import { buildContext, toolRegistry } from '@luoome/tools';
 import {
   closingReportWorkflow,
   openingReportWorkflow,
@@ -40,6 +40,7 @@ import { ZodError } from 'zod';
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
+import { STRATEGY_SCHEDULER_INTERVAL_MS, startStrategyScheduler } from './strategy-scheduler.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -159,7 +160,6 @@ export const buildWebContext = async (
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
-  await ensureBuiltinStrategies(handle.repos);
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
@@ -760,16 +760,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     c.json({
       ok: true,
       data: {
-        templates: BUILTIN_STRATEGIES.map(({ strategy, version }) => ({
-          id: strategy.id,
-          name: strategy.name,
-          description: strategy.description,
-          definition: version.definition,
-        })),
+        templates: BUILTIN_STRATEGY_TEMPLATES,
       },
     }),
   );
   app.post('/api/strategies', (c) => targetMutation(c.req.raw, 'write', 'create_strategy'));
+  app.delete('/api/strategies/:id', (c) =>
+    targetMutation(c.req.raw, 'write', 'delete_strategy', {
+      strategyId: c.req.param('id'),
+    }),
+  );
   app.get('/api/strategies/:id', (c) =>
     callTool('get_strategy', { strategyId: c.req.param('id') }),
   );
@@ -1816,10 +1816,17 @@ export interface StartWebOptions {
   readonly host?: string;
   /** 缺省 resolveDbPath()（$LUOOME_HOME/luoome.db）。 */
   readonly dbPath?: string;
+  /** 仅供测试缩短 tick；生产固定每分钟检查一次。 */
+  readonly strategySchedulerIntervalMs?: number;
 }
 
-/** 启动 web server，返回 Bun server 句柄（调用方可 close()）。 */
-export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<undefined>> => {
+export interface WebServerHandle {
+  readonly port: number;
+  stop(closeActiveConnections?: boolean): void;
+}
+
+/** 启动 Web 与进程内策略调度器；stop() 会同时停止二者。 */
+export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
   const dbPath = options.dbPath ?? resolveDbPath();
   // 行情源以设置页持久化的值为准（含启动装配），不能只读 process.env。
   const marketSettingsStore = new MarketSettingsStore(process.env);
@@ -1831,6 +1838,9 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
     marketSettingsStore,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
+  const scheduler = startStrategyScheduler(ctx, {
+    intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
+  });
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
   if (process.env.LUOOME_EXPOSE_WRITE !== 'true') {
     ctx.logger.info(
@@ -1842,5 +1852,11 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
       'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
     );
   }
-  return server;
+  return {
+    port: server.port ?? options.port,
+    stop: (closeActiveConnections) => {
+      scheduler.stop();
+      server.stop(closeActiveConnections);
+    },
+  };
 };

@@ -230,9 +230,7 @@ describe('Web runtime bootstrap', () => {
       } finally {
         sqlite.close();
       }
-      expect(
-        (await ctx.repos.strategy.list({ owner: 'builtin' })).map((strategy) => strategy.id),
-      ).toEqual(expect.arrayContaining(['early-breakout', 'bollinger-band']));
+      expect(await ctx.repos.strategy.list()).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -441,6 +439,33 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(templates?.length).toBe(7);
     expect(templates?.every((template) => template.definition?.schemaVersion === 1)).toBe(true);
     expect(templates?.some((template) => template.name === '布林带均值回复')).toBe(true);
+  });
+
+  it('DELETE /api/strategies/:id 删除用户策略', async () => {
+    const strategyId = 'web-delete-strategy';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: 'Web Delete Strategy',
+            description: '验证删除路由',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const deleted = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ ok: true, data: { deleted: true } });
+    expect((await app.fetch(new Request(`http://test/api/strategies/${strategyId}`))).status).toBe(
+      404,
+    );
   });
 
   it('策略工作台 read routes 复用 workspace/result-view/diff tool contract', async () => {
@@ -920,7 +945,7 @@ describe('web tool 闸口：能力开关', () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          input: { stockId: '601398.SH', side: 'buy', quantity: 1, price: 7.25 },
+          input: { stockId: '000001.SZ', side: 'buy', quantity: 1, price: 7.25 },
         }),
       }),
     );
@@ -945,7 +970,7 @@ describe('web tool 闸口：能力开关', () => {
           origin: 'https://evil.example',
         },
         body: JSON.stringify({
-          input: { stockId: '601398.SH', side: 'buy', quantity: 1, price: 7.25 },
+          input: { stockId: '000001.SZ', side: 'buy', quantity: 1, price: 7.25 },
         }),
       }),
     );

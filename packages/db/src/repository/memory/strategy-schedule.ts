@@ -28,6 +28,14 @@ export class InMemoryStrategyScheduleRepository implements StrategyScheduleRepos
     this.leases.delete(schedule.id);
   }
 
+  async removeByStrategyId(strategyId: string): Promise<void> {
+    for (const [id, schedule] of this.items) {
+      if (schedule.strategyId !== strategyId) continue;
+      this.items.delete(id);
+      this.leases.delete(id);
+    }
+  }
+
   async findById(id: string): Promise<StrategySchedule | null> {
     return this.items.get(id) ?? null;
   }

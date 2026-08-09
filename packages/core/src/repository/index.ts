@@ -289,6 +289,10 @@ export interface SignalObservationRepository {
     readonly to?: Date;
     readonly limit?: number;
   }): Promise<readonly SignalObservation[]>;
+  removeBySources(
+    sourceKind: SignalObservation['sourceKind'],
+    sourceIds: readonly string[],
+  ): Promise<void>;
 }
 
 export interface ChatRepository {
@@ -302,6 +306,8 @@ export interface ChatRepository {
 
 export interface StrategyRepository {
   create(strategy: Strategy): Promise<void>;
+  /** 删除 Strategy 身份及版本；调用方须先清理运行与调度数据。 */
+  remove(strategyId: string): Promise<void>;
   findById(id: string): Promise<Strategy | null>;
   list(filter?: {
     readonly status?: Strategy['status'];
@@ -358,10 +364,13 @@ export interface StrategyRunRepository {
   signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
   /** 终态 run 与其 facts 原子、只追加提交；runId 重复必须拒绝。 */
   commitRun(bundle: StrategyRunBundle): Promise<void>;
+  /** 删除指定 Strategy 的运行、结果、信号与正式运行租约。 */
+  removeByStrategyId(strategyId: string): Promise<void>;
 }
 
 export interface StrategyScheduleRepository {
   save(schedule: StrategySchedule): Promise<void>;
+  removeByStrategyId(strategyId: string): Promise<void>;
   findById(id: string): Promise<StrategySchedule | null>;
   findByStrategyId(strategyId: string): Promise<StrategySchedule | null>;
   list(input?: { readonly enabledOnly?: boolean }): Promise<readonly StrategySchedule[]>;

@@ -20,7 +20,7 @@ import {
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
 import { createDrizzleRepos, ensureSchema } from '@luoome/db';
-import { buildContext, ensureBuiltinStrategies } from '@luoome/tools';
+import { buildContext } from '@luoome/tools';
 
 /** createServerContext 的返回句柄：ctx + close()（进程退出时关闭 SQLite）。 */
 export interface ServerContextHandle {
@@ -56,8 +56,6 @@ export const createServerContext = async (
   const handle = createDrizzleRepos(join(home, 'luoome.db'));
   // 幂等（CREATE TABLE IF NOT EXISTS）；createDrizzleRepos 内部已调一次，重复调用安全。
   ensureSchema(handle.db);
-  await ensureBuiltinStrategies(handle.repos);
-
   const logger = createStderrLogger();
   const ai = createAIStackFromEnv(env, { logger });
   const accounts = await handle.repos.account.list();

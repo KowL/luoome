@@ -82,6 +82,25 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
+  it('旧 builtin Strategy 在启动迁移中转为可编辑、可删除的 user 实例', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`
+        INSERT INTO strategies (
+          id, name, description, owner, status, current_version_id, created_at, updated_at
+        ) VALUES (
+          'legacy-builtin', '旧模板策略', '历史误播种数据', 'builtin', 'draft', NULL, 1, 1
+        )
+      `);
+      ensureSchema(handle.db);
+      expect(await handle.repos.strategy.findById('legacy-builtin')).toMatchObject({
+        owner: 'user',
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
   it('策略信号索引迁移保留同一 replay run 的不同时点事实', async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');

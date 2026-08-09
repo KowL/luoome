@@ -6,8 +6,9 @@ import type { WatchRun } from './watch-run.js';
 /**
  * Workflow 运行审计（ruo 能力迁移 Phase 1C，docs/ddd/ruo-feature-migration-detailed-design.md §3.4）。
  *
- * 调度不内置：所有自动任务 = workflow + 外部 cron（PRD 决策 11）。每次运行落一条 WorkflowRun，
- * 支撑「自动任务可审计率」指标。与既有 WatchRun 共用统一读模型（UnifiedRun，查询层适配不迁表）。
+ * 自动任务统一由 workflow 执行；唤醒来源可以是 luoome 内置调度器或外部 cron。每次运行落一条
+ * WorkflowRun，支撑「自动任务可审计率」指标。与既有 WatchRun 共用统一读模型
+ *（UnifiedRun，查询层适配不迁表）。
  */
 
 export const WorkflowRunModeSchema = z.enum(['manual', 'scheduled', 'daemon']);

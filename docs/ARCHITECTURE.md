@@ -287,14 +287,16 @@ export const dailyAdviceWorkflow = defineWorkflow({
 
 Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（advice 持久化通过专用 `persist` tool 暴露，不绕过层级）。
 
-策略 Phase B 使用两个可由外部 cron 唤醒的 workflow：
+策略 Phase B 使用两个调度 workflow：
 
 - `run-strategy-schedules` 原子抢占到期 `StrategySchedule`，再调用 `run_strategy`；调度租约负责
   多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行；
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
   SignalObservation。样本未到期保持 pending，不阻塞其他样本。
 
-进程内不常驻调度线程；外部 cron 只负责唤醒 workflow。两个 workflow 都不直接访问 repository。
+`luoome start` / `luoome web serve` 在进程内每分钟唤醒 `run-strategy-schedules`，启动时也立即
+检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务继续可由
+外部 cron 调用。两个 workflow 都不直接访问 repository。
 
 ### 4.7 Adapter（adapters 包）
 
