@@ -52,9 +52,16 @@ import { marketOutlookTool } from './tools/market-outlook.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { renderReportTool } from './tools/render-report.js';
 import {
+  archiveResearchTopicTool,
+  buildResearchBriefTool,
+  createResearchDocumentTool,
+  createResearchTopicTool,
   getResearchDocumentTool,
   getResearchTopicTool,
   getStockResearchViewTool,
+  importLocalResearchDocumentTool,
+  importRemoteResearchDocumentTool,
+  linkResearchDocumentTool,
   listResearchDocumentsTool,
   listResearchTopicsTool,
   searchResearchDocumentsTool,
@@ -68,6 +75,11 @@ import {
   completeStrategyObservationsTool,
   listPendingStrategyObservationsTool,
 } from './tools/signal-observation.js';
+import {
+  compareStrategyDefinitionsTool,
+  proposeStrategyVersionDraftTool,
+  trialStrategyVersionTool,
+} from './tools/strategy-definition.js';
 import {
   generateStrategyInsightTool,
   getStrategyInsightFactsTool,
@@ -150,7 +162,7 @@ const renderTypeScript = (tools: readonly Tool[]): string => {
     .map(
       (t) =>
         `    '${t.name}': { description: ${JSON.stringify(t.description)}, ` +
-        `sideEffect: '${t.sideEffect}' },`,
+        `sideEffect: '${t.sideEffect}', requiredCapabilities: ${JSON.stringify(t.requiredCapabilities)} },`,
     )
     .join('\n');
 
@@ -165,6 +177,7 @@ export type LuoomeSideEffect = 'read' | 'write' | 'external' | 'advice' | 'trade
 export interface LuoomeToolMeta {
   readonly description: string;
   readonly sideEffect: LuoomeSideEffect;
+  readonly requiredCapabilities: readonly LuoomeSideEffect[];
 }
 
 export declare const luoomeToolMeta: {
@@ -244,6 +257,9 @@ export const toolRegistry: Registry = createRegistry([
   getStrategyTool,
   createStrategyTool,
   createStrategyVersionTool,
+  compareStrategyDefinitionsTool,
+  proposeStrategyVersionDraftTool,
+  trialStrategyVersionTool,
   validateStrategyVersionTool,
   publishStrategyVersionTool,
   pauseStrategyTool,
@@ -294,6 +310,13 @@ export const toolRegistry: Registry = createRegistry([
   updateStockEventTool,
   listResearchTopicsTool,
   getResearchTopicTool,
+  createResearchTopicTool,
+  createResearchDocumentTool,
+  importLocalResearchDocumentTool,
+  importRemoteResearchDocumentTool,
+  linkResearchDocumentTool,
+  archiveResearchTopicTool,
+  buildResearchBriefTool,
   listResearchDocumentsTool,
   getResearchDocumentTool,
   searchResearchDocumentsTool,

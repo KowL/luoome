@@ -21,6 +21,7 @@ import {
   createAShareSentimentManagerFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
@@ -80,6 +81,9 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'sync_daily_bars',
   'run_strategy',
   'generate_strategy_insight',
+  'propose_strategy_version_draft',
+  'trial_strategy_version',
+  'import_remote_research_document',
 ]);
 
 /**
@@ -218,6 +222,7 @@ export const buildWebContext = async (
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger: console }),
     ...(researchVault ? { researchVault } : {}),
+    researchRemote: createResearchRemoteDocumentAdapter(),
   });
 };
 
@@ -828,6 +833,17 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       ...(windowDays === undefined ? {} : { windowDays: Number(windowDays) }),
     });
   });
+  app.get('/api/strategies/:id/definition-diff', (c) =>
+    callTool('compare_strategy_definitions', {
+      strategyId: c.req.param('id'),
+      ...(c.req.query('fromVersionId') === undefined
+        ? {}
+        : { fromVersionId: c.req.query('fromVersionId') }),
+      ...(c.req.query('toVersionId') === undefined
+        ? {}
+        : { toVersionId: c.req.query('toVersionId') }),
+    }),
+  );
   app.post('/api/strategies/:id/insights/generate', (c) =>
     targetMutation(c.req.raw, 'external', 'generate_strategy_insight', {
       strategyId: c.req.param('id'),
@@ -889,6 +905,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   );
   app.post('/api/strategies/:id/run', (c) =>
     targetMutation(c.req.raw, 'external', 'run_strategy', {
+      strategyId: c.req.param('id'),
+    }),
+  );
+  app.post('/api/strategies/:id/draft', (c) =>
+    targetMutation(c.req.raw, 'external', 'propose_strategy_version_draft', {
+      strategyId: c.req.param('id'),
+    }),
+  );
+  app.post('/api/strategies/:id/trial', (c) =>
+    targetMutation(c.req.raw, 'external', 'trial_strategy_version', {
       strategyId: c.req.param('id'),
     }),
   );
@@ -1794,10 +1820,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       }
       return jsonResult(notFound('Tool', name));
     }
-    const allowed =
+    const primaryAllowed =
       (EXPOSED_SIDE_EFFECTS.has(tool.sideEffect) && (tool.sideEffect !== 'write' || exposeWrite)) ||
       (tool.sideEffect === 'external' && exposeExternal && WEB_ALLOWED_EXTERNAL.has(name));
-    if (!allowed) {
+    const capabilitiesAllowed = tool.requiredCapabilities.every(
+      (capability) =>
+        (capability !== 'write' || exposeWrite) &&
+        (capability !== 'external' || exposeExternal) &&
+        capability !== 'trade',
+    );
+    if (!primaryAllowed || !capabilitiesAllowed) {
       return jsonResult(permissionDenied(`web 端不暴露 ${tool.sideEffect} 类 tool（${name}）`));
     }
     if (tool.sideEffect === 'write' || tool.sideEffect === 'external') {

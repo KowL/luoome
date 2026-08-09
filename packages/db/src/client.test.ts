@@ -5,6 +5,57 @@ import { makeAccount, makeReport } from './repository/contract-tests.js';
 import { accounts } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
+  it('ResearchIndex 使用 FTS5 搜索并返回可审计 chunk ordinal', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const now = new Date('2026-08-01T00:00:00.000Z');
+      await handle.repos.researchIndex.applyIndexBatch({
+        vaultId: 'vault-fts',
+        completeness: 'complete',
+        topics: [],
+        documents: [
+          {
+            id: 'doc_fts',
+            title: 'Revenue report',
+            kind: 'report',
+            importedAt: now,
+            tags: [],
+            vaultId: 'vault-fts',
+            relativePath: 'Research/revenue.md',
+            attachmentPaths: [],
+            contentHash: 'a'.repeat(64),
+            fileModifiedAt: now,
+            indexedAt: now,
+            availability: 'available',
+          },
+        ],
+        topicDocuments: [],
+        subjectLinks: [],
+        chunks: [
+          {
+            documentId: 'doc_fts',
+            ordinal: 3,
+            headingPath: 'Revenue',
+            contentHash: 'a'.repeat(64),
+            body: 'Revenue growth remains strong',
+          },
+        ],
+        seenTopicIds: new Set(),
+        seenDocumentIds: new Set(['doc_fts']),
+        indexedAt: now,
+      });
+      expect(handle.repos.researchIndex.searchCapability()).toBe('fts');
+      const hits = await handle.repos.researchIndex.searchDocuments({ text: 'Revenue' });
+      expect(hits[0]).toMatchObject({ document: { id: 'doc_fts' }, ordinal: 3 });
+      handle.db.run(sql`DROP TABLE research_document_fts`);
+      const fallback = await handle.repos.researchIndex.searchDocuments({ text: 'Revenue' });
+      expect(fallback[0]).toMatchObject({ document: { id: 'doc_fts' }, ordinal: 3 });
+      expect(handle.repos.researchIndex.searchCapability()).toBe('metadata');
+    } finally {
+      handle.close();
+    }
+  });
+
   it('createDrizzleRepos(:memory:) 自动建表，repos 可读写，close 正常', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {

@@ -124,4 +124,33 @@ describe('evaluate-event-rules workflow', () => {
     if (!r.ok) return;
     expect(r.data.triggered).toBe(0);
   });
+
+  it('tool 返回错误时把已开始的 WorkflowRun 更新为 failed', async () => {
+    const base = await buildTestContext({ clock: CLOCK });
+    await seedAlertPlanWithEventRule(base);
+    const ctx: ToolContext = {
+      ...base,
+      repos: {
+        ...base.repos,
+        stockEvent: {
+          ...base.repos.stockEvent,
+          list: async () => {
+            throw new Error('stock events unavailable');
+          },
+        },
+      },
+    };
+
+    const result = await evaluateEventRulesWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.status).toBe('failed');
+    const runs = await base.repos.workflowRun.listRecent({
+      workflowName: 'evaluate-event-rules',
+    });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'failed' });
+    expect(runs[0]?.error).toContain('list_stock_events');
+  });
 });

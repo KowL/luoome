@@ -71,6 +71,42 @@ describe('Strategy lifecycle tools', () => {
     });
   });
 
+  it('从旧版本派生时按最新版本递增编号，同时保留所选 parent', async () => {
+    const ctx = await buildTestContext();
+    await createStrategyTool.execute(
+      { id: 'branch-strategy', name: '分支策略', description: '测试旧版本派生' },
+      ctx,
+    );
+    const first = await createStrategyVersionTool.execute(
+      { strategyId: 'branch-strategy', definition: validDefinition() },
+      ctx,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const second = await createStrategyVersionTool.execute(
+      { strategyId: 'branch-strategy', definition: validDefinition() },
+      ctx,
+    );
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+
+    const branched = await createStrategyVersionTool.execute(
+      {
+        strategyId: 'branch-strategy',
+        definition: validDefinition(),
+        parentVersionId: first.data.version.id,
+      },
+      ctx,
+    );
+
+    expect(branched.ok).toBe(true);
+    if (!branched.ok) return;
+    expect(branched.data.version).toMatchObject({
+      version: 3,
+      parentVersionId: first.data.version.id,
+    });
+  });
+
   it('marks an unregistered field invalid and refuses publish', async () => {
     const ctx = await buildTestContext();
     await createStrategyTool.execute(

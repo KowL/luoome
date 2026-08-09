@@ -1,4 +1,11 @@
-import type { DailyBar, DateRange, MarketDataAdapterLike, Quote, ToolContext } from '@luoome/core';
+import type {
+  DailyBar,
+  DateRange,
+  LimitUpLadderManagerLike,
+  MarketDataAdapterLike,
+  Quote,
+  ToolContext,
+} from '@luoome/core';
 import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
@@ -414,6 +421,93 @@ describe('tool/get_stock_market_view', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.kind).toBe('invalid_input');
+  });
+
+  it('输出当前账户范围内的关联事实 markers，并保留语义类型', async () => {
+    const ctx = await buildCtx(new StubMarketAdapter());
+    const res = await callView(ctx, {});
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.markers.some((marker) => marker.factKind === 'advice')).toBe(true);
+    expect(res.data.markers.every((marker) => marker.href.length > 0)).toBe(true);
+  });
+
+  it('个股行情返回天梯事实；上游历史可用时生成涨停 marker', async () => {
+    const entry = {
+      code: '002594',
+      name: '比亚迪',
+      industry: '汽车',
+      ladderLevel: 2,
+      uncategorized: false,
+      firstTime: '09:30:00',
+      finalTime: '14:30:00',
+      reason: '测试原因',
+      price: 106,
+      rawClose: 106,
+      corrected: false,
+      changePct: 0.1,
+      limitUpDate: TODAY,
+      board: 'main_board' as const,
+    };
+    const requestedDates: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const manager: LimitUpLadderManagerLike = {
+      name: 'limit-up-ladder',
+      sources: ['eastmoney'],
+      fetchLadder: async (query) => {
+        requestedDates.push(query.date);
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        inFlight -= 1;
+        return {
+          ok: true,
+          data: {
+            date: query.date,
+            total: query.date === TODAY ? 1 : 0,
+            maxLevel: query.date === TODAY ? 2 : 0,
+            source: 'eastmoney' as const,
+            levels:
+              query.date === TODAY ? [{ level: 2, name: '2 连板', count: 1, stocks: [entry] }] : [],
+            warnings: [],
+            asOf: NOW,
+          },
+        };
+      },
+      compareLadder: async () => ({ ok: false }),
+    };
+    const base = await buildCtx(new StubMarketAdapter(), () => NOW);
+    const ctx = { ...base, limitUpLadder: manager };
+    const res = await callView(ctx, {});
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.limitUp.recent[0]).toMatchObject({ date: TODAY, ladderLevel: 2 });
+    expect(res.data.markers.some((marker) => marker.factKind === 'limit-up')).toBe(true);
+    expect(requestedDates).toHaveLength(30);
+    expect(
+      requestedDates.every((date) => {
+        const day = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+        return day !== 0 && day !== 6;
+      }),
+    ).toBe(true);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+  });
+
+  it('date 深链接将日线查询窗口定位到历史日期', async () => {
+    const market = new StubMarketAdapter({
+      bars: makeBars(STOCK_ID, '2026-07-18', 30),
+    });
+    const ctx = await buildCtx(market);
+    const res = await callView(ctx, { date: '2026-07-18', range: '1m' });
+    expect(res.ok).toBe(true);
+    expect(market.lastBarsRange?.end).toEqual(new Date('2026-07-18T00:00:00.000Z'));
+    if (!res.ok) return;
+    expect(res.data.candles.at(-1)).toMatchObject({
+      date: '2026-07-18',
+      completeness: 'closed',
+    });
   });
 
   it('错误路径：股票无法解析 → not_found', async () => {

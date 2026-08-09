@@ -135,6 +135,20 @@ export const CreateStrategyVersionInput = z.object({
   strategyId: z.string().min(1),
   definition: StrategyDslV1Schema,
   changeSummary: z.string().max(500).optional(),
+  parentVersionId: z.string().min(1).optional(),
+  factReferences: z.array(z.string().min(1).max(200)).max(50).optional(),
+  agentTrace: z
+    .array(
+      z.object({
+        toolName: z.string().min(1),
+        input: z.unknown(),
+        output: z.unknown(),
+        ok: z.boolean(),
+        durationMs: z.number().nonnegative(),
+      }),
+    )
+    .max(100)
+    .optional(),
 });
 export const CreateStrategyVersionOutput = z.object({ version: StrategyVersionSchema });
 
@@ -151,8 +165,19 @@ export const createStrategyVersionTool = defineTool({
       return errInvalidInput('builtin Strategy 不可修改；请先用 create_strategy 复制');
     }
     const versions = await ctx.repos.strategy.listVersions(strategy.id);
-    const parent = versions.at(-1);
-    const number = (parent?.version ?? 0) + 1;
+    const latest = versions.reduce<StrategyVersion | undefined>(
+      (current, version) =>
+        current === undefined || version.version > current.version ? version : current,
+      undefined,
+    );
+    const parent =
+      input.parentVersionId === undefined
+        ? latest
+        : versions.find((version) => version.id === input.parentVersionId);
+    if (input.parentVersionId !== undefined && parent === undefined) {
+      return errNotFound('StrategyVersion', input.parentVersionId);
+    }
+    const number = (latest?.version ?? 0) + 1;
     const now = ctx.clock();
     const version = StrategyVersionSchema.parse({
       id: `${strategy.id}-v${number}-${globalThis.crypto.randomUUID().slice(0, 8)}`,
@@ -162,6 +187,8 @@ export const createStrategyVersionTool = defineTool({
       definitionHash: strategyDefinitionHash(input.definition),
       ...(parent === undefined ? {} : { parentVersionId: parent.id }),
       ...(input.changeSummary === undefined ? {} : { changeSummary: input.changeSummary }),
+      ...(input.factReferences === undefined ? {} : { factReferences: input.factReferences }),
+      ...(input.agentTrace === undefined ? {} : { agentTrace: input.agentTrace }),
       validationStatus: 'pending',
       validationErrors: [],
       createdAt: now,

@@ -4,7 +4,7 @@
 > 日期：2026-07-24
 > 参考：旧项目 `ruo` 源码审计、[统一 Watchlist](./watchlist.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)
 > 产品边界：本地单用户、Web 为主入口、CLI/MCP 为高级入口；只提供研究、提醒、建议和复盘，不自动下单
-> 研究模型更新：本文以 Stock/ResearchNote 为主体的研究档案部分已由[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)替代；公司事件、来源可信度、报告与复盘需求继续有效
+> 研究模型更新：本文以 Stock/ResearchNote 为主体的研究档案部分已由[研究主题与 Obsidian Vault 详细设计](../ddd/research-vault-detailed-design.md)替代；公司事件、来源可信度、报告与复盘需求继续有效。文中 StockGroup/StockPool 等旧名称仅用于迁移追溯，当前代码以 Watchlist/AlertPlan 为准
 
 ## 1. 文档结论
 
@@ -15,10 +15,11 @@ ruo 中值得迁移的不是 Python、Celery、Redis 或大型页面，而是几
 研究档案         →    行情/事件/证据    →   预警与简报   →   按需 Advice   →   信号与账户复盘
 ```
 
-迁移采用“吸收产品能力、复用 luoome 领域模型、重新实现”的方式：
+迁移采用“吸收产品能力、复用 luoome 领域模型、重新实现”的方式；下文早期 StockGroup/StockPool
+描述属于迁移快照，当前实现以 Strategy/Watchlist/AlertPlan 为准：
 
 - 以现有 `Stock` 为研究主体，不迁移 ruo 的 `TrackingCard`。
-- 以现有 `StockGroup`、`StockPool`、`WatchTrigger` 承接监控，不复制预警系统。
+- 以现有 `Watchlist`、`AlertPlan`、`WatchTrigger` 承接监控，不复制预警系统。
 - 以现有 `Advice` 承接 AI 分析，不自动批量生成高频建议。
 - 新增的公司事件、研究笔记和数据来源信息必须可追溯。
 - 战法和预警效果使用真实行情观察，不迁移 ruo 的随机模拟胜率。

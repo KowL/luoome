@@ -4,11 +4,20 @@ import type { SideEffect } from '@luoome/core';
 // 不进 toolRegistry（见 packages/tools/src/registry.ts），MCP 只需按 sideEffect 过滤，
 // 不再有按名字的排除清单。
 export const selectMcpTools = <
-  T extends { readonly name: string; readonly sideEffect: SideEffect },
+  T extends {
+    readonly name: string;
+    readonly sideEffect: SideEffect;
+    readonly requiredCapabilities?: readonly SideEffect[];
+  },
 >(
   tools: readonly T[],
   allowedSideEffects: ReadonlySet<SideEffect>,
-): readonly T[] => tools.filter((tool) => allowedSideEffects.has(tool.sideEffect));
+): readonly T[] =>
+  tools.filter((tool) =>
+    (tool.requiredCapabilities ?? [tool.sideEffect]).every((capability) =>
+      allowedSideEffects.has(capability),
+    ),
+  );
 
 /**
  * 从 env 解析暴露面。LUOOME_EXPOSE_TRADE==='true' 直接抛错：

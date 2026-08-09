@@ -1,11 +1,11 @@
 # 策略工作台（Strategy Workspace）详细设计
 
-> 状态：草案 v0.1
+> 状态：Phase A/B/C 已实施；Phase C 保持“草案—试算—校验—发布”逐步确认
 > 日期：2026-08-01
 > 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、[Web 对话助手设计](./web-chat-design.md)
-> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/evaluator.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
+> 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/tools/src/tools/strategy-definition.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
 
 ## 1. 设计结论
 

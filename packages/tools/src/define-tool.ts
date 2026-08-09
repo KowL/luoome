@@ -32,6 +32,11 @@ export interface ToolDefinition<I, O> {
   readonly name: string;
   readonly description: string;
   readonly sideEffect: SideEffect;
+  /**
+   * 调用该 tool 必须同时开启的能力。默认仅要求 sideEffect；同时读写本地数据并访问
+   * 外部网络的 tool 可声明 ['write', 'external']，供 Web/MCP 统一门控。
+   */
+  readonly requiredCapabilities?: readonly SideEffect[];
   /** 入参 zod schema；registry 据此推导 MCP / OpenAI / .d.ts。 */
   readonly input: z.ZodType<I>;
   /** 出参 zod schema；execute 成功路径会先做 output parse 再返回 Ok(data)。 */
@@ -58,6 +63,7 @@ export interface Tool<I = unknown, O = unknown> {
   readonly name: string;
   readonly description: string;
   readonly sideEffect: SideEffect;
+  readonly requiredCapabilities: readonly SideEffect[];
   readonly inputSchema: z.ZodType<I>;
   readonly outputSchema: z.ZodType<O>;
   execute(input: unknown, ctx: ToolContext): Promise<ToolResult<O>>;
@@ -77,6 +83,12 @@ const issuesMessage = (issues: readonly { message: string }[]): string =>
 
 export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> => {
   const { name, description, sideEffect, input, output, handler } = definition;
+  const requiredCapabilities = [
+    ...new Set(definition.requiredCapabilities ?? [sideEffect]),
+  ] as readonly SideEffect[];
+  if (!requiredCapabilities.includes(sideEffect)) {
+    throw new Error(`defineTool: requiredCapabilities 必须包含 sideEffect=${sideEffect}`);
+  }
 
   // AUDIT(advice × trade 隔离，AGENTS.md「Advice 与 Trade 的边界」硬约束):
   // sideEffect === 'advice' 的 tool 只允许「读数据 + 调 LLM + 落 advice」。
@@ -125,5 +137,13 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
     return { ok: true, data: outParsed.data };
   };
 
-  return { name, description, sideEffect, inputSchema: input, outputSchema: output, execute };
+  return {
+    name,
+    description,
+    sideEffect,
+    requiredCapabilities,
+    inputSchema: input,
+    outputSchema: output,
+    execute,
+  };
 };

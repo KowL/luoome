@@ -201,6 +201,7 @@
             </div>
             <div id="market-chart" class="market-chart"></div>
             <p id="market-chart-empty" class="placeholder" hidden>暂无 K 线数据。</p>
+            <div id="market-markers" class="market-markers mt-2"></div>
           </div>
           <div class="card mt-4">
             <div class="card-header">
@@ -212,6 +213,10 @@
           <div class="card mt-4">
             <div class="card-header"><h2>关联入口</h2></div>
             <div id="market-links" class="market-links"></div>
+          </div>
+          <div class="card mt-4">
+            <div class="card-header"><h2>涨停天梯事实</h2><div id="market-limit-up-status" class="card-meta">--</div></div>
+            <div id="market-limit-up" class="market-limit-up"></div>
           </div>
         </div>
       </section>
@@ -340,6 +345,27 @@
             <input id="research-topic-input" type="search" placeholder="搜索研究主题或资料" />
             <button id="research-search-btn" class="btn btn-primary btn-sm" type="button">搜索</button>
           </div>
+          <div class="research-toolbar flex gap-2 mt-2">
+            <label class="field-inline" for="research-kind-filter">
+              <span class="muted">类型</span>
+              <select id="research-kind-filter">
+                <option value="">全部</option>
+                <option value="company">公司</option>
+                <option value="industry">产业</option>
+                <option value="event">事件</option>
+                <option value="theme">主题</option>
+                <option value="macro">宏观</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <button id="research-create-topic-btn" class="btn btn-primary btn-sm" type="button">+ 新建主题</button>
+            <button id="research-import-document-btn" class="btn btn-outline btn-sm" type="button">导入本地资料</button>
+            <button id="research-import-remote-btn" class="btn btn-outline btn-sm" type="button">导入远程 URL</button>
+            <button id="research-sync-btn" class="btn btn-outline btn-sm" type="button">手动同步 Vault</button>
+            <span id="research-index-status" class="card-meta" aria-live="polite">索引状态：--</span>
+          </div>
+          <div id="research-write-status" class="research-write-status" role="status" aria-live="polite"></div>
+          <div id="research-inbox" class="research-inbox mt-2"></div>
           <div id="research-search-results" class="research-results mt-2"></div>
         </div>
         <div id="research-detail" class="card mt-4" hidden></div>

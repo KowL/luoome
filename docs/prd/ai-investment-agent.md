@@ -1,6 +1,6 @@
 # AI 投资 Agent 协作体验 PRD
 
-> 状态：方向草案，待按场景立项
+> 状态：方向设计；当前实现以 AI SDK、Web chat 和 ResearchTopic/ResearchDocument 契约为准，具体阶段按开发计划推进
 > 日期：2026-07-29
 > 上位文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)
 > 技术基线：[ARCHITECTURE.md](../ARCHITECTURE.md)、[AI SDK 接入与 LLM 重构设计](../ddd/ai-sdk-llm-refactor-design.md)

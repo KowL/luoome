@@ -1,4 +1,5 @@
 import { ObsidianVaultAdapter } from './obsidian.js';
+import { ResearchRemoteDocumentAdapter } from './remote.js';
 
 export const createResearchVaultAdapterFromEnv = (
   env: NodeJS.ProcessEnv = process.env,
@@ -15,3 +16,6 @@ export const createResearchVaultAdapterFromEnv = (
       : {}),
   });
 };
+
+export const createResearchRemoteDocumentAdapter = (): ResearchRemoteDocumentAdapter =>
+  new ResearchRemoteDocumentAdapter();

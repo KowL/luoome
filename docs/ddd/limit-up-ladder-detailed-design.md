@@ -1,6 +1,6 @@
 # 连板天梯详细设计：A 股涨停梯队快照（tool + 缓存 + 端到端）
 
-> 状态：Phase 1 实施稿（PRD §10 已确认三阶段范围；本文实现 Phase 1 主体并对齐 Phase 2/3 演进路径）
+> 状态：Phase 1/2/3 已实施；策略 DSL 字段联动仍按设计延后
 > 日期：2026-07-25
 > 需求：[连板天梯产品文档](../prd/limit-up-ladder-product.md)
 > 数据源：东方财富公开涨停池（`GET https://push2ex.eastmoney.com/getTopicZTPool`，无鉴权；2026-07 由原私有行情服务 `/market/limit-up/ladder` 迁移而来）
@@ -20,6 +20,8 @@
 - **天梯不替其它模块承担职责**：StockGroup / WatchPlan、报告 LLM 输入、策略预警触发都各自有 tool，天梯只暴露只读快照，**不**为这些模块改变输出顺序或参与写入路径（PRD §4.6）。
 - **缓存策略分时段**：盘中 TTL 60s（与现有 quote 缓存一致）；收盘后 key 内嵌 `date`，只要还在同一日 + 同进程就持续命中，跨日自动失效；非交易日 / 盘前 `date ≠ today` 的请求同样长期命中（历史回看场景）。这避免了"缓存 1 小时还是 8 小时"的人为硬切（PRD §14 D3）。
 - **Web 不在 Phase 1**：避免 PRD §14 D4 的"两套数据来源并行"风险，先 TUI/CLI 单数据源跑稳。**Phase 2 起**：TUI/CLI 跑稳后接入 Web `apps/web/public/index.html + js/limit-up-ladder.js`，由 web 调 `/api/market/limit-up` 走同一 manager。
+
+Phase 3 现已补齐统一事实投影：`market_outlook` 保存结构化天梯摘要，个股行情与研究视图返回可用历史和明确 unavailable 状态，行情 marker 与研究时间线复用同一日期/股票事实；报告链继续通过 `daily-review` 的 `limit_up_ladder_compare` 消费快照。历史不可获得时不回退成伪造的空记录。
 
 ## 现状（已核实）
 

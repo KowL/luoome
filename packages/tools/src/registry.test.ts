@@ -30,6 +30,9 @@ const EXPECTED_TOOL_NAMES = [
   'get_strategy',
   'create_strategy',
   'create_strategy_version',
+  'compare_strategy_definitions',
+  'propose_strategy_version_draft',
+  'trial_strategy_version',
   'validate_strategy_version',
   'publish_strategy_version',
   'pause_strategy',
@@ -80,9 +83,16 @@ const EXPECTED_TOOL_NAMES = [
   // ruo 迁移 Phase 1（docs/ddd/ruo-feature-migration-detailed-design.md §7）
   'list_research_topics',
   'get_research_topic',
+  'create_research_topic',
+  'create_research_document',
+  'import_local_research_document',
+  'import_remote_research_document',
+  'link_research_document',
+  'archive_research_topic',
   'list_research_documents',
   'get_research_document',
   'search_research_documents',
+  'build_research_brief',
   'get_stock_research_view',
   'sync_research_vault',
   'list_stock_events',
@@ -125,6 +135,13 @@ describe('toolRegistry', () => {
     expect(toolRegistry.get('fetch_quote')?.sideEffect).toBe('external');
     expect(toolRegistry.get('compute_indicators')?.sideEffect).toBe('read');
     expect(toolRegistry.get('not_a_tool')).toBeUndefined();
+  });
+
+  it('远程研究导入声明 write + external 组合能力', () => {
+    expect(toolRegistry.get('import_remote_research_document')?.requiredCapabilities).toEqual([
+      'write',
+      'external',
+    ]);
   });
 
   it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
@@ -177,12 +194,15 @@ describe('toolRegistry', () => {
       'generate_strategy_insight',
       'get_ashare_sentiment',
       'get_stock_market_view',
+      'import_remote_research_document',
+      'propose_strategy_version_draft',
       'run_strategy',
       'send_notification',
       'sync_daily_bars',
       'sync_quotes',
       'sync_stock_events',
       'sync_stock_universe',
+      'trial_strategy_version',
     ]);
     const writeTools = toolRegistry
       .all()
@@ -195,6 +215,7 @@ describe('toolRegistry', () => {
       'add_trade',
       'add_watchlist_member',
       'append_chat_message',
+      'archive_research_topic',
       'archive_watchlist',
       'archive_watchlist_member',
       'close_holding',
@@ -202,12 +223,16 @@ describe('toolRegistry', () => {
       'create_account',
       'create_alert_plan',
       'create_chat_session',
+      'create_research_document',
+      'create_research_topic',
       'create_strategy',
       'create_strategy_version',
       'create_watchlist',
       'delete_alert_plan',
       'delete_chat_session',
       'delete_stock_event',
+      'import_local_research_document',
+      'link_research_document',
       'pause_strategy',
       'publish_strategy_version',
       'record_advice_outcome',

@@ -3,6 +3,11 @@ import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './define-workflow.js';
 
+const recordRun = async (ctx: WorkflowContext, run: WorkflowRun): Promise<void> => {
+  const result = await ctx.tools.record_workflow_run.execute({ run });
+  if (!result.ok) throw new Error(JSON.stringify(result.error));
+};
+
 /**
  * sync-stock-events workflow（ruo 迁移 §4，盘外执行，cron 调度）。
  *
@@ -50,7 +55,7 @@ const stepRun: WorkflowStep = async (prev, ctx: WorkflowContext) => {
     startedAt: now,
     providerStatuses: [],
   };
-  await ctx.repos.workflowRun.save(runningRun);
+  await recordRun(ctx, runningRun);
 
   const r = await ctx.tools.sync_stock_events.execute({
     ...(input.stockIds !== undefined ? { stockIds: input.stockIds } : {}),
@@ -67,7 +72,7 @@ const stepRun: WorkflowStep = async (prev, ctx: WorkflowContext) => {
       finishedAt,
       error: JSON.stringify(r.error).slice(0, 500),
     };
-    await ctx.repos.workflowRun.save(failed);
+    await recordRun(ctx, failed);
     return SyncStockEventsWorkflowOutput.parse({
       runId,
       status: 'failed',
@@ -97,7 +102,7 @@ const stepRun: WorkflowStep = async (prev, ctx: WorkflowContext) => {
     outputSummary: { syncedStocks: synced, upserted, staleMarked },
     ...(status === 'failed' ? { error: '全部 provider 同步失败' } : {}),
   };
-  await ctx.repos.workflowRun.save(terminal);
+  await recordRun(ctx, terminal);
 
   return SyncStockEventsWorkflowOutput.parse({
     runId,

@@ -44,9 +44,9 @@ export interface ObsidianVaultOptions {
 export class ObsidianVaultAdapter implements ResearchVaultAdapterLike {
   readonly name = 'obsidian-vault';
   readonly vaultId: string;
+  readonly managedRoot: string;
   private readonly root: string;
   private readonly researchRoot: string;
-  private readonly managedRoot: string;
   private readonly maxTextBytes: number;
   private readonly maxAttachmentBytes: number;
 
@@ -185,6 +185,44 @@ export class ObsidianVaultAdapter implements ResearchVaultAdapterLike {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
+    const tmp = `${target}.luoome-${process.pid}-${Date.now()}.tmp`;
+    try {
+      const handle = await fs.open(tmp, 'wx');
+      try {
+        await handle.writeFile(content);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.rename(tmp, target);
+    } catch (error) {
+      await fs.unlink(tmp).catch(() => undefined);
+      throw error;
+    }
+    const stat = await fs.stat(target);
+    return {
+      relativePath: rel,
+      size: stat.size,
+      modifiedAt: stat.mtime,
+      contentHash: hash(content),
+    };
+  }
+
+  async updateManagedDocument(input: {
+    readonly relativePath: string;
+    readonly content: string;
+    readonly expectedContentHash: string;
+  }): Promise<ResearchVaultEntry> {
+    const rel = safeRelative(input.relativePath);
+    if (!rel.startsWith(`${this.managedRoot}/`)) {
+      throw new Error('managed writes must stay inside managed root');
+    }
+    const content = Buffer.from(input.content, 'utf8');
+    if (content.byteLength > this.maxTextBytes)
+      throw new Error('file exceeds configured size limit');
+    const { target } = await this.existingTarget(rel);
+    const current = await this.readFile(rel, this.maxTextBytes);
+    if (hash(current) !== input.expectedContentHash) throw new Error('content hash mismatch');
     const tmp = `${target}.luoome-${process.pid}-${Date.now()}.tmp`;
     try {
       const handle = await fs.open(tmp, 'wx');

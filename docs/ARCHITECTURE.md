@@ -94,6 +94,9 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 
 **新增 `advice` 等级**：advice tool 本质是只读 + LLM 推理，但产出有"建议"性质，需要独立标记。它有自己特殊的安全约束（详见 §11）。
 
+`sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
+所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。
+
 **advice ≠ trade**：advice 永远不能直接触发 trade。trade 永远是 human-in-the-loop。
 
 ## 3. 模块结构

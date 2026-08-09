@@ -47,6 +47,12 @@ describe('hash 参数解析与序列化', () => {
     expect(params.get('range')).toBe('6m');
   });
 
+  it('历史复盘日期会保留在深链接中', () => {
+    const hash = buildMarketHash('002594.SZ', '6m', '2026-07-24');
+    const { params } = parseRouteHash(`#${hash}`);
+    expect(params.get('date')).toBe('2026-07-24');
+  });
+
   it('持仓 / 分组入口链接：完整 id + 默认 3m', () => {
     expect(buildMarketLink('002594.SZ')).toBe('#market?stockId=002594.SZ&range=3m');
     const { route, params } = parseRouteHash(buildMarketLink('600519.SH'));

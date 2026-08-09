@@ -46,6 +46,33 @@ class StubAgentRuntime implements AgentRuntimeLike {
   }
 }
 
+class ResearchDraftRuntime implements AgentRuntimeLike {
+  readonly name = 'research-draft-agent';
+
+  async run(): Promise<AgentRuntimeResult> {
+    return {
+      output: {
+        conclusion: '仅生成研究写入草案，尚未写入。',
+        evidence: ['已读取研究资料'],
+        counterEvidence: ['尚未核验来源'],
+        risks: ['草案需要用户确认'],
+        disclaimers: ['草案不构成投资建议'],
+        drafts: [
+          {
+            kind: 'research',
+            tool: 'create_research_topic',
+            input: { title: '草案主题', kind: 'theme', subjects: [], tags: [] },
+            summary: '待确认的研究主题草案',
+          },
+        ],
+      },
+      trace: [],
+      usedTools: [],
+      totalUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    };
+  }
+}
+
 describe('agent_run', () => {
   it('未注入 agent runtime 时返回 permission_denied', async () => {
     const ctx = await buildTestContext();
@@ -93,5 +120,17 @@ describe('agent_run', () => {
     for (const name of AGENT_V1_TOOL_NAMES) {
       expect(toolRegistry.get(name), name).toBeDefined();
     }
+  });
+
+  it('研究写入只能作为 schema 校验后的 research 草案返回，不执行写入', async () => {
+    const runtime = new ResearchDraftRuntime();
+    const ctx = await buildTestContext({ agent: runtime });
+    const result = await agentRunTool.execute({ message: '创建研究主题草案' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.drafts).toEqual([
+      expect.objectContaining({ kind: 'research', tool: 'create_research_topic' }),
+    ]);
+    expect(result.data.usedTools).toEqual([]);
   });
 });

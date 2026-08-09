@@ -87,6 +87,14 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE TABLE IF NOT EXISTS research_document_chunks (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, heading_path TEXT NOT NULL, content_hash TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (document_id, ordinal))`,
   );
+  // FTS5 是可重建投影，不是权威业务表；旧 SQLite/构建不支持时保留 metadata 降级。
+  try {
+    db.run(
+      sql`CREATE VIRTUAL TABLE IF NOT EXISTS research_document_fts USING fts5(document_id UNINDEXED, ordinal UNINDEXED, content_hash UNINDEXED, title, heading_path, body, tokenize='unicode61')`,
+    );
+  } catch {
+    // searchCapability() 会检测到虚表不可用并返回 metadata。
+  }
   db.run(
     sql`CREATE TABLE IF NOT EXISTS research_vault_sync_runs (id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL, scanned INTEGER NOT NULL, added INTEGER NOT NULL, updated INTEGER NOT NULL, unchanged INTEGER NOT NULL, missing INTEGER NOT NULL, invalid INTEGER NOT NULL, conflicts INTEGER NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER, error TEXT)`,
   );
@@ -347,12 +355,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
       definition_hash TEXT NOT NULL,
       parent_version_id TEXT,
       change_summary TEXT,
+      fact_references_json TEXT,
+      agent_trace_json TEXT,
       validation_status TEXT NOT NULL,
       validation_errors_json TEXT NOT NULL,
       published_at INTEGER,
       created_at INTEGER NOT NULL
     )
   `);
+  migrateStrategyVersionAuditColumns(db);
   db.run(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS strategy_versions_strategy_version_unique
     ON strategy_versions (strategy_id, version)
@@ -747,6 +758,19 @@ const migrateAdviceStockNameColumn = (db: DrizzleDb): void => {
   if (cols.length === 0) return;
   if (!cols.some((c) => c.name === 'stock_name')) {
     db.run(sql`ALTER TABLE advices ADD COLUMN stock_name TEXT`);
+  }
+};
+
+/** StrategyVersion AI 审计字段，旧库按可空 JSON 列幂等补齐。 */
+const migrateStrategyVersionAuditColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(strategy_versions)`);
+  if (cols.length === 0) return;
+  const have = new Set(cols.map((column) => column.name));
+  if (!have.has('fact_references_json')) {
+    db.run(sql`ALTER TABLE strategy_versions ADD COLUMN fact_references_json TEXT`);
+  }
+  if (!have.has('agent_trace_json')) {
+    db.run(sql`ALTER TABLE strategy_versions ADD COLUMN agent_trace_json TEXT`);
   }
 };
 

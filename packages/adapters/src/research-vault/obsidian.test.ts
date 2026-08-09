@@ -68,6 +68,30 @@ describe('ObsidianVaultAdapter', () => {
     ).rejects.toThrow('managed writes');
   });
 
+  it('updates managed documents only when expectedContentHash matches', async () => {
+    const root = await makeVault();
+    const adapter = new ObsidianVaultAdapter({ vaultPath: root });
+    const created = await adapter.createManagedDocument({
+      relativePath: 'Research/Luoome/topic.md',
+      content: 'original',
+    });
+
+    const updated = await adapter.updateManagedDocument({
+      relativePath: created.relativePath,
+      content: 'updated',
+      expectedContentHash: created.contentHash,
+    });
+    expect(await readFile(join(root, created.relativePath), 'utf8')).toBe('updated');
+    await expect(
+      adapter.updateManagedDocument({
+        relativePath: created.relativePath,
+        content: 'stale',
+        expectedContentHash: created.contentHash,
+      }),
+    ).rejects.toThrow('content hash mismatch');
+    expect(updated.contentHash).not.toBe(created.contentHash);
+  });
+
   it('rejects broad and reserved roots', async () => {
     expect(() => new ObsidianVaultAdapter({ vaultPath: '/' })).toThrow('too broad');
   });

@@ -36,6 +36,10 @@ import type {
   GetResearchTopicOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
+  GetWatchlistInput,
+  GetWatchlistOutput,
+  GetWatchTriggerDeliveryStatsInput,
+  GetWatchTriggerDeliveryStatsOutput,
   LimitUpLadderCompareInput,
   LimitUpLadderCompareOutput,
   LimitUpLadderInput,
@@ -58,6 +62,8 @@ import type {
   ListStrategiesOutput,
   ListWatchlistsInput,
   ListWatchlistsOutput,
+  ListWatchRuleStatesInput,
+  ListWatchRuleStatesOutput,
   ListWatchTriggersInput,
   ListWatchTriggersOutput,
   MarketOutlookInput,
@@ -72,6 +78,8 @@ import type {
   RunStrategyOutput,
   SaveReportInput,
   SaveReportOutput,
+  SaveWatchRuleStatesInput,
+  SaveWatchRuleStatesOutput,
   SaveWatchTriggerInput,
   SaveWatchTriggerOutput,
   SearchResearchDocumentsInput,
@@ -82,6 +90,8 @@ import type {
   SendNotificationOutput,
   SetReportDeliveryStatusInput,
   SetReportDeliveryStatusOutput,
+  SetWatchTriggerDeliveryStatusInput,
+  SetWatchTriggerDeliveryStatusOutput,
   SetWatchTriggerFeedbackInput,
   SetWatchTriggerFeedbackOutput,
   StrategySignalsByStockInput,
@@ -102,11 +112,15 @@ import type {
 import {
   claimDueStrategySchedulesTool,
   finishStrategyScheduleClaimTool,
+  getWatchTriggerDeliveryStatsTool,
+  listWatchRuleStatesTool,
   recordWatchRunTool,
   recordWorkflowRunTool,
   saveReportTool,
+  saveWatchRuleStatesTool,
   saveWatchTriggerTool,
   setReportDeliveryStatusTool,
+  setWatchTriggerDeliveryStatusTool,
   syncWatchlistSourceTool,
   toolRegistry,
 } from '@luoome/tools';
@@ -156,6 +170,7 @@ export interface WorkflowToolMap {
   readonly get_account: ToolAccessor<typeof GetAccountInput, typeof GetAccountOutput>;
   readonly list_holdings: ToolAccessor<typeof ListHoldingsInput, typeof ListHoldingsOutput>;
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
+  readonly get_watchlist: ToolAccessor<typeof GetWatchlistInput, typeof GetWatchlistOutput>;
   readonly get_advice: ToolAccessor<typeof GetAdviceInput, typeof GetAdviceOutput>;
   readonly get_advice_stats: ToolAccessor<typeof GetAdviceStatsInput, typeof GetAdviceStatsOutput>;
   readonly get_ashare_sentiment: ToolAccessor<
@@ -264,6 +279,26 @@ export interface WorkflowToolMap {
     typeof SetWatchTriggerFeedbackInput,
     typeof SetWatchTriggerFeedbackOutput
   >;
+  /** workflow-only；不进入公共 registry/MCP discovery。 */
+  readonly list_watch_rule_states: ToolAccessor<
+    typeof ListWatchRuleStatesInput,
+    typeof ListWatchRuleStatesOutput
+  >;
+  /** workflow-only；不进入公共 registry/MCP discovery。 */
+  readonly save_watch_rule_states: ToolAccessor<
+    typeof SaveWatchRuleStatesInput,
+    typeof SaveWatchRuleStatesOutput
+  >;
+  /** workflow-only；不进入公共 registry/MCP discovery。 */
+  readonly set_watch_trigger_delivery_status: ToolAccessor<
+    typeof SetWatchTriggerDeliveryStatusInput,
+    typeof SetWatchTriggerDeliveryStatusOutput
+  >;
+  /** workflow-only；不进入公共 registry/MCP discovery。 */
+  readonly get_watch_trigger_delivery_stats: ToolAccessor<
+    typeof GetWatchTriggerDeliveryStatsInput,
+    typeof GetWatchTriggerDeliveryStatsOutput
+  >;
   // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md §7）
   readonly limit_up_ladder: ToolAccessor<typeof LimitUpLadderInput, typeof LimitUpLadderOutput>;
   readonly limit_up_ladder_compare: ToolAccessor<
@@ -305,6 +340,10 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     setReportDeliveryStatusTool,
     claimDueStrategySchedulesTool,
     finishStrategyScheduleClaimTool,
+    getWatchTriggerDeliveryStatsTool,
+    listWatchRuleStatesTool,
+    saveWatchRuleStatesTool,
+    setWatchTriggerDeliveryStatusTool,
   ]) {
     accessors[internalTool.name] = {
       execute: (input) => internalTool.execute(input, ctx),

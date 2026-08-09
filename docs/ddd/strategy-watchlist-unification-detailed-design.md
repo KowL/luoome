@@ -1,6 +1,6 @@
 # Strategy 与统一 Watchlist 详细设计
 
-> 状态：设计草案，待按开发计划实施
+> 状态：目标模型与主要迁移已实施；本文保留领域契约，后续仅追踪剩余缺口
 > 日期：2026-07-29
 > 输入：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)、
 > [Strategy DSL PRD](../prd/strategy-dsl.md)、[统一 Watchlist PRD](../prd/watchlist.md)

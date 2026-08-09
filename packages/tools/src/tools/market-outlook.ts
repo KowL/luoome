@@ -1,6 +1,8 @@
 import {
   type Advice,
+  AdviceLadderSnapshotSchema,
   AdviceReasoningSchema,
+  dateInShanghai,
   STANDARD_DISCLAIMERS,
   type Stock,
   type ToolContext,
@@ -29,7 +31,45 @@ export const MarketOutlookOutput = z.object({
   advice: z.any().refine((v) => v !== undefined && v !== null),
   /** 评估的股票数。 */
   evaluatedStocks: z.number().int().nonnegative(),
+  ladder: z.object({
+    status: z.enum(['available', 'unavailable']),
+    snapshot: AdviceLadderSnapshotSchema.optional(),
+    warnings: z.array(z.string()),
+  }),
 });
+
+const loadLadderSnapshot = async (
+  ctx: ToolContext,
+): Promise<z.infer<typeof MarketOutlookOutput>['ladder']> => {
+  if (ctx.limitUpLadder === undefined) {
+    return { status: 'unavailable', warnings: ['limit-up-ladder-manager-unavailable'] };
+  }
+  const date = dateInShanghai(ctx.clock());
+  const result = await ctx.limitUpLadder.fetchLadder({
+    date,
+    source: 'eastmoney',
+    days: 15,
+    includeUncategorized: false,
+    includeStar: false,
+    includeBse: false,
+    includeST: false,
+  });
+  if (!result.ok || result.data === undefined) {
+    return {
+      status: 'unavailable',
+      warnings: [result.error?.message ?? 'limit-up-ladder-unavailable'],
+    };
+  }
+  const snapshot = {
+    date: result.data.date,
+    total: result.data.total,
+    maxLevel: result.data.maxLevel,
+    source: result.data.source,
+    levels: result.data.levels.map((level) => ({ level: level.level, count: level.count })),
+    warnings: [...result.data.warnings],
+  };
+  return { status: 'available', snapshot, warnings: [...result.data.warnings] };
+};
 
 interface QuoteLike {
   readonly stockId: string;
@@ -95,6 +135,7 @@ export const marketOutlookTool = defineTool({
       quotes.length === 0 ? 0 : quotes.reduce((s, q) => s + q.changePct, 0) / quotes.length;
     const advancers = quotes.filter((q) => q.changePct > 0).length;
     const decliners = quotes.filter((q) => q.changePct < 0).length;
+    const ladder = await loadLadderSnapshot(ctx);
 
     const llm = await ctx.adapters.llm.generate<AdviceLLMOutput>({
       system: 'market_outlook',
@@ -105,6 +146,7 @@ export const marketOutlookTool = defineTool({
         advancers,
         decliners,
         avgChangePct,
+        ladder,
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
       },
     });
@@ -127,13 +169,16 @@ export const marketOutlookTool = defineTool({
       risks: llm.risks,
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'market_outlook',
-      basedOn: { dataAsOf: now },
+      basedOn: {
+        dataAsOf: now,
+        ...(ladder.snapshot === undefined ? {} : { ladder: ladder.snapshot }),
+      },
       validFrom: now,
       validUntil,
       createdAt: now,
     };
     await ctx.repos.advice.save(advice);
-    return { advice, evaluatedStocks: quotes.length };
+    return { advice, evaluatedStocks: quotes.length, ladder };
   },
 });
 

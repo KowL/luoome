@@ -56,7 +56,13 @@
 
 | 文档 | 范围 |
 |---|---|
-| [Strategy 与统一 Watchlist 开发计划](./strategy-watchlist-development-plan.md) | 从 Tactic/StockGroup/StockPool 迁移到目标模型的阶段、依赖与验收门槛 |
+| [luoome 开发计划](./development-plan.md) | 按“完成部分实现 → 已设计新功能 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
+
+## 已执行开发计划
+
+| 文档 | 范围 |
+|---|---|
+| [Strategy 与统一 Watchlist 开发计划](./strategy-watchlist-development-plan.md) | 已执行的 Tactic/StockGroup/StockPool 到目标模型迁移计划，保留用于追溯实际实施与原设计差异 |
 
 ## 运维手册
 

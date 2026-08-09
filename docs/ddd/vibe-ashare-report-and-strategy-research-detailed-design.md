@@ -1,6 +1,6 @@
 # Vibe A 股市场报告与策略研究迁移详细设计
 
-> 状态：**实施中（Phase 0、Phase 1、Phase 2、Phase 3、Phase 4、Phase 5 已完成）**
+> 状态：**Phase 0～5 已完成；旧 Tactic/StockGroup/ResearchNote 仅作为迁移历史术语，当前实现以 Strategy/Watchlist/ResearchTopic 为准**
 >
 > 日期：2026-07-29
 >
@@ -18,6 +18,8 @@
 产品语义以 PRD 和 [CONTEXT.md](../../CONTEXT.md) 为准；行情底座契约以
 [行情数据底座详细设计](./market-data-and-stock-universe-detailed-design.md)及其落地代码为准。
 本文不要求兼容 Vibe 的 Python Interface、文件格式、内置调度或页面路由。
+文中早期迁移表保留 `Tactic`、`StockGroup`、`ResearchNote` 等历史名称仅用于追溯；当前代码与
+维护文档以 `Strategy`、`Watchlist`、`ResearchTopic/ResearchDocument` 为准。
 
 ## 1. 结论
 
