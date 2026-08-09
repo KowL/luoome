@@ -74,6 +74,7 @@ describe('主题皮肤入口', () => {
     expect(html).toContain('id="theme-drawer-toggle"');
     expect(html).toContain('id="theme-drawer"');
     expect(html).toContain('id="theme-grid"');
+    expect(html).toContain('id="follow-system-input"');
     expect(html).toContain('class="theme-card"');
     expect(html).toContain('data-theme="teal"');
     expect(html).toContain('data-theme="crimson"');

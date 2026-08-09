@@ -3,10 +3,12 @@ import { describe, expect, it } from 'bun:test';
 import {
   clearBackgroundImage,
   getBackgroundImage,
+  getFollowSystem,
   getPanelOpacity,
   getTheme,
   getThemes,
   setBackgroundImage,
+  setFollowSystem,
   setPanelOpacity,
   setTheme,
 } from './theme.js';
@@ -61,5 +63,11 @@ describe('主题皮肤', () => {
   it('无 DOM 时面板透明度读写不抛出异常', () => {
     expect(getPanelOpacity()).toBeNull();
     expect(() => setPanelOpacity(80)).not.toThrow();
+  });
+
+  it('无 DOM 时跟随系统开关读写不抛出异常', () => {
+    expect(getFollowSystem()).toBe(false);
+    expect(() => setFollowSystem(true)).not.toThrow();
+    expect(() => setFollowSystem(false)).not.toThrow();
   });
 });

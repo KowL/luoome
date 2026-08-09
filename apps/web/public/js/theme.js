@@ -122,6 +122,62 @@ const storedTheme = () => {
   }
 };
 
+const FOLLOW_KEY = 'luoome-theme-follow-system';
+const SYSTEM_LIGHT_THEME = 'teal';
+const SYSTEM_DARK_THEME = 'dark';
+
+const systemTheme = () => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return DEFAULT_THEME;
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+    ? SYSTEM_DARK_THEME
+    : SYSTEM_LIGHT_THEME;
+};
+
+export const getFollowSystem = () => {
+  try {
+    return localStorage.getItem(FOLLOW_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+// 开启后立即按当前系统外观应用主题；关闭时保留当前主题不变。
+export const setFollowSystem = (enabled) => {
+  try {
+    if (enabled) {
+      localStorage.setItem(FOLLOW_KEY, '1');
+    } else {
+      localStorage.removeItem(FOLLOW_KEY);
+    }
+  } catch {
+    // localStorage 不可用时不阻断。
+  }
+  if (enabled) {
+    applyTheme(systemTheme());
+    updateThemeUI();
+  }
+};
+
+let systemListenerBound = false;
+// 跟随开启时响应系统外观变化（含 macOS「自动」的日出/日落切换）。
+const bindSystemAppearance = () => {
+  if (
+    systemListenerBound ||
+    typeof window === 'undefined' ||
+    typeof window.matchMedia !== 'function'
+  ) {
+    return;
+  }
+  systemListenerBound = true;
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (!getFollowSystem()) return;
+    applyTheme(systemTheme());
+    updateThemeUI();
+  });
+};
+
 const applyTheme = (theme) => {
   if (typeof document === 'undefined' || document.documentElement === undefined) return;
   document.documentElement.setAttribute('data-theme', validTheme(theme));
@@ -157,9 +213,10 @@ export const setTheme = (theme) => {
 export const getThemes = () => THEMES;
 
 export const initTheme = () => {
-  applyTheme(storedTheme());
+  applyTheme(getFollowSystem() ? systemTheme() : storedTheme());
   applyBackground(getBackgroundImage());
   applyPanelOpacity(getPanelOpacity());
+  bindSystemAppearance();
 };
 
 export const bindTopbarTheme = () => {
@@ -194,10 +251,25 @@ export const bindTopbarTheme = () => {
   closeBtn.addEventListener('click', closeDrawer);
   backdrop.addEventListener('click', closeDrawer);
 
+  // 跟随系统外观开关；手动选择色块会关闭跟随
+  const followInput = document.getElementById('follow-system-input');
+  const syncFollowUI = () => {
+    if (followInput !== null) followInput.checked = getFollowSystem();
+  };
+  if (followInput !== null) {
+    followInput.addEventListener('change', () => {
+      setFollowSystem(followInput.checked);
+      syncFollowUI();
+    });
+  }
+  syncFollowUI();
+
   grid.addEventListener('click', (event) => {
     const card = event.target.closest('.theme-card');
     if (card === null) return;
     setTheme(card.dataset.theme);
+    setFollowSystem(false);
+    syncFollowUI();
   });
 
   drawer.addEventListener('keydown', (event) => {
