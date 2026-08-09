@@ -19,14 +19,12 @@ describe('新增持仓行情价格', () => {
 });
 
 describe('持仓写操作错误提示', () => {
-  it('permission_denied 显示服务端原因和 token 设置指引', () => {
+  it('permission_denied 显示服务端原因', () => {
     expect(
       toolErrorText({
         kind: 'permission_denied',
-        required: 'write/external 操作需要有效 LUOOME_WEB_TOKEN',
+        required: 'write/external 操作未开启',
       }),
-    ).toBe(
-      '权限校验失败：write/external 操作需要有效 LUOOME_WEB_TOKEN；请前往「设置」保存当前服务的 Web token。',
-    );
+    ).toBe('权限校验失败：write/external 操作未开启');
   });
 });

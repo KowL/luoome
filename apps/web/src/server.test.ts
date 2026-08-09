@@ -4,7 +4,7 @@
 
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,16 +17,13 @@ import type { Hono } from 'hono';
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
 import { MarketSettingsStore } from './market-settings.js';
-import { buildWebContext, createWebApp, resolveWebToken } from './server.js';
+import { buildWebContext, createWebApp } from './server.js';
 
 let app: Hono;
 let appCtx: ToolContext;
-const WEB_TOKEN = 'test-web-token';
-
 beforeAll(async () => {
   appCtx = await buildTestContext();
   app = createWebApp(appCtx, {
-    webToken: WEB_TOKEN,
     exposeWrite: true,
     exposeExternal: true,
   });
@@ -36,10 +33,7 @@ const callTool = async (name: string, input: unknown): Promise<Response> =>
   app.fetch(
     new Request(`http://test/api/tools/${name}/call`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${WEB_TOKEN}`,
-      },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ input }),
     }),
   );
@@ -171,24 +165,11 @@ describe('报告 API', () => {
     expect(renderedBody.data?.content).toContain('# Web 收盘复盘');
   });
 
-  it('手动生成端点要求 mutation token，并保存可查询的开盘简报', async () => {
-    const denied = await app.fetch(
-      new Request('http://test/api/reports/run/opening', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ date: '2026-07-29', notify: false }),
-      }),
-    );
-    expect(denied.status).toBe(403);
-
+  it('手动生成端点可执行，并保存可查询的开盘简报', async () => {
     const generated = await app.fetch(
       new Request('http://test/api/reports/run/opening', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-          origin: 'http://test',
-        },
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
         body: JSON.stringify({ date: '2026-07-29', notify: false }),
       }),
     );
@@ -203,26 +184,6 @@ describe('报告 API', () => {
       new Request(`http://test/api/reports/${body.data?.report.id ?? ''}`),
     );
     expect(detail.status).toBe(200);
-  });
-});
-
-describe('Web token bootstrap', () => {
-  it('无 env 时生成并复用数据库同目录的 0600 token 文件', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'luoome-web-token-'));
-    const previous = process.env.LUOOME_WEB_TOKEN;
-    delete process.env.LUOOME_WEB_TOKEN;
-    try {
-      const first = resolveWebToken(join(dir, 'luoome.db'));
-      const second = resolveWebToken(join(dir, 'luoome.db'));
-      expect(first.filePath).toBe(join(dir, 'web-token'));
-      expect(second.token).toBe(first.token);
-      expect(readFileSync(first.filePath ?? '', 'utf8').trim()).toBe(first.token);
-      expect(statSync(first.filePath ?? '').mode & 0o777).toBe(0o600);
-    } finally {
-      if (previous === undefined) delete process.env.LUOOME_WEB_TOKEN;
-      else process.env.LUOOME_WEB_TOKEN = previous;
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });
 
@@ -269,9 +230,7 @@ describe('Web runtime bootstrap', () => {
       } finally {
         sqlite.close();
       }
-      expect(
-        (await ctx.repos.strategy.list({ owner: 'builtin' })).map((strategy) => strategy.id),
-      ).toEqual(expect.arrayContaining(['early-breakout', 'bollinger-band']));
+      expect(await ctx.repos.strategy.list()).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -279,7 +238,7 @@ describe('Web runtime bootstrap', () => {
 });
 
 describe('LLM 设置 API', () => {
-  it('读取不返回密钥；保存要求 token，并立即替换运行时 AI stack', async () => {
+  it('读取不返回密钥；保存后立即替换运行时 AI stack', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-ai-settings-api-'));
     try {
       const store = new AISettingsStore(
@@ -290,7 +249,6 @@ describe('LLM 设置 API', () => {
         },
       );
       const settingsApp = createWebApp(await buildTestContext(), {
-        webToken: WEB_TOKEN,
         aiSettingsStore: store,
       });
       const initial = await settingsApp.fetch(new Request('http://test/api/settings/ai'));
@@ -320,22 +278,10 @@ describe('LLM 设置 API', () => {
         maxRetries: 2,
         reasoningEffort: 'off',
       };
-      const denied = await settingsApp.fetch(
-        new Request('http://test/api/settings/ai', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(input),
-        }),
-      );
-      expect(denied.status).toBe(403);
-
       const saved = await settingsApp.fetch(
         new Request('http://test/api/settings/ai', {
           method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${WEB_TOKEN}`,
-          },
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify(input),
         }),
       );
@@ -353,7 +299,7 @@ describe('LLM 设置 API', () => {
 });
 
 describe('行情源设置 API', () => {
-  it('读取不暴露密钥；保存要求 token，并立即应用新顺序', async () => {
+  it('读取不暴露密钥；保存后立即应用新顺序', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-market-settings-api-'));
     try {
       const store = new MarketSettingsStore(
@@ -365,7 +311,6 @@ describe('行情源设置 API', () => {
         { secretPath: join(dir, '.env') },
       );
       const settingsApp = createWebApp(await buildTestContext(), {
-        webToken: WEB_TOKEN,
         marketSettingsStore: store,
       });
       const initial = await settingsApp.fetch(new Request('http://test/api/settings/market'));
@@ -377,22 +322,10 @@ describe('行情源设置 API', () => {
       });
       expect(JSON.stringify(initialPayload)).not.toContain('secret-market-key');
 
-      const denied = await settingsApp.fetch(
-        new Request('http://test/api/settings/market', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sources: ['tencent'] }),
-        }),
-      );
-      expect(denied.status).toBe(403);
-
       const saved = await settingsApp.fetch(
         new Request('http://test/api/settings/market', {
           method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${WEB_TOKEN}`,
-          },
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ sources: ['tencent', 'eastmoney'] }),
         }),
       );
@@ -407,30 +340,20 @@ describe('行情源设置 API', () => {
   });
 });
 
-describe('非 loopback API 鉴权模式', () => {
-  it('read API 也要求 Bearer token', async () => {
-    const protectedApp = createWebApp(await buildTestContext(), {
-      webToken: WEB_TOKEN,
-      requireApiToken: true,
-    });
-    const denied = await protectedApp.fetch(new Request('http://lan/api/holdings'));
-    expect(denied.status).toBe(403);
-    const allowed = await protectedApp.fetch(
-      new Request('http://lan/api/holdings', {
-        headers: { authorization: `Bearer ${WEB_TOKEN}` },
-      }),
-    );
-    expect(allowed.status).toBe(200);
+describe('非 loopback API', () => {
+  it('read API 不需要 token', async () => {
+    const unprotectedApp = createWebApp(await buildTestContext());
+    const response = await unprotectedApp.fetch(new Request('http://lan/api/holdings'));
+    expect(response.status).toBe(200);
   });
 });
 
 describe('Strategy / Watchlist / AlertPlan API', () => {
-  const targetRequest = (path: string, body: unknown, token = WEB_TOKEN): Request =>
+  const targetRequest = (path: string, body: unknown): Request =>
     new Request(`http://test${path}`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${token}`,
         origin: 'http://test',
       },
       body: JSON.stringify(body),
@@ -516,6 +439,33 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(templates?.length).toBe(7);
     expect(templates?.every((template) => template.definition?.schemaVersion === 1)).toBe(true);
     expect(templates?.some((template) => template.name === '布林带均值回复')).toBe(true);
+  });
+
+  it('DELETE /api/strategies/:id 删除用户策略', async () => {
+    const strategyId = 'web-delete-strategy';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: 'Web Delete Strategy',
+            description: '验证删除路由',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const deleted = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ ok: true, data: { deleted: true } });
+    expect((await app.fetch(new Request(`http://test/api/strategies/${strategyId}`))).status).toBe(
+      404,
+    );
   });
 
   it('策略工作台 read routes 复用 workspace/result-view/diff tool contract', async () => {
@@ -657,9 +607,8 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     });
   });
 
-  it('目标 mutation 同时要求显式 opt-in、token 与同源 Origin', async () => {
+  it('目标 mutation 要求显式 opt-in，并校验同源 Origin', async () => {
     const guarded = createWebApp(await buildTestContext(), {
-      webToken: WEB_TOKEN,
       exposeWrite: false,
       exposeExternal: false,
     });
@@ -673,26 +622,21 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     );
     expect(disabled.status).toBe(403);
 
-    const missingToken = await app.fetch(
-      targetRequest(
-        '/api/watchlists',
-        {
-          id: 'missing-token',
-          name: 'missing',
-          kind: 'personal',
-          membershipPolicy: 'manual',
-        },
-        '',
-      ),
+    const withoutToken = await app.fetch(
+      targetRequest('/api/watchlists', {
+        id: 'without-token',
+        name: 'without token',
+        kind: 'personal',
+        membershipPolicy: 'manual',
+      }),
     );
-    expect(missingToken.status).toBe(403);
+    expect(withoutToken.status).toBe(200);
 
     const crossOrigin = await app.fetch(
       new Request('http://test/api/watchlists', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
           origin: 'https://evil.example',
         },
         body: JSON.stringify({
@@ -713,7 +657,6 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
       method,
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${WEB_TOKEN}`,
         origin: 'http://test',
       },
       body: JSON.stringify(body),
@@ -950,7 +893,6 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
 
   it('归档路由走 targetMutation 三重闸口', async () => {
     const guarded = createWebApp(await buildTestContext(), {
-      webToken: WEB_TOKEN,
       exposeWrite: false,
       exposeExternal: false,
     });
@@ -964,24 +906,13 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
         )
       ).status,
     ).toBe(403);
-
-    const noToken = await app.fetch(
-      new Request('http://test/api/watchlists/some-list/archive', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{}',
-      }),
-    );
-    expect(noToken.status).toBe(403);
   });
 });
 
-describe('loopback mutation 免 token', () => {
-  it('无 token 可执行 write mutation，跨站 Origin 仍拒绝', async () => {
+describe('mutation 鉴权', () => {
+  it('无需 token 可执行 write mutation，跨站 Origin 仍拒绝', async () => {
     const lax = createWebApp(await buildTestContext(), {
-      webToken: WEB_TOKEN,
       exposeWrite: true,
-      allowLoopbackMutation: true,
     });
     const created = await lax.fetch(
       new Request('http://test/api/watchlists', {
@@ -1013,18 +944,18 @@ describe('loopback mutation 免 token', () => {
   });
 });
 
-describe('web tool 闸口：write 需本地 token', () => {
-  it('write/external 缺 token → 403，read 仍可用', async () => {
+describe('web tool 闸口：能力开关', () => {
+  it('write 无需 token，read 仍可用', async () => {
     const write = await app.fetch(
       new Request('http://test/api/tools/add_trade/call', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          input: { stockId: '601398.SH', side: 'buy', quantity: 1, price: 7.25 },
+          input: { stockId: '000001.SZ', side: 'buy', quantity: 1, price: 7.25 },
         }),
       }),
     );
-    expect(write.status).toBe(403);
+    expect(write.status).not.toBe(403);
 
     const read = await app.fetch(
       new Request('http://test/api/tools/list_holdings/call', {
@@ -1036,17 +967,16 @@ describe('web tool 闸口：write 需本地 token', () => {
     expect(read.status).toBe(200);
   });
 
-  it('跨站 Origin 即使 token 正确也拒绝 mutation', async () => {
+  it('跨站 Origin 仍拒绝 mutation', async () => {
     const r = await app.fetch(
       new Request('http://test/api/tools/add_trade/call', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
           origin: 'https://evil.example',
         },
         body: JSON.stringify({
-          input: { stockId: '601398.SH', side: 'buy', quantity: 1, price: 7.25 },
+          input: { stockId: '000001.SZ', side: 'buy', quantity: 1, price: 7.25 },
         }),
       }),
     );
@@ -1084,7 +1014,6 @@ describe('web tool 闸口：write 需本地 token', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
         },
         body: JSON.stringify({ accountId: 'web-real-account' }),
       }),
@@ -1103,7 +1032,6 @@ describe('web tool 闸口：write 需本地 token', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
         },
         body: JSON.stringify({ accountId: TEST_ACCOUNT.id }),
       }),
@@ -1168,17 +1096,13 @@ describe('web tool 闸口：write 需本地 token', () => {
 describe('web tool 闸口：external 白名单与拒绝面', () => {
   it('远程研究导入在仅开启 external、未开启 write 时拒绝', async () => {
     const guarded = createWebApp(await buildTestContext(), {
-      webToken: WEB_TOKEN,
       exposeWrite: false,
       exposeExternal: true,
     });
     const response = await guarded.fetch(
       new Request('http://test/api/tools/import_remote_research_document/call', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-        },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ input: { url: 'https://example.test/research' } }),
       }),
     );
@@ -1189,17 +1113,14 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     });
   });
 
-  it('agent_run 进入 external 白名单，但仍要求 token 与 runtime', async () => {
-    const withoutToken = await app.fetch(
+  it('agent_run 进入 external 白名单，但仍要求 runtime', async () => {
+    const withoutRuntime = await app.fetch(
       new Request('http://test/api/tools/agent_run/call', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ input: { message: '检查持仓' } }),
       }),
     );
-    expect(withoutToken.status).toBe(403);
-
-    const withoutRuntime = await callTool('agent_run', { message: '检查持仓' });
     expect(withoutRuntime.status).toBe(403);
     const body = (await json(withoutRuntime)) as {
       error?: { kind: string; required?: string };
@@ -1235,7 +1156,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect(body.data?.unsupported).toBe(true);
   });
 
-  it('get_stock_market_view（白名单）→ 200；缺 token → 403', async () => {
+  it('get_stock_market_view（白名单）→ 200；无 token 也可用', async () => {
     const r = await callTool('get_stock_market_view', { stockId: '002594.SZ' });
     expect(r.status).toBe(200);
     const body = (await json(r)) as {
@@ -1252,7 +1173,7 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
         body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
       }),
     );
-    expect(withoutToken.status).toBe(403);
+    expect(withoutToken.status).toBe(200);
   });
 
   it('get_stock_market_view 全源失败且无本地数据 → adapter_error 转 502', async () => {
@@ -1266,15 +1187,12 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     };
     const testApp = createWebApp(
       { ...base, adapters: { ...base.adapters, market: failingMarket } },
-      { webToken: WEB_TOKEN, exposeExternal: true },
+      { exposeExternal: true },
     );
     const r = await testApp.fetch(
       new Request('http://test/api/tools/get_stock_market_view/call', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-        },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
       }),
     );
@@ -1308,7 +1226,6 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
         },
         body: 'not-json',
       }),
@@ -1395,23 +1312,11 @@ describe('MVP dashboard / watch API', () => {
     expect(held?.watchlists).toBeInstanceOf(Array);
   });
 
-  it('run-once 需要 token；成功后 watch status 可见', async () => {
-    const denied = await app.fetch(
-      new Request('http://test/api/watch/run-once', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ notify: false }),
-      }),
-    );
-    expect(denied.status).toBe(403);
-
+  it('run-once 无需 token；成功后 watch status 可见', async () => {
     const run = await app.fetch(
       new Request('http://test/api/watch/run-once', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-        },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ notify: false }),
       }),
     );
@@ -1476,7 +1381,6 @@ describe('/api/chat：对话助手', () => {
     chatCtx = await buildTestContext();
     chatApp = createWebApp(chatCtx, {
       chatStreamRuntime: runtime,
-      webToken: WEB_TOKEN,
       exposeWrite: true,
       exposeExternal: true,
     });
@@ -1592,23 +1496,11 @@ describe('/api/chat：对话助手', () => {
     expect(names).not.toContain('place_order');
   });
 
-  it('会话 API 支持创建、重命名、读取与删除，并要求 mutation token', async () => {
-    const denied = await chatApp.fetch(
-      new Request('http://test/api/chat/sessions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
-      }),
-    );
-    expect(denied.status).toBe(403);
-
+  it('会话 API 支持创建、重命名、读取与删除且无需 token', async () => {
     const created = await chatApp.fetch(
       new Request('http://test/api/chat/sessions', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-        },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ title: '策略研究' }),
       }),
     );
@@ -1619,10 +1511,7 @@ describe('/api/chat：对话助手', () => {
     const renamed = await chatApp.fetch(
       new Request(`http://test/api/chat/sessions/${sessionId}`, {
         method: 'PATCH',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
-        },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ title: '长期价值研究' }),
       }),
     );
@@ -1635,7 +1524,7 @@ describe('/api/chat：对话助手', () => {
     const removed = await chatApp.fetch(
       new Request(`http://test/api/chat/sessions/${sessionId}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${WEB_TOKEN}` },
+        headers: {},
       }),
     );
     expect(removed.status).toBe(200);
@@ -1710,7 +1599,6 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
         },
         body: JSON.stringify({ feedback: 'useful' }),
       }),
@@ -1767,7 +1655,6 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
         },
         body: JSON.stringify({ feedback: 'useful' }),
       }),
@@ -1787,7 +1674,6 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${WEB_TOKEN}`,
         },
         body: JSON.stringify({ feedback: 'maybe' }),
       }),
@@ -2154,7 +2040,6 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
       repos: { ...appCtx.repos, watchlist: watchlistRepo },
     };
     const brokenApp = createWebApp(brokenCtx, {
-      webToken: WEB_TOKEN,
       exposeWrite: true,
       exposeExternal: true,
     });

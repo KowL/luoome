@@ -87,4 +87,20 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
       .all()
       .map(toObservation);
   }
+
+  async removeBySources(
+    sourceKind: SignalObservation['sourceKind'],
+    sourceIds: readonly string[],
+  ): Promise<void> {
+    if (sourceIds.length === 0) return;
+    this.db
+      .delete(signalObservations)
+      .where(
+        and(
+          eq(signalObservations.sourceKind, sourceKind),
+          inArray(signalObservations.sourceId, [...sourceIds]),
+        ),
+      )
+      .run();
+  }
 }

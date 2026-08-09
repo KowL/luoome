@@ -1017,7 +1017,7 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 
 ## 15. 安全与隐私
 
-- 所有 Web mutation 继续执行 bearer token 和 Origin 校验；
+- 所有 Web mutation 继续执行显式能力开关和 Origin 校验；
 - read/external/write/advice 副作用声明不能因聚合端点被弱化；
 - 表达式错误只返回受控摘要，不泄漏堆栈或 adapter 参数；
 - inputSnapshot 只保存股票集合与数据身份，不保存 token、API key 或请求 header；
@@ -1068,7 +1068,7 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - route 到 Tool input 的参数映射；
 - ToolResult envelope 和错误状态；
 - read route 不绕过 tools；
-- mutation token/Origin 行为不回归；
+- Origin 行为不回归；
 - partial/failed 作为业务数据返回，不误报 500；
 - warnings 降级不会伪造 current run。
 

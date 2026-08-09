@@ -1323,32 +1323,10 @@ const fillOutcomeForm = async (adviceId, decision) => {
 /* ============ settings ============ */
 
 const renderSettings = (setStatus) => {
-  const input = $('#settings-token');
-  if (input === null) return;
-  input.value = window.__luoome.getToken();
   setStatus('设置已加载');
 };
 
 const bindSettingsActions = () => {
-  const setToken = window.__luoome.setToken;
-  const saveBtn = $('#btn-token-save');
-  const clrBtn = $('#btn-token-clear');
-  if (saveBtn !== null) {
-    saveBtn.addEventListener('click', () => {
-      const token = $('#settings-token').value.trim();
-      setToken(token);
-      saveBtn.textContent = '已保存';
-      window.setTimeout(() => {
-        saveBtn.textContent = '保存 token';
-      }, 1200);
-    });
-  }
-  if (clrBtn !== null) {
-    clrBtn.addEventListener('click', () => {
-      setToken('');
-      $('#settings-token').value = '';
-    });
-  }
   const createBtn = $('#btn-account-create');
   if (createBtn !== null) {
     createBtn.addEventListener('click', async () => {
@@ -1371,7 +1349,7 @@ const bindSettingsActions = () => {
       });
       if (!created.ok) {
         createBtn.disabled = false;
-        await alertDialog('创建失败', `${created.error?.kind ?? 'unknown'}。请先保存有效 token。`);
+        await alertDialog('创建失败', `${created.error?.kind ?? 'unknown'}。`);
         return;
       }
       const accountId = created.data.account.id;

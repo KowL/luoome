@@ -256,7 +256,7 @@ StockPool   → AlertPlan
 - Watchlist 总览、详情、多来源、stage/priority、变化历史。
 - AlertPlan 管理与试跑。
 - 股票研究档案展示 StrategyResult/Signal 和 Watchlist 来源。
-- mutation token、Origin、write opt-in 测试。
+- Origin、write opt-in 测试。
 - 删除旧“战法/分组/盯盘方案”一级产品语言。
 
 ### 9.2 CLI/MCP

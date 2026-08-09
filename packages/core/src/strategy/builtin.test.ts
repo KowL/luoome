@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  BUILTIN_STRATEGIES,
-  STRATEGY_BUILTIN_DEFINED_AT,
-  STRATEGY_BUILTIN_REVISION,
-} from './builtin.js';
+import { BUILTIN_STRATEGY_TEMPLATES, STRATEGY_TEMPLATE_REVISION } from './builtin.js';
 
 /**
  * 内置策略身份锁定：definitionHash 是 StrategyVersion 的落库 identity，
@@ -21,34 +17,28 @@ const EXPECTED: Readonly<Record<string, string>> = {
   'bollinger-band': '00f49673bb05654a09a0e3e4736e4a27a340a995dba5ea5fe392f7276b6e27a0',
 };
 
-describe('BUILTIN_STRATEGIES', () => {
-  it('7 个内置策略的 id 与 definitionHash 稳定', () => {
-    expect(BUILTIN_STRATEGIES.map((bundle) => bundle.strategy.id).sort()).toEqual(
+describe('BUILTIN_STRATEGY_TEMPLATES', () => {
+  it('7 个内置模板的 id 与 definitionHash 稳定', () => {
+    expect(BUILTIN_STRATEGY_TEMPLATES.map((template) => template.id).sort()).toEqual(
       Object.keys(EXPECTED).sort(),
     );
-    for (const bundle of BUILTIN_STRATEGIES) {
-      expect(bundle.version.definitionHash).toBe(EXPECTED[bundle.strategy.id]);
+    for (const template of BUILTIN_STRATEGY_TEMPLATES) {
+      expect(template.definitionHash).toBe(EXPECTED[template.id]);
     }
   });
 
-  it('版本身份字段与播种语义稳定', () => {
-    for (const bundle of BUILTIN_STRATEGIES) {
-      expect(bundle.strategy.owner).toBe('builtin');
-      expect(bundle.strategy.status).toBe('active');
-      expect(bundle.strategy.currentVersionId).toBe(
-        `${bundle.strategy.id}-v${STRATEGY_BUILTIN_REVISION}`,
-      );
-      expect(bundle.version.id).toBe(`${bundle.strategy.id}-v${STRATEGY_BUILTIN_REVISION}`);
-      expect(bundle.version.version).toBe(STRATEGY_BUILTIN_REVISION);
-      expect(bundle.version.validationStatus).toBe('valid');
-      expect(bundle.version.publishedAt).toEqual(STRATEGY_BUILTIN_DEFINED_AT);
-      expect(bundle.strategy.createdAt).toEqual(STRATEGY_BUILTIN_DEFINED_AT);
+  it('模板只有目录身份，不携带 Strategy 生命周期字段', () => {
+    for (const template of BUILTIN_STRATEGY_TEMPLATES) {
+      expect(template.revision).toBe(STRATEGY_TEMPLATE_REVISION);
+      expect(template).not.toHaveProperty('owner');
+      expect(template).not.toHaveProperty('status');
+      expect(template).not.toHaveProperty('currentVersionId');
     }
   });
 
-  it('种子 definition 带 scoring：组件引用 selection rule 且权重和为 1、不设 top', () => {
-    for (const bundle of BUILTIN_STRATEGIES) {
-      const { definition } = bundle.version;
+  it('模板 definition 带 scoring：组件引用 selection rule 且权重和为 1、不设 top', () => {
+    for (const template of BUILTIN_STRATEGY_TEMPLATES) {
+      const { definition } = template;
       expect(definition.scoring).toBeDefined();
       const scoring = definition.scoring;
       expect(scoring?.method).toBe('weighted-sum');

@@ -36,4 +36,14 @@ export class InMemorySignalObservationRepository implements SignalObservationRep
       .sort((a, b) => (b.baselineAt?.getTime() ?? 0) - (a.baselineAt?.getTime() ?? 0))
       .slice(0, input.limit ?? Number.POSITIVE_INFINITY);
   }
+
+  async removeBySources(
+    sourceKind: SignalObservation['sourceKind'],
+    sourceIds: readonly string[],
+  ): Promise<void> {
+    const ids = new Set(sourceIds);
+    for (const [id, item] of this.items) {
+      if (item.sourceKind === sourceKind && ids.has(item.sourceId)) this.items.delete(id);
+    }
+  }
 }

@@ -477,7 +477,7 @@ export const translateTushareError = (error: unknown): Error => {
 Web 的 `/api/settings/market` 提供运行时配置：
 
 - GET 返回全部源的启用状态、优先级与 `configured` 状态，不返回 token；
-- POST 接收 `{ sources: MarketSourceId[] }`，受 mutation token 和同源 Origin 保护；
+- POST 接收 `{ sources: MarketSourceId[] }`，受同源 Origin 保护；
 - 启用 tushare 但 `TUSHARE_TOKEN` 未配置时拒绝保存（`启用 Tushare 前必须配置
   TUSHARE_TOKEN`）；
 - 保存成功后原子写入 `$LUOOME_HOME/.env`，文件权限保持 `0600`，随后替换

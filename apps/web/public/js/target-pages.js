@@ -1,7 +1,10 @@
 import { callApi } from './api.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
-import { renderStrategyWorkspacePage } from './strategy-workspace.js';
+import {
+  invalidateStrategyWorkspaceCache,
+  renderStrategyWorkspacePage,
+} from './strategy-workspace.js';
 import { $, el, fmtDateTime, fmtNum, fmtSigned, mount, statBlock } from './ui.js';
 
 const errorText = (result) => {
@@ -827,6 +830,7 @@ const openStrategyCreateModal = (setStatus, refresh) => {
       }
       closeModal();
       selectedStrategyId = created.data.strategy.id;
+      invalidateStrategyWorkspaceCache();
       window.location.hash = `#strategies?strategyId=${encodeURIComponent(selectedStrategyId)}&tab=settings&view=rule-near-miss`;
       setStatus(selectedTemplate === null ? '策略已创建' : '策略已从模板创建');
       await refresh('strategies');

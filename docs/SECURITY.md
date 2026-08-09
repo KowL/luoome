@@ -237,8 +237,8 @@ advice 类也记录：
 - **LLM**：所有 LLM 输出经过 Zod 校验，不直接执行；advice 输出额外过 sanitized 审计
 - **模型目录**：`ai-models.json` 只允许用 `apiKeyEnv` 引用凭证环境变量，不保存 API
   key；配置解析错误和日志不得输出凭证值
-- **Web LLM 设置**：写入接口按其它 mutation 使用 Bearer token + 同源 Origin 双重
-  校验；密钥文件权限固定为 `0600`，读取接口仅返回是否已配置，禁止回显、日志记录或
+- **Web LLM 设置**：写入接口按其它 mutation 使用同源 Origin 校验；密钥文件权限固定为
+  `0600`，读取接口仅返回是否已配置，禁止回显、日志记录或
   注入页面 DOM
 - **advice 回填**：`record_advice_outcome` 调用记录到 audit，但 outcome 数据本身不强制校验（用户主观回填）
 

@@ -1,23 +1,18 @@
 import {
-  assertStrategyInvariants,
-  assertStrategyVersionInvariants,
-  type Strategy,
   type StrategyDslV1,
   StrategyDslV1Schema,
   type StrategyRule,
   type StrategySignalRule,
-  type StrategyVersion,
   strategyDefinitionHash,
 } from '../entity/strategy.js';
+import { InvariantError } from '../error/index.js';
 import { inspectStrategyDefinitionReferences } from './field-registry.js';
 
 /**
- * 内置 Strategy 静态种子（替代 v0.3 内置战法 + legacy-mapper 的运行时转换）。
+ * 内置 Strategy 模板目录。
  *
- * 身份约束：
- * - strategy.id 稳定；每次内置定义升级必须发布固定的新 revision，不能原地改写旧版本。
- * - signal rule id（`legacy-signal`）沿用旧映射身份；definitionHash 锁定该 revision 的定义。
- * - 调用方（ensureBuiltinStrategies）负责把存量 builtin 协调到本 revision，不覆盖用户同名 Strategy。
+ * 模板不是 Strategy，不落库，也没有运行生命周期。用户选用模板时创建独立的 user Strategy，
+ * 后续可以继续修改、发布、暂停或删除。模板 id 与 definitionHash 只用于目录版本稳定性。
  *
  * 2026-07-31：为每个种子补 selection rule（`legacy-selection`，与 signal 同条件），
  * 让「从模板导入」创建的用户策略满足普通用户至少一条 selection rule 的不变量；
@@ -29,14 +24,16 @@ import { inspectStrategyDefinitionReferences } from './field-registry.js';
  * scoring 块，股票池 rank/score 恒为 '--'；补上后运行结果才有 score 与稳定排名。
  * definitionHash 再次变化，builtin.test.ts 的 EXPECTED 表已同步。
  */
-export interface BuiltinStrategyBundle {
-  readonly strategy: Strategy;
-  readonly version: StrategyVersion;
+export interface BuiltinStrategyTemplate {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly revision: number;
+  readonly definition: StrategyDslV1;
+  readonly definitionHash: string;
 }
 
-/** builtin 种子时间（固化，避免每次 new Date 漂移；与历史播种值一致）。 */
-export const STRATEGY_BUILTIN_DEFINED_AT = new Date('2026-07-01T00:00:00.000Z');
-export const STRATEGY_BUILTIN_REVISION = 3;
+export const STRATEGY_TEMPLATE_REVISION = 3;
 
 interface BuiltinStrategySeed {
   readonly id: string;
@@ -191,7 +188,7 @@ const BUILTIN_STRATEGY_SEEDS: readonly BuiltinStrategySeed[] = [
   },
 ];
 
-const buildBuiltinBundle = (seed: BuiltinStrategySeed): BuiltinStrategyBundle => {
+const buildBuiltinTemplate = (seed: BuiltinStrategySeed): BuiltinStrategyTemplate => {
   const signalRule: StrategySignalRule = {
     // rule id 参与 definitionHash，沿用历史播种值
     id: 'legacy-signal',
@@ -224,35 +221,20 @@ const buildBuiltinBundle = (seed: BuiltinStrategySeed): BuiltinStrategyBundle =>
       risk: seed.bucket === 'risk' ? [signalRule] : [],
     },
   });
-  // 内置种子同样过字段注册静态校验；不 valid 不签 publishedAt（不变量硬约束）
+  // 模板发布前同样经过字段注册静态校验，避免用户复制出必然无效的定义。
   const validationErrors = [...inspectStrategyDefinitionReferences(definition).validationErrors];
-  const valid = validationErrors.length === 0;
-  const version: StrategyVersion = {
-    id: `${seed.id}-v${STRATEGY_BUILTIN_REVISION}`,
-    strategyId: seed.id,
-    version: STRATEGY_BUILTIN_REVISION,
-    definition,
-    definitionHash: strategyDefinitionHash(definition),
-    changeSummary: '内置策略 revision 3：selection、scoring 与派生 meta 上下文',
-    validationStatus: valid ? 'valid' : 'invalid',
-    validationErrors,
-    ...(valid ? { publishedAt: STRATEGY_BUILTIN_DEFINED_AT } : {}),
-    createdAt: STRATEGY_BUILTIN_DEFINED_AT,
-  };
-  const strategy: Strategy = {
+  if (validationErrors.length > 0) {
+    throw new InvariantError(`内置策略模板无效: ${seed.id}: ${validationErrors.join('; ')}`);
+  }
+  return {
     id: seed.id,
     name: seed.name,
     description: seed.description,
-    owner: 'builtin',
-    status: 'active',
-    currentVersionId: version.id,
-    createdAt: STRATEGY_BUILTIN_DEFINED_AT,
-    updatedAt: STRATEGY_BUILTIN_DEFINED_AT,
+    revision: STRATEGY_TEMPLATE_REVISION,
+    definition,
+    definitionHash: strategyDefinitionHash(definition),
   };
-  assertStrategyInvariants(strategy);
-  assertStrategyVersionInvariants(version, 'builtin');
-  return { strategy, version };
 };
 
-export const BUILTIN_STRATEGIES: readonly BuiltinStrategyBundle[] =
-  BUILTIN_STRATEGY_SEEDS.map(buildBuiltinBundle);
+export const BUILTIN_STRATEGY_TEMPLATES: readonly BuiltinStrategyTemplate[] =
+  BUILTIN_STRATEGY_SEEDS.map(buildBuiltinTemplate);

@@ -287,14 +287,16 @@ export const dailyAdviceWorkflow = defineWorkflow({
 
 Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（advice 持久化通过专用 `persist` tool 暴露，不绕过层级）。
 
-策略 Phase B 使用两个可由外部 cron 唤醒的 workflow：
+策略 Phase B 使用两个调度 workflow：
 
 - `run-strategy-schedules` 原子抢占到期 `StrategySchedule`，再调用 `run_strategy`；调度租约负责
   多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行；
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
   SignalObservation。样本未到期保持 pending，不阻塞其他样本。
 
-进程内不常驻调度线程；外部 cron 只负责唤醒 workflow。两个 workflow 都不直接访问 repository。
+`luoome start` / `luoome web serve` 在进程内每分钟唤醒 `run-strategy-schedules`，启动时也立即
+检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务继续可由
+外部 cron 调用。两个 workflow 都不直接访问 repository。
 
 ### 4.7 Adapter（adapters 包）
 
@@ -361,7 +363,7 @@ A 股日级情绪同样不扩宽 `MarketDataAdapterLike`。`AShareSentimentManag
 [Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
 
 Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优先级与配置就绪状态，
-不返回密钥；受 mutation token 与同源 Origin 保护的 POST 将配置原子写入权限为
+不返回密钥；受同源 Origin 保护的 POST 将配置原子写入权限为
 `0600` 的 `$LUOOME_HOME/.env`，验证新 adapter 后替换 `ctxRef.current.adapters.market`，
 使路由在当前 Web 进程立即生效。
 
@@ -372,7 +374,7 @@ composition root 均调用 `createAIStackFromEnv`，一次加载
 `AgentRuntimeLike`。provider、模型 ID、默认生成参数、超时和 agent 预算不进入 core；
 core 只保留 SDK 无关的端口。配置文件只引用 `apiKeyEnv`，不存储凭证。
 
-Web 额外提供受 mutation token 与同源 Origin 保护的 `/api/settings/ai`：
+Web 额外提供受同源 Origin 保护的 `/api/settings/ai`：
 GET 只返回 provider、模型参数及 `apiKeyConfigured`，永不返回密钥；POST 原子写入
 模型目录与权限为 `0600` 的 `$LUOOME_HOME/.env`，随后替换
 `ctxRef.current.adapters.llm` / `agent`，使新配置在当前进程立即生效。模型未配置或
@@ -466,7 +468,7 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 `weekly-report` 共用报告 runner，经 `ctx.tools.*` 采集证据、保存 Report、记录
 `WorkflowRun` 并执行通知状态迁移。定时模式默认通知；通知失败不回滚报告，只把投递状态
 记为 `failed`、运行审计记为 `partial`。CLI 通过 `workflow run ... --mode` 触发，
-Web 通过带 mutation token 与同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
+Web 通过同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
 
 **Strategy 研究事实**：指标快照可包含最新价、动量、均线与 Bollinger 字段。规则求值的
 unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal 只表达事实，

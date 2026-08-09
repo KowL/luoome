@@ -1,5 +1,5 @@
 import {
-  BUILTIN_STRATEGIES,
+  BUILTIN_STRATEGY_TEMPLATES,
   type DailyBar,
   type MarketDataAdapterLike,
   money,
@@ -184,6 +184,7 @@ describe('run_strategy', () => {
         signalObservation: {
           findById: observationRepo.findById.bind(observationRepo),
           list: observationRepo.list.bind(observationRepo),
+          removeBySources: observationRepo.removeBySources.bind(observationRepo),
           save: () => Promise.reject(new Error('observation storage unavailable')),
         },
       },
@@ -229,15 +230,37 @@ describe('run_strategy', () => {
     });
   });
 
-  it('prepares derived meta fields required by builtin strategies', async () => {
+  it('prepares derived meta fields required by strategies created from builtin templates', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 1 });
-    const builtin = BUILTIN_STRATEGIES.find(
-      (bundle) => bundle.strategy.id === 'pullback-after-limit-up',
+    const template = BUILTIN_STRATEGY_TEMPLATES.find(
+      (candidate) => candidate.id === 'pullback-after-limit-up',
     );
-    if (builtin === undefined) throw new Error('builtin fixture missing');
-    await base.repos.strategy.create(builtin.strategy);
-    await base.repos.strategy.createVersion(builtin.version);
+    if (template === undefined) throw new Error('builtin template fixture missing');
+    const strategyId = 'pullback-after-limit-up-user';
+    const versionId = `${strategyId}-v1`;
+    const createdAt = new Date('2026-07-01T00:00:00.000Z');
+    await base.repos.strategy.create({
+      id: strategyId,
+      name: template.name,
+      description: template.description,
+      owner: 'user',
+      status: 'active',
+      currentVersionId: versionId,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await base.repos.strategy.createVersion({
+      id: versionId,
+      strategyId,
+      version: 1,
+      definition: template.definition,
+      definitionHash: template.definitionHash,
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: createdAt,
+      createdAt,
+    });
     const closes = [...Array.from({ length: 16 }, () => 100), 110, 111, 112, 113];
     const bars: DailyBar[] = closes.map((close, index) => ({
       stockId: '600519.SH',
@@ -256,10 +279,7 @@ describe('run_strategy', () => {
     };
     const ctx = { ...base, adapters: { ...base.adapters, market } };
 
-    const result = await runStrategyTool.execute(
-      { strategyId: builtin.strategy.id, stockIds: ['600519.SH'] },
-      ctx,
-    );
+    const result = await runStrategyTool.execute({ strategyId, stockIds: ['600519.SH'] }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.run).toMatchObject({

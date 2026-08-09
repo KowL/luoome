@@ -2,7 +2,7 @@
 'use strict';
 
 import { consumeUIMessageStream } from './ai-ui-stream.js';
-import { callApi, getToken } from './api.js';
+import { callApi } from './api.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { $, el, mount } from './ui.js';
 
@@ -340,7 +340,7 @@ const createSession = async () => {
     body: JSON.stringify({}),
   });
   if (!result.ok) {
-    await alertDialog('创建会话失败', errorText(result, '请先在设置页配置 Web token'));
+    await alertDialog('创建会话失败', errorText(result, '无法创建会话'));
     return null;
   }
   const session = result.data.session;
@@ -395,8 +395,6 @@ const send = async () => {
       if (!feed.includes(actionsEntry)) feed.push(actionsEntry);
     };
     const headers = new Headers({ 'content-type': 'application/json' });
-    const token = getToken();
-    if (token.length > 0) headers.set('authorization', `Bearer ${token}`);
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers,

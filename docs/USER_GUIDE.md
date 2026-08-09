@@ -69,9 +69,10 @@ luoome tools list | head
 
 ## 2. 第一次启动
 
-luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行自动建表和安装内置 Strategy，
-不会灌入账户、持仓、交易或建议。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
-Web（严格默认，见 §10 环境变量）；然后打开 Web 进入「设置」，使用 token 创建第一个真实账户。
+luoome 数据存在 `~/.luoome/luoome.db`（SQLite）。首次运行只自动建表；内置策略作为模板目录
+展示，不会写成 Strategy，也不会灌入账户、持仓、交易或建议。从模板创建的是独立用户策略，
+可以继续修改或删除。创建账户等写操作要求以 `LUOOME_EXPOSE_WRITE=true` 启动
+Web（严格默认，见 §10 环境变量）；然后打开 Web 进入「设置」创建第一个真实账户。
 
 ### 2.1 一键启动完整 MVP
 
@@ -83,9 +84,8 @@ luoome start
 
 - 创建 `~/.luoome/luoome.db`
 - 创建默认「全部持仓」分组和「持仓监控」盯盘池
-- 生成 `~/.luoome/web-token`（权限 `0600`）
 
-打开 `http://127.0.0.1:5173/`，到「设置」页粘贴 `web-token` 文件内容后，即可执行持仓、分组和盯盘修改（前提是以 `LUOOME_EXPOSE_WRITE=true` 启动；行情同步等外部调用还需 `LUOOME_EXPOSE_EXTERNAL=true`）。只想开 Web 时使用 `luoome start --no-watch` 或 `luoome web serve`。
+打开 `http://127.0.0.1:5173/`，即可在「设置」页执行持仓、分组和盯盘修改（前提是以 `LUOOME_EXPOSE_WRITE=true` 启动；行情同步等外部调用还需 `LUOOME_EXPOSE_EXTERNAL=true`）。只想开 Web 时使用 `luoome start --no-watch` 或 `luoome web serve`。
 
 ### 2.2 终端全屏
 
@@ -103,11 +103,11 @@ luoome web serve
 ```
 
 页面包含看盘、持仓、Strategy、Watchlist、AlertPlan、研究、建议、报告、复盘、对话和设置。
-所有 write/external mutation 同时要求显式环境开关、服务端 token 与同源 `Origin`。
+所有 write/external mutation 同时要求显式环境开关与同源 `Origin`。
 
-**持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作必须携带 Web token；MCP 暴露策略不受影响。
+**持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作受 `LUOOME_EXPOSE_WRITE` 控制；MCP 暴露策略不受影响。
 
-**Watchlist 页（对齐 PRD §10）**：顶部总览卡片（列表数 / 成员数 / 今日 entered-exited / 待研究 / 过期来源 / 紧急重要触发），六种视图切换——按列表、全部股票（去重 + 持仓标记）、今日变化、待研究（一键开始研究 / 归档）、当前持仓、已归档；右侧详情支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员（可填加入原因）、成员 stage / priority 行内修改与归档、来源健康摘要（active/stale + 最近 dataAsOf）、成员最近触发，以及关联 AlertPlan 列表（点击跳转预警计划页）。写操作同样要求 mutation token。
+**Watchlist 页（对齐 PRD §10）**：顶部总览卡片（列表数 / 成员数 / 今日 entered-exited / 待研究 / 过期来源 / 紧急重要触发），六种视图切换——按列表、全部股票（去重 + 持仓标记）、今日变化、待研究（一键开始研究 / 归档）、当前持仓、已归档；右侧详情支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员（可填加入原因）、成员 stage / priority 行内修改与归档、来源健康摘要（active/stale + 最近 dataAsOf）、成员最近触发，以及关联 AlertPlan 列表（点击跳转预警计划页）。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
 
 ### 2.4 MCP 模式
 
@@ -180,9 +180,9 @@ TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 
 
 `luoome start` 或 `luoome web serve` 启动后，浏览器访问 `http://127.0.0.1:5173`。
 
-### 5.1 写操作 token
+### 5.1 写操作开关
 
-本机默认绑定 `127.0.0.1`（loopback），此时读 / 写 API 均无需 token（仍保留同源 Origin 校验，挡住浏览器跨站请求）。仅当通过 `LUOOME_HOST` / `--host` 绑定非 loopback 地址时，所有 API 都要求 Bearer token：未设置 `LUOOME_WEB_TOKEN` 时服务端会生成并复用 `$LUOOME_HOME/web-token`，复制文件内容到「设置」页即可；token 存入当前浏览器的 localStorage。
+Web API 不做 token 校验。写操作仍需显式设置 `LUOOME_EXPOSE_WRITE=true`，外部调用仍需设置 `LUOOME_EXPOSE_EXTERNAL=true`；浏览器 mutation 保留同源 Origin 校验。
 
 ### 5.2 核心页面
 
@@ -190,13 +190,13 @@ TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 
 |---|---|
 | **仪表盘** | 市值 / 盈亏 / 建议 + AlertPlan 健康度和最近 Trigger。 |
 | **持仓** | 建仓、加仓、减仓、纠错、平仓 + 近期交易流水。 |
-| **Strategy** | 从模板创建、版本校验、发布、dry-run 与运行结果。 |
+| **Strategy** | 从模板创建、版本校验、发布、删除、自动调度、dry-run 与运行结果。 |
 | **Watchlist** | 总览卡片 + 六种视图（按列表 / 全部股票 / 今日变化 / 待研究 / 当前持仓 / 已归档）；成员 stage/priority 编辑与归档、列表编辑/归档、来源健康与关联 AlertPlan 联动。 |
 | **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
 | **建议** | 历史 + decision 过滤。 |
 | **复盘** | 准确率统计 + **confidence 校准表** + outcome 回填。 |
 | **对话** | AI SDK 流式助手；项目内持久化会话，工具执行轨迹可回看，写操作先生成确认草案。 |
-| **设置** | 鉴权 token / 数据源 / 账户。 |
+| **设置** | 数据源 / AI / 账户。 |
 
 ### 5.3 顶栏账户下拉
 
@@ -306,7 +306,6 @@ luoome tools call get_confidence_calibration --input '{}'
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据根目录 |
-| `LUOOME_WEB_TOKEN` | 仅非 loopback 需要 | 非 loopback 部署的 Bearer token；未设置时生成 `$LUOOME_HOME/web-token`；loopback 免 token |
 | `LUOOME_HOST` | `127.0.0.1` | Web 监听地址；默认不暴露到局域网 |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney 主 → Tencent 备，仅 A 股） |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |

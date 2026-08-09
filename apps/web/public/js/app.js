@@ -4,7 +4,7 @@
 'use strict';
 
 import { initAISettings, renderAISettings } from './ai-settings.js';
-import { callApi, getAccountId, getToken, setAccountId, setToken, TOKEN_KEY } from './api.js';
+import { callApi, getAccountId, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
@@ -285,9 +285,6 @@ const startQuoteAutoRefresh = () => {
 
 window.__luoome = {
   callApi,
-  getToken,
-  setToken,
-  TOKEN_KEY,
   getAccountId,
   setAccountId,
   getAccounts,

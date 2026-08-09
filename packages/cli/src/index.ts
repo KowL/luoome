@@ -280,8 +280,13 @@ const cmdStrategy = async (
       strategyId: requireId(rest[0], '用法: luoome strategy run <strategyId>'),
     });
   }
+  if (sub === 'delete') {
+    return cmdToolsCall('delete_strategy', flags, json, {
+      strategyId: requireId(rest[0], '用法: luoome strategy delete <strategyId>'),
+    });
+  }
   throw new CliUsageError(
-    `未知 strategy 子命令: "${sub ?? ''}"（支持 list / get / validate / run）`,
+    `未知 strategy 子命令: "${sub ?? ''}"（支持 list / get / validate / run / delete）`,
   );
 };
 
@@ -769,7 +774,10 @@ const cmdStart = async (
   const daemon = maybeDaemonize(flags, json);
   if (daemon !== null) return daemon;
   const mod = (await import('@luoome/web')) as {
-    startWeb: (options: { port: number; host: string }) => Promise<Bun.Server<undefined>>;
+    startWeb: (options: { port: number; host: string }) => Promise<{
+      readonly port: number;
+      stop(closeActiveConnections?: boolean): void;
+    }>;
   };
   const server = await mod.startWeb({ port, host });
   if (!json) console.log(`MVP 已就绪：http://${host}:${server.port}`);
@@ -811,7 +819,7 @@ Tools:
   tools call <name> --input '<json>'    调用 tool，打印 data 或 error JSON
 
 Strategy / Watchlist / Alert:
-  strategy list|get|validate|run         查询、校验或运行 Strategy
+  strategy list|get|validate|run|delete  查询、校验、运行或删除 Strategy
   watchlist list|get|sync                查询 Watchlist 或同步持仓来源
   alert list                             查询 AlertPlan
 

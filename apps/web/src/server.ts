@@ -10,8 +10,7 @@
 //                                   （fetch_quote 等）；trade 一律 403 permission_denied。
 // 所有 /api 响应统一 ToolResult 形状；同源部署，无需 CORS。
 
-import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,9 +25,9 @@ import {
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
-import { BUILTIN_STRATEGIES } from '@luoome/core';
+import { BUILTIN_STRATEGY_TEMPLATES } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, ensureBuiltinStrategies, toolRegistry } from '@luoome/tools';
+import { buildContext, toolRegistry } from '@luoome/tools';
 import {
   closingReportWorkflow,
   openingReportWorkflow,
@@ -41,6 +40,7 @@ import { ZodError } from 'zod';
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
+import { STRATEGY_SCHEDULER_INTERVAL_MS, startStrategyScheduler } from './strategy-scheduler.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -148,29 +148,6 @@ export const resolveDbPath = (): string => {
   return join(home, 'luoome.db');
 };
 
-interface ResolvedWebToken {
-  readonly token: string;
-  readonly filePath: string | null;
-}
-
-/** 环境变量优先；否则在数据库同目录生成并复用 0600 token 文件。 */
-export const resolveWebToken = (dbPath: string): ResolvedWebToken => {
-  const fromEnv = process.env.LUOOME_WEB_TOKEN?.trim();
-  if (fromEnv !== undefined && fromEnv.length > 0) {
-    return { token: fromEnv, filePath: null };
-  }
-  const filePath = join(dirname(dbPath), 'web-token');
-  if (existsSync(filePath)) {
-    const existing = readFileSync(filePath, 'utf8').trim();
-    if (existing.length >= 24) return { token: existing, filePath };
-  }
-  mkdirSync(dirname(filePath), { recursive: true });
-  const token = randomBytes(24).toString('hex');
-  writeFileSync(filePath, `${token}\n`, { encoding: 'utf8', mode: 0o600 });
-  chmodSync(filePath, 0o600);
-  return { token, filePath };
-};
-
 /**
  * 组装 web 端 ToolContext（与其他 surface 同一模式）：
  * LUOOME_HOME 下的 luoome.db + createDrizzleRepos + 真实行情/LLM + buildContext。
@@ -183,7 +160,6 @@ export const buildWebContext = async (
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
-  await ensureBuiltinStrategies(handle.repos);
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
@@ -227,12 +203,6 @@ export const buildWebContext = async (
 };
 
 export interface CreateWebAppOptions {
-  /** 服务端认可的 Bearer token；write / external 调用必须提供。 */
-  readonly webToken?: string;
-  /** 非 loopback 监听时，read/advice API 也必须鉴权。 */
-  readonly requireApiToken?: boolean;
-  /** loopback 监听时 mutation 免 token（仍保留同源 Origin 校验）；默认 false。 */
-  readonly allowLoopbackMutation?: boolean;
   /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
   readonly exposeWrite?: boolean;
   /** external tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_EXTERNAL。 */
@@ -257,20 +227,11 @@ const asChatStreamRuntime = (value: unknown): ChatStreamRuntime | undefined => {
   return undefined;
 };
 
-const mutationPermission = (
-  request: Request,
-  webToken: string,
-  allowLoopbackMutation: boolean,
-): ToolResult<never> | null => {
-  // 同源 Origin 校验不受 loopback 放行影响：挡住浏览器被恶意站点带着打本机。
+const mutationPermission = (request: Request): ToolResult<never> | null => {
+  // 同源 Origin 校验挡住浏览器被恶意站点带着执行本地 mutation。
   const origin = request.headers.get('origin');
   if (origin !== null && origin !== new URL(request.url).origin) {
     return permissionDenied('跨站 Origin 不允许执行本地 mutation');
-  }
-  if (allowLoopbackMutation) return null;
-  const authorization = request.headers.get('authorization');
-  if (webToken.length === 0 || authorization !== `Bearer ${webToken}`) {
-    return permissionDenied('write/external 操作需要有效 LUOOME_WEB_TOKEN');
   }
   return null;
 };
@@ -289,22 +250,11 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
     current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx.agent),
   };
-  const webToken = options.webToken ?? process.env.LUOOME_WEB_TOKEN ?? '';
-  const allowLoopbackMutation = options.allowLoopbackMutation === true;
   const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
   const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
   const app = new Hono();
-
-  if (options.requireApiToken === true) {
-    app.use('/api/*', async (c, next) => {
-      if (webToken.length === 0 || c.req.header('authorization') !== `Bearer ${webToken}`) {
-        return jsonResult(permissionDenied('非 loopback Web 的所有 API 都需要有效 token'));
-      }
-      await next();
-    });
-  }
 
   // —— 同源静态仪表盘（原生 HTML/JS，无构建步骤）——
   const serveFile = (file: string, contentType: string) => (): Response =>
@@ -436,7 +386,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         ),
       );
     }
-    const denied = mutationPermission(request, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(request);
     if (denied !== null) return jsonResult(denied);
     const body = await parseJsonObject(request);
     if (!('parsed' in body)) return jsonResult(body);
@@ -505,7 +455,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.post('/api/settings/market', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     if (marketSettingsStore === undefined) {
       return jsonResult(notFound('MarketSettingsStore', 'default'));
@@ -550,7 +500,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
   app.post('/api/chat/sessions', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     let body: unknown = {};
     try {
@@ -564,7 +514,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     callTool('get_chat_session', { sessionId: c.req.param('id'), messageLimit: 200 }),
   );
   app.patch('/api/chat/sessions/:id', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     let body: { title?: unknown };
     try {
@@ -578,13 +528,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
   app.delete('/api/chat/sessions/:id', (c) => {
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     return callTool('delete_chat_session', { sessionId: c.req.param('id') });
   });
 
   app.post('/api/settings/ai', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
     try {
@@ -633,7 +583,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.post('/api/account/select', async (c) => {
     // v0.8 起：虽然此路由只 in-memory 改 ctxRef.current.user.defaultAccountId
     // （不写 db），但仍是 mutation，应与 /api/tools/:name/call 的 write/external 守卫一致。
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     let body: unknown;
     try {
@@ -810,16 +760,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     c.json({
       ok: true,
       data: {
-        templates: BUILTIN_STRATEGIES.map(({ strategy, version }) => ({
-          id: strategy.id,
-          name: strategy.name,
-          description: strategy.description,
-          definition: version.definition,
-        })),
+        templates: BUILTIN_STRATEGY_TEMPLATES,
       },
     }),
   );
   app.post('/api/strategies', (c) => targetMutation(c.req.raw, 'write', 'create_strategy'));
+  app.delete('/api/strategies/:id', (c) =>
+    targetMutation(c.req.raw, 'write', 'delete_strategy', {
+      strategyId: c.req.param('id'),
+    }),
+  );
   app.get('/api/strategies/:id', (c) =>
     callTool('get_strategy', { strategyId: c.req.param('id') }),
   );
@@ -1307,7 +1257,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    * 调 set_watch_trigger_feedback；幂等；triggerId 不存在 → 404。
    */
   app.post('/api/watch/triggers/:id/feedback', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     const id = c.req.param('id');
     let body: unknown;
@@ -1339,7 +1289,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (!exposeExternal) {
       return jsonResult(permissionDenied('external 操作未开启；设置 LUOOME_EXPOSE_EXTERNAL=true'));
     }
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     let body: unknown;
     try {
@@ -1739,7 +1689,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.post('/api/reports/run/:kind', async (c) => {
-    const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+    const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     const kind = c.req.param('kind');
     const workflow =
@@ -1849,7 +1799,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // 默认不暴露：避免 web 端被滥用为批量回填入口。
   if (exposeWrite) {
     app.post('/api/review/:id/outcome', async (c) => {
-      const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+      const denied = mutationPermission(c.req.raw);
       if (denied !== null) return jsonResult(denied);
       const id = c.req.param('id');
       let body: unknown;
@@ -1893,7 +1843,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       return jsonResult(permissionDenied(`web 端不暴露 ${tool.sideEffect} 类 tool（${name}）`));
     }
     if (tool.sideEffect === 'write' || tool.sideEffect === 'external') {
-      const denied = mutationPermission(c.req.raw, webToken, allowLoopbackMutation);
+      const denied = mutationPermission(c.req.raw);
       if (denied !== null) return jsonResult(denied);
     }
 
@@ -1926,40 +1876,32 @@ export interface StartWebOptions {
   readonly host?: string;
   /** 缺省 resolveDbPath()（$LUOOME_HOME/luoome.db）。 */
   readonly dbPath?: string;
-  /** 显式注入 token；缺省从 env 解析，非 loopback 时回落到本地 token 文件。 */
-  readonly webToken?: string;
+  /** 仅供测试缩短 tick；生产固定每分钟检查一次。 */
+  readonly strategySchedulerIntervalMs?: number;
 }
 
-/** 启动 web server，返回 Bun server 句柄（调用方可 close()）。 */
-export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<undefined>> => {
+export interface WebServerHandle {
+  readonly port: number;
+  stop(closeActiveConnections?: boolean): void;
+}
+
+/** 启动 Web 与进程内策略调度器；stop() 会同时停止二者。 */
+export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
   const dbPath = options.dbPath ?? resolveDbPath();
   // 行情源以设置页持久化的值为准（含启动装配），不能只读 process.env。
   const marketSettingsStore = new MarketSettingsStore(process.env);
   const ctx = await buildWebContext(dbPath, marketSettingsStore.runtimeEnv());
   const aiSettingsStore = new AISettingsStore(process.env);
   const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
-  const loopback = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
-  const resolved =
-    options.webToken !== undefined
-      ? { token: options.webToken, filePath: null }
-      : loopback
-        ? { token: process.env.LUOOME_WEB_TOKEN?.trim() ?? '', filePath: null }
-        : resolveWebToken(dbPath);
-  if (!loopback && resolved.token.length === 0) {
-    throw new Error('非 loopback Web 必须配置非空 LUOOME_WEB_TOKEN');
-  }
   const app = createWebApp(ctx, {
-    webToken: resolved.token,
-    requireApiToken: !loopback,
-    allowLoopbackMutation: loopback,
     aiSettingsStore,
     marketSettingsStore,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
+  const scheduler = startStrategyScheduler(ctx, {
+    intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
+  });
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
-  if (resolved.filePath !== null) {
-    ctx.logger.info(`Web 写操作 token: ${resolved.filePath}（复制文件内容到 Web「设置」页）`);
-  }
   if (process.env.LUOOME_EXPOSE_WRITE !== 'true') {
     ctx.logger.info(
       'write 能力未开启：设置 LUOOME_EXPOSE_WRITE=true 后重启可启用持仓/预警等写操作',
@@ -1970,5 +1912,11 @@ export const startWeb = async (options: StartWebOptions): Promise<Bun.Server<und
       'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
     );
   }
-  return server;
+  return {
+    port: server.port ?? options.port,
+    stop: (closeActiveConnections) => {
+      scheduler.stop();
+      server.stop(closeActiveConnections);
+    },
+  };
 };

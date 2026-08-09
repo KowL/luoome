@@ -972,7 +972,7 @@ lastErrorKind
 ## 16. 安全与副作用
 
 - `sync_stock_universe`、`sync_daily_bars` 为 `external`，MCP 默认不暴露。
-- Web 手动同步需要 mutation token 和同源 Origin。
+- Web 手动同步需要同源 Origin，并受 external 能力开关控制。
 - 数据同步不会触发 Advice 或 trade。
 - 数据源配置继续存 `$LUOOME_HOME/.env`，权限 `0600`，读接口不返回密钥。
 - provider 原始 payload 不整包落库，避免未知字段携带敏感信息或导致数据库膨胀。

@@ -66,6 +66,8 @@ const RESULT_VIEW_STATUS = {
 let requestEpoch = 0;
 const responseCache = new Map();
 
+export const invalidateStrategyWorkspaceCache = () => responseCache.clear();
+
 const errorText = (result) => {
   const error = result?.error;
   if (error === undefined) return '请求失败';
@@ -768,7 +770,7 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
     el('div', 'strategy-tab-heading', [
       el('div', null, [
         el('h3', null, '自动调度'),
-        el('p', 'muted', '标准 5 段 cron；由外部 cron 每分钟唤醒 due-schedule 工作流。'),
+        el('p', 'muted', '标准 5 段 cron；luoome 运行时每分钟自动检查到期策略。'),
       ]),
       save,
     ]),
@@ -857,6 +859,31 @@ export const renderSettings = async (strategyId, setStatus, refresh) => {
     });
     actions.append(toggle);
   }
+  const remove = el('button', 'btn btn-danger btn-sm', '删除策略');
+  remove.type = 'button';
+  remove.addEventListener('click', async () => {
+    const confirmed = await confirmDialog({
+      title: '删除策略',
+      message: `确认删除“${strategy.name}”？版本、调度、运行结果、信号和观察数据都会一并删除，且无法撤销。`,
+      confirmLabel: '删除',
+      danger: true,
+    });
+    if (!confirmed) return;
+    remove.disabled = true;
+    const deleted = await callApi(`/api/strategies/${encodeURIComponent(strategy.id)}`, {
+      method: 'DELETE',
+      body: '{}',
+    });
+    if (!deleted.ok) {
+      remove.disabled = false;
+      setStatus(errorText(deleted), true);
+      return;
+    }
+    responseCache.clear();
+    setStatus('策略已删除');
+    window.location.hash = '#strategies';
+  });
+  actions.append(remove);
   const versionRows = versions.map((version) =>
     el('article', 'entity-item strategy-version-item', [
       el('div', 'flex gap-2', [
@@ -1041,14 +1068,6 @@ export const renderStrategyWorkspacePage = async ({
   const detail = $('#strategy-detail');
   if (list === null || detail === null) return;
   const state = parseStrategyHash(window.location.hash);
-  if (state.strategyId.length === 0 && preferredStrategyId.length > 0) {
-    window.location.hash = buildStrategyHash({
-      ...state,
-      strategyId: preferredStrategyId,
-      tab: 'settings',
-    });
-    return;
-  }
   const result = await cachedGet('/api/strategies');
   if (epoch !== requestEpoch) return;
   if (!result.ok) {
@@ -1056,6 +1075,25 @@ export const renderStrategyWorkspacePage = async ({
     return;
   }
   const strategies = result.data.strategies ?? [];
+  if (
+    state.strategyId.length === 0 &&
+    preferredStrategyId.length > 0 &&
+    strategies.some((strategy) => strategy.id === preferredStrategyId)
+  ) {
+    window.location.hash = buildStrategyHash({
+      ...state,
+      strategyId: preferredStrategyId,
+      tab: 'settings',
+    });
+    return;
+  }
+  if (
+    state.strategyId.length === 0 &&
+    preferredStrategyId.length > 0 &&
+    !strategies.some((strategy) => strategy.id === preferredStrategyId)
+  ) {
+    onSelect('');
+  }
   const meta = $('#strategies-meta');
   if (meta !== null) meta.textContent = `${strategies.length} 个`;
   mount(

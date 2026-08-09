@@ -15,7 +15,7 @@ import {
 import type { Logger, ToolContext } from '@luoome/core';
 // 纯 Bun 运行时入口：@luoome/db 桶导出依赖 bun:sqlite driver，禁止在 node 下 import 本包。
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, ensureBuiltinStrategies } from '@luoome/tools';
+import { buildContext } from '@luoome/tools';
 
 import { runTui } from './app.js';
 
@@ -40,7 +40,6 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
   const home = process.env.LUOOME_HOME ?? join(homedir(), '.luoome');
   mkdirSync(home, { recursive: true });
   const handle = createDrizzleRepos(join(home, 'luoome.db'));
-  await ensureBuiltinStrategies(handle.repos);
   const logger = createSilentLogger();
   const ai = createAIStackFromEnv(process.env, { logger });
   const accounts = await handle.repos.account.list();

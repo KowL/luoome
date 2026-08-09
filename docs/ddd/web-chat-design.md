@@ -50,7 +50,7 @@ interface ChatRequest {
 - `PATCH /api/chat/sessions/:id`：重命名
 - `DELETE /api/chat/sessions/:id`：删除会话和消息
 
-创建、重命名和删除沿用 Web mutation token 与同源 Origin 闸口。
+创建、重命名和删除沿用 Web 同源 Origin 闸口。
 
 ### 2. 服务端 agent 流程
 

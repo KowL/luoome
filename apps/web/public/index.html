@@ -707,22 +707,6 @@
           <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>
         </div>
-        <div class="card">
-          <div class="card-header"><h2>本地 token 鉴权</h2></div>
-          <p class="muted mb-2">
-            本机（127.0.0.1）访问时读 / 写均无需 token；仅当服务绑定非 loopback 地址时，
-            所有 API 才需要 token，把服务端生成的 token 文件内容粘贴到这里。
-          </p>
-          <div class="field">
-            <label for="settings-token">当前 token（本地存储）</label>
-            <input id="settings-token" type="password" placeholder="仅非 loopback 部署需要" autocomplete="off" />
-            <span class="hint">保存在 localStorage，仅本浏览器可见。</span>
-          </div>
-          <div class="flex gap-2">
-            <button id="btn-token-save" class="btn btn-primary btn-sm" type="button">保存 token</button>
-            <button id="btn-token-clear" class="btn btn-outline btn-sm" type="button">清除</button>
-          </div>
-        </div>
         <div class="card mt-4">
           <div class="card-header"><h2>创建真实账户</h2></div>
           <p class="muted mb-2">空数据库首次使用时先创建账户。系统不会自动填充示例持仓或交易。</p>

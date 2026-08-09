@@ -117,7 +117,7 @@
   - `/api/tactics` / `/api/tactics/scan?topN=N` / `/api/review` 已存在（v0.3）。
   - 新增 `/api/review/trend?days=N`：按天聚合命中率（confidence≥70 且 followed 且 pnl>0）。
   - write 副作用：`/api/review/:id/outcome`（opt-in via `LUOOME_EXPOSE_WRITE=true`）。
-- 鉴权：本地 token 生成 / 清除（设置页 + localStorage），请求自动附 `Authorization: Bearer <token>` header（服务端校验留口）。
+- Web mutation：同源 Origin 校验，写操作通过 `LUOOME_EXPOSE_WRITE=true` 显式开启。
 - advice 可视化：决策卡（点击展开）+ 信心度条（low/mid/high 三色）+ 支持证据 / 反证 / 风险提示 / 免责声明分层渲染。
 - 复盘趋势图：原生 SVG 折线（自动宽，x 轴日期标签 + y 轴百分比），样本不足时 fallback 到 byDecision 柱状概念。
 
@@ -129,7 +129,7 @@
 - ✅ 点击建议卡片：展开 toggle 显示 evidence / counterEvidence / risks / disclaimers。
 - ✅ 复盘页面：stat-grid + SVG 折线趋势图（W4.E 完成）+ outcome 回填表单（write opt-in）。
 - ✅ 响应式：≤900px 侧栏窄化（仅图标），≤600px 顶部 nav 横排 + 内容区单列。
-- ✅ 鉴权：设置页可生成 / 清除 token，token 附 Authorization header；服务端 `LUOOME_EXPOSE_WRITE=true` 才挂载 write endpoint。
+- ✅ Web mutation：服务端 `LUOOME_EXPOSE_WRITE=true` 才挂载 write endpoint，并执行同源 Origin 校验。
 - ✅ typecheck / test / lint 全绿（418 tests / 0 lint error）。
 
 ## v0.5 — Multi-Market & Polish（部分完成）

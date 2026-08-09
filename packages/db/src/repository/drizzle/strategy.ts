@@ -12,13 +12,14 @@ import {
   type StrategySignal,
   type StrategyVersion,
 } from '@luoome/core';
-import { and, asc, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
   type Schema,
   strategies,
   strategyResults,
+  strategyRunLeases,
   strategyRuns,
   strategySignals,
   strategyVersions,
@@ -121,6 +122,13 @@ export class DrizzleStrategyRepository implements StrategyRepository {
         updatedAt: strategy.updatedAt,
       })
       .run();
+  }
+
+  async remove(strategyId: string): Promise<void> {
+    this.db.transaction((tx) => {
+      tx.delete(strategyVersions).where(eq(strategyVersions.strategyId, strategyId)).run();
+      tx.delete(strategies).where(eq(strategies.id, strategyId)).run();
+    });
   }
 
   async findById(id: string): Promise<Strategy | null> {
@@ -363,6 +371,23 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         AND strategy_version_id = ${input.strategyVersionId}
         AND owner = ${input.owner}
     `);
+  }
+
+  async removeByStrategyId(strategyId: string): Promise<void> {
+    this.db.transaction((tx) => {
+      const runIds = tx
+        .select({ id: strategyRuns.id })
+        .from(strategyRuns)
+        .where(eq(strategyRuns.strategyId, strategyId))
+        .all()
+        .map((row) => row.id);
+      if (runIds.length > 0) {
+        tx.delete(strategyResults).where(inArray(strategyResults.runId, runIds)).run();
+      }
+      tx.delete(strategySignals).where(eq(strategySignals.strategyId, strategyId)).run();
+      tx.delete(strategyRuns).where(eq(strategyRuns.strategyId, strategyId)).run();
+      tx.delete(strategyRunLeases).where(eq(strategyRunLeases.strategyId, strategyId)).run();
+    });
   }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
