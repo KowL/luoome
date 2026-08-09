@@ -117,6 +117,114 @@ describe('intraday-watch target model', () => {
     expect(result.data.triggers).toEqual([]);
   });
 
+  it('logic=ALL 时任一规则 unknown 不产生 repeat Trigger', async () => {
+    const now = new Date('2026-08-09T02:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await createWatchlistTool.execute(
+      {
+        id: 'all-unknown-watchlist',
+        name: '组合数据缺失观察',
+        kind: 'personal',
+        membershipPolicy: 'manual',
+      },
+      base,
+    );
+    await addWatchlistMemberTool.execute(
+      { watchlistId: 'all-unknown-watchlist', stockId: '688981.SH' },
+      base,
+    );
+    await createAlertPlanTool.execute(
+      {
+        id: 'all-unknown-alert',
+        name: '组合数据缺失提醒',
+        watchlistId: 'all-unknown-watchlist',
+        logic: 'ALL',
+        triggerMode: 'repeat',
+        rules: [
+          { id: 'above-50', kind: 'price-level', level: 50, side: 'above' },
+          { id: 'holding-cost', kind: 'cost-threshold', stopLossPct: 0.05 },
+        ],
+      },
+      base,
+    );
+    for (const ruleId of ['above-50', 'holding-cost', 'composite']) {
+      await base.repos.watchRuleState.upsert({
+        alertPlanId: 'all-unknown-alert',
+        poolId: 'all-unknown-alert',
+        stockId: '688981.SH',
+        ruleId,
+        active: true,
+        lastEvaluatedAt: new Date(now.getTime() - 60_000),
+      });
+    }
+    const ctx = withFixedQuoteAdapter(base, { '688981.SH': 100 });
+
+    const result = await intradayWatchWorkflow.run(
+      { alertPlanIds: ['all-unknown-alert'], notify: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.triggers).toEqual([]);
+  });
+
+  it('logic=ALL 时一条规则为 false 即使另一条 unknown 也产生恢复 Trigger', async () => {
+    const now = new Date('2026-08-09T02:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await createWatchlistTool.execute(
+      {
+        id: 'all-recovery-watchlist',
+        name: '组合恢复观察',
+        kind: 'personal',
+        membershipPolicy: 'manual',
+      },
+      base,
+    );
+    await addWatchlistMemberTool.execute(
+      { watchlistId: 'all-recovery-watchlist', stockId: '688981.SH' },
+      base,
+    );
+    await createAlertPlanTool.execute(
+      {
+        id: 'all-recovery-alert',
+        name: '组合恢复提醒',
+        watchlistId: 'all-recovery-watchlist',
+        logic: 'ALL',
+        notifyOnRecovery: true,
+        rules: [
+          { id: 'above-150', kind: 'price-level', level: 150, side: 'above' },
+          { id: 'holding-cost', kind: 'cost-threshold', stopLossPct: 0.05 },
+        ],
+      },
+      base,
+    );
+    for (const ruleId of ['above-150', 'holding-cost', 'composite']) {
+      await base.repos.watchRuleState.upsert({
+        alertPlanId: 'all-recovery-alert',
+        poolId: 'all-recovery-alert',
+        stockId: '688981.SH',
+        ruleId,
+        active: true,
+        lastEvaluatedAt: new Date(now.getTime() - 60_000),
+      });
+    }
+    const ctx = withFixedQuoteAdapter(base, { '688981.SH': 100 });
+
+    const result = await intradayWatchWorkflow.run(
+      { alertPlanIds: ['all-recovery-alert'], notify: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.triggers).toHaveLength(1);
+    expect(result.data.triggers[0]).toMatchObject({
+      ruleId: 'composite',
+      triggerType: 'recovered',
+    });
+  });
+
   it('daily-first 同一上海自然日只产生一次 Trigger', async () => {
     const now = new Date('2026-08-09T02:00:00.000Z');
     const base = await buildTestContext({ clock: () => now });

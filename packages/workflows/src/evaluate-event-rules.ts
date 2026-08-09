@@ -194,7 +194,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
             }
 
             const priority: AlertPriority =
-              rule.priority ?? eventImportanceToPriority(event.importance);
+              rule.priority ?? plan.priority ?? eventImportanceToPriority(event.importance);
             let deliveryStatus: WatchTrigger['deliveryStatus'] = 'not-requested';
             if (!input.dryRun && priority !== 'normal') {
               if (

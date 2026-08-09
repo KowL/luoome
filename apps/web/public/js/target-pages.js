@@ -20,7 +20,7 @@ const post = (path, input, method = 'POST') =>
 export const triggerMetaText = (trigger) =>
   `${trigger.alertPlanId} · 数据 ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
 
-export const buildAlertPlanMutationInput = (values) => {
+export const buildAlertPlanMutationInput = (values, { editing = false } = {}) => {
   let rules;
   try {
     rules = JSON.parse(values.rulesJson);
@@ -50,7 +50,11 @@ export const buildAlertPlanMutationInput = (values) => {
     rules,
     logic: values.logic,
     triggerMode: values.triggerMode,
-    ...(values.priority.length === 0 ? {} : { priority: values.priority }),
+    ...(values.priority.length === 0
+      ? editing
+        ? { priority: null }
+        : {}
+      : { priority: values.priority }),
     cooldownMinutes,
     dailyNotificationLimit,
     notifyOnRecovery: values.notifyOnRecovery === 'true',
@@ -821,7 +825,7 @@ const editAlertPlan = async (plan, setStatus) => {
   if (values === null) return false;
   let input;
   try {
-    input = buildAlertPlanMutationInput(values);
+    input = buildAlertPlanMutationInput(values, { editing: !creating });
   } catch (error) {
     setStatus(error instanceof Error ? error.message : '预警配置无效', true);
     return false;

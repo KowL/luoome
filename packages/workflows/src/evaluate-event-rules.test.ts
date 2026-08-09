@@ -22,6 +22,7 @@ const seedAlertPlanWithEventRule = async (
     occursAt?: Date;
     remindBeforeDays?: number[];
     dailyNotificationLimit?: number;
+    planPriority?: 'normal' | 'important' | 'urgent';
   } = {},
 ): Promise<StockEvent> => {
   const now = CLOCK();
@@ -55,6 +56,7 @@ const seedAlertPlanWithEventRule = async (
     triggerMode: 'on-enter',
     cooldownMinutes: 30,
     dailyNotificationLimit: opts.dailyNotificationLimit ?? 20,
+    ...(opts.planPriority === undefined ? {} : { priority: opts.planPriority }),
     notifyOnRecovery: false,
     enabled: true,
     createdAt: now,
@@ -120,6 +122,19 @@ describe('evaluate-event-rules workflow', () => {
     expect(r.data.notified).toBe(0);
     const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' });
     expect(triggers[0]?.deliveryStatus).toBe('not-requested');
+  });
+
+  it('事件规则未指定优先级时继承 AlertPlan 默认优先级', async () => {
+    const ctx = await buildTestContext({ clock: CLOCK });
+    await seedAlertPlanWithEventRule(ctx, { importance: 'normal', planPriority: 'urgent' });
+
+    const result = await evaluateEventRulesWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.notified).toBe(1);
+    const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' });
+    expect(triggers[0]).toMatchObject({ priority: 'urgent', deliveryStatus: 'sent' });
   });
 
   it('窗口外事件不触发', async () => {

@@ -579,8 +579,6 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
       stateByKey.set(`${s.stockId}|${s.ruleId}`, s);
     }
 
-    // 按 (stockId, ruleId) 累积 active 结果，给 composite 用
-    const activeByStockRule = new Map<string, boolean>();
     const evaluationByStockRule = new Map<string, EvalResult>();
 
     // 先逐规则求值（同步）
@@ -623,7 +621,6 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           unknownCount += 1;
           // 状态保持：bootstrap 此前若无状态则初始化为 false，否则保留
           const prevState = stateByKey.get(stateKey);
-          activeByStockRule.set(stateKey, prevState?.active ?? false);
           if (prevState === undefined) {
             nextStates.push({
               alertPlanId: pool.id,
@@ -652,9 +649,6 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           ruleId: rule.id,
         };
         nextStates.push(nextState);
-
-        // 记录给 composite 用
-        activeByStockRule.set(`${member.stockId}|${rule.id}`, nextState.active);
 
         if (pool.logic === 'ANY' && bootstrapEmits) {
           // bootstrapEmits 仅在 evaluation.kind='true' 时成立（state machine 保证）
@@ -778,17 +772,19 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
     // 6c：ALL composite 虚拟规则
     if (pool.logic === 'ALL' && evaluableRules.length > 0) {
       for (const member of members) {
-        const allActive = evaluableRules.every(
-          (r) => activeByStockRule.get(`${member.stockId}|${r.id}`) === true,
+        const anyFalse = evaluableRules.some(
+          (r) => evaluationByStockRule.get(`${member.stockId}|${r.id}`)?.kind === 'false',
         );
         const anyUnknown = evaluableRules.some(
           (r) => evaluationByStockRule.get(`${member.stockId}|${r.id}`)?.kind === 'unknown',
         );
         const compositeId = 'composite';
         const prev = stateByKey.get(`${member.stockId}|${compositeId}`);
-        const evaluation: EvalResult = anyUnknown
-          ? { kind: 'unknown' }
-          : { kind: allActive ? 'true' : 'false', evaluatedValue: allActive ? 1 : 0, evidence: [] };
+        const evaluation: EvalResult = anyFalse
+          ? { kind: 'false', evaluatedValue: 0, evidence: [] }
+          : anyUnknown
+            ? { kind: 'unknown' }
+            : { kind: 'true', evaluatedValue: 1, evidence: [] };
         const sm = stepStateMachine(
           prev,
           evaluation,
@@ -804,7 +800,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         });
         const compositeKey = `${pool.id}|${member.stockId}|${compositeId}`;
         const emitCompositeTrigger =
-          allActive &&
+          evaluation.kind === 'true' &&
           (sm.emitTrigger ||
             (state.input.notify === false && prev === undefined) ||
             (prev?.active === true &&

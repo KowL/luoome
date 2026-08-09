@@ -59,6 +59,26 @@ describe('预警表单', () => {
       buildAlertPlanMutationInput({ ...base, rulesJson: '[{}]', dailyNotificationLimit: '0' }),
     ).toThrow('每日通知上限');
   });
+
+  it('编辑时可显式清除默认优先级', () => {
+    const input = buildAlertPlanMutationInput(
+      {
+        name: '预警',
+        watchlistId: 'watch-a',
+        rulesJson: '[{"id":"level","kind":"price-level","level":88,"side":"above"}]',
+        logic: 'ANY',
+        triggerMode: 'on-enter',
+        priority: '',
+        cooldownMinutes: '30',
+        dailyNotificationLimit: '20',
+        notifyOnRecovery: 'false',
+        enabled: 'true',
+      },
+      { editing: true },
+    );
+
+    expect(input).toHaveProperty('priority', null);
+  });
 });
 
 describe('触发条目时间行', () => {

@@ -105,7 +105,7 @@ export const UpdateAlertPlanInput = z
     rules: AlertPlanMutableFields.rules.optional(),
     logic: z.enum(['ANY', 'ALL']).optional(),
     triggerMode: z.enum(['on-enter', 'repeat', 'daily-first']).optional(),
-    priority: z.enum(['urgent', 'important', 'normal']).optional(),
+    priority: z.enum(['urgent', 'important', 'normal']).nullable().optional(),
     cooldownMinutes: z.number().int().nonnegative().optional(),
     dailyNotificationLimit: z.number().int().min(1).max(500).optional(),
     notifyOnRecovery: z.boolean().optional(),
@@ -124,9 +124,12 @@ export const updateAlertPlanTool = defineTool({
   handler: async (input, ctx) => {
     const current = await ctx.repos.alertPlan.findById(input.alertPlanId);
     if (current === null) return errNotFound('AlertPlan', input.alertPlanId);
-    const { alertPlanId: _id, ...updates } = input;
+    const { alertPlanId: _id, priority, ...updates } = input;
     void _id;
-    const plan = AlertPlanSchema.parse({ ...current, ...updates, updatedAt: ctx.clock() });
+    const planInput: Record<string, unknown> = { ...current, ...updates, updatedAt: ctx.clock() };
+    if (priority === null) delete planInput.priority;
+    else if (priority !== undefined) planInput.priority = priority;
+    const plan = AlertPlanSchema.parse(planInput);
     const referenceError = await validateReferences(plan, ctx);
     if (referenceError !== null) return referenceError;
     assertAlertPlanInvariants(plan);
