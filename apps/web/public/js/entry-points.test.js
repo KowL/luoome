@@ -72,6 +72,8 @@ describe('主题皮肤入口', () => {
     expect(html).toContain('id="bg-file-input"');
     expect(html).toContain('id="bg-upload-btn"');
     expect(html).toContain('id="bg-clear-btn"');
+    expect(html).toContain('id="panel-opacity-input"');
+    expect(html).toContain('id="panel-opacity-value"');
   });
 
   it('app.js 初始化并绑定顶栏主题', () => {
