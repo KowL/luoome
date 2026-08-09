@@ -109,6 +109,8 @@ luoome web serve
 
 **Watchlist 页（对齐 PRD §10）**：顶部总览卡片（列表数 / 成员数 / 今日 entered-exited / 待研究 / 过期来源 / 紧急重要触发），六种视图切换——按列表、全部股票（去重 + 持仓标记）、今日变化、待研究（一键开始研究 / 归档）、当前持仓、已归档；右侧详情支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员（可填加入原因）、成员 stage / priority 行内修改与归档、来源健康摘要（active/stale + 最近 dataAsOf）、成员最近触发，以及关联 AlertPlan 列表（点击跳转预警计划页）。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
 
+**研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。
+
 ### 2.4 MCP 模式
 
 ```bash
@@ -193,6 +195,7 @@ Web API 不做 token 校验。写操作仍需显式设置 `LUOOME_EXPOSE_WRITE=t
 | **Strategy** | 从模板创建、版本校验、发布、删除、自动调度、dry-run 与运行结果。 |
 | **Watchlist** | 总览卡片 + 六种视图（按列表 / 全部股票 / 今日变化 / 待研究 / 当前持仓 / 已归档）；成员 stage/priority 编辑与归档、列表编辑/归档、来源健康与关联 AlertPlan 联动。 |
 | **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
+| **研究** | 配置本地 Obsidian Vault、同步索引、创建 Topic、导入本地正文或远程 URL。 |
 | **建议** | 历史 + decision 过滤。 |
 | **复盘** | 准确率统计 + **confidence 校准表** + outcome 回填。 |
 | **对话** | AI SDK 流式助手；项目内持久化会话，工具执行轨迹可回看，写操作先生成确认草案。 |
@@ -310,6 +313,9 @@ luoome tools call get_confidence_calibration --input '{}'
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney 主 → Tencent 备，仅 A 股） |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |
 | provider 密钥变量 | 由模型目录指定 | `apiKeyEnv` 引用的环境变量，密钥不写入目录 |
+| `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；推荐直接在 Web「研究」页配置 |
+| `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与扫描的相对目录；设为 `.` 可扫描整个 Vault |
+| `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 受管文件目录，必须是 research root 的子目录 |
 | `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行 write tool 与 outcome 回填端点 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |

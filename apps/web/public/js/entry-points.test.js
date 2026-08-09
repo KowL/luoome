@@ -55,6 +55,9 @@ describe('报告页入口', () => {
 
 describe('研究 managed 写入入口', () => {
   it('提供创建主题、导入资料和写入状态容器', () => {
+    expect(html).toContain('id="research-vault-settings-form"');
+    expect(html).toContain('id="research-vault-path"');
+    expect(html).toContain('id="research-vault-save-btn"');
     expect(html).toContain('id="research-create-topic-btn"');
     expect(html).toContain('id="research-import-document-btn"');
     expect(html).toContain('id="research-import-remote-btn"');
@@ -66,6 +69,7 @@ describe('研究 managed 写入入口', () => {
     expect(read('./pages.js')).toContain('/api/tools/${' + 'toolName}/call');
     expect(read('./pages.js')).toContain('import_local_research_document');
     expect(read('./pages.js')).toContain('import_remote_research_document');
+    expect(read('./pages.js')).toContain('/api/settings/research-vault');
   });
 });
 

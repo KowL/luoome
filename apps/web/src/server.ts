@@ -40,6 +40,10 @@ import { ZodError } from 'zod';
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
+import {
+  ResearchVaultSettingsStore,
+  SaveResearchVaultSettingsSchema,
+} from './research-vault-settings.js';
 import { STRATEGY_SCHEDULER_INTERVAL_MS, startStrategyScheduler } from './strategy-scheduler.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
@@ -176,7 +180,14 @@ export const buildWebContext = async (
       throw new Error('AI 模型尚未配置，请前往设置页完成 LLM 设置');
     },
   };
-  const researchVault = createResearchVaultAdapterFromEnv(env);
+  let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
+  try {
+    researchVault = createResearchVaultAdapterFromEnv(env);
+  } catch (error) {
+    console.warn('Research Vault 配置无效；Web 将以未挂载状态启动', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   return buildContext({
     repos: handle.repos,
     adapters: {
@@ -211,6 +222,8 @@ export interface CreateWebAppOptions {
   readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
+  /** Research Vault 设置持久化；保存后即时替换当前 adapter。 */
+  readonly researchVaultSettingsStore?: ResearchVaultSettingsStore;
   /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
   readonly chatStreamRuntime?: ChatStreamRuntime;
 }
@@ -254,6 +267,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
+  const researchVaultSettingsStore = options.researchVaultSettingsStore;
   const app = new Hono();
 
   const requireMutationCapabilities = (
@@ -490,6 +504,61 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           error: {
             kind: 'invalid_input',
             message: '行情源设置校验失败',
+            issues: error.issues,
+          },
+        });
+      }
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: error instanceof Error ? error.message : String(error),
+          issues: [],
+        },
+      });
+    }
+  });
+
+  // ===== Research Vault 设置 =====
+  app.get('/api/settings/research-vault', () => {
+    if (researchVaultSettingsStore === undefined) {
+      return jsonResult(notFound('ResearchVaultSettingsStore', 'default'));
+    }
+    try {
+      return jsonResult({ ok: true, data: researchVaultSettingsStore.read() });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'internal',
+          cause: `Vault 设置读取失败：${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
+    }
+  });
+
+  app.post('/api/settings/research-vault', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
+    if (denied !== null) return jsonResult(denied);
+    if (researchVaultSettingsStore === undefined) {
+      return jsonResult(notFound('ResearchVaultSettingsStore', 'default'));
+    }
+    try {
+      const input = SaveResearchVaultSettingsSchema.parse(await c.req.json());
+      const saved = researchVaultSettingsStore.save(input);
+      const researchVault = createResearchVaultAdapterFromEnv(
+        researchVaultSettingsStore.runtimeEnv(),
+      );
+      if (researchVault === undefined) throw new Error('Vault 配置未生效');
+      ctxRef.current = { ...ctxRef.current, researchVault };
+      return jsonResult({ ok: true, data: { ...saved, applied: true } });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return jsonResult({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: 'Vault 设置校验失败',
             issues: error.issues,
           },
         });
@@ -1894,12 +1963,14 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const dbPath = options.dbPath ?? resolveDbPath();
   // 行情源以设置页持久化的值为准（含启动装配），不能只读 process.env。
   const marketSettingsStore = new MarketSettingsStore(process.env);
-  const ctx = await buildWebContext(dbPath, marketSettingsStore.runtimeEnv());
+  const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);
+  const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv());
   const aiSettingsStore = new AISettingsStore(process.env);
   const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
   const app = createWebApp(ctx, {
     aiSettingsStore,
     marketSettingsStore,
+    researchVaultSettingsStore,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   const scheduler = startStrategyScheduler(ctx, {

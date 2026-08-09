@@ -16,6 +16,7 @@ import {
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
+  createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import type { Logger, ToolContext } from '@luoome/core';
@@ -70,6 +71,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     clock: now,
     logger,
   });
+  const researchVault = createResearchVaultAdapterFromEnv(process.env);
   const ctx = buildContext({
     repos,
     adapters: {
@@ -89,6 +91,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     logger,
     limitUpLadder,
     ashareSentiment: createAShareSentimentManagerFromEnv(process.env, { clock: now, logger }),
+    ...(researchVault ? { researchVault } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
   });
 

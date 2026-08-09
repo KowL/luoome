@@ -90,6 +90,9 @@ homebrew/
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |
 | provider 密钥变量 | 由目录指定 | `apiKeyEnv` 引用环境变量名，密钥不写入模型目录 |
+| `LUOOME_RESEARCH_VAULT` | — | 本地 Obsidian Vault 绝对路径；也可在 Web「研究」页配置 |
+| `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与研究索引扫描的相对目录 |
+| `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 可创建受管研究文件的相对目录，必须位于 research root 内 |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
