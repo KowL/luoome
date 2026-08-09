@@ -71,7 +71,12 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     clock: now,
     logger,
   });
-  const researchVault = createResearchVaultAdapterFromEnv(process.env);
+  let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
+  try {
+    researchVault = createResearchVaultAdapterFromEnv(process.env);
+  } catch {
+    logger.warn('Research Vault 配置无效；CLI 将以未挂载状态继续');
+  }
   const ctx = buildContext({
     repos,
     adapters: {

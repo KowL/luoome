@@ -1,6 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createResearchVaultAdapterFromEnv } from '@luoome/adapters';
 import { parseEnvFile } from '@luoome/core';
@@ -52,6 +61,8 @@ const KEYS = {
   maxAttachmentMb: 'LUOOME_RESEARCH_MAX_ATTACHMENT_MB',
 } as const;
 
+const INVALID_CONFIG_MESSAGE = 'Vault 配置无效，请检查 Vault 路径和扫描目录';
+
 const readText = (path: string): string => {
   try {
     return existsSync(path) ? readFileSync(path, 'utf8') : '';
@@ -88,6 +99,32 @@ const updateEnvContent = (content: string, values: Readonly<Record<string, strin
   for (const [key, value] of Object.entries(values))
     lines.push(`${key}=${serializeEnvValue(value)}`);
   return `${lines.join('\n')}\n`;
+};
+
+const validateVaultDirectories = (
+  env: Readonly<Record<string, string | undefined>>,
+  researchRoot: string,
+): void => {
+  try {
+    const adapter = createResearchVaultAdapterFromEnv(env);
+    if (adapter === undefined) throw new Error('Vault 未配置');
+    const vaultPath = env.LUOOME_RESEARCH_VAULT;
+    if (vaultPath === undefined) throw new Error('Vault 未配置');
+    const vaultRoot = realpathSync(vaultPath);
+    if (!statSync(vaultRoot).isDirectory()) throw new Error('Vault 根路径不是目录');
+    const scanRoot = realpathSync(resolve(vaultRoot, researchRoot.replaceAll('\\', '/')));
+    const relativeScanRoot = relative(vaultRoot, scanRoot);
+    if (
+      relativeScanRoot === '..' ||
+      relativeScanRoot.startsWith(`..${sep}`) ||
+      isAbsolute(relativeScanRoot) ||
+      !statSync(scanRoot).isDirectory()
+    ) {
+      throw new Error('扫描目录不在 Vault 内');
+    }
+  } catch {
+    throw new Error(INVALID_CONFIG_MESSAGE);
+  }
 };
 
 export class ResearchVaultSettingsStore {
@@ -129,12 +166,12 @@ export class ResearchVaultSettingsStore {
         vaultName: basename(vaultPath),
         ...(adapter === undefined ? {} : { effectiveVaultId: adapter.vaultId }),
       };
-    } catch (error) {
+    } catch {
       return {
         ...input,
         configured: true,
         vaultName: basename(vaultPath),
-        configError: error instanceof Error ? error.message : String(error),
+        configError: INVALID_CONFIG_MESSAGE,
       };
     }
   }
@@ -152,7 +189,7 @@ export class ResearchVaultSettingsStore {
       [KEYS.maxAttachmentMb]: String(input.maxAttachmentMb),
     };
     const candidateEnv = { ...this.runtimeEnv(), ...serialized };
-    createResearchVaultAdapterFromEnv(candidateEnv);
+    validateVaultDirectories(candidateEnv, input.researchRoot);
 
     atomicWrite(this.secretPath, updateEnvContent(readText(this.secretPath), serialized));
     Object.assign(this.sessionEnv, serialized);

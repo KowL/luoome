@@ -14,7 +14,7 @@ const fixture = () => {
   const directory = mkdtempSync(join(tmpdir(), 'luoome-vault-settings-'));
   temporaryDirectories.push(directory);
   const vaultPath = join(directory, 'Investment Vault');
-  mkdirSync(vaultPath);
+  mkdirSync(join(vaultPath, 'Research'), { recursive: true });
   const store = new ResearchVaultSettingsStore(
     { LUOOME_HOME: directory },
     { secretPath: join(directory, '.env') },
@@ -84,6 +84,38 @@ describe('ResearchVaultSettingsStore', () => {
       }),
     ).toThrow();
     expect(readFileSync(store.secretPath, 'utf8')).toBe('KEEP=value\n');
+  });
+
+  it('Vault 根或扫描目录不是可用目录时拒绝保存且不覆盖原配置', () => {
+    const { directory, vaultPath, store } = fixture();
+    writeFileSync(store.secretPath, 'KEEP=value\n');
+    const vaultFile = join(directory, 'not-a-vault.md');
+    writeFileSync(vaultFile, 'content');
+    const input = {
+      researchRoot: 'Missing',
+      managedRoot: 'Missing/Luoome',
+      vaultId: '',
+      maxTextMb: 10,
+      maxAttachmentMb: 100,
+    };
+
+    expect(() => store.save({ ...input, vaultPath })).toThrow(
+      'Vault 配置无效，请检查 Vault 路径和扫描目录',
+    );
+    expect(() => store.save({ ...input, vaultPath: vaultFile })).toThrow(
+      'Vault 配置无效，请检查 Vault 路径和扫描目录',
+    );
+    expect(readFileSync(store.secretPath, 'utf8')).toBe('KEEP=value\n');
+  });
+
+  it('失效配置只返回安全诊断，不泄露绝对路径', () => {
+    const { directory, store } = fixture();
+    const missingPath = join(directory, 'private', 'deleted-vault');
+    writeFileSync(store.secretPath, `LUOOME_RESEARCH_VAULT=${missingPath}\n`);
+
+    const view = store.read();
+    expect(view.configError).toBe('Vault 配置无效，请检查 Vault 路径和扫描目录');
+    expect(JSON.stringify(view)).not.toContain(missingPath);
   });
 
   it('约束大小范围和单行路径', () => {
