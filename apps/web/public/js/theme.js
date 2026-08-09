@@ -63,6 +63,52 @@ export const clearBackgroundImage = () => {
   }
 };
 
+const OPACITY_KEY = 'luoome-panel-opacity';
+// 启用自定义背景且用户未手动调节时，CSS 侧默认面板不透明度（%），与 style.css 中 html.has-bg-image 保持一致
+const OPACITY_DEFAULT_BG = 78;
+
+const clampOpacity = (value) => {
+  // localStorage 未写入时 getItem 返回 null，而 Number(null) 为 0，会被误夹到 30
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.min(100, Math.max(30, Math.round(num)));
+};
+
+const applyPanelOpacity = (percent) => {
+  if (typeof document === 'undefined' || document.documentElement === undefined) return;
+  if (percent === null) {
+    document.documentElement.style.removeProperty('--panel-opacity');
+    return;
+  }
+  document.documentElement.style.setProperty('--panel-opacity', String(percent / 100));
+};
+
+// 返回用户持久化的面板不透明度（30~100），未设置过返回 null（走 CSS 默认值）。
+export const getPanelOpacity = () => {
+  try {
+    return clampOpacity(localStorage.getItem(OPACITY_KEY));
+  } catch {
+    return null;
+  }
+};
+
+// percent 取 30~100；传 null 清除用户设置，恢复 CSS 默认（无背景 100%，有背景 78%）。
+export const setPanelOpacity = (percent) => {
+  const next = percent === null ? null : clampOpacity(percent);
+  applyPanelOpacity(next);
+  try {
+    if (next === null) {
+      localStorage.removeItem(OPACITY_KEY);
+    } else {
+      localStorage.setItem(OPACITY_KEY, String(next));
+    }
+  } catch {
+    // localStorage 不可用时不阻断。
+  }
+  return next;
+};
+
 const validTheme = (value) => {
   if (typeof value !== 'string') return DEFAULT_THEME;
   return THEMES.some((theme) => theme.id === value) ? value : DEFAULT_THEME;
@@ -113,6 +159,7 @@ export const getThemes = () => THEMES;
 export const initTheme = () => {
   applyTheme(storedTheme());
   applyBackground(getBackgroundImage());
+  applyPanelOpacity(getPanelOpacity());
 };
 
 export const bindTopbarTheme = () => {
@@ -157,11 +204,30 @@ export const bindTopbarTheme = () => {
     if (event.key === 'Escape') closeDrawer();
   });
 
+  // 面板透明度滑杆：未手动设置时跟随是否有背景图显示默认值
+  const opacityInput = document.getElementById('panel-opacity-input');
+  const opacityValue = document.getElementById('panel-opacity-value');
+  const syncOpacityUI = () => {
+    if (opacityInput === null || opacityValue === null) return;
+    const current =
+      getPanelOpacity() ??
+      (document.documentElement.classList.contains('has-bg-image') ? OPACITY_DEFAULT_BG : 100);
+    opacityInput.value = String(current);
+    opacityValue.textContent = `${current}%`;
+  };
+  if (opacityInput !== null) {
+    opacityInput.addEventListener('input', () => {
+      const next = setPanelOpacity(opacityInput.value);
+      if (opacityValue !== null) opacityValue.textContent = `${next}%`;
+    });
+  }
+
   const fileInput = document.getElementById('bg-file-input');
   const uploadBtn = document.getElementById('bg-upload-btn');
   const clearBtn = document.getElementById('bg-clear-btn');
   const status = document.getElementById('bg-status');
   if (fileInput === null || uploadBtn === null || clearBtn === null || status === null) {
+    syncOpacityUI();
     updateThemeUI();
     return;
   }
@@ -182,6 +248,7 @@ export const bindTopbarTheme = () => {
     clearBackgroundImage();
     fileInput.value = '';
     updateBgStatus();
+    syncOpacityUI();
   });
 
   fileInput.addEventListener('change', () => {
@@ -195,10 +262,12 @@ export const bindTopbarTheme = () => {
     reader.addEventListener('load', () => {
       setBackgroundImage(reader.result);
       updateBgStatus();
+      syncOpacityUI();
     });
     reader.readAsDataURL(file);
   });
 
   updateBgStatus();
+  syncOpacityUI();
   updateThemeUI();
 };

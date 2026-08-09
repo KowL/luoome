@@ -13,12 +13,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #f3f5f9;
-  --bg-elev: #ffffff;
+  --bg-elev-base: #ffffff;
   --bg-sunken: #e9edf3;
-  --panel: rgba(255, 255, 255, 0.86);
-  --panel-solid: #ffffff;
-  --panel-alt: #f7f9fc;
-  --panel-hover: #eef2f7;
+  --panel-base: rgba(255, 255, 255, 0.86);
+  --panel-solid-base: #ffffff;
+  --panel-alt-base: #f7f9fc;
+  --panel-hover-base: #eef2f7;
 
   /* —— 颜色 · 文字 —— */
   --ink: #1c2536;
@@ -128,12 +128,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #eef4fb;
-  --bg-elev: #f8fbff;
+  --bg-elev-base: #f8fbff;
   --bg-sunken: #e4edf7;
-  --panel: rgba(248, 251, 255, 0.9);
-  --panel-solid: #f8fbff;
-  --panel-alt: #f0f7ff;
-  --panel-hover: #e6f1fb;
+  --panel-base: rgba(248, 251, 255, 0.9);
+  --panel-solid-base: #f8fbff;
+  --panel-alt-base: #f0f7ff;
+  --panel-hover-base: #e6f1fb;
 
   /* —— 颜色 · 文字 —— */
   --ink: #152238;
@@ -166,12 +166,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #f4f1fb;
-  --bg-elev: #fbf9ff;
+  --bg-elev-base: #fbf9ff;
   --bg-sunken: #ebe7f5;
-  --panel: rgba(251, 249, 255, 0.9);
-  --panel-solid: #fbf9ff;
-  --panel-alt: #f5f2fc;
-  --panel-hover: #ede9f7;
+  --panel-base: rgba(251, 249, 255, 0.9);
+  --panel-solid-base: #fbf9ff;
+  --panel-alt-base: #f5f2fc;
+  --panel-hover-base: #ede9f7;
 
   /* —— 颜色 · 文字 —— */
   --ink: #21183a;
@@ -204,12 +204,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #fbf1f4;
-  --bg-elev: #fff8fa;
+  --bg-elev-base: #fff8fa;
   --bg-sunken: #f2e6eb;
-  --panel: rgba(255, 248, 250, 0.9);
-  --panel-solid: #fff8fa;
-  --panel-alt: #fdf2f6;
-  --panel-hover: #f8e8ee;
+  --panel-base: rgba(255, 248, 250, 0.9);
+  --panel-solid-base: #fff8fa;
+  --panel-alt-base: #fdf2f6;
+  --panel-hover-base: #f8e8ee;
 
   /* —— 颜色 · 文字 —— */
   --ink: #2a1620;
@@ -242,12 +242,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #fbf7ef;
-  --bg-elev: #fffdf8;
+  --bg-elev-base: #fffdf8;
   --bg-sunken: #f2ebe0;
-  --panel: rgba(255, 253, 248, 0.9);
-  --panel-solid: #fffdf8;
-  --panel-alt: #fdf8ef;
-  --panel-hover: #f8f0e3;
+  --panel-base: rgba(255, 253, 248, 0.9);
+  --panel-solid-base: #fffdf8;
+  --panel-alt-base: #fdf8ef;
+  --panel-hover-base: #f8f0e3;
 
   /* —— 颜色 · 文字 —— */
   --ink: #291d0d;
@@ -280,12 +280,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #f0f5f2;
-  --bg-elev: #f8fbfa;
+  --bg-elev-base: #f8fbfa;
   --bg-sunken: #e4ebe7;
-  --panel: rgba(248, 251, 250, 0.9);
-  --panel-solid: #f8fbfa;
-  --panel-alt: #f0f6f3;
-  --panel-hover: #e6efea;
+  --panel-base: rgba(248, 251, 250, 0.9);
+  --panel-solid-base: #f8fbfa;
+  --panel-alt-base: #f0f6f3;
+  --panel-hover-base: #e6efea;
 
   /* —— 颜色 · 文字 —— */
   --ink: #16261e;
@@ -318,12 +318,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #eef1f5;
-  --bg-elev: #f8f9fb;
+  --bg-elev-base: #f8f9fb;
   --bg-sunken: #e4e8ed;
-  --panel: rgba(248, 249, 251, 0.9);
-  --panel-solid: #f8f9fb;
-  --panel-alt: #f1f3f6;
-  --panel-hover: #e8ebef;
+  --panel-base: rgba(248, 249, 251, 0.9);
+  --panel-solid-base: #f8f9fb;
+  --panel-alt-base: #f1f3f6;
+  --panel-hover-base: #e8ebef;
 
   /* —— 颜色 · 文字 —— */
   --ink: #1e293b;
@@ -356,12 +356,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #fdf6f1;
-  --bg-elev: #fffdfc;
+  --bg-elev-base: #fffdfc;
   --bg-sunken: #f6ebe3;
-  --panel: rgba(255, 253, 252, 0.9);
-  --panel-solid: #fffdfc;
-  --panel-alt: #fdf3ec;
-  --panel-hover: #fae9dd;
+  --panel-base: rgba(255, 253, 252, 0.9);
+  --panel-solid-base: #fffdfc;
+  --panel-alt-base: #fdf3ec;
+  --panel-hover-base: #fae9dd;
 
   /* —— 颜色 · 文字 —— */
   --ink: #2c1a12;
@@ -394,12 +394,12 @@
 
   /* —— 颜色 · 基底 —— */
   --bg: #0b101a;
-  --bg-elev: #111827;
+  --bg-elev-base: #111827;
   --bg-sunken: #080c14;
-  --panel: rgba(17, 24, 39, 0.86);
-  --panel-solid: #111827;
-  --panel-alt: #0f1521;
-  --panel-hover: #1a2334;
+  --panel-base: rgba(17, 24, 39, 0.86);
+  --panel-solid-base: #111827;
+  --panel-alt-base: #0f1521;
+  --panel-hover-base: #1a2334;
 
   /* —— 颜色 · 文字 —— */
   --ink: #e9eff8;
@@ -425,6 +425,37 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
   --glow-accent: 0 0 0 1px rgba(56, 225, 198, 0.35), 0 0 14px rgba(56, 225, 198, 0.18);
+}
+
+/* ============================================================
+ * 2.6 面板透明度：--panel-opacity 由主题抽屉滑杆控制（0~1）。
+ * 各主题只定义 -base 基色，实际面板色在这里按透明度派生；
+ * 启用自定义背景时默认 0.78，让背景图透出来。
+ * ============================================================ */
+
+:root {
+  --panel-opacity: 1;
+  --panel: color-mix(in srgb, var(--panel-base) calc(var(--panel-opacity) * 100%), transparent);
+  --panel-solid: color-mix(
+    in srgb,
+    var(--panel-solid-base) calc(var(--panel-opacity) * 100%),
+    transparent
+  );
+  --panel-alt: color-mix(
+    in srgb,
+    var(--panel-alt-base) calc(var(--panel-opacity) * 100%),
+    transparent
+  );
+  --panel-hover: color-mix(
+    in srgb,
+    var(--panel-hover-base) calc(var(--panel-opacity) * 100%),
+    transparent
+  );
+  --bg-elev: color-mix(in srgb, var(--bg-elev-base) calc(var(--panel-opacity) * 100%), transparent);
+}
+
+html.has-bg-image {
+  --panel-opacity: 0.78;
 }
 
 /* ============================================================
@@ -1206,15 +1237,7 @@ html.has-bg-image .bg-layer {
   opacity: 0.62;
 }
 
-/* 暗夜主题 + 自定义背景：面板调透明、薄纱减轻，让背景图透出来 */
-[data-theme='dark'].has-bg-image {
-  --panel: rgba(17, 24, 39, 0.68);
-  --panel-solid: rgba(17, 24, 39, 0.82);
-  --panel-alt: rgba(15, 21, 33, 0.6);
-  --panel-hover: rgba(26, 35, 52, 0.78);
-  --bg-elev: rgba(17, 24, 39, 0.75);
-}
-
+/* 暗夜主题 + 自定义背景：薄纱减轻、顶栏更透，让背景图透出来（面板透明度由 --panel-opacity 统一控制） */
 [data-theme='dark'].has-bg-image .bg-layer::after {
   opacity: 0.45;
 }
@@ -1242,6 +1265,22 @@ html.has-bg-image .bg-layer {
 .bg-status {
   margin: var(--space-2) 0 0;
   font-size: var(--text-xs);
+}
+
+.opacity-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.opacity-control input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.opacity-control span {
+  min-width: 44px;
+  text-align: right;
 }
 
 /* ============================================================
@@ -2067,12 +2106,9 @@ html.has-bg-image .bg-layer {
   cursor: pointer;
 }
 
-.board-table .board-holding {
-  background: var(--accent-soft);
-}
-
+/* 持仓行用 badge 标识，不常驻底色；仅悬停（选中）时高亮 */
 .board-table .board-holding:hover {
-  background: rgba(13, 158, 136, 0.16);
+  background: var(--accent-soft);
 }
 
 .board-name-cell {
