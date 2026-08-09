@@ -9,6 +9,9 @@
     (function () {
       try {
         var theme = localStorage.getItem('luoome-theme') || 'teal';
+        if (localStorage.getItem('luoome-theme-follow-system') === '1') {
+          theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'teal';
+        }
         if (
           ['teal', 'crimson', 'blue', 'violet', 'rose', 'amber', 'sage', 'slate', 'dark'].indexOf(theme) !== -1
         ) {
@@ -769,6 +772,14 @@
       </div>
       <div class="drawer-body">
         <p class="muted mb-3">选择一套配色，背景色与品牌色会同时切换。</p>
+        <div class="follow-system">
+          <label class="follow-system-label" for="follow-system-input">
+            <input type="checkbox" id="follow-system-input" class="switch-input" role="switch" />
+            <span class="switch-track" aria-hidden="true"></span>
+            <span>跟随系统外观</span>
+          </label>
+          <span class="hint-icon" tabindex="0" aria-label="浅色对应青碧主题，深色对应暗夜主题">i<span class="hint-tooltip" role="tooltip">浅色 → 青碧，深色 → 暗夜</span></span>
+        </div>
         <div class="theme-grid" id="theme-grid">
           <button type="button" class="theme-card" data-theme="teal" style="--swatch: #0d9e88;" title="青碧" aria-label="青碧"></button>
           <button type="button" class="theme-card" data-theme="crimson" style="--swatch: #dc2626;" title="彤阳" aria-label="彤阳"></button>
