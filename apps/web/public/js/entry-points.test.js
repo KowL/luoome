@@ -58,6 +58,17 @@ describe('报告页入口', () => {
   });
 });
 
+describe('飞书通知设置入口', () => {
+  it('提供脱敏 Webhook 配置与显式测试按钮', () => {
+    expect(html).toContain('id="feishu-settings-form"');
+    expect(html).toContain('id="feishu-webhook-url"');
+    expect(html).toContain('type="password"');
+    expect(html).toContain('id="btn-feishu-test"');
+    expect(appJs).toContain('initFeishuSettings');
+    expect(read('./feishu-settings.js')).toContain('/api/settings/feishu/test');
+  });
+});
+
 describe('研究 managed 写入入口', () => {
   it('提供创建主题、导入资料和写入状态容器', () => {
     expect(html).toContain('id="research-vault-settings-form"');

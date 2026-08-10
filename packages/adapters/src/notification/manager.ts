@@ -45,7 +45,7 @@ const defaultIdGen = (): string =>
   `notif-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
 
 export class NotificationManager {
-  private readonly feishu: FeishuWebhookAdapter | undefined;
+  private feishu: FeishuWebhookAdapter | undefined;
   private readonly log: LogChannelAdapter;
   private readonly repos: RepositoryRegistry;
   private readonly idGen: () => string;
@@ -59,6 +59,10 @@ export class NotificationManager {
     this.idGen = options.idGenerator ?? defaultIdGen;
     this.clock = options.clock ?? (() => new Date());
     this.log = new LogChannelAdapter({ logger: options.logger });
+  }
+
+  configureFeishu(feishu: FeishuWebhookAdapter | undefined): void {
+    this.feishu = feishu;
   }
 
   /**

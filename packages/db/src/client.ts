@@ -401,6 +401,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       cron TEXT NOT NULL,
       timezone TEXT NOT NULL,
       enabled INTEGER NOT NULL,
+      recommendation_policy_json TEXT,
       next_run_at INTEGER,
       last_run_id TEXT,
       lease_owner TEXT,
@@ -409,6 +410,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
       updated_at INTEGER NOT NULL
     )
   `);
+  const strategyScheduleColumns = new Set(
+    db.all<{ name: string }>(sql`PRAGMA table_info(strategy_schedules)`).map((row) => row.name),
+  );
+  if (!strategyScheduleColumns.has('recommendation_policy_json')) {
+    db.run(sql`ALTER TABLE strategy_schedules ADD COLUMN recommendation_policy_json TEXT`);
+  }
   db.run(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS strategy_schedules_strategy_unique ON strategy_schedules (strategy_id)`,
   );

@@ -1,6 +1,7 @@
 import {
   assertStrategyScheduleInvariants,
   InvariantError,
+  StrategyRecommendationPolicySchema,
   type StrategySchedule,
   type StrategyScheduleRepository,
 } from '@luoome/core';
@@ -17,6 +18,9 @@ const toSchedule = (row: Row): StrategySchedule => ({
   cron: row.cron,
   timezone: row.timezone,
   enabled: row.enabled,
+  ...(row.recommendationPolicy === null
+    ? {}
+    : { recommendationPolicy: StrategyRecommendationPolicySchema.parse(row.recommendationPolicy) }),
   ...(row.nextRunAt === null ? {} : { nextRunAt: row.nextRunAt }),
   ...(row.lastRunId === null ? {} : { lastRunId: row.lastRunId }),
   createdAt: row.createdAt,
@@ -38,6 +42,7 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
       .values({
         ...schedule,
         nextRunAt: schedule.nextRunAt ?? null,
+        recommendationPolicy: schedule.recommendationPolicy ?? null,
         lastRunId: schedule.lastRunId ?? null,
         leaseOwner: null,
         leaseUntil: null,
@@ -49,6 +54,7 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
           timezone: schedule.timezone,
           enabled: schedule.enabled,
           nextRunAt: schedule.nextRunAt ?? null,
+          recommendationPolicy: schedule.recommendationPolicy ?? null,
           lastRunId: schedule.lastRunId ?? null,
           updatedAt: schedule.updatedAt,
           leaseOwner: null,

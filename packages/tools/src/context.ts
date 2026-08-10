@@ -5,6 +5,7 @@ import type {
   LLMAdapterLike,
   Logger,
   MarketDataAdapterLike,
+  NotificationManagerLike,
   RepositoryRegistry,
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
@@ -31,6 +32,7 @@ export interface BuildContextInput {
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
+  readonly notification?: NotificationManagerLike;
 }
 
 /** Production composition root used by CLI, TUI, Web, and MCP surfaces. */
@@ -45,6 +47,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.ashareSentiment === undefined ? {} : { ashareSentiment: input.ashareSentiment }),
     ...(input.researchVault === undefined ? {} : { researchVault: input.researchVault }),
     ...(input.researchRemote === undefined ? {} : { researchRemote: input.researchRemote }),
+    ...(input.notification === undefined ? {} : { notification: input.notification }),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

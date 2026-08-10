@@ -2768,7 +2768,7 @@ html.has-bg-image .bg-layer {
   font-size: var(--text-xs);
 }
 
-/* 「今日变化」「待研究」stat 卡片可点击跳转对应区块 */
+/* 「今日变化」stat 卡片可点击跳转对应区块 */
 .stat-clickable {
   cursor: pointer;
 }
@@ -3775,6 +3775,185 @@ textarea::placeholder {
 .ai-settings-panel :disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* ============================================================
+ * 飞书通知 · secure delivery channel
+ * ============================================================ */
+
+.feishu-settings {
+  margin: var(--space-6) 0;
+}
+
+.feishu-settings-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-bottom: var(--space-4);
+  padding: 0 2px;
+}
+
+.feishu-settings-heading h2 {
+  margin: 2px 0 4px;
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  letter-spacing: 0.01em;
+}
+
+.feishu-settings-heading p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.feishu-channel-panel {
+  position: relative;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) minmax(210px, 0.42fr);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background:
+    linear-gradient(110deg, rgba(0, 184, 148, 0.055), transparent 35%),
+    linear-gradient(180deg, var(--panel), var(--panel-alt));
+  box-shadow: var(--shadow-md);
+}
+
+.feishu-channel-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(13, 158, 136, 0.7), transparent);
+}
+
+.feishu-channel-mark {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 14px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.16em;
+  border-right: 1px solid var(--line);
+  background: rgba(13, 158, 136, 0.045);
+}
+
+.feishu-channel-mark span:first-child {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--panel-solid);
+  font-size: var(--text-sm);
+  letter-spacing: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 20px rgba(13, 158, 136, 0.28);
+}
+
+.feishu-channel-mark i {
+  width: 1px;
+  flex: 1;
+  min-height: 42px;
+  background: linear-gradient(var(--accent), transparent);
+}
+
+.feishu-channel-mark span:last-child {
+  writing-mode: vertical-rl;
+}
+
+.feishu-channel-content {
+  min-width: 0;
+  padding: 26px 28px;
+}
+
+.feishu-channel-content .field {
+  margin-bottom: var(--space-4);
+}
+
+.feishu-channel-content input[type='password'] {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 11px 14px 11px 44px;
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+}
+
+.feishu-security-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  border-left: 2px solid var(--accent);
+  background: rgba(13, 158, 136, 0.055);
+}
+
+.feishu-security-note > span {
+  color: var(--accent);
+}
+
+.feishu-security-note strong {
+  color: var(--ink);
+}
+
+.feishu-security-note p {
+  margin: 2px 0 0;
+}
+
+.feishu-channel-actions {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 26px;
+  border-left: 1px solid var(--line);
+  background: rgba(28, 37, 54, 0.035);
+}
+
+.feishu-channel-actions .btn {
+  width: 100%;
+  min-height: 44px;
+}
+
+.feishu-channel-actions .saved {
+  background: var(--success);
+}
+
+.feishu-delivery-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-solid);
+}
+
+.feishu-delivery-status strong,
+.feishu-delivery-status small {
+  display: block;
+}
+
+.feishu-delivery-status strong {
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.feishu-delivery-status small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 /* ============================================================
@@ -5820,6 +5999,34 @@ body > .modal {
     align-items: flex-start;
     flex-direction: column;
     gap: var(--space-3);
+  }
+
+  .feishu-settings-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .feishu-channel-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .feishu-channel-mark {
+    display: none;
+  }
+
+  .feishu-channel-content {
+    padding: 22px 18px;
+  }
+
+  .feishu-channel-actions {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+    padding: 18px;
+  }
+
+  .feishu-delivery-status {
+    margin-bottom: 0;
   }
 
   .market-routing-panel {

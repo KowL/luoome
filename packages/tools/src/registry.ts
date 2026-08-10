@@ -13,6 +13,7 @@ import {
 } from './tools/alert-plan.js';
 import { analyzePositionTool } from './tools/analyze-position.js';
 import { analyzeStockTool } from './tools/analyze-stock.js';
+import { analyzeStrategyCandidateTool } from './tools/analyze-strategy-candidate.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
 import {
   appendChatMessageTool,
@@ -244,6 +245,7 @@ export const toolRegistry: Registry = createRegistry([
   getConfidenceCalibrationTool,
   getWatchStatusTool,
   analyzeStockTool,
+  analyzeStrategyCandidateTool,
   analyzePositionTool,
   fetchQuoteTool,
   batchQuoteTool,

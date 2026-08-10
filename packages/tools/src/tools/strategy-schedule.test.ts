@@ -59,6 +59,40 @@ describe('strategy schedule tools', () => {
     expect(await getStrategyScheduleTool.execute({ strategyId: 'scheduled' }, ctx)).toEqual(saved);
   });
 
+  it('保存默认关闭的自动推荐政策', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedActiveStrategy(ctx);
+    const saved = await setStrategyScheduleTool.execute(
+      {
+        strategyId: 'scheduled',
+        cron: '0 18 * * 1-5',
+        recommendationPolicy: {
+          enabled: true,
+          minScore: 75,
+          maxRank: 8,
+          maxPerRun: 2,
+          cooldownHours: 48,
+          notify: false,
+          channel: 'log',
+          observationHorizons: ['t3', 't5', 't20'],
+        },
+      },
+      ctx,
+    );
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.data.schedule.recommendationPolicy).toEqual({
+      enabled: true,
+      minScore: 75,
+      maxRank: 8,
+      maxPerRun: 2,
+      cooldownHours: 48,
+      notify: false,
+      channel: 'log',
+      observationHorizons: ['t3', 't5', 't20'],
+    });
+  });
+
   it('拒绝无效 cron 和 draft Strategy 的启用调度', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     await seedActiveStrategy(ctx);

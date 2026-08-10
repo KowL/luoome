@@ -383,10 +383,18 @@ describe('Phase B 洞察与调度', () => {
     expect(statuses.at(-1)).toContain('fixture');
   });
 
-  it('设置页展示可生效的 cron、时区和下一次计划', async () => {
-    globalThis.fetch = async (path) => {
+  it('设置页展示并保存调度与自动推荐政策', async () => {
+    let savedBody;
+    globalThis.fetch = async (path, init) => {
       const url = String(path);
       if (url.endsWith('/schedule')) {
+        if (init?.method === 'POST') {
+          savedBody = JSON.parse(init.body);
+          return jsonResponse({
+            ok: true,
+            data: { schedule: { ...savedBody, nextRunAt: '2026-08-11T10:00:00.000Z' } },
+          });
+        }
         return jsonResponse({
           ok: true,
           data: {
@@ -394,6 +402,16 @@ describe('Phase B 洞察与调度', () => {
               cron: '0 18 * * 1-5',
               timezone: 'Asia/Shanghai',
               enabled: true,
+              recommendationPolicy: {
+                enabled: true,
+                minScore: 75,
+                maxRank: 8,
+                maxPerRun: 2,
+                cooldownHours: 48,
+                notify: true,
+                channel: 'log',
+                observationHorizons: ['t3', 't5', 't20'],
+              },
               nextRunAt: '2026-08-10T10:00:00.000Z',
             },
           },
@@ -418,11 +436,33 @@ describe('Phase B 洞察与调度', () => {
       async () => {},
     );
     expect(node.textContent).toContain('自动调度');
+    expect(node.textContent).toContain('自动生成策略推荐');
     expect(node.textContent).toContain('标准 5 段 cron');
     expect(node.querySelectorAll('input').map((input) => input.value)).toEqual([
       '0 18 * * 1-5',
       'Asia/Shanghai',
       '',
+      '',
+      '75',
+      '8',
+      '2',
+      '48',
+      '',
     ]);
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '保存调度')
+      .click();
+    await flush();
+    expect(savedBody.recommendationPolicy).toEqual({
+      enabled: true,
+      minScore: 75,
+      maxRank: 8,
+      maxPerRun: 2,
+      cooldownHours: 48,
+      notify: true,
+      channel: 'log',
+      observationHorizons: ['t3', 't5', 't20'],
+    });
   });
 });

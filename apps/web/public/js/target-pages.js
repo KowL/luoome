@@ -121,13 +121,6 @@ const WATCHLIST_KIND_TEXT = {
 
 const MEMBERSHIP_POLICY_TEXT = { manual: '手动', synced: '同步', mixed: '混合' };
 
-const MEMBER_STAGE_TEXT = {
-  discovered: '已发现',
-  watching: '观察中',
-  researching: '研究中',
-  confirmed: '已确认',
-};
-
 const MEMBER_SOURCE_KIND_TEXT = {
   manual: '手动',
   strategy: '策略',
@@ -139,13 +132,6 @@ const MEMBER_SOURCE_KIND_TEXT = {
 const MEMBER_SOURCE_STATUS_TEXT = { active: '活跃', stale: '过期', ended: '结束' };
 
 const MEMBER_PRIORITY_TEXT = { normal: '普通', important: '重要', urgent: '紧急' };
-
-const priorityBadge = (priority) => {
-  const variant =
-    { urgent: 'badge-urgent', important: 'badge-important', normal: 'badge-normal' }[priority] ??
-    'badge-neutral';
-  return el('span', `badge ${variant}`, MEMBER_PRIORITY_TEXT[priority] ?? priority);
-};
 
 let selectedStrategyId = '';
 
@@ -160,14 +146,13 @@ export const renderStrategies = async (setStatus) => {
 };
 
 /**
- * 四个主视图 + 已归档弹窗（PRD §10.1）的行数据：全部从 /api/watchlists/overview
+ * 关注页主视图 + 已归档弹窗（PRD §10.1）的行数据：全部从 /api/watchlists/overview
  * 一次拉取的数据派生，切换视图不重复请求。
  */
 export const deriveWatchlistViews = (overview) => {
   const listCards = (overview?.lists ?? []).map((row) => ({
     watchlist: row.watchlist,
     memberCount: row.memberCount ?? 0,
-    discoveredCount: row.discoveredCount ?? 0,
     staleSources: row.sourceHealth?.stale ?? 0,
     todayEntered: row.todayEntered ?? 0,
     todayExited: row.todayExited ?? 0,
@@ -176,23 +161,10 @@ export const deriveWatchlistViews = (overview) => {
   const todayChanges = [...(overview?.todayChanges ?? [])].sort(
     (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
   );
-  const pending = [];
-  for (const stock of stocks) {
-    for (const membership of stock.memberships ?? []) {
-      if (membership.stage !== 'discovered') continue;
-      pending.push({
-        watchlistId: membership.watchlistId,
-        watchlistName: membership.watchlistName,
-        stockId: stock.stockId,
-        priority: membership.priority,
-      });
-    }
-  }
   return {
     listCards,
     stocks,
     todayChanges,
-    pending,
     archived: {
       lists: overview?.archived?.lists ?? [],
       members: overview?.archived?.members ?? [],
@@ -308,11 +280,7 @@ const renderStockTable = (stocks, emptyText) => {
         'td',
         null,
         stock.memberships.map((membership) =>
-          el(
-            'span',
-            'badge board-group-tag',
-            `${membership.watchlistName}·${MEMBER_STAGE_TEXT[membership.stage] ?? membership.stage}`,
-          ),
+          el('span', 'badge board-group-tag', membership.watchlistName),
         ),
       ),
     ]);
@@ -326,7 +294,7 @@ const renderStockTable = (stocks, emptyText) => {
           el('th', null, '名称'),
           el('th', 'num', '现价'),
           el('th', 'num', '涨跌幅'),
-          el('th', null, '关注列表·阶段'),
+          el('th', null, '关注列表'),
         ]),
       ),
       el('tbody', null, rows),
@@ -338,7 +306,7 @@ const renderStocksView = (views) => renderStockTable(views.stocks, '暂无成员
 
 /**
  * 单个列表 tab 的内容区：列表信息条（编辑/归档/加成员）+ 成员行情表
- * （阶段/优先级行内修改、来源、归档）。成员与行情来自 overview，
+ * （优先级行内修改、来源、归档）。成员与行情来自 overview，
  * 列表元信息与关联预警计划经 get_watchlist 拉取。
  */
 const renderListPane = async (watchlistId, views, setStatus) => {
@@ -434,15 +402,6 @@ const renderListPane = async (watchlistId, views, setStatus) => {
 
   const rows = sortStocksByQuote(stocks).map((stock) => {
     const membership = stock.memberships.find((m) => m.watchlistId === watchlistId);
-    const stage = memberSelect(
-      ['discovered', 'watching', 'researching', 'confirmed'],
-      membership.stage,
-      MEMBER_STAGE_TEXT,
-    );
-    stage.addEventListener('change', async () => {
-      const updated = await patchMember(watchlist.id, stock.stockId, { stage: stage.value });
-      setStatus(updated.ok ? '研究阶段已更新' : errorText(updated), !updated.ok);
-    });
     const priority = memberSelect(
       ['normal', 'important', 'urgent'],
       membership.priority,
@@ -471,7 +430,6 @@ const renderListPane = async (watchlistId, views, setStatus) => {
         ]),
       ),
       ...quoteCell(stock),
-      el('td', null, stage),
       el('td', null, priority),
       el(
         'td',
@@ -527,7 +485,6 @@ const renderListPane = async (watchlistId, views, setStatus) => {
                 el('th', null, '名称'),
                 el('th', 'num', '现价'),
                 el('th', 'num', '涨跌幅'),
-                el('th', null, '阶段'),
                 el('th', null, '优先级'),
                 el('th', null, '来源'),
                 el('th', null, '操作'),
@@ -555,40 +512,6 @@ const renderTodayView = (views) =>
           el('div', 'muted', `${change.reason} · ${fmtDateTime(change.at)}`),
         ]),
       );
-
-const renderPendingView = (views, setStatus) => {
-  const nameOf = (stockId) => views.stocks.find((stock) => stock.stockId === stockId)?.name;
-  return views.pending.length === 0
-    ? [el('p', 'placeholder', '暂无待研究成员。')]
-    : views.pending.map((item) =>
-        el('div', 'entity-item', [
-          el('div', 'flex gap-2', [
-            stockIdentityLink({ stockId: item.stockId, stockName: nameOf(item.stockId) }),
-            priorityBadge(item.priority),
-            el('span', 'muted', item.watchlistName),
-          ]),
-          el('div', 'flex gap-2', [
-            actionButton('开始研究', async (button) => {
-              button.disabled = true;
-              const updated = await patchMember(item.watchlistId, item.stockId, {
-                stage: 'researching',
-              });
-              setStatus(
-                updated.ok ? `${item.stockId} 已开始研究` : errorText(updated),
-                !updated.ok,
-              );
-              await renderWatchlists(setStatus);
-            }),
-            actionButton('归档', async (button) => {
-              button.disabled = true;
-              const archived = await archiveMember(item.watchlistId, item.stockId);
-              setStatus(archived.ok ? `${item.stockId} 已归档` : errorText(archived), !archived.ok);
-              await renderWatchlists(setStatus);
-            }),
-          ]),
-        ]),
-      );
-};
 
 /** 已归档弹窗：只读历史区，由页头按钮打开，不占主视图 tab。 */
 const openArchivedDialog = () => {
@@ -633,7 +556,7 @@ const renderWatchlistOverview = (setStatus) => {
   if (overview === null) return;
   const views = deriveWatchlistViews(overview);
   const sum = (pick) => views.listCards.reduce((total, card) => total + pick(card), 0);
-  // 「今日变化」「待研究」卡片可点击，平滑滚动到页面对应区块
+  // 「今日变化」卡片可点击，平滑滚动到页面对应区块
   const scrollTo = (selector) => () =>
     document.querySelector(selector)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const todayStat = statBlock(
@@ -643,17 +566,12 @@ const renderWatchlistOverview = (setStatus) => {
   todayStat.classList.add('stat-clickable');
   todayStat.title = '点击跳转到今日变化';
   todayStat.addEventListener('click', scrollTo('#watchlists-today-pane'));
-  const pendingStat = statBlock('待研究', String(views.pending.length));
-  pendingStat.classList.add('stat-clickable');
-  pendingStat.title = '点击跳转到待研究';
-  pendingStat.addEventListener('click', scrollTo('#watchlists-pending-pane'));
   const summary = $('#watchlists-summary');
   if (summary !== null) {
     mount(summary, [
       statBlock('关注列表', String(views.listCards.length)),
       statBlock('成员', String(sum((card) => card.memberCount))),
       todayStat,
-      pendingStat,
     ]);
   }
   // 异常提示降级为 tab 栏右侧一行小字，只在非 0 时出现，不占 stat 首屏
@@ -705,11 +623,9 @@ const renderWatchlistOverview = (setStatus) => {
     if (watchlistStockTab === 'all') mount(view, renderStocksView(views));
     else void renderListPane(watchlistStockTab, views, setStatus);
   }
-  // 第三、四层级：今日变化 / 待研究区块
+  // 第三层级：今日变化区块
   const today = $('#watchlists-today');
   if (today !== null) mount(today, renderTodayView(views));
-  const pending = $('#watchlists-pending');
-  if (pending !== null) mount(pending, renderPendingView(views, setStatus));
 };
 
 export const renderWatchlists = async (setStatus) => {

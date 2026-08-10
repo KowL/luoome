@@ -15,6 +15,7 @@ import {
   createAShareSentimentManagerFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createNotificationManagerFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
@@ -98,6 +99,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     ashareSentiment: createAShareSentimentManagerFromEnv(process.env, { clock: now, logger }),
     ...(researchVault ? { researchVault } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
+    notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
   });
 
   return { ctx, dbPath, close };
