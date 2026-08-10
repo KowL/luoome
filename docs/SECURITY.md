@@ -170,6 +170,8 @@ stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。
 - 所有密钥在 `~/.luoome/.env`，chmod 600
 - 不入 git（`.gitignore` 排除 `.env*`）
 - 不入 SQLite
+- Web 飞书设置读取接口只返回 configured 状态，不回显 Webhook；写入只接受
+  `https://open.feishu.cn/open-apis/bot/v2/hook/...`，避免测试端点成为任意 URL 请求入口
 - logger 自动脱敏：`Authorization: Bearer xxx` → `Authorization: Bearer ***`、`sk-...` → `sk-***`、飞书 webhook URL → `.../***`
 - 报告脱敏：持仓金额 / 数量可显示，成本价可选隐藏（`LUOOME_HIDE_COST=true`）
 

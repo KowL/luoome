@@ -298,7 +298,7 @@
         <div class="route-header">
           <div>
             <h1>关注</h1>
-            <div class="route-meta">统一成员 · 多来源 · 研究阶段 · 优先级</div>
+            <div class="route-meta">统一成员 · 多来源 · 优先级</div>
           </div>
           <div class="flex gap-2">
             <button id="btn-watchlist-archived" class="btn btn-outline" type="button">已归档</button>
@@ -316,10 +316,6 @@
         <div class="card mt-4" id="watchlists-today-pane">
           <div class="card-header"><h2>今日变化</h2></div>
           <div id="watchlists-today" class="entity-list"><p class="placeholder">加载中…</p></div>
-        </div>
-        <div class="card mt-4" id="watchlists-pending-pane">
-          <div class="card-header"><h2>待研究</h2></div>
-          <div id="watchlists-pending" class="entity-list"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
 
@@ -746,6 +742,72 @@
                 <span aria-hidden="true">▣</span>
                 保存路由并应用
               </button>
+            </div>
+          </section>
+        </form>
+        <form id="feishu-settings-form" class="feishu-settings" autocomplete="off">
+          <div class="feishu-settings-heading">
+            <div>
+              <span class="section-kicker">DELIVERY CHANNEL</span>
+              <h2>飞书通知</h2>
+              <p>连接群自定义机器人，用于投递策略 Advice、预警和定时报告。</p>
+            </div>
+            <div id="feishu-settings-state" class="ai-settings-state" aria-live="polite">
+              <span class="health-dot"></span>
+              <span>正在读取配置</span>
+            </div>
+          </div>
+          <section class="feishu-channel-panel" aria-labelledby="feishu-channel-title">
+            <div class="feishu-channel-mark" aria-hidden="true">
+              <span>FS</span>
+              <i></i>
+              <span>WEBHOOK</span>
+            </div>
+            <div class="feishu-channel-content">
+              <div class="ai-panel-title">
+                <span class="ai-panel-icon" aria-hidden="true">↗</span>
+                <div>
+                  <h3 id="feishu-channel-title">群机器人 Webhook</h3>
+                  <small>Encrypted local delivery credential</small>
+                </div>
+              </div>
+              <div class="field">
+                <label for="feishu-webhook-url">Webhook URL</label>
+                <div class="secret-input-wrap">
+                  <span class="secret-key-icon" aria-hidden="true">⌁</span>
+                  <input
+                    id="feishu-webhook-url"
+                    type="password"
+                    inputmode="url"
+                    maxlength="2048"
+                    placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                  />
+                </div>
+                <div class="secret-status-row">
+                  <span id="feishu-webhook-status" class="hint">未配置</span>
+                  <label class="check-label" for="feishu-clear-webhook">
+                    <input id="feishu-clear-webhook" type="checkbox" />
+                    清除已保存的 Webhook
+                  </label>
+                </div>
+              </div>
+              <div class="feishu-security-note">
+                <span aria-hidden="true">◈</span>
+                <div>
+                  <strong>密钥不回显</strong>
+                  <p>仅接受 open.feishu.cn 的新版 HTTPS Webhook。建议机器人安全关键词设为 luoome；当前不支持签名校验。</p>
+                </div>
+              </div>
+            </div>
+            <div class="feishu-channel-actions">
+              <div class="feishu-delivery-status">
+                <span class="health-dot"></span>
+                <div><strong id="feishu-delivery-label">等待配置</strong><small>策略建议不会自动交易</small></div>
+              </div>
+              <button id="btn-feishu-test" class="btn btn-outline" type="button">发送测试消息</button>
+              <button id="btn-feishu-save" class="btn btn-primary" type="submit">保存并应用</button>
             </div>
           </section>
         </form>

@@ -96,7 +96,7 @@ homebrew/
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
-| `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；缺失时通知降级为 log，不抛错 |
+| `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web「设置 → 飞书通知」中配置，缺失时通知降级为 log |
 | `LUOOME_A_SHARE_HOLIDAYS` | — | 追加 A 股休市日（逗号分隔 `YYYY-MM-DD`），与内置日历 union |
 | `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
@@ -170,9 +170,11 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 - `evaluate-event-rules`：盘前一次，`intraday-watch` 不评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 推送。
 - `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
 - 内置 `run-strategy-schedules`：每次 tick 原子抢占到期配置；非交易日或暂停策略跳过并推进，
-  多实例与手工正式运行由租约防重。调度只执行 Strategy，不生成 Advice、不发通知、不交易。
+  多实例与手工正式运行由租约防重。策略启用推荐政策后，完成运行会按评分、排名、每轮上限和冷却
+  生成可追溯 Advice，并可通知；Advice 失败不回滚运行，且不会自动交易。
 - `complete-strategy-observations`：以信号基准后的第 N 根 qfq 日线补齐事实观察；日线不足时
-  保持 `pending`，当前无指数日线时 benchmark 明确标记 unavailable。
+  保持 `pending`，当前无指数日线时 benchmark 明确标记 unavailable；配置的 T+n 节点完成后可触发
+  对应股票的阶段 Advice。也可手工运行 `strategy-recommendations`，输入策略、运行和推荐政策。
 - 三类报告 workflow 在 `scheduled` 模式默认通知；可在 `--input` 中显式传
   `{"notify":false}` 关闭。相同类型、范围与周期重复运行会更新同一份 Report。
 - `sync-stock-universe` 仍可单独人工执行；完整分页通过校验后原子提交，12 小时内有成功版本时默认跳过。

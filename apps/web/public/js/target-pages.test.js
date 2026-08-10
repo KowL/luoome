@@ -169,7 +169,6 @@ describe('deriveWatchlistViews', () => {
       {
         watchlist: overviewFixture.lists[0]?.watchlist,
         memberCount: 2,
-        discoveredCount: 1,
         staleSources: 1,
         todayEntered: 1,
         todayExited: 0,
@@ -179,7 +178,6 @@ describe('deriveWatchlistViews', () => {
       {
         watchlist: { id: 'x' },
         memberCount: 0,
-        discoveredCount: 0,
         staleSources: 0,
         todayEntered: 0,
         todayExited: 0,
@@ -193,18 +191,6 @@ describe('deriveWatchlistViews', () => {
     expect(views.todayChanges.map((change) => change.stockId)).toEqual(['000001.SZ', '600519.SH']);
   });
 
-  it('pending 只收 stage=discovered 的成员', () => {
-    const views = deriveWatchlistViews(overviewFixture);
-    expect(views.pending).toEqual([
-      {
-        watchlistId: 'wl-a',
-        watchlistName: '研究候选',
-        stockId: '002594.SZ',
-        priority: 'important',
-      },
-    ]);
-  });
-
   it('archived 透传已归档列表与成员；空 overview 全视图兜底为空', () => {
     const views = deriveWatchlistViews(overviewFixture);
     expect(views.archived.lists).toHaveLength(1);
@@ -213,7 +199,6 @@ describe('deriveWatchlistViews', () => {
       listCards: [],
       stocks: [],
       todayChanges: [],
-      pending: [],
       archived: { lists: [], members: [] },
     });
   });

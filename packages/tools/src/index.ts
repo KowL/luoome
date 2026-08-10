@@ -12,6 +12,7 @@ export * from './tools/agent-run.js';
 export * from './tools/alert-plan.js';
 export * from './tools/analyze-position.js';
 export * from './tools/analyze-stock.js';
+export * from './tools/analyze-strategy-candidate.js';
 export * from './tools/batch-quote.js';
 export * from './tools/chat-session.js';
 export * from './tools/close-holding.js';

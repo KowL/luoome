@@ -25,6 +25,7 @@ import type {
   Strategy,
   StrategyResult,
   StrategyRun,
+  StrategySchedule,
   StrategySignal,
   StrategyVersion,
   TradeSide,
@@ -368,6 +369,9 @@ export const strategySchedules = sqliteTable(
     cron: text('cron').notNull(),
     timezone: text('timezone').notNull(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    recommendationPolicy: text('recommendation_policy_json', { mode: 'json' }).$type<
+      StrategySchedule['recommendationPolicy']
+    >(),
     nextRunAt: integer('next_run_at', { mode: 'timestamp_ms' }),
     lastRunId: text('last_run_id'),
     leaseOwner: text('lease_owner'),

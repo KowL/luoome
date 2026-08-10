@@ -53,7 +53,21 @@ export interface AdviceDataSnapshot {
   readonly indicators?: Record<string, TechnicalIndicators>;
   readonly llmReasoning?: string; // LLM 原始推理（用于审计）
   readonly ladder?: AdviceLadderSnapshot;
+  readonly strategy?: StrategyAdviceEvidence;
   readonly dataAsOf: Date; // 数据截止时间
+}
+
+export interface StrategyAdviceEvidence {
+  readonly strategyId: string;
+  readonly strategyVersionId: string;
+  readonly runId: string;
+  readonly stockId: string;
+  readonly score?: number;
+  readonly rank?: number;
+  readonly resultEvidence: readonly string[];
+  readonly signalIds: readonly string[];
+  readonly observationIds: readonly string[];
+  readonly recommendationTrigger: 'run' | 't1' | 't3' | 't5' | 't20';
 }
 
 /** 市场观点引用的天梯摘要，避免把完整快照复制进 Advice JSON。 */
@@ -152,6 +166,20 @@ export const AdviceDataSnapshotSchema = z.object({
   indicators: z.record(z.string(), TechnicalIndicatorsSchema).optional(),
   llmReasoning: z.string().optional(),
   ladder: AdviceLadderSnapshotSchema.optional(),
+  strategy: z
+    .object({
+      strategyId: z.string().min(1),
+      strategyVersionId: z.string().min(1),
+      runId: z.string().min(1),
+      stockId: z.string().min(1),
+      score: z.number().min(0).max(100).optional(),
+      rank: z.number().int().positive().optional(),
+      resultEvidence: z.array(z.string()),
+      signalIds: z.array(z.string()),
+      observationIds: z.array(z.string()),
+      recommendationTrigger: z.enum(['run', 't1', 't3', 't5', 't20']),
+    })
+    .optional(),
   dataAsOf: z.coerce.date(),
 });
 

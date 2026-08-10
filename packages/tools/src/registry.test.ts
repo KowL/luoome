@@ -15,6 +15,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_advice',
   'get_advice_stats',
   'analyze_stock',
+  'analyze_strategy_candidate',
   'analyze_position',
   // v0.2 新增
   'fetch_quote',
@@ -181,7 +182,12 @@ describe('toolRegistry', () => {
       .filter((t) => t.sideEffect === 'advice')
       .map((t) => t.name)
       .sort();
-    expect(adviceTools).toEqual(['analyze_position', 'analyze_stock', 'market_outlook']);
+    expect(adviceTools).toEqual([
+      'analyze_position',
+      'analyze_stock',
+      'analyze_strategy_candidate',
+      'market_outlook',
+    ]);
     const externalTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'external')

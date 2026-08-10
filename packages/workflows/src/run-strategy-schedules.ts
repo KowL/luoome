@@ -2,6 +2,7 @@ import { isHoliday, isWeekend } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { strategyRecommendationsWorkflow } from './strategy-recommendations.js';
 
 export const RunStrategySchedulesInput = z.object({
   owner: z.string().min(1).optional(),
@@ -14,6 +15,8 @@ const ItemSchema = z.object({
   scheduleId: z.string(),
   status: z.enum(['ran', 'skipped', 'failed']),
   runId: z.string().optional(),
+  adviceCount: z.number().int().nonnegative().optional(),
+  recommendationError: z.string().optional(),
   reason: z.string().optional(),
 });
 export const RunStrategySchedulesOutput = z.object({
@@ -46,6 +49,8 @@ const runDue: WorkflowStep = async (previous, ctx) => {
     let status: 'ran' | 'skipped' | 'failed' = 'skipped';
     let reason = claim.reason;
     let runId: string | undefined;
+    let adviceCount: number | undefined;
+    let recommendationError: string | undefined;
     const now = ctx.clock();
     if (claim.eligible && !isWeekend(now) && !isHoliday(now)) {
       const result = await ctx.tools.run_strategy.execute({
@@ -56,6 +61,21 @@ const runDue: WorkflowStep = async (previous, ctx) => {
       if (result.ok) {
         status = 'ran';
         runId = result.data.run.id;
+        if (schedule.recommendationPolicy?.enabled) {
+          const recommended = await strategyRecommendationsWorkflow.run(
+            {
+              strategyId: schedule.strategyId,
+              runId,
+              policy: schedule.recommendationPolicy,
+            },
+            ctx,
+          );
+          if (recommended.ok) adviceCount = recommended.data.advices.length;
+          else
+            recommendationError = errorText(
+              recommended.error as unknown as Record<string, unknown>,
+            );
+        }
       } else {
         status = 'failed';
         reason = errorText(result.error as unknown as Record<string, unknown>);
@@ -77,6 +97,8 @@ const runDue: WorkflowStep = async (previous, ctx) => {
       scheduleId: schedule.id,
       status,
       ...(runId === undefined ? {} : { runId }),
+      ...(adviceCount === undefined ? {} : { adviceCount }),
+      ...(recommendationError === undefined ? {} : { recommendationError }),
       ...(reason === undefined ? {} : { reason }),
     });
   }

@@ -111,6 +111,8 @@ luoome web serve
 
 **研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。
 
+**飞书通知**：在“设置 → 飞书通知”填写群自定义机器人的新版 HTTPS Webhook。页面只展示是否已配置，读取 API 和浏览器均不会回显密钥；保存后写入权限为 0600 的 `$LUOOME_HOME/.env` 并立即应用。保存需要 `LUOOME_EXPOSE_WRITE=true`，发送测试消息还需要 `LUOOME_EXPOSE_EXTERNAL=true`。当前只支持 `open.feishu.cn/open-apis/bot/v2/hook/...`，建议机器人安全关键词配置为 `luoome`，不要开启签名校验。
+
 ### 2.4 MCP 模式
 
 ```bash
@@ -319,7 +321,7 @@ luoome tools call get_confidence_calibration --input '{}'
 | `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行 write tool 与 outcome 回填端点 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |
-| `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；缺失降级为 log channel |
+| `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web 设置页配置，缺失降级为 log channel |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 | `LUOOME_PORT` | 5173 | Web 端口（与 `--port` 等价） |
 

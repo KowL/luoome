@@ -22,14 +22,18 @@ StrategyRun 的 `status` 只表达执行生命周期：`running / complete / fai
 结果包已原子提交，不要求每只股票的数据都可用；数据覆盖质量由 Summary 的
 `dataHealth=complete / partial / unavailable` 与失败计数表达。存量 `status=partial` 只作为旧记录读取，
 语义等同“执行已完成、数据部分可用”。当前股票池使用最近一次结果可用的完成运行中
-`selected=true` 的 StrategyResult。
+`selected=true` 的 StrategyResult。股票进入策略股票池后，其后续事实链仍归 Strategy：
+StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5/T+20
+观察）→ Advice（建议快照）。关注列表不承载这条生命周期状态。
 
 ### StrategySchedule
 
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
-cron、IANA 时区、启停状态和 nextRunAt；修改调度不改变 definitionHash。`luoome start` / Web
-长期运行进程每分钟自动唤醒到期调度 workflow，实例间通过调度租约和正式运行租约防重。非交易日与暂停策略不运行，调度
-也不会生成 Advice、通知或交易。
+cron、IANA 时区、启停状态、nextRunAt 和可选 StrategyRecommendationPolicy；修改调度不改变
+definitionHash。`luoome start` / Web 长期运行进程每分钟自动唤醒到期调度 workflow，实例间通过
+调度租约和正式运行租约防重。非交易日与暂停策略不运行。启用推荐政策后，完成运行会按最低评分、
+最高排名、每轮上限和冷却时间调用 AI 生成可追溯 Advice；配置的 T+n 观察完成时可再次生成阶段建议，
+并可选择日志或飞书通知。推荐失败不回滚已提交的 StrategyRun，任何建议与通知都不会自动交易。
 
 ### StrategyInsight
 

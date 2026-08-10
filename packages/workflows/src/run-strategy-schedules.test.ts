@@ -12,7 +12,7 @@ import { runStrategySchedulesWorkflow } from './run-strategy-schedules.js';
 
 const NOW = new Date('2026-08-10T10:00:00.000Z');
 
-const seedScheduled = async (status: Strategy['status'] = 'active') => {
+const seedScheduled = async (status: Strategy['status'] = 'active', recommendations = false) => {
   const ctx = await buildTestContext({ clock: () => NOW });
   await seedTestStockUniverse(ctx, { limit: 1 });
   const definition: StrategyDslV1 = {
@@ -23,7 +23,24 @@ const seedScheduled = async (status: Strategy['status'] = 'active') => {
       logic: 'all',
       rules: [{ id: 'all', name: '全选', when: 'true', evidence: ['fixture'] }],
     },
-    signals: { entry: [], exit: [], risk: [] },
+    scoring: {
+      method: 'weighted-sum',
+      components: [{ ruleId: 'all', score: '80', weight: 1 }],
+    },
+    signals: {
+      entry: [
+        {
+          id: 'entry',
+          name: '入场',
+          when: 'true',
+          score: '80',
+          direction: 'bullish',
+          evidence: ['fixture'],
+        },
+      ],
+      exit: [],
+      risk: [],
+    },
   };
   const version: StrategyVersion = {
     id: 'scheduled-v1',
@@ -53,6 +70,20 @@ const seedScheduled = async (status: Strategy['status'] = 'active') => {
     cron: '0 18 * * 1-5',
     timezone: 'Asia/Shanghai',
     enabled: true,
+    ...(recommendations
+      ? {
+          recommendationPolicy: {
+            enabled: true,
+            minScore: 70,
+            maxRank: 10,
+            maxPerRun: 3,
+            cooldownHours: 72,
+            notify: true,
+            channel: 'log' as const,
+            observationHorizons: ['t3', 't5', 't20'] as const,
+          },
+        }
+      : {}),
     nextRunAt: NOW,
     createdAt: new Date('2026-08-09T10:00:00.000Z'),
     updatedAt: new Date('2026-08-09T10:00:00.000Z'),
@@ -94,5 +125,19 @@ describe('run-strategy-schedules workflow', () => {
     expect(await ctx.repos.strategySchedule.findByStrategyId('scheduled')).toMatchObject({
       nextRunAt: new Date('2026-08-11T10:00:00.000Z'),
     });
+  });
+
+  it('启用推荐政策时，定时运行后自动生成 Advice 并通知', async () => {
+    const ctx = await seedScheduled('active', true);
+    const result = await runStrategySchedulesWorkflow.run({ owner: 'worker-recommend' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items[0]).toMatchObject({ status: 'ran', adviceCount: 1 });
+    const advices = await ctx.repos.advice.query({
+      sourceTool: 'analyze_strategy_candidate',
+      includeExpired: true,
+    });
+    expect(advices).toHaveLength(1);
+    expect(await ctx.repos.notification.listByAdvice(advices[0]?.id ?? '')).toHaveLength(1);
   });
 });

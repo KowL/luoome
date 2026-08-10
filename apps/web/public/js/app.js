@@ -6,6 +6,7 @@
 import { initAISettings, renderAISettings } from './ai-settings.js';
 import { callApi, getAccountId, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
+import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { renderMarket, teardownMarket } from './market.js';
@@ -121,6 +122,8 @@ const showRoute = async (name) => {
       await renderAISettings(setStatus);
       initMarketSettings(setStatus);
       await renderMarketSettings(setStatus);
+      initFeishuSettings(setStatus);
+      await renderFeishuSettings(setStatus);
       await renderSettingsAccount();
       await renderWorkflowRuns(setStatus);
     }

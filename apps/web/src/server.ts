@@ -18,14 +18,17 @@ import { fileURLToPath } from 'node:url';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createFeishuWebhookAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createNotificationManagerFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
+  NotificationManager,
 } from '@luoome/adapters';
 import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
-import { BUILTIN_STRATEGY_TEMPLATES } from '@luoome/core';
+import { BUILTIN_STRATEGY_TEMPLATES, NotificationSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { buildContext, toolRegistry } from '@luoome/tools';
 import {
@@ -39,6 +42,7 @@ import { ZodError } from 'zod';
 
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
+import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
 import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
 import {
   ResearchVaultSettingsStore,
@@ -210,6 +214,11 @@ export const buildWebContext = async (
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger: console }),
     ...(researchVault ? { researchVault } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
+    notification: createNotificationManagerFromEnv(env, {
+      repos: handle.repos,
+      logger: console,
+      clock: now,
+    }),
   });
 };
 
@@ -224,6 +233,8 @@ export interface CreateWebAppOptions {
   readonly marketSettingsStore?: MarketSettingsStore;
   /** Research Vault 设置持久化；保存后即时替换当前 adapter。 */
   readonly researchVaultSettingsStore?: ResearchVaultSettingsStore;
+  /** 飞书 Webhook 设置；保存后热更新共享 NotificationManager。 */
+  readonly feishuSettingsStore?: FeishuSettingsStore;
   /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
   readonly chatStreamRuntime?: ChatStreamRuntime;
 }
@@ -268,6 +279,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
   const researchVaultSettingsStore = options.researchVaultSettingsStore;
+  const feishuSettingsStore = options.feishuSettingsStore;
   const app = new Hono();
 
   const requireMutationCapabilities = (
@@ -514,6 +526,118 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           kind: 'invalid_input',
           message: error instanceof Error ? error.message : String(error),
           issues: [],
+        },
+      });
+    }
+  });
+
+  // ===== 飞书通知设置 =====
+  app.get('/api/settings/feishu', () => {
+    if (feishuSettingsStore === undefined) {
+      return jsonResult(notFound('FeishuSettingsStore', 'default'));
+    }
+    try {
+      return jsonResult({ ok: true, data: feishuSettingsStore.read() });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'internal',
+          cause: `飞书设置读取失败：${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
+    }
+  });
+
+  app.post('/api/settings/feishu', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
+    if (denied !== null) return jsonResult(denied);
+    if (feishuSettingsStore === undefined) {
+      return jsonResult(notFound('FeishuSettingsStore', 'default'));
+    }
+    try {
+      const input = SaveFeishuSettingsSchema.parse(await c.req.json());
+      const saved = feishuSettingsStore.save(input);
+      const adapter = createFeishuWebhookAdapterFromEnv(feishuSettingsStore.runtimeEnv(), {
+        logger: ctxRef.current.logger,
+      });
+      if (ctxRef.current.notification instanceof NotificationManager) {
+        ctxRef.current.notification.configureFeishu(adapter);
+      }
+      return jsonResult({ ok: true, data: { ...saved, applied: true } });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return jsonResult({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: '飞书设置校验失败',
+            issues: error.issues,
+          },
+        });
+      }
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: error instanceof Error ? error.message : String(error),
+          issues: [],
+        },
+      });
+    }
+  });
+
+  app.post('/api/settings/feishu/test', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external']);
+    if (denied !== null) return jsonResult(denied);
+    if (feishuSettingsStore === undefined) {
+      return jsonResult(notFound('FeishuSettingsStore', 'default'));
+    }
+    try {
+      if (!feishuSettingsStore.read().configured) {
+        return jsonResult({
+          ok: false,
+          error: { kind: 'invalid_input', message: '请先保存飞书 Webhook', issues: [] },
+        });
+      }
+      const sent = await ctxRef.current.notification?.send({
+        channel: 'feishu',
+        payload: {
+          title: '飞书通知连接测试',
+          content: 'luoome 已成功连接此群。后续策略 Advice 可通过该 Webhook 投递。',
+          level: 'success',
+        },
+      });
+      if (sent === undefined) {
+        return jsonResult({
+          ok: false,
+          error: { kind: 'internal', cause: 'NotificationManager 未注入' },
+        });
+      }
+      const notification = NotificationSchema.parse(sent.notification);
+      if (notification.result !== 'success') {
+        return jsonResult({
+          ok: false,
+          error: {
+            kind: 'adapter_error',
+            adapter: 'feishu-webhook',
+            cause: notification.errorMessage ?? notification.result,
+            recoverable: false,
+          },
+        });
+      }
+      return jsonResult({
+        ok: true,
+        data: { delivered: true, sentAt: notification.sentAt },
+      });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'feishu-webhook',
+          cause: error instanceof Error ? error.message : String(error),
+          recoverable: false,
         },
       });
     }
@@ -1974,6 +2098,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   // 行情源以设置页持久化的值为准（含启动装配），不能只读 process.env。
   const marketSettingsStore = new MarketSettingsStore(process.env);
   const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);
+  const feishuSettingsStore = new FeishuSettingsStore(process.env);
   const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv());
   const aiSettingsStore = new AISettingsStore(process.env);
   const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
@@ -1981,6 +2106,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     aiSettingsStore,
     marketSettingsStore,
     researchVaultSettingsStore,
+    feishuSettingsStore,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   const scheduler = startStrategyScheduler(ctx, {

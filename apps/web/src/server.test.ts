@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { NotificationManager } from '@luoome/adapters';
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type { AgentCallableTool, ToolContext } from '@luoome/core';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
@@ -16,6 +17,7 @@ import type { Hono } from 'hono';
 
 import { AISettingsStore } from './ai-settings.js';
 import type { ChatStreamRuntime } from './chat.js';
+import { FeishuSettingsStore } from './feishu-settings.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
 import { buildWebContext, createWebApp } from './server.js';
@@ -232,6 +234,7 @@ describe('Web runtime bootstrap', () => {
         sqlite.close();
       }
       expect(await ctx.repos.strategy.list()).toEqual([]);
+      expect(ctx.notification).toBeInstanceOf(NotificationManager);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -340,6 +343,69 @@ describe('行情源设置 API', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('飞书设置 API', () => {
+  it('保存时不回显 Webhook，并可通过显式 external 测试投递', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-feishu-settings-api-'));
+    try {
+      const store = new FeishuSettingsStore(
+        { LUOOME_HOME: dir },
+        { secretPath: join(dir, '.env') },
+      );
+      const settingsApp = createWebApp(await buildTestContext(), {
+        feishuSettingsStore: store,
+        exposeWrite: true,
+        exposeExternal: true,
+      });
+      const webhook = 'https://open.feishu.cn/open-apis/bot/v2/hook/api-test-secret';
+      const saved = await settingsApp.fetch(
+        new Request('http://test/api/settings/feishu', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ webhookUrl: webhook, clearWebhook: false }),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      const payload = await saved.json();
+      expect(payload).toMatchObject({
+        ok: true,
+        data: { configured: true, endpoint: 'open.feishu.cn', applied: true },
+      });
+      expect(JSON.stringify(payload)).not.toContain('api-test-secret');
+
+      const tested = await settingsApp.fetch(
+        new Request('http://test/api/settings/feishu/test', { method: 'POST' }),
+      );
+      expect(tested.status).toBe(200);
+      expect(await tested.json()).toMatchObject({ ok: true, data: { delivered: true } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('保存需要 write，测试发送需要 external', async () => {
+    const store = new FeishuSettingsStore({
+      LUOOME_FEISHU_WEBHOOK_URL: 'https://open.feishu.cn/open-apis/bot/v2/hook/permission-test',
+    });
+    const guarded = createWebApp(await buildTestContext(), {
+      feishuSettingsStore: store,
+      exposeWrite: false,
+      exposeExternal: false,
+    });
+    const saved = await guarded.fetch(
+      new Request('http://test/api/settings/feishu', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: '', clearWebhook: false }),
+      }),
+    );
+    expect(saved.status).toBe(403);
+    const tested = await guarded.fetch(
+      new Request('http://test/api/settings/feishu/test', { method: 'POST' }),
+    );
+    expect(tested.status).toBe(403);
   });
 });
 

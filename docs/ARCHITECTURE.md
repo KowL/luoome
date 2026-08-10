@@ -287,16 +287,21 @@ export const dailyAdviceWorkflow = defineWorkflow({
 
 Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（advice 持久化通过专用 `persist` tool 暴露，不绕过层级）。
 
-策略 Phase B 使用两个调度 workflow：
+策略 Phase B 使用三个相关 workflow：
 
 - `run-strategy-schedules` 原子抢占到期 `StrategySchedule`，再调用 `run_strategy`；调度租约负责
-  多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行；
+  多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行。若调度
+  启用了 `StrategyRecommendationPolicy`，运行提交后继续调用 `strategy-recommendations`；
+- `strategy-recommendations` 从指定持久化 StrategyRun 的 selected 结果按评分、排名、每轮上限和
+  冷却政策筛选，通过 `analyze_strategy_candidate` 生成 Advice，并可经 notification tool 投递；
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
-  SignalObservation。样本未到期保持 pending，不阻塞其他样本。
+  SignalObservation。样本未到期保持 pending，不阻塞其他样本；配置的 T+n 节点完成后只对受影响
+  股票调用 `strategy-recommendations`。
 
 `luoome start` / `luoome web serve` 在进程内每分钟唤醒 `run-strategy-schedules`，启动时也立即
 检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务继续可由
-外部 cron 调用。两个 workflow 都不直接访问 repository。
+外部 cron 调用。这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
+回滚已原子提交的 StrategyRun，也不会触发交易。
 
 ### 4.7 Adapter（adapters 包）
 
@@ -489,6 +494,7 @@ StrategyVersion  不可变 DSL 定义、hash、校验与发布时间
 StrategyRun      一次运行的 coverage、dataAsOf、执行状态、数据完整度和 provider 状态
 StrategyResult   逐股规则结果、分数、排名、证据
 StrategySignal   按规则产生的方向、分数、证据事实
+SignalObservation StrategySignal 在 T+1/T+3/T+5/T+20 的真实表现事实
 Watchlist        统一观察集合
 WatchlistMember  股票、研究阶段、优先级
 AlertPlan        引用 Watchlist 的规则、冷却和通知策略
@@ -595,6 +601,7 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 | `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
 | `get_strategy_insight_facts` | Strategy runs + signals + observations | 可引用的确定性 facts |
 | `generate_strategy_insight` | 已校验 facts | 带 factRefs 的解释性洞察（非 Advice） |
+| `analyze_strategy_candidate` | selected StrategyResult + signals + observations | 可追溯 **Advice** |
 | `sync_watchlist_source` | source candidates | membership diff + sync audit |
 | `analyze_stock` | stock + 上下文 | **Advice[]**（buy/sell/hold/...） |
 

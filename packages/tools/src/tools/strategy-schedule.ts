@@ -1,4 +1,9 @@
-import { buildStrategySchedule, nextCronOccurrence, StrategyScheduleSchema } from '@luoome/core';
+import {
+  buildStrategySchedule,
+  nextCronOccurrence,
+  StrategyRecommendationPolicySchema,
+  StrategyScheduleSchema,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
@@ -22,6 +27,7 @@ export const SetStrategyScheduleInput = z.object({
   cron: z.string().min(1).max(120),
   timezone: z.string().min(1).max(100).default('Asia/Shanghai'),
   enabled: z.boolean().default(true),
+  recommendationPolicy: StrategyRecommendationPolicySchema.optional(),
 });
 export const SetStrategyScheduleOutput = z.object({ schedule: StrategyScheduleSchema });
 
@@ -42,7 +48,13 @@ export const setStrategyScheduleTool = defineTool({
     }
     const existing = await ctx.repos.strategySchedule.findByStrategyId(input.strategyId);
     const schedule = buildStrategySchedule({
-      ...input,
+      strategyId: input.strategyId,
+      cron: input.cron,
+      timezone: input.timezone,
+      enabled: input.enabled,
+      ...(input.recommendationPolicy === undefined
+        ? {}
+        : { recommendationPolicy: input.recommendationPolicy }),
       now: ctx.clock(),
       ...(existing === null ? {} : { existing }),
     });

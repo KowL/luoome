@@ -12,6 +12,7 @@ export * from './post-market-data.js';
 export * from './risk-report.js';
 export * from './run-strategies.js';
 export * from './run-strategy-schedules.js';
+export * from './strategy-recommendations.js';
 export * from './sync-portfolio-watchlists.js';
 export * from './sync-quotes.js';
 export * from './sync-research-vault.js';

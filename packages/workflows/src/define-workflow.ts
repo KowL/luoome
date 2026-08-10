@@ -4,6 +4,8 @@ import type {
   AnalyzePositionOutput,
   AnalyzeStockInput,
   AnalyzeStockOutput,
+  AnalyzeStrategyCandidateInput,
+  AnalyzeStrategyCandidateOutput,
   BatchQuoteInput,
   BatchQuoteOutput,
   ClaimDueStrategySchedulesInput,
@@ -36,6 +38,8 @@ import type {
   GetResearchTopicOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
+  GetStrategyScheduleInput,
+  GetStrategyScheduleOutput,
   GetWatchlistInput,
   GetWatchlistOutput,
   GetWatchTriggerDeliveryStatsInput,
@@ -60,6 +64,8 @@ import type {
   ListStockEventsOutput,
   ListStrategiesInput,
   ListStrategiesOutput,
+  ListStrategyResultViewsInput,
+  ListStrategyResultViewsOutput,
   ListWatchlistsInput,
   ListWatchlistsOutput,
   ListWatchRuleStatesInput,
@@ -183,6 +189,10 @@ export interface WorkflowToolMap {
     typeof GetConfidenceCalibrationOutput
   >;
   readonly analyze_stock: ToolAccessor<typeof AnalyzeStockInput, typeof AnalyzeStockOutput>;
+  readonly analyze_strategy_candidate: ToolAccessor<
+    typeof AnalyzeStrategyCandidateInput,
+    typeof AnalyzeStrategyCandidateOutput
+  >;
   readonly analyze_position: ToolAccessor<
     typeof AnalyzePositionInput,
     typeof AnalyzePositionOutput
@@ -216,9 +226,17 @@ export interface WorkflowToolMap {
   // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
   readonly list_strategies: ToolAccessor<typeof ListStrategiesInput, typeof ListStrategiesOutput>;
   readonly run_strategy: ToolAccessor<typeof RunStrategyInput, typeof RunStrategyOutput>;
+  readonly get_strategy_schedule: ToolAccessor<
+    typeof GetStrategyScheduleInput,
+    typeof GetStrategyScheduleOutput
+  >;
   readonly strategy_signals_by_stock: ToolAccessor<
     typeof StrategySignalsByStockInput,
     typeof StrategySignalsByStockOutput
+  >;
+  readonly list_strategy_result_views: ToolAccessor<
+    typeof ListStrategyResultViewsInput,
+    typeof ListStrategyResultViewsOutput
   >;
   readonly list_pending_strategy_observations: ToolAccessor<
     typeof ListPendingStrategyObservationsInput,

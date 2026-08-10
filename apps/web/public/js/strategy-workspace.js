@@ -747,6 +747,42 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
   const enabled = el('input');
   enabled.type = 'checkbox';
   enabled.checked = schedule?.enabled ?? true;
+  const recommendationEnabled = el('input');
+  recommendationEnabled.type = 'checkbox';
+  recommendationEnabled.checked = schedule?.recommendationPolicy?.enabled ?? false;
+  const minScore = el('input');
+  minScore.type = 'number';
+  minScore.min = '0';
+  minScore.max = '100';
+  minScore.value = String(schedule?.recommendationPolicy?.minScore ?? 70);
+  const maxRank = el('input');
+  maxRank.type = 'number';
+  maxRank.min = '1';
+  maxRank.max = '200';
+  maxRank.value = String(schedule?.recommendationPolicy?.maxRank ?? 10);
+  const maxPerRun = el('input');
+  maxPerRun.type = 'number';
+  maxPerRun.min = '1';
+  maxPerRun.max = '20';
+  maxPerRun.value = String(schedule?.recommendationPolicy?.maxPerRun ?? 3);
+  const cooldownHours = el('input');
+  cooldownHours.type = 'number';
+  cooldownHours.min = '1';
+  cooldownHours.max = '720';
+  cooldownHours.value = String(schedule?.recommendationPolicy?.cooldownHours ?? 72);
+  const notify = el('input');
+  notify.type = 'checkbox';
+  notify.checked = schedule?.recommendationPolicy?.notify ?? true;
+  const channel = el('select');
+  for (const [value, label] of [
+    ['log', '站内日志'],
+    ['feishu', '飞书'],
+  ]) {
+    const option = el('option', null, label);
+    option.value = value;
+    channel.append(option);
+  }
+  channel.value = schedule?.recommendationPolicy?.channel ?? 'log';
   const save = el('button', 'btn btn-primary btn-sm', '保存调度');
   save.type = 'button';
   save.disabled = strategy.status !== 'active' || strategy.currentVersionId === undefined;
@@ -756,6 +792,16 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
       cron: cron.value.trim(),
       timezone: timezone.value.trim(),
       enabled: enabled.checked,
+      recommendationPolicy: {
+        enabled: recommendationEnabled.checked,
+        minScore: Number(minScore.value),
+        maxRank: Number(maxRank.value),
+        maxPerRun: Number(maxPerRun.value),
+        cooldownHours: Number(cooldownHours.value),
+        notify: notify.checked,
+        channel: channel.value,
+        observationHorizons: ['t3', 't5', 't20'],
+      },
     });
     save.disabled = false;
     if (!result.ok) {
@@ -778,6 +824,13 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
       el('label', null, ['Cron 表达式', cron]),
       el('label', null, ['时区', timezone]),
       el('label', 'strategy-schedule-toggle', [enabled, '启用']),
+      el('label', 'strategy-schedule-toggle', [recommendationEnabled, '自动生成策略推荐']),
+      el('label', null, ['最低评分', minScore]),
+      el('label', null, ['最高排名', maxRank]),
+      el('label', null, ['每轮最多推荐', maxPerRun]),
+      el('label', null, ['冷却小时', cooldownHours]),
+      el('label', 'strategy-schedule-toggle', [notify, '生成后发送通知']),
+      el('label', null, ['通知渠道', channel]),
     ]),
     el(
       'p',
