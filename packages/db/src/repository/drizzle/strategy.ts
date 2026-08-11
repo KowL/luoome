@@ -518,24 +518,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   async commitRun(bundle: StrategyRunBundle): Promise<void> {
     assertStrategyRunBundleInvariants(bundle);
     this.db.transaction((tx) => {
-      const strategy = tx
-        .select()
-        .from(strategies)
-        .where(eq(strategies.id, bundle.run.strategyId))
-        .get();
-      const version = tx
-        .select()
-        .from(strategyVersions)
-        .where(eq(strategyVersions.id, bundle.run.strategyVersionId))
-        .get();
-      if (
-        strategy?.status !== 'active' ||
-        version?.strategyId !== bundle.run.strategyId ||
-        version.validationStatus !== 'valid' ||
-        version.publishedAt === null
-      ) {
-        throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
-      }
       const runValues = {
         id: bundle.run.id,
         strategyId: bundle.run.strategyId,
@@ -557,6 +539,26 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         .where(eq(strategyRuns.id, bundle.run.id))
         .get();
       if (existing === undefined) {
+        const strategy = tx
+          .select()
+          .from(strategies)
+          .where(eq(strategies.id, bundle.run.strategyId))
+          .get();
+        const version = tx
+          .select()
+          .from(strategyVersions)
+          .where(eq(strategyVersions.id, bundle.run.strategyVersionId))
+          .get();
+        if (
+          strategy?.status !== 'active' ||
+          version?.strategyId !== bundle.run.strategyId ||
+          version.validationStatus !== 'valid' ||
+          version.publishedAt === null
+        ) {
+          throw new InvariantError(
+            'StrategyRun 必须绑定 active Strategy 的 published valid version',
+          );
+        }
         tx.insert(strategyRuns).values(runValues).run();
       } else {
         if (

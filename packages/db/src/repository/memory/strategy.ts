@@ -286,14 +286,6 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
 
   async commitRun(bundle: StrategyRunBundle): Promise<void> {
     assertStrategyRunBundleInvariants(bundle);
-    if (
-      !this.strategyRepository.isRunnableVersion(
-        bundle.run.strategyId,
-        bundle.run.strategyVersionId,
-      )
-    ) {
-      throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
-    }
     const existingRun = this.runs.get(bundle.run.id);
     if (existingRun !== undefined) {
       if (
@@ -305,6 +297,13 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       ) {
         throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
       }
+    } else if (
+      !this.strategyRepository.isRunnableVersion(
+        bundle.run.strategyId,
+        bundle.run.strategyVersionId,
+      )
+    ) {
+      throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
     }
     for (const signal of bundle.signals) {
       const identity = this.signalIdentity(signal);
