@@ -840,7 +840,7 @@ stock_universe_snapshot_members
   observed_name, listing_status, industry, list_date, delist_date
 
 daily_bar_revisions
-  stock_id + date + content_hash PK,
+  stock_id + date + recorded_at + content_hash PK,
   qfq_ohlcv, source, recorded_at
 
 strategy_evaluation_sessions
@@ -850,12 +850,12 @@ strategy_evaluation_sessions
 
 strategy_evaluation_days
   session_id + data_as_of PK,
-  run_id, universe_sync_id, data_checkpoint_id, revision_cutoff, status, error
+  run_id, universe_sync_id, data_checkpoint_id, revision_cutoff, vintage_status, status, error
 ```
 
-当前 `daily_bars(stock_id,date)` 仍是最新投影，会被后续修订覆盖；P1 checkpoint 只能校验本次输入
-checksum，不能宣称未来可恢复同一 vintage。R6 启用前必须先 append-only 写
-`daily_bar_revisions`，evaluation day 用 `revision_cutoff` 固定当时可见版本。没有 revision history 的
+`daily_bars(stock_id,date)` 是可变的最新投影，scheduled run 不直接读取它，而是以 checkpoint
+`startedAt` 作为 revision cutoff 读取 append-only `daily_bar_revisions`；evaluation day 则显式保存
+`revision_cutoff` 和 `vintage_status`。没有 revision history 的
 旧日期只允许在 checkpoint / replay 输出中标记 `vintageStatus=unavailable`，不能伪装成严格可重复数据包。
 `vintageStatus=available` 还要求目标 cutoff 前最新 revision 的 content hash 与本次抓取的完整 OHLCV/source
 一致；available replay 固定使用目标历史 cutoff，不能读取本次 prepare 新写入的 revision。unavailable 才能

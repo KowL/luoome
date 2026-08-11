@@ -423,11 +423,13 @@ export const runStrategyTool = defineTool({
             let quote: Quote | undefined;
             if (input.mode === 'replay' || input.mode === 'scheduled') {
               if (needsDailyBars || needsQuote) {
-                if (input.mode === 'replay' && input.revisionCutoff !== undefined) {
+                const revisionCutoff =
+                  input.mode === 'replay' ? input.revisionCutoff : usableDataCheckpoint?.startedAt;
+                if (revisionCutoff !== undefined) {
                   const revisions = await ctx.repos.dailyBar.listRevisions({
                     stockId,
                     to: dataAsOf,
-                    recordedAt: input.revisionCutoff,
+                    recordedAt: revisionCutoff,
                   });
                   const latestByDate = new Map<string, (typeof revisions)[number]>();
                   for (const revision of revisions) {
@@ -435,7 +437,9 @@ export const runStrategyTool = defineTool({
                     const previous = latestByDate.get(key);
                     if (
                       previous === undefined ||
-                      revision.recordedAt.getTime() > previous.recordedAt.getTime()
+                      revision.recordedAt.getTime() > previous.recordedAt.getTime() ||
+                      (revision.recordedAt.getTime() === previous.recordedAt.getTime() &&
+                        revision.contentHash.localeCompare(previous.contentHash) > 0)
                     ) {
                       latestByDate.set(key, revision);
                     }
@@ -791,7 +795,7 @@ export const runStrategyTool = defineTool({
         if (leaseLost || leaseToken === null) return errLeaseLostBeforeCommit();
         const committed = await ctx.repos.strategyRun.commitRunWithFence({
           token: leaseToken,
-          now: finishedAt,
+          now: ctx.clock(),
           bundle: { run, results, signals },
         });
         if (committed === 'lease-lost') return errLeaseLostBeforeCommit();
@@ -841,7 +845,7 @@ export const runStrategyTool = defineTool({
           });
           const committed = await ctx.repos.strategyRun.commitRunWithFence({
             token: leaseToken,
-            now: finishedAt,
+            now: ctx.clock(),
             bundle: { run: failed, results: [], signals: [] },
           });
           if (committed === 'lease-lost') {

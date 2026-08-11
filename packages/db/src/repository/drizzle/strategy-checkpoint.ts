@@ -75,6 +75,7 @@ const toDay = (row: DayRow): StrategyEvaluationDay => ({
   ...(row.universeSyncId === null ? {} : { universeSyncId: row.universeSyncId }),
   ...(row.dataCheckpointId === null ? {} : { dataCheckpointId: row.dataCheckpointId }),
   ...(row.revisionCutoff === null ? {} : { revisionCutoff: row.revisionCutoff }),
+  ...(row.vintageStatus === null ? {} : { vintageStatus: row.vintageStatus }),
   status: row.status,
   ...(row.error === null ? {} : { error: row.error }),
 });
@@ -240,6 +241,7 @@ export class DrizzleStrategyEvaluationRepository implements StrategyEvaluationRe
         universeSyncId: parsed.universeSyncId ?? null,
         dataCheckpointId: parsed.dataCheckpointId ?? null,
         revisionCutoff: parsed.revisionCutoff ?? null,
+        vintageStatus: parsed.vintageStatus ?? null,
         error: parsed.error ?? null,
       })
       .onConflictDoUpdate({
@@ -249,6 +251,7 @@ export class DrizzleStrategyEvaluationRepository implements StrategyEvaluationRe
           universeSyncId: parsed.universeSyncId ?? null,
           dataCheckpointId: parsed.dataCheckpointId ?? null,
           revisionCutoff: parsed.revisionCutoff ?? null,
+          vintageStatus: parsed.vintageStatus ?? null,
           status: parsed.status,
           error: parsed.error ?? null,
         },

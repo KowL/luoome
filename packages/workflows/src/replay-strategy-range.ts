@@ -139,7 +139,7 @@ const replay: WorkflowStep = async (previous, ctx) => {
       days.push({
         dataAsOf,
         status: 'complete',
-        vintageStatus: 'unavailable',
+        vintageStatus: existing?.vintageStatus ?? 'unavailable',
         ...(existing?.runId === undefined ? {} : { runId: existing.runId }),
       });
       cursor = new Date(cursor.getTime() + 86_400_000);
@@ -157,6 +157,7 @@ const replay: WorkflowStep = async (previous, ctx) => {
       await ctx.tools.record_strategy_evaluation_day.execute({
         sessionId: evaluationSession.id,
         dataAsOf,
+        vintageStatus: 'unavailable',
         status: 'failed',
         error: errorText(pit.error),
       });
@@ -177,6 +178,7 @@ const replay: WorkflowStep = async (previous, ctx) => {
         sessionId: evaluationSession.id,
         dataAsOf,
         universeSyncId: pit.data.syncId,
+        vintageStatus: 'unavailable',
         status: 'failed',
         error,
       });
@@ -212,6 +214,7 @@ const replay: WorkflowStep = async (previous, ctx) => {
         dataAsOf,
         universeSyncId: pit.data.syncId,
         revisionCutoff,
+        vintageStatus: prepared.data.checkpoint.vintageStatus,
         status: 'failed',
         error,
       });
@@ -223,16 +226,17 @@ const replay: WorkflowStep = async (previous, ctx) => {
         dataAsOf,
         status: dayStatus,
         vintageStatus: prepared.data.checkpoint.vintageStatus,
-        runId: run.data.run.id,
+        ...(input.persist ? { runId: run.data.run.id } : {}),
         ...(dayStatus === 'failed' ? { error: run.data.run.error } : {}),
       });
       await ctx.tools.record_strategy_evaluation_day.execute({
         sessionId: evaluationSession.id,
         dataAsOf,
-        runId: run.data.run.id,
+        ...(input.persist ? { runId: run.data.run.id } : {}),
         universeSyncId: pit.data.syncId,
         dataCheckpointId: prepared.data.checkpoint.id,
         revisionCutoff,
+        vintageStatus: prepared.data.checkpoint.vintageStatus,
         status: dayStatus === 'failed' ? 'failed' : 'complete',
         ...(dayStatus === 'failed' ? { error: run.data.run.error ?? 'replay run failed' } : {}),
       });

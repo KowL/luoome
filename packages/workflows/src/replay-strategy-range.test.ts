@@ -204,6 +204,38 @@ describe('replay-strategy-range resume identity', () => {
     expect(result.error.kind).toBe('invalid_input');
   });
 
+  it('preserves the recorded vintage status for completed days when resuming', async () => {
+    const ctx = await buildTestContext();
+    await ctx.repos.strategyEvaluation.saveSession(makeSession());
+    for (const dataAsOf of [FROM, new Date('2026-07-28T00:00:00.000Z'), TO]) {
+      await ctx.repos.strategyEvaluation.saveDay({
+        sessionId: 'evaluation-session-1',
+        dataAsOf,
+        status: 'complete',
+        vintageStatus: 'available',
+      });
+    }
+
+    const result = await replayStrategyRangeWorkflow.run(
+      {
+        strategyId: 'strategy-a',
+        versionId: 'strategy-a-v1',
+        from: FROM,
+        to: TO,
+        resumeSessionId: 'evaluation-session-1',
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.days.map((day) => day.vintageStatus)).toEqual([
+      'available',
+      'available',
+      'available',
+    ]);
+  });
+
   it('uses the target cutoff when vintage content is available', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');
     const asOf = new Date('2026-08-10T00:00:00.000Z');
@@ -263,5 +295,59 @@ describe('replay-strategy-range resume identity', () => {
       dataAsOf: asOf,
     });
     expect(day?.revisionCutoff).toEqual(asOf);
+    expect(day?.vintageStatus).toBe('available');
+  });
+
+  it('does not persist a dangling run id for persist=false replay', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const asOf = new Date('2026-08-10T00:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: asOf });
+    await seedReplayStrategy(ctx, now);
+    const historicalBar = {
+      stockId: '600519.SH',
+      date: asOf,
+      open: money(10),
+      high: money(11),
+      low: money(9),
+      close: money(10),
+      volume: 1_000_000,
+      adjustment: 'qfq' as const,
+      source: 'replay-fixture',
+    };
+    const replayCtx = {
+      ...ctx,
+      adapters: {
+        ...ctx.adapters,
+        market: {
+          ...ctx.adapters.market,
+          fetchDailyBars: () => Promise.resolve([historicalBar]),
+        },
+      },
+    };
+
+    const result = await replayStrategyRangeWorkflow.run(
+      {
+        strategyId: 'replay-strategy',
+        versionId: 'replay-strategy-v1',
+        from: asOf,
+        to: asOf,
+        stockIds: ['600519.SH'],
+        persist: false,
+      },
+      replayCtx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.days[0]?.runId).toBeUndefined();
+    const day = await replayCtx.repos.strategyEvaluation.findDay({
+      sessionId: result.data.sessionId,
+      dataAsOf: asOf,
+    });
+    expect(day?.runId).toBeUndefined();
+    expect(await replayCtx.repos.strategyRun.listRuns({ strategyId: 'replay-strategy' })).toEqual(
+      [],
+    );
   });
 });

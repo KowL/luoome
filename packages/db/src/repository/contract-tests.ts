@@ -1384,10 +1384,14 @@ export const registerRepositoryContractTests = (
       });
 
       it('DailyBar revision 按 recordedAt 保留历史版本并支持 PIT 查询', async () => {
-        const revision = (recordedAt: Date, close: number): DailyBarRevision => ({
+        const revision = (
+          recordedAt: Date,
+          close: number,
+          contentHash = `hash-${recordedAt.getTime()}-${close}`,
+        ): DailyBarRevision => ({
           stockId: 'stk-1',
           date: T1,
-          contentHash: `hash-${recordedAt.getTime()}-${close}`,
+          contentHash,
           open: close - 1,
           high: close + 1,
           low: close - 2,
@@ -1405,7 +1409,41 @@ export const registerRepositoryContractTests = (
         ).toEqual([10]);
         expect(
           (await repos.dailyBar.listRevisions({ stockId: 'stk-1' })).map((item) => item.close),
-        ).toEqual([10, 11]);
+        ).toEqual([10, 10, 11]);
+      });
+
+      it('DailyBar revision 保留 A → B → A 回退事件', async () => {
+        const revision = (
+          recordedAt: Date,
+          close: number,
+          contentHash: string,
+        ): DailyBarRevision => ({
+          stockId: 'stk-1',
+          date: T1,
+          contentHash,
+          open: close - 1,
+          high: close + 1,
+          low: close - 2,
+          close,
+          volume: 100,
+          source: 'fixture',
+          recordedAt,
+        });
+        await repos.dailyBar.saveRevisions([
+          revision(T1, 10, 'hash-a'),
+          revision(T2, 11, 'hash-b'),
+          revision(T3, 10, 'hash-a'),
+        ]);
+
+        const revisions = await repos.dailyBar.listRevisions({
+          stockId: 'stk-1',
+          recordedAt: T3,
+        });
+        expect(revisions.map((item) => [item.recordedAt, item.close])).toEqual([
+          [T1, 10],
+          [T2, 11],
+          [T3, 10],
+        ]);
       });
     });
 
@@ -2868,6 +2906,7 @@ export const registerRepositoryContractTests = (
           status: 'complete',
           runId: 'run-1',
           dataCheckpointId: 'checkpoint-1',
+          vintageStatus: 'available',
         });
         expect(await repos.strategyEvaluation.findSessionById(session.id)).toEqual(session);
         expect(
@@ -2875,6 +2914,7 @@ export const registerRepositoryContractTests = (
         ).toMatchObject({
           status: 'complete',
           runId: 'run-1',
+          vintageStatus: 'available',
         });
         expect(await repos.strategyEvaluation.listDays(session.id)).toHaveLength(1);
       });

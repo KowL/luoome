@@ -108,6 +108,7 @@ export const StrategyEvaluationDaySchema = z.object({
   universeSyncId: z.string().min(1).optional(),
   dataCheckpointId: z.string().min(1).optional(),
   revisionCutoff: z.coerce.date().optional(),
+  vintageStatus: StrategyDataVintageStatusSchema.optional(),
   status: z.enum(['running', 'complete', 'failed']),
   error: z.string().min(1).optional(),
 });

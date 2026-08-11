@@ -12,6 +12,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
+import { prepareStrategyDataTool } from './prepare-strategy-data.js';
 import { runStrategyTool } from './run-strategy.js';
 
 const seedStrategy = async (
@@ -156,6 +157,87 @@ describe('run_strategy', () => {
     expect(result.data.persisted).toBe(false);
     expect(await ctx.repos.strategyRun.findRunById(result.data.run.id)).toBeNull();
     expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
+  });
+
+  it('checks the fence with a fresh clock value immediately before commit', async () => {
+    let nowMs = new Date('2026-08-12T09:00:00.000Z').getTime();
+    const base = await buildTestContext({ clock: () => new Date(nowMs++) });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: new Date(nowMs - 1) });
+    await seedStrategy(base);
+    const commitTimes: Date[] = [];
+    const strategyRun = new Proxy(base.repos.strategyRun, {
+      get(target, property, receiver) {
+        if (property === 'commitRunWithFence') {
+          return async (input: Parameters<typeof target.commitRunWithFence>[0]) => {
+            commitTimes.push(input.now);
+            return target.commitRunWithFence(input);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const ctx = { ...base, repos: { ...base.repos, strategyRun } };
+
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(commitTimes[0]?.getTime()).toBeGreaterThan(result.data.run.finishedAt?.getTime() ?? 0);
+  });
+
+  it('scheduled run reads the checkpoint revision instead of a later mutable projection', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    await seedStrategy(base);
+    const checkpointBar: DailyBar = {
+      stockId: '600519.SH',
+      date: new Date('2026-08-12T00:00:00.000Z'),
+      open: money(10),
+      high: money(11),
+      low: money(9),
+      close: money(10),
+      volume: 1_000_000,
+      adjustment: 'qfq',
+      source: 'checkpoint-fixture',
+    };
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([checkpointBar]),
+        },
+      },
+    };
+    const prepared = await prepareStrategyDataTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    await ctx.repos.dailyBar.saveMany([{ ...checkpointBar, close: money(99) }]);
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        mode: 'scheduled',
+        dataCheckpointId: prepared.data.checkpoint.id,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.signals[0]?.evaluationSnapshot.baseline).toMatchObject({ price: 10 });
+    expect(result.data.run.inputSnapshot).toMatchObject({
+      dataCheckpoint: {
+        id: prepared.data.checkpoint.id,
+        checksum: prepared.data.checkpoint.dataChecksum,
+      },
+    });
   });
 
   it('allows a validated unpublished version only for persist=false trial', async () => {

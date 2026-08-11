@@ -56,10 +56,50 @@ export class InMemoryDailyBarRepository implements DailyBarRepository {
   }
 
   async saveRevisions(revisions: readonly DailyBarRevision[]): Promise<void> {
-    for (const revision of revisions) {
-      const parsed = DailyBarRevisionSchema.parse(revision);
-      const key = `${parsed.stockId}|${parsed.date.getTime()}|${parsed.contentHash}`;
-      if (!this.revisions.has(key)) this.revisions.set(key, parsed);
+    const parsedRevisions = revisions
+      .map((revision) => DailyBarRevisionSchema.parse(revision))
+      .sort(
+        (left, right) =>
+          left.recordedAt.getTime() - right.recordedAt.getTime() ||
+          left.stockId.localeCompare(right.stockId) ||
+          left.date.getTime() - right.date.getTime() ||
+          left.contentHash.localeCompare(right.contentHash),
+      );
+    const latestByStockDate = new Map<string, DailyBarRevision>();
+    for (const revision of this.revisions.values()) {
+      const key = this.keyOf(revision.stockId, revision.date);
+      const latest = latestByStockDate.get(key);
+      if (
+        latest === undefined ||
+        revision.recordedAt.getTime() > latest.recordedAt.getTime() ||
+        (revision.recordedAt.getTime() === latest.recordedAt.getTime() &&
+          revision.contentHash.localeCompare(latest.contentHash) > 0)
+      ) {
+        latestByStockDate.set(key, revision);
+      }
+    }
+    for (const parsed of parsedRevisions) {
+      const stockDateKey = this.keyOf(parsed.stockId, parsed.date);
+      const latest = latestByStockDate.get(stockDateKey);
+      if (
+        latest !== undefined &&
+        latest.recordedAt.getTime() <= parsed.recordedAt.getTime() &&
+        latest.contentHash === parsed.contentHash
+      ) {
+        continue;
+      }
+      const key = `${parsed.stockId}|${parsed.date.getTime()}|${parsed.recordedAt.getTime()}|${parsed.contentHash}`;
+      if (!this.revisions.has(key)) {
+        this.revisions.set(key, parsed);
+        if (
+          latest === undefined ||
+          parsed.recordedAt.getTime() > latest.recordedAt.getTime() ||
+          (parsed.recordedAt.getTime() === latest.recordedAt.getTime() &&
+            parsed.contentHash.localeCompare(latest.contentHash) > 0)
+        ) {
+          latestByStockDate.set(stockDateKey, parsed);
+        }
+      }
     }
   }
 

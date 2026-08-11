@@ -310,7 +310,10 @@ export const dailyBarRevisions = sqliteTable(
     recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.stockId, t.date, t.contentHash], name: 'daily_bar_revisions_pk' }),
+    pk: primaryKey({
+      columns: [t.stockId, t.date, t.recordedAt, t.contentHash],
+      name: 'daily_bar_revisions_pk',
+    }),
     lookupIdx: index('daily_bar_revisions_lookup_idx').on(t.stockId, t.date, t.recordedAt),
   }),
 );
@@ -601,6 +604,8 @@ export const strategyEvaluationDays = sqliteTable(
     universeSyncId: text('universe_sync_id'),
     dataCheckpointId: text('data_checkpoint_id'),
     revisionCutoff: integer('revision_cutoff', { mode: 'timestamp_ms' }),
+    vintageStatus:
+      text('vintage_status').$type<NonNullable<StrategyEvaluationDay['vintageStatus']>>(),
     status: text('status').$type<StrategyEvaluationDay['status']>().notNull(),
     error: text('error'),
   },

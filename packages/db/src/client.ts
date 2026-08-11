@@ -376,7 +376,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       stock_id TEXT NOT NULL, date INTEGER NOT NULL, content_hash TEXT NOT NULL,
       open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
       volume INTEGER NOT NULL, source TEXT NOT NULL, recorded_at INTEGER NOT NULL,
-      PRIMARY KEY (stock_id, date, content_hash)
+      PRIMARY KEY (stock_id, date, recorded_at, content_hash)
     )
   `);
   db.run(sql`
@@ -629,10 +629,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE TABLE IF NOT EXISTS strategy_evaluation_days (
       session_id TEXT NOT NULL, data_as_of INTEGER NOT NULL, run_id TEXT,
       universe_sync_id TEXT, data_checkpoint_id TEXT, revision_cutoff INTEGER,
-      status TEXT NOT NULL, error TEXT,
+      vintage_status TEXT, status TEXT NOT NULL, error TEXT,
       PRIMARY KEY (session_id, data_as_of)
     )
   `);
+  ensureColumn(db, 'strategy_evaluation_days', 'vintage_status', 'TEXT');
   db.run(sql`
     CREATE INDEX IF NOT EXISTS strategy_evaluation_days_status_idx
     ON strategy_evaluation_days (session_id, status)
