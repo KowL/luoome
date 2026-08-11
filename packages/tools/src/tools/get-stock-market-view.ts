@@ -90,6 +90,7 @@ const MarketDataStatusSchema = z.object({
       'provider-fallback',
       'previous-close-unavailable',
       'bars-insufficient',
+      'bars-truncated',
       'market-closed',
     ]),
   ),
@@ -249,6 +250,23 @@ export const getStockMarketViewTool = defineTool({
         adapter: market.name,
         range: input.range,
         droppedInvalid,
+      });
+    }
+
+    // 周/月粒度下备源（如 tencent 单次最多 320 根）可能把历史窗口截短且不触发
+    // bars-insufficient；最早 bar 距 fetchStart 超过容忍天数即视为截断并显式告警。
+    const earliestBar = bars[0]?.date.getTime();
+    const barsTruncated =
+      input.granularity !== 'day' &&
+      earliestBar !== undefined &&
+      earliestBar - fetchStart.getTime() > 60 * 86_400_000;
+    if (barsTruncated) {
+      ctx.logger.warn('get_stock_market_view: 历史日线被数据源截断', {
+        stockId: stock.id,
+        adapter: market.name,
+        granularity: input.granularity,
+        fetchStart: fetchStart.toISOString().slice(0, 10),
+        earliestBar: new Date(earliestBar).toISOString().slice(0, 10),
       });
     }
 
@@ -416,7 +434,7 @@ export const getStockMarketViewTool = defineTool({
         barsAsOf: lastCandleDate,
         sources,
         marketSession: session,
-        warnings: status.warnings,
+        warnings: barsTruncated ? [...status.warnings, 'bars-truncated' as const] : status.warnings,
       },
       markers,
       limitUp,

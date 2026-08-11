@@ -493,6 +493,7 @@ const ERROR_KIND_LABELS = {
   adapter_error: '行情或外部服务异常',
   permission_denied: '权限不足',
   llm_error: 'AI 分析服务异常',
+  timeout: '请求超时',
   internal: '内部错误',
 };
 

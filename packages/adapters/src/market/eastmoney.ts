@@ -407,14 +407,14 @@ export class EastmoneyAdapter {
     };
   }
 
-  /** 拉日线。range 端点对齐 Eastmoney beg/end 参数。 */
+  /** 拉日线。range 端点对齐 Eastmoney beg/end 参数；不带 lmt 时上游默认只回 ~320 根（2026-08 实测），显式放大。 */
   async fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]> {
     const secid = toSecId(stockCode);
     const beg = formatYmd(range.start);
     const end = formatYmd(range.end);
     const url =
       `${this.baseKlineUrl}?secid=${secid}&fields1=${KLINE_FIELDS}` +
-      `&fields2=${KLINE_FIELDS}&klt=101&fqt=1&beg=${beg}&end=${end}`;
+      `&fields2=${KLINE_FIELDS}&klt=101&fqt=1&beg=${beg}&end=${end}&lmt=1000000`;
     const json = await this.getJson<EastmoneyKlineResponse>(url);
     if (json.rc !== 0 || json.data === undefined || json.data.klines === undefined) {
       throw new EastmoneyAdapterError(`Eastmoney 日线失败: rc=${json.rc} secid=${secid}`);

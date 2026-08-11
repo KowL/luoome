@@ -39,6 +39,7 @@ const RECENT_KEY = 'luoome.market.recent';
 const REFRESH_ACTIVE_MS = 60_000;
 const REFRESH_IDLE_MS = 300_000;
 const GRANULARITY_TITLES = { day: '日 K', week: '周 K', month: '月 K' };
+const EMPTY_TIP = '搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&range=3m。';
 
 const state = {
   stockId: null,
@@ -276,6 +277,7 @@ const loadIntradayView = async () => {
   const r = await callApi('/api/tools/fetch_intraday_minutes/call', {
     method: 'POST',
     body: JSON.stringify({ input: { stockId: state.stockId } }),
+    timeoutMs: 30_000,
   });
   if (!state.intradayTracker.isCurrent(requestId)) return;
   const points =
@@ -315,15 +317,12 @@ const renderData = async (data, requestId) => {
   const chartContainer = $('#market-chart');
   const chartEmpty = $('#market-chart-empty');
   if (chartContainer === null || chartEmpty === null) return;
-  // 无 bars 不建空 chart（§11.3）。
+  // 无 bars 不建空 chart（§11.3）；K 线 / 分时 / 空态可见性统一由 paintChartTabs 按 chartTab 决定。
   if (!Array.isArray(data.candles) || data.candles.length === 0) {
     destroyChart();
-    chartContainer.hidden = true;
-    chartEmpty.hidden = false;
+    paintChartTabs();
     return;
   }
-  chartContainer.hidden = false;
-  chartEmpty.hidden = true;
   if (state.chart === null) {
     const chart = await createMarketChart(chartContainer);
     const { route } = parseRouteHash(window.location.hash);
@@ -341,6 +340,7 @@ const renderData = async (data, requestId) => {
     ma20: computeMaSeries(data.candles, 20),
     markers: data.markers ?? [],
   });
+  paintChartTabs();
 };
 
 /** 轮询间隔分档：盘中（含午间休市）60s，盘外 300s 降频。 */
@@ -396,6 +396,7 @@ const loadMarketView = async () => {
   const r = await callApi('/api/tools/get_stock_market_view/call', {
     method: 'POST',
     body: JSON.stringify({ input }),
+    timeoutMs: 30_000,
   });
   if (!state.tracker.isCurrent(requestId)) return;
   if (r.ok && r.data !== undefined) {
@@ -423,8 +424,9 @@ const loadMarketView = async () => {
       const main = $('#market-main');
       if (empty !== null) {
         empty.hidden = false;
-        empty.textContent = '';
-        empty.append(el('p', 'placeholder', `${message}，请稍后重试。`));
+        // 只改占位文案，不清空 #market-empty 子树（#market-sentiment 要留给情绪面板）
+        const tip = $('#market-empty-tip');
+        if (tip !== null) tip.textContent = `${message}，请稍后重试。`;
       }
       if (main !== null) main.hidden = true;
     }
@@ -465,6 +467,8 @@ const renderMarket = async (setStatus) => {
     const empty = $('#market-empty');
     const main = $('#market-main');
     if (empty !== null) empty.hidden = false;
+    const tip = $('#market-empty-tip');
+    if (tip !== null) tip.textContent = EMPTY_TIP;
     if (main !== null) main.hidden = true;
     void renderMarketSentiment();
     return;
@@ -486,6 +490,10 @@ const renderMarket = async (setStatus) => {
   state.data = null;
   destroyChart();
   destroyIntradayChart();
+  // 换股：在途分时 fetch 作废，tab 状态回到 K 线（对齐空态分支 / teardown）
+  state.intradayTracker.next();
+  state.chartTab = 'kline';
+  state.intradayAvailable = false;
   setStatus?.(`加载 ${stockId} 行情…`);
   await loadMarketView();
 };

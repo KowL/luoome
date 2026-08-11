@@ -48,6 +48,7 @@ export type MarketViewWarning =
   | 'provider-fallback'
   | 'previous-close-unavailable'
   | 'bars-insufficient'
+  | 'bars-truncated'
   | 'market-closed';
 
 export interface MarketCandle {

@@ -549,6 +549,31 @@ describe('tool/get_stock_market_view', () => {
     expect(res.data.indicatorsAsOf).toBe(TODAY);
   });
 
+  it('granularity=month 且历史被备源截断（最早 bar 远晚于窗口起点）→ bars-truncated 告警', async () => {
+    const market = new StubMarketAdapter({ bars: makeBars(STOCK_ID, TODAY, 320) });
+    const ctx = await buildCtx(market);
+    const res = await callView(ctx, { range: '1y', granularity: 'month' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // 320 根 ≈ 最近 10.5 个月，远小于 5 年窗口 → 显式截断告警而不是静默缩水
+    expect(res.data.dataStatus.warnings).toContain('bars-truncated');
+  });
+
+  it('granularity=month + adapter 失败：DB 回退同样用扩展窗口与放大上限聚合', async () => {
+    const market = new StubMarketAdapter({ barsError: new Error('kline upstream down') });
+    const ctx = await buildCtx(market);
+    await ctx.repos.dailyBar.saveMany(makeBars(STOCK_ID, YESTERDAY, 300));
+    const res = await callView(ctx, { range: '1y', granularity: 'month' });
+    expect(res.ok).toBe(true);
+    const end = new Date(`${TODAY}T00:00:00.000Z`);
+    expect(market.lastBarsRange?.start.getTime()).toBe(end.getTime() - 5 * 370 * DAY_MS);
+    if (!res.ok) return;
+    expect(res.data.dataStatus.retrieval).toBe('local-fallback');
+    // 300 根缓存（2025-09-26 起）跨 11 个自然月；回退路径若沿用 260 上限会只剩 9 组
+    expect(res.data.candles).toHaveLength(11);
+    expect(res.data.candles.at(-1)).toMatchObject({ date: TODAY, completeness: 'live' });
+  });
+
   it('granularity=day（显式）：输出与默认一致（日 K 不聚合）', async () => {
     const ctx = await buildCtx(new StubMarketAdapter());
     const res = await callView(ctx, { granularity: 'day' });

@@ -28,7 +28,8 @@ const setAccountId = (accountId) => {
 /**
  * 调用后端 API。
  * @param {string} path 路径（必须以 / 开头）
- * @param {RequestInit & { timeoutMs?: number }} [init] fetch init；body 已是 JSON 时无需再 stringify；timeoutMs 默认 30s
+ * @param {RequestInit & { timeoutMs?: number }} [init] fetch init；body 已是 JSON 时无需再 stringify；
+ * 仅显式传 timeoutMs 时挂超时（LLM 分析 / 数据同步等长调用默认不应被打断）
  * @returns {Promise<{ok: boolean, data?: unknown, error?: object}>}
  */
 const callApi = async (path, init) => {
@@ -42,7 +43,7 @@ const callApi = async (path, init) => {
     response = await fetch(path, {
       ...rest,
       headers,
-      signal: AbortSignal.timeout(timeoutMs ?? 30_000),
+      ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
     });
   } catch (cause) {
     const kind =

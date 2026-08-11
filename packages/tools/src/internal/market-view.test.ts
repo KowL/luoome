@@ -119,4 +119,16 @@ describe('aggregateCandles', () => {
     expect(out.map((c) => c.date)).toEqual(['2026-05-15', '2026-06-30', '2026-07-02']);
     expect(out.map((c) => c.volume)).toEqual([10, 50, 40]);
   });
+
+  it('周聚合：跨年 ISO 周分桶（2026-01-01 周四归入 2025-12-29 周）', () => {
+    const candles = [
+      makeCandle('2025-12-29', { open: money(50), close: money(51) }), // 周一
+      makeCandle('2026-01-01', { close: money(52) }), // 周四，与 12-29 同一 ISO 周
+      makeCandle('2026-01-05', { open: money(53), close: money(54) }), // 下周一起新桶
+    ];
+    const out = aggregateCandles(candles, 'week');
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ date: '2026-01-01', open: 50, close: 52 });
+    expect(out[1]).toMatchObject({ date: '2026-01-05', open: 53, close: 54 });
+  });
 });

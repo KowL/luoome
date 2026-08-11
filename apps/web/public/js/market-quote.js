@@ -61,6 +61,9 @@ const renderQuoteHeader = (data) => {
     if (dataStatus.warnings.includes('provider-fallback')) {
       items.push(el('span', 'badge badge-amber', '含备用行情源'));
     }
+    if (dataStatus.warnings.includes('bars-truncated')) {
+      items.push(el('span', 'badge badge-amber', '历史数据截断'));
+    }
     mount(badges, items);
   }
 };
