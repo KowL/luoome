@@ -1057,7 +1057,11 @@ describe('Watchlist 页增强 API（PRD §10）', () => {
 
 describe('mutation 鉴权', () => {
   it('默认关闭能力开关时拒绝自定义 write / external mutation', async () => {
-    const guarded = createWebApp(await buildTestContext());
+    // 显式关闭能力开关，避免本地 .env 中 LUOOME_EXPOSE_*=true 被 bun 自动加载后放行。
+    const guarded = createWebApp(await buildTestContext(), {
+      exposeWrite: false,
+      exposeExternal: false,
+    });
     const settings = await guarded.fetch(
       new Request('http://test/api/settings/ai', {
         method: 'POST',
@@ -1076,7 +1080,10 @@ describe('mutation 鉴权', () => {
     );
     expect(chat.status).toBe(403);
 
-    const reportApp = createWebApp(await buildTestContext(), { exposeWrite: true });
+    const reportApp = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: false,
+    });
     const report = await reportApp.fetch(
       new Request('http://test/api/reports/run/opening', {
         method: 'POST',
