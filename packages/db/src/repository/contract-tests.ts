@@ -1594,6 +1594,58 @@ export const registerRepositoryContractTests = (
         ).toEqual(['run-2']);
       });
 
+      it('saveStartedRun 立即可见，commitRun 原子更新为终态', async () => {
+        const running = makeStrategyRun('run-visible', {
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+        });
+        await repos.strategyRun.saveStartedRun(running);
+        expect(await repos.strategyRun.findRunById(running.id)).toEqual(running);
+        expect((await repos.strategyRun.listRuns({ status: 'running' }))[0]?.id).toBe(running.id);
+
+        const complete = makeStrategyRun(running.id, { startedAt: running.startedAt });
+        await repos.strategyRun.commitRun({ run: complete, results: [], signals: [] });
+        expect(await repos.strategyRun.findRunById(running.id)).toEqual(complete);
+        expect(await repos.strategyRun.listRuns({ status: 'running' })).toEqual([]);
+      });
+
+      it('运行开始后 Strategy 被暂停，仍可提交 complete / failed 终态', async () => {
+        const completeRunning = makeStrategyRun('run-paused-complete', {
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+        });
+        await repos.strategyRun.saveStartedRun(completeRunning);
+        await repos.strategy.pause('strategy-1', T2);
+        const complete = makeStrategyRun(completeRunning.id, {
+          startedAt: completeRunning.startedAt,
+        });
+        await repos.strategyRun.commitRun({ run: complete, results: [], signals: [] });
+        expect(await repos.strategyRun.findRunById(complete.id)).toEqual(complete);
+
+        await repos.strategy.resume('strategy-1', T3);
+        const failedRunning = makeStrategyRun('run-paused-failed', {
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+          startedAt: T3,
+          dataAsOf: T3,
+        });
+        await repos.strategyRun.saveStartedRun(failedRunning);
+        await repos.strategy.pause('strategy-1', FAR_FUTURE);
+        const failed = makeStrategyRun(failedRunning.id, {
+          status: 'failed',
+          error: 'provider failed',
+          summary: undefined,
+          startedAt: failedRunning.startedAt,
+          dataAsOf: failedRunning.dataAsOf,
+          finishedAt: FAR_FUTURE,
+        });
+        await repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });
+        expect(await repos.strategyRun.findRunById(failed.id)).toEqual(failed);
+      });
+
       it('active Strategy 可运行显式 pinned 的历史 published valid version', async () => {
         const version2 = makeStrategyVersion('strategy-1', 2, {
           id: 'strategy-1-v2',

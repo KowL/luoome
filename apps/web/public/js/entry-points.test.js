@@ -47,6 +47,19 @@ describe('行情页入口', () => {
   });
 });
 
+describe('策略页布局', () => {
+  it('策略目录作为顶部横向切换条，工作台独占下方宽度', () => {
+    const strategySection = html.slice(
+      html.indexOf('id="route-strategies"'),
+      html.indexOf('id="route-watchlists"'),
+    );
+    expect(html).toContain('class="strategy-layout"');
+    expect(html).toContain('id="strategies-list" class="strategy-catalog-list"');
+    expect(html).toContain('class="card strategy-detail-pane"');
+    expect(strategySection).not.toContain('class="split-pane"');
+  });
+});
+
 describe('报告页入口', () => {
   it('侧栏、路由和历史/详情容器齐全', () => {
     expect(html).toContain('href="#reports" data-route="reports"');
@@ -66,6 +79,19 @@ describe('飞书通知设置入口', () => {
     expect(html).toContain('id="btn-feishu-test"');
     expect(appJs).toContain('initFeishuSettings');
     expect(read('./feishu-settings.js')).toContain('/api/settings/feishu/test');
+  });
+});
+
+describe('数据导出导入入口', () => {
+  it('设置页提供分类选择、导出和导入控件', () => {
+    const dataTransfer = read('./data-transfer.js');
+    expect(html).toContain('id="data-transfer-categories"');
+    expect(html).toContain('id="btn-data-export"');
+    expect(html).toContain('id="data-import-file"');
+    expect(html).toContain('id="btn-data-import"');
+    expect(appJs).toContain('initDataTransfer');
+    expect(dataTransfer).toContain('/api/data/export');
+    expect(dataTransfer).toContain('/api/data/import');
   });
 });
 

@@ -202,12 +202,13 @@
 - ✅ 测试 605 pass（vitest 478 + bun test db 127）；typecheck / lint 全绿
 
 
-## v0.8
-- 数据导出导入功能（可选择全部导出，部分导出）
-- 分组成员批量创建
-- AI对话操作数据库会提示 database lock
-- AI对话添加成员，添加多个成员弹出了多个确认执行窗口，需要优化确认一次即可，而且新增成员失败了
-- 策略运行中需要在执行记录显示一条状态=运行中的记录，运行完成后更新状态。
+## v0.8 ✅（已完成）
+
+- ✅ 设置页支持 JSON 数据包导出/导入；可全选或按账户持仓、策略、关注分组、建议报告、行情、研究、对话分类导出，导入按主键原子合并，不包含 API Key / Webhook。
+- ✅ 新增 `add_watchlist_members` write tool：最多 100 个成员整批校验、原子写入，并支持用规范 stockId 或唯一股票代码解析。
+- ✅ AI 对话添加一个或多个成员统一生成一张批量草案，只确认一次；失败会显示具体 tool 错误且不会部分写入。
+- ✅ SQLite 文件连接启用 WAL、`busy_timeout=5000` 与 `synchronous=NORMAL`，消除聊天、确认面板和调度器短事务并发时的即时 `database is locked`。
+- ✅ 正式 Strategy 运行先持久化 `status=running`，执行记录立即可见；完成或异常时原子更新为 `complete` / `failed` 并提交结果事实。
 
 
 

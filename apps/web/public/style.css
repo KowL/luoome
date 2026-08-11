@@ -4271,6 +4271,15 @@ textarea::placeholder {
   background: var(--accent-soft);
 }
 
+.autocomplete-item.is-active {
+  background: var(--accent-soft);
+}
+
+.autocomplete-item:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
 /* 富信息候选行（添加成员用）：单行 -> 两行结构。 */
 .autocomplete-rich {
   display: flex;
@@ -4307,6 +4316,86 @@ textarea::placeholder {
   gap: var(--space-3);
   align-items: baseline;
   flex: 0 0 auto;
+}
+
+.member-picker {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.member-picker .field {
+  margin: 0;
+}
+
+.member-picker-results {
+  max-height: 280px;
+}
+
+.member-picker-state {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+}
+
+.member-picker-selection-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: var(--space-2);
+}
+
+.member-picker-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.member-picker-selection {
+  display: grid;
+  gap: var(--space-2);
+  min-height: 2rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.member-picker-selected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+}
+
+.member-picker-selected > div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.member-picker-remove {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+.member-picker-remove:hover {
+  color: var(--danger);
+}
+
+.member-picker-empty {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 .quote-price {
   font-variant-numeric: tabular-nums;
@@ -5259,6 +5348,26 @@ body > .modal {
 }
 
 /* 设置页 workflow 运行记录容器 */
+.data-transfer-card {
+  margin-bottom: var(--space-4);
+}
+
+.data-transfer-categories,
+.data-transfer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.data-transfer-categories {
+  padding: var(--space-3) 0;
+}
+
+.data-transfer-actions {
+  align-items: center;
+  margin-top: var(--space-2);
+}
+
 .workflow-runs {
   font-size: var(--text-sm);
   color: var(--ink-soft);
@@ -5545,6 +5654,96 @@ body > .modal {
 /* ============================================================
  * Strategy Workspace · quant research console
  * ============================================================ */
+
+.strategy-layout {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.strategy-catalog-card {
+  margin-bottom: 0;
+  padding-bottom: var(--space-4);
+}
+
+.strategy-catalog-card .card-header {
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+}
+
+.strategy-catalog-list {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding: 2px 2px var(--space-2);
+  scrollbar-width: thin;
+}
+
+.strategy-catalog-list > .placeholder,
+.strategy-catalog-list > .strategy-empty-state {
+  width: 100%;
+}
+
+.strategy-catalog-item {
+  display: flex;
+  flex: 0 0 clamp(210px, 24vw, 290px);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(72, 86, 108, 0.035);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--duration) var(--ease),
+    border-color var(--duration) var(--ease),
+    transform var(--duration) var(--ease);
+}
+
+.strategy-catalog-item:hover {
+  border-color: var(--line-strong);
+  background: rgba(72, 86, 108, 0.07);
+  transform: translateY(-1px);
+}
+
+.strategy-catalog-item.selected {
+  border-color: rgba(13, 158, 136, 0.44);
+  background: linear-gradient(135deg, var(--accent-soft), rgba(13, 158, 136, 0.025));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.strategy-catalog-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.strategy-catalog-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.strategy-catalog-copy strong,
+.strategy-catalog-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-catalog-copy small {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.strategy-detail-pane {
+  min-width: 0;
+  min-height: 360px;
+}
 
 .strategy-workspace {
   display: grid;

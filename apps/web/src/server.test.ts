@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { NotificationManager } from '@luoome/adapters';
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type { AgentCallableTool, ToolContext } from '@luoome/core';
+import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import type { Hono } from 'hono';
@@ -236,6 +237,44 @@ describe('Web runtime bootstrap', () => {
       expect(await ctx.repos.strategy.list()).toEqual([]);
       expect(ctx.notification).toBeInstanceOf(NotificationManager);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('数据导出导入 API', () => {
+  it('支持部分导出并要求 write 后合并导入', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-data-api-'));
+    const dbPath = join(dir, 'luoome.db');
+    const handle = createDrizzleRepos(dbPath);
+    try {
+      await handle.repos.account.save(TEST_ACCOUNT);
+      const dataApp = createWebApp(await buildTestContext(), {
+        exposeWrite: true,
+        dataTransferDbPath: dbPath,
+      });
+      const exported = await dataApp.fetch(
+        new Request('http://test/api/data/export', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ categories: ['portfolio'] }),
+        }),
+      );
+      const archive = (await exported.json()) as { tables: Record<string, unknown[]> };
+      expect(exported.headers.get('content-disposition')).toContain('attachment');
+      expect(archive.tables.accounts).toHaveLength(1);
+      expect(archive.tables.chat_sessions).toBeUndefined();
+
+      const imported = await dataApp.fetch(
+        new Request('http://test/api/data/import', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://test' },
+          body: JSON.stringify({ archive }),
+        }),
+      );
+      expect((await json(imported)).ok).toBe(true);
+    } finally {
+      handle.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });

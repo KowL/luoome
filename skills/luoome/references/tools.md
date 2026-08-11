@@ -18,6 +18,7 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
 
 Prefer one filtered list or batch tool over repeated per-item calls. `batch_quote` is classified as external because it contacts a market source.
+Use `add_watchlist_members` for one or more manual Watchlist additions so the whole request is validated and confirmed once.
 
 ## Advice
 

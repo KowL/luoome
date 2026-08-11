@@ -2,6 +2,7 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import {
+  addWatchlistMembersTool,
   addWatchlistMemberTool,
   archiveWatchlistMemberTool,
   createWatchlistTool,
@@ -84,6 +85,48 @@ describe('Watchlist tools', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('invalid_input');
+  });
+
+  it('批量添加成员只写一次并支持纯代码解析', async () => {
+    const ctx = await buildTestContext({ clock: () => T0 });
+    await createWatchlistTool.execute(
+      { id: 'batch-watch', name: '批量', kind: 'personal', membershipPolicy: 'manual' },
+      ctx,
+    );
+    const result = await addWatchlistMembersTool.execute(
+      {
+        watchlistId: 'batch-watch',
+        members: [
+          { stockId: '600519', reason: '白酒' },
+          { stockId: '002594.SZ', reason: '新能源', priority: 'important' },
+        ],
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.created).toBe(2);
+    expect(result.data.members.map((row) => row.member.stockId)).toEqual([
+      '600519.SH',
+      '002594.SZ',
+    ]);
+  });
+
+  it('批量添加任一成员无效时整批不落库', async () => {
+    const ctx = await buildTestContext({ clock: () => T0 });
+    await createWatchlistTool.execute(
+      { id: 'atomic-watch', name: '原子', kind: 'personal', membershipPolicy: 'manual' },
+      ctx,
+    );
+    const result = await addWatchlistMembersTool.execute(
+      {
+        watchlistId: 'atomic-watch',
+        members: [{ stockId: '600519.SH' }, { stockId: 'NOT-FOUND' }],
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    expect(await ctx.repos.watchlistMember.listMembers('atomic-watch')).toEqual([]);
   });
 
   it('complete 会退出缺失成员；partial 只标 stale，changes 保留快照', async () => {

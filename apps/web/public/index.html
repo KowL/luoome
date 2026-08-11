@@ -283,12 +283,12 @@
           </div>
           <button id="btn-strategy-create" class="btn btn-primary" type="button">+ 新增策略</button>
         </div>
-        <div class="split-pane">
-          <div class="card entity-pane">
+        <div class="strategy-layout">
+          <div class="card strategy-catalog-card">
             <div class="card-header"><h2>策略目录</h2><div id="strategies-meta" class="card-meta">--</div></div>
-            <div id="strategies-list" class="entity-list"><p class="placeholder">加载中…</p></div>
+            <div id="strategies-list" class="strategy-catalog-list"><p class="placeholder">加载中…</p></div>
           </div>
-          <div class="card detail-pane">
+          <div class="card strategy-detail-pane">
             <div id="strategy-detail"><p class="placeholder">选择策略查看版本和运行操作。</p></div>
           </div>
         </div>
@@ -811,6 +811,21 @@
             </div>
           </section>
         </form>
+        <div class="card data-transfer-card">
+          <div class="card-header">
+            <div><span class="section-kicker">LOCAL DATA</span><h2>数据导出与导入</h2></div>
+            <div class="card-meta">JSON · 本地合并 · 不包含 API Key / Webhook</div>
+          </div>
+          <p class="muted mb-2">可全部选择，也可只迁移账户、策略、关注分组、研究或对话等部分数据。</p>
+          <div id="data-transfer-categories" class="data-transfer-categories">加载中…</div>
+          <div class="data-transfer-actions">
+            <button id="btn-data-export" class="btn btn-outline" type="button">导出所选数据</button>
+            <label class="btn btn-outline" for="data-import-file">选择导入文件</label>
+            <input id="data-import-file" type="file" accept="application/json,.json" hidden />
+            <button id="btn-data-import" class="btn btn-primary" type="button">导入并合并</button>
+          </div>
+          <p id="data-transfer-status" class="status" role="status" aria-live="polite" hidden></p>
+        </div>
         <div class="card">
           <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>

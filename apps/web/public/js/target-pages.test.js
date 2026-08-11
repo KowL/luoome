@@ -5,13 +5,33 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  appendMemberStock,
   buildAlertPlanMutationInput,
   deriveWatchlistViews,
+  parseMemberStockIds,
   sortStocksByQuote,
   stocksOfList,
   summarizeMemberSources,
   triggerMetaText,
 } from './target-pages.js';
+
+describe('批量成员输入', () => {
+  it('支持中英文分隔符、换行、去重和大写规范化', () => {
+    expect(parseMemberStockIds('600519.sh, 002594.SZ\n600519.SH；300750.sz')).toEqual([
+      '600519.SH',
+      '002594.SZ',
+      '300750.SZ',
+    ]);
+  });
+
+  it('搜索选择会去重，并跳过已在分组中的股票', () => {
+    const first = { id: '600519.SH', code: '600519', name: '贵州茅台' };
+    const second = { id: '002594.SZ', code: '002594', name: '比亚迪' };
+    expect(appendMemberStock([], first, ['600519.SH'])).toEqual([]);
+    expect(appendMemberStock([first], first)).toEqual([first]);
+    expect(appendMemberStock([first], second)).toEqual([first, second]);
+  });
+});
 
 describe('预警表单', () => {
   it('解析完整配置而不是生成固定价格阈值', () => {

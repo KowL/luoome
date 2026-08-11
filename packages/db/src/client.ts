@@ -1073,9 +1073,13 @@ export interface DrizzleReposHandle {
  */
 export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   const sqlite = new Database(dbPath);
+  // Web chat、策略调度器和确认面板会并发写同一文件。SQLite 默认遇到写锁立即失败；
+  // 给短事务留出等待窗口，WAL 下读请求仍可并发。
+  sqlite.exec('PRAGMA busy_timeout = 5000');
   // :memory: 不支持 WAL（pragma 会被静默忽略），文件库开 WAL 提升并发读体验。
   if (dbPath !== ':memory:') {
     sqlite.exec('PRAGMA journal_mode = WAL');
+    sqlite.exec('PRAGMA synchronous = NORMAL');
   }
   const db = drizzle(sqlite, { schema });
   try {

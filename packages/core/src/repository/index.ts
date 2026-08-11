@@ -362,7 +362,9 @@ export interface StrategyRunRepository {
   signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
   signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]>;
   signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
-  /** 终态 run 与其 facts 原子、只追加提交；runId 重复必须拒绝。 */
+  /** 写入可见的 running 记录；runId 重复必须拒绝。 */
+  saveStartedRun(run: StrategyRun): Promise<void>;
+  /** 终态 run 与其 facts 原子提交；只允许新增终态或更新同一条 running。 */
   commitRun(bundle: StrategyRunBundle): Promise<void>;
   /** 删除指定 Strategy 的运行、结果、信号与正式运行租约。 */
   removeByStrategyId(strategyId: string): Promise<void>;
@@ -415,6 +417,13 @@ export interface WatchlistMemberRepository {
   saveSource(source: WatchlistMemberSource): Promise<void>;
   listSources(memberId: string, includeEnded?: boolean): Promise<readonly WatchlistMemberSource[]>;
   currentSource(memberId: string, sourceKey: string): Promise<WatchlistMemberSource | null>;
+  /** 原子写入一批手工成员及其来源；任一项失败时整批不落库。 */
+  commitManualMembers(
+    rows: readonly {
+      readonly member: WatchlistMember;
+      readonly source: WatchlistMemberSource;
+    }[],
+  ): Promise<void>;
   saveSyncRun(run: WatchlistSyncRun): Promise<void>;
   saveSnapshots(rows: readonly MembershipSnapshot[]): Promise<void>;
   listSyncRuns(watchlistId: string, limit?: number): Promise<readonly WatchlistSyncRun[]>;

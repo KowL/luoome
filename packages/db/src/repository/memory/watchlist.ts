@@ -141,6 +141,48 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
     );
   }
 
+  async commitManualMembers(
+    rows: readonly {
+      readonly member: WatchlistMember;
+      readonly source: WatchlistMemberSource;
+    }[],
+  ): Promise<void> {
+    const nextMembers = new Map(this.members);
+    const nextSources = new Map(this.sources);
+    for (const { member, source } of rows) {
+      assertWatchlistMemberInvariants(member);
+      assertWatchlistMemberSourceInvariants(source);
+      if ((await this.watchlists.findById(member.watchlistId)) === null) {
+        throw new InvariantError(`Watchlist 不存在: ${member.watchlistId}`);
+      }
+      if (source.memberId !== member.id || source.kind !== 'manual') {
+        throw new InvariantError('手工成员来源必须引用同一 member 且 kind=manual');
+      }
+      const duplicate = [...nextMembers.values()].find(
+        (item) =>
+          item.watchlistId === member.watchlistId &&
+          item.stockId === member.stockId &&
+          item.id !== member.id,
+      );
+      if (duplicate !== undefined) throw new InvariantError('(watchlistId, stockId) 必须唯一');
+      const current = [...nextSources.values()].find(
+        (item) =>
+          item.memberId === source.memberId &&
+          item.sourceKey === source.sourceKey &&
+          item.status !== 'ended',
+      );
+      if (current !== undefined && current.id !== source.id) {
+        throw new InvariantError('(memberId, sourceKey) 只能有一个非 ended 来源');
+      }
+      nextMembers.set(member.id, member);
+      nextSources.set(source.id, source);
+    }
+    this.members.clear();
+    this.sources.clear();
+    for (const [id, member] of nextMembers) this.members.set(id, member);
+    for (const [id, source] of nextSources) this.sources.set(id, source);
+  }
+
   async saveSyncRun(run: WatchlistSyncRun): Promise<void> {
     assertWatchlistSyncRunInvariants(run);
     if ((await this.watchlists.findById(run.watchlistId)) === null) {

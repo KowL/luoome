@@ -22,6 +22,7 @@ const TOOL_LABELS = {
   update_watchlist: '更新 Watchlist',
   archive_watchlist: '归档 Watchlist',
   add_watchlist_member: '添加 Watchlist 成员',
+  add_watchlist_members: '批量添加 Watchlist 成员',
   update_watchlist_member: '更新 Watchlist 成员',
   archive_watchlist_member: '归档 Watchlist 成员',
   create_alert_plan: '创建 AlertPlan',

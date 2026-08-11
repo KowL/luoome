@@ -42,6 +42,7 @@ import { ZodError } from 'zod';
 
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
+import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
 import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
 import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
 import {
@@ -237,6 +238,8 @@ export interface CreateWebAppOptions {
   readonly feishuSettingsStore?: FeishuSettingsStore;
   /** 流式聊天 runtime；测试可注入，生产默认复用 AI SDK agent。 */
   readonly chatStreamRuntime?: ChatStreamRuntime;
+  /** 数据导出/导入所用 SQLite 文件；生产启动注入，未注入时端点返回 not_found。 */
+  readonly dataTransferDbPath?: string;
 }
 
 const asChatStreamRuntime = (value: unknown): ChatStreamRuntime | undefined => {
@@ -280,6 +283,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const marketSettingsStore = options.marketSettingsStore;
   const researchVaultSettingsStore = options.researchVaultSettingsStore;
   const feishuSettingsStore = options.feishuSettingsStore;
+  const dataTransferDbPath = options.dataTransferDbPath;
   const app = new Hono();
 
   const requireMutationCapabilities = (
@@ -454,6 +458,62 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   };
 
   // ===== AI 模型设置 =====
+
+  app.get('/api/data/categories', () =>
+    jsonResult({ ok: true, data: { categories: [...DATA_TRANSFER_CATEGORIES] } }),
+  );
+
+  app.post('/api/data/export', async (c) => {
+    if (dataTransferDbPath === undefined) {
+      return jsonResult(notFound('DataTransferDatabase', 'default'));
+    }
+    try {
+      const body = (await c.req.json()) as { categories?: unknown };
+      const categories = Array.isArray(body.categories) ? body.categories : [];
+      const archive = exportDataArchive(dataTransferDbPath, categories as string[]);
+      const date = archive.exportedAt.slice(0, 10);
+      return new Response(JSON.stringify(archive), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-disposition': `attachment; filename="luoome-${date}.json"`,
+        },
+      });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: error instanceof Error ? error.message : String(error),
+          issues: [],
+        },
+      });
+    }
+  });
+
+  app.post('/api/data/import', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
+    if (denied !== null) return jsonResult(denied);
+    if (dataTransferDbPath === undefined) {
+      return jsonResult(notFound('DataTransferDatabase', 'default'));
+    }
+    try {
+      const body = (await c.req.json()) as { archive?: unknown };
+      return jsonResult({
+        ok: true,
+        data: importDataArchive(dataTransferDbPath, body.archive),
+      });
+    } catch (error) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: error instanceof Error ? error.message : String(error),
+          issues: [],
+        },
+      });
+    }
+  });
+
   app.get('/api/settings/ai', () => {
     if (aiSettingsStore === undefined) return jsonResult(notFound('AISettingsStore', 'default'));
     try {
@@ -1389,6 +1449,11 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       watchlistId: c.req.param('id'),
     }),
   );
+  app.post('/api/watchlists/:id/members/batch', (c) =>
+    targetMutation(c.req.raw, 'write', 'add_watchlist_members', {
+      watchlistId: c.req.param('id'),
+    }),
+  );
   app.patch('/api/watchlists/:id/members/:stockId', (c) =>
     targetMutation(c.req.raw, 'write', 'update_watchlist_member', {
       watchlistId: c.req.param('id'),
@@ -2107,6 +2172,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     marketSettingsStore,
     researchVaultSettingsStore,
     feishuSettingsStore,
+    dataTransferDbPath: dbPath,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   const scheduler = startStrategyScheduler(ctx, {

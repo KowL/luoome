@@ -136,6 +136,7 @@ export const runStrategyTool = defineTool({
       });
       if (!acquired) return errInvalidInput('同一 StrategyVersion 已有正式运行执行中');
     }
+    let startedRun: z.infer<typeof StrategyRunSchema> | undefined;
     try {
       const definition = version.definition;
       const references = inspectStrategyDefinitionReferences(definition);
@@ -176,6 +177,41 @@ export const runStrategyTool = defineTool({
       const needsDailyBars = references.dataSources.includes('daily-bars');
       const needsDerivedMeta = references.paths.some((path) => path.startsWith('meta.'));
       const lookback = Math.max(1, references.requiredLookback);
+      startedRun = StrategyRunSchema.parse({
+        id: runId,
+        strategyId: input.strategyId,
+        strategyVersionId: version.id,
+        mode: input.mode,
+        coverage: 'CN_A_SHARES_SH_SZ',
+        dataAsOf,
+        startedAt,
+        status: 'running',
+        inputSnapshot: {
+          schemaVersion: 2,
+          strategyVersionId: version.id,
+          definitionHash: version.definitionHash,
+          evaluatorVersion: EVALUATOR_VERSION,
+          coverage: 'CN_A_SHARES_SH_SZ',
+          stockIds: candidateIds,
+          stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
+          requestedBy:
+            input.mode === 'replay'
+              ? 'replay'
+              : input.mode === 'scheduled'
+                ? 'scheduled'
+                : 'manual',
+          ...(successfulSync === null
+            ? {}
+            : {
+                universeCheckpoint: {
+                  provider: successfulSync.source,
+                  syncedAt: successfulSync.finishedAt ?? successfulSync.startedAt,
+                },
+              }),
+        },
+        providerStatuses: [],
+      });
+      if (input.persist) await ctx.repos.strategyRun.saveStartedRun(startedRun);
 
       const prepared = await mapWithConcurrency(
         candidateIds,
@@ -300,38 +336,9 @@ export const runStrategyTool = defineTool({
       const error =
         status === 'failed' ? `全部 ${failures.length} 个 candidate 数据准备失败` : undefined;
       const run = StrategyRunSchema.parse({
-        id: runId,
-        strategyId: input.strategyId,
-        strategyVersionId: version.id,
-        mode: input.mode,
-        coverage: 'CN_A_SHARES_SH_SZ',
-        dataAsOf,
-        startedAt,
+        ...startedRun,
         finishedAt,
         status,
-        inputSnapshot: {
-          schemaVersion: 2,
-          strategyVersionId: version.id,
-          definitionHash: version.definitionHash,
-          evaluatorVersion: EVALUATOR_VERSION,
-          coverage: 'CN_A_SHARES_SH_SZ',
-          stockIds: candidateIds,
-          stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
-          requestedBy:
-            input.mode === 'replay'
-              ? 'replay'
-              : input.mode === 'scheduled'
-                ? 'scheduled'
-                : 'manual',
-          ...(successfulSync === null
-            ? {}
-            : {
-                universeCheckpoint: {
-                  provider: successfulSync.source,
-                  syncedAt: successfulSync.finishedAt ?? successfulSync.startedAt,
-                },
-              }),
-        },
         providerStatuses:
           input.mode === 'replay'
             ? [
@@ -392,6 +399,21 @@ export const runStrategyTool = defineTool({
         }
       }
       return { run, results, signals, persisted: input.persist };
+    } catch (runError) {
+      if (input.persist && startedRun !== undefined) {
+        const stored = await ctx.repos.strategyRun.findRunById(startedRun.id);
+        if (stored?.status === 'running') {
+          const finishedAt = ctx.clock();
+          const failed = StrategyRunSchema.parse({
+            ...startedRun,
+            finishedAt: finishedAt < startedRun.startedAt ? startedRun.startedAt : finishedAt,
+            status: 'failed',
+            error: runError instanceof Error ? runError.message : String(runError),
+          });
+          await ctx.repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });
+        }
+      }
+      throw runError;
     } finally {
       if (input.persist) {
         await ctx.repos.strategyRun.releaseRunLease({
