@@ -26,6 +26,11 @@ StrategyRun 的 `status` 只表达执行生命周期：`running / complete / fai
 StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5/T+20
 观察）→ Advice（建议快照）。关注列表不承载这条生命周期状态。
 
+> 可靠性演进（尚未实现，2026-08-11 冻结目标）：`complete` 将继续只表达执行终态；新增
+> acceptance 与 `publication=published/withheld/non-publishing`。当前股票池只读取 published
+> operational run，replay/backtest/显式子集不发布。详细迁移见
+> [Strategy 日运行与历史评估可靠性详细设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
+
 ### StrategySchedule
 
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
@@ -34,6 +39,10 @@ definitionHash。`luoome start` / Web 长期运行进程每分钟自动唤醒到
 调度租约和正式运行租约防重。非交易日与暂停策略不运行。启用推荐政策后，完成运行会按最低评分、
 最高排名、每轮上限和冷却时间调用 AI 生成可追溯 Advice；配置的 T+n 观察完成时可再次生成阶段建议，
 并可选择日志或飞书通知。推荐失败不回滚已提交的 StrategyRun，任何建议与通知都不会自动交易。
+
+可靠性目标把调度、数据准备、正式运行、观察补全、洞察和可选推荐收进一个有 WorkflowRun 审计的
+daily cycle；租约使用 heartbeat + fencing token。该目标完成前，现有固定租约和外部观察 cron 仍是
+实现事实。
 
 ### StrategyInsight
 

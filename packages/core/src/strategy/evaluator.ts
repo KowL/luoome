@@ -10,7 +10,7 @@ import type {
   StrategyVersion,
 } from '../entity/strategy.js';
 import {
-  evaluateExpression,
+  compileStrategyExpression,
   extractExpressionPaths,
   extractTemplatePaths,
   interpolate,
@@ -46,13 +46,28 @@ const dslContext = (context: StrategyEvaluationContext): Readonly<Record<string,
   meta: context.meta ?? {},
 });
 
-const missingPaths = (
+const inputsFromReads = (
+  reads: readonly RuleEvaluationV2['inputs'][number][],
+): RuleEvaluationV2['inputs'] => {
+  const byPath = new Map<string, RuleEvaluationV2['inputs'][number]>();
+  for (const input of reads) {
+    const previous = byPath.get(input.path);
+    if (previous?.status === 'available') continue;
+    byPath.set(input.path, input);
+  }
+  return [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path));
+};
+
+const staticInputs = (
   expression: string,
   context: Readonly<Record<string, unknown>>,
-): readonly string[] =>
-  extractExpressionPaths(expression).filter(
-    (path) => resolveExpressionPath(path, context) === undefined,
-  );
+): RuleEvaluationV2['inputs'] =>
+  extractExpressionPaths(expression).map((path) => {
+    const value = resolveExpressionPath(path, context);
+    return value === undefined
+      ? { path, status: 'missing' as const }
+      : { path, status: 'available' as const, value };
+  });
 
 const evaluateRule = (
   rule: {
@@ -64,26 +79,31 @@ const evaluateRule = (
   scope: RuleEvaluationV2['scope'],
   context: Readonly<Record<string, unknown>>,
 ): RuleEvaluationV2 => {
-  const expressionPaths = [...new Set(extractExpressionPaths(rule.when))].sort();
-  const inputs = expressionPaths.map((path) => {
-    const value = resolveExpressionPath(path, context);
-    return value === undefined
-      ? { path, status: 'missing' as const }
-      : { path, status: 'available' as const, value };
-  });
-  const missingWhen = inputs
-    .filter((input) => input.status === 'missing')
-    .map((input) => input.path);
   try {
-    const value = evaluateExpression(interpolate(rule.when, context), context);
+    const evaluated = compileStrategyExpression(rule.when).evaluate(context);
+    const inputs = inputsFromReads(evaluated.reads);
+    if (evaluated.status === 'error') {
+      return {
+        schemaVersion: 2,
+        ruleId: rule.id,
+        scope,
+        expression: rule.when,
+        status: 'error',
+        inputs,
+        explanation: { code: 'evaluation-error', message: evaluated.error ?? '表达式求值失败' },
+        evidence: [],
+        error: evaluated.error ?? '表达式求值失败',
+      };
+    }
+    const value = evaluated.value;
     const matched = Boolean(value);
     const missingEvidence = matched
       ? rule.evidence
           .flatMap(extractTemplatePaths)
           .filter((path) => resolveExpressionPath(path, context) === undefined)
       : [];
-    const missing = [...new Set([...missingWhen, ...missingEvidence])].sort();
-    if (missing.length > 0 && (!matched || missingEvidence.length > 0)) {
+    const missing = [...new Set([...evaluated.missingPaths, ...missingEvidence])].sort();
+    if (evaluated.status === 'missing' || missingEvidence.length > 0) {
       return {
         schemaVersion: 2,
         ruleId: rule.id,
@@ -124,7 +144,7 @@ const evaluateRule = (
       scope,
       expression: rule.when,
       status: 'error',
-      inputs,
+      inputs: staticInputs(rule.when, context),
       explanation: { code: 'evaluation-error', message },
       evidence: [],
       error: message,
@@ -136,10 +156,13 @@ const evaluateScore = (
   expression: string,
   context: Readonly<Record<string, unknown>>,
 ): { readonly score?: number; readonly error?: string } => {
-  const missing = missingPaths(expression, context);
-  if (missing.length > 0) return { error: `缺少字段: ${missing.join(', ')}` };
   try {
-    const score = Number(evaluateExpression(interpolate(expression, context), context));
+    const evaluated = compileStrategyExpression(expression).evaluate(context);
+    if (evaluated.status === 'error') return { error: evaluated.error ?? 'score 求值失败' };
+    if (evaluated.status === 'missing') {
+      return { error: `缺少字段: ${evaluated.missingPaths.join(', ')}` };
+    }
+    const score = Number(evaluated.value);
     if (!Number.isFinite(score)) return { error: `score 不是有限数: ${String(score)}` };
     if (score < 0 || score > 100) return { error: `score 越界: ${score}` };
     return { score };
@@ -212,7 +235,19 @@ const evaluateSignal = (
       score: scored.score,
       direction: rule.direction,
       evidence: evaluation.evidence,
-      evaluationSnapshot: { expression: rule.when, result: evaluation.value },
+      evaluationSnapshot: {
+        expression: rule.when,
+        result: evaluation.value,
+        ...(input.context.quote === undefined
+          ? {}
+          : {
+              baseline: {
+                price: input.context.quote.close,
+                at: input.context.quote.ts,
+                provider: input.context.quote.source,
+              },
+            }),
+      },
     },
   };
 };

@@ -1,3 +1,4 @@
+import type { RuleInputFact } from '../entity/strategy.js';
 import { InvariantError } from '../error/index.js';
 
 /**
@@ -416,6 +417,322 @@ export const extractTemplatePaths = (template: string): readonly string[] => {
     for (const path of pathsFromTokens(tokenize(match[1] as string))) paths.add(path);
   }
   return [...paths].sort();
+};
+
+// ---------- compiled lazy expression ----------
+
+type CompiledNode =
+  | { readonly kind: 'literal'; readonly value: unknown }
+  | { readonly kind: 'path'; readonly path: string }
+  | { readonly kind: 'unary'; readonly op: '!' | '-'; readonly value: CompiledNode }
+  | {
+      readonly kind: 'binary';
+      readonly op: string;
+      readonly left: CompiledNode;
+      readonly right: CompiledNode;
+    }
+  | { readonly kind: 'call'; readonly name: string; readonly args: readonly CompiledNode[] };
+
+class AstParser {
+  private readonly cursor: Cursor;
+
+  constructor(private readonly expression: string) {
+    this.cursor = { tokens: tokenize(expression), pos: 0 };
+  }
+
+  parse(): CompiledNode {
+    const node = this.parseOr();
+    if (peek(this.cursor).kind !== 'eof') {
+      throw new DslEvalError(`表达式末尾有多余 token: ${peek(this.cursor).value}`, this.expression);
+    }
+    return node;
+  }
+
+  private parseOr(): CompiledNode {
+    let left = this.parseAnd();
+    while (peek(this.cursor).kind === 'op' && peek(this.cursor).value === '||') {
+      eat(this.cursor, 'op', '||');
+      left = { kind: 'binary', op: '||', left, right: this.parseAnd() };
+    }
+    return left;
+  }
+
+  private parseAnd(): CompiledNode {
+    let left = this.parseEquality();
+    while (peek(this.cursor).kind === 'op' && peek(this.cursor).value === '&&') {
+      eat(this.cursor, 'op', '&&');
+      left = { kind: 'binary', op: '&&', left, right: this.parseEquality() };
+    }
+    return left;
+  }
+
+  private parseEquality(): CompiledNode {
+    let left = this.parseRelational();
+    while (
+      peek(this.cursor).kind === 'op' &&
+      ['==', '!=', '===', '!=='].includes(peek(this.cursor).value)
+    ) {
+      const op = eat(this.cursor, 'op').value;
+      left = { kind: 'binary', op, left, right: this.parseRelational() };
+    }
+    return left;
+  }
+
+  private parseRelational(): CompiledNode {
+    let left = this.parseAdditive();
+    while (
+      peek(this.cursor).kind === 'op' &&
+      ['<', '<=', '>', '>='].includes(peek(this.cursor).value)
+    ) {
+      const op = eat(this.cursor, 'op').value;
+      left = { kind: 'binary', op, left, right: this.parseAdditive() };
+    }
+    return left;
+  }
+
+  private parseAdditive(): CompiledNode {
+    let left = this.parseMultiplicative();
+    while (
+      peek(this.cursor).kind === 'op' &&
+      (peek(this.cursor).value === '+' || peek(this.cursor).value === '-')
+    ) {
+      const op = eat(this.cursor, 'op').value;
+      left = { kind: 'binary', op, left, right: this.parseMultiplicative() };
+    }
+    return left;
+  }
+
+  private parseMultiplicative(): CompiledNode {
+    let left = this.parseUnaryAst();
+    while (peek(this.cursor).kind === 'op' && ['*', '/', '%'].includes(peek(this.cursor).value)) {
+      const op = eat(this.cursor, 'op').value;
+      left = { kind: 'binary', op, left, right: this.parseUnaryAst() };
+    }
+    return left;
+  }
+
+  private parseUnaryAst(): CompiledNode {
+    const token = peek(this.cursor);
+    if (token.kind === 'op' && (token.value === '!' || token.value === '-')) {
+      eat(this.cursor, 'op', token.value);
+      return { kind: 'unary', op: token.value, value: this.parseUnaryAst() };
+    }
+    return this.parsePrimaryAst();
+  }
+
+  private parsePrimaryAst(): CompiledNode {
+    const token = peek(this.cursor);
+    if (token.kind === 'lparen') {
+      eat(this.cursor, 'lparen');
+      const node = this.parseOr();
+      eat(this.cursor, 'rparen');
+      return node;
+    }
+    if (token.kind === 'num') {
+      eat(this.cursor, 'num');
+      return { kind: 'literal', value: Number(token.value) };
+    }
+    if (token.kind === 'bool') {
+      eat(this.cursor, 'bool');
+      return { kind: 'literal', value: token.value === 'true' };
+    }
+    if (token.kind === 'null') {
+      eat(this.cursor, 'null');
+      return { kind: 'literal', value: token.value === 'undefined' ? undefined : null };
+    }
+    if (token.kind !== 'ident') {
+      throw new DslEvalError(`无法解析的 token: ${token.kind}(${token.value})`, this.expression);
+    }
+    const segments: string[] = [eat(this.cursor, 'ident').value];
+    while (peek(this.cursor).kind === 'dot') {
+      eat(this.cursor, 'dot');
+      segments.push(eat(this.cursor, 'ident').value);
+    }
+    const path = segments.join('.');
+    if (peek(this.cursor).kind === 'lparen') {
+      if (segments.length !== 2 || segments[0] !== 'Math') {
+        throw new DslEvalError(`函数未在白名单: ${path}`, this.expression);
+      }
+      eat(this.cursor, 'lparen');
+      const args: CompiledNode[] = [];
+      if (peek(this.cursor).kind !== 'rparen') {
+        args.push(this.parseOr());
+        while (peek(this.cursor).kind === 'comma') {
+          eat(this.cursor, 'comma');
+          args.push(this.parseOr());
+        }
+      }
+      eat(this.cursor, 'rparen');
+      return { kind: 'call', name: path, args };
+    }
+    if (path === 'Math') throw new DslEvalError('Math 不能作为字段读取', this.expression);
+    return { kind: 'path', path };
+  }
+}
+
+const MISSING = Symbol('strategy-expression-missing');
+type EvaluatedValue = unknown | typeof MISSING;
+
+const asComparable = (value: EvaluatedValue): unknown => (value === MISSING ? undefined : value);
+
+const truthy = (value: EvaluatedValue): boolean => Boolean(asComparable(value));
+
+interface EvaluationState {
+  readonly context: Readonly<Record<string, unknown>>;
+  readonly reads: RuleInputFact[];
+  readonly missingPaths: Set<string>;
+}
+
+const readPath = (path: string, state: EvaluationState): EvaluatedValue => {
+  const value = resolveExpressionPath(path, state.context);
+  if (value === undefined) {
+    state.missingPaths.add(path);
+    state.reads.push({ path, status: 'missing' });
+    return MISSING;
+  }
+  state.reads.push({ path, status: 'available', value });
+  return value;
+};
+
+const evaluateCompiledNode = (node: CompiledNode, state: EvaluationState): EvaluatedValue => {
+  if (node.kind === 'literal') return node.value;
+  if (node.kind === 'path') return readPath(node.path, state);
+  if (node.kind === 'unary') {
+    const value = evaluateCompiledNode(node.value, state);
+    if (value === MISSING) return MISSING;
+    if (node.op === '!') return !value;
+    return -(value as number);
+  }
+  if (node.kind === 'call') {
+    const args = node.args.map((arg) => evaluateCompiledNode(arg, state));
+    if (args.some((arg) => arg === MISSING)) return MISSING;
+    const resolved = args.map(asComparable);
+    if (node.name === 'Math.min') return Math.min(...(resolved as number[]));
+    if (node.name === 'Math.max') return Math.max(...(resolved as number[]));
+    if (node.name === 'Math.abs') {
+      if (resolved.length !== 1) {
+        throw new DslEvalError(`Math.abs 需要 1 个参数，实际 ${resolved.length}`, node.name);
+      }
+      return Math.abs(resolved[0] as number);
+    }
+    throw new DslEvalError(`函数未在白名单: ${node.name}`, node.name);
+  }
+  if (node.op === '&&') {
+    const left = evaluateCompiledNode(node.left, state);
+    if (left !== MISSING && !truthy(left)) return false;
+    const right = evaluateCompiledNode(node.right, state);
+    if (left === MISSING) return right !== MISSING && !truthy(right) ? false : MISSING;
+    return right;
+  }
+  if (node.op === '||') {
+    const left = evaluateCompiledNode(node.left, state);
+    if (left !== MISSING && truthy(left)) return true;
+    const right = evaluateCompiledNode(node.right, state);
+    if (left === MISSING) return right !== MISSING && truthy(right) ? true : MISSING;
+    return right;
+  }
+  const left = evaluateCompiledNode(node.left, state);
+  const right = evaluateCompiledNode(node.right, state);
+  if (node.op === '===' || node.op === '!==') {
+    const equal = asComparable(left) === asComparable(right);
+    // Explicit comparisons with `undefined` are existence checks, not unknown
+    // arithmetic/comparison results. Preserve the legacy DSL contract for
+    // expressions such as `indicators.ma60 === undefined` while all other
+    // missing operands remain three-valued.
+    const explicitUndefinedComparison =
+      (left === MISSING && right === undefined) || (right === MISSING && left === undefined);
+    if ((left === MISSING || right === MISSING) && !explicitUndefinedComparison) {
+      return MISSING;
+    }
+    return node.op === '===' ? equal : !equal;
+  }
+  if (node.op === '==' || node.op === '!=') {
+    // biome-ignore lint/suspicious/noDoubleEquals: Strategy DSL explicitly supports loose equality.
+    const equal = asComparable(left) == asComparable(right);
+    const explicitUndefinedComparison =
+      (left === MISSING && right === undefined) || (right === MISSING && left === undefined);
+    if ((left === MISSING || right === MISSING) && !explicitUndefinedComparison) {
+      return MISSING;
+    }
+    return node.op === '==' ? equal : !equal;
+  }
+  if (left === MISSING || right === MISSING) return MISSING;
+  const a = left as number;
+  const b = right as number;
+  switch (node.op) {
+    case '<':
+      return a < b;
+    case '<=':
+      return a <= b;
+    case '>':
+      return a > b;
+    case '>=':
+      return a >= b;
+    case '+':
+      return a + b;
+    case '-':
+      return a - b;
+    case '*':
+      return a * b;
+    case '/':
+      return a / b;
+    case '%':
+      return a % b;
+    default:
+      throw new DslEvalError(`不支持的运算符: ${node.op}`, node.op);
+  }
+};
+
+export interface CompiledStrategyExpressionResult {
+  readonly status: 'value' | 'missing' | 'error';
+  readonly value?: unknown;
+  readonly reads: readonly RuleInputFact[];
+  readonly missingPaths: readonly string[];
+  readonly error?: string;
+}
+
+export interface CompiledStrategyExpression {
+  readonly referencedPaths: readonly string[];
+  evaluate(context: Readonly<Record<string, unknown>>): CompiledStrategyExpressionResult;
+}
+
+/** 编译一次并惰性求值；selection/scoring/signal/evidence 共用此安全 AST。 */
+export const compileStrategyExpression = (expression: string): CompiledStrategyExpression => {
+  const trimmed = expression.trim();
+  if (trimmed === '') throw new DslEvalError('表达式为空', expression);
+  assertExpressionSafety(trimmed);
+  const astExpression = trimmed.replace(TEMPLATE_RE, (_, inner: string) => `(${inner})`);
+  const ast = new AstParser(astExpression).parse();
+  const referencedPaths = extractExpressionPaths(trimmed);
+  return {
+    referencedPaths,
+    evaluate: (context) => {
+      const state: EvaluationState = { context, reads: [], missingPaths: new Set() };
+      try {
+        const value = evaluateCompiledNode(ast, state);
+        if (value === MISSING) {
+          return {
+            status: 'missing',
+            reads: state.reads,
+            missingPaths: [...state.missingPaths].sort(),
+          };
+        }
+        return {
+          status: 'value',
+          value,
+          reads: state.reads,
+          missingPaths: [...state.missingPaths].sort(),
+        };
+      } catch (error) {
+        return {
+          status: 'error',
+          reads: state.reads,
+          missingPaths: [...state.missingPaths].sort(),
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  };
 };
 
 /** 仅做语法检查；字段存在性由 field registry 另行校验。 */

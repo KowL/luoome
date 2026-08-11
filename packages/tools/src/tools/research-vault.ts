@@ -35,6 +35,10 @@ import {
   loadStockLimitUpFacts,
   StockLimitUpFactsSchema,
 } from '../internal/limit-up-facts.js';
+import {
+  readStrategySignalsByStock,
+  StrategySignalScopeSchema,
+} from '../internal/strategy-signal-scope.js';
 
 const availability = z.enum(['available', 'missing', 'invalid', 'conflict']);
 const indexStatusSchema = z.object({
@@ -583,6 +587,8 @@ export const BuildResearchBriefInput = z.object({
   topicId: z.string().min(1).optional(),
   subject: z.string().trim().min(1).optional(),
   limit: z.number().int().positive().max(20).default(10),
+  strategySignalScope: StrategySignalScopeSchema.default('operational'),
+  strategyEvaluationSessionId: z.string().min(1).optional(),
 });
 export const BuildResearchBriefOutput = ResearchBriefSchema;
 
@@ -649,7 +655,18 @@ export const buildResearchBriefTool = defineTool({
     if (stockId !== undefined) {
       const [events, signals, triggers, advices] = await Promise.all([
         safe('stock-events', () => ctx.repos.stockEvent.list({ stockId, limit: input.limit }), []),
-        safe('strategy-signals', () => ctx.repos.strategyRun.signalsByStock(stockId), []),
+        safe(
+          'strategy-signals',
+          () =>
+            readStrategySignalsByStock(ctx, {
+              stockId,
+              scope: input.strategySignalScope,
+              ...(input.strategyEvaluationSessionId === undefined
+                ? {}
+                : { evaluationSessionId: input.strategyEvaluationSessionId }),
+            }),
+          [],
+        ),
         safe(
           'watch-triggers',
           () =>
@@ -755,6 +772,8 @@ export const buildResearchBriefTool = defineTool({
 export const GetStockResearchViewInput = z.object({
   stockId: z.string().min(1),
   limit: z.number().int().positive().max(200).default(50),
+  strategySignalScope: StrategySignalScopeSchema.default('operational'),
+  strategyEvaluationSessionId: z.string().min(1).optional(),
 });
 export const GetStockResearchViewOutput = z.object({
   stockId: z.string(),
@@ -782,7 +801,13 @@ export const getStockResearchViewTool = defineTool({
         ctx.repos.researchIndex.listTopics({ subject, limit: input.limit }),
         ctx.repos.researchIndex.listDocuments({ subject, limit: input.limit }),
         ctx.repos.stockEvent.list({ stockId: input.stockId, limit: input.limit }),
-        ctx.repos.strategyRun.signalsByStock(input.stockId),
+        readStrategySignalsByStock(ctx, {
+          stockId: input.stockId,
+          scope: input.strategySignalScope,
+          ...(input.strategyEvaluationSessionId === undefined
+            ? {}
+            : { evaluationSessionId: input.strategyEvaluationSessionId }),
+        }),
         ctx.repos.watchTrigger
           .listRecent({ limit: 10_000 })
           .then((items) =>

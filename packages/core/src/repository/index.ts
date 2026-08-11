@@ -31,9 +31,18 @@ import type {
   StrategyResult,
   StrategyRun,
   StrategyRunBundle,
+  StrategyRunPublicationStatus,
+  StrategyRunScope,
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
+import type {
+  DailyBarRevision,
+  StrategyDataCheckpoint,
+  StrategyDataCheckpointMember,
+  StrategyEvaluationDay,
+  StrategyEvaluationSession,
+} from '../entity/strategy-checkpoint.js';
 import type { StrategySchedule } from '../entity/strategy-schedule.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
@@ -90,6 +99,12 @@ export interface StockUniverseRepository {
     readonly coverage: MarketCoverage;
     readonly status?: 'active' | 'missing' | 'all';
   }): Promise<readonly Stock[]>;
+  /** P2 PIT universe：只选择 observedAt 不晚于目标时点的成功快照。 */
+  latestSnapshotAtOrBefore(input: {
+    readonly coverage: MarketCoverage;
+    readonly asOf: Date;
+  }): Promise<StockUniverseSyncRun | null>;
+  listSnapshotMembers(syncId: string): Promise<readonly Stock[]>;
 }
 
 export interface HoldingRepository {
@@ -135,6 +150,13 @@ export interface DailyBarRepository {
   /** 取 ≤ to 的最近 N 根日线（按 date 降序取 N，再升序返回）。 */
   latestBefore(stockId: string, to: Date, count: number): Promise<DailyBar[]>;
   removeInRange(stockId: string, before: Date): Promise<number>;
+  saveRevisions(revisions: readonly DailyBarRevision[]): Promise<void>;
+  listRevisions(input: {
+    readonly stockId: string;
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly DailyBarRevision[]>;
 }
 
 export interface AdviceRepository {
@@ -186,6 +208,10 @@ export interface RepositoryRegistry {
   readonly strategySchedule: StrategyScheduleRepository;
   /** Strategy 运行、结果和信号。 */
   readonly strategyRun: StrategyRunRepository;
+  /** P1 盘后 Strategy 日线输入 checkpoint。 */
+  readonly strategyDataCheckpoint: StrategyDataCheckpointRepository;
+  /** P2 历史评估 session/day 进度。 */
+  readonly strategyEvaluation: StrategyEvaluationRepository;
   readonly watchlist: WatchlistRepository;
   readonly watchlistMember: WatchlistMemberRepository;
   readonly alertPlan: AlertPlanRepository;
@@ -287,6 +313,9 @@ export interface SignalObservationRepository {
     readonly horizons?: readonly SignalObservation['horizon'][];
     readonly from?: Date;
     readonly to?: Date;
+    readonly dueBefore?: Date;
+    readonly retryReadyAt?: Date;
+    readonly order?: 'due-first' | 'baseline-desc';
     readonly limit?: number;
   }): Promise<readonly SignalObservation[]>;
   removeBySources(
@@ -338,10 +367,26 @@ export interface StrategyRepository {
 }
 
 export interface StrategyRunRepository {
+  /** 新 fencing token；旧 acquireRunLease 保留 boolean 兼容，生产代码使用 token 变体。 */
+  acquireRunLeaseToken(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+    readonly runId?: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<StrategyLeaseToken | null>;
   acquireRunLease(input: {
     readonly strategyId: string;
     readonly strategyVersionId: string;
     readonly owner: string;
+    readonly runId?: string;
+    readonly returnToken?: boolean;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean | StrategyLeaseToken | null>;
+  renewRunLease(input: {
+    readonly token: StrategyLeaseToken;
     readonly now: Date;
     readonly leaseUntil: Date;
   }): Promise<boolean>;
@@ -349,11 +394,25 @@ export interface StrategyRunRepository {
     readonly strategyId: string;
     readonly strategyVersionId: string;
     readonly owner: string;
+    readonly fence?: number;
   }): Promise<void>;
+  commitRunWithFence(input: {
+    readonly token: StrategyLeaseToken;
+    readonly now: Date;
+    readonly bundle: StrategyRunBundle;
+  }): Promise<'committed' | 'lease-lost'>;
+  findLatestPublishedRun(strategyId: string): Promise<StrategyRun | null>;
+  findPreviousPublishedRun(input: {
+    readonly strategyId: string;
+    readonly beforeStartedAt: Date;
+    readonly beforeRunId: string;
+  }): Promise<StrategyRun | null>;
   findRunById(id: string): Promise<StrategyRun | null>;
   listRuns(filter?: {
     readonly strategyId?: string;
     readonly status?: StrategyRun['status'];
+    readonly scope?: StrategyRunScope;
+    readonly publication?: StrategyRunPublicationStatus;
     readonly since?: Date;
     /** 按 startedAt 倒序取前 N 条，避免全量拉取。 */
     readonly limit?: number;
@@ -383,14 +442,75 @@ export interface StrategyScheduleRepository {
     readonly leaseUntil: Date;
     readonly limit: number;
   }): Promise<readonly StrategySchedule[]>;
+  claimDueWithFence(input: {
+    readonly now: Date;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+    readonly limit: number;
+  }): Promise<readonly StrategyScheduleClaim[]>;
+  renewClaim(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly fence: number;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean>;
   /** 只有当前 lease owner 可完成抢占；每次 tick 最多补跑一次并把 nextRunAt 推进到未来。 */
   finishClaim(input: {
     readonly id: string;
     readonly owner: string;
+    readonly fence?: number;
     readonly nextRunAt: Date;
     readonly updatedAt: Date;
     readonly lastRunId?: string;
   }): Promise<void>;
+}
+
+export interface StrategyLeaseToken {
+  readonly strategyId: string;
+  readonly strategyVersionId: string;
+  readonly owner: string;
+  readonly fence: number;
+  readonly leaseUntil: Date;
+  readonly runId?: string;
+}
+
+export interface StrategyScheduleLeaseToken {
+  readonly scheduleId: string;
+  readonly owner: string;
+  readonly fence: number;
+  readonly leaseUntil: Date;
+}
+
+export interface StrategyScheduleClaim {
+  readonly schedule: StrategySchedule;
+  readonly token: StrategyScheduleLeaseToken;
+}
+
+export interface StrategyDataCheckpointRepository {
+  saveStarted(checkpoint: StrategyDataCheckpoint): Promise<void>;
+  commit(input: {
+    readonly checkpoint: StrategyDataCheckpoint;
+    readonly members: readonly StrategyDataCheckpointMember[];
+  }): Promise<void>;
+  findById(id: string): Promise<StrategyDataCheckpoint | null>;
+  listMembers(id: string): Promise<readonly StrategyDataCheckpointMember[]>;
+  latestUsableAtOrBefore(input: {
+    readonly coverage: MarketCoverage;
+    readonly asOf: Date;
+    readonly universeSyncId: string;
+  }): Promise<StrategyDataCheckpoint | null>;
+}
+
+export interface StrategyEvaluationRepository {
+  saveSession(session: StrategyEvaluationSession): Promise<void>;
+  findSessionById(id: string): Promise<StrategyEvaluationSession | null>;
+  saveDay(day: StrategyEvaluationDay): Promise<void>;
+  findDay(input: {
+    readonly sessionId: string;
+    readonly dataAsOf: Date;
+  }): Promise<StrategyEvaluationDay | null>;
+  listDays(sessionId: string): Promise<readonly StrategyEvaluationDay[]>;
 }
 
 export interface WatchlistRepository {

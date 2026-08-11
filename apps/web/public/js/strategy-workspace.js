@@ -10,9 +10,11 @@ export const parseStrategyHash = (hash) => {
   const queryIndex = raw.indexOf('?');
   const params = new URLSearchParams(queryIndex === -1 ? '' : raw.slice(queryIndex + 1));
   const tab = params.get('tab') ?? 'overview';
+  const scope = params.get('scope');
   return {
     strategyId: params.get('strategyId') ?? '',
     tab: STRATEGY_TABS.has(tab) ? tab : 'overview',
+    ...(scope === 'evaluation' ? { scope: 'evaluation' } : {}),
     ...(params.has('runId') ? { runId: params.get('runId') ?? '' } : {}),
     ...(params.has('compareRunId') ? { compareRunId: params.get('compareRunId') ?? '' } : {}),
   };
@@ -22,6 +24,7 @@ export const buildStrategyHash = (state) => {
   const params = new URLSearchParams();
   if (state.strategyId) params.set('strategyId', state.strategyId);
   params.set('tab', STRATEGY_TABS.has(state.tab) ? state.tab : 'overview');
+  if (state.scope === 'evaluation') params.set('scope', 'evaluation');
   if (state.runId) params.set('runId', state.runId);
   if (state.compareRunId) params.set('compareRunId', state.compareRunId);
   return `#strategies?${params.toString()}`;
@@ -45,6 +48,15 @@ const RUN_STATUS = {
   partial: ['已完成（历史）', 'badge-important'],
   failed: ['失败', 'badge-pos'],
   running: ['运行中', 'badge-neutral'],
+};
+const RUN_SCOPE = {
+  operational: ['生产', 'badge-active'],
+  evaluation: ['历史评估', 'badge-neutral'],
+};
+const PUBLICATION_STATUS = {
+  published: ['已发布', 'badge-active'],
+  withheld: ['暂不发布', 'badge-important'],
+  'non-publishing': ['不进入当前', 'badge-neutral'],
 };
 const DATA_HEALTH = {
   complete: '完整',
@@ -105,6 +117,12 @@ const metric = (label, value, note = '') =>
 
 const renderHealthBanner = (workspace) => {
   const warnings = [...(workspace.warnings ?? [])];
+  const latest = workspace.latestAttempt;
+  if (latest?.publication?.status && latest.publication.status !== 'published') {
+    warnings.unshift(
+      `最近尝试：${PUBLICATION_STATUS[latest.publication.status]?.[0] ?? latest.publication.status} · ${latest.publication.reasons?.join('、') || '无发布原因'}`,
+    );
+  }
   if (workspace.overview.health === 'partial') {
     warnings.unshift('本次运行已完成；部分标的数据不可用，股票池仅展示已明确命中的标的。');
   }
@@ -288,6 +306,11 @@ const renderOverview = (workspace, state) => {
         ? '--'
         : `${overview.enteredCount} / ${overview.exitedCount}`,
     ),
+    metric(
+      '当前发布',
+      PUBLICATION_STATUS[current.publication?.status]?.[0] ?? 'legacy/unknown',
+      current.scope === 'evaluation' ? '历史评估不会进入 operational current' : '',
+    ),
   ]);
   const providers = (current.providerStatuses ?? []).map((provider) =>
     el('span', `badge ${provider.ok ? 'badge-active' : 'badge-important'}`, provider.provider),
@@ -307,6 +330,16 @@ const renderOverview = (workspace, state) => {
       el('div', null, [
         el('span', 'strategy-metric-label', '数据来源'),
         el('div', 'flex gap-2', providers),
+      ]),
+      el('div', null, [
+        el('span', 'strategy-metric-label', '验收 / 覆盖'),
+        el(
+          'strong',
+          'mono',
+          current.summary?.schemaVersion === 4
+            ? `${Math.round(current.summary.acceptance.metrics.evaluatedRatio * 100)}% · 失败 ${Math.round(current.summary.acceptance.metrics.failedRatio * 100)}%`
+            : '历史运行未保存 V4 验收',
+        ),
       ]),
     ]),
   ]);
@@ -399,7 +432,7 @@ const renderPool = async (strategyId, setStatus) => {
 
 const runSummaryText = (run) => {
   const summary = run.summary ?? {};
-  if (summary.schemaVersion === 3) {
+  if (summary.schemaVersion === 4 || summary.schemaVersion === 3) {
     return `数据 ${DATA_HEALTH[summary.dataHealth] ?? summary.dataHealth} · 覆盖 ${summary.universeCount} · 求值 ${summary.evaluatedCount} · 入选 ${summary.selectedCount} · 信号 ${summary.signalCount} · 不完整 ${summary.incompleteCount} · 失败 ${summary.failedCount}`;
   }
   if (summary.schemaVersion === 2) {
@@ -491,8 +524,10 @@ const renderDiff = async (strategyId) => {
   ]);
 };
 
-export const renderRuns = async (strategyId) => {
-  const result = await cachedGet(`/api/strategies/${encodeURIComponent(strategyId)}/runs`);
+export const renderRuns = async (strategyId, scope = 'operational') => {
+  const result = await cachedGet(
+    `/api/strategies/${encodeURIComponent(strategyId)}/runs?scope=${encodeURIComponent(scope)}`,
+  );
   if (!result.ok) return el('p', 'status error', errorText(result));
   const runs = result.data.runs ?? [];
   const body = el('tbody');
@@ -504,6 +539,15 @@ export const renderRuns = async (strategyId) => {
       el('tr', null, [
         el('td', 'mono', fmtDateTime(run.startedAt)),
         el('td', null, run.mode),
+        el('td', null, badge(RUN_SCOPE[run.scope] ?? null, run.scope ?? 'legacy')),
+        el(
+          'td',
+          null,
+          badge(
+            PUBLICATION_STATUS[run.publication?.status] ?? null,
+            run.publication?.status ?? 'legacy/unknown',
+          ),
+        ),
         el('td', null, badge(RUN_STATUS[run.status], run.status)),
         el('td', 'muted', runSummaryText(run)),
         el('td', null, view),
@@ -519,6 +563,8 @@ export const renderRuns = async (strategyId) => {
           el('tr', null, [
             el('th', null, '时间'),
             el('th', null, '模式'),
+            el('th', null, '范围'),
+            el('th', null, '发布'),
             el('th', null, '状态'),
             el('th', null, '摘要'),
             el('th', null, '操作'),
@@ -527,7 +573,9 @@ export const renderRuns = async (strategyId) => {
         body,
       ]),
     ]),
-    await renderDiff(strategyId),
+    ...(scope === 'operational'
+      ? [await renderDiff(strategyId)]
+      : [el('p', 'muted', '历史评估结果与生产 current 隔离；请选择具体运行后再做显式对比。')]),
   ]);
 };
 
@@ -561,8 +609,13 @@ const renderInsightNarrative = (insight) =>
     el('p', 'muted', insight.disclaimer),
   ]);
 
-export const renderInsights = async (strategyId, setStatus = () => {}) => {
-  const path = `/api/strategies/${encodeURIComponent(strategyId)}/insights`;
+export const renderInsights = async (
+  strategyId,
+  setStatus = () => {},
+  scope = 'operational',
+  state = parseStrategyHash(typeof window === 'undefined' ? '' : window.location.hash),
+) => {
+  const path = `/api/strategies/${encodeURIComponent(strategyId)}/insights?scope=${encodeURIComponent(scope)}`;
   const result = await cachedGet(path);
   if (!result.ok) return el('p', 'status error', errorText(result));
   const facts = result.data;
@@ -574,7 +627,7 @@ export const renderInsights = async (strategyId, setStatus = () => {}) => {
     setStatus('正在基于已核验事实生成解读…');
     const generated = await post(
       `/api/strategies/${encodeURIComponent(strategyId)}/insights/generate`,
-      { windowDays: facts.window.days },
+      { windowDays: facts.window.days, scope },
     );
     generate.disabled = false;
     if (!generated.ok) {
@@ -588,7 +641,9 @@ export const renderInsights = async (strategyId, setStatus = () => {}) => {
     el('tr', null, [
       el('td', 'mono', item.horizon.toUpperCase()),
       el('td', null, `${item.complete}/${item.total}`),
+      el('td', null, item.uniqueStocks ?? '--'),
       el('td', null, pct(item.averageReturnPct)),
+      el('td', null, pct(item.medianReturnPct)),
       el('td', null, pct(item.averageMaxFavorableExcursionPct)),
       el('td', null, pct(item.averageMaxAdverseExcursionPct)),
       el('td', null, item.total === 0 ? '--' : pct(item.missingRate)),
@@ -596,6 +651,20 @@ export const renderInsights = async (strategyId, setStatus = () => {}) => {
       el('td', null, item.observedAsOf ? fmtDateTime(item.observedAsOf) : '--'),
     ]),
   );
+  const groupedRows = (facts.groupedObservations ?? [])
+    .slice(0, 36)
+    .map((item) =>
+      el('tr', null, [
+        el('td', null, item.dimension),
+        el('td', null, item.group),
+        el('td', 'mono', item.horizon.toUpperCase()),
+        el('td', null, `${item.complete}/${item.total}`),
+        el('td', null, item.uniqueStocks ?? '--'),
+        el('td', null, pct(item.averageReturnPct)),
+        el('td', null, pct(item.medianReturnPct)),
+        el('td', null, item.benchmarkStatus === 'complete' ? '可用' : '不可用'),
+      ]),
+    );
   return el('div', 'strategy-insight-grid', [
     el('div', 'strategy-tab-heading', [
       el('div', null, [
@@ -604,10 +673,24 @@ export const renderInsights = async (strategyId, setStatus = () => {}) => {
         el(
           'p',
           'muted',
-          `近 ${facts.window.days} 天 · 事实截止 ${fmtDateTime(facts.factsAsOf)} · 观察截止 ${facts.observationAsOf ? fmtDateTime(facts.observationAsOf) : '暂无'}`,
+          `范围：${facts.scope === 'evaluation' ? '历史评估' : '生产'} · 近 ${facts.window.days} 天 · 事实截止 ${fmtDateTime(facts.factsAsOf)} · 观察截止 ${facts.observationAsOf ? fmtDateTime(facts.observationAsOf) : '暂无'}`,
         ),
       ]),
-      generate,
+      el('div', 'row-actions', [
+        ...['operational', 'evaluation'].map((candidate) => {
+          const button = el(
+            'button',
+            `btn btn-outline btn-sm${candidate === scope ? ' active' : ''}`,
+            candidate === 'evaluation' ? '历史评估' : '生产事实',
+          );
+          button.type = 'button';
+          button.addEventListener('click', () => {
+            window.location.hash = buildStrategyHash({ ...state, scope: candidate });
+          });
+          return button;
+        }),
+        generate,
+      ]),
     ]),
     el('div', 'strategy-summary-grid', [
       metric('运行次数', facts.runs.total, `可用 ${facts.runs.usable} · 失败 ${facts.runs.failed}`),
@@ -633,7 +716,9 @@ export const renderInsights = async (strategyId, setStatus = () => {}) => {
               [
                 '周期',
                 '完整样本',
+                '唯一股票',
                 '平均收益',
+                '中位收益',
                 '平均最大有利',
                 '平均最大不利',
                 '缺失率',
@@ -647,6 +732,36 @@ export const renderInsights = async (strategyId, setStatus = () => {}) => {
       ]),
       el('p', 'muted', '事后事实观察不是回测；未包含成交、费用、滑点和可交易性假设。'),
     ]),
+    ...(groupedRows.length === 0
+      ? []
+      : [
+          el('section', 'strategy-insight-section', [
+            el('h4', null, '去相关分组统计'),
+            el('div', 'table-wrap', [
+              el('table', 'table', [
+                el(
+                  'thead',
+                  null,
+                  el(
+                    'tr',
+                    null,
+                    [
+                      '维度',
+                      '分组',
+                      '周期',
+                      '完整样本',
+                      '唯一股票',
+                      '平均收益',
+                      '中位收益',
+                      '基准',
+                    ].map((label) => el('th', null, label)),
+                  ),
+                ),
+                el('tbody', null, groupedRows),
+              ]),
+            ]),
+          ]),
+        ]),
     el('div', 'strategy-insight-columns', [
       el('section', 'strategy-insight-section', [
         el('h4', null, '高频规则阻断'),
@@ -968,8 +1083,9 @@ export const renderSettings = async (strategyId, setStatus, refresh) => {
 const renderTabContent = async (workspace, state, setStatus, refresh) => {
   if (state.tab === 'overview') return renderOverview(workspace, state);
   if (state.tab === 'pool') return renderPool(workspace.strategy.id, setStatus);
-  if (state.tab === 'runs') return renderRuns(workspace.strategy.id);
-  if (state.tab === 'insights') return renderInsights(workspace.strategy.id, setStatus);
+  if (state.tab === 'runs') return renderRuns(workspace.strategy.id, state.scope ?? 'operational');
+  if (state.tab === 'insights')
+    return renderInsights(workspace.strategy.id, setStatus, state.scope ?? 'operational', state);
   return renderSettings(workspace.strategy.id, setStatus, refresh);
 };
 
@@ -1084,6 +1200,14 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
             badge(STRATEGY_STATUS[workspace.strategy.status], workspace.strategy.status),
             ...(workspace.currentVersion
               ? [el('span', 'badge badge-neutral', `v${workspace.currentVersion.version}`)]
+              : []),
+            ...(workspace.currentRun
+              ? [
+                  badge(
+                    PUBLICATION_STATUS[workspace.currentRun.publication?.status] ?? null,
+                    workspace.currentRun.publication?.status ?? 'legacy/unknown',
+                  ),
+                ]
               : []),
           ]),
           el('p', 'muted', workspace.strategy.description),

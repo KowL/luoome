@@ -23,8 +23,13 @@ import type {
   StockCode,
   StockEvent,
   Strategy,
+  StrategyDataCheckpoint,
+  StrategyDataCheckpointMember,
+  StrategyEvaluationDay,
+  StrategyEvaluationSession,
   StrategyResult,
   StrategyRun,
+  StrategyRunPublication,
   StrategySchedule,
   StrategySignal,
   StrategyVersion,
@@ -157,6 +162,19 @@ export const stockUniverseSyncRuns = sqliteTable(
   }),
 );
 
+/** immutable PIT membership projection for each successful universe sync. */
+export const stockUniverseSnapshotMembers = sqliteTable(
+  'stock_universe_snapshot_members',
+  {
+    syncId: text('sync_id').notNull(),
+    stockId: text('stock_id').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.syncId, t.stockId], name: 'stock_universe_snapshot_members_pk' }),
+    stockIdx: index('stock_universe_snapshot_members_stock_idx').on(t.stockId),
+  }),
+);
+
 export const holdings = sqliteTable(
   'holdings',
   {
@@ -277,6 +295,29 @@ export const dailyBars = sqliteTable(
   }),
 );
 
+export const dailyBarRevisions = sqliteTable(
+  'daily_bar_revisions',
+  {
+    stockId: text('stock_id').notNull(),
+    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
+    contentHash: text('content_hash').notNull(),
+    open: real('open').notNull(),
+    high: real('high').notNull(),
+    low: real('low').notNull(),
+    close: real('close').notNull(),
+    volume: integer('volume').notNull(),
+    source: text('source').notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.stockId, t.date, t.recordedAt, t.contentHash],
+      name: 'daily_bar_revisions_pk',
+    }),
+    lookupIdx: index('daily_bar_revisions_lookup_idx').on(t.stockId, t.date, t.recordedAt),
+  }),
+);
+
 export const strategies = sqliteTable(
   'strategies',
   {
@@ -343,13 +384,22 @@ export const strategyRuns = sqliteTable(
     startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
     finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
     status: text('status').$type<StrategyRun['status']>().notNull(),
+    scope: text('scope')
+      .$type<NonNullable<StrategyRun['scope']>>()
+      .notNull()
+      .default('operational'),
     inputSnapshot: text('input_snapshot_json', { mode: 'json' })
       .$type<StrategyRun['inputSnapshot']>()
       .notNull(),
     providerStatuses: text('provider_statuses_json', { mode: 'json' })
       .$type<StrategyRun['providerStatuses']>()
       .notNull(),
+    providerCoverage: text('provider_coverage_json', { mode: 'json' }).$type<
+      NonNullable<StrategyRun['providerCoverage']>
+    >(),
     summary: text('summary_json', { mode: 'json' }).$type<StrategyRun['summary']>(),
+    publication: text('publication_json', { mode: 'json' }).$type<StrategyRunPublication>(),
+    publicationStatus: text('publication_status').$type<StrategyRunPublication['status']>(),
     error: text('error'),
   },
   (table) => ({
@@ -358,6 +408,13 @@ export const strategyRuns = sqliteTable(
       table.startedAt,
     ),
     statusStartedIdx: index('strategy_runs_status_started_idx').on(table.status, table.startedAt),
+    publishedCurrentIdx: index('strategy_runs_published_current_idx').on(
+      table.strategyId,
+      table.scope,
+      table.publicationStatus,
+      table.status,
+      table.startedAt,
+    ),
   }),
 );
 
@@ -369,6 +426,9 @@ export const strategySchedules = sqliteTable(
     cron: text('cron').notNull(),
     timezone: text('timezone').notNull(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    acceptancePolicy: text('acceptance_policy_json', { mode: 'json' }).$type<
+      StrategySchedule['acceptancePolicy']
+    >(),
     recommendationPolicy: text('recommendation_policy_json', { mode: 'json' }).$type<
       StrategySchedule['recommendationPolicy']
     >(),
@@ -376,6 +436,8 @@ export const strategySchedules = sqliteTable(
     lastRunId: text('last_run_id'),
     leaseOwner: text('lease_owner'),
     leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }),
+    leaseFence: integer('lease_fence').notNull().default(0),
+    leaseHeartbeatAt: integer('lease_heartbeat_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
@@ -393,6 +455,8 @@ export const strategyRunLeases = sqliteTable(
     strategyVersionId: text('strategy_version_id').notNull(),
     owner: text('owner').notNull(),
     leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }).notNull(),
+    fence: integer('fence').notNull().default(0),
+    heartbeatAt: integer('heartbeat_at', { mode: 'timestamp_ms' }).notNull().default(sql`0`),
   },
   (table) => ({
     pk: primaryKey({
@@ -453,6 +517,104 @@ export const strategySignals = sqliteTable(
   }),
 );
 
+export const strategyDataCheckpoints = sqliteTable(
+  'strategy_data_checkpoints',
+  {
+    id: text('id').primaryKey(),
+    coverage: text('coverage').notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    status: text('status').$type<StrategyDataCheckpoint['status']>().notNull(),
+    vintageStatus: text('vintage_status')
+      .$type<StrategyDataCheckpoint['vintageStatus']>()
+      .notNull()
+      .default('not-applicable'),
+    universeSyncId: text('universe_sync_id').notNull(),
+    requestedCount: integer('requested_count').notNull(),
+    availableCount: integer('available_count').notNull(),
+    failedCount: integer('failed_count').notNull(),
+    memberChecksum: text('member_checksum').notNull(),
+    dataChecksum: text('data_checksum').notNull(),
+    providerStatuses: text('provider_statuses_json', { mode: 'json' })
+      .$type<StrategyDataCheckpoint['providerStatuses']>()
+      .notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    lookupIdx: index('strategy_data_checkpoints_lookup_idx').on(
+      t.coverage,
+      t.universeSyncId,
+      t.dataAsOf,
+    ),
+  }),
+);
+
+export const strategyDataCheckpointMembers = sqliteTable(
+  'strategy_data_checkpoint_members',
+  {
+    checkpointId: text('checkpoint_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    status: text('status').$type<StrategyDataCheckpointMember['status']>().notNull(),
+    latestBarDate: integer('latest_bar_date', { mode: 'timestamp_ms' }),
+    barCount: integer('bar_count').notNull(),
+    provider: text('provider'),
+    errorKind: text('error_kind'),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.checkpointId, t.stockId],
+      name: 'strategy_data_checkpoint_members_pk',
+    }),
+    statusIdx: index('strategy_data_checkpoint_members_status_idx').on(t.checkpointId, t.status),
+  }),
+);
+
+export const strategyEvaluationSessions = sqliteTable(
+  'strategy_evaluation_sessions',
+  {
+    id: text('id').primaryKey(),
+    strategyId: text('strategy_id').notNull(),
+    strategyVersionId: text('strategy_version_id').notNull(),
+    from: integer('from_at', { mode: 'timestamp_ms' }).notNull(),
+    to: integer('to_at', { mode: 'timestamp_ms' }).notNull(),
+    status: text('status').$type<StrategyEvaluationSession['status']>().notNull(),
+    definitionHash: text('definition_hash').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    stockIds: text('stock_ids_json', { mode: 'json' }).$type<
+      StrategyEvaluationSession['stockIds']
+    >(),
+    stockIdChecksum: text('stock_id_checksum'),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+    error: text('error'),
+  },
+  (t) => ({
+    strategyCreatedIdx: index('strategy_evaluation_sessions_strategy_created_idx').on(
+      t.strategyId,
+      t.createdAt,
+    ),
+  }),
+);
+
+export const strategyEvaluationDays = sqliteTable(
+  'strategy_evaluation_days',
+  {
+    sessionId: text('session_id').notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    runId: text('run_id'),
+    universeSyncId: text('universe_sync_id'),
+    dataCheckpointId: text('data_checkpoint_id'),
+    revisionCutoff: integer('revision_cutoff', { mode: 'timestamp_ms' }),
+    vintageStatus:
+      text('vintage_status').$type<NonNullable<StrategyEvaluationDay['vintageStatus']>>(),
+    status: text('status').$type<StrategyEvaluationDay['status']>().notNull(),
+    error: text('error'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sessionId, t.dataAsOf], name: 'strategy_evaluation_days_pk' }),
+    statusIdx: index('strategy_evaluation_days_status_idx').on(t.sessionId, t.status),
+  }),
+);
+
 export const signalObservations = sqliteTable(
   'signal_observations',
   {
@@ -477,10 +639,16 @@ export const signalObservations = sqliteTable(
       .notNull(),
     unavailableReason: text('unavailable_reason'),
     observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
+    dueAt: integer('due_at', { mode: 'timestamp_ms' }),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastAttemptAt: integer('last_attempt_at', { mode: 'timestamp_ms' }),
+    nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' }),
+    lastErrorKind: text('last_error_kind'),
   },
   (t) => ({
     statusBaselineIdx: index('signal_observations_status_baseline_idx').on(t.status, t.baselineAt),
     sourceIdx: index('signal_observations_source_idx').on(t.sourceKind, t.sourceId),
+    dueIdx: index('signal_observations_due_idx').on(t.status, t.dueAt, t.nextAttemptAt),
   }),
 );
 
@@ -1046,12 +1214,14 @@ export const schema = {
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,
+  stockUniverseSnapshotMembers,
   holdings,
   trades,
   advices,
   adviceOutcomes,
   priceSnapshots,
   dailyBars,
+  dailyBarRevisions,
   strategies,
   strategyVersions,
   strategyRuns,
@@ -1059,6 +1229,10 @@ export const schema = {
   strategyRunLeases,
   strategyResults,
   strategySignals,
+  strategyDataCheckpoints,
+  strategyDataCheckpointMembers,
+  strategyEvaluationSessions,
+  strategyEvaluationDays,
   signalObservations,
   notifications,
   // v0.6 起

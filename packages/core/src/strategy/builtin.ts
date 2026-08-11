@@ -236,5 +236,145 @@ const buildBuiltinTemplate = (seed: BuiltinStrategySeed): BuiltinStrategyTemplat
   };
 };
 
-export const BUILTIN_STRATEGY_TEMPLATES: readonly BuiltinStrategyTemplate[] =
+const BUILTIN_BASE_TEMPLATES: readonly BuiltinStrategyTemplate[] =
   BUILTIN_STRATEGY_SEEDS.map(buildBuiltinTemplate);
+
+const buildEarlyBreakoutV2 = (): BuiltinStrategyTemplate => {
+  const base = BUILTIN_BASE_TEMPLATES.find((template) => template.id === 'early-breakout');
+  if (base === undefined) throw new InvariantError('early-breakout builtin template missing');
+  const entry = base.definition.signals.entry[0];
+  if (entry === undefined) throw new InvariantError('early-breakout entry signal missing');
+  const selectionRules: StrategyRule[] = [
+    {
+      id: 'trend-above-ma20',
+      name: '趋势站上 MA20',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      when: '${indicators.close} > ${indicators.ma20} && ${indicators.ma5} > ${indicators.ma20}',
+      evidence: [
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+        '收盘 ${indicators.close} > MA20 ${indicators.ma20}，MA5 位于 MA20 上方',
+      ],
+    },
+    {
+      id: 'momentum-window',
+      name: '动量窗口',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      when: '${indicators.momentum20Pct} >= 2 && ${indicators.momentum20Pct} <= 15',
+      evidence: [
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+        '20 日动量=${indicators.momentum20Pct}%（目标 2%～15%）',
+      ],
+    },
+    {
+      id: 'volume-confirmation',
+      name: '量能确认',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      when: '${indicators.volRatio5_20} >= 1.2',
+      evidence: [
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+        '量比=${indicators.volRatio5_20}（目标至少 1.2）',
+      ],
+    },
+    {
+      id: 'rsi-window',
+      name: 'RSI 窗口',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      when: '${indicators.rsi14} >= 45 && ${indicators.rsi14} <= 70',
+      evidence: [
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+        'RSI14=${indicators.rsi14}（目标 45～70）',
+      ],
+    },
+    {
+      id: 'distance-control',
+      name: '乖离控制',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      when: '${indicators.maDistance20Pct} <= 12',
+      evidence: [
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+        'MA20 乖离=${indicators.maDistance20Pct}%（不超过 12%）',
+      ],
+    },
+    {
+      id: 'breakout-freshness',
+      name: '突破新鲜度',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      when: '(${indicators.daysSinceMa20CrossUp} <= 2 || ${indicators.daysSinceMa60CrossUp} <= 2 || ${indicators.daysAboveMa20} <= 3)',
+      evidence: [
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+        'MA20 上穿距今=${indicators.daysSinceMa20CrossUp} 日，MA60 上穿距今=${indicators.daysSinceMa60CrossUp} 日，连续站上 MA20=${indicators.daysAboveMa20} 日',
+      ],
+    },
+  ];
+  const score = base.definition.scoring?.components[0]?.score ?? entry.score;
+  const definition = StrategyDslV1Schema.parse({
+    ...base.definition,
+    selection: { logic: 'all', rules: selectionRules },
+    scoring: {
+      method: 'weighted-sum',
+      components: [{ ruleId: 'momentum-window', score, weight: 1 }],
+    },
+    signals: {
+      entry: [
+        {
+          ...entry,
+          id: 'early-breakout-entry-v2',
+          emission: { mode: 'edge', cooldownTradingDays: 3 },
+        },
+      ],
+      exit: [
+        {
+          id: 'early-breakout-exit-v2',
+          name: '早期突破失效退出',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+          when: '${indicators.close} < ${indicators.ma20} || ${indicators.daysSinceMa20CrossUp} > 5',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+          score: 'Math.min(100, 60 + Math.abs(${indicators.maDistance20Pct}))',
+          direction: 'bearish',
+          evidence: [
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+            '退出条件：收盘=${indicators.close}，MA20=${indicators.ma20}，距上穿=${indicators.daysSinceMa20CrossUp}日',
+          ],
+          emission: { mode: 'edge', cooldownTradingDays: 1 },
+        },
+      ],
+      risk: [
+        {
+          id: 'early-breakout-risk-v2',
+          name: '早期突破风险线',
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+          when: '${indicators.close} < ${indicators.ma60}',
+          score: '100',
+          direction: 'bearish',
+          evidence: [
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+            '风险：收盘=${indicators.close} 跌破 MA60=${indicators.ma60}',
+          ],
+          emission: { mode: 'edge', cooldownTradingDays: 3 },
+        },
+      ],
+    },
+  });
+  const validationErrors = [...inspectStrategyDefinitionReferences(definition).validationErrors];
+  if (validationErrors.length > 0) {
+    throw new InvariantError(`内置策略模板无效: early-breakout-v2: ${validationErrors.join('; ')}`);
+  }
+  return {
+    id: 'early-breakout-v2',
+    name: '早期突破 V2',
+    description: '带 rising-edge 发射、失效退出和 MA60 风险线的早期突破研究模板',
+    revision: STRATEGY_TEMPLATE_REVISION,
+    definition,
+    definitionHash: strategyDefinitionHash(definition),
+  };
+};
+
+/**
+ * R5 试验草案不进入默认模板目录，避免在未完成人工评审前改变存量模板/播种身份。
+ * 需要试算或创建 draft version 的调用方可显式使用该定义；它不会修改已发布的
+ * `early-breakout` version。
+ */
+export const EARLY_BREAKOUT_V2_DRAFT = buildEarlyBreakoutV2();
+
+export const BUILTIN_STRATEGY_TEMPLATES: readonly BuiltinStrategyTemplate[] =
+  BUILTIN_BASE_TEMPLATES;

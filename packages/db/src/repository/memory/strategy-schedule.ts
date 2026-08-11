@@ -2,17 +2,21 @@ import {
   assertStrategyScheduleInvariants,
   InvariantError,
   type StrategySchedule,
+  type StrategyScheduleClaim,
   type StrategyScheduleRepository,
 } from '@luoome/core';
 
 interface Lease {
   readonly owner: string;
   readonly until: Date;
+  readonly fence: number;
+  readonly heartbeatAt: Date;
 }
 
 export class InMemoryStrategyScheduleRepository implements StrategyScheduleRepository {
   private readonly items = new Map<string, StrategySchedule>();
   private readonly leases = new Map<string, Lease>();
+  private readonly nextFences = new Map<string, number>();
 
   put(schedule: StrategySchedule): void {
     assertStrategyScheduleInvariants(schedule);
@@ -33,6 +37,7 @@ export class InMemoryStrategyScheduleRepository implements StrategyScheduleRepos
       if (schedule.strategyId !== strategyId) continue;
       this.items.delete(id);
       this.leases.delete(id);
+      this.nextFences.delete(id);
     }
   }
 
@@ -73,14 +78,66 @@ export class InMemoryStrategyScheduleRepository implements StrategyScheduleRepos
       )
       .slice(0, input.limit);
     for (const schedule of due) {
-      this.leases.set(schedule.id, { owner: input.owner, until: input.leaseUntil });
+      const fence = (this.nextFences.get(schedule.id) ?? 0) + 1;
+      this.nextFences.set(schedule.id, fence);
+      this.leases.set(schedule.id, {
+        owner: input.owner,
+        until: input.leaseUntil,
+        fence,
+        heartbeatAt: input.now,
+      });
     }
     return due;
+  }
+
+  async claimDueWithFence(input: {
+    readonly now: Date;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+    readonly limit: number;
+  }): Promise<readonly StrategyScheduleClaim[]> {
+    const schedules = await this.claimDue(input);
+    return schedules.flatMap((schedule) => {
+      const lease = this.leases.get(schedule.id);
+      if (lease === undefined) return [];
+      return [
+        {
+          schedule,
+          token: {
+            scheduleId: schedule.id,
+            owner: lease.owner,
+            fence: lease.fence,
+            leaseUntil: lease.until,
+          },
+        },
+      ];
+    });
+  }
+
+  async renewClaim(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly fence: number;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean> {
+    const lease = this.leases.get(input.id);
+    if (
+      lease === undefined ||
+      lease.owner !== input.owner ||
+      lease.fence !== input.fence ||
+      lease.until.getTime() <= input.now.getTime()
+    ) {
+      return false;
+    }
+    this.leases.set(input.id, { ...lease, until: input.leaseUntil, heartbeatAt: input.now });
+    return true;
   }
 
   async finishClaim(input: {
     readonly id: string;
     readonly owner: string;
+    readonly fence?: number;
     readonly nextRunAt: Date;
     readonly updatedAt: Date;
     readonly lastRunId?: string;
@@ -88,7 +145,11 @@ export class InMemoryStrategyScheduleRepository implements StrategyScheduleRepos
     const schedule = this.items.get(input.id);
     if (schedule === undefined) throw new InvariantError(`StrategySchedule 不存在: ${input.id}`);
     const lease = this.leases.get(input.id);
-    if (lease?.owner !== input.owner)
+    if (
+      lease?.owner !== input.owner ||
+      (input.fence !== undefined && lease.fence !== input.fence) ||
+      lease.until.getTime() <= input.updatedAt.getTime()
+    )
       throw new InvariantError('StrategySchedule lease owner 不匹配');
     const next: StrategySchedule = {
       ...schedule,

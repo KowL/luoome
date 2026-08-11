@@ -31,9 +31,25 @@ export class InMemorySignalObservationRepository implements SignalObservationRep
           (input.sourceIds === undefined || input.sourceIds.includes(item.sourceId)) &&
           (input.horizons === undefined || input.horizons.includes(item.horizon)) &&
           (item.baselineAt?.getTime() ?? 0) >= from &&
-          (item.baselineAt?.getTime() ?? 0) <= to,
+          (item.baselineAt?.getTime() ?? 0) <= to &&
+          (input.dueBefore === undefined ||
+            (item.dueAt?.getTime() ?? item.baselineAt?.getTime() ?? 0) <=
+              input.dueBefore.getTime()) &&
+          (input.retryReadyAt === undefined ||
+            item.nextAttemptAt === undefined ||
+            item.nextAttemptAt.getTime() <= input.retryReadyAt.getTime()),
       )
-      .sort((a, b) => (b.baselineAt?.getTime() ?? 0) - (a.baselineAt?.getTime() ?? 0))
+      .sort((a, b) => {
+        if (input.order === 'due-first') {
+          return (
+            (a.dueAt?.getTime() ?? a.baselineAt?.getTime() ?? 0) -
+              (b.dueAt?.getTime() ?? b.baselineAt?.getTime() ?? 0) ||
+            (a.baselineAt?.getTime() ?? 0) - (b.baselineAt?.getTime() ?? 0) ||
+            a.id.localeCompare(b.id)
+          );
+        }
+        return (b.baselineAt?.getTime() ?? 0) - (a.baselineAt?.getTime() ?? 0);
+      })
       .slice(0, input.limit ?? Number.POSITIVE_INFINITY);
   }
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-
+import { isHoliday, isWeekend } from '../trading-calendar.js';
 import { DataProvenanceSchema } from './provenance.js';
 import type { DailyBar } from './quote.js';
 
@@ -37,6 +37,12 @@ export const SignalObservationSchema = z.object({
   provenance: DataProvenanceSchema,
   unavailableReason: z.string().min(1).max(300).optional(),
   observedAt: z.coerce.date().optional(),
+  /** 交易 session 解析后的最早可完成时点；旧记录可缺省。 */
+  dueAt: z.coerce.date().optional(),
+  attemptCount: z.number().int().nonnegative().optional(),
+  lastAttemptAt: z.coerce.date().optional(),
+  nextAttemptAt: z.coerce.date().optional(),
+  lastErrorKind: z.string().min(1).optional(),
 });
 
 export type SignalObservation = z.infer<typeof SignalObservationSchema>;
@@ -48,11 +54,28 @@ export const SIGNAL_OBSERVATION_HORIZON_DAYS: Record<SignalObservationHorizon, n
   t20: 20,
 };
 
+/** R7 默认基准；同步任务可把它作为 explicit stockId 纳入同一份日线数据源。 */
+export const STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID = '000300.SH';
+
 export const signalObservationId = (
   sourceKind: SignalObservationSourceKind,
   sourceId: string,
   horizon: SignalObservationHorizon,
 ): string => `signal-observation:${sourceKind}:${sourceId}:${horizon}`;
+
+/** 按可用交易日 session 估计 due；holiday calendar 之外的交易所临时安排仍由补偿任务兜底。 */
+export const signalObservationDueAt = (
+  baselineAt: Date,
+  horizon: SignalObservationHorizon,
+): Date => {
+  const target = new Date(baselineAt);
+  let sessions = 0;
+  while (sessions < SIGNAL_OBSERVATION_HORIZON_DAYS[horizon]) {
+    target.setUTCDate(target.getUTCDate() + 1);
+    if (!isWeekend(target) && !isHoliday(target)) sessions += 1;
+  }
+  return target;
+};
 
 export const assertSignalObservationInvariants = (observation: SignalObservation): void => {
   if (observation.status === 'unavailable') {
@@ -63,6 +86,12 @@ export const assertSignalObservationInvariants = (observation: SignalObservation
   }
   if (observation.baselinePrice === undefined || observation.baselineAt === undefined) {
     throw new Error('pending/complete SignalObservation 必须有基准价格与时间');
+  }
+  if (
+    observation.attemptCount !== undefined &&
+    (!Number.isInteger(observation.attemptCount) || observation.attemptCount < 0)
+  ) {
+    throw new Error('SignalObservation.attemptCount 必须是非负整数');
   }
   if (observation.status === 'complete') {
     if (
@@ -82,6 +111,9 @@ export const completeSignalObservationFromDailyBars = (
   observation: SignalObservation,
   bars: readonly DailyBar[],
   fetchedAt: Date,
+  options: {
+    readonly benchmarkBars?: readonly DailyBar[];
+  } = {},
 ): SignalObservation => {
   if (
     observation.status !== 'pending' ||
@@ -90,6 +122,7 @@ export const completeSignalObservationFromDailyBars = (
   ) {
     return observation;
   }
+  if (observation.dueAt !== undefined && fetchedAt < observation.dueAt) return observation;
   const baselineAt = observation.baselineAt;
   const required = SIGNAL_OBSERVATION_HORIZON_DAYS[observation.horizon];
   const window = bars
@@ -101,13 +134,28 @@ export const completeSignalObservationFromDailyBars = (
   if (target === undefined) return observation;
   const baseline = observation.baselinePrice;
   const providers = [...new Set(window.map((bar) => bar.source))];
+  const benchmarkBars = (options.benchmarkBars ?? [])
+    .filter((bar) => bar.stockId === STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID)
+    .sort((left, right) => left.date.getTime() - right.date.getTime());
+  const benchmarkBaseline = benchmarkBars.filter((bar) => bar.date <= baselineAt).at(-1);
+  const benchmarkWindow = benchmarkBars.filter((bar) => bar.date > baselineAt).slice(0, required);
+  const benchmarkTarget = benchmarkWindow.at(-1);
+  const benchmarkReturnPct =
+    benchmarkBaseline !== undefined &&
+    benchmarkTarget !== undefined &&
+    benchmarkWindow.length >= required &&
+    benchmarkBaseline.close > 0
+      ? (benchmarkTarget.close - benchmarkBaseline.close) / benchmarkBaseline.close
+      : undefined;
   const completed: SignalObservation = {
     ...observation,
     closePrice: target.close,
     returnPct: (target.close - baseline) / baseline,
     maxFavorableExcursionPct: (Math.max(...window.map((bar) => bar.high)) - baseline) / baseline,
     maxAdverseExcursionPct: (Math.min(...window.map((bar) => bar.low)) - baseline) / baseline,
-    benchmarkStatus: 'unavailable',
+    ...(benchmarkReturnPct === undefined
+      ? { benchmarkStatus: 'unavailable' as const }
+      : { benchmarkReturnPct, benchmarkStatus: 'complete' as const }),
     status: 'complete',
     provenance: {
       provider:
@@ -117,6 +165,7 @@ export const completeSignalObservationFromDailyBars = (
       freshness: 'unknown',
     },
     observedAt: target.date,
+    ...(observation.attemptCount === undefined ? {} : { attemptCount: observation.attemptCount }),
   };
   assertSignalObservationInvariants(completed);
   return completed;

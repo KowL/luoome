@@ -27,6 +27,13 @@ export const errAdapterError = (
   error: { kind: 'adapter_error', adapter, cause, recoverable },
 });
 
+export const errLeaseLostBeforeCommit = (
+  message = 'lease_lost_before_commit',
+): ToolResult<never> => ({
+  ok: false,
+  error: { kind: 'lease_lost_before_commit', message },
+});
+
 /** defineTool 的输入定义（ARCHITECTURE §4.4：一次定义，多处生效）。 */
 export interface ToolDefinition<I, O> {
   readonly name: string;

@@ -1,5 +1,9 @@
 # 策略工作台（Strategy Workspace）PRD
 
+> 2026-08-11 可靠性修订：运行终态、数据质量与发布决定分离；目标契约见
+> [Strategy 日运行与历史评估可靠性详细设计](../ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
+> 当前代码仍按本文件旧版 `complete/partial` 可用规则运行，修订项按独立开发计划分阶段实施。
+
 > 状态：草案 v0.2
 > 日期：2026-08-01
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
@@ -105,16 +109,21 @@ V2 的交付顺序：
 
 ### 4.2 当前有效运行
 
-股票池、候选池和概览使用该 Strategy 最近一次结果可用且已持久化的完成运行。
+目标状态下，股票池、候选池和概览使用该 Strategy 最近一次 `publication=published` 且已持久化
+的 operational 完成运行。
 
 - 新运行的 `status` 只表达执行生命周期：`running / complete / failed`；
-- `complete` 表示执行结束且结果包已原子提交，即使部分股票数据不可用也会成为当前视图；
+- `complete` 只表示执行结束且结果包已原子提交，不直接决定是否成为当前视图；
 - Summary V3 以 `dataHealth=complete / partial / unavailable` 和计数表达数据覆盖质量；
-- 存量 `status=partial` 记录按“执行完成、数据部分可用”读取，仍可作为当前视图；
+- Summary V4 的 acceptance 以版本化阈值判断覆盖质量；StrategyRun publication 再表达
+  `published / withheld / non-publishing`；
+- 只有全市场 operational、执行完成且通过 acceptance 的运行可以 published；
+- replay/backtest、显式子集 scan 一律 non-publishing；
+- 存量 `status=partial` 记录按幂等 migration 的 publication 结果读取，并标记 legacy warning；
 - `failed` 不覆盖上一版有效视图；
-- `complete` 且零入选是合法空结果，必须显示“本次运行已完成，零入选”；
+- `published` 且零入选是合法空结果，必须显示“本次运行已完成，零入选”；
 - `persist=false` 的样本试算不进入历史列表，也不替换当前视图；
-- 当前没有结果可用的完成运行时，工作台显示“尚无可用运行”，不得展示空股票池造成误解。
+- 当前没有 published 运行时，工作台显示“尚无可用运行”，不得展示空股票池造成误解。
 
 ### 4.3 股票池
 
@@ -180,7 +189,7 @@ V2 支持两类确定性候选：
 
 ### 4.6 运行 Diff
 
-Diff 默认比较同一 Strategy 最近两次结果可用的完成运行，输出：
+Diff 默认比较同一 Strategy 最近两次 published operational run，输出：
 
 - entered：本次进入股票池；
 - exited：本次退出股票池；
@@ -197,7 +206,8 @@ Diff 默认比较同一 Strategy 最近两次结果可用的完成运行，输�
 - 默认优先比较相同 StrategyVersion；
 - 若两次运行版本不同，页面必须标记“定义已变化”，同时展示 from/to version；
 - 跨版本 Diff 可以展示事实变化，但不得把变化单独归因于市场；
-- `failed/running` 不参与当前视图的默认相邻比较；存量 `partial` 可参与；
+- `failed/running/withheld/non-publishing` 不参与当前视图的默认相邻比较；存量运行按 migration 后
+  publication 参与；
 - 任一侧结果缺失或为 unknown/error 时，只输出 `data-unavailable`，不得推断 entered/exited；
 - `REMOVED` 是 Diff 输出，不是 StrategyResult 的持久化状态。
 
@@ -337,7 +347,8 @@ AI 对话；研究档案作为独立行内操作保留。
 - persisted 与试算语义；
 - 查看 results、signals 和 Diff 的入口。
 
-Diff 可以选择任意两次持久化运行，但默认选择最近两次结果可用的完成运行。
+Diff 可以选择任意两次持久化运行，但默认选择最近两次 published operational run；跨 scope
+比较必须显式确认并标记非生产事实。
 
 ### 6.7 AI 洞察
 
@@ -520,14 +531,15 @@ AlertPlan 继续消费持久化 StrategySignal：
 
 ### 11.2 Phase A1
 
-- 股票池来自最近一次持久化且结果可用的完成运行中的 `selected=true` 结果；
+- 股票池来自最近一次持久化且 publication=published 的 operational run 中 `selected=true` 结果；
 - 股票池、候选池、运行结果、signal 和 Diff 中的股票均以上方名称、下方完整代码展示，且股票标识区域可进入行情页；
 - rule-near-miss 只适用于 `logic=all` 且恰好一个确定性阻断规则；
 - ranking-near-miss 能解释 rank 与 top 的差；
 - unknown/error 不计入候选池；
 - Diff 可从两个 run 确定性重算，不持久化 REMOVED/PoolStatus；
 - 跨版本 Diff 明示版本变化，不把变化单独归因于市场；
-- 数据部分可用的完成运行仍发布明确结果；failed run 不覆盖上一版有效视图；
+- 数据部分可用的完成运行只有通过 acceptance 才发布明确结果；failed/withheld/non-publishing run
+  不覆盖上一版有效视图；
 
 ### 11.3 Phase B/C
 

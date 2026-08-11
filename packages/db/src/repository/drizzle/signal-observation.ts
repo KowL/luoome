@@ -3,7 +3,7 @@ import {
   type SignalObservation,
   type SignalObservationRepository,
 } from '@luoome/core';
-import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { type Schema, signalObservations } from '../../schema/index.js';
 
@@ -30,6 +30,11 @@ const toObservation = (row: Row): SignalObservation => ({
   provenance: row.provenance,
   ...(row.unavailableReason === null ? {} : { unavailableReason: row.unavailableReason }),
   ...(row.observedAt === null ? {} : { observedAt: row.observedAt }),
+  ...(row.dueAt === null ? {} : { dueAt: row.dueAt }),
+  ...(row.attemptCount === 0 ? {} : { attemptCount: row.attemptCount }),
+  ...(row.lastAttemptAt === null ? {} : { lastAttemptAt: row.lastAttemptAt }),
+  ...(row.nextAttemptAt === null ? {} : { nextAttemptAt: row.nextAttemptAt }),
+  ...(row.lastErrorKind === null ? {} : { lastErrorKind: row.lastErrorKind }),
 });
 export class DrizzleSignalObservationRepository implements SignalObservationRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
@@ -46,6 +51,11 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
       benchmarkReturnPct: observation.benchmarkReturnPct ?? null,
       unavailableReason: observation.unavailableReason ?? null,
       observedAt: observation.observedAt ?? null,
+      dueAt: observation.dueAt ?? null,
+      attemptCount: observation.attemptCount ?? 0,
+      lastAttemptAt: observation.lastAttemptAt ?? null,
+      nextAttemptAt: observation.nextAttemptAt ?? null,
+      lastErrorKind: observation.lastErrorKind ?? null,
     };
     this.db
       .insert(signalObservations)
@@ -78,11 +88,34 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
     }
     if (input.from !== undefined) conditions.push(gte(signalObservations.baselineAt, input.from));
     if (input.to !== undefined) conditions.push(lte(signalObservations.baselineAt, input.to));
+    if (input.dueBefore !== undefined) {
+      conditions.push(
+        or(
+          lte(signalObservations.dueAt, input.dueBefore),
+          and(
+            isNull(signalObservations.dueAt),
+            lte(signalObservations.baselineAt, input.dueBefore),
+          ),
+        ),
+      );
+    }
+    if (input.retryReadyAt !== undefined) {
+      conditions.push(
+        or(
+          isNull(signalObservations.nextAttemptAt),
+          lte(signalObservations.nextAttemptAt, input.retryReadyAt),
+        ),
+      );
+    }
     return this.db
       .select()
       .from(signalObservations)
       .where(conditions.length === 0 ? undefined : and(...conditions))
-      .orderBy(desc(signalObservations.baselineAt))
+      .orderBy(
+        input.order === 'due-first'
+          ? asc(sql`coalesce(${signalObservations.dueAt}, ${signalObservations.baselineAt})`)
+          : desc(signalObservations.baselineAt),
+      )
       .limit(input.limit ?? 1000)
       .all()
       .map(toObservation);

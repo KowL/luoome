@@ -19,6 +19,7 @@ interface Membership {
 export class InMemoryStockUniverseRepository implements StockUniverseRepository {
   private readonly memberships = new Map<string, Membership>();
   private readonly runs = new Map<string, StockUniverseSyncRun>();
+  private readonly snapshotMembers = new Map<string, readonly string[]>();
   private readonly universeManagedStockIds = new Set<string>();
 
   constructor(private readonly stocks: StockRepository) {}
@@ -128,6 +129,7 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
       reportedTotal: snapshot.reportedTotal ?? null,
       ...summary,
     });
+    this.snapshotMembers.set(input.syncId, [...observedIds].sort());
     return summary;
   }
 
@@ -174,6 +176,35 @@ export class InMemoryStockUniverseRepository implements StockUniverseRepository 
     return stocks
       .filter((stock): stock is Stock => stock !== null)
       .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async latestSnapshotAtOrBefore(input: {
+    readonly coverage: MarketCoverage;
+    readonly asOf: Date;
+  }): Promise<StockUniverseSyncRun | null> {
+    return (
+      [...this.runs.values()]
+        .filter(
+          (run) =>
+            run.status === 'succeeded' &&
+            run.coverage === input.coverage &&
+            run.observedAt !== null &&
+            run.observedAt.getTime() <= input.asOf.getTime(),
+        )
+        .sort(
+          (left, right) =>
+            (right.observedAt?.getTime() ?? 0) - (left.observedAt?.getTime() ?? 0) ||
+            right.id.localeCompare(left.id),
+        )[0] ?? null
+    );
+  }
+
+  async listSnapshotMembers(syncId: string): Promise<readonly Stock[]> {
+    const ids = this.snapshotMembers.get(syncId) ?? [];
+    const stocks = await Promise.all(ids.map((id) => this.stocks.findById(id)));
+    return stocks
+      .filter((stock): stock is Stock => stock !== null)
+      .sort((left, right) => left.id.localeCompare(right.id));
   }
 
   private key(source: string, coverage: MarketCoverage, stockId: string): string {

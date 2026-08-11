@@ -2,7 +2,9 @@ import {
   assertStrategyScheduleInvariants,
   InvariantError,
   StrategyRecommendationPolicySchema,
+  StrategyRunAcceptancePolicySchema,
   type StrategySchedule,
+  type StrategyScheduleClaim,
   type StrategyScheduleRepository,
 } from '@luoome/core';
 import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
@@ -18,6 +20,9 @@ const toSchedule = (row: Row): StrategySchedule => ({
   cron: row.cron,
   timezone: row.timezone,
   enabled: row.enabled,
+  ...(row.acceptancePolicy === null
+    ? {}
+    : { acceptancePolicy: StrategyRunAcceptancePolicySchema.parse(row.acceptancePolicy) }),
   ...(row.recommendationPolicy === null
     ? {}
     : { recommendationPolicy: StrategyRecommendationPolicySchema.parse(row.recommendationPolicy) }),
@@ -42,10 +47,13 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
       .values({
         ...schedule,
         nextRunAt: schedule.nextRunAt ?? null,
+        acceptancePolicy: schedule.acceptancePolicy ?? null,
         recommendationPolicy: schedule.recommendationPolicy ?? null,
         lastRunId: schedule.lastRunId ?? null,
         leaseOwner: null,
         leaseUntil: null,
+        leaseFence: 0,
+        leaseHeartbeatAt: null,
       })
       .onConflictDoUpdate({
         target: strategySchedules.id,
@@ -54,11 +62,13 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
           timezone: schedule.timezone,
           enabled: schedule.enabled,
           nextRunAt: schedule.nextRunAt ?? null,
+          acceptancePolicy: schedule.acceptancePolicy ?? null,
           recommendationPolicy: schedule.recommendationPolicy ?? null,
           lastRunId: schedule.lastRunId ?? null,
           updatedAt: schedule.updatedAt,
           leaseOwner: null,
           leaseUntil: null,
+          leaseHeartbeatAt: null,
         },
       })
       .run();
@@ -116,7 +126,8 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
       for (const candidate of candidates) {
         const result = tx.run(sql`
           UPDATE strategy_schedules
-          SET lease_owner = ${input.owner}, lease_until = ${input.leaseUntil.getTime()}
+          SET lease_owner = ${input.owner}, lease_until = ${input.leaseUntil.getTime()},
+              lease_fence = lease_fence + 1, lease_heartbeat_at = ${input.now.getTime()}
           WHERE id = ${candidate.id}
             AND enabled = 1
             AND next_run_at <= ${input.now.getTime()}
@@ -128,13 +139,87 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
     });
   }
 
+  async claimDueWithFence(input: {
+    readonly now: Date;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+    readonly limit: number;
+  }): Promise<readonly StrategyScheduleClaim[]> {
+    return this.db.transaction((tx) => {
+      const candidates = tx
+        .select()
+        .from(strategySchedules)
+        .where(
+          and(
+            eq(strategySchedules.enabled, true),
+            lte(strategySchedules.nextRunAt, input.now),
+            or(isNull(strategySchedules.leaseUntil), lte(strategySchedules.leaseUntil, input.now)),
+          ),
+        )
+        .orderBy(asc(strategySchedules.nextRunAt), asc(strategySchedules.id))
+        .limit(input.limit)
+        .all();
+      const claimed: StrategyScheduleClaim[] = [];
+      for (const candidate of candidates) {
+        const result = tx.run(sql`
+          UPDATE strategy_schedules
+          SET lease_owner = ${input.owner}, lease_until = ${input.leaseUntil.getTime()},
+              lease_fence = lease_fence + 1, lease_heartbeat_at = ${input.now.getTime()}
+          WHERE id = ${candidate.id}
+            AND enabled = 1
+            AND next_run_at <= ${input.now.getTime()}
+            AND (lease_until IS NULL OR lease_until <= ${input.now.getTime()})
+        `);
+        if (changedRows(result) !== 1) continue;
+        const row = tx
+          .select()
+          .from(strategySchedules)
+          .where(eq(strategySchedules.id, candidate.id))
+          .get();
+        if (row === undefined) continue;
+        claimed.push({
+          schedule: toSchedule(row),
+          token: {
+            scheduleId: row.id,
+            owner: input.owner,
+            fence: row.leaseFence,
+            leaseUntil: row.leaseUntil as Date,
+          },
+        });
+      }
+      return claimed;
+    });
+  }
+
+  async renewClaim(input: {
+    readonly id: string;
+    readonly owner: string;
+    readonly fence: number;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean> {
+    const result = this.db.run(sql`
+      UPDATE strategy_schedules
+      SET lease_until = ${input.leaseUntil.getTime()}
+          , lease_heartbeat_at = ${input.now.getTime()}
+      WHERE id = ${input.id}
+        AND lease_owner = ${input.owner}
+        AND lease_fence = ${input.fence}
+        AND lease_until > ${input.now.getTime()}
+    `);
+    return changedRows(result) === 1;
+  }
+
   async finishClaim(input: {
     readonly id: string;
     readonly owner: string;
+    readonly fence?: number;
     readonly nextRunAt: Date;
     readonly updatedAt: Date;
     readonly lastRunId?: string;
   }): Promise<void> {
+    const fenceCondition =
+      input.fence === undefined ? sql`` : sql` AND lease_fence = ${input.fence}`;
     const result =
       input.lastRunId === undefined
         ? this.db.run(sql`
@@ -142,12 +227,16 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
           SET next_run_at = ${input.nextRunAt.getTime()}, updated_at = ${input.updatedAt.getTime()},
               lease_owner = NULL, lease_until = NULL
           WHERE id = ${input.id} AND lease_owner = ${input.owner}
+            AND lease_until > ${input.updatedAt.getTime()}
+          ${fenceCondition}
         `)
         : this.db.run(sql`
           UPDATE strategy_schedules
           SET next_run_at = ${input.nextRunAt.getTime()}, updated_at = ${input.updatedAt.getTime()},
               last_run_id = ${input.lastRunId}, lease_owner = NULL, lease_until = NULL
           WHERE id = ${input.id} AND lease_owner = ${input.owner}
+            AND lease_until > ${input.updatedAt.getTime()}
+          ${fenceCondition}
         `);
     if (changedRows(result) !== 1) {
       throw new InvariantError('StrategySchedule lease owner 不匹配');

@@ -1038,9 +1038,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   );
   app.get('/api/strategies/:id/insights', (c) => {
     const windowDays = c.req.query('windowDays');
+    const scope = c.req.query('scope');
+    const evaluationSessionId = c.req.query('evaluationSessionId');
     return callTool('get_strategy_insight_facts', {
       strategyId: c.req.param('id'),
       ...(windowDays === undefined ? {} : { windowDays: Number(windowDays) }),
+      ...(scope === undefined ? {} : { scope }),
+      ...(evaluationSessionId === undefined ? {} : { evaluationSessionId }),
     });
   });
   app.get('/api/strategies/:id/definition-diff', (c) =>
@@ -1128,9 +1132,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       strategyId: c.req.param('id'),
     }),
   );
-  app.get('/api/strategies/:id/runs', (c) =>
-    callTool('list_strategy_runs', { strategyId: c.req.param('id'), limit: 50 }),
-  );
+  app.get('/api/strategies/:id/runs', (c) => {
+    const scope = c.req.query('scope');
+    const publication = c.req.query('publication');
+    return callTool('list_strategy_runs', {
+      strategyId: c.req.param('id'),
+      limit: 50,
+      ...(scope === undefined ? {} : { scope }),
+      ...(publication === undefined ? {} : { publication }),
+    });
+  });
   app.get('/api/strategy-runs/compare', (c) => {
     const fromRunId = c.req.query('fromRunId');
     const toRunId = c.req.query('toRunId');

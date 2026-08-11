@@ -1,8 +1,7 @@
-import { isHoliday, isWeekend } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
-import { strategyRecommendationsWorkflow } from './strategy-recommendations.js';
+import { strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
 
 export const RunStrategySchedulesInput = z.object({
   owner: z.string().min(1).optional(),
@@ -27,81 +26,30 @@ export const RunStrategySchedulesOutput = z.object({
 });
 export type RunStrategySchedulesOutputT = z.infer<typeof RunStrategySchedulesOutput>;
 
-const errorText = (error: Record<string, unknown>): string =>
-  typeof error.message === 'string'
-    ? error.message
-    : typeof error.cause === 'string'
-      ? error.cause
-      : String(error.kind ?? 'unknown error');
-
 const runDue: WorkflowStep = async (previous, ctx) => {
   const input = previous as RunStrategySchedulesInputT;
   const owner = input.owner ?? `strategy-scheduler:${globalThis.crypto.randomUUID()}`;
-  const claimed = await ctx.tools.claim_due_strategy_schedules.execute({
-    owner,
-    limit: input.limit,
-    leaseMinutes: 120,
-  });
-  if (!claimed.ok) return claimed;
-  const items: z.infer<typeof ItemSchema>[] = [];
-  for (const claim of claimed.data.items) {
-    const { schedule } = claim;
-    let status: 'ran' | 'skipped' | 'failed' = 'skipped';
-    let reason = claim.reason;
-    let runId: string | undefined;
-    let adviceCount: number | undefined;
-    let recommendationError: string | undefined;
-    const now = ctx.clock();
-    if (claim.eligible && !isWeekend(now) && !isHoliday(now)) {
-      const result = await ctx.tools.run_strategy.execute({
-        strategyId: schedule.strategyId,
-        mode: 'scheduled',
-        persist: true,
-      });
-      if (result.ok) {
-        status = 'ran';
-        runId = result.data.run.id;
-        if (schedule.recommendationPolicy?.enabled) {
-          const recommended = await strategyRecommendationsWorkflow.run(
-            {
-              strategyId: schedule.strategyId,
-              runId,
-              policy: schedule.recommendationPolicy,
-            },
-            ctx,
-          );
-          if (recommended.ok) adviceCount = recommended.data.advices.length;
-          else
-            recommendationError = errorText(
-              recommended.error as unknown as Record<string, unknown>,
-            );
-        }
-      } else {
-        status = 'failed';
-        reason = errorText(result.error as unknown as Record<string, unknown>);
-      }
-    } else if (claim.eligible) {
-      reason = '非 A 股交易日，本次跳过并推进下一次运行';
-    }
-    const finished = await ctx.tools.finish_strategy_schedule_claim.execute({
-      scheduleId: schedule.id,
-      owner,
-      ...(runId === undefined ? {} : { lastRunId: runId }),
-    });
-    if (!finished.ok) {
-      status = 'failed';
-      reason = errorText(finished.error as unknown as Record<string, unknown>);
-    }
-    items.push({
-      strategyId: schedule.strategyId,
-      scheduleId: schedule.id,
-      status,
-      ...(runId === undefined ? {} : { runId }),
-      ...(adviceCount === undefined ? {} : { adviceCount }),
-      ...(recommendationError === undefined ? {} : { recommendationError }),
-      ...(reason === undefined ? {} : { reason }),
-    });
-  }
+  const cycle = await strategyDailyCycleWorkflow.run(
+    { owner, limit: input.limit, leaseMinutes: 20 },
+    ctx,
+  );
+  if (!cycle.ok) return cycle;
+  const items = cycle.data.items.map((item) => ({
+    strategyId: item.strategyId,
+    scheduleId: item.scheduleId,
+    status:
+      item.status === 'complete'
+        ? ('ran' as const)
+        : item.status === 'skipped'
+          ? ('skipped' as const)
+          : ('failed' as const),
+    ...(item.runId === undefined ? {} : { runId: item.runId }),
+    ...(item.adviceCount === undefined ? {} : { adviceCount: item.adviceCount }),
+    ...(item.status === 'partial' && item.reason === undefined
+      ? { recommendationError: 'strategy-daily-cycle partial' }
+      : {}),
+    ...(item.reason === undefined ? {} : { reason: item.reason }),
+  }));
   return RunStrategySchedulesOutput.parse({
     items,
     ran: items.filter((item) => item.status === 'ran').length,
@@ -115,7 +63,7 @@ export const runStrategySchedulesWorkflow = defineWorkflow<
   RunStrategySchedulesOutputT
 >({
   name: 'run-strategy-schedules',
-  description: '原子抢占到期 StrategySchedule 并触发 scheduled StrategyRun',
+  description: '调度到期 StrategySchedule，并委托 strategy-daily-cycle 完成单周期闭环',
   input: RunStrategySchedulesInput,
   steps: [runDue],
 });
