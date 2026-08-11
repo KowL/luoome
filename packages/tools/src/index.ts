@@ -20,6 +20,7 @@ export * from './tools/compute-indicators.js';
 export * from './tools/create-account.js';
 export * from './tools/delete-stock-event.js';
 export * from './tools/fetch-index-quotes.js';
+export * from './tools/fetch-intraday-minutes.js';
 export * from './tools/fetch-quote.js';
 export * from './tools/get-account.js';
 export * from './tools/get-advice.js';

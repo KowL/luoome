@@ -20,12 +20,16 @@ import {
 } from '../internal/limit-up-facts.js';
 import { ensureStockStub, STOCK_ID_PATTERN } from '../internal/manual-entry.js';
 import {
+  aggregateCandles,
   buildMarketCandles,
   buildMarketDataStatus,
   candlesToBars,
   computeMarketSession,
+  deriveAmplitude,
   derivePreviousClose,
   deriveQuoteChange,
+  MONTH_GRANULARITY_LOOKBACK_DAYS,
+  MONTH_GRANULARITY_MAX_BARS,
   normalizeDailyBars,
   normalizeMarketRange,
 } from '../internal/market-view.js';
@@ -38,12 +42,15 @@ import {
  */
 
 export const MarketViewRangeSchema = z.enum(['1m', '3m', '6m', '1y']);
+export const MarketViewGranularitySchema = z.enum(['day', 'week', 'month']);
 
 export const GetStockMarketViewInput = z.object({
   stockId: z.string().trim().min(1),
   /** 搜索候选带回的股票名；完整 stockId 尚未入库时一并登记。 */
   stockName: z.string().trim().min(1).max(100).optional(),
   range: MarketViewRangeSchema.default('3m'),
+  /** 输出 candles 粒度；indicators 恒用日级 candles 计算，聚合只影响输出。 */
+  granularity: MarketViewGranularitySchema.default('day'),
   date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -66,6 +73,7 @@ const MarketQuoteSummarySchema = z.object({
   previousClose: MoneySchema.nullable(),
   change: z.number().nullable(),
   changePct: z.number().nullable(),
+  amplitude: z.number().nullable(),
 });
 
 const MarketDataStatusSchema = z.object({
@@ -164,12 +172,18 @@ export const getStockMarketViewTool = defineTool({
     const now = ctx.clock();
     const rangeAnchor = input.date === undefined ? now : new Date(`${input.date}T00:00:00.000Z`);
     const { start, end } = normalizeMarketRange(input.range, rangeAnchor);
+    // 月 K 拉取窗口扩到 ~5 年（1y 窗口只够 12 根月 K）；markers 仍按原 range 窗口过滤。
+    const fetchStart =
+      input.granularity === 'month'
+        ? new Date(end.getTime() - MONTH_GRANULARITY_LOOKBACK_DAYS * 86_400_000)
+        : start;
+    const maxBars = input.granularity === 'month' ? MONTH_GRANULARITY_MAX_BARS : undefined;
     const market = ctx.adapters.market;
 
     // Quote 与 bars 在股票解析后并行拉取，失败各自回退 DB（§8.2）。
     const [quoteResult, barsResult] = await Promise.allSettled([
       market.fetchQuote(stock.id),
-      market.fetchDailyBars(stock.id, { start, end }),
+      market.fetchDailyBars(stock.id, { start: fetchStart, end }),
     ]);
 
     const adapterSummary = (reason: unknown): string =>
@@ -198,7 +212,7 @@ export const getStockMarketViewTool = defineTool({
     let droppedInvalid = 0;
     let barsLive = false;
     if (barsResult.status === 'fulfilled' && barsResult.value.length > 0) {
-      const normalized = normalizeDailyBars(barsResult.value, start, end);
+      const normalized = normalizeDailyBars(barsResult.value, fetchStart, end, maxBars);
       bars = normalized.bars;
       droppedInvalid = normalized.droppedInvalid;
       if (bars.length > 0) {
@@ -219,11 +233,11 @@ export const getStockMarketViewTool = defineTool({
         range: input.range,
         error: cause,
       });
-      const cached = await ctx.repos.dailyBar.findInRange(stock.id, start, end);
+      const cached = await ctx.repos.dailyBar.findInRange(stock.id, fetchStart, end);
       if (cached.length === 0) {
         return errAdapterError(market.name, cause, true);
       }
-      const normalized = normalizeDailyBars(cached, start, end);
+      const normalized = normalizeDailyBars(cached, fetchStart, end, maxBars);
       bars = normalized.bars;
       droppedInvalid += normalized.droppedInvalid;
       if (bars.length === 0) return errAdapterError(market.name, cause, true);
@@ -251,6 +265,7 @@ export const getStockMarketViewTool = defineTool({
     const candleCutoff = anchorIsToday ? end : new Date(end.getTime() + 86_400_000);
     const candles = buildMarketCandles(bars, quoteForCandle, candleCutoff);
     const { change, changePct } = deriveQuoteChange(quote, previousClose);
+    const amplitude = deriveAmplitude(quote, previousClose);
     const indicators = computeSimpleIndicators(candlesToBars(stock.id, candles));
     const sources = [...new Set([quote.source, ...candles.map((c) => c.source)])];
     const status = buildMarketDataStatus({
@@ -261,7 +276,9 @@ export const getStockMarketViewTool = defineTool({
       session,
       sources,
     });
-    const lastCandleDate = candles.at(-1)?.date ?? null;
+    // indicators / sources / markers 恒用日级 candles；聚合只影响输出 candles（CONTEXT.md 指标口径）。
+    const outCandles = aggregateCandles(candles, input.granularity);
+    const lastCandleDate = outCandles.at(-1)?.date ?? null;
 
     const [trades, advices, triggers, signals, reports, researchLinks, limitUp] = await Promise.all(
       [
@@ -388,8 +405,8 @@ export const getStockMarketViewTool = defineTool({
 
     return {
       stock: { id: stock.id, code: stock.code, name: stock.name, exchange: stock.exchange },
-      quote: { quote, previousClose, change, changePct },
-      candles,
+      quote: { quote, previousClose, change, changePct, amplitude },
+      candles: outCandles,
       indicators,
       indicatorsAsOf: lastCandleDate,
       dataStatus: {

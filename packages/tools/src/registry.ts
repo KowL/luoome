@@ -28,6 +28,7 @@ import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
+import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
@@ -251,6 +252,7 @@ export const toolRegistry: Registry = createRegistry([
   fetchQuoteTool,
   batchQuoteTool,
   fetchIndexQuotesTool,
+  fetchIntradayMinutesTool,
   syncQuotesTool,
   syncDailyBarsTool,
   getPreviousClosesTool,

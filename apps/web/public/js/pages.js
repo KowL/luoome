@@ -10,6 +10,7 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
+import { renderIndexStrip } from './index-strip.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
 import { alertDialog, promptDialog } from './modal.js';
 import { createStockSearchBox } from './search-box.js';
@@ -68,26 +69,6 @@ const bindDashboardSearch = () => {
 /* ---- 看板纯函数（pages.test.js 直接单测） ---- */
 
 /**
- * 成员涨跌幅（小数）：昨收基准 (close − prevClose) / prevClose。
- * quote 缺 prevClose（如 tencent 分钟端点无昨收）时返回 null，前端显示「—」，
- * 不回退今开基准——(close−open)/open 不是市场口径的涨跌幅。
- */
-const memberChangePct = (quote) => {
-  const close = quote?.close;
-  const prevClose = quote?.prevClose;
-  if (
-    typeof close === 'number' &&
-    Number.isFinite(close) &&
-    typeof prevClose === 'number' &&
-    Number.isFinite(prevClose) &&
-    prevClose > 0
-  ) {
-    return (close - prevClose) / prevClose;
-  }
-  return null;
-};
-
-/**
  * 看板排序：持仓行置顶（保持服务端返回顺序），其余按 |changePct| 降序，
  * 无涨跌幅（null）排最后。
  */
@@ -138,26 +119,9 @@ const ALERT_DIRECTION_BADGE = {
   watch: { cls: 'badge-watch', label: '关注' },
 };
 
-/** 指数条：unsupported 或空数组时整条隐藏；红涨绿跌沿用 --pos/--neg。 */
+/** 指数条渲染已抽到 index-strip.js（行情页共用）；dashboard 语义不变。 */
 const renderIndices = (indicesData, asOf) => {
-  const strip = $('#dashboard-indices');
-  if (strip === null) return;
-  const list = Array.isArray(indicesData?.indices) ? indicesData.indices : [];
-  if (indicesData?.unsupported === true || list.length === 0) {
-    strip.hidden = true;
-    strip.replaceChildren();
-    return;
-  }
-  strip.hidden = false;
-  const chips = list.map((idx) => {
-    const cls = idx.change > 0 ? 'pos' : idx.change < 0 ? 'neg' : 'flat';
-    return el('span', `index-chip ${cls}`, [
-      el('span', 'index-name', idx.name),
-      el('span', 'index-close mono', fmtNum(idx.close)),
-      el('span', 'index-change mono', `${fmtSigned(idx.change)}（${fmtSigned(idx.changePct)}%）`),
-    ]);
-  });
-  mount(strip, [...chips, el('span', 'index-asof', `截至 ${fmtTime(asOf)}`)]);
+  renderIndexStrip('dashboard-indices', indicesData, asOf);
 };
 
 const boardAlertCell = (todayTrigger) => {
@@ -2176,7 +2140,6 @@ export {
   cancelAnalyzeAllHoldings,
   errorKindLabel,
   filterAdvices,
-  memberChangePct,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,

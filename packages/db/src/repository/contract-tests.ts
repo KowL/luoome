@@ -1199,6 +1199,23 @@ export const registerRepositoryContractTests = (
         expect((await repos.quote.latestByStock('stk-2'))?.prevClose).toBeUndefined();
       });
 
+      it('amount / turnoverRatePct 随快照持久化；缺省读回 undefined；同主键重复 save 读回新字段', async () => {
+        await repos.quote.save(
+          makeQuote('stk-1', T1, { amount: 1_410_000_000, turnoverRatePct: 0.22 }),
+        );
+        await repos.quote.save(makeQuote('stk-2', T1));
+        const withFields = await repos.quote.latestByStock('stk-1');
+        expect(withFields?.amount).toBe(1_410_000_000);
+        expect(withFields?.turnoverRatePct).toBe(0.22);
+        const without = await repos.quote.latestByStock('stk-2');
+        expect(without?.amount).toBeUndefined();
+        expect(without?.turnoverRatePct).toBeUndefined();
+        await repos.quote.save(makeQuote('stk-1', T1, { amount: 2_000_000, turnoverRatePct: 0.5 }));
+        const updated = await repos.quote.latestByStock('stk-1');
+        expect(updated?.amount).toBe(2_000_000);
+        expect(updated?.turnoverRatePct).toBe(0.5);
+      });
+
       it('removeInRange 返回删除条数；after 不动', async () => {
         await repos.quote.save(makeQuote('stk-1', T1));
         await repos.quote.save(makeQuote('stk-1', T2));

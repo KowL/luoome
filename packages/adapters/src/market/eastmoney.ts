@@ -118,6 +118,7 @@ interface EastmoneyQuoteResponse {
     readonly f124?: number; // 行情更新时间（Unix 秒）
     readonly f57?: string; // 代码
     readonly f58?: string; // 名称
+    readonly f168?: number; // 换手率%
     readonly f169?: number; // 涨跌额
     readonly f170?: number; // 涨跌幅%
   };
@@ -250,7 +251,7 @@ const suggestExchange = (item: EastmoneySuggestItem): Exchange | undefined => {
   }
 };
 
-const QUOTE_FIELDS = 'f43,f44,f45,f46,f47,f48,f60,f57,f58,f124,f169,f170';
+const QUOTE_FIELDS = 'f43,f44,f45,f46,f47,f48,f60,f57,f58,f124,f168,f169,f170';
 const KLINE_FIELDS = '1,2,3,4,5,6,8,9';
 /** suggest 接口公开 token（Eastmoney Web 前端同款，无需鉴权）。 */
 const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
@@ -333,6 +334,8 @@ export class EastmoneyAdapter {
       low: money(d.f45 && d.f45 > 0 ? d.f45 : closeRaw),
       close: money(closeRaw),
       volume,
+      ...(typeof d.f48 === 'number' && d.f48 > 0 ? { amount: d.f48 } : {}),
+      ...(typeof d.f168 === 'number' && d.f168 >= 0 ? { turnoverRatePct: d.f168 } : {}),
       ...(typeof d.f60 === 'number' && d.f60 > 0 ? { prevClose: money(d.f60) } : {}),
       source: 'eastmoney',
     };

@@ -28,19 +28,29 @@ const setAccountId = (accountId) => {
 /**
  * 调用后端 API。
  * @param {string} path 路径（必须以 / 开头）
- * @param {RequestInit} [init] fetch init；body 已是 JSON 时无需再 stringify
+ * @param {RequestInit & { timeoutMs?: number }} [init] fetch init；body 已是 JSON 时无需再 stringify；timeoutMs 默认 30s
  * @returns {Promise<{ok: boolean, data?: unknown, error?: object}>}
  */
 const callApi = async (path, init) => {
-  const headers = new Headers(init?.headers);
-  if (init?.body !== undefined && !headers.has('content-type')) {
+  const { timeoutMs, ...rest } = init ?? {};
+  const headers = new Headers(rest.headers);
+  if (rest.body !== undefined && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }
   let response;
   try {
-    response = await fetch(path, { ...init, headers });
+    response = await fetch(path, {
+      ...rest,
+      headers,
+      signal: AbortSignal.timeout(timeoutMs ?? 30_000),
+    });
   } catch (cause) {
-    return { ok: false, error: { kind: 'adapter_error', cause: String(cause) } };
+    const kind =
+      cause instanceof DOMException &&
+      (cause.name === 'TimeoutError' || cause.name === 'AbortError')
+        ? 'timeout'
+        : 'adapter_error';
+    return { ok: false, error: { kind, cause: String(cause) } };
   }
   let body;
   try {

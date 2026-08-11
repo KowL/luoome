@@ -38,6 +38,7 @@ describe('market/factory', () => {
       'tencent:quote',
       'tencent:daily-bars',
       'tencent:search',
+      'tencent:intraday-minutes',
     ]);
   });
 
@@ -242,5 +243,42 @@ describe('market/factory', () => {
     );
     const indices = await adapter.fetchIndexQuotes();
     expect(indices[0]?.source).toBe('eastmoney');
+  });
+
+  it('intraday-minutes 只由 tencent 注册；eastmoney-only 明确不支持', async () => {
+    const tencentOnly = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'tencent' },
+      {
+        logger: silentLogger(),
+        fetchImpl: (async () =>
+          new Response(
+            JSON.stringify({
+              code: 0,
+              data: {
+                sz002594: { data: { date: '20260811', data: ['0930 91.18 1189 10841302.00'] } },
+              },
+            }),
+            { status: 200 },
+          )) as never,
+      },
+    );
+    const points = await tencentOnly.fetchIntradayMinutes('002594.SZ');
+    expect(points[0]?.source).toBe('tencent');
+    expect(
+      tencentOnly
+        .marketSourceStatus()
+        .some((s) => s.dataset === 'intraday-minutes' && s.source === 'tencent'),
+    ).toBe(true);
+
+    const eastmoneyOnly = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'eastmoney' },
+      {
+        logger: silentLogger(),
+        fetchImpl: (async () => new Response('unexpected request', { status: 500 })) as never,
+      },
+    );
+    await expect(eastmoneyOnly.fetchIntradayMinutes('002594.SZ')).rejects.toThrow(
+      /unsupported_capability/,
+    );
   });
 });

@@ -27,6 +27,7 @@ describe('market/tencent', () => {
       expect(q.high).toBe(380);
       expect(q.low).toBe(375);
       expect(q.volume).toBe(12_000); // 分钟量为累计口径：末行 120 手 × 100 = 股
+      expect(q.amount).toBe(45600); // 分钟额同为累计口径：末行第四列（元）
       expect(q.source).toBe('tencent');
       expect(q.observedAt).toEqual(new Date('2026-07-24T07:30:00.000Z'));
       expect(q.fetchedAt).toEqual(new Date('2026-07-24T08:00:00.000Z'));
@@ -40,9 +41,14 @@ describe('market/tencent', () => {
       await expect(adapter.fetchQuote('00700')).rejects.toBeInstanceOf(TencentAdapterError);
     });
 
-    it('qt 快照第 4 段为昨收 → prevClose 填充；qt 失败 → 无 prevClose 不抛错', async () => {
-      const rtBody = (code: string) =>
-        `v_${code}="1~贵州茅台~600519~380~370~376~53135~31245~21890~~20260728161459~";`;
+    it('qt 快照第 4 段为昨收、第 38 段为换手率 → 填充；qt 失败 → 两字段缺省不抛错', async () => {
+      const segments = Array.from({ length: 39 }, () => '');
+      segments[0] = '1';
+      segments[1] = '贵州茅台';
+      segments[2] = '600519';
+      segments[4] = '370';
+      segments[38] = '0.35';
+      const rtBody = (code: string) => `v_${code}="${segments.join('~')}";`;
       const withRt = new TencentAdapter({
         fetchImpl: ((url: string) =>
           Promise.resolve(
@@ -54,6 +60,7 @@ describe('market/tencent', () => {
       });
       const q1 = await withRt.fetchQuote('600519');
       expect(q1.prevClose).toBe(370);
+      expect(q1.turnoverRatePct).toBe(0.35);
 
       const rtDown = new TencentAdapter({
         fetchImpl: ((url: string) =>
@@ -64,6 +71,7 @@ describe('market/tencent', () => {
       const q2 = await rtDown.fetchQuote('600519');
       expect(q2.close).toBe(380);
       expect(q2.prevClose).toBeUndefined();
+      expect(q2.turnoverRatePct).toBeUndefined();
     });
 
     it('港股代码 → hk 前缀', async () => {
@@ -88,6 +96,60 @@ describe('market/tencent', () => {
       });
       await adapter.fetchQuote('600519');
       expect(capturedUrls[0]).toContain('code=sh600519');
+    });
+  });
+
+  describe('fetchIntradayMinutes', () => {
+    const minuteBody = (
+      code: string,
+      rows: string[] = ['0930 375 100 37500.00', '1530 380 120 45600.00'],
+    ) =>
+      JSON.stringify({
+        code: 0,
+        data: { [code]: { data: { date: '20260724', data: rows } } },
+      });
+
+    it('分钟行整行保留累计口径；time 由 date+HHMM 投影（上海时区）', async () => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () => new Response(minuteBody('sh600519'), { status: 200 })) as never,
+      });
+      const points = await adapter.fetchIntradayMinutes('600519');
+      expect(points).toHaveLength(2);
+      expect(points[0]).toMatchObject({
+        stockId: '600519',
+        price: 375,
+        cumVolume: 10_000, // 100 手 × 100 = 股
+        cumAmount: 37500,
+        source: 'tencent',
+      });
+      expect(points[0]?.time).toEqual(new Date('2026-07-24T01:30:00.000Z'));
+      expect(points[1]?.cumVolume).toBe(12_000);
+    });
+
+    it('空分钟数组 → 空序列（盘前 / 非交易日合法空态，不抛错）', async () => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () => new Response(minuteBody('sz002594', []), { status: 200 })) as never,
+      });
+      await expect(adapter.fetchIntradayMinutes('002594')).resolves.toEqual([]);
+    });
+
+    it('时间 / 价格非法的行丢弃', async () => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () =>
+          new Response(
+            minuteBody('sh600519', [
+              '09 375 100 37500.00',
+              '0930 0 100 37500.00',
+              '0931 376 101 37856.00',
+            ]),
+            {
+              status: 200,
+            },
+          )) as never,
+      });
+      const points = await adapter.fetchIntradayMinutes('600519');
+      expect(points).toHaveLength(1);
+      expect(points[0]?.price).toBe(376);
     });
   });
 

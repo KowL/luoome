@@ -301,6 +301,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
       low REAL NOT NULL,
       close REAL NOT NULL,
       volume INTEGER NOT NULL,
+      amount REAL,
+      turnover_rate REAL,
       prev_close REAL,
       source TEXT NOT NULL,
       CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, observed_at, source)
@@ -308,6 +310,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   migratePriceSnapshotTimeColumns(db);
   migratePriceSnapshotPrevCloseColumn(db);
+  migratePriceSnapshotAmountColumns(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS price_snapshots_stock_observed_idx
     ON price_snapshots (stock_id, observed_at)
@@ -858,6 +861,21 @@ const migratePriceSnapshotPrevCloseColumn = (db: DrizzleDb): void => {
   if (cols.length === 0) return;
   if (!cols.some((c) => c.name === 'prev_close')) {
     db.run(sql`ALTER TABLE price_snapshots ADD COLUMN prev_close REAL`);
+  }
+};
+
+/**
+ * price_snapshots 表补 amount / turnover_rate 列（幂等）。
+ * 旧库无此列时 ALTER ADD；新库 DDL 已含，直接跳过。
+ */
+const migratePriceSnapshotAmountColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(price_snapshots)`);
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === 'amount')) {
+    db.run(sql`ALTER TABLE price_snapshots ADD COLUMN amount REAL`);
+  }
+  if (!cols.some((c) => c.name === 'turnover_rate')) {
+    db.run(sql`ALTER TABLE price_snapshots ADD COLUMN turnover_rate REAL`);
   }
 };
 

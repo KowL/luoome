@@ -116,6 +116,10 @@ class StubMarketAdapter implements MarketDataAdapterLike {
     return Promise.reject(new Error('unsupported_capability: realtime-index'));
   }
 
+  fetchIntradayMinutes(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
+  }
+
   fetchMarketSnapshot(): Promise<never> {
     return Promise.reject(new Error('unsupported_capability: market-snapshot'));
   }
@@ -160,6 +164,28 @@ describe('tool/get_stock_market_view', () => {
     expect(res.data.dataStatus.retrieval).toBe('live');
     expect(res.data.dataStatus.marketSession).toBe('trading');
     expect(res.data.dataStatus.sources).toEqual(['eastmoney']);
+  });
+
+  it('quote 摘要透传 amount / turnoverRatePct，并派生 amplitude（prevClose 缺失时 null）', async () => {
+    const quote = makeQuote(STOCK_ID, NOW, { amount: 2_120_000_000, turnoverRatePct: 0.69 });
+    const ctx = await buildCtx(new StubMarketAdapter({ quote }));
+    const res = await callView(ctx, {});
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.quote.quote.amount).toBe(2_120_000_000);
+    expect(res.data.quote.quote.turnoverRatePct).toBe(0.69);
+    const prevClose = res.data.quote.previousClose;
+    expect(prevClose).not.toBeNull();
+    expect(res.data.quote.amplitude).toBeCloseTo((107 - 103) / Number(prevClose), 4);
+
+    const noPrev = await buildCtx(
+      new StubMarketAdapter({ quote, bars: makeBars(STOCK_ID, TODAY, 1) }),
+    );
+    const res2 = await callView(noPrev, {});
+    expect(res2.ok).toBe(true);
+    if (!res2.ok) return;
+    expect(res2.data.quote.previousClose).toBeNull();
+    expect(res2.data.quote.amplitude).toBeNull();
   });
 
   it('2. 纯代码从 repo 解析', async () => {
@@ -493,6 +519,42 @@ describe('tool/get_stock_market_view', () => {
     ).toBe(true);
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(4);
+  });
+
+  it('granularity=week：输出周 K 聚合，indicators 仍按日级 candles 计算', async () => {
+    const ctx = await buildCtx(new StubMarketAdapter());
+    const res = await callView(ctx, { granularity: 'week' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // 60 根连续自然日（2026-05-23 起）+ 当日 live candle → 10 个 ISO 周分桶
+    expect(res.data.candles).toHaveLength(10);
+    const last = res.data.candles.at(-1);
+    expect(last?.date).toBe(TODAY);
+    expect(last?.completeness).toBe('live');
+    expect(res.data.indicatorsAsOf).toBe(TODAY);
+  });
+
+  it('granularity=month：拉取窗口扩到 ~5 年并按月聚合', async () => {
+    const market = new StubMarketAdapter({ bars: makeBars(STOCK_ID, TODAY, 300) });
+    const ctx = await buildCtx(market);
+    const res = await callView(ctx, { range: '1y', granularity: 'month' });
+    expect(res.ok).toBe(true);
+    const end = new Date(`${TODAY}T00:00:00.000Z`);
+    expect(market.lastBarsRange?.end.getTime()).toBe(end.getTime());
+    expect(market.lastBarsRange?.start.getTime()).toBe(end.getTime() - 5 * 370 * DAY_MS);
+    if (!res.ok) return;
+    // 300 根连续自然日（2025-09-25 起）跨 11 个自然月；260 根日 K 上限在月粒度下被放大
+    expect(res.data.candles).toHaveLength(11);
+    expect(res.data.candles.at(-1)).toMatchObject({ date: TODAY, completeness: 'live' });
+    expect(res.data.indicatorsAsOf).toBe(TODAY);
+  });
+
+  it('granularity=day（显式）：输出与默认一致（日 K 不聚合）', async () => {
+    const ctx = await buildCtx(new StubMarketAdapter());
+    const res = await callView(ctx, { granularity: 'day' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.candles).toHaveLength(60); // 59 收盘 bar + 今日 live candle
   });
 
   it('date 深链接将日线查询窗口定位到历史日期', async () => {

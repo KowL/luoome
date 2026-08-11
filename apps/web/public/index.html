@@ -161,6 +161,7 @@
           <h1>行情</h1>
           <div id="market-search"></div>
         </div>
+        <div id="market-indices" class="index-strip" hidden></div>
         <div id="market-banner" class="status error" role="status" hidden></div>
         <div class="card" id="market-quote-card">
           <div class="market-quote-head">
@@ -181,6 +182,9 @@
             <div class="market-quote-cell"><span class="label">最低</span><span class="num" id="market-quote-low">--</span></div>
             <div class="market-quote-cell"><span class="label">昨收</span><span class="num" id="market-quote-prev">--</span></div>
             <div class="market-quote-cell"><span class="label">成交量</span><span class="num" id="market-quote-volume">--</span></div>
+            <div class="market-quote-cell"><span class="label">成交额</span><span class="num" id="market-quote-amount">--</span></div>
+            <div class="market-quote-cell"><span class="label">换手率</span><span class="num" id="market-quote-turnover">--</span></div>
+            <div class="market-quote-cell"><span class="label">振幅</span><span class="num" id="market-quote-amplitude">--</span></div>
           </div>
           <div class="market-quote-meta">
             <span id="market-quote-fetched">--</span>
@@ -190,19 +194,30 @@
         </div>
         <div id="market-empty" class="card mt-4">
           <p class="placeholder">搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&amp;range=3m。</p>
+          <div id="market-sentiment" class="market-sentiment"></div>
         </div>
         <div id="market-main" hidden>
           <div class="card mt-4">
             <div class="card-header">
-              <h2>日 K</h2>
+              <h2 id="market-chart-title">日 K</h2>
+              <div class="market-range-switch" id="market-chart-tabs" role="group" aria-label="图表类型">
+                <button type="button" class="btn btn-outline btn-sm active" data-chart-tab="kline">日 K</button>
+                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="intraday" hidden>分时</button>
+              </div>
               <div class="market-range-switch" id="market-range-switch" role="group" aria-label="周期切换">
                 <button type="button" class="btn btn-outline btn-sm" data-range="1m">1M</button>
                 <button type="button" class="btn btn-outline btn-sm" data-range="3m">3M</button>
                 <button type="button" class="btn btn-outline btn-sm" data-range="6m">6M</button>
                 <button type="button" class="btn btn-outline btn-sm" data-range="1y">1Y</button>
               </div>
+              <div class="market-range-switch" id="market-granularity-switch" role="group" aria-label="粒度切换">
+                <button type="button" class="btn btn-outline btn-sm active" data-granularity="day">日</button>
+                <button type="button" class="btn btn-outline btn-sm" data-granularity="week">周</button>
+                <button type="button" class="btn btn-outline btn-sm" data-granularity="month">月</button>
+              </div>
             </div>
             <div id="market-chart" class="market-chart"></div>
+            <div id="market-intraday-chart" class="market-chart" hidden></div>
             <p id="market-chart-empty" class="placeholder" hidden>暂无 K 线数据。</p>
             <div id="market-markers" class="market-markers mt-2"></div>
           </div>
@@ -743,6 +758,23 @@
                 保存路由并应用
               </button>
             </div>
+          </section>
+          <section class="market-routing-panel" id="market-sync-panel" aria-labelledby="market-sync-title">
+            <div class="ai-panel-title">
+              <span class="ai-panel-icon" aria-hidden="true">↻</span>
+              <div>
+                <h3 id="market-sync-title">数据同步</h3>
+                <small>Stock universe &amp; daily bars local cache</small>
+              </div>
+            </div>
+            <div id="market-sync-status" class="market-sync-status">
+              <p class="placeholder">加载中…</p>
+            </div>
+            <div class="market-sync-actions">
+              <button id="btn-sync-universe" class="btn btn-outline btn-sm" type="button">同步股票目录</button>
+              <button id="btn-sync-daily-bars" class="btn btn-outline btn-sm" type="button">同步日线</button>
+            </div>
+            <div id="market-sync-message" class="status" role="status" hidden></div>
           </section>
         </form>
         <form id="feishu-settings-form" class="feishu-settings" autocomplete="off">

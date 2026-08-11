@@ -3,6 +3,7 @@ import {
   type DailyBar,
   type DateRange,
   type Exchange,
+  type IntradayMinute,
   money,
   type Quote,
   type StockSearchCandidate,
@@ -154,19 +155,31 @@ export class TencentAdapter {
   }
 
   /**
-   * 拉快照。minute 端点返回当日分钟线：data.<code>.data.data 是
-   * "HHMM price volume amount" 字符串数组（volume 单位手）。
-   * 取末行价为最新价、首行价为 open、全程最大/最小为 high/low。
+   * minute 端点原始行：data.<code>.data.data 是 "HHMM price cumVolume cumAmount"
+   * 字符串数组（volume 手 / amount 元，均为当日累计口径），date 是交易日期。
+   * fetchQuote 与 fetchIntradayMinutes 共用；空数组不抛错（盘前合法空态），由调用方决定。
    */
-  async fetchQuote(stockCode: string): Promise<Quote> {
-    const code = toPrefixedCode(stockCode);
+  private async fetchMinuteRows(
+    code: string,
+  ): Promise<{ readonly date?: string; readonly rows: readonly string[] }> {
     const url = `${this.baseQuoteUrl}?code=${code}`;
     const json = await this.getJson<{
       data?: { [code: string]: { data?: { date?: string; data?: string[] } } };
     }>(url);
     const minuteNode = json.data?.[code]?.data;
-    const minutes = minuteNode?.data;
-    if (minutes === undefined || minutes.length === 0) {
+    return {
+      ...(minuteNode?.date === undefined ? {} : { date: minuteNode.date }),
+      rows: minuteNode?.data ?? [],
+    };
+  }
+
+  /**
+   * 拉快照。取末行价为最新价、首行价为 open、全程最大/最小为 high/low。
+   */
+  async fetchQuote(stockCode: string): Promise<Quote> {
+    const code = toPrefixedCode(stockCode);
+    const { date, rows: minutes } = await this.fetchMinuteRows(code);
+    if (minutes.length === 0) {
       throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
     }
     const prices: number[] = [];
@@ -179,20 +192,22 @@ export class TencentAdapter {
     const close = prices.at(-1);
     // 分钟行第三列是当日累计量（手），取末行即可，求和会重复计数
     const lastVolume = Number(minutes.at(-1)?.split(' ')[2]);
+    // 第四列是当日累计成交额（元，2026-08 实测与 qt 快照成交额口径一致）
+    const lastAmount = Number(minutes.at(-1)?.split(' ')[3]);
     if (open === undefined || close === undefined) {
       throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
     }
     const fetchedAt = this.clock();
     const lastTime = minutes.at(-1)?.split(' ')[0];
     const upstreamAt =
-      minuteNode?.date === undefined || lastTime === undefined
+      date === undefined || lastTime === undefined
         ? undefined
-        : parseTencentMinuteTime(minuteNode.date, lastTime);
+        : parseTencentMinuteTime(date, lastTime);
     const observedAt =
       upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
         ? upstreamAt
         : fetchedAt;
-    const prevClose = await this.fetchPrevClose(code);
+    const rtSnapshot = await this.fetchRtSnapshot(code);
     return {
       stockId: stockCode.toUpperCase(),
       observedAt,
@@ -204,30 +219,70 @@ export class TencentAdapter {
       low: money(Math.min(...prices)),
       close: money(close),
       volume: Number.isFinite(lastVolume) && lastVolume > 0 ? lastVolume * 100 : 0, // 手 → 股
-      ...(prevClose !== undefined ? { prevClose: money(prevClose) } : {}),
+      ...(Number.isFinite(lastAmount) && lastAmount > 0 ? { amount: lastAmount } : {}),
+      ...(rtSnapshot.prevClose !== undefined ? { prevClose: money(rtSnapshot.prevClose) } : {}),
+      ...(rtSnapshot.turnoverRatePct !== undefined
+        ? { turnoverRatePct: rtSnapshot.turnoverRatePct }
+        : {}),
       source: 'tencent',
     };
   }
 
   /**
-   * 昨收（best-effort）：qt.gtimg.cn 快照（GBK 文本，~ 分隔，第 4 段为昨收）。
-   * 分钟端点无此字段；失败返回 undefined，不拖垮主快照流程。
+   * 当日分时分钟序列：与 fetchQuote 同 minute 端点，整行保留累计口径；
+   * 时间 / 价格非法的行丢弃。盘前 / 非交易日端点返回空数组（合法空态，不抛错）。
    */
-  private async fetchPrevClose(code: string): Promise<number | undefined> {
+  async fetchIntradayMinutes(stockCode: string): Promise<readonly IntradayMinute[]> {
+    const code = toPrefixedCode(stockCode);
+    const { date, rows } = await this.fetchMinuteRows(code);
+    const points: IntradayMinute[] = [];
+    for (const row of rows) {
+      const [hhmm, priceRaw, volumeRaw, amountRaw] = row.split(' ');
+      const price = Number(priceRaw);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      const time =
+        date === undefined || hhmm === undefined ? undefined : parseTencentMinuteTime(date, hhmm);
+      if (time === undefined) continue;
+      const cumVolume = Number(volumeRaw);
+      const cumAmount = Number(amountRaw);
+      points.push({
+        stockId: stockCode.toUpperCase(),
+        time,
+        price: money(price),
+        cumVolume: Number.isFinite(cumVolume) && cumVolume >= 0 ? cumVolume * 100 : 0, // 手 → 股
+        ...(Number.isFinite(cumAmount) && cumAmount >= 0 ? { cumAmount } : {}),
+        source: 'tencent',
+      });
+    }
+    return points;
+  }
+
+  /**
+   * qt.gtimg.cn 快照（best-effort，GBK 文本，~ 分隔）：第 4 段为昨收、第 38 段为
+   * 换手率%（2026-08 实测）。分钟端点无这两个字段；失败返回空对象，不拖垮主快照流程。
+   */
+  private async fetchRtSnapshot(
+    code: string,
+  ): Promise<{ prevClose?: number; turnoverRatePct?: number }> {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const res = await this.fetchImpl(`${this.baseRtQuoteUrl}=${code}`, {
         signal: controller.signal,
       });
-      if (!res.ok) return undefined;
+      if (!res.ok) return {};
       const buf = await res.arrayBuffer();
       // TS 的 Encoding 联合不含 'gbk'，Bun 运行时支持；qt.gtimg.cn 是 GBK 文本
       const text = new TextDecoder('gbk' as never).decode(buf);
-      const prev = Number(text.match(/="([^"]*)"/)?.[1]?.split('~')[4]);
-      return Number.isFinite(prev) && prev > 0 ? prev : undefined;
+      const parts = text.match(/="([^"]*)"/)?.[1]?.split('~');
+      const prev = Number(parts?.[4]);
+      const turnover = Number(parts?.[38]);
+      return {
+        ...(Number.isFinite(prev) && prev > 0 ? { prevClose: prev } : {}),
+        ...(Number.isFinite(turnover) && turnover >= 0 ? { turnoverRatePct: turnover } : {}),
+      };
     } catch {
-      return undefined;
+      return {};
     } finally {
       clearTimeout(timeoutHandle);
     }

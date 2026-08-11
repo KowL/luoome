@@ -12,6 +12,7 @@ import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js'
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { renderMarket, teardownMarket } from './market.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
+import { initMarketSync, renderMarketSyncStatus } from './market-sync.js';
 import { initModal } from './modal.js';
 import {
   analyzeAllHoldings,
@@ -123,6 +124,8 @@ const showRoute = async (name) => {
       await renderAISettings(setStatus);
       initMarketSettings(setStatus);
       await renderMarketSettings(setStatus);
+      initMarketSync();
+      await renderMarketSyncStatus();
       initFeishuSettings(setStatus);
       await renderFeishuSettings(setStatus);
       initDataTransfer();
@@ -274,6 +277,7 @@ const bindGlobalActions = () => {
 
 const startDashboardAutoRefresh = () => {
   setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
     if (currentHash() === 'dashboard') void renderDashboard(setStatus);
   }, 5000);
 };

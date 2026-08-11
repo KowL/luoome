@@ -2,6 +2,7 @@ import type {
   DailyBar,
   DateRange,
   IndexQuote,
+  IntradayMinute,
   MarketCoverage,
   MarketSnapshotItem,
   Quote,
@@ -18,6 +19,7 @@ interface TestMarketSource {
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
   searchStocks?(query: string): Promise<StockSearchCandidate[]>;
   fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
+  fetchIntradayMinutes?(stockId: string): Promise<readonly IntradayMinute[]>;
   fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
 }
 
@@ -123,6 +125,17 @@ const testRegistry = (
             (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
             undefined,
           ),
+      });
+    }
+    const fetchIntradayMinutes = source.fetchIntradayMinutes?.bind(source);
+    if (fetchIntradayMinutes !== undefined) {
+      bindings.push({
+        capability: 'intraday-minutes',
+        source: sourceId,
+        coverage: TEST_COVERAGE,
+        configurationReady: true,
+        execute: ({ stockId }) => fetchIntradayMinutes(stockId),
+        dataAsOf: (points) => points.at(-1)?.time,
       });
     }
   }

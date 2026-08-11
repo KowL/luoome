@@ -184,8 +184,17 @@ const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBindin
   },
 ];
 
-const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] =>
-  commonBindings(adapter, CN_ALL);
+const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] => [
+  ...commonBindings(adapter, CN_ALL),
+  {
+    capability: 'intraday-minutes',
+    source: adapter.name,
+    coverage: CN_ALL,
+    configurationReady: true,
+    execute: ({ stockId }) => adapter.fetchIntradayMinutes(stockId),
+    dataAsOf: (points) => points.at(-1)?.time,
+  },
+];
 
 const tushareBindings = (adapter: TushareMarketAdapter): AnyMarketCapabilityBinding[] => [
   ...commonBindings(adapter, CN_SH_SZ),

@@ -83,6 +83,10 @@ export class FixedQuoteAdapter implements MarketDataAdapterLike {
     return Promise.reject(new Error('unsupported_capability: realtime-index'));
   }
 
+  fetchIntradayMinutes(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
+  }
+
   fetchMarketSnapshot(): Promise<never> {
     return Promise.reject(new Error('unsupported_capability: market-snapshot'));
   }
