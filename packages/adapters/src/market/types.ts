@@ -2,6 +2,7 @@ import type {
   DailyBar,
   DateRange,
   IndexQuote,
+  IntradayMinute,
   MarketDataAdapterLike,
   MarketSnapshotItem,
   Quote,
@@ -26,6 +27,8 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   searchStocks(query: string): Promise<StockSearchCandidate[]>;
   /** 大盘指数实时行情 Gateway；无实时来源时拒绝 unsupported_capability。 */
   fetchIndexQuotes(): Promise<readonly IndexQuote[]>;
+  /** 当日分时分钟序列 Gateway；无来源时拒绝 unsupported_capability。 */
+  fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]>;
   /** 指数能力的数据时效；delayed 不能进入 realtime 路由。 */
   readonly indexQuoteMode?: 'realtime' | 'delayed';
   /** 全市场快照 Gateway；具体来源由 capability registry 路由。 */

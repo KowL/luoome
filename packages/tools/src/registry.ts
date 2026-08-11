@@ -29,6 +29,7 @@ import { createAccountTool } from './tools/create-account.js';
 import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
+import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { generateStrategyRecommendationsTool } from './tools/generate-strategy-recommendations.js';
 import { getAccountTool } from './tools/get-account.js';
@@ -266,6 +267,7 @@ export const toolRegistry: Registry = createRegistry([
   fetchQuoteTool,
   batchQuoteTool,
   fetchIndexQuotesTool,
+  fetchIntradayMinutesTool,
   syncQuotesTool,
   syncDailyBarsTool,
   getPreviousClosesTool,

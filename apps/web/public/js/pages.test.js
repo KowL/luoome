@@ -4,7 +4,6 @@ import {
   boardStats,
   errorKindLabel,
   filterAdvices,
-  memberChangePct,
   routeStockId,
   sortBoardItems,
   watchRunSummaryText,
@@ -23,21 +22,6 @@ describe('盯盘最近一轮摘要', () => {
 
   it('尚无运行记录时给占位文案', () => {
     expect(watchRunSummaryText(null)).toBe('跑一轮后显示评估指标');
-  });
-});
-
-describe('成员涨跌幅（昨收基准）', () => {
-  it('有昨收：(close − prevClose) / prevClose', () => {
-    expect(memberChangePct({ close: 11, prevClose: 10 })).toBeCloseTo(0.1, 10);
-    expect(memberChangePct({ close: 9, prevClose: 10 })).toBeCloseTo(-0.1, 10);
-  });
-
-  it('缺昨收 / 昨收非正 / 无 quote → null（不回退今开基准）', () => {
-    expect(memberChangePct({ close: 11, open: 10 })).toBeNull();
-    expect(memberChangePct({ close: 11, prevClose: 0 })).toBeNull();
-    expect(memberChangePct({ close: 11, prevClose: Number.NaN })).toBeNull();
-    expect(memberChangePct(null)).toBeNull();
-    expect(memberChangePct(undefined)).toBeNull();
   });
 });
 

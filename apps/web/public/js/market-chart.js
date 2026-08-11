@@ -39,6 +39,24 @@ const toMarkerData = (markers) =>
     text: marker.title.slice(0, 24),
   }));
 
+/** 分时点 → 价格 Line 数据（time 为 Unix 秒；p.time 来自 JSON 是 ISO 字符串）。 */
+const toIntradayLineData = (points) =>
+  points.map((p) => ({ time: Math.floor(new Date(p.time).getTime() / 1000), value: p.price }));
+
+/**
+ * 分时点 → 逐分钟成交量 Histogram 数据：cumVolume 是当日累计口径，
+ * 相邻差分衍生逐分钟量（首点保留原值，倒挂取 0）；柱色随价格涨跌（红涨绿跌）。
+ */
+const toIntradayVolumeData = (points) =>
+  points.map((p, i) => {
+    const prev = points[i - 1];
+    return {
+      time: Math.floor(new Date(p.time).getTime() / 1000),
+      value: prev === undefined ? p.cumVolume : Math.max(0, p.cumVolume - prev.cumVolume),
+      color: prev === undefined || p.price >= prev.price ? UP_COLOR : DOWN_COLOR,
+    };
+  });
+
 /**
  * 从 candles 纯计算 MA 序列（§12.2：前端计算仅用于绘制，指标摘要以 Tool 输出为权威）。
  * 窗口不足 period 的前期点不输出。
@@ -124,8 +142,7 @@ const createMarketChart = async (container, options = {}) => {
     1,
   );
   chart.priceScale('volume', 1).applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
-  const markerApi =
-    typeof lc.createSeriesMarkers === 'function' ? lc.createSeriesMarkers(candleSeries, []) : null;
+  const markerApi = lc.createSeriesMarkers(candleSeries, []);
 
   const observer = new ResizeObserver((entries) => {
     const entry = entries[0];
@@ -141,7 +158,69 @@ const createMarketChart = async (container, options = {}) => {
       maSeries.ma10.setData(ma10);
       maSeries.ma20.setData(ma20);
       volumeSeries.setData(toVolumeData(candles));
-      markerApi?.setMarkers(toMarkerData(markers));
+      markerApi.setMarkers(toMarkerData(markers));
+      chart.timeScale().fitContent();
+    },
+    resize(width, nextHeight) {
+      chart.applyOptions({
+        width: Math.max(1, Math.floor(width)),
+        height: Math.max(1, Math.floor(nextHeight)),
+      });
+    },
+    destroy() {
+      observer.disconnect();
+      chart.remove();
+    },
+  };
+};
+
+/**
+ * 创建分时图：价格 Line 主 pane + 逐分钟成交量 Histogram 副 pane（pane 1）。
+ * 输入是 fetch_intraday_minutes 的累计口径分钟点，量在工厂内差分衍生。
+ * @param {HTMLElement} container
+ * @returns {Promise<{
+ *   setData: (points: Array<object>) => void,
+ *   resize: (width: number, height: number) => void,
+ *   destroy: () => void,
+ * }>}
+ */
+const createIntradayChart = async (container) => {
+  const lc = await loadLightweightCharts();
+  const chart = lc.createChart(container, {
+    width: container.clientWidth || 640,
+    height: 360,
+    layout: {
+      background: { type: 'solid', color: 'transparent' },
+      textColor: '#76849a',
+      attributionLogo: true, // 保留 TradingView attribution（§3.4 NOTICE 要求）
+    },
+    grid: {
+      vertLines: { color: 'rgba(72, 86, 108, 0.1)' },
+      horzLines: { color: 'rgba(72, 86, 108, 0.1)' },
+    },
+    timeScale: { borderColor: 'rgba(72, 86, 108, 0.24)', timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: 'rgba(72, 86, 108, 0.24)' },
+  });
+
+  const priceSeries = chart.addSeries(lc.LineSeries, { color: '#3f66d8', lineWidth: 2 });
+  const volumeSeries = chart.addSeries(
+    lc.HistogramSeries,
+    { priceFormat: { type: 'volume' }, priceScaleId: 'volume' },
+    1,
+  );
+  chart.priceScale('volume', 1).applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+
+  const observer = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (entry === undefined) return;
+    chart.applyOptions({ width: Math.max(1, Math.floor(entry.contentRect.width)) });
+  });
+  observer.observe(container);
+
+  return {
+    setData(points) {
+      priceSeries.setData(toIntradayLineData(points));
+      volumeSeries.setData(toIntradayVolumeData(points));
       chart.timeScale().fitContent();
     },
     resize(width, nextHeight) {
@@ -159,9 +238,12 @@ const createMarketChart = async (container, options = {}) => {
 
 export {
   computeMaSeries,
+  createIntradayChart,
   createMarketChart,
   DOWN_COLOR,
   toCandleData,
+  toIntradayLineData,
+  toIntradayVolumeData,
   toMarkerData,
   toVolumeData,
   UP_COLOR,

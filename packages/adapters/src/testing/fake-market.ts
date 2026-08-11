@@ -146,6 +146,10 @@ export class FakeMarketAdapter implements MarketDataAdapter {
     return Promise.reject(new Error('unsupported_capability: realtime-index'));
   }
 
+  fetchIntradayMinutes(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
+  }
+
   marketSourceStatus(): readonly MarketSourceStatus[] {
     const coverage = ['CN_A_SHARES_SH_SZ'] as const;
     return (['quote', 'daily-bars', 'search', 'market-snapshot'] as const).map((dataset) => ({

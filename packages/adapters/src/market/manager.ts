@@ -2,6 +2,7 @@ import type {
   DailyBar,
   DateRange,
   IndexQuote,
+  IntradayMinute,
   Logger,
   MarketSnapshotItem,
   Quote,
@@ -12,6 +13,8 @@ import { DailyBarSchema, isHoliday, isWeekend, QuoteSchema } from '@luoome/core'
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
 import type { MarketSourceRegistry, MarketSourceStatus } from './source-registry.js';
 import type { MarketDataAdapter } from './types.js';
+
+const INTRADAY_MINUTES_TTL_MS = 30_000;
 
 const rangeContainsTradingDay = (range: DateRange): boolean => {
   const cursor = new Date(range.start);
@@ -127,6 +130,11 @@ export class MarketDataManager implements MarketDataAdapter {
   private marketSnapshotCache:
     | { readonly at: number; readonly items: readonly MarketSnapshotItem[] }
     | undefined;
+  /** 当日分时 TTL 缓存（per stockId）。 */
+  private readonly intradayMinutesCache = new Map<
+    string,
+    { readonly at: number; readonly points: readonly IntradayMinute[] }
+  >();
 
   private primaryCalls = 0;
   private primaryFailures = 0;
@@ -387,6 +395,37 @@ export class MarketDataManager implements MarketDataAdapter {
       }
     }
     throw lastError ?? new Error('all market sources failed for realtime-index');
+  }
+
+  /**
+   * 当日分时分钟序列：只路由显式注册 intraday-minutes capability 的来源，
+   * 无源抛 unsupported_capability，由调用方（fetch_intraday_minutes tool）合法降级。
+   * 空序列（盘前 / 非交易日）是合法结果，不抛 no_data。
+   * 30s TTL（per stockId）：行情页轮询最密 60s，TTL 内复用避免重复打源。
+   */
+  async fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]> {
+    const cached = this.intradayMinutesCache.get(stockId);
+    if (cached !== undefined && this.clock().getTime() - cached.at < INTRADAY_MINUTES_TTL_MS) {
+      return cached.points;
+    }
+    const sources = this.registry.sources('intraday-minutes');
+    if (sources.length === 0) throw new Error('unsupported_capability: intraday-minutes');
+    let lastError: unknown;
+    for (const source of sources) {
+      try {
+        await this.rateLimiter.acquire();
+        const points = await source.execute({ stockId });
+        this.intradayMinutesCache.set(stockId, { at: this.clock().getTime(), points });
+        return points;
+      } catch (error) {
+        this.logger.warn('manager.fetchIntradayMinutes source failed', {
+          sourceName: source.source,
+          error: errorMessage(error),
+        });
+        lastError = error;
+      }
+    }
+    throw lastError ?? new Error('all market sources failed for intraday-minutes');
   }
 
   marketSourceStatus(): readonly MarketSourceStatus[] {

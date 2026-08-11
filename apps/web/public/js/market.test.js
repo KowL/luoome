@@ -11,7 +11,9 @@ import {
   changeClass,
   createRequestTracker,
   fetchedAtLabel,
+  formatAmount,
   formatVolume,
+  normalizeMarketGranularity,
   normalizeMarketRange,
   parseRouteHash,
   pushRecentView,
@@ -60,6 +62,23 @@ describe('hash 参数解析与序列化', () => {
     expect(params.get('stockId')).toBe('600519.SH');
     expect(params.get('range')).toBe('3m');
   });
+
+  it('granularity 深链接互逆：周 / 月保留在 hash 中', () => {
+    for (const g of ['week', 'month']) {
+      const hash = buildMarketHash('002594.SZ', '1y', null, g);
+      const { route, params } = parseRouteHash(`#${hash}`);
+      expect(route).toBe('market');
+      expect(params.get('stockId')).toBe('002594.SZ');
+      expect(params.get('range')).toBe('1y');
+      expect(params.get('granularity')).toBe(g);
+    }
+  });
+
+  it('granularity 为 day 时不出现在 hash（默认口径）', () => {
+    const hash = buildMarketHash('002594.SZ', '3m', null, 'day');
+    expect(hash).toBe('market?stockId=002594.SZ&range=3m');
+    expect(parseRouteHash(`#${hash}`).params.get('granularity')).toBeNull();
+  });
 });
 
 describe('range 归一化', () => {
@@ -71,6 +90,18 @@ describe('range 归一化', () => {
     expect(normalizeMarketRange(null)).toBe('3m');
     expect(normalizeMarketRange('1d')).toBe('3m');
     expect(normalizeMarketRange('')).toBe('3m');
+  });
+});
+
+describe('granularity 归一化', () => {
+  it('合法值原样保留', () => {
+    for (const g of ['day', 'week', 'month']) expect(normalizeMarketGranularity(g)).toBe(g);
+  });
+
+  it('非法 / 缺失值回退 day', () => {
+    expect(normalizeMarketGranularity(null)).toBe('day');
+    expect(normalizeMarketGranularity('year')).toBe('day');
+    expect(normalizeMarketGranularity('')).toBe('day');
   });
 });
 
@@ -139,6 +170,13 @@ describe('展示 helper', () => {
     expect(formatVolume(123_456_789)).toBe('1.23亿');
     expect(formatVolume(999)).toBe('999');
     expect(formatVolume(null)).toBe('--');
+  });
+
+  it('成交额按元格式化为万 / 亿', () => {
+    expect(formatAmount(2_193_664_806)).toBe('21.94亿');
+    expect(formatAmount(12_345)).toBe('1.23万');
+    expect(formatAmount(999)).toBe('999');
+    expect(formatAmount(undefined)).toBe('--');
   });
 
   it('涨跌配色：红涨绿跌沿用 text-pos / text-neg', () => {

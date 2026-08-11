@@ -222,6 +222,56 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
+  it('旧版 price_snapshots（无 amount/turnover_rate 列）幂等迁移并保留数据', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { Database } = await import('bun:sqlite');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luoome-quote-amount-migration-'));
+    const dbPath = path.join(dir, 'legacy.sqlite');
+    try {
+      const sqlite = new Database(dbPath);
+      sqlite.exec(`
+        CREATE TABLE price_snapshots (
+          stock_id TEXT NOT NULL,
+          observed_at INTEGER NOT NULL,
+          fetched_at INTEGER NOT NULL,
+          timestamp_source TEXT NOT NULL,
+          open REAL NOT NULL,
+          high REAL NOT NULL,
+          low REAL NOT NULL,
+          close REAL NOT NULL,
+          volume INTEGER NOT NULL,
+          prev_close REAL,
+          source TEXT NOT NULL,
+          CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, observed_at, source)
+        );
+        INSERT INTO price_snapshots
+          (stock_id, observed_at, fetched_at, timestamp_source, open, high, low, close, volume, prev_close, source)
+        VALUES
+          ('600519.SH', 1784591400000, 1784591400000, 'retrieval', 100, 101, 99, 100.5, 1234, 100, 'legacy');
+      `);
+      sqlite.close();
+
+      const handle = createDrizzleRepos(dbPath);
+      const cols = handle.db
+        .all<{ name: string }>(sql`PRAGMA table_info(price_snapshots)`)
+        .map((c) => c.name);
+      expect(cols).toContain('amount');
+      expect(cols).toContain('turnover_rate');
+      const migrated = await handle.repos.quote.latestByStock('600519.SH');
+      expect(migrated).toMatchObject({ stockId: '600519.SH', source: 'legacy', close: 100.5 });
+      expect(migrated?.amount).toBeUndefined();
+      expect(migrated?.turnoverRatePct).toBeUndefined();
+      ensureSchema(handle.db); // 再跑一次幂等
+      expect(
+        await handle.repos.quote.listInRange('600519.SH', new Date(0), new Date(8.64e15)),
+      ).toHaveLength(1);
+      handle.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('阶段 C 存量迁移：v0.5 → MVP accounts.kind=mock 自动升级为 real（幂等）', async () => {
     // 1) 手工建 accounts 表 + 灌 3 条 v0.5 旧 mock 行（绕过 repo.save 的 invariant）
     const handle = createDrizzleRepos(':memory:');

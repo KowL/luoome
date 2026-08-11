@@ -9,7 +9,7 @@
 'use strict';
 
 import { callApi } from './api.js';
-import { createRequestTracker } from './market.js';
+import { createRequestTracker } from './market-shared.js';
 import { el, mount } from './ui.js';
 
 /* ============ 纯函数（可独立测试） ============ */

@@ -37,7 +37,7 @@ import {
   runIntradayWatchObserved,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { ZodError } from 'zod';
 
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
@@ -84,6 +84,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'fetch_quote',
   'batch_quote',
   'fetch_index_quotes',
+  'fetch_intraday_minutes',
   'get_ashare_sentiment',
   'get_stock_market_view',
   'sync_stock_universe',
@@ -362,6 +363,72 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const tool = toolRegistry.get(name);
     if (tool === undefined) return notFound('Tool', name);
     return tool.execute(input, ctxRef.current);
+  };
+
+  interface BatchQuoteTarget {
+    name: string;
+    quote: {
+      close: number;
+      observedAt: unknown;
+      retrieval: 'live' | 'local-fallback';
+      freshness: 'fresh' | 'stale';
+    } | null;
+    changePct: number | null;
+  }
+
+  /**
+   * batch_quote 聚合写回（batch_quote 上限 100 只）：整体失败降级为
+   * quote 保持 null + warnings；单只失败跳过；changePct 全行统一昨收基准换算。
+   */
+  const applyBatchQuotes = async <T extends BatchQuoteTarget>(
+    entries: ReadonlyMap<string, T>,
+    warnings: string[],
+    degradeLabel: string,
+    { updateName = false, keepExistingChangePct = false } = {},
+  ): Promise<void> => {
+    const stockIds = [...entries.keys()].slice(0, 100);
+    if (stockIds.length === 0) return;
+    const quotesResult = await invokeTool('batch_quote', {
+      stockIds,
+      context: 'display',
+    });
+    if (!quotesResult.ok) {
+      warnings.push(`batch_quote 失败（${quotesResult.error.kind}），${degradeLabel}`);
+      return;
+    }
+    const { items } = quotesResult.data as {
+      items: Array<
+        | {
+            stockId: string;
+            stockName: string;
+            status: 'ok';
+            quote: { close: number; prevClose?: number; observedAt: unknown };
+            retrieval: 'live' | 'local-fallback';
+            freshness: 'fresh' | 'stale';
+          }
+        | { stockId: string; status: 'unresolved' | 'unavailable'; reason: string }
+      >;
+    };
+    for (const result of items) {
+      if (result.status !== 'ok') continue;
+      const entry = entries.get(result.stockId);
+      if (entry === undefined) continue;
+      if (updateName) entry.name = result.stockName;
+      entry.quote = {
+        close: result.quote.close,
+        observedAt: result.quote.observedAt,
+        retrieval: result.retrieval,
+        freshness: result.freshness,
+      };
+      const prevClose = result.quote.prevClose;
+      if (
+        (!keepExistingChangePct || entry.changePct === null) &&
+        typeof prevClose === 'number' &&
+        prevClose > 0
+      ) {
+        entry.changePct = ((result.quote.close - prevClose) / prevClose) * 100;
+      }
+    }
   };
 
   app.get('/api/research/topics', (c) =>
@@ -908,6 +975,46 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
   };
 
+  /** 连板天梯 / 对比共用 query 解析；compare 的校验顺序保持先 date 后 prevDate。 */
+  const parseLimitUpQuery = (
+    c: Context,
+    { requirePrevDate }: { requirePrevDate: boolean },
+  ): { input: Record<string, unknown> } | { response: Response } => {
+    const date = c.req.query('date');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return {
+        response: jsonResult({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: 'date 必填且为 YYYY-MM-DD',
+            issues: [],
+          },
+        }),
+      };
+    }
+    const input: Record<string, unknown> = { date };
+    if (requirePrevDate) {
+      const prevDate = c.req.query('prevDate');
+      if (typeof prevDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(prevDate)) {
+        return {
+          response: jsonResult({
+            ok: false,
+            error: { kind: 'invalid_input', message: 'prevDate 必填且为 YYYY-MM-DD', issues: [] },
+          }),
+        };
+      }
+      input.prevDate = prevDate;
+    }
+    input.days = intQuery(c.req.query('days'), 15, 1);
+    input.source = enumQuery(c.req.query('source'), 'eastmoney', ['eastmoney']);
+    input.includeStar = c.req.query('includeStar') === 'true';
+    input.includeBse = c.req.query('includeBse') === 'true';
+    input.includeST = c.req.query('includeST') === 'true';
+    input.includeUncategorized = c.req.query('includeUncategorized') === 'true';
+    return { input };
+  };
+
   /**
    * 连板天梯（Phase 2，docs/ddd/limit-up-ladder-detailed-design.md §11）。
    *
@@ -919,27 +1026,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    * 上游不可达：tool 返回 internal；web 包成 HTTP 502。
    */
   app.get('/api/market/limit-up', async (c) => {
-    const date = c.req.query('date');
-    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return jsonResult({
-        ok: false,
-        error: {
-          kind: 'invalid_input',
-          message: 'date 必填且为 YYYY-MM-DD',
-          issues: [],
-        },
-      });
-    }
-    const input: Record<string, unknown> = {
-      date,
-      days: intQuery(c.req.query('days'), 15, 1),
-      source: enumQuery(c.req.query('source'), 'eastmoney', ['eastmoney']),
-      includeStar: c.req.query('includeStar') === 'true',
-      includeBse: c.req.query('includeBse') === 'true',
-      includeST: c.req.query('includeST') === 'true',
-      includeUncategorized: c.req.query('includeUncategorized') === 'true',
-    };
-    const r = await invokeTool('limit_up_ladder', input);
+    const parsed = parseLimitUpQuery(c, { requirePrevDate: false });
+    if ('response' in parsed) return parsed.response;
+    const r = await invokeTool('limit_up_ladder', parsed.input);
     if (r.ok) return jsonResult(r);
     if (r.error.kind === 'invalid_input') return jsonResult(r);
     // 解析 / 上游错误 → 502
@@ -954,31 +1043,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    * 用 limit_up_ladder_compare tool，复用同一 cache。
    */
   app.get('/api/market/limit-up/compare', async (c) => {
-    const date = c.req.query('date');
-    const prevDate = c.req.query('prevDate');
-    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return jsonResult({
-        ok: false,
-        error: { kind: 'invalid_input', message: 'date 必填且为 YYYY-MM-DD', issues: [] },
-      });
-    }
-    if (typeof prevDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(prevDate)) {
-      return jsonResult({
-        ok: false,
-        error: { kind: 'invalid_input', message: 'prevDate 必填且为 YYYY-MM-DD', issues: [] },
-      });
-    }
-    const input: Record<string, unknown> = {
-      date,
-      prevDate,
-      days: intQuery(c.req.query('days'), 15, 1),
-      source: enumQuery(c.req.query('source'), 'eastmoney', ['eastmoney']),
-      includeStar: c.req.query('includeStar') === 'true',
-      includeBse: c.req.query('includeBse') === 'true',
-      includeST: c.req.query('includeST') === 'true',
-      includeUncategorized: c.req.query('includeUncategorized') === 'true',
-    };
-    const r = await invokeTool('limit_up_ladder_compare', input);
+    const parsed = parseLimitUpQuery(c, { requirePrevDate: true });
+    if ('response' in parsed) return parsed.response;
+    const r = await invokeTool('limit_up_ladder_compare', parsed.input);
     if (r.ok) return jsonResult(r);
     if (r.error.kind === 'invalid_input') return jsonResult(r);
     return new Response(JSON.stringify(r), {
@@ -1368,47 +1435,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     }
 
     // 成员股票行情：照 /api/dashboard 看板模式一次 batch_quote 聚合，
-    // 整体失败降级为 quote=null，不拖垮总览端点。batch_quote 上限 100 只。
-    const stockIds = [...stocksById.keys()].slice(0, 100);
-    if (stockIds.length > 0) {
-      const quotesResult = await invokeTool('batch_quote', {
-        stockIds,
-        context: 'display',
-      });
-      if (quotesResult.ok) {
-        const { items } = quotesResult.data as {
-          items: Array<
-            | {
-                stockId: string;
-                stockName: string;
-                status: 'ok';
-                quote: { close: number; prevClose?: number; observedAt: unknown };
-                retrieval: 'live' | 'local-fallback';
-                freshness: 'fresh' | 'stale';
-              }
-            | { stockId: string; status: 'unresolved' | 'unavailable'; reason: string }
-          >;
-        };
-        for (const result of items) {
-          if (result.status !== 'ok') continue;
-          const entry = stocksById.get(result.stockId);
-          if (entry === undefined) continue;
-          entry.name = result.stockName;
-          entry.quote = {
-            close: result.quote.close,
-            observedAt: result.quote.observedAt,
-            retrieval: result.retrieval,
-            freshness: result.freshness,
-          };
-          const prevClose = result.quote.prevClose;
-          if (typeof prevClose === 'number' && prevClose > 0) {
-            entry.changePct = ((result.quote.close - prevClose) / prevClose) * 100;
-          }
-        }
-      } else {
-        warnings.push(`batch_quote 失败（${quotesResult.error.kind}），总览行情降级为空`);
-      }
-    }
+    // 整体失败降级为 quote=null，不拖垮总览端点。
+    await applyBatchQuotes(stocksById, warnings, '总览行情降级为空', { updateName: true });
 
     return jsonResult({
       ok: true,
@@ -1741,44 +1769,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         }
       }
     }
-    if (board.size > 0) {
-      const quotesResult = await invokeTool('batch_quote', {
-        stockIds: [...board.keys()],
-        context: 'display',
-      });
-      if (quotesResult.ok) {
-        const { items } = quotesResult.data as {
-          items: Array<
-            | {
-                stockId: string;
-                status: 'ok';
-                quote: { close: number; prevClose?: number; observedAt: unknown };
-                retrieval: 'live' | 'local-fallback';
-                freshness: 'fresh' | 'stale';
-              }
-            | { stockId: string; status: 'unresolved' | 'unavailable'; reason: string }
-          >;
-        };
-        for (const result of items) {
-          if (result.status !== 'ok') continue;
-          const item = board.get(result.stockId);
-          if (item === undefined) continue;
-          item.quote = {
-            close: result.quote.close,
-            observedAt: result.quote.observedAt,
-            retrieval: result.retrieval,
-            freshness: result.freshness,
-          };
-          // 涨跌幅全行统一口径：昨收基准换算
-          const prevClose = result.quote.prevClose;
-          if (item.changePct === null && typeof prevClose === 'number' && prevClose > 0) {
-            item.changePct = ((result.quote.close - prevClose) / prevClose) * 100;
-          }
-        }
-      } else {
-        warnings.push(`batch_quote 失败（${quotesResult.error.kind}），看板行情降级为空`);
-      }
-    }
+    await applyBatchQuotes(board, warnings, '看板行情降级为空', { keepExistingChangePct: true });
     const PRIORITY_RANK = { urgent: 0, important: 1, normal: 2 } as const;
     for (const t of todayTriggers) {
       const item = board.get(t.stockId);
@@ -1867,6 +1858,15 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   // ruo 迁移 §8：数据健康读模型 + workflow 运行审计（供仪表盘 / 设置页消费）。
   app.get('/api/market-data-status', () => callTool('get_market_data_status', {}));
+
+  // 行情页指数条：与 /api/dashboard 共用 invokeIndexQuotes 缓存（15s TTL + 60s stale），
+  // 失败按 dashboard 语义降级为空数组，不拖垮行情页。
+  app.get('/api/market/indices', async () => {
+    const indexQuotes = await invokeIndexQuotes();
+    if (indexQuotes.ok) return jsonResult({ ok: true, data: indexQuotes.data });
+    return jsonResult({ ok: true, data: { indices: [] } });
+  });
+
   app.get('/api/workflow-runs', (c) => {
     const limit = Number(c.req.query('limit') ?? '30');
     return callTool('list_workflow_runs', {

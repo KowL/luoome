@@ -15,6 +15,10 @@ export interface Quote {
   readonly low: Money;
   readonly close: Money; // 实时价取最近成交价，放入 close
   readonly volume: number; // 股（各源统一换算：Eastmoney/Tencent 的手 ×100）
+  /** 成交额（元，可选）：数据源给得出才填（eastmoney f48 / tencent 分钟端点累计额）。 */
+  readonly amount?: number | undefined;
+  /** 换手率（%，可选）：数据源给得出才填（eastmoney f168 / tencent qt 快照）。 */
+  readonly turnoverRatePct?: number | undefined;
   /** 昨收（可选）：数据源给得出才填（eastmoney f60 / tushare pre_close / tencent qt 快照）。 */
   readonly prevClose?: Money | undefined;
   readonly source: string;
@@ -42,6 +46,19 @@ export interface DateRange {
   readonly end: Date;
 }
 
+/** 当日分时点（tencent 分钟端点）：volume/amount 是当日累计口径，给不出逐分钟 OHLC。 */
+export interface IntradayMinute {
+  readonly stockId: string;
+  /** 上游分钟时间（交易所时区投影为绝对时间）。 */
+  readonly time: Date;
+  readonly price: Money;
+  /** 当日累计成交量（股，与 Quote.volume 同量纲）。 */
+  readonly cumVolume: number;
+  /** 当日累计成交额（元，可选）：数据源给得出才填。 */
+  readonly cumAmount?: number | undefined;
+  readonly source: string;
+}
+
 /** 大盘指数实时行情（代码、名称、最新点位、涨跌、时间、源；点位复用 Money 精度不变量）。 */
 export interface IndexQuote {
   readonly code: string;
@@ -65,6 +82,8 @@ export const QuoteSchema = z
     low: MoneySchema,
     close: MoneySchema,
     volume: z.number().nonnegative(),
+    amount: z.number().nonnegative().optional(),
+    turnoverRatePct: z.number().nonnegative().optional(),
     prevClose: MoneySchema.optional(),
     source: z.string().min(1),
   })
@@ -105,6 +124,8 @@ export const QuoteSchema = z
       low: quote.low,
       close: quote.close,
       volume: quote.volume,
+      ...(quote.amount === undefined ? {} : { amount: quote.amount }),
+      ...(quote.turnoverRatePct === undefined ? {} : { turnoverRatePct: quote.turnoverRatePct }),
       ...(quote.prevClose === undefined ? {} : { prevClose: quote.prevClose }),
       source: quote.source,
     };
@@ -126,6 +147,15 @@ export const DailyBarSchema = z.object({
 export const DateRangeSchema = z.object({
   start: z.coerce.date(),
   end: z.coerce.date(),
+});
+
+export const IntradayMinuteSchema = z.object({
+  stockId: z.string().min(1),
+  time: z.coerce.date(),
+  price: MoneySchema,
+  cumVolume: z.number().nonnegative(),
+  cumAmount: z.number().nonnegative().optional(),
+  source: z.string().min(1),
 });
 
 export const IndexQuoteSchema = z.object({
