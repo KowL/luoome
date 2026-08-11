@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { money, stockCode } from '@luoome/core';
+import { money, STANDARD_DISCLAIMERS, stockCode } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { exportDataArchive, importDataArchive } from './data-transfer.js';
 
@@ -44,6 +44,58 @@ describe('data transfer', () => {
     expect(result.imported).toBeGreaterThanOrEqual(1);
     const reopened = createDrizzleRepos(targetPath);
     expect((await reopened.repos.account.findById('account-1'))?.name).toBe('主账户');
+    reopened.close();
+  });
+
+  it('建议和盯盘运行记录可以原样导出并回导', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    await source.repos.advice.save({
+      id: 'advice-1',
+      subjectKind: 'stock',
+      subjectId: '600519.SH',
+      decision: 'watch',
+      confidence: 70,
+      horizon: 'short',
+      reasoning: {
+        premise: '等待更多信息',
+        evidence: ['成交量稳定'],
+        counterEvidence: ['短期波动较大'],
+      },
+      risks: ['市场风险'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      basedOn: { dataAsOf: new Date('2026-08-11T00:00:00Z') },
+      validFrom: new Date('2026-08-11T00:00:00Z'),
+      validUntil: new Date('2026-08-14T00:00:00Z'),
+      createdAt: new Date('2026-08-11T00:00:00Z'),
+    });
+    await source.repos.watchRun.save({
+      id: 'watch-run-1',
+      mode: 'once',
+      status: 'succeeded',
+      startedAt: new Date('2026-08-11T00:00:00Z'),
+      finishedAt: new Date('2026-08-11T00:01:00Z'),
+      evaluatedPools: 1,
+      evaluatedStocks: 3,
+      triggered: 3,
+      notified: 2,
+      suppressedByCooldown: 1,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+    });
+    source.close();
+
+    const archive = exportDataArchive(sourcePath, ['advice-reports', 'watchlists']);
+    const targetPath = databasePath();
+    const target = createDrizzleRepos(targetPath);
+    target.close();
+
+    expect(() => importDataArchive(targetPath, archive)).not.toThrow();
+    const reopened = createDrizzleRepos(targetPath);
+    expect((await reopened.repos.advice.findById('advice-1'))?.disclaimers).toEqual([
+      ...STANDARD_DISCLAIMERS,
+    ]);
+    expect((await reopened.repos.watchRun.findById('watch-run-1'))?.notified).toBe(2);
     reopened.close();
   });
 

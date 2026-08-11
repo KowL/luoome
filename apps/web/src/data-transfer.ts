@@ -140,7 +140,6 @@ const BOOLEAN_COLUMNS = new Set([
   'active',
   'all_day',
   'enabled',
-  'notified',
   'notify_on_recovery',
   'selected',
   'stale',
@@ -149,6 +148,7 @@ const JSON_COLUMNS = new Set([
   'attachment_paths',
   'based_on',
   'details_json',
+  'disclaimers',
   'evidence',
   'eval_snapshot',
   'input_summary',
@@ -267,6 +267,10 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   alert_plans: domainValidator(AlertPlanSchema, assertAlertPlanInvariants),
   watch_triggers: domainValidator(WatchTriggerSchema, assertWatchTriggerInvariants, (row) => {
     const normalized = omitNulls(row);
+    if (row.notified !== 0 && row.notified !== 1 && typeof row.notified !== 'boolean') {
+      throw new Error('notified 必须是 0/1');
+    }
+    normalized.notified = Boolean(row.notified);
     const quoteClose = row.quoteClose;
     const quoteTs = row.quoteTs;
     if ((quoteClose == null) !== (quoteTs == null)) {
