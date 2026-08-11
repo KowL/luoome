@@ -2,7 +2,7 @@ import {
   classifyStrategyResult,
   diffStrategyRunViews,
   getStrategyRunDataHealth,
-  isUsableStrategyRun,
+  isPublishableOperationalRun,
   StrategyResultSchema,
   StrategyResultViewKindSchema,
   StrategyResultViewSchema,
@@ -18,6 +18,10 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import {
+  readStrategySignalsByStock,
+  StrategySignalScopeSchema,
+} from '../internal/strategy-signal-scope.js';
 
 export const StockIdentityViewSchema = z.object({
   stockId: z.string().min(1),
@@ -28,6 +32,8 @@ export const StockIdentityViewSchema = z.object({
 export const ListStrategyRunsInput = z.object({
   strategyId: z.string().min(1).optional(),
   status: z.enum(['running', 'complete', 'partial', 'failed']).optional(),
+  scope: z.enum(['operational', 'evaluation']).optional(),
+  publication: z.enum(['published', 'withheld', 'non-publishing']).optional(),
   since: z.coerce.date().optional(),
   limit: z.number().int().positive().max(500).default(50),
 });
@@ -45,6 +51,8 @@ export const listStrategyRunsTool = defineTool({
     const runs = await ctx.repos.strategyRun.listRuns({
       ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
       ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.scope === undefined ? {} : { scope: input.scope }),
+      ...(input.publication === undefined ? {} : { publication: input.publication }),
       ...(input.since === undefined ? {} : { since: input.since }),
       limit: input.limit,
     });
@@ -107,6 +115,12 @@ export const getStrategyRunTool = defineTool({
       results,
       signals,
       ...identities,
+      warnings: [
+        ...identities.warnings,
+        ...(isPublishableOperationalRun(run)
+          ? []
+          : [`该运行不会进入 operational current：${run.publication?.status ?? 'legacy/unknown'}`]),
+      ],
     };
   },
 });
@@ -150,9 +164,7 @@ export const listStrategyResultViewsTool = defineTool({
     if (strategy === null) return errNotFound('Strategy', input.strategyId);
     const run =
       input.runId === undefined
-        ? (await ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, limit: 10 })).find(
-            (candidate) => isUsableStrategyRun(candidate),
-          )
+        ? await ctx.repos.strategyRun.findLatestPublishedRun(strategy.id)
         : await ctx.repos.strategyRun.findRunById(input.runId);
     if (run === undefined || run === null) {
       return errNotFound('可用的完成运行', input.runId ?? strategy.id);
@@ -216,7 +228,12 @@ export const listStrategyResultViewsTool = defineTool({
           } as const),
         view,
       })),
-      warnings: directory.warnings,
+      warnings: [
+        ...directory.warnings,
+        ...(isPublishableOperationalRun(run)
+          ? []
+          : [`该运行不会进入 operational current：${run.publication?.status ?? 'legacy/unknown'}`]),
+      ],
     };
   },
 });
@@ -236,28 +253,35 @@ export const GetStrategyWorkspaceOutput = z.object({
     enteredCount: z.number().int().nonnegative().optional(),
     exitedCount: z.number().int().nonnegative().optional(),
     maxAbsRankDelta: z.number().int().nonnegative().optional(),
-    health: z.enum(['ready', 'never-run', 'running', 'partial', 'failed']),
+    health: z.enum(['ready', 'never-run', 'running', 'partial', 'withheld', 'failed']),
   }),
   warnings: z.array(z.string()),
 });
 
 export const getStrategyWorkspaceTool = defineTool({
   name: 'get_strategy_workspace',
-  description: '查询 Strategy 工作台摘要；已完成运行始终发布明确结果，执行失败才回退上一条可用运行',
+  description:
+    '查询 Strategy 工作台摘要；仅 published operational run 进入 current，未发布运行保留诊断状态',
   sideEffect: 'read',
   input: GetStrategyWorkspaceInput,
   output: GetStrategyWorkspaceOutput,
   handler: async (input, ctx) => {
     const strategy = await ctx.repos.strategy.findById(input.strategyId);
     if (strategy === null) return errNotFound('Strategy', input.strategyId);
-    const [latestAttempt, recentRuns] = await Promise.all([
-      ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, limit: 1 }),
-      ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, limit: 10 }),
+    const [latestAttempt, currentRun, previousRun] = await Promise.all([
+      ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, scope: 'operational', limit: 1 }),
+      ctx.repos.strategyRun.findLatestPublishedRun(strategy.id),
+      ctx.repos.strategyRun.findLatestPublishedRun(strategy.id).then(async (run) =>
+        run === null
+          ? null
+          : ctx.repos.strategyRun.findPreviousPublishedRun({
+              strategyId: strategy.id,
+              beforeStartedAt: run.startedAt,
+              beforeRunId: run.id,
+            }),
+      ),
     ]);
     const latest = latestAttempt[0];
-    const usableRuns = recentRuns.filter((run) => isUsableStrategyRun(run));
-    const currentRun = usableRuns[0];
-    const previousRun = usableRuns[1];
     const currentVersion =
       strategy.currentVersionId === undefined
         ? undefined
@@ -266,21 +290,34 @@ export const getStrategyWorkspaceTool = defineTool({
     const health =
       latest === undefined
         ? ('never-run' as const)
-        : latest.status === 'running' || latest.status === 'failed'
-          ? latest.status
-          : getStrategyRunDataHealth(latest) === 'partial'
-            ? ('partial' as const)
-            : ('ready' as const);
-    // 仅当最近尝试不可用作基准（失败/进行中）且存在更早的可用运行时才警告；
-    // latest 本身是 partial 且被用作基准时属于正常状态，不警告。
-    if (latest !== undefined && currentRun !== undefined && !isUsableStrategyRun(latest)) {
+        : latest.status === 'running'
+          ? ('running' as const)
+          : latest.status === 'failed'
+            ? ('failed' as const)
+            : latest.publication?.status === 'withheld'
+              ? ('withheld' as const)
+              : latest.summary?.schemaVersion === 4 && latest.publication === undefined
+                ? ('withheld' as const)
+                : getStrategyRunDataHealth(latest) === 'partial'
+                  ? ('partial' as const)
+                  : ('ready' as const);
+    if (
+      latest?.publication?.status === 'withheld' ||
+      (latest?.summary?.schemaVersion === 4 && latest.publication === undefined)
+    ) {
+      warnings.push(
+        `最近运行未发布：${latest.publication?.reasons.join(', ') || 'publication-missing'}`,
+      );
+    }
+    // 最近尝试不是当前可发布基准且存在更早的 published run 时，明确展示回退状态。
+    if (latest !== undefined && currentRun !== null && !isPublishableOperationalRun(latest)) {
       warnings.push(
         `最近运行${latest.status}，当前结果仍来自 ${currentRun.finishedAt?.toISOString() ?? currentRun.startedAt.toISOString()} 的运行`,
       );
     }
 
     const overview: z.infer<typeof GetStrategyWorkspaceOutput>['overview'] = { health };
-    if (currentRun !== undefined) {
+    if (currentRun !== null) {
       const version = await ctx.repos.strategy.findVersionById(currentRun.strategyVersionId);
       if (version === null) return errNotFound('StrategyVersion', currentRun.strategyVersionId);
       const views = (await ctx.repos.strategyRun.listResults(currentRun.id)).map((result) =>
@@ -292,7 +329,7 @@ export const getStrategyWorkspaceTool = defineTool({
         (view) => view.kind === 'ranking-near-miss',
       ).length;
       overview.incompleteCount = views.filter((view) => view.kind === 'incomplete').length;
-      if (previousRun !== undefined) {
+      if (previousRun !== null) {
         const [previousVersion, previousResults] = await Promise.all([
           ctx.repos.strategy.findVersionById(previousRun.strategyVersionId),
           ctx.repos.strategyRun.listResults(previousRun.id),
@@ -320,8 +357,8 @@ export const getStrategyWorkspaceTool = defineTool({
       strategy,
       ...(currentVersion === undefined || currentVersion === null ? {} : { currentVersion }),
       ...(latest === undefined ? {} : { latestAttempt: latest }),
-      ...(currentRun === undefined ? {} : { currentRun }),
-      ...(previousRun === undefined ? {} : { previousRun }),
+      ...(currentRun === null ? {} : { currentRun }),
+      ...(previousRun === null ? {} : { previousRun }),
       overview,
       warnings,
     };
@@ -333,6 +370,7 @@ export const CompareStrategyRunsInput = z
     strategyId: z.string().min(1),
     fromRunId: z.string().min(1).optional(),
     toRunId: z.string().min(1).optional(),
+    allowCrossScope: z.boolean().default(false),
   })
   .superRefine((input, ctx) => {
     if ((input.fromRunId === undefined) !== (input.toRunId === undefined)) {
@@ -366,12 +404,16 @@ export const compareStrategyRunsTool = defineTool({
     let fromRun: StrategyRun | null | undefined;
     let toRun: StrategyRun | null | undefined;
     if (input.fromRunId === undefined || input.toRunId === undefined) {
-      const runs = (
-        await ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, limit: 10 })
-      ).filter((run) => isUsableStrategyRun(run));
-      toRun = runs[0];
-      fromRun = runs[1];
-      if (fromRun === undefined || toRun === undefined) {
+      toRun = await ctx.repos.strategyRun.findLatestPublishedRun(strategy.id);
+      fromRun =
+        toRun === null
+          ? null
+          : await ctx.repos.strategyRun.findPreviousPublishedRun({
+              strategyId: strategy.id,
+              beforeStartedAt: toRun.startedAt,
+              beforeRunId: toRun.id,
+            });
+      if (fromRun === null || toRun === null) {
         return errNotFound('StrategyRun diff baseline', strategy.id);
       }
     } else {
@@ -388,6 +430,9 @@ export const compareStrategyRunsTool = defineTool({
     if (fromRun.id === toRun.id) return errInvalidInput('Diff 需要两个不同 StrategyRun');
     if (fromRun.status === 'running' || toRun.status === 'running') {
       return errInvalidInput('running StrategyRun 不能参与 Diff');
+    }
+    if (fromRun.scope !== toRun.scope && !input.allowCrossScope) {
+      return errInvalidInput('不同 scope 的 StrategyRun 需要显式 allowCrossScope=true 才能比较');
     }
     const [fromVersion, toVersion, fromResults, toResults] = await Promise.all([
       ctx.repos.strategy.findVersionById(fromRun.strategyVersionId),
@@ -411,6 +456,16 @@ export const compareStrategyRunsTool = defineTool({
     );
     const identityById = new Map(identities.stocks.map((stock) => [stock.stockId, stock]));
     const warnings = [...identities.warnings];
+    if (!isPublishableOperationalRun(fromRun)) {
+      warnings.push(
+        `fromRun 非 published operational：${fromRun.publication?.status ?? 'legacy/unknown'}`,
+      );
+    }
+    if (!isPublishableOperationalRun(toRun)) {
+      warnings.push(
+        `toRun 非 published operational：${toRun.publication?.status ?? 'legacy/unknown'}`,
+      );
+    }
     if (diff.definitionChanged) {
       warnings.push('定义已变化，以下差异不能单独归因于市场');
     }
@@ -443,6 +498,8 @@ export const StrategySignalsByStockInput = z.object({
   stockId: z.string().min(1),
   since: z.coerce.date().optional(),
   limit: z.number().int().positive().max(500).default(50),
+  scope: StrategySignalScopeSchema.default('operational'),
+  evaluationSessionId: z.string().min(1).optional(),
 });
 export const StrategySignalsByStockOutput = z.object({
   stockId: z.string(),
@@ -457,7 +514,20 @@ export const strategySignalsByStockTool = defineTool({
   input: StrategySignalsByStockInput,
   output: StrategySignalsByStockOutput,
   handler: async (input, ctx) => {
-    const signals = await ctx.repos.strategyRun.signalsByStock(input.stockId, input.since);
+    if (input.scope === 'evaluation' && input.evaluationSessionId === undefined) {
+      return errInvalidInput('evaluation signal 读取必须显式提供 evaluationSessionId');
+    }
+    if (input.scope === 'operational' && input.evaluationSessionId !== undefined) {
+      return errInvalidInput('operational signal 读取不能携带 evaluationSessionId');
+    }
+    const signals = await readStrategySignalsByStock(ctx, {
+      stockId: input.stockId,
+      scope: input.scope,
+      ...(input.since === undefined ? {} : { since: input.since }),
+      ...(input.evaluationSessionId === undefined
+        ? {}
+        : { evaluationSessionId: input.evaluationSessionId }),
+    });
     return {
       stockId: input.stockId,
       signals: signals.slice(0, input.limit),

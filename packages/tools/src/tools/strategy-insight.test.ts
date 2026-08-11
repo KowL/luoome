@@ -190,6 +190,12 @@ describe('strategy insight', () => {
       averageReturnPct: 0.05,
       benchmarkStatus: 'unavailable',
     });
+    expect(
+      result.ok &&
+        result.data.groupedObservations.some(
+          (item) => item.dimension === 'market-state' && item.group === 'benchmark-unavailable',
+        ),
+    ).toBe(true);
   });
 
   it('AI 输出只能引用事实层提供的 fact id', async () => {
@@ -232,7 +238,7 @@ describe('strategy insight', () => {
     });
   });
 
-  it('拒绝 AI 虚构的事实引用', async () => {
+  it('AI 两次虚构事实引用后降级 facts-only', async () => {
     const base = await buildTestContext({ clock: () => now });
     await seedInsight(base);
     const ctx: ToolContext = {
@@ -258,10 +264,10 @@ describe('strategy insight', () => {
 
     expect(
       await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx),
-    ).toMatchObject({ ok: false, error: { kind: 'llm_error' } });
+    ).toMatchObject({ ok: true, data: { provider: 'facts-only' } });
   });
 
-  it('把模型调用失败映射为可重试的 llm_error', async () => {
+  it('模型调用失败后降级为 facts-only', async () => {
     const base = await buildTestContext({ clock: () => now });
     await seedInsight(base);
     const ctx: ToolContext = {
@@ -277,9 +283,6 @@ describe('strategy insight', () => {
 
     expect(
       await generateStrategyInsightTool.execute({ strategyId: 'insight-strategy' }, ctx),
-    ).toMatchObject({
-      ok: false,
-      error: { kind: 'llm_error', provider: 'offline-insight', retryable: true },
-    });
+    ).toMatchObject({ ok: true, data: { provider: 'facts-only' } });
   });
 });

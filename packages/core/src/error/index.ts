@@ -42,6 +42,7 @@ export type ToolError =
       readonly cause: string;
       readonly retryable: boolean;
     }
+  | { readonly kind: 'lease_lost_before_commit'; readonly message: string }
   | { readonly kind: 'internal'; readonly cause: string };
 
 /** ToolError 的 kind 全集，供 registry / MCP 层做 exhaustiveness 检查。 */

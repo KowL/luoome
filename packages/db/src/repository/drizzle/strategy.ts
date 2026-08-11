@@ -4,16 +4,19 @@ import {
   assertStrategyRunInvariants,
   assertStrategyVersionInvariants,
   InvariantError,
+  normalizeLegacyStrategyRun,
   type Strategy,
+  type StrategyLeaseToken,
   type StrategyRepository,
   type StrategyResult,
   type StrategyRun,
   type StrategyRunBundle,
   type StrategyRunRepository,
+  StrategyRunSchema,
   type StrategySignal,
   type StrategyVersion,
 } from '@luoome/core';
-import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
@@ -31,6 +34,15 @@ type VersionRow = typeof strategyVersions.$inferSelect;
 type RunRow = typeof strategyRuns.$inferSelect;
 type ResultRow = typeof strategyResults.$inferSelect;
 type SignalRow = typeof strategySignals.$inferSelect;
+type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
+
+// publication_status 为空时只允许兼容存量非 V4 行；新 Summary V4 缺 publication
+// 必须保持 withheld/unknown，不能被 legacy fallback 误当成 current。
+const legacyPublishedRunCondition = () =>
+  and(
+    isNull(strategyRuns.publicationStatus),
+    sql`coalesce(json_extract(${strategyRuns.summary}, '$.schemaVersion'), 0) <> 4`,
+  );
 
 const toStrategy = (row: StrategyRow): Strategy => ({
   id: row.id,
@@ -61,21 +73,31 @@ const toVersion = (row: VersionRow): StrategyVersion => ({
   createdAt: row.createdAt,
 });
 
-const toRun = (row: RunRow): StrategyRun => ({
-  id: row.id,
-  strategyId: row.strategyId,
-  strategyVersionId: row.strategyVersionId,
-  mode: row.mode,
-  coverage: row.coverage,
-  dataAsOf: row.dataAsOf,
-  startedAt: row.startedAt,
-  ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt }),
-  status: row.status,
-  inputSnapshot: row.inputSnapshot,
-  providerStatuses: [...row.providerStatuses],
-  ...(row.summary === null ? {} : { summary: row.summary }),
-  ...(row.error === null ? {} : { error: row.error }),
-});
+const toRun = (row: RunRow): StrategyRun =>
+  normalizeLegacyStrategyRun(
+    StrategyRunSchema.parse({
+      id: row.id,
+      strategyId: row.strategyId,
+      strategyVersionId: row.strategyVersionId,
+      mode: row.mode,
+      coverage: row.coverage,
+      dataAsOf: row.dataAsOf,
+      startedAt: row.startedAt,
+      ...(row.finishedAt === null ? {} : { finishedAt: row.finishedAt }),
+      status: row.status,
+      scope: row.scope,
+      inputSnapshot: row.inputSnapshot,
+      providerStatuses: [...row.providerStatuses],
+      ...(row.providerCoverage === null || row.providerCoverage === undefined
+        ? {}
+        : { providerCoverage: [...row.providerCoverage] }),
+      ...(row.summary === null ? {} : { summary: row.summary }),
+      ...(row.publication === null || row.publication === undefined
+        ? {}
+        : { publication: row.publication }),
+      ...(row.error === null ? {} : { error: row.error }),
+    }),
+  );
 
 const toResult = (row: ResultRow): StrategyResult => ({
   runId: row.runId,
@@ -336,22 +358,82 @@ export class DrizzleStrategyRepository implements StrategyRepository {
 export class DrizzleStrategyRunRepository implements StrategyRunRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
+  async acquireRunLeaseToken(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+    readonly runId?: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<StrategyLeaseToken | null> {
+    const result = this.db.run(sql`
+      INSERT INTO strategy_run_leases
+        (strategy_id, strategy_version_id, owner, lease_until, fence, heartbeat_at)
+      VALUES (
+        ${input.strategyId}, ${input.strategyVersionId}, ${input.owner},
+        ${input.leaseUntil.getTime()}, 1, ${input.now.getTime()}
+      )
+      ON CONFLICT (strategy_id, strategy_version_id) DO UPDATE SET
+        owner = excluded.owner,
+        lease_until = excluded.lease_until,
+        fence = strategy_run_leases.fence + 1,
+        heartbeat_at = excluded.heartbeat_at
+      WHERE strategy_run_leases.lease_until <= ${input.now.getTime()}
+    `);
+    const changed =
+      typeof result === 'object' &&
+      result !== null &&
+      'changes' in result &&
+      Number((result as { readonly changes: unknown }).changes) === 1;
+    if (!changed) return null;
+    const row = this.db
+      .select()
+      .from(strategyRunLeases)
+      .where(
+        and(
+          eq(strategyRunLeases.strategyId, input.strategyId),
+          eq(strategyRunLeases.strategyVersionId, input.strategyVersionId),
+        ),
+      )
+      .get();
+    if (row === undefined) return null;
+    return {
+      strategyId: input.strategyId,
+      strategyVersionId: input.strategyVersionId,
+      owner: row.owner,
+      fence: row.fence,
+      leaseUntil: row.leaseUntil,
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
+    };
+  }
+
   async acquireRunLease(input: {
     readonly strategyId: string;
     readonly strategyVersionId: string;
     readonly owner: string;
+    readonly runId?: string;
+    readonly returnToken?: boolean;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean | StrategyLeaseToken | null> {
+    const token = await this.acquireRunLeaseToken(input);
+    if (input.returnToken === true || input.runId !== undefined) return token;
+    return token !== null;
+  }
+
+  async renewRunLease(input: {
+    readonly token: StrategyLeaseToken;
     readonly now: Date;
     readonly leaseUntil: Date;
   }): Promise<boolean> {
     const result = this.db.run(sql`
-      INSERT INTO strategy_run_leases (strategy_id, strategy_version_id, owner, lease_until)
-      VALUES (
-        ${input.strategyId}, ${input.strategyVersionId}, ${input.owner}, ${input.leaseUntil.getTime()}
-      )
-      ON CONFLICT (strategy_id, strategy_version_id) DO UPDATE SET
-        owner = excluded.owner,
-        lease_until = excluded.lease_until
-      WHERE strategy_run_leases.lease_until <= ${input.now.getTime()}
+      UPDATE strategy_run_leases
+      SET lease_until = ${input.leaseUntil.getTime()}, heartbeat_at = ${input.now.getTime()}
+      WHERE strategy_id = ${input.token.strategyId}
+        AND strategy_version_id = ${input.token.strategyVersionId}
+        AND owner = ${input.token.owner}
+        AND fence = ${input.token.fence}
+        AND lease_until > ${input.now.getTime()}
     `);
     return (
       typeof result === 'object' &&
@@ -365,13 +447,74 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     readonly strategyId: string;
     readonly strategyVersionId: string;
     readonly owner: string;
+    readonly fence?: number;
   }): Promise<void> {
-    this.db.run(sql`
-      DELETE FROM strategy_run_leases
-      WHERE strategy_id = ${input.strategyId}
-        AND strategy_version_id = ${input.strategyVersionId}
-        AND owner = ${input.owner}
-    `);
+    this.db.run(
+      input.fence === undefined
+        ? sql`
+          DELETE FROM strategy_run_leases
+          WHERE strategy_id = ${input.strategyId}
+            AND strategy_version_id = ${input.strategyVersionId}
+            AND owner = ${input.owner}
+        `
+        : sql`
+          DELETE FROM strategy_run_leases
+          WHERE strategy_id = ${input.strategyId}
+            AND strategy_version_id = ${input.strategyVersionId}
+            AND owner = ${input.owner}
+            AND fence = ${input.fence}
+        `,
+    );
+  }
+
+  async commitRunWithFence(input: {
+    readonly token: StrategyLeaseToken;
+    readonly now: Date;
+    readonly bundle: StrategyRunBundle;
+  }): Promise<'committed' | 'lease-lost'> {
+    assertStrategyRunBundleInvariants(input.bundle);
+    if (input.token.runId !== undefined && input.token.runId !== input.bundle.run.id) {
+      return 'lease-lost';
+    }
+    return this.db.transaction((tx) => {
+      const lease = tx
+        .select()
+        .from(strategyRunLeases)
+        .where(
+          and(
+            eq(strategyRunLeases.strategyId, input.token.strategyId),
+            eq(strategyRunLeases.strategyVersionId, input.token.strategyVersionId),
+            eq(strategyRunLeases.owner, input.token.owner),
+            eq(strategyRunLeases.fence, input.token.fence),
+            sql`${strategyRunLeases.leaseUntil} > ${input.now.getTime()}`,
+          ),
+        )
+        .get();
+      if (lease === undefined) return 'lease-lost';
+      if (
+        input.bundle.run.strategyId !== input.token.strategyId ||
+        input.bundle.run.strategyVersionId !== input.token.strategyVersionId
+      ) {
+        return 'lease-lost';
+      }
+      const existingRun = tx
+        .select()
+        .from(strategyRuns)
+        .where(eq(strategyRuns.id, input.bundle.run.id))
+        .get();
+      if (
+        existingRun === undefined ||
+        existingRun.status !== 'running' ||
+        input.bundle.run.status === 'running' ||
+        existingRun.strategyId !== input.bundle.run.strategyId ||
+        existingRun.strategyVersionId !== input.bundle.run.strategyVersionId ||
+        existingRun.startedAt.getTime() !== input.bundle.run.startedAt.getTime()
+      ) {
+        return 'lease-lost';
+      }
+      this.commitRunInTransaction(tx, input.bundle);
+      return 'committed';
+    });
   }
 
   async removeByStrategyId(strategyId: string): Promise<void> {
@@ -400,6 +543,8 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     filter: {
       readonly strategyId?: string;
       readonly status?: StrategyRun['status'];
+      readonly scope?: StrategyRun['scope'];
+      readonly publication?: NonNullable<StrategyRun['publication']>['status'];
       readonly since?: Date;
       readonly limit?: number;
     } = {},
@@ -409,6 +554,10 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       conditions.push(eq(strategyRuns.strategyId, filter.strategyId));
     }
     if (filter.status !== undefined) conditions.push(eq(strategyRuns.status, filter.status));
+    if (filter.scope !== undefined) conditions.push(eq(strategyRuns.scope, filter.scope));
+    if (filter.publication !== undefined) {
+      conditions.push(eq(strategyRuns.publicationStatus, filter.publication));
+    }
     if (filter.since !== undefined) conditions.push(gte(strategyRuns.startedAt, filter.since));
     const query = this.db
       .select()
@@ -417,6 +566,49 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       .orderBy(desc(strategyRuns.startedAt), desc(strategyRuns.id));
     const rows = filter.limit === undefined ? query.all() : query.limit(filter.limit).all();
     return rows.map(toRun);
+  }
+
+  async findLatestPublishedRun(strategyId: string): Promise<StrategyRun | null> {
+    const row = this.db
+      .select()
+      .from(strategyRuns)
+      .where(
+        and(
+          eq(strategyRuns.strategyId, strategyId),
+          eq(strategyRuns.scope, 'operational'),
+          or(eq(strategyRuns.publicationStatus, 'published'), legacyPublishedRunCondition()),
+          inArray(strategyRuns.status, ['complete', 'partial']),
+        ),
+      )
+      .orderBy(desc(strategyRuns.startedAt), desc(strategyRuns.id))
+      .limit(1)
+      .get();
+    return row === undefined ? null : toRun(row);
+  }
+
+  async findPreviousPublishedRun(input: {
+    readonly strategyId: string;
+    readonly beforeStartedAt: Date;
+    readonly beforeRunId: string;
+  }): Promise<StrategyRun | null> {
+    const row = this.db
+      .select()
+      .from(strategyRuns)
+      .where(
+        and(
+          eq(strategyRuns.strategyId, input.strategyId),
+          eq(strategyRuns.scope, 'operational'),
+          or(eq(strategyRuns.publicationStatus, 'published'), legacyPublishedRunCondition()),
+          inArray(strategyRuns.status, ['complete', 'partial']),
+          sql`(${strategyRuns.startedAt} < ${input.beforeStartedAt.getTime()} OR
+            (${strategyRuns.startedAt} = ${input.beforeStartedAt.getTime()} AND
+             ${strategyRuns.id} < ${input.beforeRunId}))`,
+        ),
+      )
+      .orderBy(desc(strategyRuns.startedAt), desc(strategyRuns.id))
+      .limit(1)
+      .get();
+    return row === undefined ? null : toRun(row);
   }
 
   async listResults(runId: string): Promise<readonly StrategyResult[]> {
@@ -507,9 +699,13 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         startedAt: run.startedAt,
         finishedAt: null,
         status: run.status,
+        scope: run.scope ?? 'operational',
         inputSnapshot: run.inputSnapshot,
         providerStatuses: [...run.providerStatuses],
+        providerCoverage: run.providerCoverage ?? null,
         summary: null,
+        publication: null,
+        publicationStatus: null,
         error: null,
       })
       .run();
@@ -517,80 +713,80 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
 
   async commitRun(bundle: StrategyRunBundle): Promise<void> {
     assertStrategyRunBundleInvariants(bundle);
-    this.db.transaction((tx) => {
-      const runValues = {
-        id: bundle.run.id,
-        strategyId: bundle.run.strategyId,
-        strategyVersionId: bundle.run.strategyVersionId,
-        mode: bundle.run.mode,
-        coverage: bundle.run.coverage,
-        dataAsOf: bundle.run.dataAsOf,
-        startedAt: bundle.run.startedAt,
-        finishedAt: bundle.run.finishedAt ?? null,
-        status: bundle.run.status,
-        inputSnapshot: bundle.run.inputSnapshot,
-        providerStatuses: [...bundle.run.providerStatuses],
-        summary: bundle.run.summary ?? null,
-        error: bundle.run.error ?? null,
-      };
-      const existing = tx
+    this.db.transaction((tx) => this.commitRunInTransaction(tx, bundle));
+  }
+
+  private commitRunInTransaction(tx: DrizzleTransaction, bundle: StrategyRunBundle): void {
+    const runValues = {
+      id: bundle.run.id,
+      strategyId: bundle.run.strategyId,
+      strategyVersionId: bundle.run.strategyVersionId,
+      mode: bundle.run.mode,
+      coverage: bundle.run.coverage,
+      dataAsOf: bundle.run.dataAsOf,
+      startedAt: bundle.run.startedAt,
+      finishedAt: bundle.run.finishedAt ?? null,
+      status: bundle.run.status,
+      scope: bundle.run.scope ?? 'operational',
+      inputSnapshot: bundle.run.inputSnapshot,
+      providerStatuses: [...bundle.run.providerStatuses],
+      providerCoverage: bundle.run.providerCoverage ?? null,
+      summary: bundle.run.summary ?? null,
+      publication: bundle.run.publication ?? null,
+      publicationStatus: bundle.run.publication?.status ?? null,
+      error: bundle.run.error ?? null,
+    };
+    const existing = tx.select().from(strategyRuns).where(eq(strategyRuns.id, bundle.run.id)).get();
+    if (existing === undefined) {
+      const strategy = tx
         .select()
-        .from(strategyRuns)
-        .where(eq(strategyRuns.id, bundle.run.id))
+        .from(strategies)
+        .where(eq(strategies.id, bundle.run.strategyId))
         .get();
-      if (existing === undefined) {
-        const strategy = tx
-          .select()
-          .from(strategies)
-          .where(eq(strategies.id, bundle.run.strategyId))
-          .get();
-        const version = tx
-          .select()
-          .from(strategyVersions)
-          .where(eq(strategyVersions.id, bundle.run.strategyVersionId))
-          .get();
-        if (
-          strategy?.status !== 'active' ||
-          version?.strategyId !== bundle.run.strategyId ||
-          version.validationStatus !== 'valid' ||
-          version.publishedAt === null
-        ) {
-          throw new InvariantError(
-            'StrategyRun 必须绑定 active Strategy 的 published valid version',
-          );
-        }
-        tx.insert(strategyRuns).values(runValues).run();
-      } else {
-        if (
-          existing.status !== 'running' ||
-          bundle.run.status === 'running' ||
-          existing.strategyId !== bundle.run.strategyId ||
-          existing.strategyVersionId !== bundle.run.strategyVersionId ||
-          existing.startedAt.getTime() !== bundle.run.startedAt.getTime()
-        ) {
-          throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
-        }
-        tx.update(strategyRuns).set(runValues).where(eq(strategyRuns.id, bundle.run.id)).run();
+      const version = tx
+        .select()
+        .from(strategyVersions)
+        .where(eq(strategyVersions.id, bundle.run.strategyVersionId))
+        .get();
+      if (
+        strategy?.status !== 'active' ||
+        version?.strategyId !== bundle.run.strategyId ||
+        version.validationStatus !== 'valid' ||
+        version.publishedAt === null
+      ) {
+        throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
       }
-      for (const result of bundle.results) {
-        tx.insert(strategyResults)
-          .values({
-            runId: result.runId,
-            stockId: result.stockId,
-            selected: result.selected,
-            score: result.score ?? null,
-            rank: result.rank ?? null,
-            ruleEvaluations: [...result.ruleEvaluations],
-            evidence: [...result.evidence],
-            dataAsOf: result.dataAsOf,
-          })
-          .run();
+      tx.insert(strategyRuns).values(runValues).run();
+    } else {
+      if (
+        existing.status !== 'running' ||
+        bundle.run.status === 'running' ||
+        existing.strategyId !== bundle.run.strategyId ||
+        existing.strategyVersionId !== bundle.run.strategyVersionId ||
+        existing.startedAt.getTime() !== bundle.run.startedAt.getTime()
+      ) {
+        throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
       }
-      for (const signal of bundle.signals) {
-        tx.insert(strategySignals)
-          .values({ ...signal, evidence: [...signal.evidence] })
-          .run();
-      }
-    });
+      tx.update(strategyRuns).set(runValues).where(eq(strategyRuns.id, bundle.run.id)).run();
+    }
+    for (const result of bundle.results) {
+      tx.insert(strategyResults)
+        .values({
+          runId: result.runId,
+          stockId: result.stockId,
+          selected: result.selected,
+          score: result.score ?? null,
+          rank: result.rank ?? null,
+          ruleEvaluations: [...result.ruleEvaluations],
+          evidence: [...result.evidence],
+          dataAsOf: result.dataAsOf,
+        })
+        .run();
+    }
+    for (const signal of bundle.signals) {
+      tx.insert(strategySignals)
+        .values({ ...signal, evidence: [...signal.evidence] })
+        .run();
+    }
   }
 }

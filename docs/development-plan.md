@@ -1,7 +1,7 @@
 # luoome 开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-08
+> 基线日期：2026-08-08；Strategy 可靠性复核：2026-08-11
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
@@ -43,7 +43,7 @@ tests 155 项通过；TypeScript 与 Biome 均通过。另以真实浏览器检�
 |---|---|---|
 | 行情底座 | StockUniverse、qfq DailyBar、Quote 新鲜度、capability registry 已完成 | 优先消费已有能力，不继续横向扩底层 |
 | Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除，目标模型已落地 | PRD/DDD 状态和部分架构示例滞后 |
-| Strategy Workspace | Phase A～C 已完成，包括调度、运行租约、SignalObservation、事实洞察、定义 diff、草案审计与 persist=false 试算 | 后续只做体验增强，不改变确认边界 |
+| Strategy Workspace | Phase A～C 功能已完成；2026-08-11 全市场运行确认调度、租约、发布质量门、观察补全和 AI 降级仍需可靠性深化 | 先执行 [Strategy 日运行与评估可靠性计划](./strategy-reliability-development-plan.md) 的 P0/P1；保持确认与非交易边界 |
 | Research Vault | Phase A/B、Phase C、M3 managed 创建/导入与 M4 FTS/ResearchBrief 已完成 | embedding、跨模型评测扩展和远端同步仍暂缓 |
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
 | Report / 复盘 | Report、三类简报、SignalObservation 描述统计已落地 | benchmark 仍 unavailable，不能称为回测 |
@@ -70,10 +70,26 @@ tests 155 项通过；TypeScript 与 Biome 均通过。另以真实浏览器检�
 M0 事实源与 Workflow 边界收口
 ├─ M1 Research Phase C ──► M3 Research 导入 ──► M4 Agent 检索 ──► M5 Strategy AI 迭代
 └─ M2 Market View Phase 3 ────────────────────────────────► M6 连板天梯 Phase 3
+
+Strategy 可靠性独立主线：R0 发布判定 ──► R1 fencing lease ──► R2 daily cycle
+                                      └─► R3/R4 数据与规则质量 ──► R5 早期突破 v2
+                                      └─► R6/R7 历史评估与统计
 ```
 
 以下工期按单人或单 Agent 串行开发估算，表示有效开发日，不包含外部数据源审批、产品等待和
 真实市场数据等待时间。
+
+### 3.1 当前优先级覆盖（2026-08-11）
+
+M0～M6 已完成，不再重复排期。当前最高优先级切换为
+[Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md)：
+
+1. P0：运行 publication、fencing lease、daily cycle、观察补全与 facts-only insight；
+2. P1：指标/表达式语义、全市场 checkpoint、早期突破 v2；
+3. P2：point-in-time 历史评估与 benchmark 统计。
+
+P0 完成前，N1～N4 可以继续设计，但不应占用 Strategy 生产可靠性的实现顺序。严格回测继续受
+第 7 节门禁约束。
 
 ## 4. 第一优先级：完成部分实现
 
@@ -421,6 +437,10 @@ bun run build
 | FTS5 在交付平台不可用 | 启动能力检测；metadata 搜索作为正式降级并显式返回 capability |
 | SignalObservation 被误称为回测 | 强制展示样本、缺失率、benchmarkStatus 和免责声明 |
 | Strategy AI 迭代越权 | 只创建 draft；校验、发布、激活、正式运行逐步确认 |
+| 低覆盖或 evaluation run 覆盖当前股票池 | 持久化 publication；current 只查 published operational run |
+| 固定租约短于全市场运行 | heartbeat + fencing token + 同事务 fenced commit |
+| 观察 cron 与长运行竞态 | daily cycle 在运行终态后补观察；独立 cron 只作幂等补偿 |
+| AI 结构化输出失败导致周期无结果 | 一次有界修复；再失败返回确定性 facts-only 并标 partial |
 | 图表 marker 混淆事实与建议 | Trade、Advice、Trigger、Signal 使用不同类型和文案，不统一成买卖信号 |
 | 新数据源扩张导致 provider 语义泄漏 | capability registry + provenance + Tool 契约隔离 |
 
@@ -429,3 +449,7 @@ bun run build
 完成 M0～M2 后，详细设计中当前最明显的“半成品”全部收口，可以进入已有详细设计的新功能。
 完成 M3～M6 后，Research、Strategy、Market View 和连板事实形成完整的研究—观察—复盘链路。
 N1～N4 只有在各自 DDD 冻结、端到端场景和验收门槛明确后，才进入新的实施计划。
+
+新增完成条件：Strategy 可靠性 P0 必须连续 30 个交易日满足“每个 schedule 至多一次正式运行、
+低覆盖/evaluation 不发布、长运行不失租、到期观察可补齐、AI 失败仍有事实输出”，才算日运行
+闭环完成。P1/P2 的完成条件以独立计划为准。

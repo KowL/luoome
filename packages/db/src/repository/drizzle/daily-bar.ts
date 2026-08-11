@@ -1,8 +1,14 @@
-import { type DailyBar, type DailyBarRepository, DailyBarSchema } from '@luoome/core';
+import {
+  type DailyBar,
+  type DailyBarRepository,
+  type DailyBarRevision,
+  DailyBarRevisionSchema,
+  DailyBarSchema,
+} from '@luoome/core';
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import { dailyBars, type Schema } from '../../schema/index.js';
+import { dailyBarRevisions, dailyBars, type Schema } from '../../schema/index.js';
 
 type BarRow = typeof dailyBars.$inferSelect;
 
@@ -114,5 +120,51 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
       .where(and(eq(dailyBars.stockId, stockId), lte(dailyBars.date, before)))
       .run();
     return beforeRows.length;
+  }
+
+  async saveRevisions(revisions: readonly DailyBarRevision[]): Promise<void> {
+    if (revisions.length === 0) return;
+    this.db
+      .insert(dailyBarRevisions)
+      .values(
+        revisions.map((revision) => {
+          const parsed = DailyBarRevisionSchema.parse(revision);
+          return parsed;
+        }),
+      )
+      .onConflictDoNothing()
+      .run();
+  }
+
+  async listRevisions(input: {
+    readonly stockId: string;
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly DailyBarRevision[]> {
+    const conditions = [eq(dailyBarRevisions.stockId, input.stockId)];
+    if (input.from !== undefined) conditions.push(gte(dailyBarRevisions.date, input.from));
+    if (input.to !== undefined) conditions.push(lte(dailyBarRevisions.date, input.to));
+    if (input.recordedAt !== undefined) {
+      conditions.push(lte(dailyBarRevisions.recordedAt, input.recordedAt));
+    }
+    return this.db
+      .select()
+      .from(dailyBarRevisions)
+      .where(and(...conditions))
+      .orderBy(dailyBarRevisions.date, dailyBarRevisions.recordedAt)
+      .all()
+      .map((row) => ({
+        stockId: row.stockId,
+        date: row.date,
+        contentHash: row.contentHash,
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+        volume: row.volume,
+        source: row.source,
+        recordedAt: row.recordedAt,
+      }));
   }
 }

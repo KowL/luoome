@@ -5,6 +5,7 @@ import {
   money,
   type Strategy,
   type StrategyDslV1,
+  type StrategySignalEmission,
   type StrategyVersion,
   strategyDefinitionHash,
 } from '@luoome/core';
@@ -13,7 +14,10 @@ import { describe, expect, it } from 'vitest';
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
 import { runStrategyTool } from './run-strategy.js';
 
-const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): Promise<void> => {
+const seedStrategy = async (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+  emission?: StrategySignalEmission,
+): Promise<void> => {
   const now = new Date('2026-07-28T09:00:00Z');
   const definition: StrategyDslV1 = {
     schemaVersion: 1,
@@ -43,6 +47,7 @@ const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): 
           score: '60',
           direction: 'bullish',
           evidence: ['仅供研究'],
+          ...(emission === undefined ? {} : { emission }),
         },
       ],
       exit: [],
@@ -74,6 +79,25 @@ const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): 
   await ctx.repos.strategy.createVersion(version);
 };
 
+const seedReplayBars = async (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+  dates: readonly Date[],
+): Promise<void> => {
+  await ctx.repos.dailyBar.saveMany(
+    dates.map((date) => ({
+      stockId: '600519.SH',
+      date,
+      open: money(10),
+      high: money(11),
+      low: money(9),
+      close: money(10),
+      volume: 1_000_000,
+      adjustment: 'qfq' as const,
+      source: 'test',
+    })),
+  );
+};
+
 describe('run_strategy', () => {
   it('uses active StockUniverse, ranks deterministically and atomically persists', async () => {
     const ctx = await buildTestContext();
@@ -92,7 +116,9 @@ describe('run_strategy', () => {
     ]);
     expect(result.data.signals).toHaveLength(2);
     expect(result.data.run.inputSnapshot).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      scope: 'evaluation',
+      universeKind: 'explicit',
       strategyVersionId: 'scan-strategy-v1',
       coverage: 'CN_A_SHARES_SH_SZ',
       stockIds: ['300750.SZ', '600519.SH'],
@@ -100,7 +126,7 @@ describe('run_strategy', () => {
     });
     expect(result.data.run.inputSnapshot.stockIdChecksum).toMatch(/^[a-f0-9]{64}$/);
     expect(result.data.run.summary).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       dataHealth: 'complete',
       universeCount: 2,
       evaluatedCount: 2,
@@ -114,11 +140,7 @@ describe('run_strategy', () => {
     const observations = await ctx.repos.signalObservation.list({
       sourceKind: 'strategy-signal',
     });
-    expect(observations).toHaveLength(8);
-    expect(observations[0]).toMatchObject({
-      status: 'pending',
-      benchmarkStatus: 'unavailable',
-    });
+    expect(observations).toEqual([]);
   });
 
   it('dry-run does not persist', async () => {
@@ -199,7 +221,7 @@ describe('run_strategy', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(await base.repos.strategyRun.findRunById(result.data.run.id)).not.toBeNull();
-    expect(warnings).toHaveLength(1);
+    expect(warnings).toHaveLength(0);
   });
 
   it('one stock data failure completes the run and exposes partial data health', async () => {
@@ -223,7 +245,7 @@ describe('run_strategy', () => {
     expect(result.data.run.status).toBe('complete');
     expect(result.data.results).toHaveLength(1);
     expect(result.data.run.summary).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       dataHealth: 'partial',
       failedCount: 1,
       evaluatedCount: 1,
@@ -284,7 +306,7 @@ describe('run_strategy', () => {
     if (!result.ok) return;
     expect(result.data.run).toMatchObject({
       status: 'complete',
-      summary: { schemaVersion: 3, dataHealth: 'complete' },
+      summary: { schemaVersion: 4, dataHealth: 'complete' },
     });
     expect(result.data.results[0]).toMatchObject({ selected: true, score: 75 });
     expect(
@@ -390,5 +412,67 @@ describe('run_strategy', () => {
     expect(result.data.run.providerStatuses.map((status) => status.provider)).toEqual([
       'local:daily-bars',
     ]);
+  });
+
+  it('edge 前态读取上一运行的 matched evaluation，连续 Day1/Day2/Day3 不重复发 signal', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx, { mode: 'edge', cooldownTradingDays: 0 });
+    const days = [
+      new Date('2026-07-27T00:00:00.000Z'),
+      new Date('2026-07-28T00:00:00.000Z'),
+      new Date('2026-07-29T00:00:00.000Z'),
+    ];
+    await seedReplayBars(ctx, days);
+    const runs = [];
+    for (const asOf of days) {
+      const run = await runStrategyTool.execute(
+        {
+          strategyId: 'scan-strategy',
+          mode: 'replay',
+          asOf,
+          stockIds: ['600519.SH'],
+          evaluationSessionId: 'evaluation-edge',
+        },
+        ctx,
+      );
+      expect(run.ok, JSON.stringify(run)).toBe(true);
+      if (!run.ok) return;
+      runs.push(run.data);
+    }
+    expect(runs.map((run) => run.signals)).toHaveLength(3);
+    expect(runs.map((run) => run.signals.length)).toEqual([1, 0, 0]);
+    expect(runs[1]?.results[0]?.ruleEvaluations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ruleId: 'entry', status: 'matched' })]),
+    );
+  });
+
+  it('cooldown 以最近真正 emitted signal 计数，并跨国庆假期保持有效', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx, { mode: 'level', cooldownTradingDays: 3 });
+    const days = [
+      new Date('2026-06-18T00:00:00.000Z'),
+      new Date('2026-06-22T00:00:00.000Z'),
+      new Date('2026-06-23T00:00:00.000Z'),
+    ];
+    await seedReplayBars(ctx, days);
+    const signals: number[] = [];
+    for (const asOf of days) {
+      const run = await runStrategyTool.execute(
+        {
+          strategyId: 'scan-strategy',
+          mode: 'replay',
+          asOf,
+          stockIds: ['600519.SH'],
+          evaluationSessionId: 'evaluation-cooldown',
+        },
+        ctx,
+      );
+      expect(run.ok, JSON.stringify(run)).toBe(true);
+      if (!run.ok) return;
+      signals.push(run.data.signals.length);
+    }
+    expect(signals).toEqual([1, 0, 0]);
   });
 });

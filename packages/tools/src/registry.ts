@@ -26,9 +26,11 @@ import {
 import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
+import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
+import { generateStrategyRecommendationsTool } from './tools/generate-strategy-recommendations.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
@@ -50,6 +52,7 @@ import { listTradesTool } from './tools/list-trades.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
+import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { renderReportTool } from './tools/render-report.js';
 import {
@@ -82,6 +85,14 @@ import {
   trialStrategyVersionTool,
 } from './tools/strategy-definition.js';
 import {
+  finishStrategyEvaluationSessionTool,
+  getStrategyEvaluationSessionTool,
+  getStrategyPitUniverseTool,
+  listStrategyEvaluationDaysTool,
+  recordStrategyEvaluationDayTool,
+  startStrategyEvaluationSessionTool,
+} from './tools/strategy-evaluation.js';
+import {
   generateStrategyInsightTool,
   getStrategyInsightFactsTool,
 } from './tools/strategy-insight.js';
@@ -104,7 +115,11 @@ import {
   listStrategyRunsTool,
   strategySignalsByStockTool,
 } from './tools/strategy-query.js';
-import { getStrategyScheduleTool, setStrategyScheduleTool } from './tools/strategy-schedule.js';
+import {
+  getStrategyScheduleTool,
+  renewStrategyScheduleClaimTool,
+  setStrategyScheduleTool,
+} from './tools/strategy-schedule.js';
 import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
@@ -270,6 +285,13 @@ export const toolRegistry: Registry = createRegistry([
   pauseStrategyTool,
   resumeStrategyTool,
   runStrategyTool,
+  prepareStrategyDataTool,
+  getStrategyPitUniverseTool,
+  getStrategyEvaluationSessionTool,
+  listStrategyEvaluationDaysTool,
+  startStrategyEvaluationSessionTool,
+  recordStrategyEvaluationDayTool,
+  finishStrategyEvaluationSessionTool,
   listStrategyRunsTool,
   getStrategyRunTool,
   listStrategyResultViewsTool,
@@ -278,10 +300,13 @@ export const toolRegistry: Registry = createRegistry([
   strategySignalsByStockTool,
   listPendingStrategyObservationsTool,
   completeStrategyObservationsTool,
+  createStrategyObservationCandidatesTool,
   getStrategyInsightFactsTool,
   generateStrategyInsightTool,
+  generateStrategyRecommendationsTool,
   getStrategyScheduleTool,
   setStrategyScheduleTool,
+  renewStrategyScheduleClaimTool,
   listWatchlistsTool,
   getWatchlistTool,
   createWatchlistTool,

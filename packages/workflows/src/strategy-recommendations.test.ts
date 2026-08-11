@@ -1,5 +1,9 @@
 import { type StrategyDslV1, strategyDefinitionHash } from '@luoome/core';
-import { runStrategyTool } from '@luoome/tools';
+import {
+  createStrategyObservationCandidatesTool,
+  prepareStrategyDataTool,
+  runStrategyTool,
+} from '@luoome/tools';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -67,8 +71,15 @@ const seedRun = async () => {
     updatedAt: NOW,
   });
   await ctx.repos.strategy.createVersion(version);
+  const prepared = await prepareStrategyDataTool.execute({ strategyId: 'recommend' }, ctx);
+  if (!prepared.ok) throw new Error(JSON.stringify(prepared.error));
   const run = await runStrategyTool.execute(
-    { strategyId: 'recommend', mode: 'scheduled', persist: true },
+    {
+      strategyId: 'recommend',
+      mode: 'scheduled',
+      dataCheckpointId: prepared.data.checkpoint.id,
+      persist: true,
+    },
     ctx,
   );
   if (!run.ok) throw new Error(JSON.stringify(run.error));
@@ -104,6 +115,12 @@ describe('strategy-recommendations workflow', () => {
     });
     expect(first.data.advices[0]?.basedOn.strategy?.signalIds).toHaveLength(1);
     expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
+
+    const candidates = await createStrategyObservationCandidatesTool.execute(
+      { runId: run.id },
+      ctx,
+    );
+    expect(candidates.ok).toBe(true);
 
     const second = await strategyRecommendationsWorkflow.run(input, ctx);
     expect(second).toEqual({

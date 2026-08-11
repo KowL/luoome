@@ -118,13 +118,12 @@ describe('strategy workspace full flow', () => {
     expect(beforeFormal.data.overview.health).toBe('never-run');
 
     const first = await runStrategyTool.execute(
-      { strategyId: 'full-flow-strategy', stockIds: ['600519.SH'], persist: true },
+      { strategyId: 'full-flow-strategy', persist: true },
       ctx,
     );
     const second = await runStrategyTool.execute(
       {
         strategyId: 'full-flow-strategy',
-        stockIds: ['600519.SH', '300750.SZ'],
         persist: true,
       },
       ctx,
@@ -168,7 +167,7 @@ describe('strategy workspace full flow', () => {
     expect(diff.data.diff.summary).toMatchObject({
       entered: 0,
       exited: 0,
-      dataUnavailable: 1,
+      dataUnavailable: 0,
     });
 
     const paused = await pauseStrategyTool.execute({ strategyId: 'full-flow-strategy' }, ctx);

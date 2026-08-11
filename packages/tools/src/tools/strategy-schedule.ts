@@ -2,6 +2,7 @@ import {
   buildStrategySchedule,
   nextCronOccurrence,
   StrategyRecommendationPolicySchema,
+  StrategyRunAcceptancePolicySchema,
   StrategyScheduleSchema,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -27,6 +28,7 @@ export const SetStrategyScheduleInput = z.object({
   cron: z.string().min(1).max(120),
   timezone: z.string().min(1).max(100).default('Asia/Shanghai'),
   enabled: z.boolean().default(true),
+  acceptancePolicy: StrategyRunAcceptancePolicySchema.optional(),
   recommendationPolicy: StrategyRecommendationPolicySchema.optional(),
 });
 export const SetStrategyScheduleOutput = z.object({ schedule: StrategyScheduleSchema });
@@ -52,6 +54,7 @@ export const setStrategyScheduleTool = defineTool({
       cron: input.cron,
       timezone: input.timezone,
       enabled: input.enabled,
+      ...(input.acceptancePolicy === undefined ? {} : { acceptancePolicy: input.acceptancePolicy }),
       ...(input.recommendationPolicy === undefined
         ? {}
         : { recommendationPolicy: input.recommendationPolicy }),
@@ -66,11 +69,16 @@ export const setStrategyScheduleTool = defineTool({
 export const ClaimDueStrategySchedulesInput = z.object({
   owner: z.string().min(1),
   limit: z.number().int().min(1).max(100).default(20),
-  leaseMinutes: z.number().int().min(5).max(240).default(120),
+  leaseMinutes: z.number().int().min(5).max(240).default(20),
 });
 const ClaimedScheduleSchema = z.object({
   schedule: StrategyScheduleSchema,
   eligible: z.boolean(),
+  lease: z.object({
+    owner: z.string(),
+    fence: z.number().int().nonnegative(),
+    leaseUntil: z.coerce.date(),
+  }),
   reason: z.string().optional(),
 });
 export const ClaimDueStrategySchedulesOutput = z.object({ items: z.array(ClaimedScheduleSchema) });
@@ -83,19 +91,20 @@ export const claimDueStrategySchedulesTool = defineTool({
   output: ClaimDueStrategySchedulesOutput,
   handler: async (input, ctx) => {
     const now = ctx.clock();
-    const schedules = await ctx.repos.strategySchedule.claimDue({
+    const claims = await ctx.repos.strategySchedule.claimDueWithFence({
       now,
       owner: input.owner,
       leaseUntil: new Date(now.getTime() + input.leaseMinutes * 60_000),
       limit: input.limit,
     });
     const items = await Promise.all(
-      schedules.map(async (schedule) => {
+      claims.map(async ({ schedule, token }) => {
         const strategy = await ctx.repos.strategy.findById(schedule.strategyId);
         const eligible = strategy?.status === 'active' && strategy.currentVersionId !== undefined;
         return {
           schedule,
           eligible,
+          lease: token,
           ...(eligible
             ? {}
             : {
@@ -114,6 +123,7 @@ export const claimDueStrategySchedulesTool = defineTool({
 export const FinishStrategyScheduleClaimInput = z.object({
   scheduleId: z.string().min(1),
   owner: z.string().min(1),
+  fence: z.number().int().nonnegative().optional(),
   lastRunId: z.string().min(1).optional(),
 });
 export const FinishStrategyScheduleClaimOutput = z.object({ schedule: StrategyScheduleSchema });
@@ -131,6 +141,7 @@ export const finishStrategyScheduleClaimTool = defineTool({
     await ctx.repos.strategySchedule.finishClaim({
       id: schedule.id,
       owner: input.owner,
+      ...(input.fence === undefined ? {} : { fence: input.fence }),
       nextRunAt: nextCronOccurrence(schedule.cron, schedule.timezone, now),
       updatedAt: now,
       ...(input.lastRunId === undefined ? {} : { lastRunId: input.lastRunId }),
@@ -138,5 +149,32 @@ export const finishStrategyScheduleClaimTool = defineTool({
     const updated = await ctx.repos.strategySchedule.findById(schedule.id);
     if (updated === null) return errNotFound('StrategySchedule', schedule.id);
     return { schedule: updated };
+  },
+});
+
+export const RenewStrategyScheduleClaimInput = z.object({
+  scheduleId: z.string().min(1),
+  owner: z.string().min(1),
+  fence: z.number().int().nonnegative(),
+  leaseMinutes: z.number().int().min(5).max(240).default(120),
+});
+export const RenewStrategyScheduleClaimOutput = z.object({ renewed: z.boolean() });
+
+export const renewStrategyScheduleClaimTool = defineTool({
+  name: 'renew_strategy_schedule_claim',
+  description: '按 owner+fence 延长 StrategySchedule lease；失去 fencing 时返回 renewed=false',
+  sideEffect: 'write',
+  input: RenewStrategyScheduleClaimInput,
+  output: RenewStrategyScheduleClaimOutput,
+  handler: async (input, ctx) => {
+    const now = ctx.clock();
+    const renewed = await ctx.repos.strategySchedule.renewClaim({
+      id: input.scheduleId,
+      owner: input.owner,
+      fence: input.fence,
+      now,
+      leaseUntil: new Date(now.getTime() + input.leaseMinutes * 60_000),
+    });
+    return { renewed };
   },
 });

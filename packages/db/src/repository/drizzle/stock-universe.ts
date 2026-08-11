@@ -6,13 +6,14 @@ import {
   StockUniverseSnapshotSchema,
   type StockUniverseSyncRun,
 } from '@luoome/core';
-import { and, asc, desc, eq, or } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, or } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
   type Schema,
   stocks,
   stockUniverseMemberships,
+  stockUniverseSnapshotMembers,
   stockUniverseSyncRuns,
 } from '../../schema/index.js';
 
@@ -159,6 +160,10 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
             },
           })
           .run();
+        tx.insert(stockUniverseSnapshotMembers)
+          .values({ syncId: input.syncId, stockId })
+          .onConflictDoNothing()
+          .run();
       }
 
       let markedMissing = 0;
@@ -265,5 +270,42 @@ export class DrizzleStockUniverseRepository implements StockUniverseRepository {
         return !states.has('active') && states.has('missing');
       })
       .map(({ stock }) => stock);
+  }
+
+  async latestSnapshotAtOrBefore(input: {
+    readonly coverage: MarketCoverage;
+    readonly asOf: Date;
+  }): Promise<StockUniverseSyncRun | null> {
+    const row = this.db
+      .select()
+      .from(stockUniverseSyncRuns)
+      .where(
+        and(
+          eq(stockUniverseSyncRuns.coverage, input.coverage),
+          eq(stockUniverseSyncRuns.status, 'succeeded'),
+          lte(stockUniverseSyncRuns.observedAt, input.asOf),
+        ),
+      )
+      .orderBy(desc(stockUniverseSyncRuns.observedAt), desc(stockUniverseSyncRuns.id))
+      .limit(1)
+      .get();
+    return row === undefined ? null : toSyncRun(row);
+  }
+
+  async listSnapshotMembers(syncId: string): Promise<readonly Stock[]> {
+    return this.db
+      .select({ stock: stocks })
+      .from(stockUniverseSnapshotMembers)
+      .innerJoin(stocks, eq(stocks.id, stockUniverseSnapshotMembers.stockId))
+      .where(eq(stockUniverseSnapshotMembers.syncId, syncId))
+      .orderBy(asc(stocks.id))
+      .all()
+      .map(({ stock: row }) => ({
+        id: row.id,
+        code: row.code,
+        exchange: row.exchange,
+        name: row.name,
+        ...(row.industry === null ? {} : { industry: row.industry }),
+      }));
   }
 }

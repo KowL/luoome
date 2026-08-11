@@ -4,7 +4,9 @@ import {
   assertStrategyRunInvariants,
   assertStrategyVersionInvariants,
   InvariantError,
+  normalizeLegacyStrategyRun,
   type Strategy,
+  type StrategyLeaseToken,
   type StrategyRepository,
   type StrategyResult,
   type StrategyRun,
@@ -193,21 +195,80 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
   private readonly runs = new Map<string, StrategyRun>();
   private readonly results = new Map<string, StrategyResult>();
   private readonly signals = new Map<string, StrategySignal>();
-  private readonly runLeases = new Map<string, { readonly owner: string; readonly until: Date }>();
+  private readonly runLeases = new Map<
+    string,
+    {
+      readonly owner: string;
+      readonly until: Date;
+      readonly fence: number;
+      readonly heartbeatAt: Date;
+    }
+  >();
 
   constructor(private readonly strategyRepository: InMemoryStrategyRepository) {}
+
+  async acquireRunLeaseToken(input: {
+    readonly strategyId: string;
+    readonly strategyVersionId: string;
+    readonly owner: string;
+    readonly runId?: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<StrategyLeaseToken | null> {
+    const key = `${input.strategyId}\0${input.strategyVersionId}`;
+    const existing = this.runLeases.get(key);
+    if (existing !== undefined && existing.until.getTime() > input.now.getTime()) return null;
+    const fence = (existing?.fence ?? 0) + 1;
+    this.runLeases.set(key, {
+      owner: input.owner,
+      until: input.leaseUntil,
+      fence,
+      heartbeatAt: input.now,
+    });
+    return {
+      strategyId: input.strategyId,
+      strategyVersionId: input.strategyVersionId,
+      owner: input.owner,
+      fence,
+      leaseUntil: input.leaseUntil,
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
+    };
+  }
 
   async acquireRunLease(input: {
     readonly strategyId: string;
     readonly strategyVersionId: string;
     readonly owner: string;
+    readonly runId?: string;
+    readonly returnToken?: boolean;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+  }): Promise<boolean | StrategyLeaseToken | null> {
+    const token = await this.acquireRunLeaseToken(input);
+    if (input.returnToken === true || input.runId !== undefined) return token;
+    return token !== null;
+  }
+
+  async renewRunLease(input: {
+    readonly token: StrategyLeaseToken;
     readonly now: Date;
     readonly leaseUntil: Date;
   }): Promise<boolean> {
-    const key = `${input.strategyId}\0${input.strategyVersionId}`;
+    const key = `${input.token.strategyId}\0${input.token.strategyVersionId}`;
     const existing = this.runLeases.get(key);
-    if (existing !== undefined && existing.until.getTime() > input.now.getTime()) return false;
-    this.runLeases.set(key, { owner: input.owner, until: input.leaseUntil });
+    if (
+      existing === undefined ||
+      existing.owner !== input.token.owner ||
+      existing.fence !== input.token.fence ||
+      existing.until.getTime() <= input.now.getTime()
+    ) {
+      return false;
+    }
+    this.runLeases.set(key, {
+      ...existing,
+      until: input.leaseUntil,
+      heartbeatAt: input.now,
+    });
     return true;
   }
 
@@ -215,9 +276,49 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     readonly strategyId: string;
     readonly strategyVersionId: string;
     readonly owner: string;
+    readonly fence?: number;
   }): Promise<void> {
     const key = `${input.strategyId}\0${input.strategyVersionId}`;
-    if (this.runLeases.get(key)?.owner === input.owner) this.runLeases.delete(key);
+    const lease = this.runLeases.get(key);
+    if (
+      lease?.owner === input.owner &&
+      (input.fence === undefined || input.fence === lease.fence)
+    ) {
+      this.runLeases.delete(key);
+    }
+  }
+
+  async commitRunWithFence(input: {
+    readonly token: StrategyLeaseToken;
+    readonly now: Date;
+    readonly bundle: StrategyRunBundle;
+  }): Promise<'committed' | 'lease-lost'> {
+    const key = `${input.token.strategyId}\0${input.token.strategyVersionId}`;
+    const lease = this.runLeases.get(key);
+    if (
+      lease === undefined ||
+      lease.owner !== input.token.owner ||
+      lease.fence !== input.token.fence ||
+      lease.until.getTime() <= input.now.getTime() ||
+      (input.token.runId !== undefined && input.token.runId !== input.bundle.run.id)
+    ) {
+      return 'lease-lost';
+    }
+    const existingRun = this.runs.get(input.bundle.run.id);
+    if (
+      existingRun === undefined ||
+      existingRun.status !== 'running' ||
+      input.bundle.run.status === 'running' ||
+      existingRun.strategyId !== input.bundle.run.strategyId ||
+      existingRun.strategyVersionId !== input.bundle.run.strategyVersionId ||
+      existingRun.startedAt.getTime() !== input.bundle.run.startedAt.getTime() ||
+      input.bundle.run.strategyId !== input.token.strategyId ||
+      input.bundle.run.strategyVersionId !== input.token.strategyVersionId
+    ) {
+      return 'lease-lost';
+    }
+    await this.commitRun(input.bundle);
+    return 'committed';
   }
 
   async removeByStrategyId(strategyId: string): Promise<void> {
@@ -239,22 +340,28 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
   }
 
   async findRunById(id: string): Promise<StrategyRun | null> {
-    return this.runs.get(id) ?? null;
+    const run = this.runs.get(id);
+    return run === undefined ? null : normalizeLegacyStrategyRun(run);
   }
 
   async listRuns(
     filter: {
       readonly strategyId?: string;
       readonly status?: StrategyRun['status'];
+      readonly scope?: StrategyRun['scope'];
+      readonly publication?: NonNullable<StrategyRun['publication']>['status'];
       readonly since?: Date;
       readonly limit?: number;
     } = {},
   ): Promise<readonly StrategyRun[]> {
     const sorted = [...this.runs.values()]
+      .map(normalizeLegacyStrategyRun)
       .filter(
         (run) =>
           (filter.strategyId === undefined || run.strategyId === filter.strategyId) &&
           (filter.status === undefined || run.status === filter.status) &&
+          (filter.scope === undefined || run.scope === filter.scope) &&
+          (filter.publication === undefined || run.publication?.status === filter.publication) &&
           (filter.since === undefined || run.startedAt >= filter.since),
       )
       .sort(
@@ -262,6 +369,36 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
           right.startedAt.getTime() - left.startedAt.getTime() || right.id.localeCompare(left.id),
       );
     return filter.limit === undefined ? sorted : sorted.slice(0, filter.limit);
+  }
+
+  async findLatestPublishedRun(strategyId: string): Promise<StrategyRun | null> {
+    return (
+      (await this.listRuns({ strategyId, scope: 'operational', publication: 'published' })).find(
+        (run) => run.status === 'complete' || run.status === 'partial',
+      ) ?? null
+    );
+  }
+
+  async findPreviousPublishedRun(input: {
+    readonly strategyId: string;
+    readonly beforeStartedAt: Date;
+    readonly beforeRunId: string;
+  }): Promise<StrategyRun | null> {
+    return (
+      (
+        await this.listRuns({
+          strategyId: input.strategyId,
+          scope: 'operational',
+          publication: 'published',
+        })
+      ).find(
+        (run) =>
+          (run.status === 'complete' || run.status === 'partial') &&
+          (run.startedAt.getTime() < input.beforeStartedAt.getTime() ||
+            (run.startedAt.getTime() === input.beforeStartedAt.getTime() &&
+              run.id.localeCompare(input.beforeRunId) < 0)),
+      ) ?? null
+    );
   }
 
   async listResults(runId: string): Promise<readonly StrategyResult[]> {

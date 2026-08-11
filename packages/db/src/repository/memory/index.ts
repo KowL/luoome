@@ -38,6 +38,10 @@ import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
 import { InMemoryStockUniverseRepository } from './stock-universe.js';
 import { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
+import {
+  InMemoryStrategyDataCheckpointRepository,
+  InMemoryStrategyEvaluationRepository,
+} from './strategy-checkpoint.js';
 import { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
 import { InMemoryTradeRepository } from './trade.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
@@ -62,6 +66,10 @@ export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
 export { InMemoryStockUniverseRepository } from './stock-universe.js';
 export { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
+export {
+  InMemoryStrategyDataCheckpointRepository,
+  InMemoryStrategyEvaluationRepository,
+} from './strategy-checkpoint.js';
 export { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
 export { InMemoryTradeRepository } from './trade.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
@@ -112,6 +120,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const strategy = new InMemoryStrategyRepository();
   const strategySchedule = new InMemoryStrategyScheduleRepository();
   const strategyRun = new InMemoryStrategyRunRepository(strategy);
+  const strategyDataCheckpoint = new InMemoryStrategyDataCheckpointRepository();
+  const strategyEvaluation = new InMemoryStrategyEvaluationRepository();
   const watchlist = new InMemoryWatchlistRepository();
   const watchlistMember = new InMemoryWatchlistMemberRepository(watchlist);
   const notification = new InMemoryNotificationRepository();
@@ -162,6 +172,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     strategy,
     strategySchedule,
     strategyRun,
+    strategyDataCheckpoint,
+    strategyEvaluation,
     watchlist,
     watchlistMember,
     notification,

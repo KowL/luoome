@@ -423,6 +423,7 @@ const evaluateStrategySignalRuleMember = async (
       stockId: member.stockId,
       since,
       limit: 50,
+      scope: 'operational',
     });
     if (!result.ok) continue;
     const signal = result.data.signals.find(

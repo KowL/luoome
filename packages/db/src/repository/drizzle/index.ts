@@ -14,6 +14,10 @@ export { DrizzleStockRepository } from './stock.js';
 export { DrizzleStockEventRepository } from './stock-event.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';
 export { DrizzleStrategyRepository, DrizzleStrategyRunRepository } from './strategy.js';
+export {
+  DrizzleStrategyDataCheckpointRepository,
+  DrizzleStrategyEvaluationRepository,
+} from './strategy-checkpoint.js';
 export { DrizzleStrategyScheduleRepository } from './strategy-schedule.js';
 export { DrizzleTradeRepository } from './trade.js';
 export { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';

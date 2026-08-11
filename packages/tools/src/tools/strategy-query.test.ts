@@ -16,6 +16,7 @@ import {
   getStrategyWorkspaceTool,
   listStrategyResultViewsTool,
   listStrategyRunsTool,
+  strategySignalsByStockTool,
 } from './strategy-query.js';
 
 const seedStrategy = async (ctx: Awaited<ReturnType<typeof buildTestContext>>): Promise<void> => {
@@ -86,25 +87,75 @@ const deriveRun = (
 ): StrategyRun => ({ ...base, ...patch });
 
 const partialSummary = {
-  schemaVersion: 2 as const,
+  schemaVersion: 4 as const,
+  dataHealth: 'partial' as const,
   universeCount: 1,
   evaluatedCount: 1,
   selectedCount: 1,
   signalCount: 0,
-  partialCount: 1,
+  incompleteCount: 1,
   failedCount: 0,
   failureSamples: [{ stockId: '600519.SH', error: '行情数据不足' }],
+  acceptance: {
+    decision: 'accepted' as const,
+    policy: {
+      policyVersion: 'strategy-run-acceptance-v1' as const,
+      minEvaluatedRatio: 0.98,
+      maxFailedRatio: 0.02,
+      maxIncompleteRatio: 1,
+    },
+    metrics: { evaluatedRatio: 1, failedRatio: 0, incompleteRatio: 1 },
+    reasons: [],
+    assessedAt: new Date('2026-07-28T09:00:00Z'),
+  },
 };
 
 const failedSummary = {
-  schemaVersion: 2 as const,
+  schemaVersion: 4 as const,
+  dataHealth: 'unavailable' as const,
   universeCount: 1,
   evaluatedCount: 0,
   selectedCount: 0,
   signalCount: 0,
-  partialCount: 0,
+  incompleteCount: 0,
   failedCount: 1,
   failureSamples: [{ stockId: '600519.SH', error: 'provider down' }],
+  acceptance: {
+    decision: 'rejected' as const,
+    policy: {
+      policyVersion: 'strategy-run-acceptance-v1' as const,
+      minEvaluatedRatio: 0.98,
+      maxFailedRatio: 0.02,
+      maxIncompleteRatio: 0.1,
+    },
+    metrics: { evaluatedRatio: 0, failedRatio: 1, incompleteRatio: 0 },
+    reasons: ['evaluated-ratio-below-min' as const, 'failed-ratio-above-max' as const],
+    assessedAt: new Date('2026-07-28T09:00:00Z'),
+  },
+};
+
+const selectedZeroSummary = {
+  schemaVersion: 4 as const,
+  dataHealth: 'complete' as const,
+  universeCount: 1,
+  evaluatedCount: 1,
+  selectedCount: 0,
+  signalCount: 0,
+  incompleteCount: 0,
+  failedCount: 0,
+  failureSamples: [],
+  acceptance: {
+    decision: 'accepted' as const,
+    policy: {
+      policyVersion: 'strategy-run-acceptance-v1' as const,
+      minEvaluatedRatio: 0.98,
+      maxFailedRatio: 0.02,
+      maxIncompleteRatio: 0.1,
+    },
+    metrics: { evaluatedRatio: 1, failedRatio: 0, incompleteRatio: 0 },
+    reasons: [],
+    assessedAt: new Date('2026-07-28T09:00:00Z'),
+  },
 };
 
 describe('complete|partial 可用运行基准', () => {
@@ -141,14 +192,22 @@ describe('complete|partial 可用运行基准', () => {
     const ctx = { ...base, adapters: { ...base.adapters, market } };
 
     const run = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['300750.SZ', '600519.SH'] },
+      {
+        strategyId: 'scan-strategy',
+        acceptancePolicy: {
+          policyVersion: 'strategy-run-acceptance-v1',
+          minEvaluatedRatio: 0.5,
+          maxFailedRatio: 0.5,
+          maxIncompleteRatio: 1,
+        },
+      },
       ctx,
     );
     expect(run.ok).toBe(true);
     if (!run.ok) return;
     expect(run.data.run).toMatchObject({
       status: 'complete',
-      summary: { schemaVersion: 3, dataHealth: 'partial' },
+      summary: { schemaVersion: 4, dataHealth: 'partial' },
     });
 
     const views = await listStrategyResultViewsTool.execute(
@@ -171,10 +230,7 @@ describe('complete|partial 可用运行基准', () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
     await seedStrategy(ctx);
-    const complete = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
-      ctx,
-    );
+    const complete = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
     if (!complete.ok) throw new Error('run_strategy 前置失败');
     const laterAt = new Date(complete.data.run.startedAt.getTime() + 1_000);
     const partial = deriveRun(complete.data.run, {
@@ -182,7 +238,7 @@ describe('complete|partial 可用运行基准', () => {
       startedAt: laterAt,
       finishedAt: laterAt,
       dataAsOf: laterAt,
-      status: 'partial',
+      status: 'complete',
       summary: partialSummary,
     });
     await ctx.repos.strategyRun.commitRun({
@@ -213,10 +269,7 @@ describe('complete|partial 可用运行基准', () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
     await seedStrategy(ctx);
-    const complete = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
-      ctx,
-    );
+    const complete = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
     if (!complete.ok) throw new Error('run_strategy 前置失败');
     const partialAt = new Date(complete.data.run.startedAt.getTime() + 1_000);
     const partial = deriveRun(complete.data.run, {
@@ -224,7 +277,7 @@ describe('complete|partial 可用运行基准', () => {
       startedAt: partialAt,
       finishedAt: partialAt,
       dataAsOf: partialAt,
-      status: 'partial',
+      status: 'complete',
       summary: partialSummary,
     });
     await ctx.repos.strategyRun.commitRun({
@@ -266,10 +319,7 @@ describe('complete|partial 可用运行基准', () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
     await seedStrategy(ctx);
-    const base = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
-      ctx,
-    );
+    const base = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
     if (!base.ok) throw new Error('run_strategy 前置失败');
     const failedAt = new Date(base.data.run.startedAt.getTime() + 1_000);
     const failed = deriveRun(base.data.run, {
@@ -288,7 +338,7 @@ describe('complete|partial 可用运行基准', () => {
       startedAt: partialAt,
       finishedAt: partialAt,
       dataAsOf: partialAt,
-      status: 'partial',
+      status: 'complete',
       summary: partialSummary,
     });
     await ctx.repos.strategyRun.commitRun({
@@ -311,10 +361,7 @@ describe('strategy-query', () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 2 });
     await seedStrategy(ctx);
-    const run = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH', '300750.SZ'] },
-      ctx,
-    );
+    const run = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
     if (!run.ok) throw new Error('run_strategy 前置失败');
 
     const result = await listStrategyResultViewsTool.execute(
@@ -337,10 +384,7 @@ describe('strategy-query', () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
     await seedStrategy(ctx);
-    const complete = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
-      ctx,
-    );
+    const complete = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
     if (!complete.ok) throw new Error('run_strategy 前置失败');
     const failedStartedAt = new Date(complete.data.run.startedAt.getTime() + 1_000);
     const failed = {
@@ -350,16 +394,7 @@ describe('strategy-query', () => {
       finishedAt: failedStartedAt,
       dataAsOf: failedStartedAt,
       status: 'failed' as const,
-      summary: {
-        schemaVersion: 2 as const,
-        universeCount: 1,
-        evaluatedCount: 0,
-        selectedCount: 0,
-        signalCount: 0,
-        partialCount: 0,
-        failedCount: 1,
-        failureSamples: [{ stockId: '600519.SH', error: 'provider down' }],
-      },
+      summary: failedSummary,
       error: '全部 candidate 数据准备失败',
     };
     await ctx.repos.strategyRun.commitRun({ run: failed, results: [], signals: [] });
@@ -377,10 +412,7 @@ describe('strategy-query', () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
     await seedStrategy(ctx);
-    const first = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
-      ctx,
-    );
+    const first = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
     if (!first.ok) throw new Error('run_strategy 前置失败');
     const laterAt = new Date(first.data.run.startedAt.getTime() + 1_000);
     const secondRun = {
@@ -389,16 +421,7 @@ describe('strategy-query', () => {
       startedAt: laterAt,
       finishedAt: laterAt,
       dataAsOf: laterAt,
-      summary: {
-        schemaVersion: 2 as const,
-        universeCount: 1,
-        evaluatedCount: 1,
-        selectedCount: 0,
-        signalCount: 0,
-        partialCount: 0,
-        failedCount: 0,
-        failureSamples: [],
-      },
+      summary: selectedZeroSummary,
     };
     await ctx.repos.strategyRun.commitRun({
       run: secondRun,
@@ -436,14 +459,8 @@ describe('strategy-query', () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 2 });
     await seedStrategy(ctx);
-    const first = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
-      ctx,
-    );
-    const second = await runStrategyTool.execute(
-      { strategyId: 'scan-strategy', stockIds: ['600519.SH', '300750.SZ'] },
-      ctx,
-    );
+    const first = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    const second = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
     if (!first.ok || !second.ok) throw new Error('run_strategy 前置失败');
 
     const runs = await listStrategyRunsTool.execute({ strategyId: 'scan-strategy' }, ctx);
@@ -457,11 +474,62 @@ describe('strategy-query', () => {
     expect(detail.ok).toBe(true);
     if (!detail.ok) return;
     expect(detail.data.run.id).toBe(first.data.run.id);
-    expect(detail.data.results.map((result) => result.stockId)).toEqual(['600519.SH']);
+    expect(detail.data.results.map((result) => result.stockId)).toEqual(['300750.SZ', '600519.SH']);
     expect(detail.data.signals.length).toBeGreaterThan(0);
     expect(detail.data.signals.every((signal) => signal.runId === first.data.run.id)).toBe(true);
 
     const missing = await getStrategyRunTool.execute({ runId: 'strategy-run-missing' }, ctx);
     expect(missing.ok).toBe(false);
+  });
+
+  it('strategy_signals_by_stock 默认隔离非 published operational signal，并允许显式 evaluation session', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const published = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    if (!published.ok) throw new Error('published run 前置失败');
+    const evaluationRun: StrategyRun = {
+      ...published.data.run,
+      id: 'evaluation-signal-run',
+      mode: 'replay',
+      scope: 'evaluation',
+      inputSnapshot: { evaluationSessionId: 'evaluation-1' },
+      publication: {
+        status: 'non-publishing',
+        reasons: ['evaluation-scope'],
+        decidedAt: published.data.run.finishedAt ?? published.data.run.startedAt,
+      },
+    };
+    await ctx.repos.strategyRun.commitRun({
+      run: evaluationRun,
+      results: published.data.results.map((result) => ({ ...result, runId: evaluationRun.id })),
+      signals: published.data.signals.map((signal) => ({
+        ...signal,
+        id: `evaluation:${signal.id}`,
+        runId: evaluationRun.id,
+      })),
+    });
+
+    const operational = await strategySignalsByStockTool.execute({ stockId: '600519.SH' }, ctx);
+    expect(operational.ok).toBe(true);
+    if (!operational.ok) return;
+    expect(operational.data.signals.map((signal) => signal.runId)).toEqual([published.data.run.id]);
+
+    const missingSession = await strategySignalsByStockTool.execute(
+      { stockId: '600519.SH', scope: 'evaluation' },
+      ctx,
+    );
+    expect(missingSession.ok).toBe(false);
+    const evaluation = await strategySignalsByStockTool.execute(
+      {
+        stockId: '600519.SH',
+        scope: 'evaluation',
+        evaluationSessionId: 'evaluation-1',
+      },
+      ctx,
+    );
+    expect(evaluation.ok).toBe(true);
+    if (!evaluation.ok) return;
+    expect(evaluation.data.signals.map((signal) => signal.runId)).toEqual([evaluationRun.id]);
   });
 });

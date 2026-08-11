@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { BUILTIN_STRATEGY_TEMPLATES, STRATEGY_TEMPLATE_REVISION } from './builtin.js';
+import {
+  BUILTIN_STRATEGY_TEMPLATES,
+  EARLY_BREAKOUT_V2_DRAFT,
+  STRATEGY_TEMPLATE_REVISION,
+} from './builtin.js';
 
 /**
  * 内置策略身份锁定：definitionHash 是 StrategyVersion 的落库 identity，
@@ -51,5 +55,22 @@ describe('BUILTIN_STRATEGY_TEMPLATES', () => {
         expect(selectionIds.has(component.ruleId)).toBe(true);
       }
     }
+  });
+
+  it('早期突破 V2 草案拆分 selection，并使用 edge/exit/risk 信号', () => {
+    expect(EARLY_BREAKOUT_V2_DRAFT.definition.selection.rules.map((rule) => rule.id)).toEqual([
+      'trend-above-ma20',
+      'momentum-window',
+      'volume-confirmation',
+      'rsi-window',
+      'distance-control',
+      'breakout-freshness',
+    ]);
+    expect(EARLY_BREAKOUT_V2_DRAFT.definition.signals.entry[0]?.emission).toEqual({
+      mode: 'edge',
+      cooldownTradingDays: 3,
+    });
+    expect(EARLY_BREAKOUT_V2_DRAFT.definition.signals.exit[0]?.id).toBe('early-breakout-exit-v2');
+    expect(EARLY_BREAKOUT_V2_DRAFT.definition.signals.risk[0]?.id).toBe('early-breakout-risk-v2');
   });
 });

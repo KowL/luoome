@@ -18,6 +18,8 @@ import {
   DrizzleStockEventRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
+  DrizzleStrategyDataCheckpointRepository,
+  DrizzleStrategyEvaluationRepository,
   DrizzleStrategyRepository,
   DrizzleStrategyRunRepository,
   DrizzleStrategyScheduleRepository,
@@ -33,6 +35,15 @@ import { type Schema, schema } from './schema/index.js';
 
 /** Drizzle + bun:sqlite 的数据库句柄类型（绑定本包 schema）。 */
 export type DrizzleDb = BunSQLiteDatabase<Schema>;
+
+const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: string): void => {
+  const columns = new Set(
+    db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`)).map((row) => row.name),
+  );
+  if (!columns.has(column)) {
+    db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`));
+  }
+};
 
 /**
  * 编程式建表（CREATE TABLE IF NOT EXISTS）。
@@ -115,14 +126,24 @@ export const ensureSchema = (db: DrizzleDb): void => {
       baseline_price REAL, baseline_at INTEGER, horizon TEXT NOT NULL, close_price REAL, return_pct REAL,
       max_favorable_excursion_pct REAL, max_adverse_excursion_pct REAL, benchmark_return_pct REAL,
       benchmark_status TEXT NOT NULL, status TEXT NOT NULL, provenance TEXT NOT NULL,
-      unavailable_reason TEXT, observed_at INTEGER
+      unavailable_reason TEXT, observed_at INTEGER, due_at INTEGER,
+      attempt_count INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER,
+      next_attempt_at INTEGER, last_error_kind TEXT
     )
   `);
+  ensureColumn(db, 'signal_observations', 'due_at', 'INTEGER');
+  ensureColumn(db, 'signal_observations', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'signal_observations', 'last_attempt_at', 'INTEGER');
+  ensureColumn(db, 'signal_observations', 'next_attempt_at', 'INTEGER');
+  ensureColumn(db, 'signal_observations', 'last_error_kind', 'TEXT');
   db.run(
     sql`CREATE INDEX IF NOT EXISTS signal_observations_status_baseline_idx ON signal_observations (status, baseline_at)`,
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS signal_observations_source_idx ON signal_observations (source_kind, source_id)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS signal_observations_due_idx ON signal_observations (status, due_at, next_attempt_at)`,
   );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -223,6 +244,24 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS stock_universe_sync_runs_source_coverage_finished_idx
     ON stock_universe_sync_runs (source, coverage, finished_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS stock_universe_snapshot_members (
+      sync_id TEXT NOT NULL, stock_id TEXT NOT NULL,
+      PRIMARY KEY (sync_id, stock_id)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS stock_universe_snapshot_members_stock_idx
+    ON stock_universe_snapshot_members (stock_id)
+  `);
+  // 存量库没有 immutable member projection 时，只能从最后一次 active membership
+  // 回填一个兼容快照；新 sync 会在 applySnapshot 事务内写入精确成员集合。
+  db.run(sql`
+    INSERT OR IGNORE INTO stock_universe_snapshot_members (sync_id, stock_id)
+    SELECT last_sync_id, stock_id
+    FROM stock_universe_memberships
+    WHERE state = 'active' AND last_sync_id IS NOT NULL
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS holdings (
@@ -333,6 +372,18 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
   `);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS daily_bar_revisions (
+      stock_id TEXT NOT NULL, date INTEGER NOT NULL, content_hash TEXT NOT NULL,
+      open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
+      volume INTEGER NOT NULL, source TEXT NOT NULL, recorded_at INTEGER NOT NULL,
+      PRIMARY KEY (stock_id, date, content_hash)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS daily_bar_revisions_lookup_idx
+    ON daily_bar_revisions (stock_id, date, recorded_at)
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS strategies (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -382,17 +433,51 @@ export const ensureSchema = (db: DrizzleDb): void => {
       started_at INTEGER NOT NULL,
       finished_at INTEGER,
       status TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'operational',
       input_snapshot_json TEXT NOT NULL,
       provider_statuses_json TEXT NOT NULL,
+      provider_coverage_json TEXT,
       summary_json TEXT,
+      publication_json TEXT,
+      publication_status TEXT,
       error TEXT
     )
+  `);
+  ensureColumn(db, 'strategy_runs', 'scope', "TEXT NOT NULL DEFAULT 'operational'");
+  ensureColumn(db, 'strategy_runs', 'provider_coverage_json', 'TEXT');
+  ensureColumn(db, 'strategy_runs', 'publication_json', 'TEXT');
+  ensureColumn(db, 'strategy_runs', 'publication_status', 'TEXT');
+  db.run(sql`
+    UPDATE strategy_runs
+    SET scope = CASE WHEN mode IN ('replay', 'backtest') THEN 'evaluation' ELSE 'operational' END
+    WHERE scope IS NULL OR scope = ''
+  `);
+  db.run(sql`
+    UPDATE strategy_runs
+    SET publication_status = CASE
+      WHEN mode IN ('replay', 'backtest') THEN 'non-publishing'
+      WHEN status = 'complete' OR status = 'partial' THEN 'published'
+      ELSE 'withheld'
+    END,
+    publication_json = json_object(
+      'status', CASE
+        WHEN mode IN ('replay', 'backtest') THEN 'non-publishing'
+        WHEN status = 'complete' OR status = 'partial' THEN 'published'
+        ELSE 'withheld'
+      END,
+      'reasons', json_array('legacy-publication'),
+      'decidedAt', coalesce(finished_at, started_at)
+    )
+    WHERE publication_status IS NULL
   `);
   db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_runs_strategy_started_idx ON strategy_runs (strategy_id, started_at)`,
   );
   db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_runs_status_started_idx ON strategy_runs (status, started_at)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS strategy_runs_published_current_idx ON strategy_runs (strategy_id, scope, publication_status, status, started_at)`,
   );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS strategy_schedules (
@@ -401,11 +486,14 @@ export const ensureSchema = (db: DrizzleDb): void => {
       cron TEXT NOT NULL,
       timezone TEXT NOT NULL,
       enabled INTEGER NOT NULL,
+      acceptance_policy_json TEXT,
       recommendation_policy_json TEXT,
       next_run_at INTEGER,
       last_run_id TEXT,
       lease_owner TEXT,
       lease_until INTEGER,
+      lease_fence INTEGER NOT NULL DEFAULT 0,
+      lease_heartbeat_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
@@ -416,6 +504,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
   if (!strategyScheduleColumns.has('recommendation_policy_json')) {
     db.run(sql`ALTER TABLE strategy_schedules ADD COLUMN recommendation_policy_json TEXT`);
   }
+  if (!strategyScheduleColumns.has('acceptance_policy_json')) {
+    db.run(sql`ALTER TABLE strategy_schedules ADD COLUMN acceptance_policy_json TEXT`);
+  }
+  ensureColumn(db, 'strategy_schedules', 'lease_fence', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'strategy_schedules', 'lease_heartbeat_at', 'INTEGER');
   db.run(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS strategy_schedules_strategy_unique ON strategy_schedules (strategy_id)`,
   );
@@ -431,9 +524,13 @@ export const ensureSchema = (db: DrizzleDb): void => {
       strategy_version_id TEXT NOT NULL,
       owner TEXT NOT NULL,
       lease_until INTEGER NOT NULL,
+      fence INTEGER NOT NULL DEFAULT 0,
+      heartbeat_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (strategy_id, strategy_version_id)
     )
   `);
+  ensureColumn(db, 'strategy_run_leases', 'fence', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'strategy_run_leases', 'heartbeat_at', 'INTEGER NOT NULL DEFAULT 0');
   db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_run_leases_until_idx ON strategy_run_leases (lease_until)`,
   );
@@ -483,6 +580,63 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS strategy_signals_stock_ts_idx ON strategy_signals (stock_id, ts)`,
   );
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_data_checkpoints (
+      id TEXT PRIMARY KEY, coverage TEXT NOT NULL, data_as_of INTEGER NOT NULL,
+      status TEXT NOT NULL, vintage_status TEXT NOT NULL DEFAULT 'not-applicable', universe_sync_id TEXT NOT NULL,
+      requested_count INTEGER NOT NULL, available_count INTEGER NOT NULL,
+      failed_count INTEGER NOT NULL, member_checksum TEXT NOT NULL,
+      data_checksum TEXT NOT NULL, provider_statuses_json TEXT NOT NULL,
+      started_at INTEGER NOT NULL, finished_at INTEGER
+    )
+  `);
+  ensureColumn(
+    db,
+    'strategy_data_checkpoints',
+    'vintage_status',
+    "TEXT NOT NULL DEFAULT 'not-applicable'",
+  );
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_data_checkpoints_lookup_idx
+    ON strategy_data_checkpoints (coverage, universe_sync_id, data_as_of)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_data_checkpoint_members (
+      checkpoint_id TEXT NOT NULL, stock_id TEXT NOT NULL, status TEXT NOT NULL,
+      latest_bar_date INTEGER, bar_count INTEGER NOT NULL, provider TEXT, error_kind TEXT,
+      PRIMARY KEY (checkpoint_id, stock_id)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_data_checkpoint_members_status_idx
+    ON strategy_data_checkpoint_members (checkpoint_id, status)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_evaluation_sessions (
+      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_version_id TEXT NOT NULL,
+      from_at INTEGER NOT NULL, to_at INTEGER NOT NULL, status TEXT NOT NULL,
+      definition_hash TEXT NOT NULL, created_at INTEGER NOT NULL,
+      stock_ids_json TEXT, stock_id_checksum TEXT, finished_at INTEGER, error TEXT
+    )
+  `);
+  ensureColumn(db, 'strategy_evaluation_sessions', 'stock_ids_json', 'TEXT');
+  ensureColumn(db, 'strategy_evaluation_sessions', 'stock_id_checksum', 'TEXT');
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_evaluation_sessions_strategy_created_idx
+    ON strategy_evaluation_sessions (strategy_id, created_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_evaluation_days (
+      session_id TEXT NOT NULL, data_as_of INTEGER NOT NULL, run_id TEXT,
+      universe_sync_id TEXT, data_checkpoint_id TEXT, revision_cutoff INTEGER,
+      status TEXT NOT NULL, error TEXT,
+      PRIMARY KEY (session_id, data_as_of)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_evaluation_days_status_idx
+    ON strategy_evaluation_days (session_id, status)
+  `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
@@ -1103,6 +1257,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db),
     strategySchedule: new DrizzleStrategyScheduleRepository(db),
+    strategyDataCheckpoint: new DrizzleStrategyDataCheckpointRepository(db),
+    strategyEvaluation: new DrizzleStrategyEvaluationRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),

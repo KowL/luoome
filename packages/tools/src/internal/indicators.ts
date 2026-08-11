@@ -1,4 +1,4 @@
-import type { DailyBar, TechnicalIndicators } from '@luoome/core';
+import { type DailyBar, observeCrossingUp, type TechnicalIndicators } from '@luoome/core';
 
 /**
  * 简化技术指标计算（ARCHITECTURE §6.3 step 1 的 v0.1 实现）。
@@ -22,27 +22,6 @@ const smaAt = (values: readonly number[], period: number, endIndex: number): num
     sum += value;
   }
   return sum / period;
-};
-
-const daysSinceCrossUp = (closes: readonly number[], period: number): number | undefined => {
-  let latestCrossIndex: number | undefined;
-  for (let index = period; index < closes.length; index += 1) {
-    const current = closes[index];
-    const previous = closes[index - 1];
-    const currentMa = smaAt(closes, period, index);
-    const previousMa = smaAt(closes, period, index - 1);
-    if (
-      current !== undefined &&
-      previous !== undefined &&
-      currentMa !== undefined &&
-      previousMa !== undefined &&
-      current > currentMa &&
-      previous <= previousMa
-    ) {
-      latestCrossIndex = index;
-    }
-  }
-  return latestCrossIndex === undefined ? undefined : closes.length - 1 - latestCrossIndex;
 };
 
 const consecutiveDaysAboveMa = (closes: readonly number[], period: number): number | undefined => {
@@ -119,8 +98,24 @@ export const computeSimpleIndicators = (bars: readonly DailyBar[]): TechnicalInd
       assign('maDistance60Pct', ((close - out.ma60) / out.ma60) * 100);
     }
   }
-  assign('daysSinceMa20CrossUp', daysSinceCrossUp(closes, 20));
-  assign('daysSinceMa60CrossUp', daysSinceCrossUp(closes, 60));
+  const ma20Cross = observeCrossingUp(closes, 20);
+  const ma60Cross = observeCrossingUp(closes, 60);
+  assign(
+    'daysSinceMa20CrossUp',
+    ma20Cross.status === 'observed'
+      ? ma20Cross.daysSince
+      : ma20Cross.status === 'not-observed'
+        ? ma20Cross.lowerBound
+        : undefined,
+  );
+  assign(
+    'daysSinceMa60CrossUp',
+    ma60Cross.status === 'observed'
+      ? ma60Cross.daysSince
+      : ma60Cross.status === 'not-observed'
+        ? ma60Cross.lowerBound
+        : undefined,
+  );
   assign('daysAboveMa20', consecutiveDaysAboveMa(closes, 20));
   assign('rsi14', rsi(closes, 14));
   assign('volMa5', sma(volumes, 5));

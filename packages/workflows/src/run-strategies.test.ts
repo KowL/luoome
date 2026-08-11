@@ -113,7 +113,7 @@ describe('run-strategies workflow', () => {
     const run = runId === undefined ? null : await ctx.repos.strategyRun.findRunById(runId);
     expect(run).toMatchObject({
       mode: 'scheduled',
-      inputSnapshot: { schemaVersion: 2, requestedBy: 'scheduled' },
+      inputSnapshot: { schemaVersion: 3, requestedBy: 'scheduled' },
     });
   });
 });

@@ -1,0 +1,157 @@
+import { createHash } from 'node:crypto';
+import type { DailyBarRevision } from '@luoome/core';
+import { type DailyBar, money } from '@luoome/core';
+import { describe, expect, it } from 'vitest';
+
+import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
+import { prepareStrategyDataTool } from './prepare-strategy-data.js';
+
+const bar = (date: Date): DailyBar => ({
+  stockId: '600519.SH',
+  date,
+  open: money(10),
+  high: money(11),
+  low: money(9),
+  close: money(10),
+  volume: 1_000_000,
+  adjustment: 'qfq',
+  source: 'stale-fixture',
+});
+
+const revisionFor = (input: DailyBar, recordedAt: Date): DailyBarRevision => ({
+  stockId: input.stockId,
+  date: input.date,
+  contentHash: createHash('sha256')
+    .update(
+      JSON.stringify({
+        open: input.open,
+        high: input.high,
+        low: input.low,
+        close: input.close,
+        volume: input.volume,
+        source: input.source,
+      }),
+    )
+    .digest('hex'),
+  open: input.open,
+  high: input.high,
+  low: input.low,
+  close: input.close,
+  volume: input.volume,
+  source: input.source,
+  recordedAt,
+});
+
+describe('prepare_strategy_data freshness and vintage', () => {
+  it('stale daily bar is missing rather than provider-ok and lowers checkpoint coverage', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    const oldBar = bar(new Date('2026-08-05T00:00:00.000Z'));
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: { ...base.adapters.market, fetchDailyBars: () => Promise.resolve([oldBar]) },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        maxStalenessTradingDays: 1,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.checkpoint).toMatchObject({
+      status: 'failed',
+      availableCount: 0,
+      vintageStatus: 'not-applicable',
+      providerStatuses: [
+        expect.objectContaining({
+          freshness: 'unavailable',
+          dataAsOf: oldBar.date,
+          missing: 1,
+          errorKinds: ['stale_data'],
+        }),
+      ],
+    });
+    expect(result.data.members[0]).toMatchObject({
+      status: 'missing',
+      errorKind: 'stale_data',
+    });
+  });
+
+  it('replay freshly fetched history without pre-cutoff revisions is explicitly vintage unavailable', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const asOf = new Date('2026-08-10T00:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: asOf });
+    const historicalBar = bar(asOf);
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([historicalBar]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf,
+        stockIds: ['600519.SH'],
+        persistCurrentProjection: false,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.checkpoint.vintageStatus).toBe('unavailable');
+    expect(
+      await ctx.repos.dailyBar.listRevisions({ stockId: historicalBar.stockId, recordedAt: asOf }),
+    ).toEqual([]);
+  });
+
+  it('same-date revision with different OHLCV is vintage unavailable', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const asOf = new Date('2026-08-10T00:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: asOf });
+    const fetchedBar = bar(asOf);
+    const priorBar = { ...fetchedBar, close: money(9.5), high: money(10.5) };
+    await base.repos.dailyBar.saveRevisions([
+      revisionFor(priorBar, new Date('2026-08-09T00:00:00.000Z')),
+    ]);
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([fetchedBar]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf,
+        stockIds: ['600519.SH'],
+        persistCurrentProjection: false,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.checkpoint.vintageStatus).toBe('unavailable');
+  });
+});

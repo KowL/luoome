@@ -29,6 +29,10 @@ import {
   normalizeDailyBars,
   normalizeMarketRange,
 } from '../internal/market-view.js';
+import {
+  readStrategySignalsByStock,
+  StrategySignalScopeSchema,
+} from '../internal/strategy-signal-scope.js';
 
 /**
  * get_stock_market_view（个股行情查看 Phase 1，docs/ddd/stock-market-view-detailed-design.md §7）。
@@ -48,6 +52,8 @@ export const GetStockMarketViewInput = z.object({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
+  strategySignalScope: StrategySignalScopeSchema.default('operational'),
+  strategyEvaluationSessionId: z.string().min(1).optional(),
 });
 
 export const MarketCandleSchema = z.object({
@@ -284,7 +290,13 @@ export const getStockMarketViewTool = defineTool({
         ctx.repos.watchTrigger
           .listRecent({ limit: 10_000 })
           .then((items) => items.filter((trigger) => trigger.stockId === stock.id).slice(0, 200)),
-        ctx.repos.strategyRun.signalsByStock(stock.id),
+        readStrategySignalsByStock(ctx, {
+          stockId: stock.id,
+          scope: input.strategySignalScope,
+          ...(input.strategyEvaluationSessionId === undefined
+            ? {}
+            : { evaluationSessionId: input.strategyEvaluationSessionId }),
+        }),
         ctx.repos.report.list({
           ...(ctx.user.defaultAccountId === ''
             ? {}

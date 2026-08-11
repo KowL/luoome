@@ -34,8 +34,25 @@ export type StrategyRule = z.infer<typeof StrategyRuleSchema>;
 export const StrategySignalRuleSchema = StrategyRuleSchema.extend({
   score: z.string().min(1).max(1000),
   direction: z.enum(['bullish', 'bearish', 'neutral']),
+  /** v2 信号去重语义；旧版本缺省为 level，保持已发布定义可读且不被重写。 */
+  emission: z
+    .object({
+      mode: z.enum(['level', 'edge']).default('level'),
+      cooldownTradingDays: z.number().int().min(0).max(60).default(0),
+    })
+    .optional(),
 });
 export type StrategySignalRule = z.infer<typeof StrategySignalRuleSchema>;
+
+export const StrategySignalEmissionSchema = z.object({
+  mode: z.enum(['level', 'edge']).default('level'),
+  cooldownTradingDays: z.number().int().min(0).max(60).default(0),
+});
+export type StrategySignalEmission = z.infer<typeof StrategySignalEmissionSchema>;
+
+export const getStrategySignalEmission = (
+  rule: Pick<StrategySignalRule, 'emission'>,
+): StrategySignalEmission => StrategySignalEmissionSchema.parse(rule.emission ?? {});
 
 export const StrategyScoringSchema = z.object({
   method: z.literal('weighted-sum'),
@@ -168,6 +185,154 @@ export type StrategyRunSummaryV2 = z.infer<typeof StrategyRunSummaryV2Schema>;
 export const StrategyRunDataHealthSchema = z.enum(['complete', 'partial', 'unavailable']);
 export type StrategyRunDataHealth = z.infer<typeof StrategyRunDataHealthSchema>;
 
+export const StrategyRunScopeSchema = z.enum(['operational', 'evaluation']);
+export type StrategyRunScope = z.infer<typeof StrategyRunScopeSchema>;
+
+export const StrategyRunUniverseKindSchema = z.enum(['full', 'explicit']);
+export type StrategyRunUniverseKind = z.infer<typeof StrategyRunUniverseKindSchema>;
+
+export const StrategyRunAcceptancePolicySchema = z.object({
+  policyVersion: z.literal('strategy-run-acceptance-v1'),
+  minEvaluatedRatio: z.number().min(0).max(1),
+  maxFailedRatio: z.number().min(0).max(1),
+  maxIncompleteRatio: z.number().min(0).max(1),
+});
+export type StrategyRunAcceptancePolicy = z.infer<typeof StrategyRunAcceptancePolicySchema>;
+
+export const DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY: StrategyRunAcceptancePolicy = {
+  policyVersion: 'strategy-run-acceptance-v1',
+  minEvaluatedRatio: 0.98,
+  maxFailedRatio: 0.02,
+  maxIncompleteRatio: 0.1,
+};
+
+export const StrategyRunAcceptanceReasonSchema = z.enum([
+  'run-not-complete',
+  'empty-universe',
+  'evaluated-ratio-below-min',
+  'failed-ratio-above-max',
+  'incomplete-ratio-above-max',
+]);
+export type StrategyRunAcceptanceReason = z.infer<typeof StrategyRunAcceptanceReasonSchema>;
+
+export const StrategyRunAcceptanceSchema = z.object({
+  decision: z.enum(['accepted', 'rejected']),
+  policy: StrategyRunAcceptancePolicySchema,
+  metrics: z.object({
+    evaluatedRatio: z.number().min(0).max(1),
+    failedRatio: z.number().min(0).max(1),
+    incompleteRatio: z.number().min(0).max(1),
+  }),
+  reasons: z.array(StrategyRunAcceptanceReasonSchema),
+  assessedAt: z.coerce.date(),
+});
+export type StrategyRunAcceptance = z.infer<typeof StrategyRunAcceptanceSchema>;
+
+export const StrategyRunPublicationStatusSchema = z.enum([
+  'published',
+  'withheld',
+  'non-publishing',
+]);
+export type StrategyRunPublicationStatus = z.infer<typeof StrategyRunPublicationStatusSchema>;
+
+export const StrategyRunPublicationReasonSchema = z.enum([
+  'evaluation-scope',
+  'explicit-subset',
+  'acceptance-rejected',
+  'run-not-complete',
+  'universe-checkpoint-missing',
+  'legacy-publication',
+]);
+export type StrategyRunPublicationReason = z.infer<typeof StrategyRunPublicationReasonSchema>;
+
+export const StrategyRunPublicationSchema = z.object({
+  status: StrategyRunPublicationStatusSchema,
+  reasons: z.array(StrategyRunPublicationReasonSchema),
+  decidedAt: z.coerce.date(),
+});
+export type StrategyRunPublication = z.infer<typeof StrategyRunPublicationSchema>;
+
+export const StrategyProviderCoverageSchema = z.object({
+  capability: z.enum(['quote', 'daily-bars', 'universe']),
+  provider: z.string().min(1),
+  requested: z.number().int().nonnegative(),
+  succeeded: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  missing: z.number().int().nonnegative(),
+  fallbackUsed: z.boolean(),
+  freshness: z.enum(['fresh', 'stale', 'unavailable']),
+  dataAsOf: z.coerce.date().optional(),
+  errorKinds: z.array(z.string()).max(20),
+});
+export type StrategyProviderCoverage = z.infer<typeof StrategyProviderCoverageSchema>;
+
+const strategyRunSummaryCounts = (
+  summary: {
+    readonly universeCount: number;
+    readonly evaluatedCount: number;
+    readonly selectedCount: number;
+    readonly incompleteCount: number;
+    readonly failedCount: number;
+  },
+  ctx: z.RefinementCtx,
+): void => {
+  if (summary.evaluatedCount + summary.failedCount !== summary.universeCount) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['evaluatedCount'],
+      message: 'evaluatedCount + failedCount 必须等于 universeCount',
+    });
+  }
+  if (summary.selectedCount > summary.evaluatedCount) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['selectedCount'],
+      message: 'selectedCount 不能大于 evaluatedCount',
+    });
+  }
+  if (summary.incompleteCount > summary.evaluatedCount) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['incompleteCount'],
+      message: 'incompleteCount 不能大于 evaluatedCount',
+    });
+  }
+};
+
+export const StrategyRunSummaryV4Schema = z
+  .object({
+    schemaVersion: z.literal(4),
+    dataHealth: StrategyRunDataHealthSchema,
+    universeCount: z.number().int().nonnegative(),
+    evaluatedCount: z.number().int().nonnegative(),
+    selectedCount: z.number().int().nonnegative(),
+    signalCount: z.number().int().nonnegative(),
+    incompleteCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+    failureSamples: z
+      .array(z.object({ stockId: z.string().min(1), error: z.string().min(1) }))
+      .max(20)
+      .default([]),
+    acceptance: StrategyRunAcceptanceSchema,
+  })
+  .superRefine((summary, ctx) => {
+    strategyRunSummaryCounts(summary, ctx);
+    const expectedHealth =
+      summary.failedCount === summary.universeCount && summary.universeCount > 0
+        ? 'unavailable'
+        : summary.failedCount > 0 || summary.incompleteCount > 0
+          ? 'partial'
+          : 'complete';
+    if (summary.dataHealth !== expectedHealth) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dataHealth'],
+        message: `dataHealth 应为 ${expectedHealth}`,
+      });
+    }
+  });
+export type StrategyRunSummaryV4 = z.infer<typeof StrategyRunSummaryV4Schema>;
+
 export const StrategyRunSummaryV3Schema = z
   .object({
     schemaVersion: z.literal(3),
@@ -184,27 +349,7 @@ export const StrategyRunSummaryV3Schema = z
       .default([]),
   })
   .superRefine((summary, ctx) => {
-    if (summary.evaluatedCount + summary.failedCount !== summary.universeCount) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['evaluatedCount'],
-        message: 'evaluatedCount + failedCount 必须等于 universeCount',
-      });
-    }
-    if (summary.selectedCount > summary.evaluatedCount) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['selectedCount'],
-        message: 'selectedCount 不能大于 evaluatedCount',
-      });
-    }
-    if (summary.incompleteCount > summary.evaluatedCount) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['incompleteCount'],
-        message: 'incompleteCount 不能大于 evaluatedCount',
-      });
-    }
+    strategyRunSummaryCounts(summary, ctx);
     const expectedHealth =
       summary.failedCount === summary.universeCount && summary.universeCount > 0
         ? 'unavailable'
@@ -221,12 +366,43 @@ export const StrategyRunSummaryV3Schema = z
   });
 export type StrategyRunSummaryV3 = z.infer<typeof StrategyRunSummaryV3Schema>;
 
+export const StrategyRunInputSnapshotV3Schema = z.object({
+  schemaVersion: z.literal(3),
+  strategyVersionId: z.string().min(1),
+  definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
+  evaluatorVersion: z.string().min(1),
+  scope: StrategyRunScopeSchema,
+  universeKind: StrategyRunUniverseKindSchema,
+  coverage: z.literal('CN_A_SHARES_SH_SZ'),
+  stockIds: z.array(z.string().min(1)),
+  stockIdChecksum: z.string().regex(/^[a-f0-9]{64}$/),
+  requestedBy: z.enum(['manual', 'scheduled', 'replay']),
+  universeCheckpoint: z.object({
+    syncId: z.string().min(1),
+    provider: z.string().min(1),
+    observedAt: z.coerce.date(),
+    memberChecksum: z.string().regex(/^[a-f0-9]{64}$/),
+  }),
+  dataCheckpoint: z
+    .object({
+      id: z.string().min(1),
+      dataAsOf: z.coerce.date(),
+      checksum: z.string().min(1),
+    })
+    .optional(),
+  acceptancePolicyVersion: z.string().min(1),
+  evaluationSessionId: z.string().min(1).optional(),
+});
+export type StrategyRunInputSnapshotV3 = z.infer<typeof StrategyRunInputSnapshotV3Schema>;
+
 const LegacyStrategyRunRecordSchema = z.record(z.string(), z.unknown());
 export const StrategyRunInputSnapshotSchema = z.union([
+  StrategyRunInputSnapshotV3Schema,
   StrategyRunInputSnapshotV2Schema,
   LegacyStrategyRunRecordSchema,
 ]);
 export const StrategyRunSummarySchema = z.union([
+  StrategyRunSummaryV4Schema,
   StrategyRunSummaryV3Schema,
   StrategyRunSummaryV2Schema,
   LegacyStrategyRunRecordSchema,
@@ -242,9 +418,14 @@ export const StrategyRunSchema = z.object({
   startedAt: z.coerce.date(),
   finishedAt: z.coerce.date().optional(),
   status: z.enum(['running', 'complete', 'partial', 'failed']),
+  /** 新运行必填；optional 仅为存量 legacy row 的读取兼容。 */
+  scope: StrategyRunScopeSchema.optional(),
   inputSnapshot: StrategyRunInputSnapshotSchema,
   providerStatuses: z.array(ProviderStatusSchema),
+  providerCoverage: z.array(StrategyProviderCoverageSchema).optional(),
   summary: StrategyRunSummarySchema.optional(),
+  /** 新运行必填；存量记录由 current reader 以兼容规则解释。 */
+  publication: StrategyRunPublicationSchema.optional(),
   error: z.string().min(1).optional(),
 });
 export type StrategyRun = z.infer<typeof StrategyRunSchema>;
@@ -255,10 +436,14 @@ const isStrategyRunSummaryV2 = (summary: StrategyRun['summary']): summary is Str
 const isStrategyRunSummaryV3 = (summary: StrategyRun['summary']): summary is StrategyRunSummaryV3 =>
   summary !== undefined && summary.schemaVersion === 3;
 
+const isStrategyRunSummaryV4 = (summary: StrategyRun['summary']): summary is StrategyRunSummaryV4 =>
+  summary !== undefined && summary.schemaVersion === 4;
+
 /** 运行是否结束由 status 表达；数据覆盖质量单独从 summary 读取。 */
 export const getStrategyRunDataHealth = (run: StrategyRun): StrategyRunDataHealth | undefined => {
   if (run.status === 'running') return undefined;
   if (run.status === 'failed') return 'unavailable';
+  if (isStrategyRunSummaryV4(run.summary)) return run.summary.dataHealth;
   if (isStrategyRunSummaryV3(run.summary)) return run.summary.dataHealth;
   if (run.status === 'partial') return 'partial';
   if (
@@ -274,6 +459,17 @@ export const getStrategyRunDataHealth = (run: StrategyRun): StrategyRunDataHealt
 export const isUsableStrategyRun = (run: StrategyRun): boolean =>
   run.status === 'complete' || run.status === 'partial';
 
+/** 新生产消费者的唯一入口；legacy 行由 migration/current reader 单独适配。 */
+export const isPublishableOperationalRun = (run: StrategyRun): boolean =>
+  run.scope === 'operational' &&
+  (run.status === 'complete' ||
+    (run.status === 'partial' &&
+      run.publication?.reasons.includes('legacy-publication') === true)) &&
+  run.publication?.status === 'published';
+
+export const isEvaluationStrategyRun = (run: StrategyRun): boolean =>
+  run.scope === 'evaluation' || run.publication?.status === 'non-publishing';
+
 export const LegacyRuleEvaluationSchema = z.object({
   ruleId: z.string().min(1),
   status: z.enum(['matched', 'not-matched', 'unknown', 'error']),
@@ -285,6 +481,8 @@ export const LegacyRuleEvaluationSchema = z.object({
 export const RuleInputFactSchema = z.object({
   path: z.string().min(1),
   status: z.enum(['available', 'missing']),
+  /** crossing / event fields distinguish no event from insufficient history. */
+  qualifier: z.enum(['observed', 'not-observed']).optional(),
   value: z.unknown().optional(),
 });
 export type RuleInputFact = z.infer<typeof RuleInputFactSchema>;
@@ -386,6 +584,16 @@ export const assertStrategyRunBundleInvariants = (bundle: StrategyRunBundle): vo
       throw new InvariantError('StrategyRun Summary V3 计数必须与 bundle facts 一致');
     }
   }
+  if (isStrategyRunSummaryV4(bundle.run.summary)) {
+    const summary = bundle.run.summary;
+    if (
+      summary.evaluatedCount !== bundle.results.length ||
+      summary.selectedCount !== bundle.results.filter((result) => result.selected).length ||
+      summary.signalCount !== bundle.signals.length
+    ) {
+      throw new InvariantError('StrategyRun Summary V4 计数必须与 bundle facts 一致');
+    }
+  }
 };
 
 const canonicalizeValue = (value: unknown): unknown => {
@@ -459,6 +667,19 @@ export const assertStrategyRunInvariants = (run: StrategyRun): void => {
     if (run.status === 'partial') {
       throw new InvariantError(
         'Summary V3 使用 dataHealth 表达部分数据，run.status 不得为 partial',
+      );
+    }
+    if (run.status === 'failed' && run.summary.dataHealth !== 'unavailable') {
+      throw new InvariantError('failed StrategyRun 的 dataHealth 必须为 unavailable');
+    }
+    if (run.status === 'complete' && run.summary.dataHealth === 'unavailable') {
+      throw new InvariantError('complete StrategyRun 的 dataHealth 不得为 unavailable');
+    }
+  }
+  if (isStrategyRunSummaryV4(run.summary)) {
+    if (run.status === 'partial') {
+      throw new InvariantError(
+        'Summary V4 使用 dataHealth 表达部分数据，run.status 不得为 partial',
       );
     }
     if (run.status === 'failed' && run.summary.dataHealth !== 'unavailable') {

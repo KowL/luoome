@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { DailyBarSchema, type ToolContext } from '@luoome/core';
 import { z } from 'zod';
 
@@ -5,6 +6,48 @@ import { defineTool } from '../define-tool.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INITIAL_LOOKBACK_DAYS = 370;
+const SYNC_CONCURRENCY = 8;
+
+const mapWithConcurrency = async <T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> => {
+  const result = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (cursor < items.length) {
+        const index = cursor++;
+        const item = items[index];
+        if (item !== undefined) result[index] = await fn(item);
+      }
+    }),
+  );
+  return result;
+};
+
+const isRetryableProviderError = (error: unknown): boolean =>
+  /timeout|timed out|connection reset|econnreset|rate.?limit|\b429\b/i.test(
+    error instanceof Error ? error.message : String(error),
+  );
+
+const fetchDailyBarsWithRetry = async (
+  ctx: ToolContext,
+  stockId: string,
+  range: { readonly start: Date; readonly end: Date },
+) => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await ctx.adapters.market.fetchDailyBars(stockId, range);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableProviderError(error) || attempt === 2) throw error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+};
 
 export const SyncDailyBarsInput = z
   .object({
@@ -98,39 +141,62 @@ export const syncDailyBarsTool = defineTool({
     }
 
     const now = ctx.clock();
-    const items = await Promise.all(
-      stockIds.map(async (stockId) => {
-        try {
-          const latest = (await ctx.repos.dailyBar.latestBefore(stockId, now, 1)).at(-1);
-          const lookbackDays =
-            latest === undefined ? INITIAL_LOOKBACK_DAYS : input.correctionWindowDays;
-          const startFrom = latest?.date ?? now;
-          const from = new Date(startFrom.getTime() - lookbackDays * DAY_MS);
-          const bars = (
-            await ctx.adapters.market.fetchDailyBars(stockId, {
-              start: from,
-              end: now,
-            })
-          ).map((bar) => DailyBarSchema.parse(bar));
-          if (bars.length === 0) throw new Error('no_data: no qfq daily bars returned');
-          await ctx.repos.dailyBar.saveMany(bars);
-          return {
-            stockId,
-            status: 'synced' as const,
-            barCount: bars.length,
-            from,
-            to: now,
-            sources: [...new Set(bars.map((bar) => bar.source))],
-          };
-        } catch (error) {
-          return {
-            stockId,
-            status: 'failed' as const,
-            reason: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }),
-    );
+    const items = await mapWithConcurrency(stockIds, SYNC_CONCURRENCY, async (stockId) => {
+      try {
+        const latest = (await ctx.repos.dailyBar.latestBefore(stockId, now, 1)).at(-1);
+        const lookbackDays =
+          latest === undefined ? INITIAL_LOOKBACK_DAYS : input.correctionWindowDays;
+        const startFrom = latest?.date ?? now;
+        const from = new Date(startFrom.getTime() - lookbackDays * DAY_MS);
+        const bars = (
+          await fetchDailyBarsWithRetry(ctx, stockId, {
+            start: from,
+            end: now,
+          })
+        ).map((bar) => DailyBarSchema.parse(bar));
+        if (bars.length === 0) throw new Error('no_data: no qfq daily bars returned');
+        await ctx.repos.dailyBar.saveMany(bars);
+        await ctx.repos.dailyBar.saveRevisions(
+          bars.map((bar) => ({
+            stockId: bar.stockId,
+            date: bar.date,
+            contentHash: createHash('sha256')
+              .update(
+                JSON.stringify({
+                  open: bar.open,
+                  high: bar.high,
+                  low: bar.low,
+                  close: bar.close,
+                  volume: bar.volume,
+                  source: bar.source,
+                }),
+              )
+              .digest('hex'),
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
+            volume: bar.volume,
+            source: bar.source,
+            recordedAt: now,
+          })),
+        );
+        return {
+          stockId,
+          status: 'synced' as const,
+          barCount: bars.length,
+          from,
+          to: now,
+          sources: [...new Set(bars.map((bar) => bar.source))],
+        };
+      } catch (error) {
+        return {
+          stockId,
+          status: 'failed' as const,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
     const synced = items.filter((item) => item.status === 'synced').length;
     const failed = items.length - synced;
     return {

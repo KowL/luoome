@@ -110,4 +110,60 @@ describe('SignalObservation', () => {
     expect(completed.maxFavorableExcursionPct).toBeCloseTo(0.2);
     expect(completed.maxAdverseExcursionPct).toBeCloseTo(-0.1);
   });
+
+  it('有明确版本的沪深 300 日线时计算 excess return，缺失时仍显式 unavailable', () => {
+    const pending = SignalObservationSchema.parse({
+      id: 'signal-observation:strategy-signal:s1:t1',
+      sourceKind: 'strategy-signal',
+      sourceId: 's1',
+      stockId: '600519.SH',
+      baselinePrice: 10,
+      baselineAt: new Date('2026-08-03T08:00:00Z'),
+      horizon: 't1',
+      benchmarkStatus: 'unavailable',
+      status: 'pending',
+      provenance: {
+        provider: 'quote',
+        observedAt: new Date('2026-08-03T08:00:00Z'),
+        fetchedAt: new Date('2026-08-03T08:00:01Z'),
+        freshness: 'unknown',
+      },
+    });
+    const stockBars = [{ date: '2026-08-04', close: 11 }].map(({ date, close }) => ({
+      stockId: '600519.SH',
+      date: new Date(`${date}T00:00:00Z`),
+      open: money(10),
+      high: money(11),
+      low: money(9),
+      close: money(close),
+      volume: 100,
+      adjustment: 'qfq' as const,
+      source: 'fixture',
+    }));
+    const benchmarkBars = [
+      ['2026-08-03', 100],
+      ['2026-08-04', 102],
+    ].map(([date, close]) => ({
+      stockId: '000300.SH',
+      date: new Date(`${date}T00:00:00Z`),
+      open: money(Number(close)),
+      high: money(Number(close)),
+      low: money(Number(close)),
+      close: money(Number(close)),
+      volume: 100,
+      adjustment: 'qfq' as const,
+      source: 'benchmark-v1',
+    }));
+    const completed = completeSignalObservationFromDailyBars(
+      pending,
+      stockBars,
+      new Date('2026-08-04T01:00:00Z'),
+      { benchmarkBars },
+    );
+    expect(completed).toMatchObject({
+      benchmarkStatus: 'complete',
+      benchmarkReturnPct: 0.02,
+    });
+    expect(completed.returnPct).toBeCloseTo(0.1);
+  });
 });

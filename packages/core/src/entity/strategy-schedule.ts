@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 import { nextCronOccurrence, validateCronExpression, validateTimeZone } from '../strategy/cron.js';
+import { type StrategyRunAcceptancePolicy, StrategyRunAcceptancePolicySchema } from './strategy.js';
 
 export const StrategyRecommendationPolicySchema = z.object({
   enabled: z.boolean().default(false),
@@ -26,6 +27,7 @@ export const StrategyScheduleSchema = z.object({
   cron: z.string().min(1).max(120),
   timezone: z.string().min(1).max(100),
   enabled: z.boolean(),
+  acceptancePolicy: StrategyRunAcceptancePolicySchema.optional(),
   recommendationPolicy: StrategyRecommendationPolicySchema.optional(),
   nextRunAt: z.coerce.date().optional(),
   lastRunId: z.string().min(1).optional(),
@@ -62,6 +64,7 @@ export const buildStrategySchedule = (input: {
   readonly cron: string;
   readonly timezone: string;
   readonly enabled: boolean;
+  readonly acceptancePolicy?: StrategyRunAcceptancePolicy;
   readonly recommendationPolicy?: StrategyRecommendationPolicy;
   readonly now: Date;
   readonly existing?: StrategySchedule;
@@ -72,6 +75,11 @@ export const buildStrategySchedule = (input: {
     cron: input.cron,
     timezone: input.timezone,
     enabled: input.enabled,
+    ...(input.acceptancePolicy === undefined
+      ? input.existing?.acceptancePolicy === undefined
+        ? {}
+        : { acceptancePolicy: input.existing.acceptancePolicy }
+      : { acceptancePolicy: StrategyRunAcceptancePolicySchema.parse(input.acceptancePolicy) }),
     ...(input.recommendationPolicy === undefined
       ? input.existing?.recommendationPolicy === undefined
         ? {}

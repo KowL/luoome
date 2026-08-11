@@ -303,6 +303,11 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
 外部 cron 调用。这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
 回滚已原子提交的 StrategyRun，也不会触发交易。
 
+**2026-08-11 可靠性目标（尚未实现）**：上述固定租约与独立观察 cron 将按
+[Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md)
+演进为 publication、heartbeat + fencing token 和 `strategy-daily-cycle`。在迁移完成前，本段前述
+行为仍是代码事实；实施不得把目标设计误报为当前能力。
+
 ### 4.7 Adapter（adapters 包）
 
 每个外部依赖通过 adapter 接入。行情对外暴露稳定的 `MarketDataAdapterLike` Gateway，

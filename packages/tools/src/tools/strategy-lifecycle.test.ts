@@ -272,9 +272,7 @@ describe('Strategy lifecycle tools', () => {
     );
     if (!run.ok) throw new Error(JSON.stringify(run.error));
     expect(run).toMatchObject({ ok: true });
-    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).not.toEqual(
-      [],
-    );
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
 
     const deleted = await deleteStrategyTool.execute({ strategyId: 'delete-me' }, ctx);
     expect(deleted).toEqual({ ok: true, data: { deleted: true } });

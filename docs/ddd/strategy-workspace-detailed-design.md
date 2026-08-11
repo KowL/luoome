@@ -6,6 +6,7 @@
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、[Web 对话助手设计](./web-chat-design.md)
 > 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/tools/src/tools/strategy-definition.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
+> 2026-08-11 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文仍记录 Phase A～C 已实现基线。
 
 ## 1. 设计结论
 
@@ -22,13 +23,13 @@ Strategy
 页面中的股票池、候选池、健康度和运行 Diff 均由上述事实确定性派生：
 
 ```text
-最近一次结果可用的持久化完成运行
+最近一次 published operational 持久化完成运行
   ├── selected=true                         → 股票池
   ├── all + 仅一条确定性规则未命中          → 规则近失
   ├── 全部规则命中 + rank > scoring.top     → 排名近失
   └── unknown/error/历史解释缺失             → 数据不完整
 
-最近两次结果可用的持久化完成运行
+最近两次 published operational 持久化完成运行
   └── 逐 stockId 比较派生 entered/exited/rank/score/blocking-rule/data-unavailable 变化
 ```
 
@@ -296,8 +297,9 @@ interface StrategyRunDiff {
 规则：
 
 - 输入 run 必须属于同一 Strategy，且均为持久化终态；
-- 默认比较由 Tool 限定为最近两次结果可用的完成运行；
-- 存量 partial 按“执行完成、数据部分可用”参与比较；
+- 现有实现默认比较最近两次结果可用的完成运行；可靠性修订后默认只比较最近两次
+  `publication=published` 的 operational run；
+- 存量 partial 先经过 publication migration，再决定是否参与比较；
 - `definitionChanged = from.strategyVersionId !== to.strategyVersionId`；
 - 只有两侧都有可靠结果时，entered/exited 才依据 selected 的前后变化；
 - 任一侧结果缺失或为 incomplete 时仅标记 data-unavailable，不推断进出、排名或分数变化；
@@ -311,16 +313,18 @@ interface StrategyRunDiff {
 
 | 执行状态 / 数据完整度 | 是否成为当前有效运行 | 页面语义 |
 |---|---|---|
-| complete + dataHealth=complete + selected>0 | 是 | 正常股票池 |
-| complete + selected=0 | 是 | 有效空结果，不显示错误 |
-| complete + dataHealth=partial | 是 | 少数 unknown/error/抓取失败股票不影响已明确结果；直接发布当前股票池并提示覆盖质量 |
-| legacy partial | 是 | 按“执行完成、数据部分可用”兼容读取 |
+| complete + acceptance=accepted + publication=published + selected>0 | 是 | 正常股票池 |
+| published + selected=0 | 是 | 有效空结果，不显示错误 |
+| complete + dataHealth=partial + acceptance=accepted | 是 | 发布当前股票池并提示覆盖质量 |
+| complete + acceptance=rejected + publication=withheld | 否 | 显示覆盖指标和拒绝原因；当前池不变 |
+| evaluation / 显式子集 + publication=non-publishing | 否 | 只进入显式评估/诊断视图 |
+| legacy partial | 由 migration 决定 | 显示 legacy-publication warning |
 | failed | 否 | 执行记录和异常提示可见；当前股票池不变 |
 | running | 否 | 显示进行中；禁止重复提交同策略同版本的正式运行 |
 
-“当前有效运行”的唯一规则是：该 Strategy 最新一条结果可用且已持久化的完成运行。新运行为
-`status=complete`，存量 `status=partial` 按完成语义读取。不能使用 Web 内存中的试跑结果代替；
-最近尝试为 failed/running 时回退到更早一条可用运行并给出 warning。
+可靠性修订后的唯一规则是：该 Strategy 最新一条 `publication=published` 且已持久化的 operational
+完成运行。不能使用 Web 内存中的试跑、evaluation 或显式子集结果代替；最近尝试为
+failed/running/withheld 时直接查询更早的 published run 并给出 warning。
 
 ## 6. Repository 与存储
 
@@ -343,10 +347,10 @@ signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
 
 - StockPoolRepository；
 - CandidatePoolRepository；
-- StrategyDiffRepository；
-- LatestUsableRunRepository（complete 或 partial）。
+- StrategyDiffRepository。
 
-最后一项可由现有 `listRuns({ strategyId, limit: 10 })` 拉取后在代码里过滤 complete|partial 表达，无需额外接口。
+Phase A 曾用 `listRuns({ strategyId, limit: 10 })` 后过滤 complete|partial；可靠性修订新增
+`findLatestPublishedRun/findPreviousPublishedRun`，避免连续超过 10 次失败后 current 消失。
 
 ### 6.2 持久化与事务
 
@@ -450,8 +454,9 @@ stockName 或用代码冒充名称。`get_strategy_run` 以 companion identity m
 }
 ```
 
-无结果可用的完成运行时计数为 absent，不返回伪造的 0。`health` 反映最新运行的数据完整度或执行失败，
-`currentRun` 指向最近结果可用的完成运行（包含按完成语义读取的存量 partial），因此“当前结果”和
+无 published 完成运行时计数为 absent，不返回伪造的 0。`health` 反映最新运行的数据完整度、
+withheld 或执行失败，
+可靠性修订后 `currentRun` 指向最近 published operational run，因此“当前结果”和
 “最近失败”可以同时展示。
 
 ### 7.3 新增 `list_strategy_result_views`
@@ -461,7 +466,7 @@ stockName 或用代码冒充名称。`get_strategy_run` 以 companion identity m
 ```ts
 {
   strategyId: string;
-  runId?: string; // 省略时使用 current usable completed run
+  runId?: string; // 省略时使用 current published operational run
   view: 'selected' | 'rule-near-miss' | 'ranking-near-miss' | 'incomplete' | 'excluded';
   rankingWindow?: number; // default 20, max 100
   query?: string;         // stockId 精确/前缀搜索
@@ -490,7 +495,7 @@ Phase A 可以在 Tool 内读取单次 run 的全部 results 后分类、排序�
 }
 ```
 
-缺省时选择最近两次结果可用的完成运行；只提供一个 ID 时返回 invalid-input。显式 run 必须属于同一
+缺省时选择最近两次 published operational run；只提供一个 ID 时返回 invalid-input。显式 run 必须属于同一
 Strategy。输出使用 §5.5 的 `StrategyRunDiffSchema`，每个 Diff row 补充 `stock: StockIdentityView`，
 并附带两个 version 摘要和 provider 状态。
 
@@ -758,7 +763,7 @@ score 和命中规则。数据不完整列出 missing paths/error，并明确“
 | Provider | 完整、部分或失败来源 |
 | 操作 | 查看详情、设为 Diff 起点/终点 |
 
-Diff 默认比较最近两次结果可用的完成运行。用户选择 from/to 后显示：
+Diff 默认比较最近两次 published operational run。用户选择 from/to 后显示：
 
 - 两个 run 的版本和 dataAsOf；
 - 跨版本时固定 warning：`定义已变化，以下差异不能单独归因于市场`；
@@ -839,7 +844,8 @@ AI 输出使用普通研究区块，不做聊天气泡。每个结论必须能�
 | 无版本 | 状态 badge | 设置页引导创建版本 |
 | 无可用完成运行 | 正常 header | 概览空状态；池/候选不可用说明 |
 | complete 空结果 | 当前数量 0 | 有效空池，展示 dataAsOf |
-| complete + dataHealth=partial | warning | 当前明确结果 + 数据覆盖提示 |
+| published + dataHealth=partial | warning | 当前明确结果 + 数据覆盖提示 |
+| withheld | warning | 拒绝原因 + 上一 published 当前结果 |
 | 最新 failed | danger text | 旧 complete 结果 + 失败详情入口 |
 | 请求失败 | 保留可用列表 | inline error + 重试，不清空最后成功数据 |
 | 正式运行中 | 当前策略 running 标记 | 按钮 disabled + 进度文案 |
@@ -917,7 +923,7 @@ sequenceDiagram
   W->>A: GET /api/strategies
   W->>A: GET /api/strategies/S/workspace
   A->>T: list_strategies / get_strategy_workspace
-  T->>R: strategy + versions + latest attempts + 2 usable completed runs
+  T->>R: strategy + versions + latest attempt + current/previous published runs
   R-->>T: facts
   T-->>A: normalized overview + warnings
   A-->>W: ToolResult envelope
@@ -1054,11 +1060,11 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 
 ### 16.3 Tools
 
-- workspace 选择最新结果可用的完成运行，新 partial 不再写入且存量 partial 可读；
+- workspace 选择最新 published operational run，新 partial 不再写入且存量按 publication migration 读取；
 - 无可用完成运行时计数 absent；
 - complete empty 返回 selectedCount=0；
 - result views 校验 run 归属、分页和 rankingWindow；
-- compare 默认选择最近两次结果可用的完成运行；
+- compare 默认选择最近两次 published operational run；
 - 单边 runId、跨 Strategy 和不存在 run 返回正确 ToolError.kind；
 - get_strategy_run 不扫描整个 Strategy signal 历史；
 - schema 能派生 MCP/OpenAI 定义。
@@ -1153,8 +1159,8 @@ Phase A 完成必须同时满足：
 - 股票池、候选和 Diff 都能从 run/results 确定性重算；
 - 不存在新的 StockPool/CandidatePool/Diff 持久化表；
 - 每条新运行规则均有可审计解释，历史缺失被明确标记；
-- failed/running 不覆盖上一结果可用的完成运行；新 complete 即使 dataHealth=partial 也发布明确结果，
-  存量 partial 按完成语义读取；
+- failed/running/withheld/non-publishing 不覆盖上一 published run；complete 且 dataHealth=partial
+  只有通过 acceptance 才发布；存量 partial 按 publication migration 读取；
 - Web、Tool、MCP 使用同一分类和 Diff 规则；
 - Web 视觉、响应式、无障碍和交互符合现有 UI 规范；
 - 正式运行、发布和 AI 草案保持明确确认；

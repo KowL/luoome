@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   type Account,
   type Advice,
@@ -6,6 +7,7 @@ import {
   type ChatMessage,
   type ChatSession,
   type DailyBar,
+  type DailyBarRevision,
   type Holding,
   InvariantError,
   money,
@@ -22,6 +24,10 @@ import {
   type StockEvent,
   type StockUniverseEntry,
   type Strategy,
+  type StrategyDataCheckpoint,
+  type StrategyDataCheckpointMember,
+  type StrategyEvaluationDay,
+  type StrategyEvaluationSession,
   type StrategyResult,
   type StrategyRun,
   type StrategySchedule,
@@ -284,21 +290,40 @@ const makeSignalObservation = (
   ...overrides,
 });
 
-export const makeStrategyRun = (id: string, overrides: Partial<StrategyRun> = {}): StrategyRun => ({
-  id,
-  strategyId: 'strategy-1',
-  strategyVersionId: 'strategy-1-v1',
-  mode: 'scan',
-  coverage: 'CN_A_SHARES_SH_SZ',
-  dataAsOf: T1,
-  startedAt: T1,
-  finishedAt: T2,
-  status: 'complete',
-  inputSnapshot: { fixture: true },
-  providerStatuses: [],
-  summary: { selected: 1 },
-  ...overrides,
-});
+export const makeStrategyRun = (id: string, overrides: Partial<StrategyRun> = {}): StrategyRun => {
+  const run = {
+    id,
+    strategyId: 'strategy-1',
+    strategyVersionId: 'strategy-1-v1',
+    mode: 'scan' as const,
+    coverage: 'CN_A_SHARES_SH_SZ' as const,
+    dataAsOf: T1,
+    startedAt: T1,
+    finishedAt: T2,
+    status: 'complete' as const,
+    scope: 'operational' as const,
+    inputSnapshot: { fixture: true },
+    providerStatuses: [],
+    summary: { selected: 1 },
+    ...overrides,
+  };
+  const { finishedAt, summary, error, ...withoutOptionalUndefined } = run;
+  return {
+    ...withoutOptionalUndefined,
+    ...(finishedAt === undefined ? {} : { finishedAt }),
+    ...(summary === undefined ? {} : { summary }),
+    ...(error === undefined ? {} : { error }),
+    ...(run.status === 'complete' && run.publication === undefined
+      ? {
+          publication: {
+            status: 'published' as const,
+            reasons: ['legacy-publication' as const],
+            decidedAt: finishedAt ?? run.startedAt,
+          },
+        }
+      : {}),
+  };
+};
 
 const makeStrategyResult = (
   runId: string,
@@ -713,6 +738,40 @@ export const registerRepositoryContractTests = (
             coverage: 'CN_A_SHARES_SH_SZ',
           }),
         ).toHaveLength(1);
+      });
+
+      it('保存成功快照成员并按 asOf 选择 PIT universe', async () => {
+        const apply = (syncId: string, observedAt: Date, stockId: string) =>
+          repos.stockUniverse.applySnapshot({
+            syncId,
+            appliedAt: observedAt,
+            snapshot: {
+              source: 'eastmoney',
+              coverage: 'CN_A_SHARES_SH_SZ',
+              observedAt,
+              complete: true,
+              reportedTotal: 1,
+              entries: [
+                {
+                  stockId,
+                  code: stockCode(stockId.slice(0, 6)),
+                  exchange: stockId.endsWith('.SH') ? 'SH' : 'SZ',
+                  name: stockId,
+                  listingStatus: 'listed',
+                },
+              ],
+            },
+          });
+        await apply('sync-pit-1', T1, '600519.SH');
+        await apply('sync-pit-2', T3, '002594.SZ');
+        const selected = await repos.stockUniverse.latestSnapshotAtOrBefore({
+          coverage: 'CN_A_SHARES_SH_SZ',
+          asOf: T2,
+        });
+        expect(selected?.id).toBe('sync-pit-1');
+        expect(
+          (await repos.stockUniverse.listSnapshotMembers('sync-pit-1')).map((stock) => stock.id),
+        ).toEqual(['600519.SH']);
       });
 
       it('完整快照缺失只标记 missing，再次出现时 reactivated', async () => {
@@ -1323,6 +1382,31 @@ export const registerRepositoryContractTests = (
           (await repos.dailyBar.findInRange('stk-1', T1, T3)).map((b) => b.date.getTime()),
         ).toEqual([T3.getTime()]);
       });
+
+      it('DailyBar revision 按 recordedAt 保留历史版本并支持 PIT 查询', async () => {
+        const revision = (recordedAt: Date, close: number): DailyBarRevision => ({
+          stockId: 'stk-1',
+          date: T1,
+          contentHash: `hash-${recordedAt.getTime()}-${close}`,
+          open: close - 1,
+          high: close + 1,
+          low: close - 2,
+          close,
+          volume: 100,
+          source: 'fixture',
+          recordedAt,
+        });
+        await repos.dailyBar.saveRevisions([revision(T2, 10), revision(T3, 11)]);
+        await repos.dailyBar.saveRevisions([{ ...revision(T2, 10), recordedAt: T3 }]);
+        expect(
+          (await repos.dailyBar.listRevisions({ stockId: 'stk-1', recordedAt: T2 })).map(
+            (item) => item.close,
+          ),
+        ).toEqual([10]);
+        expect(
+          (await repos.dailyBar.listRevisions({ stockId: 'stk-1' })).map((item) => item.close),
+        ).toEqual([10, 11]);
+      });
     });
 
     describe('StrategyRepository', () => {
@@ -1568,6 +1652,28 @@ export const registerRepositoryContractTests = (
             leaseUntil: FAR_FUTURE,
           }),
         ).toBe(true);
+      });
+
+      it('fenced commit 不允许在缺失 started run 时直接插入终态', async () => {
+        const run = makeStrategyRun('run-fenced-missing');
+        const token = await repos.strategyRun.acquireRunLeaseToken({
+          strategyId: 'strategy-1',
+          strategyVersionId: 'strategy-1-v1',
+          owner: 'worker-1',
+          runId: run.id,
+          now: T1,
+          leaseUntil: FAR_FUTURE,
+        });
+        expect(token).not.toBeNull();
+        if (token === null) return;
+        expect(
+          await repos.strategyRun.commitRunWithFence({
+            token,
+            now: T2,
+            bundle: { run, results: [], signals: [] },
+          }),
+        ).toBe('lease-lost');
+        expect(await repos.strategyRun.findRunById(run.id)).toBeNull();
       });
 
       it('run 往返和过滤排序一致', async () => {
@@ -2675,6 +2781,102 @@ export const registerRepositoryContractTests = (
 
         await expect(repos.report.setDeliveryStatus(saved.id, 'pending')).rejects.toThrow();
         expect((await repos.report.findById(saved.id))?.deliveryStatus).toBe('sent');
+      });
+    });
+
+    describe('StrategyDataCheckpointRepository / StrategyEvaluationRepository', () => {
+      it('checkpoint 必须先 start 再 commit，并按 PIT 查找可复用输入', async () => {
+        const checkpoint: StrategyDataCheckpoint = {
+          id: 'checkpoint-1',
+          coverage: 'CN_A_SHARES_SH_SZ',
+          dataAsOf: T2,
+          status: 'running',
+          vintageStatus: 'not-applicable',
+          universeSyncId: 'sync-1',
+          requestedCount: 2,
+          availableCount: 0,
+          failedCount: 0,
+          memberChecksum: 'members',
+          dataChecksum: 'pending',
+          providerStatuses: [],
+          startedAt: T2,
+        };
+        const members: StrategyDataCheckpointMember[] = [
+          {
+            checkpointId: checkpoint.id,
+            stockId: '600519.SH',
+            status: 'available',
+            barCount: 100,
+            provider: 'fixture',
+          },
+          {
+            checkpointId: checkpoint.id,
+            stockId: '002594.SZ',
+            status: 'missing',
+            barCount: 0,
+            provider: 'fixture',
+          },
+        ];
+        await expect(
+          repos.strategyDataCheckpoint.commit({
+            checkpoint: { ...checkpoint, status: 'complete', finishedAt: T3 },
+            members,
+          }),
+        ).rejects.toThrow();
+        await repos.strategyDataCheckpoint.saveStarted(checkpoint);
+        await repos.strategyDataCheckpoint.commit({
+          checkpoint: { ...checkpoint, status: 'partial', finishedAt: T3, availableCount: 1 },
+          members,
+        });
+        expect(await repos.strategyDataCheckpoint.listMembers(checkpoint.id)).toEqual(
+          [...members].sort((left, right) => left.stockId.localeCompare(right.stockId)),
+        );
+        expect(
+          await repos.strategyDataCheckpoint.latestUsableAtOrBefore({
+            coverage: checkpoint.coverage,
+            asOf: T3,
+            universeSyncId: checkpoint.universeSyncId,
+          }),
+        ).toMatchObject({ id: checkpoint.id, status: 'partial' });
+      });
+
+      it('evaluation session/day 支持失败日重试并按日期查询', async () => {
+        const session: StrategyEvaluationSession = {
+          id: 'evaluation-1',
+          strategyId: 'strategy-1',
+          strategyVersionId: 'strategy-1-v1',
+          from: T1,
+          to: T3,
+          status: 'running',
+          definitionHash: 'a'.repeat(64),
+          createdAt: T1,
+          stockIds: ['600519.SH'],
+          stockIdChecksum: createHash('sha256')
+            .update(JSON.stringify(['600519.SH']))
+            .digest('hex'),
+        };
+        const day: StrategyEvaluationDay = {
+          sessionId: session.id,
+          dataAsOf: T2,
+          status: 'failed',
+          error: 'provider_error',
+        };
+        await repos.strategyEvaluation.saveSession(session);
+        await repos.strategyEvaluation.saveDay(day);
+        await repos.strategyEvaluation.saveDay({
+          ...day,
+          status: 'complete',
+          runId: 'run-1',
+          dataCheckpointId: 'checkpoint-1',
+        });
+        expect(await repos.strategyEvaluation.findSessionById(session.id)).toEqual(session);
+        expect(
+          await repos.strategyEvaluation.findDay({ sessionId: session.id, dataAsOf: T2 }),
+        ).toMatchObject({
+          status: 'complete',
+          runId: 'run-1',
+        });
+        expect(await repos.strategyEvaluation.listDays(session.id)).toHaveLength(1);
       });
     });
 

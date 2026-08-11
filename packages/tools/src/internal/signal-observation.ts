@@ -3,6 +3,7 @@ import {
   SIGNAL_OBSERVATION_HORIZON_DAYS,
   type SignalObservation,
   type StrategySignal,
+  signalObservationDueAt,
   signalObservationId,
   type WatchTrigger,
 } from '@luoome/core';
@@ -28,6 +29,8 @@ const pending = (
     horizon,
     status: 'pending',
     benchmarkStatus: 'unavailable',
+    dueAt: signalObservationDueAt(baselineAt, horizon),
+    attemptCount: 0,
     provenance,
   }));
 export const observationsForWatchTrigger = (

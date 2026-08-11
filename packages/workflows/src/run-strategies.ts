@@ -42,10 +42,35 @@ const runAll: WorkflowStep = async (previous, ctx) => {
   }
   const items: z.infer<typeof RunStrategiesItemSchema>[] = [];
   for (const strategyId of ids) {
+    let dataCheckpointId: string | undefined;
+    if (input.mode === 'scheduled') {
+      const prepared = await ctx.tools.prepare_strategy_data.execute({ strategyId });
+      if (!prepared.ok) {
+        const error =
+          'message' in prepared.error
+            ? prepared.error.message
+            : 'cause' in prepared.error
+              ? prepared.error.cause
+              : 'required' in prepared.error
+                ? `permission required: ${prepared.error.required}`
+                : `${prepared.error.entity} not found: ${prepared.error.id}`;
+        items.push({
+          strategyId,
+          status: 'failed',
+          dataHealth: 'unavailable',
+          selected: 0,
+          signals: 0,
+          error,
+        });
+        continue;
+      }
+      dataCheckpointId = prepared.data.checkpoint.id;
+    }
     const result = await ctx.tools.run_strategy.execute({
       strategyId,
       mode: input.mode === 'scheduled' ? 'scheduled' : 'scan',
       ...(input.stockIds === undefined ? {} : { stockIds: input.stockIds }),
+      ...(dataCheckpointId === undefined ? {} : { dataCheckpointId }),
       persist: input.persist,
     });
     if (!result.ok) {
