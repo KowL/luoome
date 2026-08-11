@@ -72,7 +72,7 @@ const CHAT_DRAFT_TOOL_KINDS = {
   create_watchlist: 'watchlist',
   update_watchlist: 'watchlist',
   archive_watchlist: 'watchlist',
-  add_watchlist_member: 'watchlist',
+  add_watchlist_members: 'watchlist',
   update_watchlist_member: 'watchlist',
   archive_watchlist_member: 'watchlist',
   create_alert_plan: 'alert-plan',
@@ -232,6 +232,7 @@ const buildInstructions = (context: ChatContextSummary): string => `你是 luoom
 - 研究 Topic/Document/SubjectLink 也只能生成待确认草案；用户确认前不得写 Vault 或索引。
 - 只使用 Strategy、Watchlist、AlertPlan；不得生成或调用旧 Tactic、StockGroup、StockPool。
 - Strategy 发布、正式 persist 运行、Watchlist/AlertPlan 写入必须先生成草案并等待确认；不得调用内部 sync/migration 或 trade。
+- 添加一个或多个 Watchlist 成员统一调用 add_watchlist_members；一次请求里的全部成员必须放进同一个草案，只确认一次。
 - 历史消息中以「[草案处理记录]」开头的是用户在确认面板中的真实处理结果（ok 表示写入已执行，fail 表示已取消或执行失败）；已处理的草案不要再次提议。
 - 不得自动交易，也不得声称已经完成任何真实交易。
 - 涉及投资判断时必须审慎，保留风险、反证和「不构成投资建议」免责声明。

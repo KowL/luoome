@@ -1,6 +1,7 @@
 import {
   assertStrategyInvariants,
   assertStrategyRunBundleInvariants,
+  assertStrategyRunInvariants,
   assertStrategyVersionInvariants,
   InvariantError,
   type Strategy,
@@ -273,6 +274,16 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       );
   }
 
+  async saveStartedRun(run: StrategyRun): Promise<void> {
+    assertStrategyRunInvariants(run);
+    if (run.status !== 'running') throw new InvariantError('saveStartedRun 只接受 running');
+    if (!this.strategyRepository.isRunnableVersion(run.strategyId, run.strategyVersionId)) {
+      throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
+    }
+    if (this.runs.has(run.id)) throw new InvariantError(`StrategyRun.runId 已存在: ${run.id}`);
+    this.runs.set(run.id, run);
+  }
+
   async commitRun(bundle: StrategyRunBundle): Promise<void> {
     assertStrategyRunBundleInvariants(bundle);
     if (
@@ -283,8 +294,17 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     ) {
       throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
     }
-    if (this.runs.has(bundle.run.id)) {
-      throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
+    const existingRun = this.runs.get(bundle.run.id);
+    if (existingRun !== undefined) {
+      if (
+        existingRun.status !== 'running' ||
+        bundle.run.status === 'running' ||
+        existingRun.strategyId !== bundle.run.strategyId ||
+        existingRun.strategyVersionId !== bundle.run.strategyVersionId ||
+        existingRun.startedAt.getTime() !== bundle.run.startedAt.getTime()
+      ) {
+        throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
+      }
     }
     for (const signal of bundle.signals) {
       const identity = this.signalIdentity(signal);

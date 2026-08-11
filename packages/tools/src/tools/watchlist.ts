@@ -5,6 +5,7 @@ import {
   assertWatchlistMemberSourceInvariants,
   MembershipSnapshotSchema,
   ReportMissingDimensionSchema,
+  type ToolContext,
   WatchlistMemberSchema,
   WatchlistMemberSourceSchema,
   WatchlistSchema,
@@ -219,6 +220,104 @@ export const AddWatchlistMemberInput = z.object({
 });
 export const AddWatchlistMemberOutput = WatchlistMemberViewSchema;
 
+const BatchWatchlistMemberItemSchema = AddWatchlistMemberInput.omit({ watchlistId: true });
+export const AddWatchlistMembersInput = z.object({
+  watchlistId: z.string().min(1),
+  members: z.array(BatchWatchlistMemberItemSchema).min(1).max(100),
+});
+export const AddWatchlistMembersOutput = z.object({
+  members: z.array(WatchlistMemberViewSchema),
+  created: z.number().int().nonnegative(),
+});
+
+const resolveStockId = async (value: string, ctx: ToolContext): Promise<string | null> => {
+  const normalized = value.trim().toUpperCase();
+  const exact = await ctx.repos.stock.findById(normalized);
+  if (exact !== null) return exact.id;
+  const byCode = await ctx.repos.stock.findByCode(normalized);
+  return byCode?.id ?? null;
+};
+
+export const addWatchlistMembersTool = defineTool({
+  name: 'add_watchlist_members',
+  description: '一次为可手工维护的 Watchlist 批量添加成员；整批校验并原子写入',
+  sideEffect: 'write',
+  input: AddWatchlistMembersInput,
+  output: AddWatchlistMembersOutput,
+  handler: async (input, ctx) => {
+    const watchlist = await ctx.repos.watchlist.findById(input.watchlistId);
+    if (watchlist === null) return errNotFound('Watchlist', input.watchlistId);
+    if (watchlist.membershipPolicy === 'synced') {
+      return errInvalidInput('synced Watchlist 不允许手工添加成员');
+    }
+    const resolved = await Promise.all(
+      input.members.map(async (item) => ({
+        item,
+        stockId: await resolveStockId(item.stockId, ctx),
+      })),
+    );
+    const missing = resolved.filter((row) => row.stockId === null).map((row) => row.item.stockId);
+    if (missing.length > 0) return errNotFound('Stock', missing.join(', '));
+    const stockIds = resolved.map((row) => row.stockId as string);
+    if (new Set(stockIds).size !== stockIds.length) {
+      return errInvalidInput('members 中存在重复股票');
+    }
+    const now = ctx.clock();
+    const rows = [];
+    for (const [index, stockId] of stockIds.entries()) {
+      const item = input.members[index];
+      if (item === undefined) continue;
+      const existing = await ctx.repos.watchlistMember.findMember(watchlist.id, stockId);
+      const member = WatchlistMemberSchema.parse(
+        existing === null
+          ? {
+              id: `${watchlist.id}:${stockId}`,
+              watchlistId: watchlist.id,
+              stockId,
+              stage: item.stage,
+              priority: item.priority,
+              firstAddedAt: now,
+              lastActivityAt: now,
+            }
+          : {
+              ...existing,
+              stage: existing.stage === 'archived' ? item.stage : existing.stage,
+              priority: item.priority,
+              lastActivityAt: now,
+              archivedAt: undefined,
+            },
+      );
+      const sourceKey = `manual:${member.id}`;
+      if ((await ctx.repos.watchlistMember.currentSource(member.id, sourceKey)) !== null) {
+        return errInvalidInput(`成员已存在 manual source: ${stockId}`);
+      }
+      const source = WatchlistMemberSourceSchema.parse({
+        id: `${sourceKey}:${globalThis.crypto.randomUUID().slice(0, 8)}`,
+        memberId: member.id,
+        kind: 'manual',
+        sourceKey,
+        reason: item.reason,
+        status: 'active',
+        evidence: [],
+        validFrom: now,
+      });
+      assertWatchlistMemberInvariants(member);
+      assertWatchlistMemberSourceInvariants(source);
+      rows.push({ member, source });
+    }
+    await ctx.repos.watchlistMember.commitManualMembers(rows);
+    return {
+      members: await Promise.all(
+        rows.map(async ({ member }) => ({
+          member,
+          sources: await ctx.repos.watchlistMember.listSources(member.id),
+        })),
+      ),
+      created: rows.length,
+    };
+  },
+});
+
 export const addWatchlistMemberTool = defineTool({
   name: 'add_watchlist_member',
   description: '为可手工维护的 Watchlist 添加 manual source',
@@ -226,60 +325,14 @@ export const addWatchlistMemberTool = defineTool({
   input: AddWatchlistMemberInput,
   output: AddWatchlistMemberOutput,
   handler: async (input, ctx) => {
-    const watchlist = await ctx.repos.watchlist.findById(input.watchlistId);
-    if (watchlist === null) return errNotFound('Watchlist', input.watchlistId);
-    if (watchlist.membershipPolicy === 'synced') {
-      return errInvalidInput('synced Watchlist 不允许手工添加成员');
-    }
-    if ((await ctx.repos.stock.findById(input.stockId)) === null) {
-      return errNotFound('Stock', input.stockId);
-    }
-    const now = ctx.clock();
-    const existing = await ctx.repos.watchlistMember.findMember(watchlist.id, input.stockId);
-    const member = WatchlistMemberSchema.parse(
-      existing === null
-        ? {
-            id: `${watchlist.id}:${input.stockId}`,
-            watchlistId: watchlist.id,
-            stockId: input.stockId,
-            stage: input.stage,
-            priority: input.priority,
-            firstAddedAt: now,
-            lastActivityAt: now,
-          }
-        : {
-            ...existing,
-            stage: existing.stage === 'archived' ? input.stage : existing.stage,
-            priority: input.priority,
-            lastActivityAt: now,
-            archivedAt: undefined,
-          },
+    const result = await addWatchlistMembersTool.execute(
+      { watchlistId: input.watchlistId, members: [input] },
+      ctx,
     );
-    const sourceKey = `manual:${member.id}`;
-    if (
-      existing !== null &&
-      (await ctx.repos.watchlistMember.currentSource(member.id, sourceKey)) !== null
-    ) {
-      return errInvalidInput(`成员已存在 manual source: ${input.stockId}`);
-    }
-    assertWatchlistMemberInvariants(member);
-    await ctx.repos.watchlistMember.saveMember(member);
-    const source = WatchlistMemberSourceSchema.parse({
-      id: `${sourceKey}:${globalThis.crypto.randomUUID().slice(0, 8)}`,
-      memberId: member.id,
-      kind: 'manual',
-      sourceKey,
-      reason: input.reason,
-      status: 'active',
-      evidence: [],
-      validFrom: now,
-    });
-    assertWatchlistMemberSourceInvariants(source);
-    await ctx.repos.watchlistMember.saveSource(source);
-    return {
-      member,
-      sources: await ctx.repos.watchlistMember.listSources(member.id),
-    };
+    if (!result.ok) return result;
+    const first = result.data.members[0];
+    if (first === undefined) return errInvalidInput('批量成员写入未返回结果');
+    return first;
   },
 });
 

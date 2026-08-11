@@ -112,6 +112,7 @@ import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
 import { updateHoldingTool } from './tools/update-holding.js';
 import { updateStockEventTool } from './tools/update-stock-event.js';
 import {
+  addWatchlistMembersTool,
   addWatchlistMemberTool,
   archiveWatchlistMemberTool,
   archiveWatchlistTool,
@@ -287,6 +288,7 @@ export const toolRegistry: Registry = createRegistry([
   updateWatchlistTool,
   archiveWatchlistTool,
   addWatchlistMemberTool,
+  addWatchlistMembersTool,
   updateWatchlistMemberTool,
   archiveWatchlistMemberTool,
   listWatchlistChangesTool,

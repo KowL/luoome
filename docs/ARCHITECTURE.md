@@ -394,6 +394,7 @@ Web 点击确认后才进入真实 tool 写路径。`ChatSession` / `ChatMessage
 `ChatRepository` 位于 core，memory 与 drizzle repository 位于 db；Web 会话端点经
 tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 user message，
 服务端加载最近 20 条消息并在 AI SDK `onFinish` 后保存 assistant UI message parts。
+多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
 ### 4.8 Context
 
@@ -480,6 +481,8 @@ unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal �
 不表示胜率、Advice 或交易。StrategyRun 的执行状态与数据完整度分离：新运行只写
 `running / complete / failed`，其中 `complete` 表示结果包已原子提交；Summary V3 通过
 `dataHealth=complete / partial / unavailable`、evaluated/incomplete/failed 计数描述覆盖质量。
+正式运行取得 lease 后先写入可查询的 `running` 记录，终态与 results/signals 在同一事务中更新；
+意外异常也会把该记录收敛为 `failed`。
 旧 `status=partial` 记录继续可读，并按“执行完成、数据部分可用”参与当前结果视图。
 
 ```txt

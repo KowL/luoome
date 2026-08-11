@@ -16,6 +16,15 @@ const errorText = (result) => {
 const post = (path, input, method = 'POST') =>
   callApi(path, { method, body: JSON.stringify(input) });
 
+export const parseMemberStockIds = (value) => [
+  ...new Set(
+    value
+      .split(/[\s,，;；]+/)
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean),
+  ),
+];
+
 /** 触发条目时间行；字段名与 WatchTriggerSchema（只有 createdAt）对齐。 */
 export const triggerMetaText = (trigger) =>
   `${trigger.alertPlanId} · 数据 ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
@@ -373,21 +382,26 @@ const renderListPane = async (watchlistId, views, setStatus) => {
     await renderWatchlists(setStatus);
   });
 
-  const add = actionButton('手动添加成员', async () => {
+  const add = actionButton('批量添加成员', async () => {
     const values = await promptDialog({
-      title: '手动添加成员',
+      title: '批量添加成员',
       fields: [
-        { key: 'stockId', label: '股票代码', value: '600519.SH' },
+        { key: 'stockIds', label: '股票代码（逗号、空格或换行分隔）', value: '600519.SH' },
         { key: 'reason', label: '加入原因（可空，默认「用户手工添加」）', value: '' },
       ],
       confirmLabel: '添加',
     });
-    const stockId = values?.stockId;
-    if (stockId === undefined || stockId.length === 0) return;
-    const input = { stockId };
-    if ((values.reason ?? '').length > 0) input.reason = values.reason;
-    const added = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/members`, input);
-    setStatus(added.ok ? '成员已加入' : errorText(added), !added.ok);
+    const stockIds = parseMemberStockIds(values?.stockIds ?? '');
+    if (stockIds.length === 0) return;
+    const reason = values?.reason?.trim();
+    const members = stockIds.map((stockId) => ({
+      stockId,
+      ...(reason ? { reason } : {}),
+    }));
+    const added = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/members/batch`, {
+      members,
+    });
+    setStatus(added.ok ? `已加入 ${stockIds.length} 个成员` : errorText(added), !added.ok);
     await renderWatchlists(setStatus);
   });
 

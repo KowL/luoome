@@ -82,7 +82,7 @@ sessionId + 本轮 user message
 
 - **自动执行**：`search_stocks` / `fetch_quote` / `batch_quote` / `list_holdings` / `get_holding` / `list_strategies` / `get_strategy` / `list_strategy_runs` / `get_strategy_run` / `strategy_signals_by_stock` / `list_watchlists` / `get_watchlist` / `list_watchlist_changes` / `list_alert_plans` / `list_watch_triggers` / `get_advice` / `get_advice_stats` / `list_trades` / `list_research_notes`
 - **自动执行（advice，有 LLM 成本，v1.1 再开）**：`analyze_stock` / `analyze_position` / `market_outlook` —— v1 先不开，避免 chat→advice 嵌套 LLM 的延迟与成本失控；回复中引导用户去对应页面
-- **draft（write，确认后执行）**：`create_strategy` / `create_strategy_version` / `publish_strategy_version` / `pause_strategy` / `run_strategy` / `create_watchlist` / `update_watchlist` / `archive_watchlist` / `add_watchlist_member` / `update_watchlist_member` / `archive_watchlist_member` / `create_alert_plan` / `update_alert_plan` / `delete_alert_plan`
+- **draft（write，确认后执行）**：`create_strategy` / `create_strategy_version` / `publish_strategy_version` / `pause_strategy` / `run_strategy` / `create_watchlist` / `update_watchlist` / `archive_watchlist` / `add_watchlist_members`（单个或多个成员均合并为一条）/ `update_watchlist_member` / `archive_watchlist_member` / `create_alert_plan` / `update_alert_plan` / `delete_alert_plan`
 - **拒绝**：除 `fetch_quote` / `batch_quote` 外的 external、advice 与所有 trade 工具不传给 agent，模型无法调用
 - 执行门控复用 web 现有 sideEffect 规则；chat 不新增特权通道
 

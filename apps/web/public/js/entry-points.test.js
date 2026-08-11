@@ -69,6 +69,19 @@ describe('飞书通知设置入口', () => {
   });
 });
 
+describe('数据导出导入入口', () => {
+  it('设置页提供分类选择、导出和导入控件', () => {
+    const dataTransfer = read('./data-transfer.js');
+    expect(html).toContain('id="data-transfer-categories"');
+    expect(html).toContain('id="btn-data-export"');
+    expect(html).toContain('id="data-import-file"');
+    expect(html).toContain('id="btn-data-import"');
+    expect(appJs).toContain('initDataTransfer');
+    expect(dataTransfer).toContain('/api/data/export');
+    expect(dataTransfer).toContain('/api/data/import');
+  });
+});
+
 describe('研究 managed 写入入口', () => {
   it('提供创建主题、导入资料和写入状态容器', () => {
     expect(html).toContain('id="research-vault-settings-form"');

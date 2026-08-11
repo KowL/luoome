@@ -349,6 +349,71 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
     return row === undefined ? null : toSource(row);
   }
 
+  async commitManualMembers(
+    rows: readonly {
+      readonly member: WatchlistMember;
+      readonly source: WatchlistMemberSource;
+    }[],
+  ): Promise<void> {
+    for (const { member, source } of rows) {
+      assertWatchlistMemberInvariants(member);
+      assertWatchlistMemberSourceInvariants(source);
+      if (source.memberId !== member.id || source.kind !== 'manual') {
+        throw new InvariantError('手工成员来源必须引用同一 member 且 kind=manual');
+      }
+    }
+    this.db.transaction((tx) => {
+      for (const { member, source } of rows) {
+        if (
+          tx.select().from(watchlists).where(eq(watchlists.id, member.watchlistId)).get() ===
+          undefined
+        ) {
+          throw new InvariantError(`Watchlist 不存在: ${member.watchlistId}`);
+        }
+        const duplicate = tx
+          .select()
+          .from(watchlistMembers)
+          .where(
+            and(
+              eq(watchlistMembers.watchlistId, member.watchlistId),
+              eq(watchlistMembers.stockId, member.stockId),
+            ),
+          )
+          .get();
+        if (duplicate !== undefined && duplicate.id !== member.id) {
+          throw new InvariantError('(watchlistId, stockId) 必须唯一');
+        }
+        const currentSource = tx
+          .select()
+          .from(watchlistMemberSources)
+          .where(
+            and(
+              eq(watchlistMemberSources.memberId, source.memberId),
+              eq(watchlistMemberSources.sourceKey, source.sourceKey),
+              ne(watchlistMemberSources.status, 'ended'),
+            ),
+          )
+          .get();
+        if (currentSource !== undefined && currentSource.id !== source.id) {
+          throw new InvariantError('(memberId, sourceKey) 只能有一个非 ended 来源');
+        }
+        tx.insert(watchlistMembers)
+          .values(memberValues(member))
+          .onConflictDoUpdate({
+            target: watchlistMembers.id,
+            set: {
+              stage: member.stage,
+              priority: member.priority,
+              lastActivityAt: member.lastActivityAt,
+              archivedAt: member.archivedAt ?? null,
+            },
+          })
+          .run();
+        tx.insert(watchlistMemberSources).values(sourceValues(source)).run();
+      }
+    });
+  }
+
   async saveSyncRun(run: WatchlistSyncRun): Promise<void> {
     assertWatchlistSyncRunInvariants(run);
     if (

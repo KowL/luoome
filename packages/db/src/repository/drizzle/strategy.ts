@@ -1,6 +1,7 @@
 import {
   assertStrategyInvariants,
   assertStrategyRunBundleInvariants,
+  assertStrategyRunInvariants,
   assertStrategyVersionInvariants,
   InvariantError,
   type Strategy,
@@ -473,6 +474,47 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       .map(toSignal);
   }
 
+  async saveStartedRun(run: StrategyRun): Promise<void> {
+    assertStrategyRunInvariants(run);
+    if (run.status !== 'running') throw new InvariantError('saveStartedRun 只接受 running');
+    const strategy = this.db
+      .select()
+      .from(strategies)
+      .where(eq(strategies.id, run.strategyId))
+      .get();
+    const version = this.db
+      .select()
+      .from(strategyVersions)
+      .where(eq(strategyVersions.id, run.strategyVersionId))
+      .get();
+    if (
+      strategy?.status !== 'active' ||
+      version?.strategyId !== run.strategyId ||
+      version.validationStatus !== 'valid' ||
+      version.publishedAt === null
+    ) {
+      throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
+    }
+    this.db
+      .insert(strategyRuns)
+      .values({
+        id: run.id,
+        strategyId: run.strategyId,
+        strategyVersionId: run.strategyVersionId,
+        mode: run.mode,
+        coverage: run.coverage,
+        dataAsOf: run.dataAsOf,
+        startedAt: run.startedAt,
+        finishedAt: null,
+        status: run.status,
+        inputSnapshot: run.inputSnapshot,
+        providerStatuses: [...run.providerStatuses],
+        summary: null,
+        error: null,
+      })
+      .run();
+  }
+
   async commitRun(bundle: StrategyRunBundle): Promise<void> {
     assertStrategyRunBundleInvariants(bundle);
     this.db.transaction((tx) => {
@@ -494,23 +536,40 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       ) {
         throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
       }
-      tx.insert(strategyRuns)
-        .values({
-          id: bundle.run.id,
-          strategyId: bundle.run.strategyId,
-          strategyVersionId: bundle.run.strategyVersionId,
-          mode: bundle.run.mode,
-          coverage: bundle.run.coverage,
-          dataAsOf: bundle.run.dataAsOf,
-          startedAt: bundle.run.startedAt,
-          finishedAt: bundle.run.finishedAt ?? null,
-          status: bundle.run.status,
-          inputSnapshot: bundle.run.inputSnapshot,
-          providerStatuses: [...bundle.run.providerStatuses],
-          summary: bundle.run.summary ?? null,
-          error: bundle.run.error ?? null,
-        })
-        .run();
+      const runValues = {
+        id: bundle.run.id,
+        strategyId: bundle.run.strategyId,
+        strategyVersionId: bundle.run.strategyVersionId,
+        mode: bundle.run.mode,
+        coverage: bundle.run.coverage,
+        dataAsOf: bundle.run.dataAsOf,
+        startedAt: bundle.run.startedAt,
+        finishedAt: bundle.run.finishedAt ?? null,
+        status: bundle.run.status,
+        inputSnapshot: bundle.run.inputSnapshot,
+        providerStatuses: [...bundle.run.providerStatuses],
+        summary: bundle.run.summary ?? null,
+        error: bundle.run.error ?? null,
+      };
+      const existing = tx
+        .select()
+        .from(strategyRuns)
+        .where(eq(strategyRuns.id, bundle.run.id))
+        .get();
+      if (existing === undefined) {
+        tx.insert(strategyRuns).values(runValues).run();
+      } else {
+        if (
+          existing.status !== 'running' ||
+          bundle.run.status === 'running' ||
+          existing.strategyId !== bundle.run.strategyId ||
+          existing.strategyVersionId !== bundle.run.strategyVersionId ||
+          existing.startedAt.getTime() !== bundle.run.startedAt.getTime()
+        ) {
+          throw new InvariantError(`StrategyRun.runId 已存在: ${bundle.run.id}`);
+        }
+        tx.update(strategyRuns).set(runValues).where(eq(strategyRuns.id, bundle.run.id)).run();
+      }
       for (const result of bundle.results) {
         tx.insert(strategyResults)
           .values({

@@ -5259,6 +5259,26 @@ body > .modal {
 }
 
 /* 设置页 workflow 运行记录容器 */
+.data-transfer-card {
+  margin-bottom: var(--space-4);
+}
+
+.data-transfer-categories,
+.data-transfer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.data-transfer-categories {
+  padding: var(--space-3) 0;
+}
+
+.data-transfer-actions {
+  align-items: center;
+  margin-top: var(--space-2);
+}
+
 .workflow-runs {
   font-size: var(--text-sm);
   color: var(--ink-soft);
