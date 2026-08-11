@@ -266,6 +266,7 @@ describe('运行记录「查看」弹窗', () => {
     expect(section.textContent).toContain('已完成');
     expect(section.textContent).toContain('数据 部分可用');
     expect(section.textContent).toContain('不完整 1');
+    expect(section.textContent).not.toContain('v3');
     // 运行列表不再内联渲染详情区
     expect(section.querySelectorAll('.strategy-run-detail').length).toBe(0);
     const view = section.querySelectorAll('button').find((button) => button.textContent === '查看');
@@ -379,7 +380,9 @@ describe('Phase B 洞察与调度', () => {
       .click();
     await flush();
     expect(node.textContent).toContain('运行稳定');
-    expect(node.textContent).toContain('runs:window');
+    expect(node.textContent).toContain('已引用 1 项已核验事实');
+    expect(node.textContent).not.toContain('runs:window');
+    expect(node.textContent).not.toContain('quality');
     expect(statuses.at(-1)).toContain('fixture');
   });
 
@@ -413,6 +416,7 @@ describe('Phase B 洞察与调度', () => {
                 observationHorizons: ['t3', 't5', 't20'],
               },
               nextRunAt: '2026-08-10T10:00:00.000Z',
+              lastRunId: 'run-internal-id',
             },
           },
         });
@@ -426,7 +430,16 @@ describe('Phase B 洞察与调度', () => {
             status: 'active',
             currentVersionId: 'v1',
           },
-          versions: [],
+          versions: [
+            {
+              id: 'version-internal-id',
+              version: 1,
+              definitionHash: 'a'.repeat(64),
+              validationStatus: 'valid',
+              validationErrors: [],
+              definition: {},
+            },
+          ],
         },
       });
     };
@@ -438,6 +451,10 @@ describe('Phase B 洞察与调度', () => {
     expect(node.textContent).toContain('自动调度');
     expect(node.textContent).toContain('自动生成策略推荐');
     expect(node.textContent).toContain('标准 5 段 cron');
+    expect(node.textContent).toContain('v1');
+    expect(node.textContent).not.toContain('run-internal-id');
+    expect(node.textContent).not.toContain('version-internal-id');
+    expect(node.textContent).not.toContain('a'.repeat(64));
     expect(node.querySelectorAll('input').map((input) => input.value)).toEqual([
       '0 18 * * 1-5',
       'Asia/Shanghai',

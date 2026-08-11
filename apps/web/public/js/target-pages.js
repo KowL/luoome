@@ -25,6 +25,11 @@ export const parseMemberStockIds = (value) => [
   ),
 ];
 
+export const appendMemberStock = (selected, stock, existingStockIds = []) => {
+  const unavailable = new Set([...existingStockIds, ...selected.map((item) => item.id)]);
+  return unavailable.has(stock.id) ? selected : [...selected, stock];
+};
+
 /** 触发条目时间行；字段名与 WatchTriggerSchema（只有 createdAt）对齐。 */
 export const triggerMetaText = (trigger) =>
   `${trigger.alertPlanId} · 数据 ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
@@ -330,6 +335,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
     return;
   }
   const { watchlist, alertPlans } = result.data;
+  const stocks = stocksOfList(views.stocks, watchlistId);
 
   const edit = actionButton('编辑', async () => {
     const values = await promptDialog({
@@ -382,30 +388,208 @@ const renderListPane = async (watchlistId, views, setStatus) => {
     await renderWatchlists(setStatus);
   });
 
-  const add = actionButton('批量添加成员', async () => {
-    const values = await promptDialog({
-      title: '批量添加成员',
-      fields: [
-        { key: 'stockIds', label: '股票代码（逗号、空格或换行分隔）', value: '600519.SH' },
-        { key: 'reason', label: '加入原因（可空，默认「用户手工添加」）', value: '' },
-      ],
-      confirmLabel: '添加',
-    });
-    const stockIds = parseMemberStockIds(values?.stockIds ?? '');
-    if (stockIds.length === 0) return;
-    const reason = values?.reason?.trim();
-    const members = stockIds.map((stockId) => ({
-      stockId,
-      ...(reason ? { reason } : {}),
-    }));
-    const added = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/members/batch`, {
-      members,
-    });
-    setStatus(added.ok ? `已加入 ${stockIds.length} 个成员` : errorText(added), !added.ok);
-    await renderWatchlists(setStatus);
-  });
+  const add = actionButton('添加成员', async () => {
+    const searchInput = el('input');
+    searchInput.type = 'search';
+    searchInput.placeholder = '输入股票代码或名称，例如 600519 / 贵州茅台';
+    searchInput.autocomplete = 'off';
+    searchInput.setAttribute('aria-label', '搜索股票代码或名称');
+    searchInput.setAttribute('aria-autocomplete', 'list');
 
-  const stocks = stocksOfList(views.stocks, watchlistId);
+    const resultList = el('div', 'autocomplete-list member-picker-results');
+    resultList.hidden = true;
+    resultList.setAttribute('role', 'listbox');
+    const searchWrap = el('div', 'autocomplete', [searchInput, resultList]);
+    const selectionList = el('div', 'member-picker-selection');
+    const selectionHint = el('p', 'member-picker-count', '尚未选择股票');
+    const reasonInput = el('input');
+    reasonInput.type = 'text';
+    reasonInput.placeholder = '可空，默认「用户手工添加」';
+    const errorNode = el('p', 'modal-error');
+    const submit = el('button', 'btn btn-primary', '添加 0 只');
+    submit.type = 'button';
+    submit.disabled = true;
+
+    const existingStockIds = stocks.map((stock) => stock.stockId);
+    let selected = [];
+    let candidates = [];
+    let activeIndex = -1;
+    let timer = 0;
+    let requestId = 0;
+
+    const renderSelection = () => {
+      selectionHint.textContent =
+        selected.length === 0 ? '尚未选择股票' : `已选择 ${selected.length} 只股票`;
+      submit.textContent = `添加 ${selected.length} 只`;
+      submit.disabled = selected.length === 0;
+      selectionList.replaceChildren(
+        ...selected.map((stock) => {
+          const remove = el('button', 'member-picker-remove', '移除');
+          remove.type = 'button';
+          remove.setAttribute('aria-label', `移除 ${stock.name ?? stock.id}`);
+          remove.addEventListener('click', () => {
+            selected = selected.filter((item) => item.id !== stock.id);
+            renderSelection();
+          });
+          return el('div', 'member-picker-selected', [
+            el('div', null, [
+              el('strong', null, stock.name ?? stock.id),
+              el('span', 'mono muted', stock.id),
+            ]),
+            remove,
+          ]);
+        }),
+      );
+    };
+
+    const chooseCandidate = (stock) => {
+      const before = selected.length;
+      selected = appendMemberStock(selected, stock, existingStockIds);
+      if (selected.length === before) return;
+      searchInput.value = '';
+      resultList.hidden = true;
+      candidates = [];
+      activeIndex = -1;
+      errorNode.textContent = '';
+      renderSelection();
+      searchInput.focus();
+    };
+
+    const renderCandidates = () => {
+      activeIndex = Math.min(activeIndex, candidates.length - 1);
+      const selectedIds = new Set(selected.map((stock) => stock.id));
+      const existingIds = new Set(existingStockIds);
+      const nodes = candidates.map((stock, index) => {
+        const exists = existingIds.has(stock.id);
+        const chosen = selectedIds.has(stock.id);
+        const item = el('button', 'autocomplete-item autocomplete-rich');
+        item.type = 'button';
+        item.disabled = exists || chosen;
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', String(chosen));
+        if (index === activeIndex) item.classList.add('is-active');
+        item.append(
+          el('span', 'ac-line-1', [
+            el('span', 'mono', stock.code ?? stock.id),
+            el('span', 'ac-name', stock.name ?? '未命名股票'),
+          ]),
+          el(
+            'span',
+            `member-picker-state${exists || chosen ? ' muted' : ''}`,
+            exists ? '已在分组' : chosen ? '已选择' : (stock.exchange ?? ''),
+          ),
+        );
+        item.addEventListener('pointerdown', (event) => event.preventDefault());
+        item.addEventListener('click', () => chooseCandidate(stock));
+        return item;
+      });
+      if (nodes.length === 0) {
+        nodes.push(el('p', 'member-picker-empty', '未找到匹配的股票'));
+      }
+      resultList.replaceChildren(...nodes);
+      resultList.hidden = false;
+    };
+
+    const search = async (query) => {
+      const currentRequest = ++requestId;
+      resultList.replaceChildren(el('p', 'member-picker-empty', '搜索中…'));
+      resultList.hidden = false;
+      const response = await callApi(`/api/stocks/search?q=${encodeURIComponent(query)}&limit=10`);
+      if (currentRequest !== requestId || searchInput.value.trim() !== query) return;
+      if (!response.ok) {
+        candidates = [];
+        resultList.replaceChildren(el('p', 'member-picker-empty modal-error', errorText(response)));
+        resultList.hidden = false;
+        return;
+      }
+      candidates = Array.isArray(response.data?.stocks) ? response.data.stocks : [];
+      activeIndex = candidates.findIndex(
+        (stock) => !existingStockIds.includes(stock.id) && !selected.some((s) => s.id === stock.id),
+      );
+      renderCandidates();
+    };
+
+    searchInput.addEventListener('input', () => {
+      window.clearTimeout(timer);
+      const query = searchInput.value.trim();
+      if (query.length === 0) {
+        requestId += 1;
+        resultList.hidden = true;
+        candidates = [];
+        return;
+      }
+      timer = window.setTimeout(() => void search(query), 250);
+    });
+    searchInput.addEventListener('focus', () => {
+      if (candidates.length > 0) renderCandidates();
+    });
+    searchInput.addEventListener('blur', () => {
+      window.setTimeout(() => {
+        resultList.hidden = true;
+      }, 100);
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (resultList.hidden || candidates.length === 0) return;
+      const available = candidates
+        .map((stock, index) => ({ stock, index }))
+        .filter(
+          ({ stock }) =>
+            !existingStockIds.includes(stock.id) && !selected.some((item) => item.id === stock.id),
+        );
+      if (available.length === 0) return;
+      const current = available.findIndex(({ index }) => index === activeIndex);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        const next = (current + direction + available.length) % available.length;
+        activeIndex = available[next].index;
+        renderCandidates();
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        chooseCandidate(available[Math.max(0, current)].stock);
+      }
+    });
+
+    submit.addEventListener('click', () => {
+      void (async () => {
+        submit.disabled = true;
+        errorNode.textContent = '';
+        const reason = reasonInput.value.trim();
+        const members = selected.map((stock) => ({
+          stockId: stock.id,
+          ...(reason ? { reason } : {}),
+        }));
+        const added = await post(
+          `/api/watchlists/${encodeURIComponent(watchlist.id)}/members/batch`,
+          { members },
+        );
+        if (!added.ok) {
+          errorNode.textContent = errorText(added);
+          submit.disabled = false;
+          return;
+        }
+        closeModal();
+        setStatus(`已加入 ${members.length} 个成员`);
+        await renderWatchlists(setStatus);
+      })();
+    });
+
+    const cancel = el('button', 'btn btn-outline', '取消');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeModal);
+    const actions = el('div', 'modal-actions', [cancel, submit]);
+    const body = el('div', 'member-picker', [
+      el('p', 'muted', `搜索股票并加入「${watchlist.name}」，支持一次选择多只。`),
+      el('div', 'field', [el('label', null, '股票代码或名称'), searchWrap]),
+      el('div', 'member-picker-selection-head', [el('strong', null, '待添加成员'), selectionHint]),
+      selectionList,
+      el('div', 'field', [el('label', null, '加入原因'), reasonInput]),
+      errorNode,
+      actions,
+    ]);
+    openModal('添加分组成员', body);
+    searchInput.focus();
+  });
   const health = summarizeMemberSources(
     stocks.flatMap((stock) =>
       (stock.memberships ?? [])

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  appendMemberStock,
   buildAlertPlanMutationInput,
   deriveWatchlistViews,
   parseMemberStockIds,
@@ -21,6 +22,14 @@ describe('批量成员输入', () => {
       '002594.SZ',
       '300750.SZ',
     ]);
+  });
+
+  it('搜索选择会去重，并跳过已在分组中的股票', () => {
+    const first = { id: '600519.SH', code: '600519', name: '贵州茅台' };
+    const second = { id: '002594.SZ', code: '002594', name: '比亚迪' };
+    expect(appendMemberStock([], first, ['600519.SH'])).toEqual([]);
+    expect(appendMemberStock([first], first)).toEqual([first]);
+    expect(appendMemberStock([first], second)).toEqual([first, second]);
   });
 });
 

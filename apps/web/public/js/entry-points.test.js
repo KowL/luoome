@@ -47,6 +47,19 @@ describe('行情页入口', () => {
   });
 });
 
+describe('策略页布局', () => {
+  it('策略目录作为顶部横向切换条，工作台独占下方宽度', () => {
+    const strategySection = html.slice(
+      html.indexOf('id="route-strategies"'),
+      html.indexOf('id="route-watchlists"'),
+    );
+    expect(html).toContain('class="strategy-layout"');
+    expect(html).toContain('id="strategies-list" class="strategy-catalog-list"');
+    expect(html).toContain('class="card strategy-detail-pane"');
+    expect(strategySection).not.toContain('class="split-pane"');
+  });
+});
+
 describe('报告页入口', () => {
   it('侧栏、路由和历史/详情容器齐全', () => {
     expect(html).toContain('href="#reports" data-route="reports"');

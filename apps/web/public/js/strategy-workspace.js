@@ -73,7 +73,7 @@ const errorText = (result) => {
   if (error === undefined) return '请求失败';
   if (error.message) return error.message;
   if (error.cause) return error.cause;
-  if (error.entity) return `${error.entity}不存在：${error.id ?? ''}`;
+  if (error.entity) return `${error.entity}不存在`;
   return error.kind ?? '请求失败';
 };
 
@@ -134,13 +134,13 @@ const ruleEvaluationPanel = (result) => {
     panel.append(el('p', 'placeholder', '该结果没有规则解释。'));
     return panel;
   }
-  for (const evaluation of evaluations) {
+  for (const [index, evaluation] of evaluations.entries()) {
     const status = RULE_STATUS[evaluation.status];
     const isV2 = evaluation.schemaVersion === 2;
     panel.append(
       el('article', 'strategy-rule-item', [
         el('div', 'flex gap-2', [
-          el('strong', null, evaluation.ruleId),
+          el('strong', null, `规则 ${index + 1}`),
           badge(status, evaluation.status),
           ...(isV2 ? [el('span', 'badge badge-neutral', evaluation.scope)] : []),
         ]),
@@ -189,7 +189,9 @@ const addToWatchlist = async (stock, setStatus) => {
 };
 
 const resultReason = (view) => {
-  if (view.kind === 'rule-near-miss') return `阻断规则 ${view.blockingRuleIds.join('、')}`;
+  if (view.kind === 'rule-near-miss') {
+    return `未满足 ${view.blockingRuleIds.length} 条选股规则`;
+  }
   if (view.kind === 'ranking-near-miss') {
     return `距 Top ${view.distance?.positionsAway ?? '--'} 位`;
   }
@@ -482,10 +484,7 @@ const renderDiff = async (strategyId) => {
           ]),
         ]);
   return el('section', 'strategy-diff', [
-    el('div', 'strategy-tab-heading', [
-      el('h3', null, '最近两次可用运行 Diff'),
-      el('span', 'mono muted', `${diff.fromRunId} → ${diff.toRunId}`),
-    ]),
+    el('div', 'strategy-tab-heading', [el('h3', null, '最近两次可用运行对比')]),
     ...(warnings ?? []).map((warning) => el('p', 'status warning', warning)),
     strip,
     table,
@@ -505,7 +504,6 @@ export const renderRuns = async (strategyId) => {
       el('tr', null, [
         el('td', 'mono', fmtDateTime(run.startedAt)),
         el('td', null, run.mode),
-        el('td', 'mono', run.strategyVersionId),
         el('td', null, badge(RUN_STATUS[run.status], run.status)),
         el('td', 'muted', runSummaryText(run)),
         el('td', null, view),
@@ -521,7 +519,6 @@ export const renderRuns = async (strategyId) => {
           el('tr', null, [
             el('th', null, '时间'),
             el('th', null, '模式'),
-            el('th', null, '版本'),
             el('th', null, '状态'),
             el('th', null, '摘要'),
             el('th', null, '操作'),
@@ -555,7 +552,7 @@ const renderInsightNarrative = (insight) =>
           ),
         ]),
         el('p', null, finding.detail),
-        el('small', 'mono muted', `事实引用：${finding.factRefs.join(' · ')}`),
+        el('small', 'muted', `已引用 ${finding.factRefs.length} 项已核验事实`),
       ]),
     ),
     ...(insight.risks?.length
@@ -658,7 +655,7 @@ export const renderInsights = async (strategyId, setStatus = () => {}) => {
           : facts.blockers.map((item) =>
               el('article', 'entity-item', [
                 el('strong', null, item.ruleName),
-                el('span', 'mono muted', `${item.count} 次 · ${item.ruleId}`),
+                el('span', 'mono muted', `${item.count} 次`),
               ]),
             )),
       ]),
@@ -836,7 +833,7 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
       'p',
       'mono muted',
       schedule?.nextRunAt
-        ? `下次计划 ${fmtDateTime(schedule.nextRunAt)}${schedule.lastRunId ? ` · 上次运行 ${schedule.lastRunId}` : ''}`
+        ? `下次计划 ${fmtDateTime(schedule.nextRunAt)}`
         : '保存后计算下次运行时间；策略暂停时调度会跳过并推进。',
     ),
     ...(save.disabled ? [el('p', 'status warning', '只有已发布且运行中的策略可以启用调度。')] : []),
@@ -951,7 +948,6 @@ export const renderSettings = async (strategyId, setStatus, refresh) => {
         ),
         ...(version.publishedAt ? [el('span', 'badge badge-active', '已发布')] : []),
       ]),
-      el('span', 'mono muted', version.definitionHash),
       el('p', null, version.changeSummary ?? '无变更说明'),
       ...(version.validationErrors ?? []).map((message) => el('p', 'status error', message)),
       el('details', null, [
@@ -1157,8 +1153,8 @@ export const renderStrategyWorkspacePage = async ({
           el('p', 'muted', '从右上角新增策略或复制内置模板。'),
         ])
       : strategies.map((strategy) => {
-          const row = el('button', 'entity-row', [
-            el('span', 'entity-row-main', [
+          const row = el('button', 'strategy-catalog-item', [
+            el('span', 'strategy-catalog-copy', [
               el('strong', null, strategy.name),
               el('small', null, strategy.description),
             ]),
