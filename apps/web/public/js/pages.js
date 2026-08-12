@@ -18,6 +18,8 @@ import { stockIdentityLink } from './stock-link.js';
 import {
   $,
   adviceCard,
+  compareValues,
+  createPagination,
   decisionBadge,
   el,
   fmtDateTime,
@@ -25,8 +27,13 @@ import {
   fmtPct,
   fmtSigned,
   mount,
+  sortableHeader,
   statBlock,
 } from './ui.js';
+
+/* 跨自动刷新保留的列表排序状态（dashboard 5s、holdings 10s 会重绘，不持久则排序瞬间失效） */
+let boardSortState = { key: null, order: 'desc' };
+let holdingsSortState = { key: null, order: 'desc' };
 
 /* ============ dashboard ============ */
 
@@ -162,6 +169,8 @@ const boardRow = (item) => {
   return row;
 };
 
+const defaultOrderForKey = (key) => (key === 'price' || key.endsWith('price') ? 'asc' : 'desc');
+
 const renderBoard = (items) => {
   const wrap = $('#dashboard-board');
   if (wrap === null) return;
@@ -175,23 +184,46 @@ const renderBoard = (items) => {
   if (meta !== null) {
     meta.textContent = `${items.length} 只 · 涨${stats.up} 跌${stats.down} 平${stats.flat}`;
   }
-  mount(
-    wrap,
+  const listContainer = el('div', 'paginated-list');
+  const buildBoardTable = (pageItems) =>
     el('table', 'table board-table', [
       el(
         'thead',
         null,
         el('tr', null, [
           el('th', null, '名称'),
-          el('th', 'num', '现价'),
-          el('th', 'num', '涨跌幅'),
+          sortableHeader('现价', 'price', boardSortState, onSort),
+          sortableHeader('涨跌幅', 'changePct', boardSortState, onSort),
           el('th', null, 'Watchlist'),
           el('th', null, '预警'),
         ]),
       ),
-      el('tbody', null, sortBoardItems(items).map(boardRow)),
-    ]),
-  );
+      el('tbody', null, pageItems.map(boardRow)),
+    ]);
+  const sortedItems = () => {
+    if (boardSortState.key === null) return sortBoardItems(items);
+    const direction = boardSortState.order === 'asc' ? 1 : -1;
+    return [...items].sort((a, b) => {
+      const getSortValue = (item) =>
+        boardSortState.key === 'price' ? (item.quote?.close ?? null) : (item.changePct ?? null);
+      return direction * compareValues(getSortValue(a), getSortValue(b));
+    });
+  };
+  function onSort(key) {
+    boardSortState =
+      boardSortState.key === key
+        ? { key, order: boardSortState.order === 'asc' ? 'desc' : 'asc' }
+        : { key, order: defaultOrderForKey(key) };
+    renderPage();
+  }
+  function renderPage() {
+    const sorted = sortedItems();
+    const { page, pageSize } = pagination.getState();
+    mount(listContainer, buildBoardTable(sorted.slice((page - 1) * pageSize, page * pageSize)));
+  }
+  const pagination = createPagination({ total: items.length, onChange: renderPage });
+  renderPage();
+  mount(wrap, [listContainer, pagination.root]);
 };
 
 /** 今日预警紧凑行：时间 / 股票 / 方向 / 原因 / 优先级 badge；urgent 行高亮。 */
@@ -358,68 +390,136 @@ const renderHoldings = async (setStatus) => {
   const { holdings, totalValue, totalPnL, totalPnLPct, totalTodayPnl, totalTodayPnlPct } = r.data;
   // 缓存给「分析全部」复用，批量入口不再重复拉 /api/holdings
   currentHoldings = holdings;
+
+  const tableWrap = body.closest('.table-wrap');
+  let paginationWrap = tableWrap?.nextElementSibling;
+  if (
+    paginationWrap === null ||
+    !(paginationWrap instanceof Element) ||
+    !paginationWrap.classList.contains('pagination-wrap')
+  ) {
+    paginationWrap = document.createElement('div');
+    paginationWrap.className = 'pagination-wrap';
+    tableWrap?.after(paginationWrap);
+  }
+
+  const holdingRow = (item) => {
+    const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
+    const pnlCls = item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '';
+    const todayCls =
+      item.todayPnl === null ? '' : item.todayPnl > 0 ? 'pos' : item.todayPnl < 0 ? 'neg' : '';
+    const h = {
+      id: item.holding.id,
+      stockId: item.holding.stockId,
+      stockName: item.stockName,
+      quantity: item.holding.quantity,
+      availableQuantity: item.holding.availableQuantity,
+      avgCost: item.holding.avgCost,
+      currentPrice: item.currentPrice,
+    };
+    const actionBtn = (label, onClick) => {
+      const b = el('button', 'btn btn-outline btn-sm', label);
+      b.type = 'button';
+      b.addEventListener('click', () => onClick(b));
+      return b;
+    };
+    const row = el('tr', null, [
+      el('td', null, [
+        el('div', null, [
+          stockMarketLink(item.holding.stockId, item.stockName),
+          adviceSlot(item.holding.stockId),
+        ]),
+        el('div', 'cell-sub muted', stockMarketLink(item.holding.stockId, code)),
+      ]),
+      el('td', 'num', String(item.holding.quantity)),
+      el('td', 'num', fmtNum(item.holding.avgCost)),
+      el('td', 'num', fmtNum(item.currentPrice)),
+      el('td', 'num', fmtNum(item.marketValue)),
+      el('td', `num ${todayCls}`, [
+        el('div', null, item.todayPnl === null ? '--' : fmtSigned(item.todayPnl)),
+        el('div', 'cell-sub', item.todayPnlPct === null ? '' : fmtPct(item.todayPnlPct)),
+      ]),
+      el('td', `num ${pnlCls}`, [
+        el('div', null, fmtSigned(item.pnl)),
+        el('div', 'cell-sub', fmtPct(item.pnlPct)),
+      ]),
+      el('td', null, [
+        el('div', 'row-actions', [
+          actionBtn('分析', (btn) => void runAnalyzeStock(item.holding.stockId, setStatus, btn)),
+          actionBtn('加仓', () => openTradeModal(h, 'buy')),
+          actionBtn('减仓', () => openTradeModal(h, 'sell')),
+          actionBtn('纠错', () => openEditModal(h)),
+          actionBtn('平仓', () => openCloseConfirm(h)),
+        ]),
+      ]),
+    ]);
+    row.dataset.stockId = item.holding.stockId;
+    return row;
+  };
+
+  const table = body.closest('table');
+  const thead = table?.querySelector('thead');
+  const getSortValue = (item, key) => {
+    if (key === 'currentPrice') return item.currentPrice ?? null;
+    if (key === 'marketValue') return item.marketValue ?? null;
+    if (key === 'todayPnlPct') return item.todayPnlPct ?? null;
+    if (key === 'pnlPct') return item.pnlPct ?? null;
+    return null;
+  };
+  const sortedHoldings = () => {
+    if (holdingsSortState.key === null) return holdings;
+    const direction = holdingsSortState.order === 'asc' ? 1 : -1;
+    return [...holdings].sort(
+      (a, b) =>
+        direction *
+        compareValues(
+          getSortValue(a, holdingsSortState.key),
+          getSortValue(b, holdingsSortState.key),
+        ),
+    );
+  };
+  const renderHead = () => {
+    if (thead === null) return;
+    mount(
+      thead,
+      el('tr', null, [
+        el('th', null, '名称 / 代码'),
+        el('th', 'num', '数量'),
+        el('th', 'num', '成本'),
+        sortableHeader('现价', 'currentPrice', holdingsSortState, onSort, 'num'),
+        sortableHeader('市值', 'marketValue', holdingsSortState, onSort, 'num'),
+        sortableHeader('今日盈亏', 'todayPnlPct', holdingsSortState, onSort, 'num'),
+        sortableHeader('盈亏', 'pnlPct', holdingsSortState, onSort, 'num'),
+        el('th', null, '操作'),
+      ]),
+    );
+  };
+  function onSort(key) {
+    holdingsSortState =
+      holdingsSortState.key === key
+        ? { key, order: holdingsSortState.order === 'asc' ? 'desc' : 'asc' }
+        : { key, order: defaultOrderForKey(key) };
+    renderHead();
+    renderHoldingsPage();
+  }
+
+  function renderHoldingsPage() {
+    const { page, pageSize } = pagination.getState();
+    const pageItems = sortedHoldings().slice((page - 1) * pageSize, page * pageSize);
+    mount(body, pageItems.map(holdingRow));
+  }
+  const pagination = createPagination({
+    total: holdings.length,
+    onChange: renderHoldingsPage,
+  });
+
+  renderHead();
   if (holdings.length === 0) {
     mount(body, el('tr', null, el('td', { colspan: 8, class: 'placeholder' }, '（无持仓）')));
+    paginationWrap.replaceChildren();
   } else {
-    mount(
-      body,
-      holdings.map((item) => {
-        const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
-        const pnlCls = item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '';
-        const todayCls =
-          item.todayPnl === null ? '' : item.todayPnl > 0 ? 'pos' : item.todayPnl < 0 ? 'neg' : '';
-        const h = {
-          id: item.holding.id,
-          stockId: item.holding.stockId,
-          stockName: item.stockName,
-          quantity: item.holding.quantity,
-          availableQuantity: item.holding.availableQuantity,
-          avgCost: item.holding.avgCost,
-          currentPrice: item.currentPrice,
-        };
-        const actionBtn = (label, onClick) => {
-          const b = el('button', 'btn btn-outline btn-sm', label);
-          b.type = 'button';
-          b.addEventListener('click', () => onClick(b));
-          return b;
-        };
-        const row = el('tr', null, [
-          el('td', null, [
-            el('div', null, [
-              stockMarketLink(item.holding.stockId, item.stockName),
-              adviceSlot(item.holding.stockId),
-            ]),
-            el('div', 'cell-sub muted', stockMarketLink(item.holding.stockId, code)),
-          ]),
-          el('td', 'num', String(item.holding.quantity)),
-          el('td', 'num', fmtNum(item.holding.avgCost)),
-          el('td', 'num', fmtNum(item.currentPrice)),
-          el('td', 'num', fmtNum(item.marketValue)),
-          el('td', `num ${todayCls}`, [
-            el('div', null, item.todayPnl === null ? '--' : fmtSigned(item.todayPnl)),
-            el('div', 'cell-sub', item.todayPnlPct === null ? '' : fmtPct(item.todayPnlPct)),
-          ]),
-          el('td', `num ${pnlCls}`, [
-            el('div', null, fmtSigned(item.pnl)),
-            el('div', 'cell-sub', fmtPct(item.pnlPct)),
-          ]),
-          el('td', null, [
-            el('div', 'row-actions', [
-              actionBtn(
-                '分析',
-                (btn) => void runAnalyzeStock(item.holding.stockId, setStatus, btn),
-              ),
-              actionBtn('加仓', () => openTradeModal(h, 'buy')),
-              actionBtn('减仓', () => openTradeModal(h, 'sell')),
-              actionBtn('纠错', () => openEditModal(h)),
-              actionBtn('平仓', () => openCloseConfirm(h)),
-            ]),
-          ]),
-        ]);
-        row.dataset.stockId = item.holding.stockId;
-        return row;
-      }),
-    );
+    renderHoldingsPage();
+    mount(paginationWrap, pagination.root);
   }
   $('#holdings-total-value').textContent = fmtNum(totalValue);
   const totalPnlCls = totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : '';
@@ -456,31 +556,52 @@ const renderHoldings = async (setStatus) => {
   }
 };
 
+const tradeRow = (trade) =>
+  el('tr', null, [
+    el('td', null, fmtDateTime(trade.executedAt)),
+    el('td', 'mono', trade.stockId),
+    el(
+      'td',
+      trade.side === 'buy' ? 'text-pos' : 'text-neg',
+      trade.side === 'buy' ? '买入' : '卖出',
+    ),
+    el('td', 'num', String(trade.quantity)),
+    el('td', 'num', fmtNum(trade.price)),
+    el('td', null, trade.source),
+  ]);
+
 const renderTrades = (result) => {
   const body = $('#trades-body');
+  const tableWrap = body?.closest('.table-wrap');
+  let paginationWrap = tableWrap?.nextElementSibling;
+  if (
+    paginationWrap === null ||
+    !(paginationWrap instanceof Element) ||
+    !paginationWrap.classList.contains('pagination-wrap')
+  ) {
+    paginationWrap = document.createElement('div');
+    paginationWrap.className = 'pagination-wrap';
+    tableWrap?.after(paginationWrap);
+  }
   if (!result.ok) {
     mount(body, el('tr', null, el('td', 'placeholder', `交易加载失败：${result.error.kind}`)));
+    paginationWrap.replaceChildren();
     return;
   }
-  mount(
-    body,
-    result.data.trades.length === 0
-      ? el('tr', null, el('td', 'placeholder', '（无交易记录）'))
-      : result.data.trades.map((trade) =>
-          el('tr', null, [
-            el('td', null, fmtDateTime(trade.executedAt)),
-            el('td', 'mono', trade.stockId),
-            el(
-              'td',
-              trade.side === 'buy' ? 'text-pos' : 'text-neg',
-              trade.side === 'buy' ? '买入' : '卖出',
-            ),
-            el('td', 'num', String(trade.quantity)),
-            el('td', 'num', fmtNum(trade.price)),
-            el('td', null, trade.source),
-          ]),
-        ),
-  );
+  const trades = result.data.trades ?? [];
+  function renderPage() {
+    const { page, pageSize } = pagination.getState();
+    const pageItems = trades.slice((page - 1) * pageSize, page * pageSize);
+    mount(body, pageItems.map(tradeRow));
+  }
+  const pagination = createPagination({ total: trades.length, onChange: renderPage });
+  if (trades.length === 0) {
+    mount(body, el('tr', null, el('td', 'placeholder', '（无交易记录）')));
+    paginationWrap.replaceChildren();
+    return;
+  }
+  renderPage();
+  mount(paginationWrap, pagination.root);
 };
 
 /* ============ 持仓分析结果（内嵌展示，不再跳转建议页） ============ */
@@ -789,6 +910,22 @@ const renderAdviceList = async (setStatus) => {
   const filter = $('#advice-filter')?.value ?? 'all';
   const stockId = routeStockId();
   const filtered = filterAdvices(all, filter, stockId);
+  let paginationWrap = list.nextElementSibling;
+  if (
+    paginationWrap === null ||
+    !(paginationWrap instanceof Element) ||
+    !paginationWrap.classList.contains('pagination-wrap')
+  ) {
+    paginationWrap = document.createElement('div');
+    paginationWrap.className = 'pagination-wrap';
+    list.after(paginationWrap);
+  }
+  function renderPage() {
+    const { page, pageSize } = pagination.getState();
+    const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
+    mount(list, pageItems.map(adviceCard));
+  }
+  const pagination = createPagination({ total: filtered.length, onChange: renderPage });
   if (filtered.length === 0) {
     mount(
       list,
@@ -802,8 +939,10 @@ const renderAdviceList = async (setStatus) => {
           : `（${stockId} 暂无匹配建议）`,
       ),
     );
+    paginationWrap.replaceChildren();
   } else {
-    mount(list, filtered.map(adviceCard));
+    renderPage();
+    mount(paginationWrap, pagination.root);
   }
   setStatus(
     stockId === null

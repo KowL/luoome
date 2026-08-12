@@ -3,6 +3,7 @@ import {
   diffStrategyRunViews,
   getStrategyRunDataHealth,
   isPublishableOperationalRun,
+  type Quote,
   StrategyResultSchema,
   StrategyResultViewKindSchema,
   StrategyResultViewSchema,
@@ -131,7 +132,7 @@ export const ListStrategyResultViewsInput = z.object({
   view: StrategyResultViewKindSchema,
   rankingWindow: z.number().int().min(1).max(100).default(20),
   query: z.string().trim().min(1).optional(),
-  sort: z.enum(['rank', 'score', 'stock-id']).default('rank'),
+  sort: z.enum(['rank', 'score', 'stock-id', 'price', 'change-pct']).default('rank'),
   order: z.enum(['asc', 'desc']).default('asc'),
   offset: z.number().int().nonnegative().default(0),
   limit: z.number().int().positive().max(200).default(50),
@@ -147,10 +148,29 @@ export const ListStrategyResultViewsOutput = z.object({
     z.object({
       stock: StockIdentityViewSchema,
       view: StrategyResultViewSchema,
+      quote: z
+        .object({
+          price: z.number(),
+          changePct: z.number().optional(),
+          observedAt: z.coerce.date().optional(),
+        })
+        .optional(),
     }),
   ),
   warnings: z.array(z.string()),
 });
+
+const quoteChangePct = (quote: Quote | undefined): number | undefined => {
+  if (quote === undefined) return undefined;
+  const ratio =
+    quote.prevClose !== undefined && quote.prevClose !== 0
+      ? quote.close / quote.prevClose - 1
+      : quote.open !== 0
+        ? quote.close / quote.open - 1
+        : undefined;
+  if (ratio === undefined) return undefined;
+  return Math.round(ratio * 100 * 100) / 100;
+};
 
 export const listStrategyResultViewsTool = defineTool({
   name: 'list_strategy_result_views',
@@ -197,10 +217,30 @@ export const listStrategyResultViewsTool = defineTool({
         );
       });
     }
+    const quoteByStockForSort =
+      input.sort === 'price' || input.sort === 'change-pct'
+        ? await ctx.repos.quote.latestByStocks(views.map((view) => view.result.stockId))
+        : new Map();
     const direction = input.order === 'asc' ? 1 : -1;
     views.sort((left, right) => {
       if (input.sort === 'stock-id') {
         return direction * left.result.stockId.localeCompare(right.result.stockId);
+      }
+      if (input.sort === 'price' || input.sort === 'change-pct') {
+        const leftQuote = quoteByStockForSort.get(left.result.stockId);
+        const rightQuote = quoteByStockForSort.get(right.result.stockId);
+        const leftValue =
+          input.sort === 'price'
+            ? (leftQuote?.close ?? Number.MAX_SAFE_INTEGER)
+            : (quoteChangePct(leftQuote) ?? Number.MAX_SAFE_INTEGER);
+        const rightValue =
+          input.sort === 'price'
+            ? (rightQuote?.close ?? Number.MAX_SAFE_INTEGER)
+            : (quoteChangePct(rightQuote) ?? Number.MAX_SAFE_INTEGER);
+        return (
+          direction * (leftValue - rightValue) ||
+          left.result.stockId.localeCompare(right.result.stockId)
+        );
       }
       const leftValue = left.result[input.sort] ?? Number.MAX_SAFE_INTEGER;
       const rightValue = right.result[input.sort] ?? Number.MAX_SAFE_INTEGER;
@@ -211,6 +251,9 @@ export const listStrategyResultViewsTool = defineTool({
     });
     const total = views.length;
     const page = views.slice(input.offset, input.offset + input.limit);
+    const quoteByStock = await ctx.repos.quote.latestByStocks(
+      page.map((view) => view.result.stockId),
+    );
     return {
       run,
       version,
@@ -218,16 +261,27 @@ export const listStrategyResultViewsTool = defineTool({
       total,
       offset: input.offset,
       limit: input.limit,
-      rows: page.map((view) => ({
-        stock:
-          identityById.get(view.result.stockId) ??
-          ({
-            stockId: view.result.stockId,
-            stockName: '名称暂缺',
-            nameStatus: 'unavailable',
-          } as const),
-        view,
-      })),
+      rows: page.map((view) => {
+        const quote = quoteByStock.get(view.result.stockId);
+        return {
+          stock:
+            identityById.get(view.result.stockId) ??
+            ({
+              stockId: view.result.stockId,
+              stockName: '名称暂缺',
+              nameStatus: 'unavailable',
+            } as const),
+          view,
+          quote:
+            quote === undefined
+              ? undefined
+              : {
+                  price: quote.close,
+                  changePct: quoteChangePct(quote),
+                  observedAt: quote.observedAt,
+                },
+        };
+      }),
       warnings: [
         ...directory.warnings,
         ...(isPublishableOperationalRun(run)

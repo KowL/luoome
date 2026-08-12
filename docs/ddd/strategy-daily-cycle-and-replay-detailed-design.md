@@ -262,11 +262,13 @@ function decideStrategyRunPublication(input: {
 
 规则：
 
-- operational + full universe + complete + acceptance accepted = `published`；
-- operational 但质量门不通过 = `withheld`；
+- operational + full universe + complete + (acceptance accepted 或 requestedBy=manual) = `published`；
+- operational 但质量门不通过且 requestedBy≠manual（如 scheduled） = `withheld`；
 - evaluation 或显式子集 = `non-publishing`；
 - `published` 必须 reasons 为空；其它状态至少一个 reason；
 - publication 不等于 Advice/notify，也不改变 run 的执行事实。
+
+`requestedBy=manual` 对应 Web 端用户点击「正式运行」且未指定显式 stockIds 的全市场运行：用户已在确认弹窗中明确接受 partial 数据，因此不再因验收失败而 withheld。scheduled 与 replay 仍受 acceptance policy 约束。
 
 `StrategyRunSchema` 新增：
 

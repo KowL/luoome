@@ -1,7 +1,17 @@
 import { callApi } from './api.js';
+import { changeClass } from './market-shared.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
-import { $, el, fmtDateTime, fmtNum, mount } from './ui.js';
+import {
+  $,
+  createPagination,
+  el,
+  fmtDateTime,
+  fmtNum,
+  fmtSigned,
+  mount,
+  sortableHeader,
+} from './ui.js';
 
 const STRATEGY_TABS = new Set(['overview', 'pool', 'runs', 'insights', 'settings']);
 
@@ -217,7 +227,7 @@ const resultReason = (view) => {
   return view.result.selected ? '已入选' : '未入选';
 };
 
-const renderResultTable = (payload, setStatus) => {
+const renderResultTable = (payload, setStatus, sortState, onSort) => {
   if ((payload.rows ?? []).length === 0) {
     return el('div', 'strategy-empty-state', [
       el('strong', null, '当前视图为空'),
@@ -234,7 +244,7 @@ const renderResultTable = (payload, setStatus) => {
     const detailRow = el('tr', 'strategy-rule-row');
     detailRow.hidden = true;
     const detailCell = el('td');
-    detailCell.colSpan = 7;
+    detailCell.colSpan = 9;
     detailCell.append(ruleEvaluationPanel(result));
     detailRow.append(detailCell);
     const explain = el('button', 'btn btn-outline btn-sm', '规则解释');
@@ -251,9 +261,17 @@ const renderResultTable = (payload, setStatus) => {
     const watchlist = el('button', 'btn btn-outline btn-sm', '加入 Watchlist');
     watchlist.type = 'button';
     watchlist.addEventListener('click', () => void addToWatchlist(row.stock, setStatus));
+    const quote = row.quote;
+    const changePct = quote?.changePct;
     body.append(
       el('tr', null, [
         el('td', null, stockIdentityLink(row.stock)),
+        el('td', 'num mono', typeof quote?.price === 'number' ? fmtNum(quote.price, 2) : '--'),
+        el(
+          'td',
+          `num mono ${changeClass(changePct)}`,
+          typeof changePct === 'number' ? `${fmtSigned(changePct)}%` : '--',
+        ),
         el('td', 'num mono', result.rank ?? '--'),
         el('td', 'num mono', typeof result.score === 'number' ? result.score.toFixed(2) : '--'),
         el('td', null, resultReason(row.view)),
@@ -271,8 +289,10 @@ const renderResultTable = (payload, setStatus) => {
         null,
         el('tr', null, [
           el('th', null, '股票'),
-          el('th', 'num', '排名'),
-          el('th', 'num', '规则分'),
+          sortableHeader('价格', 'price', sortState, onSort),
+          sortableHeader('涨幅', 'change-pct', sortState, onSort),
+          sortableHeader('排名', 'rank', sortState, onSort),
+          sortableHeader('规则分', 'score', sortState, onSort),
           el('th', null, '状态 / 距离'),
           el('th', null, '数据截止'),
           el('th', null, '结果'),
@@ -345,7 +365,7 @@ const renderOverview = (workspace, state) => {
   ]);
 };
 
-const POOL_PAGE_SIZE = 50;
+const DEFAULT_POOL_PAGE_SIZE = 30;
 
 const renderPool = async (strategyId, setStatus) => {
   const search = el('input');
@@ -355,24 +375,33 @@ const renderPool = async (strategyId, setStatus) => {
   searchBtn.type = 'button';
   const count = el('span', 'entity-count', '--');
   const list = el('div', 'strategy-pool-list');
-  const pager = el('div', 'strategy-pool-pagination');
-  const prev = el('button', 'btn btn-outline btn-sm', '上一页');
-  const next = el('button', 'btn btn-outline btn-sm', '下一页');
-  const pageInfo = el('span', 'muted mono', '');
-  prev.type = 'button';
-  next.type = 'button';
-  pager.append(prev, pageInfo, next);
-  let page = 1;
   let query = '';
   let epoch = 0;
-  const render = async () => {
+  let render;
+  let sortState = { key: 'rank', order: 'asc' };
+  const onSort = (key) => {
+    sortState = {
+      key,
+      order: sortState.key === key && sortState.order === 'asc' ? 'desc' : 'asc',
+    };
+    pager.setState({ page: 1 });
+    void render();
+  };
+  const pager = createPagination({
+    pageSize: DEFAULT_POOL_PAGE_SIZE,
+    onChange: () => {
+      if (render !== undefined) void render();
+    },
+  });
+  render = async () => {
     const current = ++epoch;
+    const { page, pageSize } = pager.getState();
     const params = new URLSearchParams({
       view: 'selected',
-      sort: 'rank',
-      order: 'asc',
-      offset: String((page - 1) * POOL_PAGE_SIZE),
-      limit: String(POOL_PAGE_SIZE),
+      sort: sortState.key,
+      order: sortState.order,
+      offset: String((page - 1) * pageSize),
+      limit: String(pageSize),
     });
     if (query.length > 0) params.set('query', query);
     const result = await cachedGet(
@@ -383,22 +412,14 @@ const renderPool = async (strategyId, setStatus) => {
       mount(list, el('p', 'status error', errorText(result)));
       return;
     }
-    const pageCount = Math.max(1, Math.ceil(result.data.total / POOL_PAGE_SIZE));
-    if (page > pageCount) {
-      // 快速翻页越过末页时，按钳制后的页码重取（offset 已随 page 变化）
-      page = pageCount;
-      return void render();
-    }
     count.textContent = `${result.data.total} 只`;
-    prev.disabled = page <= 1;
-    next.disabled = page >= pageCount;
-    pageInfo.textContent = `第 ${page} / ${pageCount} 页 · 共 ${result.data.total} 条`;
-    pager.hidden = result.data.total === 0;
-    mount(list, renderResultTable(result.data, setStatus));
+    pager.setState({ total: result.data.total });
+    pager.root.hidden = result.data.total === 0;
+    mount(list, renderResultTable(result.data, setStatus, sortState, onSort));
   };
   const doSearch = () => {
     query = search.value.trim();
-    page = 1;
+    pager.setState({ page: 1 });
     void render();
   };
   searchBtn.addEventListener('click', doSearch);
@@ -406,14 +427,6 @@ const renderPool = async (strategyId, setStatus) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
     doSearch();
-  });
-  prev.addEventListener('click', () => {
-    page -= 1;
-    void render();
-  });
-  next.addEventListener('click', () => {
-    page += 1;
-    void render();
   });
   const root = el('div', null, [
     el('div', 'strategy-tab-heading', [
@@ -424,7 +437,7 @@ const renderPool = async (strategyId, setStatus) => {
       el('div', 'row-actions', [search, searchBtn, count]),
     ]),
     list,
-    pager,
+    pager.root,
   ]);
   await render();
   return root;
@@ -446,21 +459,34 @@ const runSummaryText = (run) => {
  * @param {object} data GET /api/strategy-runs/:id 的 data
  * @returns {HTMLElement} 可直接放入弹窗 body 的节点
  */
+const signalRow = (identity) => (signal) =>
+  el('div', 'entity-item', [
+    stockIdentityLink(identity(signal.stockId)),
+    el('span', 'mono', `${signal.direction} · score ${fmtNum(signal.score)}`),
+    el('p', 'muted', (signal.evidence ?? []).join('；')),
+  ]);
+
 export const buildRunDetailContent = (data) => {
   const identityById = new Map((data.stocks ?? []).map((stock) => [stock.stockId, stock]));
   const identity = (stockId) =>
     identityById.get(stockId) ?? { stockId, stockName: '名称暂缺', nameStatus: 'unavailable' };
   const signals = data.signals ?? [];
-  const signalRow = (signal) =>
-    el('div', 'entity-item', [
-      stockIdentityLink(identity(signal.stockId)),
-      el('span', 'mono', `${signal.direction} · score ${fmtNum(signal.score)}`),
-      el('p', 'muted', (signal.evidence ?? []).join('；')),
-    ]);
+  const listContainer = el('div', 'paginated-list');
+  function renderPage() {
+    const { page, pageSize } = pagination.getState();
+    mount(
+      listContainer,
+      signals.slice((page - 1) * pageSize, page * pageSize).map(signalRow(identity)),
+    );
+  }
+  const pagination = createPagination({ total: signals.length, onChange: renderPage });
+  renderPage();
   return el('div', 'strategy-run-detail', [
     el('p', 'muted', `信号 ${signals.length}`),
     el('h4', null, 'StrategySignal'),
-    ...(signals.length === 0 ? [el('p', 'placeholder', '无信号')] : signals.map(signalRow)),
+    ...(signals.length === 0
+      ? [el('p', 'placeholder', '无信号')]
+      : [listContainer, pagination.root]),
   ]);
 };
 
@@ -524,55 +550,62 @@ const renderDiff = async (strategyId) => {
   ]);
 };
 
+const runRow = (run) => {
+  const view = el('button', 'btn btn-outline btn-sm', '查看');
+  view.type = 'button';
+  view.addEventListener('click', () => void openRunDetail(run.id));
+  return el('tr', null, [
+    el('td', 'mono', fmtDateTime(run.startedAt)),
+    el('td', null, run.mode),
+    el('td', null, badge(RUN_SCOPE[run.scope] ?? null, run.scope ?? 'legacy')),
+    el(
+      'td',
+      null,
+      badge(
+        PUBLICATION_STATUS[run.publication?.status] ?? null,
+        run.publication?.status ?? 'legacy/unknown',
+      ),
+    ),
+    el('td', null, badge(RUN_STATUS[run.status], run.status)),
+    el('td', 'muted', runSummaryText(run)),
+    el('td', null, view),
+  ]);
+};
+
 export const renderRuns = async (strategyId, scope = 'operational') => {
   const result = await cachedGet(
     `/api/strategies/${encodeURIComponent(strategyId)}/runs?scope=${encodeURIComponent(scope)}`,
   );
   if (!result.ok) return el('p', 'status error', errorText(result));
   const runs = result.data.runs ?? [];
-  const body = el('tbody');
-  for (const run of runs) {
-    const view = el('button', 'btn btn-outline btn-sm', '查看');
-    view.type = 'button';
-    view.addEventListener('click', () => void openRunDetail(run.id));
-    body.append(
-      el('tr', null, [
-        el('td', 'mono', fmtDateTime(run.startedAt)),
-        el('td', null, run.mode),
-        el('td', null, badge(RUN_SCOPE[run.scope] ?? null, run.scope ?? 'legacy')),
-        el(
-          'td',
-          null,
-          badge(
-            PUBLICATION_STATUS[run.publication?.status] ?? null,
-            run.publication?.status ?? 'legacy/unknown',
-          ),
-        ),
-        el('td', null, badge(RUN_STATUS[run.status], run.status)),
-        el('td', 'muted', runSummaryText(run)),
-        el('td', null, view),
-      ]),
-    );
+  const tbody = el('tbody');
+  function renderPage() {
+    const { page, pageSize } = pagination.getState();
+    mount(tbody, runs.slice((page - 1) * pageSize, page * pageSize).map(runRow));
   }
-  return el('div', null, [
-    el('div', 'table-wrap strategy-run-timeline', [
-      el('table', 'table', [
-        el(
-          'thead',
-          null,
-          el('tr', null, [
-            el('th', null, '时间'),
-            el('th', null, '模式'),
-            el('th', null, '范围'),
-            el('th', null, '发布'),
-            el('th', null, '状态'),
-            el('th', null, '摘要'),
-            el('th', null, '操作'),
-          ]),
-        ),
-        body,
-      ]),
+  const pagination = createPagination({ total: runs.length, onChange: renderPage });
+  renderPage();
+  const tableWrap = el('div', 'table-wrap strategy-run-timeline', [
+    el('table', 'table', [
+      el(
+        'thead',
+        null,
+        el('tr', null, [
+          el('th', null, '时间'),
+          el('th', null, '模式'),
+          el('th', null, '范围'),
+          el('th', null, '发布'),
+          el('th', null, '状态'),
+          el('th', null, '摘要'),
+          el('th', null, '操作'),
+        ]),
+      ),
+      tbody,
     ]),
+  ]);
+  return el('div', null, [
+    tableWrap,
+    pagination.root,
     ...(scope === 'operational'
       ? [await renderDiff(strategyId)]
       : [el('p', 'muted', '历史评估结果与生产 current 隔离；请选择具体运行后再做显式对比。')]),

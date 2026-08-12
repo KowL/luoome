@@ -5907,6 +5907,61 @@ body > .modal {
   flex-wrap: wrap;
 }
 
+/* 通用分页控件 */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+.pagination-pages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pagination-pages .btn {
+  min-width: 32px;
+  justify-content: center;
+}
+
+.pagination-info {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.pagination-size {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.pagination-ellipsis {
+  color: var(--ink-soft);
+  padding: 0 4px;
+  font-size: var(--text-sm);
+}
+
+/* 可排序表头 */
+.table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.table th.sortable:hover {
+  color: var(--accent);
+}
+
+.table th.sortable.active {
+  color: var(--accent);
+}
+
 .strategy-result-table th:first-child,
 .strategy-result-table td:first-child {
   position: sticky;

@@ -334,6 +334,35 @@ describe('run_strategy', () => {
     });
   });
 
+  it('manual full-universe formal run publishes partial data after user confirmation', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      fetchQuote: (stockId) =>
+        stockId === '300750.SZ'
+          ? Promise.reject(new Error('quote unavailable'))
+          : base.adapters.market.fetchQuote(stockId),
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
+    const result = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.run.status).toBe('complete');
+    expect(result.data.run.scope).toBe('operational');
+    expect(result.data.run.summary).toMatchObject({
+      schemaVersion: 4,
+      dataHealth: 'partial',
+      failedCount: 1,
+      evaluatedCount: 1,
+    });
+    expect(result.data.run.publication).toMatchObject({
+      status: 'published',
+      reasons: [],
+    });
+  });
+
   it('prepares derived meta fields required by strategies created from builtin templates', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 1 });

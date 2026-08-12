@@ -24,6 +24,22 @@ export const ReconcileStaleStrategyRunsOutput = z.object({
   runIds: z.array(z.string()),
 });
 
+const snapshotRequestedBy = (
+  run: z.infer<typeof StrategyRunSchema>,
+): 'manual' | 'scheduled' | 'replay' | undefined => {
+  const snapshot = run.inputSnapshot;
+  if (typeof snapshot !== 'object' || snapshot === null) return undefined;
+  const value = snapshot as Record<string, unknown>;
+  if (
+    value.requestedBy === 'manual' ||
+    value.requestedBy === 'scheduled' ||
+    value.requestedBy === 'replay'
+  ) {
+    return value.requestedBy;
+  }
+  return undefined;
+};
+
 const snapshotMeta = (
   run: z.infer<typeof StrategyRunSchema>,
 ): {
@@ -73,6 +89,7 @@ export const reconcileStaleStrategyRunsTool = defineTool({
         continue;
       }
       const meta = snapshotMeta(run);
+      const requestedBy = snapshotRequestedBy(run);
       const finishedAt = new Date(
         Math.max(now.getTime(), run.dataAsOf.getTime(), run.startedAt.getTime()),
       );
@@ -108,6 +125,7 @@ export const reconcileStaleStrategyRunsTool = defineTool({
           status: 'failed',
           universeCheckpointPresent: false,
           acceptance,
+          ...(requestedBy === undefined ? {} : { requestedBy }),
           decidedAt: finishedAt,
         }),
         error: 'stale_strategy_run_reconciled',
