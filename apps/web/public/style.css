@@ -777,6 +777,31 @@ body {
   border-top: 1px dashed var(--line-strong);
 }
 
+.report-provenance > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.report-provenance > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-provenance > summary::before {
+  content: '▸';
+  color: var(--muted);
+}
+
+.report-provenance[open] > summary {
+  margin-bottom: var(--space-2);
+}
+
+.report-provenance[open] > summary::before {
+  content: '▾';
+}
+
 .report-source-row {
   display: grid;
   grid-template-columns: minmax(150px, 1fr) 0.8fr auto auto;

@@ -121,6 +121,7 @@ export const marketPulse = (
     };
   }
   const value = snapshot.limitUp.value;
+  const indexQuotes = snapshot.indexes.status === 'complete' ? (snapshot.indexes.values ?? []) : [];
   return {
     evidence,
     section: {
@@ -133,11 +134,6 @@ export const marketPulse = (
         {
           kind: 'metrics',
           items: [
-            {
-              key: 'indexCount',
-              label: '指数样本',
-              value: snapshot.indexes.values?.length ?? null,
-            },
             { key: 'sealedCount', label: '封板家数', value: value?.sealedCount ?? null },
             { key: 'brokenCount', label: '炸板家数', value: value?.brokenCount ?? null },
             {
@@ -153,6 +149,17 @@ export const marketPulse = (
             },
           ],
         },
+        ...(indexQuotes.length === 0
+          ? []
+          : [
+              {
+                kind: 'list' as const,
+                items: indexQuotes.map((quote) => ({
+                  title: `${quote.name} ${quote.changePct >= 0 ? '+' : ''}${quote.changePct.toFixed(2)}%`,
+                  detail: `收盘 ${Number(quote.close).toFixed(2)}`,
+                })),
+              },
+            ]),
       ],
       evidenceIds: evidence.map((item) => item.id),
       missingDimensions,
@@ -199,12 +206,22 @@ const attachLadderFacts = async (
     .slice(0, 20);
   const list = {
     kind: 'list' as const,
-    items: entries.map(({ level, stock }) => ({
-      title: `${stock.name} · ${level} 连板`,
-      detail: stock.reason === '--' ? '原因暂缺' : stock.reason,
-      entityKind: 'stock' as const,
-      entityId: ladderStockId(stock.code),
-    })),
+    items: entries.map(({ level, stock }) => {
+      // eastmoney 涨停池无涨停原因字段；缺省时退到行业与首封时间，不展示占位符
+      const detail = [
+        stock.reason === '--' ? undefined : stock.reason,
+        stock.industry === 'unclassified' ? undefined : stock.industry,
+        stock.firstTime === null ? undefined : `首封 ${stock.firstTime}`,
+      ]
+        .filter((part): part is string => part !== undefined)
+        .join(' · ');
+      return {
+        title: `${stock.name} · ${level} 连板`,
+        ...(detail.length === 0 ? {} : { detail }),
+        entityKind: 'stock' as const,
+        entityId: ladderStockId(stock.code),
+      };
+    }),
   };
   return {
     evidence: [...base.evidence, evidence],

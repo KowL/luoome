@@ -1,4 +1,10 @@
-import type { AShareSentimentManagerLike, AShareSentimentSnapshot } from '@luoome/core';
+import {
+  type AShareSentimentManagerLike,
+  type AShareSentimentSnapshot,
+  assembleLadder,
+  type LimitUpLadderManagerLike,
+  money,
+} from '@luoome/core';
 import { getReportTool, listWorkflowRunsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
@@ -161,6 +167,116 @@ describe('opening-report workflow', () => {
     expect(stored).toMatchObject({
       ok: true,
       data: { report: { deliveryStatus: 'sent' } },
+    });
+  });
+
+  it('指数行情可用时展示指数列表，天梯缺原因时退到行业与首封时间', async () => {
+    const snapshot = sentimentSnapshot();
+    const manager: AShareSentimentManagerLike = {
+      fetch: async () => ({ ok: true, data: snapshot }),
+    };
+    const ladderManager: LimitUpLadderManagerLike = {
+      name: 'limit-up-ladder',
+      sources: ['eastmoney'],
+      fetchLadder: async () => ({
+        ok: true,
+        data: assembleLadder(
+          '2026-07-24',
+          'eastmoney',
+          [
+            {
+              code: '600111',
+              name: '测试医药',
+              industry: '医药',
+              ladderLevel: 6,
+              uncategorized: false,
+              firstTime: '09:30:00',
+              finalTime: '09:30:00',
+              reason: '--',
+              price: 10,
+              rawClose: 10,
+              corrected: false,
+              changePct: 0.1,
+              limitUpDate: '2026-07-24',
+              board: 'main_board',
+            },
+            {
+              code: '000222',
+              name: '测试科技',
+              industry: 'unclassified',
+              ladderLevel: 2,
+              uncategorized: false,
+              firstTime: null,
+              finalTime: null,
+              reason: '资产注入预期',
+              price: 20,
+              rawClose: 20,
+              corrected: false,
+              changePct: 0.1,
+              limitUpDate: '2026-07-24',
+              board: 'main_board',
+            },
+          ],
+          [],
+          marketAsOf,
+        ),
+      }),
+      compareLadder: async () => ({ ok: false }),
+    };
+    const base = await buildTestContext({
+      clock: () => generatedAt,
+      ashareSentiment: manager,
+      limitUpLadder: ladderManager,
+    });
+    // get_ashare_sentiment 用 market adapter 的实时指数覆盖 manager 的 indexes；
+    // ts 必须落在 marketDate（2026-07-24，上海时区）否则 date_mismatch。
+    // Object.create 保留 FakeMarketAdapter 原型方法，只覆盖 fetchIndexQuotes。
+    const marketAdapter = Object.create(base.adapters.market, {
+      fetchIndexQuotes: {
+        value: async () => [
+          {
+            code: '000001',
+            name: '上证指数',
+            close: money(3500.5),
+            change: 12.3,
+            changePct: 0.35,
+            ts: marketAsOf,
+            source: 'fixture-index',
+          },
+        ],
+      },
+    }) as typeof base.adapters.market;
+    const ctx = {
+      ...base,
+      adapters: { ...base.adapters, market: marketAdapter },
+    };
+
+    const result = await openingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const market = result.data.report.sections.find((section) => section.key === 'market-pulse');
+    const lists = market?.blocks.filter((block) => block.kind === 'list');
+    expect(lists).toContainEqual({
+      kind: 'list',
+      items: [{ title: '上证指数 +0.35%', detail: '收盘 3500.50' }],
+    });
+    expect(lists).toContainEqual({
+      kind: 'list',
+      items: [
+        {
+          title: '测试医药 · 6 连板',
+          detail: '医药 · 首封 09:30:00',
+          entityKind: 'stock',
+          entityId: '600111.SH',
+        },
+        {
+          title: '测试科技 · 2 连板',
+          detail: '资产注入预期',
+          entityKind: 'stock',
+          entityId: '000222.SZ',
+        },
+      ],
     });
   });
 

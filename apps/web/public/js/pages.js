@@ -847,16 +847,19 @@ const reportBlockNode = (block) => {
     return el(
       'div',
       'report-metrics',
-      block.items.map((item) =>
-        el('div', 'report-metric', [
+      block.items.map((item) => {
+        const text =
+          item.displayValue ??
+          (item.value === null || item.value === undefined
+            ? '不可用'
+            : item.unit === 'ratio' && typeof item.value === 'number'
+              ? fmtPct(item.value, 1)
+              : `${item.value}${item.unit ?? ''}`);
+        return el('div', 'report-metric', [
           el('span', 'report-metric-label', item.label),
-          el(
-            'strong',
-            'report-metric-value',
-            `${item.displayValue ?? item.value ?? '不可用'}${item.unit ?? ''}`,
-          ),
-        ]),
-      ),
+          el('strong', 'report-metric-value', text),
+        ]);
+      }),
     );
   }
   if (block.kind === 'list') {
@@ -978,9 +981,11 @@ const loadReportDetail = async (reportId, setStatus) => {
   }
   if (report.evidence.length > 0) {
     nodes.push(
-      el('section', 'report-provenance', [
-        el('span', 'section-kicker', 'PROVENANCE'),
-        el('h3', null, '数据来源'),
+      el('details', 'report-provenance', [
+        el('summary', null, [
+          el('span', 'section-kicker', 'PROVENANCE'),
+          el('h3', null, `数据来源（${report.evidence.length}）`),
+        ]),
         ...report.evidence.map((evidence) =>
           el('div', 'report-source-row', [
             el('strong', null, evidence.dimension),

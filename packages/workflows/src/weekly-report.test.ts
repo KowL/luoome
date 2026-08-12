@@ -112,5 +112,9 @@ describe('weekly-report workflow', () => {
       'research-changes',
       'next-week-events',
     ]);
+    const marketWeek = result.data.report.sections.find((section) => section.key === 'market-week');
+    const table = marketWeek?.blocks.find((block) => block.kind === 'table');
+    // 表格列无 unit 元数据，炸板率在构建期已格式化为百分比字符串
+    expect(table?.kind === 'table' ? table.rows[0]?.brokenRate : undefined).toBe('16.7%');
   });
 });
