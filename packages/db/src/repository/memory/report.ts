@@ -87,4 +87,11 @@ export class InMemoryReportRepository implements ReportRepository {
     assertReportDeliveryTransition(report.deliveryStatus, status);
     this.items.set(id, { ...report, deliveryStatus: status });
   }
+
+  async remove(id: string): Promise<void> {
+    const report = this.items.get(id);
+    if (report === undefined) return;
+    this.items.delete(id);
+    this.idsByLogicalKey.delete(logicalKey(report));
+  }
 }

@@ -2837,6 +2837,23 @@ export const registerRepositoryContractTests = (
         await expect(repos.report.setDeliveryStatus(saved.id, 'pending')).rejects.toThrow();
         expect((await repos.report.findById(saved.id))?.deliveryStatus).toBe('sent');
       });
+
+      it('remove 删除后按 id 与逻辑周期均不可读，重复删除为幂等空操作', async () => {
+        const saved = await repos.report.upsertForPeriod(makeReport('report-remove'));
+
+        await repos.report.remove(saved.id);
+
+        expect(await repos.report.findById(saved.id)).toBeNull();
+        expect(
+          await repos.report.findByPeriod({
+            kind: 'closing',
+            scopeKey: 'all-accounts',
+            periodStart: '2026-07-02',
+            periodEnd: '2026-07-02',
+          }),
+        ).toBeNull();
+        await expect(repos.report.remove(saved.id)).resolves.toBeUndefined();
+      });
     });
 
     describe('StrategyDataCheckpointRepository / StrategyEvaluationRepository', () => {

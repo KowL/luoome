@@ -19,6 +19,7 @@ export * from './tools/close-holding.js';
 export * from './tools/compute-indicators.js';
 export * from './tools/create-account.js';
 export * from './tools/create-strategy-observation-candidates.js';
+export * from './tools/delete-report.js';
 export * from './tools/delete-stock-event.js';
 export * from './tools/fetch-index-quotes.js';
 export * from './tools/fetch-intraday-minutes.js';

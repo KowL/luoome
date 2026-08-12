@@ -170,6 +170,67 @@ describe('报告 API', () => {
     expect(renderedBody.data?.content).toContain('# Web 收盘复盘');
   });
 
+  it('删除端点移除报告，重复删除返回 not_found', async () => {
+    const now = '2026-07-30T10:00:00.000Z';
+    // 逻辑键 closing|all-accounts|period 幂等：需与上个用例的 2026-07-29 错开
+    const report = {
+      id: 'web-report-delete',
+      kind: 'closing',
+      scope: { kind: 'all-accounts' },
+      periodStart: '2026-07-30',
+      periodEnd: '2026-07-30',
+      title: '待删除收盘复盘',
+      generatedAt: now,
+      dataAsOf: '2026-07-30T08:00:00.000Z',
+      status: 'complete',
+      sections: [
+        {
+          key: 'market-pulse',
+          title: '市场脉搏',
+          required: true,
+          status: 'complete',
+          blocks: [{ kind: 'text', text: '市场平稳', tone: 'factual' }],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+      evidence: [],
+      missingDimensions: [],
+      deliveryStatus: 'not-requested',
+      workflowRunId: 'web-workflow-delete',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const saved = await saveReportTool.execute({ report }, appCtx);
+    expect(saved.ok).toBe(true);
+
+    const deleted = await app.fetch(
+      new Request('http://test/api/reports/web-report-delete', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    const deletedBody = (await deleted.json()) as { ok: boolean };
+    expect(deletedBody.ok).toBe(true);
+
+    const detail = await app.fetch(new Request('http://test/api/reports/web-report-delete'));
+    const detailBody = (await detail.json()) as { ok: boolean; error?: { kind: string } };
+    expect(detailBody.ok).toBe(false);
+    expect(detailBody.error?.kind).toBe('not_found');
+
+    const again = await app.fetch(
+      new Request('http://test/api/reports/web-report-delete', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    const againBody = (await again.json()) as { ok: boolean; error?: { kind: string } };
+    expect(againBody.ok).toBe(false);
+    expect(againBody.error?.kind).toBe('not_found');
+  });
+
   it('手动生成端点可执行，并保存可查询的开盘简报', async () => {
     const generated = await app.fetch(
       new Request('http://test/api/reports/run/opening', {

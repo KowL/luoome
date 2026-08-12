@@ -2013,6 +2013,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/reports/:id', (c) => callTool('get_report', { id: c.req.param('id') }));
 
+  app.delete('/api/reports/:id', (c) =>
+    targetMutation(c.req.raw, 'write', 'delete_report', { reportId: c.req.param('id') }),
+  );
+
   // 复盘趋势图：按天聚合命中率（confidence>=70 且 followed 且 pnl>0 占比）。
   // 默认 30 天窗口；advice 不足则返回空序列（前端 fallback 显示 byDecision）。
   app.get('/api/review/trend', async (c) => {

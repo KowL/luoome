@@ -27,6 +27,7 @@ import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
 import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
+import { deleteReportTool } from './tools/delete-report.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
@@ -364,6 +365,7 @@ export const toolRegistry: Registry = createRegistry([
   getReportTool,
   listReportsTool,
   renderReportTool,
+  deleteReportTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
   getStockUniverseStatusTool,

@@ -1060,6 +1060,16 @@ const downloadReport = async (reportId, format) => {
   URL.revokeObjectURL(url);
 };
 
+const deleteReport = async (reportId, setStatus) => {
+  const result = await callApi(`/api/reports/${reportId}`, { method: 'DELETE', body: '{}' });
+  if (!result.ok) {
+    setStatus(`报告删除失败：${result.error.kind}`, true);
+    return;
+  }
+  selectedReportId = null;
+  await renderReports(setStatus);
+};
+
 const loadReportDetail = async (reportId, setStatus) => {
   selectedReportId = reportId;
   const result = await callApi(`/api/reports/${reportId}`);
@@ -1071,10 +1081,20 @@ const loadReportDetail = async (reportId, setStatus) => {
   const detail = $('#report-detail');
   const markdown = el('button', 'btn btn-outline btn-sm', '导出 Markdown');
   const plain = el('button', 'btn btn-outline btn-sm', '导出纯文本');
+  const remove = el('button', 'btn btn-outline btn-sm', '删除');
   markdown.type = 'button';
   plain.type = 'button';
+  remove.type = 'button';
   markdown.addEventListener('click', () => void downloadReport(report.id, 'markdown'));
   plain.addEventListener('click', () => void downloadReport(report.id, 'plain-text'));
+  remove.addEventListener('click', () => {
+    openConfirmModal({
+      title: '删除报告',
+      message: `确定删除「${report.title}」？删除后不可恢复。`,
+      confirmLabel: '删除',
+      onConfirm: () => void deleteReport(report.id, setStatus),
+    });
+  });
 
   const nodes = [
     el('header', 'report-sheet-header', [
@@ -1087,7 +1107,12 @@ const loadReportDetail = async (reportId, setStatus) => {
           `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}`,
         ),
       ]),
-      el('div', 'report-sheet-actions', [reportStatusBadge(report.status), markdown, plain]),
+      el('div', 'report-sheet-actions', [
+        reportStatusBadge(report.status),
+        markdown,
+        plain,
+        remove,
+      ]),
     ]),
     el('div', 'report-asof', [
       el('span', null, `DATA AS OF ${fmtDateTime(report.dataAsOf)}`),
@@ -1194,6 +1219,9 @@ const renderReports = async (setStatus) => {
   const history = $('#report-history');
   if (reports.length === 0) {
     mount(history, el('p', 'placeholder', '暂无报告；报告 workflow 接入后会在这里形成历史。'));
+    // 删除最后一份报告后详情区同步清空，避免展示已删除内容
+    selectedReportId = null;
+    mount($('#report-detail'), el('p', 'placeholder', '暂无报告。'));
   } else {
     mount(
       history,

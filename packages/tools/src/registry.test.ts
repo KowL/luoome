@@ -122,6 +122,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_report',
   'list_reports',
   'render_report',
+  'delete_report',
   // Phase 1：连板天梯
   'limit_up_ladder',
   'limit_up_ladder_compare',
@@ -254,6 +255,7 @@ describe('toolRegistry', () => {
       'create_watchlist',
       'delete_alert_plan',
       'delete_chat_session',
+      'delete_report',
       'delete_stock_event',
       'delete_strategy',
       'finish_strategy_evaluation_session',
