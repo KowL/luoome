@@ -100,6 +100,121 @@ const seedReplayBars = async (
 };
 
 describe('run_strategy', () => {
+  it('scan with quote rules uses one batch quote request before per-stock evaluation', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    let batchCalls = 0;
+    let singleCalls = 0;
+    const originalFetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: async (stockIds) => {
+        batchCalls += 1;
+        const entries = await Promise.all(
+          stockIds.map(async (stockId) => [stockId, await originalFetchQuote(stockId)] as const),
+        );
+        return new Map(entries);
+      },
+      fetchQuote: async (stockId) => {
+        singleCalls += 1;
+        return originalFetchQuote(stockId);
+      },
+    };
+
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH', '300750.SZ'] },
+      { ...base, adapters: { ...base.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results).toHaveLength(2);
+    expect(batchCalls).toBe(1);
+    expect(singleCalls).toBe(0);
+  });
+
+  it('quote-only prefilter reduces scan candidates and keeps the run non-publishable', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    const original = await base.repos.strategy.findVersionById('scan-strategy-v1');
+    if (original === null) throw new Error('fixture version missing');
+    const originalRule = original.definition.selection.rules[0];
+    if (originalRule === undefined) throw new Error('fixture selection rule missing');
+    const definition = {
+      ...original.definition,
+      selection: {
+        ...original.definition.selection,
+        rules: [
+          {
+            id: originalRule.id,
+            name: originalRule.name,
+            evidence: originalRule.evidence,
+            when: 'quote.close > 100',
+          },
+        ],
+      },
+    } satisfies StrategyDslV1;
+    const filteredVersion: StrategyVersion = {
+      ...original,
+      id: 'scan-strategy-v2',
+      version: 2,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+    };
+    await base.repos.strategy.createVersion(filteredVersion);
+    let batchCalls = 0;
+    let singleCalls = 0;
+    const originalFetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: async (stockIds) => {
+        batchCalls += 1;
+        const entries = await Promise.all(
+          stockIds.map(async (stockId) => {
+            const quote = await originalFetchQuote(stockId);
+            return [
+              stockId,
+              { ...quote, close: money(stockId === '600519.SH' ? 101 : 99) },
+            ] as const;
+          }),
+        );
+        return new Map(entries);
+      },
+      fetchQuote: async (stockId) => {
+        singleCalls += 1;
+        return originalFetchQuote(stockId);
+      },
+    };
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        versionId: filteredVersion.id,
+        prefilter: { mode: 'quote-selection-safe' },
+      },
+      { ...base, adapters: { ...base.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results).toHaveLength(1);
+    expect(result.data.results[0]?.stockId).toBe('600519.SH');
+    expect(result.data.run.scope).toBe('evaluation');
+    expect(result.data.run.publication?.status).toBe('non-publishing');
+    expect(result.data.run.inputSnapshot).toMatchObject({
+      prefilter: {
+        mode: 'quote-selection-safe',
+        originalStockCount: 2,
+        rejectedCount: 1,
+        unavailableCount: 0,
+      },
+      stockIds: ['600519.SH'],
+    });
+    expect(batchCalls).toBe(1);
+    expect(singleCalls).toBe(0);
+  });
+
   it('uses active StockUniverse, ranks deterministically and atomically persists', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 2 });

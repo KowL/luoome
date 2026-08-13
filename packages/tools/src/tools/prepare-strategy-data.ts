@@ -32,6 +32,10 @@ export const PrepareStrategyDataInput = z.object({
   lookbackDays: z.number().int().min(60).max(1000).default(370),
   /** 交易日口径的新鲜度门禁；超过该滞后即进入 missing/partial，不得 provider ok。 */
   maxStalenessTradingDays: z.number().int().min(0).max(30).default(1),
+  /** provider 受限并发；始终有上限，避免无界请求。 */
+  concurrency: z.number().int().min(1).max(64).default(CONCURRENCY),
+  /** scheduled 可复用新鲜本地投影；replay/手动刷新默认仍走 provider。 */
+  cachePolicy: z.enum(['refresh', 'reuse-fresh']).default('refresh'),
   /** replay 只写 append-only revision，不能用历史 bars 覆盖当前 daily_bars 投影。 */
   persistCurrentProjection: z.boolean().default(true),
 });
@@ -191,15 +195,31 @@ export const prepareStrategyDataTool = defineTool({
     });
     const prepared = await mapWithConcurrency(
       stockIds,
-      CONCURRENCY,
+      input.concurrency,
       async (stockId): Promise<CheckpointMemberInput> => {
         try {
-          const bars = (
-            await fetchDailyBarsWithRetry(ctx, stockId, {
-              start: new Date(asOf.getTime() - input.lookbackDays * DAY_MS),
-              end: asOf,
-            })
-          ).filter((bar): bar is DailyBar => bar.stockId === stockId);
+          const range = {
+            start: new Date(asOf.getTime() - input.lookbackDays * DAY_MS),
+            end: asOf,
+          };
+          const cachedBars =
+            input.cachePolicy === 'reuse-fresh' && input.persistCurrentProjection
+              ? await ctx.repos.dailyBar.findInRange(stockId, range.start, range.end)
+              : [];
+          const cachedLatestBarDate = cachedBars.reduce<Date | undefined>(
+            (latest, bar) => (latest === undefined || bar.date > latest ? bar.date : latest),
+            undefined,
+          );
+          const reuseCache =
+            cachedBars.length > 0 &&
+            (tradingDayLag(cachedLatestBarDate, asOf) ?? Number.POSITIVE_INFINITY) <=
+              input.maxStalenessTradingDays;
+          const bars = reuseCache
+            ? cachedBars
+            : (await fetchDailyBarsWithRetry(ctx, stockId, range)).filter(
+                (bar): bar is DailyBar => bar.stockId === stockId,
+              );
+          const dataProvider = reuseCache ? 'local:daily-bars' : ctx.adapters.market.name;
           const latestBarDate = bars.reduce<Date | undefined>(
             (latest, bar) => (latest === undefined || bar.date > latest ? bar.date : latest),
             undefined,
@@ -233,21 +253,23 @@ export const prepareStrategyDataTool = defineTool({
                   return revision !== undefined && revisionMatchesBar(bar, revision);
                 });
           if (bars.length > 0) {
-            if (input.persistCurrentProjection) await ctx.repos.dailyBar.saveMany(bars);
-            await ctx.repos.dailyBar.saveRevisions(
-              bars.map((bar) => ({
-                stockId: bar.stockId,
-                date: bar.date,
-                contentHash: dailyBarContentHash(bar),
-                open: bar.open,
-                high: bar.high,
-                low: bar.low,
-                close: bar.close,
-                volume: bar.volume,
-                source: bar.source,
-                recordedAt: startedAt,
-              })),
-            );
+            if (!reuseCache) {
+              if (input.persistCurrentProjection) await ctx.repos.dailyBar.saveMany(bars);
+              await ctx.repos.dailyBar.saveRevisions(
+                bars.map((bar) => ({
+                  stockId: bar.stockId,
+                  date: bar.date,
+                  contentHash: dailyBarContentHash(bar),
+                  open: bar.open,
+                  high: bar.high,
+                  low: bar.low,
+                  close: bar.close,
+                  volume: bar.volume,
+                  source: bar.source,
+                  recordedAt: startedAt,
+                })),
+              );
+            }
           }
           return {
             stockId,
@@ -269,7 +291,7 @@ export const prepareStrategyDataTool = defineTool({
               )
               .digest('hex'),
             ...(latestBarDate === undefined ? {} : { latestBarDate }),
-            provider: ctx.adapters.market.name,
+            provider: dataProvider,
             ...(stale ? { errorKind: 'stale_data' } : {}),
             ...(vintageAvailable === undefined ? {} : { vintageAvailable }),
           } satisfies CheckpointMemberInput;
@@ -291,7 +313,15 @@ export const prepareStrategyDataTool = defineTool({
     const status =
       availableCount === 0 ? 'failed' : failedCount + missingCount > 0 ? 'partial' : 'complete';
     const finishedAt = ctx.clock();
-    const provider = ctx.adapters.market.name;
+    const providers = [
+      ...new Set(prepared.map((member) => member.provider).filter((value) => value !== undefined)),
+    ].sort();
+    const provider =
+      providers.length === 0
+        ? ctx.adapters.market.name
+        : providers.length === 1
+          ? (providers[0] as string)
+          : `mixed:${providers.join('+')}`;
     const vintageStatus = input.persistCurrentProjection
       ? 'not-applicable'
       : prepared.every((member) => member.vintageAvailable === true)

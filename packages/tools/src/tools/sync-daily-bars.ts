@@ -54,6 +54,7 @@ export const SyncDailyBarsInput = z
     stockIds: z.array(z.string().trim().min(1)).max(1000).optional(),
     scope: z.enum(['relevant', 'explicit']).default('relevant'),
     correctionWindowDays: z.number().int().min(5).max(60).default(15),
+    concurrency: z.number().int().min(1).max(64).default(SYNC_CONCURRENCY),
   })
   .superRefine((input, issue) => {
     if (
@@ -141,7 +142,7 @@ export const syncDailyBarsTool = defineTool({
     }
 
     const now = ctx.clock();
-    const items = await mapWithConcurrency(stockIds, SYNC_CONCURRENCY, async (stockId) => {
+    const items = await mapWithConcurrency(stockIds, input.concurrency, async (stockId) => {
       try {
         const latest = (await ctx.repos.dailyBar.latestBefore(stockId, now, 1)).at(-1);
         const lookbackDays =
