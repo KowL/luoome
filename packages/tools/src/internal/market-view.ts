@@ -33,6 +33,10 @@ export const MARKET_VIEW_RANGE_DAYS: Readonly<Record<MarketViewRange, number>> =
 
 /** 输出日 K 上限（§7.1：避免输出无上限）。 */
 export const MAX_CANDLES = 260;
+/** 月 K 聚合需要的日线窗口：~5 年（1y 窗口只够 12 根月 K）。 */
+export const MONTH_GRANULARITY_LOOKBACK_DAYS = 5 * 370;
+/** 月 K 窗口内的日线上限（5 年约 1220 个交易日，留余量）。 */
+export const MONTH_GRANULARITY_MAX_BARS = 1300;
 /** 低于该根数视为历史不足（§8.3：追加 bars-insufficient）。 */
 export const MIN_SUFFICIENT_BARS = 20;
 
@@ -44,6 +48,7 @@ export type MarketViewWarning =
   | 'provider-fallback'
   | 'previous-close-unavailable'
   | 'bars-insufficient'
+  | 'bars-truncated'
   | 'market-closed';
 
 export interface MarketCandle {
@@ -85,13 +90,15 @@ export interface NormalizedBars {
 
 /**
  * bars 规范化（§8.3）：裁剪 [start, end] → OHLC 关系校验（非法丢弃）→
- * 同日去重留最后 → date 升序 → 最多保留最后 260 根。
+ * 同日去重留最后 → date 升序 → 最多保留最后 maxBars 根（默认 MAX_CANDLES=260；
+ * 月 K 聚合需要 ~5 年日线，调用方显式放大）。
  * DailyBarSchema 已保证价格为正；OHLC 关系是对外部数据的防御性校验。
  */
 export const normalizeDailyBars = (
   rawBars: readonly DailyBar[],
   start: Date,
   end: Date,
+  maxBars: number = MAX_CANDLES,
 ): NormalizedBars => {
   const startMs = start.getTime();
   const endMs = end.getTime();
@@ -109,7 +116,7 @@ export const normalizeDailyBars = (
     byDate.set(ms, bar); // 同日重复：后出现的覆盖先出现的（留最后）
   }
   const bars = [...byDate.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
-  return { bars: bars.slice(-MAX_CANDLES), droppedInvalid };
+  return { bars: bars.slice(-maxBars), droppedInvalid };
 };
 
 /**
@@ -135,6 +142,12 @@ export const deriveQuoteChange = (
   const change = money(quote.close - previousClose);
   const changePct = money(change / previousClose);
   return { change, changePct };
+};
+
+/** 振幅 (high−low)/prevClose（§8.4 同口径，小数）；prevClose 缺失或为 0 时 null。 */
+export const deriveAmplitude = (quote: Quote, previousClose: Money | null): number | null => {
+  if (previousClose === null || previousClose <= 0) return null;
+  return money((quote.high - quote.low) / previousClose);
 };
 
 /**
@@ -182,6 +195,50 @@ export const buildMarketCandles = (
     });
   }
   return candles;
+};
+
+export type MarketViewGranularity = 'day' | 'week' | 'month';
+
+/** 上海历 ISO 周（周一起）的分桶键；date 是 YYYY-MM-DD 上海自然日（与 report.ts weekStart 同口径）。 */
+const weekBucketKey = (date: string): string => {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  const daysSinceMonday = (value.getUTCDay() + 6) % 7;
+  value.setUTCDate(value.getUTCDate() - daysSinceMonday);
+  return value.toISOString().slice(0, 10);
+};
+
+/**
+ * 日 K → 周 / 月 K 纯聚合：open=首根、close=末根、high/low=max/min、volume=sum，
+ * source/completeness 取末根；date 用区间内最后交易日（保证图表 time 有序）。
+ * 周按上海历 ISO 周（周一起）、月按自然月分组；输入须按 date 升序（buildMarketCandles 的输出）。
+ * 聚合只影响输出 candles；indicators 恒用日级 candles 计算（CONTEXT.md 指标口径）。
+ */
+export const aggregateCandles = (
+  candles: readonly MarketCandle[],
+  granularity: MarketViewGranularity,
+): MarketCandle[] => {
+  if (granularity === 'day') return [...candles];
+  const groups = new Map<string, MarketCandle[]>();
+  for (const candle of candles) {
+    const key = granularity === 'week' ? weekBucketKey(candle.date) : candle.date.slice(0, 7);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [candle]);
+    else group.push(candle);
+  }
+  return [...groups.values()].map((group) => {
+    const first = group[0] as MarketCandle;
+    const last = group[group.length - 1] as MarketCandle;
+    return {
+      date: last.date,
+      open: first.open,
+      high: Math.max(...group.map((c) => c.high)) as Money,
+      low: Math.min(...group.map((c) => c.low)) as Money,
+      close: last.close,
+      volume: group.reduce((sum, c) => sum + c.volume, 0),
+      source: last.source,
+      completeness: last.completeness,
+    };
+  });
 };
 
 /** candles → computeSimpleIndicators 的计算形状（§8.6：指标与输出 candles 同源）。 */

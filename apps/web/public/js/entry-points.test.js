@@ -171,3 +171,38 @@ describe('看盘主页结构', () => {
     }
   });
 });
+
+describe('行情页指数条', () => {
+  it('行情页有 #market-indices 容器，走 /api/market/indices 与共用 index-strip', () => {
+    expect(html).toContain('id="market-indices"');
+    expect(read('./market.js')).toContain('/api/market/indices');
+    expect(read('./index-strip.js')).toContain('renderIndexStrip');
+    expect(read('./pages.js')).toContain("renderIndexStrip('dashboard-indices'");
+  });
+});
+
+describe('行情页空态 A 股情绪面板', () => {
+  it('空态容器存在，数据源为 get_ashare_sentiment（includeIndexes: false）', () => {
+    expect(html).toContain('id="market-sentiment"');
+    const sentiment = read('./market-sentiment.js');
+    expect(sentiment).toContain('get_ashare_sentiment');
+    expect(sentiment).toContain('includeIndexes: false');
+    expect(read('./market.js')).toContain('renderMarketSentiment');
+  });
+});
+
+describe('设置页数据同步入口', () => {
+  it('状态表 / 两个同步按钮 / app.js init 接线齐全', () => {
+    expect(html).toContain('id="market-sync-status"');
+    expect(html).toContain('id="btn-sync-universe"');
+    expect(html).toContain('id="btn-sync-daily-bars"');
+    expect(html).toContain('id="market-sync-message"');
+    expect(appJs).toContain('initMarketSync');
+    expect(appJs).toContain('renderMarketSyncStatus');
+    const sync = read('./market-sync.js');
+    expect(sync).toContain('/api/market-data-status');
+    expect(sync).toContain('sync_stock_universe');
+    expect(sync).toContain('sync_daily_bars');
+    expect(sync).toContain('timeoutMs: 300_000');
+  });
+});

@@ -182,6 +182,48 @@ describe('Strategy reliability primitives', () => {
       }),
     ).toMatchObject({ status: 'non-publishing', reasons: ['explicit-subset'] });
 
+    const rejectedAcceptance = assessStrategyRun({
+      status: 'complete',
+      universeCount: 5548,
+      evaluatedCount: 5225,
+      failedCount: 323,
+      incompleteCount: 5,
+      assessedAt: NOW,
+    });
+    expect(rejectedAcceptance.decision).toBe('rejected');
+    expect(
+      decideStrategyRunPublication({
+        scope: 'operational',
+        universeKind: 'full',
+        status: 'complete',
+        universeCheckpointPresent: true,
+        acceptance: rejectedAcceptance,
+        decidedAt: NOW,
+      }),
+    ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });
+    expect(
+      decideStrategyRunPublication({
+        scope: 'operational',
+        universeKind: 'full',
+        status: 'complete',
+        universeCheckpointPresent: true,
+        acceptance: rejectedAcceptance,
+        requestedBy: 'manual',
+        decidedAt: NOW,
+      }),
+    ).toMatchObject({ status: 'published', reasons: [] });
+    expect(
+      decideStrategyRunPublication({
+        scope: 'operational',
+        universeKind: 'full',
+        status: 'complete',
+        universeCheckpointPresent: true,
+        acceptance: rejectedAcceptance,
+        requestedBy: 'scheduled',
+        decidedAt: NOW,
+      }),
+    ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });
+
     const legacy = normalizeLegacyStrategyRun({
       id: 'run-legacy',
       strategyId: 'strategy-1',

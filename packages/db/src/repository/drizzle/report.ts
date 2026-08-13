@@ -153,4 +153,8 @@ export class DrizzleReportRepository implements ReportRepository {
     assertReportDeliveryTransition(current.deliveryStatus, status);
     this.db.update(reports).set({ deliveryStatus: status }).where(eq(reports.id, id)).run();
   }
+
+  async remove(id: string): Promise<void> {
+    this.db.delete(reports).where(eq(reports.id, id)).run();
+  }
 }

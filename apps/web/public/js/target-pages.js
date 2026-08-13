@@ -5,7 +5,20 @@ import {
   invalidateStrategyWorkspaceCache,
   renderStrategyWorkspacePage,
 } from './strategy-workspace.js';
-import { $, el, fmtDateTime, fmtNum, fmtSigned, mount, statBlock } from './ui.js';
+import {
+  $,
+  compareValues,
+  createPagination,
+  el,
+  fmtDateTime,
+  fmtNum,
+  fmtSigned,
+  mount,
+  sortableHeader,
+  statBlock,
+} from './ui.js';
+
+const defaultOrderForKey = (key) => (key === 'price' ? 'asc' : 'desc');
 
 const errorText = (result) => {
   const error = result?.error;
@@ -276,44 +289,76 @@ const quoteCell = (stock) => {
  * 全部股票视图的行情表：名称（链接行情页）/ 现价 / 涨跌幅 / 所属列表，
  * 列口径与首页实时看板一致。
  */
+const stockTableRow = (stock) => {
+  const holding = stock.memberships.some((membership) => membership.holding);
+  return el('tr', null, [
+    el(
+      'td',
+      null,
+      el('div', 'board-name-cell', [
+        stockIdentityLink({ stockId: stock.stockId, stockName: stock.name }),
+        ...(holding ? [el('span', 'badge badge-holding', '持仓')] : []),
+      ]),
+    ),
+    ...quoteCell(stock),
+    el(
+      'td',
+      null,
+      stock.memberships.map((membership) =>
+        el('span', 'badge board-group-tag', membership.watchlistName),
+      ),
+    ),
+  ]);
+};
+
+const buildStockTable = (pageItems, sortState, onSort) =>
+  el('table', 'table board-table', [
+    el(
+      'thead',
+      null,
+      el('tr', null, [
+        el('th', null, '名称'),
+        sortableHeader('现价', 'price', sortState, onSort, 'num'),
+        sortableHeader('涨跌幅', 'changePct', sortState, onSort, 'num'),
+        el('th', null, '关注列表'),
+      ]),
+    ),
+    el('tbody', null, pageItems.map(stockTableRow)),
+  ]);
+
 const renderStockTable = (stocks, emptyText) => {
   if (stocks.length === 0) return [el('p', 'placeholder', emptyText)];
-  const rows = sortStocksByQuote(stocks).map((stock) => {
-    const holding = stock.memberships.some((membership) => membership.holding);
-    return el('tr', null, [
-      el(
-        'td',
-        null,
-        el('div', 'board-name-cell', [
-          stockIdentityLink({ stockId: stock.stockId, stockName: stock.name }),
-          ...(holding ? [el('span', 'badge badge-holding', '持仓')] : []),
-        ]),
-      ),
-      ...quoteCell(stock),
-      el(
-        'td',
-        null,
-        stock.memberships.map((membership) =>
-          el('span', 'badge board-group-tag', membership.watchlistName),
-        ),
-      ),
-    ]);
-  });
-  return [
-    el('table', 'table board-table', [
-      el(
-        'thead',
-        null,
-        el('tr', null, [
-          el('th', null, '名称'),
-          el('th', 'num', '现价'),
-          el('th', 'num', '涨跌幅'),
-          el('th', null, '关注列表'),
-        ]),
-      ),
-      el('tbody', null, rows),
-    ]),
-  ];
+  let sortState = { key: null, order: 'desc' };
+  const getSortValue = (stock, key) =>
+    key === 'price' ? (stock.quote?.close ?? null) : (stock.changePct ?? null);
+  const sortedStocks = () => {
+    if (sortState.key === null) return sortStocksByQuote(stocks);
+    const direction = sortState.order === 'asc' ? 1 : -1;
+    return [...stocks].sort(
+      (a, b) =>
+        direction * compareValues(getSortValue(a, sortState.key), getSortValue(b, sortState.key)),
+    );
+  };
+  const onSort = (key) => {
+    sortState =
+      sortState.key === key
+        ? { key, order: sortState.order === 'asc' ? 'desc' : 'asc' }
+        : { key, order: defaultOrderForKey(key) };
+    renderPage();
+  };
+  const listContainer = el('div', 'paginated-list');
+  function renderPage() {
+    const sorted = sortedStocks();
+    const { page, pageSize } = pagination.getState();
+    pagination.setState({ total: sorted.length });
+    mount(
+      listContainer,
+      buildStockTable(sorted.slice((page - 1) * pageSize, page * pageSize), sortState, onSort),
+    );
+  }
+  const pagination = createPagination({ total: stocks.length, onChange: renderPage });
+  renderPage();
+  return [listContainer, pagination.root];
 };
 
 const renderStocksView = (views) => renderStockTable(views.stocks, '暂无成员股票。');
@@ -598,7 +643,26 @@ const renderListPane = async (watchlistId, views, setStatus) => {
     ),
   );
 
-  const rows = sortStocksByQuote(stocks).map((stock) => {
+  let sortState = { key: null, order: 'desc' };
+  const getSortValue = (stock, key) =>
+    key === 'price' ? (stock.quote?.close ?? null) : (stock.changePct ?? null);
+  const sortedStocks = () => {
+    if (sortState.key === null) return sortStocksByQuote(stocks);
+    const direction = sortState.order === 'asc' ? 1 : -1;
+    return [...stocks].sort(
+      (a, b) =>
+        direction * compareValues(getSortValue(a, sortState.key), getSortValue(b, sortState.key)),
+    );
+  };
+  const onSort = (key) => {
+    sortState =
+      sortState.key === key
+        ? { key, order: sortState.order === 'asc' ? 'desc' : 'asc' }
+        : { key, order: defaultOrderForKey(key) };
+    renderPage();
+  };
+
+  const listMemberRow = (stock) => {
     const membership = stock.memberships.find((m) => m.watchlistId === watchlistId);
     const priority = memberSelect(
       ['normal', 'important', 'urgent'],
@@ -644,7 +708,33 @@ const renderListPane = async (watchlistId, views, setStatus) => {
       ),
       el('td', null, archive),
     ]);
-  });
+  };
+
+  const buildListTable = (pageItems) =>
+    el('table', 'table board-table', [
+      el(
+        'thead',
+        null,
+        el('tr', null, [
+          el('th', null, '名称'),
+          sortableHeader('现价', 'price', sortState, onSort, 'num'),
+          sortableHeader('涨跌幅', 'changePct', sortState, onSort, 'num'),
+          el('th', null, '优先级'),
+          el('th', null, '来源'),
+          el('th', null, '操作'),
+        ]),
+      ),
+      el('tbody', null, pageItems.map(listMemberRow)),
+    ]);
+
+  const listContainer = el('div', 'paginated-list');
+  function renderPage() {
+    const sorted = sortedStocks();
+    const { page, pageSize } = pagination.getState();
+    pagination.setState({ total: sorted.length });
+    mount(listContainer, buildListTable(sorted.slice((page - 1) * pageSize, page * pageSize)));
+  }
+  const pagination = createPagination({ total: stocks.length, onChange: renderPage });
 
   const plansLine =
     alertPlans.length === 0
@@ -658,7 +748,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
           })(),
         ]);
 
-  mount(view, [
+  const children = [
     el('div', 'watchlist-pane-head', [
       el('div', 'flex gap-2', [
         el('h2', null, watchlist.name),
@@ -672,26 +762,14 @@ const renderListPane = async (watchlistId, views, setStatus) => {
       `${WATCHLIST_KIND_TEXT[watchlist.kind] ?? watchlist.kind} · ${MEMBERSHIP_POLICY_TEXT[watchlist.membershipPolicy] ?? watchlist.membershipPolicy}${watchlist.description ? ` · ${watchlist.description}` : ''} · 来源健康：活跃 ${health.active} · 过期 ${health.stale}${health.latestDataAsOf === null ? '' : ` · 最近数据 ${fmtDateTime(health.latestDataAsOf)}`}`,
     ),
     ...(plansLine === null ? [] : [plansLine]),
-    ...(rows.length === 0
-      ? [el('p', 'placeholder', '暂无成员。')]
-      : [
-          el('table', 'table board-table', [
-            el(
-              'thead',
-              null,
-              el('tr', null, [
-                el('th', null, '名称'),
-                el('th', 'num', '现价'),
-                el('th', 'num', '涨跌幅'),
-                el('th', null, '优先级'),
-                el('th', null, '来源'),
-                el('th', null, '操作'),
-              ]),
-            ),
-            el('tbody', null, rows),
-          ]),
-        ]),
-  ]);
+  ];
+  if (sorted.length === 0) {
+    children.push(el('p', 'placeholder', '暂无成员。'));
+  } else {
+    renderPage();
+    children.push(listContainer, pagination.root);
+  }
+  mount(view, children);
 };
 
 const renderTodayView = (views) =>
@@ -946,6 +1024,71 @@ const editAlertPlan = async (plan, setStatus) => {
   return result.ok;
 };
 
+const planCard = (plan, setStatus) => {
+  const edit = actionButton('编辑', async () => {
+    if (await editAlertPlan(plan, setStatus)) await renderAlerts(setStatus);
+  });
+  const remove = actionButton('删除', async () => {
+    const confirmed = await confirmDialog({
+      title: '删除预警',
+      message: `确认删除「${plan.name}」？历史触发记录会保留。`,
+      confirmLabel: '删除',
+      danger: true,
+    });
+    if (!confirmed) return;
+    const result = await post(`/api/alert-plans/${encodeURIComponent(plan.id)}`, {}, 'DELETE');
+    setStatus(result.ok ? '预警已删除' : errorText(result), !result.ok);
+    if (result.ok) await renderAlerts(setStatus);
+  });
+  return el('div', 'entity-item', [
+    el('strong', null, plan.name),
+    el(
+      'span',
+      'muted',
+      `${plan.watchlistId} · ${plan.rules.length} 条规则 · ${plan.logic} · ${plan.triggerMode} · 冷却 ${plan.cooldownMinutes} 分钟 · 日上限 ${plan.dailyNotificationLimit}`,
+    ),
+    el(
+      'span',
+      `badge ${plan.enabled ? 'badge-active' : 'badge-neutral'}`,
+      plan.enabled ? '启用' : '停用',
+    ),
+    el('div', 'flex gap-2', [edit, remove]),
+  ]);
+};
+
+const triggerCard = (trigger) =>
+  el('div', 'entity-item', [
+    el('strong', null, `${trigger.stockId} · ${trigger.ruleKind}`),
+    el('div', 'muted', triggerMetaText(trigger)),
+    el('div', null, (trigger.evidence ?? []).join('；')),
+  ]);
+
+const mountPaginated = (root, items, renderItem, emptyNode) => {
+  if (root === null) return;
+  let paginationWrap = root.nextElementSibling;
+  if (
+    paginationWrap === null ||
+    !(paginationWrap instanceof Element) ||
+    !paginationWrap.classList.contains('pagination-wrap')
+  ) {
+    paginationWrap = document.createElement('div');
+    paginationWrap.className = 'pagination-wrap';
+    root.after(paginationWrap);
+  }
+  if (items.length === 0) {
+    mount(root, emptyNode);
+    paginationWrap.replaceChildren();
+    return;
+  }
+  function renderPage() {
+    const { page, pageSize } = pagination.getState();
+    mount(root, items.slice((page - 1) * pageSize, page * pageSize).map(renderItem));
+  }
+  const pagination = createPagination({ total: items.length, onChange: renderPage });
+  renderPage();
+  mount(paginationWrap, pagination.root);
+};
+
 export const renderAlerts = async (setStatus) => {
   const [plansResult, triggersResult] = await Promise.all([
     callApi('/api/alert-plans'),
@@ -957,61 +1100,24 @@ export const renderAlerts = async (setStatus) => {
     const plans = plansResult.ok ? (plansResult.data.plans ?? []) : [];
     const meta = $('#alerts-meta');
     if (meta !== null) meta.textContent = `${plans.length} 个`;
-    mount(
-      plansRoot,
-      plansResult.ok
-        ? plans.map((plan) => {
-            const edit = actionButton('编辑', async () => {
-              if (await editAlertPlan(plan, setStatus)) await renderAlerts(setStatus);
-            });
-            const remove = actionButton('删除', async () => {
-              const confirmed = await confirmDialog({
-                title: '删除预警',
-                message: `确认删除「${plan.name}」？历史触发记录会保留。`,
-                confirmLabel: '删除',
-                danger: true,
-              });
-              if (!confirmed) return;
-              const result = await post(
-                `/api/alert-plans/${encodeURIComponent(plan.id)}`,
-                {},
-                'DELETE',
-              );
-              setStatus(result.ok ? '预警已删除' : errorText(result), !result.ok);
-              if (result.ok) await renderAlerts(setStatus);
-            });
-            return el('div', 'entity-item', [
-              el('strong', null, plan.name),
-              el(
-                'span',
-                'muted',
-                `${plan.watchlistId} · ${plan.rules.length} 条规则 · ${plan.logic} · ${plan.triggerMode} · 冷却 ${plan.cooldownMinutes} 分钟 · 日上限 ${plan.dailyNotificationLimit}`,
-              ),
-              el(
-                'span',
-                `badge ${plan.enabled ? 'badge-active' : 'badge-neutral'}`,
-                plan.enabled ? '启用' : '停用',
-              ),
-              el('div', 'flex gap-2', [edit, remove]),
-            ]);
-          })
-        : el('p', 'status error', errorText(plansResult)),
-    );
+    if (plansResult.ok) {
+      mountPaginated(
+        plansRoot,
+        plans,
+        (plan) => planCard(plan, setStatus),
+        el('p', 'placeholder', '暂无预警计划。'),
+      );
+    } else {
+      mount(plansRoot, el('p', 'status error', errorText(plansResult)));
+    }
   }
   if (triggersRoot !== null) {
     const triggers = triggersResult.ok ? (triggersResult.data.triggers ?? []) : [];
-    mount(
-      triggersRoot,
-      triggersResult.ok
-        ? triggers.map((trigger) =>
-            el('div', 'entity-item', [
-              el('strong', null, `${trigger.stockId} · ${trigger.ruleKind}`),
-              el('div', 'muted', triggerMetaText(trigger)),
-              el('div', null, (trigger.evidence ?? []).join('；')),
-            ]),
-          )
-        : el('p', 'status error', errorText(triggersResult)),
-    );
+    if (triggersResult.ok) {
+      mountPaginated(triggersRoot, triggers, triggerCard, el('p', 'placeholder', '暂无触发记录。'));
+    } else {
+      mount(triggersRoot, el('p', 'status error', errorText(triggersResult)));
+    }
   }
   void setStatus;
 };

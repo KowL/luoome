@@ -5,7 +5,7 @@ import type {
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
 import type { NotificationPayload } from './entity/notification.js';
-import type { DailyBar, DateRange, IndexQuote, Quote } from './entity/quote.js';
+import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
@@ -30,6 +30,8 @@ export interface MarketDataAdapterLike {
   searchStocks(query: string): Promise<StockSearchCandidate[]>;
   /** 大盘指数实时行情；不支持时以 unsupported_capability 拒绝。 */
   fetchIndexQuotes(): Promise<readonly IndexQuote[]>;
+  /** 当日分时分钟序列（瞬态视图，不落库）；不支持时以 unsupported_capability 拒绝。 */
+  fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]>;
   /** 全市场快照；不支持时以 unsupported_capability 拒绝。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
   /** 启用数据源与能力的动态库存及进程内健康观测。 */
@@ -44,6 +46,7 @@ export interface MarketSourceStatus {
     | 'market-snapshot'
     | 'realtime-index'
     | 'delayed-index'
+    | 'intraday-minutes'
     | 'stock-universe'
     | 'limit-up-ladder';
   readonly source: string;

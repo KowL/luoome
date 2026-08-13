@@ -10,10 +10,11 @@ import { join } from 'node:path';
 
 import { NotificationManager } from '@luoome/adapters';
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
-import type { AgentCallableTool, ToolContext } from '@luoome/core';
+import type { AgentCallableTool, Money, ToolContext } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
+import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import type { Hono } from 'hono';
 
 import { AISettingsStore } from './ai-settings.js';
@@ -167,6 +168,67 @@ describe('报告 API', () => {
       data?: { content: string };
     };
     expect(renderedBody.data?.content).toContain('# Web 收盘复盘');
+  });
+
+  it('删除端点移除报告，重复删除返回 not_found', async () => {
+    const now = '2026-07-30T10:00:00.000Z';
+    // 逻辑键 closing|all-accounts|period 幂等：需与上个用例的 2026-07-29 错开
+    const report = {
+      id: 'web-report-delete',
+      kind: 'closing',
+      scope: { kind: 'all-accounts' },
+      periodStart: '2026-07-30',
+      periodEnd: '2026-07-30',
+      title: '待删除收盘复盘',
+      generatedAt: now,
+      dataAsOf: '2026-07-30T08:00:00.000Z',
+      status: 'complete',
+      sections: [
+        {
+          key: 'market-pulse',
+          title: '市场脉搏',
+          required: true,
+          status: 'complete',
+          blocks: [{ kind: 'text', text: '市场平稳', tone: 'factual' }],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+      evidence: [],
+      missingDimensions: [],
+      deliveryStatus: 'not-requested',
+      workflowRunId: 'web-workflow-delete',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const saved = await saveReportTool.execute({ report }, appCtx);
+    expect(saved.ok).toBe(true);
+
+    const deleted = await app.fetch(
+      new Request('http://test/api/reports/web-report-delete', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    const deletedBody = (await deleted.json()) as { ok: boolean };
+    expect(deletedBody.ok).toBe(true);
+
+    const detail = await app.fetch(new Request('http://test/api/reports/web-report-delete'));
+    const detailBody = (await detail.json()) as { ok: boolean; error?: { kind: string } };
+    expect(detailBody.ok).toBe(false);
+    expect(detailBody.error?.kind).toBe('not_found');
+
+    const again = await app.fetch(
+      new Request('http://test/api/reports/web-report-delete', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    const againBody = (await again.json()) as { ok: boolean; error?: { kind: string } };
+    expect(againBody.ok).toBe(false);
+    expect(againBody.error?.kind).toBe('not_found');
   });
 
   it('手动生成端点可执行，并保存可查询的开盘简报', async () => {
@@ -1361,6 +1423,14 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect((await json(r)).ok).toBe(true);
   });
 
+  it('fetch_intraday_minutes（白名单）→ 200（不支持时 supported:false 合法降级）', async () => {
+    const r = await callTool('fetch_intraday_minutes', { stockId: '002594.SZ' });
+    expect(r.status).toBe(200);
+    const body = (await json(r)) as { ok: boolean; data?: { supported: boolean } };
+    expect(body.ok).toBe(true);
+    expect(body.data?.supported).toBe(false);
+  });
+
   it('batch_quote（白名单）→ 200', async () => {
     const r = await callTool('batch_quote', { stockIds: ['002594.SZ'] });
     expect(r.status).toBe(200);
@@ -1534,6 +1604,59 @@ describe('MVP dashboard / watch API', () => {
     expect(typeof held?.name).toBe('string');
     expect(held?.quote?.close).toBeGreaterThan(0);
     expect(held?.watchlists).toBeInstanceOf(Array);
+  });
+
+  it('/api/market/indices：数据源不支持时按 dashboard 语义降级（200 + unsupported）', async () => {
+    const r = await app.fetch(new Request('http://test/api/market/indices'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { indices: unknown[]; unsupported?: boolean };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.indices).toEqual([]);
+    expect(body.data?.unsupported).toBe(true);
+  });
+
+  it('/api/market/indices：15s TTL 内第二次命中缓存（上游 fetchIndexQuotes 只调一次）', async () => {
+    class CountingIndexAdapter extends FixedQuoteAdapter {
+      calls = 0;
+      constructor() {
+        super({ quotes: {} });
+      }
+      override fetchIndexQuotes(): Promise<never> {
+        this.calls += 1;
+        // 基类桩声明为 Promise<never>（恒 reject）；这里按真实 IndexQuote 形状返回并断言
+        return Promise.resolve([
+          {
+            code: '000001.SH',
+            name: '上证指数',
+            close: 3900.12 as Money,
+            change: 10.2,
+            changePct: 0.26,
+            ts: new Date('2026-07-21T07:00:00.000Z'),
+            source: 'counting-test',
+          },
+        ]) as unknown as Promise<never>;
+      }
+    }
+    const countingAdapter = new CountingIndexAdapter();
+    const localCtx: ToolContext = {
+      ...appCtx,
+      adapters: { ...appCtx.adapters, market: countingAdapter },
+    };
+    const localApp = createWebApp(localCtx, { exposeWrite: true, exposeExternal: true });
+    const r1 = await localApp.fetch(new Request('http://test/api/market/indices'));
+    const r2 = await localApp.fetch(new Request('http://test/api/market/indices'));
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    const body = (await r2.json()) as {
+      ok: boolean;
+      data?: { indices: Array<{ code: string }> };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.indices[0]?.code).toBe('000001.SH');
+    expect(countingAdapter.calls).toBe(1);
   });
 
   it('run-once 无需 token；成功后 watch status 可见', async () => {

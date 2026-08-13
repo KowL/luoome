@@ -136,12 +136,19 @@ const marketWeekSection = async (
             { key: 'brokenRate', label: '炸板率' },
             { key: 'maxLadderLevel', label: '最高连板' },
           ],
-          rows: successful.map(({ date, result }) => ({
-            date,
-            sealedCount: result.data.snapshot.limitUp.value?.sealedCount ?? null,
-            brokenRate: result.data.snapshot.limitUp.value?.brokenRate ?? null,
-            maxLadderLevel: result.data.snapshot.limitUp.value?.maxLadderLevel ?? null,
-          })),
+          rows: successful.map(({ date, result }) => {
+            const brokenRate = result.data.snapshot.limitUp.value?.brokenRate;
+            return {
+              date,
+              sealedCount: result.data.snapshot.limitUp.value?.sealedCount ?? null,
+              // 表格列无 unit 元数据，ratio 在构建期格式化为百分比字符串
+              brokenRate:
+                brokenRate === undefined || brokenRate === null
+                  ? null
+                  : `${(brokenRate * 100).toFixed(1)}%`,
+              maxLadderLevel: result.data.snapshot.limitUp.value?.maxLadderLevel ?? null,
+            };
+          }),
         },
       ],
       evidenceIds: evidence.map((item) => item.id),

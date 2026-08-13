@@ -18,6 +18,8 @@ const toQuote = (row: QuoteRow): Quote => ({
   low: row.low,
   close: row.close,
   volume: row.volume,
+  ...(row.amount !== null ? { amount: row.amount } : {}),
+  ...(row.turnoverRatePct !== null ? { turnoverRatePct: row.turnoverRatePct } : {}),
   ...(row.prevClose !== null ? { prevClose: row.prevClose } : {}),
   source: row.source,
 });
@@ -43,6 +45,8 @@ export class DrizzleQuoteRepository implements QuoteRepository {
         low: parsed.low,
         close: parsed.close,
         volume: parsed.volume,
+        amount: parsed.amount ?? null,
+        turnoverRatePct: parsed.turnoverRatePct ?? null,
         prevClose: parsed.prevClose ?? null,
         source: parsed.source,
       })
@@ -56,6 +60,8 @@ export class DrizzleQuoteRepository implements QuoteRepository {
           low: parsed.low,
           close: parsed.close,
           volume: parsed.volume,
+          amount: parsed.amount ?? null,
+          turnoverRatePct: parsed.turnoverRatePct ?? null,
           prevClose: parsed.prevClose ?? null,
         },
       })

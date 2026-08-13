@@ -2,6 +2,7 @@ import type {
   DailyBar,
   DateRange,
   IndexQuote,
+  IntradayMinute,
   MarketCoverage,
   MarketSnapshotItem,
   Quote,
@@ -14,7 +15,8 @@ export type MarketCapability =
   | 'search'
   | 'market-snapshot'
   | 'realtime-index'
-  | 'delayed-index';
+  | 'delayed-index'
+  | 'intraday-minutes';
 
 interface CapabilityRequestMap {
   readonly quote: { readonly stockId: string };
@@ -23,6 +25,7 @@ interface CapabilityRequestMap {
   readonly 'market-snapshot': { readonly coverage: MarketCoverage };
   readonly 'realtime-index': { readonly coverage: MarketCoverage };
   readonly 'delayed-index': { readonly coverage: MarketCoverage; readonly asOf: Date };
+  readonly 'intraday-minutes': { readonly stockId: string };
 }
 
 interface CapabilityResultMap {
@@ -32,6 +35,7 @@ interface CapabilityResultMap {
   readonly 'market-snapshot': readonly MarketSnapshotItem[];
   readonly 'realtime-index': readonly IndexQuote[];
   readonly 'delayed-index': readonly IndexQuote[];
+  readonly 'intraday-minutes': readonly IntradayMinute[];
 }
 
 export interface MarketCapabilityBinding<C extends MarketCapability = MarketCapability> {

@@ -777,6 +777,31 @@ body {
   border-top: 1px dashed var(--line-strong);
 }
 
+.report-provenance > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.report-provenance > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-provenance > summary::before {
+  content: '▸';
+  color: var(--muted);
+}
+
+.report-provenance[open] > summary {
+  margin-bottom: var(--space-2);
+}
+
+.report-provenance[open] > summary::before {
+  content: '▾';
+}
+
 .report-source-row {
   display: grid;
   grid-template-columns: minmax(150px, 1fr) 0.8fr auto auto;
@@ -5882,6 +5907,61 @@ body > .modal {
   flex-wrap: wrap;
 }
 
+/* 通用分页控件 */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+.pagination-pages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pagination-pages .btn {
+  min-width: 32px;
+  justify-content: center;
+}
+
+.pagination-info {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.pagination-size {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.pagination-ellipsis {
+  color: var(--ink-soft);
+  padding: 0 4px;
+  font-size: var(--text-sm);
+}
+
+/* 可排序表头 */
+.table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.table th.sortable:hover {
+  color: var(--accent);
+}
+
+.table th.sortable.active {
+  color: var(--accent);
+}
+
 .strategy-result-table th:first-child,
 .strategy-result-table td:first-child {
   position: sticky;
@@ -6525,4 +6605,50 @@ body > .modal {
   .market-chart {
     min-height: 280px;
   }
+}
+
+/* ---- 行情页空态 A 股情绪面板 ---- */
+.market-sentiment {
+  margin-top: 1rem;
+}
+
+.sentiment-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.sentiment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: baseline;
+  margin: 0.35rem 0;
+}
+
+.sentiment-label {
+  font-weight: 600;
+  min-width: 4.5rem;
+}
+
+.sentiment-leaders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin: 0.35rem 0;
+}
+
+/* ---- 设置页数据同步区块 ---- */
+.market-sync-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.market-sync-status {
+  margin-top: 0.5rem;
+}
+
+#market-sync-message {
+  margin-top: 0.5rem;
 }

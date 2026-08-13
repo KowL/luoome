@@ -17,6 +17,7 @@ import {
   type Quote,
   type StrategyLeaseToken,
   StrategyResultSchema,
+  type StrategyRunInputSnapshotV3,
   StrategyRunSchema,
   StrategySignalSchema,
   type StrategyStockEvaluation,
@@ -220,6 +221,7 @@ export const runStrategyTool = defineTool({
     let candidateIds: string[] = [];
     let dataAsOf = ctx.clock();
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+    let requestedBy: StrategyRunInputSnapshotV3['requestedBy'] = 'manual';
     try {
       if (input.persist && leaseToken !== null) {
         heartbeatTimer = setInterval(() => {
@@ -450,6 +452,8 @@ export const runStrategyTool = defineTool({
           unavailableCount,
         };
       }
+      requestedBy =
+        input.mode === 'replay' ? 'replay' : input.mode === 'scheduled' ? 'scheduled' : 'manual';
       startedRun = StrategyRunSchema.parse({
         id: runId,
         strategyId: input.strategyId,
@@ -470,12 +474,7 @@ export const runStrategyTool = defineTool({
           coverage: 'CN_A_SHARES_SH_SZ',
           stockIds: candidateIds,
           stockIdChecksum: createHash('sha256').update(JSON.stringify(candidateIds)).digest('hex'),
-          requestedBy:
-            input.mode === 'replay'
-              ? 'replay'
-              : input.mode === 'scheduled'
-                ? 'scheduled'
-                : 'manual',
+          requestedBy,
           universeCheckpoint,
           ...(usableDataCheckpoint === undefined
             ? {}
@@ -787,6 +786,7 @@ export const runStrategyTool = defineTool({
         universeCheckpointPresent:
           successfulSync !== null && (input.stockIds !== undefined || snapshotStocks.length > 0),
         acceptance,
+        requestedBy,
         decidedAt: finishedAt,
       });
       const run = StrategyRunSchema.parse({
@@ -920,6 +920,7 @@ export const runStrategyTool = defineTool({
             status: 'failed',
             universeCheckpointPresent: false,
             acceptance,
+            requestedBy,
             decidedAt: finishedAt,
           });
           const failed = StrategyRunSchema.parse({

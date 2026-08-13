@@ -25,10 +25,16 @@ const markdownCell = (value: ReportValue): string =>
 const renderBlockMarkdown = (block: ReportBlock): string[] => {
   if (block.kind === 'text') return [block.tone === 'warning' ? `> ⚠️ ${block.text}` : block.text];
   if (block.kind === 'metrics') {
-    return block.items.map(
-      (item) =>
-        `- ${item.label}：${item.displayValue ?? displayValue(item.value)}${item.unit ?? ''}`,
-    );
+    return block.items.map((item) => {
+      const text =
+        item.displayValue ??
+        (item.value === null
+          ? '不可用'
+          : item.unit === 'ratio' && typeof item.value === 'number'
+            ? `${(item.value * 100).toFixed(1)}%`
+            : `${displayValue(item.value)}${item.unit ?? ''}`);
+      return `- ${item.label}：${text}`;
+    });
   }
   if (block.kind === 'list') {
     return block.items.map((item) => {

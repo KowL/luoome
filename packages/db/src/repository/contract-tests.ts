@@ -1258,6 +1258,23 @@ export const registerRepositoryContractTests = (
         expect((await repos.quote.latestByStock('stk-2'))?.prevClose).toBeUndefined();
       });
 
+      it('amount / turnoverRatePct 随快照持久化；缺省读回 undefined；同主键重复 save 读回新字段', async () => {
+        await repos.quote.save(
+          makeQuote('stk-1', T1, { amount: 1_410_000_000, turnoverRatePct: 0.22 }),
+        );
+        await repos.quote.save(makeQuote('stk-2', T1));
+        const withFields = await repos.quote.latestByStock('stk-1');
+        expect(withFields?.amount).toBe(1_410_000_000);
+        expect(withFields?.turnoverRatePct).toBe(0.22);
+        const without = await repos.quote.latestByStock('stk-2');
+        expect(without?.amount).toBeUndefined();
+        expect(without?.turnoverRatePct).toBeUndefined();
+        await repos.quote.save(makeQuote('stk-1', T1, { amount: 2_000_000, turnoverRatePct: 0.5 }));
+        const updated = await repos.quote.latestByStock('stk-1');
+        expect(updated?.amount).toBe(2_000_000);
+        expect(updated?.turnoverRatePct).toBe(0.5);
+      });
+
       it('removeInRange 返回删除条数；after 不动', async () => {
         await repos.quote.save(makeQuote('stk-1', T1));
         await repos.quote.save(makeQuote('stk-1', T2));
@@ -2819,6 +2836,23 @@ export const registerRepositoryContractTests = (
 
         await expect(repos.report.setDeliveryStatus(saved.id, 'pending')).rejects.toThrow();
         expect((await repos.report.findById(saved.id))?.deliveryStatus).toBe('sent');
+      });
+
+      it('remove 删除后按 id 与逻辑周期均不可读，重复删除为幂等空操作', async () => {
+        const saved = await repos.report.upsertForPeriod(makeReport('report-remove'));
+
+        await repos.report.remove(saved.id);
+
+        expect(await repos.report.findById(saved.id)).toBeNull();
+        expect(
+          await repos.report.findByPeriod({
+            kind: 'closing',
+            scopeKey: 'all-accounts',
+            periodStart: '2026-07-02',
+            periodEnd: '2026-07-02',
+          }),
+        ).toBeNull();
+        await expect(repos.report.remove(saved.id)).resolves.toBeUndefined();
       });
     });
 

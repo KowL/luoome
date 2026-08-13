@@ -9,6 +9,8 @@ import {
   computeMaSeries,
   DOWN_COLOR,
   toCandleData,
+  toIntradayLineData,
+  toIntradayVolumeData,
   toMarkerData,
   toVolumeData,
   UP_COLOR,
@@ -72,6 +74,26 @@ describe('MA5/MA10/MA20 计算', () => {
 
   it('空 candles 输出空序列', () => {
     expect(computeMaSeries([], 5)).toEqual([]);
+  });
+});
+
+describe('分时数据转换', () => {
+  const point = (time, price, cumVolume) => ({ time, price, cumVolume, source: 'tencent' });
+
+  it('价格 Line 数据：time 转 Unix 秒', () => {
+    expect(toIntradayLineData([point('2026-08-11T01:30:00.000Z', 91.18, 118_900)])).toEqual([
+      { time: Math.floor(new Date('2026-08-11T01:30:00.000Z').getTime() / 1000), value: 91.18 },
+    ]);
+  });
+
+  it('累计量相邻差分衍生逐分钟量；首点保留原值，倒挂取 0；柱色随价格涨跌', () => {
+    const data = toIntradayVolumeData([
+      point('2026-08-11T01:30:00.000Z', 91.18, 1_000),
+      point('2026-08-11T01:31:00.000Z', 91.2, 1_500), // 涨 → 红
+      point('2026-08-11T01:32:00.000Z', 91.1, 1_400), // 跌 + 累计倒挂 → 0，绿
+    ]);
+    expect(data.map((d) => d.value)).toEqual([1_000, 500, 0]);
+    expect(data.map((d) => d.color)).toEqual([UP_COLOR, UP_COLOR, DOWN_COLOR]);
   });
 });
 

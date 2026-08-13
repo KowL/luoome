@@ -216,11 +216,147 @@ const statBlock = (label, value, delta) =>
       : [el('div', 'label', label), el('div', 'value', value)],
   );
 
+const PAGE_SIZE_OPTIONS = [10, 30, 50, 100];
+
+/**
+ * 可点击排序表头。
+ * @param {string} label
+ * @param {string} sortKey
+ * @param {{key:string,order:'asc'|'desc'}|null} sortState
+ * @param {(key:string) => void} onSort
+ * @returns {HTMLElement}
+ */
+const compareValues = (a, b) => {
+  if (a === null || a === undefined) return 1;
+  if (b === null || b === undefined) return -1;
+  if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b);
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b));
+};
+
+const sortableHeader = (label, sortKey, sortState, onSort, className = '') => {
+  const active = sortState?.key === sortKey;
+  const arrow = active ? (sortState.order === 'asc' ? ' ↑' : ' ↓') : '';
+  const cls = `sortable${active ? ' active' : ''}${className ? ` ${className}` : ''}`;
+  const th = el('th', cls, `${label}${arrow}`);
+  th.addEventListener('click', () => onSort(sortKey));
+  return th;
+};
+
+const buildPageNumbers = (page, pageCount) => {
+  if (pageCount <= 7) return Array.from({ length: pageCount }, (_, i) => i + 1);
+  const numbers = [];
+  numbers.push(1);
+  if (page > 4) numbers.push('...');
+  const start = Math.max(2, page - 2);
+  const end = Math.min(pageCount - 1, page + 2);
+  for (let i = start; i <= end; i += 1) numbers.push(i);
+  if (page < pageCount - 3) numbers.push('...');
+  if (pageCount > 1) numbers.push(pageCount);
+  return numbers;
+};
+
+/**
+ * 可复用分页控件。
+ * @param {object} options
+ * @param {number} [options.pageSize=30]
+ * @param {number[]} [options.pageSizes=[10,30,50,100]]
+ * @param {number} [options.total=0]
+ * @param {(state: {page:number,pageSize:number}) => void} [options.onChange]
+ * @returns {{root: HTMLElement, setState: (state: Partial<{page:number,pageSize:number,total:number}>) => void, getState: () => {page:number,pageSize:number,total:number}}}
+ */
+const createPagination = (options = {}) => {
+  let pageSizes = options.pageSizes ?? PAGE_SIZE_OPTIONS;
+  let pageSize = options.pageSize ?? 30;
+  if (!pageSizes.includes(pageSize)) pageSizes = [...pageSizes, pageSize].sort((a, b) => a - b);
+  let page = 1;
+  let total = options.total ?? 0;
+  const onChange = options.onChange ?? (() => {});
+
+  const prev = el('button', 'btn btn-outline btn-sm', '上一页');
+  prev.type = 'button';
+  const next = el('button', 'btn btn-outline btn-sm', '下一页');
+  next.type = 'button';
+  const info = el('span', 'pagination-info muted mono', '');
+  const pageWrap = el('div', 'pagination-pages');
+  const sizeSelect = el('select', 'pagination-size');
+  for (const size of pageSizes) {
+    const option = document.createElement('option');
+    option.value = String(size);
+    option.textContent = `${size} 条/页`;
+    option.selected = size === pageSize;
+    sizeSelect.append(option);
+  }
+  sizeSelect.addEventListener('change', () => {
+    pageSize = Number(sizeSelect.value);
+    page = 1;
+    render();
+    onChange(getState());
+  });
+  prev.addEventListener('click', () => {
+    if (page <= 1) return;
+    page -= 1;
+    render();
+    onChange(getState());
+  });
+  next.addEventListener('click', () => {
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    if (page >= pageCount) return;
+    page += 1;
+    render();
+    onChange(getState());
+  });
+
+  const render = () => {
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    page = Math.min(Math.max(1, page), pageCount);
+    prev.disabled = page <= 1;
+    next.disabled = page >= pageCount;
+    info.textContent = `第 ${page} / ${pageCount} 页 · 共 ${total} 条`;
+    pageWrap.replaceChildren();
+    for (const number of buildPageNumbers(page, pageCount)) {
+      if (number === '...') {
+        pageWrap.append(el('span', 'pagination-ellipsis', '…'));
+        continue;
+      }
+      const button = el(
+        'button',
+        `btn btn-sm${number === page ? ' btn-primary' : ' btn-outline'}`,
+        String(number),
+      );
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        page = number;
+        render();
+        onChange(getState());
+      });
+      pageWrap.append(button);
+    }
+  };
+
+  const getState = () => ({ page, pageSize, total });
+  const setState = (next) => {
+    if (next.page !== undefined) page = next.page;
+    if (next.pageSize !== undefined) {
+      pageSize = next.pageSize;
+      for (const option of sizeSelect.options) option.selected = Number(option.value) === pageSize;
+    }
+    if (next.total !== undefined) total = next.total;
+    render();
+  };
+
+  const root = el('div', 'pagination', [prev, pageWrap, next, info, sizeSelect]);
+  render();
+  return { root, setState, getState };
+};
+
 export {
   $,
   $$,
   adviceCard,
+  compareValues,
   confidenceBar,
+  createPagination,
   DECISIONS,
   decisionBadge,
   el,
@@ -229,5 +365,6 @@ export {
   fmtPct,
   fmtSigned,
   mount,
+  sortableHeader,
   statBlock,
 };

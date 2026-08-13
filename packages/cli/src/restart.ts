@@ -1,10 +1,11 @@
 /**
- * luoome restart —— 端口级进程管理辅助（macOS/Linux，使用 lsof）。
+ * luoome restart —— 端口级进程管理辅助。
  *
  * 设计：
  * - findPidOnPort / waitForProcessExit / killPid 是 IO 包装，node + bun 通用；
  * - 不维护 PID 文件：start 排他使用同一个端口，按端口反查即可；
- * - lsof 在 Alpine / 极简 Linux 上可能缺失，调用方需先看环境。
+ * - macOS/Linux 用 lsof（Alpine / 极简 Linux 上可能缺失，调用方需先看环境）；
+ * - Windows 没有 lsof，改用系统自带 netstat -ano 解析 LISTENING 行。
  */
 
 import { spawnSync } from 'node:child_process';
@@ -12,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 const LSOF = 'lsof';
 
 /** 用 lsof 查 TCP:port 的 LISTEN 进程 PID；找不到返回 null；lsof 不可用抛错。 */
-export const findPidOnPort = async (port: number): Promise<number | null> => {
+const findPidOnPortPosix = (port: number): number | null => {
   const result = spawnSync(LSOF, ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
     encoding: 'utf8',
   });
@@ -36,9 +37,49 @@ export const findPidOnPort = async (port: number): Promise<number | null> => {
   return Number.isFinite(pid) && pid > 0 ? pid : null;
 };
 
+/** 解析 `netstat -ano -p tcp` 输出，找指定端口 LISTENING 行的 PID；找不到返回 null。 */
+export const parseNetstatPid = (output: string, port: number): number | null => {
+  for (const line of output.split(/\r?\n/)) {
+    // 行格式：  TCP    127.0.0.1:5173      0.0.0.0:0      LISTENING     12345
+    const cols = line.trim().split(/\s+/);
+    const [proto, localAddr, , state, pidCol] = cols;
+    if (
+      cols.length < 5 ||
+      proto !== 'TCP' ||
+      state !== 'LISTENING' ||
+      localAddr === undefined ||
+      pidCol === undefined
+    ) {
+      continue;
+    }
+    const sep = localAddr.lastIndexOf(':');
+    if (sep < 0 || Number.parseInt(localAddr.slice(sep + 1), 10) !== port) continue;
+    const pid = Number.parseInt(pidCol, 10);
+    if (Number.isFinite(pid) && pid > 0) return pid;
+  }
+  return null;
+};
+
+/** Windows 用 netstat 查端口占用 PID；netstat 是系统组件，缺失时直接抛错。 */
+const findPidOnPortWin32 = (port: number): number | null => {
+  const result = spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' });
+  if (result.error !== undefined && result.error !== null) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`netstat 失败 (exit ${result.status}): ${result.stderr}`);
+  }
+  return parseNetstatPid(result.stdout ?? '', port);
+};
+
+/** 按平台查 TCP:port 的 LISTEN 进程 PID；找不到返回 null。 */
+export const findPidOnPort = async (port: number): Promise<number | null> => {
+  if (process.platform === 'win32') return findPidOnPortWin32(port);
+  return findPidOnPortPosix(port);
+};
+
 /**
  * 信号化终止 PID；ESRCH（进程已无）吞掉，其它错误抛。
- * `signal` 默认 SIGTERM，让 web / watch 走优雅退出。
+ * `signal` 默认 SIGTERM，让 web / watch 走优雅退出；
+ * Windows 无 POSIX 信号，libuv 统一映射为 TerminateProcess（强制结束）。
  */
 export const killPid = (pid: number, signal: NodeJS.Signals = 'SIGTERM'): void => {
   try {

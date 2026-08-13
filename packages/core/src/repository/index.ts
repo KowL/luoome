@@ -184,6 +184,7 @@ export interface ReportRepository {
     readonly limit?: number;
   }): Promise<readonly Report[]>;
   setDeliveryStatus(id: string, status: DeliveryStatus): Promise<void>;
+  remove(id: string): Promise<void>;
 }
 
 export interface RepositoryRegistry {

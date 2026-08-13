@@ -404,6 +404,55 @@ describe('market/manager', () => {
       await expect(mgr.fetchIndexQuotes()).rejects.toThrow('explicit-index-source fail');
     });
   });
+
+  describe('fetchIntradayMinutes', () => {
+    const minute = (source: string) => ({
+      stockId: '002594.SZ',
+      time: new Date('2026-08-11T07:00:00.000Z'),
+      price: money(90.12),
+      cumVolume: 24_247_500,
+      source,
+    });
+
+    it('所有源都未实现 → 明确抛 unsupported_capability', async () => {
+      const mgr = createTestMarketDataManager({
+        primary: new StubPrimary(),
+        fallback: new StubFallback(),
+        logger: silentLogger,
+      });
+      await expect(mgr.fetchIntradayMinutes('002594.SZ')).rejects.toThrow(
+        'unsupported_capability: intraday-minutes',
+      );
+    });
+
+    it('30s TTL 内命中缓存不重复打源；超 TTL 重新拉取', async () => {
+      let now = new Date('2026-08-11T07:00:00.000Z');
+      const source = {
+        name: 'stub-intraday',
+        callCount: 0,
+        fetchQuote: () => Promise.reject(new Error('unused')),
+        batchQuote: () => Promise.resolve(new Map()),
+        fetchDailyBars: () => Promise.resolve([]),
+        fetchIntradayMinutes() {
+          this.callCount += 1;
+          return Promise.resolve([minute('stub-intraday')]);
+        },
+      };
+      const mgr = createTestMarketDataManager({
+        primary: source,
+        logger: silentLogger,
+        clock: () => now,
+      });
+      const first = await mgr.fetchIntradayMinutes('002594.SZ');
+      expect(first[0]?.source).toBe('stub-intraday');
+      now = new Date(now.getTime() + 10_000);
+      await mgr.fetchIntradayMinutes('002594.SZ');
+      expect(source.callCount).toBe(1);
+      now = new Date(now.getTime() + 31_000);
+      await mgr.fetchIntradayMinutes('002594.SZ');
+      expect(source.callCount).toBe(2);
+    });
+  });
 });
 
 describe('market/manager fetchMarketSnapshot', () => {

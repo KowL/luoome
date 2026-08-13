@@ -16,6 +16,7 @@ const makeQuoteOk = () => ({
   f124: 1784876400,
   f57: '002594',
   f58: '比亚迪',
+  f168: 0.69,
   f169: 100,
   f170: 0.95,
 });
@@ -50,6 +51,25 @@ describe('market/eastmoney', () => {
       });
       const q2 = await withoutPrev.fetchQuote('002594');
       expect(q2.prevClose).toBeUndefined();
+    });
+
+    it('f48 成交额 / f168 换手率 → amount / turnoverRatePct 填充；缺失则省略', async () => {
+      const withFields = new EastmoneyAdapter({
+        fetchImpl: (async () => new Response(okJson(makeQuoteOk()), { status: 200 })) as never,
+      });
+      const q1 = await withFields.fetchQuote('002594');
+      expect(q1.amount).toBe(987654321);
+      expect(q1.turnoverRatePct).toBe(0.69);
+
+      const noFields = makeQuoteOk() as Record<string, unknown>;
+      delete noFields.f48;
+      delete noFields.f168;
+      const withoutFields = new EastmoneyAdapter({
+        fetchImpl: (async () => new Response(okJson(noFields), { status: 200 })) as never,
+      });
+      const q2 = await withoutFields.fetchQuote('002594');
+      expect(q2.amount).toBeUndefined();
+      expect(q2.turnoverRatePct).toBeUndefined();
     });
 
     it('stockCode 带 exchange 后缀时仍能正确解析', async () => {

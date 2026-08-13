@@ -4,133 +4,55 @@
  * 页面不复制行情派生逻辑。图表实现全部在 market-chart.js，
  * 本文件不出现任何 lightweight-charts 类型。
  *
- * 顶部纯函数（hash 解析 / range 归一化 / requestId / 最近查看 / 展示文案）
- * 不触碰 DOM，可被 *.test.js 直接 import。
+ * 纯函数在 market-shared.js、报价卡 / 指标在 market-quote.js、关联事实在
+ * market-facts.js；本文件 re-export 保持既有导出面不变（market.test.js 直接 import）。
  */
 
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
 import { callApi } from './api.js';
-import { computeMaSeries, createMarketChart } from './market-chart.js';
+import { renderIndexStrip } from './index-strip.js';
+import { computeMaSeries, createIntradayChart, createMarketChart } from './market-chart.js';
+import { renderLimitUpFacts, renderMarkers } from './market-facts.js';
+import {
+  renderIndicators,
+  renderLinks,
+  renderQuoteHeader,
+  resetQuoteHeader,
+} from './market-quote.js';
+import { renderMarketSentiment } from './market-sentiment.js';
+import {
+  buildMarketHash,
+  createRequestTracker,
+  normalizeMarketGranularity,
+  normalizeMarketRange,
+  parseRouteHash,
+  pushRecentView,
+} from './market-shared.js';
 import { createStockSearchBox } from './search-box.js';
-import { $, el, fmtNum, fmtPct, fmtSigned, mount } from './ui.js';
-
-/* ============ 纯函数（可独立测试） ============ */
-
-const MARKET_RANGES = ['1m', '3m', '6m', '1y'];
-
-/** hash → { route, params }：? 前为 routeName，后为 URLSearchParams（§11.1）。 */
-const parseRouteHash = (hash) => {
-  const raw = String(hash ?? '').replace(/^#/, '');
-  const qIndex = raw.indexOf('?');
-  return {
-    route: qIndex === -1 ? raw : raw.slice(0, qIndex),
-    params: new URLSearchParams(qIndex === -1 ? '' : raw.slice(qIndex + 1)),
-  };
-};
-
-/** 行情页深链接序列化（§11.1）。 */
-const buildMarketHash = (stockId, range, date = null) =>
-  `market?stockId=${encodeURIComponent(stockId)}&range=${encodeURIComponent(range)}${
-    date ? `&date=${encodeURIComponent(date)}` : ''
-  }`;
-
-/** 业务页面跳行情页的锚点 href：默认 3m，与深链接口径一致。 */
-const buildMarketLink = (stockId) => `#${buildMarketHash(stockId, '3m')}`;
-
-/** range 归一化：非法值回退 3m（Tool input 默认口径一致）。 */
-const normalizeMarketRange = (raw) => (MARKET_RANGES.includes(raw) ? raw : '3m');
-
-/**
- * requestId 跟踪器（§11.4）：每次切换股票 / 周期 / 手动刷新递增；
- * 响应只在 id 仍是当前值时才允许渲染，旧响应不得覆盖新画面。
- */
-const createRequestTracker = () => {
-  let current = 0;
-  return {
-    next: () => {
-      current += 1;
-      return current;
-    },
-    isCurrent: (id) => id === current,
-  };
-};
-
-/**
- * 最近查看（§11.5）：按 id 去重置顶，最多 max 条；
- * 调用方保证 item 只含 id/code/name/exchange（不存价格等行情数据）。
- */
-const pushRecentView = (list, item, max = 8) =>
-  [item, ...list.filter((existing) => existing.id !== item.id)].slice(0, max);
-
-/** 行情来源 → 中文文案（§11.3）。 */
-const sourceLabel = (source) => {
-  if (source === 'eastmoney') return '东方财富';
-  if (source === 'tencent') return '腾讯行情（备用源）';
-  return typeof source === 'string' && source.length > 0 ? source : '--';
-};
-
-/** Quote 与日线可能来自不同 provider，页面必须展示完整实际来源。 */
-const sourceSummary = (sources, quoteSource) => {
-  const actual = Array.isArray(sources) && sources.length > 0 ? sources : [quoteSource];
-  return [...new Set(actual)].map(sourceLabel).join(' / ');
-};
-
-/** marketSession → 中文文案；收盘不是故障（§11.3）。 */
-const sessionLabel = (session) => {
-  switch (session) {
-    case 'pre-open':
-      return '盘前';
-    case 'trading':
-      return '交易中';
-    case 'midday-break':
-      return '午间休市';
-    case 'closed':
-      return '已收盘';
-    case 'non-trading-day':
-      return '非交易日';
-    default:
-      return '--';
-  }
-};
-
-/** 获取时间文案：quoteFetchedAt 是抓取时间，只写「行情获取于」（§4.2 缺口 8 / §11.3）。 */
-const fetchedAtLabel = (value) => {
-  if (value === null || value === undefined) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return `行情获取于 ${date.toLocaleTimeString('zh-CN', { hour12: false })}`;
-};
-
-/** 成交量（股）→ 万 / 亿（§11.3）。 */
-const formatVolume = (volume) => {
-  if (typeof volume !== 'number' || !Number.isFinite(volume)) return '--';
-  if (volume >= 1e8) return `${(volume / 1e8).toFixed(2)}亿`;
-  if (volume >= 1e4) return `${(volume / 1e4).toFixed(2)}万`;
-  return String(volume);
-};
-
-/** 涨跌额 / 涨跌幅的配色类：A 股红涨绿跌，沿用 text-pos / text-neg（§11.3）。 */
-const changeClass = (change) =>
-  typeof change !== 'number' || !Number.isFinite(change) || change === 0
-    ? ''
-    : change > 0
-      ? 'text-pos'
-      : 'text-neg';
+import { $, el, mount } from './ui.js';
 
 /* ============ 页面状态（§11.4） ============ */
 
 const RECENT_KEY = 'luoome.market.recent';
-const REFRESH_MS = 60_000;
+const REFRESH_ACTIVE_MS = 60_000;
+const REFRESH_IDLE_MS = 300_000;
+const GRANULARITY_TITLES = { day: '日 K', week: '周 K', month: '月 K' };
+const EMPTY_TIP = '搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&range=3m。';
 
 const state = {
   stockId: null,
   range: '3m',
   date: null,
+  granularity: 'day',
   tracker: createRequestTracker(),
   data: null,
   chart: null,
+  chartTab: 'kline',
+  intradayAvailable: false,
+  intradayChart: null,
+  intradayTracker: createRequestTracker(),
   refreshTimer: null,
   bound: false,
 };
@@ -167,14 +89,26 @@ const destroyChart = () => {
   }
 };
 
+const destroyIntradayChart = () => {
+  if (state.intradayChart !== null) {
+    state.intradayChart.destroy();
+    state.intradayChart = null;
+  }
+};
+
 /** 离开行情页：停 timer、销毁图表、重置选中（§11.4）。 */
 const teardownMarket = () => {
   clearRefreshTimer();
   destroyChart();
+  destroyIntradayChart();
   state.stockId = null;
   state.data = null;
   state.date = null;
+  state.granularity = 'day';
+  state.chartTab = 'kline';
+  state.intradayAvailable = false;
   state.tracker.next();
+  state.intradayTracker.next();
 };
 
 /* ============ 搜索（§11.5）：交互在 search-box.js，本页只提供去向 ============ */
@@ -188,7 +122,7 @@ const navigateToStock = (stock) => {
     exchange: stock.exchange,
   });
   saveRecent(recent);
-  window.location.hash = buildMarketHash(stock.id, state.range, state.date);
+  window.location.hash = buildMarketHash(stock.id, state.range, state.date, state.granularity);
 };
 
 const bindSearch = () => {
@@ -219,196 +153,14 @@ const renderRecent = () => {
   );
 };
 
-/* ============ 报价头 / 指标 / 关联入口（§11.2 / §11.3） ============ */
-
-const setText = (id, text, className) => {
-  const node = $(id);
-  if (node === null) return;
-  node.textContent = text;
-  if (className !== undefined) node.className = className;
-};
-
-const renderQuoteHeader = (data) => {
-  const { stock, quote, dataStatus } = data;
-  setText('#market-quote-name', stock.name);
-  setText('#market-quote-code', `${stock.id} · ${stock.exchange}`);
-  setText(
-    '#market-quote-price',
-    fmtNum(quote.quote.close),
-    `market-quote-price ${changeClass(quote.change)}`,
-  );
-  setText('#market-quote-change', fmtSigned(quote.change), changeClass(quote.change));
-  setText('#market-quote-change-pct', fmtPct(quote.changePct), changeClass(quote.change));
-  setText('#market-quote-open', fmtNum(quote.quote.open), 'num');
-  setText('#market-quote-high', fmtNum(quote.quote.high), 'num');
-  setText('#market-quote-low', fmtNum(quote.quote.low), 'num');
-  setText(
-    '#market-quote-prev',
-    quote.previousClose === null ? '--' : fmtNum(quote.previousClose),
-    'num',
-  );
-  setText('#market-quote-volume', formatVolume(quote.quote.volume), 'num');
-  setText('#market-quote-fetched', fetchedAtLabel(dataStatus.quoteFetchedAt));
-  setText('#market-quote-source', sourceSummary(dataStatus.sources, quote.quote.source));
-
-  const badges = $('#market-quote-badges');
-  if (badges !== null) {
-    const items = [el('span', 'badge badge-session', sessionLabel(dataStatus.marketSession))];
-    if (dataStatus.retrieval === 'local-fallback') {
-      items.push(el('span', 'badge badge-amber', '旧快照'));
-    }
-    if (dataStatus.warnings.includes('provider-fallback')) {
-      items.push(el('span', 'badge badge-amber', '含备用行情源'));
-    }
-    mount(badges, items);
-  }
-};
-
-const QUOTE_PLACEHOLDER_IDS = [
-  '#market-quote-name',
-  '#market-quote-code',
-  '#market-quote-open',
-  '#market-quote-high',
-  '#market-quote-low',
-  '#market-quote-prev',
-  '#market-quote-volume',
-  '#market-quote-fetched',
-  '#market-quote-source',
-];
-
-/** 报价卡常驻后，无股票 / 加载失败时清掉上一只股票残留的数据。 */
-const resetQuoteHeader = () => {
-  for (const id of QUOTE_PLACEHOLDER_IDS) setText(id, '--');
-  setText('#market-quote-price', '--', 'market-quote-price');
-  setText('#market-quote-change', '--');
-  setText('#market-quote-change-pct', '--');
-  const badges = $('#market-quote-badges');
-  if (badges !== null) mount(badges, null);
-};
-
-const INDICATOR_ROWS = [
-  { label: 'RSI14', value: (i) => fmtNum(i.rsi14) },
-  { label: 'MACD DIF', value: (i) => fmtNum(i.macdDif) },
-  { label: 'MACD DEA', value: (i) => fmtNum(i.macdDea) },
-  { label: 'MACD HIST', value: (i) => fmtNum(i.macdHist) },
-  // BOLL 预留：Tool 当前 indicators 不含 boll 字段时一律 --（以 Tool 输出为权威）。
-  { label: 'BOLL 上轨', value: (i) => fmtNum(i.bollUpper) },
-  { label: 'BOLL 中轨', value: (i) => fmtNum(i.bollMid) },
-  { label: 'BOLL 下轨', value: (i) => fmtNum(i.bollLower) },
-  { label: '20 日最高', value: (i) => fmtNum(i.high20) },
-  { label: '20 日最低', value: (i) => fmtNum(i.low20) },
-  { label: '成交量比', value: (i) => fmtNum(i.volRatio5_20) },
-];
-
-const renderIndicators = (data) => {
-  const wrap = $('#market-indicators');
-  if (wrap === null) return;
-  mount(
-    wrap,
-    INDICATOR_ROWS.map((row) =>
-      el('div', 'market-indicator', [
-        el('div', 'label', row.label),
-        el('div', 'value', row.value(data.indicators ?? {})),
-      ]),
-    ),
-  );
-  setText(
-    '#market-indicators-meta',
-    data.indicatorsAsOf === null ? '样本不足' : `截至 ${data.indicatorsAsOf}`,
-  );
-};
-
-const renderLinks = (data) => {
-  const wrap = $('#market-links');
-  if (wrap === null) return;
-  const id = encodeURIComponent(data.stock.id);
-  const links = [
-    { href: `#research?stockId=${id}`, label: '查看研究' },
-    { href: `#advice?stockId=${id}`, label: '查看 Advice' },
-    { href: `#holdings?stockId=${id}`, label: '持仓定位' },
-  ];
-  mount(
-    wrap,
-    links.map((l) => {
-      const a = el('a', 'btn btn-outline btn-sm', l.label);
-      a.setAttribute('href', l.href);
-      return a;
-    }),
-  );
-};
-
-const markerLabel = (marker) => {
-  const kind =
-    marker.factKind === 'trade'
-      ? '交易'
-      : marker.factKind === 'advice'
-        ? 'Advice'
-        : marker.factKind === 'watch-trigger'
-          ? '触发'
-          : marker.factKind === 'strategy-signal'
-            ? '信号'
-            : marker.factKind === 'report'
-              ? '报告'
-              : marker.factKind === 'limit-up'
-                ? '涨停'
-                : '研究';
-  return `${marker.date} · ${kind} · ${marker.title}`;
-};
-
-const renderLimitUpFacts = (data) => {
-  const wrap = $('#market-limit-up');
-  if (wrap === null) return;
-  const facts = data.limitUp;
-  if (facts === undefined || facts.status === 'unavailable') {
-    mount(wrap, el('span', 'muted', '历史天梯不可用；未将不可用伪装成空结果。'));
-    setText('#market-limit-up-status', '不可用');
-    return;
-  }
-  setText(
-    '#market-limit-up-status',
-    facts.asOf === null
-      ? '可用 · 时间未知'
-      : `可用 · ${new Date(facts.asOf).toLocaleDateString('zh-CN')}`,
-  );
-  mount(
-    wrap,
-    facts.recent.length === 0
-      ? el('span', 'muted', '可获得范围内暂无涨停记录')
-      : el(
-          'div',
-          'market-limit-up-list',
-          facts.recent.map((item) =>
-            el('div', 'market-limit-up-row', [
-              el('span', 'mono', item.date),
-              el('strong', null, `${item.ladderLevel} 连板`),
-              el('span', 'muted', item.reason === '--' ? '原因暂缺' : item.reason),
-            ]),
-          ),
-        ),
-  );
-};
-
-const renderMarkers = (data) => {
-  const wrap = $('#market-markers');
-  if (wrap === null) return;
-  const markers = Array.isArray(data.markers) ? data.markers : [];
-  mount(
-    wrap,
-    markers.length === 0
-      ? el('span', 'muted', '当前周期暂无关联事实')
-      : [
-          el('span', 'muted', '图表事实：'),
-          ...markers.map((marker) => {
-            const link = el('a', `market-marker market-marker-${marker.tone}`, markerLabel(marker));
-            link.setAttribute('href', marker.href);
-            link.dataset.factId = marker.factId;
-            return link;
-          }),
-        ],
-  );
-};
-
 /* ============ 加载与渲染 ============ */
+
+/** 行情页顶部指数条：与 dashboard 共用 index-strip；失败静默（指数条只是辅助信息）。 */
+const loadMarketIndices = async () => {
+  const r = await callApi('/api/market/indices');
+  if (!r.ok) return;
+  renderIndexStrip('market-indices', r.data, null);
+};
 
 const showBanner = (message) => {
   const banner = $('#market-banner');
@@ -440,8 +192,112 @@ const bindRangeSwitch = () => {
     if (target === null || state.stockId === null) return;
     const range = normalizeMarketRange(target.getAttribute('data-range'));
     if (range === state.range) return;
-    window.location.hash = buildMarketHash(state.stockId, range, state.date);
+    window.location.hash = buildMarketHash(state.stockId, range, state.date, state.granularity);
   });
+};
+
+/* ============ 日 / 周 / 月粒度切换（仅 K 线 tab 下有意义，分时 tab 时隐藏） ============ */
+
+const paintGranularitySwitch = () => {
+  const wrap = $('#market-granularity-switch');
+  if (wrap !== null) {
+    wrap.querySelectorAll('button[data-granularity]').forEach((node) => {
+      node.classList.toggle('active', node.getAttribute('data-granularity') === state.granularity);
+    });
+  }
+  const title = $('#market-chart-title');
+  if (title !== null) title.textContent = GRANULARITY_TITLES[state.granularity] ?? '日 K';
+};
+
+const bindGranularitySwitch = () => {
+  const wrap = $('#market-granularity-switch');
+  if (wrap === null || wrap.dataset.bound === '1') return;
+  wrap.dataset.bound = '1';
+  wrap.addEventListener('click', (event) => {
+    const target =
+      event.target instanceof Element ? event.target.closest('button[data-granularity]') : null;
+    if (target === null || state.stockId === null) return;
+    const granularity = normalizeMarketGranularity(target.getAttribute('data-granularity'));
+    if (granularity === state.granularity) return;
+    window.location.hash = buildMarketHash(state.stockId, state.range, state.date, granularity);
+  });
+};
+
+/* ============ 分时图（tencent-only intraday-minutes capability；不支持时隐藏 tab） ============ */
+
+const paintChartTabs = () => {
+  const onIntraday = state.chartTab === 'intraday' && state.intradayAvailable;
+  const tabs = $('#market-chart-tabs');
+  if (tabs !== null) {
+    tabs.querySelectorAll('button[data-chart-tab]').forEach((node) => {
+      const tab = node.getAttribute('data-chart-tab');
+      node.hidden = tab === 'intraday' && !state.intradayAvailable;
+      node.classList.toggle('active', tab === (onIntraday ? 'intraday' : 'kline'));
+    });
+  }
+  const rangeSwitch = $('#market-range-switch');
+  if (rangeSwitch !== null) rangeSwitch.hidden = onIntraday;
+  const granularitySwitch = $('#market-granularity-switch');
+  if (granularitySwitch !== null) granularitySwitch.hidden = onIntraday;
+  const intradayWrap = $('#market-intraday-chart');
+  if (intradayWrap !== null) intradayWrap.hidden = !onIntraday;
+  const klineWrap = $('#market-chart');
+  const klineEmpty = $('#market-chart-empty');
+  if (onIntraday) {
+    if (klineWrap !== null) klineWrap.hidden = true;
+    if (klineEmpty !== null) klineEmpty.hidden = true;
+  } else {
+    // K 线可见性以 chart 是否存在为准（与 renderData 同口径）
+    const hasChart = state.chart !== null;
+    if (klineWrap !== null) klineWrap.hidden = !hasChart;
+    if (klineEmpty !== null) klineEmpty.hidden = hasChart;
+  }
+};
+
+const bindChartTabs = () => {
+  const wrap = $('#market-chart-tabs');
+  if (wrap === null || wrap.dataset.bound === '1') return;
+  wrap.dataset.bound = '1';
+  wrap.addEventListener('click', (event) => {
+    const target =
+      event.target instanceof Element ? event.target.closest('button[data-chart-tab]') : null;
+    if (target === null) return;
+    const tab = target.getAttribute('data-chart-tab');
+    if (tab === null || tab === state.chartTab) return;
+    state.chartTab = tab;
+    paintChartTabs();
+    if (tab === 'intraday') void loadIntradayView();
+  });
+};
+
+/** 拉当日分时并渲染；不支持 / 无数据（盘前 / 非交易日）时隐藏分时 tab 只显示 K 线。 */
+const loadIntradayView = async () => {
+  if (state.stockId === null) return;
+  const requestId = state.intradayTracker.next();
+  const r = await callApi('/api/tools/fetch_intraday_minutes/call', {
+    method: 'POST',
+    body: JSON.stringify({ input: { stockId: state.stockId } }),
+    timeoutMs: 30_000,
+  });
+  if (!state.intradayTracker.isCurrent(requestId)) return;
+  const points =
+    r.ok && r.data?.supported === true && Array.isArray(r.data.points) ? r.data.points : [];
+  state.intradayAvailable = points.length > 0;
+  if (!state.intradayAvailable && state.chartTab === 'intraday') state.chartTab = 'kline';
+  paintChartTabs();
+  if (state.chartTab !== 'intraday' || !state.intradayAvailable) return;
+  if (state.intradayChart === null) {
+    const container = $('#market-intraday-chart');
+    if (container === null) return;
+    const chart = await createIntradayChart(container);
+    const { route } = parseRouteHash(window.location.hash);
+    if (!state.intradayTracker.isCurrent(requestId) || route !== 'market') {
+      chart.destroy();
+      return;
+    }
+    state.intradayChart = chart;
+  }
+  state.intradayChart.setData(points);
 };
 
 const renderData = async (data, requestId) => {
@@ -456,19 +312,17 @@ const renderData = async (data, requestId) => {
   renderMarkers(data);
   renderLimitUpFacts(data);
   paintRangeSwitch();
+  paintGranularitySwitch();
 
   const chartContainer = $('#market-chart');
   const chartEmpty = $('#market-chart-empty');
   if (chartContainer === null || chartEmpty === null) return;
-  // 无 bars 不建空 chart（§11.3）。
+  // 无 bars 不建空 chart（§11.3）；K 线 / 分时 / 空态可见性统一由 paintChartTabs 按 chartTab 决定。
   if (!Array.isArray(data.candles) || data.candles.length === 0) {
     destroyChart();
-    chartContainer.hidden = true;
-    chartEmpty.hidden = false;
+    paintChartTabs();
     return;
   }
-  chartContainer.hidden = false;
-  chartEmpty.hidden = true;
   if (state.chart === null) {
     const chart = await createMarketChart(chartContainer);
     const { route } = parseRouteHash(window.location.hash);
@@ -486,6 +340,13 @@ const renderData = async (data, requestId) => {
     ma20: computeMaSeries(data.candles, 20),
     markers: data.markers ?? [],
   });
+  paintChartTabs();
+};
+
+/** 轮询间隔分档：盘中（含午间休市）60s，盘外 300s 降频。 */
+const refreshIntervalMs = () => {
+  const session = state.data?.dataStatus?.marketSession;
+  return session === 'trading' || session === 'midday-break' ? REFRESH_ACTIVE_MS : REFRESH_IDLE_MS;
 };
 
 const scheduleRefresh = (requestId) => {
@@ -496,7 +357,7 @@ const scheduleRefresh = (requestId) => {
     if (document.visibilityState !== 'visible') return;
     if (!state.tracker.isCurrent(requestId)) return;
     void loadMarketView();
-  }, REFRESH_MS);
+  }, refreshIntervalMs());
 };
 
 const bindVisibility = () => {
@@ -522,28 +383,37 @@ const loadMarketView = async () => {
       ? {
           stockId: state.stockId,
           range: state.range,
+          granularity: state.granularity,
           ...(state.date === null ? {} : { date: state.date }),
         }
       : {
           stockId: state.stockId,
           range: state.range,
+          granularity: state.granularity,
           stockName: known.name,
           ...(state.date === null ? {} : { date: state.date }),
         };
   const r = await callApi('/api/tools/get_stock_market_view/call', {
     method: 'POST',
     body: JSON.stringify({ input }),
+    timeoutMs: 30_000,
   });
   if (!state.tracker.isCurrent(requestId)) return;
   if (r.ok && r.data !== undefined) {
     state.data = r.data;
     showBanner(null);
     await renderData(r.data, requestId);
+    // 每次行情刷新同步分时可用性；当前停在分时 tab 时一并刷新分时数据。
+    void loadIntradayView();
   } else {
     // 网络 / 上游错误：保留上一份成功画面 + error banner，不清图（§11.4）。
     const kind = r.error?.kind ?? 'internal';
     const message =
-      kind === 'adapter_error' ? '行情源暂不可用' : (r.error?.message ?? `行情加载失败（${kind}）`);
+      kind === 'adapter_error'
+        ? '行情源暂不可用'
+        : kind === 'timeout'
+          ? '请求超时，稍后自动重试'
+          : (r.error?.message ?? `行情加载失败（${kind}）`);
     if (state.data !== null) {
       showBanner(`${message}，展示上次成功数据。`);
     } else {
@@ -554,8 +424,9 @@ const loadMarketView = async () => {
       const main = $('#market-main');
       if (empty !== null) {
         empty.hidden = false;
-        empty.textContent = '';
-        empty.append(el('p', 'placeholder', `${message}，请稍后重试。`));
+        // 只改占位文案，不清空 #market-empty 子树（#market-sentiment 要留给情绪面板）
+        const tip = $('#market-empty-tip');
+        if (tip !== null) tip.textContent = `${message}，请稍后重试。`;
       }
       if (main !== null) main.hidden = true;
     }
@@ -567,59 +438,81 @@ const loadMarketView = async () => {
 const renderMarket = async (setStatus) => {
   bindSearch();
   bindRangeSwitch();
+  bindGranularitySwitch();
+  bindChartTabs();
   bindVisibility();
   renderRecent();
+  void loadMarketIndices();
   const { params } = parseRouteHash(window.location.hash);
   const stockId = params.get('stockId');
   const range = normalizeMarketRange(params.get('range'));
+  const granularity = normalizeMarketGranularity(params.get('granularity'));
   const rawDate = params.get('date');
   const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate ?? '') ? rawDate : null;
   // 无 stockId → 搜索空态（§11.1）。
   if (stockId === null || stockId.trim().length === 0) {
     clearRefreshTimer();
     destroyChart();
+    destroyIntradayChart();
     state.stockId = null;
     state.date = null;
     state.data = null;
+    state.granularity = 'day';
+    state.chartTab = 'kline';
+    state.intradayAvailable = false;
     state.tracker.next();
+    state.intradayTracker.next();
     showBanner(null);
     resetQuoteHeader();
     const empty = $('#market-empty');
     const main = $('#market-main');
     if (empty !== null) empty.hidden = false;
+    const tip = $('#market-empty-tip');
+    if (tip !== null) tip.textContent = EMPTY_TIP;
     if (main !== null) main.hidden = true;
+    void renderMarketSentiment();
     return;
   }
-  const changed = state.stockId !== stockId || state.range !== range || state.date !== date;
+  const changed =
+    state.stockId !== stockId ||
+    state.range !== range ||
+    state.date !== date ||
+    state.granularity !== granularity;
   state.stockId = stockId;
   state.range = range;
   state.date = date;
+  state.granularity = granularity;
   if (!changed && state.data !== null) {
     paintRangeSwitch();
+    paintGranularitySwitch();
     return;
   }
   state.data = null;
   destroyChart();
+  destroyIntradayChart();
+  // 换股：在途分时 fetch 作废，tab 状态回到 K 线（对齐空态分支 / teardown）
+  state.intradayTracker.next();
+  state.chartTab = 'kline';
+  state.intradayAvailable = false;
   setStatus?.(`加载 ${stockId} 行情…`);
   await loadMarketView();
 };
 
+export { markerLabel, renderMarkers } from './market-facts.js';
 export {
   buildMarketHash,
   buildMarketLink,
   changeClass,
   createRequestTracker,
   fetchedAtLabel,
+  formatAmount,
   formatVolume,
-  markerLabel,
-  navigateToStock,
+  normalizeMarketGranularity,
   normalizeMarketRange,
   parseRouteHash,
   pushRecentView,
-  renderMarkers,
-  renderMarket,
   sessionLabel,
   sourceLabel,
   sourceSummary,
-  teardownMarket,
-};
+} from './market-shared.js';
+export { navigateToStock, renderMarket, teardownMarket };

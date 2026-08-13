@@ -10,6 +10,7 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
+import { renderIndexStrip } from './index-strip.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
 import { alertDialog, promptDialog } from './modal.js';
 import { createStockSearchBox } from './search-box.js';
@@ -17,6 +18,8 @@ import { stockIdentityLink } from './stock-link.js';
 import {
   $,
   adviceCard,
+  compareValues,
+  createPagination,
   decisionBadge,
   el,
   fmtDateTime,
@@ -24,8 +27,13 @@ import {
   fmtPct,
   fmtSigned,
   mount,
+  sortableHeader,
   statBlock,
 } from './ui.js';
+
+/* 跨自动刷新保留的列表排序状态（dashboard 5s、holdings 10s 会重绘，不持久则排序瞬间失效） */
+let boardSortState = { key: null, order: 'desc' };
+let holdingsSortState = { key: null, order: 'desc' };
 
 /* ============ dashboard ============ */
 
@@ -66,26 +74,6 @@ const bindDashboardSearch = () => {
 };
 
 /* ---- 看板纯函数（pages.test.js 直接单测） ---- */
-
-/**
- * 成员涨跌幅（小数）：昨收基准 (close − prevClose) / prevClose。
- * quote 缺 prevClose（如 tencent 分钟端点无昨收）时返回 null，前端显示「—」，
- * 不回退今开基准——(close−open)/open 不是市场口径的涨跌幅。
- */
-const memberChangePct = (quote) => {
-  const close = quote?.close;
-  const prevClose = quote?.prevClose;
-  if (
-    typeof close === 'number' &&
-    Number.isFinite(close) &&
-    typeof prevClose === 'number' &&
-    Number.isFinite(prevClose) &&
-    prevClose > 0
-  ) {
-    return (close - prevClose) / prevClose;
-  }
-  return null;
-};
 
 /**
  * 看板排序：持仓行置顶（保持服务端返回顺序），其余按 |changePct| 降序，
@@ -138,26 +126,9 @@ const ALERT_DIRECTION_BADGE = {
   watch: { cls: 'badge-watch', label: '关注' },
 };
 
-/** 指数条：unsupported 或空数组时整条隐藏；红涨绿跌沿用 --pos/--neg。 */
+/** 指数条渲染已抽到 index-strip.js（行情页共用）；dashboard 语义不变。 */
 const renderIndices = (indicesData, asOf) => {
-  const strip = $('#dashboard-indices');
-  if (strip === null) return;
-  const list = Array.isArray(indicesData?.indices) ? indicesData.indices : [];
-  if (indicesData?.unsupported === true || list.length === 0) {
-    strip.hidden = true;
-    strip.replaceChildren();
-    return;
-  }
-  strip.hidden = false;
-  const chips = list.map((idx) => {
-    const cls = idx.change > 0 ? 'pos' : idx.change < 0 ? 'neg' : 'flat';
-    return el('span', `index-chip ${cls}`, [
-      el('span', 'index-name', idx.name),
-      el('span', 'index-close mono', fmtNum(idx.close)),
-      el('span', 'index-change mono', `${fmtSigned(idx.change)}（${fmtSigned(idx.changePct)}%）`),
-    ]);
-  });
-  mount(strip, [...chips, el('span', 'index-asof', `截至 ${fmtTime(asOf)}`)]);
+  renderIndexStrip('dashboard-indices', indicesData, asOf);
 };
 
 const boardAlertCell = (todayTrigger) => {
@@ -198,6 +169,8 @@ const boardRow = (item) => {
   return row;
 };
 
+const defaultOrderForKey = (key) => (key === 'price' || key.endsWith('price') ? 'asc' : 'desc');
+
 const renderBoard = (items) => {
   const wrap = $('#dashboard-board');
   if (wrap === null) return;
@@ -211,23 +184,46 @@ const renderBoard = (items) => {
   if (meta !== null) {
     meta.textContent = `${items.length} 只 · 涨${stats.up} 跌${stats.down} 平${stats.flat}`;
   }
-  mount(
-    wrap,
+  const listContainer = el('div', 'paginated-list');
+  const buildBoardTable = (pageItems) =>
     el('table', 'table board-table', [
       el(
         'thead',
         null,
         el('tr', null, [
           el('th', null, '名称'),
-          el('th', 'num', '现价'),
-          el('th', 'num', '涨跌幅'),
+          sortableHeader('现价', 'price', boardSortState, onSort),
+          sortableHeader('涨跌幅', 'changePct', boardSortState, onSort),
           el('th', null, 'Watchlist'),
           el('th', null, '预警'),
         ]),
       ),
-      el('tbody', null, sortBoardItems(items).map(boardRow)),
-    ]),
-  );
+      el('tbody', null, pageItems.map(boardRow)),
+    ]);
+  const sortedItems = () => {
+    if (boardSortState.key === null) return sortBoardItems(items);
+    const direction = boardSortState.order === 'asc' ? 1 : -1;
+    return [...items].sort((a, b) => {
+      const getSortValue = (item) =>
+        boardSortState.key === 'price' ? (item.quote?.close ?? null) : (item.changePct ?? null);
+      return direction * compareValues(getSortValue(a), getSortValue(b));
+    });
+  };
+  function onSort(key) {
+    boardSortState =
+      boardSortState.key === key
+        ? { key, order: boardSortState.order === 'asc' ? 'desc' : 'asc' }
+        : { key, order: defaultOrderForKey(key) };
+    renderPage();
+  }
+  function renderPage() {
+    const sorted = sortedItems();
+    const { page, pageSize } = pagination.getState();
+    mount(listContainer, buildBoardTable(sorted.slice((page - 1) * pageSize, page * pageSize)));
+  }
+  const pagination = createPagination({ total: items.length, onChange: renderPage });
+  renderPage();
+  mount(wrap, [listContainer, pagination.root]);
 };
 
 /** 今日预警紧凑行：时间 / 股票 / 方向 / 原因 / 优先级 badge；urgent 行高亮。 */
@@ -394,68 +390,136 @@ const renderHoldings = async (setStatus) => {
   const { holdings, totalValue, totalPnL, totalPnLPct, totalTodayPnl, totalTodayPnlPct } = r.data;
   // 缓存给「分析全部」复用，批量入口不再重复拉 /api/holdings
   currentHoldings = holdings;
+
+  const tableWrap = body.closest('.table-wrap');
+  let paginationWrap = tableWrap?.nextElementSibling;
+  if (
+    paginationWrap === null ||
+    !(paginationWrap instanceof Element) ||
+    !paginationWrap.classList.contains('pagination-wrap')
+  ) {
+    paginationWrap = document.createElement('div');
+    paginationWrap.className = 'pagination-wrap';
+    tableWrap?.after(paginationWrap);
+  }
+
+  const holdingRow = (item) => {
+    const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
+    const pnlCls = item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '';
+    const todayCls =
+      item.todayPnl === null ? '' : item.todayPnl > 0 ? 'pos' : item.todayPnl < 0 ? 'neg' : '';
+    const h = {
+      id: item.holding.id,
+      stockId: item.holding.stockId,
+      stockName: item.stockName,
+      quantity: item.holding.quantity,
+      availableQuantity: item.holding.availableQuantity,
+      avgCost: item.holding.avgCost,
+      currentPrice: item.currentPrice,
+    };
+    const actionBtn = (label, onClick) => {
+      const b = el('button', 'btn btn-outline btn-sm', label);
+      b.type = 'button';
+      b.addEventListener('click', () => onClick(b));
+      return b;
+    };
+    const row = el('tr', null, [
+      el('td', null, [
+        el('div', null, [
+          stockMarketLink(item.holding.stockId, item.stockName),
+          adviceSlot(item.holding.stockId),
+        ]),
+        el('div', 'cell-sub muted', stockMarketLink(item.holding.stockId, code)),
+      ]),
+      el('td', 'num', String(item.holding.quantity)),
+      el('td', 'num', fmtNum(item.holding.avgCost)),
+      el('td', 'num', fmtNum(item.currentPrice)),
+      el('td', 'num', fmtNum(item.marketValue)),
+      el('td', `num ${todayCls}`, [
+        el('div', null, item.todayPnl === null ? '--' : fmtSigned(item.todayPnl)),
+        el('div', 'cell-sub', item.todayPnlPct === null ? '' : fmtPct(item.todayPnlPct)),
+      ]),
+      el('td', `num ${pnlCls}`, [
+        el('div', null, fmtSigned(item.pnl)),
+        el('div', 'cell-sub', fmtPct(item.pnlPct)),
+      ]),
+      el('td', null, [
+        el('div', 'row-actions', [
+          actionBtn('分析', (btn) => void runAnalyzeStock(item.holding.stockId, setStatus, btn)),
+          actionBtn('加仓', () => openTradeModal(h, 'buy')),
+          actionBtn('减仓', () => openTradeModal(h, 'sell')),
+          actionBtn('纠错', () => openEditModal(h)),
+          actionBtn('平仓', () => openCloseConfirm(h)),
+        ]),
+      ]),
+    ]);
+    row.dataset.stockId = item.holding.stockId;
+    return row;
+  };
+
+  const table = body.closest('table');
+  const thead = table?.querySelector('thead');
+  const getSortValue = (item, key) => {
+    if (key === 'currentPrice') return item.currentPrice ?? null;
+    if (key === 'marketValue') return item.marketValue ?? null;
+    if (key === 'todayPnlPct') return item.todayPnlPct ?? null;
+    if (key === 'pnlPct') return item.pnlPct ?? null;
+    return null;
+  };
+  const sortedHoldings = () => {
+    if (holdingsSortState.key === null) return holdings;
+    const direction = holdingsSortState.order === 'asc' ? 1 : -1;
+    return [...holdings].sort(
+      (a, b) =>
+        direction *
+        compareValues(
+          getSortValue(a, holdingsSortState.key),
+          getSortValue(b, holdingsSortState.key),
+        ),
+    );
+  };
+  const renderHead = () => {
+    if (thead === null) return;
+    mount(
+      thead,
+      el('tr', null, [
+        el('th', null, '名称 / 代码'),
+        el('th', 'num', '数量'),
+        el('th', 'num', '成本'),
+        sortableHeader('现价', 'currentPrice', holdingsSortState, onSort, 'num'),
+        sortableHeader('市值', 'marketValue', holdingsSortState, onSort, 'num'),
+        sortableHeader('今日盈亏', 'todayPnlPct', holdingsSortState, onSort, 'num'),
+        sortableHeader('盈亏', 'pnlPct', holdingsSortState, onSort, 'num'),
+        el('th', null, '操作'),
+      ]),
+    );
+  };
+  function onSort(key) {
+    holdingsSortState =
+      holdingsSortState.key === key
+        ? { key, order: holdingsSortState.order === 'asc' ? 'desc' : 'asc' }
+        : { key, order: defaultOrderForKey(key) };
+    renderHead();
+    renderHoldingsPage();
+  }
+
+  function renderHoldingsPage() {
+    const { page, pageSize } = pagination.getState();
+    const pageItems = sortedHoldings().slice((page - 1) * pageSize, page * pageSize);
+    mount(body, pageItems.map(holdingRow));
+  }
+  const pagination = createPagination({
+    total: holdings.length,
+    onChange: renderHoldingsPage,
+  });
+
+  renderHead();
   if (holdings.length === 0) {
     mount(body, el('tr', null, el('td', { colspan: 8, class: 'placeholder' }, '（无持仓）')));
+    paginationWrap.replaceChildren();
   } else {
-    mount(
-      body,
-      holdings.map((item) => {
-        const code = String(item.holding.stockId).split('.')[0] || item.holding.stockId;
-        const pnlCls = item.pnl > 0 ? 'pos' : item.pnl < 0 ? 'neg' : '';
-        const todayCls =
-          item.todayPnl === null ? '' : item.todayPnl > 0 ? 'pos' : item.todayPnl < 0 ? 'neg' : '';
-        const h = {
-          id: item.holding.id,
-          stockId: item.holding.stockId,
-          stockName: item.stockName,
-          quantity: item.holding.quantity,
-          availableQuantity: item.holding.availableQuantity,
-          avgCost: item.holding.avgCost,
-          currentPrice: item.currentPrice,
-        };
-        const actionBtn = (label, onClick) => {
-          const b = el('button', 'btn btn-outline btn-sm', label);
-          b.type = 'button';
-          b.addEventListener('click', () => onClick(b));
-          return b;
-        };
-        const row = el('tr', null, [
-          el('td', null, [
-            el('div', null, [
-              stockMarketLink(item.holding.stockId, item.stockName),
-              adviceSlot(item.holding.stockId),
-            ]),
-            el('div', 'cell-sub muted', stockMarketLink(item.holding.stockId, code)),
-          ]),
-          el('td', 'num', String(item.holding.quantity)),
-          el('td', 'num', fmtNum(item.holding.avgCost)),
-          el('td', 'num', fmtNum(item.currentPrice)),
-          el('td', 'num', fmtNum(item.marketValue)),
-          el('td', `num ${todayCls}`, [
-            el('div', null, item.todayPnl === null ? '--' : fmtSigned(item.todayPnl)),
-            el('div', 'cell-sub', item.todayPnlPct === null ? '' : fmtPct(item.todayPnlPct)),
-          ]),
-          el('td', `num ${pnlCls}`, [
-            el('div', null, fmtSigned(item.pnl)),
-            el('div', 'cell-sub', fmtPct(item.pnlPct)),
-          ]),
-          el('td', null, [
-            el('div', 'row-actions', [
-              actionBtn(
-                '分析',
-                (btn) => void runAnalyzeStock(item.holding.stockId, setStatus, btn),
-              ),
-              actionBtn('加仓', () => openTradeModal(h, 'buy')),
-              actionBtn('减仓', () => openTradeModal(h, 'sell')),
-              actionBtn('纠错', () => openEditModal(h)),
-              actionBtn('平仓', () => openCloseConfirm(h)),
-            ]),
-          ]),
-        ]);
-        row.dataset.stockId = item.holding.stockId;
-        return row;
-      }),
-    );
+    renderHoldingsPage();
+    mount(paginationWrap, pagination.root);
   }
   $('#holdings-total-value').textContent = fmtNum(totalValue);
   const totalPnlCls = totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : '';
@@ -492,31 +556,52 @@ const renderHoldings = async (setStatus) => {
   }
 };
 
+const tradeRow = (trade) =>
+  el('tr', null, [
+    el('td', null, fmtDateTime(trade.executedAt)),
+    el('td', 'mono', trade.stockId),
+    el(
+      'td',
+      trade.side === 'buy' ? 'text-pos' : 'text-neg',
+      trade.side === 'buy' ? '买入' : '卖出',
+    ),
+    el('td', 'num', String(trade.quantity)),
+    el('td', 'num', fmtNum(trade.price)),
+    el('td', null, trade.source),
+  ]);
+
 const renderTrades = (result) => {
   const body = $('#trades-body');
+  const tableWrap = body?.closest('.table-wrap');
+  let paginationWrap = tableWrap?.nextElementSibling;
+  if (
+    paginationWrap === null ||
+    !(paginationWrap instanceof Element) ||
+    !paginationWrap.classList.contains('pagination-wrap')
+  ) {
+    paginationWrap = document.createElement('div');
+    paginationWrap.className = 'pagination-wrap';
+    tableWrap?.after(paginationWrap);
+  }
   if (!result.ok) {
     mount(body, el('tr', null, el('td', 'placeholder', `交易加载失败：${result.error.kind}`)));
+    paginationWrap.replaceChildren();
     return;
   }
-  mount(
-    body,
-    result.data.trades.length === 0
-      ? el('tr', null, el('td', 'placeholder', '（无交易记录）'))
-      : result.data.trades.map((trade) =>
-          el('tr', null, [
-            el('td', null, fmtDateTime(trade.executedAt)),
-            el('td', 'mono', trade.stockId),
-            el(
-              'td',
-              trade.side === 'buy' ? 'text-pos' : 'text-neg',
-              trade.side === 'buy' ? '买入' : '卖出',
-            ),
-            el('td', 'num', String(trade.quantity)),
-            el('td', 'num', fmtNum(trade.price)),
-            el('td', null, trade.source),
-          ]),
-        ),
-  );
+  const trades = result.data.trades ?? [];
+  function renderPage() {
+    const { page, pageSize } = pagination.getState();
+    const pageItems = trades.slice((page - 1) * pageSize, page * pageSize);
+    mount(body, pageItems.map(tradeRow));
+  }
+  const pagination = createPagination({ total: trades.length, onChange: renderPage });
+  if (trades.length === 0) {
+    mount(body, el('tr', null, el('td', 'placeholder', '（无交易记录）')));
+    paginationWrap.replaceChildren();
+    return;
+  }
+  renderPage();
+  mount(paginationWrap, pagination.root);
 };
 
 /* ============ 持仓分析结果（内嵌展示，不再跳转建议页） ============ */
@@ -529,6 +614,7 @@ const ERROR_KIND_LABELS = {
   adapter_error: '行情或外部服务异常',
   permission_denied: '权限不足',
   llm_error: 'AI 分析服务异常',
+  timeout: '请求超时',
   internal: '内部错误',
 };
 
@@ -824,6 +910,22 @@ const renderAdviceList = async (setStatus) => {
   const filter = $('#advice-filter')?.value ?? 'all';
   const stockId = routeStockId();
   const filtered = filterAdvices(all, filter, stockId);
+  let paginationWrap = list.nextElementSibling;
+  if (
+    paginationWrap === null ||
+    !(paginationWrap instanceof Element) ||
+    !paginationWrap.classList.contains('pagination-wrap')
+  ) {
+    paginationWrap = document.createElement('div');
+    paginationWrap.className = 'pagination-wrap';
+    list.after(paginationWrap);
+  }
+  function renderPage() {
+    const { page, pageSize } = pagination.getState();
+    const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
+    mount(list, pageItems.map(adviceCard));
+  }
+  const pagination = createPagination({ total: filtered.length, onChange: renderPage });
   if (filtered.length === 0) {
     mount(
       list,
@@ -837,8 +939,10 @@ const renderAdviceList = async (setStatus) => {
           : `（${stockId} 暂无匹配建议）`,
       ),
     );
+    paginationWrap.replaceChildren();
   } else {
-    mount(list, filtered.map(adviceCard));
+    renderPage();
+    mount(paginationWrap, pagination.root);
   }
   setStatus(
     stockId === null
@@ -882,16 +986,19 @@ const reportBlockNode = (block) => {
     return el(
       'div',
       'report-metrics',
-      block.items.map((item) =>
-        el('div', 'report-metric', [
+      block.items.map((item) => {
+        const text =
+          item.displayValue ??
+          (item.value === null || item.value === undefined
+            ? '不可用'
+            : item.unit === 'ratio' && typeof item.value === 'number'
+              ? fmtPct(item.value, 1)
+              : `${item.value}${item.unit ?? ''}`);
+        return el('div', 'report-metric', [
           el('span', 'report-metric-label', item.label),
-          el(
-            'strong',
-            'report-metric-value',
-            `${item.displayValue ?? item.value ?? '不可用'}${item.unit ?? ''}`,
-          ),
-        ]),
-      ),
+          el('strong', 'report-metric-value', text),
+        ]);
+      }),
     );
   }
   if (block.kind === 'list') {
@@ -953,6 +1060,16 @@ const downloadReport = async (reportId, format) => {
   URL.revokeObjectURL(url);
 };
 
+const deleteReport = async (reportId, setStatus) => {
+  const result = await callApi(`/api/reports/${reportId}`, { method: 'DELETE', body: '{}' });
+  if (!result.ok) {
+    setStatus(`报告删除失败：${result.error.kind}`, true);
+    return;
+  }
+  selectedReportId = null;
+  await renderReports(setStatus);
+};
+
 const loadReportDetail = async (reportId, setStatus) => {
   selectedReportId = reportId;
   const result = await callApi(`/api/reports/${reportId}`);
@@ -964,10 +1081,20 @@ const loadReportDetail = async (reportId, setStatus) => {
   const detail = $('#report-detail');
   const markdown = el('button', 'btn btn-outline btn-sm', '导出 Markdown');
   const plain = el('button', 'btn btn-outline btn-sm', '导出纯文本');
+  const remove = el('button', 'btn btn-outline btn-sm', '删除');
   markdown.type = 'button';
   plain.type = 'button';
+  remove.type = 'button';
   markdown.addEventListener('click', () => void downloadReport(report.id, 'markdown'));
   plain.addEventListener('click', () => void downloadReport(report.id, 'plain-text'));
+  remove.addEventListener('click', () => {
+    openConfirmModal({
+      title: '删除报告',
+      message: `确定删除「${report.title}」？删除后不可恢复。`,
+      confirmLabel: '删除',
+      onConfirm: () => void deleteReport(report.id, setStatus),
+    });
+  });
 
   const nodes = [
     el('header', 'report-sheet-header', [
@@ -980,7 +1107,12 @@ const loadReportDetail = async (reportId, setStatus) => {
           `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}`,
         ),
       ]),
-      el('div', 'report-sheet-actions', [reportStatusBadge(report.status), markdown, plain]),
+      el('div', 'report-sheet-actions', [
+        reportStatusBadge(report.status),
+        markdown,
+        plain,
+        remove,
+      ]),
     ]),
     el('div', 'report-asof', [
       el('span', null, `DATA AS OF ${fmtDateTime(report.dataAsOf)}`),
@@ -1013,9 +1145,11 @@ const loadReportDetail = async (reportId, setStatus) => {
   }
   if (report.evidence.length > 0) {
     nodes.push(
-      el('section', 'report-provenance', [
-        el('span', 'section-kicker', 'PROVENANCE'),
-        el('h3', null, '数据来源'),
+      el('details', 'report-provenance', [
+        el('summary', null, [
+          el('span', 'section-kicker', 'PROVENANCE'),
+          el('h3', null, `数据来源（${report.evidence.length}）`),
+        ]),
         ...report.evidence.map((evidence) =>
           el('div', 'report-source-row', [
             el('strong', null, evidence.dimension),
@@ -1085,6 +1219,9 @@ const renderReports = async (setStatus) => {
   const history = $('#report-history');
   if (reports.length === 0) {
     mount(history, el('p', 'placeholder', '暂无报告；报告 workflow 接入后会在这里形成历史。'));
+    // 删除最后一份报告后详情区同步清空，避免展示已删除内容
+    selectedReportId = null;
+    mount($('#report-detail'), el('p', 'placeholder', '暂无报告。'));
   } else {
     mount(
       history,
@@ -2176,7 +2313,6 @@ export {
   cancelAnalyzeAllHoldings,
   errorKindLabel,
   filterAdvices,
-  memberChangePct,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,

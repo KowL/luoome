@@ -1,5 +1,6 @@
 import {
   type MarketDataAdapterLike,
+  money,
   type Strategy,
   type StrategyDslV1,
   type StrategyRun,
@@ -378,6 +379,42 @@ describe('strategy-query', () => {
       ['宁德时代', '300750.SZ', 'selected'],
       ['贵州茅台', '600519.SH', 'selected'],
     ]);
+  });
+
+  it('enriches selected view with latest quote price and changePct', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 2 });
+    await seedStrategy(ctx);
+    const run = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    if (!run.ok) throw new Error('run_strategy 前置失败');
+
+    const now = ctx.clock();
+    await ctx.repos.quote.save({
+      stockId: '600519.SH',
+      observedAt: now,
+      fetchedAt: now,
+      timestampSource: 'upstream',
+      ts: now,
+      open: money(1600),
+      high: money(1650),
+      low: money(1590),
+      close: money(1640),
+      volume: 1_000_000,
+      prevClose: money(1600),
+      source: 'test',
+    });
+
+    const result = await listStrategyResultViewsTool.execute(
+      { strategyId: 'scan-strategy', view: 'selected' },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const maoTai = result.data.rows.find((row) => row.stock.stockId === '600519.SH');
+    expect(maoTai).toBeDefined();
+    expect(maoTai?.quote).toMatchObject({ price: 1640, changePct: 2.5 });
+    const ningDe = result.data.rows.find((row) => row.stock.stockId === '300750.SZ');
+    expect(ningDe?.quote).toBeUndefined();
   });
 
   it('keeps the latest complete run as current when the latest attempt failed', async () => {
