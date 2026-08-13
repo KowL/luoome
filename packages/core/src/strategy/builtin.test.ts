@@ -5,6 +5,7 @@ import {
   EARLY_BREAKOUT_V2_DRAFT,
   STRATEGY_TEMPLATE_REVISION,
 } from './builtin.js';
+import { compileStrategyExpression } from './expression.js';
 
 /**
  * 内置策略身份锁定：definitionHash 是 StrategyVersion 的落库 identity，
@@ -13,7 +14,7 @@ import {
  */
 const EXPECTED: Readonly<Record<string, string>> = {
   'breakout-volume': '63d8fb42b272ab65b8104a2216eca3780b37844b5656e1094cc4d8097d390540',
-  'ma-bullish-alignment': '272f82c753cb34641118f4b1e391b401d7bb30d187c092a49d05bcb8711360b1',
+  'ma-bullish-alignment': '35c9a7d3855c0da48d9524286179bf15961ec8d541e4fa2b1ecda8c4a13169ec',
   'pullback-after-limit-up': '11b17d7cb555b6662ae3cce3058471773397e5a1b4e7b758dd07d1eba90231a3',
   'volume-price-divergence': '947f839d471f8b99040b85e1022af77b19649fb5930b32b8ea7a2c31ebc0be7c',
   'sector-resonance': '3baf763c7f7504549c6791a878932473dffa2fe31405dc3589e8e97aa771a692',
@@ -72,5 +73,50 @@ describe('BUILTIN_STRATEGY_TEMPLATES', () => {
     });
     expect(EARLY_BREAKOUT_V2_DRAFT.definition.signals.exit[0]?.id).toBe('early-breakout-exit-v2');
     expect(EARLY_BREAKOUT_V2_DRAFT.definition.signals.risk[0]?.id).toBe('early-breakout-risk-v2');
+  });
+
+  it('均线多头要求趋势确认，并保持评分区分度', () => {
+    const template = BUILTIN_STRATEGY_TEMPLATES.find(
+      (candidate) => candidate.id === 'ma-bullish-alignment',
+    );
+    if (template === undefined) throw new Error('ma-bullish-alignment template missing');
+    const rule = template.definition.selection.rules[0];
+    const score = template.definition.scoring?.components[0]?.score;
+    if (rule === undefined || score === undefined) throw new Error('ma template rule missing');
+
+    const weakTrend = {
+      indicators: {
+        close: 11,
+        ma5: 10.5,
+        ma10: 10,
+        ma20: 9.5,
+        momentum20Pct: 2,
+        daysAboveMa20: 10,
+        volRatio5_20: 1,
+      },
+    };
+    const confirmedTrend = {
+      indicators: {
+        ...weakTrend.indicators,
+        momentum20Pct: 8,
+        daysAboveMa20: 4,
+        volRatio5_20: 1.2,
+      },
+    };
+
+    expect(compileStrategyExpression(rule.when).evaluate(weakTrend)).toMatchObject({
+      status: 'value',
+      value: false,
+    });
+    expect(compileStrategyExpression(rule.when).evaluate(confirmedTrend)).toMatchObject({
+      status: 'value',
+      value: true,
+    });
+    expect(compileStrategyExpression(score).evaluate(confirmedTrend)).toMatchObject({
+      status: 'value',
+      value: expect.any(Number),
+    });
+    const scored = compileStrategyExpression(score).evaluate(confirmedTrend);
+    expect(Number(scored.value)).toBeLessThan(100);
   });
 });
