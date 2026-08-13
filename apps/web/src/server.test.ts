@@ -854,6 +854,97 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     });
   });
 
+  it('POST /api/strategies/:id/backtests 持久化隔离的历史模拟并返回区间汇总', async () => {
+    const strategyId = 'web-strategy-backtest';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: 'Web Backtest Strategy',
+            description: '验证历史模拟回测入口',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const versionResponse = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/versions`, {
+        definition: {
+          schemaVersion: 1,
+          metadata: { horizon: 'short' },
+          universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+          selection: {
+            logic: 'all',
+            rules: [
+              {
+                id: 'positive-price',
+                name: '价格有效',
+                when: 'quote.close > 0',
+                evidence: ['价格有效'],
+              },
+            ],
+          },
+          signals: { entry: [], exit: [], risk: [] },
+        },
+      }),
+    );
+    const versionBody = (await versionResponse.json()) as {
+      data?: { version?: { id: string } };
+    };
+    const versionId = versionBody.data?.version?.id;
+    expect(versionId).toBeString();
+    if (versionId === undefined) return;
+    expect(
+      (await app.fetch(targetRequest(`/api/strategies/${strategyId}/validate`, { versionId })))
+        .status,
+    ).toBe(200);
+    expect(
+      (await app.fetch(targetRequest(`/api/strategies/${strategyId}/publish`, { versionId })))
+        .status,
+    ).toBe(200);
+
+    const response = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/backtests`, {
+        versionId,
+        from: '2026-08-09',
+        to: '2026-08-09',
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: {
+        status: 'complete',
+        summary: {
+          tradingDays: 0,
+          completedDays: 0,
+          failedDays: 0,
+          evaluatedCount: 0,
+          selectedCount: 0,
+          signalCount: 0,
+        },
+        days: [],
+      },
+    });
+    const runs = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/runs?scope=operational`),
+    );
+    expect(await runs.json()).toMatchObject({ ok: true, data: { runs: [] } });
+
+    const tooLong = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/backtests`, {
+        from: '2026-07-01',
+        to: '2026-08-01',
+      }),
+    );
+    expect(tooLong.status).toBe(400);
+    expect(await tooLong.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input', message: '历史模拟参数无效' },
+    });
+  });
+
   it('目标 mutation 要求显式 opt-in，并校验同源 Origin', async () => {
     const guarded = createWebApp(await buildTestContext(), {
       exposeWrite: false,

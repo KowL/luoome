@@ -34,11 +34,12 @@ import { buildContext, toolRegistry } from '@luoome/tools';
 import {
   closingReportWorkflow,
   openingReportWorkflow,
+  replayStrategyRangeWorkflow,
   runIntradayWatchObserved,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
@@ -52,6 +53,31 @@ import {
 import { STRATEGY_SCHEDULER_INTERVAL_MS, startStrategyScheduler } from './strategy-scheduler.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
+
+const STRATEGY_BACKTEST_MAX_DAYS = 31;
+const StrategyBacktestRequest = z
+  .object({
+    versionId: z.string().min(1).optional(),
+    from: z.string().date(),
+    to: z.string().date(),
+    stockIds: z.array(z.string().min(1)).min(1).max(500).optional(),
+  })
+  .superRefine((input, ctx) => {
+    const from = new Date(`${input.from}T00:00:00.000Z`);
+    const to = new Date(`${input.to}T00:00:00.000Z`);
+    if (from > to) {
+      ctx.addIssue({ code: 'custom', path: ['from'], message: 'from 不能晚于 to' });
+      return;
+    }
+    const days = Math.floor((to.getTime() - from.getTime()) / 86_400_000) + 1;
+    if (days > STRATEGY_BACKTEST_MAX_DAYS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['to'],
+        message: `Web 单次历史模拟最多 ${STRATEGY_BACKTEST_MAX_DAYS} 个自然日`,
+      });
+    }
+  });
 
 /**
  * 行情页图表库（设计 §12.1）：固定版本 lightweight-charts 的 ESM 产物文件。
@@ -1189,6 +1215,34 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       strategyId: c.req.param('id'),
     }),
   );
+  app.post('/api/strategies/:id/backtests', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    const parsed = StrategyBacktestRequest.safeParse(body.data);
+    if (!parsed.success) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '历史模拟参数无效',
+          issues: parsed.error.issues,
+        },
+      });
+    }
+    return jsonResult(
+      await replayStrategyRangeWorkflow.run(
+        {
+          strategyId: c.req.param('id'),
+          ...parsed.data,
+          persist: true,
+          owner: 'web',
+        },
+        ctxRef.current,
+      ),
+    );
+  });
   app.post('/api/strategies/:id/draft', (c) =>
     targetMutation(c.req.raw, 'external', 'propose_strategy_version_draft', {
       strategyId: c.req.param('id'),
