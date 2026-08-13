@@ -24,7 +24,7 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 case "$(uname -s)" in
   Darwin | Linux) ;;
-  *) fail "仅支持 macOS / Linux（Windows 请走 WSL2）" ;;
+  *) fail "仅支持 macOS / Linux（Windows 请用 install.ps1：https://raw.githubusercontent.com/KowL/luoome/main/install.ps1，或走 WSL2）" ;;
 esac
 command -v curl >/dev/null 2>&1 || fail "需要 curl"
 command -v tar >/dev/null 2>&1 || fail "需要 tar"

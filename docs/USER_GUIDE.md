@@ -31,19 +31,28 @@ luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
 ### 1.1 系统要求
 
-- **macOS / Linux**（Windows 可走 WSL2）
-- **Bun ≥ 1.3**（[安装](https://bun.sh)）
+- **macOS / Linux / Windows**（Windows 用 PowerShell 5.1+，也可走 WSL2）
+- **Bun ≥ 1.3**（[安装](https://bun.sh)；一键脚本会自动装）
 - **网络**（仅在启用 `LUOOME_MARKET_PROVIDER=real` 时需要，用于拉 Eastmoney / Tencent 行情）
 - **可选** Python 3.10+（仅诊断/可视化子工具间接依赖）
 
 ### 1.2 一键安装脚本（推荐，无需 git）
 
+macOS / Linux：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KowL/luoome/main/install.sh | sh
 ```
 
-脚本自动完成：检测并安装 Bun → 下载源码 tarball 到 `~/.luoome/src` → `bun install` →
-在 `~/.local/bin` 生成 `luoome` 命令。可用环境变量覆盖：`LUOOME_REF`（分支 / tag /
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/KowL/luoome/main/install.ps1 | iex
+```
+
+脚本自动完成：检测并安装 Bun → 下载源码到 `~/.luoome/src`（Windows 为 `~\.luoome\src`）→
+`bun install` → 生成 `luoome` 命令（macOS/Linux 在 `~/.local/bin`，Windows 在
+`~\.luoome\bin\luoome.cmd` 并写入用户 PATH）。可用环境变量覆盖：`LUOOME_REF`（分支 / tag /
 commit，默认 `main`）、`LUOOME_HOME`、`LUOOME_BIN_DIR`。重新执行即升级。
 
 ### 1.3 从源码运行（开发 / 验证）

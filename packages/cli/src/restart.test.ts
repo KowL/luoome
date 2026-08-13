@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
-import { findPidOnPort, killPid, waitForProcessExit } from './restart.js';
+import { findPidOnPort, killPid, parseNetstatPid, waitForProcessExit } from './restart.js';
 
 /**
- * restart helpers —— lsof + 信号管理。
+ * restart helpers —— lsof / netstat + 信号管理。
  * 不启动真实 web，借空闲端口 + 临时 sleep 子进程验证探活与终止。
  */
 
@@ -45,6 +45,34 @@ describe('waitForProcessExit', () => {
     killPid(pid, 'SIGKILL');
     await waitForProcessExit(pid, 2000);
     expect(exited).toBe(false);
+  });
+});
+
+describe('parseNetstatPid', () => {
+  // Windows `netstat -ano -p tcp` 的真实输出形态（含 IPv4 / IPv6 / 非 LISTENING 行）。
+  const sample = [
+    '',
+    '活动连接',
+    '',
+    '  协议  本地地址          外部地址        状态           PID',
+    '  TCP    0.0.0.0:5173           0.0.0.0:0              LISTENING       12345',
+    '  TCP    127.0.0.1:5173         127.0.0.1:60000        ESTABLISHED     12345',
+    '  TCP    127.0.0.1:60000        127.0.0.1:5173         ESTABLISHED     6789',
+    '  TCP    [::1]:5173             [::]:0                 LISTENING       22222',
+    '',
+  ].join('\r\n');
+
+  it('LISTENING 行命中端口 → PID', () => {
+    expect(parseNetstatPid(sample, 5173)).toBe(12345);
+  });
+
+  it('ESTABLISHED 行的对端端口不误判', () => {
+    expect(parseNetstatPid(sample, 60000)).toBeNull();
+  });
+
+  it('无匹配 → null', () => {
+    expect(parseNetstatPid(sample, 9999)).toBeNull();
+    expect(parseNetstatPid('', 5173)).toBeNull();
   });
 });
 

@@ -133,8 +133,11 @@ Web 用户可直接进入「设置 → LLM 设置」选择提供商、模型、�
 ## 快速启动
 
 ```bash
-# 一键安装（无需 git clone，自动装 Bun + 源码 + luoome 命令）
+# 一键安装（macOS / Linux，无需 git clone，自动装 Bun + 源码 + luoome 命令）
 curl -fsSL https://raw.githubusercontent.com/KowL/luoome/main/install.sh | sh
+
+# Windows（PowerShell 5.1+）
+irm https://raw.githubusercontent.com/KowL/luoome/main/install.ps1 | iex
 
 # 或者从本仓库直接运行
 bun install
