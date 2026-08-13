@@ -431,7 +431,7 @@ export const runStrategyTool = defineTool({
           const quote = preloadedQuotes.get(stockId);
           if (quote === undefined) {
             unavailableCount += 1;
-            return false;
+            return true;
           }
           const decision = prefilter.evaluate(quote);
           if (decision.status === 'reject') {

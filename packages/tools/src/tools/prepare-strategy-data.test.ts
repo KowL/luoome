@@ -130,7 +130,7 @@ describe('prepare_strategy_data freshness and vintage', () => {
       status: 'available',
       provider: 'local:daily-bars',
     });
-    expect(await ctx.repos.dailyBar.listRevisions({ stockId: '600519.SH' })).toHaveLength(0);
+    expect(await ctx.repos.dailyBar.listRevisions({ stockId: '600519.SH' })).toHaveLength(1);
   });
 
   it('stale daily bar is missing rather than provider-ok and lowers checkpoint coverage', async () => {

@@ -253,23 +253,23 @@ export const prepareStrategyDataTool = defineTool({
                   return revision !== undefined && revisionMatchesBar(bar, revision);
                 });
           if (bars.length > 0) {
-            if (!reuseCache) {
-              if (input.persistCurrentProjection) await ctx.repos.dailyBar.saveMany(bars);
-              await ctx.repos.dailyBar.saveRevisions(
-                bars.map((bar) => ({
-                  stockId: bar.stockId,
-                  date: bar.date,
-                  contentHash: dailyBarContentHash(bar),
-                  open: bar.open,
-                  high: bar.high,
-                  low: bar.low,
-                  close: bar.close,
-                  volume: bar.volume,
-                  source: bar.source,
-                  recordedAt: startedAt,
-                })),
-              );
+            if (!reuseCache && input.persistCurrentProjection) {
+              await ctx.repos.dailyBar.saveMany(bars);
             }
+            await ctx.repos.dailyBar.saveRevisions(
+              bars.map((bar) => ({
+                stockId: bar.stockId,
+                date: bar.date,
+                contentHash: dailyBarContentHash(bar),
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: bar.volume,
+                source: bar.source,
+                recordedAt: startedAt,
+              })),
+            );
           }
           return {
             stockId,

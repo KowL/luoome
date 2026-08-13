@@ -100,6 +100,83 @@ const seedReplayBars = async (
 };
 
 describe('run_strategy', () => {
+  it('keeps candidates when prefilter batch quotes are unavailable', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    let singleCalls = 0;
+    const originalFetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: async () => new Map(),
+      fetchQuote: async (stockId) => {
+        singleCalls += 1;
+        return originalFetchQuote(stockId);
+      },
+    };
+
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        prefilter: { mode: 'quote-selection-safe' },
+      },
+      { ...base, adapters: { ...base.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results).toHaveLength(2);
+    expect(singleCalls).toBe(2);
+    expect(result.data.run.inputSnapshot).toMatchObject({
+      prefilter: { unavailableCount: 2 },
+    });
+  });
+
+  it('scheduled run reads a checkpoint backed by a reused fresh projection', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    await seedStrategy(base);
+    await base.repos.dailyBar.saveMany([
+      {
+        stockId: '600519.SH',
+        date: new Date('2026-08-11T00:00:00.000Z'),
+        open: money(10),
+        high: money(11),
+        low: money(9),
+        close: money(10),
+        volume: 1_000_000,
+        adjustment: 'qfq',
+        source: 'local-only',
+      },
+    ]);
+    const prepared = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        cachePolicy: 'reuse-fresh',
+      },
+      base,
+    );
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        mode: 'scheduled',
+        dataCheckpointId: prepared.data.checkpoint.id,
+      },
+      base,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results[0]?.ruleEvaluations[0]?.status).toBe('matched');
+    expect(result.data.run.publication?.status).toBe('published');
+  });
+
   it('scan with quote rules uses one batch quote request before per-stock evaluation', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 2 });
