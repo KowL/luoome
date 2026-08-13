@@ -336,6 +336,34 @@ describe('run_strategy', () => {
     expect(observations).toEqual([]);
   });
 
+  it('keeps the current scan cutoff when one stock has stale observations', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 2, observedAt: now });
+    await seedStrategy(base);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      fetchQuote: async (stockId) => {
+        const quote = await base.adapters.market.fetchQuote(stockId);
+        const observedAt = stockId === '600519.SH' ? new Date('2026-07-13T00:00:00.000Z') : now;
+        return { ...quote, observedAt, ts: observedAt };
+      },
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
+
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['300750.SZ', '600519.SH'] },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.run.dataAsOf).toEqual(now);
+    expect(result.data.results.map((item) => item.dataAsOf).sort()).toEqual(
+      [new Date('2026-07-13T00:00:00.000Z'), now].sort(),
+    );
+  });
+
   it('dry-run does not persist', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 1 });
@@ -526,7 +554,7 @@ describe('run_strategy', () => {
     });
   });
 
-  it('manual full-universe formal run publishes partial data after user confirmation', async () => {
+  it('withholds a manual full-universe run when data acceptance rejects it', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 2 });
     await seedStrategy(base);
@@ -550,8 +578,8 @@ describe('run_strategy', () => {
       evaluatedCount: 1,
     });
     expect(result.data.run.publication).toMatchObject({
-      status: 'published',
-      reasons: [],
+      status: 'withheld',
+      reasons: ['acceptance-rejected'],
     });
   });
 

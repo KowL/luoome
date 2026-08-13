@@ -208,10 +208,9 @@ describe('Strategy reliability primitives', () => {
         status: 'complete',
         universeCheckpointPresent: true,
         acceptance: rejectedAcceptance,
-        requestedBy: 'manual',
         decidedAt: NOW,
       }),
-    ).toMatchObject({ status: 'published', reasons: [] });
+    ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });
     expect(
       decideStrategyRunPublication({
         scope: 'operational',
@@ -219,7 +218,6 @@ describe('Strategy reliability primitives', () => {
         status: 'complete',
         universeCheckpointPresent: true,
         acceptance: rejectedAcceptance,
-        requestedBy: 'scheduled',
         decidedAt: NOW,
       }),
     ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });

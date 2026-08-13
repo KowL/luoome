@@ -618,16 +618,6 @@ export const runStrategyTool = defineTool({
           ? [item]
           : [],
       );
-      if (input.mode === 'scan' && input.asOf === undefined) {
-        // dataAsOf 取每个候选所需事实的最新观测时间中的最保守值；
-        // lookback 内更早的 bar 是计算输入，不应把运行时点倒退到窗口起点。
-        const observedTimes = preparedStocks.flatMap((item) => [
-          ...(item.quote === undefined ? [] : [item.quote.ts.getTime()]),
-          ...(item.bars.at(-1) === undefined ? [] : [item.bars.at(-1)?.date.getTime() as number]),
-        ]);
-        const oldestObserved = Math.min(...observedTimes);
-        if (Number.isFinite(oldestObserved)) dataAsOf = new Date(oldestObserved);
-      }
       const metaByStock = needsDerivedMeta
         ? deriveStrategyMetaByStock(
             preparedStocks.map((item) => ({
@@ -786,7 +776,6 @@ export const runStrategyTool = defineTool({
         universeCheckpointPresent:
           successfulSync !== null && (input.stockIds !== undefined || snapshotStocks.length > 0),
         acceptance,
-        requestedBy,
         decidedAt: finishedAt,
       });
       const run = StrategyRunSchema.parse({
@@ -920,7 +909,6 @@ export const runStrategyTool = defineTool({
             status: 'failed',
             universeCheckpointPresent: false,
             acceptance,
-            requestedBy,
             decidedAt: finishedAt,
           });
           const failed = StrategyRunSchema.parse({
