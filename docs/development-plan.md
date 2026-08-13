@@ -1,17 +1,18 @@
 # luoome 开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-08；Strategy 可靠性复核：2026-08-11
+> 基线日期：2026-08-13；Strategy 可靠性复核：2026-08-13
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
 ## 1. 目标与排序原则
 
-后续开发分为三层，按以下顺序推进：
+后续开发分为四层，按以下顺序推进：
 
-1. 完成详细设计中已经部分落地的竖向功能，先消除半成品和架构偏差；
-2. 实现已有详细设计、但尚未开始或只具备底层支撑的新功能；
-3. 对只有 PRD 或方向草案的新需求先立项并补详细设计，再进入编码。
+1. 对已编码但尚未完成生产验收的能力，先补故障测试、可观测和真实运行证据；
+2. 完成详细设计中已经部分落地的竖向功能，消除半成品和架构偏差；
+3. 实现已有详细设计、但尚未开始或只具备底层支撑的新功能；
+4. 对只有 PRD 或方向草案的新需求先立项并补详细设计，再进入编码。
 
 所有计划以当前代码和测试为实现事实。文档顶部状态与代码冲突时，不以“待实施”等旧状态
 机械排期；先修正文档，再按本计划执行。
@@ -20,22 +21,21 @@
 
 ### 2.1 验证结果
 
-2026-08-08 在 `main`、干净工作树上完成基线验证：
+2026-08-13 在 `main` 当前工作树完成基线验证；Strategy publication、模板和 Web 历史评估相关
+改动仍未提交，按 §3 的 S0 收口，不把工作树状态提前视为已交付版本：
 
 | 验证项 | 结果 |
 |---|---|
-| Vitest | 138 个文件、963 项测试通过 |
-| DB Bun tests | 228 项测试通过 |
-| Web Bun tests | 147 项测试通过 |
+| Vitest | 153 个文件、1107 项测试通过 |
+| DB Bun tests | 259 项测试通过 |
+| Web Bun tests | 215 项测试通过 |
 | TypeScript | 所有 workspace `tsc --noEmit` 通过 |
-| Biome | 460 个文件检查通过 |
+| Biome | 517 个文件检查通过 |
+| Build | 所有含入口的 workspace Bun 构建通过 |
 
-这组数字只是本计划建立时的基线，不作为长期维护的固定测试库存。后续验收以
-`package.json` 中的当前脚本和测试发现结果为准。
-
-本轮 M0～M3 验收结果：Vitest 140 个文件、986 项通过；DB Bun tests 228 项通过；Web Bun
-tests 155 项通过；TypeScript 与 Biome 均通过。另以真实浏览器检查了研究页的索引状态、三步
-写入预览、默认 write/external permission gate，以及行情页日期深链接。
+本轮合计 1581 项测试通过。这组数字只是本计划建立时的基线，不作为长期维护的固定测试库存；
+后续验收以 `package.json` 中的当前脚本和测试发现结果为准。Web 历史评估入口尚需在 S0/S2
+完成真实浏览器和长任务验收。
 
 ### 2.2 实现状态矩阵
 
@@ -43,10 +43,11 @@ tests 155 项通过；TypeScript 与 Biome 均通过。另以真实浏览器检�
 |---|---|---|
 | 行情底座 | StockUniverse、qfq DailyBar、Quote 新鲜度、capability registry 已完成 | 优先消费已有能力，不继续横向扩底层 |
 | Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除，目标模型已落地 | PRD/DDD 状态和部分架构示例滞后 |
-| Strategy Workspace | Phase A～C 功能已完成；2026-08-11 全市场运行确认调度、租约、发布质量门、观察补全和 AI 降级仍需可靠性深化 | 先执行 [Strategy 日运行与评估可靠性计划](./strategy-reliability-development-plan.md) 的 P0/P1；保持确认与非交易边界 |
+| Strategy Workspace | Phase A～C 已完成；publication、fencing lease、daily cycle、checkpoint、PIT replay、edge signal 和观察统计的核心实现已落地 | 缺长运行故障矩阵、日期级作业体验、真实全市场性能预算和连续 30 个交易日生产证据 |
 | Research Vault | Phase A/B、Phase C、M3 managed 创建/导入与 M4 FTS/ResearchBrief 已完成 | embedding、跨模型评测扩展和远端同步仍暂缓 |
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
-| Report / 复盘 | Report、三类简报、SignalObservation 描述统计已落地 | benchmark 仍 unavailable，不能称为回测 |
+| Report / 信号复盘 | Report、三类简报、SignalObservation、benchmark/excess return、MFE/MAE 与分组描述统计已落地 | benchmark 真实数据可用率和样本去相关仍需生产验证；历史评估仍不是严格收益回测 |
+| 账户绩效 | 当前持仓 PnL、集中度、Trade 与 AdviceOutcome 已落地 | 缺现金流/公司行动口径、每日估值、TWR、回撤、benchmark 和持仓贡献归因，列为 v0.10 |
 | 连板天梯 | Phase 1～3 已完成，包括 Tool、CLI/TUI/Web、daily-review、市场观点、行情/研究个股事实 | 后续仅补历史数据源能力与体验增强 |
 | Workflow 架构 | 生产 workflow 已通过 workflow-only tools 编排，并有静态边界测试 | 后续新增 workflow 继续遵守同一边界 |
 
@@ -60,38 +61,105 @@ tests 155 项通过；TypeScript 与 Biome 均通过。另以真实浏览器检�
   以显式 opt-in、complete sync 结束缺失来源的方式重新设计。
 - [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) 中“当前没有 agent loop”的描述已被
   AI SDK 和 Web chat 实现取代，不再按旧方案重复建设 loop。
-- [ROADMAP](./ROADMAP.md) v0.8 以前内容是历史快照，不作为当前功能 backlog。
-- SignalObservation 是真实事后观察，不是严格回测；benchmark、费用、滑点和 point-in-time
-  universe 未满足前，不展示年化、胜率或回测曲线。
+- [ROADMAP](./ROADMAP.md) v0.8 以前内容是历史快照，不作为当前功能 backlog；v0.9 起才是当前版本计划。
+- SignalObservation 是真实事后观察，point-in-time replay 也是历史规则回放；即使已有 PIT universe、
+  DailyBar revision 和 benchmark 事实，在费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本
+  门禁满足前，仍不展示净值、年化、Sharpe、胜率或严格回测曲线。
 
 ## 3. 依赖关系
 
 ```text
-M0 事实源与 Workflow 边界收口
-├─ M1 Research Phase C ──► M3 Research 导入 ──► M4 Agent 检索 ──► M5 Strategy AI 迭代
-└─ M2 Market View Phase 3 ────────────────────────────────► M6 连板天梯 Phase 3
+M0～M6 已完成能力基线
+  │
+  ▼
+S0 当前改动收口 ──► S1 可靠性测试/可观测 ──► S2 历史评估作业化
+                                                   │
+                                                   ▼
+                                      S3 连续 30 个交易日生产验证
+                                                   │
+                                                   ▼
+                              S4 / v0.10 账户绩效与组合归因
 
-Strategy 可靠性独立主线：R0 发布判定 ──► R1 fencing lease ──► R2 daily cycle
-                                      └─► R3/R4 数据与规则质量 ──► R5 早期突破 v2
-                                      └─► R6/R7 历史评估与统计
+S3 观察期内可以推进 S4 的 PRD/DDD，不提前扩大自动推荐、通知或外部数据源。
 ```
 
 以下工期按单人或单 Agent 串行开发估算，表示有效开发日，不包含外部数据源审批、产品等待和
 真实市场数据等待时间。
 
-### 3.1 当前优先级覆盖（2026-08-11）
+### 3.1 当前优先级覆盖（2026-08-13）
 
-M0～M6 已完成，不再重复排期。当前最高优先级切换为
-[Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md)：
+M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md)
+中的 R0～R7 已从“待编码”进入“核心实现已落地、验收和运营证据未完成”的阶段。下一步按以下
+顺序推进：
 
-1. P0：运行 publication、fencing lease、daily cycle、观察补全与 facts-only insight；
-2. P1：指标/表达式语义、全市场 checkpoint、早期突破 v2；
-3. P2：point-in-time 历史评估与 benchmark 统计。
+| 顺序 | 里程碑 | 目标 | 预计 |
+|---|---|---|---:|
+| P0 | S0 当前改动收口 | 分离安全修复、模板升级与历史评估 UI，消除半完成工作树 | 1～2 日 |
+| P0 | S1 可靠性测试与可观测 | 用故障矩阵证明 publication、fencing、daily cycle 和降级行为 | 5～8 日 |
+| P0 | S2 历史评估作业化 | 把同步长请求改为可进度、可续跑、可取消的 evaluation job | 4～6 日 |
+| Gate | S3 生产验证 | 连续 30 个交易日收集真实运行、数据覆盖、观察补全和 AI 降级证据 | 30 个交易日 |
+| P1 | S4 账户绩效与组合归因 | 先冻结 DDD，再实现现金流口径估值、TWR、回撤和贡献归因 | 3～5 日设计 + 8～12 日实现 |
 
-P0 完成前，N1～N4 可以继续设计，但不应占用 Strategy 生产可靠性的实现顺序。严格回测继续受
-第 7 节门禁约束。
+### 3.2 Strategy 可靠性实现复核
+
+| 原里程碑 | 当前代码状态 | 下一验收动作 |
+|---|---|---|
+| R0 publication | Summary V4、scope、publication 和 current 查询已落地；手工运行绕过 acceptance 的修正位于当前工作树 | 合入安全修复，验证低覆盖 manual/scheduled 均 withheld，evaluation 永不污染 current |
+| R1 fencing lease | run/schedule heartbeat、fencing token 和 fenced commit 已落地 | 补三小时 fake-clock、owner 接管、旧 fence 提交失败和幂等 release 测试 |
+| R2 daily cycle | `strategy-daily-cycle` 已成为 Web scheduler 主路径，facts-only 已落地 | 增加 workflow 端到端故障矩阵；阶段耗时、计数和 providerStatuses 写入 WorkflowRun |
+| R3 规则语义 | crossing、AST 三值短路、实际读取路径和 RuleEvaluation V2 已落地 | 固定 evaluator 兼容测试并核对真实 incomplete 分布 |
+| R4 数据准备 | 有界并发、checkpoint、revision 和提前质量门已落地 | 配置化并发/超时，做连接重置、限流、fallback 风暴和 5198 股票性能验收 |
+| R5 早期突破 v2 | draft、edge/cooldown、exit/risk signal 能力已落地 | 用户确认后发布试验版本，进入完整 T+20 真实观察期 |
+| R6 PIT 历史评估 | universe snapshot、DailyBar revision、evaluation session/day 和 range replay 已落地 | 完成 Web 作业化、真实区间 smoke、续跑和 vintage unavailable 展示 |
+| R7 观察统计 | benchmark/excess return、分位数、MFE/MAE 和行业/score/edge 分组已落地 | 稳定同步 benchmark，验证去重口径、样本完整率和跨 Tool/Web/AI 一致性 |
+
+### 3.3 v0.9 执行切片
+
+#### S0：当前改动收口
+
+1. publication acceptance 与 `dataAsOf` 修正作为安全切片，不能与产品 UI 混在同一交付中。
+2. 均线多头模板 revision 独立交付，保留 definitionHash identity 测试。
+3. replay 输出汇总与 Web 入口独立交付；在 S2 完成前，不把“31 日全市场同步 HTTP 请求”作为正式
+   产品形态。
+4. 每个切片分别跑最小测试；合并交付前跑全量门禁。Web 改动必须真实浏览器验收。
+
+#### S1：可靠性测试与可观测
+
+1. 新增 `strategy-daily-cycle` 独立测试，覆盖 checkpoint 拒绝、withheld、观察失败、facts-only、
+   推荐/通知失败以及 schedule lease 丢失。
+2. 证明 lease 丢失后旧 owner 不能提交 run bundle、创建观察、生成 Advice 或发送通知。
+3. WorkflowRun 保存阶段、耗时、计数、publication 原因、checkpoint 和 providerStatuses；后阶段失败
+   不回滚已发布事实。
+4. 将数据准备的并发、单请求超时、有限重试和错误聚合纳入可观测配置。
+5. 对 5198 股票真实全市场运行记录数据准备 P95、纯求值 P95、覆盖率和 provider 失败分布。
+
+#### S2：历史评估作业化
+
+1. Web 创建 evaluation session 后快速返回，由日期级 job 后台推进；页面轮询 session/day 状态。
+2. 支持失败日重试、断点续跑和明确的取消状态；取消不删除已完成日期事实。
+3. 全市场与显式子集使用独立预算，展示预计范围、进度、partial/failed 和 vintage 状态。
+4. 结果固定称为“历史评估/历史回放”，只展示求值、入选、信号、覆盖与观察事实。
+5. 用真实数据验收 2026-07-01～2026-08-11，记录总耗时、版本可用率和重复运行幂等性。
+
+#### S3：生产验证门禁
+
+连续 30 个交易日记录：每个 schedule 的正式运行数、lease 续期、checkpoint 覆盖、publication、
+到期观察补全、facts-only 降级和通知结果。每周形成可靠性汇总。观察期间只允许扩大诊断和修复，
+不扩大自动推荐/通知默认范围。
+
+### 3.4 v0.10：账户绩效与组合归因
+
+S3 观察期间可先完成 PRD/DDD；实现必须遵守“契约与存储 → Tool → Report/Web/Agent”的竖向顺序：
+
+1. 冻结现金流、分红、拆股、费用、转入转出和公司行动口径。
+2. 建立按账户隔离的每日估值事实，缺失价格必须进入 completeness，不得填 0。
+3. 实现 TWR、最大回撤、benchmark 和持仓贡献归因，明确已实现/未实现 PnL 与收益率边界。
+4. 接入账户复盘页、周报和 Agent 只读事实；复盘结果不自动生成调仓或交易。
+5. 用入金、出金、分红、停牌、缺价和多账户 fixture 验证确定性与隔离性。
 
 ## 4. 第一优先级：完成部分实现
+
+> M0～M2 为已完成阶段记录，保留用于追溯，不再作为当前排期。
 
 ### M0：事实源与 Workflow 边界收口
 
@@ -195,6 +263,8 @@ P0 完成前，N1～N4 可以继续设计，但不应占用 Strategy 生产可�
 - Web tests 与真实浏览器验收通过。
 
 ## 5. 第二优先级：实现已有详细设计的新功能
+
+> M3～M6 均为已完成阶段记录，用于保留决策和验收上下文，不属于当前排期。
 
 ### M3：Research managed 创建与导入
 
@@ -326,12 +396,14 @@ Tool 本身不落库，确认后复用既有 `create_strategy_version` 写入，
 本轮实现对应 `market_outlook` 的结构化摘要、行情与研究视图的 `limitUp` facts、涨停 marker
 和研究时间线；单日历史拉取失败进入 `status=unavailable/warnings`，不伪造正常空结果。
 
-## 6. 第三优先级：新需求立项
+## 6. 后续产品立项
 
-以下需求目前只有 PRD 或方向草案。每项先产出 PRD 决策补充、DDD、Tool/API schema、迁移与测试
-矩阵，再决定实施排期。
+N1 已排入 v0.10；N2～N4 仍只有 PRD 或方向草案。每项在编码前先产出 PRD 决策补充、DDD、
+Tool/API schema、迁移与测试矩阵。
 
 ### N1：账户绩效与组合归因
+
+**状态：已排入 v0.10；S3 期间完成 PRD/DDD，生产实现依赖 Strategy 可靠性门禁。**
 
 优先冻结：
 
@@ -371,8 +443,8 @@ Tool 本身不落库，确认后复用既有 `create_strategy_version` 写入，
 
 ## 7. 明确暂缓或不做
 
-- **严格回测**：benchmark、费用、滑点、停牌/涨跌停、point-in-time universe、代码和数据版本
-  尚未满足门禁。
+- **严格收益回测**：PIT universe、DailyBar revision replay 和 benchmark 事实已经具备基础能力，但
+  费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本仍未满足门禁；v0.9 只称历史评估。
 - **分钟行情**：需要独立 MinuteBar 详细设计，不能复用 PriceSnapshot。
 - **继续扩多市场**：当前优先保障沪深 A 股目录、qfq 日线、策略和复盘闭环完整。
 - **Research 远端同步**：Git workflow 或 Obsidian Headless 只有在本地工作台稳定且有真实需求后
@@ -441,15 +513,19 @@ bun run build
 | 固定租约短于全市场运行 | heartbeat + fencing token + 同事务 fenced commit |
 | 观察 cron 与长运行竞态 | daily cycle 在运行终态后补观察；独立 cron 只作幂等补偿 |
 | AI 结构化输出失败导致周期无结果 | 一次有界修复；再失败返回确定性 facts-only 并标 partial |
+| Web 全市场历史评估阻塞单个请求 | evaluation session 后台作业化；日期级进度、续跑、取消和范围预算 |
 | 图表 marker 混淆事实与建议 | Trade、Advice、Trigger、Signal 使用不同类型和文案，不统一成买卖信号 |
 | 新数据源扩张导致 provider 语义泄漏 | capability registry + provenance + Tool 契约隔离 |
 
 ## 11. 计划完成判定
 
-完成 M0～M2 后，详细设计中当前最明显的“半成品”全部收口，可以进入已有详细设计的新功能。
-完成 M3～M6 后，Research、Strategy、Market View 和连板事实形成完整的研究—观察—复盘链路。
-N1～N4 只有在各自 DDD 冻结、端到端场景和验收门槛明确后，才进入新的实施计划。
+M0～M6 已完成并退出当前排期。v0.9 完成必须同时满足：
 
-新增完成条件：Strategy 可靠性 P0 必须连续 30 个交易日满足“每个 schedule 至多一次正式运行、
-低覆盖/evaluation 不发布、长运行不失租、到期观察可补齐、AI 失败仍有事实输出”，才算日运行
-闭环完成。P1/P2 的完成条件以独立计划为准。
+- S0～S2 全部交付且 Web 历史评估已作业化；
+- 连续 30 个交易日每个 schedule 至多一次正式运行；
+- 低覆盖/evaluation 发布污染为 0，长运行不失租或越权提交；
+- 到期观察最迟在下一次成功周期补齐，AI 故障仍有 facts-only 输出；
+- 全市场数据准备和求值进入设计性能预算，所有阶段都有 WorkflowRun 审计。
+
+v0.10 只有在账户绩效 DDD、数据完整度规则、端到端场景和测试矩阵冻结后进入实现。N2～N4
+继续作为候选方向，不与 v0.9/v0.10 并行扩张生产能力。

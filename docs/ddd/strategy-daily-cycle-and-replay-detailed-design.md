@@ -262,13 +262,13 @@ function decideStrategyRunPublication(input: {
 
 规则：
 
-- operational + full universe + complete + (acceptance accepted 或 requestedBy=manual) = `published`；
-- operational 但质量门不通过且 requestedBy≠manual（如 scheduled） = `withheld`；
+- operational + full universe + complete + acceptance accepted = `published`；
+- operational 但质量门不通过 = `withheld`，手工触发也不能绕过；
 - evaluation 或显式子集 = `non-publishing`；
 - `published` 必须 reasons 为空；其它状态至少一个 reason；
 - publication 不等于 Advice/notify，也不改变 run 的执行事实。
 
-`requestedBy=manual` 对应 Web 端用户点击「正式运行」且未指定显式 stockIds 的全市场运行：用户已在确认弹窗中明确接受 partial 数据，因此不再因验收失败而 withheld。scheduled 与 replay 仍受 acceptance policy 约束。
+`requestedBy` 只记录运行来源，不参与 publication 决策。Web 的运行确认不能替代结果生成后的数据质量门；手工、scheduled 与 replay 使用一致的 acceptance policy。
 
 `StrategyRunSchema` 新增：
 
@@ -1097,8 +1097,16 @@ Strategy Workspace 增加：
 - cycle phase timeline；
 - insight generated/facts-only 状态；
 - operational/evaluation 明确切换，默认不显示 evaluation。
+- 头部「模拟回测」入口调用 `POST /api/strategies/:id/backtests`；Web 单次限制 31 个自然日，
+  可选显式股票子集上限 500，服务端强制 `persist=true`、`owner=web`；
+- 区间结果返回逐日 `evaluated/selected/signal/failed` 与总汇总，并保留 `vintageStatus`、
+  `runId` 和 evaluation session；失败日期不能被吞掉；
+- 结果文案固定为“模拟回测（历史回放）”，明确不含收益、费用、滑点和可交易性模拟。
 
 UI 不提供“一键自动发布 v2”。定义 draft、试算、校验、发布仍是分步确认。
+
+`POST /api/strategies/:id/backtests` 同时属于 write 与 external：必须通过两个显式能力开关及
+同源 Origin 校验。返回的 replay run 一律是 evaluation/non-publishing，不参与 operational current。
 
 ### 16.2 CLI
 

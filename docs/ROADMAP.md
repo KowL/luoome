@@ -1,11 +1,13 @@
 # Roadmap
 
-> luoome v0.1 → v0.7 演进路线。每版本都有**可见产物 + 验收标准**。
+> luoome v0.1 → v0.10 演进路线。每版本都有**可见产物 + 验收标准**。
 > 设计主线：**罗（采集） → 织（分析） → 建议 → 复盘**。
 >
 > 本文件 v0.8 以前章节是历史快照。当前目标模型与入口以
 > [Strategy 与统一 Watchlist 详细设计](./ddd/strategy-watchlist-unification-detailed-design.md)
-> 和 [CONTEXT.md](../CONTEXT.md) 为准。
+> 和 [CONTEXT.md](../CONTEXT.md) 为准；当前执行顺序以
+> [开发计划](./development-plan.md) 和
+> [Strategy 可靠性开发计划](./strategy-reliability-development-plan.md) 为准。
 
 ## v0.1 — Foundation ✅（已完成）
 
@@ -210,7 +212,78 @@
 - ✅ SQLite 文件连接启用 WAL、`busy_timeout=5000` 与 `synchronous=NORMAL`，消除聊天、确认面板和调度器短事务并发时的即时 `database is locked`。
 - ✅ 正式 Strategy 运行先持久化 `status=running`，执行记录立即可见；完成或异常时原子更新为 `complete` / `failed` 并提交结果事实。
 
+## v0.9 — Strategy 生产可靠性与历史评估 🚧（进行中）
 
+**目标**：把“Strategy 功能可运行”提升为“每天可持续运行、结果可验收、失败可恢复、历史评估不污染生产视图”。
+
+**已落地基础**：
+
+- StrategyRun Summary V4、acceptance、`operational/evaluation` scope 与
+  `published/withheld/non-publishing` publication；
+- current/Diff/AlertPlan/推荐/生产洞察只消费 published operational run；
+- StrategyRun 与 StrategySchedule 的 heartbeat、fencing token 和所有权提交；
+- `strategy-daily-cycle`：数据准备 → run → 观察补全 → insight → 可选推荐/通知；
+- crossing 语义、AST 三值短路、RuleEvaluation V2、edge/cooldown 与 exit/risk signal；
+- StockUniverse PIT snapshot、DailyBar revision、StrategyDataCheckpoint；
+- evaluation session/day、range replay、断点续跑与 production/evaluation 查询隔离；
+- benchmark/excess return、MFE/MAE、分位数和行业/score/edge 分组描述统计。
+
+**当前交付切片**：
+
+1. **S0 当前改动收口**：分离 publication/`dataAsOf` 安全修复、策略模板升级、replay 汇总和 Web UI；
+2. **S1 可靠性测试与可观测**：补长租约接管、withheld 隔离、daily cycle 部分失败、facts-only 和
+   provider fault-injection；
+3. **S2 历史评估作业化**：Web 使用后台 evaluation session，提供日期级进度、失败重试、续跑、
+   取消和范围预算，不以单个同步 HTTP 请求承载全市场长任务；
+4. **S3 生产验证**：连续 30 个交易日记录 schedule、lease、checkpoint、publication、观察补全、
+   AI 降级和通知事实。
+
+**验收**：
+
+- 每个到期 schedule 每周期至多一个正式运行；三小时运行持续续租且只能提交一次；
+- 低覆盖 manual/scheduled run 均 withheld，evaluation 永不改变 current、AlertPlan、Advice 或生产通知；
+- T+1 到期观察最迟在下一次成功日周期中补齐；AI 结构或引用无效时返回 facts-only；
+- 5198 股票数据准备 P95 < 30 分钟，checkpoint 纯求值 P95 < 15 分钟，并保存覆盖与 provider 失败分布；
+- 2026-07-01～2026-08-11 可按 PIT universe 重放、断点续跑和幂等审计；
+- Web、CLI、MCP 继续复用 Tool/Workflow 契约，全量测试、typecheck、lint、build 和浏览器验收通过。
+
+v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不包含组合净值、费用、滑点、停牌/涨跌停
+可交易性或收益承诺，不是严格收益回测。
+
+## v0.10 — 账户绩效与组合归因 🧭（已规划）
+
+**目标**：补齐 Advice、Trade、Holding 和 Outcome 之后的账户级真实复盘，回答“账户实际表现如何、
+收益来自哪里、哪些结论因数据缺失不可用”。
+
+**计划范围**：
+
+- 冻结入金、出金、分红、拆股、费用、转入转出和公司行动口径；
+- 建立按账户隔离的每日估值事实与 completeness，缺失价格不得填 0；
+- 计算 TWR、最大回撤、benchmark、已实现/未实现 PnL 和持仓贡献归因；
+- 接入账户复盘页、周报和 Agent 只读事实；
+- 用入金、出金、分红、停牌、缺价和多账户 fixture 验证确定性与隔离性。
+
+**依赖与边界**：
+
+- Strategy v0.9 进入连续生产验证后可先冻结 PRD/DDD；生产实现需通过 v0.9 可靠性门禁；
+- 不复制 Account/Holding/Trade 事实，不把估值结果自动翻译为调仓 Advice；
+- 不在本版本引入自动交易、云账户或机构级组合优化。
+
+**验收**：
+
+- 外部现金流不会被错误计算为投资收益；同一账本可确定性重算；
+- benchmark 或价格缺失保持 unavailable/partial，不回填 0 或伪造完整曲线；
+- 多账户数据严格隔离，Web/Report/Agent 使用同一 Tool 口径；
+- 每个指标可追溯到估值日、行情来源、现金流和交易事实。
+
+## v0.11+ 候选方向（未立项）
+
+- Agent 协作体验 Phase 0～2：统一场景、公开计划、工具轨迹、部分失败和闭环复盘草案；
+- 显式 opt-in 的 Strategy → Watchlist source 投影，complete 才结束来源，partial/failed 只标 stale；
+- 基本面、资金流和 A 股短线事件 Evidence Adapter；
+- 连板天梯历史数据源与体验增强。
+
+以上方向必须先冻结 PRD/DDD、Tool/API schema、迁移和测试矩阵，不与 v0.9/v0.10 并行扩张生产能力。
 
 ## 不在路线图
 
@@ -221,6 +294,7 @@
 - ❌ 多用户 / 团队功能（个人工具）
 - ❌ 跟单 / 策略订阅（个人 advisor，不是平台）
 - ❌ 移动原生 App（Web PWA 优先）
+- ❌ 在费用、滑点、可交易性、公司行动和版本门禁缺失时输出严格回测收益、胜率或 Sharpe
 
 ## 评估指标
 
@@ -232,6 +306,8 @@
 - **文档同步**：ARCHITECTURE / AGENTS 是否反映最新设计
 - **agent 可用性**：通过 Claude Desktop 跑通至少 3 个真实场景
 - **advice 质量**（v0.3 起）：自测 50 条 advice，人工评估与实际 5 日走势一致率 ≥ 60%
+- **Strategy 可靠性**（v0.9 起）：重复正式运行、越权提交、低覆盖误发布和 evaluation 污染均为 0
+- **复盘完整度**（v0.10 起）：估值完整率、现金流分类完整率、benchmark 可用率和可追溯率
 
 ## 设计主线回顾
 
@@ -243,4 +319,7 @@ v0.4  Web 入口                             [面: 三端]
 v0.5  多市场 + 体验打磨                    [用: 日常]
 v0.6  盘中盯盘（股票池 + watch 长驻）      [用: 盘中]
 v0.7  节假日历                             [用: 盘中]
+v0.8  数据迁移 + 批量确认 + 运行可见性      [稳: 日常闭环]
+v0.9  Strategy 可靠性 + 历史评估作业化     [信: 可持续、可恢复]
+v0.10 账户绩效 + 组合归因                   [复: 真实账户复盘]
 ```

@@ -697,6 +697,16 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 - 统计继续来自 current run；
 - “查看失败详情”跳到执行记录并选中失败 run。
 
+头部在样本试跑、正式运行之前提供「模拟回测」。弹窗输入开始/结束日期和可选股票代码；默认最近
+31 个自然日，Web 上限 31 日、显式子集上限 500。提交后逐交易日历史回放，并在结果弹窗展示：
+
+- 区间交易日、完成/失败日、累计求值、入选、信号和失败数；
+- 每日历史数据版本可用性及失败原因；
+- evaluation session id，便于在「执行记录 → 历史评估」继续审计。
+
+这里的“模拟回测”是 point-in-time 历史回放，不输出收益率、净值、胜率、费用或滑点。结果固定进入
+evaluation/non-publishing，不得替换当前股票池；Web API 同时要求 write 与 external 能力。
+
 ### 10.6 股票池 tab
 
 > 2026-08-02（第二次修订）：股票池不再细分，「数据不完整」视图也已从工作台下线；
@@ -1077,6 +1087,8 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - Origin 行为不回归；
 - partial/failed 作为业务数据返回，不误报 500；
 - warnings 降级不会伪造 current run。
+- 模拟回测路由校验 YYYY-MM-DD、from/to 顺序、31 日上限、500 只子集上限，并强制持久化到
+  evaluation；write/external 任一能力未开启或跨站 Origin 时拒绝。
 
 ### 16.5 Web 前端
 
@@ -1091,6 +1103,8 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - 所有 stock result/signal/diff 均展示名称和完整代码，点击股票标识进入默认 3m 行情页；
 - 名称缺失时展示“名称暂缺”，不省略第二行代码；
 - DOM 使用 textContent，不产生注入。
+- 模拟回测输入规范化、逐日汇总、空交易日、partial/failed 与 vintage unavailable 状态；页面不得
+  把历史回放描述为严格收益回测。
 
 ### 16.6 浏览器验收
 
