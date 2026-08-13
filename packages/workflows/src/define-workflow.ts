@@ -52,6 +52,8 @@ import type {
   GetStrategyInsightFactsOutput,
   GetStrategyPitUniverseInput,
   GetStrategyPitUniverseOutput,
+  GetStrategyRunInput,
+  GetStrategyRunOutput,
   GetStrategyScheduleInput,
   GetStrategyScheduleOutput,
   GetWatchlistInput,
@@ -311,6 +313,7 @@ export interface WorkflowToolMap {
     typeof GetStrategyEvaluationSessionInput,
     typeof GetStrategyEvaluationSessionOutput
   >;
+  readonly get_strategy_run: ToolAccessor<typeof GetStrategyRunInput, typeof GetStrategyRunOutput>;
   readonly list_strategy_evaluation_days: ToolAccessor<
     typeof ListStrategyEvaluationDaysInput,
     typeof ListStrategyEvaluationDaysOutput

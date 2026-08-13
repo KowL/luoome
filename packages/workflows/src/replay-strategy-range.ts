@@ -19,6 +19,17 @@ export type ReplayStrategyRangeInputT = z.infer<typeof ReplayStrategyRangeInput>
 export const ReplayStrategyRangeOutput = z.object({
   sessionId: z.string(),
   status: z.enum(['complete', 'partial', 'failed']),
+  summary: z.object({
+    tradingDays: z.number().int().nonnegative(),
+    completedDays: z.number().int().nonnegative(),
+    failedDays: z.number().int().nonnegative(),
+    vintageAvailableDays: z.number().int().nonnegative(),
+    vintageUnavailableDays: z.number().int().nonnegative(),
+    evaluatedCount: z.number().int().nonnegative(),
+    selectedCount: z.number().int().nonnegative(),
+    signalCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+  }),
   days: z.array(
     z.object({
       dataAsOf: z.coerce.date(),
@@ -26,6 +37,10 @@ export const ReplayStrategyRangeOutput = z.object({
       vintageStatus: z.enum(['not-applicable', 'available', 'unavailable']),
       runId: z.string().optional(),
       error: z.string().optional(),
+      evaluatedCount: z.number().int().nonnegative().optional(),
+      selectedCount: z.number().int().nonnegative().optional(),
+      signalCount: z.number().int().nonnegative().optional(),
+      failedCount: z.number().int().nonnegative().optional(),
     }),
   ),
 });
@@ -47,6 +62,26 @@ const normalizeStockIds = (stockIds: readonly string[] | undefined): string[] | 
 
 const stockIdChecksum = (stockIds: readonly string[]): string =>
   createHash('sha256').update(JSON.stringify(stockIds)).digest('hex');
+
+const runCounts = (
+  summary: unknown,
+): {
+  evaluatedCount: number;
+  selectedCount: number;
+  signalCount: number;
+  failedCount: number;
+} | null => {
+  if (typeof summary !== 'object' || summary === null) return null;
+  const { evaluatedCount, selectedCount, signalCount, failedCount } = summary as Readonly<
+    Record<string, unknown>
+  >;
+  return typeof evaluatedCount === 'number' &&
+    typeof selectedCount === 'number' &&
+    typeof signalCount === 'number' &&
+    typeof failedCount === 'number'
+    ? { evaluatedCount, selectedCount, signalCount, failedCount }
+    : null;
+};
 
 const replay: WorkflowStep = async (previous, ctx) => {
   const input = previous as ReplayStrategyRangeInputT;
@@ -136,11 +171,18 @@ const replay: WorkflowStep = async (previous, ctx) => {
       const existing = previousDays.data.days.find(
         (day) => day.dataAsOf.toISOString() === dataAsOf.toISOString(),
       );
+      const detail =
+        existing?.runId === undefined
+          ? null
+          : await ctx.tools.get_strategy_run.execute({ runId: existing.runId });
+      if (detail !== null && !detail.ok) return detail;
+      const counts = detail === null ? null : runCounts(detail.data.run.summary);
       days.push({
         dataAsOf,
         status: 'complete',
         vintageStatus: existing?.vintageStatus ?? 'unavailable',
         ...(existing?.runId === undefined ? {} : { runId: existing.runId }),
+        ...(counts ?? {}),
       });
       cursor = new Date(cursor.getTime() + 86_400_000);
       continue;
@@ -222,12 +264,14 @@ const replay: WorkflowStep = async (previous, ctx) => {
       const dayStatus =
         run.data.run.status === 'failed' ? ('failed' as const) : ('complete' as const);
       if (dayStatus === 'failed') failed = true;
+      const counts = runCounts(run.data.run.summary);
       days.push({
         dataAsOf,
         status: dayStatus,
         vintageStatus: prepared.data.checkpoint.vintageStatus,
         ...(input.persist ? { runId: run.data.run.id } : {}),
         ...(dayStatus === 'failed' ? { error: run.data.run.error } : {}),
+        ...(counts ?? {}),
       });
       await ctx.tools.record_strategy_evaluation_day.execute({
         sessionId: evaluationSession.id,
@@ -252,9 +296,21 @@ const replay: WorkflowStep = async (previous, ctx) => {
       : 'complete',
   });
   if (!finished.ok) return finished;
+  const completed = days.filter((day) => day.status === 'complete').length;
   return ReplayStrategyRangeOutput.parse({
     sessionId: evaluationSession.id,
     status: finished.data.session.status,
+    summary: {
+      tradingDays: days.length,
+      completedDays: completed,
+      failedDays: days.length - completed,
+      vintageAvailableDays: days.filter((day) => day.vintageStatus === 'available').length,
+      vintageUnavailableDays: days.filter((day) => day.vintageStatus === 'unavailable').length,
+      evaluatedCount: days.reduce((sum, day) => sum + (day.evaluatedCount ?? 0), 0),
+      selectedCount: days.reduce((sum, day) => sum + (day.selectedCount ?? 0), 0),
+      signalCount: days.reduce((sum, day) => sum + (day.signalCount ?? 0), 0),
+      failedCount: days.reduce((sum, day) => sum + (day.failedCount ?? 0), 0),
+    },
     days,
   });
 };

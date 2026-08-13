@@ -283,6 +283,21 @@ describe('replay-strategy-range resume identity', () => {
     expect(result.data.days[0]).toMatchObject({
       status: 'complete',
       vintageStatus: 'available',
+      evaluatedCount: 1,
+      selectedCount: 1,
+      signalCount: 1,
+      failedCount: 0,
+    });
+    expect(result.data.summary).toEqual({
+      tradingDays: 1,
+      completedDays: 1,
+      failedDays: 0,
+      vintageAvailableDays: 1,
+      vintageUnavailableDays: 0,
+      evaluatedCount: 1,
+      selectedCount: 1,
+      signalCount: 1,
+      failedCount: 0,
     });
     expect(
       await replayCtx.repos.strategyEvaluation.findSessionById(result.data.sessionId),
