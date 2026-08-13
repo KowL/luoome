@@ -36,7 +36,17 @@ luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 - **网络**（仅在启用 `LUOOME_MARKET_PROVIDER=real` 时需要，用于拉 Eastmoney / Tencent 行情）
 - **可选** Python 3.10+（仅诊断/可视化子工具间接依赖）
 
-### 1.2 从源码运行（开发 / 验证）
+### 1.2 一键安装脚本（推荐，无需 git）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KowL/luoome/main/install.sh | sh
+```
+
+脚本自动完成：检测并安装 Bun → 下载源码 tarball 到 `~/.luoome/src` → `bun install` →
+在 `~/.local/bin` 生成 `luoome` 命令。可用环境变量覆盖：`LUOOME_REF`（分支 / tag /
+commit，默认 `main`）、`LUOOME_HOME`、`LUOOME_BIN_DIR`。重新执行即升级。
+
+### 1.3 从源码运行（开发 / 验证）
 
 ```bash
 git clone git@github.com:KowL/luoome.git
@@ -47,7 +57,7 @@ bun test                 # Node 兼容的 Vitest 测试
 bun run test:all         # Vitest + Bun db/web 测试
 ```
 
-### 1.3 通过 Homebrew（macOS / Linux）
+### 1.4 通过 Homebrew（macOS / Linux）
 
 ```bash
 # tap 后 install（formula 由仓库内 homebrew/luoome.rb 提供）
@@ -61,7 +71,7 @@ luoome tools list | head
 
 > Formula 走 git HEAD 构建（依赖 Bun 编译器）；首次安装会从 GitHub 拉源码 + 跑 `bun install`。tag 发布后会切到 tarball binary。
 
-### 1.4 不安装直接用
+### 1.5 不安装直接用
 
 如果只是接 MCP / Agent，跳过本地 install；先按 [luoome Skill 的 MCP 配置](../skills/luoome/references/mcp-setup.md) 连接 `luoome mcp serve`，再通过 Agent harness 的 Skill 机制安装整个 `skills/luoome/` 目录。
 
