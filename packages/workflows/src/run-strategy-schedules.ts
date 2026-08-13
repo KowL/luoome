@@ -6,6 +6,7 @@ import { strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
 export const RunStrategySchedulesInput = z.object({
   owner: z.string().min(1).optional(),
   limit: z.number().int().min(1).max(100).default(20),
+  concurrency: z.number().int().min(1).max(64).default(8),
 });
 export type RunStrategySchedulesInputT = z.infer<typeof RunStrategySchedulesInput>;
 
@@ -30,7 +31,7 @@ const runDue: WorkflowStep = async (previous, ctx) => {
   const input = previous as RunStrategySchedulesInputT;
   const owner = input.owner ?? `strategy-scheduler:${globalThis.crypto.randomUUID()}`;
   const cycle = await strategyDailyCycleWorkflow.run(
-    { owner, limit: input.limit, leaseMinutes: 20 },
+    { owner, limit: input.limit, leaseMinutes: 20, concurrency: input.concurrency },
     ctx,
   );
   if (!cycle.ok) return cycle;

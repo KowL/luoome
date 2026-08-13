@@ -82,6 +82,8 @@ export interface MarketDataManagerOptions {
   readonly quoteCache?: QuoteCache;
   readonly dailyBarCache?: DailyBarCache;
   readonly rateLimitPerSec?: number;
+  /** batchQuote 内部逐股 fallback 的并发上限。 */
+  readonly batchConcurrency?: number;
   readonly logger: Logger;
   readonly clock?: () => Date;
   /** 第三数据源抑制窗口（按股票 / 搜索 query 隔离）。默认 30 分钟。 */
@@ -122,6 +124,7 @@ export class MarketDataManager implements MarketDataAdapter {
   private readonly quoteCache: QuoteCache;
   private readonly dailyBarCache: DailyBarCache;
   private readonly rateLimiter: RateLimiter;
+  private readonly batchConcurrency: number;
   private readonly logger: Logger;
   private readonly clock: () => Date;
   private readonly suppressMs: number;
@@ -150,6 +153,7 @@ export class MarketDataManager implements MarketDataAdapter {
     this.quoteCache = options.quoteCache ?? new QuoteCache(1024, 60_000, this.clock);
     this.dailyBarCache = options.dailyBarCache ?? new DailyBarCache(512, 3_600_000, this.clock);
     this.rateLimiter = new RateLimiter(options.rateLimitPerSec ?? 10);
+    this.batchConcurrency = Math.max(1, Math.min(options.batchConcurrency ?? 8, 64));
     this.logger = options.logger;
     this.suppressMs = options.finalFallbackSuppressMs ?? 30 * 60 * 1000;
     this.marketSnapshotTtlMs = options.marketSnapshotTtlMs ?? 5 * 60 * 1000;
@@ -233,17 +237,22 @@ export class MarketDataManager implements MarketDataAdapter {
       }
     }
     if (toFetch.length === 0) return result;
-    // 并发 fetchQuote；单只全源失败只遗漏该只，不让批量读路径整体失败。
+    // 有界逐股 fallback；单只全源失败只遗漏该只，不让批量读路径整体失败。
     // list_holdings / batch_quote 会分别用成本价或“缺失项”语义降级。
+    let cursor = 0;
     await Promise.all(
-      toFetch.map(async (code) => {
-        try {
-          result.set(code, await this.fetchQuote(code));
-        } catch (error) {
-          this.logger.warn('manager.batchQuote omitted failed quote', {
-            stockCode: code,
-            error: errorMessage(error),
-          });
+      Array.from({ length: Math.min(this.batchConcurrency, toFetch.length) }, async () => {
+        while (cursor < toFetch.length) {
+          const code = toFetch[cursor++];
+          if (code === undefined) continue;
+          try {
+            result.set(code, await this.fetchQuote(code));
+          } catch (error) {
+            this.logger.warn('manager.batchQuote omitted failed quote', {
+              stockCode: code,
+              error: errorMessage(error),
+            });
+          }
         }
       }),
     );

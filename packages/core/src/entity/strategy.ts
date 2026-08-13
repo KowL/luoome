@@ -191,6 +191,17 @@ export type StrategyRunScope = z.infer<typeof StrategyRunScopeSchema>;
 export const StrategyRunUniverseKindSchema = z.enum(['full', 'explicit']);
 export type StrategyRunUniverseKind = z.infer<typeof StrategyRunUniverseKindSchema>;
 
+export const StrategyRunPrefilterSchema = z.object({
+  mode: z.literal('quote-selection-safe'),
+  originalStockCount: z.number().int().nonnegative(),
+  originalStockIdChecksum: z.string().regex(/^[a-f0-9]{64}$/),
+  appliedRuleIds: z.array(z.string().min(1)),
+  skippedRuleIds: z.array(z.string().min(1)),
+  rejectedCount: z.number().int().nonnegative(),
+  unavailableCount: z.number().int().nonnegative(),
+});
+export type StrategyRunPrefilter = z.infer<typeof StrategyRunPrefilterSchema>;
+
 export const StrategyRunAcceptancePolicySchema = z.object({
   policyVersion: z.literal('strategy-run-acceptance-v1'),
   minEvaluatedRatio: z.number().min(0).max(1),
@@ -392,6 +403,7 @@ export const StrategyRunInputSnapshotV3Schema = z.object({
     .optional(),
   acceptancePolicyVersion: z.string().min(1),
   evaluationSessionId: z.string().min(1).optional(),
+  prefilter: StrategyRunPrefilterSchema.optional(),
 });
 export type StrategyRunInputSnapshotV3 = z.infer<typeof StrategyRunInputSnapshotV3Schema>;
 

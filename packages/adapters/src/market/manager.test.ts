@@ -225,6 +225,32 @@ describe('market/manager', () => {
       // A 命中缓存；B、C 各调一次 primary
       expect(primary.callCount).toBe(2);
     });
+
+    it('逐股 fallback 遵守 batchConcurrency 上限', async () => {
+      let active = 0;
+      let maxActive = 0;
+      const primary = new StubPrimary();
+      const fetchQuote = primary.fetchQuote.bind(primary);
+      primary.fetchQuote = async (code: string) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        try {
+          return await fetchQuote(code);
+        } finally {
+          active -= 1;
+        }
+      };
+      const mgr = createTestMarketDataManager({
+        primary,
+        logger: silentLogger,
+        batchConcurrency: 2,
+      });
+
+      await mgr.batchQuote(['A', 'B', 'C', 'D', 'E']);
+
+      expect(maxActive).toBeLessThanOrEqual(2);
+    });
   });
 
   describe('rate limiter', () => {

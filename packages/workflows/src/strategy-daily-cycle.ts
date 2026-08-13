@@ -8,6 +8,7 @@ export const StrategyDailyCycleInput = z.object({
   limit: z.number().int().min(1).max(20).default(1),
   leaseMinutes: z.number().int().min(5).max(240).default(30),
   asOf: z.coerce.date().optional(),
+  concurrency: z.number().int().min(1).max(64).default(8),
 });
 export type StrategyDailyCycleInputT = z.infer<typeof StrategyDailyCycleInput>;
 
@@ -216,6 +217,8 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     phase = 'data-prep';
     const prepared = await ctx.tools.prepare_strategy_data.execute({
       strategyId: schedule.strategyId,
+      cachePolicy: 'reuse-fresh',
+      concurrency: input.concurrency,
       ...(input.asOf === undefined ? {} : { asOf: input.asOf }),
     });
     if (scheduleLeaseLost) {
@@ -239,6 +242,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         strategyId: schedule.strategyId,
         mode: 'scheduled',
         persist: true,
+        concurrency: input.concurrency,
         dataCheckpointId: checkpointId,
         ...(schedule.acceptancePolicy === undefined
           ? {}

@@ -43,6 +43,96 @@ const revisionFor = (input: DailyBar, recordedAt: Date): DailyBarRevision => ({
 });
 
 describe('prepare_strategy_data freshness and vintage', () => {
+  it('honors the bounded provider concurrency', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    const stockIds = ['600519.SH', '000001.SZ', '300750.SZ', '601318.SH'];
+    let active = 0;
+    let maxActive = 0;
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (stockId: string) => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            active -= 1;
+            return [{ ...bar(new Date('2026-08-11T00:00:00.000Z')), stockId }];
+          },
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds,
+        concurrency: 2,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(maxActive).toBeLessThanOrEqual(2);
+    expect(result.data.checkpoint.availableCount).toBe(stockIds.length);
+  });
+
+  it('scheduled cache policy reuses a fresh local projection without calling the provider', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    const cachedBar = bar(new Date('2026-08-11T00:00:00.000Z'));
+    await base.repos.dailyBar.saveMany([cachedBar]);
+    let providerCalls = 0;
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => {
+            providerCalls += 1;
+            return Promise.reject(new Error('provider must not be called for fresh cache'));
+          },
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        cachePolicy: 'reuse-fresh',
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(providerCalls).toBe(0);
+    expect(result.data.checkpoint).toMatchObject({
+      status: 'complete',
+      availableCount: 1,
+      providerStatuses: [
+        expect.objectContaining({
+          provider: 'local:daily-bars',
+          freshness: 'fresh',
+        }),
+      ],
+    });
+    expect(result.data.members[0]).toMatchObject({
+      status: 'available',
+      provider: 'local:daily-bars',
+    });
+    expect(await ctx.repos.dailyBar.listRevisions({ stockId: '600519.SH' })).toHaveLength(1);
+  });
+
   it('stale daily bar is missing rather than provider-ok and lowers checkpoint coverage', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');
     const base = await buildTestContext({ clock: () => now });
@@ -83,6 +173,47 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(result.data.members[0]).toMatchObject({
       status: 'missing',
       errorKind: 'stale_data',
+    });
+  });
+
+  it('reuse-fresh refreshes a stale local projection before applying the freshness gate', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    await base.repos.dailyBar.saveMany([bar(new Date('2026-08-05T00:00:00.000Z'))]);
+    const freshBar = bar(new Date('2026-08-11T00:00:00.000Z'));
+    let providerCalls = 0;
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => {
+            providerCalls += 1;
+            return Promise.resolve([freshBar]);
+          },
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        cachePolicy: 'reuse-fresh',
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(providerCalls).toBe(1);
+    expect(result.data.members[0]).toMatchObject({
+      status: 'available',
+      provider: 'fake-market',
+      latestBarDate: freshBar.date,
     });
   });
 
