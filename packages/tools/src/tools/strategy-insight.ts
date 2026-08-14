@@ -1,9 +1,11 @@
 import {
   aggregateSignalObservationStats,
   classifyStrategyResult,
+  deduplicateSignalObservations,
   diffStrategyRunViews,
   isPublishableOperationalRun,
   isUsableStrategyRun,
+  SIGNAL_OBSERVATION_SAMPLE_UNIT,
   type SignalObservation,
   type StrategyResultView,
   type ToolContext,
@@ -27,6 +29,7 @@ const StrategyInsightFactSchema = z.object({
 
 const ObservationAggregateSchema = z.object({
   horizon: z.enum(HORIZONS),
+  sampleUnit: z.literal(SIGNAL_OBSERVATION_SAMPLE_UNIT),
   total: z.number().int().nonnegative(),
   complete: z.number().int().nonnegative(),
   uniqueStocks: z.number().int().nonnegative(),
@@ -50,6 +53,7 @@ const GroupedObservationAggregateSchema = z.object({
   dimension: z.enum(['industry', 'score-bucket', 'edge', 'market-state']),
   group: z.string().min(1),
   horizon: z.enum(HORIZONS),
+  sampleUnit: z.literal(SIGNAL_OBSERVATION_SAMPLE_UNIT),
   total: z.number().int().nonnegative(),
   complete: z.number().int().nonnegative(),
   uniqueStocks: z.number().int().nonnegative(),
@@ -134,7 +138,9 @@ const aggregateObservations = (
   observations: readonly SignalObservation[],
 ): z.infer<typeof ObservationAggregateSchema>[] =>
   HORIZONS.map((horizon) => {
-    const rows = observations.filter((item) => item.horizon === horizon);
+    const rows = deduplicateSignalObservations(observations).filter(
+      (item) => item.horizon === horizon,
+    );
     const advanced = aggregateSignalObservationStats(observations).find(
       (item) => item.group === 'all' && item.horizon === horizon,
     );
@@ -167,6 +173,7 @@ const aggregateObservations = (
     const unavailable = rows.filter((item) => item.status === 'unavailable').length;
     return {
       horizon,
+      sampleUnit: SIGNAL_OBSERVATION_SAMPLE_UNIT,
       total: rows.length,
       complete: complete.length,
       uniqueStocks: advanced?.uniqueStocks ?? new Set(rows.map((item) => item.stockId)).size,
@@ -252,7 +259,7 @@ const aggregateObservationGroups = (
   ];
   return dimensions.flatMap(({ dimension, groupOf }) =>
     aggregateSignalObservationStats(observations, groupOf).map((stats) => {
-      const rows = observations.filter(
+      const rows = deduplicateSignalObservations(observations, groupOf).filter(
         (observation) =>
           observation.horizon === stats.horizon && groupOf(observation) === stats.group,
       );
@@ -269,6 +276,7 @@ const aggregateObservationGroups = (
         dimension,
         group: stats.group,
         horizon: stats.horizon,
+        sampleUnit: SIGNAL_OBSERVATION_SAMPLE_UNIT,
         total: stats.total,
         complete: stats.complete,
         uniqueStocks: stats.uniqueStocks,
@@ -453,6 +461,7 @@ export const collectStrategyInsightFacts = async (
     }
   }
   const observations = observationRows.slice(0, OBSERVATION_LIMIT);
+  const sampledObservationCount = deduplicateSignalObservations(observations).length;
   const observationAggregates = aggregateObservations(observations);
   const groupedObservations = aggregateObservationGroups(
     observations,
@@ -510,11 +519,7 @@ export const collectStrategyInsightFacts = async (
         item.complete === 0
           ? `暂无完整样本；待补 ${item.pending}，不可用 ${item.unavailable}，基准 ${item.benchmarkStatus}`
           : `${item.complete}/${item.total} 个完整样本，平均收益 ${((item.averageReturnPct ?? 0) * 100).toFixed(2)}%，${item.averageExcessReturnPct === undefined ? '超额收益暂不可用' : `平均超额 ${((item.averageExcessReturnPct ?? 0) * 100).toFixed(2)}%`}，基准 ${item.benchmarkStatus}`,
-      evidenceIds: evidenceIds(
-        observations
-          .filter((observation) => observation.horizon === item.horizon)
-          .map((observation) => observation.id),
-      ),
+      evidenceIds: evidenceIds(item.observationIds),
     })),
     {
       id: 'alerts:associations',
@@ -525,7 +530,7 @@ export const collectStrategyInsightFacts = async (
     {
       id: 'observations:groups',
       label: '观察分组去相关',
-      value: `${groupedObservations.length} 个行业、分数、市场状态和 edge 分组，${new Set(observations.map((item) => item.stockId)).size} 只唯一股票`,
+      value: `${groupedObservations.length} 个行业、分数、市场状态和 edge 分组；按股票-交易日-周期去重，${sampledObservationCount} 个描述性样本`,
       evidenceIds: evidenceIds(groupedObservations.flatMap((item) => item.observationIds)),
     },
   ];
@@ -537,6 +542,11 @@ export const collectStrategyInsightFacts = async (
   }
   if (observationsTruncated)
     limitations.push(`观察明细超过 ${OBSERVATION_LIMIT} 条，仅统计最近样本。`);
+  if (observations.length > sampledObservationCount) {
+    limitations.push(
+      `观察统计按同一股票、同一基准交易日、同一周期去重；${observations.length - sampledObservationCount} 条重复 signal-day 未作为独立样本。`,
+    );
+  }
   if (observationAggregates.some((item) => item.complete > 0 && item.complete < 10)) {
     limitations.push('部分观察周期的完整样本少于 10 个，只能作为描述性事实。');
   }

@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import {
+  buildBacktestResultContent,
   buildRunDetailContent,
   buildStrategyHash,
   openRunDetail,
+  parseBacktestStockIds,
   parseStrategyHash,
   renderInsights,
   renderRuns,
   renderSettings,
+  runStrategyBacktest,
 } from './strategy-workspace.js';
 
 /* ============================================================
@@ -152,6 +155,7 @@ globalThis.document = {
   querySelector: (selector) =>
     selector.startsWith('#') ? (byId.get(selector.slice(1)) ?? null) : null,
 };
+globalThis.window = { location: { hash: '' } };
 
 const modalTitle = document.createElement('div');
 const modalBody = document.createElement('div');
@@ -310,6 +314,182 @@ describe('运行详情弹窗信号列表', () => {
     const node = buildRunDetailContent({ stocks: [], signals: [] });
     expect(node.textContent).toContain('信号 0');
     expect(node.textContent).toContain('无信号');
+  });
+});
+
+describe('模拟回测（历史回放）', () => {
+  it('规范化可选股票范围并去重', () => {
+    expect(parseBacktestStockIds('600519.sh, 000001.SZ\n600519.SH')).toEqual([
+      '600519.SH',
+      '000001.SZ',
+    ]);
+    expect(parseBacktestStockIds('  ')).toBeUndefined();
+  });
+
+  it('提交历史区间并展示逐日命中与信号汇总，不宣称收益回测', async () => {
+    let requestedPath;
+    let requestedBody;
+    globalThis.fetch = async (path, init) => {
+      requestedPath = String(path);
+      requestedBody = JSON.parse(init.body);
+      return jsonResponse({
+        ok: true,
+        data: {
+          sessionId: 'evaluation-session-1',
+          status: 'complete',
+          summary: {
+            tradingDays: 2,
+            completedDays: 2,
+            failedDays: 0,
+            vintageAvailableDays: 2,
+            vintageUnavailableDays: 0,
+            evaluatedCount: 200,
+            selectedCount: 12,
+            signalCount: 8,
+            failedCount: 0,
+          },
+          days: [
+            {
+              dataAsOf: '2026-08-10T00:00:00.000Z',
+              status: 'complete',
+              vintageStatus: 'available',
+              evaluatedCount: 100,
+              selectedCount: 7,
+              signalCount: 5,
+              failedCount: 0,
+            },
+            {
+              dataAsOf: '2026-08-11T00:00:00.000Z',
+              status: 'complete',
+              vintageStatus: 'available',
+              evaluatedCount: 100,
+              selectedCount: 5,
+              signalCount: 3,
+              failedCount: 0,
+            },
+          ],
+        },
+      });
+    };
+    const statuses = [];
+
+    const result = await runStrategyBacktest(
+      { id: 'ma-bullish', name: '均线多头' },
+      { from: '2026-08-10', to: '2026-08-11', stockIds: ['600519.SH'] },
+      (message) => statuses.push(message),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(requestedPath).toContain('/api/strategies/ma-bullish/backtests');
+    expect(requestedBody).toEqual({
+      from: '2026-08-10',
+      to: '2026-08-11',
+      stockIds: ['600519.SH'],
+    });
+    expect(modalTitle.textContent).toContain('均线多头');
+    expect(modalBody.textContent).toContain('交易日2');
+    expect(modalBody.textContent).toContain('累计入选12');
+    expect(modalBody.textContent).toContain('2026-08-10');
+    expect(modalBody.textContent).toContain('不含收益、费用、滑点和可交易性模拟');
+    expect(modalBody.textContent).not.toContain('收益率');
+    const evaluationButton = modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '查看历史评估记录');
+    expect(evaluationButton).toBeDefined();
+    evaluationButton.click();
+    expect(window.location.hash).toBe(
+      '#strategies?strategyId=ma-bullish&tab=runs&scope=evaluation',
+    );
+    expect(modalOverlay.hidden).toBe(true);
+    expect(statuses.at(-1)).toContain('历史模拟完成');
+  });
+
+  it('渲染失败交易日及数据版本不可用状态', () => {
+    const node = buildBacktestResultContent({
+      sessionId: 'evaluation-session-2',
+      status: 'partial',
+      summary: {
+        tradingDays: 1,
+        completedDays: 0,
+        failedDays: 1,
+        vintageAvailableDays: 0,
+        vintageUnavailableDays: 1,
+        evaluatedCount: 0,
+        selectedCount: 0,
+        signalCount: 0,
+        failedCount: 0,
+      },
+      days: [
+        {
+          dataAsOf: '2026-08-10T00:00:00.000Z',
+          status: 'failed',
+          vintageStatus: 'unavailable',
+          error: '历史数据不可用',
+        },
+      ],
+    });
+    expect(node.textContent).toContain('失败 1');
+    expect(node.textContent).toContain('版本不可用');
+    expect(node.textContent).toContain('历史数据不可用');
+  });
+
+  it('后台快照只有 session.id 时仍显示评估会话，不渲染 undefined', () => {
+    const node = buildBacktestResultContent({
+      session: { id: 'evaluation-session-snapshot' },
+      status: 'complete',
+      summary: {
+        tradingDays: 0,
+        completedDays: 0,
+        failedDays: 0,
+        vintageAvailableDays: 0,
+        vintageUnavailableDays: 0,
+        evaluatedCount: 0,
+        selectedCount: 0,
+        signalCount: 0,
+        failedCount: 0,
+      },
+      days: [],
+    });
+    expect(node.textContent).toContain('Evaluation session evaluation-session-snapshot');
+    expect(node.textContent).not.toContain('Evaluation session undefined');
+  });
+
+  it('历史评估取消后状态文案不冒充完成', async () => {
+    globalThis.fetch = async (path) => {
+      if (String(path).endsWith('/backtests')) {
+        return jsonResponse({
+          ok: true,
+          data: {
+            sessionId: 'evaluation-session-cancelled',
+            status: 'queued',
+            session: { id: 'evaluation-session-cancelled' },
+          },
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          session: { id: 'evaluation-session-cancelled', status: 'failed' },
+          status: 'failed',
+          summary: {
+            tradingDays: 1,
+            completedDays: 0,
+            failedDays: 1,
+            selectedCount: 0,
+            signalCount: 0,
+          },
+          days: [],
+        },
+      });
+    };
+    const statuses = [];
+    await runStrategyBacktest(
+      { id: 'ma-bullish', name: '均线多头' },
+      { from: '2026-08-13', to: '2026-08-14', stockIds: ['600519.SH'] },
+      (message) => statuses.push(message),
+    );
+    expect(statuses.at(-1)).toContain('历史模拟失败或已取消');
+    expect(statuses.at(-1)).not.toContain('历史模拟完成：');
   });
 });
 

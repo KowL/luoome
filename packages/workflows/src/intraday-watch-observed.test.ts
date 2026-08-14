@@ -9,11 +9,7 @@ describe('runIntradayWatchObserved', () => {
       clock: () => new Date('2026-07-23T02:00:00.000Z'),
     });
 
-    const result = await runIntradayWatchObserved(
-      { notify: false, seedTacticSources: false },
-      ctx,
-      'once',
-    );
+    const result = await runIntradayWatchObserved({ notify: false }, ctx, 'once');
 
     expect(result.ok).toBe(true);
     const latest = await ctx.repos.watchRun.latest();

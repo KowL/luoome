@@ -159,33 +159,45 @@ const marketWeekSection = async (
 
 const accountWeekSection = async (
   input: WeeklyInput,
+  periodStart: string,
+  periodEnd: string,
   now: Date,
   ctx: WorkflowContext,
 ): Promise<ReportSectionPiece> => {
-  const current = await portfolioSection(input.scope, now, ctx);
+  const current = await portfolioSection(input.scope, now, ctx, periodEnd, {
+    fromDate: periodStart,
+    toDate: periodEnd,
+  });
   const evidence = current.evidence.map((item) => ({
     ...item,
     id: item.id.replace('overnight-portfolio', 'account-week'),
     dimension: item.dimension.replace('overnight-portfolio', 'account-week'),
   }));
+  const historicalMissing = current.section.missingDimensions.some((item) =>
+    item.dimension.includes('overnight-portfolio.valuation'),
+  );
   return {
     evidence,
     section: {
       ...current.section,
       key: 'account-week',
       title: '账户周度变化',
-      status: 'partial',
+      status: historicalMissing ? 'partial' : current.section.status,
       evidenceIds: evidence.map((item) => item.id),
       missingDimensions: [
         ...current.section.missingDimensions.map((item) => ({
           ...item,
           dimension: item.dimension.replace('overnight-portfolio', 'account-week'),
         })),
-        missing(
-          'account-week.historical-valuations',
-          '缺少完整历史估值与现金流口径，不能计算严格周收益率和最大回撤',
-          'not_implemented',
-        ),
+        ...(historicalMissing
+          ? [
+              missing(
+                'account-week.historical-valuations',
+                '部分估值日缺少行情，周度收益与最大回撤保持 unavailable',
+                'no_data',
+              ),
+            ]
+          : []),
       ],
     },
   };
@@ -338,7 +350,7 @@ const runWeeklyReport = async (
       buildSections: async (generatedAt) => {
         const [market, account, alerts, events] = await Promise.all([
           marketWeekSection(dates, generatedAt, ctx),
-          accountWeekSection(input, generatedAt, ctx),
+          accountWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
           alertFeedbackSection(periodStart, generatedAt, ctx),
           nextWeekEventsSection(periodEnd, generatedAt, ctx),
         ]);

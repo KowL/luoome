@@ -4,6 +4,7 @@ import type {
   IndexQuote,
   IntradayMinute,
   MarketCoverage,
+  MarketSnapshot,
   MarketSnapshotItem,
   Quote,
   StockSearchCandidate,
@@ -21,6 +22,7 @@ interface TestMarketSource {
   fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
   fetchIntradayMinutes?(stockId: string): Promise<readonly IntradayMinute[]>;
   fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
+  fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
 }
 
 interface TestMarketDataManagerOptions
@@ -106,6 +108,16 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: () => fetchMarketSnapshot(),
+      });
+    }
+    const fetchMarketSnapshotEnvelope = source.fetchMarketSnapshotEnvelope?.bind(source);
+    if (fetchMarketSnapshotEnvelope !== undefined) {
+      bindings.push({
+        capability: 'market-snapshot-envelope',
+        source: sourceId,
+        coverage: TEST_COVERAGE,
+        configurationReady: true,
+        execute: () => fetchMarketSnapshotEnvelope(),
       });
     }
     const fetchIndexQuotes = source.fetchIndexQuotes?.bind(source);

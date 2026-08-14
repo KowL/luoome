@@ -51,7 +51,7 @@ export interface AdviceReasoning {
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
-  readonly llmReasoning?: string; // LLM 原始推理（用于审计）
+  readonly llmReasoning?: string; // 经过 sanitized 的 LLM 推理文本（用于审计与复盘）
   readonly ladder?: AdviceLadderSnapshot;
   readonly strategy?: StrategyAdviceEvidence;
   readonly dataAsOf: Date; // 数据截止时间

@@ -33,7 +33,7 @@ export interface BuiltinStrategyTemplate {
   readonly definitionHash: string;
 }
 
-export const STRATEGY_TEMPLATE_REVISION = 3;
+export const STRATEGY_TEMPLATE_REVISION = 4;
 
 interface BuiltinStrategySeed {
   readonly id: string;
@@ -72,18 +72,22 @@ const BUILTIN_STRATEGY_SEEDS: readonly BuiltinStrategySeed[] = [
   {
     id: 'ma-bullish-alignment',
     name: '均线多头',
-    description: 'MA5 > MA10 > MA20 多头排列，趋势确认',
+    description: '价格站上 MA5 > MA10 > MA20，动量、持续性与量能共同确认的多头趋势',
     style: 'momentum',
     bucket: 'entry',
     direction: 'bullish',
     when:
       // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
-      '${indicators.ma5} !== undefined && ${indicators.ma5} > ${indicators.ma10} && ${indicators.ma10} > ${indicators.ma20}',
+      '${indicators.ma5} !== undefined && ${indicators.close} > ${indicators.ma5} && ${indicators.ma5} > ${indicators.ma10} && ${indicators.ma10} > ${indicators.ma20} && ${indicators.momentum20Pct} >= 3 && ${indicators.momentum20Pct} <= 20 && ${indicators.daysAboveMa20} >= 3 && ${indicators.volRatio5_20} >= 0.8',
     score:
       // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
-      'Math.min(100, ((${indicators.ma5} - ${indicators.ma20}) / ${indicators.ma20}) * 1000 + 50)',
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
-    evidence: ['MA5=${indicators.ma5} > MA10=${indicators.ma10} > MA20=${indicators.ma20}'],
+      '45 + Math.min(15, ${indicators.momentum20Pct}) + Math.min(15, ((${indicators.ma5} - ${indicators.ma20}) / ${indicators.ma20}) * 300) + Math.min(10, ${indicators.volRatio5_20} * 8)',
+    evidence: [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '收盘=${indicators.close} > MA5=${indicators.ma5} > MA10=${indicators.ma10} > MA20=${indicators.ma20}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: DSL placeholder
+      '20日动量=${indicators.momentum20Pct}%，连续站上MA20=${indicators.daysAboveMa20}日，量比=${indicators.volRatio5_20}',
+    ],
   },
   {
     id: 'pullback-after-limit-up',

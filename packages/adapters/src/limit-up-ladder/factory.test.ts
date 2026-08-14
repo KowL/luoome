@@ -135,4 +135,22 @@ describe('createLimitUpLadderManagerFromEnv', () => {
     expect(error.adapter).toBe('limit-up-ladder');
     expect(error.message).toContain('network down');
   });
+
+  it('生产装配复用 env 节假日历，休市日不访问真实上游', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('should not fetch on a holiday');
+    }) as unknown as typeof fetch;
+    const m = createLimitUpLadderManagerFromEnv(
+      { LUOOME_A_SHARE_HOLIDAYS: '2027-02-01' },
+      { logger: noopLogger, fetchImpl },
+    );
+
+    const r = await m.fetchLadder({ ...baseQuery, date: '2027-02-01' });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data?.warnings).toContain('non-trading-day');
+    expect(r.data?.total).toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

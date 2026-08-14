@@ -1,13 +1,20 @@
 import {
+  assertMarketSnapshotInvariants,
   quantity as brandQuantity,
   type DailyBar,
   type DateRange,
   type Exchange,
   type IntradayMinute,
+  type MarketSnapshot,
+  type MarketSnapshotItem,
+  MarketSnapshotSchema,
   money,
   type Quote,
   type StockSearchCandidate,
+  type StockUniverseSourceLike,
 } from '@luoome/core';
+
+import { SinaStockUniverseAdapter } from '../stock-universe/sina.js';
 
 /**
  * Tencent 行情适配器（v0.2 起备用源，主要覆盖 A 股；港股支持有限）。
@@ -19,6 +26,7 @@ import {
  *   为简单起见用 JSON 接口：`https://web.ifzq.gtimg.cn/appstock/app/stockDetail2/marketView?code={prefixedCode}`
  *   实际 JSON 行情接口：`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={prefixedCode},day,,,320,qfq`
  *   返回的 `qfqday` 或 `day` 字段是 K 线数据。
+ * - 全市场快照（沪深 A 股）：`https://qt.gtimg.cn/q={prefixedCode,...}`，GBK 文本批量返回。
  *
  * 设计要点：
  * - 与 EastmoneyAdapter 抛 TencentAdapterError，Manager 路由 fallback。
@@ -72,6 +80,12 @@ const toPrefixedCode = (stockCode: string): string => {
   throw new TencentAdapterError(`无法识别 stockCode: ${stockCode}`);
 };
 
+/** 指数没有个股复权因子；Tencent 仅返回 day 时，raw day 与 qfq 口径等价。 */
+const isIndexCode = (stockCode: string): boolean =>
+  /^(000001|000300|000688)\.SH$|^(399001|399006)\.SZ$/i.test(stockCode.trim());
+
+const TENCENT_MARKET_SNAPSHOT_PATTERN = /v_(sh|sz)(\d{6})="([^"]*)";?/g;
+
 export interface TencentAdapterOptions {
   readonly clock?: () => Date;
   readonly timeoutMs?: number;
@@ -81,6 +95,12 @@ export interface TencentAdapterOptions {
   readonly baseSearchUrl?: string;
   /** qt.gtimg.cn 快照（GBK 文本）：仅用于补昨收，分钟端点无此字段。 */
   readonly baseRtQuoteUrl?: string;
+  /** qt.gtimg.cn 批量全市场快照端点。 */
+  readonly baseMarketSnapshotUrl?: string;
+  /** 单次批量请求的股票数；过大时可能被上游截断。 */
+  readonly marketSnapshotChunkSize?: number;
+  /** 真实股票目录来源；生产默认使用 Sina 当前完整目录，测试可注入契约实现。 */
+  readonly stockUniverse?: StockUniverseSourceLike;
 }
 
 const TENCENT_MARKET_TO_EXCHANGE: Readonly<Record<string, Exchange>> = {
@@ -141,6 +161,9 @@ export class TencentAdapter {
   private readonly baseKlineUrl: string;
   private readonly baseSearchUrl: string;
   private readonly baseRtQuoteUrl: string;
+  private readonly baseMarketSnapshotUrl: string;
+  private readonly marketSnapshotChunkSize: number;
+  private readonly stockUniverse: StockUniverseSourceLike;
 
   constructor(options: TencentAdapterOptions = {}) {
     this.clock = options.clock ?? ((): Date => new Date());
@@ -152,6 +175,18 @@ export class TencentAdapter {
       options.baseKlineUrl ?? 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get';
     this.baseSearchUrl = options.baseSearchUrl ?? 'https://smartbox.gtimg.cn/s3/';
     this.baseRtQuoteUrl = options.baseRtQuoteUrl ?? 'https://qt.gtimg.cn/q';
+    this.baseMarketSnapshotUrl = options.baseMarketSnapshotUrl ?? 'https://qt.gtimg.cn/q';
+    this.marketSnapshotChunkSize = options.marketSnapshotChunkSize ?? 500;
+    if (!Number.isInteger(this.marketSnapshotChunkSize) || this.marketSnapshotChunkSize <= 0) {
+      throw new Error('invalid_config: Tencent marketSnapshotChunkSize must be positive');
+    }
+    this.stockUniverse =
+      options.stockUniverse ??
+      new SinaStockUniverseAdapter({
+        ...(options.clock === undefined ? {} : { clock: options.clock }),
+        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      });
   }
 
   /**
@@ -310,7 +345,7 @@ export class TencentAdapter {
       throw new TencentAdapterError(`Tencent 日线失败: code=${json.code}`);
     }
     const node = json.data[code];
-    const rawList = node?.qfqday;
+    const rawList = node?.qfqday ?? (isIndexCode(stockCode) ? node?.day : undefined);
     if (rawList === undefined) {
       throw new TencentAdapterError(`unsupported_adjustment: Tencent qfq 日线不可用 code=${code}`);
     }
@@ -355,6 +390,82 @@ export class TencentAdapter {
   }
 
   /**
+   * 批量拉取沪深 A 股实时快照。
+   *
+   * Tencent 只接受显式代码列表，因此先读取真实 Sina 当前目录，再按 500 只分批请求。
+   * 目录是身份全集，报价缺失的股票不会被伪造为 0，而是从 envelope 中省略并记录 missing。
+   */
+  async fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]> {
+    return (await this.fetchMarketSnapshotEnvelope()).items;
+  }
+
+  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+    const universe = await this.stockUniverse.fetchStockUniverse('CN_A_SHARES_SH_SZ');
+    const expected = universe.entries;
+    if (expected.length === 0) {
+      throw new TencentAdapterError('invalid_payload: Tencent market snapshot universe is empty');
+    }
+    const expectedById = new Map(expected.map((entry) => [entry.stockId, entry]));
+    const items = new Map<string, MarketSnapshotItem>();
+    let duplicateCount = 0;
+    let latestObservedAt: Date | undefined;
+    for (let offset = 0; offset < expected.length; offset += this.marketSnapshotChunkSize) {
+      const chunk = expected.slice(offset, offset + this.marketSnapshotChunkSize);
+      const text = await this.getText(
+        `${this.baseMarketSnapshotUrl}=${chunk
+          .map((entry) => `${entry.exchange.toLowerCase()}${entry.code}`)
+          .join(',')}`,
+        'gbk',
+      );
+      for (const match of text.matchAll(TENCENT_MARKET_SNAPSHOT_PATTERN)) {
+        const exchange = match[1] === 'sh' ? 'SH' : 'SZ';
+        const code = match[2];
+        const raw = match[3];
+        if (exchange === undefined || code === undefined || raw === undefined) continue;
+        const entry = expectedById.get(`${code}.${exchange}`);
+        if (entry === undefined) continue;
+        const fields = raw.split('~');
+        const close = positiveNumber(fields[3]);
+        const changePct = finiteNumber(fields[32]);
+        const observedAt = parseTencentSnapshotTime(fields[30]);
+        if (
+          observedAt !== undefined &&
+          (latestObservedAt === undefined || observedAt > latestObservedAt)
+        ) {
+          latestObservedAt = observedAt;
+        }
+        if (items.has(entry.stockId)) duplicateCount += 1;
+        items.set(entry.stockId, {
+          id: entry.stockId,
+          code: entry.code,
+          exchange: entry.exchange,
+          name: entry.name,
+          ...(close === undefined ? {} : { close }),
+          ...(changePct === undefined ? {} : { changePct }),
+        });
+      }
+    }
+    const snapshot = MarketSnapshotSchema.parse({
+      coverage: 'CN_A_SHARES_SH_SZ',
+      source: this.name,
+      fetchedAt: this.clock(),
+      ...(latestObservedAt === undefined
+        ? {}
+        : { observedAt: latestObservedAt, dataAsOf: latestObservedAt }),
+      items: [...items.values()],
+      completeness: {
+        expectedCount: expected.length,
+        receivedCount: items.size,
+        missingCount: expected.length - items.size,
+        duplicateCount,
+        complete: expected.length > 0 && items.size === expected.length && duplicateCount === 0,
+      },
+    });
+    assertMarketSnapshotInvariants(snapshot);
+    return snapshot;
+  }
+
+  /**
    * 外部股票搜索（v0.8 起）：smartbox 接口，GBK 文本 + \uXXXX 转义。
    * 空结果返回 []；HTTP 错误抛 TencentAdapterError。
    */
@@ -364,7 +475,7 @@ export class TencentAdapter {
     return parseTencentSearchHint(text);
   }
 
-  private async getText(url: string): Promise<string> {
+  private async getText(url: string, encoding: 'utf-8' | 'gbk' = 'utf-8'): Promise<string> {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -375,7 +486,7 @@ export class TencentAdapter {
       const buf = await res.arrayBuffer();
       // smartbox 标称 GBK，但 CJK 实际以 \uXXXX 转义出现（ASCII 安全），
       // utf-8 解码无损，反转义由 parseTencentSearchHint 负责。
-      return new TextDecoder('utf-8').decode(buf);
+      return new TextDecoder(encoding as never).decode(buf);
     } catch (error) {
       if (error instanceof TencentAdapterError) throw error;
       throw new TencentAdapterError(
@@ -407,3 +518,22 @@ export class TencentAdapter {
     }
   }
 }
+
+const positiveNumber = (value: string | undefined): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const finiteNumber = (value: string | undefined): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const parseTencentSnapshotTime = (value: string | undefined): Date | undefined => {
+  if (value === undefined || !/^\d{14}$/.test(value)) return undefined;
+  const parsed = new Date(
+    `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T` +
+      `${value.slice(8, 10)}:${value.slice(10, 12)}:${value.slice(12, 14)}+08:00`,
+  );
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};

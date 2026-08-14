@@ -44,6 +44,7 @@ import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
+import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listAccountsTool } from './tools/list-accounts.js';
@@ -54,6 +55,13 @@ import { listTradesTool } from './tools/list-trades.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
+import {
+  auditPortfolioPerformanceSnapshotsTool,
+  createPortfolioCashFlowTool,
+  createPortfolioCorporateActionTool,
+  getAccountPerformanceTool,
+  listPortfolioPerformanceSnapshotsTool,
+} from './tools/portfolio-performance.js';
 import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { renderReportTool } from './tools/render-report.js';
@@ -87,11 +95,13 @@ import {
   trialStrategyVersionTool,
 } from './tools/strategy-definition.js';
 import {
+  cancelStrategyEvaluationSessionTool,
   finishStrategyEvaluationSessionTool,
   getStrategyEvaluationSessionTool,
   getStrategyPitUniverseTool,
   listStrategyEvaluationDaysTool,
   recordStrategyEvaluationDayTool,
+  resumeStrategyEvaluationSessionTool,
   startStrategyEvaluationSessionTool,
 } from './tools/strategy-evaluation.js';
 import {
@@ -289,12 +299,19 @@ export const toolRegistry: Registry = createRegistry([
   resumeStrategyTool,
   runStrategyTool,
   prepareStrategyDataTool,
+  createPortfolioCashFlowTool,
+  createPortfolioCorporateActionTool,
+  getAccountPerformanceTool,
+  listPortfolioPerformanceSnapshotsTool,
+  auditPortfolioPerformanceSnapshotsTool,
   getStrategyPitUniverseTool,
   getStrategyEvaluationSessionTool,
   listStrategyEvaluationDaysTool,
   startStrategyEvaluationSessionTool,
   recordStrategyEvaluationDayTool,
   finishStrategyEvaluationSessionTool,
+  resumeStrategyEvaluationSessionTool,
+  cancelStrategyEvaluationSessionTool,
   listStrategyRunsTool,
   getStrategyRunTool,
   listStrategyResultViewsTool,
@@ -362,6 +379,7 @@ export const toolRegistry: Registry = createRegistry([
   getMarketDataStatusTool,
   getAShareSentimentTool,
   listWorkflowRunsTool,
+  getStrategyReliabilitySummaryTool,
   getReportTool,
   listReportsTool,
   renderReportTool,

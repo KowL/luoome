@@ -6,7 +6,7 @@
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、[Web 对话助手设计](./web-chat-design.md)
 > 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/tools/src/tools/strategy-definition.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
-> 2026-08-11 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文仍记录 Phase A～C 已实现基线。
+> 2026-08-14 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线，当前发布资格以 Summary V4、acceptance 和 publication 为准。
 
 ## 1. 设计结论
 
@@ -58,23 +58,22 @@ Strategy
 
 ### 2.2 本设计不包含
 
-- 严格历史回测、组合收益、回撤、费用和滑点；
+- 严格收益回测、组合收益、费用和滑点；PIT 历史评估由可靠性设计单独定义；
 - 仓位、止盈止损和自动交易；
 - 自动把 StrategyResult 同步到 Watchlist；
 - 新的前端框架、构建链或设计系统；
 - 让 LLM 重新执行规则或补造缺失的市场事实；
-- Phase D 的历史数据快照与 point-in-time universe 实现。
 
 ## 3. 当前实现与差距
 
 | 层 | 当前能力 | 主要差距 |
 |---|---|---|
-| Core | Strategy/Version/Run/Result/Signal 已存在；evaluator 支持 all/any、weighted score、top 和稳定排名 | 未命中仅保留布尔值，缺少结构化输入与解释；summary/inputSnapshot 是自由 record |
-| Repository | run、results、signals 可落库，终态 run 可原子提交 | 按 run 查询 signal 需要先按 strategy 全量读取再过滤 |
-| Tools | 可列出 run、读取 run/results/signals、按 stock 查 signal | 没有统一工作台摘要、结果分类、Diff 查询 |
-| Web API | 已有策略 CRUD、校验、发布、试跑、正式运行和历史查询 | 前端需要多次拼装；没有派生视图与 Diff 端点 |
-| Web UI | `#strategies` 已使用左目录、右详情；支持版本操作、试跑、正式运行和手工加入 Watchlist | 信息堆叠在单一详情区；无 tab、解释、候选、Diff、完整状态设计 |
-| Observation | watch-trigger 与 strategy-signal 均接入 SignalObservation | 后续价格补齐与聚合仍待独立 workflow |
+| Core | Strategy/Version/Run/Result/Signal、Summary V4、结构化 rule evaluation、result-view 和 run-diff 已落地 | 严格回测仍缺费用、滑点、可交易性与 evaluator code identity 门禁 |
+| Repository | run、results、signals、publication/scope 查询均可落库，终态 run 可原子提交；Drizzle/memory 合约已覆盖 | 大规模 result 查询达到瓶颈后再评估索引或物化策略 |
+| Tools | `get_strategy_workspace`、`list_strategy_result_views`、run diff 和 scope/publication 过滤已统一 | 真实生产样本的完整率、benchmark 可用率仍需持续观察 |
+| Web API | 策略 CRUD、校验、发布、试跑、正式运行、workspace、result-view、Diff 和历史评估端点已接入 | 账户级认证仍需独立产品决策 |
+| Web UI | `#strategies` 支持 overview/pool/runs/insights/settings、publication/partial/legacy 状态、Diff 和后台历史评估 | 更长历史任务与持续快照审计仍待真实数据积累 |
+| Observation | watch-trigger 与 strategy-signal 均接入 SignalObservation | 真实日线补齐、benchmark 可用率和聚合仍需生产样本 |
 
 设计不改变以下已成立的行为：
 
@@ -225,7 +224,8 @@ interface StrategyRunInputSnapshotV2 {
 - provider 状态继续使用 `StrategyRun.providerStatuses`，不重复塞进 inputSnapshot；
 - legacy run 可以展示已有字段，但标记 `auditStatus='legacy-partial'`。
 
-这使运行可审计，但仍不宣称完整可重放；行情快照、历史 universe 和代码制品 identity 属于 Phase D。
+这使运行可审计，但不宣称严格收益回测；行情快照、历史 universe 和 DailyBar revision 已由
+可靠性设计支持历史评估，费用、滑点、可交易性和 evaluator code identity 仍是严格回测前置条件。
 
 ### 5.4 结果视图分类
 
@@ -379,15 +379,17 @@ interface StrategySchedule {
 }
 ```
 
-调度器只触发 `run_strategy`，并生成 `mode='scheduled'` 的 StrategyRun；不得创建 Advice 或交易。
-Phase B 已实现标准 5 段 cron 与 IANA 时区解析、`nextRunAt` 推进、跨实例调度租约，以及
-`strategyId + strategyVersionId` 正式运行租约。外部 cron 每分钟唤醒
+调度器触发 `strategy-daily-cycle`，由 workflow 在 lease、checkpoint 和 publication 门禁后调用
+`run_strategy`，并生成 `mode='scheduled'` 的 StrategyRun；观察、洞察、建议和通知仍必须经过显式
+Tool，任何路径不得自动交易。Phase B 已实现标准 5 段 cron 与 IANA 时区解析、`nextRunAt` 推进、跨实例
+调度租约，以及 `strategyId + strategyVersionId` 正式运行租约。外部 cron 每分钟唤醒
 `run-strategy-schedules`；错过的周期最多补跑一次，非交易日与暂停策略跳过并推进。
 
 ### 6.4 Phase B 事实观察与 AI 洞察
 
-- `complete-strategy-observations` 同步本地 qfq 日线，以基准后的第 N 根可用日线完成观察；
-- benchmark 在指数日线接入前明确为 unavailable，不以个股或大盘报价替代；
+- `complete-strategy-observations` 同步本地 qfq 日线，以基准后的第 N 根可用日线完成观察；生产日循环和补观察
+  workflow 都会显式同步 `000300.SH`，并在审计中记录 `000300.SH:qfq:daily:v1`、来源、bar 数和失败原因；
+- benchmark 缺失或同步失败时明确保持 unavailable/partial，不以个股、大盘报价或 0 值替代；
 - `get_strategy_insight_facts` 汇总 30 天运行、Diff、阻断、行业、AlertPlan 与四个观察周期；
 - `generate_strategy_insight` 仅向 LLM 提供白名单 facts，并校验每条 finding 的 factRefs；
 - AI 洞察不持久化 Advice，不生成策略草案，不触发 Watchlist、通知或交易。
@@ -697,6 +699,16 @@ query 参数只负责转换为 Tool input；枚举、limit 和 run 归属由 Too
 - 统计继续来自 current run；
 - “查看失败详情”跳到执行记录并选中失败 run。
 
+头部在样本试跑、正式运行之前提供「模拟回测」。弹窗输入开始/结束日期和可选股票代码；默认最近
+31 个自然日，Web 上限 31 日、显式子集上限 500。提交后逐交易日历史回放，并在结果弹窗展示：
+
+- 区间交易日、完成/失败日、累计求值、入选、信号和失败数；
+- 每日历史数据版本可用性及失败原因；
+- evaluation session id，便于在「执行记录 → 历史评估」继续审计。
+
+这里的“模拟回测”是 point-in-time 历史回放，不输出收益率、净值、胜率、费用或滑点。结果固定进入
+evaluation/non-publishing，不得替换当前股票池；Web API 同时要求 write 与 external 能力。
+
 ### 10.6 股票池 tab
 
 > 2026-08-02（第二次修订）：股票池不再细分，「数据不完整」视图也已从工作台下线；
@@ -780,7 +792,9 @@ Phase A 展示占位说明，不发起 LLM 请求。Phase B 只有在存在可�
 
 - 30 天进入/退出、候选转正和规则阻断频次；
 - StrategySignal 的 T+1/T+3/T+5/T+20 观察；
-- 样本数、缺失率、benchmarkStatus 和观察截止时间；
+- 样本数、唯一股票、完整率/缺失率、均值/中位数/P25/P75、超额收益、MFE/MAE、benchmarkStatus 和观察截止时间；
+- 观察聚合按 `stock-day-horizon` 去重，同一股票同一基准交易日同一周期只保留一个可追溯代表
+  `SignalObservation`；Tool、Web 和 AI facts 使用同一去重口径，缺失 benchmark 不回填为 0；
 - 版本变化前后的事实差异；
 - “生成改进草案”入口。
 
@@ -1077,6 +1091,8 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - Origin 行为不回归；
 - partial/failed 作为业务数据返回，不误报 500；
 - warnings 降级不会伪造 current run。
+- 模拟回测路由校验 YYYY-MM-DD、from/to 顺序、31 日上限、500 只子集上限，并强制持久化到
+  evaluation；write/external 任一能力未开启或跨站 Origin 时拒绝。
 
 ### 16.5 Web 前端
 
@@ -1091,6 +1107,8 @@ AI 输入只能引用：run diff、rule evaluation、provider status、SignalObs
 - 所有 stock result/signal/diff 均展示名称和完整代码，点击股票标识进入默认 3m 行情页；
 - 名称缺失时展示“名称暂缺”，不省略第二行代码；
 - DOM 使用 textContent，不产生注入。
+- 模拟回测输入规范化、逐日汇总、空交易日、partial/failed 与 vintage unavailable 状态；页面不得
+  把历史回放描述为严格收益回测。
 
 ### 16.6 浏览器验收
 
@@ -1136,11 +1154,11 @@ bun run lint
 
 ### Phase B：自动运行与真实观察
 
-1. 待实施：StrategySchedule 独立设计与多实例并发锁；
+1. 已实施：StrategySchedule 独立设计、多实例并发锁、heartbeat 与 fencing token；
 2. 已实施：`run-strategies` 将 scheduled 模式写入可审计 StrategyRun；
 3. 已实施：strategy-signal observation 候选幂等生成；
-4. 待实施：后续价格补齐、观察聚合与 AI 洞察事实区；
-5. 待实施：AlertPlan 引用关系展示。
+4. 已实施：后续价格补齐、观察聚合与事实型 AI 洞察区；
+5. 已实施：AlertPlan 引用、推荐策略和通知失败审计；连续生产证据仍按 v0.9 Roadmap 门禁验收。
 
 ### Phase C：AI 版本迭代
 
@@ -1171,10 +1189,10 @@ Phase A 完成必须同时满足：
 
 以下内容已确定方向，但在进入对应 Phase 前仍需独立实施设计：
 
-1. StrategySchedule 的 cron 语法、时区、节假日、补跑、并发锁和多实例 ownership；
-2. StrategySignal baseline price 的具体交易时点与 provider fallback；
+1. StrategySchedule 已具备 cron、时区、节假日、补跑和 fencing ownership；剩余是跨实例真实运行证据与运营参数复核；
+2. StrategySignal baseline price 的具体交易时点与 provider fallback 的真实样本审计；
 3. 大规模 result 查询达到瓶颈后的索引或物化策略；
 4. 显式“订阅策略到 Watchlist”的 opt-in 投影、完整同步和 stale 语义；
-5. Phase D point-in-time universe、行情快照和 evaluator code identity。
+5. 严格回测所需的费用、滑点、停牌/涨跌停可交易性、公司行动和 evaluator code identity。
 
 在这些设计完成前，页面不得提前暴露不可生效的调度设置、自动 Watchlist 同步或严格回测指标。

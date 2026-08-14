@@ -18,6 +18,8 @@ export const AGENT_V1_TOOL_NAMES = [
   'list_watch_triggers',
   'get_advice',
   'get_advice_stats',
+  'get_account_performance',
+  'get_strategy_reliability_summary',
   'list_trades',
   'list_research_topics',
   'get_research_topic',
@@ -28,7 +30,10 @@ export const AGENT_V1_TOOL_NAMES = [
   'get_stock_research_view',
 ] as const;
 
-const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set(['batch_quote']);
+const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
+  'batch_quote',
+  'get_account_performance',
+]);
 
 export const buildAgentCallableTools = (
   registry: Registry,

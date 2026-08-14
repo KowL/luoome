@@ -333,6 +333,44 @@ describe('Strategy evaluator', () => {
     expect(inspected.dataSources).toEqual(['daily-bars']);
   });
 
+  it('registers ladder fields as a separate point-in-time data source', () => {
+    const dsl = definition({
+      ...definition(),
+      selection: {
+        logic: 'all',
+        rules: [
+          {
+            id: 'ladder',
+            name: '连板高度',
+            when: 'meta.limitUpLevel >= 3 && meta.limitUpToday === true',
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy evidence placeholder
+            evidence: ['${meta.limitUpLevel}板'],
+          },
+        ],
+      },
+      scoring: undefined,
+      signals: { entry: [], exit: [], risk: [] },
+    });
+    const inspected = inspectStrategyDefinitionReferences(dsl);
+    expect(inspected.validationErrors).toEqual([]);
+    expect(inspected.dataSources).toEqual(['limit-up-ladder']);
+    expect(inspected.requiredLookback).toBe(1);
+    const result = evaluateStrategyStock({
+      strategyId: 'strategy',
+      version: version(dsl),
+      runId: 'run-ladder',
+      stockId: '600519.SH',
+      ts: new Date('2026-01-02T00:00:00Z'),
+      dataAsOf: new Date('2026-01-02T00:00:00Z'),
+      context: {
+        indicators: {},
+        meta: { limitUpLevel: 3, limitUpToday: true },
+      },
+    });
+    expect(result.result.selected).toBe(true);
+    expect(result.partial).toBe(false);
+  });
+
   it('reports malformed expressions during static validation', () => {
     const dsl = definition({
       ...definition(),

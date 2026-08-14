@@ -3,7 +3,13 @@ import type { Advice, AdviceOutcome, AdviceQuery } from '../entity/advice.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { Holding } from '../entity/holding.js';
+import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
+import type {
+  PortfolioCashFlow,
+  PortfolioCorporateAction,
+  PortfolioPerformanceSnapshot,
+} from '../entity/portfolio-performance.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
 import type {
@@ -107,6 +113,15 @@ export interface StockUniverseRepository {
   listSnapshotMembers(syncId: string): Promise<readonly Stock[]>;
 }
 
+/** 已审计的按交易日涨停天梯 PIT 快照；replay 只允许读取此仓储。 */
+export interface LimitUpLadderSnapshotRepository {
+  save(snapshot: LimitUpLadder): Promise<void>;
+  findByDate(input: {
+    readonly date: string;
+    readonly source: LimitUpLadderSource;
+  }): Promise<LimitUpLadder | null>;
+}
+
 export interface HoldingRepository {
   save(holding: Holding): Promise<void>;
   findById(id: string): Promise<Holding | null>;
@@ -119,6 +134,43 @@ export interface TradeRepository {
   save(trade: Trade): Promise<void>;
   findById(id: string): Promise<Trade | null>;
   listByAccount(accountId: string): Promise<Trade[]>;
+  remove(id: string): Promise<void>;
+}
+
+export interface PortfolioCashFlowRepository {
+  save(flow: PortfolioCashFlow): Promise<void>;
+  findById(id: string): Promise<PortfolioCashFlow | null>;
+  listByAccount(accountId: string, from?: Date, to?: Date): Promise<PortfolioCashFlow[]>;
+  remove(id: string): Promise<void>;
+}
+
+export interface PortfolioCorporateActionRepository {
+  save(action: PortfolioCorporateAction): Promise<void>;
+  findById(id: string): Promise<PortfolioCorporateAction | null>;
+  listByAccount(accountId: string, from?: Date, to?: Date): Promise<PortfolioCorporateAction[]>;
+  remove(id: string): Promise<void>;
+}
+
+export interface PortfolioPerformanceSnapshotRepository {
+  save(snapshot: PortfolioPerformanceSnapshot): Promise<void>;
+  findById(id: string): Promise<PortfolioPerformanceSnapshot | null>;
+  findByFingerprint(input: {
+    readonly accountId: string;
+    readonly from: Date;
+    readonly to: Date;
+    readonly inputFingerprint: string;
+  }): Promise<PortfolioPerformanceSnapshot | null>;
+  listByAccount(
+    accountId: string,
+    limit?: number,
+  ): Promise<readonly PortfolioPerformanceSnapshot[]>;
+  /** 查询与区间有重叠的快照，按计算时间倒序，供长区间审计避免只取最新快照。 */
+  listByAccountAndRange(
+    accountId: string,
+    from: Date,
+    to: Date,
+    limit?: number,
+  ): Promise<readonly PortfolioPerformanceSnapshot[]>;
   remove(id: string): Promise<void>;
 }
 
@@ -192,8 +244,13 @@ export interface RepositoryRegistry {
   readonly stock: StockRepository;
   /** 本地股票目录完整快照与同步审计。 */
   readonly stockUniverse: StockUniverseRepository;
+  /** 历史 Strategy replay 使用的真实天梯 PIT 快照。 */
+  readonly limitUpLadderSnapshot: LimitUpLadderSnapshotRepository;
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
+  readonly portfolioCashFlow: PortfolioCashFlowRepository;
+  readonly portfolioCorporateAction: PortfolioCorporateActionRepository;
+  readonly portfolioPerformanceSnapshot: PortfolioPerformanceSnapshotRepository;
   readonly advice: AdviceRepository;
   /** A 股个性化简报历史；按 kind/scope/period 逻辑键幂等更新。 */
   readonly report: ReportRepository;

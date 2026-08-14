@@ -1,12 +1,12 @@
 // @luoome/mcp —— MCP stdio smoke 测试（纯 bun 脚本，非 vitest）。
 //
-// 运行：export PATH="$HOME/.bun/bin:$PATH" && bun packages/mcp/src/smoke.ts
+// 运行：LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=sina bun packages/mcp/src/smoke.ts
 //
 // 覆盖（spawn 真实 server 进程，MCP stdio JSON-RPC 握手）：
-//   1. initialize → tools/list：默认暴露面恰好 17 个 tool（read 14 + advice 3）
-//   2. tools/call list_holdings：ok，返回非空 holdings
-//   3. tools/call analyze_stock：ok，返回含 3 条 disclaimers 的 Advice
-//   4. 相同 LUOOME_HOME 二次 spawn：种子幂等 upsert，重复启动安全
+//   1. initialize → tools/list：默认暴露面与 registry 的 read/advice 选择策略一致
+//   2. tools/call list_accounts / list_holdings：空库返回事实，不注入样例数据
+//   3. tools/call analyze_stock：空库明确返回 Stock not_found，不伪造 Advice
+//   4. 相同 LUOOME_HOME 二次 spawn：空库初始化幂等，重复启动安全
 //   5. LUOOME_EXPOSE_TRADE=true spawn：进程退出码非零（trade 永不暴露）
 //
 // 说明：子进程用 process.execPath（即当前 bun 二进制）启动，等价于
@@ -17,7 +17,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { toolRegistry } from '@luoome/tools';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import { resolveAllowedSideEffects, selectMcpTools } from './exposure.js';
 
 const indexPath = fileURLToPath(new URL('./index.ts', import.meta.url));
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -116,7 +118,10 @@ class McpStdioClient {
     } finally {
       this.buffer += decoder.decode();
       this.drainLines();
-      this.failAllPending(new Error('server stdout closed'));
+      const stderr = this.stderrBuf.trim();
+      this.failAllPending(
+        new Error(stderr.length === 0 ? 'server stdout closed' : `server stdout closed: ${stderr}`),
+      );
     }
   }
 
@@ -228,44 +233,48 @@ const toolsListAndCall = async (client: McpStdioClient, full: boolean): Promise<
 
   const listResult = asRecord(await client.request('tools/list', {}));
   const tools = listResult.tools;
-  // 默认暴露面 = read(14) + advice(3) = 17；write/external 需 LUOOME_EXPOSE_* opt-in。
+  // 以运行时 registry + exposure policy 计算期望集合，避免新增 read/advice tool 后
+  // smoke 因历史固定数量失效；research tool 仍由 LUOOME_EXPOSE_RESEARCH 显式开启。
+  const expectedNames = selectMcpTools(toolRegistry.all(), resolveAllowedSideEffects({}))
+    .filter((tool) => !tool.name.includes('research'))
+    .map((tool) => tool.name);
+  const actualNames = Array.isArray(tools) ? tools.map((tool) => asRecord(tool).name) : [];
   check(
-    Array.isArray(tools) && tools.length === 17,
-    `tools/list 默认暴露面恰好 17 个 tool（实际 ${Array.isArray(tools) ? tools.length : 'N/A'}）`,
+    actualNames.length === expectedNames.length &&
+      expectedNames.every((name) => actualNames.includes(name)),
+    `tools/list 默认暴露面符合 selection policy（实际 ${actualNames.length}，预期 ${expectedNames.length}）`,
   );
-  const names = Array.isArray(tools) ? tools.map((t) => asRecord(t).name) : [];
   check(
-    names.includes('list_holdings') && names.includes('analyze_stock'),
+    actualNames.includes('list_holdings') && actualNames.includes('analyze_stock'),
     'tools/list 含 list_holdings 与 analyze_stock',
   );
 
   if (!full) return;
 
-  const holdingsOut = parseToolResultText(
+  const accountsOut = parseToolResultText(
+    await client.request('tools/call', { name: 'list_accounts', arguments: {} }),
+  );
+  const accounts = Array.isArray(accountsOut.accounts) ? accountsOut.accounts : [];
+  check(accounts.length === 0, 'tools/call list_accounts 在独立空库返回空事实（不注入样例账户）');
+  const holdingsResult = asRecord(
     await client.request('tools/call', { name: 'list_holdings', arguments: {} }),
   );
   check(
-    Array.isArray(holdingsOut.holdings) && holdingsOut.holdings.length > 0,
-    'tools/call list_holdings 返回非空 holdings',
+    holdingsResult.isError === true && JSON.stringify(holdingsResult.content).includes('not_found'),
+    '空库 list_holdings 明确返回 Account not_found',
   );
 
-  const analyzeOut = parseToolResultText(
+  const analyzeResult = asRecord(
     await client.request('tools/call', {
       name: 'analyze_stock',
       arguments: { stockId: '002594.SZ' },
     }),
   );
-  const advice = asRecord(analyzeOut.advice);
-  const disclaimers = advice.disclaimers;
   check(
-    Array.isArray(disclaimers) &&
-      disclaimers.length === 3 &&
-      disclaimers.every((d) => typeof d === 'string' && d.length > 0),
-    'tools/call analyze_stock 返回的 Advice 含 3 条免责声明',
-  );
-  check(
-    typeof advice.decision === 'string' && typeof advice.confidence === 'number',
-    'analyze_stock 的 Advice 含 decision/confidence',
+    analyzeResult.isError === true &&
+      JSON.stringify(analyzeResult.content).includes('Stock') &&
+      JSON.stringify(analyzeResult.content).includes('not_found'),
+    '空库 analyze_stock 明确返回 Stock not_found（不注入样例股票）',
   );
 };
 
@@ -282,7 +291,7 @@ const main = async (): Promise<void> => {
   const second = McpStdioClient.spawn({}, home);
   try {
     await toolsListAndCall(second.client, false);
-    check(true, '相同 LUOOME_HOME 二次启动握手 + tools/list 成功（种子幂等）');
+    check(true, '相同 LUOOME_HOME 二次启动握手 + tools/list 成功（空库初始化幂等）');
   } finally {
     await second.client.kill();
     rmSync(home, { recursive: true, force: true });

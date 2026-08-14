@@ -35,14 +35,13 @@ export interface NotificationManagerOptions {
     warn(message: string, meta?: Record<string, unknown>): void;
     error(message: string, meta?: Record<string, unknown>): void;
   };
-  /** 通知 ID 生成器（测试可注入）；默认 `notif-<ts>-<rand>`。 */
+  /** 通知 ID 生成器（测试可注入）；默认使用 UUID。 */
   readonly idGenerator?: () => string;
   /** 时钟注入；默认 Date.now。 */
   readonly clock?: () => Date;
 }
 
-const defaultIdGen = (): string =>
-  `notif-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+const defaultIdGen = (): string => `notif-${globalThis.crypto.randomUUID()}`;
 
 export class NotificationManager {
   private feishu: FeishuWebhookAdapter | undefined;

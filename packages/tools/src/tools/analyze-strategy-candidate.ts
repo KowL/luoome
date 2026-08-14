@@ -15,6 +15,8 @@ import {
   AdviceLLMSchema,
   computeValidUntil,
   extractLlmRaw,
+  sanitizeAdviceReasoning,
+  sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
 
@@ -122,8 +124,8 @@ export const analyzeStrategyCandidateTool = defineTool({
       decision: llmOutput.decision,
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,
-      reasoning: llmOutput.reasoning,
-      risks: llmOutput.risks,
+      reasoning: sanitizeAdviceReasoning(llmOutput.reasoning),
+      risks: sanitizeAdviceRisks(llmOutput.risks),
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'analyze_strategy_candidate',
       sourceWorkflow: 'strategy-recommendations',

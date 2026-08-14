@@ -303,6 +303,32 @@ describe('market/eastmoney', () => {
       expect(items[0]?.exchange).toBe('SH');
     });
 
+    it('返回带分页完整性、来源和抓取时间的 envelope', async () => {
+      const adapter = new EastmoneyAdapter({
+        clock: () => new Date('2026-07-28T08:00:00.000Z'),
+        fetchImpl: ((url: string) => {
+          const pn = Number(new URL(url).searchParams.get('pn'));
+          const diff = pn === 1 ? makePage(0, 500) : makePage(500, 3);
+          return Promise.resolve(
+            new Response(JSON.stringify({ rc: 0, data: { total: 503, diff } }), { status: 200 }),
+          );
+        }) as never,
+      });
+      const snapshot = await adapter.fetchMarketSnapshotEnvelope();
+      expect(snapshot).toMatchObject({
+        source: 'eastmoney',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        fetchedAt: new Date('2026-07-28T08:00:00.000Z'),
+        completeness: {
+          expectedCount: 503,
+          receivedCount: 503,
+          missingCount: 0,
+          duplicateCount: 0,
+          complete: true,
+        },
+      });
+    });
+
     it('累计达到 total 时提前停止', async () => {
       const requestedPages: number[] = [];
       const adapter = new EastmoneyAdapter({

@@ -7,6 +7,7 @@ import { startStrategyScheduler } from './strategy-scheduler.js';
 const emptyResult = (): RunStrategySchedulesOutputT => ({
   items: [],
   ran: 0,
+  partial: 0,
   skipped: 0,
   failed: 0,
 });

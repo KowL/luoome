@@ -1,7 +1,7 @@
 import { type DateRange, type MarketDataAdapterLike, money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildTestContext } from '../testing/context.js';
+import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 import { syncDailyBarsTool } from './sync-daily-bars.js';
 
 const qfqBar = (stockId: string, date: string) => ({
@@ -218,5 +218,137 @@ describe('tool/sync_daily_bars', () => {
     );
 
     expect(requestedRange?.start).toEqual(new Date('2026-07-05T00:00:00.000Z'));
+  });
+
+  it('strategy-universe 范围只同步最近成功目录快照，并允许配置并发/重试预算', async () => {
+    const now = new Date('2026-07-28T08:30:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 2, observedAt: now });
+    const calls: string[] = [];
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (stockId: string) => {
+            calls.push(stockId);
+            return [qfqBar(stockId, '2026-07-27')];
+          },
+        },
+      },
+    };
+    const result = await syncDailyBarsTool.execute(
+      { scope: 'strategy-universe', concurrency: 1, maxRetries: 0, requestTimeoutMs: 500 },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.synced).toBe(2);
+    expect(calls).toEqual(['300750.SZ', '600519.SH']);
+  });
+
+  it('provider 超时进入确定性 failed，不无限等待', async () => {
+    const base = await buildTestContext({
+      clock: () => new Date('2026-07-28T08:30:00.000Z'),
+    });
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => new Promise<never>(() => {}),
+        },
+      },
+    };
+    const result = await syncDailyBarsTool.execute(
+      {
+        scope: 'explicit',
+        stockIds: ['600519.SH'],
+        maxRetries: 0,
+        requestTimeoutMs: 500,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items[0]).toMatchObject({
+      status: 'failed',
+      reason: expect.stringContaining('provider_timeout'),
+    });
+  });
+
+  it('connection reset 只按 maxRetries 重试，并不触发无界 fallback', async () => {
+    const base = await buildTestContext({
+      clock: () => new Date('2026-07-28T08:30:00.000Z'),
+    });
+    let calls = 0;
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (stockId: string) => {
+            calls += 1;
+            if (calls <= 2) throw new Error('ECONNRESET upstream');
+            return [qfqBar(stockId, '2026-07-27')];
+          },
+        },
+      },
+    };
+    const result = await syncDailyBarsTool.execute(
+      {
+        scope: 'explicit',
+        stockIds: ['600519.SH'],
+        maxRetries: 2,
+        requestTimeoutMs: 500,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.status).toBe('succeeded');
+    expect(result.data.synced).toBe(1);
+    expect(calls).toBe(3);
+  });
+
+  it('并发 worker 不超过配置上限', async () => {
+    const base = await buildTestContext({
+      clock: () => new Date('2026-07-28T08:30:00.000Z'),
+    });
+    let active = 0;
+    let maxActive = 0;
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (stockId: string) => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            active -= 1;
+            return [qfqBar(stockId, '2026-07-27')];
+          },
+        },
+      },
+    };
+    const result = await syncDailyBarsTool.execute(
+      {
+        scope: 'explicit',
+        stockIds: ['600519.SH', '000001.SZ', '300750.SZ', '601318.SH'],
+        concurrency: 2,
+        maxRetries: 0,
+        requestTimeoutMs: 500,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.synced).toBe(4);
+    expect(maxActive).toBeLessThanOrEqual(2);
   });
 });

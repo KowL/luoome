@@ -127,7 +127,7 @@ function sanitizeAdviceReasoning(reasoning: string): string {
 }
 ```
 
-LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized 审计。展示时只在"展开原始推理"按钮后才显示完整原文，避免被复制粘贴造成下游 agent 误用。
+LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized 审计。展示时只在“展开推理”按钮后显示已清理文本，避免被复制粘贴造成下游 agent 误用。
 
 ## MCP 暴露配置
 
@@ -199,6 +199,9 @@ error message 可以含人类可读细节（如"持仓数量不能为负"），*
 - API endpoint URL + token
 - 内部文件系统路径（可显示 `$LUOOME_HOME`）
 
+`defineTool` 在统一出口清理 input issues、InvariantError、adapter/LLM/lease/internal 错误、handler
+异常和 output schema 校验错误；审计 sink 还会递归清理敏感 key、密钥样式、URL/路径、超长值和过深嵌套。
+
 ## Audit Log
 
 所有 write / external / trade 工具调用记录到 `~/.luoome/logs/audit.log`：
@@ -233,6 +236,13 @@ advice 类也记录：
 
 敏感字段不写入 audit log。
 
+当前实现（2026-08-14）：`defineTool` 对所有 `write` / `external` / `trade` / `advice` 调用记录
+成功、业务失败、输入校验失败和异常结果；CLI、MCP、TUI、Web 生产入口分别把日志写入
+`$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
+目录权限为 `0700`、文件权限为 `0600`，写入前递归脱敏敏感字段、密钥样式、Webhook、超长值和过深嵌套。
+Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外清理常见 prompt-injection 模式。
+审计 sink 故障只产生 warning，不改变 ToolResult 协议或伪造业务成功。
+
 ## 上游信任
 
 - **数据源**：Eastmoney / Tencent 等外部 API 返回的数据视为不可信，输入 db 前校验
@@ -264,14 +274,17 @@ TUI / Web / CLI 在 advice 显示界面顶部必须固定显示：
 
 ## Checklist（每个 release 前）
 
-- [ ] `LUOOME_EXPOSE_TRADE` 强制 false 校验存在
-- [ ] 所有密钥不在 git
-- [ ] 日志脱敏测试覆盖
-- [ ] Audit log 写入正常
-- [ ] trade 类工具无 MCP 暴露路径（grep 验证）
-- [ ] advice tool 不能调 trade tool（grep + 测试验证）
-- [ ] advice 必含 disclaimers（不变量测试覆盖）
-- [ ] advice 有效期限逻辑正确
-- [ ] LLM 输出 sanitized 审计生效
-- [ ] 错误信息不含密钥 / 路径细节
-- [ ] 用户界面顶部固定免责声明
+2026-08-14 已用 MCP smoke、registry/invariant/TUI/Web 结构测试、错误脱敏回归和仓库密钥扫描复核，
+以下清单全部通过；后续 release 若新增副作用或输出路径，必须重新执行同一组检查。
+
+- [x] `LUOOME_EXPOSE_TRADE` 强制 false 校验存在
+- [x] 所有密钥不在 git
+- [x] 日志脱敏测试覆盖
+- [x] Audit log 写入正常
+- [x] trade 类工具无 MCP 暴露路径（grep 验证）
+- [x] advice tool 不能调 trade tool（grep + 测试验证）
+- [x] advice 必含 disclaimers（不变量测试覆盖）
+- [x] advice 有效期限逻辑正确
+- [x] LLM 输出 sanitized 审计生效
+- [x] 错误信息不含密钥 / 路径细节
+- [x] 用户界面顶部固定免责声明

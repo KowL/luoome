@@ -10,7 +10,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "bun src/smoke.ts"
   },
   "dependencies": {
     "@luoome/adapters": "workspace:*",

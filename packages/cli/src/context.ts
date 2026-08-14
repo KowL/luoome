@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createFileAuditLogger,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
@@ -20,7 +21,12 @@ import {
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
-import type { Logger, ToolContext } from '@luoome/core';
+import {
+  DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+  DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+  type Logger,
+  type ToolContext,
+} from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
 
@@ -65,9 +71,25 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const now = (): Date => new Date();
   const accounts = await repos.account.list();
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
-
   const logger = createStderrLogger();
-  const ai = createAIStackFromEnv(process.env, { logger });
+  const market = createMarketAdapterFromEnv(process.env, {
+    clock: now,
+    logger,
+  });
+  let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
+  try {
+    ai = createAIStackFromEnv(process.env, { logger });
+  } catch (error) {
+    logger.warn('AI 模型尚未配置；CLI 将以配置模式继续（需要 AI 的命令会明确失败）', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const unavailableLLM = {
+    name: 'ai-unconfigured',
+    generate: async (): Promise<never> => {
+      throw new Error('AI 模型尚未配置，请先配置 LUOOME_AI_CONFIG 与对应密钥');
+    },
+  };
   const limitUpLadder = createLimitUpLadderManagerFromEnv(process.env, {
     clock: now,
     logger,
@@ -81,22 +103,31 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const ctx = buildContext({
     repos,
     adapters: {
-      market: createMarketAdapterFromEnv(process.env, {
-        clock: now,
-        logger,
-      }),
+      market,
       stockUniverse: createStockUniverseManagerFromEnv(process.env, {
         clock: now,
         logger,
       }),
-      llm: ai.llm,
+      llm: ai?.llm ?? unavailableLLM,
     },
-    agent: ai.agent,
+    ...(ai === undefined ? {} : { agent: ai.agent }),
+    portfolioBenchmark: {
+      stockId:
+        process.env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() ||
+        DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+      name: DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+    },
     user: { id: 'local-user', defaultAccountId },
     clock: now,
     logger,
+    auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
+    auditCaller: 'cli',
     limitUpLadder,
-    ashareSentiment: createAShareSentimentManagerFromEnv(process.env, { clock: now, logger }),
+    ashareSentiment: createAShareSentimentManagerFromEnv(process.env, {
+      clock: now,
+      logger,
+      market,
+    }),
     ...(researchVault ? { researchVault } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),

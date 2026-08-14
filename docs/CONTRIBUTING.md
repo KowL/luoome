@@ -58,7 +58,7 @@ luoome/
 │   ├── db/            Drizzle schema + 双实现 repo（drizzle + in-memory）
 │   │                  依赖 bun:sqlite；只能由 Bun 运行时 import。
 │   ├── adapters/      外部依赖适配
-│   │   ├── market/    Eastmoney / Tencent 行情
+│   │   ├── market/    Eastmoney / Sina / Tencent 行情
 │   │   ├── llm/       OpenAI-Compatible / Anthropic LLM
 │   │   ├── testing/   仅测试可导入的 deterministic fixtures / fakes
 │   │   └── notification/  飞书 Webhook 等

@@ -1,4 +1,10 @@
-import { InvariantError, type SideEffect, type ToolContext, type ToolResult } from '@luoome/core';
+import {
+  InvariantError,
+  type SideEffect,
+  type ToolContext,
+  type ToolError,
+  type ToolResult,
+} from '@luoome/core';
 import type { z } from 'zod';
 
 /**
@@ -77,7 +83,9 @@ export interface Tool<I = unknown, O = unknown> {
 }
 
 /** 检测 handler 主动返回的业务错误（{ ok: false, error: { kind } } 形状）。 */
-const isToolErrorResult = (value: unknown): value is ToolResult<never> => {
+const isToolErrorResult = (
+  value: unknown,
+): value is { readonly ok: false; readonly error: ToolError } => {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as { ok?: unknown; error?: unknown };
   if (record.ok !== false) return false;
@@ -87,6 +95,71 @@ const isToolErrorResult = (value: unknown): value is ToolResult<never> => {
 
 const issuesMessage = (issues: readonly { message: string }[]): string =>
   issues.map((issue) => issue.message).join('; ');
+
+const redactErrorText = (value: string): string =>
+  value
+    .replace(/Bearer\s+[^\s"'`]+/gi, 'Bearer [redacted]')
+    .replace(/\bsk-[A-Za-z0-9_-]+\b/gi, '[redacted]')
+    .replace(/https?:\/\/[^\s"'`]+/gi, '[redacted-url]')
+    .replace(
+      /\/(?:Users|home|private|tmp|var|opt|etc|Volumes|workspace)\/[^\s"'`)]+/gi,
+      '[redacted-path]',
+    )
+    .replace(/[A-Za-z]:\\[^\s"'`)]+/g, '[redacted-path]');
+
+const sanitizeToolError = (error: ToolError): ToolError => {
+  switch (error.kind) {
+    case 'invalid_input':
+      return {
+        ...error,
+        message: redactErrorText(error.message),
+        issues: error.issues.map((issue) => ({
+          ...issue,
+          message: redactErrorText(issue.message),
+        })),
+      };
+    case 'invariant_violation':
+      return { ...error, message: redactErrorText(error.message) };
+    case 'adapter_error':
+      return { ...error, cause: redactErrorText(error.cause) };
+    case 'llm_error':
+      return { ...error, cause: redactErrorText(error.cause) };
+    case 'lease_lost_before_commit':
+      return { ...error, message: redactErrorText(error.message) };
+    case 'internal':
+      return { ...error, cause: redactErrorText(error.cause) };
+    case 'not_found':
+    case 'permission_denied':
+      return error;
+  }
+};
+
+const writeAudit = async (
+  ctx: ToolContext,
+  tool: string,
+  sideEffect: SideEffect,
+  input: unknown,
+  result: ToolResult<unknown>,
+): Promise<void> => {
+  if (sideEffect === 'read' || ctx.auditLog === undefined) return;
+  try {
+    await ctx.auditLog.write({
+      ts: ctx.clock(),
+      tool,
+      sideEffect,
+      input,
+      result: result.ok ? 'ok' : 'error',
+      ...(result.ok ? { output: result.data } : { error: result.error }),
+      caller: ctx.auditCaller ?? ctx.user.id,
+    });
+  } catch (error) {
+    // 审计 sink 故障不能改变 tool 协议；保留可定位 warning，避免静默丢审计。
+    ctx.logger.warn('tool audit log write failed', {
+      tool,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
 
 export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> => {
   const { name, description, sideEffect, input, output, handler } = definition;
@@ -108,7 +181,7 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
   const execute = async (rawInput: unknown, ctx: ToolContext): Promise<ToolResult<O>> => {
     const parsed = input.safeParse(rawInput);
     if (!parsed.success) {
-      return {
+      const result: ToolResult<O> = {
         ok: false,
         error: {
           kind: 'invalid_input',
@@ -116,6 +189,12 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
           issues: parsed.error.issues,
         },
       };
+      const safeResult: ToolResult<O> = {
+        ok: false,
+        error: sanitizeToolError(result.error),
+      };
+      await writeAudit(ctx, name, sideEffect, rawInput, safeResult);
+      return safeResult;
     }
 
     let result: O | ToolResult<never>;
@@ -123,25 +202,51 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
       result = await handler(parsed.data, ctx);
     } catch (error) {
       if (error instanceof InvariantError) {
-        return { ok: false, error: { kind: 'invariant_violation', message: error.message } };
+        const toolResult: ToolResult<O> = {
+          ok: false,
+          error: {
+            kind: 'invariant_violation',
+            message: redactErrorText(error.message),
+          },
+        };
+        await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+        return toolResult;
       }
-      const cause = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: { kind: 'internal', cause: `tool "${name}": ${cause}` } };
+      const cause = redactErrorText(error instanceof Error ? error.message : String(error));
+      const toolResult: ToolResult<O> = {
+        ok: false,
+        error: { kind: 'internal', cause: `tool "${name}": ${cause}` },
+      };
+      await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+      return toolResult;
     }
 
-    if (isToolErrorResult(result)) return result;
+    if (isToolErrorResult(result)) {
+      const safeResult: ToolResult<O> = {
+        ok: false,
+        error: sanitizeToolError(result.error),
+      };
+      await writeAudit(ctx, name, sideEffect, parsed.data, safeResult);
+      return safeResult;
+    }
 
     const outParsed = output.safeParse(result);
     if (!outParsed.success) {
-      return {
+      const toolResult: ToolResult<O> = {
         ok: false,
         error: {
           kind: 'internal',
-          cause: `tool "${name}" output 校验失败: ${issuesMessage(outParsed.error.issues)}`,
+          cause: redactErrorText(
+            `tool "${name}" output 校验失败: ${issuesMessage(outParsed.error.issues)}`,
+          ),
         },
       };
+      await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+      return toolResult;
     }
-    return { ok: true, data: outParsed.data };
+    const toolResult: ToolResult<O> = { ok: true, data: outParsed.data };
+    await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+    return toolResult;
   };
 
   return {

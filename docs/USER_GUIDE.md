@@ -33,7 +33,7 @@ luoome 是一个**本地优先**的个人投资 advisor agent。它能：
 
 - **macOS / Linux / Windows**（Windows 用 PowerShell 5.1+，也可走 WSL2）
 - **Bun ≥ 1.3**（[安装](https://bun.sh)；一键脚本会自动装）
-- **网络**（仅在启用 `LUOOME_MARKET_PROVIDER=real` 时需要，用于拉 Eastmoney / Tencent 行情）
+- **网络**（仅在启用 `LUOOME_MARKET_PROVIDER=real` 时需要，用于拉 Eastmoney / Tencent / Sina 行情）
 - **可选** Python 3.10+（仅诊断/可视化子工具间接依赖）
 
 ### 1.2 一键安装脚本（推荐，无需 git）
@@ -128,6 +128,8 @@ luoome web serve
 
 **Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
 
+**Strategy 模拟回测**：进入已发布且运行中的策略工作台，点击「模拟回测」，选择最长 31 个自然日的历史区间；股票代码留空时按历史时点全市场运行，也可输入不超过 500 只股票缩小范围。系统逐交易日使用 point-in-time 股票池和可用的历史数据版本，结果保存为 `evaluation`，只展示求值、入选、信号、失败和数据版本状态，不会替换当前股票池。该功能是历史回放模拟，不包含组合收益、费用、滑点或可交易性模型；运行需要同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`。
+
 **研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。
 
 **飞书通知**：在“设置 → 飞书通知”填写群自定义机器人的新版 HTTPS Webhook。页面只展示是否已配置，读取 API 和浏览器均不会回显密钥；保存后写入权限为 0600 的 `$LUOOME_HOME/.env` 并立即应用。保存需要 `LUOOME_EXPOSE_WRITE=true`，发送测试消息还需要 `LUOOME_EXPOSE_EXTERNAL=true`。当前只支持 `open.feishu.cn/open-apis/bot/v2/hook/...`，建议机器人安全关键词配置为 `luoome`，不要开启签名校验。
@@ -205,7 +207,7 @@ TUI 内部用 `ctxRef` 包裹当前 ToolContext；切账户 = clone user 不动 
 
 ### 5.1 写操作开关
 
-Web API 不做 token 校验。写操作仍需显式设置 `LUOOME_EXPOSE_WRITE=true`，外部调用仍需设置 `LUOOME_EXPOSE_EXTERNAL=true`；浏览器 mutation 保留同源 Origin 校验。
+Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 `X-Luoome-Account-Id` 随请求发送，服务端按请求隔离账户上下文，避免多个 tab 互相覆盖；这不是账户级鉴权。写操作仍需显式设置 `LUOOME_EXPOSE_WRITE=true`，外部调用仍需设置 `LUOOME_EXPOSE_EXTERNAL=true`；浏览器 mutation 保留同源 Origin 校验。
 
 ### 5.2 核心页面
 
@@ -331,7 +333,9 @@ luoome tools call get_confidence_calibration --input '{}'
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据根目录 |
 | `LUOOME_HOST` | `127.0.0.1` | Web 监听地址；默认不暴露到局域网 |
-| `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney 主 → Tencent 备，仅 A 股） |
+| `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney → Tencent → Sina，仅 A 股） |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序；可显式加入 `tushare` |
+| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |
 | provider 密钥变量 | 由模型目录指定 | `apiKeyEnv` 引用的环境变量，密钥不写入目录 |
 | `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；推荐直接在 Web「研究」页配置 |
@@ -362,16 +366,19 @@ luoome tools call get_confidence_calibration --input '{}'
 
 TUI 依赖 opentui 渲染器，必须在真 TTY 跑。CI / pipe / `nohup` 都会触发。请改用 `luoome web serve` 或 tool/workflow CLI 走文件输出。
 
-### 11.4 Eastmoney 失败 → 自动切 Tencent 还是空？
+### 11.4 Eastmoney / Tencent 失败 → 自动切 Sina 还是空？
 
-`LUOOME_MARKET_PROVIDER=real` 使用 Eastmoney 主源、Tencent 备源。两者都失败时明确返回行情源错误，不生成价格。未覆盖的市场返回 not_supported。
+`LUOOME_MARKET_PROVIDER=real` 按 `LUOOME_MARKET_SOURCES` 从左到右尝试已注册能力；默认顺序是
+Eastmoney、Tencent、Sina。所有源都失败时明确返回行情源错误，不生成价格。Sina 当前只提供
+沪深目录和 qfq 日线，不会伪装成实时快照或搜索来源；未覆盖的市场返回 not_supported。
 
 ### 11.5 启动时报 AI 模型目录或 provider 密钥缺失
 
 首次启动会自动生成 `$LUOOME_HOME/ai-models.json`，内置默认值与格式可参考仓库根目录的
 `ai-models.example.json`；也可以设置 `LUOOME_AI_CONFIG` 指向自定义配置文件。再设置当前
 profile 所用 provider 的 `apiKeyEnv` 引用的环境变量；显式配置的目录缺失、未知 provider
-或缺密钥都会在启动期明确报错。
+或缺密钥都会在需要 AI 的调用处明确报错；CLI/TUI/MCP 可先以配置模式启动并使用不依赖 AI 的
+行情、账户和审计能力，不会用 mock LLM 冒充真实推理。
 
 Web 设置页已内置 Kimi（`kimi-k3` / `MOONSHOT_API_KEY`）与 DeepSeek
 （`deepseek-v4-pro` / `DEEPSEEK_API_KEY`）推荐值；切换 provider 后点击保存即可写入同一份

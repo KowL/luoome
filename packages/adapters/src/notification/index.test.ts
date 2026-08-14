@@ -211,4 +211,15 @@ describe('notification/NotificationManager', () => {
     expect(r.notification.result).toBe('success');
     expect(notif.rows.get('n-1')?.channel).toBe('log');
   });
+
+  it('默认通知 ID 使用 UUID，连续发送不冲突', async () => {
+    const { repos, notif } = makeRepos();
+    const mgr = new NotificationManager({ repos, logger: noopLogger });
+    await mgr.sendLog({ title: 't1', content: 'c1', level: 'info' });
+    await mgr.sendLog({ title: 't2', content: 'c2', level: 'info' });
+    const ids = [...notif.rows.keys()];
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every((id) => /^notif-[0-9a-f-]{36}$/.test(id))).toBe(true);
+  });
 });

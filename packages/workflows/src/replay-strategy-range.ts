@@ -4,6 +4,9 @@ import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
+const DAY_MS = 86_400_000;
+const endOfDay = (date: Date): Date => new Date(date.getTime() + DAY_MS - 1);
+
 export const ReplayStrategyRangeInput = z.object({
   strategyId: z.string().min(1),
   versionId: z.string().min(1).optional(),
@@ -19,6 +22,17 @@ export type ReplayStrategyRangeInputT = z.infer<typeof ReplayStrategyRangeInput>
 export const ReplayStrategyRangeOutput = z.object({
   sessionId: z.string(),
   status: z.enum(['complete', 'partial', 'failed']),
+  summary: z.object({
+    tradingDays: z.number().int().nonnegative(),
+    completedDays: z.number().int().nonnegative(),
+    failedDays: z.number().int().nonnegative(),
+    vintageAvailableDays: z.number().int().nonnegative(),
+    vintageUnavailableDays: z.number().int().nonnegative(),
+    evaluatedCount: z.number().int().nonnegative(),
+    selectedCount: z.number().int().nonnegative(),
+    signalCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+  }),
   days: z.array(
     z.object({
       dataAsOf: z.coerce.date(),
@@ -26,6 +40,10 @@ export const ReplayStrategyRangeOutput = z.object({
       vintageStatus: z.enum(['not-applicable', 'available', 'unavailable']),
       runId: z.string().optional(),
       error: z.string().optional(),
+      evaluatedCount: z.number().int().nonnegative().optional(),
+      selectedCount: z.number().int().nonnegative().optional(),
+      signalCount: z.number().int().nonnegative().optional(),
+      failedCount: z.number().int().nonnegative().optional(),
     }),
   ),
 });
@@ -47,6 +65,26 @@ const normalizeStockIds = (stockIds: readonly string[] | undefined): string[] | 
 
 const stockIdChecksum = (stockIds: readonly string[]): string =>
   createHash('sha256').update(JSON.stringify(stockIds)).digest('hex');
+
+const runCounts = (
+  summary: unknown,
+): {
+  evaluatedCount: number;
+  selectedCount: number;
+  signalCount: number;
+  failedCount: number;
+} | null => {
+  if (typeof summary !== 'object' || summary === null) return null;
+  const { evaluatedCount, selectedCount, signalCount, failedCount } = summary as Readonly<
+    Record<string, unknown>
+  >;
+  return typeof evaluatedCount === 'number' &&
+    typeof selectedCount === 'number' &&
+    typeof signalCount === 'number' &&
+    typeof failedCount === 'number'
+    ? { evaluatedCount, selectedCount, signalCount, failedCount }
+    : null;
+};
 
 const replay: WorkflowStep = async (previous, ctx) => {
   const input = previous as ReplayStrategyRangeInputT;
@@ -126,6 +164,7 @@ const replay: WorkflowStep = async (previous, ctx) => {
   );
   let cursor = new Date(input.from);
   let failed = false;
+  let cancelled = false;
   while (cursor <= input.to) {
     const dataAsOf = new Date(cursor);
     if (isWeekend(dataAsOf) || isHoliday(dataAsOf)) {
@@ -141,11 +180,33 @@ const replay: WorkflowStep = async (previous, ctx) => {
         status: 'complete',
         vintageStatus: existing?.vintageStatus ?? 'unavailable',
         ...(existing?.runId === undefined ? {} : { runId: existing.runId }),
+        ...(existing?.evaluatedCount === undefined
+          ? {}
+          : { evaluatedCount: existing.evaluatedCount }),
+        ...(existing?.selectedCount === undefined ? {} : { selectedCount: existing.selectedCount }),
+        ...(existing?.signalCount === undefined ? {} : { signalCount: existing.signalCount }),
+        ...(existing?.failedCount === undefined ? {} : { failedCount: existing.failedCount }),
       });
       cursor = new Date(cursor.getTime() + 86_400_000);
       continue;
     }
-    const pit = await ctx.tools.get_strategy_pit_universe.execute({ asOf: dataAsOf });
+    const currentSession = await ctx.tools.get_strategy_evaluation_session.execute({
+      sessionId: evaluationSession.id,
+    });
+    if (!currentSession.ok) return currentSession;
+    if (currentSession.data.session === null || currentSession.data.session.status !== 'running') {
+      cancelled = true;
+      break;
+    }
+    const startedDay = await ctx.tools.record_strategy_evaluation_day.execute({
+      sessionId: evaluationSession.id,
+      dataAsOf,
+      status: 'running',
+    });
+    if (!startedDay.ok) return startedDay;
+    // dataAsOf is the trading-day key at 00:00 UTC; an immutable universe snapshot
+    // recorded during that trading day is valid for its end-of-day replay.
+    const pit = await ctx.tools.get_strategy_pit_universe.execute({ asOf: endOfDay(dataAsOf) });
     if (!pit.ok) {
       failed = true;
       days.push({
@@ -159,6 +220,10 @@ const replay: WorkflowStep = async (previous, ctx) => {
         dataAsOf,
         vintageStatus: 'unavailable',
         status: 'failed',
+        evaluatedCount: 0,
+        selectedCount: 0,
+        signalCount: 0,
+        failedCount: 0,
         error: errorText(pit.error),
       });
       cursor = new Date(cursor.getTime() + 86_400_000);
@@ -167,6 +232,7 @@ const replay: WorkflowStep = async (previous, ctx) => {
     const prepared = await ctx.tools.prepare_strategy_data.execute({
       strategyId: effectiveStrategyId,
       asOf: dataAsOf,
+      universeAsOf: endOfDay(dataAsOf),
       persistCurrentProjection: false,
       ...(effectiveStockIds === undefined ? {} : { stockIds: effectiveStockIds }),
     });
@@ -180,6 +246,10 @@ const replay: WorkflowStep = async (previous, ctx) => {
         universeSyncId: pit.data.syncId,
         vintageStatus: 'unavailable',
         status: 'failed',
+        evaluatedCount: 0,
+        selectedCount: 0,
+        signalCount: 0,
+        failedCount: 0,
         error,
       });
       cursor = new Date(cursor.getTime() + 86_400_000);
@@ -194,6 +264,7 @@ const replay: WorkflowStep = async (previous, ctx) => {
       versionId: effectiveVersionId,
       mode: 'replay',
       asOf: dataAsOf,
+      universeAsOf: endOfDay(dataAsOf),
       ...(effectiveStockIds === undefined ? {} : { stockIds: effectiveStockIds }),
       revisionCutoff,
       dataCheckpointId: prepared.data.checkpoint.id,
@@ -222,12 +293,14 @@ const replay: WorkflowStep = async (previous, ctx) => {
       const dayStatus =
         run.data.run.status === 'failed' ? ('failed' as const) : ('complete' as const);
       if (dayStatus === 'failed') failed = true;
+      const counts = runCounts(run.data.run.summary);
       days.push({
         dataAsOf,
         status: dayStatus,
         vintageStatus: prepared.data.checkpoint.vintageStatus,
         ...(input.persist ? { runId: run.data.run.id } : {}),
         ...(dayStatus === 'failed' ? { error: run.data.run.error } : {}),
+        ...(counts ?? {}),
       });
       await ctx.tools.record_strategy_evaluation_day.execute({
         sessionId: evaluationSession.id,
@@ -238,23 +311,48 @@ const replay: WorkflowStep = async (previous, ctx) => {
         revisionCutoff,
         vintageStatus: prepared.data.checkpoint.vintageStatus,
         status: dayStatus === 'failed' ? 'failed' : 'complete',
+        ...(counts ?? {}),
         ...(dayStatus === 'failed' ? { error: run.data.run.error ?? 'replay run failed' } : {}),
       });
     }
     cursor = new Date(cursor.getTime() + 86_400_000);
   }
-  const finished = await ctx.tools.finish_strategy_evaluation_session.execute({
-    sessionId: evaluationSession.id,
-    status: failed
-      ? days.some((day) => day.status === 'complete')
-        ? 'partial'
-        : 'failed'
-      : 'complete',
-  });
+  const finished = cancelled
+    ? await ctx.tools.get_strategy_evaluation_session.execute({ sessionId: evaluationSession.id })
+    : await ctx.tools.finish_strategy_evaluation_session.execute({
+        sessionId: evaluationSession.id,
+        status: failed
+          ? days.some((day) => day.status === 'complete')
+            ? 'partial'
+            : 'failed'
+          : 'complete',
+      });
   if (!finished.ok) return finished;
+  if (finished.data.session === null) {
+    return {
+      ok: false,
+      error: {
+        kind: 'not_found',
+        entity: 'StrategyEvaluationSession',
+        id: evaluationSession.id,
+      },
+    };
+  }
+  const completed = days.filter((day) => day.status === 'complete').length;
   return ReplayStrategyRangeOutput.parse({
     sessionId: evaluationSession.id,
-    status: finished.data.session.status,
+    status: finished.data.session.status === 'running' ? 'partial' : finished.data.session.status,
+    summary: {
+      tradingDays: days.length,
+      completedDays: completed,
+      failedDays: days.length - completed,
+      vintageAvailableDays: days.filter((day) => day.vintageStatus === 'available').length,
+      vintageUnavailableDays: days.filter((day) => day.vintageStatus === 'unavailable').length,
+      evaluatedCount: days.reduce((sum, day) => sum + (day.evaluatedCount ?? 0), 0),
+      selectedCount: days.reduce((sum, day) => sum + (day.selectedCount ?? 0), 0),
+      signalCount: days.reduce((sum, day) => sum + (day.signalCount ?? 0), 0),
+      failedCount: days.reduce((sum, day) => sum + (day.failedCount ?? 0), 0),
+    },
     days,
   });
 };

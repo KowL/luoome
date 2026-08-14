@@ -1,7 +1,10 @@
+import {
+  STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
+  STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
-import { strategyRecommendationsWorkflow } from './strategy-recommendations.js';
 
 export const CompleteStrategyObservationsWorkflowInput = z.object({
   limit: z.number().int().min(1).max(5000).default(1000),
@@ -20,6 +23,11 @@ export const CompleteStrategyObservationsWorkflowOutput = z.object({
   pending: z.number().int().nonnegative(),
   recommendationAdvices: z.number().int().nonnegative(),
   recommendationFailed: z.number().int().nonnegative(),
+  benchmarkDataVersion: z.literal(STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION),
+  benchmarkSyncStatus: z.enum(['succeeded', 'partial', 'failed', 'skipped']),
+  benchmarkSynced: z.number().int().nonnegative(),
+  benchmarkFailed: z.number().int().nonnegative(),
+  benchmarkSources: z.array(z.string()),
 });
 export type CompleteStrategyObservationsWorkflowOutputT = z.infer<
   typeof CompleteStrategyObservationsWorkflowOutput
@@ -33,15 +41,36 @@ const complete: WorkflowStep = async (previous, ctx) => {
   if (!listed.ok) return listed;
   let syncedStocks = 0;
   let failedStocks = 0;
+  let benchmarkSyncStatus: CompleteStrategyObservationsWorkflowOutputT['benchmarkSyncStatus'] =
+    'skipped';
+  let benchmarkSynced = 0;
+  let benchmarkFailed = 0;
+  let benchmarkSources: string[] = [];
   if (input.syncBars && listed.data.stockIds.length > 0) {
     const synced = await ctx.tools.sync_daily_bars.execute({
       scope: 'explicit',
-      stockIds: listed.data.stockIds,
-      correctionWindowDays: 30,
+      stockIds: [...new Set([...listed.data.stockIds, STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID])],
+      correctionWindowDays: 60,
     });
     if (!synced.ok) return synced;
-    syncedStocks = synced.data.synced;
-    failedStocks = synced.data.failed;
+    const benchmarkItem = synced.data.items.find(
+      (item) => item.stockId === STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+    );
+    if (benchmarkItem?.status === 'synced') {
+      benchmarkSyncStatus = 'succeeded';
+      benchmarkSynced = 1;
+      benchmarkSources = benchmarkItem.sources;
+    } else if (benchmarkItem?.status === 'failed') {
+      benchmarkSyncStatus = 'failed';
+      benchmarkFailed = 1;
+    } else {
+      benchmarkSyncStatus = synced.data.status;
+    }
+    const stockItems = synced.data.items.filter(
+      (item) => item.stockId !== STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+    );
+    syncedStocks = stockItems.filter((item) => item.status === 'synced').length;
+    failedStocks = stockItems.filter((item) => item.status === 'failed').length;
   }
   const result = await ctx.tools.complete_strategy_observations.execute({ limit: input.limit });
   if (!result.ok) return result;
@@ -78,16 +107,13 @@ const complete: WorkflowStep = async (previous, ctx) => {
     if (!schedule.ok || schedule.data.schedule?.recommendationPolicy?.enabled !== true) continue;
     const policy = schedule.data.schedule.recommendationPolicy;
     if (!policy.observationHorizons.includes(group.horizon)) continue;
-    const recommended = await strategyRecommendationsWorkflow.run(
-      {
-        strategyId: group.strategyId,
-        runId: group.runId,
-        policy,
-        trigger: group.horizon,
-        stockIds: group.stockIds,
-      },
-      ctx,
-    );
+    const recommended = await ctx.tools.generate_strategy_recommendations.execute({
+      strategyId: group.strategyId,
+      runId: group.runId,
+      policy,
+      trigger: group.horizon,
+      stockIds: group.stockIds,
+    });
     if (recommended.ok) recommendationAdvices += recommended.data.advices.length;
     else recommendationFailed += 1;
   }
@@ -100,6 +126,11 @@ const complete: WorkflowStep = async (previous, ctx) => {
     pending: result.data.pending,
     recommendationAdvices,
     recommendationFailed,
+    benchmarkDataVersion: STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
+    benchmarkSyncStatus,
+    benchmarkSynced,
+    benchmarkFailed,
+    benchmarkSources,
   });
 };
 

@@ -10,6 +10,7 @@
 //                                   （fetch_quote 等）；trade 一律 403 permission_denied。
 // 所有 /api 响应统一 ToolResult 形状；同源部署，无需 CORS。
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -19,6 +20,7 @@ import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
   createFeishuWebhookAdapterFromEnv,
+  createFileAuditLogger,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
@@ -27,18 +29,39 @@ import {
   createStockUniverseManagerFromEnv,
   NotificationManager,
 } from '@luoome/adapters';
-import type { SideEffect, ToolContext, ToolError, ToolResult } from '@luoome/core';
-import { BUILTIN_STRATEGY_TEMPLATES, NotificationSchema } from '@luoome/core';
+import {
+  BUILTIN_STRATEGY_TEMPLATES,
+  DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+  DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+  NotificationSchema,
+  type SideEffect,
+  type ToolContext,
+  type ToolError,
+  type ToolResult,
+} from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
-import { buildContext, toolRegistry } from '@luoome/tools';
+import {
+  auditPortfolioPerformanceSnapshotsTool,
+  buildContext,
+  cancelStrategyEvaluationSessionTool,
+  finishStrategyEvaluationSessionTool,
+  getAccountPerformanceTool,
+  getStrategyEvaluationSessionTool,
+  listPortfolioPerformanceSnapshotsTool,
+  listStrategyEvaluationDaysTool,
+  resumeStrategyEvaluationSessionTool,
+  startStrategyEvaluationSessionTool,
+  toolRegistry,
+} from '@luoome/tools';
 import {
   closingReportWorkflow,
   openingReportWorkflow,
+  replayStrategyRangeWorkflow,
   runIntradayWatchObserved,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
@@ -52,6 +75,31 @@ import {
 import { STRATEGY_SCHEDULER_INTERVAL_MS, startStrategyScheduler } from './strategy-scheduler.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
+
+const STRATEGY_BACKTEST_MAX_DAYS = 31;
+const StrategyBacktestRequest = z
+  .object({
+    versionId: z.string().min(1).optional(),
+    from: z.string().date(),
+    to: z.string().date(),
+    stockIds: z.array(z.string().min(1)).min(1).max(500).optional(),
+  })
+  .superRefine((input, ctx) => {
+    const from = new Date(`${input.from}T00:00:00.000Z`);
+    const to = new Date(`${input.to}T00:00:00.000Z`);
+    if (from > to) {
+      ctx.addIssue({ code: 'custom', path: ['from'], message: 'from 不能晚于 to' });
+      return;
+    }
+    const days = Math.floor((to.getTime() - from.getTime()) / 86_400_000) + 1;
+    if (days > STRATEGY_BACKTEST_MAX_DAYS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['to'],
+        message: `Web 单次历史模拟最多 ${STRATEGY_BACKTEST_MAX_DAYS} 个自然日`,
+      });
+    }
+  });
 
 /**
  * 行情页图表库（设计 §12.1）：固定版本 lightweight-charts 的 ESM 产物文件。
@@ -87,6 +135,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'fetch_intraday_minutes',
   'get_ashare_sentiment',
   'get_stock_market_view',
+  'get_account_performance',
   'sync_stock_universe',
   'sync_daily_bars',
   'run_strategy',
@@ -136,9 +185,9 @@ const statusOf = (error: ToolError): number => {
   }
 };
 
-const jsonResult = (result: ToolResult<unknown>): Response =>
+const jsonResult = (result: ToolResult<unknown>, statusOverride?: number): Response =>
   new Response(JSON.stringify(result), {
-    status: result.ok ? 200 : statusOf(result.error),
+    status: statusOverride ?? (result.ok ? 200 : statusOf(result.error)),
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
 
@@ -194,15 +243,16 @@ export const buildWebContext = async (
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  const market = createMarketAdapterFromEnv(env, {
+    clock: now,
+    logger: console,
+    // Web 持仓与 Watchlist 盘中轮询；TTL 不调小的话拿到的都是缓存
+    quoteCacheTtlMs: 10_000,
+  });
   return buildContext({
     repos: handle.repos,
     adapters: {
-      market: createMarketAdapterFromEnv(env, {
-        clock: now,
-        logger: console,
-        // Web 持仓与 Watchlist 盘中轮询；TTL 不调小的话拿到的都是缓存
-        quoteCacheTtlMs: 10_000,
-      }),
+      market,
       stockUniverse: createStockUniverseManagerFromEnv(env, {
         clock: now,
         logger: console,
@@ -211,9 +261,20 @@ export const buildWebContext = async (
     },
     ...(ai === undefined ? {} : { agent: ai.agent }),
     clock: now,
+    auditLog: createFileAuditLogger(join(dirname(dbPath), 'logs', 'audit.log')),
+    auditCaller: 'web',
     user: { id: 'local-web-user', defaultAccountId },
+    portfolioBenchmark: {
+      stockId:
+        env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() || DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+      name: DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+    },
     limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
-    ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger: console }),
+    ashareSentiment: createAShareSentimentManagerFromEnv(env, {
+      clock: now,
+      logger: console,
+      market,
+    }),
     ...(researchVault ? { researchVault } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(env, {
@@ -267,14 +328,14 @@ const mutationPermission = (request: Request): ToolResult<never> | null => {
 /** 构造 Hono app（注入 ctx，便于测试与复用）。 */
 /**
  * 构造 Hono app（注入 ctx，便于测试与复用）。
- * 接受 ctx 引用对象 { current } 而非裸 ToolContext——v0.5 W3 多账户切换通过
- * /api/account/select 改写 ctxRef.current.user.defaultAccountId，其它路由通过
- * ctxRef.current 取最新值，不再每次请求 mutate 全量 ctx。
+ * 接受 ctx 引用对象 { current } 而非裸 ToolContext。浏览器账户选择通过
+ * X-Luoome-Account-Id 形成 request-scoped context；无 header 的本地调用沿用默认账户。
  */
 export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptions = {}): Hono => {
-  // 多账户切换（v0.5 W3）通过 ctxRef.current mutate user.defaultAccountId；
-  // 内部 callTool / invokeTool 全部走 ctxRef.current 读取最新值。
+  // 兼容无 header 的本地调用，同时为浏览器请求提供 request-scoped 账户选择。
+  // 这样不同 tab 的 localStorage 账户不会再互相覆盖共享进程上下文。
   const ctxRef: { current: ToolContext } = { current: initialCtx };
+  const requestStorage = new AsyncLocalStorage<Request>();
   const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
     current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx.agent),
   };
@@ -286,6 +347,18 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const feishuSettingsStore = options.feishuSettingsStore;
   const dataTransferDbPath = options.dataTransferDbPath;
   const app = new Hono();
+
+  /** 浏览器 api.js 从 localStorage 发送的账户选择；没有时沿用本地默认账户。 */
+  const contextForRequest = (): ToolContext => {
+    const accountId = requestStorage.getStore()?.headers.get('x-luoome-account-id')?.trim();
+    if (accountId === undefined || accountId.length === 0) return ctxRef.current;
+    return {
+      ...ctxRef.current,
+      user: { ...ctxRef.current.user, defaultAccountId: accountId },
+    };
+  };
+
+  app.use('*', async (c, next) => requestStorage.run(c.req.raw, next));
 
   const requireMutationCapabilities = (
     request: Request,
@@ -353,7 +426,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const callTool = async (name: string, input: unknown): Promise<Response> => {
     const tool = toolRegistry.get(name);
     if (tool === undefined) return jsonResult(notFound('Tool', name));
-    return jsonResult(await tool.execute(input, ctxRef.current));
+    return jsonResult(await tool.execute(input, contextForRequest()));
   };
 
   /**
@@ -362,7 +435,117 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const invokeTool = async (name: string, input: unknown): Promise<ToolResult<unknown>> => {
     const tool = toolRegistry.get(name);
     if (tool === undefined) return notFound('Tool', name);
-    return tool.execute(input, ctxRef.current);
+    return tool.execute(input, contextForRequest());
+  };
+
+  const getEvaluationSession = (input: { sessionId: string }) =>
+    getStrategyEvaluationSessionTool.execute(input, ctxRef.current);
+  const listEvaluationDays = (input: { sessionId: string }) =>
+    listStrategyEvaluationDaysTool.execute(input, ctxRef.current);
+  const startEvaluationSession = (
+    input: Parameters<typeof startStrategyEvaluationSessionTool.execute>[0],
+  ) => startStrategyEvaluationSessionTool.execute(input, ctxRef.current);
+  const finishEvaluationSession = (
+    input: Parameters<typeof finishStrategyEvaluationSessionTool.execute>[0],
+  ) => finishStrategyEvaluationSessionTool.execute(input, ctxRef.current);
+  const resumeEvaluationSession = (
+    input: Parameters<typeof resumeStrategyEvaluationSessionTool.execute>[0],
+  ) => resumeStrategyEvaluationSessionTool.execute(input, ctxRef.current);
+  const cancelEvaluationSession = (
+    input: Parameters<typeof cancelStrategyEvaluationSessionTool.execute>[0],
+  ) => cancelStrategyEvaluationSessionTool.execute(input, ctxRef.current);
+
+  type EvaluationJobInput = {
+    readonly strategyId: string;
+    readonly versionId: string | undefined;
+    readonly from: string;
+    readonly to: string;
+    readonly stockIds: string[] | undefined;
+  };
+  const evaluationJobs = new Map<string, Promise<void>>();
+
+  const startEvaluationJob = (sessionId: string, input: EvaluationJobInput): void => {
+    if (evaluationJobs.has(sessionId)) return;
+    const job = (async (): Promise<void> => {
+      const result = await replayStrategyRangeWorkflow.run(
+        {
+          ...input,
+          from: new Date(`${input.from}T00:00:00.000Z`),
+          to: new Date(`${input.to}T00:00:00.000Z`),
+          persist: true,
+          owner: `web-evaluation:${sessionId}`,
+          resumeSessionId: sessionId,
+        },
+        contextForRequest(),
+      );
+      if (!result.ok) {
+        const session = await getEvaluationSession({ sessionId });
+        if (session.ok && session.data.session?.status === 'running') {
+          await finishEvaluationSession({
+            sessionId,
+            status: 'failed',
+            error:
+              result.error.kind === 'invalid_input'
+                ? result.error.message
+                : `evaluation_job_failed:${result.error.kind}`,
+          });
+        }
+        ctxRef.current.logger.error('web evaluation job failed', {
+          sessionId,
+          strategyId: input.strategyId,
+          errorKind: result.error.kind,
+        });
+      }
+    })()
+      .catch(async (error: unknown) => {
+        const session = await getEvaluationSession({ sessionId });
+        if (session.ok && session.data.session?.status === 'running') {
+          await finishEvaluationSession({
+            sessionId,
+            status: 'failed',
+            error: 'evaluation_job_failed',
+          });
+        }
+        ctxRef.current.logger.error('web evaluation job crashed', {
+          sessionId,
+          strategyId: input.strategyId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        evaluationJobs.delete(sessionId);
+      });
+    evaluationJobs.set(sessionId, job);
+  };
+
+  const evaluationSnapshot = async (sessionId: string): Promise<ToolResult<unknown>> => {
+    const session = await getEvaluationSession({ sessionId });
+    if (!session.ok) return session;
+    if (session.data.session === null) return notFound('StrategyEvaluationSession', sessionId);
+    const days = await listEvaluationDays({ sessionId });
+    if (!days.ok) return days;
+    const rows = days.data.days;
+    const completedDays = rows.filter((day) => day.status === 'complete').length;
+    const failedDays = rows.filter((day) => day.status === 'failed').length;
+    return {
+      ok: true,
+      data: {
+        session: session.data.session,
+        days: rows,
+        status: session.data.session.status,
+        summary: {
+          tradingDays: rows.length,
+          completedDays,
+          failedDays,
+          vintageAvailableDays: rows.filter((day) => day.vintageStatus === 'available').length,
+          vintageUnavailableDays: rows.filter((day) => day.vintageStatus === 'unavailable').length,
+          evaluatedCount: rows.reduce((sum, day) => sum + (day.evaluatedCount ?? 0), 0),
+          selectedCount: rows.reduce((sum, day) => sum + (day.selectedCount ?? 0), 0),
+          signalCount: rows.reduce((sum, day) => sum + (day.signalCount ?? 0), 0),
+          failedCount: rows.reduce((sum, day) => sum + (day.failedCount ?? 0), 0),
+        },
+      },
+    };
   };
 
   interface BatchQuoteTarget {
@@ -630,10 +813,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         clock: ctxRef.current.clock,
         logger: ctxRef.current.logger,
       });
+      const ashareSentiment = createAShareSentimentManagerFromEnv(candidateEnv, {
+        clock: ctxRef.current.clock,
+        logger: ctxRef.current.logger,
+        market,
+      });
       const saved = marketSettingsStore.save(input);
       ctxRef.current = {
         ...ctxRef.current,
         adapters: { ...ctxRef.current.adapters, market },
+        ashareSentiment,
       };
       return jsonResult({ ok: true, data: { ...saved, applied: true } });
     } catch (error) {
@@ -902,14 +1091,82 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // 全部账户列表（用于顶栏下拉）。
   app.get('/api/accounts', () => callTool('list_accounts', {}));
 
+  const accountPerformanceResponse = async (c: Context, accountId: string): Promise<Response> => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external']);
+    if (denied !== null) return jsonResult(denied);
+    const from = c.req.query('from');
+    const to = c.req.query('to');
+    if (from === undefined || to === undefined) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: 'from 和 to 必填（YYYY-MM-DD）',
+          issues: [],
+        },
+      });
+    }
+    return jsonResult(
+      await getAccountPerformanceTool.execute(
+        {
+          accountId,
+          from,
+          to,
+          ...(c.req.query('benchmarkStockId') === undefined
+            ? {}
+            : { benchmarkStockId: c.req.query('benchmarkStockId') }),
+        },
+        contextForRequest(),
+      ),
+    );
+  };
+  app.get('/api/account/performance', (c) =>
+    accountPerformanceResponse(c, contextForRequest().user.defaultAccountId),
+  );
+  app.get('/api/accounts/:id/performance', (c) => accountPerformanceResponse(c, c.req.param('id')));
+  app.get('/api/accounts/:id/performance/snapshots', async (c) =>
+    jsonResult(
+      await listPortfolioPerformanceSnapshotsTool.execute(
+        {
+          accountId: c.req.param('id'),
+          ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
+        },
+        contextForRequest(),
+      ),
+    ),
+  );
+  app.get('/api/accounts/:id/performance/snapshot-audit', async (c) => {
+    const from = c.req.query('from');
+    const to = c.req.query('to');
+    if (from === undefined || to === undefined) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: 'from 和 to 必填（YYYY-MM-DD）',
+          issues: [],
+        },
+      });
+    }
+    return jsonResult(
+      await auditPortfolioPerformanceSnapshotsTool.execute(
+        {
+          accountId: c.req.param('id'),
+          from,
+          to,
+          ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
+        },
+        contextForRequest(),
+      ),
+    );
+  });
+
   /**
-   * 切换当前激活账户：把 ctxRef.current.user.defaultAccountId 更新为指定账户。
-   * 单进程单 tab 假设（与现有 TUI / CLI 一致）：ctx 共享内存仓，切换是 mutate。
-   * 调用侧只需要再 reload 受影响的数据视图（持仓 / Strategy / 复盘）。
+   * 切换当前激活账户：浏览器把账户 id 保存到 localStorage，后续请求通过
+   * X-Luoome-Account-Id 形成 request-scoped 账户上下文；无 header 的本地调用仍兼容共享默认账户。
    */
   app.post('/api/account/select', async (c) => {
-    // v0.8 起：虽然此路由只 in-memory 改 ctxRef.current.user.defaultAccountId
-    // （不写 db），但仍是 mutation，应与 /api/tools/:name/call 的 write/external 守卫一致。
+    // 该路由不写 db，但仍是 mutation，应与 /api/tools/:name/call 的 write/external 守卫一致。
     const denied = mutationPermission(c.req.raw);
     if (denied !== null) return jsonResult(denied);
     let body: unknown;
@@ -1189,6 +1446,93 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       strategyId: c.req.param('id'),
     }),
   );
+  app.get('/api/strategies/:id/backtests/:sessionId', async (c) => {
+    const session = await getEvaluationSession({
+      sessionId: c.req.param('sessionId'),
+    });
+    if (!session.ok) return jsonResult(session);
+    if (session.data.session === null) {
+      return jsonResult(notFound('StrategyEvaluationSession', c.req.param('sessionId')));
+    }
+    if (session.data.session.strategyId !== c.req.param('id')) {
+      return jsonResult(notFound('StrategyEvaluationSession', c.req.param('sessionId')));
+    }
+    return jsonResult(await evaluationSnapshot(c.req.param('sessionId')));
+  });
+  app.post('/api/strategies/:id/backtests', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    const parsed = StrategyBacktestRequest.safeParse(body.data);
+    if (!parsed.success) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '历史模拟参数无效',
+          issues: parsed.error.issues,
+        },
+      });
+    }
+    const started = await startEvaluationSession({
+      strategyId: c.req.param('id'),
+      ...parsed.data,
+    });
+    if (!started.ok) return jsonResult(started);
+    startEvaluationJob(started.data.session.id, {
+      strategyId: c.req.param('id'),
+      versionId: parsed.data.versionId,
+      from: parsed.data.from,
+      to: parsed.data.to,
+      stockIds: parsed.data.stockIds,
+    });
+    return jsonResult(
+      {
+        ok: true,
+        data: {
+          session: started.data.session,
+          status: 'queued',
+          sessionId: started.data.session.id,
+        },
+      },
+      202,
+    );
+  });
+  app.post('/api/strategies/:id/backtests/:sessionId/retry', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const sessionId = c.req.param('sessionId');
+    const existing = await getEvaluationSession({ sessionId });
+    if (!existing.ok) return jsonResult(existing);
+    if (existing.data.session === null || existing.data.session.strategyId !== c.req.param('id')) {
+      return jsonResult(notFound('StrategyEvaluationSession', sessionId));
+    }
+    const resumed = await resumeEvaluationSession({ sessionId });
+    if (!resumed.ok) return jsonResult(resumed);
+    startEvaluationJob(sessionId, {
+      strategyId: resumed.data.session.strategyId,
+      versionId: resumed.data.session.strategyVersionId,
+      from: resumed.data.session.from.toISOString().slice(0, 10),
+      to: resumed.data.session.to.toISOString().slice(0, 10),
+      stockIds:
+        resumed.data.session.stockIds === undefined
+          ? undefined
+          : [...resumed.data.session.stockIds],
+    });
+    return jsonResult({ ok: true, data: { session: resumed.data.session, status: 'queued' } }, 202);
+  });
+  app.post('/api/strategies/:id/backtests/:sessionId/cancel', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const sessionId = c.req.param('sessionId');
+    const existing = await getEvaluationSession({ sessionId });
+    if (!existing.ok) return jsonResult(existing);
+    if (existing.data.session === null || existing.data.session.strategyId !== c.req.param('id')) {
+      return jsonResult(notFound('StrategyEvaluationSession', sessionId));
+    }
+    return jsonResult(await cancelEvaluationSession({ sessionId }));
+  });
   app.post('/api/strategies/:id/draft', (c) =>
     targetMutation(c.req.raw, 'external', 'propose_strategy_version_draft', {
       strategyId: c.req.param('id'),
@@ -1612,7 +1956,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       typeof body === 'object' && body !== null && !Array.isArray(body)
         ? { ...(body as Record<string, unknown>) }
         : { notify: false };
-    return jsonResult(await runIntradayWatchObserved(input, ctxRef.current, 'once'));
+    return jsonResult(await runIntradayWatchObserved(input, contextForRequest(), 'once'));
   });
 
   app.get('/api/dashboard', async () => {
@@ -1875,6 +2219,23 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     });
   });
 
+  app.get('/api/strategy/reliability-summary', (c) => {
+    const targetTradingDays = Number(c.req.query('targetTradingDays') ?? '30');
+    const limit = Number(c.req.query('limit') ?? '1000');
+    const strategyId = c.req.query('strategyId')?.trim();
+    const scheduleId = c.req.query('scheduleId')?.trim();
+    const since = c.req.query('since')?.trim();
+    const until = c.req.query('until')?.trim();
+    return callTool('get_strategy_reliability_summary', {
+      ...(strategyId === undefined || strategyId.length === 0 ? {} : { strategyId }),
+      ...(scheduleId === undefined || scheduleId.length === 0 ? {} : { scheduleId }),
+      ...(since === undefined || since.length === 0 ? {} : { since }),
+      ...(until === undefined || until.length === 0 ? {} : { until }),
+      targetTradingDays: Number.isFinite(targetTradingDays) ? targetTradingDays : 30,
+      limit: Number.isFinite(limit) ? limit : 1000,
+    });
+  });
+
   // 对话助手：AI SDK UI Message Stream（SSE），web 内部端点，不进 toolRegistry。
   app.post('/api/chat', async (c) => {
     let body: unknown;
@@ -1897,7 +2258,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           ok: false,
           error: {
             kind: 'llm_error',
-            provider: ctxRef.current.adapters.llm.name,
+            provider: contextForRequest().adapters.llm.name,
             cause: 'AI 模型尚未配置，请前往设置页完成 LLM 设置',
             retryable: false,
           },
@@ -1908,7 +2269,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       );
     }
-    return createChatStreamResponse(body, ctxRef.current, runtime, c.req.raw.signal);
+    return createChatStreamResponse(body, contextForRequest(), runtime, c.req.raw.signal);
   });
 
   app.get('/api/stocks/search', async (c) => {
@@ -2001,7 +2362,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         ? { periodEnd: raw.date, date: undefined }
         : {}),
     };
-    return jsonResult(await workflow.run(input, ctxRef.current));
+    return jsonResult(await workflow.run(input, contextForRequest()));
   });
 
   app.get('/api/reports/:id/render', (c) =>
@@ -2151,7 +2512,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       typeof body === 'object' && body !== null && 'input' in body
         ? (body as { input: unknown }).input
         : {};
-    return jsonResult(await tool.execute(input, ctxRef.current));
+    return jsonResult(await tool.execute(input, contextForRequest()));
   });
 
   return app;

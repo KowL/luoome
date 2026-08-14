@@ -31,7 +31,7 @@ export const SignalObservationSchema = z.object({
   maxFavorableExcursionPct: z.number().finite().optional(),
   maxAdverseExcursionPct: z.number().finite().optional(),
   benchmarkReturnPct: z.number().finite().optional(),
-  /** 当前未接入指数日线，必须显式标记而非默默省略。 */
+  /** benchmark 使用版本化 qfq 日线；同步失败时必须显式标记而非默默省略。 */
   benchmarkStatus: z.enum(['complete', 'unavailable']).default('unavailable'),
   status: SignalObservationStatusSchema,
   provenance: DataProvenanceSchema,
@@ -56,6 +56,8 @@ export const SIGNAL_OBSERVATION_HORIZON_DAYS: Record<SignalObservationHorizon, n
 
 /** R7 默认基准；同步任务可把它作为 explicit stockId 纳入同一份日线数据源。 */
 export const STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID = '000300.SH';
+/** R7 benchmark 的可审计数据集版本：沪深 300、前复权、日线。 */
+export const STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION = '000300.SH:qfq:daily:v1';
 
 export const signalObservationId = (
   sourceKind: SignalObservationSourceKind,

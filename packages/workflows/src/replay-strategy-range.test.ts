@@ -283,6 +283,21 @@ describe('replay-strategy-range resume identity', () => {
     expect(result.data.days[0]).toMatchObject({
       status: 'complete',
       vintageStatus: 'available',
+      evaluatedCount: 1,
+      selectedCount: 1,
+      signalCount: 1,
+      failedCount: 0,
+    });
+    expect(result.data.summary).toEqual({
+      tradingDays: 1,
+      completedDays: 1,
+      failedDays: 0,
+      vintageAvailableDays: 1,
+      vintageUnavailableDays: 0,
+      evaluatedCount: 1,
+      selectedCount: 1,
+      signalCount: 1,
+      failedCount: 0,
     });
     expect(
       await replayCtx.repos.strategyEvaluation.findSessionById(result.data.sessionId),
@@ -296,6 +311,53 @@ describe('replay-strategy-range resume identity', () => {
     });
     expect(day?.revisionCutoff).toEqual(asOf);
     expect(day?.vintageStatus).toBe('available');
+  });
+
+  it('PIT universe uses the trading-day end boundary for an intraday snapshot', async () => {
+    const now = new Date('2026-08-10T18:00:00.000Z');
+    const asOf = new Date('2026-08-10T00:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx, {
+      limit: 1,
+      observedAt: new Date('2026-08-10T15:00:00.000Z'),
+    });
+    await seedReplayStrategy(ctx, now);
+    const historicalBar = {
+      stockId: '600519.SH',
+      date: asOf,
+      open: money(10),
+      high: money(11),
+      low: money(9),
+      close: money(10),
+      volume: 1_000_000,
+      adjustment: 'qfq' as const,
+      source: 'replay-fixture',
+    };
+    const replayCtx = {
+      ...ctx,
+      adapters: {
+        ...ctx.adapters,
+        market: { ...ctx.adapters.market, fetchDailyBars: () => Promise.resolve([historicalBar]) },
+      },
+    };
+    const result = await replayStrategyRangeWorkflow.run(
+      {
+        strategyId: 'replay-strategy',
+        versionId: 'replay-strategy-v1',
+        from: asOf,
+        to: asOf,
+      },
+      replayCtx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.days[0]).toMatchObject({ status: 'complete' });
+    expect(
+      await replayCtx.repos.strategyEvaluation.findDay({
+        sessionId: result.data.sessionId,
+        dataAsOf: asOf,
+      }),
+    ).toMatchObject({ universeSyncId: 'sync-test-stock-universe' });
   });
 
   it('does not persist a dangling run id for persist=false replay', async () => {

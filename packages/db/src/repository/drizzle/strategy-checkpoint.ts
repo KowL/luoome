@@ -77,6 +77,10 @@ const toDay = (row: DayRow): StrategyEvaluationDay => ({
   ...(row.revisionCutoff === null ? {} : { revisionCutoff: row.revisionCutoff }),
   ...(row.vintageStatus === null ? {} : { vintageStatus: row.vintageStatus }),
   status: row.status,
+  ...(row.evaluatedCount === null ? {} : { evaluatedCount: row.evaluatedCount }),
+  ...(row.selectedCount === null ? {} : { selectedCount: row.selectedCount }),
+  ...(row.signalCount === null ? {} : { signalCount: row.signalCount }),
+  ...(row.failedCount === null ? {} : { failedCount: row.failedCount }),
   ...(row.error === null ? {} : { error: row.error }),
 });
 
@@ -243,6 +247,10 @@ export class DrizzleStrategyEvaluationRepository implements StrategyEvaluationRe
         revisionCutoff: parsed.revisionCutoff ?? null,
         vintageStatus: parsed.vintageStatus ?? null,
         error: parsed.error ?? null,
+        evaluatedCount: parsed.evaluatedCount ?? null,
+        selectedCount: parsed.selectedCount ?? null,
+        signalCount: parsed.signalCount ?? null,
+        failedCount: parsed.failedCount ?? null,
       })
       .onConflictDoUpdate({
         target: [strategyEvaluationDays.sessionId, strategyEvaluationDays.dataAsOf],
@@ -254,6 +262,10 @@ export class DrizzleStrategyEvaluationRepository implements StrategyEvaluationRe
           vintageStatus: parsed.vintageStatus ?? null,
           status: parsed.status,
           error: parsed.error ?? null,
+          evaluatedCount: parsed.evaluatedCount ?? null,
+          selectedCount: parsed.selectedCount ?? null,
+          signalCount: parsed.signalCount ?? null,
+          failedCount: parsed.failedCount ?? null,
         },
       })
       .run();

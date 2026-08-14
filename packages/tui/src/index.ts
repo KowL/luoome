@@ -8,11 +8,17 @@ import { join } from 'node:path';
 
 import {
   createAIStackFromEnv,
+  createFileAuditLogger,
   createMarketAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
-import type { Logger, ToolContext } from '@luoome/core';
+import {
+  DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+  DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+  type Logger,
+  type ToolContext,
+} from '@luoome/core';
 // 纯 Bun 运行时入口：@luoome/db 桶导出依赖 bun:sqlite driver，禁止在 node 下 import 本包。
 import { createDrizzleRepos } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
@@ -56,8 +62,16 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
       llm: ai.llm,
     },
     agent: ai.agent,
+    portfolioBenchmark: {
+      stockId:
+        process.env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() ||
+        DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+      name: DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+    },
     user: { id: 'local-user', defaultAccountId },
     logger,
+    auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
+    auditCaller: 'tui',
     researchRemote: createResearchRemoteDocumentAdapter(),
   });
   return { ctx, close: handle.close };

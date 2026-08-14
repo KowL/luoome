@@ -110,6 +110,10 @@ export const StrategyEvaluationDaySchema = z.object({
   revisionCutoff: z.coerce.date().optional(),
   vintageStatus: StrategyDataVintageStatusSchema.optional(),
   status: z.enum(['running', 'complete', 'failed']),
+  evaluatedCount: z.number().int().nonnegative().optional(),
+  selectedCount: z.number().int().nonnegative().optional(),
+  signalCount: z.number().int().nonnegative().optional(),
+  failedCount: z.number().int().nonnegative().optional(),
   error: z.string().min(1).optional(),
 });
 export type StrategyEvaluationDay = z.infer<typeof StrategyEvaluationDaySchema>;

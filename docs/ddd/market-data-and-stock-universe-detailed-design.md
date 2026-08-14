@@ -1,6 +1,6 @@
 # 行情数据底座详细设计：多源规范化、盘后归档与本地股票目录
 
-> 状态：**实施中（Phase 1 股票目录、Phase 2 规范日线与盘后闭环已完成）**
+> 状态：**Phase 1～4 核心实现已完成；真实跨日性能与 provider 运行证据持续收集**
 > 日期：2026-07-28
 > 范围：行情 adapter seam、实时 Quote、新鲜度、规范日线、盘后归档、股票目录
 > `StockUniverse` 本地同步、搜索与全市场扫描的数据关系
@@ -11,15 +11,15 @@
 
 ## 1. 背景
 
-当前行情实现已经具备 Eastmoney、Tencent、Tushare 三个真实数据源，以及
+当前行情实现已经具备 Eastmoney、Tencent、Sina、Tushare 四个真实数据源，以及
 `MarketDataManager` 提供的缓存、限速和 fallback。CLI、TUI、MCP、Web 也统一通过
 `createMarketAdapterFromEnv` 装配，依赖方向符合 `surface → tools → adapters/core`。
 
 但现有 seam 主要保证 TypeScript 形状兼容，没有完整保证行为可替换：
 
 1. `fetchDailyBars` 只在抛错时 fallback；主源返回空数组会被当成成功并缓存。
-2. Eastmoney/Tencent 返回前复权日线但写 `adjFactor=1`；Tushare 返回未复权 OHLC
-   和真实复权因子，切源会改变指标的价格坐标系。
+2. Eastmoney/Tencent/Sina 返回 qfq 日线；Tushare 返回未复权 OHLC 和真实复权因子，
+   切源仍必须保持 qfq 领域口径。
 3. Tushare 的 `fetchIndexQuotes` 是最近日线而非盘中实时数据，却满足当前“实时指数”
    方法形状。
 4. Eastmoney/Tencent 的 Quote `ts` 使用抓取时间；盘前、午休和盘后重复抓取会把冻结价格
@@ -106,7 +106,8 @@ CN_A_SHARES_SH_SZ = 上海 A 股 + 深圳 A 股
 ### 4.2 全市场行情快照（MarketSnapshot）
 
 全市场行情快照回答“某个时刻覆盖范围内股票的价格横截面是什么”。它包含 `close`、
-`changePct` 等高频字段，用于：
+`changePct` 等高频字段，并以 envelope 携带 `coverage`、`source`、`fetchedAt` 及分页
+`expected/received/missing/duplicate/complete` 计数，用于：
 
 - formula 分组全市场扫描；
 - LLM 分组候选上下文；
@@ -173,6 +174,7 @@ interface MarketSnapshotSource {
   readonly name: MarketSourceId;
   readonly coverage: readonly MarketCoverage[];
   fetchMarketSnapshot(): Promise<SourceMarketSnapshot>;
+  fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot>;
 }
 
 interface StockUniverseSource {
@@ -326,12 +328,16 @@ registry 之外 `new EastmoneyAdapter()`。
 初始配置：
 
 ```text
-LUOOME_MARKET_SOURCES=eastmoney,tencent[,tushare]
-LUOOME_STOCK_UNIVERSE_SOURCES=eastmoney[,tushare]
+LUOOME_MARKET_SOURCES=eastmoney,tencent,sina[,tushare]
+LUOOME_STOCK_UNIVERSE_SOURCES=eastmoney,sina[,tushare]
 ```
 
 股票目录使用独立顺序，因为 Tencent 首期不具备完整目录能力，而 Quote 源顺序不应隐式决定
 目录来源。
+
+Sina 是无鉴权的公开沪深目录和复权日线来源：目录使用 `sh_a`/`sz_a` 分页接口，日线使用
+K 线与 qfq 因子接口；只注册 `daily-bars` 能力，不伪装成实时快照或搜索能力。qfq 因子缺失时
+返回明确错误，不回退为未复权数据。
 
 显式启用 Tushare 时继续要求 `TUSHARE_TOKEN`。如果配置了一个不支持所需能力的 source，
 启动期快速失败，不在运行时静默跳过。
@@ -621,8 +627,10 @@ adapter contract tests。
 
 ### 9.3 Tencent
 
-Tencent 首期只实现 Quote、DailyBar 和 Search 能力，不注册为 StockUniverseSource 或
-IndexQuoteSource。不能添加返回空数组的占位 implementation。
+Tencent 实现 Quote、DailyBar、Search、IntradayMinute 和 MarketSnapshot 能力，不注册为
+StockUniverseSource 或 IndexQuoteSource。MarketSnapshot 使用真实 Sina 当前完整目录作为身份全集，
+再通过 `qt.gtimg.cn` GBK 批量接口请求实时 close/changePct；批次缺失保留 envelope 的 partial，
+不填充零值。不能添加返回空数组的占位 implementation。
 
 ### 9.4 指数
 
@@ -643,7 +651,7 @@ IndexQuoteSource。不能添加返回空数组的占位 implementation。
 | DailyBar | qfq、范围内有合法交易日数据 | 空、raw、全部越界、部分解析、异常 |
 | Search | 结果在 source coverage 内；coverage 完整时空可终止 | source 只覆盖部分目标市场且为空 |
 | Realtime index | `mode=realtime` 且时间合法 | delayed、空、异常 |
-| MarketSnapshot | complete、数量和 coverage 校验通过 | 空、部分分页、异常 |
+| MarketSnapshot | complete、数量和 coverage 校验通过 | 空、部分分页、重复或异常 |
 | StockUniverse | complete、原子完整性校验通过 | 空、部分分页、数量异常、异常 |
 
 DailyBar 请求区间如果按交易日历确认不包含任何交易日，可以合法返回空，不强制 fallback。
@@ -668,7 +676,7 @@ key = capability + stockId/query/coverage
 | Quote | stockId | Web 10s，其它 60s | 否 |
 | DailyBar | stockId + 对齐日期 + adjustment | 1h | 仅无交易日区间 |
 | Realtime index | coverage/index set | 10s | 否 |
-| MarketSnapshot | coverage | 5min | 否 |
+| MarketSnapshot | coverage（含完整性 envelope） | 5min | 否 |
 | StockUniverse | source + coverage | 一次 sync 进程内 | 否 |
 
 所有 TTL 使用注入 clock，避免 Manager 使用测试时钟而 LRU 使用 `Date.now()` 的双时钟。
@@ -1161,7 +1169,7 @@ packages/core/src/entity/{quote,stock-universe}.ts
 packages/core/src/repository/index.ts
 
 packages/adapters/src/market/{registry,gateway,manager,cache}.ts
-packages/adapters/src/market/{eastmoney,tencent,tushare}.ts
+packages/adapters/src/market/{eastmoney,sina,tencent,tushare}.ts
 packages/adapters/src/stock-universe/*
 
 packages/db/src/schema/index.ts
@@ -1196,6 +1204,8 @@ apps/web/src/server.ts
 - [x] Tushare delayed index 不冒充 realtime。
 - [x] source 配置与实际调用完全一致。
 - [x] health 输出自动包含新 source/capability。
+- [x] 全市场快照提供 source/fetchedAt/coverage 与 expected/received/missing/duplicate 完整性信封；
+      市场宽度只消费完整信封，缺失时返回 unavailable。
 - [x] Drizzle schema 与 `ensureSchema` 同步、迁移幂等。
 - [x] `bun run test:all`、`bun run typecheck`、`bun run lint` 通过。
 - [x] 不新增任何自动交易路径。

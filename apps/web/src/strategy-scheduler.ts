@@ -49,6 +49,7 @@ export const startStrategyScheduler = (
           'complete' in result.data
             ? {
                 ran: result.data.complete,
+                partial: result.data.partial,
                 skipped: result.data.skipped,
                 failed: result.data.failed,
               }

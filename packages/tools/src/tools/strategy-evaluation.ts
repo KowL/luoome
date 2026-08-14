@@ -162,3 +162,59 @@ export const finishStrategyEvaluationSessionTool = defineTool({
     return { session };
   },
 });
+
+export const ResumeStrategyEvaluationSessionInput = z.object({
+  sessionId: z.string().min(1),
+});
+export const ResumeStrategyEvaluationSessionOutput = z.object({
+  session: StrategyEvaluationSessionSchema,
+});
+export const resumeStrategyEvaluationSessionTool = defineTool({
+  name: 'resume_strategy_evaluation_session',
+  description: '将失败或部分完成的历史评估 session 重新置为 running，供失败日期重试与断点续跑',
+  sideEffect: 'write',
+  input: ResumeStrategyEvaluationSessionInput,
+  output: ResumeStrategyEvaluationSessionOutput,
+  handler: async (input, ctx: ToolContext) => {
+    const existing = await ctx.repos.strategyEvaluation.findSessionById(input.sessionId);
+    if (existing === null) return errNotFound('StrategyEvaluationSession', input.sessionId);
+    if (existing.status === 'running') return { session: existing };
+    if (existing.status === 'complete')
+      return errInvalidInput('已完成的 evaluation session 不能续跑');
+    const session = StrategyEvaluationSessionSchema.parse({
+      ...existing,
+      status: 'running',
+      finishedAt: undefined,
+      error: undefined,
+    });
+    await ctx.repos.strategyEvaluation.saveSession(session);
+    return { session };
+  },
+});
+
+export const CancelStrategyEvaluationSessionInput = z.object({
+  sessionId: z.string().min(1),
+});
+export const CancelStrategyEvaluationSessionOutput = z.object({
+  session: StrategyEvaluationSessionSchema,
+});
+export const cancelStrategyEvaluationSessionTool = defineTool({
+  name: 'cancel_strategy_evaluation_session',
+  description: '取消正在运行的历史评估；已完成日期事实保留，session 以稳定错误码结束',
+  sideEffect: 'write',
+  input: CancelStrategyEvaluationSessionInput,
+  output: CancelStrategyEvaluationSessionOutput,
+  handler: async (input, ctx: ToolContext) => {
+    const existing = await ctx.repos.strategyEvaluation.findSessionById(input.sessionId);
+    if (existing === null) return errNotFound('StrategyEvaluationSession', input.sessionId);
+    if (existing.status !== 'running') return { session: existing };
+    const session = StrategyEvaluationSessionSchema.parse({
+      ...existing,
+      status: 'failed',
+      finishedAt: ctx.clock(),
+      error: 'evaluation_cancelled',
+    });
+    await ctx.repos.strategyEvaluation.saveSession(session);
+    return { session };
+  },
+});
