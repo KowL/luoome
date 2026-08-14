@@ -3,7 +3,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { callApi } from './api.js';
+import { callApi, getAccountId } from './api.js';
 import {
   openCloseConfirm,
   openConfirmModal,
@@ -1261,6 +1261,81 @@ const renderReports = async (setStatus) => {
 
 /* ============ review ============ */
 
+const formatPercentPoints = (value) =>
+  typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)}%` : '--';
+
+const toDateInputValue = (date) => date.toISOString().slice(0, 10);
+
+const renderAccountPerformance = async () => {
+  const fromNode = $('#review-performance-from');
+  const toNode = $('#review-performance-to');
+  if (fromNode === null || toNode === null) return;
+  const now = new Date();
+  if (fromNode.value === '') {
+    fromNode.value = toDateInputValue(new Date(now.getTime() - 30 * 86_400_000));
+  }
+  if (toNode.value === '') toNode.value = toDateInputValue(now);
+  const accountId = getAccountId();
+  const path =
+    accountId.length > 0 ? `/api/accounts/${accountId}/performance` : '/api/account/performance';
+  const result = await callApi(`${path}?from=${fromNode.value}&to=${toNode.value}`);
+  const meta = $('#review-performance-meta');
+  if (!result.ok) {
+    if (meta !== null) meta.textContent = `加载失败：${result.error?.kind ?? 'unknown'}`;
+    const tbody = $('#review-performance-table tbody');
+    if (tbody !== null)
+      tbody.innerHTML = '<tr><td colspan="6" class="placeholder">暂无可用估值</td></tr>';
+    return;
+  }
+  const performance = result.data;
+  if (meta !== null) {
+    const completeness =
+      performance.completeness === 'complete' ? '完整' : `部分（${performance.completeness}）`;
+    const audit = performance.audit;
+    const auditText =
+      audit?.snapshotId === undefined
+        ? '无审计快照'
+        : `snapshot ${audit.snapshotId.slice(0, 18)}…${
+            audit.dataAsOf === undefined ? '' : ` · dataAsOf ${String(audit.dataAsOf).slice(0, 10)}`
+          }`;
+    const benchmarkLabel = performance.benchmarkStockId ?? '未配置';
+    meta.textContent = `${completeness} · benchmark ${benchmarkLabel} ${performance.benchmarkStatus ?? 'unavailable'} · ${auditText}`;
+  }
+  mount($('#review-performance-stats'), [
+    statBlock('TWR', formatPercentPoints(performance.twrPct)),
+    statBlock('最大回撤', formatPercentPoints(performance.maxDrawdownPct)),
+    statBlock('基准 TWR', formatPercentPoints(performance.benchmarkTwrPct)),
+    statBlock('超额收益', formatPercentPoints(performance.excessTwrPct)),
+    statBlock('已实现 PnL', fmtSigned(performance.realizedPnl)),
+    statBlock('总 PnL', fmtSigned(performance.totalPnl)),
+  ]);
+  const rows = Array.isArray(performance.valuation) ? [...performance.valuation].reverse() : [];
+  const tbody = $('#review-performance-table tbody');
+  if (tbody !== null) {
+    mount(
+      tbody,
+      rows.length === 0
+        ? el('tr', null, el('td', { colSpan: 6, class: 'placeholder' }, '区间内没有交易日估值'))
+        : rows.map((day) =>
+            el('tr', null, [
+              el('td', null, String(day.date).slice(0, 10)),
+              el('td', null, fmtNum(day.totalValue)),
+              el('td', null, fmtSigned(day.externalCashFlow)),
+              el('td', null, formatPercentPoints(day.twrReturnPct)),
+              el('td', null, formatPercentPoints(day.drawdownPct)),
+              el(
+                'td',
+                null,
+                day.completeness === 'complete'
+                  ? '完整'
+                  : day.missingStockIds?.join(', ') || day.completeness,
+              ),
+            ]),
+          ),
+    );
+  }
+};
+
 const renderTrend = (data) => {
   const box = $('#review-trend');
   if (!Array.isArray(data) || data.length < 2) {
@@ -1371,11 +1446,18 @@ const renderReview = async (setStatus) => {
     $('#review-calibration-meta').textContent = `加载校准失败：${calR.error.kind ?? ''}`;
   }
 
-  // 趋势图：mock 数据（W4.E 待后端给出 byDay 序列）；先用 byDecision 的 hitRate
+  // 趋势图：当前接口按决策维度聚合，保持事实口径，不创建演示数据。
   const decisionData = Object.entries(stats.byDecision ?? {})
     .filter(([, s]) => s.totalAdvices > 0)
     .map(([decision, s]) => ({ label: decision, hitRate: s.hitRate }));
   renderTrend(decisionData);
+
+  const performanceRefresh = $('#btn-review-performance-refresh');
+  if (performanceRefresh !== null && performanceRefresh.dataset.bound !== 'true') {
+    performanceRefresh.dataset.bound = 'true';
+    performanceRefresh.addEventListener('click', () => void renderAccountPerformance());
+  }
+  await renderAccountPerformance();
 
   // 列表 + outcome 回填按钮
   const advices = r.data.advices.advices ?? [];

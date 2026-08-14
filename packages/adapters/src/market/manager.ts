@@ -4,11 +4,18 @@ import type {
   IndexQuote,
   IntradayMinute,
   Logger,
+  MarketSnapshot,
   MarketSnapshotItem,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
-import { DailyBarSchema, isHoliday, isWeekend, QuoteSchema } from '@luoome/core';
+import {
+  assertMarketSnapshotInvariants,
+  DailyBarSchema,
+  isHoliday,
+  isWeekend,
+  QuoteSchema,
+} from '@luoome/core';
 
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
 import type { MarketSourceRegistry, MarketSourceStatus } from './source-registry.js';
@@ -82,6 +89,8 @@ export interface MarketDataManagerOptions {
   readonly quoteCache?: QuoteCache;
   readonly dailyBarCache?: DailyBarCache;
   readonly rateLimitPerSec?: number;
+  /** batchQuote 内部逐股 fallback 的并发上限。 */
+  readonly batchConcurrency?: number;
   readonly logger: Logger;
   readonly clock?: () => Date;
   /** 第三数据源抑制窗口（按股票 / 搜索 query 隔离）。默认 30 分钟。 */
@@ -122,6 +131,7 @@ export class MarketDataManager implements MarketDataAdapter {
   private readonly quoteCache: QuoteCache;
   private readonly dailyBarCache: DailyBarCache;
   private readonly rateLimiter: RateLimiter;
+  private readonly batchConcurrency: number;
   private readonly logger: Logger;
   private readonly clock: () => Date;
   private readonly suppressMs: number;
@@ -129,6 +139,9 @@ export class MarketDataManager implements MarketDataAdapter {
   /** 全市场快照 TTL 缓存（单 key：全市场只有一份）。 */
   private marketSnapshotCache:
     | { readonly at: number; readonly items: readonly MarketSnapshotItem[] }
+    | undefined;
+  private marketSnapshotEnvelopeCache:
+    | { readonly at: number; readonly snapshot: MarketSnapshot }
     | undefined;
   /** 当日分时 TTL 缓存（per stockId）。 */
   private readonly intradayMinutesCache = new Map<
@@ -150,6 +163,7 @@ export class MarketDataManager implements MarketDataAdapter {
     this.quoteCache = options.quoteCache ?? new QuoteCache(1024, 60_000, this.clock);
     this.dailyBarCache = options.dailyBarCache ?? new DailyBarCache(512, 3_600_000, this.clock);
     this.rateLimiter = new RateLimiter(options.rateLimitPerSec ?? 10);
+    this.batchConcurrency = Math.max(1, Math.min(options.batchConcurrency ?? 8, 64));
     this.logger = options.logger;
     this.suppressMs = options.finalFallbackSuppressMs ?? 30 * 60 * 1000;
     this.marketSnapshotTtlMs = options.marketSnapshotTtlMs ?? 5 * 60 * 1000;
@@ -233,17 +247,22 @@ export class MarketDataManager implements MarketDataAdapter {
       }
     }
     if (toFetch.length === 0) return result;
-    // 并发 fetchQuote；单只全源失败只遗漏该只，不让批量读路径整体失败。
+    // 有界逐股 fallback；单只全源失败只遗漏该只，不让批量读路径整体失败。
     // list_holdings / batch_quote 会分别用成本价或“缺失项”语义降级。
+    let cursor = 0;
     await Promise.all(
-      toFetch.map(async (code) => {
-        try {
-          result.set(code, await this.fetchQuote(code));
-        } catch (error) {
-          this.logger.warn('manager.batchQuote omitted failed quote', {
-            stockCode: code,
-            error: errorMessage(error),
-          });
+      Array.from({ length: Math.min(this.batchConcurrency, toFetch.length) }, async () => {
+        while (cursor < toFetch.length) {
+          const code = toFetch[cursor++];
+          if (code === undefined) continue;
+          try {
+            result.set(code, await this.fetchQuote(code));
+          } catch (error) {
+            this.logger.warn('manager.batchQuote omitted failed quote', {
+              stockCode: code,
+              error: errorMessage(error),
+            });
+          }
         }
       }),
     );
@@ -368,6 +387,44 @@ export class MarketDataManager implements MarketDataAdapter {
     throw lastError ?? new Error('all market sources failed for market-snapshot');
   }
 
+  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+    const now = this.clock();
+    if (
+      this.marketSnapshotEnvelopeCache !== undefined &&
+      now.getTime() - this.marketSnapshotEnvelopeCache.at < this.marketSnapshotTtlMs
+    ) {
+      return this.marketSnapshotEnvelopeCache.snapshot;
+    }
+    const sources = this.registry.sources('market-snapshot-envelope', {
+      coverage: 'CN_A_SHARES_SH_SZ',
+    });
+    if (sources.length === 0) throw new Error('unsupported_capability: market-snapshot-envelope');
+    let lastError: unknown;
+    for (const source of sources) {
+      try {
+        await this.rateLimiter.acquire();
+        const snapshot = source.execute({ coverage: 'CN_A_SHARES_SH_SZ' });
+        const parsed = await snapshot;
+        assertMarketSnapshotInvariants(parsed);
+        if (!parsed.completeness.complete) {
+          throw new Error(
+            `partial_data: ${source.source} market snapshot missing ${parsed.completeness.missingCount} items`,
+          );
+        }
+        this.marketSnapshotEnvelopeCache = { at: now.getTime(), snapshot: parsed };
+        this.marketSnapshotCache = { at: now.getTime(), items: parsed.items };
+        return parsed;
+      } catch (error) {
+        this.logger.warn('manager.fetchMarketSnapshotEnvelope source failed', {
+          sourceName: source.source,
+          error: errorMessage(error),
+        });
+        lastError = error;
+      }
+    }
+    throw lastError ?? new Error('all market sources failed for market-snapshot-envelope');
+  }
+
   /**
    * 大盘指数实时行情：只路由显式注册 realtime-index capability 的来源，
    * delayed-index 永远不会进入该路径（指数快照低频，不做缓存）。
@@ -455,6 +512,7 @@ export class MarketDataManager implements MarketDataAdapter {
     this.finalFallbackCalls = 0;
     this.finalFallbackAtByKey.clear();
     this.marketSnapshotCache = undefined;
+    this.marketSnapshotEnvelopeCache = undefined;
     this.quoteCache.clear();
     this.dailyBarCache.clear();
     this.rateLimiter.reset();

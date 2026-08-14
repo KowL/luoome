@@ -14,7 +14,9 @@ export * from './entity/invariants.js';
 export * from './entity/limit-up-ladder.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';
+export * from './entity/market-snapshot.js';
 export * from './entity/notification.js';
+export * from './entity/portfolio-performance.js';
 export * from './entity/provenance.js';
 export * from './entity/quote.js';
 export * from './entity/report.js';
@@ -35,6 +37,7 @@ export * from './entity/workflow-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
+export * from './portfolio/performance.js';
 // 仓储接口
 export * from './repository/index.js';
 export * from './research-vault.js';
@@ -47,6 +50,7 @@ export * from './strategy/evaluator.js';
 export * from './strategy/expression.js';
 export * from './strategy/field-registry.js';
 export * from './strategy/observation-stats.js';
+export * from './strategy/prefilter.js';
 export * from './strategy/publication.js';
 export * from './strategy/result-view.js';
 export * from './strategy/run-diff.js';

@@ -4,7 +4,6 @@ import {
   type StrategyRunAcceptance,
   type StrategyRunAcceptancePolicy,
   StrategyRunAcceptancePolicySchema,
-  type StrategyRunInputSnapshotV3,
   type StrategyRunPublication,
   StrategyRunPublicationSchema,
   type StrategyRunScope,
@@ -54,17 +53,13 @@ export interface DecideStrategyRunPublicationInput {
   readonly status: StrategyRun['status'];
   readonly universeCheckpointPresent: boolean;
   readonly acceptance: StrategyRunAcceptance;
-  readonly requestedBy?: StrategyRunInputSnapshotV3['requestedBy'];
   readonly decidedAt: Date;
 }
 
 /**
  * publication 是 operational current 的消费门，不是执行状态或 dataHealth 的别名。
  *
- * 对于手工触发的正式全市场运行（requestedBy=manual），用户已在 Web 端显式确认接受 partial
- * 数据；只要运行完成且 universe checkpoint 存在，就允许进入 current，不把验收失败作为
- * withheld 理由。scheduled/replay 仍受 acceptance policy 约束，避免无人值守运行自动污染
- * 当前股票池。
+ * acceptance policy 对所有正式运行一致生效；手工触发只表达请求来源，不得绕过发布门。
  */
 export const decideStrategyRunPublication = (
   input: DecideStrategyRunPublicationInput,
@@ -76,15 +71,7 @@ export const decideStrategyRunPublication = (
   if (input.scope === 'operational' && !input.universeCheckpointPresent) {
     reasons.push('universe-checkpoint-missing');
   }
-  const manualFormalPublishes =
-    input.requestedBy === 'manual' &&
-    input.scope === 'operational' &&
-    input.universeKind === 'full' &&
-    input.status === 'complete' &&
-    input.universeCheckpointPresent;
-  if (!manualFormalPublishes && input.acceptance.decision === 'rejected') {
-    reasons.push('acceptance-rejected');
-  }
+  if (input.acceptance.decision === 'rejected') reasons.push('acceptance-rejected');
   const nonPublishing = input.scope === 'evaluation' || input.universeKind === 'explicit';
   const status = nonPublishing ? 'non-publishing' : reasons.length === 0 ? 'published' : 'withheld';
   return StrategyRunPublicationSchema.parse({

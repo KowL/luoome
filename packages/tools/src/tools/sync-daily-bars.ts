@@ -6,7 +6,6 @@ import { defineTool } from '../define-tool.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INITIAL_LOOKBACK_DAYS = 370;
-const SYNC_CONCURRENCY = 8;
 
 const mapWithConcurrency = async <T, R>(
   items: readonly T[],
@@ -36,14 +35,28 @@ const fetchDailyBarsWithRetry = async (
   ctx: ToolContext,
   stockId: string,
   range: { readonly start: Date; readonly end: Date },
+  options: { readonly maxRetries: number; readonly timeoutMs: number },
 ) => {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
     try {
-      return await ctx.adapters.market.fetchDailyBars(stockId, range);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          ctx.adapters.market.fetchDailyBars(stockId, range),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`provider_timeout: daily bars ${stockId}`)),
+              options.timeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
     } catch (error) {
       lastError = error;
-      if (!isRetryableProviderError(error) || attempt === 2) throw error;
+      if (!isRetryableProviderError(error) || attempt === options.maxRetries) throw error;
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -52,8 +65,11 @@ const fetchDailyBarsWithRetry = async (
 export const SyncDailyBarsInput = z
   .object({
     stockIds: z.array(z.string().trim().min(1)).max(1000).optional(),
-    scope: z.enum(['relevant', 'explicit']).default('relevant'),
+    scope: z.enum(['relevant', 'explicit', 'strategy-universe']).default('relevant'),
     correctionWindowDays: z.number().int().min(5).max(60).default(15),
+    concurrency: z.number().int().min(1).max(64).default(8),
+    maxRetries: z.number().int().min(0).max(5).default(2),
+    requestTimeoutMs: z.number().int().min(500).max(120_000).default(20_000),
   })
   .superRefine((input, issue) => {
     if (
@@ -119,6 +135,14 @@ async function syncRelevantStockIds(ctx: ToolContext): Promise<string[]> {
   return [...result].sort();
 }
 
+async function syncStrategyUniverseStockIds(ctx: ToolContext): Promise<string[]> {
+  const sync = await ctx.repos.stockUniverse.latestSuccessfulSync({
+    coverage: 'CN_A_SHARES_SH_SZ',
+  });
+  if (sync === null) return [];
+  return (await ctx.repos.stockUniverse.listSnapshotMembers(sync.id)).map((stock) => stock.id);
+}
+
 export const syncDailyBarsTool = defineTool({
   name: 'sync_daily_bars',
   description: '为显式或相关股票同步规范前复权日线，逐股报告结果并保留成功项',
@@ -129,7 +153,9 @@ export const syncDailyBarsTool = defineTool({
     const stockIds =
       input.scope === 'explicit'
         ? [...new Set(input.stockIds ?? [])]
-        : await syncRelevantStockIds(ctx);
+        : input.scope === 'strategy-universe'
+          ? await syncStrategyUniverseStockIds(ctx)
+          : await syncRelevantStockIds(ctx);
     if (stockIds.length === 0) {
       return {
         status: 'skipped' as const,
@@ -141,7 +167,7 @@ export const syncDailyBarsTool = defineTool({
     }
 
     const now = ctx.clock();
-    const items = await mapWithConcurrency(stockIds, SYNC_CONCURRENCY, async (stockId) => {
+    const items = await mapWithConcurrency(stockIds, input.concurrency, async (stockId) => {
       try {
         const latest = (await ctx.repos.dailyBar.latestBefore(stockId, now, 1)).at(-1);
         const lookbackDays =
@@ -149,10 +175,15 @@ export const syncDailyBarsTool = defineTool({
         const startFrom = latest?.date ?? now;
         const from = new Date(startFrom.getTime() - lookbackDays * DAY_MS);
         const bars = (
-          await fetchDailyBarsWithRetry(ctx, stockId, {
-            start: from,
-            end: now,
-          })
+          await fetchDailyBarsWithRetry(
+            ctx,
+            stockId,
+            {
+              start: from,
+              end: now,
+            },
+            { maxRetries: input.maxRetries, timeoutMs: input.requestTimeoutMs },
+          )
         ).map((bar) => DailyBarSchema.parse(bar));
         if (bars.length === 0) throw new Error('no_data: no qfq daily bars returned');
         await ctx.repos.dailyBar.saveMany(bars);

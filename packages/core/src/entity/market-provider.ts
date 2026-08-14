@@ -4,7 +4,7 @@ import { z } from 'zod';
  * Production market data configuration.
  *
  * Synthetic providers were removed: every runtime surface must opt into the
- * real Eastmoney → Tencent chain explicitly.
+ * real market-source registry explicitly (default: Eastmoney → Tencent → Sina).
  */
 export type MarketProviderName = 'real';
 

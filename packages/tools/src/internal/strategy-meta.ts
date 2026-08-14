@@ -4,6 +4,9 @@ export interface StrategyMetaStockInput {
   readonly stockId: string;
   readonly industry?: string | undefined;
   readonly bars: readonly DailyBar[];
+  readonly limitUpLadder?: {
+    readonly ladderLevel: number;
+  };
 }
 
 const sortedBars = (bars: readonly DailyBar[]): readonly DailyBar[] =>
@@ -76,6 +79,12 @@ export const deriveStrategyMetaByStock = (
             ? {}
             : { stockChange3d: stock.stockChange3d, priceUp: stock.stockChange3d > 0 }),
           ...(sectorAvgChange3d === undefined ? {} : { sectorAvgChange3d }),
+          ...(stock.limitUpLadder === undefined
+            ? {}
+            : {
+                limitUpLevel: stock.limitUpLadder.ladderLevel,
+                limitUpToday: true,
+              }),
         },
       ];
     }),

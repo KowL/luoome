@@ -47,6 +47,60 @@ describe('data transfer', () => {
     reopened.close();
   });
 
+  it('真实天梯 PIT 快照随 market-data 分类导出并回导', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    await source.repos.limitUpLadderSnapshot.save({
+      date: '2026-08-13',
+      total: 1,
+      maxLevel: 3,
+      source: 'eastmoney',
+      levels: [
+        {
+          level: 3,
+          name: '3 连板',
+          count: 1,
+          stocks: [
+            {
+              code: '600519',
+              name: '贵州茅台',
+              industry: '白酒',
+              ladderLevel: 3,
+              uncategorized: false,
+              firstTime: '09:31:00',
+              finalTime: '14:50:00',
+              reason: '真实快照导出夹具',
+              price: 100,
+              rawClose: 100,
+              corrected: false,
+              changePct: 0.1,
+              limitUpDate: '2026-08-13',
+              board: 'main_board',
+            },
+          ],
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-08-13T07:00:00Z'),
+    });
+    source.close();
+
+    const archive = exportDataArchive(sourcePath, ['market-data']);
+    expect(archive.tables.limit_up_ladder_snapshots).toHaveLength(1);
+    const targetPath = databasePath();
+    const target = createDrizzleRepos(targetPath);
+    target.close();
+    expect(() => importDataArchive(targetPath, archive)).not.toThrow();
+    const reopened = createDrizzleRepos(targetPath);
+    await expect(
+      reopened.repos.limitUpLadderSnapshot.findByDate({
+        date: '2026-08-13',
+        source: 'eastmoney',
+      }),
+    ).resolves.toMatchObject({ total: 1, maxLevel: 3 });
+    reopened.close();
+  });
+
   it('建议和盯盘运行记录可以原样导出并回导', async () => {
     const sourcePath = databasePath();
     const source = createDrizzleRepos(sourcePath);

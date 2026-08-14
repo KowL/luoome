@@ -1,3 +1,4 @@
+import { stockCode } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { TencentAdapter, TencentAdapterError } from './tencent.js';
@@ -208,6 +209,22 @@ describe('market/tencent', () => {
       );
     });
 
+    it('指数只有 raw day 时按指数真实口径接受', async () => {
+      const data = {
+        sh000300: {
+          day: [['2026-07-01', '3900', '3910', '3920', '3890', '1000']],
+        },
+      };
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () =>
+          new Response(JSON.stringify({ code: 0, data }), { status: 200 })) as never,
+      });
+      const range = { start: new Date('2026-07-01'), end: new Date('2026-07-31') };
+      const bars = await adapter.fetchDailyBars('000300.SH', range);
+      expect(bars).toHaveLength(1);
+      expect(bars[0]).toMatchObject({ stockId: '000300.SH', close: 3910, adjustment: 'qfq' });
+    });
+
     it('data 缺 code 节点 → 空数据抛错', async () => {
       const adapter = new TencentAdapter({
         fetchImpl: (async () =>
@@ -228,6 +245,94 @@ describe('market/tencent', () => {
       await expect(adapter.fetchDailyBars('600519', range)).rejects.toBeInstanceOf(
         TencentAdapterError,
       );
+    });
+  });
+
+  describe('fetchMarketSnapshotEnvelope', () => {
+    const universe = {
+      name: 'test-universe',
+      coverage: ['CN_A_SHARES_SH_SZ'] as const,
+      fetchStockUniverse: async () => ({
+        source: 'test-universe',
+        coverage: 'CN_A_SHARES_SH_SZ' as const,
+        observedAt: new Date('2026-08-13T07:30:00.000Z'),
+        complete: true as const,
+        reportedTotal: 2,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: stockCode('600519'),
+            exchange: 'SH' as const,
+            name: '贵州茅台',
+            listingStatus: 'unknown' as const,
+          },
+          {
+            stockId: '000001.SZ',
+            code: stockCode('000001'),
+            exchange: 'SZ' as const,
+            name: '平安银行',
+            listingStatus: 'unknown' as const,
+          },
+        ],
+      }),
+    };
+
+    const snapshotLine = (exchange: string, code: string, close: string, changePct: string) => {
+      const fields = Array.from({ length: 33 }, () => '');
+      fields[0] = exchange === 'sh' ? '1' : '51';
+      fields[1] = 'ignored by directory';
+      fields[2] = code;
+      fields[3] = close;
+      fields[30] = '20260813161452';
+      fields[32] = changePct;
+      return `v_${exchange}${code}="${fields.join('~')}";`;
+    };
+
+    it('按真实目录批量请求并生成完整 envelope', async () => {
+      const urls: string[] = [];
+      const adapter = new TencentAdapter({
+        stockUniverse: universe,
+        marketSnapshotChunkSize: 1,
+        fetchImpl: ((url: string) => {
+          urls.push(String(url));
+          const body = String(url).includes('sh600519')
+            ? snapshotLine('sh', '600519', '1355.29', '0.92')
+            : snapshotLine('sz', '000001', '11.25', '0');
+          return Promise.resolve(new Response(body, { status: 200 }));
+        }) as never,
+      });
+      const snapshot = await adapter.fetchMarketSnapshotEnvelope();
+      expect(snapshot.source).toBe('tencent');
+      expect(snapshot.completeness).toEqual({
+        expectedCount: 2,
+        receivedCount: 2,
+        missingCount: 0,
+        duplicateCount: 0,
+        complete: true,
+      });
+      expect(snapshot.items).toEqual([
+        expect.objectContaining({ id: '600519.SH', close: 1355.29, changePct: 0.92 }),
+        expect.objectContaining({ id: '000001.SZ', close: 11.25, changePct: 0 }),
+      ]);
+      expect(urls).toHaveLength(2);
+      expect(urls.every((url) => url.startsWith('https://qt.gtimg.cn/q='))).toBe(true);
+    });
+
+    it('报价缺失时保留 partial envelope，不填充 0', async () => {
+      const adapter = new TencentAdapter({
+        stockUniverse: universe,
+        fetchImpl: (async () =>
+          new Response(snapshotLine('sh', '600519', '1355.29', '0.92'), { status: 200 })) as never,
+      });
+      const snapshot = await adapter.fetchMarketSnapshotEnvelope();
+      expect(snapshot.completeness).toMatchObject({
+        expectedCount: 2,
+        receivedCount: 1,
+        missingCount: 1,
+        complete: false,
+      });
+      expect(snapshot.items).toHaveLength(1);
+      expect(snapshot.items[0]).not.toHaveProperty('close', 0);
     });
   });
 });

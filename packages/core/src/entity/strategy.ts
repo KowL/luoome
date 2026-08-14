@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 import { assertStrategySelectionPolicy } from '../strategy-watchlist-policy.js';
-import { ProviderStatusSchema } from './workflow-run.js';
+import { ProviderLatencySchema, ProviderStatusSchema } from './workflow-run.js';
 
 const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/);
 
@@ -191,6 +191,17 @@ export type StrategyRunScope = z.infer<typeof StrategyRunScopeSchema>;
 export const StrategyRunUniverseKindSchema = z.enum(['full', 'explicit']);
 export type StrategyRunUniverseKind = z.infer<typeof StrategyRunUniverseKindSchema>;
 
+export const StrategyRunPrefilterSchema = z.object({
+  mode: z.literal('quote-selection-safe'),
+  originalStockCount: z.number().int().nonnegative(),
+  originalStockIdChecksum: z.string().regex(/^[a-f0-9]{64}$/),
+  appliedRuleIds: z.array(z.string().min(1)),
+  skippedRuleIds: z.array(z.string().min(1)),
+  rejectedCount: z.number().int().nonnegative(),
+  unavailableCount: z.number().int().nonnegative(),
+});
+export type StrategyRunPrefilter = z.infer<typeof StrategyRunPrefilterSchema>;
+
 export const StrategyRunAcceptancePolicySchema = z.object({
   policyVersion: z.literal('strategy-run-acceptance-v1'),
   minEvaluatedRatio: z.number().min(0).max(1),
@@ -253,7 +264,7 @@ export const StrategyRunPublicationSchema = z.object({
 export type StrategyRunPublication = z.infer<typeof StrategyRunPublicationSchema>;
 
 export const StrategyProviderCoverageSchema = z.object({
-  capability: z.enum(['quote', 'daily-bars', 'universe']),
+  capability: z.enum(['quote', 'daily-bars', 'universe', 'limit-up-ladder']),
   provider: z.string().min(1),
   requested: z.number().int().nonnegative(),
   succeeded: z.number().int().nonnegative(),
@@ -263,6 +274,7 @@ export const StrategyProviderCoverageSchema = z.object({
   freshness: z.enum(['fresh', 'stale', 'unavailable']),
   dataAsOf: z.coerce.date().optional(),
   errorKinds: z.array(z.string()).max(20),
+  latencyMs: ProviderLatencySchema.optional(),
 });
 export type StrategyProviderCoverage = z.infer<typeof StrategyProviderCoverageSchema>;
 
@@ -392,6 +404,7 @@ export const StrategyRunInputSnapshotV3Schema = z.object({
     .optional(),
   acceptancePolicyVersion: z.string().min(1),
   evaluationSessionId: z.string().min(1).optional(),
+  prefilter: StrategyRunPrefilterSchema.optional(),
 });
 export type StrategyRunInputSnapshotV3 = z.infer<typeof StrategyRunInputSnapshotV3Schema>;
 

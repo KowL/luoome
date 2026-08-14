@@ -42,12 +42,12 @@ export const syncQuotesWorkflow = defineWorkflow<SyncQuotesInputT, SyncQuotesOut
       );
     },
     // 2) 包一层 summary + ISO 时间戳
-    (prev) => {
+    (prev, ctx) => {
       const data = prev as { synced: readonly unknown[]; totalRequested: number };
       return {
         syncedCount: data.synced.length,
         totalRequested: data.totalRequested,
-        syncedAt: new Date().toISOString(),
+        syncedAt: ctx.clock().toISOString(),
       };
     },
   ],

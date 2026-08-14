@@ -116,5 +116,15 @@ describe('weekly-report workflow', () => {
     const table = marketWeek?.blocks.find((block) => block.kind === 'table');
     // 表格列无 unit 元数据，炸板率在构建期已格式化为百分比字符串
     expect(table?.kind === 'table' ? table.rows[0]?.brokenRate : undefined).toBe('16.7%');
+    const accountWeek = result.data.report.sections.find(
+      (section) => section.key === 'account-week',
+    );
+    const accountMetrics = accountWeek?.blocks.find((block) => block.kind === 'metrics');
+    expect(
+      accountWeek?.missingDimensions.some((item) => item.errorKind === 'not_implemented'),
+    ).toBe(false);
+    expect(
+      accountMetrics?.kind === 'metrics' ? accountMetrics.items.map((item) => item.key) : [],
+    ).toEqual(expect.arrayContaining(['periodStartValue', 'periodTwrPct', 'maxDrawdownPct']));
   });
 });

@@ -38,6 +38,6 @@ export const ensureStockStub = async (
   await ctx.repos.stock.save(stub);
 };
 
-/** 手工录入类实体的 id 生成（时间 + 随机后缀）。 */
+/** 手工录入类实体的 id 生成。 */
 export const manualId = (kind: 'account' | 'trade' | 'holding'): string =>
-  `manual-${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  `manual-${kind}-${globalThis.crypto.randomUUID()}`;

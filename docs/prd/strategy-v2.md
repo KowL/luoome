@@ -2,7 +2,8 @@
 
 > 2026-08-11 可靠性修订：运行终态、数据质量与发布决定分离；目标契约见
 > [Strategy 日运行与历史评估可靠性详细设计](../ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
-> 当前代码仍按本文件旧版 `complete/partial` 可用规则运行，修订项按独立开发计划分阶段实施。
+> 2026-08-14 实现状态：Summary V4、acceptance、publication、fencing lease、daily cycle、PIT
+> replay 和 facts-only 降级已落地；跨日性能样本继续作为运营观测，不设置固定交易日数量门禁。
 
 > 状态：草案 v0.2
 > 日期：2026-08-01
@@ -101,7 +102,7 @@ V2 的交付顺序：
 | 某只股票为何入选或未入选？ | StrategyResult.ruleEvaluations |
 | 产生了什么方向性事实？ | StrategySignal |
 | 后续真实表现如何？ | SignalObservation |
-| 当前股票池是什么？ | 最近一次有效 run 的 StrategyResult 派生 |
+| 当前股票池是什么？ | 最近一次 `publication=published` 的 operational StrategyRun 派生 |
 | 当前候选池是什么？ | 同一 run 的规则/排名近失结果派生 |
 | 相比上次发生了什么？ | 两次 run 的 StrategyResult 集合差 |
 
@@ -114,7 +115,7 @@ V2 的交付顺序：
 
 - 新运行的 `status` 只表达执行生命周期：`running / complete / failed`；
 - `complete` 只表示执行结束且结果包已原子提交，不直接决定是否成为当前视图；
-- Summary V3 以 `dataHealth=complete / partial / unavailable` 和计数表达数据覆盖质量；
+- Summary V4 以 `dataHealth=complete / partial / unavailable` 和计数表达数据覆盖质量；
 - Summary V4 的 acceptance 以版本化阈值判断覆盖质量；StrategyRun publication 再表达
   `published / withheld / non-publishing`；
 - 只有全市场 operational、执行完成且通过 acceptance 的运行可以 published；
@@ -214,7 +215,8 @@ Diff 默认比较同一 Strategy 最近两次 published operational run，输出
 ### 4.7 StrategyRun 审计事实
 
 V2 将 `StrategyRun.summary` 和 `inputSnapshot` 从自由 record 收口为稳定、可展示的事实；
-Summary V3 进一步把执行状态与数据完整度分离。
+Summary V4 进一步把执行状态、数据完整度和 publication 分离；acceptance 由版本化阈值判断，
+evaluation 与 withheld 运行不会覆盖生产当前视图。
 
 摘要至少包含：
 
@@ -370,8 +372,9 @@ AI 洞察是基于事实的解释区，不是独立聊天入口。
 - 样本不足或数据不可用时显示 unavailable；
 - 不表述为组合收益、回测收益或未来概率。
 
-当前 SignalObservation 仅完成 watch-trigger 路径，StrategySignal 直接观察仍需扩展 source kind 和
-生成流程；该依赖完成前不展示策略真实表现。
+StrategySignal 已使用 `sourceKind='strategy-signal'` 创建 T+1/T+3/T+5/T+20 观察候选，并由
+`complete-strategy-observations` 通过真实 qfq 日线补齐；缺少真实日线时保持 pending/unavailable，
+不填默认收益。策略真实表现仍需满足样本完整率与 benchmark 可用率后才可展示为可用事实。
 
 ### 6.8 设置
 

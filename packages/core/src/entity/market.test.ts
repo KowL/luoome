@@ -5,7 +5,7 @@ import {
   MARKET_LABEL,
   MarketSchema,
   marketFromExchange,
-  V0_2_SUPPORTED_MARKETS,
+  SUPPORTED_MARKETS,
 } from './market.js';
 
 describe('entity/market', () => {
@@ -40,10 +40,10 @@ describe('entity/market', () => {
       }
     });
 
-    it('V0_2_SUPPORTED_MARKETS = cn-a + cn-hk（不含 us）', () => {
-      expect(V0_2_SUPPORTED_MARKETS.has('cn-a')).toBe(true);
-      expect(V0_2_SUPPORTED_MARKETS.has('cn-hk')).toBe(true);
-      expect(V0_2_SUPPORTED_MARKETS.has('us')).toBe(false);
+    it('SUPPORTED_MARKETS = cn-a + cn-hk（不含 us）', () => {
+      expect(SUPPORTED_MARKETS.has('cn-a')).toBe(true);
+      expect(SUPPORTED_MARKETS.has('cn-hk')).toBe(true);
+      expect(SUPPORTED_MARKETS.has('us')).toBe(false);
     });
   });
 });

@@ -37,6 +37,26 @@ describe('主题皮肤', () => {
     expect(getTheme()).toBe('teal');
   });
 
+  it('DOM shim 缺少 querySelectorAll 时设置主题不抛出异常', () => {
+    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        documentElement: {
+          getAttribute: () => 'teal',
+          setAttribute: () => {},
+        },
+      },
+    });
+
+    try {
+      expect(() => setTheme('teal')).not.toThrow();
+    } finally {
+      if (documentDescriptor === undefined) delete globalThis.document;
+      else Object.defineProperty(globalThis, 'document', documentDescriptor);
+    }
+  });
+
   it('非图片 data URL 不生效', () => {
     expect(setBackgroundImage('data:text/plain;base64,aGk=')).toBe(false);
     expect(setBackgroundImage(null)).toBe(false);

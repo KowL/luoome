@@ -34,11 +34,15 @@ describe('market/factory', () => {
       'eastmoney:daily-bars',
       'eastmoney:search',
       'eastmoney:market-snapshot',
+      'eastmoney:market-snapshot-envelope',
       'eastmoney:realtime-index',
       'tencent:quote',
       'tencent:daily-bars',
       'tencent:search',
+      'tencent:market-snapshot',
+      'tencent:market-snapshot-envelope',
       'tencent:intraday-minutes',
+      'sina:daily-bars',
     ]);
   });
 

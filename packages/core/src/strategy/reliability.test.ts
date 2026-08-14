@@ -1,17 +1,26 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertExpressionSafety,
   assessStrategyRun,
   compileStrategyExpression,
+  compileStrategyQuotePrefilter,
+  DslEvalError,
   decideStrategyRunPublication,
   decideStrategySignalEmission,
   normalizeLegacyStrategyRun,
   observeCrossingUp,
 } from '../index.js';
+import { money } from '../types/branded.js';
 
 const NOW = new Date('2026-08-12T00:00:00.000Z');
 
 describe('Strategy reliability primitives', () => {
+  it('把 DSL 禁用关键字归一为可识别的 DslEvalError', () => {
+    expect(() => assertExpressionSafety('globalThis.process')).toThrow(DslEvalError);
+    expect(() => assertExpressionSafety('globalThis.process')).toThrow(/globalThis/);
+  });
+
   it('compiled expressions short-circuit missing branches and keep three-valued results', () => {
     const falseAnd = compileStrategyExpression('selection.price > 10 && selection.missing > 0');
     const trueOr = compileStrategyExpression('selection.price > 10 || selection.missing > 0');
@@ -97,6 +106,44 @@ describe('Strategy reliability primitives', () => {
     ).toEqual({ emit: false, reason: 'rising-edge' });
   });
 
+  it('quote prefilter only rejects conservatively decidable selection rules', () => {
+    const prefilter = compileStrategyQuotePrefilter({
+      schemaVersion: 1,
+      metadata: {},
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [
+          { id: 'price', name: '价格', when: 'quote.close > 10', evidence: ['价格'] },
+          {
+            id: 'trend',
+            name: '趋势',
+            when: 'indicators.close > indicators.ma20',
+            evidence: ['趋势'],
+          },
+        ],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    });
+    expect(prefilter.applicableRuleIds).toEqual(['price']);
+    expect(prefilter.skippedRuleIds).toEqual(['trend']);
+    expect(
+      prefilter.evaluate({
+        stockId: '600519.SH',
+        observedAt: NOW,
+        fetchedAt: NOW,
+        timestampSource: 'upstream',
+        ts: NOW,
+        open: money(9),
+        high: money(10),
+        low: money(8),
+        close: money(9),
+        volume: 1,
+        source: 'test',
+      }),
+    ).toEqual({ status: 'reject', rejectedBy: ['price'] });
+  });
+
   it('cooldown counts trading days rather than weekends and exchange holidays', () => {
     const previousSignal = {
       id: 'signal-holiday',
@@ -168,10 +215,9 @@ describe('Strategy reliability primitives', () => {
         status: 'complete',
         universeCheckpointPresent: true,
         acceptance: rejectedAcceptance,
-        requestedBy: 'manual',
         decidedAt: NOW,
       }),
-    ).toMatchObject({ status: 'published', reasons: [] });
+    ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });
     expect(
       decideStrategyRunPublication({
         scope: 'operational',
@@ -179,7 +225,6 @@ describe('Strategy reliability primitives', () => {
         status: 'complete',
         universeCheckpointPresent: true,
         acceptance: rejectedAcceptance,
-        requestedBy: 'scheduled',
         decidedAt: NOW,
       }),
     ).toMatchObject({ status: 'withheld', reasons: ['acceptance-rejected'] });

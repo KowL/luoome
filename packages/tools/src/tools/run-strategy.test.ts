@@ -1,6 +1,8 @@
 import {
   BUILTIN_STRATEGY_TEMPLATES,
   type DailyBar,
+  type LimitUpLadder,
+  type LimitUpLadderManagerLike,
   type MarketDataAdapterLike,
   money,
   type Strategy,
@@ -100,6 +102,503 @@ const seedReplayBars = async (
 };
 
 describe('run_strategy', () => {
+  it('正式扫描的天梯字段只来自真实 limit-up-ladder manager，并写入 coverage', async () => {
+    const now = new Date('2026-08-14T07:00:00.000Z');
+    let requestedDate: string | undefined;
+    const ctx = await buildTestContext({
+      clock: () => now,
+      limitUpLadder: {
+        name: 'limit-up-ladder',
+        sources: ['eastmoney'],
+        fetchLadder: async ({ date }) => {
+          requestedDate = date;
+          return {
+            ok: true,
+            data: {
+              date,
+              total: 1,
+              maxLevel: 3,
+              source: 'eastmoney' as const,
+              levels: [
+                {
+                  level: 3,
+                  name: '3 连板',
+                  count: 1,
+                  stocks: [
+                    {
+                      code: '600519',
+                      name: '贵州茅台',
+                      industry: '白酒',
+                      ladderLevel: 3,
+                      uncategorized: false,
+                      firstTime: '09:31:00',
+                      finalTime: '14:50:00',
+                      reason: '测试不可作为生产数据',
+                      price: 100,
+                      rawClose: 100,
+                      corrected: false,
+                      changePct: 0.1,
+                      limitUpDate: date,
+                      board: 'main_board' as const,
+                    },
+                  ],
+                },
+              ],
+              warnings: [],
+              asOf: now,
+            },
+          };
+        },
+        compareLadder: async () => ({
+          ok: false,
+          error: {
+            kind: 'adapter_error' as const,
+            adapter: 'limit-up-ladder' as const,
+            message: 'not used',
+            recoverable: false,
+          },
+        }),
+      } satisfies LimitUpLadderManagerLike,
+    });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: now });
+    await seedStrategy(ctx);
+    const base = await ctx.repos.strategy.findVersionById('scan-strategy-v1');
+    if (base === null) throw new Error('fixture version missing');
+    const definition: StrategyDslV1 = {
+      ...base.definition,
+      selection: {
+        logic: 'all',
+        rules: [
+          {
+            id: 'ladder',
+            name: '连板高度',
+            when: 'meta.limitUpLevel >= 3 && meta.limitUpToday === true',
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy evidence placeholder
+            evidence: ['${meta.limitUpLevel}板'],
+          },
+        ],
+      },
+      scoring: undefined,
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    const versionId = 'scan-strategy-ladder-v2';
+    await ctx.repos.strategy.createVersion({
+      ...base,
+      id: versionId,
+      version: 2,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      publishedAt: undefined,
+      parentVersionId: base.id,
+    });
+    await ctx.repos.strategy.setVersionValidation(versionId, { status: 'valid', errors: [] });
+    await ctx.repos.strategy.publishVersion('scan-strategy', versionId, now);
+
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(requestedDate).toBe('2026-08-14');
+    expect(result.data.results[0]).toMatchObject({ selected: true });
+    expect(result.data.results[0]?.ruleEvaluations[0]).toMatchObject({
+      status: 'matched',
+      inputs: expect.arrayContaining([
+        { path: 'meta.limitUpLevel', status: 'available', value: 3 },
+        { path: 'meta.limitUpToday', status: 'available', value: true },
+      ]),
+    });
+    expect(result.data.run.providerCoverage).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          capability: 'limit-up-ladder',
+          provider: 'limit-up-ladder',
+          requested: 1,
+          succeeded: 1,
+          missing: 0,
+          freshness: 'fresh',
+        }),
+      ]),
+    );
+    await expect(
+      ctx.repos.limitUpLadderSnapshot.findByDate({ date: '2026-08-14', source: 'eastmoney' }),
+    ).resolves.toMatchObject({ date: '2026-08-14', total: 1, maxLevel: 3 });
+  });
+
+  it('历史 replay 没有 PIT 天梯快照时保持 unknown，不读取当前天梯', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const base = await ctx.repos.strategy.findVersionById('scan-strategy-v1');
+    if (base === null) throw new Error('fixture version missing');
+    const definition: StrategyDslV1 = {
+      ...base.definition,
+      selection: {
+        logic: 'all',
+        rules: [
+          {
+            id: 'ladder',
+            name: '连板高度',
+            when: 'meta.limitUpLevel >= 3',
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy evidence placeholder
+            evidence: ['${meta.limitUpLevel}板'],
+          },
+        ],
+      },
+      scoring: undefined,
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    const versionId = 'scan-strategy-ladder-v2';
+    await ctx.repos.strategy.createVersion({
+      ...base,
+      id: versionId,
+      version: 2,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      publishedAt: undefined,
+      parentVersionId: base.id,
+    });
+    await ctx.repos.strategy.setVersionValidation(versionId, { status: 'valid', errors: [] });
+    await ctx.repos.strategy.publishVersion(
+      'scan-strategy',
+      versionId,
+      new Date('2026-07-01T00:00:00.000Z'),
+    );
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        mode: 'replay',
+        asOf: new Date('2026-07-01T00:00:00.000Z'),
+        stockIds: ['600519.SH'],
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results[0]).toMatchObject({ selected: false });
+    expect(result.data.results[0]?.ruleEvaluations[0]).toMatchObject({
+      status: 'unknown',
+      error: '缺少字段: meta.limitUpLevel',
+    });
+    expect(result.data.run.providerStatuses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: 'historical:limit-up-ladder',
+          ok: false,
+          errorKind: 'historical_snapshot_unavailable',
+        }),
+      ]),
+    );
+    expect(result.data.run.providerCoverage).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          capability: 'limit-up-ladder',
+          freshness: 'unavailable',
+          missing: 1,
+          errorKinds: ['historical_snapshot_unavailable'],
+        }),
+      ]),
+    );
+  });
+
+  it('历史 replay 读取已持久化 PIT 天梯，不调用当前 manager', async () => {
+    const asOf = new Date('2026-07-01T00:00:00.000Z');
+    const ctx = await buildTestContext({
+      limitUpLadder: {
+        name: 'limit-up-ladder',
+        sources: ['eastmoney'],
+        fetchLadder: async () => {
+          throw new Error('current manager must not be called during replay');
+        },
+        compareLadder: async () => {
+          throw new Error('current manager must not be called during replay');
+        },
+      },
+    });
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+    const base = await ctx.repos.strategy.findVersionById('scan-strategy-v1');
+    if (base === null) throw new Error('fixture version missing');
+    const definition: StrategyDslV1 = {
+      ...base.definition,
+      selection: {
+        logic: 'all',
+        rules: [
+          {
+            id: 'ladder',
+            name: '连板高度',
+            when: 'meta.limitUpLevel >= 3 && meta.limitUpToday === true',
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy evidence placeholder
+            evidence: ['${meta.limitUpLevel}板'],
+          },
+        ],
+      },
+      scoring: undefined,
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    const versionId = 'scan-strategy-ladder-pit-v2';
+    await ctx.repos.strategy.createVersion({
+      ...base,
+      id: versionId,
+      version: 2,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      publishedAt: undefined,
+      parentVersionId: base.id,
+    });
+    await ctx.repos.strategy.setVersionValidation(versionId, { status: 'valid', errors: [] });
+    await ctx.repos.strategy.publishVersion('scan-strategy', versionId, asOf);
+    const snapshot: LimitUpLadder = {
+      date: '2026-07-01',
+      total: 1,
+      maxLevel: 3,
+      source: 'eastmoney',
+      levels: [
+        {
+          level: 3,
+          name: '3 连板',
+          count: 1,
+          stocks: [
+            {
+              code: '600519',
+              name: '贵州茅台',
+              industry: '白酒',
+              ladderLevel: 3,
+              uncategorized: false,
+              firstTime: '09:31:00',
+              finalTime: '14:50:00',
+              reason: '历史快照',
+              price: 100,
+              rawClose: 100,
+              corrected: false,
+              changePct: 0.1,
+              limitUpDate: '2026-07-01',
+              board: 'main_board',
+            },
+          ],
+        },
+      ],
+      warnings: [],
+      asOf,
+    };
+    await ctx.repos.limitUpLadderSnapshot.save(snapshot);
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', mode: 'replay', asOf, stockIds: ['600519.SH'] },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results[0]).toMatchObject({ selected: true });
+    expect(result.data.run.providerStatuses).toEqual(
+      expect.arrayContaining([{ provider: 'historical:limit-up-ladder', ok: true }]),
+    );
+    expect(result.data.run.providerCoverage).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          capability: 'limit-up-ladder',
+          provider: 'historical:limit-up-ladder',
+          succeeded: 1,
+          missing: 0,
+          freshness: 'fresh',
+          dataAsOf: asOf,
+        }),
+      ]),
+    );
+  });
+
+  it('keeps candidates when prefilter batch quotes are unavailable', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    let singleCalls = 0;
+    const originalFetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: async () => new Map(),
+      fetchQuote: async (stockId) => {
+        singleCalls += 1;
+        return originalFetchQuote(stockId);
+      },
+    };
+
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        prefilter: { mode: 'quote-selection-safe' },
+      },
+      { ...base, adapters: { ...base.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results).toHaveLength(2);
+    expect(singleCalls).toBe(2);
+    expect(result.data.run.inputSnapshot).toMatchObject({
+      prefilter: { unavailableCount: 2 },
+    });
+  });
+
+  it('scheduled run reads a checkpoint backed by a reused fresh projection', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    await seedStrategy(base);
+    await base.repos.dailyBar.saveMany([
+      {
+        stockId: '600519.SH',
+        date: new Date('2026-08-11T00:00:00.000Z'),
+        open: money(10),
+        high: money(11),
+        low: money(9),
+        close: money(10),
+        volume: 1_000_000,
+        adjustment: 'qfq',
+        source: 'local-only',
+      },
+    ]);
+    const prepared = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        cachePolicy: 'reuse-fresh',
+      },
+      base,
+    );
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        mode: 'scheduled',
+        dataCheckpointId: prepared.data.checkpoint.id,
+      },
+      base,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results[0]?.ruleEvaluations[0]?.status).toBe('matched');
+    expect(result.data.run.publication?.status).toBe('published');
+  });
+
+  it('scan with quote rules uses one batch quote request before per-stock evaluation', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    let batchCalls = 0;
+    let singleCalls = 0;
+    const originalFetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: async (stockIds) => {
+        batchCalls += 1;
+        const entries = await Promise.all(
+          stockIds.map(async (stockId) => [stockId, await originalFetchQuote(stockId)] as const),
+        );
+        return new Map(entries);
+      },
+      fetchQuote: async (stockId) => {
+        singleCalls += 1;
+        return originalFetchQuote(stockId);
+      },
+    };
+
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH', '300750.SZ'] },
+      { ...base, adapters: { ...base.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results).toHaveLength(2);
+    expect(batchCalls).toBe(1);
+    expect(singleCalls).toBe(0);
+  });
+
+  it('quote-only prefilter reduces scan candidates and keeps the run non-publishable', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    const original = await base.repos.strategy.findVersionById('scan-strategy-v1');
+    if (original === null) throw new Error('fixture version missing');
+    const originalRule = original.definition.selection.rules[0];
+    if (originalRule === undefined) throw new Error('fixture selection rule missing');
+    const definition = {
+      ...original.definition,
+      selection: {
+        ...original.definition.selection,
+        rules: [
+          {
+            id: originalRule.id,
+            name: originalRule.name,
+            evidence: originalRule.evidence,
+            when: 'quote.close > 100',
+          },
+        ],
+      },
+    } satisfies StrategyDslV1;
+    const filteredVersion: StrategyVersion = {
+      ...original,
+      id: 'scan-strategy-v2',
+      version: 2,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+    };
+    await base.repos.strategy.createVersion(filteredVersion);
+    let batchCalls = 0;
+    let singleCalls = 0;
+    const originalFetchQuote = base.adapters.market.fetchQuote.bind(base.adapters.market);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: async (stockIds) => {
+        batchCalls += 1;
+        const entries = await Promise.all(
+          stockIds.map(async (stockId) => {
+            const quote = await originalFetchQuote(stockId);
+            return [
+              stockId,
+              { ...quote, close: money(stockId === '600519.SH' ? 101 : 99) },
+            ] as const;
+          }),
+        );
+        return new Map(entries);
+      },
+      fetchQuote: async (stockId) => {
+        singleCalls += 1;
+        return originalFetchQuote(stockId);
+      },
+    };
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        versionId: filteredVersion.id,
+        prefilter: { mode: 'quote-selection-safe' },
+      },
+      { ...base, adapters: { ...base.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results).toHaveLength(1);
+    expect(result.data.results[0]?.stockId).toBe('600519.SH');
+    expect(result.data.run.scope).toBe('evaluation');
+    expect(result.data.run.publication?.status).toBe('non-publishing');
+    expect(result.data.run.inputSnapshot).toMatchObject({
+      prefilter: {
+        mode: 'quote-selection-safe',
+        originalStockCount: 2,
+        rejectedCount: 1,
+        unavailableCount: 0,
+      },
+      stockIds: ['600519.SH'],
+    });
+    expect(batchCalls).toBe(1);
+    expect(singleCalls).toBe(0);
+  });
+
   it('uses active StockUniverse, ranks deterministically and atomically persists', async () => {
     const ctx = await buildTestContext();
     await seedTestStockUniverse(ctx, { limit: 2 });
@@ -142,6 +641,34 @@ describe('run_strategy', () => {
       sourceKind: 'strategy-signal',
     });
     expect(observations).toEqual([]);
+  });
+
+  it('keeps the current scan cutoff when one stock has stale observations', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 2, observedAt: now });
+    await seedStrategy(base);
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      fetchQuote: async (stockId) => {
+        const quote = await base.adapters.market.fetchQuote(stockId);
+        const observedAt = stockId === '600519.SH' ? new Date('2026-07-13T00:00:00.000Z') : now;
+        return { ...quote, observedAt, ts: observedAt };
+      },
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
+
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['300750.SZ', '600519.SH'] },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.run.dataAsOf).toEqual(now);
+    expect(result.data.results.map((item) => item.dataAsOf).sort()).toEqual(
+      [new Date('2026-07-13T00:00:00.000Z'), now].sort(),
+    );
   });
 
   it('dry-run does not persist', async () => {
@@ -334,7 +861,7 @@ describe('run_strategy', () => {
     });
   });
 
-  it('manual full-universe formal run publishes partial data after user confirmation', async () => {
+  it('withholds a manual full-universe run when data acceptance rejects it', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 2 });
     await seedStrategy(base);
@@ -358,8 +885,8 @@ describe('run_strategy', () => {
       evaluatedCount: 1,
     });
     expect(result.data.run.publication).toMatchObject({
-      status: 'published',
-      reasons: [],
+      status: 'withheld',
+      reasons: ['acceptance-rejected'],
     });
   });
 

@@ -9,7 +9,11 @@ import {
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
   DrizzleHoldingRepository,
+  DrizzleLimitUpLadderSnapshotRepository,
   DrizzleNotificationRepository,
+  DrizzlePortfolioCashFlowRepository,
+  DrizzlePortfolioCorporateActionRepository,
+  DrizzlePortfolioPerformanceSnapshotRepository,
   DrizzleQuoteRepository,
   DrizzleReportRepository,
   DrizzleResearchIndexRepository,
@@ -255,6 +259,22 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS stock_universe_snapshot_members_stock_idx
     ON stock_universe_snapshot_members (stock_id)
   `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS limit_up_ladder_snapshots (
+      date TEXT NOT NULL,
+      source TEXT NOT NULL,
+      total INTEGER NOT NULL,
+      max_level INTEGER NOT NULL,
+      levels_json TEXT NOT NULL,
+      warnings_json TEXT NOT NULL,
+      as_of INTEGER NOT NULL,
+      PRIMARY KEY (date, source)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS limit_up_ladder_snapshots_source_date_idx
+    ON limit_up_ladder_snapshots (source, date)
+  `);
   // 存量库没有 immutable member projection 时，只能从最后一次 active membership
   // 回填一个兼容快照；新 sync 会在 applySnapshot 事务内写入精确成员集合。
   db.run(sql`
@@ -292,6 +312,71 @@ export const ensureSchema = (db: DrizzleDb): void => {
       source TEXT NOT NULL,
       created_at INTEGER NOT NULL
     )
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS portfolio_cash_flows (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      occurred_at INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      stock_id TEXT,
+      source TEXT NOT NULL,
+      note TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS portfolio_cash_flows_account_occurred_idx
+    ON portfolio_cash_flows (account_id, occurred_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS portfolio_corporate_actions (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      occurred_at INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      ratio REAL,
+      cash_per_share REAL,
+      source TEXT NOT NULL,
+      note TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS portfolio_corporate_actions_account_occurred_idx
+    ON portfolio_corporate_actions (account_id, occurred_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS portfolio_corporate_actions_stock_occurred_idx
+    ON portfolio_corporate_actions (stock_id, occurred_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS portfolio_performance_snapshots (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      from_at INTEGER NOT NULL,
+      to_at INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL,
+      calculated_at INTEGER NOT NULL,
+      data_as_of INTEGER,
+      performance_json TEXT NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS portfolio_performance_snapshots_account_range_fingerprint_unique
+    ON portfolio_performance_snapshots (account_id, from_at, to_at, input_fingerprint)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS portfolio_performance_snapshots_account_calculated_idx
+    ON portfolio_performance_snapshots (account_id, calculated_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS portfolio_performance_snapshots_account_range_idx
+    ON portfolio_performance_snapshots (account_id, from_at, to_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS advices (
@@ -632,11 +717,17 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE TABLE IF NOT EXISTS strategy_evaluation_days (
       session_id TEXT NOT NULL, data_as_of INTEGER NOT NULL, run_id TEXT,
       universe_sync_id TEXT, data_checkpoint_id TEXT, revision_cutoff INTEGER,
-      vintage_status TEXT, status TEXT NOT NULL, error TEXT,
+      vintage_status TEXT, status TEXT NOT NULL,
+      evaluated_count INTEGER, selected_count INTEGER, signal_count INTEGER, failed_count INTEGER,
+      error TEXT,
       PRIMARY KEY (session_id, data_as_of)
     )
   `);
   ensureColumn(db, 'strategy_evaluation_days', 'vintage_status', 'TEXT');
+  ensureColumn(db, 'strategy_evaluation_days', 'evaluated_count', 'INTEGER');
+  ensureColumn(db, 'strategy_evaluation_days', 'selected_count', 'INTEGER');
+  ensureColumn(db, 'strategy_evaluation_days', 'signal_count', 'INTEGER');
+  ensureColumn(db, 'strategy_evaluation_days', 'failed_count', 'INTEGER');
   db.run(sql`
     CREATE INDEX IF NOT EXISTS strategy_evaluation_days_status_idx
     ON strategy_evaluation_days (session_id, status)
@@ -1266,8 +1357,12 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     account: new DrizzleAccountRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
+    limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
     holding: new DrizzleHoldingRepository(db),
     trade: new DrizzleTradeRepository(db),
+    portfolioCashFlow: new DrizzlePortfolioCashFlowRepository(db),
+    portfolioCorporateAction: new DrizzlePortfolioCorporateActionRepository(db),
+    portfolioPerformanceSnapshot: new DrizzlePortfolioPerformanceSnapshotRepository(db),
     advice: new DrizzleAdviceRepository(db),
     report: new DrizzleReportRepository(db),
     quote: new DrizzleQuoteRepository(db),

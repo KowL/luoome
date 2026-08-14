@@ -185,7 +185,7 @@ const applyTheme = (theme) => {
 };
 
 const updateThemeUI = () => {
-  if (typeof document === 'undefined') return;
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
   const current = getTheme();
   document.querySelectorAll('.theme-card').forEach((button) => {
     const active = button.dataset.theme === current;

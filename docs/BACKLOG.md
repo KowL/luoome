@@ -10,27 +10,35 @@
 
 2. ~~**apps/web 零测试 + 依赖声明缺失**~~ ✅ 已修（v0.8：`package.json` 补声明 `@luoome/adapters` / `@luoome/db`；新增 `server.test.ts` 闸口矩阵 9 例，`bun run test:web` 执行并纳入 `test:all`）
 
-3. **MCP 与 CLI 时钟口径分叉**
-   - `packages/mcp/src/context.ts` 业务时钟固定 mock 锚点（2026-07-17，注释自称 v0.1），CLI / TUI / Web 用真实时钟；同一 `get_advice`（默认过滤过期）在 MCP 与 CLI 下结果可能不同。
+3. ~~**MCP 与 CLI 时钟口径分叉**~~ ✅ 已修：`packages/mcp/src/context.ts` 与 CLI / TUI / Web 一样使用真实系统时钟；测试与运行时不再固定 2026-07-17 锚点。
 
-4. **tools 包桶导出漏 4 个 write tool**
-   - `packages/tools/src/index.ts` 未导出 `add-holding` / `add-trade` / `close-holding` / `update-holding`，头注释仍写「13 个 tool」；`packages/tools/package.json` description 仍写「8 个 v0.1 tool」。
+4. ~~**tools 包桶导出漏 4 个 write tool**~~ ✅ 已修：`packages/tools/src/index.ts` 已导出
+   `add-holding` / `add-trade` / `close-holding` / `update-holding`，包描述也改为运行时 registry/discovery 口径。
 
 ## P2 — 测试盲区 / 硬编码
 
-5. **workflows 三个无测试**：`run-strategies` / `risk-report` / `daily-review`；且 `risk-report` 的 VaR 是 mock 固定值（2% × 总市值），`sync-quotes` 用 `new Date()` 而非 `ctx.clock()`。
-6. **版本号三处口径互相对不上**：CLI `VERSION = '0.1.0'`（`packages/cli/src/index.ts`）、MCP serverInfo 同、homebrew formula test 断言 `0.5.x`——而实际已 v0.6.2。
-7. **MCP smoke 硬编码 17 tool**：`packages/mcp/src/smoke.ts` 新增 read/advice tool 会脆断；smoke 无 CI / script 挂载，只能手跑。
-8. **db DDL 与 Drizzle schema 双份手写**：`ensureSchema` 编程式 DDL 与 `schema/index.ts` 靠纪律同步（唯一索引 / 复合主键两处都有），漂移风险，代码注释自认应被 migrate 取代；`createDrizzleRepos` docstring 残留「5 个 repository」（实际 11）。
-9. **Web 暴露面仍需收敛**：Web 不做账户级鉴权；多账户切换是 `ctxRef.current` 内存 mutate（单进程单 tab 假设；监听非 localhost 时需注意暴露面）。
+5. ~~**风险工作流测试与固定 VaR**~~ ✅ 已修：`run-strategies` / `daily-review` / `risk-report` 均有测试，
+   `sync-quotes` 使用 `ctx.clock()`；`risk-report` 改用 `get_account_performance` 的真实历史 TWR
+   收益计算 95% 历史 VaR，历史事实不足时明确返回 unavailable，不再固定 2%。
+6. ~~**版本号三处口径互相对不上**~~ ✅ 已修：CLI 与 MCP serverInfo 当前统一为 `0.9.0`，Homebrew formula 与 smoke 断言同步为 `0.9.0`；各 workspace package version 仍作为内部包版本，不冒充产品 release。
+7. ~~**MCP smoke 硬编码 17 tool**~~ ✅ 已修：`packages/mcp/src/smoke.ts` 按运行时 registry 与
+   exposure policy 计算默认暴露集合，不再固定数量；新增 `bun run mcp:smoke` 与
+   `bun --cwd packages/mcp run smoke` 入口，仍保留真实 stdio/SQLite 握手验收。
+8. **db DDL 与 Drizzle schema 双份手写**（部分收口）：`ensureSchema` 编程式 DDL 与
+   `schema/index.ts` 仍需手工同步，完整迁移生成仍待后续；已补 50 张表的启动契约测试，逐表
+   校验实际 SQLite 列和显式索引名称，schema drift 现在会在测试中直接失败。
+9. **Web 暴露面仍需收敛**（部分收口）：浏览器账户选择已通过
+   `X-Luoome-Account-Id` + request-scoped context 隔离不同 tab，不再依赖共享账户 mutate；无 header 的
+   本地调用仍兼容默认账户。Web 仍不做账户级鉴权，监听非 localhost 时必须由部署侧提供网络隔离或
+   后续产品决策的认证层。
 
 ## P3 — 代码气味（不阻塞）
 
-10. `intraday-watch`：trigger id 用 `Math.random()`（不可复现）；`stepLoadPrevCloses` 里 `catch {}` 静默吞错；evidence 缺 prevClose 来源标注（与 HANDOFF §9.5 重叠）。
+10. `intraday-watch`：~~trigger id 用 `Math.random()`（不可复现）~~ ✅ 已改用 `crypto.randomUUID()`；~~昨收加载失败静默吞错~~ ✅ 保留可定位 warning；~~evidence 缺 prevClose 来源标注~~ ✅ `price-change` evidence 明确记录 `prevCloseSource=bar`。
 11. TUI `app.ts` 1007 行单文件；RESIZE handler 里 `overlay.height` 连续赋值两次（第一行死代码）；`CalibrationView` 类型定义在文件末尾却在中间使用。
-12. core：`V0_2_SUPPORTED_MARKETS` 命名陈旧（v0.5 已支持 US）；`assertExpressionSafety` 抛普通 Error 而非 `InvariantError` / `DslEvalError`。
-13. adapters：`package.json` 声明 `drizzle-orm` 依赖但 src 未使用；`eastmoney.ts` / `openai-compatible.ts` 尾部重复 re-export 与桶导出冗余；`workflows/package.json` description 仍写「v0.1 仅骨架」。
-14. `intraday-watch.ts` 两处用条件类型体操推断 ctx 类型，应直接 import `WorkflowContext`。
+12. core：~~`V0_2_SUPPORTED_MARKETS` 命名陈旧~~ ✅ 已统一为当前语义的 `SUPPORTED_MARKETS`；~~`assertExpressionSafety` 抛普通 Error~~ ✅ 已修为可识别的 `DslEvalError`，并补回归测试。
+13. adapters：~~`package.json` 声明 `drizzle-orm` 依赖但 src 未使用~~ ✅ 已移除直接依赖；`eastmoney.ts` / `openai-compatible.ts` 尾部重复 re-export 与桶导出冗余；~~`workflows/package.json` description 仍写「v0.1 仅骨架」~~ ✅ 已更新为当前 workflow 范围。
+14. ~~`intraday-watch.ts` 两处用条件类型体操推断 ctx 类型~~ ✅ 已统一直接使用 `WorkflowContext`。
 
 ---
 

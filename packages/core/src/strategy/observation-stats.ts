@@ -19,6 +19,58 @@ export interface SignalObservationStats {
   readonly observedAsOf?: Date;
 }
 
+/**
+ * R7 的描述性样本单位：同一股票、同一基准交易日和同一观察周期只保留一个事实。
+ * baselineAt 缺失的 unavailable 记录无法可靠解析为 signal-day，因此不参与去重。
+ */
+export const SIGNAL_OBSERVATION_SAMPLE_UNIT = 'stock-day-horizon' as const;
+
+export const signalObservationSampleKey = (observation: SignalObservation): string | undefined => {
+  if (observation.baselineAt === undefined) return undefined;
+  const baselineDay = observation.baselineAt.toISOString().slice(0, 10);
+  return `${observation.stockId}\0${baselineDay}\0${observation.horizon}`;
+};
+
+const observationStatusRank: Record<SignalObservation['status'], number> = {
+  unavailable: 0,
+  pending: 1,
+  complete: 2,
+};
+
+/** 按 sample key 选出可审计的代表行；同等级下用 id 保证结果稳定。 */
+export const deduplicateSignalObservations = (
+  observations: readonly SignalObservation[],
+  groupOf: (observation: SignalObservation) => string = () => 'all',
+): readonly SignalObservation[] => {
+  const representatives = new Map<string, SignalObservation>();
+  const unkeyed: SignalObservation[] = [];
+  for (const observation of observations) {
+    const sampleKey = signalObservationSampleKey(observation);
+    if (sampleKey === undefined) {
+      unkeyed.push(observation);
+      continue;
+    }
+    const key = `${groupOf(observation)}\0${sampleKey}`;
+    const previous = representatives.get(key);
+    if (
+      previous === undefined ||
+      observationStatusRank[observation.status] > observationStatusRank[previous.status] ||
+      (observationStatusRank[observation.status] === observationStatusRank[previous.status] &&
+        observation.id.localeCompare(previous.id) < 0)
+    ) {
+      representatives.set(key, observation);
+    }
+  }
+  return [...representatives.values(), ...unkeyed].sort(
+    (left, right) =>
+      left.horizon.localeCompare(right.horizon) ||
+      left.stockId.localeCompare(right.stockId) ||
+      (left.baselineAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+        (right.baselineAt?.getTime() ?? Number.MAX_SAFE_INTEGER) ||
+      left.id.localeCompare(right.id),
+  );
+};
+
 const average = (values: readonly number[]): number | undefined =>
   values.length === 0 ? undefined : values.reduce((sum, value) => sum + value, 0) / values.length;
 
@@ -39,8 +91,9 @@ export const aggregateSignalObservationStats = (
   observations: readonly SignalObservation[],
   groupOf: (observation: SignalObservation) => string = () => 'all',
 ): readonly SignalObservationStats[] => {
+  const sampledObservations = deduplicateSignalObservations(observations, groupOf);
   const groups = new Map<string, SignalObservation[]>();
-  for (const observation of observations) {
+  for (const observation of sampledObservations) {
     const key = `${groupOf(observation)}\0${observation.horizon}`;
     groups.set(key, [...(groups.get(key) ?? []), observation]);
   }

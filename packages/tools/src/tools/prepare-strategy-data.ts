@@ -13,7 +13,25 @@ import { z } from 'zod';
 import { defineTool, errInvalidInput } from '../define-tool.js';
 
 const DAY_MS = 86_400_000;
-const CONCURRENCY = 8;
+const monotonicNow = (): number =>
+  typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
+
+const roundedMs = (value: number): number => Math.round(Math.max(0, value) * 100) / 100;
+
+const percentileMs = (values: readonly number[], percentile: number): number => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * percentile) - 1));
+  return roundedMs(sorted[index] ?? 0);
+};
+
+const latencySummary = (values: readonly number[]) => ({
+  samples: values.length,
+  p50Ms: percentileMs(values, 0.5),
+  p95Ms: percentileMs(values, 0.95),
+  maxMs: roundedMs(Math.max(0, ...values)),
+});
+
 type CheckpointMemberInput = {
   readonly stockId: string;
   readonly status: 'available' | 'missing' | 'failed';
@@ -23,18 +41,41 @@ type CheckpointMemberInput = {
   readonly provider?: string;
   readonly errorKind?: string;
   readonly vintageAvailable?: boolean;
+  readonly durationMs: number;
 };
 
 export const PrepareStrategyDataInput = z.object({
   strategyId: z.string().min(1),
   asOf: z.coerce.date().optional(),
+  /**
+   * PIT universe 的可见时点；历史 replay 的交易日 key 通常是 UTC 午夜，
+   * 但目录 snapshot 可能在该交易日盘中固化，不能因此被午夜查询漏掉。
+   */
+  universeAsOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(1000).optional(),
   lookbackDays: z.number().int().min(60).max(1000).default(370),
   /** 交易日口径的新鲜度门禁；超过该滞后即进入 missing/partial，不得 provider ok。 */
   maxStalenessTradingDays: z.number().int().min(0).max(30).default(1),
+  /** scheduled 可复用新鲜本地投影；replay/手动刷新默认仍走 provider。 */
+  cachePolicy: z.enum(['refresh', 'reuse-fresh']).default('refresh'),
   /** replay 只写 append-only revision，不能用历史 bars 覆盖当前 daily_bars 投影。 */
   persistCurrentProjection: z.boolean().default(true),
+  /** 外部 provider 的有界并发与失败预算。 */
+  concurrency: z.number().int().min(1).max(64).default(8),
+  maxRetries: z.number().int().min(0).max(5).default(2),
+  requestTimeoutMs: z.number().int().min(500).max(120_000).default(20_000),
 });
+
+export const PrepareStrategyDataPerformanceSchema = z.object({
+  memberLatencyMs: z.object({
+    samples: z.number().int().nonnegative(),
+    p50Ms: z.number().finite().nonnegative(),
+    p95Ms: z.number().finite().nonnegative(),
+    maxMs: z.number().finite().nonnegative(),
+  }),
+  wallDurationMs: z.number().finite().nonnegative(),
+});
+export type PrepareStrategyDataPerformance = z.infer<typeof PrepareStrategyDataPerformanceSchema>;
 
 export const PrepareStrategyDataOutput = z.object({
   checkpoint: StrategyDataCheckpointSchema,
@@ -48,6 +89,8 @@ export const PrepareStrategyDataOutput = z.object({
       errorKind: z.string().optional(),
     }),
   ),
+  /** 真实成员请求延迟，供性能门禁审计；不含估算或 mock 样本。 */
+  performance: PrepareStrategyDataPerformanceSchema,
 });
 
 const mapWithConcurrency = async <T, R>(
@@ -74,18 +117,40 @@ const isRetryableProviderError = (error: unknown): boolean =>
     error instanceof Error ? error.message : String(error),
   );
 
+const providerErrorKind = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  const stable = message.match(
+    /\b(provider_timeout|no_data|unsupported_[a-z_]+|invalid[_-]payload|rate[_-]?limit)\b/i,
+  )?.[1];
+  return stable?.toLowerCase() ?? (error instanceof Error ? error.name : 'provider_error');
+};
+
 const fetchDailyBarsWithRetry = async (
   ctx: ToolContext,
   stockId: string,
   range: { readonly start: Date; readonly end: Date },
+  options: { readonly maxRetries: number; readonly timeoutMs: number },
 ): Promise<DailyBar[]> => {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
     try {
-      return await ctx.adapters.market.fetchDailyBars(stockId, range);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          ctx.adapters.market.fetchDailyBars(stockId, range),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`provider_timeout: daily bars ${stockId}`)),
+              options.timeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
     } catch (error) {
       lastError = error;
-      if (!isRetryableProviderError(error) || attempt === 2) throw error;
+      if (!isRetryableProviderError(error) || attempt === options.maxRetries) throw error;
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -153,15 +218,16 @@ const tradingDayLag = (latest: Date | undefined, asOf: Date): number | undefined
 
 export const prepareStrategyDataTool = defineTool({
   name: 'prepare_strategy_data',
-  description: '按固定并发上限准备 Strategy 日线数据并提交可复用 checkpoint',
+  description: '按配置化并发、超时和重试预算准备 Strategy 日线数据并提交可复用 checkpoint',
   sideEffect: 'external',
   input: PrepareStrategyDataInput,
   output: PrepareStrategyDataOutput,
   handler: async (input, ctx: ToolContext) => {
     const asOf = input.asOf ?? ctx.clock();
+    const universeAsOf = input.universeAsOf ?? asOf;
     const sync = await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({
       coverage: 'CN_A_SHARES_SH_SZ',
-      asOf,
+      asOf: universeAsOf,
     });
     const snapshotIds =
       sync === null
@@ -174,6 +240,7 @@ export const prepareStrategyDataTool = defineTool({
       sync?.id ?? `explicit:${createHash('sha256').update(stockIds.join(',')).digest('hex')}`;
     const checkpointId = `strategy-data-checkpoint-${globalThis.crypto.randomUUID()}`;
     const startedAt = ctx.clock();
+    const operationStartedAt = monotonicNow();
     await ctx.repos.strategyDataCheckpoint.saveStarted({
       id: checkpointId,
       coverage: 'CN_A_SHARES_SH_SZ',
@@ -191,15 +258,35 @@ export const prepareStrategyDataTool = defineTool({
     });
     const prepared = await mapWithConcurrency(
       stockIds,
-      CONCURRENCY,
+      input.concurrency,
       async (stockId): Promise<CheckpointMemberInput> => {
+        const memberStartedAt = monotonicNow();
         try {
-          const bars = (
-            await fetchDailyBarsWithRetry(ctx, stockId, {
-              start: new Date(asOf.getTime() - input.lookbackDays * DAY_MS),
-              end: asOf,
-            })
-          ).filter((bar): bar is DailyBar => bar.stockId === stockId);
+          const range = {
+            start: new Date(asOf.getTime() - input.lookbackDays * DAY_MS),
+            end: asOf,
+          };
+          const cachedBars =
+            input.cachePolicy === 'reuse-fresh' && input.persistCurrentProjection
+              ? await ctx.repos.dailyBar.findInRange(stockId, range.start, range.end)
+              : [];
+          const cachedLatestBarDate = cachedBars.reduce<Date | undefined>(
+            (latest, bar) => (latest === undefined || bar.date > latest ? bar.date : latest),
+            undefined,
+          );
+          const reuseCache =
+            cachedBars.length > 0 &&
+            (tradingDayLag(cachedLatestBarDate, asOf) ?? Number.POSITIVE_INFINITY) <=
+              input.maxStalenessTradingDays;
+          const bars = reuseCache
+            ? cachedBars
+            : (
+                await fetchDailyBarsWithRetry(ctx, stockId, range, {
+                  maxRetries: input.maxRetries,
+                  timeoutMs: input.requestTimeoutMs,
+                })
+              ).filter((bar): bar is DailyBar => bar.stockId === stockId);
+          const dataProvider = reuseCache ? 'local:daily-bars' : ctx.adapters.market.name;
           const latestBarDate = bars.reduce<Date | undefined>(
             (latest, bar) => (latest === undefined || bar.date > latest ? bar.date : latest),
             undefined,
@@ -233,7 +320,9 @@ export const prepareStrategyDataTool = defineTool({
                   return revision !== undefined && revisionMatchesBar(bar, revision);
                 });
           if (bars.length > 0) {
-            if (input.persistCurrentProjection) await ctx.repos.dailyBar.saveMany(bars);
+            if (!reuseCache && input.persistCurrentProjection) {
+              await ctx.repos.dailyBar.saveMany(bars);
+            }
             await ctx.repos.dailyBar.saveRevisions(
               bars.map((bar) => ({
                 stockId: bar.stockId,
@@ -269,9 +358,10 @@ export const prepareStrategyDataTool = defineTool({
               )
               .digest('hex'),
             ...(latestBarDate === undefined ? {} : { latestBarDate }),
-            provider: ctx.adapters.market.name,
+            provider: dataProvider,
             ...(stale ? { errorKind: 'stale_data' } : {}),
             ...(vintageAvailable === undefined ? {} : { vintageAvailable }),
+            durationMs: roundedMs(monotonicNow() - memberStartedAt),
           } satisfies CheckpointMemberInput;
         } catch (error) {
           return {
@@ -280,18 +370,33 @@ export const prepareStrategyDataTool = defineTool({
             barCount: 0,
             barChecksum: '',
             provider: ctx.adapters.market.name,
-            errorKind: error instanceof Error ? error.name : 'provider_error',
+            errorKind: providerErrorKind(error),
+            durationMs: roundedMs(monotonicNow() - memberStartedAt),
           } satisfies CheckpointMemberInput;
         }
       },
     );
+    const memberDurations = prepared.map((member) => member.durationMs);
+    const memberLatencyMs = latencySummary(memberDurations);
+    const performance = {
+      memberLatencyMs,
+      wallDurationMs: roundedMs(monotonicNow() - operationStartedAt),
+    } satisfies PrepareStrategyDataPerformance;
     const availableCount = prepared.filter((member) => member.status === 'available').length;
     const missingCount = prepared.filter((member) => member.status === 'missing').length;
     const failedCount = prepared.filter((member) => member.status === 'failed').length;
     const status =
       availableCount === 0 ? 'failed' : failedCount + missingCount > 0 ? 'partial' : 'complete';
     const finishedAt = ctx.clock();
-    const provider = ctx.adapters.market.name;
+    const providers = [
+      ...new Set(prepared.map((member) => member.provider).filter((value) => value !== undefined)),
+    ].sort();
+    const provider =
+      providers.length === 0
+        ? ctx.adapters.market.name
+        : providers.length === 1
+          ? (providers[0] as string)
+          : `mixed:${providers.join('+')}`;
     const vintageStatus = input.persistCurrentProjection
       ? 'not-applicable'
       : prepared.every((member) => member.vintageAvailable === true)
@@ -348,6 +453,7 @@ export const prepareStrategyDataTool = defineTool({
           freshness: providerFreshness,
           ...(providerDataAsOf === undefined ? {} : { dataAsOf: providerDataAsOf }),
           errorKinds: [...new Set(prepared.flatMap((member) => member.errorKind ?? []))],
+          latencyMs: memberLatencyMs,
         },
       ],
       startedAt,
@@ -357,6 +463,6 @@ export const prepareStrategyDataTool = defineTool({
       checkpoint,
       members: prepared.map((member) => ({ checkpointId: checkpoint.id, ...member })),
     });
-    return { checkpoint, members: prepared };
+    return { checkpoint, members: prepared, performance };
   },
 });

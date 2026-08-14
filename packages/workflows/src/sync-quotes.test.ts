@@ -23,6 +23,15 @@ describe('workflow/sync-quotes', () => {
     expect(res.ok).toBe(true);
   });
 
+  it('使用 workflow context clock 生成审计时间，而不是读取系统时间', async () => {
+    const clock = () => new Date('2026-07-28T09:10:11.000Z');
+    const ctx = await buildTestContext({ clock });
+    const res = await syncQuotesWorkflow.run({}, ctx);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.syncedAt).toBe(clock().toISOString());
+  });
+
   it('错误路径：accountId 不是 uuid → invalid_input', async () => {
     const ctx = await buildTestContext();
     const res = await syncQuotesWorkflow.run({ accountId: 'not-uuid' }, ctx);

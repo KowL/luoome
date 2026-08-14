@@ -17,10 +17,20 @@ export type WorkflowRunMode = z.infer<typeof WorkflowRunModeSchema>;
 export const WorkflowRunStatusSchema = z.enum(['running', 'succeeded', 'partial', 'failed']);
 export type WorkflowRunStatus = z.infer<typeof WorkflowRunStatusSchema>;
 
+export const ProviderLatencySchema = z.object({
+  samples: z.number().int().nonnegative(),
+  p50Ms: z.number().finite().nonnegative(),
+  p95Ms: z.number().finite().nonnegative(),
+  maxMs: z.number().finite().nonnegative(),
+});
+export type ProviderLatency = z.infer<typeof ProviderLatencySchema>;
+
 export const ProviderStatusSchema = z.object({
   provider: z.string(),
   ok: z.boolean(),
   errorKind: z.string().optional(),
+  /** 外部 provider 成功/失败请求的真实延迟分布，不是预算或估算值。 */
+  latencyMs: ProviderLatencySchema.optional(),
 });
 export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;
 

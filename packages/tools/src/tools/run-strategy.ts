@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import {
   assessStrategyRun,
   assignStableStrategyRanks,
+  compileStrategyQuotePrefilter,
   type DailyBar,
   DailyBarSchema,
   DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
+  dateInShanghai,
   decideStrategyRunPublication,
   decideStrategySignalEmission,
   deriveStrategyRunScope,
@@ -39,16 +41,23 @@ const EVALUATION_CONCURRENCY = 8;
 const EVALUATOR_VERSION = 'strategy-evaluator-v2';
 const RUN_LEASE_MS = 15 * 60 * 1000;
 const RUN_HEARTBEAT_MS = 5 * 60 * 1000;
+const BATCH_QUOTE_CHUNK_SIZE = 100;
 
 export const RunStrategyInput = z.object({
   strategyId: z.string().min(1),
   versionId: z.string().min(1).optional(),
   mode: z.enum(['scan', 'scheduled', 'replay']).default('scan'),
   asOf: z.coerce.date().optional(),
+  /** replay 的 PIT universe 可在交易日内固化，独立于交易日 key 的 dataAsOf。 */
+  universeAsOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
   revisionCutoff: z.coerce.date().optional(),
   dataCheckpointId: z.string().min(1).optional(),
   evaluationSessionId: z.string().min(1).optional(),
+  /** provider/CPU 受限并发；始终有上限，避免全市场扫描打爆上游。 */
+  concurrency: z.number().int().min(1).max(64).default(EVALUATION_CONCURRENCY),
+  /** 仅 scan evaluation 可显式启用；不会产生 operational publication。 */
+  prefilter: z.object({ mode: z.literal('quote-selection-safe') }).optional(),
   acceptancePolicy: z
     .object({
       policyVersion: z.literal('strategy-run-acceptance-v1'),
@@ -84,6 +93,39 @@ const mapWithConcurrency = async <T, R>(
   });
   await Promise.all(workers);
   return results;
+};
+
+const batchQuoteWithConcurrency = async (
+  stockIds: readonly string[],
+  concurrency: number,
+  ctx: ToolContext,
+): Promise<Map<string, Quote>> => {
+  const chunks: string[][] = [];
+  const chunkSize = Math.min(BATCH_QUOTE_CHUNK_SIZE, concurrency);
+  for (let index = 0; index < stockIds.length; index += chunkSize) {
+    chunks.push(stockIds.slice(index, index + chunkSize));
+  }
+  // adapter 的 batchQuote 实现可能自行并发逐股请求；串行提交小批次，
+  // 使其内部单批并发也不超过 run 的 provider 上限。
+  const chunkResults = await mapWithConcurrency(chunks, 1, async (chunk) => {
+    try {
+      return await ctx.adapters.market.batchQuote(chunk);
+    } catch (error) {
+      ctx.logger.warn('run_strategy batch quote chunk failed; falling back to per-stock fetch', {
+        chunkSize: chunk.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return new Map<string, Quote>();
+    }
+  });
+  const quotes = new Map<string, Quote>();
+  for (const chunk of chunkResults) {
+    for (const [requestedStockId, quote] of chunk) {
+      quotes.set(requestedStockId, quote);
+      quotes.set(quote.stockId, quote);
+    }
+  }
+  return quotes;
 };
 
 const quoteFromDailyBar = (bar: DailyBar, fetchedAt: Date): Quote => ({
@@ -141,6 +183,9 @@ export const runStrategyTool = defineTool({
     if (input.mode === 'replay' && input.asOf === undefined) {
       return errInvalidInput('mode=replay 时 asOf 必填');
     }
+    if (input.prefilter !== undefined && input.mode !== 'scan') {
+      return errInvalidInput('prefilter 只允许用于 mode=scan 的 evaluation 运行');
+    }
     if (input.mode !== 'replay' && input.revisionCutoff !== undefined) {
       return errInvalidInput('revisionCutoff 只允许用于 mode=replay');
     }
@@ -149,6 +194,9 @@ export const runStrategyTool = defineTool({
         'mode=scan/scheduled 不支持 asOf：bars 会取历史而 quote 仍是实时，时点不一致；需要历史时点请用 mode=replay + 显式 stockIds',
       );
     }
+    if (input.mode !== 'replay' && input.universeAsOf !== undefined) {
+      return errInvalidInput('universeAsOf 只允许用于 mode=replay');
+    }
     const resolved = await resolveVersion(input.strategyId, input.versionId, !input.persist, ctx);
     if ('ok' in resolved) return resolved;
     const version = resolved;
@@ -156,10 +204,10 @@ export const runStrategyTool = defineTool({
     const runId = `strategy-run-${globalThis.crypto.randomUUID()}`;
     const scope = deriveStrategyRunScope({
       mode: input.mode,
-      hasExplicitStockIds: input.stockIds !== undefined,
+      hasExplicitStockIds: input.stockIds !== undefined || input.prefilter !== undefined,
     });
     const universeKind = deriveStrategyRunUniverseKind({
-      hasExplicitStockIds: input.stockIds !== undefined,
+      hasExplicitStockIds: input.stockIds !== undefined || input.prefilter !== undefined,
     });
     let leaseToken: StrategyLeaseToken | null = null;
     let leaseLost = false;
@@ -214,7 +262,7 @@ export const runStrategyTool = defineTool({
         input.mode === 'replay'
           ? await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({
               coverage: 'CN_A_SHARES_SH_SZ',
-              asOf: dataAsOf,
+              asOf: input.universeAsOf ?? dataAsOf,
             })
           : await ctx.repos.stockUniverse.latestSuccessfulSync({
               coverage: 'CN_A_SHARES_SH_SZ',
@@ -254,9 +302,10 @@ export const runStrategyTool = defineTool({
 
       const startedAt = ctx.clock();
       dataAsOf = input.asOf ?? startedAt;
-      const needsQuote = references.dataSources.includes('quote');
+      const needsQuote = references.dataSources.includes('quote') || input.prefilter !== undefined;
       const needsDailyBars = references.dataSources.includes('daily-bars');
       const needsDerivedMeta = references.paths.some((path) => path.startsWith('meta.'));
+      const needsLimitUpLadder = references.dataSources.includes('limit-up-ladder');
       const lookback = Math.max(1, references.requiredLookback);
       const universeMemberIds = [...new Set(requestedIds)].sort();
       const universeCheckpoint =
@@ -358,6 +407,124 @@ export const runStrategyTool = defineTool({
         const oldestObserved = Math.min(...observedTimes);
         if (Number.isFinite(oldestObserved)) dataAsOf = new Date(oldestObserved);
       }
+      let limitUpLadderByCode = new Map<string, { readonly ladderLevel: number }>();
+      let limitUpLadderProviderOk = !needsLimitUpLadder;
+      let limitUpLadderDataAsOf: Date | undefined;
+      let limitUpLadderErrorKind: string | undefined;
+      if (needsLimitUpLadder) {
+        if (input.mode === 'replay') {
+          // Replay 只读取已持久化的真实 PIT 快照，不能读取当前可变天梯。
+          try {
+            const snapshot = await ctx.repos.limitUpLadderSnapshot.findByDate({
+              date: dateInShanghai(dataAsOf),
+              source: 'eastmoney',
+            });
+            if (snapshot === null) {
+              limitUpLadderErrorKind = 'historical_snapshot_unavailable';
+            } else {
+              limitUpLadderProviderOk = true;
+              limitUpLadderDataAsOf = snapshot.asOf;
+              limitUpLadderByCode = new Map(
+                snapshot.levels
+                  .flatMap((level) => level.stocks)
+                  .map((entry) => [entry.code, { ladderLevel: entry.ladderLevel }] as const),
+              );
+            }
+          } catch (error) {
+            limitUpLadderErrorKind = 'historical_snapshot_read_failed';
+            ctx.logger.warn('读取历史天梯 PIT 快照失败', {
+              date: dateInShanghai(dataAsOf),
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else if (ctx.limitUpLadder === undefined) {
+          limitUpLadderErrorKind = 'manager_unavailable';
+        } else {
+          const ladder = await ctx.limitUpLadder.fetchLadder({
+            date: dateInShanghai(dataAsOf),
+            source: 'eastmoney',
+            days: 15,
+            includeUncategorized: false,
+            includeStar: false,
+            includeBse: false,
+            includeST: false,
+          });
+          if (ladder.ok && ladder.data !== undefined) {
+            limitUpLadderProviderOk = true;
+            limitUpLadderDataAsOf = ladder.data.asOf;
+            limitUpLadderByCode = new Map(
+              ladder.data.levels
+                .flatMap((level) => level.stocks)
+                .map((entry) => [entry.code, { ladderLevel: entry.ladderLevel }] as const),
+            );
+            try {
+              await ctx.repos.limitUpLadderSnapshot.save(ladder.data);
+            } catch (error) {
+              // 当前扫描仍可使用真实返回，但不把未落库的结果冒充为可 replay 的 PIT 事实。
+              limitUpLadderErrorKind = 'historical_snapshot_persist_failed';
+              ctx.logger.warn('写入历史天梯 PIT 快照失败', {
+                date: ladder.data.date,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          } else {
+            limitUpLadderErrorKind = ladder.error?.kind ?? 'adapter_error';
+          }
+        }
+      }
+
+      let prefilterSnapshot:
+        | {
+            readonly mode: 'quote-selection-safe';
+            readonly originalStockCount: number;
+            readonly originalStockIdChecksum: string;
+            readonly appliedRuleIds: readonly string[];
+            readonly skippedRuleIds: readonly string[];
+            readonly rejectedCount: number;
+            readonly unavailableCount: number;
+          }
+        | undefined;
+      const preloadedQuotes = new Map<string, Quote>();
+      if (input.mode === 'scan' && needsQuote && candidateIds.length > 0) {
+        const batchQuotes = await batchQuoteWithConcurrency(candidateIds, input.concurrency, ctx);
+        for (const [stockId, quote] of batchQuotes) preloadedQuotes.set(stockId, quote);
+      }
+      if (input.prefilter !== undefined) {
+        const prefilter = compileStrategyQuotePrefilter(definition);
+        if (prefilter.applicableRuleIds.length === 0) {
+          return errInvalidInput(
+            '当前 Strategy 没有可由 quote 安全判定的 selection rule，无法预筛选',
+          );
+        }
+        const originalCandidateIds = [...candidateIds];
+        const originalStockIdChecksum = createHash('sha256')
+          .update(JSON.stringify(originalCandidateIds))
+          .digest('hex');
+        let rejectedCount = 0;
+        let unavailableCount = 0;
+        candidateIds = originalCandidateIds.filter((stockId) => {
+          const quote = preloadedQuotes.get(stockId);
+          if (quote === undefined) {
+            unavailableCount += 1;
+            return true;
+          }
+          const decision = prefilter.evaluate(quote);
+          if (decision.status === 'reject') {
+            rejectedCount += 1;
+            return false;
+          }
+          return true;
+        });
+        prefilterSnapshot = {
+          mode: 'quote-selection-safe',
+          originalStockCount: originalCandidateIds.length,
+          originalStockIdChecksum,
+          appliedRuleIds: prefilter.applicableRuleIds,
+          skippedRuleIds: prefilter.skippedRuleIds,
+          rejectedCount,
+          unavailableCount,
+        };
+      }
       requestedBy =
         input.mode === 'replay' ? 'replay' : input.mode === 'scheduled' ? 'scheduled' : 'manual';
       startedRun = StrategyRunSchema.parse({
@@ -397,6 +564,7 @@ export const runStrategyTool = defineTool({
           ...(input.evaluationSessionId === undefined
             ? {}
             : { evaluationSessionId: input.evaluationSessionId }),
+          ...(prefilterSnapshot === undefined ? {} : { prefilter: prefilterSnapshot }),
         },
         providerStatuses: [],
         providerCoverage: [],
@@ -405,7 +573,7 @@ export const runStrategyTool = defineTool({
 
       const prepared = await mapWithConcurrency(
         candidateIds,
-        EVALUATION_CONCURRENCY,
+        input.concurrency,
         async (
           stockId,
         ): Promise<
@@ -474,7 +642,10 @@ export const runStrategyTool = defineTool({
                   end: dataAsOf,
                 });
               }
-              if (needsQuote) quote = await ctx.adapters.market.fetchQuote(stockId);
+              if (needsQuote) {
+                quote =
+                  preloadedQuotes.get(stockId) ?? (await ctx.adapters.market.fetchQuote(stockId));
+              }
             }
             return {
               ok: true,
@@ -520,23 +691,19 @@ export const runStrategyTool = defineTool({
           ? [item]
           : [],
       );
-      if (input.mode === 'scan' && input.asOf === undefined) {
-        // dataAsOf 取每个候选所需事实的最新观测时间中的最保守值；
-        // lookback 内更早的 bar 是计算输入，不应把运行时点倒退到窗口起点。
-        const observedTimes = preparedStocks.flatMap((item) => [
-          ...(item.quote === undefined ? [] : [item.quote.ts.getTime()]),
-          ...(item.bars.at(-1) === undefined ? [] : [item.bars.at(-1)?.date.getTime() as number]),
-        ]);
-        const oldestObserved = Math.min(...observedTimes);
-        if (Number.isFinite(oldestObserved)) dataAsOf = new Date(oldestObserved);
-      }
       const metaByStock = needsDerivedMeta
         ? deriveStrategyMetaByStock(
-            preparedStocks.map((item) => ({
-              stockId: item.stockId,
-              industry: activeById.get(item.stockId)?.industry,
-              bars: item.bars,
-            })),
+            preparedStocks.map((item) => {
+              const stock = activeById.get(item.stockId);
+              const limitUpLadder =
+                stock === undefined ? undefined : limitUpLadderByCode.get(stock.code);
+              return {
+                stockId: item.stockId,
+                industry: stock?.industry,
+                bars: item.bars,
+                ...(limitUpLadder === undefined ? {} : { limitUpLadder }),
+              };
+            }),
           )
         : new Map<string, Readonly<Record<string, unknown>>>();
       const successful: StrategyStockEvaluation[] = preparedStocks.map((item) => {
@@ -688,7 +855,6 @@ export const runStrategyTool = defineTool({
         universeCheckpointPresent:
           successfulSync !== null && (input.stockIds !== undefined || snapshotStocks.length > 0),
         acceptance,
-        requestedBy,
         decidedAt: finishedAt,
       });
       const run = StrategyRunSchema.parse({
@@ -706,6 +872,24 @@ export const runStrategyTool = defineTool({
                         provider:
                           input.mode === 'scheduled' ? 'checkpoint:daily-bars' : 'local:daily-bars',
                         ok: localProviderOk,
+                        ...(input.mode === 'scheduled' &&
+                        checkpointDailyBarsCoverage?.latencyMs !== undefined
+                          ? { latencyMs: checkpointDailyBarsCoverage.latencyMs }
+                          : {}),
+                      },
+                    ]
+                  : []),
+                ...(needsLimitUpLadder
+                  ? [
+                      {
+                        provider:
+                          input.mode === 'replay'
+                            ? 'historical:limit-up-ladder'
+                            : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
+                        ok: limitUpLadderProviderOk,
+                        ...(limitUpLadderErrorKind === undefined
+                          ? {}
+                          : { errorKind: limitUpLadderErrorKind }),
                       },
                     ]
                   : []),
@@ -719,6 +903,17 @@ export const runStrategyTool = defineTool({
                       {
                         provider: `${ctx.adapters.market.name}:daily-bars`,
                         ok: failures.length === 0,
+                      },
+                    ]
+                  : []),
+                ...(needsLimitUpLadder
+                  ? [
+                      {
+                        provider: ctx.limitUpLadder?.name ?? 'limit-up-ladder',
+                        ok: limitUpLadderProviderOk,
+                        ...(limitUpLadderErrorKind === undefined
+                          ? {}
+                          : { errorKind: limitUpLadderErrorKind }),
                       },
                     ]
                   : []),
@@ -773,6 +968,29 @@ export const runStrategyTool = defineTool({
                 },
               ]
             : []),
+          ...(needsLimitUpLadder
+            ? [
+                {
+                  capability: 'limit-up-ladder' as const,
+                  provider:
+                    input.mode === 'replay'
+                      ? 'historical:limit-up-ladder'
+                      : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
+                  requested: candidateIds.length,
+                  succeeded: limitUpLadderProviderOk ? candidateIds.length : 0,
+                  failed: 0,
+                  missing: limitUpLadderProviderOk ? 0 : candidateIds.length,
+                  fallbackUsed: false,
+                  freshness: limitUpLadderProviderOk
+                    ? ('fresh' as const)
+                    : ('unavailable' as const),
+                  ...(limitUpLadderDataAsOf === undefined
+                    ? {}
+                    : { dataAsOf: limitUpLadderDataAsOf }),
+                  errorKinds: limitUpLadderErrorKind === undefined ? [] : [limitUpLadderErrorKind],
+                },
+              ]
+            : []),
         ],
         summary: {
           schemaVersion: 4,
@@ -822,7 +1040,6 @@ export const runStrategyTool = defineTool({
             status: 'failed',
             universeCheckpointPresent: false,
             acceptance,
-            requestedBy,
             decidedAt: finishedAt,
           });
           const failed = StrategyRunSchema.parse({

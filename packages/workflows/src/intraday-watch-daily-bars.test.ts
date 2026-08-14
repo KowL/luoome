@@ -113,10 +113,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         source: 'intraday-test',
       },
     ]);
-    const r = await intradayWatchWorkflow.run(
-      { poolIds: ['p-change'], notify: false, seedTacticSources: false },
-      ctx,
-    );
+    const r = await intradayWatchWorkflow.run({ alertPlanIds: ['p-change'], notify: false }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggers).toHaveLength(1);
@@ -128,10 +125,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
   it('dailyBars 缺失：price-change 为 unknown，不使用 quote.open', async () => {
     const ctx = await setupCtx({ '600519.SH': 100 });
     // 不 seed dailyBars
-    const r = await intradayWatchWorkflow.run(
-      { poolIds: ['p-change'], notify: false, seedTacticSources: false },
-      ctx,
-    );
+    const r = await intradayWatchWorkflow.run({ alertPlanIds: ['p-change'], notify: false }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggers).toEqual([]);
@@ -164,10 +158,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         source: 'intraday-test',
       },
     ]);
-    const r = await intradayWatchWorkflow.run(
-      { poolIds: ['p-change'], notify: false, seedTacticSources: false },
-      ctx,
-    );
+    const r = await intradayWatchWorkflow.run({ alertPlanIds: ['p-change'], notify: false }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     // latest 取 95，change = 5.26% > 4% → 触发
@@ -189,10 +180,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         source: 'intraday-test',
       },
     ]);
-    const r = await intradayWatchWorkflow.run(
-      { poolIds: ['p-change'], notify: false, seedTacticSources: false },
-      ctx,
-    );
+    const r = await intradayWatchWorkflow.run({ alertPlanIds: ['p-change'], notify: false }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggers).toEqual([]);
@@ -228,10 +216,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
       createdAt: T0,
       updatedAt: T0,
     });
-    const r = await intradayWatchWorkflow.run(
-      { poolIds: ['p-change'], notify: false, seedTacticSources: false },
-      ctx,
-    );
+    const r = await intradayWatchWorkflow.run({ alertPlanIds: ['p-change'], notify: false }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggers).toEqual([]);
@@ -252,10 +237,7 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
         source: 'intraday-test',
       },
     ]);
-    const r = await intradayWatchWorkflow.run(
-      { poolIds: ['p-change'], notify: false, seedTacticSources: false },
-      ctx,
-    );
+    const r = await intradayWatchWorkflow.run({ alertPlanIds: ['p-change'], notify: false }, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggers).toEqual([]);

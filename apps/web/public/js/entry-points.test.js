@@ -37,6 +37,15 @@ describe('侧栏与路由结构', () => {
   });
 });
 
+describe('Advice 安全提示', () => {
+  it('顶栏下固定显示投资免责声明', () => {
+    expect(html).toContain('class="advice-disclaimer-banner"');
+    expect(html).toContain('本建议由 AI 生成，不构成投资建议。');
+    expect(html).toContain('投资有风险，决策需自行承担。');
+    expect(read('../style.css')).toContain('position: sticky');
+  });
+});
+
 describe('行情页入口', () => {
   it('行情页搜索容器保留（页内换股票）', () => {
     expect(html).toContain('id="market-search"');

@@ -12,8 +12,9 @@ import { InvariantError } from '../error/index.js';
  * - `board` 由 code 前缀派生（与策略预警 §5.2 一致）：主板 / 创业板 / 科创板 / 北交所；科创板与北交所默认被过滤
  * - `uncategorized` 区分两种来源缺失：数据源未给 `level` 字段 / 跨日 reorg 后无法判定
  *
- * 不落库：manager 自身缓存已满足下游引用需求；落库留作 Phase 3 策略预警需要"历史快照比对"时另立任务
- * （设计文档 §6）。
+ * manager 的实时返回仍是当前查询入口；生产 scan/scheduled 会把同一份真实结果写入
+ * `LimitUpLadderSnapshotRepository`，供历史 replay 按交易日读取。快照不由 replay 现场抓取，
+ * 也不把当前快照推断成历史事实。
  */
 
 // ---------- 枚举与基础类型 ----------

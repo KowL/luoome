@@ -7,6 +7,7 @@ export const RunStrategiesInput = z.object({
   strategyIds: z.array(z.string().min(1)).optional(),
   mode: z.enum(['manual', 'scheduled']).default('manual'),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
+  concurrency: z.number().int().min(1).max(64).default(8),
   persist: z.boolean().default(true),
 });
 export type RunStrategiesInputT = z.infer<typeof RunStrategiesInput>;
@@ -44,7 +45,12 @@ const runAll: WorkflowStep = async (previous, ctx) => {
   for (const strategyId of ids) {
     let dataCheckpointId: string | undefined;
     if (input.mode === 'scheduled') {
-      const prepared = await ctx.tools.prepare_strategy_data.execute({ strategyId });
+      const prepared = await ctx.tools.prepare_strategy_data.execute({
+        strategyId,
+        cachePolicy: 'reuse-fresh',
+        concurrency: input.concurrency,
+        ...(input.stockIds === undefined ? {} : { stockIds: input.stockIds }),
+      });
       if (!prepared.ok) {
         const error =
           'message' in prepared.error
@@ -71,6 +77,7 @@ const runAll: WorkflowStep = async (previous, ctx) => {
       mode: input.mode === 'scheduled' ? 'scheduled' : 'scan',
       ...(input.stockIds === undefined ? {} : { stockIds: input.stockIds }),
       ...(dataCheckpointId === undefined ? {} : { dataCheckpointId }),
+      concurrency: input.concurrency,
       persist: input.persist,
     });
     if (!result.ok) {

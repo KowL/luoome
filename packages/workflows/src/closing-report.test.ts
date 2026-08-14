@@ -1,4 +1,5 @@
 import type { AShareSentimentManagerLike, AShareSentimentSnapshot } from '@luoome/core';
+import { createWatchlistTool, syncWatchlistSourceTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -107,5 +108,48 @@ describe('closing-report workflow', () => {
     expect(
       JSON.stringify(result.data.report.sections.flatMap((section) => section.blocks)),
     ).not.toContain('买入');
+  });
+
+  it('从真实 Watchlist 变化工具生成分组变化表', async () => {
+    const ctx = await buildTestContext({
+      clock: () => now,
+      ashareSentiment: { fetch: async () => ({ ok: true, data: snapshot() }) },
+    });
+    const created = await createWatchlistTool.execute(
+      {
+        id: 'closing-watch',
+        name: '收盘观察',
+        kind: 'strategy',
+        membershipPolicy: 'synced',
+      },
+      ctx,
+    );
+    expect(created.ok).toBe(true);
+    const synced = await syncWatchlistSourceTool.execute(
+      {
+        watchlistId: 'closing-watch',
+        sourceKind: 'strategy',
+        sourceKey: 'strategy:closing',
+        status: 'complete',
+        candidates: [{ stockId: '600519.SH', reason: '收盘入选', evidence: ['fixture'] }],
+      },
+      ctx,
+    );
+    expect(synced.ok).toBe(true);
+
+    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const groupChanges = result.data.report.sections.find(
+      (section) => section.key === 'group-changes',
+    );
+    expect(groupChanges).toMatchObject({ status: 'complete', missingDimensions: [] });
+    expect(groupChanges?.blocks[0]).toMatchObject({
+      kind: 'table',
+      rows: [
+        { watchlist: '收盘观察', entered: 1, exited: 0, unchanged: 0, runs: 1, status: 'complete' },
+      ],
+    });
   });
 });

@@ -45,4 +45,5 @@ export const marketFromExchange = (exchange: Exchange): Market => {
 };
 
 /** v0.2 真实行情适配器覆盖范围（ROADMAP v0.2：A股 + 港股，不接美股）。 */
-export const V0_2_SUPPORTED_MARKETS: ReadonlySet<Market> = new Set<Market>(['cn-a', 'cn-hk']);
+/** Markets with a complete identity and data model in the current product scope. */
+export const SUPPORTED_MARKETS: ReadonlySet<Market> = new Set<Market>(['cn-a', 'cn-hk']);

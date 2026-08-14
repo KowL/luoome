@@ -61,6 +61,101 @@ describe('Web 信息架构', () => {
   });
 });
 
+describe('账户绩效 API', () => {
+  it('使用账户真实交易与行情事实计算每日估值，并要求 external opt-in', async () => {
+    const guarded = createWebApp(await buildTestContext(), { exposeExternal: false });
+    const denied = await guarded.fetch(
+      new Request(
+        `http://test/api/accounts/${TEST_ACCOUNT.id}/performance?from=2026-07-01&to=2026-07-03`,
+      ),
+    );
+    expect(denied.status).toBe(403);
+
+    const performanceApp = createWebApp(await buildTestContext(), { exposeExternal: true });
+    const missingRange = await performanceApp.fetch(
+      new Request(`http://test/api/accounts/${TEST_ACCOUNT.id}/performance`),
+    );
+    expect(missingRange.status).toBe(400);
+
+    const response = await performanceApp.fetch(
+      new Request(
+        `http://test/api/accounts/${TEST_ACCOUNT.id}/performance?from=2026-07-01&to=2026-07-03`,
+      ),
+    );
+    const body = (await response.json()) as {
+      readonly ok: boolean;
+      readonly data?: {
+        readonly accountId: string;
+        readonly valuation: readonly unknown[];
+        readonly completeness: string;
+      };
+    };
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      data: { accountId: TEST_ACCOUNT.id, completeness: 'complete' },
+    });
+    expect(body.data?.valuation.length).toBeGreaterThan(0);
+  });
+
+  it('提供不重新请求行情的绩效快照审计摘要', async () => {
+    const snapshotApp = createWebApp(await buildTestContext(), { exposeExternal: true });
+    const performance = await snapshotApp.fetch(
+      new Request(
+        `http://test/api/accounts/${TEST_ACCOUNT.id}/performance?from=2026-07-01&to=2026-07-03`,
+      ),
+    );
+    expect(performance.status).toBe(200);
+    const response = await snapshotApp.fetch(
+      new Request(`http://test/api/accounts/${TEST_ACCOUNT.id}/performance/snapshots?limit=10`),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: { snapshots: [{ accountId: TEST_ACCOUNT.id, valuationDays: 3 }] },
+    });
+    const audit = await snapshotApp.fetch(
+      new Request(
+        `http://test/api/accounts/${TEST_ACCOUNT.id}/performance/snapshot-audit?from=2026-07-01&to=2026-07-03`,
+      ),
+    );
+    expect(audit.status).toBe(200);
+    expect(await audit.json()).toMatchObject({
+      ok: true,
+      data: {
+        audit: {
+          accountId: TEST_ACCOUNT.id,
+          expectedTradingDays: 3,
+          observedTradingDays: 3,
+          completeness: 'complete',
+          missingDates: [],
+        },
+      },
+    });
+  });
+});
+
+describe('Strategy 可靠性汇总 API', () => {
+  it('通过只读 tool 暴露真实 WorkflowRun 门禁汇总', async () => {
+    const response = await app.fetch(
+      new Request(
+        'http://test/api/strategy/reliability-summary?targetTradingDays=2&limit=10&scheduleId=schedule-test',
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: {
+        workflowName: 'strategy-daily-cycle',
+        runCount: 0,
+        tradingDays: 0,
+        scheduleTradingDayKeys: {},
+        gate: { targetTradingDays: 2, ready: false },
+      },
+    });
+  });
+});
+
 describe('研究 Vault API', () => {
   it('按主题和显式股票 SubjectLink 查询可重建索引', async () => {
     const now = new Date('2026-08-01T00:00:00.000Z');
@@ -425,7 +520,7 @@ describe('行情源设置 API', () => {
       const initialPayload = await initial.json();
       expect(initialPayload).toMatchObject({
         ok: true,
-        data: { activeOrder: ['eastmoney', 'tencent'] },
+        data: { activeOrder: ['eastmoney', 'tencent', 'sina'] },
       });
       expect(JSON.stringify(initialPayload)).not.toContain('secret-market-key');
 
@@ -851,6 +946,113 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(await insight.json()).toMatchObject({
       ok: true,
       data: { provider: 'fake-llm', insight: { findings: [{ factRefs: ['runs:window'] }] } },
+    });
+  });
+
+  it('POST /api/strategies/:id/backtests 持久化隔离的历史模拟并返回区间汇总', async () => {
+    const strategyId = 'web-strategy-backtest';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: 'Web Backtest Strategy',
+            description: '验证历史模拟回测入口',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const versionResponse = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/versions`, {
+        definition: {
+          schemaVersion: 1,
+          metadata: { horizon: 'short' },
+          universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+          selection: {
+            logic: 'all',
+            rules: [
+              {
+                id: 'positive-price',
+                name: '价格有效',
+                when: 'quote.close > 0',
+                evidence: ['价格有效'],
+              },
+            ],
+          },
+          signals: { entry: [], exit: [], risk: [] },
+        },
+      }),
+    );
+    const versionBody = (await versionResponse.json()) as {
+      data?: { version?: { id: string } };
+    };
+    const versionId = versionBody.data?.version?.id;
+    expect(versionId).toBeString();
+    if (versionId === undefined) return;
+    expect(
+      (await app.fetch(targetRequest(`/api/strategies/${strategyId}/validate`, { versionId })))
+        .status,
+    ).toBe(200);
+    expect(
+      (await app.fetch(targetRequest(`/api/strategies/${strategyId}/publish`, { versionId })))
+        .status,
+    ).toBe(200);
+
+    const response = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/backtests`, {
+        versionId,
+        from: '2026-08-09',
+        to: '2026-08-09',
+      }),
+    );
+
+    expect(response.status).toBe(202);
+    const queued = (await response.json()) as {
+      readonly data?: { readonly sessionId?: string };
+    };
+    expect(queued.data?.sessionId).toBeString();
+    if (queued.data?.sessionId === undefined) return;
+    let snapshot: { readonly ok: boolean; readonly data?: { readonly status?: string } } = {
+      ok: false,
+    };
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const status = await app.fetch(
+        new Request(`http://test/api/strategies/${strategyId}/backtests/${queued.data.sessionId}`),
+      );
+      snapshot = (await status.json()) as typeof snapshot;
+      if (snapshot.data?.status !== 'running') break;
+      await Bun.sleep(5);
+    }
+    expect(snapshot).toMatchObject({
+      ok: true,
+      data: {
+        status: 'complete',
+        summary: {
+          tradingDays: 0,
+          completedDays: 0,
+          failedDays: 0,
+          evaluatedCount: 0,
+          selectedCount: 0,
+          signalCount: 0,
+        },
+        days: [],
+      },
+    });
+    const runs = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/runs?scope=operational`),
+    );
+    expect(await runs.json()).toMatchObject({ ok: true, data: { runs: [] } });
+
+    const tooLong = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/backtests`, {
+        from: '2026-07-01',
+        to: '2026-08-01',
+      }),
+    );
+    expect(tooLong.status).toBe(400);
+    expect(await tooLong.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input', message: '历史模拟参数无效' },
     });
   });
 
@@ -1323,6 +1525,34 @@ describe('web tool 闸口：能力开关', () => {
       }),
     );
     expect(restored.status).toBe(200);
+  });
+
+  it('浏览器账户 header 使用 request-scoped 上下文，不串扰并发 tab', async () => {
+    const accountId = `web-scoped-${globalThis.crypto.randomUUID()}`;
+    const created = await callTool('create_account', {
+      id: accountId,
+      name: 'Web request scoped account',
+      currency: 'CNY',
+      initialCapital: 50_000,
+    });
+    expect(created.status).toBe(200);
+
+    const [first, second] = await Promise.all([
+      app.fetch(
+        new Request('http://test/api/holdings', {
+          headers: { 'x-luoome-account-id': accountId },
+        }),
+      ),
+      app.fetch(
+        new Request('http://test/api/holdings', {
+          headers: { 'x-luoome-account-id': TEST_ACCOUNT.id },
+        }),
+      ),
+    ]);
+    const firstBody = (await first.json()) as { data: { accountId: string } };
+    const secondBody = (await second.json()) as { data: { accountId: string } };
+    expect(firstBody.data.accountId).toBe(accountId);
+    expect(secondBody.data.accountId).toBe(TEST_ACCOUNT.id);
   });
 
   it('add_trade（buy）加仓 → 200 且数量累加', async () => {

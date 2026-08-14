@@ -7,6 +7,8 @@ import type {
   DailyBar,
   Holding,
   Notification,
+  PortfolioCashFlow,
+  PortfolioCorporateAction,
   Quote,
   Report,
   RepositoryRegistry,
@@ -28,7 +30,13 @@ import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
 import { InMemoryHoldingRepository } from './holding.js';
+import { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 import { InMemoryNotificationRepository } from './notification.js';
+import {
+  InMemoryPortfolioCashFlowRepository,
+  InMemoryPortfolioCorporateActionRepository,
+} from './portfolio-performance.js';
+import { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 import { InMemoryQuoteRepository } from './quote.js';
 import { InMemoryReportRepository } from './report.js';
 import { InMemoryResearchIndexRepository } from './research-index.js';
@@ -56,7 +64,13 @@ export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
 export { InMemoryHoldingRepository } from './holding.js';
+export { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 export { InMemoryNotificationRepository } from './notification.js';
+export {
+  InMemoryPortfolioCashFlowRepository,
+  InMemoryPortfolioCorporateActionRepository,
+} from './portfolio-performance.js';
+export { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 export { InMemoryQuoteRepository } from './quote.js';
 export { InMemoryReportRepository } from './report.js';
 export { InMemoryResearchIndexRepository } from './research-index.js';
@@ -84,6 +98,8 @@ export interface InMemorySeed {
   readonly stocks?: readonly Stock[];
   readonly holdings?: readonly Holding[];
   readonly trades?: readonly Trade[];
+  readonly portfolioCashFlows?: readonly PortfolioCashFlow[];
+  readonly portfolioCorporateActions?: readonly PortfolioCorporateAction[];
   readonly advices?: readonly Advice[];
   readonly chatSessions?: readonly ChatSession[];
   readonly chatMessages?: readonly ChatMessage[];
@@ -109,8 +125,12 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const account = new InMemoryAccountRepository();
   const stock = new InMemoryStockRepository();
   const stockUniverse = new InMemoryStockUniverseRepository(stock);
+  const limitUpLadderSnapshot = new InMemoryLimitUpLadderSnapshotRepository();
   const holding = new InMemoryHoldingRepository();
   const trade = new InMemoryTradeRepository();
+  const portfolioCashFlow = new InMemoryPortfolioCashFlowRepository();
+  const portfolioCorporateAction = new InMemoryPortfolioCorporateActionRepository();
+  const portfolioPerformanceSnapshot = new InMemoryPortfolioPerformanceSnapshotRepository();
   const advice = new InMemoryAdviceRepository();
   const report = new InMemoryReportRepository();
   const chat = new InMemoryChatRepository();
@@ -140,6 +160,9 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const s of seed.stocks ?? []) stock.put(s);
     for (const h of seed.holdings ?? []) holding.put(h);
     for (const t of seed.trades ?? []) trade.put(t);
+    for (const flow of seed.portfolioCashFlows ?? []) void portfolioCashFlow.save(flow);
+    for (const action of seed.portfolioCorporateActions ?? [])
+      void portfolioCorporateAction.save(action);
     for (const adv of seed.advices ?? []) advice.put(adv);
     for (const r of seed.reports ?? []) report.put(r);
     for (const session of seed.chatSessions ?? []) chat.putSession(session);
@@ -162,8 +185,12 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     account,
     stock,
     stockUniverse,
+    limitUpLadderSnapshot,
     holding,
     trade,
+    portfolioCashFlow,
+    portfolioCorporateAction,
+    portfolioPerformanceSnapshot,
     advice,
     report,
     quote,

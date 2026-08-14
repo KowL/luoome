@@ -31,8 +31,11 @@ import {
   ChatSessionSchema,
   DailyBarSchema,
   HoldingSchema,
+  LimitUpLadderSchema,
   MembershipSnapshotSchema,
   NotificationSchema,
+  PortfolioCashFlowSchema,
+  PortfolioCorporateActionSchema,
   QuoteSchema,
   ReportSchema,
   ResearchDocumentChunkSchema,
@@ -75,7 +78,14 @@ export const DATA_TRANSFER_CATEGORIES = [
 export type DataTransferCategory = (typeof DATA_TRANSFER_CATEGORIES)[number];
 
 const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>> = {
-  portfolio: ['accounts', 'stocks', 'holdings', 'trades'],
+  portfolio: [
+    'accounts',
+    'stocks',
+    'holdings',
+    'trades',
+    'portfolio_cash_flows',
+    'portfolio_corporate_actions',
+  ],
   strategies: [
     'stocks',
     'strategies',
@@ -111,6 +121,7 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'stock_universe_sync_runs',
     'price_snapshots',
     'daily_bars',
+    'limit_up_ladder_snapshots',
     'stock_events',
   ],
   research: [
@@ -248,6 +259,8 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
     return { ...omitNulls(row), closedAt: row.closedAt };
   }),
   trades: domainValidator(TradeSchema, assertTradeInvariants),
+  portfolio_cash_flows: domainValidator(PortfolioCashFlowSchema),
+  portfolio_corporate_actions: domainValidator(PortfolioCorporateActionSchema),
   strategies: domainValidator(StrategySchema, assertStrategyInvariants),
   strategy_versions: domainValidator(StrategyVersionSchema, (value) =>
     assertStrategyVersionInvariants(value, 'migration'),
@@ -296,6 +309,7 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   stock_universe_sync_runs: domainValidator(stockUniverseSyncRunSchema),
   price_snapshots: domainValidator(QuoteSchema),
   daily_bars: domainValidator(DailyBarSchema),
+  limit_up_ladder_snapshots: domainValidator(LimitUpLadderSchema),
   stock_events: domainValidator(StockEventSchema, assertStockEventInvariants),
   research_topic_index: domainValidator(ResearchTopicIndexSchema),
   research_document_index: domainValidator(ResearchDocumentIndexSchema),

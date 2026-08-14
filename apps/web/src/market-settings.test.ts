@@ -26,13 +26,14 @@ afterEach(() => {
 });
 
 describe('MarketSettingsStore', () => {
-  it('默认启用 Eastmoney → Tencent，并标记未配置的 Tushare', () => {
+  it('默认启用 Eastmoney → Tencent → Sina，并标记未配置的 Tushare', () => {
     const { store } = createStore();
     expect(store.read()).toMatchObject({
-      activeOrder: ['eastmoney', 'tencent'],
+      activeOrder: ['eastmoney', 'tencent', 'sina'],
       sources: [
         { id: 'eastmoney', enabled: true, priority: 1, configured: true },
         { id: 'tencent', enabled: true, priority: 2, configured: true },
+        { id: 'sina', enabled: true, priority: 3, configured: true },
         {
           id: 'tushare',
           enabled: false,

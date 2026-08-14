@@ -128,6 +128,65 @@ describe('AShareSentimentManager', () => {
     expect(result.data.breadth.status).toBe('unavailable');
   });
 
+  it('只用完整真实行情快照计算市场宽度', async () => {
+    const market = {
+      fetchMarketSnapshotEnvelope: vi.fn(async () => ({
+        source: 'eastmoney',
+        coverage: 'CN_A_SHARES_SH_SZ' as const,
+        fetchedAt: now,
+        items: [
+          {
+            id: '000001.SZ',
+            code: '000001',
+            exchange: 'SZ' as const,
+            name: '平安银行',
+            changePct: 1.2,
+          },
+          {
+            id: '600000.SH',
+            code: '600000',
+            exchange: 'SH' as const,
+            name: '浦发银行',
+            changePct: -0.4,
+          },
+          {
+            id: '600519.SH',
+            code: '600519',
+            exchange: 'SH' as const,
+            name: '贵州茅台',
+            changePct: 0,
+          },
+        ],
+        completeness: {
+          expectedCount: 3,
+          receivedCount: 3,
+          missingCount: 0,
+          duplicateCount: 0,
+          complete: true,
+        },
+      })),
+    };
+    const manager = new AShareSentimentManager({
+      sources: [source()],
+      clock: () => now,
+      logger,
+      market: market as never,
+    });
+
+    const result = await manager.fetch({
+      date: '2026-07-28',
+      coverage: 'CN_A_SHARES_SH_SZ',
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.breadth).toMatchObject({
+      status: 'complete',
+      value: { advancing: 1, declining: 1, unchanged: 1, total: 3 },
+    });
+    expect(market.fetchMarketSnapshotEnvelope).toHaveBeenCalledTimes(1);
+  });
+
   it('炸板端点失败时标 partial 且不携带无法完整表达的 limitUp value', async () => {
     const manager = new AShareSentimentManager({
       sources: [source(false)],

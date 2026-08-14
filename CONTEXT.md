@@ -21,15 +21,17 @@ StrategySignal 是可供后续观察的信号。Signal 不等于 Advice，更不
 StrategyRun 的 `status` 只表达执行生命周期：`running / complete / failed`。`complete` 表示执行已结束且
 结果包已原子提交，不要求每只股票的数据都可用；数据覆盖质量由 Summary 的
 `dataHealth=complete / partial / unavailable` 与失败计数表达。存量 `status=partial` 只作为旧记录读取，
-语义等同“执行已完成、数据部分可用”。当前股票池使用最近一次结果可用的完成运行中
-`selected=true` 的 StrategyResult。股票进入策略股票池后，其后续事实链仍归 Strategy：
+语义等同“执行已完成、数据部分可用”。新的当前股票池只消费通过 acceptance 且
+`publication=published` 的 operational run；evaluation、withheld 和 non-publishing 运行不会覆盖当前事实。
+股票进入策略股票池后，其后续事实链仍归 Strategy：
 StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5/T+20
 观察）→ Advice（建议快照）。关注列表不承载这条生命周期状态。
 
-> 可靠性演进（尚未实现，2026-08-11 冻结目标）：`complete` 将继续只表达执行终态；新增
-> acceptance 与 `publication=published/withheld/non-publishing`。当前股票池只读取 published
-> operational run，replay/backtest/显式子集不发布。详细迁移见
-> [Strategy 日运行与历史评估可靠性详细设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
+> 可靠性实现（2026-08-14）：`complete` 继续只表达执行终态；acceptance 与
+> `publication=published/withheld/non-publishing` 独立表达发布资格。生产 daily cycle 使用
+> heartbeat + fencing token、checkpoint、观察补全和 facts-only 降级；replay/backtest/显式子集不发布。
+> 跨日性能样本与真实运行记录继续作为运营观测，不设置固定交易日数量的完成门禁。详细契约见
+> [Strategy 日运行与历史评估详细设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
 
 ### StrategySchedule
 
@@ -40,9 +42,9 @@ definitionHash。`luoome start` / Web 长期运行进程每分钟自动唤醒到
 最高排名、每轮上限和冷却时间调用 AI 生成可追溯 Advice；配置的 T+n 观察完成时可再次生成阶段建议，
 并可选择日志或飞书通知。推荐失败不回滚已提交的 StrategyRun，任何建议与通知都不会自动交易。
 
-可靠性目标把调度、数据准备、正式运行、观察补全、洞察和可选推荐收进一个有 WorkflowRun 审计的
-daily cycle；租约使用 heartbeat + fencing token。该目标完成前，现有固定租约和外部观察 cron 仍是
-实现事实。
+可靠性目标已落地为把调度、数据准备、正式运行、观察补全、洞察和可选推荐收进一个有 WorkflowRun
+审计的 daily cycle；租约使用 heartbeat + fencing token。外部观察 cron 只保留为幂等补偿任务，
+真实交易日的运行记录仍需持续积累，期间不扩大自动推荐或通知默认范围；样本数量不作为固定完成门禁。
 
 ### StrategyInsight
 
@@ -77,6 +79,14 @@ StrategySignal，不临时运行全市场 Strategy。
 
 指定沪深 A 股交易日的市场情绪事实集合。每个维度独立记录数据截止时间、来源与可用状态；
 数据不可用不等于正常零值。
+
+### LimitUpLadder 与历史 PIT 天梯
+
+`LimitUpLadder` 是指定 `Asia/Shanghai` 交易日的真实涨停梯队事实，`ladderLevel` 只表示当日快照中
+可审计的连板层级，不等于 Advice、收益概率或交易信号。交互式当前查询走真实 manager/cache；
+正式 Strategy scan/scheduled 将返回写入 `LimitUpLadderSnapshotRepository`，历史 replay 只读取同一
+交易日、同一来源的 PIT 快照。没有快照或历史字段缺失时必须返回 unknown/unavailable，不读取当前快照、
+情绪接口或 mock 推断历史事实。
 
 ### ResearchTopic / ResearchDocument
 

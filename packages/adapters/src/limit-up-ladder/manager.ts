@@ -68,7 +68,7 @@ const defaultIsHoliday = (d: Date, holidays: ReadonlyMap<number, ReadonlySet<str
   return holidays.get(year)?.has(ds) === true;
 };
 
-/** 内置 2026 A 股休市日（与 cli/holidays.ts 同步；缺 2027 是为了保持本文件自包含）。 */
+/** 直接构造 Manager 时的最小 fallback；生产 factory 会注入 core 的完整三层日历。 */
 const BUILTIN_HOLIDAYS_2026: ReadonlyMap<number, ReadonlySet<string>> = new Map<
   number,
   ReadonlySet<string>
@@ -110,8 +110,7 @@ const BUILTIN_HOLIDAYS_2026: ReadonlyMap<number, ReadonlySet<string>> = new Map<
 ]);
 
 const defaultHolidaysProvider = async (): Promise<ReadonlyMap<number, ReadonlySet<string>>> => {
-  // Phase 1 仅内置 2026；env 加载在 cli/holidays.ts，adapters 不能依赖 cli
-  // 真实运行：2027+ 用户需自己补（limitation 已在文档标注）
+  // 直接构造 Manager 主要用于测试；生产装配在 factory 中注入共享日历。
   if (process.env.LUOOME_A_SHARE_HOLIDAYS === undefined) return BUILTIN_HOLIDAYS_2026;
   const raw = process.env.LUOOME_A_SHARE_HOLIDAYS;
   if (raw === undefined || raw.trim() === '') return BUILTIN_HOLIDAYS_2026;

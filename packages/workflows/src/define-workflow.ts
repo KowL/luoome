@@ -8,6 +8,8 @@ import type {
   AnalyzeStrategyCandidateOutput,
   BatchQuoteInput,
   BatchQuoteOutput,
+  CancelStrategyEvaluationSessionInput,
+  CancelStrategyEvaluationSessionOutput,
   ClaimDueStrategySchedulesInput,
   ClaimDueStrategySchedulesOutput,
   CompleteStrategyObservationsInput,
@@ -28,6 +30,8 @@ import type {
   GenerateStrategyRecommendationsOutput,
   GetAccountInput,
   GetAccountOutput,
+  GetAccountPerformanceInput,
+  GetAccountPerformanceOutput,
   GetAdviceInput,
   GetAdviceOutput,
   GetAdviceStatsInput,
@@ -52,6 +56,8 @@ import type {
   GetStrategyInsightFactsOutput,
   GetStrategyPitUniverseInput,
   GetStrategyPitUniverseOutput,
+  GetStrategyRunInput,
+  GetStrategyRunOutput,
   GetStrategyScheduleInput,
   GetStrategyScheduleOutput,
   GetWatchlistInput,
@@ -82,6 +88,10 @@ import type {
   ListStrategyEvaluationDaysOutput,
   ListStrategyResultViewsInput,
   ListStrategyResultViewsOutput,
+  ListStrategyRunsInput,
+  ListStrategyRunsOutput,
+  ListWatchlistChangesInput,
+  ListWatchlistChangesOutput,
   ListWatchlistsInput,
   ListWatchlistsOutput,
   ListWatchRuleStatesInput,
@@ -92,6 +102,8 @@ import type {
   MarketOutlookOutput,
   PrepareStrategyDataInput,
   PrepareStrategyDataOutput,
+  ReconcileStaleWorkflowRunsInput,
+  ReconcileStaleWorkflowRunsOutput,
   RecordAdviceOutcomeInput,
   RecordAdviceOutcomeOutput,
   RecordStrategyEvaluationDayInput,
@@ -102,6 +114,8 @@ import type {
   RenderReportOutput,
   RenewStrategyScheduleClaimInput,
   RenewStrategyScheduleClaimOutput,
+  ResumeStrategyEvaluationSessionInput,
+  ResumeStrategyEvaluationSessionOutput,
   RunStrategyInput,
   RunStrategyOutput,
   SaveReportInput,
@@ -145,6 +159,7 @@ import {
   getWatchTriggerDeliveryStatsTool,
   listWatchRuleStatesTool,
   reconcileStaleStrategyRunsTool,
+  reconcileStaleWorkflowRunsTool,
   recordWatchRunTool,
   recordWorkflowRunTool,
   saveReportTool,
@@ -199,6 +214,10 @@ export interface WorkflowToolMap {
   readonly list_accounts: ToolAccessor<typeof ListAccountsInput, typeof ListAccountsOutput>;
   readonly list_alert_plans: ToolAccessor<typeof ListAlertPlansInput, typeof ListAlertPlansOutput>;
   readonly get_account: ToolAccessor<typeof GetAccountInput, typeof GetAccountOutput>;
+  readonly get_account_performance: ToolAccessor<
+    typeof GetAccountPerformanceInput,
+    typeof GetAccountPerformanceOutput
+  >;
   readonly list_holdings: ToolAccessor<typeof ListHoldingsInput, typeof ListHoldingsOutput>;
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
   readonly get_watchlist: ToolAccessor<typeof GetWatchlistInput, typeof GetWatchlistOutput>;
@@ -307,9 +326,22 @@ export interface WorkflowToolMap {
     typeof FinishStrategyEvaluationSessionInput,
     typeof FinishStrategyEvaluationSessionOutput
   >;
+  readonly resume_strategy_evaluation_session: ToolAccessor<
+    typeof ResumeStrategyEvaluationSessionInput,
+    typeof ResumeStrategyEvaluationSessionOutput
+  >;
+  readonly cancel_strategy_evaluation_session: ToolAccessor<
+    typeof CancelStrategyEvaluationSessionInput,
+    typeof CancelStrategyEvaluationSessionOutput
+  >;
   readonly get_strategy_evaluation_session: ToolAccessor<
     typeof GetStrategyEvaluationSessionInput,
     typeof GetStrategyEvaluationSessionOutput
+  >;
+  readonly get_strategy_run: ToolAccessor<typeof GetStrategyRunInput, typeof GetStrategyRunOutput>;
+  readonly list_strategy_runs: ToolAccessor<
+    typeof ListStrategyRunsInput,
+    typeof ListStrategyRunsOutput
   >;
   readonly list_strategy_evaluation_days: ToolAccessor<
     typeof ListStrategyEvaluationDaysInput,
@@ -328,6 +360,10 @@ export interface WorkflowToolMap {
     typeof RenewStrategyScheduleClaimOutput
   >;
   readonly list_watchlists: ToolAccessor<typeof ListWatchlistsInput, typeof ListWatchlistsOutput>;
+  readonly list_watchlist_changes: ToolAccessor<
+    typeof ListWatchlistChangesInput,
+    typeof ListWatchlistChangesOutput
+  >;
   /** workflow-only；不进入公共 registry/MCP discovery。 */
   readonly sync_watchlist_source: ToolAccessor<
     typeof SyncWatchlistSourceInput,
@@ -340,6 +376,11 @@ export interface WorkflowToolMap {
   readonly record_workflow_run: ToolAccessor<
     typeof RecordWorkflowRunInput,
     typeof RecordWorkflowRunOutput
+  >;
+  /** workflow-only；不进入公共 registry/MCP discovery。 */
+  readonly reconcile_stale_workflow_runs: ToolAccessor<
+    typeof ReconcileStaleWorkflowRunsInput,
+    typeof ReconcileStaleWorkflowRunsOutput
   >;
   readonly save_report: ToolAccessor<typeof SaveReportInput, typeof SaveReportOutput>;
   readonly render_report: ToolAccessor<typeof RenderReportInput, typeof RenderReportOutput>;
@@ -427,6 +468,7 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     recordWatchRunTool,
     recordWorkflowRunTool,
     reconcileStaleStrategyRunsTool,
+    reconcileStaleWorkflowRunsTool,
     saveReportTool,
     saveWatchTriggerTool,
     setReportDeliveryStatusTool,

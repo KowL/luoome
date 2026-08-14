@@ -294,6 +294,8 @@ export const portfolioSection = async (
   scope: ReportScope,
   now: Date,
   ctx: WorkflowContext,
+  asOfDate?: string,
+  performanceRange?: { readonly fromDate: string; readonly toDate: string },
 ): Promise<{ section: ReportSection; evidence: ReportEvidence[] }> => {
   const accountIds: string[] = [];
   if (scope.kind === 'account') {
@@ -315,6 +317,18 @@ export const portfolioSection = async (
   const results = await Promise.all(
     accountIds.map((accountId) => ctx.tools.list_holdings.execute({ accountId })),
   );
+  const performanceDate = asOfDate ?? dateInShanghai(now);
+  const performanceFrom = performanceRange?.fromDate ?? performanceDate;
+  const performanceTo = performanceRange?.toDate ?? performanceDate;
+  const performanceResults = await Promise.all(
+    accountIds.map((accountId) =>
+      ctx.tools.get_account_performance.execute({
+        accountId,
+        from: new Date(`${performanceFrom}T00:00:00.000Z`),
+        to: new Date(`${performanceTo}T00:00:00.000Z`),
+      }),
+    ),
+  );
   const successful = results.filter((result) => result.ok);
   if (successful.length === 0 && results.length > 0) {
     return unavailableSection(
@@ -327,18 +341,74 @@ export const portfolioSection = async (
     );
   }
   const values = successful.flatMap((result) => (result.ok ? [result.data] : []));
+  const successfulPerformance = performanceResults.filter((result) => result.ok);
+  const performanceValues = successfulPerformance.flatMap((result) =>
+    result.ok ? [result.data] : [],
+  );
+  const failedPerformanceAccounts = performanceResults.length - successfulPerformance.length;
+  const incompletePerformance = performanceValues.some(
+    (value) => value.completeness !== 'complete',
+  );
+  const ranged = performanceRange !== undefined;
+  const periodStartValues = performanceValues.map((value) => value.valuation.at(0)?.totalValue);
+  const periodEndValues = performanceValues.map((value) => value.valuation.at(-1)?.totalValue);
+  const allPeriodValuesAvailable = (values: readonly (number | undefined)[]): values is number[] =>
+    values.length > 0 &&
+    values.length === accountIds.length &&
+    values.every((value) => value !== undefined);
+  const periodStartValue = allPeriodValuesAvailable(periodStartValues)
+    ? periodStartValues.reduce((total, value) => total + value, 0)
+    : null;
+  const periodEndValue = allPeriodValuesAvailable(periodEndValues)
+    ? periodEndValues.reduce((total, value) => total + value, 0)
+    : null;
+  const periodValueChange =
+    periodStartValue === null || periodEndValue === null ? null : periodEndValue - periodStartValue;
+  const periodTwrValues = performanceValues.map((value) => value.twrPct);
+  const periodTwrPct = allPeriodValuesAvailable(periodTwrValues)
+    ? periodTwrValues.reduce((total, value) => total + value, 0)
+    : null;
+  const drawdownValues = performanceValues.map((value) => value.maxDrawdownPct);
+  const maxDrawdownPct = allPeriodValuesAvailable(drawdownValues)
+    ? Math.min(...drawdownValues)
+    : null;
   const evidence = [
     localEvidence('overnight-portfolio:0', 'overnight-portfolio', now, 'local/holdings'),
+    localEvidence(
+      'overnight-portfolio:performance',
+      'overnight-portfolio.performance',
+      now,
+      'tool/get_account_performance',
+    ),
   ];
-  const missingTodayPnl = values.some((value) => value.totalTodayPnl === null);
+  const missingTodayPnl = ranged ? false : values.some((value) => value.totalTodayPnl === null);
   const failedAccounts = results.length - successful.length;
-  const isPartial = missingTodayPnl || failedAccounts > 0;
+  const isPartial =
+    missingTodayPnl || failedAccounts > 0 || failedPerformanceAccounts > 0 || incompletePerformance;
   const missingDimensions = [
     ...(missingTodayPnl
       ? [missing('overnight-portfolio.previous-close', '部分持仓缺少可靠昨收', 'no_data')]
       : []),
     ...(failedAccounts > 0
       ? [missing('overnight-portfolio.accounts', `${failedAccounts} 个账户读取失败`, 'read_failed')]
+      : []),
+    ...(failedPerformanceAccounts > 0
+      ? [
+          missing(
+            'overnight-portfolio.performance',
+            `${failedPerformanceAccounts} 个账户绩效读取失败`,
+            'read_failed',
+          ),
+        ]
+      : []),
+    ...(incompletePerformance
+      ? [
+          missing(
+            'overnight-portfolio.valuation',
+            '部分估值日缺少行情，收益指标保持 unavailable',
+            'no_data',
+          ),
+        ]
       : []),
   ];
   return {
@@ -361,15 +431,63 @@ export const portfolioSection = async (
             },
             {
               key: 'totalValue',
-              label: '当前估值',
-              value: values.reduce((total, value) => total + Number(value.totalValue), 0),
+              label: ranged ? '期末估值' : '当前估值',
+              value: ranged
+                ? periodEndValue
+                : values.reduce((total, value) => total + Number(value.totalValue), 0),
             },
+            ...(ranged
+              ? [
+                  { key: 'periodStartValue', label: '期初估值', value: periodStartValue },
+                  { key: 'periodTwrPct', label: '区间 TWR', value: periodTwrPct, unit: '%' },
+                  {
+                    key: 'maxDrawdownPct',
+                    label: '区间最大回撤',
+                    value: maxDrawdownPct,
+                    unit: '%',
+                  },
+                ]
+              : []),
             {
               key: 'todayPnl',
-              label: '今日估值变化',
-              value: missingTodayPnl
-                ? null
-                : values.reduce((total, value) => total + Number(value.totalTodayPnl), 0),
+              label: ranged ? '区间估值变化' : '今日估值变化',
+              value: ranged
+                ? periodValueChange
+                : missingTodayPnl
+                  ? null
+                  : values.reduce((total, value) => total + Number(value.totalTodayPnl), 0),
+            },
+            {
+              key: 'totalPnl',
+              label: '账本总 PnL',
+              value:
+                performanceValues.length === 0 ||
+                performanceValues.some((value) => value.totalPnl === undefined)
+                  ? null
+                  : performanceValues.reduce((total, value) => total + Number(value.totalPnl), 0),
+            },
+            {
+              key: 'twrPct',
+              label: 'TWR',
+              value:
+                performanceValues.length === 0 ||
+                performanceValues.some((value) => value.twrPct === undefined)
+                  ? null
+                  : performanceValues.reduce((total, value) => total + Number(value.twrPct), 0),
+              unit: '%（账户合计仅作观察）',
+            },
+            {
+              key: 'benchmarkTwrPct',
+              label: 'Benchmark TWR',
+              value:
+                performanceValues.length === 0 ||
+                performanceValues.some((value) => value.benchmarkTwrPct === undefined)
+                  ? null
+                  : performanceValues.reduce(
+                      (total, value) => total + Number(value.benchmarkTwrPct),
+                      0,
+                    ),
+              unit: '%（未加权）',
             },
           ],
         },
@@ -551,7 +669,7 @@ const runOpeningReport = async (
         const [market, events, portfolio, plans, watchlists] = await Promise.all([
           attachLadderFacts(marketBase, marketDate, generatedAt, ctx),
           eventsSection(date, generatedAt, ctx),
-          portfolioSection(input.scope, generatedAt, ctx),
+          portfolioSection(input.scope, generatedAt, ctx, input.date),
           alertPlansSection(generatedAt, ctx),
           watchlistsSection(generatedAt, ctx),
         ]);

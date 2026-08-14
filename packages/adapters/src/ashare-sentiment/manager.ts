@@ -7,6 +7,8 @@ import {
   isHoliday,
   isWeekend,
   type Logger,
+  type MarketDataAdapterLike,
+  type MarketSnapshot,
 } from '@luoome/core';
 
 import type {
@@ -21,6 +23,8 @@ interface ManagerOptions {
   readonly clock: () => Date;
   readonly logger: Logger;
   readonly ttlMs?: number;
+  /** 真实全市场行情快照；宽度只在存在完整性信封时计算。 */
+  readonly market?: MarketDataAdapterLike;
 }
 
 interface SelectedPool {
@@ -193,7 +197,17 @@ export class AShareSentimentManager implements AShareSentimentManagerLike {
       pool: failedPool(now, 'network_error', 'no sentiment source returned broken pool'),
       provider: `${primaryName}/broken-board`,
     };
-    const snapshot = this.assemble(input.date, now, sealed, broken);
+    let marketSnapshot: MarketSnapshot | undefined;
+    if (this.options.market?.fetchMarketSnapshotEnvelope !== undefined) {
+      try {
+        marketSnapshot = await this.options.market.fetchMarketSnapshotEnvelope();
+      } catch (error) {
+        this.options.logger.warn('ashare sentiment market snapshot failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const snapshot = this.assemble(input.date, now, sealed, broken, marketSnapshot);
     this.cache.set(key, { snapshot, expiresAt: now.getTime() + this.ttlMs });
     return { ok: true, data: snapshot };
   }
@@ -203,6 +217,7 @@ export class AShareSentimentManager implements AShareSentimentManagerLike {
     now: Date,
     sealed: SelectedPool,
     broken: SelectedPool,
+    marketSnapshot?: MarketSnapshot,
   ): AShareSentimentSnapshot {
     const sealedEntries = sealed.pool.ok ? dedupe(sealed.pool.entries) : [];
     const sealedIds = new Set(sealedEntries.map((entry) => entry.stockId));
@@ -254,6 +269,41 @@ export class AShareSentimentManager implements AShareSentimentManagerLike {
     const dataAsOf =
       successfulObservedAt.length === 0 ? now : new Date(Math.min(...successfulObservedAt));
 
+    const breadthItems = marketSnapshot?.items.filter((item) => item.changePct !== undefined) ?? [];
+    const breadthComplete =
+      marketSnapshot?.completeness.complete && breadthItems.length === marketSnapshot.items.length;
+    const breadthStatus =
+      breadthItems.length === 0 ? 'unavailable' : breadthComplete ? 'complete' : 'partial';
+    const breadthWarnings = [
+      ...(marketSnapshot === undefined
+        ? ['market snapshot completeness envelope unavailable']
+        : []),
+      ...(marketSnapshot !== undefined && !marketSnapshot.completeness.complete
+        ? [
+            `market snapshot incomplete: expected=${marketSnapshot.completeness.expectedCount} received=${marketSnapshot.completeness.receivedCount}`,
+          ]
+        : []),
+      ...(marketSnapshot !== undefined && breadthItems.length < marketSnapshot.items.length
+        ? [
+            `breadth changePct missing for ${marketSnapshot.items.length - breadthItems.length} stocks`,
+          ]
+        : []),
+    ];
+    const breadthProvenance: DataProvenance =
+      marketSnapshot === undefined
+        ? unavailableProvenance(
+            'luoome/market-snapshot',
+            now,
+            'incomplete_coverage',
+            'market snapshot completeness envelope is unavailable',
+          )
+        : {
+            provider: marketSnapshot.source,
+            observedAt: marketSnapshot.observedAt ?? marketSnapshot.fetchedAt,
+            fetchedAt: marketSnapshot.fetchedAt,
+            freshness: marketSnapshot.observedAt === undefined ? 'unknown' : 'fresh',
+            ...(marketSnapshot.completeness.complete ? {} : { errorKind: 'partial_data' }),
+          };
     const snapshot: AShareSentimentSnapshot = {
       date,
       coverage: 'CN_A_SHARES_SH_SZ',
@@ -271,16 +321,19 @@ export class AShareSentimentManager implements AShareSentimentManagerLike {
         warnings: ['index quotes are composed by get_ashare_sentiment'],
       },
       breadth: {
-        status: 'unavailable',
-        provenance: [
-          unavailableProvenance(
-            'luoome/market-snapshot',
-            now,
-            'incomplete_coverage',
-            'market snapshot completeness envelope is unavailable',
-          ),
-        ],
-        warnings: ['market snapshot completeness envelope is unavailable'],
+        status: breadthStatus,
+        provenance: [breadthProvenance],
+        warnings: breadthWarnings,
+        ...(breadthItems.length > 0
+          ? {
+              value: {
+                advancing: breadthItems.filter((item) => (item.changePct ?? 0) > 0).length,
+                declining: breadthItems.filter((item) => (item.changePct ?? 0) < 0).length,
+                unchanged: breadthItems.filter((item) => (item.changePct ?? 0) === 0).length,
+                total: breadthItems.length,
+              },
+            }
+          : {}),
       },
       limitUp: {
         status: bothComplete ? 'complete' : oneComplete ? 'partial' : 'unavailable',

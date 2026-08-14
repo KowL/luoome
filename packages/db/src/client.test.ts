@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
+import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos, ensureSchema } from './client.js';
 import { makeAccount, makeReport } from './repository/contract-tests.js';
+import * as schema from './schema/index.js';
 import { accounts } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
@@ -77,6 +79,41 @@ describe('createDrizzleRepos / ensureSchema', () => {
       ensureSchema(handle.db);
       ensureSchema(handle.db);
       expect(await handle.repos.account.findById('acc-1')).not.toBeNull();
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('Drizzle schema 与 ensureSchema 的实际 SQLite 列和索引保持一致', () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const drizzleTableMarker = Symbol.for('drizzle:IsDrizzleTable');
+      const tables = Object.entries(schema).filter(
+        ([, value]) =>
+          value !== null &&
+          typeof value === 'object' &&
+          (value as Record<PropertyKey, unknown>)[drizzleTableMarker] === true,
+      );
+      expect(tables.length).toBeGreaterThanOrEqual(50);
+      for (const [exportName, table] of tables) {
+        const config = getTableConfig(table as Parameters<typeof getTableConfig>[0]);
+        const quotedTable = JSON.stringify(config.name);
+        const actualColumns = handle.db
+          .all<{ name: string }>(sql.raw(`PRAGMA table_info(${quotedTable})`))
+          .map((row) => row.name);
+        const expectedColumns = Object.values(config.columns).map((column) => column.name);
+        expect(actualColumns, `${exportName} columns`).toEqual(expectedColumns);
+
+        const actualIndexes = handle.db
+          .all<{ name: string }>(sql.raw(`PRAGMA index_list(${quotedTable})`))
+          .map((row) => row.name);
+        for (const index of config.indexes) {
+          if (index.config.name === undefined) continue;
+          expect(actualIndexes, `${exportName} index ${index.config.name}`).toContain(
+            index.config.name,
+          );
+        }
+      }
     } finally {
       handle.close();
     }

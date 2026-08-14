@@ -18,6 +18,7 @@ const DATASET_LABELS = {
   'realtime-index': '指数行情',
   'intraday-minutes': '分时',
   'market-snapshot': '市场快照',
+  'market-snapshot-envelope': '市场快照完整性',
 };
 
 const FRESHNESS_LABELS = {

@@ -4,7 +4,13 @@ export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
 export { DrizzleHoldingRepository } from './holding.js';
+export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 export { DrizzleNotificationRepository } from './notification.js';
+export {
+  DrizzlePortfolioCashFlowRepository,
+  DrizzlePortfolioCorporateActionRepository,
+} from './portfolio-performance.js';
+export { DrizzlePortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
 export { DrizzleResearchIndexRepository } from './research-index.js';

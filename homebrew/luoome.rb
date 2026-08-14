@@ -4,7 +4,7 @@
 # Homebrew formula for luoome — 本地优先的个人投资 advisor agent
 # (https://github.com/KowL/luoome).
 #
-# 用法（v0.8.0 默认从 git HEAD 构建，因为还没有稳定 release tarball）：
+# 用法（v0.9.0 默认从 git HEAD 构建，因为还没有稳定 release tarball）：
 #
 #   brew tap KowL/luoome
 #   brew install luoome                       # 默认 HEAD
@@ -20,11 +20,11 @@ class Luoome < Formula
   url "https://github.com/KowL/luoome.git",
       using: GitProxy,
       branch: "main"           # 显式 branch 字段，避免 GH archive 默认 main 时漏 tag
-  version "0.8.0"
+  version "0.9.0"
   revision 1
 
-  # v0.8.0 走 git build（HEAD 装当前 main）；待首个 release tag 后切到：
-  #   url "https://github.com/KowL/luoome/archive/refs/tags/v0.8.0.tar.gz"
+  # v0.9.0 走 git build（HEAD 装当前 main）；待首个 release tag 后切到：
+  #   url "https://github.com/KowL/luoome/archive/refs/tags/v0.9.0.tar.gz"
   #   sha256 "..."
 
   license "MIT"
@@ -61,7 +61,7 @@ class Luoome < Formula
   test do
     # smoke：跑 `luoome --help` 应该打印 COMMAND 列。
     output = shell_output("#{bin}/luoome --version 2>&1")
-    assert_match(/0\.5\.\d+/, output, "luoome --version 应打印 0.5.x 版本号")
+    assert_match(/0\.9\.0/, output, "luoome --version 应打印 0.9.0 版本号")
 
     # tools list 只读注册表，不初始化行情或 LLM。
     output = shell_output("#{bin}/luoome tools list 2>&1")

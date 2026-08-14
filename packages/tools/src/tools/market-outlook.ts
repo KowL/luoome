@@ -14,6 +14,8 @@ import {
   type AdviceLLMOutput,
   AdviceLLMSchema,
   computeValidUntil,
+  sanitizeAdviceReasoning,
+  sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
 
 const DAY_MS = 86_400_000;
@@ -155,7 +157,7 @@ export const marketOutlookTool = defineTool({
     const id = `mkt-${now.getTime().toString(36)}`;
     const validUntil = computeValidUntil(llm.horizon, now);
     const reasoning = AdviceReasoningSchema.parse({
-      ...llm.reasoning,
+      ...sanitizeAdviceReasoning(llm.reasoning),
       premise: `${input.theme ?? '全市场'} 平均涨跌 ${(avgChangePct * 100).toFixed(2)}% / 涨 ${advancers} / 跌 ${decliners}`,
     });
     const advice: Advice = {
@@ -166,7 +168,7 @@ export const marketOutlookTool = defineTool({
       confidence: llm.confidence,
       horizon: llm.horizon,
       reasoning,
-      risks: llm.risks,
+      risks: sanitizeAdviceRisks(llm.risks),
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'market_outlook',
       basedOn: {

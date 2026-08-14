@@ -1,7 +1,7 @@
 # Strategy 日运行与评估可靠性开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-11
+> 基线日期：2026-08-14；核心实现复核：2026-08-14
 > 适用范围：Strategy 的定时运行、当前股票池、SignalObservation、AI 洞察与历史评估
 > 详细设计：[Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md)
 
@@ -19,7 +19,7 @@
 1. 以 2026-07-01～2026-08-11 的 30 个交易日做隔离模拟，使用 500 只样本股票；
 2. 检查 2026-08-10、2026-08-11 的正式全市场运行、观察补全和 AI 洞察输出。
 
-关键事实如下：
+历史诊断事实如下（用于解释为什么建立本计划，不代表当前实现状态）：
 
 | 事实 | 结果 | 影响 |
 |---|---:|---|
@@ -28,8 +28,8 @@
 | T+1 完整样本 | 164；平均收益 -0.37% | 只能作为描述性事实 |
 | T+5 完整样本 | 157；平均收益 -1.78% | 需要继续观察并迭代定义 |
 | T+20 完整样本 | 58；平均收益 -4.95% | 样本未走完完整周期，不能下收益结论 |
-| 2026-08-10 正式运行 | 5,198 只；失败 0；incomplete 485；约 24 分钟 | 数据部分可用，但仍需验收门 |
-| 2026-08-11 正式运行 | 5,198 只；evaluated 1,976；failed 3,222；约 143 分钟 | 失败率约 62%，不应替换当前股票池 |
+| 2026-08-10 正式运行 | 5,198 只；失败 0；incomplete 485；约 24 分钟 | 历史诊断，促成当前 acceptance 门禁 |
+| 2026-08-11 正式运行 | 5,198 只；evaluated 1,976；failed 3,222；约 143 分钟 | 历史诊断，促成当前 checkpoint/失败预算 |
 | 正式运行固定租约 | 120 分钟 | 长运行可能在提交前失去互斥保护 |
 | 观察补全 | 2026-07-01 后没有成功的正式 workflow 记录；43 条正式观察仍 pending | 18:10 固定外部 cron 与长运行存在竞态 |
 | AI 洞察 | 模型输出结构/事实引用无效，被校验器拒绝 | 校验正确，但缺少事实型降级输出 |
@@ -40,18 +40,66 @@
 停牌/涨跌停可交易性、benchmark 与 point-in-time universe。因此以上数字不是严格回测结果，
 只用于发现运行和策略定义缺口。
 
+### 2.1 当前实现证据
+
+- R0～R4 核心实现已落地：Summary V4、scope/publication、fencing lease、daily cycle、AI
+  facts-only、bounded data preparation、checkpoint 与 provider latency 审计均已接入。
+- R1 memory/Drizzle contract 已覆盖 fake clock 三小时 schedule heartbeat、续租到期拒绝、释放后旧
+  claim 拒绝、run lease 重复 release，以及 owner/fence 接管提交边界。
+- R2 workflow 故障矩阵已覆盖数据准备 fail-fast、AI facts-only、观察阶段写入失败；后阶段失败时
+  已发布 StrategyRun 不回滚，WorkflowRun 保留 phase timings 与 publication 审计。
+- daily cycle 已在正式数据准备前通过 `list_strategy_runs` Tool 检查同一 schedule/交易日的已提交
+  operational scheduled run；重复 cron claim 释放并记录 `schedule-day-duplicate` skipped 审计，可靠性汇总不将
+  skipped claim 计为生产周期。
+- R4 同步 Tool 已有确定性 fault-injection 覆盖：连接重置按 `maxRetries` 有界重试、超时终止、
+  worker 并发不超过配置上限；生产 provider 仍只记录真实失败分布，不用测试 fixture 替代。
+- daily cycle 启动前通过 workflow-only `reconcile_stale_workflow_runs` 收敛进程中断遗留的旧
+  `WorkflowRun(status=running)`；仅处理超过调用方租约窗口的记录，近期任务保持 running。
+- 生产日 `strategy-daily-cycle` 已在数据准备前调用 `sync_stock_universe` 固化当日真实 PIT
+  snapshot；目录同步失败会释放 schedule lease 并结束为 failed，不使用旧 snapshot 继续发布；
+  显式历史 `asOf` 不触发实时目录同步。
+- 真实 Sina 全市场目录与日线已在独立 SQLite 完成 5,207/5,207 日线同步；重复准备覆盖
+  5,205/5,207，失败 0，缺口 2，无 mock/fallback。
+- 真实 replay smoke 已完成：`full-market-benchmark` 的 `600519.SH` 在 2026-08-13～14
+  两个交易日均完成；首日 `vintage=unavailable`、次日 `vintage=available`，两个 run 均为
+  evaluation/non-publishing，未进入 operational current。
+- 同一真实 SQLite 又完成 2026-08-13～14、500 只真实股票的 2 日 replay：2/2 天 complete，
+  evaluated=1,000、failed=0；逐日 StrategyRun 分别约 1 秒，首日 vintage unavailable、次日
+  available。对 2026-07-01～08-11 的 30 日请求则 30/30 因缺少对应日期 PIT universe 返回
+  `not_found`，未用当前快照或 mock 伪造历史版本。
+- 同一真实 SQLite 又完成 5,207 只全市场 replay：2026-08-13～14 两日 complete，累计
+  evaluated=10,414、selected=10,410、failed=0；两日全市场回放的 vintage 均为 `unavailable`（`available`
+  仅出现在既有 1 只/500 只子集证据）。期间修复 replay/数据准备对 PIT snapshot 查找时点不一致的问题：replay 传入
+  交易日日终的独立 `universeAsOf`，checkpoint 的 `dataAsOf` 仍是目标交易日；未用当前目录或 mock 补齐。
+- 真实 `strategy-daily-cycle` 已完成 2026-08-13/14 两个正式交易日周期；两周期均 `partial`
+  （AI facts-only）、publication=published、leaseRenewals=2、leaseLost=0、checkpoint coverage=99.94%。
+  data-prep phase P50/P95/max=521089/521103/521103ms，run phase P50/P95/max=1695/3059/3059ms。
+  stale WorkflowRun 仍保留审计，但可靠性门禁不把它当正式周期。另一次显式回放 2026-08-11 因缺少
+  PIT universe 诚实失败并保留审计，不能算作成功生产周期。
+- `get_strategy_reliability_summary` 将显式 `asOf` 历史尝试标记为 `historicalRunCount`，保留失败审计但
+  不计入正式周期状态、publication 或 `cycle-failed` 门禁；当前 2026-08-11 的 PIT 缺失失败因此不污染
+  2026-08-13/14 的正式汇总。
+- 可靠性汇总的 `since`/`until` 以 WorkflowRun 的 `inputSummary.dataAsOf` 为准，避免历史补跑因启动时间
+  落在查询区间内而被误计入生产门禁。
+- R7 观察聚合已统一使用 `stock-day-horizon` 描述性样本单位：同一股票、同一基准交易日、同一周期只
+  保留一个代表性 `SignalObservation`，优先保留 complete，统计的 `observationIds` 即为可追溯证据；
+  Tool、Web 和 AI facts 同时展示完整样本、唯一股票、缺失率、均值/中位数/P25/P75、超额收益、MFE/MAE、
+  benchmark 状态与观察截止时间，重复 signal-day 会在 facts limitations 中明确披露。
+- 当前不设置固定交易日数量的生产完成门禁；跨更多交易日 phase P50/P95/max、真实历史区间预算和
+  完整观察期继续作为运营观测与性能基线积累。
+
 ## 3. 优先级总览
 
 | 优先级 | 里程碑 | 目标 | 预计 |
 |---|---|---|---:|
-| P0 | R0 运行验收与生产/评估隔离 | 不让低覆盖或 replay 结果成为当前事实 | 3～4 日 |
-| P0 | R1 租约续期与所有权提交 | 长运行不重复、不越权提交 | 3～5 日 |
-| P0 | R2 日运行闭环与 AI 降级 | 调度、观察、洞察形成一次可审计周期 | 4～6 日 |
-| P1 | R3 指标与规则语义修正 | 消除伪 incomplete，提高规则解释深度 | 3～5 日 |
-| P1 | R4 全市场数据准备稳定化 | 降低 provider 抖动和运行时长 | 5～8 日 |
-| P1 | R5 早期突破 v2 试验 | 减少重复信号，增加退出/风险事实 | 4～6 日 + 真实观察期 |
-| P2 | R6 point-in-time 历史评估 | 可重放一段日期且不产生幸存者偏差 | 8～12 日 |
-| P2 | R7 观察统计增强 | benchmark、分组和样本相关性透明化 | 5～8 日 |
+| ✅ | R0 运行验收与生产/评估隔离 | publication、current 隔离与 acceptance | 已完成，持续真实运行观测 |
+| ✅ | R1 租约续期与所有权提交 | heartbeat、fence 与旧 owner 拒绝 | 已完成，待真实运行观察 |
+| ✅ | R2 日运行闭环与 AI 降级 | 可审计周期与 facts-only | 已完成，待连续观察 |
+| ✅ | R3 指标与规则语义修正 | 实际读取路径与 edge/cooldown | 已完成，待真实分布复核 |
+| ✅ | R4 全市场数据准备稳定化 | bounded pool、checkpoint、provider 审计 | 已完成，待跨日性能门禁 |
+| P1 | R5 早期突破 v2 试验 | 减少重复信号，增加退出/风险事实 | 真实 T+20 观察期 |
+| ✅ | R6 point-in-time 历史评估 | PIT snapshot、revision、range replay | 已完成，待真实长区间预算 |
+| ✅ | R7 观察统计增强 | benchmark、分组和样本相关性透明化 | 去重口径与跨界面展示已完成，待真实样本稳定性 |
 
 工期按单人或单 Agent 串行开发估算，不包含真实市场等待期。P0 完成前不扩大自动通知或
 StrategyRecommendationPolicy 的使用范围。
@@ -108,9 +156,9 @@ StrategyRecommendationPolicy 的使用范围。
 
 #### 验收
 
-- fake clock 下 3 小时运行持续续租且只能提交一次；
+- fake clock 下 3 小时运行持续续租且只能提交一次（memory/Drizzle contract 已覆盖）；
 - owner A 失租、owner B 以新 fence 接管后，A 的提交原子失败；
-- heartbeat 或 release 重复调用保持幂等；
+- heartbeat 或 release 重复调用保持幂等（run lease release 已覆盖，schedule 释放后旧 claim 被拒绝）；
 - SQLite DDL、Drizzle schema、memory 实现和 contract tests 同步。
 
 ### R2：日运行闭环与 AI 降级
@@ -119,20 +167,23 @@ StrategyRecommendationPolicy 的使用范围。
 
 1. 新增深的 workflow 模块 `strategy-daily-cycle`，通过 `ctx.tools.*` 依次编排：
    schedule claim → 数据检查/准备 → run → publication → 到期观察补全 → insight → 可选推荐/通知。
-2. 观察补全不再依赖“运行开始后固定 10 分钟”的外部 cron；日周期在 run 终态后执行一次，
+2. 生产日数据准备前先通过 `sync_stock_universe` 固化当日真实 PIT snapshot；同步失败直接释放
+   schedule lease 并失败，不用旧 snapshot 冒充当前目录；显式历史 `asOf` 只读取已有 snapshot。
+3. 观察补全不再依赖“运行开始后固定 10 分钟”的外部 cron；日周期在 run 终态后执行一次，
    独立 cron 只保留为幂等补偿任务。
-3. pending observation 改为最早到期/最老优先；同步失败记录 attempt/nextAttemptAt，防止新样本
+4. pending observation 改为最早到期/最老优先；同步失败记录 attempt/nextAttemptAt，防止新样本
    长期挤压旧样本或每天无界重试。
-4. 每个阶段写 WorkflowRun 摘要和 providerStatuses；后阶段失败不回滚已提交的 published run。
-5. `generate_strategy_insight` 保持严格 Zod 和 factRef 校验，增加一次有界修复重试。
-6. LLM 仍失败时输出 facts-only 洞察，WorkflowRun 标记 partial，并明确“AI 叙述不可用”；不得
+5. 每个阶段写 WorkflowRun 摘要和 providerStatuses；后阶段失败不回滚已提交的 published run。
+6. `generate_strategy_insight` 保持严格 Zod 和 factRef 校验，增加一次有界修复重试。
+7. LLM 仍失败时输出 facts-only 洞察，WorkflowRun 标记 partial，并明确“AI 叙述不可用”；不得
    伪造 narrative 或 Advice。
-7. 默认 notification 仅发送 published run 的事实摘要；Advice 仍由显式启用的
+8. 默认 notification 仅发送 published run 的事实摘要；Advice 仍由显式启用的
    recommendation policy 产生。
 
 #### 验收
 
 - 一个日周期的阶段、耗时、计数、接受/拒绝原因可追踪；
+- 正式周期缺 publication、checkpoint 或观察审计事实时，可靠性汇总必须阻塞，不得误报 ready；
 - T+1 到期观察最迟在下一次成功日周期中补齐；
 - insight 结构无效时仍返回确定性 facts，且记录 provider 和失败原因；
 - withheld/non-publishing run 不生成推荐、预警或生产通知；
@@ -229,8 +280,10 @@ StrategyRecommendationPolicy 的使用范围。
 
 #### 任务
 
-1. 同步明确版本的 benchmark 日线，完成 excess return 的事实计算；benchmark 缺失仍保持
-   unavailable。
+1. 同步明确版本的 benchmark 日线（当前数据集版本为
+   `000300.SH:qfq:daily:v1`），完成 excess return 的事实计算；benchmark 缺失仍保持
+   unavailable。生产日循环与补观察 workflow 均通过 `sync_daily_bars(scope=explicit)` 记录同步状态、来源、
+   bar 数和失败原因。
 2. 按首次 edge signal、行业、市场状态、score bucket 分组，避免把重复 signal-day 当独立样本。
 3. 同时展示样本数、唯一股票数、完整率、均值、中位数、分位数、MFE、MAE 和观察截止日。
 4. 最小样本不足时只展示描述性事实，不生成概率或收益承诺。
@@ -240,6 +293,9 @@ StrategyRecommendationPolicy 的使用范围。
 - 所有聚合都可回溯到 SignalObservation id；
 - benchmark 数据缺失不会回填 0；
 - 统计窗口、去重口径和缺失率在 Tool/Web/AI facts 中一致。
+
+当前实现验收：benchmark 同步在生产日循环和补观察 workflow 中均为显式步骤；同步失败不会阻止个股事实
+保存，但周期审计标记为 `partial`，观察行保留 `benchmarkStatus=unavailable`，不使用 mock 或 0 值替代。
 
 ## 7. 实施切片
 
@@ -271,9 +327,9 @@ StrategyRecommendationPolicy 的使用范围。
 
 ## 9. 完成判定
 
-P0 完成的判定不是“定时任务被触发”，而是连续 30 个交易日满足：每个到期 schedule 至多一个
+P0 完成的判定不是“定时任务被触发”，而是已具备可验证的可靠性闭环：每个到期 schedule 至多一个
 正式运行；长运行不失去租约；低覆盖运行不发布；到期观察能补齐；AI 故障仍有事实输出；每个阶段
-都有 WorkflowRun 审计。
+都有 WorkflowRun 审计。真实交易日样本继续用于运营观测，不设置固定数量的完成门禁。
 
 P1 完成后，早期突破 v2 才进入至少一个完整 T+20 真实观察周期。P2 完成前，任何历史区间结果
 都继续标记为“历史评估/描述性观察”，不得称为严格回测。
