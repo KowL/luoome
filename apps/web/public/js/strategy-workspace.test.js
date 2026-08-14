@@ -432,7 +432,6 @@ describe('模拟回测（历史回放）', () => {
     expect(node.textContent).toContain('版本不可用');
     expect(node.textContent).toContain('历史数据不可用');
   });
-
   it('后台快照只有 session.id 时仍显示评估会话，不渲染 undefined', () => {
     const node = buildBacktestResultContent({
       session: { id: 'evaluation-session-snapshot' },

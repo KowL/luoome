@@ -50,6 +50,7 @@ export * from './strategy/evaluator.js';
 export * from './strategy/expression.js';
 export * from './strategy/field-registry.js';
 export * from './strategy/observation-stats.js';
+export * from './strategy/prefilter.js';
 export * from './strategy/publication.js';
 export * from './strategy/result-view.js';
 export * from './strategy/run-diff.js';

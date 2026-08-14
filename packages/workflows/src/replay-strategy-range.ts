@@ -175,17 +175,29 @@ const replay: WorkflowStep = async (previous, ctx) => {
       const existing = previousDays.data.days.find(
         (day) => day.dataAsOf.toISOString() === dataAsOf.toISOString(),
       );
+      const detail =
+        existing?.runId === undefined
+          ? null
+          : await ctx.tools.get_strategy_run.execute({ runId: existing.runId });
+      if (detail !== null && !detail.ok) return detail;
+      const counts = detail === null ? null : runCounts(detail.data.run.summary);
       days.push({
         dataAsOf,
         status: 'complete',
         vintageStatus: existing?.vintageStatus ?? 'unavailable',
         ...(existing?.runId === undefined ? {} : { runId: existing.runId }),
-        ...(existing?.evaluatedCount === undefined
+        ...(existing?.evaluatedCount === undefined && counts?.evaluatedCount === undefined
           ? {}
-          : { evaluatedCount: existing.evaluatedCount }),
-        ...(existing?.selectedCount === undefined ? {} : { selectedCount: existing.selectedCount }),
-        ...(existing?.signalCount === undefined ? {} : { signalCount: existing.signalCount }),
-        ...(existing?.failedCount === undefined ? {} : { failedCount: existing.failedCount }),
+          : { evaluatedCount: existing?.evaluatedCount ?? counts?.evaluatedCount }),
+        ...(existing?.selectedCount === undefined && counts?.selectedCount === undefined
+          ? {}
+          : { selectedCount: existing?.selectedCount ?? counts?.selectedCount }),
+        ...(existing?.signalCount === undefined && counts?.signalCount === undefined
+          ? {}
+          : { signalCount: existing?.signalCount ?? counts?.signalCount }),
+        ...(existing?.failedCount === undefined && counts?.failedCount === undefined
+          ? {}
+          : { failedCount: existing?.failedCount ?? counts?.failedCount }),
       });
       cursor = new Date(cursor.getTime() + 86_400_000);
       continue;

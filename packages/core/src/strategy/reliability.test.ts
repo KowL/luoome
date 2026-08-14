@@ -4,12 +4,14 @@ import {
   assertExpressionSafety,
   assessStrategyRun,
   compileStrategyExpression,
+  compileStrategyQuotePrefilter,
   DslEvalError,
   decideStrategyRunPublication,
   decideStrategySignalEmission,
   normalizeLegacyStrategyRun,
   observeCrossingUp,
 } from '../index.js';
+import { money } from '../types/branded.js';
 
 const NOW = new Date('2026-08-12T00:00:00.000Z');
 
@@ -102,6 +104,44 @@ describe('Strategy reliability primitives', () => {
         emission: { mode: 'edge', cooldownTradingDays: 0 },
       }),
     ).toEqual({ emit: false, reason: 'rising-edge' });
+  });
+
+  it('quote prefilter only rejects conservatively decidable selection rules', () => {
+    const prefilter = compileStrategyQuotePrefilter({
+      schemaVersion: 1,
+      metadata: {},
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [
+          { id: 'price', name: '价格', when: 'quote.close > 10', evidence: ['价格'] },
+          {
+            id: 'trend',
+            name: '趋势',
+            when: 'indicators.close > indicators.ma20',
+            evidence: ['趋势'],
+          },
+        ],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    });
+    expect(prefilter.applicableRuleIds).toEqual(['price']);
+    expect(prefilter.skippedRuleIds).toEqual(['trend']);
+    expect(
+      prefilter.evaluate({
+        stockId: '600519.SH',
+        observedAt: NOW,
+        fetchedAt: NOW,
+        timestampSource: 'upstream',
+        ts: NOW,
+        open: money(9),
+        high: money(10),
+        low: money(8),
+        close: money(9),
+        volume: 1,
+        source: 'test',
+      }),
+    ).toEqual({ status: 'reject', rejectedBy: ['price'] });
   });
 
   it('cooldown counts trading days rather than weekends and exchange holidays', () => {
