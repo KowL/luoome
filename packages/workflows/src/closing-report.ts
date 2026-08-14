@@ -51,7 +51,7 @@ const accountPerformance = async (
   now: Date,
   ctx: WorkflowContext,
 ): Promise<ReportSectionPiece> => {
-  const piece = await portfolioSection(input.scope, now, ctx);
+  const piece = await portfolioSection(input.scope, now, ctx, input.date);
   return {
     evidence: piece.evidence.map((item) => ({
       ...item,
@@ -155,6 +155,130 @@ const adviceExpirySection = async (date: string, now: Date, ctx: WorkflowContext
   };
 };
 
+const groupChangesSection = async (date: string, now: Date, ctx: WorkflowContext) => {
+  const watchlists = await ctx.tools.list_watchlists.execute({ enabledOnly: true });
+  if (!watchlists.ok) {
+    return unavailableSection(
+      'group-changes',
+      '分组变化',
+      true,
+      now,
+      'group-changes.history',
+      watchlists.error.kind,
+    );
+  }
+
+  const evidence = [];
+  const missingDimensions = [];
+  const rows = [];
+  for (const item of watchlists.data.items) {
+    const changes = await ctx.tools.list_watchlist_changes.execute({
+      watchlistId: item.watchlist.id,
+      limit: 50,
+    });
+    if (!changes.ok) {
+      missingDimensions.push(
+        missing(
+          `group-changes.${item.watchlist.id}`,
+          `${item.watchlist.name} 的同步变化不可用`,
+          changes.error.kind,
+        ),
+      );
+      continue;
+    }
+    const runs = changes.data.runs.filter((entry) => {
+      const observedDates = [entry.run.dataAsOf, entry.run.finishedAt, entry.run.startedAt]
+        .filter((value): value is Date => value !== undefined)
+        .map(dateInShanghai);
+      return observedDates.includes(date);
+    });
+    evidence.push(
+      localEvidence(
+        `group-changes:${item.watchlist.id}`,
+        `group-changes.${item.watchlist.id}`,
+        now,
+        'tool/list_watchlist_changes',
+      ),
+    );
+    if (runs.length === 0) {
+      missingDimensions.push(
+        missing(
+          `group-changes.${item.watchlist.id}`,
+          `${item.watchlist.name} 在 ${date} 没有同步运行记录`,
+          'not_found',
+        ),
+      );
+      continue;
+    }
+    const entered = runs.reduce((sum, entry) => sum + entry.run.enteredCount, 0);
+    const exited = runs.reduce((sum, entry) => sum + entry.run.exitedCount, 0);
+    const unchanged = runs.reduce((sum, entry) => sum + entry.run.unchangedCount, 0);
+    const incompleteRuns = runs.filter((entry) => entry.run.status !== 'complete');
+    for (const entry of incompleteRuns) {
+      for (const dimension of entry.run.missingDimensions) {
+        missingDimensions.push({
+          ...dimension,
+          dimension: `group-changes.${item.watchlist.id}.${dimension.dimension}`,
+        });
+      }
+      if (entry.run.status === 'partial' && entry.run.missingDimensions.length === 0) {
+        missingDimensions.push(
+          missing(
+            `group-changes.${item.watchlist.id}`,
+            `${item.watchlist.name} 的同步运行仅部分完成`,
+            'incomplete_coverage',
+          ),
+        );
+      }
+      if (entry.run.status === 'failed' && entry.run.missingDimensions.length === 0) {
+        missingDimensions.push(
+          missing(
+            `group-changes.${item.watchlist.id}`,
+            `${item.watchlist.name} 的同步运行失败${entry.run.error === undefined ? '' : `：${entry.run.error}`}`,
+            'upstream_error',
+          ),
+        );
+      }
+    }
+    rows.push({
+      watchlist: item.watchlist.name,
+      entered,
+      exited,
+      unchanged,
+      runs: runs.length,
+      status: incompleteRuns.length === 0 ? 'complete' : 'partial',
+    });
+  }
+
+  const status = missingDimensions.length === 0 ? ('complete' as const) : ('partial' as const);
+  return {
+    evidence,
+    section: {
+      key: 'group-changes',
+      title: '分组变化',
+      required: true,
+      status,
+      dataAsOf: now,
+      blocks: [
+        {
+          kind: 'table' as const,
+          columns: [
+            { key: 'watchlist', label: '分组' },
+            { key: 'entered', label: '新增' },
+            { key: 'exited', label: '移出' },
+            { key: 'unchanged', label: '未变' },
+            { key: 'runs', label: '同步次数' },
+            { key: 'status', label: '状态' },
+          ],
+          rows,
+        },
+      ],
+      evidenceIds: evidence.map((item) => item.id),
+      missingDimensions,
+    },
+  };
+};
+
 const nextEventsSection = async (date: string, now: Date, ctx: WorkflowContext) => {
   const nextDate = nextTradingDay(date);
   const from = new Date(`${nextDate}T00:00:00+08:00`);
@@ -242,20 +366,13 @@ const runClosingReport = async (
               'ashare-sentiment',
               sentiment.error.kind,
             );
-        const [performance, triggers, adviceExpiry, nextEvents] = await Promise.all([
+        const [performance, triggers, groupChanges, adviceExpiry, nextEvents] = await Promise.all([
           accountPerformance(input, generatedAt, ctx),
           triggersSection(date, generatedAt, ctx),
+          groupChangesSection(date, generatedAt, ctx),
           adviceExpirySection(date, generatedAt, ctx),
           nextEventsSection(date, generatedAt, ctx),
         ]);
-        const groupChanges = unavailableSection(
-          'group-changes',
-          '分组变化',
-          true,
-          generatedAt,
-          'group-changes.history',
-          'not_implemented',
-        );
         return [market, performance, triggers, groupChanges, adviceExpiry, nextEvents];
       },
     },

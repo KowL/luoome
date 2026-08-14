@@ -8,7 +8,7 @@ import {
 } from './expression.js';
 
 export type StrategyFieldType = 'number' | 'boolean' | 'string';
-export type StrategyFieldDataSource = 'quote' | 'daily-bars' | 'meta';
+export type StrategyFieldDataSource = 'quote' | 'daily-bars' | 'meta' | 'limit-up-ladder';
 
 export interface StrategyFieldDefinition {
   readonly path: string;
@@ -124,6 +124,19 @@ const metaFields: readonly StrategyFieldDefinition[] = [
     unit: 'ratio',
     dataSource: 'daily-bars',
     requiredLookback: 4,
+  },
+  {
+    path: 'meta.limitUpLevel',
+    type: 'number',
+    unit: 'board',
+    dataSource: 'limit-up-ladder',
+    requiredLookback: 1,
+  },
+  {
+    path: 'meta.limitUpToday',
+    type: 'boolean',
+    dataSource: 'limit-up-ladder',
+    requiredLookback: 1,
   },
 ].map((field) => ({ ...field, availableForCoverage: coverage })) as StrategyFieldDefinition[];
 

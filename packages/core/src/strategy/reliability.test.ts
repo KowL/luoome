@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertExpressionSafety,
   assessStrategyRun,
   compileStrategyExpression,
   compileStrategyQuotePrefilter,
+  DslEvalError,
   decideStrategyRunPublication,
   decideStrategySignalEmission,
   normalizeLegacyStrategyRun,
@@ -14,6 +16,11 @@ import { money } from '../types/branded.js';
 const NOW = new Date('2026-08-12T00:00:00.000Z');
 
 describe('Strategy reliability primitives', () => {
+  it('把 DSL 禁用关键字归一为可识别的 DslEvalError', () => {
+    expect(() => assertExpressionSafety('globalThis.process')).toThrow(DslEvalError);
+    expect(() => assertExpressionSafety('globalThis.process')).toThrow(/globalThis/);
+  });
+
   it('compiled expressions short-circuit missing branches and keep three-valued results', () => {
     const falseAnd = compileStrategyExpression('selection.price > 10 && selection.missing > 0');
     const trueOr = compileStrategyExpression('selection.price > 10 || selection.missing > 0');

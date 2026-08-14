@@ -48,7 +48,7 @@ const FORBIDDEN_KEYWORDS = [
 export const assertExpressionSafety = (expr: string): void => {
   for (const kw of FORBIDDEN_KEYWORDS) {
     if (expr.includes(kw)) {
-      throw new Error(`战法表达式禁用关键字: "${kw}"`);
+      throw new DslEvalError(`战法表达式禁用关键字: "${kw}"`, expr);
     }
   }
 };

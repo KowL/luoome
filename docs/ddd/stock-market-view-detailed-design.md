@@ -1,7 +1,7 @@
 # 个股行情查看详细设计：Market View + Web 图表
 
 > 状态：Phase 1/2 已实施；Phase 3 的事实关联、图表标记与日期深链接已实施
-> 日期：2026-07-26
+> 日期：2026-08-14
 > 范围：个股实时快照、日 K、成交量、指标摘要、数据来源与新鲜度；不包含完整分时和分钟 K
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md) §6、[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)
 
@@ -105,22 +105,21 @@ Web 图表实现采用 `lightweight-charts@5.2.0`：
 | DailyBar repository | 同上 | 支持区间和最近 N 根 |
 | Eastmoney adapter | `packages/adapters/src/market/eastmoney.ts` | 实时快照 + 前复权日线 |
 | Tencent adapter | `packages/adapters/src/market/tencent.ts` | 实时快照 + 前复权日线 |
+| Sina adapter | `packages/adapters/src/market/sina.ts` | 沪深 A 股 qfq 日线；不声明实时快照能力 |
 | MarketDataManager | `packages/adapters/src/market/manager.ts` | 主源、备源、限速、Quote 60s 缓存、日线 1h 缓存 |
 | 技术指标 | `packages/tools/src/internal/indicators.ts` | MA、RSI、MACD、BOLL、成交量等 |
 | 股票搜索 | `search_stocks` / `/api/stocks/search` | 外部搜索失败回本地 Stock repository |
 | Web | Hono + 原生 HTML/CSS/ES modules | 无前端构建步骤 |
 
-### 4.2 必须处理的缺口
+### 4.2 已关闭缺口（截至 2026-08-14）
 
-1. `compute_indicators` 不返回日线，页面无法用它直接画图。
-2. `DailyBar` 没有 `source`，但 `daily_bars` 表有该列。
-3. Drizzle `DailyBarRepository.saveMany` 当前把 `source` 硬编码成 `eastmoney`，Tencent fallback 会被错误记录为主源。
-4. `MarketDataManager.fetchDailyBars` 只使用内存缓存，没有把结果写 repository。
-5. DailyBar 内存缓存使用精确 `start/end` 作为 key；若 end 使用每次变化的 `now`，命中率会很差。
-6. Quote 没有 `prevClose`；涨跌额和涨跌幅必须用上一交易日 DailyBar 推导。
-7. Eastmoney 返回成交额、昨收和涨跌幅，但当前 Quote 契约会丢弃；首期不因单一数据源扩张 Quote。
-8. Quote 的 `ts` 当前更接近本地抓取时间，不是交易所成交时间；UI 文案必须使用“获取于”，不能写成“成交于”。
-9. 研究页股票搜索当前使用 `query=`，服务端契约使用 `q=`；实施行情页时同步修复共享调用，避免两个搜索入口行为不一致。
+1. `get_stock_market_view` 在 Tool 内同时返回 candles、指标和数据状态，页面不再重复调用 `compute_indicators`。
+2. `DailyBar`、Drizzle 与 memory repository 均保留真实 `source`；批量 upsert 不以首行覆盖其它日期。
+3. 日线成功结果由行情查看 Tool 写入 repository，缓存键按规范化交易日区间复用。
+4. Quote 已支持可选 `prevClose`、成交额和换手率；缺失时仍由 Market View 从前复权日线推导昨收。
+5. `observedAt` / `fetchedAt` 区分上游观测和本地抓取，界面继续使用“获取于”而不是“成交于”。
+6. 股票搜索统一使用 `q` 契约；外部搜索失败时只回退本地事实，不生成样例股票。
+7. Sina 仅注册 `daily-bars` capability，真实源失败按 provider error 返回，不提供 mock 生产 fallback。
 
 ## 5. 端到端数据流
 
@@ -129,7 +128,7 @@ Web #market
   │
   ├─ GET /api/stocks/search?q=...
   │    └─ search_stocks
-  │         └─ MarketDataManager.searchStocks → Eastmoney → Tencent → local repo
+  │         └─ MarketDataManager.searchStocks → registered search sources → local repo
   │
   └─ POST /api/tools/get_stock_market_view/call
        └─ get_stock_market_view (external)
@@ -189,17 +188,11 @@ source: z.string().min(1)
 
 SQLite 已有 `daily_bars.source NOT NULL`，本次不新增列，也不需要存量迁移。`ensureSchema` DDL 保持不变。
 
-### 6.2 不修改 Quote
+### 6.2 Quote 的可选源字段与派生边界
 
-首期不向 Quote 增加：
-
-- `prevClose`；
-- `change` / `changePct`；
-- `amount`；
-- `turnoverRate`；
-- `bid` / `ask`。
-
-这些要么能从 Quote + DailyBar 推导，要么不是两个 adapter 都稳定支持。展示派生值属于 Market View read model，不是 Quote 不变量。
+Quote 已保留不同源能够稳定提供的可选 `prevClose`、`amount` 和 `turnoverRatePct`；`change` /
+`changePct` 仍属于 Market View read model。若 Quote 没有 `prevClose`，Tool 从上一交易日 qfq
+DailyBar 推导，不把缺失值填成 0，也不把单一源字段升级为强制领域不变量。
 
 ### 6.3 不新增 MarketView 领域实体
 
@@ -446,7 +439,9 @@ changePct = previousClose > 0 ? change / previousClose : null
 
 `marketSession` 由现有交易日历和 Asia/Shanghai 时间纯计算。午休是 `midday-break`，非交易日是 `non-trading-day`。收盘状态不等于数据 stale。
 
-当前固定数据源链是 Eastmoney → Tencent。只要成功数据中出现 `tencent`，追加 `provider-fallback`。若未来允许用户调整主源顺序，必须把 fallback metadata 提升到 `MarketDataManager` 的正式返回契约，不能继续按 source 名称推断。
+行情来源由 `LUOOME_MARKET_SOURCES` 和 capability registry 决定，默认顺序为 Eastmoney → Tencent → Sina。
+Sina 当前只绑定 `daily-bars`，因此不会被误用于实时快照或股票搜索。fallback metadata 必须来自
+实际返回的 provider，不按 source 名称硬编码。
 
 ## 9. Repository 与缓存
 
@@ -465,18 +460,14 @@ saveMany(bars)
 findInRange(stockId, from, to)
 ```
 
-修改 Drizzle `saveMany`：
+当前实现的 Drizzle `saveMany` 已使用 SQLite `excluded.column` 表达式完成批量 upsert：
 
 - 每根 bar 写自己的 `source`；
-- upsert 的 `set` 不能使用首行值覆盖整批其它行；
-- 批量内不同日期或来源必须逐条正确更新。
+- 冲突更新逐行读取对应 VALUES 的 OHLCV / adjustment / source，不会用首行覆盖整批其它行；
+- 批量内不同日期或来源逐条正确更新，并由 memory/Drizzle contract test 守住。
 
-当前实现从 `rows[0]` 构造统一 `set`，这会在批量 upsert 冲突时把首根 bar 的 OHLCV 写给其它日期。行情页扩大日线写入频率前必须先修复。可选实现：
-
-- 用逐条 `insert ... onConflictDoUpdate`，首期数据量最多 260，简单可靠；
-- 或使用 SQLite `excluded.column` 表达式完成真正批量 upsert。
-
-优先选择后者；若 Drizzle Bun SQLite 类型不稳定，选择逐条写入并由 contract test 守住正确性。
+此前从 `rows[0]` 构造统一 `set` 的实现已修复；后续修改 schema 或 upsert 字段时必须继续保留该
+逐行语义和对应 contract test。
 
 ### 9.3 缓存
 
@@ -807,7 +798,7 @@ bun run build
 
 ## 15. 分阶段实施
 
-### Phase 1：数据契约
+### Phase 1：数据契约（✅ 已完成）
 
 1. DailyBar 增加 source；
 2. 修复 Drizzle DailyBar 批量 upsert；
@@ -816,9 +807,9 @@ bun run build
 5. registry / Web external 白名单接线；
 6. Tool、repository 和 server tests。
 
-完成标准：CLI 调 Tool 能稳定返回真实 Quote、日 K、指标、来源和新鲜度。
+完成标准已满足：CLI / MCP / Web 调 Tool 可返回真实 Quote、日 K、指标、来源和新鲜度。
 
-### Phase 2：Web 页面
+### Phase 2：Web 页面（✅ 已完成）
 
 1. 接入固定版本 Lightweight Charts；
 2. 新增 `market-chart.js`；
@@ -827,9 +818,9 @@ bun run build
 5. 60 秒刷新与页面生命周期；
 6. 前端 tests 和真实浏览器验收。
 
-完成标准：用户能在 Web 搜索股票并可靠查看日 K，错误和 fallback 状态可见。
+完成标准已满足：用户能在 Web 搜索股票并查看日 K，错误和 fallback 状态可见。
 
-### Phase 3：场景联动
+### Phase 3：场景联动（✅ 已完成基础切片）
 
 1. 研究页、Advice、持仓股票代码链接到 `#market`；
 2. WatchTrigger / Trade / Advice 作为 chart marker；

@@ -13,12 +13,18 @@ import { join } from 'node:path';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createFileAuditLogger,
   createMarketAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
-import type { Logger, ToolContext } from '@luoome/core';
+import {
+  DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+  DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+  type Logger,
+  type ToolContext,
+} from '@luoome/core';
 import { createDrizzleRepos, ensureSchema } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
 
@@ -62,13 +68,14 @@ export const createServerContext = async (
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const now = (): Date => new Date();
   const researchVault = createResearchVaultAdapterFromEnv(env);
+  const market = createMarketAdapterFromEnv(env, {
+    clock: now,
+    logger,
+  });
   const ctx = buildContext({
     repos: handle.repos,
     adapters: {
-      market: createMarketAdapterFromEnv(env, {
-        clock: now,
-        logger,
-      }),
+      market,
       stockUniverse: createStockUniverseManagerFromEnv(env, {
         clock: now,
         logger,
@@ -76,10 +83,17 @@ export const createServerContext = async (
       llm: ai.llm,
     },
     agent: ai.agent,
+    portfolioBenchmark: {
+      stockId:
+        env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() || DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+      name: DEFAULT_PORTFOLIO_BENCHMARK_NAME,
+    },
     user: { id: 'local-user', defaultAccountId },
     clock: now,
     logger,
-    ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger }),
+    auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
+    auditCaller: 'mcp',
+    ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger, market }),
     ...(researchVault ? { researchVault } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
   });

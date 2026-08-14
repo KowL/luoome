@@ -1,4 +1,4 @@
-import type { AShareSentimentManagerLike, Logger } from '@luoome/core';
+import type { AShareSentimentManagerLike, Logger, MarketDataAdapterLike } from '@luoome/core';
 import { z } from 'zod';
 
 import { EastmoneyAShareSentimentAdapter } from './eastmoney.js';
@@ -8,6 +8,7 @@ export interface CreateAShareSentimentManagerDeps {
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
+  readonly market?: MarketDataAdapterLike;
 }
 
 export const createAShareSentimentManagerFromEnv = (
@@ -31,6 +32,7 @@ export const createAShareSentimentManagerFromEnv = (
         sources: [new EastmoneyAShareSentimentAdapter(deps.fetchImpl, undefined, clock)],
         clock,
         logger: deps.logger,
+        ...(deps.market === undefined ? {} : { market: deps.market }),
       });
   }
 };

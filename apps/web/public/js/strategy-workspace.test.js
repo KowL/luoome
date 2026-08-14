@@ -432,6 +432,64 @@ describe('模拟回测（历史回放）', () => {
     expect(node.textContent).toContain('版本不可用');
     expect(node.textContent).toContain('历史数据不可用');
   });
+  it('后台快照只有 session.id 时仍显示评估会话，不渲染 undefined', () => {
+    const node = buildBacktestResultContent({
+      session: { id: 'evaluation-session-snapshot' },
+      status: 'complete',
+      summary: {
+        tradingDays: 0,
+        completedDays: 0,
+        failedDays: 0,
+        vintageAvailableDays: 0,
+        vintageUnavailableDays: 0,
+        evaluatedCount: 0,
+        selectedCount: 0,
+        signalCount: 0,
+        failedCount: 0,
+      },
+      days: [],
+    });
+    expect(node.textContent).toContain('Evaluation session evaluation-session-snapshot');
+    expect(node.textContent).not.toContain('Evaluation session undefined');
+  });
+
+  it('历史评估取消后状态文案不冒充完成', async () => {
+    globalThis.fetch = async (path) => {
+      if (String(path).endsWith('/backtests')) {
+        return jsonResponse({
+          ok: true,
+          data: {
+            sessionId: 'evaluation-session-cancelled',
+            status: 'queued',
+            session: { id: 'evaluation-session-cancelled' },
+          },
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          session: { id: 'evaluation-session-cancelled', status: 'failed' },
+          status: 'failed',
+          summary: {
+            tradingDays: 1,
+            completedDays: 0,
+            failedDays: 1,
+            selectedCount: 0,
+            signalCount: 0,
+          },
+          days: [],
+        },
+      });
+    };
+    const statuses = [];
+    await runStrategyBacktest(
+      { id: 'ma-bullish', name: '均线多头' },
+      { from: '2026-08-13', to: '2026-08-14', stockIds: ['600519.SH'] },
+      (message) => statuses.push(message),
+    );
+    expect(statuses.at(-1)).toContain('历史模拟失败或已取消');
+    expect(statuses.at(-1)).not.toContain('历史模拟完成：');
+  });
 });
 
 describe('Phase B 洞察与调度', () => {

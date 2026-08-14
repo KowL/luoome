@@ -1,10 +1,13 @@
 import {
+  assertMarketSnapshotInvariants,
   quantity as brandQuantity,
   type DailyBar,
   type DateRange,
   type Exchange,
   type IndexQuote,
+  type MarketSnapshot,
   type MarketSnapshotItem,
+  MarketSnapshotSchema,
   money,
   type Quote,
   type StockSearchCandidate,
@@ -475,7 +478,12 @@ export class EastmoneyAdapter {
    * 任一页失败直接抛 EastmoneyAdapterError：返回半拉子全集会让分组刷新误算退出成员。
    */
   async fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]> {
+    return (await this.fetchMarketSnapshotEnvelope()).items;
+  }
+
+  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
     const items: MarketSnapshotItem[] = [];
+    let expectedCount: number | undefined;
     for (let page = 1; ; page++) {
       const url =
         `${this.baseClistUrl}?pn=${page}&pz=${CLIST_PAGE_SIZE}&po=1&np=1` +
@@ -484,11 +492,29 @@ export class EastmoneyAdapter {
       const pageItems = parseEastmoneyClist(json);
       items.push(...pageItems);
       const total = json.data?.total;
+      if (total !== undefined) expectedCount = total;
       if (pageItems.length < CLIST_PAGE_SIZE || (total !== undefined && items.length >= total)) {
         break;
       }
     }
-    return items;
+    const uniqueItems = [...new Map(items.map((item) => [item.id, item])).values()];
+    const expected = expectedCount ?? uniqueItems.length;
+    const duplicateCount = items.length - uniqueItems.length;
+    const snapshot = MarketSnapshotSchema.parse({
+      coverage: 'CN_A_SHARES_SH_SZ',
+      source: this.name,
+      fetchedAt: this.clock(),
+      items: uniqueItems,
+      completeness: {
+        expectedCount: expected,
+        receivedCount: uniqueItems.length,
+        missingCount: Math.max(0, expected - uniqueItems.length),
+        duplicateCount,
+        complete: expected > 0 && expected === uniqueItems.length && duplicateCount === 0,
+      },
+    });
+    assertMarketSnapshotInvariants(snapshot);
+    return snapshot;
   }
 
   private async getJson<T>(url: string): Promise<T> {

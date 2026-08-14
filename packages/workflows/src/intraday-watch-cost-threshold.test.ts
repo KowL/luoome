@@ -131,7 +131,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['tp-only'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['tp-only'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -169,7 +169,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['sl-only'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['sl-only'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -201,7 +201,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['both-up'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['both-up'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -229,7 +229,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['both-down'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['both-down'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -256,7 +256,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['boundary-up'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['boundary-up'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -282,7 +282,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['boundary-down'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['boundary-down'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -309,7 +309,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['no-hit'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['no-hit'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -336,7 +336,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['manual-pool'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['manual-pool'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -362,7 +362,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['unresolved-pool'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['unresolved-pool'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -387,7 +387,7 @@ describe('intraday-watch cost-threshold 规则', () => {
       updatedAt: T0,
     });
     const r = await intradayWatchWorkflow.run(
-      { poolIds: ['persist-check'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['persist-check'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -419,7 +419,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     // v0.7：notify=true 的 bootstrap 默认不 emit。先跑一轮 dry-run 完成 bootstrap，
     // 期间 state 被写为 active=true + 一次 ATTEMPTED 触发落库（dry-run 自身不占 cooldown）。
     const rDry = await intradayWatchWorkflow.run(
-      { poolIds: ['cooldown-pool'], notify: false, seedTacticSources: false },
+      { alertPlanIds: ['cooldown-pool'], notify: false },
       ctx as unknown as ToolContext,
     );
     expect(rDry.ok).toBe(true);
@@ -436,7 +436,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     await ctx.repos.watchTrigger.remove(dryRunTrigger.id);
 
     const r1 = await intradayWatchWorkflow.run(
-      { poolIds: ['cooldown-pool'], notify: true, seedTacticSources: false },
+      { alertPlanIds: ['cooldown-pool'], notify: true },
       ctx as unknown as ToolContext,
     );
     expect(r1.ok).toBe(true);

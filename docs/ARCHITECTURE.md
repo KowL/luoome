@@ -299,14 +299,14 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
   股票调用 `strategy-recommendations`。
 
 `luoome start` / `luoome web serve` 在进程内每分钟唤醒 `run-strategy-schedules`，启动时也立即
-检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务继续可由
-外部 cron 调用。这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
+检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务的外部 cron
+只作为幂等补偿。这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
 回滚已原子提交的 StrategyRun，也不会触发交易。
 
-**2026-08-11 可靠性目标（尚未实现）**：上述固定租约与独立观察 cron 将按
-[Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md)
-演进为 publication、heartbeat + fencing token 和 `strategy-daily-cycle`。在迁移完成前，本段前述
-行为仍是代码事实；实施不得把目标设计误报为当前能力。
+**2026-08-14 可靠性状态**：publication、heartbeat + fencing token、`strategy-daily-cycle`、
+WorkflowRun 阶段审计与 `get_strategy_reliability_summary` 已落地；汇总会阻塞 schedule/交易日重复
+运行并输出阶段 P50/P95/max。跨交易日生产证据和真实全市场性能预算继续属于 Roadmap 的运营观测，
+不能把设计目标误报为已验收事实，也不设置固定交易日数量门禁。
 
 ### 4.7 Adapter（adapters 包）
 
@@ -353,7 +353,7 @@ surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及各 capability 的尝试优先级，可选
-`eastmoney`、`tencent`、`tushare`。未配置时默认 Eastmoney → Tencent。显式启用
+`eastmoney`、`sina`、`tencent`、`tushare`。未配置时默认 Eastmoney → Tencent → Sina。显式启用
 Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网关
 `http://api.tushare.pro`），非法配置在启动期抛错。
 详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md)。
@@ -368,8 +368,8 @@ A 股日级情绪同样不扩宽 `MarketDataAdapterLike`。`AShareSentimentManag
 `createAShareSentimentManagerFromEnv` 独立装配东方财富封板池和炸板池，隐藏跨池去重、
 维度级 partial/unavailable、provenance、fallback 与短 TTL 缓存；指数由
 `get_ashare_sentiment` 组合现有 `fetchIndexQuotes`。只有指数观测日与请求交易日一致时才
-进入快照。`MarketSnapshot` 尚无 coverage/source/asOf/completeness 信封，因此 breadth
-固定 unavailable，禁止从部分实时报价推算全市场宽度。详见
+进入快照。`MarketSnapshot` 通过 coverage/source/asOf/completeness 信封表达完整性；breadth 只消费
+完整真实信封，全部真实来源不可用时保持 unavailable，不从部分实时报价推算全市场宽度。详见
 [Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
 
 Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优先级与配置就绪状态，
@@ -484,8 +484,9 @@ Web 通过同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
 **Strategy 研究事实**：指标快照可包含最新价、动量、均线与 Bollinger 字段。规则求值的
 unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal 只表达事实，
 不表示胜率、Advice 或交易。StrategyRun 的执行状态与数据完整度分离：新运行只写
-`running / complete / failed`，其中 `complete` 表示结果包已原子提交；Summary V3 通过
-`dataHealth=complete / partial / unavailable`、evaluated/incomplete/failed 计数描述覆盖质量。
+`running / complete / failed`，其中 `complete` 表示结果包已原子提交；Summary V4 通过
+`dataHealth=complete / partial / unavailable`、evaluated/incomplete/failed 计数描述覆盖质量，
+并由 acceptance 与 `publication=published/withheld/non-publishing` 独立决定是否进入生产视图。
 正式运行取得 lease 后先写入可查询的 `running` 记录，终态与 results/signals 在同一事务中更新；
 意外异常也会把该记录收敛为 `failed`。
 旧 `status=partial` 记录继续可读，并按“执行完成、数据部分可用”参与当前结果视图。
@@ -510,7 +511,7 @@ WatchTrigger     AlertPlan 命中事实与送达状态
 Alert            预警（账户?、标的?、类型、参数、状态）
 Note             笔记（标题、内容、标签、来源）
 Config           KV 配置（user/account/global scope）
-LimitUpLadder    连板天梯快照（date, source, maxLevel, levels[]）—— Phase 1，docs/ddd/limit-up-ladder-detailed-design.md
+LimitUpLadder    连板天梯快照（date, source, maxLevel, levels[]）；实时 manager + PIT snapshot repository
 LimitUpLadderEntry  单 entry（price / rawClose / corrected / ladderLevel / firstTime / finalTime）
 Report           个性化结构化事实简报（周期、scope、section/block、provenance、partial）
 AShareSentimentSnapshot  沪深 A 股日级指数/宽度/封板/炸板/热点证据（维度级完整性）
@@ -762,7 +763,9 @@ type ToolError =
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
 - `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
-- **Phase 2 候选**：连板天梯联动 workflow —— 在 `daily-review` / `market-outlook` 中读 `limit_up_ladder` 与 `limit_up_ladder_compare` tool，把天梯快照作为 LLM 复盘段的事实来源（替换 ruo 旧 `market-review.chain.ts` 字符串拼接）。Phase 1 仅提供 tool；workflow 改造延后（设计：[docs/ddd/limit-up-ladder-detailed-design.md §9](./ddd/limit-up-ladder-detailed-design.md)）。
+- **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` / `market-outlook` 通过
+  `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
+  日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。
 
 ### 8.2 Workflow 与 tool 的边界
 
@@ -906,8 +909,8 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 1. 在 `workflows/<name>-advice.ts` 用 `defineWorkflow` 定义
 2. 通过 `ctx.tools.analyze_stock.execute()` 拿建议
-3. 通过 `ctx.repos.advice.save()` 持久化
-4. 加 workflow 集成测试（mock 所有依赖 tool + LLM）
+3. 通过 `ctx.tools.*.execute()` 获取事实和写入结果，不直接访问 repository 或 adapter
+4. 加 workflow 集成测试；测试替身只限测试边界，生产路径不注入 mock 数据
 
 ### 13.3 加新数据源
 

@@ -83,9 +83,10 @@ homebrew/
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`） |
-| `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney 主 → Tencent 备；全源失败明确报错 |
-| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent` | 行情数据源启用顺序；可显式加入 `tushare` |
-| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney` | 股票目录数据源顺序；支持 `eastmoney,tushare` |
+| `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney → Tencent → Sina；全源失败明确报错 |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare` |
+| `LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID` | `000300.SH` | 账户绩效默认 benchmark；首期为沪深300，可用真实指数日线覆盖时才显示可用 |
+| `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
 | `TUSHARE_TOKEN` | — | 任一路由显式启用 `tushare` 时必填 |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录；默认路径缺失时自动生成，格式见 [`ai-models.example.json`](./ai-models.example.json) |

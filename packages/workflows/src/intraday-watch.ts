@@ -527,6 +527,9 @@ const stepLoadPrevCloses: WorkflowStep = async (prev, ctx) => {
     for (const item of result.data.items) {
       if (item.status === 'ok' && item.close > 0) prevCloses.set(item.stockId, item.close);
     }
+  } else {
+    // 昨收失败时继续以 unknown 评估，避免用 quote.open 伪造基准；同时保留可定位日志。
+    ctx.logger.warn('[intraday-watch] get_previous_closes failed', { error: result.error });
   }
   return { ...state, prevCloses } satisfies PrevClosesState;
 };
@@ -1004,7 +1007,7 @@ const makeTriggerId = (
   now: Date,
   suffix = '',
 ): string =>
-  `wt-${poolId}-${stockId}-${ruleId}-${now.getTime()}-${Math.random().toString(36).slice(2, 6)}${suffix ? `-${suffix}` : ''}`;
+  `wt-${poolId}-${stockId}-${ruleId}-${now.getTime()}-${globalThis.crypto.randomUUID()}${suffix ? `-${suffix}` : ''}`;
 
 // ============================================================
 // step 7-9：cooldown + 每日上限 + 优先级映射（统一处理）

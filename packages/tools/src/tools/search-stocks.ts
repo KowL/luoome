@@ -6,7 +6,7 @@ import { defineTool } from '../define-tool.js';
 /**
  * search_stocks（v0.2 起，read；v0.8 起接外部数据源）。
  * 模糊搜索 stock：query 为空或仅空白时返回空数组。
- * 数据源链路：adapter.searchStocks（Eastmoney 主 → Tencent 备）
+ * 数据源链路：adapter.searchStocks（由 market source registry 选择具备 search 能力的源）
  * 优先；adapter 未实现或抛错时降级本地 StockRepository.search。
  * limit 默认 20，最大 100（防御性上限，避免 agent 误传 10000 把表拖垮）。
  */

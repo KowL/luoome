@@ -6,6 +6,7 @@ import {
   type DailyBar,
   DailyBarSchema,
   DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
+  dateInShanghai,
   decideStrategyRunPublication,
   decideStrategySignalEmission,
   deriveStrategyRunScope,
@@ -47,6 +48,8 @@ export const RunStrategyInput = z.object({
   versionId: z.string().min(1).optional(),
   mode: z.enum(['scan', 'scheduled', 'replay']).default('scan'),
   asOf: z.coerce.date().optional(),
+  /** replay 的 PIT universe 可在交易日内固化，独立于交易日 key 的 dataAsOf。 */
+  universeAsOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(500).optional(),
   revisionCutoff: z.coerce.date().optional(),
   dataCheckpointId: z.string().min(1).optional(),
@@ -191,6 +194,9 @@ export const runStrategyTool = defineTool({
         'mode=scan/scheduled 不支持 asOf：bars 会取历史而 quote 仍是实时，时点不一致；需要历史时点请用 mode=replay + 显式 stockIds',
       );
     }
+    if (input.mode !== 'replay' && input.universeAsOf !== undefined) {
+      return errInvalidInput('universeAsOf 只允许用于 mode=replay');
+    }
     const resolved = await resolveVersion(input.strategyId, input.versionId, !input.persist, ctx);
     if ('ok' in resolved) return resolved;
     const version = resolved;
@@ -256,7 +262,7 @@ export const runStrategyTool = defineTool({
         input.mode === 'replay'
           ? await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({
               coverage: 'CN_A_SHARES_SH_SZ',
-              asOf: dataAsOf,
+              asOf: input.universeAsOf ?? dataAsOf,
             })
           : await ctx.repos.stockUniverse.latestSuccessfulSync({
               coverage: 'CN_A_SHARES_SH_SZ',
@@ -299,6 +305,7 @@ export const runStrategyTool = defineTool({
       const needsQuote = references.dataSources.includes('quote') || input.prefilter !== undefined;
       const needsDailyBars = references.dataSources.includes('daily-bars');
       const needsDerivedMeta = references.paths.some((path) => path.startsWith('meta.'));
+      const needsLimitUpLadder = references.dataSources.includes('limit-up-ladder');
       const lookback = Math.max(1, references.requiredLookback);
       const universeMemberIds = [...new Set(requestedIds)].sort();
       const universeCheckpoint =
@@ -400,6 +407,72 @@ export const runStrategyTool = defineTool({
         const oldestObserved = Math.min(...observedTimes);
         if (Number.isFinite(oldestObserved)) dataAsOf = new Date(oldestObserved);
       }
+      let limitUpLadderByCode = new Map<string, { readonly ladderLevel: number }>();
+      let limitUpLadderProviderOk = !needsLimitUpLadder;
+      let limitUpLadderDataAsOf: Date | undefined;
+      let limitUpLadderErrorKind: string | undefined;
+      if (needsLimitUpLadder) {
+        if (input.mode === 'replay') {
+          // Replay 只读取已持久化的真实 PIT 快照，不能读取当前可变天梯。
+          try {
+            const snapshot = await ctx.repos.limitUpLadderSnapshot.findByDate({
+              date: dateInShanghai(dataAsOf),
+              source: 'eastmoney',
+            });
+            if (snapshot === null) {
+              limitUpLadderErrorKind = 'historical_snapshot_unavailable';
+            } else {
+              limitUpLadderProviderOk = true;
+              limitUpLadderDataAsOf = snapshot.asOf;
+              limitUpLadderByCode = new Map(
+                snapshot.levels
+                  .flatMap((level) => level.stocks)
+                  .map((entry) => [entry.code, { ladderLevel: entry.ladderLevel }] as const),
+              );
+            }
+          } catch (error) {
+            limitUpLadderErrorKind = 'historical_snapshot_read_failed';
+            ctx.logger.warn('读取历史天梯 PIT 快照失败', {
+              date: dateInShanghai(dataAsOf),
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else if (ctx.limitUpLadder === undefined) {
+          limitUpLadderErrorKind = 'manager_unavailable';
+        } else {
+          const ladder = await ctx.limitUpLadder.fetchLadder({
+            date: dateInShanghai(dataAsOf),
+            source: 'eastmoney',
+            days: 15,
+            includeUncategorized: false,
+            includeStar: false,
+            includeBse: false,
+            includeST: false,
+          });
+          if (ladder.ok && ladder.data !== undefined) {
+            limitUpLadderProviderOk = true;
+            limitUpLadderDataAsOf = ladder.data.asOf;
+            limitUpLadderByCode = new Map(
+              ladder.data.levels
+                .flatMap((level) => level.stocks)
+                .map((entry) => [entry.code, { ladderLevel: entry.ladderLevel }] as const),
+            );
+            try {
+              await ctx.repos.limitUpLadderSnapshot.save(ladder.data);
+            } catch (error) {
+              // 当前扫描仍可使用真实返回，但不把未落库的结果冒充为可 replay 的 PIT 事实。
+              limitUpLadderErrorKind = 'historical_snapshot_persist_failed';
+              ctx.logger.warn('写入历史天梯 PIT 快照失败', {
+                date: ladder.data.date,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          } else {
+            limitUpLadderErrorKind = ladder.error?.kind ?? 'adapter_error';
+          }
+        }
+      }
+
       let prefilterSnapshot:
         | {
             readonly mode: 'quote-selection-safe';
@@ -620,11 +693,17 @@ export const runStrategyTool = defineTool({
       );
       const metaByStock = needsDerivedMeta
         ? deriveStrategyMetaByStock(
-            preparedStocks.map((item) => ({
-              stockId: item.stockId,
-              industry: activeById.get(item.stockId)?.industry,
-              bars: item.bars,
-            })),
+            preparedStocks.map((item) => {
+              const stock = activeById.get(item.stockId);
+              const limitUpLadder =
+                stock === undefined ? undefined : limitUpLadderByCode.get(stock.code);
+              return {
+                stockId: item.stockId,
+                industry: stock?.industry,
+                bars: item.bars,
+                ...(limitUpLadder === undefined ? {} : { limitUpLadder }),
+              };
+            }),
           )
         : new Map<string, Readonly<Record<string, unknown>>>();
       const successful: StrategyStockEvaluation[] = preparedStocks.map((item) => {
@@ -793,6 +872,24 @@ export const runStrategyTool = defineTool({
                         provider:
                           input.mode === 'scheduled' ? 'checkpoint:daily-bars' : 'local:daily-bars',
                         ok: localProviderOk,
+                        ...(input.mode === 'scheduled' &&
+                        checkpointDailyBarsCoverage?.latencyMs !== undefined
+                          ? { latencyMs: checkpointDailyBarsCoverage.latencyMs }
+                          : {}),
+                      },
+                    ]
+                  : []),
+                ...(needsLimitUpLadder
+                  ? [
+                      {
+                        provider:
+                          input.mode === 'replay'
+                            ? 'historical:limit-up-ladder'
+                            : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
+                        ok: limitUpLadderProviderOk,
+                        ...(limitUpLadderErrorKind === undefined
+                          ? {}
+                          : { errorKind: limitUpLadderErrorKind }),
                       },
                     ]
                   : []),
@@ -806,6 +903,17 @@ export const runStrategyTool = defineTool({
                       {
                         provider: `${ctx.adapters.market.name}:daily-bars`,
                         ok: failures.length === 0,
+                      },
+                    ]
+                  : []),
+                ...(needsLimitUpLadder
+                  ? [
+                      {
+                        provider: ctx.limitUpLadder?.name ?? 'limit-up-ladder',
+                        ok: limitUpLadderProviderOk,
+                        ...(limitUpLadderErrorKind === undefined
+                          ? {}
+                          : { errorKind: limitUpLadderErrorKind }),
                       },
                     ]
                   : []),
@@ -857,6 +965,29 @@ export const runStrategyTool = defineTool({
                     ? {}
                     : { dataAsOf: localCoverageDataAsOf }),
                   errorKinds: coverageErrorKinds,
+                },
+              ]
+            : []),
+          ...(needsLimitUpLadder
+            ? [
+                {
+                  capability: 'limit-up-ladder' as const,
+                  provider:
+                    input.mode === 'replay'
+                      ? 'historical:limit-up-ladder'
+                      : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
+                  requested: candidateIds.length,
+                  succeeded: limitUpLadderProviderOk ? candidateIds.length : 0,
+                  failed: 0,
+                  missing: limitUpLadderProviderOk ? 0 : candidateIds.length,
+                  fallbackUsed: false,
+                  freshness: limitUpLadderProviderOk
+                    ? ('fresh' as const)
+                    : ('unavailable' as const),
+                  ...(limitUpLadderDataAsOf === undefined
+                    ? {}
+                    : { dataAsOf: limitUpLadderDataAsOf }),
+                  errorKinds: limitUpLadderErrorKind === undefined ? [] : [limitUpLadderErrorKind],
                 },
               ]
             : []),

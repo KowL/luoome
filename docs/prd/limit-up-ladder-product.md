@@ -1,6 +1,6 @@
 # 连板天梯产品文档
 
-> 状态：草稿（Phase 0 调研完成，未确认实施范围与分期）
+> 状态：目标模型已落地（Phase 1～3 核心实现完成；当前/正式日与历史 PIT Strategy DSL 字段已接入，断板历史仍延后）
 > 日期：2026-07-25
 > 参考：旧项目 `ruo` 的 `market limit-up` 命令及 luoome [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) 与 [统一 Watchlist](./watchlist.md)。
 > 产品边界：仅做 A 股短线方向的"看盘辅助页面 + 数据接口"；不替用户决策、不自动下单、不承诺任何"必涨/必板"语义
@@ -71,14 +71,18 @@ ruo 在 `market limit-up` 子命令实现了天梯入口（`ruo-cli/src/commands
 
 ### 2.3 luoome 现状
 
-- 没有专门的"涨停梯队"页面或 TUI 区块。
-- 涨停、炸板、断板事实可作为未来 Strategy 的上游数据源，避免各规则重复拉取。
+- 已有专门的 Web `/market/limit-up` 页面、TUI `L` 子视图、CLI `market limit-up` 子命令和
+  `limit_up_ladder` / `limit_up_ladder_compare` 两个只读 tool；所有入口复用同一 manager/cache。
+- `daily-review`、`opening-report`、`market_outlook` 与个股行情/研究事实已消费同一结构化快照；缺数据
+  明确返回 unavailable/adapter_error，不回退到 mock 或伪造空记录。
+- 涨停、炸板、断板事实仍可作为未来 Strategy 的上游数据源，避免各规则重复拉取。
 - [ruo 能力迁移产品设计](./ruo-feature-migration-product-design.md) §P3 写明"连板天梯与昨日梯队表现：页面和接口较完整，外部依赖重；A 股短线方向明确时再做"——本文档是这条决策的展开。
 - 数据源已迁移为东方财富公开涨停池（`getTopicZTPool`，公开 API、无鉴权）；已确认不接 amazingdata，无 fallback。
 
 ### 2.4 一句话缺口
 
-缺一个"看一眼就知道今天资金在追谁、追到第几板、龙头是谁、跟风的同一行业还有谁"的稳定页面，以及一份能被报告、TOP10、预警规则、LLM 复盘同时引用的结构化数据接口。
+原始缺口已由上述页面和统一结构化 tool 闭环；剩余工作是连续真实 provider 运行证据、历史快照审计，以及
+需另行冻结产品口径的 Strategy 字段联动与炸板/断板历史增强。
 
 ## 3. 产品目标
 
@@ -371,31 +375,34 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 - 输出现状差异与字段口径（本文档 §2、§5）。
 - 标记未决决策（见 §14）。
 
-### Phase 1：天梯快照（建议优先）
+### Phase 1：天梯快照（已完成）
 
 目标：跑通"tool → 缓存 → TUI 展示"的最小闭环。
 
-- 实现 `limit_up_ladder` tool（数据源 eastmoney 公开涨停池，无 fallback）。
-- 实现 `LimitUpLadder` / `LimitUpLadderEntry` Zod schema。
-- TUI 增加 `L` 快捷键与涨停梯队子视图。
-- CLI `luoome market limit-up` 保留 ruo 形态但去掉日期兜底。
-- 不做 Web 页面（仍由 TUI/CLI 提供入口）。
-- 不联动 TOP10 排序与报告。
+- [x] 实现 `limit_up_ladder` tool（数据源 eastmoney 公开涨停池，无 fallback）。
+- [x] 实现 `LimitUpLadder` / `LimitUpLadderEntry` Zod schema。
+- [x] TUI 增加 `L` 快捷键与涨停梯队子视图。
+- [x] CLI `luoome market limit-up` 保留 ruo 形态但去掉日期兜底。
+- [x] Web 页面和统一 API 已在 Phase 2 接入；不保留第二套数据来源。
+- [x] 报告/市场观点只通过 tool 消费快照，不改天梯事实层排序。
 
-### Phase 2：页面与下游联动
+### Phase 2：页面与下游联动（已完成）
 
 目标：让所有下游消费方统一从本快照读取。
 
-- Web `/market/limit-up` 页面，含日期切换与 vs 昨日 diff。
-- 报告 workflow 改造：`market-review.chain.ts` 输入段替换为天梯快照。
-- `watchlist refreshTop10` 切换到本快照，移除其对行情源 ladder 接口的直接调用。
-- 增加 `limit_up_ladder_compare` tool。
+- [x] Web `/market/limit-up` 页面，含日期切换与 vs 昨日 diff。
+- [x] 报告 workflow 改造为通过 `limit_up_ladder_compare` 消费天梯快照。
+- [x] 旧 `watchlist refreshTop10` 已由 Strategy/Watchlist 目标模型替代，不再保留独立联动路径。
+- [x] 增加 `limit_up_ladder_compare` tool。
 
-### Phase 3：与策略预警联动
+### Phase 3：与策略预警联动（核心事实投影已完成）
 
-- 未来 Strategy 的涨停类字段统一引用本快照。
-- 增加"炸板 / 断板"语义字段（依赖数据源暴露 `isBroken` / `consecutiveBoard`；当前东方财富涨停池无此字段）。
-- 与个股详情"事件"区打通。
+- [x] Strategy DSL 的涨停字段统一引用本快照：`meta.limitUpLevel` / `meta.limitUpToday` 由
+  `limit-up-ladder` manager 提供；scan/scheduled 按运行 `dataAsOf` 的 Asia/Shanghai 日期查询真实快照并写入
+  PIT repository，provider coverage 可审计；replay 优先读取对应历史快照，缺失时保持 `unknown`，不读取当前快照。
+- [ ] 增加"炸板 / 断板"历史语义字段（当前东方财富涨停池无可验证的 `isBroken` /
+  `consecutiveBoard` 字段）。
+- [x] 与个股详情/研究事实/行情 marker 区打通；缺失历史保持 unavailable。
 
 ## 11. 验收标准
 
@@ -449,29 +456,30 @@ output = { curr: LimitUpLadder; prev: LimitUpLadder; diff: {
 | TUI 在窄终端下显示拥挤 | 与 ruo 一致每层最多展示前 3 只；超出用 `<N> 只未显示>` 折叠 |
 | LLM 把天梯 level 当作"买入建议"喂给用户 | LLM 复盘链路只读天梯快照，且提示词明确"天梯是事实不是建议"；advice 链路独立 |
 
-## 14. 未决决策
+## 14. 当前决策与后续确认点
 
-以下决策需在进入 Phase 1 前与主人家确认：
+Phase 1～3 已按以下默认口径实现；若要改变这些产品边界，应先更新 PRD/DDD、Tool schema 和测试矩阵，
+再修改代码：
 
-### D1：天梯是否纳入 luoome 主线
+### D1：天梯是否纳入 luoome 主线（已采用 A）
 
-选项 A：纳入主线（本文档假设）。
-选项 B：作为可选模块放在 `packages/optional/limit-up-ladder`，默认不打包。
+当前采用选项 A：纳入主线。
 
 影响：A 路径会影响 Web 导航与 CLI 速查；B 路径所有下游（TOP10、报告）需要 feature flag 隔离。
 
-### D2：天梯数据是否限制在主板+创业板
+### D2：天梯数据是否限制在主板+创业板（已采用默认限制）
 
-ruo `getLimitUpStocksMainAndChiNext` 已默认排除科创板和北交所。建议沿用，但需确认是否给"全市场"留一个开关。
+默认排除科创板和北交所；通过 `includeStar` / `includeBse` 显式 opt-in，不改变默认覆盖。
 
-### D3：缓存时长
+### D3：缓存时长（已冻结为按交易时段）
 
-建议 1 小时；但若上游同步延迟 > 1 小时，缓存应被版本号/数据时间戳作废。需确认数据源是否暴露数据时间戳（当前东方财富涨停池未暴露）。
+缓存由 manager 按盘中短 TTL、盘后/历史日期 key 复用；当前 Eastmoney 未提供独立数据时间戳，响应 `asOf`
+只表示本机抓取时间，不冒充市场观测时间。
 
-### D4：报告与 TOP10 是否在 Phase 1 同步切换
+### D4：报告与 TOP10 是否在 Phase 1 同步切换（已采用分阶段）
 
-建议 Phase 1 只做 TUI/CLI，Phase 2 再切换报告与 TOP10。这样风险最小，但 Phase 1 与 Phase 2 期间存在"两套数据来源并行"。
+Phase 1 先完成 TUI/CLI，Phase 2 再接入 Web 与报告；旧 TOP10 路径已由 Strategy/Watchlist 目标模型替代。
 
-### D5：LLM 复盘链是否同步改造
+### D5：LLM 复盘链是否同步改造（核心路径已接入）
 
-LLM 改造可以早做（成本低），但需要先在 LLM 输入格式上确定"只读天梯快照"的拼装模板。建议 Phase 1 末尾出 prompt 草稿，Phase 2 接入。
+报告/市场观点已通过结构化 tool 输入天梯事实；后续只允许在独立设计中扩展 prompt，不把 level 翻译为 Advice 或收益概率。

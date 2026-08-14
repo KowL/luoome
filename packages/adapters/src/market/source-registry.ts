@@ -4,6 +4,7 @@ import type {
   IndexQuote,
   IntradayMinute,
   MarketCoverage,
+  MarketSnapshot,
   MarketSnapshotItem,
   Quote,
   StockSearchCandidate,
@@ -14,6 +15,7 @@ export type MarketCapability =
   | 'daily-bars'
   | 'search'
   | 'market-snapshot'
+  | 'market-snapshot-envelope'
   | 'realtime-index'
   | 'delayed-index'
   | 'intraday-minutes';
@@ -23,6 +25,7 @@ interface CapabilityRequestMap {
   readonly 'daily-bars': { readonly stockId: string; readonly range: DateRange };
   readonly search: { readonly query: string };
   readonly 'market-snapshot': { readonly coverage: MarketCoverage };
+  readonly 'market-snapshot-envelope': { readonly coverage: MarketCoverage };
   readonly 'realtime-index': { readonly coverage: MarketCoverage };
   readonly 'delayed-index': { readonly coverage: MarketCoverage; readonly asOf: Date };
   readonly 'intraday-minutes': { readonly stockId: string };
@@ -33,6 +36,7 @@ interface CapabilityResultMap {
   readonly 'daily-bars': readonly DailyBar[];
   readonly search: readonly StockSearchCandidate[];
   readonly 'market-snapshot': readonly MarketSnapshotItem[];
+  readonly 'market-snapshot-envelope': MarketSnapshot;
   readonly 'realtime-index': readonly IndexQuote[];
   readonly 'delayed-index': readonly IndexQuote[];
   readonly 'intraday-minutes': readonly IntradayMinute[];

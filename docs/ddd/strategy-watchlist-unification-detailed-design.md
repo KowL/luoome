@@ -247,8 +247,9 @@ export const StrategyRunSchema = z.object({
 - `dataAsOf <= finishedAt`（终态）。
 - run 永远绑定发布且 valid 的 StrategyVersion，replay 也不例外。
 - 新写入只使用 `running/complete/failed`；`partial` 仅用于读取存量记录。
-- `complete` 只表达执行结束与事实包提交成功，覆盖质量由 Summary V3 的
-  `dataHealth=complete/partial/unavailable` 表达。
+- `complete` 只表达执行结束与事实包提交成功，覆盖质量由 Summary V4 的
+  `dataHealth=complete/partial/unavailable` 表达；acceptance 与
+  `publication=published/withheld/non-publishing` 再决定是否进入生产当前视图。
 
 ### 4.5 StrategyResult
 

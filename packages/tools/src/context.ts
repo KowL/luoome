@@ -23,6 +23,8 @@ export interface BuildContextInput {
   readonly agent?: AgentRuntimeLike;
   readonly clock?: () => Date;
   readonly logger?: Logger;
+  readonly auditLog?: ToolContext['auditLog'];
+  readonly auditCaller?: string;
   readonly user?: {
     readonly id: string;
     readonly defaultAccountId: string;
@@ -33,6 +35,7 @@ export interface BuildContextInput {
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
   readonly notification?: NotificationManagerLike;
+  readonly portfolioBenchmark?: ToolContext['portfolioBenchmark'];
 }
 
 /** Production composition root used by CLI, TUI, Web, and MCP surfaces. */
@@ -43,11 +46,16 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     user: input.user ?? { id: 'local-user', defaultAccountId: '' },
     clock: input.clock ?? (() => new Date()),
     logger: input.logger ?? console,
+    ...(input.auditLog === undefined ? {} : { auditLog: input.auditLog }),
+    ...(input.auditCaller === undefined ? {} : { auditCaller: input.auditCaller }),
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
     ...(input.ashareSentiment === undefined ? {} : { ashareSentiment: input.ashareSentiment }),
     ...(input.researchVault === undefined ? {} : { researchVault: input.researchVault }),
     ...(input.researchRemote === undefined ? {} : { researchRemote: input.researchRemote }),
     ...(input.notification === undefined ? {} : { notification: input.notification }),
+    ...(input.portfolioBenchmark === undefined
+      ? {}
+      : { portfolioBenchmark: input.portfolioBenchmark }),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

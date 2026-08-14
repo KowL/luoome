@@ -4,16 +4,19 @@ import type {
   LimitUpLadderDiff,
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
+import type { MarketSnapshot, MarketSnapshotItem } from './entity/market-snapshot.js';
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
+import type { ToolErrorKind } from './error/index.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type {
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
 } from './research-vault.js';
+import type { SideEffect } from './types/side-effect.js';
 
 /**
  * core 不能 import adapters 包（ARCHITECTURE §3 依赖方向），
@@ -34,6 +37,8 @@ export interface MarketDataAdapterLike {
   fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]>;
   /** 全市场快照；不支持时以 unsupported_capability 拒绝。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
+  /** 带来源、时间和分页完整性信封的全市场快照；不支持时以 unsupported_capability 拒绝。 */
+  fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
   /** 启用数据源与能力的动态库存及进程内健康观测。 */
   marketSourceStatus(): readonly MarketSourceStatus[];
 }
@@ -44,6 +49,7 @@ export interface MarketSourceStatus {
     | 'daily-bars'
     | 'search'
     | 'market-snapshot'
+    | 'market-snapshot-envelope'
     | 'realtime-index'
     | 'delayed-index'
     | 'intraday-minutes'
@@ -74,16 +80,6 @@ export interface StockSearchCandidate {
   readonly code: string;
   readonly exchange: Exchange;
   readonly name: string;
-}
-
-/** 全市场快照条目（id 约定同 StockSearchCandidate）；close/changePct 缺失表示无报价。 */
-export interface MarketSnapshotItem {
-  readonly id: string;
-  readonly code: string;
-  readonly exchange: Exchange;
-  readonly name: string;
-  readonly close?: number;
-  readonly changePct?: number;
 }
 
 /** LLM 调用请求（ARCHITECTURE §6.3：system + schema + data）。 */
@@ -152,6 +148,21 @@ export interface Logger {
   error(message: string, meta?: Record<string, unknown>): void;
 }
 
+/** Tool 调用审计事件；实现可以写文件、数据库或其它受控审计 sink。 */
+export interface AuditLogEvent {
+  readonly ts: Date;
+  readonly tool: string;
+  readonly sideEffect: SideEffect;
+  readonly result: 'ok' | 'error';
+  readonly errorKind?: ToolErrorKind;
+  readonly caller: string;
+}
+
+/** core 只定义审计投影，不承担 IO。 */
+export interface AuditLoggerLike {
+  write(event: AuditLogEvent): void | Promise<void>;
+}
+
 /**
  * 所有 tool / workflow handler 收到的 ctx（ARCHITECTURE §4.8）。
  * ctx 是唯一被允许注入依赖的方式。
@@ -200,8 +211,17 @@ export interface ToolContext {
   };
   readonly clock: () => Date;
   readonly logger: Logger;
+  /** write/external/advice/trade tool 的结构化审计 sink；测试上下文可省略。 */
+  readonly auditLog?: AuditLoggerLike;
+  /** 审计事件的调用方标签，例如 cli / mcp / web / tui。 */
+  readonly auditCaller?: string;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
+  /** 生产账户绩效的默认 benchmark；测试上下文可不注入以显式保持 unavailable。 */
+  readonly portfolioBenchmark?: {
+    readonly stockId: string;
+    readonly name: string;
+  };
 }
 
 export type AShareSentimentManagerResult =

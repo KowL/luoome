@@ -10,8 +10,12 @@ import {
   type DailyBarRevision,
   type Holding,
   InvariantError,
+  type LimitUpLadder,
   money,
   type Notification,
+  type PortfolioCashFlow,
+  type PortfolioCorporateAction,
+  type PortfolioPerformanceSnapshot,
   type Quote,
   quantity,
   type Report,
@@ -64,6 +68,41 @@ const T2 = new Date('2026-07-03T01:00:00.000Z');
 const T3 = new Date('2026-07-04T01:00:00.000Z');
 const FAR_FUTURE = new Date('2099-01-01T00:00:00.000Z');
 const FAR_PAST = new Date('2000-01-01T00:00:00.000Z');
+
+const makeLimitUpLadder = (overrides: Partial<LimitUpLadder> = {}): LimitUpLadder => ({
+  date: '2026-07-01',
+  total: 1,
+  maxLevel: 3,
+  source: 'eastmoney',
+  levels: [
+    {
+      level: 3,
+      name: '3 连板',
+      count: 1,
+      stocks: [
+        {
+          code: '600519',
+          name: '贵州茅台',
+          industry: '白酒',
+          ladderLevel: 3,
+          uncategorized: false,
+          firstTime: '09:31:00',
+          finalTime: '09:31:00',
+          reason: '测试事实',
+          price: 100,
+          rawClose: 100,
+          corrected: false,
+          changePct: 0.1,
+          limitUpDate: '2026-07-01',
+          board: 'main_board',
+        },
+      ],
+    },
+  ],
+  warnings: [],
+  asOf: T1,
+  ...overrides,
+});
 
 const makeAlertPlan = (id: string, overrides: Partial<AlertPlan> = {}): AlertPlan => ({
   id,
@@ -1032,6 +1071,102 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('Portfolio performance repositories', () => {
+      it('现金流按账户和时间范围隔离，支持 upsert/remove', async () => {
+        const flow: PortfolioCashFlow = {
+          id: 'flow-1',
+          accountId: 'acc-1',
+          occurredAt: T1,
+          kind: 'deposit',
+          amount: 10_000,
+          currency: 'CNY',
+          source: 'manual',
+          createdAt: T1,
+        };
+        await repos.portfolioCashFlow.save(flow);
+        await repos.portfolioCashFlow.save({ ...flow, amount: 12_000 });
+        expect(await repos.portfolioCashFlow.findById(flow.id)).toEqual({
+          ...flow,
+          amount: 12_000,
+        });
+        expect(await repos.portfolioCashFlow.listByAccount('acc-1', T1, T1)).toHaveLength(1);
+        expect(await repos.portfolioCashFlow.listByAccount('acc-2')).toEqual([]);
+        await repos.portfolioCashFlow.remove(flow.id);
+        expect(await repos.portfolioCashFlow.findById(flow.id)).toBeNull();
+      });
+
+      it('公司行动按账户隔离并保留可选字段', async () => {
+        const action: PortfolioCorporateAction = {
+          id: 'action-1',
+          accountId: 'acc-1',
+          stockId: 'stk-1',
+          occurredAt: T2,
+          kind: 'split',
+          ratio: 2,
+          source: 'import',
+          createdAt: T2,
+        };
+        await repos.portfolioCorporateAction.save(action);
+        expect(await repos.portfolioCorporateAction.findById(action.id)).toEqual(action);
+        expect(await repos.portfolioCorporateAction.listByAccount('acc-2')).toEqual([]);
+        await expect(
+          repos.portfolioCorporateAction.save({
+            ...action,
+            id: 'action-bad',
+            ratio: undefined,
+          }),
+        ).rejects.toThrow();
+        await repos.portfolioCorporateAction.remove(action.id);
+        expect(await repos.portfolioCorporateAction.findById(action.id)).toBeNull();
+      });
+
+      it('绩效快照按输入指纹幂等复用，并按账户/时间倒序查询', async () => {
+        const snapshot: PortfolioPerformanceSnapshot = {
+          id: 'performance-snapshot-1',
+          accountId: 'acc-1',
+          from: T1,
+          to: T2,
+          currency: 'CNY',
+          inputFingerprint: 'fingerprint-1',
+          calculatedAt: T2,
+          dataAsOf: T2,
+          performance: {
+            accountId: 'acc-1',
+            from: T1,
+            to: T2,
+            currency: 'CNY',
+            completeness: 'complete',
+            cashFlowComplete: true,
+            benchmarkStatus: 'unavailable',
+            realizedPnl: 0,
+            valuation: [],
+            contributions: [],
+            warnings: [],
+          },
+        };
+        await repos.portfolioPerformanceSnapshot.save(snapshot);
+        await repos.portfolioPerformanceSnapshot.save({ ...snapshot, calculatedAt: T3 });
+        expect(
+          await repos.portfolioPerformanceSnapshot.findByFingerprint({
+            accountId: snapshot.accountId,
+            from: snapshot.from,
+            to: snapshot.to,
+            inputFingerprint: snapshot.inputFingerprint,
+          }),
+        ).toMatchObject({ id: snapshot.id, calculatedAt: T3 });
+        expect(await repos.portfolioPerformanceSnapshot.listByAccount('acc-1')).toHaveLength(1);
+        expect(
+          await repos.portfolioPerformanceSnapshot.listByAccountAndRange('acc-1', T1, T2),
+        ).toHaveLength(1);
+        expect(
+          await repos.portfolioPerformanceSnapshot.listByAccountAndRange('acc-1', T3, T3),
+        ).toEqual([]);
+        expect(await repos.portfolioPerformanceSnapshot.listByAccount('acc-2')).toEqual([]);
+        await repos.portfolioPerformanceSnapshot.remove(snapshot.id);
+        expect(await repos.portfolioPerformanceSnapshot.findById(snapshot.id)).toBeNull();
+      });
+    });
+
     describe('AdviceRepository', () => {
       it('save + findById 往返一致（含 basedOn 快照的 Date 字段）', async () => {
         const advice = makeAdvice('adv-1', {
@@ -1648,6 +1783,72 @@ export const registerRepositoryContractTests = (
         ).toEqual([schedule]);
       });
 
+      it('fake clock 三小时持续 heartbeat，release 后旧 claim 不能再次生效', async () => {
+        const schedule = makeStrategySchedule('strategy-heartbeat');
+        await repos.strategySchedule.save(schedule);
+        const claims = await repos.strategySchedule.claimDueWithFence({
+          now: T1,
+          owner: 'worker-heartbeat',
+          leaseUntil: new Date(T1.getTime() + 20 * 60_000),
+          limit: 1,
+        });
+        expect(claims).toHaveLength(1);
+        const token = claims[0]?.token;
+        expect(token).toBeDefined();
+        if (token === undefined) return;
+
+        let now = T1;
+        for (let minutes = 5; minutes <= 180; minutes += 5) {
+          now = new Date(T1.getTime() + minutes * 60_000);
+          expect(
+            await repos.strategySchedule.renewClaim({
+              id: token.scheduleId,
+              owner: token.owner,
+              fence: token.fence,
+              now,
+              leaseUntil: new Date(now.getTime() + 20 * 60_000),
+            }),
+          ).toBe(true);
+        }
+
+        expect(
+          await repos.strategySchedule.renewClaim({
+            id: token.scheduleId,
+            owner: token.owner,
+            fence: token.fence,
+            now: new Date(now.getTime() + 20 * 60_000),
+            leaseUntil: new Date(now.getTime() + 40 * 60_000),
+          }),
+        ).toBe(false);
+
+        const nextRunAt = new Date(now.getTime() + 24 * 60 * 60_000);
+        await repos.strategySchedule.finishClaim({
+          id: token.scheduleId,
+          owner: token.owner,
+          fence: token.fence,
+          nextRunAt,
+          updatedAt: now,
+        });
+        await expect(
+          repos.strategySchedule.finishClaim({
+            id: token.scheduleId,
+            owner: token.owner,
+            fence: token.fence,
+            nextRunAt,
+            updatedAt: now,
+          }),
+        ).rejects.toThrow(InvariantError);
+        expect(
+          await repos.strategySchedule.renewClaim({
+            id: token.scheduleId,
+            owner: token.owner,
+            fence: token.fence,
+            now,
+            leaseUntil: new Date(now.getTime() + 20 * 60_000),
+          }),
+        ).toBe(false);
+      });
+
       it('removeByStrategyId 删除配置及其 lease', async () => {
         const schedule = makeStrategySchedule('strategy-remove');
         await repos.strategySchedule.save(schedule);
@@ -1691,6 +1892,7 @@ export const registerRepositoryContractTests = (
           }),
         ).toBe(false);
         await repos.strategyRun.releaseRunLease({ ...base, owner: 'worker-1' });
+        await repos.strategyRun.releaseRunLease({ ...base, owner: 'worker-1' });
         expect(
           await repos.strategyRun.acquireRunLease({
             ...base,
@@ -1707,6 +1909,77 @@ export const registerRepositoryContractTests = (
             leaseUntil: FAR_FUTURE,
           }),
         ).toBe(true);
+      });
+
+      it('fake clock 三小时持续 run heartbeat，fenced commit 只允许一次', async () => {
+        const running = makeStrategyRun('run-heartbeat', {
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+          publication: undefined,
+        });
+        await repos.strategyRun.saveStartedRun(running);
+        const token = await repos.strategyRun.acquireRunLeaseToken({
+          strategyId: running.strategyId,
+          strategyVersionId: running.strategyVersionId,
+          owner: 'worker-heartbeat',
+          runId: running.id,
+          now: T1,
+          leaseUntil: new Date(T1.getTime() + 20 * 60_000),
+        });
+        expect(token).not.toBeNull();
+        if (token === null) return;
+
+        let now = T1;
+        for (let minutes = 5; minutes <= 180; minutes += 5) {
+          now = new Date(T1.getTime() + minutes * 60_000);
+          expect(
+            await repos.strategyRun.renewRunLease({
+              token,
+              now,
+              leaseUntil: new Date(now.getTime() + 20 * 60_000),
+            }),
+          ).toBe(true);
+        }
+        expect(
+          await repos.strategyRun.renewRunLease({
+            token,
+            now: new Date(now.getTime() + 20 * 60_000),
+            leaseUntil: new Date(now.getTime() + 40 * 60_000),
+          }),
+        ).toBe(false);
+
+        const terminal = makeStrategyRun(running.id, {
+          status: 'complete',
+          startedAt: running.startedAt,
+          finishedAt: now,
+        });
+        expect(
+          await repos.strategyRun.commitRunWithFence({
+            token,
+            now,
+            bundle: { run: terminal, results: [], signals: [] },
+          }),
+        ).toBe('committed');
+        expect(
+          await repos.strategyRun.commitRunWithFence({
+            token,
+            now,
+            bundle: { run: terminal, results: [], signals: [] },
+          }),
+        ).toBe('lease-lost');
+        await repos.strategyRun.releaseRunLease({
+          strategyId: token.strategyId,
+          strategyVersionId: token.strategyVersionId,
+          owner: token.owner,
+          fence: token.fence,
+        });
+        await repos.strategyRun.releaseRunLease({
+          strategyId: token.strategyId,
+          strategyVersionId: token.strategyVersionId,
+          owner: token.owner,
+          fence: token.fence,
+        });
       });
 
       it('fenced commit 不允许在缺失 started run 时直接插入终态', async () => {
@@ -1729,6 +2002,54 @@ export const registerRepositoryContractTests = (
           }),
         ).toBe('lease-lost');
         expect(await repos.strategyRun.findRunById(run.id)).toBeNull();
+      });
+
+      it('旧 owner 失租后不能提交，接管 owner 以更大 fence 只能提交一次', async () => {
+        const run = makeStrategyRun('run-fence-handoff', {
+          status: 'running',
+          finishedAt: undefined,
+          publication: undefined,
+        });
+        await repos.strategyRun.saveStartedRun(run);
+        const ownerA = await repos.strategyRun.acquireRunLeaseToken({
+          strategyId: run.strategyId,
+          strategyVersionId: run.strategyVersionId,
+          owner: 'owner-a',
+          runId: run.id,
+          now: T1,
+          leaseUntil: T2,
+        });
+        expect(ownerA).not.toBeNull();
+        const ownerB = await repos.strategyRun.acquireRunLeaseToken({
+          strategyId: run.strategyId,
+          strategyVersionId: run.strategyVersionId,
+          owner: 'owner-b',
+          runId: run.id,
+          now: T2,
+          leaseUntil: T3,
+        });
+        expect(ownerB).not.toBeNull();
+        if (ownerA === null || ownerB === null) return;
+        expect(ownerB.fence).toBeGreaterThan(ownerA.fence);
+        const terminal = makeStrategyRun(run.id, {
+          finishedAt: T3,
+          status: 'complete',
+        });
+        expect(
+          await repos.strategyRun.commitRunWithFence({
+            token: ownerB,
+            now: T2,
+            bundle: { run: terminal, results: [], signals: [] },
+          }),
+        ).toBe('committed');
+        expect(
+          await repos.strategyRun.commitRunWithFence({
+            token: ownerA,
+            now: T2,
+            bundle: { run: terminal, results: [], signals: [] },
+          }),
+        ).toBe('lease-lost');
+        expect(await repos.strategyRun.findRunById(run.id)).toMatchObject({ status: 'complete' });
       });
 
       it('run 往返和过滤排序一致', async () => {
@@ -2951,6 +3272,43 @@ export const registerRepositoryContractTests = (
           vintageStatus: 'available',
         });
         expect(await repos.strategyEvaluation.listDays(session.id)).toHaveLength(1);
+      });
+    });
+
+    describe('LimitUpLadderSnapshotRepository', () => {
+      it('按交易日和来源保存、读取并保留完整快照', async () => {
+        const snapshot = makeLimitUpLadder();
+        await repos.limitUpLadderSnapshot.save(snapshot);
+        expect(
+          await repos.limitUpLadderSnapshot.findByDate({
+            date: snapshot.date,
+            source: snapshot.source,
+          }),
+        ).toEqual(snapshot);
+        expect(
+          await repos.limitUpLadderSnapshot.findByDate({
+            date: '2026-07-02',
+            source: snapshot.source,
+          }),
+        ).toBeNull();
+      });
+
+      it('同一交易日重复采集按 date/source 幂等更新，不串其它日期', async () => {
+        const first = makeLimitUpLadder();
+        const second = makeLimitUpLadder({
+          total: 2,
+          maxLevel: 4,
+          asOf: T2,
+        });
+        await repos.limitUpLadderSnapshot.save(first);
+        await repos.limitUpLadderSnapshot.save(second);
+        await repos.limitUpLadderSnapshot.save(makeLimitUpLadder({ date: '2026-07-02' }));
+        await expect(
+          repos.limitUpLadderSnapshot.findByDate({ date: first.date, source: first.source }),
+        ).resolves.toEqual(second);
+        await expect(
+          repos.limitUpLadderSnapshot.findByDate({ date: '2026-07-02', source: first.source }),
+        ).resolves.toMatchObject({ date: '2026-07-02', total: 1 });
       });
     });
 

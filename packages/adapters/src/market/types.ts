@@ -4,6 +4,7 @@ import type {
   IndexQuote,
   IntradayMinute,
   MarketDataAdapterLike,
+  MarketSnapshot,
   MarketSnapshotItem,
   Quote,
   StockSearchCandidate,
@@ -33,4 +34,5 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   readonly indexQuoteMode?: 'realtime' | 'delayed';
   /** 全市场快照 Gateway；具体来源由 capability registry 路由。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
+  fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
 }

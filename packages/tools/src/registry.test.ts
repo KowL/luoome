@@ -48,6 +48,8 @@ const EXPECTED_TOOL_NAMES = [
   'start_strategy_evaluation_session',
   'record_strategy_evaluation_day',
   'finish_strategy_evaluation_session',
+  'resume_strategy_evaluation_session',
+  'cancel_strategy_evaluation_session',
   'list_strategy_runs',
   'get_strategy_run',
   'get_strategy_workspace',
@@ -118,6 +120,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_market_data_status',
   'get_ashare_sentiment',
   'list_workflow_runs',
+  'get_strategy_reliability_summary',
   // Vibe A 股报告迁移 Phase 1
   'get_report',
   'list_reports',
@@ -136,6 +139,12 @@ const EXPECTED_TOOL_NAMES = [
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   'get_stock_market_view',
   'get_stock_universe_status',
+  // v0.10 账户绩效与组合归因
+  'create_portfolio_cash_flow',
+  'create_portfolio_corporate_action',
+  'get_account_performance',
+  'list_account_performance_snapshots',
+  'audit_account_performance_snapshots',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -214,6 +223,7 @@ describe('toolRegistry', () => {
       'fetch_intraday_minutes',
       'fetch_quote',
       'generate_strategy_insight',
+      'get_account_performance',
       'get_ashare_sentiment',
       'get_stock_market_view',
       'import_remote_research_document',
@@ -242,11 +252,14 @@ describe('toolRegistry', () => {
       'archive_research_topic',
       'archive_watchlist',
       'archive_watchlist_member',
+      'cancel_strategy_evaluation_session',
       'close_holding',
       'complete_strategy_observations',
       'create_account',
       'create_alert_plan',
       'create_chat_session',
+      'create_portfolio_cash_flow',
+      'create_portfolio_corporate_action',
       'create_research_document',
       'create_research_topic',
       'create_strategy',
@@ -268,6 +281,7 @@ describe('toolRegistry', () => {
       'rename_chat_session',
       'renew_strategy_schedule_claim',
       'resume_strategy',
+      'resume_strategy_evaluation_session',
       'set_strategy_schedule',
       'set_watch_trigger_feedback',
       'start_strategy_evaluation_session',

@@ -1,4 +1,5 @@
 import {
+  type StockUniverseManagerLike,
   type Strategy,
   type StrategyDslV1,
   type StrategySchedule,
@@ -15,6 +16,31 @@ const NOW = new Date('2026-08-10T10:00:00.000Z');
 const seedScheduled = async (status: Strategy['status'] = 'active', recommendations = false) => {
   const ctx = await buildTestContext({ clock: () => NOW });
   await seedTestStockUniverse(ctx, { limit: 1 });
+  const stockUniverse: StockUniverseManagerLike = {
+    name: 'stock-universe',
+    sources: ['test-universe'],
+    fetchStockUniverse: async ({ coverage }) => {
+      const stocks = await ctx.repos.stockUniverse.listCurrent({ coverage, status: 'active' });
+      return {
+        source: 'test-universe',
+        coverage,
+        observedAt: ctx.clock(),
+        complete: true,
+        reportedTotal: stocks.length,
+        entries: stocks.map((stock) => ({
+          stockId: stock.id,
+          code: stock.code,
+          exchange: stock.exchange,
+          name: stock.name,
+          listingStatus: 'listed' as const,
+        })),
+      };
+    },
+  };
+  const scheduledCtx = {
+    ...ctx,
+    adapters: { ...ctx.adapters, stockUniverse },
+  };
   const definition: StrategyDslV1 = {
     schemaVersion: 1,
     metadata: {},
@@ -89,7 +115,7 @@ const seedScheduled = async (status: Strategy['status'] = 'active', recommendati
     updatedAt: new Date('2026-08-09T10:00:00.000Z'),
   };
   await ctx.repos.strategySchedule.save(schedule);
-  return ctx;
+  return scheduledCtx;
 };
 
 describe('run-strategy-schedules workflow', () => {
@@ -111,7 +137,7 @@ describe('run-strategy-schedules workflow', () => {
     const second = await runStrategySchedulesWorkflow.run({ owner: 'worker-2' }, ctx);
     expect(second).toEqual({
       ok: true,
-      data: { items: [], ran: 0, skipped: 0, failed: 0 },
+      data: { items: [], ran: 0, partial: 0, skipped: 0, failed: 0 },
     });
   });
 
@@ -139,5 +165,29 @@ describe('run-strategy-schedules workflow', () => {
     });
     expect(advices).toHaveLength(1);
     expect(await ctx.repos.notification.listByAdvice(advices[0]?.id ?? '')).toHaveLength(1);
+  });
+
+  it('AI 不可用时保留事实发布并把 facts-only 映射为 partial，而不是 failed', async () => {
+    const base = await seedScheduled();
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        llm: {
+          name: 'failing-llm',
+          generate: async () => {
+            throw new Error('provider unavailable');
+          },
+        },
+      },
+    };
+    const result = await runStrategySchedulesWorkflow.run({ owner: 'worker-ai-failure' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data).toMatchObject({ ran: 0, partial: 1, skipped: 0, failed: 0 });
+    expect(result.data.items[0]).toMatchObject({
+      status: 'partial',
+      recommendationError: 'strategy-daily-cycle partial',
+    });
   });
 });

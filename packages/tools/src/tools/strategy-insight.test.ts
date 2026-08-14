@@ -186,6 +186,7 @@ describe('strategy insight', () => {
     expect(
       result.ok && result.data.observations.find((item) => item.horizon === 't1'),
     ).toMatchObject({
+      sampleUnit: 'stock-day-horizon',
       complete: 1,
       averageReturnPct: 0.05,
       benchmarkStatus: 'unavailable',

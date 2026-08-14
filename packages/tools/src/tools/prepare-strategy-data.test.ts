@@ -174,6 +174,10 @@ describe('prepare_strategy_data freshness and vintage', () => {
       status: 'missing',
       errorKind: 'stale_data',
     });
+    expect(result.data.performance).toMatchObject({
+      memberLatencyMs: { samples: 1 },
+    });
+    expect(result.data.checkpoint.providerStatuses[0]?.latencyMs).toMatchObject({ samples: 1 });
   });
 
   it('reuse-fresh refreshes a stale local projection before applying the freshness gate', async () => {
@@ -284,5 +288,35 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.checkpoint.vintageStatus).toBe('unavailable');
+  });
+
+  it('provider timeout is persisted as a stable error kind', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => new Promise<DailyBar[]>(() => {}),
+        },
+      },
+    };
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH'],
+        maxRetries: 0,
+        requestTimeoutMs: 500,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]?.errorKind).toBe('provider_timeout');
+    expect(result.data.checkpoint.providerStatuses[0]?.errorKinds).toEqual(['provider_timeout']);
   });
 });

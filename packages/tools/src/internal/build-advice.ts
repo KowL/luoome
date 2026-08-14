@@ -2,6 +2,7 @@ import {
   AdviceDecisionSchema,
   type AdviceHorizon,
   AdviceHorizonSchema,
+  type AdviceReasoning,
   AdviceReasoningSchema,
   adviceExpiryDays,
 } from '@luoome/core';
@@ -20,6 +21,31 @@ export const AdviceLLMSchema = z.object({
 });
 
 export type AdviceLLMOutput = z.infer<typeof AdviceLLMSchema>;
+
+const PROMPT_INJECTION_PATTERNS = [
+  /ignore (?:all )?previous instructions/gi,
+  /you (?:are|must)(?: now)?/gi,
+  /system:\s*/gi,
+  /<\|.*?\|>/g,
+];
+
+/** Advice 落库前的文本安全边界：LLM 文本只作为展示证据，不能携带可执行提示词。 */
+export const sanitizeAdviceText = (value: string): string => {
+  let sanitized = value;
+  for (const pattern of PROMPT_INJECTION_PATTERNS) {
+    sanitized = sanitized.replace(pattern, '[redacted]');
+  }
+  return sanitized;
+};
+
+export const sanitizeAdviceReasoning = (reasoning: AdviceReasoning): AdviceReasoning => ({
+  premise: sanitizeAdviceText(reasoning.premise),
+  evidence: reasoning.evidence.map(sanitizeAdviceText),
+  counterEvidence: reasoning.counterEvidence.map(sanitizeAdviceText),
+});
+
+export const sanitizeAdviceRisks = (risks: readonly string[]): readonly string[] =>
+  risks.map(sanitizeAdviceText);
 
 const DAY_MS = 86_400_000;
 /** A 股收盘 15:00 用固定 UTC+8 计算（不依赖宿主机时区，保证测试确定性）。 */
@@ -51,5 +77,5 @@ export const computeValidUntil = (horizon: AdviceHorizon, now: Date): Date => {
 export const extractLlmRaw = (value: unknown): string | undefined => {
   if (typeof value !== 'object' || value === null) return undefined;
   const raw = (value as { raw?: unknown }).raw;
-  return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+  return typeof raw === 'string' && raw.length > 0 ? sanitizeAdviceText(raw) : undefined;
 };

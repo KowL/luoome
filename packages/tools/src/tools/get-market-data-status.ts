@@ -127,7 +127,8 @@ export const getMarketDataStatusTool = defineTool({
       const thresholdMs =
         item.dataset === 'quote' ||
         item.dataset === 'realtime-index' ||
-        item.dataset === 'market-snapshot'
+        item.dataset === 'market-snapshot' ||
+        item.dataset === 'market-snapshot-envelope'
           ? STALE_AFTER_MS
           : 36 * 60 * 60 * 1000;
       const freshness =

@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 import { assertStrategySelectionPolicy } from '../strategy-watchlist-policy.js';
-import { ProviderStatusSchema } from './workflow-run.js';
+import { ProviderLatencySchema, ProviderStatusSchema } from './workflow-run.js';
 
 const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/);
 
@@ -264,7 +264,7 @@ export const StrategyRunPublicationSchema = z.object({
 export type StrategyRunPublication = z.infer<typeof StrategyRunPublicationSchema>;
 
 export const StrategyProviderCoverageSchema = z.object({
-  capability: z.enum(['quote', 'daily-bars', 'universe']),
+  capability: z.enum(['quote', 'daily-bars', 'universe', 'limit-up-ladder']),
   provider: z.string().min(1),
   requested: z.number().int().nonnegative(),
   succeeded: z.number().int().nonnegative(),
@@ -274,6 +274,7 @@ export const StrategyProviderCoverageSchema = z.object({
   freshness: z.enum(['fresh', 'stale', 'unavailable']),
   dataAsOf: z.coerce.date().optional(),
   errorKinds: z.array(z.string()).max(20),
+  latencyMs: ProviderLatencySchema.optional(),
 });
 export type StrategyProviderCoverage = z.infer<typeof StrategyProviderCoverageSchema>;
 

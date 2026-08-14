@@ -677,6 +677,9 @@ export const renderInsights = async (
       el('td', null, item.uniqueStocks ?? '--'),
       el('td', null, pct(item.averageReturnPct)),
       el('td', null, pct(item.medianReturnPct)),
+      el('td', null, pct(item.p25ReturnPct)),
+      el('td', null, pct(item.p75ReturnPct)),
+      el('td', null, pct(item.averageExcessReturnPct)),
       el('td', null, pct(item.averageMaxFavorableExcursionPct)),
       el('td', null, pct(item.averageMaxAdverseExcursionPct)),
       el('td', null, item.total === 0 ? '--' : pct(item.missingRate)),
@@ -695,7 +698,13 @@ export const renderInsights = async (
         el('td', null, item.uniqueStocks ?? '--'),
         el('td', null, pct(item.averageReturnPct)),
         el('td', null, pct(item.medianReturnPct)),
+        el('td', null, pct(item.p25ReturnPct)),
+        el('td', null, pct(item.p75ReturnPct)),
+        el('td', null, pct(item.averageMaxFavorableExcursionPct)),
+        el('td', null, pct(item.averageMaxAdverseExcursionPct)),
+        el('td', null, item.total === 0 ? '--' : pct(item.missingRate)),
         el('td', null, item.benchmarkStatus === 'complete' ? '可用' : '不可用'),
+        el('td', null, item.observedAsOf ? fmtDateTime(item.observedAsOf) : '--'),
       ]),
     );
   return el('div', 'strategy-insight-grid', [
@@ -738,6 +747,11 @@ export const renderInsights = async (
     ]),
     el('section', 'strategy-insight-section', [
       el('h4', null, '真实信号观察'),
+      el(
+        'p',
+        'muted',
+        '样本口径：同一股票、同一基准交易日、同一观察周期只保留一个可追溯事实；缺失 benchmark 保持不可用，不回填为 0。',
+      ),
       el('div', 'table-wrap', [
         el('table', 'table', [
           el(
@@ -752,6 +766,9 @@ export const renderInsights = async (
                 '唯一股票',
                 '平均收益',
                 '中位收益',
+                'P25',
+                'P75',
+                '平均超额',
                 '平均最大有利',
                 '平均最大不利',
                 '缺失率',
@@ -786,7 +803,13 @@ export const renderInsights = async (
                       '唯一股票',
                       '平均收益',
                       '中位收益',
+                      'P25',
+                      'P75',
+                      '平均最大有利',
+                      '平均最大不利',
+                      '缺失率',
                       '基准',
+                      '观察截止',
                     ].map((label) => el('th', null, label)),
                   ),
                 ),
@@ -1146,8 +1169,9 @@ const VINTAGE_STATUS = {
   'not-applicable': ['不适用', 'badge-neutral'],
 };
 
-export const buildBacktestResultContent = (data, strategyId = '') => {
+export const buildBacktestResultContent = (data, strategyId = '', sessionId) => {
   const summary = data.summary;
+  const evaluationSessionId = sessionId ?? data.sessionId ?? data.session?.id;
   const evaluationButton = el('button', 'btn btn-outline btn-sm', '查看历史评估记录');
   evaluationButton.type = 'button';
   const evaluationHash = buildStrategyHash({
@@ -1208,7 +1232,37 @@ export const buildBacktestResultContent = (data, strategyId = '') => {
             ]),
           ]),
         ]),
-    el('p', 'mono muted', `Evaluation session ${data.sessionId}`),
+    ...(evaluationSessionId === undefined
+      ? []
+      : [el('p', 'mono muted', `Evaluation session ${evaluationSessionId}`)]),
+  ]);
+};
+
+const buildBacktestProgressContent = (data, strategyId, sessionId, setStatus) => {
+  const summary = data.summary ?? {
+    tradingDays: 0,
+    completedDays: 0,
+    failedDays: 0,
+    selectedCount: 0,
+  };
+  const cancel = el('button', 'btn btn-danger btn-sm', '取消历史评估');
+  cancel.type = 'button';
+  cancel.addEventListener('click', async () => {
+    cancel.disabled = true;
+    const result = await post(
+      `/api/strategies/${encodeURIComponent(strategyId)}/backtests/${encodeURIComponent(sessionId)}/cancel`,
+      {},
+    );
+    setStatus(result.ok ? '已请求取消历史评估，已完成日期会保留' : errorText(result), !result.ok);
+  });
+  return el('div', 'strategy-backtest-progress', [
+    el(
+      'p',
+      null,
+      `已完成 ${summary.completedDays ?? 0}/${summary.tradingDays ?? 0} 个交易日，失败 ${summary.failedDays ?? 0}，累计入选 ${summary.selectedCount ?? 0}`,
+    ),
+    el('p', 'muted', '任务在后台运行，页面会按日期刷新进度；历史评估不会替换当前生产股票池。'),
+    el('div', 'modal-actions', [cancel]),
   ]);
 };
 
@@ -1219,16 +1273,57 @@ export const runStrategyBacktest = async (strategy, input, setStatus) => {
     setStatus(errorText(result), true);
     return result;
   }
+  let completed = result.data?.summary === undefined ? undefined : result.data;
+  const sessionId = result.data?.sessionId ?? result.data?.session?.id;
+  if (completed === undefined && typeof sessionId === 'string') {
+    openModal(
+      `模拟回测（历史回放）· ${strategy.name}`,
+      buildBacktestProgressContent(result.data, strategy.id, sessionId, setStatus),
+    );
+    for (let attempt = 0; attempt < 360; attempt += 1) {
+      const snapshot = await callApi(
+        `/api/strategies/${encodeURIComponent(strategy.id)}/backtests/${encodeURIComponent(sessionId)}`,
+      );
+      if (!snapshot.ok) {
+        setStatus(errorText(snapshot), true);
+        return snapshot;
+      }
+      const data = snapshot.data;
+      const summary = data.summary ?? {};
+      setStatus(
+        `历史评估进度：${summary.completedDays ?? 0}/${summary.tradingDays ?? 0} 个交易日，已入选 ${summary.selectedCount ?? 0}`,
+      );
+      if (data.status !== 'running' && data.session?.status !== 'running') {
+        completed = data;
+        break;
+      }
+      openModal(
+        `模拟回测（历史回放）· ${strategy.name}`,
+        buildBacktestProgressContent(data, strategy.id, sessionId, setStatus),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  if (completed === undefined) {
+    setStatus('历史评估仍在后台运行，可在执行记录中查看进度', false);
+    return result;
+  }
   responseCache.clear();
   openModal(
     `模拟回测（历史回放）· ${strategy.name}`,
-    buildBacktestResultContent(result.data, strategy.id),
+    buildBacktestResultContent(completed, strategy.id, sessionId),
   );
+  const completionLabel =
+    completed.status === 'complete'
+      ? '历史模拟完成'
+      : completed.status === 'partial'
+        ? '历史模拟部分完成'
+        : '历史模拟失败或已取消';
   setStatus(
-    `历史模拟完成：${result.data.summary.completedDays}/${result.data.summary.tradingDays} 个交易日，累计入选 ${result.data.summary.selectedCount}，信号 ${result.data.summary.signalCount}`,
-    result.data.status !== 'complete',
+    `${completionLabel}：${completed.summary.completedDays}/${completed.summary.tradingDays} 个交易日，累计入选 ${completed.summary.selectedCount}，信号 ${completed.summary.signalCount}`,
+    completed.status !== 'complete',
   );
-  return result;
+  return { ...result, data: completed };
 };
 
 const localDateText = (date) => {

@@ -64,7 +64,7 @@ Content-Type: application/json
 `MarketDataManager` 已经有 primary、fallback、finalFallback 槽位与 30 分钟抑制窗口。
 `LUOOME_MARKET_SOURCES` 从左到右把启用源映射到这些槽位，数据源可选
 `eastmoney`、`tencent`、`tushare`，至少启用一个且不得重复。缺省顺序仍是
-Eastmoney → Tencent；显式启用 Tushare 后，它可以处于任意优先级。
+Eastmoney → Tencent → Sina；显式启用 Tushare 后，它可以处于任意优先级。
 
 现有 `finalFallbackSuppressMs` 是**主备源抑制窗口**，不是 Tushare 自身冷却窗口：
 
@@ -461,7 +461,8 @@ export const translateTushareError = (error: unknown): Error => {
 `MarketSourceOrderSchema` 与 `marketSourceOrderFromEnv`。factory 读取
 `LUOOME_MARKET_SOURCES`，按逗号切分并校验：
 
-- 可选值只有 `eastmoney`、`tencent`、`tushare`；
+- 可选值为 `eastmoney`、`sina`、`tencent`、`tushare`；其中 Sina 当前只绑定
+  `daily-bars` 能力；
 - 至少一个、最多三个，不允许重复；
 - 从左到右分别占据 primary、fallback、finalFallback；
 - 只启用一个源时使用内部 disabled adapter 占据必需的 fallback 端口，真实请求失败仍按
@@ -469,7 +470,7 @@ export const translateTushareError = (error: unknown): Error => {
 - 显式启用 Tushare 但缺少 `TUSHARE_TOKEN` 时启动期抛 `Tushare 已启用，但 TUSHARE_TOKEN
   未配置`，避免界面显示已启用但运行时静默跳过。
 
-未设置时默认 Eastmoney → Tencent。旧 `LUOOME_MARKET_ADSHARE` 兼容开关已删除。各 surface
+未设置时默认 Eastmoney → Tencent → Sina。旧 `LUOOME_MARKET_ADSHARE` 兼容开关已删除。各 surface
 只把自己的 env 传给 factory，不再分别解析开关。
 
 ### 6.1 Web 设置与热更新
@@ -482,7 +483,7 @@ Web 的 `/api/settings/market` 提供运行时配置：
   TUSHARE_TOKEN`）；
 - 保存成功后原子写入 `$LUOOME_HOME/.env`，文件权限保持 `0600`，随后替换
   `ctxRef.current.adapters.market`，当前进程立即生效；
-- Eastmoney 与 Tencent 无额外配置要求。
+- Eastmoney、Tencent 与 Sina 无额外配置要求；Sina 仅提供公开沪深 qfq 日线。
 
 ## 7. Core / DB 演进
 

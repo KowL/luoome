@@ -36,8 +36,9 @@
    `WorkflowRun`；复杂横截面算法以后通过 `strategy` resolver Seam 接入。
 8. 共振结果是同一交易日、同一 coverage 下的信号事实聚合，不叫“置信度”，不输出操作建议。
 9. 回测曲线和收益指标等到 `SignalObservation`、复权、费用、基准与样本口径完整后再建设。
-10. 共享前置是当前工作树已基本落地的 `StockUniverse` 目录主链路，以及仍待完成的
-    `all-stocks` coverage、规范 `DailyBar`、交易日历、MarketSnapshot envelope 与盘后数据归档。
+10. 共享前置是当前工作树已落地的 `StockUniverse` 目录主链路、`all-stocks` coverage、规范
+    `DailyBar`、交易日历、MarketSnapshot completeness envelope 与盘后数据归档；真实 provider
+    不可用时仍按维度返回 unavailable，不用静态数据补齐。
 
 ## 2. 范围
 
@@ -562,9 +563,10 @@ Phase 2 实施事实：东方财富涨停池只提供可靠的行业字段，没
 - 交易日和数据日期一致性；
 - 短 TTL 进程缓存。
 
-当前 `MarketSnapshot` 尚未统一携带 coverage、source、asOf 和 completeness envelope。
-在行情底座补齐该契约前，`get_ashare_sentiment.breadth` 必须返回 unavailable，不能从部分报价
-推算后声称覆盖沪深 A 股。补齐后 Manager 必须校验 expected/received 数量和分页完整性。
+`MarketSnapshot` 现在统一携带 coverage、source、fetchedAt 与 completeness envelope；Eastmoney
+分页 adapter 与 Tencent 批量 adapter 都校验 expected/received/missing/duplicate 后才标记 complete，
+Tencent 的身份全集来自真实 Sina 当前目录。`get_ashare_sentiment.breadth`
+只在完整信封且每个条目都有 changePct 时计算，否则返回 partial/unavailable，并保留明确 warning。
 
 Manager 不隐藏持久化。持久化由 Report 保存的 evidence 完成；如 Phase 3C 需要独立日历史，
 再增加专用 repository，不提前建表。
@@ -705,12 +707,10 @@ output = {
 10. 写 WorkflowRun(succeeded|partial|failed)。
 ```
 
-Workflow 只通过 `ctx.tools.*` 编排。为避免新增 workflow 直接访问 repository，需要补一个内部
-write tool `record_workflow_run`，或先把同等能力纳入 `defineWorkflow` 生命周期；二选一后统一使用，
-不得复制当前个别 workflow 直接写 repository 的做法。
-
-当前 `defineWorkflow` 不会自动写 `WorkflowRun`；`sync-stock-universe` 也只是单步 tool 编排。
-因此“workflow 自动审计”是本设计的前置实现任务，不是可直接复用的现状。
+Workflow 只通过 `ctx.tools.*` 编排。当前已通过 workflow-only 的
+`record_workflow_run`、`reconcile_stale_workflow_runs` 等工具承接审计和持久化，生产 workflow
+不直接访问 repository/adapter；`defineWorkflow` 仍不隐式创建审计记录，调用方必须显式编排
+生命周期，避免把失败或部分结果误报为成功。
 
 Report.status 与 WorkflowRun.status 不完全相同：
 
@@ -777,8 +777,9 @@ section：
 | `research-changes` | 否 | 新增笔记与 thesis 版本变化 |
 | `next-week-events` | 是 | 下一周重要 StockEvent |
 
-`signal-outcomes` 在 SignalObservation 未实现前为 optional unavailable，不使整份周报 partial。
-实现后再通过模板版本将其提升为 required，不动态改变历史报告判定。
+`signal-outcomes` 已接入 SignalObservation；真实样本不足、观察未到期或 benchmark 缺失时仍明确
+标记 unavailable/partial，不填默认收益，也不使历史报告被重新判定。只有在产品确认模板升级后，
+才可将其提升为 required。
 
 ### 10.5 模板版本
 
@@ -1183,8 +1184,8 @@ Vibe 当前快照仅在进程内，默认没有可靠存量可导入。旧设计
 - IndexQuote 可稳定获取并带 source/ts。
 - LimitUpLadder 现有测试保持通过。
 - StockEvent、WorkflowRun 已有实现保持可用。
-- MarketSnapshot 如参与宽度计算，必须补 coverage/source/asOf/completeness envelope；
-  否则 breadth 明确 unavailable。
+- [x] MarketSnapshot 已携带 coverage/source/fetchedAt/completeness envelope；宽度仅在完整
+  信封且每个条目有 changePct 时计算，否则明确返回 partial/unavailable。
 
 ### 17.2 开始全市场策略刷新前
 
@@ -1209,7 +1210,8 @@ Vibe 当前快照仅在进程内，默认没有可靠存量可导入。旧设计
 - 合并当前已基本完成的 StockUniverse 目录主链路及 contract tests。
 - 落地交易日历共享 Module。
 - 完成规范 DailyBar 盘后归档和 coverage 状态。
-- 补 MarketSnapshot coverage/source/asOf/completeness envelope。
+- [x] 补齐 MarketSnapshot coverage/source/fetchedAt/completeness envelope，并将宽度计算绑定到
+  完整真实快照。
 - 给 workflow runner 增加统一 WorkflowRun 审计，或提供只供 workflow 使用的原子 tool。
 - 修正 `run_tactic(all-stocks)`、`tactic-scan` 超 50 条和 evaluatedStocks 口径。
 
@@ -1257,8 +1259,10 @@ Vibe 当前快照仅在进程内，默认没有可靠存量可导入。旧设计
 
 - [x] SignalObservation：WatchTrigger / StrategySignal 建立 T+1/3/5/20 的可审计观察记录；
   `tactic-signal` 仅保留历史读取兼容。
-- [x] 本地日线完成观察，样本统计返回样本数、时间范围、缺失率及收益描述统计。
-- [x] benchmark 未接入时显式标为 unavailable；满足 §17.3 后才建设回测 Module 和曲线。
+- [x] 本地日线完成观察，样本统计返回样本数、唯一股票、时间范围、缺失率及收益描述统计；同一股票、
+  同一基准交易日、同一周期按 `stock-day-horizon` 去重，代表 observation id 可回溯。
+- [x] SignalObservation 使用版本化 benchmark 数据集 `000300.SH:qfq:daily:v1`；同步失败时显式标为
+  unavailable/partial；满足 §17.3 后才建设严格回测 Module 和曲线。
 
 ## 19. 文件影响范围
 
@@ -1427,7 +1431,7 @@ Drizzle/in-memory 共用：
 
 - [x] core 零 IO，依赖方向符合 ARCHITECTURE。
 - [x] repository 有 Drizzle/in-memory 双 Adapter 和 contract tests。
-- [ ] Workflow 只通过 `ctx.tools.*` 编排。
+- [x] Workflow 只通过 `ctx.tools.*` 编排；生产文件有静态边界测试，审计写入走 workflow-only tools。
 - [x] Tool sideEffect 和 MCP exposure 正确。
 - [x] Drizzle schema 与 ensureSchema 同步且迁移幂等。
 - [x] `bun run typecheck` 通过。
@@ -1448,5 +1452,5 @@ Drizzle/in-memory 共用：
 11. 复杂策略必须使用本地批量数据，不允许逐股在线抓取。
 12. 回测和收益指标等待 SignalObservation 与完整市场口径。
 13. Vibe 历史文件默认不导入。
-14. 当前 StockUniverse 目录主链路已在未提交工作树中基本落地；实现必须先合并并保持全绿，
-    再补下游 all-stocks、MarketSnapshot envelope 和 workflow 审计，不得覆盖或倒退其契约。
+14. 当前 StockUniverse 目录主链路已在未提交工作树中基本落地；MarketSnapshot envelope 与
+    workflow 审计已接入，后续只在不覆盖或倒退契约的前提下补下游 all-stocks 证据。

@@ -4,11 +4,18 @@ import type {
   IndexQuote,
   IntradayMinute,
   Logger,
+  MarketSnapshot,
   MarketSnapshotItem,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
-import { DailyBarSchema, isHoliday, isWeekend, QuoteSchema } from '@luoome/core';
+import {
+  assertMarketSnapshotInvariants,
+  DailyBarSchema,
+  isHoliday,
+  isWeekend,
+  QuoteSchema,
+} from '@luoome/core';
 
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
 import type { MarketSourceRegistry, MarketSourceStatus } from './source-registry.js';
@@ -132,6 +139,9 @@ export class MarketDataManager implements MarketDataAdapter {
   /** 全市场快照 TTL 缓存（单 key：全市场只有一份）。 */
   private marketSnapshotCache:
     | { readonly at: number; readonly items: readonly MarketSnapshotItem[] }
+    | undefined;
+  private marketSnapshotEnvelopeCache:
+    | { readonly at: number; readonly snapshot: MarketSnapshot }
     | undefined;
   /** 当日分时 TTL 缓存（per stockId）。 */
   private readonly intradayMinutesCache = new Map<
@@ -377,6 +387,44 @@ export class MarketDataManager implements MarketDataAdapter {
     throw lastError ?? new Error('all market sources failed for market-snapshot');
   }
 
+  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+    const now = this.clock();
+    if (
+      this.marketSnapshotEnvelopeCache !== undefined &&
+      now.getTime() - this.marketSnapshotEnvelopeCache.at < this.marketSnapshotTtlMs
+    ) {
+      return this.marketSnapshotEnvelopeCache.snapshot;
+    }
+    const sources = this.registry.sources('market-snapshot-envelope', {
+      coverage: 'CN_A_SHARES_SH_SZ',
+    });
+    if (sources.length === 0) throw new Error('unsupported_capability: market-snapshot-envelope');
+    let lastError: unknown;
+    for (const source of sources) {
+      try {
+        await this.rateLimiter.acquire();
+        const snapshot = source.execute({ coverage: 'CN_A_SHARES_SH_SZ' });
+        const parsed = await snapshot;
+        assertMarketSnapshotInvariants(parsed);
+        if (!parsed.completeness.complete) {
+          throw new Error(
+            `partial_data: ${source.source} market snapshot missing ${parsed.completeness.missingCount} items`,
+          );
+        }
+        this.marketSnapshotEnvelopeCache = { at: now.getTime(), snapshot: parsed };
+        this.marketSnapshotCache = { at: now.getTime(), items: parsed.items };
+        return parsed;
+      } catch (error) {
+        this.logger.warn('manager.fetchMarketSnapshotEnvelope source failed', {
+          sourceName: source.source,
+          error: errorMessage(error),
+        });
+        lastError = error;
+      }
+    }
+    throw lastError ?? new Error('all market sources failed for market-snapshot-envelope');
+  }
+
   /**
    * 大盘指数实时行情：只路由显式注册 realtime-index capability 的来源，
    * delayed-index 永远不会进入该路径（指数快照低频，不做缓存）。
@@ -464,6 +512,7 @@ export class MarketDataManager implements MarketDataAdapter {
     this.finalFallbackCalls = 0;
     this.finalFallbackAtByKey.clear();
     this.marketSnapshotCache = undefined;
+    this.marketSnapshotEnvelopeCache = undefined;
     this.quoteCache.clear();
     this.dailyBarCache.clear();
     this.rateLimiter.reset();

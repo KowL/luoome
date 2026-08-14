@@ -6,6 +6,7 @@ import { tushareConfigFromEnv } from '../tushare/client.js';
 import { QuoteCache } from './cache.js';
 import { EastmoneyAdapter } from './eastmoney.js';
 import { MarketDataManager } from './manager.js';
+import { SinaAdapter } from './sina.js';
 import { type AnyMarketCapabilityBinding, MarketSourceRegistry } from './source-registry.js';
 import { TencentAdapter } from './tencent.js';
 import { TushareMarketAdapter } from './tushare.js';
@@ -17,7 +18,7 @@ import { TushareMarketAdapter } from './tushare.js';
  * - provider 解析委托 core 的 parseMarketProviderConfigFromEnv（非法值启动期抛错）。
  * - 返回 MarketDataManager，缓存 / 限速 / 30 分钟抑制窗口全部由 Manager
  *   既有实现承担，此处只做组装。
- * - LUOOME_MARKET_SOURCES 定义启用状态和优先级；未配置时保持 Eastmoney → Tencent。
+ * - LUOOME_MARKET_SOURCES 定义启用状态和优先级；未配置时使用 Eastmoney → Tencent → Sina。
  */
 
 export interface CreateMarketAdapterDeps {
@@ -33,7 +34,7 @@ export interface CreateMarketAdapterDeps {
   readonly quoteCacheTtlMs?: number;
 }
 
-export const MarketSourceIdSchema = z.enum(['eastmoney', 'tencent', 'tushare']);
+export const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'tushare']);
 export type MarketSourceId = z.infer<typeof MarketSourceIdSchema>;
 
 export const MarketSourceOrderSchema = z
@@ -46,7 +47,7 @@ export const MarketSourceOrderSchema = z
     }
   });
 
-/** 未配置 LUOOME_MARKET_SOURCES 时保持 Eastmoney → Tencent。 */
+/** 未配置 LUOOME_MARKET_SOURCES 时使用 Eastmoney → Tencent → Sina。 */
 export const marketSourceOrderFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
 ): MarketSourceId[] => {
@@ -56,7 +57,7 @@ export const marketSourceOrderFromEnv = (
       raw.split(',').map((source) => source.trim().toLowerCase()),
     );
   }
-  return MarketSourceOrderSchema.parse(['eastmoney', 'tencent']);
+  return MarketSourceOrderSchema.parse(['eastmoney', 'tencent', 'sina']);
 };
 
 export const createMarketAdapterFromEnv = (
@@ -85,6 +86,10 @@ export const createMarketAdapterFromEnv = (
       case 'tencent': {
         const adapter = new TencentAdapter(sourceOpts);
         return tencentBindings(adapter);
+      }
+      case 'sina': {
+        const adapter = new SinaAdapter(sourceOpts);
+        return sinaBindings(adapter);
       }
       case 'tushare': {
         const adapter = buildTushare(env, sourceOpts, deps.logger);
@@ -171,6 +176,14 @@ const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBindin
     execute: () => adapter.fetchMarketSnapshot(),
   },
   {
+    capability: 'market-snapshot-envelope',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchMarketSnapshotEnvelope(),
+    dataAsOf: (snapshot) => snapshot.dataAsOf,
+  },
+  {
     capability: 'realtime-index',
     source: adapter.name,
     coverage: CN_SH_SZ,
@@ -187,12 +200,38 @@ const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBindin
 const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] => [
   ...commonBindings(adapter, CN_ALL),
   {
+    capability: 'market-snapshot',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchMarketSnapshot(),
+  },
+  {
+    capability: 'market-snapshot-envelope',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchMarketSnapshotEnvelope(),
+    dataAsOf: (snapshot) => snapshot.dataAsOf,
+  },
+  {
     capability: 'intraday-minutes',
     source: adapter.name,
     coverage: CN_ALL,
     configurationReady: true,
     execute: ({ stockId }) => adapter.fetchIntradayMinutes(stockId),
     dataAsOf: (points) => points.at(-1)?.time,
+  },
+];
+
+const sinaBindings = (adapter: SinaAdapter): AnyMarketCapabilityBinding[] => [
+  {
+    capability: 'daily-bars',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockId, range }) => adapter.fetchDailyBars(stockId, range),
+    dataAsOf: (bars) => bars.at(-1)?.date,
   },
 ];
 

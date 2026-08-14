@@ -1,9 +1,15 @@
 # Strategy 日运行与历史评估可靠性详细设计
 
-> 状态：设计冻结候选，待按开发计划分阶段实现
-> 日期：2026-08-11
+> 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+20 仍按开发计划持续验收
+> 日期：2026-08-14
 > 关联计划：[Strategy 日运行与评估可靠性开发计划](../strategy-reliability-development-plan.md)
 > 影响范围：core、db、tools、workflows、Web/CLI/MCP 读取面
+
+实现复核：R0～R4、R6～R7 的 Tool/Workflow/存储契约已接入当前代码；真实 Sina 全市场
+5,207 只数据准备、首个 schedule 审计和 2 个交易日 PIT replay 已验证。历史区间缺少对应
+日期的真实 PIT universe 时保持 `not_found`，不使用当前快照冒充历史版本。replay 对盘中固化的
+snapshot 使用交易日日终 `universeAsOf`，而 checkpoint 的 `dataAsOf` 仍保持目标交易日时点，避免
+PIT 目录查找在午夜和日终之间分叉。
 
 ## 1. 背景与覆盖关系
 
@@ -81,6 +87,10 @@ workflows ──► tools ──► core
 - repository interface 在 core，Drizzle/memory implementation 在 db；
 - tools 可以访问 repository/adapter；
 - workflows 只调用 `ctx.tools.*`，不直接访问 repository 或 adapter；
+- 正式 daily cycle 在数据准备前通过 `list_strategy_runs(scope=operational)` 检查同一
+  schedule/UTC 交易日是否已有 `mode=scheduled` 正式运行；重复 cron claim 只释放 lease 并保留
+  `schedule-day-duplicate` skipped 审计，不重复拉取外部数据或写入 StrategyRun；可靠性汇总不把
+  skipped claim 计入生产周期样本；
 - Web/API 不复制 current-run、acceptance 或观察聚合规则。
 
 `StrategyRunExecution` 内部保留两个真实 adapter implementation：
@@ -734,7 +744,8 @@ workflow 必须检查 `result.data.run.status/publication`，不能只检查 Too
 
 - `name='strategy-daily-cycle'`；
 - inputSummary：strategyId、scheduleId、versionId、dataAsOf、policyVersion；
-- outputSummary：phase statuses、runId、publication/acceptance、计数、insight mode、
+- outputSummary：phase statuses、runId、publication/acceptance、计数、lease 续期、checkpoint 覆盖、
+  观察补全、`000300.SH:qfq:daily:v1` benchmark 同步状态/来源/bar 数/失败原因、insight mode、
   advice/notification count；
 - providerStatuses：market checkpoint、LLM、notification；
 - 不写完整 DSL、逐股结果或 prompt。
@@ -742,7 +753,8 @@ workflow 必须检查 `result.data.run.status/publication`，不能只检查 Too
 ### 9.4 `complete-strategy-observations`
 
 继续作为幂等补偿 workflow，可按小时或每日运行；它不能再被认为是唯一正常路径。daily cycle 在
-run 终态后先补“所有已到期的历史观察”，不是只补本 run。
+run 终态后先显式同步 `000300.SH` qfq 日线，再补“所有已到期的历史观察”，不是只补本 run；补偿 workflow
+同样记录 benchmark 数据集版本和逐项同步结果。同步失败不填替代值，个股观察仍可保存但周期保持 partial。
 
 ### 9.5 `strategy-replay-range`
 
@@ -764,7 +776,7 @@ run 终态后先补“所有已到期的历史观察”，不是只补本 run。
 
 1. 解析 A 股交易日；
 2. 建立或恢复 evaluation session；
-3. 每日解析 PIT universe 和 checkpoint；
+3. 每日按交易日日终 `universeAsOf` 解析 PIT universe，再按目标 `dataAsOf` 准备 checkpoint；
 4. 调用 `run_strategy(mode='replay')`；
 5. 保存日期级进度和错误；
 6. 由 evaluation observation tool 基于后续 checkpoint 计算 T+n；
@@ -1077,8 +1089,21 @@ Workflow 输出示例：
 - `strategy_observation_total{horizon,status}`；
 - `strategy_insight_total{mode,provider}`。
 
-如果项目当前没有 metrics backend，先以结构化 WorkflowRun/logger 输出，避免为本功能引入新的
-监控基础设施。
+观察事实聚合统一采用 `stock-day-horizon` 描述性样本单位：以 `stockId + baselineAt` 的交易日 +
+`horizon` 作为 sample key，同一 key 只保留一个代表性 observation，complete 优先于 pending，
+同等级按 observation id 稳定选择；baselineAt 缺失的 unavailable 事实不臆测交易日，保留为独立缺失行。
+聚合返回的 `observationIds` 是实际参与统计的代表事实，Tool/Web/AI facts 共用该列表和去重口径，
+并同时保留 total、complete、uniqueStocks、missingRate、分位数、benchmark/excess、MFE/MAE 与 observedAsOf。
+
+如果项目当前没有 metrics backend，先以结构化 WorkflowRun/logger 输出，并通过
+`get_strategy_reliability_summary`（Web：`/api/strategy/reliability-summary`）按真实审计记录聚合，避免为本功能引入新的监控基础设施。
+
+汇总同时按 `scheduleId + dataAsOf` 交易日去重计数；同一 schedule 同一交易日出现重复正式运行时，
+门禁返回 `schedule-day-duplicate`，不能把重复运行计入通过条件。
+汇总支持按 `scheduleId` 查询，并返回每个 schedule 的 `scheduleTradingDayKeys`；未指定单个
+schedule 时，多 schedule 只要有任一 schedule 未达到目标交易日数，门禁就返回
+`schedule-days-below-target`，不能跨 schedule 拼接交易日达标。
+汇总还按真实 `phaseTimings` 计算各阶段 P50/P95/max 延迟，供全市场数据准备与 checkpoint 求值预算复核。
 
 ### 15.2 日志 locality
 

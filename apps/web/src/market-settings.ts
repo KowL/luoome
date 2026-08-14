@@ -37,6 +37,7 @@ const SOURCE_META: Readonly<
 > = {
   eastmoney: { label: '东方财富', description: '公开实时行情与日线，默认主源' },
   tencent: { label: '腾讯行情', description: '公开行情备源，覆盖沪深 A 股' },
+  sina: { label: '新浪行情', description: '公开沪深目录与复权日线备源' },
   tushare: { label: 'Tushare', description: 'tushare.pro 数据服务，支持实时快照、日线与复权因子' },
 };
 
@@ -89,7 +90,7 @@ export class MarketSettingsStore {
 
   read(): MarketSettingsView {
     const env = this.runtimeEnv();
-    let activeOrder: MarketSourceId[] = ['eastmoney', 'tencent'];
+    let activeOrder: MarketSourceId[] = ['eastmoney', 'tencent', 'sina'];
     let configError: string | undefined;
     try {
       activeOrder = marketSourceOrderFromEnv(env);

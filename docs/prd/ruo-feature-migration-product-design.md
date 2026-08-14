@@ -599,7 +599,9 @@ SignalObservation
 数据依赖（Phase 3A 立项前必须验证）：
 
 - T+N 观察需要触发时点之后 N 个交易日的日线。当前 `dailyBar` 主要为持仓股昨收服务，任意候选股的历史覆盖与回填策略需要单独设计；
-- `benchmarkReturnPct` 需要指数行情，是一个新的 adapter 依赖，首期未覆盖时该字段标记 unavailable 而不是省略。
+- `benchmarkReturnPct` 使用真实指数 qfq 日线数据集 `000300.SH:qfq:daily:v1`；生产日循环和补观察 workflow
+  先显式同步该数据集，来源和失败原因进入审计。指数日线缺失时该字段标记 unavailable 而不是省略，周期保留
+  partial，不使用替代报价或 0 值。
 
 展示原则：
 

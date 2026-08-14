@@ -34,7 +34,6 @@
         "@ai-sdk/provider": "3.0.x",
         "@luoome/core": "workspace:*",
         "ai": "6.0.x",
-        "drizzle-orm": "^0.45.2",
         "zod": "^4.0.0",
       },
     },

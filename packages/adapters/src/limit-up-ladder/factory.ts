@@ -1,4 +1,14 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import type { LimitUpLadderManagerLike, Logger } from '@luoome/core';
+import {
+  BUILTIN_HOLIDAYS,
+  mergeHolidayCalendars,
+  parseEnvHolidays,
+  parseHolidayObject,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { EastmoneyLimitUpLadderAdapter } from './eastmoney.js';
@@ -39,7 +49,34 @@ export const createLimitUpLadderManagerFromEnv = (
     primary: buildLimitUpLadderSource(source, deps.fetchImpl),
     logger: deps.logger,
     clock,
+    holidaysProvider: async () => loadHolidaysFromEnv(env),
   });
+};
+
+/**
+ * 连板天梯与 watch 共用同一份三层节假日历：内置 → 文件 → env。
+ *
+ * adapters 不能依赖 cli，因此在装配根读取配置；读取失败按日历“无新增项”处理，
+ * 与 CLI 的容错口径一致。生产路径不会因为节假日配置文件损坏而伪造行情结果。
+ */
+const loadHolidaysFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+): ReadonlyMap<number, ReadonlySet<string>> => {
+  const home = env.LUOOME_HOME?.trim() || join(homedir(), '.luoome');
+  const filePath = env.LUOOME_HOLIDAYS_FILE?.trim() || join(home, 'holidays.json');
+  let fileCalendar: ReadonlyMap<number, ReadonlySet<string>> = new Map();
+  try {
+    if (existsSync(filePath)) {
+      fileCalendar = parseHolidayObject(JSON.parse(readFileSync(filePath, 'utf8')));
+    }
+  } catch {
+    fileCalendar = new Map();
+  }
+  return mergeHolidayCalendars(
+    BUILTIN_HOLIDAYS,
+    fileCalendar,
+    parseEnvHolidays(env.LUOOME_A_SHARE_HOLIDAYS),
+  );
 };
 
 const buildLimitUpLadderSource = (

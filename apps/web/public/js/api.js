@@ -35,6 +35,10 @@ const setAccountId = (accountId) => {
 const callApi = async (path, init) => {
   const { timeoutMs, ...rest } = init ?? {};
   const headers = new Headers(rest.headers);
+  const accountId = getAccountId();
+  if (accountId.length > 0 && !headers.has('x-luoome-account-id')) {
+    headers.set('x-luoome-account-id', accountId);
+  }
   if (rest.body !== undefined && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }

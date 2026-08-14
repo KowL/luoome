@@ -1,4 +1,4 @@
-import type { Logger } from '@luoome/core';
+import type { Logger, MarketSnapshot } from '@luoome/core';
 import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import type { FakeMarketAdapter } from '../testing/fake-market.js';
@@ -463,6 +463,7 @@ describe('market/manager fetchMarketSnapshot', () => {
   class SnapshotSource {
     readonly name: string;
     callCount = 0;
+    envelopeCallCount = 0;
     fail = false;
     constructor(name: string) {
       this.name = name;
@@ -480,6 +481,23 @@ describe('market/manager fetchMarketSnapshot', () => {
       this.callCount += 1;
       if (this.fail) throw new Error('snapshot fail');
       return SNAPSHOT;
+    }
+    async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
+      this.envelopeCallCount += 1;
+      if (this.fail) throw new Error('snapshot envelope fail');
+      return {
+        coverage: 'CN_A_SHARES_SH_SZ',
+        source: this.name,
+        fetchedAt: new Date('2026-08-14T08:00:00.000Z'),
+        items: SNAPSHOT.map((item) => ({ ...item, changePct: 1.2 })),
+        completeness: {
+          expectedCount: 1,
+          receivedCount: 1,
+          missingCount: 0,
+          duplicateCount: 0,
+          complete: true,
+        },
+      };
     }
   }
 
@@ -525,6 +543,40 @@ describe('market/manager fetchMarketSnapshot', () => {
     const items = await mgr.fetchMarketSnapshot();
     expect(items).toEqual(SNAPSHOT);
     expect(fallback.callCount).toBe(1);
+  });
+
+  it('MarketSnapshot envelope → 校验完整性并复用 TTL 缓存', async () => {
+    const primary = new SnapshotSource('p');
+    const mgr = createTestMarketDataManager({ primary, logger: silentLogger });
+    const a = await mgr.fetchMarketSnapshotEnvelope();
+    const b = await mgr.fetchMarketSnapshotEnvelope();
+    expect(a.completeness.complete).toBe(true);
+    expect(a.items[0]?.changePct).toBe(1.2);
+    expect(b).toBe(a);
+    expect(primary.envelopeCallCount).toBe(1);
+  });
+
+  it('MarketSnapshot envelope 不完整 → 继续尝试 fallback', async () => {
+    const primary = new SnapshotSource('p');
+    const fallback = new SnapshotSource('f');
+    const partial: MarketSnapshot = {
+      coverage: 'CN_A_SHARES_SH_SZ',
+      source: 'p',
+      fetchedAt: new Date('2026-08-14T08:00:00.000Z'),
+      items: SNAPSHOT,
+      completeness: {
+        expectedCount: 2,
+        receivedCount: 1,
+        missingCount: 1,
+        duplicateCount: 0,
+        complete: false,
+      },
+    };
+    primary.fetchMarketSnapshotEnvelope = async () => partial;
+    const mgr = createTestMarketDataManager({ primary, fallback, logger: silentLogger });
+    const result = await mgr.fetchMarketSnapshotEnvelope();
+    expect(result.source).toBe('f');
+    expect(fallback.envelopeCallCount).toBe(1);
   });
 
   it('没有任何源实现 → 明确抛错（调用方降级本地股票库）', async () => {

@@ -9,11 +9,16 @@ import type {
   ChatMessagePart,
   DeliveryStatus,
   Exchange,
+  LimitUpLadder,
+  LimitUpLadderSource,
   ListingStatus,
   MarketCoverage,
   MembershipSnapshot,
   Money,
   Notification,
+  PortfolioCashFlow,
+  PortfolioCorporateAction,
+  PortfolioPerformanceSnapshot,
   ProviderStatus,
   Quantity,
   Report,
@@ -175,6 +180,24 @@ export const stockUniverseSnapshotMembers = sqliteTable(
   }),
 );
 
+/** Real provider 的按交易日天梯快照；replay 只读取此 PIT 表，不读取当前 manager。 */
+export const limitUpLadderSnapshots = sqliteTable(
+  'limit_up_ladder_snapshots',
+  {
+    date: text('date').notNull(),
+    source: text('source').$type<LimitUpLadderSource>().notNull(),
+    total: integer('total').notNull(),
+    maxLevel: integer('max_level').notNull(),
+    levels: text('levels_json', { mode: 'json' }).$type<LimitUpLadder['levels']>().notNull(),
+    warnings: text('warnings_json', { mode: 'json' }).$type<LimitUpLadder['warnings']>().notNull(),
+    asOf: integer('as_of', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.date, t.source], name: 'limit_up_ladder_snapshots_pk' }),
+    sourceDateIdx: index('limit_up_ladder_snapshots_source_date_idx').on(t.source, t.date),
+  }),
+);
+
 export const holdings = sqliteTable(
   'holdings',
   {
@@ -206,6 +229,85 @@ export const trades = sqliteTable('trades', {
   source: text('source').$type<TradeSource>().notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
+
+export const portfolioCashFlows = sqliteTable(
+  'portfolio_cash_flows',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    kind: text('kind').$type<PortfolioCashFlow['kind']>().notNull(),
+    amount: real('amount').notNull(),
+    currency: text('currency').notNull(),
+    stockId: text('stock_id'),
+    source: text('source').$type<PortfolioCashFlow['source']>().notNull(),
+    note: text('note'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    accountOccurredIdx: index('portfolio_cash_flows_account_occurred_idx').on(
+      t.accountId,
+      t.occurredAt,
+    ),
+  }),
+);
+
+export const portfolioCorporateActions = sqliteTable(
+  'portfolio_corporate_actions',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    kind: text('kind').$type<PortfolioCorporateAction['kind']>().notNull(),
+    ratio: real('ratio'),
+    cashPerShare: real('cash_per_share'),
+    source: text('source').$type<PortfolioCorporateAction['source']>().notNull(),
+    note: text('note'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    accountOccurredIdx: index('portfolio_corporate_actions_account_occurred_idx').on(
+      t.accountId,
+      t.occurredAt,
+    ),
+    stockOccurredIdx: index('portfolio_corporate_actions_stock_occurred_idx').on(
+      t.stockId,
+      t.occurredAt,
+    ),
+  }),
+);
+
+export const portfolioPerformanceSnapshots = sqliteTable(
+  'portfolio_performance_snapshots',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    from: integer('from_at', { mode: 'timestamp_ms' }).notNull(),
+    to: integer('to_at', { mode: 'timestamp_ms' }).notNull(),
+    currency: text('currency').notNull(),
+    inputFingerprint: text('input_fingerprint').notNull(),
+    calculatedAt: integer('calculated_at', { mode: 'timestamp_ms' }).notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }),
+    performance: text('performance_json', { mode: 'json' })
+      .$type<PortfolioPerformanceSnapshot['performance']>()
+      .notNull(),
+  },
+  (t) => ({
+    accountRangeFingerprintUnique: uniqueIndex(
+      'portfolio_performance_snapshots_account_range_fingerprint_unique',
+    ).on(t.accountId, t.from, t.to, t.inputFingerprint),
+    accountCalculatedIdx: index('portfolio_performance_snapshots_account_calculated_idx').on(
+      t.accountId,
+      t.calculatedAt,
+    ),
+    accountRangeIdx: index('portfolio_performance_snapshots_account_range_idx').on(
+      t.accountId,
+      t.from,
+      t.to,
+    ),
+  }),
+);
 
 export const advices = sqliteTable(
   'advices',
@@ -610,6 +712,10 @@ export const strategyEvaluationDays = sqliteTable(
     vintageStatus:
       text('vintage_status').$type<NonNullable<StrategyEvaluationDay['vintageStatus']>>(),
     status: text('status').$type<StrategyEvaluationDay['status']>().notNull(),
+    evaluatedCount: integer('evaluated_count'),
+    selectedCount: integer('selected_count'),
+    signalCount: integer('signal_count'),
+    failedCount: integer('failed_count'),
     error: text('error'),
   },
   (t) => ({
@@ -1218,8 +1324,12 @@ export const schema = {
   stockUniverseMemberships,
   stockUniverseSyncRuns,
   stockUniverseSnapshotMembers,
+  limitUpLadderSnapshots,
   holdings,
   trades,
+  portfolioCashFlows,
+  portfolioCorporateActions,
+  portfolioPerformanceSnapshots,
   advices,
   adviceOutcomes,
   priceSnapshots,
