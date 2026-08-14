@@ -134,6 +134,48 @@ describe('tool/batch_quote', () => {
     ]);
   });
 
+  it('intraday-rule accepts a live quote observed just after the request started', async () => {
+    const requestStartedAt = new Date('2026-07-22T02:30:00.000Z');
+    const nextTick = new Date(requestStartedAt.getTime() + 1);
+    let clockCalls = 0;
+    const base = await buildTestContext();
+    const ctx = {
+      ...base,
+      clock: () => (clockCalls++ === 0 ? requestStartedAt : nextTick),
+    };
+    const quote = (observedAt: Date): Quote => ({
+      stockId: '002594.SZ',
+      observedAt,
+      fetchedAt: observedAt,
+      timestampSource: 'retrieval',
+      ts: observedAt,
+      open: money(100),
+      high: money(101),
+      low: money(99),
+      close: money(100.5),
+      volume: 1234,
+      source: 'live-test',
+    });
+    const market = {
+      ...ctx.adapters.market,
+      batchQuote: (): Promise<Map<string, Quote>> => {
+        const liveQuote = quote(ctx.clock());
+        return Promise.resolve(new Map([[liveQuote.stockId, liveQuote]]));
+      },
+    };
+
+    const result = await batchQuoteTool.execute(
+      { stockIds: ['002594.SZ'], context: 'intraday-rule' },
+      { ...ctx, adapters: { ...ctx.adapters, market } },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items).toEqual([
+      expect.objectContaining({ stockId: '002594.SZ', status: 'ok', freshness: 'fresh' }),
+    ]);
+  });
+
   it('错误路径：stockIds 为空 → invalid_input', async () => {
     const ctx = await buildTestContext();
     const res = await batchQuoteTool.execute({ stockIds: [] }, ctx);

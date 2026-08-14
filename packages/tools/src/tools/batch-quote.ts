@@ -63,7 +63,6 @@ export const batchQuoteTool = defineTool({
         resolved.push({ id: stock.id, name: stock.name });
       }
     }
-    const now = ctx.clock();
     const freshAfterMs = Math.max(input.watchIntervalSeconds * 2_000, 180_000);
     const classify = (
       stockId: string,
@@ -71,6 +70,7 @@ export const batchQuoteTool = defineTool({
       quote: Quote,
       retrieval: 'live' | 'local-fallback',
     ): z.infer<typeof BatchQuoteItem> => {
+      const now = ctx.clock();
       const ageMs = now.getTime() - quote.observedAt.getTime();
       const sameTradingDay = dateInShanghai(now) === dateInShanghai(quote.observedAt);
       const fresh = ageMs >= 0 && ageMs <= freshAfterMs;
