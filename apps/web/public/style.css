@@ -1469,6 +1469,11 @@ html.has-bg-image .bg-layer {
 }
 
 .sidebar {
+  position: sticky;
+  top: var(--topbar-h);
+  align-self: start;
+  height: calc(100vh - var(--topbar-h));
+  overflow-y: auto;
   border-right: 1px solid var(--line);
   padding: var(--space-4) 0;
 }
@@ -6154,6 +6159,8 @@ body > .modal {
   }
 
   .sidebar {
+    position: static;
+    height: auto;
     min-width: 0;
     width: 100%;
     overflow: hidden;
