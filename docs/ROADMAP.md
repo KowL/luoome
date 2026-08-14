@@ -242,7 +242,7 @@
    已补上 workflow 进程中断后的 stale running 审计收敛、生产日循环显式同步并审计
    `000300.SH:qfq:daily:v1` benchmark，以及 50 张表的 Drizzle/SQLite
    schema drift 契约（逐表列与显式索引）；剩余跨交易日 P50/P95/max 样本；
-   非只读 Tool 的 JSONL audit log 已接入 CLI/MCP/TUI/Web 四个生产入口，文件权限、递归脱敏和 Advice
+   非只读 Tool 的 JSONL audit log 已接入 CLI/MCP/TUI/Web 四个生产入口，文件权限、元数据审计和 Advice
    prompt-injection 清理均有测试；Tool 的 input issues、InvariantError、handler 和 output schema
    错误出口统一脱敏；release checklist 已完成逐项复核，但不改变 S3 生产观测要求。
 3. **S2 历史评估作业化 ✅（真实区间边界已验收）**：Web 使用后台 evaluation session，提供日期级

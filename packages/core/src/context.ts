@@ -10,6 +10,7 @@ import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './e
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
+import type { ToolErrorKind } from './error/index.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type {
   ResearchRemoteImportAdapterLike,
@@ -152,10 +153,8 @@ export interface AuditLogEvent {
   readonly ts: Date;
   readonly tool: string;
   readonly sideEffect: SideEffect;
-  readonly input: unknown;
   readonly result: 'ok' | 'error';
-  readonly output?: unknown;
-  readonly error?: unknown;
+  readonly errorKind?: ToolErrorKind;
   readonly caller: string;
 }
 

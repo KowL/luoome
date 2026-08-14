@@ -138,7 +138,6 @@ const writeAudit = async (
   ctx: ToolContext,
   tool: string,
   sideEffect: SideEffect,
-  input: unknown,
   result: ToolResult<unknown>,
 ): Promise<void> => {
   if (sideEffect === 'read' || ctx.auditLog === undefined) return;
@@ -147,9 +146,8 @@ const writeAudit = async (
       ts: ctx.clock(),
       tool,
       sideEffect,
-      input,
       result: result.ok ? 'ok' : 'error',
-      ...(result.ok ? { output: result.data } : { error: result.error }),
+      ...(result.ok ? {} : { errorKind: result.error.kind }),
       caller: ctx.auditCaller ?? ctx.user.id,
     });
   } catch (error) {
@@ -193,7 +191,7 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
         ok: false,
         error: sanitizeToolError(result.error),
       };
-      await writeAudit(ctx, name, sideEffect, rawInput, safeResult);
+      await writeAudit(ctx, name, sideEffect, safeResult);
       return safeResult;
     }
 
@@ -209,7 +207,7 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
             message: redactErrorText(error.message),
           },
         };
-        await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+        await writeAudit(ctx, name, sideEffect, toolResult);
         return toolResult;
       }
       const cause = redactErrorText(error instanceof Error ? error.message : String(error));
@@ -217,7 +215,7 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
         ok: false,
         error: { kind: 'internal', cause: `tool "${name}": ${cause}` },
       };
-      await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+      await writeAudit(ctx, name, sideEffect, toolResult);
       return toolResult;
     }
 
@@ -226,7 +224,7 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
         ok: false,
         error: sanitizeToolError(result.error),
       };
-      await writeAudit(ctx, name, sideEffect, parsed.data, safeResult);
+      await writeAudit(ctx, name, sideEffect, safeResult);
       return safeResult;
     }
 
@@ -241,11 +239,11 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
           ),
         },
       };
-      await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+      await writeAudit(ctx, name, sideEffect, toolResult);
       return toolResult;
     }
     const toolResult: ToolResult<O> = { ok: true, data: outParsed.data };
-    await writeAudit(ctx, name, sideEffect, parsed.data, toolResult);
+    await writeAudit(ctx, name, sideEffect, toolResult);
     return toolResult;
   };
 

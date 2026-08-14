@@ -620,7 +620,7 @@ Tool/API schema、迁移与测试矩阵。
 - Advice 保留证据、反证、风险、免责声明和有效期；
 - trade 永不通过 MCP 暴露，不新增自动交易路径。
 - 非只读 Tool 已统一记录 JSONL audit log：CLI/MCP/TUI/Web 生产入口写入各自 `$LUOOME_HOME` 日志，
-  文件权限为 `0700/0600`，敏感字段递归脱敏；Advice 的 LLM reasoning、risks 与 raw reasoning 在落库前
+  文件权限为 `0700/0600`，只记录调用元数据、不记录业务输入输出；Advice 的 LLM reasoning、risks 与 raw reasoning 在落库前
   清理常见 prompt-injection 模式。2026-08-14 release checklist 已通过 MCP smoke、registry/invariant、
   错误脱敏和 Web/TUI 界面回归复核。
 

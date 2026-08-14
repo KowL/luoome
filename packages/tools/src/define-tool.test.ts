@@ -242,11 +242,16 @@ describe('defineTool execute 错误模型', () => {
       result: 'ok',
       caller: 'test',
     });
+    expect(events[0]).not.toHaveProperty('input');
+    expect(events[0]).not.toHaveProperty('output');
     expect(events[1]).toMatchObject({
       tool: 'test_advice',
       sideEffect: 'advice',
       result: 'error',
+      errorKind: 'not_found',
       caller: 'test',
     });
+    expect(events[1]).not.toHaveProperty('input');
+    expect(events[1]).not.toHaveProperty('error');
   });
 });

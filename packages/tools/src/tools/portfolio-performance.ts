@@ -16,7 +16,6 @@ import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 const accountIdInput = z.object({ accountId: z.string().min(1).optional() });
 
 export const CreatePortfolioCashFlowInput = z.object({
-  id: z.string().min(1).optional(),
   accountId: z.string().min(1),
   occurredAt: z.coerce.date(),
   kind: PortfolioCashFlowSchema.shape.kind,
@@ -42,7 +41,7 @@ export const createPortfolioCashFlowTool = defineTool({
       return errInvalidInput('现金流 currency 必须与账户一致');
     const flow = PortfolioCashFlowSchema.parse({
       ...input,
-      id: input.id ?? `cash-flow-${globalThis.crypto.randomUUID()}`,
+      id: `cash-flow-${globalThis.crypto.randomUUID()}`,
       createdAt: ctx.clock(),
     });
     await ctx.repos.portfolioCashFlow.save(flow);
@@ -51,7 +50,6 @@ export const createPortfolioCashFlowTool = defineTool({
 });
 
 export const CreatePortfolioCorporateActionInput = z.object({
-  id: z.string().min(1).optional(),
   accountId: z.string().min(1),
   stockId: z.string().min(1),
   occurredAt: z.coerce.date(),
@@ -77,7 +75,7 @@ export const createPortfolioCorporateActionTool = defineTool({
     if (stock === null) return errNotFound('Stock', input.stockId);
     const action = PortfolioCorporateActionSchema.parse({
       ...input,
-      id: input.id ?? `corporate-action-${globalThis.crypto.randomUUID()}`,
+      id: `corporate-action-${globalThis.crypto.randomUUID()}`,
       createdAt: ctx.clock(),
     });
     await ctx.repos.portfolioCorporateAction.save(action);

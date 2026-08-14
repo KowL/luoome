@@ -11,12 +11,48 @@ import {
 } from './portfolio-performance.js';
 
 describe('portfolio performance tools', () => {
+  it('generates ledger fact ids instead of accepting caller-controlled ids', async () => {
+    const ctx = await buildTestContext();
+    const accountId = ctx.user.defaultAccountId;
+    const flow = await createPortfolioCashFlowTool.execute(
+      {
+        id: 'caller-flow-id',
+        accountId,
+        occurredAt: new Date('2026-07-02T00:00:00.000Z'),
+        kind: 'deposit',
+        amount: 100,
+        currency: 'CNY',
+      },
+      ctx,
+    );
+    const action = await createPortfolioCorporateActionTool.execute(
+      {
+        id: 'caller-action-id',
+        accountId,
+        stockId: '600519.SH',
+        occurredAt: new Date('2026-07-02T00:00:00.000Z'),
+        kind: 'split',
+        ratio: 2,
+      },
+      ctx,
+    );
+
+    expect(flow.ok).toBe(true);
+    expect(action.ok).toBe(true);
+    if (!flow.ok || !action.ok) return;
+    expect(flow.data.flow.id).toMatch(/^cash-flow-/);
+    expect(flow.data.flow.id).not.toBe('caller-flow-id');
+    expect(action.data.action.id).toMatch(/^corporate-action-/);
+    expect(action.data.action.id).not.toBe('caller-action-id');
+    expect(await ctx.repos.portfolioCashFlow.findById('caller-flow-id')).toBeNull();
+    expect(await ctx.repos.portfolioCorporateAction.findById('caller-action-id')).toBeNull();
+  });
+
   it('records a real account cash flow and calculates performance from daily bars', async () => {
     const ctx = await buildTestContext();
     const accountId = ctx.user.defaultAccountId;
     const created = await createPortfolioCashFlowTool.execute(
       {
-        id: 'tool-flow-1',
         accountId,
         occurredAt: new Date('2026-07-02T00:00:00.000Z'),
         kind: 'deposit',
@@ -46,7 +82,6 @@ describe('portfolio performance tools', () => {
     const ctx = await buildTestContext();
     const result = await createPortfolioCorporateActionTool.execute(
       {
-        id: 'tool-action-unknown',
         accountId: ctx.user.defaultAccountId,
         stockId: 'missing-stock',
         occurredAt: new Date('2026-07-02T00:00:00.000Z'),

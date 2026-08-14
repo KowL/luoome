@@ -248,11 +248,14 @@ export const calculatePortfolioPerformance = (
   const contributions = [...positions.entries()].map(([stockId, state]) => {
     const lastDay = valuation.at(-1);
     const lastPrice = priceAt(input.barsByStock.get(stockId), lastDay?.date ?? input.to);
-    const currentValue = lastPrice === undefined ? undefined : state.quantity * lastPrice;
+    const currentValue =
+      state.quantity <= 0 ? 0 : lastPrice === undefined ? undefined : state.quantity * lastPrice;
     const unrealizedPnl =
-      lastPrice === undefined
-        ? undefined
-        : (currentValue ?? 0) - state.quantity * state.averageCost;
+      state.quantity <= 0
+        ? 0
+        : lastPrice === undefined
+          ? undefined
+          : (currentValue ?? 0) - state.quantity * state.averageCost;
     return {
       stockId,
       ...(currentValue === undefined ? {} : { currentValue }),

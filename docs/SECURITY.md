@@ -200,7 +200,7 @@ error message 可以含人类可读细节（如"持仓数量不能为负"），*
 - 内部文件系统路径（可显示 `$LUOOME_HOME`）
 
 `defineTool` 在统一出口清理 input issues、InvariantError、adapter/LLM/lease/internal 错误、handler
-异常和 output schema 校验错误；审计 sink 还会递归清理敏感 key、密钥样式、URL/路径、超长值和过深嵌套。
+异常和 output schema 校验错误；审计事件只记录调用元数据，不接收 Tool 的业务输入或输出。
 
 ## Audit Log
 
@@ -211,7 +211,6 @@ error message 可以含人类可读细节（如"持仓数量不能为负"），*
   "ts": "2026-07-17T10:30:00Z",
   "tool": "add_trade",
   "sideEffect": "write",
-  "input": { "stockId": "...", "quantity": 1000, "price": 14.5 },
   "result": "ok",
   "caller": "mcp"
 }
@@ -224,22 +223,18 @@ advice 类也记录：
   "ts": "...",
   "tool": "analyze_stock",
   "sideEffect": "advice",
-  "input": { "stockId": "002594" },
-  "output": {
-    "decision": "hold",
-    "confidence": 65,
-    "validUntil": "2026-07-22T15:00:00Z"
-  },
+  "result": "ok",
   "caller": "mcp"
 }
 ```
 
-敏感字段不写入 audit log。
+Tool 的业务输入、业务输出和错误详情不写入 audit log；失败事件只保留 `errorKind`。
 
 当前实现（2026-08-14）：`defineTool` 对所有 `write` / `external` / `trade` / `advice` 调用记录
 成功、业务失败、输入校验失败和异常结果；CLI、MCP、TUI、Web 生产入口分别把日志写入
 `$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
-目录权限为 `0700`、文件权限为 `0600`，写入前递归脱敏敏感字段、密钥样式、Webhook、超长值和过深嵌套。
+目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
+可选错误类别和调用方，从源头避免私人投资数据进入 sink。
 Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外清理常见 prompt-injection 模式。
 审计 sink 故障只产生 warning，不改变 ToolResult 协议或伪造业务成功。
 

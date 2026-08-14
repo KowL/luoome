@@ -173,4 +173,54 @@ describe('calculatePortfolioPerformance', () => {
     expect(result.valuation[0]?.holdingsValue).toBe(550);
     expect(result.valuation[0]?.totalValue).toBe(1_050);
   });
+
+  it('keeps total PnL available for a closed position without an ending quote', () => {
+    const result = calculatePortfolioPerformance({
+      accountId: 'account-1',
+      currency: 'CNY',
+      initialCapital: 1_000,
+      from: date('2026-08-10'),
+      to: date('2026-08-11'),
+      trades: [
+        {
+          id: 'buy-1',
+          accountId: 'account-1',
+          stockId: '600519.SH',
+          side: 'buy',
+          quantity: quantity(1),
+          price: money(100),
+          fee: money(0),
+          executedAt: date('2026-08-10'),
+          source: 'manual',
+          createdAt: date('2026-08-10'),
+        },
+        {
+          id: 'sell-1',
+          accountId: 'account-1',
+          stockId: '600519.SH',
+          side: 'sell',
+          quantity: quantity(1),
+          price: money(110),
+          fee: money(0),
+          executedAt: date('2026-08-10'),
+          source: 'manual',
+          createdAt: date('2026-08-10'),
+        },
+      ],
+      cashFlows: [],
+      corporateActions: [],
+      barsByStock: new Map(),
+    });
+
+    expect(result.completeness).toBe('complete');
+    expect(result.realizedPnl).toBe(10);
+    expect(result.unrealizedPnl).toBe(0);
+    expect(result.totalPnl).toBe(10);
+    expect(result.contributions[0]).toMatchObject({
+      stockId: '600519.SH',
+      currentValue: 0,
+      unrealizedPnl: 0,
+      completeness: 'complete',
+    });
+  });
 });
