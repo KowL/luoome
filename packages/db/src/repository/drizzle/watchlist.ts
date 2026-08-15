@@ -475,6 +475,7 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
   }
 
   async commitWatchlistSync(input: WatchlistSyncCommit): Promise<WatchlistSyncRun> {
+    assertWatchlistSyncRunInvariants(input.run);
     if (input.run.status === 'running') {
       throw new InvariantError('commitWatchlistSync 只接受终态 run');
     }
@@ -490,6 +491,20 @@ export class DrizzleWatchlistMemberRepository implements WatchlistMemberReposito
         undefined
       ) {
         throw new InvariantError(`Watchlist 不存在: ${input.run.watchlistId}`);
+      }
+      if (input.run.producerRunId !== undefined) {
+        const existingRun = tx
+          .select()
+          .from(watchlistSyncRuns)
+          .where(
+            and(
+              eq(watchlistSyncRuns.watchlistId, input.run.watchlistId),
+              eq(watchlistSyncRuns.sourceKey, input.run.sourceKey),
+              eq(watchlistSyncRuns.producerRunId, input.run.producerRunId),
+            ),
+          )
+          .get();
+        if (existingRun !== undefined) return toRun(existingRun);
       }
       const memberRows = tx
         .select()

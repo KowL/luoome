@@ -42,7 +42,8 @@ PIT 目录查找在午夜和日终之间分叉。
    成为 operational current。
 3. operational 与 evaluation 共享 evaluator，但消费者边界严格隔离。
 4. 调度、运行、观察、洞察和可选推荐形成一个有审计的 daily cycle。
-5. scheduled run 消费可追溯的数据 checkpoint，减少执行期外部 IO。
+5. scheduled run 消费可追溯的数据 checkpoint，减少执行期外部 IO；正式运行完成后只按 active
+   StrategyWatchlistSubscription 投影到 Watchlist。
 6. 历史区间可断点重放，并使用 point-in-time universe。
 7. LLM 不可用时仍交付确定性事实，且不伪造 AI narrative。
 
@@ -755,6 +756,12 @@ workflow 必须检查 `result.data.run.status/publication`，不能只检查 Too
 继续作为幂等补偿 workflow，可按小时或每日运行；它不能再被认为是唯一正常路径。daily cycle 在
 run 终态后先显式同步 `000300.SH` qfq 日线，再补“所有已到期的历史观察”，不是只补本 run；补偿 workflow
 同样记录 benchmark 数据集版本和逐项同步结果。同步失败不填替代值，个股观察仍可保存但周期保持 partial。
+
+同一 daily cycle 在 run 提交成功且 publication 为 `published` 后，通过
+`ctx.tools.sync_strategy_watchlist_subscriptions` 这个不进入公共 registry/MCP 的内部编排 tool 处理
+Strategy→Watchlist 订阅。该步骤使用 run 的
+`dataHealth` 决定 complete/partial：partial 只标 stale，failed/withheld/evaluation/非持久化运行不调用
+source commit；无 active 订阅时跳过。它不创建 Advice、Notification、AlertPlan 或 Trade。
 
 ### 9.5 `strategy-replay-range`
 

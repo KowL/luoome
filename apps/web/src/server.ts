@@ -51,6 +51,7 @@ import {
   listStrategyEvaluationDaysTool,
   resumeStrategyEvaluationSessionTool,
   startStrategyEvaluationSessionTool,
+  syncStrategyWatchlistSubscriptionsTool,
   toolRegistry,
 } from '@luoome/tools';
 import {
@@ -1441,9 +1442,64 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       strategyId: c.req.param('id'),
     }),
   );
-  app.post('/api/strategies/:id/run', (c) =>
-    targetMutation(c.req.raw, 'external', 'run_strategy', {
+  app.post('/api/strategies/:id/run', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    const run = await invokeTool('run_strategy', {
+      ...body.data,
       strategyId: c.req.param('id'),
+    });
+    if (!run.ok || typeof run.data !== 'object' || run.data === null) return jsonResult(run);
+    const payload = run.data as {
+      readonly run?: { readonly id?: unknown; readonly status?: unknown };
+      readonly persisted?: unknown;
+    } & Record<string, unknown>;
+    if (
+      payload.persisted !== true ||
+      typeof payload.run?.id !== 'string' ||
+      payload.run.status === 'failed'
+    ) {
+      return jsonResult(run);
+    }
+    const synced = await syncStrategyWatchlistSubscriptionsTool.execute(
+      { strategyId: c.req.param('id'), producerRunId: payload.run.id },
+      contextForRequest(),
+    );
+    return jsonResult({
+      ...run,
+      data: {
+        ...payload,
+        watchlistSync: synced.ok
+          ? synced.data
+          : {
+              status: 'failed',
+              error:
+                'message' in synced.error
+                  ? synced.error.message
+                  : 'cause' in synced.error
+                    ? synced.error.cause
+                    : synced.error.kind,
+            },
+      },
+    });
+  });
+  app.get('/api/strategies/:id/watchlists', (c) =>
+    callTool('list_strategy_watchlist_subscriptions', {
+      strategyId: c.req.param('id'),
+      status: 'active',
+    }),
+  );
+  app.post('/api/strategies/:id/watchlists', (c) =>
+    targetMutation(c.req.raw, 'write', 'subscribe_strategy_to_watchlist', {
+      strategyId: c.req.param('id'),
+    }),
+  );
+  app.delete('/api/strategies/:id/watchlists/:watchlistId', (c) =>
+    targetMutation(c.req.raw, 'write', 'unsubscribe_strategy_from_watchlist', {
+      strategyId: c.req.param('id'),
+      watchlistId: c.req.param('watchlistId'),
     }),
   );
   app.get('/api/strategies/:id/backtests/:sessionId', async (c) => {

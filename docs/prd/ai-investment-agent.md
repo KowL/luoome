@@ -157,7 +157,7 @@ Agent 输出重要判断时要区分：
 - 解释 universe、因子、筛选、评分、信号、风控和评估口径；
 - 解释哪些条件当前可确定性执行；
 - 生成 Strategy 新版本并试算；
-- 将 StrategyRun 结果加入或更新统一 Watchlist；
+- 在用户确认显式 Strategy→Watchlist 订阅后，将 StrategyRun 结果投影到统一 Watchlist；没有订阅时只能生成手工加入或订阅草案；
 - 对历史信号、候选变化和真实后续表现做描述性复盘。
 
 Agent 不在对话中即时发明未注册的因子，也不把一次生成的 Strategy 直接投入定时运行。

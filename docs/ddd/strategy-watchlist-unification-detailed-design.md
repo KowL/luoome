@@ -1,7 +1,7 @@
 # Strategy 与统一 Watchlist 详细设计
 
-> 状态：目标模型与主要迁移已实施；本文保留领域契约，后续仅追踪剩余缺口
-> 日期：2026-07-29
+> 状态：目标模型、显式 Strategy→Watchlist 订阅与完整/部分同步已实施；本文追踪当前契约
+> 日期：2026-08-15
 > 输入：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)、
 > [Strategy DSL PRD](../prd/strategy-dsl.md)、[统一 Watchlist PRD](../prd/watchlist.md)
 > 当前事实来源：[ARCHITECTURE.md](../ARCHITECTURE.md)、`packages/core`、`packages/db`、
@@ -19,7 +19,7 @@
 ```text
 StrategyVersion
   └── StrategyRun
-        ├── StrategyResult ──► WatchlistMemberSource(strategy)
+        ├── StrategyResult ──► (active subscription) ──► WatchlistMemberSource(strategy)
         └── StrategySignal ──► Advice evidence / AlertRule / SignalObservation
 
 Watchlist
@@ -55,6 +55,7 @@ Watchlist
 - Agent、Web、CLI、MCP 使用同一 tool schema。
 - 所有 repository 同时提供 drizzle 与 in-memory 实现，并复用 contract tests。
 - Drizzle schema、`ensureSchema` DDL 和存量库迁移保持同步、幂等。
+- Strategy 不默认绑定 Watchlist；目标列表必须通过持久化订阅契约显式选择。
 
 ### 2.2 非目标
 
@@ -727,7 +728,8 @@ load active StrategyVersion
   → evaluate selection/scoring/signals per stock
   → assign stable ranks
   → commit StrategyRun + Results + Signals
-  → （未交付，后续迭代）optional sync target Watchlist
+  → （由 run-strategies / strategy-daily-cycle / Web 正式运行编排）
+     按发布资格读取 active subscriptions 并调用内部 sync tool
 ```
 
 输入：
@@ -739,7 +741,6 @@ load active StrategyVersion
   mode?: 'scan' | 'replay';
   asOf?: Date;              // replay 必填
   stockIds?: string[];      // 试算子集；正式 scheduled 不允许
-  targetWatchlistId?: string; // 未交付，后续迭代（schema 已不含该字段）
   persist?: boolean;        // 默认 true；试算 false
 }
 ```
@@ -748,6 +749,8 @@ sideEffect：
 
 - 需要外部行情时为 `external`。
 - `persist=false` 仍可能外部取数，不能标 read。
+- `run_strategy` 不接受临时 `targetWatchlistId`，也不在 tool 内创建订阅；persist=false、evaluation、
+  trial、withheld、non-publishing、failed run 永远不会改变 Watchlist。
 - Agent 调用正式 persist/sync 前必须获得明确确认；样本试算可自动调用。
 
 ### 8.2 数据上下文
@@ -858,6 +861,45 @@ Portfolio Watchlist 每次持仓写操作后或启动同步：
 - complete 只基于本地 repository，不依赖外部行情。
 - 平仓结束 portfolio source，不自动归档仍被用户/Strategy 关注的 Member。
 
+### 9.5 Strategy → Watchlist 显式订阅
+
+Strategy 与 Watchlist 的关系是持久化、可审计的订阅契约，不是 Web 临时状态：
+
+```ts
+interface StrategyWatchlistSubscription {
+  id: string;
+  strategyId: string;
+  watchlistId: string;
+  sourceKey: `strategy:${string}`;
+  status: 'active' | 'cancelled';
+  createdBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+  cancelledAt?: Date;
+  cancelledBy?: string;
+}
+```
+
+`sourceKey` 必须等于 `strategy:<strategyId>`；同一 Strategy/Watchlist 只能有一个 active 契约；取消
+采用 tombstone，保留创建人、取消人和时间；取消后重新订阅创建新契约，不复活旧审计行。用户通过
+`subscribe_strategy_to_watchlist` 明确选择 Strategy 与目标 Watchlist，通过
+`unsubscribe_strategy_from_watchlist` 取消；UI 的选择只是这些 Tool 的入口。
+
+正式运行完成后，编排层调用不进入公共 registry/MCP 的内部 `sync_strategy_watchlist_subscriptions`：
+
+1. 仅读取指定 `producerRunId` 和该 Strategy 的 active 订阅；run 必须是持久化的
+   `scope=operational`、`publication.status=published` 正式运行。
+2. `dataHealth=complete` 映射为 `sync_watchlist_source.status=complete`；`dataHealth=partial` 映射为
+   `partial`。候选集合必须与该 run 的 `selected=true` facts 完全一致，并保留
+   `strategyId/strategyVersionId/producerRunId/score/rank/evidence/dataAsOf` provenance。
+3. complete 才能结束本次缺失的 Strategy source；partial/failed 只标 stale，不根据缺失集合制造退出。
+   空 complete 只有在 published run 证明可信零命中时才结束全部该 source。
+4. 同一 `(watchlistId, sourceKey, producerRunId)` 重试返回已有 sync run，不重复制造成员/快照或结束来源。
+5. manual、AI、Portfolio 和其它 Strategy source 仍 active/stale 时，结束一个 Strategy source 不归档成员。
+
+桥接不会创建 Advice、Notification、AlertPlan 或 Trade，也不会自动创建订阅。取消订阅只阻止后续
+producer run 同步，不删除已有成员、来源或同步快照。
+
 ## 10. AlertPlan 与盘中链路
 
 `intraday-watch` 改造后的步骤：
@@ -896,6 +938,9 @@ load enabled AlertPlans
 | `publish_strategy_version` | write | 激活 valid version |
 | `pause_strategy` | write | 暂停定时运行 |
 | `run_strategy` | external | 运行并可持久化结果 |
+| `list_strategy_watchlist_subscriptions` | read | 查询 Strategy→Watchlist 订阅及取消历史 |
+| `subscribe_strategy_to_watchlist` | write | 用户显式创建目标订阅；重复调用幂等 |
+| `unsubscribe_strategy_from_watchlist` | write | 用户显式取消订阅并保留 tombstone |
 | `list_strategy_runs` | read | 运行历史 |
 | `get_strategy_run` | read | run + results + provider status |
 | `strategy_signals_by_stock` | read | 个股信号 |
@@ -913,6 +958,7 @@ load enabled AlertPlans
 | `update_watchlist_member` | write | 修改 stage/priority |
 | `archive_watchlist_member` | write | 结束 manual source/归档 |
 | `sync_watchlist_source` | write | 内部原子同步；不直接暴露给日常 Agent |
+| `sync_strategy_watchlist_subscriptions` | write | 内部编排；不进入公共 registry/MCP，仅为 published operational run 处理 active 订阅 |
 | `list_watchlist_changes` | read | sync runs/snapshots |
 
 ### 11.3 Alert tools
@@ -947,7 +993,8 @@ load enabled AlertPlans
 1. `list_strategies(status=active)`。
 2. 过滤 schedule=after-market 的 currentVersion。
 3. 对每个 Strategy 调 `run_strategy`。
-4. （未交付，后续迭代）有 target Watchlist 时调用内部 sync tool。
+4. run 持久化且是 published operational 时调用内部 subscription sync；没有 active 订阅时跳过。
+   `partial` 只记录 source partial/stale，不结束来源。
 5. 记录每项执行状态 complete/failed、dataHealth 和 providerStatuses；历史 partial 按完成读取。
 6. 不生成 Advice、不发送买卖结论。
 
@@ -989,6 +1036,9 @@ GET/POST /api/strategies/:id/versions
 POST     /api/strategies/:id/validate
 POST     /api/strategies/:id/publish
 POST     /api/strategies/:id/run
+GET      /api/strategies/:id/watchlists
+POST     /api/strategies/:id/watchlists
+DELETE   /api/strategies/:id/watchlists/:watchlistId
 GET/POST /api/watchlists
 GET/PATCH /api/watchlists/:id
 POST     /api/watchlists/:id/members
@@ -996,7 +1046,9 @@ PATCH    /api/watchlists/:id/members/:memberId
 GET/POST /api/alert-plans
 ```
 
-所有 mutation 继续受 token、同源 Origin 和 `LUOOME_EXPOSE_WRITE=true` 保护。
+订阅 mutation 受 token、同源 Origin 和 `LUOOME_EXPOSE_WRITE=true` 保护；Web 正式运行同时视为
+`write + external`，成功持久化后按同一订阅桥接同步。UI 必须显示 active 订阅、目标选择和取消按钮，
+不得以“加入 Watchlist”手工 member 操作冒充 Strategy 订阅。
 
 ### 13.2 CLI
 
@@ -1012,6 +1064,7 @@ luoome watch                         # 现有常驻 runner 保留
 - 新 read tools 默认可暴露。
 - write/external 遵循现有 opt-in。
 - `sync_watchlist_source`、migration 和内部 commit tools 不暴露。
+- `sync_strategy_watchlist_subscriptions` 也不暴露；三个订阅管理 Tool 按 read/write opt-in 暴露。
 - 实际执行为一次性硬切：旧 tactic/group/pool tools 已随迁移从 registry 移除，无兼容期 discovery。
 
 ### 13.4 Agent
@@ -1077,9 +1130,12 @@ drizzle + memory 共用：
 - Strategy/version 唯一、激活事务、不可变版本。
 - Run commit 原子性、result/signal 唯一和排序。
 - Watchlist member 唯一。
+- StrategyWatchlistSubscription active 唯一、取消 tombstone 和策略删除时的显式取消。
 - 多 source 进入、更新、stale、结束、重新进入。
 - complete 空结果、partial/failed 不退出。
 - sync commit 原子性。
+- published operational complete/partial/withheld/evaluation/failed/persist=false 的 Strategy sync 门禁、
+  provenance、空 complete 和 producerRun 幂等。
 - AlertPlan 引用和删除保护。
 
 ### 16.3 Migration
@@ -1111,6 +1167,7 @@ fixture 数据库覆盖：
 
 - API 鉴权/Origin/write opt-in。
 - Strategy 草案、校验、发布、运行。
+- Strategy 订阅目标选择、取消、重复订阅幂等，以及 partial/withheld/evaluation 不改变 Watchlist。
 - Watchlist 多来源和 stage 操作。
 - AlertPlan CRUD 与试跑。
 - 浏览器真实启动验证：页面、确认、错误、stale/partial 展示。

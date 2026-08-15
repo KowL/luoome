@@ -12,6 +12,7 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Strategies and signals: `list_strategies`, `get_strategy`, `list_strategy_runs`,
   `get_strategy_run`, `strategy_signals_by_stock`.
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
+  `list_strategy_watchlist_subscriptions`.
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`.
 - Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `list_stock_events`.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
@@ -31,7 +32,7 @@ Use advice tools only for an explicit analysis request:
 ## Write
 
 Write tools create or change local records, including accounts, holdings, trades, Strategies,
-Watchlists, AlertPlans, stock events and feedback. Before calling one:
+Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback. Before calling one:
 
 1. Read the target state and resolve stable IDs.
 2. Restate exact values, especially stock, side, quantity, price, time and account.
@@ -40,6 +41,12 @@ Watchlists, AlertPlans, stock events and feedback. Before calling one:
 5. Verify the returned result and re-read state when correctness matters.
 
 Internal persistence tools such as watch-run or trigger recording are intended for workflows; do not invoke them for normal user requests unless their MCP description explicitly supports the requested operation.
+
+`subscribe_strategy_to_watchlist` and `unsubscribe_strategy_from_watchlist` are the explicit subscription
+contract. A Strategy has no Watchlist projection without an active subscription. Published operational runs
+may project only to subscribed targets; complete sync can end missing Strategy sources, while partial/failed
+sync only marks them stale. Evaluation, trial, `persist=false`, withheld, non-publishing and failed runs never
+change a Watchlist. The internal projection bridge is orchestration-only and is not registry/MCP-exposed.
 
 ## External
 

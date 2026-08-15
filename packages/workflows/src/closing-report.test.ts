@@ -128,8 +128,8 @@ describe('closing-report workflow', () => {
     const synced = await syncWatchlistSourceTool.execute(
       {
         watchlistId: 'closing-watch',
-        sourceKind: 'strategy',
-        sourceKey: 'strategy:closing',
+        sourceKind: 'ai',
+        sourceKey: 'ai:closing',
         status: 'complete',
         candidates: [{ stockId: '600519.SH', reason: '收盘入选', evidence: ['fixture'] }],
       },

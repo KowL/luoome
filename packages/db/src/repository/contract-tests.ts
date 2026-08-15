@@ -37,6 +37,7 @@ import {
   type StrategySchedule,
   type StrategySignal,
   type StrategyVersion,
+  type StrategyWatchlistSubscription,
   stockCode,
   strategyDefinitionHash,
   type Trade,
@@ -426,6 +427,21 @@ const makeWatchlistSyncRun = (
   exitedCount: 0,
   unchangedCount: 0,
   missingDimensions: [],
+  ...overrides,
+});
+
+const makeStrategyWatchlistSubscription = (
+  id: string,
+  overrides: Partial<StrategyWatchlistSubscription> = {},
+): StrategyWatchlistSubscription => ({
+  id,
+  strategyId: 'strategy-1',
+  watchlistId: 'watchlist-1',
+  sourceKey: 'strategy:strategy-1',
+  status: 'active',
+  createdBy: 'user-1',
+  createdAt: T1,
+  updatedAt: T1,
   ...overrides,
 });
 
@@ -2311,6 +2327,74 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('StrategyWatchlistSubscriptionRepository', () => {
+      it('save/find/list 往返一致并按 status 过滤', async () => {
+        const subscription = makeStrategyWatchlistSubscription('subscription-1');
+        await repos.strategyWatchlistSubscription.save(subscription);
+        expect(await repos.strategyWatchlistSubscription.findById(subscription.id)).toEqual(
+          subscription,
+        );
+        expect(
+          await repos.strategyWatchlistSubscription.findActive({
+            strategyId: subscription.strategyId,
+            watchlistId: subscription.watchlistId,
+          }),
+        ).toEqual(subscription);
+        expect(await repos.strategyWatchlistSubscription.list({ status: 'active' })).toEqual([
+          subscription,
+        ]);
+      });
+
+      it('同一 Strategy/Watchlist 只允许一个 active，取消后可重新订阅', async () => {
+        const first = makeStrategyWatchlistSubscription('subscription-1');
+        await repos.strategyWatchlistSubscription.save(first);
+        await expect(
+          repos.strategyWatchlistSubscription.save(
+            makeStrategyWatchlistSubscription('subscription-2'),
+          ),
+        ).rejects.toThrow(InvariantError);
+        const cancelled = makeStrategyWatchlistSubscription('subscription-1', {
+          status: 'cancelled',
+          updatedAt: T2,
+          cancelledAt: T2,
+          cancelledBy: 'user-2',
+        });
+        await repos.strategyWatchlistSubscription.save(cancelled);
+        const second = makeStrategyWatchlistSubscription('subscription-2', {
+          createdAt: T3,
+          updatedAt: T3,
+        });
+        await repos.strategyWatchlistSubscription.save(second);
+        expect((await repos.strategyWatchlistSubscription.list({})).map((item) => item.id)).toEqual(
+          ['subscription-2', 'subscription-1'],
+        );
+        expect(
+          await repos.strategyWatchlistSubscription.findActive({
+            strategyId: first.strategyId,
+            watchlistId: first.watchlistId,
+          }),
+        ).toEqual(second);
+      });
+
+      it('sourceKey 与取消字段违反不变量时拒绝', async () => {
+        await expect(
+          repos.strategyWatchlistSubscription.save(
+            makeStrategyWatchlistSubscription('bad-source', {
+              sourceKey: 'strategy:other',
+            }),
+          ),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.strategyWatchlistSubscription.save(
+            makeStrategyWatchlistSubscription('bad-cancel', {
+              status: 'cancelled',
+              updatedAt: T2,
+            }),
+          ),
+        ).rejects.toThrow(InvariantError);
+      });
+    });
+
     describe('SignalObservationRepository', () => {
       it('removeBySources 只删除指定来源的观察', async () => {
         await repos.signalObservation.save(makeSignalObservation('observation-1', 'signal-1'));
@@ -2401,6 +2485,30 @@ export const registerRepositoryContractTests = (
         });
         expect(await repos.watchlistMember.listSources(member.id)).toEqual([manual]);
         expect(await repos.watchlistMember.listSources(member.id, true)).toHaveLength(2);
+      });
+
+      it('同一 producerRun 重试幂等，不重复创建 sync run/snapshot 或结束来源', async () => {
+        const producerRunId = 'strategy-run-idempotent';
+        const first = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-idempotent-1', { producerRunId }),
+          candidates: [{ stockId: '600519.SH', reason: 'first', evidence: ['e1'] }],
+        });
+        const retry = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-idempotent-2', {
+            producerRunId,
+            startedAt: T2,
+            finishedAt: T3,
+          }),
+          candidates: [{ stockId: '002594.SZ', reason: 'must-not-apply', evidence: ['e2'] }],
+        });
+        expect(retry).toEqual(first);
+        expect(await repos.watchlistMember.listSyncRuns('watchlist-1')).toHaveLength(1);
+        expect(await repos.watchlistMember.listSnapshots(first.id)).toHaveLength(1);
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        expect(
+          await repos.watchlistMember.currentSource(member.id, 'strategy:strategy-1'),
+        ).toMatchObject({ status: 'active', syncRunId: first.id });
       });
 
       it('partial/failed 不退出来源；complete 空结果才结束并归档自动成员', async () => {

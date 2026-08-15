@@ -230,6 +230,9 @@
 - benchmark/excess return、MFE/MAE、分位数和行业/score/edge 分组描述统计。
 - 观察统计已统一按 `stock-day-horizon` 去重：同一股票、交易日、观察周期只保留一个可追溯代表样本，
   Tool/Web/AI facts 同步展示完整样本、唯一股票、缺失率、分位数、超额、MFE/MAE、benchmark 与观察截止日。
+- Strategy → Watchlist 首个竖向切片已完成：用户显式创建持久订阅后，只有 published operational run
+  才能投影；complete/partial/failed、可信空结果、来源隔离和同一 producerRun 幂等语义已接入
+  SQLite/in-memory、Tool、workflow、Web/API/UI 与测试。
 
 **当前交付切片**（2026-08-14）：
 
@@ -412,7 +415,6 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
 ## v0.11+ 候选方向（未立项）
 
 - Agent 协作体验 Phase 0～2：统一场景、公开计划、工具轨迹、部分失败和闭环复盘草案；
-- 显式 opt-in 的 Strategy → Watchlist source 投影，complete 才结束来源，partial/failed 只标 stale；
 - 基本面、资金流和 A 股短线事件 Evidence Adapter；
 - 连板天梯历史数据源与体验增强。
 
@@ -425,7 +427,7 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
 - ❌ 真实券商自动下单（合规 + 资金风险）
 - ❌ 云同步账户数据（local-first 默认）
 - ❌ 多用户 / 团队功能（个人工具）
-- ❌ 跟单 / 策略订阅（个人 advisor，不是平台）
+- ❌ 跨用户跟单、公开策略市场或平台级策略订阅（个人 advisor，不是平台）
 - ❌ 移动原生 App（Web PWA 优先）
 - ❌ 在费用、滑点、可交易性、公司行动和版本门禁缺失时输出严格回测收益、胜率或 Sharpe
 

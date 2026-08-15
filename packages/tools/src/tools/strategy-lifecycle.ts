@@ -68,7 +68,8 @@ export const DeleteStrategyOutput = z.object({ deleted: z.boolean() });
 
 export const deleteStrategyTool = defineTool({
   name: 'delete_strategy',
-  description: '删除 Strategy 及其版本、调度、运行结果、信号和信号观察；不删除内置模板',
+  description:
+    '删除 Strategy 及其版本、调度、运行结果、信号和信号观察，并取消其 Watchlist 订阅；不删除内置模板',
   sideEffect: 'write',
   input: DeleteStrategyInput,
   output: DeleteStrategyOutput,
@@ -93,6 +94,20 @@ export const deleteStrategyTool = defineTool({
       (signal) => signal.id,
     );
     await ctx.repos.signalObservation.removeBySources('strategy-signal', signalIds);
+    const cancelledAt = ctx.clock();
+    const subscriptions = await ctx.repos.strategyWatchlistSubscription.list({
+      strategyId: strategy.id,
+      status: 'active',
+    });
+    for (const subscription of subscriptions) {
+      await ctx.repos.strategyWatchlistSubscription.save({
+        ...subscription,
+        status: 'cancelled',
+        updatedAt: cancelledAt,
+        cancelledAt,
+        cancelledBy: ctx.user.id,
+      });
+    }
     await ctx.repos.strategySchedule.removeByStrategyId(strategy.id);
     await ctx.repos.strategyRun.removeByStrategyId(strategy.id);
     await ctx.repos.strategy.remove(strategy.id);

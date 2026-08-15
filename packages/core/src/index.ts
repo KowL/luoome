@@ -29,6 +29,7 @@ export * from './entity/stock-universe.js';
 export * from './entity/strategy.js';
 export * from './entity/strategy-checkpoint.js';
 export * from './entity/strategy-schedule.js';
+export * from './entity/strategy-watchlist-subscription.js';
 export * from './entity/trade.js';
 export * from './entity/watch-run.js';
 export * from './entity/watch-trigger.js';

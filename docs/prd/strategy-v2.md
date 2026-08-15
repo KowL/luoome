@@ -4,6 +4,8 @@
 > [Strategy 日运行与历史评估可靠性详细设计](../ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
 > 2026-08-14 实现状态：Summary V4、acceptance、publication、fencing lease、daily cycle、PIT
 > replay 和 facts-only 降级已落地；跨日性能样本继续作为运营观测，不设置固定交易日数量门禁。
+> 2026-08-15 实现状态：Strategy → Watchlist 持久显式订阅与 complete/partial/failed source sync 已落地；
+> 没有 active 订阅时仍不会自动投影。
 
 > 状态：草案 v0.2
 > 日期：2026-08-01
@@ -89,7 +91,7 @@ V2 的交付顺序：
 - 策略市场或跨用户订阅；
 - LLM 参与逐股规则求值；
 - StrategyRun 自动触发 Advice 或真实交易；
-- 默认把策略命中自动写入 Watchlist。
+- 未经显式持久订阅把策略命中自动写入 Watchlist。
 
 ## 4. 领域事实与派生视图
 
@@ -429,11 +431,12 @@ StrategyResult 是策略命中的唯一事实；策略工作台的股票池不�
 
 V2 默认行为：
 
-- StrategyRun 不自动创建或同步 Watchlist；
+- StrategyRun 不自动创建订阅，`run_strategy` tool 也不直接同步 Watchlist；
 - 用户可以把结果手动加入个人 Watchlist，产生 manual source；
 - 不删除现有 `WatchlistMemberSource(strategy)` 领域能力；
-- 未来若交付“订阅策略到 Watchlist”，它只能是显式 opt-in 的可重建投影；
+- 已交付“订阅策略到 Watchlist”：用户通过持久订阅契约显式选择目标，StrategyRun 本身不创建订阅；
 - 投影只有 complete sync 才能结束缺失 strategy source，partial/failed 必须保留上一版并标 stale；
+- evaluation、trial、`persist=false`、withheld、non-publishing 和 failed run 永远不投影；
 - 结束 strategy source 不得删除仍有 manual/ai/portfolio/import 来源的成员。
 
 因此，本 PRD 只 supersede “每次 StrategyRun 默认原子更新 Watchlist”的产品行为，不 supersede
@@ -558,4 +561,5 @@ AlertPlan 继续消费持久化 StrategySignal：
 1. 调度采用独立 scheduler 配置，不写入不可变 Strategy DSL；Phase B 另行细化 cron、时区、补跑和并发锁；
 2. ranking-near-miss 默认展示 top 之后 20 条，调用方可在 1～100 内调整；
 3. StrategySignal 直接创建 SignalObservation，WatchTrigger 的观察链保持独立；
-4. V2 不交付自动 Strategy → Watchlist 同步；未来若提供，必须是显式 opt-in 且只允许 complete sync 结束缺失来源。
+4. V2 不交付默认自动 Strategy → Watchlist 同步；当前实现只允许通过显式持久订阅投影，且只有 complete
+   sync 可以结束缺失来源，partial/failed 只标 stale。

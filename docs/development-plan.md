@@ -1,7 +1,7 @@
 # luoome 开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-14；Strategy 可靠性复核：2026-08-14
+> 基线日期：2026-08-15；Strategy 可靠性复核：2026-08-14
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
@@ -141,7 +141,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | 领域 | 当前真实状态 | 主要缺口 |
 |---|---|---|
 | 行情底座 | StockUniverse、qfq DailyBar、Quote 新鲜度、capability registry 已完成 | 优先消费已有能力，不继续横向扩底层 |
-| Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除，目标模型已落地 | PRD/DDD 状态和部分架构示例滞后 |
+| Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除；统一 Watchlist、多来源与 Strategy → Watchlist 持久显式订阅、取消、published operational 投影和 complete/partial/failed 同步语义已落地 | 持续积累真实生产日验收样本与订阅来源的产品观测 |
 | Strategy Workspace | Phase A～C 已完成；publication、fencing lease、daily cycle、checkpoint、PIT replay、edge signal、观察统计和独立故障矩阵已落地；生产日 daily cycle 会先同步真实 StockUniverse PIT snapshot，启动前自动收敛 stale WorkflowRun，并阻止同一 schedule/交易日重复正式 cycle；5,207 只真实 Sina 全市场重复运行与首个 schedule 审计已记录 | 跨交易日阶段 P50/P95/max 与持续真实运行观测 |
 | Research Vault | Phase A/B、Phase C、M3 managed 创建/导入与 M4 FTS/ResearchBrief 已完成 | embedding、跨模型评测扩展和远端同步仍暂缓 |
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
@@ -156,8 +156,9 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 
 - `ResearchNote` 需求已被 [ResearchTopic / ResearchDocument 设计](./ddd/research-vault-detailed-design.md)
   替代，不恢复旧 ResearchNote CRUD。
-- 旧 Watchlist PRD 中的自动 Strategy source 同步，不覆盖较新的 Strategy Workspace 决策；未来只能
-  以显式 opt-in、complete sync 结束缺失来源的方式重新设计。
+- 旧 Watchlist PRD 中“自动绑定”的 Strategy source 同步已按较新的 Strategy Workspace 决策收敛为持久
+  显式 opt-in 订阅：只有 published operational run 可投影，complete sync 才结束缺失来源，partial/failed
+  只标 stale；没有订阅时不产生 Watchlist source。
 - [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) 中“当前没有 agent loop”的描述已被
   AI SDK 和 Web chat 实现取代，不再按旧方案重复建设 loop。
 - [ROADMAP](./ROADMAP.md) v0.8 以前内容是历史快照，不作为当前功能 backlog；v0.9 起才是当前版本计划。
@@ -558,13 +559,14 @@ Tool/API schema、迁移与测试矩阵。
 - 用户确认后生成 Strategy、Watchlist 或 AlertPlan 修改草案；
 - 不新增平行 Agent 数据库或角色实体。
 
-### N3：Watchlist 自动 Strategy source
+### N3：Watchlist Strategy source（首个竖向切片已完成）
 
-- 必须显式 opt-in；
-- 只有 complete sync 可以结束缺失来源；
-- partial/failed 只标 stale，不制造全量退出；
-- 不影响 manual、AI、Portfolio 等其它来源；
-- 先解决旧 Watchlist PRD 与新 Strategy Workspace 决策冲突。
+- 持久化 Strategy → Watchlist 显式订阅、取消和审计历史；
+- 只有 published operational run 可以投影，complete sync 才能结束缺失来源；
+- partial/failed 只标 stale，不制造全量退出；空 complete 只在完整且可信零命中时结束全部来源；
+- manual、AI、Portfolio 和其它 Strategy source 相互隔离；重复 producerRun 幂等；
+- Tool、Workflow、SQLite/in-memory repository、Web/API/UI 与测试已接线；不自动生成 Advice、通知、AlertPlan
+  或 Trade。
 
 ### N4：基本面、资金流和 A 股短线事件雷达
 

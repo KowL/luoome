@@ -37,13 +37,15 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 - 持仓、交易、笔记、预警
 - 行情快照、日线、技术指标
 - 版本化 Strategy + StrategyResult / StrategySignal
-- 多来源 Watchlist + AlertPlan / WatchTrigger
+- 多来源 Watchlist + 持久的 Strategy → Watchlist 显式订阅 + AlertPlan / WatchTrigger
 - 风控指标（VaR、Sharpe、最大回撤、集中度）
 
 ### 分析维度（只读）
 
 - PnL、风险敞口、行业暴露
 - Strategy 扫描、评分与可解释规则结果
+- 只有用户明确订阅后，published operational StrategyRun 才能同步目标 Watchlist；complete 才能结束
+  缺失来源，partial/failed 只标 stale，evaluation/trial/withheld/non-publishing/failed 不改 Watchlist
 - 多源行情交叉验证
 - LLM 推理总结（每日复盘、个股分析）
 
@@ -196,6 +198,7 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 - 持仓完整录入闭环与交易流水
 - Strategy 不可变版本、校验、发布、dry-run/正式运行与信号事实
 - Watchlist 支持 manual / strategy / ai / portfolio / import 多来源与研究阶段
+- Strategy → Watchlist 需要显式持久订阅；可在 Strategy 设置页或对应 Tool 中取消，重复 producerRun 幂等
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一显式能力开关 + 同源校验
 - `luoome start` 一键启动 Web + 长驻盯盘

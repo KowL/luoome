@@ -70,6 +70,7 @@ export * from './tools/strategy-insight.js';
 export * from './tools/strategy-lifecycle.js';
 export * from './tools/strategy-query.js';
 export * from './tools/strategy-schedule.js';
+export * from './tools/strategy-watchlist-subscription.js';
 export * from './tools/sync-daily-bars.js';
 export * from './tools/sync-quotes.js';
 export * from './tools/sync-stock-events.js';

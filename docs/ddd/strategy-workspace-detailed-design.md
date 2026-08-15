@@ -60,7 +60,7 @@ Strategy
 
 - 严格收益回测、组合收益、费用和滑点；PIT 历史评估由可靠性设计单独定义；
 - 仓位、止盈止损和自动交易；
-- 自动把 StrategyResult 同步到 Watchlist；
+- 未经用户订阅就自动把 StrategyResult 同步到 Watchlist；Strategy→Watchlist 同步只通过显式持久订阅发生；
 - 新的前端框架、构建链或设计系统；
 - 让 LLM 重新执行规则或补造缺失的市场事实；
 
@@ -68,11 +68,11 @@ Strategy
 
 | 层 | 当前能力 | 主要差距 |
 |---|---|---|
-| Core | Strategy/Version/Run/Result/Signal、Summary V4、结构化 rule evaluation、result-view 和 run-diff 已落地 | 严格回测仍缺费用、滑点、可交易性与 evaluator code identity 门禁 |
+| Core | Strategy/Version/Run/Result/Signal、Summary V4、结构化 rule evaluation、result-view、run-diff 与 StrategyWatchlistSubscription 已落地 | 严格回测仍缺费用、滑点、可交易性与 evaluator code identity 门禁 |
 | Repository | run、results、signals、publication/scope 查询均可落库，终态 run 可原子提交；Drizzle/memory 合约已覆盖 | 大规模 result 查询达到瓶颈后再评估索引或物化策略 |
-| Tools | `get_strategy_workspace`、`list_strategy_result_views`、run diff 和 scope/publication 过滤已统一 | 真实生产样本的完整率、benchmark 可用率仍需持续观察 |
-| Web API | 策略 CRUD、校验、发布、试跑、正式运行、workspace、result-view、Diff 和历史评估端点已接入 | 账户级认证仍需独立产品决策 |
-| Web UI | `#strategies` 支持 overview/pool/runs/insights/settings、publication/partial/legacy 状态、Diff 和后台历史评估 | 更长历史任务与持续快照审计仍待真实数据积累 |
+| Tools | `get_strategy_workspace`、`list_strategy_result_views`、run diff、scope/publication 过滤、订阅管理与 producer-run 同步门禁已统一 | 真实生产样本的完整率、benchmark 可用率仍需持续观察 |
+| Web API | 策略 CRUD、校验、发布、试跑、正式运行、workspace、result-view、Diff、历史评估与显式订阅/取消端点已接入 | 账户级认证仍需独立产品决策 |
+| Web UI | `#strategies` 支持 overview/pool/runs/insights/settings、publication/partial/legacy 状态、Diff、后台历史评估和 Strategy→Watchlist 显式订阅面板 | 更长历史任务与持续快照审计仍待真实数据积累 |
 | Observation | watch-trigger 与 strategy-signal 均接入 SignalObservation | 真实日线补齐、benchmark 可用率和聚合仍需生产样本 |
 
 设计不改变以下已成立的行为：
@@ -1192,7 +1192,6 @@ Phase A 完成必须同时满足：
 1. StrategySchedule 已具备 cron、时区、节假日、补跑和 fencing ownership；剩余是跨实例真实运行证据与运营参数复核；
 2. StrategySignal baseline price 的具体交易时点与 provider fallback 的真实样本审计；
 3. 大规模 result 查询达到瓶颈后的索引或物化策略；
-4. 显式“订阅策略到 Watchlist”的 opt-in 投影、完整同步和 stale 语义；
-5. 严格回测所需的费用、滑点、停牌/涨跌停可交易性、公司行动和 evaluator code identity。
+4. 严格回测所需的费用、滑点、停牌/涨跌停可交易性、公司行动和 evaluator code identity。
 
-在这些设计完成前，页面不得提前暴露不可生效的调度设置、自动 Watchlist 同步或严格回测指标。
+页面不得暴露未经订阅的自动 Watchlist 同步或严格回测指标；当前已实施的订阅面板只允许显式创建/取消。

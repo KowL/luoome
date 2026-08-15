@@ -50,6 +50,10 @@ import type {
   StrategyEvaluationSession,
 } from '../entity/strategy-checkpoint.js';
 import type { StrategySchedule } from '../entity/strategy-schedule.js';
+import type {
+  StrategyWatchlistSubscription,
+  StrategyWatchlistSubscriptionStatus,
+} from '../entity/strategy-watchlist-subscription.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
 import type {
@@ -270,6 +274,7 @@ export interface RepositoryRegistry {
   readonly strategyDataCheckpoint: StrategyDataCheckpointRepository;
   /** P2 历史评估 session/day 进度。 */
   readonly strategyEvaluation: StrategyEvaluationRepository;
+  readonly strategyWatchlistSubscription: StrategyWatchlistSubscriptionRepository;
   readonly watchlist: WatchlistRepository;
   readonly watchlistMember: WatchlistMemberRepository;
   readonly alertPlan: AlertPlanRepository;
@@ -569,6 +574,20 @@ export interface StrategyEvaluationRepository {
     readonly dataAsOf: Date;
   }): Promise<StrategyEvaluationDay | null>;
   listDays(sessionId: string): Promise<readonly StrategyEvaluationDay[]>;
+}
+
+export interface StrategyWatchlistSubscriptionRepository {
+  save(subscription: StrategyWatchlistSubscription): Promise<void>;
+  findById(id: string): Promise<StrategyWatchlistSubscription | null>;
+  findActive(input: {
+    readonly strategyId: string;
+    readonly watchlistId: string;
+  }): Promise<StrategyWatchlistSubscription | null>;
+  list(filter?: {
+    readonly strategyId?: string;
+    readonly watchlistId?: string;
+    readonly status?: StrategyWatchlistSubscriptionStatus;
+  }): Promise<readonly StrategyWatchlistSubscription[]>;
 }
 
 export interface WatchlistRepository {
