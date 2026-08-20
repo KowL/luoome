@@ -6,6 +6,8 @@ import type {
   Logger,
   MarketSnapshot,
   MarketSnapshotItem,
+  MinuteBar,
+  MinuteBarInterval,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
@@ -22,6 +24,7 @@ import type { MarketSourceRegistry, MarketSourceStatus } from './source-registry
 import type { MarketDataAdapter } from './types.js';
 
 const INTRADAY_MINUTES_TTL_MS = 30_000;
+const MINUTE_BARS_TTL_MS = 15_000;
 
 const rangeContainsTradingDay = (range: DateRange): boolean => {
   const cursor = new Date(range.start);
@@ -131,6 +134,8 @@ export class MarketDataManager implements MarketDataAdapter {
   private readonly quoteCache: QuoteCache;
   private readonly dailyBarCache: DailyBarCache;
   private readonly rateLimiter: RateLimiter;
+  /** Tushare 官方实时分钟上限 500 次/分钟；独立 limiter 不与其它行情能力混算。 */
+  private readonly minuteBarRateLimiter = new RateLimiter(500, 60_000);
   private readonly batchConcurrency: number;
   private readonly logger: Logger;
   private readonly clock: () => Date;
@@ -147,6 +152,10 @@ export class MarketDataManager implements MarketDataAdapter {
   private readonly intradayMinutesCache = new Map<
     string,
     { readonly at: number; readonly points: readonly IntradayMinute[] }
+  >();
+  private readonly minuteBarsCache = new Map<
+    string,
+    { readonly at: number; readonly bars: readonly MinuteBar[] }
   >();
 
   private primaryCalls = 0;
@@ -485,6 +494,42 @@ export class MarketDataManager implements MarketDataAdapter {
     throw lastError ?? new Error('all market sources failed for intraday-minutes');
   }
 
+  /**
+   * 当前交易日原生分钟 OHLCV。15s TTL 只缓存非空有效结果；来源、周期和时间均由
+   * MinuteBarSchema 在 adapter 边界校验，Manager 只负责显式 capability 路由与限速。
+   */
+  async fetchMinuteBars(
+    stockId: string,
+    interval: MinuteBarInterval,
+  ): Promise<readonly MinuteBar[]> {
+    const key = `${stockId}|${interval}`;
+    const cached = this.minuteBarsCache.get(key);
+    if (cached !== undefined && this.clock().getTime() - cached.at < MINUTE_BARS_TTL_MS) {
+      return cached.bars;
+    }
+    const sources = this.registry.sources('minute-bars');
+    if (sources.length === 0) throw new Error('unsupported_capability: minute-bars');
+    let lastError: unknown;
+    for (const source of sources) {
+      try {
+        await this.minuteBarRateLimiter.acquire();
+        const bars = await source.execute({ stockId, interval });
+        if (bars.length === 0) throw new Error('no_data: empty minute bars');
+        this.minuteBarsCache.set(key, { at: this.clock().getTime(), bars });
+        return bars;
+      } catch (error) {
+        this.logger.warn('manager.fetchMinuteBars source failed', {
+          sourceName: source.source,
+          stockId,
+          interval,
+          error: errorMessage(error),
+        });
+        lastError = error;
+      }
+    }
+    throw lastError ?? new Error('all market sources failed for minute-bars');
+  }
+
   marketSourceStatus(): readonly MarketSourceStatus[] {
     return this.registry.describe();
   }
@@ -515,7 +560,10 @@ export class MarketDataManager implements MarketDataAdapter {
     this.marketSnapshotEnvelopeCache = undefined;
     this.quoteCache.clear();
     this.dailyBarCache.clear();
+    this.intradayMinutesCache.clear();
+    this.minuteBarsCache.clear();
     this.rateLimiter.reset();
+    this.minuteBarRateLimiter.reset();
   }
 }
 

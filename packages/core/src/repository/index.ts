@@ -4,6 +4,7 @@ import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
+import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type {
   PortfolioCashFlow,
@@ -222,6 +223,20 @@ export interface DailyBarRepository {
   }): Promise<readonly DailyBarRevision[]>;
 }
 
+/** 独立分钟行情仓储；不读取或投影 PriceSnapshot。 */
+export interface MinuteBarRepository {
+  saveMany(bars: readonly MinuteBar[]): Promise<void>;
+  findInRange(
+    stockId: string,
+    interval: MinuteBarInterval,
+    from: Date,
+    to: Date,
+  ): Promise<MinuteBar[]>;
+  latestSession(stockId: string, interval: MinuteBarInterval): Promise<MinuteBar[]>;
+  /** 全局保留期清理；返回实际删除行数。 */
+  removeBefore(before: Date): Promise<number>;
+}
+
 export interface AdviceRepository {
   save(advice: Advice): Promise<void>;
   findById(id: string): Promise<Advice | null>;
@@ -269,6 +284,8 @@ export interface RepositoryRegistry {
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
   readonly dailyBar: DailyBarRepository;
+  /** Market View Phase 4：独立 raw 分钟 OHLCV，默认保留 30 天。 */
+  readonly minuteBar: MinuteBarRepository;
   /** Phase 6：信号后的事实表现观察，不包含回测交易。 */
   readonly signalObservation: SignalObservationRepository;
   /** Strategy 目标模型身份与不可变版本；W1 起内部可读写，W2 才开放 tools。 */

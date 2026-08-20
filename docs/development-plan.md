@@ -602,7 +602,7 @@ Tool/API schema、迁移与测试矩阵。
 
 - **严格收益回测**：PIT universe、DailyBar revision replay 和 benchmark 事实已经具备基础能力，但
   费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本仍未满足门禁；v0.9 只称历史评估。
-- **分钟行情**：需要独立 MinuteBar 详细设计，不能复用 PriceSnapshot。
+- **分钟行情**：Phase 4 已完成首个独立 MinuteBar 竖向切片（当前会话 Tushare + 30 天本地保留）；历史远端分钟补数仍受 provider capability 限制，不能复用 PriceSnapshot。
 - **继续扩多市场**：当前优先保障沪深 A 股目录、qfq 日线、策略和复盘闭环完整。
 - **Research 远端同步**：Git workflow 或 Obsidian Headless 只有在本地工作台稳定且有真实需求后
   再设计。

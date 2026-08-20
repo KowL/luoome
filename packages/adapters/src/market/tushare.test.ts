@@ -110,11 +110,12 @@ const dailyFetch = (
 };
 
 describe('TushareMarketAdapter 市场支持范围', () => {
-  it('HK / US / BJ → 抛 unsupported_market（fetchQuote 与 fetchDailyBars）', async () => {
+  it('HK / US / BJ → 抛 unsupported_market（Quote / DailyBar / MinuteBar）', async () => {
     const { adapter, warns } = makeAdapter(() => Promise.resolve(tushareEnvelope([], [])));
     for (const code of ['00700.HK', 'AAPL.US', '830799.BJ']) {
       await expect(adapter.fetchQuote(code)).rejects.toThrow(/unsupported_market/);
       await expect(adapter.fetchDailyBars(code, DAILY_RANGE)).rejects.toThrow(/unsupported_market/);
+      await expect(adapter.fetchMinuteBars(code, '1m')).rejects.toThrow(/unsupported_market/);
     }
     expect(warns.some((w) => w.message.includes('market not supported'))).toBe(true);
   });
@@ -256,6 +257,91 @@ describe('TushareMarketAdapter.fetchQuote', () => {
     const row = ['600519.SH', '2026-07-24T07:00:00.000Z', 1690, 1710, 1685, 1234];
     const { adapter } = makeAdapter(() => Promise.resolve(tushareEnvelope(fields, [row])));
     await expect(adapter.fetchQuote('600519.SH')).rejects.toThrow(/tushare parse/);
+  });
+});
+
+describe('TushareMarketAdapter.fetchMinuteBars', () => {
+  const fields = ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'];
+
+  it('rt_min_daily 映射 raw OHLCV、周期、结束标签与来源，并按时间升序', async () => {
+    const { adapter, requests, infos } = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(fields, [
+          ['600519.SH', '1MIN', '2026-07-24 09:32:00', 1691, 1692, 1693, 1690, 20_000, 33_840_000],
+          ['600519.SH', '1MIN', '2026-07-24 09:31:00', 1690, 1691, 1692, 1689, 10_000, 16_905_000],
+        ]),
+      ),
+    );
+    const bars = await adapter.fetchMinuteBars('600519.SH', '1m');
+    expect(requests[0]).toMatchObject({
+      apiName: 'rt_min_daily',
+      params: { ts_code: '600519.SH', freq: '1MIN' },
+    });
+    expect(bars.map((bar) => bar.endedAt)).toEqual([
+      new Date('2026-07-24T01:31:00.000Z'),
+      new Date('2026-07-24T01:32:00.000Z'),
+    ]);
+    expect(bars[0]).toMatchObject({
+      stockId: '600519.SH',
+      interval: '1m',
+      open: 1690,
+      high: 1692,
+      low: 1689,
+      close: 1691,
+      volume: 10_000,
+      amount: 16_905_000,
+      adjustment: 'raw',
+      source: 'tushare',
+      completeness: 'closed',
+    });
+    expect(infos.some((line) => line.message === 'tushare.fetchMinuteBars ok')).toBe(true);
+  });
+
+  it('上游 code 错配或非法 OHLC → parse 错误，不静默写入部分数据', async () => {
+    const mismatch = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(fields, [
+          ['000001.SZ', '5MIN', '2026-07-24 09:35:00', 10, 10, 11, 9, 100, 1000],
+        ]),
+      ),
+    );
+    await expect(mismatch.adapter.fetchMinuteBars('600519.SH', '5m')).rejects.toThrow(/parse/);
+
+    const invalid = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(fields, [
+          ['600519.SH', '1MIN', '2026-07-24 09:31:00', 10, 12, 11, 9, 100, 1000],
+        ]),
+      ),
+    );
+    await expect(invalid.adapter.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow(/parse/);
+
+    const wrongFrequency = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(fields, [
+          ['600519.SH', '1MIN', '2026-07-24 09:31:00', 10, 10, 11, 9, 100, 1000],
+        ]),
+      ),
+    );
+    await expect(wrongFrequency.adapter.fetchMinuteBars('600519.SH', '5m')).rejects.toThrow(
+      /frequency mismatch/,
+    );
+  });
+
+  it('权限错误保留 tushare upstream_error，空结果原样返回给 Manager 判 no_data', async () => {
+    const denied = makeAdapter(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ code: 2002, msg: '无权限', data: { fields: [], items: [] } }),
+        ),
+      ),
+    );
+    await expect(denied.adapter.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow(
+      /upstream_error: 2002/,
+    );
+
+    const empty = makeAdapter(() => Promise.resolve(tushareEnvelope(fields, [])));
+    await expect(empty.adapter.fetchMinuteBars('600519.SH', '1m')).resolves.toEqual([]);
   });
 });
 

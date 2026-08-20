@@ -120,6 +120,10 @@ class StubMarketAdapter implements MarketDataAdapterLike {
     return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
   }
 
+  fetchMinuteBars(): Promise<never> {
+    return Promise.reject(new Error('unsupported_capability: minute-bars'));
+  }
+
   fetchMarketSnapshot(): Promise<never> {
     return Promise.reject(new Error('unsupported_capability: market-snapshot'));
   }

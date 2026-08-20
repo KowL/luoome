@@ -13,7 +13,7 @@
 
 import { callApi } from './api.js';
 import { renderIndexStrip } from './index-strip.js';
-import { computeMaSeries, createIntradayChart, createMarketChart } from './market-chart.js';
+import { computeMaSeries, createMarketChart, createMinuteBarChart } from './market-chart.js';
 import { renderLimitUpFacts, renderMarkers } from './market-facts.js';
 import {
   renderIndicators,
@@ -50,9 +50,11 @@ const state = {
   data: null,
   chart: null,
   chartTab: 'kline',
-  intradayAvailable: false,
-  intradayChart: null,
-  intradayTracker: createRequestTracker(),
+  minuteInterval: '1m',
+  minuteData: null,
+  minuteChart: null,
+  minuteChartMode: null,
+  minuteTracker: createRequestTracker(),
   refreshTimer: null,
   bound: false,
 };
@@ -90,9 +92,10 @@ const destroyChart = () => {
 };
 
 const destroyIntradayChart = () => {
-  if (state.intradayChart !== null) {
-    state.intradayChart.destroy();
-    state.intradayChart = null;
+  if (state.minuteChart !== null) {
+    state.minuteChart.destroy();
+    state.minuteChart = null;
+    state.minuteChartMode = null;
   }
 };
 
@@ -106,9 +109,10 @@ const teardownMarket = () => {
   state.date = null;
   state.granularity = 'day';
   state.chartTab = 'kline';
-  state.intradayAvailable = false;
+  state.minuteInterval = '1m';
+  state.minuteData = null;
   state.tracker.next();
-  state.intradayTracker.next();
+  state.minuteTracker.next();
 };
 
 /* ============ 搜索（§11.5）：交互在 search-box.js，本页只提供去向 ============ */
@@ -223,27 +227,81 @@ const bindGranularitySwitch = () => {
   });
 };
 
-/* ============ 分时图（tencent-only intraday-minutes capability；不支持时隐藏 tab） ============ */
+/* ============ 独立 MinuteBar：分时 / 分钟 K，共用真实 raw OHLCV 与状态账本 ============ */
+
+const MINUTE_WARNING_LABELS = {
+  'unsupported-capability': '未配置分钟行情源',
+  'provider-error': '分钟源请求失败',
+  'no-data': '分钟源无数据',
+  'local-fallback': '使用本地留存',
+  'historical-provider-unavailable': '远端仅支持当日',
+  'session-in-progress': '交易时段尚未结束',
+  'gaps-detected': '序列存在缺口',
+  'outside-trading-session': '已剔除非交易时段桶',
+  'mixed-provider-date': '已剔除混合日期/周期',
+  'source-date-mismatch': '来源日期与请求不一致',
+};
+
+const minuteStatusLabel = (status) =>
+  status === 'complete' ? '完整' : status === 'partial' ? '部分可用' : '不可用';
+
+const renderMinuteStatus = (data) => {
+  const wrap = $('#market-minute-status');
+  if (wrap === null) return;
+  wrap.dataset.status = data?.status ?? 'unavailable';
+  const warnings = Array.isArray(data?.warnings)
+    ? data.warnings.map((warning) => MINUTE_WARNING_LABELS[warning] ?? warning)
+    : [];
+  const detail =
+    data?.status === 'unavailable'
+      ? warnings.join(' · ') || '没有可展示的分钟 OHLCV；Quote 与日 K 不受影响。'
+      : `${data.date ?? '--'} · ${data.bars?.length ?? 0} 根 · ${warnings.join(' · ') || '未检测到内部缺口'}`;
+  mount(wrap, [
+    el('strong', '', `分钟数据 ${minuteStatusLabel(data?.status)}`),
+    el('span', '', detail),
+    el(
+      'span',
+      'minute-status-meta',
+      `${data?.sources?.join('/') || '--'} · RAW · 留存 ${data?.retentionDays ?? 30} 天`,
+    ),
+  ]);
+};
 
 const paintChartTabs = () => {
-  const onIntraday = state.chartTab === 'intraday' && state.intradayAvailable;
+  const onMinute = state.chartTab === 'intraday' || state.chartTab === 'minute-k';
   const tabs = $('#market-chart-tabs');
   if (tabs !== null) {
     tabs.querySelectorAll('button[data-chart-tab]').forEach((node) => {
       const tab = node.getAttribute('data-chart-tab');
-      node.hidden = tab === 'intraday' && !state.intradayAvailable;
-      node.classList.toggle('active', tab === (onIntraday ? 'intraday' : 'kline'));
+      node.classList.toggle('active', tab === state.chartTab);
     });
   }
   const rangeSwitch = $('#market-range-switch');
-  if (rangeSwitch !== null) rangeSwitch.hidden = onIntraday;
+  if (rangeSwitch !== null) rangeSwitch.hidden = onMinute;
   const granularitySwitch = $('#market-granularity-switch');
-  if (granularitySwitch !== null) granularitySwitch.hidden = onIntraday;
+  if (granularitySwitch !== null) granularitySwitch.hidden = onMinute;
+  const minuteIntervalSwitch = $('#market-minute-interval-switch');
+  if (minuteIntervalSwitch !== null) {
+    minuteIntervalSwitch.hidden = !onMinute;
+    minuteIntervalSwitch.querySelectorAll('button[data-minute-interval]').forEach((node) => {
+      node.classList.toggle(
+        'active',
+        node.getAttribute('data-minute-interval') === state.minuteInterval,
+      );
+    });
+  }
+  const title = $('#market-chart-title');
+  if (title !== null && onMinute) {
+    title.textContent = `${state.chartTab === 'intraday' ? '分时' : '分钟 K'} · ${state.minuteInterval.replace('m', ' 分')}`;
+  }
   const intradayWrap = $('#market-intraday-chart');
-  if (intradayWrap !== null) intradayWrap.hidden = !onIntraday;
+  const minuteHasBars = Array.isArray(state.minuteData?.bars) && state.minuteData.bars.length > 0;
+  if (intradayWrap !== null) intradayWrap.hidden = !onMinute || !minuteHasBars;
+  const minuteStatus = $('#market-minute-status');
+  if (minuteStatus !== null) minuteStatus.hidden = !onMinute;
   const klineWrap = $('#market-chart');
   const klineEmpty = $('#market-chart-empty');
-  if (onIntraday) {
+  if (onMinute) {
     if (klineWrap !== null) klineWrap.hidden = true;
     if (klineEmpty !== null) klineEmpty.hidden = true;
   } else {
@@ -266,38 +324,79 @@ const bindChartTabs = () => {
     if (tab === null || tab === state.chartTab) return;
     state.chartTab = tab;
     paintChartTabs();
-    if (tab === 'intraday') void loadIntradayView();
+    if (tab === 'intraday' || tab === 'minute-k') {
+      destroyIntradayChart();
+      void loadIntradayView();
+    }
   });
 };
 
-/** 拉当日分时并渲染；不支持 / 无数据（盘前 / 非交易日）时隐藏分时 tab 只显示 K 线。 */
+const bindMinuteIntervalSwitch = () => {
+  const wrap = $('#market-minute-interval-switch');
+  if (wrap === null || wrap.dataset.bound === '1') return;
+  wrap.dataset.bound = '1';
+  wrap.addEventListener('click', (event) => {
+    const target =
+      event.target instanceof Element ? event.target.closest('button[data-minute-interval]') : null;
+    const interval = target?.getAttribute('data-minute-interval');
+    if (interval === null || interval === undefined || interval === state.minuteInterval) return;
+    state.minuteInterval = interval;
+    state.minuteData = null;
+    destroyIntradayChart();
+    paintChartTabs();
+    void loadIntradayView();
+  });
+};
+
+/** 拉独立 MinuteBar；unavailable / partial 仍保留 tab 并展示事实状态。 */
 const loadIntradayView = async () => {
   if (state.stockId === null) return;
-  const requestId = state.intradayTracker.next();
-  const r = await callApi('/api/tools/fetch_intraday_minutes/call', {
+  const requestId = state.minuteTracker.next();
+  const r = await callApi('/api/tools/get_stock_minute_bars/call', {
     method: 'POST',
-    body: JSON.stringify({ input: { stockId: state.stockId } }),
+    body: JSON.stringify({
+      input: {
+        stockId: state.stockId,
+        interval: state.minuteInterval,
+        ...(state.date === null ? {} : { date: state.date }),
+      },
+    }),
     timeoutMs: 30_000,
   });
-  if (!state.intradayTracker.isCurrent(requestId)) return;
-  const points =
-    r.ok && r.data?.supported === true && Array.isArray(r.data.points) ? r.data.points : [];
-  state.intradayAvailable = points.length > 0;
-  if (!state.intradayAvailable && state.chartTab === 'intraday') state.chartTab = 'kline';
+  if (!state.minuteTracker.isCurrent(requestId)) return;
+  state.minuteData =
+    r.ok && r.data !== undefined
+      ? r.data
+      : {
+          status: 'unavailable',
+          bars: [],
+          sources: [],
+          warnings: ['provider-error'],
+          retentionDays: 30,
+        };
+  renderMinuteStatus(state.minuteData);
   paintChartTabs();
-  if (state.chartTab !== 'intraday' || !state.intradayAvailable) return;
-  if (state.intradayChart === null) {
+  if (!Array.isArray(state.minuteData.bars) || state.minuteData.bars.length === 0) {
+    destroyIntradayChart();
+    paintChartTabs();
+    return;
+  }
+  const mode = state.chartTab === 'minute-k' ? 'candlestick' : 'line';
+  if (state.minuteChart === null || state.minuteChartMode !== mode) {
+    destroyIntradayChart();
     const container = $('#market-intraday-chart');
     if (container === null) return;
-    const chart = await createIntradayChart(container);
+    const chart = await createMinuteBarChart(container, mode);
     const { route } = parseRouteHash(window.location.hash);
-    if (!state.intradayTracker.isCurrent(requestId) || route !== 'market') {
+    if (!state.minuteTracker.isCurrent(requestId) || route !== 'market') {
       chart.destroy();
       return;
     }
-    state.intradayChart = chart;
+    state.minuteChart = chart;
+    state.minuteChartMode = mode;
   }
-  state.intradayChart.setData(points);
+  state.minuteChart.setData(state.minuteData.bars);
+  paintChartTabs();
 };
 
 const renderData = async (data, requestId) => {
@@ -403,8 +502,9 @@ const loadMarketView = async () => {
     state.data = r.data;
     showBanner(null);
     await renderData(r.data, requestId);
-    // 每次行情刷新同步分时可用性；当前停在分时 tab 时一并刷新分时数据。
-    void loadIntradayView();
+    if (state.chartTab === 'intraday' || state.chartTab === 'minute-k') {
+      void loadIntradayView();
+    }
   } else {
     // 网络 / 上游错误：保留上一份成功画面 + error banner，不清图（§11.4）。
     const kind = r.error?.kind ?? 'internal';
@@ -440,6 +540,7 @@ const renderMarket = async (setStatus) => {
   bindRangeSwitch();
   bindGranularitySwitch();
   bindChartTabs();
+  bindMinuteIntervalSwitch();
   bindVisibility();
   renderRecent();
   void loadMarketIndices();
@@ -459,9 +560,10 @@ const renderMarket = async (setStatus) => {
     state.data = null;
     state.granularity = 'day';
     state.chartTab = 'kline';
-    state.intradayAvailable = false;
+    state.minuteInterval = '1m';
+    state.minuteData = null;
     state.tracker.next();
-    state.intradayTracker.next();
+    state.minuteTracker.next();
     showBanner(null);
     resetQuoteHeader();
     const empty = $('#market-empty');
@@ -491,9 +593,10 @@ const renderMarket = async (setStatus) => {
   destroyChart();
   destroyIntradayChart();
   // 换股：在途分时 fetch 作废，tab 状态回到 K 线（对齐空态分支 / teardown）
-  state.intradayTracker.next();
+  state.minuteTracker.next();
   state.chartTab = 'kline';
-  state.intradayAvailable = false;
+  state.minuteInterval = '1m';
+  state.minuteData = null;
   setStatus?.(`加载 ${stockId} 行情…`);
   await loadMarketView();
 };

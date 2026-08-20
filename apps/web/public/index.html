@@ -207,7 +207,8 @@
               <h2 id="market-chart-title">日 K</h2>
               <div class="market-range-switch" id="market-chart-tabs" role="group" aria-label="图表类型">
                 <button type="button" class="btn btn-outline btn-sm active" data-chart-tab="kline">日 K</button>
-                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="intraday" hidden>分时</button>
+                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="intraday">分时</button>
+                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="minute-k">分钟 K</button>
               </div>
               <div class="market-range-switch" id="market-range-switch" role="group" aria-label="周期切换">
                 <button type="button" class="btn btn-outline btn-sm" data-range="1m">1M</button>
@@ -220,9 +221,17 @@
                 <button type="button" class="btn btn-outline btn-sm" data-granularity="week">周</button>
                 <button type="button" class="btn btn-outline btn-sm" data-granularity="month">月</button>
               </div>
+              <div class="market-range-switch" id="market-minute-interval-switch" role="group" aria-label="分钟周期" hidden>
+                <button type="button" class="btn btn-outline btn-sm active" data-minute-interval="1m">1分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="5m">5分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="15m">15分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="30m">30分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="60m">60分</button>
+              </div>
             </div>
             <div id="market-chart" class="market-chart"></div>
             <div id="market-intraday-chart" class="market-chart" hidden></div>
+            <div id="market-minute-status" class="market-minute-status" hidden aria-live="polite"></div>
             <p id="market-chart-empty" class="placeholder" hidden>暂无 K 线数据。</p>
             <div id="market-markers" class="market-markers mt-2"></div>
           </div>

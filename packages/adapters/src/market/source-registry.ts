@@ -6,6 +6,8 @@ import type {
   MarketCoverage,
   MarketSnapshot,
   MarketSnapshotItem,
+  MinuteBar,
+  MinuteBarInterval,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
@@ -18,7 +20,8 @@ export type MarketCapability =
   | 'market-snapshot-envelope'
   | 'realtime-index'
   | 'delayed-index'
-  | 'intraday-minutes';
+  | 'intraday-minutes'
+  | 'minute-bars';
 
 interface CapabilityRequestMap {
   readonly quote: { readonly stockId: string };
@@ -29,6 +32,7 @@ interface CapabilityRequestMap {
   readonly 'realtime-index': { readonly coverage: MarketCoverage };
   readonly 'delayed-index': { readonly coverage: MarketCoverage; readonly asOf: Date };
   readonly 'intraday-minutes': { readonly stockId: string };
+  readonly 'minute-bars': { readonly stockId: string; readonly interval: MinuteBarInterval };
 }
 
 interface CapabilityResultMap {
@@ -40,6 +44,7 @@ interface CapabilityResultMap {
   readonly 'realtime-index': readonly IndexQuote[];
   readonly 'delayed-index': readonly IndexQuote[];
   readonly 'intraday-minutes': readonly IntradayMinute[];
+  readonly 'minute-bars': readonly MinuteBar[];
 }
 
 export interface MarketCapabilityBinding<C extends MarketCapability = MarketCapability> {

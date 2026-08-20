@@ -138,6 +138,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'batch_quote',
   'fetch_index_quotes',
   'fetch_intraday_minutes',
+  'get_stock_minute_bars',
   'get_ashare_sentiment',
   'get_stock_market_view',
   'get_account_performance',

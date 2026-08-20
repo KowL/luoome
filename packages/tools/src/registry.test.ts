@@ -22,6 +22,7 @@ const EXPECTED_TOOL_NAMES = [
   'batch_quote',
   'fetch_index_quotes',
   'fetch_intraday_minutes',
+  'get_stock_minute_bars',
   'sync_quotes',
   'sync_daily_bars',
   'get_previous_closes',
@@ -173,6 +174,13 @@ describe('toolRegistry', () => {
     ]);
   });
 
+  it('get_stock_minute_bars 声明 external + write 组合能力', () => {
+    expect(toolRegistry.get('get_stock_minute_bars')?.requiredCapabilities).toEqual([
+      'external',
+      'write',
+    ]);
+  });
+
   it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
     const names = toolRegistry.all().map((tool) => tool.name);
     expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);
@@ -232,6 +240,7 @@ describe('toolRegistry', () => {
       'get_account_performance',
       'get_ashare_sentiment',
       'get_stock_market_view',
+      'get_stock_minute_bars',
       'import_remote_research_document',
       'prepare_strategy_data',
       'propose_strategy_version_draft',
