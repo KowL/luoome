@@ -55,6 +55,8 @@ const EXPECTED_TOOL_NAMES = [
   'get_strategy_workspace',
   'list_strategy_result_views',
   'compare_strategy_runs',
+  'run_local_selector_research',
+  'assess_adaptive_personality',
   'strategy_signals_by_stock',
   // Strategy Phase B：调度、真实表现补全与事实型 AI 洞察
   'list_pending_strategy_observations',

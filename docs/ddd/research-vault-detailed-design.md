@@ -926,6 +926,11 @@ input = {
 
 不按 `Stock.industry` 自动带入全部行业 Topic。
 
+返回同时包含 `profile` 研究读模型：它只由显式 stock SubjectLink 和可追溯结构化事实重建，分开
+列出 `evidence`、`counterEvidence`、`unknowns`、`limitations`、`coverage` 与 `factsAsOf`。Profile
+不包含收益概率、Strategy 发布状态或 Advice 结论；索引、研究链接或反证不可用时必须保留
+`unavailable/unknown`，不能用空结果伪装完整研究。
+
 ### 11.2 写 Tool
 
 #### `create_research_topic` — write

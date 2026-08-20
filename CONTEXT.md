@@ -92,6 +92,11 @@ StrategySignal，不临时运行全市场 Strategy。
 
 研究以 `ResearchTopic` 为持续上下文，以 `ResearchDocument` 为资料索引；Topic 可不关联股票，也可通过显式 SubjectLink 关联多只股票、产业、事件、主题或宏观问题。正文权威来源是本地 Obsidian Vault，SQLite 只保存可重建的索引、关系、分块和同步审计。研究资料不自动生成 Advice 或交易动作。
 
+股票研究 Profile 是上述显式链接的只读投影，不是 Strategy、Watchlist 或收益概率。它必须分别展示
+evidence、counter-evidence、unknown/unavailable、来源状态和事实截止时间；没有显式链接时不得按
+行业或当前股票池推断研究结论。横截面 selector 属于 Strategy 研究 Tool，adaptive personality 只是
+版本化训练/验证可信门禁，均不自动创建 Advice 或 Trade。
+
 ## 关键约束
 
 - 首期全市场覆盖固定为沪深 A 股，不暗示港股、美股或北交所。
