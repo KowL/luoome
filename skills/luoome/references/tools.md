@@ -67,6 +67,10 @@ notifications. Full-market or persisted Strategy runs require confirmation; boun
 
 Research semantic search and cross-model evaluation are external calls. `search_research_documents_hybrid` sends the query text to the configured embedding provider and must preserve its `complete`, capability, EvidenceRef, counter-evidence, risks and unknowns fields. `rebuild_research_embeddings` additionally sends private research chunks and writes a rebuildable projection, so it requires both external and write authorization. Never interpret zero hits from an incomplete projection as absence of evidence.
 
+Research Vault 的 `pull_research_vault_git` 是 workflow-only，故意不在 registry/MCP discovery 中。
+远端同步只能由用户通过 CLI 的 `sync-research-vault-remote` workflow 或本地 Web 研究页显式确认；
+它需要 write/external 双 opt-in，且不会自动 commit、push、reset、rebase 或解决冲突。
+
 ## Never exposed
 
 Real order placement and cancellation are outside the luoome MCP surface. Do not search for a workaround, call a broker directly, reinterpret a write tool as an order, or claim an Advice was executed.

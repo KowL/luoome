@@ -17,6 +17,7 @@ import type {
   ResearchEmbeddingAdapterLike,
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
+  ResearchVaultGitSyncAdapterLike,
 } from './research-vault.js';
 import type { SideEffect } from './types/side-effect.js';
 
@@ -224,6 +225,9 @@ export interface ToolContext {
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
   /** 私人正文外发的 embedding capability；仅由 external tool 显式调用。 */
   readonly researchEmbedding?: ResearchEmbeddingAdapterLike;
+  readonly researchVaultGitSync?: ResearchVaultGitSyncAdapterLike;
+  /** Surface 级取消信号；长外部操作只在安全取消点消费。 */
+  readonly abortSignal?: AbortSignal;
   /** 生产账户绩效的默认 benchmark；测试上下文可不注入以显式保持 unavailable。 */
   readonly portfolioBenchmark?: {
     readonly stockId: string;

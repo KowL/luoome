@@ -104,6 +104,8 @@ import type {
   MarketOutlookOutput,
   PrepareStrategyDataInput,
   PrepareStrategyDataOutput,
+  PullResearchVaultGitInput,
+  PullResearchVaultGitOutput,
   ReconcileStaleWorkflowRunsInput,
   ReconcileStaleWorkflowRunsOutput,
   RecordAdviceOutcomeInput,
@@ -162,6 +164,7 @@ import {
   finishStrategyScheduleClaimTool,
   getWatchTriggerDeliveryStatsTool,
   listWatchRuleStatesTool,
+  pullResearchVaultGitTool,
   reconcileStaleStrategyRunsTool,
   reconcileStaleWorkflowRunsTool,
   recordWatchRunTool,
@@ -215,6 +218,11 @@ export interface WorkflowToolMap {
   readonly sync_research_vault: ToolAccessor<
     typeof SyncResearchVaultInput,
     typeof SyncResearchVaultOutput
+  >;
+  /** workflow-only；远端更新后必须继续调用 sync_research_vault。 */
+  readonly pull_research_vault_git: ToolAccessor<
+    typeof PullResearchVaultGitInput,
+    typeof PullResearchVaultGitOutput
   >;
   readonly list_accounts: ToolAccessor<typeof ListAccountsInput, typeof ListAccountsOutput>;
   readonly list_alert_plans: ToolAccessor<typeof ListAlertPlansInput, typeof ListAlertPlansOutput>;
@@ -480,6 +488,7 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
   for (const internalTool of [
     recordWatchRunTool,
     recordWorkflowRunTool,
+    pullResearchVaultGitTool,
     reconcileStaleStrategyRunsTool,
     reconcileStaleWorkflowRunsTool,
     saveReportTool,

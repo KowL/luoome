@@ -34,6 +34,7 @@ import {
 /* 跨自动刷新保留的列表排序状态（dashboard 5s、holdings 10s 会重绘，不持久则排序瞬间失效） */
 let boardSortState = { key: null, order: 'desc' };
 let holdingsSortState = { key: null, order: 'desc' };
+let researchRemoteSyncController = null;
 
 /* ============ dashboard ============ */
 
@@ -1841,6 +1842,13 @@ const renderResearch = async (setStatus) => {
   const syncButton = /** @type {HTMLButtonElement | null} */ (
     document.getElementById('research-sync-btn')
   );
+  const remoteSyncButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-remote-sync-btn')
+  );
+  const remoteCancelButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-remote-cancel-btn')
+  );
+  const remoteSyncStatus = document.getElementById('research-remote-sync-status');
   const createTopicButton = /** @type {HTMLButtonElement | null} */ (
     document.getElementById('research-create-topic-btn')
   );
@@ -1937,6 +1945,53 @@ const renderResearch = async (setStatus) => {
         `vault-state ${data.configError ? 'invalid' : data.configured ? 'configured' : ''}`.trim();
     }
     setVaultSettingsStatus(data.configError ?? (data.configured ? '配置已加载' : '填写路径后保存'));
+  };
+
+  const loadRemoteSyncStatus = async (preserveMessage = false) => {
+    if (remoteSyncButton === null || remoteSyncStatus === null) return;
+    const response = await callApi('/api/research/remote-sync/status');
+    const configured = response.ok && response.data.configured === true;
+    remoteSyncButton.disabled = !configured || researchRemoteSyncController !== null;
+    if (!preserveMessage || !configured) {
+      remoteSyncStatus.textContent = configured
+        ? '远端同步：Git 已显式启用'
+        : '远端同步：未启用（需设置 LUOOME_RESEARCH_REMOTE_SYNC=git）';
+    }
+  };
+
+  const runRemoteSync = async () => {
+    if (remoteSyncButton === null || remoteCancelButton === null || remoteSyncStatus === null)
+      return;
+    const controller = new AbortController();
+    researchRemoteSyncController = controller;
+    remoteSyncButton.disabled = true;
+    remoteCancelButton.hidden = false;
+    remoteSyncStatus.textContent = '正在检查工作树、拉取远端并重建索引…';
+    try {
+      const response = await callApi('/api/research/remote-sync', {
+        method: 'POST',
+        body: JSON.stringify({ timeoutMs: 60_000 }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        remoteSyncStatus.textContent = `远端同步停止：${response.error?.cause ?? response.error?.message ?? response.error?.kind}`;
+        return;
+      }
+      const index = response.data.index;
+      remoteSyncStatus.textContent =
+        response.data.status === 'succeeded'
+          ? `远端同步完成：${response.data.git.status}${index ? `，扫描 ${index.scanned} 个文件` : ''}`
+          : `远端已更新，索引部分完成：${response.data.diagnostic ?? '请检查运行记录'}`;
+      await load();
+    } catch (error) {
+      remoteSyncStatus.textContent = controller.signal.aborted
+        ? '远端同步取消请求已发送；若已进入本地 fast-forward，将完成该原子步骤后停止'
+        : `远端同步失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (researchRemoteSyncController === controller) researchRemoteSyncController = null;
+      remoteCancelButton.hidden = true;
+      await loadRemoteSyncStatus(true);
+    }
   };
 
   const saveVaultSettings = async () => {
@@ -2556,6 +2611,16 @@ const renderResearch = async (setStatus) => {
         .join('；');
       setStatus(summary || '没有已配置模型可评测');
     });
+    remoteSyncButton?.addEventListener('click', () => {
+      openConfirmModal({
+        title: '确认从 Git 远端拉取 Research Vault',
+        message:
+          '只允许干净工作树上的 fast-forward。执行前会创建本地 Git bundle 备份；冲突或分叉将停止，不会自动 commit、push、reset、rebase 或选边。\n\n请确认远端仓库为私有仓库，且凭证由本机 Git 凭证管理器提供。',
+        confirmLabel: '确认拉取并重建索引',
+        onConfirm: () => void runRemoteSync(),
+      });
+    });
+    remoteCancelButton?.addEventListener('click', () => researchRemoteSyncController?.abort());
     createTopicButton?.addEventListener('click', () => void openCreateTopic());
     importDocumentButton?.addEventListener('click', () => void openImportDocument());
     importRemoteButton?.addEventListener('click', () => void openImportRemote());
@@ -2567,6 +2632,7 @@ const renderResearch = async (setStatus) => {
 
   await loadVaultSettings();
   await loadEmbeddingStatus();
+  await loadRemoteSyncStatus();
 
   const stockId = routeStockId();
   if (stockId !== null) {

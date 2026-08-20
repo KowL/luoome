@@ -58,6 +58,7 @@ export * from './tools/record-workflow-run.js';
 export * from './tools/render-report.js';
 export * from './tools/research-embedding.js';
 export * from './tools/research-vault.js';
+export * from './tools/research-vault-git-sync.js';
 export * from './tools/run-strategy.js';
 export * from './tools/save-report.js';
 export * from './tools/save-watch-trigger.js';

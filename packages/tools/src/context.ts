@@ -10,6 +10,7 @@ import type {
   ResearchEmbeddingAdapterLike,
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
+  ResearchVaultGitSyncAdapterLike,
   StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
@@ -36,6 +37,7 @@ export interface BuildContextInput {
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
   readonly researchEmbedding?: ResearchEmbeddingAdapterLike;
+  readonly researchVaultGitSync?: ResearchVaultGitSyncAdapterLike;
   readonly notification?: NotificationManagerLike;
   readonly portfolioBenchmark?: ToolContext['portfolioBenchmark'];
 }
@@ -57,6 +59,9 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.researchEmbedding === undefined
       ? {}
       : { researchEmbedding: input.researchEmbedding }),
+    ...(input.researchVaultGitSync === undefined
+      ? {}
+      : { researchVaultGitSync: input.researchVaultGitSync }),
     ...(input.notification === undefined ? {} : { notification: input.notification }),
     ...(input.portfolioBenchmark === undefined
       ? {}

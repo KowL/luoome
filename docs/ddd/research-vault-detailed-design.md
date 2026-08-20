@@ -1,6 +1,6 @@
 # 研究主题与 Obsidian Vault 详细设计
 
-> 状态：Phase A/B、Phase C、Phase D(M3 managed 创建/导入)、Phase E(M4 FTS/ResearchBrief/Agent 草案门控) 与 Phase G(embedding 检索/跨模型评测) 已实施
+> 状态：Phase A～G 已实施；Phase F 采用独立 Git-only 安全同步 workflow，Phase G 完成 embedding 检索/跨模型评测
 > 日期：2026-08-20
 > 范围：研究主题、研究文档、研究对象关联、Obsidian Vault、可重建索引、全文检索、研究时间线与 Agent 检索
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)、[AI 投资决策闭环](../prd/ai-investment-decision-loop.md)、[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)
@@ -627,21 +627,55 @@ packages/adapters/src/research-vault/factory.ts
 
 ### 7.3 Git 与 Obsidian Sync
 
-首期把外部仓库视为“用户已经同步到本地的 Vault 路径”：
+Phase F 只实现 Git workflow，不同时实现 Obsidian Headless。决策依据是：现有用户需求是把已受
+Git 管理的本地 Vault 安全拉到最新；本地已有稳定 Git，而 [Obsidian Headless 官方文档](https://obsidian.md/help/headless)
+在设计时仍标为 open beta，且本机没有对应 CLI。Git 路径更小、可本地真实验收，也不要求把
+Obsidian 账号凭证交给 luoome。Headless 不作为 fallback；未来若需求变化须另写决策。
 
-- luoome 不执行 git clone/pull/commit/push；
-- 用户可用 Git、Obsidian Sync、iCloud 等方式管理目录；
-- 工作树冲突文件按普通无效 Markdown 报告；
-- `.git` 永不进入扫描和日志。
+实现边界：
 
-后续如实现远端同步，新增独立 external workflow，不把 Git 或 Obsidian Headless 混进 Vault Adapter。它必须：
+- `GitResearchVaultSyncAdapter` 是独立 external port/adapter，不属于 `ResearchVaultAdapterLike`；
+- Obsidian 与 Git adapter 复用同一安全根校验；Git adapter 仍在自身 constructor 独立拒绝文件系统
+  根、用户 home、当前项目根和 `.obsidian` 保留目录，不能依赖 Obsidian adapter 先成功装配；
+- `pull_research_vault_git` 是 workflow-only Tool，不注册到通用 Tool Registry，也不通过 MCP 暴露；
+- `sync-research-vault-remote` workflow 先经 `ctx.tools.pull_research_vault_git`，成功后再经既有
+  `ctx.tools.sync_research_vault` 确定性重建 SQLite 索引；Workflow 不直接调用 adapter/repository；
+- 只有 `LUOOME_RESEARCH_REMOTE_SYNC=git` 才装配 adapter；Web 调用还必须同时开启
+  `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`，并通过同源 Origin 校验和用户确认；
+- `.git` 永不进入 Vault 扫描、Tool 输出或日志。
 
-- 显式 opt-in；
-- pull 前检查工作树；
-- 只允许 fast-forward；
-- 冲突时停止，不自动 reset、rebase 或选边；
-- 不自动 commit 或 push；
-- Obsidian Headless 仍为 beta 时不得成为默认路径。
+一次 pull 的确定性协议：
+
+1. 验证 Vault 本身就是 Git 工作树根、HEAD 非 detached、当前分支有 upstream，且不存在
+   merge/rebase/cherry-pick/revert/bisect 等未完成操作；
+2. 用 `git status --porcelain=v1 -z --untracked-files=all` 检查 tracked/untracked 均为空；fetch 后
+   再用 NUL 分隔的 `diff --name-only --no-renames` 与 `ls-files --others --ignored` 比较 incoming
+   写入/删除路径和本地 ignored-untracked 路径；同路径或文件/目录祖先冲突时拒绝 fast-forward，
+   但不因无关 ignored 缓存存在而失败；
+3. remote 只允许 HTTPS、SSH 或本地路径；拒绝 HTTP、`ext::`、自定义 uploadpack、以参数符号开头
+   的值以及 HTTPS URL 内嵌认证信息；
+4. 关闭交互式凭证提示、hooks、submodule recurse 和 tags 后执行显式 remote fetch；fetch 支持
+   1–300 秒超时与取消，并终止整个 Git 子进程组；stderr 不收集，避免 remote 诊断泄漏凭证 URL；
+5. fetch 后再次检查工作树和未完成操作；若本地已最新或领先则不改工作树；若双方分叉则失败；
+6. 只有 `HEAD` 是 upstream 祖先时，先创建当前 HEAD 的 Git bundle，再执行
+   `git merge --ff-only --no-edit <已解析 upstream commit>`；不运行普通 `git pull`；
+7. fast-forward 后再次确认工作树干净，随后才允许索引重建。
+
+备份写入 `$LUOOME_HOME/backups/research-vault/<vault-hash>/<backupId>.bundle`（Web 使用数据库同级
+目录）。constructor 会沿 backupRoot 最近存在祖先解析真实路径，拒绝 backupRoot 等于 Vault 或位于
+Vault 内，避免创建 hooks/bundle 自己污染待同步工作树。目录 `0700`、文件 `0600`。备份失败则
+工作树不更新；系统不自动轮转或删除备份。恢复是单独的人工操作：先用
+`git bundle verify <bundle>`，再把 bundle clone 到新的恢复目录进行检查，按需复制文件或由用户
+明确选择 Git 恢复命令。luoome 绝不自动 reset/rebase/选边，也不把恢复动作混入失败处理。
+
+Web 远端同步 POST 必须是合法 JSON 对象；空体或畸形 JSON 均返回 `invalid_input`，不得进入
+external workflow。设置热更新每次都替换或显式清除 Git adapter，撤销
+`LUOOME_RESEARCH_REMOTE_SYNC=git` 后 status 和 POST 在当前进程立即变为未配置。
+
+取消或超时发生在 fetch/集成前时，本轮 `WorkflowRun` 记 `failed`，工作树不更新。开始本地
+fast-forward 后忽略取消且不设强制超时，避免 checkout 半更新；该原子步骤完成后继续索引和审计。
+Git 成功而索引失败时返回 `partial`，保留 backupId 与 provider 状态；Vault 文件仍为权威来源，
+再次运行既有本地索引流程即可修复投影。任何路径都不自动 clone、commit 或 push。
 
 ## 8. SQLite 投影与 Repository
 
@@ -1213,8 +1247,12 @@ Embedding 还需要 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 和模型目录显�
 
 - luoome 不判断 Git remote 是否公开；设置页必须提示 Vault 可能包含私人投资数据；
 - 不自动把 `.obsidian`、凭证、账户数据或数据库复制进 Vault；
-- Obsidian Sync/Headless 凭证由其官方客户端管理，不进入 luoome env dump 和 SQLite；
-- 远端同步冲突不会由 luoome 自动覆盖。
+- Git 凭证只由本机 credential helper、SSH agent 或系统凭证管理器提供；禁用终端提示，不保存到
+  luoome env、SQLite、Tool 输出、WorkflowRun 或日志；
+- remote URL 和 Git stderr 不进入审计；状态接口只返回 `configured` 与 `provider=git`；
+- fast-forward 前的 bundle 是本地敏感备份，固定 `0600`，需与 Vault 一样保护；
+- 远端同步冲突、分叉、脏工作树和未完成 Git 操作都停止，不由 luoome 自动覆盖；
+- Obsidian Sync/Headless 不在 Phase F 实现或 fallback 路径中。
 
 ## 17. 错误与降级
 
@@ -1233,6 +1271,10 @@ Embedding 还需要 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 和模型目录显�
 | URL 抓取失败 | `adapter_error` | 不写 managed Document |
 | SQLite apply 失败 | `internal` | Vault 文件不回滚，下次扫描修复 |
 | Vault 文件被外部修改 | hash mismatch | managed patch 拒绝，提示重新同步 |
+| Git 工作树脏/操作未完成 | `adapter_error(recoverable=true)` | pull 前停止，不 fetch/集成 |
+| Git 分叉或 remote 不安全 | `adapter_error(recoverable=false)` | 停止，不 reset/rebase/选边 |
+| Git fetch 取消/超时 | `adapter_error(recoverable=true)` | 终止进程组，工作树不更新，WorkflowRun failed |
+| Git 已更新、索引失败 | WorkflowRun `partial` | 保留 bundle 与 Vault 文件，下次确定性重建索引 |
 
 所有 surface 消费 `ToolResult`；adapter 异常不得直接泄漏。
 
@@ -1368,11 +1410,13 @@ drizzle 与 memory 共同覆盖：
 - SubjectLink 草案；
 - 固定评测集和 prompt injection 测试。
 
-### Phase F：可选远端同步
+### Phase F：可选远端同步（已实施，2026-08-20）
 
-- 根据真实需求选择 Git workflow 或 Obsidian Headless；
-- 先完成凭证、冲突、备份与恢复设计；
-- 不改变 Vault 文件作为权威来源的契约。
+- 选择独立 Git-only workflow；未同时实现 Obsidian Headless；
+- 完成双 opt-in、凭证隔离、干净工作树、仅 fast-forward、备份/人工恢复、超时/取消和冲突停止；
+- 远端 pull 与本地 Vault Adapter 分离，成功后只通过既有索引 Tool 确定性重建；
+- `WorkflowRun` 审计 `succeeded / partial / failed` 与 Git/index provider 状态，不记录路径或凭证；
+- 不改变 Vault 文件作为权威来源的契约，不自动 clone、commit 或 push。
 
 ### Phase G：Embedding 检索与跨模型评测（已实施，2026-08-20）
 
@@ -1409,7 +1453,8 @@ drizzle 与 memory 共同覆盖：
 7. 研究时间线是类型化读模型，不新增万能事件表。
 8. 首期直接文件系统接入 Vault，不要求 Obsidian 插件或桌面进程。
 9. 默认 index-only；luoome 只在 managed root 内创建文件。
-10. 不自动 Git pull/commit/push，不依赖 Obsidian Headless。
+10. 远端同步默认关闭；显式 Git workflow 只做受控 fetch + fast-forward，不自动 clone/commit/push，
+    不依赖 Obsidian Headless。
 11. 不按产业自动扩散到全部股票，股票关联必须显式确认。
 12. 当前无 ResearchNote 数据，旧模型硬切，旧物理表不 DROP、不读。
 13. FTS5 是确定性基线；embedding 是显式、可重建且允许稳定降级的外部 capability。

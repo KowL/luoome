@@ -88,6 +88,7 @@ import {
   searchResearchDocumentsTool,
   syncResearchVaultTool,
 } from './tools/research-vault.js';
+import { getResearchVaultRemoteSyncStatusTool } from './tools/research-vault-git-sync.js';
 import { runStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { sendNotificationTool } from './tools/send-notification.js';
@@ -406,6 +407,7 @@ export const toolRegistry: Registry = createRegistry([
   rebuildResearchEmbeddingsTool,
   evaluateResearchEmbeddingsTool,
   getStockResearchViewTool,
+  getResearchVaultRemoteSyncStatusTool,
   syncResearchVaultTool,
   deleteStockEventTool,
   syncStockEventsTool,

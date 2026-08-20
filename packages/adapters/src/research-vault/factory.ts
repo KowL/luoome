@@ -1,3 +1,4 @@
+import { GitResearchVaultSyncAdapter } from './git-sync.js';
 import { ObsidianVaultAdapter } from './obsidian.js';
 import { ResearchRemoteDocumentAdapter } from './remote.js';
 
@@ -22,3 +23,20 @@ export const createResearchVaultAdapterFromEnv = (
 
 export const createResearchRemoteDocumentAdapter = (): ResearchRemoteDocumentAdapter =>
   new ResearchRemoteDocumentAdapter();
+
+export const createResearchVaultGitSyncAdapterFromEnv = (
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  options: { readonly backupRoot: string },
+): GitResearchVaultSyncAdapter | undefined => {
+  const provider = env.LUOOME_RESEARCH_REMOTE_SYNC?.trim();
+  if (!provider) return undefined;
+  if (provider !== 'git') {
+    throw new Error('LUOOME_RESEARCH_REMOTE_SYNC 仅支持 git');
+  }
+  const vaultPath = env.LUOOME_RESEARCH_VAULT?.trim();
+  if (!vaultPath) throw new Error('Git Research Vault 同步需要 LUOOME_RESEARCH_VAULT');
+  return new GitResearchVaultSyncAdapter({
+    vaultPath,
+    backupRoot: options.backupRoot,
+  });
+};

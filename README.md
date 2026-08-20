@@ -98,6 +98,7 @@ homebrew/
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 可创建受管研究文件的相对目录，必须位于 research root 内 |
 | `LUOOME_RESEARCH_EMBEDDING_ENABLED` | 关 | `=true`：显式挂载 Research embedding 外部 capability；默认搜索仍为本地 FTS5 |
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | OpenAI-compatible embedding 模型目录；只写 `apiKeyEnv` 名，不写密钥 |
+| `LUOOME_RESEARCH_REMOTE_SYNC` | 关 | `=git`：启用独立 Git-only Vault 拉取 workflow；仍需 write/external 双 opt-in |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
@@ -183,6 +184,8 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 0 19 * * 5     luoome workflow run weekly-report --mode scheduled
 # 开盘简报：周一会自动读取前一交易日，而不是自然日前一天
 0 9 * * 1-5    luoome workflow run opening-report --mode scheduled
+# 可选 Research Vault Git 拉取：仅干净工作树 + fast-forward，先备份再重建索引
+# 0 */2 * * *  luoome workflow run sync-research-vault-remote --mode scheduled
 ```
 
 - `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。

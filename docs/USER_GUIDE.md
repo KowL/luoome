@@ -155,6 +155,22 @@ Embedding 模型目录默认位于 `$LUOOME_HOME/research-embeddings.json`。下
 
 同时设置 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true`；Web 语义查询还需 `LUOOME_EXPOSE_EXTERNAL=true`，增量重建另需 `LUOOME_EXPOSE_WRITE=true`。目录或密钥无效时其它 Research 能力继续启动，embedding 状态显示为未挂载。
 
+可选 Git 远端同步需把 Vault 本身配置为有 upstream 的 Git 工作树，并设置
+`LUOOME_RESEARCH_REMOTE_SYNC=git`、`LUOOME_EXPOSE_WRITE=true`、`LUOOME_EXPOSE_EXTERNAL=true`。
+研究页会显示“拉取远端并重建索引”，每次点击仍需确认。系统只接受完全干净工作树上的
+fast-forward，先在 `$LUOOME_HOME/backups/research-vault/` 创建权限为 `0600` 的 bundle，再通过既有
+索引流程重建；分叉、冲突、未完成 Git 操作、超时或取消都会停止。它绝不自动 commit、push、reset、
+rebase 或选边。远端应使用私有仓库，HTTPS 凭证放系统 credential helper，SSH 凭证放 SSH agent，
+不要写进 remote URL。
+
+恢复时先运行 `git bundle verify <bundle>`，再运行 `git clone <bundle> <新的恢复目录>` 检查备份；
+确认内容后人工复制所需文件或明确执行自己的 Git 恢复步骤。luoome 不会自动恢复或删除 bundle。
+CLI 可显式运行：
+
+```bash
+luoome workflow run sync-research-vault-remote --mode manual
+```
+
 **飞书通知**：在“设置 → 飞书通知”填写群自定义机器人的新版 HTTPS Webhook。页面只展示是否已配置，读取 API 和浏览器均不会回显密钥；保存后写入权限为 0600 的 `$LUOOME_HOME/.env` 并立即应用。保存需要 `LUOOME_EXPOSE_WRITE=true`，发送测试消息还需要 `LUOOME_EXPOSE_EXTERNAL=true`。当前只支持 `open.feishu.cn/open-apis/bot/v2/hook/...`，建议机器人安全关键词配置为 `luoome`，不要开启签名校验。
 
 ### 2.4 MCP 模式
@@ -368,6 +384,7 @@ luoome tools call get_confidence_calibration --input '{}'
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 受管文件目录，必须是 research root 的子目录 |
 | `LUOOME_RESEARCH_EMBEDDING_ENABLED` | `false` | 显式挂载 Research embedding 外部 capability；默认仍为本地 FTS5 |
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | embedding 模型目录路径；密钥由目录里的 `apiKeyEnv` 从环境读取 |
+| `LUOOME_RESEARCH_REMOTE_SYNC` | `false` | `git` 启用独立安全拉取 workflow；不配置则完全不装配 |
 | `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行 write tool 与 outcome 回填端点 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |

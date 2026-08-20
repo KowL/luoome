@@ -72,6 +72,47 @@ export interface ResearchEmbeddingAdapterLike {
     readonly usage: ResearchEmbeddingUsage;
   }>;
 }
+
+export type ResearchVaultGitPullFailureReason =
+  | 'cancelled'
+  | 'timeout'
+  | 'git-unavailable'
+  | 'not-git-repository'
+  | 'dirty-worktree'
+  | 'operation-in-progress'
+  | 'detached-head'
+  | 'missing-upstream'
+  | 'unsafe-remote'
+  | 'diverged'
+  | 'backup-failed'
+  | 'fetch-failed'
+  | 'integrate-failed';
+
+export type ResearchVaultGitPullResult =
+  | {
+      readonly ok: true;
+      readonly status: 'updated' | 'up-to-date';
+      readonly backupId?: string;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: ResearchVaultGitPullFailureReason;
+      readonly message: string;
+      readonly recoverable: boolean;
+    };
+
+/**
+ * Phase F 远端同步端口。它与 ResearchVaultAdapterLike 分离：前者只负责安全更新本地 Git
+ * 工作树，后者继续只负责把本地 Vault 当作权威文件源读取和写入。
+ */
+export interface ResearchVaultGitSyncAdapterLike {
+  readonly name: string;
+  readonly provider: 'git';
+  pull(input: {
+    readonly timeoutMs: number;
+    readonly signal?: AbortSignal;
+  }): Promise<ResearchVaultGitPullResult>;
+}
 export interface ResearchIndexStatus {
   readonly vaultId: string;
   readonly freshness: 'fresh' | 'stale' | 'unavailable';

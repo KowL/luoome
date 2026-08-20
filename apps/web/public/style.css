@@ -4599,6 +4599,24 @@ textarea::placeholder {
   gap: var(--space-3);
 }
 
+.vault-remote-sync {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.vault-remote-sync p {
+  max-width: 76ch;
+  margin: 0.35rem 0 0;
+}
+
+.vault-remote-sync .flex {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 720px) {
   .vault-settings-form {
     grid-template-columns: 1fr;
