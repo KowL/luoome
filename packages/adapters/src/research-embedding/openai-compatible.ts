@@ -102,7 +102,12 @@ export class OpenAICompatibleResearchEmbeddingAdapter implements ResearchEmbeddi
       const parsed = responseSchema.parse(await response.json());
       const ordered = [...parsed.data].sort((left, right) => left.index - right.index);
       if (ordered.length !== texts.length) throw new Error('embedding provider 返回数量不匹配');
-      for (const item of ordered) {
+      for (const [expectedIndex, item] of ordered.entries()) {
+        if (item.index !== expectedIndex) {
+          throw new Error(
+            `embedding provider 返回 index 不连续: expected=${expectedIndex}, actual=${item.index}`,
+          );
+        }
         if (item.embedding.length !== config.dimensions) {
           throw new Error(
             `embedding 维度不匹配: expected=${config.dimensions}, actual=${item.embedding.length}`,

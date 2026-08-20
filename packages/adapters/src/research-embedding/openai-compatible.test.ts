@@ -81,4 +81,37 @@ describe('OpenAICompatibleResearchEmbeddingAdapter', () => {
       adapter.embed({ model: 'small', purpose: 'query', texts: ['query'] }),
     ).rejects.toThrow('embedding 维度不匹配');
   });
+
+  it.each([
+    {
+      name: '重复 index',
+      data: [
+        { index: 0, embedding: [1, 0, 0] },
+        { index: 0, embedding: [0, 1, 0] },
+      ],
+      message: 'embedding provider 返回 index 不连续',
+    },
+    {
+      name: '缺失 index',
+      data: [{ index: 0, embedding: [1, 0, 0] }, { embedding: [0, 1, 0] }],
+      message: 'Invalid input',
+    },
+    {
+      name: '越界 index',
+      data: [
+        { index: 0, embedding: [1, 0, 0] },
+        { index: 2, embedding: [0, 1, 0] },
+      ],
+      message: 'embedding provider 返回 index 不连续',
+    },
+  ])('$name 时拒绝整批响应', async ({ data, message }) => {
+    const adapter = new OpenAICompatibleResearchEmbeddingAdapter(
+      catalog,
+      { FIXTURE_EMBEDDING_KEY: 'secret' },
+      (async () => Response.json({ data })) as unknown as typeof fetch,
+    );
+    await expect(
+      adapter.embed({ model: 'small', purpose: 'document', texts: ['first', 'second'] }),
+    ).rejects.toThrow(message);
+  });
 });

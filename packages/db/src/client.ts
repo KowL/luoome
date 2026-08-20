@@ -1445,6 +1445,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     sqlite.close();
     throw error;
   }
+  const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     stock: new DrizzleStockRepository(db),
@@ -1478,8 +1479,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     watchRuleState: new DrizzleWatchRuleStateRepository(db),
     watchRun: new DrizzleWatchRunRepository(db),
     // ruo 迁移起
-    researchIndex: new DrizzleResearchIndexRepository(db),
-    researchEmbedding: new DrizzleResearchEmbeddingRepository(db),
+    researchIndex,
+    researchEmbedding: new DrizzleResearchEmbeddingRepository(db, researchIndex),
     researchVaultSyncRun: new DrizzleResearchVaultSyncRunRepository(db),
     stockEvent: new DrizzleStockEventRepository(db),
     workflowRun: new DrizzleWorkflowRunRepository(db),

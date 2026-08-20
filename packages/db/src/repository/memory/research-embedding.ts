@@ -6,7 +6,11 @@ import type {
   ResearchIndexRepository,
   ResearchSearchHit,
 } from '@luoome/core';
-import { researchEmbeddingIdentityKey } from '@luoome/core';
+import {
+  ResearchChunkEmbeddingSchema,
+  ResearchEmbeddingIndexStateSchema,
+  researchEmbeddingIdentityKey,
+} from '@luoome/core';
 
 const copy = <T>(value: T): T => structuredClone(value);
 const rowKey = (
@@ -51,7 +55,8 @@ export class InMemoryResearchEmbeddingRepository implements ResearchEmbeddingRep
   }
 
   async saveMany(embeddings: readonly ResearchChunkEmbedding[]): Promise<void> {
-    for (const embedding of embeddings) {
+    const parsed = embeddings.map((embedding) => ResearchChunkEmbeddingSchema.parse(embedding));
+    for (const embedding of parsed) {
       this.embeddings.set(
         rowKey(embedding.identity, embedding.documentId, embedding.ordinal),
         copy(embedding),
@@ -116,7 +121,8 @@ export class InMemoryResearchEmbeddingRepository implements ResearchEmbeddingRep
   }
 
   async saveState(state: ResearchEmbeddingIndexState): Promise<void> {
-    this.states.set(researchEmbeddingIdentityKey(state.identity), copy(state));
+    const parsed = ResearchEmbeddingIndexStateSchema.parse(state);
+    this.states.set(researchEmbeddingIdentityKey(parsed.identity), copy(parsed));
   }
 
   async findState(

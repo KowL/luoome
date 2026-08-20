@@ -1,23 +1,25 @@
 import type {
   ResearchChunkEmbedding,
-  ResearchDocumentIndex,
   ResearchEmbeddingIndexState,
   ResearchEmbeddingModelIdentity,
   ResearchEmbeddingRepository,
+  ResearchIndexRepository,
   ResearchSearchHit,
 } from '@luoome/core';
-import { researchEmbeddingIdentityKey } from '@luoome/core';
+import {
+  ResearchChunkEmbeddingSchema,
+  ResearchEmbeddingIndexStateSchema,
+  researchEmbeddingIdentityKey,
+} from '@luoome/core';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 
 import type { DrizzleDb } from '../../client.js';
 import {
   researchChunkEmbeddings,
   researchDocumentChunks,
-  researchDocumentIndex,
   researchEmbeddingIndexStates,
-  researchSubjectLinks,
-  researchTopicDocuments,
 } from '../../schema/index.js';
+import { DrizzleResearchIndexRepository } from './research-index.js';
 
 const cosine = (left: readonly number[], right: readonly number[]): number => {
   let dot = 0;
@@ -33,23 +35,13 @@ const cosine = (left: readonly number[], right: readonly number[]): number => {
   return leftNorm === 0 || rightNorm === 0 ? 0 : dot / Math.sqrt(leftNorm * rightNorm);
 };
 
-const documentFrom = (row: typeof researchDocumentIndex.$inferSelect): ResearchDocumentIndex => ({
-  ...row,
-  tags: [...(row.tags ?? [])],
-  attachmentPaths: [...(row.attachmentPaths ?? [])],
-  author: row.author ?? undefined,
-  sourceUrl: row.sourceUrl ?? undefined,
-  sourceStatus: (row.sourceStatus as ResearchDocumentIndex['sourceStatus']) ?? undefined,
-  publishedAt: row.publishedAt ?? undefined,
-  observedAt: row.observedAt ?? undefined,
-  excerpt: row.excerpt ?? undefined,
-  diagnostic: row.diagnostic ?? undefined,
-  kind: row.kind as ResearchDocumentIndex['kind'],
-  availability: row.availability as ResearchDocumentIndex['availability'],
-});
-
 export class DrizzleResearchEmbeddingRepository implements ResearchEmbeddingRepository {
-  constructor(private readonly db: DrizzleDb) {}
+  constructor(
+    private readonly db: DrizzleDb,
+    private readonly researchIndex: ResearchIndexRepository = new DrizzleResearchIndexRepository(
+      db,
+    ),
+  ) {}
 
   async listPending(
     input: Parameters<ResearchEmbeddingRepository['listPending']>[0],
@@ -77,9 +69,10 @@ export class DrizzleResearchEmbeddingRepository implements ResearchEmbeddingRepo
   }
 
   async saveMany(embeddings: readonly ResearchChunkEmbedding[]): Promise<void> {
-    if (embeddings.length === 0) return;
+    const parsed = embeddings.map((embedding) => ResearchChunkEmbeddingSchema.parse(embedding));
+    if (parsed.length === 0) return;
     this.db.transaction((tx) => {
-      for (const embedding of embeddings) {
+      for (const embedding of parsed) {
         const row: typeof researchChunkEmbeddings.$inferInsert = {
           documentId: embedding.documentId,
           ordinal: embedding.ordinal,
@@ -191,18 +184,19 @@ export class DrizzleResearchEmbeddingRepository implements ResearchEmbeddingRepo
   }
 
   async saveState(state: ResearchEmbeddingIndexState): Promise<void> {
+    const parsed = ResearchEmbeddingIndexStateSchema.parse(state);
     const row: typeof researchEmbeddingIndexStates.$inferInsert = {
-      identityKey: researchEmbeddingIdentityKey(state.identity),
-      provider: state.identity.provider,
-      model: state.identity.model,
-      dimensions: state.identity.dimensions,
-      version: state.identity.version,
-      status: state.status,
-      expectedChunks: state.expectedChunks,
-      embeddedChunks: state.embeddedChunks,
-      staleChunks: state.staleChunks,
-      updatedAt: state.updatedAt,
-      diagnostic: state.diagnostic ?? null,
+      identityKey: researchEmbeddingIdentityKey(parsed.identity),
+      provider: parsed.identity.provider,
+      model: parsed.identity.model,
+      dimensions: parsed.identity.dimensions,
+      version: parsed.identity.version,
+      status: parsed.status,
+      expectedChunks: parsed.expectedChunks,
+      embeddedChunks: parsed.embeddedChunks,
+      staleChunks: parsed.staleChunks,
+      updatedAt: parsed.updatedAt,
+      diagnostic: parsed.diagnostic ?? null,
     };
     this.db
       .insert(researchEmbeddingIndexStates)
@@ -241,42 +235,12 @@ export class DrizzleResearchEmbeddingRepository implements ResearchEmbeddingRepo
     input: Parameters<ResearchEmbeddingRepository['searchSimilar']>[0],
   ): Promise<readonly ResearchSearchHit[]> {
     if (input.vector.length !== input.identity.dimensions) return [];
-    let allowed = this.db.select().from(researchDocumentIndex).all();
-    if (input.kind !== undefined)
-      allowed = allowed.filter((document) => document.kind === input.kind);
-    if (input.topicId !== undefined) {
-      const ids = new Set(
-        this.db
-          .select({ documentId: researchTopicDocuments.documentId })
-          .from(researchTopicDocuments)
-          .where(eq(researchTopicDocuments.topicId, input.topicId))
-          .all()
-          .map((row) => row.documentId),
-      );
-      allowed = allowed.filter((document) => ids.has(document.id));
-    }
-    if (input.subject !== undefined) {
-      const split = input.subject.indexOf(':');
-      const subjectKind = split < 0 ? undefined : input.subject.slice(0, split);
-      const subjectKey = split < 0 ? input.subject : input.subject.slice(split + 1);
-      const ids = new Set(
-        this.db
-          .select({ ownerId: researchSubjectLinks.ownerId })
-          .from(researchSubjectLinks)
-          .where(
-            and(
-              eq(researchSubjectLinks.ownerKind, 'document'),
-              subjectKind === undefined
-                ? undefined
-                : eq(researchSubjectLinks.subjectKind, subjectKind),
-              eq(researchSubjectLinks.subjectKey, subjectKey),
-            ),
-          )
-          .all()
-          .map((row) => row.ownerId),
-      );
-      allowed = allowed.filter((document) => ids.has(document.id));
-    }
+    const allowed = await this.researchIndex.listDocuments({
+      ...(input.topicId === undefined ? {} : { topicId: input.topicId }),
+      ...(input.subject === undefined ? {} : { subject: input.subject }),
+      ...(input.kind === undefined ? {} : { kind: input.kind }),
+      limit: Number.MAX_SAFE_INTEGER,
+    });
     const documents = new Map(allowed.map((document) => [document.id, document]));
     const chunks = new Map(
       this.db
@@ -307,7 +271,7 @@ export class DrizzleResearchEmbeddingRepository implements ResearchEmbeddingRepo
         }
         return [
           {
-            document: documentFrom(document),
+            document,
             ordinal: chunk.ordinal,
             headingPath: chunk.headingPath,
             snippet: chunk.body.slice(0, 500),
