@@ -44,11 +44,15 @@ import {
   auditPortfolioPerformanceSnapshotsTool,
   buildContext,
   cancelStrategyEvaluationSessionTool,
+  createStrictStrategyBacktestTool,
+  executeStrictStrategyBacktestTool,
   finishStrategyEvaluationSessionTool,
   getAccountPerformanceTool,
   getStrategyEvaluationSessionTool,
+  getStrictStrategyBacktestTool,
   listPortfolioPerformanceSnapshotsTool,
   listStrategyEvaluationDaysTool,
+  listStrictStrategyBacktestsTool,
   resumeStrategyEvaluationSessionTool,
   startStrategyEvaluationSessionTool,
   syncStrategyWatchlistSubscriptionsTool,
@@ -105,6 +109,22 @@ const StrategyBacktestRequest = z
       });
     }
   });
+
+const StrictStrategyBacktestRequest = z.object({
+  evaluationSessionId: z.string().min(1),
+  initialCash: z.number().positive().default(1_000_000),
+  benchmarkStockId: z.string().min(1).default('000300.SH'),
+  benchmarkDatasetVersion: z.string().min(1).default('000300.SH:qfq:daily:v1'),
+  lotSize: z.number().int().positive().default(100),
+  maxPositions: z.number().int().min(1).max(100).default(20),
+  costs: z.object({
+    commissionBps: z.number().nonnegative().max(100),
+    minimumCommission: z.number().nonnegative(),
+    sellStampDutyBps: z.number().nonnegative().max(100),
+    buySlippageBps: z.number().nonnegative().max(500),
+    sellSlippageBps: z.number().nonnegative().max(500),
+  }),
+});
 
 /**
  * 行情页图表库（设计 §12.1）：固定版本 lightweight-charts 的 ESM 产物文件。
@@ -552,6 +572,33 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       },
     };
+  };
+
+  const strictBacktestJobs = new Map<string, Promise<void>>();
+  const startStrictBacktestJob = (backtestRunId: string, strategyId: string): void => {
+    if (strictBacktestJobs.has(backtestRunId)) return;
+    const job = executeStrictStrategyBacktestTool
+      .execute({ backtestRunId }, ctxRef.current)
+      .then((result) => {
+        if (!result.ok || result.data.run.status === 'failed') {
+          ctxRef.current.logger.error('web strict backtest job failed', {
+            backtestRunId,
+            strategyId,
+            errorKind: result.ok ? result.data.run.error : result.error.kind,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        ctxRef.current.logger.error('web strict backtest job crashed', {
+          backtestRunId,
+          strategyId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        strictBacktestJobs.delete(backtestRunId);
+      });
+    strictBacktestJobs.set(backtestRunId, job);
   };
 
   interface BatchQuoteTarget {
@@ -1524,6 +1571,53 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       watchlistId: c.req.param('watchlistId'),
     }),
   );
+  app.get('/api/strategies/:id/strict-backtests', async (c) => {
+    const result = await listStrictStrategyBacktestsTool.execute(
+      { strategyId: c.req.param('id'), limit: 50 },
+      contextForRequest(),
+    );
+    return jsonResult(result);
+  });
+  app.get('/api/strategies/:id/strict-backtests/:backtestRunId', async (c) => {
+    const result = await getStrictStrategyBacktestTool.execute(
+      { backtestRunId: c.req.param('backtestRunId') },
+      contextForRequest(),
+    );
+    if (!result.ok) return jsonResult(result);
+    if (result.data.run === null || result.data.run.spec.strategyId !== c.req.param('id')) {
+      return jsonResult(notFound('StrictStrategyBacktest', c.req.param('backtestRunId')));
+    }
+    return jsonResult(result);
+  });
+  app.post('/api/strategies/:id/strict-backtests', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    const parsed = StrictStrategyBacktestRequest.safeParse(body.data);
+    if (!parsed.success) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '严格回测参数无效',
+          issues: parsed.error.issues,
+        },
+      });
+    }
+    const created = await createStrictStrategyBacktestTool.execute(
+      { strategyId: c.req.param('id'), ...parsed.data },
+      contextForRequest(),
+    );
+    if (!created.ok) return jsonResult(created);
+    if (created.data.run.status === 'queued') {
+      startStrictBacktestJob(created.data.run.id, c.req.param('id'));
+    }
+    return jsonResult(
+      { ok: true, data: { run: created.data.run } },
+      created.data.run.status === 'queued' ? 202 : 200,
+    );
+  });
   app.get('/api/strategies/:id/backtests/:sessionId', async (c) => {
     const session = await getEvaluationSession({
       sessionId: c.req.param('sessionId'),

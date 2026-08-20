@@ -91,6 +91,11 @@ import {
   listPendingStrategyObservationsTool,
 } from './tools/signal-observation.js';
 import {
+  createStrictStrategyBacktestTool,
+  getStrictStrategyBacktestTool,
+  listStrictStrategyBacktestsTool,
+} from './tools/strategy-backtest.js';
+import {
   compareStrategyDefinitionsTool,
   proposeStrategyVersionDraftTool,
   trialStrategyVersionTool,
@@ -323,6 +328,9 @@ export const toolRegistry: Registry = createRegistry([
   finishStrategyEvaluationSessionTool,
   resumeStrategyEvaluationSessionTool,
   cancelStrategyEvaluationSessionTool,
+  createStrictStrategyBacktestTool,
+  getStrictStrategyBacktestTool,
+  listStrictStrategyBacktestsTool,
   listStrategyRunsTool,
   getStrategyRunTool,
   listStrategyResultViewsTool,
