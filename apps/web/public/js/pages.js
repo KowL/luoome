@@ -2149,8 +2149,18 @@ const renderResearch = async (setStatus) => {
     if (facts.status === 'unavailable') {
       return el('p', 'muted mt-2', '近期涨停天梯不可用；未将不可用伪装成空结果。');
     }
+    const coveredDays = Math.max(0, 30 - (facts.missingDates?.length ?? 0));
     return el('section', 'research-topic-timeline mt-2', [
-      el('h3', null, '近期涨停天梯'),
+      el(
+        'h3',
+        null,
+        facts.status === 'partial'
+          ? `近期涨停天梯（部分覆盖 ${coveredDays}/30 日）`
+          : '近期涨停天梯',
+      ),
+      facts.status === 'partial'
+        ? el('p', 'muted', '仅展示已保存的 PIT 快照；缺失日期未用当前接口回填。')
+        : null,
       facts.recent?.length
         ? el(
             'ul',
@@ -2166,6 +2176,43 @@ const renderResearch = async (setStatus) => {
               ),
           )
         : el('p', 'muted', '可获得范围内暂无涨停记录'),
+    ]);
+  };
+
+  const researchProfile = (profile) => {
+    if (profile === undefined || profile === null) return null;
+    const statusLabel =
+      profile.status === 'complete'
+        ? '事实完整'
+        : profile.status === 'partial'
+          ? '部分可用'
+          : '不可用';
+    const coverage = profile.coverage ?? {};
+    return el('section', 'card research-stock-profile mt-2', [
+      el('div', 'card-header', [
+        el('div', null, [el('h3', null, '股票研究 Profile'), stockIdentityLink(profile.stock)]),
+        el(
+          'span',
+          `badge ${profile.status === 'complete' ? 'badge-ok' : 'badge-warn'}`,
+          statusLabel,
+        ),
+      ]),
+      el(
+        'p',
+        'muted',
+        `Topic ${coverage.topics ?? 0} · 资料 ${coverage.documents ?? 0} · 事件 ${coverage.events ?? 0} · 策略信号 ${coverage.strategySignals ?? 0} · 触发 ${coverage.watchTriggers ?? 0}`,
+      ),
+      profile.factsAsOf ? el('p', 'muted', `事实截止：${fmtDateTime(profile.factsAsOf)}`) : null,
+      topicSection(
+        '支持证据',
+        (profile.evidence ?? []).slice(0, 8).map((item) => item.summary),
+      ),
+      topicSection(
+        '反证',
+        (profile.counterEvidence ?? []).slice(0, 8).map((item) => item.summary),
+      ),
+      topicSection('Unavailable / 待补证', profile.unknowns),
+      el('p', 'muted', (profile.limitations ?? []).join(' ')),
     ]);
   };
 
@@ -2266,7 +2313,14 @@ const renderResearch = async (setStatus) => {
     setStatus(`已加载 ${topic.title}`);
   };
 
-  const paint = (topics, documents, status, timeline = [], limitUp = undefined) => {
+  const paint = (
+    topics,
+    documents,
+    status,
+    timeline = [],
+    limitUp = undefined,
+    profile = undefined,
+  ) => {
     paintIndexStatus(status);
     paintInbox(topics, documents);
     const cards = [
@@ -2274,6 +2328,7 @@ const renderResearch = async (setStatus) => {
       ...documents.map((document) =>
         researchResultCard(document, 'document', () => void showDocument(document.id)),
       ),
+      researchProfile(profile),
       researchTimeline(timeline),
       researchLimitUp(limitUp),
     ];
@@ -2362,6 +2417,7 @@ const renderResearch = async (setStatus) => {
       response.data.indexStatus,
       response.data.timeline ?? [],
       response.data.limitUp,
+      response.data.profile,
     );
     return;
   }

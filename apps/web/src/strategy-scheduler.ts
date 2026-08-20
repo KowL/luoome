@@ -7,6 +7,52 @@ import {
 
 export const STRATEGY_SCHEDULER_INTERVAL_MS = 60_000;
 
+export interface StrategySchedulerTuning {
+  readonly leaseMinutes: number;
+  readonly concurrency: number;
+  readonly maxStalenessTradingDays: number;
+  readonly maxRetries: number;
+  readonly requestTimeoutMs: number;
+}
+
+const boundedInteger = (
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} 必须是 ${min}～${max} 的整数`);
+  }
+  return parsed;
+};
+
+export const strategySchedulerTuningFromEnv = (
+  env: NodeJS.ProcessEnv = process.env,
+): StrategySchedulerTuning => ({
+  leaseMinutes: boundedInteger(env, 'LUOOME_STRATEGY_SCHEDULE_LEASE_MINUTES', 30, 5, 240),
+  concurrency: boundedInteger(env, 'LUOOME_STRATEGY_DATA_CONCURRENCY', 8, 1, 64),
+  maxStalenessTradingDays: boundedInteger(
+    env,
+    'LUOOME_STRATEGY_DATA_MAX_STALENESS_TRADING_DAYS',
+    1,
+    0,
+    30,
+  ),
+  maxRetries: boundedInteger(env, 'LUOOME_STRATEGY_DATA_MAX_RETRIES', 2, 0, 5),
+  requestTimeoutMs: boundedInteger(
+    env,
+    'LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS',
+    20_000,
+    500,
+    120_000,
+  ),
+});
+
 export interface StrategySchedulerHandle {
   readonly tick: () => Promise<void>;
   readonly stop: () => void;
@@ -16,6 +62,7 @@ export interface StartStrategySchedulerOptions {
   readonly intervalMs?: number;
   readonly startImmediately?: boolean;
   readonly owner?: string;
+  readonly tuning?: StrategySchedulerTuning;
   readonly run?: () => Promise<ToolResult<RunStrategySchedulesOutputT | StrategyDailyCycleOutputT>>;
 }
 
@@ -29,9 +76,9 @@ export const startStrategyScheduler = (
     throw new Error(`策略调度间隔必须为正数: ${intervalMs}`);
   }
   const owner = options.owner ?? `luoome:${process.pid}:${globalThis.crypto.randomUUID()}`;
+  const tuning = options.tuning ?? strategySchedulerTuningFromEnv();
   const run =
-    options.run ??
-    (() => strategyDailyCycleWorkflow.run({ owner, limit: 1, leaseMinutes: 30 }, ctx));
+    options.run ?? (() => strategyDailyCycleWorkflow.run({ owner, limit: 1, ...tuning }, ctx));
   let stopped = false;
   let running = false;
 

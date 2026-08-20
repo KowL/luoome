@@ -214,6 +214,13 @@ export interface DailyBarRepository {
     readonly to?: Date;
     readonly recordedAt?: Date;
   }): Promise<readonly DailyBarRevision[]>;
+  /** 横截面研究批量读取 PIT revision；实现内部负责 SQLite 参数分块并保持稳定排序。 */
+  listRevisionsForStocks(input: {
+    readonly stockIds: readonly string[];
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly DailyBarRevision[]>;
 }
 
 export interface AdviceRepository {

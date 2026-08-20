@@ -33,14 +33,18 @@ const renderLimitUpFacts = (data) => {
     setText('#market-limit-up-status', '不可用');
     return;
   }
+  const coveredDays = Math.max(0, 30 - (facts.missingDates?.length ?? 0));
+  const coverageLabel = facts.status === 'partial' ? `部分覆盖 ${coveredDays}/30 日` : '完整覆盖';
   setText(
     '#market-limit-up-status',
-    facts.asOf === null
-      ? '可用 · 时间未知'
-      : `可用 · ${new Date(facts.asOf).toLocaleDateString('zh-CN')}`,
+    facts.dataAsOf === null
+      ? `${coverageLabel} · 时间未知`
+      : `${coverageLabel} · ${new Date(facts.dataAsOf).toLocaleDateString('zh-CN')}`,
   );
-  mount(
-    wrap,
+  mount(wrap, [
+    facts.status === 'partial'
+      ? el('p', 'muted', '仅展示已保存的 PIT 快照；缺失日期未用当前接口回填。')
+      : null,
     facts.recent.length === 0
       ? el('span', 'muted', '可获得范围内暂无涨停记录')
       : el(
@@ -54,7 +58,7 @@ const renderLimitUpFacts = (data) => {
             ]),
           ),
         ),
-  );
+  ]);
 };
 
 const renderMarkers = (data) => {

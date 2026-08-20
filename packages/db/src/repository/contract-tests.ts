@@ -1587,6 +1587,34 @@ export const registerRepositoryContractTests = (
         ).toEqual([10, 10, 11]);
       });
 
+      it('DailyBar revision 可按多股票批量 PIT 查询并稳定排序', async () => {
+        const revision = (stockId: string, recordedAt: Date, close: number): DailyBarRevision => ({
+          stockId,
+          date: T1,
+          contentHash: `${stockId}-${recordedAt.getTime()}-${close}`,
+          open: close - 1,
+          high: close + 1,
+          low: close - 2,
+          close,
+          volume: 100,
+          source: 'fixture',
+          recordedAt,
+        });
+        await repos.dailyBar.saveRevisions([
+          revision('stk-2', T2, 20),
+          revision('stk-1', T2, 10),
+          revision('stk-1', T3, 11),
+        ]);
+        const got = await repos.dailyBar.listRevisionsForStocks({
+          stockIds: ['stk-2', 'stk-1'],
+          recordedAt: T2,
+        });
+        expect(got.map((item) => `${item.stockId}:${item.close}`)).toEqual([
+          'stk-1:10',
+          'stk-2:20',
+        ]);
+      });
+
       it('DailyBar revision 保留 A → B → A 回退事件', async () => {
         const revision = (
           recordedAt: Date,

@@ -88,9 +88,20 @@ StrategySignal，不临时运行全市场 Strategy。
 交易日、同一来源的 PIT 快照。没有快照或历史字段缺失时必须返回 unknown/unavailable，不读取当前快照、
 情绪接口或 mock 推断历史事实。
 
+炸板固定指“当日原始最高价触及实际涨停价、但原始收盘价未封涨停”；开板后回封不算炸板。
+`consecutiveBoard(D)` 指 D 开盘前、截至上一交易日连续封板的交易日数量；断板指该值至少为 1 且
+D 未收盘封板。所需 raw OHLC、涨停价、交易日或前序窗口缺失时保持 unknown。当前没有通过
+schema、发布时间、revision 与真实凭据验收的数据源，因此这些字段不进入 Strategy registry；
+AShareSentiment 的近期炸板池不得倒灌历史 PIT。
+
 ### ResearchTopic / ResearchDocument
 
 研究以 `ResearchTopic` 为持续上下文，以 `ResearchDocument` 为资料索引；Topic 可不关联股票，也可通过显式 SubjectLink 关联多只股票、产业、事件、主题或宏观问题。正文权威来源是本地 Obsidian Vault，SQLite 只保存可重建的索引、关系、分块和同步审计。研究资料不自动生成 Advice 或交易动作。
+
+股票研究 Profile 是上述显式链接的只读投影，不是 Strategy、Watchlist 或收益概率。它必须分别展示
+evidence、counter-evidence、unknown/unavailable、来源状态和事实截止时间；没有显式链接时不得按
+行业或当前股票池推断研究结论。横截面 selector 属于 Strategy 研究 Tool，adaptive personality 只是
+版本化训练/验证可信门禁，均不自动创建 Advice 或 Trade。
 
 ## 关键约束
 

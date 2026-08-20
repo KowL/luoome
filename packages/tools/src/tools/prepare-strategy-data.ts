@@ -225,6 +225,13 @@ export const prepareStrategyDataTool = defineTool({
   handler: async (input, ctx: ToolContext) => {
     const asOf = input.asOf ?? ctx.clock();
     const universeAsOf = input.universeAsOf ?? asOf;
+    const sourceStatuses =
+      typeof ctx.adapters.market.marketSourceStatus === 'function'
+        ? ctx.adapters.market.marketSourceStatus()
+        : [];
+    const primaryDailyBarSource = sourceStatuses.find(
+      (source) => source.dataset === 'daily-bars' && source.capabilityEnabled,
+    )?.source;
     const sync = await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({
       coverage: 'CN_A_SHARES_SH_SZ',
       asOf: universeAsOf,
@@ -286,7 +293,14 @@ export const prepareStrategyDataTool = defineTool({
                   timeoutMs: input.requestTimeoutMs,
                 })
               ).filter((bar): bar is DailyBar => bar.stockId === stockId);
-          const dataProvider = reuseCache ? 'local:daily-bars' : ctx.adapters.market.name;
+          const barProviders = [...new Set(bars.map((bar) => bar.source))].sort();
+          const dataProvider = reuseCache
+            ? 'local:daily-bars'
+            : barProviders.length === 0
+              ? ctx.adapters.market.name
+              : barProviders.length === 1
+                ? (barProviders[0] as string)
+                : `mixed:${barProviders.join('+')}`;
           const latestBarDate = bars.reduce<Date | undefined>(
             (latest, bar) => (latest === undefined || bar.date > latest ? bar.date : latest),
             undefined,
@@ -418,6 +432,15 @@ export const prepareStrategyDataTool = defineTool({
         : failedCount + missingCount > 0
           ? ('stale' as const)
           : ('fresh' as const);
+    const fallbackUsed =
+      primaryDailyBarSource !== undefined &&
+      prepared.some((member) => {
+        if (member.provider === undefined || member.provider === 'local:daily-bars') return false;
+        const actualSources = member.provider.startsWith('mixed:')
+          ? member.provider.slice('mixed:'.length).split('+')
+          : [member.provider];
+        return actualSources.some((source) => source !== primaryDailyBarSource);
+      });
     const checkpoint = StrategyDataCheckpointSchema.parse({
       id: checkpointId,
       coverage: 'CN_A_SHARES_SH_SZ',
@@ -449,7 +472,7 @@ export const prepareStrategyDataTool = defineTool({
           succeeded: availableCount,
           failed: failedCount,
           missing: prepared.filter((member) => member.status === 'missing').length,
-          fallbackUsed: false,
+          fallbackUsed,
           freshness: providerFreshness,
           ...(providerDataAsOf === undefined ? {} : { dataAsOf: providerDataAsOf }),
           errorKinds: [...new Set(prepared.flatMap((member) => member.errorKind ?? []))],
