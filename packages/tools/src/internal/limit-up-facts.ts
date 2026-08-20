@@ -3,6 +3,7 @@ import {
   dateInShanghai,
   isHoliday,
   isWeekend,
+  type LimitUpLadder,
   type LimitUpLadderEntry,
   type ToolContext,
 } from '@luoome/core';
@@ -20,10 +21,14 @@ const RecentLimitUpSchema = z.object({
 export const StockLimitUpFactsSchema = z.object({
   stockId: z.string().min(1),
   code: z.string().regex(/^\d{6}$/),
-  status: z.enum(['available', 'unavailable']),
+  status: z.enum(['complete', 'partial', 'unavailable']),
+  coverage: z.literal('CN_A_SHARES_SH_SZ'),
+  source: z.literal('eastmoney'),
   today: RecentLimitUpSchema.nullable(),
   recent: z.array(RecentLimitUpSchema).max(30),
-  asOf: z.coerce.date().nullable(),
+  dataAsOf: z.coerce.date().nullable(),
+  fetchedAt: z.coerce.date().nullable(),
+  missingDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(30),
   warnings: z.array(z.string()),
 });
 
@@ -54,64 +59,84 @@ const entryFor = (entry: LimitUpLadderEntry): z.infer<typeof RecentLimitUpSchema
   corrected: entry.corrected,
 });
 
-/**
- * 通过统一 manager 拉取可获得的历史日期；任何单日失败都进入 warnings，
- * 不把“上游不支持历史”伪装成正常空列表。
- */
+const usableSnapshot = (warnings: readonly string[]): boolean =>
+  !warnings.includes('empty-ladder') && !warnings.includes('non-trading-day');
+
+const dataCutoffFor = (snapshot: LimitUpLadder): Date => {
+  const close = new Date(`${snapshot.date}T15:00:00.000+08:00`);
+  return snapshot.asOf.getTime() < close.getTime() ? snapshot.asOf : close;
+};
+
+/** 历史日期只读取 PIT snapshot；当天交互视图可读取 manager，不能现场回拉远端补历史。 */
 export const loadStockLimitUpFacts = async (
   stockId: string,
   code: string,
   anchorDate: string,
   ctx: ToolContext,
 ): Promise<StockLimitUpFacts> => {
-  if (ctx.limitUpLadder === undefined) {
-    return {
-      stockId,
-      code,
-      status: 'unavailable',
-      today: null,
-      recent: [],
-      asOf: null,
-      warnings: ['limit-up-ladder-manager-unavailable'],
-    };
-  }
   const warnings: string[] = [];
   const rows: Array<z.infer<typeof RecentLimitUpSchema>> = [];
-  let successful = 0;
-  let latestAsOf: Date | null = null;
+  const missingDates: string[] = [];
+  let covered = 0;
+  let latestDataAsOf: Date | null = null;
+  let latestFetchedAt: Date | null = null;
   const dates = recentTradingDates(anchorDate, 30);
+  const currentDate = currentLimitUpDate(ctx);
   const concurrency = 4;
   for (let start = 0; start < dates.length; start += concurrency) {
     const batch = dates.slice(start, start + concurrency);
     const results = await Promise.all(
-      batch.map(async (date) => ({
-        date,
-        result: await ctx.limitUpLadder?.fetchLadder({
+      batch.map(async (date) => {
+        if (anchorDate === currentDate && date === currentDate) {
+          if (ctx.limitUpLadder === undefined) {
+            return { date, snapshot: null, warning: 'current-manager-unavailable' };
+          }
+          const result = await ctx.limitUpLadder.fetchLadder({
+            date,
+            source: 'eastmoney',
+            days: 30,
+            includeUncategorized: false,
+            includeStar: false,
+            includeBse: false,
+            includeST: false,
+          });
+          if (!result.ok || result.data === undefined) {
+            return {
+              date,
+              snapshot: null,
+              warning: result.error?.message ?? 'current-manager-unavailable',
+            };
+          }
+          return { date, snapshot: result.data };
+        }
+        return {
           date,
-          source: 'eastmoney',
-          days: 30,
-          includeUncategorized: false,
-          includeStar: false,
-          includeBse: false,
-          includeST: false,
-        }),
-      })),
+          snapshot: await ctx.repos.limitUpLadderSnapshot.findByDate({
+            date,
+            source: 'eastmoney',
+          }),
+        };
+      }),
     );
-    for (const { date, result } of results) {
-      if (result === undefined || !result.ok || result.data === undefined) {
-        warnings.push(`${date}: ${result?.error?.message ?? 'history-unavailable'}`);
+    for (const { date, snapshot, warning } of results) {
+      if (snapshot === null || !usableSnapshot(snapshot.warnings)) {
+        missingDates.push(date);
+        if (warning !== undefined) warnings.push(`${date}: ${warning}`);
         continue;
       }
-      successful += 1;
-      if (latestAsOf === null || result.data.asOf.getTime() > latestAsOf.getTime()) {
-        latestAsOf = result.data.asOf;
+      covered += 1;
+      const dataAsOf = dataCutoffFor(snapshot);
+      if (latestDataAsOf === null || dataAsOf.getTime() > latestDataAsOf.getTime()) {
+        latestDataAsOf = dataAsOf;
       }
-      const match = result.data.levels
+      if (latestFetchedAt === null || snapshot.asOf.getTime() > latestFetchedAt.getTime()) {
+        latestFetchedAt = snapshot.asOf;
+      }
+      const match = snapshot.levels
         .flatMap((level) => level.stocks)
         .find((entry) => entry.code === code);
       if (match !== undefined) rows.push(entryFor(match));
-      if (result.data.warnings.length > 0)
-        warnings.push(`${date}: ${result.data.warnings.join(', ')}`);
+      if (snapshot.warnings.length > 0) warnings.push(`${date}: ${snapshot.warnings.join(', ')}`);
     }
   }
   const recent = [...new Map(rows.map((row) => [row.date, row])).values()]
@@ -121,11 +146,20 @@ export const loadStockLimitUpFacts = async (
   return StockLimitUpFactsSchema.parse({
     stockId,
     code,
-    status: successful === 0 ? 'unavailable' : 'available',
+    status: covered === 0 ? 'unavailable' : missingDates.length === 0 ? 'complete' : 'partial',
+    coverage: 'CN_A_SHARES_SH_SZ',
+    source: 'eastmoney',
     today,
     recent,
-    asOf: latestAsOf,
-    warnings: [...new Set(warnings)],
+    dataAsOf: latestDataAsOf,
+    fetchedAt: latestFetchedAt,
+    missingDates,
+    warnings: [
+      ...new Set([
+        ...warnings,
+        ...(missingDates.length === 0 ? [] : [`pit-snapshots-missing:${missingDates.length}`]),
+      ]),
+    ],
   });
 };
 

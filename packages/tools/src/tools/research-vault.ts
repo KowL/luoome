@@ -836,9 +836,13 @@ export const getStockResearchViewTool = defineTool({
           stockId: input.stockId,
           code: '000000',
           status: 'unavailable',
+          coverage: 'CN_A_SHARES_SH_SZ',
+          source: 'eastmoney',
           today: null,
           recent: [],
-          asOf: null,
+          dataAsOf: null,
+          fetchedAt: null,
+          missingDates: [],
           warnings: ['stock-code-unavailable'],
         });
     const topicDocuments = await Promise.all(
