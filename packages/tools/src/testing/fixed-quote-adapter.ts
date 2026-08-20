@@ -3,6 +3,7 @@ import type {
   DateRange,
   MarketDataAdapterLike,
   MarketSourceStatus,
+  MinuteBar,
   Money,
   Quote,
 } from '@luoome/core';
@@ -85,6 +86,10 @@ export class FixedQuoteAdapter implements MarketDataAdapterLike {
 
   fetchIntradayMinutes(): Promise<never> {
     return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
+  }
+
+  fetchMinuteBars(): Promise<readonly MinuteBar[]> {
+    return Promise.reject(new Error('unsupported_capability: minute-bars'));
   }
 
   fetchMarketSnapshot(): Promise<never> {

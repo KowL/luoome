@@ -238,6 +238,14 @@ const sinaBindings = (adapter: SinaAdapter): AnyMarketCapabilityBinding[] => [
 const tushareBindings = (adapter: TushareMarketAdapter): AnyMarketCapabilityBinding[] => [
   ...commonBindings(adapter, CN_SH_SZ),
   {
+    capability: 'minute-bars',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockId, interval }) => adapter.fetchMinuteBars(stockId, interval),
+    dataAsOf: (bars) => bars.at(-1)?.endedAt,
+  },
+  {
     capability: 'delayed-index',
     source: adapter.name,
     coverage: CN_SH_SZ,

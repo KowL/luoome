@@ -6,6 +6,7 @@ import type {
   ChatSession,
   DailyBar,
   Holding,
+  MinuteBar,
   Notification,
   PortfolioCashFlow,
   PortfolioCorporateAction,
@@ -31,6 +32,7 @@ import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
 import { InMemoryHoldingRepository } from './holding.js';
 import { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+import { InMemoryMinuteBarRepository } from './minute-bar.js';
 import { InMemoryNotificationRepository } from './notification.js';
 import {
   InMemoryPortfolioCashFlowRepository,
@@ -67,6 +69,7 @@ export { InMemoryChatRepository } from './chat.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
 export { InMemoryHoldingRepository } from './holding.js';
 export { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+export { InMemoryMinuteBarRepository } from './minute-bar.js';
 export { InMemoryNotificationRepository } from './notification.js';
 export {
   InMemoryPortfolioCashFlowRepository,
@@ -111,6 +114,7 @@ export interface InMemorySeed {
   readonly reports?: readonly Report[];
   readonly signalObservations?: readonly SignalObservation[];
   readonly dailyBars?: readonly DailyBar[];
+  readonly minuteBars?: readonly MinuteBar[];
   readonly strategies?: readonly Strategy[];
   readonly strategySchedules?: readonly StrategySchedule[];
   readonly strategyVersions?: readonly StrategyVersion[];
@@ -140,6 +144,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const chat = new InMemoryChatRepository();
   const quote = new InMemoryQuoteRepository();
   const dailyBar = new InMemoryDailyBarRepository();
+  const minuteBar = new InMemoryMinuteBarRepository();
   const signalObservation = new InMemorySignalObservationRepository();
   const strategy = new InMemoryStrategyRepository();
   const strategySchedule = new InMemoryStrategyScheduleRepository();
@@ -175,6 +180,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const message of seed.chatMessages ?? []) chat.putMessage(message);
     for (const q of seed.quotes ?? []) quote.put(q);
     for (const b of seed.dailyBars ?? []) dailyBar.put(b);
+    for (const b of seed.minuteBars ?? []) minuteBar.put(b);
     for (const observation of seed.signalObservations ?? []) signalObservation.put(observation);
     for (const item of seed.strategies ?? []) void strategy.create(item);
     for (const item of seed.strategySchedules ?? []) strategySchedule.put(item);
@@ -201,6 +207,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     report,
     quote,
     dailyBar,
+    minuteBar,
     signalObservation,
     strategy,
     strategySchedule,

@@ -10,6 +10,7 @@ import {
   DrizzleDailyBarRepository,
   DrizzleHoldingRepository,
   DrizzleLimitUpLadderSnapshotRepository,
+  DrizzleMinuteBarRepository,
   DrizzleNotificationRepository,
   DrizzlePortfolioCashFlowRepository,
   DrizzlePortfolioCorporateActionRepository,
@@ -460,6 +461,31 @@ export const ensureSchema = (db: DrizzleDb): void => {
   migrateDailyBarAdjustmentColumns(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS minute_bars (
+      stock_id TEXT NOT NULL,
+      interval TEXT NOT NULL,
+      ended_at INTEGER NOT NULL,
+      open REAL NOT NULL,
+      high REAL NOT NULL,
+      low REAL NOT NULL,
+      close REAL NOT NULL,
+      volume INTEGER NOT NULL,
+      amount REAL,
+      adjustment TEXT NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      completeness TEXT NOT NULL,
+      CONSTRAINT minute_bars_pk PRIMARY KEY (stock_id, interval, ended_at)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS minute_bars_stock_interval_ended_idx
+    ON minute_bars (stock_id, interval, ended_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS minute_bars_ended_idx ON minute_bars (ended_at)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS daily_bar_revisions (
@@ -1423,6 +1449,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     report: new DrizzleReportRepository(db),
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),
+    minuteBar: new DrizzleMinuteBarRepository(db),
     signalObservation: new DrizzleSignalObservationRepository(db),
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db),

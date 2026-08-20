@@ -16,6 +16,7 @@ const DATASET_LABELS = {
   'daily-bars': '日线',
   quote: '实时快照',
   'realtime-index': '指数行情',
+  'minute-bars': '分钟 OHLCV',
   'intraday-minutes': '分时',
   'market-snapshot': '市场快照',
   'market-snapshot-envelope': '市场快照完整性',

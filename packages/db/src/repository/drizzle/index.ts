@@ -5,6 +5,7 @@ export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
 export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+export { DrizzleMinuteBarRepository } from './minute-bar.js';
 export { DrizzleNotificationRepository } from './notification.js';
 export {
   DrizzlePortfolioCashFlowRepository,

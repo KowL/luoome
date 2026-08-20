@@ -2,7 +2,7 @@
 
 > 状态：已实施（2026-07-27）
 > 日期：2026-07-27
-> 范围：直连 tushare 官方 HTTP API，使其成为 Eastmoney / Tencent 之外的第三个真实行情源
+> 范围：直连 tushare 官方 HTTP API，使其成为 Eastmoney / Tencent 之外的第三个真实行情源；包含 Phase 4 MinuteBar 当前会话能力
 > 关联文档：[架构说明 §4.7](../ARCHITECTURE.md)、[个股行情查看详细设计](./stock-market-view-detailed-design.md)、[Tushare 集成手册](../runbooks/tushare-integration.md)
 > 说明：本文档替代原 [adshare 设计]（已删除）——adshare 私有代理服务已整体移除，传输层由 adshare `GET /tushare/*` + 双认证头改为 tushare 官方 POST envelope，环境变量由 `ADSHARE_*` 改为 `TUSHARE_*`。领域语义（第三真实源契约、字段映射、复权因子合并、vol 手→股、市场范围、错误转译）保持不变。
 
@@ -12,7 +12,7 @@
 
 - 注册为可排序的数据源；默认关闭，启用后可占据 `primary`、`fallback` 或
   `finalFallback` 槽位；
-- 同时具备 `fetchQuote` / `batchQuote` / `fetchDailyBars` / `searchStocks` 四个能力；
+- 同时具备 `fetchQuote` / `batchQuote` / `fetchDailyBars` / `searchStocks` / `fetchMinuteBars` 能力；
 - 与 Eastmoney / Tencent 共享 `Quote` / `DailyBar` / `StockSearchCandidate` 形状，统一进入现有缓存；需要持久化的 tool 继续按既有职责写 repository；
 - A 股场景下允许用户配置一至三个真实源的启用状态与优先级，保留现有降级语义与抑制窗口。
 
@@ -25,7 +25,7 @@
 本设计不实现：
 
 - 港股 / 美股 / 北交所 / 加密资产。adapter 只覆盖 SH / SZ A 股，其它市场不在支持范围。
-- 分钟 K 线、复盘分钟行情、分时图。本设计仅对齐日 K 与实时快照，分钟行情另有独立设计。
+- 历史分钟补数与复盘分钟行情。本设计只接入当前会话 `rt_min_daily`；MinuteBar 的冻结 schema、缺口和本地保留见 [独立设计](./minute-bar-detailed-design.md)。
 - 自动交易、盯盘触发、Advice 联动。本设计只做读取。
 - tushare 积分 / 权限体系的自动检测。接口权限不足统一按 `upstream_error` 走既有降级，
   人工处理见集成手册。
@@ -58,6 +58,7 @@ Content-Type: application/json
 | `fetchQuote` | `rt_k` | 实时 Level-1 快照，price 即最新价，vol 单位=股；**需单独开通权限**（[doc_id=290](https://tushare.pro/document/1?doc_id=290)） |
 | `fetchDailyBars` | `daily` + `adj_factor` | 日线 vol 单位=手；复权因子单独请求并合并；均需 2000 积分起 |
 | `searchStocks` | `stock_basic` | `exchange` 用 `SSE` / `SZSE`；客户端截断 20 条 |
+| `fetchMinuteBars` | `rt_min_daily` | 沪深 A 股当前会话；1/5/15/30/60 分钟 seam；OHLCV raw；单股、实时分钟权限 |
 
 ### 3.2 Adapter 进入可配置的三段行情路由
 

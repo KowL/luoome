@@ -57,6 +57,31 @@ const toIntradayVolumeData = (points) =>
     };
   });
 
+/** MinuteBar[] → 分时收盘价 Line 数据。 */
+const toMinuteLineData = (bars) =>
+  bars.map((bar) => ({
+    time: Math.floor(new Date(bar.endedAt).getTime() / 1000),
+    value: bar.close,
+  }));
+
+/** MinuteBar[] → 分钟 Candlestick 数据。 */
+const toMinuteCandleData = (bars) =>
+  bars.map((bar) => ({
+    time: Math.floor(new Date(bar.endedAt).getTime() / 1000),
+    open: bar.open,
+    high: bar.high,
+    low: bar.low,
+    close: bar.close,
+  }));
+
+/** MinuteBar[] → 原生逐桶成交量；不对累计量做猜测性差分。 */
+const toMinuteVolumeData = (bars) =>
+  bars.map((bar) => ({
+    time: Math.floor(new Date(bar.endedAt).getTime() / 1000),
+    value: bar.volume,
+    color: bar.close >= bar.open ? UP_COLOR : DOWN_COLOR,
+  }));
+
 /**
  * 从 candles 纯计算 MA 序列（§12.2：前端计算仅用于绘制，指标摘要以 Tool 输出为权威）。
  * 窗口不足 period 的前期点不输出。
@@ -236,15 +261,83 @@ const createIntradayChart = async (container) => {
   };
 };
 
+/**
+ * 创建生产 MinuteBar 图：分时模式使用 close Line，分钟 K 模式使用原生 OHLC Candlestick；
+ * 两者的成交量都直接消费 MinuteBar.volume。
+ */
+const createMinuteBarChart = async (container, mode = 'line') => {
+  const lc = await loadLightweightCharts();
+  const chart = lc.createChart(container, {
+    width: container.clientWidth || 640,
+    height: 360,
+    layout: {
+      background: { type: 'solid', color: 'transparent' },
+      textColor: '#76849a',
+      attributionLogo: true,
+    },
+    grid: {
+      vertLines: { color: 'rgba(72, 86, 108, 0.1)' },
+      horzLines: { color: 'rgba(72, 86, 108, 0.1)' },
+    },
+    timeScale: { borderColor: 'rgba(72, 86, 108, 0.24)', timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: 'rgba(72, 86, 108, 0.24)' },
+  });
+  const priceSeries =
+    mode === 'candlestick'
+      ? chart.addSeries(lc.CandlestickSeries, {
+          upColor: UP_COLOR,
+          downColor: DOWN_COLOR,
+          borderVisible: false,
+          wickUpColor: UP_COLOR,
+          wickDownColor: DOWN_COLOR,
+        })
+      : chart.addSeries(lc.LineSeries, { color: '#3f66d8', lineWidth: 2 });
+  const volumeSeries = chart.addSeries(
+    lc.HistogramSeries,
+    { priceFormat: { type: 'volume' }, priceScaleId: 'volume' },
+    1,
+  );
+  chart.priceScale('volume', 1).applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+  const observer = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (entry === undefined) return;
+    chart.applyOptions({ width: Math.max(1, Math.floor(entry.contentRect.width)) });
+  });
+  observer.observe(container);
+  return {
+    setData(bars) {
+      priceSeries.setData(
+        mode === 'candlestick' ? toMinuteCandleData(bars) : toMinuteLineData(bars),
+      );
+      volumeSeries.setData(toMinuteVolumeData(bars));
+      chart.timeScale().fitContent();
+    },
+    resize(width, nextHeight) {
+      chart.applyOptions({
+        width: Math.max(1, Math.floor(width)),
+        height: Math.max(1, Math.floor(nextHeight)),
+      });
+    },
+    destroy() {
+      observer.disconnect();
+      chart.remove();
+    },
+  };
+};
+
 export {
   computeMaSeries,
   createIntradayChart,
   createMarketChart,
+  createMinuteBarChart,
   DOWN_COLOR,
   toCandleData,
   toIntradayLineData,
   toIntradayVolumeData,
   toMarkerData,
+  toMinuteCandleData,
+  toMinuteLineData,
+  toMinuteVolumeData,
   toVolumeData,
   UP_COLOR,
   volumeColor,
