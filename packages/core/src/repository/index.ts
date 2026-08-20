@@ -43,6 +43,7 @@ import type {
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
+import type { StrictBacktestMarketFact, StrictBacktestRun } from '../entity/strategy-backtest.js';
 import type {
   DailyBarRevision,
   StrategyDataCheckpoint,
@@ -298,6 +299,8 @@ export interface RepositoryRegistry {
   readonly strategyDataCheckpoint: StrategyDataCheckpointRepository;
   /** P2 历史评估 session/day 进度。 */
   readonly strategyEvaluation: StrategyEvaluationRepository;
+  /** 严格回测运行与 PIT 可成交性/公司行动事实；与 operational/evaluation run 隔离。 */
+  readonly strategyBacktest: StrategyBacktestRepository;
   readonly strategyWatchlistSubscription: StrategyWatchlistSubscriptionRepository;
   readonly watchlist: WatchlistRepository;
   readonly watchlistMember: WatchlistMemberRepository;
@@ -598,6 +601,22 @@ export interface StrategyEvaluationRepository {
     readonly dataAsOf: Date;
   }): Promise<StrategyEvaluationDay | null>;
   listDays(sessionId: string): Promise<readonly StrategyEvaluationDay[]>;
+}
+
+export interface StrategyBacktestRepository {
+  saveRun(run: StrictBacktestRun): Promise<void>;
+  findRunById(id: string): Promise<StrictBacktestRun | null>;
+  listRuns(input?: {
+    readonly strategyId?: string;
+    readonly limit?: number;
+  }): Promise<readonly StrictBacktestRun[]>;
+  saveMarketFacts(facts: readonly StrictBacktestMarketFact[]): Promise<void>;
+  listMarketFacts(input: {
+    readonly stockIds: readonly string[];
+    readonly from: Date;
+    readonly to: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly StrictBacktestMarketFact[]>;
 }
 
 export interface StrategyWatchlistSubscriptionRepository {

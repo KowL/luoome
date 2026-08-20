@@ -16,6 +16,8 @@ import {
   inspectStrategyDefinitionReferences,
   isPublishableOperationalRun,
   type Quote,
+  STRATEGY_EVALUATOR_CODE_HASH,
+  STRATEGY_EVALUATOR_VERSION,
   type StrategyLeaseToken,
   StrategyResultSchema,
   type StrategyRunInputSnapshotV3,
@@ -38,7 +40,6 @@ import { deriveStrategyMetaByStock } from '../internal/strategy-meta.js';
 
 const DAY_MS = 86_400_000;
 const EVALUATION_CONCURRENCY = 8;
-const EVALUATOR_VERSION = 'strategy-evaluator-v2';
 const RUN_LEASE_MS = 15 * 60 * 1000;
 const RUN_HEARTBEAT_MS = 5 * 60 * 1000;
 const BATCH_QUOTE_CHUNK_SIZE = 100;
@@ -541,7 +542,8 @@ export const runStrategyTool = defineTool({
           schemaVersion: 3,
           strategyVersionId: version.id,
           definitionHash: version.definitionHash,
-          evaluatorVersion: EVALUATOR_VERSION,
+          evaluatorVersion: STRATEGY_EVALUATOR_VERSION,
+          evaluatorCodeIdentity: STRATEGY_EVALUATOR_CODE_HASH,
           scope,
           universeKind,
           coverage: 'CN_A_SHARES_SH_SZ',

@@ -48,6 +48,7 @@ import { InMemoryStockRepository } from './stock.js';
 import { InMemoryStockEventRepository } from './stock-event.js';
 import { InMemoryStockUniverseRepository } from './stock-universe.js';
 import { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
+import { InMemoryStrategyBacktestRepository } from './strategy-backtest.js';
 import {
   InMemoryStrategyDataCheckpointRepository,
   InMemoryStrategyEvaluationRepository,
@@ -84,6 +85,7 @@ export { InMemoryStockRepository } from './stock.js';
 export { InMemoryStockEventRepository } from './stock-event.js';
 export { InMemoryStockUniverseRepository } from './stock-universe.js';
 export { InMemoryStrategyRepository, InMemoryStrategyRunRepository } from './strategy.js';
+export { InMemoryStrategyBacktestRepository } from './strategy-backtest.js';
 export {
   InMemoryStrategyDataCheckpointRepository,
   InMemoryStrategyEvaluationRepository,
@@ -149,6 +151,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const strategyRun = new InMemoryStrategyRunRepository(strategy);
   const strategyDataCheckpoint = new InMemoryStrategyDataCheckpointRepository();
   const strategyEvaluation = new InMemoryStrategyEvaluationRepository();
+  const strategyBacktest = new InMemoryStrategyBacktestRepository();
   const strategyWatchlistSubscription = new InMemoryStrategyWatchlistSubscriptionRepository();
   const watchlist = new InMemoryWatchlistRepository();
   const watchlistMember = new InMemoryWatchlistMemberRepository(watchlist);
@@ -211,6 +214,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     strategyRun,
     strategyDataCheckpoint,
     strategyEvaluation,
+    strategyBacktest,
     strategyWatchlistSubscription,
     watchlist,
     watchlistMember,

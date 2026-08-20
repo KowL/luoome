@@ -1136,6 +1136,22 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     });
   });
 
+  it('严格回测 API 独立于历史回放，并在参数缺失时返回门禁入口错误', async () => {
+    const invalid = await app.fetch(
+      targetRequest('/api/strategies/strict-api-check/strict-backtests', {}),
+    );
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input', message: '严格回测参数无效' },
+    });
+    const list = await app.fetch(
+      new Request('http://test/api/strategies/strict-api-check/strict-backtests'),
+    );
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({ ok: true, data: { runs: [] } });
+  });
+
   it('目标 mutation 要求显式 opt-in，并校验同源 Origin', async () => {
     const guarded = createWebApp(await buildTestContext(), {
       exposeWrite: false,

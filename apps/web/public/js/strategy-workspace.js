@@ -1284,6 +1284,144 @@ const VINTAGE_STATUS = {
   'not-applicable': ['不适用', 'badge-neutral'],
 };
 
+const STRICT_GATE_STATUS = {
+  complete: ['完整', 'badge-active'],
+  partial: ['部分可用', 'badge-important'],
+  unavailable: ['不可用', 'badge-pos'],
+};
+
+export const buildStrictBacktestResultContent = (run) => {
+  const gateRows = (run.gateAudit?.items ?? []).map((item) =>
+    el('tr', null, [
+      el('td', 'mono', item.key),
+      el('td', null, badge(STRICT_GATE_STATUS[item.status], item.status)),
+      el('td', 'muted', item.detail),
+    ]),
+  );
+  const metrics = run.metrics;
+  const metricNodes =
+    metrics === undefined
+      ? [
+          el(
+            'p',
+            'status warning',
+            '数据门禁未完整通过，净值、收益、回撤等指标暂不可用；不会输出伪造 Sharpe 或胜率。',
+          ),
+        ]
+      : [
+          el('div', 'strategy-summary-grid', [
+            metric('最终净值', fmtNum(metrics.finalEquity)),
+            metric('净收益', `${fmtSigned(metrics.netReturnPct)}%`),
+            metric('最大回撤', `${fmtSigned(metrics.maxDrawdownPct)}%`),
+            metric('基准收益', `${fmtSigned(metrics.benchmarkReturnPct)}%`),
+            metric('超额收益', `${fmtSigned(metrics.excessReturnPct)}%`),
+            metric('成交笔数', metrics.tradeCount),
+          ]),
+        ];
+  return el('div', 'strategy-backtest-result', [
+    el(
+      'p',
+      'muted',
+      `严格回测 ${run.id} · ${run.status} · 输入指纹 ${run.inputFingerprint.slice(0, 12)}…`,
+    ),
+    ...metricNodes,
+    el('h4', null, '门禁审计'),
+    ...(gateRows.length === 0
+      ? [el('p', 'placeholder', '暂无门禁审计。')]
+      : [
+          el('div', 'table-wrap', [
+            el('table', 'table', [
+              el(
+                'thead',
+                null,
+                el(
+                  'tr',
+                  null,
+                  ['门禁', '状态', '证据'].map((label) => el('th', null, label)),
+                ),
+              ),
+              el('tbody', null, gateRows),
+            ]),
+          ]),
+        ]),
+    ...(run.error === undefined ? [] : [el('p', 'status error', run.error)]),
+    el('p', 'muted', '严格回测与生产运行、历史评估隔离，不生成 Advice、Trade 或通知。'),
+  ]);
+};
+
+export const runStrictStrategyBacktest = async (strategy, input, setStatus) => {
+  setStatus('正在检查严格回测数据门禁…');
+  const created = await post(
+    `/api/strategies/${encodeURIComponent(strategy.id)}/strict-backtests`,
+    input,
+  );
+  if (!created.ok) {
+    setStatus(errorText(created), true);
+    return created;
+  }
+  const initial = created.data?.run;
+  const runId = initial?.id;
+  if (typeof runId !== 'string') return created;
+  let run = initial;
+  for (
+    let attempt = 0;
+    attempt < 360 && (run.status === 'queued' || run.status === 'running');
+    attempt += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const snapshot = await callApi(
+      `/api/strategies/${encodeURIComponent(strategy.id)}/strict-backtests/${encodeURIComponent(runId)}`,
+    );
+    if (!snapshot.ok) {
+      setStatus(errorText(snapshot), true);
+      return snapshot;
+    }
+    run = snapshot.data.run;
+    setStatus(`严格回测：${run.status}，门禁 ${run.gateAudit?.status ?? 'unknown'}`);
+  }
+  openModal(`严格回测 · ${strategy.name}`, buildStrictBacktestResultContent(run));
+  setStatus(
+    run.metrics === undefined
+      ? `严格回测${run.resultAvailability === 'unavailable' ? '不可用' : '部分完成'}：请查看门禁审计`
+      : `严格回测完成：净收益 ${fmtSigned(run.metrics.netReturnPct)}%`,
+    run.metrics === undefined,
+  );
+  return { ...created, data: { run } };
+};
+
+const openStrictBacktestDialog = async (strategy, setStatus) => {
+  const values = await promptDialog({
+    title: `严格回测 · ${strategy.name}`,
+    fields: [
+      { key: 'evaluationSessionId', label: '历史评估 session ID', value: '' },
+      { key: 'initialCash', label: '初始资金', value: '1000000' },
+      { key: 'commissionBps', label: '佣金（bps）', value: '3' },
+      { key: 'minimumCommission', label: '最低佣金', value: '5' },
+      { key: 'sellStampDutyBps', label: '卖出印花税（bps）', value: '5' },
+      { key: 'buySlippageBps', label: '买入滑点（bps）', value: '2' },
+      { key: 'sellSlippageBps', label: '卖出滑点（bps）', value: '2' },
+    ],
+    confirmLabel: '创建严格回测',
+    note: '必须提供已完成的历史评估 session。任一 PIT、修订、费用、滑点、可交易性、公司行动、基准或求值器身份门禁缺失时，只返回不可用/部分结果，不生成收益指标。',
+  });
+  if (values === null) return;
+  await runStrictStrategyBacktest(
+    strategy,
+    {
+      evaluationSessionId: values.evaluationSessionId,
+      initialCash: Number(values.initialCash),
+      costs: {
+        commissionBps: Number(values.commissionBps),
+        minimumCommission: Number(values.minimumCommission),
+        sellStampDutyBps: Number(values.sellStampDutyBps),
+        buySlippageBps: Number(values.buySlippageBps),
+        sellSlippageBps: Number(values.sellSlippageBps),
+      },
+    },
+    setStatus,
+  );
+};
+
 export const buildBacktestResultContent = (data, strategyId = '', sessionId) => {
   const summary = data.summary;
   const evaluationSessionId = sessionId ?? data.sessionId ?? data.session?.id;
@@ -1549,6 +1687,12 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
   };
   const headerActions = el('div', 'row-actions');
   if (workspace.currentVersion !== undefined && workspace.strategy.status === 'active') {
+    const strictBacktest = el('button', 'btn btn-outline btn-sm', '严格回测');
+    strictBacktest.type = 'button';
+    strictBacktest.addEventListener(
+      'click',
+      () => void openStrictBacktestDialog(workspace.strategy, setStatus),
+    );
     const backtest = el('button', 'btn btn-outline btn-sm', '模拟回测');
     backtest.type = 'button';
     backtest.addEventListener(
@@ -1567,7 +1711,7 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
       'click',
       () => void runAction(workspace.strategy, true, setStatus, rerender),
     );
-    headerActions.append(backtest, sample, formal);
+    headerActions.append(strictBacktest, backtest, sample, formal);
   }
   const tabs = el('div', 'strategy-tabs');
   tabs.setAttribute('role', 'tablist');

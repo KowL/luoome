@@ -23,6 +23,7 @@ import {
   DrizzleStockEventRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
+  DrizzleStrategyBacktestRepository,
   DrizzleStrategyDataCheckpointRepository,
   DrizzleStrategyEvaluationRepository,
   DrizzleStrategyRepository,
@@ -760,6 +761,35 @@ export const ensureSchema = (db: DrizzleDb): void => {
     ON strategy_evaluation_days (session_id, status)
   `);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_backtest_runs (
+      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_version_id TEXT NOT NULL,
+      evaluation_session_id TEXT NOT NULL, status TEXT NOT NULL,
+      result_availability TEXT NOT NULL, spec_json TEXT NOT NULL, spec_hash TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL, evaluator_json TEXT NOT NULL,
+      gate_audit_json TEXT NOT NULL, metrics_json TEXT, error TEXT,
+      created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_backtest_runs_strategy_created_idx
+    ON strategy_backtest_runs (strategy_id, created_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_backtest_runs_session_idx
+    ON strategy_backtest_runs (evaluation_session_id)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_backtest_market_facts (
+      stock_id TEXT NOT NULL, date INTEGER NOT NULL, recorded_at INTEGER NOT NULL,
+      content_hash TEXT NOT NULL, fact_json TEXT NOT NULL,
+      PRIMARY KEY (stock_id, date, recorded_at, content_hash)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_backtest_market_facts_lookup_idx
+    ON strategy_backtest_market_facts (stock_id, date, recorded_at)
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       channel TEXT NOT NULL,
@@ -1426,6 +1456,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     strategySchedule: new DrizzleStrategyScheduleRepository(db),
     strategyDataCheckpoint: new DrizzleStrategyDataCheckpointRepository(db),
     strategyEvaluation: new DrizzleStrategyEvaluationRepository(db),
+    strategyBacktest: new DrizzleStrategyBacktestRepository(db),
     strategyWatchlistSubscription: new DrizzleStrategyWatchlistSubscriptionRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
