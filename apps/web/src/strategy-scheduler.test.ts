@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { buildTestContext } from '@luoome/tools/testing';
 import type { RunStrategySchedulesOutputT } from '@luoome/workflows';
 
-import { startStrategyScheduler } from './strategy-scheduler.js';
+import { startStrategyScheduler, strategySchedulerTuningFromEnv } from './strategy-scheduler.js';
 
 const emptyResult = (): RunStrategySchedulesOutputT => ({
   items: [],
@@ -13,6 +13,30 @@ const emptyResult = (): RunStrategySchedulesOutputT => ({
 });
 
 describe('strategy scheduler', () => {
+  it('从环境变量读取有界的 Strategy 生产参数，并拒绝危险值', () => {
+    expect(
+      strategySchedulerTuningFromEnv({
+        LUOOME_STRATEGY_SCHEDULE_LEASE_MINUTES: '45',
+        LUOOME_STRATEGY_DATA_CONCURRENCY: '6',
+        LUOOME_STRATEGY_DATA_MAX_STALENESS_TRADING_DAYS: '2',
+        LUOOME_STRATEGY_DATA_MAX_RETRIES: '1',
+        LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS: '30000',
+      }),
+    ).toEqual({
+      leaseMinutes: 45,
+      concurrency: 6,
+      maxStalenessTradingDays: 2,
+      maxRetries: 1,
+      requestTimeoutMs: 30_000,
+    });
+    expect(() => strategySchedulerTuningFromEnv({ LUOOME_STRATEGY_DATA_CONCURRENCY: '0' })).toThrow(
+      'LUOOME_STRATEGY_DATA_CONCURRENCY',
+    );
+    expect(() =>
+      strategySchedulerTuningFromEnv({ LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS: 'unbounded' }),
+    ).toThrow('LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS');
+  });
+
   it('主动 tick，并在 stop 后不再运行', async () => {
     const ctx = await buildTestContext();
     let calls = 0;

@@ -102,6 +102,11 @@ homebrew/
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web「设置 → 飞书通知」中配置，缺失时通知降级为 log |
 | `LUOOME_A_SHARE_HOLIDAYS` | — | 追加 A 股休市日（逗号分隔 `YYYY-MM-DD`），与内置日历 union |
 | `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
+| `LUOOME_STRATEGY_SCHEDULE_LEASE_MINUTES` | `30` | Strategy schedule claim 租约分钟数；范围 5～240 |
+| `LUOOME_STRATEGY_DATA_CONCURRENCY` | `8` | Strategy 日线准备并发；范围 1～64 |
+| `LUOOME_STRATEGY_DATA_MAX_STALENESS_TRADING_DAYS` | `1` | Strategy 成员日线允许陈旧交易日数；范围 0～30 |
+| `LUOOME_STRATEGY_DATA_MAX_RETRIES` | `2` | Strategy 单成员行情最大重试次数；范围 0～5 |
+| `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 | `LUOOME_PORT` | 5173 | Web 端口（与 `--port` 等价） |
 
@@ -156,6 +161,8 @@ bun install
 策略调度已内置：`luoome start` 与 `luoome web serve` 启动后每分钟自动检查一次
 `StrategySchedule`，进程启动时也会立即检查，不需要配置 crontab。每个策略仍按自己的标准 5 段
 cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由租约防重。
+生产参数、每日 fencing/checkpoint/provider/baseline 检查和可靠性汇总见
+[Strategy 生产可靠性运维手册](./docs/runbooks/strategy-reliability-operations.md)。
 
 其它低频自动任务仍由 workflow + 外部 cron 触发（每次运行落一条 `WorkflowRun` 审计，
 `list_workflow_runs` 可查）。建议在 crontab 中配置：

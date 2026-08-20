@@ -14,6 +14,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
+import { createStrategyObservationCandidatesTool } from './create-strategy-observation-candidates.js';
 import { prepareStrategyDataTool } from './prepare-strategy-data.js';
 import { runStrategyTool } from './run-strategy.js';
 
@@ -759,6 +760,24 @@ describe('run_strategy', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.signals[0]?.evaluationSnapshot.baseline).toMatchObject({ price: 10 });
+    const candidates = await createStrategyObservationCandidatesTool.execute(
+      { runId: result.data.run.id },
+      ctx,
+    );
+    expect(candidates).toMatchObject({
+      ok: true,
+      data: {
+        baselines: {
+          available: 1,
+          unavailable: 0,
+          providers: { 'checkpoint-fixture': 1 },
+        },
+        horizons: {
+          t1: { created: 1, skipped: 0 },
+          t20: { created: 1, skipped: 0 },
+        },
+      },
+    });
     expect(result.data.run.inputSnapshot).toMatchObject({
       dataCheckpoint: {
         id: prepared.data.checkpoint.id,
