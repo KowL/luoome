@@ -18,7 +18,7 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_strategy_watchlist_subscriptions`.
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`.
-- Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `list_stock_events`.
+- Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `get_research_embedding_status`, `list_stock_events`.
   The `profile` returned by `get_stock_research_view` is a ResearchTopic/ResearchDocument read
   model with evidence, counter-evidence and unknowns. It is not a Strategy, Advice or expected-return estimate.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
@@ -64,6 +64,8 @@ change a Watchlist. The internal projection bridge is orchestration-only and is 
 External tools fetch market/event data, validate or run Strategies, synchronize data or send
 notifications. Full-market or persisted Strategy runs require confirmation; bounded
 `run_strategy` dry-runs must use `persist=false`.
+
+Research semantic search and cross-model evaluation are external calls. `search_research_documents_hybrid` sends the query text to the configured embedding provider and must preserve its `complete`, capability, EvidenceRef, counter-evidence, risks and unknowns fields. `rebuild_research_embeddings` additionally sends private research chunks and writes a rebuildable projection, so it requires both external and write authorization. Never interpret zero hits from an incomplete projection as absence of evidence.
 
 ## Never exposed
 

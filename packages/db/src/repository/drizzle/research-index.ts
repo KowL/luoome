@@ -506,6 +506,20 @@ export class DrizzleResearchIndexRepository implements ResearchIndexRepository {
       }));
   }
 
+  async listChunks(input: { readonly documentIds?: readonly string[] } = {}) {
+    if (input.documentIds?.length === 0) return [];
+    return this.db
+      .select()
+      .from(researchDocumentChunks)
+      .where(
+        input.documentIds === undefined
+          ? undefined
+          : inArray(researchDocumentChunks.documentId, [...input.documentIds]),
+      )
+      .orderBy(asc(researchDocumentChunks.documentId), asc(researchDocumentChunks.ordinal))
+      .all();
+  }
+
   async listStockSubjectKeys(): Promise<readonly string[]> {
     return this.db
       .selectDistinct({ subjectKey: researchSubjectLinks.subjectKey })

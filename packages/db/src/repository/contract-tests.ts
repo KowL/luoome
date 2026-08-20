@@ -3223,6 +3223,68 @@ export const registerRepositoryContractTests = (
           'missing',
         );
       });
+
+      it('embedding 投影按模型 identity 增量重建并在 chunk hash 变化后失效', async () => {
+        const identity = {
+          provider: 'test',
+          model: 'embed-v1',
+          dimensions: 3,
+          version: '2026-08-15',
+        } as const;
+        const document = makeResearchDocument('report');
+        const apply = async (contentHash: string, body: string) =>
+          repos.researchIndex.applyIndexBatch({
+            vaultId: 'vault-test',
+            completeness: 'partial',
+            topics: [],
+            documents: [{ ...document, contentHash }],
+            topicDocuments: [],
+            subjectLinks: [],
+            chunks: [
+              { documentId: document.id, ordinal: 0, headingPath: '摘要', contentHash, body },
+            ],
+            seenTopicIds: new Set(),
+            seenDocumentIds: new Set([document.id]),
+            indexedAt: T1,
+          });
+
+        await apply('b'.repeat(64), '现金流改善');
+        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toHaveLength(1);
+        await repos.researchEmbedding.saveMany([
+          {
+            documentId: document.id,
+            ordinal: 0,
+            contentHash: 'b'.repeat(64),
+            identity,
+            vector: [1, 0, 0],
+            embeddedAt: T1,
+          },
+        ]);
+        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
+          status: 'ready',
+          expectedChunks: 1,
+          embeddedChunks: 1,
+          staleChunks: 0,
+        });
+        expect(
+          await repos.researchEmbedding.searchSimilar({
+            identity,
+            vector: [1, 0, 0],
+            limit: 5,
+          }),
+        ).toMatchObject([{ document: { id: document.id }, ordinal: 0 }]);
+
+        await apply('c'.repeat(64), '现金流恶化');
+        expect(await repos.researchEmbedding.inspect(identity, T2)).toMatchObject({
+          status: 'stale',
+          embeddedChunks: 0,
+          staleChunks: 1,
+        });
+        expect(await repos.researchEmbedding.deleteInvalid(identity)).toBe(1);
+        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toMatchObject([
+          { documentId: document.id, contentHash: 'c'.repeat(64) },
+        ]);
+      });
     });
 
     describe('StockEventRepository', () => {

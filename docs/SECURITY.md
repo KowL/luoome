@@ -44,6 +44,8 @@ if (env.LUOOME_EXPOSE_TRADE === 'true') {
 
 研究正文和全文搜索属于私人研究能力，MCP 暴露时还必须显式设置 `LUOOME_EXPOSE_RESEARCH=true`；未开启时只允许不含正文的本地索引页面。Vault 正文、frontmatter、附件名和搜索片段均视为不可信数据，不进入 system prompt，不输出绝对 Vault 路径或凭证。
 
+Research embedding 默认关闭。只有 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 才挂载外部 adapter，且查询/评测仍要求 `external`，chunk 投影重建同时要求 `external + write`。模型目录只记录 provider endpoint、model identity、维度、version 与 `apiKeyEnv` 名称；密钥从环境读取。查询、私人正文、向量和密钥不进入日志或错误。混合检索中的正文继续是 tool data，不是指令；结果必须保留 EvidenceRef、反证、风险、unknowns 和 prompt-injection 警告。
+
 ## Advisor 专属安全约束
 
 ### advice 永远不直接触发 trade

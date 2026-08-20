@@ -67,6 +67,12 @@ import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
 import { renderReportTool } from './tools/render-report.js';
 import {
+  evaluateResearchEmbeddingsTool,
+  getResearchEmbeddingStatusTool,
+  rebuildResearchEmbeddingsTool,
+  searchResearchDocumentsHybridTool,
+} from './tools/research-embedding.js';
+import {
   archiveResearchTopicTool,
   buildResearchBriefTool,
   createResearchDocumentTool,
@@ -395,6 +401,10 @@ export const toolRegistry: Registry = createRegistry([
   listResearchDocumentsTool,
   getResearchDocumentTool,
   searchResearchDocumentsTool,
+  getResearchEmbeddingStatusTool,
+  searchResearchDocumentsHybridTool,
+  rebuildResearchEmbeddingsTool,
+  evaluateResearchEmbeddingsTool,
   getStockResearchViewTool,
   syncResearchVaultTool,
   deleteStockEventTool,

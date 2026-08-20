@@ -10,7 +10,12 @@ import { join } from 'node:path';
 
 import { NotificationManager } from '@luoome/adapters';
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
-import type { AgentCallableTool, Money, ToolContext } from '@luoome/core';
+import type {
+  AgentCallableTool,
+  Money,
+  ResearchEmbeddingAdapterLike,
+  ToolContext,
+} from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
@@ -180,6 +185,70 @@ describe('Strategy 可靠性汇总 API', () => {
 });
 
 describe('研究 Vault API', () => {
+  it('embedding 状态可读，混合检索与重建分别要求 external / external+write', async () => {
+    const plainContext = await buildTestContext();
+    const plainApp = createWebApp(plainContext, { exposeExternal: false, exposeWrite: false });
+    const status = await plainApp.fetch(new Request('http://test/api/research/embeddings/status'));
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ ok: true, data: { configured: false } });
+
+    const deniedSearch = await plainApp.fetch(
+      new Request('http://test/api/research/search/hybrid', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '现金流' }),
+      }),
+    );
+    expect(deniedSearch.status).toBe(403);
+
+    const externalOnly = createWebApp(plainContext, {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    const deniedRebuild = await externalOnly.fetch(
+      new Request('http://test/api/research/embeddings/rebuild', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(deniedRebuild.status).toBe(403);
+
+    const adapter: ResearchEmbeddingAdapterLike = {
+      name: 'web-fixture',
+      defaultModel: 'fixture',
+      listModels: () => [
+        {
+          name: 'fixture',
+          identity: { provider: 'fixture', model: 'fixture', dimensions: 2, version: 'v1' },
+        },
+      ],
+      embed: async ({ texts }) => ({
+        identity: { provider: 'fixture', model: 'fixture', dimensions: 2, version: 'v1' },
+        vectors: texts.map(() => [1, 0]),
+        usage: { latencyMs: 1 },
+      }),
+    };
+    const configuredApp = createWebApp(
+      { ...plainContext, researchEmbedding: adapter },
+      {
+        exposeExternal: true,
+        exposeWrite: true,
+      },
+    );
+    const configuredStatus = await configuredApp.fetch(
+      new Request('http://test/api/research/embeddings/status'),
+    );
+    expect(await configuredStatus.json()).toMatchObject({
+      ok: true,
+      data: {
+        configured: true,
+        defaultModel: 'fixture',
+        models: [{ state: { status: 'empty', embeddedChunks: 0, expectedChunks: 0 } }],
+      },
+    });
+  });
+
   it('按主题和显式股票 SubjectLink 查询可重建索引', async () => {
     const now = new Date('2026-08-01T00:00:00.000Z');
     await appCtx.repos.researchIndex.applyIndexBatch({

@@ -24,6 +24,8 @@ import type {
   ProviderStatus,
   Quantity,
   Report,
+  ResearchEmbeddingIndexState,
+  ResearchEmbeddingModelIdentity,
   ResearchTopicIndex,
   ResearchVaultSyncRun,
   SignalObservation,
@@ -1286,6 +1288,41 @@ export const researchDocumentFts = sqliteTable('research_document_fts', {
   headingPath: text('heading_path').notNull(),
   body: text('body').notNull(),
 });
+export const researchChunkEmbeddings = sqliteTable(
+  'research_chunk_embeddings',
+  {
+    documentId: text('document_id').notNull(),
+    ordinal: integer('ordinal').notNull(),
+    contentHash: text('content_hash').notNull(),
+    identityKey: text('identity_key').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    dimensions: integer('dimensions').notNull(),
+    version: text('version').notNull(),
+    vector: text('vector_json', { mode: 'json' }).$type<readonly number[]>().notNull(),
+    embeddedAt: integer('embedded_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.identityKey, t.documentId, t.ordinal],
+      name: 'research_chunk_embeddings_pk',
+    }),
+    identityIdx: index('research_chunk_embeddings_identity_idx').on(t.identityKey),
+  }),
+);
+export const researchEmbeddingIndexStates = sqliteTable('research_embedding_index_states', {
+  identityKey: text('identity_key').primaryKey(),
+  provider: text('provider').$type<ResearchEmbeddingModelIdentity['provider']>().notNull(),
+  model: text('model').$type<ResearchEmbeddingModelIdentity['model']>().notNull(),
+  dimensions: integer('dimensions').notNull(),
+  version: text('version').$type<ResearchEmbeddingModelIdentity['version']>().notNull(),
+  status: text('status').$type<ResearchEmbeddingIndexState['status']>().notNull(),
+  expectedChunks: integer('expected_chunks').notNull(),
+  embeddedChunks: integer('embedded_chunks').notNull(),
+  staleChunks: integer('stale_chunks').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  diagnostic: text('diagnostic'),
+});
 export const researchVaultSyncRuns = sqliteTable(
   'research_vault_sync_runs',
   {
@@ -1497,6 +1534,8 @@ export const schema = {
   researchSubjectLinks,
   researchDocumentChunks,
   researchDocumentFts,
+  researchChunkEmbeddings,
+  researchEmbeddingIndexStates,
   researchVaultSyncRuns,
   stockEvents,
   workflowRuns,

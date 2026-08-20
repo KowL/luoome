@@ -56,6 +56,7 @@ export * from './tools/record-advice-outcome.js';
 export * from './tools/record-watch-run.js';
 export * from './tools/record-workflow-run.js';
 export * from './tools/render-report.js';
+export * from './tools/research-embedding.js';
 export * from './tools/research-vault.js';
 export * from './tools/run-strategy.js';
 export * from './tools/save-report.js';

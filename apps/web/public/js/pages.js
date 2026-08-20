@@ -1851,6 +1851,16 @@ const renderResearch = async (setStatus) => {
     document.getElementById('research-import-remote-btn')
   );
   const indexStatus = document.getElementById('research-index-status');
+  const embeddingStatus = document.getElementById('research-embedding-status');
+  const hybridSearch = /** @type {HTMLInputElement | null} */ (
+    document.getElementById('research-hybrid-search')
+  );
+  const embeddingRebuildButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-embedding-rebuild-btn')
+  );
+  const embeddingEvaluateButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-embedding-evaluate-btn')
+  );
   const inbox = document.getElementById('research-inbox');
   const writeStatus = document.getElementById('research-write-status');
   if (
@@ -1867,6 +1877,27 @@ const renderResearch = async (setStatus) => {
     if (vaultSettingsStatus === null) return;
     vaultSettingsStatus.textContent = message;
     vaultSettingsStatus.className = `card-meta ${kind}`.trim();
+  };
+
+  const paintEmbeddingStatus = (data) => {
+    if (embeddingStatus === null) return;
+    if (!data?.configured) {
+      embeddingStatus.textContent =
+        '语义索引：未启用；FTS5/metadata 仍是确定性基线，正文不会外发。';
+      return;
+    }
+    const model = data.models?.find((item) => item.name === data.defaultModel) ?? data.models?.[0];
+    if (!model) {
+      embeddingStatus.textContent = '语义索引：已启用但没有可用模型。';
+      return;
+    }
+    const state = model.state;
+    embeddingStatus.textContent = `语义索引：${model.name} · ${state.status} · ${state.embeddedChunks}/${state.expectedChunks} chunks · ${model.identity.dimensions} 维 · ${model.identity.version}`;
+  };
+
+  const loadEmbeddingStatus = async () => {
+    const response = await callApi('/api/research/embeddings/status');
+    if (response.ok) paintEmbeddingStatus(response.data);
   };
 
   const loadVaultSettings = async () => {
@@ -1993,6 +2024,9 @@ const renderResearch = async (setStatus) => {
     }
     return error.message ?? error.cause ?? error.required ?? '写入失败';
   };
+
+  const toolErrorText = (error, fallback) =>
+    error?.message ?? error?.required ?? error?.cause ?? error?.kind ?? fallback;
 
   const writeResearch = async (button, toolName, input, label) => {
     if (button !== null) button.disabled = true;
@@ -2429,15 +2463,25 @@ const renderResearch = async (setStatus) => {
     const query = input.value.trim();
     setStatus(query ? `搜索 ${query}…` : '加载研究主题…');
     if (query) {
-      const response = await callApi(`/api/research/search?q=${encodeURIComponent(query)}`);
+      const useHybrid = hybridSearch?.checked === true;
+      const response = useHybrid
+        ? await callApi('/api/research/search/hybrid', {
+            method: 'POST',
+            body: JSON.stringify({ text: query, limit: 50 }),
+          })
+        : await callApi(`/api/research/search?q=${encodeURIComponent(query)}`);
       if (!response.ok) {
-        mount(results, el('p', 'error', response.error?.message ?? '研究索引不可用'));
+        mount(results, el('p', 'error', toolErrorText(response.error, '研究索引不可用')));
         return;
+      }
+      if (useHybrid && embeddingStatus !== null) {
+        const embedding = response.data.embedding;
+        embeddingStatus.textContent = `语义检索：${response.data.capability} · ${response.data.complete ? '完整' : '不完整'}${embedding?.diagnostic ? ` · ${embedding.diagnostic}` : ''}`;
       }
       paint(
         [],
         (response.data.hits ?? []).map((hit) => hit.document),
-        response.data.indexStatus,
+        useHybrid ? undefined : response.data.indexStatus,
       );
       return;
     }
@@ -2446,7 +2490,7 @@ const renderResearch = async (setStatus) => {
       `/api/research/topics${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
     );
     if (!response.ok) {
-      mount(results, el('p', 'error', response.error?.message ?? '研究索引不可用'));
+      mount(results, el('p', 'error', toolErrorText(response.error, '研究索引不可用')));
       return;
     }
     paint(response.data.topics ?? [], [], response.data.indexStatus);
@@ -2474,6 +2518,44 @@ const renderResearch = async (setStatus) => {
       setStatus(`Vault 同步完成：扫描 ${response.data.scanned} 个文件`);
       await load();
     });
+    embeddingRebuildButton?.addEventListener('click', async () => {
+      embeddingRebuildButton.disabled = true;
+      setStatus('增量重建语义索引；私人正文将发送给已配置的外部 embedding 模型…');
+      const response = await callApi('/api/research/embeddings/rebuild', {
+        method: 'POST',
+        body: JSON.stringify({ maxChunks: 200 }),
+      });
+      embeddingRebuildButton.disabled = false;
+      if (!response.ok) {
+        setStatus(toolErrorText(response.error, '语义索引重建失败'));
+        return;
+      }
+      setStatus(
+        `语义索引处理 ${response.data.processed} chunks；覆盖 ${response.data.state.embeddedChunks}/${response.data.state.expectedChunks}`,
+      );
+      await loadEmbeddingStatus();
+    });
+    embeddingEvaluateButton?.addEventListener('click', async () => {
+      embeddingEvaluateButton.disabled = true;
+      setStatus('运行固定评测集；仅发送版本内置的公开评测文本…');
+      const response = await callApi('/api/research/embeddings/evaluate', {
+        method: 'POST',
+        body: JSON.stringify({ topK: 3 }),
+      });
+      embeddingEvaluateButton.disabled = false;
+      if (!response.ok) {
+        setStatus(toolErrorText(response.error, '跨模型评测失败'));
+        return;
+      }
+      const summary = response.data.results
+        .map((result) =>
+          result.status === 'failed'
+            ? `${result.model}: 失败（${result.diagnostic ?? 'provider unavailable'}）`
+            : `${result.model}: R@3 ${result.recallAtK.toFixed(2)}, MRR ${result.meanReciprocalRank.toFixed(2)}, ${result.latencyMs.toFixed(0)}ms${result.estimatedCostUsd === undefined ? '' : `, $${result.estimatedCostUsd.toFixed(6)}`}`,
+        )
+        .join('；');
+      setStatus(summary || '没有已配置模型可评测');
+    });
     createTopicButton?.addEventListener('click', () => void openCreateTopic());
     importDocumentButton?.addEventListener('click', () => void openImportDocument());
     importRemoteButton?.addEventListener('click', () => void openImportRemote());
@@ -2484,6 +2566,7 @@ const renderResearch = async (setStatus) => {
   }
 
   await loadVaultSettings();
+  await loadEmbeddingStatus();
 
   const stockId = routeStockId();
   if (stockId !== null) {

@@ -1,7 +1,7 @@
 # 研究主题与 Obsidian Vault 详细设计
 
-> 状态：Phase A/B、Phase C、Phase D(M3 managed 创建/导入) 与 Phase E(M4 FTS/ResearchBrief/Agent 草案门控) 已实施
-> 日期：2026-08-01
+> 状态：Phase A/B、Phase C、Phase D(M3 managed 创建/导入)、Phase E(M4 FTS/ResearchBrief/Agent 草案门控) 与 Phase G(embedding 检索/跨模型评测) 已实施
+> 日期：2026-08-20
 > 范围：研究主题、研究文档、研究对象关联、Obsidian Vault、可重建索引、全文检索、研究时间线与 Agent 检索
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)、[AI 投资决策闭环](../prd/ai-investment-decision-loop.md)、[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)
 > 替代关系：本文替代 [ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md) 中 `ResearchNote`、股票研究档案正文存储和对应 Tool/Web 设计；原文的 `StockEvent`、`DataProvenance`、`WorkflowRun` 与事件规则继续有效
@@ -59,7 +59,7 @@
 - 依赖 Obsidian 桌面进程才能读取正文；
 - 依赖仍处于 beta 的 Obsidian Headless 作为基础能力；
 - OCR、复杂表格还原、公式识别和图片语义理解；
-- 向量数据库或跨用户共享研究库；
+- 专用向量数据库或跨用户共享研究库；
 - 从产业研究自动推导全部产业成分股；
 - 因研究资料更新自动生成 Advice 或交易动作。
 
@@ -716,6 +716,31 @@ research_vault_sync_runs
 - started_at INTEGER NOT NULL
 - finished_at INTEGER
 - error TEXT
+
+research_chunk_embeddings
+- document_id TEXT NOT NULL
+- ordinal INTEGER NOT NULL
+- content_hash TEXT NOT NULL
+- provider TEXT NOT NULL
+- model TEXT NOT NULL
+- dimensions INTEGER NOT NULL
+- version TEXT NOT NULL
+- vector_json TEXT NOT NULL
+- embedded_at INTEGER NOT NULL
+- PRIMARY KEY (document_id, ordinal, provider, model, dimensions, version)
+
+research_embedding_index_states
+- provider TEXT NOT NULL
+- model TEXT NOT NULL
+- dimensions INTEGER NOT NULL
+- version TEXT NOT NULL
+- status TEXT NOT NULL
+- expected_chunks INTEGER NOT NULL
+- embedded_chunks INTEGER NOT NULL
+- stale_chunks INTEGER NOT NULL
+- updated_at INTEGER NOT NULL
+- diagnostic TEXT
+- PRIMARY KEY (provider, model, dimensions, version)
 ```
 
 索引：
@@ -771,8 +796,22 @@ Tool 不感知 Drizzle transaction 类型。
 - 保留 heading path 和 ordinal；
 - 代码块、表格和 callout 尽量整体保留；
 - 每个 chunk 记录文档 contentHash，hash 变化才重建；
-- 首期只做 FTS，不引入 embedding；
+- FTS5 始终是确定性基线；embedding 是可选、可重建的外部 capability；
 - Agent 引用返回 `documentId + relativePath + headingPath + quote`，quote 最大 500 字符。
+
+### 8.4 Embedding 投影与失效
+
+- 模型 identity 固定为 `provider + model + dimensions + version`；任一字段变化都创建独立投影，旧行不参与新 identity 查询；
+- 每行 embedding 同时记录 chunk 的 `contentHash`。chunk 被替换、文档缺失或 hash 改变后，该行立即失效，不能进入语义命中；
+- `rebuild_research_embeddings` 只读取当前 identity 的缺失/失效 chunk，按 `maxChunks` 增量处理；投影可从 Vault chunk 完整重建，不进入数据导出；
+- 状态区分 `empty / building / ready / partial / failed / stale`，并报告 expected、embedded、stale；只有 `ready` 才能把零命中解释为完整语义索引上的零命中；
+- Drizzle 和 memory 实现复用 repository contract tests；Drizzle schema 与 `ensureSchema` DDL 同步；
+- 混合检索以 Reciprocal Rank Fusion 合并 FTS 与语义排名。embedding 未配置、无覆盖或调用失败时稳定返回 FTS5/metadata 基线，同时 `complete=false` 和 diagnostic；
+- 混合结果继续生成真实 chunk `EvidenceRef`，保留反证、风险、unknowns，并明确 Vault 正文中的指令是不可信数据。
+
+### 8.5 固定跨模型评测
+
+`evaluate_research_embeddings` 使用版本化 `research-retrieval-v1`：6 条固定语料、5 条带相关性判定的查询，逐模型报告 Recall@K、MRR、provider 返回的 token usage、估算成本和实测调用延迟。单模型失败记录 `status=failed`，不补造指标，也不丢弃其它模型结果。该评测只比较当前固定判定集，不等同于真实生产质量结论；没有真实 provider 配置和调用记录时不得声称完成生产验收。
 
 ## 9. Vault 同步算法
 
@@ -1168,6 +1207,8 @@ LUOOME_EXPOSE_RESEARCH=true
 
 未开启时只不注册正文读取和搜索 Tool；Topic/Document 写 Tool 仍同时受 `LUOOME_EXPOSE_WRITE=true` 控制，URL 导入还受 `LUOOME_EXPOSE_EXTERNAL=true` 控制。不得在日志、Tool trace 和错误中输出正文、绝对路径、认证信息或完整私人 thesis。
 
+Embedding 还需要 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 和模型目录显式启用。重建会把 chunk 正文发给目录指定的外部 provider，同时要求 `external + write`；查询会把用户查询发给 provider，跨模型评测会发送固定公开评测集，均要求 `external`。模型目录只保存 `apiKeyEnv` 名称，密钥只从环境读取；请求正文、查询、向量和密钥不得写日志。Web 必须在语义开关旁提示外部发送边界，默认仍使用本地 FTS5。
+
 ### 16.3 Git 与同步风险
 
 - luoome 不判断 Git remote 是否公开；设置页必须提示 Vault 可能包含私人投资数据；
@@ -1185,6 +1226,9 @@ LUOOME_EXPOSE_RESEARCH=true
 | 重复 luoome_id | run partial + conflict | 不选胜者，保留旧投影 |
 | Document 缺附件 | available + warning | 正文可用则仍可检索 |
 | FTS5 不可用 | capability unavailable | metadata 搜索可用，不返回伪完整结果 |
+| embedding 未配置/无覆盖 | `complete=false` | 返回 FTS5/metadata 基线，不把零命中冒充完整 |
+| embedding provider 失败 | `adapter_error` 或 hybrid 降级 | 重建标 failed；查询保留确定性基线 |
+| 模型 identity/hash 变化 | stale/partial | 旧向量不参与命中，增量重建当前 identity |
 | Obsidian 未安装 | 正文仍可读 | open URI 由客户端决定 |
 | URL 抓取失败 | `adapter_error` | 不写 managed Document |
 | SQLite apply 失败 | `internal` | Vault 文件不回滚，下次扫描修复 |
@@ -1330,14 +1374,22 @@ drizzle 与 memory 共同覆盖：
 - 先完成凭证、冲突、备份与恢复设计；
 - 不改变 Vault 文件作为权威来源的契约。
 
-依赖顺序：A → B → C；D 与 E 在 B 后可并行；F 最后评估。
+### Phase G：Embedding 检索与跨模型评测（已实施，2026-08-20）
+
+- 可重建 chunk embedding 投影、identity 与增量失效；
+- OpenAI-compatible 多模型 adapter 与显式外部 capability；
+- FTS5 + embedding 混合检索、稳定降级与不完整语义；
+- 固定判定集上的 Recall@K、MRR、延迟、token 和成本对比；
+- Tool、Web、Agent 白名单、双 repository contract tests 与安全文档同步。
+
+依赖顺序：A → B → C；D 与 E 在 B 后可并行；G 依赖 E；F 最后评估。
 
 ## 21. 验收标准
 
 - Topic 可以不关联股票，也可以显式关联多只股票；
 - 产业、事件、主题、宏观研究是一等入口，不伪装成股票笔记；
 - 一个 Document 可以属于多个 Topic；
-- Vault 是唯一权威正文，SQLite 中的 metadata、excerpt、chunk 和 FTS 可完全重建；
+- Vault 是唯一权威正文，SQLite 中的 metadata、excerpt、chunk、FTS 和 embedding 投影可完全重建；
 - StockEvent 不依赖 Vault，提醒、幂等和状态行为不回归；
 - 股票研究页只消费显式关联，不自动扩散行业噪声；
 - Vault 文件移动、缺失、损坏和重复 id 都有确定性行为；
@@ -1360,7 +1412,7 @@ drizzle 与 memory 共同覆盖：
 10. 不自动 Git pull/commit/push，不依赖 Obsidian Headless。
 11. 不按产业自动扩散到全部股票，股票关联必须显式确认。
 12. 当前无 ResearchNote 数据，旧模型硬切，旧物理表不 DROP、不读。
-13. 全文搜索先用可重建 FTS5，embedding 延后。
+13. FTS5 是确定性基线；embedding 是显式、可重建且允许稳定降级的外部 capability。
 14. 外部资料始终是不可信数据，不能改变 Agent 指令或绕过权限。
 15. 研究更新不会自动生成 Advice，更不会触发交易。
 

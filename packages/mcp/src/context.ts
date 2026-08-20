@@ -15,6 +15,7 @@ import {
   createAShareSentimentManagerFromEnv,
   createFileAuditLogger,
   createMarketAdapterFromEnv,
+  createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
@@ -68,6 +69,12 @@ export const createServerContext = async (
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const now = (): Date => new Date();
   const researchVault = createResearchVaultAdapterFromEnv(env);
+  let researchEmbedding: ReturnType<typeof createResearchEmbeddingAdapterFromEnv>;
+  try {
+    researchEmbedding = createResearchEmbeddingAdapterFromEnv(env);
+  } catch {
+    logger.warn('Research embedding 配置无效；MCP 将以 capability 未挂载状态继续');
+  }
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger,
@@ -95,6 +102,7 @@ export const createServerContext = async (
     auditCaller: 'mcp',
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger, market }),
     ...(researchVault ? { researchVault } : {}),
+    ...(researchEmbedding ? { researchEmbedding } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
   });
 

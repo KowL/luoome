@@ -24,6 +24,7 @@ import {
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
+  createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
@@ -166,6 +167,9 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'sync_daily_bars',
   'run_strategy',
   'generate_strategy_insight',
+  'search_research_documents_hybrid',
+  'rebuild_research_embeddings',
+  'evaluate_research_embeddings',
   'propose_strategy_version_draft',
   'trial_strategy_version',
   'import_remote_research_document',
@@ -269,6 +273,14 @@ export const buildWebContext = async (
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  let researchEmbedding: ReturnType<typeof createResearchEmbeddingAdapterFromEnv>;
+  try {
+    researchEmbedding = createResearchEmbeddingAdapterFromEnv(env);
+  } catch (error) {
+    console.warn('Research embedding 配置无效；Web 将以 capability 未挂载状态启动', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger: console,
@@ -302,6 +314,7 @@ export const buildWebContext = async (
       market,
     }),
     ...(researchVault ? { researchVault } : {}),
+    ...(researchEmbedding ? { researchEmbedding } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(env, {
       repos: handle.repos,
@@ -732,6 +745,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (!('parsed' in body)) return jsonResult(body);
     return jsonResult(await invokeTool(toolName, { ...body.data, ...fixedInput }));
   };
+
+  app.get('/api/research/embeddings/status', () => callTool('get_research_embedding_status', {}));
+  app.post('/api/research/search/hybrid', (c) =>
+    targetMutation(c.req.raw, 'external', 'search_research_documents_hybrid'),
+  );
+  app.post('/api/research/embeddings/rebuild', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external', 'write']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(await invokeTool('rebuild_research_embeddings', body.data));
+  });
+  app.post('/api/research/embeddings/evaluate', (c) =>
+    targetMutation(c.req.raw, 'external', 'evaluate_research_embeddings'),
+  );
 
   // 指数行情缓存：dashboard 5s 轮询，push2 对高频请求突发限流（2026-07 实测），
   // 15s TTL 把请求量降到 1/3；调用失败时回退最近成功值（60s 内），避免指数条闪空。

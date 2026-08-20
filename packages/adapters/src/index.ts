@@ -31,6 +31,7 @@ export * from './market/tushare.js';
 export * from './market/types.js';
 // 通知（v0.3 起）
 export * from './notification/index.js';
+export * from './research-embedding/index.js';
 export * from './research-vault/index.js';
 // 股票目录
 export * from './stock-universe/eastmoney.js';

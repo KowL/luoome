@@ -59,6 +59,8 @@ const CHAT_READ_TOOL_NAMES = [
   'list_research_documents',
   'get_research_document',
   'search_research_documents',
+  'get_research_embedding_status',
+  'search_research_documents_hybrid',
   'build_research_brief',
   'get_stock_research_view',
 ] as const;

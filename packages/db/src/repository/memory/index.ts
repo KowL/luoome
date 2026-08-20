@@ -41,6 +41,7 @@ import {
 import { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 import { InMemoryQuoteRepository } from './quote.js';
 import { InMemoryReportRepository } from './report.js';
+import { InMemoryResearchEmbeddingRepository } from './research-embedding.js';
 import { InMemoryResearchIndexRepository } from './research-index.js';
 import { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 import { InMemorySignalObservationRepository } from './signal-observation.js';
@@ -78,6 +79,7 @@ export {
 export { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 export { InMemoryQuoteRepository } from './quote.js';
 export { InMemoryReportRepository } from './report.js';
+export { InMemoryResearchEmbeddingRepository } from './research-embedding.js';
 export { InMemoryResearchIndexRepository } from './research-index.js';
 export { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { InMemorySignalObservationRepository } from './signal-observation.js';
@@ -163,6 +165,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const watchRun = new InMemoryWatchRunRepository();
   // ruo 迁移起
   const researchIndex = new InMemoryResearchIndexRepository();
+  const researchEmbedding = new InMemoryResearchEmbeddingRepository(researchIndex);
   const researchVaultSyncRun = new InMemoryResearchVaultSyncRunRepository();
   const stockEvent = new InMemoryStockEventRepository();
   const workflowRun = new InMemoryWorkflowRunRepository();
@@ -224,6 +227,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     watchRuleState,
     watchRun,
     researchIndex,
+    researchEmbedding,
     researchVaultSyncRun,
     stockEvent,
     workflowRun,
