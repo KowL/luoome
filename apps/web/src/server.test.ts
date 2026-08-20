@@ -1749,6 +1749,35 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect(body.data?.status).toBe('unavailable');
   });
 
+  it('get_stock_minute_bars 同时要求 external + write 能力', async () => {
+    const request = () =>
+      new Request('http://test/api/tools/get_stock_minute_bars/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
+      });
+
+    const externalOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    expect((await externalOnly.fetch(request())).status).toBe(403);
+
+    const writeOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: false,
+      exposeWrite: true,
+    });
+    expect((await writeOnly.fetch(request())).status).toBe(403);
+
+    const both = createWebApp(await buildTestContext(), {
+      exposeExternal: true,
+      exposeWrite: true,
+    });
+    const allowed = await both.fetch(request());
+    expect(allowed.status).toBe(200);
+    expect((await json(allowed)).ok).toBe(true);
+  });
+
   it('batch_quote（白名单）→ 200', async () => {
     const r = await callTool('batch_quote', { stockIds: ['002594.SZ'] });
     expect(r.status).toBe(200);

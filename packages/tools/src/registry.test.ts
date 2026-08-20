@@ -174,6 +174,13 @@ describe('toolRegistry', () => {
     ]);
   });
 
+  it('get_stock_minute_bars 声明 external + write 组合能力', () => {
+    expect(toolRegistry.get('get_stock_minute_bars')?.requiredCapabilities).toEqual([
+      'external',
+      'write',
+    ]);
+  });
+
   it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
     const names = toolRegistry.all().map((tool) => tool.name);
     expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);

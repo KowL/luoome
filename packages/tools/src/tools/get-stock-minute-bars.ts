@@ -60,6 +60,7 @@ export const getStockMinuteBarsTool = defineTool({
   name: 'get_stock_minute_bars',
   description: '获取独立分钟 OHLCV；支持当前真实源与本地按需历史，缺口和不可用状态显式返回',
   sideEffect: 'external',
+  requiredCapabilities: ['external', 'write'],
   input: GetStockMinuteBarsInput,
   output: GetStockMinuteBarsOutput,
   handler: async (input, ctx) => {
