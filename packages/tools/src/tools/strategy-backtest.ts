@@ -100,6 +100,16 @@ const latestFactsByStockDate = (
   return result;
 };
 
+export const orderStrictBacktestTargetStockIds = (results: readonly StrategyResult[]): string[] =>
+  results
+    .filter((result) => result.selected)
+    .sort(
+      (left, right) =>
+        (left.rank ?? Number.POSITIVE_INFINITY) - (right.rank ?? Number.POSITIVE_INFINITY) ||
+        left.stockId.localeCompare(right.stockId),
+    )
+    .map((result) => result.stockId);
+
 interface AssembledBacktest {
   readonly gateAudit: StrictBacktestGateAudit;
   readonly inputFingerprint: string;
@@ -171,10 +181,7 @@ const assembleBacktest = async (
         : (resultsByDay.get(selectionDay.dataAsOf.toISOString()) ?? []);
     return {
       date: day.dataAsOf,
-      stockIds: results
-        .filter((result) => result.selected)
-        .map((result) => result.stockId)
-        .sort(),
+      stockIds: orderStrictBacktestTargetStockIds(results),
     };
   });
   const targetStockIds = [...new Set(targets.flatMap((target) => target.stockIds))].sort();

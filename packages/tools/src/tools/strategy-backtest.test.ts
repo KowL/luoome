@@ -2,7 +2,10 @@ import { type StrategyEvaluationSession, strategyDefinitionHash } from '@luoome/
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
-import { createStrictStrategyBacktestTool } from './strategy-backtest.js';
+import {
+  createStrictStrategyBacktestTool,
+  orderStrictBacktestTargetStockIds,
+} from './strategy-backtest.js';
 
 const NOW = new Date('2026-08-15T08:00:00.000Z');
 
@@ -25,6 +28,27 @@ const session: StrategyEvaluationSession = {
 };
 
 describe('strict strategy backtest tools', () => {
+  it('按 rank 升序、stockId 升序构造稳定目标顺序，不按代码抢占高排名', () => {
+    const result = (stockId: string, rank?: number) => ({
+      runId: 'run-order',
+      stockId,
+      selected: true,
+      ...(rank === undefined ? {} : { rank }),
+      ruleEvaluations: [],
+      evidence: [],
+      dataAsOf: NOW,
+    });
+
+    expect(
+      orderStrictBacktestTargetStockIds([
+        result('000001.SZ', 2),
+        result('600519.SH', 1),
+        result('300001.SZ'),
+        result('000002.SZ'),
+      ]),
+    ).toEqual(['600519.SH', '000001.SZ', '000002.SZ', '300001.SZ']);
+  });
+
   it('真实事实门禁缺失时保存 partial 审计且不输出任何收益指标', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     await ctx.repos.strategyEvaluation.saveSession(session);

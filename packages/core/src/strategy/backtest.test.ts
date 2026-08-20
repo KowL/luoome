@@ -104,6 +104,33 @@ describe('strict backtest core', () => {
     expect(result.equityCurve[1]?.equity).toBeLessThan(result.equityCurve[0]?.equity ?? 0);
   });
 
+  it('卖出受限旧仓占用 maxPositions 槽位时不再买入新仓', () => {
+    const cappedSpec: StrictBacktestSpec = {
+      ...spec,
+      execution: { ...spec.execution, maxPositions: 1 },
+    };
+    const result = runStrictBacktest({
+      spec: cappedSpec,
+      targets: [
+        { date: D1, stockIds: ['600519.SH'] },
+        { date: D2, stockIds: ['300001.SZ', '000001.SZ'] },
+      ],
+      marketFacts: [
+        fact('600519.SH', D1, 100, 110),
+        fact('600519.SH', D2, 90, 85, {
+          sellAllowed: false,
+          sellRestriction: 'limit-down',
+        }),
+        fact('300001.SZ', D2, 20, 21),
+        fact('000001.SZ', D2, 30, 31),
+      ],
+      benchmarkFacts: [fact('000300.SH', D1, 4000, 4020), fact('000300.SH', D2, 4030, 4040)],
+    });
+
+    expect(result.trades.filter((trade) => trade.date.getTime() === D2.getTime())).toEqual([]);
+    expect(result.tradeCount).toBe(1);
+  });
+
   it('运行 schema 只允许全部门禁 complete 后携带 metrics', () => {
     const items = [
       'pit-universe',

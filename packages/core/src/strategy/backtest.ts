@@ -69,9 +69,7 @@ export const runStrictBacktest = (input: RunStrictBacktestInput): StrictBacktest
   let grossNotional = 0;
 
   for (const targetDay of targetDays) {
-    const stockIds = [...new Set(targetDay.stockIds)]
-      .sort()
-      .slice(0, input.spec.execution.maxPositions);
+    const stockIds = [...new Set(targetDay.stockIds)].slice(0, input.spec.execution.maxPositions);
     const dayFacts = input.marketFacts.filter(
       (fact) => fact.date.getTime() === targetDay.date.getTime(),
     );
@@ -100,11 +98,14 @@ export const runStrictBacktest = (input: RunStrictBacktestInput): StrictBacktest
       positions.delete(position.stockId);
     }
 
-    const eligible = stockIds.filter((stockId) => {
-      const fact = factByKey.get(keyOf(stockId, targetDay.date));
-      if (fact === undefined) throw new InvariantError(`缺少市场事实: ${stockId}`);
-      return fact.buyAllowed && !positions.has(stockId);
-    });
+    const availableSlots = Math.max(0, input.spec.execution.maxPositions - positions.size);
+    const eligible = stockIds
+      .filter((stockId) => {
+        const fact = factByKey.get(keyOf(stockId, targetDay.date));
+        if (fact === undefined) throw new InvariantError(`缺少市场事实: ${stockId}`);
+        return fact.buyAllowed && !positions.has(stockId);
+      })
+      .slice(0, availableSlots);
     for (let index = 0; index < eligible.length; index += 1) {
       const stockId = eligible[index];
       if (stockId === undefined) continue;

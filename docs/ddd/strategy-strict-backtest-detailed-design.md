@@ -23,7 +23,7 @@
 
 ## 首个执行模型
 
-`next-open-full-rebalance-equal-weight-v1` 在 D 日使用 D-1 已冻结的 selected targets，于 D 日开盘按 lot size 全量再平衡。成交价由开盘价叠加固定买卖滑点；佣金和卖出印花税按 spec 计算。停牌或涨跌停导致不可卖时保留持仓并按收盘估值；不可买标的不建仓。公司行动在当日成交和估值前应用。benchmark 使用同一历史 cutoff 的复权日线，按区间首尾收盘计算。
+`next-open-full-rebalance-equal-weight-v1` 在 D 日使用 D-1 已冻结的 selected targets，于 D 日开盘按 lot size 全量再平衡。成交价由开盘价叠加固定买卖滑点；佣金和卖出印花税按 spec 计算。停牌或涨跌停导致不可卖时保留持仓并按收盘估值；不可买标的不建仓。公司行动在当日成交和估值前应用。benchmark 使用同一历史 cutoff 的复权日线，按首个执行日开盘到最后执行日收盘计算，与策略首日投入和末日估值口径一致。
 
 ## 存储与接口
 
