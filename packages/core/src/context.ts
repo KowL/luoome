@@ -5,6 +5,7 @@ import type {
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
 import type { MarketSnapshot, MarketSnapshotItem } from './entity/market-snapshot.js';
+import type { MinuteBar, MinuteBarInterval } from './entity/minute-bar.js';
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
 import type { Exchange } from './entity/stock.js';
@@ -35,6 +36,8 @@ export interface MarketDataAdapterLike {
   fetchIndexQuotes(): Promise<readonly IndexQuote[]>;
   /** 当日分时分钟序列（瞬态视图，不落库）；不支持时以 unsupported_capability 拒绝。 */
   fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]>;
+  /** 当前交易日的原生分钟 OHLCV；不支持时以 unsupported_capability 拒绝。 */
+  fetchMinuteBars(stockId: string, interval: MinuteBarInterval): Promise<readonly MinuteBar[]>;
   /** 全市场快照；不支持时以 unsupported_capability 拒绝。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
   /** 带来源、时间和分页完整性信封的全市场快照；不支持时以 unsupported_capability 拒绝。 */
@@ -53,6 +56,7 @@ export interface MarketSourceStatus {
     | 'realtime-index'
     | 'delayed-index'
     | 'intraday-minutes'
+    | 'minute-bars'
     | 'stock-universe'
     | 'limit-up-ladder';
   readonly source: string;

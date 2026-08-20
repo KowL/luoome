@@ -67,7 +67,7 @@ module：统一 interface 只暴露调用方真正需要理解的语义，把协
 
 本设计不实现：
 
-- 分钟 K、逐笔成交、Level-2、盘口和资金流；
+- 逐笔成交、Level-2、盘口和资金流；分钟 OHLCV 由独立 [MinuteBar 设计](./minute-bar-detailed-design.md) 管理；
 - 为全市场每只股票每分钟持久化 PriceSnapshot；
 - 自动交易或由行情同步触发交易；
 - 把股票目录当作交易所官方证券主数据；
@@ -628,7 +628,8 @@ adapter contract tests。
 ### 9.3 Tencent
 
 Tencent 实现 Quote、DailyBar、Search、IntradayMinute 和 MarketSnapshot 能力，不注册为
-StockUniverseSource 或 IndexQuoteSource。MarketSnapshot 使用真实 Sina 当前完整目录作为身份全集，
+`minute-bars`、StockUniverseSource 或 IndexQuoteSource；MinuteBar 仅由具备 OHLCV capability
+的 provider 显式注册。MarketSnapshot 使用真实 Sina 当前完整目录作为身份全集，
 再通过 `qt.gtimg.cn` GBK 批量接口请求实时 close/changePct；批次缺失保留 envelope 的 partial，
 不填充零值。不能添加返回空数组的占位 implementation。
 
@@ -953,7 +954,7 @@ MarketSnapshot 可用时继续用于高效全市场初筛；不可用时可以�
 checkpoint 生成：
 
 ```text
-dataset: quote | daily-bars | market-snapshot | stock-universe | realtime-index
+dataset: quote | daily-bars | market-snapshot | stock-universe | realtime-index | minute-bars
 source
 coverage
 capabilityEnabled

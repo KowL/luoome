@@ -14,6 +14,8 @@ import type {
   ListingStatus,
   MarketCoverage,
   MembershipSnapshot,
+  MinuteBarCompleteness,
+  MinuteBarInterval,
   Money,
   Notification,
   PortfolioCashFlow,
@@ -398,6 +400,38 @@ export const dailyBars = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.stockId, t.date], name: 'daily_bars_pk' }),
     stockIdx: index('daily_bars_stock_idx').on(t.stockId),
+  }),
+);
+
+/** 独立分钟 OHLCV；不复用 price_snapshots，价格口径固定为 provider raw。 */
+export const minuteBars = sqliteTable(
+  'minute_bars',
+  {
+    stockId: text('stock_id').notNull(),
+    interval: text('interval').$type<MinuteBarInterval>().notNull(),
+    endedAt: integer('ended_at', { mode: 'timestamp_ms' }).notNull(),
+    open: real('open').$type<Money>().notNull(),
+    high: real('high').$type<Money>().notNull(),
+    low: real('low').$type<Money>().notNull(),
+    close: real('close').$type<Money>().notNull(),
+    volume: integer('volume').notNull(),
+    amount: real('amount'),
+    adjustment: text('adjustment').$type<'raw'>().notNull(),
+    source: text('source').notNull(),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
+    completeness: text('completeness').$type<MinuteBarCompleteness>().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.stockId, t.interval, t.endedAt],
+      name: 'minute_bars_pk',
+    }),
+    stockIntervalEndedIdx: index('minute_bars_stock_interval_ended_idx').on(
+      t.stockId,
+      t.interval,
+      t.endedAt,
+    ),
+    endedIdx: index('minute_bars_ended_idx').on(t.endedAt),
   }),
 );
 
@@ -1367,6 +1401,7 @@ export const schema = {
   adviceOutcomes,
   priceSnapshots,
   dailyBars,
+  minuteBars,
   dailyBarRevisions,
   strategies,
   strategyVersions,

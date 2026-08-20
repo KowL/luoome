@@ -222,7 +222,13 @@ describe('market/factory', () => {
     await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/unsupported_capability/);
     expect(
       adapter.marketSourceStatus().map(({ dataset, source }) => `${source}:${dataset}`),
-    ).toEqual(['tushare:quote', 'tushare:daily-bars', 'tushare:search', 'tushare:delayed-index']);
+    ).toEqual([
+      'tushare:quote',
+      'tushare:daily-bars',
+      'tushare:search',
+      'tushare:minute-bars',
+      'tushare:delayed-index',
+    ]);
     expect(urls).toEqual([]);
   });
 
@@ -284,5 +290,45 @@ describe('market/factory', () => {
     await expect(eastmoneyOnly.fetchIntradayMinutes('002594.SZ')).rejects.toThrow(
       /unsupported_capability/,
     );
+  });
+
+  it('minute-bars 只在显式启用 Tushare 时注册；映射 rt_min_daily', async () => {
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'tushare',
+        TUSHARE_TOKEN: 'test-token',
+      },
+      {
+        logger: silentLogger(),
+        clock: () => new Date('2026-08-14T02:00:00.000Z'),
+        fetchImpl: (async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { api_name: string };
+          if (body.api_name !== 'rt_min_daily') {
+            return new Response('unexpected api', { status: 500 });
+          }
+          return new Response(
+            JSON.stringify({
+              code: 0,
+              msg: '',
+              data: {
+                fields: ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'],
+                items: [
+                  ['002594.SZ', '1MIN', '2026-08-14 09:31:00', 90, 90.5, 91, 89, 10000, 905000],
+                ],
+              },
+            }),
+            { status: 200 },
+          );
+        }) as never,
+      },
+    );
+    const bars = await adapter.fetchMinuteBars('002594.SZ', '1m');
+    expect(bars[0]).toMatchObject({ source: 'tushare', interval: '1m', adjustment: 'raw' });
+    expect(
+      adapter
+        .marketSourceStatus()
+        .some((status) => status.dataset === 'minute-bars' && status.source === 'tushare'),
+    ).toBe(true);
   });
 });

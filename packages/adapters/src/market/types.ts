@@ -6,6 +6,8 @@ import type {
   MarketDataAdapterLike,
   MarketSnapshot,
   MarketSnapshotItem,
+  MinuteBar,
+  MinuteBarInterval,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
@@ -30,6 +32,8 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   fetchIndexQuotes(): Promise<readonly IndexQuote[]>;
   /** 当日分时分钟序列 Gateway；无来源时拒绝 unsupported_capability。 */
   fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]>;
+  /** 当前交易日 provider 原生分钟 OHLCV；无来源时拒绝 unsupported_capability。 */
+  fetchMinuteBars(stockId: string, interval: MinuteBarInterval): Promise<readonly MinuteBar[]>;
   /** 指数能力的数据时效；delayed 不能进入 realtime 路由。 */
   readonly indexQuoteMode?: 'realtime' | 'delayed';
   /** 全市场快照 Gateway；具体来源由 capability registry 路由。 */

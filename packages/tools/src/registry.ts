@@ -43,6 +43,7 @@ import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
+import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
 import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
@@ -288,6 +289,7 @@ export const toolRegistry: Registry = createRegistry([
   batchQuoteTool,
   fetchIndexQuotesTool,
   fetchIntradayMinutesTool,
+  getStockMinuteBarsTool,
   syncQuotesTool,
   syncDailyBarsTool,
   getPreviousClosesTool,

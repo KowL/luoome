@@ -3,6 +3,7 @@ import {
   type DateRange,
   type MarketSnapshotItem,
   type MarketSourceStatus,
+  type MinuteBar,
   money,
   type Quote,
   type StockSearchCandidate,
@@ -148,6 +149,10 @@ export class FakeMarketAdapter implements MarketDataAdapter {
 
   fetchIntradayMinutes(): Promise<never> {
     return Promise.reject(new Error('unsupported_capability: intraday-minutes'));
+  }
+
+  fetchMinuteBars(): Promise<readonly MinuteBar[]> {
+    return Promise.reject(new Error('unsupported_capability: minute-bars'));
   }
 
   marketSourceStatus(): readonly MarketSourceStatus[] {
