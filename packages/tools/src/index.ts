@@ -64,6 +64,7 @@ export * from './tools/send-notification.js';
 export * from './tools/set-report-delivery-status.js';
 export * from './tools/set-watch-trigger-feedback.js';
 export * from './tools/signal-observation.js';
+export * from './tools/strategy-backtest.js';
 export * from './tools/strategy-definition.js';
 export * from './tools/strategy-evaluation.js';
 export * from './tools/strategy-insight.js';

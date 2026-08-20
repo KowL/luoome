@@ -4,6 +4,7 @@ import {
   buildBacktestResultContent,
   buildRunDetailContent,
   buildStrategyHash,
+  buildStrictBacktestResultContent,
   openRunDetail,
   parseBacktestStockIds,
   parseStrategyHash,
@@ -489,6 +490,28 @@ describe('模拟回测（历史回放）', () => {
     );
     expect(statuses.at(-1)).toContain('历史模拟失败或已取消');
     expect(statuses.at(-1)).not.toContain('历史模拟完成：');
+  });
+});
+
+describe('严格回测', () => {
+  it('门禁不完整时只展示不可用说明，不展示伪指标', () => {
+    const node = buildStrictBacktestResultContent({
+      id: 'strict-1',
+      status: 'complete',
+      resultAvailability: 'partial',
+      inputFingerprint: 'a'.repeat(64),
+      gateAudit: {
+        status: 'partial',
+        items: [
+          { key: 'pit-universe', status: 'complete', detail: 'ok' },
+          { key: 'tradability', status: 'unavailable', detail: 'missing' },
+        ],
+      },
+    });
+    expect(node.textContent).toContain('数据门禁未完整通过');
+    expect(node.textContent).toContain('tradability');
+    expect(node.textContent).toContain('不会输出伪造 Sharpe 或胜率');
+    expect(node.textContent).not.toContain('最终净值');
   });
 });
 

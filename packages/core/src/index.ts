@@ -27,6 +27,7 @@ export * from './entity/stock.js';
 export * from './entity/stock-event.js';
 export * from './entity/stock-universe.js';
 export * from './entity/strategy.js';
+export * from './entity/strategy-backtest.js';
 export * from './entity/strategy-checkpoint.js';
 export * from './entity/strategy-schedule.js';
 export * from './entity/strategy-watchlist-subscription.js';
@@ -42,6 +43,7 @@ export * from './portfolio/performance.js';
 // 仓储接口
 export * from './repository/index.js';
 export * from './research-vault.js';
+export * from './strategy/backtest.js';
 export * from './strategy/builtin.js';
 export * from './strategy/cron.js';
 export * from './strategy/crossing.js';

@@ -32,6 +32,7 @@ import type {
   StrategyDataCheckpointMember,
   StrategyEvaluationDay,
   StrategyEvaluationSession,
+  StrategyEvaluatorIdentity,
   StrategyResult,
   StrategyRun,
   StrategyRunPublication,
@@ -39,6 +40,11 @@ import type {
   StrategySignal,
   StrategyVersion,
   StrategyWatchlistSubscription,
+  StrictBacktestGateAudit,
+  StrictBacktestMarketFact,
+  StrictBacktestMetrics,
+  StrictBacktestRun,
+  StrictBacktestSpec,
   TradeSide,
   TradeSource,
   Watchlist,
@@ -725,6 +731,61 @@ export const strategyEvaluationDays = sqliteTable(
   }),
 );
 
+export const strategyBacktestRuns = sqliteTable(
+  'strategy_backtest_runs',
+  {
+    id: text('id').primaryKey(),
+    strategyId: text('strategy_id').notNull(),
+    strategyVersionId: text('strategy_version_id').notNull(),
+    evaluationSessionId: text('evaluation_session_id').notNull(),
+    status: text('status').$type<StrictBacktestRun['status']>().notNull(),
+    resultAvailability: text('result_availability')
+      .$type<StrictBacktestRun['resultAvailability']>()
+      .notNull(),
+    spec: text('spec_json', { mode: 'json' }).$type<StrictBacktestSpec>().notNull(),
+    specHash: text('spec_hash').notNull(),
+    inputFingerprint: text('input_fingerprint').notNull(),
+    evaluator: text('evaluator_json', { mode: 'json' })
+      .$type<StrategyEvaluatorIdentity>()
+      .notNull(),
+    gateAudit: text('gate_audit_json', { mode: 'json' }).$type<StrictBacktestGateAudit>().notNull(),
+    metrics: text('metrics_json', { mode: 'json' }).$type<StrictBacktestMetrics>(),
+    error: text('error'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    strategyCreatedIdx: index('strategy_backtest_runs_strategy_created_idx').on(
+      t.strategyId,
+      t.createdAt,
+    ),
+    sessionIdx: index('strategy_backtest_runs_session_idx').on(t.evaluationSessionId),
+  }),
+);
+
+export const strategyBacktestMarketFacts = sqliteTable(
+  'strategy_backtest_market_facts',
+  {
+    stockId: text('stock_id').notNull(),
+    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+    contentHash: text('content_hash').notNull(),
+    fact: text('fact_json', { mode: 'json' }).$type<StrictBacktestMarketFact>().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.stockId, t.date, t.recordedAt, t.contentHash],
+      name: 'strategy_backtest_market_facts_pk',
+    }),
+    lookupIdx: index('strategy_backtest_market_facts_lookup_idx').on(
+      t.stockId,
+      t.date,
+      t.recordedAt,
+    ),
+  }),
+);
+
 export const signalObservations = sqliteTable(
   'signal_observations',
   {
@@ -1379,6 +1440,8 @@ export const schema = {
   strategyDataCheckpointMembers,
   strategyEvaluationSessions,
   strategyEvaluationDays,
+  strategyBacktestRuns,
+  strategyBacktestMarketFacts,
   signalObservations,
   notifications,
   // v0.6 起

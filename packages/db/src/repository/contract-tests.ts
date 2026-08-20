@@ -6,6 +6,7 @@ import {
   type AlertPlan,
   type ChatMessage,
   type ChatSession,
+  CURRENT_STRATEGY_EVALUATOR_IDENTITY,
   type DailyBar,
   type DailyBarRevision,
   type Holding,
@@ -38,8 +39,14 @@ import {
   type StrategySignal,
   type StrategyVersion,
   type StrategyWatchlistSubscription,
+  type StrictBacktestGateAudit,
+  type StrictBacktestMarketFact,
+  type StrictBacktestRun,
+  type StrictBacktestSpec,
   stockCode,
   strategyDefinitionHash,
+  strictBacktestHash,
+  strictBacktestSpecHash,
   type Trade,
   type Watchlist,
   type WatchlistMemberSource,
@@ -3380,6 +3387,118 @@ export const registerRepositoryContractTests = (
           vintageStatus: 'available',
         });
         expect(await repos.strategyEvaluation.listDays(session.id)).toHaveLength(1);
+      });
+    });
+
+    describe('StrategyBacktestRepository', () => {
+      const spec: StrictBacktestSpec = {
+        schemaVersion: 1,
+        strategyId: 'strategy-1',
+        strategyVersionId: 'strategy-1-v1',
+        evaluationSessionId: 'evaluation-1',
+        from: T1,
+        to: T3,
+        initialCash: 1_000_000,
+        benchmark: { stockId: '000300.SH', datasetVersion: '000300.SH:qfq:daily:v1' },
+        execution: {
+          model: 'next-open-full-rebalance-equal-weight-v1',
+          lotSize: 100,
+          maxPositions: 20,
+        },
+        fees: {
+          model: 'ashare-fees-v1',
+          commissionBps: 2.5,
+          minimumCommission: 5,
+          sellStampDutyBps: 5,
+        },
+        slippage: { model: 'fixed-bps-at-open-v1', buyBps: 5, sellBps: 5 },
+      };
+      const gateAudit: StrictBacktestGateAudit = {
+        status: 'complete',
+        assessedAt: T2,
+        items: [
+          'pit-universe',
+          'daily-bar-revisions',
+          'fees',
+          'slippage',
+          'tradability',
+          'corporate-actions',
+          'benchmark',
+          'evaluator-code',
+        ].map((key) => ({
+          key: key as StrictBacktestGateAudit['items'][number]['key'],
+          status: 'complete' as const,
+          reason: 'fixture-complete',
+          evidenceRefs: [],
+        })),
+      };
+
+      it('保存不可变运行身份并按策略倒序查询', async () => {
+        const run: StrictBacktestRun = {
+          id: 'strict-backtest-1',
+          status: 'queued',
+          resultAvailability: 'complete',
+          spec,
+          specHash: strictBacktestSpecHash(spec),
+          inputFingerprint: strictBacktestHash('input-1'),
+          evaluator: CURRENT_STRATEGY_EVALUATOR_IDENTITY,
+          gateAudit,
+          createdAt: T1,
+        };
+        await repos.strategyBacktest.saveRun(run);
+        await repos.strategyBacktest.saveRun({ ...run, status: 'running', startedAt: T2 });
+        expect(await repos.strategyBacktest.findRunById(run.id)).toMatchObject({
+          id: run.id,
+          status: 'running',
+          inputFingerprint: run.inputFingerprint,
+        });
+        expect(await repos.strategyBacktest.listRuns({ strategyId: spec.strategyId })).toHaveLength(
+          1,
+        );
+        await expect(
+          repos.strategyBacktest.saveRun({
+            ...run,
+            inputFingerprint: strictBacktestHash('changed'),
+          }),
+        ).rejects.toThrow('immutable identity');
+      });
+
+      it('PIT 市场事实按股票、日期和 recordedAt cutoff 查询', async () => {
+        const fact: StrictBacktestMarketFact = {
+          stockId: '600519.SH',
+          date: T2,
+          rawOpen: 100,
+          rawHigh: 110,
+          rawLow: 95,
+          rawClose: 105,
+          sessionStatus: 'open',
+          buyAllowed: true,
+          sellAllowed: true,
+          buyRestriction: 'none',
+          sellRestriction: 'none',
+          corporateActionsStatus: 'complete',
+          corporateActions: [],
+          source: 'fixture',
+          recordedAt: T3,
+          contentHash: 'b'.repeat(64),
+        };
+        await repos.strategyBacktest.saveMarketFacts([fact]);
+        expect(
+          await repos.strategyBacktest.listMarketFacts({
+            stockIds: [fact.stockId],
+            from: T1,
+            to: T3,
+            recordedAt: T2,
+          }),
+        ).toEqual([]);
+        expect(
+          await repos.strategyBacktest.listMarketFacts({
+            stockIds: [fact.stockId],
+            from: T1,
+            to: T3,
+            recordedAt: T3,
+          }),
+        ).toEqual([fact]);
       });
     });
 

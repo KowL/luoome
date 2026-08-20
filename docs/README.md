@@ -53,6 +53,7 @@
 | [策略工作台详细设计](./ddd/strategy-workspace-detailed-design.md) | Strategy 规则解释、派生股票池/候选池、运行 Diff、Tool/API 与 Web UI 设计 |
 | [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、fencing lease、daily cycle、行情 checkpoint、AI 降级与 point-in-time replay |
 | [账户绩效与组合归因详细设计](./ddd/account-performance-detailed-design.md) | 现金流、公司行动、每日估值、TWR、回撤、benchmark、贡献归因与缺失语义 |
+| [Strategy 严格回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope、数据门禁、可复现身份、费用/滑点/可交易性与指标可用性 |
 
 ## 当前开发计划
 
