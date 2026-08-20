@@ -2632,8 +2632,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const aiSettingsStore = new AISettingsStore(process.env);
   const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
   const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
-  const exposeExternal =
-    options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
+  const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const app = createWebApp(ctx, {
     exposeWrite,
     exposeExternal,

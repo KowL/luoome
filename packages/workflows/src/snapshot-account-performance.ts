@@ -9,26 +9,28 @@ export const ACCOUNT_PERFORMANCE_HISTORY_DAYS = 365;
 export const ACCOUNT_PERFORMANCE_MAX_HISTORY_DAYS = 3_660;
 export const ACCOUNT_PERFORMANCE_MAX_ACCOUNTS = 1_000;
 
-export const SnapshotAccountPerformanceInput = z.object({
-  accountIds: z
-    .array(z.string().min(1))
-    .max(ACCOUNT_PERFORMANCE_MAX_ACCOUNTS)
-    .transform((accountIds) => [...new Set(accountIds)])
-    .optional(),
-  from: z.string().date().optional(),
-  to: z.string().date().optional(),
-  historyDays: z
-    .number()
-    .int()
-    .positive()
-    .max(ACCOUNT_PERFORMANCE_MAX_HISTORY_DAYS)
-    .default(ACCOUNT_PERFORMANCE_HISTORY_DAYS),
-  benchmarkStockId: z.string().min(1).optional(),
-  mode: z.enum(['manual', 'scheduled', 'daemon']).default('scheduled'),
-}).refine(
-  (input) => input.from === undefined || input.to === undefined || input.from <= input.to,
-  { message: 'from 不能晚于 to', path: ['from'] },
-);
+export const SnapshotAccountPerformanceInput = z
+  .object({
+    accountIds: z
+      .array(z.string().min(1))
+      .max(ACCOUNT_PERFORMANCE_MAX_ACCOUNTS)
+      .transform((accountIds) => [...new Set(accountIds)])
+      .optional(),
+    from: z.string().date().optional(),
+    to: z.string().date().optional(),
+    historyDays: z
+      .number()
+      .int()
+      .positive()
+      .max(ACCOUNT_PERFORMANCE_MAX_HISTORY_DAYS)
+      .default(ACCOUNT_PERFORMANCE_HISTORY_DAYS),
+    benchmarkStockId: z.string().min(1).optional(),
+    mode: z.enum(['manual', 'scheduled', 'daemon']).default('scheduled'),
+  })
+  .refine((input) => input.from === undefined || input.to === undefined || input.from <= input.to, {
+    message: 'from 不能晚于 to',
+    path: ['from'],
+  });
 
 const SnapshotAccountPerformanceItem = z.object({
   accountId: z.string().min(1),
