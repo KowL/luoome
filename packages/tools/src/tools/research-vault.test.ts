@@ -441,6 +441,13 @@ topic_kind: custom
     if (!result.ok) return;
     expect(result.data.events.map((event) => event.id)).toContain('evt-research');
     expect(result.data.timeline.some((item) => item.kind === 'stock-event')).toBe(true);
+    expect(result.data.profile).toMatchObject({
+      stock: { stockId: '600519.SH', nameStatus: 'resolved' },
+      status: 'partial',
+      coverage: { events: 1 },
+    });
+    expect(result.data.profile.evidence.map((item) => item.id)).toContain('evt-research');
+    expect(result.data.profile.limitations.join(' ')).toContain('不输出收益概率');
     expect(result.data.trades.every((trade) => trade.accountId === ctx.user.defaultAccountId)).toBe(
       true,
     );

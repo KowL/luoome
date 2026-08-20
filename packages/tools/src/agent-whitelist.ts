@@ -20,6 +20,8 @@ export const AGENT_V1_TOOL_NAMES = [
   'get_advice_stats',
   'get_account_performance',
   'get_strategy_reliability_summary',
+  'run_local_selector_research',
+  'assess_adaptive_personality',
   'list_trades',
   'list_research_topics',
   'get_research_topic',

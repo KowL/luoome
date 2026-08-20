@@ -224,9 +224,17 @@ describe('研究 Vault API', () => {
 
     const stockView = (await (
       await app.fetch(new Request('http://test/api/research/stocks/600519.SH'))
-    ).json()) as { ok: boolean; data?: { topics: Array<{ id: string }> } };
+    ).json()) as {
+      ok: boolean;
+      data?: {
+        topics: Array<{ id: string }>;
+        profile: { status: string; evidence: Array<unknown>; unknowns: Array<string> };
+      };
+    };
     expect(stockView.ok).toBe(true);
     expect(stockView.data?.topics.map((topic) => topic.id)).toContain('topic_web_industry');
+    expect(stockView.data?.profile).toMatchObject({ status: 'partial' });
+    expect(stockView.data?.profile.evidence.length).toBeGreaterThan(0);
   });
 });
 
@@ -2080,6 +2088,8 @@ describe('/api/chat：对话助手', () => {
     expect(response.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1');
     expect(await response.text()).toContain('"type":"text-delta"');
     expect(captured?.tools.map((item) => item.name)).toContain('fetch_quote');
+    expect(captured?.tools.map((item) => item.name)).toContain('run_local_selector_research');
+    expect(captured?.tools.map((item) => item.name)).toContain('assess_adaptive_personality');
     expect(captured?.tools.map((item) => item.name)).not.toContain('get_quote');
     expect(captured?.instructions).toContain('不得自动交易');
     expect(await chatCtx.repos.chat.listMessages('stream-contract')).toHaveLength(2);

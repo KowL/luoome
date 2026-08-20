@@ -1,6 +1,6 @@
 # Vibe A 股市场报告与策略研究迁移详细设计
 
-> 状态：**Phase 0～5 已完成；旧 Tactic/StockGroup/ResearchNote 仅作为迁移历史术语，当前实现以 Strategy/Watchlist/ResearchTopic 为准**
+> 状态：**Phase 0～6 已完成；local_selector、adaptive_personality、stock_profile 已按本节收口；旧 Tactic/StockGroup/ResearchNote 仅作为迁移历史术语，当前实现以 Strategy/Watchlist/ResearchTopic 为准**
 >
 > 日期：2026-07-29
 >
@@ -32,8 +32,9 @@
 4. 报告正文以结构化 section/block 为事实源；Markdown 只是派生展示格式。
 5. 报告可以自动生成事实摘要，但不会自动生成 Advice，更不会触发 Trade。
 6. Vibe「策略市场」不迁成新的 `Strategy` 实体、注册表、内存 store 或一级导航。
-7. 首期策略研究复用 `Tactic`、`TacticSignal`、`StockGroup`、`GroupMemberSnapshot` 和
-   `WorkflowRun`；复杂横截面算法以后通过 `strategy` resolver Seam 接入。
+7. 首期策略研究复用现有 `Strategy`/`StrategyVersion`、PIT `StockUniverse`、批量
+   `DailyBar`、`StrategyRun`/`SignalObservation` 和 `ResearchTopic`；不复制旧
+   `Tactic`、`StockGroup`、`ResearchNote` 聚合。
 8. 共振结果是同一交易日、同一 coverage 下的信号事实聚合，不叫“置信度”，不输出操作建议。
 9. 回测曲线和收益指标等到 `SignalObservation`、复权、费用、基准与样本口径完整后再建设。
 10. 共享前置是当前工作树已落地的 `StockUniverse` 目录主链路、`all-stocks` coverage、规范
@@ -975,9 +976,9 @@ rankScore = clamp(0, 100, supportAverage - oppositionPenalty + resonanceBonus)
 | `trend_timing` | 组合现有均线多头、放量突破 Tactic 的 formula groups | 是 | 修正 tactic-scan/全市场 coverage |
 | `early_breakout` | 新 Tactic/指标表达式 | 第二批 | MA20/MA60 距离、交叉时间、RSI |
 | `bollinger_band` | 新 Tactic | 第二批 | Bollinger 上下轨、带宽和位置指标 |
-| `local_selector` | `strategy` resolver | 延后 | 横截面排序、批量 DailyBar、参数 schema |
-| `adaptive_personality` | 独立研究算法 | 延后 | 参数版本、训练/验证分离、可信回测 |
-| `stock_profile` | 研究读模型 | 延后 | 不作为 market-visible 策略 |
+| `local_selector` | Strategy 研究 Tool（确定性横截面排序） | 已收口 | PIT universe、批量 DailyBar revision、版本化参数、稳定结果 |
+| `adaptive_personality` | Strategy 评估门禁（非发布算法） | 已收口 | 参数版本、训练/验证隔离、PIT/观察/基准覆盖门禁 |
+| `stock_profile` | `ResearchTopic` 驱动的股票研究读模型 | 已收口 | 显式 evidence/counter-evidence/unknown，不伪装策略或概率 |
 | `my_multi_factor` / `my_bollinger` | 不迁移 | 否 | Vibe 中隐藏且与信号投递耦合 |
 
 ### 12.6 `strategy` resolver 的未来 Seam
@@ -1029,6 +1030,48 @@ Implementation 必须是确定性纯计算，不直接访问网络、数据库�
 - LLM 精排成为用户主动的可选步骤，不作为 nightly refresh 的必要条件。
 - LLM 失败时保留确定性结果。
 - LLM rationale 不覆盖原始 score/evidence。
+
+### 12.8 `local_selector`：确定性横截面研究切片
+
+`local_selector` 不迁移 Vibe 的旧 resolver、股票组或隐藏策略市场概念。当前切片由
+`run_local_selector_research` Tool 承载，输入必须同时给出 `marketDate`、`revisionCutoff`、
+可选的 PIT universe 子集和 `local-selector-v1` 参数。Tool 先读取指定交易日日终之前的
+`StockUniverse`，再用一次批量 `DailyBarRepository.listRevisionsForStocks` 读取 qfq revision；每个
+股票/交易日只保留 `recordedAt <= revisionCutoff` 的最新 revision，不能用当前快照补齐历史。
+
+参数固定声明 `minimumBars`、`minimumCoverageRatio`、`top` 和去重因子权重。首版因子为 20 日
+动量、收盘价相对 20 日均线、20 日波动率和 20 日平均成交量；每个因子在同一批可用股票内做
+带并列平均秩的百分位，按方向转换后以权重求和。结果按 `score desc, stockId asc` 排序，保留
+`dataAsOf`、逐因子 evidence、低分位 counter-evidence 和 unavailable 原因，因此同一 PIT 输入
+可重算出同一结果。
+
+这个 score 只表示横截面相对排序，不是收益概率、胜率或 Advice confidence；Tool 不创建
+`StrategyVersion`、`Watchlist` 来源、Advice 或 Trade。`strategy` resolver union 仍保持关闭，
+直到出现两个独立且有真实数据契约的算法实现。
+
+### 12.9 `adaptive_personality`：可信评估门禁
+
+`adaptive_personality` 不作为可发布的 Strategy 算法，也不把历史样本拟合结果写成个性化收益
+结论。`assess_adaptive_personality` 只读取一个确切的 `StrategyVersion`（id、definitionHash、
+参数版本和训练 fact reference）、独立的训练/验证 `StrategyEvaluationSession`、PIT vintage
+状态以及验证期 `SignalObservation` 和 benchmark 状态。
+
+默认 `adaptive-personality-gate-v1` 要求：训练至少 60 个交易日、验证至少 20 个交易日、训练期
+严格早于验证期、两段 complete、两段 PIT vintage 覆盖 100%、验证至少 30 条完整观察且 benchmark 覆盖
+至少 90%。任何门禁失败都返回 `status=unavailable`、`conclusion=null` 和稳定 reason code；
+通过也只允许进入人工评审，不自动发布版本、不生成 Advice、不触发交易。当前 replay 主链路在
+验证运行没有足够独立观察时必须诚实保持 unavailable，不能用当前快照、模拟收益或推断数据替代。
+
+### 12.10 `stock_profile`：研究读模型
+
+`stock_profile` 不是 Vibe/yfinance 基本面估值迁移，也不是 market-visible Strategy。当前实现
+扩展 `get_stock_research_view` 返回 `profile`：以显式股票 SubjectLink 聚合 `ResearchTopic`、
+`ResearchDocument`、结构化事件、已发布 StrategySignal、WatchTrigger 和涨停事实，并分别保留
+`evidence`、`counterEvidence`、`unknowns`、`coverage`、`factsAsOf` 与来源状态。没有显式研究链接、
+索引不可用或反证缺失时显示 unavailable/unknown，不用空数组伪装“没有风险”。
+
+Profile 是可重建的研究投影，不新增策略聚合根、收益概率字段或独立仓储；Advice/Trade 仍走各自
+显式 Tool，研究页面只展示事实、反证、限制和不可用原因。
 
 ## 13. Web、CLI 与实时更新
 
@@ -1264,6 +1307,13 @@ Vibe 当前快照仅在进程内，默认没有可靠存量可导入。旧设计
 - [x] SignalObservation 使用版本化 benchmark 数据集 `000300.SH:qfq:daily:v1`；同步失败时显式标为
   unavailable/partial；满足 §17.3 后才建设严格回测 Module 和曲线。
 
+### Phase 7：三项延后能力收口
+
+- [x] `local_selector` 以批量 PIT DailyBar 研究 Tool 落地，参数、百分位并列、稳定排序和 unavailable 有测试。
+- [x] `adaptive_personality` 以版本/训练-验证/PIT/观察/benchmark 门禁落地；证据不足不输出结论。
+- [x] `stock_profile` 并入股票研究读模型，显式拆分 evidence、counter-evidence 与 unknown，不新增 Strategy 或收益概率。
+- [x] Tool registry、Agent whitelist、Research/Web 展示和 Skill references 同步；无自动 Advice/Trade。
+
 ## 19. 文件影响范围
 
 预计新增：
@@ -1308,6 +1358,11 @@ apps/web/src/server.ts
 apps/web/public/*
 skills/luoome/SKILL.md
 ```
+
+本次 Phase 7 还新增/修改：`packages/core/src/strategy/local-selector.ts`、
+`packages/core/src/strategy/adaptive-personality.ts`、`packages/core/src/entity/stock-research-profile.ts`、
+`packages/tools/src/tools/strategy-research.ts`、DailyBar revision 批量仓储接口及其双实现，
+以及 `get_stock_research_view` 和 Web 股票研究视图；这些切片不新增 SQLite 表。
 
 实际实施按 phase 拆分，不允许一次提交修改全部文件。
 
@@ -1356,6 +1411,9 @@ Drizzle/in-memory 共用：
 - 共振保留 opposingSignals。
 - rankScore 可复现且不越界。
 - `score_signals` 输入最多 50。
+- `run_local_selector_research` 的 PIT cutoff、批量 revision、参数校验、并列百分位和稳定排序。
+- `assess_adaptive_personality` 的参数版本、训练/验证隔离、观察/benchmark 门禁和 unavailable。
+- `get_stock_research_view.profile` 的 evidence、counter-evidence、unknown 和事实截止时间。
 
 ### 20.5 Workflow
 

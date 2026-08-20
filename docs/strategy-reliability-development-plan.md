@@ -12,6 +12,11 @@
 
 本计划不新增自动交易，不把 StrategySignal 或 SignalObservation 表述为 Advice、胜率或严格回测。
 
+研究算法边界：`run_local_selector_research` 只消费 PIT StockUniverse 与批量 qfq DailyBar revision，
+输出可重算的横截面 score/evidence；`assess_adaptive_personality` 只做版本化训练/验证可信门禁，
+数据不足保持 unavailable。两者均不发布 Strategy、生成 Advice 或触发 Trade；股票 profile 由
+ResearchTopic/ResearchDocument 的显式链接读模型承载。
+
 ## 2. 决策基线
 
 2026-08-11 对“早期突破”策略做了两类检查：
