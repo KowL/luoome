@@ -58,7 +58,16 @@ describe('strategy signal observation tools', () => {
     const result = await completeStrategyObservationsTool.execute({}, ctx);
     expect(result).toMatchObject({
       ok: true,
-      data: { scanned: 2, completed: 1, pending: 1 },
+      data: {
+        scanned: 2,
+        completed: 1,
+        pending: 1,
+        byHorizon: {
+          t3: { scanned: 1, completed: 1, pending: 0 },
+          t5: { scanned: 1, completed: 0, pending: 1 },
+          t20: { scanned: 0, completed: 0, pending: 0 },
+        },
+      },
     });
     expect(await ctx.repos.signalObservation.findById(pending('t3').id)).toMatchObject({
       status: 'complete',

@@ -72,6 +72,7 @@
 
 | 文档 | 用途 |
 |---|---|
+| [Strategy 生产可靠性运维手册](./runbooks/strategy-reliability-operations.md) | 调度参数、fencing/checkpoint/provider/baseline/T+20 日检、P50/P95/max 周报与真实 provider smoke |
 | [Tushare 集成手册](./runbooks/tushare-integration.md) | 配置、启动顺序、验证和故障排查 |
 
 ## 历史归档

@@ -16,6 +16,18 @@ export const CreateStrategyObservationCandidatesOutput = z.object({
   runId: z.string().min(1),
   created: z.number().int().nonnegative(),
   skipped: z.number().int().nonnegative(),
+  baselines: z.object({
+    available: z.number().int().nonnegative(),
+    unavailable: z.number().int().nonnegative(),
+    providers: z.record(z.string(), z.number().int().nonnegative()),
+  }),
+  horizons: z.record(
+    z.enum(['t1', 't3', 't5', 't20']),
+    z.object({
+      created: z.number().int().nonnegative(),
+      skipped: z.number().int().nonnegative(),
+    }),
+  ),
 });
 
 const baselineFromSignal = (signal: StrategySignal): StrategySignalBaseline | undefined => {
@@ -62,18 +74,48 @@ export const createStrategyObservationCandidatesTool = defineTool({
         })
       ).map((observation) => observation.id),
     );
+    const baselineBySignal = new Map(
+      signals.map((signal) => [signal.id, baselineFromSignal(signal)] as const),
+    );
     const candidates = signals.flatMap((signal) =>
       observationsForStrategySignal(
         signal,
-        baselineFromSignal(signal),
+        baselineBySignal.get(signal.id),
         run.finishedAt ?? run.dataAsOf,
       ),
     );
     await saveObservationCandidates(candidates, ctx.repos.signalObservation);
+    const providers = new Map<string, number>();
+    for (const baseline of baselineBySignal.values()) {
+      if (baseline === undefined) continue;
+      providers.set(baseline.provider, (providers.get(baseline.provider) ?? 0) + 1);
+    }
+    const horizons = Object.fromEntries(
+      (['t1', 't3', 't5', 't20'] as const).map((horizon) => {
+        const rows = candidates.filter((candidate) => candidate.horizon === horizon);
+        return [
+          horizon,
+          {
+            created: rows.filter((candidate) => !existing.has(candidate.id)).length,
+            skipped: rows.filter((candidate) => existing.has(candidate.id)).length,
+          },
+        ];
+      }),
+    );
     return {
       runId: input.runId,
       created: candidates.filter((candidate) => !existing.has(candidate.id)).length,
       skipped: candidates.filter((candidate) => existing.has(candidate.id)).length,
+      baselines: {
+        available: [...baselineBySignal.values()].filter((baseline) => baseline !== undefined)
+          .length,
+        unavailable: [...baselineBySignal.values()].filter((baseline) => baseline === undefined)
+          .length,
+        providers: Object.fromEntries(
+          [...providers].sort(([left], [right]) => left.localeCompare(right)),
+        ),
+      },
+      horizons,
     };
   },
 });

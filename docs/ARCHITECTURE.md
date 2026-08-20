@@ -612,6 +612,9 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 | `compute_risk_metrics` | holdings + history | VaR / Sharpe / 最大回撤 |
 | `compute_indicators` | daily bars | MA / RSI / MACD / BOLL |
 | `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
+| `run_local_selector_research` | PIT StockUniverse + batch qfq DailyBar revisions + versioned params | deterministic cross-sectional score/evidence/unavailable（read-only research） |
+| `assess_adaptive_personality` | StrategyVersion + isolated evaluation sessions + observations/benchmark | versioned credibility gate；insufficient evidence is unavailable（never publishes） |
+| `get_stock_research_view` | explicit ResearchTopic/Document links + structured facts | stock research profile with evidence/counter-evidence/unknown（not probability/Advice） |
 | `get_strategy_insight_facts` | Strategy runs + signals + observations | 可引用的确定性 facts |
 | `generate_strategy_insight` | 已校验 facts | 带 factRefs 的解释性洞察（非 Advice） |
 | `analyze_strategy_candidate` | selected StrategyResult + signals + observations | 可追溯 **Advice** |

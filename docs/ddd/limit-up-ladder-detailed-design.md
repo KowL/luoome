@@ -1,6 +1,6 @@
 # 连板天梯详细设计：A 股涨停梯队快照（tool + 缓存 + 端到端）
 
-> 状态：Phase 1/2/3 已实施；当前/正式日 Strategy DSL 与历史 PIT 天梯字段已实施，断板语义仍延后
+> 状态：Phase 1/2/3 已实施；当前/正式日 Strategy DSL 与历史 PIT 天梯字段已实施；2026-08-15 已冻结炸板/断板语义并完成安全降级，数据源门禁未满足前不注册运行时字段
 > 日期：2026-07-25
 > 需求：[连板天梯产品文档](../prd/limit-up-ladder-product.md)
 > 数据源：东方财富公开涨停池（`GET https://push2ex.eastmoney.com/getTopicZTPool`，无鉴权；2026-07 由原私有行情服务 `/market/limit-up/ladder` 迁移而来）
@@ -31,6 +31,10 @@ Strategy DSL 的天梯字段也已接入统一 manager：`meta.limitUpLevel`（�
 `dataAsOf`；scan/scheduled 同步持久化该日快照，replay 只按交易日读取已审计 PIT。没有快照时字段
 仍保持 missing/unknown，避免把历史评估伪装成 point-in-time 天梯事实。
 
+个股近 30 个交易日视图也遵守同一边界：历史日期只读 `LimitUpLadderSnapshotRepository`，仅当
+anchor 是上海当天时允许当天读取实时 manager。输出显式携带 `source`、`coverage`、`dataAsOf`、
+`missingDates` 与 `complete / partial / unavailable`；滚动接口的空响应不得解释为“当天没有事件”。
+
 ## 现状（已核实，截至 2026-08-14）
 
 - `LimitUpLadder` / `LimitUpLadderEntry` core schema、过滤去重和不变量已落地；
@@ -44,6 +48,91 @@ Strategy DSL 的天梯字段也已接入统一 manager：`meta.limitUpLevel`（�
 - 天梯不可用时返回 `adapter_error`，非交易日和字段缺失通过空 levels/warnings 表达；不把失败伪造成昨天数据、
   空成功或交易建议。
 - 天梯本身仍是只读事实，不直接触发通知；实时 manager 与历史 PIT 表均使用 `Asia/Shanghai` 交易日口径。
+
+## 炸板 / 断板历史语义与数据源决策（2026-08-15）
+
+### 语义冻结
+
+所有价格比较使用同一数据源、同一股票、同一交易日的**未复权**人民币分价整数。不能用 qfq
+`DailyBar` 与原始涨停价混算，也不能用 `9.8% / 19.8%` 阈值替代当日实际涨停价。
+
+对股票 `S` 和沪深 A 股交易日 `D`：
+
+- `closedAtUpperLimit(D)`：`rawClose(D) == upLimit(D)`；
+- `touchedUpperLimit(D)`：`rawHigh(D) == upLimit(D)`；
+- `isBroken(D)`：`touchedUpperLimit(D) && !closedAtUpperLimit(D)`，即盘中触及涨停、收盘未封；
+  已开板后回封仍属于封板，不属于炸板；
+- `consecutiveBoard(D)`：在 `D` 开盘前已经成立的连续封板高度，即从上一交易日 `D-1` 向前，
+  连续满足 `closedAtUpperLimit` 的最大交易日数量；上一交易日未封时为 `0`；
+- `isBoardBreak(D)`：`consecutiveBoard(D) >= 1 && !closedAtUpperLimit(D)`。它包含触板未封的断板，
+  也包含当日从未触板的断板；`isBroken` 只是其中一个子集；
+- 当 `D` 收盘封板且历史完整时，当日连续封板高度应为 `consecutiveBoard(D) + 1`。现有
+  `ladderLevel` 仍以已采集天梯事实为准，两者只能交叉校验，不能在历史缺口上相互补造。
+
+`openCount` / `zbc` 只表示盘中开板次数，不能直接映射为 `isBroken`。交易日必须来自当时可用的
+沪深交易日历；自然日、周末推算或当前日历倒灌都不能补历史事实。任一必要日的 raw OHLC、涨停价、
+交易日或前序连续窗口缺失时，对应布尔值和整数为 `unknown`，不能写 `false` 或 `0`。
+
+### 审计信封
+
+未来字段必须逐股票、逐交易日保存以下信封；缺任一项不得进入严格 PIT replay：
+
+```ts
+interface LimitUpBoardHistoryFact {
+  stockId: string;
+  tradeDate: string;
+  source: string;
+  coverage: 'CN_A_SHARES_SH_SZ';
+  status: 'complete' | 'partial' | 'unavailable';
+  dataAsOf: Date;
+  publishedAt: Date;
+  fetchedAt: Date;
+  vintage: 'captured' | 'backfill';
+  isBroken: boolean | null;
+  consecutiveBoard: number | null;
+  isBoardBreak: boolean | null;
+  missingFields: string[];
+}
+```
+
+`captured` 必须在文档发布时间之后按日采集并保留首次原始响应摘要；后来回补的历史行一律标为
+`backfill`。如果 provider 没有 revision/version 契约，`backfill` 不能假装成当日已保存的 PIT
+证据。当前 `limit_up_ladder_snapshots` 的 `(date, source)` upsert 只适合既有天梯快照，不足以保存
+字段修订史；数据源通过门禁后需新增专用 repository，并按仓库规范提供 Drizzle/in-memory 双实现、
+revision-preserving key 与 contract tests，schema 和 `ensureSchema` 同步。
+
+### 数据源核验
+
+| 候选 | 已核实能力与发布时间 | 缺口 | 决策 |
+|---|---|---|---|
+| Eastmoney `getTopicZTPool` / `getTopicZBPool` | 2026-08-15 真实请求：2026-08-14 分别返回 63/19 条；炸板池有 `zttj.days/ct`、`ztp`、`zs`，抽样的 `zttj.ct` 与前一日封板高度一致 | 无正式 schema、历史保留、发布时间或 revision 契约；2026-07-24 对两个端点均静默返回 0，而 2026-07-27 又有数据，不能区分“无事件”和“超出滚动窗口” | 只用于当前/近期展示与情绪统计；拒绝作为炸板/断板历史 PIT 源 |
+| Tushare `daily` + `stk_limit` | 官方文档给出 raw OHLC；`daily` 交易日 15:00～16:00 入库；`stk_limit` 当日约 08:40 更新并给出 `up_limit`；可按上述确定性公式派生 | 本环境 `TUSHARE_TOKEN` 未配置，未完成真实权限、覆盖、异常日、复权/分价和跨日连续性 smoke；provider revision 契约仍需落实 | 首选候选，保持 pending；不得仅凭文档上线 |
+| Tushare `limit_list_ths` | 官方文档声明历史自 2023-11-01、约 16:00 更新，提供炸板池、`open_num`、`tag/status` 等字段 | 需 8000 积分，且仅限个人学习研究；本环境无 token，未验证权限、字段稳定性与自由文本状态映射 | 可作交叉校验源，不作为当前生产实现 |
+
+官方依据：[Tushare A 股日线](https://tushare.pro/document/1?doc_id=27)、
+[每日涨跌停价格](https://tushare.pro/document/2?doc_id=183)、
+[同花顺涨跌停榜单](https://tushare.pro/document/2?doc_id=355)。Eastmoney 端点没有找到可承担
+schema/发布时间/revision 契约的官方文档，真实响应只能作为一次观测证据，不能替代契约。
+
+### 上线门禁与当前降级
+
+只有同时满足以下条件才进入 core/adapters/repository/tool/Strategy/UI 实现：
+
+1. 明确的字段 schema、市场 coverage、历史起点/保留窗口、许可与发布时间；
+2. 用真实凭据完成至少封板、触板未封、开板回封、ST/20cm、停牌/无成交、除权日样本交叉验证；
+3. 原始未复权 OHLC 与涨停价可按分价精确关联，交易日窗口完整；
+4. captured/backfill/revision 规则可落库并通过 PIT replay 测试；
+5. provider partial、空响应、权限和字段漂移都能降级为 partial/unavailable。
+
+当前结论是门禁未满足，因此：
+
+- 不在 field registry 注册 `meta.isBroken`、`meta.consecutiveBoard` 或 `meta.isBoardBreak`；引用这些
+  路径仍按未知字段拒绝，不用默认值让 Strategy 误命中；
+- replay 继续只消费同交易日 PIT 天梯；个股历史只读 snapshot repository；
+- `AShareSentiment` 的近期炸板池不得反向填充天梯历史、Strategy meta 或 PIT repository；
+- UI 不新增炸板/断板列，避免把 rolling/current 观测展示为完整历史；
+- 后续首选实现是独立 `raw-daily + daily-limit` capability 与专用 revision repository，不扩宽 qfq
+  `DailyBar` 语义，也不把天梯转成 Advice、收益概率或交易信号。
 
 ## 设计
 

@@ -10,11 +10,17 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Stock discovery and calculations: `search_stocks`, `compute_indicators`. Indicators include
   RSI14, MA20/MA60 distance and cross recency, plus Bollinger 20-day bands, bandwidth and position.
 - Strategies and signals: `list_strategies`, `get_strategy`, `list_strategy_runs`,
-  `get_strategy_run`, `strategy_signals_by_stock`.
+  `get_strategy_run`, `strategy_signals_by_stock`. `run_local_selector_research` performs a
+  deterministic PIT cross-sectional research ranking from batch qfq DailyBar revisions; its score
+  is a same-batch rank, not a probability. `assess_adaptive_personality` only checks whether an
+  immutable parameter version has separate training/validation evidence; `unavailable` means no
+  adaptive conclusion may be shown.
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_strategy_watchlist_subscriptions`.
   `list_alert_plans`, `list_watch_triggers`, `get_watch_status`.
 - Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `list_stock_events`.
+  The `profile` returned by `get_stock_research_view` is a ResearchTopic/ResearchDocument read
+  model with evidence, counter-evidence and unknowns. It is not a Strategy, Advice or expected-return estimate.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
 
