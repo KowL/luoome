@@ -51,6 +51,7 @@ import {
   InMemoryStrategyEvaluationRepository,
 } from './strategy-checkpoint.js';
 import { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
+import { InMemoryStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
 import { InMemoryTradeRepository } from './trade.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 import { InMemoryWatchRunRepository } from './watch-run.js';
@@ -85,6 +86,7 @@ export {
   InMemoryStrategyEvaluationRepository,
 } from './strategy-checkpoint.js';
 export { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
+export { InMemoryStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
 export { InMemoryTradeRepository } from './trade.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 export { InMemoryWatchRunRepository } from './watch-run.js';
@@ -142,6 +144,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const strategyRun = new InMemoryStrategyRunRepository(strategy);
   const strategyDataCheckpoint = new InMemoryStrategyDataCheckpointRepository();
   const strategyEvaluation = new InMemoryStrategyEvaluationRepository();
+  const strategyWatchlistSubscription = new InMemoryStrategyWatchlistSubscriptionRepository();
   const watchlist = new InMemoryWatchlistRepository();
   const watchlistMember = new InMemoryWatchlistMemberRepository(watchlist);
   const notification = new InMemoryNotificationRepository();
@@ -201,6 +204,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     strategyRun,
     strategyDataCheckpoint,
     strategyEvaluation,
+    strategyWatchlistSubscription,
     watchlist,
     watchlistMember,
     notification,

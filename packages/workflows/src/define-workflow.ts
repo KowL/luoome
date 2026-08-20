@@ -90,6 +90,8 @@ import type {
   ListStrategyResultViewsOutput,
   ListStrategyRunsInput,
   ListStrategyRunsOutput,
+  ListStrategyWatchlistSubscriptionsInput,
+  ListStrategyWatchlistSubscriptionsOutput,
   ListWatchlistChangesInput,
   ListWatchlistChangesOutput,
   ListWatchlistsInput,
@@ -150,6 +152,8 @@ import type {
   SyncStockEventsOutput,
   SyncStockUniverseInput,
   SyncStockUniverseOutput,
+  SyncStrategyWatchlistSubscriptionsInput,
+  SyncStrategyWatchlistSubscriptionsOutput,
   SyncWatchlistSourceInput,
   SyncWatchlistSourceOutput,
 } from '@luoome/tools';
@@ -167,6 +171,7 @@ import {
   saveWatchTriggerTool,
   setReportDeliveryStatusTool,
   setWatchTriggerDeliveryStatusTool,
+  syncStrategyWatchlistSubscriptionsTool,
   syncWatchlistSourceTool,
   toolRegistry,
 } from '@luoome/tools';
@@ -221,6 +226,10 @@ export interface WorkflowToolMap {
   readonly list_holdings: ToolAccessor<typeof ListHoldingsInput, typeof ListHoldingsOutput>;
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
   readonly get_watchlist: ToolAccessor<typeof GetWatchlistInput, typeof GetWatchlistOutput>;
+  readonly list_strategy_watchlist_subscriptions: ToolAccessor<
+    typeof ListStrategyWatchlistSubscriptionsInput,
+    typeof ListStrategyWatchlistSubscriptionsOutput
+  >;
   readonly get_advice: ToolAccessor<typeof GetAdviceInput, typeof GetAdviceOutput>;
   readonly get_advice_stats: ToolAccessor<typeof GetAdviceStatsInput, typeof GetAdviceStatsOutput>;
   readonly get_ashare_sentiment: ToolAccessor<
@@ -437,6 +446,10 @@ export interface WorkflowToolMap {
     typeof LimitUpLadderCompareInput,
     typeof LimitUpLadderCompareOutput
   >;
+  readonly sync_strategy_watchlist_subscriptions: ToolAccessor<
+    typeof SyncStrategyWatchlistSubscriptionsInput,
+    typeof SyncStrategyWatchlistSubscriptionsOutput
+  >;
 }
 
 /**
@@ -478,6 +491,7 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     listWatchRuleStatesTool,
     saveWatchRuleStatesTool,
     setWatchTriggerDeliveryStatusTool,
+    syncStrategyWatchlistSubscriptionsTool,
   ]) {
     accessors[internalTool.name] = {
       execute: (input) => internalTool.execute(input, ctx),

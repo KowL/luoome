@@ -3,8 +3,11 @@ import {
   assertWatchlistInvariants,
   assertWatchlistMemberInvariants,
   assertWatchlistMemberSourceInvariants,
+  getStrategyRunDataHealth,
+  isPublishableOperationalRun,
   MembershipSnapshotSchema,
   ReportMissingDimensionSchema,
+  type StrategyRun,
   type ToolContext,
   WatchlistMemberSchema,
   WatchlistMemberSourceSchema,
@@ -21,6 +24,32 @@ const WatchlistMemberViewSchema = z.object({
   member: WatchlistMemberSchema,
   sources: z.array(WatchlistMemberSourceSchema),
 });
+
+const isTrustedCompleteZeroRun = (run: StrategyRun): boolean => {
+  const summary = run.summary;
+  if (summary === undefined || typeof summary !== 'object' || summary === null) return false;
+  const value = summary as Record<string, unknown>;
+  const selectedCount = value.selectedCount;
+  const universeCount = value.universeCount;
+  const evaluatedCount = value.evaluatedCount;
+  if (
+    selectedCount !== 0 ||
+    typeof universeCount !== 'number' ||
+    typeof evaluatedCount !== 'number' ||
+    universeCount !== evaluatedCount
+  ) {
+    return false;
+  }
+  if (value.schemaVersion === 2) {
+    return value.partialCount === 0 && value.failedCount === 0;
+  }
+  return (
+    (value.schemaVersion === 3 || value.schemaVersion === 4) &&
+    value.dataHealth === 'complete' &&
+    value.incompleteCount === 0 &&
+    value.failedCount === 0
+  );
+};
 
 export const ListWatchlistsInput = z.object({
   kind: WatchlistSchema.shape.kind.optional(),
@@ -452,6 +481,64 @@ export const syncWatchlistSourceTool = defineTool({
     }
     if (!input.sourceKey.startsWith(`${input.sourceKind}:`)) {
       return errInvalidInput('sourceKey 前缀必须与 sourceKind 一致');
+    }
+    if (input.sourceKind === 'strategy') {
+      if (input.sourceId === undefined || input.sourceVersionId === undefined) {
+        return errInvalidInput(
+          'strategy source 必须提供 sourceId、sourceVersionId 和 producerRunId',
+        );
+      }
+      if (input.producerRunId === undefined) {
+        return errInvalidInput('strategy source 必须提供 producerRunId');
+      }
+      if (input.sourceKey !== `strategy:${input.sourceId}`) {
+        return errInvalidInput('strategy sourceKey 必须等于 strategy:<strategyId>');
+      }
+      const producerRun = await ctx.repos.strategyRun.findRunById(input.producerRunId);
+      if (producerRun === null) return errNotFound('StrategyRun', input.producerRunId);
+      if (producerRun.strategyId !== input.sourceId) {
+        return errInvalidInput('producerRunId 与 strategy sourceId 不匹配');
+      }
+      if (producerRun.strategyVersionId !== input.sourceVersionId) {
+        return errInvalidInput('strategy sourceVersionId 必须等于 producerRun.strategyVersionId');
+      }
+      if (!isPublishableOperationalRun(producerRun)) {
+        return errInvalidInput('只有 published operational StrategyRun 才能同步 Watchlist');
+      }
+      const health = getStrategyRunDataHealth(producerRun);
+      const expectedStatus =
+        health === 'complete' ? 'complete' : health === 'partial' ? 'partial' : null;
+      if (expectedStatus === null || input.status !== expectedStatus) {
+        return errInvalidInput(
+          `StrategyRun dataHealth=${health ?? 'unavailable'} 时只能以 ${expectedStatus ?? '不可同步'} 状态同步`,
+        );
+      }
+      const results = await ctx.repos.strategyRun.listResults(producerRun.id);
+      const selectedIds = new Set(
+        results.filter((result) => result.selected).map((result) => result.stockId),
+      );
+      const candidateIds = new Set(input.candidates.map((candidate) => candidate.stockId));
+      if (
+        selectedIds.size !== candidateIds.size ||
+        [...selectedIds].some((stockId) => !candidateIds.has(stockId))
+      ) {
+        return errInvalidInput(
+          'strategy source candidates 必须完整对应 producerRun 的 selected 结果',
+        );
+      }
+      if (
+        input.dataAsOf !== undefined &&
+        input.dataAsOf.getTime() !== producerRun.dataAsOf.getTime()
+      ) {
+        return errInvalidInput('strategy source dataAsOf 必须等于 producerRun.dataAsOf');
+      }
+      if (
+        input.status === 'complete' &&
+        input.candidates.length === 0 &&
+        !isTrustedCompleteZeroRun(producerRun)
+      ) {
+        return errInvalidInput('空 complete StrategyRun 必须有完整覆盖且可信零命中的 summary');
+      }
     }
     if (input.status === 'failed' && input.error === undefined) {
       return errInvalidInput('failed sync 必须提供 error');

@@ -25,6 +25,7 @@ export {
   DrizzleStrategyEvaluationRepository,
 } from './strategy-checkpoint.js';
 export { DrizzleStrategyScheduleRepository } from './strategy-schedule.js';
+export { DrizzleStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
 export { DrizzleTradeRepository } from './trade.js';
 export { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';
 export { DrizzleWatchRunRepository } from './watch-run.js';

@@ -69,7 +69,7 @@ luoome 要形成的闭环不是“AI 自动交易”，而是：
 - `Advice` 不等于 `trade`；任何建议、预警、报告或 Agent 都不能自动下单。
 - 事实、观点、建议分层展示，缺失数据不能伪装成零值或确定结论。
 - 重要结论保留证据、来源、数据截止时间、反证、风险和有效期。
-- 自动化可以同步事实、运行策略、更新 Watchlist 和生成事实型报告；生成 Advice 必须由用户主动触发。
+- 自动化可以同步事实、运行策略、按显式 Strategy→Watchlist 订阅更新 Watchlist 和生成事实型报告；生成 Advice 必须由用户主动触发。
 - 默认本地单用户，不建设云端跟单、策略订阅或多租户交易平台。
 
 ### 3.2 本总纲不承诺
@@ -112,7 +112,7 @@ luoome 要形成的闭环不是“AI 自动交易”，而是：
 `Strategy` 发现和评价机会，`Watchlist` 承接持续观察，`AlertPlan` 回答“何时提醒”：
 
 ```text
-StrategyRun ──► Watchlist ──► AlertPlan ──► Watch Runner ──► WatchTrigger
+StrategyRun ──► 显式订阅 ──► Watchlist ──► AlertPlan ──► Watch Runner ──► WatchTrigger
 候选与评分       机会生命周期      规则与冷却       确定性求值        可审计事实
 ```
 

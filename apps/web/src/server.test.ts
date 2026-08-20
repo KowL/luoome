@@ -762,6 +762,78 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(afterDelete.data?.plans?.some((plan) => plan.id === alertPlanId)).toBe(false);
   });
 
+  it('Strategy→Watchlist 订阅 API 必须显式创建，并支持取消而不删除审计历史', async () => {
+    const strategyId = 'web-subscription-strategy';
+    const watchlistId = 'web-subscription-watchlist';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: '订阅测试策略',
+            description: 'explicit subscription',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/watchlists', {
+            id: watchlistId,
+            name: '订阅目标',
+            kind: 'strategy',
+            membershipPolicy: 'mixed',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const initial = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/watchlists`),
+    );
+    expect(initial.status).toBe(200);
+    expect(await initial.json()).toMatchObject({ ok: true, data: { subscriptions: [] } });
+
+    const subscribed = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/watchlists`, { watchlistId }),
+    );
+    expect(subscribed.status).toBe(200);
+    expect(await subscribed.json()).toMatchObject({
+      ok: true,
+      data: { subscription: { strategyId, watchlistId, status: 'active' }, idempotent: false },
+    });
+    const repeated = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/watchlists`, { watchlistId }),
+    );
+    expect(await repeated.json()).toMatchObject({ ok: true, data: { idempotent: true } });
+
+    const cancelled = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/watchlists/${watchlistId}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toMatchObject({
+      ok: true,
+      data: { subscription: { status: 'cancelled' }, idempotent: false },
+    });
+    const active = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/watchlists`),
+    );
+    expect(await active.json()).toMatchObject({ ok: true, data: { subscriptions: [] } });
+    const history = await callTool('list_strategy_watchlist_subscriptions', {
+      strategyId,
+      status: 'cancelled',
+    });
+    expect(await history.json()).toMatchObject({
+      ok: true,
+      data: { subscriptions: [{ strategyId, watchlistId, status: 'cancelled' }] },
+    });
+  });
+
   it('GET /api/strategy-templates 返回内置模板目录', async () => {
     const res = await app.fetch(new Request('http://test/api/strategy-templates'));
     expect(res.status).toBe(200);

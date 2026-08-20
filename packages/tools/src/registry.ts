@@ -132,6 +132,11 @@ import {
   renewStrategyScheduleClaimTool,
   setStrategyScheduleTool,
 } from './tools/strategy-schedule.js';
+import {
+  listStrategyWatchlistSubscriptionsTool,
+  subscribeStrategyToWatchlistTool,
+  unsubscribeStrategyFromWatchlistTool,
+} from './tools/strategy-watchlist-subscription.js';
 import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
@@ -337,6 +342,9 @@ export const toolRegistry: Registry = createRegistry([
   updateWatchlistMemberTool,
   archiveWatchlistMemberTool,
   listWatchlistChangesTool,
+  listStrategyWatchlistSubscriptionsTool,
+  subscribeStrategyToWatchlistTool,
+  unsubscribeStrategyFromWatchlistTool,
   listAlertPlansTool,
   createAlertPlanTool,
   updateAlertPlanTool,

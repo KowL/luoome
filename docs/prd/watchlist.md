@@ -1,7 +1,7 @@
 # 统一 Watchlist（投资观察中心）PRD
 
-> 状态：目标模型已落地；旧 StockGroup 术语仅保留在迁移说明中
-> 日期：2026-07-29
+> 状态：目标模型与 Strategy → Watchlist 显式订阅首个竖向切片已落地；旧 StockGroup 术语仅保留在迁移说明中
+> 日期：2026-08-15
 > 上位文档：[AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)
 > 关联文档：[Strategy DSL](./strategy-dsl.md)、[AI 投资决策闭环](./ai-investment-decision-loop.md)
 
@@ -231,19 +231,32 @@ StrategyRun 输出结构化 StrategyResult：
 
 Watchlist 同步器根据结果更新 strategy source，不让 Strategy 直接改写成员的人工 stage 或笔记。
 
-### 6.2 同步策略
+### 6.2 显式订阅与完整同步
 
-用户配置：
+Strategy 不默认绑定任何 Watchlist。用户必须明确选择 Strategy 与目标 Watchlist，创建持久、可审计的
+订阅契约；Web 设置页和 `subscribe_strategy_to_watchlist` / `unsubscribe_strategy_from_watchlist`
+提供创建、取消与历史查询。订阅只描述目标 source，不改写成员的人工 stage、笔记或其它来源。
 
 ```text
 Strategy: 价值成长
 Target Watchlist: 价值成长候选
-Enter: selected=true 且 rank<=30
-Exit: 连续 2 次 complete run 未入选
-On enter stage: discovered
+Subscription: active
+Source key: strategy:<strategyId>
 ```
 
-退出可配置确认窗口，避免一次数据抖动造成频繁进出。
+只有已发布（`publication=published`）的正式 operational StrategyRun 才有资格投影。`evaluation`、
+`trial`、`persist=false`、`withheld`、`non-publishing` 和 `failed` run 永远不得改变 Watchlist。
+投影保留 `strategyId`、`strategyVersionId`、`producerRunId`、`score`、`rank`、`evidence` 与 `dataAsOf`。
+
+同步状态必须复用 `sync_watchlist_source` 的完整覆盖语义：
+
+- `complete` 才能按本次完整结果结束缺失的该 Strategy source；
+- `partial` 只更新当前命中来源并将既有来源标记为 `stale`，不按缺失集合退出；
+- `failed` 不改变现有来源，只记录失败快照；不可用数据不会伪装成可信空结果；
+- 空的 `complete` 只有在完整覆盖且可信地确认零命中时，才可结束该 Strategy source；
+- 同一 `producerRunId` 重试必须幂等，不重复成员、快照或错误结束来源；
+- manual、AI、Portfolio 和其它 Strategy source 独立维护，结束一个 Strategy source 不归档仍有其它
+  `active/stale` source 的成员。
 
 ### 6.3 多策略汇总
 
@@ -479,12 +492,13 @@ update_alert_plan
 - stage 和 priority；
 - AlertPlan 引用迁移。
 
-### Phase 2：Strategy 同步
+### Phase 2：Strategy 同步（首个竖向切片已完成）
 
-- StrategyRun 原子更新 strategy source；
-- entered/exited/score/rank 变化；
-- stale/partial/failed 状态；
-- 多策略来源与共识展示。
+- 持久 Strategy → Watchlist 显式订阅、取消与审计历史；
+- 仅 published operational run 投影，保留 run/version/evidence/dataAsOf provenance；
+- complete/partial/failed/可信空结果的完整同步语义；
+- entered/exited/score/rank 变化与同一 producerRun 幂等；
+- 多策略来源与共识展示；Web Strategy 设置页提供订阅和取消入口。
 
 ### Phase 3：AI 与研究工作台
 
@@ -506,6 +520,8 @@ update_alert_plan
 - 同一 Watchlist 中同一股票只有一个当前 Member，允许多个独立 Source。
 - Strategy、AI、Portfolio 任一来源退出不会误删其它来源。
 - 策略同步失败不会制造全量退出，旧来源明确标记 stale。
+- 没有显式订阅时 Strategy 不会创建或修改任何 Watchlist source。
+- evaluation、trial、persist=false、withheld、non-publishing 和 failed run 不会修改 Watchlist。
 - stage 不覆盖 Holding 事实，也不自动等同于 Advice。
 - 每次自动成员变化可追溯 run、版本、数据时间、reason 和 evidence。
 - AlertPlan 与 Watchlist 成员解耦，提醒不会自动交易。

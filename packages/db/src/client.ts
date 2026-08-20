@@ -27,6 +27,7 @@ import {
   DrizzleStrategyRepository,
   DrizzleStrategyRunRepository,
   DrizzleStrategyScheduleRepository,
+  DrizzleStrategyWatchlistSubscriptionRepository,
   DrizzleTradeRepository,
   DrizzleWatchlistMemberRepository,
   DrizzleWatchlistRepository,
@@ -850,6 +851,26 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_enabled_idx ON watchlists (enabled)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_kind_idx ON watchlists (kind)`);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_watchlist_subscriptions (
+      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, watchlist_id TEXT NOT NULL,
+      source_key TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      cancelled_at INTEGER, cancelled_by TEXT
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_strategy_status_idx
+    ON strategy_watchlist_subscriptions (strategy_id, status)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_watchlist_status_idx
+    ON strategy_watchlist_subscriptions (watchlist_id, status)
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_active_unique
+    ON strategy_watchlist_subscriptions (strategy_id, watchlist_id) WHERE status = 'active'
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS watchlist_members (
       id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, stock_id TEXT NOT NULL,
       stage TEXT NOT NULL, priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
@@ -900,6 +921,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS watchlist_sync_runs_producer_idx
     ON watchlist_sync_runs (producer_run_id)
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS watchlist_sync_runs_producer_source_unique
+    ON watchlist_sync_runs (watchlist_id, source_key, producer_run_id)
+    WHERE producer_run_id IS NOT NULL
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS membership_snapshots (
@@ -1373,6 +1399,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     strategySchedule: new DrizzleStrategyScheduleRepository(db),
     strategyDataCheckpoint: new DrizzleStrategyDataCheckpointRepository(db),
     strategyEvaluation: new DrizzleStrategyEvaluationRepository(db),
+    strategyWatchlistSubscription: new DrizzleStrategyWatchlistSubscriptionRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),

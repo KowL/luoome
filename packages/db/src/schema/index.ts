@@ -38,6 +38,7 @@ import type {
   StrategySchedule,
   StrategySignal,
   StrategyVersion,
+  StrategyWatchlistSubscription,
   TradeSide,
   TradeSource,
   Watchlist,
@@ -828,6 +829,35 @@ export const watchlists = sqliteTable(
   }),
 );
 
+export const strategyWatchlistSubscriptions = sqliteTable(
+  'strategy_watchlist_subscriptions',
+  {
+    id: text('id').primaryKey(),
+    strategyId: text('strategy_id').notNull(),
+    watchlistId: text('watchlist_id').notNull(),
+    sourceKey: text('source_key').notNull(),
+    status: text('status').$type<StrategyWatchlistSubscription['status']>().notNull(),
+    createdBy: text('created_by').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    cancelledAt: integer('cancelled_at', { mode: 'timestamp_ms' }),
+    cancelledBy: text('cancelled_by'),
+  },
+  (t) => ({
+    strategyStatusIdx: index('strategy_watchlist_subscriptions_strategy_status_idx').on(
+      t.strategyId,
+      t.status,
+    ),
+    watchlistStatusIdx: index('strategy_watchlist_subscriptions_watchlist_status_idx').on(
+      t.watchlistId,
+      t.status,
+    ),
+    activeUnique: uniqueIndex('strategy_watchlist_subscriptions_active_unique')
+      .on(t.strategyId, t.watchlistId)
+      .where(sql`status = 'active'`),
+  }),
+);
+
 export const watchlistMembers = sqliteTable(
   'watchlist_members',
   {
@@ -904,6 +934,9 @@ export const watchlistSyncRuns = sqliteTable(
       t.startedAt,
     ),
     producerIdx: index('watchlist_sync_runs_producer_idx').on(t.producerRunId),
+    producerSourceUnique: uniqueIndex('watchlist_sync_runs_producer_source_unique')
+      .on(t.watchlistId, t.sourceKey, t.producerRunId)
+      .where(sql`producer_run_id IS NOT NULL`),
   }),
 );
 

@@ -77,6 +77,9 @@ const EXPECTED_TOOL_NAMES = [
   'update_watchlist_member',
   'archive_watchlist_member',
   'list_watchlist_changes',
+  'list_strategy_watchlist_subscriptions',
+  'subscribe_strategy_to_watchlist',
+  'unsubscribe_strategy_from_watchlist',
   // Strategy + 统一 Watchlist W4
   'list_alert_plans',
   'create_alert_plan',
@@ -173,6 +176,7 @@ describe('toolRegistry', () => {
     expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);
     for (const hidden of [
       'sync_watchlist_source',
+      'sync_strategy_watchlist_subscriptions',
       'record_watch_run',
       'record_workflow_run',
       'save_report',
@@ -285,7 +289,9 @@ describe('toolRegistry', () => {
       'set_strategy_schedule',
       'set_watch_trigger_feedback',
       'start_strategy_evaluation_session',
+      'subscribe_strategy_to_watchlist',
       'sync_research_vault',
+      'unsubscribe_strategy_from_watchlist',
       'update_alert_plan',
       'update_holding',
       'update_stock_event',

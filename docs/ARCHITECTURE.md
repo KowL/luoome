@@ -433,7 +433,8 @@ interface ToolContext {
 
 **当前研究与观察模型**：Strategy 是版本化研究规则；StrategyRun 产出可追溯的
 StrategyResult/StrategySignal。Watchlist 统一 manual/strategy/ai/portfolio/import 来源和成员
-生命周期。AlertPlan 引用 Watchlist 并产生 WatchTrigger。公开 surface 只读写这三个模型；
+生命周期；Strategy → Watchlist 只有在用户创建持久、可审计的显式订阅契约后，才由
+published operational run 投影 strategy source。AlertPlan 引用 Watchlist 并产生 WatchTrigger。公开 surface 只读写这三个模型；
 旧 Tactic/StockGroup/StockPool 模型（含 migration decoder 与旧表 DDL）已整体移除，
 存量库的旧物理表不再维护（不 DROP、不读取）。
 
@@ -754,7 +755,7 @@ type ToolError =
 ### 8.1 内置 workflow
 
 - `daily-advice`：每个持仓股 → `analyze_stock` → 持久化 → 推送高分建议（v0.2）
-- `run-strategies`：运行已发布 Strategy（同步到目标 Watchlist 的能力未交付，后续迭代）
+- `run-strategies`：运行已发布 Strategy，并按 active 显式订阅投影到目标 Watchlist；只有 published operational run 可投影
 - `sync-portfolio-watchlists`：按账户同步 portfolio 来源
 - `market-outlook`：拉大盘指数 + 板块涨跌 → LLM 综合 → 市场观点（v0.3）
 - `risk-report`：风控指标 + 持仓建议（v0.3）

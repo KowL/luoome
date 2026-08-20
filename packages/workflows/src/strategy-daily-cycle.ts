@@ -26,6 +26,17 @@ const CycleItemSchema = z.object({
   runId: z.string().optional(),
   checkpointId: z.string().optional(),
   insightProvider: z.string().optional(),
+  watchlistSync: z
+    .object({
+      status: z.enum(['complete', 'partial', 'failed', 'skipped']),
+      complete: z.number().int().nonnegative().optional(),
+      partial: z.number().int().nonnegative().optional(),
+      failed: z.number().int().nonnegative().optional(),
+      skipped: z.number().int().nonnegative().optional(),
+      reason: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
   adviceCount: z.number().int().nonnegative().optional(),
   notificationFailed: z.number().int().nonnegative().optional(),
   reason: z.string().optional(),
@@ -106,6 +117,17 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     let runId: string | undefined;
     let checkpointId: string | undefined;
     let insightProvider: string | undefined;
+    let watchlistSync:
+      | {
+          status: 'complete' | 'partial' | 'failed' | 'skipped';
+          complete?: number;
+          partial?: number;
+          failed?: number;
+          skipped?: number;
+          reason?: string;
+          error?: string;
+        }
+      | undefined;
     let adviceCount: number | undefined;
     let notificationFailed: number | undefined;
     let leaseRenewals = 0;
@@ -244,6 +266,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             publication,
             summary: runSummary,
             insightProvider,
+            watchlistSync,
             adviceCount,
             notificationFailed,
             leaseRenewals,
@@ -522,6 +545,31 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           status = 'failed';
           reason = 'lease_lost_before_commit';
         } else {
+          const synced = await ctx.tools.sync_strategy_watchlist_subscriptions.execute({
+            strategyId: schedule.strategyId,
+            producerRunId: run.data.run.id,
+          });
+          if (!synced.ok) {
+            status = 'partial';
+            reason = errorText(synced.error);
+            watchlistSync = { status: 'failed', error: reason };
+          } else {
+            watchlistSync = {
+              status: synced.data.status,
+              complete: synced.data.complete,
+              partial: synced.data.partial,
+              failed: synced.data.failed,
+              skipped: synced.data.skipped,
+              ...(synced.data.reason === undefined ? {} : { reason: synced.data.reason }),
+            };
+            if (synced.data.status === 'partial') {
+              status = 'partial';
+              reason = 'Strategy→Watchlist source partial sync；未根据缺失集合结束来源';
+            } else if (synced.data.status === 'failed') {
+              status = 'partial';
+              reason = 'Strategy→Watchlist source sync failed；未改变其它来源';
+            }
+          }
           beginPhase('observations');
           const candidates = await ctx.tools.create_strategy_observation_candidates.execute({
             runId,
@@ -675,6 +723,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       ...(runId === undefined ? {} : { runId }),
       ...(checkpointId === undefined ? {} : { checkpointId }),
       ...(insightProvider === undefined ? {} : { insightProvider }),
+      ...(watchlistSync === undefined ? {} : { watchlistSync }),
       ...(adviceCount === undefined ? {} : { adviceCount }),
       ...(notificationFailed === undefined ? {} : { notificationFailed }),
       ...(reason === undefined ? {} : { reason }),

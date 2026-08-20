@@ -45,7 +45,9 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(defaultNames).toContain('list_strategies');
     expect(defaultNames).toContain('list_watchlists');
     expect(defaultNames).toContain('list_alert_plans');
+    expect(defaultNames).toContain('list_strategy_watchlist_subscriptions');
     expect(defaultNames).not.toContain('create_strategy');
+    expect(defaultNames).not.toContain('subscribe_strategy_to_watchlist');
     expect(defaultNames).not.toContain('run_strategy');
 
     const optedIn = selectMcpTools(
@@ -60,6 +62,7 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(optedInNames).toContain('run_strategy');
     for (const internalName of [
       'sync_watchlist_source',
+      'sync_strategy_watchlist_subscriptions',
       'record_watch_run',
       'record_workflow_run',
       'save_report',
