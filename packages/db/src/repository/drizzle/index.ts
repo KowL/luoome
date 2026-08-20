@@ -14,6 +14,7 @@ export {
 export { DrizzlePortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
+export { DrizzleResearchEmbeddingRepository } from './research-embedding.js';
 export { DrizzleResearchIndexRepository } from './research-index.js';
 export { DrizzleResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';

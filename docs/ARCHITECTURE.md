@@ -97,6 +97,8 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 `sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
 所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。
 
+Research 检索以 SQLite FTS5 为确定性基线。可选 embedding adapter 通过 `ToolContext.researchEmbedding` 注入；Tool 只面向 core 的稳定接口，不读取 provider 配置。embedding 投影属于 db 中可重建读模型，由独立 `ResearchEmbeddingRepository` 的 Drizzle/in-memory 双实现维护，并按 `provider + model + dimensions + version + chunk contentHash` 隔离和失效。混合检索、增量重建和固定跨模型评测均通过 Tool 暴露，Web/Agent 不复制融合或指标逻辑。
+
 **advice ≠ trade**：advice 永远不能直接触发 trade。trade 永远是 human-in-the-loop。
 
 ## 3. 模块结构

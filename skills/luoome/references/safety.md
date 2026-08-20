@@ -27,6 +27,7 @@ When presenting Advice, preserve these fields when returned:
 - Advice calls should be deliberate because they may invoke an LLM and incur cost.
 - Write and external calls require an explicit, transaction-specific authorization. A general request such as “manage my portfolio” is not authorization for an unspecified mutation.
 - If write/external tools are not exposed, explain the required MCP configuration; do not use shell commands as a bypass.
+- Research embedding calls may send query text or private Vault chunks to the configured provider. Confirm that exact transfer, preserve incomplete/fallback diagnostics, and never paste credentials or private text into error reports.
 
 ## ToolResult handling
 

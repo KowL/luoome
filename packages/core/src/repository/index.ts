@@ -14,6 +14,11 @@ import type {
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
 import type {
+  ResearchChunkEmbedding,
+  ResearchEmbeddingIndexState,
+  ResearchEmbeddingModelIdentity,
+} from '../entity/research-embedding.js';
+import type {
   ResearchAvailability,
   ResearchDocumentChunk,
   ResearchDocumentIndex,
@@ -314,6 +319,7 @@ export interface RepositoryRegistry {
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
   readonly watchRun: WatchRunRepository;
   readonly researchIndex: ResearchIndexRepository;
+  readonly researchEmbedding: ResearchEmbeddingRepository;
   readonly researchVaultSyncRun: ResearchVaultSyncRunRepository;
   /** ruo 迁移 Phase 1B；公司事件（幂等 upsert by (provider, externalId)）。 */
   readonly stockEvent: StockEventRepository;
@@ -378,6 +384,9 @@ export interface ResearchIndexRepository {
   listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]>;
   searchCapability(): ResearchSearchCapability;
   searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]>;
+  listChunks(input?: {
+    readonly documentIds?: readonly string[];
+  }): Promise<readonly ResearchDocumentChunk[]>;
   listStockSubjectKeys(): Promise<readonly string[]>;
   listSubjectLinks(input?: {
     readonly ownerKind?: ResearchSubjectLink['ownerKind'];
@@ -391,6 +400,29 @@ export interface ResearchVaultSyncRunRepository {
   save(run: ResearchVaultSyncRun): Promise<void>;
   findById(id: string): Promise<ResearchVaultSyncRun | null>;
   list(vaultId: string, limit?: number): Promise<readonly ResearchVaultSyncRun[]>;
+}
+
+export interface ResearchEmbeddingRepository {
+  listPending(input: {
+    readonly identity: ResearchEmbeddingModelIdentity;
+    readonly limit: number;
+  }): Promise<readonly ResearchDocumentChunk[]>;
+  saveMany(embeddings: readonly ResearchChunkEmbedding[]): Promise<void>;
+  deleteInvalid(identity: ResearchEmbeddingModelIdentity): Promise<number>;
+  inspect(
+    identity: ResearchEmbeddingModelIdentity,
+    now: Date,
+  ): Promise<ResearchEmbeddingIndexState>;
+  saveState(state: ResearchEmbeddingIndexState): Promise<void>;
+  findState(identity: ResearchEmbeddingModelIdentity): Promise<ResearchEmbeddingIndexState | null>;
+  searchSimilar(input: {
+    readonly identity: ResearchEmbeddingModelIdentity;
+    readonly vector: readonly number[];
+    readonly topicId?: string;
+    readonly subject?: string;
+    readonly kind?: ResearchDocumentKind;
+    readonly limit: number;
+  }): Promise<readonly ResearchSearchHit[]>;
 }
 
 export interface SignalObservationRepository {

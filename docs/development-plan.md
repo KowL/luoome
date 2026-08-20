@@ -149,7 +149,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | 行情底座 | StockUniverse、qfq DailyBar、Quote 新鲜度、capability registry 已完成 | 优先消费已有能力，不继续横向扩底层 |
 | Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除；统一 Watchlist、多来源与 Strategy → Watchlist 持久显式订阅、取消、published operational 投影和 complete/partial/failed 同步语义已落地 | 持续积累真实生产日验收样本与订阅来源的产品观测 |
 | Strategy Workspace | Phase A～C 已完成；publication、fencing lease、daily cycle、checkpoint、PIT replay、edge signal、观察统计和独立故障矩阵已落地；生产日 daily cycle 会先同步真实 StockUniverse PIT snapshot，启动前自动收敛 stale WorkflowRun，并阻止同一 schedule/交易日重复正式 cycle；5,207 只真实 Sina 全市场重复运行与首个 schedule 审计已记录 | 跨交易日阶段 P50/P95/max 与持续真实运行观测 |
-| Research Vault | Phase A/B、Phase C、M3 managed 创建/导入与 M4 FTS/ResearchBrief 已完成 | embedding、跨模型评测扩展和远端同步仍暂缓 |
+| Research Vault | Phase A/B、Phase C、M3 managed 创建/导入、M4 FTS/ResearchBrief 与 embedding 混合检索/跨模型固定评测已完成 | 真实 provider 生产质量观测和远端同步仍待真实配置与需求 |
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
 | Report / 信号复盘 | Report、三类简报、SignalObservation、benchmark/excess return、MFE/MAE、分组描述统计和真实历史 VaR 风险报告已落地；观察聚合统一按 `stock-day-horizon` 去重并可回溯代表性 observation id | benchmark 真实数据可用率、去重分布和跨 Tool/Web/AI 的真实样本稳定性仍需验证；历史评估仍不是严格收益回测 |
 | 账户绩效 | 现金流/公司行动 schema、双仓储、绩效 Tool、盘后持续快照 workflow/scheduler、WorkflowRun 性能预算、输入修订追溯、逐日审计、Web/报告/Agent、31 交易日真实 SQLite、双账户/拆股/缺价、周报区间 TWR/回撤与浏览器回归已落地 | 真实 provider 长区间、大账户生产规模和跨交易日连续调度证据 |
@@ -493,6 +493,15 @@ expectedContentHash 更新校验、索引失败可重建，以及 Web 写入门�
 - 正文窗口、snippet 和引用长度都有上限；
 - 资料中的工具调用指令不能改变 Agent 行为；
 - 数据缺失进入 unknowns/sourceStatus，不生成伪完整答案。
+
+#### Embedding 与跨模型评测扩展（已完成，2026-08-20）
+
+- FTS5 保持确定性基线；embedding capability 未配置、无有效覆盖或 provider 失败时稳定降级，并返回 `complete=false`；
+- chunk embedding 投影按 provider/model/dimensions/version 与 contentHash 失效，可从 Vault chunk 增量重建；
+- Drizzle/in-memory 双实现、共享 contract tests、schema/`ensureSchema`、Tool/Web/Agent 接线均已同步；
+- 固定 `research-retrieval-v1` 评测集逐模型报告 Recall@K、MRR、调用延迟、token 与估算成本；失败模型不补造指标；
+- 私人 chunk 正文和查询只有在 embedding capability 与 external（重建另需 write）显式开启时才发送给目录指定 provider；
+- 本地 fixture 只验证契约，真实 provider 质量/成本/延迟仍必须由实际配置和调用证据验收。
 
 ### M5：Strategy Workspace Phase C
 

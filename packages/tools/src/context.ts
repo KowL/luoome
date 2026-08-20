@@ -7,6 +7,7 @@ import type {
   MarketDataAdapterLike,
   NotificationManagerLike,
   RepositoryRegistry,
+  ResearchEmbeddingAdapterLike,
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
   StockUniverseManagerLike,
@@ -34,6 +35,7 @@ export interface BuildContextInput {
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
+  readonly researchEmbedding?: ResearchEmbeddingAdapterLike;
   readonly notification?: NotificationManagerLike;
   readonly portfolioBenchmark?: ToolContext['portfolioBenchmark'];
 }
@@ -52,6 +54,9 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.ashareSentiment === undefined ? {} : { ashareSentiment: input.ashareSentiment }),
     ...(input.researchVault === undefined ? {} : { researchVault: input.researchVault }),
     ...(input.researchRemote === undefined ? {} : { researchRemote: input.researchRemote }),
+    ...(input.researchEmbedding === undefined
+      ? {}
+      : { researchEmbedding: input.researchEmbedding }),
     ...(input.notification === undefined ? {} : { notification: input.notification }),
     ...(input.portfolioBenchmark === undefined
       ? {}

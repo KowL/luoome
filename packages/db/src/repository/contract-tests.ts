@@ -3223,6 +3223,238 @@ export const registerRepositoryContractTests = (
           'missing',
         );
       });
+
+      it('embedding 投影按模型 identity 增量重建并在 chunk hash 变化后失效', async () => {
+        const identity = {
+          provider: 'test',
+          model: 'embed-v1',
+          dimensions: 3,
+          version: '2026-08-15',
+        } as const;
+        const document = makeResearchDocument('report');
+        const apply = async (contentHash: string, body: string) =>
+          repos.researchIndex.applyIndexBatch({
+            vaultId: 'vault-test',
+            completeness: 'partial',
+            topics: [],
+            documents: [{ ...document, contentHash }],
+            topicDocuments: [],
+            subjectLinks: [],
+            chunks: [
+              { documentId: document.id, ordinal: 0, headingPath: '摘要', contentHash, body },
+            ],
+            seenTopicIds: new Set(),
+            seenDocumentIds: new Set([document.id]),
+            indexedAt: T1,
+          });
+
+        await apply('b'.repeat(64), '现金流改善');
+        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toHaveLength(1);
+        await repos.researchEmbedding.saveMany([
+          {
+            documentId: document.id,
+            ordinal: 0,
+            contentHash: 'b'.repeat(64),
+            identity,
+            vector: [1, 0, 0],
+            embeddedAt: T1,
+          },
+        ]);
+        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
+          status: 'ready',
+          expectedChunks: 1,
+          embeddedChunks: 1,
+          staleChunks: 0,
+        });
+        expect(
+          await repos.researchEmbedding.searchSimilar({
+            identity,
+            vector: [1, 0, 0],
+            limit: 5,
+          }),
+        ).toMatchObject([{ document: { id: document.id }, ordinal: 0 }]);
+
+        await apply('c'.repeat(64), '现金流恶化');
+        expect(await repos.researchEmbedding.inspect(identity, T2)).toMatchObject({
+          status: 'stale',
+          embeddedChunks: 0,
+          staleChunks: 1,
+        });
+        expect(await repos.researchEmbedding.deleteInvalid(identity)).toBe(1);
+        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toMatchObject([
+          { documentId: document.id, contentHash: 'c'.repeat(64) },
+        ]);
+      });
+
+      it('embedding 公开写入口按 Core schema 原子拒绝非法向量和状态', async () => {
+        const identity = {
+          provider: 'test',
+          model: 'embed-atomic',
+          dimensions: 3,
+          version: 'v1',
+        } as const;
+        const document = makeResearchDocument('atomic');
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'partial',
+          topics: [],
+          documents: [document],
+          topicDocuments: [],
+          subjectLinks: [],
+          chunks: [
+            {
+              documentId: document.id,
+              ordinal: 0,
+              headingPath: '支持',
+              contentHash: document.contentHash,
+              body: '合法 chunk',
+            },
+            {
+              documentId: document.id,
+              ordinal: 1,
+              headingPath: '反证',
+              contentHash: document.contentHash,
+              body: '非法向量不应留下部分投影',
+            },
+          ],
+          seenTopicIds: new Set(),
+          seenDocumentIds: new Set([document.id]),
+          indexedAt: T1,
+        });
+        const base = {
+          documentId: document.id,
+          contentHash: document.contentHash,
+          identity,
+          embeddedAt: T1,
+        };
+
+        await expect(
+          repos.researchEmbedding.saveMany([
+            { ...base, ordinal: 0, vector: [1, 0, 0] },
+            { ...base, ordinal: 1, vector: [0, 1] },
+          ]),
+        ).rejects.toThrow();
+        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
+          embeddedChunks: 0,
+          staleChunks: 2,
+        });
+
+        await expect(
+          repos.researchEmbedding.saveMany([{ ...base, ordinal: 0, vector: [1, Number.NaN, 0] }]),
+        ).rejects.toThrow();
+        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
+          embeddedChunks: 0,
+          staleChunks: 2,
+        });
+
+        await expect(
+          repos.researchEmbedding.saveState({
+            identity,
+            status: 'partial',
+            expectedChunks: -1,
+            embeddedChunks: 0,
+            staleChunks: 0,
+            updatedAt: T1,
+          }),
+        ).rejects.toThrow();
+        expect(await repos.researchEmbedding.findState(identity)).toBeNull();
+      });
+
+      it('embedding kind/topic/subject 过滤与 ResearchIndex 完整 subject 语义一致', async () => {
+        const identity = {
+          provider: 'test',
+          model: 'embed-filter',
+          dimensions: 3,
+          version: 'v1',
+        } as const;
+        const documents = [
+          makeResearchDocument('filter-a', { kind: 'report', contentHash: '1'.repeat(64) }),
+          makeResearchDocument('filter-b', { kind: 'article', contentHash: '2'.repeat(64) }),
+          makeResearchDocument('filter-c', { kind: 'analysis', contentHash: '3'.repeat(64) }),
+        ];
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'partial',
+          topics: [makeResearchTopic('filter-a'), makeResearchTopic('filter-b')],
+          documents,
+          topicDocuments: [
+            { topicId: 'topic_filter-a', documentId: 'doc_filter-a', relation: 'supporting' },
+            { topicId: 'topic_filter-b', documentId: 'doc_filter-b', relation: 'supporting' },
+            {
+              topicId: 'topic_filter-a',
+              documentId: 'doc_filter-c',
+              relation: 'counter-evidence',
+            },
+          ],
+          subjectLinks: [
+            {
+              ownerKind: 'document',
+              ownerId: 'doc_filter-a',
+              subjectKind: 'stock',
+              subjectKey: '600519.SH',
+              relation: 'related',
+            },
+            {
+              ownerKind: 'document',
+              ownerId: 'doc_filter-b',
+              subjectKind: 'stock',
+              subjectKey: '600519.SH',
+              relation: 'related',
+            },
+            {
+              ownerKind: 'document',
+              ownerId: 'doc_filter-c',
+              subjectKind: 'industry',
+              subjectKey: '白酒',
+              relation: 'related',
+            },
+          ],
+          chunks: documents.map((document) => ({
+            documentId: document.id,
+            ordinal: 0,
+            headingPath: '摘要',
+            contentHash: document.contentHash,
+            body: document.title,
+          })),
+          seenTopicIds: new Set(['topic_filter-a', 'topic_filter-b']),
+          seenDocumentIds: new Set(documents.map((document) => document.id)),
+          indexedAt: T1,
+        });
+        await repos.researchEmbedding.saveMany(
+          documents.map((document, index) => ({
+            documentId: document.id,
+            ordinal: 0,
+            contentHash: document.contentHash,
+            identity,
+            vector: [1, index / 10, 0],
+            embeddedAt: T1,
+          })),
+        );
+        const ids = async (
+          filters: Omit<
+            Parameters<typeof repos.researchEmbedding.searchSimilar>[0],
+            'identity' | 'vector' | 'limit'
+          >,
+        ) =>
+          (
+            await repos.researchEmbedding.searchSimilar({
+              identity,
+              vector: [1, 0, 0],
+              limit: 10,
+              ...filters,
+            })
+          )
+            .map((hit) => hit.document.id)
+            .sort();
+
+        expect(await ids({ kind: 'report' })).toEqual(['doc_filter-a']);
+        expect(await ids({ topicId: 'topic_filter-a' })).toEqual(['doc_filter-a', 'doc_filter-c']);
+        expect(await ids({ subject: 'stock:600519.SH' })).toEqual(['doc_filter-a', 'doc_filter-b']);
+        expect(await ids({ subject: '600519.SH' })).toEqual([]);
+        expect(
+          await ids({ topicId: 'topic_filter-a', kind: 'report', subject: 'stock:600519.SH' }),
+        ).toEqual(['doc_filter-a']);
+      });
     });
 
     describe('StockEventRepository', () => {

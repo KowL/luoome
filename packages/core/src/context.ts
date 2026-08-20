@@ -14,6 +14,7 @@ import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-unive
 import type { ToolErrorKind } from './error/index.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type {
+  ResearchEmbeddingAdapterLike,
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
 } from './research-vault.js';
@@ -221,6 +222,8 @@ export interface ToolContext {
   readonly auditCaller?: string;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
+  /** 私人正文外发的 embedding capability；仅由 external tool 显式调用。 */
+  readonly researchEmbedding?: ResearchEmbeddingAdapterLike;
   /** 生产账户绩效的默认 benchmark；测试上下文可不注入以显式保持 unavailable。 */
   readonly portfolioBenchmark?: {
     readonly stockId: string;

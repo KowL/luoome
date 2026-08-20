@@ -17,6 +17,7 @@ import {
   DrizzlePortfolioPerformanceSnapshotRepository,
   DrizzleQuoteRepository,
   DrizzleReportRepository,
+  DrizzleResearchEmbeddingRepository,
   DrizzleResearchIndexRepository,
   DrizzleResearchVaultSyncRunRepository,
   DrizzleSignalObservationRepository,
@@ -104,6 +105,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   db.run(
     sql`CREATE TABLE IF NOT EXISTS research_document_chunks (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, heading_path TEXT NOT NULL, content_hash TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (document_id, ordinal))`,
+  );
+  db.run(
+    sql`CREATE TABLE IF NOT EXISTS research_chunk_embeddings (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, content_hash TEXT NOT NULL, identity_key TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, version TEXT NOT NULL, vector_json TEXT NOT NULL, embedded_at INTEGER NOT NULL, PRIMARY KEY (identity_key, document_id, ordinal))`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS research_chunk_embeddings_identity_idx ON research_chunk_embeddings (identity_key)`,
+  );
+  db.run(
+    sql`CREATE TABLE IF NOT EXISTS research_embedding_index_states (identity_key TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, expected_chunks INTEGER NOT NULL, embedded_chunks INTEGER NOT NULL, stale_chunks INTEGER NOT NULL, updated_at INTEGER NOT NULL, diagnostic TEXT)`,
   );
   // FTS5 是可重建投影，不是权威业务表；旧 SQLite/构建不支持时保留 metadata 降级。
   try {
@@ -1435,6 +1445,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     sqlite.close();
     throw error;
   }
+  const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     stock: new DrizzleStockRepository(db),
@@ -1468,7 +1479,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     watchRuleState: new DrizzleWatchRuleStateRepository(db),
     watchRun: new DrizzleWatchRunRepository(db),
     // ruo 迁移起
-    researchIndex: new DrizzleResearchIndexRepository(db),
+    researchIndex,
+    researchEmbedding: new DrizzleResearchEmbeddingRepository(db, researchIndex),
     researchVaultSyncRun: new DrizzleResearchVaultSyncRunRepository(db),
     stockEvent: new DrizzleStockEventRepository(db),
     workflowRun: new DrizzleWorkflowRunRepository(db),

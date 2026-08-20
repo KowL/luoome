@@ -1,3 +1,7 @@
+import type {
+  ResearchEmbeddingModelIdentity,
+  ResearchEmbeddingUsage,
+} from './entity/research-embedding.js';
 import type { ResearchDocumentIndex } from './entity/research-vault.js';
 export interface ResearchVaultEntry {
   readonly relativePath: string;
@@ -49,6 +53,24 @@ export interface ResearchRemoteImportAdapterLike {
     readonly timeoutMs: number;
     readonly maxRedirects: number;
   }): Promise<ResearchRemoteDocument>;
+}
+
+export interface ResearchEmbeddingAdapterLike {
+  readonly name: string;
+  readonly defaultModel: string;
+  listModels(): readonly {
+    readonly name: string;
+    readonly identity: ResearchEmbeddingModelIdentity;
+  }[];
+  embed(input: {
+    readonly model?: string;
+    readonly purpose: 'document' | 'query' | 'evaluation';
+    readonly texts: readonly string[];
+  }): Promise<{
+    readonly identity: ResearchEmbeddingModelIdentity;
+    readonly vectors: readonly (readonly number[])[];
+    readonly usage: ResearchEmbeddingUsage;
+  }>;
 }
 export interface ResearchIndexStatus {
   readonly vaultId: string;

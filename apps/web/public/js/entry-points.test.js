@@ -113,6 +113,10 @@ describe('研究 managed 写入入口', () => {
     expect(html).toContain('id="research-import-document-btn"');
     expect(html).toContain('id="research-import-remote-btn"');
     expect(html).toContain('id="research-write-status"');
+    expect(html).toContain('id="research-hybrid-search"');
+    expect(html).toContain('id="research-embedding-status"');
+    expect(html).toContain('id="research-embedding-rebuild-btn"');
+    expect(html).toContain('id="research-embedding-evaluate-btn"');
   });
 
   it('页面写入经过预览确认和统一 tool call', () => {
@@ -121,6 +125,10 @@ describe('研究 managed 写入入口', () => {
     expect(read('./pages.js')).toContain('import_local_research_document');
     expect(read('./pages.js')).toContain('import_remote_research_document');
     expect(read('./pages.js')).toContain('/api/settings/research-vault');
+    expect(read('./pages.js')).toContain('/api/research/search/hybrid');
+    expect(read('./pages.js')).toContain('/api/research/embeddings/rebuild');
+    expect(read('./pages.js')).toContain('/api/research/embeddings/evaluate');
+    expect(read('./pages.js')).toContain("result.status === 'failed'");
   });
 });
 

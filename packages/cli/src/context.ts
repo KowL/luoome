@@ -17,6 +17,7 @@ import {
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
+  createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createStockUniverseManagerFromEnv,
@@ -100,6 +101,12 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   } catch {
     logger.warn('Research Vault 配置无效；CLI 将以未挂载状态继续');
   }
+  let researchEmbedding: ReturnType<typeof createResearchEmbeddingAdapterFromEnv>;
+  try {
+    researchEmbedding = createResearchEmbeddingAdapterFromEnv(process.env);
+  } catch {
+    logger.warn('Research embedding 配置无效；CLI 将以 capability 未挂载状态继续');
+  }
   const ctx = buildContext({
     repos,
     adapters: {
@@ -129,6 +136,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
       market,
     }),
     ...(researchVault ? { researchVault } : {}),
+    ...(researchEmbedding ? { researchEmbedding } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
   });

@@ -420,6 +420,10 @@
           <div class="research-search flex gap-2">
             <input id="research-topic-input" type="search" placeholder="搜索研究主题或资料" />
             <button id="research-search-btn" class="btn btn-primary btn-sm" type="button">搜索</button>
+            <label class="field-inline" for="research-hybrid-search">
+              <input id="research-hybrid-search" type="checkbox" />
+              <span>语义扩展（外部）</span>
+            </label>
           </div>
           <div class="research-toolbar flex gap-2 mt-2">
             <label class="field-inline" for="research-kind-filter">
@@ -438,8 +442,11 @@
             <button id="research-import-document-btn" class="btn btn-outline btn-sm" type="button">导入本地资料</button>
             <button id="research-import-remote-btn" class="btn btn-outline btn-sm" type="button">导入远程 URL</button>
             <button id="research-sync-btn" class="btn btn-outline btn-sm" type="button">手动同步 Vault</button>
+            <button id="research-embedding-rebuild-btn" class="btn btn-outline btn-sm" type="button">增量重建语义索引</button>
+            <button id="research-embedding-evaluate-btn" class="btn btn-outline btn-sm" type="button">跨模型评测</button>
             <span id="research-index-status" class="card-meta" aria-live="polite">索引状态：--</span>
           </div>
+          <div id="research-embedding-status" class="card-meta mt-2" role="status" aria-live="polite">语义索引：未检查</div>
           <div id="research-write-status" class="research-write-status" role="status" aria-live="polite"></div>
           <div id="research-inbox" class="research-inbox mt-2"></div>
           <div id="research-search-results" class="research-results mt-2"></div>
