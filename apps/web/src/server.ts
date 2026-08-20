@@ -70,6 +70,10 @@ import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from '
 import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
 import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
 import {
+  PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
+  startPortfolioPerformanceScheduler,
+} from './portfolio-performance-scheduler.js';
+import {
   ResearchVaultSettingsStore,
   SaveResearchVaultSettingsSchema,
 } from './research-vault-settings.js';
@@ -1125,18 +1129,29 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     accountPerformanceResponse(c, contextForRequest().user.defaultAccountId),
   );
   app.get('/api/accounts/:id/performance', (c) => accountPerformanceResponse(c, c.req.param('id')));
-  app.get('/api/accounts/:id/performance/snapshots', async (c) =>
+  const accountPerformanceSnapshotsResponse = async (
+    c: Context,
+    accountId: string,
+  ): Promise<Response> =>
     jsonResult(
       await listPortfolioPerformanceSnapshotsTool.execute(
         {
-          accountId: c.req.param('id'),
+          accountId,
           ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
         },
         contextForRequest(),
       ),
-    ),
+    );
+  app.get('/api/account/performance/snapshots', (c) =>
+    accountPerformanceSnapshotsResponse(c, contextForRequest().user.defaultAccountId),
   );
-  app.get('/api/accounts/:id/performance/snapshot-audit', async (c) => {
+  app.get('/api/accounts/:id/performance/snapshots', (c) =>
+    accountPerformanceSnapshotsResponse(c, c.req.param('id')),
+  );
+  const accountPerformanceSnapshotAuditResponse = async (
+    c: Context,
+    accountId: string,
+  ): Promise<Response> => {
     const from = c.req.query('from');
     const to = c.req.query('to');
     if (from === undefined || to === undefined) {
@@ -1152,7 +1167,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult(
       await auditPortfolioPerformanceSnapshotsTool.execute(
         {
-          accountId: c.req.param('id'),
+          accountId,
           from,
           to,
           ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
@@ -1160,7 +1175,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         contextForRequest(),
       ),
     );
-  });
+  };
+  app.get('/api/account/performance/snapshot-audit', (c) =>
+    accountPerformanceSnapshotAuditResponse(c, contextForRequest().user.defaultAccountId),
+  );
+  app.get('/api/accounts/:id/performance/snapshot-audit', (c) =>
+    accountPerformanceSnapshotAuditResponse(c, c.req.param('id')),
+  );
 
   /**
    * 切换当前激活账户：浏览器把账户 id 保存到 localStorage，后续请求通过
@@ -2582,6 +2603,8 @@ export interface StartWebOptions {
   readonly dbPath?: string;
   /** 仅供测试缩短 tick；生产固定每分钟检查一次。 */
   readonly strategySchedulerIntervalMs?: number;
+  /** 仅供测试缩短 tick；生产每五分钟检查一次盘后账户绩效快照。 */
+  readonly portfolioPerformanceSchedulerIntervalMs?: number;
 }
 
 export interface WebServerHandle {
@@ -2610,6 +2633,11 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const scheduler = startStrategyScheduler(ctx, {
     intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
   });
+  const portfolioPerformanceScheduler = startPortfolioPerformanceScheduler(ctx, {
+    intervalMs:
+      options.portfolioPerformanceSchedulerIntervalMs ??
+      PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
+  });
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
   if (process.env.LUOOME_EXPOSE_WRITE !== 'true') {
     ctx.logger.info(
@@ -2625,6 +2653,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     port: server.port ?? options.port,
     stop: (closeActiveConnections) => {
       scheduler.stop();
+      portfolioPerformanceScheduler.stop();
       server.stop(closeActiveConnections);
     },
   };

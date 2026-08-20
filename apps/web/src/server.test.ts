@@ -58,6 +58,8 @@ describe('Web 信息架构', () => {
     expect(html).toContain('data-route="watchlists"');
     expect(html).toContain('data-route="alerts"');
     expect(html).toContain('id="btn-dashboard-watch-run"');
+    expect(html).toContain('id="review-performance-snapshots-table"');
+    expect(html).toContain('id="review-performance-audit-table"');
   });
 });
 
@@ -120,7 +122,11 @@ describe('账户绩效 API', () => {
       ),
     );
     expect(audit.status).toBe(200);
-    expect(await audit.json()).toMatchObject({
+    const auditBody = (await audit.json()) as {
+      ok: boolean;
+      data?: { audit: { days: Array<Record<string, unknown>> } };
+    };
+    expect(auditBody).toMatchObject({
       ok: true,
       data: {
         audit: {
@@ -129,9 +135,26 @@ describe('账户绩效 API', () => {
           observedTradingDays: 3,
           completeness: 'complete',
           missingDates: [],
+          revisionDayCount: 0,
         },
       },
     });
+    expect(auditBody.data?.audit.days[0]).toMatchObject({
+      date: '2026-07-01',
+      completeness: 'complete',
+      revisionCount: 1,
+    });
+
+    const currentSnapshots = await snapshotApp.fetch(
+      new Request('http://test/api/account/performance/snapshots?limit=10'),
+    );
+    expect(currentSnapshots.status).toBe(200);
+    const currentAudit = await snapshotApp.fetch(
+      new Request(
+        'http://test/api/account/performance/snapshot-audit?from=2026-07-01&to=2026-07-03',
+      ),
+    );
+    expect(currentAudit.status).toBe(200);
   });
 });
 

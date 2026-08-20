@@ -13,6 +13,7 @@ export * from './replay-strategy-range.js';
 export * from './risk-report.js';
 export * from './run-strategies.js';
 export * from './run-strategy-schedules.js';
+export * from './snapshot-account-performance.js';
 export * from './strategy-daily-cycle.js';
 export * from './strategy-recommendations.js';
 export * from './sync-portfolio-watchlists.js';

@@ -1857,6 +1857,46 @@ html.has-bg-image .bg-layer {
   font-family: var(--font-mono);
 }
 
+.performance-audit {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.performance-audit > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.performance-audit-grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 14px;
+}
+
+.performance-audit-grid h3 {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+.audit-fingerprint {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.audit-status-complete {
+  color: var(--success);
+}
+
+.audit-status-partial,
+.audit-status-unavailable {
+  color: var(--warning);
+}
+
 .card-link {
   font-size: var(--text-sm);
   font-family: var(--font-mono);
