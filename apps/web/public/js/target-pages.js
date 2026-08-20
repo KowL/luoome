@@ -177,13 +177,15 @@ export const renderStrategies = async (setStatus) => {
  * 一次拉取的数据派生，切换视图不重复请求。
  */
 export const deriveWatchlistViews = (overview) => {
-  const listCards = (overview?.lists ?? []).map((row) => ({
-    watchlist: row.watchlist,
-    memberCount: row.memberCount ?? 0,
-    staleSources: row.sourceHealth?.stale ?? 0,
-    todayEntered: row.todayEntered ?? 0,
-    todayExited: row.todayExited ?? 0,
-  }));
+  const listCards = (overview?.lists ?? [])
+    .filter((row) => row.watchlist?.enabled !== false)
+    .map((row) => ({
+      watchlist: row.watchlist,
+      memberCount: row.memberCount ?? 0,
+      staleSources: row.sourceHealth?.stale ?? 0,
+      todayEntered: row.todayEntered ?? 0,
+      todayExited: row.todayExited ?? 0,
+    }));
   const stocks = [...(overview?.stocks ?? [])].sort((a, b) => a.stockId.localeCompare(b.stockId));
   const todayChanges = [...(overview?.todayChanges ?? [])].sort(
     (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
@@ -763,7 +765,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
     ),
     ...(plansLine === null ? [] : [plansLine]),
   ];
-  if (sorted.length === 0) {
+  if (stocks.length === 0) {
     children.push(el('p', 'placeholder', '暂无成员。'));
   } else {
     renderPage();
