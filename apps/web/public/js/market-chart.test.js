@@ -12,6 +12,9 @@ import {
   toIntradayLineData,
   toIntradayVolumeData,
   toMarkerData,
+  toMinuteCandleData,
+  toMinuteLineData,
+  toMinuteVolumeData,
   toVolumeData,
   UP_COLOR,
   volumeColor,
@@ -94,6 +97,33 @@ describe('分时数据转换', () => {
     ]);
     expect(data.map((d) => d.value)).toEqual([1_000, 500, 0]);
     expect(data.map((d) => d.color)).toEqual([UP_COLOR, UP_COLOR, DOWN_COLOR]);
+  });
+});
+
+describe('MinuteBar 数据转换', () => {
+  const bar = (endedAt, open, close, volume = 1000) => ({
+    endedAt,
+    open,
+    high: Math.max(open, close) + 1,
+    low: Math.min(open, close) - 1,
+    close,
+    volume,
+  });
+
+  it('line/candlestick 使用 OHLC 与 bucket end label', () => {
+    const bars = [bar('2026-08-11T01:31:00.000Z', 10, 11)];
+    const time = Math.floor(new Date(bars[0].endedAt).getTime() / 1000);
+    expect(toMinuteLineData(bars)).toEqual([{ time, value: 11 }]);
+    expect(toMinuteCandleData(bars)).toEqual([{ time, open: 10, high: 12, low: 9, close: 11 }]);
+  });
+
+  it('volume 直接使用 provider bar.volume，不对累计量差分', () => {
+    const data = toMinuteVolumeData([
+      bar('2026-08-11T01:31:00.000Z', 10, 11, 1200),
+      bar('2026-08-11T01:32:00.000Z', 11, 10, 800),
+    ]);
+    expect(data.map((item) => item.value)).toEqual([1200, 800]);
+    expect(data.map((item) => item.color)).toEqual([UP_COLOR, DOWN_COLOR]);
   });
 });
 

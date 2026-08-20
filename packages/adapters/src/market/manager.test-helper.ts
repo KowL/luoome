@@ -6,6 +6,8 @@ import type {
   MarketCoverage,
   MarketSnapshot,
   MarketSnapshotItem,
+  MinuteBar,
+  MinuteBarInterval,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
@@ -21,6 +23,7 @@ interface TestMarketSource {
   searchStocks?(query: string): Promise<StockSearchCandidate[]>;
   fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
   fetchIntradayMinutes?(stockId: string): Promise<readonly IntradayMinute[]>;
+  fetchMinuteBars?(stockId: string, interval: MinuteBarInterval): Promise<readonly MinuteBar[]>;
   fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
   fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
 }
@@ -148,6 +151,17 @@ const testRegistry = (
         configurationReady: true,
         execute: ({ stockId }) => fetchIntradayMinutes(stockId),
         dataAsOf: (points) => points.at(-1)?.time,
+      });
+    }
+    const fetchMinuteBars = source.fetchMinuteBars?.bind(source);
+    if (fetchMinuteBars !== undefined) {
+      bindings.push({
+        capability: 'minute-bars',
+        source: sourceId,
+        coverage: TEST_COVERAGE,
+        configurationReady: true,
+        execute: ({ stockId, interval }) => fetchMinuteBars(stockId, interval),
+        dataAsOf: (bars) => bars.at(-1)?.endedAt,
       });
     }
   }

@@ -455,6 +455,71 @@ describe('market/manager', () => {
   });
 });
 
+describe('market/manager fetchMinuteBars', () => {
+  const minuteBar = (endedAt: Date, source = 'minute-source') => ({
+    stockId: '002594.SZ',
+    interval: '1m' as const,
+    endedAt,
+    open: money(90),
+    high: money(91),
+    low: money(89),
+    close: money(90.5),
+    volume: 10_000,
+    adjustment: 'raw' as const,
+    source,
+    fetchedAt: new Date(endedAt.getTime() + 1_000),
+    completeness: 'closed' as const,
+  });
+
+  it('无显式 minute-bars capability 时拒绝，不把 intraday-minutes 冒充 OHLCV', async () => {
+    const mgr = createTestMarketDataManager({
+      primary: new StubPrimary(),
+      fallback: new StubFallback(),
+      logger: silentLogger,
+    });
+    await expect(mgr.fetchMinuteBars('002594.SZ', '1m')).rejects.toThrow(
+      'unsupported_capability: minute-bars',
+    );
+  });
+
+  it('15s TTL 按 stockId+interval 隔离；空结果不缓存并转 no_data', async () => {
+    let now = new Date('2026-08-11T07:00:00.000Z');
+    const source = {
+      name: 'minute-source',
+      calls: 0,
+      empty: false,
+      fetchQuote: () => Promise.reject(new Error('unused')),
+      fetchDailyBars: () => Promise.resolve([]),
+      fetchMinuteBars(_stockId: string, interval: '1m' | '5m') {
+        this.calls += 1;
+        return Promise.resolve(
+          this.empty
+            ? []
+            : [{ ...minuteBar(now), interval, fetchedAt: new Date(now.getTime() + 1_000) }],
+        );
+      },
+    };
+    const mgr = createTestMarketDataManager({
+      primary: source,
+      logger: silentLogger,
+      clock: () => now,
+    });
+    await mgr.fetchMinuteBars('002594.SZ', '1m');
+    now = new Date(now.getTime() + 10_000);
+    await mgr.fetchMinuteBars('002594.SZ', '1m');
+    await mgr.fetchMinuteBars('002594.SZ', '5m');
+    expect(source.calls).toBe(2);
+    now = new Date(now.getTime() + 16_000);
+    await mgr.fetchMinuteBars('002594.SZ', '1m');
+    expect(source.calls).toBe(3);
+
+    source.empty = true;
+    await expect(mgr.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow('no_data');
+    await expect(mgr.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow('no_data');
+    expect(source.calls).toBe(5);
+  });
+});
+
 describe('market/manager fetchMarketSnapshot', () => {
   const SNAPSHOT = [
     { id: '600519.SH', code: '600519', exchange: 'SH' as const, name: '贵州茅台', close: 1486.2 },

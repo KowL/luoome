@@ -3,10 +3,12 @@ import type {
   DateRange,
   IndexQuote,
   Logger,
+  MinuteBar,
+  MinuteBarInterval,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
-import { quantity as brandQuantity, money } from '@luoome/core';
+import { quantity as brandQuantity, MinuteBarSchema, money } from '@luoome/core';
 import { ZodError, z } from 'zod';
 
 import type { TushareConfig } from '../tushare/client.js';
@@ -45,6 +47,26 @@ const QuoteRowSchema = z.object({
   vol: z.number().nonnegative(),
   pre_close: z.number().positive().nullish(),
 });
+
+const MinuteBarRowSchema = z.object({
+  code: z.string().min(1),
+  freq: z.string().nullish(),
+  time: z.string().min(1),
+  open: z.number().positive(),
+  close: z.number().positive(),
+  high: z.number().positive(),
+  low: z.number().positive(),
+  vol: z.number().nonnegative(),
+  amount: z.number().nonnegative(),
+});
+
+const TUSHARE_MINUTE_FREQ: Readonly<Record<MinuteBarInterval, string>> = {
+  '1m': '1MIN',
+  '5m': '5MIN',
+  '15m': '15MIN',
+  '30m': '30MIN',
+  '60m': '60MIN',
+};
 
 const isTushareSupported = (stockCode: string): boolean => {
   const [, suffix] = stockCode.toUpperCase().trim().split('.');
@@ -174,6 +196,96 @@ export class TushareMarketAdapter {
       }),
     );
     return out;
+  }
+
+  /**
+   * A 股当日累计分钟 OHLCV：官方 rt_min_daily，单股、最多 1000 行、raw 价格，
+   * 需要独立实时分钟权限。接口只给当前交易日，不承担历史分页。
+   */
+  async fetchMinuteBars(
+    stockCode: string,
+    interval: MinuteBarInterval,
+  ): Promise<readonly MinuteBar[]> {
+    if (!isTushareSupported(stockCode)) {
+      throw new Error(`unsupported_market: ${stockCode}`);
+    }
+    const tsCode = stockCode.toUpperCase();
+    try {
+      const rows = await tushareQuery(
+        'rt_min_daily',
+        { ts_code: tsCode, freq: TUSHARE_MINUTE_FREQ[interval] },
+        this.config,
+        this.fetchImpl,
+        ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'],
+      );
+      if (rows.length > 1000) {
+        throw new Error(`partial_data: rt_min_daily exceeded 1000 rows for ${tsCode}`);
+      }
+      const fetchedAt = this.clock();
+      const parsedRows = rows.map((row) => MinuteBarRowSchema.parse(row));
+      const normalized = parsedRows.map((row) => {
+        if (row.code.toUpperCase() !== tsCode) {
+          throw new Error(`tushare parse: minute code mismatch ${row.code} != ${tsCode}`);
+        }
+        const expectedFreq = TUSHARE_MINUTE_FREQ[interval];
+        if (
+          row.freq !== undefined &&
+          row.freq !== null &&
+          row.freq.toUpperCase() !== expectedFreq
+        ) {
+          throw new Error(
+            `tushare parse: minute frequency mismatch ${row.freq} != ${expectedFreq}`,
+          );
+        }
+        const endedAt = parseTradeTime(row.time);
+        if (endedAt === undefined) {
+          throw new Error(`tushare parse: invalid minute time ${row.time}`);
+        }
+        return { row, endedAt };
+      });
+      normalized.sort((left, right) => left.endedAt.getTime() - right.endedAt.getTime());
+      const latestEndedAt = normalized.at(-1)?.endedAt;
+      const intervalMs = Number.parseInt(interval, 10) * 60_000;
+      const bars = normalized.map(
+        ({ row, endedAt }): MinuteBar =>
+          MinuteBarSchema.parse({
+            stockId: tsCode,
+            interval,
+            endedAt,
+            open: money(row.open),
+            high: money(row.high),
+            low: money(row.low),
+            close: money(row.close),
+            volume: brandQuantity(Math.round(row.vol)),
+            amount: row.amount,
+            adjustment: 'raw',
+            source: 'tushare',
+            fetchedAt,
+            completeness:
+              latestEndedAt !== undefined &&
+              endedAt.getTime() === latestEndedAt.getTime() &&
+              fetchedAt.getTime() - endedAt.getTime() < intervalMs
+                ? 'live'
+                : 'closed',
+          }),
+      );
+      this.logger.info('tushare.fetchMinuteBars ok', {
+        stockCode: tsCode,
+        interval,
+        source: 'tushare',
+        count: bars.length,
+      });
+      return bars;
+    } catch (error) {
+      const translated = translateTushareError(error);
+      this.logger.warn('tushare.fetchMinuteBars failed', {
+        stockCode: tsCode,
+        interval,
+        kind: kindOf(translated.message),
+        error: translated.message,
+      });
+      throw translated;
+    }
   }
 
   /**

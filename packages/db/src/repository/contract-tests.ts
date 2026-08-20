@@ -11,6 +11,7 @@ import {
   type Holding,
   InvariantError,
   type LimitUpLadder,
+  type MinuteBar,
   money,
   type Notification,
   type PortfolioCashFlow,
@@ -217,6 +218,26 @@ export const makeDailyBar = (
   volume: 1_000_000,
   adjustment: 'qfq',
   source: 'test',
+  ...overrides,
+});
+
+export const makeMinuteBar = (
+  stockId: string,
+  endedAt: Date,
+  overrides: Partial<MinuteBar> = {},
+): MinuteBar => ({
+  stockId,
+  interval: '1m',
+  endedAt,
+  open: money(10),
+  high: money(11),
+  low: money(9),
+  close: money(10.5),
+  volume: 10_000,
+  adjustment: 'raw',
+  source: 'tushare',
+  fetchedAt: new Date(endedAt.getTime() + 1_000),
+  completeness: 'closed',
   ...overrides,
 });
 
@@ -1612,6 +1633,73 @@ export const registerRepositoryContractTests = (
           [T2, 11],
           [T3, 10],
         ]);
+      });
+    });
+
+    describe('MinuteBarRepository', () => {
+      const M1 = new Date('2026-07-02T01:31:00.000Z');
+      const M2 = new Date('2026-07-02T01:32:00.000Z');
+      const M3 = new Date('2026-07-03T01:31:00.000Z');
+
+      it('saveMany + findInRange 按 endedAt 升序，字段完整往返', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M2, { amount: 22_000, completeness: 'live' }),
+          makeMinuteBar('stk-1', M1),
+        ]);
+        const got = await repos.minuteBar.findInRange('stk-1', '1m', M1, M2);
+        expect(got.map((bar) => bar.endedAt)).toEqual([M1, M2]);
+        expect(got[1]).toMatchObject({
+          amount: 22_000,
+          adjustment: 'raw',
+          source: 'tushare',
+          completeness: 'live',
+        });
+      });
+
+      it('同 stock/interval/endedAt upsert；不同 interval 隔离', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1),
+          makeMinuteBar('stk-1', M1, { interval: '5m', high: money(21), close: money(20) }),
+        ]);
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1, { high: money(13), close: money(12), source: 'replacement' }),
+        ]);
+        expect((await repos.minuteBar.findInRange('stk-1', '1m', M1, M1))[0]).toMatchObject({
+          close: 12,
+          source: 'replacement',
+        });
+        expect((await repos.minuteBar.findInRange('stk-1', '5m', M1, M1))[0]?.close).toBe(20);
+      });
+
+      it('latestSession 只返回最新上海交易日', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1),
+          makeMinuteBar('stk-1', M2),
+          makeMinuteBar('stk-1', M3),
+        ]);
+        expect(
+          (await repos.minuteBar.latestSession('stk-1', '1m')).map((bar) => bar.endedAt),
+        ).toEqual([M3]);
+        expect(await repos.minuteBar.latestSession('missing', '1m')).toEqual([]);
+      });
+
+      it('removeBefore 按全局保留期删除，不删除边界', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1),
+          makeMinuteBar('stk-2', M2),
+          makeMinuteBar('stk-1', M3),
+        ]);
+        expect(await repos.minuteBar.removeBefore(M2)).toBe(1);
+        expect(await repos.minuteBar.findInRange('stk-2', '1m', M2, M2)).toHaveLength(1);
+        expect(await repos.minuteBar.findInRange('stk-1', '1m', M1, M3)).toHaveLength(1);
+      });
+
+      it('拒绝 qfq MinuteBar，防止与 DailyBar 口径混用', async () => {
+        await expect(
+          repos.minuteBar.saveMany([
+            { ...makeMinuteBar('stk-1', M1), adjustment: 'qfq' } as unknown as MinuteBar,
+          ]),
+        ).rejects.toThrow();
       });
     });
 

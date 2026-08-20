@@ -1733,6 +1733,14 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect(body.data?.supported).toBe(false);
   });
 
+  it('get_stock_minute_bars（白名单）→ 200（不支持时 unavailable 合法降级）', async () => {
+    const r = await callTool('get_stock_minute_bars', { stockId: '002594.SZ' });
+    expect(r.status).toBe(200);
+    const body = (await json(r)) as { ok: boolean; data?: { status: string } };
+    expect(body.ok).toBe(true);
+    expect(body.data?.status).toBe('unavailable');
+  });
+
   it('batch_quote（白名单）→ 200', async () => {
     const r = await callTool('batch_quote', { stockIds: ['002594.SZ'] });
     expect(r.status).toBe(200);

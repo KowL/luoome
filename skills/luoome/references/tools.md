@@ -18,6 +18,11 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
 
+Market View Phase 4: `get_stock_minute_bars` returns independent OHLCV MinuteBar facts for the
+current session when a configured provider has `minute-bars` capability. It reports partial gaps,
+stale local fallback, or unavailable explicitly; historical dates are limited to retained local
+data and are never synthesized from `PriceSnapshot` or cumulative `IntradayMinute` rows.
+
 Prefer one filtered list or batch tool over repeated per-item calls. `batch_quote` is classified as external because it contacts a market source.
 Use `add_watchlist_members` for one or more manual Watchlist additions so the whole request is validated and confirmed once.
 

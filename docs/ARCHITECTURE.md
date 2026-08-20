@@ -320,7 +320,8 @@ type MarketCapability =
   | 'search'
   | 'market-snapshot'
   | 'realtime-index'
-  | 'delayed-index';
+  | 'delayed-index'
+  | 'minute-bars';
 
 interface MarketCapabilityBinding<C extends MarketCapability> {
   readonly capability: C;
@@ -344,6 +345,8 @@ Adapter manager 提供：
   Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟；
   eastmoney 实现走 `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板）
 - 指数行情严格区分 `realtime-index` 与 `delayed-index`；Tushare 日线型指数数据不能进入实时接口
+- 连续分钟 OHLCV 必须走显式 `minute-bars` capability；不得把 `intraday-minutes` 或 PriceSnapshot
+  区间查询冒充 MinuteBar，provider 不可用时由 Tool 返回 partial/unavailable
 
 `MarketDataManager` 构造时必须传入 `MarketSourceRegistry`，不存在接受 provider 宽接口的兼容
 构造路径，也不得在 Registry 之外临时实例化 Eastmoney 等隐藏来源。新增或替换来源时，在
