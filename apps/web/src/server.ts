@@ -1096,11 +1096,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           ),
         },
       );
-      ctxRef.current = {
-        ...ctxRef.current,
-        researchVault,
-        ...(researchVaultGitSync === undefined ? {} : { researchVaultGitSync }),
-      };
+      const nextContext = { ...ctxRef.current, researchVault };
+      delete nextContext.researchVaultGitSync;
+      ctxRef.current =
+        researchVaultGitSync === undefined ? nextContext : { ...nextContext, researchVaultGitSync };
       return jsonResult({ ok: true, data: { ...saved, applied: true } });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -1131,16 +1130,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.post('/api/research/remote-sync', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
     if (denied !== null) return jsonResult(denied);
-    let body: unknown = {};
-    try {
-      body = await c.req.json();
-    } catch {
-      // 空请求体使用 workflow 默认值。
-    }
-    if (typeof body === 'object' && body !== null && !Array.isArray(body)) {
-      body = { ...body, mode: 'manual' };
-    }
-    return jsonResult(await syncResearchVaultRemoteWorkflow.run(body, contextForRequest()));
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(
+      await syncResearchVaultRemoteWorkflow.run(
+        { ...body.data, mode: 'manual' },
+        contextForRequest(),
+      ),
+    );
   });
 
   app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));

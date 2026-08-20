@@ -635,6 +635,8 @@ Obsidian 账号凭证交给 luoome。Headless 不作为 fallback；未来若需�
 实现边界：
 
 - `GitResearchVaultSyncAdapter` 是独立 external port/adapter，不属于 `ResearchVaultAdapterLike`；
+- Obsidian 与 Git adapter 复用同一安全根校验；Git adapter 仍在自身 constructor 独立拒绝文件系统
+  根、用户 home、当前项目根和 `.obsidian` 保留目录，不能依赖 Obsidian adapter 先成功装配；
 - `pull_research_vault_git` 是 workflow-only Tool，不注册到通用 Tool Registry，也不通过 MCP 暴露；
 - `sync-research-vault-remote` workflow 先经 `ctx.tools.pull_research_vault_git`，成功后再经既有
   `ctx.tools.sync_research_vault` 确定性重建 SQLite 索引；Workflow 不直接调用 adapter/repository；
@@ -646,7 +648,10 @@ Obsidian 账号凭证交给 luoome。Headless 不作为 fallback；未来若需�
 
 1. 验证 Vault 本身就是 Git 工作树根、HEAD 非 detached、当前分支有 upstream，且不存在
    merge/rebase/cherry-pick/revert/bisect 等未完成操作；
-2. 用 `git status --porcelain=v1 -z --untracked-files=all` 检查 tracked/untracked 均为空；
+2. 用 `git status --porcelain=v1 -z --untracked-files=all` 检查 tracked/untracked 均为空；fetch 后
+   再用 NUL 分隔的 `diff --name-only --no-renames` 与 `ls-files --others --ignored` 比较 incoming
+   写入/删除路径和本地 ignored-untracked 路径；同路径或文件/目录祖先冲突时拒绝 fast-forward，
+   但不因无关 ignored 缓存存在而失败；
 3. remote 只允许 HTTPS、SSH 或本地路径；拒绝 HTTP、`ext::`、自定义 uploadpack、以参数符号开头
    的值以及 HTTPS URL 内嵌认证信息；
 4. 关闭交互式凭证提示、hooks、submodule recurse 和 tags 后执行显式 remote fetch；fetch 支持
@@ -657,10 +662,15 @@ Obsidian 账号凭证交给 luoome。Headless 不作为 fallback；未来若需�
 7. fast-forward 后再次确认工作树干净，随后才允许索引重建。
 
 备份写入 `$LUOOME_HOME/backups/research-vault/<vault-hash>/<backupId>.bundle`（Web 使用数据库同级
-目录），目录 `0700`、文件 `0600`。备份失败则工作树不更新；系统不自动轮转或删除备份。恢复是
-单独的人工操作：先用 `git bundle verify <bundle>`，再把 bundle clone 到新的恢复目录进行检查，
-按需复制文件或由用户明确选择 Git 恢复命令。luoome 绝不自动 reset/rebase/选边，也不把恢复动作
-混入失败处理。
+目录）。constructor 会沿 backupRoot 最近存在祖先解析真实路径，拒绝 backupRoot 等于 Vault 或位于
+Vault 内，避免创建 hooks/bundle 自己污染待同步工作树。目录 `0700`、文件 `0600`。备份失败则
+工作树不更新；系统不自动轮转或删除备份。恢复是单独的人工操作：先用
+`git bundle verify <bundle>`，再把 bundle clone 到新的恢复目录进行检查，按需复制文件或由用户
+明确选择 Git 恢复命令。luoome 绝不自动 reset/rebase/选边，也不把恢复动作混入失败处理。
+
+Web 远端同步 POST 必须是合法 JSON 对象；空体或畸形 JSON 均返回 `invalid_input`，不得进入
+external workflow。设置热更新每次都替换或显式清除 Git adapter，撤销
+`LUOOME_RESEARCH_REMOTE_SYNC=git` 后 status 和 POST 在当前进程立即变为未配置。
 
 取消或超时发生在 fetch/集成前时，本轮 `WorkflowRun` 记 `failed`，工作树不更新。开始本地
 fast-forward 后忽略取消且不设强制超时，避免 checkout 半更新；该原子步骤完成后继续索引和审计。

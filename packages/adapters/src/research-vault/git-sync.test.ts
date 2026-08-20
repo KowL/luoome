@@ -6,11 +6,12 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer, type Socket } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, parse } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -63,6 +64,36 @@ afterEach(() => {
 });
 
 describe('GitResearchVaultSyncAdapter', () => {
+  it('独立拒绝 filesystem root、home、项目根和 .obsidian 保留路径', () => {
+    const root = mkdtempSync(join(tmpdir(), 'luoome-vault-git-roots-'));
+    roots.push(root);
+    const reserved = join(root, '.obsidian');
+    mkdirSync(reserved);
+    const backupRoot = join(root, 'backups');
+
+    for (const vaultPath of [parse(process.cwd()).root, homedir(), process.cwd(), reserved]) {
+      expect(() => new GitResearchVaultSyncAdapter({ vaultPath, backupRoot })).toThrow(
+        'too broad or reserved',
+      );
+    }
+  });
+
+  it('拒绝等于 Vault、位于 Vault 内或经现存 symlink 落入 Vault 的 backup root', () => {
+    const fixture = createFixture();
+    const vaultLink = join(fixture.root, 'vault-link');
+    symlinkSync(fixture.vault, vaultLink, 'dir');
+
+    for (const backupRoot of [
+      fixture.vault,
+      join(fixture.vault, 'not-created', 'backups'),
+      join(vaultLink, 'not-created', 'backups'),
+    ]) {
+      expect(
+        () => new GitResearchVaultSyncAdapter({ vaultPath: fixture.vault, backupRoot }),
+      ).toThrow('backup root must be outside vault');
+    }
+  });
+
   it('使用真实 Git 创建 0600 bundle 备份并仅 fast-forward 更新干净工作树', async () => {
     const fixture = createFixture();
     publish(fixture.publisher, 'remote.md', '# Remote\n');
@@ -105,6 +136,51 @@ describe('GitResearchVaultSyncAdapter', () => {
     expect(result).toMatchObject({ ok: false, reason: 'dirty-worktree', recoverable: true });
     expect(git(fixture.vault, ['rev-parse', 'HEAD'])).toBe(before);
     expect(readFileSync(join(fixture.vault, 'local-secret.md'), 'utf8')).toBe('do not touch');
+  });
+
+  it('远端新增路径与本地 ignored secret 冲突时保留本地文件且不改变 HEAD', async () => {
+    const fixture = createFixture();
+    writeFileSync(join(fixture.vault, '.git', 'info', 'exclude'), 'Research/secret.md\n');
+    writeFileSync(join(fixture.vault, 'Research', 'secret.md'), 'local secret');
+    writeFileSync(join(fixture.publisher, 'Research', 'secret.md'), 'remote content');
+    git(fixture.publisher, ['add', 'Research/secret.md']);
+    git(fixture.publisher, ['commit', '-m', 'publish conflicting secret']);
+    git(fixture.publisher, ['push', 'origin', 'main']);
+    const before = git(fixture.vault, ['rev-parse', 'HEAD']);
+    const adapter = new GitResearchVaultSyncAdapter({
+      vaultPath: fixture.vault,
+      backupRoot: fixture.backupRoot,
+    });
+
+    const result = await adapter.pull({ timeoutMs: 10_000 });
+
+    expect(result).toMatchObject({ ok: false, reason: 'dirty-worktree', recoverable: true });
+    expect(git(fixture.vault, ['rev-parse', 'HEAD'])).toBe(before);
+    expect(readFileSync(join(fixture.vault, 'Research', 'secret.md'), 'utf8')).toBe('local secret');
+    expect(
+      readdirSync(fixture.backupRoot, { recursive: true }).some((entry) =>
+        String(entry).endsWith('.bundle'),
+      ),
+    ).toBe(false);
+  });
+
+  it('无关 ignored 缓存不会阻止远端 fast-forward', async () => {
+    const fixture = createFixture();
+    writeFileSync(join(fixture.vault, '.git', 'info', 'exclude'), '.cache/\n');
+    mkdirSync(join(fixture.vault, '.cache'));
+    writeFileSync(join(fixture.vault, '.cache', 'local.bin'), 'cache');
+    publish(fixture.publisher, 'remote.md', '# Remote\n');
+    const adapter = new GitResearchVaultSyncAdapter({
+      vaultPath: fixture.vault,
+      backupRoot: fixture.backupRoot,
+    });
+
+    expect(await adapter.pull({ timeoutMs: 10_000 })).toMatchObject({
+      ok: true,
+      status: 'updated',
+    });
+    expect(readFileSync(join(fixture.vault, '.cache', 'local.bin'), 'utf8')).toBe('cache');
+    expect(readFileSync(join(fixture.vault, 'Research', 'remote.md'), 'utf8')).toBe('# Remote\n');
   });
 
   it('本地和 upstream 分叉时停止，不自动 reset、rebase、合并或创建备份', async () => {

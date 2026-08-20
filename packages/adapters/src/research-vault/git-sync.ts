@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, realpathSync, renameSync, unlinkSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import type {
   ResearchVaultGitPullFailureReason,
@@ -9,10 +9,13 @@ import type {
   ResearchVaultGitSyncAdapterLike,
 } from '@luoome/core';
 
+import { resolveBackupRootOutsideVault, resolveSafeVaultRoot } from './path-safety.js';
+
 interface GitCommandResult {
   readonly status: 'ok' | 'error' | 'spawn-error' | 'timeout' | 'cancelled';
   readonly exitCode?: number;
   readonly stdout: string;
+  readonly stdoutTruncated?: boolean;
 }
 
 interface RunGitOptions {
@@ -44,6 +47,7 @@ const runGit = (
     const detached = process.platform !== 'win32';
     const stdout: Buffer[] = [];
     let stdoutSize = 0;
+    let stdoutTruncated = false;
     let stopReason: 'timeout' | 'cancelled' | undefined;
     let settled = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
@@ -88,6 +92,7 @@ const runGit = (
     if (options.timeoutMs > 0) timeout = setTimeout(() => stop('timeout'), options.timeoutMs);
     options.signal?.addEventListener('abort', cancel, { once: true });
     child.stdout.on('data', (chunk: Buffer) => {
+      if (stdoutSize + chunk.length > MAX_CAPTURE_BYTES) stdoutTruncated = true;
       stdoutSize = capture(stdout, stdoutSize, chunk);
     });
     // stderr 故意不收集：Git remote 诊断可能包含带凭证的 URL。
@@ -103,6 +108,7 @@ const runGit = (
         status: code === 0 ? 'ok' : 'error',
         ...(code === null ? {} : { exitCode: code }),
         stdout: text,
+        ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
       });
     });
   });
@@ -115,6 +121,15 @@ const failure = (
 ): ResearchVaultGitPullResult => ({ ok: false, reason, message, recoverable });
 
 const cleanOutput = (value: string): string => value.replaceAll('\0', '').trim();
+
+const nulPaths = (value: string): readonly string[] =>
+  value
+    .split('\0')
+    .filter((path) => path.length > 0)
+    .map((path) => path.replace(/\/$/, ''));
+
+const pathsConflict = (left: string, right: string): boolean =>
+  left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 
 const remoteIsSafe = (remoteUrl: string): boolean => {
   if (/\r|\n|\0/.test(remoteUrl) || remoteUrl.startsWith('-') || remoteUrl.startsWith('ext::')) {
@@ -161,8 +176,8 @@ export class GitResearchVaultSyncAdapter implements ResearchVaultGitSyncAdapterL
   private readonly gitBin: string;
 
   constructor(options: GitResearchVaultSyncOptions) {
-    this.vaultRoot = realpathSync(options.vaultPath);
-    this.backupRoot = resolve(options.backupRoot);
+    this.vaultRoot = resolveSafeVaultRoot(options.vaultPath);
+    this.backupRoot = resolveBackupRootOutsideVault(this.vaultRoot, options.backupRoot);
     this.hooksRoot = join(this.backupRoot, '.disabled-hooks');
     this.gitBin = options.gitBin ?? 'git';
   }
@@ -228,6 +243,43 @@ export class GitResearchVaultSyncAdapter implements ResearchVaultGitSyncAdapterL
     renameSync(temporary, target);
     chmodSync(target, 0o600);
     return backupId;
+  }
+
+  private async ignoredPathsConflictWithIncoming(
+    beforeHead: string,
+    upstreamHead: string,
+    timeoutMs: number,
+  ): Promise<ResearchVaultGitPullResult | null> {
+    const incoming = await this.command(
+      ['diff', '--name-only', '--no-renames', '-z', beforeHead, upstreamHead, '--'],
+      { timeoutMs, cancellable: false },
+    );
+    const ignored = await this.command(
+      ['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--'],
+      { timeoutMs, cancellable: false },
+    );
+    if (
+      incoming.status !== 'ok' ||
+      ignored.status !== 'ok' ||
+      incoming.stdoutTruncated === true ||
+      ignored.stdoutTruncated === true
+    ) {
+      return failure(
+        'integrate-failed',
+        '无法验证 ignored 本地路径与远端变更是否冲突，工作树未更新',
+        false,
+      );
+    }
+    const incomingPaths = nulPaths(incoming.stdout);
+    const ignoredPaths = nulPaths(ignored.stdout);
+    if (
+      incomingPaths.some((incomingPath) =>
+        ignoredPaths.some((ignoredPath) => pathsConflict(incomingPath, ignoredPath)),
+      )
+    ) {
+      return failure('dirty-worktree', '远端变更与本地 ignored 路径冲突，已停止同步', true);
+    }
+    return null;
   }
 
   async pull(input: {
@@ -368,6 +420,13 @@ export class GitResearchVaultSyncAdapter implements ResearchVaultGitSyncAdapterL
         if (remoteBehind.status === 'ok') return { ok: true, status: 'up-to-date' };
         return failure('diverged', 'Vault 本地分支与 upstream 已分叉，拒绝自动合并', false);
       }
+
+      const ignoredConflict = await this.ignoredPathsConflictWithIncoming(
+        beforeHead,
+        upstreamHead,
+        commandTimeoutMs,
+      );
+      if (ignoredConflict !== null) return ignoredConflict;
 
       const backupId = await this.createBackup(commandTimeoutMs);
       if (backupId === null) {

@@ -853,6 +853,76 @@ describe('Research Vault 设置 API', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('保存关闭远端 opt-in 后清除旧 Git adapter，status 和 POST 立即拒绝', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-vault-remote-disable-'));
+    const vaultPath = join(dir, 'Investment Vault');
+    let pulls = 0;
+    try {
+      mkdirSync(join(vaultPath, 'Research'), { recursive: true });
+      const store = new ResearchVaultSettingsStore(
+        { LUOOME_HOME: dir },
+        { secretPath: join(dir, '.env') },
+      );
+      const base = await buildTestContext();
+      const settingsApp = createWebApp(
+        {
+          ...base,
+          researchVaultGitSync: {
+            name: 'previously-enabled-git',
+            provider: 'git',
+            pull: async () => {
+              pulls += 1;
+              return { ok: true, status: 'up-to-date' };
+            },
+          },
+        },
+        {
+          researchVaultSettingsStore: store,
+          exposeWrite: true,
+          exposeExternal: true,
+        },
+      );
+      expect(
+        await (
+          await settingsApp.fetch(new Request('http://test/api/research/remote-sync/status'))
+        ).json(),
+      ).toMatchObject({ ok: true, data: { configured: true, provider: 'git' } });
+
+      const saved = await settingsApp.fetch(
+        new Request('http://test/api/settings/research-vault', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            vaultPath,
+            researchRoot: 'Research',
+            managedRoot: 'Research/Luoome',
+            vaultId: 'test-vault',
+            maxTextMb: 10,
+            maxAttachmentMb: 100,
+          }),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      expect(
+        await (
+          await settingsApp.fetch(new Request('http://test/api/research/remote-sync/status'))
+        ).json(),
+      ).toEqual({ ok: true, data: { configured: false } });
+
+      const sync = await settingsApp.fetch(
+        new Request('http://test/api/research/remote-sync', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://test' },
+          body: '{}',
+        }),
+      );
+      expect(sync.status).toBe(403);
+      expect(pulls).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Research Vault 远端同步 API', () => {
@@ -945,6 +1015,40 @@ describe('Research Vault 远端同步 API', () => {
       },
     });
     expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('畸形 JSON 返回 400 且绝不调用 pull', async () => {
+    let pulls = 0;
+    const base = await buildTestContext();
+    const target = createWebApp(
+      {
+        ...base,
+        researchVault: vault,
+        researchVaultGitSync: {
+          ...gitSync,
+          pull: async () => {
+            pulls += 1;
+            return { ok: true, status: 'up-to-date' };
+          },
+        },
+      },
+      { exposeWrite: true, exposeExternal: true },
+    );
+
+    const response = await target.fetch(
+      new Request('http://test/api/research/remote-sync', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{malformed',
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input', message: '请求体必须是 JSON 对象' },
+    });
+    expect(pulls).toBe(0);
   });
 });
 

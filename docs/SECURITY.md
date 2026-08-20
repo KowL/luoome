@@ -191,8 +191,12 @@ Obsidian Headless fallback。它默认关闭；只有 `LUOOME_RESEARCH_REMOTE_SY
 
 安全协议：
 
+- Git adapter 不依赖 Obsidian adapter 的装配结果，自身拒绝文件系统根、用户 home、当前项目根和
+  `.obsidian` 保留目录；设置热更新撤销 Git opt-in 时立即清除旧 adapter；
 - pull 前和 fetch 后都要求 tracked/untracked 工作树完全干净；detached HEAD、缺 upstream、未完成
   merge/rebase/cherry-pick/revert/bisect、分叉或冲突均停止；
+- ignored 文件不作为普通 dirty 状态一刀切；fast-forward 前用 NUL 分隔路径比较 incoming 变更与
+  ignored-untracked 文件，只有同路径或文件/目录祖先冲突才停止，且不改变 HEAD；
 - 只执行显式 remote fetch 和本地 `merge --ff-only`；禁止自动 clone、commit、push、reset、rebase、
   选边或冲突解决；hooks、submodule recurse、tags 和交互式凭证提示关闭；
 - remote 只接受 HTTPS、SSH 或本地路径；拒绝 HTTP、remote helper `ext::`、自定义 uploadpack 和
@@ -201,8 +205,10 @@ Obsidian Headless fallback。它默认关闭；只有 `LUOOME_RESEARCH_REMOTE_SY
   Tool 输出、WorkflowRun 或日志；状态接口只返回是否配置和 provider；
 - fetch 支持超时与取消，并终止整个 Git 子进程组。进入本地 fast-forward 后不响应取消或强制
   超时，以免工作树停在半更新状态；
-- fast-forward 前创建 Git bundle；目录权限 `0700`、文件 `0600`。备份失败则不更新，备份不自动
-  删除。恢复必须先 `git bundle verify`，在新的恢复目录检查后由用户人工决定，不自动 reset；
+- fast-forward 前创建 Git bundle；backupRoot 按最近存在祖先解析真实路径且必须位于 Vault 外，
+  防止备份本身污染工作树。目录权限 `0700`、文件 `0600`。备份失败则不更新，备份不自动删除。
+  恢复必须先 `git bundle verify`，在新的恢复目录检查后由用户人工决定，不自动 reset；
+- Web POST 只接受合法 JSON 对象；畸形或空请求体在进入 external workflow 前返回 `invalid_input`；
 - Git 成功后仍以 Vault 文件为权威来源，通过既有 `sync_research_vault` 重建索引。索引失败记
   `partial`；Git 安全边界、取消或超时失败记 `failed`；成功记 `succeeded`。WorkflowRun 只保留
   provider 状态、计数和 opaque backupId。

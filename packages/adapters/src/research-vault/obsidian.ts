@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { constants, promises as fs, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, dirname, extname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { constants, promises as fs } from 'node:fs';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 
 import type { ResearchVaultAdapterLike, ResearchVaultEntry } from '@luoome/core';
+
+import { resolveSafeVaultRoot } from './path-safety.js';
 
 const hash = (data: Uint8Array | string): string => createHash('sha256').update(data).digest('hex');
 
@@ -51,18 +52,7 @@ export class ObsidianVaultAdapter implements ResearchVaultAdapterLike {
   private readonly maxAttachmentBytes: number;
 
   constructor(options: ObsidianVaultOptions) {
-    if (!isAbsolute(options.vaultPath)) throw new Error('vault path must be absolute');
-    this.root = realpathSync(options.vaultPath);
-    const filesystemRoot = parse(this.root).root;
-    const currentProject = realpathSync(process.cwd());
-    if (
-      this.root === filesystemRoot ||
-      this.root === realpathSync(homedir()) ||
-      this.root === currentProject ||
-      basename(this.root) === '.obsidian'
-    ) {
-      throw new Error('vault path is too broad or reserved');
-    }
+    this.root = resolveSafeVaultRoot(options.vaultPath);
 
     this.researchRoot = safeRelative(options.researchRoot ?? 'Research');
     this.managedRoot = safeRelative(options.managedRoot ?? 'Research/Luoome');
