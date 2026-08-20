@@ -65,11 +65,26 @@ export const GetStrategyReliabilitySummaryOutput = z.object({
     availableCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
     coverageRatio: z.number().min(0).max(1),
+    fallbackRuns: z.number().int().nonnegative(),
+    providers: z.record(z.string(), z.number().int().nonnegative()),
   }),
   observations: z.object({
     runsWithObservations: z.number().int().nonnegative(),
     completed: z.number().int().nonnegative(),
     pending: z.number().int().nonnegative(),
+    baselines: z.object({
+      available: z.number().int().nonnegative(),
+      unavailable: z.number().int().nonnegative(),
+      providers: z.record(z.string(), z.number().int().nonnegative()),
+    }),
+    byHorizon: z.record(
+      z.enum(['t1', 't3', 't5', 't20']),
+      z.object({
+        created: z.number().int().nonnegative(),
+        completed: z.number().int().nonnegative(),
+        pending: z.number().int().nonnegative(),
+      }),
+    ),
   }),
   insight: z.object({
     factsOnly: z.number().int().nonnegative(),
@@ -102,6 +117,11 @@ export const GetStrategyReliabilitySummaryOutput = z.object({
       maxMs: z.number().nonnegative(),
     }),
   ),
+  observationTarget: z.object({
+    targetTradingDays: z.number().int().positive(),
+    reached: z.boolean(),
+    blockers: z.array(z.string()),
+  }),
   gate: z.object({
     targetTradingDays: z.number().int().positive(),
     ready: z.boolean(),
@@ -111,7 +131,7 @@ export const GetStrategyReliabilitySummaryOutput = z.object({
 
 export const getStrategyReliabilitySummaryTool = defineTool({
   name: 'get_strategy_reliability_summary',
-  description: '汇总 strategy-daily-cycle 的真实运行审计，生成 30 个交易日可靠性门禁证据',
+  description: '汇总 strategy-daily-cycle 的真实运行审计；样本目标独立于生产可靠性门禁',
   sideEffect: 'read',
   input: GetStrategyReliabilitySummaryInput,
   output: GetStrategyReliabilitySummaryOutput,
@@ -170,8 +190,25 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       requestedCount: 0,
       availableCount: 0,
       failedCount: 0,
+      fallbackRuns: 0,
     };
-    const observations = { runsWithObservations: 0, completed: 0, pending: 0 };
+    const checkpointProviders = new Map<string, number>();
+    const observationBaselineProviders = new Map<string, number>();
+    const observationByHorizon = Object.fromEntries(
+      (['t1', 't3', 't5', 't20'] as const).map((horizon) => [
+        horizon,
+        { created: 0, completed: 0, pending: 0 },
+      ]),
+    ) as Record<
+      't1' | 't3' | 't5' | 't20',
+      { created: number; completed: number; pending: number }
+    >;
+    const observations = {
+      runsWithObservations: 0,
+      completed: 0,
+      pending: 0,
+      baselines: { available: 0, unavailable: 0 },
+    };
     const insight = { factsOnly: 0, unavailable: 0 };
     const notifications = { failed: 0, runsWithFailure: 0 };
     const providerErrors = new Map<string, number>();
@@ -237,6 +274,13 @@ export const getStrategyReliabilitySummaryTool = defineTool({
         if ((numberValue(checkpoint.coverageRatio) ?? 0) < 0.98) {
           checkpoints.belowAcceptance += 1;
         }
+        if (checkpoint.fallbackUsed === true) checkpoints.fallbackRuns += 1;
+        if (Array.isArray(checkpoint.providers)) {
+          for (const provider of checkpoint.providers) {
+            if (typeof provider !== 'string') continue;
+            checkpointProviders.set(provider, (checkpointProviders.get(provider) ?? 0) + 1);
+          }
+        }
       }
 
       const observation = recordValue(outputSummary?.observations);
@@ -244,6 +288,42 @@ export const getStrategyReliabilitySummaryTool = defineTool({
         observations.runsWithObservations += 1;
         observations.completed += Math.max(0, Math.floor(numberValue(observation.completed) ?? 0));
         observations.pending += Math.max(0, Math.floor(numberValue(observation.pending) ?? 0));
+        const baselines = recordValue(observation.baselines);
+        observations.baselines.available += Math.max(
+          0,
+          Math.floor(numberValue(baselines?.available) ?? 0),
+        );
+        observations.baselines.unavailable += Math.max(
+          0,
+          Math.floor(numberValue(baselines?.unavailable) ?? 0),
+        );
+        const baselineProviders = recordValue(baselines?.providers);
+        if (baselineProviders !== undefined) {
+          for (const [provider, count] of Object.entries(baselineProviders)) {
+            const value = numberValue(count);
+            if (value === undefined || value < 0) continue;
+            observationBaselineProviders.set(
+              provider,
+              (observationBaselineProviders.get(provider) ?? 0) + Math.floor(value),
+            );
+          }
+        }
+        const byHorizon = recordValue(observation.byHorizon);
+        for (const horizon of ['t1', 't3', 't5', 't20'] as const) {
+          const row = recordValue(byHorizon?.[horizon]);
+          observationByHorizon[horizon].created += Math.max(
+            0,
+            Math.floor(numberValue(row?.created) ?? 0),
+          );
+          observationByHorizon[horizon].completed += Math.max(
+            0,
+            Math.floor(numberValue(row?.completed) ?? 0),
+          );
+          observationByHorizon[horizon].pending += Math.max(
+            0,
+            Math.floor(numberValue(row?.pending) ?? 0),
+          );
+        }
       }
       if (outputSummary?.insightProvider === 'facts-only') insight.factsOnly += 1;
       if (
@@ -332,12 +412,16 @@ export const getStrategyReliabilitySummaryTool = defineTool({
         ]),
     );
     const blockers: string[] = [];
-    if (tradingDays.size < input.targetTradingDays) blockers.push('trading-days-below-target');
+    if (productionRuns.length === 0) blockers.push('no-production-cycles');
+    const observationTargetBlockers: string[] = [];
+    if (tradingDays.size < input.targetTradingDays) {
+      observationTargetBlockers.push('trading-days-below-target');
+    }
     if (
       scheduleTradingDayKeys.size > 1 &&
       [...scheduleTradingDayKeys.values()].some((days) => days.size < input.targetTradingDays)
     ) {
-      blockers.push('schedule-days-below-target');
+      observationTargetBlockers.push('schedule-days-below-target');
     }
     if (leases.leaseLost > 0) blockers.push('lease-lost');
     if (checkpoints.belowAcceptance > 0) blockers.push('checkpoint-below-acceptance');
@@ -349,6 +433,7 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       blockers.push('observation-audit-missing');
     }
     if (observations.pending > 0) blockers.push('observation-pending');
+    if (observations.baselines.unavailable > 0) blockers.push('observation-baseline-unavailable');
     if (notifications.failed > 0) blockers.push('notification-failed');
     if (statuses.running > 0) blockers.push('cycle-running');
     if (statuses.failed > 0) blockers.push('cycle-failed');
@@ -369,8 +454,23 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       statuses,
       publications,
       leases,
-      checkpoints: { ...checkpoints, coverageRatio: Math.min(1, Math.max(0, coverageRatio)) },
-      observations,
+      checkpoints: {
+        ...checkpoints,
+        coverageRatio: Math.min(1, Math.max(0, coverageRatio)),
+        providers: Object.fromEntries(
+          [...checkpointProviders].sort(([left], [right]) => left.localeCompare(right)),
+        ),
+      },
+      observations: {
+        ...observations,
+        baselines: {
+          ...observations.baselines,
+          providers: Object.fromEntries(
+            [...observationBaselineProviders].sort(([left], [right]) => left.localeCompare(right)),
+          ),
+        },
+        byHorizon: observationByHorizon,
+      },
       insight,
       notifications,
       providerErrors: Object.fromEntries(
@@ -379,6 +479,11 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       scheduleDayDuplicates,
       phaseDurations,
       providerLatencies,
+      observationTarget: {
+        targetTradingDays: input.targetTradingDays,
+        reached: observationTargetBlockers.length === 0,
+        blockers: observationTargetBlockers,
+      },
       gate: {
         targetTradingDays: input.targetTradingDays,
         ready: blockers.length === 0,

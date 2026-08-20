@@ -234,7 +234,7 @@
   才能投影；complete/partial/failed、可信空结果、来源隔离和同一 producerRun 幂等语义已接入
   SQLite/in-memory、Tool、workflow、Web/API/UI 与测试。
 
-**当前交付切片**（2026-08-14）：
+**当前交付切片**（2026-08-20）：
 
 1. **S0 当前改动收口 ✅**：publication/`dataAsOf` 安全修复、策略模板升级、replay 汇总与
    Web 历史评估入口已完成；
@@ -245,6 +245,8 @@
    已补上 workflow 进程中断后的 stale running 审计收敛、生产日循环显式同步并审计
    `000300.SH:qfq:daily:v1` benchmark，以及 50 张表的 Drizzle/SQLite
    schema drift 契约（逐表列与显式索引）；剩余跨交易日 P50/P95/max 样本；
+   本轮再补 schedule/data 有界运营参数、数据准备后/发布后/下游副作用前 fencing 复核、实际
+   provider/baseline/fallback 与 T+1/T+3/T+5/T+20 审计字段，并提供可重复运维 Runbook；
    非只读 Tool 的 JSONL audit log 已接入 CLI/MCP/TUI/Web 四个生产入口，文件权限、元数据审计和 Advice
    prompt-injection 清理均有测试；Tool 的 input issues、InvariantError、handler 和 output schema
    错误出口统一脱敏；release checklist 已完成逐项复核，但不改变 S3 生产观测要求。
@@ -263,15 +265,16 @@
 5. **S3 生产观测 ⏳**：按真实开市日持续记录 schedule、lease、checkpoint、publication、观察补全、
    AI 降级和通知事实；不设固定交易日数量的完成门禁。
 
-**未关闭项分类（2026-08-14）**：
+**未关闭项分类（2026-08-20）**：
 
 - **真实运行观测**：S3 当前已有 2 个正式真实交易日，后续继续积累真实运行样本；样本数量不再作为固定完成门禁。
 - **真实数据门禁**：v0.10 更长历史、持续快照审计和缺失日期重放必须等待对应 PIT universe 在真实交易日沉淀。
 - **独立产品/数据决策**：天梯 Strategy DSL 的当前/正式日与 PIT replay 已冻结并实现；跨交易日快照仍需
-  持续积累，炸板/断板历史仍需可审计数据源；两项都不允许用当前快照、情绪接口或 mock 推断。
+  持续积累。炸板/断板定义、审计信封和候选源门禁已于 2026-08-15 冻结，但真实凭据/修订验收尚未
+  通过，字段保持未注册；两项都不允许用当前快照、情绪接口、rolling 空响应或 mock 推断。
 - **安全立项**：Web 账户级鉴权尚未定义，当前 `X-Luoome-Account-Id` 只解决 request-scoped 串账户，不能作为认证。
 
-**下一步开发顺序（2026-08-14 决策）**：
+**下一步开发顺序（2026-08-20 决策）**：
 
 1. **P0 真实数据验收（基础 smoke 已完成）**：真实 Tencent 指数 `day` 口径已接入；31 个交易日
    benchmark、账户现金流与交易事实的 SQLite 文件库，以及双账户/拆股语义 smoke 已通过。随后用
@@ -314,7 +317,7 @@ failed=0；8/13 的 PIT snapshot 为盘中固化版本且 vintage=unavailable。
 `X-Luoome-Account-Id` 形成 request-scoped context，并发 tab 不再共享可变账户上下文。该机制
 只解决上下文串扰，不替代账户级鉴权，后者仍需独立产品决策。
 
-**执行决策（2026-08-14）**：当前冻结横向功能扩张，开发顺序固定为“真实运行证据 → v0.10 验收收口
+**执行决策（2026-08-20）**：当前冻结横向功能扩张，开发顺序固定为“真实运行证据 → v0.10 验收收口
 → 新需求立项”。S3 作为持续观测项推进，允许在观察期间修复可靠性缺陷、补测试/观测/文档和重跑
 已有真实 PIT 数据；缺数据必须保留 `not_found` / `partial` / `failed`，不得使用 mock 或当前快照补齐。
 R5 早期突破 v2、完整迁移生成、Web 账户级鉴权分别等待用户确认或产品决策，不与当前门禁并行扩大。

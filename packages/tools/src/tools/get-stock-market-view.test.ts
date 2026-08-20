@@ -458,7 +458,7 @@ describe('tool/get_stock_market_view', () => {
     expect(res.data.markers.every((marker) => marker.href.length > 0)).toBe(true);
   });
 
-  it('个股行情返回天梯事实；上游历史可用时生成涨停 marker', async () => {
+  it('个股行情当天读取 manager、历史读取 PIT，并生成涨停 marker', async () => {
     const entry = {
       code: '002594',
       name: '比亚迪',
@@ -476,17 +476,11 @@ describe('tool/get_stock_market_view', () => {
       board: 'main_board' as const,
     };
     const requestedDates: string[] = [];
-    let inFlight = 0;
-    let maxInFlight = 0;
     const manager: LimitUpLadderManagerLike = {
       name: 'limit-up-ladder',
       sources: ['eastmoney'],
       fetchLadder: async (query) => {
         requestedDates.push(query.date);
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        inFlight -= 1;
         return {
           ok: true,
           data: {
@@ -504,21 +498,38 @@ describe('tool/get_stock_market_view', () => {
       compareLadder: async () => ({ ok: false }),
     };
     const base = await buildCtx(new StubMarketAdapter(), () => NOW);
+    await base.repos.limitUpLadderSnapshot.save({
+      date: YESTERDAY,
+      total: 1,
+      maxLevel: 1,
+      source: 'eastmoney',
+      levels: [
+        {
+          level: 1,
+          name: '首板',
+          count: 1,
+          stocks: [{ ...entry, ladderLevel: 1, limitUpDate: YESTERDAY }],
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-07-20T07:00:00.000Z'),
+    });
     const ctx = { ...base, limitUpLadder: manager };
     const res = await callView(ctx, {});
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.data.limitUp.recent[0]).toMatchObject({ date: TODAY, ladderLevel: 2 });
+    expect(res.data.limitUp.recent[1]).toMatchObject({ date: YESTERDAY, ladderLevel: 1 });
+    expect(res.data.limitUp).toMatchObject({
+      status: 'partial',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      source: 'eastmoney',
+      dataAsOf: NOW,
+      fetchedAt: NOW,
+    });
     expect(res.data.markers.some((marker) => marker.factKind === 'limit-up')).toBe(true);
-    expect(requestedDates).toHaveLength(30);
-    expect(
-      requestedDates.every((date) => {
-        const day = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-        return day !== 0 && day !== 6;
-      }),
-    ).toBe(true);
-    expect(maxInFlight).toBeGreaterThan(1);
-    expect(maxInFlight).toBeLessThanOrEqual(4);
+    expect(requestedDates).toEqual([TODAY]);
+    expect(res.data.limitUp.missingDates).toHaveLength(28);
   });
 
   it('granularity=week：输出周 K 聚合，indicators 仍按日级 candles 计算', async () => {

@@ -47,6 +47,14 @@ export const CompleteStrategyObservationsOutput = z.object({
   completed: z.number().int().nonnegative(),
   pending: z.number().int().nonnegative(),
   completedIds: z.array(z.string()),
+  byHorizon: z.record(
+    z.enum(['t1', 't3', 't5', 't20']),
+    z.object({
+      scanned: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      pending: z.number().int().nonnegative(),
+    }),
+  ),
 });
 
 export const completeStrategyObservationsTool = defineTool({
@@ -125,6 +133,15 @@ export const completeStrategyObservationsTool = defineTool({
       completed: completedIds.length,
       pending: pending.length - completedIds.length,
       completedIds,
+      byHorizon: Object.fromEntries(
+        (['t1', 't3', 't5', 't20'] as const).map((horizon) => {
+          const rows = pending.filter((observation) => observation.horizon === horizon);
+          const completed = rows.filter((observation) =>
+            completedIds.includes(observation.id),
+          ).length;
+          return [horizon, { scanned: rows.length, completed, pending: rows.length - completed }];
+        }),
+      ),
     };
   },
 });

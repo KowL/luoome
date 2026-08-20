@@ -216,7 +216,7 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(providerCalls).toBe(1);
     expect(result.data.members[0]).toMatchObject({
       status: 'available',
-      provider: 'fake-market',
+      provider: 'stale-fixture',
       latestBarDate: freshBar.date,
     });
   });
@@ -288,6 +288,55 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.checkpoint.vintageStatus).toBe('unavailable');
+  });
+
+  it('按实际 DailyBar source 审计 provider fallback，不把 manager 名称当作数据源', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          name: 'manager',
+          marketSourceStatus: () => [
+            {
+              dataset: 'daily-bars' as const,
+              source: 'primary-source',
+              coverage: ['CN_A_SHARES_SH_SZ' as const],
+              capabilityEnabled: true,
+              configurationReady: true,
+            },
+            {
+              dataset: 'daily-bars' as const,
+              source: 'fallback-source',
+              coverage: ['CN_A_SHARES_SH_SZ' as const],
+              capabilityEnabled: true,
+              configurationReady: true,
+            },
+          ],
+          fetchDailyBars: () =>
+            Promise.resolve([
+              { ...bar(new Date('2026-08-12T00:00:00.000Z')), source: 'fallback-source' },
+            ]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      { strategyId: 'strategy-1', asOf: now, stockIds: ['600519.SH'] },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.members[0]?.provider).toBe('fallback-source');
+    expect(result.data.checkpoint.providerStatuses[0]).toMatchObject({
+      provider: 'fallback-source',
+      fallbackUsed: true,
+    });
   });
 
   it('provider timeout is persisted as a stable error kind', async () => {

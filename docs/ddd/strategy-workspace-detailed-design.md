@@ -1,12 +1,12 @@
 # 策略工作台（Strategy Workspace）详细设计
 
 > 状态：Phase A/B/C 已实施；Phase C 保持“草案—试算—校验—发布”逐步确认
-> 日期：2026-08-01
+> 日期：2026-08-20
 > 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、[Web 对话助手设计](./web-chat-design.md)
 > 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/tools/src/tools/strategy-definition.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
-> 2026-08-14 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线，当前发布资格以 Summary V4、acceptance 和 publication 为准。
+> 2026-08-20 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线，当前发布资格以 Summary V4、acceptance 和 publication 为准。schedule/data 运营参数、跨阶段 fencing 检查、实际 provider/baseline 与 T+1/T+3/T+5/T+20 审计已接入；跨交易日真实性能分布和 R5 发布后的 T+20 仍是观察项。
 
 ## 1. 设计结论
 
@@ -1189,8 +1189,8 @@ Phase A 完成必须同时满足：
 
 以下内容已确定方向，但在进入对应 Phase 前仍需独立实施设计：
 
-1. StrategySchedule 已具备 cron、时区、节假日、补跑和 fencing ownership；剩余是跨实例真实运行证据与运营参数复核；
-2. StrategySignal baseline price 的具体交易时点与 provider fallback 的真实样本审计；
+1. StrategySchedule 已具备 cron、时区、节假日、补跑和 fencing ownership；参数边界与跨阶段续租已落地，剩余是跨实例真实运行证据和跨交易日性能分布；
+2. StrategySignal baseline price 的具体交易时点与 provider fallback 的真实样本审计已接入运行汇总，仍需在真实生产样本中持续观察可用率与来源切换；
 3. 大规模 result 查询达到瓶颈后的索引或物化策略；
 4. 严格回测所需的费用、滑点、停牌/涨跌停可交易性、公司行动和 evaluator code identity。
 
