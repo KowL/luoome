@@ -182,6 +182,34 @@ stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。
 - logger 自动脱敏：`Authorization: Bearer xxx` → `Authorization: Bearer ***`、`sk-...` → `sk-***`、飞书 webhook URL → `.../***`
 - 报告脱敏：持仓金额 / 数量可显示，成本价可选隐藏（`LUOOME_HIDE_COST=true`）
 
+## Research Vault Git 远端同步
+
+Research Vault Phase F 只提供独立 Git workflow，不把网络同步混进 Vault Adapter，也不实现
+Obsidian Headless fallback。它默认关闭；只有 `LUOOME_RESEARCH_REMOTE_SYNC=git` 才装配，Web
+还必须同时开启 `LUOOME_EXPOSE_WRITE=true`、`LUOOME_EXPOSE_EXTERNAL=true`，通过同源 Origin
+检查并由用户在确认框明确触发。真正执行 pull 的 Tool 是 workflow-only，不进入通用 registry/MCP。
+
+安全协议：
+
+- pull 前和 fetch 后都要求 tracked/untracked 工作树完全干净；detached HEAD、缺 upstream、未完成
+  merge/rebase/cherry-pick/revert/bisect、分叉或冲突均停止；
+- 只执行显式 remote fetch 和本地 `merge --ff-only`；禁止自动 clone、commit、push、reset、rebase、
+  选边或冲突解决；hooks、submodule recurse、tags 和交互式凭证提示关闭；
+- remote 只接受 HTTPS、SSH 或本地路径；拒绝 HTTP、remote helper `ext::`、自定义 uploadpack 和
+  HTTPS URL 内嵌认证信息；
+- Git 凭证必须由本机 credential helper/SSH agent 管理。remote URL、stderr、路径和凭证不进入
+  Tool 输出、WorkflowRun 或日志；状态接口只返回是否配置和 provider；
+- fetch 支持超时与取消，并终止整个 Git 子进程组。进入本地 fast-forward 后不响应取消或强制
+  超时，以免工作树停在半更新状态；
+- fast-forward 前创建 Git bundle；目录权限 `0700`、文件 `0600`。备份失败则不更新，备份不自动
+  删除。恢复必须先 `git bundle verify`，在新的恢复目录检查后由用户人工决定，不自动 reset；
+- Git 成功后仍以 Vault 文件为权威来源，通过既有 `sync_research_vault` 重建索引。索引失败记
+  `partial`；Git 安全边界、取消或超时失败记 `failed`；成功记 `succeeded`。WorkflowRun 只保留
+  provider 状态、计数和 opaque backupId。
+
+远端仓库是否公开无法由 luoome 判断。Web 固定提示用户只使用私有仓库，并把 bundle 备份按私人
+投资资料保护。
+
 ## 写入类工具的二次确认
 
 write 类工具通过 MCP 暴露时，`add_trade` 必须带 `confirm: true` 才执行。这是协议层约定，agent 应当向用户复述交易详情后，再调一次带 `confirm: true`。

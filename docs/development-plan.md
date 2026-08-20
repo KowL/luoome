@@ -149,7 +149,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | 行情底座 | StockUniverse、qfq DailyBar、Quote 新鲜度、capability registry 已完成 | 优先消费已有能力，不继续横向扩底层 |
 | Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除；统一 Watchlist、多来源与 Strategy → Watchlist 持久显式订阅、取消、published operational 投影和 complete/partial/failed 同步语义已落地 | 持续积累真实生产日验收样本与订阅来源的产品观测 |
 | Strategy Workspace | Phase A～C 已完成；publication、fencing lease、daily cycle、checkpoint、PIT replay、edge signal、观察统计和独立故障矩阵已落地；生产日 daily cycle 会先同步真实 StockUniverse PIT snapshot，启动前自动收敛 stale WorkflowRun，并阻止同一 schedule/交易日重复正式 cycle；5,207 只真实 Sina 全市场重复运行与首个 schedule 审计已记录 | 跨交易日阶段 P50/P95/max 与持续真实运行观测 |
-| Research Vault | Phase A/B、Phase C、M3 managed 创建/导入、M4 FTS/ResearchBrief 与 embedding 混合检索/跨模型固定评测已完成 | 真实 provider 生产质量观测和远端同步仍待真实配置与需求 |
+| Research Vault | Phase A～G 已完成；managed 创建/导入、FTS/ResearchBrief、独立 Git-only 安全远端同步及 embedding 混合检索/跨模型固定评测已落地 | 真实 embedding provider 生产质量与长期远端同步运行观测 |
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
 | Report / 信号复盘 | Report、三类简报、SignalObservation、benchmark/excess return、MFE/MAE、分组描述统计和真实历史 VaR 风险报告已落地；观察聚合统一按 `stock-day-horizon` 去重并可回溯代表性 observation id | benchmark 真实数据可用率、去重分布和跨 Tool/Web/AI 的真实样本稳定性仍需验证；历史评估仍不是严格收益回测 |
 | 账户绩效 | 现金流/公司行动 schema、双仓储、绩效 Tool、盘后持续快照 workflow/scheduler、WorkflowRun 性能预算、输入修订追溯、逐日审计、Web/报告/Agent、31 交易日真实 SQLite、双账户/拆股/缺价、周报区间 TWR/回撤与浏览器回归已落地 | 真实 provider 长区间、大账户生产规模和跨交易日连续调度证据 |
@@ -613,8 +613,8 @@ Tool/API schema、迁移与测试矩阵。
   费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本仍未满足门禁；v0.9 只称历史评估。
 - **分钟行情**：Phase 4 已完成首个独立 MinuteBar 竖向切片（当前会话 Tushare + 30 天本地保留）；历史远端分钟补数仍受 provider capability 限制，不能复用 PriceSnapshot。
 - **继续扩多市场**：当前优先保障沪深 A 股目录、qfq 日线、策略和复盘闭环完整。
-- **Research 远端同步**：Git workflow 或 Obsidian Headless 只有在本地工作台稳定且有真实需求后
-  再设计。
+- **Obsidian Headless 同步**：Phase F 已选择更小且本地可验收的 Git-only workflow；Headless
+  仍不实现，不作为 fallback，需求变化时另行决策。
 - **自动交易**：永久不做；Strategy、AlertPlan、WatchTrigger、Advice 均不得自动下单。
 
 ## 8. PR 与实施节奏

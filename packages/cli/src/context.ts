@@ -20,6 +20,7 @@ import {
   createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
+  createResearchVaultGitSyncAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import {
@@ -107,6 +108,14 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   } catch {
     logger.warn('Research embedding 配置无效；CLI 将以 capability 未挂载状态继续');
   }
+  let researchVaultGitSync: ReturnType<typeof createResearchVaultGitSyncAdapterFromEnv>;
+  try {
+    researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(process.env, {
+      backupRoot: join(home, 'backups', 'research-vault'),
+    });
+  } catch {
+    logger.warn('Research Vault 远端同步配置无效；CLI 将以未挂载状态继续');
+  }
   const ctx = buildContext({
     repos,
     adapters: {
@@ -137,6 +146,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     }),
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),
+    ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
   });

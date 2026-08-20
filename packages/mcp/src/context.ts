@@ -18,6 +18,7 @@ import {
   createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
+  createResearchVaultGitSyncAdapterFromEnv,
   createStockUniverseManagerFromEnv,
 } from '@luoome/adapters';
 import {
@@ -75,6 +76,14 @@ export const createServerContext = async (
   } catch {
     logger.warn('Research embedding 配置无效；MCP 将以 capability 未挂载状态继续');
   }
+  let researchVaultGitSync: ReturnType<typeof createResearchVaultGitSyncAdapterFromEnv>;
+  try {
+    researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(env, {
+      backupRoot: join(home, 'backups', 'research-vault'),
+    });
+  } catch {
+    logger.warn('Research Vault 远端同步配置无效；MCP 将以未挂载状态继续');
+  }
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger,
@@ -103,6 +112,7 @@ export const createServerContext = async (
     ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger, market }),
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),
+    ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
   });
 

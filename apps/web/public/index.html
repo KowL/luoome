@@ -414,6 +414,17 @@
               <span id="research-vault-settings-status" class="card-meta" role="status" aria-live="polite"></span>
             </div>
           </form>
+          <div class="vault-remote-sync">
+            <div>
+              <strong>可选 Git 远端同步</strong>
+              <p class="card-meta">仅在工作树干净且可 fast-forward 时拉取；先创建本地 bundle 备份，绝不自动 commit、push、reset、rebase 或解决冲突。Vault 文件仍是权威来源。</p>
+            </div>
+            <div class="flex gap-2">
+              <button id="research-remote-sync-btn" class="btn btn-outline btn-sm" type="button" disabled>拉取远端并重建索引</button>
+              <button id="research-remote-cancel-btn" class="btn btn-outline btn-sm" type="button" hidden>取消拉取</button>
+              <span id="research-remote-sync-status" class="card-meta" role="status" aria-live="polite">远端同步：检查配置中…</span>
+            </div>
+          </div>
         </div>
         <div class="card">
           <div class="card-header"><h2>研究主题与资料</h2></div>

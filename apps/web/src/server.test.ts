@@ -14,6 +14,8 @@ import type {
   AgentCallableTool,
   Money,
   ResearchEmbeddingAdapterLike,
+  ResearchVaultAdapterLike,
+  ResearchVaultGitSyncAdapterLike,
   ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
@@ -65,6 +67,8 @@ describe('Web 信息架构', () => {
     expect(html).toContain('id="btn-dashboard-watch-run"');
     expect(html).toContain('id="review-performance-snapshots-table"');
     expect(html).toContain('id="review-performance-audit-table"');
+    expect(html).toContain('id="research-remote-sync-btn"');
+    expect(html).toContain('仅在工作树干净且可 fast-forward 时拉取');
   });
 });
 
@@ -848,6 +852,99 @@ describe('Research Vault 设置 API', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Research Vault 远端同步 API', () => {
+  const vault: ResearchVaultAdapterLike = {
+    name: 'web-remote-vault',
+    vaultId: 'web-remote-vault',
+    scan: async () => [],
+    readText: async () => '',
+    createManagedDocument: async () => {
+      throw new Error('not used');
+    },
+    updateManagedDocument: async () => {
+      throw new Error('not used');
+    },
+    importAttachment: async () => {
+      throw new Error('not used');
+    },
+    buildOpenUri: (path) => `obsidian://open?file=${encodeURIComponent(path)}`,
+  };
+  const gitSync: ResearchVaultGitSyncAdapterLike = {
+    name: 'web-remote-git',
+    provider: 'git',
+    pull: async () => ({ ok: true, status: 'up-to-date' }),
+  };
+
+  it('状态只暴露 provider 配置，不暴露 remote 或凭证', async () => {
+    const base = await buildTestContext();
+    const target = createWebApp({ ...base, researchVault: vault, researchVaultGitSync: gitSync });
+    const response = await target.fetch(new Request('http://test/api/research/remote-sync/status'));
+    expect(await response.json()).toEqual({
+      ok: true,
+      data: { configured: true, provider: 'git' },
+    });
+  });
+
+  it('POST 同时要求 write/external opt-in 和同源 Origin', async () => {
+    const base = await buildTestContext();
+    const ctx = { ...base, researchVault: vault, researchVaultGitSync: gitSync };
+    const withoutExternal = createWebApp(ctx, { exposeWrite: true, exposeExternal: false });
+    expect(
+      (
+        await withoutExternal.fetch(
+          new Request('http://test/api/research/remote-sync', { method: 'POST' }),
+        )
+      ).status,
+    ).toBe(403);
+
+    const exposed = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+    const crossOrigin = await exposed.fetch(
+      new Request('http://test/api/research/remote-sync', {
+        method: 'POST',
+        headers: { origin: 'https://attacker.invalid' },
+      }),
+    );
+    expect(crossOrigin.status).toBe(403);
+  });
+
+  it('显式确认路径运行独立 workflow，并把请求取消信号传给 adapter', async () => {
+    let signal: AbortSignal | undefined;
+    const base = await buildTestContext();
+    const target = createWebApp(
+      {
+        ...base,
+        researchVault: vault,
+        researchVaultGitSync: {
+          ...gitSync,
+          pull: async (input) => {
+            signal = input.signal;
+            return { ok: true, status: 'up-to-date' };
+          },
+        },
+      },
+      { exposeWrite: true, exposeExternal: true },
+    );
+    const response = await target.fetch(
+      new Request('http://test/api/research/remote-sync', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ timeoutMs: 5_000 }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: {
+        status: 'succeeded',
+        git: { provider: 'git', status: 'up-to-date' },
+        index: { status: 'succeeded', scanned: 0 },
+      },
+    });
+    expect(signal).toBeInstanceOf(AbortSignal);
   });
 });
 

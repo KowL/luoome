@@ -27,6 +27,7 @@ import {
   createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
+  createResearchVaultGitSyncAdapterFromEnv,
   createStockUniverseManagerFromEnv,
   NotificationManager,
 } from '@luoome/adapters';
@@ -49,6 +50,7 @@ import {
   executeStrictStrategyBacktestTool,
   finishStrategyEvaluationSessionTool,
   getAccountPerformanceTool,
+  getResearchVaultRemoteSyncStatusTool,
   getStrategyEvaluationSessionTool,
   getStrictStrategyBacktestTool,
   listPortfolioPerformanceSnapshotsTool,
@@ -64,6 +66,7 @@ import {
   openingReportWorkflow,
   replayStrategyRangeWorkflow,
   runIntradayWatchObserved,
+  syncResearchVaultRemoteWorkflow,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
@@ -281,6 +284,14 @@ export const buildWebContext = async (
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  let researchVaultGitSync: ReturnType<typeof createResearchVaultGitSyncAdapterFromEnv>;
+  try {
+    researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(env, {
+      backupRoot: join(dirname(dbPath), 'backups', 'research-vault'),
+    });
+  } catch {
+    console.warn('Research Vault 远端同步配置无效；Web 将以未挂载状态启动');
+  }
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger: console,
@@ -315,6 +326,7 @@ export const buildWebContext = async (
     }),
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),
+    ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(env, {
       repos: handle.repos,
@@ -389,11 +401,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   /** 浏览器 api.js 从 localStorage 发送的账户选择；没有时沿用本地默认账户。 */
   const contextForRequest = (): ToolContext => {
-    const accountId = requestStorage.getStore()?.headers.get('x-luoome-account-id')?.trim();
-    if (accountId === undefined || accountId.length === 0) return ctxRef.current;
+    const request = requestStorage.getStore();
+    const accountId = request?.headers.get('x-luoome-account-id')?.trim();
     return {
       ...ctxRef.current,
-      user: { ...ctxRef.current.user, defaultAccountId: accountId },
+      ...(request === undefined ? {} : { abortSignal: request.signal }),
+      ...(accountId === undefined || accountId.length === 0
+        ? {}
+        : { user: { ...ctxRef.current.user, defaultAccountId: accountId } }),
     };
   };
 
@@ -1071,7 +1086,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         researchVaultSettingsStore.runtimeEnv(),
       );
       if (researchVault === undefined) throw new Error('Vault 配置未生效');
-      ctxRef.current = { ...ctxRef.current, researchVault };
+      const researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(
+        researchVaultSettingsStore.runtimeEnv(),
+        {
+          backupRoot: join(
+            dirname(dataTransferDbPath ?? resolveDbPath()),
+            'backups',
+            'research-vault',
+          ),
+        },
+      );
+      ctxRef.current = {
+        ...ctxRef.current,
+        researchVault,
+        ...(researchVaultGitSync === undefined ? {} : { researchVaultGitSync }),
+      };
       return jsonResult({ ok: true, data: { ...saved, applied: true } });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -1093,6 +1122,25 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       });
     }
+  });
+
+  app.get('/api/research/remote-sync/status', async () =>
+    jsonResult(await getResearchVaultRemoteSyncStatusTool.execute({}, contextForRequest())),
+  );
+
+  app.post('/api/research/remote-sync', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    let body: unknown = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      // 空请求体使用 workflow 默认值。
+    }
+    if (typeof body === 'object' && body !== null && !Array.isArray(body)) {
+      body = { ...body, mode: 'manual' };
+    }
+    return jsonResult(await syncResearchVaultRemoteWorkflow.run(body, contextForRequest()));
   });
 
   app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
