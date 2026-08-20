@@ -141,6 +141,11 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 
 启动时校验：trade 必须 false，否则启动失败。
 
+Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须在启动层独立验证其完整副作用集合。
+账户绩效盘后 scheduler 会读取外部行情并持久化日线、快照和 WorkflowRun，因此只有
+`LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启时才允许启动；缺任一项时
+保持停用并记录原因。不得通过修改 Tool 的单一 `sideEffect` 标签掩盖组合副作用。
+
 ## 内置 agent loop
 
 `agent_run` 分类为 `external`，默认不通过 MCP 暴露。其运行时能力由 tools 包的显式白名单构造：

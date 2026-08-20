@@ -106,4 +106,40 @@ describe('snapshot-account-performance workflow', () => {
       errorKind: 'not_found',
     });
   });
+
+  it('在任何运行审计前拒绝反向区间，并去重重复账户', async () => {
+    const base = await buildTestContext({
+      clock: () => new Date('2026-07-03T09:00:00.000Z'),
+    });
+    const invalid = await snapshotAccountPerformanceWorkflow.run(
+      { from: '2026-07-03', to: '2026-07-01' },
+      base,
+    );
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.error.kind).toBe('invalid_input');
+    expect(
+      await base.repos.workflowRun.listRecent({
+        workflowName: 'snapshot-account-performance',
+      }),
+    ).toEqual([]);
+
+    const accountId = base.user.defaultAccountId;
+    const deduplicated = await snapshotAccountPerformanceWorkflow.run(
+      {
+        accountIds: [accountId, accountId, accountId],
+        from: '2026-07-01',
+        to: '2026-07-03',
+      },
+      base,
+    );
+    expect(deduplicated).toMatchObject({
+      ok: true,
+      data: {
+        requestedAccounts: 1,
+        completedAccounts: 1,
+        items: [{ accountId }],
+      },
+    });
+    expect(await base.repos.portfolioPerformanceSnapshot.listByAccount(accountId)).toHaveLength(1);
+  });
 });

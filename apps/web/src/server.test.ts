@@ -22,7 +22,7 @@ import type { ChatStreamRuntime } from './chat.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
-import { buildWebContext, createWebApp } from './server.js';
+import { buildWebContext, createWebApp, startWeb } from './server.js';
 
 let app: Hono;
 let appCtx: ToolContext;
@@ -380,6 +380,100 @@ describe('报告 API', () => {
 });
 
 describe('Web runtime bootstrap', () => {
+  it('账户绩效 scheduler 仅在 write 与 external 双显式开启时启动', async () => {
+    const previousWrite = process.env.LUOOME_EXPOSE_WRITE;
+    const previousExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
+    const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
+    const previousMarketSources = process.env.LUOOME_MARKET_SOURCES;
+    const originalInfo = console.info;
+    const logs: string[] = [];
+    delete process.env.LUOOME_EXPOSE_WRITE;
+    delete process.env.LUOOME_EXPOSE_EXTERNAL;
+    process.env.LUOOME_MARKET_PROVIDER = 'real';
+    process.env.LUOOME_MARKET_SOURCES = 'sina';
+    console.info = (...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+    try {
+      const cases = [
+        {
+          label: 'default',
+          capabilities: {},
+          expectedStarts: 0,
+          expectedState: 'write=未开启，external=未开启',
+        },
+        {
+          label: 'write-only',
+          capabilities: { exposeWrite: true, exposeExternal: false },
+          expectedStarts: 0,
+          expectedState: 'write=已开启，external=未开启',
+        },
+        {
+          label: 'external-only',
+          capabilities: { exposeWrite: false, exposeExternal: true },
+          expectedStarts: 0,
+          expectedState: 'write=未开启，external=已开启',
+        },
+        {
+          label: 'write-and-external',
+          capabilities: { exposeWrite: true, exposeExternal: true },
+          expectedStarts: 1,
+          expectedState: 'write=已开启，external=已开启',
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const dir = mkdtempSync(join(tmpdir(), `luoome-performance-gate-${testCase.label}-`));
+        let starts = 0;
+        let stops = 0;
+        const logStart = logs.length;
+        let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
+        try {
+          handle = await startWeb({
+            port: 0,
+            dbPath: join(dir, 'luoome.db'),
+            ...testCase.capabilities,
+            strategySchedulerStartImmediately: false,
+            portfolioPerformanceSchedulerFactory: () => {
+              starts += 1;
+              return {
+                tick: async () => {},
+                stop: () => {
+                  stops += 1;
+                },
+              };
+            },
+          });
+          expect(starts).toBe(testCase.expectedStarts);
+          const caseLogs = logs.slice(logStart).join('\n');
+          if (testCase.expectedStarts === 0) {
+            expect(caseLogs).toContain('账户绩效盘后快照调度器未启动');
+            expect(caseLogs).toContain('LUOOME_EXPOSE_WRITE=true');
+            expect(caseLogs).toContain('LUOOME_EXPOSE_EXTERNAL=true');
+            expect(caseLogs).toContain(testCase.expectedState);
+          } else {
+            expect(caseLogs).not.toContain('账户绩效盘后快照调度器未启动');
+          }
+          handle.stop(true);
+          handle = undefined;
+          expect(stops).toBe(testCase.expectedStarts);
+        } finally {
+          handle?.stop(true);
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      console.info = originalInfo;
+      if (previousWrite === undefined) delete process.env.LUOOME_EXPOSE_WRITE;
+      else process.env.LUOOME_EXPOSE_WRITE = previousWrite;
+      if (previousExternal === undefined) delete process.env.LUOOME_EXPOSE_EXTERNAL;
+      else process.env.LUOOME_EXPOSE_EXTERNAL = previousExternal;
+      if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
+      else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;
+      if (previousMarketSources === undefined) delete process.env.LUOOME_MARKET_SOURCES;
+      else process.env.LUOOME_MARKET_SOURCES = previousMarketSources;
+    }
+  });
+
   it('starts with an empty database and never inserts sample records', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-empty-runtime-'));
     try {

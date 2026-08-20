@@ -301,9 +301,10 @@ smoke 已返回 1 条 `complete`/`available` 快照；跨交易日生产证据�
 2026-08-20 收口：`snapshot-account-performance` 只通过 `ctx.tools.*` 顺序处理账户，默认 365 日、最多
 3,660 日和 1,000 账户；账户内行情序列最多 8 路并发。每个账户由原绩效 Tool 立即保存快照，中断重跑
 复用同指纹结果，事实变化只生成受影响账户的新版本。WorkflowRun 保存新建/复用、完整/部分/失败、
-价格序列、bars 和耗时汇总。Web 盘后 scheduler 在交易日 16:00 后触发，复盘页展示版本历史和按最新
-修订选择的逐日审计；旧 complete 不能遮蔽新 partial。真实行情源不可达或覆盖不足时仍保留
-`partial/unavailable` 与 warning，不填 0。
+价格序列、bars 和耗时汇总。Web 盘后 scheduler 仅在 write 与 external 同时显式开启时启动，并在缺少
+任一能力时记录原因；双开后于交易日 16:00 后触发。复盘页展示版本历史和按最新修订选择的逐日审计；
+旧 complete 不能遮蔽新 partial。Workflow 输入拒绝 `from > to`，显式账户按首次出现去重；真实行情源
+不可达或覆盖不足时仍保留 `partial/unavailable` 与 warning，不填 0。
 
 真实长区间验收已前移：独立文件 SQLite + Sina 对 2025-08-21～2026-08-20 自动生成 1 条盘后快照，
 2 个价格序列共读取持仓 242 bars、benchmark 242 bars，首跑约 3.46 秒；同事实手动 WorkflowRun

@@ -50,8 +50,10 @@ provider 返回与本地事实合并；provider 失败则保留已有日线，�
 输入事实变化则只为受影响账户创建修订快照。WorkflowRun 只保存账户总数、完整/部分/失败数、新建/复用
 数、价格序列、日线数和耗时，不把私人账本或持仓明细写入运行审计。
 
-Web 长期进程每 5 分钟检查一次，A 股交易日 16:00（Asia/Shanghai）后每进程至多触发一次盘后 workflow；
-重启后的重复触发仍由快照指纹幂等收敛。手动 CLI 可用
+Web 长期进程只在 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启时启动
+盘后 scheduler；缺任一能力时不构造 scheduler，并记录未启动原因和两项能力状态。启用后每 5 分钟检查
+一次，A 股交易日 16:00（Asia/Shanghai）后每进程至多触发一次盘后 workflow；重启后的重复触发仍由
+快照指纹幂等收敛。手动 CLI 可用
 `luoome workflow run snapshot-account-performance --input '{...}'` 重跑指定区间或账户。
 
 ## 4. Surface 约束
@@ -66,6 +68,8 @@ Web 长期进程每 5 分钟检查一次，A 股交易日 16:00（Asia/Shanghai�
 - Web 复盘页展示估值日、现金流、日 TWR、回撤、完整度、TWR/benchmark/超额收益和 PnL；缺失原因原样可见。
 - 开盘/收盘报告的账户区块和 Agent v1 查询白名单复用 `get_account_performance`，不复制计算逻辑。
 - Tool 的现金流与公司行动写入仍受 `write` 闸口约束；任何绩效结果都不自动创建 Advice、AlertPlan 或 Trade。
+- 盘后 workflow 会请求外部行情并写入日线、绩效快照和 WorkflowRun，因此 Web 后台调用不得复用仅约束
+  HTTP Tool 路由的 capability gate；启动层必须同时验证 `write + external`。
 
 ## 5. 验收矩阵
 
