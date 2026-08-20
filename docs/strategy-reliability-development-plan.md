@@ -1,7 +1,7 @@
 # Strategy 日运行与评估可靠性开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-14；核心实现复核：2026-08-14
+> 基线日期：2026-08-14；核心实现复核：2026-08-20
 > 适用范围：Strategy 的定时运行、当前股票池、SignalObservation、AI 洞察与历史评估
 > 详细设计：[Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md)
 
@@ -87,6 +87,18 @@
   benchmark 状态与观察截止时间，重复 signal-day 会在 facts limitations 中明确披露。
 - 当前不设置固定交易日数量的生产完成门禁；跨更多交易日 phase P50/P95/max、真实历史区间预算和
   完整观察期继续作为运营观测与性能基线积累。
+- 本轮补充：scheduler 的 schedule lease、数据并发/陈旧窗口/重试/超时均有界可配置；daily cycle
+  在数据准备后、发布后和推荐/通知前同步复核 schedule lease，旧 owner 失租不得产生新的运行或下游
+  副作用；checkpoint 与 observation candidate 审计保留实际 bar/baseline provider、fallback 和
+  T+1/T+3/T+5/T+20 分布；可靠性汇总把 `gate` 与 `observationTarget` 分开，并输出 phase P50/P95/max。
+- 截至 2026-08-20，本工作树新增的真实 provider 证据以临时独立 SQLite 冒烟为准；正式生产周期仍只
+  计入已有的 2026-08-13/14 两日审计，不能把临时 smoke 或旧历史评估算作新的 S3 交易日。
+- 2026-08-20 真实 provider smoke：独立临时 SQLite 使用 `LUOOME_MARKET_PROVIDER=real`、Sina，
+  `000300.SH` 返回 245 根日线、来源为 `sina`、失败 0；该结果用于确认 baseline provider 链路，
+  不替代正式 daily cycle 或完整 T+20 观察。
+- 同日按生产顺序 `eastmoney,tencent,sina` 重跑真实 `000300.SH`：Eastmoney 真实 socket 关闭被记录，
+  Tencent fallback 返回 245 根日线、失败 0；该证据确认 fallback 不是静态数据，但不代表 Eastmoney
+  故障已永久消失，后续继续按周期汇总 provider 分布。
 
 ## 3. 优先级总览
 
@@ -96,7 +108,7 @@
 | ✅ | R1 租约续期与所有权提交 | heartbeat、fence 与旧 owner 拒绝 | 已完成，待真实运行观察 |
 | ✅ | R2 日运行闭环与 AI 降级 | 可审计周期与 facts-only | 已完成，待连续观察 |
 | ✅ | R3 指标与规则语义修正 | 实际读取路径与 edge/cooldown | 已完成，待真实分布复核 |
-| ✅ | R4 全市场数据准备稳定化 | bounded pool、checkpoint、provider 审计 | 已完成，待跨日性能门禁 |
+| ✅ | R4 全市场数据准备稳定化 | bounded pool、checkpoint、provider/fallback 审计与有界运营参数 | 已完成，待跨日性能门禁 |
 | P1 | R5 早期突破 v2 试验 | 减少重复信号，增加退出/风险事实 | 真实 T+20 观察期 |
 | ✅ | R6 point-in-time 历史评估 | PIT snapshot、revision、range replay | 已完成，待真实长区间预算 |
 | ✅ | R7 观察统计增强 | benchmark、分组和样本相关性透明化 | 去重口径与跨界面展示已完成，待真实样本稳定性 |

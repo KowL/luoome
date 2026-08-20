@@ -26,8 +26,18 @@ describe('get_strategy_reliability_summary', () => {
           availableCount: 10,
           failedCount: 0,
           coverageRatio: 1,
+          fallbackUsed: true,
+          providers: ['sina'],
         },
-        observations: { completed: 3, pending: 0 },
+        observations: {
+          completed: 3,
+          pending: 0,
+          baselines: { available: 2, unavailable: 0, providers: { sina: 2 } },
+          byHorizon: {
+            t1: { created: 2, completed: 2, pending: 0 },
+            t20: { created: 2, completed: 1, pending: 0 },
+          },
+        },
         insightProvider: 'facts-only',
         phaseTimings: [
           { phase: 'data-prep', durationMs: 120 },
@@ -81,8 +91,19 @@ describe('get_strategy_reliability_summary', () => {
         failedCount: 0,
         belowAcceptance: 0,
         coverageRatio: 1,
+        fallbackRuns: 1,
+        providers: { sina: 1 },
       },
-      observations: { runsWithObservations: 1, completed: 3, pending: 0 },
+      observations: {
+        runsWithObservations: 1,
+        completed: 3,
+        pending: 0,
+        baselines: { available: 2, unavailable: 0, providers: { sina: 2 } },
+        byHorizon: {
+          t1: { created: 2, completed: 2, pending: 0 },
+          t20: { created: 2, completed: 1, pending: 0 },
+        },
+      },
       insight: { factsOnly: 1, unavailable: 0 },
       providerErrors: { timeout: 1 },
       scheduleDayDuplicates: 0,
@@ -93,6 +114,7 @@ describe('get_strategy_reliability_summary', () => {
       providerLatencies: {
         'checkpoint:daily-bars': { samples: 10, p50Ms: 100, p95Ms: 180, maxMs: 220 },
       },
+      observationTarget: { targetTradingDays: 2, reached: true, blockers: [] },
       gate: {
         targetTradingDays: 2,
         ready: false,
@@ -115,7 +137,14 @@ describe('get_strategy_reliability_summary', () => {
         scheduleId: 'schedule-incomplete-audit',
         dataAsOf: new Date('2026-08-12T00:00:00.000Z'),
       },
-      outputSummary: { publication: 'withheld' },
+      outputSummary: {
+        publication: 'withheld',
+        observations: {
+          completed: 0,
+          pending: 0,
+          baselines: { available: 0, unavailable: 1, providers: {} },
+        },
+      },
       providerStatuses: [],
     });
 
@@ -127,7 +156,7 @@ describe('get_strategy_reliability_summary', () => {
     if (!result.ok) return;
     expect(result.data.gate).toMatchObject({
       ready: false,
-      blockers: ['publication-withheld', 'checkpoint-missing', 'observation-audit-missing'],
+      blockers: ['publication-withheld', 'checkpoint-missing', 'observation-baseline-unavailable'],
     });
   });
 
@@ -172,7 +201,7 @@ describe('get_strategy_reliability_summary', () => {
     });
   });
 
-  it('多 schedule 不拼接交易日；任一 schedule 未达目标时保持门禁阻塞', async () => {
+  it('多 schedule 不拼接观察样本；样本目标不足不再伪装成代码可靠性失败', async () => {
     const ctx = await buildTestContext();
     const run = async (id: string, scheduleId: string, day: string) =>
       ctx.repos.workflowRun.save({
@@ -211,7 +240,11 @@ describe('get_strategy_reliability_summary', () => {
     expect(result.data).toMatchObject({
       tradingDays: 2,
       scheduleCount: 2,
-      gate: { ready: false, blockers: ['schedule-days-below-target'] },
+      observationTarget: {
+        reached: false,
+        blockers: ['schedule-days-below-target'],
+      },
+      gate: { ready: true, blockers: [] },
     });
 
     const singleSchedule = await getStrategyReliabilitySummaryTool.execute(
@@ -227,6 +260,7 @@ describe('get_strategy_reliability_summary', () => {
     expect(singleSchedule.data).toMatchObject({
       scheduleId: 'schedule-a',
       scheduleTradingDayKeys: { 'schedule-a': ['2026-08-10'] },
+      observationTarget: { reached: true, blockers: [] },
       gate: { ready: true, blockers: [] },
     });
   });
@@ -295,7 +329,8 @@ describe('get_strategy_reliability_summary', () => {
       historicalRunCount: 0,
       tradingDays: 0,
       statuses: { running: 0, succeeded: 0, partial: 0, failed: 0 },
-      gate: { blockers: ['trading-days-below-target'] },
+      observationTarget: { blockers: ['trading-days-below-target'] },
+      gate: { blockers: ['no-production-cycles'] },
     });
   });
 
@@ -346,7 +381,8 @@ describe('get_strategy_reliability_summary', () => {
       historicalRunCount: 2,
       tradingDays: 0,
       statuses: { running: 0, succeeded: 0, partial: 0, failed: 0 },
-      gate: { blockers: ['trading-days-below-target'] },
+      observationTarget: { blockers: ['trading-days-below-target'] },
+      gate: { blockers: ['no-production-cycles'] },
     });
   });
 

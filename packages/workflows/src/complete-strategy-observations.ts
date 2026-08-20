@@ -21,6 +21,14 @@ export const CompleteStrategyObservationsWorkflowOutput = z.object({
   scanned: z.number().int().nonnegative(),
   completed: z.number().int().nonnegative(),
   pending: z.number().int().nonnegative(),
+  byHorizon: z.record(
+    z.enum(['t1', 't3', 't5', 't20']),
+    z.object({
+      scanned: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      pending: z.number().int().nonnegative(),
+    }),
+  ),
   recommendationAdvices: z.number().int().nonnegative(),
   recommendationFailed: z.number().int().nonnegative(),
   benchmarkDataVersion: z.literal(STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION),
@@ -124,6 +132,7 @@ const complete: WorkflowStep = async (previous, ctx) => {
     scanned: result.data.scanned,
     completed: result.data.completed,
     pending: result.data.pending,
+    byHorizon: result.data.byHorizon,
     recommendationAdvices,
     recommendationFailed,
     benchmarkDataVersion: STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
