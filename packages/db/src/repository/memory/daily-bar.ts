@@ -124,4 +124,28 @@ export class InMemoryDailyBarRepository implements DailyBarRepository {
           left.contentHash.localeCompare(right.contentHash),
       );
   }
+
+  async listRevisionsForStocks(input: {
+    readonly stockIds: readonly string[];
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly DailyBarRevision[]> {
+    const stockIds = new Set(input.stockIds);
+    return [...this.revisions.values()]
+      .filter(
+        (revision) =>
+          stockIds.has(revision.stockId) &&
+          (input.from === undefined || revision.date >= input.from) &&
+          (input.to === undefined || revision.date <= input.to) &&
+          (input.recordedAt === undefined || revision.recordedAt <= input.recordedAt),
+      )
+      .sort(
+        (left, right) =>
+          left.stockId.localeCompare(right.stockId) ||
+          left.date.getTime() - right.date.getTime() ||
+          left.recordedAt.getTime() - right.recordedAt.getTime() ||
+          left.contentHash.localeCompare(right.contentHash),
+      );
+  }
 }

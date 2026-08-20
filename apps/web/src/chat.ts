@@ -44,6 +44,8 @@ const CHAT_READ_TOOL_NAMES = [
   'list_strategy_runs',
   'get_strategy_run',
   'strategy_signals_by_stock',
+  'run_local_selector_research',
+  'assess_adaptive_personality',
   'list_watchlists',
   'get_watchlist',
   'list_watchlist_changes',

@@ -128,6 +128,10 @@ import {
   strategySignalsByStockTool,
 } from './tools/strategy-query.js';
 import {
+  assessAdaptivePersonalityTool,
+  runLocalSelectorResearchTool,
+} from './tools/strategy-research.js';
+import {
   getStrategyScheduleTool,
   renewStrategyScheduleClaimTool,
   setStrategyScheduleTool,
@@ -322,6 +326,8 @@ export const toolRegistry: Registry = createRegistry([
   listStrategyResultViewsTool,
   getStrategyWorkspaceTool,
   compareStrategyRunsTool,
+  runLocalSelectorResearchTool,
+  assessAdaptivePersonalityTool,
   strategySignalsByStockTool,
   listPendingStrategyObservationsTool,
   completeStrategyObservationsTool,
