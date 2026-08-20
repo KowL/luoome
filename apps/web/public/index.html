@@ -565,6 +565,32 @@
               <tbody><tr><td colspan="6" class="placeholder">加载中…</td></tr></tbody>
             </table>
           </div>
+          <details class="performance-audit" open>
+            <summary>
+              <span>快照与区间审计</span>
+              <span class="card-meta" id="review-performance-audit-meta">只读持久化事实 · 不重新抓行情</span>
+            </summary>
+            <div class="performance-audit-grid">
+              <section>
+                <h3>快照版本</h3>
+                <div class="table-wrap">
+                  <table class="table" id="review-performance-snapshots-table">
+                    <thead><tr><th>计算时间</th><th>区间</th><th>完整度</th><th>dataAsOf</th><th>输入指纹</th><th>预算事实</th></tr></thead>
+                    <tbody><tr><td colspan="6" class="placeholder">加载中…</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+              <section>
+                <h3>逐交易日审计</h3>
+                <div class="table-wrap">
+                  <table class="table" id="review-performance-audit-table">
+                    <thead><tr><th>交易日</th><th>状态</th><th>缺失标的 / 原因</th><th>修订</th><th>最新快照</th></tr></thead>
+                    <tbody><tr><td colspan="5" class="placeholder">加载中…</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </details>
         </div>
         <div class="card mt-4">
           <div class="card-header">

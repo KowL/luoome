@@ -1266,6 +1266,86 @@ const formatPercentPoints = (value) =>
 
 const toDateInputValue = (date) => date.toISOString().slice(0, 10);
 
+const renderAccountPerformanceAudit = async (accountId, from, to) => {
+  const base =
+    accountId.length > 0 ? `/api/accounts/${accountId}/performance` : '/api/account/performance';
+  const [snapshotsResult, auditResult] = await Promise.all([
+    callApi(`${base}/snapshots?limit=30`),
+    callApi(`${base}/snapshot-audit?from=${from}&to=${to}&limit=200`),
+  ]);
+  const meta = $('#review-performance-audit-meta');
+  const snapshotsBody = $('#review-performance-snapshots-table tbody');
+  const auditBody = $('#review-performance-audit-table tbody');
+  if (!snapshotsResult.ok || !auditResult.ok) {
+    if (meta !== null) {
+      meta.textContent = `审计加载失败：${snapshotsResult.error?.kind ?? auditResult.error?.kind ?? 'unknown'}`;
+    }
+    if (snapshotsBody !== null) {
+      snapshotsBody.innerHTML = '<tr><td colspan="6" class="placeholder">暂无快照审计</td></tr>';
+    }
+    if (auditBody !== null) {
+      auditBody.innerHTML = '<tr><td colspan="5" class="placeholder">暂无区间审计</td></tr>';
+    }
+    return;
+  }
+
+  const snapshots = snapshotsResult.data.snapshots ?? [];
+  const audit = auditResult.data.audit;
+  if (meta !== null) {
+    meta.textContent = `${snapshots.length} 个版本 · ${audit.observedTradingDays}/${audit.expectedTradingDays} 个交易日 · ${audit.revisionDayCount} 日有修订 · ${audit.gaps.length} 个缺口`;
+  }
+  if (snapshotsBody !== null) {
+    mount(
+      snapshotsBody,
+      snapshots.length === 0
+        ? el('tr', null, el('td', { colSpan: 6, class: 'placeholder' }, '尚无持久化快照'))
+        : snapshots.map((snapshot) => {
+            const facts = snapshot.inputFacts;
+            const budget =
+              facts === undefined
+                ? '--'
+                : `${facts.priceSeries} 序列 / ${facts.dailyBars + facts.benchmarkBars} bars / ${Math.round(snapshot.calculationDurationMs ?? 0)}ms`;
+            return el('tr', null, [
+              el('td', null, fmtDateTime(snapshot.calculatedAt)),
+              el(
+                'td',
+                null,
+                `${String(snapshot.from).slice(0, 10)} → ${String(snapshot.to).slice(0, 10)}`,
+              ),
+              el('td', null, `${snapshot.completeness} / ${snapshot.benchmarkStatus}`),
+              el(
+                'td',
+                null,
+                snapshot.dataAsOf === undefined ? '--' : String(snapshot.dataAsOf).slice(0, 10),
+              ),
+              el('td', 'audit-fingerprint', snapshot.inputFingerprint.slice(0, 12)),
+              el('td', null, budget),
+            ]);
+          }),
+    );
+  }
+  if (auditBody !== null) {
+    mount(
+      auditBody,
+      audit.days.length === 0
+        ? el('tr', null, el('td', { colSpan: 5, class: 'placeholder' }, '区间内没有 A 股交易日'))
+        : [...audit.days].reverse().map((day) => {
+            const issue =
+              day.missingStockIds.length > 0
+                ? day.missingStockIds.join(', ')
+                : (day.warnings[0] ?? '--');
+            return el('tr', null, [
+              el('td', null, day.date),
+              el('td', `audit-status-${day.completeness}`, day.completeness),
+              el('td', null, day.completeness === 'complete' ? '--' : issue),
+              el('td', null, `${day.revisionCount} 版`),
+              el('td', 'audit-fingerprint', day.snapshotId?.slice(0, 12) ?? '--'),
+            ]);
+          }),
+    );
+  }
+};
+
 const renderAccountPerformance = async () => {
   const fromNode = $('#review-performance-from');
   const toNode = $('#review-performance-to');
@@ -1285,6 +1365,7 @@ const renderAccountPerformance = async () => {
     const tbody = $('#review-performance-table tbody');
     if (tbody !== null)
       tbody.innerHTML = '<tr><td colspan="6" class="placeholder">暂无可用估值</td></tr>';
+    await renderAccountPerformanceAudit(accountId, fromNode.value, toNode.value);
     return;
   }
   const performance = result.data;
@@ -1334,6 +1415,7 @@ const renderAccountPerformance = async () => {
           ),
     );
   }
+  await renderAccountPerformanceAudit(accountId, fromNode.value, toNode.value);
 };
 
 const renderTrend = (data) => {

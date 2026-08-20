@@ -74,6 +74,10 @@ import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from '
 import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
 import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
 import {
+  PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
+  startPortfolioPerformanceScheduler,
+} from './portfolio-performance-scheduler.js';
+import {
   ResearchVaultSettingsStore,
   SaveResearchVaultSettingsSchema,
 } from './research-vault-settings.js';
@@ -1173,18 +1177,29 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     accountPerformanceResponse(c, contextForRequest().user.defaultAccountId),
   );
   app.get('/api/accounts/:id/performance', (c) => accountPerformanceResponse(c, c.req.param('id')));
-  app.get('/api/accounts/:id/performance/snapshots', async (c) =>
+  const accountPerformanceSnapshotsResponse = async (
+    c: Context,
+    accountId: string,
+  ): Promise<Response> =>
     jsonResult(
       await listPortfolioPerformanceSnapshotsTool.execute(
         {
-          accountId: c.req.param('id'),
+          accountId,
           ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
         },
         contextForRequest(),
       ),
-    ),
+    );
+  app.get('/api/account/performance/snapshots', (c) =>
+    accountPerformanceSnapshotsResponse(c, contextForRequest().user.defaultAccountId),
   );
-  app.get('/api/accounts/:id/performance/snapshot-audit', async (c) => {
+  app.get('/api/accounts/:id/performance/snapshots', (c) =>
+    accountPerformanceSnapshotsResponse(c, c.req.param('id')),
+  );
+  const accountPerformanceSnapshotAuditResponse = async (
+    c: Context,
+    accountId: string,
+  ): Promise<Response> => {
     const from = c.req.query('from');
     const to = c.req.query('to');
     if (from === undefined || to === undefined) {
@@ -1200,7 +1215,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult(
       await auditPortfolioPerformanceSnapshotsTool.execute(
         {
-          accountId: c.req.param('id'),
+          accountId,
           from,
           to,
           ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
@@ -1208,7 +1223,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         contextForRequest(),
       ),
     );
-  });
+  };
+  app.get('/api/account/performance/snapshot-audit', (c) =>
+    accountPerformanceSnapshotAuditResponse(c, contextForRequest().user.defaultAccountId),
+  );
+  app.get('/api/accounts/:id/performance/snapshot-audit', (c) =>
+    accountPerformanceSnapshotAuditResponse(c, c.req.param('id')),
+  );
 
   /**
    * 切换当前激活账户：浏览器把账户 id 保存到 localStorage，后续请求通过
@@ -2675,8 +2696,18 @@ export interface StartWebOptions {
   readonly host?: string;
   /** 缺省 resolveDbPath()（$LUOOME_HOME/luoome.db）。 */
   readonly dbPath?: string;
+  /** write API 与后台任务必须显式开启；缺省读取 LUOOME_EXPOSE_WRITE。 */
+  readonly exposeWrite?: boolean;
+  /** external API 与后台任务必须显式开启；缺省读取 LUOOME_EXPOSE_EXTERNAL。 */
+  readonly exposeExternal?: boolean;
   /** 仅供测试缩短 tick；生产固定每分钟检查一次。 */
   readonly strategySchedulerIntervalMs?: number;
+  /** 仅供启动级测试关闭立即 tick；生产缺省立即检查。 */
+  readonly strategySchedulerStartImmediately?: boolean;
+  /** 仅供测试缩短 tick；生产每五分钟检查一次盘后账户绩效快照。 */
+  readonly portfolioPerformanceSchedulerIntervalMs?: number;
+  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
+  readonly portfolioPerformanceSchedulerFactory?: typeof startPortfolioPerformanceScheduler;
 }
 
 export interface WebServerHandle {
@@ -2694,7 +2725,11 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv());
   const aiSettingsStore = new AISettingsStore(process.env);
   const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
+  const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
+  const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const app = createWebApp(ctx, {
+    exposeWrite,
+    exposeExternal,
     aiSettingsStore,
     marketSettingsStore,
     researchVaultSettingsStore,
@@ -2704,22 +2739,40 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   const scheduler = startStrategyScheduler(ctx, {
     intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
+    ...(options.strategySchedulerStartImmediately === undefined
+      ? {}
+      : { startImmediately: options.strategySchedulerStartImmediately }),
   });
+  const portfolioPerformanceScheduler =
+    exposeWrite && exposeExternal
+      ? (options.portfolioPerformanceSchedulerFactory ?? startPortfolioPerformanceScheduler)(ctx, {
+          intervalMs:
+            options.portfolioPerformanceSchedulerIntervalMs ??
+            PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
+        })
+      : undefined;
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
-  if (process.env.LUOOME_EXPOSE_WRITE !== 'true') {
+  if (!exposeWrite) {
     ctx.logger.info(
       'write 能力未开启：设置 LUOOME_EXPOSE_WRITE=true 后重启可启用持仓/预警等写操作',
     );
   }
-  if (process.env.LUOOME_EXPOSE_EXTERNAL !== 'true') {
+  if (!exposeExternal) {
     ctx.logger.info(
       'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
+    );
+  }
+  if (portfolioPerformanceScheduler === undefined) {
+    ctx.logger.info(
+      `账户绩效盘后快照调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
+      { exposeWrite, exposeExternal },
     );
   }
   return {
     port: server.port ?? options.port,
     stop: (closeActiveConnections) => {
       scheduler.stop();
+      portfolioPerformanceScheduler?.stop();
       server.stop(closeActiveConnections);
     },
   };

@@ -1,7 +1,7 @@
 # luoome 开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-15；Strategy 可靠性复核：2026-08-20
+> 基线日期：2026-08-20；Strategy 可靠性复核：2026-08-20；账户绩效持续快照复核：2026-08-20
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
@@ -20,6 +20,12 @@
 ## 2. 当前基线
 
 ### 2.1 验证结果
+
+2026-08-20 在 `c8f75cd` 基线上补齐账户绩效剩余代码交付：盘后持续快照 workflow/scheduler、
+WorkflowRun 预算审计、8 路有界价格序列并发、输入修订新快照/旧版本追溯、按最新修订的逐交易日审计，
+以及 Web 快照历史与区间审计入口。确定性测试覆盖全账户首跑、幂等重跑、单账户事实修订、多账户隔离、
+部分失败续跑、最新 partial 不被旧 complete 掩盖和盘后调度防重。一年真实 provider 长区间 smoke
+已完成；跨真实交易日连续调度和大账户预算仍作为生产证据项，不能由 fixture 或当前快照关闭。
 
 2026-08-20 在当前工作树完成复核；Strategy 可靠性、历史评估作业化与账户绩效首片均已通过本地
 门禁，仍把全市场性能、历史评估长任务和连续生产证据保留为后续验收；账户绩效的 31 个交易日
@@ -146,7 +152,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | Research Vault | Phase A/B、Phase C、M3 managed 创建/导入与 M4 FTS/ResearchBrief 已完成 | embedding、跨模型评测扩展和远端同步仍暂缓 |
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
 | Report / 信号复盘 | Report、三类简报、SignalObservation、benchmark/excess return、MFE/MAE、分组描述统计和真实历史 VaR 风险报告已落地；观察聚合统一按 `stock-day-horizon` 去重并可回溯代表性 observation id | benchmark 真实数据可用率、去重分布和跨 Tool/Web/AI 的真实样本稳定性仍需验证；历史评估仍不是严格收益回测 |
-| 账户绩效 | 现金流/公司行动 schema、双仓储、绩效 Tool、Web/报告/Agent、输入指纹快照、默认 benchmark、31 交易日真实 SQLite、双账户/拆股/缺价、周报区间 TWR/回撤、周报浏览器回归、真实 `600984.SH` 缺价验收和 3 日后台评估边界已落地 | 全市场长区间性能、更长历史任务与持续快照审计 |
+| 账户绩效 | 现金流/公司行动 schema、双仓储、绩效 Tool、盘后持续快照 workflow/scheduler、WorkflowRun 性能预算、输入修订追溯、逐日审计、Web/报告/Agent、31 交易日真实 SQLite、双账户/拆股/缺价、周报区间 TWR/回撤与浏览器回归已落地 | 真实 provider 长区间、大账户生产规模和跨交易日连续调度证据 |
 | 连板天梯 | Phase 1～3 已完成；`meta.limitUpLevel`/`meta.limitUpToday` 已接入真实 manager，scan/scheduled 写入 PIT，replay 优先读取历史快照，缺失仍保持 unknown | 炸板/断板历史语义与跨交易日真实快照积累 |
 | Workflow 架构 | 生产 workflow 已通过 workflow-only tools 编排，并有静态边界测试 | 后续新增 workflow 继续遵守同一边界 |
 
@@ -272,7 +278,7 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 到期观察补全、facts-only 降级和通知结果。每周形成可靠性汇总；这些是运营监控与性能基线，
 不作为固定交易日数量的完成门禁。观察期间只允许扩大诊断和修复，不扩大自动推荐/通知默认范围。
 
-### 3.4 v0.10：账户绩效与组合归因（首个竖向切片已完成）
+### 3.4 v0.10：账户绩效与组合归因（持续快照代码链已完成）
 
 实现已按“契约与存储 → Tool → Report/Web/Agent”的竖向顺序完成首片；S3 观察期间只补审计与真实数据验收：
 
@@ -280,7 +286,7 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 2. ✅ 建立按账户隔离的每日估值输出，缺失价格进入 completeness，不填 0。
 3. ✅ 实现 TWR、最大回撤、benchmark/超额收益、已实现/未实现 PnL 与持仓贡献归因。
 4. ✅ 接入账户复盘页、收盘/开盘账户区块和 Agent 只读白名单；不生成调仓或交易。
-5. ✅ 增加输入指纹绩效快照与默认 benchmark 配置；✅ 完成 31 个交易日真实行情 + SQLite + 双账户/拆股/缺价 + 浏览器绩效页基础 smoke；✅ 完成真实 2 日 × 500 只完整及 3 日 × 500 只部分完成后台历史评估浏览器 smoke；✅ 完成周报浏览器回归、周报区间估值/TWR/回撤区块；✅ 收盘复盘通过 `list_watchlists` + `list_watchlist_changes` 生成分组变化汇总；✅ 完成真实 `600984.SH` 缺价验收（缺价不填 0）；⏳ 补更长历史任务与持续快照审计证据。
+5. ✅ 增加输入指纹绩效快照与默认 benchmark 配置；✅ 完成 31 个交易日真实行情 + SQLite + 双账户/拆股/缺价 + 浏览器绩效页基础 smoke；✅ 完成真实 2 日 × 500 只完整及 3 日 × 500 只部分完成后台历史评估浏览器 smoke；✅ 完成周报浏览器回归、周报区间估值/TWR/回撤区块；✅ 收盘复盘通过 `list_watchlists` + `list_watchlist_changes` 生成分组变化汇总；✅ 完成真实 `600984.SH` 缺价验收（缺价不填 0）；✅ 补齐盘后持续快照、断点幂等、输入修订追溯、逐日审计和 Web 审计入口；⏳ 继续积累真实 provider 长区间、大账户与跨日生产证据。
 
 本轮收口：账户绩效读取发现本地只缓存部分日线时，会向已配置行情 adapter 补齐缺失区间并合并已有事实；provider 失败仍保留已有数据并由计算器返回 `partial/unavailable`，不把部分缓存误报为完整快照。相关工具回归和 typecheck 已通过。
 
@@ -291,6 +297,20 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 `GET /api/accounts/:id/performance/snapshot-audit` 汇总交易日覆盖、缺失日期和 partial 原因，仍只读
 持久化事实，并改为按账户+区间重叠查询，避免长区间被最新非重叠快照遮蔽。独立真实 Sina 3 日空库
 smoke 已返回 1 条 `complete`/`available` 快照；跨交易日生产证据仍按真实运行持续积累，不以固定天数表述完成度。
+
+2026-08-20 收口：`snapshot-account-performance` 只通过 `ctx.tools.*` 顺序处理账户，默认 365 日、最多
+3,660 日和 1,000 账户；账户内行情序列最多 8 路并发。每个账户由原绩效 Tool 立即保存快照，中断重跑
+复用同指纹结果，事实变化只生成受影响账户的新版本。WorkflowRun 保存新建/复用、完整/部分/失败、
+价格序列、bars 和耗时汇总。Web 盘后 scheduler 仅在 write 与 external 同时显式开启时启动，并在缺少
+任一能力时记录原因；双开后于交易日 16:00 后触发。复盘页展示版本历史和按最新修订选择的逐日审计；
+旧 complete 不能遮蔽新 partial。Workflow 输入拒绝 `from > to`，显式账户按首次出现去重；真实行情源
+不可达或覆盖不足时仍保留 `partial/unavailable` 与 warning，不填 0。
+
+真实长区间验收已前移：独立文件 SQLite + Sina 对 2025-08-21～2026-08-20 自动生成 1 条盘后快照，
+2 个价格序列共读取持仓 242 bars、benchmark 242 bars，首跑约 3.46 秒；同事实手动 WorkflowRun
+重跑 `created=0/reused=1`，约 0.57 秒。真实 Chrome 复盘页可见 2 个版本、251 个日历预期交易日、
+9 个 partial 缺口和缺失标的 `600519.SH`，未填 0。缺口包含真实休市日，暴露内置交易日历与交易所
+休市事实仍需权威校准；跨真实交易日连续调度和大账户生产规模仍是证据缺口。
 
 ## 4. 第一优先级：完成部分实现
 

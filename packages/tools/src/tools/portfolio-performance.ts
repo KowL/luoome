@@ -5,6 +5,7 @@ import {
   isWeekend,
   PortfolioCashFlowSchema,
   PortfolioCorporateActionSchema,
+  PortfolioPerformanceInputFactsSchema,
   PortfolioPerformanceSchema,
   PortfolioPerformanceSnapshotSchema,
   type ToolContext,
@@ -110,6 +111,8 @@ export const PortfolioPerformanceSnapshotSummarySchema = z.object({
   twrPct: z.number().finite().optional(),
   maxDrawdownPct: z.number().finite().optional(),
   totalPnl: z.number().finite().optional(),
+  calculationDurationMs: z.number().finite().nonnegative().optional(),
+  inputFacts: PortfolioPerformanceInputFactsSchema.optional(),
 });
 export const ListPortfolioPerformanceSnapshotsOutput = z.object({
   snapshots: z.array(PortfolioPerformanceSnapshotSummarySchema),
@@ -127,6 +130,10 @@ const PortfolioPerformanceSnapshotAuditGapSchema = z.object({
   completeness: PortfolioPerformanceSchema.shape.completeness,
   missingStockIds: z.array(z.string()),
   warnings: z.array(z.string()),
+  snapshotId: z.string().min(1).optional(),
+  inputFingerprint: z.string().min(1).optional(),
+  calculatedAt: z.coerce.date().optional(),
+  revisionCount: z.number().int().nonnegative(),
 });
 
 export const AuditPortfolioPerformanceSnapshotsOutput = z.object({
@@ -140,12 +147,14 @@ export const AuditPortfolioPerformanceSnapshotsOutput = z.object({
     snapshotIds: z.array(z.string().min(1)),
     snapshotCount: z.number().int().nonnegative(),
     valuationDayCount: z.number().int().nonnegative(),
+    revisionDayCount: z.number().int().nonnegative(),
     completeDayCount: z.number().int().nonnegative(),
     partialDayCount: z.number().int().nonnegative(),
     unavailableDayCount: z.number().int().nonnegative(),
     completeness: PortfolioPerformanceSchema.shape.completeness,
     dataAsOfFrom: z.coerce.date().optional(),
     dataAsOfTo: z.coerce.date().optional(),
+    days: z.array(PortfolioPerformanceSnapshotAuditGapSchema),
     gaps: z.array(PortfolioPerformanceSnapshotAuditGapSchema),
     warnings: z.array(z.string()),
   }),
@@ -189,6 +198,12 @@ export const listPortfolioPerformanceSnapshotsTool = defineTool({
         ...(snapshot.performance.totalPnl === undefined
           ? {}
           : { totalPnl: snapshot.performance.totalPnl }),
+        ...(snapshot.performance.audit?.calculationDurationMs === undefined
+          ? {}
+          : { calculationDurationMs: snapshot.performance.audit.calculationDurationMs }),
+        ...(snapshot.performance.audit?.inputFacts === undefined
+          ? {}
+          : { inputFacts: snapshot.performance.audit.inputFacts }),
       })),
     };
   },
@@ -216,25 +231,29 @@ export const auditPortfolioPerformanceSnapshotsTool = defineTool({
     );
     type DayFact = {
       completeness: import('@luoome/core').PortfolioValuationCompleteness;
-      missingStockIds: Set<string>;
-      warnings: Set<string>;
+      missingStockIds: string[];
+      warnings: string[];
+      snapshotId: string;
+      inputFingerprint: string;
+      calculatedAt: Date;
     };
     const dayFacts = new Map<string, DayFact>();
+    const revisionsByDate = new Map<string, number>();
     for (const snapshot of snapshots) {
       for (const day of snapshot.performance.valuation) {
         const date = dateKey(day.date);
         if (date < dateKey(input.from) || date > dateKey(input.to)) continue;
-        const current = dayFacts.get(date) ?? {
-          completeness: 'unavailable',
-          missingStockIds: new Set<string>(),
-          warnings: new Set<string>(),
-        };
-        if (completenessRank(day.completeness) > completenessRank(current.completeness)) {
-          current.completeness = day.completeness;
+        revisionsByDate.set(date, (revisionsByDate.get(date) ?? 0) + 1);
+        if (!dayFacts.has(date)) {
+          dayFacts.set(date, {
+            completeness: day.completeness,
+            missingStockIds: [...day.missingStockIds].sort(),
+            warnings: [...snapshot.performance.warnings].sort(),
+            snapshotId: snapshot.id,
+            inputFingerprint: snapshot.inputFingerprint,
+            calculatedAt: snapshot.calculatedAt,
+          });
         }
-        for (const stockId of day.missingStockIds) current.missingStockIds.add(stockId);
-        for (const warning of snapshot.performance.warnings) current.warnings.add(warning);
-        dayFacts.set(date, current);
       }
     }
 
@@ -256,17 +275,24 @@ export const auditPortfolioPerformanceSnapshotsTool = defineTool({
         : observedDates.length === 0
           ? 'unavailable'
           : 'partial';
-    const gaps = expectedDates
-      .filter((date) => dayFacts.get(date)?.completeness !== 'complete')
-      .map((date) => {
-        const fact = dayFacts.get(date);
-        return {
-          date,
-          completeness: fact?.completeness ?? 'unavailable',
-          missingStockIds: fact === undefined ? [] : [...fact.missingStockIds].sort(),
-          warnings: fact === undefined ? ['未找到该估值日的持久化快照'] : [...fact.warnings].sort(),
-        };
-      });
+    const days = expectedDates.map((date) => {
+      const fact = dayFacts.get(date);
+      return {
+        date,
+        completeness: fact?.completeness ?? ('unavailable' as const),
+        missingStockIds: fact?.missingStockIds ?? [],
+        warnings: fact?.warnings ?? ['未找到该估值日的持久化快照'],
+        ...(fact === undefined
+          ? {}
+          : {
+              snapshotId: fact.snapshotId,
+              inputFingerprint: fact.inputFingerprint,
+              calculatedAt: fact.calculatedAt,
+            }),
+        revisionCount: revisionsByDate.get(date) ?? 0,
+      };
+    });
+    const gaps = days.filter((day) => day.completeness !== 'complete');
     const warnings = new Set<string>();
     if (snapshots.length === 0) warnings.add('没有找到覆盖该区间的持久化绩效快照');
     if (snapshots.length >= input.limit) {
@@ -291,12 +317,14 @@ export const auditPortfolioPerformanceSnapshotsTool = defineTool({
         snapshotIds: snapshots.map((snapshot) => snapshot.id),
         snapshotCount: snapshots.length,
         valuationDayCount: [...dayFacts.keys()].length,
+        revisionDayCount: days.filter((day) => day.revisionCount > 1).length,
         completeDayCount,
         partialDayCount,
         unavailableDayCount,
         completeness,
         ...(dataAsOf[0] === undefined ? {} : { dataAsOfFrom: dataAsOf[0] }),
         ...(dataAsOf.at(-1) === undefined ? {} : { dataAsOfTo: dataAsOf.at(-1) }),
+        days,
         gaps,
         warnings: [...warnings],
       },
@@ -331,6 +359,33 @@ const fetchBars = async (
   }
 };
 
+export const PORTFOLIO_MARKET_CONCURRENCY = 8;
+
+const mapWithConcurrency = async <T, R>(
+  values: readonly T[],
+  concurrency: number,
+  worker: (value: T) => Promise<R>,
+): Promise<R[]> => {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const runners = Array.from(
+    { length: Math.min(values.length, Math.max(1, concurrency)) },
+    async () => {
+      while (cursor < values.length) {
+        const index = cursor;
+        cursor += 1;
+        const value = values[index];
+        if (value !== undefined) results[index] = await worker(value);
+      }
+    },
+  );
+  await Promise.all(runners);
+  return results;
+};
+
+const monotonicNow = (): number =>
+  typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
+
 const dateKey = (value: Date): string => value.toISOString().slice(0, 10);
 
 const tradingDayKeys = (from: Date, to: Date): string[] => {
@@ -344,9 +399,6 @@ const tradingDayKeys = (from: Date, to: Date): string[] => {
   }
   return expectedTradingDays;
 };
-
-const completenessRank = (value: import('@luoome/core').PortfolioValuationCompleteness): number =>
-  value === 'complete' ? 2 : value === 'partial' ? 1 : 0;
 
 const canonicalDate = (value: Date): string => value.toISOString();
 
@@ -461,6 +513,7 @@ export const getAccountPerformanceTool = defineTool({
   input: GetAccountPerformanceInput,
   output: GetAccountPerformanceOutput,
   handler: async (input, ctx: ToolContext) => {
+    const startedAtMs = monotonicNow();
     if (input.from > input.to) return errInvalidInput('performance from 不能晚于 to');
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
     if (accountId.length === 0) return errInvalidInput('缺少 accountId');
@@ -476,15 +529,21 @@ export const getAccountPerformanceTool = defineTool({
       ...cashFlows.flatMap((flow) => (flow.stockId === undefined ? [] : [flow.stockId])),
       ...actions.map((action) => action.stockId),
     ]);
-    const barsByStock = new Map<string, readonly import('@luoome/core').DailyBar[]>();
-    for (const stockId of stockIds) {
-      barsByStock.set(stockId, await fetchBars(stockId, input.from, input.to, ctx));
-    }
     const benchmarkStockId = input.benchmarkStockId ?? ctx.portfolioBenchmark?.stockId;
-    let benchmarkBars: readonly import('@luoome/core').DailyBar[] | undefined;
-    if (benchmarkStockId !== undefined) {
-      benchmarkBars = await fetchBars(benchmarkStockId, input.from, input.to, ctx);
-    }
+    const priceSeriesStockIds = [
+      ...new Set([...stockIds, ...(benchmarkStockId ? [benchmarkStockId] : [])]),
+    ];
+    const fetchedSeries = await mapWithConcurrency(
+      priceSeriesStockIds,
+      PORTFOLIO_MARKET_CONCURRENCY,
+      async (stockId) => [stockId, await fetchBars(stockId, input.from, input.to, ctx)] as const,
+    );
+    const fetchedByStock = new Map(fetchedSeries);
+    const barsByStock = new Map<string, readonly import('@luoome/core').DailyBar[]>(
+      [...stockIds].map((stockId) => [stockId, fetchedByStock.get(stockId) ?? []]),
+    );
+    const benchmarkBars =
+      benchmarkStockId === undefined ? undefined : (fetchedByStock.get(benchmarkStockId) ?? []);
     const calculated = calculatePortfolioPerformance({
       accountId,
       currency: account.currency,
@@ -521,6 +580,30 @@ export const getAccountPerformanceTool = defineTool({
       to: input.to,
       inputFingerprint,
     });
+    const dataAsOf = dataAsOfFor(barsByStock, benchmarkBars);
+    const inputFacts = {
+      trades: trades.length,
+      holdings: holdings.length,
+      cashFlows: cashFlows.length,
+      corporateActions: actions.length,
+      priceSeries: fetchedByStock.size,
+      dailyBars: [...barsByStock.values()].reduce((total, bars) => total + bars.length, 0),
+      benchmarkBars: benchmarkBars?.length ?? 0,
+    };
+    const calculationDurationMs = Math.max(0, monotonicNow() - startedAtMs);
+    const calculatedAt = ctx.clock();
+    const auditedPerformance = PortfolioPerformanceSchema.parse({
+      ...performance,
+      audit: {
+        snapshotId,
+        inputFingerprint,
+        calculatedAt,
+        ...(dataAsOf === undefined ? {} : { dataAsOf }),
+        calculationDurationMs,
+        inputFacts,
+        cacheStatus: 'created',
+      },
+    });
     const snapshot =
       existing ??
       PortfolioPerformanceSnapshotSchema.parse({
@@ -530,11 +613,9 @@ export const getAccountPerformanceTool = defineTool({
         to: input.to,
         currency: account.currency,
         inputFingerprint,
-        calculatedAt: ctx.clock(),
-        ...(dataAsOfFor(barsByStock, benchmarkBars) === undefined
-          ? {}
-          : { dataAsOf: dataAsOfFor(barsByStock, benchmarkBars) }),
-        performance,
+        calculatedAt,
+        ...(dataAsOf === undefined ? {} : { dataAsOf }),
+        performance: auditedPerformance,
       });
     if (existing === null) await ctx.repos.portfolioPerformanceSnapshot.save(snapshot);
     return PortfolioPerformanceSchema.parse({
@@ -544,6 +625,13 @@ export const getAccountPerformanceTool = defineTool({
         inputFingerprint: snapshot.inputFingerprint,
         calculatedAt: snapshot.calculatedAt,
         ...(snapshot.dataAsOf === undefined ? {} : { dataAsOf: snapshot.dataAsOf }),
+        ...(snapshot.performance.audit?.calculationDurationMs === undefined
+          ? {}
+          : { calculationDurationMs: snapshot.performance.audit.calculationDurationMs }),
+        ...(snapshot.performance.audit?.inputFacts === undefined
+          ? {}
+          : { inputFacts: snapshot.performance.audit.inputFacts }),
+        cacheStatus: existing === null ? 'created' : 'reused',
       },
     });
   },

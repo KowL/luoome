@@ -93,6 +93,17 @@ export const PortfolioContributionSchema = z.object({
 });
 export type PortfolioContribution = z.infer<typeof PortfolioContributionSchema>;
 
+export const PortfolioPerformanceInputFactsSchema = z.object({
+  trades: z.number().int().nonnegative(),
+  holdings: z.number().int().nonnegative(),
+  cashFlows: z.number().int().nonnegative(),
+  corporateActions: z.number().int().nonnegative(),
+  priceSeries: z.number().int().nonnegative(),
+  dailyBars: z.number().int().nonnegative(),
+  benchmarkBars: z.number().int().nonnegative(),
+});
+export type PortfolioPerformanceInputFacts = z.infer<typeof PortfolioPerformanceInputFactsSchema>;
+
 export const PortfolioPerformanceSchema = z.object({
   accountId: z.string().min(1),
   from: z.coerce.date(),
@@ -118,6 +129,9 @@ export const PortfolioPerformanceSchema = z.object({
       inputFingerprint: z.string().min(1),
       calculatedAt: z.coerce.date(),
       dataAsOf: z.coerce.date().optional(),
+      calculationDurationMs: z.number().finite().nonnegative().optional(),
+      inputFacts: PortfolioPerformanceInputFactsSchema.optional(),
+      cacheStatus: z.enum(['created', 'reused']).optional(),
     })
     .optional(),
 });
