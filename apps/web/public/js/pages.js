@@ -2149,8 +2149,18 @@ const renderResearch = async (setStatus) => {
     if (facts.status === 'unavailable') {
       return el('p', 'muted mt-2', '近期涨停天梯不可用；未将不可用伪装成空结果。');
     }
+    const coveredDays = Math.max(0, 30 - (facts.missingDates?.length ?? 0));
     return el('section', 'research-topic-timeline mt-2', [
-      el('h3', null, '近期涨停天梯'),
+      el(
+        'h3',
+        null,
+        facts.status === 'partial'
+          ? `近期涨停天梯（部分覆盖 ${coveredDays}/30 日）`
+          : '近期涨停天梯',
+      ),
+      facts.status === 'partial'
+        ? el('p', 'muted', '仅展示已保存的 PIT 快照；缺失日期未用当前接口回填。')
+        : null,
       facts.recent?.length
         ? el(
             'ul',
