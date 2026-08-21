@@ -7,7 +7,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errNotFound } from '../define-tool.js';
+import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
 import {
   type AdviceLLMOutput,
   AdviceLLMSchema,
@@ -17,6 +17,7 @@ import {
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
+import { resolveQuote } from '../internal/resolve-quotes.js';
 
 const DAY_MS = 86_400_000;
 const BARS_LOOKBACK_DAYS = 120;
@@ -44,13 +45,24 @@ export const analyzePositionTool = defineTool({
     if (stock === null) return errNotFound('Stock', holding.stockId);
 
     const now = ctx.clock();
-    const [quote, bars] = await Promise.all([
-      ctx.adapters.market.fetchQuote(stock.id),
+    // 行情走统一 resolveQuote：实时拉取，上游缺席回退本地最近快照。
+    const [quoteItem, bars] = await Promise.all([
+      resolveQuote(ctx, stock.id, { context: 'display' }),
       ctx.adapters.market.fetchDailyBars(stock.id, {
         start: new Date(now.getTime() - BARS_LOOKBACK_DAYS * DAY_MS),
         end: now,
       }),
     ]);
+    if (quoteItem === undefined || quoteItem.status !== 'ok') {
+      return errAdapterError(
+        ctx.adapters.market.name,
+        quoteItem !== undefined && quoteItem.status === 'unavailable'
+          ? quoteItem.reason
+          : 'quote_unavailable',
+        true,
+      );
+    }
+    const quote = quoteItem.quote;
     const indicators = computeSimpleIndicators(bars);
 
     const llmOutput = await ctx.adapters.llm.generate<AdviceLLMOutput>({

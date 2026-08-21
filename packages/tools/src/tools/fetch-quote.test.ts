@@ -1,3 +1,4 @@
+import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
 import { fetchQuoteTool } from './fetch-quote.js';
@@ -26,6 +27,36 @@ describe('tool/fetch_quote', () => {
     const res = await fetchQuoteTool.execute({ stockId: '601398.SH', stockName: '工商银行' }, ctx);
     expect(res.ok).toBe(true);
     expect((await ctx.repos.stock.findById('601398.SH'))?.name).toBe('工商银行');
+  });
+
+  it('上游失败回退本地最近快照', async () => {
+    const ctx = await buildTestContext();
+    const now = ctx.clock();
+    await ctx.repos.quote.save({
+      stockId: '002594.SZ',
+      observedAt: now,
+      fetchedAt: now,
+      timestampSource: 'upstream',
+      ts: now,
+      open: money(100),
+      high: money(101),
+      low: money(99),
+      close: money(100.5),
+      volume: 1234,
+      source: 'cached',
+    });
+    const market = {
+      ...ctx.adapters.market,
+      batchQuote: () => Promise.reject(new Error('upstream down')),
+    };
+    const res = await fetchQuoteTool.execute(
+      { stockId: '002594.SZ' },
+      { ...ctx, adapters: { ...ctx.adapters, market } },
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.quote.close).toBe(100.5);
+    expect(res.data.quote.source).toBe('cached');
   });
 
   it('错误路径：stock 不存在 → not_found', async () => {

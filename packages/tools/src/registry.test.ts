@@ -252,6 +252,7 @@ describe('toolRegistry', () => {
       'get_stock_market_view',
       'get_stock_minute_bars',
       'import_remote_research_document',
+      'list_strategy_result_views',
       'prepare_strategy_data',
       'propose_strategy_version_draft',
       'rebuild_research_embeddings',

@@ -4,7 +4,6 @@ import {
   dateInShanghai,
   ExchangeSchema,
   MoneySchema,
-  type Quote,
   QuoteSchema,
   type ReportSchema,
   TechnicalIndicatorsSchema,
@@ -33,6 +32,7 @@ import {
   normalizeDailyBars,
   normalizeMarketRange,
 } from '../internal/market-view.js';
+import { resolveQuote } from '../internal/resolve-quotes.js';
 import {
   readStrategySignalsByStock,
   StrategySignalScopeSchema,
@@ -187,32 +187,35 @@ export const getStockMarketViewTool = defineTool({
     const maxBars = input.granularity === 'month' ? MONTH_GRANULARITY_MAX_BARS : undefined;
     const market = ctx.adapters.market;
 
-    // Quote 与 bars 在股票解析后并行拉取，失败各自回退 DB（§8.2）。
-    const [quoteResult, barsResult] = await Promise.allSettled([
-      market.fetchQuote(stock.id),
-      market.fetchDailyBars(stock.id, { start: fetchStart, end }),
+    // Quote 走统一 resolveQuotes（实时拉取 + 本地快照兜底），与 bars 并行，失败各自回退 DB（§8.2）。
+    const [quoteItem, barsResult] = await Promise.all([
+      resolveQuote(ctx, stock.id, { context: 'display' }),
+      market.fetchDailyBars(stock.id, { start: fetchStart, end }).then(
+        (value) => ({ status: 'fulfilled' as const, value }),
+        (reason: unknown) => ({ status: 'rejected' as const, reason }),
+      ),
     ]);
 
     const adapterSummary = (reason: unknown): string =>
       reason instanceof Error ? reason.message : String(reason);
 
-    let quote: Quote | null = null;
-    let quoteLive = false;
-    if (quoteResult.status === 'fulfilled') {
-      quote = quoteResult.value;
-      quoteLive = true;
-      await ctx.repos.quote.save(quote);
-    } else {
-      ctx.logger.warn('get_stock_market_view: quote 外部拉取失败，尝试本地快照', {
+    if (quoteItem === undefined || quoteItem.status !== 'ok') {
+      return errAdapterError(
+        market.name,
+        quoteItem !== undefined && quoteItem.status === 'unavailable'
+          ? quoteItem.reason
+          : 'quote_unavailable',
+        true,
+      );
+    }
+    const quote = quoteItem.quote;
+    const quoteLive = quoteItem.retrieval === 'live';
+    if (!quoteLive) {
+      ctx.logger.warn('get_stock_market_view: quote 实时拉取缺席，使用本地快照', {
         stockId: stock.id,
         adapter: market.name,
         range: input.range,
-        error: adapterSummary(quoteResult.reason),
       });
-      quote = await ctx.repos.quote.latestByStock(stock.id);
-      if (quote === null) {
-        return errAdapterError(market.name, adapterSummary(quoteResult.reason), true);
-      }
     }
 
     let bars: readonly DailyBar[] = [];
