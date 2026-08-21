@@ -5114,6 +5114,39 @@ textarea::placeholder {
   font-family: var(--font-mono);
 }
 
+.chat-plan {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  padding: 8px 12px;
+  width: 100%;
+}
+
+.chat-plan-title {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.chat-plan-detail {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+
+.chat-cancelled-mark {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+}
+
 .chat-drafts {
   display: flex;
   flex-direction: column;
@@ -5167,6 +5200,30 @@ textarea::placeholder {
 
 .chat-draft-settled.ok {
   color: var(--success);
+}
+
+.chat-draft-display {
+  margin-top: 6px;
+}
+
+.chat-draft-target {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.chat-draft-fields {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--muted);
+}
+
+.chat-draft-warn {
+  margin: 6px 0 0;
+  font-size: var(--text-xs);
+  color: var(--warning, #b45309);
 }
 
 .chat-form {

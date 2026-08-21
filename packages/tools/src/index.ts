@@ -1,6 +1,9 @@
 // @luoome/tools 桶导出：defineTool + toolRegistry + 全部公开/内部 tool。
 // 旧 Tactic / StockGroup / StockPool / WatchPlan tool 已按 CONTEXT.md 口径下线。
 
+export * from './agent/draft-display.js';
+export * from './agent/route.js';
+export * from './agent/scenarios.js';
 export * from './agent-whitelist.js';
 export * from './context.js';
 export * from './define-tool.js';

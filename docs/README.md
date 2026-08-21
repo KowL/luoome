@@ -55,6 +55,7 @@
 | [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、fencing lease、daily cycle、行情 checkpoint、AI 降级与 point-in-time replay |
 | [账户绩效与组合归因详细设计](./ddd/account-performance-detailed-design.md) | 现金流、公司行动、每日估值、TWR、回撤、benchmark、贡献归因与缺失语义 |
 | [Strategy 严格回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope、数据门禁、可复现身份、费用/滑点/可交易性与指标可用性 |
+| [Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md) | 场景目录与确定性路由、计划卡、部分失败契约、Advice 草案与草案卡片升级、数据健康与取消 |
 
 ## 当前开发计划
 

@@ -2453,6 +2453,7 @@ describe('/api/chat：对话助手', () => {
       await request.onFinish?.({
         id: '',
         parts: [{ type: 'text', text: '你好' }],
+        cancelled: false,
       });
       return new Response(
         [
@@ -2576,6 +2577,28 @@ describe('/api/chat：对话助手', () => {
     expect(await chatCtx.repos.strategy.findById('chat-draft-strategy')).toBeNull();
   });
 
+  it('advice 草案 tool 只生成带 display 的待确认草案，不执行 LLM 分析', async () => {
+    await createSession('advice-draft-tool');
+    await chat(chatApp, {
+      sessionId: 'advice-draft-tool',
+      messages: [
+        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '帮我分析 300857' }] },
+      ],
+    });
+    const draftTool = captured?.tools.find((item) => item.name === 'analyze_stock');
+    expect(draftTool?.description).toContain('不会执行分析');
+    const result = await draftTool?.execute({ stockId: 'SZ300857' });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'advice', tool: 'analyze_stock' },
+    });
+    const output = result?.output as { draft: { display?: { targetObject: string } } } | undefined;
+    expect(output?.draft.display?.targetObject).toBe('个股 Advice（SZ300857）');
+    // 草案路径不触发真实分析：库里不应产生 Advice 记录
+    expect(await chatCtx.repos.advice.query({})).toEqual([]);
+  });
+
   it('read 工具仍经 registry 执行，未批准的 external/trade 不暴露', async () => {
     await createSession('read-tools');
     await chat(chatApp, {
@@ -2593,6 +2616,121 @@ describe('/api/chat：对话助手', () => {
     expect(names).not.toContain('sync_quotes');
     expect(names).not.toContain('send_notification');
     expect(names).not.toContain('place_order');
+  });
+
+  it('响应投影 x-luoome-chat-route header（URL 编码的路由 JSON）', async () => {
+    await createSession('route-header');
+    const response = await chat(chatApp, {
+      sessionId: 'route-header',
+      messages: [
+        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '复盘一下最近的建议' }] },
+      ],
+    });
+    expect(response.status).toBe(200);
+    const header = response.headers.get('x-luoome-chat-route');
+    expect(header).not.toBeNull();
+    const route = JSON.parse(decodeURIComponent(header ?? '')) as {
+      scenario: string;
+      subjects: string[];
+      needsAdvice: boolean;
+      involvesWrite: boolean;
+      plannedDimensions: string[];
+    };
+    expect(route.scenario).toBe('review');
+    expect(route.plannedDimensions.length).toBeGreaterThan(0);
+    expect(captured?.instructions).toContain('描述性统计');
+  });
+
+  it('路由场景切换 chat 白名单与指令覆写', async () => {
+    await createSession('scenario-portfolio');
+    await chat(chatApp, {
+      sessionId: 'scenario-portfolio',
+      messages: [
+        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '我的持仓成本和盈亏' }] },
+      ],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('get_account_performance');
+    expect(names).toContain('list_trades');
+    expect(names).toContain('get_market_data_status');
+    expect(names).not.toContain('run_local_selector_research');
+    expect(names).not.toContain('get_confidence_calibration');
+    expect(captured?.instructions).toContain('持仓与风险');
+
+    await createSession('scenario-general');
+    await chat(chatApp, {
+      sessionId: 'scenario-general',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    const generalNames = captured?.tools.map((item) => item.name) ?? [];
+    expect(generalNames).toContain('run_local_selector_research');
+    expect(generalNames).toContain('get_market_data_status');
+    expect(generalNames).not.toContain('get_account_performance');
+  });
+
+  it('数据健康正常时不注入 dataHealth，降级时注入问题项摘要', async () => {
+    await createSession('data-health-ok');
+    await chat(chatApp, {
+      sessionId: 'data-health-ok',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    expect(captured?.instructions).not.toContain('dataHealth');
+
+    await chatCtx.repos.watchRun.save({
+      id: 'wr-failed-1',
+      mode: 'once',
+      status: 'failed',
+      startedAt: new Date('2026-08-21T00:00:00.000Z'),
+      finishedAt: new Date('2026-08-21T00:01:00.000Z'),
+      evaluatedPools: 0,
+      evaluatedStocks: 0,
+      triggered: 0,
+      notified: 0,
+      suppressedByCooldown: 0,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+      error: 'mock 失败',
+    });
+    await createSession('data-health-degraded');
+    await chat(chatApp, {
+      sessionId: 'data-health-degraded',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    expect(captured?.instructions).toContain('dataHealth');
+    expect(captured?.instructions).toContain('watch 最近一次运行失败');
+  });
+
+  it('取消时按实际 parts 落库并附加 cancelled 标记 part', async () => {
+    const cancelledRuntime: ChatStreamRuntime = {
+      createUIMessageStreamResponse: async (request) => {
+        await request.onFinish?.({
+          id: '',
+          parts: [{ type: 'text', text: '半截回答' }],
+          cancelled: true,
+        });
+        return new Response('data: [DONE]\n\n', {
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    };
+    const cancelApp = createWebApp(chatCtx, {
+      chatStreamRuntime: cancelledRuntime,
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    await createSession('cancelled-persist');
+    const response = await chat(cancelApp, {
+      sessionId: 'cancelled-persist',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    expect(response.status).toBe(200);
+    const messages = await chatCtx.repos.chat.listMessages('cancelled-persist');
+    const assistant = messages.find((message) => message.role === 'assistant');
+    expect(assistant?.parts).toContainEqual({ type: 'text', text: '半截回答' });
+    expect(assistant?.parts).toContainEqual({
+      type: 'data-luoome-cancelled',
+      data: { cancelled: true },
+    });
   });
 
   it('会话 API 支持创建、重命名、读取与删除且无需 token', async () => {

@@ -1,40 +1,8 @@
 import type { AgentCallableTool, ToolContext } from '@luoome/core';
 import type { Registry } from './registry.js';
 
-export const AGENT_V1_TOOL_NAMES = [
-  'list_holdings',
-  'get_holding',
-  'batch_quote',
-  'list_strategies',
-  'get_strategy',
-  'compare_strategy_definitions',
-  'list_strategy_runs',
-  'get_strategy_run',
-  'strategy_signals_by_stock',
-  'list_watchlists',
-  'get_watchlist',
-  'list_watchlist_changes',
-  'list_alert_plans',
-  'list_watch_triggers',
-  'get_advice',
-  'get_advice_stats',
-  'get_account_performance',
-  'get_strategy_reliability_summary',
-  'run_local_selector_research',
-  'assess_adaptive_personality',
-  'list_trades',
-  'list_research_topics',
-  'get_research_topic',
-  'list_research_documents',
-  'get_research_document',
-  'search_research_documents',
-  'get_research_embedding_status',
-  'search_research_documents_hybrid',
-  'build_research_brief',
-  'get_stock_research_view',
-] as const;
-
-const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
+export const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
+  'fetch_quote',
   'batch_quote',
   'get_account_performance',
   'search_research_documents_hybrid',
@@ -43,18 +11,19 @@ const APPROVED_EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
 export const buildAgentCallableTools = (
   registry: Registry,
   ctx: ToolContext,
+  readToolNames: readonly string[],
 ): AgentCallableTool[] =>
-  AGENT_V1_TOOL_NAMES.map((name) => {
+  readToolNames.map((name) => {
     const registered = registry.get(name);
     if (registered === undefined) {
-      throw new Error(`agent_run 白名单引用未注册 tool: ${name}`);
+      throw new Error(`agent 白名单引用未注册 tool: ${name}`);
     }
     const allowed =
       registered.sideEffect === 'read' ||
       (registered.sideEffect === 'external' && APPROVED_EXTERNAL_TOOLS.has(registered.name));
     if (!allowed) {
       throw new Error(
-        `agent_run 白名单禁止 sideEffect=${registered.sideEffect} tool: ${registered.name}`,
+        `agent 白名单禁止 sideEffect=${registered.sideEffect} tool: ${registered.name}`,
       );
     }
     return {

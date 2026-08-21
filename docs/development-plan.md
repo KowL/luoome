@@ -561,10 +561,43 @@ replay 只读取该快照，缺失时保持 unknown，不直接把当前快照�
 本轮实现对应 `market_outlook` 的结构化摘要、行情与研究视图的 `limitUp` facts、涨停 marker
 和研究时间线；单日历史拉取失败进入 `status=unavailable/warnings`，不伪造正常空结果。
 
+### M7：Agent 协作体验 Phase 0+1
+
+**状态：已完成（2026-08-21）**
+
+**预计：10～14 日；依赖：无新领域实体，基于已落地的 runtime/白名单/trace 基础**
+
+详细设计：[Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md)。
+对应 PRD Phase 0（统一现有体验）与 Phase 1（可追溯研究助手）中尚未落地的产品层缺口。
+M7A～M7D 四切片均已交付：场景目录与确定性路由、计划卡、`agent_run` 部分失败契约、
+草案 display 投影与 Advice 确认卡、数据健康注入与 chat 取消链路；全量门禁与真实浏览器
+验收通过，实施偏差记录在设计文档 §11。
+
+#### 切片
+
+1. M7A 场景目录与路由（3～4 日）：`packages/tools` 场景目录作为研究/持仓/观察/复盘四类
+   场景 prompt 与白名单的单一事实来源；确定性路由纯函数；chat/`agent_run` 接入；route
+   header 与前端计划卡。
+2. M7B 回答结构与部分失败（2～3 日）：`agent_run` 输出扩展 `unknowns`/`partialFailures`，
+   trace 失败条目强制并集；基础安全规则收口为共享 `BASE_INSTRUCTIONS`。
+3. M7C 草案升级与 Advice 确认卡（3～4 日）：draft payload 增加 `display` 投影（目标对象、
+   字段来源、不支持/歧义项）；编辑 = 预填修正；`analyze_stock`/`analyze_position`/
+   `market_outlook` 以 advice 草案进入 chat，确认后走既有 `/api/tools/:name/call`。
+4. M7D 数据健康与取消（2～3 日）：`get_market_data_status` 进白名单与上下文摘要；chat
+   前端 AbortController 取消；真实浏览器验收。
+
+#### 验收
+
+- 四场景白名单全部注册校验通过，路由确定性测试覆盖命中/兜底/优先级；
+- `agent_run` 在模型隐瞒工具失败时仍强制披露 partialFailures；
+- chat 内 advice 草案确认前零 LLM 分析调用，确认后 Advice 卡完整展示并落库回看；
+- 数据健康异常进入回答与上下文；取消不伪造完整 assistant 消息；
+- Web 自动测试与真实浏览器验收通过。
+
 ## 6. 后续产品立项
 
-N1 已排入 v0.10；N2～N4 仍只有 PRD 或方向草案。每项在编码前先产出 PRD 决策补充、DDD、
-Tool/API schema、迁移与测试矩阵。
+N1 已排入 v0.10；N2 Phase 0+1 已立项为 M7（见 §5），N2 Phase 2 与 N3～N4 仍只有 PRD 或
+方向草案。每项在编码前先产出 PRD 决策补充、DDD、Tool/API schema、迁移与测试矩阵。
 
 ### N1：账户绩效与组合归因
 
@@ -581,6 +614,11 @@ Tool/API schema、迁移与测试矩阵。
 这是新需求中优先级最高的一项，因为它直接补齐 Advice、Trade、Outcome 后的真实复盘。
 
 ### N2：Agent 协作体验 Phase 0～2
+
+**状态：Phase 0+1 已完成（2026-08-21，M7A～M7D）**，详细设计与实施偏差见
+[Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md)，
+按 M7A～M7D 切片进入排期（见 §5 M7）。Phase 2 闭环复盘助手（研究假设版本实体、
+Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向，编码前另行补详细设计。
 
 - 统一研究、持仓、观察和复盘场景提示词与白名单；
 - 展示公开计划、工具轨迹、部分失败和长任务状态；
@@ -698,4 +736,5 @@ M0～M6 已完成并退出当前排期。v0.9 完成必须同时满足：
 - 全市场数据准备和求值进入设计性能预算，所有阶段都有 WorkflowRun 审计。
 
 账户绩效 DDD、数据完整度规则、端到端场景和测试矩阵的首版已冻结并进入实现；剩余快照审计
-扩展需继续遵守同一契约。N2～N4 仍为候选方向，不与 v0.9/v0.10 并行扩张生产能力。
+扩展需继续遵守同一契约。N2 Phase 0+1 已立项为 M7 并按切片交付；N2 Phase 2、N3 剩余范围
+与 N4 仍为候选方向，不与 v0.9/v0.10 并行扩张生产能力。
