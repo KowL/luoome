@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe('MarketSettingsStore', () => {
-  it('默认启用 Eastmoney → Tencent → Sina，并标记未配置的 Tushare', () => {
+  it('默认启用 Eastmoney → Tencent → Sina，并标记未配置的 Tushare 与 fuyao', () => {
     const { store } = createStore();
     expect(store.read()).toMatchObject({
       activeOrder: ['eastmoney', 'tencent', 'sina'],
@@ -40,6 +40,13 @@ describe('MarketSettingsStore', () => {
           priority: null,
           configured: false,
           configurationHint: '需要先配置 TUSHARE_TOKEN',
+        },
+        {
+          id: 'fuyao',
+          enabled: false,
+          priority: null,
+          configured: false,
+          configurationHint: '需要先配置 FUYAO_API_KEY',
         },
       ],
     });

@@ -1,6 +1,7 @@
 import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
+import { SourceExecutionError } from '../source-error.js';
 import { MarketSourceRegistry } from './source-registry.js';
 
 describe('market/source-registry', () => {
@@ -13,6 +14,7 @@ describe('market/source-registry', () => {
           coverage: ['CN_A_SHARES_SH_SZ'],
           configurationReady: true,
           execute: () => Promise.resolve([]),
+          observationOf: () => ({ outcome: 'success' }),
         },
         {
           capability: 'realtime-index',
@@ -20,6 +22,7 @@ describe('market/source-registry', () => {
           coverage: ['CN_A_SHARES_SH_SZ'],
           configurationReady: true,
           execute: () => Promise.resolve([]),
+          observationOf: () => ({ outcome: 'success' }),
         },
       ],
       () => new Date('2026-07-28T02:30:00.000Z'),
@@ -29,6 +32,38 @@ describe('market/source-registry', () => {
       'eastmoney',
     ]);
     expect(registry.sources('delayed-index').map((source) => source.source)).toEqual(['tushare']);
+  });
+
+  it('coverage 约束过滤由 market 薄壳承担', () => {
+    const registry = new MarketSourceRegistry(
+      [
+        {
+          capability: 'quote',
+          source: 'eastmoney',
+          coverage: ['CN_A_SHARES_SH_SZ'],
+          configurationReady: true,
+          execute: () => Promise.reject(new Error('unreachable')),
+          observationOf: () => ({ outcome: 'success' }),
+        },
+        {
+          capability: 'quote',
+          source: 'tencent',
+          coverage: ['CN_A_SHARES_SH_SZ', 'HK_EQUITIES'],
+          configurationReady: true,
+          execute: () => Promise.reject(new Error('unreachable')),
+          observationOf: () => ({ outcome: 'success' }),
+        },
+      ],
+      () => new Date(),
+    );
+
+    expect(registry.sources('quote').map((source) => source.source)).toEqual([
+      'eastmoney',
+      'tencent',
+    ]);
+    expect(
+      registry.sources('quote', { coverage: 'HK_EQUITIES' }).map((source) => source.source),
+    ).toEqual(['tencent']);
   });
 
   it('执行观测自动进入动态健康库存', async () => {
@@ -54,7 +89,7 @@ describe('market/source-registry', () => {
               volume: 100,
               source: 'eastmoney',
             }),
-          dataAsOf: (quote) => quote.observedAt,
+          observationOf: (quote) => ({ outcome: 'success', dataAsOf: quote.observedAt }),
         },
       ],
       () => now,
@@ -77,9 +112,10 @@ describe('market/source-registry', () => {
       coverage: ['CN_A_SHARES_SH_SZ'] as const,
       configurationReady: true,
       execute: () => Promise.resolve([]),
+      observationOf: () => ({ outcome: 'success' as const }),
     };
     expect(() => new MarketSourceRegistry([duplicate, duplicate], () => new Date())).toThrow(
-      /duplicate market capability binding/,
+      /duplicate source capability binding/,
     );
   });
 
@@ -94,9 +130,12 @@ describe('market/source-registry', () => {
           coverage: ['CN_A_SHARES_SH_SZ'],
           configurationReady: true,
           execute: () => {
-            if (shouldFail) throw new Error('timeout: upstream unavailable');
+            if (shouldFail) {
+              throw new SourceExecutionError('timeout', 'timeout: upstream unavailable');
+            }
             return Promise.resolve([]);
           },
+          observationOf: () => ({ outcome: 'success' }),
         },
       ],
       () => now,
@@ -130,10 +169,11 @@ describe('market/source-registry', () => {
               coverage: ['CN_A_SHARES_SH_SZ'],
               configurationReady: false,
               execute: () => Promise.resolve([]),
+              observationOf: () => ({ outcome: 'success' }),
             },
           ],
           () => new Date(),
         ),
-    ).toThrow(/configuration not ready/);
+    ).toThrow(/source configuration not ready/);
   });
 });

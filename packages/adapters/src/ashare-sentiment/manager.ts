@@ -9,17 +9,18 @@ import {
   type Logger,
   type MarketDataAdapterLike,
   type MarketSnapshot,
+  type SourceStatus,
 } from '@luoome/core';
 
+import type { SourceRegistry } from '../source-registry.js';
 import type {
+  AShareSentimentCapabilityMap,
   AShareSentimentRawEntry,
   AShareSentimentRawPool,
-  AShareSentimentRawSnapshot,
-  AShareSentimentSource,
 } from './types.js';
 
 interface ManagerOptions {
-  readonly sources: readonly [AShareSentimentSource, ...AShareSentimentSource[]];
+  readonly registry: SourceRegistry<AShareSentimentCapabilityMap>;
   readonly clock: () => Date;
   readonly logger: Logger;
   readonly ttlMs?: number;
@@ -37,6 +38,8 @@ interface CacheEntry {
   readonly expiresAt: number;
   readonly snapshot: AShareSentimentSnapshot;
 }
+
+type PoolCapability = 'sentiment-sealed-pool' | 'sentiment-broken-pool';
 
 const unavailableProvenance = (
   provider: string,
@@ -105,15 +108,33 @@ const countThemes = (
 
 const dateAsShanghaiNoon = (date: string): Date => new Date(`${date}T12:00:00+08:00`);
 
+/**
+ * AShareSentimentManager。
+ *
+ * 封板 / 炸板按两个独立 capability 分别路由、分别 fallback 后再组装现有快照
+ * （docs/ddd/source-pluggability-and-observation-design.md §4.3/§6.3）：
+ * 单池失败只对该池 fallback，跨源池级拼装与 warnings 语义保持不变。
+ */
 export class AShareSentimentManager implements AShareSentimentManagerLike {
   readonly name = 'ashare-sentiment' as const;
   readonly sources: readonly string[];
+  private readonly primaryName: string;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly ttlMs: number;
 
   constructor(private readonly options: ManagerOptions) {
-    this.sources = options.sources.map((source) => source.name);
+    const sources = [...new Set(options.registry.describe().map((status) => status.source))];
+    const first = sources[0];
+    if (first === undefined) {
+      throw new Error('ashare-sentiment registry 缺少 sentiment pool capability 绑定');
+    }
+    this.sources = sources;
+    this.primaryName = first;
     this.ttlMs = options.ttlMs ?? 60_000;
+  }
+
+  status(): readonly SourceStatus[] {
+    return this.options.registry.describe();
   }
 
   async fetch(input: { readonly date: string; readonly coverage: 'CN_A_SHARES_SH_SZ' }): Promise<
@@ -146,57 +167,9 @@ export class AShareSentimentManager implements AShareSentimentManagerLike {
       return { ok: true, data: cached.snapshot };
     }
 
-    const primaryName = this.options.sources[0].name;
-    let sealed: SelectedPool | undefined;
-    let broken: SelectedPool | undefined;
-    for (const source of this.options.sources) {
-      let raw: AShareSentimentRawSnapshot;
-      try {
-        raw = await source.fetch(input);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.options.logger.warn('ashare sentiment source failed', {
-          source: source.name,
-          error: message,
-        });
-        const failure = failedPool(this.options.clock(), 'network_error', message);
-        sealed ??= { pool: failure, provider: `${source.name}/limit-up` };
-        broken ??= { pool: failure, provider: `${source.name}/broken-board` };
-        continue;
-      }
-      const validEnvelope = raw.date === input.date && raw.coverage === input.coverage;
-      const envelopeFailure = failedPool(
-        this.options.clock(),
-        'invalid_response',
-        `source envelope mismatch: ${raw.date}/${raw.coverage}`,
-      );
-      const sourceSealed = validEnvelope ? raw.sealed : envelopeFailure;
-      const sourceBroken = validEnvelope ? raw.broken : envelopeFailure;
-      if (sealed === undefined || (!sealed.pool.ok && sourceSealed.ok)) {
-        sealed = {
-          pool: sourceSealed,
-          provider: `${source.name}/limit-up`,
-          ...(source.name === primaryName ? {} : { fallbackFrom: `${primaryName}/limit-up` }),
-        };
-      }
-      if (broken === undefined || (!broken.pool.ok && sourceBroken.ok)) {
-        broken = {
-          pool: sourceBroken,
-          provider: `${source.name}/broken-board`,
-          ...(source.name === primaryName ? {} : { fallbackFrom: `${primaryName}/broken-board` }),
-        };
-      }
-      if (sealed.pool.ok && broken.pool.ok) break;
-    }
+    const sealed = await this.selectPool('sentiment-sealed-pool', 'limit-up', input);
+    const broken = await this.selectPool('sentiment-broken-pool', 'broken-board', input);
 
-    sealed ??= {
-      pool: failedPool(now, 'network_error', 'no sentiment source returned sealed pool'),
-      provider: `${primaryName}/limit-up`,
-    };
-    broken ??= {
-      pool: failedPool(now, 'network_error', 'no sentiment source returned broken pool'),
-      provider: `${primaryName}/broken-board`,
-    };
     let marketSnapshot: MarketSnapshot | undefined;
     if (this.options.market?.fetchMarketSnapshotEnvelope !== undefined) {
       try {
@@ -210,6 +183,53 @@ export class AShareSentimentManager implements AShareSentimentManagerLike {
     const snapshot = this.assemble(input.date, now, sealed, broken, marketSnapshot);
     this.cache.set(key, { snapshot, expiresAt: now.getTime() + this.ttlMs });
     return { ok: true, data: snapshot };
+  }
+
+  /**
+   * 单池选择循环：按绑定顺序逐 handle 拉取，首个 ok 池胜出；全部失败保留第一份失败
+   * （含 unsupported_date），后续源的 ok 池可替换并记录 fallbackFrom——与存量池级语义一致。
+   */
+  private async selectPool(
+    capability: PoolCapability,
+    providerSuffix: 'limit-up' | 'broken-board',
+    input: { readonly date: string; readonly coverage: 'CN_A_SHARES_SH_SZ' },
+  ): Promise<SelectedPool> {
+    const primaryName = this.primaryName;
+    let selected: SelectedPool | undefined;
+    for (const handle of this.options.registry.sources(capability)) {
+      let pool: AShareSentimentRawPool;
+      try {
+        pool = await handle.execute(input);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.logger.warn('ashare sentiment source failed', {
+          source: handle.source,
+          error: message,
+        });
+        pool = failedPool(this.options.clock(), 'network_error', message);
+      }
+      if (selected === undefined || (!selected.pool.ok && pool.ok)) {
+        selected = {
+          pool,
+          provider: `${handle.source}/${providerSuffix}`,
+          ...(handle.source === primaryName
+            ? {}
+            : { fallbackFrom: `${primaryName}/${providerSuffix}` }),
+        };
+      }
+      if (selected.pool.ok) break;
+    }
+    const poolLabel = capability === 'sentiment-sealed-pool' ? 'sealed' : 'broken';
+    return (
+      selected ?? {
+        pool: failedPool(
+          this.options.clock(),
+          'network_error',
+          `no sentiment source returned ${poolLabel} pool`,
+        ),
+        provider: `${primaryName}/${providerSuffix}`,
+      }
+    );
   }
 
   private assemble(

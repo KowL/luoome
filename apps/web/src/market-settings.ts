@@ -39,6 +39,18 @@ const SOURCE_META: Readonly<
   tencent: { label: '腾讯行情', description: '公开行情备源，覆盖沪深 A 股' },
   sina: { label: '新浪行情', description: '公开沪深目录与复权日线备源' },
   tushare: { label: 'Tushare', description: 'tushare.pro 数据服务，支持实时快照、日线与复权因子' },
+  fuyao: {
+    label: '同花顺 fuyao',
+    description: '同花顺金融数据 API，支持快照、前复权日线、检索与指数',
+  },
+};
+
+/** 需要额外凭证的行情源：未配置时 UI 标记未就绪，save 拒绝启用。 */
+const SOURCE_REQUIRED_ENV: Readonly<
+  Partial<Record<MarketSourceId, { readonly key: string; readonly label: string }>>
+> = {
+  tushare: { key: 'TUSHARE_TOKEN', label: 'Tushare' },
+  fuyao: { key: 'FUYAO_API_KEY', label: 'fuyao' },
 };
 
 const readText = (path: string): string => {
@@ -97,21 +109,22 @@ export class MarketSettingsStore {
     } catch (error) {
       configError = error instanceof Error ? error.message : String(error);
     }
-    const tushareConfigured = (env.TUSHARE_TOKEN?.trim().length ?? 0) > 0;
+    const sources = (Object.keys(SOURCE_META) as MarketSourceId[]).map((id) => {
+      const priorityIndex = activeOrder.indexOf(id);
+      const required = SOURCE_REQUIRED_ENV[id];
+      const configured = required === undefined || (env[required.key]?.trim().length ?? 0) > 0;
+      return {
+        id,
+        label: SOURCE_META[id].label,
+        description: SOURCE_META[id].description,
+        enabled: priorityIndex >= 0,
+        priority: priorityIndex >= 0 ? priorityIndex + 1 : null,
+        configured,
+        ...(configured ? {} : { configurationHint: `需要先配置 ${required?.key ?? ''}` }),
+      };
+    });
     return {
-      sources: (Object.keys(SOURCE_META) as MarketSourceId[]).map((id) => {
-        const priorityIndex = activeOrder.indexOf(id);
-        const configured = id !== 'tushare' || tushareConfigured;
-        return {
-          id,
-          label: SOURCE_META[id].label,
-          description: SOURCE_META[id].description,
-          enabled: priorityIndex >= 0,
-          priority: priorityIndex >= 0 ? priorityIndex + 1 : null,
-          configured,
-          ...(configured ? {} : { configurationHint: '需要先配置 TUSHARE_TOKEN' }),
-        };
-      }),
+      sources,
       activeOrder,
       secretPath: this.secretPath,
       ...(configError === undefined ? {} : { configError }),
@@ -121,8 +134,11 @@ export class MarketSettingsStore {
   save(input: SaveMarketSettings): MarketSettingsView {
     const settings = SaveMarketSettingsSchema.parse(input);
     const env = this.runtimeEnv();
-    if (settings.sources.includes('tushare') && (env.TUSHARE_TOKEN?.trim().length ?? 0) === 0) {
-      throw new Error('启用 Tushare 前必须配置 TUSHARE_TOKEN');
+    for (const id of settings.sources) {
+      const required = SOURCE_REQUIRED_ENV[id];
+      if (required !== undefined && (env[required.key]?.trim().length ?? 0) === 0) {
+        throw new Error(`启用 ${required.label} 前必须配置 ${required.key}`);
+      }
     }
     const serialized = settings.sources.join(',');
     this.sessionEnv.LUOOME_MARKET_SOURCES = serialized;

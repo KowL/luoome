@@ -335,4 +335,39 @@ describe('market/tencent', () => {
       expect(snapshot.items[0]).not.toHaveProperty('close', 0);
     });
   });
+
+  describe('fetchBatchQuotes（原生批量）', () => {
+    /** qt 文本行：字段布局 [3]最新价 [6]成交量(手) [30]行情时间 [32]涨跌幅%；其余空。 */
+    const batchLine = (exchange: string, code: string, close: string, changePct: string) => {
+      const fields = Array.from({ length: 39 }, () => '');
+      fields[0] = exchange === 'sh' ? '1' : '51';
+      fields[2] = code;
+      fields[3] = close;
+      fields[30] = '20260813161452';
+      fields[32] = changePct;
+      return `v_${exchange}${code}="${fields.join('~')}";`;
+    };
+
+    it('单次请求取整批；无对应行 / 非法代码只丢弃该只', async () => {
+      const urls: string[] = [];
+      const adapter = new TencentAdapter({
+        fetchImpl: ((url: string) => {
+          urls.push(String(url));
+          const body = [
+            batchLine('sh', '600519', '1355.29', '0.92'),
+            batchLine('sz', '000001', '11.25', '0'),
+          ].join('\n');
+          return Promise.resolve(new Response(body, { status: 200 }));
+        }) as never,
+        clock: () => new Date('2026-08-13T08:20:00.000Z'),
+      });
+      const quotes = await adapter.fetchBatchQuotes(['600519', '000001', '999999']);
+      // 一次请求、两只返回；999999 无对应行被丢弃
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain('sh600519,sz000001,sh999999');
+      expect(quotes).toHaveLength(2);
+      expect(quotes.map((q) => q.stockId)).toEqual(['600519', '000001']);
+      expect(quotes.find((q) => q.stockId === '600519')?.close).toBe(1355.29);
+    });
+  });
 });

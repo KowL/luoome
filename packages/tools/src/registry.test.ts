@@ -154,6 +154,14 @@ const EXPECTED_TOOL_NAMES = [
   // Phase 1：连板天梯
   'limit_up_ladder',
   'limit_up_ladder_compare',
+  // 龙虎榜（只读）
+  'dragon_tiger_list',
+  // 北向资金历史流（只读）
+  'northbound_flow',
+  // 财经要闻（只读）
+  'fetch_news',
+  // 行业板块行情（只读）
+  'fetch_sector_quotes',
   // 持久化 AI 对话会话
   'create_chat_session',
   'list_chat_sessions',

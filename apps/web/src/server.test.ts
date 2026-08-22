@@ -3,12 +3,12 @@
 // ctx 用 buildTestContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
 
 import { Database } from 'bun:sqlite';
-import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, it, mock } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { MockFundamentalDataAdapter, NotificationManager } from '@luoome/adapters';
+import { EastmoneySource, MockFundamentalDataAdapter, NotificationManager } from '@luoome/adapters';
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type {
   AgentCallableTool,
@@ -16,6 +16,7 @@ import type {
   ResearchEmbeddingAdapterLike,
   ResearchVaultAdapterLike,
   ResearchVaultGitSyncAdapterLike,
+  SourceStatus,
   ToolContext,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
@@ -759,6 +760,143 @@ describe('行情源设置 API', () => {
         ok: true,
         data: { activeOrder: ['tencent', 'eastmoney'], applied: true },
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('仅改来源顺序时复用共享 EastmoneySource 实例，无关 manager 不重建（§4.7/§9.2）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-settings-hot-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      // 共享实例带可观测 fetchImpl：重建后的 market adapter 若自构新实例则不会触达它
+      const sharedFetch = mock(async () => new Response('{}', { status: 500 }));
+      const eastmoney = new EastmoneySource({
+        fetchImpl: sharedFetch as unknown as typeof fetch,
+      });
+      const marker = (dataset: string): SourceStatus => ({
+        dataset,
+        source: `${dataset}-fake`,
+        coverage: ['CN_A_SHARES_SH_SZ'],
+        capabilityEnabled: true,
+        configurationReady: true,
+      });
+      const ctx = await buildTestContext({
+        limitUpLadder: {
+          name: 'limit-up-ladder',
+          sources: ['limit-up-ladder-fake'],
+          status: () => [marker('limit-up-ladder')],
+          fetchLadder: () => Promise.reject(new Error('not used')),
+          compareLadder: () => Promise.reject(new Error('not used')),
+        },
+        dragonTiger: {
+          name: 'dragon-tiger',
+          sources: ['dragon-tiger-fake'],
+          status: () => [marker('dragon-tiger')],
+          fetchList: () => Promise.reject(new Error('not used')),
+        },
+        northboundFlow: {
+          name: 'northbound-flow',
+          sources: ['northbound-flow-fake'],
+          status: () => [marker('northbound-flow')],
+          fetchSeries: () => Promise.reject(new Error('not used')),
+        },
+        news: {
+          name: 'news',
+          sources: ['finance-news-fake'],
+          status: () => [marker('finance-news')],
+          fetchNews: () => Promise.reject(new Error('not used')),
+        },
+        ashareSentiment: {
+          fetch: () => Promise.reject(new Error('not used')),
+          status: () => [marker('sentiment-sealed-pool')],
+        },
+      });
+      const hotApp = createWebApp(ctx, {
+        marketSettingsStore: store,
+        exposeWrite: true,
+        exposeExternal: true,
+        sources: { eastmoney },
+      });
+      const datasetKeys = async (): Promise<string[]> => {
+        const response = await hotApp.fetch(new Request('http://test/api/market-data-status'));
+        const payload = (await response.json()) as {
+          ok: boolean;
+          data: { datasets: Array<{ dataset: string; source: string }> };
+        };
+        return payload.data.datasets.map((item) => `${item.dataset}:${item.source}`);
+      };
+      const before = await datasetKeys();
+      for (const key of [
+        'limit-up-ladder:limit-up-ladder-fake',
+        'dragon-tiger:dragon-tiger-fake',
+        'northbound-flow:northbound-flow-fake',
+        'finance-news:finance-news-fake',
+        'sentiment-sealed-pool:sentiment-sealed-pool-fake',
+      ]) {
+        expect(before).toContain(key);
+      }
+
+      const saved = await hotApp.fetch(
+        new Request('http://test/api/settings/market', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sources: ['eastmoney'] }),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({
+        ok: true,
+        data: { activeOrder: ['eastmoney'], applied: true },
+      });
+
+      // 无关 manager 未被重建：fake 观测标记在热更新后仍然存在
+      const after = await datasetKeys();
+      expect(after).toEqual(
+        expect.arrayContaining([
+          'limit-up-ladder:limit-up-ladder-fake',
+          'dragon-tiger:dragon-tiger-fake',
+          'northbound-flow:northbound-flow-fake',
+          'finance-news:finance-news-fake',
+        ]),
+      );
+      // sentiment 直接依赖 market，随热更新重建为真实 factory 的 eastmoney 观测
+      expect(after).toContain('sentiment-sealed-pool:eastmoney');
+      expect(after).not.toContain('sentiment-sealed-pool:sentiment-sealed-pool-fake');
+
+      // 重建后的 market adapter 复用共享实例：fetch_quote 经 eastmoney 路由触达 sharedFetch
+      expect(sharedFetch).not.toHaveBeenCalled();
+      await hotApp.fetch(
+        new Request('http://test/api/tools/fetch_quote/call', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
+        }),
+      );
+      expect(sharedFetch).toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('buildWebContext 把注入的共享 EastmoneySource 分发给 market 与非行情 factory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-web-sources-'));
+    try {
+      const sharedFetch = mock(async () => new Response('{}', { status: 500 }));
+      const eastmoney = new EastmoneySource({
+        fetchImpl: sharedFetch as unknown as typeof fetch,
+      });
+      const ctx = await buildWebContext(
+        join(dir, 'luoome.db'),
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { sources: { eastmoney } },
+      );
+      // 非行情 factory（news）复用注入实例，而非自构走全局 fetch 的新实例
+      await ctx.news?.fetchNews({ limit: 5 });
+      expect(sharedFetch).toHaveBeenCalled();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3177,6 +3315,7 @@ const stubLadderManager = (opts: {
 }): LimitUpLadderManagerLike => ({
   name: 'limit-up-ladder',
   sources: ['eastmoney'],
+  status: () => [],
   fetchLadder: async (): Promise<LimitUpLadderResultLike> => {
     if (opts.fail === true) {
       return {
@@ -3332,6 +3471,262 @@ describe('Web 连板天梯 API', () => {
     const body = (await r.json()) as { ok: boolean; data?: { diff: { totalDelta: number } } };
     expect(body.ok).toBe(true);
     expect(body.data?.diff.totalDelta).toBe(1);
+  });
+});
+
+/**
+ * 行业板块行情 Web API。
+ * 用 stub manager 隔离 eastmoney 实链，避免网络依赖。
+ */
+import type { SectorQuoteList, SectorQuoteManagerLike, SectorQuoteResultLike } from '@luoome/core';
+
+const stubSectorQuoteManager = (opts: {
+  readonly list?: SectorQuoteList;
+  readonly fail?: boolean;
+}): SectorQuoteManagerLike => ({
+  name: 'sector-quote',
+  sources: ['eastmoney'],
+  fetchList: async (): Promise<SectorQuoteResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'sector-quote',
+          message: 'eastmoney forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    const list = opts.list ?? {
+      total: 1,
+      source: 'eastmoney' as const,
+      items: [
+        {
+          code: 'BK0732',
+          name: '贵金属',
+          price: 2837.18,
+          changePct: 0.0599,
+          change: 160.26,
+          amount: 38_253_089_126,
+          upCount: 12,
+          downCount: 0,
+          leadingStockName: '湖南白银',
+          leadingStockCode: '002716',
+          leadingStockChangePct: 0.1003,
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-08-21T07:39:32Z'),
+    };
+    return { ok: true, data: list };
+  },
+});
+
+describe('Web 行业板块行情 API', () => {
+  it('正常请求 → 200 + 与 stub 一致列表；sort/limit 透传', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ sectorQuote: stubSectorQuoteManager({}) }),
+    );
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/sectors?sort=amount&limit=10'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { total: number; source: string; items: { code: string; changePct: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.source).toBe('eastmoney');
+    expect(body.data?.items[0]?.code).toBe('BK0732');
+    expect(body.data?.items[0]?.changePct).toBeCloseTo(0.0599);
+  });
+
+  it('limit 越界 → invalid_input (400)', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ sectorQuote: stubSectorQuoteManager({}) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/market/sectors?limit=999'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ sectorQuote: stubSectorQuoteManager({ fail: true }) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/market/sectors'));
+    expect(r.status).toBe(502);
+  });
+
+  it('HTML 路由 /market/sectors 返回 index.html', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(new Request('http://test/market/sectors'));
+    expect(r.status).toBe(200);
+    const ct = r.headers.get('content-type') ?? '';
+    expect(ct).toContain('text/html');
+  });
+});
+
+/**
+ * 财经要闻 Web API（fetch_news tool）。
+ * 用 stub manager 隔离 eastmoney 实链，避免网络依赖。
+ */
+import type { NewsList, NewsManagerLike, NewsResultLike } from '@luoome/core';
+
+const stubNewsManager = (opts: {
+  readonly list?: NewsList;
+  readonly fail?: boolean;
+}): NewsManagerLike => ({
+  name: 'news',
+  sources: ['eastmoney'],
+  status: () => [],
+  fetchNews: async (): Promise<NewsResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'news',
+          message: 'eastmoney forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    const list = opts.list ?? {
+      total: 1,
+      source: 'eastmoney' as const,
+      items: [
+        {
+          id: 'n1',
+          title: '央行宣布降准释放流动性',
+          summary: '中国人民银行宣布……',
+          category: '宏观' as const,
+          source: '人民日报',
+          publishedAt: new Date('2026-08-22T10:12:00+08:00'),
+          url: 'https://finance.eastmoney.com/a/n1.html',
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-08-22T03:00:00Z'),
+    };
+    return { ok: true, data: list };
+  },
+});
+
+describe('Web 财经要闻 API', () => {
+  it('正常请求 → 200 + 与 stub 一致列表', async () => {
+    const testApp = createWebApp(await buildTestContext({ news: stubNewsManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/news?limit=8'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { total: number; source: string; items: { id: string; title: string }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.source).toBe('eastmoney');
+    expect(body.data?.items[0]?.title).toContain('降准');
+  });
+
+  it('limit 越界 → invalid_input (400)', async () => {
+    const testApp = createWebApp(await buildTestContext({ news: stubNewsManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/news?limit=999'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(await buildTestContext({ news: stubNewsManager({ fail: true }) }));
+    const r = await testApp.fetch(new Request('http://test/api/news'));
+    expect(r.status).toBe(502);
+  });
+});
+
+/**
+ * 指数分时 Web API（fetch_intraday_minutes tool）。
+ * FakeMarketAdapter 的 fetchIntradayMinutes 抛 unsupported_capability → supported:false 合法降级。
+ */
+describe('Web 指数分时 API', () => {
+  it('code 缺失 / 不在白名单 → invalid_input (400)', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r1 = await testApp.fetch(new Request('http://test/api/market/indices/intraday'));
+    expect(r1.status).toBe(400);
+    const r2 = await testApp.fetch(new Request('http://test/api/market/indices/intraday?code=HSI'));
+    expect(r2.status).toBe(400);
+    const body = (await r2.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('数据源不支持分时 → 200 + supported:false（合法降级）', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { supported: boolean; points: unknown[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.supported).toBe(false);
+    expect(body.data?.points).toEqual([]);
+  });
+
+  it('数据源返回分时点 → 200 + points 透传', async () => {
+    const ctx = await buildTestContext();
+    const stubMarket = {
+      name: 'stub-market',
+      fetchIntradayMinutes: async (stockId: string) => [
+        {
+          stockId,
+          time: new Date('2026-08-21T01:31:00Z'),
+          price: 3880.5,
+          cumVolume: 120_000,
+          cumAmount: 465_660_000,
+          source: 'tencent',
+        },
+      ],
+    };
+    const testApp = createWebApp({
+      ...ctx,
+      adapters: { ...ctx.adapters, market: stubMarket as never },
+    });
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { supported: boolean; date?: string; points: { price: number; cumAmount?: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.supported).toBe(true);
+    expect(body.data?.date).toBe('2026-08-21');
+    expect(body.data?.points[0]?.price).toBe(3880.5);
+    expect(body.data?.points[0]?.cumAmount).toBe(465_660_000);
+  });
+
+  it('上游抛错（非 unsupported）→ 502', async () => {
+    const ctx = await buildTestContext();
+    const failingMarket = {
+      name: 'stub-market',
+      fetchIntradayMinutes: async (): Promise<never> => {
+        throw new Error('socket hang up');
+      },
+    };
+    const testApp = createWebApp({
+      ...ctx,
+      adapters: { ...ctx.adapters, market: failingMarket as never },
+    });
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(r.status).toBe(502);
   });
 });
 

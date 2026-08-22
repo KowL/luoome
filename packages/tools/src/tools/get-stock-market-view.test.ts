@@ -483,6 +483,7 @@ describe('tool/get_stock_market_view', () => {
     const manager: LimitUpLadderManagerLike = {
       name: 'limit-up-ladder',
       sources: ['eastmoney'],
+      status: () => [],
       fetchLadder: async (query) => {
         requestedDates.push(query.date);
         return {

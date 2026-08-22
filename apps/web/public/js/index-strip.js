@@ -42,4 +42,39 @@ const renderIndexStrip = (containerId, indicesData, asOf) => {
   ]);
 };
 
-export { renderIndexStrip };
+/**
+ * 渲染固定指数卡片（看盘页 4 卡 / 指数页 6 卡共用）。
+ * 与 strip 不同：数据缺失 / unsupported 时卡片仍渲染，值降级为 '--'（用户要求看到卡片结构）。
+ * onSelect 非空时卡片可点击（指数页选中切换分时图），selectedCode 命中的卡加 selected class。
+ */
+const renderIndexCards = (containerId, defs, indicesData, options = {}) => {
+  const wrap = $(`#${containerId}`);
+  if (wrap === null) return;
+  const list = Array.isArray(indicesData?.indices) ? indicesData.indices : [];
+  const byCode = new Map(list.map((idx) => [String(idx.code), idx]));
+  mount(
+    wrap,
+    defs.map((def) => {
+      const idx = byCode.get(def.code);
+      const hasData = idx !== undefined;
+      const cls = !hasData ? '' : idx.change > 0 ? 'pos' : idx.change < 0 ? 'neg' : '';
+      const card = el('div', `index-card ${cls}`, [
+        el('div', 'index-card-name', def.name),
+        el('div', 'index-card-close mono', hasData ? fmtNum(idx.close) : '--'),
+        el(
+          'div',
+          'index-card-change mono',
+          hasData ? `${fmtSigned(idx.change)}（${fmtSigned(idx.changePct)}%）` : '--',
+        ),
+      ]);
+      if (options.onSelect !== undefined) {
+        card.classList.add('clickable');
+        if (options.selectedCode === def.code) card.classList.add('selected');
+        card.addEventListener('click', () => options.onSelect(def.code));
+      }
+      return card;
+    }),
+  );
+};
+
+export { renderIndexCards, renderIndexStrip };

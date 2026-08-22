@@ -11,6 +11,16 @@ import type {
 import { quantity as brandQuantity, MinuteBarSchema, money } from '@luoome/core';
 import { ZodError, z } from 'zod';
 
+import {
+  invalidPayloadError,
+  noDataError,
+  partialDataError,
+  SourceExecutionError,
+  sourceErrorKindOf,
+  unsupportedAdjustmentError,
+  unsupportedMarketError,
+  upstreamError,
+} from '../source-error.js';
 import type { TushareConfig } from '../tushare/client.js';
 import { tushareQuery } from '../tushare/client.js';
 
@@ -111,7 +121,7 @@ export class TushareMarketAdapter {
   async fetchQuote(stockCode: string): Promise<Quote> {
     if (!isTushareSupported(stockCode)) {
       this.logger.warn('tushare market not supported by tushare', { stockCode });
-      throw new Error(`unsupported_market: ${stockCode}`);
+      throw unsupportedMarketError(`unsupported_market: ${stockCode}`);
     }
     const tsCode = stockCode.toUpperCase(); // 保留完整 '600519.SH'
     try {
@@ -124,11 +134,11 @@ export class TushareMarketAdapter {
       }
       const row = rows[0];
       if (row === undefined)
-        throw new Error(`tushare no_data: ${tsCode} 快照为空（远端限流或抖动）`);
+        throw noDataError(`tushare no_data: ${tsCode} 快照为空（远端限流或抖动）`);
       // rt_k 盘前 / 停牌尚未有成交时价格全 0：不是合法 Quote，按无数据抛错走降级，
       // 避免 Zod 校验炸出冗长 parse 错误。
       if (isZeroQuoteRow(row)) {
-        throw new Error(`tushare no_data: ${tsCode} 快照价格全零（盘前或停牌无成交）`);
+        throw noDataError(`tushare no_data: ${tsCode} 快照价格全零（盘前或停牌无成交）`);
       }
       const parsed = QuoteRowSchema.parse(row);
       const fetchedAt = this.clock();
@@ -159,7 +169,7 @@ export class TushareMarketAdapter {
       const translated = translateTushareError(error);
       this.logger.warn('tushare.fetchQuote failed', {
         stockCode: tsCode,
-        kind: kindOf(translated.message),
+        kind: kindOf(translated),
         error: translated.message,
       });
       throw translated;
@@ -207,7 +217,7 @@ export class TushareMarketAdapter {
     interval: MinuteBarInterval,
   ): Promise<readonly MinuteBar[]> {
     if (!isTushareSupported(stockCode)) {
-      throw new Error(`unsupported_market: ${stockCode}`);
+      throw unsupportedMarketError(`unsupported_market: ${stockCode}`);
     }
     const tsCode = stockCode.toUpperCase();
     try {
@@ -219,13 +229,13 @@ export class TushareMarketAdapter {
         ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'],
       );
       if (rows.length > 1000) {
-        throw new Error(`partial_data: rt_min_daily exceeded 1000 rows for ${tsCode}`);
+        throw partialDataError(`partial_data: rt_min_daily exceeded 1000 rows for ${tsCode}`);
       }
       const fetchedAt = this.clock();
       const parsedRows = rows.map((row) => MinuteBarRowSchema.parse(row));
       const normalized = parsedRows.map((row) => {
         if (row.code.toUpperCase() !== tsCode) {
-          throw new Error(`tushare parse: minute code mismatch ${row.code} != ${tsCode}`);
+          throw invalidPayloadError(`tushare parse: minute code mismatch ${row.code} != ${tsCode}`);
         }
         const expectedFreq = TUSHARE_MINUTE_FREQ[interval];
         if (
@@ -233,13 +243,13 @@ export class TushareMarketAdapter {
           row.freq !== null &&
           row.freq.toUpperCase() !== expectedFreq
         ) {
-          throw new Error(
+          throw invalidPayloadError(
             `tushare parse: minute frequency mismatch ${row.freq} != ${expectedFreq}`,
           );
         }
         const endedAt = parseTradeTime(row.time);
         if (endedAt === undefined) {
-          throw new Error(`tushare parse: invalid minute time ${row.time}`);
+          throw invalidPayloadError(`tushare parse: invalid minute time ${row.time}`);
         }
         return { row, endedAt };
       });
@@ -281,7 +291,7 @@ export class TushareMarketAdapter {
       this.logger.warn('tushare.fetchMinuteBars failed', {
         stockCode: tsCode,
         interval,
-        kind: kindOf(translated.message),
+        kind: kindOf(translated),
         error: translated.message,
       });
       throw translated;
@@ -340,7 +350,7 @@ export class TushareMarketAdapter {
         });
       }
       if (indices.length === 0) {
-        throw new Error('tushare no_data: 指数行情全部缺失（index_daily 无有效行）');
+        throw noDataError('tushare no_data: 指数行情全部缺失（index_daily 无有效行）');
       }
       this.logger.info('tushare.fetchIndexQuotes ok', {
         source: 'tushare',
@@ -350,7 +360,7 @@ export class TushareMarketAdapter {
     } catch (error) {
       const translated = translateTushareError(error);
       this.logger.warn('tushare.fetchIndexQuotes failed', {
-        kind: kindOf(translated.message),
+        kind: kindOf(translated),
         error: translated.message,
       });
       throw translated;
@@ -360,7 +370,7 @@ export class TushareMarketAdapter {
   async fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]> {
     if (!isTushareSupported(stockCode)) {
       this.logger.warn('tushare market not supported by tushare', { stockCode });
-      throw new Error(`unsupported_market: ${stockCode}`);
+      throw unsupportedMarketError(`unsupported_market: ${stockCode}`);
     }
     const tsCode = stockCode.toUpperCase();
     try {
@@ -402,7 +412,9 @@ export class TushareMarketAdapter {
       adjChangePoints.sort((left, right) => left.date.localeCompare(right.date));
       const latestAdjFactor = adjChangePoints.at(-1)?.factor;
       if (dailyRows.length > 0 && latestAdjFactor === undefined) {
-        throw new Error(`unsupported_adjustment: adj_factor missing for ${tsCode}`);
+        throw unsupportedAdjustmentError(
+          `unsupported_adjustment: adj_factor missing for ${tsCode}`,
+        );
       }
       // 当日因子 = 最后一个 ≤ 当日的变动点因子（密集逐日源等价于精确匹配）。
       const adjFactorAt = (date: string): number | undefined => {
@@ -443,7 +455,9 @@ export class TushareMarketAdapter {
         const adj = adjFactorAt(date);
         if (adj === undefined) {
           // bar 日早于历史上首个因子变动日，无法确定当日复权口径
-          throw new Error(`unsupported_adjustment: adj_factor missing for ${tsCode} ${date}`);
+          throw unsupportedAdjustmentError(
+            `unsupported_adjustment: adj_factor missing for ${tsCode} ${date}`,
+          );
         }
         const ratio = adj / (latestAdjFactor as number);
         bars.push({
@@ -473,7 +487,7 @@ export class TushareMarketAdapter {
       const translated = translateTushareError(error);
       this.logger.warn('tushare.fetchDailyBars failed', {
         stockCode: tsCode,
-        kind: kindOf(translated.message),
+        kind: kindOf(translated),
         error: translated.message,
       });
       throw translated;
@@ -517,13 +531,13 @@ export class TushareMarketAdapter {
         (c) => c.name.toUpperCase().includes(normalized) || c.id.startsWith(normalized),
       );
       if (relevant.length === 0) {
-        throw new Error(`tushare no_data: search no relevant match for ${normalized}`);
+        throw noDataError(`tushare no_data: search no relevant match for ${normalized}`);
       }
       return relevant;
     } catch (error) {
       const translated = translateTushareError(error);
       this.logger.warn('tushare.searchStocks failed', {
-        kind: kindOf(translated.message),
+        kind: kindOf(translated),
         error: translated.message,
       });
       throw translated;
@@ -531,10 +545,12 @@ export class TushareMarketAdapter {
   }
 }
 
-/** ZodError → 带 `tushare ...` 前缀的普通 Error（manager 不感知额外错误类）。 */
+/** ZodError → invalid_payload；其余已结构化错误原样透传（消息保留 `tushare ...` 前缀）。 */
 export const translateTushareError = (error: unknown): Error => {
-  if (error instanceof ZodError) return new Error(`tushare parse: ${error.message}`);
-  return error instanceof Error ? error : new Error(String(error));
+  if (error instanceof ZodError) {
+    return invalidPayloadError(`tushare parse: ${error.message}`, error);
+  }
+  return error instanceof Error ? error : upstreamError(String(error));
 };
 
 /** trade_date 归一：接受八位数字或八位字符串 → 'YYYYMMDD'；其它输入返回 null。 */
@@ -587,15 +603,8 @@ const asFiniteNumber = (v: unknown): number | null =>
 const asShares = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? brandQuantity(Math.round(v * 100)) : null;
 
-const kindOf = (message: string): string => {
-  if (message.startsWith('unsupported_market')) return 'unsupported_market';
-  if (message.startsWith('tushare network')) return 'network';
-  if (message.startsWith('tushare http')) return 'http';
-  if (message.startsWith('tushare parse')) return 'parse';
-  if (message.startsWith('tushare not_found')) return 'not_found';
-  if (message.startsWith('tushare no_data')) return 'no_data';
-  return 'unknown';
-};
+const kindOf = (error: Error): string =>
+  error instanceof SourceExecutionError ? error.kind : sourceErrorKindOf(error);
 
 const errorMessage = (e: unknown): string => {
   if (e instanceof Error) return `${e.name}: ${e.message}`;

@@ -22,6 +22,10 @@ Use read tools to identify subjects and inspect current state before deeper anal
   The `profile` returned by `get_stock_research_view` is a ResearchTopic/ResearchDocument read
   model with evidence, counter-evidence and unknowns. It is not a Strategy, Advice or expected-return estimate.
 - Limit-up ladder snapshot (Phase 1): `limit_up_ladder` for a single-day ladder, `limit_up_ladder_compare` for cross-day diff. Pure read-only structured data — never interpret level as a buy/sell signal.
+- Dragon-tiger list: `dragon_tiger_list` returns one trading day's billboard entries (close, change, turnover, reason, net/buy/sell amounts). Pure read-only structured data — never interpret billboard presence as a buy/sell signal.
+- Northbound flow: `northbound_flow` returns the daily northbound (Shanghai + Shenzhen Connect) series — turnover always present; daily net buy/sell amounts are only available before 2024-08-16 (exchange disclosure change) and are `null` afterwards. Pure read-only structured data.
+- Financial news: `fetch_news` returns the eastmoney headline stream (title, summary, inferred category, media source, publish time, url). Category is a title-keyword heuristic, not an upstream fact. Pure read-only.
+- Sector quotes: `fetch_sector_quotes` returns eastmoney industry-sector realtime snapshots (code, name, price, changePct, amount, up/down counts, leading stock), sortable by changePct (default) or amount. Pure read-only structured data — never interpret sector strength as a buy/sell signal.
 - Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
 
 Market View Phase 4: `get_stock_minute_bars` returns independent OHLCV MinuteBar facts for the

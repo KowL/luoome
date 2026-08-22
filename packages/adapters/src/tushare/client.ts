@@ -1,3 +1,4 @@
+import { httpStatusErrorKind, isAbortError, SourceExecutionError } from '../source-error.js';
 import { parseTushareEnvelopeRows } from './envelope.js';
 
 /**
@@ -6,8 +7,8 @@ import { parseTushareEnvelopeRows } from './envelope.js';
  * 协议：POST `${url}`，JSON body `{api_name, token, params, fields}`，
  * 响应 `{code, msg, data: {fields, items}}`。
  * - 仅网络错误、超时与 5xx 重试（指数退避）；4xx 直接抛错。
- * - 抛出的错误统一带 `tushare ...` 前缀（network / timeout / http / upstream_error / parse），
- *   调用方不需要感知额外错误类。
+ * - 抛出的错误统一为携带结构化 kind 的 SourceExecutionError，消息保留 `tushare ...`
+ *   前缀（network / timeout / http / upstream_error / parse），观测层读 kind 不看消息。
  */
 
 export interface TushareConfig {
@@ -66,7 +67,11 @@ export const tushareQuery = async (
   try {
     raw = await res.json();
   } catch (error) {
-    throw new Error(`tushare parse: 响应不是有效 JSON（${String(error)}）`);
+    throw new SourceExecutionError(
+      'invalid_payload',
+      `tushare parse: 响应不是有效 JSON（${String(error)}）`,
+      error,
+    );
   }
   return parseTushareEnvelopeRows(raw);
 };
@@ -93,7 +98,10 @@ const postWithRetry = async (
       }
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        throw new Error(`tushare http: 远端 ${res.status} ${text}`);
+        throw new SourceExecutionError(
+          httpStatusErrorKind(res.status),
+          `tushare http: 远端 ${res.status} ${text}`,
+        );
       }
       return res;
     } catch (error) {
@@ -104,19 +112,22 @@ const postWithRetry = async (
         continue;
       }
       if (isAbortError(error)) {
-        throw new Error(`tushare timeout: 远端请求超时（${config.timeoutMs}ms）`);
+        throw new SourceExecutionError(
+          'timeout',
+          `tushare timeout: 远端请求超时（${config.timeoutMs}ms）`,
+          error,
+        );
       }
-      throw new Error(`tushare network: 远端请求失败：${String(error)}`);
+      throw new SourceExecutionError(
+        'network',
+        `tushare network: 远端请求失败：${String(error)}`,
+        error,
+      );
     } finally {
       clearTimeout(timer);
     }
   }
-  throw new Error(`tushare network: 重试耗尽：${String(lastError)}`);
+  throw new SourceExecutionError('network', `tushare network: 重试耗尽：${String(lastError)}`);
 };
-
-const isAbortError = (error: unknown): boolean =>
-  error instanceof DOMException
-    ? error.name === 'AbortError'
-    : typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError';
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

@@ -318,11 +318,14 @@ WorkflowRun 阶段审计与 `get_strategy_reliability_summary` 已落地；汇�
 ```ts
 type MarketCapability =
   | 'quote'
+  | 'batch-quote'
   | 'daily-bars'
   | 'search'
   | 'market-snapshot'
+  | 'market-snapshot-envelope'
   | 'realtime-index'
   | 'delayed-index'
+  | 'intraday-minutes'
   | 'minute-bars';
 
 interface MarketCapabilityBinding<C extends MarketCapability> {
@@ -331,6 +334,7 @@ interface MarketCapabilityBinding<C extends MarketCapability> {
   readonly coverage: readonly MarketCoverage[];
   readonly configurationReady: boolean;
   execute(input: CapabilityRequestMap[C]): Promise<CapabilityResultMap[C]>;
+  observationOf(result: CapabilityResultMap[C]): SourceResultObservation;
 }
 ```
 
@@ -341,6 +345,11 @@ Adapter manager 提供：
 - 缓存（带 TTL）
 - 限速（per-adapter 配额）
 - 股票搜索路由（空数组不降级、抛错才降级）
+- 批量快照：`batch-quote` capability（第 10 种）让原生支持多代码单请求的源
+  （eastmoney ulist、tencent qt 批量、fuyao snapshot 批量）一次请求取整批；
+  `batchQuote` 先路由 batch binding 并把结果回写 quoteCache，返回中缺漏的标的记 warn 遗漏，
+  批量路径全部失败或无 binding 时降级为有界逐股扇出；批量结果与请求代码按 base code
+  （忽略 .SH/.SZ/.BJ 后缀）匹配，兼容源返回带后缀而调用方传裸代码
 - 全市场快照路由（为扫描候选补充可选快照价，也供 LLM 分组生成候选上下文；
   `run_strategy` 全市场扫描的候选身份全集必须来自
   `StockUniverse coverage='CN_A_SHARES_SH_SZ' status='active'`，快照不得增删候选。
@@ -350,37 +359,57 @@ Adapter manager 提供：
 - 连续分钟 OHLCV 必须走显式 `minute-bars` capability；不得把 `intraday-minutes` 或 PriceSnapshot
   区间查询冒充 MinuteBar，provider 不可用时由 Tool 返回 partial/unavailable
 
+数据源路由底座是泛型 `SourceRegistry<CapabilityMap>`（adapters/source-registry.ts）：
+market 域的 `MarketSourceRegistry` 只是它的收窄薄壳，五个非行情域（连板天梯、龙虎榜、
+北向资金、要闻、A 股情绪）各自用同一泛型装配。registry 的 `execute` 包装层是唯一观测点：
+binding 用必填 `observationOf(result)` 把已 resolve 的结果分类为
+`success`（可带 `dataAsOf`）/ `failure(kind)` / `ignored` 三态，进程内内存态、重启归零；
+`lastErrorKind` 存在即 `unavailable`，否则按 `dataAsOf` 阈值判 fresh/stale，否则 `unknown`，
+不回退 `lastSuccessAt`。错误词表统一为 core 的 `SourceErrorKind`，传输与解析失败经
+`SourceExecutionError` 携带 kind，不依赖错误消息正则。
+
+东方财富在本仓库的全部能力收敛到单一 `EastmoneySource`（adapters/eastmoney/source.ts）：
+HTTP 管道在 `eastmoney/client.ts`，URL 模板与字段映射保留在各域目录的纯函数中，本类只做
+方法委托。CLI/MCP/Web 三个组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
+分发共享；Web 行情源热更新只改来源顺序时复用同一实例，仅重建 market manager 与直接依赖
+market 的 sentiment manager。
+
 `MarketDataManager` 构造时必须传入 `MarketSourceRegistry`，不存在接受 provider 宽接口的兼容
-构造路径，也不得在 Registry 之外临时实例化 Eastmoney 等隐藏来源。新增或替换来源时，在
+构造路径，也不得在 Registry 之外临时实例化隐藏来源。新增或替换来源时，在
 composition root 将 adapter 的实际能力绑定到 Registry；tool、workflow 和 surface 不改。
 
 surface 装配（v0.5 起）：CLI/TUI/Web/MCP 四个组装根统一调
 `createMarketAdapterFromEnv`（adapters/market/factory.ts）。`LUOOME_MARKET_PROVIDER`
 必须显式设为 `real`；`LUOOME_MARKET_SOURCES` 用逗号分隔、从左到右定义最多三个
 启用源及各 capability 的尝试优先级，可选
-`eastmoney`、`sina`、`tencent`、`tushare`。未配置时默认 Eastmoney → Tencent → Sina。显式启用
+`eastmoney`、`sina`、`tencent`、`tushare`、`fuyao`。未配置时默认 Eastmoney → Tencent → Sina。显式启用
 Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网关
-`http://api.tushare.pro`），非法配置在启动期抛错。
-详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md)。
+`http://api.tushare.pro`），显式启用 fuyao 时必须配置 `FUYAO_API_KEY`（`FUYAO_BASE_URL` 可选，
+缺省 `https://fuyao.aicubes.cn`），非法配置在启动期抛错。
+详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md) 与
+[fuyao-market-adapter-design](./ddd/fuyao-market-adapter-design.md)。
 
-连板天梯不走 `MarketDataManager`，由 `createLimitUpLadderManagerFromEnv`
-（adapters/limit-up-ladder/factory.ts）独立装配。`LUOOME_LIMIT_UP_LADDER_SOURCES`
-显式声明来源，当前唯一注册值为 `eastmoney`（`getTopicZTPool`，无鉴权）；未知来源在
-启动期失败，不做隐式 Eastmoney fallback。Manager 暴露实际 sources，健康读模型据此生成
-`limit-up-ladder` 数据集库存。
+连板天梯、龙虎榜、北向资金、要闻与 A 股日级情绪都不进 `MarketDataManager`，分别由
+`create*ManagerFromEnv` 独立装配；`LUOOME_*_SOURCES` 与 `LUOOME_MARKET_SOURCES` 同构
+（逗号分隔、有序、去重校验、未知源启动期抛错），当前唯一注册值为 `eastmoney`。
+各 manager 的 `status()` 直接委托 registry 观测，健康读模型（`get_market_data_status`）
+聚合 market registry、stock-universe checkpoint 与这五个 manager 的 `status()` 生成
+`datasets` 库存。
 
-A 股日级情绪同样不扩宽 `MarketDataAdapterLike`。`AShareSentimentManager` 通过
-`createAShareSentimentManagerFromEnv` 独立装配东方财富封板池和炸板池，隐藏跨池去重、
-维度级 partial/unavailable、provenance、fallback 与短 TTL 缓存；指数由
-`get_ashare_sentiment` 组合现有 `fetchIndexQuotes`。只有指数观测日与请求交易日一致时才
-进入快照。`MarketSnapshot` 通过 coverage/source/asOf/completeness 信封表达完整性；breadth 只消费
-完整真实信封，全部真实来源不可用时保持 unavailable，不从部分实时报价推算全市场宽度。详见
+A 股情绪 manager 内部把封板池与炸板池注册为 `sentiment-sealed-pool` /
+`sentiment-broken-pool` 两个独立 capability，分别路由、分别 fallback，单池故障在状态页
+只显示对应 dataset 为 `unavailable`；维度级 partial/unavailable、provenance 与短 TTL 缓存
+仍由 manager 隐藏；指数由 `get_ashare_sentiment` 组合现有 `fetchIndexQuotes`。只有指数观测日
+与请求交易日一致时才进入快照。`MarketSnapshot` 通过 coverage/source/asOf/completeness 信封
+表达完整性；breadth 只消费完整真实信封，全部真实来源不可用时保持 unavailable，不从部分
+实时报价推算全市场宽度。详见
 [Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
 
 Web 额外提供 `/api/settings/market`：GET 返回数据源启用状态、优先级与配置就绪状态，
 不返回密钥；受同源 Origin 保护的 POST 将配置原子写入权限为
 `0600` 的 `$LUOOME_HOME/.env`，验证新 adapter 后替换 `ctxRef.current.adapters.market`，
-使路由在当前 Web 进程立即生效。
+使路由在当前 Web 进程立即生效。只改来源顺序时复用进程级共享 SourceSet，不产生第二个
+EastmoneySource 实例，无关 manager 的缓存不清空。
 
 LLM 装配采用 adapters 内的 AI SDK Provider Registry。CLI/TUI/Web/MCP 四个
 composition root 均调用 `createAIStackFromEnv`，一次加载
@@ -419,6 +448,9 @@ interface ToolContext {
   };
   agent?: AgentRuntimeLike;
   limitUpLadder?: LimitUpLadderManagerLike;
+  dragonTiger?: DragonTigerManagerLike;
+  northboundFlow?: NorthboundFlowManagerLike;
+  news?: NewsManagerLike;
   ashareSentiment?: AShareSentimentManagerLike;
   user: { id: string; defaultAccountId: string };
   clock: () => Date;
@@ -429,8 +461,9 @@ interface ToolContext {
 `ctx` 是唯一被允许注入依赖的方式。`AgentRuntimeLike` 是 SDK 无关投影；AI SDK 的
 `LanguageModel` / `ToolLoopAgent` 类型只存在于 adapters。`agent_run` 从 registry
 构造显式只读能力白名单，不能绕过 tool 契约直接访问 repository 或 adapter。
-`limitUpLadder` 与 `ashareSentiment` 是日级批量快照 manager，保持为顶层可选端口，
-不混入逐标的实时行情 Gateway。
+`limitUpLadder` 等非行情 manager 是日级批量快照端口，保持为顶层可选字段，
+不混入逐标的实时行情 Gateway；各 manager 的必填 `status()` 是统一观测端口，
+直接委托各自 registry 的进程内健康观测（见 §4.7）。
 
 ## 5. 数据模型
 

@@ -6,9 +6,11 @@
 import { initAISettings, renderAISettings } from './ai-settings.js';
 import { callApi, getAccountId, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
+import { renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
+import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { renderMarket, teardownMarket } from './market.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
@@ -30,6 +32,7 @@ import {
   renderWorkflowRuns,
   runWatchOnce,
 } from './pages.js';
+import { renderSectors } from './sectors.js';
 import {
   initTargetActions,
   renderAlerts,
@@ -68,6 +71,7 @@ const startClock = () => {
 
 const ROUTES = [
   'dashboard',
+  'indices',
   'market',
   'holdings',
   'strategies',
@@ -78,6 +82,7 @@ const ROUTES = [
   'reports',
   'review',
   'limit-up',
+  'sectors',
   'chat',
   'settings',
 ];
@@ -86,6 +91,8 @@ const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
   // 离开行情页时停止 60s 自动刷新并销毁图表（设计 §11.4）。
   if (safe !== 'market') teardownMarket();
+  // 离开指数页时停止 10s 分时刷新定时器。
+  if (safe !== 'indices') teardownIndices();
   document.querySelectorAll('.route').forEach((node) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
@@ -99,8 +106,11 @@ const showRoute = async (name) => {
   try {
     if (safe === 'dashboard') {
       await renderDashboard(setStatus);
+      // 市场行情区块（概览 / 迷你热力 / 要闻）只按路由进入加载一次，不进 5s 轮询
+      await renderDashboardMarketBlocks();
       await renderDataHealth(setStatus);
     } else if (safe === 'market') await renderMarket(setStatus);
+    else if (safe === 'indices') await renderIndicesPage(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
     else if (safe === 'strategies') await renderStrategies(setStatus);
     else if (safe === 'watchlists') await renderWatchlists(setStatus);
@@ -115,6 +125,8 @@ const showRoute = async (name) => {
       await renderReview(setStatus);
     } else if (safe === 'limit-up') {
       await renderLimitUpLadder(setStatus);
+    } else if (safe === 'sectors') {
+      await renderSectors(setStatus);
     } else if (safe === 'chat') {
       initChat();
       await refreshChat();

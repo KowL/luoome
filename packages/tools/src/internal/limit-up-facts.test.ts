@@ -54,6 +54,7 @@ describe('loadStockLimitUpFacts', () => {
       fetchLadder: {
         name: 'limit-up-ladder',
         sources: ['eastmoney'],
+        status: () => [],
         fetchLadder,
         compareLadder: vi.fn(),
       },
@@ -104,6 +105,7 @@ describe('loadStockLimitUpFacts', () => {
       fetchLadder: {
         name: 'limit-up-ladder',
         sources: ['eastmoney'],
+        status: () => [],
         fetchLadder,
         compareLadder: vi.fn(),
       },

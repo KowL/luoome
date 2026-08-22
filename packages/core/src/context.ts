@@ -1,4 +1,5 @@
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
+import type { DragonTigerList, DragonTigerListQuery } from './entity/dragon-tiger.js';
 import type {
   FinancialFact,
   FinancialMissingReason,
@@ -11,8 +12,11 @@ import type {
 } from './entity/limit-up-ladder.js';
 import type { MarketSnapshot, MarketSnapshotItem } from './entity/market-snapshot.js';
 import type { MinuteBar, MinuteBarInterval } from './entity/minute-bar.js';
+import type { FetchNewsQuery, NewsList } from './entity/news.js';
+import type { NorthboundFlowQuery, NorthboundFlowSeries } from './entity/northbound-flow.js';
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
+import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
@@ -24,6 +28,7 @@ import type {
   ResearchVaultAdapterLike,
   ResearchVaultGitSyncAdapterLike,
 } from './research-vault.js';
+import type { SourceStatus } from './source.js';
 import type { SideEffect } from './types/side-effect.js';
 
 /**
@@ -53,27 +58,9 @@ export interface MarketDataAdapterLike {
   marketSourceStatus(): readonly MarketSourceStatus[];
 }
 
-export interface MarketSourceStatus {
-  readonly dataset:
-    | 'quote'
-    | 'daily-bars'
-    | 'search'
-    | 'market-snapshot'
-    | 'market-snapshot-envelope'
-    | 'realtime-index'
-    | 'delayed-index'
-    | 'intraday-minutes'
-    | 'minute-bars'
-    | 'stock-universe'
-    | 'limit-up-ladder';
-  readonly source: string;
+/** 行情域的 SourceStatus 收窄别名：coverage 为 MarketCoverage；dataset 保持开放 string（与泛型 registry 解耦，新增 capability 不要求改 core）。 */
+export interface MarketSourceStatus extends Omit<SourceStatus, 'coverage'> {
   readonly coverage: readonly MarketCoverage[];
-  readonly capabilityEnabled: boolean;
-  readonly configurationReady: boolean;
-  readonly lastAttemptAt?: Date;
-  readonly lastSuccessAt?: Date;
-  readonly dataAsOf?: Date;
-  readonly lastErrorKind?: string;
 }
 
 export interface StockUniverseManagerLike {
@@ -279,6 +266,26 @@ export interface ToolContext {
    * tools 层通过 ctx.limitUpLadder.fetchLadder / compareLadder 访问。
    */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
+  /**
+   * 龙虎榜 manager；顶层字段（与 limitUpLadder 同级），日级批量快照语义相同。
+   * tools 层通过 ctx.dragonTiger.fetchList 访问。
+   */
+  readonly dragonTiger?: DragonTigerManagerLike;
+  /**
+   * 北向资金日级历史流 manager；顶层字段（与 dragonTiger 同级），日级批量序列语义相同。
+   * tools 层通过 ctx.northboundFlow.fetchSeries 访问。
+   */
+  readonly northboundFlow?: NorthboundFlowManagerLike;
+  /**
+   * 财经要闻 manager；顶层字段（与 northboundFlow 同级），日级批量列表语义相同。
+   * tools 层通过 ctx.news.fetchNews 访问。
+   */
+  readonly news?: NewsManagerLike;
+  /**
+   * 行业板块行情 manager；顶层字段（与 news 同级），实时快照语义。
+   * tools 层通过 ctx.sectorQuote.fetchList 访问。
+   */
+  readonly sectorQuote?: SectorQuoteManagerLike;
   /** A 股日级情绪证据聚合器；外部源与维度降级封装在 adapters。 */
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly user: {
@@ -323,6 +330,8 @@ export interface AShareSentimentManagerLike {
     readonly date: string;
     readonly coverage: 'CN_A_SHARES_SH_SZ';
   }): Promise<AShareSentimentManagerResult>;
+  /** 封板 / 炸板两个 capability 的进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
 }
 
 /**
@@ -393,4 +402,100 @@ export interface LimitUpLadderManagerLike {
     prevDate: string,
     query: Omit<LimitUpLadderQuery, 'date'>,
   ): Promise<LimitUpLadderCompareResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 龙虎榜 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 DragonTigerList（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface DragonTigerResultLike {
+  readonly ok: boolean;
+  readonly data?: DragonTigerList;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'dragon-tiger';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface DragonTigerManagerLike {
+  readonly name: 'dragon-tiger';
+  readonly sources: readonly string[];
+  fetchList(query: DragonTigerListQuery): Promise<DragonTigerResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 北向资金历史流 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 NorthboundFlowSeries（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface NorthboundFlowResultLike {
+  readonly ok: boolean;
+  readonly data?: NorthboundFlowSeries;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'northbound-flow';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface NorthboundFlowManagerLike {
+  readonly name: 'northbound-flow';
+  readonly sources: readonly string[];
+  fetchSeries(query: NorthboundFlowQuery): Promise<NorthboundFlowResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 财经要闻 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 NewsList（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface NewsResultLike {
+  readonly ok: boolean;
+  readonly data?: NewsList;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'news';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface NewsManagerLike {
+  readonly name: 'news';
+  readonly sources: readonly string[];
+  fetchNews(query: FetchNewsQuery): Promise<NewsResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 行业板块行情 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 SectorQuoteList（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface SectorQuoteResultLike {
+  readonly ok: boolean;
+  readonly data?: SectorQuoteList;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'sector-quote';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface SectorQuoteManagerLike {
+  readonly name: 'sector-quote';
+  readonly sources: readonly string[];
+  fetchList(query: FetchSectorQuotesQuery): Promise<SectorQuoteResultLike>;
 }

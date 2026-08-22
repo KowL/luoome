@@ -18,8 +18,14 @@ import type {
   ComputeIndicatorsOutput,
   CreateStrategyObservationCandidatesInput,
   CreateStrategyObservationCandidatesOutput,
+  DragonTigerListInput,
+  DragonTigerListOutput,
+  FetchNewsInput,
+  FetchNewsOutput,
   FetchQuoteInput,
   FetchQuoteOutput,
+  FetchSectorQuotesInput,
+  FetchSectorQuotesOutput,
   FinishStrategyEvaluationSessionInput,
   FinishStrategyEvaluationSessionOutput,
   FinishStrategyScheduleClaimInput,
@@ -108,6 +114,8 @@ import type {
   ListWatchTriggersOutput,
   MarketOutlookInput,
   MarketOutlookOutput,
+  NorthboundFlowInput,
+  NorthboundFlowOutput,
   PrepareStrategyDataInput,
   PrepareStrategyDataOutput,
   PullResearchVaultGitInput,
@@ -468,6 +476,20 @@ export interface WorkflowToolMap {
   readonly limit_up_ladder_compare: ToolAccessor<
     typeof LimitUpLadderCompareInput,
     typeof LimitUpLadderCompareOutput
+  >;
+  // 龙虎榜（只读）
+  readonly dragon_tiger_list: ToolAccessor<
+    typeof DragonTigerListInput,
+    typeof DragonTigerListOutput
+  >;
+  // 北向资金历史流（只读）
+  readonly northbound_flow: ToolAccessor<typeof NorthboundFlowInput, typeof NorthboundFlowOutput>;
+  // 财经要闻（只读）
+  readonly fetch_news: ToolAccessor<typeof FetchNewsInput, typeof FetchNewsOutput>;
+  // 行业板块行情（只读）
+  readonly fetch_sector_quotes: ToolAccessor<
+    typeof FetchSectorQuotesInput,
+    typeof FetchSectorQuotesOutput
   >;
   readonly sync_strategy_watchlist_subscriptions: ToolAccessor<
     typeof SyncStrategyWatchlistSubscriptionsInput,

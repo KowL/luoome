@@ -29,6 +29,7 @@ import { createAccountTool } from './tools/create-account.js';
 import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
 import { deleteReportTool } from './tools/delete-report.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
+import { dragonTigerListTool } from './tools/dragon-tiger.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
@@ -59,6 +60,8 @@ import { listTradesTool } from './tools/list-trades.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
 import { marketOutlookTool } from './tools/market-outlook.js';
+import { fetchNewsTool } from './tools/news.js';
+import { northboundFlowTool } from './tools/northbound-flow.js';
 import {
   auditPortfolioPerformanceSnapshotsTool,
   createPortfolioCashFlowTool,
@@ -98,6 +101,7 @@ import {
 import { getResearchVaultRemoteSyncStatusTool } from './tools/research-vault-git-sync.js';
 import { runStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
+import { fetchSectorQuotesTool } from './tools/sector-quote.js';
 import { sendNotificationTool } from './tools/send-notification.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import {
@@ -400,6 +404,14 @@ export const toolRegistry: Registry = createRegistry([
   // Phase 1：连板天梯（docs/ddd/limit-up-ladder-detailed-design.md §7）
   limitUpLadderTool,
   limitUpLadderCompareTool,
+  // 龙虎榜（只读；东方财富数据中心公开报表）
+  dragonTigerListTool,
+  // 北向资金历史流（只读；东方财富数据中心公开报表）
+  northboundFlowTool,
+  // 财经要闻（只读；东方财富公开新闻 API）
+  fetchNewsTool,
+  // 行业板块行情（只读；东方财富 push2 板块列表公开 API）
+  fetchSectorQuotesTool,
   // v0.5 新增：持仓 / 交易录入（write）
   addTradeTool,
   addHoldingTool,

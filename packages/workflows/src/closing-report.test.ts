@@ -78,6 +78,7 @@ describe('closing-report workflow', () => {
   it('使用当日市场证据并保存六个收盘事实 section', async () => {
     const requestedDates: string[] = [];
     const manager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async (input) => {
         requestedDates.push(input.date);
         return { ok: true, data: snapshot() };
@@ -113,7 +114,7 @@ describe('closing-report workflow', () => {
   it('从真实 Watchlist 变化工具生成分组变化表', async () => {
     const ctx = await buildTestContext({
       clock: () => now,
-      ashareSentiment: { fetch: async () => ({ ok: true, data: snapshot() }) },
+      ashareSentiment: { status: () => [], fetch: async () => ({ ok: true, data: snapshot() }) },
     });
     const created = await createWatchlistTool.execute(
       {

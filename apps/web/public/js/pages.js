@@ -10,7 +10,8 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
-import { renderIndexStrip } from './index-strip.js';
+import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
+import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
 import { alertDialog, promptDialog } from './modal.js';
 import { createStockSearchBox } from './search-box.js';
@@ -127,9 +128,12 @@ const ALERT_DIRECTION_BADGE = {
   watch: { cls: 'badge-watch', label: '关注' },
 };
 
-/** 指数条渲染已抽到 index-strip.js（行情页共用）；dashboard 语义不变。 */
-const renderIndices = (indicesData, asOf) => {
-  renderIndexStrip('dashboard-indices', indicesData, asOf);
+/** 看盘页核心指数 4 卡（渲染器在 index-strip.js，与指数页共用）；数据空时卡片仍渲染为 '--'。 */
+const renderIndices = (indicesData) => {
+  const defs = DASHBOARD_INDEX_CODES.map(
+    (code) => INDEX_DEFS.find((d) => d.code === code) ?? { code, name: code },
+  );
+  renderIndexCards('dashboard-indices', defs, indicesData);
 };
 
 const boardAlertCell = (todayTrigger) => {
@@ -260,8 +264,6 @@ const renderDashboard = async (setStatus) => {
     return;
   }
   const {
-    asOf,
-    holdings: d,
     advice: adviceData,
     watchlists,
     alertPlans,
@@ -273,23 +275,12 @@ const renderDashboard = async (setStatus) => {
     todayTriggers,
   } = result.data;
 
-  // 指数条 + 实时看板
-  renderIndices(indices, asOf);
+  // 核心指数 4 卡 + 实时看板
+  renderIndices(indices);
   renderBoard(Array.isArray(board) ? board : []);
 
-  // 总市值 / 盈亏
-  $('#dash-total-value').textContent = fmtNum(d.totalValue);
-  const pnlNode = $('#dash-total-pnl');
-  pnlNode.textContent = fmtSigned(d.totalPnL);
-  pnlNode.className = `value ${d.totalPnL > 0 ? 'text-pos' : d.totalPnL < 0 ? 'text-neg' : ''}`;
-  const pnlPctNode = $('#dash-total-pnl-pct');
-  pnlPctNode.textContent = fmtPct(d.totalPnLPct);
-  pnlPctNode.className = `delta ${d.totalPnL > 0 ? 'pos' : d.totalPnL < 0 ? 'neg' : ''}`;
-  $('#dash-holdings-count').textContent = String(d.holdings.length);
-
-  // 今日建议 Top 3
+  // 今日建议 Top 3（条数与决策分布并入卡片 meta；持仓汇总卡片已移至持仓页）
   const advices = adviceData.advices;
-  $('#dash-advice-count').textContent = String(advices.length);
   const top = [...advices].sort((a, b) => b.confidence - a.confidence).slice(0, 3);
   mount(
     $('#dash-advice-list'),
@@ -301,9 +292,11 @@ const renderDashboard = async (setStatus) => {
     acc[a.decision] = (acc[a.decision] ?? 0) + 1;
     return acc;
   }, {});
-  $('#dash-advice-summary').textContent = Object.entries(byDecision)
+  const decisionSummary = Object.entries(byDecision)
     .map(([decision, count]) => `${decision}×${count}`)
     .join(' · ');
+  $('#dash-advice-meta').textContent =
+    `共 ${advices.length} 条${decisionSummary.length > 0 ? ` · ${decisionSummary}` : ''}`;
 
   setHealth('#dash-watch-dot', watch.state);
   $('#dash-watch-state').textContent = healthLabel(watch.state);
@@ -391,6 +384,16 @@ const renderHoldings = async (setStatus) => {
   const { holdings, totalValue, totalPnL, totalPnLPct, totalTodayPnl, totalTodayPnlPct } = r.data;
   // 缓存给「分析全部」复用，批量入口不再重复拉 /api/holdings
   currentHoldings = holdings;
+
+  // 顶部汇总卡片（从看盘页迁入；口径与原 dashboard-stats 一致）
+  $('#holdings-stat-total-value').textContent = fmtNum(totalValue);
+  const statPnlNode = $('#holdings-stat-total-pnl');
+  statPnlNode.textContent = fmtSigned(totalPnL);
+  statPnlNode.className = `value ${totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : ''}`;
+  const statPnlPctNode = $('#holdings-stat-total-pnl-pct');
+  statPnlPctNode.textContent = fmtPct(totalPnLPct);
+  statPnlPctNode.className = `delta ${totalPnL > 0 ? 'pos' : totalPnL < 0 ? 'neg' : ''}`;
+  $('#holdings-stat-count').textContent = String(holdings.length);
 
   const tableWrap = body.closest('.table-wrap');
   let paginationWrap = tableWrap?.nextElementSibling;

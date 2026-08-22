@@ -35,7 +35,7 @@
   <!-- 1. 顶栏 -->
   <header class="topbar" role="banner">
     <div class="brand">
-      luoome <small>本地投资 advisor</small>
+      luoome
     </div>
     <div class="topbar-meta">
       <label class="account-select-wrap" for="account-select">
@@ -50,16 +50,12 @@
     </div>
   </header>
 
-  <div class="advice-disclaimer-banner" role="note" aria-label="投资风险提示">
-    <span>本建议由 AI 生成，不构成投资建议。</span>
-    <span>投资有风险，决策需自行承担。</span>
-  </div>
-
   <!-- 3. 主布局：侧栏 + 内容 -->
   <div class="app-shell">
     <aside class="sidebar" aria-label="主导航">
       <ul class="nav" role="navigation">
         <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>看盘</span></a></li>
+        <li><a class="nav-item" href="#indices" data-route="indices"><span>指数</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
         <li><a class="nav-item" href="#strategies" data-route="strategies"><span>策略</span></a></li>
         <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>关注</span></a></li>
@@ -69,6 +65,7 @@
         <li><a class="nav-item" href="#reports" data-route="reports"><span>报告</span></a></li>
         <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
         <li><a class="nav-item" href="#limit-up" data-route="limit-up"><span>涨停梯队</span></a></li>
+        <li><a class="nav-item" href="#sectors" data-route="sectors"><span>板块热力</span></a></li>
         <li><a class="nav-item" href="#chat" data-route="chat"><span>对话</span></a></li>
         <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
       </ul>
@@ -81,12 +78,33 @@
           <h1>看盘</h1>
           <div id="dashboard-stock-search"></div>
         </div>
-        <div id="dashboard-indices" class="index-strip" hidden></div>
-        <div id="dashboard-stats" class="stat-grid">
-          <div class="stat"><div class="label">总市值</div><div class="value" id="dash-total-value">--</div></div>
-          <div class="stat"><div class="label">总盈亏</div><div class="value" id="dash-total-pnl">--</div><div class="delta" id="dash-total-pnl-pct">--</div></div>
-          <div class="stat"><div class="label">持仓数</div><div class="value" id="dash-holdings-count">--</div></div>
-          <div class="stat"><div class="label">今日建议</div><div class="value" id="dash-advice-count">--</div><div class="delta" id="dash-advice-summary">--</div></div>
+        <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；查看全部 → #indices 指数页） -->
+        <div class="card" id="dashboard-indices-card">
+          <div class="card-header">
+            <h2>核心指数</h2>
+            <a href="#indices" class="card-link">查看全部 →</a>
+          </div>
+          <div id="dashboard-indices" class="index-card-grid"></div>
+        </div>
+        <!-- 市场概览（A 股情绪快照：宽度 / 涨跌停；dashboard-market.js 每次进入路由时加载一次） -->
+        <div id="dashboard-overview" class="stat-grid">
+          <div class="stat"><div class="label">上涨家数</div><div class="value text-pos" id="dash-advancing">--</div></div>
+          <div class="stat"><div class="label">下跌家数</div><div class="value text-neg" id="dash-declining">--</div></div>
+          <div class="stat"><div class="label">涨停封板</div><div class="value" id="dash-sealed">--</div><div class="delta" id="dash-ladder">--</div></div>
+          <div class="stat"><div class="label">炸板率</div><div class="value" id="dash-broken-rate">--</div><div class="delta" id="dash-broken-count">--</div></div>
+        </div>
+        <div class="dashboard-cols">
+          <div class="card">
+            <div class="card-header">
+              <h2>行业板块热力</h2>
+              <a href="#sectors" class="card-link">查看全部 →</a>
+            </div>
+            <div id="dash-sector-heatmap"><p class="placeholder">加载中…</p></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2>财经要闻</h2><div class="card-meta" id="dash-news-meta"></div></div>
+            <div id="dash-news-list"><p class="placeholder">加载中…</p></div>
+          </div>
         </div>
         <div class="card" id="dashboard-board-card">
           <div class="card-header"><h2>实时看板</h2><div class="card-meta" id="dashboard-board-meta"></div></div>
@@ -157,6 +175,28 @@
         <div class="card" id="dashboard-data-health">
           <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale Watchlist</div></div>
           <div id="data-health-body" class="data-health">加载中…</div>
+        </div>
+      </section>
+
+      <!-- route: indices（核心指数 + 分时走势） -->
+      <section id="route-indices" class="route" data-route="indices" hidden>
+        <div class="route-header">
+          <h1>指数</h1>
+          <div class="route-meta">沪深创科 + 港股 · 点击卡片看分时</div>
+        </div>
+        <div id="indices-cards" class="index-card-grid"></div>
+        <div class="card mt-4" id="indices-chart-card">
+          <div class="card-header">
+            <h2 id="indices-chart-title">分时走势</h2>
+            <div class="card-meta" id="indices-chart-meta">--</div>
+          </div>
+          <div class="indices-price-row">
+            <span class="indices-price mono" id="indices-price">--</span>
+            <span class="indices-change mono" id="indices-change">--</span>
+          </div>
+          <div id="indices-chart" class="indices-chart"><p class="placeholder">加载中…</p></div>
+          <div id="indices-timeaxis" class="indices-timeaxis" hidden></div>
+          <div id="indices-detail" class="indices-detail"></div>
         </div>
       </section>
 
@@ -258,6 +298,11 @@
         <div class="route-header">
           <h1>持仓</h1>
           <div class="route-meta">实时市值 · 盈亏</div>
+        </div>
+        <div id="holdings-stats" class="stat-grid">
+          <div class="stat"><div class="label">总市值</div><div class="value" id="holdings-stat-total-value">--</div></div>
+          <div class="stat"><div class="label">总盈亏</div><div class="value" id="holdings-stat-total-pnl">--</div><div class="delta" id="holdings-stat-total-pnl-pct">--</div></div>
+          <div class="stat"><div class="label">持仓数</div><div class="value" id="holdings-stat-count">--</div></div>
         </div>
         <div class="card">
           <div class="card-header">
@@ -684,6 +729,9 @@
 
       <!-- route: limit-up -->
       <section id="route-limit-up" class="route" data-route="limit-up" hidden></section>
+
+      <!-- route: sectors -->
+      <section id="route-sectors" class="route" data-route="sectors" hidden></section>
 
       <!-- route: settings -->
       <section id="route-settings" class="route" data-route="settings" hidden>

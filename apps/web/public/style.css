@@ -2319,6 +2319,159 @@ html.has-bg-image .bg-layer {
   color: var(--muted);
 }
 
+/* ---------- 核心指数卡片（看盘页 4 卡 / 指数页 6 卡共用） ---------- */
+
+.index-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--space-3);
+}
+
+.index-card {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.index-card.clickable {
+  cursor: pointer;
+}
+
+.index-card.clickable:hover {
+  border-color: var(--line-strong);
+}
+
+.index-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.index-card-name {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.index-card-close {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.index-card-change {
+  font-size: var(--text-sm);
+}
+
+.index-card.pos .index-card-close,
+.index-card.pos .index-card-change {
+  color: var(--pos);
+}
+
+.index-card.neg .index-card-close,
+.index-card.neg .index-card-change {
+  color: var(--neg);
+}
+
+/* ---------- 指数页分时图 ---------- */
+
+.indices-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.indices-price {
+  font-size: 28px;
+  font-weight: var(--weight-bold, 700);
+}
+
+.indices-change {
+  font-size: var(--text-md);
+}
+
+.indices-chart {
+  height: 280px;
+}
+
+.indices-chart-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.chart-grid-line {
+  stroke: var(--line);
+  stroke-width: 0.3;
+}
+
+.chart-base-line {
+  stroke: var(--line-strong);
+  stroke-width: 0.4;
+  stroke-dasharray: 2, 2;
+}
+
+.chart-price-line {
+  fill: none;
+  stroke-width: 0.8;
+  stroke-linejoin: round;
+}
+
+.grad-pos-a {
+  stop-color: var(--pos);
+  stop-opacity: 0.15;
+}
+
+.grad-pos-b {
+  stop-color: var(--pos);
+  stop-opacity: 0;
+}
+
+.grad-neg-a {
+  stop-color: var(--neg);
+  stop-opacity: 0.15;
+}
+
+.grad-neg-b {
+  stop-color: var(--neg);
+  stop-opacity: 0;
+}
+
+.indices-timeaxis {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.indices-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.indices-detail-cell {
+  text-align: center;
+}
+
+.indices-detail-cell .label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.indices-detail-cell .value {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
 /* 实时看板 */
 .board-table .board-row {
   cursor: pointer;
@@ -5775,6 +5928,107 @@ body > .modal {
 
 .ladder-diff .value.neg {
   color: var(--neg);
+}
+
+/* ---------- 板块热力（sectors 页） ---------- */
+
+.sector-heatmap {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px;
+  margin-bottom: var(--space-6);
+}
+
+.sector-tile {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+  min-height: 64px;
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  cursor: default;
+  overflow: hidden;
+}
+
+.sector-tile-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sector-tile-pct {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.sector-tile-lead {
+  font-size: var(--text-xs);
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 看盘页迷你热力：更小的格子，grid 整体可点击（跳 #sectors） */
+.sector-heatmap.mini {
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  margin-bottom: 0;
+}
+
+.sector-heatmap.mini .sector-tile {
+  min-height: 54px;
+}
+
+.sector-heatmap.mini .sector-tile-lead {
+  display: none;
+}
+
+/* 看盘页财经要闻列表 */
+.news-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.news-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.news-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pos);
+  margin-top: 7px;
+  flex-shrink: 0;
+}
+
+.news-main {
+  min-width: 0;
+}
+
+.news-title {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.news-title:hover {
+  color: var(--accent);
+}
+
+.news-meta {
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 
 /* ============================================================

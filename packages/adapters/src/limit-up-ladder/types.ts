@@ -22,14 +22,27 @@ export type LimitUpLadderResult =
   | { readonly ok: true; readonly data: LimitUpLadderManagerResult }
   | { readonly ok: false; readonly error: LimitUpLadderError };
 
-/** 单个数据源适配器（当前仅 eastmoney 实现；name 用于错误 / 日志标识）。 */
+/** adapter / source 一次天梯拉取的完整结果；observedAt 供 registry 观测（§6.2）。 */
+export interface LimitUpLadderFetchResult {
+  readonly date: string;
+  /** 源实际观测时刻：历史日为收盘时刻，当日为 min(fetchedAt, 收盘)。 */
+  readonly observedAt: Date;
+  readonly entries: LimitUpLadderRawEntry[];
+}
+
+/** 单个数据源适配器（当前仅 EastmoneySource 实现；name 用于错误 / 日志标识）。 */
 export interface LimitUpLadderAdapterLike {
   readonly name: string;
-  fetchLadder(
-    date: string,
-    opts?: { readonly days?: number },
-  ): Promise<{ readonly date: string; readonly entries: LimitUpLadderRawEntry[] }>;
+  fetchLadder(date: string, opts?: { readonly days?: number }): Promise<LimitUpLadderFetchResult>;
 }
+
+/** 连板天梯域的 capability map（SourceRegistry 实例化，§6.2）。 */
+export type LimitUpLadderCapabilityMap = {
+  readonly 'limit-up-ladder': {
+    readonly request: { readonly date: string; readonly days: number };
+    readonly result: LimitUpLadderFetchResult;
+  };
+};
 
 /** 数据源 adapter 返回的原始条目（snake_case，协议层）。 */
 export interface LimitUpLadderRawEntry {

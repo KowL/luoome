@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { EastmoneyAdapter, EastmoneyAdapterError, parseEastmoneyClist } from './eastmoney.js';
+import { EastmoneySource } from '../eastmoney/source.js';
+import { SourceExecutionError } from '../source-error.js';
+import { EastmoneyAdapterError, parseEastmoneyClist } from './eastmoney.js';
 
 /** 构造固定 JSON 响应。 */
 const okJson = (data: object): string => JSON.stringify({ rc: 0, data });
@@ -24,7 +26,7 @@ const makeQuoteOk = () => ({
 describe('market/eastmoney', () => {
   describe('fetchQuote', () => {
     it('成功解析 quote；source=eastmoney', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson(makeQuoteOk()), { status: 200 })) as never,
         clock: () => new Date('2026-07-24T07:00:05.000Z'),
       });
@@ -38,7 +40,7 @@ describe('market/eastmoney', () => {
     });
 
     it('f60 昨收 → prevClose 填充；f60 缺失 → 无 prevClose', async () => {
-      const withPrev = new EastmoneyAdapter({
+      const withPrev = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson(makeQuoteOk()), { status: 200 })) as never,
       });
       const q1 = await withPrev.fetchQuote('002594');
@@ -46,7 +48,7 @@ describe('market/eastmoney', () => {
 
       const noF60 = makeQuoteOk();
       delete (noF60 as Record<string, unknown>).f60;
-      const withoutPrev = new EastmoneyAdapter({
+      const withoutPrev = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson(noF60), { status: 200 })) as never,
       });
       const q2 = await withoutPrev.fetchQuote('002594');
@@ -54,7 +56,7 @@ describe('market/eastmoney', () => {
     });
 
     it('f48 成交额 / f168 换手率 → amount / turnoverRatePct 填充；缺失则省略', async () => {
-      const withFields = new EastmoneyAdapter({
+      const withFields = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson(makeQuoteOk()), { status: 200 })) as never,
       });
       const q1 = await withFields.fetchQuote('002594');
@@ -64,7 +66,7 @@ describe('market/eastmoney', () => {
       const noFields = makeQuoteOk() as Record<string, unknown>;
       delete noFields.f48;
       delete noFields.f168;
-      const withoutFields = new EastmoneyAdapter({
+      const withoutFields = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson(noFields), { status: 200 })) as never,
       });
       const q2 = await withoutFields.fetchQuote('002594');
@@ -73,7 +75,7 @@ describe('market/eastmoney', () => {
     });
 
     it('stockCode 带 exchange 后缀时仍能正确解析', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson(makeQuoteOk()), { status: 200 })) as never,
       });
       const q = await adapter.fetchQuote('002594.SZ');
@@ -81,22 +83,25 @@ describe('market/eastmoney', () => {
     });
 
     it('rc != 0 时抛 EastmoneyAdapterError', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () => new Response(JSON.stringify({ rc: -1 }), { status: 200 })) as never,
       });
       await expect(adapter.fetchQuote('002594')).rejects.toBeInstanceOf(EastmoneyAdapterError);
     });
 
-    it('HTTP 500 时抛 EastmoneyAdapterError', async () => {
-      const adapter = new EastmoneyAdapter({
+    it('HTTP 500 时抛结构化传输错误（client 层，非 EastmoneyAdapterError）', async () => {
+      const adapter = new EastmoneySource({
         fetchImpl: (async () =>
           new Response('oops', { status: 500, statusText: 'Server Error' })) as never,
       });
-      await expect(adapter.fetchQuote('002594')).rejects.toBeInstanceOf(EastmoneyAdapterError);
+      await expect(adapter.fetchQuote('002594')).rejects.toBeInstanceOf(SourceExecutionError);
+      await expect(adapter.fetchQuote('002594')).rejects.toMatchObject({
+        kind: 'upstream_error',
+      });
     });
 
     it('f43 缺失时抛错', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson({}), { status: 200 })) as never,
       });
       await expect(adapter.fetchQuote('002594')).rejects.toBeInstanceOf(EastmoneyAdapterError);
@@ -104,7 +109,7 @@ describe('market/eastmoney', () => {
 
     it('港股 5 位代码 → secid 116.xxxxx', async () => {
       let capturedUrl = '';
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: ((url: string) => {
           capturedUrl = String(url);
           return Promise.resolve(
@@ -119,7 +124,7 @@ describe('market/eastmoney', () => {
     });
 
     it('未知代码格式抛错', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () => new Response(okJson({}), { status: 200 })) as never,
       });
       await expect(adapter.fetchQuote('XYZ123')).rejects.toBeInstanceOf(EastmoneyAdapterError);
@@ -129,7 +134,7 @@ describe('market/eastmoney', () => {
   describe('batchQuote', () => {
     it('并发拉多股；单条 rc=-1 失败不中断', async () => {
       let count = 0;
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: ((url: string) => {
           count += 1;
           if (url.includes('002594')) {
@@ -146,12 +151,52 @@ describe('market/eastmoney', () => {
     });
   });
 
+  describe('fetchBatchQuotes（原生批量）', () => {
+    it('单次请求多 secid；缺漏标的不占位', async () => {
+      const urls: string[] = [];
+      const adapter = new EastmoneySource({
+        fetchImpl: ((url: string) => {
+          urls.push(String(url));
+          return Promise.resolve(
+            new Response(
+              okJson({
+                diff: [
+                  {
+                    f12: '600519',
+                    f13: '1',
+                    f2: 1355.29,
+                    f17: 1350,
+                    f15: 1360,
+                    f16: 1340,
+                    f5: 1000,
+                    f6: 100000,
+                    f18: 1350,
+                    f8: 0.5,
+                    f124: 1755555555,
+                  },
+                ],
+              }),
+              { status: 200 },
+            ),
+          );
+        }) as never,
+      });
+      const quotes = await adapter.fetchBatchQuotes(['600519', '002594']);
+      // 一次请求包含两只的 secid；002594 无对应行 → 只返回 600519
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain('secids=1.600519,0.002594');
+      expect(quotes).toHaveLength(1);
+      expect(quotes[0]?.stockId).toBe('600519');
+      expect(quotes[0]?.close).toBe(1355.29);
+    });
+  });
+
   describe('fetchIndexQuotes', () => {
-    it('并发解析 5 只主要指数；f58 名称为准', async () => {
-      const adapter = new EastmoneyAdapter({
+    it('并发解析 6 只主要指数；f58 名称为准', async () => {
+      const adapter = new EastmoneySource({
         clock: () => new Date('2026-07-28T01:00:00.000Z'),
         fetchImpl: ((url: string) => {
-          const secid = String(url).match(/secid=([\d.]+)/)?.[1] ?? '';
+          const secid = String(url).match(/secid=([\w.]+)/)?.[1] ?? '';
           const code = secid.split('.')[1] ?? secid;
           return Promise.resolve(
             new Response(
@@ -162,13 +207,14 @@ describe('market/eastmoney', () => {
         }) as never,
       });
       const indices = await adapter.fetchIndexQuotes();
-      expect(indices).toHaveLength(5);
+      expect(indices).toHaveLength(6);
       expect(indices.map((q) => q.code)).toEqual([
         '000001',
         '399001',
         '399006',
         '000300',
         '000688',
+        'HSI',
       ]);
       const first = indices[0];
       expect(first?.name).toBe('指数000001');
@@ -180,9 +226,9 @@ describe('market/eastmoney', () => {
     });
 
     it('单只失败被跳过（rc=-1 / f43 缺失），其余正常返回', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: ((url: string) => {
-          const secid = String(url).match(/secid=([\d.]+)/)?.[1] ?? '';
+          const secid = String(url).match(/secid=([\w.]+)/)?.[1] ?? '';
           const code = secid.split('.')[1] ?? secid;
           if (code === '399001') {
             return Promise.resolve(new Response(JSON.stringify({ rc: -1 }), { status: 200 }));
@@ -198,11 +244,11 @@ describe('market/eastmoney', () => {
         }) as never,
       });
       const indices = await adapter.fetchIndexQuotes();
-      expect(indices.map((q) => q.code)).toEqual(['000001', '399006', '000688']);
+      expect(indices.map((q) => q.code)).toEqual(['000001', '399006', '000688', 'HSI']);
     });
 
     it('全部失败抛 EastmoneyAdapterError', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () => new Response(JSON.stringify({ rc: -1 }), { status: 200 })) as never,
       });
       await expect(adapter.fetchIndexQuotes()).rejects.toBeInstanceOf(EastmoneyAdapterError);
@@ -219,7 +265,7 @@ describe('market/eastmoney', () => {
           '2026-07-02,105,108,109,104,1500000,0,0,0',
         ],
       };
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () =>
           new Response(JSON.stringify({ rc: 0, data }), { status: 200 })) as never,
       });
@@ -235,7 +281,7 @@ describe('market/eastmoney', () => {
     });
 
     it('非 6 字段行跳过；rc != 0 抛错', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: (async () =>
           new Response(JSON.stringify({ rc: -1, data: { klines: [] } }), { status: 200 })) as never,
       });
@@ -287,7 +333,7 @@ describe('market/eastmoney', () => {
 
     it('满页继续翻页，不足一页停止；结果为多页合并', async () => {
       const requestedPages: number[] = [];
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: ((url: string) => {
           const pn = Number(new URL(url).searchParams.get('pn'));
           requestedPages.push(pn);
@@ -304,7 +350,7 @@ describe('market/eastmoney', () => {
     });
 
     it('返回带分页完整性、来源和抓取时间的 envelope', async () => {
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         clock: () => new Date('2026-07-28T08:00:00.000Z'),
         fetchImpl: ((url: string) => {
           const pn = Number(new URL(url).searchParams.get('pn'));
@@ -331,7 +377,7 @@ describe('market/eastmoney', () => {
 
     it('累计达到 total 时提前停止', async () => {
       const requestedPages: number[] = [];
-      const adapter = new EastmoneyAdapter({
+      const adapter = new EastmoneySource({
         fetchImpl: ((url: string) => {
           const pn = Number(new URL(url).searchParams.get('pn'));
           requestedPages.push(pn);
@@ -347,8 +393,8 @@ describe('market/eastmoney', () => {
       expect(items.length).toBe(500);
     });
 
-    it('任一页失败 → 抛 EastmoneyAdapterError（不返回半拉子全集）', async () => {
-      const adapter = new EastmoneyAdapter({
+    it('任一页失败 → 抛结构化错误（不返回半拉子全集）', async () => {
+      const adapter = new EastmoneySource({
         fetchImpl: ((url: string) => {
           const pn = Number(new URL(url).searchParams.get('pn'));
           if (pn === 2) return Promise.resolve(new Response('oops', { status: 500 }));
@@ -359,7 +405,7 @@ describe('market/eastmoney', () => {
           );
         }) as never,
       });
-      await expect(adapter.fetchMarketSnapshot()).rejects.toBeInstanceOf(EastmoneyAdapterError);
+      await expect(adapter.fetchMarketSnapshot()).rejects.toBeInstanceOf(SourceExecutionError);
     });
   });
 });

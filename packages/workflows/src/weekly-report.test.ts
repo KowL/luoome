@@ -126,6 +126,7 @@ describe('weekly-report workflow', () => {
   it('按本周真实交易日生成趋势，不把自然日周末纳入周期', async () => {
     const requestedDates: string[] = [];
     const manager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async (input) => {
         requestedDates.push(input.date);
         return { ok: true, data: snapshotFor(input.date) };

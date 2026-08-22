@@ -113,6 +113,17 @@ evidence、counter-evidence、unknown/unavailable、来源状态和事实截止�
 行业或当前股票池推断研究结论。横截面 selector 属于 Strategy 研究 Tool，adaptive personality 只是
 版本化训练/验证可信门禁，均不自动创建 Advice 或 Trade。
 
+### 数据源观测（SourceObservation）
+
+每个外部数据源能力在内存中的最近运行事实：`lastAttemptAt`、`lastSuccessAt`、`dataAsOf`、
+`lastErrorKind`。它是内存态运行观测，进程重启归零，不代表历史可用性，也不是数据新鲜度的
+唯一判据（freshness 由 `get_market_data_status` 结合阈值推导为 fresh / stale / unknown /
+unavailable）。只记录源失败（网络、上游、无效响应），调用方输入错误与非交易日早退不计入。
+行情、连板天梯、龙虎榜、A 股情绪、北向资金、要闻等所有域共用同一泛化 `SourceRegistry`
+的 execute 包装层作为唯一观测点：binding 以 `observationOf` 把已 resolve 的结果分类为
+success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态，成功清除
+`lastErrorKind`，失败保留上一份 `lastSuccessAt` / `dataAsOf` 供诊断。
+
 ## 关键约束
 
 - 首期全市场覆盖固定为沪深 A 股，不暗示港股、美股或北交所。

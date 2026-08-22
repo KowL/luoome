@@ -20,6 +20,7 @@ import {
   createResearchVaultAdapterFromEnv,
   createResearchVaultGitSyncAdapterFromEnv,
   createStockUniverseManagerFromEnv,
+  EastmoneySource,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
@@ -84,9 +85,12 @@ export const createServerContext = async (
   } catch {
     logger.warn('Research Vault 远端同步配置无效；MCP 将以未挂载状态继续');
   }
+  // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与 sentiment factory（§4.6）
+  const sources = { eastmoney: new EastmoneySource({ clock: now }) };
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger,
+    sources,
   });
   const ctx = buildContext({
     repos: handle.repos,
@@ -109,7 +113,12 @@ export const createServerContext = async (
     logger,
     auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
     auditCaller: 'mcp',
-    ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger, market }),
+    ashareSentiment: createAShareSentimentManagerFromEnv(env, {
+      clock: now,
+      logger,
+      market,
+      sources,
+    }),
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),
     ...(researchVaultGitSync ? { researchVaultGitSync } : {}),

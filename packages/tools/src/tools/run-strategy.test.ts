@@ -111,6 +111,7 @@ describe('run_strategy', () => {
       limitUpLadder: {
         name: 'limit-up-ladder',
         sources: ['eastmoney'],
+        status: () => [],
         fetchLadder: async ({ date }) => {
           requestedDate = date;
           return {
@@ -309,6 +310,7 @@ describe('run_strategy', () => {
       limitUpLadder: {
         name: 'limit-up-ladder',
         sources: ['eastmoney'],
+        status: () => [],
         fetchLadder: async () => {
           throw new Error('current manager must not be called during replay');
         },

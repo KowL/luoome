@@ -13,16 +13,21 @@ import { join } from 'node:path';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createDragonTigerManagerFromEnv,
   createFileAuditLogger,
   createFundamentalDataAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createNewsManagerFromEnv,
+  createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
   createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createResearchVaultGitSyncAdapterFromEnv,
+  createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
+  EastmoneySource,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
@@ -75,9 +80,12 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const accounts = await repos.account.list();
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const logger = createStderrLogger();
+  // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
+  const sources = { eastmoney: new EastmoneySource({ clock: now }) };
   const market = createMarketAdapterFromEnv(process.env, {
     clock: now,
     logger,
+    sources,
   });
   const fundamentalData = createFundamentalDataAdapterFromEnv(process.env);
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
@@ -95,6 +103,26 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     },
   };
   const limitUpLadder = createLimitUpLadderManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    sources,
+  });
+  const dragonTiger = createDragonTigerManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    sources,
+  });
+  const northboundFlow = createNorthboundFlowManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    sources,
+  });
+  const news = createNewsManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    sources,
+  });
+  const sectorQuote = createSectorQuoteManagerFromEnv(process.env, {
     clock: now,
     logger,
   });
@@ -141,10 +169,15 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
     auditCaller: 'cli',
     limitUpLadder,
+    dragonTiger,
+    northboundFlow,
+    news,
+    sectorQuote,
     ashareSentiment: createAShareSentimentManagerFromEnv(process.env, {
       clock: now,
       logger,
       market,
+      sources,
     }),
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),

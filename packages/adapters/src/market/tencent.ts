@@ -14,6 +14,7 @@ import {
   type StockUniverseSourceLike,
 } from '@luoome/core';
 
+import { httpStatusErrorKind, isAbortError, SourceExecutionError } from '../source-error.js';
 import { SinaStockUniverseAdapter } from '../stock-universe/sina.js';
 
 /**
@@ -39,14 +40,8 @@ import { SinaStockUniverseAdapter } from '../stock-universe/sina.js';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
-export class TencentAdapterError extends Error {
+export class TencentAdapterError extends SourceExecutionError {
   override readonly name = 'TencentAdapterError';
-  constructor(
-    message: string,
-    override readonly cause?: unknown,
-  ) {
-    super(message);
-  }
 }
 
 interface TencentKlineNode {
@@ -77,7 +72,7 @@ const toPrefixedCode = (stockCode: string): string => {
     if (first === '4' || first === '8') return `bj${normalized}`;
   }
   if (/^\d{4,5}$/.test(normalized)) return `hk${normalized.padStart(5, '0')}`;
-  throw new TencentAdapterError(`无法识别 stockCode: ${stockCode}`);
+  throw new TencentAdapterError('unsupported_market', `无法识别 stockCode: ${stockCode}`);
 };
 
 /** 指数没有个股复权因子；Tencent 仅返回 day 时，raw day 与 qfq 口径等价。 */
@@ -85,6 +80,9 @@ const isIndexCode = (stockCode: string): boolean =>
   /^(000001|000300|000688)\.SH$|^(399001|399006)\.SZ$/i.test(stockCode.trim());
 
 const TENCENT_MARKET_SNAPSHOT_PATTERN = /v_(sh|sz)(\d{6})="([^"]*)";?/g;
+
+/** 批量快照行（qt.gtimg.cn）：与全市场快照同端点，扩到 bj（北交所）。 */
+const TENCENT_BATCH_QUOTE_PATTERN = /v_(sh|sz|bj)(\d{6})="([^"]*)";?/g;
 
 export interface TencentAdapterOptions {
   readonly clock?: () => Date;
@@ -215,7 +213,7 @@ export class TencentAdapter {
     const code = toPrefixedCode(stockCode);
     const { date, rows: minutes } = await this.fetchMinuteRows(code);
     if (minutes.length === 0) {
-      throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
+      throw new TencentAdapterError('no_data', `Tencent 快照缺价: code=${code}`);
     }
     const prices: number[] = [];
     for (const row of minutes) {
@@ -230,7 +228,7 @@ export class TencentAdapter {
     // 第四列是当日累计成交额（元，2026-08 实测与 qt 快照成交额口径一致）
     const lastAmount = Number(minutes.at(-1)?.split(' ')[3]);
     if (open === undefined || close === undefined) {
-      throw new TencentAdapterError(`Tencent 快照缺价: code=${code}`);
+      throw new TencentAdapterError('no_data', `Tencent 快照缺价: code=${code}`);
     }
     const fetchedAt = this.clock();
     const lastTime = minutes.at(-1)?.split(' ')[0];
@@ -337,17 +335,89 @@ export class TencentAdapter {
     return result;
   }
 
+  /**
+   * 原生批量快照（batch-quote capability）：qt.gtimg.cn 一次请求多代码
+   * （GBK 文本，`v_<prefixed>="~ 分隔行"`，与全市场快照同端点）。
+   * 字段布局（2026-08-22 实盘验证）：[3]最新价 [4]昨收 [5]今开 [6]成交量(手)
+   * [30]行情时间 [33]最高 [34]最低 [37]成交额(万) [38]换手率%——时间 / 昨收 /
+   * 换手率与 fetchRtSnapshot、fetchMarketSnapshotEnvelope 共用同一份解析函数。
+   * 无法识别 / 上游未返回 / 价格非法的标的只丢弃该只，不伪造占位项。
+   */
+  async fetchBatchQuotes(stockIds: readonly string[]): Promise<Quote[]> {
+    const pairs: Array<{ readonly stockId: string; readonly prefixed: string }> = [];
+    for (const code of stockIds) {
+      const stockId = code.toUpperCase().trim();
+      try {
+        pairs.push({ stockId, prefixed: toPrefixedCode(stockId) });
+      } catch (error) {
+        if (!(error instanceof TencentAdapterError)) throw error;
+      }
+    }
+    if (pairs.length === 0) return [];
+    const text = await this.getText(
+      `${this.baseMarketSnapshotUrl}=${pairs.map((pair) => pair.prefixed).join(',')}`,
+      'gbk',
+    );
+    const rows = new Map<string, readonly string[]>();
+    for (const match of text.matchAll(TENCENT_BATCH_QUOTE_PATTERN)) {
+      const prefixed = `${match[1]}${match[2]}`;
+      const raw = match[3];
+      if (raw === undefined) continue;
+      rows.set(prefixed, raw.split('~'));
+    }
+    const fetchedAt = this.clock();
+    const quotes: Quote[] = [];
+    for (const { stockId, prefixed } of pairs) {
+      const fields = rows.get(prefixed);
+      if (fields === undefined) continue;
+      const close = positiveNumber(fields[3]);
+      if (close === undefined) continue;
+      const upstreamAt = parseTencentSnapshotTime(fields[30]);
+      const observedAt =
+        upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
+          ? upstreamAt
+          : fetchedAt;
+      const open = positiveNumber(fields[5]);
+      const high = positiveNumber(fields[33]);
+      const low = positiveNumber(fields[34]);
+      const prevClose = positiveNumber(fields[4]);
+      const volumeLots = finiteNumber(fields[6]);
+      const amountWan = finiteNumber(fields[37]);
+      const turnover = finiteNumber(fields[38]);
+      quotes.push({
+        stockId,
+        observedAt,
+        fetchedAt,
+        timestampSource: observedAt === fetchedAt ? 'retrieval' : 'upstream',
+        ts: observedAt,
+        open: money(open ?? close),
+        high: money(high ?? close),
+        low: money(low ?? close),
+        close: money(close),
+        volume: volumeLots !== undefined && volumeLots > 0 ? volumeLots * 100 : 0, // 手 → 股
+        ...(amountWan !== undefined && amountWan > 0 ? { amount: amountWan * 10_000 } : {}), // 万 → 元
+        ...(prevClose !== undefined ? { prevClose: money(prevClose) } : {}),
+        ...(turnover !== undefined && turnover >= 0 ? { turnoverRatePct: turnover } : {}),
+        source: 'tencent',
+      });
+    }
+    return quotes;
+  }
+
   async fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]> {
     const code = toPrefixedCode(stockCode);
     const url = `${this.baseKlineUrl}?param=${code},day,,,320,qfq`;
     const json = await this.getJson<TencentKlineResponse>(url);
     if (json.code !== 0 || json.data === undefined) {
-      throw new TencentAdapterError(`Tencent 日线失败: code=${json.code}`);
+      throw new TencentAdapterError('upstream_error', `Tencent 日线失败: code=${json.code}`);
     }
     const node = json.data[code];
     const rawList = node?.qfqday ?? (isIndexCode(stockCode) ? node?.day : undefined);
     if (rawList === undefined) {
-      throw new TencentAdapterError(`unsupported_adjustment: Tencent qfq 日线不可用 code=${code}`);
+      throw new TencentAdapterError(
+        'unsupported_adjustment',
+        `unsupported_adjustment: Tencent qfq 日线不可用 code=${code}`,
+      );
     }
     const stockId = stockCode.includes('.') ? stockCode.toUpperCase() : stockCode.toUpperCase();
     const fromMs = range.start.getTime();
@@ -403,7 +473,10 @@ export class TencentAdapter {
     const universe = await this.stockUniverse.fetchStockUniverse('CN_A_SHARES_SH_SZ');
     const expected = universe.entries;
     if (expected.length === 0) {
-      throw new TencentAdapterError('invalid_payload: Tencent market snapshot universe is empty');
+      throw new TencentAdapterError(
+        'invalid_payload',
+        'invalid_payload: Tencent market snapshot universe is empty',
+      );
     }
     const expectedById = new Map(expected.map((entry) => [entry.stockId, entry]));
     const items = new Map<string, MarketSnapshotItem>();
@@ -481,7 +554,10 @@ export class TencentAdapter {
     try {
       const res = await this.fetchImpl(url, { signal: controller.signal });
       if (!res.ok) {
-        throw new TencentAdapterError(`HTTP ${res.status} ${res.statusText} url=${url}`);
+        throw new TencentAdapterError(
+          httpStatusErrorKind(res.status),
+          `HTTP ${res.status} ${res.statusText} url=${url}`,
+        );
       }
       const buf = await res.arrayBuffer();
       // smartbox 标称 GBK，但 CJK 实际以 \uXXXX 转义出现（ASCII 安全），
@@ -490,6 +566,7 @@ export class TencentAdapter {
     } catch (error) {
       if (error instanceof TencentAdapterError) throw error;
       throw new TencentAdapterError(
+        isAbortError(error) ? 'timeout' : 'network',
         `fetch 失败: ${error instanceof Error ? error.message : String(error)}`,
         error,
       );
@@ -504,12 +581,24 @@ export class TencentAdapter {
     try {
       const res = await this.fetchImpl(url, { signal: controller.signal });
       if (!res.ok) {
-        throw new TencentAdapterError(`HTTP ${res.status} ${res.statusText} url=${url}`);
+        throw new TencentAdapterError(
+          httpStatusErrorKind(res.status),
+          `HTTP ${res.status} ${res.statusText} url=${url}`,
+        );
       }
-      return (await res.json()) as T;
+      try {
+        return (await res.json()) as T;
+      } catch (error) {
+        throw new TencentAdapterError(
+          'invalid_payload',
+          `JSON 解析失败: ${error instanceof Error ? error.message : String(error)}`,
+          error,
+        );
+      }
     } catch (error) {
       if (error instanceof TencentAdapterError) throw error;
       throw new TencentAdapterError(
+        isAbortError(error) ? 'timeout' : 'network',
         `fetch 失败: ${error instanceof Error ? error.message : String(error)}`,
         error,
       );

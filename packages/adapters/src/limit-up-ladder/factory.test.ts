@@ -1,6 +1,7 @@
 import type { LimitUpLadderQuery, Logger } from '@luoome/core';
 import { describe, expect, it, vi } from 'vitest';
 
+import { EastmoneySource } from '../eastmoney/source.js';
 import { createLimitUpLadderManagerFromEnv } from './factory.js';
 
 const noopLogger: Logger = {
@@ -66,6 +67,57 @@ describe('createLimitUpLadderManagerFromEnv', () => {
         { logger: noopLogger },
       ),
     ).toThrow();
+  });
+
+  it('重复数据源在启动期失败', () => {
+    expect(() =>
+      createLimitUpLadderManagerFromEnv(
+        { LUOOME_LIMIT_UP_LADDER_SOURCES: 'eastmoney,eastmoney' },
+        { logger: noopLogger },
+      ),
+    ).toThrow();
+  });
+
+  it('注入共享 EastmoneySource 时复用该实例，不再用 deps.fetchImpl 自构', async () => {
+    const injectedFetch = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => poolFixture,
+        }) as unknown as Response,
+    ) as unknown as typeof fetch;
+    const selfConstructFetch = vi.fn(async () => {
+      throw new Error('must not self-construct');
+    }) as unknown as typeof fetch;
+
+    const m = createLimitUpLadderManagerFromEnv(
+      {},
+      {
+        logger: noopLogger,
+        fetchImpl: selfConstructFetch,
+        sources: { eastmoney: new EastmoneySource({ fetchImpl: injectedFetch }) },
+      },
+    );
+    const r = await m.fetchLadder(baseQuery);
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data?.source).toBe('eastmoney');
+    expect(r.data?.total).toBe(2);
+    expect(injectedFetch).toHaveBeenCalled();
+    expect(selfConstructFetch).not.toHaveBeenCalled();
+  });
+
+  it('status() 暴露 registry 观测（binding 未执行时无执行事实）', () => {
+    const m = createLimitUpLadderManagerFromEnv({}, { logger: noopLogger });
+    const status = m.status();
+    expect(status).toHaveLength(1);
+    expect(status[0]).toMatchObject({
+      dataset: 'limit-up-ladder',
+      source: 'eastmoney',
+      coverage: ['CN_A_SHARES_SH_SZ'],
+    });
   });
 
   it('fetchImpl 返回涨停池 fixture 时 fetchLadder 返回映射后的天梯', async () => {

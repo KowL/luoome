@@ -14,9 +14,13 @@ import type {
   Advice,
   AgentRuntimeLike,
   AShareSentimentManagerLike,
+  DragonTigerManagerLike,
   LimitUpLadderManagerLike,
   Logger,
+  NewsManagerLike,
+  NorthboundFlowManagerLike,
   RepositoryRegistry,
+  SectorQuoteManagerLike,
   StockUniverseManagerLike,
   ToolContext,
 } from '@luoome/core';
@@ -29,6 +33,14 @@ export interface BuildTestContextOptions {
   readonly advices?: readonly Advice[];
   /** 可选注入连板天梯 manager（Phase 2 接入 web API 测试）。 */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
+  /** 可选注入龙虎榜 manager。 */
+  readonly dragonTiger?: DragonTigerManagerLike;
+  /** 可选注入北向资金历史流 manager。 */
+  readonly northboundFlow?: NorthboundFlowManagerLike;
+  /** 可选注入财经要闻 manager。 */
+  readonly news?: NewsManagerLike;
+  /** 可选注入行业板块行情 manager。 */
+  readonly sectorQuote?: SectorQuoteManagerLike;
   readonly stockUniverse?: StockUniverseManagerLike;
   readonly ashareSentiment?: AShareSentimentManagerLike;
 }
@@ -74,6 +86,10 @@ export const buildTestContext = async (
     logger: opts.logger ?? createSilentLogger(),
     ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
     ...(opts.ashareSentiment === undefined ? {} : { ashareSentiment: opts.ashareSentiment }),
+    ...(opts.dragonTiger === undefined ? {} : { dragonTiger: opts.dragonTiger }),
+    ...(opts.northboundFlow === undefined ? {} : { northboundFlow: opts.northboundFlow }),
+    ...(opts.news === undefined ? {} : { news: opts.news }),
+    ...(opts.sectorQuote === undefined ? {} : { sectorQuote: opts.sectorQuote }),
   };
   if (opts.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: opts.limitUpLadder };

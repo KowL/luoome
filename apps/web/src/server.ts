@@ -19,17 +19,22 @@ import { fileURLToPath } from 'node:url';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createDragonTigerManagerFromEnv,
   createFeishuWebhookAdapterFromEnv,
   createFileAuditLogger,
   createFundamentalDataAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createNewsManagerFromEnv,
+  createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
   createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
   createResearchVaultGitSyncAdapterFromEnv,
+  createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
+  EastmoneySource,
   NotificationManager,
 } from '@luoome/adapters';
 import {
@@ -243,6 +248,15 @@ export const resolveDbPath = (): string => {
 };
 
 /**
+ * 进程级共享数据源实例集（docs/ddd/source-pluggability-and-observation-design.md §4.6/§4.7）。
+ * 当前仅 EastmoneySource；组装根创建一次后分发给 market 与五个非行情 factory，
+ * 行情源热更新复用同一实例。
+ */
+export interface WebSourceSet {
+  readonly eastmoney?: EastmoneySource;
+}
+
+/**
  * 组装 web 端 ToolContext（与其他 surface 同一模式）：
  * LUOOME_HOME 下的 luoome.db + createDrizzleRepos + 真实行情/LLM + buildContext。
  * 空数据库保持为空，不自动插入任何业务记录。
@@ -250,6 +264,7 @@ export const resolveDbPath = (): string => {
 export const buildWebContext = async (
   dbPath: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  deps: { readonly sources?: WebSourceSet } = {},
 ): Promise<ToolContext> => {
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -294,11 +309,15 @@ export const buildWebContext = async (
   } catch {
     console.warn('Research Vault 远端同步配置无效；Web 将以未挂载状态启动');
   }
+  // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
+  const eastmoney = deps.sources?.eastmoney ?? new EastmoneySource({ clock: now });
+  const sources = { eastmoney };
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger: console,
     // Web 持仓与 Watchlist 盘中轮询；TTL 不调小的话拿到的都是缓存
     quoteCacheTtlMs: 10_000,
+    sources,
   });
   const fundamentalData = createFundamentalDataAdapterFromEnv(env);
   return buildContext({
@@ -321,11 +340,20 @@ export const buildWebContext = async (
         env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() || DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
       name: DEFAULT_PORTFOLIO_BENCHMARK_NAME,
     },
-    limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
+    limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console, sources }),
+    dragonTiger: createDragonTigerManagerFromEnv(env, { clock: now, logger: console, sources }),
+    northboundFlow: createNorthboundFlowManagerFromEnv(env, {
+      clock: now,
+      logger: console,
+      sources,
+    }),
+    news: createNewsManagerFromEnv(env, { clock: now, logger: console, sources }),
+    sectorQuote: createSectorQuoteManagerFromEnv(env, { clock: now, logger: console }),
     ashareSentiment: createAShareSentimentManagerFromEnv(env, {
       clock: now,
       logger: console,
       market,
+      sources,
     }),
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),
@@ -349,6 +377,14 @@ export interface CreateWebAppOptions {
   readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
+  /**
+   * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
+   * 实例，只重建 market 与直接依赖 market 的 sentiment manager，不产生第二个实例。
+   * 未来若设置项会改变 Eastmoney client 本身（超时、代理、base URL 等），必须先以新
+   * SourceSet 构造并验证 market + 五个非行情 manager 的完整 candidate 图，验证成功后
+   * 一次性替换 ctxRef 与本引用；失败时旧图保持不变。
+   */
+  readonly sources?: WebSourceSet;
   /** Research Vault 设置持久化；保存后即时替换当前 adapter。 */
   readonly researchVaultSettingsStore?: ResearchVaultSettingsStore;
   /** 飞书 Webhook 设置；保存后热更新共享 NotificationManager。 */
@@ -398,6 +434,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
+  const sharedSources = options.sources;
   const researchVaultSettingsStore = options.researchVaultSettingsStore;
   const feishuSettingsStore = options.feishuSettingsStore;
   const dataTransferDbPath = options.dataTransferDbPath;
@@ -909,14 +946,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         ...marketSettingsStore.runtimeEnv(),
         LUOOME_MARKET_SOURCES: input.sources.join(','),
       };
+      // 只改来源顺序：复用进程级 SourceSet，仅重建 market 与依赖 market 的 sentiment（§4.7）
+      const sharedDeps =
+        sharedSources?.eastmoney === undefined
+          ? {}
+          : { sources: { eastmoney: sharedSources.eastmoney } };
       const market = createMarketAdapterFromEnv(candidateEnv, {
         clock: ctxRef.current.clock,
         logger: ctxRef.current.logger,
+        ...sharedDeps,
       });
       const ashareSentiment = createAShareSentimentManagerFromEnv(candidateEnv, {
         clock: ctxRef.current.clock,
         logger: ctxRef.current.logger,
         market,
+        ...sharedDeps,
       });
       const saved = marketSettingsStore.save(input);
       ctxRef.current = {
@@ -1460,6 +1504,61 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   // HTML route for SPA shell
   app.get('/market/limit-up', serveFile('index.html', 'text/html; charset=utf-8'));
+
+  /**
+   * 行业板块行情（fetch_sector_quotes tool；实时快照，无缓存）。
+   *
+   * 参数：
+   *   sort (可选) changePct | amount，默认 changePct
+   *   limit (可选) 1-200，默认 50
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/market/sectors', async (c) => {
+    const input: Record<string, unknown> = {};
+    const sort = c.req.query('sort');
+    if (sort !== undefined) input.sort = sort;
+    const limit = c.req.query('limit');
+    if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const r = await invokeTool('fetch_sector_quotes', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // HTML route for SPA shell
+  app.get('/market/sectors', serveFile('index.html', 'text/html; charset=utf-8'));
+
+  /**
+   * 财经要闻（fetch_news tool；7×24 滚动流，无缓存）。
+   *
+   * 参数：
+   *   limit (可选) 1-100，默认 30
+   *   category / keyword (可选) 透传 tool
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/news', async (c) => {
+    const input: Record<string, unknown> = {};
+    const limit = c.req.query('limit');
+    if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const category = c.req.query('category');
+    if (category !== undefined) input.category = category;
+    const keyword = c.req.query('keyword');
+    if (keyword !== undefined) input.keyword = keyword;
+    const r = await invokeTool('fetch_news', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
 
   app.get('/api/trades', (c) => {
     const input: Record<string, unknown> = {};
@@ -2460,6 +2559,43 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult({ ok: true, data: { indices: [] } });
   });
 
+  /**
+   * 指数当日分时（fetch_intraday_minutes tool；tencent 分钟端点仅沪深，恒指不支持）。
+   *
+   * 参数：code (必填) 指数代码，白名单见 INDEX_INTRADAY_STOCK_IDS
+   * 降级：数据源不支持 → { ok: true, data: { supported: false, points: [] } }（200）；
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  const INDEX_INTRADAY_STOCK_IDS: Readonly<Record<string, string>> = {
+    '000001': '000001.SH', // 上证指数
+    '399001': '399001.SZ', // 深证成指
+    '399006': '399006.SZ', // 创业板指
+    '000300': '000300.SH', // 沪深300
+    '000688': '000688.SH', // 科创50
+  };
+  app.get('/api/market/indices/intraday', async (c) => {
+    const code = c.req.query('code') ?? '';
+    const stockId = INDEX_INTRADAY_STOCK_IDS[code];
+    if (stockId === undefined) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: `不支持的指数 code: ${code === '' ? '(空)' : code}（可选 ${Object.keys(INDEX_INTRADAY_STOCK_IDS).join('/')}）`,
+          issues: [],
+        },
+      });
+    }
+    const r = await invokeTool('fetch_intraday_minutes', { stockId });
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
   app.get('/api/workflow-runs', (c) => {
     const limit = Number(c.req.query('limit') ?? '30');
     return callTool('list_workflow_runs', {
@@ -2799,7 +2935,9 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const marketSettingsStore = new MarketSettingsStore(process.env);
   const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);
   const feishuSettingsStore = new FeishuSettingsStore(process.env);
-  const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv());
+  // composition root 持有进程级 SourceSet（§4.7）：主装配与热更新共用同一实例
+  const sources: WebSourceSet = { eastmoney: new EastmoneySource() };
+  const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv(), { sources });
   const aiSettingsStore = new AISettingsStore(process.env);
   const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
   const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
@@ -2812,6 +2950,7 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     researchVaultSettingsStore,
     feishuSettingsStore,
     dataTransferDbPath: dbPath,
+    sources,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   const scheduler = startStrategyScheduler(ctx, {

@@ -84,6 +84,7 @@ describe('opening-report workflow', () => {
   it('周一使用上周五市场证据，幂等保存结构化报告并写入 partial 审计', async () => {
     const requestedDates: string[] = [];
     const manager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async (input) => {
         requestedDates.push(input.date);
         return { ok: true, data: sentimentSnapshot() };
@@ -150,6 +151,7 @@ describe('opening-report workflow', () => {
 
   it('scheduled 模式默认发送通知并把报告 deliveryStatus 更新为 sent', async () => {
     const manager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
     };
     const ctx = await buildTestContext({
@@ -173,11 +175,13 @@ describe('opening-report workflow', () => {
   it('指数行情可用时展示指数列表，天梯缺原因时退到行业与首封时间', async () => {
     const snapshot = sentimentSnapshot();
     const manager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async () => ({ ok: true, data: snapshot }),
     };
     const ladderManager: LimitUpLadderManagerLike = {
       name: 'limit-up-ladder',
       sources: ['eastmoney'],
+      status: () => [],
       fetchLadder: async () => ({
         ok: true,
         data: assembleLadder(
@@ -282,6 +286,7 @@ describe('opening-report workflow', () => {
 
   it('通知失败时保留报告并把 deliveryStatus 记为 failed', async () => {
     const manager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
     };
     const base = await buildTestContext({

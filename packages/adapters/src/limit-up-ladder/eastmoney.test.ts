@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { EastmoneyLimitUpLadderAdapter } from './eastmoney.js';
+import { EastmoneySource } from '../eastmoney/source.js';
+import { SourceExecutionError } from '../source-error.js';
 
 /**
- * EastmoneyLimitUpLadderAdapter 单元测试。
- * 全程 fetchImpl stub 模拟 getTopicZTPool 响应，不依赖网络。
+ * EastmoneySource.fetchLadder 委托测试（getTopicZTPool）。
+ * 解析断言保留自原 EastmoneyLimitUpLadderAdapter 测试；传输错误收敛为 SourceExecutionError。
+ * 全程 fetchImpl stub，不依赖网络。
  */
 
 const POOL_FIXTURE = {
@@ -43,13 +45,16 @@ const stubFetch = (handler: (url: string) => Promise<Response>) => {
   return { fetchImpl, urls };
 };
 
-describe('EastmoneyLimitUpLadderAdapter', () => {
+/** 2026-07-24 上海 16:00（已收盘）。 */
+const afterClose = () => new Date('2026-07-24T08:00:00.000Z');
+
+describe('EastmoneySource.fetchLadder', () => {
   it('pool 字段映射：close=p/1000、pre_close 反推、level=lbc、时间 HH:MM:SS、行业', async () => {
     const { fetchImpl, urls } = stubFetch(() =>
       Promise.resolve(new Response(JSON.stringify(POOL_FIXTURE), { status: 200 })),
     );
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    const result = await adapter.fetchLadder('2026-07-24');
+    const source = new EastmoneySource({ fetchImpl, clock: afterClose });
+    const result = await source.fetchLadder('2026-07-24');
 
     expect(urls[0]).toContain('getTopicZTPool');
     expect(urls[0]).toContain('date=20260724');
@@ -74,6 +79,28 @@ describe('EastmoneyLimitUpLadderAdapter', () => {
     expect(second?.close).toBe(5.5);
   });
 
+  it('observedAt：已收盘的历史日为该日收盘时刻（15:00 +08:00）', async () => {
+    const { fetchImpl } = stubFetch(() =>
+      Promise.resolve(new Response(JSON.stringify(POOL_FIXTURE), { status: 200 })),
+    );
+    const source = new EastmoneySource({ fetchImpl, clock: afterClose });
+    const result = await source.fetchLadder('2026-07-24');
+    expect(result.observedAt).toEqual(new Date('2026-07-24T07:00:00.000Z'));
+  });
+
+  it('observedAt：当日盘中为 fetchedAt（min(fetchedAt, 收盘)）', async () => {
+    const { fetchImpl } = stubFetch(() =>
+      Promise.resolve(new Response(JSON.stringify(POOL_FIXTURE), { status: 200 })),
+    );
+    // 2026-07-24 上海 10:00（盘中）
+    const source = new EastmoneySource({
+      fetchImpl,
+      clock: () => new Date('2026-07-24T02:00:00.000Z'),
+    });
+    const result = await source.fetchLadder('2026-07-24');
+    expect(result.observedAt).toEqual(new Date('2026-07-24T02:00:00.000Z'));
+  });
+
   it('lbc 缺失或 <1 → level 缺省（uncategorized 由 manager 判定）；fbt=0 → 时间缺省', async () => {
     const { fetchImpl } = stubFetch(() =>
       Promise.resolve(
@@ -87,8 +114,8 @@ describe('EastmoneyLimitUpLadderAdapter', () => {
         ),
       ),
     );
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    const [entry] = (await adapter.fetchLadder('2026-07-24')).entries;
+    const source = new EastmoneySource({ fetchImpl });
+    const [entry] = (await source.fetchLadder('2026-07-24')).entries;
     expect(entry?.level).toBeUndefined();
     expect(entry?.first_time).toBeUndefined();
     expect(entry?.final_time).toBeUndefined();
@@ -99,8 +126,8 @@ describe('EastmoneyLimitUpLadderAdapter', () => {
     const { fetchImpl } = stubFetch(() =>
       Promise.resolve(new Response(JSON.stringify({ data: null }), { status: 200 })),
     );
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    const result = await adapter.fetchLadder('2026-07-25');
+    const source = new EastmoneySource({ fetchImpl });
+    const result = await source.fetchLadder('2026-07-25');
     expect(result.entries).toEqual([]);
   });
 
@@ -121,38 +148,44 @@ describe('EastmoneyLimitUpLadderAdapter', () => {
         ),
       ),
     );
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    const result = await adapter.fetchLadder('2026-07-24');
+    const source = new EastmoneySource({ fetchImpl });
+    const result = await source.fetchLadder('2026-07-24');
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0]?.code).toBe('600005');
   });
 
-  it('HTTP 非 2xx → 抛错（manager 转 adapter_error）', async () => {
+  it('HTTP 非 2xx → SourceExecutionError（upstream_error，含状态码）', async () => {
     const { fetchImpl } = stubFetch(() => Promise.resolve(new Response('boom', { status: 502 })));
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    await expect(adapter.fetchLadder('2026-07-24')).rejects.toThrow(/HTTP 502/);
+    const source = new EastmoneySource({ fetchImpl });
+    await expect(source.fetchLadder('2026-07-24')).rejects.toMatchObject({
+      name: 'SourceExecutionError',
+      kind: 'upstream_error',
+    });
+    await expect(source.fetchLadder('2026-07-24')).rejects.toThrow(/HTTP 502/);
   });
 
-  it('网络错误 → 抛带上下文的错误', async () => {
+  it('网络错误 → SourceExecutionError（network）', async () => {
     const { fetchImpl } = stubFetch(() => Promise.reject(new TypeError('socket hang up')));
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    await expect(adapter.fetchLadder('2026-07-24')).rejects.toThrow(/请求失败/);
+    const source = new EastmoneySource({ fetchImpl });
+    await expect(source.fetchLadder('2026-07-24')).rejects.toMatchObject({ kind: 'network' });
   });
 
-  it('响应非 JSON → 抛解析错误', async () => {
+  it('响应非 JSON → SourceExecutionError（invalid_payload）', async () => {
     const { fetchImpl } = stubFetch(() =>
       Promise.resolve(new Response('not-json', { status: 200 })),
     );
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    await expect(adapter.fetchLadder('2026-07-24')).rejects.toThrow(/不是有效 JSON/);
+    const source = new EastmoneySource({ fetchImpl });
+    const error = await source.fetchLadder('2026-07-24').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SourceExecutionError);
+    expect((error as SourceExecutionError).kind).toBe('invalid_payload');
   });
 
   it('days 参数被忽略（连板数由 pool lbc 直接给出）', async () => {
     const { fetchImpl, urls } = stubFetch(() =>
       Promise.resolve(new Response(JSON.stringify(POOL_FIXTURE), { status: 200 })),
     );
-    const adapter = new EastmoneyLimitUpLadderAdapter(fetchImpl);
-    await adapter.fetchLadder('2026-07-24', { days: 30 });
+    const source = new EastmoneySource({ fetchImpl });
+    await source.fetchLadder('2026-07-24', { days: 30 });
     expect(urls[0]).not.toContain('days');
   });
 });
