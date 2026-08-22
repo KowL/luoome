@@ -25,6 +25,12 @@ export const AddTradeInput = z.object({
   executedAt: z.coerce.date().optional(),
   /** 缺省 = 当前用户默认账户。 */
   accountId: z.string().min(1).optional(),
+  /** 可选 Advice 依据；必须与 stock/position 事实一致。 */
+  adviceId: z.string().min(1).optional(),
+  /** 可选研究假设版本依据；只接受 active 版本。 */
+  researchHypothesisVersionId: z.string().min(1).optional(),
+  /** 可选 Strategy 来源；只接受已发布版本。 */
+  strategyVersionId: z.string().min(1).optional(),
 });
 
 export const AddTradeOutput = z.object({
@@ -52,9 +58,51 @@ export const addTradeTool = defineTool({
     const account = await ctx.repos.account.findById(accountId);
     if (account === null) return errNotFound('Account', accountId);
 
+    if (input.adviceId !== undefined) {
+      const advice = await ctx.repos.advice.findById(input.adviceId);
+      if (advice === null) return errNotFound('Advice', input.adviceId);
+      if (advice.subjectKind === 'stock') {
+        if (advice.subjectId !== input.stockId) {
+          return errInvalidInput('Advice.subjectId 与 Trade.stockId 不一致');
+        }
+      } else if (advice.subjectKind === 'position') {
+        const position = await ctx.repos.holding.findById(advice.subjectId);
+        if (
+          position === null ||
+          position.accountId !== accountId ||
+          position.stockId !== input.stockId
+        ) {
+          return errInvalidInput('Advice.position 与 Trade.accountId/stockId 不一致');
+        }
+      } else {
+        return errInvalidInput('Trade.adviceId 只能关联 stock 或 position Advice');
+      }
+    }
+
+    if (input.researchHypothesisVersionId !== undefined) {
+      const hypothesis = await ctx.repos.researchHypothesisVersion.findById(
+        input.researchHypothesisVersionId,
+      );
+      if (hypothesis === null) {
+        return errNotFound('ResearchHypothesisVersion', input.researchHypothesisVersionId);
+      }
+      if (hypothesis.status !== 'active') {
+        return errInvalidInput('Trade.researchHypothesisVersionId 必须指向 active 版本');
+      }
+    }
+
+    if (input.strategyVersionId !== undefined) {
+      const strategyVersion = await ctx.repos.strategy.findVersionById(input.strategyVersionId);
+      if (strategyVersion === null) {
+        return errNotFound('StrategyVersion', input.strategyVersionId);
+      }
+      if (strategyVersion.publishedAt === undefined) {
+        return errInvalidInput('Trade.strategyVersionId 必须指向已发布 StrategyVersion');
+      }
+    }
+
     const now = ctx.clock();
     const executedAt = input.executedAt ?? now;
-    await ensureStockStub(input.stockId, ctx, input.stockName);
 
     const trade: Trade = {
       id: manualId('trade'),
@@ -66,10 +114,15 @@ export const addTradeTool = defineTool({
       fee: money(input.fee),
       executedAt,
       source: 'manual',
+      ...(input.adviceId === undefined ? {} : { adviceId: input.adviceId }),
+      ...(input.researchHypothesisVersionId === undefined
+        ? {}
+        : { researchHypothesisVersionId: input.researchHypothesisVersionId }),
+      ...(input.strategyVersionId === undefined
+        ? {}
+        : { strategyVersionId: input.strategyVersionId }),
       createdAt: now,
     };
-    await ctx.repos.trade.save(trade);
-
     const existing = await ctx.repos.holding.findByAccountAndStock(accountId, input.stockId);
     let holding: Holding;
     if (input.side === 'buy') {
@@ -113,6 +166,9 @@ export const addTradeTool = defineTool({
         ...(remain === 0 ? { closedAt: executedAt } : {}),
       };
     }
+    // 先完成持仓侧的所有业务校验，避免无持仓/超卖等 invalid_input 留下孤立 Trade。
+    await ensureStockStub(input.stockId, ctx, input.stockName);
+    await ctx.repos.trade.save(trade);
     await ctx.repos.holding.save(holding);
     return { trade, holding };
   },

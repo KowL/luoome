@@ -3,7 +3,6 @@ import {
   type AdviceDecision,
   AdviceDecisionSchema,
   type AdviceOutcome,
-  type AdviceRepository,
   AdviceSubjectKindSchema,
   addMoney,
   type Money,
@@ -48,20 +47,6 @@ export const GetAdviceStatsOutput = flatStatsSchema.extend({
 });
 
 type FlatStats = z.infer<typeof flatStatsSchema>;
-
-/**
- * core 的 AdviceRepository v0.1 未暴露 outcome 读取方法；
- * db 的 InMemory / Drizzle 实现都提供 getOutcome。这里做结构化类型守护：
- * 有则读取，无则视为「无 outcome 数据」（统计退化为仅 advice 维度，不报错）。
- */
-interface OutcomeReader {
-  getOutcome(adviceId: string): Promise<AdviceOutcome | null>;
-}
-
-const asOutcomeReader = (repo: AdviceRepository): OutcomeReader | null => {
-  const candidate = repo as unknown as Partial<OutcomeReader>;
-  return typeof candidate.getOutcome === 'function' ? (repo as unknown as OutcomeReader) : null;
-};
 
 const computeFlatStats = (
   advices: readonly Advice[],
@@ -151,18 +136,8 @@ export const getAdviceStatsTool = defineTool({
     });
 
     const outcomes = new Map<string, AdviceOutcome>();
-    const reader = asOutcomeReader(ctx.repos.advice);
-    if (reader === null) {
-      ctx.logger.warn('get_advice_stats: advice repo 不支持 getOutcome，outcome 维度按空统计', {
-        tool: 'get_advice_stats',
-      });
-    } else {
-      await Promise.all(
-        advices.map(async (advice) => {
-          const outcome = await reader.getOutcome(advice.id);
-          if (outcome !== null) outcomes.set(advice.id, outcome);
-        }),
-      );
+    for (const outcome of await ctx.repos.advice.listOutcomes()) {
+      outcomes.set(outcome.adviceId, outcome);
     }
 
     return { ...computeFlatStats(advices, outcomes), byDecision: byDecisionOf(advices, outcomes) };

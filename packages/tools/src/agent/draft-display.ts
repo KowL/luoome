@@ -32,6 +32,9 @@ const asRecord = (value: unknown): ParsedInput =>
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+const knownness = (raw: ParsedInput, key: string): DraftDisplayField['value'] =>
+  key in raw ? '已知' : '未知';
+
 /**
  * source 判定：出现在模型原始 input 中的字段标 'user'；schema 校验补全（raw 中缺失）
  * 的标 'default'；'inferred' 只留给 summarizer 能明确推断的字段。
@@ -114,6 +117,41 @@ const SUMMARIZERS: Readonly<Record<string, DraftSummarizer>> = {
       field(raw, parsed, 'kind', '类型'),
       ...(parsed.summary !== undefined ? [field(raw, parsed, 'summary', '摘要')] : []),
       field(raw, parsed, 'tags', '标签'),
+    ],
+  }),
+  create_research_hypothesis_version: (raw, parsed) => ({
+    targetObject: `研究假设版本「${text(parsed.topicId)}」`,
+    fields: [
+      field(raw, parsed, 'topicId', 'Topic'),
+      field(raw, parsed, 'documentId', 'Document'),
+      field(raw, parsed, 'documentContentHash', '内容 Hash'),
+      field(raw, parsed, 'summary', '摘要'),
+    ],
+  }),
+  record_advice_outcome: (raw, parsed) => ({
+    targetObject: `Advice 结果「${text(parsed.adviceId)}」`,
+    fields: [
+      field(raw, parsed, 'adviceId', 'Advice'),
+      field(raw, parsed, 'outcome', '结果'),
+      field(raw, parsed, 'tradeIds', '交易 IDs'),
+      {
+        name: '盈亏已知性',
+        value: knownness(raw, 'pnl'),
+        source: 'pnl' in raw ? ('user' as const) : ('default' as const),
+      },
+      field(raw, parsed, 'pnl', '实际盈亏'),
+      {
+        name: '基准盈亏已知性',
+        value: knownness(raw, 'benchmarkPnl'),
+        source: 'benchmarkPnl' in raw ? ('user' as const) : ('default' as const),
+      },
+      ...(parsed.benchmarkPnl === undefined
+        ? []
+        : [field(raw, parsed, 'benchmarkPnl', '基准盈亏')]),
+      ...(parsed.holdingHours === undefined
+        ? []
+        : [field(raw, parsed, 'holdingHours', '持有时长（小时）')]),
+      ...(parsed.notes === undefined ? [] : [field(raw, parsed, 'notes', '复盘备注')]),
     ],
   }),
   analyze_stock: (raw, parsed) => ({

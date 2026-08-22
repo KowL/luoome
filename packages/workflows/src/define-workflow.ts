@@ -40,6 +40,8 @@ import type {
   GetAShareSentimentOutput,
   GetConfidenceCalibrationInput,
   GetConfidenceCalibrationOutput,
+  GetDecisionLoopReviewInput,
+  GetDecisionLoopReviewOutput,
   GetHoldingInput,
   GetHoldingOutput,
   GetPreviousClosesInput,
@@ -48,6 +50,8 @@ import type {
   GetResearchDocumentOutput,
   GetResearchTopicInput,
   GetResearchTopicOutput,
+  GetSignalObservationStatsInput,
+  GetSignalObservationStatsOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
   GetStrategyEvaluationSessionInput,
@@ -92,6 +96,8 @@ import type {
   ListStrategyRunsOutput,
   ListStrategyWatchlistSubscriptionsInput,
   ListStrategyWatchlistSubscriptionsOutput,
+  ListTradesInput,
+  ListTradesOutput,
   ListWatchlistChangesInput,
   ListWatchlistChangesOutput,
   ListWatchlistsInput,
@@ -249,6 +255,10 @@ export interface WorkflowToolMap {
     typeof GetConfidenceCalibrationInput,
     typeof GetConfidenceCalibrationOutput
   >;
+  readonly get_decision_loop_review: ToolAccessor<
+    typeof GetDecisionLoopReviewInput,
+    typeof GetDecisionLoopReviewOutput
+  >;
   readonly analyze_stock: ToolAccessor<typeof AnalyzeStockInput, typeof AnalyzeStockOutput>;
   readonly analyze_strategy_candidate: ToolAccessor<
     typeof AnalyzeStrategyCandidateInput,
@@ -306,6 +316,10 @@ export interface WorkflowToolMap {
   readonly complete_strategy_observations: ToolAccessor<
     typeof CompleteStrategyObservationsInput,
     typeof CompleteStrategyObservationsOutput
+  >;
+  readonly get_signal_observation_stats: ToolAccessor<
+    typeof GetSignalObservationStatsInput,
+    typeof GetSignalObservationStatsOutput
   >;
   readonly create_strategy_observation_candidates: ToolAccessor<
     typeof CreateStrategyObservationCandidatesInput,
@@ -419,6 +433,7 @@ export interface WorkflowToolMap {
     typeof ListStockEventsInput,
     typeof ListStockEventsOutput
   >;
+  readonly list_trades: ToolAccessor<typeof ListTradesInput, typeof ListTradesOutput>;
   readonly list_watch_triggers: ToolAccessor<
     typeof ListWatchTriggersInput,
     typeof ListWatchTriggersOutput

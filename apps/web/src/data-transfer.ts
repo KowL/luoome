@@ -178,6 +178,7 @@ const JSON_COLUMNS = new Set([
   'risks',
   'rules',
   'tags',
+  'trade_ids',
 ]);
 
 const snakeToCamel = (value: string): string =>

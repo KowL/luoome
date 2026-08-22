@@ -1,6 +1,7 @@
 import type {
   AgentRuntimeLike,
   AShareSentimentManagerLike,
+  FundamentalDataAdapterLike,
   LimitUpLadderManagerLike,
   LLMAdapterLike,
   Logger,
@@ -40,6 +41,8 @@ export interface BuildContextInput {
   readonly researchVaultGitSync?: ResearchVaultGitSyncAdapterLike;
   readonly notification?: NotificationManagerLike;
   readonly portfolioBenchmark?: ToolContext['portfolioBenchmark'];
+  /** Phase 3 P3-1：只从显式基本面 adapter 读取，未注入时 sync 保持 unavailable。 */
+  readonly fundamentalData?: FundamentalDataAdapterLike;
 }
 
 /** Production composition root used by CLI, TUI, Web, and MCP surfaces. */
@@ -66,6 +69,7 @@ export const buildContext = (input: BuildContextInput): ToolContext => {
     ...(input.portfolioBenchmark === undefined
       ? {}
       : { portfolioBenchmark: input.portfolioBenchmark }),
+    ...(input.fundamentalData === undefined ? {} : { fundamentalData: input.fundamentalData }),
   };
   if (input.limitUpLadder !== undefined) {
     return { ...ctx, limitUpLadder: input.limitUpLadder };

@@ -3,6 +3,11 @@ export { DrizzleAdviceRepository } from './advice.js';
 export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
+export { DrizzleFinancialFactRepository } from './financial-fact.js';
+export {
+  DrizzleFundamentalScoreRunRepository,
+  DrizzleFundamentalScoreVersionRepository,
+} from './fundamental-score.js';
 export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 export { DrizzleMinuteBarRepository } from './minute-bar.js';
@@ -15,6 +20,7 @@ export { DrizzlePortfolioPerformanceSnapshotRepository } from './portfolio-perfo
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
 export { DrizzleResearchEmbeddingRepository } from './research-embedding.js';
+export { DrizzleResearchHypothesisVersionRepository } from './research-hypothesis.js';
 export { DrizzleResearchIndexRepository } from './research-index.js';
 export { DrizzleResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';

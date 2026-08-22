@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { NotificationManager } from '@luoome/adapters';
+import { MockFundamentalDataAdapter, NotificationManager } from '@luoome/adapters';
 import { TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type {
   AgentCallableTool,
@@ -453,6 +453,31 @@ describe('报告 API', () => {
 });
 
 describe('Web runtime bootstrap', () => {
+  it('基本面 adapter 默认不注入，显式 mock 重建 context 后才注入且保持 not-ready', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-fundamental-context-'));
+    const baseEnv = {
+      LUOOME_MARKET_PROVIDER: 'real',
+      LUOOME_MARKET_SOURCES: 'sina',
+    };
+    try {
+      const defaultContext = await buildWebContext(join(dir, 'default.db'), baseEnv);
+      expect(defaultContext.fundamentalData).toBeUndefined();
+
+      const mockContext = await buildWebContext(join(dir, 'mock.db'), {
+        ...baseEnv,
+        LUOOME_FUNDAMENTAL_PROVIDER: 'mock',
+      });
+      expect(mockContext.fundamentalData).toMatchObject({
+        name: 'mock-fundamental',
+        source: 'mock-fundamental-pit-fixture',
+        gateStatus: 'not-ready',
+        gate: { status: 'not-ready' },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('账户绩效 scheduler 仅在 write 与 external 双显式开启时启动', async () => {
     const previousWrite = process.env.LUOOME_EXPOSE_WRITE;
     const previousExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
@@ -2181,6 +2206,110 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect((await json(allowed)).ok).toBe(true);
   });
 
+  it('sync_financial_facts 同时要求 external + write，双开后保持 gate=not-ready；get read 默认可调用', async () => {
+    const base = await buildTestContext();
+    const ctx = {
+      ...base,
+      fundamentalData: new MockFundamentalDataAdapter(),
+    };
+    const request = () =>
+      new Request('http://test/api/tools/sync_financial_facts/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          input: { stockIds: ['600000.SH'], metricIds: ['roe'] },
+        }),
+      });
+
+    const externalOnly = createWebApp(ctx, {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    expect((await externalOnly.fetch(request())).status).toBe(403);
+
+    const writeOnly = createWebApp(ctx, {
+      exposeExternal: false,
+      exposeWrite: true,
+    });
+    expect((await writeOnly.fetch(request())).status).toBe(403);
+
+    const both = createWebApp(ctx, {
+      exposeExternal: true,
+      exposeWrite: true,
+    });
+    const synced = await both.fetch(request());
+    expect(synced.status).toBe(200);
+    expect(await synced.json()).toMatchObject({
+      ok: true,
+      data: { providerKind: 'mock', gate: 'not-ready' },
+    });
+
+    const readOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: false,
+      exposeWrite: false,
+    });
+    const read = await readOnly.fetch(
+      new Request('http://test/api/tools/get_financial_facts/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          input: {
+            stockIds: ['600000.SH'],
+            metricIds: ['roe'],
+            asOf: '2026-08-22T00:00:00.000Z',
+          },
+        }),
+      }),
+    );
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({ ok: true, data: { gate: 'not-ready' } });
+  });
+
+  it('run_fundamental_score 只需要 write；get_fundamental_score 默认 read，二者不声明 external/trade', async () => {
+    const input = {
+      scoreVersionId: 'fundamental-score-v1',
+      asOf: '2026-08-22T00:00:00.000Z',
+      stockIds: ['600000.SH'],
+      universeSyncId: 'universe-sync-1',
+      universeMemberChecksum: 'a'.repeat(64),
+      persist: false,
+    };
+    const readOnly = createWebApp(await buildTestContext(), {
+      exposeWrite: false,
+      exposeExternal: false,
+    });
+    const denied = await readOnly.fetch(
+      new Request('http://test/api/tools/run_fundamental_score/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input }),
+      }),
+    );
+    expect(denied.status).toBe(403);
+
+    const writeOnly = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: false,
+    });
+    const allowed = await writeOnly.fetch(
+      new Request('http://test/api/tools/run_fundamental_score/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input }),
+      }),
+    );
+    expect(allowed.status).not.toBe(403);
+
+    const get = await readOnly.fetch(
+      new Request('http://test/api/tools/get_fundamental_score/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { runId: 'missing-score-run' } }),
+      }),
+    );
+    expect(get.status).toBe(404);
+  });
+
   it('batch_quote（白名单）→ 200', async () => {
     const r = await callTool('batch_quote', { stockIds: ['002594.SZ'] });
     expect(r.status).toBe(200);
@@ -2599,6 +2728,80 @@ describe('/api/chat：对话助手', () => {
     expect(await chatCtx.repos.advice.query({})).toEqual([]);
   });
 
+  it('review chat 暴露 AdviceOutcome 草案但不暴露研究假设或 trade 工具', async () => {
+    await createSession('review-outcome-draft');
+    await chat(chatApp, {
+      sessionId: 'review-outcome-draft',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '复盘最近的建议' }] }],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('record_advice_outcome');
+    expect(names).not.toContain('create_research_hypothesis_version');
+    expect(names).not.toContain('add_trade');
+    const draftTool = captured?.tools.find((item) => item.name === 'record_advice_outcome');
+    const result = await draftTool?.execute({
+      adviceId: 'advice-review-1',
+      outcome: 'partially_followed',
+      tradeIds: ['trade-review-1'],
+    });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'review', tool: 'record_advice_outcome' },
+    });
+    const output = result?.output as {
+      draft: {
+        display?: { fields: readonly { name: string; value: unknown; source: string }[] };
+      };
+    };
+    expect(output.draft.display?.fields).toEqual(
+      expect.arrayContaining([
+        { name: '结果', value: 'partially_followed', source: 'user' },
+        { name: '交易 IDs', value: ['trade-review-1'], source: 'user' },
+        { name: '盈亏已知性', value: '未知', source: 'default' },
+      ]),
+    );
+    expect(await chatCtx.repos.advice.listOutcomes()).toEqual([]);
+  });
+
+  it('research chat 暴露研究假设版本草案但不暴露 AdviceOutcome 或 trade 工具', async () => {
+    await createSession('research-hypothesis-draft');
+    await chat(chatApp, {
+      sessionId: 'research-hypothesis-draft',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '更新研究假设' }] }],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('create_research_hypothesis_version');
+    expect(names).not.toContain('record_advice_outcome');
+    expect(names).not.toContain('add_trade');
+    const draftTool = captured?.tools.find(
+      (item) => item.name === 'create_research_hypothesis_version',
+    );
+    const result = await draftTool?.execute({
+      topicId: 'topic_growth',
+      documentId: 'doc_thesis',
+      documentContentHash: 'a'.repeat(64),
+      summary: '利润率改善将延续',
+    });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'research', tool: 'create_research_hypothesis_version' },
+    });
+    const output = result?.output as {
+      draft: {
+        display?: { fields: readonly { name: string; value: unknown; source: string }[] };
+      };
+    };
+    expect(output.draft.display?.fields).toEqual([
+      { name: 'Topic', value: 'topic_growth', source: 'user' },
+      { name: 'Document', value: 'doc_thesis', source: 'user' },
+      { name: '内容 Hash', value: 'a'.repeat(64), source: 'user' },
+      { name: '摘要', value: '利润率改善将延续', source: 'user' },
+    ]);
+    expect(await chatCtx.repos.researchHypothesisVersion.list({})).toEqual([]);
+  });
+
   it('read 工具仍经 registry 执行，未批准的 external/trade 不暴露', async () => {
     await createSession('read-tools');
     await chat(chatApp, {
@@ -2616,6 +2819,8 @@ describe('/api/chat：对话助手', () => {
     expect(names).not.toContain('sync_quotes');
     expect(names).not.toContain('send_notification');
     expect(names).not.toContain('place_order');
+    expect(names).not.toContain('record_advice_outcome');
+    expect(names).not.toContain('create_research_hypothesis_version');
   });
 
   it('响应投影 x-luoome-chat-route header（URL 编码的路由 JSON）', async () => {
@@ -2665,6 +2870,8 @@ describe('/api/chat：对话助手', () => {
     const generalNames = captured?.tools.map((item) => item.name) ?? [];
     expect(generalNames).toContain('run_local_selector_research');
     expect(generalNames).toContain('get_market_data_status');
+    expect(generalNames).toContain('record_advice_outcome');
+    expect(generalNames).toContain('create_research_hypothesis_version');
     expect(generalNames).not.toContain('get_account_performance');
   });
 

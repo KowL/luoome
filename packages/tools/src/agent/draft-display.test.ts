@@ -63,6 +63,64 @@ describe('summarizeDraft', () => {
     expect(display.fields.map((f) => f.name)).toEqual(['股票', '备注']);
   });
 
+  it('record_advice_outcome：保留部分采纳、交易关联与盈亏未知性', () => {
+    const display = summarizeDraft({
+      tool: 'record_advice_outcome',
+      kind: 'review',
+      input: {
+        adviceId: 'advice-1',
+        outcome: 'partially_followed',
+        tradeIds: ['trade-1'],
+      },
+      parsed: {
+        adviceId: 'advice-1',
+        outcome: 'partially_followed',
+        tradeIds: ['trade-1'],
+        pnl: 0,
+      },
+      description: '回填 Advice 结果',
+    });
+    expect(display.targetObject).toBe('Advice 结果「advice-1」');
+    expect(display.fields).toEqual(
+      expect.arrayContaining([
+        { name: '结果', value: 'partially_followed', source: 'user' },
+        { name: '交易 IDs', value: ['trade-1'], source: 'user' },
+        { name: '盈亏已知性', value: '未知', source: 'default' },
+        { name: '实际盈亏', value: 0, source: 'default' },
+        { name: '基准盈亏已知性', value: '未知', source: 'default' },
+      ]),
+    );
+    expect(display).toEqual(DraftDisplaySchema.parse(display));
+  });
+
+  it('create_research_hypothesis_version：投影 Topic、Document、hash 和摘要', () => {
+    const display = summarizeDraft({
+      tool: 'create_research_hypothesis_version',
+      kind: 'research',
+      input: {
+        topicId: 'topic_growth',
+        documentId: 'doc_thesis',
+        documentContentHash: 'a'.repeat(64),
+        summary: '利润率改善将延续',
+      },
+      parsed: {
+        topicId: 'topic_growth',
+        documentId: 'doc_thesis',
+        documentContentHash: 'a'.repeat(64),
+        summary: '利润率改善将延续',
+      },
+      description: '创建研究假设版本',
+    });
+    expect(display.targetObject).toBe('研究假设版本「topic_growth」');
+    expect(display.fields).toEqual([
+      { name: 'Topic', value: 'topic_growth', source: 'user' },
+      { name: 'Document', value: 'doc_thesis', source: 'user' },
+      { name: '内容 Hash', value: 'a'.repeat(64), source: 'user' },
+      { name: '摘要', value: '利润率改善将延续', source: 'user' },
+    ]);
+    expect(display).toEqual(DraftDisplaySchema.parse(display));
+  });
+
   it('无专用 summarizer 的 tool 回落到最小投影', () => {
     const display = summarizeDraft({
       tool: 'pause_strategy',

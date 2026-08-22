@@ -296,6 +296,101 @@ describe('agent_run', () => {
     expect(await ctx.repos.advice.query({})).toEqual([]);
   });
 
+  it('review 场景允许 AdviceOutcome 草案并展示结果、交易与盈亏未知性', async () => {
+    const runtime = new AdviceDraftRuntime([
+      {
+        kind: 'review',
+        tool: 'record_advice_outcome',
+        input: {
+          adviceId: 'advice-review-1',
+          outcome: 'partially_followed',
+          tradeIds: ['trade-review-1'],
+        },
+        summary: '待确认的建议结果回填',
+      },
+    ]);
+    const ctx = await buildTestContext({ agent: runtime });
+    const result = await agentRunTool.execute({ message: '回填建议结果', scenario: 'review' }, ctx);
+    if (!result.ok) throw new Error('agent_run should succeed');
+    expect(result.data.drafts).toHaveLength(1);
+    const draft = result.data.drafts[0];
+    expect(draft).toMatchObject({ kind: 'review', tool: 'record_advice_outcome' });
+    expect(draft?.display).toMatchObject({ targetObject: 'Advice 结果「advice-review-1」' });
+    expect(draft?.display?.fields).toEqual(
+      expect.arrayContaining([
+        { name: '结果', value: 'partially_followed', source: 'user' },
+        { name: '交易 IDs', value: ['trade-review-1'], source: 'user' },
+        { name: '盈亏已知性', value: '未知', source: 'default' },
+      ]),
+    );
+    expect(await ctx.repos.advice.listOutcomes()).toEqual([]);
+  });
+
+  it('research 场景允许研究假设版本草案并展示来源 hash，不执行写入', async () => {
+    const runtime = new AdviceDraftRuntime([
+      {
+        kind: 'research',
+        tool: 'create_research_hypothesis_version',
+        input: {
+          topicId: 'topic_growth',
+          documentId: 'doc_thesis',
+          documentContentHash: 'a'.repeat(64),
+          summary: '利润率改善将延续',
+        },
+        summary: '待确认的研究假设版本',
+      },
+    ]);
+    const ctx = await buildTestContext({ agent: runtime });
+    const result = await agentRunTool.execute(
+      { message: '更新研究假设', scenario: 'research' },
+      ctx,
+    );
+    if (!result.ok) throw new Error('agent_run should succeed');
+    expect(result.data.drafts).toHaveLength(1);
+    const draft = result.data.drafts[0];
+    expect(draft).toMatchObject({ kind: 'research', tool: 'create_research_hypothesis_version' });
+    expect(draft?.display).toMatchObject({ targetObject: '研究假设版本「topic_growth」' });
+    expect(draft?.display?.fields).toEqual([
+      { name: 'Topic', value: 'topic_growth', source: 'user' },
+      { name: 'Document', value: 'doc_thesis', source: 'user' },
+      { name: '内容 Hash', value: 'a'.repeat(64), source: 'user' },
+      { name: '摘要', value: '利润率改善将延续', source: 'user' },
+    ]);
+    expect(await ctx.repos.researchHypothesisVersion.list({})).toEqual([]);
+  });
+
+  it('portfolio/watch 场景不会接收 Phase 2 review/research 草案', async () => {
+    const runtime = new AdviceDraftRuntime([
+      {
+        kind: 'review',
+        tool: 'record_advice_outcome',
+        input: { adviceId: 'advice-1', outcome: 'ignored' },
+        summary: '不应进入持仓场景',
+      },
+      {
+        kind: 'research',
+        tool: 'create_research_hypothesis_version',
+        input: {
+          topicId: 'topic_growth',
+          documentId: 'doc_thesis',
+          documentContentHash: 'a'.repeat(64),
+        },
+        summary: '不应进入盯盘场景',
+      },
+    ]);
+    const ctx = await buildTestContext({ agent: runtime });
+    const portfolio = await agentRunTool.execute(
+      { message: '查看持仓', scenario: 'portfolio' },
+      ctx,
+    );
+    const watch = await agentRunTool.execute({ message: '查看盯盘', scenario: 'watch' }, ctx);
+    if (!portfolio.ok || !watch.ok) throw new Error('agent_run should succeed');
+    expect(portfolio.data.drafts).toEqual([]);
+    expect(watch.data.drafts).toEqual([]);
+    expect(portfolio.data.risks).toContain('2 条无效写入草案已被安全门控丢弃');
+    expect(watch.data.risks).toContain('2 条无效写入草案已被安全门控丢弃');
+  });
+
   it('kind 与 tool 不匹配的 advice 草案仍被门控丢弃', async () => {
     const runtime = new AdviceDraftRuntime([
       {

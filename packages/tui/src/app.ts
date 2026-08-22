@@ -720,7 +720,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       }
       lines.push(
         '',
-        '回填方式：luoome advice outcome <id> --followed true|false --pnl <amount>',
+        '回填方式：luoome advice outcome <id> --outcome followed|partially_followed|ignored --pnl <amount>',
         '[esc] 关闭    [↑/↓] 滚动',
       );
       if (state.overlay === null || state.overlay.title !== 'outcome 复盘') return;

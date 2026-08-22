@@ -32,6 +32,15 @@ export const assertTradeInvariants = (t: Trade): void => {
   if (t.fee < 0) {
     throw new InvariantError('trade fee must be >= 0');
   }
+  for (const [field, value] of [
+    ['adviceId', t.adviceId],
+    ['researchHypothesisVersionId', t.researchHypothesisVersionId],
+    ['strategyVersionId', t.strategyVersionId],
+  ] as const) {
+    if (value !== undefined && value.length === 0) {
+      throw new InvariantError(`trade ${field} must not be empty`);
+    }
+  }
 };
 
 /** Advice 不变量 5 条（docs/archive/MVP-TASK.md §2.3）。 */

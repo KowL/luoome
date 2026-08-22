@@ -9,6 +9,13 @@ import {
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
   type DailyBar,
   type DailyBarRevision,
+  type FinancialFact,
+  FUNDAMENTAL_FACTOR_REGISTRY_HASH,
+  type FundamentalScoreResult,
+  type FundamentalScoreRun,
+  type FundamentalScoreVersion,
+  financialFactContentHash,
+  fundamentalScoreVersionDefinitionHash,
   type Holding,
   InvariantError,
   type LimitUpLadder,
@@ -23,6 +30,7 @@ import {
   type Report,
   type RepositoryRegistry,
   type ResearchDocumentIndex,
+  type ResearchHypothesisVersion,
   type ResearchTopicIndex,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
@@ -77,6 +85,110 @@ const T2 = new Date('2026-07-03T01:00:00.000Z');
 const T3 = new Date('2026-07-04T01:00:00.000Z');
 const FAR_FUTURE = new Date('2099-01-01T00:00:00.000Z');
 const FAR_PAST = new Date('2000-01-01T00:00:00.000Z');
+
+const makeFundamentalScoreVersion = (
+  overrides: Partial<FundamentalScoreVersion> = {},
+): FundamentalScoreVersion => {
+  const draft = {
+    id: 'fundamental-score-v1',
+    version: 1,
+    registryVersion: 'fundamental-factor-registry-v1',
+    registryHash: FUNDAMENTAL_FACTOR_REGISTRY_HASH,
+    normalizationVersion: 'fundamental-normalization-v1' as const,
+    components: [
+      {
+        factorId: 'fundamental.profitability.roe',
+        weight: 1,
+        normalizer: 'market-percentile-v1' as const,
+      },
+    ],
+    missingPolicy: 'unknown' as const,
+    rounding: 'round-to-6-decimal' as const,
+    definitionHash: '0'.repeat(64),
+    status: 'published' as const,
+    createdAt: T0,
+    publishedAt: T1,
+    ...overrides,
+  } satisfies FundamentalScoreVersion;
+  return { ...draft, definitionHash: fundamentalScoreVersionDefinitionHash(draft) };
+};
+
+const makeFundamentalScoreRun = (
+  overrides: Partial<FundamentalScoreRun> = {},
+): FundamentalScoreRun =>
+  ({
+    id: 'score-run-1',
+    scoreVersionId: 'fundamental-score-v1',
+    scoreVersionHash: 'a'.repeat(64),
+    registryHash: FUNDAMENTAL_FACTOR_REGISTRY_HASH,
+    universeSyncId: 'universe-sync-1',
+    universeMemberChecksum: 'b'.repeat(64),
+    asOf: T2,
+    financialVintageKey: 'c'.repeat(64),
+    normalizerDenominatorHash: 'd'.repeat(64),
+    counts: { evaluated: 1, available: 1, missing: 0, excluded: 0 },
+    providerStatus: 'complete' as const,
+    evaluatorCodeIdentity: 'score-evaluator-test',
+    status: 'started' as const,
+    createdAt: T1,
+    ...overrides,
+  }) as FundamentalScoreRun;
+
+const makeFundamentalScoreResult = (
+  overrides: Partial<FundamentalScoreResult> = {},
+): FundamentalScoreResult =>
+  ({
+    scoreRunId: 'score-run-1',
+    stockId: '600519.SH',
+    status: 'available' as const,
+    score: 100,
+    rank: 1,
+    components: [
+      {
+        factorId: 'fundamental.profitability.roe',
+        rawValue: 20,
+        unit: 'percent-points' as const,
+        direction: 'higher' as const,
+        normalizedValue: 100,
+        contribution: 100,
+        sourceRevisionIds: ['fact-1'],
+      },
+    ],
+    dataAsOf: T2,
+    vintageKey: 'c'.repeat(64),
+    ...overrides,
+  }) as FundamentalScoreResult;
+
+const makeFinancialFact = (
+  id: string,
+  overrides: Partial<Omit<FinancialFact, 'contentHash'>> = {},
+): FinancialFact => {
+  const fact = {
+    id,
+    stockId: 'stk-1',
+    metricId: 'revenue',
+    periodType: 'annual' as const,
+    periodStart: new Date('2025-01-01T00:00:00.000Z'),
+    periodEnd: T1,
+    value: 100,
+    canonicalUnit: 'ratio' as const,
+    source: 'fixture',
+    sourceRecordId: `record-${id}`,
+    sourceRevision: 'r1',
+    publishedAt: T0,
+    revisionPublishedAt: T0,
+    recordedAt: T0,
+    status: 'reported' as const,
+    ...overrides,
+  } satisfies Omit<FinancialFact, 'contentHash'>;
+  return {
+    ...fact,
+    contentHash: financialFactContentHash({
+      ...fact,
+      contentHash: '0'.repeat(64),
+    } as FinancialFact),
+  };
+};
 
 const makeLimitUpLadder = (overrides: Partial<LimitUpLadder> = {}): LimitUpLadder => ({
   date: '2026-07-01',
@@ -557,6 +669,20 @@ const makeResearchDocument = (
   fileModifiedAt: T1,
   indexedAt: T1,
   availability: 'available',
+  ...overrides,
+});
+
+const makeResearchHypothesisVersion = (
+  id: string,
+  overrides: Partial<ResearchHypothesisVersion> = {},
+): ResearchHypothesisVersion => ({
+  id: `hypothesis_${id}`,
+  topicId: 'topic_industry',
+  documentId: 'doc_thesis',
+  documentContentHash: 'b'.repeat(64),
+  version: 1,
+  status: 'active',
+  createdAt: T1,
   ...overrides,
 });
 
@@ -1086,6 +1212,18 @@ export const registerRepositoryContractTests = (
         expect(await repos.trade.findById('missing')).toBeNull();
       });
 
+      it('决策归因字段可空且 memory/Drizzle 往返一致', async () => {
+        const trade = makeTrade('t-attributed', {
+          adviceId: 'advice-1',
+          researchHypothesisVersionId: 'hypothesis-1',
+          strategyVersionId: 'strategy-v1',
+        });
+        await repos.trade.save(trade);
+        expect(await repos.trade.findById(trade.id)).toEqual(trade);
+        await repos.trade.save(makeTrade('t-legacy'));
+        expect(await repos.trade.findById('t-legacy')).toEqual(makeTrade('t-legacy'));
+      });
+
       it('listByAccount 按 executedAt 升序', async () => {
         await repos.trade.save(makeTrade('t-2', { executedAt: T3 }));
         await repos.trade.save(makeTrade('t-1', { executedAt: T1 }));
@@ -1346,21 +1484,47 @@ export const registerRepositoryContractTests = (
 
         const outcome: AdviceOutcome = {
           adviceId: 'adv-1',
+          tradeIds: ['trade-1'],
           outcome: 'followed',
           pnl: money(123.4567),
           benchmarkPnl: money(50),
+          holdingHours: 12,
+          notes: '复盘备注',
           recordedAt: T3,
         };
         await repos.advice.recordOutcome('adv-1', outcome);
         expect(await handle.readOutcome('adv-1')).toEqual(outcome);
+        expect(await repos.advice.findOutcome('adv-1')).toEqual(outcome);
+        expect(await repos.advice.listOutcomes({ since: T2, until: T3 })).toEqual([outcome]);
+        expect(await repos.advice.listOutcomes({ since: FAR_FUTURE })).toEqual([]);
 
-        const updated: AdviceOutcome = { adviceId: 'adv-1', outcome: 'ignored', recordedAt: T3 };
+        await repos.advice.save(makeAdvice('adv-2', { subjectId: 'stk-2' }));
+        const otherOutcome: AdviceOutcome = {
+          adviceId: 'adv-2',
+          tradeIds: [],
+          outcome: 'ignored',
+          recordedAt: T2,
+        };
+        await repos.advice.recordOutcome('adv-2', otherOutcome);
+        expect(await repos.advice.listOutcomes({ subjectId: 'stk-2' })).toEqual([otherOutcome]);
+
+        const updated: AdviceOutcome = {
+          adviceId: 'adv-1',
+          tradeIds: [],
+          outcome: 'ignored',
+          recordedAt: T3,
+        };
         await repos.advice.recordOutcome('adv-1', updated);
         expect(await handle.readOutcome('adv-1')).toEqual(updated);
       });
 
       it('recordOutcome 的 adviceId 不一致时拒绝', async () => {
-        const outcome: AdviceOutcome = { adviceId: 'adv-x', outcome: 'ignored', recordedAt: T3 };
+        const outcome: AdviceOutcome = {
+          adviceId: 'adv-x',
+          tradeIds: [],
+          outcome: 'ignored',
+          recordedAt: T3,
+        };
         await expect(repos.advice.recordOutcome('adv-y', outcome)).rejects.toThrow(InvariantError);
       });
     });
@@ -3457,6 +3621,236 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('ResearchHypothesisVersionRepository', () => {
+      it('create + list/find 往返，并原子 supersede 旧 active 版本', async () => {
+        const first = makeResearchHypothesisVersion('one');
+        await repos.researchHypothesisVersion.create(first);
+        expect(await repos.researchHypothesisVersion.findById(first.id)).toEqual(first);
+
+        const second = makeResearchHypothesisVersion('two', {
+          version: 2,
+          supersedesId: first.id,
+          documentId: 'doc_thesis-2',
+          createdAt: T2,
+        });
+        await repos.researchHypothesisVersion.create(second);
+        expect(await repos.researchHypothesisVersion.findById(first.id)).toMatchObject({
+          status: 'superseded',
+        });
+        expect(await repos.researchHypothesisVersion.findById(second.id)).toEqual(second);
+        expect(
+          (await repos.researchHypothesisVersion.list({ topicId: 'topic_industry' })).map(
+            (item) => item.id,
+          ),
+        ).toEqual([second.id, first.id]);
+        expect(
+          await repos.researchHypothesisVersion.list({
+            topicId: 'topic_industry',
+            status: 'active',
+          }),
+        ).toEqual([second]);
+      });
+
+      it('拒绝重复版本、非 active 创建和断开的版本链', async () => {
+        await repos.researchHypothesisVersion.create(makeResearchHypothesisVersion('one'));
+        await expect(
+          repos.researchHypothesisVersion.create(
+            makeResearchHypothesisVersion('duplicate', { version: 1 }),
+          ),
+        ).rejects.toThrow();
+        await expect(
+          repos.researchHypothesisVersion.create(
+            makeResearchHypothesisVersion('bad-status', { status: 'archived' }),
+          ),
+        ).rejects.toThrow();
+        await expect(
+          repos.researchHypothesisVersion.create(
+            makeResearchHypothesisVersion('bad-chain', {
+              version: 2,
+              supersedesId: 'hypothesis_missing',
+            }),
+          ),
+        ).rejects.toThrow();
+      });
+    });
+
+    describe('FinancialFactRepository', () => {
+      it('append-only：重复 revision 幂等，冲突 id 不覆盖旧事实', async () => {
+        const first = makeFinancialFact('fact-1');
+        await repos.financialFact.appendMany([first, first]);
+        expect(
+          await repos.financialFact.listRevisions({ stockIds: ['stk-1'], metricIds: ['revenue'] }),
+        ).toEqual([first]);
+
+        const later = makeFinancialFact('fact-2', {
+          value: 110,
+          sourceRecordId: 'record-fact-1',
+          sourceRevision: 'r2',
+          publishedAt: T2,
+          revisionPublishedAt: T2,
+          recordedAt: T2,
+          supersedesId: first.id,
+        });
+        await repos.financialFact.appendMany([later]);
+        await expect(
+          repos.financialFact.appendMany([makeFinancialFact(first.id, { value: 999 })]),
+        ).rejects.toThrow(InvariantError);
+        expect(
+          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map(
+            (item) => item.value,
+          ),
+        ).toEqual([100, 110]);
+      });
+
+      it('批量 append 遇到后续 id 冲突时整体回滚，不留下前置插入', async () => {
+        const existing = makeFinancialFact('fact-existing');
+        await repos.financialFact.appendMany([existing]);
+        const first = makeFinancialFact('fact-before-conflict', { value: 101 });
+        const conflict = makeFinancialFact(existing.id, { value: 999 });
+        await expect(repos.financialFact.appendMany([first, conflict])).rejects.toThrow(
+          InvariantError,
+        );
+        expect(
+          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map((item) => item.id),
+        ).toEqual([existing.id]);
+      });
+
+      it('appendMany 拒绝断链、跨实体和非较早 supersedes revision，并支持同批较早目标', async () => {
+        const target = makeFinancialFact('fact-target');
+        await repos.financialFact.appendMany([target]);
+        await expect(
+          repos.financialFact.appendMany([
+            makeFinancialFact('fact-missing-target', {
+              supersedesId: 'revision-missing',
+              sourceRevision: 'r2',
+              publishedAt: T2,
+              revisionPublishedAt: T2,
+              recordedAt: T2,
+            }),
+          ]),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.financialFact.appendMany([
+            makeFinancialFact('fact-cross-stock', {
+              stockId: 'stk-2',
+              supersedesId: target.id,
+              sourceRevision: 'r2',
+              publishedAt: T2,
+              revisionPublishedAt: T2,
+              recordedAt: T2,
+            }),
+          ]),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.financialFact.appendMany([
+            makeFinancialFact('fact-not-later', {
+              supersedesId: target.id,
+              sourceRevision: 'r2',
+              publishedAt: T0,
+              revisionPublishedAt: T0,
+              recordedAt: T0,
+            }),
+          ]),
+        ).rejects.toThrow(InvariantError);
+        expect(await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).toEqual([target]);
+
+        const batchTarget = makeFinancialFact('fact-batch-target');
+        const batchChild = makeFinancialFact('fact-batch-child', {
+          sourceRevision: 'r2',
+          publishedAt: T2,
+          revisionPublishedAt: T2,
+          recordedAt: T2,
+          supersedesId: batchTarget.id,
+        });
+        await repos.financialFact.appendMany([batchTarget, batchChild]);
+        expect(
+          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map((item) => item.id),
+        ).toEqual([target.id, batchTarget.id, batchChild.id]);
+      });
+
+      it('日期边界、空集合和大 stock 查询保持稳定排序', async () => {
+        const other = makeFinancialFact('fact-3', {
+          stockId: 'stk-2',
+          metricId: 'margin',
+          periodEnd: T2,
+          periodStart: new Date('2025-01-01T00:00:00.000Z'),
+          value: 0.2,
+        });
+        await repos.financialFact.appendMany([other, makeFinancialFact('fact-1')]);
+        expect(await repos.financialFact.listRevisions({ stockIds: [] })).toEqual([]);
+        expect(
+          await repos.financialFact.listRevisions({ stockIds: ['stk-1'], from: T1, to: T1 }),
+        ).toHaveLength(1);
+        expect(
+          (
+            await repos.financialFact.listRevisions({
+              stockIds: ['stk-2', 'stk-1'],
+              metricIds: ['margin', 'revenue'],
+            })
+          ).map((item) => `${item.stockId}:${item.metricId}`),
+        ).toEqual(['stk-1:revenue', 'stk-2:margin']);
+        const stockIds = Array.from({ length: 401 }, (_, index) => `bulk-${index}`);
+        expect(
+          await repos.financialFact.listRevisions({ stockIds: [...stockIds, 'stk-1'] }),
+        ).toEqual([makeFinancialFact('fact-1')]);
+        const metricIds = Array.from({ length: 401 }, (_, index) => `metric-${index}`);
+        metricIds[200] = 'revenue';
+        expect(
+          await repos.financialFact.listRevisions({
+            stockIds: ['stk-1'],
+            metricIds,
+          }),
+        ).toEqual([makeFinancialFact('fact-1')]);
+      });
+
+      it('resolveVintage 委托 strict PIT resolver，不回退撤回 revision', async () => {
+        const first = makeFinancialFact('fact-1');
+        const retracted = makeFinancialFact('fact-2', {
+          sourceRecordId: 'record-fact-1',
+          sourceRevision: 'r2',
+          publishedAt: T2,
+          revisionPublishedAt: T2,
+          recordedAt: T2,
+          status: 'retracted',
+          supersedesId: first.id,
+        });
+        await repos.financialFact.appendMany([first, retracted]);
+        const vintage = await repos.financialFact.resolveVintage({
+          stockIds: ['stk-1'],
+          metricIds: ['revenue'],
+          asOf: T2,
+          policy: 'strict-pit-v1',
+        });
+        expect(vintage.facts).toEqual([]);
+        expect(vintage.missing).toEqual([
+          {
+            stockId: 'stk-1',
+            metricId: 'revenue',
+            periodEnd: T1,
+            reason: 'retracted',
+            revisionIds: [retracted.id],
+          },
+        ]);
+        expect(vintage.coverage).toEqual({
+          requested: 1,
+          available: 0,
+          missing: 1,
+          retracted: 1,
+        });
+      });
+
+      it('读写对象不暴露可变引用', async () => {
+        const fact = makeFinancialFact('fact-copy');
+        await repos.financialFact.appendMany([fact]);
+        const got = (await repos.financialFact.listRevisions({ stockIds: [fact.stockId] }))[0];
+        expect(got).toEqual(fact);
+        got?.periodEnd.setUTCDate(1);
+        expect((await repos.financialFact.listRevisions({ stockIds: [fact.stockId] }))[0]).toEqual(
+          fact,
+        );
+      });
+    });
+
     describe('StockEventRepository', () => {
       it('upsertByExternal 幂等：同 (provider, externalId) 更新不重复插入', async () => {
         const first = makeStockEvent('e1', {
@@ -3884,6 +4278,133 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.limitUpLadderSnapshot.findByDate({ date: '2026-07-02', source: first.source }),
         ).resolves.toMatchObject({ date: '2026-07-02', total: 1 });
+      });
+    });
+
+    describe('FundamentalScoreVersionRepository', () => {
+      it('保存定义快照、重复 identity 幂等并隔离可变引用', async () => {
+        const version = makeFundamentalScoreVersion();
+        await repos.fundamentalScoreVersion.save(version);
+        await repos.fundamentalScoreVersion.save(structuredClone(version));
+        const got = await repos.fundamentalScoreVersion.findById(version.id);
+        expect(got).toEqual(version);
+        if (got === null) throw new Error('missing score version');
+        const gotComponent = got.components[0];
+        if (gotComponent === undefined) throw new Error('missing score component');
+        (gotComponent as { weight: number }).weight = 0.5;
+        got.createdAt.setTime(0);
+        expect(await repos.fundamentalScoreVersion.findById(version.id)).toEqual(version);
+        expect(
+          (await repos.fundamentalScoreVersion.list({ status: 'published' })).map(
+            (item) => item.id,
+          ),
+        ).toEqual([version.id]);
+      });
+
+      it('draft 可一次发布再退役，已发布/退役定义与发布时间不可覆盖', async () => {
+        const draft = makeFundamentalScoreVersion({
+          id: 'fundamental-score-lifecycle',
+          status: 'draft',
+          publishedAt: undefined,
+        });
+        await repos.fundamentalScoreVersion.save(draft);
+        const published = { ...draft, status: 'published' as const, publishedAt: T1 };
+        await repos.fundamentalScoreVersion.save(published);
+        const retired = { ...published, status: 'retired' as const };
+        await repos.fundamentalScoreVersion.save(retired);
+        expect(await repos.fundamentalScoreVersion.findById(retired.id)).toEqual(retired);
+        await expect(
+          repos.fundamentalScoreVersion.save({ ...retired, publishedAt: T2 }),
+        ).rejects.toThrow(InvariantError);
+        const retiredComponent = retired.components[0];
+        if (retiredComponent === undefined) throw new Error('missing score component');
+        await expect(
+          repos.fundamentalScoreVersion.save({
+            ...retired,
+            components: [{ ...retiredComponent, normalizer: 'industry-percentile-v1' as const }],
+          }),
+        ).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('FundamentalScoreRunRepository', () => {
+      it('started 后原子 commit results，重复相同提交幂等且读结果隔离', async () => {
+        const started = makeFundamentalScoreRun();
+        await repos.fundamentalScoreRun.saveStarted(started);
+        await expect(
+          repos.fundamentalScoreRun.commit({ run: started, results: [] }),
+        ).rejects.toThrow(InvariantError);
+        const committed = { ...started, status: 'committed' as const, committedAt: T3 };
+        const result = makeFundamentalScoreResult();
+        await repos.fundamentalScoreRun.commit({ run: committed, results: [result] });
+        await repos.fundamentalScoreRun.commit({ run: committed, results: [result] });
+        expect(await repos.fundamentalScoreRun.findById(started.id)).toEqual(committed);
+        const results = await repos.fundamentalScoreRun.listResults(started.id);
+        expect(results).toEqual([result]);
+        const resultComponent = results[0]?.components[0];
+        if (resultComponent === undefined) throw new Error('missing result component');
+        (resultComponent as { rawValue: number }).rawValue = 999;
+        expect(await repos.fundamentalScoreRun.listResults(started.id)).toEqual([result]);
+        expect((await repos.fundamentalScoreRun.list()).map((run) => run.id)).toEqual([started.id]);
+      });
+
+      it('unavailable/failed 终态保留 terminalReason 但不暴露 results，终态冲突拒绝', async () => {
+        const started = makeFundamentalScoreRun({ id: 'score-run-unavailable' });
+        await repos.fundamentalScoreRun.saveStarted(started);
+        const unavailable = {
+          ...started,
+          status: 'unavailable' as const,
+          committedAt: T3,
+          terminalReason: {
+            code: 'provider-unavailable',
+            message: 'fixture provider unavailable',
+            observedAt: T2,
+          },
+        };
+        await repos.fundamentalScoreRun.commit({ run: unavailable, results: [] });
+        await repos.fundamentalScoreRun.commit({ run: unavailable, results: [] });
+        expect(await repos.fundamentalScoreRun.findById(started.id)).toEqual(unavailable);
+        expect(await repos.fundamentalScoreRun.listResults(started.id)).toEqual([]);
+        await expect(
+          repos.fundamentalScoreRun.commit({
+            run: {
+              ...unavailable,
+              terminalReason: { ...unavailable.terminalReason, message: 'changed' },
+            },
+            results: [],
+          }),
+        ).rejects.toThrow(InvariantError);
+      });
+
+      it('未先 started、非 committed 带 results 或 committed 结果不完整时拒绝', async () => {
+        const committed = {
+          ...makeFundamentalScoreRun({ id: 'score-run-unknown' }),
+          status: 'committed' as const,
+          committedAt: T3,
+        };
+        await expect(
+          repos.fundamentalScoreRun.commit({
+            run: committed,
+            results: [makeFundamentalScoreResult({ scoreRunId: committed.id })],
+          }),
+        ).rejects.toThrow(InvariantError);
+        const started = makeFundamentalScoreRun({ id: 'score-run-invalid' });
+        await repos.fundamentalScoreRun.saveStarted(started);
+        await expect(
+          repos.fundamentalScoreRun.commit({
+            run: {
+              ...started,
+              status: 'failed' as const,
+              committedAt: T3,
+              terminalReason: {
+                code: 'evaluator-error',
+                message: 'failed',
+                observedAt: T2,
+              },
+            },
+            results: [makeFundamentalScoreResult({ scoreRunId: started.id })],
+          }),
+        ).rejects.toThrow(InvariantError);
       });
     });
 

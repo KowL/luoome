@@ -9,6 +9,10 @@ import type {
   ChatMessagePart,
   DeliveryStatus,
   Exchange,
+  FinancialFact,
+  FundamentalScoreResult,
+  FundamentalScoreRun,
+  FundamentalScoreVersion,
   LimitUpLadder,
   LimitUpLadderSource,
   ListingStatus,
@@ -26,6 +30,7 @@ import type {
   Report,
   ResearchEmbeddingIndexState,
   ResearchEmbeddingModelIdentity,
+  ResearchHypothesisVersion,
   ResearchTopicIndex,
   ResearchVaultSyncRun,
   SignalObservation,
@@ -238,6 +243,9 @@ export const trades = sqliteTable('trades', {
   fee: real('fee').$type<Money>().notNull(),
   executedAt: integer('executed_at', { mode: 'timestamp_ms' }).notNull(),
   source: text('source').$type<TradeSource>().notNull(),
+  adviceId: text('advice_id'),
+  researchHypothesisVersionId: text('research_hypothesis_version_id'),
+  strategyVersionId: text('strategy_version_id'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
@@ -347,13 +355,22 @@ export const advices = sqliteTable(
 );
 
 /** 每条 advice 至多一条 outcome（复盘回填，重复回填视为覆盖）。 */
-export const adviceOutcomes = sqliteTable('advice_outcomes', {
-  adviceId: text('advice_id').primaryKey(),
-  outcome: text('outcome').$type<'followed' | 'partially_followed' | 'ignored'>().notNull(),
-  pnl: real('pnl').$type<Money>(),
-  benchmarkPnl: real('benchmark_pnl').$type<Money>(),
-  recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
-});
+export const adviceOutcomes = sqliteTable(
+  'advice_outcomes',
+  {
+    adviceId: text('advice_id').primaryKey(),
+    tradeIds: text('trade_ids', { mode: 'json' }).$type<readonly string[]>().notNull(),
+    outcome: text('outcome').$type<'followed' | 'partially_followed' | 'ignored'>().notNull(),
+    pnl: real('pnl').$type<Money>(),
+    benchmarkPnl: real('benchmark_pnl').$type<Money>(),
+    holdingHours: real('holding_hours'),
+    notes: text('notes'),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    recordedAtIdx: index('advice_outcomes_recorded_at_idx').on(t.recordedAt),
+  }),
+);
 
 /** 实时行情快照（可选表，ARCHITECTURE §5.1 PriceSnapshot）。 */
 export const priceSnapshots = sqliteTable(
@@ -463,6 +480,141 @@ export const dailyBarRevisions = sqliteTable(
       name: 'daily_bar_revisions_pk',
     }),
     lookupIdx: index('daily_bar_revisions_lookup_idx').on(t.stockId, t.date, t.recordedAt),
+  }),
+);
+
+/**
+ * Phase 3 P3-1：append-only 基本面事实修订；同一 logical revision + content hash 幂等，
+ * 但不得按 (stock, metric, period) 覆盖旧事实。
+ */
+export const financialFactRevisions = sqliteTable(
+  'financial_fact_revisions',
+  {
+    id: text('id').primaryKey(),
+    stockId: text('stock_id').notNull(),
+    metricId: text('metric_id').notNull(),
+    periodType: text('period_type').$type<FinancialFact['periodType']>().notNull(),
+    periodStart: integer('period_start', { mode: 'timestamp_ms' }),
+    periodEnd: integer('period_end', { mode: 'timestamp_ms' }).notNull(),
+    value: real('value').notNull(),
+    canonicalUnit: text('canonical_unit').$type<FinancialFact['canonicalUnit']>().notNull(),
+    currency: text('currency').$type<NonNullable<FinancialFact['currency']>>(),
+    rawValue: real('raw_value'),
+    rawUnit: text('raw_unit'),
+    source: text('source').notNull(),
+    sourceRecordId: text('source_record_id').notNull(),
+    sourceRevision: text('source_revision').notNull(),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }).notNull(),
+    revisionPublishedAt: integer('revision_published_at', { mode: 'timestamp_ms' }).notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+    status: text('status').$type<FinancialFact['status']>().notNull(),
+    supersedesId: text('supersedes_id'),
+    industryKey: text('industry_key'),
+    contentHash: text('content_hash').notNull(),
+  },
+  (t) => ({
+    logicalRevisionHashUnique: uniqueIndex('financial_fact_revisions_logical_hash_unique').on(
+      t.source,
+      t.sourceRecordId,
+      t.sourceRevision,
+      t.contentHash,
+    ),
+    pitLookupIdx: index('financial_fact_revisions_pit_lookup_idx').on(
+      t.stockId,
+      t.metricId,
+      t.periodEnd,
+      t.revisionPublishedAt,
+      t.recordedAt,
+    ),
+    recordedAtIdx: index('financial_fact_revisions_recorded_at_idx').on(t.recordedAt),
+  }),
+);
+
+/** P3-2：不可变的基本面评分定义快照。draft 可完成一次发布/退役状态迁移；已发布/退役后不可覆盖。 */
+export const fundamentalScoreVersions = sqliteTable(
+  'fundamental_score_versions',
+  {
+    id: text('id').primaryKey(),
+    version: integer('version').notNull(),
+    registryVersion: text('registry_version').notNull(),
+    registryHash: text('registry_hash').notNull(),
+    normalizationVersion: text('normalization_version').notNull(),
+    components: text('components_json', { mode: 'json' })
+      .$type<FundamentalScoreVersion['components']>()
+      .notNull(),
+    missingPolicy: text('missing_policy').notNull(),
+    rounding: text('rounding').notNull(),
+    definitionHash: text('definition_hash').notNull(),
+    status: text('status').$type<FundamentalScoreVersion['status']>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    definitionHashUnique: uniqueIndex('fundamental_score_versions_definition_hash_unique').on(
+      t.definitionHash,
+    ),
+    statusVersionIdx: index('fundamental_score_versions_status_version_idx').on(
+      t.status,
+      t.version,
+    ),
+  }),
+);
+
+/** P3-2：一次确定性评分运行的不可变生命周期事实。 */
+export const fundamentalScoreRuns = sqliteTable(
+  'fundamental_score_runs',
+  {
+    id: text('id').primaryKey(),
+    scoreVersionId: text('score_version_id').notNull(),
+    scoreVersionHash: text('score_version_hash').notNull(),
+    registryHash: text('registry_hash').notNull(),
+    universeSyncId: text('universe_sync_id').notNull(),
+    universeMemberChecksum: text('universe_member_checksum').notNull(),
+    asOf: integer('as_of', { mode: 'timestamp_ms' }).notNull(),
+    financialVintageKey: text('financial_vintage_key').notNull(),
+    normalizerDenominatorHash: text('normalizer_denominator_hash').notNull(),
+    counts: text('counts_json', { mode: 'json' }).$type<FundamentalScoreRun['counts']>().notNull(),
+    providerStatus: text('provider_status')
+      .$type<FundamentalScoreRun['providerStatus']>()
+      .notNull(),
+    evaluatorCodeIdentity: text('evaluator_code_identity').notNull(),
+    status: text('status').$type<FundamentalScoreRun['status']>().notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    committedAt: integer('committed_at', { mode: 'timestamp_ms' }),
+    terminalReason: text('terminal_reason_json', { mode: 'json' }).$type<NonNullable<
+      FundamentalScoreRun['terminalReason']
+    > | null>(),
+  },
+  (t) => ({
+    scoreVersionAsOfIdx: index('fundamental_score_runs_score_version_as_of_idx').on(
+      t.scoreVersionId,
+      t.asOf,
+    ),
+    statusCreatedIdx: index('fundamental_score_runs_status_created_idx').on(t.status, t.createdAt),
+  }),
+);
+
+/** P3-2：每个 run/stock 一行；只有 committed run 的结果可消费。 */
+export const fundamentalScoreResults = sqliteTable(
+  'fundamental_score_results',
+  {
+    scoreRunId: text('score_run_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    status: text('status').$type<FundamentalScoreResult['status']>().notNull(),
+    score: real('score'),
+    rank: integer('rank'),
+    components: text('components_json', { mode: 'json' })
+      .$type<FundamentalScoreResult['components']>()
+      .notNull(),
+    dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),
+    vintageKey: text('vintage_key').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({
+      columns: [t.scoreRunId, t.stockId],
+      name: 'fundamental_score_results_pk',
+    }),
+    runRankIdx: index('fundamental_score_results_run_rank_idx').on(t.scoreRunId, t.rank),
   }),
 );
 
@@ -1228,6 +1380,30 @@ export const researchDocumentIndex = sqliteTable(
     observedIdx: index('research_document_index_observed_idx').on(t.observedAt),
   }),
 );
+export const researchHypothesisVersions = sqliteTable(
+  'research_hypothesis_versions',
+  {
+    id: text('id').primaryKey(),
+    topicId: text('topic_id').notNull(),
+    documentId: text('document_id').notNull(),
+    documentContentHash: text('document_content_hash').notNull(),
+    version: integer('version').notNull(),
+    status: text('status').$type<ResearchHypothesisVersion['status']>().notNull(),
+    supersedesId: text('supersedes_id'),
+    summary: text('summary'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    topicVersionUnique: uniqueIndex('research_hypothesis_versions_topic_version_unique').on(
+      t.topicId,
+      t.version,
+    ),
+    topicStatusIdx: index('research_hypothesis_versions_topic_status_idx').on(t.topicId, t.status),
+    activeUnique: uniqueIndex('research_hypothesis_versions_active_unique')
+      .on(t.topicId)
+      .where(sql`status = 'active'`),
+  }),
+);
 export const researchTopicDocuments = sqliteTable(
   'research_topic_documents',
   {
@@ -1501,6 +1677,10 @@ export const schema = {
   dailyBars,
   minuteBars,
   dailyBarRevisions,
+  financialFactRevisions,
+  fundamentalScoreVersions,
+  fundamentalScoreRuns,
+  fundamentalScoreResults,
   strategies,
   strategyVersions,
   strategyRuns,
@@ -1530,6 +1710,7 @@ export const schema = {
   // ruo 迁移起（docs/ddd/ruo-feature-migration-detailed-design.md §3）
   researchTopicIndex,
   researchDocumentIndex,
+  researchHypothesisVersions,
   researchTopicDocuments,
   researchSubjectLinks,
   researchDocumentChunks,

@@ -53,6 +53,16 @@ AlertPlan，以及 StrategySignal 的 T+1/T+3/T+5/T+20 事后观察。AI 只解�
 fact id；不得把观察称为回测，不得给出收益承诺、未来概率或买卖建议。事实截止时间、观察截止
 时间、缺失率和小样本限制必须保留。
 
+### FinancialFact / FundamentalScore
+
+`FinancialFact` 是带报告期间、首次披露时间、revision 披露时间与本地记录时间的 append-only 财务事实；
+strict PIT 只读取截止 `asOf` 已公开且已被本地记录的 revision，撤回后不得回退旧值。`FundamentalScore`
+由版本化因子 registry、固定单位/方向、同一 vintage 横截面与最小样本门槛确定性计算，是 0～100 的规则分，
+不是概率、Advice 或交易授权。当前 P3-0～P3-2 已完成 Core、mock revision 装配、score version/run/result
+双仓储与确定性评分 Tool；`persist=false` 不写库，unavailable run 不保存可消费结果。mock 必须显式启用，
+评分与查询始终披露 `providerKind=mock`、`gate=not-ready`，且尚未接入 Strategy DSL。没有通过真实财务 revision 门禁前，不得用当前行情、
+股票目录行业、测试 fixture 或抓取时间替代生产 PIT 财务事实，也不得开放生产评分入口。
+
 ### Watchlist
 
 回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护

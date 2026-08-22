@@ -5,6 +5,10 @@ import type {
   ChatMessage,
   ChatSession,
   DailyBar,
+  FinancialFact,
+  FundamentalScoreResult,
+  FundamentalScoreRun,
+  FundamentalScoreVersion,
   Holding,
   MinuteBar,
   Notification,
@@ -13,6 +17,7 @@ import type {
   Quote,
   Report,
   RepositoryRegistry,
+  ResearchHypothesisVersion,
   SignalObservation,
   Stock,
   StockEvent,
@@ -30,6 +35,11 @@ import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
+import { InMemoryFinancialFactRepository } from './financial-fact.js';
+import {
+  InMemoryFundamentalScoreRunRepository,
+  InMemoryFundamentalScoreVersionRepository,
+} from './fundamental-score.js';
 import { InMemoryHoldingRepository } from './holding.js';
 import { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 import { InMemoryMinuteBarRepository } from './minute-bar.js';
@@ -42,6 +52,7 @@ import { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-perf
 import { InMemoryQuoteRepository } from './quote.js';
 import { InMemoryReportRepository } from './report.js';
 import { InMemoryResearchEmbeddingRepository } from './research-embedding.js';
+import { InMemoryResearchHypothesisVersionRepository } from './research-hypothesis.js';
 import { InMemoryResearchIndexRepository } from './research-index.js';
 import { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 import { InMemorySignalObservationRepository } from './signal-observation.js';
@@ -68,6 +79,11 @@ export { InMemoryAdviceRepository } from './advice.js';
 export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
 export { InMemoryDailyBarRepository } from './daily-bar.js';
+export { InMemoryFinancialFactRepository } from './financial-fact.js';
+export {
+  InMemoryFundamentalScoreRunRepository,
+  InMemoryFundamentalScoreVersionRepository,
+} from './fundamental-score.js';
 export { InMemoryHoldingRepository } from './holding.js';
 export { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 export { InMemoryMinuteBarRepository } from './minute-bar.js';
@@ -80,6 +96,7 @@ export { InMemoryPortfolioPerformanceSnapshotRepository } from './portfolio-perf
 export { InMemoryQuoteRepository } from './quote.js';
 export { InMemoryReportRepository } from './report.js';
 export { InMemoryResearchEmbeddingRepository } from './research-embedding.js';
+export { InMemoryResearchHypothesisVersionRepository } from './research-hypothesis.js';
 export { InMemoryResearchIndexRepository } from './research-index.js';
 export { InMemoryResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { InMemorySignalObservationRepository } from './signal-observation.js';
@@ -116,6 +133,12 @@ export interface InMemorySeed {
   readonly reports?: readonly Report[];
   readonly signalObservations?: readonly SignalObservation[];
   readonly dailyBars?: readonly DailyBar[];
+  readonly financialFacts?: readonly FinancialFact[];
+  readonly fundamentalScoreVersions?: readonly FundamentalScoreVersion[];
+  readonly fundamentalScoreRuns?: readonly {
+    readonly run: FundamentalScoreRun;
+    readonly results: readonly FundamentalScoreResult[];
+  }[];
   readonly minuteBars?: readonly MinuteBar[];
   readonly strategies?: readonly Strategy[];
   readonly strategySchedules?: readonly StrategySchedule[];
@@ -128,6 +151,7 @@ export interface InMemorySeed {
   /** ruo 迁移起：可选预置公司事件 + workflow 运行。 */
   readonly stockEvents?: readonly StockEvent[];
   readonly workflowRuns?: readonly WorkflowRun[];
+  readonly researchHypothesisVersions?: readonly ResearchHypothesisVersion[];
 }
 
 /** 构造全部 in-memory repository，可选灌入种子。 */
@@ -146,6 +170,9 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const chat = new InMemoryChatRepository();
   const quote = new InMemoryQuoteRepository();
   const dailyBar = new InMemoryDailyBarRepository();
+  const financialFact = new InMemoryFinancialFactRepository();
+  const fundamentalScoreVersion = new InMemoryFundamentalScoreVersionRepository();
+  const fundamentalScoreRun = new InMemoryFundamentalScoreRunRepository();
   const minuteBar = new InMemoryMinuteBarRepository();
   const signalObservation = new InMemorySignalObservationRepository();
   const strategy = new InMemoryStrategyRepository();
@@ -166,6 +193,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   // ruo 迁移起
   const researchIndex = new InMemoryResearchIndexRepository();
   const researchEmbedding = new InMemoryResearchEmbeddingRepository(researchIndex);
+  const researchHypothesisVersion = new InMemoryResearchHypothesisVersionRepository();
   const researchVaultSyncRun = new InMemoryResearchVaultSyncRunRepository();
   const stockEvent = new InMemoryStockEventRepository();
   const workflowRun = new InMemoryWorkflowRunRepository();
@@ -183,6 +211,18 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const message of seed.chatMessages ?? []) chat.putMessage(message);
     for (const q of seed.quotes ?? []) quote.put(q);
     for (const b of seed.dailyBars ?? []) dailyBar.put(b);
+    if (seed.financialFacts !== undefined) void financialFact.appendMany(seed.financialFacts);
+    for (const version of seed.fundamentalScoreVersions ?? [])
+      void fundamentalScoreVersion.save(version);
+    for (const bundle of seed.fundamentalScoreRuns ?? []) {
+      void fundamentalScoreRun.saveStarted({
+        ...bundle.run,
+        status: 'started',
+        committedAt: undefined,
+        terminalReason: undefined,
+      });
+      void fundamentalScoreRun.commit(bundle);
+    }
     for (const b of seed.minuteBars ?? []) minuteBar.put(b);
     for (const observation of seed.signalObservations ?? []) signalObservation.put(observation);
     for (const item of seed.strategies ?? []) void strategy.create(item);
@@ -195,6 +235,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const r of seed.watchRuns ?? []) watchRun.put(r);
     for (const e of seed.stockEvents ?? []) stockEvent.put(e);
     for (const r of seed.workflowRuns ?? []) workflowRun.put(r);
+    for (const version of seed.researchHypothesisVersions ?? [])
+      void researchHypothesisVersion.create(version);
   }
   return {
     account,
@@ -210,6 +252,9 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     report,
     quote,
     dailyBar,
+    financialFact,
+    fundamentalScoreVersion,
+    fundamentalScoreRun,
     minuteBar,
     signalObservation,
     strategy,
@@ -229,6 +274,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     researchIndex,
     researchEmbedding,
     researchVaultSyncRun,
+    researchHypothesisVersion,
     stockEvent,
     workflowRun,
     chat,

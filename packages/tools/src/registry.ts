@@ -32,12 +32,15 @@ import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { fetchIndexQuotesTool } from './tools/fetch-index-quotes.js';
 import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
+import { getFinancialFactsTool, syncFinancialFactsTool } from './tools/financial-facts.js';
+import { getFundamentalScoreTool, runFundamentalScoreTool } from './tools/fundamental-score.js';
 import { generateStrategyRecommendationsTool } from './tools/generate-strategy-recommendations.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
+import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
 import { getHoldingTool } from './tools/get-holding.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
@@ -73,6 +76,10 @@ import {
   searchResearchDocumentsHybridTool,
 } from './tools/research-embedding.js';
 import {
+  createResearchHypothesisVersionTool,
+  listResearchHypothesisVersionsTool,
+} from './tools/research-hypothesis.js';
+import {
   archiveResearchTopicTool,
   buildResearchBriefTool,
   createResearchDocumentTool,
@@ -95,6 +102,7 @@ import { sendNotificationTool } from './tools/send-notification.js';
 import { setWatchTriggerFeedbackTool } from './tools/set-watch-trigger-feedback.js';
 import {
   completeStrategyObservationsTool,
+  getSignalObservationStatsTool,
   listPendingStrategyObservationsTool,
 } from './tools/signal-observation.js';
 import {
@@ -132,6 +140,11 @@ import {
   resumeStrategyTool,
   validateStrategyVersionTool,
 } from './tools/strategy-lifecycle.js';
+import {
+  exportStrategyManifestTool,
+  importStrategyManifestTool,
+  validateStrategyManifestTool,
+} from './tools/strategy-manifest.js';
 import {
   compareStrategyRunsTool,
   getStrategyRunTool,
@@ -293,6 +306,9 @@ export const toolRegistry: Registry = createRegistry([
   getAdviceTool,
   getAdviceStatsTool,
   getConfidenceCalibrationTool,
+  getDecisionLoopReviewTool,
+  getFinancialFactsTool,
+  getFundamentalScoreTool,
   getWatchStatusTool,
   analyzeStockTool,
   analyzeStrategyCandidateTool,
@@ -304,6 +320,8 @@ export const toolRegistry: Registry = createRegistry([
   getStockMinuteBarsTool,
   syncQuotesTool,
   syncDailyBarsTool,
+  syncFinancialFactsTool,
+  runFundamentalScoreTool,
   getPreviousClosesTool,
   searchStocksTool,
   computeIndicatorsTool,
@@ -317,6 +335,9 @@ export const toolRegistry: Registry = createRegistry([
   proposeStrategyVersionDraftTool,
   trialStrategyVersionTool,
   validateStrategyVersionTool,
+  exportStrategyManifestTool,
+  validateStrategyManifestTool,
+  importStrategyManifestTool,
   publishStrategyVersionTool,
   pauseStrategyTool,
   resumeStrategyTool,
@@ -348,6 +369,7 @@ export const toolRegistry: Registry = createRegistry([
   strategySignalsByStockTool,
   listPendingStrategyObservationsTool,
   completeStrategyObservationsTool,
+  getSignalObservationStatsTool,
   createStrategyObservationCandidatesTool,
   getStrategyInsightFactsTool,
   generateStrategyInsightTool,
@@ -391,6 +413,8 @@ export const toolRegistry: Registry = createRegistry([
   addStockEventTool,
   updateStockEventTool,
   listResearchTopicsTool,
+  createResearchHypothesisVersionTool,
+  listResearchHypothesisVersionsTool,
   getResearchTopicTool,
   createResearchTopicTool,
   createResearchDocumentTool,

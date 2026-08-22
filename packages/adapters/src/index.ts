@@ -6,6 +6,9 @@ export * from './ashare-sentiment/factory.js';
 export * from './ashare-sentiment/manager.js';
 export * from './ashare-sentiment/types.js';
 export * from './audit/file.js';
+// 基本面 PIT mock（仅显式测试注入，永不自动装配）
+export * from './fundamental/factory.js';
+export * from './fundamental/mock.js';
 export * from './limit-up-ladder/eastmoney.js';
 export * from './limit-up-ladder/factory.js';
 export * from './limit-up-ladder/manager.js';

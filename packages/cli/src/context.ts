@@ -14,6 +14,7 @@ import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
   createFileAuditLogger,
+  createFundamentalDataAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
@@ -78,6 +79,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     clock: now,
     logger,
   });
+  const fundamentalData = createFundamentalDataAdapterFromEnv(process.env);
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
   try {
     ai = createAIStackFromEnv(process.env, { logger });
@@ -147,6 +149,7 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),
     ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
+    ...(fundamentalData === undefined ? {} : { fundamentalData }),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
   });

@@ -1,7 +1,8 @@
 import type { Account } from '../entity/account.js';
-import type { Advice, AdviceOutcome, AdviceQuery } from '../entity/advice.js';
+import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
+import type { FinancialFact, FinancialVintage } from '../entity/fundamental.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
 import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
@@ -18,6 +19,10 @@ import type {
   ResearchEmbeddingIndexState,
   ResearchEmbeddingModelIdentity,
 } from '../entity/research-embedding.js';
+import type {
+  ResearchHypothesisVersion,
+  ResearchHypothesisVersionStatus,
+} from '../entity/research-hypothesis.js';
 import type {
   ResearchAvailability,
   ResearchDocumentChunk,
@@ -80,6 +85,12 @@ import type {
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
 import type { ResearchSearchHit } from '../research-vault.js';
+import type {
+  FundamentalScoreResult,
+  FundamentalScoreRun,
+  FundamentalScoreRunCommit,
+  FundamentalScoreVersion,
+} from '../strategy/fundamental-factor.js';
 
 /**
  * Repository 接口（ARCHITECTURE §2.5 / §4.3）。
@@ -229,6 +240,59 @@ export interface DailyBarRepository {
   }): Promise<readonly DailyBarRevision[]>;
 }
 
+/**
+ * Append-only 基本面事实修订仓储；PIT vintage 选择仍由 core strict resolver 定义。
+ * 实现必须同时提供 Drizzle/SQLite 与 in-memory 版本，并保持查询排序和副本语义一致。
+ */
+export interface FinancialFactRepository {
+  appendMany(facts: readonly FinancialFact[]): Promise<void>;
+  listRevisions(input: {
+    readonly stockIds: readonly string[];
+    readonly metricIds?: readonly string[];
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly FinancialFact[]>;
+  resolveVintage(input: {
+    readonly stockIds: readonly string[];
+    readonly metricIds: readonly string[];
+    readonly asOf: Date;
+    readonly policy: 'strict-pit-v1';
+  }): Promise<FinancialVintage>;
+}
+
+/**
+ * Immutable, append-only score-version snapshots. A second save for an
+ * existing id must either be an identical idempotent replay or be rejected;
+ * published/retired definitions are never updated in place.
+ */
+export interface FundamentalScoreVersionRepository {
+  save(version: FundamentalScoreVersion): Promise<void>;
+  findById(id: string): Promise<FundamentalScoreVersion | null>;
+  list(input?: {
+    readonly status?: FundamentalScoreVersion['status'];
+  }): Promise<readonly FundamentalScoreVersion[]>;
+}
+
+/**
+ * Append-only score-run audit facts. `saveStarted` creates the only mutable
+ * lifecycle state; `commit` atomically moves it once to a terminal status and
+ * stores results only for `committed`. unavailable/failed terminal commits
+ * retain their run reason but expose no consumable results.
+ */
+export interface FundamentalScoreRunRepository {
+  saveStarted(run: FundamentalScoreRun): Promise<void>;
+  commit(input: FundamentalScoreRunCommit): Promise<void>;
+  findById(id: string): Promise<FundamentalScoreRun | null>;
+  list(input?: {
+    readonly scoreVersionId?: string;
+    readonly status?: FundamentalScoreRun['status'];
+    readonly asOf?: Date;
+    readonly limit?: number;
+  }): Promise<readonly FundamentalScoreRun[]>;
+  listResults(runId: string): Promise<readonly FundamentalScoreResult[]>;
+}
+
 /** 独立分钟行情仓储；不读取或投影 PriceSnapshot。 */
 export interface MinuteBarRepository {
   saveMany(bars: readonly MinuteBar[]): Promise<void>;
@@ -248,6 +312,8 @@ export interface AdviceRepository {
   findById(id: string): Promise<Advice | null>;
   query(filter: AdviceQuery): Promise<Advice[]>;
   recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void>;
+  findOutcome(adviceId: string): Promise<AdviceOutcome | null>;
+  listOutcomes(filter?: AdviceOutcomeQuery): Promise<AdviceOutcome[]>;
 }
 
 export interface ReportRepository {
@@ -290,6 +356,12 @@ export interface RepositoryRegistry {
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
   readonly dailyBar: DailyBarRepository;
+  /** Phase 3 P3-1：append-only 基本面 PIT facts 与 strict vintage resolver。 */
+  readonly financialFact: FinancialFactRepository;
+  /** Phase 3 P3-2：不可变基本面 score version 快照。 */
+  readonly fundamentalScoreVersion: FundamentalScoreVersionRepository;
+  /** Phase 3 P3-2：一次性 terminal commit 的基本面 score run/results。 */
+  readonly fundamentalScoreRun: FundamentalScoreRunRepository;
   /** Market View Phase 4：独立 raw 分钟 OHLCV，默认保留 30 天。 */
   readonly minuteBar: MinuteBarRepository;
   /** Phase 6：信号后的事实表现观察，不包含回测交易。 */
@@ -321,6 +393,7 @@ export interface RepositoryRegistry {
   readonly researchIndex: ResearchIndexRepository;
   readonly researchEmbedding: ResearchEmbeddingRepository;
   readonly researchVaultSyncRun: ResearchVaultSyncRunRepository;
+  readonly researchHypothesisVersion: ResearchHypothesisVersionRepository;
   /** ruo 迁移 Phase 1B；公司事件（幂等 upsert by (provider, externalId)）。 */
   readonly stockEvent: StockEventRepository;
   /** ruo 迁移 Phase 1C；workflow 运行审计。 */
@@ -400,6 +473,17 @@ export interface ResearchVaultSyncRunRepository {
   save(run: ResearchVaultSyncRun): Promise<void>;
   findById(id: string): Promise<ResearchVaultSyncRun | null>;
   list(vaultId: string, limit?: number): Promise<readonly ResearchVaultSyncRun[]>;
+}
+
+export interface ResearchHypothesisVersionRepository {
+  /** 创建新的 active 版本，并在同一事务内将该 Topic 旧 active 版本标记为 superseded。 */
+  create(version: ResearchHypothesisVersion): Promise<void>;
+  findById(id: string): Promise<ResearchHypothesisVersion | null>;
+  list(input?: {
+    readonly topicId?: string;
+    readonly status?: ResearchHypothesisVersionStatus;
+    readonly limit?: number;
+  }): Promise<readonly ResearchHypothesisVersion[]>;
 }
 
 export interface ResearchEmbeddingRepository {

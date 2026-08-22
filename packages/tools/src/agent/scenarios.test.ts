@@ -29,11 +29,13 @@ describe('agent 场景目录', () => {
     }
   });
 
-  it('草案清单全部已注册、kind 合法且四场景与 general 完全一致', () => {
-    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(22);
+  it('草案清单全部已注册、kind 合法；Phase 2 草案按场景收窄', () => {
+    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(24);
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_stock).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_position).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.market_outlook).toBe('advice');
+    expect(AGENT_DRAFT_TOOL_KINDS.record_advice_outcome).toBe('review');
+    expect(AGENT_DRAFT_TOOL_KINDS.create_research_hypothesis_version).toBe('research');
     for (const [name, kind] of Object.entries(AGENT_DRAFT_TOOL_KINDS)) {
       const registered = toolRegistry.get(name);
       expect(registered, name).toBeDefined();
@@ -41,8 +43,20 @@ describe('agent 场景目录', () => {
         expect(registered?.sideEffect, name).toBe('advice');
       }
     }
-    for (const scenario of Object.values(AGENT_SCENARIOS)) {
-      expect(scenario.draftToolKinds).toBe(AGENT_DRAFT_TOOL_KINDS);
+    expect(AGENT_SCENARIOS.general.draftToolKinds).toBe(AGENT_DRAFT_TOOL_KINDS);
+    expect(AGENT_SCENARIOS.review.draftToolKinds.record_advice_outcome).toBe('review');
+    expect(AGENT_SCENARIOS.review.draftToolKinds).not.toHaveProperty(
+      'create_research_hypothesis_version',
+    );
+    expect(AGENT_SCENARIOS.research.draftToolKinds.create_research_hypothesis_version).toBe(
+      'research',
+    );
+    expect(AGENT_SCENARIOS.research.draftToolKinds).not.toHaveProperty('record_advice_outcome');
+    for (const id of ['portfolio', 'watch'] as const) {
+      expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty('record_advice_outcome');
+      expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty(
+        'create_research_hypothesis_version',
+      );
     }
   });
 
@@ -59,11 +73,15 @@ describe('agent 场景目录', () => {
   it('场景专属项落在对应场景', () => {
     expect(AGENT_SCENARIOS.portfolio.readToolNames).toContain('get_account_performance');
     expect(AGENT_SCENARIOS.review.readToolNames).toContain('get_confidence_calibration');
+    expect(AGENT_SCENARIOS.review.readToolNames).toContain('get_decision_loop_review');
+    expect(AGENT_SCENARIOS.review.readToolNames).toContain('get_signal_observation_stats');
     expect(AGENT_SCENARIOS.review.readToolNames).toContain('get_strategy_reliability_summary');
     expect(AGENT_SCENARIOS.review.readToolNames).toContain('compare_strategy_definitions');
     expect(AGENT_SCENARIOS.research.readToolNames).toContain('get_stock_research_view');
     expect(AGENT_SCENARIOS.research.readToolNames).toContain('compare_strategy_definitions');
     expect(AGENT_SCENARIOS.watch.readToolNames).toContain('get_watch_status');
+    expect(AGENT_SCENARIOS.general.readToolNames).toContain('get_signal_observation_stats');
+    expect(AGENT_SCENARIOS.general.readToolNames).toContain('get_decision_loop_review');
   });
 
   it('review 覆写含小样本相关性约束，每场景有计划维度', () => {

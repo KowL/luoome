@@ -1555,6 +1555,20 @@ const renderReview = async (setStatus) => {
         const li = el('div', 'advice-card');
         const status = a.outcome === undefined ? '（待回填）' : a.outcome.outcome;
         const pnlText = a.outcome?.pnl !== undefined ? `  盈亏 ${fmtSigned(a.outcome.pnl)}` : '';
+        const outcomeMeta =
+          a.outcome === undefined
+            ? []
+            : [
+                ...(a.outcome.benchmarkPnl === undefined
+                  ? []
+                  : [`基准 ${fmtSigned(a.outcome.benchmarkPnl)}`]),
+                ...(a.outcome.holdingHours === undefined
+                  ? []
+                  : [`持有 ${a.outcome.holdingHours}h`]),
+                ...(Array.isArray(a.outcome.tradeIds) && a.outcome.tradeIds.length > 0
+                  ? [`交易 ${a.outcome.tradeIds.join(',')}`]
+                  : []),
+              ];
         li.append(
           el('div', 'row-1', [
             el('div', 'subject', [el('span', 'code', code), a.subjectId]),
@@ -1562,7 +1576,11 @@ const renderReview = async (setStatus) => {
           ]),
         );
         li.append(el('p', 'premise', a.reasoning?.premise ?? ''));
-        const row2 = el('div', 'row-2', `${status}${pnlText}  有效至 ${fmtDateTime(a.validUntil)}`);
+        const row2 = el('div', 'row-2', [
+          `${status}${pnlText}`,
+          ...outcomeMeta,
+          `有效至 ${fmtDateTime(a.validUntil)}`,
+        ]);
         li.append(row2);
         if (a.outcome === undefined) {
           const btn = el('button', 'btn btn-outline btn-sm', '回填 outcome');
@@ -1580,12 +1598,36 @@ const renderReview = async (setStatus) => {
   setStatus('复盘已刷新');
 };
 
+const outcomeInputOf = (values) => {
+  const optionalNumber = (value) => {
+    const text = String(value ?? '').trim();
+    if (text.length === 0) return undefined;
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const pnl = optionalNumber(values.pnl);
+  const benchmarkPnl = optionalNumber(values.benchmarkPnl);
+  const holdingHours = optionalNumber(values.holdingHours);
+  const tradeIds = String(values.tradeIds ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  return {
+    outcome: values.outcome,
+    ...(pnl === undefined ? {} : { pnl }),
+    ...(benchmarkPnl === undefined ? {} : { benchmarkPnl }),
+    ...(holdingHours === undefined ? {} : { holdingHours }),
+    ...(tradeIds.length > 0 ? { tradeIds } : {}),
+    ...(String(values.notes ?? '').length > 0 ? { notes: values.notes } : {}),
+  };
+};
+
 const fillOutcomeForm = async (adviceId, decision) => {
   const values = await promptDialog({
     title: `回填 outcome（${adviceId.slice(0, 8)} · 决策 ${decision}）`,
     fields: [
       {
-        key: 'followed',
+        key: 'outcome',
         label: '执行情况',
         value: 'followed',
         options: [
@@ -1594,21 +1636,27 @@ const fillOutcomeForm = async (adviceId, decision) => {
           { value: 'ignored', label: '忽略' },
         ],
       },
-      { key: 'pnl', label: '实际盈亏（人民币，可负）', value: '0' },
+      {
+        key: 'pnl',
+        label: '实际盈亏（人民币，可负）',
+        placeholder: '未知或未平仓时留空',
+      },
+      { key: 'benchmarkPnl', label: '同期基准盈亏（可选）', placeholder: '选填' },
+      { key: 'holdingHours', label: '持有时长（小时，可选）', placeholder: '选填' },
+      {
+        key: 'tradeIds',
+        label: '关联交易 ID（可选，逗号分隔）',
+        placeholder: '例如 trade-1,trade-2',
+      },
       { key: 'notes', label: '备注（可选）', placeholder: '选填' },
     ],
     confirmLabel: '回填',
   });
   if (values === null) return;
-  const pnl = Number(values.pnl);
   const r = await callApi(`/api/review/${adviceId}/outcome`, {
     method: 'POST',
     body: JSON.stringify({
-      input: {
-        followed: values.followed === 'followed',
-        pnl: Number.isFinite(pnl) ? pnl : 0,
-        ...(values.notes.length > 0 ? { notes: values.notes } : {}),
-      },
+      input: outcomeInputOf(values),
     }),
   });
   if (r.ok) {
@@ -2682,6 +2730,7 @@ export {
   cancelAnalyzeAllHoldings,
   errorKindLabel,
   filterAdvices,
+  outcomeInputOf,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,

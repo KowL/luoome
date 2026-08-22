@@ -28,7 +28,11 @@ const VALUE_FLAGS = new Set([
   'host',
   'limit',
   'pnl',
+  'benchmark-pnl',
   'holding-hours',
+  'outcome',
+  'followed',
+  'trade-ids',
   'notes',
   'mode',
   // v0.6 watch 子命令
@@ -478,11 +482,24 @@ const cmdAdviceOutcome = async (
   if (adviceId === undefined || adviceId.length === 0) {
     throw new CliUsageError('advice outcome 需要 adviceId 作为位置参数');
   }
-  const followedRaw = flagString(flags, 'followed') ?? 'true';
-  const followed = followedRaw === 'true' || followedRaw === '1';
-  const pnl = Number(flagString(flags, 'pnl') ?? '0');
+  const outcomeRaw = flagString(flags, 'outcome');
+  const followedRaw = flagString(flags, 'followed');
+  const outcome =
+    outcomeRaw ??
+    (followedRaw === undefined || followedRaw === 'true' || followedRaw === '1'
+      ? 'followed'
+      : 'ignored');
+  const pnlRaw = flagString(flags, 'pnl');
+  const pnl = pnlRaw === undefined ? undefined : Number(pnlRaw);
+  const benchmarkPnlRaw = flagString(flags, 'benchmark-pnl');
+  const benchmarkPnl = benchmarkPnlRaw !== undefined ? Number(benchmarkPnlRaw) : undefined;
   const holdingHoursStr = flagString(flags, 'holding-hours');
   const holdingHours = holdingHoursStr !== undefined ? Number(holdingHoursStr) : undefined;
+  const tradeIds =
+    flagString(flags, 'trade-ids')
+      ?.split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0) ?? [];
   const notes = flagString(flags, 'notes');
   const handle = await createCliContext();
   try {
@@ -491,8 +508,10 @@ const cmdAdviceOutcome = async (
     const res = await tool.execute(
       {
         adviceId,
-        followed,
-        pnl,
+        outcome,
+        tradeIds,
+        ...(pnl !== undefined ? { pnl } : {}),
+        ...(benchmarkPnl !== undefined ? { benchmarkPnl } : {}),
         ...(holdingHours !== undefined ? { holdingHours } : {}),
         ...(notes !== undefined ? { notes } : {}),
       },
@@ -836,7 +855,8 @@ Strategy / Watchlist / Alert:
 Advice:
   advice list [--since 7d] [--include-expired] [--limit N]   查询历史建议
   advice stats [--since 30d]                                 建议准确率统计
-  advice outcome <id> [--followed true|false] [--pnl N]        回填建议结果
+  advice outcome <id> [--outcome followed|partially_followed|ignored] [--pnl N]
+                               回填建议结果（--followed true|false 仍兼容）
 
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）

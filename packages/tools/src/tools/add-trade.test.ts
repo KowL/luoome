@@ -1,10 +1,170 @@
+import { type StrategyDslV1, type StrategyVersion, strategyDefinitionHash } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import { addTradeTool } from './add-trade.js';
 import { analyzePositionTool } from './analyze-position.js';
+import { listTradesTool } from './list-trades.js';
 
 describe('add_trade', () => {
+  it('接受显式 Advice / ResearchHypothesisVersion / StrategyVersion 归因并可按归因查询', async () => {
+    const now = new Date('2026-08-01T00:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const advice = (
+      await ctx.repos.advice.query({
+        subjectKind: 'stock',
+        subjectId: '002594.SZ',
+        includeExpired: true,
+      })
+    )[0];
+    if (advice === undefined) throw new Error('test advice missing');
+
+    await ctx.repos.researchHypothesisVersion.create({
+      id: 'hypothesis_trade-test',
+      topicId: 'topic_trade-test',
+      documentId: 'doc_trade-test',
+      documentContentHash: 'a'.repeat(64),
+      version: 1,
+      status: 'active',
+      createdAt: now,
+    });
+    const definition: StrategyDslV1 = {
+      schemaVersion: 1,
+      metadata: { horizon: 'short' },
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [{ id: 'rule', name: '有效价格', when: 'quote.close > 0', evidence: ['价格'] }],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    const strategyVersion: StrategyVersion = {
+      id: 'trade-strategy-v1',
+      strategyId: 'trade-strategy',
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: now,
+      createdAt: now,
+    };
+    await ctx.repos.strategy.create({
+      id: 'trade-strategy',
+      name: '交易归因策略',
+      description: '测试用策略',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: strategyVersion.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.strategy.createVersion(strategyVersion);
+
+    const result = await addTradeTool.execute(
+      {
+        stockId: '002594.SZ',
+        side: 'buy',
+        quantity: 100,
+        price: 106,
+        adviceId: advice.id,
+        researchHypothesisVersionId: 'hypothesis_trade-test',
+        strategyVersionId: strategyVersion.id,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.trade).toMatchObject({
+      adviceId: advice.id,
+      researchHypothesisVersionId: 'hypothesis_trade-test',
+      strategyVersionId: strategyVersion.id,
+    });
+
+    const listed = await listTradesTool.execute({ adviceId: advice.id }, ctx);
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.data.trades.map((trade) => trade.id)).toContain(result.data.trade.id);
+  });
+
+  it('拒绝 Advice 股票不一致、缺失假设版本和未发布 StrategyVersion', async () => {
+    const now = new Date('2026-08-01T00:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const wrongAdvice = (
+      await ctx.repos.advice.query({
+        subjectKind: 'stock',
+        subjectId: '600519.SH',
+        includeExpired: true,
+      })
+    )[0];
+    if (wrongAdvice === undefined) throw new Error('test advice missing');
+
+    const mismatched = await addTradeTool.execute(
+      {
+        stockId: '002594.SZ',
+        side: 'buy',
+        quantity: 100,
+        price: 106,
+        adviceId: wrongAdvice.id,
+      },
+      ctx,
+    );
+    expect(mismatched).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+
+    const missingHypothesis = await addTradeTool.execute(
+      {
+        stockId: '002594.SZ',
+        side: 'buy',
+        quantity: 100,
+        price: 106,
+        researchHypothesisVersionId: 'hypothesis_missing',
+      },
+      ctx,
+    );
+    expect(missingHypothesis).toMatchObject({ ok: false, error: { kind: 'not_found' } });
+
+    const definition: StrategyDslV1 = {
+      schemaVersion: 1,
+      metadata: {},
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [{ id: 'rule', name: '有效价格', when: 'quote.close > 0', evidence: ['价格'] }],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    await ctx.repos.strategy.create({
+      id: 'unpublished-trade-strategy',
+      name: '未发布策略',
+      description: '测试用策略',
+      owner: 'user',
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.strategy.createVersion({
+      id: 'unpublished-trade-v1',
+      strategyId: 'unpublished-trade-strategy',
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      createdAt: now,
+    });
+    const unpublished = await addTradeTool.execute(
+      {
+        stockId: '002594.SZ',
+        side: 'buy',
+        quantity: 100,
+        price: 106,
+        strategyVersionId: 'unpublished-trade-v1',
+      },
+      ctx,
+    );
+    expect(unpublished).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+  });
+
   it('buy 新开仓：落 trade + holding（avgCost=price）+ 自动补 stock stub', async () => {
     const ctx = await buildTestContext();
     // 601398.SH 不在 fixtures 中
@@ -109,6 +269,7 @@ describe('add_trade', () => {
 
   it('sell 超卖 → invalid_input', async () => {
     const ctx = await buildTestContext();
+    const before = await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId);
     const result = await addTradeTool.execute(
       { stockId: '002594.SZ', side: 'sell', quantity: 9999, price: 110 },
       ctx,
@@ -116,10 +277,12 @@ describe('add_trade', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('invalid_input');
+    expect(await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId)).toEqual(before);
   });
 
   it('sell 无持仓 → invalid_input', async () => {
     const ctx = await buildTestContext();
+    const before = await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId);
     const result = await addTradeTool.execute(
       { stockId: '601398.SH', side: 'sell', quantity: 100, price: 70 },
       ctx,
@@ -127,6 +290,7 @@ describe('add_trade', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('invalid_input');
+    expect(await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId)).toEqual(before);
   });
 
   it('账户不存在 → not_found', async () => {

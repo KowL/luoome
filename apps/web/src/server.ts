@@ -21,6 +21,7 @@ import {
   createAShareSentimentManagerFromEnv,
   createFeishuWebhookAdapterFromEnv,
   createFileAuditLogger,
+  createFundamentalDataAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
   createNotificationManagerFromEnv,
@@ -168,6 +169,7 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'get_account_performance',
   'sync_stock_universe',
   'sync_daily_bars',
+  'sync_financial_facts',
   'run_strategy',
   'generate_strategy_insight',
   'search_research_documents_hybrid',
@@ -298,6 +300,7 @@ export const buildWebContext = async (
     // Web 持仓与 Watchlist 盘中轮询；TTL 不调小的话拿到的都是缓存
     quoteCacheTtlMs: 10_000,
   });
+  const fundamentalData = createFundamentalDataAdapterFromEnv(env);
   return buildContext({
     repos: handle.repos,
     adapters: {
@@ -327,6 +330,7 @@ export const buildWebContext = async (
     ...(researchVault ? { researchVault } : {}),
     ...(researchEmbedding ? { researchEmbedding } : {}),
     ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
+    ...(fundamentalData === undefined ? {} : { fundamentalData }),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(env, {
       repos: handle.repos,

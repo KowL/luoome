@@ -1,5 +1,10 @@
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
 import type {
+  FinancialFact,
+  FinancialMissingReason,
+  FinancialPeriodType,
+} from './entity/fundamental.js';
+import type {
   LimitUpLadder,
   LimitUpLadderDiff,
   LimitUpLadderQuery,
@@ -79,6 +84,71 @@ export interface StockUniverseManagerLike {
     readonly source?: string;
   }): Promise<StockUniverseSnapshot>;
 }
+
+/**
+ * Phase 3 financial-fact gate. `not-ready` is the safe default until a source
+ * proves publication/revision metadata and real PIT coverage; it must not be
+ * inferred from transport success or fixture data.
+ */
+export type FundamentalDataGateStatus = 'not-ready' | 'evaluation-ready' | 'operational';
+
+export interface FundamentalDataGate {
+  readonly name: 'fundamental-data-gate-v1';
+  readonly status: FundamentalDataGateStatus;
+  readonly reasons: readonly string[];
+  readonly evaluatedAt: Date;
+}
+
+export type FundamentalIngestionIssueReason =
+  | FinancialMissingReason
+  | 'invalid-payload'
+  | 'unsupported-capability';
+
+/** Structured issue retained when a source row cannot become a FinancialFact. */
+export interface FundamentalIngestionIssue {
+  readonly source: string;
+  readonly reason: FundamentalIngestionIssueReason;
+  readonly message: string;
+  readonly observedAt: Date;
+  readonly stockId?: string;
+  readonly metricId?: string;
+  readonly periodType?: FinancialPeriodType;
+  readonly periodEnd?: Date;
+  readonly sourceRecordId?: string;
+  readonly sourceRevision?: string;
+}
+
+/** Raw revision query; adapters return all source revisions, leaving PIT choice to core. */
+export interface FundamentalDataQuery {
+  readonly stockIds: readonly string[];
+  readonly metricIds?: readonly string[];
+  readonly periodFrom?: Date;
+  readonly periodTo?: Date;
+}
+
+export interface FundamentalDataAdapterResult {
+  readonly source: string;
+  readonly gateStatus: FundamentalDataGateStatus;
+  readonly gate: FundamentalDataGate;
+  readonly revisions: readonly FinancialFact[];
+  readonly issues: readonly FundamentalIngestionIssue[];
+  readonly observedAt: Date;
+}
+
+/**
+ * Independent from MarketDataAdapterLike: current quote/daily-bar sources
+ * cannot satisfy the publication/revision PIT contract by being renamed.
+ */
+export interface FundamentalDataAdapterLike {
+  readonly name: string;
+  readonly source: string;
+  readonly gateStatus: FundamentalDataGateStatus;
+  readonly gate: FundamentalDataGate;
+  fetchFinancialFactRevisions(input: FundamentalDataQuery): Promise<FundamentalDataAdapterResult>;
+}
+
+export type FundamentalDataAdapterInput = FundamentalDataQuery;
+export type FundamentalDataAdapterOutput = FundamentalDataAdapterResult;
 
 /** 股票搜索候选（外部数据源统一形状；id = '<code>.<EXCHANGE>'）。 */
 export interface StockSearchCandidate {
@@ -233,6 +303,8 @@ export interface ToolContext {
     readonly stockId: string;
     readonly name: string;
   };
+  /** Phase 3 P3-1：显式基本面数据 adapter；未注入时同步入口保持 unavailable。 */
+  readonly fundamentalData?: FundamentalDataAdapterLike;
 }
 
 export type AShareSentimentManagerResult =

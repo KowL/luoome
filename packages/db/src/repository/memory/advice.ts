@@ -1,6 +1,7 @@
 import {
   type Advice,
   type AdviceOutcome,
+  type AdviceOutcomeQuery,
   type AdviceQuery,
   type AdviceRepository,
   assertAdviceInvariants,
@@ -24,7 +25,7 @@ export class InMemoryAdviceRepository implements AdviceRepository {
   async findById(id: string): Promise<Advice | null> {
     const advice = this.items.get(id);
     if (advice === undefined) return null;
-    const outcome = await this.getOutcome(id);
+    const outcome = await this.findOutcome(id);
     return outcome === null ? advice : { ...advice, outcome };
   }
 
@@ -51,7 +52,7 @@ export class InMemoryAdviceRepository implements AdviceRepository {
     if (filter.limit !== undefined) out = out.slice(0, filter.limit);
     return Promise.all(
       out.map(async (a) => {
-        const outcome = await this.getOutcome(a.id);
+        const outcome = await this.findOutcome(a.id);
         return outcome === null ? a : { ...a, outcome };
       }),
     );
@@ -66,8 +67,32 @@ export class InMemoryAdviceRepository implements AdviceRepository {
     this.outcomes.set(adviceId, outcome);
   }
 
-  /** 读取已回填的 outcome（超出 core 接口的便捷方法，与 Drizzle 实现对齐）。 */
-  async getOutcome(adviceId: string): Promise<AdviceOutcome | null> {
+  async findOutcome(adviceId: string): Promise<AdviceOutcome | null> {
     return this.outcomes.get(adviceId) ?? null;
+  }
+
+  async listOutcomes(filter: AdviceOutcomeQuery = {}): Promise<AdviceOutcome[]> {
+    let out = [...this.outcomes.values()].filter((outcome) => {
+      if (filter.adviceId !== undefined && outcome.adviceId !== filter.adviceId) return false;
+      if (filter.since !== undefined && outcome.recordedAt < filter.since) return false;
+      if (filter.until !== undefined && outcome.recordedAt > filter.until) return false;
+      const advice = this.items.get(outcome.adviceId);
+      if (advice === undefined) return false;
+      if (filter.subjectKind !== undefined && advice.subjectKind !== filter.subjectKind) {
+        return false;
+      }
+      if (filter.subjectId !== undefined && advice.subjectId !== filter.subjectId) return false;
+      return true;
+    });
+    out = out.sort(
+      (a, b) =>
+        b.recordedAt.getTime() - a.recordedAt.getTime() || b.adviceId.localeCompare(a.adviceId),
+    );
+    return filter.limit === undefined ? out : out.slice(0, filter.limit);
+  }
+
+  /** 兼容旧调用方；新代码应使用 AdviceRepository.findOutcome。 */
+  async getOutcome(adviceId: string): Promise<AdviceOutcome | null> {
+    return this.findOutcome(adviceId);
   }
 }

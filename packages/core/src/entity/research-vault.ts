@@ -52,7 +52,8 @@ const pathSchema = z
       !normalized.split('/').includes('..')
     );
   }, 'must be a safe POSIX relative path');
-const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export const ResearchContentHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const hashSchema = ResearchContentHashSchema;
 const tagsSchema = z.array(z.string().min(1).max(64)).max(32);
 
 export const ResearchTopicIndexSchema = z.object({

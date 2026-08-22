@@ -187,6 +187,43 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 因此当前开发顺序不扩展横向产品能力：只收口可靠性、安全、测试、观测和文档，并持续积累真实
 provider 证据；禁止用 mock、当前快照或推断字段关闭上述门禁。
 
+### 2.6 Phase 2：真实复盘闭环执行里程碑（2026-08-21）
+
+Phase 0+1 的 Agent 协作体验已完成；Phase 2 继续按[决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md)
+执行。2026-08-21 已完成 P2-0～P2-4 核心代码切片，并用临时真实 SQLite 走通 Web outcome 回填与刷新持久化；
+这仍不等同于“真实复盘全部完成”，P2-5 的 Advice → Trade → Observation/Report → 新版本全链路、
+跨 repository 原子性和持续生产样本仍需关闭。
+
+| 顺序 | 里程碑 | 当前状态 | 关闭条件 |
+|---|---|---|---|
+| P2-0 | AdviceOutcome 语义、Trade 依据关系、ResearchHypothesisVersion 最小版本契约、Report 投影与迁移基线 | 核心代码完成 | schema/不变量、`ensureSchema`/Drizzle、旧数据读取、双仓储 contract tests 和 data-transfer 已通过 |
+| P2-1 | AdviceOutcome 回填与 Trade 依据关联 | 核心代码完成 | 三态 outcome、unknown 金额、可空依据关联、账户/股票/版本边界及无效卖出不落孤儿 Trade 已覆盖 |
+| P2-2 | SignalObservation 稳定统计 | 代码完成，生产证据持续积累 | 统一去重聚合 Tool 已落地；benchmark 可用率与跨运行真实样本继续观测 |
+| P2-3 | 周报行为模式与数据质量 | 核心区块完成 | Advice、Trade 归因、Signal、最小样本行为模式和 data-quality 已落地；跨账户 research changes 因能力缺口保持 unavailable，不伪造空结果 |
+| P2-4 | 反馈到 Strategy、AlertPlan 或研究假设新版本 | 核心草案链路完成 | ResearchHypothesisVersion 双仓储/Tool/Agent draft 已落地；跨 repository 原子事务仍需收口 |
+| P2-5 | 端到端复盘与浏览器验收 | 部分完成 | 已通过 Outcome Web golden path；仍需真实数据完成 Advice → Trade → Observation/Report → 新版本全链路 |
+
+执行顺序固定为 P2-0 → P2-1/P2-2 → P2-3 → P2-4 → P2-5。P2-1/P2-2 可以并行开发，
+但共享 schema 必须先由 P2-0 冻结；生产数据不足时允许返回 `partial/unavailable`，不允许用 fixture、
+mock、当前快照或零值关闭验收。上位 PRD 的 Phase 2 状态保持不变，待主线程在代码和证据全部验收后更新。
+
+### 2.7 总纲 Phase 3 状态与外部数据门禁（2026-08-21）
+
+Phase 3 四项能力按“代码状态”和“生产证据”分开记录。下表中的“代码完成”不代表真实数据验收完成；
+任何指标只在对应门禁完整时发布，否则只能返回审计、样本和 `partial/unavailable`。
+
+| Phase 3 项目 | 当前状态 | 主要代码/设计缺口 | 外部数据门禁 |
+|---|---|---|---|
+| 基本面因子与评分 | P3-0 Core、P3-1 mock、P3-2 deterministic score engine 已完成；真实 gate `not-ready` | append-only FinancialFact、score version/run/result 双仓储与迁移、显式 mock adapter、market/industry percentile、`sync/get_financial_facts`、`run/get_fundamental_score` 和 Web 权限门禁已落地；仍缺 P3-3 StrategyDslV2/evaluation workflow、P3-4 真实门禁与 P3-5 只读解释 UI | 现有 Tushare/Eastmoney/Sina 无财报发布时间、revision identity 或重述链；仍需真实 PIT adapter、覆盖证据、单位/期间映射与 restatement 样本，mock score 永远不能升级真实门禁 |
+| 严格时间切片回测 | 代码切片已落地；真实数据证据未闭合 | strict-backtest scope、身份冻结、门禁审计和执行模型已有设计/契约；真实停牌/涨跌停/退市、公司行动、历史 benchmark、费用/滑点和 evaluator identity 尚未形成持续生产证据 | PIT universe、DailyBar revision/checkpoint/cutoff、版本化费用、版本化滑点、每日可交易性、公司行动、同 cutoff benchmark、evaluator 版本/代码身份八项必须完整；缺失只输出门禁和 unavailable，不输出净收益/回撤/Sharpe/胜率 |
+| 组合归因与现金流口径净值 | 代码基本完成；长区间、跨日和大账户生产证据未闭合 | 现金流/公司行动/TWR/回撤/贡献归因、快照审计和 Web 基础链路已落地；`cashFlowComplete` 等完整性字段必须由账本覆盖事实推导，不能在成功计算时无条件置 true | 真实交易、持仓、入出金、分红、费用、拆股/送转、价格与 benchmark 全区间覆盖；权威交易日历、输入修订追溯、现金流完整性和连续 scheduler 运行；缺价/缺账本保持 partial/unavailable，不填 0 |
+| 可移植策略研究定义 | 最小 JSON 纵向切片已完成 | canonical/versioned manifest、能力/字段依赖、数据集/evaluator identity、时间切片/执行模型及 export/validate/import read tools 已落地；跨实例文件传输 UI/CLI 可后续扩展 | 导入包自带 schema/version、字段/能力依赖、数据集与 evaluator identity、时间切片和执行模型；缺能力返回 unsupported，未知 DSL 字段拒绝，不静默降级 |
+
+现实开发顺序：先完成 Phase 2 的契约与真实装配，再修正组合绩效完整性语义并积累 provider 证据；
+随后收口严格回测的八项门禁；只有 PIT 基本面事实和数据字典可用时才立项基本面因子；最后冻结可移植
+研究定义，以已稳定的 Strategy schema、数据版本和 evaluator identity 作为 canonical manifest。Phase 3
+任何一项的真实数据门禁都不能靠补测试、浏览器截图或一次性 mock smoke 关闭。
+
 ## 3. 依赖关系
 
 ```text

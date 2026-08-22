@@ -143,6 +143,11 @@ const adviceCard = (advice) => {
     const o = advice.outcome;
     const pnlText = o.pnl !== undefined ? `（盈亏 ${fmtSigned(o.pnl)}）` : '';
     row2Parts.push(`outcome: ${o.outcome}${pnlText}`);
+    if (o.benchmarkPnl !== undefined) row2Parts.push(`基准 ${fmtSigned(o.benchmarkPnl)}`);
+    if (o.holdingHours !== undefined) row2Parts.push(`持有 ${o.holdingHours}h`);
+    if (Array.isArray(o.tradeIds) && o.tradeIds.length > 0) {
+      row2Parts.push(`交易 ${o.tradeIds.join(',')}`);
+    }
   }
   card.append(
     el(

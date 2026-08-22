@@ -91,7 +91,7 @@ describe('get_confidence_calibration', () => {
       const outcomeResult = await recordAdviceOutcomeTool.execute(
         {
           adviceId: a.id,
-          followed: true,
+          outcome: 'followed',
           pnl: a.hit ? 10 : -5,
         },
         ctx,
@@ -179,7 +179,7 @@ describe('get_confidence_calibration', () => {
       });
     }
     const r = await recordAdviceOutcomeTool.execute(
-      { adviceId: 'a1', followed: true, pnl: 100 },
+      { adviceId: 'a1', outcome: 'followed', pnl: 100 },
       ctx,
     );
     expect(r.ok).toBe(true);

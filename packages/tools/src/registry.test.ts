@@ -14,6 +14,9 @@ const EXPECTED_TOOL_NAMES = [
   'list_trades',
   'get_advice',
   'get_advice_stats',
+  'get_decision_loop_review',
+  'get_financial_facts',
+  'get_fundamental_score',
   'analyze_stock',
   'analyze_strategy_candidate',
   'analyze_position',
@@ -25,6 +28,8 @@ const EXPECTED_TOOL_NAMES = [
   'get_stock_minute_bars',
   'sync_quotes',
   'sync_daily_bars',
+  'sync_financial_facts',
+  'run_fundamental_score',
   'get_previous_closes',
   'search_stocks',
   'compute_indicators',
@@ -34,6 +39,9 @@ const EXPECTED_TOOL_NAMES = [
   'create_strategy',
   'delete_strategy',
   'create_strategy_version',
+  'export_strategy_manifest',
+  'validate_strategy_manifest',
+  'import_strategy_manifest',
   'compare_strategy_definitions',
   'propose_strategy_version_draft',
   'trial_strategy_version',
@@ -65,6 +73,7 @@ const EXPECTED_TOOL_NAMES = [
   // Strategy Phase B：调度、真实表现补全与事实型 AI 洞察
   'list_pending_strategy_observations',
   'complete_strategy_observations',
+  'get_signal_observation_stats',
   'create_strategy_observation_candidates',
   'get_strategy_insight_facts',
   'generate_strategy_insight',
@@ -107,6 +116,8 @@ const EXPECTED_TOOL_NAMES = [
   'set_watch_trigger_feedback',
   // ruo 迁移 Phase 1（docs/ddd/ruo-feature-migration-detailed-design.md §7）
   'list_research_topics',
+  'create_research_hypothesis_version',
+  'list_research_hypothesis_versions',
   'get_research_topic',
   'create_research_topic',
   'create_research_document',
@@ -189,6 +200,20 @@ describe('toolRegistry', () => {
     ]);
   });
 
+  it('sync_financial_facts 声明 external + write 组合能力', () => {
+    expect(toolRegistry.get('sync_financial_facts')?.requiredCapabilities).toEqual([
+      'external',
+      'write',
+    ]);
+  });
+
+  it('fundamental score tools use the required read/write capability split', () => {
+    expect(toolRegistry.get('run_fundamental_score')?.sideEffect).toBe('write');
+    expect(toolRegistry.get('run_fundamental_score')?.requiredCapabilities).toEqual(['write']);
+    expect(toolRegistry.get('get_fundamental_score')?.sideEffect).toBe('read');
+    expect(toolRegistry.get('get_fundamental_score')?.requiredCapabilities).toEqual(['read']);
+  });
+
   it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
     const names = toolRegistry.all().map((tool) => tool.name);
     expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);
@@ -260,6 +285,7 @@ describe('toolRegistry', () => {
       'search_research_documents_hybrid',
       'send_notification',
       'sync_daily_bars',
+      'sync_financial_facts',
       'sync_quotes',
       'sync_stock_events',
       'sync_stock_universe',
@@ -289,6 +315,7 @@ describe('toolRegistry', () => {
       'create_portfolio_cash_flow',
       'create_portfolio_corporate_action',
       'create_research_document',
+      'create_research_hypothesis_version',
       'create_research_topic',
       'create_strategy',
       'create_strategy_observation_candidates',
@@ -311,6 +338,7 @@ describe('toolRegistry', () => {
       'renew_strategy_schedule_claim',
       'resume_strategy',
       'resume_strategy_evaluation_session',
+      'run_fundamental_score',
       'set_strategy_schedule',
       'set_watch_trigger_feedback',
       'start_strategy_evaluation_session',
