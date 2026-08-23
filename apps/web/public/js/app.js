@@ -30,7 +30,9 @@ import {
   renderSettings,
   renderSettingsAccount,
   renderWorkflowRuns,
+  resetAdviceDeleteMode,
   runWatchOnce,
+  toggleAdviceDeleteMode,
 } from './pages.js';
 import { renderSectors } from './sectors.js';
 import {
@@ -93,6 +95,8 @@ const showRoute = async (name) => {
   if (safe !== 'market') teardownMarket();
   // 离开指数页时停止 10s 分时刷新定时器。
   if (safe !== 'indices') teardownIndices();
+  // 离开建议页时退出删除选择模式并清空选择集（防状态残留）。
+  if (safe !== 'advice') resetAdviceDeleteMode();
   document.querySelectorAll('.route').forEach((node) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
@@ -132,18 +136,7 @@ const showRoute = async (name) => {
       await refreshChat();
     } else if (safe === 'settings') {
       renderSettings(setStatus);
-      initAISettings(setStatus);
-      await renderAISettings(setStatus);
-      initMarketSettings(setStatus);
-      await renderMarketSettings(setStatus);
-      initMarketSync();
-      await renderMarketSyncStatus();
-      initFeishuSettings(setStatus);
-      await renderFeishuSettings(setStatus);
-      initDataTransfer();
-      await renderDataTransfer();
-      await renderSettingsAccount();
-      await renderWorkflowRuns(setStatus);
+      await renderSettingsTab(setStatus, settingsTab());
     }
   } catch (error) {
     setStatus(`路由错误：${error instanceof Error ? error.message : String(error)}`, true);
@@ -160,6 +153,46 @@ const currentHash = () => {
   if (path === 'watch' || path === 'groups') return 'alerts';
   if (path === 'tactics') return 'strategies';
   return ROUTES.includes(path) ? path : 'dashboard';
+};
+
+/* ============ 设置页二级菜单（#settings?tab=ai|market|notify|data|system） ============ */
+
+const SETTINGS_TABS = ['ai', 'market', 'notify', 'data', 'system'];
+
+const settingsTab = (hash = window.location.hash) => {
+  const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'ai';
+  return SETTINGS_TABS.includes(tab) ? tab : 'ai';
+};
+
+/** 只渲染当前 tab 的分区内容；pane 显隐与 subnav 高亮同步。 */
+const renderSettingsTab = async (setStatus, tab) => {
+  document.querySelectorAll('[data-settings-pane]').forEach((node) => {
+    node.hidden = node.dataset.settingsPane !== tab;
+  });
+  document.querySelectorAll('.settings-subnav-item').forEach((node) => {
+    const active = node.dataset.settingsTab === tab;
+    node.classList.toggle('active', active);
+    if (active) node.setAttribute('aria-current', 'true');
+    else node.removeAttribute('aria-current');
+  });
+  if (tab === 'ai') {
+    initAISettings(setStatus);
+    await renderAISettings(setStatus);
+  } else if (tab === 'market') {
+    initMarketSettings(setStatus);
+    await renderMarketSettings(setStatus);
+    initMarketSync();
+    await renderMarketSyncStatus();
+  } else if (tab === 'notify') {
+    initFeishuSettings(setStatus);
+    await renderFeishuSettings(setStatus);
+  } else if (tab === 'data') {
+    initDataTransfer();
+    await renderDataTransfer();
+  } else if (tab === 'system') {
+    await renderSettingsAccount();
+    await renderWorkflowRuns(setStatus);
+  }
 };
 
 const onHashChange = () => {
@@ -279,7 +312,15 @@ const bindGlobalActions = () => {
 
   const adviceFilter = $('#advice-filter');
   if (adviceFilter !== null)
-    adviceFilter.addEventListener('change', () => void renderAdviceList(setStatus));
+    adviceFilter.addEventListener('change', () => {
+      // 筛选切换退出删除选择模式（选择集跨筛选保留会造成误删）
+      resetAdviceDeleteMode();
+      void renderAdviceList(setStatus);
+    });
+
+  const adviceDeleteModeBtn = $('#btn-advice-delete-mode');
+  if (adviceDeleteModeBtn !== null)
+    adviceDeleteModeBtn.addEventListener('click', () => void toggleAdviceDeleteMode(setStatus));
 
   bindSettingsActions();
   bindAccountSelect();

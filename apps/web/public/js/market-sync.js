@@ -3,6 +3,8 @@
  * GET /api/market-data-status 展示 datasets / providers 状态；
  * 「同步股票目录」→ sync_stock_universe，「同步日线」→ sync_daily_bars，
  * 长调用显式 timeoutMs: 300_000，进行中禁用按钮，完成后刷新状态表。
+ * 表格只列这两个按钮真正刷新的数据集；其余数据集的实时状态见上方
+ * 各行情源的能力表与仪表盘「数据健康」卡。
  */
 
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
@@ -10,6 +12,9 @@
 
 import { callApi } from './api.js';
 import { $, el, mount } from './ui.js';
+
+/** 本面板只展示两个同步按钮作用的数据集。 */
+const SYNCED_DATASETS = new Set(['stock-universe', 'daily-bars']);
 
 const DATASET_LABELS = {
   'stock-universe': '股票目录',
@@ -23,10 +28,10 @@ const DATASET_LABELS = {
 };
 
 const FRESHNESS_LABELS = {
-  fresh: 'fresh',
-  stale: 'stale',
-  unknown: 'unknown',
-  unavailable: 'unavailable',
+  fresh: '新鲜',
+  stale: '过期',
+  unknown: '未知',
+  unavailable: '不可用',
 };
 
 const fmtTime = (value) => {
@@ -35,6 +40,8 @@ const fmtTime = (value) => {
   if (Number.isNaN(date.getTime())) return '--';
   return date.toLocaleString('zh-CN', { hour12: false });
 };
+
+export { DATASET_LABELS, FRESHNESS_LABELS, fmtTime, initMarketSync, renderMarketSyncStatus };
 
 const setMessage = (text, isError = false) => {
   const node = $('#market-sync-message');
@@ -59,8 +66,12 @@ const renderMarketSyncStatus = async () => {
     mount(wrap, el('p', 'placeholder', `数据状态加载失败（${r.error?.kind ?? 'internal'}）。`));
     return;
   }
-  const datasets = Array.isArray(r.data?.datasets) ? r.data.datasets : [];
-  const providers = Array.isArray(r.data?.providers) ? r.data.providers : [];
+  const datasets = (Array.isArray(r.data?.datasets) ? r.data.datasets : []).filter((ds) =>
+    SYNCED_DATASETS.has(ds.dataset),
+  );
+  const providers = (Array.isArray(r.data?.providers) ? r.data.providers : []).filter((p) =>
+    datasets.some((ds) => ds.source === p.provider),
+  );
   const rows = datasets.map((ds) =>
     el('tr', null, [
       el('td', null, DATASET_LABELS[ds.dataset] ?? ds.dataset),
@@ -142,5 +153,3 @@ const initMarketSync = () => {
     () => void runSync('sync_daily_bars', {}, '同步日线'),
   );
 };
-
-export { initMarketSync, renderMarketSyncStatus };

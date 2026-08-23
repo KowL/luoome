@@ -7,6 +7,7 @@ import type {
   MarketCoverage,
   MarketSnapshot,
   MarketSnapshotItem,
+  MarketSourceProbe,
   MinuteBar,
   MinuteBarInterval,
   Quote,
@@ -19,7 +20,7 @@ import {
   isWeekend,
   QuoteSchema,
 } from '@luoome/core';
-
+import { sourceErrorKindOf } from '../source-error.js';
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
 import type {
   MarketCapability,
@@ -31,6 +32,12 @@ import type { MarketDataAdapter } from './types.js';
 
 const INTRADAY_MINUTES_TTL_MS = 30_000;
 const MINUTE_BARS_TTL_MS = 15_000;
+
+/** 探测用的固定标的与检索词：高流动性大盘股，五个源都覆盖。 */
+const PROBE_STOCK_ID = '600519.SH';
+const PROBE_SEARCH_QUERY = '茅台';
+/** 日 K 探测窗口：两周，含交易日的概率高且响应轻。 */
+const PROBE_DAILY_BARS_WINDOW_MS = 14 * 86_400_000;
 
 /** 批量结果与请求代码匹配用：去掉 .SH/.SZ/.BJ 后缀，兼容源返回带后缀而调用方传裸代码（如 fuyao）。 */
 const baseOf = (code: string): string => code.replace(/\.(SH|SZ|BJ)$/i, '');
@@ -591,6 +598,54 @@ export class MarketDataManager implements MarketDataAdapter {
 
   marketSourceStatus(): readonly MarketSourceStatus[] {
     return this.registry.describe();
+  }
+
+  /**
+   * 主动探测指定源的每个 capability（设置页「测试」按钮）：直接执行 registry handle，
+   * 观测由 handle 自动记录（§4.3），不经过路由 / 缓存 / 限速。逐项顺序执行，
+   * 单项失败不中断其余项；未绑定的能力标记 bound=false 不执行。
+   */
+  async probeSource(source: string): Promise<readonly MarketSourceProbe[]> {
+    const now = this.clock();
+    const requests: { [C in MarketCapability]: MarketCapabilityMap[C]['request'] } = {
+      quote: { stockId: PROBE_STOCK_ID },
+      'batch-quote': { stockIds: [PROBE_STOCK_ID] },
+      'daily-bars': {
+        stockId: PROBE_STOCK_ID,
+        range: { start: new Date(now.getTime() - PROBE_DAILY_BARS_WINDOW_MS), end: now },
+      },
+      search: { query: PROBE_SEARCH_QUERY },
+      'market-snapshot': { coverage: 'CN_A_SHARES_SH_SZ' },
+      'market-snapshot-envelope': { coverage: 'CN_A_SHARES_SH_SZ' },
+      'realtime-index': { coverage: 'CN_A_SHARES_SH_SZ' },
+      'delayed-index': { coverage: 'CN_A_SHARES_SH_SZ', asOf: now },
+      'intraday-minutes': { stockId: PROBE_STOCK_ID },
+      'minute-bars': { stockId: PROBE_STOCK_ID, interval: '1m' },
+    };
+    const probes: MarketSourceProbe[] = [];
+    for (const capability of Object.keys(requests) as MarketCapability[]) {
+      const handle = this.registry.sources(capability).find((h) => h.source === source);
+      if (handle === undefined) {
+        probes.push({ capability, bound: false, ok: null });
+        continue;
+      }
+      const startedAt = Date.now();
+      try {
+        // 循环里 capability 是联合类型，handle 与 request 的对应关系由上方 requests 表保证
+        const execute = handle.execute as (input: unknown) => Promise<unknown>;
+        await execute(requests[capability]);
+        probes.push({ capability, bound: true, ok: true, durationMs: Date.now() - startedAt });
+      } catch (error) {
+        probes.push({
+          capability,
+          bound: true,
+          ok: false,
+          errorKind: sourceErrorKindOf(error),
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    }
+    return probes;
   }
 
   stats(): ManagerStats {

@@ -4,6 +4,7 @@
 //   GET  /api/holdings          → list_holdings
 //   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
+//   POST /api/advice/delete       → delete_advice（write，body { ids }）
 //   POST /api/tools/:name/call    → 默认只放行 read/advice（ARCHITECTURE §7.1）；
 //                                   write 需 LUOOME_EXPOSE_WRITE=true，external 需
 //                                   LUOOME_EXPOSE_EXTERNAL=true 且命中白名单
@@ -35,6 +36,7 @@ import {
   createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
   EastmoneySource,
+  MarketSourceIdSchema,
   NotificationManager,
 } from '@luoome/adapters';
 import {
@@ -82,7 +84,12 @@ import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
 import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
-import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
+import {
+  type MarketDatasetStatusRow,
+  MarketSettingsStore,
+  SaveMarketSettingsSchema,
+  withRuntimeStatus,
+} from './market-settings.js';
 import {
   PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
   startPortfolioPerformanceScheduler,
@@ -917,12 +924,18 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   // ===== 行情数据源设置 =====
-  app.get('/api/settings/market', () => {
+  app.get('/api/settings/market', async () => {
     if (marketSettingsStore === undefined) {
       return jsonResult(notFound('MarketSettingsStore', 'default'));
     }
     try {
-      return jsonResult({ ok: true, data: marketSettingsStore.read() });
+      const view = marketSettingsStore.read();
+      // 叠加运行态（§5）：读模型失败时降级为纯配置态，不拖垮设置读取
+      const status = await invokeTool('get_market_data_status', {});
+      if (!status.ok) return jsonResult({ ok: true, data: view });
+      const datasets = (status.data as { datasets?: MarketDatasetStatusRow[] }).datasets;
+      if (!Array.isArray(datasets)) return jsonResult({ ok: true, data: view });
+      return jsonResult({ ok: true, data: withRuntimeStatus(view, datasets) });
     } catch (error) {
       return jsonResult({
         ok: false,
@@ -989,6 +1002,58 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       });
     }
+  });
+
+  /**
+   * 主动探测指定行情源的全部能力（设置页「测试」按钮）：逐项执行 registry handle，
+   * 观测自动写入（§4.3），响应携带探测明细与叠加最新运行态的设置视图。
+   * 只允许探测已启用源（未启用源不在当前 manager 的 registry 里，无 handle 可执行）。
+   */
+  app.post('/api/settings/market/:id/test', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external']);
+    if (denied !== null) return jsonResult(denied);
+    if (marketSettingsStore === undefined) {
+      return jsonResult(notFound('MarketSettingsStore', 'default'));
+    }
+    const parsed = MarketSourceIdSchema.safeParse(c.req.param('id'));
+    if (!parsed.success) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: `未知的行情源：${c.req.param('id')}`, issues: [] },
+      });
+    }
+    const market = ctxRef.current.adapters.market;
+    const view = marketSettingsStore.read();
+    if (!view.activeOrder.includes(parsed.data)) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: `行情源 ${parsed.data} 未启用，先启用并保存后再测试`,
+          issues: [],
+        },
+      });
+    }
+    if (typeof market.probeSource !== 'function') {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: market.name,
+          cause: '当前行情适配器不支持主动探测',
+          recoverable: false,
+        },
+      });
+    }
+    const probes = await market.probeSource(parsed.data);
+    // 探测后重新聚合一次运行态，前端直接用响应里的 settings 刷新列表
+    const fresh = marketSettingsStore.read();
+    const status = await invokeTool('get_market_data_status', {});
+    const datasets = status.ok
+      ? (status.data as { datasets?: MarketDatasetStatusRow[] }).datasets
+      : undefined;
+    const settings = Array.isArray(datasets) ? withRuntimeStatus(fresh, datasets) : fresh;
+    return jsonResult({ ok: true, data: { probes, settings } });
   });
 
   // ===== 飞书通知设置 =====
@@ -2699,6 +2764,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (subjectId !== undefined && subjectId.length > 0) input.subjectId = subjectId;
     return callTool('get_advice_stats', input);
   });
+
+  // 建议删除（单个 = 单元素 ids）；write 能力门控与 delete_report 一致。
+  app.post('/api/advice/delete', (c) => targetMutation(c.req.raw, 'write', 'delete_advice'));
 
   app.get('/api/reports', (c) => {
     const input: Record<string, unknown> = {};

@@ -40,6 +40,7 @@ export * from './market/cache.js';
 export * from './market/eastmoney.js';
 export * from './market/factory.js';
 export * from './market/manager.js';
+export * from './market/manifest.js';
 export * from './market/sina.js';
 export * from './market/source-registry.js';
 export * from './market/tencent.js';

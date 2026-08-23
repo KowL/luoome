@@ -27,6 +27,7 @@ import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
 import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
+import { deleteAdviceTool } from './tools/delete-advice.js';
 import { deleteReportTool } from './tools/delete-report.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
 import { dragonTigerListTool } from './tools/dragon-tiger.js';
@@ -456,6 +457,7 @@ export const toolRegistry: Registry = createRegistry([
   listReportsTool,
   renderReportTool,
   deleteReportTool,
+  deleteAdviceTool,
   // 个股行情查看 Phase 1（docs/ddd/stock-market-view-detailed-design.md §10）
   getStockMarketViewTool,
   getStockUniverseStatusTool,

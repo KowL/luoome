@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  MARKET_SOURCE_MANIFEST,
+  type MarketCapability,
   type MarketSourceId,
   MarketSourceOrderSchema,
   marketSourceOrderFromEnv,
@@ -15,6 +17,24 @@ export const SaveMarketSettingsSchema = z.object({
 });
 export type SaveMarketSettings = z.infer<typeof SaveMarketSettingsSchema>;
 
+/** capability 运行态（§4.3 状态机产物，由 get_market_data_status 的 datasets 提供）。 */
+export type MarketCapabilityState = 'fresh' | 'stale' | 'unavailable' | 'unknown';
+
+export interface MarketCapabilityStatusView {
+  readonly capability: MarketCapability;
+  readonly label: string;
+  /** manifest 声明该源支持此能力；false 表示能力边界之外，不展示运行态。 */
+  readonly bound: boolean;
+  /** 运行态，仅 enabled 源由 server 聚合填入；未填充表示读模型不可用。 */
+  readonly state?: MarketCapabilityState;
+  readonly lastAttemptAt?: string;
+  readonly lastSuccessAt?: string;
+  readonly dataAsOf?: string;
+  readonly lastErrorKind?: string;
+}
+
+export type MarketSourceHealth = MarketCapabilityState | 'off';
+
 export interface MarketSourceSettingsView {
   readonly id: MarketSourceId;
   readonly label: string;
@@ -23,6 +43,10 @@ export interface MarketSourceSettingsView {
   readonly priority: number | null;
   readonly configured: boolean;
   readonly configurationHint?: string;
+  /** 全部 10 种行情能力的静态清单（bound 标记支持与否），server 侧叠加运行态。 */
+  readonly capabilities: readonly MarketCapabilityStatusView[];
+  /** 行级摘要：enabled 时取各 bound capability 最差状态；disabled 为 'off'。 */
+  readonly health: MarketSourceHealth;
 }
 
 export interface MarketSettingsView {
@@ -31,6 +55,90 @@ export interface MarketSettingsView {
   readonly secretPath: string;
   readonly configError?: string;
 }
+
+/** 设置页能力词表（web 层投影，与 market-sync.js 的 DATASET_LABELS 同口径）。 */
+const CAPABILITY_LABELS: Readonly<Record<MarketCapability, string>> = {
+  quote: '实时快照',
+  'batch-quote': '批量快照',
+  'daily-bars': '日 K',
+  search: '搜索',
+  'market-snapshot': '全市场快照',
+  'market-snapshot-envelope': '快照完整性',
+  'realtime-index': '实时指数',
+  'delayed-index': '延时指数',
+  'intraday-minutes': '当日分时',
+  'minute-bars': '分钟 K',
+};
+
+const ALL_CAPABILITIES = Object.keys(CAPABILITY_LABELS) as MarketCapability[];
+
+/** 健康度严重次序：索引越小越差，行级摘要取最差。 */
+const HEALTH_RANK: Readonly<Record<MarketSourceHealth, number>> = {
+  unavailable: 0,
+  stale: 1,
+  unknown: 2,
+  fresh: 3,
+  off: 4,
+};
+
+/** get_market_data_status datasets 中与本视图相关行的最小形状。 */
+export interface MarketDatasetStatusRow {
+  readonly dataset: string;
+  readonly source: string;
+  readonly freshness: MarketCapabilityState;
+  readonly lastAttemptAt?: Date;
+  readonly lastSuccessAt?: Date;
+  readonly dataAsOf?: Date;
+  readonly lastErrorKind?: string;
+}
+
+/**
+ * 把 get_market_data_status 的 datasets 叠加到配置态视图上（§5 组装）。
+ * 只消费五个行情源、10 种 capability 的行；enabled 源缺失观测 → 'unknown'。
+ */
+export const withRuntimeStatus = (
+  view: MarketSettingsView,
+  datasets: readonly MarketDatasetStatusRow[],
+): MarketSettingsView => {
+  const marketSourceIds = new Set(view.sources.map((source) => source.id));
+  const byKey = new Map<string, MarketDatasetStatusRow>();
+  for (const row of datasets) {
+    if (marketSourceIds.has(row.source as MarketSourceId)) {
+      byKey.set(`${row.source}:${row.dataset}`, row);
+    }
+  }
+  const sources = view.sources.map((source) => {
+    if (!source.enabled) return source;
+    const capabilities = source.capabilities.map((capability) => {
+      if (!capability.bound) return capability;
+      const row = byKey.get(`${source.id}:${capability.capability}`);
+      if (row === undefined) return { ...capability, state: 'unknown' as const };
+      return {
+        ...capability,
+        state: row.freshness,
+        ...(row.lastAttemptAt === undefined
+          ? {}
+          : { lastAttemptAt: row.lastAttemptAt.toISOString() }),
+        ...(row.lastSuccessAt === undefined
+          ? {}
+          : { lastSuccessAt: row.lastSuccessAt.toISOString() }),
+        ...(row.dataAsOf === undefined ? {} : { dataAsOf: row.dataAsOf.toISOString() }),
+        ...(row.lastErrorKind === undefined ? {} : { lastErrorKind: row.lastErrorKind }),
+      };
+    });
+    const health = capabilities
+      .filter((capability) => capability.bound)
+      .reduce<MarketSourceHealth>(
+        (worst, capability) =>
+          HEALTH_RANK[capability.state ?? 'unknown'] < HEALTH_RANK[worst]
+            ? (capability.state ?? 'unknown')
+            : worst,
+        'fresh',
+      );
+    return { ...source, capabilities, health };
+  });
+  return { ...view, sources };
+};
 
 const SOURCE_META: Readonly<
   Record<MarketSourceId, { readonly label: string; readonly description: string }>
@@ -45,13 +153,8 @@ const SOURCE_META: Readonly<
   },
 };
 
-/** 需要额外凭证的行情源：未配置时 UI 标记未就绪，save 拒绝启用。 */
-const SOURCE_REQUIRED_ENV: Readonly<
-  Partial<Record<MarketSourceId, { readonly key: string; readonly label: string }>>
-> = {
-  tushare: { key: 'TUSHARE_TOKEN', label: 'Tushare' },
-  fuyao: { key: 'FUYAO_API_KEY', label: 'fuyao' },
-};
+/** 需要额外凭证的行情源由 MARKET_SOURCE_MANIFEST 声明（adapters 层单一事实来源）。 */
+const requiredEnvOf = (id: MarketSourceId) => MARKET_SOURCE_MANIFEST[id].requiredEnv;
 
 const readText = (path: string): string => {
   try {
@@ -111,16 +214,26 @@ export class MarketSettingsStore {
     }
     const sources = (Object.keys(SOURCE_META) as MarketSourceId[]).map((id) => {
       const priorityIndex = activeOrder.indexOf(id);
-      const required = SOURCE_REQUIRED_ENV[id];
+      const required = requiredEnvOf(id);
       const configured = required === undefined || (env[required.key]?.trim().length ?? 0) > 0;
+      const enabled = priorityIndex >= 0;
+      const manifestCapabilities = new Set(MARKET_SOURCE_MANIFEST[id].capabilities);
+      const capabilities = ALL_CAPABILITIES.map((capability) => ({
+        capability,
+        label: CAPABILITY_LABELS[capability],
+        bound: manifestCapabilities.has(capability),
+      }));
       return {
         id,
         label: SOURCE_META[id].label,
         description: SOURCE_META[id].description,
-        enabled: priorityIndex >= 0,
-        priority: priorityIndex >= 0 ? priorityIndex + 1 : null,
+        enabled,
+        priority: enabled ? priorityIndex + 1 : null,
         configured,
         ...(configured ? {} : { configurationHint: `需要先配置 ${required?.key ?? ''}` }),
+        capabilities,
+        // 运行态由 server 叠加（withRuntimeStatus）；store 视角下 enabled 源一律 unknown
+        health: enabled ? ('unknown' as const) : ('off' as const),
       };
     });
     return {
@@ -135,7 +248,7 @@ export class MarketSettingsStore {
     const settings = SaveMarketSettingsSchema.parse(input);
     const env = this.runtimeEnv();
     for (const id of settings.sources) {
-      const required = SOURCE_REQUIRED_ENV[id];
+      const required = requiredEnvOf(id);
       if (required !== undefined && (env[required.key]?.trim().length ?? 0) === 0) {
         throw new Error(`启用 ${required.label} 前必须配置 ${required.key}`);
       }

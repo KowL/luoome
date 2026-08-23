@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { EastmoneySource, MockFundamentalDataAdapter, NotificationManager } from '@luoome/adapters';
-import { TEST_ACCOUNT } from '@luoome/adapters/testing';
+import { createTestMarketDataManager, TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type {
   AgentCallableTool,
   Money,
@@ -760,6 +760,143 @@ describe('行情源设置 API', () => {
         ok: true,
         data: { activeOrder: ['tencent', 'eastmoney'], applied: true },
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('GET 聚合运行态：每源 10 种能力清单 + 行级健康摘要（§5）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-settings-view-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      const app = createWebApp(await buildTestContext(), { marketSettingsStore: store });
+      const res = await app.fetch(new Request('http://test/api/settings/market'));
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as {
+        ok: boolean;
+        data: {
+          sources: Array<{
+            id: string;
+            health: string;
+            capabilities: Array<{ capability: string; bound: boolean; state?: string }>;
+          }>;
+        };
+      };
+      const sources = payload.data.sources;
+      const eastmoney = sources.find((source) => source.id === 'eastmoney');
+      expect(eastmoney?.capabilities).toHaveLength(10);
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'quote')).toMatchObject({
+        bound: true,
+        state: 'unknown',
+      });
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'minute-bars')).toMatchObject({
+        bound: false,
+      });
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'minute-bars')?.state).toBe(
+        undefined,
+      );
+      expect(eastmoney?.health).toBe('unknown');
+      // 未启用源：health=off 且不带运行态
+      const tushare = sources.find((source) => source.id === 'tushare');
+      expect(tushare?.health).toBe('off');
+      expect(tushare?.capabilities.every((c) => c.state === undefined)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /:id/test 主动探测已启用源并返回叠加最新观测的设置视图', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-probe-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      // 注入带 probeSource 的真实 manager（stub 源，无网络）
+      const observedAt = new Date('2026-08-21T07:00:00.000Z');
+      const market = createTestMarketDataManager({
+        primary: {
+          name: 'eastmoney',
+          fetchQuote: () => Promise.resolve({ observedAt } as never),
+          fetchDailyBars: () => Promise.resolve([{ date: observedAt }] as never),
+        },
+        logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+      });
+      const ctx = await buildTestContext();
+      const probeCtx = { ...ctx, adapters: { ...ctx.adapters, market } };
+      const probeApp = createWebApp(probeCtx, { marketSettingsStore: store, exposeExternal: true });
+
+      const res = await probeApp.fetch(
+        new Request('http://test/api/settings/market/eastmoney/test', { method: 'POST' }),
+      );
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as {
+        ok: boolean;
+        data: {
+          probes: Array<{ capability: string; bound: boolean; ok: boolean | null }>;
+          settings: {
+            sources: Array<{
+              id: string;
+              capabilities: Array<{ capability: string; state?: string }>;
+            }>;
+          };
+        };
+      };
+      expect(payload.ok).toBe(true);
+      const quoteProbe = payload.data.probes.find((probe) => probe.capability === 'quote');
+      expect(quoteProbe).toMatchObject({ bound: true, ok: true });
+      // stub 只有 quote / daily-bars 两种绑定
+      expect(payload.data.probes.find((probe) => probe.capability === 'batch-quote')).toMatchObject(
+        { bound: false, ok: null },
+      );
+      // 响应里的 settings 已叠加最新观测：quote 有运行态
+      const eastmoney = payload.data.settings.sources.find((source) => source.id === 'eastmoney');
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'quote')?.state).toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /:id/test 卡口：未启用源 / 未知源 / fake adapter / 未开 external', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-probe-guard-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      const ctx = await buildTestContext();
+      const probeApp = createWebApp(ctx, { marketSettingsStore: store, exposeExternal: true });
+
+      // 未启用源
+      const disabled = await probeApp.fetch(
+        new Request('http://test/api/settings/market/fuyao/test', { method: 'POST' }),
+      );
+      expect(((await disabled.json()) as { ok: boolean; error: { kind: string } }).error.kind).toBe(
+        'invalid_input',
+      );
+      // 未知源 id
+      const unknown = await probeApp.fetch(
+        new Request('http://test/api/settings/market/unknown-source/test', { method: 'POST' }),
+      );
+      expect(((await unknown.json()) as { error: { kind: string } }).error.kind).toBe(
+        'invalid_input',
+      );
+      // fake adapter 无 probeSource
+      const fake = await probeApp.fetch(
+        new Request('http://test/api/settings/market/eastmoney/test', { method: 'POST' }),
+      );
+      expect(((await fake.json()) as { error: { kind: string } }).error.kind).toBe('adapter_error');
+      // 未开 external 卡口
+      const guardedApp = createWebApp(ctx, { marketSettingsStore: store, exposeExternal: false });
+      const denied = await guardedApp.fetch(
+        new Request('http://test/api/settings/market/eastmoney/test', { method: 'POST' }),
+      );
+      expect(((await denied.json()) as { error: { kind: string } }).error.kind).toBe(
+        'permission_denied',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2565,6 +2702,61 @@ describe('/api/advice 查询参数', () => {
     const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
     expect(body.ok).toBe(false);
     expect(body.error?.kind).toBe('invalid_input');
+  });
+});
+
+describe('POST /api/advice/delete', () => {
+  const postDelete = (target: Hono, body: unknown): Promise<Response> =>
+    Promise.resolve(
+      target.fetch(
+        new Request('http://test/api/advice/delete', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://test' },
+          body: JSON.stringify(body),
+        }),
+      ),
+    );
+
+  it('删除命中建议（含 outcome 级联），未命中 id 进 notFound；再查询已消失', async () => {
+    const ctx = await buildTestContext();
+    const seeded = await ctx.repos.advice.query({ includeExpired: true });
+    expect(seeded.length).toBeGreaterThanOrEqual(2);
+    const victim = seeded[0];
+    if (victim === undefined) throw new Error('seeded advice missing');
+    await ctx.repos.advice.recordOutcome(victim.id, {
+      adviceId: victim.id,
+      tradeIds: [],
+      outcome: 'followed',
+      recordedAt: new Date('2026-08-22T08:00:00.000Z'),
+    });
+    const testApp = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+
+    const r = await postDelete(testApp, { ids: [victim.id, 'adv-not-exists'] });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { deleted: number; notFound: string[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.deleted).toBe(1);
+    expect(body.data?.notFound).toEqual(['adv-not-exists']);
+
+    expect(await ctx.repos.advice.findById(victim.id)).toBeNull();
+    expect(await ctx.repos.advice.findOutcome(victim.id)).toBeNull();
+  });
+
+  it('write 未开放 → permission_denied；空 ids → invalid_input', async () => {
+    const guardedApp = createWebApp(await buildTestContext(), { exposeWrite: false });
+    const denied = await postDelete(guardedApp, { ids: ['x'] });
+    const deniedBody = (await denied.json()) as { ok: boolean; error?: { kind: string } };
+    expect(deniedBody.ok).toBe(false);
+    expect(deniedBody.error?.kind).toBe('permission_denied');
+
+    const testApp = createWebApp(await buildTestContext(), { exposeWrite: true });
+    const invalid = await postDelete(testApp, { ids: [] });
+    const invalidBody = (await invalid.json()) as { ok: boolean; error?: { kind: string } };
+    expect(invalidBody.ok).toBe(false);
+    expect(invalidBody.error?.kind).toBe('invalid_input');
   });
 });
 

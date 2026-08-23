@@ -101,6 +101,7 @@ const EXPECTED_TOOL_NAMES = [
   'update_alert_plan',
   'delete_alert_plan',
   'record_advice_outcome',
+  'delete_advice',
   'send_notification',
   'market_outlook',
   // v0.5 新增
@@ -330,6 +331,7 @@ describe('toolRegistry', () => {
       'create_strategy_version',
       'create_strict_strategy_backtest',
       'create_watchlist',
+      'delete_advice',
       'delete_alert_plan',
       'delete_chat_session',
       'delete_report',

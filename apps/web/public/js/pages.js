@@ -13,7 +13,8 @@ import {
 import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
-import { alertDialog, promptDialog } from './modal.js';
+import { DATASET_LABELS } from './market-sync.js';
+import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { createStockSearchBox } from './search-box.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
@@ -902,6 +903,54 @@ const runWatchOnce = async (setStatus) => {
 };
 /* ============ advice ============ */
 
+/* 建议页删除走选择模式：默认态卡片无勾选框；点头部的「删除」进入选择模式后才可选。
+ * 筛选切换与路由离开必须重置（app.js 调 resetAdviceDeleteMode），防状态残留。 */
+const selectedAdviceIds = new Set();
+let adviceSelectMode = false;
+
+const resetAdviceDeleteMode = () => {
+  adviceSelectMode = false;
+  selectedAdviceIds.clear();
+  const btn = $('#btn-advice-delete-mode');
+  if (btn !== null) btn.textContent = '删除';
+  const bar = $('#advice-batch-bar');
+  if (bar !== null) {
+    bar.hidden = true;
+    bar.replaceChildren();
+  }
+};
+
+/** 头部「删除 / 取消」按钮：进入或退出选择模式。 */
+const toggleAdviceDeleteMode = async (setStatus) => {
+  if (adviceSelectMode) resetAdviceDeleteMode();
+  else adviceSelectMode = true;
+  await renderAdviceList(setStatus);
+};
+
+/** 删除建议（选择模式确认入口）：modal 确认 → API → 退出选择模式并刷新列表。 */
+const removeAdvices = async (ids, setStatus) => {
+  if (ids.length === 0) return;
+  const confirmed = await confirmDialog({
+    title: '删除建议',
+    message: `确定删除选中的 ${ids.length} 条建议吗？删除后不可恢复，关联的 outcome 记录会一并删除。`,
+    confirmLabel: `删除 ${ids.length} 条`,
+    danger: true,
+  });
+  if (!confirmed) return;
+  const r = await callApi('/api/advice/delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+  if (!r.ok) {
+    setStatus(`删除建议失败：${r.error.message ?? r.error.kind}`, true);
+    return;
+  }
+  resetAdviceDeleteMode();
+  const notFoundNote = r.data.notFound.length > 0 ? `（${r.data.notFound.length} 条已不存在）` : '';
+  setStatus(`已删除 ${r.data.deleted} 条建议${notFoundNote}`);
+  await renderAdviceList(setStatus);
+};
+
 const renderAdviceList = async (setStatus) => {
   const r = await callApi('/api/advice?includeExpired=true');
   const list = $('#advice-full-list');
@@ -911,9 +960,16 @@ const renderAdviceList = async (setStatus) => {
     return;
   }
   const all = [...r.data.advices].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  // 剪枝：勾选集合只保留仍存在的建议（可能刚被删除）
+  const existingIds = new Set(all.map((a) => a.id));
+  for (const id of [...selectedAdviceIds]) {
+    if (!existingIds.has(id)) selectedAdviceIds.delete(id);
+  }
   const filter = $('#advice-filter')?.value ?? 'all';
   const stockId = routeStockId();
   const filtered = filterAdvices(all, filter, stockId);
+  const modeBtn = $('#btn-advice-delete-mode');
+  if (modeBtn !== null) modeBtn.textContent = adviceSelectMode ? '取消' : '删除';
   let paginationWrap = list.nextElementSibling;
   if (
     paginationWrap === null ||
@@ -927,8 +983,60 @@ const renderAdviceList = async (setStatus) => {
   function renderPage() {
     const { page, pageSize } = pagination.getState();
     const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
-    mount(list, pageItems.map(adviceCard));
+    mount(
+      list,
+      pageItems.map((advice) =>
+        adviceCard(
+          advice,
+          adviceSelectMode
+            ? {
+                checked: selectedAdviceIds.has(advice.id),
+                onToggleSelect: (id, checked) => {
+                  if (checked) selectedAdviceIds.add(id);
+                  else selectedAdviceIds.delete(id);
+                  renderBatchBar();
+                },
+              }
+            : {},
+        ),
+      ),
+    );
   }
+  const renderBatchBar = () => {
+    const bar = $('#advice-batch-bar');
+    if (bar === null) return;
+    if (!adviceSelectMode) {
+      bar.hidden = true;
+      bar.replaceChildren();
+      return;
+    }
+    const allSelected = filtered.length > 0 && filtered.every((a) => selectedAdviceIds.has(a.id));
+    const toggleAll = el(
+      'button',
+      'btn btn-outline btn-sm',
+      allSelected ? '取消全选' : `全选 ${filtered.length} 条`,
+    );
+    toggleAll.type = 'button';
+    toggleAll.addEventListener('click', () => {
+      if (allSelected) selectedAdviceIds.clear();
+      else for (const a of filtered) selectedAdviceIds.add(a.id);
+      renderPage();
+      renderBatchBar();
+    });
+    const confirmDelete = el('button', 'btn btn-danger btn-sm', '确认删除');
+    confirmDelete.type = 'button';
+    confirmDelete.disabled = selectedAdviceIds.size === 0;
+    confirmDelete.addEventListener(
+      'click',
+      () => void removeAdvices([...selectedAdviceIds], setStatus),
+    );
+    mount(bar, [
+      el('span', 'batch-bar-info', `已选 ${selectedAdviceIds.size} 条`),
+      toggleAll,
+      confirmDelete,
+    ]);
+    bar.hidden = false;
+  };
   const pagination = createPagination({ total: filtered.length, onChange: renderPage });
   if (filtered.length === 0) {
     mount(
@@ -948,6 +1056,7 @@ const renderAdviceList = async (setStatus) => {
     renderPage();
     mount(paginationWrap, pagination.root);
   }
+  renderBatchBar();
   setStatus(
     stockId === null
       ? `建议已刷新 · ${filtered.length} / ${all.length} 条`
@@ -1772,7 +1881,7 @@ const renderDataHealth = async (setStatus) => {
     return;
   }
   const data =
-    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
+    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, datasets?: Array<{dataset: string, source: string, freshness: string, dataAsOf?: string, lastSuccessAt?: string, lastErrorKind?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
       r.data
     );
   const providerEls = data.providers.map((p) => {
@@ -1803,12 +1912,46 @@ const renderDataHealth = async (setStatus) => {
             ),
           ),
         ]);
+  // 数据集明细（ruo §8 读模型的 datasets，此前被丢弃）：折叠展示 per-dataset 观测
+  const datasets = Array.isArray(data.datasets) ? data.datasets : [];
+  const datasetDetail =
+    datasets.length === 0
+      ? null
+      : el('details', 'data-health-datasets', [
+          el('summary', null, `数据集明细（${datasets.length}）`),
+          el('table', 'table data-health-dataset-table', [
+            el('thead', null, [
+              el('tr', null, [
+                el('th', null, '数据集'),
+                el('th', null, '来源'),
+                el('th', null, '状态'),
+                el('th', null, '数据截至'),
+                el('th', null, '最近错误'),
+              ]),
+            ]),
+            el(
+              'tbody',
+              null,
+              datasets.map((ds) => {
+                const meta = FRESHNESS_LABEL[ds.freshness] ?? FRESHNESS_LABEL.unknown;
+                return el('tr', null, [
+                  el('td', null, DATASET_LABELS[ds.dataset] ?? ds.dataset),
+                  el('td', null, ds.source),
+                  el('td', meta.cls, meta.label),
+                  el('td', null, fmtTime(ds.dataAsOf ?? ds.lastSuccessAt)),
+                  el('td', 'muted', ds.lastErrorKind ?? ''),
+                ]);
+              }),
+            ),
+          ]),
+        ]);
   mount(
     body,
     el('div', 'data-health-grid', [
       el('div', 'data-health-providers', [el('h3', null, '行情源'), ...providerEls]),
       el('div', 'data-health-watch', [el('h3', null, 'watch 健康'), el('p', null, watchText)]),
       ...(stale !== null ? [stale] : []),
+      ...(datasetDetail !== null ? [datasetDetail] : []),
     ]),
   );
   setStatus('数据健康已更新');
@@ -2744,8 +2887,10 @@ export {
   renderSettings,
   renderSettingsAccount,
   renderWorkflowRuns,
+  resetAdviceDeleteMode,
   routeStockId,
   runWatchOnce,
   sortBoardItems,
+  toggleAdviceDeleteMode,
   watchRunSummaryText,
 };

@@ -306,3 +306,40 @@ describe('设置页数据同步入口', () => {
     expect(sync).toContain('timeoutMs: 300_000');
   });
 });
+
+describe('建议页删除', () => {
+  it('头部筛选旁有「删除」模式按钮；批量操作条初始隐藏', () => {
+    expect(html).toContain('id="btn-advice-delete-mode" class="btn btn-outline btn-sm"');
+    expect(html).toContain('id="advice-batch-bar" class="batch-bar" hidden');
+  });
+
+  it('adviceCard 只按选择模式渲染勾选框（不再有卡片行尾删除按钮）', () => {
+    const ui = read('./ui.js');
+    expect(ui).toContain("'advice-select'");
+    expect(ui).toContain('onToggleSelect');
+    expect(ui).not.toContain('advice-delete');
+    expect(ui).not.toContain('onDelete');
+    expect(ui).toContain('event.target instanceof HTMLInputElement');
+  });
+
+  it('pages.js 接线：选择模式状态 / 批量条确认删除置灰 / confirmDialog / POST /api/advice/delete', () => {
+    const pages = read('./pages.js');
+    expect(pages).toContain('adviceSelectMode');
+    expect(pages).toContain('selectedAdviceIds');
+    expect(pages).toContain('resetAdviceDeleteMode');
+    expect(pages).toContain('toggleAdviceDeleteMode');
+    expect(pages).toContain("$('#advice-batch-bar')");
+    expect(pages).toContain('confirmDelete.disabled = selectedAdviceIds.size === 0');
+    expect(pages).toContain(
+      "import { alertDialog, confirmDialog, promptDialog } from './modal.js'",
+    );
+    expect(pages).toContain("callApi('/api/advice/delete'");
+  });
+
+  it('app.js 接线：模式按钮绑定；筛选切换与路由离开都重置选择模式', () => {
+    expect(appJs).toContain('resetAdviceDeleteMode');
+    expect(appJs).toContain('toggleAdviceDeleteMode');
+    expect(appJs).toContain("$('#btn-advice-delete-mode')");
+    expect(appJs).toContain("if (safe !== 'advice') resetAdviceDeleteMode();");
+  });
+});

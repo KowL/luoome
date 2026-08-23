@@ -314,6 +314,8 @@ export interface AdviceRepository {
   recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void>;
   findOutcome(adviceId: string): Promise<AdviceOutcome | null>;
   listOutcomes(filter?: AdviceOutcomeQuery): Promise<AdviceOutcome[]>;
+  /** 删除建议并级联删除其 outcome（advice_outcomes 无 FK，两实现都显式清理）；id 不存在时为幂等空操作。 */
+  remove(id: string): Promise<void>;
 }
 
 export interface ReportRepository {

@@ -64,6 +64,14 @@ import { getJson } from './client.js';
 const MARKET_TIMEOUT_MS = 5_000;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/**
+ * push2 主域在部分网络环境被按端点定向阻断（socket reset / curl 000，2026-08 实测），
+ * push2delay 是东财官方延迟行情镜像，同路径同字段（延迟约 15 分钟）。
+ * 仅在传输层失败（network/timeout）时降级重试一次；HTTP 状态与解析错误不重试。
+ */
+const PUSH2_HOST = 'push2.eastmoney.com';
+const PUSH2_DELAY_HOST = 'push2delay.eastmoney.com';
+
 /** 历史日为该交易日收盘时刻（15:00 +08:00），当日为 min(fetchedAt, closeAt)（§6.2）。 */
 const tradingDayObservedAt = (date: string, fetchedAt: Date): Date => {
   const closeAt = new Date(`${date}T15:00:00+08:00`);
@@ -123,6 +131,16 @@ export class EastmoneySource
   }
 
   private marketJson(url: string): Promise<unknown> {
+    return this.marketFetch(url).catch((error: unknown) => {
+      const kind = sourceErrorKindOf(error);
+      if ((kind !== 'network' && kind !== 'timeout') || !url.includes(PUSH2_HOST)) {
+        throw error;
+      }
+      return this.marketFetch(url.replace(PUSH2_HOST, PUSH2_DELAY_HOST));
+    });
+  }
+
+  private marketFetch(url: string): Promise<unknown> {
     return getJson(url, {
       timeoutMs: this.timeoutMs ?? MARKET_TIMEOUT_MS,
       ...(this.fetchImpl === undefined ? {} : { fetchImpl: this.fetchImpl }),

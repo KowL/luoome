@@ -95,4 +95,9 @@ export class InMemoryAdviceRepository implements AdviceRepository {
   async getOutcome(adviceId: string): Promise<AdviceOutcome | null> {
     return this.findOutcome(adviceId);
   }
+
+  async remove(id: string): Promise<void> {
+    this.items.delete(id);
+    this.outcomes.delete(id);
+  }
 }

@@ -528,8 +528,10 @@
                 <option value="watch">观望</option>
                 <option value="avoid">回避</option>
               </select>
+              <button id="btn-advice-delete-mode" class="btn btn-outline btn-sm" type="button">删除</button>
             </div>
           </div>
+          <div id="advice-batch-bar" class="batch-bar" hidden></div>
           <div id="advice-full-list"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
@@ -739,7 +741,14 @@
           <h1>设置</h1>
           <div class="route-meta">AI 模型 / 账户 / 鉴权 / 数据源</div>
         </div>
-        <form id="ai-settings-form" class="ai-settings" autocomplete="off">
+        <nav class="settings-subnav" aria-label="设置分区">
+          <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
+          <a href="#settings?tab=market" class="settings-subnav-item" data-settings-tab="market">数据源</a>
+          <a href="#settings?tab=notify" class="settings-subnav-item" data-settings-tab="notify">通知</a>
+          <a href="#settings?tab=data" class="settings-subnav-item" data-settings-tab="data">数据</a>
+          <a href="#settings?tab=system" class="settings-subnav-item" data-settings-tab="system">系统</a>
+        </nav>
+        <form id="ai-settings-form" class="ai-settings" autocomplete="off" data-settings-pane="ai">
           <div class="ai-settings-heading">
             <div>
               <span class="section-kicker">MODEL CONTROL</span>
@@ -846,7 +855,7 @@
             </section>
           </div>
         </form>
-        <form id="market-settings-form" class="market-settings" autocomplete="off">
+        <form id="market-settings-form" class="market-settings" autocomplete="off" data-settings-pane="market">
           <div class="market-settings-heading">
             <div>
               <span class="section-kicker">MARKET ROUTING</span>
@@ -877,6 +886,7 @@
                 <span>配置文件</span>
                 <code id="market-secret-path">--</code>
               </div>
+              <button id="btn-market-refresh" class="btn btn-outline btn-sm" type="button">刷新状态</button>
               <button id="btn-market-save" class="btn btn-primary market-save-btn" type="submit">
                 <span aria-hidden="true">▣</span>
                 保存路由并应用
@@ -901,7 +911,7 @@
             <div id="market-sync-message" class="status" role="status" hidden></div>
           </section>
         </form>
-        <form id="feishu-settings-form" class="feishu-settings" autocomplete="off">
+        <form id="feishu-settings-form" class="feishu-settings" autocomplete="off" data-settings-pane="notify">
           <div class="feishu-settings-heading">
             <div>
               <span class="section-kicker">DELIVERY CHANNEL</span>
@@ -967,7 +977,7 @@
             </div>
           </section>
         </form>
-        <div class="card data-transfer-card">
+        <div class="card data-transfer-card" data-settings-pane="data">
           <div class="card-header">
             <div><span class="section-kicker">LOCAL DATA</span><h2>数据导出与导入</h2></div>
             <div class="card-meta">JSON · 本地合并 · 不包含 API Key / Webhook</div>
@@ -982,6 +992,7 @@
           </div>
           <p id="data-transfer-status" class="status" role="status" aria-live="polite" hidden></p>
         </div>
+        <div data-settings-pane="system">
         <div class="card">
           <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>
@@ -1008,6 +1019,7 @@
         <div class="card mt-4">
           <div class="card-header"><h2>当前账户信息</h2></div>
           <div id="settings-account"><p class="placeholder">加载中…</p></div>
+        </div>
         </div>
       </section>
 

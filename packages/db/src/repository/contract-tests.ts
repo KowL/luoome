@@ -1527,6 +1527,28 @@ export const registerRepositoryContractTests = (
         };
         await expect(repos.advice.recordOutcome('adv-y', outcome)).rejects.toThrow(InvariantError);
       });
+
+      it('remove 删除建议并级联清理 outcome；删除不存在 id 为幂等空操作', async () => {
+        await repos.advice.save(makeAdvice('adv-1'));
+        await repos.advice.save(makeAdvice('adv-2'));
+        const outcome: AdviceOutcome = {
+          adviceId: 'adv-1',
+          tradeIds: [],
+          outcome: 'followed',
+          recordedAt: T3,
+        };
+        await repos.advice.recordOutcome('adv-1', outcome);
+
+        await repos.advice.remove('adv-1');
+        expect(await repos.advice.findById('adv-1')).toBeNull();
+        expect(await repos.advice.findOutcome('adv-1')).toBeNull();
+        expect(await repos.advice.listOutcomes({})).toEqual([]);
+        expect((await repos.advice.query({})).map((a) => a.id)).toEqual(['adv-2']);
+
+        await repos.advice.remove('adv-1');
+        await repos.advice.remove('adv-missing');
+        expect((await repos.advice.query({})).map((a) => a.id)).toEqual(['adv-2']);
+      });
     });
 
     describe('QuoteRepository', () => {

@@ -83,6 +83,7 @@ describe('get_advice_stats', () => {
       recordOutcome: (adviceId, outcome) => base.recordOutcome(adviceId, outcome),
       findOutcome: (adviceId) => base.findOutcome(adviceId),
       listOutcomes: (filter) => base.listOutcomes(filter),
+      remove: (id) => base.remove(id),
     };
     const ctx = buildContext({
       repos: { ...mockCtx.repos, advice: interfaceOnlyAdviceRepo },

@@ -28,7 +28,7 @@ import type {
   ResearchVaultAdapterLike,
   ResearchVaultGitSyncAdapterLike,
 } from './research-vault.js';
-import type { SourceStatus } from './source.js';
+import type { SourceErrorKind, SourceStatus } from './source.js';
 import type { SideEffect } from './types/side-effect.js';
 
 /**
@@ -56,11 +56,24 @@ export interface MarketDataAdapterLike {
   fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
   /** 启用数据源与能力的动态库存及进程内健康观测。 */
   marketSourceStatus(): readonly MarketSourceStatus[];
+  /** 主动探测指定源的各 capability（设置页「测试」按钮）；直接执行 registry handle，不经过路由 / 缓存 / 限速。 */
+  probeSource?(source: string): Promise<readonly MarketSourceProbe[]>;
 }
 
 /** 行情域的 SourceStatus 收窄别名：coverage 为 MarketCoverage；dataset 保持开放 string（与泛型 registry 解耦，新增 capability 不要求改 core）。 */
 export interface MarketSourceStatus extends Omit<SourceStatus, 'coverage'> {
   readonly coverage: readonly MarketCoverage[];
+}
+
+/** 单项能力主动探测结果（设置页「测试」按钮）；capability 保持开放 string，理由同 MarketSourceStatus。 */
+export interface MarketSourceProbe {
+  readonly capability: string;
+  /** false 表示该源未绑定此能力，未执行探测。 */
+  readonly bound: boolean;
+  /** 探测结果；bound=false 时为 null。 */
+  readonly ok: boolean | null;
+  readonly errorKind?: SourceErrorKind;
+  readonly durationMs?: number;
 }
 
 export interface StockUniverseManagerLike {

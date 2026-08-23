@@ -1648,6 +1648,37 @@ html.has-bg-image .bg-layer {
   gap: 10px;
 }
 
+/* 设置页二级菜单：#settings?tab= 分区切换 */
+.settings-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: var(--space-5);
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-subnav-item {
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease;
+}
+
+.settings-subnav-item:hover {
+  color: var(--ink);
+}
+
+.settings-subnav-item.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: var(--weight-semibold, 600);
+}
+
 .route-header h1::before {
   content: '';
   width: 8px;
@@ -2614,6 +2645,29 @@ html.has-bg-image .bg-layer {
   padding-left: 18px;
 }
 
+/* 数据健康卡：数据集明细（折叠，占满整行避免表格挤压换行） */
+.data-health-datasets {
+  grid-column: 1 / -1;
+  margin-top: var(--space-3);
+}
+
+.data-health-datasets summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.data-health-dataset-table {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.data-health-dataset-table td,
+.data-health-dataset-table th {
+  padding: 3px 8px;
+  font-size: var(--text-xs);
+}
+
 /* 盯盘 rail */
 .watch-rail,
 .watch-console {
@@ -3578,6 +3632,38 @@ html.has-bg-image .bg-layer {
   margin-bottom: 6px;
 }
 
+/* 建议页选择模式：勾选框；subject 吸收剩余空间保持 badge 右对齐 */
+.advice-card .row-1 .subject {
+  flex: 1;
+}
+
+.advice-card .advice-select {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* 批量操作条：选择模式下常驻（确认删除在未勾选时置灰） */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-alt);
+}
+
+.batch-bar .batch-bar-info {
+  flex: 1;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
 .advice-card .subject {
   font-weight: var(--weight-semibold);
   display: flex;
@@ -4254,6 +4340,11 @@ textarea::placeholder {
   opacity: 0.5;
 }
 
+/* 相邻面板（路由 + 数据同步）之间留出间距，避免边框相贴糊成一团。 */
+.market-routing-panel + .market-routing-panel {
+  margin-top: var(--space-5);
+}
+
 .market-routing-rail {
   position: absolute;
   top: 31px;
@@ -4362,6 +4453,97 @@ textarea::placeholder {
   color: var(--warning);
 }
 
+/* 行级运行健康：配置态（READY）之外的第二层信息，取各能力最差状态 */
+.market-source-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.market-source-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.market-source-health.fresh .market-source-health-dot {
+  background: var(--success);
+}
+
+.market-source-health.fresh {
+  color: var(--success);
+}
+
+.market-source-health.stale .market-source-health-dot {
+  background: var(--warning);
+}
+
+.market-source-health.stale {
+  color: var(--warning);
+}
+
+.market-source-health.unavailable .market-source-health-dot {
+  background: var(--danger);
+}
+
+.market-source-health.unavailable {
+  color: var(--danger);
+}
+
+/* 源行展开区：能力 × 运行态表 */
+.market-source-detail {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.market-source-detail-note {
+  margin: 0 0 8px;
+  font-size: var(--text-xs);
+}
+
+.market-capability-table {
+  width: 100%;
+}
+
+.market-capability-table td,
+.market-capability-table th {
+  padding: 4px 8px;
+  font-size: var(--text-xs);
+}
+
+.market-capability-table tr.unbound td {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.market-capability-state.fresh {
+  color: var(--success);
+}
+
+.market-capability-state.stale {
+  color: var(--warning);
+}
+
+.market-capability-state.unavailable {
+  color: var(--danger);
+}
+
+.market-capability-state.unknown {
+  color: var(--muted);
+}
+
+.market-test-btn {
+  white-space: nowrap;
+  font-size: var(--text-xs);
+}
+
 .market-source-controls {
   display: flex;
   align-items: center;
@@ -4445,7 +4627,12 @@ textarea::placeholder {
 
 .market-order-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.3;
+  opacity: 0.45;
+}
+
+/* 未启用行整体降透明度（0.64），禁用按钮需补偿，避免深色主题下隐形。 */
+.market-source-row:not(.enabled) .market-order-btn:disabled {
+  opacity: 0.8;
 }
 
 .market-routing-footer {

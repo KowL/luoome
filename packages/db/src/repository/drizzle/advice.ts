@@ -186,4 +186,11 @@ export class DrizzleAdviceRepository implements AdviceRepository {
   async getOutcome(adviceId: string): Promise<AdviceOutcome | null> {
     return this.findOutcome(adviceId);
   }
+
+  async remove(id: string): Promise<void> {
+    this.db.transaction((tx) => {
+      tx.delete(adviceOutcomes).where(eq(adviceOutcomes.adviceId, id)).run();
+      tx.delete(advices).where(eq(advices.id, id)).run();
+    });
+  }
 }
