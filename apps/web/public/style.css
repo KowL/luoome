@@ -6117,6 +6117,84 @@ body > .modal {
   color: var(--neg);
 }
 
+/* ---------- 龙虎榜（dragon-tiger 页） ---------- */
+
+.dragon-filters {
+  display: flex;
+  gap: var(--space-2, 8px);
+}
+
+/* 筛选 tab 高亮口径与 market 页 range tab 一致 */
+.dragon-filters .btn.active {
+  background: var(--accent-soft, rgba(13, 158, 136, 0.1));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dragon-meta {
+  margin: calc(-1 * var(--space-3)) 0 var(--space-4);
+}
+
+.dragon-warning {
+  color: var(--warning);
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-4);
+}
+
+.dragon-summary .value.pos,
+.dragon-detail-grid .value.pos {
+  color: var(--pos);
+}
+
+.dragon-summary .value.neg,
+.dragon-detail-grid .value.neg {
+  color: var(--neg);
+}
+
+/* 详情弹窗里的 stat 比页面汇总小一号 */
+.dragon-detail-grid .stat .value {
+  font-size: 18px;
+}
+
+.dragon-reason {
+  margin-top: var(--space-3);
+}
+
+.dragon-reason .label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.dragon-reason p {
+  margin: 0;
+  padding: var(--space-3);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: var(--leading-base);
+}
+
+/* 上榜原因列截断，长文案留给详情弹窗 */
+#route-dragon-tiger .table {
+  table-layout: fixed;
+}
+
+#route-dragon-tiger .table th:nth-child(6),
+#route-dragon-tiger .table td:nth-child(6) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#route-dragon-tiger .table tbody tr {
+  cursor: pointer;
+}
+
 /* ---------- 板块热力（sectors 页） ---------- */
 
 .sector-heatmap {

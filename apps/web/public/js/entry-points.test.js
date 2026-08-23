@@ -343,3 +343,44 @@ describe('建议页删除', () => {
     expect(appJs).toContain("if (safe !== 'advice') resetAdviceDeleteMode();");
   });
 });
+
+describe('龙虎榜页面入口', () => {
+  const dragonJs = read('./dragon-tiger.js');
+
+  it('侧栏「涨停梯队」后有「龙虎榜」菜单项，#route-dragon-tiger section 存在', () => {
+    expect(html).toContain('href="#limit-up" data-route="limit-up"');
+    expect(html).toContain('href="#dragon-tiger" data-route="dragon-tiger"><span>龙虎榜</span>');
+    expect(html).toContain('id="route-dragon-tiger"');
+    // 位置：涨停梯队之后、板块热力之前
+    const navOrder = ['data-route="limit-up"', 'data-route="dragon-tiger"', 'data-route="sectors"'];
+    const positions = navOrder.map((marker) => html.indexOf(marker));
+    for (const pos of positions) expect(pos).toBeGreaterThan(-1);
+    for (let i = 1; i < positions.length; i += 1) {
+      expect(positions[i]).toBeGreaterThan(positions[i - 1]);
+    }
+  });
+
+  it('app.js 接入 dragon-tiger 路由并负责 teardown（60s 轮询定时器）', () => {
+    expect(appJs).toContain("'dragon-tiger'");
+    expect(appJs).toContain(
+      "import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js'",
+    );
+    expect(appJs).toContain('teardownDragonTiger();');
+    expect(appJs).toContain('renderDragonTiger(setStatus)');
+  });
+
+  it('dragon-tiger.js 走 /api/dragon-tiger，60s 刷新且页面隐藏跳过，行详情复用 openModal', () => {
+    expect(dragonJs).toContain("callApi('/api/dragon-tiger')");
+    expect(dragonJs).toContain('60_000');
+    expect(dragonJs).toContain("document.visibilityState !== 'visible'");
+    expect(dragonJs).toContain("import { openModal } from './modal.js'");
+    expect(dragonJs).toContain("'non-trading-day'");
+    expect(dragonJs).toContain("'empty-list'");
+  });
+
+  it('服务端暴露 GET /api/dragon-tiger（dragon_tiger_list tool）', () => {
+    const serverTs = read('../../src/server.ts');
+    expect(serverTs).toContain("app.get('/api/dragon-tiger'");
+    expect(serverTs).toContain("invokeTool('dragon_tiger_list'");
+  });
+});

@@ -8,6 +8,7 @@ import { callApi, getAccountId, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
 import { renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
+import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import { renderIndicesPage, teardownIndices } from './indices.js';
@@ -84,6 +85,7 @@ const ROUTES = [
   'reports',
   'review',
   'limit-up',
+  'dragon-tiger',
   'sectors',
   'chat',
   'settings',
@@ -97,6 +99,8 @@ const showRoute = async (name) => {
   if (safe !== 'indices') teardownIndices();
   // 离开建议页时退出删除选择模式并清空选择集（防状态残留）。
   if (safe !== 'advice') resetAdviceDeleteMode();
+  // 离开龙虎榜页时停止 60s 自动刷新定时器。
+  if (safe !== 'dragon-tiger') teardownDragonTiger();
   document.querySelectorAll('.route').forEach((node) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
@@ -129,6 +133,8 @@ const showRoute = async (name) => {
       await renderReview(setStatus);
     } else if (safe === 'limit-up') {
       await renderLimitUpLadder(setStatus);
+    } else if (safe === 'dragon-tiger') {
+      await renderDragonTiger(setStatus);
     } else if (safe === 'sectors') {
       await renderSectors(setStatus);
     } else if (safe === 'chat') {

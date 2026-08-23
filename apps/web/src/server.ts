@@ -492,6 +492,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/groups', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/watch', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/advice', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/dragon-tiger', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/reports', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
@@ -1616,6 +1617,28 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const keyword = c.req.query('keyword');
     if (keyword !== undefined) input.keyword = keyword;
     const r = await invokeTool('fetch_news', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 龙虎榜（dragon_tiger_list tool；Manager 自带缓存与节假日历）。
+   *
+   * 参数：
+   *   date (可选) YYYY-MM-DD；缺省时 manager 自动回溯最近交易日
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/dragon-tiger', async (c) => {
+    const input: Record<string, unknown> = {};
+    const date = c.req.query('date');
+    if (date !== undefined) input.date = date;
+    const r = await invokeTool('dragon_tiger_list', input);
     if (r.ok) return jsonResult(r);
     if (r.error.kind === 'invalid_input') return jsonResult(r);
     // 解析 / 上游错误 → 502

@@ -3839,6 +3839,102 @@ describe('Web 财经要闻 API', () => {
 });
 
 /**
+ * 龙虎榜 Web API（dragon_tiger_list tool）。
+ * 用 stub manager 隔离 eastmoney 实链，避免网络依赖。
+ */
+import type { DragonTigerList, DragonTigerManagerLike, DragonTigerResultLike } from '@luoome/core';
+
+const stubDragonTigerManager = (opts: {
+  readonly list?: DragonTigerList;
+  readonly fail?: boolean;
+}): DragonTigerManagerLike => ({
+  name: 'dragon-tiger',
+  sources: ['eastmoney'],
+  status: () => [],
+  fetchList: async (): Promise<DragonTigerResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'dragon-tiger',
+          message: 'eastmoney forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    const list = opts.list ?? {
+      date: '2026-08-21',
+      total: 1,
+      source: 'eastmoney' as const,
+      entries: [
+        {
+          code: '600519',
+          name: '贵州茅台',
+          close: 1850,
+          changePct: 0.0321,
+          turnoverRate: 0.015,
+          reason: '日涨幅偏离值达7%的证券',
+          netAmount: 120_000_000,
+          buyAmount: 320_000_000,
+          sellAmount: 200_000_000,
+          amount: 5_600_000_000,
+          tradeDate: '2026-08-21',
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-08-21T10:00:00Z'),
+    };
+    return { ok: true, data: list };
+  },
+});
+
+describe('Web 龙虎榜 API', () => {
+  it('正常请求 → 200 + 与 stub 一致榜单', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTiger: stubDragonTigerManager({}) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { date: string; total: number; entries: { code: string; netAmount: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.date).toBe('2026-08-21');
+    expect(body.data?.entries[0]?.code).toBe('600519');
+    expect(body.data?.entries[0]?.netAmount).toBe(120_000_000);
+  });
+
+  it('date 非法格式 → invalid_input (400)', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTiger: stubDragonTigerManager({}) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger?date=2026/08/21'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTiger: stubDragonTigerManager({ fail: true }) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger?date=2026-08-21'));
+    expect(r.status).toBe(502);
+  });
+
+  it('HTML 路由 /dragon-tiger 返回 index.html', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(new Request('http://test/dragon-tiger'));
+    expect(r.status).toBe(200);
+    const ct = r.headers.get('content-type') ?? '';
+    expect(ct).toContain('text/html');
+  });
+});
+
+/**
  * 指数分时 Web API（fetch_intraday_minutes tool）。
  * FakeMarketAdapter 的 fetchIntradayMinutes 抛 unsupported_capability → supported:false 合法降级。
  */
