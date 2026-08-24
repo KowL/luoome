@@ -6131,8 +6131,10 @@ body > .modal {
   color: var(--accent);
 }
 
+/* --muted 对比度偏低（浅色 ~3.4:1 / 暗夜 ~3.9:1），元信息行用 --ink-soft 保证可读 */
 .dragon-meta {
   margin: calc(-1 * var(--space-3)) 0 var(--space-4);
+  color: var(--ink-soft);
 }
 
 .dragon-warning {
@@ -6182,6 +6184,17 @@ body > .modal {
 /* 上榜原因列截断，长文案留给详情弹窗 */
 #route-dragon-tiger .table {
   table-layout: fixed;
+}
+
+/* 表头同 .dragon-meta：--muted 小字对比度不足，改用 --ink-soft */
+#route-dragon-tiger .table th {
+  color: var(--ink-soft);
+}
+
+/* 暗夜主题下这两处小字用纯白更清晰 */
+[data-theme='dark'] .dragon-meta,
+[data-theme='dark'] #route-dragon-tiger .table th {
+  color: #ffffff;
 }
 
 #route-dragon-tiger .table th:nth-child(6),
