@@ -9,6 +9,7 @@ import { type SourceId, SourceIdSchema } from '../source.js';
  * 设计要点（对齐 limit-up-ladder 的组织风格）：
  * - 一次龙虎榜快照 = 单一交易日 `date` + 单一数据源 `source` + 不可变的 `entries`
  * - 同一股票同日可因不同上榜原因出现多条（API 按 (股票, 原因) 一行），不做跨条目去重
+ * - 买入 / 卖出席位挂在对应上榜明细上，金额单位为元
  * - 涨跌幅 / 换手率统一存小数（0.10 = 10%），与 limit-up-ladder 的 changePct 口径一致
  * - 金额字段单位为元；netAmount 可为负（净卖出）
  * - 缺字段哨兵：name 缺失回退到 code；reason 缺失显示 '--'（manager 内归一化）
@@ -27,6 +28,15 @@ export const DragonTigerSourceSchema = SourceIdSchema;
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期必须为 YYYY-MM-DD');
 
 // ---------- 单条上榜记录 ----------
+
+export const DragonTigerSeatSchema = z.object({
+  /** 营业部 / 机构席位名称。 */
+  name: z.string(),
+  /** 该席位在买入或卖出方向的金额（元）。 */
+  amount: z.number().nonnegative(),
+});
+
+export type DragonTigerSeat = z.infer<typeof DragonTigerSeatSchema>;
 
 export const DragonTigerEntrySchema = z.object({
   /** A 股代码 6 位（'600xxx' / '000xxx' / '300xxx'）；不带交易所后缀。 */
@@ -51,6 +61,10 @@ export const DragonTigerEntrySchema = z.object({
   amount: z.number().nonnegative(),
   /** 上榜交易日 YYYY-MM-DD；应 == 快照基准日 `date`（runtime 校验）。 */
   tradeDate: dateString,
+  /** 买入营业部席位；数据源未提供时省略。 */
+  buySeats: z.array(DragonTigerSeatSchema).optional(),
+  /** 卖出营业部席位；数据源未提供时省略。 */
+  sellSeats: z.array(DragonTigerSeatSchema).optional(),
 });
 
 export type DragonTigerEntry = z.infer<typeof DragonTigerEntrySchema>;

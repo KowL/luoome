@@ -1,5 +1,5 @@
 import { asAmount, asRatio, asString } from '../eastmoney/coercion.js';
-import type { DragonTigerRawEntry } from './types.js';
+import type { DragonTigerRawEntry, DragonTigerRawSeat } from './types.js';
 
 /**
  * Eastmoney 龙虎榜（RPT_DAILYBILLBOARD_DETAILS）协议层（主源）。
@@ -18,6 +18,8 @@ import type { DragonTigerRawEntry } from './types.js';
 
 const BASE_URL = 'https://datacenter-web.eastmoney.com/api/data/v1/get';
 const REPORT_NAME = 'RPT_DAILYBILLBOARD_DETAILS';
+const BUY_SEAT_REPORT_NAME = 'RPT_BILLBOARD_DAILYDETAILSBUY';
+const SELL_SEAT_REPORT_NAME = 'RPT_BILLBOARD_DAILYDETAILSSELL';
 /** 单日上榜条目约几十至一百余条；500 足以单页取全。 */
 const PAGE_SIZE = 500;
 
@@ -29,6 +31,22 @@ export const dragonTigerListUrl = (date: string): string => {
     `&sortColumns=BILLBOARD_NET_AMT&sortTypes=-1&pageSize=${PAGE_SIZE}&pageNumber=1` +
     `&filter=${filter}`
   );
+};
+
+/** 龙虎榜买入 / 卖出营业部席位报表 URL。 */
+export const dragonTigerSeatUrl = (date: string, side: 'buy' | 'sell'): string => {
+  const filter = encodeURIComponent(`(TRADE_DATE='${date}')`);
+  const reportName = side === 'buy' ? BUY_SEAT_REPORT_NAME : SELL_SEAT_REPORT_NAME;
+  const sortColumn = side === 'buy' ? 'BUY' : 'SELL';
+  return (
+    `${BASE_URL}?reportName=${reportName}&columns=ALL&source=WEB&CLIENT=WEB` +
+    `&sortColumns=${sortColumn}&sortTypes=-1&pageSize=5000&pageNumber=1&filter=${filter}`
+  );
+};
+
+const asIdentifier = (value: unknown): string | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return asString(value);
 };
 
 /**
@@ -58,6 +76,7 @@ export const parseDragonTigerReport = (raw: unknown): DragonTigerRawEntry[] => {
     const buyAmount = asAmount(obj.BILLBOARD_BUY_AMT);
     const sellAmount = asAmount(obj.BILLBOARD_SELL_AMT);
     const amount = asAmount(obj.ACCUM_AMOUNT);
+    const tradeId = asIdentifier(obj.TRADE_ID);
     entries.push({
       code,
       ...(name === undefined ? {} : { name }),
@@ -69,10 +88,78 @@ export const parseDragonTigerReport = (raw: unknown): DragonTigerRawEntry[] => {
       ...(buyAmount === undefined ? {} : { buy_amount: buyAmount }),
       ...(sellAmount === undefined ? {} : { sell_amount: sellAmount }),
       ...(amount === undefined ? {} : { amount }),
+      ...(tradeId === undefined ? {} : { trade_id: tradeId }),
       ...(tradeDate === undefined || !/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)
         ? {}
         : { trade_date: tradeDate }),
     });
   }
   return entries;
+};
+
+/** 解析买入 / 卖出营业部席位报表。 */
+export const parseDragonTigerSeatReport = (
+  raw: unknown,
+  side: 'buy' | 'sell',
+): DragonTigerRawSeat[] => {
+  const result = (raw as Record<string, unknown>).result as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  const rows = Array.isArray(result?.data) ? (result.data as unknown[]) : [];
+  const seats: DragonTigerRawSeat[] = [];
+  for (const item of rows) {
+    const obj = item as Record<string, unknown>;
+    const code = asString(obj.SECURITY_CODE);
+    const name = asString(obj.OPERATEDEPT_NAME);
+    const amount = asAmount(side === 'buy' ? obj.BUY : obj.SELL);
+    if (code === undefined || !/^\d{6}$/.test(code) || name === undefined || amount === undefined) {
+      continue;
+    }
+    const tradeId = asIdentifier(obj.TRADE_ID);
+    const reason = asString(obj.EXPLANATION);
+    seats.push({
+      code,
+      ...(tradeId === undefined ? {} : { trade_id: tradeId }),
+      ...(reason === undefined ? {} : { reason }),
+      name,
+      amount,
+    });
+  }
+  return seats;
+};
+
+const entryKey = (entry: {
+  readonly code: string;
+  readonly trade_id?: string | undefined;
+  readonly reason?: string | undefined;
+}): string => `${entry.trade_id ?? ''}|${entry.code}|${entry.reason ?? ''}`;
+
+/** 将席位明细按股票 / 上榜原因 / 交易 ID 关联回主榜单。 */
+export const attachDragonTigerSeats = (
+  entries: DragonTigerRawEntry[],
+  buySeats: DragonTigerRawSeat[],
+  sellSeats: DragonTigerRawSeat[],
+): DragonTigerRawEntry[] => {
+  const buyByKey = new Map<string, DragonTigerRawSeat[]>();
+  const sellByKey = new Map<string, DragonTigerRawSeat[]>();
+  for (const seat of buySeats) {
+    const list = buyByKey.get(entryKey(seat)) ?? [];
+    list.push(seat);
+    buyByKey.set(entryKey(seat), list);
+  }
+  for (const seat of sellSeats) {
+    const list = sellByKey.get(entryKey(seat)) ?? [];
+    list.push(seat);
+    sellByKey.set(entryKey(seat), list);
+  }
+  return entries.map((entry) => {
+    const buy = buyByKey.get(entryKey(entry)) ?? [];
+    const sell = sellByKey.get(entryKey(entry)) ?? [];
+    return {
+      ...entry,
+      ...(buy.length === 0 ? {} : { buy_seats: buy }),
+      ...(sell.length === 0 ? {} : { sell_seats: sell }),
+    };
+  });
 };

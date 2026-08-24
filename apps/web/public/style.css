@@ -6131,6 +6131,10 @@ body > .modal {
   color: var(--accent);
 }
 
+.dragon-controls .dragon-filters {
+  margin-left: auto;
+}
+
 /* --muted 对比度偏低（浅色 ~3.4:1 / 暗夜 ~3.9:1），元信息行用 --ink-soft 保证可读 */
 .dragon-meta {
   margin: calc(-1 * var(--space-3)) 0 var(--space-4);
@@ -6146,6 +6150,10 @@ body > .modal {
 .dragon-summary .value.pos,
 .dragon-detail-grid .value.pos {
   color: var(--pos);
+}
+
+.dragon-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .dragon-summary .value.neg,
@@ -6181,7 +6189,73 @@ body > .modal {
   line-height: var(--leading-base);
 }
 
-/* 上榜原因列截断，长文案留给详情弹窗 */
+.dragon-detail-item {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.dragon-detail-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  line-height: var(--leading-base);
+}
+
+.dragon-detail-item-head strong {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.dragon-detail-item-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.dragon-detail-item-grid .stat {
+  min-width: 0;
+}
+
+.dragon-detail-item-grid .stat .value {
+  font-size: var(--text-sm);
+}
+
+.dragon-seat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.dragon-seat-section .label {
+  margin-bottom: 8px;
+}
+
+.dragon-seat-table-wrap {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.dragon-seat-table th,
+.dragon-seat-table td {
+  padding: 7px 10px;
+  font-size: var(--text-xs);
+}
+
+.dragon-seat-empty {
+  margin: 0;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  font-size: var(--text-xs);
+}
+
+/* 表格列宽稳定，行内只展示股票级聚合数据；原因明细留给弹窗 */
 #route-dragon-tiger .table {
   table-layout: fixed;
 }
@@ -6197,15 +6271,31 @@ body > .modal {
   color: #ffffff;
 }
 
-#route-dragon-tiger .table th:nth-child(6),
-#route-dragon-tiger .table td:nth-child(6) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 #route-dragon-tiger .table tbody tr {
   cursor: pointer;
+}
+
+#route-dragon-tiger .table tbody tr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (max-width: 760px) {
+  .dragon-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dragon-controls .dragon-filters {
+    margin-left: 0;
+  }
+
+  .dragon-detail-item-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dragon-seat-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---------- 板块热力（sectors 页） ---------- */

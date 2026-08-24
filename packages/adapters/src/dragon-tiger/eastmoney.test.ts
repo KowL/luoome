@@ -27,6 +27,7 @@ const REPORT_FIXTURE = {
         BILLBOARD_BUY_AMT: 3371674861.76,
         BILLBOARD_SELL_AMT: 2516026109.89,
         ACCUM_AMOUNT: 17302349779,
+        TRADE_ID: '100400189',
       },
       {
         TRADE_DATE: '2026-08-21 00:00:00',
@@ -45,6 +46,38 @@ const REPORT_FIXTURE = {
   },
 };
 
+const BUY_SEAT_FIXTURE = {
+  result: {
+    pages: 1,
+    data: [
+      {
+        SECURITY_CODE: '600547',
+        TRADE_DATE: '2026-08-21 00:00:00',
+        OPERATEDEPT_NAME: '沪股通专用',
+        EXPLANATION: '非S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券',
+        BUY: 931_448_827.85,
+        TRADE_ID: '100400189',
+      },
+    ],
+  },
+};
+
+const SELL_SEAT_FIXTURE = {
+  result: {
+    pages: 1,
+    data: [
+      {
+        SECURITY_CODE: '600547',
+        TRADE_DATE: '2026-08-21 00:00:00',
+        OPERATEDEPT_NAME: '机构专用',
+        EXPLANATION: '非S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券',
+        SELL: 411_053_559.83,
+        TRADE_ID: '100400189',
+      },
+    ],
+  },
+};
+
 const stubFetch = (handler: (url: string) => Promise<Response>) => {
   const urls: string[] = [];
   const fetchImpl = ((url: string | URL | Request) => {
@@ -58,10 +91,15 @@ const stubFetch = (handler: (url: string) => Promise<Response>) => {
 const afterClose = () => new Date('2026-08-21T08:00:00.000Z');
 
 describe('EastmoneySource.fetchList', () => {
-  it('字段映射：close/change_pct(÷100)/turnover_rate(÷100)/reason/金额/trade_date', async () => {
-    const { fetchImpl, urls } = stubFetch(() =>
-      Promise.resolve(new Response(JSON.stringify(REPORT_FIXTURE), { status: 200 })),
-    );
+  it('字段映射：行情 / 金额 / 交易日与买卖席位', async () => {
+    const { fetchImpl, urls } = stubFetch((url) => {
+      const fixture = url.includes('RPT_BILLBOARD_DAILYDETAILSBUY')
+        ? BUY_SEAT_FIXTURE
+        : url.includes('RPT_BILLBOARD_DAILYDETAILSSELL')
+          ? SELL_SEAT_FIXTURE
+          : REPORT_FIXTURE;
+      return Promise.resolve(new Response(JSON.stringify(fixture), { status: 200 }));
+    });
     const source = new EastmoneySource({ fetchImpl, clock: afterClose });
     const result = await source.fetchList('2026-08-21');
 
@@ -83,6 +121,20 @@ describe('EastmoneySource.fetchList', () => {
     expect(first?.sell_amount).toBeCloseTo(2516026109.89, 2);
     expect(first?.amount).toBe(17302349779);
     expect(first?.trade_date).toBe('2026-08-21');
+    expect(first?.buy_seats).toEqual([
+      expect.objectContaining({
+        name: '沪股通专用',
+        amount: 931_448_827.85,
+        trade_id: '100400189',
+      }),
+    ]);
+    expect(first?.sell_seats).toEqual([
+      expect.objectContaining({
+        name: '机构专用',
+        amount: 411_053_559.83,
+        trade_id: '100400189',
+      }),
+    ]);
   });
 
   it('EXPLANATION 缺失时回退 EXPLAIN；金额字段缺失 → 缺省（manager 归一为 0）', async () => {

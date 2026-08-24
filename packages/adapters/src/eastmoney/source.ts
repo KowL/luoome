@@ -17,7 +17,13 @@ import type {
   AShareSentimentPoolSource,
   AShareSentimentRawPool,
 } from '../ashare-sentiment/types.js';
-import { dragonTigerListUrl, parseDragonTigerReport } from '../dragon-tiger/eastmoney.js';
+import {
+  attachDragonTigerSeats,
+  dragonTigerListUrl,
+  dragonTigerSeatUrl,
+  parseDragonTigerReport,
+  parseDragonTigerSeatReport,
+} from '../dragon-tiger/eastmoney.js';
 import type { DragonTigerAdapterLike, DragonTigerFetchResult } from '../dragon-tiger/types.js';
 import { limitUpLadderPoolUrl, parseLimitUpLadderPool } from '../limit-up-ladder/eastmoney.js';
 import type {
@@ -209,11 +215,20 @@ export class EastmoneySource
 
   async fetchList(date: string): Promise<DragonTigerFetchResult> {
     const raw = await this.json(dragonTigerListUrl(date));
+    const [buyResult, sellResult] = await Promise.allSettled([
+      this.json(dragonTigerSeatUrl(date, 'buy')),
+      this.json(dragonTigerSeatUrl(date, 'sell')),
+    ]);
     const fetchedAt = this.clock();
+    const entries = parseDragonTigerReport(raw);
+    const buySeats =
+      buyResult.status === 'fulfilled' ? parseDragonTigerSeatReport(buyResult.value, 'buy') : [];
+    const sellSeats =
+      sellResult.status === 'fulfilled' ? parseDragonTigerSeatReport(sellResult.value, 'sell') : [];
     return {
       date,
       observedAt: tradingDayObservedAt(date, fetchedAt),
-      entries: parseDragonTigerReport(raw),
+      entries: attachDragonTigerSeats(entries, buySeats, sellSeats),
     };
   }
 

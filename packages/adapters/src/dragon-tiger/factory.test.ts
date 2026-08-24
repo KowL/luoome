@@ -142,7 +142,7 @@ describe('createDragonTigerManagerFromEnv', () => {
     expect(first?.tradeDate).toBe(TRADING_DAY);
 
     // 日期透传到报表 filter（TRADE_DATE）
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
     const calledUrl = String((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
     expect(calledUrl).toContain(encodeURIComponent("(TRADE_DATE='2026-08-21')"));
   });

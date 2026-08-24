@@ -6,6 +6,7 @@ import {
   filterEntries,
   formatPct,
   formatSignedAmount,
+  groupEntriesByStock,
   summarizeEntries,
   warningText,
 } from './dragon-tiger.js';
@@ -62,6 +63,44 @@ describe('filterEntries', () => {
   it('非法输入 → 空数组', () => {
     expect(filterEntries(null, 'all')).toEqual([]);
     expect(filterEntries(undefined, 'up')).toEqual([]);
+  });
+});
+
+describe('groupEntriesByStock', () => {
+  it('同一股票多条上榜原因合并，聚合金额不重复计算且明细完整保留', () => {
+    const first = {
+      ...entry('600001', 0.05, 100),
+      buyAmount: 300,
+      sellAmount: 200,
+      amount: 10_000,
+      reason: '日涨幅偏离值达7%的证券',
+    };
+    const second = {
+      ...entry('600001', 0.05, -40),
+      buyAmount: 120,
+      sellAmount: 160,
+      amount: 10_000,
+      reason: '连续三个交易日内涨幅偏离值累计达20%',
+    };
+
+    const groups = groupEntriesByStock([first, second, entry('600002', -0.03)]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({
+      code: '600001',
+      reasonCount: 2,
+      netAmount: 100,
+      buyAmount: 300,
+      sellAmount: 200,
+      amount: 10_000,
+    });
+    expect(groups[0].details).toEqual([first, second]);
+    expect(groups[1].details).toHaveLength(1);
+  });
+
+  it('非法输入或缺少代码 → 空数组 / 跳过无效条目', () => {
+    expect(groupEntriesByStock(null)).toEqual([]);
+    expect(groupEntriesByStock([{ name: '无代码' }])).toEqual([]);
   });
 });
 

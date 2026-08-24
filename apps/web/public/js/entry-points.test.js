@@ -370,7 +370,13 @@ describe('龙虎榜页面入口', () => {
   });
 
   it('dragon-tiger.js 走 /api/dragon-tiger，60s 刷新且页面隐藏跳过，行详情复用 openModal', () => {
-    expect(dragonJs).toContain("callApi('/api/dragon-tiger')");
+    expect(dragonJs).toContain('callApi(`/api/dragon-tiger?date=');
+    expect(dragonJs).toContain("input.type = 'date'");
+    expect(dragonJs).toContain('groupEntriesByStock');
+    expect(dragonJs).toContain('entry.details.map');
+    expect(dragonJs).toContain('detail.buySeats');
+    expect(dragonJs).toContain('detail.sellSeats');
+    expect(dragonJs).toContain('dragon-seat-table');
     expect(dragonJs).toContain('60_000');
     expect(dragonJs).toContain("document.visibilityState !== 'visible'");
     expect(dragonJs).toContain("import { openModal } from './modal.js'");

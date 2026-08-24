@@ -30,6 +30,15 @@ export interface DragonTigerFetchResult {
   readonly entries: DragonTigerRawEntry[];
 }
 
+/** 东方财富买入 / 卖出席位报表中的单个营业部。 */
+export interface DragonTigerRawSeat {
+  readonly code: string;
+  readonly trade_id?: string | undefined;
+  readonly reason?: string | undefined;
+  readonly name: string;
+  readonly amount: number;
+}
+
 /** 单个数据源适配器（当前仅 EastmoneySource 实现；name 用于错误 / 日志标识）。 */
 export interface DragonTigerAdapterLike {
   readonly name: string;
@@ -57,4 +66,7 @@ export interface DragonTigerRawEntry {
   readonly sell_amount?: number | undefined;
   readonly amount?: number | undefined;
   readonly trade_date?: string | undefined;
+  readonly trade_id?: string | undefined;
+  readonly buy_seats?: DragonTigerRawSeat[] | undefined;
+  readonly sell_seats?: DragonTigerRawSeat[] | undefined;
 }

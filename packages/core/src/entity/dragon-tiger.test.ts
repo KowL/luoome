@@ -38,6 +38,14 @@ describe('DragonTigerEntrySchema', () => {
   it('合法输入通过（netAmount 可为负）', () => {
     expect(DragonTigerEntrySchema.safeParse(makeEntry()).success).toBe(true);
     expect(DragonTigerEntrySchema.safeParse(makeEntry({ netAmount: -100 })).success).toBe(true);
+    expect(
+      DragonTigerEntrySchema.safeParse(
+        makeEntry({
+          buySeats: [{ name: '沪股通专用', amount: 1000 }],
+          sellSeats: [{ name: '机构专用', amount: 800 }],
+        }),
+      ).success,
+    ).toBe(true);
   });
 
   it('非法 code / close / changePct 拒绝', () => {

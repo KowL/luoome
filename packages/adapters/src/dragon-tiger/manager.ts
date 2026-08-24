@@ -52,6 +52,12 @@ function mapEntry(raw: DragonTigerRawEntry, date: string): DragonTigerEntry {
     sellAmount: raw.sell_amount ?? 0,
     amount: raw.amount ?? 0,
     tradeDate: raw.trade_date ?? date,
+    ...(raw.buy_seats === undefined
+      ? {}
+      : { buySeats: raw.buy_seats.map((seat) => ({ name: seat.name, amount: seat.amount })) }),
+    ...(raw.sell_seats === undefined
+      ? {}
+      : { sellSeats: raw.sell_seats.map((seat) => ({ name: seat.name, amount: seat.amount })) }),
   };
 }
 
