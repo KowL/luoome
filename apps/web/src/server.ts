@@ -1694,6 +1694,19 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/api/strategies/:id/workspace', (c) =>
     callTool('get_strategy_workspace', { strategyId: c.req.param('id') }),
   );
+  app.get('/api/strategies/:id/decision-cycles', (c) => {
+    const runId = c.req.query('runId');
+    const stockId = c.req.query('stockId');
+    const accountId = c.req.query('accountId');
+    const limit = c.req.query('limit');
+    return callTool('get_strategy_decision_cycles', {
+      strategyId: c.req.param('id'),
+      ...(accountId === undefined ? {} : { accountId }),
+      ...(runId === undefined ? {} : { runId }),
+      ...(stockId === undefined ? {} : { stockId }),
+      ...(limit === undefined ? {} : { limit: Number(limit) }),
+    });
+  });
   app.get('/api/strategies/:id/insights', (c) => {
     const windowDays = c.req.query('windowDays');
     const scope = c.req.query('scope');
@@ -2912,6 +2925,22 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult({
       ok: true,
       data: { advices: adviceResult.data, stats: statsResult.data },
+    });
+  });
+
+  // 全局决策闭环复盘（read）：直接消费 get_decision_loop_review，保留 unknown/partial 语义。
+  app.get('/api/review/decision-loop', (c) => {
+    const accountId = c.req.query('accountId');
+    const stockId = c.req.query('stockId');
+    const since = c.req.query('since');
+    const until = c.req.query('until');
+    const limit = c.req.query('limit');
+    return callTool('get_decision_loop_review', {
+      ...(accountId === undefined ? {} : { accountId }),
+      ...(stockId === undefined ? {} : { stockId }),
+      ...(since === undefined ? {} : { since }),
+      ...(until === undefined ? {} : { until }),
+      ...(limit === undefined ? {} : { limit: Number(limit) }),
     });
   });
 

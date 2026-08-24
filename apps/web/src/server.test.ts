@@ -1628,6 +1628,56 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(definitionDiff.status).toBe(400);
   });
 
+  it('策略闭环与全局复盘入口只调用 read tool，并保留参数校验/404', async () => {
+    const strategyId = 'web-decision-cycle-routes';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: 'Web Decision Cycle Strategy',
+            description: '验证候选闭环只读入口',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const cycles = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/decision-cycles?limit=10`),
+    );
+    expect(cycles.status).toBe(200);
+    expect(await cycles.json()).toMatchObject({
+      ok: true,
+      data: { strategyId, total: 0, cycles: [], limitations: expect.any(Array) },
+    });
+
+    const invalid = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/decision-cycles?limit=0`),
+    );
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+
+    const missing = await app.fetch(
+      new Request('http://test/api/strategies/missing-decision-cycle/decision-cycles'),
+    );
+    expect(missing.status).toBe(404);
+
+    const review = await app.fetch(new Request('http://test/api/review/decision-loop?limit=20'));
+    expect(review.status).toBe(200);
+    expect(await review.json()).toMatchObject({
+      ok: true,
+      data: {
+        accountId: TEST_ACCOUNT.id,
+        advice: { backfilled: expect.any(Number), pending: expect.any(Number) },
+        trades: { unattributed: expect.any(Number) },
+        signalObservations: { stats: expect.any(Array) },
+        evidenceIds: expect.any(Array),
+        unknowns: expect.any(Array),
+        limitations: expect.any(Array),
+      },
+    });
+  });
+
   it('策略工作台 pause/resume routes 复用生命周期 tool 并保留 mutation 防护', async () => {
     const strategyId = 'web-strategy-lifecycle-routes';
     expect(

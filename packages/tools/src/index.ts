@@ -45,6 +45,7 @@ export * from './tools/get-report.js';
 export * from './tools/get-stock-market-view.js';
 export * from './tools/get-stock-minute-bars.js';
 export * from './tools/get-stock-universe-status.js';
+export * from './tools/get-strategy-decision-cycles.js';
 export * from './tools/get-strategy-reliability-summary.js';
 export * from './tools/get-watch-status.js';
 export * from './tools/limit-up-ladder.js';

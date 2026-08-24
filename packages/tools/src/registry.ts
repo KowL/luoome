@@ -50,6 +50,7 @@ import { getReportTool } from './tools/get-report.js';
 import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
+import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cycles.js';
 import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
@@ -312,6 +313,7 @@ export const toolRegistry: Registry = createRegistry([
   getAdviceStatsTool,
   getConfidenceCalibrationTool,
   getDecisionLoopReviewTool,
+  getStrategyDecisionCyclesTool,
   getFinancialFactsTool,
   getFundamentalScoreTool,
   getWatchStatusTool,

@@ -15,6 +15,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_advice',
   'get_advice_stats',
   'get_decision_loop_review',
+  'get_strategy_decision_cycles',
   'get_financial_facts',
   'get_fundamental_score',
   'analyze_stock',

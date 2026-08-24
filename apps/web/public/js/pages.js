@@ -56,6 +56,12 @@ const filterAdvices = (advices, decision, stockId) =>
       (stockId === null || advice.subjectId === stockId),
   );
 
+/** Trade 的显式归因包含 Advice、研究假设版本或 StrategyVersion 任一 provenance。 */
+const decisionLoopAttributionRate = (trades) => {
+  if (trades.total === 0) return null;
+  return (trades.total - trades.unattributed) / trades.total;
+};
+
 const formatMetricDistribution = (counts, label) => {
   const entries = Object.entries(counts ?? {});
   if (entries.length === 0) return `—`;
@@ -1581,6 +1587,100 @@ const renderTrend = (data) => {
   box.innerHTML = svg;
 };
 
+const renderDecisionLoopSummary = async () => {
+  const root = $('#review-decision-loop-content');
+  if (root === null) return;
+  const result = await callApi('/api/review/decision-loop');
+  if (!result.ok) {
+    mount(root, el('p', 'status error', `闭环摘要加载失败：${result.error?.kind ?? 'unknown'}`));
+    return;
+  }
+  const review = result.data;
+  const advice = review.advice;
+  const trades = review.trades;
+  const observations = review.signalObservations;
+  const horizonStats = new Map((observations.stats ?? []).map((item) => [item.horizon, item]));
+  const horizonRows = ['t1', 't3', 't5', 't20'].map((horizon) => {
+    const item = horizonStats.get(horizon);
+    const sample = item?.total ?? 0;
+    return el('tr', null, [
+      el('td', 'mono', horizon.toUpperCase()),
+      el('td', null, item === undefined ? '暂无样本' : `${item.complete}/${sample}`),
+      el(
+        'td',
+        null,
+        item === undefined ? '--' : `${item.pending} 待观察 · ${item.unavailable} 不可用`,
+      ),
+      el('td', null, sample === 0 ? '--' : fmtPct(item.missingRate)),
+      el('td', null, item?.benchmarkStatus === 'complete' ? '可用' : '不可用 / 未知'),
+      el('td', null, item?.observedAsOf === undefined ? '--' : fmtDateTime(item.observedAsOf)),
+    ]);
+  });
+  const attributionRate = decisionLoopAttributionRate(trades);
+  mount(root, [
+    el('div', 'strategy-review-loop-metrics', [
+      statBlock('Advice 已回填', String(advice.backfilled)),
+      statBlock('Advice 待回填', String(advice.pending)),
+      statBlock(
+        'Trade 显式归因率',
+        attributionRate === null ? '--' : fmtPct(attributionRate),
+        trades.total === 0
+          ? '暂无交易样本'
+          : `${trades.total - trades.unattributed} / ${trades.total} 笔`,
+      ),
+      statBlock('Trade 未归因', trades.total === 0 ? '--' : String(trades.unattributed)),
+      statBlock(
+        '观察事实',
+        observations.total === 0 ? '--' : String(observations.total),
+        observations.total === 0
+          ? '暂无观察样本'
+          : `${observations.complete} 完整 · ${observations.pending} 待观察 · ${observations.unavailable} 不可用`,
+      ),
+      statBlock('数据截止', fmtDateTime(review.dataAsOf)),
+    ]),
+    el('div', 'table-wrap', [
+      el('table', 'table', [
+        el(
+          'thead',
+          null,
+          el(
+            'tr',
+            null,
+            ['Horizon', '完整 / 样本', '待观察 / 不可用', '缺失率', 'Benchmark', '观察截止'].map(
+              (label) => el('th', null, label),
+            ),
+          ),
+        ),
+        el('tbody', null, horizonRows),
+      ]),
+    ]),
+    el('div', 'strategy-review-loop-columns', [
+      el('section', null, [
+        el('h3', null, '研究假设版本引用'),
+        ...(review.researchHypothesisVersions?.length
+          ? review.researchHypothesisVersions.map((version) =>
+              el(
+                'p',
+                'mono muted',
+                `${version.id} · v${version.version} · ${version.summary ?? '无摘要'}`,
+              ),
+            )
+          : [el('p', 'placeholder', '暂无研究假设版本引用。')]),
+      ]),
+      el('section', null, [
+        el('h3', null, '审计边界'),
+        el('p', 'mono muted', `Evidence IDs：${review.evidenceIds?.join('、') || '无'}`),
+        ...(review.unknowns?.length
+          ? [el('p', 'status warning', `Unknown：${review.unknowns.join('；')}`)]
+          : []),
+        ...(review.limitations?.length
+          ? [el('p', 'muted', `限制：${review.limitations.join('；')}`)]
+          : []),
+      ]),
+    ]),
+  ]);
+};
+
 const renderReview = async (setStatus) => {
   const r = await callApi('/api/review');
   if (!r.ok) {
@@ -1610,6 +1710,7 @@ const renderReview = async (setStatus) => {
     ),
   ]);
   $('#review-stats-meta').textContent = `${stats.totalAdvices} 条（含已过期）`;
+  await renderDecisionLoopSummary();
 
   // ====== W4 confidence 自校准表 ======
   const calR = await callApi('/api/review/calibration');
@@ -2874,6 +2975,7 @@ export {
   bindSettingsActions,
   boardStats,
   cancelAnalyzeAllHoldings,
+  decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
   outcomeInputOf,

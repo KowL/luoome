@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   boardStats,
+  decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
   outcomeInputOf,
@@ -95,6 +96,16 @@ describe('Advice outcome 回填契约', () => {
         notes: '',
       }),
     ).toEqual({ outcome: 'partially_followed' });
+  });
+});
+
+describe('决策闭环 Trade 归因', () => {
+  it('Advice / 研究假设 / 策略版本任一显式 provenance 都计入归因率', () => {
+    expect(decisionLoopAttributionRate({ total: 3, unattributed: 1 })).toBeCloseTo(2 / 3);
+  });
+
+  it('没有交易样本时保持 unknown，不显示 0%', () => {
+    expect(decisionLoopAttributionRate({ total: 0, unattributed: 0 })).toBeNull();
   });
 });
 

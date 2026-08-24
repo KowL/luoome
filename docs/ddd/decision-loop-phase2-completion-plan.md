@@ -1,6 +1,6 @@
 # AI 投资决策闭环 Phase 2 完成计划
 
-> 状态：P2-0～P2-4 核心代码切片已完成；P2-5 全链路真实数据证据仍待积累（2026-08-21）
+> 状态：P2-0～P2-5 代码、自动化测试和本地浏览器切片已完成；P2-5 全链路真实数据证据仍待积累，Phase 2 不标记为完全完成（2026-08-24）
 > 上位文档：[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
 > 关联：[AI 投资 Agent 协作体验](../prd/ai-investment-agent.md)、[Agent 协作体验 Phase 0+1 详细设计](./agent-collaboration-phase0-1-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)、[Strategy 严格回测详细设计](./strategy-strict-backtest-detailed-design.md)
 > 说明：本文件只冻结 Phase 2 的实现边界和验收顺序，不修改上位 PRD 的状态。只有代码、测试、浏览器和真实数据证据全部满足门禁后，主线程才更新 PRD 状态。
@@ -15,6 +15,18 @@ Phase 2 的目标是把“建议—行动—结果—后续观察—研究迭代
 - `SignalObservation` 已支持 `watch-trigger` / `strategy-signal`、T+1/T+3/T+5/T+20、`pending / complete / unavailable`、benchmark 状态和按 `stock-day-horizon` 的描述性聚合；生产样本覆盖和 benchmark 可用率仍是证据项。
 - `weekly-report` 已接入真实 AdviceOutcome 与 SignalObservation 区块，并保留小样本、缺失和能力不可用披露；跨账户研究版本变化仍因缺少可靠的全局查询能力而显式 unavailable。
 - `Trade` 已支持可空的研究假设、Advice、`StrategyVersion` 关联并在写入边界验证；`ResearchHypothesisVersion` 已有 core、双仓储、迁移、Tool 和 Agent 草案链路。跨 repository 原子事务、全局研究变化投影及生产样本仍属于 P2-5 收口项。
+
+### 1.1 2026-08-24 实施记录
+
+本次已完成 P2-5 的代码闭环和本地装配切片，仍不等同于生产证据完成：
+
+- 新增只读 `get_strategy_decision_cycles`，由 `strategyId + runId + stockId` 派生候选周期；Web 提供 `/api/strategies/:id/decision-cycles`，不新增闭环实体或表。只接纳 `accepted + published operational` 运行，replay/evaluation/withheld/non-publishing 保留排除原因。
+- Strategy 工作台增加“闭环”tab，按事实结果、emitted signal、T+1/T+3/T+5/T+20 `SignalObservation`、AI 洞察、阶段 Advice 和显式 Trade 展示证据链；观察明确不是回测，Advice 的 confidence 不表述为概率，Trade 不按版本/日期/股票猜测归属。
+- 复盘页增加 `/api/review/decision-loop` 只读入口和闭环摘要，展示 Advice 回填、显式 Trade 归因、各 horizon 的 complete/pending/unavailable、研究假设版本、evidence IDs、unknowns、limitations 和 `dataAsOf`。
+- 推荐策略设置可选择 T+1/T+3/T+5/T+20，保存时保留已有策略参数；授权文案明确仅对 accepted + published operational run 生效、阶段观察完成后生成 Advice、不会自动交易，通知开关独立。后端默认关闭和既有契约保持不变。
+- Advice Drizzle 读取保留 `basedOn.strategy`/`ladder` 快照，避免闭环读模型丢失 Strategy 依据；memory/Drizzle contract tests 均覆盖该回读行为。
+
+本地验收使用隔离 SQLite 与种子事实覆盖 T+1 complete、T+3 pending、T+5 unavailable、T+20 缺样本、多个 Advice、Outcome、显式/版本级/未归因 Trade 及研究假设引用，并检查桌面与 390px 窄屏。尚未取得跨真实交易日的 provider、benchmark、现金流/公司行动和持续 schedule 运行证据；因此本记录只关闭代码/装配门禁，不关闭第 8 节生产数据门禁。
 
 Phase 2 完成必须同时满足四个产品条件：
 

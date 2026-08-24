@@ -1370,6 +1370,18 @@ export const registerRepositoryContractTests = (
             },
             indicators: { 'stk-1': { ma5: 10.2, rsi14: 55 } },
             llmReasoning: '原始推理文本',
+            strategy: {
+              strategyId: 'strategy-1',
+              strategyVersionId: 'strategy-version-1',
+              runId: 'strategy-run-1',
+              stockId: 'stk-1',
+              score: 82,
+              rank: 1,
+              resultEvidence: ['result-fact'],
+              signalIds: ['signal-1'],
+              observationIds: ['observation-1'],
+              recommendationTrigger: 'run',
+            },
             dataAsOf: T3,
           },
         });

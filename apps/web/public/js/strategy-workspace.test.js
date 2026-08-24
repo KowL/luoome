@@ -8,6 +8,7 @@ import {
   openRunDetail,
   parseBacktestStockIds,
   parseStrategyHash,
+  renderDecisionCycles,
   renderInsights,
   renderRuns,
   renderSettings,
@@ -251,6 +252,10 @@ describe('strategy workspace route state', () => {
     });
     expect(buildStrategyHash({ strategyId: 's1', tab: 'pool' })).toBe(
       '#strategies?strategyId=s1&tab=pool',
+    );
+    expect(parseStrategyHash('#strategies?strategyId=s1&tab=cycle').tab).toBe('cycle');
+    expect(buildStrategyHash({ strategyId: 's1', tab: 'cycle', runId: 'run-1' })).toBe(
+      '#strategies?strategyId=s1&tab=cycle&runId=run-1',
     );
   });
 });
@@ -615,7 +620,7 @@ describe('Phase B 洞察与调度', () => {
                 cooldownHours: 48,
                 notify: true,
                 channel: 'log',
-                observationHorizons: ['t3', 't5', 't20'],
+                observationHorizons: ['t1', 't5'],
               },
               nextRunAt: '2026-08-10T10:00:00.000Z',
               lastRunId: 'run-internal-id',
@@ -651,7 +656,9 @@ describe('Phase B 洞察与调度', () => {
       async () => {},
     );
     expect(node.textContent).toContain('自动调度');
-    expect(node.textContent).toContain('自动生成策略推荐');
+    expect(node.textContent).toContain('自动生成并保存 AI Advice');
+    expect(node.textContent).toContain('accepted + published operational run');
+    expect(node.textContent).toContain('不会自动交易');
     expect(node.textContent).toContain('标准 5 段 cron');
     expect(node.textContent).toContain('v1');
     expect(node.textContent).not.toContain('run-internal-id');
@@ -662,6 +669,10 @@ describe('Phase B 洞察与调度', () => {
       'Asia/Shanghai',
       '',
       '',
+      't1',
+      't3',
+      't5',
+      't20',
       '75',
       '8',
       '2',
@@ -681,7 +692,128 @@ describe('Phase B 洞察与调度', () => {
       cooldownHours: 48,
       notify: true,
       channel: 'log',
-      observationHorizons: ['t3', 't5', 't20'],
+      observationHorizons: ['t1', 't5'],
     });
+  });
+
+  it('闭环 tab 展示事实、阶段 Advice 与显式 Trade 链接，并保留未知状态', async () => {
+    globalThis.fetch = async (path) => {
+      expect(String(path)).toContain('/decision-cycles');
+      return jsonResponse({
+        ok: true,
+        data: {
+          total: 1,
+          factsAsOf: '2026-08-08T10:00:00.000Z',
+          evidenceIds: ['result-fact', 'obs-t1', 'advice-1', 'trade-1'],
+          unknowns: ['T3 尚未完成'],
+          limitations: ['仅显式 Advice 关系可归因'],
+          cycles: [
+            {
+              stockId: '600519.SH',
+              runId: 'run-cycle-1',
+              strategyVersionId: 'version-cycle-1',
+              result: { score: 82, rank: 1, evidence: ['result-fact'] },
+              run: {
+                status: 'complete',
+                publication: { status: 'published' },
+                dataAsOf: '2026-08-07T10:00:00.000Z',
+              },
+              signals: [
+                { id: 'signal-1', direction: 'bullish', score: 80, evidence: ['signal fact'] },
+              ],
+              observationProgress: [
+                {
+                  horizon: 't1',
+                  status: 'complete',
+                  completeCount: 1,
+                  pendingCount: 0,
+                  unavailableCount: 0,
+                  observationIds: ['obs-t1'],
+                  benchmarkStatus: 'complete',
+                },
+                {
+                  horizon: 't3',
+                  status: 'pending',
+                  completeCount: 0,
+                  pendingCount: 1,
+                  unavailableCount: 0,
+                  observationIds: [],
+                  benchmarkStatus: 'unavailable',
+                  unavailableReasons: ['等待收盘'],
+                },
+                {
+                  horizon: 't5',
+                  status: 'unavailable',
+                  completeCount: 0,
+                  pendingCount: 0,
+                  unavailableCount: 1,
+                  observationIds: [],
+                  benchmarkStatus: 'unavailable',
+                  unavailableReasons: ['无数据'],
+                },
+                {
+                  horizon: 't20',
+                  status: 'unavailable',
+                  completeCount: 0,
+                  pendingCount: 0,
+                  unavailableCount: 1,
+                  observationIds: [],
+                  benchmarkStatus: 'unavailable',
+                  unavailableReasons: ['无数据'],
+                },
+              ],
+              observations: [
+                {
+                  id: 'obs-t1',
+                  returnPct: 0.05,
+                  maxFavorableExcursionPct: 0.08,
+                  maxAdverseExcursionPct: -0.02,
+                  benchmarkReturnPct: 0.01,
+                  benchmarkStatus: 'complete',
+                },
+              ],
+              advices: [
+                {
+                  id: 'advice-1',
+                  decision: 'watch',
+                  confidence: 76,
+                  validFrom: '2026-08-07T10:00:00.000Z',
+                  validUntil: '2026-08-10T10:00:00.000Z',
+                  basedOn: { strategy: { recommendationTrigger: 'run' } },
+                  reasoning: { premise: '等待事实确认' },
+                },
+              ],
+              trades: [
+                {
+                  id: 'trade-1',
+                  side: 'buy',
+                  quantity: 100,
+                  price: 100,
+                  executedAt: '2026-08-08T10:00:00.000Z',
+                },
+              ],
+              tradeLinks: [
+                { tradeId: 'trade-1', adviceId: 'advice-1', relation: 'trade.adviceId' },
+              ],
+              evidenceIds: ['result-fact', 'obs-t1', 'advice-1', 'trade-1'],
+              unknowns: ['T3 尚未完成'],
+              limitations: ['仅显式 Advice 关系可归因'],
+              factsAsOf: '2026-08-08T10:00:00.000Z',
+            },
+          ],
+        },
+      });
+    };
+    const node = await renderDecisionCycles('cycle-ui-strategy', { runId: 'run-cycle-1' });
+    expect(node.textContent).toContain('策略候选闭环');
+    expect(node.textContent).toContain('事实 / 事后观察');
+    expect(node.textContent).toContain('T3');
+    expect(node.textContent).toContain('待观察');
+    expect(node.textContent).toContain('AI Advice / 决策快照');
+    expect(node.textContent).toContain('已过期');
+    expect(node.textContent).toContain('Outcome 待回填');
+    expect(node.textContent).toContain('trade-1');
+    expect(node.textContent).toContain('Unknown');
+    expect(node.textContent).not.toContain('概率');
   });
 });
