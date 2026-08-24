@@ -79,14 +79,8 @@
           <h1>看盘</h1>
           <div id="dashboard-stock-search"></div>
         </div>
-        <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；查看全部 → #indices 指数页） -->
-        <div class="card" id="dashboard-indices-card">
-          <div class="card-header">
-            <h2>核心指数</h2>
-            <a href="#indices" class="card-link">查看全部 →</a>
-          </div>
-          <div id="dashboard-indices" class="index-card-grid"></div>
-        </div>
+        <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；点击卡片 → #indices 指数页） -->
+        <div id="dashboard-indices" class="index-card-grid dashboard-index-grid" aria-label="核心指数"></div>
         <!-- 市场概览（A 股情绪快照：宽度 / 涨跌停；dashboard-market.js 每次进入路由时加载一次） -->
         <div id="dashboard-overview" class="stat-grid">
           <div class="stat"><div class="label">上涨家数</div><div class="value text-pos" id="dash-advancing">--</div></div>

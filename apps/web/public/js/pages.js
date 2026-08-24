@@ -140,7 +140,9 @@ const renderIndices = (indicesData) => {
   const defs = DASHBOARD_INDEX_CODES.map(
     (code) => INDEX_DEFS.find((d) => d.code === code) ?? { code, name: code },
   );
-  renderIndexCards('dashboard-indices', defs, indicesData);
+  renderIndexCards('dashboard-indices', defs, indicesData, {
+    onSelect: (code) => navigateTo(`indices?code=${encodeURIComponent(code)}`),
+  });
 };
 
 const boardAlertCell = (todayTrigger) => {

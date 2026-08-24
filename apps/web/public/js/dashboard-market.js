@@ -11,7 +11,7 @@
 'use strict';
 
 import { callApi } from './api.js';
-import { renderSectorHeatmap } from './sector-heatmap.js';
+import { renderSectorHeatmap, selectSectorExtremes } from './sector-heatmap.js';
 import { $, el, mount } from './ui.js';
 
 /** 今日（Asia/Shanghai）YYYY-MM-DD。 */
@@ -116,7 +116,7 @@ const renderOverview = async () => {
 const renderMiniHeatmap = async () => {
   const wrap = $('#dash-sector-heatmap');
   if (wrap === null) return;
-  const r = await callApi('/api/market/sectors?sort=changePct&limit=24');
+  const r = await callApi('/api/market/sectors?sort=changePct&all=true');
   if (!r.ok) {
     mount(
       wrap,
@@ -128,7 +128,7 @@ const renderMiniHeatmap = async () => {
     );
     return;
   }
-  const items = r.data?.items ?? [];
+  const items = selectSectorExtremes(r.data?.items ?? [], 15);
   if (items.length === 0) {
     mount(wrap, el('p', 'placeholder', '（无板块数据）'));
     return;

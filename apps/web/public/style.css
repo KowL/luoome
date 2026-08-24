@@ -2358,6 +2358,60 @@ html.has-bg-image .bg-layer {
   gap: var(--space-3);
 }
 
+.dashboard-index-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: var(--space-5);
+}
+
+.dashboard-index-grid .index-card {
+  position: relative;
+  min-height: 116px;
+  padding: var(--space-4) 18px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--panel) 92%, var(--accent) 8%), var(--panel)),
+    var(--panel);
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.dashboard-index-grid .index-card::after {
+  content: '';
+  position: absolute;
+  right: -18px;
+  bottom: -28px;
+  width: 92px;
+  height: 92px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 50%;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.dashboard-index-grid .index-card.clickable:hover,
+.dashboard-index-grid .index-card.clickable:focus-visible {
+  border-color: var(--accent);
+  background: var(--panel-hover);
+  box-shadow: var(--glow-accent);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+@media (max-width: 900px) {
+  .dashboard-index-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .dashboard-index-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .index-card {
   display: grid;
   gap: 2px;
@@ -6299,6 +6353,69 @@ body > .modal {
 }
 
 /* ---------- 板块热力（sectors 页） ---------- */
+
+.sector-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.sector-heading h2 {
+  margin: 0;
+}
+
+.sector-summary {
+  display: flex;
+  gap: var(--space-3);
+  color: var(--muted);
+  font: var(--weight-semibold) var(--text-sm) / 1.4 var(--font-mono);
+}
+
+.sector-summary .pos {
+  color: var(--pos);
+}
+
+.sector-summary .neg {
+  color: var(--neg);
+}
+
+.sector-summary .flat {
+  color: var(--neutral);
+}
+
+.sector-list {
+  margin-top: var(--space-6);
+}
+
+.sector-list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.sector-list-heading h3 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.sector-list-heading .ladder-controls {
+  margin-bottom: 0;
+}
+
+.sector-unavailable {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  border: 1px dashed var(--line-strong);
+  text-align: center;
+}
 
 .sector-heatmap {
   display: grid;

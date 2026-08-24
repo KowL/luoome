@@ -26,6 +26,11 @@ let selectedCode = INDEX_DEFS[0].code;
 let refreshTimer = null;
 let latestQuotes = null;
 
+const selectedIndexFromHash = (hash = window.location.hash) => {
+  const code = new URLSearchParams(hash.split('?')[1] ?? '').get('code');
+  return INDEX_DEFS.some((def) => def.code === code) ? code : INDEX_DEFS[0].code;
+};
+
 /* ---- 纯函数（indices.test.js 直接单测） ---- */
 
 /* 分时点的 time 是 UTC ISO（如 '2026-08-21T01:31:00.000Z'，来自 tool 层归一化），
@@ -263,6 +268,7 @@ const refreshAll = async () => {
 const renderIndicesPage = async (setStatus) => {
   const root = $('#route-indices');
   if (root === null) return;
+  selectedCode = selectedIndexFromHash();
   try {
     await refreshAll();
   } catch (error) {

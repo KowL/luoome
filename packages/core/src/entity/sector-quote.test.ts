@@ -71,6 +71,10 @@ describe('FetchSectorQuotesQuerySchema', () => {
     expect(FetchSectorQuotesQuerySchema.safeParse({ limit: 0 }).success).toBe(false);
     expect(FetchSectorQuotesQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
   });
+
+  it('允许请求完整行业板块集合', () => {
+    expect(FetchSectorQuotesQuerySchema.safeParse({ all: true }).success).toBe(true);
+  });
 });
 
 describe('SectorQuoteListSchema', () => {

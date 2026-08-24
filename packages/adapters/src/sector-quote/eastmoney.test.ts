@@ -82,6 +82,101 @@ describe('EastmoneySectorQuoteAdapter', () => {
     expect(first?.leading_stock_change_pct).toBeCloseTo(0.1003);
   });
 
+  it('请求超过上游单页上限时继续翻页，保留后续下跌板块', async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(url);
+      const page = new URL(url).searchParams.get('pn');
+      const body =
+        page === '2'
+          ? {
+              rc: 0,
+              data: {
+                total: 496,
+                diff: [
+                  {
+                    f2: 100,
+                    f3: -2.5,
+                    f4: -2.5,
+                    f6: 1_000_000,
+                    f12: 'BKDOWN',
+                    f14: '下跌板块',
+                  },
+                ],
+              },
+            }
+          : {
+              ...SECTOR_FIXTURE,
+              data: {
+                ...SECTOR_FIXTURE.data,
+                diff: Array.from({ length: 100 }, (_, index) => ({
+                  ...SECTOR_FIXTURE.data.diff[index % 2],
+                  f12: `BK${String(index).padStart(4, '0')}`,
+                })),
+              },
+            };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await new EastmoneySectorQuoteAdapter(fetchImpl).fetchList(150, 'f3');
+
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain('pn=1');
+    expect(urls[1]).toContain('pn=2');
+    expect(result.items.some((item) => item.change_pct < 0)).toBe(true);
+  });
+
+  it('请求完整集合时读取到最后一页，保留最深跌幅', async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(url);
+      const page = Number(new URL(url).searchParams.get('pn'));
+      const length = page === 5 ? 96 : 100;
+      const diff = Array.from({ length }, (_, index) => ({
+        f2: 100,
+        f3: page === 5 ? -6.99 : 7.44 - (page - 1) * 1.8 - index * 0.01,
+        f4: 0,
+        f6: 1_000_000,
+        f12: `BK${page}${String(index).padStart(3, '0')}`,
+        f14: `板块${page}-${index}`,
+      }));
+      return new Response(JSON.stringify({ rc: 0, data: { total: 496, diff } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await new EastmoneySectorQuoteAdapter(fetchImpl).fetchList(undefined, 'f3');
+
+    expect(urls).toHaveLength(5);
+    expect(urls.at(-1)).toContain('pn=5');
+    expect(result.items).toHaveLength(496);
+    expect(Math.min(...result.items.map((item) => item.change_pct))).toBeCloseTo(-0.0699);
+  });
+
+  it('全集模式跟随上游 total，未来增至 600 条时仍完整加载', async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(url);
+      const page = Number(new URL(url).searchParams.get('pn'));
+      const diff = Array.from({ length: 100 }, (_, index) => ({
+        f2: 100,
+        f3: page === 6 ? -6.99 : 1,
+        f4: 0,
+        f6: 1_000_000,
+        f12: `BK${page}${String(index).padStart(3, '0')}`,
+        f14: `板块${page}-${index}`,
+      }));
+      return new Response(JSON.stringify({ rc: 0, data: { total: 600, diff } }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await new EastmoneySectorQuoteAdapter(fetchImpl).fetchList(undefined, 'f3');
+
+    expect(urls).toHaveLength(6);
+    expect(urls.at(-1)).toContain('pn=6');
+    expect(result.items).toHaveLength(600);
+    expect(Math.min(...result.items.map((item) => item.change_pct))).toBeCloseTo(-0.0699);
+  });
+
   it('缺领涨股 / 涨跌家数的条目保留为 undefined；缺 code/name/价格/涨跌幅的条目剔除', async () => {
     const { fetchImpl } = stubFetch(() =>
       okJson({

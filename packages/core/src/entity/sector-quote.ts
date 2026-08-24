@@ -6,7 +6,7 @@ import { InvariantError } from '../error/index.js';
  * 行业板块行情快照实体。
  *
  * 设计要点（对齐 news / dragon-tiger 的组织风格）：
- * - 一次查询 = 排序字段 `sort` + `limit` + 不可变的 `items`；实时行情快照，无交易日历逻辑
+ * - 一次查询 = 排序字段 `sort` + `limit` / `all` + 不可变的 `items`；实时行情快照，无交易日历逻辑
  * - 上游（东方财富 push2 clist，fs=m:90+t:2 行业板块）字段：f2 最新价 / f3 涨跌幅 /
  *   f4 涨跌额 / f6 成交额(元) / f12 板块代码(BKxxxx) / f14 名称 / f104 上涨家数 /
  *   f105 下跌家数 / f128 领涨股名称 / f140 领涨股代码 / f136 领涨股涨跌幅 / f124 行情时间戳
@@ -74,8 +74,10 @@ export type SectorQuoteList = z.infer<typeof SectorQuoteListSchema>;
 export const FetchSectorQuotesQuerySchema = z.object({
   /** 排序字段（默认 changePct 涨跌幅降序）。 */
   sort: SectorQuoteSortSchema.default('changePct'),
-  /** 返回条数（默认 50）。 */
+  /** 返回条数（默认 50；all=true 时忽略 limit 并返回上游全集）。 */
   limit: z.number().int().min(1).max(200).default(50),
+  /** 是否按上游 total 分页加载完整集合。 */
+  all: z.boolean().optional(),
   source: SectorQuoteSourceSchema.default('eastmoney'),
 });
 

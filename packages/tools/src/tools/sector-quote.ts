@@ -18,7 +18,7 @@ export const fetchSectorQuotesTool = defineTool({
   name: 'fetch_sector_quotes',
   description:
     '拉取东方财富行业板块实时行情：板块代码/名称/最新点位/涨跌幅/成交额/上涨下跌家数/领涨股。' +
-    'sort 支持 changePct（涨跌幅，默认）与 amount（成交额），均为降序；limit 默认 50 上限 200。' +
+    'sort 支持 changePct（涨跌幅，默认）与 amount（成交额），均为降序；limit 默认 50 上限 200，all=true 返回完整集合。' +
     '空 items + warnings=["empty-list"] 表示无数据。',
   sideEffect: 'read',
   input: FetchSectorQuotesInput,

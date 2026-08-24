@@ -69,8 +69,18 @@ const renderIndexCards = (containerId, defs, indicesData, options = {}) => {
       ]);
       if (options.onSelect !== undefined) {
         card.classList.add('clickable');
+        card.setAttribute('role', 'button');
+        card.tabIndex = 0;
+        card.setAttribute('aria-label', `查看${def.name}分时走势`);
         if (options.selectedCode === def.code) card.classList.add('selected');
-        card.addEventListener('click', () => options.onSelect(def.code));
+        const select = () => options.onSelect(def.code);
+        card.addEventListener('click', select);
+        card.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            select();
+          }
+        });
       }
       return card;
     }),

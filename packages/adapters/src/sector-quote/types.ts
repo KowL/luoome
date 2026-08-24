@@ -26,10 +26,14 @@ export type SectorQuoteResult =
 export interface SectorQuoteAdapterLike {
   readonly name: string;
   /**
-   * 拉取行业板块一页（pageSize 条，按 fid 字段降序）；无数据时返回空 items，不抛错。
+   * 拉取行业板块（pageSize 条，按 fid 字段降序）；pageSize 为 undefined 时按上游 total 拉取全集。
+   * 无数据时返回空 items，不抛错。
    * fid 为上游排序字段码（f3 涨跌幅 / f6 成交额）。
    */
-  fetchList(pageSize: number, fid: 'f3' | 'f6'): Promise<{ readonly items: SectorQuoteRawItem[] }>;
+  fetchList(
+    pageSize: number | undefined,
+    fid: 'f3' | 'f6',
+  ): Promise<{ readonly items: SectorQuoteRawItem[] }>;
 }
 
 /** 数据源 adapter 返回的原始条目（snake_case，协议层；涨跌幅已归一为小数）。 */

@@ -14,6 +14,19 @@ const formatPct = (n) => `${n > 0 ? '+' : ''}${(n * 100).toFixed(2)}%`;
 /** 成交额（元）→ 亿，保留 1 位小数。 */
 const formatAmount = (n) => `${(n / 100_000_000).toFixed(1)}亿`;
 
+/** 取涨幅最大与跌幅最大的各 limit 个板块，热力图固定展示双侧极值。 */
+const selectSectorExtremes = (items, limit = 15) => {
+  const source = Array.isArray(items) ? items : [];
+  if (!Number.isInteger(limit) || limit <= 0) return [];
+  const up = source.filter((item) => item.changePct > 0).sort((a, b) => b.changePct - a.changePct);
+  const down = source
+    .filter((item) => item.changePct < 0)
+    .sort((a, b) => a.changePct - b.changePct);
+  return [...up.slice(0, limit), ...down.slice(0, limit)].sort(
+    (a, b) => Math.abs(b.changePct) - Math.abs(a.changePct),
+  );
+};
+
 /**
  * 热力格配色：|pct| 越大 alpha 越深（0.12 → 0.9 区间），alpha > 0.45 时用白字。
  * 红 rgb(224,72,79)（--pos）涨，绿 rgb(15,157,88)（--neg）跌。
@@ -59,4 +72,4 @@ const renderSectorHeatmap = (items, extraClass = '') => {
   );
 };
 
-export { renderSectorHeatmap, sectorTileStyle };
+export { renderSectorHeatmap, sectorTileStyle, selectSectorExtremes };

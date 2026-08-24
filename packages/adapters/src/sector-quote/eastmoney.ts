@@ -22,6 +22,7 @@ const SECTOR_FS = 'm:90+t:2';
 const FIELDS = 'f12,f14,f2,f3,f4,f6,f104,f105,f124,f128,f136,f140';
 const UT_TOKEN = 'bd1d9ddb04089700cf9c27f6f7426281';
 const DEFAULT_TIMEOUT_MS = 10_000;
+const UPSTREAM_PAGE_SIZE = 100;
 
 const asNumber = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? v : undefined;
@@ -39,67 +40,85 @@ export class EastmoneySectorQuoteAdapter implements SectorQuoteAdapterLike {
   ) {}
 
   async fetchList(
-    pageSize: number,
+    pageSize: number | undefined,
     fid: 'f3' | 'f6',
   ): Promise<{ readonly items: SectorQuoteRawItem[] }> {
-    const url =
-      `${this.baseUrl}?pn=1&pz=${pageSize}&po=1&np=1&fltt=2&invt=2&fid=${fid}` +
-      `&fs=${encodeURIComponent(SECTOR_FS)}&fields=${FIELDS}&ut=${UT_TOKEN}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let res: Response;
-    try {
-      res = await (this.fetchImpl ?? fetch)(url, { signal: controller.signal });
-    } catch (error) {
-      throw new Error(
-        `eastmoney sector-quote 请求失败: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) throw new Error(`eastmoney sector-quote HTTP ${res.status}`);
-
-    let raw: unknown;
-    try {
-      raw = await res.json();
-    } catch (error) {
-      throw new Error(`eastmoney sector-quote 响应不是有效 JSON: ${String(error)}`);
-    }
-    const body = raw as Record<string, unknown>;
-    const data = body.data as Record<string, unknown> | null | undefined;
-    // 无数据时 data 为 null（非业务错误），按空列表处理
-    const rows = Array.isArray(data?.diff) ? (data.diff as unknown[]) : [];
-
     const items: SectorQuoteRawItem[] = [];
-    for (const item of rows) {
-      const obj = item as Record<string, unknown>;
-      const code = asString(obj.f12);
-      const name = asString(obj.f14);
-      const price = asNumber(obj.f2);
-      const changePct = asNumber(obj.f3);
-      if (code === undefined || name === undefined) continue;
-      if (price === undefined || price <= 0 || changePct === undefined) continue;
-      const upCount = asNumber(obj.f104);
-      const downCount = asNumber(obj.f105);
-      const leadingStockName = asString(obj.f128);
-      const leadingStockCode = asString(obj.f140);
-      const leadingStockChangePct = asNumber(obj.f136);
-      items.push({
-        code,
-        name,
-        price,
-        change_pct: changePct / 100,
-        change: asNumber(obj.f4) ?? 0,
-        amount: asNumber(obj.f6) ?? 0,
-        ...(upCount === undefined ? {} : { up_count: upCount }),
-        ...(downCount === undefined ? {} : { down_count: downCount }),
-        ...(leadingStockName === undefined ? {} : { leading_stock_name: leadingStockName }),
-        ...(leadingStockCode === undefined ? {} : { leading_stock_code: leadingStockCode }),
-        ...(leadingStockChangePct === undefined
-          ? {}
-          : { leading_stock_change_pct: leadingStockChangePct / 100 }),
-      });
+    const pageSizeForRequest =
+      pageSize === undefined ? UPSTREAM_PAGE_SIZE : Math.min(pageSize, UPSTREAM_PAGE_SIZE);
+    const maxPages =
+      pageSize === undefined ? Number.POSITIVE_INFINITY : Math.ceil(pageSize / pageSizeForRequest);
+    let upstreamTotal: number | undefined;
+    let fetchedRows = 0;
+
+    for (let page = 1; page <= maxPages; page += 1) {
+      if (pageSize !== undefined && items.length >= pageSize) break;
+      if (pageSize === undefined && upstreamTotal !== undefined && fetchedRows >= upstreamTotal) {
+        break;
+      }
+      const url =
+        `${this.baseUrl}?pn=${page}&pz=${pageSizeForRequest}&po=1&np=1&fltt=2&invt=2&fid=${fid}` +
+        `&fs=${encodeURIComponent(SECTOR_FS)}&fields=${FIELDS}&ut=${UT_TOKEN}`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      let res: Response;
+      try {
+        res = await (this.fetchImpl ?? fetch)(url, { signal: controller.signal });
+      } catch (error) {
+        throw new Error(
+          `eastmoney sector-quote 请求失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!res.ok) throw new Error(`eastmoney sector-quote HTTP ${res.status}`);
+
+      let raw: unknown;
+      try {
+        raw = await res.json();
+      } catch (error) {
+        throw new Error(`eastmoney sector-quote 响应不是有效 JSON: ${String(error)}`);
+      }
+      const body = raw as Record<string, unknown>;
+      const data = body.data as Record<string, unknown> | null | undefined;
+      // 无数据时 data 为 null（非业务错误），按空列表处理
+      const rows = Array.isArray(data?.diff) ? (data.diff as unknown[]) : [];
+      upstreamTotal = asNumber(data?.total) ?? upstreamTotal;
+      fetchedRows += rows.length;
+      if (rows.length === 0) break;
+
+      for (const item of rows) {
+        const obj = item as Record<string, unknown>;
+        const code = asString(obj.f12);
+        const name = asString(obj.f14);
+        const price = asNumber(obj.f2);
+        const changePct = asNumber(obj.f3);
+        if (code === undefined || name === undefined) continue;
+        if (price === undefined || price <= 0 || changePct === undefined) continue;
+        const upCount = asNumber(obj.f104);
+        const downCount = asNumber(obj.f105);
+        const leadingStockName = asString(obj.f128);
+        const leadingStockCode = asString(obj.f140);
+        const leadingStockChangePct = asNumber(obj.f136);
+        items.push({
+          code,
+          name,
+          price,
+          change_pct: changePct / 100,
+          change: asNumber(obj.f4) ?? 0,
+          amount: asNumber(obj.f6) ?? 0,
+          ...(upCount === undefined ? {} : { up_count: upCount }),
+          ...(downCount === undefined ? {} : { down_count: downCount }),
+          ...(leadingStockName === undefined ? {} : { leading_stock_name: leadingStockName }),
+          ...(leadingStockCode === undefined ? {} : { leading_stock_code: leadingStockCode }),
+          ...(leadingStockChangePct === undefined
+            ? {}
+            : { leading_stock_change_pct: leadingStockChangePct / 100 }),
+        });
+      }
+
+      if (rows.length < pageSizeForRequest) break;
     }
-    return { items };
+    return { items: pageSize === undefined ? items : items.slice(0, pageSize) };
   }
 }

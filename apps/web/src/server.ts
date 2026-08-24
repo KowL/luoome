@@ -1576,7 +1576,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    *
    * 参数：
    *   sort (可选) changePct | amount，默认 changePct
-   *   limit (可选) 1-200，默认 50
+   *   limit (可选) 1-200，默认 50；all=true 时按上游 total 加载完整集合
    *
    * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
    */
@@ -1586,6 +1586,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (sort !== undefined) input.sort = sort;
     const limit = c.req.query('limit');
     if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const all = c.req.query('all');
+    if (all !== undefined) input.all = all === 'true';
     const r = await invokeTool('fetch_sector_quotes', input);
     if (r.ok) return jsonResult(r);
     if (r.error.kind === 'invalid_input') return jsonResult(r);

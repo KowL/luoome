@@ -226,6 +226,17 @@ describe('看盘页市场行情区块', () => {
   it('要闻区块走 /api/news（fetch_news tool）', () => {
     expect(read('./dashboard-market.js')).toContain('/api/news');
   });
+
+  it('板块页支持日期上下文、列表排序与双侧 15 个极值热力图', () => {
+    const sectors = read('./sectors.js');
+    const heatmap = read('./sector-heatmap.js');
+    expect(sectors).toContain("type = 'date'");
+    expect(sectors).toContain('板块列表');
+    expect(sectors).toContain('sortItems');
+    expect(sectors).toContain('all=true');
+    expect(heatmap).toContain('selectSectorExtremes');
+    expect(heatmap).toContain('limit = 15');
+  });
 });
 
 describe('行情页指数条', () => {
@@ -242,12 +253,14 @@ describe('看盘页指数卡片', () => {
     expect(pages).toContain("import { renderIndexCards } from './index-strip.js'");
     expect(pages).toContain("renderIndexCards('dashboard-indices'");
     expect(read('./index-strip.js')).toContain('renderIndexCards');
-    expect(html).toContain('id="dashboard-indices" class="index-card-grid"');
+    expect(html).toContain('id="dashboard-indices" class="index-card-grid dashboard-index-grid"');
   });
 
-  it('卡片区块带「查看全部 →」链接指向 #indices 指数页', () => {
-    expect(html).toContain('id="dashboard-indices-card"');
-    expect(html).toMatch(/href="#indices" class="card-link">查看全部/);
+  it('看盘页直接展示 4 张指数卡，点击卡片进入指数页并带上指数 code', () => {
+    expect(html).toContain('id="dashboard-indices" class="index-card-grid dashboard-index-grid"');
+    const pages = read('./pages.js');
+    expect(pages).toContain('indices?code=');
+    expect(pages).toContain('encodeURIComponent(code)');
   });
 });
 

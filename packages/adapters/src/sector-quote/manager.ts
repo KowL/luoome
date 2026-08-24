@@ -73,7 +73,10 @@ export class SectorQuoteManager {
 
     let rawResult: { items: SectorQuoteRawItem[] };
     try {
-      rawResult = await this.primary.fetchList(query.limit, SORT_TO_FID[query.sort]);
+      rawResult = await this.primary.fetchList(
+        query.all === true ? undefined : query.limit,
+        SORT_TO_FID[query.sort],
+      );
     } catch (err) {
       this.logger.warn('sector-quote primary adapter failed', {
         adapter: this.primary.name,
@@ -84,7 +87,9 @@ export class SectorQuoteManager {
       );
     }
 
-    const items = rawResult.items.slice(0, query.limit).map(mapItem);
+    const items = (
+      query.all === true ? rawResult.items : rawResult.items.slice(0, query.limit)
+    ).map(mapItem);
 
     const warnings: string[] = [];
     if (items.length === 0) warnings.push('empty-list');
