@@ -5726,10 +5726,9 @@ body > .modal {
 
 .strategy-catalog-list {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
-  overflow-x: auto;
   padding: 2px 2px var(--space-2);
-  scrollbar-width: thin;
 }
 
 .strategy-catalog-list > .placeholder,
@@ -5739,7 +5738,7 @@ body > .modal {
 
 .strategy-catalog-item {
   display: flex;
-  flex: 0 0 clamp(210px, 24vw, 290px);
+  flex: 1 1 clamp(210px, 24vw, 290px);
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
