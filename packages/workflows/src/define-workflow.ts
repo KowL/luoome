@@ -18,8 +18,14 @@ import type {
   ComputeIndicatorsOutput,
   CreateStrategyObservationCandidatesInput,
   CreateStrategyObservationCandidatesOutput,
+  DragonTigerListInput,
+  DragonTigerListOutput,
+  FetchNewsInput,
+  FetchNewsOutput,
   FetchQuoteInput,
   FetchQuoteOutput,
+  FetchSectorQuotesInput,
+  FetchSectorQuotesOutput,
   FinishStrategyEvaluationSessionInput,
   FinishStrategyEvaluationSessionOutput,
   FinishStrategyScheduleClaimInput,
@@ -40,6 +46,8 @@ import type {
   GetAShareSentimentOutput,
   GetConfidenceCalibrationInput,
   GetConfidenceCalibrationOutput,
+  GetDecisionLoopReviewInput,
+  GetDecisionLoopReviewOutput,
   GetHoldingInput,
   GetHoldingOutput,
   GetPreviousClosesInput,
@@ -48,6 +56,8 @@ import type {
   GetResearchDocumentOutput,
   GetResearchTopicInput,
   GetResearchTopicOutput,
+  GetSignalObservationStatsInput,
+  GetSignalObservationStatsOutput,
   GetStockUniverseStatusInput,
   GetStockUniverseStatusOutput,
   GetStrategyEvaluationSessionInput,
@@ -90,6 +100,10 @@ import type {
   ListStrategyResultViewsOutput,
   ListStrategyRunsInput,
   ListStrategyRunsOutput,
+  ListStrategyWatchlistSubscriptionsInput,
+  ListStrategyWatchlistSubscriptionsOutput,
+  ListTradesInput,
+  ListTradesOutput,
   ListWatchlistChangesInput,
   ListWatchlistChangesOutput,
   ListWatchlistsInput,
@@ -100,8 +114,12 @@ import type {
   ListWatchTriggersOutput,
   MarketOutlookInput,
   MarketOutlookOutput,
+  NorthboundFlowInput,
+  NorthboundFlowOutput,
   PrepareStrategyDataInput,
   PrepareStrategyDataOutput,
+  PullResearchVaultGitInput,
+  PullResearchVaultGitOutput,
   ReconcileStaleWorkflowRunsInput,
   ReconcileStaleWorkflowRunsOutput,
   RecordAdviceOutcomeInput,
@@ -150,6 +168,8 @@ import type {
   SyncStockEventsOutput,
   SyncStockUniverseInput,
   SyncStockUniverseOutput,
+  SyncStrategyWatchlistSubscriptionsInput,
+  SyncStrategyWatchlistSubscriptionsOutput,
   SyncWatchlistSourceInput,
   SyncWatchlistSourceOutput,
 } from '@luoome/tools';
@@ -158,6 +178,7 @@ import {
   finishStrategyScheduleClaimTool,
   getWatchTriggerDeliveryStatsTool,
   listWatchRuleStatesTool,
+  pullResearchVaultGitTool,
   reconcileStaleStrategyRunsTool,
   reconcileStaleWorkflowRunsTool,
   recordWatchRunTool,
@@ -167,6 +188,7 @@ import {
   saveWatchTriggerTool,
   setReportDeliveryStatusTool,
   setWatchTriggerDeliveryStatusTool,
+  syncStrategyWatchlistSubscriptionsTool,
   syncWatchlistSourceTool,
   toolRegistry,
 } from '@luoome/tools';
@@ -211,6 +233,11 @@ export interface WorkflowToolMap {
     typeof SyncResearchVaultInput,
     typeof SyncResearchVaultOutput
   >;
+  /** workflow-only；远端更新后必须继续调用 sync_research_vault。 */
+  readonly pull_research_vault_git: ToolAccessor<
+    typeof PullResearchVaultGitInput,
+    typeof PullResearchVaultGitOutput
+  >;
   readonly list_accounts: ToolAccessor<typeof ListAccountsInput, typeof ListAccountsOutput>;
   readonly list_alert_plans: ToolAccessor<typeof ListAlertPlansInput, typeof ListAlertPlansOutput>;
   readonly get_account: ToolAccessor<typeof GetAccountInput, typeof GetAccountOutput>;
@@ -221,6 +248,10 @@ export interface WorkflowToolMap {
   readonly list_holdings: ToolAccessor<typeof ListHoldingsInput, typeof ListHoldingsOutput>;
   readonly get_holding: ToolAccessor<typeof GetHoldingInput, typeof GetHoldingOutput>;
   readonly get_watchlist: ToolAccessor<typeof GetWatchlistInput, typeof GetWatchlistOutput>;
+  readonly list_strategy_watchlist_subscriptions: ToolAccessor<
+    typeof ListStrategyWatchlistSubscriptionsInput,
+    typeof ListStrategyWatchlistSubscriptionsOutput
+  >;
   readonly get_advice: ToolAccessor<typeof GetAdviceInput, typeof GetAdviceOutput>;
   readonly get_advice_stats: ToolAccessor<typeof GetAdviceStatsInput, typeof GetAdviceStatsOutput>;
   readonly get_ashare_sentiment: ToolAccessor<
@@ -231,6 +262,10 @@ export interface WorkflowToolMap {
   readonly get_confidence_calibration: ToolAccessor<
     typeof GetConfidenceCalibrationInput,
     typeof GetConfidenceCalibrationOutput
+  >;
+  readonly get_decision_loop_review: ToolAccessor<
+    typeof GetDecisionLoopReviewInput,
+    typeof GetDecisionLoopReviewOutput
   >;
   readonly analyze_stock: ToolAccessor<typeof AnalyzeStockInput, typeof AnalyzeStockOutput>;
   readonly analyze_strategy_candidate: ToolAccessor<
@@ -289,6 +324,10 @@ export interface WorkflowToolMap {
   readonly complete_strategy_observations: ToolAccessor<
     typeof CompleteStrategyObservationsInput,
     typeof CompleteStrategyObservationsOutput
+  >;
+  readonly get_signal_observation_stats: ToolAccessor<
+    typeof GetSignalObservationStatsInput,
+    typeof GetSignalObservationStatsOutput
   >;
   readonly create_strategy_observation_candidates: ToolAccessor<
     typeof CreateStrategyObservationCandidatesInput,
@@ -402,6 +441,7 @@ export interface WorkflowToolMap {
     typeof ListStockEventsInput,
     typeof ListStockEventsOutput
   >;
+  readonly list_trades: ToolAccessor<typeof ListTradesInput, typeof ListTradesOutput>;
   readonly list_watch_triggers: ToolAccessor<
     typeof ListWatchTriggersInput,
     typeof ListWatchTriggersOutput
@@ -437,6 +477,24 @@ export interface WorkflowToolMap {
     typeof LimitUpLadderCompareInput,
     typeof LimitUpLadderCompareOutput
   >;
+  // 龙虎榜（只读）
+  readonly dragon_tiger_list: ToolAccessor<
+    typeof DragonTigerListInput,
+    typeof DragonTigerListOutput
+  >;
+  // 北向资金历史流（只读）
+  readonly northbound_flow: ToolAccessor<typeof NorthboundFlowInput, typeof NorthboundFlowOutput>;
+  // 财经要闻（只读）
+  readonly fetch_news: ToolAccessor<typeof FetchNewsInput, typeof FetchNewsOutput>;
+  // 行业板块行情（只读）
+  readonly fetch_sector_quotes: ToolAccessor<
+    typeof FetchSectorQuotesInput,
+    typeof FetchSectorQuotesOutput
+  >;
+  readonly sync_strategy_watchlist_subscriptions: ToolAccessor<
+    typeof SyncStrategyWatchlistSubscriptionsInput,
+    typeof SyncStrategyWatchlistSubscriptionsOutput
+  >;
 }
 
 /**
@@ -467,6 +525,7 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
   for (const internalTool of [
     recordWatchRunTool,
     recordWorkflowRunTool,
+    pullResearchVaultGitTool,
     reconcileStaleStrategyRunsTool,
     reconcileStaleWorkflowRunsTool,
     saveReportTool,
@@ -478,6 +537,7 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     listWatchRuleStatesTool,
     saveWatchRuleStatesTool,
     setWatchTriggerDeliveryStatusTool,
+    syncStrategyWatchlistSubscriptionsTool,
   ]) {
     accessors[internalTool.name] = {
       execute: (input) => internalTool.execute(input, ctx),

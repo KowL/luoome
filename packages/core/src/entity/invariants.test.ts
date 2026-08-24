@@ -127,6 +127,21 @@ describe('assertTradeInvariants', () => {
     expect(() => assertTradeInvariants(validTrade())).not.toThrow();
   });
 
+  it('accepts optional decision provenance references', () => {
+    expect(() =>
+      assertTradeInvariants({
+        ...validTrade(),
+        adviceId: 'advice-1',
+        researchHypothesisVersionId: 'hypothesis-1',
+        strategyVersionId: 'strategy-v1',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects empty decision provenance references', () => {
+    expect(() => assertTradeInvariants({ ...validTrade(), adviceId: '' })).toThrow(/adviceId/);
+  });
+
   it('rejects zero quantity', () => {
     const t = { ...validTrade(), quantity: quantity(0) };
     expect(() => assertTradeInvariants(t)).toThrow(InvariantError);

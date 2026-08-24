@@ -1,7 +1,7 @@
 # luoome 开发计划
 
 > 状态：当前执行计划
-> 基线日期：2026-08-14；Strategy 可靠性复核：2026-08-14
+> 基线日期：2026-08-20；Strategy 可靠性复核：2026-08-20；账户绩效持续快照复核：2026-08-20
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
@@ -21,7 +21,13 @@
 
 ### 2.1 验证结果
 
-2026-08-14 在当前工作树完成复核；Strategy 可靠性、历史评估作业化与账户绩效首片均已通过本地
+2026-08-20 在 `c8f75cd` 基线上补齐账户绩效剩余代码交付：盘后持续快照 workflow/scheduler、
+WorkflowRun 预算审计、8 路有界价格序列并发、输入修订新快照/旧版本追溯、按最新修订的逐交易日审计，
+以及 Web 快照历史与区间审计入口。确定性测试覆盖全账户首跑、幂等重跑、单账户事实修订、多账户隔离、
+部分失败续跑、最新 partial 不被旧 complete 掩盖和盘后调度防重。一年真实 provider 长区间 smoke
+已完成；跨真实交易日连续调度和大账户预算仍作为生产证据项，不能由 fixture 或当前快照关闭。
+
+2026-08-20 在当前工作树完成复核；Strategy 可靠性、历史评估作业化与账户绩效首片均已通过本地
 门禁，仍把全市场性能、历史评估长任务和连续生产证据保留为后续验收；账户绩效的 31 个交易日
 浏览器页 smoke 已通过：
 
@@ -119,7 +125,7 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 `completeDayCount=3`、`missingDates=[]`、`gaps=[]`；这证明审计闭环可读真实持久化事实。跨交易日
 样本继续作为运营观测与性能基线积累，但不再设置固定天数的完成门禁。
 
-### 2.2 本轮执行决策（2026-08-14）
+### 2.2 本轮执行决策（2026-08-20）
 
 当前不再新增横向产品能力，按以下顺序推进：
 
@@ -141,12 +147,12 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | 领域 | 当前真实状态 | 主要缺口 |
 |---|---|---|
 | 行情底座 | StockUniverse、qfq DailyBar、Quote 新鲜度、capability registry 已完成 | 优先消费已有能力，不继续横向扩底层 |
-| Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除，目标模型已落地 | PRD/DDD 状态和部分架构示例滞后 |
+| Strategy / Watchlist | 旧 Tactic、StockGroup、StockPool 已移除；统一 Watchlist、多来源与 Strategy → Watchlist 持久显式订阅、取消、published operational 投影和 complete/partial/failed 同步语义已落地 | 持续积累真实生产日验收样本与订阅来源的产品观测 |
 | Strategy Workspace | Phase A～C 已完成；publication、fencing lease、daily cycle、checkpoint、PIT replay、edge signal、观察统计和独立故障矩阵已落地；生产日 daily cycle 会先同步真实 StockUniverse PIT snapshot，启动前自动收敛 stale WorkflowRun，并阻止同一 schedule/交易日重复正式 cycle；5,207 只真实 Sina 全市场重复运行与首个 schedule 审计已记录 | 跨交易日阶段 P50/P95/max 与持续真实运行观测 |
-| Research Vault | Phase A/B、Phase C、M3 managed 创建/导入与 M4 FTS/ResearchBrief 已完成 | embedding、跨模型评测扩展和远端同步仍暂缓 |
+| Research Vault | Phase A～G 已完成；managed 创建/导入、FTS/ResearchBrief、独立 Git-only 安全远端同步及 embedding 混合检索/跨模型固定评测已落地 | 真实 embedding provider 生产质量与长期远端同步运行观测 |
 | Market View | Phase 1/2 已完成；Phase 3 的事实关联、markers 和日期深链接已落地 | 账户/事实详情的更细粒度页面联动仍可增强 |
 | Report / 信号复盘 | Report、三类简报、SignalObservation、benchmark/excess return、MFE/MAE、分组描述统计和真实历史 VaR 风险报告已落地；观察聚合统一按 `stock-day-horizon` 去重并可回溯代表性 observation id | benchmark 真实数据可用率、去重分布和跨 Tool/Web/AI 的真实样本稳定性仍需验证；历史评估仍不是严格收益回测 |
-| 账户绩效 | 现金流/公司行动 schema、双仓储、绩效 Tool、Web/报告/Agent、输入指纹快照、默认 benchmark、31 交易日真实 SQLite、双账户/拆股/缺价、周报区间 TWR/回撤、周报浏览器回归、真实 `600984.SH` 缺价验收和 3 日后台评估边界已落地 | 全市场长区间性能、更长历史任务与持续快照审计 |
+| 账户绩效 | 现金流/公司行动 schema、双仓储、绩效 Tool、盘后持续快照 workflow/scheduler、WorkflowRun 性能预算、输入修订追溯、逐日审计、Web/报告/Agent、31 交易日真实 SQLite、双账户/拆股/缺价、周报区间 TWR/回撤与浏览器回归已落地 | 真实 provider 长区间、大账户生产规模和跨交易日连续调度证据 |
 | 连板天梯 | Phase 1～3 已完成；`meta.limitUpLevel`/`meta.limitUpToday` 已接入真实 manager，scan/scheduled 写入 PIT，replay 优先读取历史快照，缺失仍保持 unknown | 炸板/断板历史语义与跨交易日真实快照积累 |
 | Workflow 架构 | 生产 workflow 已通过 workflow-only tools 编排，并有静态边界测试 | 后续新增 workflow 继续遵守同一边界 |
 
@@ -156,8 +162,9 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 
 - `ResearchNote` 需求已被 [ResearchTopic / ResearchDocument 设计](./ddd/research-vault-detailed-design.md)
   替代，不恢复旧 ResearchNote CRUD。
-- 旧 Watchlist PRD 中的自动 Strategy source 同步，不覆盖较新的 Strategy Workspace 决策；未来只能
-  以显式 opt-in、complete sync 结束缺失来源的方式重新设计。
+- 旧 Watchlist PRD 中“自动绑定”的 Strategy source 同步已按较新的 Strategy Workspace 决策收敛为持久
+  显式 opt-in 订阅：只有 published operational run 可投影，complete sync 才结束缺失来源，partial/failed
+  只标 stale；没有订阅时不产生 Watchlist source。
 - [Agent Loop 技术选型分析](./ddd/agent-loop-tech-selection.md) 中“当前没有 agent loop”的描述已被
   AI SDK 和 Web chat 实现取代，不再按旧方案重复建设 loop。
 - [ROADMAP](./ROADMAP.md) v0.8 以前内容是历史快照，不作为当前功能 backlog；v0.9 起才是当前版本计划。
@@ -174,11 +181,48 @@ failed=0；两日全市场回放的 vintage 均为 `unavailable`（8/14 的 `ava
 | S3 生产观测 | 进行中，当前已有 2 个正式真实交易日样本 | 按真实交易日持续形成 schedule/lease/checkpoint/publication/观察/AI 降级审计；不设固定天数门禁 |
 | v0.10 更长历史与持续快照 | 基础切片可用，长区间仍受真实 PIT 数据积累限制 | 真实 PIT 日期持续沉淀后完成更长历史任务、断点幂等和快照审计 |
 | 连板天梯 → Strategy DSL 字段 | 当前/正式日与 PIT replay 已完成；无对应交易日快照时仍保持 unknown | 持续积累真实交易日快照，并获得可审计炸板/断板历史数据源 |
-| 炸板/断板历史语义 | 延后，当前涨停池不提供可验证的历史 `isBroken`/`consecutiveBoard` | 获得可审计历史数据源并冻结定义；不得用当前情绪接口推断历史天梯字段 |
+| 炸板/断板历史语义 | 2026-08-15 已冻结定义、审计信封和数据源门禁；个股历史已收紧为仅读 PIT repository，字段仍未注册 | 用真实凭据完成 Tushare raw daily + daily limit（首选）覆盖/权限/revision smoke 后，再实现专用双 repository；不得用当前情绪接口推断历史天梯字段 |
 | Web 账户级鉴权 | 未立项；当前只有 request-scoped 账户选择 | 独立安全/产品决策、认证模型、权限矩阵和端到端验收 |
 
 因此当前开发顺序不扩展横向产品能力：只收口可靠性、安全、测试、观测和文档，并持续积累真实
 provider 证据；禁止用 mock、当前快照或推断字段关闭上述门禁。
+
+### 2.6 Phase 2：真实复盘闭环执行里程碑（2026-08-21）
+
+Phase 0+1 的 Agent 协作体验已完成；Phase 2 继续按[决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md)
+执行。2026-08-21 已完成 P2-0～P2-4 核心代码切片，并用临时真实 SQLite 走通 Web outcome 回填与刷新持久化；
+这仍不等同于“真实复盘全部完成”，P2-5 的 Advice → Trade → Observation/Report → 新版本全链路、
+跨 repository 原子性和持续生产样本仍需关闭。
+
+| 顺序 | 里程碑 | 当前状态 | 关闭条件 |
+|---|---|---|---|
+| P2-0 | AdviceOutcome 语义、Trade 依据关系、ResearchHypothesisVersion 最小版本契约、Report 投影与迁移基线 | 核心代码完成 | schema/不变量、`ensureSchema`/Drizzle、旧数据读取、双仓储 contract tests 和 data-transfer 已通过 |
+| P2-1 | AdviceOutcome 回填与 Trade 依据关联 | 核心代码完成 | 三态 outcome、unknown 金额、可空依据关联、账户/股票/版本边界及无效卖出不落孤儿 Trade 已覆盖 |
+| P2-2 | SignalObservation 稳定统计 | 代码完成，生产证据持续积累 | 统一去重聚合 Tool 已落地；benchmark 可用率与跨运行真实样本继续观测 |
+| P2-3 | 周报行为模式与数据质量 | 核心区块完成 | Advice、Trade 归因、Signal、最小样本行为模式和 data-quality 已落地；跨账户 research changes 因能力缺口保持 unavailable，不伪造空结果 |
+| P2-4 | 反馈到 Strategy、AlertPlan 或研究假设新版本 | 核心草案链路完成 | ResearchHypothesisVersion 双仓储/Tool/Agent draft 已落地；跨 repository 原子事务仍需收口 |
+| P2-5 | 端到端复盘与浏览器验收 | 部分完成 | 已通过 Outcome Web golden path；仍需真实数据完成 Advice → Trade → Observation/Report → 新版本全链路 |
+
+执行顺序固定为 P2-0 → P2-1/P2-2 → P2-3 → P2-4 → P2-5。P2-1/P2-2 可以并行开发，
+但共享 schema 必须先由 P2-0 冻结；生产数据不足时允许返回 `partial/unavailable`，不允许用 fixture、
+mock、当前快照或零值关闭验收。上位 PRD 的 Phase 2 状态保持不变，待主线程在代码和证据全部验收后更新。
+
+### 2.7 总纲 Phase 3 状态与外部数据门禁（2026-08-21）
+
+Phase 3 四项能力按“代码状态”和“生产证据”分开记录。下表中的“代码完成”不代表真实数据验收完成；
+任何指标只在对应门禁完整时发布，否则只能返回审计、样本和 `partial/unavailable`。
+
+| Phase 3 项目 | 当前状态 | 主要代码/设计缺口 | 外部数据门禁 |
+|---|---|---|---|
+| 基本面因子与评分 | P3-0 Core、P3-1 mock、P3-2 deterministic score engine 已完成；真实 gate `not-ready` | append-only FinancialFact、score version/run/result 双仓储与迁移、显式 mock adapter、market/industry percentile、`sync/get_financial_facts`、`run/get_fundamental_score` 和 Web 权限门禁已落地；仍缺 P3-3 StrategyDslV2/evaluation workflow、P3-4 真实门禁与 P3-5 只读解释 UI | 现有 Tushare/Eastmoney/Sina 无财报发布时间、revision identity 或重述链；仍需真实 PIT adapter、覆盖证据、单位/期间映射与 restatement 样本，mock score 永远不能升级真实门禁 |
+| 严格时间切片回测 | 代码切片已落地；真实数据证据未闭合 | strict-backtest scope、身份冻结、门禁审计和执行模型已有设计/契约；真实停牌/涨跌停/退市、公司行动、历史 benchmark、费用/滑点和 evaluator identity 尚未形成持续生产证据 | PIT universe、DailyBar revision/checkpoint/cutoff、版本化费用、版本化滑点、每日可交易性、公司行动、同 cutoff benchmark、evaluator 版本/代码身份八项必须完整；缺失只输出门禁和 unavailable，不输出净收益/回撤/Sharpe/胜率 |
+| 组合归因与现金流口径净值 | 代码基本完成；长区间、跨日和大账户生产证据未闭合 | 现金流/公司行动/TWR/回撤/贡献归因、快照审计和 Web 基础链路已落地；`cashFlowComplete` 等完整性字段必须由账本覆盖事实推导，不能在成功计算时无条件置 true | 真实交易、持仓、入出金、分红、费用、拆股/送转、价格与 benchmark 全区间覆盖；权威交易日历、输入修订追溯、现金流完整性和连续 scheduler 运行；缺价/缺账本保持 partial/unavailable，不填 0 |
+| 可移植策略研究定义 | 最小 JSON 纵向切片已完成 | canonical/versioned manifest、能力/字段依赖、数据集/evaluator identity、时间切片/执行模型及 export/validate/import read tools 已落地；跨实例文件传输 UI/CLI 可后续扩展 | 导入包自带 schema/version、字段/能力依赖、数据集与 evaluator identity、时间切片和执行模型；缺能力返回 unsupported，未知 DSL 字段拒绝，不静默降级 |
+
+现实开发顺序：先完成 Phase 2 的契约与真实装配，再修正组合绩效完整性语义并积累 provider 证据；
+随后收口严格回测的八项门禁；只有 PIT 基本面事实和数据字典可用时才立项基本面因子；最后冻结可移植
+研究定义，以已稳定的 Strategy schema、数据版本和 evaluator identity 作为 canonical manifest。Phase 3
+任何一项的真实数据门禁都不能靠补测试、浏览器截图或一次性 mock smoke 关闭。
 
 ## 3. 依赖关系
 
@@ -271,7 +315,7 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 到期观察补全、facts-only 降级和通知结果。每周形成可靠性汇总；这些是运营监控与性能基线，
 不作为固定交易日数量的完成门禁。观察期间只允许扩大诊断和修复，不扩大自动推荐/通知默认范围。
 
-### 3.4 v0.10：账户绩效与组合归因（首个竖向切片已完成）
+### 3.4 v0.10：账户绩效与组合归因（持续快照代码链已完成）
 
 实现已按“契约与存储 → Tool → Report/Web/Agent”的竖向顺序完成首片；S3 观察期间只补审计与真实数据验收：
 
@@ -279,7 +323,7 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 2. ✅ 建立按账户隔离的每日估值输出，缺失价格进入 completeness，不填 0。
 3. ✅ 实现 TWR、最大回撤、benchmark/超额收益、已实现/未实现 PnL 与持仓贡献归因。
 4. ✅ 接入账户复盘页、收盘/开盘账户区块和 Agent 只读白名单；不生成调仓或交易。
-5. ✅ 增加输入指纹绩效快照与默认 benchmark 配置；✅ 完成 31 个交易日真实行情 + SQLite + 双账户/拆股/缺价 + 浏览器绩效页基础 smoke；✅ 完成真实 2 日 × 500 只完整及 3 日 × 500 只部分完成后台历史评估浏览器 smoke；✅ 完成周报浏览器回归、周报区间估值/TWR/回撤区块；✅ 收盘复盘通过 `list_watchlists` + `list_watchlist_changes` 生成分组变化汇总；✅ 完成真实 `600984.SH` 缺价验收（缺价不填 0）；⏳ 补更长历史任务与持续快照审计证据。
+5. ✅ 增加输入指纹绩效快照与默认 benchmark 配置；✅ 完成 31 个交易日真实行情 + SQLite + 双账户/拆股/缺价 + 浏览器绩效页基础 smoke；✅ 完成真实 2 日 × 500 只完整及 3 日 × 500 只部分完成后台历史评估浏览器 smoke；✅ 完成周报浏览器回归、周报区间估值/TWR/回撤区块；✅ 收盘复盘通过 `list_watchlists` + `list_watchlist_changes` 生成分组变化汇总；✅ 完成真实 `600984.SH` 缺价验收（缺价不填 0）；✅ 补齐盘后持续快照、断点幂等、输入修订追溯、逐日审计和 Web 审计入口；⏳ 继续积累真实 provider 长区间、大账户与跨日生产证据。
 
 本轮收口：账户绩效读取发现本地只缓存部分日线时，会向已配置行情 adapter 补齐缺失区间并合并已有事实；provider 失败仍保留已有数据并由计算器返回 `partial/unavailable`，不把部分缓存误报为完整快照。相关工具回归和 typecheck 已通过。
 
@@ -290,6 +334,20 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 `GET /api/accounts/:id/performance/snapshot-audit` 汇总交易日覆盖、缺失日期和 partial 原因，仍只读
 持久化事实，并改为按账户+区间重叠查询，避免长区间被最新非重叠快照遮蔽。独立真实 Sina 3 日空库
 smoke 已返回 1 条 `complete`/`available` 快照；跨交易日生产证据仍按真实运行持续积累，不以固定天数表述完成度。
+
+2026-08-20 收口：`snapshot-account-performance` 只通过 `ctx.tools.*` 顺序处理账户，默认 365 日、最多
+3,660 日和 1,000 账户；账户内行情序列最多 8 路并发。每个账户由原绩效 Tool 立即保存快照，中断重跑
+复用同指纹结果，事实变化只生成受影响账户的新版本。WorkflowRun 保存新建/复用、完整/部分/失败、
+价格序列、bars 和耗时汇总。Web 盘后 scheduler 仅在 write 与 external 同时显式开启时启动，并在缺少
+任一能力时记录原因；双开后于交易日 16:00 后触发。复盘页展示版本历史和按最新修订选择的逐日审计；
+旧 complete 不能遮蔽新 partial。Workflow 输入拒绝 `from > to`，显式账户按首次出现去重；真实行情源
+不可达或覆盖不足时仍保留 `partial/unavailable` 与 warning，不填 0。
+
+真实长区间验收已前移：独立文件 SQLite + Sina 对 2025-08-21～2026-08-20 自动生成 1 条盘后快照，
+2 个价格序列共读取持仓 242 bars、benchmark 242 bars，首跑约 3.46 秒；同事实手动 WorkflowRun
+重跑 `created=0/reused=1`，约 0.57 秒。真实 Chrome 复盘页可见 2 个版本、251 个日历预期交易日、
+9 个 partial 缺口和缺失标的 `600519.SH`，未填 0。缺口包含真实休市日，暴露内置交易日历与交易所
+休市事实仍需权威校准；跨真实交易日连续调度和大账户生产规模仍是证据缺口。
 
 ## 4. 第一优先级：完成部分实现
 
@@ -473,6 +531,15 @@ expectedContentHash 更新校验、索引失败可重建，以及 Web 写入门�
 - 资料中的工具调用指令不能改变 Agent 行为；
 - 数据缺失进入 unknowns/sourceStatus，不生成伪完整答案。
 
+#### Embedding 与跨模型评测扩展（已完成，2026-08-20）
+
+- FTS5 保持确定性基线；embedding capability 未配置、无有效覆盖或 provider 失败时稳定降级，并返回 `complete=false`；
+- chunk embedding 投影按 provider/model/dimensions/version 与 contentHash 失效，可从 Vault chunk 增量重建；
+- Drizzle/in-memory 双实现、共享 contract tests、schema/`ensureSchema`、Tool/Web/Agent 接线均已同步；
+- 固定 `research-retrieval-v1` 评测集逐模型报告 Recall@K、MRR、调用延迟、token 与估算成本；失败模型不补造指标；
+- 私人 chunk 正文和查询只有在 embedding capability 与 external（重建另需 write）显式开启时才发送给目录指定 provider；
+- 本地 fixture 只验证契约，真实 provider 质量/成本/延迟仍必须由实际配置和调用证据验收。
+
 ### M5：Strategy Workspace Phase C
 
 **状态：已完成（2026-08-09）**
@@ -531,10 +598,43 @@ replay 只读取该快照，缺失时保持 unknown，不直接把当前快照�
 本轮实现对应 `market_outlook` 的结构化摘要、行情与研究视图的 `limitUp` facts、涨停 marker
 和研究时间线；单日历史拉取失败进入 `status=unavailable/warnings`，不伪造正常空结果。
 
+### M7：Agent 协作体验 Phase 0+1
+
+**状态：已完成（2026-08-21）**
+
+**预计：10～14 日；依赖：无新领域实体，基于已落地的 runtime/白名单/trace 基础**
+
+详细设计：[Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md)。
+对应 PRD Phase 0（统一现有体验）与 Phase 1（可追溯研究助手）中尚未落地的产品层缺口。
+M7A～M7D 四切片均已交付：场景目录与确定性路由、计划卡、`agent_run` 部分失败契约、
+草案 display 投影与 Advice 确认卡、数据健康注入与 chat 取消链路；全量门禁与真实浏览器
+验收通过，实施偏差记录在设计文档 §11。
+
+#### 切片
+
+1. M7A 场景目录与路由（3～4 日）：`packages/tools` 场景目录作为研究/持仓/观察/复盘四类
+   场景 prompt 与白名单的单一事实来源；确定性路由纯函数；chat/`agent_run` 接入；route
+   header 与前端计划卡。
+2. M7B 回答结构与部分失败（2～3 日）：`agent_run` 输出扩展 `unknowns`/`partialFailures`，
+   trace 失败条目强制并集；基础安全规则收口为共享 `BASE_INSTRUCTIONS`。
+3. M7C 草案升级与 Advice 确认卡（3～4 日）：draft payload 增加 `display` 投影（目标对象、
+   字段来源、不支持/歧义项）；编辑 = 预填修正；`analyze_stock`/`analyze_position`/
+   `market_outlook` 以 advice 草案进入 chat，确认后走既有 `/api/tools/:name/call`。
+4. M7D 数据健康与取消（2～3 日）：`get_market_data_status` 进白名单与上下文摘要；chat
+   前端 AbortController 取消；真实浏览器验收。
+
+#### 验收
+
+- 四场景白名单全部注册校验通过，路由确定性测试覆盖命中/兜底/优先级；
+- `agent_run` 在模型隐瞒工具失败时仍强制披露 partialFailures；
+- chat 内 advice 草案确认前零 LLM 分析调用，确认后 Advice 卡完整展示并落库回看；
+- 数据健康异常进入回答与上下文；取消不伪造完整 assistant 消息；
+- Web 自动测试与真实浏览器验收通过。
+
 ## 6. 后续产品立项
 
-N1 已排入 v0.10；N2～N4 仍只有 PRD 或方向草案。每项在编码前先产出 PRD 决策补充、DDD、
-Tool/API schema、迁移与测试矩阵。
+N1 已排入 v0.10；N2 Phase 0+1 已立项为 M7（见 §5），N2 Phase 2 与 N3～N4 仍只有 PRD 或
+方向草案。每项在编码前先产出 PRD 决策补充、DDD、Tool/API schema、迁移与测试矩阵。
 
 ### N1：账户绩效与组合归因
 
@@ -552,19 +652,25 @@ Tool/API schema、迁移与测试矩阵。
 
 ### N2：Agent 协作体验 Phase 0～2
 
+**状态：Phase 0+1 已完成（2026-08-21，M7A～M7D）**，详细设计与实施偏差见
+[Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md)，
+按 M7A～M7D 切片进入排期（见 §5 M7）。Phase 2 闭环复盘助手（研究假设版本实体、
+Advice→Trade→Outcome 串联编排）与按场景评测集仍为候选方向，编码前另行补详细设计。
+
 - 统一研究、持仓、观察和复盘场景提示词与白名单；
 - 展示公开计划、工具轨迹、部分失败和长任务状态；
 - 串联 Research、Advice、Trade、Outcome、SignalObservation；
 - 用户确认后生成 Strategy、Watchlist 或 AlertPlan 修改草案；
 - 不新增平行 Agent 数据库或角色实体。
 
-### N3：Watchlist 自动 Strategy source
+### N3：Watchlist Strategy source（首个竖向切片已完成）
 
-- 必须显式 opt-in；
-- 只有 complete sync 可以结束缺失来源；
-- partial/failed 只标 stale，不制造全量退出；
-- 不影响 manual、AI、Portfolio 等其它来源；
-- 先解决旧 Watchlist PRD 与新 Strategy Workspace 决策冲突。
+- 持久化 Strategy → Watchlist 显式订阅、取消和审计历史；
+- 只有 published operational run 可以投影，complete sync 才能结束缺失来源；
+- partial/failed 只标 stale，不制造全量退出；空 complete 只在完整且可信零命中时结束全部来源；
+- manual、AI、Portfolio 和其它 Strategy source 相互隔离；重复 producerRun 幂等；
+- Tool、Workflow、SQLite/in-memory repository、Web/API/UI 与测试已接线；不自动生成 Advice、通知、AlertPlan
+  或 Trade。
 
 ### N4：基本面、资金流和 A 股短线事件雷达
 
@@ -580,10 +686,10 @@ Tool/API schema、迁移与测试矩阵。
 
 - **严格收益回测**：PIT universe、DailyBar revision replay 和 benchmark 事实已经具备基础能力，但
   费用、滑点、停牌/涨跌停可交易性、公司行动和代码版本仍未满足门禁；v0.9 只称历史评估。
-- **分钟行情**：需要独立 MinuteBar 详细设计，不能复用 PriceSnapshot。
+- **分钟行情**：Phase 4 已完成首个独立 MinuteBar 竖向切片（当前会话 Tushare + 30 天本地保留）；历史远端分钟补数仍受 provider capability 限制，不能复用 PriceSnapshot。
 - **继续扩多市场**：当前优先保障沪深 A 股目录、qfq 日线、策略和复盘闭环完整。
-- **Research 远端同步**：Git workflow 或 Obsidian Headless 只有在本地工作台稳定且有真实需求后
-  再设计。
+- **Obsidian Headless 同步**：Phase F 已选择更小且本地可验收的 Git-only workflow；Headless
+  仍不实现，不作为 fallback，需求变化时另行决策。
 - **自动交易**：永久不做；Strategy、AlertPlan、WatchTrigger、Advice 均不得自动下单。
 
 ## 8. PR 与实施节奏
@@ -667,4 +773,5 @@ M0～M6 已完成并退出当前排期。v0.9 完成必须同时满足：
 - 全市场数据准备和求值进入设计性能预算，所有阶段都有 WorkflowRun 审计。
 
 账户绩效 DDD、数据完整度规则、端到端场景和测试矩阵的首版已冻结并进入实现；剩余快照审计
-扩展需继续遵守同一契约。N2～N4 仍为候选方向，不与 v0.9/v0.10 并行扩张生产能力。
+扩展需继续遵守同一契约。N2 Phase 0+1 已立项为 M7 并按切片交付；N2 Phase 2、N3 剩余范围
+与 N4 仍为候选方向，不与 v0.9/v0.10 并行扩张生产能力。

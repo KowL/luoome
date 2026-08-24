@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
+import {
+  MarketSettingsStore,
+  SaveMarketSettingsSchema,
+  withRuntimeStatus,
+} from './market-settings.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -26,7 +30,7 @@ afterEach(() => {
 });
 
 describe('MarketSettingsStore', () => {
-  it('默认启用 Eastmoney → Tencent → Sina，并标记未配置的 Tushare', () => {
+  it('默认启用 Eastmoney → Tencent → Sina，并标记未配置的 Tushare 与 fuyao', () => {
     const { store } = createStore();
     expect(store.read()).toMatchObject({
       activeOrder: ['eastmoney', 'tencent', 'sina'],
@@ -40,6 +44,13 @@ describe('MarketSettingsStore', () => {
           priority: null,
           configured: false,
           configurationHint: '需要先配置 TUSHARE_TOKEN',
+        },
+        {
+          id: 'fuyao',
+          enabled: false,
+          priority: null,
+          configured: false,
+          configurationHint: '需要先配置 FUYAO_API_KEY',
         },
       ],
     });
@@ -76,5 +87,79 @@ describe('MarketSettingsStore', () => {
     writeFileSync(store.secretPath, 'LUOOME_MARKET_SOURCES=tushare\n');
     expect(store.runtimeEnv().LUOOME_MARKET_SOURCES).toBe('tushare');
     expect(store.read().activeOrder).toEqual(['tushare']);
+  });
+
+  it('配置态视图带全部 10 种能力的静态清单，bound 与 manifest 一致', () => {
+    const { store } = createStore();
+    const view = store.read();
+    const sina = view.sources.find((source) => source.id === 'sina');
+    expect(sina?.capabilities).toHaveLength(10);
+    expect(
+      sina?.capabilities.find((capability) => capability.capability === 'daily-bars'),
+    ).toMatchObject({ bound: true, label: '日 K' });
+    expect(
+      sina?.capabilities.find((capability) => capability.capability === 'quote'),
+    ).toMatchObject({ bound: false });
+    // 无运行态叠加时：enabled → unknown，disabled → off
+    expect(sina?.health).toBe('unknown');
+    expect(view.sources.find((source) => source.id === 'tushare')?.health).toBe('off');
+  });
+});
+
+describe('withRuntimeStatus', () => {
+  const baseView = () => {
+    const { store } = createStore();
+    return store.read();
+  };
+
+  it('按 source:capability 叠加运行态，行级健康取最差状态', () => {
+    const view = withRuntimeStatus(baseView(), [
+      {
+        dataset: 'quote',
+        source: 'eastmoney',
+        freshness: 'fresh',
+        lastSuccessAt: new Date('2026-08-22T01:00:00.000Z'),
+        dataAsOf: new Date('2026-08-22T01:00:00.000Z'),
+      },
+      {
+        dataset: 'daily-bars',
+        source: 'eastmoney',
+        freshness: 'unavailable',
+        lastErrorKind: 'network',
+      },
+    ]);
+    const eastmoney = view.sources.find((source) => source.id === 'eastmoney');
+    expect(
+      eastmoney?.capabilities.find((capability) => capability.capability === 'quote'),
+    ).toMatchObject({
+      state: 'fresh',
+      lastSuccessAt: '2026-08-22T01:00:00.000Z',
+      dataAsOf: '2026-08-22T01:00:00.000Z',
+    });
+    expect(
+      eastmoney?.capabilities.find((capability) => capability.capability === 'daily-bars'),
+    ).toMatchObject({ state: 'unavailable', lastErrorKind: 'network' });
+    expect(eastmoney?.health).toBe('unavailable');
+    // 未观测到的 bound capability 回 unknown
+    expect(
+      eastmoney?.capabilities.find((capability) => capability.capability === 'search')?.state,
+    ).toBe('unknown');
+  });
+
+  it('disabled 源与非行情域 dataset 不叠加运行态', () => {
+    const view = withRuntimeStatus(baseView(), [
+      { dataset: 'daily-bars', source: 'tushare', freshness: 'fresh' },
+      { dataset: 'news', source: 'eastmoney', freshness: 'fresh' },
+    ]);
+    const tushare = view.sources.find((source) => source.id === 'tushare');
+    expect(tushare?.health).toBe('off');
+    expect(tushare?.capabilities.every((capability) => capability.state === undefined)).toBe(true);
+    // 'news' 不是行情 capability，eastmoney 的 capabilities 不受影响
+    const eastmoney = view.sources.find((source) => source.id === 'eastmoney');
+    expect(
+      eastmoney?.capabilities.every((capability) =>
+        capability.bound ? capability.state === 'unknown' : capability.state === undefined,
+      ),
+    ).toBe(true);
   });
 });

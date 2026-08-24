@@ -15,6 +15,9 @@ export const StrategyDailyCycleInput = z.object({
   leaseMinutes: z.number().int().min(5).max(240).default(30),
   asOf: z.coerce.date().optional(),
   concurrency: z.number().int().min(1).max(64).default(8),
+  maxStalenessTradingDays: z.number().int().min(0).max(30).default(1),
+  maxRetries: z.number().int().min(0).max(5).default(2),
+  requestTimeoutMs: z.number().int().min(500).max(120_000).default(20_000),
 });
 export type StrategyDailyCycleInputT = z.infer<typeof StrategyDailyCycleInput>;
 
@@ -26,6 +29,17 @@ const CycleItemSchema = z.object({
   runId: z.string().optional(),
   checkpointId: z.string().optional(),
   insightProvider: z.string().optional(),
+  watchlistSync: z
+    .object({
+      status: z.enum(['complete', 'partial', 'failed', 'skipped']),
+      complete: z.number().int().nonnegative().optional(),
+      partial: z.number().int().nonnegative().optional(),
+      failed: z.number().int().nonnegative().optional(),
+      skipped: z.number().int().nonnegative().optional(),
+      reason: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
   adviceCount: z.number().int().nonnegative().optional(),
   notificationFailed: z.number().int().nonnegative().optional(),
   reason: z.string().optional(),
@@ -106,6 +120,17 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     let runId: string | undefined;
     let checkpointId: string | undefined;
     let insightProvider: string | undefined;
+    let watchlistSync:
+      | {
+          status: 'complete' | 'partial' | 'failed' | 'skipped';
+          complete?: number;
+          partial?: number;
+          failed?: number;
+          skipped?: number;
+          reason?: string;
+          error?: string;
+        }
+      | undefined;
     let adviceCount: number | undefined;
     let notificationFailed: number | undefined;
     let leaseRenewals = 0;
@@ -116,6 +141,8 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           availableCount: number;
           failedCount: number;
           coverageRatio: number;
+          fallbackUsed: boolean;
+          providers: string[];
         }
       | undefined;
     let dataPreparationPerformance: Record<string, unknown> | undefined;
@@ -135,6 +162,21 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           scanned: number;
           completed: number;
           pending: number;
+          baselines: {
+            available: number;
+            unavailable: number;
+            providers: Record<string, number>;
+          };
+          byHorizon: Record<
+            't1' | 't3' | 't5' | 't20',
+            {
+              created: number;
+              skipped: number;
+              scanned: number;
+              completed: number;
+              pending: number;
+            }
+          >;
         }
       | undefined;
     let benchmarkSync:
@@ -189,6 +231,21 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     let scheduleLeaseLost = false;
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     let heartbeatInFlight = false;
+    const renewScheduleLease = async (): Promise<boolean> => {
+      if (scheduleLeaseLost) return false;
+      const renewed = await ctx.tools.renew_strategy_schedule_claim.execute({
+        scheduleId: schedule.id,
+        owner,
+        fence: lease.fence,
+        leaseMinutes: input.leaseMinutes,
+      });
+      if (!renewed.ok || !renewed.data.renewed) {
+        scheduleLeaseLost = true;
+        return false;
+      }
+      leaseRenewals += 1;
+      return true;
+    };
     const stopHeartbeat = (): void => {
       if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
       heartbeatTimer = undefined;
@@ -244,6 +301,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             publication,
             summary: runSummary,
             insightProvider,
+            watchlistSync,
             adviceCount,
             notificationFailed,
             leaseRenewals,
@@ -365,13 +423,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       });
       continue;
     }
-    const renewed = await ctx.tools.renew_strategy_schedule_claim.execute({
-      scheduleId: schedule.id,
-      owner,
-      fence: lease.fence,
-      leaseMinutes: input.leaseMinutes,
-    });
-    if (!renewed.ok || !renewed.data.renewed) {
+    if (!(await renewScheduleLease())) {
       await finishAudit({
         strategyId: schedule.strategyId,
         scheduleId: schedule.id,
@@ -381,7 +433,6 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       });
       continue;
     }
-    leaseRenewals += 1;
     heartbeatTimer = setInterval(
       () => {
         if (scheduleLeaseLost || heartbeatInFlight) return;
@@ -452,6 +503,9 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       strategyId: schedule.strategyId,
       cachePolicy: 'reuse-fresh',
       concurrency: input.concurrency,
+      maxStalenessTradingDays: input.maxStalenessTradingDays,
+      maxRetries: input.maxRetries,
+      requestTimeoutMs: input.requestTimeoutMs,
       ...(input.asOf === undefined ? {} : { asOf: input.asOf }),
     });
     if (scheduleLeaseLost) {
@@ -479,6 +533,8 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           prepared.data.checkpoint.requestedCount === 0
             ? 0
             : prepared.data.checkpoint.availableCount / prepared.data.checkpoint.requestedCount,
+        fallbackUsed: prepared.data.checkpoint.providerStatuses.some((item) => item.fallbackUsed),
+        providers: prepared.data.checkpoint.providerStatuses.map((item) => item.provider),
       };
       dataPreparationPerformance = prepared.data.performance;
       providerStatuses = prepared.data.checkpoint.providerStatuses.map((item) => ({
@@ -487,6 +543,12 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         ...(item.errorKinds[0] === undefined ? {} : { errorKind: item.errorKinds[0] }),
         ...(item.latencyMs === undefined ? {} : { latencyMs: item.latencyMs }),
       }));
+      if (!(await renewScheduleLease())) {
+        status = 'failed';
+        reason = 'lease_lost_before_commit';
+      }
+    }
+    if (status !== 'failed' && checkpointId !== undefined) {
       beginPhase('run');
       const run = await ctx.tools.run_strategy.execute({
         strategyId: schedule.strategyId,
@@ -518,10 +580,35 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         } else if (run.data.run.publication?.status !== 'published') {
           status = 'partial';
           reason = `StrategyRun ${run.data.run.publication?.status ?? 'without-publication'}，不创建生产观察/建议`;
-        } else if (scheduleLeaseLost) {
+        } else if (!(await renewScheduleLease())) {
           status = 'failed';
           reason = 'lease_lost_before_commit';
         } else {
+          const synced = await ctx.tools.sync_strategy_watchlist_subscriptions.execute({
+            strategyId: schedule.strategyId,
+            producerRunId: run.data.run.id,
+          });
+          if (!synced.ok) {
+            status = 'partial';
+            reason = errorText(synced.error);
+            watchlistSync = { status: 'failed', error: reason };
+          } else {
+            watchlistSync = {
+              status: synced.data.status,
+              complete: synced.data.complete,
+              partial: synced.data.partial,
+              failed: synced.data.failed,
+              skipped: synced.data.skipped,
+              ...(synced.data.reason === undefined ? {} : { reason: synced.data.reason }),
+            };
+            if (synced.data.status === 'partial') {
+              status = 'partial';
+              reason = 'Strategy→Watchlist source partial sync；未根据缺失集合结束来源';
+            } else if (synced.data.status === 'failed') {
+              status = 'partial';
+              reason = 'Strategy→Watchlist source sync failed；未改变其它来源';
+            }
+          }
           beginPhase('observations');
           const candidates = await ctx.tools.create_strategy_observation_candidates.execute({
             runId,
@@ -539,6 +626,13 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
               scanned: 0,
               completed: 0,
               pending: 0,
+              baselines: candidates.data.baselines,
+              byHorizon: Object.fromEntries(
+                (['t1', 't3', 't5', 't20'] as const).map((horizon) => [
+                  horizon,
+                  { ...candidates.data.horizons[horizon], scanned: 0, completed: 0, pending: 0 },
+                ]),
+              ) as NonNullable<typeof observationSummary>['byHorizon'],
             };
             if (input.asOf !== undefined) {
               benchmarkSync = {
@@ -584,11 +678,23 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             const completed = await ctx.tools.complete_strategy_observations.execute({
               limit: 1000,
             });
+            const currentObservationSummary = observationSummary;
             observationSummary = {
-              ...observationSummary,
+              ...currentObservationSummary,
               scanned: completed.ok ? completed.data.scanned : 0,
               completed: completed.ok ? completed.data.completed : 0,
               pending: completed.ok ? completed.data.pending : 0,
+              byHorizon: Object.fromEntries(
+                (['t1', 't3', 't5', 't20'] as const).map((horizon) => [
+                  horizon,
+                  {
+                    ...currentObservationSummary.byHorizon[horizon],
+                    ...(completed.ok
+                      ? completed.data.byHorizon[horizon]
+                      : { scanned: 0, completed: 0, pending: 0 }),
+                  },
+                ]),
+              ) as NonNullable<typeof observationSummary>['byHorizon'],
             };
             if (!completed.ok || completed.data.pending > 0) {
               status = 'partial';
@@ -613,7 +719,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
               if (scheduleLeaseLost) {
                 reason = 'lease_lost_before_commit';
                 status = 'failed';
-              } else if (schedule.recommendationPolicy?.enabled) {
+              } else if (schedule.recommendationPolicy?.enabled && (await renewScheduleLease())) {
                 const recommendations = await ctx.tools.generate_strategy_recommendations.execute({
                   strategyId: schedule.strategyId,
                   runId,
@@ -675,6 +781,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       ...(runId === undefined ? {} : { runId }),
       ...(checkpointId === undefined ? {} : { checkpointId }),
       ...(insightProvider === undefined ? {} : { insightProvider }),
+      ...(watchlistSync === undefined ? {} : { watchlistSync }),
       ...(adviceCount === undefined ? {} : { adviceCount }),
       ...(notificationFailed === undefined ? {} : { notificationFailed }),
       ...(reason === undefined ? {} : { reason }),

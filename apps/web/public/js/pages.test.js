@@ -4,6 +4,7 @@ import {
   boardStats,
   errorKindLabel,
   filterAdvices,
+  outcomeInputOf,
   routeStockId,
   sortBoardItems,
   watchRunSummaryText,
@@ -59,6 +60,41 @@ describe('行情关联深链接', () => {
     expect(filterAdvices(advices, 'all', '002594.SZ')).toHaveLength(2);
     expect(filterAdvices(advices, 'buy', '002594.SZ')).toEqual([advices[0]]);
     expect(filterAdvices(advices, 'buy', null)).toEqual([advices[0], advices[2]]);
+  });
+});
+
+describe('Advice outcome 回填契约', () => {
+  it('保留 partially_followed 并透传复盘字段', () => {
+    expect(
+      outcomeInputOf({
+        outcome: 'partially_followed',
+        pnl: '-12.5',
+        benchmarkPnl: '4',
+        holdingHours: '6',
+        tradeIds: 'trade-1, trade-2',
+        notes: '只执行一半',
+      }),
+    ).toEqual({
+      outcome: 'partially_followed',
+      pnl: -12.5,
+      benchmarkPnl: 4,
+      holdingHours: 6,
+      tradeIds: ['trade-1', 'trade-2'],
+      notes: '只执行一半',
+    });
+  });
+
+  it('盈亏留空时保持 unknown，不自动写成 0', () => {
+    expect(
+      outcomeInputOf({
+        outcome: 'partially_followed',
+        pnl: '',
+        benchmarkPnl: '',
+        holdingHours: '',
+        tradeIds: '',
+        notes: '',
+      }),
+    ).toEqual({ outcome: 'partially_followed' });
   });
 });
 

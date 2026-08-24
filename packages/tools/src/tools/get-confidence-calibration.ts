@@ -1,7 +1,6 @@
 import {
   type Advice,
   type AdviceOutcome,
-  type AdviceRepository,
   AdviceSubjectKindSchema,
   type Money,
   MoneySchema,
@@ -76,19 +75,6 @@ const bucketIndexOf = (confidence: number): number => {
   // confidence ∈ [0, 100]；BUCKET_LABELS 第 9 项包含 90-100。
   const idx = Math.min(9, Math.floor(confidence / 10));
   return Math.max(0, idx);
-};
-
-/**
- * 与 get_advice_stats 共用：core AdviceRepository 未声明 outcome reader，
- * db 实现额外提供 getOutcome()。通过结构化类型守护做适配。
- */
-interface OutcomeReader {
-  getOutcome(adviceId: string): Promise<AdviceOutcome | null>;
-}
-
-const asOutcomeReader = (repo: AdviceRepository): OutcomeReader | null => {
-  const candidate = repo as unknown as Partial<OutcomeReader>;
-  return typeof candidate.getOutcome === 'function' ? (repo as unknown as OutcomeReader) : null;
 };
 
 const zeroMoney = (): Money => money(0);
@@ -166,19 +152,8 @@ export const getConfidenceCalibrationTool = defineTool({
     });
 
     const outcomes = new Map<string, AdviceOutcome>();
-    const reader = asOutcomeReader(ctx.repos.advice);
-    if (reader === null) {
-      ctx.logger.warn(
-        'get_confidence_calibration: advice repo 不支持 getOutcome，outcome 维度按空统计',
-        { tool: 'get_confidence_calibration' },
-      );
-    } else {
-      await Promise.all(
-        advices.map(async (advice) => {
-          const outcome = await reader.getOutcome(advice.id);
-          if (outcome !== null) outcomes.set(advice.id, outcome);
-        }),
-      );
+    for (const outcome of await ctx.repos.advice.listOutcomes()) {
+      outcomes.set(outcome.adviceId, outcome);
     }
 
     const buckets = computeBuckets(advices, outcomes);

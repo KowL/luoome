@@ -44,6 +44,8 @@ if (env.LUOOME_EXPOSE_TRADE === 'true') {
 
 研究正文和全文搜索属于私人研究能力，MCP 暴露时还必须显式设置 `LUOOME_EXPOSE_RESEARCH=true`；未开启时只允许不含正文的本地索引页面。Vault 正文、frontmatter、附件名和搜索片段均视为不可信数据，不进入 system prompt，不输出绝对 Vault 路径或凭证。
 
+Research embedding 默认关闭。只有 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 才挂载外部 adapter，且查询/评测仍要求 `external`，chunk 投影重建同时要求 `external + write`。模型目录只记录 provider endpoint、model identity、维度、version 与 `apiKeyEnv` 名称；密钥从环境读取。查询、私人正文、向量和密钥不进入日志或错误。混合检索中的正文继续是 tool data，不是指令；结果必须保留 EvidenceRef、反证、风险、unknowns 和 prompt-injection 警告。
+
 ## Advisor 专属安全约束
 
 ### advice 永远不直接触发 trade
@@ -141,6 +143,11 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 
 启动时校验：trade 必须 false，否则启动失败。
 
+Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须在启动层独立验证其完整副作用集合。
+账户绩效盘后 scheduler 会读取外部行情并持久化日线、快照和 WorkflowRun，因此只有
+`LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启时才允许启动；缺任一项时
+保持停用并记录原因。不得通过修改 Tool 的单一 `sideEffect` 标签掩盖组合副作用。
+
 ## 内置 agent loop
 
 `agent_run` 分类为 `external`，默认不通过 MCP 暴露。其运行时能力由 tools 包的显式白名单构造：
@@ -174,6 +181,40 @@ stdio 假设**宿主可信**。仅本地进程可连，无网络暴露。
   `https://open.feishu.cn/open-apis/bot/v2/hook/...`，避免测试端点成为任意 URL 请求入口
 - logger 自动脱敏：`Authorization: Bearer xxx` → `Authorization: Bearer ***`、`sk-...` → `sk-***`、飞书 webhook URL → `.../***`
 - 报告脱敏：持仓金额 / 数量可显示，成本价可选隐藏（`LUOOME_HIDE_COST=true`）
+
+## Research Vault Git 远端同步
+
+Research Vault Phase F 只提供独立 Git workflow，不把网络同步混进 Vault Adapter，也不实现
+Obsidian Headless fallback。它默认关闭；只有 `LUOOME_RESEARCH_REMOTE_SYNC=git` 才装配，Web
+还必须同时开启 `LUOOME_EXPOSE_WRITE=true`、`LUOOME_EXPOSE_EXTERNAL=true`，通过同源 Origin
+检查并由用户在确认框明确触发。真正执行 pull 的 Tool 是 workflow-only，不进入通用 registry/MCP。
+
+安全协议：
+
+- Git adapter 不依赖 Obsidian adapter 的装配结果，自身拒绝文件系统根、用户 home、当前项目根和
+  `.obsidian` 保留目录；设置热更新撤销 Git opt-in 时立即清除旧 adapter；
+- pull 前和 fetch 后都要求 tracked/untracked 工作树完全干净；detached HEAD、缺 upstream、未完成
+  merge/rebase/cherry-pick/revert/bisect、分叉或冲突均停止；
+- ignored 文件不作为普通 dirty 状态一刀切；fast-forward 前用 NUL 分隔路径比较 incoming 变更与
+  ignored-untracked 文件，只有同路径或文件/目录祖先冲突才停止，且不改变 HEAD；
+- 只执行显式 remote fetch 和本地 `merge --ff-only`；禁止自动 clone、commit、push、reset、rebase、
+  选边或冲突解决；hooks、submodule recurse、tags 和交互式凭证提示关闭；
+- remote 只接受 HTTPS、SSH 或本地路径；拒绝 HTTP、remote helper `ext::`、自定义 uploadpack 和
+  HTTPS URL 内嵌认证信息；
+- Git 凭证必须由本机 credential helper/SSH agent 管理。remote URL、stderr、路径和凭证不进入
+  Tool 输出、WorkflowRun 或日志；状态接口只返回是否配置和 provider；
+- fetch 支持超时与取消，并终止整个 Git 子进程组。进入本地 fast-forward 后不响应取消或强制
+  超时，以免工作树停在半更新状态；
+- fast-forward 前创建 Git bundle；backupRoot 按最近存在祖先解析真实路径且必须位于 Vault 外，
+  防止备份本身污染工作树。目录权限 `0700`、文件 `0600`。备份失败则不更新，备份不自动删除。
+  恢复必须先 `git bundle verify`，在新的恢复目录检查后由用户人工决定，不自动 reset；
+- Web POST 只接受合法 JSON 对象；畸形或空请求体在进入 external workflow 前返回 `invalid_input`；
+- Git 成功后仍以 Vault 文件为权威来源，通过既有 `sync_research_vault` 重建索引。索引失败记
+  `partial`；Git 安全边界、取消或超时失败记 `failed`；成功记 `succeeded`。WorkflowRun 只保留
+  provider 状态、计数和 opaque backupId。
+
+远端仓库是否公开无法由 luoome 判断。Web 固定提示用户只使用私有仓库，并把 bundle 备份按私人
+投资资料保护。
 
 ## 写入类工具的二次确认
 
@@ -248,17 +289,6 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
   `0600`，读取接口仅返回是否已配置，禁止回显、日志记录或
   注入页面 DOM
 - **advice 回填**：`record_advice_outcome` 调用记录到 audit，但 outcome 数据本身不强制校验（用户主观回填）
-
-## 用户教育
-
-TUI / Web / CLI 在 advice 显示界面顶部必须固定显示：
-
-```txt
-─────────────────────────────────────────
-本建议由 AI 生成，不构成投资建议。
-投资有风险，决策需自行承担。
-─────────────────────────────────────────
-```
 
 ## 报告漏洞
 

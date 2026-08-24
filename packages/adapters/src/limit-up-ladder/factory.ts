@@ -11,14 +11,17 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { EastmoneyLimitUpLadderAdapter } from './eastmoney.js';
+import { EastmoneySource } from '../eastmoney/source.js';
+import { type AnyBinding, SourceRegistry } from '../source-registry.js';
 import { LimitUpLadderManager } from './manager.js';
+import type { LimitUpLadderCapabilityMap } from './types.js';
 
 /**
  * 连板天梯 manager 装配根（docs/ddd/limit-up-ladder-detailed-design.md §5）。
  *
  * 仿 `createMarketAdapterFromEnv`（market/factory.ts）的位置与签名风格。
- * - 当前只支持东方财富公开涨停池，无鉴权
+ * - LUOOME_LIMIT_UP_LADDER_SOURCES：逗号分隔、有序、去重；未知源启动期抛错；缺省 eastmoney
+ *   （docs/ddd/source-pluggability-and-observation-design.md §4.6）
  * - 通过显式数据源配置装配；未知或重复来源在启动时失败
  * - 返回的 manager 同时满足 core `LimitUpLadderManagerLike` 接口（structural typing）
  */
@@ -27,31 +30,59 @@ export interface CreateLimitUpLadderManagerDeps {
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly fetchImpl?: typeof fetch;
+  /** 组装根共享的供应商实例；注入时不再自构（§4.6）。 */
+  readonly sources?: { readonly eastmoney?: EastmoneySource };
 }
+
+/** 已注册的连板天梯数据源（封闭启动校验；core 端口侧是开放 SourceIdSchema）。 */
+const LimitUpLadderSourcesSchema = z
+  .array(z.literal('eastmoney'))
+  .min(1, '至少启用一个连板天梯数据源')
+  .superRefine((sources, ctx) => {
+    if (new Set(sources).size !== sources.length) {
+      ctx.addIssue({ code: 'custom', message: '连板天梯数据源不能重复' });
+    }
+  });
+
+const limitUpLadderSourcesFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+): readonly 'eastmoney'[] => {
+  const raw = env.LUOOME_LIMIT_UP_LADDER_SOURCES?.trim();
+  return LimitUpLadderSourcesSchema.parse(
+    raw === undefined || raw.length === 0
+      ? ['eastmoney']
+      : raw.split(',').map((source) => source.trim().toLowerCase()),
+  );
+};
 
 export const createLimitUpLadderManagerFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   deps: CreateLimitUpLadderManagerDeps,
 ): LimitUpLadderManagerLike => {
   const clock = deps.clock ?? (() => new Date());
-  const raw = env.LUOOME_LIMIT_UP_LADDER_SOURCES?.trim();
-  const [source] = z
-    .tuple([z.literal('eastmoney')], {
-      error: '连板天梯当前必须且只能启用 eastmoney',
-    })
-    .parse(
-      raw === undefined || raw.length === 0
-        ? ['eastmoney']
-        : raw.split(',').map((source) => source.trim().toLowerCase()),
-    );
+  const order = limitUpLadderSourcesFromEnv(env);
+  const eastmoney = deps.sources?.eastmoney ?? new EastmoneySource({ clock, ...fetchOpt(deps) });
+
+  const bindings = order.flatMap((source) => {
+    switch (source) {
+      case 'eastmoney':
+        return eastmoneyBindings(eastmoney);
+      default:
+        throw new Error(`不支持的数据源：${String(source satisfies never)}`);
+    }
+  });
+  const registry = new SourceRegistry<LimitUpLadderCapabilityMap>(bindings, clock);
 
   return new LimitUpLadderManager({
-    primary: buildLimitUpLadderSource(source, deps.fetchImpl),
+    registry,
     logger: deps.logger,
     clock,
     holidaysProvider: async () => loadHolidaysFromEnv(env),
   });
 };
+
+const fetchOpt = (deps: CreateLimitUpLadderManagerDeps) =>
+  deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl };
 
 /**
  * 连板天梯与 watch 共用同一份三层节假日历：内置 → 文件 → env。
@@ -79,12 +110,14 @@ const loadHolidaysFromEnv = (
   );
 };
 
-const buildLimitUpLadderSource = (
-  source: 'eastmoney',
-  fetchImpl: typeof fetch | undefined,
-): EastmoneyLimitUpLadderAdapter => {
-  switch (source) {
-    case 'eastmoney':
-      return new EastmoneyLimitUpLadderAdapter(fetchImpl);
-  }
-};
+/** dataAsOf = source 返回的 observedAt；合法空池也是 success（§6.2）。 */
+const eastmoneyBindings = (source: EastmoneySource): AnyBinding<LimitUpLadderCapabilityMap>[] => [
+  {
+    capability: 'limit-up-ladder',
+    source: 'eastmoney',
+    coverage: ['CN_A_SHARES_SH_SZ'],
+    configurationReady: true,
+    execute: ({ date, days }) => source.fetchLadder(date, { days }),
+    observationOf: (result) => ({ outcome: 'success', dataAsOf: result.observedAt }),
+  },
+];

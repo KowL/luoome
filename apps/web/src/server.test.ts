@@ -3,14 +3,22 @@
 // ctx 用 buildTestContext（in-memory repos）注入 createWebApp，不走真实 SQLite 文件。
 
 import { Database } from 'bun:sqlite';
-import { afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, it, mock } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { NotificationManager } from '@luoome/adapters';
-import { TEST_ACCOUNT } from '@luoome/adapters/testing';
-import type { AgentCallableTool, Money, ToolContext } from '@luoome/core';
+import { EastmoneySource, MockFundamentalDataAdapter, NotificationManager } from '@luoome/adapters';
+import { createTestMarketDataManager, TEST_ACCOUNT } from '@luoome/adapters/testing';
+import type {
+  AgentCallableTool,
+  Money,
+  ResearchEmbeddingAdapterLike,
+  ResearchVaultAdapterLike,
+  ResearchVaultGitSyncAdapterLike,
+  SourceStatus,
+  ToolContext,
+} from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
@@ -22,7 +30,7 @@ import type { ChatStreamRuntime } from './chat.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
-import { buildWebContext, createWebApp } from './server.js';
+import { buildWebContext, createWebApp, startWeb } from './server.js';
 
 let app: Hono;
 let appCtx: ToolContext;
@@ -58,6 +66,10 @@ describe('Web 信息架构', () => {
     expect(html).toContain('data-route="watchlists"');
     expect(html).toContain('data-route="alerts"');
     expect(html).toContain('id="btn-dashboard-watch-run"');
+    expect(html).toContain('id="review-performance-snapshots-table"');
+    expect(html).toContain('id="review-performance-audit-table"');
+    expect(html).toContain('id="research-remote-sync-btn"');
+    expect(html).toContain('仅在工作树干净且可 fast-forward 时拉取');
   });
 });
 
@@ -120,7 +132,11 @@ describe('账户绩效 API', () => {
       ),
     );
     expect(audit.status).toBe(200);
-    expect(await audit.json()).toMatchObject({
+    const auditBody = (await audit.json()) as {
+      ok: boolean;
+      data?: { audit: { days: Array<Record<string, unknown>> } };
+    };
+    expect(auditBody).toMatchObject({
       ok: true,
       data: {
         audit: {
@@ -129,9 +145,26 @@ describe('账户绩效 API', () => {
           observedTradingDays: 3,
           completeness: 'complete',
           missingDates: [],
+          revisionDayCount: 0,
         },
       },
     });
+    expect(auditBody.data?.audit.days[0]).toMatchObject({
+      date: '2026-07-01',
+      completeness: 'complete',
+      revisionCount: 1,
+    });
+
+    const currentSnapshots = await snapshotApp.fetch(
+      new Request('http://test/api/account/performance/snapshots?limit=10'),
+    );
+    expect(currentSnapshots.status).toBe(200);
+    const currentAudit = await snapshotApp.fetch(
+      new Request(
+        'http://test/api/account/performance/snapshot-audit?from=2026-07-01&to=2026-07-03',
+      ),
+    );
+    expect(currentAudit.status).toBe(200);
   });
 });
 
@@ -157,6 +190,70 @@ describe('Strategy 可靠性汇总 API', () => {
 });
 
 describe('研究 Vault API', () => {
+  it('embedding 状态可读，混合检索与重建分别要求 external / external+write', async () => {
+    const plainContext = await buildTestContext();
+    const plainApp = createWebApp(plainContext, { exposeExternal: false, exposeWrite: false });
+    const status = await plainApp.fetch(new Request('http://test/api/research/embeddings/status'));
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ ok: true, data: { configured: false } });
+
+    const deniedSearch = await plainApp.fetch(
+      new Request('http://test/api/research/search/hybrid', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '现金流' }),
+      }),
+    );
+    expect(deniedSearch.status).toBe(403);
+
+    const externalOnly = createWebApp(plainContext, {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    const deniedRebuild = await externalOnly.fetch(
+      new Request('http://test/api/research/embeddings/rebuild', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(deniedRebuild.status).toBe(403);
+
+    const adapter: ResearchEmbeddingAdapterLike = {
+      name: 'web-fixture',
+      defaultModel: 'fixture',
+      listModels: () => [
+        {
+          name: 'fixture',
+          identity: { provider: 'fixture', model: 'fixture', dimensions: 2, version: 'v1' },
+        },
+      ],
+      embed: async ({ texts }) => ({
+        identity: { provider: 'fixture', model: 'fixture', dimensions: 2, version: 'v1' },
+        vectors: texts.map(() => [1, 0]),
+        usage: { latencyMs: 1 },
+      }),
+    };
+    const configuredApp = createWebApp(
+      { ...plainContext, researchEmbedding: adapter },
+      {
+        exposeExternal: true,
+        exposeWrite: true,
+      },
+    );
+    const configuredStatus = await configuredApp.fetch(
+      new Request('http://test/api/research/embeddings/status'),
+    );
+    expect(await configuredStatus.json()).toMatchObject({
+      ok: true,
+      data: {
+        configured: true,
+        defaultModel: 'fixture',
+        models: [{ state: { status: 'empty', embeddedChunks: 0, expectedChunks: 0 } }],
+      },
+    });
+  });
+
   it('按主题和显式股票 SubjectLink 查询可重建索引', async () => {
     const now = new Date('2026-08-01T00:00:00.000Z');
     await appCtx.repos.researchIndex.applyIndexBatch({
@@ -201,9 +298,17 @@ describe('研究 Vault API', () => {
 
     const stockView = (await (
       await app.fetch(new Request('http://test/api/research/stocks/600519.SH'))
-    ).json()) as { ok: boolean; data?: { topics: Array<{ id: string }> } };
+    ).json()) as {
+      ok: boolean;
+      data?: {
+        topics: Array<{ id: string }>;
+        profile: { status: string; evidence: Array<unknown>; unknowns: Array<string> };
+      };
+    };
     expect(stockView.ok).toBe(true);
     expect(stockView.data?.topics.map((topic) => topic.id)).toContain('topic_web_industry');
+    expect(stockView.data?.profile).toMatchObject({ status: 'partial' });
+    expect(stockView.data?.profile.evidence.length).toBeGreaterThan(0);
   });
 });
 
@@ -349,6 +454,125 @@ describe('报告 API', () => {
 });
 
 describe('Web runtime bootstrap', () => {
+  it('基本面 adapter 默认不注入，显式 mock 重建 context 后才注入且保持 not-ready', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-fundamental-context-'));
+    const baseEnv = {
+      LUOOME_MARKET_PROVIDER: 'real',
+      LUOOME_MARKET_SOURCES: 'sina',
+    };
+    try {
+      const defaultContext = await buildWebContext(join(dir, 'default.db'), baseEnv);
+      expect(defaultContext.fundamentalData).toBeUndefined();
+
+      const mockContext = await buildWebContext(join(dir, 'mock.db'), {
+        ...baseEnv,
+        LUOOME_FUNDAMENTAL_PROVIDER: 'mock',
+      });
+      expect(mockContext.fundamentalData).toMatchObject({
+        name: 'mock-fundamental',
+        source: 'mock-fundamental-pit-fixture',
+        gateStatus: 'not-ready',
+        gate: { status: 'not-ready' },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('账户绩效 scheduler 仅在 write 与 external 双显式开启时启动', async () => {
+    const previousWrite = process.env.LUOOME_EXPOSE_WRITE;
+    const previousExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
+    const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
+    const previousMarketSources = process.env.LUOOME_MARKET_SOURCES;
+    const originalInfo = console.info;
+    const logs: string[] = [];
+    delete process.env.LUOOME_EXPOSE_WRITE;
+    delete process.env.LUOOME_EXPOSE_EXTERNAL;
+    process.env.LUOOME_MARKET_PROVIDER = 'real';
+    process.env.LUOOME_MARKET_SOURCES = 'sina';
+    console.info = (...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+    try {
+      const cases = [
+        {
+          label: 'default',
+          capabilities: {},
+          expectedStarts: 0,
+          expectedState: 'write=未开启，external=未开启',
+        },
+        {
+          label: 'write-only',
+          capabilities: { exposeWrite: true, exposeExternal: false },
+          expectedStarts: 0,
+          expectedState: 'write=已开启，external=未开启',
+        },
+        {
+          label: 'external-only',
+          capabilities: { exposeWrite: false, exposeExternal: true },
+          expectedStarts: 0,
+          expectedState: 'write=未开启，external=已开启',
+        },
+        {
+          label: 'write-and-external',
+          capabilities: { exposeWrite: true, exposeExternal: true },
+          expectedStarts: 1,
+          expectedState: 'write=已开启，external=已开启',
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const dir = mkdtempSync(join(tmpdir(), `luoome-performance-gate-${testCase.label}-`));
+        let starts = 0;
+        let stops = 0;
+        const logStart = logs.length;
+        let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
+        try {
+          handle = await startWeb({
+            port: 0,
+            dbPath: join(dir, 'luoome.db'),
+            ...testCase.capabilities,
+            strategySchedulerStartImmediately: false,
+            portfolioPerformanceSchedulerFactory: () => {
+              starts += 1;
+              return {
+                tick: async () => {},
+                stop: () => {
+                  stops += 1;
+                },
+              };
+            },
+          });
+          expect(starts).toBe(testCase.expectedStarts);
+          const caseLogs = logs.slice(logStart).join('\n');
+          if (testCase.expectedStarts === 0) {
+            expect(caseLogs).toContain('账户绩效盘后快照调度器未启动');
+            expect(caseLogs).toContain('LUOOME_EXPOSE_WRITE=true');
+            expect(caseLogs).toContain('LUOOME_EXPOSE_EXTERNAL=true');
+            expect(caseLogs).toContain(testCase.expectedState);
+          } else {
+            expect(caseLogs).not.toContain('账户绩效盘后快照调度器未启动');
+          }
+          handle.stop(true);
+          handle = undefined;
+          expect(stops).toBe(testCase.expectedStarts);
+        } finally {
+          handle?.stop(true);
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      console.info = originalInfo;
+      if (previousWrite === undefined) delete process.env.LUOOME_EXPOSE_WRITE;
+      else process.env.LUOOME_EXPOSE_WRITE = previousWrite;
+      if (previousExternal === undefined) delete process.env.LUOOME_EXPOSE_EXTERNAL;
+      else process.env.LUOOME_EXPOSE_EXTERNAL = previousExternal;
+      if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
+      else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;
+      if (previousMarketSources === undefined) delete process.env.LUOOME_MARKET_SOURCES;
+      else process.env.LUOOME_MARKET_SOURCES = previousMarketSources;
+    }
+  });
+
   it('starts with an empty database and never inserts sample records', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-empty-runtime-'));
     try {
@@ -540,6 +764,280 @@ describe('行情源设置 API', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('GET 聚合运行态：每源 10 种能力清单 + 行级健康摘要（§5）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-settings-view-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      const app = createWebApp(await buildTestContext(), { marketSettingsStore: store });
+      const res = await app.fetch(new Request('http://test/api/settings/market'));
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as {
+        ok: boolean;
+        data: {
+          sources: Array<{
+            id: string;
+            health: string;
+            capabilities: Array<{ capability: string; bound: boolean; state?: string }>;
+          }>;
+        };
+      };
+      const sources = payload.data.sources;
+      const eastmoney = sources.find((source) => source.id === 'eastmoney');
+      expect(eastmoney?.capabilities).toHaveLength(10);
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'quote')).toMatchObject({
+        bound: true,
+        state: 'unknown',
+      });
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'minute-bars')).toMatchObject({
+        bound: false,
+      });
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'minute-bars')?.state).toBe(
+        undefined,
+      );
+      expect(eastmoney?.health).toBe('unknown');
+      // 未启用源：health=off 且不带运行态
+      const tushare = sources.find((source) => source.id === 'tushare');
+      expect(tushare?.health).toBe('off');
+      expect(tushare?.capabilities.every((c) => c.state === undefined)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /:id/test 主动探测已启用源并返回叠加最新观测的设置视图', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-probe-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      // 注入带 probeSource 的真实 manager（stub 源，无网络）
+      const observedAt = new Date('2026-08-21T07:00:00.000Z');
+      const market = createTestMarketDataManager({
+        primary: {
+          name: 'eastmoney',
+          fetchQuote: () => Promise.resolve({ observedAt } as never),
+          fetchDailyBars: () => Promise.resolve([{ date: observedAt }] as never),
+        },
+        logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+      });
+      const ctx = await buildTestContext();
+      const probeCtx = { ...ctx, adapters: { ...ctx.adapters, market } };
+      const probeApp = createWebApp(probeCtx, { marketSettingsStore: store, exposeExternal: true });
+
+      const res = await probeApp.fetch(
+        new Request('http://test/api/settings/market/eastmoney/test', { method: 'POST' }),
+      );
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as {
+        ok: boolean;
+        data: {
+          probes: Array<{ capability: string; bound: boolean; ok: boolean | null }>;
+          settings: {
+            sources: Array<{
+              id: string;
+              capabilities: Array<{ capability: string; state?: string }>;
+            }>;
+          };
+        };
+      };
+      expect(payload.ok).toBe(true);
+      const quoteProbe = payload.data.probes.find((probe) => probe.capability === 'quote');
+      expect(quoteProbe).toMatchObject({ bound: true, ok: true });
+      // stub 只有 quote / daily-bars 两种绑定
+      expect(payload.data.probes.find((probe) => probe.capability === 'batch-quote')).toMatchObject(
+        { bound: false, ok: null },
+      );
+      // 响应里的 settings 已叠加最新观测：quote 有运行态
+      const eastmoney = payload.data.settings.sources.find((source) => source.id === 'eastmoney');
+      expect(eastmoney?.capabilities.find((c) => c.capability === 'quote')?.state).toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /:id/test 卡口：未启用源 / 未知源 / fake adapter / 未开 external', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-probe-guard-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      const ctx = await buildTestContext();
+      const probeApp = createWebApp(ctx, { marketSettingsStore: store, exposeExternal: true });
+
+      // 未启用源
+      const disabled = await probeApp.fetch(
+        new Request('http://test/api/settings/market/fuyao/test', { method: 'POST' }),
+      );
+      expect(((await disabled.json()) as { ok: boolean; error: { kind: string } }).error.kind).toBe(
+        'invalid_input',
+      );
+      // 未知源 id
+      const unknown = await probeApp.fetch(
+        new Request('http://test/api/settings/market/unknown-source/test', { method: 'POST' }),
+      );
+      expect(((await unknown.json()) as { error: { kind: string } }).error.kind).toBe(
+        'invalid_input',
+      );
+      // fake adapter 无 probeSource
+      const fake = await probeApp.fetch(
+        new Request('http://test/api/settings/market/eastmoney/test', { method: 'POST' }),
+      );
+      expect(((await fake.json()) as { error: { kind: string } }).error.kind).toBe('adapter_error');
+      // 未开 external 卡口
+      const guardedApp = createWebApp(ctx, { marketSettingsStore: store, exposeExternal: false });
+      const denied = await guardedApp.fetch(
+        new Request('http://test/api/settings/market/eastmoney/test', { method: 'POST' }),
+      );
+      expect(((await denied.json()) as { error: { kind: string } }).error.kind).toBe(
+        'permission_denied',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('仅改来源顺序时复用共享 EastmoneySource 实例，无关 manager 不重建（§4.7/§9.2）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-market-settings-hot-'));
+    try {
+      const store = new MarketSettingsStore(
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { secretPath: join(dir, '.env') },
+      );
+      // 共享实例带可观测 fetchImpl：重建后的 market adapter 若自构新实例则不会触达它
+      const sharedFetch = mock(async () => new Response('{}', { status: 500 }));
+      const eastmoney = new EastmoneySource({
+        fetchImpl: sharedFetch as unknown as typeof fetch,
+      });
+      const marker = (dataset: string): SourceStatus => ({
+        dataset,
+        source: `${dataset}-fake`,
+        coverage: ['CN_A_SHARES_SH_SZ'],
+        capabilityEnabled: true,
+        configurationReady: true,
+      });
+      const ctx = await buildTestContext({
+        limitUpLadder: {
+          name: 'limit-up-ladder',
+          sources: ['limit-up-ladder-fake'],
+          status: () => [marker('limit-up-ladder')],
+          fetchLadder: () => Promise.reject(new Error('not used')),
+          compareLadder: () => Promise.reject(new Error('not used')),
+        },
+        dragonTiger: {
+          name: 'dragon-tiger',
+          sources: ['dragon-tiger-fake'],
+          status: () => [marker('dragon-tiger')],
+          fetchList: () => Promise.reject(new Error('not used')),
+        },
+        northboundFlow: {
+          name: 'northbound-flow',
+          sources: ['northbound-flow-fake'],
+          status: () => [marker('northbound-flow')],
+          fetchSeries: () => Promise.reject(new Error('not used')),
+        },
+        news: {
+          name: 'news',
+          sources: ['finance-news-fake'],
+          status: () => [marker('finance-news')],
+          fetchNews: () => Promise.reject(new Error('not used')),
+        },
+        ashareSentiment: {
+          fetch: () => Promise.reject(new Error('not used')),
+          status: () => [marker('sentiment-sealed-pool')],
+        },
+      });
+      const hotApp = createWebApp(ctx, {
+        marketSettingsStore: store,
+        exposeWrite: true,
+        exposeExternal: true,
+        sources: { eastmoney },
+      });
+      const datasetKeys = async (): Promise<string[]> => {
+        const response = await hotApp.fetch(new Request('http://test/api/market-data-status'));
+        const payload = (await response.json()) as {
+          ok: boolean;
+          data: { datasets: Array<{ dataset: string; source: string }> };
+        };
+        return payload.data.datasets.map((item) => `${item.dataset}:${item.source}`);
+      };
+      const before = await datasetKeys();
+      for (const key of [
+        'limit-up-ladder:limit-up-ladder-fake',
+        'dragon-tiger:dragon-tiger-fake',
+        'northbound-flow:northbound-flow-fake',
+        'finance-news:finance-news-fake',
+        'sentiment-sealed-pool:sentiment-sealed-pool-fake',
+      ]) {
+        expect(before).toContain(key);
+      }
+
+      const saved = await hotApp.fetch(
+        new Request('http://test/api/settings/market', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sources: ['eastmoney'] }),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({
+        ok: true,
+        data: { activeOrder: ['eastmoney'], applied: true },
+      });
+
+      // 无关 manager 未被重建：fake 观测标记在热更新后仍然存在
+      const after = await datasetKeys();
+      expect(after).toEqual(
+        expect.arrayContaining([
+          'limit-up-ladder:limit-up-ladder-fake',
+          'dragon-tiger:dragon-tiger-fake',
+          'northbound-flow:northbound-flow-fake',
+          'finance-news:finance-news-fake',
+        ]),
+      );
+      // sentiment 直接依赖 market，随热更新重建为真实 factory 的 eastmoney 观测
+      expect(after).toContain('sentiment-sealed-pool:eastmoney');
+      expect(after).not.toContain('sentiment-sealed-pool:sentiment-sealed-pool-fake');
+
+      // 重建后的 market adapter 复用共享实例：fetch_quote 经 eastmoney 路由触达 sharedFetch
+      expect(sharedFetch).not.toHaveBeenCalled();
+      await hotApp.fetch(
+        new Request('http://test/api/tools/fetch_quote/call', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
+        }),
+      );
+      expect(sharedFetch).toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('buildWebContext 把注入的共享 EastmoneySource 分发给 market 与非行情 factory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-web-sources-'));
+    try {
+      const sharedFetch = mock(async () => new Response('{}', { status: 500 }));
+      const eastmoney = new EastmoneySource({
+        fetchImpl: sharedFetch as unknown as typeof fetch,
+      });
+      const ctx = await buildWebContext(
+        join(dir, 'luoome.db'),
+        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        { sources: { eastmoney } },
+      );
+      // 非行情 factory（news）复用注入实例，而非自构走全局 fetch 的新实例
+      await ctx.news?.fetchNews({ limit: 5 });
+      expect(sharedFetch).toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('飞书设置 API', () => {
@@ -655,6 +1153,203 @@ describe('Research Vault 设置 API', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('保存关闭远端 opt-in 后清除旧 Git adapter，status 和 POST 立即拒绝', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-vault-remote-disable-'));
+    const vaultPath = join(dir, 'Investment Vault');
+    let pulls = 0;
+    try {
+      mkdirSync(join(vaultPath, 'Research'), { recursive: true });
+      const store = new ResearchVaultSettingsStore(
+        { LUOOME_HOME: dir },
+        { secretPath: join(dir, '.env') },
+      );
+      const base = await buildTestContext();
+      const settingsApp = createWebApp(
+        {
+          ...base,
+          researchVaultGitSync: {
+            name: 'previously-enabled-git',
+            provider: 'git',
+            pull: async () => {
+              pulls += 1;
+              return { ok: true, status: 'up-to-date' };
+            },
+          },
+        },
+        {
+          researchVaultSettingsStore: store,
+          exposeWrite: true,
+          exposeExternal: true,
+        },
+      );
+      expect(
+        await (
+          await settingsApp.fetch(new Request('http://test/api/research/remote-sync/status'))
+        ).json(),
+      ).toMatchObject({ ok: true, data: { configured: true, provider: 'git' } });
+
+      const saved = await settingsApp.fetch(
+        new Request('http://test/api/settings/research-vault', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            vaultPath,
+            researchRoot: 'Research',
+            managedRoot: 'Research/Luoome',
+            vaultId: 'test-vault',
+            maxTextMb: 10,
+            maxAttachmentMb: 100,
+          }),
+        }),
+      );
+      expect(saved.status).toBe(200);
+      expect(
+        await (
+          await settingsApp.fetch(new Request('http://test/api/research/remote-sync/status'))
+        ).json(),
+      ).toEqual({ ok: true, data: { configured: false } });
+
+      const sync = await settingsApp.fetch(
+        new Request('http://test/api/research/remote-sync', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://test' },
+          body: '{}',
+        }),
+      );
+      expect(sync.status).toBe(403);
+      expect(pulls).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Research Vault 远端同步 API', () => {
+  const vault: ResearchVaultAdapterLike = {
+    name: 'web-remote-vault',
+    vaultId: 'web-remote-vault',
+    scan: async () => [],
+    readText: async () => '',
+    createManagedDocument: async () => {
+      throw new Error('not used');
+    },
+    updateManagedDocument: async () => {
+      throw new Error('not used');
+    },
+    importAttachment: async () => {
+      throw new Error('not used');
+    },
+    buildOpenUri: (path) => `obsidian://open?file=${encodeURIComponent(path)}`,
+  };
+  const gitSync: ResearchVaultGitSyncAdapterLike = {
+    name: 'web-remote-git',
+    provider: 'git',
+    pull: async () => ({ ok: true, status: 'up-to-date' }),
+  };
+
+  it('状态只暴露 provider 配置，不暴露 remote 或凭证', async () => {
+    const base = await buildTestContext();
+    const target = createWebApp({ ...base, researchVault: vault, researchVaultGitSync: gitSync });
+    const response = await target.fetch(new Request('http://test/api/research/remote-sync/status'));
+    expect(await response.json()).toEqual({
+      ok: true,
+      data: { configured: true, provider: 'git' },
+    });
+  });
+
+  it('POST 同时要求 write/external opt-in 和同源 Origin', async () => {
+    const base = await buildTestContext();
+    const ctx = { ...base, researchVault: vault, researchVaultGitSync: gitSync };
+    const withoutExternal = createWebApp(ctx, { exposeWrite: true, exposeExternal: false });
+    expect(
+      (
+        await withoutExternal.fetch(
+          new Request('http://test/api/research/remote-sync', { method: 'POST' }),
+        )
+      ).status,
+    ).toBe(403);
+
+    const exposed = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+    const crossOrigin = await exposed.fetch(
+      new Request('http://test/api/research/remote-sync', {
+        method: 'POST',
+        headers: { origin: 'https://attacker.invalid' },
+      }),
+    );
+    expect(crossOrigin.status).toBe(403);
+  });
+
+  it('显式确认路径运行独立 workflow，并把请求取消信号传给 adapter', async () => {
+    let signal: AbortSignal | undefined;
+    const base = await buildTestContext();
+    const target = createWebApp(
+      {
+        ...base,
+        researchVault: vault,
+        researchVaultGitSync: {
+          ...gitSync,
+          pull: async (input) => {
+            signal = input.signal;
+            return { ok: true, status: 'up-to-date' };
+          },
+        },
+      },
+      { exposeWrite: true, exposeExternal: true },
+    );
+    const response = await target.fetch(
+      new Request('http://test/api/research/remote-sync', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ timeoutMs: 5_000 }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: {
+        status: 'succeeded',
+        git: { provider: 'git', status: 'up-to-date' },
+        index: { status: 'succeeded', scanned: 0 },
+      },
+    });
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('畸形 JSON 返回 400 且绝不调用 pull', async () => {
+    let pulls = 0;
+    const base = await buildTestContext();
+    const target = createWebApp(
+      {
+        ...base,
+        researchVault: vault,
+        researchVaultGitSync: {
+          ...gitSync,
+          pull: async () => {
+            pulls += 1;
+            return { ok: true, status: 'up-to-date' };
+          },
+        },
+      },
+      { exposeWrite: true, exposeExternal: true },
+    );
+
+    const response = await target.fetch(
+      new Request('http://test/api/research/remote-sync', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{malformed',
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input', message: '请求体必须是 JSON 对象' },
+    });
+    expect(pulls).toBe(0);
+  });
 });
 
 describe('非 loopback API', () => {
@@ -760,6 +1455,78 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       await app.fetch(new Request('http://test/api/alert-plans'))
     ).json()) as { data?: { plans?: Array<{ id: string }> } };
     expect(afterDelete.data?.plans?.some((plan) => plan.id === alertPlanId)).toBe(false);
+  });
+
+  it('Strategy→Watchlist 订阅 API 必须显式创建，并支持取消而不删除审计历史', async () => {
+    const strategyId = 'web-subscription-strategy';
+    const watchlistId = 'web-subscription-watchlist';
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/strategies', {
+            id: strategyId,
+            name: '订阅测试策略',
+            description: 'explicit subscription',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.fetch(
+          targetRequest('/api/watchlists', {
+            id: watchlistId,
+            name: '订阅目标',
+            kind: 'strategy',
+            membershipPolicy: 'mixed',
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const initial = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/watchlists`),
+    );
+    expect(initial.status).toBe(200);
+    expect(await initial.json()).toMatchObject({ ok: true, data: { subscriptions: [] } });
+
+    const subscribed = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/watchlists`, { watchlistId }),
+    );
+    expect(subscribed.status).toBe(200);
+    expect(await subscribed.json()).toMatchObject({
+      ok: true,
+      data: { subscription: { strategyId, watchlistId, status: 'active' }, idempotent: false },
+    });
+    const repeated = await app.fetch(
+      targetRequest(`/api/strategies/${strategyId}/watchlists`, { watchlistId }),
+    );
+    expect(await repeated.json()).toMatchObject({ ok: true, data: { idempotent: true } });
+
+    const cancelled = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/watchlists/${watchlistId}`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: '{}',
+      }),
+    );
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toMatchObject({
+      ok: true,
+      data: { subscription: { status: 'cancelled' }, idempotent: false },
+    });
+    const active = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/watchlists`),
+    );
+    expect(await active.json()).toMatchObject({ ok: true, data: { subscriptions: [] } });
+    const history = await callTool('list_strategy_watchlist_subscriptions', {
+      strategyId,
+      status: 'cancelled',
+    });
+    expect(await history.json()).toMatchObject({
+      ok: true,
+      data: { subscriptions: [{ strategyId, watchlistId, status: 'cancelled' }] },
+    });
   });
 
   it('GET /api/strategy-templates 返回内置模板目录', async () => {
@@ -1054,6 +1821,22 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       ok: false,
       error: { kind: 'invalid_input', message: '历史模拟参数无效' },
     });
+  });
+
+  it('严格回测 API 独立于历史回放，并在参数缺失时返回门禁入口错误', async () => {
+    const invalid = await app.fetch(
+      targetRequest('/api/strategies/strict-api-check/strict-backtests', {}),
+    );
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input', message: '严格回测参数无效' },
+    });
+    const list = await app.fetch(
+      new Request('http://test/api/strategies/strict-api-check/strict-backtests'),
+    );
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({ ok: true, data: { runs: [] } });
   });
 
   it('目标 mutation 要求显式 opt-in，并校验同源 Origin', async () => {
@@ -1661,6 +2444,147 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     expect(body.data?.supported).toBe(false);
   });
 
+  it('get_stock_minute_bars（白名单）→ 200（不支持时 unavailable 合法降级）', async () => {
+    const r = await callTool('get_stock_minute_bars', { stockId: '002594.SZ' });
+    expect(r.status).toBe(200);
+    const body = (await json(r)) as { ok: boolean; data?: { status: string } };
+    expect(body.ok).toBe(true);
+    expect(body.data?.status).toBe('unavailable');
+  });
+
+  it('get_stock_minute_bars 同时要求 external + write 能力', async () => {
+    const request = () =>
+      new Request('http://test/api/tools/get_stock_minute_bars/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { stockId: '002594.SZ' } }),
+      });
+
+    const externalOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    expect((await externalOnly.fetch(request())).status).toBe(403);
+
+    const writeOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: false,
+      exposeWrite: true,
+    });
+    expect((await writeOnly.fetch(request())).status).toBe(403);
+
+    const both = createWebApp(await buildTestContext(), {
+      exposeExternal: true,
+      exposeWrite: true,
+    });
+    const allowed = await both.fetch(request());
+    expect(allowed.status).toBe(200);
+    expect((await json(allowed)).ok).toBe(true);
+  });
+
+  it('sync_financial_facts 同时要求 external + write，双开后保持 gate=not-ready；get read 默认可调用', async () => {
+    const base = await buildTestContext();
+    const ctx = {
+      ...base,
+      fundamentalData: new MockFundamentalDataAdapter(),
+    };
+    const request = () =>
+      new Request('http://test/api/tools/sync_financial_facts/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          input: { stockIds: ['600000.SH'], metricIds: ['roe'] },
+        }),
+      });
+
+    const externalOnly = createWebApp(ctx, {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    expect((await externalOnly.fetch(request())).status).toBe(403);
+
+    const writeOnly = createWebApp(ctx, {
+      exposeExternal: false,
+      exposeWrite: true,
+    });
+    expect((await writeOnly.fetch(request())).status).toBe(403);
+
+    const both = createWebApp(ctx, {
+      exposeExternal: true,
+      exposeWrite: true,
+    });
+    const synced = await both.fetch(request());
+    expect(synced.status).toBe(200);
+    expect(await synced.json()).toMatchObject({
+      ok: true,
+      data: { providerKind: 'mock', gate: 'not-ready' },
+    });
+
+    const readOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: false,
+      exposeWrite: false,
+    });
+    const read = await readOnly.fetch(
+      new Request('http://test/api/tools/get_financial_facts/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          input: {
+            stockIds: ['600000.SH'],
+            metricIds: ['roe'],
+            asOf: '2026-08-22T00:00:00.000Z',
+          },
+        }),
+      }),
+    );
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({ ok: true, data: { gate: 'not-ready' } });
+  });
+
+  it('run_fundamental_score 只需要 write；get_fundamental_score 默认 read，二者不声明 external/trade', async () => {
+    const input = {
+      scoreVersionId: 'fundamental-score-v1',
+      asOf: '2026-08-22T00:00:00.000Z',
+      stockIds: ['600000.SH'],
+      universeSyncId: 'universe-sync-1',
+      universeMemberChecksum: 'a'.repeat(64),
+      persist: false,
+    };
+    const readOnly = createWebApp(await buildTestContext(), {
+      exposeWrite: false,
+      exposeExternal: false,
+    });
+    const denied = await readOnly.fetch(
+      new Request('http://test/api/tools/run_fundamental_score/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input }),
+      }),
+    );
+    expect(denied.status).toBe(403);
+
+    const writeOnly = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: false,
+    });
+    const allowed = await writeOnly.fetch(
+      new Request('http://test/api/tools/run_fundamental_score/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input }),
+      }),
+    );
+    expect(allowed.status).not.toBe(403);
+
+    const get = await readOnly.fetch(
+      new Request('http://test/api/tools/get_fundamental_score/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { runId: 'missing-score-run' } }),
+      }),
+    );
+    expect(get.status).toBe(404);
+  });
+
   it('batch_quote（白名单）→ 200', async () => {
     const r = await callTool('batch_quote', { stockIds: ['002594.SZ'] });
     expect(r.status).toBe(200);
@@ -1778,6 +2702,61 @@ describe('/api/advice 查询参数', () => {
     const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
     expect(body.ok).toBe(false);
     expect(body.error?.kind).toBe('invalid_input');
+  });
+});
+
+describe('POST /api/advice/delete', () => {
+  const postDelete = (target: Hono, body: unknown): Promise<Response> =>
+    Promise.resolve(
+      target.fetch(
+        new Request('http://test/api/advice/delete', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://test' },
+          body: JSON.stringify(body),
+        }),
+      ),
+    );
+
+  it('删除命中建议（含 outcome 级联），未命中 id 进 notFound；再查询已消失', async () => {
+    const ctx = await buildTestContext();
+    const seeded = await ctx.repos.advice.query({ includeExpired: true });
+    expect(seeded.length).toBeGreaterThanOrEqual(2);
+    const victim = seeded[0];
+    if (victim === undefined) throw new Error('seeded advice missing');
+    await ctx.repos.advice.recordOutcome(victim.id, {
+      adviceId: victim.id,
+      tradeIds: [],
+      outcome: 'followed',
+      recordedAt: new Date('2026-08-22T08:00:00.000Z'),
+    });
+    const testApp = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+
+    const r = await postDelete(testApp, { ids: [victim.id, 'adv-not-exists'] });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { deleted: number; notFound: string[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.deleted).toBe(1);
+    expect(body.data?.notFound).toEqual(['adv-not-exists']);
+
+    expect(await ctx.repos.advice.findById(victim.id)).toBeNull();
+    expect(await ctx.repos.advice.findOutcome(victim.id)).toBeNull();
+  });
+
+  it('write 未开放 → permission_denied；空 ids → invalid_input', async () => {
+    const guardedApp = createWebApp(await buildTestContext(), { exposeWrite: false });
+    const denied = await postDelete(guardedApp, { ids: ['x'] });
+    const deniedBody = (await denied.json()) as { ok: boolean; error?: { kind: string } };
+    expect(deniedBody.ok).toBe(false);
+    expect(deniedBody.error?.kind).toBe('permission_denied');
+
+    const testApp = createWebApp(await buildTestContext(), { exposeWrite: true });
+    const invalid = await postDelete(testApp, { ids: [] });
+    const invalidBody = (await invalid.json()) as { ok: boolean; error?: { kind: string } };
+    expect(invalidBody.ok).toBe(false);
+    expect(invalidBody.error?.kind).toBe('invalid_input');
   });
 });
 
@@ -1933,6 +2912,7 @@ describe('/api/chat：对话助手', () => {
       await request.onFinish?.({
         id: '',
         parts: [{ type: 'text', text: '你好' }],
+        cancelled: false,
       });
       return new Response(
         [
@@ -1985,6 +2965,8 @@ describe('/api/chat：对话助手', () => {
     expect(response.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1');
     expect(await response.text()).toContain('"type":"text-delta"');
     expect(captured?.tools.map((item) => item.name)).toContain('fetch_quote');
+    expect(captured?.tools.map((item) => item.name)).toContain('run_local_selector_research');
+    expect(captured?.tools.map((item) => item.name)).toContain('assess_adaptive_personality');
     expect(captured?.tools.map((item) => item.name)).not.toContain('get_quote');
     expect(captured?.instructions).toContain('不得自动交易');
     expect(await chatCtx.repos.chat.listMessages('stream-contract')).toHaveLength(2);
@@ -2054,6 +3036,102 @@ describe('/api/chat：对话助手', () => {
     expect(await chatCtx.repos.strategy.findById('chat-draft-strategy')).toBeNull();
   });
 
+  it('advice 草案 tool 只生成带 display 的待确认草案，不执行 LLM 分析', async () => {
+    await createSession('advice-draft-tool');
+    await chat(chatApp, {
+      sessionId: 'advice-draft-tool',
+      messages: [
+        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '帮我分析 300857' }] },
+      ],
+    });
+    const draftTool = captured?.tools.find((item) => item.name === 'analyze_stock');
+    expect(draftTool?.description).toContain('不会执行分析');
+    const result = await draftTool?.execute({ stockId: 'SZ300857' });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'advice', tool: 'analyze_stock' },
+    });
+    const output = result?.output as { draft: { display?: { targetObject: string } } } | undefined;
+    expect(output?.draft.display?.targetObject).toBe('个股 Advice（SZ300857）');
+    // 草案路径不触发真实分析：库里不应产生 Advice 记录
+    expect(await chatCtx.repos.advice.query({})).toEqual([]);
+  });
+
+  it('review chat 暴露 AdviceOutcome 草案但不暴露研究假设或 trade 工具', async () => {
+    await createSession('review-outcome-draft');
+    await chat(chatApp, {
+      sessionId: 'review-outcome-draft',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '复盘最近的建议' }] }],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('record_advice_outcome');
+    expect(names).not.toContain('create_research_hypothesis_version');
+    expect(names).not.toContain('add_trade');
+    const draftTool = captured?.tools.find((item) => item.name === 'record_advice_outcome');
+    const result = await draftTool?.execute({
+      adviceId: 'advice-review-1',
+      outcome: 'partially_followed',
+      tradeIds: ['trade-review-1'],
+    });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'review', tool: 'record_advice_outcome' },
+    });
+    const output = result?.output as {
+      draft: {
+        display?: { fields: readonly { name: string; value: unknown; source: string }[] };
+      };
+    };
+    expect(output.draft.display?.fields).toEqual(
+      expect.arrayContaining([
+        { name: '结果', value: 'partially_followed', source: 'user' },
+        { name: '交易 IDs', value: ['trade-review-1'], source: 'user' },
+        { name: '盈亏已知性', value: '未知', source: 'default' },
+      ]),
+    );
+    expect(await chatCtx.repos.advice.listOutcomes()).toEqual([]);
+  });
+
+  it('research chat 暴露研究假设版本草案但不暴露 AdviceOutcome 或 trade 工具', async () => {
+    await createSession('research-hypothesis-draft');
+    await chat(chatApp, {
+      sessionId: 'research-hypothesis-draft',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '更新研究假设' }] }],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('create_research_hypothesis_version');
+    expect(names).not.toContain('record_advice_outcome');
+    expect(names).not.toContain('add_trade');
+    const draftTool = captured?.tools.find(
+      (item) => item.name === 'create_research_hypothesis_version',
+    );
+    const result = await draftTool?.execute({
+      topicId: 'topic_growth',
+      documentId: 'doc_thesis',
+      documentContentHash: 'a'.repeat(64),
+      summary: '利润率改善将延续',
+    });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toMatchObject({
+      __luoomeDraft: true,
+      draft: { kind: 'research', tool: 'create_research_hypothesis_version' },
+    });
+    const output = result?.output as {
+      draft: {
+        display?: { fields: readonly { name: string; value: unknown; source: string }[] };
+      };
+    };
+    expect(output.draft.display?.fields).toEqual([
+      { name: 'Topic', value: 'topic_growth', source: 'user' },
+      { name: 'Document', value: 'doc_thesis', source: 'user' },
+      { name: '内容 Hash', value: 'a'.repeat(64), source: 'user' },
+      { name: '摘要', value: '利润率改善将延续', source: 'user' },
+    ]);
+    expect(await chatCtx.repos.researchHypothesisVersion.list({})).toEqual([]);
+  });
+
   it('read 工具仍经 registry 执行，未批准的 external/trade 不暴露', async () => {
     await createSession('read-tools');
     await chat(chatApp, {
@@ -2071,6 +3149,125 @@ describe('/api/chat：对话助手', () => {
     expect(names).not.toContain('sync_quotes');
     expect(names).not.toContain('send_notification');
     expect(names).not.toContain('place_order');
+    expect(names).not.toContain('record_advice_outcome');
+    expect(names).not.toContain('create_research_hypothesis_version');
+  });
+
+  it('响应投影 x-luoome-chat-route header（URL 编码的路由 JSON）', async () => {
+    await createSession('route-header');
+    const response = await chat(chatApp, {
+      sessionId: 'route-header',
+      messages: [
+        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '复盘一下最近的建议' }] },
+      ],
+    });
+    expect(response.status).toBe(200);
+    const header = response.headers.get('x-luoome-chat-route');
+    expect(header).not.toBeNull();
+    const route = JSON.parse(decodeURIComponent(header ?? '')) as {
+      scenario: string;
+      subjects: string[];
+      needsAdvice: boolean;
+      involvesWrite: boolean;
+      plannedDimensions: string[];
+    };
+    expect(route.scenario).toBe('review');
+    expect(route.plannedDimensions.length).toBeGreaterThan(0);
+    expect(captured?.instructions).toContain('描述性统计');
+  });
+
+  it('路由场景切换 chat 白名单与指令覆写', async () => {
+    await createSession('scenario-portfolio');
+    await chat(chatApp, {
+      sessionId: 'scenario-portfolio',
+      messages: [
+        { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '我的持仓成本和盈亏' }] },
+      ],
+    });
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    expect(names).toContain('get_account_performance');
+    expect(names).toContain('list_trades');
+    expect(names).toContain('get_market_data_status');
+    expect(names).not.toContain('run_local_selector_research');
+    expect(names).not.toContain('get_confidence_calibration');
+    expect(captured?.instructions).toContain('持仓与风险');
+
+    await createSession('scenario-general');
+    await chat(chatApp, {
+      sessionId: 'scenario-general',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    const generalNames = captured?.tools.map((item) => item.name) ?? [];
+    expect(generalNames).toContain('run_local_selector_research');
+    expect(generalNames).toContain('get_market_data_status');
+    expect(generalNames).toContain('record_advice_outcome');
+    expect(generalNames).toContain('create_research_hypothesis_version');
+    expect(generalNames).not.toContain('get_account_performance');
+  });
+
+  it('数据健康正常时不注入 dataHealth，降级时注入问题项摘要', async () => {
+    await createSession('data-health-ok');
+    await chat(chatApp, {
+      sessionId: 'data-health-ok',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    expect(captured?.instructions).not.toContain('dataHealth');
+
+    await chatCtx.repos.watchRun.save({
+      id: 'wr-failed-1',
+      mode: 'once',
+      status: 'failed',
+      startedAt: new Date('2026-08-21T00:00:00.000Z'),
+      finishedAt: new Date('2026-08-21T00:01:00.000Z'),
+      evaluatedPools: 0,
+      evaluatedStocks: 0,
+      triggered: 0,
+      notified: 0,
+      suppressedByCooldown: 0,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+      error: 'mock 失败',
+    });
+    await createSession('data-health-degraded');
+    await chat(chatApp, {
+      sessionId: 'data-health-degraded',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    expect(captured?.instructions).toContain('dataHealth');
+    expect(captured?.instructions).toContain('watch 最近一次运行失败');
+  });
+
+  it('取消时按实际 parts 落库并附加 cancelled 标记 part', async () => {
+    const cancelledRuntime: ChatStreamRuntime = {
+      createUIMessageStreamResponse: async (request) => {
+        await request.onFinish?.({
+          id: '',
+          parts: [{ type: 'text', text: '半截回答' }],
+          cancelled: true,
+        });
+        return new Response('data: [DONE]\n\n', {
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      },
+    };
+    const cancelApp = createWebApp(chatCtx, {
+      chatStreamRuntime: cancelledRuntime,
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    await createSession('cancelled-persist');
+    const response = await chat(cancelApp, {
+      sessionId: 'cancelled-persist',
+      messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+    });
+    expect(response.status).toBe(200);
+    const messages = await chatCtx.repos.chat.listMessages('cancelled-persist');
+    const assistant = messages.find((message) => message.role === 'assistant');
+    expect(assistant?.parts).toContainEqual({ type: 'text', text: '半截回答' });
+    expect(assistant?.parts).toContainEqual({
+      type: 'data-luoome-cancelled',
+      data: { cancelled: true },
+    });
   });
 
   it('会话 API 支持创建、重命名、读取与删除且无需 token', async () => {
@@ -2310,6 +3507,7 @@ const stubLadderManager = (opts: {
 }): LimitUpLadderManagerLike => ({
   name: 'limit-up-ladder',
   sources: ['eastmoney'],
+  status: () => [],
   fetchLadder: async (): Promise<LimitUpLadderResultLike> => {
     if (opts.fail === true) {
       return {
@@ -2465,6 +3663,358 @@ describe('Web 连板天梯 API', () => {
     const body = (await r.json()) as { ok: boolean; data?: { diff: { totalDelta: number } } };
     expect(body.ok).toBe(true);
     expect(body.data?.diff.totalDelta).toBe(1);
+  });
+});
+
+/**
+ * 行业板块行情 Web API。
+ * 用 stub manager 隔离 eastmoney 实链，避免网络依赖。
+ */
+import type { SectorQuoteList, SectorQuoteManagerLike, SectorQuoteResultLike } from '@luoome/core';
+
+const stubSectorQuoteManager = (opts: {
+  readonly list?: SectorQuoteList;
+  readonly fail?: boolean;
+}): SectorQuoteManagerLike => ({
+  name: 'sector-quote',
+  sources: ['eastmoney'],
+  fetchList: async (): Promise<SectorQuoteResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'sector-quote',
+          message: 'eastmoney forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    const list = opts.list ?? {
+      total: 1,
+      source: 'eastmoney' as const,
+      items: [
+        {
+          code: 'BK0732',
+          name: '贵金属',
+          price: 2837.18,
+          changePct: 0.0599,
+          change: 160.26,
+          amount: 38_253_089_126,
+          upCount: 12,
+          downCount: 0,
+          leadingStockName: '湖南白银',
+          leadingStockCode: '002716',
+          leadingStockChangePct: 0.1003,
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-08-21T07:39:32Z'),
+    };
+    return { ok: true, data: list };
+  },
+});
+
+describe('Web 行业板块行情 API', () => {
+  it('正常请求 → 200 + 与 stub 一致列表；sort/limit 透传', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ sectorQuote: stubSectorQuoteManager({}) }),
+    );
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/sectors?sort=amount&limit=10'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { total: number; source: string; items: { code: string; changePct: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.source).toBe('eastmoney');
+    expect(body.data?.items[0]?.code).toBe('BK0732');
+    expect(body.data?.items[0]?.changePct).toBeCloseTo(0.0599);
+  });
+
+  it('limit 越界 → invalid_input (400)', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ sectorQuote: stubSectorQuoteManager({}) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/market/sectors?limit=999'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ sectorQuote: stubSectorQuoteManager({ fail: true }) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/market/sectors'));
+    expect(r.status).toBe(502);
+  });
+
+  it('HTML 路由 /market/sectors 返回 index.html', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(new Request('http://test/market/sectors'));
+    expect(r.status).toBe(200);
+    const ct = r.headers.get('content-type') ?? '';
+    expect(ct).toContain('text/html');
+  });
+});
+
+/**
+ * 财经要闻 Web API（fetch_news tool）。
+ * 用 stub manager 隔离 eastmoney 实链，避免网络依赖。
+ */
+import type { NewsList, NewsManagerLike, NewsResultLike } from '@luoome/core';
+
+const stubNewsManager = (opts: {
+  readonly list?: NewsList;
+  readonly fail?: boolean;
+}): NewsManagerLike => ({
+  name: 'news',
+  sources: ['eastmoney'],
+  status: () => [],
+  fetchNews: async (): Promise<NewsResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'news',
+          message: 'eastmoney forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    const list = opts.list ?? {
+      total: 1,
+      source: 'eastmoney' as const,
+      items: [
+        {
+          id: 'n1',
+          title: '央行宣布降准释放流动性',
+          summary: '中国人民银行宣布……',
+          category: '宏观' as const,
+          source: '人民日报',
+          publishedAt: new Date('2026-08-22T10:12:00+08:00'),
+          url: 'https://finance.eastmoney.com/a/n1.html',
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-08-22T03:00:00Z'),
+    };
+    return { ok: true, data: list };
+  },
+});
+
+describe('Web 财经要闻 API', () => {
+  it('正常请求 → 200 + 与 stub 一致列表', async () => {
+    const testApp = createWebApp(await buildTestContext({ news: stubNewsManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/news?limit=8'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { total: number; source: string; items: { id: string; title: string }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.source).toBe('eastmoney');
+    expect(body.data?.items[0]?.title).toContain('降准');
+  });
+
+  it('limit 越界 → invalid_input (400)', async () => {
+    const testApp = createWebApp(await buildTestContext({ news: stubNewsManager({}) }));
+    const r = await testApp.fetch(new Request('http://test/api/news?limit=999'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(await buildTestContext({ news: stubNewsManager({ fail: true }) }));
+    const r = await testApp.fetch(new Request('http://test/api/news'));
+    expect(r.status).toBe(502);
+  });
+});
+
+/**
+ * 龙虎榜 Web API（dragon_tiger_list tool）。
+ * 用 stub manager 隔离 eastmoney 实链，避免网络依赖。
+ */
+import type { DragonTigerList, DragonTigerManagerLike, DragonTigerResultLike } from '@luoome/core';
+
+const stubDragonTigerManager = (opts: {
+  readonly list?: DragonTigerList;
+  readonly fail?: boolean;
+}): DragonTigerManagerLike => ({
+  name: 'dragon-tiger',
+  sources: ['eastmoney'],
+  status: () => [],
+  fetchList: async (): Promise<DragonTigerResultLike> => {
+    if (opts.fail === true) {
+      return {
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: 'dragon-tiger',
+          message: 'eastmoney forced fail',
+          recoverable: false,
+        },
+      };
+    }
+    const list = opts.list ?? {
+      date: '2026-08-21',
+      total: 1,
+      source: 'eastmoney' as const,
+      entries: [
+        {
+          code: '600519',
+          name: '贵州茅台',
+          close: 1850,
+          changePct: 0.0321,
+          turnoverRate: 0.015,
+          reason: '日涨幅偏离值达7%的证券',
+          netAmount: 120_000_000,
+          buyAmount: 320_000_000,
+          sellAmount: 200_000_000,
+          amount: 5_600_000_000,
+          tradeDate: '2026-08-21',
+        },
+      ],
+      warnings: [],
+      asOf: new Date('2026-08-21T10:00:00Z'),
+    };
+    return { ok: true, data: list };
+  },
+});
+
+describe('Web 龙虎榜 API', () => {
+  it('正常请求 → 200 + 与 stub 一致榜单', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTiger: stubDragonTigerManager({}) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { date: string; total: number; entries: { code: string; netAmount: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.date).toBe('2026-08-21');
+    expect(body.data?.entries[0]?.code).toBe('600519');
+    expect(body.data?.entries[0]?.netAmount).toBe(120_000_000);
+  });
+
+  it('date 非法格式 → invalid_input (400)', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTiger: stubDragonTigerManager({}) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger?date=2026/08/21'));
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('上游不可达 → 502', async () => {
+    const testApp = createWebApp(
+      await buildTestContext({ dragonTiger: stubDragonTigerManager({ fail: true }) }),
+    );
+    const r = await testApp.fetch(new Request('http://test/api/dragon-tiger?date=2026-08-21'));
+    expect(r.status).toBe(502);
+  });
+
+  it('HTML 路由 /dragon-tiger 返回 index.html', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(new Request('http://test/dragon-tiger'));
+    expect(r.status).toBe(200);
+    const ct = r.headers.get('content-type') ?? '';
+    expect(ct).toContain('text/html');
+  });
+});
+
+/**
+ * 指数分时 Web API（fetch_intraday_minutes tool）。
+ * FakeMarketAdapter 的 fetchIntradayMinutes 抛 unsupported_capability → supported:false 合法降级。
+ */
+describe('Web 指数分时 API', () => {
+  it('code 缺失 / 不在白名单 → invalid_input (400)', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r1 = await testApp.fetch(new Request('http://test/api/market/indices/intraday'));
+    expect(r1.status).toBe(400);
+    const r2 = await testApp.fetch(new Request('http://test/api/market/indices/intraday?code=HSI'));
+    expect(r2.status).toBe(400);
+    const body = (await r2.json()) as { ok: boolean; error?: { kind: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error?.kind).toBe('invalid_input');
+  });
+
+  it('数据源不支持分时 → 200 + supported:false（合法降级）', async () => {
+    const testApp = createWebApp(await buildTestContext());
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { supported: boolean; points: unknown[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.supported).toBe(false);
+    expect(body.data?.points).toEqual([]);
+  });
+
+  it('数据源返回分时点 → 200 + points 透传', async () => {
+    const ctx = await buildTestContext();
+    const stubMarket = {
+      name: 'stub-market',
+      fetchIntradayMinutes: async (stockId: string) => [
+        {
+          stockId,
+          time: new Date('2026-08-21T01:31:00Z'),
+          price: 3880.5,
+          cumVolume: 120_000,
+          cumAmount: 465_660_000,
+          source: 'tencent',
+        },
+      ],
+    };
+    const testApp = createWebApp({
+      ...ctx,
+      adapters: { ...ctx.adapters, market: stubMarket as never },
+    });
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      ok: boolean;
+      data?: { supported: boolean; date?: string; points: { price: number; cumAmount?: number }[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.supported).toBe(true);
+    expect(body.data?.date).toBe('2026-08-21');
+    expect(body.data?.points[0]?.price).toBe(3880.5);
+    expect(body.data?.points[0]?.cumAmount).toBe(465_660_000);
+  });
+
+  it('上游抛错（非 unsupported）→ 502', async () => {
+    const ctx = await buildTestContext();
+    const failingMarket = {
+      name: 'stub-market',
+      fetchIntradayMinutes: async (): Promise<never> => {
+        throw new Error('socket hang up');
+      },
+    };
+    const testApp = createWebApp({
+      ...ctx,
+      adapters: { ...ctx.adapters, market: failingMarket as never },
+    });
+    const r = await testApp.fetch(
+      new Request('http://test/api/market/indices/intraday?code=000001'),
+    );
+    expect(r.status).toBe(502);
   });
 });
 

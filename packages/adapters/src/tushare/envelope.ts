@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { SourceExecutionError } from '../source-error.js';
+
 /**
  * Tushare 官方 HTTP API envelope（https://tushare.pro/document/1?doc_id=130）。
  *
@@ -21,11 +23,17 @@ const TushareEnvelopeSchema = z.object({
 export const parseTushareEnvelopeRows = (raw: unknown): Array<Record<string, unknown>> => {
   const env = TushareEnvelopeSchema.parse(raw);
   if (env.code !== 0) {
-    throw new Error(`tushare upstream_error: ${env.code} ${env.msg ?? ''}`);
+    throw new SourceExecutionError(
+      'upstream_error',
+      `tushare upstream_error: ${env.code} ${env.msg ?? ''}`,
+    );
   }
   return env.data.items.map((row) => {
     if (row.length !== env.data.fields.length) {
-      throw new Error('tushare parse: fields/items length mismatch');
+      throw new SourceExecutionError(
+        'invalid_payload',
+        'tushare parse: fields/items length mismatch',
+      );
     }
     const obj: Record<string, unknown> = {};
     env.data.fields.forEach((field, i) => {

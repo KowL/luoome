@@ -43,7 +43,11 @@
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
 | [个股行情查看详细设计](./ddd/stock-market-view-detailed-design.md) | Market View Tool、日 K 数据契约、Web 图表与降级语义 |
+| [MinuteBar 详细设计](./ddd/minute-bar-detailed-design.md) | 独立分钟 OHLCV schema、Tushare 当前会话能力、缺口/保留和 Web 状态 |
 | [Tushare 行情适配器设计](./ddd/tushare-market-adapter-design.md) | Tushare 作为 `MarketDataManager` 第三真实源的契约、字段映射与抑制窗口 |
+| [同花顺 fuyao 行情适配器设计](./ddd/fuyao-market-adapter-design.md) | 同花顺 fuyao API 作为第四真实行情源的能力映射、envelope 错误转译与 factory 接线 |
+| [数据源可插拔与统一观测设计](./ddd/source-pluggability-and-observation-design.md) | 通用 SourceRegistry、单一 EastmoneySource、非行情域源可插拔与全域源健康观测（评审中） |
+| [行情数据源设置与状态展示优化设计](./ddd/market-source-settings-status-design.md) | 设置页源 × capability 配置态 + 运行态视图、静态能力 manifest 与 get_market_data_status 聚合 |
 | [行情数据底座详细设计](./ddd/market-data-and-stock-universe-detailed-design.md) | 多源规范化、盘后日线归档、本地股票目录同步与严格 adapter 替换 |
 | [Vibe A 股报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md) | Report、A 股情绪证据、三类简报 workflow 与策略研究映射 |
 | [Web 对话助手设计](./ddd/web-chat-design.md) | `/api/chat` 与 draft-and-confirm 交互 |
@@ -53,6 +57,10 @@
 | [策略工作台详细设计](./ddd/strategy-workspace-detailed-design.md) | Strategy 规则解释、派生股票池/候选池、运行 Diff、Tool/API 与 Web UI 设计 |
 | [Strategy 日运行与历史评估可靠性详细设计](./ddd/strategy-daily-cycle-and-replay-detailed-design.md) | publication、fencing lease、daily cycle、行情 checkpoint、AI 降级与 point-in-time replay |
 | [账户绩效与组合归因详细设计](./ddd/account-performance-detailed-design.md) | 现金流、公司行动、每日估值、TWR、回撤、benchmark、贡献归因与缺失语义 |
+| [Strategy 严格回测详细设计](./ddd/strategy-strict-backtest-detailed-design.md) | 独立 backtest scope、数据门禁、可复现身份、费用/滑点/可交易性与指标可用性 |
+| [Agent 协作体验 Phase 0+1 详细设计](./ddd/agent-collaboration-phase0-1-detailed-design.md) | 场景目录与确定性路由、计划卡、部分失败契约、Advice 草案与草案卡片升级、数据健康与取消 |
+| [AI 投资决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md) | 真实复盘目标用户旅程、冻结契约、竖向切片、迁移/安全/测试、浏览器验收与外部数据门禁 |
+| [Phase 3 基本面 PIT 因子与横截面评分详细设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) | 财务事实 vintage、因子 registry、横截面评分、版本审计与真实数据门禁 |
 
 ## 当前开发计划
 
@@ -71,6 +79,7 @@
 
 | 文档 | 用途 |
 |---|---|
+| [Strategy 生产可靠性运维手册](./runbooks/strategy-reliability-operations.md) | 调度参数、fencing/checkpoint/provider/baseline/T+20 日检、P50/P95/max 周报与真实 provider smoke |
 | [Tushare 集成手册](./runbooks/tushare-integration.md) | 配置、启动顺序、验证和故障排查 |
 
 ## 历史归档

@@ -1,4 +1,4 @@
-import type { MarketSourceStatus } from '@luoome/core';
+import type { MarketSourceStatus, SourceStatus } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -46,6 +46,8 @@ export const GetMarketDataStatusOutput = z.object({
  * get_market_data_status（ruo 迁移 §6 / §7.3，read）。现算，不落新表。
  *
  * - providers：按 PriceSnapshot 最新一条推断新鲜度（fresh / stale / unknown）
+ * - datasets：market registry + stock-universe checkpoint + 五个非行情 manager status() 的统一观测，
+ *   freshness 走 §4.3 状态机（lastErrorKind → unavailable；否则按 dataAsOf 阈值；否则 unknown）
  * - watchHealth：最近 WatchRun 摘要
  * - watchlistStale：存在 stale 成员来源的启用 Watchlist
  */
@@ -93,19 +95,18 @@ export const getMarketDataStatusTool = defineTool({
         };
       }),
     );
-    const ladderInventory: MarketSourceStatus[] = (ctx.limitUpLadder?.sources ?? []).map(
-      (source) => ({
-        dataset: 'limit-up-ladder' as const,
-        source,
-        coverage: ['CN_A_SHARES_SH_SZ'] as const,
-        capabilityEnabled: true,
-        configurationReady: true,
-      }),
-    );
-    const inventory: readonly MarketSourceStatus[] = [
+    // 非行情域 inventory 由各 manager 的 registry 观测提供（§6.4）；未装配的可选端口不产生对应 dataset
+    const nonMarketInventory: readonly SourceStatus[] = [
+      ctx.limitUpLadder?.status(),
+      ctx.dragonTiger?.status(),
+      ctx.ashareSentiment?.status(),
+      ctx.northboundFlow?.status(),
+      ctx.news?.status(),
+    ].flatMap((status) => status ?? []);
+    const inventory: readonly SourceStatus[] = [
       ...marketInventory,
       ...universeInventory,
-      ...ladderInventory,
+      ...nonMarketInventory,
     ];
     const sourceIds = [
       ...new Set([...inventory.map((item) => item.source), ...latestBySource.keys()]),
@@ -123,7 +124,6 @@ export const getMarketDataStatusTool = defineTool({
       };
     });
     const datasets = inventory.map((item) => {
-      const dataAt = item.dataAsOf ?? item.lastSuccessAt;
       const thresholdMs =
         item.dataset === 'quote' ||
         item.dataset === 'realtime-index' ||
@@ -131,13 +131,14 @@ export const getMarketDataStatusTool = defineTool({
         item.dataset === 'market-snapshot-envelope'
           ? STALE_AFTER_MS
           : 36 * 60 * 60 * 1000;
+      // §4.3 状态机：最新有效 outcome 失败 → unavailable；否则按 dataAsOf 阈值；不回退 lastSuccessAt
       const freshness =
-        dataAt !== undefined
-          ? now.getTime() - dataAt.getTime() <= thresholdMs
-            ? ('fresh' as const)
-            : ('stale' as const)
-          : item.lastErrorKind !== undefined
-            ? ('unavailable' as const)
+        item.lastErrorKind !== undefined
+          ? ('unavailable' as const)
+          : item.dataAsOf !== undefined
+            ? now.getTime() - item.dataAsOf.getTime() <= thresholdMs
+              ? ('fresh' as const)
+              : ('stale' as const)
             : ('unknown' as const);
       return { ...item, coverage: [...item.coverage], freshness };
     });

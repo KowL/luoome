@@ -1,6 +1,7 @@
 import type { Logger } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
+import { EastmoneySource } from '../eastmoney/source.js';
 import { createMarketAdapterFromEnv } from './factory.js';
 
 const silentLogger = (): Logger => {
@@ -33,12 +34,14 @@ describe('market/factory', () => {
       'eastmoney:quote',
       'eastmoney:daily-bars',
       'eastmoney:search',
+      'eastmoney:batch-quote',
       'eastmoney:market-snapshot',
       'eastmoney:market-snapshot-envelope',
       'eastmoney:realtime-index',
       'tencent:quote',
       'tencent:daily-bars',
       'tencent:search',
+      'tencent:batch-quote',
       'tencent:market-snapshot',
       'tencent:market-snapshot-envelope',
       'tencent:intraday-minutes',
@@ -74,6 +77,33 @@ describe('market/factory', () => {
     expect(q.source).toBe('eastmoney');
     expect(q.close).toBe(100.5);
     expect(q.volume).toBe(1_234_500); // 手 → 股
+  });
+
+  it('注入共享 EastmoneySource 时 eastmoney 分支复用该实例，不再用 deps.fetchImpl 自构', async () => {
+    const quoteBody = JSON.stringify({
+      rc: 0,
+      data: { f43: 100.5, f44: 101, f45: 99.5, f46: 100, f47: 12345, f60: 99.8 },
+    });
+    const injectedCalls: string[] = [];
+    const injected = new EastmoneySource({
+      fetchImpl: ((url: string | URL | Request) => {
+        injectedCalls.push(String(url));
+        return Promise.resolve(new Response(quoteBody, { status: 200 }));
+      }) as unknown as typeof fetch,
+    });
+    const selfConstructFetch = (async () => {
+      throw new Error('must not self-construct eastmoney');
+    }) as unknown as typeof fetch;
+
+    const adapter = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'eastmoney' },
+      { logger: silentLogger(), fetchImpl: selfConstructFetch, sources: { eastmoney: injected } },
+    );
+    const q = await adapter.fetchQuote('002594.SZ');
+
+    expect(q.source).toBe('eastmoney');
+    expect(q.close).toBe(100.5);
+    expect(injectedCalls.some((url) => url.includes('push2.eastmoney.com'))).toBe(true);
   });
 
   it('real：primary 失败 → 落到 Tencent fallback', async () => {
@@ -222,7 +252,13 @@ describe('market/factory', () => {
     await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/unsupported_capability/);
     expect(
       adapter.marketSourceStatus().map(({ dataset, source }) => `${source}:${dataset}`),
-    ).toEqual(['tushare:quote', 'tushare:daily-bars', 'tushare:search', 'tushare:delayed-index']);
+    ).toEqual([
+      'tushare:quote',
+      'tushare:daily-bars',
+      'tushare:search',
+      'tushare:minute-bars',
+      'tushare:delayed-index',
+    ]);
     expect(urls).toEqual([]);
   });
 
@@ -284,5 +320,180 @@ describe('market/factory', () => {
     await expect(eastmoneyOnly.fetchIntradayMinutes('002594.SZ')).rejects.toThrow(
       /unsupported_capability/,
     );
+  });
+
+  it('minute-bars 只在显式启用 Tushare 时注册；映射 rt_min_daily', async () => {
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'tushare',
+        TUSHARE_TOKEN: 'test-token',
+      },
+      {
+        logger: silentLogger(),
+        clock: () => new Date('2026-08-14T02:00:00.000Z'),
+        fetchImpl: (async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { api_name: string };
+          if (body.api_name !== 'rt_min_daily') {
+            return new Response('unexpected api', { status: 500 });
+          }
+          return new Response(
+            JSON.stringify({
+              code: 0,
+              msg: '',
+              data: {
+                fields: ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'],
+                items: [
+                  ['002594.SZ', '1MIN', '2026-08-14 09:31:00', 90, 90.5, 91, 89, 10000, 905000],
+                ],
+              },
+            }),
+            { status: 200 },
+          );
+        }) as never,
+      },
+    );
+    const bars = await adapter.fetchMinuteBars('002594.SZ', '1m');
+    expect(bars[0]).toMatchObject({ source: 'tushare', interval: '1m', adjustment: 'raw' });
+    expect(
+      adapter
+        .marketSourceStatus()
+        .some((status) => status.dataset === 'minute-bars' && status.source === 'tushare'),
+    ).toBe(true);
+  });
+
+  it('LUOOME_MARKET_SOURCES 含 fuyao 但 FUYAO_API_KEY 缺失 → 启动期报错', () => {
+    expect(() =>
+      createMarketAdapterFromEnv(
+        { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'fuyao' },
+        { logger: silentLogger() },
+      ),
+    ).toThrow(/FUYAO_API_KEY/);
+  });
+
+  it('LUOOME_MARKET_SOURCES=fuyao + FUYAO_API_KEY：quote 路由到 fuyao，绑定集合正确', async () => {
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'fuyao',
+        FUYAO_API_KEY: 'test-fuyao-key',
+      },
+      {
+        logger: silentLogger(),
+        fetchImpl: (async (url: string) => {
+          expect(String(url)).toContain('fuyao.aicubes.cn/api/a-share/prices/snapshot');
+          return new Response(
+            JSON.stringify({
+              code: 0,
+              message: 'success',
+              request_id: 'r1',
+              data: {
+                timestamp: Date.now() - 60_000,
+                item: [
+                  {
+                    thscode: '002594.SZ',
+                    ticker: '002594',
+                    last_price: 250,
+                    price_change: 2,
+                    price_change_ratio_pct: 0.81,
+                    open_price: 248,
+                    high_price: 251,
+                    low_price: 247,
+                    prev_price: 248,
+                    volume: 999,
+                    turnover: 249750,
+                  },
+                ],
+              },
+            }),
+            { status: 200 },
+          );
+        }) as never,
+      },
+    );
+    const q = await adapter.fetchQuote('002594.SZ');
+    expect(q.source).toBe('fuyao');
+    expect(q.close).toBe(250);
+    expect(
+      adapter.marketSourceStatus().map(({ dataset, source }) => `${source}:${dataset}`),
+    ).toEqual([
+      'fuyao:quote',
+      'fuyao:daily-bars',
+      'fuyao:search',
+      'fuyao:batch-quote',
+      'fuyao:market-snapshot',
+      'fuyao:delayed-index',
+    ]);
+  });
+
+  it('eastmoney 失败 → 降级到 fuyao fallback', async () => {
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'eastmoney,fuyao',
+        FUYAO_API_KEY: 'test-fuyao-key',
+      },
+      {
+        logger: silentLogger(),
+        fetchImpl: (async (url: string) => {
+          if (String(url).includes('fuyao.aicubes.cn')) {
+            return new Response(
+              JSON.stringify({
+                code: 0,
+                message: 'success',
+                request_id: 'r1',
+                data: {
+                  timestamp: Date.now() - 60_000,
+                  item: [
+                    {
+                      thscode: '002594.SZ',
+                      ticker: '002594',
+                      last_price: 250,
+                      open_price: 248,
+                      high_price: 251,
+                      low_price: 247,
+                      prev_price: 248,
+                      volume: 999,
+                      turnover: 249750,
+                    },
+                  ],
+                },
+              }),
+              { status: 200 },
+            );
+          }
+          return new Response('down', { status: 500 });
+        }) as never,
+      },
+    );
+    const q = await adapter.fetchQuote('002594.SZ');
+    expect(q.source).toBe('fuyao');
+    expect(q.close).toBe(250);
+  });
+
+  it('activeOrder 仅 fuyao：realtime index 明确不支持，minute/intraday 不注册', async () => {
+    const urls: string[] = [];
+    const adapter = createMarketAdapterFromEnv(
+      {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'fuyao',
+        FUYAO_API_KEY: 'test-fuyao-key',
+      },
+      {
+        logger: silentLogger(),
+        fetchImpl: ((url: string) => {
+          urls.push(String(url));
+          return Promise.resolve(new Response('unexpected request', { status: 500 }));
+        }) as never,
+      },
+    );
+    await expect(adapter.fetchIndexQuotes()).rejects.toThrow(/unsupported_capability/);
+    await expect(adapter.fetchMinuteBars('002594.SZ', '1m')).rejects.toThrow(
+      /unsupported_capability/,
+    );
+    await expect(adapter.fetchIntradayMinutes('002594.SZ')).rejects.toThrow(
+      /unsupported_capability/,
+    );
+    expect(urls).toEqual([]);
   });
 });

@@ -4,7 +4,27 @@ import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { type Schema, trades } from '../../schema/index.js';
 
-/** Trade 的 Drizzle 实现。行结构与实体一致，无需 mapper。 */
+type TradeRow = typeof trades.$inferSelect;
+
+const fromRow = (row: TradeRow): Trade => ({
+  id: row.id,
+  accountId: row.accountId,
+  stockId: row.stockId,
+  side: row.side,
+  quantity: row.quantity,
+  price: row.price,
+  fee: row.fee,
+  executedAt: row.executedAt,
+  source: row.source,
+  ...(row.adviceId === null ? {} : { adviceId: row.adviceId }),
+  ...(row.researchHypothesisVersionId === null
+    ? {}
+    : { researchHypothesisVersionId: row.researchHypothesisVersionId }),
+  ...(row.strategyVersionId === null ? {} : { strategyVersionId: row.strategyVersionId }),
+  createdAt: row.createdAt,
+});
+
+/** Trade 的 Drizzle 实现。关联字段是可空 provenance，不影响持仓事实。 */
 export class DrizzleTradeRepository implements TradeRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
@@ -20,6 +40,9 @@ export class DrizzleTradeRepository implements TradeRepository {
       fee: trade.fee,
       executedAt: trade.executedAt,
       source: trade.source,
+      adviceId: trade.adviceId ?? null,
+      researchHypothesisVersionId: trade.researchHypothesisVersionId ?? null,
+      strategyVersionId: trade.strategyVersionId ?? null,
       createdAt: trade.createdAt,
     };
     this.db.insert(trades).values(row).onConflictDoUpdate({ target: trades.id, set: row }).run();
@@ -27,7 +50,7 @@ export class DrizzleTradeRepository implements TradeRepository {
 
   async findById(id: string): Promise<Trade | null> {
     const row = this.db.select().from(trades).where(eq(trades.id, id)).get();
-    return row ?? null;
+    return row === undefined ? null : fromRow(row);
   }
 
   /** 按执行时间升序（id 决胜），与内存实现保持一致。 */
@@ -37,7 +60,8 @@ export class DrizzleTradeRepository implements TradeRepository {
       .from(trades)
       .where(eq(trades.accountId, accountId))
       .orderBy(asc(trades.executedAt), asc(trades.id))
-      .all();
+      .all()
+      .map(fromRow);
   }
 
   async remove(id: string): Promise<void> {

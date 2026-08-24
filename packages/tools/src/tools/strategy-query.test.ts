@@ -189,6 +189,13 @@ describe('complete|partial 可用运行基准', () => {
         stockId === '300750.SZ'
           ? Promise.reject(new Error('quote unavailable'))
           : base.adapters.market.fetchQuote(stockId),
+      // spread 类实例会丢失原型方法，显式委托保留 batchQuote；
+      // 预加载同样缺席 300750.SZ，保留 fetchQuote 拒绝 → partial 的测试意图
+      batchQuote: async (stockIds) => {
+        const quotes = await base.adapters.market.batchQuote(stockIds);
+        quotes.delete('300750.SZ');
+        return quotes;
+      },
     };
     const ctx = { ...base, adapters: { ...base.adapters, market } };
 
@@ -381,15 +388,15 @@ describe('strategy-query', () => {
     ]);
   });
 
-  it('enriches selected view with latest quote price and changePct', async () => {
-    const ctx = await buildTestContext();
-    await seedTestStockUniverse(ctx, { limit: 2 });
-    await seedStrategy(ctx);
-    const run = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+  it('enriches selected view with live quotes, missing live falls back to cached snapshot', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    const run = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, base);
     if (!run.ok) throw new Error('run_strategy 前置失败');
 
-    const now = ctx.clock();
-    await ctx.repos.quote.save({
+    const now = base.clock();
+    await base.repos.quote.save({
       stockId: '600519.SH',
       observedAt: now,
       fetchedAt: now,
@@ -403,6 +410,16 @@ describe('strategy-query', () => {
       prevClose: money(1600),
       source: 'test',
     });
+    // 600519.SH 实时缺席 → 回退上面的本地快照；300750.SZ 走实时
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: async (stockIds) => {
+        const quotes = await base.adapters.market.batchQuote(stockIds);
+        quotes.delete('600519.SH');
+        return quotes;
+      },
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
 
     const result = await listStrategyResultViewsTool.execute(
       { strategyId: 'scan-strategy', view: 'selected' },
@@ -411,10 +428,35 @@ describe('strategy-query', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const maoTai = result.data.rows.find((row) => row.stock.stockId === '600519.SH');
-    expect(maoTai).toBeDefined();
     expect(maoTai?.quote).toMatchObject({ price: 1640, changePct: 2.5 });
     const ningDe = result.data.rows.find((row) => row.stock.stockId === '300750.SZ');
-    expect(ningDe?.quote).toBeUndefined();
+    expect(ningDe?.quote).toBeDefined();
+    expect(ningDe?.quote?.changePct).toBe(0);
+  });
+
+  it('leaves quote undefined when both live fetch and local snapshot miss', async () => {
+    const base = await buildTestContext();
+    await seedTestStockUniverse(base, { limit: 2 });
+    await seedStrategy(base);
+    const run = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, base);
+    if (!run.ok) throw new Error('run_strategy 前置失败');
+
+    const market: MarketDataAdapterLike = {
+      ...base.adapters.market,
+      batchQuote: () => Promise.resolve(new Map()),
+    };
+    const ctx = { ...base, adapters: { ...base.adapters, market } };
+
+    const result = await listStrategyResultViewsTool.execute(
+      { strategyId: 'scan-strategy', view: 'selected' },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows).toHaveLength(2);
+    for (const row of result.data.rows) {
+      expect(row.quote).toBeUndefined();
+    }
   });
 
   it('keeps the latest complete run as current when the latest attempt failed', async () => {

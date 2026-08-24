@@ -383,6 +383,10 @@ export const StrategyRunInputSnapshotV3Schema = z.object({
   strategyVersionId: z.string().min(1),
   definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
   evaluatorVersion: z.string().min(1),
+  evaluatorCodeIdentity: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   scope: StrategyRunScopeSchema,
   universeKind: StrategyRunUniverseKindSchema,
   coverage: z.literal('CN_A_SHARES_SH_SZ'),

@@ -3,8 +3,14 @@ export { DrizzleAdviceRepository } from './advice.js';
 export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
+export { DrizzleFinancialFactRepository } from './financial-fact.js';
+export {
+  DrizzleFundamentalScoreRunRepository,
+  DrizzleFundamentalScoreVersionRepository,
+} from './fundamental-score.js';
 export { DrizzleHoldingRepository } from './holding.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
+export { DrizzleMinuteBarRepository } from './minute-bar.js';
 export { DrizzleNotificationRepository } from './notification.js';
 export {
   DrizzlePortfolioCashFlowRepository,
@@ -13,6 +19,8 @@ export {
 export { DrizzlePortfolioPerformanceSnapshotRepository } from './portfolio-performance-snapshot.js';
 export { DrizzleQuoteRepository } from './quote.js';
 export { DrizzleReportRepository } from './report.js';
+export { DrizzleResearchEmbeddingRepository } from './research-embedding.js';
+export { DrizzleResearchHypothesisVersionRepository } from './research-hypothesis.js';
 export { DrizzleResearchIndexRepository } from './research-index.js';
 export { DrizzleResearchVaultSyncRunRepository } from './research-vault-run.js';
 export { DrizzleSignalObservationRepository } from './signal-observation.js';
@@ -20,11 +28,13 @@ export { DrizzleStockRepository } from './stock.js';
 export { DrizzleStockEventRepository } from './stock-event.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';
 export { DrizzleStrategyRepository, DrizzleStrategyRunRepository } from './strategy.js';
+export { DrizzleStrategyBacktestRepository } from './strategy-backtest.js';
 export {
   DrizzleStrategyDataCheckpointRepository,
   DrizzleStrategyEvaluationRepository,
 } from './strategy-checkpoint.js';
 export { DrizzleStrategyScheduleRepository } from './strategy-schedule.js';
+export { DrizzleStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
 export { DrizzleTradeRepository } from './trade.js';
 export { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';
 export { DrizzleWatchRunRepository } from './watch-run.js';

@@ -29,7 +29,7 @@ Strategy
   ├── StrategyResult         每只股票的入选、评分和解释
   └── StrategySignal         某时点产生的方向性信号
 
-StrategyRun ──► WatchlistMemberSource(strategy)
+StrategyRun ──► active StrategyWatchlistSubscription ──► WatchlistMemberSource(strategy)
 StrategySignal ──► Alert / Advice evidence / SignalObservation
 ```
 
@@ -411,12 +411,12 @@ evaluation:
 
 ## 7. 与统一 Watchlist 的关系
 
-StrategyRun 更新 Watchlist 的策略来源：
+在用户创建 active StrategyWatchlistSubscription 后，正式 StrategyRun 才能更新 Watchlist 的策略来源：
 
 ```text
-StrategyRun
+published operational StrategyRun
   ├── selected=true  ──► 添加/刷新 WatchlistMemberSource(strategy)
-  └── selected=false ──► 结束该策略来源的有效期
+  └── selected=false ──► complete 时结束该策略来源的有效期
 ```
 
 重要约束：
@@ -424,7 +424,8 @@ StrategyRun
 - 同一股票可被多个 Strategy 同时发现。
 - 策略不再命中时，只结束对应 strategy source。
 - 如果股票仍有手工、AI、持仓或其它策略来源，WatchlistMember 继续存在。
-- 策略刷新失败不结束任何旧来源，旧结果标记 stale。
+- complete 才能按完整结果结束缺失来源；partial/failed 只标 stale，不按缺失集合退出。
+- evaluation、trial、persist=false、withheld、non-publishing 和 failed run 不改变 Watchlist。
 - 用户可把策略候选提升为重点研究，而不改变 StrategyResult。
 
 ## 8. 与 Advice、Portfolio 和 Agent 的关系
@@ -492,7 +493,7 @@ Agent 不可以：
 - 模板和自然语言草案；
 - 发布、暂停、复制、回滚和版本差异；
 - 注册数据字典与静态校验；
-- StrategyRun 原子更新统一 Watchlist；
+- 通过显式 StrategyWatchlistSubscription，StrategyRun 原子更新统一 Watchlist；
 - Agent/Web/CLI/MCP 使用统一 Strategy tools。
 
 ### Phase 3：风险与真实复盘
@@ -513,6 +514,6 @@ Agent 不可以：
 - 每次运行可追溯策略版本、数据时间、覆盖范围和部分失败。
 - 每只候选能解释为何入选、得分如何组成、哪些规则未满足。
 - 历史信号可还原到对应 StrategyVersion 和 rule。
-- Strategy 更新 Watchlist 来源时不会误删其它来源。
+- Strategy 只有在显式订阅后更新 Watchlist 来源，且不会误删其它来源。
 - score 不表述为收益概率，signal 不表述为最终 Advice。
 - Strategy 的任何运行都不能触发真实交易。

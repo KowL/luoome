@@ -19,6 +19,17 @@ const RunStrategiesItemSchema = z.object({
   runId: z.string().optional(),
   selected: z.number().int().nonnegative(),
   signals: z.number().int().nonnegative(),
+  watchlistSync: z
+    .object({
+      status: z.enum(['complete', 'partial', 'failed', 'skipped']),
+      complete: z.number().int().nonnegative().optional(),
+      partial: z.number().int().nonnegative().optional(),
+      failed: z.number().int().nonnegative().optional(),
+      skipped: z.number().int().nonnegative().optional(),
+      reason: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
   error: z.string().optional(),
 });
 
@@ -99,6 +110,43 @@ const runAll: WorkflowStep = async (previous, ctx) => {
       });
       continue;
     }
+    let watchlistSync:
+      | {
+          status: 'complete' | 'partial' | 'failed' | 'skipped';
+          complete?: number;
+          partial?: number;
+          failed?: number;
+          skipped?: number;
+          reason?: string;
+          error?: string;
+        }
+      | undefined;
+    if (result.data.persisted && result.data.run.status !== 'failed') {
+      const synced = await ctx.tools.sync_strategy_watchlist_subscriptions.execute({
+        strategyId,
+        producerRunId: result.data.run.id,
+      });
+      if (synced.ok) {
+        watchlistSync = {
+          status: synced.data.status,
+          complete: synced.data.complete,
+          partial: synced.data.partial,
+          failed: synced.data.failed,
+          skipped: synced.data.skipped,
+          ...(synced.data.reason === undefined ? {} : { reason: synced.data.reason }),
+        };
+      } else {
+        watchlistSync = {
+          status: 'failed',
+          error:
+            'message' in synced.error
+              ? synced.error.message
+              : 'cause' in synced.error
+                ? synced.error.cause
+                : `${synced.error.kind}`,
+        };
+      }
+    }
     items.push({
       strategyId,
       status: result.data.run.status === 'failed' ? 'failed' : 'complete',
@@ -106,6 +154,7 @@ const runAll: WorkflowStep = async (previous, ctx) => {
       runId: result.data.run.id,
       selected: result.data.results.filter((candidate) => candidate.selected).length,
       signals: result.data.signals.length,
+      ...(watchlistSync === undefined ? {} : { watchlistSync }),
       ...(result.data.run.error === undefined ? {} : { error: result.data.run.error }),
     });
   }

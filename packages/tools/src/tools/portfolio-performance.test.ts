@@ -125,13 +125,98 @@ describe('portfolio performance tools', () => {
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
-    expect(first.data.audit).toMatchObject({ inputFingerprint: expect.any(String) });
-    expect(second.data.audit).toEqual(first.data.audit);
+    expect(first.data.audit).toMatchObject({
+      inputFingerprint: expect.any(String),
+      cacheStatus: 'created',
+      calculationDurationMs: expect.any(Number),
+      inputFacts: { priceSeries: expect.any(Number), dailyBars: expect.any(Number) },
+    });
+    expect(second.data.audit).toMatchObject({
+      snapshotId: first.data.audit?.snapshotId,
+      inputFingerprint: first.data.audit?.inputFingerprint,
+      calculatedAt: first.data.audit?.calculatedAt,
+      cacheStatus: 'reused',
+    });
     expect(first.data.benchmarkStockId).toBe('000300.SH');
     expect(
       await ctx.repos.portfolioPerformanceSnapshot.listByAccount(input.accountId),
     ).toHaveLength(1);
     expect(fetchCount).toBeGreaterThan(0);
+  });
+
+  it('输入账本事实变化时创建新快照并保留旧快照追溯', async () => {
+    const ctx = await buildTestContext();
+    const accountId = ctx.user.defaultAccountId;
+    const input = {
+      accountId,
+      from: new Date('2026-07-01T00:00:00.000Z'),
+      to: new Date('2026-07-03T00:00:00.000Z'),
+    };
+    const first = await getAccountPerformanceTool.execute(input, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await createPortfolioCashFlowTool.execute(
+      {
+        accountId,
+        occurredAt: new Date('2026-07-02T00:00:00.000Z'),
+        kind: 'fee',
+        amount: 12,
+        currency: 'CNY',
+      },
+      ctx,
+    );
+    const second = await getAccountPerformanceTool.execute(input, ctx);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.audit?.snapshotId).not.toBe(first.data.audit?.snapshotId);
+    expect(second.data.audit?.inputFingerprint).not.toBe(first.data.audit?.inputFingerprint);
+    const snapshots = await ctx.repos.portfolioPerformanceSnapshot.listByAccount(accountId);
+    expect(snapshots).toHaveLength(2);
+    expect(
+      await ctx.repos.portfolioPerformanceSnapshot.findById(first.data.audit?.snapshotId ?? ''),
+    ).not.toBeNull();
+  });
+
+  it('以有界并发抓取大账户价格序列并记录性能预算事实', async () => {
+    const base = await buildTestContext();
+    let active = 0;
+    let maxActive = 0;
+    const ctx = {
+      ...base,
+      portfolioBenchmark: { stockId: '000300.SH', name: '沪深300' },
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (
+            ...args: Parameters<typeof base.adapters.market.fetchDailyBars>
+          ) => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            try {
+              return await base.adapters.market.fetchDailyBars(...args);
+            } finally {
+              active -= 1;
+            }
+          },
+        },
+      },
+    };
+    const result = await getAccountPerformanceTool.execute(
+      {
+        accountId: base.user.defaultAccountId,
+        from: new Date('2026-07-01T00:00:00.000Z'),
+        to: new Date('2026-07-03T00:00:00.000Z'),
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(maxActive).toBeGreaterThan(1);
+    expect(maxActive).toBeLessThanOrEqual(8);
+    expect(result.data.audit?.inputFacts?.priceSeries).toBeGreaterThan(1);
+    expect(result.data.audit?.calculationDurationMs).toBeGreaterThanOrEqual(0);
   });
 
   it('审计快照区间覆盖并暴露缺失交易日，不重新请求行情', async () => {
@@ -225,6 +310,82 @@ describe('portfolio performance tools', () => {
           observedTradingDays: 3,
           missingDates: [],
           completeness: 'complete',
+        },
+      },
+    });
+  });
+
+  it('区间审计采用最新事实修订，旧 complete 不掩盖新的 partial', async () => {
+    const ctx = await buildTestContext({
+      clock: () => new Date('2026-07-04T00:00:00.000Z'),
+    });
+    const accountId = ctx.user.defaultAccountId;
+    const first = await getAccountPerformanceTool.execute(
+      {
+        accountId,
+        from: new Date('2026-07-01T00:00:00.000Z'),
+        to: new Date('2026-07-03T00:00:00.000Z'),
+      },
+      ctx,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const original = await ctx.repos.portfolioPerformanceSnapshot.findById(
+      first.data.audit?.snapshotId ?? '',
+    );
+    expect(original).not.toBeNull();
+    if (original === null) return;
+    await ctx.repos.portfolioPerformanceSnapshot.save({
+      ...original,
+      id: 'performance-revision-partial',
+      inputFingerprint: 'revision-partial',
+      calculatedAt: new Date('2026-07-05T00:00:00.000Z'),
+      performance: {
+        ...original.performance,
+        completeness: 'partial',
+        twrPct: undefined,
+        maxDrawdownPct: undefined,
+        warnings: ['输入事实修订后发现停牌缺价，收益指标保持 unavailable'],
+        valuation: original.performance.valuation.map((day, index) =>
+          index === 0
+            ? {
+                ...day,
+                holdingsValue: undefined,
+                totalValue: undefined,
+                completeness: 'partial',
+                missingStockIds: ['600519.SH'],
+                twrReturnPct: undefined,
+                cumulativeTwrPct: undefined,
+                drawdownPct: undefined,
+              }
+            : day,
+        ),
+        audit: undefined,
+      },
+    });
+    const audit = await auditPortfolioPerformanceSnapshotsTool.execute(
+      {
+        accountId,
+        from: new Date('2026-07-01T00:00:00.000Z'),
+        to: new Date('2026-07-03T00:00:00.000Z'),
+      },
+      ctx,
+    );
+    expect(audit).toMatchObject({
+      ok: true,
+      data: {
+        audit: {
+          completeness: 'partial',
+          partialDayCount: 1,
+          revisionDayCount: 3,
+          gaps: [
+            {
+              date: '2026-07-01',
+              snapshotId: 'performance-revision-partial',
+              revisionCount: 2,
+              missingStockIds: ['600519.SH'],
+            },
+          ],
         },
       },
     });

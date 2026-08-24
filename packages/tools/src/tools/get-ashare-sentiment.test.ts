@@ -78,6 +78,7 @@ const baseSnapshot = (): AShareSentimentSnapshot => ({
 });
 
 const manager: AShareSentimentManagerLike = {
+  status: () => [],
   fetch: async () => ({ ok: true, data: baseSnapshot() }),
 };
 
@@ -119,6 +120,7 @@ describe('get_ashare_sentiment', () => {
     const historical = baseSnapshot();
     historical.date = '2026-07-27';
     const historicalManager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async () => ({ ok: true, data: historical }),
     };
     const base = await buildTestContext({
@@ -197,6 +199,7 @@ describe('get_ashare_sentiment', () => {
 
   it('manager 判定非交易日时映射为 invalid_input', async () => {
     const invalidManager: AShareSentimentManagerLike = {
+      status: () => [],
       fetch: async () => ({
         ok: false,
         error: {

@@ -1,19 +1,15 @@
 import { quantity as brandQuantity, type DailyBar, type DateRange, money } from '@luoome/core';
 
+import { httpStatusErrorKind, SourceExecutionError } from '../source-error.js';
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_KLINE_URL =
   'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData';
 const DEFAULT_FACTOR_URL = 'https://finance.sina.com.cn/realstock/company';
 const MAX_DATALEN = 1023;
 
-export class SinaAdapterError extends Error {
+export class SinaAdapterError extends SourceExecutionError {
   override readonly name = 'SinaAdapterError';
-  constructor(
-    message: string,
-    override readonly cause?: unknown,
-  ) {
-    super(message);
-  }
 }
 
 interface SinaRawBar {
@@ -72,7 +68,7 @@ export class SinaAdapter {
     const code = toPrefixedCode(stockCode);
     const rawBars = await this.fetchRawBars(code, range);
     if (rawBars.length === 0) {
-      throw new SinaAdapterError(`no_data: Sina 日线为空 code=${code}`);
+      throw new SinaAdapterError('no_data', `no_data: Sina 日线为空 code=${code}`);
     }
     const factors = isIndexCode(stockCode) ? [] : await this.fetchFactors(code);
     const fromMs = range.start.getTime();
@@ -98,7 +94,10 @@ export class SinaAdapter {
       if (date.getTime() < fromMs || date.getTime() > toMs) continue;
       const factor = factors.length === 0 ? 1 : factorForDate(factors, date.getTime());
       if (!Number.isFinite(factor) || factor <= 0) {
-        throw new SinaAdapterError(`invalid_adjustment: Sina qfq factor invalid code=${code}`);
+        throw new SinaAdapterError(
+          'invalid_payload',
+          `invalid_adjustment: Sina qfq factor invalid code=${code}`,
+        );
       }
       bars.push({
         stockId: stockCode.toUpperCase(),
@@ -114,7 +113,7 @@ export class SinaAdapter {
       });
     }
     if (bars.length === 0) {
-      throw new SinaAdapterError(`no_data: Sina 日线在请求区间内为空 code=${code}`);
+      throw new SinaAdapterError('no_data', `no_data: Sina 日线在请求区间内为空 code=${code}`);
     }
     return bars;
   }
@@ -128,7 +127,10 @@ export class SinaAdapter {
     const response = await this.request(url);
     const payload = (await response.json()) as unknown;
     if (!Array.isArray(payload)) {
-      throw new SinaAdapterError(`invalid_payload: Sina 日线响应不是数组 code=${code}`);
+      throw new SinaAdapterError(
+        'invalid_payload',
+        `invalid_payload: Sina 日线响应不是数组 code=${code}`,
+      );
     }
     return payload as SinaRawBar[];
   }
@@ -139,16 +141,24 @@ export class SinaAdapter {
     const text = await response.text();
     const match = text.match(/=\s*(\{[\s\S]*?\})\s*(?:;|\/\*)/);
     if (match?.[1] === undefined) {
-      throw new SinaAdapterError(`invalid_payload: Sina qfq factor response code=${code}`);
+      throw new SinaAdapterError(
+        'invalid_payload',
+        `invalid_payload: Sina qfq factor response code=${code}`,
+      );
     }
     let payload: SinaFactorPayload;
     try {
       payload = JSON.parse(match[1]) as SinaFactorPayload;
     } catch (error) {
-      throw new SinaAdapterError(`invalid_payload: Sina qfq factor JSON code=${code}`, error);
+      throw new SinaAdapterError(
+        'invalid_payload',
+        `invalid_payload: Sina qfq factor JSON code=${code}`,
+        error,
+      );
     }
     if (!Array.isArray(payload.data) || payload.data.length === 0) {
       throw new SinaAdapterError(
+        'unsupported_adjustment',
         `unsupported_adjustment: Sina qfq factor unavailable code=${code}`,
       );
     }
@@ -156,7 +166,10 @@ export class SinaAdapter {
       const date = parseDate(item.d);
       const factor = positiveNumber(item.f);
       if (date === undefined || factor === undefined) {
-        throw new SinaAdapterError(`invalid_payload: Sina qfq factor row code=${code}`);
+        throw new SinaAdapterError(
+          'invalid_payload',
+          `invalid_payload: Sina qfq factor row code=${code}`,
+        );
       }
       return { date: date.getTime(), factor };
     });
@@ -169,7 +182,12 @@ export class SinaAdapter {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const response = await this.fetchImpl(url, { signal: controller.signal });
-      if (!response.ok) throw new SinaAdapterError(`HTTP ${response.status} url=${url}`);
+      if (!response.ok) {
+        throw new SinaAdapterError(
+          httpStatusErrorKind(response.status),
+          `HTTP ${response.status} url=${url}`,
+        );
+      }
       return response;
     } catch (error) {
       if (error instanceof SinaAdapterError) throw error;
@@ -180,7 +198,7 @@ export class SinaAdapter {
         error.name === 'AbortError'
           ? 'timeout'
           : 'network';
-      throw new SinaAdapterError(`${kind}: Sina request failed url=${url}`, error);
+      throw new SinaAdapterError(kind, `${kind}: Sina request failed url=${url}`, error);
     } finally {
       clearTimeout(timeout);
     }
@@ -200,7 +218,7 @@ const toPrefixedCode = (stockCode: string): string => {
   if (/^\d{6}$/.test(normalized)) {
     return `${normalized[0] === '6' ? 'sh' : 'sz'}${normalized}`;
   }
-  throw new SinaAdapterError(`无法识别 stockCode: ${stockCode}`);
+  throw new SinaAdapterError('unsupported_market', `无法识别 stockCode: ${stockCode}`);
 };
 
 const isIndexCode = (stockCode: string): boolean =>

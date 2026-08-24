@@ -225,6 +225,17 @@ export class InMemoryResearchIndexRepository implements ResearchIndexRepository 
       });
   }
 
+  async listChunks(input: { readonly documentIds?: readonly string[] } = {}) {
+    const allowed = input.documentIds === undefined ? undefined : new Set(input.documentIds);
+    return this.chunks
+      .filter((chunk) => allowed === undefined || allowed.has(chunk.documentId))
+      .sort(
+        (left, right) =>
+          left.documentId.localeCompare(right.documentId) || left.ordinal - right.ordinal,
+      )
+      .map(copy);
+  }
+
   async listStockSubjectKeys(): Promise<readonly string[]> {
     return [
       ...new Set(

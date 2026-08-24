@@ -1011,6 +1011,115 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
   ]);
 };
 
+const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh) => {
+  const [subscriptionsResult, watchlistsResult] = await Promise.all([
+    cachedGet(`/api/strategies/${encodeURIComponent(strategy.id)}/watchlists`),
+    cachedGet('/api/watchlists'),
+  ]);
+  if (!subscriptionsResult.ok) {
+    return el('section', 'strategy-schedule-panel', [
+      el('h3', null, 'Strategy → Watchlist 订阅'),
+      el('p', 'status error', errorText(subscriptionsResult)),
+    ]);
+  }
+  if (!watchlistsResult.ok) {
+    return el('section', 'strategy-schedule-panel', [
+      el('h3', null, 'Strategy → Watchlist 订阅'),
+      el('p', 'status error', errorText(watchlistsResult)),
+    ]);
+  }
+  const subscriptions = subscriptionsResult.data.subscriptions ?? [];
+  const targets = (watchlistsResult.data.items ?? []).filter(
+    ({ watchlist }) => watchlist.enabled && watchlist.kind !== 'system',
+  );
+  const select = el('select');
+  for (const { watchlist } of targets) {
+    const option = el('option', null, `${watchlist.name} · ${watchlist.id}`);
+    option.value = watchlist.id;
+    select.append(option);
+  }
+  const subscribe = el('button', 'btn btn-primary btn-sm', '订阅目标 Watchlist');
+  subscribe.type = 'button';
+  subscribe.disabled = targets.length === 0;
+  subscribe.addEventListener('click', async () => {
+    if (select.value.length === 0) return;
+    const target = targets.find(({ watchlist }) => watchlist.id === select.value)?.watchlist;
+    const confirmed = await confirmDialog({
+      title: '订阅 Strategy 输出',
+      message: `确认将 ${strategy.name} 的后续 published operational run 同步到“${target?.name ?? select.value}”？部分数据只会标 stale，试跑/评估/未发布运行不会改变 Watchlist。`,
+      confirmLabel: '确认订阅',
+    });
+    if (!confirmed) return;
+    subscribe.disabled = true;
+    const result = await post(`/api/strategies/${encodeURIComponent(strategy.id)}/watchlists`, {
+      watchlistId: select.value,
+    });
+    subscribe.disabled = targets.length === 0;
+    if (!result.ok) {
+      setStatus(errorText(result), true);
+      return;
+    }
+    responseCache.clear();
+    setStatus(result.data.idempotent ? '订阅已存在' : 'Strategy→Watchlist 订阅已创建');
+    await refresh();
+  });
+  const activeRows = subscriptions.map((subscription) => {
+    const target = targets.find(({ watchlist }) => watchlist.id === subscription.watchlistId);
+    const cancel = el('button', 'btn btn-outline btn-sm', '取消订阅');
+    cancel.type = 'button';
+    cancel.addEventListener('click', async () => {
+      const confirmed = await confirmDialog({
+        title: '取消 Strategy 订阅',
+        message: `确认停止将 ${strategy.name} 的后续 published operational run 同步到“${target?.name ?? subscription.watchlistId}”？已有 Watchlist 成员和同步历史不会被删除。`,
+        confirmLabel: '取消订阅',
+      });
+      if (!confirmed) return;
+      cancel.disabled = true;
+      const result = await callApi(
+        `/api/strategies/${encodeURIComponent(strategy.id)}/watchlists/${encodeURIComponent(subscription.watchlistId)}`,
+        { method: 'DELETE', body: '{}' },
+      );
+      if (!result.ok) {
+        cancel.disabled = false;
+        setStatus(errorText(result), true);
+        return;
+      }
+      responseCache.clear();
+      setStatus('Strategy→Watchlist 订阅已取消');
+      await refresh();
+    });
+    return el('article', 'entity-item', [
+      el('div', 'flex gap-2', [
+        el('strong', null, target?.name ?? subscription.watchlistId),
+        el('span', 'badge badge-active', '同步中'),
+      ]),
+      el(
+        'p',
+        'muted',
+        `source ${subscription.sourceKey} · 创建于 ${fmtDateTime(subscription.createdAt)}`,
+      ),
+      cancel,
+    ]);
+  });
+  return el('section', 'strategy-schedule-panel', [
+    el('div', 'strategy-tab-heading', [
+      el('div', null, [
+        el('h3', null, 'Strategy → Watchlist 订阅'),
+        el(
+          'p',
+          'muted',
+          '必须显式选择目标。只有 published operational run 才会同步；partial 只标 stale，不根据缺失集合退出来源。',
+        ),
+      ]),
+      el('div', 'row-actions', [select, subscribe]),
+    ]),
+    ...(targets.length === 0 ? [el('p', 'status warning', '没有可订阅的启用 Watchlist。')] : []),
+    ...(activeRows.length === 0
+      ? [el('p', 'placeholder', '当前没有 active Strategy→Watchlist 订阅。')]
+      : [el('div', 'entity-list', activeRows)]),
+  ]);
+};
+
 export const renderSettings = async (strategyId, setStatus, refresh) => {
   const [result, scheduleResult] = await Promise.all([
     cachedGet(`/api/strategies/${encodeURIComponent(strategyId)}`),
@@ -1019,6 +1128,11 @@ export const renderSettings = async (strategyId, setStatus, refresh) => {
   if (!result.ok) return el('p', 'status error', errorText(result));
   if (!scheduleResult.ok) return el('p', 'status error', errorText(scheduleResult));
   const { strategy, versions } = result.data;
+  const subscriptionPanel = await renderStrategyWatchlistSubscriptions(
+    strategy,
+    setStatus,
+    refresh,
+  );
   const latest = versions.at(-1);
   const actions = el('div', 'row-actions');
   const create = el('button', 'btn btn-outline btn-sm', '创建新版本');
@@ -1132,6 +1246,7 @@ export const renderSettings = async (strategyId, setStatus, refresh) => {
     ...(versionRows.length === 0
       ? [el('p', 'placeholder', '尚无版本，请创建第一个版本草案。')]
       : versionRows),
+    subscriptionPanel,
     renderScheduleSettings(strategy, scheduleResult.data.schedule, setStatus, refresh),
   ]);
 };
@@ -1167,6 +1282,144 @@ const VINTAGE_STATUS = {
   available: ['版本可用', 'badge-active'],
   unavailable: ['版本不可用', 'badge-important'],
   'not-applicable': ['不适用', 'badge-neutral'],
+};
+
+const STRICT_GATE_STATUS = {
+  complete: ['完整', 'badge-active'],
+  partial: ['部分可用', 'badge-important'],
+  unavailable: ['不可用', 'badge-pos'],
+};
+
+export const buildStrictBacktestResultContent = (run) => {
+  const gateRows = (run.gateAudit?.items ?? []).map((item) =>
+    el('tr', null, [
+      el('td', 'mono', item.key),
+      el('td', null, badge(STRICT_GATE_STATUS[item.status], item.status)),
+      el('td', 'muted', item.detail),
+    ]),
+  );
+  const metrics = run.metrics;
+  const metricNodes =
+    metrics === undefined
+      ? [
+          el(
+            'p',
+            'status warning',
+            '数据门禁未完整通过，净值、收益、回撤等指标暂不可用；不会输出伪造 Sharpe 或胜率。',
+          ),
+        ]
+      : [
+          el('div', 'strategy-summary-grid', [
+            metric('最终净值', fmtNum(metrics.finalEquity)),
+            metric('净收益', `${fmtSigned(metrics.netReturnPct)}%`),
+            metric('最大回撤', `${fmtSigned(metrics.maxDrawdownPct)}%`),
+            metric('基准收益', `${fmtSigned(metrics.benchmarkReturnPct)}%`),
+            metric('超额收益', `${fmtSigned(metrics.excessReturnPct)}%`),
+            metric('成交笔数', metrics.tradeCount),
+          ]),
+        ];
+  return el('div', 'strategy-backtest-result', [
+    el(
+      'p',
+      'muted',
+      `严格回测 ${run.id} · ${run.status} · 输入指纹 ${run.inputFingerprint.slice(0, 12)}…`,
+    ),
+    ...metricNodes,
+    el('h4', null, '门禁审计'),
+    ...(gateRows.length === 0
+      ? [el('p', 'placeholder', '暂无门禁审计。')]
+      : [
+          el('div', 'table-wrap', [
+            el('table', 'table', [
+              el(
+                'thead',
+                null,
+                el(
+                  'tr',
+                  null,
+                  ['门禁', '状态', '证据'].map((label) => el('th', null, label)),
+                ),
+              ),
+              el('tbody', null, gateRows),
+            ]),
+          ]),
+        ]),
+    ...(run.error === undefined ? [] : [el('p', 'status error', run.error)]),
+    el('p', 'muted', '严格回测与生产运行、历史评估隔离，不生成 Advice、Trade 或通知。'),
+  ]);
+};
+
+export const runStrictStrategyBacktest = async (strategy, input, setStatus) => {
+  setStatus('正在检查严格回测数据门禁…');
+  const created = await post(
+    `/api/strategies/${encodeURIComponent(strategy.id)}/strict-backtests`,
+    input,
+  );
+  if (!created.ok) {
+    setStatus(errorText(created), true);
+    return created;
+  }
+  const initial = created.data?.run;
+  const runId = initial?.id;
+  if (typeof runId !== 'string') return created;
+  let run = initial;
+  for (
+    let attempt = 0;
+    attempt < 360 && (run.status === 'queued' || run.status === 'running');
+    attempt += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const snapshot = await callApi(
+      `/api/strategies/${encodeURIComponent(strategy.id)}/strict-backtests/${encodeURIComponent(runId)}`,
+    );
+    if (!snapshot.ok) {
+      setStatus(errorText(snapshot), true);
+      return snapshot;
+    }
+    run = snapshot.data.run;
+    setStatus(`严格回测：${run.status}，门禁 ${run.gateAudit?.status ?? 'unknown'}`);
+  }
+  openModal(`严格回测 · ${strategy.name}`, buildStrictBacktestResultContent(run));
+  setStatus(
+    run.metrics === undefined
+      ? `严格回测${run.resultAvailability === 'unavailable' ? '不可用' : '部分完成'}：请查看门禁审计`
+      : `严格回测完成：净收益 ${fmtSigned(run.metrics.netReturnPct)}%`,
+    run.metrics === undefined,
+  );
+  return { ...created, data: { run } };
+};
+
+const openStrictBacktestDialog = async (strategy, setStatus) => {
+  const values = await promptDialog({
+    title: `严格回测 · ${strategy.name}`,
+    fields: [
+      { key: 'evaluationSessionId', label: '历史评估 session ID', value: '' },
+      { key: 'initialCash', label: '初始资金', value: '1000000' },
+      { key: 'commissionBps', label: '佣金（bps）', value: '3' },
+      { key: 'minimumCommission', label: '最低佣金', value: '5' },
+      { key: 'sellStampDutyBps', label: '卖出印花税（bps）', value: '5' },
+      { key: 'buySlippageBps', label: '买入滑点（bps）', value: '2' },
+      { key: 'sellSlippageBps', label: '卖出滑点（bps）', value: '2' },
+    ],
+    confirmLabel: '创建严格回测',
+    note: '必须提供已完成的历史评估 session。任一 PIT、修订、费用、滑点、可交易性、公司行动、基准或求值器身份门禁缺失时，只返回不可用/部分结果，不生成收益指标。',
+  });
+  if (values === null) return;
+  await runStrictStrategyBacktest(
+    strategy,
+    {
+      evaluationSessionId: values.evaluationSessionId,
+      initialCash: Number(values.initialCash),
+      costs: {
+        commissionBps: Number(values.commissionBps),
+        minimumCommission: Number(values.minimumCommission),
+        sellStampDutyBps: Number(values.sellStampDutyBps),
+        buySlippageBps: Number(values.buySlippageBps),
+        sellSlippageBps: Number(values.sellSlippageBps),
+      },
+    },
+    setStatus,
+  );
 };
 
 export const buildBacktestResultContent = (data, strategyId = '', sessionId) => {
@@ -1434,6 +1687,12 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
   };
   const headerActions = el('div', 'row-actions');
   if (workspace.currentVersion !== undefined && workspace.strategy.status === 'active') {
+    const strictBacktest = el('button', 'btn btn-outline btn-sm', '严格回测');
+    strictBacktest.type = 'button';
+    strictBacktest.addEventListener(
+      'click',
+      () => void openStrictBacktestDialog(workspace.strategy, setStatus),
+    );
     const backtest = el('button', 'btn btn-outline btn-sm', '模拟回测');
     backtest.type = 'button';
     backtest.addEventListener(
@@ -1452,7 +1711,7 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
       'click',
       () => void runAction(workspace.strategy, true, setStatus, rerender),
     );
-    headerActions.append(backtest, sample, formal);
+    headerActions.append(strictBacktest, backtest, sample, formal);
   }
   const tabs = el('div', 'strategy-tabs');
   tabs.setAttribute('role', 'tablist');

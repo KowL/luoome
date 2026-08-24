@@ -143,8 +143,8 @@ describe('Watchlist tools', () => {
     const first = await syncWatchlistSourceTool.execute(
       {
         watchlistId: 'strategy-watch',
-        sourceKind: 'strategy',
-        sourceKey: 'strategy:quality',
+        sourceKind: 'ai',
+        sourceKey: 'ai:quality',
         status: 'complete',
         candidates: [
           { stockId: '600519.SH', reason: '入选', evidence: ['质量得分'] },
@@ -158,8 +158,8 @@ describe('Watchlist tools', () => {
     const partial = await syncWatchlistSourceTool.execute(
       {
         watchlistId: 'strategy-watch',
-        sourceKind: 'strategy',
-        sourceKey: 'strategy:quality',
+        sourceKind: 'ai',
+        sourceKey: 'ai:quality',
         status: 'partial',
         candidates: [{ stockId: '600519.SH', reason: '已确认', evidence: [] }],
         missingDimensions: [{ dimension: 'daily-bars', reason: '部分行情缺失', retryable: true }],
@@ -216,8 +216,8 @@ describe('Watchlist tools', () => {
     const result = await syncWatchlistSourceTool.execute(
       {
         watchlistId: 'failed-watch',
-        sourceKind: 'strategy',
-        sourceKey: 'strategy:failed',
+        sourceKind: 'ai',
+        sourceKey: 'ai:failed',
         status: 'failed',
         error: 'provider unavailable',
         candidates: [{ stockId: '600519.SH', reason: '不应写入', evidence: [] }],

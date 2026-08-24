@@ -97,7 +97,10 @@ const fmtDateTime = (d) => {
 
 /**
  * Advice 完整卡片（含 expand 切换）。
+ * options.onToggleSelect 非空时行首渲染勾选框（建议页选择模式的批量删除）；
+ * 勾选框点击不触发卡片展开。
  * @param {object} advice
+ * @param {{ checked?: boolean, onToggleSelect?: (id: string, checked: boolean) => void }} [options]
  * @returns {HTMLElement}
  */
 const HORIZON_LABELS = {
@@ -107,7 +110,7 @@ const HORIZON_LABELS = {
   long: '长期',
 };
 
-const adviceCard = (advice) => {
+const adviceCard = (advice, options = {}) => {
   const code = String(advice.subjectId ?? '').split('.')[0] || String(advice.subjectId ?? '');
   const card = el('article', 'advice-card');
   const premise = advice.reasoning?.premise ?? '';
@@ -118,13 +121,25 @@ const adviceCard = (advice) => {
   const risks = Array.isArray(advice.risks) ? advice.risks : [];
   const disclaimers = Array.isArray(advice.disclaimers) ? advice.disclaimers : [];
 
-  // row-1: 标的 + 决策 badge
+  // row-1: [勾选框] 标的 + 决策 badge
   const primaryLabel =
     typeof advice.stockName === 'string' && advice.stockName.length > 0 ? advice.stockName : code;
-  const row1 = el('div', 'row-1', [
+  const row1Parts = [];
+  if (options.onToggleSelect !== undefined) {
+    const checkbox = el('input', 'advice-select');
+    checkbox.type = 'checkbox';
+    checkbox.checked = options.checked === true;
+    checkbox.setAttribute('aria-label', '选择该建议');
+    checkbox.addEventListener('change', () => {
+      options.onToggleSelect?.(String(advice.id ?? ''), checkbox.checked);
+    });
+    row1Parts.push(checkbox);
+  }
+  row1Parts.push(
     el('div', 'subject', [el('span', 'code', primaryLabel), String(advice.subjectId ?? '')]),
     decisionBadge(advice.decision),
-  ]);
+  );
+  const row1 = el('div', 'row-1', row1Parts);
   card.append(row1);
 
   // premise
@@ -143,6 +158,11 @@ const adviceCard = (advice) => {
     const o = advice.outcome;
     const pnlText = o.pnl !== undefined ? `（盈亏 ${fmtSigned(o.pnl)}）` : '';
     row2Parts.push(`outcome: ${o.outcome}${pnlText}`);
+    if (o.benchmarkPnl !== undefined) row2Parts.push(`基准 ${fmtSigned(o.benchmarkPnl)}`);
+    if (o.holdingHours !== undefined) row2Parts.push(`持有 ${o.holdingHours}h`);
+    if (Array.isArray(o.tradeIds) && o.tradeIds.length > 0) {
+      row2Parts.push(`交易 ${o.tradeIds.join(',')}`);
+    }
   }
   card.append(
     el(
@@ -196,9 +216,11 @@ const adviceCard = (advice) => {
   }
   card.append(toggle);
 
-  // 点击展开 / 收起
+  // 点击展开 / 收起（按钮与勾选框不触发展开）
   card.addEventListener('click', (event) => {
-    if (event.target instanceof HTMLButtonElement) return;
+    if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLInputElement) {
+      return;
+    }
     card.classList.toggle('expanded');
   });
   card.setAttribute('role', 'button');

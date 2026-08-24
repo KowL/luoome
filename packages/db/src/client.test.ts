@@ -84,6 +84,59 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
+  it('旧 advice_outcomes 表启动迁移补齐 Outcome 字段并保留存量数据', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { Database } = await import('bun:sqlite');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'luoome-advice-outcome-migration-'));
+    const dbPath = path.join(dir, 'legacy.sqlite');
+    try {
+      const sqlite = new Database(dbPath);
+      sqlite.exec(`
+        CREATE TABLE advice_outcomes (
+          advice_id TEXT PRIMARY KEY,
+          outcome TEXT NOT NULL,
+          pnl REAL,
+          benchmark_pnl REAL,
+          recorded_at INTEGER NOT NULL
+        );
+        INSERT INTO advice_outcomes
+          (advice_id, outcome, pnl, benchmark_pnl, recorded_at)
+        VALUES ('legacy-advice', 'followed', 12.5, 8.5, 1782748800000);
+      `);
+      sqlite.close();
+
+      const handle = createDrizzleRepos(dbPath);
+      try {
+        const columns = handle.db
+          .all<{ name: string }>(sql`PRAGMA table_info(advice_outcomes)`)
+          .map((column) => column.name);
+        expect(columns).toEqual([
+          'advice_id',
+          'outcome',
+          'pnl',
+          'benchmark_pnl',
+          'recorded_at',
+          'trade_ids',
+          'holding_hours',
+          'notes',
+        ]);
+        expect(await handle.repos.advice.findOutcome('legacy-advice')).toMatchObject({
+          adviceId: 'legacy-advice',
+          tradeIds: [],
+          outcome: 'followed',
+          pnl: 12.5,
+          benchmarkPnl: 8.5,
+        });
+      } finally {
+        handle.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('Drizzle schema 与 ensureSchema 的实际 SQLite 列和索引保持一致', () => {
     const handle = createDrizzleRepos(':memory:');
     try {
@@ -114,6 +167,31 @@ describe('createDrizzleRepos / ensureSchema', () => {
           );
         }
       }
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('P3-2 score tables/terminal reason 迁移幂等并保留设计索引', () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      ensureSchema(handle.db);
+      const runColumns = handle.db
+        .all<{ name: string }>(sql`PRAGMA table_info(fundamental_score_runs)`)
+        .map((row) => row.name);
+      expect(runColumns).toContain('terminal_reason_json');
+      const versionIndexes = handle.db
+        .all<{ name: string }>(sql`PRAGMA index_list(fundamental_score_versions)`)
+        .map((row) => row.name);
+      const runIndexes = handle.db
+        .all<{ name: string }>(sql`PRAGMA index_list(fundamental_score_runs)`)
+        .map((row) => row.name);
+      const resultIndexes = handle.db
+        .all<{ name: string }>(sql`PRAGMA index_list(fundamental_score_results)`)
+        .map((row) => row.name);
+      expect(versionIndexes).toContain('fundamental_score_versions_definition_hash_unique');
+      expect(runIndexes).toContain('fundamental_score_runs_score_version_as_of_idx');
+      expect(resultIndexes).toContain('fundamental_score_results_run_rank_idx');
     } finally {
       handle.close();
     }

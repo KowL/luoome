@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { FakeMarketAdapter } from '../testing/fake-market.js';
 import { QuoteCache } from './cache.js';
+import type { MarketDataManager } from './manager.js';
 import { createTestMarketDataManager } from './manager.test-helper.js';
 
 /**
@@ -162,6 +163,10 @@ const silentLogger: Logger = {
   error: () => {},
 };
 
+/** per-source stats 查询辅助：未出现过的 source 视为 0 次调用（calls 含失败尝试）。 */
+const sourceCalls = (mgr: MarketDataManager, source: string): number =>
+  mgr.stats().sources.find((s) => s.source === source)?.calls ?? 0;
+
 const range: DateRange = {
   start: new Date('2026-07-19T00:00:00.000Z'),
   end: new Date('2026-07-21T00:00:00.000Z'),
@@ -310,9 +315,8 @@ describe('market/manager 真实行情链路容错（v0.6.2）', () => {
       const bars = await mgr.fetchDailyBars('600519.SH', range);
       expect(bars[0]?.close).toBe(93); // mock 数据
       expect(final.callCount).toBe(1);
-      // 注：primaryFailures / fallbackFailures 仅在 fetchQuote 路径里 increment
-      // （manager.ts 实现如此），fetchDailyBars 失败不计入这俩计数。
-      expect(mgr.stats().finalFallbackCalls).toBe(1);
+      // per-source stats：calls 是尝试次数（含失败），三个源各被尝试一次
+      expect(sourceCalls(mgr, 'resil-final')).toBe(1);
     });
 
     it('suppress 窗口：第一次 fallback 也失败后，第二次 fetchDailyBars 不再尝试 primary/fallback', async () => {
@@ -441,7 +445,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
     });
     const q = await mgr.fetchQuote('600519.SH');
     expect(q.source).toBe('tushare');
-    expect(mgr.stats().finalFallbackCalls).toBe(1);
+    expect(sourceCalls(mgr, 'fake-market')).toBe(1);
   });
 
   it('Eastmoney + Tencent + tushare 全失败 → 抛错', async () => {
@@ -484,10 +488,10 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
     expect(third.source).toBe('tushare');
     expect(primary.quoteCalls).toBe(2);
     expect(fallback.quoteCalls).toBe(2);
-    expect(mgr.stats().finalFallbackCalls).toBe(3); // 尝试次数，非成功次数
+    expect(sourceCalls(mgr, 'fake-market')).toBe(3); // 尝试次数，非成功次数
   });
 
-  it('Eastmoney 成功时 finalFallbackCalls = 0', async () => {
+  it('Eastmoney 成功时末源（tushare 槽位）调用次数 = 0', async () => {
     const primary = new ResilPrimary();
     const mgr = createTestMarketDataManager({
       primary,
@@ -497,7 +501,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
     });
     const q = await mgr.fetchQuote('600519.SH');
     expect(q.source).toBe('eastmoney-stub');
-    expect(mgr.stats().finalFallbackCalls).toBe(0);
+    expect(sourceCalls(mgr, 'fake-market')).toBe(0);
   });
 
   it('searchStocks 主源返回空数组 → 不触发 fallback 到 tushare', async () => {
@@ -512,7 +516,7 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
     await expect(mgr.searchStocks('600519')).resolves.toEqual([]);
     expect(primary.searchCalls).toBe(1);
     expect(fallback.searchCalls).toBe(0);
-    expect(mgr.stats().finalFallbackCalls).toBe(0);
+    expect(sourceCalls(mgr, 'fake-market')).toBe(0);
   });
 
   it('searchStocks 主备源抛错 → 触发 fallback 到 tushare', async () => {
@@ -525,6 +529,6 @@ describe('market/manager finalFallback（tushare 槽位，v0.9）', () => {
     const candidates = await mgr.searchStocks('600519');
     expect(candidates.length).toBeGreaterThan(0);
     expect(candidates.some((c) => c.id === '600519.SH')).toBe(true);
-    expect(mgr.stats().finalFallbackCalls).toBe(1);
+    expect(sourceCalls(mgr, 'fake-market')).toBe(1);
   });
 });

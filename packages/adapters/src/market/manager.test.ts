@@ -1,9 +1,11 @@
-import type { Logger, MarketSnapshot } from '@luoome/core';
+import type { Logger, MarketSnapshot, Quote } from '@luoome/core';
 import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
+import type { EastmoneySource } from '../eastmoney/source.js';
 import type { FakeMarketAdapter } from '../testing/fake-market.js';
 import { QuoteCache } from './cache.js';
-import type { EastmoneyAdapter, EastmoneyAdapterError } from './eastmoney.js';
+import type { EastmoneyAdapterError } from './eastmoney.js';
+import type { MarketDataManager } from './manager.js';
 import { createTestMarketDataManager } from './manager.test-helper.js';
 import type { TencentAdapter, TencentAdapterError } from './tencent.js';
 
@@ -103,12 +105,45 @@ class StubFinal {
   }
 }
 
+/** 原生批量源：fetchBatchQuotes 一次返回整批；可配置全败 / 缺漏部分标的。 */
+class StubBatchPrimary extends StubPrimary {
+  batchCallCount = 0;
+  batchIds: readonly string[] = [];
+  failBatch = false;
+  dropIds: readonly string[] = [];
+  async fetchBatchQuotes(stockIds: readonly string[]): Promise<Quote[]> {
+    this.batchCallCount += 1;
+    this.batchIds = stockIds;
+    if (this.failBatch) throw new Error('batch fail');
+    const fetchedAt = new Date();
+    return stockIds
+      .filter((id) => !this.dropIds.includes(id))
+      .map((id) => ({
+        stockId: id,
+        observedAt: fetchedAt,
+        fetchedAt,
+        timestampSource: 'retrieval' as const,
+        ts: fetchedAt,
+        open: money(100),
+        high: money(101),
+        low: money(99),
+        close: money(100),
+        volume: 1000,
+        source: 'eastmoney',
+      }));
+  }
+}
+
 const silentLogger: Logger = {
   debug: () => {},
   info: () => {},
   warn: () => {},
   error: () => {},
 };
+
+/** per-source stats 查询辅助：未出现过的 source 视为 0 次调用。 */
+const sourceCalls = (mgr: MarketDataManager, source: string): number =>
+  mgr.stats().sources.find((s) => s.source === source)?.calls ?? 0;
 
 describe('market/manager', () => {
   describe('fetchQuote 主路径', () => {
@@ -167,7 +202,7 @@ describe('market/manager', () => {
       const q = await mgr.fetchQuote('A');
       expect(q.source).toBe('mock');
       expect(final.callCount).toBe(1);
-      expect(mgr.stats().finalFallbackCalls).toBe(1);
+      expect(sourceCalls(mgr, 'stub-final')).toBe(1);
     });
 
     it('finalFallback 抑制窗口：失败后 30 分钟内同一只股票直接走 mock，其它股票不受影响', async () => {
@@ -207,6 +242,73 @@ describe('market/manager', () => {
   });
 
   describe('batchQuote', () => {
+    it('batch-quote 优先：一次请求取整批，不逐股 fetch，结果回写缓存', async () => {
+      const primary = new StubBatchPrimary();
+      const mgr = createTestMarketDataManager({
+        primary,
+        logger: silentLogger,
+      });
+      const result = await mgr.batchQuote(['A', 'B', 'C']);
+      expect(primary.batchCallCount).toBe(1);
+      expect(primary.batchIds).toEqual(['A', 'B', 'C']);
+      expect(result.size).toBe(3);
+      // 批量成功路径不触达逐股 fetch
+      expect(primary.callCount).toBe(0);
+      // 批量结果回写 quoteCache：后续 fetchQuote 命中缓存，不再打源
+      const quote = await mgr.fetchQuote('A');
+      expect(quote.stockId).toBe('A');
+      expect(primary.callCount).toBe(0);
+    });
+
+    it('batch 缺漏标的：遗漏该只，不逐股补拉', async () => {
+      const primary = new StubBatchPrimary();
+      primary.dropIds = ['B'];
+      const mgr = createTestMarketDataManager({
+        primary,
+        logger: silentLogger,
+      });
+      const result = await mgr.batchQuote(['A', 'B', 'C']);
+      expect(primary.batchCallCount).toBe(1);
+      expect([...result.keys()].sort()).toEqual(['A', 'C']);
+      expect(primary.callCount).toBe(0);
+    });
+
+    it('batch 全源失败：降级为逐股扇出兜底', async () => {
+      const primary = new StubBatchPrimary();
+      primary.failBatch = true;
+      const fallback = new StubFallback();
+      fallback.failMode = 'ok';
+      const mgr = createTestMarketDataManager({
+        primary,
+        fallback,
+        logger: silentLogger,
+      });
+      const result = await mgr.batchQuote(['A', 'B', 'C']);
+      // 批量失败 → 逐股 fetchQuote（primary 的 failMode='ok'，每只经 primary 拿到）
+      expect(primary.batchCallCount).toBe(1);
+      expect(primary.callCount).toBe(3);
+      expect(result.size).toBe(3);
+    });
+
+    it('无 batch binding（纯逐股源）：保持既有扇出行为', async () => {
+      const primary = new StubPrimary();
+      const fallback = new StubFallback();
+      const final = new StubFinal();
+      const mgr = createTestMarketDataManager({
+        primary,
+        fallback,
+        finalFallback: final,
+        logger: silentLogger,
+      });
+      // 预热 A 入缓存
+      await mgr.fetchQuote('A');
+      primary.callCount = 0;
+      const result = await mgr.batchQuote(['A', 'B', 'C']);
+      expect(result.size).toBe(3);
+      // A 命中缓存；B、C 各调一次 primary（无 batch binding，走既有扇出）
+      expect(primary.callCount).toBe(2);
+    });
+
     it('部分命中缓存；其余并发 fetch', async () => {
       const primary = new StubPrimary();
       const fallback = new StubFallback();
@@ -275,7 +377,7 @@ describe('market/manager', () => {
   });
 
   describe('stats', () => {
-    it('输出 primary/fallback/final 调用计数 + 缓存命中率', async () => {
+    it('按 source 输出调用 / 失败计数 + 缓存命中率', async () => {
       const primary = new StubPrimary();
       primary.failMode = 'throw'; // 触发 fallback 路径
       const fallback = new StubFallback();
@@ -290,9 +392,22 @@ describe('market/manager', () => {
       await mgr.fetchQuote('A');
       await mgr.fetchQuote('A'); // cache hit
       const stats = mgr.stats();
-      expect(stats.primaryCalls).toBe(1);
-      expect(stats.fallbackCalls).toBe(1);
-      expect(stats.finalFallbackCalls).toBe(1);
+      const bySource = new Map(stats.sources.map((s) => [s.source, s]));
+      expect(bySource.get('stub-primary')).toEqual({
+        source: 'stub-primary',
+        calls: 1,
+        failures: 1,
+      });
+      expect(bySource.get('stub-fallback')).toEqual({
+        source: 'stub-fallback',
+        calls: 1,
+        failures: 1,
+      });
+      expect(bySource.get('stub-final')).toEqual({
+        source: 'stub-final',
+        calls: 1,
+        failures: 0,
+      });
       expect(stats.cache.quote.hits).toBe(1);
     });
   });
@@ -455,6 +570,71 @@ describe('market/manager', () => {
   });
 });
 
+describe('market/manager fetchMinuteBars', () => {
+  const minuteBar = (endedAt: Date, source = 'minute-source') => ({
+    stockId: '002594.SZ',
+    interval: '1m' as const,
+    endedAt,
+    open: money(90),
+    high: money(91),
+    low: money(89),
+    close: money(90.5),
+    volume: 10_000,
+    adjustment: 'raw' as const,
+    source,
+    fetchedAt: new Date(endedAt.getTime() + 1_000),
+    completeness: 'closed' as const,
+  });
+
+  it('无显式 minute-bars capability 时拒绝，不把 intraday-minutes 冒充 OHLCV', async () => {
+    const mgr = createTestMarketDataManager({
+      primary: new StubPrimary(),
+      fallback: new StubFallback(),
+      logger: silentLogger,
+    });
+    await expect(mgr.fetchMinuteBars('002594.SZ', '1m')).rejects.toThrow(
+      'unsupported_capability: minute-bars',
+    );
+  });
+
+  it('15s TTL 按 stockId+interval 隔离；空结果不缓存并转 no_data', async () => {
+    let now = new Date('2026-08-11T07:00:00.000Z');
+    const source = {
+      name: 'minute-source',
+      calls: 0,
+      empty: false,
+      fetchQuote: () => Promise.reject(new Error('unused')),
+      fetchDailyBars: () => Promise.resolve([]),
+      fetchMinuteBars(_stockId: string, interval: '1m' | '5m') {
+        this.calls += 1;
+        return Promise.resolve(
+          this.empty
+            ? []
+            : [{ ...minuteBar(now), interval, fetchedAt: new Date(now.getTime() + 1_000) }],
+        );
+      },
+    };
+    const mgr = createTestMarketDataManager({
+      primary: source,
+      logger: silentLogger,
+      clock: () => now,
+    });
+    await mgr.fetchMinuteBars('002594.SZ', '1m');
+    now = new Date(now.getTime() + 10_000);
+    await mgr.fetchMinuteBars('002594.SZ', '1m');
+    await mgr.fetchMinuteBars('002594.SZ', '5m');
+    expect(source.calls).toBe(2);
+    now = new Date(now.getTime() + 16_000);
+    await mgr.fetchMinuteBars('002594.SZ', '1m');
+    expect(source.calls).toBe(3);
+
+    source.empty = true;
+    await expect(mgr.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow('no_data');
+    await expect(mgr.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow('no_data');
+    expect(source.calls).toBe(5);
+  });
+});
+
 describe('market/manager fetchMarketSnapshot', () => {
   const SNAPSHOT = [
     { id: '600519.SH', code: '600519', exchange: 'SH' as const, name: '贵州茅台', close: 1486.2 },
@@ -593,8 +773,8 @@ describe('market/manager fetchMarketSnapshot', () => {
 
 // 显式 import 以确保 type-only 引用被 vite 保留（避免误删 unused import 警告）
 export type {
-  EastmoneyAdapter,
   EastmoneyAdapterError,
+  EastmoneySource,
   FakeMarketAdapter,
   TencentAdapter,
   TencentAdapterError,

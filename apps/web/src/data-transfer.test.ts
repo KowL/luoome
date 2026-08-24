@@ -123,6 +123,16 @@ describe('data transfer', () => {
       validUntil: new Date('2026-08-14T00:00:00Z'),
       createdAt: new Date('2026-08-11T00:00:00Z'),
     });
+    await source.repos.advice.recordOutcome('advice-1', {
+      adviceId: 'advice-1',
+      tradeIds: ['trade-1'],
+      outcome: 'partially_followed',
+      pnl: money(-12.5),
+      benchmarkPnl: money(4),
+      holdingHours: 6,
+      notes: '只执行一半',
+      recordedAt: new Date('2026-08-12T00:00:00Z'),
+    });
     await source.repos.watchRun.save({
       id: 'watch-run-1',
       mode: 'once',
@@ -149,6 +159,14 @@ describe('data transfer', () => {
     expect((await reopened.repos.advice.findById('advice-1'))?.disclaimers).toEqual([
       ...STANDARD_DISCLAIMERS,
     ]);
+    expect((await reopened.repos.advice.findById('advice-1'))?.outcome).toMatchObject({
+      tradeIds: ['trade-1'],
+      outcome: 'partially_followed',
+      pnl: -12.5,
+      benchmarkPnl: 4,
+      holdingHours: 6,
+      notes: '只执行一半',
+    });
     expect((await reopened.repos.watchRun.findById('watch-run-1'))?.notified).toBe(2);
     reopened.close();
   });

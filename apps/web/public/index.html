@@ -35,7 +35,7 @@
   <!-- 1. 顶栏 -->
   <header class="topbar" role="banner">
     <div class="brand">
-      luoome <small>本地投资 advisor</small>
+      luoome
     </div>
     <div class="topbar-meta">
       <label class="account-select-wrap" for="account-select">
@@ -50,16 +50,12 @@
     </div>
   </header>
 
-  <div class="advice-disclaimer-banner" role="note" aria-label="投资风险提示">
-    <span>本建议由 AI 生成，不构成投资建议。</span>
-    <span>投资有风险，决策需自行承担。</span>
-  </div>
-
   <!-- 3. 主布局：侧栏 + 内容 -->
   <div class="app-shell">
     <aside class="sidebar" aria-label="主导航">
       <ul class="nav" role="navigation">
         <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>看盘</span></a></li>
+        <li><a class="nav-item" href="#indices" data-route="indices"><span>指数</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
         <li><a class="nav-item" href="#strategies" data-route="strategies"><span>策略</span></a></li>
         <li><a class="nav-item" href="#watchlists" data-route="watchlists"><span>关注</span></a></li>
@@ -69,6 +65,8 @@
         <li><a class="nav-item" href="#reports" data-route="reports"><span>报告</span></a></li>
         <li><a class="nav-item" href="#review" data-route="review"><span>复盘</span></a></li>
         <li><a class="nav-item" href="#limit-up" data-route="limit-up"><span>涨停梯队</span></a></li>
+        <li><a class="nav-item" href="#dragon-tiger" data-route="dragon-tiger"><span>龙虎榜</span></a></li>
+        <li><a class="nav-item" href="#sectors" data-route="sectors"><span>板块热力</span></a></li>
         <li><a class="nav-item" href="#chat" data-route="chat"><span>对话</span></a></li>
         <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
       </ul>
@@ -81,12 +79,33 @@
           <h1>看盘</h1>
           <div id="dashboard-stock-search"></div>
         </div>
-        <div id="dashboard-indices" class="index-strip" hidden></div>
-        <div id="dashboard-stats" class="stat-grid">
-          <div class="stat"><div class="label">总市值</div><div class="value" id="dash-total-value">--</div></div>
-          <div class="stat"><div class="label">总盈亏</div><div class="value" id="dash-total-pnl">--</div><div class="delta" id="dash-total-pnl-pct">--</div></div>
-          <div class="stat"><div class="label">持仓数</div><div class="value" id="dash-holdings-count">--</div></div>
-          <div class="stat"><div class="label">今日建议</div><div class="value" id="dash-advice-count">--</div><div class="delta" id="dash-advice-summary">--</div></div>
+        <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；查看全部 → #indices 指数页） -->
+        <div class="card" id="dashboard-indices-card">
+          <div class="card-header">
+            <h2>核心指数</h2>
+            <a href="#indices" class="card-link">查看全部 →</a>
+          </div>
+          <div id="dashboard-indices" class="index-card-grid"></div>
+        </div>
+        <!-- 市场概览（A 股情绪快照：宽度 / 涨跌停；dashboard-market.js 每次进入路由时加载一次） -->
+        <div id="dashboard-overview" class="stat-grid">
+          <div class="stat"><div class="label">上涨家数</div><div class="value text-pos" id="dash-advancing">--</div></div>
+          <div class="stat"><div class="label">下跌家数</div><div class="value text-neg" id="dash-declining">--</div></div>
+          <div class="stat"><div class="label">涨停封板</div><div class="value" id="dash-sealed">--</div><div class="delta" id="dash-ladder">--</div></div>
+          <div class="stat"><div class="label">炸板率</div><div class="value" id="dash-broken-rate">--</div><div class="delta" id="dash-broken-count">--</div></div>
+        </div>
+        <div class="dashboard-cols">
+          <div class="card">
+            <div class="card-header">
+              <h2>行业板块热力</h2>
+              <a href="#sectors" class="card-link">查看全部 →</a>
+            </div>
+            <div id="dash-sector-heatmap"><p class="placeholder">加载中…</p></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2>财经要闻</h2><div class="card-meta" id="dash-news-meta"></div></div>
+            <div id="dash-news-list"><p class="placeholder">加载中…</p></div>
+          </div>
         </div>
         <div class="card" id="dashboard-board-card">
           <div class="card-header"><h2>实时看板</h2><div class="card-meta" id="dashboard-board-meta"></div></div>
@@ -160,6 +179,28 @@
         </div>
       </section>
 
+      <!-- route: indices（核心指数 + 分时走势） -->
+      <section id="route-indices" class="route" data-route="indices" hidden>
+        <div class="route-header">
+          <h1>指数</h1>
+          <div class="route-meta">沪深创科 + 港股 · 点击卡片看分时</div>
+        </div>
+        <div id="indices-cards" class="index-card-grid"></div>
+        <div class="card mt-4" id="indices-chart-card">
+          <div class="card-header">
+            <h2 id="indices-chart-title">分时走势</h2>
+            <div class="card-meta" id="indices-chart-meta">--</div>
+          </div>
+          <div class="indices-price-row">
+            <span class="indices-price mono" id="indices-price">--</span>
+            <span class="indices-change mono" id="indices-change">--</span>
+          </div>
+          <div id="indices-chart" class="indices-chart"><p class="placeholder">加载中…</p></div>
+          <div id="indices-timeaxis" class="indices-timeaxis" hidden></div>
+          <div id="indices-detail" class="indices-detail"></div>
+        </div>
+      </section>
+
       <!-- route: market（个股行情，docs/ddd/stock-market-view-detailed-design.md §11） -->
       <section id="route-market" class="route" data-route="market" hidden>
         <div class="route-header">
@@ -207,7 +248,8 @@
               <h2 id="market-chart-title">日 K</h2>
               <div class="market-range-switch" id="market-chart-tabs" role="group" aria-label="图表类型">
                 <button type="button" class="btn btn-outline btn-sm active" data-chart-tab="kline">日 K</button>
-                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="intraday" hidden>分时</button>
+                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="intraday">分时</button>
+                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="minute-k">分钟 K</button>
               </div>
               <div class="market-range-switch" id="market-range-switch" role="group" aria-label="周期切换">
                 <button type="button" class="btn btn-outline btn-sm" data-range="1m">1M</button>
@@ -220,9 +262,17 @@
                 <button type="button" class="btn btn-outline btn-sm" data-granularity="week">周</button>
                 <button type="button" class="btn btn-outline btn-sm" data-granularity="month">月</button>
               </div>
+              <div class="market-range-switch" id="market-minute-interval-switch" role="group" aria-label="分钟周期" hidden>
+                <button type="button" class="btn btn-outline btn-sm active" data-minute-interval="1m">1分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="5m">5分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="15m">15分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="30m">30分</button>
+                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="60m">60分</button>
+              </div>
             </div>
             <div id="market-chart" class="market-chart"></div>
             <div id="market-intraday-chart" class="market-chart" hidden></div>
+            <div id="market-minute-status" class="market-minute-status" hidden aria-live="polite"></div>
             <p id="market-chart-empty" class="placeholder" hidden>暂无 K 线数据。</p>
             <div id="market-markers" class="market-markers mt-2"></div>
           </div>
@@ -249,6 +299,11 @@
         <div class="route-header">
           <h1>持仓</h1>
           <div class="route-meta">实时市值 · 盈亏</div>
+        </div>
+        <div id="holdings-stats" class="stat-grid">
+          <div class="stat"><div class="label">总市值</div><div class="value" id="holdings-stat-total-value">--</div></div>
+          <div class="stat"><div class="label">总盈亏</div><div class="value" id="holdings-stat-total-pnl">--</div><div class="delta" id="holdings-stat-total-pnl-pct">--</div></div>
+          <div class="stat"><div class="label">持仓数</div><div class="value" id="holdings-stat-count">--</div></div>
         </div>
         <div class="card">
           <div class="card-header">
@@ -405,12 +460,27 @@
               <span id="research-vault-settings-status" class="card-meta" role="status" aria-live="polite"></span>
             </div>
           </form>
+          <div class="vault-remote-sync">
+            <div>
+              <strong>可选 Git 远端同步</strong>
+              <p class="card-meta">仅在工作树干净且可 fast-forward 时拉取；先创建本地 bundle 备份，绝不自动 commit、push、reset、rebase 或解决冲突。Vault 文件仍是权威来源。</p>
+            </div>
+            <div class="flex gap-2">
+              <button id="research-remote-sync-btn" class="btn btn-outline btn-sm" type="button" disabled>拉取远端并重建索引</button>
+              <button id="research-remote-cancel-btn" class="btn btn-outline btn-sm" type="button" hidden>取消拉取</button>
+              <span id="research-remote-sync-status" class="card-meta" role="status" aria-live="polite">远端同步：检查配置中…</span>
+            </div>
+          </div>
         </div>
         <div class="card">
           <div class="card-header"><h2>研究主题与资料</h2></div>
           <div class="research-search flex gap-2">
             <input id="research-topic-input" type="search" placeholder="搜索研究主题或资料" />
             <button id="research-search-btn" class="btn btn-primary btn-sm" type="button">搜索</button>
+            <label class="field-inline" for="research-hybrid-search">
+              <input id="research-hybrid-search" type="checkbox" />
+              <span>语义扩展（外部）</span>
+            </label>
           </div>
           <div class="research-toolbar flex gap-2 mt-2">
             <label class="field-inline" for="research-kind-filter">
@@ -429,8 +499,11 @@
             <button id="research-import-document-btn" class="btn btn-outline btn-sm" type="button">导入本地资料</button>
             <button id="research-import-remote-btn" class="btn btn-outline btn-sm" type="button">导入远程 URL</button>
             <button id="research-sync-btn" class="btn btn-outline btn-sm" type="button">手动同步 Vault</button>
+            <button id="research-embedding-rebuild-btn" class="btn btn-outline btn-sm" type="button">增量重建语义索引</button>
+            <button id="research-embedding-evaluate-btn" class="btn btn-outline btn-sm" type="button">跨模型评测</button>
             <span id="research-index-status" class="card-meta" aria-live="polite">索引状态：--</span>
           </div>
+          <div id="research-embedding-status" class="card-meta mt-2" role="status" aria-live="polite">语义索引：未检查</div>
           <div id="research-write-status" class="research-write-status" role="status" aria-live="polite"></div>
           <div id="research-inbox" class="research-inbox mt-2"></div>
           <div id="research-search-results" class="research-results mt-2"></div>
@@ -456,8 +529,10 @@
                 <option value="watch">观望</option>
                 <option value="avoid">回避</option>
               </select>
+              <button id="btn-advice-delete-mode" class="btn btn-outline btn-sm" type="button">删除</button>
             </div>
           </div>
+          <div id="advice-batch-bar" class="batch-bar" hidden></div>
           <div id="advice-full-list"><p class="placeholder">加载中…</p></div>
         </div>
       </section>
@@ -556,6 +631,32 @@
               <tbody><tr><td colspan="6" class="placeholder">加载中…</td></tr></tbody>
             </table>
           </div>
+          <details class="performance-audit" open>
+            <summary>
+              <span>快照与区间审计</span>
+              <span class="card-meta" id="review-performance-audit-meta">只读持久化事实 · 不重新抓行情</span>
+            </summary>
+            <div class="performance-audit-grid">
+              <section>
+                <h3>快照版本</h3>
+                <div class="table-wrap">
+                  <table class="table" id="review-performance-snapshots-table">
+                    <thead><tr><th>计算时间</th><th>区间</th><th>完整度</th><th>dataAsOf</th><th>输入指纹</th><th>预算事实</th></tr></thead>
+                    <tbody><tr><td colspan="6" class="placeholder">加载中…</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+              <section>
+                <h3>逐交易日审计</h3>
+                <div class="table-wrap">
+                  <table class="table" id="review-performance-audit-table">
+                    <thead><tr><th>交易日</th><th>状态</th><th>缺失标的 / 原因</th><th>修订</th><th>最新快照</th></tr></thead>
+                    <tbody><tr><td colspan="5" class="placeholder">加载中…</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </details>
         </div>
         <div class="card mt-4">
           <div class="card-header">
@@ -632,13 +733,26 @@
       <!-- route: limit-up -->
       <section id="route-limit-up" class="route" data-route="limit-up" hidden></section>
 
+      <!-- route: dragon-tiger -->
+      <section id="route-dragon-tiger" class="route" data-route="dragon-tiger" hidden></section>
+
+      <!-- route: sectors -->
+      <section id="route-sectors" class="route" data-route="sectors" hidden></section>
+
       <!-- route: settings -->
       <section id="route-settings" class="route" data-route="settings" hidden>
         <div class="route-header">
           <h1>设置</h1>
           <div class="route-meta">AI 模型 / 账户 / 鉴权 / 数据源</div>
         </div>
-        <form id="ai-settings-form" class="ai-settings" autocomplete="off">
+        <nav class="settings-subnav" aria-label="设置分区">
+          <a href="#settings?tab=ai" class="settings-subnav-item" data-settings-tab="ai">AI 模型</a>
+          <a href="#settings?tab=market" class="settings-subnav-item" data-settings-tab="market">数据源</a>
+          <a href="#settings?tab=notify" class="settings-subnav-item" data-settings-tab="notify">通知</a>
+          <a href="#settings?tab=data" class="settings-subnav-item" data-settings-tab="data">数据</a>
+          <a href="#settings?tab=system" class="settings-subnav-item" data-settings-tab="system">系统</a>
+        </nav>
+        <form id="ai-settings-form" class="ai-settings" autocomplete="off" data-settings-pane="ai">
           <div class="ai-settings-heading">
             <div>
               <span class="section-kicker">MODEL CONTROL</span>
@@ -745,7 +859,7 @@
             </section>
           </div>
         </form>
-        <form id="market-settings-form" class="market-settings" autocomplete="off">
+        <form id="market-settings-form" class="market-settings" autocomplete="off" data-settings-pane="market">
           <div class="market-settings-heading">
             <div>
               <span class="section-kicker">MARKET ROUTING</span>
@@ -776,6 +890,7 @@
                 <span>配置文件</span>
                 <code id="market-secret-path">--</code>
               </div>
+              <button id="btn-market-refresh" class="btn btn-outline btn-sm" type="button">刷新状态</button>
               <button id="btn-market-save" class="btn btn-primary market-save-btn" type="submit">
                 <span aria-hidden="true">▣</span>
                 保存路由并应用
@@ -800,7 +915,7 @@
             <div id="market-sync-message" class="status" role="status" hidden></div>
           </section>
         </form>
-        <form id="feishu-settings-form" class="feishu-settings" autocomplete="off">
+        <form id="feishu-settings-form" class="feishu-settings" autocomplete="off" data-settings-pane="notify">
           <div class="feishu-settings-heading">
             <div>
               <span class="section-kicker">DELIVERY CHANNEL</span>
@@ -866,7 +981,7 @@
             </div>
           </section>
         </form>
-        <div class="card data-transfer-card">
+        <div class="card data-transfer-card" data-settings-pane="data">
           <div class="card-header">
             <div><span class="section-kicker">LOCAL DATA</span><h2>数据导出与导入</h2></div>
             <div class="card-meta">JSON · 本地合并 · 不包含 API Key / Webhook</div>
@@ -881,6 +996,7 @@
           </div>
           <p id="data-transfer-status" class="status" role="status" aria-live="polite" hidden></p>
         </div>
+        <div data-settings-pane="system">
         <div class="card">
           <div class="card-header"><h2>Workflow 运行记录</h2><div class="card-meta">自动任务审计（含 intraday-watch）</div></div>
           <div id="settings-workflow-runs" class="workflow-runs">加载中…</div>
@@ -907,6 +1023,7 @@
         <div class="card mt-4">
           <div class="card-header"><h2>当前账户信息</h2></div>
           <div id="settings-account"><p class="placeholder">加载中…</p></div>
+        </div>
         </div>
       </section>
 

@@ -116,9 +116,15 @@ export interface Advice {
 /** 建议结果回填（事后验证，ARCHITECTURE §5.2）。 */
 export interface AdviceOutcome {
   readonly adviceId: string;
+  /** 实际执行关联的交易记录；空数组表示未关联具体成交。 */
+  readonly tradeIds: readonly string[];
   readonly outcome: 'followed' | 'partially_followed' | 'ignored';
   readonly pnl?: Money; // 实际盈亏
   readonly benchmarkPnl?: Money; // 同期基准盈亏
+  /** 跟单持仓时长（小时）。 */
+  readonly holdingHours?: number;
+  /** 用户填写的复盘笔记。 */
+  readonly notes?: string;
   readonly recordedAt: Date;
 }
 
@@ -147,6 +153,17 @@ export interface AdviceQuery {
   readonly until?: Date;
   /** 默认 false：过期 advice 不主动返回（ARCHITECTURE §6.5）。 */
   readonly includeExpired?: boolean;
+  readonly limit?: number;
+}
+
+/** AdviceOutcome 的查询条件；subject 条件通过关联 Advice 过滤。 */
+export interface AdviceOutcomeQuery {
+  readonly adviceId?: string;
+  readonly subjectKind?: AdviceSubjectKind;
+  readonly subjectId?: string;
+  /** 按 outcome.recordedAt 过滤（闭区间）。 */
+  readonly since?: Date;
+  readonly until?: Date;
   readonly limit?: number;
 }
 
@@ -185,9 +202,12 @@ export const AdviceDataSnapshotSchema = z.object({
 
 export const AdviceOutcomeSchema = z.object({
   adviceId: z.string().min(1),
+  tradeIds: z.array(z.string().min(1)).default([]),
   outcome: z.enum(['followed', 'partially_followed', 'ignored']),
   pnl: MoneySchema.optional(),
   benchmarkPnl: MoneySchema.optional(),
+  holdingHours: z.number().nonnegative().optional(),
+  notes: z.string().max(2000).optional(),
   recordedAt: z.coerce.date(),
 });
 

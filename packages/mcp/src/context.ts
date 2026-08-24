@@ -15,9 +15,12 @@ import {
   createAShareSentimentManagerFromEnv,
   createFileAuditLogger,
   createMarketAdapterFromEnv,
+  createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
+  createResearchVaultGitSyncAdapterFromEnv,
   createStockUniverseManagerFromEnv,
+  EastmoneySource,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
@@ -68,9 +71,26 @@ export const createServerContext = async (
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const now = (): Date => new Date();
   const researchVault = createResearchVaultAdapterFromEnv(env);
+  let researchEmbedding: ReturnType<typeof createResearchEmbeddingAdapterFromEnv>;
+  try {
+    researchEmbedding = createResearchEmbeddingAdapterFromEnv(env);
+  } catch {
+    logger.warn('Research embedding 配置无效；MCP 将以 capability 未挂载状态继续');
+  }
+  let researchVaultGitSync: ReturnType<typeof createResearchVaultGitSyncAdapterFromEnv>;
+  try {
+    researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(env, {
+      backupRoot: join(home, 'backups', 'research-vault'),
+    });
+  } catch {
+    logger.warn('Research Vault 远端同步配置无效；MCP 将以未挂载状态继续');
+  }
+  // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与 sentiment factory（§4.6）
+  const sources = { eastmoney: new EastmoneySource({ clock: now }) };
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger,
+    sources,
   });
   const ctx = buildContext({
     repos: handle.repos,
@@ -93,8 +113,15 @@ export const createServerContext = async (
     logger,
     auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
     auditCaller: 'mcp',
-    ashareSentiment: createAShareSentimentManagerFromEnv(env, { clock: now, logger, market }),
+    ashareSentiment: createAShareSentimentManagerFromEnv(env, {
+      clock: now,
+      logger,
+      market,
+      sources,
+    }),
     ...(researchVault ? { researchVault } : {}),
+    ...(researchEmbedding ? { researchEmbedding } : {}),
+    ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
     researchRemote: createResearchRemoteDocumentAdapter(),
   });
 

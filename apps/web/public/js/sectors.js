@@ -1,0 +1,119 @@
+// apps/web/public/js/sectors.js —— 行业板块热力图页面渲染器。
+//
+// 设计要点：
+// - 与涨停梯队（limit-up-ladder.js）同级，纯只读实时快照展示
+// - 热力图渲染抽在 sector-heatmap.js（看盘页迷你热力共用），按 |涨跌幅| 降序平铺，
+//   红涨绿跌、颜色深浅随涨跌幅绝对值加深（配色复用全局 --pos / --neg 口径）
+// - 排序切换（涨跌幅 / 成交额）走服务端 fid，不本地重排
+// - 数据全由 fetch_sector_quotes tool 提供，UI 不臆造字段
+
+// biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
+'use strict';
+
+import { callApi } from './api.js';
+import { renderSectorHeatmap } from './sector-heatmap.js';
+import { $, el, mount } from './ui.js';
+
+const formatPct = (n) => `${n > 0 ? '+' : ''}${(n * 100).toFixed(2)}%`;
+
+/** 成交额（元）→ 亿，保留 1 位小数。 */
+const formatAmount = (n) => `${(n / 100_000_000).toFixed(1)}亿`;
+
+const pctCell = (value) => {
+  const cls = value > 0 ? 'num pos' : value < 0 ? 'num neg' : 'num';
+  return el('td', cls, formatPct(value));
+};
+
+const renderRow = (item) =>
+  el('tr', '', [
+    el('td', 'code', item.code),
+    el('td', '', item.name),
+    el('td', 'num', item.price.toFixed(2)),
+    pctCell(item.changePct),
+    el('td', 'num', formatAmount(item.amount)),
+    el('td', 'num pos', item.upCount !== undefined ? String(item.upCount) : '--'),
+    el('td', 'num neg', item.downCount !== undefined ? String(item.downCount) : '--'),
+    el('td', '', item.leadingStockName ?? '--'),
+    item.leadingStockChangePct !== undefined
+      ? pctCell(item.leadingStockChangePct)
+      : el('td', 'num', '--'),
+  ]);
+
+const renderTable = (items) => {
+  const header = el('thead', '', [
+    el('tr', '', [
+      el('th', '', '代码'),
+      el('th', '', '名称'),
+      el('th', 'num', '最新'),
+      el('th', 'num', '涨跌幅'),
+      el('th', 'num', '成交额'),
+      el('th', 'num', '上涨'),
+      el('th', 'num', '下跌'),
+      el('th', '', '领涨股'),
+      el('th', 'num', '领涨涨幅'),
+    ]),
+  ]);
+  return el('div', 'table-wrap', [
+    el('table', 'table', [header, el('tbody', '', items.map(renderRow))]),
+  ]);
+};
+
+const sortFromUrl = () => {
+  const params = new URLSearchParams(window.location.search);
+  const sort = params.get('sort');
+  return sort === 'amount' ? 'amount' : 'changePct';
+};
+
+const sortToUrl = (sort) => {
+  const url = new URL(window.location.href);
+  url.searchParams.set('sort', sort);
+  window.history.replaceState({}, '', url.toString());
+};
+
+const renderControls = (sort, setStatus) => {
+  const select = el('select', 'date-input', [
+    el('option', '', '按涨跌幅'),
+    el('option', '', '按成交额'),
+  ]);
+  select.children[0].value = 'changePct';
+  select.children[1].value = 'amount';
+  select.value = sort;
+  select.addEventListener('change', () => {
+    sortToUrl(select.value);
+    void renderSectors(setStatus);
+  });
+  const btn = el('button', 'btn', '刷新');
+  btn.addEventListener('click', () => void renderSectors(setStatus));
+  return el('div', 'ladder-controls', [el('label', '', '排序'), select, btn]);
+};
+
+export const renderSectors = async (setStatus) => {
+  const root = $('#route-sectors');
+  if (root === null) return;
+  const sort = sortFromUrl();
+  mount(root, [el('p', 'muted', '加载中…')]);
+  const r = await callApi(`/api/market/sectors?sort=${encodeURIComponent(sort)}&limit=100`);
+  if (!r.ok) {
+    // callApi 不回传 HTTP status；server 把上游失败包成 error.kind='adapter_error'
+    const kind =
+      r.error?.kind === 'adapter_error' ? 'upstream-unavailable' : (r.error?.kind ?? 'internal');
+    const detail =
+      kind === 'upstream-unavailable' ? '请检查 luoome web 到东方财富行情服务的网络连通性。' : '';
+    mount(root, [
+      el('h2', '', '板块热力'),
+      el('p', 'error', `加载失败：${kind}（${detail}）`.trim()),
+    ]);
+    setStatus(`加载板块行情失败：${kind}`, true);
+    return;
+  }
+  const list = r.data;
+  const items = list.items ?? [];
+  const header = el('h2', '', `板块热力 · ${items.length} 个行业板块`);
+  const controls = renderControls(sort, setStatus);
+  const body =
+    items.length === 0
+      ? el('div', 'ladder-empty', '（无板块数据）')
+      : [renderSectorHeatmap(items), renderTable(items)];
+  mount(root, [header, controls, ...(Array.isArray(body) ? body : [body])]);
+  setStatus(`板块热力加载完成（${items.length} 个板块）`);
+};

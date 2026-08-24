@@ -19,6 +19,7 @@ import {
   assertStrategyRunInvariants,
   assertStrategyScheduleInvariants,
   assertStrategyVersionInvariants,
+  assertStrategyWatchlistSubscriptionInvariants,
   assertTradeInvariants,
   assertWatchlistInvariants,
   assertWatchlistMemberInvariants,
@@ -53,6 +54,7 @@ import {
   StrategySchema,
   StrategySignalSchema,
   StrategyVersionSchema,
+  StrategyWatchlistSubscriptionSchema,
   TradeSchema,
   WatchlistMemberSchema,
   WatchlistMemberSourceSchema,
@@ -94,10 +96,12 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'strategy_results',
     'strategy_signals',
     'strategy_schedules',
+    'strategy_watchlist_subscriptions',
   ],
   watchlists: [
     'stocks',
     'watchlists',
+    'strategy_watchlist_subscriptions',
     'watchlist_members',
     'watchlist_member_sources',
     'watchlist_sync_runs',
@@ -174,6 +178,7 @@ const JSON_COLUMNS = new Set([
   'risks',
   'rules',
   'tags',
+  'trade_ids',
 ]);
 
 const snakeToCamel = (value: string): string =>
@@ -269,6 +274,10 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   strategy_results: domainValidator(StrategyResultSchema),
   strategy_signals: domainValidator(StrategySignalSchema),
   strategy_schedules: domainValidator(StrategyScheduleSchema, assertStrategyScheduleInvariants),
+  strategy_watchlist_subscriptions: domainValidator(
+    StrategyWatchlistSubscriptionSchema,
+    assertStrategyWatchlistSubscriptionInvariants,
+  ),
   watchlists: domainValidator(WatchlistSchema, assertWatchlistInvariants),
   watchlist_members: domainValidator(WatchlistMemberSchema, assertWatchlistMemberInvariants),
   watchlist_member_sources: domainValidator(

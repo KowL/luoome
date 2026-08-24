@@ -37,13 +37,15 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 - 持仓、交易、笔记、预警
 - 行情快照、日线、技术指标
 - 版本化 Strategy + StrategyResult / StrategySignal
-- 多来源 Watchlist + AlertPlan / WatchTrigger
+- 多来源 Watchlist + 持久的 Strategy → Watchlist 显式订阅 + AlertPlan / WatchTrigger
 - 风控指标（VaR、Sharpe、最大回撤、集中度）
 
 ### 分析维度（只读）
 
 - PnL、风险敞口、行业暴露
 - Strategy 扫描、评分与可解释规则结果
+- 只有用户明确订阅后，published operational StrategyRun 才能同步目标 Watchlist；complete 才能结束
+  缺失来源，partial/failed 只标 stale，evaluation/trial/withheld/non-publishing/failed 不改 Watchlist
 - 多源行情交叉验证
 - LLM 推理总结（每日复盘、个股分析）
 
@@ -84,7 +86,8 @@ homebrew/
 |---|---|---|
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`） |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney → Tencent → Sina；全源失败明确报错 |
-| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare` |
+| `LUOOME_FUNDAMENTAL_PROVIDER` | 可选 | 默认不装配；仅显式设置 `mock` 才注入固定 PIT fixture，gate 永远为 `not-ready`，不代表真实数据可用 |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情数据源启用顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID` | `000300.SH` | 账户绩效默认 benchmark；首期为沪深300，可用真实指数日线覆盖时才显示可用 |
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录数据源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_LIMIT_UP_LADDER_SOURCES` | `eastmoney` | 连板天梯数据源顺序；当前仅注册 `eastmoney` |
@@ -94,12 +97,20 @@ homebrew/
 | `LUOOME_RESEARCH_VAULT` | — | 本地 Obsidian Vault 绝对路径；也可在 Web「研究」页配置 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与研究索引扫描的相对目录 |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 可创建受管研究文件的相对目录，必须位于 research root 内 |
+| `LUOOME_RESEARCH_EMBEDDING_ENABLED` | 关 | `=true`：显式挂载 Research embedding 外部 capability；默认搜索仍为本地 FTS5 |
+| `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | OpenAI-compatible embedding 模型目录；只写 `apiKeyEnv` 名，不写密钥 |
+| `LUOOME_RESEARCH_REMOTE_SYNC` | 关 | `=git`：启用独立 Git-only Vault 拉取 workflow；仍需 write/external 双 opt-in |
 | `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web「设置 → 飞书通知」中配置，缺失时通知降级为 log |
 | `LUOOME_A_SHARE_HOLIDAYS` | — | 追加 A 股休市日（逗号分隔 `YYYY-MM-DD`），与内置日历 union |
 | `LUOOME_HOLIDAYS_FILE` | `$LUOOME_HOME/holidays.json` | 节假日历文件路径；文件损坏静默 fallback 到内置 |
+| `LUOOME_STRATEGY_SCHEDULE_LEASE_MINUTES` | `30` | Strategy schedule claim 租约分钟数；范围 5～240 |
+| `LUOOME_STRATEGY_DATA_CONCURRENCY` | `8` | Strategy 日线准备并发；范围 1～64 |
+| `LUOOME_STRATEGY_DATA_MAX_STALENESS_TRADING_DAYS` | `1` | Strategy 成员日线允许陈旧交易日数；范围 0～30 |
+| `LUOOME_STRATEGY_DATA_MAX_RETRIES` | `2` | Strategy 单成员行情最大重试次数；范围 0～5 |
+| `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 | `LUOOME_PORT` | 5173 | Web 端口（与 `--port` 等价） |
 
@@ -154,6 +165,8 @@ bun install
 策略调度已内置：`luoome start` 与 `luoome web serve` 启动后每分钟自动检查一次
 `StrategySchedule`，进程启动时也会立即检查，不需要配置 crontab。每个策略仍按自己的标准 5 段
 cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由租约防重。
+生产参数、每日 fencing/checkpoint/provider/baseline 检查和可靠性汇总见
+[Strategy 生产可靠性运维手册](./docs/runbooks/strategy-reliability-operations.md)。
 
 其它低频自动任务仍由 workflow + 外部 cron 触发（每次运行落一条 `WorkflowRun` 审计，
 `list_workflow_runs` 可查）。建议在 crontab 中配置：
@@ -172,6 +185,8 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 0 19 * * 5     luoome workflow run weekly-report --mode scheduled
 # 开盘简报：周一会自动读取前一交易日，而不是自然日前一天
 0 9 * * 1-5    luoome workflow run opening-report --mode scheduled
+# 可选 Research Vault Git 拉取：仅干净工作树 + fast-forward，先备份再重建索引
+# 0 */2 * * *  luoome workflow run sync-research-vault-remote --mode scheduled
 ```
 
 - `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
@@ -196,6 +211,7 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 - 持仓完整录入闭环与交易流水
 - Strategy 不可变版本、校验、发布、dry-run/正式运行与信号事实
 - Watchlist 支持 manual / strategy / ai / portfolio / import 多来源与研究阶段
+- Strategy → Watchlist 需要显式持久订阅；可在 Strategy 设置页或对应 Tool 中取消，重复 producerRun 幂等
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一显式能力开关 + 同源校验
 - `luoome start` 一键启动 Web + 长驻盯盘

@@ -3,14 +3,15 @@ import type {
   LimitUpLadderDiff,
   LimitUpLadderEntry,
   LimitUpLadderQuery,
-  LimitUpLadderSource,
   Logger,
+  SourceStatus,
 } from '@luoome/core';
 import { assembleLadder, deriveBoard, diffTopLevel, filterAndDedupeEntries } from '@luoome/core';
 
+import type { SourceHandle, SourceRegistry } from '../source-registry.js';
 import { LRU } from './lru.js';
 import type {
-  LimitUpLadderAdapterLike,
+  LimitUpLadderCapabilityMap,
   LimitUpLadderRawEntry,
   LimitUpLadderResult,
 } from './types.js';
@@ -19,19 +20,22 @@ import type {
  * LimitUpLadderManager（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md §4.3）。
  *
  * 设计要点：
- * - 主源失败 → 捕获 → 可选 fallback → 双失败抛 adapter_error
- * - 缓存 key = (date, source, includeStar, includeBse, includeST, days)；
+ * - 源循环替换为 registry handle 循环（docs/ddd/source-pluggability-and-observation-design.md §6.3）：
+ *   按绑定顺序逐 handle 查缓存 / 拉取，全部失败抛 adapter_error；
+ *   显式 query.source 只尝试该源，未启用返回既有 adapter_error 协议
+ * - 缓存 key = (date, source, includeStar, includeBse, includeST, days)；source 维度来自
+ *   handle.source（命中）与成功 handle.source（写入），不用可选 query.source 生成伪 key；
  *   includeUncategorized 是 entry 级展示过滤，不进 key，返回前再应用
  * - TTL：当日盘中 = 60s；当日收盘后 / 跨日 / 非当日 = Infinity；
  *   空 ladder（盘前 / 数据未更新）例外，封顶 60s，避免盘前快照全天滞留
  * - 收盘价修正（§6.4）：map 阶段按 raw.high == raw.close + pct ∈ [9.8%, 10%) 触发
  * - 节假日历：简化版内联实现（不依赖 cli，因为 adapters 不能反向依赖 cli）
  *   ；holidaysProvider 可注入供测试替换
+ * - 非交易日早退不写观测，结果 source 用显式约束或配置首项 + warnings=['non-trading-day']（§4.6）
  */
 
 interface ManagerOptions {
-  readonly primary: LimitUpLadderAdapterLike;
-  readonly fallback?: LimitUpLadderAdapterLike;
+  readonly registry: SourceRegistry<LimitUpLadderCapabilityMap>;
   readonly logger: Logger;
   readonly clock: () => Date;
   /** 测试用：注入节假日历避免实际环境依赖。 */
@@ -168,7 +172,7 @@ function applyDisplayFilter(ladder: LimitUpLadder, includeUncategorized: boolean
   return assembleLadder(ladder.date, ladder.source, entries, ladder.warnings, ladder.asOf);
 }
 
-function cacheKey(query: LimitUpLadderQuery, source: LimitUpLadderSource): string {
+function cacheKey(query: LimitUpLadderQuery, source: string): string {
   return [
     query.date,
     source,
@@ -205,8 +209,8 @@ export class LimitUpLadderManager {
   readonly name = 'limit-up-ladder' as const;
   readonly sources: readonly string[];
 
-  private readonly primary: LimitUpLadderAdapterLike;
-  private readonly fallback: LimitUpLadderAdapterLike | undefined;
+  private readonly handles: readonly SourceHandle<LimitUpLadderCapabilityMap, 'limit-up-ladder'>[];
+  private readonly registry: SourceRegistry<LimitUpLadderCapabilityMap>;
   private readonly logger: Logger;
   private readonly clock: () => Date;
   private readonly cache: LRU<string, LimitUpLadder>;
@@ -219,12 +223,13 @@ export class LimitUpLadderManager {
   private holidaysLoading: Promise<ReadonlyMap<number, ReadonlySet<string>>> | undefined;
 
   constructor(opts: ManagerOptions) {
-    this.primary = opts.primary;
-    this.fallback = opts.fallback;
-    this.sources = [
-      opts.primary.name,
-      ...(opts.fallback === undefined ? [] : [opts.fallback.name]),
-    ];
+    this.registry = opts.registry;
+    this.handles = opts.registry.sources('limit-up-ladder');
+    const first = this.handles[0];
+    if (first === undefined) {
+      throw new Error('limit-up-ladder registry 缺少 limit-up-ladder capability 绑定');
+    }
+    this.sources = [...new Set(this.handles.map((handle) => handle.source))];
     this.logger = opts.logger;
     this.clock = opts.clock;
     this.cache = new LRU<string, LimitUpLadder>(512);
@@ -232,6 +237,10 @@ export class LimitUpLadderManager {
     this.dateInShanghaiFn = opts.dateInShanghaiFn ?? defaultDateInShanghai;
     this.isWeekendFn = opts.isWeekendFn ?? defaultIsWeekend;
     this.isHolidayFn = opts.isHolidayFn ?? defaultIsHoliday;
+  }
+
+  status(): readonly SourceStatus[] {
+    return this.registry.describe();
   }
 
   private async getHolidays(): Promise<ReadonlyMap<number, ReadonlySet<string>>> {
@@ -252,84 +261,88 @@ export class LimitUpLadderManager {
 
   async fetchLadder(query: LimitUpLadderQuery): Promise<LimitUpLadderResult> {
     const { date, source, days, includeStar, includeBse, includeST, includeUncategorized } = query;
-    const key = cacheKey(query, source);
     const now = this.clock();
+
+    // 显式 source 路由约束：只尝试该源；未启用返回既有 adapter_error 协议（§4.6）
+    const handles =
+      source === undefined
+        ? this.handles
+        : this.handles.filter((handle) => handle.source === source);
+    const firstHandle = handles[0] ?? this.handles[0];
+    if (handles.length === 0 || firstHandle === undefined) {
+      return errorResult(`source ${String(source)} 未启用`);
+    }
 
     // 确保节假日历加载完毕再判定交易日
     if (this.holidays === undefined) {
       await this.getHolidays();
     }
 
-    // 缓存命中（LRU 内部校验 TTL；Infinity written 永不失效）
-    const cached = this.cache.get(key);
-    if (cached !== undefined) {
-      return { ok: true, data: applyDisplayFilter(cached, includeUncategorized) };
+    // 缓存命中（LRU 内部校验 TTL；Infinity written 永不失效）；key 的 source 维度来自 handle
+    for (const handle of handles) {
+      const cached = this.cache.get(cacheKey(query, handle.source));
+      if (cached !== undefined) {
+        return { ok: true, data: applyDisplayFilter(cached, includeUncategorized) };
+      }
     }
 
     const ttl = computeTtl(date, now, this.dateInShanghaiFn);
 
-    // 非交易日：直接返回空 ladder（不调远端）
+    // 非交易日：直接返回空 ladder（不调远端、不写观测；source 取显式约束或配置首项，§4.6）
     if (!this.isTradingDay(date)) {
-      const empty = assembleLadder(date, source, [], ['non-trading-day'], now);
-      this.cache.set(key, empty, undefined);
+      const localSource = source ?? firstHandle.source;
+      const empty = assembleLadder(date, localSource, [], ['non-trading-day'], now);
+      this.cache.set(cacheKey(query, localSource), empty, undefined);
       return { ok: true, data: empty };
     }
 
-    // 主源
-    let rawResult: { date: string; entries: LimitUpLadderRawEntry[] };
-    try {
-      rawResult = await this.primary.fetchLadder(date, { days });
-    } catch (err) {
-      this.logger.warn('limit-up-ladder primary adapter failed', {
-        adapter: this.primary.name,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      if (this.fallback === undefined) {
-        return errorResult(
-          `primary ${this.primary.name} failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+    // 按绑定顺序逐 handle 拉取；全部失败返回 adapter_error
+    let lastError: unknown;
+    for (const handle of handles) {
       try {
-        rawResult = await this.fallback.fetchLadder(date, { days });
-        this.logger.info('limit-up-ladder fallback succeeded', {
-          adapter: this.fallback.name,
+        const rawResult = await handle.execute({ date, days });
+
+        // 映射 + 修正 + 过滤 + 去重
+        const mapped = rawResult.entries.map((e) => mapAndCorrectEntry(e, date));
+        const filtered = filterAndDedupeEntries(mapped, {
+          includeStar,
+          includeBse,
+          includeST,
         });
-      } catch (fallbackErr) {
-        this.logger.error('limit-up-ladder fallback also failed', {
-          adapter: this.fallback.name,
-          error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
-        });
-        return errorResult(
-          `primary and fallback both failed: ${
-            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
-          }`,
+
+        const warnings: string[] = [];
+        const correctedCount = filtered.filter((e) => e.corrected).length;
+        if (correctedCount > 0) warnings.push(`corrected entries: ${correctedCount}`);
+        if (filtered.length === 0) warnings.push('empty-ladder');
+        if (mapped.length > filtered.length) {
+          warnings.push(`filtered: ${mapped.length - filtered.length} entries`);
+        }
+
+        const ladder = assembleLadder(date, handle.source, filtered, warnings, now);
+
+        // 空 ladder（盘前 / 数据未更新）不允许长期缓存：否则盘前查一次，全天都停留在 empty-ladder
+        const effectiveTtl = filtered.length === 0 ? Math.min(ttl, 60_000) : ttl;
+        this.cache.set(
+          cacheKey(query, handle.source),
+          ladder,
+          effectiveTtl === Infinity ? undefined : effectiveTtl,
         );
+
+        return { ok: true, data: applyDisplayFilter(ladder, includeUncategorized) };
+      } catch (err) {
+        this.logger.warn('limit-up-ladder source failed', {
+          source: handle.source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        lastError = err;
       }
     }
 
-    // 映射 + 修正 + 过滤 + 去重
-    const mapped = rawResult.entries.map((e) => mapAndCorrectEntry(e, date));
-    const filtered = filterAndDedupeEntries(mapped, {
-      includeStar,
-      includeBse,
-      includeST,
-    });
-
-    const warnings: string[] = [];
-    const correctedCount = filtered.filter((e) => e.corrected).length;
-    if (correctedCount > 0) warnings.push(`corrected entries: ${correctedCount}`);
-    if (filtered.length === 0) warnings.push('empty-ladder');
-    if (mapped.length > filtered.length) {
-      warnings.push(`filtered: ${mapped.length - filtered.length} entries`);
-    }
-
-    const ladder = assembleLadder(date, source, filtered, warnings, now);
-
-    // 空 ladder（盘前 / 数据未更新）不允许长期缓存：否则盘前查一次，全天都停留在 empty-ladder
-    const effectiveTtl = filtered.length === 0 ? Math.min(ttl, 60_000) : ttl;
-    this.cache.set(key, ladder, effectiveTtl === Infinity ? undefined : effectiveTtl);
-
-    return { ok: true, data: applyDisplayFilter(ladder, includeUncategorized) };
+    return errorResult(
+      `all sources failed (${handles.map((handle) => handle.source).join(' → ')}): ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`,
+    );
   }
 
   async compareLadder(

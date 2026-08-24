@@ -10,9 +10,11 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
-import { renderIndexStrip } from './index-strip.js';
+import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
+import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
-import { alertDialog, promptDialog } from './modal.js';
+import { DATASET_LABELS } from './market-sync.js';
+import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { createStockSearchBox } from './search-box.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
@@ -34,6 +36,7 @@ import {
 /* 跨自动刷新保留的列表排序状态（dashboard 5s、holdings 10s 会重绘，不持久则排序瞬间失效） */
 let boardSortState = { key: null, order: 'desc' };
 let holdingsSortState = { key: null, order: 'desc' };
+let researchRemoteSyncController = null;
 
 /* ============ dashboard ============ */
 
@@ -126,9 +129,12 @@ const ALERT_DIRECTION_BADGE = {
   watch: { cls: 'badge-watch', label: '关注' },
 };
 
-/** 指数条渲染已抽到 index-strip.js（行情页共用）；dashboard 语义不变。 */
-const renderIndices = (indicesData, asOf) => {
-  renderIndexStrip('dashboard-indices', indicesData, asOf);
+/** 看盘页核心指数 4 卡（渲染器在 index-strip.js，与指数页共用）；数据空时卡片仍渲染为 '--'。 */
+const renderIndices = (indicesData) => {
+  const defs = DASHBOARD_INDEX_CODES.map(
+    (code) => INDEX_DEFS.find((d) => d.code === code) ?? { code, name: code },
+  );
+  renderIndexCards('dashboard-indices', defs, indicesData);
 };
 
 const boardAlertCell = (todayTrigger) => {
@@ -259,8 +265,6 @@ const renderDashboard = async (setStatus) => {
     return;
   }
   const {
-    asOf,
-    holdings: d,
     advice: adviceData,
     watchlists,
     alertPlans,
@@ -272,23 +276,12 @@ const renderDashboard = async (setStatus) => {
     todayTriggers,
   } = result.data;
 
-  // 指数条 + 实时看板
-  renderIndices(indices, asOf);
+  // 核心指数 4 卡 + 实时看板
+  renderIndices(indices);
   renderBoard(Array.isArray(board) ? board : []);
 
-  // 总市值 / 盈亏
-  $('#dash-total-value').textContent = fmtNum(d.totalValue);
-  const pnlNode = $('#dash-total-pnl');
-  pnlNode.textContent = fmtSigned(d.totalPnL);
-  pnlNode.className = `value ${d.totalPnL > 0 ? 'text-pos' : d.totalPnL < 0 ? 'text-neg' : ''}`;
-  const pnlPctNode = $('#dash-total-pnl-pct');
-  pnlPctNode.textContent = fmtPct(d.totalPnLPct);
-  pnlPctNode.className = `delta ${d.totalPnL > 0 ? 'pos' : d.totalPnL < 0 ? 'neg' : ''}`;
-  $('#dash-holdings-count').textContent = String(d.holdings.length);
-
-  // 今日建议 Top 3
+  // 今日建议 Top 3（条数与决策分布并入卡片 meta；持仓汇总卡片已移至持仓页）
   const advices = adviceData.advices;
-  $('#dash-advice-count').textContent = String(advices.length);
   const top = [...advices].sort((a, b) => b.confidence - a.confidence).slice(0, 3);
   mount(
     $('#dash-advice-list'),
@@ -300,9 +293,11 @@ const renderDashboard = async (setStatus) => {
     acc[a.decision] = (acc[a.decision] ?? 0) + 1;
     return acc;
   }, {});
-  $('#dash-advice-summary').textContent = Object.entries(byDecision)
+  const decisionSummary = Object.entries(byDecision)
     .map(([decision, count]) => `${decision}×${count}`)
     .join(' · ');
+  $('#dash-advice-meta').textContent =
+    `共 ${advices.length} 条${decisionSummary.length > 0 ? ` · ${decisionSummary}` : ''}`;
 
   setHealth('#dash-watch-dot', watch.state);
   $('#dash-watch-state').textContent = healthLabel(watch.state);
@@ -390,6 +385,16 @@ const renderHoldings = async (setStatus) => {
   const { holdings, totalValue, totalPnL, totalPnLPct, totalTodayPnl, totalTodayPnlPct } = r.data;
   // 缓存给「分析全部」复用，批量入口不再重复拉 /api/holdings
   currentHoldings = holdings;
+
+  // 顶部汇总卡片（从看盘页迁入；口径与原 dashboard-stats 一致）
+  $('#holdings-stat-total-value').textContent = fmtNum(totalValue);
+  const statPnlNode = $('#holdings-stat-total-pnl');
+  statPnlNode.textContent = fmtSigned(totalPnL);
+  statPnlNode.className = `value ${totalPnL > 0 ? 'text-pos' : totalPnL < 0 ? 'text-neg' : ''}`;
+  const statPnlPctNode = $('#holdings-stat-total-pnl-pct');
+  statPnlPctNode.textContent = fmtPct(totalPnLPct);
+  statPnlPctNode.className = `delta ${totalPnL > 0 ? 'pos' : totalPnL < 0 ? 'neg' : ''}`;
+  $('#holdings-stat-count').textContent = String(holdings.length);
 
   const tableWrap = body.closest('.table-wrap');
   let paginationWrap = tableWrap?.nextElementSibling;
@@ -898,6 +903,54 @@ const runWatchOnce = async (setStatus) => {
 };
 /* ============ advice ============ */
 
+/* 建议页删除走选择模式：默认态卡片无勾选框；点头部的「删除」进入选择模式后才可选。
+ * 筛选切换与路由离开必须重置（app.js 调 resetAdviceDeleteMode），防状态残留。 */
+const selectedAdviceIds = new Set();
+let adviceSelectMode = false;
+
+const resetAdviceDeleteMode = () => {
+  adviceSelectMode = false;
+  selectedAdviceIds.clear();
+  const btn = $('#btn-advice-delete-mode');
+  if (btn !== null) btn.textContent = '删除';
+  const bar = $('#advice-batch-bar');
+  if (bar !== null) {
+    bar.hidden = true;
+    bar.replaceChildren();
+  }
+};
+
+/** 头部「删除 / 取消」按钮：进入或退出选择模式。 */
+const toggleAdviceDeleteMode = async (setStatus) => {
+  if (adviceSelectMode) resetAdviceDeleteMode();
+  else adviceSelectMode = true;
+  await renderAdviceList(setStatus);
+};
+
+/** 删除建议（选择模式确认入口）：modal 确认 → API → 退出选择模式并刷新列表。 */
+const removeAdvices = async (ids, setStatus) => {
+  if (ids.length === 0) return;
+  const confirmed = await confirmDialog({
+    title: '删除建议',
+    message: `确定删除选中的 ${ids.length} 条建议吗？删除后不可恢复，关联的 outcome 记录会一并删除。`,
+    confirmLabel: `删除 ${ids.length} 条`,
+    danger: true,
+  });
+  if (!confirmed) return;
+  const r = await callApi('/api/advice/delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+  if (!r.ok) {
+    setStatus(`删除建议失败：${r.error.message ?? r.error.kind}`, true);
+    return;
+  }
+  resetAdviceDeleteMode();
+  const notFoundNote = r.data.notFound.length > 0 ? `（${r.data.notFound.length} 条已不存在）` : '';
+  setStatus(`已删除 ${r.data.deleted} 条建议${notFoundNote}`);
+  await renderAdviceList(setStatus);
+};
+
 const renderAdviceList = async (setStatus) => {
   const r = await callApi('/api/advice?includeExpired=true');
   const list = $('#advice-full-list');
@@ -907,9 +960,16 @@ const renderAdviceList = async (setStatus) => {
     return;
   }
   const all = [...r.data.advices].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  // 剪枝：勾选集合只保留仍存在的建议（可能刚被删除）
+  const existingIds = new Set(all.map((a) => a.id));
+  for (const id of [...selectedAdviceIds]) {
+    if (!existingIds.has(id)) selectedAdviceIds.delete(id);
+  }
   const filter = $('#advice-filter')?.value ?? 'all';
   const stockId = routeStockId();
   const filtered = filterAdvices(all, filter, stockId);
+  const modeBtn = $('#btn-advice-delete-mode');
+  if (modeBtn !== null) modeBtn.textContent = adviceSelectMode ? '取消' : '删除';
   let paginationWrap = list.nextElementSibling;
   if (
     paginationWrap === null ||
@@ -923,8 +983,60 @@ const renderAdviceList = async (setStatus) => {
   function renderPage() {
     const { page, pageSize } = pagination.getState();
     const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
-    mount(list, pageItems.map(adviceCard));
+    mount(
+      list,
+      pageItems.map((advice) =>
+        adviceCard(
+          advice,
+          adviceSelectMode
+            ? {
+                checked: selectedAdviceIds.has(advice.id),
+                onToggleSelect: (id, checked) => {
+                  if (checked) selectedAdviceIds.add(id);
+                  else selectedAdviceIds.delete(id);
+                  renderBatchBar();
+                },
+              }
+            : {},
+        ),
+      ),
+    );
   }
+  const renderBatchBar = () => {
+    const bar = $('#advice-batch-bar');
+    if (bar === null) return;
+    if (!adviceSelectMode) {
+      bar.hidden = true;
+      bar.replaceChildren();
+      return;
+    }
+    const allSelected = filtered.length > 0 && filtered.every((a) => selectedAdviceIds.has(a.id));
+    const toggleAll = el(
+      'button',
+      'btn btn-outline btn-sm',
+      allSelected ? '取消全选' : `全选 ${filtered.length} 条`,
+    );
+    toggleAll.type = 'button';
+    toggleAll.addEventListener('click', () => {
+      if (allSelected) selectedAdviceIds.clear();
+      else for (const a of filtered) selectedAdviceIds.add(a.id);
+      renderPage();
+      renderBatchBar();
+    });
+    const confirmDelete = el('button', 'btn btn-danger btn-sm', '确认删除');
+    confirmDelete.type = 'button';
+    confirmDelete.disabled = selectedAdviceIds.size === 0;
+    confirmDelete.addEventListener(
+      'click',
+      () => void removeAdvices([...selectedAdviceIds], setStatus),
+    );
+    mount(bar, [
+      el('span', 'batch-bar-info', `已选 ${selectedAdviceIds.size} 条`),
+      toggleAll,
+      confirmDelete,
+    ]);
+    bar.hidden = false;
+  };
   const pagination = createPagination({ total: filtered.length, onChange: renderPage });
   if (filtered.length === 0) {
     mount(
@@ -944,6 +1056,7 @@ const renderAdviceList = async (setStatus) => {
     renderPage();
     mount(paginationWrap, pagination.root);
   }
+  renderBatchBar();
   setStatus(
     stockId === null
       ? `建议已刷新 · ${filtered.length} / ${all.length} 条`
@@ -1266,6 +1379,86 @@ const formatPercentPoints = (value) =>
 
 const toDateInputValue = (date) => date.toISOString().slice(0, 10);
 
+const renderAccountPerformanceAudit = async (accountId, from, to) => {
+  const base =
+    accountId.length > 0 ? `/api/accounts/${accountId}/performance` : '/api/account/performance';
+  const [snapshotsResult, auditResult] = await Promise.all([
+    callApi(`${base}/snapshots?limit=30`),
+    callApi(`${base}/snapshot-audit?from=${from}&to=${to}&limit=200`),
+  ]);
+  const meta = $('#review-performance-audit-meta');
+  const snapshotsBody = $('#review-performance-snapshots-table tbody');
+  const auditBody = $('#review-performance-audit-table tbody');
+  if (!snapshotsResult.ok || !auditResult.ok) {
+    if (meta !== null) {
+      meta.textContent = `审计加载失败：${snapshotsResult.error?.kind ?? auditResult.error?.kind ?? 'unknown'}`;
+    }
+    if (snapshotsBody !== null) {
+      snapshotsBody.innerHTML = '<tr><td colspan="6" class="placeholder">暂无快照审计</td></tr>';
+    }
+    if (auditBody !== null) {
+      auditBody.innerHTML = '<tr><td colspan="5" class="placeholder">暂无区间审计</td></tr>';
+    }
+    return;
+  }
+
+  const snapshots = snapshotsResult.data.snapshots ?? [];
+  const audit = auditResult.data.audit;
+  if (meta !== null) {
+    meta.textContent = `${snapshots.length} 个版本 · ${audit.observedTradingDays}/${audit.expectedTradingDays} 个交易日 · ${audit.revisionDayCount} 日有修订 · ${audit.gaps.length} 个缺口`;
+  }
+  if (snapshotsBody !== null) {
+    mount(
+      snapshotsBody,
+      snapshots.length === 0
+        ? el('tr', null, el('td', { colSpan: 6, class: 'placeholder' }, '尚无持久化快照'))
+        : snapshots.map((snapshot) => {
+            const facts = snapshot.inputFacts;
+            const budget =
+              facts === undefined
+                ? '--'
+                : `${facts.priceSeries} 序列 / ${facts.dailyBars + facts.benchmarkBars} bars / ${Math.round(snapshot.calculationDurationMs ?? 0)}ms`;
+            return el('tr', null, [
+              el('td', null, fmtDateTime(snapshot.calculatedAt)),
+              el(
+                'td',
+                null,
+                `${String(snapshot.from).slice(0, 10)} → ${String(snapshot.to).slice(0, 10)}`,
+              ),
+              el('td', null, `${snapshot.completeness} / ${snapshot.benchmarkStatus}`),
+              el(
+                'td',
+                null,
+                snapshot.dataAsOf === undefined ? '--' : String(snapshot.dataAsOf).slice(0, 10),
+              ),
+              el('td', 'audit-fingerprint', snapshot.inputFingerprint.slice(0, 12)),
+              el('td', null, budget),
+            ]);
+          }),
+    );
+  }
+  if (auditBody !== null) {
+    mount(
+      auditBody,
+      audit.days.length === 0
+        ? el('tr', null, el('td', { colSpan: 5, class: 'placeholder' }, '区间内没有 A 股交易日'))
+        : [...audit.days].reverse().map((day) => {
+            const issue =
+              day.missingStockIds.length > 0
+                ? day.missingStockIds.join(', ')
+                : (day.warnings[0] ?? '--');
+            return el('tr', null, [
+              el('td', null, day.date),
+              el('td', `audit-status-${day.completeness}`, day.completeness),
+              el('td', null, day.completeness === 'complete' ? '--' : issue),
+              el('td', null, `${day.revisionCount} 版`),
+              el('td', 'audit-fingerprint', day.snapshotId?.slice(0, 12) ?? '--'),
+            ]);
+          }),
+    );
+  }
+};
+
 const renderAccountPerformance = async () => {
   const fromNode = $('#review-performance-from');
   const toNode = $('#review-performance-to');
@@ -1285,6 +1478,7 @@ const renderAccountPerformance = async () => {
     const tbody = $('#review-performance-table tbody');
     if (tbody !== null)
       tbody.innerHTML = '<tr><td colspan="6" class="placeholder">暂无可用估值</td></tr>';
+    await renderAccountPerformanceAudit(accountId, fromNode.value, toNode.value);
     return;
   }
   const performance = result.data;
@@ -1334,6 +1528,7 @@ const renderAccountPerformance = async () => {
           ),
     );
   }
+  await renderAccountPerformanceAudit(accountId, fromNode.value, toNode.value);
 };
 
 const renderTrend = (data) => {
@@ -1472,6 +1667,20 @@ const renderReview = async (setStatus) => {
         const li = el('div', 'advice-card');
         const status = a.outcome === undefined ? '（待回填）' : a.outcome.outcome;
         const pnlText = a.outcome?.pnl !== undefined ? `  盈亏 ${fmtSigned(a.outcome.pnl)}` : '';
+        const outcomeMeta =
+          a.outcome === undefined
+            ? []
+            : [
+                ...(a.outcome.benchmarkPnl === undefined
+                  ? []
+                  : [`基准 ${fmtSigned(a.outcome.benchmarkPnl)}`]),
+                ...(a.outcome.holdingHours === undefined
+                  ? []
+                  : [`持有 ${a.outcome.holdingHours}h`]),
+                ...(Array.isArray(a.outcome.tradeIds) && a.outcome.tradeIds.length > 0
+                  ? [`交易 ${a.outcome.tradeIds.join(',')}`]
+                  : []),
+              ];
         li.append(
           el('div', 'row-1', [
             el('div', 'subject', [el('span', 'code', code), a.subjectId]),
@@ -1479,7 +1688,11 @@ const renderReview = async (setStatus) => {
           ]),
         );
         li.append(el('p', 'premise', a.reasoning?.premise ?? ''));
-        const row2 = el('div', 'row-2', `${status}${pnlText}  有效至 ${fmtDateTime(a.validUntil)}`);
+        const row2 = el('div', 'row-2', [
+          `${status}${pnlText}`,
+          ...outcomeMeta,
+          `有效至 ${fmtDateTime(a.validUntil)}`,
+        ]);
         li.append(row2);
         if (a.outcome === undefined) {
           const btn = el('button', 'btn btn-outline btn-sm', '回填 outcome');
@@ -1497,12 +1710,36 @@ const renderReview = async (setStatus) => {
   setStatus('复盘已刷新');
 };
 
+const outcomeInputOf = (values) => {
+  const optionalNumber = (value) => {
+    const text = String(value ?? '').trim();
+    if (text.length === 0) return undefined;
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const pnl = optionalNumber(values.pnl);
+  const benchmarkPnl = optionalNumber(values.benchmarkPnl);
+  const holdingHours = optionalNumber(values.holdingHours);
+  const tradeIds = String(values.tradeIds ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  return {
+    outcome: values.outcome,
+    ...(pnl === undefined ? {} : { pnl }),
+    ...(benchmarkPnl === undefined ? {} : { benchmarkPnl }),
+    ...(holdingHours === undefined ? {} : { holdingHours }),
+    ...(tradeIds.length > 0 ? { tradeIds } : {}),
+    ...(String(values.notes ?? '').length > 0 ? { notes: values.notes } : {}),
+  };
+};
+
 const fillOutcomeForm = async (adviceId, decision) => {
   const values = await promptDialog({
     title: `回填 outcome（${adviceId.slice(0, 8)} · 决策 ${decision}）`,
     fields: [
       {
-        key: 'followed',
+        key: 'outcome',
         label: '执行情况',
         value: 'followed',
         options: [
@@ -1511,21 +1748,27 @@ const fillOutcomeForm = async (adviceId, decision) => {
           { value: 'ignored', label: '忽略' },
         ],
       },
-      { key: 'pnl', label: '实际盈亏（人民币，可负）', value: '0' },
+      {
+        key: 'pnl',
+        label: '实际盈亏（人民币，可负）',
+        placeholder: '未知或未平仓时留空',
+      },
+      { key: 'benchmarkPnl', label: '同期基准盈亏（可选）', placeholder: '选填' },
+      { key: 'holdingHours', label: '持有时长（小时，可选）', placeholder: '选填' },
+      {
+        key: 'tradeIds',
+        label: '关联交易 ID（可选，逗号分隔）',
+        placeholder: '例如 trade-1,trade-2',
+      },
       { key: 'notes', label: '备注（可选）', placeholder: '选填' },
     ],
     confirmLabel: '回填',
   });
   if (values === null) return;
-  const pnl = Number(values.pnl);
   const r = await callApi(`/api/review/${adviceId}/outcome`, {
     method: 'POST',
     body: JSON.stringify({
-      input: {
-        followed: values.followed === 'followed',
-        pnl: Number.isFinite(pnl) ? pnl : 0,
-        ...(values.notes.length > 0 ? { notes: values.notes } : {}),
-      },
+      input: outcomeInputOf(values),
     }),
   });
   if (r.ok) {
@@ -1638,7 +1881,7 @@ const renderDataHealth = async (setStatus) => {
     return;
   }
   const data =
-    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
+    /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, datasets?: Array<{dataset: string, source: string, freshness: string, dataAsOf?: string, lastSuccessAt?: string, lastErrorKind?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
       r.data
     );
   const providerEls = data.providers.map((p) => {
@@ -1669,12 +1912,46 @@ const renderDataHealth = async (setStatus) => {
             ),
           ),
         ]);
+  // 数据集明细（ruo §8 读模型的 datasets，此前被丢弃）：折叠展示 per-dataset 观测
+  const datasets = Array.isArray(data.datasets) ? data.datasets : [];
+  const datasetDetail =
+    datasets.length === 0
+      ? null
+      : el('details', 'data-health-datasets', [
+          el('summary', null, `数据集明细（${datasets.length}）`),
+          el('table', 'table data-health-dataset-table', [
+            el('thead', null, [
+              el('tr', null, [
+                el('th', null, '数据集'),
+                el('th', null, '来源'),
+                el('th', null, '状态'),
+                el('th', null, '数据截至'),
+                el('th', null, '最近错误'),
+              ]),
+            ]),
+            el(
+              'tbody',
+              null,
+              datasets.map((ds) => {
+                const meta = FRESHNESS_LABEL[ds.freshness] ?? FRESHNESS_LABEL.unknown;
+                return el('tr', null, [
+                  el('td', null, DATASET_LABELS[ds.dataset] ?? ds.dataset),
+                  el('td', null, ds.source),
+                  el('td', meta.cls, meta.label),
+                  el('td', null, fmtTime(ds.dataAsOf ?? ds.lastSuccessAt)),
+                  el('td', 'muted', ds.lastErrorKind ?? ''),
+                ]);
+              }),
+            ),
+          ]),
+        ]);
   mount(
     body,
     el('div', 'data-health-grid', [
       el('div', 'data-health-providers', [el('h3', null, '行情源'), ...providerEls]),
       el('div', 'data-health-watch', [el('h3', null, 'watch 健康'), el('p', null, watchText)]),
       ...(stale !== null ? [stale] : []),
+      ...(datasetDetail !== null ? [datasetDetail] : []),
     ]),
   );
   setStatus('数据健康已更新');
@@ -1759,6 +2036,13 @@ const renderResearch = async (setStatus) => {
   const syncButton = /** @type {HTMLButtonElement | null} */ (
     document.getElementById('research-sync-btn')
   );
+  const remoteSyncButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-remote-sync-btn')
+  );
+  const remoteCancelButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-remote-cancel-btn')
+  );
+  const remoteSyncStatus = document.getElementById('research-remote-sync-status');
   const createTopicButton = /** @type {HTMLButtonElement | null} */ (
     document.getElementById('research-create-topic-btn')
   );
@@ -1769,6 +2053,16 @@ const renderResearch = async (setStatus) => {
     document.getElementById('research-import-remote-btn')
   );
   const indexStatus = document.getElementById('research-index-status');
+  const embeddingStatus = document.getElementById('research-embedding-status');
+  const hybridSearch = /** @type {HTMLInputElement | null} */ (
+    document.getElementById('research-hybrid-search')
+  );
+  const embeddingRebuildButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-embedding-rebuild-btn')
+  );
+  const embeddingEvaluateButton = /** @type {HTMLButtonElement | null} */ (
+    document.getElementById('research-embedding-evaluate-btn')
+  );
   const inbox = document.getElementById('research-inbox');
   const writeStatus = document.getElementById('research-write-status');
   if (
@@ -1785,6 +2079,27 @@ const renderResearch = async (setStatus) => {
     if (vaultSettingsStatus === null) return;
     vaultSettingsStatus.textContent = message;
     vaultSettingsStatus.className = `card-meta ${kind}`.trim();
+  };
+
+  const paintEmbeddingStatus = (data) => {
+    if (embeddingStatus === null) return;
+    if (!data?.configured) {
+      embeddingStatus.textContent =
+        '语义索引：未启用；FTS5/metadata 仍是确定性基线，正文不会外发。';
+      return;
+    }
+    const model = data.models?.find((item) => item.name === data.defaultModel) ?? data.models?.[0];
+    if (!model) {
+      embeddingStatus.textContent = '语义索引：已启用但没有可用模型。';
+      return;
+    }
+    const state = model.state;
+    embeddingStatus.textContent = `语义索引：${model.name} · ${state.status} · ${state.embeddedChunks}/${state.expectedChunks} chunks · ${model.identity.dimensions} 维 · ${model.identity.version}`;
+  };
+
+  const loadEmbeddingStatus = async () => {
+    const response = await callApi('/api/research/embeddings/status');
+    if (response.ok) paintEmbeddingStatus(response.data);
   };
 
   const loadVaultSettings = async () => {
@@ -1824,6 +2139,53 @@ const renderResearch = async (setStatus) => {
         `vault-state ${data.configError ? 'invalid' : data.configured ? 'configured' : ''}`.trim();
     }
     setVaultSettingsStatus(data.configError ?? (data.configured ? '配置已加载' : '填写路径后保存'));
+  };
+
+  const loadRemoteSyncStatus = async (preserveMessage = false) => {
+    if (remoteSyncButton === null || remoteSyncStatus === null) return;
+    const response = await callApi('/api/research/remote-sync/status');
+    const configured = response.ok && response.data.configured === true;
+    remoteSyncButton.disabled = !configured || researchRemoteSyncController !== null;
+    if (!preserveMessage || !configured) {
+      remoteSyncStatus.textContent = configured
+        ? '远端同步：Git 已显式启用'
+        : '远端同步：未启用（需设置 LUOOME_RESEARCH_REMOTE_SYNC=git）';
+    }
+  };
+
+  const runRemoteSync = async () => {
+    if (remoteSyncButton === null || remoteCancelButton === null || remoteSyncStatus === null)
+      return;
+    const controller = new AbortController();
+    researchRemoteSyncController = controller;
+    remoteSyncButton.disabled = true;
+    remoteCancelButton.hidden = false;
+    remoteSyncStatus.textContent = '正在检查工作树、拉取远端并重建索引…';
+    try {
+      const response = await callApi('/api/research/remote-sync', {
+        method: 'POST',
+        body: JSON.stringify({ timeoutMs: 60_000 }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        remoteSyncStatus.textContent = `远端同步停止：${response.error?.cause ?? response.error?.message ?? response.error?.kind}`;
+        return;
+      }
+      const index = response.data.index;
+      remoteSyncStatus.textContent =
+        response.data.status === 'succeeded'
+          ? `远端同步完成：${response.data.git.status}${index ? `，扫描 ${index.scanned} 个文件` : ''}`
+          : `远端已更新，索引部分完成：${response.data.diagnostic ?? '请检查运行记录'}`;
+      await load();
+    } catch (error) {
+      remoteSyncStatus.textContent = controller.signal.aborted
+        ? '远端同步取消请求已发送；若已进入本地 fast-forward，将完成该原子步骤后停止'
+        : `远端同步失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (researchRemoteSyncController === controller) researchRemoteSyncController = null;
+      remoteCancelButton.hidden = true;
+      await loadRemoteSyncStatus(true);
+    }
   };
 
   const saveVaultSettings = async () => {
@@ -1911,6 +2273,9 @@ const renderResearch = async (setStatus) => {
     }
     return error.message ?? error.cause ?? error.required ?? '写入失败';
   };
+
+  const toolErrorText = (error, fallback) =>
+    error?.message ?? error?.required ?? error?.cause ?? error?.kind ?? fallback;
 
   const writeResearch = async (button, toolName, input, label) => {
     if (button !== null) button.disabled = true;
@@ -2149,8 +2514,18 @@ const renderResearch = async (setStatus) => {
     if (facts.status === 'unavailable') {
       return el('p', 'muted mt-2', '近期涨停天梯不可用；未将不可用伪装成空结果。');
     }
+    const coveredDays = Math.max(0, 30 - (facts.missingDates?.length ?? 0));
     return el('section', 'research-topic-timeline mt-2', [
-      el('h3', null, '近期涨停天梯'),
+      el(
+        'h3',
+        null,
+        facts.status === 'partial'
+          ? `近期涨停天梯（部分覆盖 ${coveredDays}/30 日）`
+          : '近期涨停天梯',
+      ),
+      facts.status === 'partial'
+        ? el('p', 'muted', '仅展示已保存的 PIT 快照；缺失日期未用当前接口回填。')
+        : null,
       facts.recent?.length
         ? el(
             'ul',
@@ -2166,6 +2541,43 @@ const renderResearch = async (setStatus) => {
               ),
           )
         : el('p', 'muted', '可获得范围内暂无涨停记录'),
+    ]);
+  };
+
+  const researchProfile = (profile) => {
+    if (profile === undefined || profile === null) return null;
+    const statusLabel =
+      profile.status === 'complete'
+        ? '事实完整'
+        : profile.status === 'partial'
+          ? '部分可用'
+          : '不可用';
+    const coverage = profile.coverage ?? {};
+    return el('section', 'card research-stock-profile mt-2', [
+      el('div', 'card-header', [
+        el('div', null, [el('h3', null, '股票研究 Profile'), stockIdentityLink(profile.stock)]),
+        el(
+          'span',
+          `badge ${profile.status === 'complete' ? 'badge-ok' : 'badge-warn'}`,
+          statusLabel,
+        ),
+      ]),
+      el(
+        'p',
+        'muted',
+        `Topic ${coverage.topics ?? 0} · 资料 ${coverage.documents ?? 0} · 事件 ${coverage.events ?? 0} · 策略信号 ${coverage.strategySignals ?? 0} · 触发 ${coverage.watchTriggers ?? 0}`,
+      ),
+      profile.factsAsOf ? el('p', 'muted', `事实截止：${fmtDateTime(profile.factsAsOf)}`) : null,
+      topicSection(
+        '支持证据',
+        (profile.evidence ?? []).slice(0, 8).map((item) => item.summary),
+      ),
+      topicSection(
+        '反证',
+        (profile.counterEvidence ?? []).slice(0, 8).map((item) => item.summary),
+      ),
+      topicSection('Unavailable / 待补证', profile.unknowns),
+      el('p', 'muted', (profile.limitations ?? []).join(' ')),
     ]);
   };
 
@@ -2266,7 +2678,14 @@ const renderResearch = async (setStatus) => {
     setStatus(`已加载 ${topic.title}`);
   };
 
-  const paint = (topics, documents, status, timeline = [], limitUp = undefined) => {
+  const paint = (
+    topics,
+    documents,
+    status,
+    timeline = [],
+    limitUp = undefined,
+    profile = undefined,
+  ) => {
     paintIndexStatus(status);
     paintInbox(topics, documents);
     const cards = [
@@ -2274,6 +2693,7 @@ const renderResearch = async (setStatus) => {
       ...documents.map((document) =>
         researchResultCard(document, 'document', () => void showDocument(document.id)),
       ),
+      researchProfile(profile),
       researchTimeline(timeline),
       researchLimitUp(limitUp),
     ];
@@ -2292,15 +2712,25 @@ const renderResearch = async (setStatus) => {
     const query = input.value.trim();
     setStatus(query ? `搜索 ${query}…` : '加载研究主题…');
     if (query) {
-      const response = await callApi(`/api/research/search?q=${encodeURIComponent(query)}`);
+      const useHybrid = hybridSearch?.checked === true;
+      const response = useHybrid
+        ? await callApi('/api/research/search/hybrid', {
+            method: 'POST',
+            body: JSON.stringify({ text: query, limit: 50 }),
+          })
+        : await callApi(`/api/research/search?q=${encodeURIComponent(query)}`);
       if (!response.ok) {
-        mount(results, el('p', 'error', response.error?.message ?? '研究索引不可用'));
+        mount(results, el('p', 'error', toolErrorText(response.error, '研究索引不可用')));
         return;
+      }
+      if (useHybrid && embeddingStatus !== null) {
+        const embedding = response.data.embedding;
+        embeddingStatus.textContent = `语义检索：${response.data.capability} · ${response.data.complete ? '完整' : '不完整'}${embedding?.diagnostic ? ` · ${embedding.diagnostic}` : ''}`;
       }
       paint(
         [],
         (response.data.hits ?? []).map((hit) => hit.document),
-        response.data.indexStatus,
+        useHybrid ? undefined : response.data.indexStatus,
       );
       return;
     }
@@ -2309,7 +2739,7 @@ const renderResearch = async (setStatus) => {
       `/api/research/topics${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
     );
     if (!response.ok) {
-      mount(results, el('p', 'error', response.error?.message ?? '研究索引不可用'));
+      mount(results, el('p', 'error', toolErrorText(response.error, '研究索引不可用')));
       return;
     }
     paint(response.data.topics ?? [], [], response.data.indexStatus);
@@ -2337,6 +2767,54 @@ const renderResearch = async (setStatus) => {
       setStatus(`Vault 同步完成：扫描 ${response.data.scanned} 个文件`);
       await load();
     });
+    embeddingRebuildButton?.addEventListener('click', async () => {
+      embeddingRebuildButton.disabled = true;
+      setStatus('增量重建语义索引；私人正文将发送给已配置的外部 embedding 模型…');
+      const response = await callApi('/api/research/embeddings/rebuild', {
+        method: 'POST',
+        body: JSON.stringify({ maxChunks: 200 }),
+      });
+      embeddingRebuildButton.disabled = false;
+      if (!response.ok) {
+        setStatus(toolErrorText(response.error, '语义索引重建失败'));
+        return;
+      }
+      setStatus(
+        `语义索引处理 ${response.data.processed} chunks；覆盖 ${response.data.state.embeddedChunks}/${response.data.state.expectedChunks}`,
+      );
+      await loadEmbeddingStatus();
+    });
+    embeddingEvaluateButton?.addEventListener('click', async () => {
+      embeddingEvaluateButton.disabled = true;
+      setStatus('运行固定评测集；仅发送版本内置的公开评测文本…');
+      const response = await callApi('/api/research/embeddings/evaluate', {
+        method: 'POST',
+        body: JSON.stringify({ topK: 3 }),
+      });
+      embeddingEvaluateButton.disabled = false;
+      if (!response.ok) {
+        setStatus(toolErrorText(response.error, '跨模型评测失败'));
+        return;
+      }
+      const summary = response.data.results
+        .map((result) =>
+          result.status === 'failed'
+            ? `${result.model}: 失败（${result.diagnostic ?? 'provider unavailable'}）`
+            : `${result.model}: R@3 ${result.recallAtK.toFixed(2)}, MRR ${result.meanReciprocalRank.toFixed(2)}, ${result.latencyMs.toFixed(0)}ms${result.estimatedCostUsd === undefined ? '' : `, $${result.estimatedCostUsd.toFixed(6)}`}`,
+        )
+        .join('；');
+      setStatus(summary || '没有已配置模型可评测');
+    });
+    remoteSyncButton?.addEventListener('click', () => {
+      openConfirmModal({
+        title: '确认从 Git 远端拉取 Research Vault',
+        message:
+          '只允许干净工作树上的 fast-forward。执行前会创建本地 Git bundle 备份；冲突或分叉将停止，不会自动 commit、push、reset、rebase 或选边。\n\n请确认远端仓库为私有仓库，且凭证由本机 Git 凭证管理器提供。',
+        confirmLabel: '确认拉取并重建索引',
+        onConfirm: () => void runRemoteSync(),
+      });
+    });
+    remoteCancelButton?.addEventListener('click', () => researchRemoteSyncController?.abort());
     createTopicButton?.addEventListener('click', () => void openCreateTopic());
     importDocumentButton?.addEventListener('click', () => void openImportDocument());
     importRemoteButton?.addEventListener('click', () => void openImportRemote());
@@ -2347,6 +2825,8 @@ const renderResearch = async (setStatus) => {
   }
 
   await loadVaultSettings();
+  await loadEmbeddingStatus();
+  await loadRemoteSyncStatus();
 
   const stockId = routeStockId();
   if (stockId !== null) {
@@ -2362,6 +2842,7 @@ const renderResearch = async (setStatus) => {
       response.data.indexStatus,
       response.data.timeline ?? [],
       response.data.limitUp,
+      response.data.profile,
     );
     return;
   }
@@ -2395,6 +2876,7 @@ export {
   cancelAnalyzeAllHoldings,
   errorKindLabel,
   filterAdvices,
+  outcomeInputOf,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
@@ -2405,8 +2887,10 @@ export {
   renderSettings,
   renderSettingsAccount,
   renderWorkflowRuns,
+  resetAdviceDeleteMode,
   routeStockId,
   runWatchOnce,
   sortBoardItems,
+  toggleAdviceDeleteMode,
   watchRunSummaryText,
 };

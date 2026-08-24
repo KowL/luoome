@@ -1,9 +1,11 @@
 import type { Account } from '../entity/account.js';
-import type { Advice, AdviceOutcome, AdviceQuery } from '../entity/advice.js';
+import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
+import type { FinancialFact, FinancialVintage } from '../entity/fundamental.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
+import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
 import type { Notification, NotificationResult } from '../entity/notification.js';
 import type {
   PortfolioCashFlow,
@@ -12,6 +14,15 @@ import type {
 } from '../entity/portfolio-performance.js';
 import type { DailyBar, Quote } from '../entity/quote.js';
 import type { Report, ReportKind, ReportStatus } from '../entity/report.js';
+import type {
+  ResearchChunkEmbedding,
+  ResearchEmbeddingIndexState,
+  ResearchEmbeddingModelIdentity,
+} from '../entity/research-embedding.js';
+import type {
+  ResearchHypothesisVersion,
+  ResearchHypothesisVersionStatus,
+} from '../entity/research-hypothesis.js';
 import type {
   ResearchAvailability,
   ResearchDocumentChunk,
@@ -42,6 +53,7 @@ import type {
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
+import type { StrictBacktestMarketFact, StrictBacktestRun } from '../entity/strategy-backtest.js';
 import type {
   DailyBarRevision,
   StrategyDataCheckpoint,
@@ -50,6 +62,10 @@ import type {
   StrategyEvaluationSession,
 } from '../entity/strategy-checkpoint.js';
 import type { StrategySchedule } from '../entity/strategy-schedule.js';
+import type {
+  StrategyWatchlistSubscription,
+  StrategyWatchlistSubscriptionStatus,
+} from '../entity/strategy-watchlist-subscription.js';
 import type { Trade } from '../entity/trade.js';
 import type { WatchRun } from '../entity/watch-run.js';
 import type {
@@ -69,6 +85,12 @@ import type {
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
 import type { ResearchSearchHit } from '../research-vault.js';
+import type {
+  FundamentalScoreResult,
+  FundamentalScoreRun,
+  FundamentalScoreRunCommit,
+  FundamentalScoreVersion,
+} from '../strategy/fundamental-factor.js';
 
 /**
  * Repository 接口（ARCHITECTURE §2.5 / §4.3）。
@@ -209,6 +231,80 @@ export interface DailyBarRepository {
     readonly to?: Date;
     readonly recordedAt?: Date;
   }): Promise<readonly DailyBarRevision[]>;
+  /** 横截面研究批量读取 PIT revision；实现内部负责 SQLite 参数分块并保持稳定排序。 */
+  listRevisionsForStocks(input: {
+    readonly stockIds: readonly string[];
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly DailyBarRevision[]>;
+}
+
+/**
+ * Append-only 基本面事实修订仓储；PIT vintage 选择仍由 core strict resolver 定义。
+ * 实现必须同时提供 Drizzle/SQLite 与 in-memory 版本，并保持查询排序和副本语义一致。
+ */
+export interface FinancialFactRepository {
+  appendMany(facts: readonly FinancialFact[]): Promise<void>;
+  listRevisions(input: {
+    readonly stockIds: readonly string[];
+    readonly metricIds?: readonly string[];
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly FinancialFact[]>;
+  resolveVintage(input: {
+    readonly stockIds: readonly string[];
+    readonly metricIds: readonly string[];
+    readonly asOf: Date;
+    readonly policy: 'strict-pit-v1';
+  }): Promise<FinancialVintage>;
+}
+
+/**
+ * Immutable, append-only score-version snapshots. A second save for an
+ * existing id must either be an identical idempotent replay or be rejected;
+ * published/retired definitions are never updated in place.
+ */
+export interface FundamentalScoreVersionRepository {
+  save(version: FundamentalScoreVersion): Promise<void>;
+  findById(id: string): Promise<FundamentalScoreVersion | null>;
+  list(input?: {
+    readonly status?: FundamentalScoreVersion['status'];
+  }): Promise<readonly FundamentalScoreVersion[]>;
+}
+
+/**
+ * Append-only score-run audit facts. `saveStarted` creates the only mutable
+ * lifecycle state; `commit` atomically moves it once to a terminal status and
+ * stores results only for `committed`. unavailable/failed terminal commits
+ * retain their run reason but expose no consumable results.
+ */
+export interface FundamentalScoreRunRepository {
+  saveStarted(run: FundamentalScoreRun): Promise<void>;
+  commit(input: FundamentalScoreRunCommit): Promise<void>;
+  findById(id: string): Promise<FundamentalScoreRun | null>;
+  list(input?: {
+    readonly scoreVersionId?: string;
+    readonly status?: FundamentalScoreRun['status'];
+    readonly asOf?: Date;
+    readonly limit?: number;
+  }): Promise<readonly FundamentalScoreRun[]>;
+  listResults(runId: string): Promise<readonly FundamentalScoreResult[]>;
+}
+
+/** 独立分钟行情仓储；不读取或投影 PriceSnapshot。 */
+export interface MinuteBarRepository {
+  saveMany(bars: readonly MinuteBar[]): Promise<void>;
+  findInRange(
+    stockId: string,
+    interval: MinuteBarInterval,
+    from: Date,
+    to: Date,
+  ): Promise<MinuteBar[]>;
+  latestSession(stockId: string, interval: MinuteBarInterval): Promise<MinuteBar[]>;
+  /** 全局保留期清理；返回实际删除行数。 */
+  removeBefore(before: Date): Promise<number>;
 }
 
 export interface AdviceRepository {
@@ -216,6 +312,10 @@ export interface AdviceRepository {
   findById(id: string): Promise<Advice | null>;
   query(filter: AdviceQuery): Promise<Advice[]>;
   recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void>;
+  findOutcome(adviceId: string): Promise<AdviceOutcome | null>;
+  listOutcomes(filter?: AdviceOutcomeQuery): Promise<AdviceOutcome[]>;
+  /** 删除建议并级联删除其 outcome（advice_outcomes 无 FK，两实现都显式清理）；id 不存在时为幂等空操作。 */
+  remove(id: string): Promise<void>;
 }
 
 export interface ReportRepository {
@@ -258,6 +358,14 @@ export interface RepositoryRegistry {
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
   readonly dailyBar: DailyBarRepository;
+  /** Phase 3 P3-1：append-only 基本面 PIT facts 与 strict vintage resolver。 */
+  readonly financialFact: FinancialFactRepository;
+  /** Phase 3 P3-2：不可变基本面 score version 快照。 */
+  readonly fundamentalScoreVersion: FundamentalScoreVersionRepository;
+  /** Phase 3 P3-2：一次性 terminal commit 的基本面 score run/results。 */
+  readonly fundamentalScoreRun: FundamentalScoreRunRepository;
+  /** Market View Phase 4：独立 raw 分钟 OHLCV，默认保留 30 天。 */
+  readonly minuteBar: MinuteBarRepository;
   /** Phase 6：信号后的事实表现观察，不包含回测交易。 */
   readonly signalObservation: SignalObservationRepository;
   /** Strategy 目标模型身份与不可变版本；W1 起内部可读写，W2 才开放 tools。 */
@@ -270,6 +378,9 @@ export interface RepositoryRegistry {
   readonly strategyDataCheckpoint: StrategyDataCheckpointRepository;
   /** P2 历史评估 session/day 进度。 */
   readonly strategyEvaluation: StrategyEvaluationRepository;
+  /** 严格回测运行与 PIT 可成交性/公司行动事实；与 operational/evaluation run 隔离。 */
+  readonly strategyBacktest: StrategyBacktestRepository;
+  readonly strategyWatchlistSubscription: StrategyWatchlistSubscriptionRepository;
   readonly watchlist: WatchlistRepository;
   readonly watchlistMember: WatchlistMemberRepository;
   readonly alertPlan: AlertPlanRepository;
@@ -282,7 +393,9 @@ export interface RepositoryRegistry {
   /** MVP-1：每轮 watch 心跳/结果，无触发时也可观测。 */
   readonly watchRun: WatchRunRepository;
   readonly researchIndex: ResearchIndexRepository;
+  readonly researchEmbedding: ResearchEmbeddingRepository;
   readonly researchVaultSyncRun: ResearchVaultSyncRunRepository;
+  readonly researchHypothesisVersion: ResearchHypothesisVersionRepository;
   /** ruo 迁移 Phase 1B；公司事件（幂等 upsert by (provider, externalId)）。 */
   readonly stockEvent: StockEventRepository;
   /** ruo 迁移 Phase 1C；workflow 运行审计。 */
@@ -346,6 +459,9 @@ export interface ResearchIndexRepository {
   listDocuments(query: ResearchDocumentQuery): Promise<readonly ResearchDocumentIndex[]>;
   searchCapability(): ResearchSearchCapability;
   searchDocuments(query: ResearchSearchQuery): Promise<readonly ResearchSearchHit[]>;
+  listChunks(input?: {
+    readonly documentIds?: readonly string[];
+  }): Promise<readonly ResearchDocumentChunk[]>;
   listStockSubjectKeys(): Promise<readonly string[]>;
   listSubjectLinks(input?: {
     readonly ownerKind?: ResearchSubjectLink['ownerKind'];
@@ -359,6 +475,40 @@ export interface ResearchVaultSyncRunRepository {
   save(run: ResearchVaultSyncRun): Promise<void>;
   findById(id: string): Promise<ResearchVaultSyncRun | null>;
   list(vaultId: string, limit?: number): Promise<readonly ResearchVaultSyncRun[]>;
+}
+
+export interface ResearchHypothesisVersionRepository {
+  /** 创建新的 active 版本，并在同一事务内将该 Topic 旧 active 版本标记为 superseded。 */
+  create(version: ResearchHypothesisVersion): Promise<void>;
+  findById(id: string): Promise<ResearchHypothesisVersion | null>;
+  list(input?: {
+    readonly topicId?: string;
+    readonly status?: ResearchHypothesisVersionStatus;
+    readonly limit?: number;
+  }): Promise<readonly ResearchHypothesisVersion[]>;
+}
+
+export interface ResearchEmbeddingRepository {
+  listPending(input: {
+    readonly identity: ResearchEmbeddingModelIdentity;
+    readonly limit: number;
+  }): Promise<readonly ResearchDocumentChunk[]>;
+  saveMany(embeddings: readonly ResearchChunkEmbedding[]): Promise<void>;
+  deleteInvalid(identity: ResearchEmbeddingModelIdentity): Promise<number>;
+  inspect(
+    identity: ResearchEmbeddingModelIdentity,
+    now: Date,
+  ): Promise<ResearchEmbeddingIndexState>;
+  saveState(state: ResearchEmbeddingIndexState): Promise<void>;
+  findState(identity: ResearchEmbeddingModelIdentity): Promise<ResearchEmbeddingIndexState | null>;
+  searchSimilar(input: {
+    readonly identity: ResearchEmbeddingModelIdentity;
+    readonly vector: readonly number[];
+    readonly topicId?: string;
+    readonly subject?: string;
+    readonly kind?: ResearchDocumentKind;
+    readonly limit: number;
+  }): Promise<readonly ResearchSearchHit[]>;
 }
 
 export interface SignalObservationRepository {
@@ -569,6 +719,36 @@ export interface StrategyEvaluationRepository {
     readonly dataAsOf: Date;
   }): Promise<StrategyEvaluationDay | null>;
   listDays(sessionId: string): Promise<readonly StrategyEvaluationDay[]>;
+}
+
+export interface StrategyBacktestRepository {
+  saveRun(run: StrictBacktestRun): Promise<void>;
+  findRunById(id: string): Promise<StrictBacktestRun | null>;
+  listRuns(input?: {
+    readonly strategyId?: string;
+    readonly limit?: number;
+  }): Promise<readonly StrictBacktestRun[]>;
+  saveMarketFacts(facts: readonly StrictBacktestMarketFact[]): Promise<void>;
+  listMarketFacts(input: {
+    readonly stockIds: readonly string[];
+    readonly from: Date;
+    readonly to: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly StrictBacktestMarketFact[]>;
+}
+
+export interface StrategyWatchlistSubscriptionRepository {
+  save(subscription: StrategyWatchlistSubscription): Promise<void>;
+  findById(id: string): Promise<StrategyWatchlistSubscription | null>;
+  findActive(input: {
+    readonly strategyId: string;
+    readonly watchlistId: string;
+  }): Promise<StrategyWatchlistSubscription | null>;
+  list(filter?: {
+    readonly strategyId?: string;
+    readonly watchlistId?: string;
+    readonly status?: StrategyWatchlistSubscriptionStatus;
+  }): Promise<readonly StrategyWatchlistSubscription[]>;
 }
 
 export interface WatchlistRepository {

@@ -23,6 +23,7 @@ const mkManager = (
 ): LimitUpLadderManagerLike => ({
   name: 'limit-up-ladder',
   sources: ['eastmoney'],
+  status: () => [],
   fetchLadder: fetchImpl,
   compareLadder: compareImpl,
 });

@@ -6,21 +6,29 @@ import type {
   MarketCoverage,
   MarketSnapshot,
   MarketSnapshotItem,
+  MinuteBar,
+  MinuteBarInterval,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
-
+import type { SourceResultObservation } from '../source-registry.js';
 import { MarketDataManager, type MarketDataManagerOptions } from './manager.js';
 import { type AnyMarketCapabilityBinding, MarketSourceRegistry } from './source-registry.js';
+
+/** 与 factory 同契约：resolved 即 success；dataAsOf 有则更新、无则清除。 */
+const successObservation = (dataAsOf: Date | undefined): SourceResultObservation =>
+  dataAsOf === undefined ? { outcome: 'success' } : { outcome: 'success', dataAsOf };
 
 interface TestMarketSource {
   readonly name: string;
   readonly indexQuoteMode?: 'realtime' | 'delayed';
   fetchQuote(stockCode: string): Promise<Quote>;
+  fetchBatchQuotes?(stockIds: readonly string[]): Promise<Quote[]>;
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
   searchStocks?(query: string): Promise<StockSearchCandidate[]>;
   fetchIndexQuotes?(): Promise<readonly IndexQuote[]>;
   fetchIntradayMinutes?(stockId: string): Promise<readonly IntradayMinute[]>;
+  fetchMinuteBars?(stockId: string, interval: MinuteBarInterval): Promise<readonly MinuteBar[]>;
   fetchMarketSnapshot?(): Promise<readonly MarketSnapshotItem[]>;
   fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
 }
@@ -79,7 +87,7 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: ({ stockId }) => source.fetchQuote(stockId),
-        dataAsOf: (quote) => quote.observedAt,
+        observationOf: (quote) => successObservation(quote.observedAt),
       },
       {
         capability: 'daily-bars',
@@ -87,9 +95,29 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: ({ stockId, range }) => source.fetchDailyBars(stockId, range),
-        dataAsOf: (bars) => bars.at(-1)?.date,
+        observationOf: (bars) => successObservation(bars.at(-1)?.date),
       },
     );
+    const fetchBatchQuotes = source.fetchBatchQuotes?.bind(source);
+    if (fetchBatchQuotes !== undefined) {
+      bindings.push({
+        capability: 'batch-quote',
+        source: sourceId,
+        coverage: TEST_COVERAGE,
+        configurationReady: true,
+        execute: ({ stockIds }) => fetchBatchQuotes(stockIds),
+        observationOf: (quotes) =>
+          successObservation(
+            quotes.reduce<Date | undefined>(
+              (latest, quote) =>
+                latest === undefined || quote.observedAt.getTime() > latest.getTime()
+                  ? quote.observedAt
+                  : latest,
+              undefined,
+            ),
+          ),
+      });
+    }
     const searchStocks = source.searchStocks?.bind(source);
     if (searchStocks !== undefined) {
       bindings.push({
@@ -98,6 +126,7 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: ({ query }) => searchStocks(query),
+        observationOf: () => ({ outcome: 'success' }),
       });
     }
     const fetchMarketSnapshot = source.fetchMarketSnapshot?.bind(source);
@@ -108,6 +137,7 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: () => fetchMarketSnapshot(),
+        observationOf: () => ({ outcome: 'success' }),
       });
     }
     const fetchMarketSnapshotEnvelope = source.fetchMarketSnapshotEnvelope?.bind(source);
@@ -118,6 +148,7 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: () => fetchMarketSnapshotEnvelope(),
+        observationOf: (snapshot) => successObservation(snapshot.dataAsOf),
       });
     }
     const fetchIndexQuotes = source.fetchIndexQuotes?.bind(source);
@@ -132,10 +163,12 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: () => fetchIndexQuotes(),
-        dataAsOf: (indices) =>
-          indices.reduce<Date | undefined>(
-            (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
-            undefined,
+        observationOf: (indices) =>
+          successObservation(
+            indices.reduce<Date | undefined>(
+              (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
+              undefined,
+            ),
           ),
       });
     }
@@ -147,7 +180,18 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: ({ stockId }) => fetchIntradayMinutes(stockId),
-        dataAsOf: (points) => points.at(-1)?.time,
+        observationOf: (points) => successObservation(points.at(-1)?.time),
+      });
+    }
+    const fetchMinuteBars = source.fetchMinuteBars?.bind(source);
+    if (fetchMinuteBars !== undefined) {
+      bindings.push({
+        capability: 'minute-bars',
+        source: sourceId,
+        coverage: TEST_COVERAGE,
+        configurationReady: true,
+        execute: ({ stockId, interval }) => fetchMinuteBars(stockId, interval),
+        observationOf: (bars) => successObservation(bars.at(-1)?.endedAt),
       });
     }
   }

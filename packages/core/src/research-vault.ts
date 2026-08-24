@@ -1,3 +1,7 @@
+import type {
+  ResearchEmbeddingModelIdentity,
+  ResearchEmbeddingUsage,
+} from './entity/research-embedding.js';
 import type { ResearchDocumentIndex } from './entity/research-vault.js';
 export interface ResearchVaultEntry {
   readonly relativePath: string;
@@ -49,6 +53,65 @@ export interface ResearchRemoteImportAdapterLike {
     readonly timeoutMs: number;
     readonly maxRedirects: number;
   }): Promise<ResearchRemoteDocument>;
+}
+
+export interface ResearchEmbeddingAdapterLike {
+  readonly name: string;
+  readonly defaultModel: string;
+  listModels(): readonly {
+    readonly name: string;
+    readonly identity: ResearchEmbeddingModelIdentity;
+  }[];
+  embed(input: {
+    readonly model?: string;
+    readonly purpose: 'document' | 'query' | 'evaluation';
+    readonly texts: readonly string[];
+  }): Promise<{
+    readonly identity: ResearchEmbeddingModelIdentity;
+    readonly vectors: readonly (readonly number[])[];
+    readonly usage: ResearchEmbeddingUsage;
+  }>;
+}
+
+export type ResearchVaultGitPullFailureReason =
+  | 'cancelled'
+  | 'timeout'
+  | 'git-unavailable'
+  | 'not-git-repository'
+  | 'dirty-worktree'
+  | 'operation-in-progress'
+  | 'detached-head'
+  | 'missing-upstream'
+  | 'unsafe-remote'
+  | 'diverged'
+  | 'backup-failed'
+  | 'fetch-failed'
+  | 'integrate-failed';
+
+export type ResearchVaultGitPullResult =
+  | {
+      readonly ok: true;
+      readonly status: 'updated' | 'up-to-date';
+      readonly backupId?: string;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: ResearchVaultGitPullFailureReason;
+      readonly message: string;
+      readonly recoverable: boolean;
+    };
+
+/**
+ * Phase F 远端同步端口。它与 ResearchVaultAdapterLike 分离：前者只负责安全更新本地 Git
+ * 工作树，后者继续只负责把本地 Vault 当作权威文件源读取和写入。
+ */
+export interface ResearchVaultGitSyncAdapterLike {
+  readonly name: string;
+  readonly provider: 'git';
+  pull(input: {
+    readonly timeoutMs: number;
+    readonly signal?: AbortSignal;
+  }): Promise<ResearchVaultGitPullResult>;
 }
 export interface ResearchIndexStatus {
   readonly vaultId: string;

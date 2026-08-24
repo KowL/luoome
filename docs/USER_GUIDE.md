@@ -126,11 +126,50 @@ luoome web serve
 
 **持仓 tab 支持完整持仓管理（v0.8 起）**：卡片头部「+ 新增持仓」（建仓即写交易记录；股票输入走外部数据源搜索——Eastmoney 主 → Tencent 备，无结果时按代码位数给出 .SH/.SZ/.HK/.US 后缀候选兜底，选定后自动填入现价）；每行行内操作 **加仓 / 减仓 / 纠错 / 平仓**，页面下方保留近期交易流水。写操作受 `LUOOME_EXPOSE_WRITE` 控制；MCP 暴露策略不受影响。
 
-**Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
+**Watchlist 页（对齐 PRD §10）**：自上而下四层——状态统计卡片（列表数 / 成员数 / 今日 entered-exited / 待研究，后两者点击跳转同名区块；过期来源与紧急重要触发为非 0 才显示的提示小字）、分组列表股票区（tab 为「全部 + 每个列表」：全部展示去重行情表（名称/现价/涨跌幅 + 持仓标记），单列表展示信息条与成员行情表，支持编辑列表（名称 / 描述 / 启停）、归档列表（归档即停用，成员与历史保留）、手动加成员、成员 stage / priority 行内修改与归档、来源健康与关联 AlertPlan 入口）、今日变化区块、待研究区块（一键开始研究 / 归档）；已归档经页头按钮弹窗查看。Strategy 工作台设置页可明确选择目标 Watchlist、创建或取消持久订阅；只有 published operational run 会投影，partial/failed 只标 stale，evaluation/trial/withheld/non-publishing/failed 不改变 Watchlist。写操作受 `LUOOME_EXPOSE_WRITE` 控制。
 
 **Strategy 模拟回测**：进入已发布且运行中的策略工作台，点击「模拟回测」，选择最长 31 个自然日的历史区间；股票代码留空时按历史时点全市场运行，也可输入不超过 500 只股票缩小范围。系统逐交易日使用 point-in-time 股票池和可用的历史数据版本，结果保存为 `evaluation`，只展示求值、入选、信号、失败和数据版本状态，不会替换当前股票池。该功能是历史回放模拟，不包含组合收益、费用、滑点或可交易性模型；运行需要同时开启 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`。
 
-**研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。
+**研究页**：在“本地 Research Vault”卡片填写 Obsidian Vault 的绝对路径、扫描目录和受管目录，点击“保存并同步”。配置会写入 `$LUOOME_HOME/.env` 并立即应用，无需重启；保存前会校验真实路径及目录边界。普通 Markdown 只有带 luoome frontmatter 才进入索引，也可通过“导入本地资料”把明确提供的 Markdown/TXT 正文复制为受管研究文档。配置、同步和导入均受 `LUOOME_EXPOSE_WRITE` 控制；远程 URL 导入还需 `LUOOME_EXPOSE_EXTERNAL`。默认搜索只使用本地 FTS5。勾选“语义扩展（外部）”后，查询文本会发送给显式配置的 embedding provider；“增量重建”还会发送私人 chunk 正文并要求 `external + write`。页面会显示模型 identity、覆盖状态与不完整诊断；未配置、provider 失败或覆盖不完整时稳定回退 FTS5，零命中不代表完整研究库无证据。固定评测只比较版本化判定集的 Recall@K/MRR/成本/延迟，不等同于生产质量结论。
+
+Embedding 模型目录默认位于 `$LUOOME_HOME/research-embeddings.json`。下例不含密钥；`RESEARCH_EMBEDDING_API_KEY` 必须单独放在环境中。修改目录或开关后重启进程：
+
+```json
+{
+  "version": 1,
+  "defaultModel": "small",
+  "models": {
+    "small": {
+      "provider": "my-provider",
+      "baseURL": "https://provider.example/v1",
+      "apiKeyEnv": "RESEARCH_EMBEDDING_API_KEY",
+      "model": "embedding-small",
+      "dimensions": 1536,
+      "version": "2026-08",
+      "maxBatchSize": 64,
+      "inputCostPerMillionTokensUsd": 0.02
+    }
+  }
+}
+```
+
+同时设置 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true`；Web 语义查询还需 `LUOOME_EXPOSE_EXTERNAL=true`，增量重建另需 `LUOOME_EXPOSE_WRITE=true`。目录或密钥无效时其它 Research 能力继续启动，embedding 状态显示为未挂载。
+
+可选 Git 远端同步需把 Vault 本身配置为有 upstream 的 Git 工作树，并设置
+`LUOOME_RESEARCH_REMOTE_SYNC=git`、`LUOOME_EXPOSE_WRITE=true`、`LUOOME_EXPOSE_EXTERNAL=true`。
+研究页会显示“拉取远端并重建索引”，每次点击仍需确认。系统只接受完全干净工作树上的
+fast-forward，先在 `$LUOOME_HOME/backups/research-vault/` 创建权限为 `0600` 的 bundle，再通过既有
+索引流程重建；分叉、冲突、未完成 Git 操作、超时或取消都会停止。它绝不自动 commit、push、reset、
+rebase 或选边。远端应使用私有仓库，HTTPS 凭证放系统 credential helper，SSH 凭证放 SSH agent，
+不要写进 remote URL。
+
+恢复时先运行 `git bundle verify <bundle>`，再运行 `git clone <bundle> <新的恢复目录>` 检查备份；
+确认内容后人工复制所需文件或明确执行自己的 Git 恢复步骤。luoome 不会自动恢复或删除 bundle。
+CLI 可显式运行：
+
+```bash
+luoome workflow run sync-research-vault-remote --mode manual
+```
 
 **飞书通知**：在“设置 → 飞书通知”填写群自定义机器人的新版 HTTPS Webhook。页面只展示是否已配置，读取 API 和浏览器均不会回显密钥；保存后写入权限为 0600 的 `$LUOOME_HOME/.env` 并立即应用。保存需要 `LUOOME_EXPOSE_WRITE=true`，发送测试消息还需要 `LUOOME_EXPOSE_EXTERNAL=true`。当前只支持 `open.feishu.cn/open-apis/bot/v2/hook/...`，建议机器人安全关键词配置为 `luoome`，不要开启签名校验。
 
@@ -156,6 +195,8 @@ luoome mcp serve    # stdio JSON-RPC
 | `luoome watch [--interval 60] [--alert-plan ID] [--once]` | 启动 AlertPlan 盯盘或执行单轮 |
 | `luoome strategy list|get|validate|run` | 查询、校验或运行 Strategy |
 | `luoome watchlist list|get|sync` | 查询 Watchlist 或同步 portfolio 来源 |
+| `luoome tools call subscribe_strategy_to_watchlist --input '{...}'` | 明确订阅 Strategy 到目标 Watchlist |
+| `luoome tools call unsubscribe_strategy_from_watchlist --input '{...}'` | 取消订阅并保留审计历史 |
 | `luoome alert list` | 查询 AlertPlan |
 | `luoome mcp serve` | 启动 MCP stdio server |
 | `luoome tools list [--json]` | 列全部注册 tool（含 sideEffect） |
@@ -215,7 +256,7 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 |---|---|
 | **仪表盘** | 市值 / 盈亏 / 建议 + AlertPlan 健康度和最近 Trigger。 |
 | **持仓** | 建仓、加仓、减仓、纠错、平仓 + 近期交易流水。 |
-| **Strategy** | 从模板创建、版本校验、发布、删除、自动调度、dry-run 与运行结果。 |
+| **Strategy** | 从模板创建、版本校验、发布、删除、自动调度、dry-run 与运行结果；设置页支持显式订阅/取消目标 Watchlist。 |
 | **Watchlist** | 统计卡片 + 分组列表股票区（全部 / 单列表 tab）+ 今日变化 + 待研究 + 已归档弹窗；支持用逗号、空格或换行批量添加成员，以及成员 stage/priority 编辑与归档、列表编辑/归档、来源健康与关联 AlertPlan 联动。 |
 | **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
 | **研究** | 配置本地 Obsidian Vault、同步索引、创建 Topic、导入本地正文或远程 URL。 |
@@ -334,13 +375,16 @@ luoome tools call get_confidence_calibration --input '{}'
 | `LUOOME_HOME` | `~/.luoome` | 数据根目录 |
 | `LUOOME_HOST` | `127.0.0.1` | Web 监听地址；默认不暴露到局域网 |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`（Eastmoney → Tencent → Sina，仅 A 股） |
-| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序；可显式加入 `tushare` |
+| `LUOOME_MARKET_SOURCES` | `eastmoney,tencent,sina` | 行情源顺序；可显式加入 `tushare`（需 `TUSHARE_TOKEN`）/ `fuyao`（需 `FUYAO_API_KEY`） |
 | `LUOOME_STOCK_UNIVERSE_SOURCES` | `eastmoney,sina` | 股票目录源顺序；支持 `eastmoney,sina,tushare` |
 | `LUOOME_AI_CONFIG` | `$LUOOME_HOME/ai-models.json` | AI SDK 模型目录路径 |
 | provider 密钥变量 | 由模型目录指定 | `apiKeyEnv` 引用的环境变量，密钥不写入目录 |
 | `LUOOME_RESEARCH_VAULT` | — | Obsidian Vault 绝对路径；推荐直接在 Web「研究」页配置 |
 | `LUOOME_RESEARCH_ROOT` | `Research` | Vault 内参与扫描的相对目录；设为 `.` 可扫描整个 Vault |
 | `LUOOME_RESEARCH_MANAGED_ROOT` | `Research/Luoome` | luoome 受管文件目录，必须是 research root 的子目录 |
+| `LUOOME_RESEARCH_EMBEDDING_ENABLED` | `false` | 显式挂载 Research embedding 外部 capability；默认仍为本地 FTS5 |
+| `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | embedding 模型目录路径；密钥由目录里的 `apiKeyEnv` 从环境读取 |
+| `LUOOME_RESEARCH_REMOTE_SYNC` | `false` | `git` 启用独立安全拉取 workflow；不配置则完全不装配 |
 | `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行 write tool 与 outcome 回填端点 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |

@@ -8,25 +8,33 @@ import {
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
+  DrizzleFinancialFactRepository,
+  DrizzleFundamentalScoreRunRepository,
+  DrizzleFundamentalScoreVersionRepository,
   DrizzleHoldingRepository,
   DrizzleLimitUpLadderSnapshotRepository,
+  DrizzleMinuteBarRepository,
   DrizzleNotificationRepository,
   DrizzlePortfolioCashFlowRepository,
   DrizzlePortfolioCorporateActionRepository,
   DrizzlePortfolioPerformanceSnapshotRepository,
   DrizzleQuoteRepository,
   DrizzleReportRepository,
+  DrizzleResearchEmbeddingRepository,
+  DrizzleResearchHypothesisVersionRepository,
   DrizzleResearchIndexRepository,
   DrizzleResearchVaultSyncRunRepository,
   DrizzleSignalObservationRepository,
   DrizzleStockEventRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
+  DrizzleStrategyBacktestRepository,
   DrizzleStrategyDataCheckpointRepository,
   DrizzleStrategyEvaluationRepository,
   DrizzleStrategyRepository,
   DrizzleStrategyRunRepository,
   DrizzleStrategyScheduleRepository,
+  DrizzleStrategyWatchlistSubscriptionRepository,
   DrizzleTradeRepository,
   DrizzleWatchlistMemberRepository,
   DrizzleWatchlistRepository,
@@ -88,6 +96,25 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS research_document_index_observed_idx ON research_document_index (observed_at)`,
   );
   db.run(
+    sql`CREATE TABLE IF NOT EXISTS research_hypothesis_versions (
+      id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, document_id TEXT NOT NULL,
+      document_content_hash TEXT NOT NULL, version INTEGER NOT NULL, status TEXT NOT NULL,
+      supersedes_id TEXT, summary TEXT, created_at INTEGER NOT NULL
+    )`,
+  );
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS research_hypothesis_versions_topic_version_unique
+      ON research_hypothesis_versions (topic_id, version)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS research_hypothesis_versions_topic_status_idx
+      ON research_hypothesis_versions (topic_id, status)`,
+  );
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS research_hypothesis_versions_active_unique
+      ON research_hypothesis_versions (topic_id) WHERE status = 'active'`,
+  );
+  db.run(
     sql`CREATE TABLE IF NOT EXISTS research_topic_documents (topic_id TEXT NOT NULL, document_id TEXT NOT NULL, relation TEXT NOT NULL, sort_order INTEGER, PRIMARY KEY (topic_id, document_id, relation))`,
   );
   db.run(
@@ -101,6 +128,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   db.run(
     sql`CREATE TABLE IF NOT EXISTS research_document_chunks (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, heading_path TEXT NOT NULL, content_hash TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (document_id, ordinal))`,
+  );
+  db.run(
+    sql`CREATE TABLE IF NOT EXISTS research_chunk_embeddings (document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, content_hash TEXT NOT NULL, identity_key TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, version TEXT NOT NULL, vector_json TEXT NOT NULL, embedded_at INTEGER NOT NULL, PRIMARY KEY (identity_key, document_id, ordinal))`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS research_chunk_embeddings_identity_idx ON research_chunk_embeddings (identity_key)`,
+  );
+  db.run(
+    sql`CREATE TABLE IF NOT EXISTS research_embedding_index_states (identity_key TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, expected_chunks INTEGER NOT NULL, embedded_chunks INTEGER NOT NULL, stale_chunks INTEGER NOT NULL, updated_at INTEGER NOT NULL, diagnostic TEXT)`,
   );
   // FTS5 是可重建投影，不是权威业务表；旧 SQLite/构建不支持时保留 metadata 降级。
   try {
@@ -310,9 +346,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
       fee REAL NOT NULL,
       executed_at INTEGER NOT NULL,
       source TEXT NOT NULL,
+      advice_id TEXT,
+      research_hypothesis_version_id TEXT,
+      strategy_version_id TEXT,
       created_at INTEGER NOT NULL
     )
   `);
+  ensureColumn(db, 'trades', 'advice_id', 'TEXT');
+  ensureColumn(db, 'trades', 'research_hypothesis_version_id', 'TEXT');
+  ensureColumn(db, 'trades', 'strategy_version_id', 'TEXT');
   db.run(sql`
     CREATE TABLE IF NOT EXISTS portfolio_cash_flows (
       id TEXT PRIMARY KEY,
@@ -408,12 +450,21 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS advice_outcomes (
       advice_id TEXT PRIMARY KEY,
+      trade_ids TEXT NOT NULL DEFAULT '[]',
       outcome TEXT NOT NULL,
       pnl REAL,
       benchmark_pnl REAL,
+      holding_hours REAL,
+      notes TEXT,
       recorded_at INTEGER NOT NULL
     )
   `);
+  ensureColumn(db, 'advice_outcomes', 'trade_ids', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(db, 'advice_outcomes', 'holding_hours', 'REAL');
+  ensureColumn(db, 'advice_outcomes', 'notes', 'TEXT');
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS advice_outcomes_recorded_at_idx ON advice_outcomes (recorded_at)`,
+  );
   db.run(sql`
     CREATE TABLE IF NOT EXISTS price_snapshots (
       stock_id TEXT NOT NULL,
@@ -460,6 +511,31 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS daily_bars_stock_idx ON daily_bars (stock_id)
   `);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS minute_bars (
+      stock_id TEXT NOT NULL,
+      interval TEXT NOT NULL,
+      ended_at INTEGER NOT NULL,
+      open REAL NOT NULL,
+      high REAL NOT NULL,
+      low REAL NOT NULL,
+      close REAL NOT NULL,
+      volume INTEGER NOT NULL,
+      amount REAL,
+      adjustment TEXT NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      completeness TEXT NOT NULL,
+      CONSTRAINT minute_bars_pk PRIMARY KEY (stock_id, interval, ended_at)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS minute_bars_stock_interval_ended_idx
+    ON minute_bars (stock_id, interval, ended_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS minute_bars_ended_idx ON minute_bars (ended_at)
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS daily_bar_revisions (
       stock_id TEXT NOT NULL, date INTEGER NOT NULL, content_hash TEXT NOT NULL,
       open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
@@ -470,6 +546,113 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS daily_bar_revisions_lookup_idx
     ON daily_bar_revisions (stock_id, date, recorded_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS financial_fact_revisions (
+      id TEXT PRIMARY KEY,
+      stock_id TEXT NOT NULL,
+      metric_id TEXT NOT NULL,
+      period_type TEXT NOT NULL,
+      period_start INTEGER,
+      period_end INTEGER NOT NULL,
+      value REAL NOT NULL,
+      canonical_unit TEXT NOT NULL,
+      currency TEXT,
+      raw_value REAL,
+      raw_unit TEXT,
+      source TEXT NOT NULL,
+      source_record_id TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      published_at INTEGER NOT NULL,
+      revision_published_at INTEGER NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      supersedes_id TEXT,
+      industry_key TEXT,
+      content_hash TEXT NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS financial_fact_revisions_logical_hash_unique
+    ON financial_fact_revisions (source, source_record_id, source_revision, content_hash)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS financial_fact_revisions_pit_lookup_idx
+    ON financial_fact_revisions (stock_id, metric_id, period_end, revision_published_at, recorded_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS financial_fact_revisions_recorded_at_idx
+    ON financial_fact_revisions (recorded_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS fundamental_score_versions (
+      id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      registry_version TEXT NOT NULL,
+      registry_hash TEXT NOT NULL,
+      normalization_version TEXT NOT NULL,
+      components_json TEXT NOT NULL,
+      missing_policy TEXT NOT NULL,
+      rounding TEXT NOT NULL,
+      definition_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      published_at INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS fundamental_score_versions_definition_hash_unique
+    ON fundamental_score_versions (definition_hash)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS fundamental_score_versions_status_version_idx
+    ON fundamental_score_versions (status, version)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS fundamental_score_runs (
+      id TEXT PRIMARY KEY,
+      score_version_id TEXT NOT NULL,
+      score_version_hash TEXT NOT NULL,
+      registry_hash TEXT NOT NULL,
+      universe_sync_id TEXT NOT NULL,
+      universe_member_checksum TEXT NOT NULL,
+      as_of INTEGER NOT NULL,
+      financial_vintage_key TEXT NOT NULL,
+      normalizer_denominator_hash TEXT NOT NULL,
+      counts_json TEXT NOT NULL,
+      provider_status TEXT NOT NULL,
+      evaluator_code_identity TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      committed_at INTEGER,
+      terminal_reason_json TEXT
+    )
+  `);
+  ensureColumn(db, 'fundamental_score_runs', 'terminal_reason_json', 'TEXT');
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS fundamental_score_runs_score_version_as_of_idx
+    ON fundamental_score_runs (score_version_id, as_of)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS fundamental_score_runs_status_created_idx
+    ON fundamental_score_runs (status, created_at)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS fundamental_score_results (
+      score_run_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      score REAL,
+      rank INTEGER,
+      components_json TEXT NOT NULL,
+      data_as_of INTEGER NOT NULL,
+      vintage_key TEXT NOT NULL,
+      CONSTRAINT fundamental_score_results_pk PRIMARY KEY (score_run_id, stock_id)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS fundamental_score_results_run_rank_idx
+    ON fundamental_score_results (score_run_id, rank)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS strategies (
@@ -733,6 +916,35 @@ export const ensureSchema = (db: DrizzleDb): void => {
     ON strategy_evaluation_days (session_id, status)
   `);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_backtest_runs (
+      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, strategy_version_id TEXT NOT NULL,
+      evaluation_session_id TEXT NOT NULL, status TEXT NOT NULL,
+      result_availability TEXT NOT NULL, spec_json TEXT NOT NULL, spec_hash TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL, evaluator_json TEXT NOT NULL,
+      gate_audit_json TEXT NOT NULL, metrics_json TEXT, error TEXT,
+      created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_backtest_runs_strategy_created_idx
+    ON strategy_backtest_runs (strategy_id, created_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_backtest_runs_session_idx
+    ON strategy_backtest_runs (evaluation_session_id)
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_backtest_market_facts (
+      stock_id TEXT NOT NULL, date INTEGER NOT NULL, recorded_at INTEGER NOT NULL,
+      content_hash TEXT NOT NULL, fact_json TEXT NOT NULL,
+      PRIMARY KEY (stock_id, date, recorded_at, content_hash)
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_backtest_market_facts_lookup_idx
+    ON strategy_backtest_market_facts (stock_id, date, recorded_at)
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       channel TEXT NOT NULL,
@@ -850,6 +1062,26 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_enabled_idx ON watchlists (enabled)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS watchlists_kind_idx ON watchlists (kind)`);
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_watchlist_subscriptions (
+      id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, watchlist_id TEXT NOT NULL,
+      source_key TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      cancelled_at INTEGER, cancelled_by TEXT
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_strategy_status_idx
+    ON strategy_watchlist_subscriptions (strategy_id, status)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_watchlist_status_idx
+    ON strategy_watchlist_subscriptions (watchlist_id, status)
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_active_unique
+    ON strategy_watchlist_subscriptions (strategy_id, watchlist_id) WHERE status = 'active'
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS watchlist_members (
       id TEXT PRIMARY KEY, watchlist_id TEXT NOT NULL, stock_id TEXT NOT NULL,
       stage TEXT NOT NULL, priority TEXT NOT NULL, first_added_at INTEGER NOT NULL,
@@ -900,6 +1132,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE INDEX IF NOT EXISTS watchlist_sync_runs_producer_idx
     ON watchlist_sync_runs (producer_run_id)
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS watchlist_sync_runs_producer_source_unique
+    ON watchlist_sync_runs (watchlist_id, source_key, producer_run_id)
+    WHERE producer_run_id IS NOT NULL
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS membership_snapshots (
@@ -1353,6 +1590,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     sqlite.close();
     throw error;
   }
+  const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     stock: new DrizzleStockRepository(db),
@@ -1367,12 +1605,18 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     report: new DrizzleReportRepository(db),
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),
+    financialFact: new DrizzleFinancialFactRepository(db),
+    fundamentalScoreVersion: new DrizzleFundamentalScoreVersionRepository(db),
+    fundamentalScoreRun: new DrizzleFundamentalScoreRunRepository(db),
+    minuteBar: new DrizzleMinuteBarRepository(db),
     signalObservation: new DrizzleSignalObservationRepository(db),
     strategy: new DrizzleStrategyRepository(db),
     strategyRun: new DrizzleStrategyRunRepository(db),
     strategySchedule: new DrizzleStrategyScheduleRepository(db),
     strategyDataCheckpoint: new DrizzleStrategyDataCheckpointRepository(db),
     strategyEvaluation: new DrizzleStrategyEvaluationRepository(db),
+    strategyBacktest: new DrizzleStrategyBacktestRepository(db),
+    strategyWatchlistSubscription: new DrizzleStrategyWatchlistSubscriptionRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),
@@ -1383,8 +1627,10 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     watchRuleState: new DrizzleWatchRuleStateRepository(db),
     watchRun: new DrizzleWatchRunRepository(db),
     // ruo 迁移起
-    researchIndex: new DrizzleResearchIndexRepository(db),
+    researchIndex,
+    researchEmbedding: new DrizzleResearchEmbeddingRepository(db, researchIndex),
     researchVaultSyncRun: new DrizzleResearchVaultSyncRunRepository(db),
+    researchHypothesisVersion: new DrizzleResearchHypothesisVersionRepository(db),
     stockEvent: new DrizzleStockEventRepository(db),
     workflowRun: new DrizzleWorkflowRunRepository(db),
     chat: new DrizzleChatRepository(db),

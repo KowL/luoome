@@ -22,6 +22,8 @@ import {
   type ResearchVaultSyncRun,
   researchDocumentDate,
   StockEventSchema,
+  type StockResearchProfileFact,
+  StockResearchProfileSchema,
   StrategySignalSchema,
   type ToolContext,
   TradeSchema,
@@ -777,6 +779,7 @@ export const GetStockResearchViewInput = z.object({
 });
 export const GetStockResearchViewOutput = z.object({
   stockId: z.string(),
+  profile: StockResearchProfileSchema,
   topics: z.array(topicSummary),
   documents: z.array(documentSummary),
   events: z.array(StockEventSchema),
@@ -836,9 +839,13 @@ export const getStockResearchViewTool = defineTool({
           stockId: input.stockId,
           code: '000000',
           status: 'unavailable',
+          coverage: 'CN_A_SHARES_SH_SZ',
+          source: 'eastmoney',
           today: null,
           recent: [],
-          asOf: null,
+          dataAsOf: null,
+          fetchedAt: null,
+          missingDates: [],
           warnings: ['stock-code-unavailable'],
         });
     const topicDocuments = await Promise.all(
@@ -846,6 +853,9 @@ export const getStockResearchViewTool = defineTool({
         ctx.repos.researchIndex.listDocuments({ topicId: topic.id, limit: input.limit }),
       ),
     );
+    const topicRelations = (
+      await Promise.all(topics.map((topic) => ctx.repos.researchIndex.listTopicDocuments(topic.id)))
+    ).flat();
     const documents = [
       ...new Map(
         [...directDocuments, ...topicDocuments.flat()].map((document) => [document.id, document]),
@@ -911,8 +921,141 @@ export const getStockResearchViewTool = defineTool({
     ]
       .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || a.id.localeCompare(b.id))
       .slice(0, input.limit * 3);
+    const counterDocumentIds = new Set(
+      topicRelations
+        .filter((relation) => relation.relation === 'counter-evidence')
+        .map((relation) => relation.documentId),
+    );
+    const fact = (
+      item: Omit<StockResearchProfileFact, 'sourceStatus'> & {
+        readonly sourceStatus?: StockResearchProfileFact['sourceStatus'];
+      },
+    ): StockResearchProfileFact => ({ sourceStatus: 'not-applicable', ...item });
+    const researchFacts = [
+      ...topics.map((topic) =>
+        fact({
+          kind: 'topic',
+          id: topic.id,
+          summary: topic.summary ?? topic.title,
+          occurredAt: topic.indexedAt,
+          sourceStatus: 'not-applicable',
+        }),
+      ),
+      ...documents
+        .filter((document) => !counterDocumentIds.has(document.id))
+        .map((document) =>
+          fact({
+            kind: 'document',
+            id: document.id,
+            summary: document.excerpt ?? document.title,
+            occurredAt: researchDocumentDate(document),
+            sourceStatus: document.sourceStatus === 'verified' ? 'verified' : 'unverified',
+          }),
+        ),
+      ...events.map((event) =>
+        fact({
+          kind: 'stock-event',
+          id: event.id,
+          summary: event.description ?? event.title,
+          occurredAt: event.occursAt,
+        }),
+      ),
+      ...signals
+        .filter((signal) => signal.direction !== 'bearish')
+        .map((signal) =>
+          fact({
+            kind: 'strategy-signal',
+            id: signal.id,
+            summary: signal.evidence.join('；').slice(0, 500),
+            occurredAt: signal.ts,
+          }),
+        ),
+      ...triggers.map((trigger) =>
+        fact({
+          kind: 'watch-trigger',
+          id: trigger.id,
+          summary: [trigger.reason, ...trigger.evidence].join('；').slice(0, 500),
+          occurredAt: trigger.createdAt,
+        }),
+      ),
+      ...limitUp.recent.map((item) =>
+        fact({
+          kind: 'limit-up',
+          id: `${input.stockId}:${item.date}`,
+          summary: `${item.ladderLevel} 连板${item.reason === '--' ? '' : `；${item.reason}`}`,
+          occurredAt: new Date(`${item.date}T00:00:00.000Z`),
+        }),
+      ),
+    ].slice(0, 100);
+    const counterFacts = [
+      ...documents
+        .filter((document) => counterDocumentIds.has(document.id))
+        .map((document) =>
+          fact({
+            kind: 'document',
+            id: document.id,
+            summary: document.excerpt ?? document.title,
+            occurredAt: researchDocumentDate(document),
+            sourceStatus: document.sourceStatus === 'verified' ? 'verified' : 'unverified',
+          }),
+        ),
+      ...signals
+        .filter((signal) => signal.direction === 'bearish')
+        .map((signal) =>
+          fact({
+            kind: 'strategy-signal',
+            id: signal.id,
+            summary: signal.evidence.join('；').slice(0, 500),
+            occurredAt: signal.ts,
+          }),
+        ),
+    ].slice(0, 100);
+    const datedFacts = [...researchFacts, ...counterFacts]
+      .flatMap((item) => (item.occurredAt === undefined ? [] : [item.occurredAt]))
+      .sort((left, right) => left.getTime() - right.getTime());
+    const indexStatus = await currentIndexStatus(ctx, topics[0]?.vaultId ?? documents[0]?.vaultId);
+    const unknowns = [
+      ...(stock === null ? ['本地股票目录无法解析该股票身份'] : []),
+      ...(indexStatus.freshness === 'fresh'
+        ? []
+        : [`Research Vault index ${indexStatus.freshness}，研究资料可能不完整`]),
+      ...(topics.length + documents.length === 0 ? ['没有显式关联的 ResearchTopic/Document'] : []),
+      ...(counterFacts.length === 0 ? ['没有显式反证资料或 bearish StrategySignal'] : []),
+      ...(limitUp.status === 'unavailable' ? ['涨停天梯事实不可用'] : []),
+    ];
+    const profile = StockResearchProfileSchema.parse({
+      stock: {
+        stockId: input.stockId,
+        stockName: stock?.name ?? '名称暂缺',
+        nameStatus: stock?.name === undefined ? 'unavailable' : 'resolved',
+      },
+      status:
+        researchFacts.length + counterFacts.length === 0
+          ? 'unavailable'
+          : unknowns.length > 0
+            ? 'partial'
+            : 'complete',
+      ...(datedFacts.at(-1) === undefined ? {} : { factsAsOf: datedFacts.at(-1) }),
+      ...(datedFacts[0] === undefined ? {} : { oldestEvidenceAt: datedFacts[0] }),
+      coverage: {
+        topics: topics.length,
+        documents: documents.length,
+        events: events.length,
+        strategySignals: signals.length,
+        watchTriggers: triggers.length,
+      },
+      evidence: researchFacts,
+      counterEvidence: counterFacts,
+      unknowns,
+      limitations: [
+        'Stock profile 是显式研究关系与持久事实的读模型，不是 market-visible Strategy。',
+        'StrategySignal score 只表示规则强度；本读模型不输出收益概率或 Advice confidence。',
+        '读取 profile 不会自动生成 Advice、修改 Watchlist 或触发交易。',
+      ],
+    });
     return {
       stockId: input.stockId,
+      profile,
       topics: [...topics],
       documents: [...documents],
       events: [...events],
@@ -922,7 +1065,7 @@ export const getStockResearchViewTool = defineTool({
       trades: [...trades],
       timeline,
       limitUp,
-      indexStatus: await currentIndexStatus(ctx, topics[0]?.vaultId ?? documents[0]?.vaultId),
+      indexStatus,
     };
   },
 });

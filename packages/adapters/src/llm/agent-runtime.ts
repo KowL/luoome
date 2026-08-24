@@ -122,6 +122,8 @@ export interface AgentUIStreamRequest {
   readonly onFinish?: (message: {
     readonly id: string;
     readonly parts: readonly Record<string, unknown>[];
+    /** 流被中断（abortSignal 触发）时为 true；parts 为已收到的部分。 */
+    readonly cancelled: boolean;
   }) => Promise<void> | void;
 }
 
@@ -224,10 +226,11 @@ export class AISDKAgentRuntime implements AgentRuntimeLike {
       ...(request.onFinish === undefined
         ? {}
         : {
-            onFinish: async ({ responseMessage }) => {
+            onFinish: async ({ responseMessage, isAborted }) => {
               await request.onFinish?.({
                 id: responseMessage.id,
                 parts: responseMessage.parts as unknown as readonly Record<string, unknown>[],
+                cancelled: isAborted,
               });
             },
           }),

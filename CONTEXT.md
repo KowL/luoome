@@ -53,6 +53,16 @@ AlertPlan，以及 StrategySignal 的 T+1/T+3/T+5/T+20 事后观察。AI 只解�
 fact id；不得把观察称为回测，不得给出收益承诺、未来概率或买卖建议。事实截止时间、观察截止
 时间、缺失率和小样本限制必须保留。
 
+### FinancialFact / FundamentalScore
+
+`FinancialFact` 是带报告期间、首次披露时间、revision 披露时间与本地记录时间的 append-only 财务事实；
+strict PIT 只读取截止 `asOf` 已公开且已被本地记录的 revision，撤回后不得回退旧值。`FundamentalScore`
+由版本化因子 registry、固定单位/方向、同一 vintage 横截面与最小样本门槛确定性计算，是 0～100 的规则分，
+不是概率、Advice 或交易授权。当前 P3-0～P3-2 已完成 Core、mock revision 装配、score version/run/result
+双仓储与确定性评分 Tool；`persist=false` 不写库，unavailable run 不保存可消费结果。mock 必须显式启用，
+评分与查询始终披露 `providerKind=mock`、`gate=not-ready`，且尚未接入 Strategy DSL。没有通过真实财务 revision 门禁前，不得用当前行情、
+股票目录行业、测试 fixture 或抓取时间替代生产 PIT 财务事实，也不得开放生产评分入口。
+
 ### Watchlist
 
 回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护
@@ -88,9 +98,31 @@ StrategySignal，不临时运行全市场 Strategy。
 交易日、同一来源的 PIT 快照。没有快照或历史字段缺失时必须返回 unknown/unavailable，不读取当前快照、
 情绪接口或 mock 推断历史事实。
 
+炸板固定指“当日原始最高价触及实际涨停价、但原始收盘价未封涨停”；开板后回封不算炸板。
+`consecutiveBoard(D)` 指 D 开盘前、截至上一交易日连续封板的交易日数量；断板指该值至少为 1 且
+D 未收盘封板。所需 raw OHLC、涨停价、交易日或前序窗口缺失时保持 unknown。当前没有通过
+schema、发布时间、revision 与真实凭据验收的数据源，因此这些字段不进入 Strategy registry；
+AShareSentiment 的近期炸板池不得倒灌历史 PIT。
+
 ### ResearchTopic / ResearchDocument
 
 研究以 `ResearchTopic` 为持续上下文，以 `ResearchDocument` 为资料索引；Topic 可不关联股票，也可通过显式 SubjectLink 关联多只股票、产业、事件、主题或宏观问题。正文权威来源是本地 Obsidian Vault，SQLite 只保存可重建的索引、关系、分块和同步审计。研究资料不自动生成 Advice 或交易动作。
+
+股票研究 Profile 是上述显式链接的只读投影，不是 Strategy、Watchlist 或收益概率。它必须分别展示
+evidence、counter-evidence、unknown/unavailable、来源状态和事实截止时间；没有显式链接时不得按
+行业或当前股票池推断研究结论。横截面 selector 属于 Strategy 研究 Tool，adaptive personality 只是
+版本化训练/验证可信门禁，均不自动创建 Advice 或 Trade。
+
+### 数据源观测（SourceObservation）
+
+每个外部数据源能力在内存中的最近运行事实：`lastAttemptAt`、`lastSuccessAt`、`dataAsOf`、
+`lastErrorKind`。它是内存态运行观测，进程重启归零，不代表历史可用性，也不是数据新鲜度的
+唯一判据（freshness 由 `get_market_data_status` 结合阈值推导为 fresh / stale / unknown /
+unavailable）。只记录源失败（网络、上游、无效响应），调用方输入错误与非交易日早退不计入。
+行情、连板天梯、龙虎榜、A 股情绪、北向资金、要闻等所有域共用同一泛化 `SourceRegistry`
+的 execute 包装层作为唯一观测点：binding 以 `observationOf` 把已 resolve 的结果分类为
+success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态，成功清除
+`lastErrorKind`，失败保留上一份 `lastSuccessAt` / `dataAsOf` 供诊断。
 
 ## 关键约束
 

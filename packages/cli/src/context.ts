@@ -13,13 +13,21 @@ import { join } from 'node:path';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createDragonTigerManagerFromEnv,
   createFileAuditLogger,
+  createFundamentalDataAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createNewsManagerFromEnv,
+  createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
+  createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
+  createResearchVaultGitSyncAdapterFromEnv,
+  createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
+  EastmoneySource,
 } from '@luoome/adapters';
 import {
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
@@ -72,10 +80,14 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const accounts = await repos.account.list();
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const logger = createStderrLogger();
+  // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
+  const sources = { eastmoney: new EastmoneySource({ clock: now }) };
   const market = createMarketAdapterFromEnv(process.env, {
     clock: now,
     logger,
+    sources,
   });
+  const fundamentalData = createFundamentalDataAdapterFromEnv(process.env);
   let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
   try {
     ai = createAIStackFromEnv(process.env, { logger });
@@ -93,12 +105,46 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
   const limitUpLadder = createLimitUpLadderManagerFromEnv(process.env, {
     clock: now,
     logger,
+    sources,
+  });
+  const dragonTiger = createDragonTigerManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    sources,
+  });
+  const northboundFlow = createNorthboundFlowManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    sources,
+  });
+  const news = createNewsManagerFromEnv(process.env, {
+    clock: now,
+    logger,
+    sources,
+  });
+  const sectorQuote = createSectorQuoteManagerFromEnv(process.env, {
+    clock: now,
+    logger,
   });
   let researchVault: ReturnType<typeof createResearchVaultAdapterFromEnv>;
   try {
     researchVault = createResearchVaultAdapterFromEnv(process.env);
   } catch {
     logger.warn('Research Vault 配置无效；CLI 将以未挂载状态继续');
+  }
+  let researchEmbedding: ReturnType<typeof createResearchEmbeddingAdapterFromEnv>;
+  try {
+    researchEmbedding = createResearchEmbeddingAdapterFromEnv(process.env);
+  } catch {
+    logger.warn('Research embedding 配置无效；CLI 将以 capability 未挂载状态继续');
+  }
+  let researchVaultGitSync: ReturnType<typeof createResearchVaultGitSyncAdapterFromEnv>;
+  try {
+    researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(process.env, {
+      backupRoot: join(home, 'backups', 'research-vault'),
+    });
+  } catch {
+    logger.warn('Research Vault 远端同步配置无效；CLI 将以未挂载状态继续');
   }
   const ctx = buildContext({
     repos,
@@ -123,12 +169,20 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     auditLog: createFileAuditLogger(join(home, 'logs', 'audit.log')),
     auditCaller: 'cli',
     limitUpLadder,
+    dragonTiger,
+    northboundFlow,
+    news,
+    sectorQuote,
     ashareSentiment: createAShareSentimentManagerFromEnv(process.env, {
       clock: now,
       logger,
       market,
+      sources,
     }),
     ...(researchVault ? { researchVault } : {}),
+    ...(researchEmbedding ? { researchEmbedding } : {}),
+    ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
+    ...(fundamentalData === undefined ? {} : { fundamentalData }),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(process.env, { repos, logger, clock: now }),
   });

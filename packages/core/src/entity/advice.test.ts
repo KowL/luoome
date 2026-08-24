@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { AdviceQuerySchema, AdviceSchema, STANDARD_DISCLAIMERS } from './advice.js';
+import {
+  AdviceOutcomeSchema,
+  AdviceQuerySchema,
+  AdviceSchema,
+  STANDARD_DISCLAIMERS,
+} from './advice.js';
 import { QuoteSchema } from './quote.js';
 
 const NOW_ISO = '2026-07-17T02:00:00.000Z';
@@ -70,5 +75,20 @@ describe('entity zod schemas (z.coerce.date 约定)', () => {
     expect(AdviceQuerySchema.parse({}).includeExpired).toBeUndefined();
     expect(AdviceQuerySchema.parse({ includeExpired: true }).includeExpired).toBe(true);
     expect(AdviceQuerySchema.parse({ since: NOW_ISO }).since).toBeInstanceOf(Date);
+  });
+
+  it('AdviceOutcomeSchema 保留交易关联与复盘字段，旧数据默认空 tradeIds', () => {
+    const outcome = AdviceOutcomeSchema.parse({
+      adviceId: 'adv1',
+      outcome: 'partially_followed',
+      pnl: 12.34567,
+      benchmarkPnl: 8,
+      holdingHours: 4,
+      notes: '只执行了一半',
+      recordedAt: NOW_ISO,
+    });
+    expect(outcome.tradeIds).toEqual([]);
+    expect(outcome.pnl).toBe(12.3457);
+    expect(outcome.recordedAt).toBeInstanceOf(Date);
   });
 });

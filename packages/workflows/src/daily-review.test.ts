@@ -38,6 +38,7 @@ const mkLadderManager = (
   return {
     name: 'limit-up-ladder',
     sources: ['eastmoney'],
+    status: () => [],
     fetchLadder: async () =>
       opts.fail === true
         ? {

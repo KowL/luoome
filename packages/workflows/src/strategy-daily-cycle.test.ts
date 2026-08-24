@@ -245,6 +245,62 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toEqual([]);
   });
 
+  it('数据准备后被另一实例接管时，旧 owner 在 run/观察/Advice 前被同步 fence 拒绝', async () => {
+    const base = await buildTestContext({ clock: () => NOW });
+    await seedSchedule(base, { withSignal: true });
+    const adviceIdsBefore = new Set(
+      (await base.repos.advice.query({ includeExpired: true })).map((advice) => advice.id),
+    );
+    let renewals = 0;
+    const strategySchedule = base.repos.strategySchedule;
+    const ctx: ToolContext = {
+      ...base,
+      repos: {
+        ...base.repos,
+        strategySchedule: {
+          save: (...args: Parameters<typeof strategySchedule.save>) =>
+            strategySchedule.save(...args),
+          removeByStrategyId: (...args: Parameters<typeof strategySchedule.removeByStrategyId>) =>
+            strategySchedule.removeByStrategyId(...args),
+          findById: (...args: Parameters<typeof strategySchedule.findById>) =>
+            strategySchedule.findById(...args),
+          findByStrategyId: (...args: Parameters<typeof strategySchedule.findByStrategyId>) =>
+            strategySchedule.findByStrategyId(...args),
+          list: (...args: Parameters<typeof strategySchedule.list>) =>
+            strategySchedule.list(...args),
+          claimDue: (...args: Parameters<typeof strategySchedule.claimDue>) =>
+            strategySchedule.claimDue(...args),
+          claimDueWithFence: (...args: Parameters<typeof strategySchedule.claimDueWithFence>) =>
+            strategySchedule.claimDueWithFence(...args),
+          renewClaim: async (...args: Parameters<typeof strategySchedule.renewClaim>) => {
+            renewals += 1;
+            return renewals === 1 ? strategySchedule.renewClaim(...args) : false;
+          },
+          finishClaim: (...args: Parameters<typeof strategySchedule.finishClaim>) =>
+            strategySchedule.finishClaim(...args),
+        },
+      },
+    };
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'stale-owner', asOf: NOW, leaseMinutes: 5 },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(renewals).toBe(2);
+    expect(result.data.items[0]).toMatchObject({
+      status: 'failed',
+      reason: 'lease_lost_before_commit',
+    });
+    expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toEqual([]);
+    expect(await ctx.repos.signalObservation.list({ sourceKind: 'strategy-signal' })).toEqual([]);
+    expect(
+      (await ctx.repos.advice.query({ includeExpired: true })).map((advice) => advice.id),
+    ).toEqual([...adviceIdsBefore]);
+  });
+
   it('生产日运行前同步真实目录快照，显式历史 asOf 不触发实时同步', async () => {
     const LATER = new Date('2026-08-11T12:00:00.000Z');
     const base = await buildTestContext({ clock: () => LATER });

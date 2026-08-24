@@ -32,6 +32,7 @@ describe('get_advice_stats', () => {
     const ctx = await buildTestContext({ advices: seedTwo() });
     await ctx.repos.advice.recordOutcome('stats-s1', {
       adviceId: 'stats-s1',
+      tradeIds: [],
       outcome: 'followed',
       pnl: money(500),
       recordedAt: new Date('2026-01-05T00:00:00.000Z'),
@@ -71,15 +72,18 @@ describe('get_advice_stats', () => {
     expect(result.data.byDecision.buy?.totalAdvices).toBe(0);
   });
 
-  it('降级路径：repo 无 getOutcome → outcome 维度按空统计（不报错）', async () => {
+  it('AdviceRepository 正式 outcome 查询契约可直接用于统计', async () => {
     const mockCtx = await buildTestContext({ advices: seedTwo() });
     const base = mockCtx.repos.advice;
-    // 只实现 core AdviceRepository 接口的 4 个方法（无 getOutcome 便捷方法）。
+    // 只通过 AdviceRepository 正式接口转发，不依赖具体 DB 实现的额外方法。
     const interfaceOnlyAdviceRepo: AdviceRepository = {
       save: (advice) => base.save(advice),
       findById: (id) => base.findById(id),
       query: (filter) => base.query(filter),
       recordOutcome: (adviceId, outcome) => base.recordOutcome(adviceId, outcome),
+      findOutcome: (adviceId) => base.findOutcome(adviceId),
+      listOutcomes: (filter) => base.listOutcomes(filter),
+      remove: (id) => base.remove(id),
     };
     const ctx = buildContext({
       repos: { ...mockCtx.repos, advice: interfaceOnlyAdviceRepo },

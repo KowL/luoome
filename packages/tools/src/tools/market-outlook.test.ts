@@ -44,6 +44,7 @@ describe('tool/market_outlook', () => {
     const manager: LimitUpLadderManagerLike = {
       name: 'limit-up-ladder',
       sources: ['eastmoney'],
+      status: () => [],
       fetchLadder: async () => ({ ok: true, data: ladder }),
       compareLadder: async () => ({
         ok: true,

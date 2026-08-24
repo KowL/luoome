@@ -28,8 +28,13 @@ const VALUE_FLAGS = new Set([
   'host',
   'limit',
   'pnl',
+  'benchmark-pnl',
   'holding-hours',
+  'outcome',
+  'followed',
+  'trade-ids',
   'notes',
+  'mode',
   // v0.6 watch 子命令
   'interval',
   'alert-plan',
@@ -477,11 +482,24 @@ const cmdAdviceOutcome = async (
   if (adviceId === undefined || adviceId.length === 0) {
     throw new CliUsageError('advice outcome 需要 adviceId 作为位置参数');
   }
-  const followedRaw = flagString(flags, 'followed') ?? 'true';
-  const followed = followedRaw === 'true' || followedRaw === '1';
-  const pnl = Number(flagString(flags, 'pnl') ?? '0');
+  const outcomeRaw = flagString(flags, 'outcome');
+  const followedRaw = flagString(flags, 'followed');
+  const outcome =
+    outcomeRaw ??
+    (followedRaw === undefined || followedRaw === 'true' || followedRaw === '1'
+      ? 'followed'
+      : 'ignored');
+  const pnlRaw = flagString(flags, 'pnl');
+  const pnl = pnlRaw === undefined ? undefined : Number(pnlRaw);
+  const benchmarkPnlRaw = flagString(flags, 'benchmark-pnl');
+  const benchmarkPnl = benchmarkPnlRaw !== undefined ? Number(benchmarkPnlRaw) : undefined;
   const holdingHoursStr = flagString(flags, 'holding-hours');
   const holdingHours = holdingHoursStr !== undefined ? Number(holdingHoursStr) : undefined;
+  const tradeIds =
+    flagString(flags, 'trade-ids')
+      ?.split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0) ?? [];
   const notes = flagString(flags, 'notes');
   const handle = await createCliContext();
   try {
@@ -490,8 +508,10 @@ const cmdAdviceOutcome = async (
     const res = await tool.execute(
       {
         adviceId,
-        followed,
-        pnl,
+        outcome,
+        tradeIds,
+        ...(pnl !== undefined ? { pnl } : {}),
+        ...(benchmarkPnl !== undefined ? { benchmarkPnl } : {}),
         ...(holdingHours !== undefined ? { holdingHours } : {}),
         ...(notes !== undefined ? { notes } : {}),
       },
@@ -685,15 +705,24 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / strategy-recommendations / complete-strategy-observations / sync-portfolio-watchlists / risk-report / daily-review / intraday-watch / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / replay-strategy-range / strategy-recommendations / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / sync-research-vault-remote / risk-report / daily-review / intraday-watch / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report）`,
     );
   }
   const handle = await createCliContext();
+  const abortController = name === 'sync-research-vault-remote' ? new AbortController() : undefined;
+  const handleSigint = (): void => abortController?.abort();
+  if (abortController !== undefined) process.once('SIGINT', handleSigint);
   try {
-    const res = await wf.run(input, handle.ctx);
+    const res = await wf.run(
+      input,
+      abortController === undefined
+        ? handle.ctx
+        : { ...handle.ctx, abortSignal: abortController.signal },
+    );
     console.log(JSON.stringify(res, null, 2));
     return res.ok ? 0 : 1;
   } finally {
+    if (abortController !== undefined) process.off('SIGINT', handleSigint);
     handle.close();
   }
 };
@@ -826,7 +855,8 @@ Strategy / Watchlist / Alert:
 Advice:
   advice list [--since 7d] [--include-expired] [--limit N]   查询历史建议
   advice stats [--since 30d]                                 建议准确率统计
-  advice outcome <id> [--followed true|false] [--pnl N]        回填建议结果
+  advice outcome <id> [--outcome followed|partially_followed|ignored] [--pnl N]
+                               回填建议结果（--followed true|false 仍兼容）
 
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
@@ -838,7 +868,7 @@ Surfaces:
                                按端口反查旧进程 SIGTERM 后再 start，无需手动 kill
   web serve [--port 5173] [--host 127.0.0.1] [--foreground]
                                仅启动 Web 仪表盘；默认后台运行（同 start）
-  workflow run <name>          跑内置 workflow（含策略调度、观察补全与三类报告）
+  workflow run <name>          跑内置 workflow（含策略调度、绩效快照、观察补全与三类报告）
   watch [--interval 60] [--alert-plan <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
                                 仅扫描启用的 AlertPlan 与其 Watchlist 成员

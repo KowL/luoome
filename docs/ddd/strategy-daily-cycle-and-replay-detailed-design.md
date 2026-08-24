@@ -1,15 +1,21 @@
 # Strategy 日运行与历史评估可靠性详细设计
 
 > 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+20 仍按开发计划持续验收
-> 日期：2026-08-14
+> 日期：2026-08-20
 > 关联计划：[Strategy 日运行与评估可靠性开发计划](../strategy-reliability-development-plan.md)
 > 影响范围：core、db、tools、workflows、Web/CLI/MCP 读取面
 
-实现复核：R0～R4、R6～R7 的 Tool/Workflow/存储契约已接入当前代码；真实 Sina 全市场
+实现复核（2026-08-20）：R0～R4、R6～R7 的 Tool/Workflow/存储契约已接入当前代码；真实 Sina 全市场
 5,207 只数据准备、首个 schedule 审计和 2 个交易日 PIT replay 已验证。历史区间缺少对应
 日期的真实 PIT universe 时保持 `not_found`，不使用当前快照冒充历史版本。replay 对盘中固化的
 snapshot 使用交易日日终 `universeAsOf`，而 checkpoint 的 `dataAsOf` 仍保持目标交易日时点，避免
 PIT 目录查找在午夜和日终之间分叉。
+
+本轮可靠性收口补充了 schedule lease 在数据准备后、发布后和推荐/通知前的同步续租检查；调度器将
+schedule lease、数据并发、陈旧窗口、重试和请求超时作为有界启动参数。数据准备与 observation candidate
+审计现在保留实际 bar/baseline provider、fallback 使用情况和 T+1/T+3/T+5/T+20 的创建/完成/pending
+分布；汇总 Tool 将 `gate`（可靠性阻塞）与 `observationTarget`（样本成熟度）分离。跨交易日真实分布和
+R5 发布后的完整 T+20 仍未完成，继续按运维手册持续观察。
 
 ## 1. 背景与覆盖关系
 
@@ -42,7 +48,8 @@ PIT 目录查找在午夜和日终之间分叉。
    成为 operational current。
 3. operational 与 evaluation 共享 evaluator，但消费者边界严格隔离。
 4. 调度、运行、观察、洞察和可选推荐形成一个有审计的 daily cycle。
-5. scheduled run 消费可追溯的数据 checkpoint，减少执行期外部 IO。
+5. scheduled run 消费可追溯的数据 checkpoint，减少执行期外部 IO；正式运行完成后只按 active
+   StrategyWatchlistSubscription 投影到 Watchlist。
 6. 历史区间可断点重放，并使用 point-in-time universe。
 7. LLM 不可用时仍交付确定性事实，且不伪造 AI narrative。
 
@@ -534,10 +541,14 @@ interface StrategyDataCheckpointRepository {
 
 ### 7.1 参数
 
-首版默认：
+首版安全不变量与生产默认：
 
 - run lease：15 分钟；heartbeat：每 5 分钟；
-- schedule lease：20 分钟；heartbeat：每 5 分钟；
+- schedule lease：30 分钟；heartbeat：每 5 分钟；scheduler 可通过
+  `LUOOME_STRATEGY_SCHEDULE_LEASE_MINUTES` 在 5～240 分钟内有界调整；
+- 数据准备默认 8 workers、允许陈旧 1 个交易日、最多重试 2 次、单请求超时 20 秒，分别由
+  `LUOOME_STRATEGY_DATA_CONCURRENCY`、`LUOOME_STRATEGY_DATA_MAX_STALENESS_TRADING_DAYS`、
+  `LUOOME_STRATEGY_DATA_MAX_RETRIES`、`LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` 有界调整；
 - 每次成功接管都分配更大的 fencing token；
 - heartbeat 连续失败一次即标记 lease-lost，不等待最终提交才发现；
 - 参数是 implementation 配置，不进入 Strategy DSL。
@@ -755,6 +766,12 @@ workflow 必须检查 `result.data.run.status/publication`，不能只检查 Too
 继续作为幂等补偿 workflow，可按小时或每日运行；它不能再被认为是唯一正常路径。daily cycle 在
 run 终态后先显式同步 `000300.SH` qfq 日线，再补“所有已到期的历史观察”，不是只补本 run；补偿 workflow
 同样记录 benchmark 数据集版本和逐项同步结果。同步失败不填替代值，个股观察仍可保存但周期保持 partial。
+
+同一 daily cycle 在 run 提交成功且 publication 为 `published` 后，通过
+`ctx.tools.sync_strategy_watchlist_subscriptions` 这个不进入公共 registry/MCP 的内部编排 tool 处理
+Strategy→Watchlist 订阅。该步骤使用 run 的
+`dataHealth` 决定 complete/partial：partial 只标 stale，failed/withheld/evaluation/非持久化运行不调用
+source commit；无 active 订阅时跳过。它不创建 Advice、Notification、AlertPlan 或 Trade。
 
 ### 9.5 `strategy-replay-range`
 
@@ -1103,7 +1120,11 @@ Workflow 输出示例：
 汇总支持按 `scheduleId` 查询，并返回每个 schedule 的 `scheduleTradingDayKeys`；未指定单个
 schedule 时，多 schedule 只要有任一 schedule 未达到目标交易日数，门禁就返回
 `schedule-days-below-target`，不能跨 schedule 拼接交易日达标。
-汇总还按真实 `phaseTimings` 计算各阶段 P50/P95/max 延迟，供全市场数据准备与 checkpoint 求值预算复核。
+汇总还按真实 `phaseTimings` 计算各阶段 P50/P95/max 延迟，并从持久化周期摘要聚合 provider 成员延迟的
+等权近似；provider 近似值必须在运营报告中标明，不把少量跨日分位点冒充原始请求的精确全局分位数。
+checkpoint 同时汇总实际 provider 与 fallback 次数；observation 汇总保留 baseline 可用性和四个 horizon
+的 created/completed/pending。`gate.ready` 只表达可靠性缺陷，交易日样本目标单列在
+`observationTarget.reached`，未达到目标不阻塞代码交付。
 
 ### 15.2 日志 locality
 
@@ -1202,6 +1223,10 @@ memory 与 Drizzle 共用：
 8. LLM failure + facts-only；
 9. recommendation/notification failure 不回滚 run；
 10. crash 后 resume 不重复日期。
+
+补充边界：数据准备耗时期间若同步续租失败，旧 owner 不得提交 StrategyRun、SignalObservation 或
+Advice；发布后续租失败则不得启动新的下游副作用。provider fallback、实际 baseline 来源与四个
+observation horizon 的审计字段必须在工具测试中可重复断言。
 
 观察补全另加大 backlog 用例：新旧 10,000 条 pending 混合时 oldest/due-first 不饥饿，失败样本按
 nextAttemptAt 退避且不阻塞其它股票。

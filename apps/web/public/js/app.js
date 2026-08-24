@@ -6,9 +6,12 @@
 import { initAISettings, renderAISettings } from './ai-settings.js';
 import { callApi, getAccountId, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
+import { renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
+import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
+import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { renderMarket, teardownMarket } from './market.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
@@ -28,8 +31,11 @@ import {
   renderSettings,
   renderSettingsAccount,
   renderWorkflowRuns,
+  resetAdviceDeleteMode,
   runWatchOnce,
+  toggleAdviceDeleteMode,
 } from './pages.js';
+import { renderSectors } from './sectors.js';
 import {
   initTargetActions,
   renderAlerts,
@@ -68,6 +74,7 @@ const startClock = () => {
 
 const ROUTES = [
   'dashboard',
+  'indices',
   'market',
   'holdings',
   'strategies',
@@ -78,6 +85,8 @@ const ROUTES = [
   'reports',
   'review',
   'limit-up',
+  'dragon-tiger',
+  'sectors',
   'chat',
   'settings',
 ];
@@ -86,6 +95,12 @@ const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
   // 离开行情页时停止 60s 自动刷新并销毁图表（设计 §11.4）。
   if (safe !== 'market') teardownMarket();
+  // 离开指数页时停止 10s 分时刷新定时器。
+  if (safe !== 'indices') teardownIndices();
+  // 离开建议页时退出删除选择模式并清空选择集（防状态残留）。
+  if (safe !== 'advice') resetAdviceDeleteMode();
+  // 离开龙虎榜页时停止 60s 自动刷新定时器。
+  if (safe !== 'dragon-tiger') teardownDragonTiger();
   document.querySelectorAll('.route').forEach((node) => {
     node.hidden = node.dataset.route !== safe;
     node.classList.toggle('active', node.dataset.route === safe);
@@ -99,8 +114,11 @@ const showRoute = async (name) => {
   try {
     if (safe === 'dashboard') {
       await renderDashboard(setStatus);
+      // 市场行情区块（概览 / 迷你热力 / 要闻）只按路由进入加载一次，不进 5s 轮询
+      await renderDashboardMarketBlocks();
       await renderDataHealth(setStatus);
     } else if (safe === 'market') await renderMarket(setStatus);
+    else if (safe === 'indices') await renderIndicesPage(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
     else if (safe === 'strategies') await renderStrategies(setStatus);
     else if (safe === 'watchlists') await renderWatchlists(setStatus);
@@ -115,23 +133,16 @@ const showRoute = async (name) => {
       await renderReview(setStatus);
     } else if (safe === 'limit-up') {
       await renderLimitUpLadder(setStatus);
+    } else if (safe === 'dragon-tiger') {
+      await renderDragonTiger(setStatus);
+    } else if (safe === 'sectors') {
+      await renderSectors(setStatus);
     } else if (safe === 'chat') {
       initChat();
       await refreshChat();
     } else if (safe === 'settings') {
       renderSettings(setStatus);
-      initAISettings(setStatus);
-      await renderAISettings(setStatus);
-      initMarketSettings(setStatus);
-      await renderMarketSettings(setStatus);
-      initMarketSync();
-      await renderMarketSyncStatus();
-      initFeishuSettings(setStatus);
-      await renderFeishuSettings(setStatus);
-      initDataTransfer();
-      await renderDataTransfer();
-      await renderSettingsAccount();
-      await renderWorkflowRuns(setStatus);
+      await renderSettingsTab(setStatus, settingsTab());
     }
   } catch (error) {
     setStatus(`路由错误：${error instanceof Error ? error.message : String(error)}`, true);
@@ -148,6 +159,46 @@ const currentHash = () => {
   if (path === 'watch' || path === 'groups') return 'alerts';
   if (path === 'tactics') return 'strategies';
   return ROUTES.includes(path) ? path : 'dashboard';
+};
+
+/* ============ 设置页二级菜单（#settings?tab=ai|market|notify|data|system） ============ */
+
+const SETTINGS_TABS = ['ai', 'market', 'notify', 'data', 'system'];
+
+const settingsTab = (hash = window.location.hash) => {
+  const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'ai';
+  return SETTINGS_TABS.includes(tab) ? tab : 'ai';
+};
+
+/** 只渲染当前 tab 的分区内容；pane 显隐与 subnav 高亮同步。 */
+const renderSettingsTab = async (setStatus, tab) => {
+  document.querySelectorAll('[data-settings-pane]').forEach((node) => {
+    node.hidden = node.dataset.settingsPane !== tab;
+  });
+  document.querySelectorAll('.settings-subnav-item').forEach((node) => {
+    const active = node.dataset.settingsTab === tab;
+    node.classList.toggle('active', active);
+    if (active) node.setAttribute('aria-current', 'true');
+    else node.removeAttribute('aria-current');
+  });
+  if (tab === 'ai') {
+    initAISettings(setStatus);
+    await renderAISettings(setStatus);
+  } else if (tab === 'market') {
+    initMarketSettings(setStatus);
+    await renderMarketSettings(setStatus);
+    initMarketSync();
+    await renderMarketSyncStatus();
+  } else if (tab === 'notify') {
+    initFeishuSettings(setStatus);
+    await renderFeishuSettings(setStatus);
+  } else if (tab === 'data') {
+    initDataTransfer();
+    await renderDataTransfer();
+  } else if (tab === 'system') {
+    await renderSettingsAccount();
+    await renderWorkflowRuns(setStatus);
+  }
 };
 
 const onHashChange = () => {
@@ -267,7 +318,15 @@ const bindGlobalActions = () => {
 
   const adviceFilter = $('#advice-filter');
   if (adviceFilter !== null)
-    adviceFilter.addEventListener('change', () => void renderAdviceList(setStatus));
+    adviceFilter.addEventListener('change', () => {
+      // 筛选切换退出删除选择模式（选择集跨筛选保留会造成误删）
+      resetAdviceDeleteMode();
+      void renderAdviceList(setStatus);
+    });
+
+  const adviceDeleteModeBtn = $('#btn-advice-delete-mode');
+  if (adviceDeleteModeBtn !== null)
+    adviceDeleteModeBtn.addEventListener('click', () => void toggleAdviceDeleteMode(setStatus));
 
   bindSettingsActions();
   bindAccountSelect();

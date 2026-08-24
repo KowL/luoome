@@ -4,7 +4,7 @@
 import { consumeUIMessageStream } from './ai-ui-stream.js';
 import { callApi } from './api.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
-import { $, el, mount } from './ui.js';
+import { $, adviceCard, el, mount } from './ui.js';
 
 const feed = [];
 let sessions = [];
@@ -28,11 +28,53 @@ const TOOL_LABELS = {
   create_alert_plan: '创建 AlertPlan',
   update_alert_plan: '更新 AlertPlan',
   delete_alert_plan: '删除 AlertPlan',
+  create_research_topic: '创建研究主题',
+  analyze_stock: '分析个股',
+  analyze_position: '分析持仓',
+  market_outlook: '市场观点',
 };
 
 const toolLabel = (tool) => TOOL_LABELS[tool] ?? tool;
 const errorText = (result, fallback) => result?.error?.message ?? result?.error?.cause ?? fallback;
 const trimLeadingChatWhitespace = (text) => text.trimStart();
+
+const SCENARIO_LABELS = {
+  research: '股票研究',
+  portfolio: '持仓与风险',
+  watch: '观察盯盘',
+  review: '复盘',
+  general: '通用问答',
+};
+
+// 计划卡只展示确定性路由与场景模板数据，不涉及模型思维链。
+const planCardLines = (route) => {
+  const lines = [];
+  if (Array.isArray(route?.plannedDimensions) && route.plannedDimensions.length > 0) {
+    lines.push(`将查询：${route.plannedDimensions.join(' → ')}`);
+  }
+  if (route?.needsAdvice === true) lines.push('可能生成建议');
+  if (route?.involvesWrite === true) lines.push('可能生成待确认草案');
+  return lines;
+};
+
+const planCard = (route) => {
+  const card = el('div', 'chat-plan');
+  card.append(
+    el('div', 'chat-plan-title', `计划 · ${SCENARIO_LABELS[route.scenario] ?? route.scenario}`),
+  );
+  card.append(el('p', 'chat-plan-detail', planCardLines(route).join('；')));
+  return card;
+};
+
+const parseChatRouteHeader = (value) => {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  try {
+    const route = JSON.parse(decodeURIComponent(value));
+    return typeof route?.scenario === 'string' ? route : null;
+  } catch {
+    return null;
+  }
+};
 
 // 草案确认/取消结果以该前缀作为 user 文本消息持久化到会话：
 // 刷新后能把历史草案渲染为已结算，模型下一轮也能看到处理结果而不重复提议。
@@ -71,6 +113,78 @@ const recordDraftSettlement = async (draft, text, ok) => {
   if (!result.ok) console.warn('[chat] 草案处理记录写入失败', result.error);
 };
 
+// 取消消息的 parts：已收到文本（可为空）+ cancelled 标记，供前端兜底落库与历史还原。
+const cancelledAssistantParts = (content) => [
+  ...(content.trim().length > 0 ? [{ type: 'text', text: content }] : []),
+  { type: 'data-luoome-cancelled', data: { cancelled: true } },
+];
+
+// 实测 Bun 下客户端断开后服务端 onFinish 不会回调（响应流被先行拆除），由前端把
+// partial 助手消息落库；messageId 取自流的 start chunk，saveMessage 按 id upsert 幂等。
+const persistCancelledAssistant = async (sessionId, messageId, content) => {
+  const result = await callApi('/api/tools/append_chat_message/call', {
+    method: 'POST',
+    body: JSON.stringify({
+      input: {
+        sessionId,
+        ...(messageId === null ? {} : { messageId }),
+        role: 'assistant',
+        parts: cancelledAssistantParts(content),
+      },
+    }),
+  });
+  if (!result.ok) console.warn('[chat] 取消消息落库失败', result.error);
+};
+
+const DRAFT_FIELD_SOURCE_LABELS = { default: '默认', inferred: '推断' };
+
+const formatDraftFieldValue = (value) => {
+  if (Array.isArray(value)) return value.map(formatDraftFieldValue).join('、');
+  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
+  return String(value ?? '—');
+};
+
+// display 投影渲染：targetObject + 字段表（来源标记）+ 不支持/歧义警示。
+// 无 display 的历史草案回落到 summary + raw JSON。
+const draftDisplayNode = (display) => {
+  const wrap = el('div', 'chat-draft-display');
+  wrap.append(el('p', 'chat-draft-target', String(display.targetObject ?? '')));
+  const fields = Array.isArray(display.fields) ? display.fields : [];
+  if (fields.length > 0) {
+    wrap.append(
+      el(
+        'ul',
+        'chat-draft-fields',
+        fields.map((f) => {
+          const badge = DRAFT_FIELD_SOURCE_LABELS[f?.source];
+          return el(
+            'li',
+            null,
+            `${String(f?.name ?? '')}: ${formatDraftFieldValue(f?.value)}${badge ? `（${badge}）` : ''}`,
+          );
+        }),
+      ),
+    );
+  }
+  for (const item of Array.isArray(display.unsupported) ? display.unsupported : []) {
+    wrap.append(el('p', 'chat-draft-warn', `不支持：${String(item)}`));
+  }
+  for (const item of Array.isArray(display.ambiguous) ? display.ambiguous : []) {
+    wrap.append(el('p', 'chat-draft-warn', `注意：${String(item)}`));
+  }
+  return wrap;
+};
+
+// 「编辑」= 预填修正：把 display 字段摘要转成自然语言预填进输入框，模型重新生成草案。
+const draftEditPrefill = (draft) => {
+  const fields = Array.isArray(draft.display?.fields) ? draft.display.fields : [];
+  const summary = fields
+    .map((f) => `${String(f?.name ?? '')}=${formatDraftFieldValue(f?.value)}`)
+    .join('，');
+  const target = draft.display?.targetObject ?? toolLabel(draft.tool);
+  return `请修改刚才的草案（${String(target)}）${summary.length > 0 ? `：${summary}` : ''}，我想改为：`;
+};
+
 const draftCard = (draft) => {
   const card = el('div', 'chat-draft');
   card.append(el('div', 'chat-draft-title', `草案 · ${toolLabel(draft.tool)}`));
@@ -84,13 +198,19 @@ const draftCard = (draft) => {
     );
     return card;
   }
-  card.append(el('p', 'chat-draft-summary', String(draft.summary ?? '')));
-  card.append(el('pre', 'chat-draft-input', JSON.stringify(draft.input ?? {}, null, 2)));
+  if (draft.display !== undefined && draft.display !== null) {
+    card.append(draftDisplayNode(draft.display));
+  } else {
+    card.append(el('p', 'chat-draft-summary', String(draft.summary ?? '')));
+    card.append(el('pre', 'chat-draft-input', JSON.stringify(draft.input ?? {}, null, 2)));
+  }
   const confirmBtn = el('button', 'btn btn-primary btn-sm', '确认执行');
   confirmBtn.type = 'button';
+  const editBtn = el('button', 'btn btn-outline btn-sm', '编辑');
+  editBtn.type = 'button';
   const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
   cancelBtn.type = 'button';
-  card.append(el('div', 'chat-draft-actions', [confirmBtn, cancelBtn]));
+  card.append(el('div', 'chat-draft-actions', [confirmBtn, editBtn, cancelBtn]));
 
   const settle = (text, ok) => {
     draft.settled = { text, ok };
@@ -99,6 +219,7 @@ const draftCard = (draft) => {
   };
   confirmBtn.addEventListener('click', async () => {
     confirmBtn.disabled = true;
+    editBtn.disabled = true;
     cancelBtn.disabled = true;
     const result = await callApi(`/api/tools/${draft.tool}/call`, {
       method: 'POST',
@@ -106,9 +227,21 @@ const draftCard = (draft) => {
     });
     if (result.ok) {
       settle(`${toolLabel(draft.tool)}执行成功`, true);
+      // advice 草案确认后返回正式 Advice，用 Advice 页同款卡片渲染进会话。
+      const advice = result.data?.advice;
+      if (draft.kind === 'advice' && advice !== undefined && advice !== null) {
+        feed.push({ type: 'advice', advice });
+        renderChat();
+      }
     } else {
       settle(`执行失败：${errorText(result, '未知错误')}`, false);
     }
+  });
+  editBtn.addEventListener('click', () => {
+    const input = $('#chat-input');
+    if (input === null) return;
+    input.value = draftEditPrefill(draft);
+    input.focus();
   });
   cancelBtn.addEventListener('click', () => settle('已取消该草案', false));
   return card;
@@ -138,12 +271,18 @@ const usedActionsNode = (usedActions) => {
 };
 
 const renderEntry = (entry) => {
-  if (entry.type === 'msg') return el('div', `chat-msg ${entry.role}`, entry.content);
+  if (entry.type === 'msg') {
+    const node = el('div', `chat-msg ${entry.role}`, entry.content);
+    if (entry.cancelled === true) node.append(el('span', 'chat-cancelled-mark', '已取消'));
+    return node;
+  }
   if (entry.type === 'note') return el('div', 'chat-msg system', entry.text);
   if (entry.type === 'status') {
     return el('div', 'chat-msg system chat-stream-status', entry.text);
   }
   if (entry.type === 'actions') return usedActionsNode(entry.usedActions);
+  if (entry.type === 'plan') return planCard(entry.route);
+  if (entry.type === 'advice') return adviceCard(entry.advice);
   return el('div', 'chat-drafts', entry.drafts.map(draftCard));
 };
 
@@ -283,8 +422,16 @@ const persistedFeed = (messages) => {
       continue;
     }
     const visibleText = trimLeadingChatWhitespace(text);
-    if (visibleText.trim().length > 0) {
-      result.push({ type: 'msg', role: message.role, content: visibleText });
+    const cancelled =
+      message.role === 'assistant' &&
+      message.parts.some((part) => part.type === 'data-luoome-cancelled');
+    if (visibleText.trim().length > 0 || cancelled) {
+      result.push({
+        type: 'msg',
+        role: message.role,
+        content: visibleText,
+        ...(cancelled ? { cancelled: true } : {}),
+      });
     }
     if (message.role !== 'assistant') continue;
     const actions = [];
@@ -372,16 +519,29 @@ const send = async () => {
   sending = true;
   const sendBtn = $('#chat-send');
   if (sendBtn !== null) sendBtn.disabled = true;
+  const controller = new AbortController();
+  // 流式期间显示「取消」：abort 会断流，服务端透传 request.signal 中断 runtime。
+  const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
+  cancelBtn.type = 'button';
+  cancelBtn.id = 'chat-cancel';
+  cancelBtn.addEventListener('click', () => controller.abort());
+  $('#chat-form')?.append(cancelBtn);
+  let assistantEntry = null;
+  // catch 块需要引用：取消时把 partial 消息兜底落库（服务端 onFinish 此时不会回调）
+  let sessionId = null;
+  let assistantMessageId = null;
+  let fetchSent = false;
 
   try {
     if (activeSessionId === null && (await createSession()) === null) return;
-    const sessionId = activeSessionId;
+    sessionId = activeSessionId;
     if (sessionId === null) return;
     input.value = '';
     pushMsg('user', text);
     const statusEntry = { type: 'status', text: '正在连接模型…' };
     const actionsEntry = { type: 'actions', usedActions: [] };
-    const assistantEntry = { type: 'msg', role: 'assistant', content: '' };
+    // catch 块需要引用：取消时给这条消息打「已取消」标注
+    assistantEntry = { type: 'msg', role: 'assistant', content: '', cancelled: false };
     const toolCalls = new Map();
     let assistantStarted = false;
     feed.push(statusEntry);
@@ -396,9 +556,11 @@ const send = async () => {
       if (!feed.includes(actionsEntry)) feed.push(actionsEntry);
     };
     const headers = new Headers({ 'content-type': 'application/json' });
+    fetchSent = true;
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers,
+      signal: controller.signal,
       body: JSON.stringify({
         sessionId,
         messages: [
@@ -410,8 +572,12 @@ const send = async () => {
         ],
       }),
     });
+    const route = parseChatRouteHeader(response.headers.get('x-luoome-chat-route'));
+    if (route !== null) feed.push({ type: 'plan', route });
     await consumeUIMessageStream(response, (part) => {
-      if (part.type === 'start-step') {
+      if (part.type === 'start') {
+        if (typeof part.messageId === 'string') assistantMessageId = part.messageId;
+      } else if (part.type === 'start-step') {
         statusEntry.text = '模型正在推理…';
       } else if (part.type === 'tool-input-available') {
         statusEntry.text = `正在执行 ${part.toolName}…`;
@@ -463,9 +629,24 @@ const send = async () => {
   } catch (error) {
     const status = feed.findLast((entry) => entry.type === 'status');
     if (status !== undefined) removeEntry(status);
-    pushMsg('assistant', `请求失败：${error instanceof Error ? error.message : '未知错误'}`);
+    if (controller.signal.aborted) {
+      // 主动取消：保留已接收的文本与工具轨迹，标注「已取消」，不伪造完整回答。
+      if (assistantEntry !== null) {
+        assistantEntry.cancelled = true;
+        if (!feed.includes(assistantEntry)) feed.push(assistantEntry);
+        renderChat();
+        // 客户端断开后服务端 onFinish 不会回调，前端兜底落库 partial + cancelled 标记。
+        if (fetchSent && sessionId !== null) {
+          await persistCancelledAssistant(sessionId, assistantMessageId, assistantEntry.content);
+        }
+        await refreshSessions();
+      }
+    } else {
+      pushMsg('assistant', `请求失败：${error instanceof Error ? error.message : '未知错误'}`);
+    }
   } finally {
     sending = false;
+    cancelBtn.remove();
     if (sendBtn !== null) sendBtn.disabled = false;
     input.focus();
   }
@@ -494,9 +675,15 @@ const refreshChat = async () => {
 };
 
 export {
+  cancelledAssistantParts,
+  draftEditPrefill,
+  formatDraftFieldValue,
   formatDraftSettlement,
   initChat,
+  parseChatRouteHeader,
   parseDraftSettlement,
+  persistedFeed,
+  planCardLines,
   refreshChat,
   renderChat,
   trimLeadingChatWhitespace,

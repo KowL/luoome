@@ -218,6 +218,7 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
   }
 
   async commitWatchlistSync(input: WatchlistSyncCommit): Promise<WatchlistSyncRun> {
+    assertWatchlistSyncRunInvariants(input.run);
     if (input.run.status === 'running') {
       throw new InvariantError('commitWatchlistSync 只接受终态 run');
     }
@@ -227,6 +228,15 @@ export class InMemoryWatchlistMemberRepository implements WatchlistMemberReposit
     const candidates = new Map(input.candidates.map((candidate) => [candidate.stockId, candidate]));
     if (candidates.size !== input.candidates.length) {
       throw new InvariantError('Watchlist sync candidates.stockId 必须唯一');
+    }
+    if (input.run.producerRunId !== undefined) {
+      const existingRun = [...this.runs.values()].find(
+        (run) =>
+          run.watchlistId === input.run.watchlistId &&
+          run.sourceKey === input.run.sourceKey &&
+          run.producerRunId === input.run.producerRunId,
+      );
+      if (existingRun !== undefined) return existingRun;
     }
 
     const nextMembers = new Map(this.members);

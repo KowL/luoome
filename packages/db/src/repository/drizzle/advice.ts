@@ -2,6 +2,7 @@ import {
   type Advice,
   type AdviceDataSnapshot,
   type AdviceOutcome,
+  type AdviceOutcomeQuery,
   type AdviceQuery,
   type AdviceRepository,
   assertAdviceInvariants,
@@ -64,9 +65,12 @@ const toAdvice = (row: AdviceRow, outcome: AdviceOutcome | null): Advice => {
 
 const toOutcome = (row: OutcomeRow): AdviceOutcome => ({
   adviceId: row.adviceId,
+  tradeIds: row.tradeIds,
   outcome: row.outcome,
   ...(row.pnl !== null ? { pnl: row.pnl } : {}),
   ...(row.benchmarkPnl !== null ? { benchmarkPnl: row.benchmarkPnl } : {}),
+  ...(row.holdingHours !== null ? { holdingHours: row.holdingHours } : {}),
+  ...(row.notes !== null ? { notes: row.notes } : {}),
   recordedAt: row.recordedAt,
 });
 
@@ -99,7 +103,7 @@ export class DrizzleAdviceRepository implements AdviceRepository {
   async findById(id: string): Promise<Advice | null> {
     const row = this.db.select().from(advices).where(eq(advices.id, id)).get();
     if (row === undefined) return null;
-    return toAdvice(row, await this.getOutcome(id));
+    return toAdvice(row, await this.findOutcome(id));
   }
 
   /**
@@ -124,7 +128,7 @@ export class DrizzleAdviceRepository implements AdviceRepository {
       .where(and(...conditions))
       .orderBy(desc(advices.createdAt), desc(advices.id));
     const rows = filter.limit !== undefined ? base.limit(filter.limit).all() : base.all();
-    const outcomes = await Promise.all(rows.map((r) => this.getOutcome(r.id)));
+    const outcomes = await Promise.all(rows.map((r) => this.findOutcome(r.id)));
     return rows.map((r, i) => toAdvice(r, outcomes[i] ?? null));
   }
 
@@ -136,9 +140,12 @@ export class DrizzleAdviceRepository implements AdviceRepository {
     }
     const row = {
       adviceId,
+      tradeIds: outcome.tradeIds,
       outcome: outcome.outcome,
       pnl: outcome.pnl ?? null,
       benchmarkPnl: outcome.benchmarkPnl ?? null,
+      holdingHours: outcome.holdingHours ?? null,
+      notes: outcome.notes ?? null,
       recordedAt: outcome.recordedAt,
     };
     this.db
@@ -148,16 +155,42 @@ export class DrizzleAdviceRepository implements AdviceRepository {
       .run();
   }
 
-  /**
-   * 读取已回填的 outcome（超出 core 接口的便捷方法，供 stats / 测试使用）。
-   * core 的 AdviceRepository 接口 v0.1 未暴露 outcome 读取，工具层可直接用具体类。
-   */
-  async getOutcome(adviceId: string): Promise<AdviceOutcome | null> {
+  async findOutcome(adviceId: string): Promise<AdviceOutcome | null> {
     const row = this.db
       .select()
       .from(adviceOutcomes)
       .where(eq(adviceOutcomes.adviceId, adviceId))
       .get();
     return row === undefined ? null : toOutcome(row);
+  }
+
+  async listOutcomes(filter: AdviceOutcomeQuery = {}): Promise<AdviceOutcome[]> {
+    const conditions = [
+      filter.adviceId !== undefined ? eq(adviceOutcomes.adviceId, filter.adviceId) : undefined,
+      filter.subjectKind !== undefined ? eq(advices.subjectKind, filter.subjectKind) : undefined,
+      filter.subjectId !== undefined ? eq(advices.subjectId, filter.subjectId) : undefined,
+      filter.since !== undefined ? gte(adviceOutcomes.recordedAt, filter.since) : undefined,
+      filter.until !== undefined ? lte(adviceOutcomes.recordedAt, filter.until) : undefined,
+    ].filter((condition) => condition !== undefined);
+    const base = this.db
+      .select({ outcome: adviceOutcomes })
+      .from(adviceOutcomes)
+      .innerJoin(advices, eq(adviceOutcomes.adviceId, advices.id))
+      .where(and(...conditions))
+      .orderBy(desc(adviceOutcomes.recordedAt), desc(adviceOutcomes.adviceId));
+    const rows = filter.limit !== undefined ? base.limit(filter.limit).all() : base.all();
+    return rows.map((row) => toOutcome(row.outcome));
+  }
+
+  /** 兼容旧调用方；新代码应使用 AdviceRepository.findOutcome。 */
+  async getOutcome(adviceId: string): Promise<AdviceOutcome | null> {
+    return this.findOutcome(adviceId);
+  }
+
+  async remove(id: string): Promise<void> {
+    this.db.transaction((tx) => {
+      tx.delete(adviceOutcomes).where(eq(adviceOutcomes.adviceId, id)).run();
+      tx.delete(advices).where(eq(advices.id, id)).run();
+    });
   }
 }

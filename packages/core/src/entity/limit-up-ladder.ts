@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
+import { type SourceId, SourceIdSchema } from '../source.js';
 
 /**
  * 连板天梯实体（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md §1）。
@@ -24,10 +25,13 @@ export type LimitUpBoard = 'main_board' | 'chinext' | 'star' | 'bse';
 
 export const LimitUpBoardSchema = z.enum(['main_board', 'chinext', 'star', 'bse']);
 
-/** 数据源名称（当前仅 eastmoney 公开涨停池；保留枚举便于 schema 限定与将来扩展）。 */
-export type LimitUpLadderSource = 'eastmoney';
+/**
+ * 数据源标识（通用 SourceId；当前仅 eastmoney 公开涨停池注册）。
+ * 兼容扩宽：docs/ddd/source-pluggability-and-observation-design.md §4.6。
+ */
+export type LimitUpLadderSource = SourceId;
 
-export const LimitUpLadderSourceSchema = z.enum(['eastmoney']);
+export const LimitUpLadderSourceSchema = SourceIdSchema;
 
 /** HH:MM:SS 字符串或 null（null 表示缺数据，不臆造）。 */
 const timeStringOrNull = z
@@ -117,7 +121,8 @@ export type LimitUpLadderDiff = z.infer<typeof LimitUpLadderDiffSchema>;
 
 export const LimitUpLadderQuerySchema = z.object({
   date: dateString,
-  source: LimitUpLadderSourceSchema.default('eastmoney'),
+  /** 可选单源路由约束：未传时按配置顺序 fallback；显式传入时只尝试该源（§4.6）。 */
+  source: LimitUpLadderSourceSchema.optional(),
   /** 样本窗口（默认 15）；预留给需要历史窗口判定 level 的数据源，eastmoney 涨停池忽略。 */
   days: z.number().int().positive().default(15),
   /** 默认 false；false 时 uncategorized=true 的 entry 不出现。 */
@@ -135,7 +140,7 @@ export type LimitUpLadderQuery = z.infer<typeof LimitUpLadderQuerySchema>;
 export const LimitUpLadderCompareInputSchema = z.object({
   date: dateString,
   prevDate: dateString,
-  source: LimitUpLadderSourceSchema.default('eastmoney'),
+  source: LimitUpLadderSourceSchema.optional(),
   days: z.number().int().positive().default(15),
   includeUncategorized: z.boolean().default(false),
   includeStar: z.boolean().default(false),

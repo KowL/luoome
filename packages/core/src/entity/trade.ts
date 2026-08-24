@@ -16,6 +16,10 @@ export interface Trade {
   readonly fee: Money;
   readonly executedAt: Date;
   readonly source: TradeSource;
+  /** 可选决策 provenance；历史导入交易可以为空，不从事实推断。 */
+  readonly adviceId?: string;
+  readonly researchHypothesisVersionId?: string;
+  readonly strategyVersionId?: string;
   readonly createdAt: Date;
 }
 
@@ -32,5 +36,8 @@ export const TradeSchema = z.object({
   fee: MoneySchema,
   executedAt: z.coerce.date(),
   source: TradeSourceSchema,
+  adviceId: z.string().min(1).optional(),
+  researchHypothesisVersionId: z.string().min(1).optional(),
+  strategyVersionId: z.string().min(1).optional(),
   createdAt: z.coerce.date(),
 });

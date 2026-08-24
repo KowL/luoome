@@ -4,6 +4,7 @@
 //   GET  /api/holdings          → list_holdings
 //   GET  /api/advice            → get_advice（?subjectId=&includeExpired=）
 //   GET  /api/advice/stats        → get_advice_stats
+//   POST /api/advice/delete       → delete_advice（write，body { ids }）
 //   POST /api/tools/:name/call    → 默认只放行 read/advice（ARCHITECTURE §7.1）；
 //                                   write 需 LUOOME_EXPOSE_WRITE=true，external 需
 //                                   LUOOME_EXPOSE_EXTERNAL=true 且命中白名单
@@ -19,14 +20,23 @@ import { fileURLToPath } from 'node:url';
 import {
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
+  createDragonTigerManagerFromEnv,
   createFeishuWebhookAdapterFromEnv,
   createFileAuditLogger,
+  createFundamentalDataAdapterFromEnv,
   createLimitUpLadderManagerFromEnv,
   createMarketAdapterFromEnv,
+  createNewsManagerFromEnv,
+  createNorthboundFlowManagerFromEnv,
   createNotificationManagerFromEnv,
+  createResearchEmbeddingAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
   createResearchVaultAdapterFromEnv,
+  createResearchVaultGitSyncAdapterFromEnv,
+  createSectorQuoteManagerFromEnv,
   createStockUniverseManagerFromEnv,
+  EastmoneySource,
+  MarketSourceIdSchema,
   NotificationManager,
 } from '@luoome/adapters';
 import {
@@ -44,13 +54,19 @@ import {
   auditPortfolioPerformanceSnapshotsTool,
   buildContext,
   cancelStrategyEvaluationSessionTool,
+  createStrictStrategyBacktestTool,
+  executeStrictStrategyBacktestTool,
   finishStrategyEvaluationSessionTool,
   getAccountPerformanceTool,
+  getResearchVaultRemoteSyncStatusTool,
   getStrategyEvaluationSessionTool,
+  getStrictStrategyBacktestTool,
   listPortfolioPerformanceSnapshotsTool,
   listStrategyEvaluationDaysTool,
+  listStrictStrategyBacktestsTool,
   resumeStrategyEvaluationSessionTool,
   startStrategyEvaluationSessionTool,
+  syncStrategyWatchlistSubscriptionsTool,
   toolRegistry,
 } from '@luoome/tools';
 import {
@@ -58,6 +74,7 @@ import {
   openingReportWorkflow,
   replayStrategyRangeWorkflow,
   runIntradayWatchObserved,
+  syncResearchVaultRemoteWorkflow,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
@@ -67,7 +84,16 @@ import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
 import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
-import { MarketSettingsStore, SaveMarketSettingsSchema } from './market-settings.js';
+import {
+  type MarketDatasetStatusRow,
+  MarketSettingsStore,
+  SaveMarketSettingsSchema,
+  withRuntimeStatus,
+} from './market-settings.js';
+import {
+  PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
+  startPortfolioPerformanceScheduler,
+} from './portfolio-performance-scheduler.js';
 import {
   ResearchVaultSettingsStore,
   SaveResearchVaultSettingsSchema,
@@ -101,6 +127,22 @@ const StrategyBacktestRequest = z
     }
   });
 
+const StrictStrategyBacktestRequest = z.object({
+  evaluationSessionId: z.string().min(1),
+  initialCash: z.number().positive().default(1_000_000),
+  benchmarkStockId: z.string().min(1).default('000300.SH'),
+  benchmarkDatasetVersion: z.string().min(1).default('000300.SH:qfq:daily:v1'),
+  lotSize: z.number().int().positive().default(100),
+  maxPositions: z.number().int().min(1).max(100).default(20),
+  costs: z.object({
+    commissionBps: z.number().nonnegative().max(100),
+    minimumCommission: z.number().nonnegative(),
+    sellStampDutyBps: z.number().nonnegative().max(100),
+    buySlippageBps: z.number().nonnegative().max(500),
+    sellSlippageBps: z.number().nonnegative().max(500),
+  }),
+});
+
 /**
  * 行情页图表库（设计 §12.1）：固定版本 lightweight-charts 的 ESM 产物文件。
  * 必须serve standalone 产物：包入口（lightweight-charts.production.mjs）含裸导入
@@ -133,13 +175,18 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'batch_quote',
   'fetch_index_quotes',
   'fetch_intraday_minutes',
+  'get_stock_minute_bars',
   'get_ashare_sentiment',
   'get_stock_market_view',
   'get_account_performance',
   'sync_stock_universe',
   'sync_daily_bars',
+  'sync_financial_facts',
   'run_strategy',
   'generate_strategy_insight',
+  'search_research_documents_hybrid',
+  'rebuild_research_embeddings',
+  'evaluate_research_embeddings',
   'propose_strategy_version_draft',
   'trial_strategy_version',
   'import_remote_research_document',
@@ -208,6 +255,15 @@ export const resolveDbPath = (): string => {
 };
 
 /**
+ * 进程级共享数据源实例集（docs/ddd/source-pluggability-and-observation-design.md §4.6/§4.7）。
+ * 当前仅 EastmoneySource；组装根创建一次后分发给 market 与五个非行情 factory，
+ * 行情源热更新复用同一实例。
+ */
+export interface WebSourceSet {
+  readonly eastmoney?: EastmoneySource;
+}
+
+/**
  * 组装 web 端 ToolContext（与其他 surface 同一模式）：
  * LUOOME_HOME 下的 luoome.db + createDrizzleRepos + 真实行情/LLM + buildContext。
  * 空数据库保持为空，不自动插入任何业务记录。
@@ -215,6 +271,7 @@ export const resolveDbPath = (): string => {
 export const buildWebContext = async (
   dbPath: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  deps: { readonly sources?: WebSourceSet } = {},
 ): Promise<ToolContext> => {
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -243,12 +300,33 @@ export const buildWebContext = async (
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  let researchEmbedding: ReturnType<typeof createResearchEmbeddingAdapterFromEnv>;
+  try {
+    researchEmbedding = createResearchEmbeddingAdapterFromEnv(env);
+  } catch (error) {
+    console.warn('Research embedding 配置无效；Web 将以 capability 未挂载状态启动', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  let researchVaultGitSync: ReturnType<typeof createResearchVaultGitSyncAdapterFromEnv>;
+  try {
+    researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(env, {
+      backupRoot: join(dirname(dbPath), 'backups', 'research-vault'),
+    });
+  } catch {
+    console.warn('Research Vault 远端同步配置无效；Web 将以未挂载状态启动');
+  }
+  // 进程级 SourceSet 先建一次，经 deps.sources 分发给 market 与五个非行情 factory（§4.6）
+  const eastmoney = deps.sources?.eastmoney ?? new EastmoneySource({ clock: now });
+  const sources = { eastmoney };
   const market = createMarketAdapterFromEnv(env, {
     clock: now,
     logger: console,
     // Web 持仓与 Watchlist 盘中轮询；TTL 不调小的话拿到的都是缓存
     quoteCacheTtlMs: 10_000,
+    sources,
   });
+  const fundamentalData = createFundamentalDataAdapterFromEnv(env);
   return buildContext({
     repos: handle.repos,
     adapters: {
@@ -269,13 +347,25 @@ export const buildWebContext = async (
         env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() || DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
       name: DEFAULT_PORTFOLIO_BENCHMARK_NAME,
     },
-    limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console }),
+    limitUpLadder: createLimitUpLadderManagerFromEnv(env, { clock: now, logger: console, sources }),
+    dragonTiger: createDragonTigerManagerFromEnv(env, { clock: now, logger: console, sources }),
+    northboundFlow: createNorthboundFlowManagerFromEnv(env, {
+      clock: now,
+      logger: console,
+      sources,
+    }),
+    news: createNewsManagerFromEnv(env, { clock: now, logger: console, sources }),
+    sectorQuote: createSectorQuoteManagerFromEnv(env, { clock: now, logger: console }),
     ashareSentiment: createAShareSentimentManagerFromEnv(env, {
       clock: now,
       logger: console,
       market,
+      sources,
     }),
     ...(researchVault ? { researchVault } : {}),
+    ...(researchEmbedding ? { researchEmbedding } : {}),
+    ...(researchVaultGitSync ? { researchVaultGitSync } : {}),
+    ...(fundamentalData === undefined ? {} : { fundamentalData }),
     researchRemote: createResearchRemoteDocumentAdapter(),
     notification: createNotificationManagerFromEnv(env, {
       repos: handle.repos,
@@ -294,6 +384,14 @@ export interface CreateWebAppOptions {
   readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
+  /**
+   * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
+   * 实例，只重建 market 与直接依赖 market 的 sentiment manager，不产生第二个实例。
+   * 未来若设置项会改变 Eastmoney client 本身（超时、代理、base URL 等），必须先以新
+   * SourceSet 构造并验证 market + 五个非行情 manager 的完整 candidate 图，验证成功后
+   * 一次性替换 ctxRef 与本引用；失败时旧图保持不变。
+   */
+  readonly sources?: WebSourceSet;
   /** Research Vault 设置持久化；保存后即时替换当前 adapter。 */
   readonly researchVaultSettingsStore?: ResearchVaultSettingsStore;
   /** 飞书 Webhook 设置；保存后热更新共享 NotificationManager。 */
@@ -343,6 +441,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const aiSettingsStore = options.aiSettingsStore;
   const marketSettingsStore = options.marketSettingsStore;
+  const sharedSources = options.sources;
   const researchVaultSettingsStore = options.researchVaultSettingsStore;
   const feishuSettingsStore = options.feishuSettingsStore;
   const dataTransferDbPath = options.dataTransferDbPath;
@@ -350,11 +449,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   /** 浏览器 api.js 从 localStorage 发送的账户选择；没有时沿用本地默认账户。 */
   const contextForRequest = (): ToolContext => {
-    const accountId = requestStorage.getStore()?.headers.get('x-luoome-account-id')?.trim();
-    if (accountId === undefined || accountId.length === 0) return ctxRef.current;
+    const request = requestStorage.getStore();
+    const accountId = request?.headers.get('x-luoome-account-id')?.trim();
     return {
       ...ctxRef.current,
-      user: { ...ctxRef.current.user, defaultAccountId: accountId },
+      ...(request === undefined ? {} : { abortSignal: request.signal }),
+      ...(accountId === undefined || accountId.length === 0
+        ? {}
+        : { user: { ...ctxRef.current.user, defaultAccountId: accountId } }),
     };
   };
 
@@ -390,6 +492,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/groups', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/watch', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/advice', serveFile('index.html', 'text/html; charset=utf-8'));
+  app.get('/dragon-tiger', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/reports', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/settings', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/review', serveFile('index.html', 'text/html; charset=utf-8'));
@@ -548,6 +651,33 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     };
   };
 
+  const strictBacktestJobs = new Map<string, Promise<void>>();
+  const startStrictBacktestJob = (backtestRunId: string, strategyId: string): void => {
+    if (strictBacktestJobs.has(backtestRunId)) return;
+    const job = executeStrictStrategyBacktestTool
+      .execute({ backtestRunId }, ctxRef.current)
+      .then((result) => {
+        if (!result.ok || result.data.run.status === 'failed') {
+          ctxRef.current.logger.error('web strict backtest job failed', {
+            backtestRunId,
+            strategyId,
+            errorKind: result.ok ? result.data.run.error : result.error.kind,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        ctxRef.current.logger.error('web strict backtest job crashed', {
+          backtestRunId,
+          strategyId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        strictBacktestJobs.delete(backtestRunId);
+      });
+    strictBacktestJobs.set(backtestRunId, job);
+  };
+
   interface BatchQuoteTarget {
     name: string;
     quote: {
@@ -680,6 +810,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult(await invokeTool(toolName, { ...body.data, ...fixedInput }));
   };
 
+  app.get('/api/research/embeddings/status', () => callTool('get_research_embedding_status', {}));
+  app.post('/api/research/search/hybrid', (c) =>
+    targetMutation(c.req.raw, 'external', 'search_research_documents_hybrid'),
+  );
+  app.post('/api/research/embeddings/rebuild', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external', 'write']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(await invokeTool('rebuild_research_embeddings', body.data));
+  });
+  app.post('/api/research/embeddings/evaluate', (c) =>
+    targetMutation(c.req.raw, 'external', 'evaluate_research_embeddings'),
+  );
+
   // 指数行情缓存：dashboard 5s 轮询，push2 对高频请求突发限流（2026-07 实测），
   // 15s TTL 把请求量降到 1/3；调用失败时回退最近成功值（60s 内），避免指数条闪空。
   const INDEX_QUOTES_TTL_MS = 15_000;
@@ -780,12 +925,18 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   // ===== 行情数据源设置 =====
-  app.get('/api/settings/market', () => {
+  app.get('/api/settings/market', async () => {
     if (marketSettingsStore === undefined) {
       return jsonResult(notFound('MarketSettingsStore', 'default'));
     }
     try {
-      return jsonResult({ ok: true, data: marketSettingsStore.read() });
+      const view = marketSettingsStore.read();
+      // 叠加运行态（§5）：读模型失败时降级为纯配置态，不拖垮设置读取
+      const status = await invokeTool('get_market_data_status', {});
+      if (!status.ok) return jsonResult({ ok: true, data: view });
+      const datasets = (status.data as { datasets?: MarketDatasetStatusRow[] }).datasets;
+      if (!Array.isArray(datasets)) return jsonResult({ ok: true, data: view });
+      return jsonResult({ ok: true, data: withRuntimeStatus(view, datasets) });
     } catch (error) {
       return jsonResult({
         ok: false,
@@ -809,14 +960,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         ...marketSettingsStore.runtimeEnv(),
         LUOOME_MARKET_SOURCES: input.sources.join(','),
       };
+      // 只改来源顺序：复用进程级 SourceSet，仅重建 market 与依赖 market 的 sentiment（§4.7）
+      const sharedDeps =
+        sharedSources?.eastmoney === undefined
+          ? {}
+          : { sources: { eastmoney: sharedSources.eastmoney } };
       const market = createMarketAdapterFromEnv(candidateEnv, {
         clock: ctxRef.current.clock,
         logger: ctxRef.current.logger,
+        ...sharedDeps,
       });
       const ashareSentiment = createAShareSentimentManagerFromEnv(candidateEnv, {
         clock: ctxRef.current.clock,
         logger: ctxRef.current.logger,
         market,
+        ...sharedDeps,
       });
       const saved = marketSettingsStore.save(input);
       ctxRef.current = {
@@ -845,6 +1003,58 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       });
     }
+  });
+
+  /**
+   * 主动探测指定行情源的全部能力（设置页「测试」按钮）：逐项执行 registry handle，
+   * 观测自动写入（§4.3），响应携带探测明细与叠加最新运行态的设置视图。
+   * 只允许探测已启用源（未启用源不在当前 manager 的 registry 里，无 handle 可执行）。
+   */
+  app.post('/api/settings/market/:id/test', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['external']);
+    if (denied !== null) return jsonResult(denied);
+    if (marketSettingsStore === undefined) {
+      return jsonResult(notFound('MarketSettingsStore', 'default'));
+    }
+    const parsed = MarketSourceIdSchema.safeParse(c.req.param('id'));
+    if (!parsed.success) {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: `未知的行情源：${c.req.param('id')}`, issues: [] },
+      });
+    }
+    const market = ctxRef.current.adapters.market;
+    const view = marketSettingsStore.read();
+    if (!view.activeOrder.includes(parsed.data)) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: `行情源 ${parsed.data} 未启用，先启用并保存后再测试`,
+          issues: [],
+        },
+      });
+    }
+    if (typeof market.probeSource !== 'function') {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'adapter_error',
+          adapter: market.name,
+          cause: '当前行情适配器不支持主动探测',
+          recoverable: false,
+        },
+      });
+    }
+    const probes = await market.probeSource(parsed.data);
+    // 探测后重新聚合一次运行态，前端直接用响应里的 settings 刷新列表
+    const fresh = marketSettingsStore.read();
+    const status = await invokeTool('get_market_data_status', {});
+    const datasets = status.ok
+      ? (status.data as { datasets?: MarketDatasetStatusRow[] }).datasets
+      : undefined;
+    const settings = Array.isArray(datasets) ? withRuntimeStatus(fresh, datasets) : fresh;
+    return jsonResult({ ok: true, data: { probes, settings } });
   });
 
   // ===== 飞书通知设置 =====
@@ -990,7 +1200,20 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         researchVaultSettingsStore.runtimeEnv(),
       );
       if (researchVault === undefined) throw new Error('Vault 配置未生效');
-      ctxRef.current = { ...ctxRef.current, researchVault };
+      const researchVaultGitSync = createResearchVaultGitSyncAdapterFromEnv(
+        researchVaultSettingsStore.runtimeEnv(),
+        {
+          backupRoot: join(
+            dirname(dataTransferDbPath ?? resolveDbPath()),
+            'backups',
+            'research-vault',
+          ),
+        },
+      );
+      const nextContext = { ...ctxRef.current, researchVault };
+      delete nextContext.researchVaultGitSync;
+      ctxRef.current =
+        researchVaultGitSync === undefined ? nextContext : { ...nextContext, researchVaultGitSync };
       return jsonResult({ ok: true, data: { ...saved, applied: true } });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -1012,6 +1235,23 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       });
     }
+  });
+
+  app.get('/api/research/remote-sync/status', async () =>
+    jsonResult(await getResearchVaultRemoteSyncStatusTool.execute({}, contextForRequest())),
+  );
+
+  app.post('/api/research/remote-sync', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(
+      await syncResearchVaultRemoteWorkflow.run(
+        { ...body.data, mode: 'manual' },
+        contextForRequest(),
+      ),
+    );
   });
 
   app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
@@ -1124,18 +1364,29 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     accountPerformanceResponse(c, contextForRequest().user.defaultAccountId),
   );
   app.get('/api/accounts/:id/performance', (c) => accountPerformanceResponse(c, c.req.param('id')));
-  app.get('/api/accounts/:id/performance/snapshots', async (c) =>
+  const accountPerformanceSnapshotsResponse = async (
+    c: Context,
+    accountId: string,
+  ): Promise<Response> =>
     jsonResult(
       await listPortfolioPerformanceSnapshotsTool.execute(
         {
-          accountId: c.req.param('id'),
+          accountId,
           ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
         },
         contextForRequest(),
       ),
-    ),
+    );
+  app.get('/api/account/performance/snapshots', (c) =>
+    accountPerformanceSnapshotsResponse(c, contextForRequest().user.defaultAccountId),
   );
-  app.get('/api/accounts/:id/performance/snapshot-audit', async (c) => {
+  app.get('/api/accounts/:id/performance/snapshots', (c) =>
+    accountPerformanceSnapshotsResponse(c, c.req.param('id')),
+  );
+  const accountPerformanceSnapshotAuditResponse = async (
+    c: Context,
+    accountId: string,
+  ): Promise<Response> => {
     const from = c.req.query('from');
     const to = c.req.query('to');
     if (from === undefined || to === undefined) {
@@ -1151,7 +1402,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult(
       await auditPortfolioPerformanceSnapshotsTool.execute(
         {
-          accountId: c.req.param('id'),
+          accountId,
           from,
           to,
           ...(c.req.query('limit') === undefined ? {} : { limit: c.req.query('limit') }),
@@ -1159,7 +1410,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         contextForRequest(),
       ),
     );
-  });
+  };
+  app.get('/api/account/performance/snapshot-audit', (c) =>
+    accountPerformanceSnapshotAuditResponse(c, contextForRequest().user.defaultAccountId),
+  );
+  app.get('/api/accounts/:id/performance/snapshot-audit', (c) =>
+    accountPerformanceSnapshotAuditResponse(c, c.req.param('id')),
+  );
 
   /**
    * 切换当前激活账户：浏览器把账户 id 保存到 localStorage，后续请求通过
@@ -1314,6 +1571,83 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   // HTML route for SPA shell
   app.get('/market/limit-up', serveFile('index.html', 'text/html; charset=utf-8'));
 
+  /**
+   * 行业板块行情（fetch_sector_quotes tool；实时快照，无缓存）。
+   *
+   * 参数：
+   *   sort (可选) changePct | amount，默认 changePct
+   *   limit (可选) 1-200，默认 50
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/market/sectors', async (c) => {
+    const input: Record<string, unknown> = {};
+    const sort = c.req.query('sort');
+    if (sort !== undefined) input.sort = sort;
+    const limit = c.req.query('limit');
+    if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const r = await invokeTool('fetch_sector_quotes', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  // HTML route for SPA shell
+  app.get('/market/sectors', serveFile('index.html', 'text/html; charset=utf-8'));
+
+  /**
+   * 财经要闻（fetch_news tool；7×24 滚动流，无缓存）。
+   *
+   * 参数：
+   *   limit (可选) 1-100，默认 30
+   *   category / keyword (可选) 透传 tool
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/news', async (c) => {
+    const input: Record<string, unknown> = {};
+    const limit = c.req.query('limit');
+    if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const category = c.req.query('category');
+    if (category !== undefined) input.category = category;
+    const keyword = c.req.query('keyword');
+    if (keyword !== undefined) input.keyword = keyword;
+    const r = await invokeTool('fetch_news', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
+  /**
+   * 龙虎榜（dragon_tiger_list tool；Manager 自带缓存与节假日历）。
+   *
+   * 参数：
+   *   date (可选) YYYY-MM-DD；缺省时 manager 自动回溯最近交易日
+   *
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  app.get('/api/dragon-tiger', async (c) => {
+    const input: Record<string, unknown> = {};
+    const date = c.req.query('date');
+    if (date !== undefined) input.date = date;
+    const r = await invokeTool('dragon_tiger_list', input);
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
   app.get('/api/trades', (c) => {
     const input: Record<string, unknown> = {};
     const stockId = c.req.query('stockId');
@@ -1441,11 +1775,113 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       strategyId: c.req.param('id'),
     }),
   );
-  app.post('/api/strategies/:id/run', (c) =>
-    targetMutation(c.req.raw, 'external', 'run_strategy', {
+  app.post('/api/strategies/:id/run', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    const run = await invokeTool('run_strategy', {
+      ...body.data,
+      strategyId: c.req.param('id'),
+    });
+    if (!run.ok || typeof run.data !== 'object' || run.data === null) return jsonResult(run);
+    const payload = run.data as {
+      readonly run?: { readonly id?: unknown; readonly status?: unknown };
+      readonly persisted?: unknown;
+    } & Record<string, unknown>;
+    if (
+      payload.persisted !== true ||
+      typeof payload.run?.id !== 'string' ||
+      payload.run.status === 'failed'
+    ) {
+      return jsonResult(run);
+    }
+    const synced = await syncStrategyWatchlistSubscriptionsTool.execute(
+      { strategyId: c.req.param('id'), producerRunId: payload.run.id },
+      contextForRequest(),
+    );
+    return jsonResult({
+      ...run,
+      data: {
+        ...payload,
+        watchlistSync: synced.ok
+          ? synced.data
+          : {
+              status: 'failed',
+              error:
+                'message' in synced.error
+                  ? synced.error.message
+                  : 'cause' in synced.error
+                    ? synced.error.cause
+                    : synced.error.kind,
+            },
+      },
+    });
+  });
+  app.get('/api/strategies/:id/watchlists', (c) =>
+    callTool('list_strategy_watchlist_subscriptions', {
+      strategyId: c.req.param('id'),
+      status: 'active',
+    }),
+  );
+  app.post('/api/strategies/:id/watchlists', (c) =>
+    targetMutation(c.req.raw, 'write', 'subscribe_strategy_to_watchlist', {
       strategyId: c.req.param('id'),
     }),
   );
+  app.delete('/api/strategies/:id/watchlists/:watchlistId', (c) =>
+    targetMutation(c.req.raw, 'write', 'unsubscribe_strategy_from_watchlist', {
+      strategyId: c.req.param('id'),
+      watchlistId: c.req.param('watchlistId'),
+    }),
+  );
+  app.get('/api/strategies/:id/strict-backtests', async (c) => {
+    const result = await listStrictStrategyBacktestsTool.execute(
+      { strategyId: c.req.param('id'), limit: 50 },
+      contextForRequest(),
+    );
+    return jsonResult(result);
+  });
+  app.get('/api/strategies/:id/strict-backtests/:backtestRunId', async (c) => {
+    const result = await getStrictStrategyBacktestTool.execute(
+      { backtestRunId: c.req.param('backtestRunId') },
+      contextForRequest(),
+    );
+    if (!result.ok) return jsonResult(result);
+    if (result.data.run === null || result.data.run.spec.strategyId !== c.req.param('id')) {
+      return jsonResult(notFound('StrictStrategyBacktest', c.req.param('backtestRunId')));
+    }
+    return jsonResult(result);
+  });
+  app.post('/api/strategies/:id/strict-backtests', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    const parsed = StrictStrategyBacktestRequest.safeParse(body.data);
+    if (!parsed.success) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '严格回测参数无效',
+          issues: parsed.error.issues,
+        },
+      });
+    }
+    const created = await createStrictStrategyBacktestTool.execute(
+      { strategyId: c.req.param('id'), ...parsed.data },
+      contextForRequest(),
+    );
+    if (!created.ok) return jsonResult(created);
+    if (created.data.run.status === 'queued') {
+      startStrictBacktestJob(created.data.run.id, c.req.param('id'));
+    }
+    return jsonResult(
+      { ok: true, data: { run: created.data.run } },
+      created.data.run.status === 'queued' ? 202 : 200,
+    );
+  });
   app.get('/api/strategies/:id/backtests/:sessionId', async (c) => {
     const session = await getEvaluationSession({
       sessionId: c.req.param('sessionId'),
@@ -2211,6 +2647,43 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult({ ok: true, data: { indices: [] } });
   });
 
+  /**
+   * 指数当日分时（fetch_intraday_minutes tool；tencent 分钟端点仅沪深，恒指不支持）。
+   *
+   * 参数：code (必填) 指数代码，白名单见 INDEX_INTRADAY_STOCK_IDS
+   * 降级：数据源不支持 → { ok: true, data: { supported: false, points: [] } }（200）；
+   * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
+   */
+  const INDEX_INTRADAY_STOCK_IDS: Readonly<Record<string, string>> = {
+    '000001': '000001.SH', // 上证指数
+    '399001': '399001.SZ', // 深证成指
+    '399006': '399006.SZ', // 创业板指
+    '000300': '000300.SH', // 沪深300
+    '000688': '000688.SH', // 科创50
+  };
+  app.get('/api/market/indices/intraday', async (c) => {
+    const code = c.req.query('code') ?? '';
+    const stockId = INDEX_INTRADAY_STOCK_IDS[code];
+    if (stockId === undefined) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: `不支持的指数 code: ${code === '' ? '(空)' : code}（可选 ${Object.keys(INDEX_INTRADAY_STOCK_IDS).join('/')}）`,
+          issues: [],
+        },
+      });
+    }
+    const r = await invokeTool('fetch_intraday_minutes', { stockId });
+    if (r.ok) return jsonResult(r);
+    if (r.error.kind === 'invalid_input') return jsonResult(r);
+    // 解析 / 上游错误 → 502
+    return new Response(JSON.stringify(r), {
+      status: 502,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  });
+
   app.get('/api/workflow-runs', (c) => {
     const limit = Number(c.req.query('limit') ?? '30');
     return callTool('list_workflow_runs', {
@@ -2314,6 +2787,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (subjectId !== undefined && subjectId.length > 0) input.subjectId = subjectId;
     return callTool('get_advice_stats', input);
   });
+
+  // 建议删除（单个 = 单元素 ids）；write 能力门控与 delete_report 一致。
+  app.post('/api/advice/delete', (c) => targetMutation(c.req.raw, 'write', 'delete_advice'));
 
   app.get('/api/reports', (c) => {
     const input: Record<string, unknown> = {};
@@ -2524,8 +3000,18 @@ export interface StartWebOptions {
   readonly host?: string;
   /** 缺省 resolveDbPath()（$LUOOME_HOME/luoome.db）。 */
   readonly dbPath?: string;
+  /** write API 与后台任务必须显式开启；缺省读取 LUOOME_EXPOSE_WRITE。 */
+  readonly exposeWrite?: boolean;
+  /** external API 与后台任务必须显式开启；缺省读取 LUOOME_EXPOSE_EXTERNAL。 */
+  readonly exposeExternal?: boolean;
   /** 仅供测试缩短 tick；生产固定每分钟检查一次。 */
   readonly strategySchedulerIntervalMs?: number;
+  /** 仅供启动级测试关闭立即 tick；生产缺省立即检查。 */
+  readonly strategySchedulerStartImmediately?: boolean;
+  /** 仅供测试缩短 tick；生产每五分钟检查一次盘后账户绩效快照。 */
+  readonly portfolioPerformanceSchedulerIntervalMs?: number;
+  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
+  readonly portfolioPerformanceSchedulerFactory?: typeof startPortfolioPerformanceScheduler;
 }
 
 export interface WebServerHandle {
@@ -2540,35 +3026,60 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   const marketSettingsStore = new MarketSettingsStore(process.env);
   const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);
   const feishuSettingsStore = new FeishuSettingsStore(process.env);
-  const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv());
+  // composition root 持有进程级 SourceSet（§4.7）：主装配与热更新共用同一实例
+  const sources: WebSourceSet = { eastmoney: new EastmoneySource() };
+  const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv(), { sources });
   const aiSettingsStore = new AISettingsStore(process.env);
   const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
+  const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
+  const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
   const app = createWebApp(ctx, {
+    exposeWrite,
+    exposeExternal,
     aiSettingsStore,
     marketSettingsStore,
     researchVaultSettingsStore,
     feishuSettingsStore,
     dataTransferDbPath: dbPath,
+    sources,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
   const scheduler = startStrategyScheduler(ctx, {
     intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
+    ...(options.strategySchedulerStartImmediately === undefined
+      ? {}
+      : { startImmediately: options.strategySchedulerStartImmediately }),
   });
+  const portfolioPerformanceScheduler =
+    exposeWrite && exposeExternal
+      ? (options.portfolioPerformanceSchedulerFactory ?? startPortfolioPerformanceScheduler)(ctx, {
+          intervalMs:
+            options.portfolioPerformanceSchedulerIntervalMs ??
+            PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
+        })
+      : undefined;
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
-  if (process.env.LUOOME_EXPOSE_WRITE !== 'true') {
+  if (!exposeWrite) {
     ctx.logger.info(
       'write 能力未开启：设置 LUOOME_EXPOSE_WRITE=true 后重启可启用持仓/预警等写操作',
     );
   }
-  if (process.env.LUOOME_EXPOSE_EXTERNAL !== 'true') {
+  if (!exposeExternal) {
     ctx.logger.info(
       'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
+    );
+  }
+  if (portfolioPerformanceScheduler === undefined) {
+    ctx.logger.info(
+      `账户绩效盘后快照调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
+      { exposeWrite, exposeExternal },
     );
   }
   return {
     port: server.port ?? options.port,
     stop: (closeActiveConnections) => {
       scheduler.stop();
+      portfolioPerformanceScheduler?.stop();
       server.stop(closeActiveConnections);
     },
   };

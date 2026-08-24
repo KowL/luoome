@@ -17,6 +17,7 @@ import {
   sanitizeAdviceReasoning,
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
+import { resolveQuotes } from '../internal/resolve-quotes.js';
 
 const DAY_MS = 86_400_000;
 const DEFAULT_LOOKBACK_DAYS = 60;
@@ -108,15 +109,19 @@ const collectQuotes = async (
     theme !== undefined && theme.length > 0
       ? stocks.filter((s) => s.industry?.includes(theme) || s.name.includes(theme))
       : stocks;
+  // 统一行情获取（批量 + 落库 + 缓存兜底）；涨幅统计只用实时行情，
+  // 本地快照可能是旧交易日的，混入会扭曲全市场平均涨幅。
+  const resolved = await resolveQuotes(
+    ctx,
+    filtered.slice(0, 50).map((s) => s.id),
+    { context: 'display' },
+  );
   const quotes: QuoteLike[] = [];
-  for (const s of filtered.slice(0, 50)) {
-    try {
-      const q = await ctx.adapters.market.fetchQuote(s.id);
-      const changePct = q.open === 0 ? 0 : (q.close - q.open) / q.open;
-      quotes.push({ stockId: s.id, ts: q.ts, close: q.close, open: q.open, changePct });
-    } catch (e) {
-      ctx.logger.warn('[market_outlook] fetchQuote failed', { stockId: s.id, err: String(e) });
-    }
+  for (const item of resolved) {
+    if (item.status !== 'ok' || item.retrieval !== 'live') continue;
+    const q = item.quote;
+    const changePct = q.open === 0 ? 0 : (q.close - q.open) / q.open;
+    quotes.push({ stockId: item.stockId, ts: q.ts, close: q.close, open: q.open, changePct });
   }
   return quotes;
 };

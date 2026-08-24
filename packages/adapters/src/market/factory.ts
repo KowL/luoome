@@ -1,10 +1,12 @@
 import type { Logger, MarketCoverage, MarketDataAdapterLike } from '@luoome/core';
 import { parseMarketProviderConfigFromEnv } from '@luoome/core';
 import { z } from 'zod';
-
+import { EastmoneySource } from '../eastmoney/source.js';
+import { fuyaoConfigFromEnv } from '../fuyao/client.js';
+import { FuyaoSource } from '../fuyao/source.js';
+import type { SourceResultObservation } from '../source-registry.js';
 import { tushareConfigFromEnv } from '../tushare/client.js';
 import { QuoteCache } from './cache.js';
-import { EastmoneyAdapter } from './eastmoney.js';
 import { MarketDataManager } from './manager.js';
 import { SinaAdapter } from './sina.js';
 import { type AnyMarketCapabilityBinding, MarketSourceRegistry } from './source-registry.js';
@@ -32,9 +34,11 @@ export interface CreateMarketAdapterDeps {
   readonly sourceOrder?: readonly MarketSourceId[];
   /** 覆盖 QuoteCache TTL（默认 60s）；盘中高频刷新的 surface（如 Web）可调小。 */
   readonly quoteCacheTtlMs?: number;
+  /** 组装根共享的供应商实例；注入时对应分支复用而不自构（§4.6）。 */
+  readonly sources?: { readonly eastmoney?: EastmoneySource; readonly fuyao?: FuyaoSource };
 }
 
-export const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'tushare']);
+export const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'tushare', 'fuyao']);
 export type MarketSourceId = z.infer<typeof MarketSourceIdSchema>;
 
 export const MarketSourceOrderSchema = z
@@ -80,7 +84,7 @@ export const createMarketAdapterFromEnv = (
   const bindings = sourceOrder.flatMap((source) => {
     switch (source) {
       case 'eastmoney': {
-        const adapter = new EastmoneyAdapter(sourceOpts);
+        const adapter = deps.sources?.eastmoney ?? new EastmoneySource(sourceOpts);
         return eastmoneyBindings(adapter);
       }
       case 'tencent': {
@@ -94,6 +98,10 @@ export const createMarketAdapterFromEnv = (
       case 'tushare': {
         const adapter = buildTushare(env, sourceOpts, deps.logger);
         return tushareBindings(adapter);
+      }
+      case 'fuyao': {
+        const adapter = deps.sources?.fuyao ?? buildFuyao(env, sourceOpts, deps.logger);
+        return fuyaoBindings(adapter);
       }
       default:
         throw new Error(`不支持的行情数据源：${String(source satisfies never)}`);
@@ -126,18 +134,36 @@ const buildTushare = (
   return new TushareMarketAdapter({ ...sourceOpts, config, logger });
 };
 
+/** fuyao 被显式排入路由时要求配置完整，避免 UI 显示已启用但运行时静默跳过。 */
+const buildFuyao = (
+  env: Readonly<Record<string, string | undefined>>,
+  sourceOpts: { clock?: () => Date; fetchImpl?: typeof fetch },
+  logger: Logger,
+): FuyaoSource => {
+  const apiKey = env.FUYAO_API_KEY;
+  if (apiKey === undefined || apiKey.trim().length === 0) {
+    throw new Error('fuyao 已启用，但 FUYAO_API_KEY 未配置');
+  }
+  const config = fuyaoConfigFromEnv(env);
+  return new FuyaoSource({ ...sourceOpts, config, logger });
+};
+
 const CN_SH_SZ = ['CN_A_SHARES_SH_SZ'] as const satisfies readonly MarketCoverage[];
 const CN_ALL = ['CN_A_SHARES_SH_SZ', 'CN_A_SHARES_BJ'] as const satisfies readonly MarketCoverage[];
+
+/** binding 契约：resolved 结果统一视为 success；dataAsOf 有则更新、无则清除（§4.3）。 */
+const successObservation = (dataAsOf: Date | undefined): SourceResultObservation =>
+  dataAsOf === undefined ? { outcome: 'success' } : { outcome: 'success', dataAsOf };
 
 const commonBindings = (
   adapter: {
     readonly name: string;
-    fetchQuote(stockId: string): ReturnType<EastmoneyAdapter['fetchQuote']>;
+    fetchQuote(stockId: string): ReturnType<EastmoneySource['fetchQuote']>;
     fetchDailyBars(
       stockId: string,
-      range: Parameters<EastmoneyAdapter['fetchDailyBars']>[1],
-    ): ReturnType<EastmoneyAdapter['fetchDailyBars']>;
-    searchStocks(query: string): ReturnType<EastmoneyAdapter['searchStocks']>;
+      range: Parameters<EastmoneySource['fetchDailyBars']>[1],
+    ): ReturnType<EastmoneySource['fetchDailyBars']>;
+    searchStocks(query: string): ReturnType<EastmoneySource['searchStocks']>;
   },
   coverage: readonly MarketCoverage[],
 ): AnyMarketCapabilityBinding[] => [
@@ -147,7 +173,7 @@ const commonBindings = (
     coverage,
     configurationReady: true,
     execute: ({ stockId }) => adapter.fetchQuote(stockId),
-    dataAsOf: (quote) => quote.observedAt,
+    observationOf: (quote) => successObservation(quote.observedAt),
   },
   {
     capability: 'daily-bars',
@@ -155,7 +181,7 @@ const commonBindings = (
     coverage,
     configurationReady: true,
     execute: ({ stockId, range }) => adapter.fetchDailyBars(stockId, range),
-    dataAsOf: (bars) => bars.at(-1)?.date,
+    observationOf: (bars) => successObservation(bars.at(-1)?.date),
   },
   {
     capability: 'search',
@@ -163,17 +189,36 @@ const commonBindings = (
     coverage,
     configurationReady: true,
     execute: ({ query }) => adapter.searchStocks(query),
+    observationOf: () => ({ outcome: 'success' }),
   },
 ];
 
-const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBinding[] => [
+const eastmoneyBindings = (adapter: EastmoneySource): AnyMarketCapabilityBinding[] => [
   ...commonBindings(adapter, CN_ALL),
+  {
+    capability: 'batch-quote',
+    source: adapter.name,
+    coverage: CN_ALL,
+    configurationReady: true,
+    execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
+    observationOf: (quotes) =>
+      successObservation(
+        quotes.reduce<Date | undefined>(
+          (latest, quote) =>
+            latest === undefined || quote.observedAt.getTime() > latest.getTime()
+              ? quote.observedAt
+              : latest,
+          undefined,
+        ),
+      ),
+  },
   {
     capability: 'market-snapshot',
     source: adapter.name,
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: () => adapter.fetchMarketSnapshot(),
+    observationOf: () => ({ outcome: 'success' }),
   },
   {
     capability: 'market-snapshot-envelope',
@@ -181,7 +226,7 @@ const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBindin
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: () => adapter.fetchMarketSnapshotEnvelope(),
-    dataAsOf: (snapshot) => snapshot.dataAsOf,
+    observationOf: (snapshot) => successObservation(snapshot.dataAsOf),
   },
   {
     capability: 'realtime-index',
@@ -189,10 +234,12 @@ const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBindin
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: () => adapter.fetchIndexQuotes(),
-    dataAsOf: (indices) =>
-      indices.reduce<Date | undefined>(
-        (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
-        undefined,
+    observationOf: (indices) =>
+      successObservation(
+        indices.reduce<Date | undefined>(
+          (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
+          undefined,
+        ),
       ),
   },
 ];
@@ -200,11 +247,29 @@ const eastmoneyBindings = (adapter: EastmoneyAdapter): AnyMarketCapabilityBindin
 const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] => [
   ...commonBindings(adapter, CN_ALL),
   {
+    capability: 'batch-quote',
+    source: adapter.name,
+    coverage: CN_ALL,
+    configurationReady: true,
+    execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
+    observationOf: (quotes) =>
+      successObservation(
+        quotes.reduce<Date | undefined>(
+          (latest, quote) =>
+            latest === undefined || quote.observedAt.getTime() > latest.getTime()
+              ? quote.observedAt
+              : latest,
+          undefined,
+        ),
+      ),
+  },
+  {
     capability: 'market-snapshot',
     source: adapter.name,
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: () => adapter.fetchMarketSnapshot(),
+    observationOf: () => ({ outcome: 'success' }),
   },
   {
     capability: 'market-snapshot-envelope',
@@ -212,7 +277,7 @@ const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] 
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: () => adapter.fetchMarketSnapshotEnvelope(),
-    dataAsOf: (snapshot) => snapshot.dataAsOf,
+    observationOf: (snapshot) => successObservation(snapshot.dataAsOf),
   },
   {
     capability: 'intraday-minutes',
@@ -220,7 +285,7 @@ const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] 
     coverage: CN_ALL,
     configurationReady: true,
     execute: ({ stockId }) => adapter.fetchIntradayMinutes(stockId),
-    dataAsOf: (points) => points.at(-1)?.time,
+    observationOf: (points) => successObservation(points.at(-1)?.time),
   },
 ];
 
@@ -231,22 +296,80 @@ const sinaBindings = (adapter: SinaAdapter): AnyMarketCapabilityBinding[] => [
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: ({ stockId, range }) => adapter.fetchDailyBars(stockId, range),
-    dataAsOf: (bars) => bars.at(-1)?.date,
+    observationOf: (bars) => successObservation(bars.at(-1)?.date),
   },
 ];
 
 const tushareBindings = (adapter: TushareMarketAdapter): AnyMarketCapabilityBinding[] => [
   ...commonBindings(adapter, CN_SH_SZ),
   {
+    capability: 'minute-bars',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockId, interval }) => adapter.fetchMinuteBars(stockId, interval),
+    observationOf: (bars) => successObservation(bars.at(-1)?.endedAt),
+  },
+  {
     capability: 'delayed-index',
     source: adapter.name,
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: () => adapter.fetchIndexQuotes(),
-    dataAsOf: (indices) =>
-      indices.reduce<Date | undefined>(
-        (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
-        undefined,
+    observationOf: (indices) =>
+      successObservation(
+        indices.reduce<Date | undefined>(
+          (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
+          undefined,
+        ),
+      ),
+  },
+];
+
+/**
+ * fuyao 绑定：quote / daily-bars / search + market-snapshot + delayed-index。
+ * 指数快照时效未经实盘验证前只绑 delayed-index（不绑 realtime-index）；
+ * 无分钟线端点，minute-bars / intraday-minutes 不绑（调用方得到明确 unsupported_capability）。
+ */
+const fuyaoBindings = (adapter: FuyaoSource): AnyMarketCapabilityBinding[] => [
+  ...commonBindings(adapter, CN_SH_SZ),
+  {
+    capability: 'batch-quote',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
+    observationOf: (quotes) =>
+      successObservation(
+        quotes.reduce<Date | undefined>(
+          (latest, quote) =>
+            latest === undefined || quote.observedAt.getTime() > latest.getTime()
+              ? quote.observedAt
+              : latest,
+          undefined,
+        ),
+      ),
+  },
+  {
+    capability: 'market-snapshot',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchMarketSnapshot(),
+    observationOf: () => ({ outcome: 'success' }),
+  },
+  {
+    capability: 'delayed-index',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchIndexQuotes(),
+    observationOf: (indices) =>
+      successObservation(
+        indices.reduce<Date | undefined>(
+          (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
+          undefined,
+        ),
       ),
   },
 ];

@@ -230,8 +230,11 @@
 - benchmark/excess return、MFE/MAE、分位数和行业/score/edge 分组描述统计。
 - 观察统计已统一按 `stock-day-horizon` 去重：同一股票、交易日、观察周期只保留一个可追溯代表样本，
   Tool/Web/AI facts 同步展示完整样本、唯一股票、缺失率、分位数、超额、MFE/MAE、benchmark 与观察截止日。
+- Strategy → Watchlist 首个竖向切片已完成：用户显式创建持久订阅后，只有 published operational run
+  才能投影；complete/partial/failed、可信空结果、来源隔离和同一 producerRun 幂等语义已接入
+  SQLite/in-memory、Tool、workflow、Web/API/UI 与测试。
 
-**当前交付切片**（2026-08-14）：
+**当前交付切片**（2026-08-20）：
 
 1. **S0 当前改动收口 ✅**：publication/`dataAsOf` 安全修复、策略模板升级、replay 汇总与
    Web 历史评估入口已完成；
@@ -242,6 +245,8 @@
    已补上 workflow 进程中断后的 stale running 审计收敛、生产日循环显式同步并审计
    `000300.SH:qfq:daily:v1` benchmark，以及 50 张表的 Drizzle/SQLite
    schema drift 契约（逐表列与显式索引）；剩余跨交易日 P50/P95/max 样本；
+   本轮再补 schedule/data 有界运营参数、数据准备后/发布后/下游副作用前 fencing 复核、实际
+   provider/baseline/fallback 与 T+1/T+3/T+5/T+20 审计字段，并提供可重复运维 Runbook；
    非只读 Tool 的 JSONL audit log 已接入 CLI/MCP/TUI/Web 四个生产入口，文件权限、元数据审计和 Advice
    prompt-injection 清理均有测试；Tool 的 input issues、InvariantError、handler 和 output schema
    错误出口统一脱敏；release checklist 已完成逐项复核，但不改变 S3 生产观测要求。
@@ -260,15 +265,16 @@
 5. **S3 生产观测 ⏳**：按真实开市日持续记录 schedule、lease、checkpoint、publication、观察补全、
    AI 降级和通知事实；不设固定交易日数量的完成门禁。
 
-**未关闭项分类（2026-08-14）**：
+**未关闭项分类（2026-08-20）**：
 
 - **真实运行观测**：S3 当前已有 2 个正式真实交易日，后续继续积累真实运行样本；样本数量不再作为固定完成门禁。
 - **真实数据门禁**：v0.10 更长历史、持续快照审计和缺失日期重放必须等待对应 PIT universe 在真实交易日沉淀。
 - **独立产品/数据决策**：天梯 Strategy DSL 的当前/正式日与 PIT replay 已冻结并实现；跨交易日快照仍需
-  持续积累，炸板/断板历史仍需可审计数据源；两项都不允许用当前快照、情绪接口或 mock 推断。
+  持续积累。炸板/断板定义、审计信封和候选源门禁已于 2026-08-15 冻结，但真实凭据/修订验收尚未
+  通过，字段保持未注册；两项都不允许用当前快照、情绪接口、rolling 空响应或 mock 推断。
 - **安全立项**：Web 账户级鉴权尚未定义，当前 `X-Luoome-Account-Id` 只解决 request-scoped 串账户，不能作为认证。
 
-**下一步开发顺序（2026-08-14 决策）**：
+**下一步开发顺序（2026-08-20 决策）**：
 
 1. **P0 真实数据验收（基础 smoke 已完成）**：真实 Tencent 指数 `day` 口径已接入；31 个交易日
    benchmark、账户现金流与交易事实的 SQLite 文件库，以及双账户/拆股语义 smoke 已通过。随后用
@@ -311,7 +317,7 @@ failed=0；8/13 的 PIT snapshot 为盘中固化版本且 vintage=unavailable。
 `X-Luoome-Account-Id` 形成 request-scoped context，并发 tab 不再共享可变账户上下文。该机制
 只解决上下文串扰，不替代账户级鉴权，后者仍需独立产品决策。
 
-**执行决策（2026-08-14）**：当前冻结横向功能扩张，开发顺序固定为“真实运行证据 → v0.10 验收收口
+**执行决策（2026-08-20）**：当前冻结横向功能扩张，开发顺序固定为“真实运行证据 → v0.10 验收收口
 → 新需求立项”。S3 作为持续观测项推进，允许在观察期间修复可靠性缺陷、补测试/观测/文档和重跑
 已有真实 PIT 数据；缺数据必须保留 `not_found` / `partial` / `failed`，不得使用 mock 或当前快照补齐。
 R5 早期突破 v2、完整迁移生成、Web 账户级鉴权分别等待用户确认或产品决策，不与当前门禁并行扩大。
@@ -357,7 +363,7 @@ advancing/declining/unchanged=1,083/4,041/83，total=5,207，warnings 为空。
 v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不包含组合净值、费用、滑点、停牌/涨跌停
 可交易性或收益承诺，不是严格收益回测。
 
-## v0.10 — 账户绩效与组合归因 🚧（契约与首个竖向切片已完成）
+## v0.10 — 账户绩效与组合归因 🚧（持续快照代码链已完成，生产证据积累中）
 
 **目标**：补齐 Advice、Trade、Holding 和 Outcome 之后的账户级真实复盘，回答“账户实际表现如何、
 收益来自哪里、哪些结论因数据缺失不可用”。
@@ -370,7 +376,7 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
 - 接入账户复盘页、周报和 Agent 只读事实；
 - 用入金、出金、分红、停牌、缺价和多账户 fixture 验证确定性与隔离性。
 
-**已实现切片（截至 2026-08-14）**：
+**已实现切片（截至 2026-08-20）**：
 
 - core 已冻结现金流、公司行动、估值日、完整度、贡献归因和 benchmark 输出 schema；
 - Drizzle / in-memory 双仓储与合约测试已接入，现金流和公司行动均按账户隔离；
@@ -382,6 +388,13 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
 - TWR 排除外部现金流，支持拆股/送转、分红、费用、已实现/未实现 PnL、最大回撤、benchmark
   与超额收益，并对缺价保持 `partial/unavailable`。
 - `portfolio_performance_snapshots` 按账户、区间和输入事实指纹幂等保存结果、`dataAsOf` 与计算时间；生产默认 benchmark 为沪深300（`000300.SH`），可用环境变量覆盖。
+- `snapshot-account-performance` workflow 通过 `ctx.tools.*` 为全部或显式账户生成滚动历史快照；账户级
+  完成即持久化，中断重跑复用同指纹结果，输入事实变化产生新版本且旧版本可追溯。WorkflowRun 保存
+  新建/复用、完整/部分/失败、价格序列、日线量和耗时预算，不记录私人账本明细。
+- 账户价格序列以最多 8 路并发读取；默认 365 日，可显式扩大到 3,660 日，单次最多 1,000 账户。
+  Web 长期进程在 A 股交易日 16:00 后触发盘后快照；同进程防重，重启重复触发由指纹幂等收敛。
+- 区间审计按最新快照修订选择逐日事实并返回 `revisionCount`，不会用旧 complete 遮蔽新 partial；Web
+  复盘页展示快照版本、输入指纹、`dataAsOf`、预算事实和逐交易日缺口。当前账户与显式账户均有只读端点。
 - 收盘复盘的 `group-changes` 已通过 `list_watchlists` + `list_watchlist_changes` 生成当日 entered/
   exited/unchanged 汇总；无同步记录或上游失败时标记缺失，不把空数据伪造成完整变化。
 **依赖与边界**：
@@ -399,7 +412,11 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
   3 日区间审计返回 3/3 complete、无 missing/gaps；✅ 真实 2 日 ×
   500 只完整及 3 日 × 500 只部分完成后台历史评估浏览器 smoke（逐日进度、完成结果、取消与
   `not_found` 语义）；✅ 周报账户区块已接入区间估值、TWR 与最大回撤并完成真实浏览器回归；✅ 收盘
-  复盘分组变化接入真实 Watchlist 变化工具；⏳ 更长历史任务验收与持续快照审计，确认缺失原因可见；
+  复盘分组变化接入真实 Watchlist 变化工具；✅ 持续快照 workflow/scheduler、断点幂等、修订追溯和 Web
+  审计入口已完成；✅ 独立真实 Sina + SQLite 的 2025-08-21～2026-08-20 长区间首跑约 3.46 秒，
+  242 条持仓 bars 与 242 条 benchmark bars 形成 partial 快照，同事实重跑复用旧快照；真实 Chrome
+  可见 2 个版本、251 个日历预期交易日和 9 个未填 0 的 partial 缺口；⏳ 内置交易日历与真实休市日的
+  权威校准、大账户生产规模及跨交易日连续调度证据继续积累；
 - 持续验证默认 benchmark 数据覆盖，不把缺失 benchmark 显示为可用；
 - 将绩效事实纳入周报展示和浏览器回归，完成产品验收后再标记 v0.10 完成。
 **验收**：
@@ -412,7 +429,6 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
 ## v0.11+ 候选方向（未立项）
 
 - Agent 协作体验 Phase 0～2：统一场景、公开计划、工具轨迹、部分失败和闭环复盘草案；
-- 显式 opt-in 的 Strategy → Watchlist source 投影，complete 才结束来源，partial/failed 只标 stale；
 - 基本面、资金流和 A 股短线事件 Evidence Adapter；
 - 连板天梯历史数据源与体验增强。
 
@@ -425,7 +441,7 @@ v0.9 的历史区间能力固定称为“历史评估/历史回放”。它不�
 - ❌ 真实券商自动下单（合规 + 资金风险）
 - ❌ 云同步账户数据（local-first 默认）
 - ❌ 多用户 / 团队功能（个人工具）
-- ❌ 跟单 / 策略订阅（个人 advisor，不是平台）
+- ❌ 跨用户跟单、公开策略市场或平台级策略订阅（个人 advisor，不是平台）
 - ❌ 移动原生 App（Web PWA 优先）
 - ❌ 在费用、滑点、可交易性、公司行动和版本门禁缺失时输出严格回测收益、胜率或 Sharpe
 

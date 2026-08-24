@@ -19,6 +19,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { resolveQuotes } from '../internal/resolve-quotes.js';
 import {
   readStrategySignalsByStock,
   StrategySignalScopeSchema,
@@ -175,8 +176,8 @@ const quoteChangePct = (quote: Quote | undefined): number | undefined => {
 export const listStrategyResultViewsTool = defineTool({
   name: 'list_strategy_result_views',
   description:
-    '查询 Strategy 当前或指定运行的股票池、候选池及数据不完整视图；默认基准为最近一次已完成且结果可用的运行',
-  sideEffect: 'read',
+    '查询 Strategy 当前或指定运行的股票池、候选池及数据不完整视图；默认基准为最近一次已完成且结果可用的运行；行情实时拉取，上游失败回退本地快照',
+  sideEffect: 'external',
   input: ListStrategyResultViewsInput,
   output: ListStrategyResultViewsOutput,
   handler: async (input, ctx) => {
@@ -217,6 +218,8 @@ export const listStrategyResultViewsTool = defineTool({
         );
       });
     }
+    // 排序键仍用本地快照：排序需要全量行，对全池实时拉取代价过大；
+    // 仅当前页的展示值走实时拉取。
     const quoteByStockForSort =
       input.sort === 'price' || input.sort === 'change-pct'
         ? await ctx.repos.quote.latestByStocks(views.map((view) => view.result.stockId))
@@ -251,8 +254,15 @@ export const listStrategyResultViewsTool = defineTool({
     });
     const total = views.length;
     const page = views.slice(input.offset, input.offset + input.limit);
-    const quoteByStock = await ctx.repos.quote.latestByStocks(
+    const resolvedQuotes = await resolveQuotes(
+      ctx,
       page.map((view) => view.result.stockId),
+      { context: 'display' },
+    );
+    const quoteByStock = new Map(
+      resolvedQuotes.flatMap((item) =>
+        item.status === 'ok' ? [[item.stockId, item.quote] as const] : [],
+      ),
     );
     return {
       run,

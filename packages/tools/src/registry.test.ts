@@ -14,6 +14,9 @@ const EXPECTED_TOOL_NAMES = [
   'list_trades',
   'get_advice',
   'get_advice_stats',
+  'get_decision_loop_review',
+  'get_financial_facts',
+  'get_fundamental_score',
   'analyze_stock',
   'analyze_strategy_candidate',
   'analyze_position',
@@ -22,8 +25,11 @@ const EXPECTED_TOOL_NAMES = [
   'batch_quote',
   'fetch_index_quotes',
   'fetch_intraday_minutes',
+  'get_stock_minute_bars',
   'sync_quotes',
   'sync_daily_bars',
+  'sync_financial_facts',
+  'run_fundamental_score',
   'get_previous_closes',
   'search_stocks',
   'compute_indicators',
@@ -33,6 +39,9 @@ const EXPECTED_TOOL_NAMES = [
   'create_strategy',
   'delete_strategy',
   'create_strategy_version',
+  'export_strategy_manifest',
+  'validate_strategy_manifest',
+  'import_strategy_manifest',
   'compare_strategy_definitions',
   'propose_strategy_version_draft',
   'trial_strategy_version',
@@ -50,15 +59,21 @@ const EXPECTED_TOOL_NAMES = [
   'finish_strategy_evaluation_session',
   'resume_strategy_evaluation_session',
   'cancel_strategy_evaluation_session',
+  'create_strict_strategy_backtest',
+  'get_strict_strategy_backtest',
+  'list_strict_strategy_backtests',
   'list_strategy_runs',
   'get_strategy_run',
   'get_strategy_workspace',
   'list_strategy_result_views',
   'compare_strategy_runs',
+  'run_local_selector_research',
+  'assess_adaptive_personality',
   'strategy_signals_by_stock',
   // Strategy Phase B：调度、真实表现补全与事实型 AI 洞察
   'list_pending_strategy_observations',
   'complete_strategy_observations',
+  'get_signal_observation_stats',
   'create_strategy_observation_candidates',
   'get_strategy_insight_facts',
   'generate_strategy_insight',
@@ -77,12 +92,16 @@ const EXPECTED_TOOL_NAMES = [
   'update_watchlist_member',
   'archive_watchlist_member',
   'list_watchlist_changes',
+  'list_strategy_watchlist_subscriptions',
+  'subscribe_strategy_to_watchlist',
+  'unsubscribe_strategy_from_watchlist',
   // Strategy + 统一 Watchlist W4
   'list_alert_plans',
   'create_alert_plan',
   'update_alert_plan',
   'delete_alert_plan',
   'record_advice_outcome',
+  'delete_advice',
   'send_notification',
   'market_outlook',
   // v0.5 新增
@@ -98,6 +117,8 @@ const EXPECTED_TOOL_NAMES = [
   'set_watch_trigger_feedback',
   // ruo 迁移 Phase 1（docs/ddd/ruo-feature-migration-detailed-design.md §7）
   'list_research_topics',
+  'create_research_hypothesis_version',
+  'list_research_hypothesis_versions',
   'get_research_topic',
   'create_research_topic',
   'create_research_document',
@@ -108,9 +129,14 @@ const EXPECTED_TOOL_NAMES = [
   'list_research_documents',
   'get_research_document',
   'search_research_documents',
+  'get_research_embedding_status',
+  'search_research_documents_hybrid',
+  'rebuild_research_embeddings',
+  'evaluate_research_embeddings',
   'build_research_brief',
   'get_stock_research_view',
   'sync_research_vault',
+  'get_research_vault_remote_sync_status',
   'list_stock_events',
   'add_stock_event',
   'update_stock_event',
@@ -129,6 +155,14 @@ const EXPECTED_TOOL_NAMES = [
   // Phase 1：连板天梯
   'limit_up_ladder',
   'limit_up_ladder_compare',
+  // 龙虎榜（只读）
+  'dragon_tiger_list',
+  // 北向资金历史流（只读）
+  'northbound_flow',
+  // 财经要闻（只读）
+  'fetch_news',
+  // 行业板块行情（只读）
+  'fetch_sector_quotes',
   // 持久化 AI 对话会话
   'create_chat_session',
   'list_chat_sessions',
@@ -168,12 +202,35 @@ describe('toolRegistry', () => {
     ]);
   });
 
+  it('get_stock_minute_bars 声明 external + write 组合能力', () => {
+    expect(toolRegistry.get('get_stock_minute_bars')?.requiredCapabilities).toEqual([
+      'external',
+      'write',
+    ]);
+  });
+
+  it('sync_financial_facts 声明 external + write 组合能力', () => {
+    expect(toolRegistry.get('sync_financial_facts')?.requiredCapabilities).toEqual([
+      'external',
+      'write',
+    ]);
+  });
+
+  it('fundamental score tools use the required read/write capability split', () => {
+    expect(toolRegistry.get('run_fundamental_score')?.sideEffect).toBe('write');
+    expect(toolRegistry.get('run_fundamental_score')?.requiredCapabilities).toEqual(['write']);
+    expect(toolRegistry.get('get_fundamental_score')?.sideEffect).toBe('read');
+    expect(toolRegistry.get('get_fundamental_score')?.requiredCapabilities).toEqual(['read']);
+  });
+
   it('W6：legacy、内部 commit/sync/migration 与 trade 不进入公共 registry', () => {
     const names = toolRegistry.all().map((tool) => tool.name);
     expect(names.filter((name) => name.startsWith('migration_'))).toEqual([]);
     for (const hidden of [
       'sync_watchlist_source',
+      'sync_strategy_watchlist_subscriptions',
       'record_watch_run',
+      'pull_research_vault_git',
       'record_workflow_run',
       'save_report',
       'save_watch_trigger',
@@ -219,6 +276,7 @@ describe('toolRegistry', () => {
     expect(externalTools).toEqual([
       'agent_run',
       'batch_quote',
+      'evaluate_research_embeddings',
       'fetch_index_quotes',
       'fetch_intraday_minutes',
       'fetch_quote',
@@ -226,12 +284,17 @@ describe('toolRegistry', () => {
       'get_account_performance',
       'get_ashare_sentiment',
       'get_stock_market_view',
+      'get_stock_minute_bars',
       'import_remote_research_document',
+      'list_strategy_result_views',
       'prepare_strategy_data',
       'propose_strategy_version_draft',
+      'rebuild_research_embeddings',
       'run_strategy',
+      'search_research_documents_hybrid',
       'send_notification',
       'sync_daily_bars',
+      'sync_financial_facts',
       'sync_quotes',
       'sync_stock_events',
       'sync_stock_universe',
@@ -261,11 +324,14 @@ describe('toolRegistry', () => {
       'create_portfolio_cash_flow',
       'create_portfolio_corporate_action',
       'create_research_document',
+      'create_research_hypothesis_version',
       'create_research_topic',
       'create_strategy',
       'create_strategy_observation_candidates',
       'create_strategy_version',
+      'create_strict_strategy_backtest',
       'create_watchlist',
+      'delete_advice',
       'delete_alert_plan',
       'delete_chat_session',
       'delete_report',
@@ -282,10 +348,13 @@ describe('toolRegistry', () => {
       'renew_strategy_schedule_claim',
       'resume_strategy',
       'resume_strategy_evaluation_session',
+      'run_fundamental_score',
       'set_strategy_schedule',
       'set_watch_trigger_feedback',
       'start_strategy_evaluation_session',
+      'subscribe_strategy_to_watchlist',
       'sync_research_vault',
+      'unsubscribe_strategy_from_watchlist',
       'update_alert_plan',
       'update_holding',
       'update_stock_event',

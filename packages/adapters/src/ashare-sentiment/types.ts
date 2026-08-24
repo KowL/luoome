@@ -1,8 +1,6 @@
 export const A_SHARE_SENTIMENT_COVERAGE = 'CN_A_SHARES_SH_SZ' as const;
 export type AShareSentimentCoverage = typeof A_SHARE_SENTIMENT_COVERAGE;
 
-export type AShareSentimentCapability = 'limit-up' | 'broken-board' | 'themes';
-
 export interface AShareSentimentRawEntry {
   readonly stockId: string;
   readonly name: string;
@@ -27,19 +25,32 @@ export type AShareSentimentRawPool =
       readonly errorMessage: string;
     };
 
-export interface AShareSentimentRawSnapshot {
-  readonly date: string;
-  readonly coverage: AShareSentimentCoverage;
-  readonly source: string;
-  readonly sealed: AShareSentimentRawPool;
-  readonly broken: AShareSentimentRawPool;
-}
-
-export interface AShareSentimentSource {
+/**
+ * 池级情绪源（docs/ddd/source-pluggability-and-observation-design.md §4.2/§4.3）。
+ *
+ * 封板 / 炸板是两个独立 capability：manager 分别路由、分别 fallback 后再组装快照，
+ * 单池失败不被整体成功掩盖。池级失败以 ok:false 池返回（存量结果契约），不抛错。
+ */
+export interface AShareSentimentPoolSource {
   readonly name: string;
-  readonly capabilities: readonly AShareSentimentCapability[];
-  fetch(input: {
+  fetchSealedPool(input: {
     readonly date: string;
     readonly coverage: AShareSentimentCoverage;
-  }): Promise<AShareSentimentRawSnapshot>;
+  }): Promise<AShareSentimentRawPool>;
+  fetchBrokenPool(input: {
+    readonly date: string;
+    readonly coverage: AShareSentimentCoverage;
+  }): Promise<AShareSentimentRawPool>;
 }
+
+/** 情绪域的 capability map（SourceRegistry 实例化，§6.2）。 */
+export type AShareSentimentCapabilityMap = {
+  readonly 'sentiment-sealed-pool': {
+    readonly request: { readonly date: string; readonly coverage: AShareSentimentCoverage };
+    readonly result: AShareSentimentRawPool;
+  };
+  readonly 'sentiment-broken-pool': {
+    readonly request: { readonly date: string; readonly coverage: AShareSentimentCoverage };
+    readonly result: AShareSentimentRawPool;
+  };
+};

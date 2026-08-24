@@ -5,7 +5,7 @@ import {
   DailyBarRevisionSchema,
   DailyBarSchema,
 } from '@luoome/core';
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { dailyBarRevisions, dailyBars, type Schema } from '../../schema/index.js';
@@ -204,6 +204,53 @@ export class DrizzleDailyBarRepository implements DailyBarRepository {
       .where(and(...conditions))
       .orderBy(dailyBarRevisions.date, dailyBarRevisions.recordedAt, dailyBarRevisions.contentHash)
       .all()
+      .map((row) => ({
+        stockId: row.stockId,
+        date: row.date,
+        contentHash: row.contentHash,
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+        volume: row.volume,
+        source: row.source,
+        recordedAt: row.recordedAt,
+      }));
+  }
+
+  async listRevisionsForStocks(input: {
+    readonly stockIds: readonly string[];
+    readonly from?: Date;
+    readonly to?: Date;
+    readonly recordedAt?: Date;
+  }): Promise<readonly DailyBarRevision[]> {
+    const stockIds = [...new Set(input.stockIds)].sort();
+    if (stockIds.length === 0) return [];
+    const rows: (typeof dailyBarRevisions.$inferSelect)[] = [];
+    for (let index = 0; index < stockIds.length; index += 400) {
+      const chunk = stockIds.slice(index, index + 400);
+      const conditions = [inArray(dailyBarRevisions.stockId, chunk)];
+      if (input.from !== undefined) conditions.push(gte(dailyBarRevisions.date, input.from));
+      if (input.to !== undefined) conditions.push(lte(dailyBarRevisions.date, input.to));
+      if (input.recordedAt !== undefined) {
+        conditions.push(lte(dailyBarRevisions.recordedAt, input.recordedAt));
+      }
+      rows.push(
+        ...this.db
+          .select()
+          .from(dailyBarRevisions)
+          .where(and(...conditions))
+          .all(),
+      );
+    }
+    return rows
+      .sort(
+        (left, right) =>
+          left.stockId.localeCompare(right.stockId) ||
+          left.date.getTime() - right.date.getTime() ||
+          left.recordedAt.getTime() - right.recordedAt.getTime() ||
+          left.contentHash.localeCompare(right.contentHash),
+      )
       .map((row) => ({
         stockId: row.stockId,
         date: row.date,

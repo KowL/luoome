@@ -1,7 +1,7 @@
 # 研究主题与 Obsidian Vault 详细设计
 
-> 状态：Phase A/B、Phase C、Phase D(M3 managed 创建/导入) 与 Phase E(M4 FTS/ResearchBrief/Agent 草案门控) 已实施
-> 日期：2026-08-01
+> 状态：Phase A～G 已实施；Phase F 采用独立 Git-only 安全同步 workflow，Phase G 完成 embedding 检索/跨模型评测
+> 日期：2026-08-20
 > 范围：研究主题、研究文档、研究对象关联、Obsidian Vault、可重建索引、全文检索、研究时间线与 Agent 检索
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)、[AI 投资决策闭环](../prd/ai-investment-decision-loop.md)、[ruo 能力迁移产品设计](../prd/ruo-feature-migration-product-design.md)
 > 替代关系：本文替代 [ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md) 中 `ResearchNote`、股票研究档案正文存储和对应 Tool/Web 设计；原文的 `StockEvent`、`DataProvenance`、`WorkflowRun` 与事件规则继续有效
@@ -59,7 +59,7 @@
 - 依赖 Obsidian 桌面进程才能读取正文；
 - 依赖仍处于 beta 的 Obsidian Headless 作为基础能力；
 - OCR、复杂表格还原、公式识别和图片语义理解；
-- 向量数据库或跨用户共享研究库；
+- 专用向量数据库或跨用户共享研究库；
 - 从产业研究自动推导全部产业成分股；
 - 因研究资料更新自动生成 Advice 或交易动作。
 
@@ -627,21 +627,55 @@ packages/adapters/src/research-vault/factory.ts
 
 ### 7.3 Git 与 Obsidian Sync
 
-首期把外部仓库视为“用户已经同步到本地的 Vault 路径”：
+Phase F 只实现 Git workflow，不同时实现 Obsidian Headless。决策依据是：现有用户需求是把已受
+Git 管理的本地 Vault 安全拉到最新；本地已有稳定 Git，而 [Obsidian Headless 官方文档](https://obsidian.md/help/headless)
+在设计时仍标为 open beta，且本机没有对应 CLI。Git 路径更小、可本地真实验收，也不要求把
+Obsidian 账号凭证交给 luoome。Headless 不作为 fallback；未来若需求变化须另写决策。
 
-- luoome 不执行 git clone/pull/commit/push；
-- 用户可用 Git、Obsidian Sync、iCloud 等方式管理目录；
-- 工作树冲突文件按普通无效 Markdown 报告；
-- `.git` 永不进入扫描和日志。
+实现边界：
 
-后续如实现远端同步，新增独立 external workflow，不把 Git 或 Obsidian Headless 混进 Vault Adapter。它必须：
+- `GitResearchVaultSyncAdapter` 是独立 external port/adapter，不属于 `ResearchVaultAdapterLike`；
+- Obsidian 与 Git adapter 复用同一安全根校验；Git adapter 仍在自身 constructor 独立拒绝文件系统
+  根、用户 home、当前项目根和 `.obsidian` 保留目录，不能依赖 Obsidian adapter 先成功装配；
+- `pull_research_vault_git` 是 workflow-only Tool，不注册到通用 Tool Registry，也不通过 MCP 暴露；
+- `sync-research-vault-remote` workflow 先经 `ctx.tools.pull_research_vault_git`，成功后再经既有
+  `ctx.tools.sync_research_vault` 确定性重建 SQLite 索引；Workflow 不直接调用 adapter/repository；
+- 只有 `LUOOME_RESEARCH_REMOTE_SYNC=git` 才装配 adapter；Web 调用还必须同时开启
+  `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true`，并通过同源 Origin 校验和用户确认；
+- `.git` 永不进入 Vault 扫描、Tool 输出或日志。
 
-- 显式 opt-in；
-- pull 前检查工作树；
-- 只允许 fast-forward；
-- 冲突时停止，不自动 reset、rebase 或选边；
-- 不自动 commit 或 push；
-- Obsidian Headless 仍为 beta 时不得成为默认路径。
+一次 pull 的确定性协议：
+
+1. 验证 Vault 本身就是 Git 工作树根、HEAD 非 detached、当前分支有 upstream，且不存在
+   merge/rebase/cherry-pick/revert/bisect 等未完成操作；
+2. 用 `git status --porcelain=v1 -z --untracked-files=all` 检查 tracked/untracked 均为空；fetch 后
+   再用 NUL 分隔的 `diff --name-only --no-renames` 与 `ls-files --others --ignored` 比较 incoming
+   写入/删除路径和本地 ignored-untracked 路径；同路径或文件/目录祖先冲突时拒绝 fast-forward，
+   但不因无关 ignored 缓存存在而失败；
+3. remote 只允许 HTTPS、SSH 或本地路径；拒绝 HTTP、`ext::`、自定义 uploadpack、以参数符号开头
+   的值以及 HTTPS URL 内嵌认证信息；
+4. 关闭交互式凭证提示、hooks、submodule recurse 和 tags 后执行显式 remote fetch；fetch 支持
+   1–300 秒超时与取消，并终止整个 Git 子进程组；stderr 不收集，避免 remote 诊断泄漏凭证 URL；
+5. fetch 后再次检查工作树和未完成操作；若本地已最新或领先则不改工作树；若双方分叉则失败；
+6. 只有 `HEAD` 是 upstream 祖先时，先创建当前 HEAD 的 Git bundle，再执行
+   `git merge --ff-only --no-edit <已解析 upstream commit>`；不运行普通 `git pull`；
+7. fast-forward 后再次确认工作树干净，随后才允许索引重建。
+
+备份写入 `$LUOOME_HOME/backups/research-vault/<vault-hash>/<backupId>.bundle`（Web 使用数据库同级
+目录）。constructor 会沿 backupRoot 最近存在祖先解析真实路径，拒绝 backupRoot 等于 Vault 或位于
+Vault 内，避免创建 hooks/bundle 自己污染待同步工作树。目录 `0700`、文件 `0600`。备份失败则
+工作树不更新；系统不自动轮转或删除备份。恢复是单独的人工操作：先用
+`git bundle verify <bundle>`，再把 bundle clone 到新的恢复目录进行检查，按需复制文件或由用户
+明确选择 Git 恢复命令。luoome 绝不自动 reset/rebase/选边，也不把恢复动作混入失败处理。
+
+Web 远端同步 POST 必须是合法 JSON 对象；空体或畸形 JSON 均返回 `invalid_input`，不得进入
+external workflow。设置热更新每次都替换或显式清除 Git adapter，撤销
+`LUOOME_RESEARCH_REMOTE_SYNC=git` 后 status 和 POST 在当前进程立即变为未配置。
+
+取消或超时发生在 fetch/集成前时，本轮 `WorkflowRun` 记 `failed`，工作树不更新。开始本地
+fast-forward 后忽略取消且不设强制超时，避免 checkout 半更新；该原子步骤完成后继续索引和审计。
+Git 成功而索引失败时返回 `partial`，保留 backupId 与 provider 状态；Vault 文件仍为权威来源，
+再次运行既有本地索引流程即可修复投影。任何路径都不自动 clone、commit 或 push。
 
 ## 8. SQLite 投影与 Repository
 
@@ -716,6 +750,31 @@ research_vault_sync_runs
 - started_at INTEGER NOT NULL
 - finished_at INTEGER
 - error TEXT
+
+research_chunk_embeddings
+- document_id TEXT NOT NULL
+- ordinal INTEGER NOT NULL
+- content_hash TEXT NOT NULL
+- provider TEXT NOT NULL
+- model TEXT NOT NULL
+- dimensions INTEGER NOT NULL
+- version TEXT NOT NULL
+- vector_json TEXT NOT NULL
+- embedded_at INTEGER NOT NULL
+- PRIMARY KEY (document_id, ordinal, provider, model, dimensions, version)
+
+research_embedding_index_states
+- provider TEXT NOT NULL
+- model TEXT NOT NULL
+- dimensions INTEGER NOT NULL
+- version TEXT NOT NULL
+- status TEXT NOT NULL
+- expected_chunks INTEGER NOT NULL
+- embedded_chunks INTEGER NOT NULL
+- stale_chunks INTEGER NOT NULL
+- updated_at INTEGER NOT NULL
+- diagnostic TEXT
+- PRIMARY KEY (provider, model, dimensions, version)
 ```
 
 索引：
@@ -771,8 +830,22 @@ Tool 不感知 Drizzle transaction 类型。
 - 保留 heading path 和 ordinal；
 - 代码块、表格和 callout 尽量整体保留；
 - 每个 chunk 记录文档 contentHash，hash 变化才重建；
-- 首期只做 FTS，不引入 embedding；
+- FTS5 始终是确定性基线；embedding 是可选、可重建的外部 capability；
 - Agent 引用返回 `documentId + relativePath + headingPath + quote`，quote 最大 500 字符。
+
+### 8.4 Embedding 投影与失效
+
+- 模型 identity 固定为 `provider + model + dimensions + version`；任一字段变化都创建独立投影，旧行不参与新 identity 查询；
+- 每行 embedding 同时记录 chunk 的 `contentHash`。chunk 被替换、文档缺失或 hash 改变后，该行立即失效，不能进入语义命中；
+- `rebuild_research_embeddings` 只读取当前 identity 的缺失/失效 chunk，按 `maxChunks` 增量处理；投影可从 Vault chunk 完整重建，不进入数据导出；
+- 状态区分 `empty / building / ready / partial / failed / stale`，并报告 expected、embedded、stale；只有 `ready` 才能把零命中解释为完整语义索引上的零命中；
+- Drizzle 和 memory 实现复用 repository contract tests；Drizzle schema 与 `ensureSchema` DDL 同步；
+- 混合检索以 Reciprocal Rank Fusion 合并 FTS 与语义排名。embedding 未配置、无覆盖或调用失败时稳定返回 FTS5/metadata 基线，同时 `complete=false` 和 diagnostic；
+- 混合结果继续生成真实 chunk `EvidenceRef`，保留反证、风险、unknowns，并明确 Vault 正文中的指令是不可信数据。
+
+### 8.5 固定跨模型评测
+
+`evaluate_research_embeddings` 使用版本化 `research-retrieval-v1`：6 条固定语料、5 条带相关性判定的查询，逐模型报告 Recall@K、MRR、provider 返回的 token usage、估算成本和实测调用延迟。单模型失败记录 `status=failed`，不补造指标，也不丢弃其它模型结果。该评测只比较当前固定判定集，不等同于真实生产质量结论；没有真实 provider 配置和调用记录时不得声称完成生产验收。
 
 ## 9. Vault 同步算法
 
@@ -925,6 +998,11 @@ input = {
 - 类型化 timeline。
 
 不按 `Stock.industry` 自动带入全部行业 Topic。
+
+返回同时包含 `profile` 研究读模型：它只由显式 stock SubjectLink 和可追溯结构化事实重建，分开
+列出 `evidence`、`counterEvidence`、`unknowns`、`limitations`、`coverage` 与 `factsAsOf`。Profile
+不包含收益概率、Strategy 发布状态或 Advice 结论；索引、研究链接或反证不可用时必须保留
+`unavailable/unknown`，不能用空结果伪装完整研究。
 
 ### 11.2 写 Tool
 
@@ -1163,12 +1241,18 @@ LUOOME_EXPOSE_RESEARCH=true
 
 未开启时只不注册正文读取和搜索 Tool；Topic/Document 写 Tool 仍同时受 `LUOOME_EXPOSE_WRITE=true` 控制，URL 导入还受 `LUOOME_EXPOSE_EXTERNAL=true` 控制。不得在日志、Tool trace 和错误中输出正文、绝对路径、认证信息或完整私人 thesis。
 
+Embedding 还需要 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 和模型目录显式启用。重建会把 chunk 正文发给目录指定的外部 provider，同时要求 `external + write`；查询会把用户查询发给 provider，跨模型评测会发送固定公开评测集，均要求 `external`。模型目录只保存 `apiKeyEnv` 名称，密钥只从环境读取；请求正文、查询、向量和密钥不得写日志。Web 必须在语义开关旁提示外部发送边界，默认仍使用本地 FTS5。
+
 ### 16.3 Git 与同步风险
 
 - luoome 不判断 Git remote 是否公开；设置页必须提示 Vault 可能包含私人投资数据；
 - 不自动把 `.obsidian`、凭证、账户数据或数据库复制进 Vault；
-- Obsidian Sync/Headless 凭证由其官方客户端管理，不进入 luoome env dump 和 SQLite；
-- 远端同步冲突不会由 luoome 自动覆盖。
+- Git 凭证只由本机 credential helper、SSH agent 或系统凭证管理器提供；禁用终端提示，不保存到
+  luoome env、SQLite、Tool 输出、WorkflowRun 或日志；
+- remote URL 和 Git stderr 不进入审计；状态接口只返回 `configured` 与 `provider=git`；
+- fast-forward 前的 bundle 是本地敏感备份，固定 `0600`，需与 Vault 一样保护；
+- 远端同步冲突、分叉、脏工作树和未完成 Git 操作都停止，不由 luoome 自动覆盖；
+- Obsidian Sync/Headless 不在 Phase F 实现或 fallback 路径中。
 
 ## 17. 错误与降级
 
@@ -1180,10 +1264,17 @@ LUOOME_EXPOSE_RESEARCH=true
 | 重复 luoome_id | run partial + conflict | 不选胜者，保留旧投影 |
 | Document 缺附件 | available + warning | 正文可用则仍可检索 |
 | FTS5 不可用 | capability unavailable | metadata 搜索可用，不返回伪完整结果 |
+| embedding 未配置/无覆盖 | `complete=false` | 返回 FTS5/metadata 基线，不把零命中冒充完整 |
+| embedding provider 失败 | `adapter_error` 或 hybrid 降级 | 重建标 failed；查询保留确定性基线 |
+| 模型 identity/hash 变化 | stale/partial | 旧向量不参与命中，增量重建当前 identity |
 | Obsidian 未安装 | 正文仍可读 | open URI 由客户端决定 |
 | URL 抓取失败 | `adapter_error` | 不写 managed Document |
 | SQLite apply 失败 | `internal` | Vault 文件不回滚，下次扫描修复 |
 | Vault 文件被外部修改 | hash mismatch | managed patch 拒绝，提示重新同步 |
+| Git 工作树脏/操作未完成 | `adapter_error(recoverable=true)` | pull 前停止，不 fetch/集成 |
+| Git 分叉或 remote 不安全 | `adapter_error(recoverable=false)` | 停止，不 reset/rebase/选边 |
+| Git fetch 取消/超时 | `adapter_error(recoverable=true)` | 终止进程组，工作树不更新，WorkflowRun failed |
+| Git 已更新、索引失败 | WorkflowRun `partial` | 保留 bundle 与 Vault 文件，下次确定性重建索引 |
 
 所有 surface 消费 `ToolResult`；adapter 异常不得直接泄漏。
 
@@ -1319,20 +1410,30 @@ drizzle 与 memory 共同覆盖：
 - SubjectLink 草案；
 - 固定评测集和 prompt injection 测试。
 
-### Phase F：可选远端同步
+### Phase F：可选远端同步（已实施，2026-08-20）
 
-- 根据真实需求选择 Git workflow 或 Obsidian Headless；
-- 先完成凭证、冲突、备份与恢复设计；
-- 不改变 Vault 文件作为权威来源的契约。
+- 选择独立 Git-only workflow；未同时实现 Obsidian Headless；
+- 完成双 opt-in、凭证隔离、干净工作树、仅 fast-forward、备份/人工恢复、超时/取消和冲突停止；
+- 远端 pull 与本地 Vault Adapter 分离，成功后只通过既有索引 Tool 确定性重建；
+- `WorkflowRun` 审计 `succeeded / partial / failed` 与 Git/index provider 状态，不记录路径或凭证；
+- 不改变 Vault 文件作为权威来源的契约，不自动 clone、commit 或 push。
 
-依赖顺序：A → B → C；D 与 E 在 B 后可并行；F 最后评估。
+### Phase G：Embedding 检索与跨模型评测（已实施，2026-08-20）
+
+- 可重建 chunk embedding 投影、identity 与增量失效；
+- OpenAI-compatible 多模型 adapter 与显式外部 capability；
+- FTS5 + embedding 混合检索、稳定降级与不完整语义；
+- 固定判定集上的 Recall@K、MRR、延迟、token 和成本对比；
+- Tool、Web、Agent 白名单、双 repository contract tests 与安全文档同步。
+
+依赖顺序：A → B → C；D 与 E 在 B 后可并行；G 依赖 E；F 最后评估。
 
 ## 21. 验收标准
 
 - Topic 可以不关联股票，也可以显式关联多只股票；
 - 产业、事件、主题、宏观研究是一等入口，不伪装成股票笔记；
 - 一个 Document 可以属于多个 Topic；
-- Vault 是唯一权威正文，SQLite 中的 metadata、excerpt、chunk 和 FTS 可完全重建；
+- Vault 是唯一权威正文，SQLite 中的 metadata、excerpt、chunk、FTS 和 embedding 投影可完全重建；
 - StockEvent 不依赖 Vault，提醒、幂等和状态行为不回归；
 - 股票研究页只消费显式关联，不自动扩散行业噪声；
 - Vault 文件移动、缺失、损坏和重复 id 都有确定性行为；
@@ -1352,10 +1453,11 @@ drizzle 与 memory 共同覆盖：
 7. 研究时间线是类型化读模型，不新增万能事件表。
 8. 首期直接文件系统接入 Vault，不要求 Obsidian 插件或桌面进程。
 9. 默认 index-only；luoome 只在 managed root 内创建文件。
-10. 不自动 Git pull/commit/push，不依赖 Obsidian Headless。
+10. 远端同步默认关闭；显式 Git workflow 只做受控 fetch + fast-forward，不自动 clone/commit/push，
+    不依赖 Obsidian Headless。
 11. 不按产业自动扩散到全部股票，股票关联必须显式确认。
 12. 当前无 ResearchNote 数据，旧模型硬切，旧物理表不 DROP、不读。
-13. 全文搜索先用可重建 FTS5，embedding 延后。
+13. FTS5 是确定性基线；embedding 是显式、可重建且允许稳定降级的外部 capability。
 14. 外部资料始终是不可信数据，不能改变 Agent 指令或绕过权限。
 15. 研究更新不会自动生成 Advice，更不会触发交易。
 

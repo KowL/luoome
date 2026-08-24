@@ -1,21 +1,34 @@
 import type { AShareSentimentSnapshot } from './entity/ashare-sentiment.js';
+import type { DragonTigerList, DragonTigerListQuery } from './entity/dragon-tiger.js';
+import type {
+  FinancialFact,
+  FinancialMissingReason,
+  FinancialPeriodType,
+} from './entity/fundamental.js';
 import type {
   LimitUpLadder,
   LimitUpLadderDiff,
   LimitUpLadderQuery,
 } from './entity/limit-up-ladder.js';
 import type { MarketSnapshot, MarketSnapshotItem } from './entity/market-snapshot.js';
+import type { MinuteBar, MinuteBarInterval } from './entity/minute-bar.js';
+import type { FetchNewsQuery, NewsList } from './entity/news.js';
+import type { NorthboundFlowQuery, NorthboundFlowSeries } from './entity/northbound-flow.js';
 import type { NotificationPayload } from './entity/notification.js';
 import type { DailyBar, DateRange, IndexQuote, IntradayMinute, Quote } from './entity/quote.js';
+import type { FetchSectorQuotesQuery, SectorQuoteList } from './entity/sector-quote.js';
 import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { ToolErrorKind } from './error/index.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type {
+  ResearchEmbeddingAdapterLike,
   ResearchRemoteImportAdapterLike,
   ResearchVaultAdapterLike,
+  ResearchVaultGitSyncAdapterLike,
 } from './research-vault.js';
+import type { SourceErrorKind, SourceStatus } from './source.js';
 import type { SideEffect } from './types/side-effect.js';
 
 /**
@@ -35,34 +48,32 @@ export interface MarketDataAdapterLike {
   fetchIndexQuotes(): Promise<readonly IndexQuote[]>;
   /** 当日分时分钟序列（瞬态视图，不落库）；不支持时以 unsupported_capability 拒绝。 */
   fetchIntradayMinutes(stockId: string): Promise<readonly IntradayMinute[]>;
+  /** 当前交易日的原生分钟 OHLCV；不支持时以 unsupported_capability 拒绝。 */
+  fetchMinuteBars(stockId: string, interval: MinuteBarInterval): Promise<readonly MinuteBar[]>;
   /** 全市场快照；不支持时以 unsupported_capability 拒绝。 */
   fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]>;
   /** 带来源、时间和分页完整性信封的全市场快照；不支持时以 unsupported_capability 拒绝。 */
   fetchMarketSnapshotEnvelope?(): Promise<MarketSnapshot>;
   /** 启用数据源与能力的动态库存及进程内健康观测。 */
   marketSourceStatus(): readonly MarketSourceStatus[];
+  /** 主动探测指定源的各 capability（设置页「测试」按钮）；直接执行 registry handle，不经过路由 / 缓存 / 限速。 */
+  probeSource?(source: string): Promise<readonly MarketSourceProbe[]>;
 }
 
-export interface MarketSourceStatus {
-  readonly dataset:
-    | 'quote'
-    | 'daily-bars'
-    | 'search'
-    | 'market-snapshot'
-    | 'market-snapshot-envelope'
-    | 'realtime-index'
-    | 'delayed-index'
-    | 'intraday-minutes'
-    | 'stock-universe'
-    | 'limit-up-ladder';
-  readonly source: string;
+/** 行情域的 SourceStatus 收窄别名：coverage 为 MarketCoverage；dataset 保持开放 string（与泛型 registry 解耦，新增 capability 不要求改 core）。 */
+export interface MarketSourceStatus extends Omit<SourceStatus, 'coverage'> {
   readonly coverage: readonly MarketCoverage[];
-  readonly capabilityEnabled: boolean;
-  readonly configurationReady: boolean;
-  readonly lastAttemptAt?: Date;
-  readonly lastSuccessAt?: Date;
-  readonly dataAsOf?: Date;
-  readonly lastErrorKind?: string;
+}
+
+/** 单项能力主动探测结果（设置页「测试」按钮）；capability 保持开放 string，理由同 MarketSourceStatus。 */
+export interface MarketSourceProbe {
+  readonly capability: string;
+  /** false 表示该源未绑定此能力，未执行探测。 */
+  readonly bound: boolean;
+  /** 探测结果；bound=false 时为 null。 */
+  readonly ok: boolean | null;
+  readonly errorKind?: SourceErrorKind;
+  readonly durationMs?: number;
 }
 
 export interface StockUniverseManagerLike {
@@ -73,6 +84,71 @@ export interface StockUniverseManagerLike {
     readonly source?: string;
   }): Promise<StockUniverseSnapshot>;
 }
+
+/**
+ * Phase 3 financial-fact gate. `not-ready` is the safe default until a source
+ * proves publication/revision metadata and real PIT coverage; it must not be
+ * inferred from transport success or fixture data.
+ */
+export type FundamentalDataGateStatus = 'not-ready' | 'evaluation-ready' | 'operational';
+
+export interface FundamentalDataGate {
+  readonly name: 'fundamental-data-gate-v1';
+  readonly status: FundamentalDataGateStatus;
+  readonly reasons: readonly string[];
+  readonly evaluatedAt: Date;
+}
+
+export type FundamentalIngestionIssueReason =
+  | FinancialMissingReason
+  | 'invalid-payload'
+  | 'unsupported-capability';
+
+/** Structured issue retained when a source row cannot become a FinancialFact. */
+export interface FundamentalIngestionIssue {
+  readonly source: string;
+  readonly reason: FundamentalIngestionIssueReason;
+  readonly message: string;
+  readonly observedAt: Date;
+  readonly stockId?: string;
+  readonly metricId?: string;
+  readonly periodType?: FinancialPeriodType;
+  readonly periodEnd?: Date;
+  readonly sourceRecordId?: string;
+  readonly sourceRevision?: string;
+}
+
+/** Raw revision query; adapters return all source revisions, leaving PIT choice to core. */
+export interface FundamentalDataQuery {
+  readonly stockIds: readonly string[];
+  readonly metricIds?: readonly string[];
+  readonly periodFrom?: Date;
+  readonly periodTo?: Date;
+}
+
+export interface FundamentalDataAdapterResult {
+  readonly source: string;
+  readonly gateStatus: FundamentalDataGateStatus;
+  readonly gate: FundamentalDataGate;
+  readonly revisions: readonly FinancialFact[];
+  readonly issues: readonly FundamentalIngestionIssue[];
+  readonly observedAt: Date;
+}
+
+/**
+ * Independent from MarketDataAdapterLike: current quote/daily-bar sources
+ * cannot satisfy the publication/revision PIT contract by being renamed.
+ */
+export interface FundamentalDataAdapterLike {
+  readonly name: string;
+  readonly source: string;
+  readonly gateStatus: FundamentalDataGateStatus;
+  readonly gate: FundamentalDataGate;
+  fetchFinancialFactRevisions(input: FundamentalDataQuery): Promise<FundamentalDataAdapterResult>;
+}
+
+export type FundamentalDataAdapterInput = FundamentalDataQuery;
+export type FundamentalDataAdapterOutput = FundamentalDataAdapterResult;
 
 /** 股票搜索候选（外部数据源统一形状；id = '<code>.<EXCHANGE>'）。 */
 export interface StockSearchCandidate {
@@ -203,6 +279,26 @@ export interface ToolContext {
    * tools 层通过 ctx.limitUpLadder.fetchLadder / compareLadder 访问。
    */
   readonly limitUpLadder?: LimitUpLadderManagerLike;
+  /**
+   * 龙虎榜 manager；顶层字段（与 limitUpLadder 同级），日级批量快照语义相同。
+   * tools 层通过 ctx.dragonTiger.fetchList 访问。
+   */
+  readonly dragonTiger?: DragonTigerManagerLike;
+  /**
+   * 北向资金日级历史流 manager；顶层字段（与 dragonTiger 同级），日级批量序列语义相同。
+   * tools 层通过 ctx.northboundFlow.fetchSeries 访问。
+   */
+  readonly northboundFlow?: NorthboundFlowManagerLike;
+  /**
+   * 财经要闻 manager；顶层字段（与 northboundFlow 同级），日级批量列表语义相同。
+   * tools 层通过 ctx.news.fetchNews 访问。
+   */
+  readonly news?: NewsManagerLike;
+  /**
+   * 行业板块行情 manager；顶层字段（与 news 同级），实时快照语义。
+   * tools 层通过 ctx.sectorQuote.fetchList 访问。
+   */
+  readonly sectorQuote?: SectorQuoteManagerLike;
   /** A 股日级情绪证据聚合器；外部源与维度降级封装在 adapters。 */
   readonly ashareSentiment?: AShareSentimentManagerLike;
   readonly user: {
@@ -217,11 +313,18 @@ export interface ToolContext {
   readonly auditCaller?: string;
   readonly researchVault?: ResearchVaultAdapterLike;
   readonly researchRemote?: ResearchRemoteImportAdapterLike;
+  /** 私人正文外发的 embedding capability；仅由 external tool 显式调用。 */
+  readonly researchEmbedding?: ResearchEmbeddingAdapterLike;
+  readonly researchVaultGitSync?: ResearchVaultGitSyncAdapterLike;
+  /** Surface 级取消信号；长外部操作只在安全取消点消费。 */
+  readonly abortSignal?: AbortSignal;
   /** 生产账户绩效的默认 benchmark；测试上下文可不注入以显式保持 unavailable。 */
   readonly portfolioBenchmark?: {
     readonly stockId: string;
     readonly name: string;
   };
+  /** Phase 3 P3-1：显式基本面数据 adapter；未注入时同步入口保持 unavailable。 */
+  readonly fundamentalData?: FundamentalDataAdapterLike;
 }
 
 export type AShareSentimentManagerResult =
@@ -240,6 +343,8 @@ export interface AShareSentimentManagerLike {
     readonly date: string;
     readonly coverage: 'CN_A_SHARES_SH_SZ';
   }): Promise<AShareSentimentManagerResult>;
+  /** 封板 / 炸板两个 capability 的进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
 }
 
 /**
@@ -310,4 +415,100 @@ export interface LimitUpLadderManagerLike {
     prevDate: string,
     query: Omit<LimitUpLadderQuery, 'date'>,
   ): Promise<LimitUpLadderCompareResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 龙虎榜 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 DragonTigerList（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface DragonTigerResultLike {
+  readonly ok: boolean;
+  readonly data?: DragonTigerList;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'dragon-tiger';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface DragonTigerManagerLike {
+  readonly name: 'dragon-tiger';
+  readonly sources: readonly string[];
+  fetchList(query: DragonTigerListQuery): Promise<DragonTigerResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 北向资金历史流 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 NorthboundFlowSeries（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface NorthboundFlowResultLike {
+  readonly ok: boolean;
+  readonly data?: NorthboundFlowSeries;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'northbound-flow';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface NorthboundFlowManagerLike {
+  readonly name: 'northbound-flow';
+  readonly sources: readonly string[];
+  fetchSeries(query: NorthboundFlowQuery): Promise<NorthboundFlowResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 财经要闻 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 NewsList（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface NewsResultLike {
+  readonly ok: boolean;
+  readonly data?: NewsList;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'news';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface NewsManagerLike {
+  readonly name: 'news';
+  readonly sources: readonly string[];
+  fetchNews(query: FetchNewsQuery): Promise<NewsResultLike>;
+  /** 进程内源健康观测（registry.describe()）。 */
+  status(): readonly SourceStatus[];
+}
+
+/**
+ * 行业板块行情 manager 投影。
+ * - core 不依赖 adapters；返回类型直接是 core 的 SectorQuoteList（manager 内部已组装为最终快照）
+ * - 失败/不可用 → 返回 { ok: false, error }，调用方按 ToolError 协议转译
+ */
+export interface SectorQuoteResultLike {
+  readonly ok: boolean;
+  readonly data?: SectorQuoteList;
+  readonly error?: {
+    readonly kind: 'adapter_error';
+    readonly adapter: 'sector-quote';
+    readonly message: string;
+    readonly recoverable: boolean;
+  };
+}
+
+export interface SectorQuoteManagerLike {
+  readonly name: 'sector-quote';
+  readonly sources: readonly string[];
+  fetchList(query: FetchSectorQuotesQuery): Promise<SectorQuoteResultLike>;
 }

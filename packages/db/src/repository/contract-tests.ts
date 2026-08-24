@@ -6,11 +6,20 @@ import {
   type AlertPlan,
   type ChatMessage,
   type ChatSession,
+  CURRENT_STRATEGY_EVALUATOR_IDENTITY,
   type DailyBar,
   type DailyBarRevision,
+  type FinancialFact,
+  FUNDAMENTAL_FACTOR_REGISTRY_HASH,
+  type FundamentalScoreResult,
+  type FundamentalScoreRun,
+  type FundamentalScoreVersion,
+  financialFactContentHash,
+  fundamentalScoreVersionDefinitionHash,
   type Holding,
   InvariantError,
   type LimitUpLadder,
+  type MinuteBar,
   money,
   type Notification,
   type PortfolioCashFlow,
@@ -21,6 +30,7 @@ import {
   type Report,
   type RepositoryRegistry,
   type ResearchDocumentIndex,
+  type ResearchHypothesisVersion,
   type ResearchTopicIndex,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
@@ -37,8 +47,15 @@ import {
   type StrategySchedule,
   type StrategySignal,
   type StrategyVersion,
+  type StrategyWatchlistSubscription,
+  type StrictBacktestGateAudit,
+  type StrictBacktestMarketFact,
+  type StrictBacktestRun,
+  type StrictBacktestSpec,
   stockCode,
   strategyDefinitionHash,
+  strictBacktestHash,
+  strictBacktestSpecHash,
   type Trade,
   type Watchlist,
   type WatchlistMemberSource,
@@ -68,6 +85,110 @@ const T2 = new Date('2026-07-03T01:00:00.000Z');
 const T3 = new Date('2026-07-04T01:00:00.000Z');
 const FAR_FUTURE = new Date('2099-01-01T00:00:00.000Z');
 const FAR_PAST = new Date('2000-01-01T00:00:00.000Z');
+
+const makeFundamentalScoreVersion = (
+  overrides: Partial<FundamentalScoreVersion> = {},
+): FundamentalScoreVersion => {
+  const draft = {
+    id: 'fundamental-score-v1',
+    version: 1,
+    registryVersion: 'fundamental-factor-registry-v1',
+    registryHash: FUNDAMENTAL_FACTOR_REGISTRY_HASH,
+    normalizationVersion: 'fundamental-normalization-v1' as const,
+    components: [
+      {
+        factorId: 'fundamental.profitability.roe',
+        weight: 1,
+        normalizer: 'market-percentile-v1' as const,
+      },
+    ],
+    missingPolicy: 'unknown' as const,
+    rounding: 'round-to-6-decimal' as const,
+    definitionHash: '0'.repeat(64),
+    status: 'published' as const,
+    createdAt: T0,
+    publishedAt: T1,
+    ...overrides,
+  } satisfies FundamentalScoreVersion;
+  return { ...draft, definitionHash: fundamentalScoreVersionDefinitionHash(draft) };
+};
+
+const makeFundamentalScoreRun = (
+  overrides: Partial<FundamentalScoreRun> = {},
+): FundamentalScoreRun =>
+  ({
+    id: 'score-run-1',
+    scoreVersionId: 'fundamental-score-v1',
+    scoreVersionHash: 'a'.repeat(64),
+    registryHash: FUNDAMENTAL_FACTOR_REGISTRY_HASH,
+    universeSyncId: 'universe-sync-1',
+    universeMemberChecksum: 'b'.repeat(64),
+    asOf: T2,
+    financialVintageKey: 'c'.repeat(64),
+    normalizerDenominatorHash: 'd'.repeat(64),
+    counts: { evaluated: 1, available: 1, missing: 0, excluded: 0 },
+    providerStatus: 'complete' as const,
+    evaluatorCodeIdentity: 'score-evaluator-test',
+    status: 'started' as const,
+    createdAt: T1,
+    ...overrides,
+  }) as FundamentalScoreRun;
+
+const makeFundamentalScoreResult = (
+  overrides: Partial<FundamentalScoreResult> = {},
+): FundamentalScoreResult =>
+  ({
+    scoreRunId: 'score-run-1',
+    stockId: '600519.SH',
+    status: 'available' as const,
+    score: 100,
+    rank: 1,
+    components: [
+      {
+        factorId: 'fundamental.profitability.roe',
+        rawValue: 20,
+        unit: 'percent-points' as const,
+        direction: 'higher' as const,
+        normalizedValue: 100,
+        contribution: 100,
+        sourceRevisionIds: ['fact-1'],
+      },
+    ],
+    dataAsOf: T2,
+    vintageKey: 'c'.repeat(64),
+    ...overrides,
+  }) as FundamentalScoreResult;
+
+const makeFinancialFact = (
+  id: string,
+  overrides: Partial<Omit<FinancialFact, 'contentHash'>> = {},
+): FinancialFact => {
+  const fact = {
+    id,
+    stockId: 'stk-1',
+    metricId: 'revenue',
+    periodType: 'annual' as const,
+    periodStart: new Date('2025-01-01T00:00:00.000Z'),
+    periodEnd: T1,
+    value: 100,
+    canonicalUnit: 'ratio' as const,
+    source: 'fixture',
+    sourceRecordId: `record-${id}`,
+    sourceRevision: 'r1',
+    publishedAt: T0,
+    revisionPublishedAt: T0,
+    recordedAt: T0,
+    status: 'reported' as const,
+    ...overrides,
+  } satisfies Omit<FinancialFact, 'contentHash'>;
+  return {
+    ...fact,
+    contentHash: financialFactContentHash({
+      ...fact,
+      contentHash: '0'.repeat(64),
+    } as FinancialFact),
+  };
+};
 
 const makeLimitUpLadder = (overrides: Partial<LimitUpLadder> = {}): LimitUpLadder => ({
   date: '2026-07-01',
@@ -216,6 +337,26 @@ export const makeDailyBar = (
   volume: 1_000_000,
   adjustment: 'qfq',
   source: 'test',
+  ...overrides,
+});
+
+export const makeMinuteBar = (
+  stockId: string,
+  endedAt: Date,
+  overrides: Partial<MinuteBar> = {},
+): MinuteBar => ({
+  stockId,
+  interval: '1m',
+  endedAt,
+  open: money(10),
+  high: money(11),
+  low: money(9),
+  close: money(10.5),
+  volume: 10_000,
+  adjustment: 'raw',
+  source: 'tushare',
+  fetchedAt: new Date(endedAt.getTime() + 1_000),
+  completeness: 'closed',
   ...overrides,
 });
 
@@ -429,6 +570,21 @@ const makeWatchlistSyncRun = (
   ...overrides,
 });
 
+const makeStrategyWatchlistSubscription = (
+  id: string,
+  overrides: Partial<StrategyWatchlistSubscription> = {},
+): StrategyWatchlistSubscription => ({
+  id,
+  strategyId: 'strategy-1',
+  watchlistId: 'watchlist-1',
+  sourceKey: 'strategy:strategy-1',
+  status: 'active',
+  createdBy: 'user-1',
+  createdAt: T1,
+  updatedAt: T1,
+  ...overrides,
+});
+
 export const makeNotification = (
   id: string,
   overrides: Partial<Notification> = {},
@@ -513,6 +669,20 @@ const makeResearchDocument = (
   fileModifiedAt: T1,
   indexedAt: T1,
   availability: 'available',
+  ...overrides,
+});
+
+const makeResearchHypothesisVersion = (
+  id: string,
+  overrides: Partial<ResearchHypothesisVersion> = {},
+): ResearchHypothesisVersion => ({
+  id: `hypothesis_${id}`,
+  topicId: 'topic_industry',
+  documentId: 'doc_thesis',
+  documentContentHash: 'b'.repeat(64),
+  version: 1,
+  status: 'active',
+  createdAt: T1,
   ...overrides,
 });
 
@@ -1042,6 +1212,18 @@ export const registerRepositoryContractTests = (
         expect(await repos.trade.findById('missing')).toBeNull();
       });
 
+      it('决策归因字段可空且 memory/Drizzle 往返一致', async () => {
+        const trade = makeTrade('t-attributed', {
+          adviceId: 'advice-1',
+          researchHypothesisVersionId: 'hypothesis-1',
+          strategyVersionId: 'strategy-v1',
+        });
+        await repos.trade.save(trade);
+        expect(await repos.trade.findById(trade.id)).toEqual(trade);
+        await repos.trade.save(makeTrade('t-legacy'));
+        expect(await repos.trade.findById('t-legacy')).toEqual(makeTrade('t-legacy'));
+      });
+
       it('listByAccount 按 executedAt 升序', async () => {
         await repos.trade.save(makeTrade('t-2', { executedAt: T3 }));
         await repos.trade.save(makeTrade('t-1', { executedAt: T1 }));
@@ -1302,22 +1484,70 @@ export const registerRepositoryContractTests = (
 
         const outcome: AdviceOutcome = {
           adviceId: 'adv-1',
+          tradeIds: ['trade-1'],
           outcome: 'followed',
           pnl: money(123.4567),
           benchmarkPnl: money(50),
+          holdingHours: 12,
+          notes: '复盘备注',
           recordedAt: T3,
         };
         await repos.advice.recordOutcome('adv-1', outcome);
         expect(await handle.readOutcome('adv-1')).toEqual(outcome);
+        expect(await repos.advice.findOutcome('adv-1')).toEqual(outcome);
+        expect(await repos.advice.listOutcomes({ since: T2, until: T3 })).toEqual([outcome]);
+        expect(await repos.advice.listOutcomes({ since: FAR_FUTURE })).toEqual([]);
 
-        const updated: AdviceOutcome = { adviceId: 'adv-1', outcome: 'ignored', recordedAt: T3 };
+        await repos.advice.save(makeAdvice('adv-2', { subjectId: 'stk-2' }));
+        const otherOutcome: AdviceOutcome = {
+          adviceId: 'adv-2',
+          tradeIds: [],
+          outcome: 'ignored',
+          recordedAt: T2,
+        };
+        await repos.advice.recordOutcome('adv-2', otherOutcome);
+        expect(await repos.advice.listOutcomes({ subjectId: 'stk-2' })).toEqual([otherOutcome]);
+
+        const updated: AdviceOutcome = {
+          adviceId: 'adv-1',
+          tradeIds: [],
+          outcome: 'ignored',
+          recordedAt: T3,
+        };
         await repos.advice.recordOutcome('adv-1', updated);
         expect(await handle.readOutcome('adv-1')).toEqual(updated);
       });
 
       it('recordOutcome 的 adviceId 不一致时拒绝', async () => {
-        const outcome: AdviceOutcome = { adviceId: 'adv-x', outcome: 'ignored', recordedAt: T3 };
+        const outcome: AdviceOutcome = {
+          adviceId: 'adv-x',
+          tradeIds: [],
+          outcome: 'ignored',
+          recordedAt: T3,
+        };
         await expect(repos.advice.recordOutcome('adv-y', outcome)).rejects.toThrow(InvariantError);
+      });
+
+      it('remove 删除建议并级联清理 outcome；删除不存在 id 为幂等空操作', async () => {
+        await repos.advice.save(makeAdvice('adv-1'));
+        await repos.advice.save(makeAdvice('adv-2'));
+        const outcome: AdviceOutcome = {
+          adviceId: 'adv-1',
+          tradeIds: [],
+          outcome: 'followed',
+          recordedAt: T3,
+        };
+        await repos.advice.recordOutcome('adv-1', outcome);
+
+        await repos.advice.remove('adv-1');
+        expect(await repos.advice.findById('adv-1')).toBeNull();
+        expect(await repos.advice.findOutcome('adv-1')).toBeNull();
+        expect(await repos.advice.listOutcomes({})).toEqual([]);
+        expect((await repos.advice.query({})).map((a) => a.id)).toEqual(['adv-2']);
+
+        await repos.advice.remove('adv-1');
+        await repos.advice.remove('adv-missing');
+        expect((await repos.advice.query({})).map((a) => a.id)).toEqual(['adv-2']);
       });
     });
 
@@ -1564,6 +1794,34 @@ export const registerRepositoryContractTests = (
         ).toEqual([10, 10, 11]);
       });
 
+      it('DailyBar revision 可按多股票批量 PIT 查询并稳定排序', async () => {
+        const revision = (stockId: string, recordedAt: Date, close: number): DailyBarRevision => ({
+          stockId,
+          date: T1,
+          contentHash: `${stockId}-${recordedAt.getTime()}-${close}`,
+          open: close - 1,
+          high: close + 1,
+          low: close - 2,
+          close,
+          volume: 100,
+          source: 'fixture',
+          recordedAt,
+        });
+        await repos.dailyBar.saveRevisions([
+          revision('stk-2', T2, 20),
+          revision('stk-1', T2, 10),
+          revision('stk-1', T3, 11),
+        ]);
+        const got = await repos.dailyBar.listRevisionsForStocks({
+          stockIds: ['stk-2', 'stk-1'],
+          recordedAt: T2,
+        });
+        expect(got.map((item) => `${item.stockId}:${item.close}`)).toEqual([
+          'stk-1:10',
+          'stk-2:20',
+        ]);
+      });
+
       it('DailyBar revision 保留 A → B → A 回退事件', async () => {
         const revision = (
           recordedAt: Date,
@@ -1596,6 +1854,73 @@ export const registerRepositoryContractTests = (
           [T2, 11],
           [T3, 10],
         ]);
+      });
+    });
+
+    describe('MinuteBarRepository', () => {
+      const M1 = new Date('2026-07-02T01:31:00.000Z');
+      const M2 = new Date('2026-07-02T01:32:00.000Z');
+      const M3 = new Date('2026-07-03T01:31:00.000Z');
+
+      it('saveMany + findInRange 按 endedAt 升序，字段完整往返', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M2, { amount: 22_000, completeness: 'live' }),
+          makeMinuteBar('stk-1', M1),
+        ]);
+        const got = await repos.minuteBar.findInRange('stk-1', '1m', M1, M2);
+        expect(got.map((bar) => bar.endedAt)).toEqual([M1, M2]);
+        expect(got[1]).toMatchObject({
+          amount: 22_000,
+          adjustment: 'raw',
+          source: 'tushare',
+          completeness: 'live',
+        });
+      });
+
+      it('同 stock/interval/endedAt upsert；不同 interval 隔离', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1),
+          makeMinuteBar('stk-1', M1, { interval: '5m', high: money(21), close: money(20) }),
+        ]);
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1, { high: money(13), close: money(12), source: 'replacement' }),
+        ]);
+        expect((await repos.minuteBar.findInRange('stk-1', '1m', M1, M1))[0]).toMatchObject({
+          close: 12,
+          source: 'replacement',
+        });
+        expect((await repos.minuteBar.findInRange('stk-1', '5m', M1, M1))[0]?.close).toBe(20);
+      });
+
+      it('latestSession 只返回最新上海交易日', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1),
+          makeMinuteBar('stk-1', M2),
+          makeMinuteBar('stk-1', M3),
+        ]);
+        expect(
+          (await repos.minuteBar.latestSession('stk-1', '1m')).map((bar) => bar.endedAt),
+        ).toEqual([M3]);
+        expect(await repos.minuteBar.latestSession('missing', '1m')).toEqual([]);
+      });
+
+      it('removeBefore 按全局保留期删除，不删除边界', async () => {
+        await repos.minuteBar.saveMany([
+          makeMinuteBar('stk-1', M1),
+          makeMinuteBar('stk-2', M2),
+          makeMinuteBar('stk-1', M3),
+        ]);
+        expect(await repos.minuteBar.removeBefore(M2)).toBe(1);
+        expect(await repos.minuteBar.findInRange('stk-2', '1m', M2, M2)).toHaveLength(1);
+        expect(await repos.minuteBar.findInRange('stk-1', '1m', M1, M3)).toHaveLength(1);
+      });
+
+      it('拒绝 qfq MinuteBar，防止与 DailyBar 口径混用', async () => {
+        await expect(
+          repos.minuteBar.saveMany([
+            { ...makeMinuteBar('stk-1', M1), adjustment: 'qfq' } as unknown as MinuteBar,
+          ]),
+        ).rejects.toThrow();
       });
     });
 
@@ -2311,6 +2636,74 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('StrategyWatchlistSubscriptionRepository', () => {
+      it('save/find/list 往返一致并按 status 过滤', async () => {
+        const subscription = makeStrategyWatchlistSubscription('subscription-1');
+        await repos.strategyWatchlistSubscription.save(subscription);
+        expect(await repos.strategyWatchlistSubscription.findById(subscription.id)).toEqual(
+          subscription,
+        );
+        expect(
+          await repos.strategyWatchlistSubscription.findActive({
+            strategyId: subscription.strategyId,
+            watchlistId: subscription.watchlistId,
+          }),
+        ).toEqual(subscription);
+        expect(await repos.strategyWatchlistSubscription.list({ status: 'active' })).toEqual([
+          subscription,
+        ]);
+      });
+
+      it('同一 Strategy/Watchlist 只允许一个 active，取消后可重新订阅', async () => {
+        const first = makeStrategyWatchlistSubscription('subscription-1');
+        await repos.strategyWatchlistSubscription.save(first);
+        await expect(
+          repos.strategyWatchlistSubscription.save(
+            makeStrategyWatchlistSubscription('subscription-2'),
+          ),
+        ).rejects.toThrow(InvariantError);
+        const cancelled = makeStrategyWatchlistSubscription('subscription-1', {
+          status: 'cancelled',
+          updatedAt: T2,
+          cancelledAt: T2,
+          cancelledBy: 'user-2',
+        });
+        await repos.strategyWatchlistSubscription.save(cancelled);
+        const second = makeStrategyWatchlistSubscription('subscription-2', {
+          createdAt: T3,
+          updatedAt: T3,
+        });
+        await repos.strategyWatchlistSubscription.save(second);
+        expect((await repos.strategyWatchlistSubscription.list({})).map((item) => item.id)).toEqual(
+          ['subscription-2', 'subscription-1'],
+        );
+        expect(
+          await repos.strategyWatchlistSubscription.findActive({
+            strategyId: first.strategyId,
+            watchlistId: first.watchlistId,
+          }),
+        ).toEqual(second);
+      });
+
+      it('sourceKey 与取消字段违反不变量时拒绝', async () => {
+        await expect(
+          repos.strategyWatchlistSubscription.save(
+            makeStrategyWatchlistSubscription('bad-source', {
+              sourceKey: 'strategy:other',
+            }),
+          ),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.strategyWatchlistSubscription.save(
+            makeStrategyWatchlistSubscription('bad-cancel', {
+              status: 'cancelled',
+              updatedAt: T2,
+            }),
+          ),
+        ).rejects.toThrow(InvariantError);
+      });
+    });
+
     describe('SignalObservationRepository', () => {
       it('removeBySources 只删除指定来源的观察', async () => {
         await repos.signalObservation.save(makeSignalObservation('observation-1', 'signal-1'));
@@ -2401,6 +2794,30 @@ export const registerRepositoryContractTests = (
         });
         expect(await repos.watchlistMember.listSources(member.id)).toEqual([manual]);
         expect(await repos.watchlistMember.listSources(member.id, true)).toHaveLength(2);
+      });
+
+      it('同一 producerRun 重试幂等，不重复创建 sync run/snapshot 或结束来源', async () => {
+        const producerRunId = 'strategy-run-idempotent';
+        const first = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-idempotent-1', { producerRunId }),
+          candidates: [{ stockId: '600519.SH', reason: 'first', evidence: ['e1'] }],
+        });
+        const retry = await repos.watchlistMember.commitWatchlistSync({
+          run: makeWatchlistSyncRun('sync-idempotent-2', {
+            producerRunId,
+            startedAt: T2,
+            finishedAt: T3,
+          }),
+          candidates: [{ stockId: '002594.SZ', reason: 'must-not-apply', evidence: ['e2'] }],
+        });
+        expect(retry).toEqual(first);
+        expect(await repos.watchlistMember.listSyncRuns('watchlist-1')).toHaveLength(1);
+        expect(await repos.watchlistMember.listSnapshots(first.id)).toHaveLength(1);
+        const member = await repos.watchlistMember.findMember('watchlist-1', '600519.SH');
+        if (member === null) throw new Error('fixture member missing');
+        expect(
+          await repos.watchlistMember.currentSource(member.id, 'strategy:strategy-1'),
+        ).toMatchObject({ status: 'active', syncRunId: first.id });
       });
 
       it('partial/failed 不退出来源；complete 空结果才结束并归档自动成员', async () => {
@@ -2992,6 +3409,468 @@ export const registerRepositoryContractTests = (
           'missing',
         );
       });
+
+      it('embedding 投影按模型 identity 增量重建并在 chunk hash 变化后失效', async () => {
+        const identity = {
+          provider: 'test',
+          model: 'embed-v1',
+          dimensions: 3,
+          version: '2026-08-15',
+        } as const;
+        const document = makeResearchDocument('report');
+        const apply = async (contentHash: string, body: string) =>
+          repos.researchIndex.applyIndexBatch({
+            vaultId: 'vault-test',
+            completeness: 'partial',
+            topics: [],
+            documents: [{ ...document, contentHash }],
+            topicDocuments: [],
+            subjectLinks: [],
+            chunks: [
+              { documentId: document.id, ordinal: 0, headingPath: '摘要', contentHash, body },
+            ],
+            seenTopicIds: new Set(),
+            seenDocumentIds: new Set([document.id]),
+            indexedAt: T1,
+          });
+
+        await apply('b'.repeat(64), '现金流改善');
+        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toHaveLength(1);
+        await repos.researchEmbedding.saveMany([
+          {
+            documentId: document.id,
+            ordinal: 0,
+            contentHash: 'b'.repeat(64),
+            identity,
+            vector: [1, 0, 0],
+            embeddedAt: T1,
+          },
+        ]);
+        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
+          status: 'ready',
+          expectedChunks: 1,
+          embeddedChunks: 1,
+          staleChunks: 0,
+        });
+        expect(
+          await repos.researchEmbedding.searchSimilar({
+            identity,
+            vector: [1, 0, 0],
+            limit: 5,
+          }),
+        ).toMatchObject([{ document: { id: document.id }, ordinal: 0 }]);
+
+        await apply('c'.repeat(64), '现金流恶化');
+        expect(await repos.researchEmbedding.inspect(identity, T2)).toMatchObject({
+          status: 'stale',
+          embeddedChunks: 0,
+          staleChunks: 1,
+        });
+        expect(await repos.researchEmbedding.deleteInvalid(identity)).toBe(1);
+        expect(await repos.researchEmbedding.listPending({ identity, limit: 10 })).toMatchObject([
+          { documentId: document.id, contentHash: 'c'.repeat(64) },
+        ]);
+      });
+
+      it('embedding 公开写入口按 Core schema 原子拒绝非法向量和状态', async () => {
+        const identity = {
+          provider: 'test',
+          model: 'embed-atomic',
+          dimensions: 3,
+          version: 'v1',
+        } as const;
+        const document = makeResearchDocument('atomic');
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'partial',
+          topics: [],
+          documents: [document],
+          topicDocuments: [],
+          subjectLinks: [],
+          chunks: [
+            {
+              documentId: document.id,
+              ordinal: 0,
+              headingPath: '支持',
+              contentHash: document.contentHash,
+              body: '合法 chunk',
+            },
+            {
+              documentId: document.id,
+              ordinal: 1,
+              headingPath: '反证',
+              contentHash: document.contentHash,
+              body: '非法向量不应留下部分投影',
+            },
+          ],
+          seenTopicIds: new Set(),
+          seenDocumentIds: new Set([document.id]),
+          indexedAt: T1,
+        });
+        const base = {
+          documentId: document.id,
+          contentHash: document.contentHash,
+          identity,
+          embeddedAt: T1,
+        };
+
+        await expect(
+          repos.researchEmbedding.saveMany([
+            { ...base, ordinal: 0, vector: [1, 0, 0] },
+            { ...base, ordinal: 1, vector: [0, 1] },
+          ]),
+        ).rejects.toThrow();
+        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
+          embeddedChunks: 0,
+          staleChunks: 2,
+        });
+
+        await expect(
+          repos.researchEmbedding.saveMany([{ ...base, ordinal: 0, vector: [1, Number.NaN, 0] }]),
+        ).rejects.toThrow();
+        expect(await repos.researchEmbedding.inspect(identity, T1)).toMatchObject({
+          embeddedChunks: 0,
+          staleChunks: 2,
+        });
+
+        await expect(
+          repos.researchEmbedding.saveState({
+            identity,
+            status: 'partial',
+            expectedChunks: -1,
+            embeddedChunks: 0,
+            staleChunks: 0,
+            updatedAt: T1,
+          }),
+        ).rejects.toThrow();
+        expect(await repos.researchEmbedding.findState(identity)).toBeNull();
+      });
+
+      it('embedding kind/topic/subject 过滤与 ResearchIndex 完整 subject 语义一致', async () => {
+        const identity = {
+          provider: 'test',
+          model: 'embed-filter',
+          dimensions: 3,
+          version: 'v1',
+        } as const;
+        const documents = [
+          makeResearchDocument('filter-a', { kind: 'report', contentHash: '1'.repeat(64) }),
+          makeResearchDocument('filter-b', { kind: 'article', contentHash: '2'.repeat(64) }),
+          makeResearchDocument('filter-c', { kind: 'analysis', contentHash: '3'.repeat(64) }),
+        ];
+        await repos.researchIndex.applyIndexBatch({
+          vaultId: 'vault-test',
+          completeness: 'partial',
+          topics: [makeResearchTopic('filter-a'), makeResearchTopic('filter-b')],
+          documents,
+          topicDocuments: [
+            { topicId: 'topic_filter-a', documentId: 'doc_filter-a', relation: 'supporting' },
+            { topicId: 'topic_filter-b', documentId: 'doc_filter-b', relation: 'supporting' },
+            {
+              topicId: 'topic_filter-a',
+              documentId: 'doc_filter-c',
+              relation: 'counter-evidence',
+            },
+          ],
+          subjectLinks: [
+            {
+              ownerKind: 'document',
+              ownerId: 'doc_filter-a',
+              subjectKind: 'stock',
+              subjectKey: '600519.SH',
+              relation: 'related',
+            },
+            {
+              ownerKind: 'document',
+              ownerId: 'doc_filter-b',
+              subjectKind: 'stock',
+              subjectKey: '600519.SH',
+              relation: 'related',
+            },
+            {
+              ownerKind: 'document',
+              ownerId: 'doc_filter-c',
+              subjectKind: 'industry',
+              subjectKey: '白酒',
+              relation: 'related',
+            },
+          ],
+          chunks: documents.map((document) => ({
+            documentId: document.id,
+            ordinal: 0,
+            headingPath: '摘要',
+            contentHash: document.contentHash,
+            body: document.title,
+          })),
+          seenTopicIds: new Set(['topic_filter-a', 'topic_filter-b']),
+          seenDocumentIds: new Set(documents.map((document) => document.id)),
+          indexedAt: T1,
+        });
+        await repos.researchEmbedding.saveMany(
+          documents.map((document, index) => ({
+            documentId: document.id,
+            ordinal: 0,
+            contentHash: document.contentHash,
+            identity,
+            vector: [1, index / 10, 0],
+            embeddedAt: T1,
+          })),
+        );
+        const ids = async (
+          filters: Omit<
+            Parameters<typeof repos.researchEmbedding.searchSimilar>[0],
+            'identity' | 'vector' | 'limit'
+          >,
+        ) =>
+          (
+            await repos.researchEmbedding.searchSimilar({
+              identity,
+              vector: [1, 0, 0],
+              limit: 10,
+              ...filters,
+            })
+          )
+            .map((hit) => hit.document.id)
+            .sort();
+
+        expect(await ids({ kind: 'report' })).toEqual(['doc_filter-a']);
+        expect(await ids({ topicId: 'topic_filter-a' })).toEqual(['doc_filter-a', 'doc_filter-c']);
+        expect(await ids({ subject: 'stock:600519.SH' })).toEqual(['doc_filter-a', 'doc_filter-b']);
+        expect(await ids({ subject: '600519.SH' })).toEqual([]);
+        expect(
+          await ids({ topicId: 'topic_filter-a', kind: 'report', subject: 'stock:600519.SH' }),
+        ).toEqual(['doc_filter-a']);
+      });
+    });
+
+    describe('ResearchHypothesisVersionRepository', () => {
+      it('create + list/find 往返，并原子 supersede 旧 active 版本', async () => {
+        const first = makeResearchHypothesisVersion('one');
+        await repos.researchHypothesisVersion.create(first);
+        expect(await repos.researchHypothesisVersion.findById(first.id)).toEqual(first);
+
+        const second = makeResearchHypothesisVersion('two', {
+          version: 2,
+          supersedesId: first.id,
+          documentId: 'doc_thesis-2',
+          createdAt: T2,
+        });
+        await repos.researchHypothesisVersion.create(second);
+        expect(await repos.researchHypothesisVersion.findById(first.id)).toMatchObject({
+          status: 'superseded',
+        });
+        expect(await repos.researchHypothesisVersion.findById(second.id)).toEqual(second);
+        expect(
+          (await repos.researchHypothesisVersion.list({ topicId: 'topic_industry' })).map(
+            (item) => item.id,
+          ),
+        ).toEqual([second.id, first.id]);
+        expect(
+          await repos.researchHypothesisVersion.list({
+            topicId: 'topic_industry',
+            status: 'active',
+          }),
+        ).toEqual([second]);
+      });
+
+      it('拒绝重复版本、非 active 创建和断开的版本链', async () => {
+        await repos.researchHypothesisVersion.create(makeResearchHypothesisVersion('one'));
+        await expect(
+          repos.researchHypothesisVersion.create(
+            makeResearchHypothesisVersion('duplicate', { version: 1 }),
+          ),
+        ).rejects.toThrow();
+        await expect(
+          repos.researchHypothesisVersion.create(
+            makeResearchHypothesisVersion('bad-status', { status: 'archived' }),
+          ),
+        ).rejects.toThrow();
+        await expect(
+          repos.researchHypothesisVersion.create(
+            makeResearchHypothesisVersion('bad-chain', {
+              version: 2,
+              supersedesId: 'hypothesis_missing',
+            }),
+          ),
+        ).rejects.toThrow();
+      });
+    });
+
+    describe('FinancialFactRepository', () => {
+      it('append-only：重复 revision 幂等，冲突 id 不覆盖旧事实', async () => {
+        const first = makeFinancialFact('fact-1');
+        await repos.financialFact.appendMany([first, first]);
+        expect(
+          await repos.financialFact.listRevisions({ stockIds: ['stk-1'], metricIds: ['revenue'] }),
+        ).toEqual([first]);
+
+        const later = makeFinancialFact('fact-2', {
+          value: 110,
+          sourceRecordId: 'record-fact-1',
+          sourceRevision: 'r2',
+          publishedAt: T2,
+          revisionPublishedAt: T2,
+          recordedAt: T2,
+          supersedesId: first.id,
+        });
+        await repos.financialFact.appendMany([later]);
+        await expect(
+          repos.financialFact.appendMany([makeFinancialFact(first.id, { value: 999 })]),
+        ).rejects.toThrow(InvariantError);
+        expect(
+          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map(
+            (item) => item.value,
+          ),
+        ).toEqual([100, 110]);
+      });
+
+      it('批量 append 遇到后续 id 冲突时整体回滚，不留下前置插入', async () => {
+        const existing = makeFinancialFact('fact-existing');
+        await repos.financialFact.appendMany([existing]);
+        const first = makeFinancialFact('fact-before-conflict', { value: 101 });
+        const conflict = makeFinancialFact(existing.id, { value: 999 });
+        await expect(repos.financialFact.appendMany([first, conflict])).rejects.toThrow(
+          InvariantError,
+        );
+        expect(
+          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map((item) => item.id),
+        ).toEqual([existing.id]);
+      });
+
+      it('appendMany 拒绝断链、跨实体和非较早 supersedes revision，并支持同批较早目标', async () => {
+        const target = makeFinancialFact('fact-target');
+        await repos.financialFact.appendMany([target]);
+        await expect(
+          repos.financialFact.appendMany([
+            makeFinancialFact('fact-missing-target', {
+              supersedesId: 'revision-missing',
+              sourceRevision: 'r2',
+              publishedAt: T2,
+              revisionPublishedAt: T2,
+              recordedAt: T2,
+            }),
+          ]),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.financialFact.appendMany([
+            makeFinancialFact('fact-cross-stock', {
+              stockId: 'stk-2',
+              supersedesId: target.id,
+              sourceRevision: 'r2',
+              publishedAt: T2,
+              revisionPublishedAt: T2,
+              recordedAt: T2,
+            }),
+          ]),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.financialFact.appendMany([
+            makeFinancialFact('fact-not-later', {
+              supersedesId: target.id,
+              sourceRevision: 'r2',
+              publishedAt: T0,
+              revisionPublishedAt: T0,
+              recordedAt: T0,
+            }),
+          ]),
+        ).rejects.toThrow(InvariantError);
+        expect(await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).toEqual([target]);
+
+        const batchTarget = makeFinancialFact('fact-batch-target');
+        const batchChild = makeFinancialFact('fact-batch-child', {
+          sourceRevision: 'r2',
+          publishedAt: T2,
+          revisionPublishedAt: T2,
+          recordedAt: T2,
+          supersedesId: batchTarget.id,
+        });
+        await repos.financialFact.appendMany([batchTarget, batchChild]);
+        expect(
+          (await repos.financialFact.listRevisions({ stockIds: ['stk-1'] })).map((item) => item.id),
+        ).toEqual([target.id, batchTarget.id, batchChild.id]);
+      });
+
+      it('日期边界、空集合和大 stock 查询保持稳定排序', async () => {
+        const other = makeFinancialFact('fact-3', {
+          stockId: 'stk-2',
+          metricId: 'margin',
+          periodEnd: T2,
+          periodStart: new Date('2025-01-01T00:00:00.000Z'),
+          value: 0.2,
+        });
+        await repos.financialFact.appendMany([other, makeFinancialFact('fact-1')]);
+        expect(await repos.financialFact.listRevisions({ stockIds: [] })).toEqual([]);
+        expect(
+          await repos.financialFact.listRevisions({ stockIds: ['stk-1'], from: T1, to: T1 }),
+        ).toHaveLength(1);
+        expect(
+          (
+            await repos.financialFact.listRevisions({
+              stockIds: ['stk-2', 'stk-1'],
+              metricIds: ['margin', 'revenue'],
+            })
+          ).map((item) => `${item.stockId}:${item.metricId}`),
+        ).toEqual(['stk-1:revenue', 'stk-2:margin']);
+        const stockIds = Array.from({ length: 401 }, (_, index) => `bulk-${index}`);
+        expect(
+          await repos.financialFact.listRevisions({ stockIds: [...stockIds, 'stk-1'] }),
+        ).toEqual([makeFinancialFact('fact-1')]);
+        const metricIds = Array.from({ length: 401 }, (_, index) => `metric-${index}`);
+        metricIds[200] = 'revenue';
+        expect(
+          await repos.financialFact.listRevisions({
+            stockIds: ['stk-1'],
+            metricIds,
+          }),
+        ).toEqual([makeFinancialFact('fact-1')]);
+      });
+
+      it('resolveVintage 委托 strict PIT resolver，不回退撤回 revision', async () => {
+        const first = makeFinancialFact('fact-1');
+        const retracted = makeFinancialFact('fact-2', {
+          sourceRecordId: 'record-fact-1',
+          sourceRevision: 'r2',
+          publishedAt: T2,
+          revisionPublishedAt: T2,
+          recordedAt: T2,
+          status: 'retracted',
+          supersedesId: first.id,
+        });
+        await repos.financialFact.appendMany([first, retracted]);
+        const vintage = await repos.financialFact.resolveVintage({
+          stockIds: ['stk-1'],
+          metricIds: ['revenue'],
+          asOf: T2,
+          policy: 'strict-pit-v1',
+        });
+        expect(vintage.facts).toEqual([]);
+        expect(vintage.missing).toEqual([
+          {
+            stockId: 'stk-1',
+            metricId: 'revenue',
+            periodEnd: T1,
+            reason: 'retracted',
+            revisionIds: [retracted.id],
+          },
+        ]);
+        expect(vintage.coverage).toEqual({
+          requested: 1,
+          available: 0,
+          missing: 1,
+          retracted: 1,
+        });
+      });
+
+      it('读写对象不暴露可变引用', async () => {
+        const fact = makeFinancialFact('fact-copy');
+        await repos.financialFact.appendMany([fact]);
+        const got = (await repos.financialFact.listRevisions({ stockIds: [fact.stockId] }))[0];
+        expect(got).toEqual(fact);
+        got?.periodEnd.setUTCDate(1);
+        expect((await repos.financialFact.listRevisions({ stockIds: [fact.stockId] }))[0]).toEqual(
+          fact,
+        );
+      });
     });
 
     describe('StockEventRepository', () => {
@@ -3275,6 +4154,118 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('StrategyBacktestRepository', () => {
+      const spec: StrictBacktestSpec = {
+        schemaVersion: 1,
+        strategyId: 'strategy-1',
+        strategyVersionId: 'strategy-1-v1',
+        evaluationSessionId: 'evaluation-1',
+        from: T1,
+        to: T3,
+        initialCash: 1_000_000,
+        benchmark: { stockId: '000300.SH', datasetVersion: '000300.SH:qfq:daily:v1' },
+        execution: {
+          model: 'next-open-full-rebalance-equal-weight-v1',
+          lotSize: 100,
+          maxPositions: 20,
+        },
+        fees: {
+          model: 'ashare-fees-v1',
+          commissionBps: 2.5,
+          minimumCommission: 5,
+          sellStampDutyBps: 5,
+        },
+        slippage: { model: 'fixed-bps-at-open-v1', buyBps: 5, sellBps: 5 },
+      };
+      const gateAudit: StrictBacktestGateAudit = {
+        status: 'complete',
+        assessedAt: T2,
+        items: [
+          'pit-universe',
+          'daily-bar-revisions',
+          'fees',
+          'slippage',
+          'tradability',
+          'corporate-actions',
+          'benchmark',
+          'evaluator-code',
+        ].map((key) => ({
+          key: key as StrictBacktestGateAudit['items'][number]['key'],
+          status: 'complete' as const,
+          reason: 'fixture-complete',
+          evidenceRefs: [],
+        })),
+      };
+
+      it('保存不可变运行身份并按策略倒序查询', async () => {
+        const run: StrictBacktestRun = {
+          id: 'strict-backtest-1',
+          status: 'queued',
+          resultAvailability: 'complete',
+          spec,
+          specHash: strictBacktestSpecHash(spec),
+          inputFingerprint: strictBacktestHash('input-1'),
+          evaluator: CURRENT_STRATEGY_EVALUATOR_IDENTITY,
+          gateAudit,
+          createdAt: T1,
+        };
+        await repos.strategyBacktest.saveRun(run);
+        await repos.strategyBacktest.saveRun({ ...run, status: 'running', startedAt: T2 });
+        expect(await repos.strategyBacktest.findRunById(run.id)).toMatchObject({
+          id: run.id,
+          status: 'running',
+          inputFingerprint: run.inputFingerprint,
+        });
+        expect(await repos.strategyBacktest.listRuns({ strategyId: spec.strategyId })).toHaveLength(
+          1,
+        );
+        await expect(
+          repos.strategyBacktest.saveRun({
+            ...run,
+            inputFingerprint: strictBacktestHash('changed'),
+          }),
+        ).rejects.toThrow('immutable identity');
+      });
+
+      it('PIT 市场事实按股票、日期和 recordedAt cutoff 查询', async () => {
+        const fact: StrictBacktestMarketFact = {
+          stockId: '600519.SH',
+          date: T2,
+          rawOpen: 100,
+          rawHigh: 110,
+          rawLow: 95,
+          rawClose: 105,
+          sessionStatus: 'open',
+          buyAllowed: true,
+          sellAllowed: true,
+          buyRestriction: 'none',
+          sellRestriction: 'none',
+          corporateActionsStatus: 'complete',
+          corporateActions: [],
+          source: 'fixture',
+          recordedAt: T3,
+          contentHash: 'b'.repeat(64),
+        };
+        await repos.strategyBacktest.saveMarketFacts([fact]);
+        expect(
+          await repos.strategyBacktest.listMarketFacts({
+            stockIds: [fact.stockId],
+            from: T1,
+            to: T3,
+            recordedAt: T2,
+          }),
+        ).toEqual([]);
+        expect(
+          await repos.strategyBacktest.listMarketFacts({
+            stockIds: [fact.stockId],
+            from: T1,
+            to: T3,
+            recordedAt: T3,
+          }),
+        ).toEqual([fact]);
+      });
+    });
+
     describe('LimitUpLadderSnapshotRepository', () => {
       it('按交易日和来源保存、读取并保留完整快照', async () => {
         const snapshot = makeLimitUpLadder();
@@ -3309,6 +4300,133 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.limitUpLadderSnapshot.findByDate({ date: '2026-07-02', source: first.source }),
         ).resolves.toMatchObject({ date: '2026-07-02', total: 1 });
+      });
+    });
+
+    describe('FundamentalScoreVersionRepository', () => {
+      it('保存定义快照、重复 identity 幂等并隔离可变引用', async () => {
+        const version = makeFundamentalScoreVersion();
+        await repos.fundamentalScoreVersion.save(version);
+        await repos.fundamentalScoreVersion.save(structuredClone(version));
+        const got = await repos.fundamentalScoreVersion.findById(version.id);
+        expect(got).toEqual(version);
+        if (got === null) throw new Error('missing score version');
+        const gotComponent = got.components[0];
+        if (gotComponent === undefined) throw new Error('missing score component');
+        (gotComponent as { weight: number }).weight = 0.5;
+        got.createdAt.setTime(0);
+        expect(await repos.fundamentalScoreVersion.findById(version.id)).toEqual(version);
+        expect(
+          (await repos.fundamentalScoreVersion.list({ status: 'published' })).map(
+            (item) => item.id,
+          ),
+        ).toEqual([version.id]);
+      });
+
+      it('draft 可一次发布再退役，已发布/退役定义与发布时间不可覆盖', async () => {
+        const draft = makeFundamentalScoreVersion({
+          id: 'fundamental-score-lifecycle',
+          status: 'draft',
+          publishedAt: undefined,
+        });
+        await repos.fundamentalScoreVersion.save(draft);
+        const published = { ...draft, status: 'published' as const, publishedAt: T1 };
+        await repos.fundamentalScoreVersion.save(published);
+        const retired = { ...published, status: 'retired' as const };
+        await repos.fundamentalScoreVersion.save(retired);
+        expect(await repos.fundamentalScoreVersion.findById(retired.id)).toEqual(retired);
+        await expect(
+          repos.fundamentalScoreVersion.save({ ...retired, publishedAt: T2 }),
+        ).rejects.toThrow(InvariantError);
+        const retiredComponent = retired.components[0];
+        if (retiredComponent === undefined) throw new Error('missing score component');
+        await expect(
+          repos.fundamentalScoreVersion.save({
+            ...retired,
+            components: [{ ...retiredComponent, normalizer: 'industry-percentile-v1' as const }],
+          }),
+        ).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('FundamentalScoreRunRepository', () => {
+      it('started 后原子 commit results，重复相同提交幂等且读结果隔离', async () => {
+        const started = makeFundamentalScoreRun();
+        await repos.fundamentalScoreRun.saveStarted(started);
+        await expect(
+          repos.fundamentalScoreRun.commit({ run: started, results: [] }),
+        ).rejects.toThrow(InvariantError);
+        const committed = { ...started, status: 'committed' as const, committedAt: T3 };
+        const result = makeFundamentalScoreResult();
+        await repos.fundamentalScoreRun.commit({ run: committed, results: [result] });
+        await repos.fundamentalScoreRun.commit({ run: committed, results: [result] });
+        expect(await repos.fundamentalScoreRun.findById(started.id)).toEqual(committed);
+        const results = await repos.fundamentalScoreRun.listResults(started.id);
+        expect(results).toEqual([result]);
+        const resultComponent = results[0]?.components[0];
+        if (resultComponent === undefined) throw new Error('missing result component');
+        (resultComponent as { rawValue: number }).rawValue = 999;
+        expect(await repos.fundamentalScoreRun.listResults(started.id)).toEqual([result]);
+        expect((await repos.fundamentalScoreRun.list()).map((run) => run.id)).toEqual([started.id]);
+      });
+
+      it('unavailable/failed 终态保留 terminalReason 但不暴露 results，终态冲突拒绝', async () => {
+        const started = makeFundamentalScoreRun({ id: 'score-run-unavailable' });
+        await repos.fundamentalScoreRun.saveStarted(started);
+        const unavailable = {
+          ...started,
+          status: 'unavailable' as const,
+          committedAt: T3,
+          terminalReason: {
+            code: 'provider-unavailable',
+            message: 'fixture provider unavailable',
+            observedAt: T2,
+          },
+        };
+        await repos.fundamentalScoreRun.commit({ run: unavailable, results: [] });
+        await repos.fundamentalScoreRun.commit({ run: unavailable, results: [] });
+        expect(await repos.fundamentalScoreRun.findById(started.id)).toEqual(unavailable);
+        expect(await repos.fundamentalScoreRun.listResults(started.id)).toEqual([]);
+        await expect(
+          repos.fundamentalScoreRun.commit({
+            run: {
+              ...unavailable,
+              terminalReason: { ...unavailable.terminalReason, message: 'changed' },
+            },
+            results: [],
+          }),
+        ).rejects.toThrow(InvariantError);
+      });
+
+      it('未先 started、非 committed 带 results 或 committed 结果不完整时拒绝', async () => {
+        const committed = {
+          ...makeFundamentalScoreRun({ id: 'score-run-unknown' }),
+          status: 'committed' as const,
+          committedAt: T3,
+        };
+        await expect(
+          repos.fundamentalScoreRun.commit({
+            run: committed,
+            results: [makeFundamentalScoreResult({ scoreRunId: committed.id })],
+          }),
+        ).rejects.toThrow(InvariantError);
+        const started = makeFundamentalScoreRun({ id: 'score-run-invalid' });
+        await repos.fundamentalScoreRun.saveStarted(started);
+        await expect(
+          repos.fundamentalScoreRun.commit({
+            run: {
+              ...started,
+              status: 'failed' as const,
+              committedAt: T3,
+              terminalReason: {
+                code: 'evaluator-error',
+                message: 'failed',
+                observedAt: T2,
+              },
+            },
+            results: [makeFundamentalScoreResult({ scoreRunId: started.id })],
+          }),
+        ).rejects.toThrow(InvariantError);
       });
     });
 

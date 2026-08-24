@@ -205,6 +205,21 @@ describe('deriveWatchlistViews', () => {
     ]);
   });
 
+  it('归档列表不进入可操作 tab，但仍保留在归档视图', () => {
+    const views = deriveWatchlistViews({
+      lists: [
+        { watchlist: { id: 'wl-active', name: '启用列表', enabled: true }, memberCount: 1 },
+        { watchlist: { id: 'wl-archived', name: '归档列表', enabled: false }, memberCount: 2 },
+      ],
+      archived: {
+        lists: [{ id: 'wl-archived', name: '归档列表', enabled: false }],
+        members: [],
+      },
+    });
+    expect(views.listCards.map((card) => card.watchlist.id)).toEqual(['wl-active']);
+    expect(views.archived.lists.map((watchlist) => watchlist.id)).toEqual(['wl-archived']);
+  });
+
   it('stocks 按 stockId 排序；todayChanges 按时间倒序', () => {
     const views = deriveWatchlistViews(overviewFixture);
     expect(views.stocks.map((stock) => stock.stockId)).toEqual(['002594.SZ', '600519.SH']);

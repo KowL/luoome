@@ -1,8 +1,8 @@
 # 个股行情查看详细设计：Market View + Web 图表
 
-> 状态：Phase 1/2 已实施；Phase 3 的事实关联、图表标记与日期深链接已实施
-> 日期：2026-08-14
-> 范围：个股实时快照、日 K、成交量、指标摘要、数据来源与新鲜度；不包含完整分时和分钟 K
+> 状态：Phase 1/2/3 已实施；Phase 4 首个 MinuteBar 竖向切片已实施（历史分钟仍为本地保留范围）
+> 日期：2026-08-20
+> 范围：个股实时快照、日 K、MinuteBar 分时/分钟 K、成交量、指标摘要、数据来源与新鲜度
 > 关联文档：[架构说明](../ARCHITECTURE.md)、[ruo 能力迁移详细设计](./ruo-feature-migration-detailed-design.md) §6、[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)
 
 ## 1. 目标
@@ -22,7 +22,7 @@
 
 首期不实现：
 
-- 分时图、1/5/15/30/60 分钟 K；
+- 任意历史日期的远端分钟补数（当前 provider 只提供当前交易日）；
 - Level-2、五档盘口、逐笔成交、资金流向；
 - 复权方式切换；
 - 自定义画线、复杂指标编辑器；
@@ -30,7 +30,8 @@
 - WebSocket 或 SSE 推送；
 - 自动交易。
 
-`PriceSnapshot` 是用户调用、workflow 或盯盘扫描时留下的稀疏快照，不能当成连续分钟行情。后续需要分时或分钟 K 时，必须新增独立 `MinuteBar` 能力，见 §15。
+`PriceSnapshot` 是用户调用、workflow 或盯盘扫描时留下的稀疏快照，不能当成连续分钟行情。
+MinuteBar 的冻结 schema、provider 能力、缺口和生命周期见 [MinuteBar 详细设计](./minute-bar-detailed-design.md)。
 
 ## 3. 已确认决策
 
@@ -829,35 +830,13 @@ bun run build
 
 完成标准：行情页成为研究、建议和复盘事实的共享查看入口。
 
-### Phase 4：分钟行情（独立设计）
+### Phase 4：分钟行情（✅ 首个生产级竖向切片）
 
-若用户确实需要分时和分钟 K，另立设计，至少包含：
-
-```ts
-interface MinuteBar {
-  stockId: string;
-  interval: '1m' | '5m' | '15m' | '30m' | '60m';
-  startedAt: Date;
-  open: Money;
-  high: Money;
-  low: Money;
-  close: Money;
-  volume: number;
-  source: string;
-  completeness: 'closed' | 'live';
-}
-```
-
-并同步：
-
-- `MinuteBarRepository` 的 drizzle / memory 实现与 contract tests；
-- adapter `fetchMinuteBars`；
-- 交易时段、午休、跨日和补洞规则；
-- 分钟数据 TTL、保留期和清理策略；
-- 数据量和 rate limit；
-- Web 周期切换。
-
-不得用 PriceSnapshot 区间查询替代 MinuteBar。
+已完成独立 `MinuteBar` core schema、Drizzle/in-memory repository、Tushare `rt_min_daily`
+adapter seam、`get_stock_minute_bars` Tool 和 Web 分时/分钟 K 展示。当前 provider 只覆盖
+沪深 A 股当日会话；显式历史日期只读 30 天本地保留，缺失时诚实返回 unavailable/partial。
+完整冻结契约见 [MinuteBar 详细设计](./minute-bar-detailed-design.md)。不得用 PriceSnapshot
+或累计口径 IntradayMinute 区间查询替代 MinuteBar。
 
 ## 16. 文件变更清单
 

@@ -2,12 +2,13 @@ import { QuoteSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import { resolveQuotes } from '../internal/resolve-quotes.js';
 
 /**
  * sync_quotes（v0.2 起，external）。
  * 同步账户下所有活跃持仓的实时行情（accountId 缺省走 ctx.user.defaultAccountId）。
- * 流程：list_holdings → 抽 stockIds → batch_quote 逻辑内联（不经 tool 调用）→ 写 quote_snapshot。
- * 返回成功 / 失败条数；不抛异常（单条失败不影响整体）。
+ * 流程：list_holdings → 抽 stockIds → resolveQuotes（实时批量拉取 + 落 quote_snapshot +
+ * 缓存兜底）。返回实时成功条数；单条失败回落本地快照、不影响整体，synced 只计实时命中的。
  */
 export const SyncQuotesInput = z.object({
   accountId: z.uuid().optional(),
@@ -30,9 +31,10 @@ export const syncQuotesTool = defineTool({
     const holdings = await ctx.repos.holding.listByAccount(accountId);
     const stockIds = [...new Set(holdings.map((h) => h.stockId))];
     if (stockIds.length === 0) return { synced: [], totalRequested: 0 };
-    const quotes = await ctx.adapters.market.batchQuote(stockIds);
-    const list = [...quotes.values()];
-    await Promise.all(list.map((q) => ctx.repos.quote.save(q)));
-    return { synced: list, totalRequested: stockIds.length };
+    const items = await resolveQuotes(ctx, stockIds, { context: 'display' });
+    const synced = items.flatMap((item) =>
+      item.status === 'ok' && item.retrieval === 'live' ? [item.quote] : [],
+    );
+    return { synced, totalRequested: stockIds.length };
   },
 });

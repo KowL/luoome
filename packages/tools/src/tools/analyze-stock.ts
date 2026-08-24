@@ -9,7 +9,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errNotFound } from '../define-tool.js';
+import { defineTool, errAdapterError, errNotFound } from '../define-tool.js';
 import {
   type AdviceLLMOutput,
   AdviceLLMSchema,
@@ -19,6 +19,7 @@ import {
   sanitizeAdviceRisks,
 } from '../internal/build-advice.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
+import { resolveQuote } from '../internal/resolve-quotes.js';
 
 const DAY_MS = 86_400_000;
 /** 拉日线的回看窗口。 */
@@ -53,15 +54,26 @@ export const analyzeStockTool = defineTool({
     if (stock === null) return errNotFound('Stock', input.stockId);
 
     // ARCHITECTURE §6.3：拉行情 + 指标 → 持仓上下文 → LLM 推理 → 组装 → 校验 → 持久化。
+    // 行情走统一 resolveQuote：实时拉取，上游缺席回退本地最近快照。
     const now = ctx.clock();
-    const [quote, bars, position] = await Promise.all([
-      ctx.adapters.market.fetchQuote(stock.id),
+    const [quoteItem, bars, position] = await Promise.all([
+      resolveQuote(ctx, stock.id, { context: 'display' }),
       ctx.adapters.market.fetchDailyBars(stock.id, {
         start: new Date(now.getTime() - BARS_LOOKBACK_DAYS * DAY_MS),
         end: now,
       }),
       ctx.repos.holding.findByAccountAndStock(ctx.user.defaultAccountId, stock.id),
     ]);
+    if (quoteItem === undefined || quoteItem.status !== 'ok') {
+      return errAdapterError(
+        ctx.adapters.market.name,
+        quoteItem !== undefined && quoteItem.status === 'unavailable'
+          ? quoteItem.reason
+          : 'quote_unavailable',
+        true,
+      );
+    }
+    const quote = quoteItem.quote;
     const indicators = computeSimpleIndicators(bars);
 
     const llmOutput = await ctx.adapters.llm.generate<AdviceLLMOutput>({
