@@ -5,6 +5,7 @@ import {
   buildRunDetailContent,
   buildStrategyHash,
   buildStrictBacktestResultContent,
+  evaluationSessionOptions,
   openRunDetail,
   parseBacktestStockIds,
   parseStrategyHash,
@@ -438,7 +439,7 @@ describe('模拟回测（历史回放）', () => {
     expect(node.textContent).toContain('版本不可用');
     expect(node.textContent).toContain('历史数据不可用');
   });
-  it('后台快照只有 session.id 时仍显示评估会话，不渲染 undefined', () => {
+  it('后台快照带内部 session.id 时也不向用户显示', () => {
     const node = buildBacktestResultContent({
       session: { id: 'evaluation-session-snapshot' },
       status: 'complete',
@@ -455,8 +456,8 @@ describe('模拟回测（历史回放）', () => {
       },
       days: [],
     });
-    expect(node.textContent).toContain('Evaluation session evaluation-session-snapshot');
-    expect(node.textContent).not.toContain('Evaluation session undefined');
+    expect(node.textContent).not.toContain('evaluation-session-snapshot');
+    expect(node.textContent).not.toContain('Evaluation session');
   });
 
   it('历史评估取消后状态文案不冒充完成', async () => {
@@ -499,6 +500,20 @@ describe('模拟回测（历史回放）', () => {
 });
 
 describe('严格回测', () => {
+  it('历史评估下拉用日期与状态作标签，不显示 session ID', () => {
+    const options = evaluationSessionOptions([
+      {
+        status: 'complete',
+        startedAt: '2026-08-20T00:00:00.000Z',
+        inputSnapshot: { evaluationSessionId: 'evaluation-session-internal' },
+      },
+    ]);
+    expect(options).toHaveLength(1);
+    expect(options[0]?.value).toBe('evaluation-session-internal');
+    expect(options[0]?.label).toContain('2026');
+    expect(options[0]?.label).not.toContain('evaluation-session-internal');
+  });
+
   it('门禁不完整时只展示不可用说明，不展示伪指标', () => {
     const node = buildStrictBacktestResultContent({
       id: 'strict-1',
@@ -517,6 +532,8 @@ describe('严格回测', () => {
     expect(node.textContent).toContain('tradability');
     expect(node.textContent).toContain('不会输出伪造 Sharpe 或胜率');
     expect(node.textContent).not.toContain('最终净值');
+    expect(node.textContent).not.toContain('strict-1');
+    expect(node.textContent).not.toContain('aaaaaaaaaaaa');
   });
 });
 
@@ -696,7 +713,7 @@ describe('Phase B 洞察与调度', () => {
     });
   });
 
-  it('闭环 tab 展示事实、阶段 Advice 与显式 Trade 链接，并保留未知状态', async () => {
+  it('闭环 tab 展示事实、阶段 Advice 与交易关联，但不显示内部 ID', async () => {
     globalThis.fetch = async (path) => {
       expect(String(path)).toContain('/decision-cycles');
       return jsonResponse({
@@ -811,9 +828,20 @@ describe('Phase B 洞察与调度', () => {
     expect(node.textContent).toContain('待观察');
     expect(node.textContent).toContain('AI Advice / 决策快照');
     expect(node.textContent).toContain('已过期');
-    expect(node.textContent).toContain('Outcome 待回填');
-    expect(node.textContent).toContain('trade-1');
-    expect(node.textContent).toContain('Unknown');
+    expect(node.textContent).toContain('结果待回填');
+    expect(node.textContent).toContain('已关联 1 笔交易');
+    expect(node.textContent).toContain('待确认');
+    for (const internalId of [
+      'run-cycle-1',
+      'version-cycle-1',
+      'signal-1',
+      'obs-t1',
+      'advice-1',
+      'trade-1',
+      'result-fact',
+    ]) {
+      expect(node.textContent).not.toContain(internalId);
+    }
     expect(node.textContent).not.toContain('概率');
   });
 });

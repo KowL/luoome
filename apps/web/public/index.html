@@ -233,7 +233,7 @@
           <div id="market-recent" class="market-recent"></div>
         </div>
         <div id="market-empty" class="card mt-4">
-          <p class="placeholder" id="market-empty-tip">搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&amp;range=3m。</p>
+          <p class="placeholder" id="market-empty-tip">搜索并选择一只股票查看行情，也可以从持仓、建议或研究页直接进入。</p>
           <div id="market-sentiment" class="market-sentiment"></div>
         </div>
         <div id="market-main" hidden>
@@ -392,7 +392,7 @@
         <div class="route-header">
           <div>
             <h1>预警计划</h1>
-            <div class="route-meta">引用关注列表 · 稳定规则 ID · 盘中试跑</div>
+            <div class="route-meta">引用关注列表 · 稳定规则 · 盘中试跑</div>
           </div>
           <div class="flex gap-2">
             <button id="btn-alert-run" class="btn btn-outline" type="button">试跑一轮</button>
@@ -436,10 +436,6 @@
             <label>
               <span>受管目录</span>
               <input id="research-vault-managed-root" name="managedRoot" type="text" value="Research/Luoome" required />
-            </label>
-            <label>
-              <span>稳定 Vault ID <span class="muted">可选</span></span>
-              <input id="research-vault-id" name="vaultId" type="text" autocomplete="off" placeholder="investment-vault" />
             </label>
             <label>
               <span>Markdown 上限（MB）</span>
@@ -643,7 +639,7 @@
                 <h3>快照版本</h3>
                 <div class="table-wrap">
                   <table class="table" id="review-performance-snapshots-table">
-                    <thead><tr><th>计算时间</th><th>区间</th><th>完整度</th><th>dataAsOf</th><th>输入指纹</th><th>预算事实</th></tr></thead>
+                    <thead><tr><th>计算时间</th><th>区间</th><th>完整度</th><th>数据截至</th><th>预算事实</th></tr></thead>
                     <tbody><tr><td colspan="6" class="placeholder">加载中…</td></tr></tbody>
                   </table>
                 </div>
@@ -652,7 +648,7 @@
                 <h3>逐交易日审计</h3>
                 <div class="table-wrap">
                   <table class="table" id="review-performance-audit-table">
-                    <thead><tr><th>交易日</th><th>状态</th><th>缺失标的 / 原因</th><th>修订</th><th>最新快照</th></tr></thead>
+                    <thead><tr><th>交易日</th><th>状态</th><th>缺失标的 / 原因</th><th>修订</th></tr></thead>
                     <tbody><tr><td colspan="5" class="placeholder">加载中…</td></tr></tbody>
                   </table>
                 </div>
@@ -779,9 +775,9 @@
               </div>
               <div class="ai-model-row">
                 <div class="field">
-                  <label for="ai-model">模型 ID</label>
+                  <label for="ai-model">模型标识</label>
                   <input id="ai-model" type="text" required maxlength="200" spellcheck="false" />
-                  <span class="hint">填写 provider 要求的精确模型 ID。</span>
+                  <span class="hint">填写服务商要求的精确模型标识。</span>
                 </div>
                 <button id="btn-ai-provider-defaults" class="btn btn-outline ai-default-btn" type="button">
                   ↻ 使用推荐值

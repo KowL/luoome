@@ -45,7 +45,10 @@ export const appendMemberStock = (selected, stock, existingStockIds = []) => {
 
 /** 触发条目时间行；字段名与 WatchTriggerSchema（只有 createdAt）对齐。 */
 export const triggerMetaText = (trigger) =>
-  `${trigger.alertPlanId} · 数据 ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
+  `数据 ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
+
+export const alertPlanMetaText = (plan, watchlistName) =>
+  `${watchlistName ?? '关注列表不可用'} · ${plan.rules?.length ?? 0} 条规则 · ${plan.logic ?? '--'} · ${plan.triggerMode ?? '--'} · 冷却 ${plan.cooldownMinutes ?? 0} 分钟 · 日上限 ${plan.dailyNotificationLimit ?? '--'}`;
 
 export const buildAlertPlanMutationInput = (values, { editing = false } = {}) => {
   let rules;
@@ -70,7 +73,7 @@ export const buildAlertPlanMutationInput = (values, { editing = false } = {}) =>
   const name = values.name.trim();
   const watchlistId = values.watchlistId.trim();
   if (name.length === 0) throw new Error('请输入预警名称');
-  if (watchlistId.length === 0) throw new Error('请输入关注列表 ID');
+  if (watchlistId.length === 0) throw new Error('请选择关注列表');
   return {
     name,
     watchlistId,
@@ -918,11 +921,35 @@ export const renderWatchlists = async (setStatus) => {
   renderWatchlistOverview(setStatus);
 };
 
-const editAlertPlan = async (plan, setStatus) => {
+const loadAlertWatchlists = async () => {
+  const result = await callApi('/api/watchlists');
+  if (!result.ok) return result;
+  return {
+    ...result,
+    data: (result.data.items ?? []).map(({ watchlist }) => watchlist),
+  };
+};
+
+const editAlertPlan = async (plan, setStatus, suppliedWatchlists) => {
   const creating = plan === null;
+  const watchlistsResult =
+    suppliedWatchlists === undefined
+      ? await loadAlertWatchlists()
+      : { ok: true, data: suppliedWatchlists };
+  if (!watchlistsResult.ok) {
+    setStatus(`关注列表加载失败：${errorText(watchlistsResult)}`, true);
+    return false;
+  }
+  const watchlists = watchlistsResult.data.filter(
+    (watchlist) => watchlist.enabled || watchlist.id === plan?.watchlistId,
+  );
+  if (watchlists.length === 0) {
+    setStatus('请先创建一个可用的关注列表', true);
+    return false;
+  }
   const watchlistId = creating
     ? watchlistStockTab === 'all'
-      ? ''
+      ? watchlists[0].id
       : watchlistStockTab
     : plan.watchlistId;
   const values = await promptDialog({
@@ -934,7 +961,14 @@ const editAlertPlan = async (plan, setStatus) => {
         label: '名称',
         value: creating ? `${watchlistId || '关注列表'} 价格预警` : plan.name,
       },
-      { key: 'watchlistId', label: '关注列表 ID', value: watchlistId },
+      {
+        key: 'watchlistId',
+        label: '关注列表',
+        value: watchlists.some((watchlist) => watchlist.id === watchlistId)
+          ? watchlistId
+          : watchlists[0].id,
+        options: watchlists.map((watchlist) => ({ value: watchlist.id, label: watchlist.name })),
+      },
       {
         key: 'rulesJson',
         label: '规则 JSON',
@@ -1026,9 +1060,9 @@ const editAlertPlan = async (plan, setStatus) => {
   return result.ok;
 };
 
-const planCard = (plan, setStatus) => {
+const planCard = (plan, setStatus, watchlistsById, watchlists) => {
   const edit = actionButton('编辑', async () => {
-    if (await editAlertPlan(plan, setStatus)) await renderAlerts(setStatus);
+    if (await editAlertPlan(plan, setStatus, watchlists)) await renderAlerts(setStatus);
   });
   const remove = actionButton('删除', async () => {
     const confirmed = await confirmDialog({
@@ -1044,11 +1078,7 @@ const planCard = (plan, setStatus) => {
   });
   return el('div', 'entity-item', [
     el('strong', null, plan.name),
-    el(
-      'span',
-      'muted',
-      `${plan.watchlistId} · ${plan.rules.length} 条规则 · ${plan.logic} · ${plan.triggerMode} · 冷却 ${plan.cooldownMinutes} 分钟 · 日上限 ${plan.dailyNotificationLimit}`,
-    ),
+    el('span', 'muted', alertPlanMetaText(plan, watchlistsById.get(plan.watchlistId)?.name)),
     el(
       'span',
       `badge ${plan.enabled ? 'badge-active' : 'badge-neutral'}`,
@@ -1058,10 +1088,15 @@ const planCard = (plan, setStatus) => {
   ]);
 };
 
-const triggerCard = (trigger) =>
+const triggerCard = (trigger, plansById) =>
   el('div', 'entity-item', [
     el('strong', null, `${trigger.stockId} · ${trigger.ruleKind}`),
-    el('div', 'muted', triggerMetaText(trigger)),
+    el('div', 'muted', [
+      ...(plansById.get(trigger.alertPlanId)?.name
+        ? [`${plansById.get(trigger.alertPlanId).name} · `]
+        : []),
+      triggerMetaText(trigger),
+    ]),
     el('div', null, (trigger.evidence ?? []).join('；')),
   ]);
 
@@ -1092,21 +1127,25 @@ const mountPaginated = (root, items, renderItem, emptyNode) => {
 };
 
 export const renderAlerts = async (setStatus) => {
-  const [plansResult, triggersResult] = await Promise.all([
+  const [plansResult, triggersResult, watchlistsResult] = await Promise.all([
     callApi('/api/alert-plans'),
     callApi('/api/watch/triggers?limit=50'),
+    loadAlertWatchlists(),
   ]);
+  const plans = plansResult.ok ? (plansResult.data.plans ?? []) : [];
+  const watchlists = watchlistsResult.ok ? watchlistsResult.data : [];
+  const plansById = new Map(plans.map((plan) => [plan.id, plan]));
+  const watchlistsById = new Map(watchlists.map((watchlist) => [watchlist.id, watchlist]));
   const plansRoot = $('#alerts-list');
   const triggersRoot = $('#alerts-triggers');
   if (plansRoot !== null) {
-    const plans = plansResult.ok ? (plansResult.data.plans ?? []) : [];
     const meta = $('#alerts-meta');
     if (meta !== null) meta.textContent = `${plans.length} 个`;
     if (plansResult.ok) {
       mountPaginated(
         plansRoot,
         plans,
-        (plan) => planCard(plan, setStatus),
+        (plan) => planCard(plan, setStatus, watchlistsById, watchlists),
         el('p', 'placeholder', '暂无预警计划。'),
       );
     } else {
@@ -1116,7 +1155,12 @@ export const renderAlerts = async (setStatus) => {
   if (triggersRoot !== null) {
     const triggers = triggersResult.ok ? (triggersResult.data.triggers ?? []) : [];
     if (triggersResult.ok) {
-      mountPaginated(triggersRoot, triggers, triggerCard, el('p', 'placeholder', '暂无触发记录。'));
+      mountPaginated(
+        triggersRoot,
+        triggers,
+        (trigger) => triggerCard(trigger, plansById),
+        el('p', 'placeholder', '暂无触发记录。'),
+      );
     } else {
       mount(triggersRoot, el('p', 'status error', errorText(triggersResult)));
     }

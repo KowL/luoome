@@ -161,7 +161,7 @@ const adviceCard = (advice, options = {}) => {
     if (o.benchmarkPnl !== undefined) row2Parts.push(`基准 ${fmtSigned(o.benchmarkPnl)}`);
     if (o.holdingHours !== undefined) row2Parts.push(`持有 ${o.holdingHours}h`);
     if (Array.isArray(o.tradeIds) && o.tradeIds.length > 0) {
-      row2Parts.push(`交易 ${o.tradeIds.join(',')}`);
+      row2Parts.push(`已关联 ${o.tradeIds.length} 笔交易`);
     }
   }
   card.append(

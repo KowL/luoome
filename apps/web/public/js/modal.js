@@ -113,6 +113,10 @@ export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = 
           control.wrap = 'soft';
         }
       } else {
+        if (field.multiple === true) {
+          control.multiple = true;
+          control.size = Math.min(Math.max(field.options.length, 3), 8);
+        }
         for (const option of field.options) {
           const node = document.createElement('option');
           node.value = option.value;
@@ -124,11 +128,18 @@ export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = 
       control.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          settle(Object.fromEntries(controls.map(({ key, control: c }) => [key, c.value.trim()])));
+          settle(Object.fromEntries(controls.map(({ key, control: c }) => [key, controlValue(c)])));
         }
       });
       return { key: field.key, control };
     });
+    const controlValue = (control) =>
+      control instanceof HTMLSelectElement && control.multiple
+        ? [...control.selectedOptions]
+            .map((option) => option.value.trim())
+            .filter(Boolean)
+            .join(',')
+        : control.value.trim();
     openModal(
       title,
       el('div', null, [
@@ -143,7 +154,7 @@ export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = 
           danger,
           onConfirm: () =>
             settle(
-              Object.fromEntries(controls.map(({ key, control }) => [key, control.value.trim()])),
+              Object.fromEntries(controls.map(({ key, control }) => [key, controlValue(control)])),
             ),
         }),
       ]),

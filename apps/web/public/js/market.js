@@ -39,7 +39,7 @@ const RECENT_KEY = 'luoome.market.recent';
 const REFRESH_ACTIVE_MS = 60_000;
 const REFRESH_IDLE_MS = 300_000;
 const GRANULARITY_TITLES = { day: '日 K', week: '周 K', month: '月 K' };
-const EMPTY_TIP = '搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&range=3m。';
+const EMPTY_TIP = '搜索并选择一只股票查看行情，也可以从持仓、建议或研究页直接进入。';
 
 const state = {
   stockId: null,

@@ -668,7 +668,7 @@ const renderCycleCard = (cycle, strategyId) => {
         ),
       ]),
       el('p', null, 'StrategyResult 已明确入选；以下事实均绑定本次 run。'),
-      el('p', 'mono muted', `证据：${(cycle.result.evidence ?? []).join('、') || '无'}`),
+      el('p', 'muted', `已记录 ${(cycle.result.evidence ?? []).length} 项入选依据`),
     ]),
     el('li', 'strategy-cycle-stage strategy-cycle-fact', [
       el('div', 'strategy-cycle-stage-head', [
@@ -679,8 +679,7 @@ const renderCycleCard = (cycle, strategyId) => {
         ? [el('p', 'placeholder', '本周期没有 emitted signal。')]
         : (cycle.signals ?? []).map((signal) =>
             el('article', 'strategy-cycle-fact-row', [
-              el('strong', 'mono', signal.id),
-              el('span', null, `${signal.direction} · score ${fmtNum(signal.score)}`),
+              el('strong', null, `${signal.direction} · score ${fmtNum(signal.score)}`),
               el('p', 'muted', (signal.evidence ?? []).join('；')),
             ]),
           )),
@@ -719,9 +718,7 @@ const renderCycleCard = (cycle, strategyId) => {
             ),
             ...(facts.length === 0
               ? [el('p', 'muted', item.unavailableReasons?.join('；') || '事实不可用')]
-              : facts.map((observation) =>
-                  el('p', 'muted', `${observation.id} · ${observationFactText(observation)}`),
-                )),
+              : facts.map((observation) => el('p', 'muted', observationFactText(observation)))),
             el(
               'small',
               'muted',
@@ -756,9 +753,9 @@ const renderCycleCard = (cycle, strategyId) => {
             const outcome = advice.outcome;
             const outcomeSummary =
               outcome === undefined
-                ? 'Outcome 待回填'
+                ? '结果待回填'
                 : [
-                    `Outcome ${outcome.outcome}`,
+                    `结果 ${outcome.outcome}`,
                     ...(outcome.pnl === undefined ? [] : [`PnL ${fmtSigned(outcome.pnl)}`]),
                     ...(outcome.benchmarkPnl === undefined
                       ? []
@@ -776,12 +773,9 @@ const renderCycleCard = (cycle, strategyId) => {
                 `${adviceValidityText(advice)} ${fmtDateTime(advice.validFrom)} → ${fmtDateTime(advice.validUntil)} · ${outcomeSummary}`,
               ),
               ...(outcome?.tradeIds?.length
-                ? [el('p', 'mono muted', `显式 Trade IDs：${outcome.tradeIds.join('、')}`)]
+                ? [el('p', 'muted', `已关联 ${outcome.tradeIds.length} 笔交易`)]
                 : []),
-              cycleLink(
-                `#advice?stockId=${encodeURIComponent(cycle.stockId)}`,
-                `Advice ${advice.id.slice(0, 10)}…`,
-              ),
+              cycleLink(`#advice?stockId=${encodeURIComponent(cycle.stockId)}`, '查看这条 Advice'),
             ]);
           })),
     ]),
@@ -791,22 +785,16 @@ const renderCycleCard = (cycle, strategyId) => {
         cycleLink('#review', '打开全局复盘'),
       ]),
       ...(tradeRows.length === 0
-        ? [
-            el(
-              'p',
-              'placeholder',
-              '当前账户没有通过 Advice ID 或 AdviceOutcome.tradeIds 显式关联的 Trade。',
-            ),
-          ]
+        ? [el('p', 'placeholder', '当前账户没有明确关联到本建议的交易。')]
         : tradeRows.map((trade) => {
             const links = tradeLinks.filter((link) => link.tradeId === trade.id);
             return el('article', 'strategy-cycle-trade-row', [
-              el('strong', 'mono', trade.id),
-              el('span', null, `${trade.side} · ${trade.quantity} @ ${trade.price}`),
+              el('strong', null, `${trade.side} · ${trade.quantity} @ ${trade.price}`),
               el('span', 'muted', fmtDateTime(trade.executedAt)),
-              el('small', 'muted', links.map((link) => link.relation).join('、')),
+              ...(links.length > 0 ? [el('small', 'muted', '明确关联到建议')] : []),
             ]);
           })),
+      ...(tradeRows.length > 0 ? [el('p', 'muted', `已关联 ${tradeRows.length} 笔交易`)] : []),
     ]),
   ]);
   const audit = el('details', 'strategy-cycle-audit', [
@@ -814,11 +802,10 @@ const renderCycleCard = (cycle, strategyId) => {
     el(
       'p',
       'mono muted',
-      `factsAsOf ${fmtDateTime(cycle.factsAsOf)} · evidence ${cycle.evidenceIds?.length ?? 0}`,
+      `事实截止 ${fmtDateTime(cycle.factsAsOf)} · ${cycle.evidenceIds?.length ?? 0} 项依据`,
     ),
-    el('p', null, `Evidence IDs：${(cycle.evidenceIds ?? []).join('、') || '无'}`),
     ...(cycle.unknowns?.length
-      ? [el('p', 'status warning', `Unknown：${cycle.unknowns.join('；')}`)]
+      ? [el('p', 'status warning', `待确认：${cycle.unknowns.join('；')}`)]
       : []),
     ...(cycle.limitations?.length
       ? [el('p', 'muted', `限制：${cycle.limitations.join('；')}`)]
@@ -826,10 +813,7 @@ const renderCycleCard = (cycle, strategyId) => {
   ]);
   return el('article', 'strategy-cycle-card', [
     el('header', 'strategy-cycle-head', [
-      el('div', null, [
-        stock,
-        el('p', 'mono muted', `run ${cycle.runId} · version ${cycle.strategyVersionId}`),
-      ]),
+      el('div', null, [stock, el('p', 'muted', '本次正式运行入选')]),
       el('div', 'strategy-cycle-run-meta', [
         badge(RUN_STATUS[cycle.run?.status], cycle.run?.status ?? '--'),
         badge(
@@ -858,11 +842,7 @@ export const renderDecisionCycles = async (strategyId, state = {}) => {
     el('div', null, [
       el('span', 'section-kicker', 'DECISION CYCLE'),
       el('h3', null, '策略候选闭环'),
-      el(
-        'p',
-        'muted',
-        '按 strategyId + runId + stockId 派生；观察是事后事实，Advice 是可选决策快照。',
-      ),
+      el('p', 'muted', '按每次正式运行与候选股票形成闭环；观察是事后事实，Advice 是可选决策快照。'),
     ]),
     cycleLink('#review', '全局复盘'),
   ]);
@@ -887,7 +867,7 @@ export const renderDecisionCycles = async (strategyId, state = {}) => {
     el(
       'p',
       'mono muted',
-      `共 ${payload.total} 个周期 · factsAsOf ${fmtDateTime(payload.factsAsOf)} · evidence ${payload.evidenceIds?.length ?? 0}`,
+      `共 ${payload.total} 个周期 · 事实截止 ${fmtDateTime(payload.factsAsOf)} · ${payload.evidenceIds?.length ?? 0} 项依据`,
     ),
     ...cycles.map((cycle) => renderCycleCard(cycle, strategyId)),
     ...(payload.limitations?.length
@@ -1346,7 +1326,7 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
   );
   const select = el('select');
   for (const { watchlist } of targets) {
-    const option = el('option', null, `${watchlist.name} · ${watchlist.id}`);
+    const option = el('option', null, watchlist.name);
     option.value = watchlist.id;
     select.append(option);
   }
@@ -1382,7 +1362,7 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
     cancel.addEventListener('click', async () => {
       const confirmed = await confirmDialog({
         title: '取消 Strategy 订阅',
-        message: `确认停止将 ${strategy.name} 的后续 published operational run 同步到“${target?.name ?? subscription.watchlistId}”？已有 Watchlist 成员和同步历史不会被删除。`,
+        message: `确认停止将 ${strategy.name} 的后续正式运行同步到“${target?.name ?? '已关联关注列表'}”？已有关注列表成员和同步历史不会被删除。`,
         confirmLabel: '取消订阅',
       });
       if (!confirmed) return;
@@ -1402,14 +1382,10 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
     });
     return el('article', 'entity-item', [
       el('div', 'flex gap-2', [
-        el('strong', null, target?.name ?? subscription.watchlistId),
+        el('strong', null, target?.name ?? '已关联关注列表'),
         el('span', 'badge badge-active', '同步中'),
       ]),
-      el(
-        'p',
-        'muted',
-        `source ${subscription.sourceKey} · 创建于 ${fmtDateTime(subscription.createdAt)}`,
-      ),
+      el('p', 'muted', `创建于 ${fmtDateTime(subscription.createdAt)}`),
       cancel,
     ]);
   });
@@ -1632,11 +1608,7 @@ export const buildStrictBacktestResultContent = (run) => {
           ]),
         ];
   return el('div', 'strategy-backtest-result', [
-    el(
-      'p',
-      'muted',
-      `严格回测 ${run.id} · ${run.status} · 输入指纹 ${run.inputFingerprint.slice(0, 12)}…`,
-    ),
+    el('p', 'muted', `严格回测 · ${run.status}`),
     ...metricNodes,
     el('h4', null, '门禁审计'),
     ...(gateRows.length === 0
@@ -1702,11 +1674,44 @@ export const runStrictStrategyBacktest = async (strategy, input, setStatus) => {
   return { ...created, data: { run } };
 };
 
+export const evaluationSessionOptions = (runs) => {
+  const seen = new Set();
+  const options = [];
+  for (const run of runs ?? []) {
+    const id = run.inputSnapshot?.evaluationSessionId;
+    if (typeof id !== 'string' || id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    const status = RUN_STATUS[run.status]?.[0] ?? run.status ?? '状态未知';
+    options.push({
+      value: id,
+      label: `${fmtDateTime(run.startedAt ?? run.dataAsOf)} · ${status}`,
+    });
+  }
+  return options;
+};
+
 const openStrictBacktestDialog = async (strategy, setStatus) => {
+  const runsResult = await cachedGet(
+    `/api/strategies/${encodeURIComponent(strategy.id)}/runs?scope=evaluation`,
+  );
+  if (!runsResult.ok) {
+    setStatus(`历史评估记录加载失败：${errorText(runsResult)}`, true);
+    return;
+  }
+  const sessionOptions = evaluationSessionOptions(runsResult.data.runs);
+  if (sessionOptions.length === 0) {
+    setStatus('请先完成一次模拟回测，再创建严格回测', true);
+    return;
+  }
   const values = await promptDialog({
     title: `严格回测 · ${strategy.name}`,
     fields: [
-      { key: 'evaluationSessionId', label: '历史评估 session ID', value: '' },
+      {
+        key: 'evaluationSessionId',
+        label: '历史评估记录',
+        value: sessionOptions[0].value,
+        options: sessionOptions,
+      },
       { key: 'initialCash', label: '初始资金', value: '1000000' },
       { key: 'commissionBps', label: '佣金（bps）', value: '3' },
       { key: 'minimumCommission', label: '最低佣金', value: '5' },
@@ -1715,7 +1720,7 @@ const openStrictBacktestDialog = async (strategy, setStatus) => {
       { key: 'sellSlippageBps', label: '卖出滑点（bps）', value: '2' },
     ],
     confirmLabel: '创建严格回测',
-    note: '必须提供已完成的历史评估 session。任一 PIT、修订、费用、滑点、可交易性、公司行动、基准或求值器身份门禁缺失时，只返回不可用/部分结果，不生成收益指标。',
+    note: '请选择一条已完成的历史评估。任一 PIT、修订、费用、滑点、可交易性、公司行动、基准或求值器身份门禁缺失时，只返回不可用/部分结果，不生成收益指标。',
   });
   if (values === null) return;
   await runStrictStrategyBacktest(
@@ -1735,9 +1740,8 @@ const openStrictBacktestDialog = async (strategy, setStatus) => {
   );
 };
 
-export const buildBacktestResultContent = (data, strategyId = '', sessionId) => {
+export const buildBacktestResultContent = (data, strategyId = '') => {
   const summary = data.summary;
-  const evaluationSessionId = sessionId ?? data.sessionId ?? data.session?.id;
   const evaluationButton = el('button', 'btn btn-outline btn-sm', '查看历史评估记录');
   evaluationButton.type = 'button';
   const evaluationHash = buildStrategyHash({
@@ -1798,9 +1802,6 @@ export const buildBacktestResultContent = (data, strategyId = '', sessionId) => 
             ]),
           ]),
         ]),
-    ...(evaluationSessionId === undefined
-      ? []
-      : [el('p', 'mono muted', `Evaluation session ${evaluationSessionId}`)]),
   ]);
 };
 

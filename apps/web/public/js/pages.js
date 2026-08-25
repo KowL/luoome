@@ -1387,6 +1387,19 @@ const formatPercentPoints = (value) =>
 
 const toDateInputValue = (date) => date.toISOString().slice(0, 10);
 
+const linkedTradesText = (tradeIds) =>
+  Array.isArray(tradeIds) && tradeIds.length > 0 ? `已关联 ${tradeIds.length} 笔交易` : null;
+
+const tradeOptionLabel = (trade) =>
+  `${fmtDateTime(trade.executedAt)} · ${trade.stockId} · ${trade.side === 'buy' ? '买入' : '卖出'} ${trade.quantity} @ ${fmtNum(trade.price)}`;
+
+const performanceAuditText = (audit) => {
+  if (audit?.snapshotId === undefined) return '无审计快照';
+  return `审计快照${
+    audit.dataAsOf === undefined ? '' : ` · 数据截至 ${String(audit.dataAsOf).slice(0, 10)}`
+  }`;
+};
+
 const renderAccountPerformanceAudit = async (accountId, from, to) => {
   const base =
     accountId.length > 0 ? `/api/accounts/${accountId}/performance` : '/api/account/performance';
@@ -1402,10 +1415,10 @@ const renderAccountPerformanceAudit = async (accountId, from, to) => {
       meta.textContent = `审计加载失败：${snapshotsResult.error?.kind ?? auditResult.error?.kind ?? 'unknown'}`;
     }
     if (snapshotsBody !== null) {
-      snapshotsBody.innerHTML = '<tr><td colspan="6" class="placeholder">暂无快照审计</td></tr>';
+      snapshotsBody.innerHTML = '<tr><td colspan="5" class="placeholder">暂无快照审计</td></tr>';
     }
     if (auditBody !== null) {
-      auditBody.innerHTML = '<tr><td colspan="5" class="placeholder">暂无区间审计</td></tr>';
+      auditBody.innerHTML = '<tr><td colspan="4" class="placeholder">暂无区间审计</td></tr>';
     }
     return;
   }
@@ -1419,7 +1432,7 @@ const renderAccountPerformanceAudit = async (accountId, from, to) => {
     mount(
       snapshotsBody,
       snapshots.length === 0
-        ? el('tr', null, el('td', { colSpan: 6, class: 'placeholder' }, '尚无持久化快照'))
+        ? el('tr', null, el('td', { colSpan: 5, class: 'placeholder' }, '尚无持久化快照'))
         : snapshots.map((snapshot) => {
             const facts = snapshot.inputFacts;
             const budget =
@@ -1439,7 +1452,6 @@ const renderAccountPerformanceAudit = async (accountId, from, to) => {
                 null,
                 snapshot.dataAsOf === undefined ? '--' : String(snapshot.dataAsOf).slice(0, 10),
               ),
-              el('td', 'audit-fingerprint', snapshot.inputFingerprint.slice(0, 12)),
               el('td', null, budget),
             ]);
           }),
@@ -1449,7 +1461,7 @@ const renderAccountPerformanceAudit = async (accountId, from, to) => {
     mount(
       auditBody,
       audit.days.length === 0
-        ? el('tr', null, el('td', { colSpan: 5, class: 'placeholder' }, '区间内没有 A 股交易日'))
+        ? el('tr', null, el('td', { colSpan: 4, class: 'placeholder' }, '区间内没有 A 股交易日'))
         : [...audit.days].reverse().map((day) => {
             const issue =
               day.missingStockIds.length > 0
@@ -1460,7 +1472,6 @@ const renderAccountPerformanceAudit = async (accountId, from, to) => {
               el('td', `audit-status-${day.completeness}`, day.completeness),
               el('td', null, day.completeness === 'complete' ? '--' : issue),
               el('td', null, `${day.revisionCount} 版`),
-              el('td', 'audit-fingerprint', day.snapshotId?.slice(0, 12) ?? '--'),
             ]);
           }),
     );
@@ -1494,12 +1505,7 @@ const renderAccountPerformance = async () => {
     const completeness =
       performance.completeness === 'complete' ? '完整' : `部分（${performance.completeness}）`;
     const audit = performance.audit;
-    const auditText =
-      audit?.snapshotId === undefined
-        ? '无审计快照'
-        : `snapshot ${audit.snapshotId.slice(0, 18)}…${
-            audit.dataAsOf === undefined ? '' : ` · dataAsOf ${String(audit.dataAsOf).slice(0, 10)}`
-          }`;
+    const auditText = performanceAuditText(audit);
     const benchmarkLabel = performance.benchmarkStockId ?? '未配置';
     meta.textContent = `${completeness} · benchmark ${benchmarkLabel} ${performance.benchmarkStatus ?? 'unavailable'} · ${auditText}`;
   }
@@ -1661,19 +1667,15 @@ const renderDecisionLoopSummary = async () => {
         el('h3', null, '研究假设版本引用'),
         ...(review.researchHypothesisVersions?.length
           ? review.researchHypothesisVersions.map((version) =>
-              el(
-                'p',
-                'mono muted',
-                `${version.id} · v${version.version} · ${version.summary ?? '无摘要'}`,
-              ),
+              el('p', 'mono muted', `v${version.version} · ${version.summary ?? '无摘要'}`),
             )
           : [el('p', 'placeholder', '暂无研究假设版本引用。')]),
       ]),
       el('section', null, [
         el('h3', null, '审计边界'),
-        el('p', 'mono muted', `Evidence IDs：${review.evidenceIds?.join('、') || '无'}`),
+        el('p', 'muted', `已记录 ${review.evidenceIds?.length ?? 0} 项依据`),
         ...(review.unknowns?.length
-          ? [el('p', 'status warning', `Unknown：${review.unknowns.join('；')}`)]
+          ? [el('p', 'status warning', `待确认：${review.unknowns.join('；')}`)]
           : []),
         ...(review.limitations?.length
           ? [el('p', 'muted', `限制：${review.limitations.join('；')}`)]
@@ -1780,9 +1782,9 @@ const renderReview = async (setStatus) => {
                 ...(a.outcome.holdingHours === undefined
                   ? []
                   : [`持有 ${a.outcome.holdingHours}h`]),
-                ...(Array.isArray(a.outcome.tradeIds) && a.outcome.tradeIds.length > 0
-                  ? [`交易 ${a.outcome.tradeIds.join(',')}`]
-                  : []),
+                ...(linkedTradesText(a.outcome.tradeIds) === null
+                  ? []
+                  : [linkedTradesText(a.outcome.tradeIds)]),
               ];
         li.append(
           el('div', 'row-1', [
@@ -1802,7 +1804,7 @@ const renderReview = async (setStatus) => {
           btn.type = 'button';
           btn.addEventListener('click', (event) => {
             event.stopPropagation();
-            fillOutcomeForm(a.id, a.decision);
+            fillOutcomeForm(a.id, a.decision, a.subjectId);
           });
           li.append(btn);
         }
@@ -1837,9 +1839,18 @@ const outcomeInputOf = (values) => {
   };
 };
 
-const fillOutcomeForm = async (adviceId, decision) => {
+const fillOutcomeForm = async (adviceId, decision, stockId) => {
+  const tradesResult = await callApi(
+    `/api/trades?stockId=${encodeURIComponent(stockId)}&limit=100`,
+  );
+  const tradeOptions = tradesResult.ok
+    ? (tradesResult.data.trades ?? []).map((trade) => ({
+        value: trade.id,
+        label: tradeOptionLabel(trade),
+      }))
+    : [];
   const values = await promptDialog({
-    title: `回填 outcome（${adviceId.slice(0, 8)} · 决策 ${decision}）`,
+    title: `回填结果 · 决策 ${decision}`,
     fields: [
       {
         key: 'outcome',
@@ -1858,11 +1869,16 @@ const fillOutcomeForm = async (adviceId, decision) => {
       },
       { key: 'benchmarkPnl', label: '同期基准盈亏（可选）', placeholder: '选填' },
       { key: 'holdingHours', label: '持有时长（小时，可选）', placeholder: '选填' },
-      {
-        key: 'tradeIds',
-        label: '关联交易 ID（可选，逗号分隔）',
-        placeholder: '例如 trade-1,trade-2',
-      },
+      ...(tradeOptions.length === 0
+        ? []
+        : [
+            {
+              key: 'tradeIds',
+              label: '关联交易（可选）',
+              value: '',
+              options: [{ value: '', label: '不关联交易' }, ...tradeOptions],
+            },
+          ]),
       { key: 'notes', label: '备注（可选）', placeholder: '选填' },
     ],
     confirmLabel: '回填',
@@ -1875,7 +1891,7 @@ const fillOutcomeForm = async (adviceId, decision) => {
     }),
   });
   if (r.ok) {
-    setStatus(`outcome 已回填 ${adviceId.slice(0, 8)}`);
+    setStatus('结果已回填');
     await renderReview(setStatus);
   } else {
     setStatus(
@@ -2010,9 +2026,7 @@ const renderDataHealth = async (setStatus) => {
           el(
             'ul',
             null,
-            data.watchlistStale.map((item) =>
-              el('li', null, `${item.name}（${item.watchlistId}）`),
-            ),
+            data.watchlistStale.map((item) => el('li', null, item.name)),
           ),
         ]);
   // 数据集明细（ruo §8 读模型的 datasets，此前被丢弃）：折叠展示 per-dataset 观测
@@ -2168,6 +2182,7 @@ const renderResearch = async (setStatus) => {
   );
   const inbox = document.getElementById('research-inbox');
   const writeStatus = document.getElementById('research-write-status');
+  let configuredVaultId = '';
   if (
     input === null ||
     button === null ||
@@ -2197,7 +2212,7 @@ const renderResearch = async (setStatus) => {
       return;
     }
     const state = model.state;
-    embeddingStatus.textContent = `语义索引：${model.name} · ${state.status} · ${state.embeddedChunks}/${state.expectedChunks} chunks · ${model.identity.dimensions} 维 · ${model.identity.version}`;
+    embeddingStatus.textContent = `语义索引：${model.name} · ${state.status} · ${state.embeddedChunks}/${state.expectedChunks} chunks · ${model.identity.dimensions} 维`;
   };
 
   const loadEmbeddingStatus = async () => {
@@ -2229,14 +2244,14 @@ const renderResearch = async (setStatus) => {
     }
     setValue('research-vault-root', data.researchRoot);
     setValue('research-vault-managed-root', data.managedRoot);
-    setValue('research-vault-id', data.vaultId);
+    configuredVaultId = data.vaultId ?? '';
     setValue('research-vault-max-text', data.maxTextMb);
     setValue('research-vault-max-attachment', data.maxAttachmentMb);
     if (vaultState !== null) {
       vaultState.textContent = data.configError
         ? '配置无效'
         : data.configured
-          ? `已连接 · ${data.effectiveVaultId ?? 'Vault'}`
+          ? `已连接 · ${data.vaultName ?? 'Vault'}`
           : '未配置';
       vaultState.className =
         `vault-state ${data.configError ? 'invalid' : data.configured ? 'configured' : ''}`.trim();
@@ -2299,7 +2314,7 @@ const renderResearch = async (setStatus) => {
       vaultPath: value('research-vault-path'),
       researchRoot: value('research-vault-root'),
       managedRoot: value('research-vault-managed-root'),
-      vaultId: value('research-vault-id'),
+      vaultId: configuredVaultId,
       maxTextMb: Number(value('research-vault-max-text')),
       maxAttachmentMb: Number(value('research-vault-max-attachment')),
     };
@@ -2368,6 +2383,17 @@ const renderResearch = async (setStatus) => {
       .split(/[，,\n]/u)
       .map((item) => item.trim())
       .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index);
+
+  const loadResearchTopicOptions = async () => {
+    const response = await callApi('/api/research/topics?limit=200');
+    if (!response.ok) return [];
+    return (response.data.topics ?? []).map((topic) => ({ value: topic.id, label: topic.title }));
+  };
+
+  const selectedTopicNames = (topicIds, options) => {
+    const namesById = new Map(options.map((option) => [option.value, option.label]));
+    return topicIds.map((id) => namesById.get(id)).filter(Boolean);
+  };
 
   const writeErrorText = (error) => {
     if (!error || typeof error !== 'object') return '写入失败';
@@ -2467,6 +2493,7 @@ const renderResearch = async (setStatus) => {
   };
 
   const openImportDocument = async () => {
+    const topicOptions = await loadResearchTopicOptions();
     const values = await promptDialog({
       title: '导入本地研究资料',
       note: '只接受你明确提供的 Markdown/TXT；内容会以 untrusted 研究资料保存，不自动生成 Advice。',
@@ -2504,7 +2531,16 @@ const renderResearch = async (setStatus) => {
           placeholder: '粘贴 Markdown 或 TXT 正文',
         },
         { key: 'sourceUrl', label: '来源 URL', placeholder: '可选' },
-        { key: 'topicIds', label: '主题 ID（逗号分隔）', placeholder: 'topic_...' },
+        ...(topicOptions.length === 0
+          ? []
+          : [
+              {
+                key: 'topicIds',
+                label: '关联主题（可多选）',
+                options: topicOptions,
+                multiple: true,
+              },
+            ]),
         { key: 'subjects', label: '对象（逗号分隔）', placeholder: 'stock:600519.SH' },
         { key: 'tags', label: '标签（逗号分隔）', placeholder: '财报, 风险' },
       ],
@@ -2517,21 +2553,23 @@ const renderResearch = async (setStatus) => {
       format: values.format,
       body: values.body,
       ...(values.sourceUrl.length > 0 ? { sourceUrl: values.sourceUrl } : {}),
-      topicIds: splitCsv(values.topicIds),
+      topicIds: splitCsv(values.topicIds ?? ''),
       subjects: splitCsv(values.subjects),
       tags: splitCsv(values.tags),
     };
+    const topicNames = selectedTopicNames(input.topicIds, topicOptions);
     const excerpt = values.body.length > 500 ? `${values.body.slice(0, 500)}…` : values.body;
     confirmResearchWrite(
       importDocumentButton,
       'import_local_research_document',
       input,
       `资料「${values.title}」`,
-      `标题：${values.title}\n类型：${values.kind} · ${values.format}\n主题：${input.topicIds.join('、') || '—'}\n正文预览：\n${excerpt}`,
+      `标题：${values.title}\n类型：${values.kind} · ${values.format}\n主题：${topicNames.join('、') || '—'}\n正文预览：\n${excerpt}`,
     );
   };
 
   const openImportRemote = async () => {
+    const topicOptions = await loadResearchTopicOptions();
     const values = await promptDialog({
       title: '导入远程研究资料',
       note: '会经过 SSRF、重定向、媒体类型、大小和超时限制；远程内容始终标记为 untrusted。',
@@ -2553,7 +2591,16 @@ const renderResearch = async (setStatus) => {
             { value: 'timeline-update', label: '时间线更新' },
           ],
         },
-        { key: 'topicIds', label: '主题 ID（逗号分隔）', placeholder: 'topic_...' },
+        ...(topicOptions.length === 0
+          ? []
+          : [
+              {
+                key: 'topicIds',
+                label: '关联主题（可多选）',
+                options: topicOptions,
+                multiple: true,
+              },
+            ]),
         { key: 'subjects', label: '对象（逗号分隔）', placeholder: 'stock:600519.SH' },
         { key: 'tags', label: '标签（逗号分隔）', placeholder: '来源, 外部' },
       ],
@@ -2564,16 +2611,17 @@ const renderResearch = async (setStatus) => {
       url: values.url,
       ...(values.title.length > 0 ? { title: values.title } : {}),
       kind: values.kind,
-      topicIds: splitCsv(values.topicIds),
+      topicIds: splitCsv(values.topicIds ?? ''),
       subjects: splitCsv(values.subjects),
       tags: splitCsv(values.tags),
     };
+    const topicNames = selectedTopicNames(input.topicIds, topicOptions);
     confirmResearchWrite(
       importRemoteButton,
       'import_remote_research_document',
       input,
       `远程资料「${values.title || values.url}」`,
-      `URL：${values.url}\n类型：${values.kind}\n主题：${input.topicIds.join('、') || '—'}\n对象：${input.subjects.join('、') || '—'}\n远程内容会保存原件并进行安全正文抽取。`,
+      `URL：${values.url}\n类型：${values.kind}\n主题：${topicNames.join('、') || '—'}\n对象：${input.subjects.join('、') || '—'}\n远程内容会保存原件并进行安全正文抽取。`,
     );
   };
 
@@ -2980,7 +3028,9 @@ export {
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
+  linkedTradesText,
   outcomeInputOf,
+  performanceAuditText,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
@@ -2996,5 +3046,6 @@ export {
   runWatchOnce,
   sortBoardItems,
   toggleAdviceDeleteMode,
+  tradeOptionLabel,
   watchRunSummaryText,
 };

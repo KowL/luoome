@@ -5,9 +5,12 @@ import {
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
+  linkedTradesText,
   outcomeInputOf,
+  performanceAuditText,
   routeStockId,
   sortBoardItems,
+  tradeOptionLabel,
   watchRunSummaryText,
 } from './pages.js';
 
@@ -106,6 +109,38 @@ describe('决策闭环 Trade 归因', () => {
 
   it('没有交易样本时保持 unknown，不显示 0%', () => {
     expect(decisionLoopAttributionRate({ total: 0, unattributed: 0 })).toBeNull();
+  });
+
+  it('用关联数量代替交易 ID', () => {
+    expect(linkedTradesText(['trade-1', 'trade-2'])).toBe('已关联 2 笔交易');
+    expect(linkedTradesText([])).toBeNull();
+  });
+});
+
+describe('绩效审计摘要', () => {
+  it('展示数据日期而不是快照 ID', () => {
+    const text = performanceAuditText({
+      snapshotId: 'snapshot-internal-1',
+      dataAsOf: '2026-08-24T00:00:00.000Z',
+    });
+    expect(text).toBe('审计快照 · 数据截至 2026-08-24');
+    expect(text).not.toContain('snapshot-internal-1');
+  });
+});
+
+describe('交易选择标签', () => {
+  it('用成交信息识别交易，不显示内部交易 ID', () => {
+    const label = tradeOptionLabel({
+      id: 'trade-internal-1',
+      stockId: '600519.SH',
+      side: 'buy',
+      quantity: 100,
+      price: 1600,
+      executedAt: '2026-08-24T02:30:00.000Z',
+    });
+    expect(label).toContain('600519.SH');
+    expect(label).toContain('100 @ 1,600.00');
+    expect(label).not.toContain('trade-internal-1');
   });
 });
 

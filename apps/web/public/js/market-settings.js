@@ -122,8 +122,6 @@ const sourceRow = (source, index) => {
   copy.className = 'market-source-copy';
   const title = document.createElement('strong');
   title.textContent = source.label;
-  const id = document.createElement('code');
-  id.textContent = source.id;
   const description = document.createElement('p');
   description.textContent = source.description;
   const status = document.createElement('span');
@@ -138,7 +136,7 @@ const sourceRow = (source, index) => {
   const healthText = document.createElement('span');
   healthText.textContent = HEALTH_LABELS[healthKind] ?? healthKind;
   health.append(dot, healthText);
-  copy.append(title, id, description, status, health);
+  copy.append(title, description, status, health);
 
   const controls = document.createElement('div');
   controls.className = 'market-source-controls';

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  alertPlanMetaText,
   appendMemberStock,
   buildAlertPlanMutationInput,
   deriveWatchlistViews,
@@ -103,14 +104,32 @@ describe('预警表单', () => {
 });
 
 describe('触发条目时间行', () => {
-  it('读取 WatchTriggerSchema 的 createdAt 字段', () => {
+  it('读取 WatchTriggerSchema 的 createdAt 字段且不显示预警计划 ID', () => {
     const text = triggerMetaText({
       alertPlanId: 'plan-1',
       createdAt: '2026-07-29T08:00:00.000Z',
     });
-    expect(text.startsWith('plan-1 · 数据 ')).toBe(true);
+    expect(text.startsWith('数据 ')).toBe(true);
+    expect(text).not.toContain('plan-1');
     // triggeredAt 早已不存在；误读会得到 Invalid Date
     expect(text.includes('Invalid Date')).toBe(false);
+  });
+
+  it('预警计划使用关注列表名称，不回退显示内部 ID', () => {
+    expect(
+      alertPlanMetaText(
+        {
+          watchlistId: 'watch-a',
+          rules: [{ id: 'rule-a' }],
+          logic: 'ANY',
+          triggerMode: 'on-enter',
+          cooldownMinutes: 30,
+          dailyNotificationLimit: 20,
+        },
+        '研究候选',
+      ),
+    ).toContain('研究候选 · 1 条规则');
+    expect(alertPlanMetaText({ watchlistId: 'watch-a', rules: [] })).not.toContain('watch-a');
   });
 });
 
