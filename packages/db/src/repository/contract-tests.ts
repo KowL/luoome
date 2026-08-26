@@ -2101,6 +2101,39 @@ export const registerRepositoryContractTests = (
         });
       });
 
+      it('claimByStrategyIdWithFence 可定向抢占未到期 schedule，并拒绝并发 owner', async () => {
+        const schedule = makeStrategySchedule('strategy-manual', { nextRunAt: FAR_FUTURE });
+        await repos.strategySchedule.save(schedule);
+        const first = await repos.strategySchedule.claimByStrategyIdWithFence({
+          strategyId: schedule.strategyId,
+          now: T1,
+          owner: 'manual-1',
+          leaseUntil: T2,
+        });
+        expect(first).toMatchObject({
+          schedule,
+          token: { scheduleId: schedule.id, owner: 'manual-1', fence: 1 },
+        });
+        expect(
+          await repos.strategySchedule.claimByStrategyIdWithFence({
+            strategyId: schedule.strategyId,
+            now: T1,
+            owner: 'manual-2',
+            leaseUntil: T3,
+          }),
+        ).toBeNull();
+        const takeover = await repos.strategySchedule.claimByStrategyIdWithFence({
+          strategyId: schedule.strategyId,
+          now: T2,
+          owner: 'manual-2',
+          leaseUntil: T3,
+        });
+        expect(takeover).toMatchObject({
+          schedule,
+          token: { scheduleId: schedule.id, owner: 'manual-2', fence: 2 },
+        });
+      });
+
       it('过期 lease 可被其他 owner 接管', async () => {
         const schedule = makeStrategySchedule('strategy-1');
         await repos.strategySchedule.save(schedule);

@@ -226,6 +226,9 @@ describe('strategy-daily-cycle reliability matrix', () => {
           claimDueWithFence: (
             ...args: Parameters<typeof base.repos.strategySchedule.claimDueWithFence>
           ) => base.repos.strategySchedule.claimDueWithFence(...args),
+          claimByStrategyIdWithFence: (
+            ...args: Parameters<typeof base.repos.strategySchedule.claimByStrategyIdWithFence>
+          ) => base.repos.strategySchedule.claimByStrategyIdWithFence(...args),
           renewClaim: async () => false,
           finishClaim: (...args: Parameters<typeof base.repos.strategySchedule.finishClaim>) =>
             base.repos.strategySchedule.finishClaim(...args),
@@ -272,6 +275,9 @@ describe('strategy-daily-cycle reliability matrix', () => {
             strategySchedule.claimDue(...args),
           claimDueWithFence: (...args: Parameters<typeof strategySchedule.claimDueWithFence>) =>
             strategySchedule.claimDueWithFence(...args),
+          claimByStrategyIdWithFence: (
+            ...args: Parameters<typeof strategySchedule.claimByStrategyIdWithFence>
+          ) => strategySchedule.claimByStrategyIdWithFence(...args),
           renewClaim: async (...args: Parameters<typeof strategySchedule.renewClaim>) => {
             renewals += 1;
             return renewals === 1 ? strategySchedule.renewClaim(...args) : false;
@@ -471,5 +477,243 @@ describe('strategy-daily-cycle reliability matrix', () => {
       reason: 'schedule-day-duplicate',
     });
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toHaveLength(1);
+  });
+
+  it('手动正式运行即使 schedule 尚未到期也复用同一调度配置和生产闭环', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedSchedule(ctx);
+    const snapshotStocks = await ctx.repos.stockUniverse.listSnapshotMembers(
+      'sync-test-stock-universe',
+    );
+    const manualCtx: ToolContext = {
+      ...ctx,
+      adapters: {
+        ...ctx.adapters,
+        stockUniverse: {
+          name: 'stock-universe',
+          sources: ['stock-universe'],
+          fetchStockUniverse: async () => ({
+            source: 'stock-universe',
+            coverage: 'CN_A_SHARES_SH_SZ' as const,
+            observedAt: NOW,
+            complete: true,
+            reportedTotal: snapshotStocks.length,
+            entries: snapshotStocks.map((stock) => ({
+              stockId: stock.id,
+              code: stock.code,
+              exchange: stock.exchange,
+              name: stock.name,
+              listingStatus: 'listed' as const,
+            })),
+          }),
+        },
+      },
+    };
+    const schedule = await ctx.repos.strategySchedule.findById('cycle-schedule');
+    expect(schedule).not.toBeNull();
+    if (schedule === null) return;
+    await ctx.repos.strategySchedule.save({
+      ...schedule,
+      nextRunAt: new Date(NOW.getTime() + 24 * 60 * 60_000),
+      acceptancePolicy: {
+        policyVersion: 'strategy-run-acceptance-v1',
+        minEvaluatedRatio: 0.9,
+        maxFailedRatio: 0.1,
+        maxIncompleteRatio: 0.1,
+      },
+    });
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-manual', strategyId: 'cycle-strategy', trigger: 'manual', leaseMinutes: 5 },
+      manualCtx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items).toHaveLength(1);
+    expect(result.data.items[0]).toMatchObject({
+      strategyId: 'cycle-strategy',
+      scheduleId: 'cycle-schedule',
+      status: 'complete',
+    });
+    const runId = result.data.items[0]?.runId;
+    expect(runId).toBeDefined();
+    const run = runId === undefined ? null : await manualCtx.repos.strategyRun.findRunById(runId);
+    expect(run?.summary).toMatchObject({
+      schemaVersion: 4,
+      acceptance: { policy: { minEvaluatedRatio: 0.9, maxFailedRatio: 0.1 } },
+    });
+  });
+
+  it('重跑只刷新上次失败成员，并沿用原 universe checkpoint 后恢复发布', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedTestStockUniverse(ctx, { limit: 10, observedAt: NOW });
+    const snapshotStocks = await ctx.repos.stockUniverse.listSnapshotMembers(
+      'sync-test-stock-universe',
+    );
+    expect(snapshotStocks).toHaveLength(10);
+    const failedStock = snapshotStocks[0];
+    if (failedStock === undefined) return;
+    const strategyId = 'retry-cycle-strategy';
+    const definition: StrategyDslV1 = {
+      schemaVersion: 1,
+      metadata: {},
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [{ id: 'all', name: '全选', when: 'true', evidence: ['retry fixture'] }],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    const version: StrategyVersion = {
+      id: `${strategyId}-v1`,
+      strategyId,
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: NOW,
+      createdAt: NOW,
+    };
+    await ctx.repos.strategy.create({
+      id: strategyId,
+      name: '重跑闭环测试',
+      description: 'retry fixture',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: version.id,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    await ctx.repos.strategy.createVersion(version);
+    const schedule: StrategySchedule = {
+      id: `${strategyId}-schedule`,
+      strategyId,
+      cron: '0 18 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+      nextRunAt: NOW,
+      acceptancePolicy: {
+        policyVersion: 'strategy-run-acceptance-v1',
+        minEvaluatedRatio: 0.9,
+        maxFailedRatio: 0.05,
+        maxIncompleteRatio: 0.1,
+      },
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    await ctx.repos.strategySchedule.save(schedule);
+    let failFirstAttempt = true;
+    const retryRequests: string[] = [];
+    const stockUniverse: StockUniverseManagerLike = {
+      name: 'stock-universe',
+      sources: ['stock-universe'],
+      fetchStockUniverse: async () => ({
+        source: 'stock-universe',
+        coverage: 'CN_A_SHARES_SH_SZ' as const,
+        observedAt: NOW,
+        complete: true as const,
+        reportedTotal: snapshotStocks.length,
+        entries: snapshotStocks.map((stock) => ({
+          stockId: stock.id,
+          code: stock.code,
+          exchange: stock.exchange,
+          name: stock.name,
+          listingStatus: 'listed' as const,
+        })),
+      }),
+    };
+    const market = {
+      ...ctx.adapters.market,
+      fetchDailyBars: async (stockId: string, range: { start: Date; end: Date }) => {
+        if (stockId === failedStock.id && failFirstAttempt) {
+          throw new Error('provider unavailable');
+        }
+        if (!failFirstAttempt && snapshotStocks.some((stock) => stock.id === stockId)) {
+          retryRequests.push(stockId);
+        }
+        return ctx.adapters.market.fetchDailyBars(stockId, range);
+      },
+    };
+    const retryCtx: ToolContext = {
+      ...ctx,
+      adapters: { ...ctx.adapters, market, stockUniverse },
+    };
+
+    const first = await strategyDailyCycleWorkflow.run(
+      { owner: 'retry-first', strategyId, trigger: 'manual', leaseMinutes: 5 },
+      retryCtx,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.items[0]).toMatchObject({ status: 'partial', publication: 'withheld' });
+    const firstRunId = first.data.items[0]?.runId;
+    expect(firstRunId).toBeDefined();
+    if (firstRunId === undefined) return;
+    const firstRun = await retryCtx.repos.strategyRun.findRunById(firstRunId);
+    expect(firstRun).toMatchObject({ publication: { status: 'withheld' } });
+    const firstCheckpointId =
+      typeof firstRun?.inputSnapshot === 'object' &&
+      firstRun.inputSnapshot !== null &&
+      'dataCheckpoint' in firstRun.inputSnapshot &&
+      typeof firstRun.inputSnapshot.dataCheckpoint === 'object' &&
+      firstRun.inputSnapshot.dataCheckpoint !== null &&
+      'id' in firstRun.inputSnapshot.dataCheckpoint
+        ? firstRun.inputSnapshot.dataCheckpoint.id
+        : undefined;
+    expect(typeof firstCheckpointId).toBe('string');
+    if (typeof firstCheckpointId !== 'string') return;
+    const firstCheckpoint = await retryCtx.repos.strategyDataCheckpoint.findById(firstCheckpointId);
+    expect(firstCheckpoint).toMatchObject({
+      universeSyncId: expect.any(String),
+      requestedCount: 10,
+      availableCount: 9,
+      failedCount: 1,
+    });
+    if (firstCheckpoint === null) return;
+    const originalUniverseSyncId = firstCheckpoint.universeSyncId;
+    const originalMemberChecksum = firstCheckpoint.memberChecksum;
+
+    failFirstAttempt = false;
+    retryRequests.length = 0;
+    const retry = await strategyDailyCycleWorkflow.run(
+      {
+        owner: 'retry-second',
+        strategyId,
+        trigger: 'retry',
+        retryRunId: firstRunId,
+        leaseMinutes: 5,
+      },
+      retryCtx,
+    );
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.data.items[0]).toMatchObject({ status: 'complete', publication: 'published' });
+    expect(retryRequests).toEqual([failedStock.id]);
+    const retryRunId = retry.data.items[0]?.runId;
+    expect(retryRunId).toBeDefined();
+    if (retryRunId === undefined) return;
+    const retryRun = await retryCtx.repos.strategyRun.findRunById(retryRunId);
+    const retryCheckpointId =
+      typeof retryRun?.inputSnapshot === 'object' &&
+      retryRun.inputSnapshot !== null &&
+      'dataCheckpoint' in retryRun.inputSnapshot &&
+      typeof retryRun.inputSnapshot.dataCheckpoint === 'object' &&
+      retryRun.inputSnapshot.dataCheckpoint !== null &&
+      'id' in retryRun.inputSnapshot.dataCheckpoint
+        ? retryRun.inputSnapshot.dataCheckpoint.id
+        : undefined;
+    expect(typeof retryCheckpointId).toBe('string');
+    if (typeof retryCheckpointId !== 'string') return;
+    const retryCheckpoint = await retryCtx.repos.strategyDataCheckpoint.findById(retryCheckpointId);
+    expect(retryCheckpoint).toMatchObject({
+      status: 'complete',
+      requestedCount: 10,
+      availableCount: 10,
+      failedCount: 0,
+      universeSyncId: originalUniverseSyncId,
+      memberChecksum: originalMemberChecksum,
+    });
   });
 });

@@ -17,11 +17,16 @@ import type {
   ResearchVaultAdapterLike,
   ResearchVaultGitSyncAdapterLike,
   SourceStatus,
+  StockUniverseManagerLike,
+  StrategyDslV1,
+  StrategySchedule,
+  StrategyVersion,
   ToolContext,
 } from '@luoome/core';
+import { strategyDefinitionHash } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
-import { buildTestContext } from '@luoome/tools/testing';
+import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { FixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import type { Hono } from 'hono';
 
@@ -1763,6 +1768,145 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(await insight.json()).toMatchObject({
       ok: true,
       data: { provider: 'fake-llm', insight: { findings: [{ factRefs: ['runs:window'] }] } },
+    });
+  });
+
+  it('POST /api/strategies/:id/run 正式入口复用 daily cycle，sample 仍走直接运行', async () => {
+    const now = new Date('2026-08-10T10:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx, { limit: 1, observedAt: now });
+    const members = await ctx.repos.stockUniverse.listSnapshotMembers('sync-test-stock-universe');
+    const firstMember = members[0];
+    if (firstMember === undefined) throw new Error('route fixture stock missing');
+
+    const strategyId = 'web-strategy-daily-cycle-route';
+    const definition: StrategyDslV1 = {
+      schemaVersion: 1,
+      metadata: { horizon: 'short' },
+      universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+      selection: {
+        logic: 'all',
+        rules: [{ id: 'all', name: '全选', when: 'true', evidence: ['route fixture'] }],
+      },
+      signals: { entry: [], exit: [], risk: [] },
+    };
+    const version: StrategyVersion = {
+      id: `${strategyId}-v1`,
+      strategyId,
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: now,
+      createdAt: now,
+    };
+    await ctx.repos.strategy.create({
+      id: strategyId,
+      name: 'daily cycle route fixture',
+      description: 'route fixture',
+      owner: 'user',
+      status: 'active',
+      currentVersionId: version.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.strategy.createVersion(version);
+    const schedule: StrategySchedule = {
+      id: `${strategyId}-schedule`,
+      strategyId,
+      cron: '0 18 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+      nextRunAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await ctx.repos.strategySchedule.save(schedule);
+
+    const stockUniverse: StockUniverseManagerLike = {
+      name: 'stock-universe',
+      sources: ['route-stock-universe'],
+      fetchStockUniverse: async () => ({
+        source: 'route-stock-universe',
+        coverage: 'CN_A_SHARES_SH_SZ' as const,
+        observedAt: now,
+        complete: true as const,
+        reportedTotal: 1,
+        entries: [
+          {
+            stockId: firstMember.id,
+            code: firstMember.code,
+            exchange: firstMember.exchange,
+            name: firstMember.name,
+            listingStatus: 'listed' as const,
+          },
+        ],
+      }),
+    };
+    const routeApp = createWebApp(
+      { ...ctx, adapters: { ...ctx.adapters, stockUniverse } },
+      { exposeWrite: true, exposeExternal: true },
+    );
+
+    // run_strategy 的 persist 默认值为 true；空 body 也必须进入正式 daily cycle。
+    const formal = await routeApp.fetch(targetRequest(`/api/strategies/${strategyId}/run`, {}));
+    expect(formal.status).toBe(200);
+    const formalBody = (await formal.json()) as {
+      ok: boolean;
+      data?: {
+        persisted?: boolean;
+        workflow?: string;
+        results?: unknown[];
+        signals?: unknown[];
+        item?: { strategyId?: string; scheduleId?: string; selectedCount?: number };
+      };
+    };
+    expect(formalBody).toMatchObject({
+      ok: true,
+      data: {
+        persisted: true,
+        workflow: 'strategy-daily-cycle',
+        results: [],
+        signals: [],
+        item: { strategyId, scheduleId: schedule.id },
+      },
+    });
+    expect(formalBody.data?.item?.selectedCount).toBe(1);
+
+    // 明确 persist=false 才保留 sample/direct 语义，并返回逐项结果供试跑页面使用。
+    const sample = await routeApp.fetch(
+      targetRequest(`/api/strategies/${strategyId}/run`, {
+        persist: false,
+        stockIds: [firstMember.id],
+      }),
+    );
+    expect(sample.status).toBe(200);
+    const sampleBody = (await sample.json()) as {
+      ok: boolean;
+      data?: { persisted?: boolean; workflow?: string; results?: unknown[] };
+    };
+    expect(sampleBody.ok).toBe(true);
+    expect(sampleBody.data?.persisted).toBe(false);
+    expect(sampleBody.data?.workflow).toBeUndefined();
+    expect(sampleBody.data?.results).toHaveLength(1);
+  });
+
+  it('POST /api/strategies/:id/run 拒绝 sample 携带 retryRunId', async () => {
+    const guardedApp = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    const response = await guardedApp.fetch(
+      targetRequest('/api/strategies/sample-retry-guard/run', {
+        persist: false,
+        retryRunId: 'run-from-another-mode',
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
     });
   });
 

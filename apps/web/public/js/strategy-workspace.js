@@ -551,10 +551,46 @@ const renderDiff = async (strategyId) => {
   ]);
 };
 
-const runRow = (run) => {
+const rerunFailedItems = async (strategyId, runId, button) => {
+  button.disabled = true;
+  button.textContent = '重跑中…';
+  const result = await post(`/api/strategies/${encodeURIComponent(strategyId)}/run`, {
+    persist: true,
+    retryRunId: runId,
+  });
+  if (!result.ok) {
+    button.disabled = false;
+    button.textContent = '仅重跑失败项';
+    return result;
+  }
+  responseCache.clear();
+  const item = result.data?.item ?? result.data?.cycle?.items?.[0];
+  button.textContent =
+    item?.status === 'complete'
+      ? '重跑完成'
+      : item?.status === 'partial'
+        ? '重跑部分完成'
+        : '重跑结束';
+  return result;
+};
+
+const runRow = (run, onRetry) => {
   const view = el('button', 'btn btn-outline btn-sm', '查看');
   view.type = 'button';
   view.addEventListener('click', () => void openRunDetail(run.id));
+  const actions = [view];
+  const summary = run.summary ?? {};
+  if (
+    run.scope === 'operational' &&
+    run.publication?.status === 'withheld' &&
+    (summary.schemaVersion === 4 || summary.schemaVersion === 3) &&
+    summary.failedCount > 0
+  ) {
+    const retry = el('button', 'btn btn-outline btn-sm', '仅重跑失败项');
+    retry.type = 'button';
+    retry.addEventListener('click', () => void onRetry(run.id, retry));
+    actions.push(retry);
+  }
   return el('tr', null, [
     el('td', 'mono', fmtDateTime(run.startedAt)),
     el('td', null, run.mode),
@@ -569,22 +605,37 @@ const runRow = (run) => {
     ),
     el('td', null, badge(RUN_STATUS[run.status], run.status)),
     el('td', 'muted', runSummaryText(run)),
-    el('td', null, view),
+    el('td', null, el('div', 'row-actions', actions)),
   ]);
 };
 
 export const renderRuns = async (strategyId, scope = 'operational') => {
-  const result = await cachedGet(
-    `/api/strategies/${encodeURIComponent(strategyId)}/runs?scope=${encodeURIComponent(scope)}`,
-  );
+  const runsPath = `/api/strategies/${encodeURIComponent(strategyId)}/runs?scope=${encodeURIComponent(scope)}`;
+  const result = await cachedGet(runsPath);
   if (!result.ok) return el('p', 'status error', errorText(result));
-  const runs = result.data.runs ?? [];
+  let runs = result.data.runs ?? [];
   const tbody = el('tbody');
   function renderPage() {
     const { page, pageSize } = pagination.getState();
-    mount(tbody, runs.slice((page - 1) * pageSize, page * pageSize).map(runRow));
+    mount(
+      tbody,
+      runs.slice((page - 1) * pageSize, page * pageSize).map((run) => runRow(run, retryRun)),
+    );
   }
   const pagination = createPagination({ total: runs.length, onChange: renderPage });
+  const refreshRuns = async () => {
+    responseCache.delete(runsPath);
+    const refreshed = await cachedGet(runsPath);
+    if (!refreshed.ok) return refreshed;
+    runs = refreshed.data.runs ?? [];
+    pagination.setState({ total: runs.length });
+    renderPage();
+    return refreshed;
+  };
+  const retryRun = async (runId, button) => {
+    const retried = await rerunFailedItems(strategyId, runId, button);
+    if (retried.ok) await refreshRuns();
+  };
   renderPage();
   const tableWrap = el('div', 'table-wrap strategy-run-timeline', [
     el('table', 'table', [
@@ -1937,7 +1988,7 @@ const openBacktestDialog = async (strategy, setStatus) => {
   );
 };
 
-const runAction = async (strategy, persist, setStatus, refresh) => {
+const runAction = async (strategy, persist, setStatus, refresh, retryRunId) => {
   let stockIds;
   if (!persist) {
     const values = await promptDialog({
@@ -1961,14 +2012,40 @@ const runAction = async (strategy, persist, setStatus, refresh) => {
   const result = await post(`/api/strategies/${encodeURIComponent(strategy.id)}/run`, {
     ...(stockIds === undefined ? {} : { stockIds }),
     persist,
+    ...(retryRunId === undefined ? {} : { retryRunId }),
   });
   if (!result.ok) {
     setStatus(errorText(result), true);
     return;
   }
   responseCache.clear();
+  const cycleItem = result.data?.item ?? result.data?.cycle?.items?.[0];
+  if (persist && cycleItem !== undefined) {
+    const cycleStatus =
+      cycleItem.status === 'complete'
+        ? '已完成'
+        : cycleItem.status === 'partial'
+          ? '部分完成'
+          : cycleItem.status === 'skipped'
+            ? '已跳过'
+            : '失败';
+    const publication =
+      PUBLICATION_STATUS[cycleItem.publication]?.[0] ??
+      (cycleItem.publication === undefined ? '' : cycleItem.publication);
+    const selected =
+      typeof cycleItem.selectedCount === 'number' ? `；入选 ${cycleItem.selectedCount}` : '';
+    const failed =
+      typeof cycleItem.failedCount === 'number' && cycleItem.failedCount > 0
+        ? `；失败 ${cycleItem.failedCount}`
+        : '';
+    setStatus(
+      `策略正式运行${cycleStatus}${publication.length > 0 ? ` · ${publication}` : ''}${selected}${failed}`,
+    );
+    await refresh();
+    return;
+  }
   const dataHealth =
-    result.data.run.summary?.schemaVersion === 3
+    result.data.run.summary?.schemaVersion === 4 || result.data.run.summary?.schemaVersion === 3
       ? `，数据${DATA_HEALTH[result.data.run.summary.dataHealth] ?? result.data.run.summary.dataHealth}`
       : '';
   setStatus(

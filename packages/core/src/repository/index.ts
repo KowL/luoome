@@ -656,6 +656,13 @@ export interface StrategyScheduleRepository {
     readonly leaseUntil: Date;
     readonly limit: number;
   }): Promise<readonly StrategyScheduleClaim[]>;
+  /** 原子抢占指定 Strategy 的 schedule，供用户手动触发复用同一生产闭环。 */
+  claimByStrategyIdWithFence(input: {
+    readonly strategyId: string;
+    readonly now: Date;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+  }): Promise<StrategyScheduleClaim | null>;
   renewClaim(input: {
     readonly id: string;
     readonly owner: string;

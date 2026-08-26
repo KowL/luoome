@@ -5,6 +5,7 @@ import {
   assessStrategyRun,
   compileStrategyExpression,
   compileStrategyQuotePrefilter,
+  DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
   DslEvalError,
   decideStrategyRunPublication,
   decideStrategySignalEmission,
@@ -16,6 +17,24 @@ import { money } from '../types/branded.js';
 const NOW = new Date('2026-08-12T00:00:00.000Z');
 
 describe('Strategy reliability primitives', () => {
+  it('默认生产验收允许最多 10% 失败，并要求至少 90% 已求值', () => {
+    expect(DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY).toMatchObject({
+      minEvaluatedRatio: 0.9,
+      maxFailedRatio: 0.1,
+      maxIncompleteRatio: 0.1,
+    });
+    expect(
+      assessStrategyRun({
+        status: 'complete',
+        universeCount: 10,
+        evaluatedCount: 9,
+        failedCount: 1,
+        incompleteCount: 0,
+        assessedAt: NOW,
+      }).decision,
+    ).toBe('accepted');
+  });
+
   it('把 DSL 禁用关键字归一为可识别的 DslEvalError', () => {
     expect(() => assertExpressionSafety('globalThis.process')).toThrow(DslEvalError);
     expect(() => assertExpressionSafety('globalThis.process')).toThrow(/globalThis/);
@@ -192,8 +211,8 @@ describe('Strategy reliability primitives', () => {
     const rejectedAcceptance = assessStrategyRun({
       status: 'complete',
       universeCount: 5548,
-      evaluatedCount: 5225,
-      failedCount: 323,
+      evaluatedCount: 4948,
+      failedCount: 600,
       incompleteCount: 5,
       assessedAt: NOW,
     });

@@ -9,16 +9,45 @@ import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
-export const StrategyDailyCycleInput = z.object({
-  owner: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(20).default(1),
-  leaseMinutes: z.number().int().min(5).max(240).default(30),
-  asOf: z.coerce.date().optional(),
-  concurrency: z.number().int().min(1).max(64).default(8),
-  maxStalenessTradingDays: z.number().int().min(0).max(30).default(1),
-  maxRetries: z.number().int().min(0).max(5).default(2),
-  requestTimeoutMs: z.number().int().min(500).max(120_000).default(20_000),
-});
+export const StrategyDailyCycleInput = z
+  .object({
+    owner: z.string().min(1).optional(),
+    /** 传入时只处理该 Strategy，供 Web 手动正式运行复用其 schedule。 */
+    strategyId: z.string().min(1).optional(),
+    trigger: z.enum(['scheduled', 'manual', 'retry']).default('scheduled'),
+    /** retry 只允许引用上一次持久化运行，并从其 checkpoint 失败成员重试。 */
+    retryRunId: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(20).default(1),
+    leaseMinutes: z.number().int().min(5).max(240).default(30),
+    asOf: z.coerce.date().optional(),
+    concurrency: z.number().int().min(1).max(64).default(8),
+    maxStalenessTradingDays: z.number().int().min(0).max(30).default(1),
+    maxRetries: z.number().int().min(0).max(5).default(2),
+    requestTimeoutMs: z.number().int().min(500).max(120_000).default(20_000),
+  })
+  .superRefine((input, ctx) => {
+    if (input.trigger !== 'scheduled' && input.strategyId === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['strategyId'],
+        message: '手动或重试运行必须指定 strategyId',
+      });
+    }
+    if (input.trigger === 'retry' && input.retryRunId === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['retryRunId'],
+        message: '重试运行必须指定 retryRunId',
+      });
+    }
+    if (input.trigger !== 'retry' && input.retryRunId !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['retryRunId'],
+        message: 'retryRunId 只允许用于 trigger=retry',
+      });
+    }
+  });
 export type StrategyDailyCycleInputT = z.infer<typeof StrategyDailyCycleInput>;
 
 const CycleItemSchema = z.object({
@@ -28,6 +57,11 @@ const CycleItemSchema = z.object({
   phase: z.enum(['claim', 'data-prep', 'run', 'observations', 'insight', 'finish']),
   runId: z.string().optional(),
   checkpointId: z.string().optional(),
+  evaluatedCount: z.number().int().nonnegative().optional(),
+  selectedCount: z.number().int().nonnegative().optional(),
+  signalCount: z.number().int().nonnegative().optional(),
+  failedCount: z.number().int().nonnegative().optional(),
+  publication: z.enum(['published', 'withheld', 'non-publishing']).optional(),
   insightProvider: z.string().optional(),
   watchlistSync: z
     .object({
@@ -105,12 +139,83 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       error: reconciled.error,
     });
   }
+  const reconciledRuns = await ctx.tools.reconcile_stale_strategy_runs.execute({
+    olderThanMinutes: Math.max(30, input.leaseMinutes * 2),
+    limit: 100,
+  });
+  if (!reconciledRuns.ok) {
+    ctx.logger.warn('strategy-daily-cycle: stale strategy run reconciliation failed', {
+      error: reconciledRuns.error,
+    });
+  }
+  let retryCheckpointId: string | undefined;
+  if (input.trigger === 'retry' && input.retryRunId !== undefined) {
+    const runs = await ctx.tools.list_strategy_runs.execute({
+      strategyId: input.strategyId,
+      scope: 'operational',
+      limit: 500,
+    });
+    if (!runs.ok) return runs;
+    const retryRun = runs.data.runs.find((run) => run.id === input.retryRunId);
+    if (retryRun === undefined) {
+      return {
+        ok: false,
+        error: { kind: 'not_found', entity: 'StrategyRun', id: input.retryRunId },
+      };
+    }
+    if (retryRun.strategyId !== input.strategyId) {
+      return {
+        ok: false,
+        error: { kind: 'invalid_input', message: 'retryRunId 不属于指定 Strategy', issues: [] },
+      };
+    }
+    const snapshot = retryRun.inputSnapshot;
+    const checkpoint =
+      typeof snapshot === 'object' && snapshot !== null && 'dataCheckpoint' in snapshot
+        ? snapshot.dataCheckpoint
+        : undefined;
+    const checkpointId =
+      typeof checkpoint === 'object' && checkpoint !== null && 'id' in checkpoint
+        ? checkpoint.id
+        : undefined;
+    if (typeof checkpointId !== 'string' || checkpointId.length === 0) {
+      return {
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '指定运行没有可重试的 data checkpoint',
+          issues: [],
+        },
+      };
+    }
+    retryCheckpointId = checkpointId;
+  }
   const claimed = await ctx.tools.claim_due_strategy_schedules.execute({
     owner,
+    ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
     limit: input.limit,
     leaseMinutes: input.leaseMinutes,
   });
   if (!claimed.ok) return claimed;
+  if (input.strategyId !== undefined && claimed.data.items.length === 0) {
+    const schedule = await ctx.tools.get_strategy_schedule.execute({
+      strategyId: input.strategyId,
+    });
+    if (!schedule.ok) return schedule;
+    return schedule.data.schedule === null
+      ? {
+          ok: false,
+          error: { kind: 'not_found', entity: 'StrategySchedule', id: input.strategyId },
+        }
+      : {
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: 'StrategySchedule 未启用或已有运行 lease，请稍后重试',
+            issues: [],
+          },
+        };
+  }
   const items: z.infer<typeof CycleItemSchema>[] = [];
   for (const claim of claimed.data.items) {
     const { schedule, lease } = claim;
@@ -190,8 +295,12 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         }
       | undefined;
 
-    let publication: string | undefined;
+    let publication: z.infer<typeof CycleItemSchema>['publication'];
     let runSummary: Record<string, unknown> | undefined;
+    let evaluatedCount: number | undefined;
+    let selectedCount: number | undefined;
+    let signalCount: number | undefined;
+    let failedCount: number | undefined;
     let providerStatuses: Array<{
       provider: string;
       ok: boolean;
@@ -265,7 +374,12 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           strategyId: schedule.strategyId,
           scheduleId: schedule.id,
           dataAsOf: auditDataAsOf,
-          requestedBy: input.asOf === undefined ? 'scheduled' : 'historical',
+          requestedBy:
+            input.trigger === 'scheduled'
+              ? input.asOf === undefined
+                ? 'scheduled'
+                : 'historical'
+              : input.trigger,
         },
         providerStatuses: [],
       },
@@ -291,7 +405,12 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             strategyId: schedule.strategyId,
             scheduleId: schedule.id,
             dataAsOf: auditDataAsOf,
-            requestedBy: input.asOf === undefined ? 'scheduled' : 'historical',
+            requestedBy:
+              input.trigger === 'scheduled'
+                ? input.asOf === undefined
+                  ? 'scheduled'
+                  : 'historical'
+                : input.trigger,
           },
           outputSummary: {
             status: item.status,
@@ -330,7 +449,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     // claiming the same schedule again after a successful run.  Check the persisted run facts
     // through the Tool boundary before doing external data work; a skipped claim is audited but
     // never becomes a production cycle.
-    if (input.asOf === undefined) {
+    if (input.trigger === 'scheduled' && input.asOf === undefined) {
       const priorRuns = await ctx.tools.list_strategy_runs.execute({
         strategyId: schedule.strategyId,
         scope: 'operational',
@@ -463,7 +582,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     beginPhase('data-prep');
     // 生产日运行必须先把当日可见股票目录固化为 PIT snapshot；显式历史
     // asOf 只能读取已有快照，禁止在当前时点抓取数据伪装成历史版本。
-    if (input.asOf === undefined) {
+    if (input.trigger !== 'retry' && input.asOf === undefined) {
       const synced = await ctx.tools.sync_stock_universe.execute({
         coverage: 'CN_A_SHARES_SH_SZ',
         force: false,
@@ -507,6 +626,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       maxRetries: input.maxRetries,
       requestTimeoutMs: input.requestTimeoutMs,
       ...(input.asOf === undefined ? {} : { asOf: input.asOf }),
+      ...(retryCheckpointId === undefined ? {} : { retryCheckpointId }),
     });
     if (scheduleLeaseLost) {
       status = 'failed';
@@ -572,6 +692,16 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           run.data.run.summary !== undefined && typeof run.data.run.summary === 'object'
             ? (run.data.run.summary as Record<string, unknown>)
             : undefined;
+        if (runSummary !== undefined) {
+          evaluatedCount =
+            typeof runSummary.evaluatedCount === 'number' ? runSummary.evaluatedCount : undefined;
+          selectedCount =
+            typeof runSummary.selectedCount === 'number' ? runSummary.selectedCount : undefined;
+          signalCount =
+            typeof runSummary.signalCount === 'number' ? runSummary.signalCount : undefined;
+          failedCount =
+            typeof runSummary.failedCount === 'number' ? runSummary.failedCount : undefined;
+        }
         providerStatuses = run.data.run.providerStatuses;
         publication = run.data.run.publication?.status;
         if (run.data.run.status === 'failed') {
@@ -780,6 +910,11 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       phase,
       ...(runId === undefined ? {} : { runId }),
       ...(checkpointId === undefined ? {} : { checkpointId }),
+      ...(evaluatedCount === undefined ? {} : { evaluatedCount }),
+      ...(selectedCount === undefined ? {} : { selectedCount }),
+      ...(signalCount === undefined ? {} : { signalCount }),
+      ...(failedCount === undefined ? {} : { failedCount }),
+      ...(publication === undefined ? {} : { publication }),
       ...(insightProvider === undefined ? {} : { insightProvider }),
       ...(watchlistSync === undefined ? {} : { watchlistSync }),
       ...(adviceCount === undefined ? {} : { adviceCount }),

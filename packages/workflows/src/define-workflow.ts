@@ -120,6 +120,8 @@ import type {
   PrepareStrategyDataOutput,
   PullResearchVaultGitInput,
   PullResearchVaultGitOutput,
+  ReconcileStaleStrategyRunsInput,
+  ReconcileStaleStrategyRunsOutput,
   ReconcileStaleWorkflowRunsInput,
   ReconcileStaleWorkflowRunsOutput,
   RecordAdviceOutcomeInput,
@@ -420,6 +422,11 @@ export interface WorkflowToolMap {
   readonly reconcile_stale_workflow_runs: ToolAccessor<
     typeof ReconcileStaleWorkflowRunsInput,
     typeof ReconcileStaleWorkflowRunsOutput
+  >;
+  /** workflow-only；周期开始收敛失去 lease 的 running StrategyRun。 */
+  readonly reconcile_stale_strategy_runs: ToolAccessor<
+    typeof ReconcileStaleStrategyRunsInput,
+    typeof ReconcileStaleStrategyRunsOutput
   >;
   readonly save_report: ToolAccessor<typeof SaveReportInput, typeof SaveReportOutput>;
   readonly render_report: ToolAccessor<typeof RenderReportInput, typeof RenderReportOutput>;

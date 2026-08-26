@@ -10,7 +10,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errInvalidInput } from '../define-tool.js';
+import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 
 const DAY_MS = 86_400_000;
 const monotonicNow = (): number =>
@@ -53,6 +53,8 @@ export const PrepareStrategyDataInput = z.object({
    */
   universeAsOf: z.coerce.date().optional(),
   stockIds: z.array(z.string().min(1)).max(1000).optional(),
+  /** retry 只重取该 checkpoint 中 status=failed 的成员，再提交完整成员集合。 */
+  retryCheckpointId: z.string().min(1).optional(),
   lookbackDays: z.number().int().min(60).max(1000).default(370),
   /** 交易日口径的新鲜度门禁；超过该滞后即进入 missing/partial，不得 provider ok。 */
   maxStalenessTradingDays: z.number().int().min(0).max(30).default(1),
@@ -223,7 +225,31 @@ export const prepareStrategyDataTool = defineTool({
   input: PrepareStrategyDataInput,
   output: PrepareStrategyDataOutput,
   handler: async (input, ctx: ToolContext) => {
-    const asOf = input.asOf ?? ctx.clock();
+    const retryBase =
+      input.retryCheckpointId === undefined
+        ? null
+        : await ctx.repos.strategyDataCheckpoint.findById(input.retryCheckpointId);
+    if (input.retryCheckpointId !== undefined && retryBase === null) {
+      return errNotFound('StrategyDataCheckpoint', input.retryCheckpointId);
+    }
+    if (retryBase?.status === 'running') {
+      return errInvalidInput('retry checkpoint 仍在运行中');
+    }
+    if (retryBase !== null && input.stockIds !== undefined) {
+      return errInvalidInput('retry checkpoint 不能同时指定 stockIds');
+    }
+    const retryBaseMembers =
+      retryBase === null
+        ? []
+        : [...(await ctx.repos.strategyDataCheckpoint.listMembers(retryBase.id))];
+    const retryIds = retryBaseMembers
+      .filter((member) => member.status === 'failed')
+      .map((member) => member.stockId)
+      .sort();
+    if (retryBase !== null && retryIds.length === 0) {
+      return errInvalidInput('retry checkpoint 没有 status=failed 的成员');
+    }
+    const asOf = retryBase?.dataAsOf ?? input.asOf ?? ctx.clock();
     const universeAsOf = input.universeAsOf ?? asOf;
     const sourceStatuses =
       typeof ctx.adapters.market.marketSourceStatus === 'function'
@@ -232,19 +258,26 @@ export const prepareStrategyDataTool = defineTool({
     const primaryDailyBarSource = sourceStatuses.find(
       (source) => source.dataset === 'daily-bars' && source.capabilityEnabled,
     )?.source;
-    const sync = await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({
-      coverage: 'CN_A_SHARES_SH_SZ',
-      asOf: universeAsOf,
-    });
+    const sync =
+      retryBase === null
+        ? await ctx.repos.stockUniverse.latestSnapshotAtOrBefore({
+            coverage: 'CN_A_SHARES_SH_SZ',
+            asOf: universeAsOf,
+          })
+        : null;
     const snapshotIds =
-      sync === null
-        ? []
-        : (await ctx.repos.stockUniverse.listSnapshotMembers(sync.id)).map((stock) => stock.id);
+      retryBase === null
+        ? sync === null
+          ? []
+          : (await ctx.repos.stockUniverse.listSnapshotMembers(sync.id)).map((stock) => stock.id)
+        : retryBaseMembers.map((member) => member.stockId);
     const stockIds = [...new Set(input.stockIds ?? snapshotIds)].sort();
     if (stockIds.length === 0)
       return errInvalidInput('prepare_strategy_data 需要非空 PIT StockUniverse');
     const universeSyncId =
-      sync?.id ?? `explicit:${createHash('sha256').update(stockIds.join(',')).digest('hex')}`;
+      retryBase?.universeSyncId ??
+      sync?.id ??
+      `explicit:${createHash('sha256').update(stockIds.join(',')).digest('hex')}`;
     const checkpointId = `strategy-data-checkpoint-${globalThis.crypto.randomUUID()}`;
     const startedAt = ctx.clock();
     const operationStartedAt = monotonicNow();
@@ -263,8 +296,8 @@ export const prepareStrategyDataTool = defineTool({
       providerStatuses: [],
       startedAt,
     });
-    const prepared = await mapWithConcurrency(
-      stockIds,
+    const fetched = await mapWithConcurrency(
+      retryBase === null ? stockIds : retryIds,
       input.concurrency,
       async (stockId): Promise<CheckpointMemberInput> => {
         const memberStartedAt = monotonicNow();
@@ -390,7 +423,32 @@ export const prepareStrategyDataTool = defineTool({
         }
       },
     );
-    const memberDurations = prepared.map((member) => member.durationMs);
+    const fetchedByStock = new Map(fetched.map((member) => [member.stockId, member] as const));
+    const prepared =
+      retryBase === null
+        ? fetched
+        : stockIds.map((stockId) => {
+            const refreshed = fetchedByStock.get(stockId);
+            if (refreshed !== undefined) return refreshed;
+            const previous = retryBaseMembers.find((member) => member.stockId === stockId);
+            if (previous === undefined) {
+              throw new Error(`retry checkpoint 缺少成员: ${stockId}`);
+            }
+            return {
+              stockId,
+              status: previous.status,
+              ...(previous.latestBarDate === undefined
+                ? {}
+                : { latestBarDate: previous.latestBarDate }),
+              barCount: previous.barCount,
+              ...(previous.provider === undefined ? {} : { provider: previous.provider }),
+              ...(previous.errorKind === undefined ? {} : { errorKind: previous.errorKind }),
+              durationMs: 0,
+            } satisfies CheckpointMemberInput;
+          });
+    const memberDurations = (retryBase === null ? prepared : fetched).map(
+      (member) => member.durationMs,
+    );
     const memberLatencyMs = latencySummary(memberDurations);
     const performance = {
       memberLatencyMs,

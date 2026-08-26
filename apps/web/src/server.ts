@@ -74,6 +74,7 @@ import {
   openingReportWorkflow,
   replayStrategyRangeWorkflow,
   runIntradayWatchObserved,
+  strategyDailyCycleWorkflow,
   syncResearchVaultRemoteWorkflow,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
@@ -1795,9 +1796,76 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (denied !== null) return jsonResult(denied);
     const body = await parseJsonObject(c.req.raw);
     if (!('parsed' in body)) return jsonResult(body);
+    const strategyId = c.req.param('id');
+    const retryRunId =
+      typeof body.data.retryRunId === 'string' && body.data.retryRunId.length > 0
+        ? body.data.retryRunId
+        : undefined;
+    const persisted = body.data.persist !== false;
+    if (retryRunId !== undefined && !persisted) {
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: 'retryRunId 只允许用于正式运行',
+          issues: [],
+        },
+      });
+    }
+    if (persisted) {
+      const cycle = await strategyDailyCycleWorkflow.run(
+        {
+          strategyId,
+          trigger: retryRunId === undefined ? 'manual' : 'retry',
+          ...(retryRunId === undefined ? {} : { retryRunId }),
+        },
+        contextForRequest(),
+      );
+      if (!cycle.ok) return jsonResult(cycle);
+      const item = cycle.data.items[0];
+      if (item === undefined) {
+        return jsonResult({
+          ok: false,
+          error: {
+            kind: 'internal',
+            cause: 'strategy-daily-cycle 未返回运行结果',
+          },
+        });
+      }
+      const runs =
+        item.runId === undefined
+          ? undefined
+          : await invokeTool('list_strategy_runs', {
+              strategyId,
+              limit: 500,
+            });
+      const runRows =
+        runs?.ok === true && typeof runs.data === 'object' && runs.data !== null
+          ? (runs.data as { readonly runs?: unknown }).runs
+          : undefined;
+      const run = Array.isArray(runRows)
+        ? runRows.find(
+            (candidate): candidate is Record<string, unknown> =>
+              typeof candidate === 'object' && candidate !== null && candidate.id === item.runId,
+          )
+        : undefined;
+      return jsonResult({
+        ok: true,
+        data: {
+          persisted: true,
+          workflow: 'strategy-daily-cycle',
+          cycle: cycle.data,
+          item,
+          ...(run === undefined ? {} : { run }),
+          // 正式运行的结果页统一读取 selected view；这里不重复返回全量逐股事实。
+          results: [],
+          signals: [],
+        },
+      });
+    }
     const run = await invokeTool('run_strategy', {
       ...body.data,
-      strategyId: c.req.param('id'),
+      strategyId,
     });
     if (!run.ok || typeof run.data !== 'object' || run.data === null) return jsonResult(run);
     const payload = run.data as {

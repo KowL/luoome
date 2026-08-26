@@ -191,6 +191,54 @@ export class DrizzleStrategyScheduleRepository implements StrategyScheduleReposi
     });
   }
 
+  async claimByStrategyIdWithFence(input: {
+    readonly strategyId: string;
+    readonly now: Date;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+  }): Promise<StrategyScheduleClaim | null> {
+    return this.db.transaction((tx) => {
+      const candidate = tx
+        .select()
+        .from(strategySchedules)
+        .where(
+          and(
+            eq(strategySchedules.strategyId, input.strategyId),
+            eq(strategySchedules.enabled, true),
+            or(isNull(strategySchedules.leaseUntil), lte(strategySchedules.leaseUntil, input.now)),
+          ),
+        )
+        .limit(1)
+        .get();
+      if (candidate === undefined) return null;
+      const result = tx.run(sql`
+        UPDATE strategy_schedules
+        SET lease_owner = ${input.owner}, lease_until = ${input.leaseUntil.getTime()},
+            lease_fence = lease_fence + 1, lease_heartbeat_at = ${input.now.getTime()}
+        WHERE id = ${candidate.id}
+          AND strategy_id = ${input.strategyId}
+          AND enabled = 1
+          AND (lease_until IS NULL OR lease_until <= ${input.now.getTime()})
+      `);
+      if (changedRows(result) !== 1) return null;
+      const row = tx
+        .select()
+        .from(strategySchedules)
+        .where(eq(strategySchedules.id, candidate.id))
+        .get();
+      if (row === undefined) return null;
+      return {
+        schedule: toSchedule(row),
+        token: {
+          scheduleId: row.id,
+          owner: input.owner,
+          fence: row.leaseFence,
+          leaseUntil: row.leaseUntil as Date,
+        },
+      };
+    });
+  }
+
   async renewClaim(input: {
     readonly id: string;
     readonly owner: string;

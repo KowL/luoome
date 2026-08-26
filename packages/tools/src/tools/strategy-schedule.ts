@@ -68,6 +68,8 @@ export const setStrategyScheduleTool = defineTool({
 
 export const ClaimDueStrategySchedulesInput = z.object({
   owner: z.string().min(1),
+  /** 指定时跳过 nextRunAt 到期判断，供 Web 手动正式运行复用同一 lease。 */
+  strategyId: z.string().min(1).optional(),
   limit: z.number().int().min(1).max(100).default(20),
   leaseMinutes: z.number().int().min(5).max(240).default(20),
 });
@@ -85,18 +87,29 @@ export const ClaimDueStrategySchedulesOutput = z.object({ items: z.array(Claimed
 
 export const claimDueStrategySchedulesTool = defineTool({
   name: 'claim_due_strategy_schedules',
-  description: '为调度 workflow 原子抢占到期 StrategySchedule',
+  description: '为调度 workflow 原子抢占到期或指定的 StrategySchedule',
   sideEffect: 'write',
   input: ClaimDueStrategySchedulesInput,
   output: ClaimDueStrategySchedulesOutput,
   handler: async (input, ctx) => {
     const now = ctx.clock();
-    const claims = await ctx.repos.strategySchedule.claimDueWithFence({
-      now,
-      owner: input.owner,
-      leaseUntil: new Date(now.getTime() + input.leaseMinutes * 60_000),
-      limit: input.limit,
-    });
+    const leaseUntil = new Date(now.getTime() + input.leaseMinutes * 60_000);
+    const claims =
+      input.strategyId === undefined
+        ? await ctx.repos.strategySchedule.claimDueWithFence({
+            now,
+            owner: input.owner,
+            leaseUntil,
+            limit: input.limit,
+          })
+        : [
+            await ctx.repos.strategySchedule.claimByStrategyIdWithFence({
+              strategyId: input.strategyId,
+              now,
+              owner: input.owner,
+              leaseUntil,
+            }),
+          ].flatMap((claim) => (claim === null ? [] : [claim]));
     const items = await Promise.all(
       claims.map(async ({ schedule, token }) => {
         const strategy = await ctx.repos.strategy.findById(schedule.strategyId);

@@ -302,6 +302,57 @@ describe('运行记录「查看」弹窗', () => {
     expect(modalOverlay.hidden).toBe(false);
     expect(modalBody.textContent).toContain('StrategyRun 不存在');
   });
+
+  it('暂不发布运行只显示失败项重跑入口，不把全量 evaluated 结果灌回页面', async () => {
+    const withheld = {
+      ...run,
+      id: 'withheld-run',
+      scope: 'operational',
+      publication: { status: 'withheld' },
+      summary: { ...run.summary, schemaVersion: 4, failedCount: 1 },
+    };
+    let retryBody;
+    let runsFetches = 0;
+    globalThis.fetch = async (path, init) => {
+      const url = String(path);
+      if (url.includes('/api/strategies/breakout-volume-retry/runs')) {
+        runsFetches += 1;
+        return jsonResponse({
+          ok: true,
+          data: {
+            runs: [
+              runsFetches === 1 ? withheld : { ...withheld, publication: { status: 'published' } },
+            ],
+          },
+        });
+      }
+      if (url.includes('/api/strategies/breakout-volume-retry/run')) {
+        retryBody = init?.body;
+        return jsonResponse({
+          ok: true,
+          data: {
+            persisted: true,
+            item: { status: 'complete', selectedCount: 2, failedCount: 0 },
+            cycle: { items: [] },
+          },
+        });
+      }
+      return jsonResponse({ ok: false, error: { kind: 'not_found', message: '无数据' } });
+    };
+    const section = await renderRuns('breakout-volume-retry');
+    expect(section.textContent).toContain('仅重跑失败项');
+    expect(section.querySelectorAll('.strategy-result-table').length).toBe(0);
+    const retry = section
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '仅重跑失败项');
+    expect(retry).toBeDefined();
+    retry.click();
+    await flush();
+    expect(JSON.parse(retryBody)).toEqual({ persist: true, retryRunId: 'withheld-run' });
+    expect(retry.textContent).toBe('重跑完成');
+    expect(runsFetches).toBe(2);
+    expect(section.textContent).not.toContain('仅重跑失败项');
+  });
 });
 
 describe('运行详情弹窗信号列表', () => {

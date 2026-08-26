@@ -114,6 +114,39 @@ export class InMemoryStrategyScheduleRepository implements StrategyScheduleRepos
     });
   }
 
+  async claimByStrategyIdWithFence(input: {
+    readonly strategyId: string;
+    readonly now: Date;
+    readonly owner: string;
+    readonly leaseUntil: Date;
+  }): Promise<StrategyScheduleClaim | null> {
+    const schedule = [...this.items.values()].find(
+      (item) => item.strategyId === input.strategyId && item.enabled,
+    );
+    if (schedule === undefined) return null;
+    const currentLease = this.leases.get(schedule.id);
+    if (currentLease !== undefined && currentLease.until.getTime() > input.now.getTime()) {
+      return null;
+    }
+    const fence = (this.nextFences.get(schedule.id) ?? 0) + 1;
+    this.nextFences.set(schedule.id, fence);
+    this.leases.set(schedule.id, {
+      owner: input.owner,
+      until: input.leaseUntil,
+      fence,
+      heartbeatAt: input.now,
+    });
+    return {
+      schedule,
+      token: {
+        scheduleId: schedule.id,
+        owner: input.owner,
+        fence,
+        leaseUntil: input.leaseUntil,
+      },
+    };
+  }
+
   async renewClaim(input: {
     readonly id: string;
     readonly owner: string;

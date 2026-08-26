@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DailyBarRevision } from '@luoome/core';
-import { type DailyBar, money } from '@luoome/core';
+import { type DailyBar, money, type StrategyDataCheckpoint } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
@@ -367,5 +367,104 @@ describe('prepare_strategy_data freshness and vintage', () => {
     if (!result.ok) return;
     expect(result.data.members[0]?.errorKind).toBe('provider_timeout');
     expect(result.data.checkpoint.providerStatuses[0]?.errorKinds).toEqual(['provider_timeout']);
+  });
+
+  it('重试 checkpoint 只请求失败成员并合并回完整股票池', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 2, observedAt: now });
+    const stocks = await base.repos.stockUniverse.listSnapshotMembers('sync-test-stock-universe');
+    expect(stocks).toHaveLength(2);
+    const first = stocks[0];
+    const second = stocks[1];
+    if (first === undefined || second === undefined) return;
+    const stockIds = [first.id, second.id].sort();
+    const memberChecksum = createHash('sha256').update(JSON.stringify(stockIds)).digest('hex');
+    const baseCheckpoint: StrategyDataCheckpoint = {
+      id: 'retry-base-checkpoint',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: now,
+      status: 'partial',
+      vintageStatus: 'not-applicable',
+      universeSyncId: 'sync-test-stock-universe',
+      requestedCount: stockIds.length,
+      availableCount: 1,
+      failedCount: 1,
+      memberChecksum,
+      dataChecksum: 'base-data-checksum',
+      providerStatuses: [
+        {
+          capability: 'daily-bars',
+          provider: 'test-provider',
+          requested: stockIds.length,
+          succeeded: 1,
+          failed: 1,
+          missing: 0,
+          fallbackUsed: false,
+          freshness: 'stale',
+          errorKinds: ['provider_error'],
+        },
+      ],
+      startedAt: now,
+    };
+    await base.repos.strategyDataCheckpoint.saveStarted({ ...baseCheckpoint, status: 'running' });
+    await base.repos.strategyDataCheckpoint.commit({
+      checkpoint: { ...baseCheckpoint, finishedAt: now },
+      members: [
+        {
+          checkpointId: baseCheckpoint.id,
+          stockId: stockIds[0] as string,
+          status: 'available',
+          latestBarDate: new Date('2026-08-11T00:00:00.000Z'),
+          barCount: 1,
+          provider: 'test-provider',
+        },
+        {
+          checkpointId: baseCheckpoint.id,
+          stockId: stockIds[1] as string,
+          status: 'failed',
+          barCount: 0,
+          provider: 'test-provider',
+          errorKind: 'provider_error',
+        },
+      ],
+    });
+    const failedStockId = stockIds[1] as string;
+    const requested: string[] = [];
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (stockId: string) => {
+            requested.push(stockId);
+            return [{ ...bar(new Date('2026-08-11T00:00:00.000Z')), stockId }];
+          },
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        retryCheckpointId: baseCheckpoint.id,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(requested).toEqual([failedStockId]);
+    expect(result.data.checkpoint).toMatchObject({
+      status: 'complete',
+      universeSyncId: baseCheckpoint.universeSyncId,
+      requestedCount: 2,
+      availableCount: 2,
+      failedCount: 0,
+      memberChecksum: baseCheckpoint.memberChecksum,
+    });
+    expect(result.data.members.map((member) => member.stockId)).toEqual(stockIds);
+    expect(result.data.members.every((member) => member.status === 'available')).toBe(true);
   });
 });
