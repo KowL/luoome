@@ -25,7 +25,7 @@
 本设计不实现：
 
 - 港股 / 美股 / 北交所 / 加密资产。adapter 只覆盖 SH / SZ A 股，其它市场不在支持范围。
-- 历史分钟补数与复盘分钟行情。本设计只接入当前会话 `rt_min_daily`；MinuteBar 的冻结 schema、缺口和本地保留见 [独立设计](./minute-bar-detailed-design.md)。
+- 历史分钟补数与复盘分钟行情。本设计只接入当前会话 `rt_min`；MinuteBar 的冻结 schema、缺口和本地保留见 [独立设计](./minute-bar-detailed-design.md)。
 - 自动交易、盯盘触发、Advice 联动。本设计只做读取。
 - tushare 积分 / 权限体系的自动检测。接口权限不足统一按 `upstream_error` 走既有降级，
   人工处理见集成手册。
@@ -58,7 +58,7 @@ Content-Type: application/json
 | `fetchQuote` | `rt_k` | 实时 Level-1 快照，price 即最新价，vol 单位=股；**需单独开通权限**（[doc_id=290](https://tushare.pro/document/1?doc_id=290)） |
 | `fetchDailyBars` | `daily` + `adj_factor` | 日线 vol 单位=手；复权因子单独请求并合并；均需 2000 积分起 |
 | `searchStocks` | `stock_basic` | `exchange` 用 `SSE` / `SZSE`；客户端截断 20 条 |
-| `fetchMinuteBars` | `rt_min_daily` | 沪深 A 股当前会话；1/5/15/30/60 分钟 seam；OHLCV raw；单股、实时分钟权限 |
+| `fetchMinuteBars` | `rt_min` | 沪深 A 股当前会话；1/5/15/30/60 分钟 seam；OHLCV raw；单股、实时分钟权限（[doc_id=374](https://tushare.pro/document/2?doc_id=374)）。不传 fields：官方时间列叫 `time`，代理网关叫 `trade_time`，解析两者都接受 |
 
 ### 3.2 Adapter 进入可配置的三段行情路由
 

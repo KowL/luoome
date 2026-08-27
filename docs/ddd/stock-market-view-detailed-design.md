@@ -832,7 +832,7 @@ bun run build
 
 ### Phase 4：分钟行情（✅ 首个生产级竖向切片）
 
-已完成独立 `MinuteBar` core schema、Drizzle/in-memory repository、Tushare `rt_min_daily`
+已完成独立 `MinuteBar` core schema、Drizzle/in-memory repository、Tushare `rt_min`
 adapter seam、`get_stock_minute_bars` Tool 和 Web 分时/分钟 K 展示。当前 provider 只覆盖
 沪深 A 股当日会话；显式历史日期只读 30 天本地保留，缺失时诚实返回 unavailable/partial。
 完整冻结契约见 [MinuteBar 详细设计](./minute-bar-detailed-design.md)。不得用 PriceSnapshot

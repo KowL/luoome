@@ -261,20 +261,21 @@ describe('TushareMarketAdapter.fetchQuote', () => {
 });
 
 describe('TushareMarketAdapter.fetchMinuteBars', () => {
-  const fields = ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'];
+  // 代理网关 rt_min 默认列：时间字段叫 trade_time，且回显 freq。
+  const fields = ['ts_code', 'trade_time', 'freq', 'open', 'close', 'high', 'low', 'vol', 'amount'];
 
-  it('rt_min_daily 映射 raw OHLCV、周期、结束标签与来源，并按时间升序', async () => {
+  it('rt_min 映射 raw OHLCV、周期、结束标签与来源，并按时间升序', async () => {
     const { adapter, requests, infos } = makeAdapter(() =>
       Promise.resolve(
         tushareEnvelope(fields, [
-          ['600519.SH', '1MIN', '2026-07-24 09:32:00', 1691, 1692, 1693, 1690, 20_000, 33_840_000],
-          ['600519.SH', '1MIN', '2026-07-24 09:31:00', 1690, 1691, 1692, 1689, 10_000, 16_905_000],
+          ['600519.SH', '2026-07-24 09:32:00', '1MIN', 1691, 1692, 1693, 1690, 20_000, 33_840_000],
+          ['600519.SH', '2026-07-24 09:31:00', '1MIN', 1690, 1691, 1692, 1689, 10_000, 16_905_000],
         ]),
       ),
     );
     const bars = await adapter.fetchMinuteBars('600519.SH', '1m');
     expect(requests[0]).toMatchObject({
-      apiName: 'rt_min_daily',
+      apiName: 'rt_min',
       params: { ts_code: '600519.SH', freq: '1MIN' },
     });
     expect(bars.map((bar) => bar.endedAt)).toEqual([
@@ -297,11 +298,24 @@ describe('TushareMarketAdapter.fetchMinuteBars', () => {
     expect(infos.some((line) => line.message === 'tushare.fetchMinuteBars ok')).toBe(true);
   });
 
+  it('官方 rt_min 默认列（time、无 freq 回显）同样可解析', async () => {
+    const officialFields = ['ts_code', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'];
+    const { adapter } = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(officialFields, [
+          ['600519.SH', '2026-07-24 09:31:00', 1690, 1691, 1692, 1689, 10_000, 16_905_000],
+        ]),
+      ),
+    );
+    const bars = await adapter.fetchMinuteBars('600519.SH', '1m');
+    expect(bars[0]).toMatchObject({ endedAt: new Date('2026-07-24T01:31:00.000Z'), open: 1690 });
+  });
+
   it('上游 code 错配或非法 OHLC → parse 错误，不静默写入部分数据', async () => {
     const mismatch = makeAdapter(() =>
       Promise.resolve(
         tushareEnvelope(fields, [
-          ['000001.SZ', '5MIN', '2026-07-24 09:35:00', 10, 10, 11, 9, 100, 1000],
+          ['000001.SZ', '2026-07-24 09:35:00', '5MIN', 10, 10, 11, 9, 100, 1000],
         ]),
       ),
     );
@@ -310,7 +324,7 @@ describe('TushareMarketAdapter.fetchMinuteBars', () => {
     const invalid = makeAdapter(() =>
       Promise.resolve(
         tushareEnvelope(fields, [
-          ['600519.SH', '1MIN', '2026-07-24 09:31:00', 10, 12, 11, 9, 100, 1000],
+          ['600519.SH', '2026-07-24 09:31:00', '1MIN', 10, 12, 11, 9, 100, 1000],
         ]),
       ),
     );
@@ -319,12 +333,24 @@ describe('TushareMarketAdapter.fetchMinuteBars', () => {
     const wrongFrequency = makeAdapter(() =>
       Promise.resolve(
         tushareEnvelope(fields, [
-          ['600519.SH', '1MIN', '2026-07-24 09:31:00', 10, 10, 11, 9, 100, 1000],
+          ['600519.SH', '2026-07-24 09:31:00', '1MIN', 10, 10, 11, 9, 100, 1000],
         ]),
       ),
     );
     await expect(wrongFrequency.adapter.fetchMinuteBars('600519.SH', '5m')).rejects.toThrow(
       /frequency mismatch/,
+    );
+
+    const noTime = makeAdapter(() =>
+      Promise.resolve(
+        tushareEnvelope(
+          ['ts_code', 'open', 'close', 'high', 'low', 'vol', 'amount'],
+          [['600519.SH', 10, 10, 11, 9, 100, 1000]],
+        ),
+      ),
+    );
+    await expect(noTime.adapter.fetchMinuteBars('600519.SH', '1m')).rejects.toThrow(
+      /invalid minute time/,
     );
   });
 

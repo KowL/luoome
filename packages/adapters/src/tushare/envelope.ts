@@ -19,15 +19,23 @@ const TushareEnvelopeSchema = z.object({
   }),
 });
 
+// code≠0 时上游（含代理网关）常把 data 置为 null；先只校验 code/msg，
+// 避免业务错误被 data 结构校验误报成 parse 错误而吞掉真实 msg。
+const TushareHeadSchema = z.object({
+  code: z.number().int(),
+  msg: z.string().nullish().default(''),
+});
+
 /** envelope → 行对象数组；code≠0 或行列数不符时抛错。 */
 export const parseTushareEnvelopeRows = (raw: unknown): Array<Record<string, unknown>> => {
-  const env = TushareEnvelopeSchema.parse(raw);
-  if (env.code !== 0) {
+  const head = TushareHeadSchema.parse(raw);
+  if (head.code !== 0) {
     throw new SourceExecutionError(
       'upstream_error',
-      `tushare upstream_error: ${env.code} ${env.msg ?? ''}`,
+      `tushare upstream_error: ${head.code} ${head.msg ?? ''}`,
     );
   }
+  const env = TushareEnvelopeSchema.parse(raw);
   return env.data.items.map((row) => {
     if (row.length !== env.data.fields.length) {
       throw new SourceExecutionError(

@@ -322,7 +322,7 @@ describe('market/factory', () => {
     );
   });
 
-  it('minute-bars 只在显式启用 Tushare 时注册；映射 rt_min_daily', async () => {
+  it('minute-bars 只在显式启用 Tushare 时注册；映射 rt_min', async () => {
     const adapter = createMarketAdapterFromEnv(
       {
         LUOOME_MARKET_PROVIDER: 'real',
@@ -334,7 +334,7 @@ describe('market/factory', () => {
         clock: () => new Date('2026-08-14T02:00:00.000Z'),
         fetchImpl: (async (_url: string, init?: RequestInit) => {
           const body = JSON.parse(String(init?.body)) as { api_name: string };
-          if (body.api_name !== 'rt_min_daily') {
+          if (body.api_name !== 'rt_min') {
             return new Response('unexpected api', { status: 500 });
           }
           return new Response(
@@ -342,9 +342,19 @@ describe('market/factory', () => {
               code: 0,
               msg: '',
               data: {
-                fields: ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'],
+                fields: [
+                  'ts_code',
+                  'trade_time',
+                  'freq',
+                  'open',
+                  'close',
+                  'high',
+                  'low',
+                  'vol',
+                  'amount',
+                ],
                 items: [
-                  ['002594.SZ', '1MIN', '2026-08-14 09:31:00', 90, 90.5, 91, 89, 10000, 905000],
+                  ['002594.SZ', '2026-08-14 09:31:00', '1MIN', 90, 90.5, 91, 89, 10000, 905000],
                 ],
               },
             }),

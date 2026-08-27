@@ -39,6 +39,16 @@ describe('parseTushareEnvelopeRows', () => {
     ).toThrow(/tushare upstream_error: 40001 denied/);
   });
 
+  it('code≠0 且 data 为 null（网关业务错误形态）→ 抛 upstream_error 而非 parse 错误', () => {
+    expect(() =>
+      parseTushareEnvelopeRows({
+        code: -501,
+        msg: 'api_name=rt_min_daily not supported',
+        data: null,
+      }),
+    ).toThrow(/tushare upstream_error: -501 api_name=rt_min_daily not supported/);
+  });
+
   it('行列数量不符 → 抛 length mismatch', () => {
     expect(() =>
       parseTushareEnvelopeRows({ code: 0, data: { fields: ['a', 'b'], items: [[1]] } }),

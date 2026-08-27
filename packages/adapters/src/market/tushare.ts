@@ -58,10 +58,13 @@ const QuoteRowSchema = z.object({
   pre_close: z.number().positive().nullish(),
 });
 
+// rt_min 的时间列官方叫 time，代理网关叫 trade_time（实测网关会静默丢弃未知
+// fields，无法显式指定）；两者都接受，映射时取第一个可用值。
 const MinuteBarRowSchema = z.object({
-  code: z.string().min(1),
+  ts_code: z.string().min(1),
   freq: z.string().nullish(),
-  time: z.string().min(1),
+  time: z.string().min(1).nullish(),
+  trade_time: z.string().min(1).nullish(),
   open: z.number().positive(),
   close: z.number().positive(),
   high: z.number().positive(),
@@ -209,8 +212,10 @@ export class TushareMarketAdapter {
   }
 
   /**
-   * A 股当日累计分钟 OHLCV：官方 rt_min_daily，单股、最多 1000 行、raw 价格，
-   * 需要独立实时分钟权限。接口只给当前交易日，不承担历史分页。
+   * A 股当前交易日分钟 OHLCV：官方 rt_min（doc_id=374），单次最多 1000 行、raw 价格，
+   * 需要实时分钟权限。接口只给当前交易日，不承担历史分页。
+   * 不传 fields：官方默认列时间字段叫 time，代理网关叫 trade_time，
+   * 显式指定会被网关静默丢弃，省略后按各自默认列解析。
    */
   async fetchMinuteBars(
     stockCode: string,
@@ -222,20 +227,21 @@ export class TushareMarketAdapter {
     const tsCode = stockCode.toUpperCase();
     try {
       const rows = await tushareQuery(
-        'rt_min_daily',
+        'rt_min',
         { ts_code: tsCode, freq: TUSHARE_MINUTE_FREQ[interval] },
         this.config,
         this.fetchImpl,
-        ['code', 'freq', 'time', 'open', 'close', 'high', 'low', 'vol', 'amount'],
       );
       if (rows.length > 1000) {
-        throw partialDataError(`partial_data: rt_min_daily exceeded 1000 rows for ${tsCode}`);
+        throw partialDataError(`partial_data: rt_min exceeded 1000 rows for ${tsCode}`);
       }
       const fetchedAt = this.clock();
       const parsedRows = rows.map((row) => MinuteBarRowSchema.parse(row));
       const normalized = parsedRows.map((row) => {
-        if (row.code.toUpperCase() !== tsCode) {
-          throw invalidPayloadError(`tushare parse: minute code mismatch ${row.code} != ${tsCode}`);
+        if (row.ts_code.toUpperCase() !== tsCode) {
+          throw invalidPayloadError(
+            `tushare parse: minute code mismatch ${row.ts_code} != ${tsCode}`,
+          );
         }
         const expectedFreq = TUSHARE_MINUTE_FREQ[interval];
         if (
@@ -247,9 +253,10 @@ export class TushareMarketAdapter {
             `tushare parse: minute frequency mismatch ${row.freq} != ${expectedFreq}`,
           );
         }
-        const endedAt = parseTradeTime(row.time);
+        const timeRaw = row.time ?? row.trade_time;
+        const endedAt = parseTradeTime(timeRaw);
         if (endedAt === undefined) {
-          throw invalidPayloadError(`tushare parse: invalid minute time ${row.time}`);
+          throw invalidPayloadError(`tushare parse: invalid minute time ${timeRaw}`);
         }
         return { row, endedAt };
       });

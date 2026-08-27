@@ -43,13 +43,14 @@ when it spans both session ends and has no interior gaps. A live/current session
 
 ## 3. Provider capability and limits
 
-The production adapter uses Tushare `rt_min_daily`, not the Tencent cumulative minute endpoint.
+The production adapter uses Tushare `rt_min` (doc_id=374), not the Tencent cumulative minute endpoint.
 The endpoint is one A-share per request, current trading day only, OHLCV, and requires the
 realtime-minute permission. The implementation requests the selected frequency and supports the
 public 1/5/15/30/60-minute contract at the adapter seam; provider-specific aggregation is not invented.
+The request omits `fields` because the official time column is `time` while the proxy gateway
+renames it to `trade_time` and silently drops unknown field names; parsing accepts either.
 Tushare documents a maximum of 1,000 rows for this realtime endpoint and a separate minute-data
-permission ([rt_min_daily](https://tushare.pro/document/2?doc_id=457),
-[rt_min](https://tushare.pro/document/2?doc_id=374),
+permission ([rt_min](https://tushare.pro/document/2?doc_id=374),
 [permissions/frequency](https://tushare.pro/document/1?doc_id=290)). A response over the limit is
 marked partial rather than silently truncated.
 
