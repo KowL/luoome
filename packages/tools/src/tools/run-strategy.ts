@@ -401,7 +401,9 @@ export const runStrategyTool = defineTool({
         usableDataCheckpoint !== undefined
       ) {
         const observedTimes = checkpointMembers.flatMap((member) =>
-          candidateIds.includes(member.stockId) && member.latestBarDate !== undefined
+          candidateIds.includes(member.stockId) &&
+          member.status === 'available' &&
+          member.latestBarDate !== undefined
             ? [member.latestBarDate.getTime()]
             : [],
         );
@@ -634,7 +636,8 @@ export const runStrategyTool = defineTool({
                 }
               }
               const latestBar = bars.at(-1);
-              if (needsQuote && latestBar !== undefined) {
+              // checkpoint latest bar also anchors post-signal observations for daily-bar-only DSLs.
+              if (latestBar !== undefined) {
                 quote = quoteFromDailyBar(latestBar, startedAt);
               }
             } else {

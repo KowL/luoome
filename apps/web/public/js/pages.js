@@ -62,6 +62,10 @@ const decisionLoopAttributionRate = (trades) => {
   return (trades.total - trades.unattributed) / trades.total;
 };
 
+const calibrationRateText = (rate, withOutcome) => (withOutcome === 0 ? '--' : fmtPct(rate));
+
+const calibrationPnlText = (pnl, withOutcome) => (withOutcome === 0 ? '--' : fmtSigned(pnl));
+
 const formatMetricDistribution = (counts, label) => {
   const entries = Object.entries(counts ?? {});
   if (entries.length === 0) return `—`;
@@ -1684,42 +1688,56 @@ const renderDecisionLoopSummary = async () => {
 };
 
 const renderReview = async (setStatus) => {
-  const r = await callApi('/api/review');
+  const [r, calR] = await Promise.all([callApi('/api/review'), callApi('/api/review/calibration')]);
   if (!r.ok) {
     setStatus(`加载失败：${r.error.kind}`, true);
     return;
   }
   const stats = r.data.stats;
+  const outcomeSamples = calR.ok ? calR.data.totalWithOutcome : 0;
   const grid = $('#review-stats-grid');
   mount(grid, [
     statBlock('总条数', String(stats.totalAdvices)),
     statBlock('平均信心度', stats.avgConfidence.toFixed(1)),
-    statBlock('命中率', fmtPct(stats.hitRate)),
+    statBlock('命中率', calibrationRateText(stats.hitRate, outcomeSamples)),
     statBlock(
       '跟单盈亏',
-      fmtSigned(stats.pnlWhenFollowed),
-      stats.pnlWhenFollowed > 0 ? 'pos' : stats.pnlWhenFollowed < 0 ? 'neg' : '',
+      calibrationPnlText(stats.pnlWhenFollowed, outcomeSamples),
+      outcomeSamples === 0
+        ? ''
+        : stats.pnlWhenFollowed > 0
+          ? 'pos'
+          : stats.pnlWhenFollowed < 0
+            ? 'neg'
+            : '',
     ),
     statBlock(
       '忽略盈亏',
-      fmtSigned(stats.pnlWhenIgnored),
-      stats.pnlWhenIgnored > 0 ? 'pos' : stats.pnlWhenIgnored < 0 ? 'neg' : '',
+      calibrationPnlText(stats.pnlWhenIgnored, outcomeSamples),
+      outcomeSamples === 0
+        ? ''
+        : stats.pnlWhenIgnored > 0
+          ? 'pos'
+          : stats.pnlWhenIgnored < 0
+            ? 'neg'
+            : '',
     ),
     statBlock(
       'follow 占比',
-      fmtPct(stats.outcomeRate.followed),
-      `${fmtPct(stats.outcomeRate.partiallyFollowed)} 部分 / ${fmtPct(stats.outcomeRate.ignored)} 忽略`,
+      calibrationRateText(stats.outcomeRate.followed, outcomeSamples),
+      outcomeSamples === 0
+        ? '尚无 outcome 样本'
+        : `${fmtPct(stats.outcomeRate.partiallyFollowed)} 部分 / ${fmtPct(stats.outcomeRate.ignored)} 忽略`,
     ),
   ]);
   $('#review-stats-meta').textContent = `${stats.totalAdvices} 条（含已过期）`;
   await renderDecisionLoopSummary();
 
   // ====== W4 confidence 自校准表 ======
-  const calR = await callApi('/api/review/calibration');
   if (calR.ok) {
     const cal = calR.data;
     $('#review-calibration-meta').textContent =
-      `${cal.totalAdvices} 条 / ${cal.totalWithOutcome} 已回填 · 整体命中率 ${fmtPct(cal.overallHitRate)}`;
+      `${cal.totalAdvices} 条 / ${cal.totalWithOutcome} 已回填 · 整体命中率 ${calibrationRateText(cal.overallHitRate, cal.totalWithOutcome)}`;
     const tbody = $('#review-calibration-table tbody');
     tbody.innerHTML = cal.buckets
       .map((b) => {
@@ -1733,8 +1751,8 @@ const renderReview = async (setStatus) => {
           `<td>${b.total}</td>` +
           `<td>${b.withOutcome}</td>` +
           `<td>${b.hits}</td>` +
-          `<td class="${hitColor}">${fmtPct(b.hitRate)}</td>` +
-          `<td class="${pnlClass}">${fmtSigned(b.avgPnl)}</td>` +
+          `<td class="${hitColor}">${calibrationRateText(b.hitRate, b.withOutcome)}</td>` +
+          `<td class="${pnlClass}">${calibrationPnlText(b.avgPnl, b.withOutcome)}</td>` +
           `<td>${b.avgConfidence.toFixed(1)}</td>` +
           `</tr>`
         );
@@ -1745,7 +1763,7 @@ const renderReview = async (setStatus) => {
   }
 
   // 趋势图：当前接口按决策维度聚合，保持事实口径，不创建演示数据。
-  const decisionData = Object.entries(stats.byDecision ?? {})
+  const decisionData = (outcomeSamples === 0 ? [] : Object.entries(stats.byDecision ?? {}))
     .filter(([, s]) => s.totalAdvices > 0)
     .map(([decision, s]) => ({ label: decision, hitRate: s.hitRate }));
   renderTrend(decisionData);
@@ -2976,6 +2994,8 @@ export {
   analyzeAllHoldings,
   bindSettingsActions,
   boardStats,
+  calibrationPnlText,
+  calibrationRateText,
   cancelAnalyzeAllHoldings,
   decisionLoopAttributionRate,
   errorKindLabel,

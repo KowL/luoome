@@ -13,9 +13,13 @@ import { runStrategySchedulesWorkflow } from './run-strategy-schedules.js';
 
 const NOW = new Date('2026-08-10T10:00:00.000Z');
 
-const seedScheduled = async (status: Strategy['status'] = 'active', recommendations = false) => {
+const seedScheduled = async (
+  status: Strategy['status'] = 'active',
+  recommendations = false,
+  stockCount = 1,
+) => {
   const ctx = await buildTestContext({ clock: () => NOW });
-  await seedTestStockUniverse(ctx, { limit: 1 });
+  await seedTestStockUniverse(ctx, { limit: stockCount });
   const stockUniverse: StockUniverseManagerLike = {
     name: 'stock-universe',
     sources: ['test-universe'],
@@ -153,18 +157,20 @@ describe('run-strategy-schedules workflow', () => {
     });
   });
 
-  it('启用推荐政策时，定时运行后自动生成 Advice 并通知', async () => {
-    const ctx = await seedScheduled('active', true);
+  it('启用推荐政策时，定时运行后为每个入选股票生成 Advice 并通知', async () => {
+    const ctx = await seedScheduled('active', true, 2);
     const result = await runStrategySchedulesWorkflow.run({ owner: 'worker-recommend' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.items[0]).toMatchObject({ status: 'ran', adviceCount: 1 });
+    expect(result.data.items[0]).toMatchObject({ status: 'ran', adviceCount: 2 });
     const advices = await ctx.repos.advice.query({
       sourceTool: 'analyze_strategy_candidate',
       includeExpired: true,
     });
-    expect(advices).toHaveLength(1);
-    expect(await ctx.repos.notification.listByAdvice(advices[0]?.id ?? '')).toHaveLength(1);
+    expect(advices).toHaveLength(2);
+    for (const advice of advices) {
+      expect(await ctx.repos.notification.listByAdvice(advice.id)).toHaveLength(1);
+    }
   });
 
   it('AI 不可用时保留事实发布并把 facts-only 映射为 partial，而不是 failed', async () => {

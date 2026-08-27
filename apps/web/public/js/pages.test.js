@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   boardStats,
+  calibrationPnlText,
+  calibrationRateText,
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
@@ -10,6 +12,18 @@ import {
   sortBoardItems,
   watchRunSummaryText,
 } from './pages.js';
+
+describe('confidence 校准 unknown 展示', () => {
+  it('无 outcome 样本时不用 0 伪装命中率和平均收益', () => {
+    expect(calibrationRateText(0, 0)).toBe('--');
+    expect(calibrationPnlText(0, 0)).toBe('--');
+  });
+
+  it('有 outcome 样本时保留真实的 0', () => {
+    expect(calibrationRateText(0, 1)).toBe('0.00%');
+    expect(calibrationPnlText(0, 1)).toBe('0.00');
+  });
+});
 
 describe('盯盘最近一轮摘要', () => {
   it('读取 WatchRunSchema 的 evaluatedPools 字段', () => {

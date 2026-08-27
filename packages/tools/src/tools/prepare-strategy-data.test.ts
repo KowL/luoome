@@ -180,6 +180,55 @@ describe('prepare_strategy_data freshness and vintage', () => {
     expect(result.data.checkpoint.providerStatuses[0]?.latencyMs).toMatchObject({ samples: 1 });
   });
 
+  it('reports dataAsOf from available members without letting stale members age the checkpoint', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 2, observedAt: now });
+    const freshDate = new Date('2026-08-12T00:00:00.000Z');
+    const staleDate = new Date('2026-08-05T00:00:00.000Z');
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: (stockId: string) =>
+            Promise.resolve([
+              {
+                ...bar(stockId === '600519.SH' ? freshDate : staleDate),
+                stockId,
+              },
+            ]),
+        },
+      },
+    };
+
+    const result = await prepareStrategyDataTool.execute(
+      {
+        strategyId: 'strategy-1',
+        asOf: now,
+        stockIds: ['600519.SH', '000001.SZ'],
+        maxStalenessTradingDays: 1,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.checkpoint).toMatchObject({
+      status: 'partial',
+      availableCount: 1,
+      providerStatuses: [
+        expect.objectContaining({
+          freshness: 'stale',
+          dataAsOf: freshDate,
+          succeeded: 1,
+          missing: 1,
+        }),
+      ],
+    });
+  });
+
   it('reuse-fresh refreshes a stale local projection before applying the freshness gate', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');
     const base = await buildTestContext({ clock: () => now });

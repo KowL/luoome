@@ -28,6 +28,16 @@ Phase 2 的目标是把“建议—行动—结果—后续观察—研究迭代
 
 本地验收使用隔离 SQLite 与种子事实覆盖 T+1 complete、T+3 pending、T+5 unavailable、T+20 缺样本、多个 Advice、Outcome、显式/版本级/未归因 Trade 及研究假设引用，并检查桌面与 390px 窄屏。尚未取得跨真实交易日的 provider、benchmark、现金流/公司行动和持续 schedule 运行证据；因此本记录只关闭代码/装配门禁，不关闭第 8 节生产数据门禁。
 
+### 1.2 2026-08-27 真实数据 smoke
+
+- 真实日线 checkpoint 覆盖 5,207 / 5,554：5,206 个可用成员到 2026-08-27，1 个停留在 2026-08-26，345 个失败，2 个缺失。因此运行按最早可用事实保守记录 `dataAsOf=2026-08-26`，整体仍是 `partial`。
+- 三条用户策略的新版本均将正式入选限制为评分 Top 15；三次 `accepted + published operational` 运行各入选 15 只，且 emitted signal 的日线基准价全部可用。
+- 显式启用的 `StrategyRecommendationPolicy` 为 45 / 45 个入选周期写入 run-stage Advice；其中 6 份因 LLM 结构化输出不可用而明确降级为低 confidence 规则 fallback。用户可见 evidence 改为从 `StrategyResult` / `StrategySignal` / `SignalObservation` 确定性投影，LLM 原始输出只保留在审计快照。
+- T+1/T+3/T+5/T+20 当时全部为 `pending`，45 份 Advice 均尚无 Outcome，且没有可按显式 Advice ID 确认的 Trade。这次 smoke 只证明了逐票生成、事实引用和 unknown 展示，不能证明决策收益或 confidence 校准有效。
+- 浏览器实测覆盖策略闭环、Advice 深链、设置保存后刷新、全局复盘 unknown，并在桌面和 390px 宽度检查无横向溢出。无 Outcome 样本时命中率和盈亏显示 `--`，不用 0 补位。
+
+该 smoke 没有关闭跨交易日观察、benchmark 完整性、Outcome / Trade 真实归因或长期 schedule 运营门禁，Phase 2 仍不标记为完全完成。
+
 Phase 2 完成必须同时满足四个产品条件：
 
 1. 用户可以从 Advice、信号、持仓或周报进入一次复盘，并看到事实、未知项和来源。

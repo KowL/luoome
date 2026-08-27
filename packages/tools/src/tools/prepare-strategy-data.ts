@@ -417,15 +417,16 @@ export const prepareStrategyDataTool = defineTool({
         ? 'available'
         : 'unavailable';
     const availableLatestDates = prepared.flatMap((member) =>
-      member.status === 'available' && member.latestBarDate === undefined
-        ? []
-        : member.latestBarDate === undefined
-          ? []
-          : [member.latestBarDate],
+      member.status === 'available' && member.latestBarDate !== undefined
+        ? [member.latestBarDate]
+        : [],
     );
-    const providerDataAsOf = availableLatestDates.sort(
-      (left, right) => left.getTime() - right.getTime(),
-    )[0];
+    const observedLatestDates = prepared.flatMap((member) =>
+      member.latestBarDate === undefined ? [] : [member.latestBarDate],
+    );
+    const providerDataAsOf = (
+      availableLatestDates.length > 0 ? availableLatestDates : observedLatestDates
+    ).sort((left, right) => left.getTime() - right.getTime())[0];
     const providerFreshness =
       availableCount === 0
         ? ('unavailable' as const)
