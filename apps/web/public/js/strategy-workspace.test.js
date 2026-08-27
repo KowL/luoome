@@ -303,6 +303,120 @@ describe('运行记录「查看」弹窗', () => {
   });
 });
 
+describe('执行记录「重跑」按钮', () => {
+  const withheldRun = {
+    ...run,
+    id: 'run-withheld',
+    scope: 'operational',
+    publication: { status: 'withheld', reasons: ['acceptance-rejected'] },
+  };
+  const publishedRun = {
+    ...run,
+    id: 'run-published',
+    scope: 'operational',
+    publication: { status: 'published', reasons: [] },
+  };
+
+  const waitFor = async (cond) => {
+    for (let i = 0; i < 50 && !cond(); i += 1) await flush();
+    expect(cond()).toBe(true);
+  };
+
+  it('withheld 行显示「重跑」，published 行不显示', async () => {
+    globalThis.fetch = async (path) => {
+      const url = String(path);
+      if (url.includes('/api/strategies/rerun-demo/runs')) {
+        return jsonResponse({ ok: true, data: { runs: [withheldRun, publishedRun] } });
+      }
+      return jsonResponse({ ok: false, error: { kind: 'not_found', message: '无数据' } });
+    };
+    const section = await renderRuns('rerun-demo');
+    const reruns = section
+      .querySelectorAll('button')
+      .filter((button) => button.textContent === '重跑');
+    expect(reruns.length).toBe(1);
+    expect(section.textContent).toContain('暂不发布');
+    expect(section.textContent).toContain('已发布');
+  });
+
+  it('确认重跑后 POST /run 且列表重新拉取渲染', async () => {
+    const calls = [];
+    globalThis.fetch = async (path, init) => {
+      const url = String(path);
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body });
+      if (url.includes('/api/strategies/rerun-ok/runs')) {
+        return jsonResponse({ ok: true, data: { runs: [withheldRun] } });
+      }
+      if (url.includes('/api/strategies/rerun-ok/run')) {
+        return jsonResponse({
+          ok: true,
+          data: {
+            run: { id: 'run-new', status: 'complete', publication: { status: 'published' } },
+            results: [{}],
+            signals: [{}, {}],
+          },
+        });
+      }
+      return jsonResponse({ ok: false, error: { kind: 'not_found', message: '无数据' } });
+    };
+    const section = await renderRuns('rerun-ok');
+    const rerun = section
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '重跑');
+    expect(rerun).toBeDefined();
+    rerun.click();
+    const confirm = modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '开始重跑');
+    expect(confirm).toBeDefined();
+    confirm.click();
+    await waitFor(() => section.textContent.includes('已发布；结果 1，信号 2'));
+    const post = calls.find((call) => call.method === 'POST');
+    expect(post.url).toBe('/api/strategies/rerun-ok/run');
+    expect(JSON.parse(post.body)).toEqual({ persist: true });
+    const listFetches = calls.filter(
+      (call) => call.method === 'GET' && call.url.includes('/api/strategies/rerun-ok/runs'),
+    );
+    expect(listFetches.length).toBe(2);
+  });
+
+  it('重跑失败时状态行展示错误且不重新拉取列表', async () => {
+    const calls = [];
+    globalThis.fetch = async (path, init) => {
+      const url = String(path);
+      calls.push({ url, method: init?.method ?? 'GET' });
+      if (url.includes('/api/strategies/rerun-fail/runs')) {
+        return jsonResponse({ ok: true, data: { runs: [withheldRun] } });
+      }
+      if (url.includes('/api/strategies/rerun-fail/run')) {
+        return jsonResponse({
+          ok: false,
+          error: { kind: 'invalid_input', message: '同一 StrategyVersion 已有正式运行执行中' },
+        });
+      }
+      return jsonResponse({ ok: false, error: { kind: 'not_found', message: '无数据' } });
+    };
+    const section = await renderRuns('rerun-fail');
+    section
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '重跑')
+      .click();
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '开始重跑')
+      .click();
+    await waitFor(() => section.textContent.includes('同一 StrategyVersion 已有正式运行执行中'));
+    const listFetches = calls.filter(
+      (call) => call.method === 'GET' && call.url.includes('/api/strategies/rerun-fail/runs'),
+    );
+    expect(listFetches.length).toBe(1);
+    const rerun = section
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '重跑');
+    expect(rerun.disabled).toBe(false);
+  });
+});
+
 describe('运行详情弹窗信号列表', () => {
   it('渲染股票 / direction · score / evidence，score 保留两位小数', () => {
     const node = buildRunDetailContent(detailData);

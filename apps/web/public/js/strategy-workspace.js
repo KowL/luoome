@@ -551,10 +551,17 @@ const renderDiff = async (strategyId) => {
   ]);
 };
 
-const runRow = (run) => {
+const runRow = (run, onRerun) => {
   const view = el('button', 'btn btn-outline btn-sm', '查看');
   view.type = 'button';
   view.addEventListener('click', () => void openRunDetail(run.id));
+  const actions = [view];
+  if (run.publication?.status === 'withheld' && onRerun !== undefined) {
+    const rerun = el('button', 'btn btn-outline btn-sm', '重跑');
+    rerun.type = 'button';
+    rerun.addEventListener('click', () => void onRerun(rerun));
+    actions.push(rerun);
+  }
   return el('tr', null, [
     el('td', 'mono', fmtDateTime(run.startedAt)),
     el('td', null, run.mode),
@@ -569,22 +576,79 @@ const runRow = (run) => {
     ),
     el('td', null, badge(RUN_STATUS[run.status], run.status)),
     el('td', 'muted', runSummaryText(run)),
-    el('td', null, view),
+    el('td', null, actions),
   ]);
 };
 
-export const renderRuns = async (strategyId, scope = 'operational') => {
-  const result = await cachedGet(
-    `/api/strategies/${encodeURIComponent(strategyId)}/runs?scope=${encodeURIComponent(scope)}`,
+/**
+ * withheld 行的一键重跑：触发一次新的正式运行（mode=scan、persist），
+ * 新运行仍走完整验收门——验收通过才发布替换 current，否则保留现有已发布结果。
+ */
+const rerunStrategy = async (strategyId, button, setLine, reload) => {
+  const confirmed = await confirmDialog({
+    title: '重跑策略',
+    message:
+      '将重新执行全市场扫描并原子落库。只有运行验收通过才会发布并替换当前结果；验收未通过或执行失败时保留现有已发布结果。',
+    confirmLabel: '开始重跑',
+  });
+  if (!confirmed) return;
+  button.disabled = true;
+  button.textContent = '重跑中…';
+  setLine('策略重跑中…');
+  const result = await post(`/api/strategies/${encodeURIComponent(strategyId)}/run`, {
+    persist: true,
+  });
+  button.disabled = false;
+  button.textContent = '重跑';
+  if (!result.ok) {
+    setLine(errorText(result), true);
+    return;
+  }
+  responseCache.clear();
+  const run = result.data?.run ?? {};
+  const statusText = RUN_STATUS[run.status]?.[0] ?? String(run.status ?? '完成');
+  const publicationText = PUBLICATION_STATUS[run.publication?.status]?.[0];
+  const resultsCount = result.data?.results?.length ?? 0;
+  const signalsCount = result.data?.signals?.length ?? 0;
+  setLine(
+    `重跑${statusText}${publicationText === undefined ? '' : `，${publicationText}`}；结果 ${resultsCount}，信号 ${signalsCount}`,
   );
+  await reload();
+};
+
+export const renderRuns = async (strategyId, scope = 'operational') => {
+  const path = `/api/strategies/${encodeURIComponent(strategyId)}/runs?scope=${encodeURIComponent(scope)}`;
+  const result = await cachedGet(path);
   if (!result.ok) return el('p', 'status error', errorText(result));
-  const runs = result.data.runs ?? [];
+  const statusLine = el('p', 'status');
+  statusLine.hidden = true;
+  const setLine = (text, isError = false) => {
+    statusLine.textContent = text;
+    statusLine.className = isError ? 'status error' : 'status';
+    statusLine.hidden = text.length === 0;
+  };
+  let runs = result.data.runs ?? [];
   const tbody = el('tbody');
   function renderPage() {
     const { page, pageSize } = pagination.getState();
-    mount(tbody, runs.slice((page - 1) * pageSize, page * pageSize).map(runRow));
+    mount(
+      tbody,
+      runs.slice((page - 1) * pageSize, page * pageSize).map((run) => runRow(run, rerun)),
+    );
   }
   const pagination = createPagination({ total: runs.length, onChange: renderPage });
+  const reload = async () => {
+    responseCache.delete(path);
+    const fresh = await cachedGet(path);
+    if (!fresh.ok) {
+      setLine(errorText(fresh), true);
+      return;
+    }
+    runs = fresh.data.runs ?? [];
+    pagination.setState({ total: runs.length, page: 1 });
+    renderPage();
+  };
+  const rerun = (button) => rerunStrategy(strategyId, button, setLine, reload);
   renderPage();
   const tableWrap = el('div', 'table-wrap strategy-run-timeline', [
     el('table', 'table', [
@@ -605,6 +669,7 @@ export const renderRuns = async (strategyId, scope = 'operational') => {
     ]),
   ]);
   return el('div', null, [
+    statusLine,
     tableWrap,
     pagination.root,
     ...(scope === 'operational'
