@@ -66,14 +66,6 @@ export const createStrategyObservationCandidatesTool = defineTool({
       return errInvalidInput('只有 published operational StrategyRun 才能创建观察候选');
     }
     const signals = await ctx.repos.strategyRun.signalsByRun(input.runId);
-    const existing = new Set(
-      (
-        await ctx.repos.signalObservation.list({
-          sourceKind: 'strategy-signal',
-          sourceIds: signals.map((signal) => signal.id),
-        })
-      ).map((observation) => observation.id),
-    );
     const baselineBySignal = new Map(
       signals.map((signal) => [signal.id, baselineFromSignal(signal)] as const),
     );
@@ -83,6 +75,15 @@ export const createStrategyObservationCandidatesTool = defineTool({
         baselineBySignal.get(signal.id),
         run.finishedAt ?? run.dataAsOf,
       ),
+    );
+    const existing = new Set(
+      (
+        await ctx.repos.signalObservation.list({
+          sourceKind: 'strategy-signal',
+          sourceIds: signals.map((signal) => signal.id),
+          limit: candidates.length,
+        })
+      ).map((observation) => observation.id),
     );
     await saveObservationCandidates(candidates, ctx.repos.signalObservation);
     const providers = new Map<string, number>();

@@ -18,6 +18,9 @@ import { createStrategyObservationCandidatesTool } from './create-strategy-obser
 import { prepareStrategyDataTool } from './prepare-strategy-data.js';
 import { runStrategyTool } from './run-strategy.js';
 
+// biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy DSL placeholder fixture.
+const CLOSE_INDICATOR = '${indicators.close}';
+
 const seedStrategy = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,
   emission?: StrategySignalEmission,
@@ -80,6 +83,68 @@ const seedStrategy = async (
     updatedAt: now,
   };
   await ctx.repos.strategy.create(strategy);
+  await ctx.repos.strategy.createVersion(version);
+};
+
+const seedDailyBarStrategy = async (
+  ctx: Awaited<ReturnType<typeof buildTestContext>>,
+): Promise<void> => {
+  const now = new Date('2026-07-28T09:00:00Z');
+  const definition: StrategyDslV1 = {
+    schemaVersion: 1,
+    metadata: {},
+    universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+    selection: {
+      logic: 'all',
+      rules: [
+        {
+          id: 'positive-close',
+          name: '收盘价有效',
+          when: `${CLOSE_INDICATOR} > 0`,
+          evidence: [`收盘价=${CLOSE_INDICATOR}`],
+        },
+      ],
+    },
+    scoring: {
+      method: 'weighted-sum',
+      components: [{ ruleId: 'positive-close', score: '50', weight: 1 }],
+    },
+    signals: {
+      entry: [
+        {
+          id: 'entry',
+          name: '日线研究信号',
+          when: `${CLOSE_INDICATOR} > 0`,
+          score: '60',
+          direction: 'bullish',
+          evidence: [`收盘价=${CLOSE_INDICATOR}`],
+        },
+      ],
+      exit: [],
+      risk: [],
+    },
+  };
+  const version: StrategyVersion = {
+    id: 'daily-bar-strategy-v1',
+    strategyId: 'daily-bar-strategy',
+    version: 1,
+    definition,
+    definitionHash: strategyDefinitionHash(definition),
+    validationStatus: 'valid',
+    validationErrors: [],
+    publishedAt: now,
+    createdAt: now,
+  };
+  await ctx.repos.strategy.create({
+    id: 'daily-bar-strategy',
+    name: '纯日线策略',
+    description: '测试纯日线策略',
+    owner: 'user',
+    status: 'active',
+    currentVersionId: version.id,
+    createdAt: now,
+    updatedAt: now,
+  });
   await ctx.repos.strategy.createVersion(version);
 };
 
@@ -487,6 +552,64 @@ describe('run_strategy', () => {
     expect(result.data.run.publication?.status).toBe('published');
   });
 
+  it('scheduled run dataAsOf ignores stale checkpoint members', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const freshDate = new Date('2026-08-12T00:00:00.000Z');
+    const staleDate = new Date('2026-08-05T00:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 2, observedAt: now });
+    await seedStrategy(base);
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: (stockId: string) =>
+            Promise.resolve([
+              {
+                stockId,
+                date: stockId === '600519.SH' ? freshDate : staleDate,
+                open: money(10),
+                high: money(11),
+                low: money(9),
+                close: money(10),
+                volume: 1_000_000,
+                adjustment: 'qfq' as const,
+                source: 'checkpoint-fixture',
+              },
+            ]),
+        },
+      },
+    };
+    const prepared = await prepareStrategyDataTool.execute(
+      { strategyId: 'scan-strategy', asOf: now, maxStalenessTradingDays: 1 },
+      ctx,
+    );
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'scan-strategy',
+        mode: 'scheduled',
+        dataCheckpointId: prepared.data.checkpoint.id,
+        acceptancePolicy: {
+          policyVersion: 'strategy-run-acceptance-v1',
+          minEvaluatedRatio: 0.5,
+          maxFailedRatio: 0.5,
+          maxIncompleteRatio: 0.5,
+        },
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.run.dataAsOf).toEqual(freshDate);
+    expect(result.data.run.providerCoverage?.[0]?.dataAsOf).toEqual(freshDate);
+  });
+
   it('scan with quote rules uses one batch quote request before per-stock evaluation', async () => {
     const base = await buildTestContext();
     await seedTestStockUniverse(base, { limit: 2 });
@@ -784,6 +907,89 @@ describe('run_strategy', () => {
       dataCheckpoint: {
         id: prepared.data.checkpoint.id,
         checksum: prepared.data.checkpoint.dataChecksum,
+      },
+    });
+  });
+
+  it('scheduled daily-bar-only signals preserve the checkpoint close as observation baseline', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+    await seedDailyBarStrategy(base);
+    const checkpointBar: DailyBar = {
+      stockId: '600519.SH',
+      date: new Date('2026-08-12T00:00:00.000Z'),
+      open: money(10),
+      high: money(11),
+      low: money(9),
+      close: money(10),
+      volume: 1_000_000,
+      adjustment: 'qfq',
+      source: 'checkpoint-fixture',
+    };
+    const ctx = {
+      ...base,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: () => Promise.resolve([checkpointBar]),
+        },
+      },
+    };
+    const prepared = await prepareStrategyDataTool.execute(
+      { strategyId: 'daily-bar-strategy' },
+      ctx,
+    );
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    const result = await runStrategyTool.execute(
+      {
+        strategyId: 'daily-bar-strategy',
+        mode: 'scheduled',
+        dataCheckpointId: prepared.data.checkpoint.id,
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.signals[0]?.evaluationSnapshot.baseline).toEqual({
+      price: 10,
+      at: checkpointBar.date,
+      provider: checkpointBar.source,
+    });
+    let observationQueryLimit: number | undefined;
+    const observationRepo = ctx.repos.signalObservation;
+    const candidates = await createStrategyObservationCandidatesTool.execute(
+      { runId: result.data.run.id },
+      {
+        ...ctx,
+        repos: {
+          ...ctx.repos,
+          signalObservation: {
+            save: (observation) => observationRepo.save(observation),
+            findById: (id) => observationRepo.findById(id),
+            list: (input) => {
+              observationQueryLimit = input?.limit;
+              return observationRepo.list(input);
+            },
+            removeBySources: (sourceKind, sourceIds) =>
+              observationRepo.removeBySources(sourceKind, sourceIds),
+          },
+        },
+      },
+    );
+    expect(observationQueryLimit).toBe(4);
+    expect(candidates).toMatchObject({
+      ok: true,
+      data: {
+        baselines: {
+          available: 1,
+          unavailable: 0,
+          providers: { 'checkpoint-fixture': 1 },
+        },
       },
     });
   });
