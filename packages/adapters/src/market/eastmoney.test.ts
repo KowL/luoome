@@ -191,6 +191,51 @@ describe('market/eastmoney', () => {
     });
   });
 
+  describe('fetchIntradayMinutes', () => {
+    it('解析 trends2 指数分时，把单分钟量额累加为当日累计口径', async () => {
+      let capturedUrl = '';
+      const adapter = new EastmoneySource({
+        fetchImpl: ((url: string) => {
+          capturedUrl = String(url);
+          return Promise.resolve(
+            new Response(
+              okJson({
+                trends: [
+                  '2026-08-31 09:30,3926.53,3926.53,3926.53,3926.53,100,1000.00,3926.53',
+                  '2026-08-31 09:31,3928.00,3928.00,3928.00,3928.00,120,1300.00,3927.20',
+                ],
+              }),
+              { status: 200 },
+            ),
+          );
+        }) as never,
+      });
+
+      const points = await adapter.fetchIntradayMinutes('000001.SH');
+
+      expect(capturedUrl).toContain('/api/qt/stock/trends2/get');
+      expect(capturedUrl).toContain('secid=1.000001');
+      expect(points).toEqual([
+        {
+          stockId: '000001.SH',
+          time: new Date('2026-08-31T01:30:00.000Z'),
+          price: 3926.53,
+          cumVolume: 10_000,
+          cumAmount: 1000,
+          source: 'eastmoney',
+        },
+        {
+          stockId: '000001.SH',
+          time: new Date('2026-08-31T01:31:00.000Z'),
+          price: 3928,
+          cumVolume: 22_000,
+          cumAmount: 2300,
+          source: 'eastmoney',
+        },
+      ]);
+    });
+  });
+
   describe('fetchIndexQuotes', () => {
     it('并发解析 6 只主要指数；f58 名称为准', async () => {
       const adapter = new EastmoneySource({

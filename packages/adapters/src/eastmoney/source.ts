@@ -2,6 +2,7 @@ import type {
   DailyBar,
   DateRange,
   IndexQuote,
+  IntradayMinute,
   MarketSnapshot,
   MarketSnapshotItem,
   Quote,
@@ -36,6 +37,7 @@ import {
   fetchEastmoneyBatchQuotes,
   fetchEastmoneyDailyBars,
   fetchEastmoneyIndexQuotes,
+  fetchEastmoneyIntradayMinutes,
   fetchEastmoneyMarketSnapshot,
   fetchEastmoneyMarketSnapshotEnvelope,
   fetchEastmoneyQuote,
@@ -177,6 +179,10 @@ export class EastmoneySource
 
   fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
     return fetchEastmoneyIndexQuotes(this.marketHttp);
+  }
+
+  fetchIntradayMinutes(stockCode: string): Promise<readonly IntradayMinute[]> {
+    return fetchEastmoneyIntradayMinutes(this.marketHttp, stockCode);
   }
 
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]> {

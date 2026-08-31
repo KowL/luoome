@@ -95,7 +95,10 @@ describe('EastmoneySource 情绪双池', () => {
       }
       return new Response(JSON.stringify(SEALED_FIXTURE), { status: 200 });
     }) as typeof fetch;
-    const source = new EastmoneySource({ fetchImpl });
+    const source = new EastmoneySource({
+      fetchImpl,
+      clock: () => new Date('2026-07-28T07:01:00.000Z'),
+    });
 
     const sealed = await source.fetchSealedPool(INPUT);
     const broken = await source.fetchBrokenPool(INPUT);
@@ -125,7 +128,10 @@ describe('EastmoneySource 情绪双池', () => {
   it('上游成功返回空池时保留 complete 空集合，不转换为 unavailable', async () => {
     const fetchImpl = (async () =>
       new Response(JSON.stringify({ data: null }), { status: 200 })) as unknown as typeof fetch;
-    const source = new EastmoneySource({ fetchImpl });
+    const source = new EastmoneySource({
+      fetchImpl,
+      clock: () => new Date('2026-07-28T07:01:00.000Z'),
+    });
     const sealed = await source.fetchSealedPool(INPUT);
     const broken = await source.fetchBrokenPool(INPUT);
 

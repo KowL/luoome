@@ -5,6 +5,7 @@ import {
   type DateRange,
   type Exchange,
   type IndexQuote,
+  type IntradayMinute,
   type MarketSnapshot,
   type MarketSnapshotItem,
   MarketSnapshotSchema,
@@ -49,6 +50,7 @@ export class EastmoneyAdapterError extends SourceExecutionError {
 const BASE_QUOTE_URL = 'https://push2.eastmoney.com/api/qt/stock/get';
 const BASE_BATCH_QUOTE_URL = 'https://push2.eastmoney.com/api/qt/ulist.np/get';
 const BASE_KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get';
+const BASE_TRENDS_URL = 'https://push2his.eastmoney.com/api/qt/stock/trends2/get';
 const BASE_SEARCH_URL = 'https://searchapi.eastmoney.com/api/suggest/get';
 const BASE_CLIST_URL = 'https://push2.eastmoney.com/api/qt/clist/get';
 
@@ -260,6 +262,8 @@ const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
 const CLIST_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23';
 const CLIST_FIELDS = 'f12,f13,f14,f2,f3';
 const CLIST_PAGE_SIZE = 500;
+const TRENDS_FIELDS1 = 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11';
+const TRENDS_FIELDS2 = 'f51,f52,f53,f54,f55,f56,f57,f58';
 
 /**
  * 主要大盘指数（secid 用 Eastmoney marketId 约定：1=SH，0=SZ，100=HK）。
@@ -619,6 +623,64 @@ export const fetchEastmoneyDailyBars = async (
     });
   }
   return bars;
+};
+
+interface EastmoneyTrendsResponse {
+  readonly rc: number;
+  readonly data?: {
+    readonly trends?: readonly string[] | null;
+  } | null;
+}
+
+/** Eastmoney `YYYY-MM-DD HH:mm` → 上海交易时区的绝对时间。 */
+const parseEastmoneyMinuteTime = (value: string): Date | undefined => {
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(value)) return undefined;
+  const parsed = new Date(`${value.replace(' ', 'T')}:00+08:00`);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
+/**
+ * 当日分时（trends2）。f52=价格，f56/f57=单分钟成交量（手）/额（元）；
+ * 输出累加为 IntradayMinute 要求的当日累计口径。盘前或非交易日空数组是合法结果。
+ */
+export const fetchEastmoneyIntradayMinutes = async (
+  http: EastmoneyMarketRequest,
+  stockCode: string,
+): Promise<readonly IntradayMinute[]> => {
+  const secid = toSecId(stockCode);
+  const url =
+    `${BASE_TRENDS_URL}?secid=${secid}&fields1=${TRENDS_FIELDS1}` +
+    `&fields2=${TRENDS_FIELDS2}&iscr=0&ndays=1`;
+  const json = (await http.getJson(url)) as EastmoneyTrendsResponse;
+  if (json.rc !== 0) {
+    throw new EastmoneyAdapterError(
+      'upstream_error',
+      `Eastmoney 分时失败: rc=${json.rc} secid=${secid}`,
+    );
+  }
+
+  let cumVolume = 0;
+  let cumAmount = 0;
+  const points: IntradayMinute[] = [];
+  for (const row of json.data?.trends ?? []) {
+    const [timeRaw, priceRaw, , , , volumeRaw, amountRaw] = row.split(',');
+    const minuteVolume = Number(volumeRaw);
+    const minuteAmount = Number(amountRaw);
+    if (Number.isFinite(minuteVolume) && minuteVolume >= 0) cumVolume += minuteVolume * 100;
+    if (Number.isFinite(minuteAmount) && minuteAmount >= 0) cumAmount += minuteAmount;
+    const time = timeRaw === undefined ? undefined : parseEastmoneyMinuteTime(timeRaw);
+    const price = Number(priceRaw);
+    if (time === undefined || !Number.isFinite(price) || price <= 0) continue;
+    points.push({
+      stockId: stockCode.toUpperCase(),
+      time,
+      price: money(price),
+      cumVolume,
+      cumAmount,
+      source: 'eastmoney',
+    });
+  }
+  return points;
 };
 
 /**

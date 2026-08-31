@@ -229,6 +229,14 @@ const eastmoneyBindings = (adapter: EastmoneySource): AnyMarketCapabilityBinding
     observationOf: (snapshot) => successObservation(snapshot.dataAsOf),
   },
   {
+    capability: 'intraday-minutes',
+    source: adapter.name,
+    coverage: CN_ALL,
+    configurationReady: true,
+    execute: ({ stockId }) => adapter.fetchIntradayMinutes(stockId),
+    observationOf: (points) => successObservation(points.at(-1)?.time),
+  },
+  {
     capability: 'realtime-index',
     source: adapter.name,
     coverage: CN_SH_SZ,
@@ -327,7 +335,7 @@ const tushareBindings = (adapter: TushareMarketAdapter): AnyMarketCapabilityBind
 ];
 
 /**
- * fuyao 绑定：quote / daily-bars / search + market-snapshot + delayed-index。
+ * fuyao 绑定：quote / daily-bars / search + market-snapshot(+envelope) + delayed-index。
  * 指数快照时效未经实盘验证前只绑 delayed-index（不绑 realtime-index）；
  * 无分钟线端点，minute-bars / intraday-minutes 不绑（调用方得到明确 unsupported_capability）。
  */
@@ -357,6 +365,14 @@ const fuyaoBindings = (adapter: FuyaoSource): AnyMarketCapabilityBinding[] => [
     configurationReady: true,
     execute: () => adapter.fetchMarketSnapshot(),
     observationOf: () => ({ outcome: 'success' }),
+  },
+  {
+    capability: 'market-snapshot-envelope',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchMarketSnapshotEnvelope(),
+    observationOf: (snapshot) => successObservation(snapshot.dataAsOf),
   },
   {
     capability: 'delayed-index',

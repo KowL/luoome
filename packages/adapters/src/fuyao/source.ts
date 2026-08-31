@@ -4,13 +4,14 @@ import type {
   IndexQuote,
   IntradayMinute,
   Logger,
+  MarketSnapshot,
   MarketSnapshotItem,
   MinuteBar,
   MinuteBarInterval,
   Quote,
   StockSearchCandidate,
 } from '@luoome/core';
-import { money } from '@luoome/core';
+import { assertMarketSnapshotInvariants, MarketSnapshotSchema, money } from '@luoome/core';
 import { ZodError, z } from 'zod';
 
 import {
@@ -331,13 +332,23 @@ export class FuyaoSource {
    * 返回半拉子全集会让分组刷新误算退出成员（对齐 eastmoney clist 语义）。
    */
   async fetchMarketSnapshot(): Promise<readonly MarketSnapshotItem[]> {
+    return (await this.fetchMarketSnapshotEnvelope()).items;
+  }
+
+  /**
+   * fuyao 分页协议不返回 total；连续拉取至首个短页即证明已到达末页。
+   * 任一页请求失败会抛错，跨页重复则标记为不完整，避免把分页漂移样本用于市场宽度。
+   */
+  async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
     try {
       const items: MarketSnapshotItem[] = [];
+      const observedTimes: number[] = [];
       for (let offset = 0; ; offset += MARKET_SNAPSHOT_PAGE_SIZE) {
-        const { items: rows } = await this.client.get('/api/a-share/prices/snapshot', {
+        const { items: rows, timestamp } = await this.client.get('/api/a-share/prices/snapshot', {
           limit: MARKET_SNAPSHOT_PAGE_SIZE,
           offset,
         });
+        if (timestamp !== undefined) observedTimes.push(timestamp.getTime());
         for (const row of rows) {
           const parsed = SnapshotItemSchema.parse(row);
           const exchange = parsed.thscode.endsWith('.SH')
@@ -366,14 +377,32 @@ export class FuyaoSource {
         if (rows.length < MARKET_SNAPSHOT_PAGE_SIZE) break;
       }
       const unique = [...new Map(items.map((item) => [item.id, item])).values()];
-      this.logger.info('fuyao.fetchMarketSnapshot ok', {
+      const duplicateCount = items.length - unique.length;
+      const observedAt =
+        observedTimes.length === 0 ? undefined : new Date(Math.min(...observedTimes));
+      const snapshot = MarketSnapshotSchema.parse({
+        coverage: 'CN_A_SHARES_SH_SZ',
+        source: 'fuyao',
+        fetchedAt: this.clock(),
+        ...(observedAt === undefined ? {} : { observedAt, dataAsOf: observedAt }),
+        items: unique,
+        completeness: {
+          expectedCount: unique.length,
+          receivedCount: unique.length,
+          missingCount: 0,
+          duplicateCount,
+          complete: unique.length > 0 && duplicateCount === 0,
+        },
+      });
+      assertMarketSnapshotInvariants(snapshot);
+      this.logger.info('fuyao.fetchMarketSnapshotEnvelope ok', {
         source: 'fuyao',
         count: unique.length,
       });
-      return unique;
+      return snapshot;
     } catch (error) {
       const translated = translateFuyaoError(error);
-      this.logger.warn('fuyao.fetchMarketSnapshot failed', {
+      this.logger.warn('fuyao.fetchMarketSnapshotEnvelope failed', {
         kind: kindOf(translated),
         error: translated.message,
       });

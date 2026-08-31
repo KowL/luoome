@@ -37,6 +37,7 @@ describe('market/factory', () => {
       'eastmoney:batch-quote',
       'eastmoney:market-snapshot',
       'eastmoney:market-snapshot-envelope',
+      'eastmoney:intraday-minutes',
       'eastmoney:realtime-index',
       'tencent:quote',
       'tencent:daily-bars',
@@ -285,7 +286,7 @@ describe('market/factory', () => {
     expect(indices[0]?.source).toBe('eastmoney');
   });
 
-  it('intraday-minutes 只由 tencent 注册；eastmoney-only 明确不支持', async () => {
+  it('intraday-minutes 由 eastmoney / tencent 注册并按来源顺序路由', async () => {
     const tencentOnly = createMarketAdapterFromEnv(
       { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'tencent' },
       {
@@ -314,12 +315,25 @@ describe('market/factory', () => {
       { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'eastmoney' },
       {
         logger: silentLogger(),
-        fetchImpl: (async () => new Response('unexpected request', { status: 500 })) as never,
+        fetchImpl: (async () =>
+          new Response(
+            JSON.stringify({
+              rc: 0,
+              data: {
+                trends: ['2026-08-31 09:30,3926.53,3926.53,3926.53,3926.53,100,1000.00,3926.53'],
+              },
+            }),
+            { status: 200 },
+          )) as never,
       },
     );
-    await expect(eastmoneyOnly.fetchIntradayMinutes('002594.SZ')).rejects.toThrow(
-      /unsupported_capability/,
-    );
+    const eastmoneyPoints = await eastmoneyOnly.fetchIntradayMinutes('000001.SH');
+    expect(eastmoneyPoints[0]?.source).toBe('eastmoney');
+    expect(
+      eastmoneyOnly
+        .marketSourceStatus()
+        .some((s) => s.dataset === 'intraday-minutes' && s.source === 'eastmoney'),
+    ).toBe(true);
   });
 
   it('minute-bars 只在显式启用 Tushare 时注册；映射 rt_min', async () => {
@@ -432,6 +446,7 @@ describe('market/factory', () => {
       'fuyao:search',
       'fuyao:batch-quote',
       'fuyao:market-snapshot',
+      'fuyao:market-snapshot-envelope',
       'fuyao:delayed-index',
     ]);
   });

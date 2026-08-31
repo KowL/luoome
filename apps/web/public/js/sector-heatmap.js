@@ -14,6 +14,13 @@ const formatPct = (n) => `${n > 0 ? '+' : ''}${(n * 100).toFixed(2)}%`;
 /** 成交额（元）→ 亿，保留 1 位小数。 */
 const formatAmount = (n) => `${(n / 100_000_000).toFixed(1)}亿`;
 
+/** 按涨幅降序排列：上涨 → 平盘 → 下跌。 */
+const sortSectorHeatmapItems = (items) =>
+  [...items].sort((a, b) => {
+    const diff = b.changePct - a.changePct;
+    return diff !== 0 ? diff : a.name.localeCompare(b.name, 'zh-CN');
+  });
+
 /** 取涨幅最大与跌幅最大的各 limit 个板块，热力图固定展示双侧极值。 */
 const selectSectorExtremes = (items, limit = 15) => {
   const source = Array.isArray(items) ? items : [];
@@ -22,9 +29,7 @@ const selectSectorExtremes = (items, limit = 15) => {
   const down = source
     .filter((item) => item.changePct < 0)
     .sort((a, b) => a.changePct - b.changePct);
-  return [...up.slice(0, limit), ...down.slice(0, limit)].sort(
-    (a, b) => Math.abs(b.changePct) - Math.abs(a.changePct),
-  );
+  return sortSectorHeatmapItems([...up.slice(0, limit), ...down.slice(0, limit)]);
 };
 
 /**
@@ -59,17 +64,17 @@ const renderTile = (item) => {
 };
 
 /**
- * 渲染热力图 grid（按 |涨跌幅| 降序平铺）。
+ * 渲染热力图 grid（按涨幅降序平铺）。
  * @param {Array} items fetch_sector_quotes 的 items
  * @param {string} [extraClass] 附加 class（如 'mini' 迷你版）
  */
 const renderSectorHeatmap = (items, extraClass = '') => {
-  const byAbs = [...items].sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct));
+  const sorted = sortSectorHeatmapItems(items);
   return el(
     'div',
     `sector-heatmap${extraClass.length > 0 ? ` ${extraClass}` : ''}`,
-    byAbs.map(renderTile),
+    sorted.map(renderTile),
   );
 };
 
-export { renderSectorHeatmap, sectorTileStyle, selectSectorExtremes };
+export { renderSectorHeatmap, sectorTileStyle, selectSectorExtremes, sortSectorHeatmapItems };

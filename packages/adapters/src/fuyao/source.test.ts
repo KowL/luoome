@@ -256,6 +256,37 @@ describe('fuyao/FuyaoSource.searchStocks', () => {
 });
 
 describe('fuyao/FuyaoSource.fetchMarketSnapshot', () => {
+  it('分页抵达末页后返回可验证的完整性信封', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      snapshotRow(`6000${String(i).padStart(2, '0')}.SH`),
+    );
+    const page2 = [
+      snapshotRow('000001.SZ', { price_change_ratio_pct: -2.5 }),
+      snapshotRow('000002.SZ'),
+    ];
+    const { source } = makeSource((async (url: string) =>
+      url.includes('offset=0') ? envelope(page1) : envelope(page2)) as never);
+
+    const snapshot = await source.fetchMarketSnapshotEnvelope();
+
+    expect(snapshot).toMatchObject({
+      source: 'fuyao',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      fetchedAt: CLOCK,
+      observedAt: new Date(TIMESTAMP_MS),
+      dataAsOf: new Date(TIMESTAMP_MS),
+      completeness: {
+        expectedCount: 102,
+        receivedCount: 102,
+        missingCount: 0,
+        duplicateCount: 0,
+        complete: true,
+      },
+    });
+    expect(snapshot.items).toHaveLength(102);
+    expect(snapshot.items.at(-2)?.changePct).toBe(-2.5);
+  });
+
   it('limit=100 分页，item.length < limit 时终止；BJ 过滤、id 去重、changePct 原值保留', async () => {
     const page1 = Array.from({ length: 100 }, (_, i) =>
       snapshotRow(`6000${String(i).padStart(2, '0')}.SH`),
