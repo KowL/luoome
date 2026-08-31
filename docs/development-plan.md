@@ -224,6 +224,26 @@ Phase 3 四项能力按“代码状态”和“生产证据”分开记录。下
 研究定义，以已稳定的 Strategy schema、数据版本和 evaluator identity 作为 canonical manifest。Phase 3
 任何一项的真实数据门禁都不能靠补测试、浏览器截图或一次性 mock smoke 关闭。
 
+### 2.8 Strategy 实验与反馈闭环执行决策（2026-08-30）
+
+Strategy Workspace Phase C 按
+[Strategy 实验、晋级与反馈闭环开发计划](./strategy-experiment-feedback-development-plan.md)推进。Wave A
+已于 2026-08-30 完成：持久化外部 Tool 已收紧为 `external + write`，独立非持久化 trial 入口、
+StrategyResult scoring breakdown、DSL catalog、实验上下文和通用人工晋级门禁均已落地。Wave B 也已完成：
+Field Registry 驱动的 Web 实验室、规则构建器、JSON 高级模式、同样本 Trial 和独立验证编排已通过自动测试
+及三档真实浏览器验收。Wave C 已完成四层证据、四周期 observation、发布后真实反馈、严格回测门禁和
+发布前事实快照，并完成主线组合验证。Wave D 的 RecommendationPolicy V2 账户级确定性预检已于
+2026-08-31 完成。Wave E 也已完成显式 V2 设置和既有 WorkflowRun 预检结果的只读可观测；未扩大默认
+Advice/通知范围，也未以重新计算或 mock 代替真实生产周期证据。
+
+这属于已有 Strategy Workspace Phase C 和可靠性事实的产品收口，不放宽 S3 真实生产观测约束：
+
+- sample trial 继续 `persist=false`，不成为 current run；
+- eligible 只进入人工评审，不自动校验、发布或运行；
+- 不扩大 Advice、通知或 Watchlist 默认范围；
+- 基本面与严格回测仍分别受真实 PIT provider 和历史市场事实门禁约束；
+- 不新增自动交易路径。
+
 ## 3. 依赖关系
 
 ```text
@@ -267,7 +287,7 @@ M0～M6 已完成，不再重复排期。[Strategy 日运行与评估可靠性�
 | R2 daily cycle | `strategy-daily-cycle` 已成为 Web scheduler 主路径，生产日先通过 `sync_stock_universe` 固化真实 PIT snapshot，显式历史 `asOf` 不触发实时同步；facts-only、阶段耗时、计数和 providerStatuses 已落地；调度层能区分 `partial` 与 `failed`；启动前以 workflow-only tool 收敛超出租约窗口的 stale WorkflowRun；观察补全和推荐均经 `ctx.tools.*` 编排；测试已覆盖目录同步失败不使用旧快照、数据准备失败、AI facts-only、观察阶段失败后保留已发布 run、lease 丢失 | 继续随真实生产周期观察 T+1 补全与 provider 失败分布 |
 | R3 规则语义 | crossing、AST 三值短路、实际读取路径和 RuleEvaluation V2 已落地 | 固定 evaluator 兼容测试并核对真实 incomplete 分布 |
 | R4 数据准备 | 有界并发、配置化超时/重试、checkpoint、revision、成员 latency P50/P95/max 和真实 5,207 只重复运行已落地；测试已覆盖连接重置的有界重试、超时和并发上限 | 跨交易日阶段 P50/P95/max，并用真实 provider 继续观察限流/回退分布 |
-| R5 早期突破 v2 | draft、edge/cooldown、exit/risk signal 能力已落地 | 用户确认后发布试验版本，进入完整 T+20 真实观察期 |
+| R5 早期突破 v2 | draft、edge/cooldown、exit/risk signal 能力已落地 | 用户确认后发布试验版本，以 T+1/T+3/T+5 真实观察持续评审，不设置 T+20 等待条件 |
 | R6 PIT 历史评估 | universe snapshot、DailyBar revision、evaluation session/day、range replay 与 Web 后台作业已落地 | 真实区间 smoke、断点/取消后的幂等审计和 vintage unavailable 浏览器展示 |
 | R7 观察统计 | benchmark/excess return、分位数、MFE/MAE、行业/score/edge/market-state 分组和 `stock-day-horizon` 去重已落地；Tool/Web/AI facts 共用代表性 observation id；生产日与补观察流程显式同步并审计 `000300.SH:qfq:daily:v1` | 继续用真实样本验证 benchmark 完整率、去重分布和跨 Tool/Web/AI 一致性 |
 

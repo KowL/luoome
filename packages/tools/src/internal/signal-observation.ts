@@ -1,6 +1,6 @@
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   type DataProvenance,
-  SIGNAL_OBSERVATION_HORIZON_DAYS,
   type SignalObservation,
   type StrategySignal,
   signalObservationDueAt,
@@ -8,9 +8,7 @@ import {
   type WatchTrigger,
 } from '@luoome/core';
 
-const horizons = Object.keys(
-  SIGNAL_OBSERVATION_HORIZON_DAYS,
-) as (keyof typeof SIGNAL_OBSERVATION_HORIZON_DAYS)[];
+const horizons = ACTIVE_SIGNAL_OBSERVATION_HORIZONS;
 const pending = (
   sourceKind: SignalObservation['sourceKind'],
   sourceId: string,

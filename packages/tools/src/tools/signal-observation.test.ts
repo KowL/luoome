@@ -59,6 +59,7 @@ describe('strategy signal observation tools', () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     await ctx.repos.signalObservation.save(pending('t3'));
     await ctx.repos.signalObservation.save(pending('t5'));
+    await ctx.repos.signalObservation.save(pending('t20'));
     const dates = ['2026-08-04', '2026-08-05', '2026-08-06'];
     await ctx.repos.dailyBar.saveMany(
       dates.map((date, index) => ({
@@ -91,7 +92,6 @@ describe('strategy signal observation tools', () => {
         byHorizon: {
           t3: { scanned: 1, completed: 1, pending: 0 },
           t5: { scanned: 1, completed: 0, pending: 1 },
-          t20: { scanned: 0, completed: 0, pending: 0 },
         },
       },
     });
@@ -102,6 +102,11 @@ describe('strategy signal observation tools', () => {
     expect(await ctx.repos.signalObservation.findById(pending('t5').id)).toMatchObject({
       status: 'pending',
     });
+    expect(await ctx.repos.signalObservation.findById(pending('t20').id)).toMatchObject({
+      status: 'pending',
+    });
+    if (!result.ok) return;
+    expect(result.data.byHorizon).not.toHaveProperty('t20');
   });
 
   it('按 stock-day-horizon 去重并返回描述性统计与缺失限制', async () => {

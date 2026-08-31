@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { type Money, MoneySchema } from '../types/branded.js';
 import { type TechnicalIndicators, TechnicalIndicatorsSchema } from './indicator-set.js';
 import { type Quote, QuoteSchema } from './quote.js';
+import { ActiveSignalObservationHorizonSchema } from './signal-observation.js';
 
 // ---------- 枚举类型（ARCHITECTURE §5.2） ----------
 
@@ -19,6 +20,19 @@ export const AdviceSubjectKindSchema = z.enum([
   'position',
 ]);
 export const AdviceHorizonSchema = z.enum(['intraday', 'short', 'medium', 'long']);
+export const ActiveStrategyRecommendationTriggerSchema = z.union([
+  z.literal('run'),
+  ActiveSignalObservationHorizonSchema,
+]);
+export type ActiveStrategyRecommendationTrigger = z.infer<
+  typeof ActiveStrategyRecommendationTriggerSchema
+>;
+/** `t20` 只为读取已经生成的 Advice 证据保留。 */
+export const StrategyRecommendationTriggerSchema = z.union([
+  ActiveStrategyRecommendationTriggerSchema,
+  z.literal('t20'),
+]);
+export type StrategyRecommendationTrigger = z.infer<typeof StrategyRecommendationTriggerSchema>;
 
 /**
  * Advice 有效期映射（ARCHITECTURE §6.5），单位：交易日。
@@ -62,12 +76,14 @@ export interface StrategyAdviceEvidence {
   readonly strategyVersionId: string;
   readonly runId: string;
   readonly stockId: string;
+  /** V2 account provenance; absent on legacy Advice and therefore not trusted for V2 cooldown. */
+  readonly accountId?: string;
   readonly score?: number;
   readonly rank?: number;
   readonly resultEvidence: readonly string[];
   readonly signalIds: readonly string[];
   readonly observationIds: readonly string[];
-  readonly recommendationTrigger: 'run' | 't1' | 't3' | 't5' | 't20';
+  readonly recommendationTrigger: StrategyRecommendationTrigger;
 }
 
 /** 市场观点引用的天梯摘要，避免把完整快照复制进 Advice JSON。 */
@@ -189,12 +205,13 @@ export const AdviceDataSnapshotSchema = z.object({
       strategyVersionId: z.string().min(1),
       runId: z.string().min(1),
       stockId: z.string().min(1),
+      accountId: z.string().min(1).optional(),
       score: z.number().min(0).max(100).optional(),
       rank: z.number().int().positive().optional(),
       resultEvidence: z.array(z.string()),
       signalIds: z.array(z.string()),
       observationIds: z.array(z.string()),
-      recommendationTrigger: z.enum(['run', 't1', 't3', 't5', 't20']),
+      recommendationTrigger: StrategyRecommendationTriggerSchema,
     })
     .optional(),
   dataAsOf: z.coerce.date(),

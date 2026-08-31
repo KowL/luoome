@@ -1,4 +1,9 @@
-import { AdviceSchema, StrategyRecommendationPolicySchema } from '@luoome/core';
+import {
+  ActiveStrategyRecommendationTriggerSchema,
+  AdviceSchema,
+  StrategyRecommendationPolicySchema,
+  StrategyRecommendationPreflightSummarySchema,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
@@ -7,7 +12,7 @@ export const StrategyRecommendationsInput = z.object({
   strategyId: z.string().min(1),
   runId: z.string().min(1),
   policy: StrategyRecommendationPolicySchema,
-  trigger: z.enum(['run', 't1', 't3', 't5', 't20']).default('run'),
+  trigger: ActiveStrategyRecommendationTriggerSchema.default('run'),
   stockIds: z.array(z.string().min(1)).max(200).optional(),
 });
 export type StrategyRecommendationsInputT = z.infer<typeof StrategyRecommendationsInput>;
@@ -18,6 +23,7 @@ export const StrategyRecommendationsOutput = z.object({
   advices: z.array(AdviceSchema),
   skippedCooldown: z.number().int().nonnegative(),
   notificationFailed: z.number().int().nonnegative(),
+  preflight: StrategyRecommendationPreflightSummarySchema.optional(),
 });
 export type StrategyRecommendationsOutputT = z.infer<typeof StrategyRecommendationsOutput>;
 

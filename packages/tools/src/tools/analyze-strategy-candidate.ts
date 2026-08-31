@@ -1,4 +1,5 @@
 import {
+  ActiveStrategyRecommendationTriggerSchema,
   type Advice,
   AdviceDataSnapshotSchema,
   type AdviceDecision,
@@ -46,7 +47,7 @@ export const AnalyzeStrategyCandidateInput = z.object({
   strategyId: z.string().min(1),
   runId: z.string().min(1),
   stockId: z.string().min(1),
-  recommendationTrigger: z.enum(['run', 't1', 't3', 't5', 't20']).default('run'),
+  recommendationTrigger: ActiveStrategyRecommendationTriggerSchema.default('run'),
 });
 
 export const AnalyzeStrategyCandidateOutput = z.object({
@@ -241,6 +242,7 @@ export const analyzeStrategyCandidateTool = defineTool({
       strategyVersionId: run.strategyVersionId,
       runId: run.id,
       stockId: stock.id,
+      accountId: ctx.user.defaultAccountId,
       ...(result.score === undefined ? {} : { score: result.score }),
       ...(result.rank === undefined ? {} : { rank: result.rank }),
       resultEvidence: groundedResult.evidence,

@@ -155,19 +155,51 @@ const evaluateRule = (
 const evaluateScore = (
   expression: string,
   context: Readonly<Record<string, unknown>>,
-): { readonly score?: number; readonly error?: string } => {
+  weight: number,
+):
+  | {
+      readonly status: 'available';
+      readonly inputs: RuleEvaluationV2['inputs'];
+      readonly rawScore: number;
+      readonly contribution: number;
+    }
+  | {
+      readonly status: 'missing' | 'error';
+      readonly inputs: RuleEvaluationV2['inputs'];
+      readonly error: string;
+    } => {
   try {
     const evaluated = compileStrategyExpression(expression).evaluate(context);
-    if (evaluated.status === 'error') return { error: evaluated.error ?? 'score 求值失败' };
-    if (evaluated.status === 'missing') {
-      return { error: `缺少字段: ${evaluated.missingPaths.join(', ')}` };
+    const inputs = inputsFromReads(evaluated.reads);
+    if (evaluated.status === 'error') {
+      return { status: 'error', inputs, error: evaluated.error ?? 'score 求值失败' };
     }
-    const score = Number(evaluated.value);
-    if (!Number.isFinite(score)) return { error: `score 不是有限数: ${String(score)}` };
-    if (score < 0 || score > 100) return { error: `score 越界: ${score}` };
-    return { score };
+    if (evaluated.status === 'missing') {
+      return {
+        status: 'missing',
+        inputs,
+        error: `缺少字段: ${evaluated.missingPaths.join(', ')}`,
+      };
+    }
+    const rawScore = Number(evaluated.value);
+    if (!Number.isFinite(rawScore)) {
+      return { status: 'error', inputs, error: `score 不是有限数: ${String(rawScore)}` };
+    }
+    if (rawScore < 0 || rawScore > 100) {
+      return { status: 'error', inputs, error: `score 越界: ${rawScore}` };
+    }
+    return {
+      status: 'available',
+      inputs,
+      rawScore,
+      contribution: rawScore * weight,
+    };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return {
+      status: 'error',
+      inputs: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 };
 
@@ -208,9 +240,9 @@ const evaluateSignal = (
     }
     return { evaluation };
   }
-  const scored = evaluateScore(rule.score, context);
-  if (scored.score === undefined) {
-    const error = scored.error ?? 'signal score 无效';
+  const scored = evaluateScore(rule.score, context, 1);
+  if (scored.status !== 'available') {
+    const error = scored.error;
     return {
       evaluation: {
         ...evaluation,
@@ -232,7 +264,7 @@ const evaluateSignal = (
       ruleId: rule.id,
       stockId: input.stockId,
       ts: input.ts,
-      score: scored.score,
+      score: scored.rawScore,
       direction: rule.direction,
       evidence: evaluation.evidence,
       evaluationSnapshot: {
@@ -266,17 +298,51 @@ export const evaluateStrategyStock = (
   );
 
   let score: number | undefined;
+  let scoringBreakdown: StrategyResult['scoringBreakdown'];
   if (selection.selected && definition.scoring !== undefined) {
-    let weighted = 0;
-    for (const component of definition.scoring.components) {
-      const evaluated = evaluateScore(component.score, context);
-      if (evaluated.score === undefined) {
-        errors.push(`scoring ${component.ruleId}: ${evaluated.error ?? '未知错误'}`);
-      } else {
-        weighted += evaluated.score * component.weight;
+    const breakdown = definition.scoring.components.map((component) => {
+      const evaluated = evaluateScore(component.score, context, component.weight);
+      if (evaluated.status === 'available') {
+        return {
+          schemaVersion: 1 as const,
+          ruleId: component.ruleId,
+          expression: component.score,
+          status: 'available' as const,
+          inputs: evaluated.inputs,
+          weight: component.weight,
+          rawScore: evaluated.rawScore,
+          contribution: evaluated.contribution,
+        };
       }
+      if (evaluated.status === 'missing') {
+        errors.push(`scoring ${component.ruleId}: ${evaluated.error}`);
+        return {
+          schemaVersion: 1 as const,
+          ruleId: component.ruleId,
+          expression: component.score,
+          status: 'missing' as const,
+          inputs: evaluated.inputs,
+          weight: component.weight,
+        };
+      }
+      errors.push(`scoring ${component.ruleId}: ${evaluated.error}`);
+      return {
+        schemaVersion: 1 as const,
+        ruleId: component.ruleId,
+        expression: component.score,
+        status: 'error' as const,
+        inputs: evaluated.inputs,
+        weight: component.weight,
+        error: evaluated.error,
+      };
+    });
+    scoringBreakdown = breakdown;
+    if (breakdown.every((component) => component.status === 'available') && errors.length === 0) {
+      score = breakdown.reduce(
+        (sum, component) => sum + (component.status === 'available' ? component.contribution : 0),
+        0,
+      );
     }
-    if (errors.length === 0) score = weighted;
   }
 
   const signalOutcomes = [
@@ -301,6 +367,7 @@ export const evaluateStrategyStock = (
       stockId: input.stockId,
       selected: selection.selected,
       ...(score === undefined ? {} : { score }),
+      ...(scoringBreakdown === undefined ? {} : { scoringBreakdown }),
       ruleEvaluations: [...selectionEvaluations, ...signalEvaluations],
       evidence,
       dataAsOf: input.dataAsOf,

@@ -69,7 +69,9 @@ export * from './strategy/local-selector.js';
 export * from './strategy/observation-stats.js';
 export * from './strategy/portable-manifest.js';
 export * from './strategy/prefilter.js';
+export * from './strategy/promotion.js';
 export * from './strategy/publication.js';
+export * from './strategy/recommendation-preflight.js';
 export * from './strategy/result-view.js';
 export * from './strategy/run-diff.js';
 // Strategy / Watchlist 重构的跨阶段决策约束（W0 起）

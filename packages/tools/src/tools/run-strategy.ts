@@ -77,6 +77,15 @@ export const RunStrategyOutput = z.object({
   persisted: z.boolean(),
 });
 
+export const TrialStrategyInput = RunStrategyInput.extend({
+  mode: z.enum(['scan', 'replay']).default('scan'),
+  persist: z.literal(false).default(false),
+});
+
+export const TrialStrategyOutput = RunStrategyOutput.extend({
+  persisted: z.literal(false),
+});
+
 const mapWithConcurrency = async <T, R>(
   items: readonly T[],
   limit: number,
@@ -172,6 +181,7 @@ export const runStrategyTool = defineTool({
   description:
     '运行 Strategy selection/scoring/signals；外部行情只用于权威 StockUniverse 内候选，不会自动交易',
   sideEffect: 'external',
+  requiredCapabilities: ['external', 'write'],
   input: RunStrategyInput,
   output: RunStrategyOutput,
   handler: async (input, ctx) => {
@@ -1089,5 +1099,25 @@ export const runStrategyTool = defineTool({
         });
       }
     }
+  },
+});
+
+export const trialStrategyTool = defineTool({
+  name: 'trial_strategy',
+  description:
+    '对单个 Strategy version 执行非持久化样本试跑；强制 persist=false，不支持 scheduled，不产生正式 StrategyRun',
+  sideEffect: 'external',
+  input: TrialStrategyInput,
+  output: TrialStrategyOutput,
+  handler: async (input, ctx) => {
+    const result = await runStrategyTool.execute(
+      {
+        ...input,
+        persist: false,
+      },
+      ctx,
+    );
+    if (!result.ok) return result;
+    return result.data;
   },
 });

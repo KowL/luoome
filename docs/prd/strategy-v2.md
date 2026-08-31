@@ -363,7 +363,7 @@ AI 洞察是基于事实的解释区，不是独立聊天入口。
 - 最近 30 天进入/退出和候选转正变化；
 - 行业分布与平均分变化；
 - 规则阻断频次；
-- StrategySignal 的 T+1/T+3/T+5/T+20 真实表现；
+- StrategySignal 的 T+1/T+3/T+5 真实表现；
 - 版本变化前后的事实差异；
 - 可生成新 StrategyVersion 草案的改进建议。
 
@@ -374,7 +374,7 @@ AI 洞察是基于事实的解释区，不是独立聊天入口。
 - 样本不足或数据不可用时显示 unavailable；
 - 不表述为组合收益、回测收益或未来概率。
 
-StrategySignal 已使用 `sourceKind='strategy-signal'` 创建 T+1/T+3/T+5/T+20 观察候选，并由
+StrategySignal 使用 `sourceKind='strategy-signal'` 创建 T+1/T+3/T+5 观察候选，并由
 `complete-strategy-observations` 通过真实 qfq 日线补齐；缺少真实日线时保持 pending/unavailable，
 不填默认收益。策略真实表现仍需满足样本完整率与 benchmark 可用率后才可展示为可用事实。
 

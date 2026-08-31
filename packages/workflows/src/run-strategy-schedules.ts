@@ -1,3 +1,4 @@
+import { StrategyRecommendationPreflightSummarySchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
@@ -17,6 +18,7 @@ const ItemSchema = z.object({
   status: z.enum(['ran', 'partial', 'skipped', 'failed']),
   runId: z.string().optional(),
   adviceCount: z.number().int().nonnegative().optional(),
+  preflight: StrategyRecommendationPreflightSummarySchema.optional(),
   recommendationError: z.string().optional(),
   reason: z.string().optional(),
 });
@@ -50,6 +52,7 @@ const runDue: WorkflowStep = async (previous, ctx) => {
             : ('failed' as const),
     ...(item.runId === undefined ? {} : { runId: item.runId }),
     ...(item.adviceCount === undefined ? {} : { adviceCount: item.adviceCount }),
+    ...(item.preflight === undefined ? {} : { preflight: item.preflight }),
     ...(item.status === 'partial' && item.reason === undefined
       ? { recommendationError: 'strategy-daily-cycle partial' }
       : {}),

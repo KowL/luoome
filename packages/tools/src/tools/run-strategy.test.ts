@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { buildTestContext, seedTestDailyBars, seedTestStockUniverse } from '../testing/context.js';
 import { createStrategyObservationCandidatesTool } from './create-strategy-observation-candidates.js';
 import { prepareStrategyDataTool } from './prepare-strategy-data.js';
-import { runStrategyTool } from './run-strategy.js';
+import { runStrategyTool, trialStrategyTool } from './run-strategy.js';
 
 // biome-ignore lint/suspicious/noTemplateCurlyInString: Strategy DSL placeholder fixture.
 const CLOSE_INDICATOR = '${indicators.close}';
@@ -168,6 +168,65 @@ const seedReplayBars = async (
 };
 
 describe('run_strategy', () => {
+  it('trial_strategy 是 external-only 的单版本非持久化入口，并禁止 scheduled/persist=true', async () => {
+    const ctx = await buildTestContext({
+      clock: () => new Date('2026-08-14T07:00:00.000Z'),
+    });
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+
+    expect(trialStrategyTool.requiredCapabilities).toEqual(['external']);
+    const result = await trialStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'] },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.persisted).toBe(false);
+    expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'scan-strategy' })).toHaveLength(0);
+
+    const scheduled = await trialStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'], mode: 'scheduled' },
+      ctx,
+    );
+    expect(scheduled).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+
+    const persisted = await trialStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH'], persist: true },
+      ctx,
+    );
+    expect(persisted).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+    expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'scan-strategy' })).toHaveLength(0);
+  });
+
+  it('透传 scoring breakdown 到 Tool output 与持久化结果', async () => {
+    const ctx = await buildTestContext();
+    await seedTestStockUniverse(ctx, { limit: 1 });
+    await seedStrategy(ctx);
+
+    const result = await runStrategyTool.execute({ strategyId: 'scan-strategy' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results[0]).toMatchObject({
+      score: 50,
+      scoringBreakdown: [
+        {
+          schemaVersion: 1,
+          ruleId: 'positive-price',
+          expression: '50',
+          status: 'available',
+          inputs: [],
+          weight: 1,
+          rawScore: 50,
+          contribution: 50,
+        },
+      ],
+    });
+    await expect(ctx.repos.strategyRun.listResults(result.data.run.id)).resolves.toEqual(
+      result.data.results,
+    );
+  });
+
   it('正式扫描的天梯字段只来自真实 limit-up-ladder manager，并写入 coverage', async () => {
     const now = new Date('2026-08-14T07:00:00.000Z');
     let requestedDate: string | undefined;
@@ -899,7 +958,7 @@ describe('run_strategy', () => {
         },
         horizons: {
           t1: { created: 1, skipped: 0 },
-          t20: { created: 1, skipped: 0 },
+          t5: { created: 1, skipped: 0 },
         },
       },
     });
@@ -981,7 +1040,7 @@ describe('run_strategy', () => {
         },
       },
     );
-    expect(observationQueryLimit).toBe(4);
+    expect(observationQueryLimit).toBe(3);
     expect(candidates).toMatchObject({
       ok: true,
       data: {

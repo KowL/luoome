@@ -2,12 +2,21 @@ import { describe, expect, it } from 'vitest';
 
 import { money } from '../types/branded.js';
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  ActiveSignalObservationHorizonSchema,
   assertSignalObservationInvariants,
   completeSignalObservationFromDailyBars,
+  SignalObservationHorizonSchema,
   SignalObservationSchema,
 } from './signal-observation.js';
 
 describe('SignalObservation', () => {
+  it('active observation horizons stop at T+5 while legacy T+20 remains decodable', () => {
+    expect(ACTIVE_SIGNAL_OBSERVATION_HORIZONS).toEqual(['t1', 't3', 't5']);
+    expect(ActiveSignalObservationHorizonSchema.safeParse('t20').success).toBe(false);
+    expect(SignalObservationHorizonSchema.parse('t20')).toBe('t20');
+  });
+
   it('accepts StrategySignal as the current strategy observation source', () => {
     expect(
       SignalObservationSchema.parse({

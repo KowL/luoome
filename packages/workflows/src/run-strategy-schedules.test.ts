@@ -110,7 +110,7 @@ const seedScheduled = async (
             cooldownHours: 72,
             notify: true,
             channel: 'log' as const,
-            observationHorizons: ['t3', 't5', 't20'] as const,
+            observationHorizons: ['t3', 't5'] as const,
           },
         }
       : {}),

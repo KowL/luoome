@@ -1,17 +1,30 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import {
+  appendExperimentScoringComponent,
+  appendExperimentSelectionRule,
+  appendExperimentSignalRule,
   buildBacktestResultContent,
+  buildExperimentScoreExpression,
+  buildExperimentSimpleExpression,
   buildRunDetailContent,
   buildStrategyHash,
   buildStrictBacktestResultContent,
+  createExperimentBlankDefinition,
+  deriveExperimentStepStates,
+  invalidateStrategyWorkspaceCache,
+  nextExperimentRuleId,
+  nextExperimentScoringRuleId,
   openRunDetail,
   parseBacktestStockIds,
+  parseExperimentStockIds,
   parseStrategyHash,
+  removeExperimentSelectionRule,
   renderDecisionCycles,
   renderInsights,
   renderRuns,
   renderSettings,
+  renderStrategyExperiment,
   runStrategyBacktest,
 } from './strategy-workspace.js';
 
@@ -39,6 +52,12 @@ class FakeNode {
   }
 
   replaceChildren(...children) {
+    const active = globalThis.document?.activeElement;
+    const contains = (node, target) =>
+      node === target || (node?._children ?? []).some((child) => contains(child, target));
+    if (active !== null && active !== undefined && contains(this, active)) {
+      globalThis.document.activeElement = null;
+    }
     this._children = [];
     this.append(...children);
   }
@@ -129,6 +148,17 @@ class FakeElement extends FakeNode {
     for (const listener of this._listeners.click ?? []) listener.call(this, { target: this });
   }
 
+  dispatchEvent(event) {
+    for (const listener of this._listeners[event.type] ?? []) {
+      listener.call(this, { ...event, target: this, currentTarget: this });
+    }
+    return true;
+  }
+
+  focus() {
+    document.activeElement = this;
+  }
+
   querySelectorAll(selector) {
     const matches = [];
     const visit = (node) => {
@@ -154,6 +184,7 @@ globalThis.Node = FakeNode;
 globalThis.document = {
   createElement: (tag) => new FakeElement(tag),
   createTextNode: (data) => new FakeText(data),
+  activeElement: null,
   querySelector: (selector) =>
     selector.startsWith('#') ? (byId.get(selector.slice(1)) ?? null) : null,
 };
@@ -218,6 +249,108 @@ const run = {
   },
 };
 
+const experimentCatalog = {
+  schemaVersion: 1,
+  fields: [
+    {
+      path: 'quote.close',
+      type: 'number',
+      unit: 'CNY',
+      requiredLookback: 0,
+      dataSource: 'quote',
+      coverage: ['CN_A_SHARES_SH_SZ'],
+      operators: ['==', '>', '>=', '<', '<=', '+'],
+    },
+    {
+      path: 'meta.recentLimitUp',
+      type: 'boolean',
+      dataSource: 'meta',
+      coverage: ['CN_A_SHARES_SH_SZ'],
+      operators: ['==', '!=', '&&'],
+    },
+  ],
+  limits: { selectionRules: null, scoringComponents: null, signalRulesPerScope: null },
+};
+
+const experimentDefinition = {
+  schemaVersion: 1,
+  metadata: { horizon: 'short', style: 'breakout' },
+  universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+  selection: {
+    logic: 'all',
+    rules: [
+      {
+        id: 'close-positive',
+        name: '收盘价有效',
+        when: 'quote.close > 0',
+        evidence: [String.raw`quote.close = \${quote.close}`],
+      },
+    ],
+  },
+  scoring: {
+    method: 'weighted-sum',
+    components: [{ ruleId: 'close-positive', score: '50', weight: 1 }],
+  },
+  signals: { entry: [], exit: [], risk: [] },
+};
+
+const experimentContext = {
+  strategy: { id: 'experiment-ui', name: '实验 UI', status: 'active' },
+  baseVersion: {
+    id: 'experiment-ui-v1',
+    version: 1,
+    definition: experimentDefinition,
+    definitionHash: 'a'.repeat(64),
+    validationStatus: 'valid',
+    validationErrors: [],
+    createdAt: '2026-08-01T00:00:00.000Z',
+    publishedAt: '2026-08-01T00:00:00.000Z',
+  },
+  candidateVersion: {
+    id: 'experiment-ui-v2',
+    version: 2,
+    definition: {
+      ...experimentDefinition,
+      metadata: { ...experimentDefinition.metadata, style: 'breakout-plus' },
+    },
+    definitionHash: 'b'.repeat(64),
+    parentVersionId: 'experiment-ui-v1',
+    validationStatus: 'valid',
+    validationErrors: [],
+    createdAt: '2026-08-02T00:00:00.000Z',
+  },
+  definitionDiff: {
+    changed: true,
+    fromHash: 'a'.repeat(64),
+    toHash: 'b'.repeat(64),
+    changes: [
+      { path: 'metadata.style', kind: 'changed', before: 'breakout', after: 'breakout-plus' },
+    ],
+    summary: { added: 0, removed: 0, changed: 1 },
+  },
+  versionState: {
+    candidatePersisted: true,
+    candidateValid: true,
+    candidatePublished: false,
+    parentMatchesBase: true,
+  },
+  observations: { horizon: 't5', stats: [], benchmarkCoverageRatio: 0, observationIds: [] },
+  promotion: {
+    policyVersion: 'strategy-promotion-v1',
+    status: 'blocked',
+    reasons: ['validation-days-insufficient', 'observations-insufficient'],
+    metrics: {
+      validationTradingDays: 0,
+      vintageCoverageRatio: 0,
+      completeObservationCount: 0,
+      benchmarkCoverageRatio: 0,
+    },
+    factReferences: ['strategy:experiment-ui'],
+    limitations: ['尚无独立验证事实。'],
+  },
+  limitations: ['当前没有独立验证 session。'],
+};
+
 const flush = async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -225,6 +358,7 @@ const flush = async () => {
 
 afterEach(() => {
   modalOverlay.hidden = true;
+  document.activeElement = null;
   globalThis.fetch = undefined;
 });
 
@@ -257,6 +391,703 @@ describe('strategy workspace route state', () => {
     expect(buildStrategyHash({ strategyId: 's1', tab: 'cycle', runId: 'run-1' })).toBe(
       '#strategies?strategyId=s1&tab=cycle&runId=run-1',
     );
+  });
+});
+
+describe('Strategy Experiment Lab', () => {
+  it('只使用 catalog 生成结构化表达式，并规范化样本股票', () => {
+    const field = experimentCatalog.fields[0];
+    expect(buildExperimentSimpleExpression(field, '>', ' 10 ')).toBe('quote.close > 10');
+    expect(buildExperimentSimpleExpression(experimentCatalog.fields[1], '==', 'FALSE')).toBe(
+      'meta.recentLimitUp == false',
+    );
+    expect(createExperimentBlankDefinition(experimentCatalog).selection.rules[0].when).toBe(
+      'quote.close > 0',
+    );
+    expect(
+      createExperimentBlankDefinition(experimentCatalog).selection.rules[0].when,
+    ).not.toContain('unregistered');
+    expect(parseExperimentStockIds('600519.sh, 000001.SZ\n600519.SH； 300750.sz')).toEqual([
+      '600519.SH',
+      '000001.SZ',
+      '300750.SZ',
+    ]);
+  });
+
+  it('新增/删除规则保持唯一 id，并同步清理 scoring 引用与权重', () => {
+    const definition = createExperimentBlankDefinition(experimentCatalog);
+    definition.selection.rules.push({
+      id: 'selection-2',
+      name: '第二条',
+      when: 'meta.recentLimitUp == true',
+      evidence: ['recent limit up'],
+    });
+    definition.scoring.components.push({ ruleId: 'selection-2', score: '60', weight: 0.5 });
+    definition.scoring.components[0].weight = 0.5;
+    definition.signals.entry.push({
+      id: 'entry-rule-1',
+      name: '入场',
+      when: 'quote.close > 0',
+      score: '60',
+      direction: 'bullish',
+      evidence: ['close'],
+    });
+
+    expect(nextExperimentRuleId(definition.selection.rules, 'selection')).toBe('selection-3');
+    expect(nextExperimentRuleId(definition.signals.entry, 'entry-rule')).toBe('entry-rule-2');
+    expect(
+      nextExperimentScoringRuleId(definition.selection.rules, definition.scoring.components),
+    ).toBe(undefined);
+
+    const removed = removeExperimentSelectionRule(definition, 'selection-1');
+    expect(removed.selection.rules.map((rule) => rule.id)).toEqual(['selection-2']);
+    expect(removed.scoring.components).toEqual([
+      expect.objectContaining({ ruleId: 'selection-2', weight: 1 }),
+    ]);
+    expect(removed.scoring.components.map((component) => component.ruleId)).toEqual([
+      'selection-2',
+    ]);
+
+    const added = appendExperimentSelectionRule(removed, experimentCatalog);
+    expect(added.selection.rules.map((rule) => rule.id)).toEqual(['selection-2', 'selection-3']);
+    const withScoring = appendExperimentScoringComponent(added);
+    expect(withScoring.scoring.components.map((component) => component.ruleId)).toEqual([
+      'selection-2',
+      'selection-3',
+    ]);
+    expect(
+      withScoring.scoring.components.reduce((sum, component) => sum + component.weight, 0),
+    ).toBe(1);
+    expect(appendExperimentScoringComponent(withScoring)).toEqual(withScoring);
+
+    const withSignal = appendExperimentSignalRule(withScoring, experimentCatalog, 'entry');
+    expect(withSignal.signals.entry.map((rule) => rule.id)).toEqual([
+      'entry-rule-1',
+      'entry-rule-2',
+    ]);
+  });
+
+  it('scoring 与 signal score 只由 catalog 生成；高级表达式在结构化模式只读', async () => {
+    expect(buildExperimentScoreExpression('constant', experimentCatalog, '55')).toBe('55');
+    expect(buildExperimentScoreExpression('field', experimentCatalog, 'quote.close')).toBe(
+      `\${quote.close}`,
+    );
+    expect(buildExperimentScoreExpression('field', experimentCatalog, 'unregistered.score')).toBe(
+      '',
+    );
+    expect(buildExperimentScoreExpression('field', experimentCatalog, 'meta.recentLimitUp')).toBe(
+      '',
+    );
+
+    const advancedContext = {
+      ...experimentContext,
+      strategy: { id: 'experiment-score-advanced', name: 'Score advanced', status: 'active' },
+      candidateVersion: {
+        ...experimentContext.candidateVersion,
+        definition: {
+          ...experimentContext.candidateVersion.definition,
+          scoring: {
+            method: 'weighted-sum',
+            components: [
+              {
+                ruleId: 'close-positive',
+                score: `Math.min(100, \${quote.close})`,
+                weight: 1,
+              },
+            ],
+          },
+          signals: {
+            entry: [
+              {
+                id: 'entry-rule-1',
+                name: '高级信号',
+                when: 'quote.close > 0',
+                score: `\${unregistered.score}`,
+                direction: 'bullish',
+                evidence: ['close'],
+              },
+            ],
+            exit: [],
+            risk: [],
+          },
+        },
+      },
+    };
+    invalidateStrategyWorkspaceCache();
+    globalThis.fetch = async (path) =>
+      String(path).includes('/api/strategy/dsl-catalog')
+        ? jsonResponse({ ok: true, data: experimentCatalog })
+        : jsonResponse({ ok: true, data: advancedContext });
+    const node = await renderStrategyExperiment(
+      'experiment-score-advanced',
+      () => {},
+      async () => {},
+    );
+    expect(node.textContent).toContain('高级表达式只读');
+    expect(node.textContent).toContain(`\${unregistered.score}`);
+    expect(node.querySelectorAll('.experiment-score-advanced').length).toBeGreaterThan(0);
+  });
+
+  it('按 baseline / candidate / validation 事实展示六段流程状态', () => {
+    const steps = deriveExperimentStepStates(experimentContext, {});
+    expect(steps.map((step) => step.title)).toEqual([
+      '基线',
+      '草案',
+      'Diff',
+      'Trial',
+      '独立验证',
+      '晋级评审',
+    ]);
+    expect(steps.map((step) => step.status)).toEqual([
+      'complete',
+      'complete',
+      'complete',
+      'ready',
+      'ready',
+      'blocked',
+    ]);
+  });
+
+  it('证据门禁 eligible 时展示人工评审入口，不变成自动发布', async () => {
+    invalidateStrategyWorkspaceCache();
+    const eligibleContext = {
+      ...experimentContext,
+      strategy: { id: 'experiment-eligible', name: 'Eligible UI', status: 'active' },
+      promotion: {
+        ...experimentContext.promotion,
+        status: 'eligible-for-human-review',
+        reasons: [],
+        metrics: {
+          validationTradingDays: 20,
+          vintageCoverageRatio: 1,
+          completeObservationCount: 30,
+          benchmarkCoverageRatio: 0.9,
+        },
+        factReferences: ['strategy:experiment-eligible', 'strategy-evaluation:eligible-session'],
+      },
+      validation: {
+        session: {
+          id: 'eligible-session',
+          strategyId: 'experiment-eligible',
+          strategyVersionId: 'experiment-ui-v2',
+          from: '2026-08-01T00:00:00.000Z',
+          to: '2026-08-28T00:00:00.000Z',
+          status: 'complete',
+          definitionHash: 'b'.repeat(64),
+          createdAt: '2026-08-30T00:00:00.000Z',
+        },
+        days: [],
+        runIds: [],
+        vintageCoverageRatio: 1,
+      },
+    };
+    globalThis.fetch = async (path) =>
+      String(path).includes('/api/strategy/dsl-catalog')
+        ? jsonResponse({ ok: true, data: experimentCatalog })
+        : jsonResponse({ ok: true, data: eligibleContext });
+    const node = await renderStrategyExperiment(
+      'experiment-eligible',
+      () => {},
+      async () => {},
+    );
+    expect(node.textContent).toContain('人工确认发布');
+    expect(node.textContent).toContain('证据质量达到预设门禁');
+    expect(deriveExperimentStepStates(eligibleContext, {}).at(-1).status).toBe('ready');
+    expect(
+      node.querySelectorAll('button').find((button) => button.textContent === '人工确认发布')
+        .disabled,
+    ).toBe(false);
+  });
+
+  it('渲染字段元数据、双模式入口、Diff 与评审门禁，不生成胜率叙事', async () => {
+    invalidateStrategyWorkspaceCache();
+    globalThis.fetch = async (path) => {
+      if (String(path).includes('/api/strategy/dsl-catalog')) {
+        return jsonResponse({ ok: true, data: experimentCatalog });
+      }
+      return jsonResponse({ ok: true, data: experimentContext });
+    };
+    const node = await renderStrategyExperiment(
+      'experiment-ui',
+      () => {},
+      async () => {},
+    );
+    expect(node.textContent).toContain('基线 → 草案 → Diff → Trial → 独立验证 → 人工评审');
+    expect(node.textContent).toContain('字段目录');
+    expect(node.textContent).toContain('quote.close');
+    expect(node.textContent).toContain('CNY');
+    expect(node.textContent).toContain('lookback 0d');
+    expect(node.textContent).toContain('实时行情');
+    expect(node.textContent).toContain('缺失时保持 unknown');
+    expect(node.textContent).toContain('结构化编辑');
+    expect(node.textContent).toContain('JSON 高级');
+    expect(node.textContent).toContain('metadata.style');
+    expect(node.textContent).toContain('验证交易日');
+    expect(node.textContent).not.toContain('胜率');
+  });
+
+  it('X4 分层展示四类证据，并区分缺失、不可用与真实 0 收益', async () => {
+    invalidateStrategyWorkspaceCache();
+    const observationLink = {
+      observationId: 'observation-t1-zero',
+      signalId: 'signal-t1-zero',
+      runId: 'run-t1-zero',
+      stockId: '600519.SH',
+      strategyId: 'experiment-x4-ui',
+      strategyVersionId: 'experiment-ui-v2',
+      horizon: 't1',
+    };
+    const x4Context = {
+      ...experimentContext,
+      strategy: { id: 'experiment-x4-ui', name: 'X4 UI', status: 'active' },
+      evidenceLayers: [
+        {
+          id: 'trial',
+          title: '样本 Trial',
+          status: 'memory-only',
+          persisted: false,
+          description: '当前页面内存。',
+        },
+        {
+          id: 'historical-evaluation',
+          title: '历史评估',
+          status: 'complete',
+          persisted: true,
+          description: '持久化历史事实。',
+        },
+        {
+          id: 'strict-backtest',
+          title: '严格回测',
+          status: 'unavailable',
+          persisted: true,
+          description: '数据门禁未满足。',
+        },
+        {
+          id: 'signal-observation',
+          title: '真实 SignalObservation',
+          status: 'partial',
+          persisted: true,
+          description: '真实后续事实。',
+        },
+      ],
+      observations: {
+        horizon: 't5',
+        stats: [],
+        benchmarkCoverageRatio: 1,
+        observationIds: ['observation-t1-zero'],
+        observationLinks: [observationLink],
+        horizons: [
+          {
+            horizon: 't1',
+            total: 1,
+            complete: 1,
+            missing: 0,
+            pending: 0,
+            unavailable: 0,
+            untracked: 0,
+            uniqueStocks: 1,
+            missingRate: 0,
+            benchmarkComplete: 1,
+            benchmarkTotal: 1,
+            benchmarkCoverageRatio: 1,
+            observationIds: ['observation-t1-zero'],
+            observationLinks: [observationLink],
+            averageReturnPct: 0,
+            medianReturnPct: 0,
+            p25ReturnPct: 0,
+            p75ReturnPct: 0,
+            averageMaxFavorableExcursionPct: 0,
+            averageMaxAdverseExcursionPct: 0,
+          },
+          {
+            horizon: 't3',
+            total: 2,
+            complete: 0,
+            missing: 2,
+            pending: 1,
+            unavailable: 0,
+            untracked: 1,
+            uniqueStocks: 2,
+            missingRate: 1,
+            benchmarkComplete: 0,
+            benchmarkTotal: 0,
+            benchmarkCoverageRatio: 0,
+            observationIds: [],
+            observationLinks: [],
+          },
+        ],
+      },
+      realObservations: {
+        status: 'unavailable',
+        versionId: 'experiment-ui-v1',
+        runIds: [],
+        horizons: [],
+        observationIds: [],
+        observationLinks: [],
+        limitations: ['尚无真实生产 SignalObservation。'],
+      },
+      strictBacktests: [],
+    };
+    globalThis.fetch = async (path) =>
+      String(path).includes('/api/strategy/dsl-catalog')
+        ? jsonResponse({ ok: true, data: experimentCatalog })
+        : jsonResponse({ ok: true, data: x4Context });
+    const node = await renderStrategyExperiment(
+      'experiment-x4-ui',
+      () => {},
+      async () => {},
+    );
+    expect(node.textContent).toContain('四层证据，不混用');
+    expect(node.querySelectorAll('.experiment-evidence-layer').length).toBe(4);
+    expect(node.textContent).toContain('仅页面内存');
+    expect(node.textContent).toContain('T+1');
+    expect(node.textContent).toContain('T+3');
+    expect(node.textContent).toContain('未建档');
+    expect(node.textContent).toContain('0.00%');
+    expect(node.textContent).toContain('尚无真实生产 SignalObservation');
+    expect(node.textContent).toContain('严格回测');
+
+    const noObservationContext = {
+      ...x4Context,
+      strategy: { id: 'experiment-x4-ui-no-observation', name: 'X4 empty facts', status: 'active' },
+      observations: {
+        ...x4Context.observations,
+        observationIds: [],
+        observationLinks: [],
+        horizons: [
+          {
+            horizon: 't1',
+            total: 2,
+            complete: 0,
+            missing: 2,
+            pending: 0,
+            unavailable: 0,
+            untracked: 2,
+            uniqueStocks: 2,
+            missingRate: 1,
+            benchmarkComplete: 0,
+            benchmarkTotal: 0,
+            benchmarkCoverageRatio: 0,
+            observationIds: [],
+            observationLinks: [],
+          },
+        ],
+      },
+      realObservations: {
+        ...x4Context.realObservations,
+        versionId: undefined,
+      },
+    };
+    globalThis.fetch = async (path) =>
+      String(path).includes('/api/strategy/dsl-catalog')
+        ? jsonResponse({ ok: true, data: experimentCatalog })
+        : jsonResponse({ ok: true, data: noObservationContext });
+    const noObservationNode = await renderStrategyExperiment(
+      'experiment-x4-ui-no-observation',
+      () => {},
+      async () => {},
+    );
+    expect(noObservationNode.querySelectorAll('.experiment-wide-table').length).toBe(1);
+    expect(noObservationNode.textContent).toContain('0 / 2');
+    expect(noObservationNode.textContent).toContain('未建档');
+  });
+
+  it('载入 EARLY_BREAKOUT_V2_DRAFT 只改变页面内存，不发送 POST', async () => {
+    invalidateStrategyWorkspaceCache();
+    const starterDefinition = {
+      ...experimentDefinition,
+      metadata: { ...experimentDefinition.metadata, style: 'early-breakout-v2' },
+      signals: {
+        ...experimentDefinition.signals,
+        entry: [
+          {
+            id: 'starter-entry',
+            name: 'Starter 入场',
+            when: 'quote.close > 0',
+            score: '50',
+            direction: 'bullish',
+            evidence: ['starter fixture'],
+          },
+        ],
+      },
+    };
+    const starterContext = {
+      ...experimentContext,
+      strategy: { id: 'experiment-starter', name: 'Starter UI', status: 'active' },
+      starterTemplate: {
+        id: 'early-breakout-v2',
+        name: '早期突破 V2',
+        description: 'starter fixture',
+        revision: 4,
+        definition: starterDefinition,
+        definitionHash: 'c'.repeat(64),
+      },
+    };
+    const calls = [];
+    globalThis.fetch = async (path, init) => {
+      calls.push({ path: String(path), method: init?.method ?? 'GET' });
+      return String(path).includes('/api/strategy/dsl-catalog')
+        ? jsonResponse({ ok: true, data: experimentCatalog })
+        : jsonResponse({ ok: true, data: starterContext });
+    };
+    const node = await renderStrategyExperiment(
+      'experiment-starter',
+      () => {},
+      async () => {},
+    );
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '载入到本地编辑器')
+      .click();
+    await flush();
+
+    const rerendered = await renderStrategyExperiment(
+      'experiment-starter',
+      () => {},
+      async () => {},
+    );
+    rerendered
+      .querySelectorAll('button')
+      .find((button) => button.textContent === 'JSON 高级')
+      .click();
+    const editor = rerendered
+      .querySelectorAll('textarea')
+      .find((textarea) => textarea.className.includes('experiment-json-editor'));
+    expect(editor.value).toContain('starter-entry');
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+  });
+
+  it('严格回测经过二次确认，第二步取消时不发送 POST', async () => {
+    invalidateStrategyWorkspaceCache();
+    const strictContext = {
+      ...experimentContext,
+      strategy: { id: 'experiment-strict-confirm', name: 'Strict confirm UI', status: 'active' },
+      validation: {
+        session: {
+          id: 'strict-confirm-session',
+          strategyId: 'experiment-strict-confirm',
+          strategyVersionId: 'experiment-ui-v2',
+          from: '2026-08-01T00:00:00.000Z',
+          to: '2026-08-08T00:00:00.000Z',
+          status: 'complete',
+          definitionHash: 'b'.repeat(64),
+          createdAt: '2026-08-08T00:00:00.000Z',
+        },
+        days: [],
+        runIds: [],
+        vintageCoverageRatio: 1,
+        evaluatorIdentityStatus: 'consistent',
+        evaluatorIdentities: [],
+      },
+      strictBacktests: [],
+    };
+    const calls = [];
+    globalThis.fetch = async (path, init) => {
+      calls.push({ path: String(path), method: init?.method ?? 'GET' });
+      return String(path).includes('/api/strategy/dsl-catalog')
+        ? jsonResponse({ ok: true, data: experimentCatalog })
+        : jsonResponse({ ok: true, data: strictContext });
+    };
+    const node = await renderStrategyExperiment(
+      'experiment-strict-confirm',
+      () => {},
+      async () => {},
+    );
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '创建严格回测')
+      .click();
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '继续填写后确认')
+      .click();
+    await flush();
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '取消')
+      .click();
+    await flush();
+
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+    expect(modalOverlay.hidden).toBe(true);
+  });
+
+  it('JSON 高级模式解析失败后仍可恢复到结构化编辑', async () => {
+    invalidateStrategyWorkspaceCache();
+    globalThis.fetch = async (path) => {
+      if (String(path).includes('/api/strategy/dsl-catalog')) {
+        return jsonResponse({ ok: true, data: experimentCatalog });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          ...experimentContext,
+          candidateVersion: undefined,
+          versionState: {
+            ...experimentContext.versionState,
+            candidatePersisted: false,
+            candidateValid: false,
+          },
+        },
+      });
+    };
+    const node = await renderStrategyExperiment(
+      'experiment-json-recovery',
+      () => {},
+      async () => {},
+    );
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === 'JSON 高级')
+      .click();
+    const editor = node
+      .querySelectorAll('textarea')
+      .find((textarea) => textarea.className.includes('experiment-json-editor'));
+    expect(editor).toBeDefined();
+    editor.value = '{ broken';
+    editor.dispatchEvent({ type: 'input' });
+    expect(node.textContent).toContain('JSON 格式无效');
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '结构化编辑')
+      .click();
+    expect(node.textContent).toContain('规则构建器');
+  });
+
+  it('JSON 连续输入不重挂载 textarea，保留焦点与同一编辑节点', async () => {
+    invalidateStrategyWorkspaceCache();
+    globalThis.fetch = async (path) =>
+      String(path).includes('/api/strategy/dsl-catalog')
+        ? jsonResponse({ ok: true, data: experimentCatalog })
+        : jsonResponse({ ok: true, data: experimentContext });
+    const node = await renderStrategyExperiment(
+      'experiment-json-focus',
+      () => {},
+      async () => {},
+    );
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === 'JSON 高级')
+      .click();
+    const editor = node
+      .querySelectorAll('textarea')
+      .find((textarea) => textarea.className.includes('experiment-json-editor'));
+    editor.focus();
+    editor.value = JSON.stringify(experimentDefinition);
+    editor.dispatchEvent({ type: 'input' });
+    expect(
+      node
+        .querySelectorAll('textarea')
+        .find((textarea) => textarea.className.includes('experiment-json-editor')),
+    ).toBe(editor);
+    expect(document.activeElement).toBe(editor);
+  });
+
+  it('Trial 外部失败后恢复按钮，不留下自动持久化假象', async () => {
+    invalidateStrategyWorkspaceCache();
+    const calls = [];
+    globalThis.fetch = async (path, init) => {
+      const url = String(path);
+      calls.push({ url, method: init?.method ?? 'GET' });
+      if (url.includes('/api/strategy/dsl-catalog'))
+        return jsonResponse({ ok: true, data: experimentCatalog });
+      if (url.includes('/api/strategies/experiment-trial-failure/trial')) {
+        return jsonResponse({
+          ok: false,
+          error: { kind: 'unsupported_capability', message: '行情适配器暂不可用' },
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          ...experimentContext,
+          strategy: { id: 'experiment-trial-failure', name: 'Trial failure', status: 'active' },
+        },
+      });
+    };
+    const node = await renderStrategyExperiment(
+      'experiment-trial-failure',
+      () => {},
+      async () => {},
+    );
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '运行样本 Trial')
+      .click();
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '开始 Trial')
+      .click();
+    for (
+      let attempt = 0;
+      attempt < 20 && !node.textContent.includes('行情适配器暂不可用');
+      attempt += 1
+    )
+      await flush();
+    expect(node.textContent).toContain('Trial 失败：行情适配器暂不可用');
+    expect(node.textContent).toContain('可以修复外部数据或权限后再次运行');
+    expect(
+      node.querySelectorAll('button').find((button) => button.textContent === '运行样本 Trial')
+        .disabled,
+    ).toBe(false);
+    expect(calls.filter((call) => call.method === 'POST').length).toBe(1);
+  });
+
+  it('独立验证进行中展示取消入口，取消仍是显式确认动作', async () => {
+    invalidateStrategyWorkspaceCache();
+    const statuses = [];
+    const runningContext = {
+      ...experimentContext,
+      strategy: { id: 'experiment-cancel', name: 'Cancel validation', status: 'active' },
+      validation: {
+        session: {
+          id: 'validation-running',
+          strategyId: 'experiment-cancel',
+          strategyVersionId: 'experiment-ui-v2',
+          from: '2026-08-01T00:00:00.000Z',
+          to: '2026-08-30T00:00:00.000Z',
+          status: 'running',
+          definitionHash: 'b'.repeat(64),
+          createdAt: '2026-08-30T00:00:00.000Z',
+        },
+        days: [],
+        runIds: [],
+        vintageCoverageRatio: 0,
+      },
+    };
+    globalThis.fetch = async (path, init) => {
+      if (String(path).includes('/api/strategy/dsl-catalog')) {
+        return jsonResponse({ ok: true, data: experimentCatalog });
+      }
+      if (
+        init?.method === 'POST' &&
+        String(path).includes('/backtests/validation-running/cancel')
+      ) {
+        return jsonResponse({
+          ok: true,
+          data: { session: { ...runningContext.validation.session, status: 'failed' } },
+        });
+      }
+      return jsonResponse({ ok: true, data: runningContext });
+    };
+    const node = await renderStrategyExperiment(
+      'experiment-cancel',
+      (message) => statuses.push(message),
+      async () => {},
+    );
+    expect(
+      await node.querySelectorAll('button').find((button) => button.textContent === '取消独立验证'),
+    ).toBeDefined();
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '取消独立验证')
+      .click();
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '取消验证')
+      .click();
+    await flush();
+    expect(statuses.at(-1)).toContain('已请求取消独立验证');
   });
 });
 
@@ -786,7 +1617,6 @@ describe('Phase B 洞察与调度', () => {
       't1',
       't3',
       't5',
-      't20',
       '75',
       '8',
       '2',
@@ -808,6 +1638,326 @@ describe('Phase B 洞察与调度', () => {
       channel: 'log',
       observationHorizons: ['t1', 't5'],
     });
+  });
+
+  it('Legacy V1 不静默升级，显式升级/降级取消均不发送 POST', async () => {
+    invalidateStrategyWorkspaceCache();
+    let postCount = 0;
+    let savedBody;
+    const statusMessages = [];
+    globalThis.fetch = async (path, init) => {
+      const url = String(path);
+      if (url.includes('/recommendation-preflights')) {
+        return jsonResponse({
+          ok: true,
+          data: { strategyId: 'policy-version-ui', runs: [], reasonCounts: [], limitations: [] },
+        });
+      }
+      if (url.endsWith('/schedule')) {
+        if (init?.method === 'POST') {
+          postCount += 1;
+          savedBody = JSON.parse(init.body);
+          return jsonResponse({
+            ok: true,
+            data: { schedule: { ...savedBody, nextRunAt: '2026-08-11T10:00:00.000Z' } },
+          });
+        }
+        return jsonResponse({
+          ok: true,
+          data: {
+            schedule: {
+              cron: '0 18 * * 1-5',
+              timezone: 'Asia/Shanghai',
+              enabled: true,
+              recommendationPolicy: {
+                enabled: false,
+                minScore: 70,
+                maxRank: 10,
+                maxPerRun: 3,
+                cooldownHours: 72,
+                notify: true,
+                channel: 'log',
+                observationHorizons: ['t3', 't5', 't20'],
+              },
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          strategy: {
+            id: 'policy-version-ui',
+            name: '版本切换策略',
+            status: 'active',
+            currentVersionId: 'v1',
+          },
+          versions: [],
+        },
+      });
+    };
+    const node = await renderSettings(
+      'policy-version-ui',
+      (message, isError) => statusMessages.push({ message, isError }),
+      async () => {},
+    );
+    expect(node.textContent).toContain('Legacy V1');
+    expect(node.textContent).toContain('不会静默升级');
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '保存调度')
+      .click();
+    await flush();
+    expect(postCount).toBe(1);
+    expect(savedBody.recommendationPolicy).not.toHaveProperty('schemaVersion');
+    expect(savedBody.recommendationPolicy).not.toHaveProperty('portfolioPreflight');
+
+    const upgrade = node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '启用账户预检 V2');
+    upgrade.click();
+    await flush();
+    expect(modalBody.textContent).toContain('确认选择 Account-gated V2');
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '取消')
+      .click();
+    await flush();
+    expect(postCount).toBe(1);
+    expect(node.textContent).toContain('Legacy V1');
+
+    upgrade.click();
+    await flush();
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '选择 V2')
+      .click();
+    await flush();
+    expect(node.textContent).toContain('Account-gated V2');
+    expect(node.textContent).toContain('候选资格');
+    expect(node.textContent).toContain('账户暴露');
+    expect(node.textContent).toContain('信号冲突');
+    expect(node.textContent).toContain('数据质量');
+    const maxSingle = node
+      .querySelectorAll('input')
+      .find((input) => input.id === 'strategy-preflight-max-single-exposure');
+    const maxIndustry = node
+      .querySelectorAll('input')
+      .find((input) => input.id === 'strategy-preflight-max-industry-exposure');
+    const maxAge = node
+      .querySelectorAll('input')
+      .find((input) => input.id === 'strategy-preflight-max-data-age');
+    expect(maxSingle.value).toBe('');
+    expect(maxIndustry.value).toBe('');
+    maxAge.value = '';
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '保存调度')
+      .click();
+    await flush();
+    expect(postCount).toBe(1);
+    expect(modalOverlay.hidden).toBe(true);
+    expect(statusMessages[statusMessages.length - 1]).toMatchObject({
+      isError: true,
+    });
+    expect(statusMessages[statusMessages.length - 1].message).toContain('最大数据年龄');
+
+    maxAge.value = '31';
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '保存调度')
+      .click();
+    await flush();
+    expect(postCount).toBe(1);
+    expect(modalOverlay.hidden).toBe(true);
+
+    maxAge.value = '1.5';
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '保存调度')
+      .click();
+    await flush();
+    expect(postCount).toBe(1);
+    expect(modalOverlay.hidden).toBe(true);
+
+    maxAge.value = '0';
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '保存调度')
+      .click();
+    await flush();
+    expect(modalBody.textContent).toContain('确认保存 V2');
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '取消')
+      .click();
+    await flush();
+    expect(postCount).toBe(1);
+
+    maxAge.value = '1';
+
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '保存调度')
+      .click();
+    await flush();
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '确认保存 V2')
+      .click();
+    await flush();
+    expect(postCount).toBe(2);
+    expect(savedBody.recommendationPolicy).toEqual({
+      schemaVersion: 2,
+      enabled: false,
+      minScore: 70,
+      maxRank: 10,
+      maxPerRun: 3,
+      cooldownHours: 72,
+      notify: true,
+      channel: 'log',
+      observationHorizons: ['t3', 't5'],
+      portfolioPreflight: {
+        skipExistingHolding: true,
+        requireLiquidityFacts: true,
+        maxDataAgeTradingDays: 1,
+        rejectOnExitSignal: true,
+        rejectOnRiskSignal: true,
+      },
+    });
+
+    const downgrade = node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '切回 Legacy V1');
+    downgrade.click();
+    await flush();
+    expect(modalBody.textContent).toContain('会丢弃本次保存的账户预检配置');
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '取消')
+      .click();
+    await flush();
+    expect(postCount).toBe(2);
+  });
+
+  it('V2 设置刷新后无损回填，并展示历史状态、reason code 和 factCount', async () => {
+    invalidateStrategyWorkspaceCache();
+    globalThis.fetch = async (path) => {
+      const url = String(path);
+      if (url.includes('/recommendation-preflights')) {
+        return jsonResponse({
+          ok: true,
+          data: {
+            strategyId: 'policy-v2-refresh',
+            runs: [
+              {
+                startedAt: '2026-08-31T09:00:00.000Z',
+                finishedAt: '2026-08-31T09:01:00.000Z',
+                workflowStatus: 'partial',
+                total: 2,
+                eligible: 1,
+                skipped: 1,
+                unavailable: 0,
+                candidates: [
+                  {
+                    stockId: '000001.SZ',
+                    status: 'eligible',
+                    reasonCodes: [],
+                    factCount: 4,
+                    evaluatedAt: '2026-08-31T09:00:30.000Z',
+                  },
+                  {
+                    stockId: '600519.SH',
+                    status: 'skipped',
+                    reasonCodes: ['existing-holding', 'cooldown'],
+                    factCount: 2,
+                    evaluatedAt: '2026-08-31T09:00:31.000Z',
+                  },
+                ],
+              },
+            ],
+            reasonCounts: [
+              { code: 'existing-holding', count: 1 },
+              { code: 'cooldown', count: 1 },
+            ],
+            limitations: [],
+          },
+        });
+      }
+      if (url.endsWith('/schedule')) {
+        return jsonResponse({
+          ok: true,
+          data: {
+            schedule: {
+              cron: '0 18 * * 1-5',
+              timezone: 'Asia/Shanghai',
+              enabled: true,
+              recommendationPolicy: {
+                schemaVersion: 2,
+                enabled: true,
+                minScore: 82,
+                maxRank: 4,
+                maxPerRun: 2,
+                cooldownHours: 24,
+                notify: false,
+                channel: 'log',
+                observationHorizons: ['t1'],
+                portfolioPreflight: {
+                  maxSinglePositionExposurePct: 12.5,
+                  maxIndustryExposurePct: 35,
+                  skipExistingHolding: false,
+                  requireLiquidityFacts: true,
+                  maxDataAgeTradingDays: 2,
+                  rejectOnExitSignal: false,
+                  rejectOnRiskSignal: true,
+                },
+              },
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          strategy: {
+            id: 'policy-v2-refresh',
+            name: 'V2 回填策略',
+            status: 'active',
+            currentVersionId: 'v1',
+          },
+          versions: [],
+        },
+      });
+    };
+    const node = await renderSettings(
+      'policy-v2-refresh',
+      () => {},
+      async () => {},
+    );
+    expect(node.textContent).toContain('Account-gated V2');
+    expect(node.textContent).toContain('可进入 Advice 分析');
+    expect(node.textContent).toContain('已有持仓');
+    expect(node.textContent).toContain('existing-holding');
+    expect(node.textContent).toContain('冷却中');
+    expect(node.textContent).toContain('cooldown');
+    expect(node.textContent).toContain('最近 1 次原因分布');
+    expect(node.textContent).toContain('事实 2');
+    expect(node.textContent).not.toContain('accountId');
+    expect(node.textContent).not.toContain('runId');
+    expect(
+      node
+        .querySelectorAll('input')
+        .find((input) => input.id === 'strategy-preflight-max-single-exposure').value,
+    ).toBe('12.5');
+    expect(
+      node
+        .querySelectorAll('input')
+        .find((input) => input.id === 'strategy-preflight-max-industry-exposure').value,
+    ).toBe('35');
+    expect(
+      node.querySelectorAll('input').find((input) => input.id === 'strategy-preflight-max-data-age')
+        .value,
+    ).toBe('2');
   });
 
   it('闭环 tab 展示事实、阶段 Advice 与显式 Trade 链接，并保留未知状态', async () => {
@@ -922,6 +2072,7 @@ describe('Phase B 洞察与调度', () => {
     expect(node.textContent).toContain('策略候选闭环');
     expect(node.textContent).toContain('事实 / 事后观察');
     expect(node.textContent).toContain('T3');
+    expect(node.textContent).not.toContain('T20');
     expect(node.textContent).toContain('待观察');
     expect(node.textContent).toContain('AI Advice / 决策快照');
     expect(node.textContent).toContain('已过期');

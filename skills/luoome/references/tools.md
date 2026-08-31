@@ -66,8 +66,9 @@ change a Watchlist. The internal projection bridge is orchestration-only and is 
 ## External
 
 External tools fetch market/event data, validate or run Strategies, synchronize data or send
-notifications. Full-market or persisted Strategy runs require confirmation; bounded
-`run_strategy` dry-runs must use `persist=false`.
+notifications. A bounded single-version sample uses the external-only `trial_strategy` tool;
+it forces `persist=false` and does not accept `mode=scheduled`. Full-market or persisted Strategy
+runs require confirmation and both capabilities; use `run_strategy` with `persist=true`.
 
 Research semantic search and cross-model evaluation are external calls. `search_research_documents_hybrid` sends the query text to the configured embedding provider and must preserve its `complete`, capability, EvidenceRef, counter-evidence, risks and unknowns fields. `rebuild_research_embeddings` additionally sends private research chunks and writes a rebuildable projection, so it requires both external and write authorization. Never interpret zero hits from an incomplete projection as absence of evidence.
 

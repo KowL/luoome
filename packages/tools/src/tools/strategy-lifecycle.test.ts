@@ -142,6 +142,51 @@ describe('Strategy lifecycle tools', () => {
     expect(published.ok).toBe(false);
   });
 
+  it('keeps legacy duplicate scoring definitions readable but validation blocks publish', async () => {
+    const ctx = await buildTestContext();
+    await createStrategyTool.execute(
+      { id: 'legacy-scoring', name: '旧评分策略', description: '测试旧重复 component' },
+      ctx,
+    );
+    const duplicate = {
+      ...validDefinition(),
+      scoring: {
+        method: 'weighted-sum' as const,
+        components: [
+          { ruleId: 'positive-price', score: '50', weight: 0.5 },
+          { ruleId: 'positive-price', score: '60', weight: 0.5 },
+        ],
+      },
+    };
+    const created = await createStrategyVersionTool.execute(
+      { strategyId: 'legacy-scoring', definition: duplicate },
+      ctx,
+    );
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(
+      (await ctx.repos.strategy.findVersionById(created.data.version.id))?.definition.scoring
+        ?.components,
+    ).toHaveLength(2);
+
+    const validated = await validateStrategyVersionTool.execute(
+      { versionId: created.data.version.id },
+      ctx,
+    );
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) return;
+    expect(validated.data.version.validationStatus).toBe('invalid');
+    expect(validated.data.version.validationErrors).toEqual([
+      'scoring component.ruleId 必须唯一: positive-price',
+    ]);
+
+    const published = await publishStrategyVersionTool.execute(
+      { versionId: created.data.version.id },
+      ctx,
+    );
+    expect(published.ok).toBe(false);
+  });
+
   it('validate/publish 可绑定 Strategy，拒绝跨策略 versionId', async () => {
     const ctx = await buildTestContext();
     await createStrategyTool.execute({ id: 'strategy-a', name: '策略 A', description: 'A' }, ctx);

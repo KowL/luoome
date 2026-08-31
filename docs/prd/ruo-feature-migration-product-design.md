@@ -585,7 +585,7 @@ SignalObservation
 - stockId
 - baselinePrice
 - baselineAt
-- horizon: t1 | t3 | t5 | t20
+- horizon: t1 | t3 | t5（存量 t20 仅兼容读取）
 - closePrice?
 - returnPct?
 - maxFavorableExcursionPct?

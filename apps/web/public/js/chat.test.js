@@ -105,6 +105,12 @@ describe('草案编辑预填', () => {
     expect(draftEditPrefill({ tool: 'analyze_stock' })).toBe(
       '请修改刚才的草案（分析个股），我想改为：',
     );
+    expect(draftEditPrefill({ tool: 'trial_strategy' })).toBe(
+      '请修改刚才的草案（试跑 Strategy），我想改为：',
+    );
+    expect(draftEditPrefill({ tool: 'run_strategy' })).toBe(
+      '请修改刚才的草案（正式运行 Strategy），我想改为：',
+    );
   });
 
   it('字段值格式化：数组顿号连接、对象 JSON、空值占位', () => {

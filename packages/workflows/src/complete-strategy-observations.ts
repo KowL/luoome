@@ -1,6 +1,10 @@
 import {
+  type ActiveSignalObservationHorizon,
+  ActiveSignalObservationHorizonSchema,
+  isActiveSignalObservationHorizon,
   STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+  StrategyRecommendationPreflightSummarySchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -22,7 +26,7 @@ export const CompleteStrategyObservationsWorkflowOutput = z.object({
   completed: z.number().int().nonnegative(),
   pending: z.number().int().nonnegative(),
   byHorizon: z.record(
-    z.enum(['t1', 't3', 't5', 't20']),
+    ActiveSignalObservationHorizonSchema,
     z.object({
       scanned: z.number().int().nonnegative(),
       completed: z.number().int().nonnegative(),
@@ -31,6 +35,7 @@ export const CompleteStrategyObservationsWorkflowOutput = z.object({
   ),
   recommendationAdvices: z.number().int().nonnegative(),
   recommendationFailed: z.number().int().nonnegative(),
+  recommendationPreflight: StrategyRecommendationPreflightSummarySchema.optional(),
   benchmarkDataVersion: z.literal(STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION),
   benchmarkSyncStatus: z.enum(['succeeded', 'partial', 'failed', 'skipped']),
   benchmarkSynced: z.number().int().nonnegative(),
@@ -85,10 +90,16 @@ const complete: WorkflowStep = async (previous, ctx) => {
   const completedIds = new Set(result.data.completedIds);
   const groups = new Map<
     string,
-    { strategyId: string; runId: string; horizon: 't1' | 't3' | 't5' | 't20'; stockIds: string[] }
+    {
+      strategyId: string;
+      runId: string;
+      horizon: ActiveSignalObservationHorizon;
+      stockIds: string[];
+    }
   >();
   for (const observation of listed.data.observations) {
     if (!completedIds.has(observation.id)) continue;
+    if (!isActiveSignalObservationHorizon(observation.horizon)) continue;
     const signals = await ctx.tools.strategy_signals_by_stock.execute({
       stockId: observation.stockId,
       limit: 500,
@@ -108,6 +119,9 @@ const complete: WorkflowStep = async (previous, ctx) => {
   }
   let recommendationAdvices = 0;
   let recommendationFailed = 0;
+  const recommendationPreflightDetails: z.output<
+    typeof StrategyRecommendationPreflightSummarySchema
+  >['details'] = [];
   for (const group of groups.values()) {
     const schedule = await ctx.tools.get_strategy_schedule.execute({
       strategyId: group.strategyId,
@@ -122,8 +136,12 @@ const complete: WorkflowStep = async (previous, ctx) => {
       trigger: group.horizon,
       stockIds: group.stockIds,
     });
-    if (recommended.ok) recommendationAdvices += recommended.data.advices.length;
-    else recommendationFailed += 1;
+    if (recommended.ok) {
+      recommendationAdvices += recommended.data.advices.length;
+      if (recommended.data.preflight !== undefined) {
+        recommendationPreflightDetails.push(...recommended.data.preflight.details);
+      }
+    } else recommendationFailed += 1;
   }
   return CompleteStrategyObservationsWorkflowOutput.parse({
     requestedStocks: listed.data.stockIds.length,
@@ -135,6 +153,21 @@ const complete: WorkflowStep = async (previous, ctx) => {
     byHorizon: result.data.byHorizon,
     recommendationAdvices,
     recommendationFailed,
+    ...(recommendationPreflightDetails.length === 0
+      ? {}
+      : {
+          recommendationPreflight: {
+            total: recommendationPreflightDetails.length,
+            eligible: recommendationPreflightDetails.filter((item) => item.status === 'eligible')
+              .length,
+            skipped: recommendationPreflightDetails.filter((item) => item.status === 'skipped')
+              .length,
+            unavailable: recommendationPreflightDetails.filter(
+              (item) => item.status === 'unavailable',
+            ).length,
+            details: recommendationPreflightDetails,
+          },
+        }),
     benchmarkDataVersion: STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
     benchmarkSyncStatus,
     benchmarkSynced,

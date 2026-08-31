@@ -1,11 +1,12 @@
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  ActiveSignalObservationHorizonSchema,
   aggregateSignalObservationStats,
   completeSignalObservationFromDailyBars,
   type DailyBar,
   deduplicateSignalObservations,
   SIGNAL_OBSERVATION_SAMPLE_UNIT,
   type SignalObservation,
-  SignalObservationHorizonSchema,
   SignalObservationSchema,
   SignalObservationSourceKindSchema,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
@@ -14,11 +15,11 @@ import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
 
-const SIGNAL_OBSERVATION_HORIZONS = ['t1', 't3', 't5', 't20'] as const;
+const SIGNAL_OBSERVATION_HORIZONS = ACTIVE_SIGNAL_OBSERVATION_HORIZONS;
 const SIGNAL_OBSERVATION_STATS_LIMIT = 5000;
 
 const SignalObservationStatsItemSchema = z.object({
-  horizon: SignalObservationHorizonSchema,
+  horizon: ActiveSignalObservationHorizonSchema,
   sampleUnit: z.literal(SIGNAL_OBSERVATION_SAMPLE_UNIT),
   total: z.number().int().nonnegative(),
   complete: z.number().int().nonnegative(),
@@ -46,7 +47,7 @@ export const GetSignalObservationStatsInput = z
     /** 按 observation.baselineAt 的闭区间上界过滤。 */
     until: z.coerce.date().optional(),
     sourceKind: SignalObservationSourceKindSchema.optional(),
-    horizons: z.array(SignalObservationHorizonSchema).min(1).max(4).optional(),
+    horizons: z.array(ActiveSignalObservationHorizonSchema).min(1).max(3).optional(),
     limit: z.number().int().min(1).max(SIGNAL_OBSERVATION_STATS_LIMIT).default(1000),
   })
   .superRefine((input, context) => {
@@ -66,7 +67,7 @@ export const GetSignalObservationStatsOutput = z.object({
     until: z.coerce.date().optional(),
   }),
   sourceKind: SignalObservationSourceKindSchema.optional(),
-  horizons: z.array(SignalObservationHorizonSchema),
+  horizons: z.array(ActiveSignalObservationHorizonSchema),
   total: z.number().int().nonnegative(),
   complete: z.number().int().nonnegative(),
   missingRate: z.number().min(0).max(1),
@@ -123,7 +124,7 @@ export const getSignalObservationStatsTool = defineTool({
       ...(input.since === undefined ? {} : { from: input.since }),
       ...(input.until === undefined ? {} : { to: input.until }),
       ...(input.sourceKind === undefined ? {} : { sourceKind: input.sourceKind }),
-      ...(input.horizons === undefined ? {} : { horizons: input.horizons }),
+      horizons: input.horizons ?? SIGNAL_OBSERVATION_HORIZONS,
       limit: input.limit,
     });
     const sampled = deduplicateSignalObservations(observations);
@@ -132,7 +133,7 @@ export const getSignalObservationStatsTool = defineTool({
       const rows = sampled.filter((observation) => observation.horizon === aggregate.horizon);
       const completeRows = rows.filter((observation) => observation.status === 'complete');
       return {
-        horizon: aggregate.horizon,
+        horizon: ActiveSignalObservationHorizonSchema.parse(aggregate.horizon),
         sampleUnit: SIGNAL_OBSERVATION_SAMPLE_UNIT,
         total: aggregate.total,
         complete: aggregate.complete,
@@ -213,6 +214,7 @@ export const listPendingStrategyObservationsTool = defineTool({
     const observations = await ctx.repos.signalObservation.list({
       sourceKind: 'strategy-signal',
       status: 'pending',
+      horizons: SIGNAL_OBSERVATION_HORIZONS,
       dueBefore: ctx.clock(),
       retryReadyAt: ctx.clock(),
       order: 'due-first',
@@ -234,7 +236,7 @@ export const CompleteStrategyObservationsOutput = z.object({
   pending: z.number().int().nonnegative(),
   completedIds: z.array(z.string()),
   byHorizon: z.record(
-    z.enum(['t1', 't3', 't5', 't20']),
+    ActiveSignalObservationHorizonSchema,
     z.object({
       scanned: z.number().int().nonnegative(),
       completed: z.number().int().nonnegative(),
@@ -245,7 +247,7 @@ export const CompleteStrategyObservationsOutput = z.object({
 
 export const completeStrategyObservationsTool = defineTool({
   name: 'complete_strategy_observations',
-  description: '仅用本地规范 qfq 日线补齐 StrategySignal 的 T+1/T+3/T+5/T+20 事实观察',
+  description: '仅用本地规范 qfq 日线补齐 StrategySignal 的 T+1/T+3/T+5 事实观察',
   sideEffect: 'write',
   input: CompleteStrategyObservationsInput,
   output: CompleteStrategyObservationsOutput,
@@ -253,6 +255,7 @@ export const completeStrategyObservationsTool = defineTool({
     const pending = await ctx.repos.signalObservation.list({
       sourceKind: 'strategy-signal',
       status: 'pending',
+      horizons: SIGNAL_OBSERVATION_HORIZONS,
       dueBefore: ctx.clock(),
       retryReadyAt: ctx.clock(),
       order: 'due-first',
@@ -320,7 +323,7 @@ export const completeStrategyObservationsTool = defineTool({
       pending: pending.length - completedIds.length,
       completedIds,
       byHorizon: Object.fromEntries(
-        (['t1', 't3', 't5', 't20'] as const).map((horizon) => {
+        SIGNAL_OBSERVATION_HORIZONS.map((horizon) => {
           const rows = pending.filter((observation) => observation.horizon === horizon);
           const completed = rows.filter((observation) =>
             completedIds.includes(observation.id),

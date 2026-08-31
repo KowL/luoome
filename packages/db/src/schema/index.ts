@@ -75,6 +75,10 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
+type StrategyResultEvaluationJson =
+  | StrategyResult['ruleEvaluations']
+  | Pick<StrategyResult, 'ruleEvaluations' | 'scoringBreakdown'>;
+
 /** 跨多表数据迁移登记；迁移逻辑由 repository-free runner 执行。 */
 export const schemaMigrations = sqliteTable('schema_migrations', {
   id: text('id').primaryKey(),
@@ -776,7 +780,7 @@ export const strategyResults = sqliteTable(
     score: real('score'),
     rank: integer('rank'),
     ruleEvaluations: text('rule_evaluations_json', { mode: 'json' })
-      .$type<StrategyResult['ruleEvaluations']>()
+      .$type<StrategyResultEvaluationJson>()
       .notNull(),
     evidence: text('evidence_json', { mode: 'json' }).$type<StrategyResult['evidence']>().notNull(),
     dataAsOf: integer('data_as_of', { mode: 'timestamp_ms' }).notNull(),

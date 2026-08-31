@@ -99,16 +99,24 @@ const toRun = (row: RunRow): StrategyRun =>
     }),
   );
 
-const toResult = (row: ResultRow): StrategyResult => ({
-  runId: row.runId,
-  stockId: row.stockId,
-  selected: row.selected,
-  ...(row.score === null ? {} : { score: row.score }),
-  ...(row.rank === null ? {} : { rank: row.rank }),
-  ruleEvaluations: [...row.ruleEvaluations],
-  evidence: [...row.evidence],
-  dataAsOf: row.dataAsOf,
-});
+const toResult = (row: ResultRow): StrategyResult => {
+  const stored = Array.isArray(row.ruleEvaluations)
+    ? { ruleEvaluations: row.ruleEvaluations }
+    : row.ruleEvaluations;
+  return {
+    runId: row.runId,
+    stockId: row.stockId,
+    selected: row.selected,
+    ...(row.score === null ? {} : { score: row.score }),
+    ...(row.rank === null ? {} : { rank: row.rank }),
+    ruleEvaluations: [...stored.ruleEvaluations],
+    ...(stored.scoringBreakdown === undefined
+      ? {}
+      : { scoringBreakdown: [...stored.scoringBreakdown] }),
+    evidence: [...row.evidence],
+    dataAsOf: row.dataAsOf,
+  };
+};
 
 const toSignal = (row: SignalRow): StrategySignal => ({
   id: row.id,
@@ -777,7 +785,13 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
           selected: result.selected,
           score: result.score ?? null,
           rank: result.rank ?? null,
-          ruleEvaluations: [...result.ruleEvaluations],
+          ruleEvaluations:
+            result.scoringBreakdown === undefined
+              ? [...result.ruleEvaluations]
+              : {
+                  ruleEvaluations: [...result.ruleEvaluations],
+                  scoringBreakdown: [...result.scoringBreakdown],
+                },
           evidence: [...result.evidence],
           dataAsOf: result.dataAsOf,
         })

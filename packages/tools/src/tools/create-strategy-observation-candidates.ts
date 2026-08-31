@@ -1,4 +1,10 @@
-import { isPublishableOperationalRun, type StrategySignal, type ToolContext } from '@luoome/core';
+import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  ActiveSignalObservationHorizonSchema,
+  isPublishableOperationalRun,
+  type StrategySignal,
+  type ToolContext,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
@@ -22,7 +28,7 @@ export const CreateStrategyObservationCandidatesOutput = z.object({
     providers: z.record(z.string(), z.number().int().nonnegative()),
   }),
   horizons: z.record(
-    z.enum(['t1', 't3', 't5', 't20']),
+    ActiveSignalObservationHorizonSchema,
     z.object({
       created: z.number().int().nonnegative(),
       skipped: z.number().int().nonnegative(),
@@ -92,7 +98,7 @@ export const createStrategyObservationCandidatesTool = defineTool({
       providers.set(baseline.provider, (providers.get(baseline.provider) ?? 0) + 1);
     }
     const horizons = Object.fromEntries(
-      (['t1', 't3', 't5', 't20'] as const).map((horizon) => {
+      ACTIVE_SIGNAL_OBSERVATION_HORIZONS.map((horizon) => {
         const rows = candidates.filter((candidate) => candidate.horizon === horizon);
         return [
           horizon,

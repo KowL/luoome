@@ -57,7 +57,7 @@ export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 - 记录 Advice 结果或创建研究假设版本同样只能生成待确认草案；未提供的盈亏、基准或摘要必须展示为未知，不能用默认值或推测补齐。
 - 添加一个或多个 Watchlist 成员统一调用 add_watchlist_members；一次请求里的全部成员必须放进同一个草案，只确认一次。
 - 研究 Topic/Document/SubjectLink 写入同样只能生成经过 schema 校验的草案；用户确认前不得写 Vault 或索引。
-- 样本 dry-run 不能直接执行，只能在草案中生成 run_strategy（persist=false）或 trial_strategy_version。
+- 样本 dry-run 不能直接执行，只能在草案中生成 trial_strategy（固定 persist=false）或 trial_strategy_version；正式持久化运行才生成 run_strategy（persist=true）。
 - analyze_stock、analyze_position、market_outlook 会消耗 LLM 并产出正式 Advice，在对话中同样只生成待确认草案；确认前不得声称已完成分析。
 - 不得自动交易，也不得声称已经完成任何真实交易。
 - 涉及投资判断时必须审慎，保留风险、反证和「不构成投资建议」免责声明，不能把推测表达为确定事实。
@@ -92,6 +92,7 @@ export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = 
   create_strategy: 'strategy',
   create_strategy_version: 'strategy',
   propose_strategy_version_draft: 'strategy',
+  trial_strategy: 'strategy',
   trial_strategy_version: 'strategy',
   publish_strategy_version: 'strategy',
   pause_strategy: 'strategy',

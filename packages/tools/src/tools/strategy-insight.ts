@@ -1,4 +1,6 @@
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  ActiveSignalObservationHorizonSchema,
   aggregateSignalObservationStats,
   classifyStrategyResult,
   deduplicateSignalObservations,
@@ -15,7 +17,7 @@ import { z } from 'zod';
 import { defineTool, errNotFound } from '../define-tool.js';
 
 const DAY_MS = 86_400_000;
-const HORIZONS = ['t1', 't3', 't5', 't20'] as const;
+const HORIZONS = ACTIVE_SIGNAL_OBSERVATION_HORIZONS;
 const OBSERVATION_QUERY_CHUNK = 400;
 const OBSERVATION_LIMIT = 5000;
 const FACT_EVIDENCE_LIMIT = 50;
@@ -275,7 +277,7 @@ const aggregateObservationGroups = (
       return {
         dimension,
         group: stats.group,
-        horizon: stats.horizon,
+        horizon: ActiveSignalObservationHorizonSchema.parse(stats.horizon),
         sampleUnit: SIGNAL_OBSERVATION_SAMPLE_UNIT,
         total: stats.total,
         complete: stats.complete,
@@ -450,6 +452,7 @@ export const collectStrategyInsightFacts = async (
       ...(await ctx.repos.signalObservation.list({
         sourceKind: 'strategy-signal',
         sourceIds,
+        horizons: HORIZONS,
         limit: OBSERVATION_LIMIT,
       })),
     );

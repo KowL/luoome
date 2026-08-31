@@ -67,6 +67,11 @@ const dialogActions = (confirmLabel, { danger = false, onConfirm } = {}) => {
   return row;
 };
 
+const focusFirstDialogButton = () => {
+  const body = $('#modal-body');
+  body?.querySelectorAll('button')[0]?.focus();
+};
+
 /**
  * 确认对话框（替代 window.confirm）。
  * @returns {Promise<boolean>} 确认 true；取消/关闭 false。
@@ -86,6 +91,7 @@ export const confirmDialog = ({
         dialogActions(confirmLabel, { danger, onConfirm: () => settle(true) }),
       ]),
     );
+    focusFirstDialogButton();
   }).then((value) => value === true);
 
 /**

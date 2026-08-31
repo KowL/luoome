@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import type { StrategyDslV1, StrategyVersion } from '../entity/strategy.js';
-import { strategyDefinitionHash } from '../entity/strategy.js';
+import {
+  type StrategyDslV1,
+  StrategyDslV1Schema,
+  StrategyResultSchema,
+  StrategyScoreComponentEvaluationSchema,
+  type StrategyVersion,
+  StrategyVersionSchema,
+  strategyDefinitionHash,
+} from '../entity/strategy.js';
 import {
   assignStableStrategyRanks,
   evaluateStrategyStock,
@@ -108,6 +115,236 @@ describe('Strategy evaluator', () => {
     expect(result.result).toMatchObject({ selected: true, score: 63 });
     expect(result.signals).toHaveLength(1);
     expect(result.signals[0]?.evidence).toEqual(['RSI=63']);
+  });
+
+  it('records ordered scoring components with actual reads and exact contributions', () => {
+    const base = definition();
+    const dsl = definition({
+      selection: {
+        logic: 'all',
+        rules: [
+          ...base.selection.rules,
+          {
+            id: 'momentum',
+            name: '动量',
+            when: 'indicators.close > 0',
+            evidence: ['动量有效'],
+          },
+        ],
+      },
+      scoring: {
+        method: 'weighted-sum',
+        components: [
+          {
+            ruleId: 'momentum',
+            score: 'indicators.close > 0 && indicators.ma20 * 5',
+            weight: 0.75,
+          },
+          { ruleId: 'trend', score: 'indicators.rsi14', weight: 0.25 },
+        ],
+      },
+    });
+    const result = evaluate('000001.SZ', { close: 12, ma20: 10, rsi14: 63 }, dsl);
+
+    expect(result.partial).toBe(false);
+    expect(result.result.score).toBe(53.25);
+    expect(result.result.scoringBreakdown).toEqual([
+      {
+        schemaVersion: 1,
+        ruleId: 'momentum',
+        expression: 'indicators.close > 0 && indicators.ma20 * 5',
+        status: 'available',
+        inputs: [
+          { path: 'indicators.close', status: 'available', value: 12 },
+          { path: 'indicators.ma20', status: 'available', value: 10 },
+        ],
+        weight: 0.75,
+        rawScore: 50,
+        contribution: 37.5,
+      },
+      {
+        schemaVersion: 1,
+        ruleId: 'trend',
+        expression: 'indicators.rsi14',
+        status: 'available',
+        inputs: [{ path: 'indicators.rsi14', status: 'available', value: 63 }],
+        weight: 0.25,
+        rawScore: 63,
+        contribution: 15.75,
+      },
+    ]);
+  });
+
+  it('keeps available contributions but leaves score absent for missing components', () => {
+    const base = definition();
+    const dsl = definition({
+      selection: {
+        logic: 'all',
+        rules: [
+          ...base.selection.rules,
+          {
+            id: 'momentum',
+            name: '动量',
+            when: 'indicators.close > 0',
+            evidence: ['动量有效'],
+          },
+        ],
+      },
+      scoring: {
+        method: 'weighted-sum',
+        components: [
+          { ruleId: 'trend', score: 'indicators.rsi14', weight: 0.4 },
+          { ruleId: 'momentum', score: 'indicators.close > 0 && indicators.ma60', weight: 0.6 },
+        ],
+      },
+    });
+    const result = evaluate('000001.SZ', { close: 12, ma20: 10, rsi14: 63 }, dsl);
+
+    expect(result.partial).toBe(true);
+    expect(result.result.score).toBeUndefined();
+    expect(result.result.scoringBreakdown).toMatchObject([
+      { ruleId: 'trend', status: 'available', rawScore: 63, contribution: 25.200000000000003 },
+      {
+        ruleId: 'momentum',
+        expression: 'indicators.close > 0 && indicators.ma60',
+        status: 'missing',
+        inputs: [
+          { path: 'indicators.close', status: 'available', value: 12 },
+          { path: 'indicators.ma60', status: 'missing' },
+        ],
+      },
+    ]);
+    expect(result.result.scoringBreakdown?.[1]).not.toHaveProperty('rawScore');
+    expect(result.result.scoringBreakdown?.[1]).not.toHaveProperty('contribution');
+    expect(result.errors).toContain('scoring momentum: 缺少字段: indicators.ma60');
+  });
+
+  it('marks parse, evaluation and range failures as error components', () => {
+    const base = definition();
+    const dsl = definition({
+      selection: {
+        logic: 'all',
+        rules: [
+          ...base.selection.rules,
+          {
+            id: 'momentum',
+            name: '动量',
+            when: 'indicators.close > 0',
+            evidence: ['动量有效'],
+          },
+          {
+            id: 'broken',
+            name: '语法错误',
+            when: 'indicators.close > 0',
+            evidence: ['语法错误'],
+          },
+        ],
+      },
+      scoring: {
+        method: 'weighted-sum',
+        components: [
+          { ruleId: 'trend', score: '101', weight: 0.4 },
+          { ruleId: 'momentum', score: 'Math.abs(1, 2)', weight: 0.3 },
+          { ruleId: 'broken', score: 'indicators.close >', weight: 0.3 },
+        ],
+      },
+    });
+    const result = evaluate('000001.SZ', { close: 12, ma20: 10, rsi14: 63 }, dsl);
+
+    expect(result.partial).toBe(true);
+    expect(result.result.score).toBeUndefined();
+    expect(result.result.scoringBreakdown).toMatchObject([
+      { ruleId: 'trend', status: 'error', error: 'score 越界: 101' },
+      { ruleId: 'momentum', status: 'error', error: expect.stringContaining('Math.abs') },
+      { ruleId: 'broken', status: 'error', error: expect.stringContaining('无法解析') },
+    ]);
+    expect(result.result.scoringBreakdown?.every((component) => component.status === 'error')).toBe(
+      true,
+    );
+  });
+
+  it('requires status-consistent scoring breakdown fields', () => {
+    const base = {
+      schemaVersion: 1 as const,
+      ruleId: 'trend',
+      expression: 'indicators.rsi14',
+      inputs: [],
+      weight: 1,
+    };
+    expect(
+      StrategyScoreComponentEvaluationSchema.safeParse({
+        ...base,
+        status: 'available',
+        rawScore: 80,
+        contribution: 80,
+      }).success,
+    ).toBe(true);
+    expect(
+      StrategyScoreComponentEvaluationSchema.safeParse({
+        ...base,
+        status: 'available',
+        rawScore: 80,
+      }).success,
+    ).toBe(false);
+    expect(
+      StrategyScoreComponentEvaluationSchema.safeParse({
+        ...base,
+        status: 'missing',
+        rawScore: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      StrategyScoreComponentEvaluationSchema.safeParse({
+        ...base,
+        status: 'error',
+      }).success,
+    ).toBe(false);
+    expect(
+      StrategyScoreComponentEvaluationSchema.safeParse({
+        ...base,
+        status: 'error',
+        error: 'score 越界: 101',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('keeps duplicate scoring component ids readable but exposes a stable validation error', () => {
+    const duplicate = definition({
+      scoring: {
+        method: 'weighted-sum',
+        components: [
+          { ruleId: 'trend', score: '50', weight: 0.5 },
+          { ruleId: 'trend', score: '60', weight: 0.5 },
+        ],
+      },
+    });
+    expect(StrategyDslV1Schema.safeParse(duplicate).success).toBe(true);
+    const legacyVersion = StrategyVersionSchema.parse({
+      id: 'strategy-v1-legacy',
+      strategyId: 'strategy',
+      version: 1,
+      definition: duplicate,
+      definitionHash: strategyDefinitionHash(duplicate),
+      validationStatus: 'valid',
+      validationErrors: [],
+      publishedAt: new Date('2026-01-01T00:00:00Z'),
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    expect(legacyVersion.definition.scoring?.components).toHaveLength(2);
+    expect(inspectStrategyDefinitionReferences(duplicate).validationErrors).toContain(
+      'scoring component.ruleId 必须唯一: trend',
+    );
+
+    const legacy = {
+      runId: 'legacy-run',
+      stockId: '000001.SZ',
+      selected: true,
+      score: 50,
+      ruleEvaluations: [{ ruleId: 'trend', status: 'matched', value: true, evidence: ['legacy'] }],
+      evidence: ['legacy'],
+      dataAsOf: new Date('2026-01-02T00:00:00Z'),
+    };
+    expect(StrategyResultSchema.parse(legacy)).not.toHaveProperty('scoringBreakdown');
   });
 
   it('propagates missing fields as unknown instead of false or zero', () => {

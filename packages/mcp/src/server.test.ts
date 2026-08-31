@@ -33,6 +33,31 @@ describe('MCP sideEffect 暴露门控', () => {
     expect(both.map((tool) => tool.name)).toContain('import_remote_research_document');
   });
 
+  it('Strategy 持久化外部 tools 必须同时开启 write 与 external，草案/trial 仅需 external', () => {
+    const externalOnly = selectMcpTools(
+      toolRegistry.all(),
+      resolveAllowedSideEffects({ LUOOME_EXPOSE_EXTERNAL: 'true' }),
+    );
+    const externalOnlyNames = externalOnly.map((tool) => tool.name);
+    expect(externalOnlyNames).not.toContain('run_strategy');
+    expect(externalOnlyNames).not.toContain('prepare_strategy_data');
+    expect(externalOnlyNames).toContain('trial_strategy');
+    expect(externalOnlyNames).toContain('propose_strategy_version_draft');
+    expect(externalOnlyNames).toContain('trial_strategy_version');
+
+    const both = selectMcpTools(
+      toolRegistry.all(),
+      resolveAllowedSideEffects({
+        LUOOME_EXPOSE_WRITE: 'true',
+        LUOOME_EXPOSE_EXTERNAL: 'true',
+      }),
+    );
+    const bothNames = both.map((tool) => tool.name);
+    expect(bothNames).toContain('run_strategy');
+    expect(bothNames).toContain('prepare_strategy_data');
+    expect(bothNames).toContain('trial_strategy');
+  });
+
   it('trade 硬卡不能由环境变量开启', () => {
     expect(() => resolveAllowedSideEffects({ LUOOME_EXPOSE_TRADE: 'true' })).toThrow(
       /trade tools are never exposed/,

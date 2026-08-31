@@ -183,6 +183,8 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'sync_daily_bars',
   'sync_financial_facts',
   'run_strategy',
+  'trial_strategy',
+  'prepare_strategy_data',
   'generate_strategy_insight',
   'search_research_documents_hybrid',
   'rebuild_research_embeddings',
@@ -1684,6 +1686,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       },
     }),
   );
+  app.get('/api/strategy/dsl-catalog', () => callTool('get_strategy_dsl_catalog', {}));
   app.post('/api/strategies', (c) => targetMutation(c.req.raw, 'write', 'create_strategy'));
   app.delete('/api/strategies/:id', (c) =>
     targetMutation(c.req.raw, 'write', 'delete_strategy', {
@@ -1695,6 +1698,26 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   );
   app.get('/api/strategies/:id/workspace', (c) =>
     callTool('get_strategy_workspace', { strategyId: c.req.param('id') }),
+  );
+  app.get('/api/strategies/:id/experiment', (c) =>
+    callTool('get_strategy_experiment_context', {
+      strategyId: c.req.param('id'),
+      ...(c.req.query('baseVersionId') === undefined
+        ? {}
+        : { baseVersionId: c.req.query('baseVersionId') }),
+      ...(c.req.query('candidateVersionId') === undefined
+        ? {}
+        : { candidateVersionId: c.req.query('candidateVersionId') }),
+      ...(c.req.query('trainingSessionId') === undefined
+        ? {}
+        : { trainingSessionId: c.req.query('trainingSessionId') }),
+      ...(c.req.query('validationSessionId') === undefined
+        ? {}
+        : { validationSessionId: c.req.query('validationSessionId') }),
+      ...(c.req.query('observationHorizon') === undefined
+        ? {}
+        : { observationHorizon: c.req.query('observationHorizon') }),
+    }),
   );
   app.get('/api/strategies/:id/decision-cycles', (c) => {
     const runId = c.req.query('runId');
@@ -1739,6 +1762,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/api/strategies/:id/schedule', (c) =>
     callTool('get_strategy_schedule', { strategyId: c.req.param('id') }),
   );
+  app.get('/api/strategies/:id/recommendation-preflights', (c) => {
+    const limit = c.req.query('limit');
+    return callTool('get_strategy_recommendation_preflight_history', {
+      strategyId: c.req.param('id'),
+      ...(limit === undefined ? {} : { limit: Number(limit) }),
+    });
+  });
   app.post('/api/strategies/:id/schedule', (c) =>
     targetMutation(c.req.raw, 'write', 'set_strategy_schedule', {
       strategyId: c.req.param('id'),
@@ -1791,11 +1821,15 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     }),
   );
   app.post('/api/strategies/:id/run', async (c) => {
-    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
-    if (denied !== null) return jsonResult(denied);
     const body = await parseJsonObject(c.req.raw);
     if (!('parsed' in body)) return jsonResult(body);
-    const run = await invokeTool('run_strategy', {
+    const isTrial = body.data.persist === false;
+    const denied = requireMutationCapabilities(
+      c.req.raw,
+      isTrial ? ['external'] : ['write', 'external'],
+    );
+    if (denied !== null) return jsonResult(denied);
+    const run = await invokeTool(isTrial ? 'trial_strategy' : 'run_strategy', {
       ...body.data,
       strategyId: c.req.param('id'),
     });

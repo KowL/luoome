@@ -1,7 +1,7 @@
 # Strategy 生产可靠性运维手册
 
 本手册用于持续复核 Strategy 日运行的 schedule/run fencing、行情 checkpoint、provider fallback、
-SignalObservation 基准价与 T+1/T+3/T+5/T+20 补全。它只读取或生成可审计事实，不把历史评估称为
+SignalObservation 基准价与 T+1/T+3/T+5 补全。它只读取或生成可审计事实，不把历史评估称为
 收益回测，也不扩大自动 Advice、通知或交易范围。
 
 ## 1. 调度参数
@@ -33,7 +33,7 @@ luoome workflow run complete-strategy-observations --input '{"limit":1000}'
 2. `leaseLost=0`，长阶段有续租；失租后不得出现新的 observation、Advice 或通知副作用。
 3. checkpoint 的 coverage、`fallbackUsed` 和 provider 分布与真实返回来源一致。
 4. observation baseline 的 available/unavailable 和 provider 分布可解释；不可用不能填 0 或当前价。
-5. `byHorizon.t20` 的 created/completed/pending 随真实交易 session 推进；未到期保持 pending。
+5. `byHorizon.t1/t3/t5` 的 created/completed/pending 随真实交易 session 推进；未到期保持 pending。
 6. AI 不可用时周期可为 `partial` + facts-only，但已发布的事实运行不能因此被改写成 failed。
 
 ## 3. 周度汇总
@@ -76,8 +76,9 @@ LUOOME_MARKET_SOURCES=sina \
 保留命令输出和临时目录路径作为当次证据，至少记录执行时间、真实 provider、bar 数、失败原因与是否 fallback。
 公网失败是当次真实观测，不用测试数据替代；确定性 fault-injection 仍由自动测试负责。
 
-## 5. R5 与 T+20 边界
+## 5. R5 与 T+5 边界
 
 早期突破 v2 继续保持 draft。只有用户显式确认发布后，才从首个 published operational signal 的真实
-baseline 开始计算完整 T+20 观察期。历史诊断样本、evaluation run、当前行情快照或推断数据都不能作为
-R5 T+20 生产验收证据；观察完成前只报告样本数、缺失率和描述性事实，不生成收益承诺。
+baseline 开始计算 T+1/T+3/T+5 观察。历史诊断样本、evaluation run、当前行情快照或推断数据都不能作为
+R5 生产验收证据；T+5 完成前只报告样本数、缺失率和描述性事实，不生成收益承诺。T+20 已退役，存量
+记录不参与当前门禁。

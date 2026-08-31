@@ -524,6 +524,9 @@ describe('strategy-query', () => {
       stockName: '贵州茅台',
       stockId: '600519.SH',
     });
+    expect(compared.data.diff.rows[0]?.after?.result.scoringBreakdown).toEqual(
+      first.data.results[0]?.scoringBreakdown,
+    );
 
     const workspace = await getStrategyWorkspaceTool.execute({ strategyId: 'scan-strategy' }, ctx);
     expect(workspace.ok).toBe(true);
@@ -554,8 +557,29 @@ describe('strategy-query', () => {
     if (!detail.ok) return;
     expect(detail.data.run.id).toBe(first.data.run.id);
     expect(detail.data.results.map((result) => result.stockId)).toEqual(['300750.SZ', '600519.SH']);
+    expect(detail.data.results[0]?.scoringBreakdown).toEqual([
+      expect.objectContaining({
+        schemaVersion: 1,
+        ruleId: 'positive-price',
+        expression: '50',
+        status: 'available',
+        weight: 1,
+        rawScore: 50,
+        contribution: 50,
+      }),
+    ]);
     expect(detail.data.signals.length).toBeGreaterThan(0);
     expect(detail.data.signals.every((signal) => signal.runId === first.data.run.id)).toBe(true);
+
+    const views = await listStrategyResultViewsTool.execute(
+      { strategyId: 'scan-strategy', runId: first.data.run.id, view: 'selected' },
+      ctx,
+    );
+    expect(views.ok).toBe(true);
+    if (!views.ok) return;
+    expect(views.data.rows[0]?.view.result.scoringBreakdown).toEqual(
+      detail.data.results[0]?.scoringBreakdown,
+    );
 
     const missing = await getStrategyRunTool.execute({ runId: 'strategy-run-missing' }, ctx);
     expect(missing.ok).toBe(false);

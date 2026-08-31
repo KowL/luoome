@@ -24,8 +24,11 @@ StrategyRun 的 `status` 只表达执行生命周期：`running / complete / fai
 语义等同“执行已完成、数据部分可用”。新的当前股票池只消费通过 acceptance 且
 `publication=published` 的 operational run；evaluation、withheld 和 non-publishing 运行不会覆盖当前事实。
 股票进入策略股票池后，其后续事实链仍归 Strategy：
-StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5/T+20
+StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservation（T+1/T+3/T+5
 观察）→ Advice（建议快照）。关注列表不承载这条生命周期状态。
+
+SignalObservation 的有效观察周期固定为 T+1/T+3/T+5；T+20 已退役，不再创建、补全、展示或作为
+验收等待条件。存量 `horizon=t20` 行只保留读取兼容，不进入当前统计、推荐和实验事实。
 
 > 可靠性实现（2026-08-14）：`complete` 继续只表达执行终态；acceptance 与
 > `publication=published/withheld/non-publishing` 独立表达发布资格。生产 daily cycle 使用
@@ -38,8 +41,10 @@ StrategyResult（入选）→ StrategySignal（跟踪信号）→ SignalObservat
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
 cron、IANA 时区、启停状态、nextRunAt 和可选 StrategyRecommendationPolicy；修改调度不改变
 definitionHash。`luoome start` / Web 长期运行进程每分钟自动唤醒到期调度 workflow，实例间通过
-调度租约和正式运行租约防重。非交易日与暂停策略不运行。启用推荐政策后，完成运行会按最低评分、
-最高排名、每轮上限和冷却时间调用 AI 生成可追溯 Advice；配置的 T+n 观察完成时可再次生成阶段建议，
+调度租约和正式运行租约防重。非交易日与暂停策略不运行。存量无 `schemaVersion` 的
+RecommendationPolicy 继续按 V1 语义执行；只有显式 `schemaVersion=2` 的 policy 才执行账户级确定性预检。
+V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因、流动性、数据新鲜度、信号冲突和冷却；
+事实缺失时返回 unavailable，只有 eligible 候选才生成可追溯 Advice。配置的 T+n 观察完成时可再次生成阶段建议，
 并可选择日志或飞书通知。推荐失败不回滚已提交的 StrategyRun，任何建议与通知都不会自动交易。
 
 可靠性目标已落地为把调度、数据准备、正式运行、观察补全、洞察和可选推荐收进一个有 WorkflowRun
@@ -49,7 +54,7 @@ definitionHash。`luoome start` / Web 长期运行进程每分钟自动唤醒到
 ### StrategyInsight
 
 回答“策略最近实际发生了什么”。确定性事实层汇总运行变化、规则阻断、当前行业分布、关联
-AlertPlan，以及 StrategySignal 的 T+1/T+3/T+5/T+20 事后观察。AI 只解释事实层并必须引用存在的
+AlertPlan，以及 StrategySignal 的 T+1/T+3/T+5 事后观察。AI 只解释事实层并必须引用存在的
 fact id；不得把观察称为回测，不得给出收益承诺、未来概率或买卖建议。事实截止时间、观察截止
 时间、缺失率和小样本限制必须保留。
 

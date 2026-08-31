@@ -220,6 +220,7 @@ export const prepareStrategyDataTool = defineTool({
   name: 'prepare_strategy_data',
   description: '按配置化并发、超时和重试预算准备 Strategy 日线数据并提交可复用 checkpoint',
   sideEffect: 'external',
+  requiredCapabilities: ['external', 'write'],
   input: PrepareStrategyDataInput,
   output: PrepareStrategyDataOutput,
   handler: async (input, ctx: ToolContext) => {

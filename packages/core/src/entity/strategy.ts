@@ -523,6 +523,41 @@ export type RuleEvaluationV2 = z.infer<typeof RuleEvaluationV2Schema>;
 export const RuleEvaluationSchema = z.union([RuleEvaluationV2Schema, LegacyRuleEvaluationSchema]);
 export type RuleEvaluation = z.infer<typeof RuleEvaluationSchema>;
 
+const StrategyScoreComponentEvaluationBase = {
+  schemaVersion: z.literal(1),
+  ruleId: z.string().min(1),
+  expression: z.string().min(1),
+  inputs: z.array(RuleInputFactSchema),
+  weight: z.number().positive().max(1),
+};
+
+export const StrategyScoreComponentEvaluationSchema = z.discriminatedUnion('status', [
+  z
+    .object({
+      ...StrategyScoreComponentEvaluationBase,
+      status: z.literal('available'),
+      rawScore: z.number().min(0).max(100),
+      contribution: z.number().min(0).max(100),
+    })
+    .strict(),
+  z
+    .object({
+      ...StrategyScoreComponentEvaluationBase,
+      status: z.literal('missing'),
+    })
+    .strict(),
+  z
+    .object({
+      ...StrategyScoreComponentEvaluationBase,
+      status: z.literal('error'),
+      error: z.string().min(1),
+    })
+    .strict(),
+]);
+export type StrategyScoreComponentEvaluation = z.infer<
+  typeof StrategyScoreComponentEvaluationSchema
+>;
+
 export const StrategyResultSchema = z.object({
   runId: z.string().min(1),
   stockId: z.string().min(1),
@@ -530,6 +565,7 @@ export const StrategyResultSchema = z.object({
   score: z.number().min(0).max(100).optional(),
   rank: z.number().int().positive().optional(),
   ruleEvaluations: z.array(RuleEvaluationSchema),
+  scoringBreakdown: z.array(StrategyScoreComponentEvaluationSchema).optional(),
   evidence: z.array(z.string()),
   dataAsOf: z.coerce.date(),
 });

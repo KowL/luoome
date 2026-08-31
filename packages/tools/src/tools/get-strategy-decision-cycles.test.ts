@@ -265,7 +265,6 @@ describe('get_strategy_decision_cycles', () => {
       ['t1', 'complete'],
       ['t3', 'pending'],
       ['t5', 'unavailable'],
-      ['t20', 'unavailable'],
     ]);
     expect(cycle?.advices[0]?.basedOn.strategy).toMatchObject({
       runId: RUN_ID,

@@ -194,6 +194,12 @@ export const inspectStrategyDefinitionReferences = (
   for (const component of definition.scoring?.components ?? []) {
     addExpression(`scoring.${component.ruleId}.score`, component.score);
   }
+  const scoringRuleIds = definition.scoring?.components.map((component) => component.ruleId) ?? [];
+  for (const ruleId of new Set(scoringRuleIds)) {
+    if (scoringRuleIds.filter((candidate) => candidate === ruleId).length > 1) {
+      errors.push(`scoring component.ruleId 必须唯一: ${ruleId}`);
+    }
+  }
   for (const rule of [
     ...definition.signals.entry,
     ...definition.signals.exit,

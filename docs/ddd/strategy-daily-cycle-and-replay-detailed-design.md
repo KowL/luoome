@@ -1,6 +1,6 @@
 # Strategy 日运行与历史评估可靠性详细设计
 
-> 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+20 仍按开发计划持续验收
+> 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+5 仍按开发计划持续验收
 > 日期：2026-08-20
 > 关联计划：[Strategy 日运行与评估可靠性开发计划](../strategy-reliability-development-plan.md)
 > 影响范围：core、db、tools、workflows、Web/CLI/MCP 读取面
@@ -13,9 +13,9 @@ PIT 目录查找在午夜和日终之间分叉。
 
 本轮可靠性收口补充了 schedule lease 在数据准备后、发布后和推荐/通知前的同步续租检查；调度器将
 schedule lease、数据并发、陈旧窗口、重试和请求超时作为有界启动参数。数据准备与 observation candidate
-审计现在保留实际 bar/baseline provider、fallback 使用情况和 T+1/T+3/T+5/T+20 的创建/完成/pending
+审计现在保留实际 bar/baseline provider、fallback 使用情况和 T+1/T+3/T+5 的创建/完成/pending
 分布；汇总 Tool 将 `gate`（可靠性阻塞）与 `observationTarget`（样本成熟度）分离。跨交易日真实分布和
-R5 发布后的完整 T+20 仍未完成，继续按运维手册持续观察。
+R5 发布后的 T+5 事实继续按运维手册观察，但不再设置 T+20 等待条件。
 
 ## 1. 背景与覆盖关系
 
@@ -645,7 +645,7 @@ output = {
 create_strategy_observation_candidates({ runId: string })
 ```
 
-它只接受 publishable operational run，按 emitted signals 幂等创建 T+1/T+3/T+5/T+20 candidates。
+它只接受 publishable operational run，按 emitted signals 幂等创建 T+1/T+3/T+5 candidates。
 `complete_strategy_observations` 继续保持原子补全；现有 workflow 作为独立补偿入口保留。
 
 P0 先把 pending 查询改为 `dueAt/baselineAt ASC`，避免当前 `baselineAt DESC` 让旧样本饥饿。P1

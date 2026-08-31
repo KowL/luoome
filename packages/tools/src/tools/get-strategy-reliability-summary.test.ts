@@ -101,7 +101,6 @@ describe('get_strategy_reliability_summary', () => {
         baselines: { available: 2, unavailable: 0, providers: { sina: 2 } },
         byHorizon: {
           t1: { created: 2, completed: 2, pending: 0 },
-          t20: { created: 2, completed: 1, pending: 0 },
         },
       },
       insight: { factsOnly: 1, unavailable: 0 },
@@ -121,6 +120,7 @@ describe('get_strategy_reliability_summary', () => {
         blockers: ['lease-lost', 'publication-missing', 'cycle-failed'],
       },
     });
+    expect(result.data.observations.byHorizon).not.toHaveProperty('t20');
   });
 
   it('正式周期缺审计事实或被 withheld 时不能误报 ready', async () => {

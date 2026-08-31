@@ -439,7 +439,7 @@ export const makeStrategySchedule = (
     cooldownHours: 72,
     notify: false,
     channel: 'log',
-    observationHorizons: ['t3', 't5', 't20'],
+    observationHorizons: ['t3', 't5'],
   },
   nextRunAt: T1,
   createdAt: T0,
@@ -1955,6 +1955,30 @@ export const registerRepositoryContractTests = (
         ).toEqual([1, 2]);
       });
 
+      it('旧 StrategyVersion 的重复 scoring component 仍可存取', async () => {
+        await repos.strategy.create(makeStrategy('strategy-1'));
+        const base = makeStrategyVersion('strategy-1');
+        const definition = {
+          ...base.definition,
+          scoring: {
+            method: 'weighted-sum' as const,
+            components: [
+              { ruleId: 'rule-1', score: '50', weight: 0.5 },
+              { ruleId: 'rule-1', score: '60', weight: 0.5 },
+            ],
+          },
+        };
+        const legacyVersion: StrategyVersion = {
+          ...base,
+          definition,
+          definitionHash: strategyDefinitionHash(definition),
+        };
+
+        await repos.strategy.createVersion(legacyVersion);
+
+        expect(await repos.strategy.findVersionById(legacyVersion.id)).toEqual(legacyVersion);
+      });
+
       it('activateVersion 只接受同 Strategy 的 published valid version', async () => {
         await repos.strategy.create(makeStrategy('strategy-1'));
         const version = makeStrategyVersion('strategy-1');
@@ -2057,6 +2081,33 @@ export const registerRepositoryContractTests = (
         await expect(
           repos.strategySchedule.save({ ...schedule, id: 'conflicting-schedule' }),
         ).rejects.toThrow();
+      });
+
+      it('V2 recommendation policy 往返保留显式 schemaVersion 与账户预检配置', async () => {
+        const schedule = makeStrategySchedule('strategy-v2', {
+          recommendationPolicy: {
+            schemaVersion: 2,
+            enabled: true,
+            minScore: 70,
+            maxRank: 10,
+            maxPerRun: 3,
+            cooldownHours: 72,
+            notify: false,
+            channel: 'log',
+            observationHorizons: ['t3', 't5'],
+            portfolioPreflight: {
+              maxIndustryExposurePct: 35,
+              maxSinglePositionExposurePct: 20,
+              skipExistingHolding: true,
+              requireLiquidityFacts: true,
+              maxDataAgeTradingDays: 1,
+              rejectOnExitSignal: true,
+              rejectOnRiskSignal: true,
+            },
+          },
+        });
+        await repos.strategySchedule.save(schedule);
+        expect(await repos.strategySchedule.findById(schedule.id)).toEqual(schedule);
       });
 
       it('claimDue 原子抢占，只有 owner 可完成并推进 nextRunAt', async () => {
@@ -2492,6 +2543,29 @@ export const registerRepositoryContractTests = (
         const results = await repos.strategyRun.listResults('run-1');
         expect(results.map((result) => result.stockId)).toEqual(['002594.SZ', '600519.SH']);
         expect(results[1]?.score).toBe(90);
+      });
+
+      it('commitRun round-trip 保留可选 scoring breakdown', async () => {
+        const scoringBreakdown: NonNullable<StrategyResult['scoringBreakdown']> = [
+          {
+            schemaVersion: 1,
+            ruleId: 'rule-1',
+            expression: 'indicators.rsi14',
+            status: 'available',
+            inputs: [{ path: 'indicators.rsi14', status: 'available', value: 80 }],
+            weight: 0.5,
+            rawScore: 80,
+            contribution: 40,
+          },
+        ];
+        const original = makeStrategyResult('run-1', '600519.SH', { scoringBreakdown });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-1'),
+          results: [original],
+          signals: [],
+        });
+
+        expect(await repos.strategyRun.listResults('run-1')).toEqual([original]);
       });
 
       it('listResults 无 rank 的结果排在最后', async () => {

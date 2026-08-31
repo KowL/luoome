@@ -44,8 +44,11 @@ const EXPECTED_TOOL_NAMES = [
   'validate_strategy_manifest',
   'import_strategy_manifest',
   'compare_strategy_definitions',
+  'get_strategy_dsl_catalog',
+  'get_strategy_experiment_context',
   'propose_strategy_version_draft',
   'trial_strategy_version',
+  'trial_strategy',
   'validate_strategy_version',
   'publish_strategy_version',
   'pause_strategy',
@@ -147,6 +150,7 @@ const EXPECTED_TOOL_NAMES = [
   'get_market_data_status',
   'get_ashare_sentiment',
   'list_workflow_runs',
+  'get_strategy_recommendation_preflight_history',
   'get_strategy_reliability_summary',
   // Vibe A 股报告迁移 Phase 1
   'get_report',
@@ -215,6 +219,19 @@ describe('toolRegistry', () => {
       'external',
       'write',
     ]);
+  });
+
+  it('Strategy 持久化外部 tools 要求 external + write，单版本与 paired trial 保持 external-only', () => {
+    for (const name of ['run_strategy', 'prepare_strategy_data']) {
+      expect(toolRegistry.get(name)?.requiredCapabilities, name).toEqual(['external', 'write']);
+    }
+    for (const name of [
+      'propose_strategy_version_draft',
+      'trial_strategy',
+      'trial_strategy_version',
+    ]) {
+      expect(toolRegistry.get(name)?.requiredCapabilities, name).toEqual(['external']);
+    }
   });
 
   it('fundamental score tools use the required read/write capability split', () => {
@@ -299,6 +316,7 @@ describe('toolRegistry', () => {
       'sync_quotes',
       'sync_stock_events',
       'sync_stock_universe',
+      'trial_strategy',
       'trial_strategy_version',
     ]);
     const writeTools = toolRegistry

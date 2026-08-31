@@ -1,9 +1,10 @@
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  ActiveSignalObservationHorizonSchema,
   type Advice,
   AdviceSchema,
   isPublishableOperationalRun,
   type SignalObservation,
-  SignalObservationHorizonSchema,
   SignalObservationSchema,
   type StrategyResult,
   StrategyResultSchema,
@@ -21,7 +22,7 @@ import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 const HorizonStatusSchema = z.enum(['pending', 'complete', 'unavailable']);
 
 const ObservationProgressSchema = z.object({
-  horizon: SignalObservationHorizonSchema,
+  horizon: ActiveSignalObservationHorizonSchema,
   status: HorizonStatusSchema,
   observationIds: z.array(z.string().min(1)),
   factIds: z.array(z.string().min(1)),
@@ -95,7 +96,7 @@ type ObservationProgress = z.infer<typeof ObservationProgressSchema>;
 type TradeLink = z.infer<typeof TradeLinkSchema>;
 type StrategyCandidateCycle = z.infer<typeof StrategyCandidateCycleSchema>;
 
-const HORIZONS = ['t1', 't3', 't5', 't20'] as const;
+const HORIZONS = ACTIVE_SIGNAL_OBSERVATION_HORIZONS;
 
 function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
@@ -291,6 +292,7 @@ async function loadCycle(
     ? await ctx.repos.signalObservation.list({
         sourceKind: 'strategy-signal',
         sourceIds: signalIds,
+        horizons: HORIZONS,
         limit: 5000,
       })
     : [];

@@ -189,6 +189,74 @@ describe('Strategy 可靠性汇总 API', () => {
   });
 });
 
+describe('Strategy 预检历史 API', () => {
+  it('通过只读历史 Tool 返回脱敏的既有 preflight 快照', async () => {
+    const ctx = await buildTestContext();
+    await ctx.repos.workflowRun.save({
+      id: 'workflow-private-id',
+      workflowName: 'strategy-daily-cycle',
+      mode: 'scheduled',
+      status: 'succeeded',
+      startedAt: new Date('2026-08-31T09:00:00.000Z'),
+      finishedAt: new Date('2026-08-31T09:01:00.000Z'),
+      inputSummary: { strategyId: 'strategy-history-api' },
+      outputSummary: {
+        preflight: {
+          total: 1,
+          eligible: 0,
+          skipped: 1,
+          unavailable: 0,
+          details: [
+            {
+              accountId: 'account-private-id',
+              strategyId: 'strategy-history-api',
+              runId: 'run-private-id',
+              stockId: '600519.SH',
+              status: 'skipped',
+              reasons: [{ code: 'existing-holding', message: '已有持仓' }],
+              factReferences: ['fact-private-id'],
+              evaluatedAt: new Date('2026-08-31T09:00:30.000Z'),
+              metrics: {},
+            },
+          ],
+        },
+      },
+      providerStatuses: [],
+    });
+    const historyApp = createWebApp(ctx);
+    const response = await historyApp.fetch(
+      new Request(
+        'http://test/api/strategies/strategy-history-api/recommendation-preflights?limit=5',
+      ),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      ok: true,
+      data: {
+        strategyId: 'strategy-history-api',
+        runs: [
+          {
+            workflowStatus: 'succeeded',
+            skipped: 1,
+            candidates: [
+              {
+                stockId: '600519.SH',
+                status: 'skipped',
+                reasonCodes: ['existing-holding'],
+                factCount: 1,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('account-private-id');
+    expect(JSON.stringify(body)).not.toContain('run-private-id');
+    expect(JSON.stringify(body)).not.toContain('fact-private-id');
+  });
+});
+
 describe('研究 Vault API', () => {
   it('embedding 状态可读，混合检索与重建分别要求 external / external+write', async () => {
     const plainContext = await buildTestContext();
@@ -1628,6 +1696,100 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
     expect(definitionDiff.status).toBe(400);
   });
 
+  it('提供 DSL catalog 与实验上下文 GET read routes；缺候选时返回 200 blocked 数据', async () => {
+    const catalog = await app.fetch(new Request('http://test/api/strategy/dsl-catalog'));
+    expect(catalog.status).toBe(200);
+    expect(await catalog.json()).toMatchObject({
+      ok: true,
+      data: {
+        schemaVersion: 1,
+        fields: expect.arrayContaining([expect.objectContaining({ path: 'quote.close' })]),
+      },
+    });
+
+    const strategyId = 'web-strategy-experiment-route';
+    const created = await app.fetch(
+      targetRequest('/api/strategies', {
+        id: strategyId,
+        name: 'Web Experiment Strategy',
+        description: '验证实验上下文路由',
+      }),
+    );
+    expect(created.status).toBe(200);
+
+    const experiment = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/experiment?observationHorizon=t1`),
+    );
+    expect(experiment.status).toBe(200);
+    expect(await experiment.json()).toMatchObject({
+      ok: true,
+      data: {
+        strategy: { id: strategyId },
+        observations: { horizon: 't1', observationIds: [] },
+        promotion: {
+          status: 'blocked',
+          reasons: expect.arrayContaining(['candidate-version-missing']),
+        },
+      },
+    });
+
+    const forwardedTraining = await app.fetch(
+      new Request(
+        `http://test/api/strategies/${strategyId}/experiment?trainingSessionId=missing-training-session`,
+      ),
+    );
+    expect(forwardedTraining.status).toBe(404);
+    expect(await forwardedTraining.json()).toMatchObject({
+      ok: false,
+      error: {
+        kind: 'not_found',
+        entity: 'StrategyEvaluationSession',
+        id: 'missing-training-session',
+      },
+    });
+  });
+
+  it('实验 mutation 路由分别执行 external/write 能力闸口并拒绝跨源请求', async () => {
+    const externalOnly = createWebApp(await buildTestContext(), {
+      exposeWrite: false,
+      exposeExternal: true,
+    });
+    const writeOnly = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: false,
+    });
+    const guardedRequest = (path: string, origin = 'http://test'): Request =>
+      new Request(`http://test${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin },
+        body: '{}',
+      });
+
+    expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/versions'))).status).toBe(
+      403,
+    );
+    expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/validate'))).status).toBe(
+      403,
+    );
+    expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/publish'))).status).toBe(
+      403,
+    );
+    expect((await externalOnly.fetch(guardedRequest('/api/strategies/x3/backtests'))).status).toBe(
+      403,
+    );
+    expect((await writeOnly.fetch(guardedRequest('/api/strategies/x3/draft'))).status).toBe(403);
+    expect((await writeOnly.fetch(guardedRequest('/api/strategies/x3/trial'))).status).toBe(403);
+
+    const crossOrigin = await app.fetch(
+      guardedRequest('/api/strategies/x3/draft', 'https://evil.example'),
+    );
+    expect(crossOrigin.status).toBe(403);
+    expect(await crossOrigin.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'permission_denied' },
+    });
+  });
+
   it('策略闭环与全局复盘入口只调用 read tool，并保留参数校验/404', async () => {
     const strategyId = 'web-decision-cycle-routes';
     expect(
@@ -2443,6 +2605,131 @@ describe('web tool 闸口：能力开关', () => {
 });
 
 describe('web tool 闸口：external 白名单与拒绝面', () => {
+  it('external-only 的样本试跑走 trial_strategy，正式运行仍拒绝', async () => {
+    const externalOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    const sample = await externalOnly.fetch(
+      new Request('http://test/api/strategies/missing-strategy/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ persist: false }),
+      }),
+    );
+    expect(sample.status).toBe(404);
+    expect(await sample.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'not_found' },
+    });
+
+    const scheduled = await externalOnly.fetch(
+      new Request('http://test/api/strategies/missing-strategy/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ persist: false, mode: 'scheduled' }),
+      }),
+    );
+    expect(scheduled.status).toBe(400);
+    expect(await scheduled.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+
+    const formal = await externalOnly.fetch(
+      new Request('http://test/api/strategies/missing-strategy/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ persist: true }),
+      }),
+    );
+    expect(formal.status).toBe(403);
+
+    const genericTrial = await externalOnly.fetch(
+      new Request('http://test/api/tools/trial_strategy/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ input: { strategyId: 'missing-strategy', persist: false } }),
+      }),
+    );
+    expect(genericTrial.status).toBe(404);
+  });
+
+  it('Strategy 持久化外部 tools 在专用/通用 Web route 都要求 write + external', async () => {
+    const runRequest = (path: string): Request =>
+      new Request(`http://test${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ input: { strategyId: 'missing-strategy', persist: false } }),
+      });
+    const prepareRequest = (): Request =>
+      new Request('http://test/api/tools/prepare_strategy_data/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ input: {} }),
+      });
+
+    const externalOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: true,
+      exposeWrite: false,
+    });
+    expect(
+      (await externalOnly.fetch(runRequest('/api/strategies/missing-strategy/run'))).status,
+    ).toBe(403);
+    expect((await externalOnly.fetch(runRequest('/api/tools/run_strategy/call'))).status).toBe(403);
+    expect((await externalOnly.fetch(prepareRequest())).status).toBe(403);
+
+    const writeOnly = createWebApp(await buildTestContext(), {
+      exposeExternal: false,
+      exposeWrite: true,
+    });
+    expect((await writeOnly.fetch(runRequest('/api/strategies/missing-strategy/run'))).status).toBe(
+      403,
+    );
+    expect((await writeOnly.fetch(runRequest('/api/tools/run_strategy/call'))).status).toBe(403);
+    expect((await writeOnly.fetch(prepareRequest())).status).toBe(403);
+
+    const both = createWebApp(await buildTestContext(), {
+      exposeExternal: true,
+      exposeWrite: true,
+    });
+    const specialized = await both.fetch(runRequest('/api/strategies/missing-strategy/run'));
+    expect(specialized.status).toBe(404);
+    expect(await specialized.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'not_found' },
+    });
+    const generic = await both.fetch(runRequest('/api/tools/run_strategy/call'));
+    expect(generic.status).toBe(404);
+    expect(await generic.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'not_found' },
+    });
+    const prepared = await both.fetch(prepareRequest());
+    expect(prepared.status).toBe(400);
+    expect(await prepared.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+
+    const draft = await externalOnly.fetch(
+      new Request('http://test/api/tools/propose_strategy_version_draft/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ input: {} }),
+      }),
+    );
+    expect(draft.status).toBe(400);
+    const trial = await externalOnly.fetch(
+      new Request('http://test/api/tools/trial_strategy_version/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ input: {} }),
+      }),
+    );
+    expect(trial.status).toBe(400);
+  });
+
   it('远程研究导入在仅开启 external、未开启 write 时拒绝', async () => {
     const guarded = createWebApp(await buildTestContext(), {
       exposeWrite: false,

@@ -1606,7 +1606,7 @@ const renderDecisionLoopSummary = async () => {
   const trades = review.trades;
   const observations = review.signalObservations;
   const horizonStats = new Map((observations.stats ?? []).map((item) => [item.horizon, item]));
-  const horizonRows = ['t1', 't3', 't5', 't20'].map((horizon) => {
+  const horizonRows = ['t1', 't3', 't5'].map((horizon) => {
     const item = horizonStats.get(horizon);
     const sample = item?.total ?? 0;
     return el('tr', null, [

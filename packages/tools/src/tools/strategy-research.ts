@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  ActiveSignalObservationHorizonSchema,
   AdaptivePersonalityAssessmentSchema,
   AdaptivePersonalityPolicySchema,
   assessAdaptivePersonality,
@@ -190,7 +191,7 @@ export const AssessAdaptivePersonalityInput = z.object({
   parameterVersionId: z.string().min(1),
   trainingSessionId: z.string().min(1),
   validationSessionId: z.string().min(1),
-  observationHorizon: z.enum(['t1', 't3', 't5', 't20']).default('t5'),
+  observationHorizon: ActiveSignalObservationHorizonSchema.default('t5'),
   policy: AdaptivePersonalityPolicySchema.default({
     policyVersion: 'adaptive-personality-gate-v1',
     minTrainingTradingDays: 60,

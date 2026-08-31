@@ -55,3 +55,34 @@ describe('drizzle AdviceRepository 读兼容', () => {
     }
   });
 });
+
+describe('drizzle StrategyResult 读兼容', () => {
+  it('存量 rule_evaluations_json 数组无 breakdown 时仍可读取', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const ruleEvaluations = [
+        { ruleId: 'rule-1', status: 'matched', value: true, evidence: ['legacy'] },
+      ];
+      handle.db.run(sql`
+        INSERT INTO strategy_results (
+          run_id, stock_id, selected, score, rank, rule_evaluations_json, evidence_json, data_as_of
+        ) VALUES (
+          'legacy-result-run', '600519.SH', 1, 50, 1,
+          ${JSON.stringify(ruleEvaluations)}, ${JSON.stringify(['legacy'])}, 1782748800000
+        )
+      `);
+
+      const results = await handle.repos.strategyRun.listResults('legacy-result-run');
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        runId: 'legacy-result-run',
+        stockId: '600519.SH',
+        score: 50,
+        ruleEvaluations,
+      });
+      expect(results[0]).not.toHaveProperty('scoringBreakdown');
+    } finally {
+      handle.close();
+    }
+  });
+});

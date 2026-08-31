@@ -12,8 +12,18 @@ export const SignalObservationSourceKindSchema = z.enum([
 ]);
 export type SignalObservationSourceKind = z.infer<typeof SignalObservationSourceKindSchema>;
 
+export const ACTIVE_SIGNAL_OBSERVATION_HORIZONS = ['t1', 't3', 't5'] as const;
+export const ActiveSignalObservationHorizonSchema = z.enum(ACTIVE_SIGNAL_OBSERVATION_HORIZONS);
+export type ActiveSignalObservationHorizon = z.infer<typeof ActiveSignalObservationHorizonSchema>;
+
+/** `t20` 仅用于读取既有持久化观察；新候选、补全与产品视图只使用 active horizons。 */
 export const SignalObservationHorizonSchema = z.enum(['t1', 't3', 't5', 't20']);
 export type SignalObservationHorizon = z.infer<typeof SignalObservationHorizonSchema>;
+
+export const isActiveSignalObservationHorizon = (
+  horizon: SignalObservationHorizon,
+): horizon is ActiveSignalObservationHorizon =>
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS.includes(horizon as ActiveSignalObservationHorizon);
 
 export const SignalObservationStatusSchema = z.enum(['pending', 'complete', 'unavailable']);
 export type SignalObservationStatus = z.infer<typeof SignalObservationStatusSchema>;

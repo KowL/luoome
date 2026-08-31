@@ -6,7 +6,7 @@
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 相关设计：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)、[Web 对话助手设计](./web-chat-design.md)
 > 当前实现：`packages/core/src/entity/strategy.ts`、`packages/core/src/strategy/definition-diff.ts`、`packages/tools/src/tools/strategy-definition.ts`、`packages/tools/src/tools/strategy-query.ts`、`packages/tools/src/tools/run-strategy.ts`、`apps/web/src/server.ts`、`apps/web/public/js/target-pages.js`
-> 2026-08-20 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线，当前发布资格以 Summary V4、acceptance 和 publication 为准。schedule/data 运营参数、跨阶段 fencing 检查、实际 provider/baseline 与 T+1/T+3/T+5/T+20 审计已接入；跨交易日真实性能分布和 R5 发布后的 T+20 仍是观察项。
+> 2026-08-20 可靠性修订：[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md) 覆盖本文“所有 complete/legacy partial 均可作为 current”和“固定租约”结论；本文记录工作台 Phase A～C 基线，当前发布资格以 Summary V4、acceptance 和 publication 为准。schedule/data 运营参数、跨阶段 fencing 检查、实际 provider/baseline 与 T+1/T+3/T+5 审计已接入；T+20 已退役，不再作为观察等待项。
 
 ## 1. 设计结论
 
@@ -791,7 +791,7 @@ Diff 默认比较最近两次 published operational run。用户选择 from/to �
 Phase A 展示占位说明，不发起 LLM 请求。Phase B 只有在存在可审计事实时展示：
 
 - 30 天进入/退出、候选转正和规则阻断频次；
-- StrategySignal 的 T+1/T+3/T+5/T+20 观察；
+- StrategySignal 的 T+1/T+3/T+5 观察；
 - 样本数、唯一股票、完整率/缺失率、均值/中位数/P25/P75、超额收益、MFE/MAE、benchmarkStatus 和观察截止时间；
 - 观察聚合按 `stock-day-horizon` 去重，同一股票同一基准交易日同一周期只保留一个可追溯代表
   `SignalObservation`；Tool、Web 和 AI facts 使用同一去重口径，缺失 benchmark 不回填为 0；
@@ -993,7 +993,7 @@ z.enum(['watch-trigger', 'strategy-signal', 'tactic-signal'])
 
 - `sourceKind='strategy-signal'`；
 - `sourceId=StrategySignal.id`；
-- horizon 为 t1/t3/t5/t20；
+- horizon 为 t1/t3/t5；存量 t20 只读兼容，不再生成；
 - baseline 优先使用信号求值时的 quote close，否则使用同次求值的最新日线 close；
 - provenance 明确 provider、dataAsOf 和缺失原因。
 

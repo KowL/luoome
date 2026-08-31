@@ -246,7 +246,7 @@
    `000300.SH:qfq:daily:v1` benchmark，以及 50 张表的 Drizzle/SQLite
    schema drift 契约（逐表列与显式索引）；剩余跨交易日 P50/P95/max 样本；
    本轮再补 schedule/data 有界运营参数、数据准备后/发布后/下游副作用前 fencing 复核、实际
-   provider/baseline/fallback 与 T+1/T+3/T+5/T+20 审计字段，并提供可重复运维 Runbook；
+   provider/baseline/fallback 与 T+1/T+3/T+5 审计字段，并提供可重复运维 Runbook；
    非只读 Tool 的 JSONL audit log 已接入 CLI/MCP/TUI/Web 四个生产入口，文件权限、元数据审计和 Advice
    prompt-injection 清理均有测试；Tool 的 input issues、InvariantError、handler 和 output schema
    错误出口统一脱敏；release checklist 已完成逐项复核，但不改变 S3 生产观测要求。

@@ -100,7 +100,7 @@ describe('strategy-recommendations workflow', () => {
         cooldownHours: 72,
         notify: true,
         channel: 'log' as const,
-        observationHorizons: ['t3', 't5', 't20'] as const,
+        observationHorizons: ['t3', 't5'] as const,
       },
     };
     const first = await strategyRecommendationsWorkflow.run(input, ctx);
@@ -178,12 +178,50 @@ describe('strategy-recommendations workflow', () => {
           cooldownHours: 72,
           notify: true,
           channel: 'log',
-          observationHorizons: ['t3', 't5', 't20'],
+          observationHorizons: ['t3', 't5'],
         },
       },
       ctx,
     );
     expect(result).toMatchObject({ ok: true, data: { advices: [] } });
     expect(await ctx.repos.notification.listRecent()).toHaveLength(0);
+  });
+
+  it('V2 在 workflow 输出账户级预检摘要，并在已有持仓时不生成 Advice', async () => {
+    const { ctx, run } = await seedRun();
+    const result = await strategyRecommendationsWorkflow.run(
+      {
+        strategyId: 'recommend',
+        runId: run.id,
+        stockIds: ['600519.SH'],
+        policy: {
+          schemaVersion: 2,
+          enabled: true,
+          minScore: 70,
+          maxRank: 10,
+          maxPerRun: 3,
+          cooldownHours: 72,
+          notify: false,
+          channel: 'log',
+          observationHorizons: ['t3', 't5'],
+          portfolioPreflight: {
+            skipExistingHolding: true,
+            requireLiquidityFacts: false,
+            maxDataAgeTradingDays: 30,
+            rejectOnExitSignal: true,
+            rejectOnRiskSignal: true,
+          },
+        },
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.advices).toEqual([]);
+    expect(result.data.preflight).toMatchObject({ total: 1, eligible: 0, skipped: 1 });
+    expect(result.data.preflight?.details[0]?.reasons.map((reason) => reason.code)).toContain(
+      'existing-holding',
+    );
   });
 });

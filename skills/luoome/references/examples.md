@@ -24,8 +24,10 @@ User gives a stock, side, quantity, price and execution time:
 ## Run a Strategy sample
 
 1. Use `list_strategies` or `get_strategy` to identify a published Strategy and exact version.
-2. For an automatic sample, invoke `run_strategy` with explicit `stockIds` and `persist=false`.
-3. A persisted or full-market run requires an explicit confirmation.
+2. For an automatic sample, invoke `trial_strategy` with explicit `stockIds`; it is fixed to
+   `persist=false` and is not a scheduled run.
+3. A persisted or full-market run requires an explicit confirmation; use `run_strategy` with
+   `persist=true`.
 4. Explain that StrategyResult and StrategySignal are evidence, not an order or guaranteed outcome.
 
 ## Analyze a stock

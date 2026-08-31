@@ -542,7 +542,7 @@ StrategyVersion  不可变 DSL 定义、hash、校验与发布时间
 StrategyRun      一次运行的 coverage、dataAsOf、执行状态、数据完整度和 provider 状态
 StrategyResult   逐股规则结果、分数、排名、证据
 StrategySignal   按规则产生的方向、分数、证据事实
-SignalObservation StrategySignal 在 T+1/T+3/T+5/T+20 的真实表现事实
+SignalObservation StrategySignal 在 T+1/T+3/T+5 的真实表现事实；存量 T+20 仅兼容读取
 Watchlist        统一观察集合
 WatchlistMember  股票、研究阶段、优先级
 AlertPlan        引用 Watchlist 的规则、冷却和通知策略

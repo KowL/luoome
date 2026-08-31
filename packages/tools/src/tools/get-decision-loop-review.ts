@@ -1,4 +1,6 @@
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  ActiveSignalObservationHorizonSchema,
   type Advice,
   aggregateSignalObservationStats,
   deduplicateSignalObservations,
@@ -6,7 +8,6 @@ import {
   ResearchHypothesisVersionStatusSchema,
   SIGNAL_OBSERVATION_SAMPLE_UNIT,
   type SignalObservation,
-  SignalObservationHorizonSchema,
   type Trade,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -63,7 +64,7 @@ const TradeAttributionSchema = z.object({
 
 const SignalStatsSchema = z.object({
   group: z.string().min(1),
-  horizon: SignalObservationHorizonSchema,
+  horizon: ActiveSignalObservationHorizonSchema,
   sampleUnit: z.literal(SIGNAL_OBSERVATION_SAMPLE_UNIT),
   total: z.number().int().nonnegative(),
   complete: z.number().int().nonnegative(),
@@ -184,6 +185,7 @@ const buildSignalReview = (observations: readonly SignalObservation[]) => {
     const completeRows = rows.filter((observation) => observation.status === 'complete');
     return {
       ...aggregate,
+      horizon: ActiveSignalObservationHorizonSchema.parse(aggregate.horizon),
       observationIds: [...aggregate.observationIds],
       sampleUnit: SIGNAL_OBSERVATION_SAMPLE_UNIT,
       pending: rows.filter((observation) => observation.status === 'pending').length,
@@ -231,6 +233,7 @@ export const getDecisionLoopReviewTool = defineTool({
       ctx.repos.signalObservation.list({
         ...(input.since === undefined ? {} : { from: input.since }),
         ...(input.until === undefined ? {} : { to: input.until }),
+        horizons: ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
         limit: input.limit,
       }),
     ]);

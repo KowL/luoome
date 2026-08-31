@@ -59,7 +59,7 @@ describe('strategy schedule tools', () => {
     expect(await getStrategyScheduleTool.execute({ strategyId: 'scheduled' }, ctx)).toEqual(saved);
   });
 
-  it('保存默认关闭的自动推荐政策', async () => {
+  it('保存自动推荐政策时移除已退役的 T+20 配置', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     await seedActiveStrategy(ctx);
     const saved = await setStrategyScheduleTool.execute(
@@ -89,7 +89,7 @@ describe('strategy schedule tools', () => {
       cooldownHours: 48,
       notify: false,
       channel: 'log',
-      observationHorizons: ['t3', 't5', 't20'],
+      observationHorizons: ['t3', 't5'],
     });
   });
 

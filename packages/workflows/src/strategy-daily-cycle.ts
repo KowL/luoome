@@ -1,9 +1,12 @@
 import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  type ActiveSignalObservationHorizon,
   DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
   isHoliday,
   isWeekend,
   STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
+  StrategyRecommendationPreflightSummarySchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -42,6 +45,7 @@ const CycleItemSchema = z.object({
     .optional(),
   adviceCount: z.number().int().nonnegative().optional(),
   notificationFailed: z.number().int().nonnegative().optional(),
+  preflight: StrategyRecommendationPreflightSummarySchema.optional(),
   reason: z.string().optional(),
 });
 export const StrategyDailyCycleOutput = z.object({
@@ -133,6 +137,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       | undefined;
     let adviceCount: number | undefined;
     let notificationFailed: number | undefined;
+    let preflight: z.infer<typeof StrategyRecommendationPreflightSummarySchema> | undefined;
     let leaseRenewals = 0;
     let checkpointSummary:
       | {
@@ -168,7 +173,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             providers: Record<string, number>;
           };
           byHorizon: Record<
-            't1' | 't3' | 't5' | 't20',
+            ActiveSignalObservationHorizon,
             {
               created: number;
               skipped: number;
@@ -304,6 +309,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             watchlistSync,
             adviceCount,
             notificationFailed,
+            preflight,
             leaseRenewals,
             checkpoint: checkpointSummary,
             dataPreparationPerformance,
@@ -628,7 +634,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
               pending: 0,
               baselines: candidates.data.baselines,
               byHorizon: Object.fromEntries(
-                (['t1', 't3', 't5', 't20'] as const).map((horizon) => [
+                ACTIVE_SIGNAL_OBSERVATION_HORIZONS.map((horizon) => [
                   horizon,
                   { ...candidates.data.horizons[horizon], scanned: 0, completed: 0, pending: 0 },
                 ]),
@@ -685,7 +691,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
               completed: completed.ok ? completed.data.completed : 0,
               pending: completed.ok ? completed.data.pending : 0,
               byHorizon: Object.fromEntries(
-                (['t1', 't3', 't5', 't20'] as const).map((horizon) => [
+                ACTIVE_SIGNAL_OBSERVATION_HORIZONS.map((horizon) => [
                   horizon,
                   {
                     ...currentObservationSummary.byHorizon[horizon],
@@ -731,11 +737,13 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
                 } else if (recommendations.data.notificationFailed > 0) {
                   adviceCount = recommendations.data.advices.length;
                   notificationFailed = recommendations.data.notificationFailed;
+                  preflight = recommendations.data.preflight;
                   status = 'partial';
                   reason = `${recommendations.data.notificationFailed} 条通知发送失败`;
                 } else {
                   adviceCount = recommendations.data.advices.length;
                   notificationFailed = recommendations.data.notificationFailed;
+                  preflight = recommendations.data.preflight;
                 }
                 if (scheduleLeaseLost) {
                   status = 'failed';
@@ -784,6 +792,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       ...(watchlistSync === undefined ? {} : { watchlistSync }),
       ...(adviceCount === undefined ? {} : { adviceCount }),
       ...(notificationFailed === undefined ? {} : { notificationFailed }),
+      ...(preflight === undefined ? {} : { preflight }),
       ...(reason === undefined ? {} : { reason }),
     });
   }

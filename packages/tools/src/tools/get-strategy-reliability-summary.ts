@@ -1,3 +1,8 @@
+import {
+  ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
+  type ActiveSignalObservationHorizon,
+  ActiveSignalObservationHorizonSchema,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -78,7 +83,7 @@ export const GetStrategyReliabilitySummaryOutput = z.object({
       providers: z.record(z.string(), z.number().int().nonnegative()),
     }),
     byHorizon: z.record(
-      z.enum(['t1', 't3', 't5', 't20']),
+      ActiveSignalObservationHorizonSchema,
       z.object({
         created: z.number().int().nonnegative(),
         completed: z.number().int().nonnegative(),
@@ -195,12 +200,12 @@ export const getStrategyReliabilitySummaryTool = defineTool({
     const checkpointProviders = new Map<string, number>();
     const observationBaselineProviders = new Map<string, number>();
     const observationByHorizon = Object.fromEntries(
-      (['t1', 't3', 't5', 't20'] as const).map((horizon) => [
+      ACTIVE_SIGNAL_OBSERVATION_HORIZONS.map((horizon) => [
         horizon,
         { created: 0, completed: 0, pending: 0 },
       ]),
     ) as Record<
-      't1' | 't3' | 't5' | 't20',
+      ActiveSignalObservationHorizon,
       { created: number; completed: number; pending: number }
     >;
     const observations = {
@@ -309,7 +314,7 @@ export const getStrategyReliabilitySummaryTool = defineTool({
           }
         }
         const byHorizon = recordValue(observation.byHorizon);
-        for (const horizon of ['t1', 't3', 't5', 't20'] as const) {
+        for (const horizon of ACTIVE_SIGNAL_OBSERVATION_HORIZONS) {
           const row = recordValue(byHorizon?.[horizon]);
           observationByHorizon[horizon].created += Math.max(
             0,

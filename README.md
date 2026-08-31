@@ -178,7 +178,7 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 50 8 * * 1-5  luoome workflow run evaluate-event-rules
 # 盘后数据闭环：目录完整快照 + 相关股票前复权日线 + 数据健康汇总
 30 16 * * 1-5  luoome workflow run post-market-data
-# 盘后补齐信号 T+1/T+3/T+5/T+20 真实表现（未到期样本保持 pending）
+# 盘后补齐信号 T+1/T+3/T+5 真实表现（未到期样本保持 pending）
 10 18 * * 1-5   luoome workflow run complete-strategy-observations
 # 收盘复盘与周报：报告先保存，通知失败只会把 WorkflowRun 降为 partial
 0 18 * * 1-5   luoome workflow run closing-report --mode scheduled

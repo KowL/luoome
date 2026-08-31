@@ -51,6 +51,7 @@ import { getStockMarketViewTool } from './tools/get-stock-market-view.js';
 import { getStockMinuteBarsTool } from './tools/get-stock-minute-bars.js';
 import { getStockUniverseStatusTool } from './tools/get-stock-universe-status.js';
 import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cycles.js';
+import { getStrategyRecommendationPreflightHistoryTool } from './tools/get-strategy-recommendation-preflight-history.js';
 import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
@@ -101,7 +102,7 @@ import {
   syncResearchVaultTool,
 } from './tools/research-vault.js';
 import { getResearchVaultRemoteSyncStatusTool } from './tools/research-vault-git-sync.js';
-import { runStrategyTool } from './tools/run-strategy.js';
+import { runStrategyTool, trialStrategyTool } from './tools/run-strategy.js';
 import { searchStocksTool } from './tools/search-stocks.js';
 import { fetchSectorQuotesTool } from './tools/sector-quote.js';
 import { sendNotificationTool } from './tools/send-notification.js';
@@ -131,6 +132,10 @@ import {
   resumeStrategyEvaluationSessionTool,
   startStrategyEvaluationSessionTool,
 } from './tools/strategy-evaluation.js';
+import {
+  getStrategyDslCatalogTool,
+  getStrategyExperimentContextTool,
+} from './tools/strategy-experiment.js';
 import {
   generateStrategyInsightTool,
   getStrategyInsightFactsTool,
@@ -314,6 +319,7 @@ export const toolRegistry: Registry = createRegistry([
   getConfidenceCalibrationTool,
   getDecisionLoopReviewTool,
   getStrategyDecisionCyclesTool,
+  getStrategyRecommendationPreflightHistoryTool,
   getFinancialFactsTool,
   getFundamentalScoreTool,
   getWatchStatusTool,
@@ -339,6 +345,8 @@ export const toolRegistry: Registry = createRegistry([
   deleteStrategyTool,
   createStrategyVersionTool,
   compareStrategyDefinitionsTool,
+  getStrategyDslCatalogTool,
+  getStrategyExperimentContextTool,
   proposeStrategyVersionDraftTool,
   trialStrategyVersionTool,
   validateStrategyVersionTool,
@@ -349,6 +357,7 @@ export const toolRegistry: Registry = createRegistry([
   pauseStrategyTool,
   resumeStrategyTool,
   runStrategyTool,
+  trialStrategyTool,
   prepareStrategyDataTool,
   createPortfolioCashFlowTool,
   createPortfolioCorporateActionTool,
