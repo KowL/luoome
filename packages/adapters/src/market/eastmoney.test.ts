@@ -21,6 +21,15 @@ const makeQuoteOk = () => ({
   f168: 0.69,
   f169: 100,
   f170: 0.95,
+  f84: 2_000_000_000,
+  f85: 1_800_000_000,
+  f116: 200_000_000_000,
+  f117: 180_000_000_000,
+  f162: 18.2,
+  f163: 21.4,
+  f164: 19.6,
+  f167: 3.8,
+  f245: 2.7,
 });
 
 describe('market/eastmoney', () => {
@@ -37,6 +46,17 @@ describe('market/eastmoney', () => {
       expect(q.observedAt).toEqual(new Date('2026-07-24T07:00:00.000Z'));
       expect(q.fetchedAt).toEqual(new Date('2026-07-24T07:00:05.000Z'));
       expect(q.timestampSource).toBe('upstream');
+      expect(q).toMatchObject({
+        totalShares: 2_000_000_000,
+        floatShares: 1_800_000_000,
+        totalMarketCap: 200_000_000_000,
+        floatMarketCap: 180_000_000_000,
+        peDynamic: 18.2,
+        peStatic: 21.4,
+        peTtm: 19.6,
+        pb: 3.8,
+        psTtm: 2.7,
+      });
     });
 
     it('f60 昨收 → prevClose 填充；f60 缺失 → 无 prevClose', async () => {

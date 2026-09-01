@@ -10,6 +10,8 @@ import {
   formatVolume,
   sessionLabel,
   sourceSummary,
+  stockCodeLabel,
+  xueqiuStockUrl,
 } from './market-shared.js';
 import { $, el, fmtNum, fmtPct, fmtSigned, mount } from './ui.js';
 
@@ -23,7 +25,18 @@ const setText = (id, text, className) => {
 const renderQuoteHeader = (data) => {
   const { stock, quote, dataStatus } = data;
   setText('#market-quote-name', stock.name);
-  setText('#market-quote-code', `${stock.id} · ${stock.exchange}`);
+  setText('#market-quote-code', stockCodeLabel(stock));
+  const codeLink = $('#market-quote-code');
+  if (codeLink !== null) {
+    const href = xueqiuStockUrl(stock.id);
+    if (href === null) {
+      codeLink.removeAttribute('href');
+      codeLink.removeAttribute('aria-label');
+    } else {
+      codeLink.setAttribute('href', href);
+      codeLink.setAttribute('aria-label', `在雪球查看 ${stock.name}（${stock.id}）`);
+    }
+  }
   setText(
     '#market-quote-price',
     fmtNum(quote.quote.close),
@@ -49,6 +62,15 @@ const renderQuoteHeader = (data) => {
     'num',
   );
   setText('#market-quote-amplitude', fmtPct(quote.amplitude), 'num');
+  setText('#market-quote-total-market-cap', formatAmount(quote.quote.totalMarketCap), 'num');
+  setText('#market-quote-float-market-cap', formatAmount(quote.quote.floatMarketCap), 'num');
+  setText('#market-quote-pe-ttm', fmtNum(quote.quote.peTtm), 'num');
+  setText('#market-quote-pe-dynamic', fmtNum(quote.quote.peDynamic), 'num');
+  setText('#market-quote-pe-static', fmtNum(quote.quote.peStatic), 'num');
+  setText('#market-quote-ps-ttm', fmtNum(quote.quote.psTtm), 'num');
+  setText('#market-quote-pb', fmtNum(quote.quote.pb), 'num');
+  setText('#market-quote-total-shares', formatVolume(quote.quote.totalShares), 'num');
+  setText('#market-quote-float-shares', formatVolume(quote.quote.floatShares), 'num');
   setText('#market-quote-fetched', fetchedAtLabel(dataStatus.quoteFetchedAt));
   setText('#market-quote-source', sourceSummary(dataStatus.sources, quote.quote.source));
 
@@ -76,6 +98,9 @@ const resetQuoteHeader = () => {
       node.textContent = '--';
     });
   setText('#market-quote-price', '--', 'market-quote-price');
+  const codeLink = $('#market-quote-code');
+  codeLink?.removeAttribute('href');
+  codeLink?.removeAttribute('aria-label');
   const badges = $('#market-quote-badges');
   if (badges !== null) mount(badges, null);
 };

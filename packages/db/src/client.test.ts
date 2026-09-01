@@ -337,7 +337,7 @@ describe('createDrizzleRepos / ensureSchema', () => {
     }
   });
 
-  it('旧版 price_snapshots（无 amount/turnover_rate 列）幂等迁移并保留数据', async () => {
+  it('旧版 price_snapshots 幂等补齐成交与估值列并保留数据', async () => {
     const fs = await import('node:fs');
     const os = await import('node:os');
     const path = await import('node:path');
@@ -374,10 +374,17 @@ describe('createDrizzleRepos / ensureSchema', () => {
         .map((c) => c.name);
       expect(cols).toContain('amount');
       expect(cols).toContain('turnover_rate');
+      expect(cols).toContain('total_market_cap');
+      expect(cols).toContain('float_market_cap');
+      expect(cols).toContain('pe_ttm');
+      expect(cols).toContain('ps_ttm');
+      expect(cols).toContain('pb');
       const migrated = await handle.repos.quote.latestByStock('600519.SH');
       expect(migrated).toMatchObject({ stockId: '600519.SH', source: 'legacy', close: 100.5 });
       expect(migrated?.amount).toBeUndefined();
       expect(migrated?.turnoverRatePct).toBeUndefined();
+      expect(migrated?.totalMarketCap).toBeUndefined();
+      expect(migrated?.peTtm).toBeUndefined();
       ensureSchema(handle.db); // 再跑一次幂等
       expect(
         await handle.repos.quote.listInRange('600519.SH', new Date(0), new Date(8.64e15)),

@@ -309,7 +309,10 @@ export class MarketDataManager implements MarketDataAdapter {
   }
 
   /** 拉单股快照（带缓存 + 限速 + fallback + 静默降级）。 */
-  async fetchQuote(stockCode: string): Promise<Quote> {
+  async fetchQuote(
+    stockCode: string,
+    options: { readonly requireDetails?: boolean } = {},
+  ): Promise<Quote> {
     return this.routeWithFallback({
       capability: 'quote',
       request: { stockId: stockCode },
@@ -317,6 +320,15 @@ export class MarketDataManager implements MarketDataAdapter {
         const cached = this.quoteCache.get(stockCode);
         if (cached !== undefined) {
           this.logger.debug('manager.fetchQuote cache hit', { stockCode });
+        }
+        if (
+          options.requireDetails === true &&
+          cached !== undefined &&
+          cached.totalMarketCap === undefined &&
+          cached.peTtm === undefined &&
+          cached.pb === undefined
+        ) {
+          return undefined;
         }
         return cached;
       },

@@ -12,10 +12,9 @@ import {
 } from './holdings-actions.js';
 import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
-import { buildMarketLink, navigateToStock, parseRouteHash } from './market.js';
+import { buildMarketLink, parseRouteHash } from './market.js';
 import { DATASET_LABELS } from './market-sync.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
-import { createStockSearchBox } from './search-box.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
   $,
@@ -77,13 +76,6 @@ const stockMarketLink = (stockId, text) => {
   const a = el('a', 'stock-link', text);
   a.setAttribute('href', buildMarketLink(stockId));
   return a;
-};
-
-/** 仪表盘搜索框只建一次（renderDashboard 有 5s 自动刷新）；选中走行情页统一入口。 */
-const bindDashboardSearch = () => {
-  const wrap = $('#dashboard-stock-search');
-  if (wrap === null) return;
-  createStockSearchBox(wrap, { onSelect: (stock) => navigateToStock(stock) });
 };
 
 /* ---- 看板纯函数（pages.test.js 直接单测） ---- */
@@ -270,7 +262,6 @@ const sortAlerts = (triggers) =>
   });
 
 const renderDashboard = async (setStatus) => {
-  bindDashboardSearch();
   const result = await callApi('/api/dashboard');
   if (!result.ok) {
     setStatus(`仪表盘加载失败：${result.error.kind}`, true);

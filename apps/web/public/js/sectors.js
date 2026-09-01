@@ -12,6 +12,7 @@
 
 import { callApi } from './api.js';
 import { renderSectorHeatmap, selectSectorExtremes } from './sector-heatmap.js';
+import { stockCodeLink } from './stock-link.js';
 import { $, el, mount } from './ui.js';
 
 const formatPct = (n) => `${n > 0 ? '+' : ''}${(n * 100).toFixed(2)}%`;
@@ -34,7 +35,17 @@ const renderRow = (item) =>
     el('td', 'num', formatAmount(item.amount)),
     el('td', 'num pos', item.upCount !== undefined ? String(item.upCount) : '--'),
     el('td', 'num neg', item.downCount !== undefined ? String(item.downCount) : '--'),
-    el('td', '', item.leadingStockName ?? '--'),
+    el(
+      'td',
+      '',
+      item.leadingStockCode === undefined
+        ? (item.leadingStockName ?? '--')
+        : stockCodeLink(
+            item.leadingStockCode,
+            item.leadingStockName ?? item.leadingStockCode,
+            'sector-leading-stock-link',
+          ),
+    ),
     item.leadingStockChangePct !== undefined
       ? pctCell(item.leadingStockChangePct)
       : el('td', 'num', '--'),

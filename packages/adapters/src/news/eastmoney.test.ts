@@ -52,10 +52,11 @@ describe('EastmoneySource.fetchNews', () => {
   it('字段映射：id=code、showTime 按 +08:00 解析、uniqueUrl 优先且 http→https、summary 空串缺省', async () => {
     const { fetchImpl, urls } = stubFetch(() => okJson(NEWS_FIXTURE));
     const source = new EastmoneySource({ fetchImpl, now: () => 1787367000000 });
-    const result = await source.fetchNews(30);
+    const result = await source.fetchNews(1, 30);
 
     expect(urls[0]).toContain('getNewsByColumns');
     expect(urls[0]).toContain('column=350');
+    expect(urls[0]).toContain('page_index=1');
     expect(urls[0]).toContain('page_size=30');
     expect(urls[0]).toContain('req_trace=1787367000000');
 
@@ -87,7 +88,7 @@ describe('EastmoneySource.fetchNews', () => {
       }),
     );
     const source = new EastmoneySource({ fetchImpl });
-    const result = await source.fetchNews(30);
+    const result = await source.fetchNews(1, 30);
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.id).toContain('2026-08-22T11:00:00+08:00');
   });
@@ -97,11 +98,11 @@ describe('EastmoneySource.fetchNews', () => {
       okJson({ code: '0', message: 'Required String parameter req_trace is not present' }),
     );
     const badSource = new EastmoneySource({ fetchImpl: badCode });
-    await expect(badSource.fetchNews(30)).rejects.toMatchObject({ kind: 'upstream_error' });
-    await expect(badSource.fetchNews(30)).rejects.toThrow(/上游错误/);
+    await expect(badSource.fetchNews(1, 30)).rejects.toMatchObject({ kind: 'upstream_error' });
+    await expect(badSource.fetchNews(1, 30)).rejects.toThrow(/上游错误/);
 
     const { fetchImpl: empty } = stubFetch(() => okJson({ code: '1', data: null }));
-    const result = await new EastmoneySource({ fetchImpl: empty }).fetchNews(30);
+    const result = await new EastmoneySource({ fetchImpl: empty }).fetchNews(1, 30);
     expect(result.items).toEqual([]);
   });
 
@@ -109,16 +110,16 @@ describe('EastmoneySource.fetchNews', () => {
     const http502 = new EastmoneySource({
       fetchImpl: (() => Promise.resolve(new Response('boom', { status: 502 }))) as never,
     });
-    await expect(http502.fetchNews(30)).rejects.toMatchObject({ kind: 'upstream_error' });
+    await expect(http502.fetchNews(1, 30)).rejects.toMatchObject({ kind: 'upstream_error' });
 
     const netErr = new EastmoneySource({
       fetchImpl: (() => Promise.reject(new TypeError('socket hang up'))) as never,
     });
-    await expect(netErr.fetchNews(30)).rejects.toMatchObject({ kind: 'network' });
+    await expect(netErr.fetchNews(1, 30)).rejects.toMatchObject({ kind: 'network' });
 
     const badJson = new EastmoneySource({
       fetchImpl: (() => Promise.resolve(new Response('not-json', { status: 200 }))) as never,
     });
-    await expect(badJson.fetchNews(30)).rejects.toMatchObject({ kind: 'invalid_payload' });
+    await expect(badJson.fetchNews(1, 30)).rejects.toMatchObject({ kind: 'invalid_payload' });
   });
 });

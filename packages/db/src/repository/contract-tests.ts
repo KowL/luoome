@@ -1652,6 +1652,31 @@ export const registerRepositoryContractTests = (
         expect(updated?.turnoverRatePct).toBe(0.5);
       });
 
+      it('股本、市值和估值字段随快照持久化，缺省读回 undefined', async () => {
+        await repos.quote.save(
+          makeQuote('stk-1', T1, {
+            totalShares: 2_000_000_000,
+            floatShares: 1_800_000_000,
+            totalMarketCap: 200_000_000_000,
+            floatMarketCap: 180_000_000_000,
+            peDynamic: 18.2,
+            peTtm: 19.6,
+            peStatic: 21.4,
+            psTtm: 2.7,
+            pb: 3.8,
+          }),
+        );
+        await repos.quote.save(makeQuote('stk-2', T1));
+        expect(await repos.quote.latestByStock('stk-1')).toMatchObject({
+          totalShares: 2_000_000_000,
+          floatMarketCap: 180_000_000_000,
+          peTtm: 19.6,
+          psTtm: 2.7,
+          pb: 3.8,
+        });
+        expect((await repos.quote.latestByStock('stk-2'))?.totalMarketCap).toBeUndefined();
+      });
+
       it('removeInRange 返回删除条数；after 不动', async () => {
         await repos.quote.save(makeQuote('stk-1', T1));
         await repos.quote.save(makeQuote('stk-1', T2));

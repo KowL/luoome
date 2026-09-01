@@ -168,6 +168,19 @@ describe('market/manager', () => {
       expect(stats.cache.quote.misses).toBe(1);
     });
 
+    it('详情请求跳过不含估值字段的轻量缓存', async () => {
+      const primary = new StubPrimary();
+      const mgr = createTestMarketDataManager({
+        primary,
+        fallback: new StubFallback(),
+        finalFallback: new StubFinal(),
+        logger: silentLogger,
+      });
+      await mgr.fetchQuote('A');
+      await mgr.fetchQuote('A', { requireDetails: true });
+      expect(primary.callCount).toBe(2);
+    });
+
     it('primary 失败 → 自动 fallback；fallback 成功', async () => {
       const primary = new StubPrimary();
       primary.failMode = 'throw';

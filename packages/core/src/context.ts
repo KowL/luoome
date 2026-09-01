@@ -39,7 +39,7 @@ import type { SideEffect } from './types/side-effect.js';
 /** 行情数据源（ARCHITECTURE §4.7 MarketDataAdapter 的 core 侧投影）。 */
 export interface MarketDataAdapterLike {
   readonly name: string;
-  fetchQuote(stockCode: string): Promise<Quote>;
+  fetchQuote(stockCode: string, options?: { readonly requireDetails?: boolean }): Promise<Quote>;
   batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>>;
   fetchDailyBars(stockCode: string, range: DateRange): Promise<DailyBar[]>;
   /** 外部数据源股票搜索；不支持时以 unsupported_capability 拒绝。 */

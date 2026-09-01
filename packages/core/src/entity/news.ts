@@ -18,7 +18,7 @@ import { type SourceId, SourceIdSchema } from '../source.js';
 // ---------- 枚举与基础类型 ----------
 
 /**
- * 数据源标识（通用 SourceId；当前仅 eastmoney 要闻 API 注册）。
+ * 数据源标识（通用 SourceId；当前注册 eastmoney 与 10jqka）。
  * 兼容扩宽：docs/ddd/source-pluggability-and-observation-design.md §4.6。
  */
 export type NewsSource = SourceId;
@@ -78,6 +78,8 @@ export type NewsList = z.infer<typeof NewsListSchema>;
 // ---------- 查询参数 ----------
 
 export const FetchNewsQuerySchema = z.object({
+  /** 上游滚动流页码；从 1 开始。 */
+  page: z.number().int().min(1).max(1000).default(1),
   /** 缺省 = 全部分类。 */
   category: NewsCategorySchema.optional(),
   /** 返回条数（默认 30）。 */

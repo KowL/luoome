@@ -13,7 +13,8 @@ export const openModal = (title, body) => {
   const bodyNode = $('#modal-body');
   const overlay = $('#modal-overlay');
   if (titleNode === null || bodyNode === null || overlay === null) return;
-  titleNode.textContent = title;
+  if (title instanceof Node) titleNode.replaceChildren(title);
+  else titleNode.textContent = title;
   bodyNode.replaceChildren(body);
   overlay.hidden = false;
 };

@@ -21,7 +21,7 @@ export interface MarketDataAdapter extends MarketDataAdapterLike {
   /** 数据源名（如 'eastmoney' / 'tencent'）。 */
   readonly name: string;
   /** 拉单只股票实时行情（stockCode 可为 Stock.id 或 Stock.code）。 */
-  fetchQuote(stockCode: string): Promise<Quote>;
+  fetchQuote(stockCode: string, options?: { readonly requireDetails?: boolean }): Promise<Quote>;
   /** 批量拉行情，key 为入参原样代码。 */
   batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>>;
   /** 拉取指定区间日线。 */

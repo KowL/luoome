@@ -71,7 +71,7 @@ const mkManager = (
 describe('NewsManager（registry 集成）', () => {
   it('唯一源成功：provenance 记录实际 source；dataAsOf 为最大 published_at', async () => {
     const m = mkManager([['eastmoney', async () => fetchResult()]]);
-    const r = await m.fetchNews({ limit: 30 });
+    const r = await m.fetchNews({ page: 1, limit: 30 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.source).toBe('eastmoney');
@@ -85,7 +85,7 @@ describe('NewsManager（registry 集成）', () => {
 
   it('空列表 success 但无 dataAsOf（freshness unknown）', async () => {
     const m = mkManager([['eastmoney', async () => ({ items: [] })]]);
-    const r = await m.fetchNews({ limit: 30 });
+    const r = await m.fetchNews({ page: 1, limit: 30 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.warnings).toContain('empty-list');
@@ -106,7 +106,7 @@ describe('NewsManager（registry 集成）', () => {
       ],
       ['fuyao', fallbackMock],
     ]);
-    const r = await m.fetchNews({ limit: 30 });
+    const r = await m.fetchNews({ page: 1, limit: 30 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.source).toBe('fuyao');
@@ -122,14 +122,14 @@ describe('NewsManager（registry 集成）', () => {
         },
       ],
     ]);
-    const failed = await m.fetchNews({ limit: 30 });
+    const failed = await m.fetchNews({ page: 1, limit: 30 });
     expect(failed.ok).toBe(false);
     if (!failed.ok) {
       expect(failed.error.kind).toBe('adapter_error');
       expect(failed.error.message).toContain('eastmoney down');
     }
 
-    const disabled = await m.fetchNews({ limit: 30, source: 'tushare' });
+    const disabled = await m.fetchNews({ page: 1, limit: 30, source: 'tushare' });
     expect(disabled.ok).toBe(false);
     if (!disabled.ok) expect(disabled.error.kind).toBe('adapter_error');
   });

@@ -37,6 +37,7 @@
     <div class="brand">
       luoome
     </div>
+    <div id="topbar-stock-search" class="topbar-stock-search" aria-label="股票搜索"></div>
     <div class="topbar-meta">
       <label class="account-select-wrap" for="account-select">
         <span class="muted">账户</span>
@@ -77,7 +78,6 @@
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div class="route-header">
           <h1>看盘</h1>
-          <div id="dashboard-stock-search"></div>
         </div>
         <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；点击卡片 → #indices 指数页） -->
         <div id="dashboard-indices" class="index-card-grid dashboard-index-grid" aria-label="核心指数"></div>
@@ -97,8 +97,16 @@
             <div id="dash-sector-heatmap"><p class="placeholder">加载中…</p></div>
           </div>
           <div class="card">
-            <div class="card-header"><h2>财经要闻</h2><div class="card-meta" id="dash-news-meta"></div></div>
-            <div id="dash-news-list"><p class="placeholder">加载中…</p></div>
+            <div class="card-header news-card-header">
+              <div>
+                <h2>财经要闻</h2>
+                <div class="news-tabs" role="tablist" aria-label="财经要闻来源">
+                  <button class="news-tab active" type="button" role="tab" aria-selected="true" data-news-source="eastmoney">东方财富</button>
+                  <button class="news-tab" type="button" role="tab" aria-selected="false" data-news-source="10jqka">同花顺</button>
+                </div>
+              </div>
+            </div>
+            <div id="dash-news-list" class="news-scroll"><p class="placeholder">加载中…</p></div>
           </div>
         </div>
         <div class="card" id="dashboard-board-card">
@@ -196,17 +204,17 @@
 
       <!-- route: market（个股行情，docs/ddd/stock-market-view-detailed-design.md §11） -->
       <section id="route-market" class="route" data-route="market" hidden>
-        <div class="route-header">
-          <h1>行情</h1>
-          <div id="market-search"></div>
-        </div>
-        <div id="market-indices" class="index-strip" hidden></div>
         <div id="market-banner" class="status error" role="status" hidden></div>
         <div class="card" id="market-quote-card">
           <div class="market-quote-head">
             <div>
               <h2 id="market-quote-name">--</h2>
-              <div class="muted mono" id="market-quote-code">--</div>
+              <a
+                class="muted mono market-quote-code-link"
+                id="market-quote-code"
+                target="_blank"
+                rel="noopener noreferrer"
+              >--</a>
             </div>
             <div class="market-quote-badges" id="market-quote-badges"></div>
           </div>
@@ -224,6 +232,18 @@
             <div class="market-quote-cell"><span class="label">成交额</span><span class="num" id="market-quote-amount">--</span></div>
             <div class="market-quote-cell"><span class="label">换手率</span><span class="num" id="market-quote-turnover">--</span></div>
             <div class="market-quote-cell"><span class="label">振幅</span><span class="num" id="market-quote-amplitude">--</span></div>
+          </div>
+          <div class="market-quote-section-label">估值与股本</div>
+          <div class="market-quote-grid market-valuation-grid">
+            <div class="market-quote-cell"><span class="label">总市值</span><span class="num" id="market-quote-total-market-cap">--</span></div>
+            <div class="market-quote-cell"><span class="label">流通市值</span><span class="num" id="market-quote-float-market-cap">--</span></div>
+            <div class="market-quote-cell"><span class="label">市盈率 TTM</span><span class="num" id="market-quote-pe-ttm">--</span></div>
+            <div class="market-quote-cell"><span class="label">市盈率（动）</span><span class="num" id="market-quote-pe-dynamic">--</span></div>
+            <div class="market-quote-cell"><span class="label">市盈率（静）</span><span class="num" id="market-quote-pe-static">--</span></div>
+            <div class="market-quote-cell"><span class="label">市销率 TTM</span><span class="num" id="market-quote-ps-ttm">--</span></div>
+            <div class="market-quote-cell"><span class="label">市净率</span><span class="num" id="market-quote-pb">--</span></div>
+            <div class="market-quote-cell"><span class="label">总股本</span><span class="num" id="market-quote-total-shares">--</span></div>
+            <div class="market-quote-cell"><span class="label">流通股本</span><span class="num" id="market-quote-float-shares">--</span></div>
           </div>
           <div class="market-quote-meta">
             <span id="market-quote-fetched">--</span>

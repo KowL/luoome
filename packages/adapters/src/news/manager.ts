@@ -89,7 +89,11 @@ export class NewsManager {
     let lastError: unknown;
     for (const handle of handles) {
       try {
-        const rawResult = await handle.execute({ pageSize: FETCH_POOL_SIZE });
+        const filtered = query.category !== undefined || query.keyword !== undefined;
+        const rawResult = await handle.execute({
+          page: query.page,
+          pageSize: filtered ? FETCH_POOL_SIZE : query.limit,
+        });
 
         let items = rawResult.items.map(mapItem);
         if (query.category !== undefined) {

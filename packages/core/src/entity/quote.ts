@@ -21,6 +21,18 @@ export interface Quote {
   readonly turnoverRatePct?: number | undefined;
   /** 昨收（可选）：数据源给得出才填（eastmoney f60 / tushare pre_close / tencent qt 快照）。 */
   readonly prevClose?: Money | undefined;
+  /** 总股本 / 流通股本（股，可选）。 */
+  readonly totalShares?: number | undefined;
+  readonly floatShares?: number | undefined;
+  /** 总市值 / 流通市值（元，可选）。 */
+  readonly totalMarketCap?: number | undefined;
+  readonly floatMarketCap?: number | undefined;
+  /** 估值指标（可选；亏损公司可能为负值）。 */
+  readonly peDynamic?: number | undefined;
+  readonly peTtm?: number | undefined;
+  readonly peStatic?: number | undefined;
+  readonly psTtm?: number | undefined;
+  readonly pb?: number | undefined;
   readonly source: string;
 }
 
@@ -85,6 +97,15 @@ export const QuoteSchema = z
     amount: z.number().nonnegative().optional(),
     turnoverRatePct: z.number().nonnegative().optional(),
     prevClose: MoneySchema.optional(),
+    totalShares: z.number().nonnegative().optional(),
+    floatShares: z.number().nonnegative().optional(),
+    totalMarketCap: z.number().nonnegative().optional(),
+    floatMarketCap: z.number().nonnegative().optional(),
+    peDynamic: z.number().finite().optional(),
+    peTtm: z.number().finite().optional(),
+    peStatic: z.number().finite().optional(),
+    psTtm: z.number().finite().optional(),
+    pb: z.number().finite().optional(),
     source: z.string().min(1),
   })
   .superRefine((quote, ctx) => {
@@ -127,6 +148,15 @@ export const QuoteSchema = z
       ...(quote.amount === undefined ? {} : { amount: quote.amount }),
       ...(quote.turnoverRatePct === undefined ? {} : { turnoverRatePct: quote.turnoverRatePct }),
       ...(quote.prevClose === undefined ? {} : { prevClose: quote.prevClose }),
+      ...(quote.totalShares === undefined ? {} : { totalShares: quote.totalShares }),
+      ...(quote.floatShares === undefined ? {} : { floatShares: quote.floatShares }),
+      ...(quote.totalMarketCap === undefined ? {} : { totalMarketCap: quote.totalMarketCap }),
+      ...(quote.floatMarketCap === undefined ? {} : { floatMarketCap: quote.floatMarketCap }),
+      ...(quote.peDynamic === undefined ? {} : { peDynamic: quote.peDynamic }),
+      ...(quote.peTtm === undefined ? {} : { peTtm: quote.peTtm }),
+      ...(quote.peStatic === undefined ? {} : { peStatic: quote.peStatic }),
+      ...(quote.psTtm === undefined ? {} : { psTtm: quote.psTtm }),
+      ...(quote.pb === undefined ? {} : { pb: quote.pb }),
       source: quote.source,
     };
   });

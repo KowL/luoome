@@ -24,7 +24,12 @@ const RESOLVE_CHUNK_SIZE = 100;
 export const resolveQuotes = async (
   ctx: ToolContext,
   stockIds: readonly string[],
-  opts: { context: QuoteResolveContext; watchIntervalSeconds?: number },
+  opts: {
+    context: QuoteResolveContext;
+    watchIntervalSeconds?: number;
+    /** 单股详情入口使用；批量行情即使只有一个入参也保持 batch 语义。 */
+    requireDetails?: boolean;
+  },
 ): Promise<ResolvedQuoteItem[]> => {
   const watchIntervalSeconds = opts.watchIntervalSeconds ?? 60;
   const resolved: Array<{ id: string; name: string }> = [];
@@ -78,7 +83,13 @@ export const resolveQuotes = async (
   for (let offset = 0; offset < resolved.length; offset += RESOLVE_CHUNK_SIZE) {
     const chunk = resolved.slice(offset, offset + RESOLVE_CHUNK_SIZE);
     try {
-      const quotes = await ctx.adapters.market.batchQuote(chunk.map((s) => s.id));
+      const first = chunk[0];
+      const quotes =
+        opts.requireDetails === true && chunk.length === 1 && first !== undefined
+          ? new Map([
+              [first.id, await ctx.adapters.market.fetchQuote(first.id, { requireDetails: true })],
+            ])
+          : await ctx.adapters.market.batchQuote(chunk.map((s) => s.id));
       const liveQuotes = [...quotes.values()].map((quote) => QuoteSchema.parse(quote));
       await Promise.all(liveQuotes.map((quote) => ctx.repos.quote.save(quote)));
       for (const quote of liveQuotes) fetched.set(quote.stockId, quote);
@@ -112,6 +123,6 @@ export const resolveQuote = async (
   stockId: string,
   opts: { context: QuoteResolveContext; watchIntervalSeconds?: number },
 ): Promise<ResolvedQuoteItem | undefined> => {
-  const [item] = await resolveQuotes(ctx, [stockId], opts);
+  const [item] = await resolveQuotes(ctx, [stockId], { ...opts, requireDetails: true });
   return item;
 };

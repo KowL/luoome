@@ -13,7 +13,7 @@ import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
-import { renderMarket, teardownMarket } from './market.js';
+import { navigateToStock, renderMarket, teardownMarket } from './market.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
 import { initMarketSync, renderMarketSyncStatus } from './market-sync.js';
 import { initModal } from './modal.js';
@@ -35,6 +35,7 @@ import {
   runWatchOnce,
   toggleAdviceDeleteMode,
 } from './pages.js';
+import { createStockSearchBox } from './search-box.js';
 import { renderSectors } from './sectors.js';
 import {
   initTargetActions,
@@ -68,6 +69,15 @@ const startClock = () => {
   };
   tick();
   setInterval(tick, 1000);
+};
+
+const bindTopbarStockSearch = () => {
+  const wrap = $('#topbar-stock-search');
+  if (wrap === null || wrap.childElementCount > 0) return;
+  createStockSearchBox(wrap, {
+    placeholder: '搜索代码 / 名称',
+    onSelect: (stock) => navigateToStock(stock, { resetContext: true }),
+  });
 };
 
 /* ============ 路由分发 ============ */
@@ -362,6 +372,7 @@ window.__luoome = {
 
 initTheme();
 bindTopbarTheme();
+bindTopbarStockSearch();
 bindGlobalActions();
 startClock();
 startDashboardAutoRefresh();

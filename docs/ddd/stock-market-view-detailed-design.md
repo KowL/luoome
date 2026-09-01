@@ -117,7 +117,7 @@ Web 图表实现采用 `lightweight-charts@5.2.0`：
 1. `get_stock_market_view` 在 Tool 内同时返回 candles、指标和数据状态，页面不再重复调用 `compute_indicators`。
 2. `DailyBar`、Drizzle 与 memory repository 均保留真实 `source`；批量 upsert 不以首行覆盖其它日期。
 3. 日线成功结果由行情查看 Tool 写入 repository，缓存键按规范化交易日区间复用。
-4. Quote 已支持可选 `prevClose`、成交额和换手率；缺失时仍由 Market View 从前复权日线推导昨收。
+4. Quote 已支持可选 `prevClose`、成交额、换手率，以及 Eastmoney 单股快照提供的股本、市值和估值字段；缺失时 UI 显示 `--`，不生成替代值。
 5. `observedAt` / `fetchedAt` 区分上游观测和本地抓取，界面继续使用“获取于”而不是“成交于”。
 6. 股票搜索统一使用 `q` 契约；外部搜索失败时只回退本地事实，不生成样例股票。
 7. Sina 仅注册 `daily-bars` capability，真实源失败按 provider error 返回，不提供 mock 生产 fallback。
@@ -191,7 +191,7 @@ SQLite 已有 `daily_bars.source NOT NULL`，本次不新增列，也不需要�
 
 ### 6.2 Quote 的可选源字段与派生边界
 
-Quote 已保留不同源能够稳定提供的可选 `prevClose`、`amount` 和 `turnoverRatePct`；`change` /
+Quote 已保留不同源能够稳定提供的可选 `prevClose`、`amount`、`turnoverRatePct`、股本、市值及 PE / PS / PB；`change` /
 `changePct` 仍属于 Market View read model。若 Quote 没有 `prevClose`，Tool 从上一交易日 qfq
 DailyBar 推导，不把缺失值填成 0，也不把单一源字段升级为强制领域不变量。
 
@@ -508,9 +508,9 @@ POST /api/tools/get_stock_market_view/call
 
 行情页不单独占用侧栏菜单项，入口来自：
 
-- 仪表盘股票搜索；
+- 全局顶栏股票搜索；
 - 持仓和分组中的股票链接；
-- 行情页内搜索及最近查看；
+- 行情页最近查看；
 - 外部或站内深链接。
 
 进入行情深链接时，现有侧栏不设置 active 项。“涨停梯队”首期保持现有独立入口，不在本任务重组整个侧栏。
@@ -533,16 +533,16 @@ routeParams = hash 中 ? 之后的 URLSearchParams
 ### 11.2 页面结构
 
 ```text
-行情
-├── 搜索区
-│   ├── 代码/名称输入
-│   ├── 搜索候选
-│   └── 最近查看（localStorage，最多 8 只）
+全局顶栏
+└── 股票搜索（代码 / 名称输入与候选）
+行情详情
 ├── 报价头
 │   ├── 名称 / 代码 / 交易所
 │   ├── 当前价 / 涨跌 / 涨跌幅
-│   ├── 开 / 高 / 低 / 昨收 / 成交量
+│   ├── 开 / 高 / 低 / 昨收 / 成交量 / 成交额
+│   ├── 总市值 / 流通市值 / PE / PS / PB / 股本
 │   └── 获取时间 / source / freshness
+├── 最近查看（localStorage，最多 8 只）
 ├── 周期切换：1M / 3M / 6M / 1Y
 ├── 图表
 │   ├── 日 K 主 pane
@@ -601,7 +601,7 @@ routeParams = hash 中 ? 之后的 URLSearchParams
 
 ### 11.5 搜索
 
-输入至少 1 个字符后触发，debounce 250ms：
+顶栏输入至少 1 个字符后触发，debounce 250ms：
 
 ```text
 GET /api/stocks/search?q=<encoded>

@@ -21,6 +21,15 @@ const toQuote = (row: QuoteRow): Quote => ({
   ...(row.amount !== null ? { amount: row.amount } : {}),
   ...(row.turnoverRatePct !== null ? { turnoverRatePct: row.turnoverRatePct } : {}),
   ...(row.prevClose !== null ? { prevClose: row.prevClose } : {}),
+  ...(row.totalShares !== null ? { totalShares: row.totalShares } : {}),
+  ...(row.floatShares !== null ? { floatShares: row.floatShares } : {}),
+  ...(row.totalMarketCap !== null ? { totalMarketCap: row.totalMarketCap } : {}),
+  ...(row.floatMarketCap !== null ? { floatMarketCap: row.floatMarketCap } : {}),
+  ...(row.peDynamic !== null ? { peDynamic: row.peDynamic } : {}),
+  ...(row.peTtm !== null ? { peTtm: row.peTtm } : {}),
+  ...(row.peStatic !== null ? { peStatic: row.peStatic } : {}),
+  ...(row.psTtm !== null ? { psTtm: row.psTtm } : {}),
+  ...(row.pb !== null ? { pb: row.pb } : {}),
   source: row.source,
 });
 
@@ -48,6 +57,15 @@ export class DrizzleQuoteRepository implements QuoteRepository {
         amount: parsed.amount ?? null,
         turnoverRatePct: parsed.turnoverRatePct ?? null,
         prevClose: parsed.prevClose ?? null,
+        totalShares: parsed.totalShares ?? null,
+        floatShares: parsed.floatShares ?? null,
+        totalMarketCap: parsed.totalMarketCap ?? null,
+        floatMarketCap: parsed.floatMarketCap ?? null,
+        peDynamic: parsed.peDynamic ?? null,
+        peTtm: parsed.peTtm ?? null,
+        peStatic: parsed.peStatic ?? null,
+        psTtm: parsed.psTtm ?? null,
+        pb: parsed.pb ?? null,
         source: parsed.source,
       })
       .onConflictDoUpdate({
@@ -63,6 +81,15 @@ export class DrizzleQuoteRepository implements QuoteRepository {
           amount: parsed.amount ?? null,
           turnoverRatePct: parsed.turnoverRatePct ?? null,
           prevClose: parsed.prevClose ?? null,
+          totalShares: parsed.totalShares ?? null,
+          floatShares: parsed.floatShares ?? null,
+          totalMarketCap: parsed.totalMarketCap ?? null,
+          floatMarketCap: parsed.floatMarketCap ?? null,
+          peDynamic: parsed.peDynamic ?? null,
+          peTtm: parsed.peTtm ?? null,
+          peStatic: parsed.peStatic ?? null,
+          psTtm: parsed.psTtm ?? null,
+          pb: parsed.pb ?? null,
         },
       })
       .run();

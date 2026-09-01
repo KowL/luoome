@@ -2,7 +2,13 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { firstProbeDay, fmtRelativeTime, overviewStats, prevDay } from './dashboard-market.js';
+import {
+  firstProbeDay,
+  fmtRelativeTime,
+  overviewStats,
+  prevDay,
+  shouldLoadNewsOnScroll,
+} from './dashboard-market.js';
 
 describe('firstProbeDay', () => {
   it('周末回退到周五；工作日原样返回', () => {
@@ -87,5 +93,15 @@ describe('overviewStats', () => {
     expect(partial.advancing).toBeNull();
     expect(partial.sealed).toBe(3);
     expect(partial.brokenRate).toBeNull();
+  });
+});
+
+describe('shouldLoadNewsOnScroll', () => {
+  it('仅在接近列表底部时加载下一页', () => {
+    const nearBottom = { scrollHeight: 370, scrollTop: 0, clientHeight: 330 };
+    expect(shouldLoadNewsOnScroll(nearBottom)).toBe(true);
+    expect(shouldLoadNewsOnScroll({ scrollHeight: 700, scrollTop: 100, clientHeight: 330 })).toBe(
+      false,
+    );
   });
 });

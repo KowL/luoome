@@ -391,7 +391,8 @@ Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网
 
 连板天梯、龙虎榜、北向资金、要闻与 A 股日级情绪都不进 `MarketDataManager`，分别由
 `create*ManagerFromEnv` 独立装配；`LUOOME_*_SOURCES` 与 `LUOOME_MARKET_SOURCES` 同构
-（逗号分隔、有序、去重校验、未知源启动期抛错），当前唯一注册值为 `eastmoney`。
+（逗号分隔、有序、去重校验、未知源启动期抛错）。其中要闻注册 `eastmoney` 与 `10jqka`，
+其余四个 A 股日级域当前唯一注册值为 `eastmoney`。
 各 manager 的 `status()` 直接委托 registry 观测，健康读模型（`get_market_data_status`）
 聚合 market registry、stock-universe checkpoint 与这五个 manager 的 `status()` 生成
 `datasets` 库存。
