@@ -530,6 +530,13 @@ unknown/error、evidence 与 dataAsOf 必须保存在 StrategyResult；Signal �
 意外异常也会把该记录收敛为 `failed`。
 旧 `status=partial` 记录继续可读，并按“执行完成、数据部分可用”参与当前结果视图。
 
+**Strategy 模块深化（2026-09-01）**：`StrategyEvaluationData` 由 Live 与 Checkpoint 两个真实
+Adapter 实现，统一 quote/daily-bars 读取和 provider audit；`StrategyRunSnapshot` Compatibility Module
+统一解释 V3/V2/legacy 输入身份；`StrategyObservationEvidence` 批量校验 run → signal → observation
+关系并报告 missing/truncated；`StrategyRunTimeline` 一次装载 run/version/results，供 Workspace、Diff
+与 Insight 复用。Web Strategy Workspace 按 overview、experiment、runs、insights、cycle、settings、
+backtest 功能模块拆分，入口文件只负责路由与页面组合。
+
 ```txt
 Account          账户（真实，币种，初始资金）
 Stock            标的（代码、交易所、名称、行业）

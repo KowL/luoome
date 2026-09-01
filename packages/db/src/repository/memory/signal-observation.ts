@@ -18,6 +18,26 @@ export class InMemorySignalObservationRepository implements SignalObservationRep
   async findById(id: string): Promise<SignalObservation | null> {
     return this.items.get(id) ?? null;
   }
+  async listBySources(
+    input: Parameters<SignalObservationRepository['listBySources']>[0],
+  ): Promise<readonly SignalObservation[]> {
+    if (input.sourceIds.length === 0) return [];
+    const sourceIds = new Set(input.sourceIds);
+    const horizons = input.horizons === undefined ? undefined : new Set(input.horizons);
+    return [...this.items.values()]
+      .filter(
+        (item) =>
+          sourceIds.has(item.sourceId) &&
+          (input.sourceKind === undefined || item.sourceKind === input.sourceKind) &&
+          (horizons === undefined || horizons.has(item.horizon)),
+      )
+      .sort(
+        (left, right) =>
+          (right.baselineAt?.getTime() ?? Number.NEGATIVE_INFINITY) -
+            (left.baselineAt?.getTime() ?? Number.NEGATIVE_INFINITY) ||
+          right.id.localeCompare(left.id),
+      );
+  }
   async list(
     input: Parameters<SignalObservationRepository['list']>[0] = {},
   ): Promise<readonly SignalObservation[]> {

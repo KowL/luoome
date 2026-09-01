@@ -1,10 +1,11 @@
 import {
   assertWorkflowRunInvariants,
   type ProviderStatus,
+  type StrategyDailyCycleAuditQuery,
   type WorkflowRun,
   type WorkflowRunRepository,
 } from '@luoome/core';
-import { and, desc, eq, gte, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { type Schema, workflowRuns } from '../../schema/index.js';
@@ -84,6 +85,46 @@ export class DrizzleWorkflowRunRepository implements WorkflowRunRepository {
       .where(where)
       .orderBy(desc(workflowRuns.startedAt))
       .limit(opts.limit ?? 50)
+      .all()
+      .map(toWorkflowRun);
+  }
+
+  async listStrategyDailyCycleAudits(
+    query: StrategyDailyCycleAuditQuery = {},
+  ): Promise<readonly WorkflowRun[]> {
+    const conditions: SQL[] = [eq(workflowRuns.workflowName, 'strategy-daily-cycle')];
+    if (query.strategyId !== undefined) {
+      conditions.push(
+        sql`json_extract(${workflowRuns.inputSummary}, '$.strategyId') = ${query.strategyId}`,
+      );
+    }
+    if (query.scheduleId !== undefined) {
+      conditions.push(
+        sql`json_extract(${workflowRuns.inputSummary}, '$.scheduleId') = ${query.scheduleId}`,
+      );
+    }
+    if (query.statuses !== undefined) {
+      conditions.push(
+        query.statuses.length === 0 ? sql`0` : inArray(workflowRuns.status, [...query.statuses]),
+      );
+    }
+    const dataAsOfJulian = sql<number>`coalesce(
+      julianday(json_extract(${workflowRuns.inputSummary}, '$.dataAsOf')),
+      julianday(${workflowRuns.startedAt} / 1000.0, 'unixepoch')
+    )`;
+    if (query.since !== undefined) {
+      conditions.push(gte(dataAsOfJulian, sql<number>`julianday(${query.since.toISOString()})`));
+    }
+    if (query.until !== undefined) {
+      conditions.push(lte(dataAsOfJulian, sql<number>`julianday(${query.until.toISOString()})`));
+    }
+    return this.db
+      .select()
+      .from(workflowRuns)
+      .where(and(...conditions))
+      .orderBy(desc(workflowRuns.startedAt), desc(workflowRuns.id))
+      .limit(query.limit ?? 50)
+      .offset(query.offset ?? 0)
       .all()
       .map(toWorkflowRun);
   }

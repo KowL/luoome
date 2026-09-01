@@ -108,6 +108,10 @@ workflows ──► tools ──► core
 两者实现同一个 `StrategyEvaluationData` interface，隐藏 quote/daily-bars 的时点、来源、缺失和
 checkpoint 差异。trial、scheduled 和未来 simulation 不各自复制数据准备逻辑。
 
+实现复核（2026-09-01）：该 interface 已落在 tools 内部 seam；`run_strategy` 只选择 Adapter 并消费
+统一的 prepared/failure/audit 结果。日线 ingestion 的有界并发、超时重试和内容 hash 同时收敛为
+共享实现，`prepare_strategy_data` 与 `sync_daily_bars` 不再各自维护副本。
+
 ## 4. 目标数据流
 
 ### 4.1 生产日周期
@@ -441,7 +445,7 @@ StrategyResult.dataAsOf 保留逐股实际时间。空 bars、字段全缺或 st
 
 ```ts
 interface StrategyRunRepository {
-  acquireRunLease(input: AcquireRunLeaseInput): Promise<StrategyLeaseToken | null>;
+  acquireRunLeaseToken(input: AcquireRunLeaseInput): Promise<StrategyLeaseToken | null>;
   renewRunLease(input: { token: StrategyLeaseToken; now: Date; leaseUntil: Date }): Promise<boolean>;
   releaseRunLease(input: { token: StrategyLeaseToken }): Promise<void>;
 
@@ -466,6 +470,9 @@ interface StrategyRunRepository {
     since?: Date;
     limit?: number;
   }): Promise<readonly StrategyRun[]>;
+  listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]>;
+  signalsByRuns(runIds: readonly string[]): Promise<readonly StrategySignal[]>;
+  signalsByIds(signalIds: readonly string[]): Promise<readonly StrategySignal[]>;
 }
 ```
 
@@ -483,6 +490,10 @@ Drizzle 实现事务顺序：
 6. 任一失败整笔回滚。
 
 memory implementation 使用相同顺序，并由共享 contract tests 固定。
+
+旧 boolean `acquireRunLease` wrapper 已删除；调用方必须持有 fencing token。批量事实读取由 Drizzle 与
+in-memory 双实现共享 contract tests，供 StrategyRunTimeline 和 StrategyObservationEvidence 使用，
+避免按 run/股票的 N+1 查询与通用分页上限造成静默截断。
 
 ### 6.2 StrategyScheduleRepository
 

@@ -11,13 +11,16 @@ import {
   type StrategyRun,
   StrategyRunSchema,
   StrategySignalSchema,
-  type ToolContext,
   type Trade,
   TradeSchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import {
+  collectStrategyObservationEvidence,
+  type StrategyObservationEvidence,
+} from '../internal/strategy-observation-evidence.js';
 
 const HorizonStatusSchema = z.enum(['pending', 'complete', 'unavailable']);
 
@@ -277,27 +280,20 @@ const isProductionCycleRun = (run: StrategyRun): boolean =>
   hasAcceptedRun(run);
 
 async function loadCycle(
-  ctx: ToolContext,
   run: StrategyRun,
   result: StrategyResult,
+  observationEvidence: StrategyObservationEvidence,
   accountTrades: Trade[],
   advicesForStock: Advice[],
   factsAsOf: Date,
 ): Promise<StrategyCandidateCycle> {
-  const signals = (await ctx.repos.strategyRun.signalsByRun(run.id)).filter(
-    (signal) => signal.stockId === result.stockId,
+  const signals = observationEvidence.signals.filter(
+    (signal) => signal.runId === run.id && signal.stockId === result.stockId,
   );
   const signalIds = signals.map((signal) => signal.id);
-  const observations = signalIds.length
-    ? await ctx.repos.signalObservation.list({
-        sourceKind: 'strategy-signal',
-        sourceIds: signalIds,
-        horizons: HORIZONS,
-        limit: 5000,
-      })
-    : [];
-  const cycleObservations = observations.filter((observation) =>
-    signalIds.includes(observation.sourceId),
+  const signalIdSet = new Set(signalIds);
+  const cycleObservations = observationEvidence.rawObservations.filter((observation) =>
+    signalIdSet.has(observation.sourceId),
   );
   const progressRows = HORIZONS.map((horizon) =>
     observationsForProgress(cycleObservations, horizon),
@@ -320,6 +316,7 @@ async function loadCycle(
     'SignalObservation 是信号后的确定性事实观察，不是回测，也不包含成交、费用或滑点假设。',
     'Trade 只按 Advice ID 或 AdviceOutcome.tradeIds 显式归因；不会从 strategyVersionId、日期或股票推断周期。',
     'replay、evaluation、withheld 与 non-publishing 运行不会进入生产闭环或触发 Advice。',
+    ...observationEvidence.limitations,
   ];
   const evidenceIds = unique([
     run.id,
@@ -397,12 +394,26 @@ export const getStrategyDecisionCyclesTool = defineTool({
 
     const accountTrades = await ctx.repos.trade.listByAccount(accountId);
     const adviceByStock = new Map<string, Advice[]>();
+    const resultsByRun = new Map<string, StrategyResult[]>();
+    const allResults = await ctx.repos.strategyRun.listResultsByRuns(runs.map((run) => run.id));
+    for (const result of allResults) {
+      const rows = resultsByRun.get(result.runId) ?? [];
+      rows.push(result);
+      resultsByRun.set(result.runId, rows);
+    }
+    const observationEvidence = await collectStrategyObservationEvidence({
+      ctx,
+      runs,
+      horizons: HORIZONS,
+      maxObservations: 5_000,
+      sourceLabel: 'decision cycle',
+    });
     const cycles: StrategyCandidateCycle[] = [];
     const factsAsOf = ctx.clock();
 
     for (const run of runs) {
       if (cycles.length >= input.limit) break;
-      const results = await ctx.repos.strategyRun.listResults(run.id);
+      const results = resultsByRun.get(run.id) ?? [];
       const selectedResults = results.filter(
         (result) => result.selected && (!input.stockId || result.stockId === input.stockId),
       );
@@ -410,19 +421,21 @@ export const getStrategyDecisionCyclesTool = defineTool({
         if (cycles.length >= input.limit) break;
         const stockId = result.stockId;
         if (!adviceByStock.has(stockId)) {
-          const rows = await ctx.repos.advice.query({
-            subjectKind: 'stock',
-            subjectId: stockId,
-            includeExpired: true,
-            limit: 5000,
-          });
-          adviceByStock.set(stockId, [...rows]);
+          adviceByStock.set(
+            stockId,
+            await ctx.repos.advice.query({
+              subjectKind: 'stock',
+              subjectId: stockId,
+              includeExpired: true,
+              limit: 5_000,
+            }),
+          );
         }
         cycles.push(
           await loadCycle(
-            ctx,
             run,
             result,
+            observationEvidence,
             accountTrades,
             adviceByStock.get(stockId) ?? [],
             factsAsOf,

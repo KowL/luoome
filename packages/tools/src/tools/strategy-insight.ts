@@ -7,6 +7,7 @@ import {
   diffStrategyRunViews,
   isPublishableOperationalRun,
   isUsableStrategyRun,
+  readStrategyRunSnapshot,
   SIGNAL_OBSERVATION_SAMPLE_UNIT,
   type SignalObservation,
   type StrategyResultView,
@@ -15,10 +16,11 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
+import { collectStrategyObservationEvidence } from '../internal/strategy-observation-evidence.js';
+import { readStrategyRunTimeline } from '../internal/strategy-run-timeline.js';
 
 const DAY_MS = 86_400_000;
 const HORIZONS = ACTIVE_SIGNAL_OBSERVATION_HORIZONS;
-const OBSERVATION_QUERY_CHUNK = 400;
 const OBSERVATION_LIMIT = 5000;
 const FACT_EVIDENCE_LIMIT = 50;
 
@@ -328,32 +330,31 @@ export const collectStrategyInsightFacts = async (
   const now = ctx.clock();
   const from = new Date(now.getTime() - windowDays * DAY_MS);
   const scope = options.scope ?? 'operational';
-  const allRuns = await ctx.repos.strategyRun.listRuns({
+  const timeline = await readStrategyRunTimeline(ctx, {
     strategyId,
     scope,
     ...(scope === 'operational' ? { publication: 'published' as const } : {}),
     since: from,
     limit: 100,
   });
-  const usableRuns = allRuns.filter((run) =>
+  const allRuns = timeline.entries.map((entry) => entry.run);
+  const usableEntries = timeline.entries.filter((entry) =>
     scope === 'operational'
-      ? isPublishableOperationalRun(run)
-      : isUsableStrategyRun(run) &&
+      ? isPublishableOperationalRun(entry.run)
+      : isUsableStrategyRun(entry.run) &&
         (options.evaluationSessionId === undefined ||
-          (typeof run.inputSnapshot === 'object' &&
-            run.inputSnapshot !== null &&
-            'evaluationSessionId' in run.inputSnapshot &&
-            (run.inputSnapshot as { readonly evaluationSessionId?: unknown })
-              .evaluationSessionId === options.evaluationSessionId)),
+          readStrategyRunSnapshot(entry.run.inputSnapshot).evaluationSessionId ===
+            options.evaluationSessionId),
   );
+  const usableRuns = usableEntries.map((entry) => entry.run);
   const viewsByRun = new Map<string, StrategyResultView[]>();
   const ruleNames = new Map<string, string>();
   const signalRuleEmissions = new Map<
     string,
     { emission?: { mode?: 'level' | 'edge' } | undefined }
   >();
-  for (const run of usableRuns) {
-    const version = await ctx.repos.strategy.findVersionById(run.strategyVersionId);
+  for (const entry of usableEntries) {
+    const { run, version, results } = entry;
     if (version === null) continue;
     for (const rule of version.definition.selection.rules) ruleNames.set(rule.id, rule.name);
     for (const rule of [
@@ -363,7 +364,6 @@ export const collectStrategyInsightFacts = async (
     ]) {
       signalRuleEmissions.set(rule.id, rule);
     }
-    const results = await ctx.repos.strategyRun.listResults(run.id);
     viewsByRun.set(
       run.id,
       results.map((result) => classifyStrategyResult(version.definition, result)),
@@ -443,28 +443,16 @@ export const collectStrategyInsightFacts = async (
   const signals = (await ctx.repos.strategyRun.signalsByStrategy(strategyId, from)).filter(
     (signal) => publishedRunIds.has(signal.runId),
   );
-  const signalIds = signals.map((signal) => signal.id);
-  const observationRows: SignalObservation[] = [];
-  let observationsTruncated = false;
-  for (let index = 0; index < signalIds.length; index += OBSERVATION_QUERY_CHUNK) {
-    const sourceIds = signalIds.slice(index, index + OBSERVATION_QUERY_CHUNK);
-    observationRows.push(
-      ...(await ctx.repos.signalObservation.list({
-        sourceKind: 'strategy-signal',
-        sourceIds,
-        horizons: HORIZONS,
-        limit: OBSERVATION_LIMIT,
-      })),
-    );
-    if (observationRows.length >= OBSERVATION_LIMIT) {
-      observationsTruncated =
-        observationRows.length > OBSERVATION_LIMIT ||
-        index + OBSERVATION_QUERY_CHUNK < signalIds.length;
-      break;
-    }
-  }
-  const observations = observationRows.slice(0, OBSERVATION_LIMIT);
-  const sampledObservationCount = deduplicateSignalObservations(observations).length;
+  const observationEvidence = await collectStrategyObservationEvidence({
+    ctx,
+    signals,
+    horizons: HORIZONS,
+    maxObservations: OBSERVATION_LIMIT,
+    sourceLabel: 'strategy insight',
+  });
+  const observations = observationEvidence.observations;
+  const sampledObservationCount = observationEvidence.sampledObservationCount;
+  const observationsTruncated = observationEvidence.truncated;
   const observationAggregates = aggregateObservations(observations);
   const groupedObservations = aggregateObservationGroups(
     observations,
@@ -538,6 +526,7 @@ export const collectStrategyInsightFacts = async (
     },
   ];
   const limitations: string[] = [];
+  limitations.push(...observationEvidence.limitations);
   if (allRuns.length === 0) limitations.push('观察窗口内没有策略运行，无法判断股票池变化。');
   if (signals.length === 0) limitations.push('观察窗口内没有策略信号，暂无事后表现样本。');
   if (signals.length > 0 && observations.length === 0) {
@@ -545,9 +534,9 @@ export const collectStrategyInsightFacts = async (
   }
   if (observationsTruncated)
     limitations.push(`观察明细超过 ${OBSERVATION_LIMIT} 条，仅统计最近样本。`);
-  if (observations.length > sampledObservationCount) {
+  if (observationEvidence.rawObservationCount > sampledObservationCount) {
     limitations.push(
-      `观察统计按同一股票、同一基准交易日、同一周期去重；${observations.length - sampledObservationCount} 条重复 signal-day 未作为独立样本。`,
+      `观察统计按同一股票、同一基准交易日、同一周期去重；${observationEvidence.rawObservationCount - sampledObservationCount} 条重复 signal-day 未作为独立样本。`,
     );
   }
   if (observationAggregates.some((item) => item.complete > 0 && item.complete < 10)) {

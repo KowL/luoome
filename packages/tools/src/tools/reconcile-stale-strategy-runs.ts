@@ -1,6 +1,7 @@
 import {
   assessStrategyRun,
   decideStrategyRunPublication,
+  readStrategyRunSnapshot,
   StrategyRunSchema,
   type ToolContext,
 } from '@luoome/core';
@@ -24,37 +25,16 @@ export const ReconcileStaleStrategyRunsOutput = z.object({
   runIds: z.array(z.string()),
 });
 
-const snapshotRequestedBy = (
-  run: z.infer<typeof StrategyRunSchema>,
-): 'manual' | 'scheduled' | 'replay' | undefined => {
-  const snapshot = run.inputSnapshot;
-  if (typeof snapshot !== 'object' || snapshot === null) return undefined;
-  const value = snapshot as Record<string, unknown>;
-  if (
-    value.requestedBy === 'manual' ||
-    value.requestedBy === 'scheduled' ||
-    value.requestedBy === 'replay'
-  ) {
-    return value.requestedBy;
-  }
-  return undefined;
-};
-
 const snapshotMeta = (
   run: z.infer<typeof StrategyRunSchema>,
 ): {
   readonly universeCount: number;
   readonly universeKind: 'full' | 'explicit';
 } => {
-  const snapshot = run.inputSnapshot;
-  if (typeof snapshot !== 'object' || snapshot === null) {
-    return { universeCount: 0, universeKind: 'full' };
-  }
-  const value = snapshot as Record<string, unknown>;
-  const stockIds = Array.isArray(value.stockIds) ? value.stockIds : [];
+  const snapshot = readStrategyRunSnapshot(run.inputSnapshot);
   return {
-    universeCount: stockIds.length,
-    universeKind: value.universeKind === 'explicit' ? 'explicit' : 'full',
+    universeCount: snapshot.stockIds.length,
+    universeKind: snapshot.universeKind ?? 'full',
   };
 };
 
@@ -89,7 +69,7 @@ export const reconcileStaleStrategyRunsTool = defineTool({
         continue;
       }
       const meta = snapshotMeta(run);
-      const requestedBy = snapshotRequestedBy(run);
+      const requestedBy = readStrategyRunSnapshot(run.inputSnapshot).requestedBy;
       const finishedAt = new Date(
         Math.max(now.getTime(), run.dataAsOf.getTime(), run.startedAt.getTime()),
       );

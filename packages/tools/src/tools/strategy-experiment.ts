@@ -12,6 +12,7 @@ import {
   EARLY_BREAKOUT_V2_DRAFT,
   isActiveSignalObservationHorizon,
   isPublishableOperationalRun,
+  readStrategyRunSnapshot,
   type SignalObservation,
   STRATEGY_FIELD_REGISTRY,
   StrategyDefinitionDiffSchema,
@@ -31,6 +32,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { collectStrategyObservationEvidence } from '../internal/strategy-observation-evidence.js';
 
 const STRATEGY_DSL_OPERATORS: Readonly<Record<StrategyFieldType, readonly string[]>> = {
   number: ['==', '!=', '===', '!==', '<', '<=', '>', '>=', '+', '-', '*', '/', '%'],
@@ -228,15 +230,7 @@ export type StrategyExperimentContext = z.infer<typeof GetStrategyExperimentCont
 const MAX_EVALUATION_RUNS = 5000;
 const MAX_OPERATIONAL_RUNS = 5000;
 const MAX_STRICT_BACKTESTS = 100;
-const OBSERVATION_QUERY_CHUNK = 400;
-const MAX_OBSERVATIONS_PER_QUERY = 5000;
 const EXPERIMENT_OBSERVATION_HORIZONS = ACTIVE_SIGNAL_OBSERVATION_HORIZONS;
-
-const snapshotEvaluationSessionId = (snapshot: unknown): string | undefined => {
-  if (typeof snapshot !== 'object' || snapshot === null) return undefined;
-  const value = (snapshot as { readonly evaluationSessionId?: unknown }).evaluationSessionId;
-  return typeof value === 'string' ? value : undefined;
-};
 
 const uniqueInOrder = (values: readonly string[]): string[] => [...new Set(values)];
 
@@ -268,7 +262,7 @@ const runMatchesValidation = (
   run.scope === 'evaluation' &&
   (run.status === 'complete' || run.status === 'partial') &&
   (() => {
-    const snapshotSessionId = snapshotEvaluationSessionId(run.inputSnapshot);
+    const snapshotSessionId = readStrategyRunSnapshot(run.inputSnapshot).evaluationSessionId;
     return snapshotSessionId === undefined || snapshotSessionId === input.validationSessionId;
   })();
 
@@ -284,60 +278,16 @@ const collectObservationsForRuns = async (input: {
   readonly observations: readonly SignalObservation[];
   readonly signals: readonly StrategySignal[];
 }> => {
-  const runIdSet = new Set(input.runs.map((run) => run.id));
-  const signals = (
-    await Promise.all(input.runs.map((run) => input.ctx.repos.strategyRun.signalsByRun(run.id)))
-  )
-    .flat()
-    .filter(
-      (signal) =>
-        signal.strategyId === input.strategyId &&
-        signal.strategyVersionId === input.candidateVersionId &&
-        runIdSet.has(signal.runId),
-    );
-  const signalStockById = new Map(signals.map((signal) => [signal.id, signal.stockId] as const));
-  const sourceIds = [...new Set(signals.map((signal) => signal.id))].sort();
-  const observationsById = new Map<string, SignalObservation>();
-  for (let index = 0; index < sourceIds.length; index += OBSERVATION_QUERY_CHUNK) {
-    const sourceIdChunk = sourceIds.slice(index, index + OBSERVATION_QUERY_CHUNK);
-    const sourceIdSet = new Set(sourceIdChunk);
-    const rows = await input.ctx.repos.signalObservation.list({
-      sourceKind: 'strategy-signal',
-      sourceIds: sourceIdChunk,
-      horizons: input.horizons,
-      limit: MAX_OBSERVATIONS_PER_QUERY,
-    });
-    if (rows.length >= MAX_OBSERVATIONS_PER_QUERY) {
-      input.limitations.push(
-        `SignalObservation 查询达到单批上限 ${MAX_OBSERVATIONS_PER_QUERY}，统计可能不完整。`,
-      );
-    }
-    for (const row of rows) {
-      if (
-        row.sourceKind !== 'strategy-signal' ||
-        !isActiveSignalObservationHorizon(row.horizon) ||
-        !input.horizons.includes(row.horizon) ||
-        !sourceIdSet.has(row.sourceId)
-      ) {
-        continue;
-      }
-      const signalStockId = signalStockById.get(row.sourceId);
-      if (signalStockId === undefined) continue;
-      if (row.stockId !== signalStockId) {
-        input.limitations.push(
-          `SignalObservation ${row.id} 的 stockId=${row.stockId} 与 StrategySignal ${row.sourceId} 的 stockId=${signalStockId} 不一致，已跳过。`,
-        );
-        continue;
-      }
-      observationsById.set(row.id, row);
-    }
-  }
-  if (sourceIds.length > 0 && observationsById.size === 0) {
-    input.limitations.push(
-      `${input.sourceLabel} runs 有 StrategySignal，但当前 T+1/T+3/T+5 没有 observation 事实；这不是 0 收益。`,
-    );
-  }
-  return { observations: [...observationsById.values()], signals };
+  const evidence = await collectStrategyObservationEvidence({
+    ctx: input.ctx,
+    runs: input.runs,
+    strategyId: input.strategyId,
+    strategyVersionId: input.candidateVersionId,
+    horizons: input.horizons,
+    sourceLabel: input.sourceLabel,
+  });
+  input.limitations.push(...evidence.limitations);
+  return { observations: evidence.observations, signals: evidence.signals };
 };
 
 const observationLink = (
@@ -492,11 +442,6 @@ const buildFactReferences = (input: {
   ...(input.strictBacktestIds ?? []).map((runId) => `strict-backtest:${runId}`),
 ];
 
-const snapshotField = (snapshot: unknown, key: string): unknown => {
-  if (typeof snapshot !== 'object' || snapshot === null) return undefined;
-  return (snapshot as Record<string, unknown>)[key];
-};
-
 const evaluatorIdentities = (runs: readonly StrategyRun[]) => {
   const identities = new Map<
     string,
@@ -504,14 +449,13 @@ const evaluatorIdentities = (runs: readonly StrategyRun[]) => {
   >();
   const missingEvaluatorVersionRunIds: string[] = [];
   for (const run of runs) {
-    const version = snapshotField(run.inputSnapshot, 'evaluatorVersion');
-    if (typeof version !== 'string' || version.length === 0) {
+    const snapshot = readStrategyRunSnapshot(run.inputSnapshot);
+    const version = snapshot.evaluatorVersion;
+    if (version === undefined) {
       missingEvaluatorVersionRunIds.push(run.id);
       continue;
     }
-    const codeHash = snapshotField(run.inputSnapshot, 'evaluatorCodeIdentity');
-    const normalizedCodeHash =
-      typeof codeHash === 'string' && codeHash.length > 0 ? codeHash : undefined;
+    const normalizedCodeHash = snapshot.evaluatorCodeIdentity;
     const key = `${version}\0${normalizedCodeHash ?? ''}`;
     const previous = identities.get(key);
     if (previous === undefined) {

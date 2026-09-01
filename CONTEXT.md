@@ -51,6 +51,36 @@ V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因
 审计的 daily cycle；租约使用 heartbeat + fencing token。外部观察 cron 只保留为幂等补偿任务，
 真实交易日的运行记录仍需持续积累，期间不扩大自动推荐或通知默认范围；样本数量不作为固定完成门禁。
 
+### StrategyDailyCycleAudit
+
+回答“某个 StrategySchedule 的一次盘后日循环发生了什么、使用了哪个事实时点、在哪一阶段降级或失败”。
+它是 `strategy-daily-cycle` WorkflowRun 的稳定领域投影：v1 写入显式版本、Strategy/Schedule 归属与
+dataAsOf；无版本旧记录继续通过同一解码边界只读兼容。按 Strategy、Schedule 或 dataAsOf 查询时，
+必须先确定归属与时间范围再截取数量，避免其它策略的新运行挤掉目标审计历史。
+
+### StrategyEvaluationData
+
+回答“本次 StrategyRun 的逐股 quote / daily-bars 从哪个时点与来源取得，以及缺失如何审计”。
+实时 scan 使用 Live Adapter；scheduled/replay 使用 Checkpoint Adapter，只读取本地 checkpoint 或 PIT
+revision。两个实现共享同一 Interface，`run_strategy` 不再承载模式分支、重试或 provider coverage 计算。
+
+### StrategyRunSnapshot
+
+StrategyRun 的不可变输入身份。当前写入 V3；V2 与任意旧对象只通过统一 Compatibility Module 读取。
+evaluator identity、requestedBy、evaluationSessionId、universe 和 data checkpoint 不得由各调用方直接
+探测原始 key，否则旧数据在不同 surface 会产生不一致语义。
+
+### StrategyObservationEvidence
+
+回答“哪些 StrategySignal 与哪些 ACTIVE SignalObservation 构成可审计事实链”。它批量校验
+run → signal → observation 的 Strategy/version/stock/horizon 归属，按 stock-day-horizon 去重，并显式
+返回 expected、missing、truncated 和 limitations。T+20 存量行不进入这条事实链。
+
+### StrategyRunTimeline
+
+Strategy 工作台、运行比较和洞察共用的只读运行视图；一次装载 run、version 与 results，并统一当前
+published operational run、上一基准和最近尝试的选择。它不是新的持久化实体，不改变 publication 规则。
+
 ### StrategyInsight
 
 回答“策略最近实际发生了什么”。确定性事实层汇总运行变化、规则阻断、当前行业分布、关联

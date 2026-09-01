@@ -155,7 +155,14 @@ describe('strategy-daily-cycle reliability matrix', () => {
         workflowName: 'strategy-daily-cycle',
       })
     )[0];
+    expect(audit?.inputSummary).toMatchObject({
+      schemaVersion: 1,
+      strategyId: 'cycle-strategy',
+      scheduleId: 'cycle-schedule',
+      requestedBy: 'historical',
+    });
     expect(audit?.outputSummary).toMatchObject({
+      schemaVersion: 1,
       benchmarkSync: {
         status: 'skipped',
         dataVersion: '000300.SH:qfq:daily:v1',

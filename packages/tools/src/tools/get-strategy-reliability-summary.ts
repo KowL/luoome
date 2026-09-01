@@ -2,27 +2,15 @@ import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   type ActiveSignalObservationHorizon,
   ActiveSignalObservationHorizonSchema,
+  decodeStrategyDailyCycleAudit,
+  isHistoricalStrategyDailyCycleAudit,
+  isProductionStrategyDailyCycleAudit,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
 
-const dateValue = (value: unknown): Date | undefined => {
-  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : undefined;
-  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date : undefined;
-};
-
 const dayKey = (value: Date): string => value.toISOString().slice(0, 10);
-
-const recordValue = (value: unknown): Record<string, unknown> | undefined =>
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-
-const numberValue = (value: unknown): number | undefined =>
-  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
 export const GetStrategyReliabilitySummaryInput = z.object({
   strategyId: z.string().min(1).optional(),
@@ -141,48 +129,24 @@ export const getStrategyReliabilitySummaryTool = defineTool({
   input: GetStrategyReliabilitySummaryInput,
   output: GetStrategyReliabilitySummaryOutput,
   handler: async (input, ctx) => {
-    const runs = await ctx.repos.workflowRun.listRecent({
-      workflowName: 'strategy-daily-cycle',
+    const runs = await ctx.repos.workflowRun.listStrategyDailyCycleAudits({
+      ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
+      ...(input.scheduleId === undefined ? {} : { scheduleId: input.scheduleId }),
       ...(input.since === undefined ? {} : { since: input.since }),
+      ...(input.until === undefined ? {} : { until: input.until }),
       limit: input.limit,
     });
-    const filtered = runs
+    const audits = runs.flatMap((run) => decodeStrategyDailyCycleAudit(run) ?? []);
+    const filtered = audits
       // 进程恢复时被收敛的 WorkflowRun 仍保留作审计，但不是一次正式 schedule 周期；
       // 不应把它计入正式运行数、阶段延迟或 schedule-day duplicate 门禁。
-      .filter(
-        (run) => recordValue(run.outputSummary)?.reconciliation !== 'stale_workflow_run_reconciled',
-      )
-      .filter((run) => {
-        const dataAsOf = dateValue(recordValue(run.inputSummary)?.dataAsOf) ?? run.startedAt;
-        if (input.since !== undefined && dataAsOf < input.since) return false;
-        if (input.until !== undefined && dataAsOf > input.until) return false;
-        return true;
-      })
-      .filter((run) => {
-        if (input.strategyId === undefined) return true;
-        return recordValue(run.inputSummary)?.strategyId === input.strategyId;
-      })
-      .filter((run) => {
-        if (input.scheduleId === undefined) return true;
-        return recordValue(run.inputSummary)?.scheduleId === input.scheduleId;
-      });
+      .filter((audit) => audit.reconciliation !== 'stale_workflow_run_reconciled');
     // Holiday/ineligible/duplicate claims are audited as skipped workflow attempts, not
     // production cycles.  Excluding them keeps trading-day, phase and publication gates tied to
     // actual StrategyRun-producing cycles.
-    const cycleRuns = filtered.filter(
-      (run) => recordValue(run.outputSummary)?.status !== 'skipped',
-    );
-    const historicalRuns = cycleRuns.filter((run) => {
-      const inputSummary = recordValue(run.inputSummary);
-      if (inputSummary?.requestedBy === 'historical') return true;
-      // 兼容已落库的旧显式 asOf 周期：正常生产周期的 dataAsOf 与 startedAt
-      // 只相差当天时区边界；跨过一天以上即视为历史尝试，保留审计但不污染 S3 门禁。
-      const dataAsOf = dateValue(inputSummary?.dataAsOf);
-      return (
-        dataAsOf !== undefined && run.startedAt.getTime() - dataAsOf.getTime() > 24 * 60 * 60_000
-      );
-    });
-    const productionRuns = cycleRuns.filter((run) => !historicalRuns.includes(run));
+    const cycleAudits = filtered.filter((audit) => audit.cycleStatus !== 'skipped');
+    const historicalAudits = cycleAudits.filter(isHistoricalStrategyDailyCycleAudit);
+    const productionAudits = cycleAudits.filter(isProductionStrategyDailyCycleAudit);
     const scheduleIds = new Set<string>();
     const tradingDays = new Set<string>();
     const scheduleTradingDayKeys = new Map<string, Set<string>>();
@@ -226,57 +190,53 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       Array<{ p50Ms: number; p95Ms: number; maxMs: number }>
     >();
 
-    for (const run of productionRuns) {
+    for (const audit of productionAudits) {
+      const run = audit.run;
       statuses[run.status] += 1;
-      const inputSummary = recordValue(run.inputSummary);
-      const outputSummary = recordValue(run.outputSummary);
-      const scheduleId = inputSummary?.scheduleId;
-      if (typeof scheduleId === 'string') scheduleIds.add(scheduleId);
-      const dataAsOf = dateValue(inputSummary?.dataAsOf) ?? run.startedAt;
+      const scheduleId = audit.scheduleId;
+      if (scheduleId !== undefined) scheduleIds.add(scheduleId);
+      const dataAsOf = audit.dataAsOf;
       const tradingDayKey = dayKey(dataAsOf);
       tradingDays.add(tradingDayKey);
-      if (typeof scheduleId === 'string') {
+      if (scheduleId !== undefined) {
         const scheduleDays = scheduleTradingDayKeys.get(scheduleId) ?? new Set<string>();
         scheduleDays.add(tradingDayKey);
         scheduleTradingDayKeys.set(scheduleId, scheduleDays);
         const scheduleDay = `${scheduleId}:${dayKey(dataAsOf)}`;
         scheduleDayRunCounts.set(scheduleDay, (scheduleDayRunCounts.get(scheduleDay) ?? 0) + 1);
       }
-      const phaseTimings = outputSummary?.phaseTimings;
-      if (Array.isArray(phaseTimings)) {
-        for (const timing of phaseTimings) {
-          const row = recordValue(timing);
-          const phase = row?.phase;
-          const durationMs = numberValue(row?.durationMs);
-          if (typeof phase !== 'string' || durationMs === undefined || durationMs < 0) continue;
+      if (audit.phaseTimings.length > 0) {
+        for (const timing of audit.phaseTimings) {
+          const { phase, durationMs } = timing;
+          if (durationMs === undefined) continue;
           const samples = phaseDurationSamples.get(phase) ?? [];
           samples.push(durationMs);
           phaseDurationSamples.set(phase, samples);
         }
       }
 
-      const publication = outputSummary?.publication;
+      const publication = audit.publication;
       if (publication === 'published') publications.published += 1;
       else if (publication === 'withheld') publications.withheld += 1;
       else if (publication === 'non-publishing') publications.nonPublishing += 1;
       else publications.missing += 1;
 
-      const renewalCount = numberValue(outputSummary?.leaseRenewals) ?? 0;
+      const renewalCount = audit.leaseRenewals ?? 0;
       leases.totalRenewals += Math.max(0, Math.floor(renewalCount));
       if (renewalCount > 0) leases.runsWithRenewal += 1;
-      const reason = outputSummary?.reason ?? run.error;
+      const reason = audit.reason;
       if (reason === 'lease_lost_before_commit') leases.leaseLost += 1;
 
-      const checkpoint = recordValue(outputSummary?.checkpoint);
+      const checkpoint = audit.checkpoint;
       if (checkpoint !== undefined) {
         checkpoints.runsWithCheckpoint += 1;
-        const requested = numberValue(checkpoint.requestedCount) ?? 0;
-        const available = numberValue(checkpoint.availableCount) ?? 0;
-        const failed = numberValue(checkpoint.failedCount) ?? 0;
+        const requested = checkpoint.requestedCount ?? 0;
+        const available = checkpoint.availableCount ?? 0;
+        const failed = checkpoint.failedCount ?? 0;
         checkpoints.requestedCount += Math.max(0, Math.floor(requested));
         checkpoints.availableCount += Math.max(0, Math.floor(available));
         checkpoints.failedCount += Math.max(0, Math.floor(failed));
-        if ((numberValue(checkpoint.coverageRatio) ?? 0) < 0.98) {
+        if ((checkpoint.coverageRatio ?? 0) < 0.98) {
           checkpoints.belowAcceptance += 1;
         }
         if (checkpoint.fallbackUsed === true) checkpoints.fallbackRuns += 1;
@@ -288,56 +248,36 @@ export const getStrategyReliabilitySummaryTool = defineTool({
         }
       }
 
-      const observation = recordValue(outputSummary?.observations);
+      const observation = audit.observations;
       if (observation !== undefined) {
         observations.runsWithObservations += 1;
-        observations.completed += Math.max(0, Math.floor(numberValue(observation.completed) ?? 0));
-        observations.pending += Math.max(0, Math.floor(numberValue(observation.pending) ?? 0));
-        const baselines = recordValue(observation.baselines);
-        observations.baselines.available += Math.max(
-          0,
-          Math.floor(numberValue(baselines?.available) ?? 0),
-        );
-        observations.baselines.unavailable += Math.max(
-          0,
-          Math.floor(numberValue(baselines?.unavailable) ?? 0),
-        );
-        const baselineProviders = recordValue(baselines?.providers);
+        observations.completed += Math.max(0, Math.floor(observation.completed ?? 0));
+        observations.pending += Math.max(0, Math.floor(observation.pending ?? 0));
+        const baselines = observation.baselines;
+        observations.baselines.available += Math.max(0, Math.floor(baselines?.available ?? 0));
+        observations.baselines.unavailable += Math.max(0, Math.floor(baselines?.unavailable ?? 0));
+        const baselineProviders = baselines?.providers;
         if (baselineProviders !== undefined) {
           for (const [provider, count] of Object.entries(baselineProviders)) {
-            const value = numberValue(count);
-            if (value === undefined || value < 0) continue;
             observationBaselineProviders.set(
               provider,
-              (observationBaselineProviders.get(provider) ?? 0) + Math.floor(value),
+              (observationBaselineProviders.get(provider) ?? 0) + Math.floor(count),
             );
           }
         }
-        const byHorizon = recordValue(observation.byHorizon);
+        const byHorizon = observation.byHorizon;
         for (const horizon of ACTIVE_SIGNAL_OBSERVATION_HORIZONS) {
-          const row = recordValue(byHorizon?.[horizon]);
-          observationByHorizon[horizon].created += Math.max(
-            0,
-            Math.floor(numberValue(row?.created) ?? 0),
-          );
-          observationByHorizon[horizon].completed += Math.max(
-            0,
-            Math.floor(numberValue(row?.completed) ?? 0),
-          );
-          observationByHorizon[horizon].pending += Math.max(
-            0,
-            Math.floor(numberValue(row?.pending) ?? 0),
-          );
+          const row = byHorizon?.[horizon];
+          observationByHorizon[horizon].created += Math.max(0, Math.floor(row?.created ?? 0));
+          observationByHorizon[horizon].completed += Math.max(0, Math.floor(row?.completed ?? 0));
+          observationByHorizon[horizon].pending += Math.max(0, Math.floor(row?.pending ?? 0));
         }
       }
-      if (outputSummary?.insightProvider === 'facts-only') insight.factsOnly += 1;
-      if (
-        typeof outputSummary?.insightProvider === 'string' &&
-        outputSummary.insightProvider === 'unavailable'
-      ) {
+      if (audit.insightProvider === 'facts-only') insight.factsOnly += 1;
+      if (audit.insightProvider === 'unavailable') {
         insight.unavailable += 1;
       }
-      const notificationFailed = numberValue(outputSummary?.notificationFailed) ?? 0;
+      const notificationFailed = audit.notificationFailed ?? 0;
       if (notificationFailed > 0) {
         notifications.failed += Math.floor(notificationFailed);
         notifications.runsWithFailure += 1;
@@ -417,7 +357,7 @@ export const getStrategyReliabilitySummaryTool = defineTool({
         ]),
     );
     const blockers: string[] = [];
-    if (productionRuns.length === 0) blockers.push('no-production-cycles');
+    if (productionAudits.length === 0) blockers.push('no-production-cycles');
     const observationTargetBlockers: string[] = [];
     if (tradingDays.size < input.targetTradingDays) {
       observationTargetBlockers.push('trading-days-below-target');
@@ -450,8 +390,8 @@ export const getStrategyReliabilitySummaryTool = defineTool({
       ...(input.until === undefined ? {} : { until: input.until }),
       ...(input.strategyId === undefined ? {} : { strategyId: input.strategyId }),
       ...(input.scheduleId === undefined ? {} : { scheduleId: input.scheduleId }),
-      runCount: productionRuns.length,
-      historicalRunCount: historicalRuns.length,
+      runCount: productionAudits.length,
+      historicalRunCount: historicalAudits.length,
       scheduleCount: scheduleIds.size,
       tradingDays: tradingDays.size,
       tradingDayKeys: [...tradingDays].sort(),

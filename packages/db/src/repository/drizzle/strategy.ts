@@ -415,20 +415,6 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     };
   }
 
-  async acquireRunLease(input: {
-    readonly strategyId: string;
-    readonly strategyVersionId: string;
-    readonly owner: string;
-    readonly runId?: string;
-    readonly returnToken?: boolean;
-    readonly now: Date;
-    readonly leaseUntil: Date;
-  }): Promise<boolean | StrategyLeaseToken | null> {
-    const token = await this.acquireRunLeaseToken(input);
-    if (input.returnToken === true || input.runId !== undefined) return token;
-    return token !== null;
-  }
-
   async renewRunLease(input: {
     readonly token: StrategyLeaseToken;
     readonly now: Date;
@@ -636,6 +622,25 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
     );
   }
 
+  async listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]> {
+    if (runIds.length === 0) return [];
+    return (
+      this.db
+        .select()
+        .from(strategyResults)
+        .where(inArray(strategyResults.runId, [...runIds]))
+        // rank 为 NULL 的无排名结果排最后（与 listResults 一致）。
+        .orderBy(
+          asc(strategyResults.runId),
+          sql`${strategyResults.rank} IS NULL`,
+          asc(strategyResults.rank),
+          asc(strategyResults.stockId),
+        )
+        .all()
+        .map(toResult)
+    );
+  }
+
   async signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]> {
     const where =
       since === undefined
@@ -655,6 +660,28 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       .select()
       .from(strategySignals)
       .where(eq(strategySignals.runId, runId))
+      .orderBy(desc(strategySignals.ts), desc(strategySignals.id))
+      .all()
+      .map(toSignal);
+  }
+
+  async signalsByRuns(runIds: readonly string[]): Promise<readonly StrategySignal[]> {
+    if (runIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(strategySignals)
+      .where(inArray(strategySignals.runId, [...runIds]))
+      .orderBy(desc(strategySignals.ts), desc(strategySignals.id))
+      .all()
+      .map(toSignal);
+  }
+
+  async signalsByIds(signalIds: readonly string[]): Promise<readonly StrategySignal[]> {
+    if (signalIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(strategySignals)
+      .where(inArray(strategySignals.id, [...signalIds]))
       .orderBy(desc(strategySignals.ts), desc(strategySignals.id))
       .all()
       .map(toSignal);

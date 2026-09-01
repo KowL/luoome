@@ -21,6 +21,10 @@ import { z } from 'zod';
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import { resolveQuotes } from '../internal/resolve-quotes.js';
 import {
+  hydrateStrategyRunTimeline,
+  readStrategyOperationalBaseline,
+} from '../internal/strategy-run-timeline.js';
+import {
   readStrategySignalsByStock,
   StrategySignalScopeSchema,
 } from '../internal/strategy-signal-scope.js';
@@ -332,20 +336,12 @@ export const getStrategyWorkspaceTool = defineTool({
   handler: async (input, ctx) => {
     const strategy = await ctx.repos.strategy.findById(input.strategyId);
     if (strategy === null) return errNotFound('Strategy', input.strategyId);
-    const [latestAttempt, currentRun, previousRun] = await Promise.all([
-      ctx.repos.strategyRun.listRuns({ strategyId: strategy.id, scope: 'operational', limit: 1 }),
-      ctx.repos.strategyRun.findLatestPublishedRun(strategy.id),
-      ctx.repos.strategyRun.findLatestPublishedRun(strategy.id).then(async (run) =>
-        run === null
-          ? null
-          : ctx.repos.strategyRun.findPreviousPublishedRun({
-              strategyId: strategy.id,
-              beforeStartedAt: run.startedAt,
-              beforeRunId: run.id,
-            }),
-      ),
-    ]);
-    const latest = latestAttempt[0];
+    const baseline = await readStrategyOperationalBaseline(ctx, strategy);
+    const latest = baseline.latestAttempt?.run;
+    const currentEntry = baseline.current;
+    const previousEntry = baseline.previous;
+    const currentRun = currentEntry?.run;
+    const previousRun = previousEntry?.run;
     const currentVersion =
       strategy.currentVersionId === undefined
         ? undefined
@@ -374,17 +370,18 @@ export const getStrategyWorkspaceTool = defineTool({
       );
     }
     // 最近尝试不是当前可发布基准且存在更早的 published run 时，明确展示回退状态。
-    if (latest !== undefined && currentRun !== null && !isPublishableOperationalRun(latest)) {
+    if (latest !== undefined && currentRun !== undefined && !isPublishableOperationalRun(latest)) {
       warnings.push(
         `最近运行${latest.status}，当前结果仍来自 ${currentRun.finishedAt?.toISOString() ?? currentRun.startedAt.toISOString()} 的运行`,
       );
     }
 
     const overview: z.infer<typeof GetStrategyWorkspaceOutput>['overview'] = { health };
-    if (currentRun !== null) {
-      const version = await ctx.repos.strategy.findVersionById(currentRun.strategyVersionId);
-      if (version === null) return errNotFound('StrategyVersion', currentRun.strategyVersionId);
-      const views = (await ctx.repos.strategyRun.listResults(currentRun.id)).map((result) =>
+    if (currentEntry !== undefined) {
+      const version = currentEntry.version;
+      if (version === null)
+        return errNotFound('StrategyVersion', currentEntry.run.strategyVersionId);
+      const views = currentEntry.results.map((result) =>
         classifyStrategyResult(version.definition, result),
       );
       overview.selectedCount = views.filter((view) => view.kind === 'selected').length;
@@ -393,17 +390,15 @@ export const getStrategyWorkspaceTool = defineTool({
         (view) => view.kind === 'ranking-near-miss',
       ).length;
       overview.incompleteCount = views.filter((view) => view.kind === 'incomplete').length;
-      if (previousRun !== null) {
-        const [previousVersion, previousResults] = await Promise.all([
-          ctx.repos.strategy.findVersionById(previousRun.strategyVersionId),
-          ctx.repos.strategyRun.listResults(previousRun.id),
-        ]);
+      if (previousEntry !== undefined) {
+        const previousVersion = previousEntry.version;
+        const previousResults = previousEntry.results;
         if (previousVersion === null) {
-          return errNotFound('StrategyVersion', previousRun.strategyVersionId);
+          return errNotFound('StrategyVersion', previousEntry.run.strategyVersionId);
         }
         const diff = diffStrategyRunViews({
-          fromRun: previousRun,
-          toRun: currentRun,
+          fromRun: previousEntry.run,
+          toRun: currentEntry.run,
           fromViews: previousResults.map((result) =>
             classifyStrategyResult(previousVersion.definition, result),
           ),
@@ -421,8 +416,8 @@ export const getStrategyWorkspaceTool = defineTool({
       strategy,
       ...(currentVersion === undefined || currentVersion === null ? {} : { currentVersion }),
       ...(latest === undefined ? {} : { latestAttempt: latest }),
-      ...(currentRun === null ? {} : { currentRun }),
-      ...(previousRun === null ? {} : { previousRun }),
+      ...(currentRun === undefined ? {} : { currentRun }),
+      ...(previousRun === undefined ? {} : { previousRun }),
       overview,
       warnings,
     };
@@ -467,17 +462,12 @@ export const compareStrategyRunsTool = defineTool({
     if (strategy === null) return errNotFound('Strategy', input.strategyId);
     let fromRun: StrategyRun | null | undefined;
     let toRun: StrategyRun | null | undefined;
+    let baselineTimeline: Awaited<ReturnType<typeof readStrategyOperationalBaseline>> | undefined;
     if (input.fromRunId === undefined || input.toRunId === undefined) {
-      toRun = await ctx.repos.strategyRun.findLatestPublishedRun(strategy.id);
-      fromRun =
-        toRun === null
-          ? null
-          : await ctx.repos.strategyRun.findPreviousPublishedRun({
-              strategyId: strategy.id,
-              beforeStartedAt: toRun.startedAt,
-              beforeRunId: toRun.id,
-            });
-      if (fromRun === null || toRun === null) {
+      baselineTimeline = await readStrategyOperationalBaseline(ctx, strategy);
+      toRun = baselineTimeline.current?.run;
+      fromRun = baselineTimeline.previous?.run;
+      if (fromRun === undefined || toRun === undefined) {
         return errNotFound('StrategyRun diff baseline', strategy.id);
       }
     } else {
@@ -498,12 +488,16 @@ export const compareStrategyRunsTool = defineTool({
     if (fromRun.scope !== toRun.scope && !input.allowCrossScope) {
       return errInvalidInput('不同 scope 的 StrategyRun 需要显式 allowCrossScope=true 才能比较');
     }
-    const [fromVersion, toVersion, fromResults, toResults] = await Promise.all([
-      ctx.repos.strategy.findVersionById(fromRun.strategyVersionId),
-      ctx.repos.strategy.findVersionById(toRun.strategyVersionId),
-      ctx.repos.strategyRun.listResults(fromRun.id),
-      ctx.repos.strategyRun.listResults(toRun.id),
-    ]);
+    const hydrated =
+      baselineTimeline === undefined
+        ? await hydrateStrategyRunTimeline(ctx, [fromRun, toRun])
+        : undefined;
+    const fromEntry = baselineTimeline?.previous ?? hydrated?.byRunId.get(fromRun.id);
+    const toEntry = baselineTimeline?.current ?? hydrated?.byRunId.get(toRun.id);
+    const fromVersion = fromEntry?.version ?? null;
+    const toVersion = toEntry?.version ?? null;
+    const fromResults = fromEntry?.results ?? [];
+    const toResults = toEntry?.results ?? [];
     if (fromVersion === null) return errNotFound('StrategyVersion', fromRun.strategyVersionId);
     if (toVersion === null) return errNotFound('StrategyVersion', toRun.strategyVersionId);
     const diff = diffStrategyRunViews({

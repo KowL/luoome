@@ -71,6 +71,28 @@ export class DrizzleSignalObservationRepository implements SignalObservationRepo
       .get();
     return row === undefined ? null : toObservation(row);
   }
+
+  async listBySources(
+    input: Parameters<SignalObservationRepository['listBySources']>[0],
+  ): Promise<readonly SignalObservation[]> {
+    if (input.sourceIds.length === 0) return [];
+    const conditions = [inArray(signalObservations.sourceId, [...input.sourceIds])];
+    if (input.sourceKind !== undefined) {
+      conditions.push(eq(signalObservations.sourceKind, input.sourceKind));
+    }
+    if (input.horizons !== undefined) {
+      if (input.horizons.length === 0) return [];
+      conditions.push(inArray(signalObservations.horizon, [...input.horizons]));
+    }
+    return this.db
+      .select()
+      .from(signalObservations)
+      .where(and(...conditions))
+      .orderBy(desc(signalObservations.baselineAt), desc(signalObservations.id))
+      .all()
+      .map(toObservation);
+  }
+
   async list(
     input: Parameters<SignalObservationRepository['list']>[0] = {},
   ): Promise<readonly SignalObservation[]> {

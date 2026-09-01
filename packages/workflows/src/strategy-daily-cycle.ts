@@ -1,9 +1,12 @@
 import {
   ACTIVE_SIGNAL_OBSERVATION_HORIZONS,
   type ActiveSignalObservationHorizon,
+  createStrategyDailyCycleAuditInputSummary,
+  createStrategyDailyCycleAuditOutputSummary,
   DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
   isHoliday,
   isWeekend,
+  readStrategyRunSnapshot,
   STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
   StrategyRecommendationPreflightSummarySchema,
@@ -70,31 +73,14 @@ const errorText = (error: {
 
 const utcDayKey = (value: Date): string => value.toISOString().slice(0, 10);
 
-const parseSnapshotDate = (value: unknown): Date | undefined => {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? undefined : value;
-  }
-  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-};
-
 const scheduledRunDataAsOf = (run: {
   readonly dataAsOf: Date;
   readonly inputSnapshot: unknown;
 }): Date => {
-  const snapshot = run.inputSnapshot;
-  if (typeof snapshot !== 'object' || snapshot === null || !('dataCheckpoint' in snapshot)) {
-    return run.dataAsOf;
-  }
-  const checkpoint = snapshot.dataCheckpoint;
-  if (typeof checkpoint !== 'object' || checkpoint === null || !('dataAsOf' in checkpoint)) {
-    return run.dataAsOf;
-  }
   // Scheduled StrategyRun.dataAsOf is conservatively allowed to be the oldest member bar.
   // The checkpoint timestamp is the cycle's trading-day key and is therefore the correct
   // identity for preventing a second cron tick on the same day.
-  return parseSnapshotDate(checkpoint.dataAsOf) ?? run.dataAsOf;
+  return readStrategyRunSnapshot(run.inputSnapshot).dataCheckpoint?.dataAsOf ?? run.dataAsOf;
 };
 
 const runCycle: WorkflowStep = async (previous, ctx) => {
@@ -258,6 +244,12 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     const workflowRunId = `workflow-strategy-daily-cycle-${globalThis.crypto.randomUUID()}`;
     const workflowStartedAt = ctx.clock();
     const auditDataAsOf = input.asOf ?? workflowStartedAt;
+    const auditInputSummary = createStrategyDailyCycleAuditInputSummary({
+      strategyId: schedule.strategyId,
+      scheduleId: schedule.id,
+      dataAsOf: auditDataAsOf,
+      requestedBy: input.asOf === undefined ? 'scheduled' : 'historical',
+    });
     beginPhase('claim');
     const startedAudit = await ctx.tools.record_workflow_run.execute({
       run: {
@@ -266,12 +258,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         mode: 'scheduled',
         status: 'running',
         startedAt: workflowStartedAt,
-        inputSummary: {
-          strategyId: schedule.strategyId,
-          scheduleId: schedule.id,
-          dataAsOf: auditDataAsOf,
-          requestedBy: input.asOf === undefined ? 'scheduled' : 'historical',
-        },
+        inputSummary: auditInputSummary,
         providerStatuses: [],
       },
     });
@@ -292,13 +279,8 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
           status: auditStatus,
           startedAt: workflowStartedAt,
           finishedAt,
-          inputSummary: {
-            strategyId: schedule.strategyId,
-            scheduleId: schedule.id,
-            dataAsOf: auditDataAsOf,
-            requestedBy: input.asOf === undefined ? 'scheduled' : 'historical',
-          },
-          outputSummary: {
+          inputSummary: auditInputSummary,
+          outputSummary: createStrategyDailyCycleAuditOutputSummary({
             status: item.status,
             phase: item.phase,
             runId,
@@ -317,7 +299,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             observations: observationSummary,
             benchmarkSync,
             phaseTimings,
-          },
+          }),
           providerStatuses,
           ...(item.reason === undefined ? {} : { error: item.reason }),
         },
@@ -359,8 +341,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       const duplicate = priorRuns.data.runs.some(
         (run) =>
           run.mode === 'scheduled' &&
-          run.inputSnapshot !== undefined &&
-          run.inputSnapshot.requestedBy === 'scheduled' &&
+          readStrategyRunSnapshot(run.inputSnapshot).requestedBy === 'scheduled' &&
           utcDayKey(scheduledRunDataAsOf(run)) === utcDayKey(auditDataAsOf),
       );
       if (duplicate) {

@@ -85,6 +85,7 @@ import type {
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
 import type { ResearchSearchHit } from '../research-vault.js';
+import type { StrategyDailyCycleAuditQuery } from '../strategy/daily-cycle-audit.js';
 import type {
   FundamentalScoreResult,
   FundamentalScoreRun,
@@ -514,6 +515,12 @@ export interface ResearchEmbeddingRepository {
 export interface SignalObservationRepository {
   save(observation: SignalObservation): Promise<void>;
   findById(id: string): Promise<SignalObservation | null>;
+  /** 按来源批量读取全部观察；不受通用 list 的默认分页上限影响。 */
+  listBySources(input: {
+    readonly sourceKind?: SignalObservation['sourceKind'];
+    readonly sourceIds: readonly string[];
+    readonly horizons?: readonly SignalObservation['horizon'][];
+  }): Promise<readonly SignalObservation[]>;
   list(input?: {
     readonly status?: SignalObservationStatus;
     readonly sourceKind?: SignalObservation['sourceKind'];
@@ -575,7 +582,7 @@ export interface StrategyRepository {
 }
 
 export interface StrategyRunRepository {
-  /** 新 fencing token；旧 acquireRunLease 保留 boolean 兼容，生产代码使用 token 变体。 */
+  /** 获取正式运行的 fencing token；租约不存在或仍有效时返回 null。 */
   acquireRunLeaseToken(input: {
     readonly strategyId: string;
     readonly strategyVersionId: string;
@@ -584,15 +591,6 @@ export interface StrategyRunRepository {
     readonly now: Date;
     readonly leaseUntil: Date;
   }): Promise<StrategyLeaseToken | null>;
-  acquireRunLease(input: {
-    readonly strategyId: string;
-    readonly strategyVersionId: string;
-    readonly owner: string;
-    readonly runId?: string;
-    readonly returnToken?: boolean;
-    readonly now: Date;
-    readonly leaseUntil: Date;
-  }): Promise<boolean | StrategyLeaseToken | null>;
   renewRunLease(input: {
     readonly token: StrategyLeaseToken;
     readonly now: Date;
@@ -626,7 +624,13 @@ export interface StrategyRunRepository {
     readonly limit?: number;
   }): Promise<readonly StrategyRun[]>;
   listResults(runId: string): Promise<readonly StrategyResult[]>;
+  /** 按运行批量读取结果；空 runIds 返回空数组。 */
+  listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]>;
   signalsByRun(runId: string): Promise<readonly StrategySignal[]>;
+  /** 按运行批量读取信号；空 runIds 返回空数组。 */
+  signalsByRuns(runIds: readonly string[]): Promise<readonly StrategySignal[]>;
+  /** 按 signal id 批量读取信号；不存在的 id 被忽略。 */
+  signalsByIds(signalIds: readonly string[]): Promise<readonly StrategySignal[]>;
   signalsByStrategy(strategyId: string, since?: Date): Promise<readonly StrategySignal[]>;
   signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]>;
   /** 写入可见的 running 记录；runId 重复必须拒绝。 */
@@ -946,5 +950,9 @@ export interface WorkflowRunRepository {
     readonly since?: Date;
     readonly limit?: number;
   }): Promise<readonly WorkflowRun[]>;
+  /** Strategy 日循环专用审计查询；归属与 dataAsOf 过滤必须先于 limit/offset。 */
+  listStrategyDailyCycleAudits(
+    query?: StrategyDailyCycleAuditQuery,
+  ): Promise<readonly WorkflowRun[]>;
   remove(id: string): Promise<void>;
 }

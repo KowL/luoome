@@ -200,6 +200,12 @@ describe('get_strategy_recommendation_preflight_history', () => {
         ],
       },
     });
+    for (let index = 0; index < 25; index += 1) {
+      await saveCycle(ctx, {
+        id: `cycle-without-preflight-${index}`,
+        startedAt: `2026-08-31T09:${String(59 - index).padStart(2, '0')}:00.000Z`,
+      });
+    }
 
     const result = await getStrategyRecommendationPreflightHistoryTool.execute(
       { strategyId: STRATEGY_ID, limit: 1 },
@@ -209,7 +215,7 @@ describe('get_strategy_recommendation_preflight_history', () => {
       ok: true,
       data: {
         runs: [{ startedAt: new Date('2026-08-30T10:00:00.000Z') }],
-        limitations: ['损坏的 preflight 快照未计入历史。'],
+        limitations: ['旧运行没有 preflight 快照，已忽略。', '损坏的 preflight 快照未计入历史。'],
       },
     });
   });

@@ -123,6 +123,52 @@ describe('get_strategy_reliability_summary', () => {
     expect(result.data.observations.byHorizon).not.toHaveProperty('t20');
   });
 
+  it('strategy 归属过滤发生在 limit 之前', async () => {
+    const ctx = await buildTestContext();
+    await ctx.repos.workflowRun.save({
+      id: 'cycle-target-older',
+      workflowName: 'strategy-daily-cycle',
+      mode: 'scheduled',
+      status: 'succeeded',
+      startedAt: new Date('2026-08-10T09:00:00.000Z'),
+      finishedAt: new Date('2026-08-10T09:01:00.000Z'),
+      inputSummary: {
+        strategyId: 'strategy-target',
+        scheduleId: 'schedule-target',
+        dataAsOf: new Date('2026-08-10T00:00:00.000Z'),
+      },
+      outputSummary: { publication: 'published' },
+      providerStatuses: [],
+    });
+    await ctx.repos.workflowRun.save({
+      id: 'cycle-other-newer',
+      workflowName: 'strategy-daily-cycle',
+      mode: 'scheduled',
+      status: 'succeeded',
+      startedAt: new Date('2026-08-11T09:00:00.000Z'),
+      finishedAt: new Date('2026-08-11T09:01:00.000Z'),
+      inputSummary: {
+        strategyId: 'strategy-other',
+        scheduleId: 'schedule-other',
+        dataAsOf: new Date('2026-08-11T00:00:00.000Z'),
+      },
+      outputSummary: { publication: 'published' },
+      providerStatuses: [],
+    });
+
+    const result = await getStrategyReliabilitySummaryTool.execute(
+      { strategyId: 'strategy-target', targetTradingDays: 1, limit: 1 },
+      ctx,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        runCount: 1,
+        tradingDayKeys: ['2026-08-10'],
+      },
+    });
+  });
+
   it('正式周期缺审计事实或被 withheld 时不能误报 ready', async () => {
     const ctx = await buildTestContext();
     await ctx.repos.workflowRun.save({

@@ -1,32 +1,30 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-
+import {
+  buildBacktestResultContent,
+  buildStrictBacktestResultContent,
+  parseBacktestStockIds,
+  runStrategyBacktest,
+} from './strategy-workspace-backtest.js';
+import { renderDecisionCycles } from './strategy-workspace-cycle.js';
 import {
   appendExperimentScoringComponent,
   appendExperimentSelectionRule,
   appendExperimentSignalRule,
-  buildBacktestResultContent,
   buildExperimentScoreExpression,
   buildExperimentSimpleExpression,
-  buildRunDetailContent,
-  buildStrategyHash,
-  buildStrictBacktestResultContent,
   createExperimentBlankDefinition,
   deriveExperimentStepStates,
-  invalidateStrategyWorkspaceCache,
+  invalidateExperimentCache,
   nextExperimentRuleId,
   nextExperimentScoringRuleId,
-  openRunDetail,
-  parseBacktestStockIds,
   parseExperimentStockIds,
-  parseStrategyHash,
   removeExperimentSelectionRule,
-  renderDecisionCycles,
-  renderInsights,
-  renderRuns,
-  renderSettings,
   renderStrategyExperiment,
-  runStrategyBacktest,
-} from './strategy-workspace.js';
+} from './strategy-workspace-experiment.js';
+import { renderInsights } from './strategy-workspace-insights.js';
+import { buildStrategyHash, parseStrategyHash } from './strategy-workspace-route.js';
+import { buildRunDetailContent, openRunDetail, renderRuns } from './strategy-workspace-runs.js';
+import { invalidateSettingsCache, renderSettings } from './strategy-workspace-settings.js';
 
 /* ============================================================
  * 极简 DOM shim：bun test 无内置 document，仓库也未引入 DOM 库，
@@ -513,7 +511,7 @@ describe('Strategy Experiment Lab', () => {
         },
       },
     };
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     globalThis.fetch = async (path) =>
       String(path).includes('/api/strategy/dsl-catalog')
         ? jsonResponse({ ok: true, data: experimentCatalog })
@@ -549,7 +547,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('证据门禁 eligible 时展示人工评审入口，不变成自动发布', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     const eligibleContext = {
       ...experimentContext,
       strategy: { id: 'experiment-eligible', name: 'Eligible UI', status: 'active' },
@@ -600,7 +598,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('渲染字段元数据、双模式入口、Diff 与评审门禁，不生成胜率叙事', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     globalThis.fetch = async (path) => {
       if (String(path).includes('/api/strategy/dsl-catalog')) {
         return jsonResponse({ ok: true, data: experimentCatalog });
@@ -627,7 +625,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('X4 分层展示四类证据，并区分缺失、不可用与真实 0 收益', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     const observationLink = {
       observationId: 'observation-t1-zero',
       signalId: 'signal-t1-zero',
@@ -793,7 +791,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('载入 EARLY_BREAKOUT_V2_DRAFT 只改变页面内存，不发送 POST', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     const starterDefinition = {
       ...experimentDefinition,
       metadata: { ...experimentDefinition.metadata, style: 'early-breakout-v2' },
@@ -858,7 +856,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('严格回测经过二次确认，第二步取消时不发送 POST', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     const strictContext = {
       ...experimentContext,
       strategy: { id: 'experiment-strict-confirm', name: 'Strict confirm UI', status: 'active' },
@@ -913,7 +911,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('JSON 高级模式解析失败后仍可恢复到结构化编辑', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     globalThis.fetch = async (path) => {
       if (String(path).includes('/api/strategy/dsl-catalog')) {
         return jsonResponse({ ok: true, data: experimentCatalog });
@@ -955,7 +953,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('JSON 连续输入不重挂载 textarea，保留焦点与同一编辑节点', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     globalThis.fetch = async (path) =>
       String(path).includes('/api/strategy/dsl-catalog')
         ? jsonResponse({ ok: true, data: experimentCatalog })
@@ -984,7 +982,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('Trial 外部失败后恢复按钮，不留下自动持久化假象', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     const calls = [];
     globalThis.fetch = async (path, init) => {
       const url = String(path);
@@ -1034,7 +1032,7 @@ describe('Strategy Experiment Lab', () => {
   });
 
   it('独立验证进行中展示取消入口，取消仍是显式确认动作', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateExperimentCache();
     const statuses = [];
     const runningContext = {
       ...experimentContext,
@@ -1641,7 +1639,7 @@ describe('Phase B 洞察与调度', () => {
   });
 
   it('Legacy V1 不静默升级，显式升级/降级取消均不发送 POST', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateSettingsCache();
     let postCount = 0;
     let savedBody;
     const statusMessages = [];
@@ -1841,7 +1839,7 @@ describe('Phase B 洞察与调度', () => {
   });
 
   it('V2 设置刷新后无损回填，并展示历史状态、reason code 和 factCount', async () => {
-    invalidateStrategyWorkspaceCache();
+    invalidateSettingsCache();
     globalThis.fetch = async (path) => {
       const url = String(path);
       if (url.includes('/recommendation-preflights')) {

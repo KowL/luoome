@@ -1,8 +1,10 @@
 import {
+  decodeStrategyDailyCycleAudit,
   STRATEGY_RECOMMENDATION_PREFLIGHT_REASON_ORDER,
+  type StrategyDailyCycleAudit,
   type StrategyRecommendationPreflightReasonCode,
   StrategyRecommendationPreflightReasonCodeSchema,
-  StrategyRecommendationPreflightSummarySchema,
+  type StrategyRecommendationPreflightSummarySchema,
   type WorkflowRun,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -59,11 +61,6 @@ type ParsedPreflightRun = {
 const compareCodeUnits = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
-const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-
 const LIMITATION_MESSAGES = {
   missingAttribution: '旧运行缺少 Strategy 归属信息，已忽略。',
   missingPreflight: '旧运行没有 preflight 快照，已忽略。',
@@ -83,10 +80,11 @@ const isTerminalWorkflowStatus = (
   status === 'succeeded' || status === 'partial' || status === 'failed';
 
 const preflightSnapshotFor = (
-  run: WorkflowRun,
+  audit: StrategyDailyCycleAudit,
   strategyId: string,
   limitations: Set<LimitationKey>,
 ): ParsedPreflightRun | undefined => {
+  const run = audit.run;
   if (!isTerminalWorkflowStatus(run.status)) {
     return undefined;
   }
@@ -95,28 +93,24 @@ const preflightSnapshotFor = (
     return undefined;
   }
 
-  const inputSummary = asRecord(run.inputSummary);
-  if (inputSummary?.strategyId === undefined) {
+  if (audit.strategyId === undefined) {
     addLimitation(limitations, 'missingAttribution');
     return undefined;
   }
-  if (inputSummary.strategyId !== strategyId) {
+  if (audit.strategyId !== strategyId) {
     return undefined;
   }
 
-  const outputSummary = asRecord(run.outputSummary);
-  const rawPreflight = outputSummary?.preflight;
-  if (rawPreflight === undefined) {
+  if (audit.preflight.state === 'missing') {
     addLimitation(limitations, 'missingPreflight');
     return undefined;
   }
-  const parsed = StrategyRecommendationPreflightSummarySchema.safeParse(rawPreflight);
-  if (!parsed.success) {
+  if (audit.preflight.state === 'corrupt') {
     addLimitation(limitations, 'corruptPreflight');
     return undefined;
   }
 
-  const snapshot = parsed.data;
+  const snapshot = audit.preflight.snapshot;
   const counts = {
     total: snapshot.details.length,
     eligible: snapshot.details.filter((detail) => detail.status === 'eligible').length,
@@ -193,25 +187,27 @@ export const getStrategyRecommendationPreflightHistoryTool = defineTool({
   input: GetStrategyRecommendationPreflightHistoryInput,
   output: GetStrategyRecommendationPreflightHistoryOutput,
   handler: async (input, ctx) => {
-    // Over-fetch a bounded window so running/corrupt/other-Strategy records do not make a
-    // requested recent history appear shorter than the caller's limit. Query each terminal
-    // status explicitly so the repository boundary never asks for in-flight workflow runs.
-    const recentLimit = Math.min(200, input.limit * 4);
-    const runs = (
-      await Promise.all(
-        (['succeeded', 'partial', 'failed'] as const).map((status) =>
-          ctx.repos.workflowRun.listRecent({
-            workflowName: 'strategy-daily-cycle',
-            status,
-            limit: recentLimit,
-          }),
-        ),
-      )
-    ).flat();
     const limitations = new Set<LimitationKey>();
-    const parsedRuns = runs.flatMap((run) => {
-      return preflightSnapshotFor(run, input.strategyId, limitations) ?? [];
-    });
+    const parsedRuns: ParsedPreflightRun[] = [];
+    const pageSize = Math.max(20, input.limit);
+    let offset = 0;
+    while (parsedRuns.length < input.limit) {
+      const runs = await ctx.repos.workflowRun.listStrategyDailyCycleAudits({
+        strategyId: input.strategyId,
+        statuses: ['succeeded', 'partial', 'failed'],
+        limit: pageSize,
+        offset,
+      });
+      offset += runs.length;
+      for (const run of runs) {
+        const audit = decodeStrategyDailyCycleAudit(run);
+        if (audit === undefined) continue;
+        const parsed = preflightSnapshotFor(audit, input.strategyId, limitations);
+        if (parsed !== undefined) parsedRuns.push(parsed);
+        if (parsedRuns.length >= input.limit) break;
+      }
+      if (runs.length < pageSize) break;
+    }
     parsedRuns.sort((left, right) => {
       const byStartedAt = right.run.startedAt.getTime() - left.run.startedAt.getTime();
       if (byStartedAt !== 0) return byStartedAt;

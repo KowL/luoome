@@ -59,6 +59,7 @@ export * from './strategy/backtest.js';
 export * from './strategy/builtin.js';
 export * from './strategy/cron.js';
 export * from './strategy/crossing.js';
+export * from './strategy/daily-cycle-audit.js';
 export * from './strategy/definition-diff.js';
 export * from './strategy/emission.js';
 export * from './strategy/evaluator.js';
@@ -74,6 +75,7 @@ export * from './strategy/publication.js';
 export * from './strategy/recommendation-preflight.js';
 export * from './strategy/result-view.js';
 export * from './strategy/run-diff.js';
+export * from './strategy/run-snapshot.js';
 // Strategy / Watchlist 重构的跨阶段决策约束（W0 起）
 export * from './strategy-watchlist-policy.js';
 // A 股节假日历（纯计算；文件 / env 加载仍在 cli）

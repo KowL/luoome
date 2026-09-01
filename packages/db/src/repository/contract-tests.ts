@@ -2258,47 +2258,6 @@ export const registerRepositoryContractTests = (
         await repos.strategy.activateVersion('strategy-1', 'strategy-1-v1', T1);
       });
 
-      it('同 StrategyVersion 正式运行 lease 互斥，过期或释放后可接管', async () => {
-        const base = {
-          strategyId: 'strategy-1',
-          strategyVersionId: 'strategy-1-v1',
-        };
-        expect(
-          await repos.strategyRun.acquireRunLease({
-            ...base,
-            owner: 'worker-1',
-            now: T1,
-            leaseUntil: T3,
-          }),
-        ).toBe(true);
-        expect(
-          await repos.strategyRun.acquireRunLease({
-            ...base,
-            owner: 'worker-2',
-            now: T2,
-            leaseUntil: T3,
-          }),
-        ).toBe(false);
-        await repos.strategyRun.releaseRunLease({ ...base, owner: 'worker-1' });
-        await repos.strategyRun.releaseRunLease({ ...base, owner: 'worker-1' });
-        expect(
-          await repos.strategyRun.acquireRunLease({
-            ...base,
-            owner: 'worker-2',
-            now: T2,
-            leaseUntil: T3,
-          }),
-        ).toBe(true);
-        expect(
-          await repos.strategyRun.acquireRunLease({
-            ...base,
-            owner: 'worker-3',
-            now: T3,
-            leaseUntil: FAR_FUTURE,
-          }),
-        ).toBe(true);
-      });
-
       it('fake clock 三小时持续 run heartbeat，fenced commit 只允许一次', async () => {
         const running = makeStrategyRun('run-heartbeat', {
           status: 'running',
@@ -2635,6 +2594,47 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.signalsByRun('missing')).toEqual([]);
       });
 
+      it('批量读取 results/signals 与按 id 读取保持完整且稳定排序', async () => {
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-bulk-a', { startedAt: T1 }),
+          results: [
+            makeStrategyResult('run-bulk-a', '600519.SH', { rank: 2 }),
+            makeStrategyResult('run-bulk-a', '002594.SZ', { rank: 1 }),
+          ],
+          signals: [
+            makeStrategySignal('signal-bulk-a', '600519.SH', {
+              runId: 'run-bulk-a',
+              ts: T1,
+            }),
+          ],
+        });
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-bulk-b', { startedAt: T2 }),
+          results: [makeStrategyResult('run-bulk-b', '300750.SZ', { rank: 1 })],
+          signals: [
+            makeStrategySignal('signal-bulk-b', '300750.SZ', {
+              runId: 'run-bulk-b',
+              ts: T3,
+            }),
+          ],
+        });
+
+        expect(
+          (await repos.strategyRun.listResultsByRuns(['run-bulk-b', 'run-bulk-a'])).map(
+            (result) => `${result.runId}:${result.stockId}`,
+          ),
+        ).toEqual(['run-bulk-a:002594.SZ', 'run-bulk-a:600519.SH', 'run-bulk-b:300750.SZ']);
+        expect(
+          (await repos.strategyRun.signalsByRuns(['run-bulk-a', 'run-bulk-b'])).map(
+            (signal) => signal.id,
+          ),
+        ).toEqual(['signal-bulk-b', 'signal-bulk-a']);
+        expect(await repos.strategyRun.signalsByIds(['signal-bulk-a', 'missing'])).toEqual([
+          expect.objectContaining({ id: 'signal-bulk-a' }),
+        ]);
+        expect(await repos.strategyRun.signalsByRuns([])).toEqual([]);
+      });
+
       it('commitRun 原子提交；引用不匹配时不留下 run/result/signal', async () => {
         const run = makeStrategyRun('run-atomic');
         await repos.strategyRun.commitRun({
@@ -2694,13 +2694,14 @@ export const registerRepositoryContractTests = (
 
       it('removeByStrategyId 删除运行、结果、信号和 lease', async () => {
         const run = makeStrategyRun('run-remove');
-        await repos.strategyRun.acquireRunLease({
+        const lease = await repos.strategyRun.acquireRunLeaseToken({
           strategyId: 'strategy-1',
           strategyVersionId: 'strategy-1-v1',
           owner: 'worker-1',
           now: T1,
           leaseUntil: T3,
         });
+        expect(lease).not.toBeNull();
         await repos.strategyRun.commitRun({
           run,
           results: [makeStrategyResult(run.id, '600519.SH')],
@@ -2711,14 +2712,14 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.listResults(run.id)).toEqual([]);
         expect(await repos.strategyRun.signalsByStrategy('strategy-1')).toEqual([]);
         expect(
-          await repos.strategyRun.acquireRunLease({
+          await repos.strategyRun.acquireRunLeaseToken({
             strategyId: 'strategy-1',
             strategyVersionId: 'strategy-1-v1',
             owner: 'worker-2',
             now: T2,
             leaseUntil: T3,
           }),
-        ).toBe(true);
+        ).not.toBeNull();
       });
     });
 
@@ -2791,6 +2792,28 @@ export const registerRepositoryContractTests = (
     });
 
     describe('SignalObservationRepository', () => {
+      it('listBySources 不受通用 list 默认 limit 影响并按来源/周期过滤', async () => {
+        const rows = Array.from({ length: 1_005 }, (_, index) =>
+          makeSignalObservation(`bulk-observation-${index}`, `bulk-signal-${index}`),
+        );
+        for (const row of rows) await repos.signalObservation.save(row);
+        await repos.signalObservation.save(
+          makeSignalObservation('bulk-t20', 'bulk-signal-0', { horizon: 't20' }),
+        );
+        await repos.signalObservation.save(
+          makeSignalObservation('bulk-watch', 'bulk-signal-1', { sourceKind: 'watch-trigger' }),
+        );
+
+        const listed = await repos.signalObservation.listBySources({
+          sourceKind: 'strategy-signal',
+          sourceIds: rows.map((row) => row.sourceId),
+          horizons: ['t1'],
+        });
+        expect(listed).toHaveLength(rows.length);
+        expect(listed.some((row) => row.id === 'bulk-t20')).toBe(false);
+        expect(listed.some((row) => row.id === 'bulk-watch')).toBe(false);
+      });
+
       it('removeBySources 只删除指定来源的观察', async () => {
         await repos.signalObservation.save(makeSignalObservation('observation-1', 'signal-1'));
         await repos.signalObservation.save(makeSignalObservation('observation-2', 'signal-2'));
@@ -4040,6 +4063,62 @@ export const registerRepositoryContractTests = (
         expect(recent.map((r) => r.id)).toEqual(['w2', 'w1']);
         const byName = await repos.workflowRun.listRecent({ workflowName: 'sync-stock-events' });
         expect(byName.map((r) => r.id)).toEqual(['w1']);
+      });
+
+      it('strategy-daily-cycle 先按归属和 dataAsOf 过滤，再应用 limit/offset', async () => {
+        await repos.workflowRun.save(
+          makeWorkflowRun('cycle-other-newer', {
+            workflowName: 'strategy-daily-cycle',
+            startedAt: T3,
+            finishedAt: T3,
+            inputSummary: {
+              strategyId: 'strategy-other',
+              scheduleId: 'schedule-other',
+              dataAsOf: T3,
+            },
+          }),
+        );
+        await repos.workflowRun.save(
+          makeWorkflowRun('cycle-target-latest-data', {
+            workflowName: 'strategy-daily-cycle',
+            startedAt: T1,
+            finishedAt: T2,
+            inputSummary: {
+              strategyId: 'strategy-target',
+              scheduleId: 'schedule-target',
+              dataAsOf: T3,
+            },
+          }),
+        );
+        await repos.workflowRun.save(
+          makeWorkflowRun('cycle-target-old-data', {
+            workflowName: 'strategy-daily-cycle',
+            startedAt: T3,
+            finishedAt: T3,
+            inputSummary: {
+              strategyId: 'strategy-target',
+              scheduleId: 'schedule-target',
+              dataAsOf: T1,
+            },
+          }),
+        );
+
+        const first = await repos.workflowRun.listStrategyDailyCycleAudits({
+          strategyId: 'strategy-target',
+          scheduleId: 'schedule-target',
+          since: T2,
+          limit: 1,
+        });
+        expect(first.map((run) => run.id)).toEqual(['cycle-target-latest-data']);
+        expect(
+          await repos.workflowRun.listStrategyDailyCycleAudits({
+            strategyId: 'strategy-target',
+            scheduleId: 'schedule-target',
+            since: T2,
+            limit: 1,
+            offset: 1,
+          }),
+        ).toEqual([]);
       });
 
       it('failed 缺 error 时拒绝', async () => {

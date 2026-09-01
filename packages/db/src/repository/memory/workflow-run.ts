@@ -1,5 +1,7 @@
 import {
   assertWorkflowRunInvariants,
+  decodeStrategyDailyCycleAudit,
+  type StrategyDailyCycleAuditQuery,
   type WorkflowRun,
   type WorkflowRunRepository,
 } from '@luoome/core';
@@ -37,6 +39,29 @@ export class InMemoryWorkflowRunRepository implements WorkflowRunRepository {
       .filter((r) => r.startedAt.getTime() >= sinceMs)
       .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
       .slice(0, limit);
+  }
+
+  async listStrategyDailyCycleAudits(
+    query: StrategyDailyCycleAuditQuery = {},
+  ): Promise<readonly WorkflowRun[]> {
+    const sinceMs = query.since?.getTime() ?? Number.NEGATIVE_INFINITY;
+    const untilMs = query.until?.getTime() ?? Number.POSITIVE_INFINITY;
+    const statuses = query.statuses === undefined ? undefined : new Set(query.statuses);
+    return [...this.items.values()]
+      .flatMap((run) => decodeStrategyDailyCycleAudit(run) ?? [])
+      .filter((audit) => query.strategyId === undefined || audit.strategyId === query.strategyId)
+      .filter((audit) => query.scheduleId === undefined || audit.scheduleId === query.scheduleId)
+      .filter((audit) => statuses === undefined || statuses.has(audit.run.status))
+      .filter((audit) => {
+        const dataAsOfMs = audit.dataAsOf.getTime();
+        return dataAsOfMs >= sinceMs && dataAsOfMs <= untilMs;
+      })
+      .sort((left, right) => {
+        const byStartedAt = right.run.startedAt.getTime() - left.run.startedAt.getTime();
+        return byStartedAt !== 0 ? byStartedAt : right.run.id.localeCompare(left.run.id);
+      })
+      .slice(query.offset ?? 0, (query.offset ?? 0) + (query.limit ?? 50))
+      .map((audit) => audit.run);
   }
 
   async remove(id: string): Promise<void> {

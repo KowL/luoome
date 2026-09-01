@@ -10,6 +10,7 @@ import {
   type StrictBacktestMarketFact,
   StrictBacktestRunSchema,
   StrictBacktestSpecSchema,
+  strategyRunUsesEvaluator,
   strictBacktestHash,
   strictBacktestSpecHash,
   type ToolContext,
@@ -161,14 +162,13 @@ const assembleBacktest = async (
     revisionComplete &&
     days.every((day) => {
       const run = day.runId === undefined ? null : runs.get(day.runId);
-      const snapshot = run?.inputSnapshot;
       return (
-        snapshot !== null &&
-        snapshot !== undefined &&
-        'schemaVersion' in snapshot &&
-        snapshot.schemaVersion === 3 &&
-        snapshot.evaluatorVersion === STRATEGY_EVALUATOR_VERSION &&
-        snapshot.evaluatorCodeIdentity === STRATEGY_EVALUATOR_CODE_HASH
+        run !== null &&
+        run !== undefined &&
+        strategyRunUsesEvaluator(run.inputSnapshot, {
+          version: STRATEGY_EVALUATOR_VERSION,
+          codeIdentity: STRATEGY_EVALUATOR_CODE_HASH,
+        })
       );
     });
 

@@ -1030,6 +1030,7 @@ describe('run_strategy', () => {
           signalObservation: {
             save: (observation) => observationRepo.save(observation),
             findById: (id) => observationRepo.findById(id),
+            listBySources: (input) => observationRepo.listBySources(input),
             list: (input) => {
               observationQueryLimit = input?.limit;
               return observationRepo.list(input);
@@ -1100,6 +1101,7 @@ describe('run_strategy', () => {
         ...base.repos,
         signalObservation: {
           findById: observationRepo.findById.bind(observationRepo),
+          listBySources: observationRepo.listBySources.bind(observationRepo),
           list: observationRepo.list.bind(observationRepo),
           removeBySources: observationRepo.removeBySources.bind(observationRepo),
           save: () => Promise.reject(new Error('observation storage unavailable')),

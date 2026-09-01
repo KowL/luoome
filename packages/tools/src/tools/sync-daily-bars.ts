@@ -1,66 +1,15 @@
-import { createHash } from 'node:crypto';
 import { DailyBarSchema, type ToolContext } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import {
+  dailyBarContentHash,
+  fetchDailyBarsWithRetry,
+  mapWithConcurrency,
+} from '../internal/daily-bar-ingestion.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INITIAL_LOOKBACK_DAYS = 370;
-
-const mapWithConcurrency = async <T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> => {
-  const result = new Array<R>(items.length);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (cursor < items.length) {
-        const index = cursor++;
-        const item = items[index];
-        if (item !== undefined) result[index] = await fn(item);
-      }
-    }),
-  );
-  return result;
-};
-
-const isRetryableProviderError = (error: unknown): boolean =>
-  /timeout|timed out|connection reset|econnreset|rate.?limit|\b429\b/i.test(
-    error instanceof Error ? error.message : String(error),
-  );
-
-const fetchDailyBarsWithRetry = async (
-  ctx: ToolContext,
-  stockId: string,
-  range: { readonly start: Date; readonly end: Date },
-  options: { readonly maxRetries: number; readonly timeoutMs: number },
-) => {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
-    try {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          ctx.adapters.market.fetchDailyBars(stockId, range),
-          new Promise<never>((_, reject) => {
-            timeout = setTimeout(
-              () => reject(new Error(`provider_timeout: daily bars ${stockId}`)),
-              options.timeoutMs,
-            );
-          }),
-        ]);
-      } finally {
-        if (timeout !== undefined) clearTimeout(timeout);
-      }
-    } catch (error) {
-      lastError = error;
-      if (!isRetryableProviderError(error) || attempt === options.maxRetries) throw error;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-};
 
 export const SyncDailyBarsInput = z
   .object({
@@ -191,18 +140,7 @@ export const syncDailyBarsTool = defineTool({
           bars.map((bar) => ({
             stockId: bar.stockId,
             date: bar.date,
-            contentHash: createHash('sha256')
-              .update(
-                JSON.stringify({
-                  open: bar.open,
-                  high: bar.high,
-                  low: bar.low,
-                  close: bar.close,
-                  volume: bar.volume,
-                  source: bar.source,
-                }),
-              )
-              .digest('hex'),
+            contentHash: dailyBarContentHash(bar),
             open: bar.open,
             high: bar.high,
             low: bar.low,

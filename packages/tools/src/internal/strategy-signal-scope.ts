@@ -1,6 +1,7 @@
 import {
   isPublishableOperationalRun,
   isUsableStrategyRun,
+  readStrategyRunSnapshot,
   type StrategySignal,
   type ToolContext,
 } from '@luoome/core';
@@ -30,13 +31,8 @@ export const filterStrategySignalsByScope = async (
     if (input.scope === 'operational') return isPublishableOperationalRun(run);
     if (run.scope !== 'evaluation' || !isUsableStrategyRun(run)) return false;
     if (input.evaluationSessionId === undefined) return true;
-    const snapshot = run.inputSnapshot;
     return (
-      typeof snapshot === 'object' &&
-      snapshot !== null &&
-      'evaluationSessionId' in snapshot &&
-      (snapshot as { readonly evaluationSessionId?: unknown }).evaluationSessionId ===
-        input.evaluationSessionId
+      readStrategyRunSnapshot(run.inputSnapshot).evaluationSessionId === input.evaluationSessionId
     );
   });
 };

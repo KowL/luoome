@@ -3,8 +3,6 @@ import {
   assessStrategyRun,
   assignStableStrategyRanks,
   compileStrategyQuotePrefilter,
-  type DailyBar,
-  DailyBarSchema,
   DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
   dateInShanghai,
   decideStrategyRunPublication,
@@ -15,7 +13,7 @@ import {
   getStrategySignalEmission,
   inspectStrategyDefinitionReferences,
   isPublishableOperationalRun,
-  type Quote,
+  readStrategyRunSnapshot,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
   type StrategyLeaseToken,
@@ -36,13 +34,16 @@ import {
   errNotFound,
 } from '../define-tool.js';
 import { computeSimpleIndicators } from '../internal/indicators.js';
+import {
+  createCheckpointStrategyEvaluationDataAdapter,
+  createLiveStrategyEvaluationDataAdapter,
+  type StrategyEvaluationDataRequest,
+} from '../internal/strategy-evaluation-data.js';
 import { deriveStrategyMetaByStock } from '../internal/strategy-meta.js';
 
-const DAY_MS = 86_400_000;
 const EVALUATION_CONCURRENCY = 8;
 const RUN_LEASE_MS = 15 * 60 * 1000;
 const RUN_HEARTBEAT_MS = 5 * 60 * 1000;
-const BATCH_QUOTE_CHUNK_SIZE = 100;
 
 export const RunStrategyInput = z.object({
   strategyId: z.string().min(1),
@@ -84,72 +85,6 @@ export const TrialStrategyInput = RunStrategyInput.extend({
 
 export const TrialStrategyOutput = RunStrategyOutput.extend({
   persisted: z.literal(false),
-});
-
-const mapWithConcurrency = async <T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-  shouldContinue: () => boolean = () => true,
-): Promise<R[]> => {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length && shouldContinue()) {
-      const index = next++;
-      const item = items[index];
-      if (item !== undefined) results[index] = await fn(item);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-};
-
-const batchQuoteWithConcurrency = async (
-  stockIds: readonly string[],
-  concurrency: number,
-  ctx: ToolContext,
-): Promise<Map<string, Quote>> => {
-  const chunks: string[][] = [];
-  const chunkSize = Math.min(BATCH_QUOTE_CHUNK_SIZE, concurrency);
-  for (let index = 0; index < stockIds.length; index += chunkSize) {
-    chunks.push(stockIds.slice(index, index + chunkSize));
-  }
-  // adapter 的 batchQuote 实现可能自行并发逐股请求；串行提交小批次，
-  // 使其内部单批并发也不超过 run 的 provider 上限。
-  const chunkResults = await mapWithConcurrency(chunks, 1, async (chunk) => {
-    try {
-      return await ctx.adapters.market.batchQuote(chunk);
-    } catch (error) {
-      ctx.logger.warn('run_strategy batch quote chunk failed; falling back to per-stock fetch', {
-        chunkSize: chunk.length,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return new Map<string, Quote>();
-    }
-  });
-  const quotes = new Map<string, Quote>();
-  for (const chunk of chunkResults) {
-    for (const [requestedStockId, quote] of chunk) {
-      quotes.set(requestedStockId, quote);
-      quotes.set(quote.stockId, quote);
-    }
-  }
-  return quotes;
-};
-
-const quoteFromDailyBar = (bar: DailyBar, fetchedAt: Date): Quote => ({
-  stockId: bar.stockId,
-  observedAt: bar.date,
-  fetchedAt,
-  timestampSource: 'upstream',
-  ts: bar.date,
-  open: bar.open,
-  high: bar.high,
-  low: bar.low,
-  close: bar.close,
-  volume: bar.volume,
-  source: bar.source,
 });
 
 const resolveVersion = async (
@@ -349,12 +284,6 @@ export const runStrategyTool = defineTool({
         usableDataCheckpoint === undefined
           ? []
           : await ctx.repos.strategyDataCheckpoint.listMembers(usableDataCheckpoint.id);
-      const checkpointMemberByStock = new Map(
-        checkpointMembers.map((member) => [member.stockId, member] as const),
-      );
-      const checkpointDailyBarsCoverage = usableDataCheckpoint?.providerStatuses.find(
-        (coverage) => coverage.capability === 'daily-bars',
-      );
       if (input.mode === 'scheduled' && usableDataCheckpoint === undefined) {
         return errInvalidInput('scheduled StrategyRun 的 data checkpoint 不可用');
       }
@@ -420,6 +349,20 @@ export const runStrategyTool = defineTool({
         const oldestObserved = Math.min(...observedTimes);
         if (Number.isFinite(oldestObserved)) dataAsOf = new Date(oldestObserved);
       }
+      const evaluationRevisionCutoff =
+        input.mode === 'replay' ? input.revisionCutoff : usableDataCheckpoint?.startedAt;
+      const evaluationData =
+        input.mode === 'scan'
+          ? createLiveStrategyEvaluationDataAdapter(ctx)
+          : createCheckpointStrategyEvaluationDataAdapter({
+              ctx,
+              mode: input.mode,
+              members: checkpointMembers,
+              ...(usableDataCheckpoint === undefined ? {} : { checkpoint: usableDataCheckpoint }),
+              ...(evaluationRevisionCutoff === undefined
+                ? {}
+                : { revisionCutoff: evaluationRevisionCutoff }),
+            });
       let limitUpLadderByCode = new Map<string, { readonly ladderLevel: number }>();
       let limitUpLadderProviderOk = !needsLimitUpLadder;
       let limitUpLadderDataAsOf: Date | undefined;
@@ -497,11 +440,10 @@ export const runStrategyTool = defineTool({
             readonly unavailableCount: number;
           }
         | undefined;
-      const preloadedQuotes = new Map<string, Quote>();
-      if (input.mode === 'scan' && needsQuote && candidateIds.length > 0) {
-        const batchQuotes = await batchQuoteWithConcurrency(candidateIds, input.concurrency, ctx);
-        for (const [stockId, quote] of batchQuotes) preloadedQuotes.set(stockId, quote);
-      }
+      const preloadedQuotes =
+        input.mode === 'scan' && needsQuote && candidateIds.length > 0
+          ? await evaluationData.preloadQuotes(candidateIds, input.concurrency)
+          : new Map();
       if (input.prefilter !== undefined) {
         const prefilter = compileStrategyQuotePrefilter(definition);
         if (prefilter.applicableRuleIds.length === 0) {
@@ -585,127 +527,20 @@ export const runStrategyTool = defineTool({
       });
       if (input.persist) await ctx.repos.strategyRun.saveStartedRun(startedRun);
 
-      const prepared = await mapWithConcurrency(
-        candidateIds,
-        input.concurrency,
-        async (
-          stockId,
-        ): Promise<
-          | {
-              readonly ok: true;
-              readonly stockId: string;
-              readonly bars: readonly DailyBar[];
-              readonly quote?: Quote;
-            }
-          | { readonly ok: false; readonly stockId: string; readonly error: string }
-        > => {
-          try {
-            let bars: readonly DailyBar[] = [];
-            let quote: Quote | undefined;
-            if (input.mode === 'replay' || input.mode === 'scheduled') {
-              if (needsDailyBars || needsQuote) {
-                const revisionCutoff =
-                  input.mode === 'replay' ? input.revisionCutoff : usableDataCheckpoint?.startedAt;
-                if (revisionCutoff !== undefined) {
-                  const revisions = await ctx.repos.dailyBar.listRevisions({
-                    stockId,
-                    to: dataAsOf,
-                    recordedAt: revisionCutoff,
-                  });
-                  const latestByDate = new Map<string, (typeof revisions)[number]>();
-                  for (const revision of revisions) {
-                    const key = revision.date.toISOString();
-                    const previous = latestByDate.get(key);
-                    if (
-                      previous === undefined ||
-                      revision.recordedAt.getTime() > previous.recordedAt.getTime() ||
-                      (revision.recordedAt.getTime() === previous.recordedAt.getTime() &&
-                        revision.contentHash.localeCompare(previous.contentHash) > 0)
-                    ) {
-                      latestByDate.set(key, revision);
-                    }
-                  }
-                  bars = [...latestByDate.values()]
-                    .sort((left, right) => left.date.getTime() - right.date.getTime())
-                    .slice(-lookback)
-                    .map((revision) =>
-                      DailyBarSchema.parse({
-                        stockId: revision.stockId,
-                        date: revision.date,
-                        open: revision.open,
-                        high: revision.high,
-                        low: revision.low,
-                        close: revision.close,
-                        volume: revision.volume,
-                        adjustment: 'qfq' as const,
-                        source: revision.source,
-                      }),
-                    );
-                } else {
-                  bars = await ctx.repos.dailyBar.latestBefore(stockId, dataAsOf, lookback);
-                }
-              }
-              const latestBar = bars.at(-1);
-              // checkpoint latest bar also anchors post-signal observations for daily-bar-only DSLs.
-              if (latestBar !== undefined) {
-                quote = quoteFromDailyBar(latestBar, startedAt);
-              }
-            } else {
-              if (needsDailyBars) {
-                bars = await ctx.adapters.market.fetchDailyBars(stockId, {
-                  start: new Date(dataAsOf.getTime() - Math.max(lookback * 2, 30) * DAY_MS),
-                  end: dataAsOf,
-                });
-              }
-              if (needsQuote) {
-                quote =
-                  preloadedQuotes.get(stockId) ?? (await ctx.adapters.market.fetchQuote(stockId));
-              }
-            }
-            return {
-              ok: true,
-              stockId,
-              bars,
-              ...(quote === undefined ? {} : { quote }),
-            };
-          } catch (error) {
-            return {
-              ok: false,
-              stockId,
-              error: error instanceof Error ? error.message : String(error),
-            };
-          }
-        },
-        () => !leaseLost,
-      );
+      const evaluationRequest: StrategyEvaluationDataRequest = {
+        stockIds: candidateIds,
+        dataAsOf,
+        fetchedAt: startedAt,
+        lookback,
+        needsQuote,
+        needsDailyBars,
+        concurrency: input.concurrency,
+        shouldContinue: () => !leaseLost,
+      };
+      const evaluationBatch = await evaluationData.load(evaluationRequest);
       if (leaseLost) return errLeaseLostBeforeCommit();
-
-      const fetchedFailures = prepared.filter(
-        (item): item is Extract<(typeof prepared)[number], { ok: false }> => !item.ok,
-      );
-      const fetchedFailureIds = new Set(fetchedFailures.map((item) => item.stockId));
-      const checkpointFailures =
-        input.mode === 'scheduled'
-          ? candidateIds
-              .filter(
-                (stockId) =>
-                  !fetchedFailureIds.has(stockId) &&
-                  checkpointMemberByStock.get(stockId)?.status !== 'available',
-              )
-              .map((stockId) => ({
-                ok: false as const,
-                stockId,
-                error: checkpointMemberByStock.get(stockId)?.errorKind ?? 'stale_data',
-              }))
-          : [];
-      const failures = [...fetchedFailures, ...checkpointFailures];
-      const preparedStocks = prepared.flatMap((item) =>
-        item.ok &&
-        (input.mode !== 'scheduled' ||
-          checkpointMemberByStock.get(item.stockId)?.status === 'available')
-          ? [item]
-          : [],
-      );
+      const failures = evaluationBatch.failures;
+      const preparedStocks = evaluationBatch.prepared;
       const metaByStock = needsDerivedMeta
         ? deriveStrategyMetaByStock(
             preparedStocks.map((item) => {
@@ -754,13 +589,9 @@ export const runStrategyTool = defineTool({
           if (scope === 'operational' && !isPublishableOperationalRun(candidate)) return false;
           if (scope !== 'evaluation') return true;
           if (input.evaluationSessionId === undefined) return false;
-          const snapshot = candidate.inputSnapshot;
           return (
-            typeof snapshot === 'object' &&
-            snapshot !== null &&
-            'evaluationSessionId' in snapshot &&
-            (snapshot as { readonly evaluationSessionId?: unknown }).evaluationSessionId ===
-              input.evaluationSessionId
+            readStrategyRunSnapshot(candidate.inputSnapshot).evaluationSessionId ===
+            input.evaluationSessionId
           );
         })
         .sort((left, right) => right.dataAsOf.getTime() - left.dataAsOf.getTime());
@@ -807,41 +638,7 @@ export const runStrategyTool = defineTool({
         });
         return decision.emit;
       });
-      const localCoverageFreshness =
-        input.mode === 'scheduled'
-          ? (checkpointDailyBarsCoverage?.freshness ?? 'unavailable')
-          : input.mode === 'replay'
-            ? 'stale'
-            : 'fresh';
-      const localCoverageDataAsOf =
-        input.mode === 'scheduled' ? checkpointDailyBarsCoverage?.dataAsOf : dataAsOf;
-      const checkpointUnavailableStockIds = new Set(
-        candidateIds.filter(
-          (stockId) => checkpointMemberByStock.get(stockId)?.status !== 'available',
-        ),
-      );
-      const coverageSucceeded =
-        input.mode === 'scheduled'
-          ? candidateIds.length - checkpointUnavailableStockIds.size
-          : preparedStocks.filter((item) => item.bars.length > 0).length;
-      const coverageFailed =
-        input.mode === 'scheduled'
-          ? candidateIds.filter(
-              (stockId) => checkpointMemberByStock.get(stockId)?.status === 'failed',
-            ).length
-          : failures.length;
-      const coverageMissing =
-        input.mode === 'scheduled'
-          ? candidateIds.filter(
-              (stockId) => checkpointMemberByStock.get(stockId)?.status !== 'available',
-            ).length - coverageFailed
-          : preparedStocks.filter((item) => item.bars.length === 0).length;
-      const coverageErrorKinds = [
-        ...(checkpointDailyBarsCoverage?.errorKinds ?? []),
-        ...(failures.length === 0 ? [] : ['provider_error']),
-        ...(usableDataCheckpoint?.vintageStatus === 'unavailable' ? ['vintage_unavailable'] : []),
-      ].filter((kind, index, all) => all.indexOf(kind) === index);
-      const localProviderOk = failures.length === 0 && localCoverageFreshness === 'fresh';
+      const evaluationAudit = evaluationData.audit(evaluationRequest, evaluationBatch);
       const incompleteCount = ranked.filter((item) => item.partial).length;
       const finishedAt = ctx.clock();
       const status =
@@ -877,112 +674,25 @@ export const runStrategyTool = defineTool({
         dataAsOf,
         finishedAt,
         status,
-        providerStatuses:
-          input.mode === 'replay' || input.mode === 'scheduled'
+        providerStatuses: [
+          ...evaluationAudit.providerStatuses,
+          ...(needsLimitUpLadder
             ? [
-                // replay/scheduled 只读本地 dailyBar/checkpoint，不以 market adapter 名义上报
-                ...(needsQuote || needsDailyBars
-                  ? [
-                      {
-                        provider:
-                          input.mode === 'scheduled' ? 'checkpoint:daily-bars' : 'local:daily-bars',
-                        ok: localProviderOk,
-                        ...(input.mode === 'scheduled' &&
-                        checkpointDailyBarsCoverage?.latencyMs !== undefined
-                          ? { latencyMs: checkpointDailyBarsCoverage.latencyMs }
-                          : {}),
-                      },
-                    ]
-                  : []),
-                ...(needsLimitUpLadder
-                  ? [
-                      {
-                        provider:
-                          input.mode === 'replay'
-                            ? 'historical:limit-up-ladder'
-                            : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
-                        ok: limitUpLadderProviderOk,
-                        ...(limitUpLadderErrorKind === undefined
-                          ? {}
-                          : { errorKind: limitUpLadderErrorKind }),
-                      },
-                    ]
-                  : []),
+                {
+                  provider:
+                    input.mode === 'replay'
+                      ? 'historical:limit-up-ladder'
+                      : (ctx.limitUpLadder?.name ?? 'limit-up-ladder'),
+                  ok: limitUpLadderProviderOk,
+                  ...(limitUpLadderErrorKind === undefined
+                    ? {}
+                    : { errorKind: limitUpLadderErrorKind }),
+                },
               ]
-            : [
-                ...(needsQuote
-                  ? [{ provider: ctx.adapters.market.name, ok: failures.length === 0 }]
-                  : []),
-                ...(needsDailyBars
-                  ? [
-                      {
-                        provider: `${ctx.adapters.market.name}:daily-bars`,
-                        ok: failures.length === 0,
-                      },
-                    ]
-                  : []),
-                ...(needsLimitUpLadder
-                  ? [
-                      {
-                        provider: ctx.limitUpLadder?.name ?? 'limit-up-ladder',
-                        ok: limitUpLadderProviderOk,
-                        ...(limitUpLadderErrorKind === undefined
-                          ? {}
-                          : { errorKind: limitUpLadderErrorKind }),
-                      },
-                    ]
-                  : []),
-              ],
+            : []),
+        ],
         providerCoverage: [
-          ...(needsQuote
-            ? [
-                {
-                  capability: 'quote' as const,
-                  provider:
-                    input.mode === 'replay'
-                      ? 'local:daily-bars'
-                      : input.mode === 'scheduled'
-                        ? 'checkpoint:daily-bars'
-                        : ctx.adapters.market.name,
-                  requested: candidateIds.length,
-                  succeeded:
-                    input.mode === 'scheduled'
-                      ? coverageSucceeded
-                      : preparedStocks.filter((item) => item.quote !== undefined).length,
-                  failed: coverageFailed,
-                  missing: coverageMissing,
-                  fallbackUsed: false,
-                  freshness: localCoverageFreshness,
-                  ...(localCoverageDataAsOf === undefined
-                    ? {}
-                    : { dataAsOf: localCoverageDataAsOf }),
-                  errorKinds: coverageErrorKinds,
-                },
-              ]
-            : []),
-          ...(needsDailyBars
-            ? [
-                {
-                  capability: 'daily-bars' as const,
-                  provider:
-                    input.mode === 'replay'
-                      ? 'local:daily-bars'
-                      : input.mode === 'scheduled'
-                        ? 'checkpoint:daily-bars'
-                        : `${ctx.adapters.market.name}:daily-bars`,
-                  requested: candidateIds.length,
-                  succeeded: coverageSucceeded,
-                  failed: coverageFailed,
-                  missing: coverageMissing,
-                  fallbackUsed: false,
-                  freshness: localCoverageFreshness,
-                  ...(localCoverageDataAsOf === undefined
-                    ? {}
-                    : { dataAsOf: localCoverageDataAsOf }),
-                  errorKinds: coverageErrorKinds,
-                },
-              ]
-            : []),
+          ...evaluationAudit.providerCoverage,
           ...(needsLimitUpLadder
             ? [
                 {

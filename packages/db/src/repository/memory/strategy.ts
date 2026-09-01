@@ -235,20 +235,6 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
     };
   }
 
-  async acquireRunLease(input: {
-    readonly strategyId: string;
-    readonly strategyVersionId: string;
-    readonly owner: string;
-    readonly runId?: string;
-    readonly returnToken?: boolean;
-    readonly now: Date;
-    readonly leaseUntil: Date;
-  }): Promise<boolean | StrategyLeaseToken | null> {
-    const token = await this.acquireRunLeaseToken(input);
-    if (input.returnToken === true || input.runId !== undefined) return token;
-    return token !== null;
-  }
-
   async renewRunLease(input: {
     readonly token: StrategyLeaseToken;
     readonly now: Date;
@@ -411,6 +397,19 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       );
   }
 
+  async listResultsByRuns(runIds: readonly string[]): Promise<readonly StrategyResult[]> {
+    if (runIds.length === 0) return [];
+    const runIdSet = new Set(runIds);
+    return [...this.results.values()]
+      .filter((result) => runIdSet.has(result.runId))
+      .sort(
+        (left, right) =>
+          left.runId.localeCompare(right.runId) ||
+          (left.rank ?? Number.MAX_SAFE_INTEGER) - (right.rank ?? Number.MAX_SAFE_INTEGER) ||
+          left.stockId.localeCompare(right.stockId),
+      );
+  }
+
   async saveStartedRun(run: StrategyRun): Promise<void> {
     assertStrategyRunInvariants(run);
     if (run.status !== 'running') throw new InvariantError('saveStartedRun 只接受 running');
@@ -474,6 +473,18 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
 
   async signalsByRun(runId: string): Promise<readonly StrategySignal[]> {
     return this.sortedSignals((signal) => signal.runId === runId);
+  }
+
+  async signalsByRuns(runIds: readonly string[]): Promise<readonly StrategySignal[]> {
+    if (runIds.length === 0) return [];
+    const runIdSet = new Set(runIds);
+    return this.sortedSignals((signal) => runIdSet.has(signal.runId));
+  }
+
+  async signalsByIds(signalIds: readonly string[]): Promise<readonly StrategySignal[]> {
+    if (signalIds.length === 0) return [];
+    const signalIdSet = new Set(signalIds);
+    return this.sortedSignals((signal) => signalIdSet.has(signal.id));
   }
 
   async signalsByStock(stockId: string, since?: Date): Promise<readonly StrategySignal[]> {
