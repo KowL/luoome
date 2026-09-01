@@ -190,7 +190,6 @@
             <span class="indices-change mono" id="indices-change">--</span>
           </div>
           <div id="indices-chart" class="indices-chart"><p class="placeholder">加载中…</p></div>
-          <div id="indices-timeaxis" class="indices-timeaxis" hidden></div>
           <div id="indices-detail" class="indices-detail"></div>
         </div>
       </section>
@@ -239,29 +238,25 @@
         <div id="market-main" hidden>
           <div class="card mt-4">
             <div class="card-header">
-              <h2 id="market-chart-title">日 K</h2>
-              <div class="market-range-switch" id="market-chart-tabs" role="group" aria-label="图表类型">
-                <button type="button" class="btn btn-outline btn-sm active" data-chart-tab="kline">日 K</button>
-                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="intraday">分时</button>
-                <button type="button" class="btn btn-outline btn-sm" data-chart-tab="minute-k">分钟 K</button>
-              </div>
               <div class="market-range-switch" id="market-range-switch" role="group" aria-label="周期切换">
                 <button type="button" class="btn btn-outline btn-sm" data-range="1m">1M</button>
                 <button type="button" class="btn btn-outline btn-sm" data-range="3m">3M</button>
                 <button type="button" class="btn btn-outline btn-sm" data-range="6m">6M</button>
                 <button type="button" class="btn btn-outline btn-sm" data-range="1y">1Y</button>
               </div>
-              <div class="market-range-switch" id="market-granularity-switch" role="group" aria-label="粒度切换">
-                <button type="button" class="btn btn-outline btn-sm active" data-granularity="day">日</button>
-                <button type="button" class="btn btn-outline btn-sm" data-granularity="week">周</button>
-                <button type="button" class="btn btn-outline btn-sm" data-granularity="month">月</button>
-              </div>
-              <div class="market-range-switch" id="market-minute-interval-switch" role="group" aria-label="分钟周期" hidden>
-                <button type="button" class="btn btn-outline btn-sm active" data-minute-interval="1m">1分</button>
-                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="5m">5分</button>
-                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="15m">15分</button>
-                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="30m">30分</button>
-                <button type="button" class="btn btn-outline btn-sm" data-minute-interval="60m">60分</button>
+              <div class="market-chart-actions">
+                <div class="market-range-switch" id="market-chart-tabs" role="group" aria-label="图表周期">
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="intraday">分时</button>
+                  <button type="button" class="btn btn-outline btn-sm active" data-chart-tab="day">日K</button>
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="week">周K</button>
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="month">月K</button>
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="60m">60分</button>
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="30m">30分</button>
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="15m">15分</button>
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="5m">5分</button>
+                  <button type="button" class="btn btn-outline btn-sm" data-chart-tab="1m">1分</button>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" id="market-marker-toggle" aria-pressed="false">策略信号</button>
               </div>
             </div>
             <div id="market-chart" class="market-chart"></div>

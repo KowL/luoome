@@ -74,6 +74,9 @@ describe('MarketSettingsStore', () => {
       '启用 Tushare 前必须配置 TUSHARE_TOKEN',
     );
     expect(() => SaveMarketSettingsSchema.parse({ sources: [] })).toThrow(/至少启用一个/);
+    expect(() =>
+      SaveMarketSettingsSchema.parse({ sources: ['eastmoney', 'tencent', 'sina', 'tushare'] }),
+    ).toThrow(/最多启用 3 个/);
     expect(() => SaveMarketSettingsSchema.parse({ sources: ['eastmoney', 'eastmoney'] })).toThrow(
       /不能重复/,
     );

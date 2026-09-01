@@ -2493,58 +2493,6 @@ html.has-bg-image .bg-layer {
   height: 280px;
 }
 
-.indices-chart-svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-.chart-grid-line {
-  stroke: var(--line);
-  stroke-width: 0.3;
-}
-
-.chart-base-line {
-  stroke: var(--line-strong);
-  stroke-width: 0.4;
-  stroke-dasharray: 2, 2;
-}
-
-.chart-price-line {
-  fill: none;
-  stroke-width: 0.8;
-  stroke-linejoin: round;
-}
-
-.grad-pos-a {
-  stop-color: var(--pos);
-  stop-opacity: 0.15;
-}
-
-.grad-pos-b {
-  stop-color: var(--pos);
-  stop-opacity: 0;
-}
-
-.grad-neg-a {
-  stop-color: var(--neg);
-  stop-opacity: 0.15;
-}
-
-.grad-neg-b {
-  stop-color: var(--neg);
-  stop-opacity: 0;
-}
-
-.indices-timeaxis {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 var(--space-1);
-  font-size: var(--text-xs);
-  color: var(--muted);
-  font-family: var(--font-mono);
-}
-
 .indices-detail {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -8851,8 +8799,36 @@ body > .modal {
 }
 
 .market-chart {
+  position: relative;
   width: 100%;
-  min-height: 360px;
+  min-height: 520px;
+}
+
+/* 图表周期 tab + 策略信号开关（右组） */
+.market-chart-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+#market-marker-toggle.active {
+  background: var(--accent-soft, rgba(13, 158, 136, 0.1));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* K 线图各 pane 左上角图例（雪球式），垂直位置由 JS 按 pane 高度对齐 */
+.chart-legend {
+  position: absolute;
+  left: var(--space-2);
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .market-minute-status {
@@ -8939,7 +8915,7 @@ body > .modal {
   }
 
   .market-chart {
-    min-height: 280px;
+    min-height: 420px;
   }
 
   .market-minute-status {

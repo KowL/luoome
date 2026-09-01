@@ -270,12 +270,11 @@ describe('指数页结构', () => {
     expect(html).toContain('id="route-indices"');
   });
 
-  it('指数页容器齐全：6 卡网格 / 分时图 / 时间轴 / 明细', () => {
+  it('指数页容器齐全：6 卡网格 / 分时图 / 明细', () => {
     expect(html).toContain('id="indices-cards"');
     expect(html).toContain('id="indices-chart-card"');
     expect(html).toContain('id="indices-chart-title"');
     expect(html).toContain('id="indices-chart"');
-    expect(html).toContain('id="indices-timeaxis"');
     expect(html).toContain('id="indices-detail"');
   });
 

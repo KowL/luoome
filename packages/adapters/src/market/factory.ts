@@ -44,7 +44,7 @@ export type MarketSourceId = z.infer<typeof MarketSourceIdSchema>;
 export const MarketSourceOrderSchema = z
   .array(MarketSourceIdSchema)
   .min(1, '至少启用一个行情数据源')
-  .max(3)
+  .max(3, '最多启用 3 个行情数据源')
   .superRefine((sources, ctx) => {
     if (new Set(sources).size !== sources.length) {
       ctx.addIssue({ code: 'custom', message: '行情数据源不能重复' });

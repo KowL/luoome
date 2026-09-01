@@ -10,6 +10,9 @@ let testingId = null;
 let reportStatus = () => {};
 let initialized = false;
 
+/** 与 adapters 的 MarketSourceOrderSchema.max 保持一致。 */
+const MAX_ACTIVE_SOURCES = 3;
+
 const HEALTH_LABELS = {
   fresh: '新鲜',
   stale: '过期',
@@ -37,6 +40,9 @@ const activeSourceIds = (items) =>
     .filter((source) => source.enabled)
     .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
     .map((source) => source.id);
+
+/** 是否还能再启用一个源（上限 MAX_ACTIVE_SOURCES）。 */
+const canEnableMore = (items) => activeSourceIds(items).length < MAX_ACTIVE_SOURCES;
 
 const normalizePriorities = () => {
   let priority = 1;
@@ -147,7 +153,10 @@ const sourceRow = (source, index) => {
   const toggle = document.createElement('input');
   toggle.type = 'checkbox';
   toggle.checked = source.enabled;
-  toggle.disabled = !source.configured;
+  toggle.disabled = !source.configured || (!source.enabled && !canEnableMore(sources));
+  if (!source.enabled && source.configured && !canEnableMore(sources)) {
+    toggle.title = `最多启用 ${MAX_ACTIVE_SOURCES} 个行情数据源，请先停用一个`;
+  }
   toggle.setAttribute('aria-label', `${source.enabled ? '停用' : '启用'} ${source.label}`);
   const switchTrack = document.createElement('span');
   switchTrack.setAttribute('aria-hidden', 'true');
@@ -310,8 +319,9 @@ const saveMarketSettings = async (setStatus) => {
   button.disabled = false;
   if (!result.ok) {
     setPanelState('保存失败', 'error');
+    const issueMessage = result.error?.issues?.[0]?.message;
     setStatus(
-      `行情源设置保存失败：${result.error?.message ?? result.error?.required ?? result.error?.kind ?? 'unknown'}`,
+      `行情源设置保存失败：${issueMessage ?? result.error?.message ?? result.error?.required ?? result.error?.kind ?? 'unknown'}`,
       true,
     );
     return;
@@ -339,4 +349,11 @@ const initMarketSettings = (setStatus) => {
   });
 };
 
-export { activeSourceIds, initMarketSettings, renderMarketSettings, saveMarketSettings };
+export {
+  activeSourceIds,
+  canEnableMore,
+  initMarketSettings,
+  MAX_ACTIVE_SOURCES,
+  renderMarketSettings,
+  saveMarketSettings,
+};

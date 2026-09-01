@@ -13,7 +13,7 @@
 
 import { callApi } from './api.js';
 import { renderIndexStrip } from './index-strip.js';
-import { computeMaSeries, createMarketChart, createMinuteBarChart } from './market-chart.js';
+import { createMarketChart, createMinuteBarChart } from './market-chart.js';
 import { renderLimitUpFacts, renderMarkers } from './market-facts.js';
 import {
   renderIndicators,
@@ -38,7 +38,6 @@ import { $, el, mount } from './ui.js';
 const RECENT_KEY = 'luoome.market.recent';
 const REFRESH_ACTIVE_MS = 60_000;
 const REFRESH_IDLE_MS = 300_000;
-const GRANULARITY_TITLES = { day: '日 K', week: '周 K', month: '月 K' };
 const EMPTY_TIP = '搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&range=3m。';
 
 const state = {
@@ -57,6 +56,8 @@ const state = {
   minuteTracker: createRequestTracker(),
   refreshTimer: null,
   bound: false,
+  /** 「策略信号」开关：true 时 K 线图上叠加策略/Advice/交易标注（§11 关联事实）。 */
+  showMarkers: false,
 };
 
 const loadRecent = () => {
@@ -200,30 +201,35 @@ const bindRangeSwitch = () => {
   });
 };
 
-/* ============ 日 / 周 / 月粒度切换（仅 K 线 tab 下有意义，分时 tab 时隐藏） ============ */
+/* ============ 图表周期 tab（雪球式单排：分时 / 日K / 周K / 月K / 60分…1分） ============ */
 
-const paintGranularitySwitch = () => {
-  const wrap = $('#market-granularity-switch');
-  if (wrap !== null) {
-    wrap.querySelectorAll('button[data-granularity]').forEach((node) => {
-      node.classList.toggle('active', node.getAttribute('data-granularity') === state.granularity);
-    });
-  }
-  const title = $('#market-chart-title');
-  if (title !== null) title.textContent = GRANULARITY_TITLES[state.granularity] ?? '日 K';
+/** 当前激活 tab：intraday=分时；kline 用粒度（day/week/month）；minute-k 用分钟间隔。 */
+const activeChartTab = () => {
+  if (state.chartTab === 'intraday') return 'intraday';
+  if (state.chartTab === 'minute-k') return state.minuteInterval;
+  return state.granularity;
 };
 
-const bindGranularitySwitch = () => {
-  const wrap = $('#market-granularity-switch');
-  if (wrap === null || wrap.dataset.bound === '1') return;
-  wrap.dataset.bound = '1';
-  wrap.addEventListener('click', (event) => {
-    const target =
-      event.target instanceof Element ? event.target.closest('button[data-granularity]') : null;
-    if (target === null || state.stockId === null) return;
-    const granularity = normalizeMarketGranularity(target.getAttribute('data-granularity'));
-    if (granularity === state.granularity) return;
-    window.location.hash = buildMarketHash(state.stockId, state.range, state.date, granularity);
+/** 「策略信号」开关：切换 K 线图上的关联事实标注，默认关闭。 */
+const paintMarkerToggle = () => {
+  const toggle = $('#market-marker-toggle');
+  if (toggle === null) return;
+  toggle.classList.toggle('active', state.showMarkers);
+  toggle.setAttribute('aria-pressed', String(state.showMarkers));
+};
+
+const applyMarkerVisibility = () => {
+  state.chart?.setMarkers(state.showMarkers ? (state.data?.markers ?? []) : []);
+};
+
+const bindMarkerToggle = () => {
+  const toggle = $('#market-marker-toggle');
+  if (toggle === null || toggle.dataset.bound === '1') return;
+  toggle.dataset.bound = '1';
+  toggle.addEventListener('click', () => {
+    state.showMarkers = !state.showMarkers;
+    paintMarkerToggle();
+    applyMarkerVisibility();
   });
 };
 
@@ -268,40 +274,25 @@ const renderMinuteStatus = (data) => {
 };
 
 const paintChartTabs = () => {
-  const onMinute = state.chartTab === 'intraday' || state.chartTab === 'minute-k';
+  const onKline = state.chartTab === 'kline';
+  const active = activeChartTab();
   const tabs = $('#market-chart-tabs');
   if (tabs !== null) {
     tabs.querySelectorAll('button[data-chart-tab]').forEach((node) => {
-      const tab = node.getAttribute('data-chart-tab');
-      node.classList.toggle('active', tab === state.chartTab);
+      node.classList.toggle('active', node.getAttribute('data-chart-tab') === active);
     });
   }
+  // range 只对 K 线粒度有意义（分钟 tab 固定当日序列）
   const rangeSwitch = $('#market-range-switch');
-  if (rangeSwitch !== null) rangeSwitch.hidden = onMinute;
-  const granularitySwitch = $('#market-granularity-switch');
-  if (granularitySwitch !== null) granularitySwitch.hidden = onMinute;
-  const minuteIntervalSwitch = $('#market-minute-interval-switch');
-  if (minuteIntervalSwitch !== null) {
-    minuteIntervalSwitch.hidden = !onMinute;
-    minuteIntervalSwitch.querySelectorAll('button[data-minute-interval]').forEach((node) => {
-      node.classList.toggle(
-        'active',
-        node.getAttribute('data-minute-interval') === state.minuteInterval,
-      );
-    });
-  }
-  const title = $('#market-chart-title');
-  if (title !== null && onMinute) {
-    title.textContent = `${state.chartTab === 'intraday' ? '分时' : '分钟 K'} · ${state.minuteInterval.replace('m', ' 分')}`;
-  }
+  if (rangeSwitch !== null) rangeSwitch.hidden = !onKline;
   const intradayWrap = $('#market-intraday-chart');
   const minuteHasBars = Array.isArray(state.minuteData?.bars) && state.minuteData.bars.length > 0;
-  if (intradayWrap !== null) intradayWrap.hidden = !onMinute || !minuteHasBars;
+  if (intradayWrap !== null) intradayWrap.hidden = onKline || !minuteHasBars;
   const minuteStatus = $('#market-minute-status');
-  if (minuteStatus !== null) minuteStatus.hidden = !onMinute;
+  if (minuteStatus !== null) minuteStatus.hidden = onKline;
   const klineWrap = $('#market-chart');
   const klineEmpty = $('#market-chart-empty');
-  if (onMinute) {
+  if (!onKline) {
     if (klineWrap !== null) klineWrap.hidden = true;
     if (klineEmpty !== null) klineEmpty.hidden = true;
   } else {
@@ -319,28 +310,20 @@ const bindChartTabs = () => {
   wrap.addEventListener('click', (event) => {
     const target =
       event.target instanceof Element ? event.target.closest('button[data-chart-tab]') : null;
-    if (target === null) return;
+    if (target === null || state.stockId === null) return;
     const tab = target.getAttribute('data-chart-tab');
-    if (tab === null || tab === state.chartTab) return;
-    state.chartTab = tab;
-    paintChartTabs();
-    if (tab === 'intraday' || tab === 'minute-k') {
+    if (tab === null || tab === activeChartTab()) return;
+    if (tab === 'day' || tab === 'week' || tab === 'month') {
+      // K 线粒度走深链接（与 range 切换同口径），hashchange 驱动重载；
+      // hash 未变（粒度本就是它）时直接用既有 K 线数据，无需重拉。
+      state.chartTab = 'kline';
       destroyIntradayChart();
-      void loadIntradayView();
+      paintChartTabs();
+      window.location.hash = buildMarketHash(state.stockId, state.range, state.date, tab);
+      return;
     }
-  });
-};
-
-const bindMinuteIntervalSwitch = () => {
-  const wrap = $('#market-minute-interval-switch');
-  if (wrap === null || wrap.dataset.bound === '1') return;
-  wrap.dataset.bound = '1';
-  wrap.addEventListener('click', (event) => {
-    const target =
-      event.target instanceof Element ? event.target.closest('button[data-minute-interval]') : null;
-    const interval = target?.getAttribute('data-minute-interval');
-    if (interval === null || interval === undefined || interval === state.minuteInterval) return;
-    state.minuteInterval = interval;
+    state.chartTab = tab === 'intraday' ? 'intraday' : 'minute-k';
+    state.minuteInterval = tab === 'intraday' ? '1m' : tab;
     state.minuteData = null;
     destroyIntradayChart();
     paintChartTabs();
@@ -411,7 +394,6 @@ const renderData = async (data, requestId) => {
   renderMarkers(data);
   renderLimitUpFacts(data);
   paintRangeSwitch();
-  paintGranularitySwitch();
 
   const chartContainer = $('#market-chart');
   const chartEmpty = $('#market-chart-empty');
@@ -434,10 +416,7 @@ const renderData = async (data, requestId) => {
   if (!state.tracker.isCurrent(requestId) || state.chart === null) return;
   state.chart.setData({
     candles: data.candles,
-    ma5: computeMaSeries(data.candles, 5),
-    ma10: computeMaSeries(data.candles, 10),
-    ma20: computeMaSeries(data.candles, 20),
-    markers: data.markers ?? [],
+    markers: state.showMarkers ? (data.markers ?? []) : [],
   });
   paintChartTabs();
 };
@@ -538,9 +517,8 @@ const loadMarketView = async () => {
 const renderMarket = async (setStatus) => {
   bindSearch();
   bindRangeSwitch();
-  bindGranularitySwitch();
   bindChartTabs();
-  bindMinuteIntervalSwitch();
+  bindMarkerToggle();
   bindVisibility();
   renderRecent();
   void loadMarketIndices();
@@ -586,7 +564,7 @@ const renderMarket = async (setStatus) => {
   state.granularity = granularity;
   if (!changed && state.data !== null) {
     paintRangeSwitch();
-    paintGranularitySwitch();
+    paintChartTabs();
     return;
   }
   state.data = null;

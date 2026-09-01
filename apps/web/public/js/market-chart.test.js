@@ -6,8 +6,10 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  computeMacdSeries,
   computeMaSeries,
   DOWN_COLOR,
+  symmetricRangeAroundBase,
   toCandleData,
   toIntradayLineData,
   toIntradayVolumeData,
@@ -78,6 +80,38 @@ describe('MA5/MA10/MA20 计算', () => {
   it('空 candles 输出空序列', () => {
     expect(computeMaSeries([], 5)).toEqual([]);
   });
+
+  it('valueAt 访问器：按 volume 计算均量线', () => {
+    const volMa = computeMaSeries(candles, 5, (c) => c.volume);
+    expect(volMa.length).toBe(2);
+    expect(volMa[0]).toEqual({ time: '2026-07-24', value: 1000 });
+  });
+});
+
+describe('MACD(12,26,9) 计算', () => {
+  const trending = (n, start = 10, step = 0.1) =>
+    Array.from({ length: n }, (_, i) =>
+      candle(`2026-07-${String(i + 1).padStart(2, '0')}`, 0, start + i * step),
+    );
+
+  it('前 slow-2 根不输出，之后每根输出 DIF/DEA/MACD', () => {
+    const data = computeMacdSeries(trending(30));
+    expect(data).toHaveLength(30 - 25);
+    expect(data[0].time).toBe('2026-07-26');
+    expect(data.at(-1).time).toBe('2026-07-30');
+  });
+
+  it('持续上涨序列 DIF > DEA > 0 且 MACD 柱为正；macd = 2×(dif-dea)', () => {
+    const last = computeMacdSeries(trending(60)).at(-1);
+    expect(last.dif).toBeGreaterThan(last.dea);
+    expect(last.dea).toBeGreaterThan(0);
+    expect(last.macd).toBeCloseTo(2 * (last.dif - last.dea));
+  });
+
+  it('序列不足 slow 根时返回空', () => {
+    expect(computeMacdSeries(trending(20))).toEqual([]);
+    expect(computeMacdSeries([])).toEqual([]);
+  });
 });
 
 describe('分时数据转换', () => {
@@ -97,6 +131,39 @@ describe('分时数据转换', () => {
     ]);
     expect(data.map((d) => d.value)).toEqual([1_000, 500, 0]);
     expect(data.map((d) => d.color)).toEqual([UP_COLOR, UP_COLOR, DOWN_COLOR]);
+  });
+
+  it('cumVolume 缺失 / 非法的点跳过，不产生 NaN 柱', () => {
+    const data = toIntradayVolumeData([
+      point('2026-08-11T01:30:00.000Z', 91.18, 1_000),
+      { time: '2026-08-11T01:31:00.000Z', price: 91.2 }, // 无量 → 跳过
+      point('2026-08-11T01:32:00.000Z', 91.1, 1_500),
+    ]);
+    expect(data).toHaveLength(2);
+    expect(data.every((d) => Number.isFinite(d.value))).toBe(true);
+  });
+});
+
+describe('昨收居中纵轴范围', () => {
+  it('以昨收为中心按最大偏离对称展开（0 轴居中），留 8% 边距', () => {
+    const range = symmetricRangeAroundBase([3800, 3820, 3810], 3790);
+    // 最大偏离 30（3820 - 3790），pad = 30 * 1.08 = 32.4
+    expect(range.minValue).toBeCloseTo(3790 - 32.4);
+    expect(range.maxValue).toBeCloseTo(3790 + 32.4);
+  });
+
+  it('价格等于昨收（零偏离）时用基准千分之一兜底，范围仍对称', () => {
+    const range = symmetricRangeAroundBase([3790, 3790], 3790);
+    expect(range.minValue).toBeCloseTo(3790 - 3790 * 0.001 * 1.08);
+    expect(range.maxValue).toBeCloseTo(3790 + 3790 * 0.001 * 1.08);
+  });
+
+  it('base 非法 / 序列为空 → null（调用方退回默认 autoscale）', () => {
+    expect(symmetricRangeAroundBase([3800], null)).toBeNull();
+    expect(symmetricRangeAroundBase([3800], 0)).toBeNull();
+    expect(symmetricRangeAroundBase([3800], -1)).toBeNull();
+    expect(symmetricRangeAroundBase([], 3790)).toBeNull();
+    expect(symmetricRangeAroundBase([Number.NaN], 3790)).toBeNull();
   });
 });
 

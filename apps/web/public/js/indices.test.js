@@ -14,7 +14,7 @@ const pt = (time, price, cumVolume = 1000, cumAmount = price * cumVolume) => ({
 });
 
 describe('buildIntradayModel', () => {
-  it('价格 / 纵轴范围（不含量额）/ 极值 / 末点累计量额', () => {
+  it('有效价格点 / 极值 / 末点累计量额', () => {
     const model = buildIntradayModel(
       [
         pt('2026-08-21T09:31:00+08:00', 3800, 1000),
@@ -24,6 +24,7 @@ describe('buildIntradayModel', () => {
       3790,
     );
     expect(model).not.toBeNull();
+    expect(model.points.map((p) => p.price)).toEqual([3800, 3820, 3810]);
     expect(model.prices).toEqual([3800, 3820, 3810]);
     expect(model.open).toBe(3800);
     expect(model.high).toBe(3820);
@@ -31,18 +32,19 @@ describe('buildIntradayModel', () => {
     expect(model.base).toBe(3790);
     expect(model.lastVolume).toBe(3000);
     expect(model.lastAmount).toBe(3810 * 3000);
-    expect(model.labels).toEqual(['09:31', '09:32', '09:33']);
   });
 
-  it('纵轴范围只由价格与昨收决定（指数 cumAmount/cumVolume 是全市场口径，不参与绘图）', () => {
-    // tencent 指数分钟数据的 cumAmount/cumVolume 相除 ≈ 17（不是指数点位），
-    // 若混入 min/max 会把价格线压扁到顶部——回归锁定。
+  it('非法价格点被过滤，不进 points', () => {
     const model = buildIntradayModel(
-      [pt('2026-08-21T09:31:00+08:00', 3800, 416_819_100, 7_276_088_191.9)],
+      [
+        pt('2026-08-21T09:31:00+08:00', 3800),
+        { time: 'x', price: -1 },
+        pt('2026-08-21T09:32:00+08:00', 3810),
+      ],
       3790,
     );
-    expect(model.min).toBeGreaterThan(3700);
-    expect(model.max).toBeLessThan(3900);
+    expect(model.points).toHaveLength(2);
+    expect(model.prices).toEqual([3800, 3810]);
   });
 
   it('preClose 缺失（null）时基准退化为首分钟价', () => {
