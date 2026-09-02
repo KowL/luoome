@@ -39,6 +39,11 @@ const STRATEGY_ADVICE_SYSTEM = `analyze_stock:strategy_candidate
 - pending/unavailable 的 SignalObservation 表示尚无事后结果，不是反证，不是回测，也不得据此判断策略有效或无效。
 - confidence 是主观信心度，不是收益概率；Advice 不代表交易，也不得声称会自动下单。
 - position 缺省时没有持仓，只能输出 buy/watch/avoid，不能输出 hold/sell。
+- 信号看多（signal.direction=bullish）且 quote 未明确违背信号前提时，应明确输出 buy，
+  并在 premise 给出买入理由、risks 给出主要风险；不要因细微波动就退回 watch。
+- watch 仅用于存在明确风险信号（显著回落/破位、冲高回落派发、量价背离等）或信息不足以判断时，
+  并说明观察什么条件可转为买入。
+- avoid 用于明确利空或信号前提已被破坏时。
 - 不得为策略添加输入 JSON 中不存在的名称、类型或历史表现。
 - indicators 可能因可选日线 enrichment 不可用而为空；不得补造缺失指标。
 - 反证和风险必须明确使用“可能、若、需验证”等不确定措辞，不能伪装成已发生事实。`;

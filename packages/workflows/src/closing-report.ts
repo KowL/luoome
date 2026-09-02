@@ -2,6 +2,7 @@ import {
   dateInShanghai,
   isHoliday,
   isWeekend,
+  type ReportBlock,
   ReportSchema,
   ReportScopeSchema,
   type ToolResult,
@@ -155,130 +156,6 @@ const adviceExpirySection = async (date: string, now: Date, ctx: WorkflowContext
   };
 };
 
-const groupChangesSection = async (date: string, now: Date, ctx: WorkflowContext) => {
-  const watchlists = await ctx.tools.list_watchlists.execute({ enabledOnly: true });
-  if (!watchlists.ok) {
-    return unavailableSection(
-      'group-changes',
-      '分组变化',
-      true,
-      now,
-      'group-changes.history',
-      watchlists.error.kind,
-    );
-  }
-
-  const evidence = [];
-  const missingDimensions = [];
-  const rows = [];
-  for (const item of watchlists.data.items) {
-    const changes = await ctx.tools.list_watchlist_changes.execute({
-      watchlistId: item.watchlist.id,
-      limit: 50,
-    });
-    if (!changes.ok) {
-      missingDimensions.push(
-        missing(
-          `group-changes.${item.watchlist.id}`,
-          `${item.watchlist.name} 的同步变化不可用`,
-          changes.error.kind,
-        ),
-      );
-      continue;
-    }
-    const runs = changes.data.runs.filter((entry) => {
-      const observedDates = [entry.run.dataAsOf, entry.run.finishedAt, entry.run.startedAt]
-        .filter((value): value is Date => value !== undefined)
-        .map(dateInShanghai);
-      return observedDates.includes(date);
-    });
-    evidence.push(
-      localEvidence(
-        `group-changes:${item.watchlist.id}`,
-        `group-changes.${item.watchlist.id}`,
-        now,
-        'tool/list_watchlist_changes',
-      ),
-    );
-    if (runs.length === 0) {
-      missingDimensions.push(
-        missing(
-          `group-changes.${item.watchlist.id}`,
-          `${item.watchlist.name} 在 ${date} 没有同步运行记录`,
-          'not_found',
-        ),
-      );
-      continue;
-    }
-    const entered = runs.reduce((sum, entry) => sum + entry.run.enteredCount, 0);
-    const exited = runs.reduce((sum, entry) => sum + entry.run.exitedCount, 0);
-    const unchanged = runs.reduce((sum, entry) => sum + entry.run.unchangedCount, 0);
-    const incompleteRuns = runs.filter((entry) => entry.run.status !== 'complete');
-    for (const entry of incompleteRuns) {
-      for (const dimension of entry.run.missingDimensions) {
-        missingDimensions.push({
-          ...dimension,
-          dimension: `group-changes.${item.watchlist.id}.${dimension.dimension}`,
-        });
-      }
-      if (entry.run.status === 'partial' && entry.run.missingDimensions.length === 0) {
-        missingDimensions.push(
-          missing(
-            `group-changes.${item.watchlist.id}`,
-            `${item.watchlist.name} 的同步运行仅部分完成`,
-            'incomplete_coverage',
-          ),
-        );
-      }
-      if (entry.run.status === 'failed' && entry.run.missingDimensions.length === 0) {
-        missingDimensions.push(
-          missing(
-            `group-changes.${item.watchlist.id}`,
-            `${item.watchlist.name} 的同步运行失败${entry.run.error === undefined ? '' : `：${entry.run.error}`}`,
-            'upstream_error',
-          ),
-        );
-      }
-    }
-    rows.push({
-      watchlist: item.watchlist.name,
-      entered,
-      exited,
-      unchanged,
-      runs: runs.length,
-      status: incompleteRuns.length === 0 ? 'complete' : 'partial',
-    });
-  }
-
-  const status = missingDimensions.length === 0 ? ('complete' as const) : ('partial' as const);
-  return {
-    evidence,
-    section: {
-      key: 'group-changes',
-      title: '分组变化',
-      required: true,
-      status,
-      dataAsOf: now,
-      blocks: [
-        {
-          kind: 'table' as const,
-          columns: [
-            { key: 'watchlist', label: '分组' },
-            { key: 'entered', label: '新增' },
-            { key: 'exited', label: '移出' },
-            { key: 'unchanged', label: '未变' },
-            { key: 'runs', label: '同步次数' },
-            { key: 'status', label: '状态' },
-          ],
-          rows,
-        },
-      ],
-      evidenceIds: evidence.map((item) => item.id),
-      missingDimensions,
-    },
-  };
-};
-
 const nextEventsSection = async (date: string, now: Date, ctx: WorkflowContext) => {
   const nextDate = nextTradingDay(date);
   const from = new Date(`${nextDate}T00:00:00+08:00`);
@@ -332,10 +209,27 @@ const nextEventsSection = async (date: string, now: Date, ctx: WorkflowContext) 
 
 const STRATEGY_ADVICE_SOURCE_TOOL = 'analyze_strategy_candidate';
 
+const adviceDecisionLabel = (decision: string): string => {
+  switch (decision) {
+    case 'buy':
+      return '买入';
+    case 'sell':
+      return '卖出';
+    case 'hold':
+      return '持有';
+    case 'watch':
+      return '观察';
+    case 'avoid':
+      return '回避';
+    default:
+      return decision;
+  }
+};
+
 /**
- * 「策略行动」（PRD strategy-ai-managed-automation §4.1/§4.2）：
- * 事实层为当日 published operational run 的信号概览 + 当日策略 Advice 链接（entityKind='advice'，
- * 不含 Advice 决策字段名，decision 值仅以文本展示）；解读层只组装 Advice 已有 reasoning，不发起 LLM。
+ * 「策略行动」：当日策略建议按方向分组，buy 优先为「值得买入」，逐条给出操作建议
+ * （现价 + 理由 + 风险 + 有效期）。decision 值仅以文本展示，block 不含决策字段 key
+ * （report 不变量约束），entityKind='advice' 链接回 Advice 本体。
  */
 const strategyActionsSection = async (
   date: string,
@@ -405,10 +299,67 @@ const strategyActionsSection = async (
     const value = run?.summary?.[key];
     return typeof value === 'number' ? value : null;
   };
+  const buyAdvices = dayAdvices.filter((advice) => advice.decision === 'buy');
+  const watchAdvices = dayAdvices.filter((advice) => advice.decision === 'watch');
+  const avoidAdvices = dayAdvices.filter(
+    (advice) => advice.decision === 'sell' || advice.decision === 'avoid',
+  );
+  const adviceActionDetail = (advice: (typeof dayAdvices)[number]): string => {
+    const quote = advice.basedOn.quotes?.[advice.subjectId];
+    const parts: string[] = [];
+    if (quote !== undefined) parts.push(`现价 ${quote.close}`);
+    parts.push(advice.reasoning.premise);
+    if (advice.risks.length > 0) parts.push(`风险：${advice.risks.join('；')}`);
+    parts.push(`有效期至 ${dateInShanghai(advice.validUntil)}`);
+    return parts.join(' · ');
+  };
+  const adviceItem = (advice: (typeof dayAdvices)[number]) => ({
+    title: advice.stockName ?? advice.subjectId,
+    detail: `${adviceDecisionLabel(advice.decision)} · ${adviceActionDetail(advice)}`,
+    entityKind: 'advice' as const,
+    entityId: advice.id,
+  });
   const evidence = [
     localEvidence('strategy-actions:runs', 'strategy-actions.runs', now, 'tool:list_strategy_runs'),
     localEvidence('strategy-actions:advice', 'strategy-actions.advice', now, 'tool:get_advice'),
   ];
+  const blocks: ReportBlock[] = [
+    {
+      kind: 'table',
+      columns: [
+        { key: 'strategy', label: '策略' },
+        { key: 'selectedCount', label: '入选数' },
+        { key: 'signalCount', label: '信号数' },
+      ],
+      rows: strategies.data.strategies.map((strategy) => {
+        const run = latestRunByStrategy.get(strategy.id);
+        return {
+          strategy: strategy.name,
+          selectedCount: summaryCount(run, 'selectedCount'),
+          signalCount: summaryCount(run, 'signalCount'),
+        };
+      }),
+    },
+    {
+      kind: 'text',
+      tone: 'factual',
+      text:
+        buyAdvices.length === 0
+          ? `${date} 无值得买入的策略标的。`
+          : `值得买入（${buyAdvices.length}）：`,
+    },
+  ];
+  if (buyAdvices.length > 0) {
+    blocks.push({ kind: 'list', items: buyAdvices.map(adviceItem) });
+  }
+  if (watchAdvices.length > 0) {
+    blocks.push({ kind: 'text', tone: 'factual', text: `观察中（${watchAdvices.length}）：` });
+    blocks.push({ kind: 'list', items: watchAdvices.map(adviceItem) });
+  }
+  if (avoidAdvices.length > 0) {
+    blocks.push({ kind: 'text', tone: 'factual', text: `回避（${avoidAdvices.length}）：` });
+    blocks.push({ kind: 'list', items: avoidAdvices.map(adviceItem) });
+  }
   return {
     evidence,
     section: {
@@ -417,47 +368,7 @@ const strategyActionsSection = async (
       required: false,
       status: 'complete' as const,
       dataAsOf: now,
-      blocks: [
-        {
-          kind: 'table' as const,
-          columns: [
-            { key: 'strategy', label: '策略' },
-            { key: 'selectedCount', label: '入选数' },
-            { key: 'signalCount', label: '信号数' },
-          ],
-          rows: strategies.data.strategies.map((strategy) => {
-            const run = latestRunByStrategy.get(strategy.id);
-            return {
-              strategy: strategy.name,
-              selectedCount: summaryCount(run, 'selectedCount'),
-              signalCount: summaryCount(run, 'signalCount'),
-            };
-          }),
-        },
-        {
-          kind: 'list' as const,
-          items: dayAdvices.map((advice) => ({
-            title: advice.stockName ?? advice.subjectId,
-            detail: `${advice.decision} · 有效期至 ${dateInShanghai(advice.validUntil)}`,
-            entityKind: 'advice' as const,
-            entityId: advice.id,
-          })),
-        },
-        {
-          kind: 'text' as const,
-          tone: 'factual' as const,
-          text:
-            dayAdvices.length === 0
-              ? `${date} 无策略建议（推荐未启用、预检全部过滤或 AI 不可用均会导致无建议）。`
-              : [
-                  `${date} 策略建议 ${dayAdvices.length} 条：`,
-                  ...dayAdvices.map(
-                    (advice) =>
-                      `${advice.stockName ?? advice.subjectId}：${advice.reasoning.premise}`,
-                  ),
-                ].join('\n'),
-        },
-      ],
+      blocks,
       evidenceIds: evidence.map((item) => item.id),
       missingDimensions: [],
     },
@@ -500,24 +411,15 @@ const runClosingReport = async (
               'ashare-sentiment',
               sentiment.error.kind,
             );
-        const [performance, triggers, groupChanges, adviceExpiry, strategyActions, nextEvents] =
+        const [performance, triggers, adviceExpiry, strategyActions, nextEvents] =
           await Promise.all([
             accountPerformance(input, generatedAt, ctx),
             triggersSection(date, generatedAt, ctx),
-            groupChangesSection(date, generatedAt, ctx),
             adviceExpirySection(date, generatedAt, ctx),
             strategyActionsSection(date, generatedAt, ctx),
             nextEventsSection(date, generatedAt, ctx),
           ]);
-        return [
-          market,
-          performance,
-          triggers,
-          groupChanges,
-          adviceExpiry,
-          strategyActions,
-          nextEvents,
-        ];
+        return [market, performance, triggers, adviceExpiry, strategyActions, nextEvents];
       },
     },
     ctx,

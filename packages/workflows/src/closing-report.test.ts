@@ -7,7 +7,6 @@ import {
   strategyDefinitionHash,
   type ToolContext,
 } from '@luoome/core';
-import { createWatchlistTool, syncWatchlistSourceTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -203,11 +202,11 @@ const seedStrategyAdvice = async (ctx: ToolContext, date: string): Promise<void>
     subjectKind: 'stock',
     subjectId: '600519.SH',
     stockName: '贵州茅台',
-    decision: 'watch',
+    decision: 'buy',
     confidence: 60,
     horizon: 'short',
     reasoning: {
-      premise: '策略信号触发且量价配合，建议观察。',
+      premise: '策略信号触发且量价配合，值得买入。',
       evidence: ['fixture evidence'],
       counterEvidence: ['fixture counter'],
     },
@@ -254,57 +253,10 @@ describe('closing-report workflow', () => {
       'market-pulse',
       'account-performance',
       'important-triggers',
-      'group-changes',
       'advice-expiry',
       'strategy-actions',
       'next-events',
     ]);
-    expect(
-      JSON.stringify(result.data.report.sections.flatMap((section) => section.blocks)),
-    ).not.toContain('买入');
-  });
-
-  it('从真实 Watchlist 变化工具生成分组变化表', async () => {
-    const ctx = await buildTestContext({
-      clock: () => now,
-      ashareSentiment: { status: () => [], fetch: async () => ({ ok: true, data: snapshot() }) },
-    });
-    const created = await createWatchlistTool.execute(
-      {
-        id: 'closing-watch',
-        name: '收盘观察',
-        kind: 'strategy',
-        membershipPolicy: 'synced',
-      },
-      ctx,
-    );
-    expect(created.ok).toBe(true);
-    const synced = await syncWatchlistSourceTool.execute(
-      {
-        watchlistId: 'closing-watch',
-        sourceKind: 'ai',
-        sourceKey: 'ai:closing',
-        status: 'complete',
-        candidates: [{ stockId: '600519.SH', reason: '收盘入选', evidence: ['fixture'] }],
-      },
-      ctx,
-    );
-    expect(synced.ok).toBe(true);
-
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const groupChanges = result.data.report.sections.find(
-      (section) => section.key === 'group-changes',
-    );
-    expect(groupChanges).toMatchObject({ status: 'complete', missingDimensions: [] });
-    expect(groupChanges?.blocks[0]).toMatchObject({
-      kind: 'table',
-      rows: [
-        { watchlist: '收盘观察', entered: 1, exited: 0, unchanged: 0, runs: 1, status: 'complete' },
-      ],
-    });
   });
 
   it('策略行动 section 汇总当日 published 运行概览并以链接引用策略 Advice', async () => {
@@ -335,8 +287,11 @@ describe('closing-report workflow', () => {
         entityId: 'closing-strategy-advice-2026-07-27',
       }),
     ]);
+    const item = list?.kind === 'list' ? list.items[0] : undefined;
+    expect(item?.detail).toContain('买入');
+    expect(item?.detail).toContain('策略信号触发且量价配合');
     const text = section?.blocks.find((block) => block.kind === 'text');
-    expect(text?.kind === 'text' ? text.text : '').toContain('策略信号触发且量价配合');
+    expect(text?.kind === 'text' ? text.text : '').toContain('值得买入');
     const serialized = JSON.stringify(section?.blocks);
     for (const field of [
       '"decision"',
@@ -367,7 +322,7 @@ describe('closing-report workflow', () => {
     const list = section?.blocks.find((block) => block.kind === 'list');
     expect(list?.kind === 'list' ? list.items : []).toEqual([]);
     const text = section?.blocks.find((block) => block.kind === 'text');
-    expect(text?.kind === 'text' ? text.text : '').toContain('无策略建议');
+    expect(text?.kind === 'text' ? text.text : '').toContain('无值得买入的策略标的');
   });
 
   it('策略数据读取失败时策略行动 section unavailable，且不改变整份报告状态', async () => {
