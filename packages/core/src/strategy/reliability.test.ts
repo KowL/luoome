@@ -195,6 +195,13 @@ describe('Strategy reliability primitives', () => {
       evaluatedCount: 5225,
       failedCount: 323,
       incompleteCount: 5,
+      // 显式严格 policy 构造 rejected 场景，不依赖已放宽的默认门槛。
+      policy: {
+        policyVersion: 'strategy-run-acceptance-v1',
+        minEvaluatedRatio: 0.98,
+        maxFailedRatio: 0.02,
+        maxIncompleteRatio: 0.1,
+      },
       assessedAt: NOW,
     });
     expect(rejectedAcceptance.decision).toBe('rejected');

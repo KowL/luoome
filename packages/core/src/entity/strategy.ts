@@ -212,8 +212,8 @@ export type StrategyRunAcceptancePolicy = z.infer<typeof StrategyRunAcceptancePo
 
 export const DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY: StrategyRunAcceptancePolicy = {
   policyVersion: 'strategy-run-acceptance-v1',
-  minEvaluatedRatio: 0.98,
-  maxFailedRatio: 0.02,
+  minEvaluatedRatio: 0.8,
+  maxFailedRatio: 0.1,
   maxIncompleteRatio: 0.1,
 };
 
