@@ -28,6 +28,7 @@ import {
   DrizzleStockEventRepository,
   DrizzleStockRepository,
   DrizzleStockUniverseRepository,
+  DrizzleStrategyAutonomyActionRepository,
   DrizzleStrategyBacktestRepository,
   DrizzleStrategyDataCheckpointRepository,
   DrizzleStrategyEvaluationRepository,
@@ -954,6 +955,25 @@ export const ensureSchema = (db: DrizzleDb): void => {
     CREATE INDEX IF NOT EXISTS strategy_backtest_market_facts_lookup_idx
     ON strategy_backtest_market_facts (stock_id, date, recorded_at)
   `);
+  // M2-S0：Strategy 自主管理动作审计（DDD strategy-ai-lifecycle §2/§4）。
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS strategy_autonomy_actions (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
+      strategy_id TEXT NOT NULL, strategy_version_id TEXT, evaluation_session_id TEXT,
+      trigger TEXT NOT NULL, rule_snapshot_json TEXT, ai_narrative TEXT,
+      fact_references_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      completed_at INTEGER
+    )
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_autonomy_actions_strategy_created_idx
+    ON strategy_autonomy_actions (strategy_id, created_at)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS strategy_autonomy_actions_status_created_idx
+    ON strategy_autonomy_actions (status, created_at)
+  `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
@@ -1648,6 +1668,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     strategyEvaluation: new DrizzleStrategyEvaluationRepository(db),
     strategyBacktest: new DrizzleStrategyBacktestRepository(db),
     strategyWatchlistSubscription: new DrizzleStrategyWatchlistSubscriptionRepository(db),
+    strategyAutonomyAction: new DrizzleStrategyAutonomyActionRepository(db),
     watchlist: new DrizzleWatchlistRepository(db),
     watchlistMember: new DrizzleWatchlistMemberRepository(db),
     notification: new DrizzleNotificationRepository(db),

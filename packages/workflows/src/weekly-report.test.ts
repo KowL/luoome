@@ -307,6 +307,7 @@ describe('weekly-report workflow', () => {
       'alert-feedback',
       'signal-outcomes',
       'strategy-review',
+      'strategy-autonomy-actions',
       'advice-outcomes',
       'trade-attribution',
       'behavior-patterns',
@@ -660,5 +661,72 @@ describe('weekly-report workflow', () => {
       expect.arrayContaining([expect.objectContaining({ dimension: 'strategy-review.runs' })]),
     );
     expect(broken.data.report.status).toBe(control.data.report.status);
+  });
+
+  it('AI 管理动作 section 列出本周动作与指标摘要，插在策略复盘之后', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const createdAt = new Date('2026-07-29T02:00:00.000Z');
+    await ctx.repos.strategyAutonomyAction.save({
+      id: 'weekly-autonomy-pause-1',
+      kind: 'pause',
+      status: 'executed',
+      strategyId: 'weekly-autonomy-strategy',
+      trigger: 'weekly-review',
+      ruleSnapshot: {
+        sampleCount: 25,
+        benchmarkCoverage: 0.96,
+        avgExcessReturn: -0.012,
+        medianExcessReturn: -0.008,
+        thresholds: { minSampleCount: 20, minBenchmarkCoverage: 0.9 },
+      },
+      factReferences: [],
+      attempts: 0,
+      createdAt,
+      updatedAt: createdAt,
+      completedAt: createdAt,
+    });
+
+    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const keys = result.data.report.sections.map((item) => item.key);
+    expect(keys.indexOf('strategy-autonomy-actions')).toBe(keys.indexOf('strategy-review') + 1);
+    const section = result.data.report.sections.find(
+      (item) => item.key === 'strategy-autonomy-actions',
+    );
+    expect(section).toMatchObject({
+      title: 'AI 管理动作',
+      required: false,
+      status: 'complete',
+    });
+    const list = section?.blocks.find((block) => block.kind === 'list');
+    const items = list?.kind === 'list' ? list.items : [];
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      entityKind: 'strategy',
+      entityId: 'weekly-autonomy-strategy',
+    });
+    expect(items[0]?.title).toContain('自动暂停');
+    expect(items[0]?.detail).toContain('weekly-autonomy-strategy');
+    expect(items[0]?.detail).toContain('完整样本 25');
+    expect(items[0]?.detail).toContain('平均超额 -1.20%');
+  });
+
+  it('本周无动作时 AI 管理动作 section 输出 factual 空态文本', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+
+    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find(
+      (item) => item.key === 'strategy-autonomy-actions',
+    );
+    expect(section).toMatchObject({ required: false, status: 'complete' });
+    const list = section?.blocks.find((block) => block.kind === 'list');
+    expect(list?.kind === 'list' ? list.items : []).toHaveLength(0);
+    const text = section?.blocks.find((block) => block.kind === 'text');
+    expect(text?.kind === 'text' ? text.text : '').toContain('本周没有 AI 管理动作');
   });
 });

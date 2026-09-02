@@ -42,12 +42,15 @@ const ObservationAggregateSchema = z.object({
   missingRate: z.number().min(0).max(1),
   observationIds: z.array(z.string().min(1)).max(5000),
   benchmarkStatus: z.enum(['complete', 'unavailable']),
+  /** 完整样本中 benchmarkStatus=complete 的覆盖率（无完整样本时为 0）。 */
+  benchmarkCoverage: z.number().min(0).max(1),
   averageReturnPct: z.number().finite().optional(),
   medianReturnPct: z.number().finite().optional(),
   p25ReturnPct: z.number().finite().optional(),
   p75ReturnPct: z.number().finite().optional(),
   averageBenchmarkReturnPct: z.number().finite().optional(),
   averageExcessReturnPct: z.number().finite().optional(),
+  medianExcessReturnPct: z.number().finite().optional(),
   averageMaxFavorableExcursionPct: z.number().finite().optional(),
   averageMaxAdverseExcursionPct: z.number().finite().optional(),
   observedAsOf: z.coerce.date().optional(),
@@ -189,6 +192,7 @@ const aggregateObservations = (
         complete.length > 0 && complete.every((item) => item.benchmarkStatus === 'complete')
           ? 'complete'
           : 'unavailable',
+      benchmarkCoverage: advanced?.benchmarkCoverage ?? 0,
       ...(averageReturnPct === undefined ? {} : { averageReturnPct }),
       ...(advanced?.medianReturnPct === undefined
         ? {}
@@ -197,6 +201,9 @@ const aggregateObservations = (
       ...(advanced?.p75ReturnPct === undefined ? {} : { p75ReturnPct: advanced.p75ReturnPct }),
       ...(averageBenchmarkReturnPct === undefined ? {} : { averageBenchmarkReturnPct }),
       ...(averageExcessReturnPct === undefined ? {} : { averageExcessReturnPct }),
+      ...(advanced?.medianExcessReturnPct === undefined
+        ? {}
+        : { medianExcessReturnPct: advanced.medianExcessReturnPct }),
       ...(averageMaxFavorableExcursionPct === undefined ? {} : { averageMaxFavorableExcursionPct }),
       ...(averageMaxAdverseExcursionPct === undefined ? {} : { averageMaxAdverseExcursionPct }),
       ...(observedAsOf === undefined ? {} : { observedAsOf }),

@@ -36,6 +36,7 @@ export * from './entity/stock-event.js';
 export * from './entity/stock-research-profile.js';
 export * from './entity/stock-universe.js';
 export * from './entity/strategy.js';
+export * from './entity/strategy-autonomy-action.js';
 export * from './entity/strategy-backtest.js';
 export * from './entity/strategy-checkpoint.js';
 export * from './entity/strategy-schedule.js';

@@ -16,6 +16,16 @@ export const TEST_LLM_SYSTEM_RESOLVE_LLM_GROUP = 'resolve_llm_group';
 export const TEST_LLM_SYSTEM_CHAT_PLAN = 'chat_plan';
 export const TEST_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
 export const TEST_LLM_SYSTEM_STRATEGY_INSIGHT = 'strategy_insight';
+export const TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL = 'strategy_version_proposal';
+
+/**
+ * strategy_version_proposal 测试注入标记（放在 data.strategy.description 中）：
+ * - 'proposal-fixture:schema-error'  → 输出非 DSL 结构（tool 侧 schema 校验失败）
+ * - 'proposal-fixture:unknown-field' → 输出引用未注册字段的定义（validate 阶段判 invalid）
+ * - 'proposal-fixture:unchanged'     → 原样返回基线定义（unchanged 分支）
+ * 无标记时默认在基线每条 selection rule 的 when 后追加 ' && quote.close > 0'
+ * （无 selection rule 时改 metadata.style），保证 definitionHash 与基线不同且可通过校验。
+ */
 
 /**
  * web chat 测试注入前缀（docs/ddd/web-chat-design.md §6）：
@@ -45,6 +55,7 @@ type TestMode =
   | 'chat_plan'
   | 'chat_reply'
   | 'strategy_insight'
+  | 'strategy_version_proposal'
   | 'generic';
 
 /** 仅依赖 safeParse 的最小 schema 投影（zod schema 天然满足）。 */
@@ -164,6 +175,9 @@ export class FakeLLMAdapter implements LLMAdapter {
     // analyze_stock），若按内容包含匹配会被误判。
     if (system.includes(TEST_LLM_SYSTEM_CHAT_PLAN)) return 'chat_plan';
     if (system.includes(TEST_LLM_SYSTEM_CHAT_REPLY)) return 'chat_reply';
+    if (system.includes(TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL)) {
+      return 'strategy_version_proposal';
+    }
     if (system.includes(TEST_LLM_SYSTEM_STRATEGY_INSIGHT)) return 'strategy_insight';
     if (system.includes(TEST_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
     if (system.includes(TEST_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
@@ -220,6 +234,16 @@ export class FakeLLMAdapter implements LLMAdapter {
       }
       return Promise.resolve(asGenerateResult<T>(out, raw));
     }
+    if (mode === 'strategy_version_proposal') {
+      const out = this.buildStrategyVersionProposal(request.data);
+      const raw = JSON.stringify({ fixture: true, mode });
+      const schema = request.schema;
+      if (isSchemaLike(schema)) {
+        const parsed = schema.safeParse(out);
+        if (parsed.success) return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
+      }
+      return Promise.resolve(asGenerateResult<T>(out, raw));
+    }
     return Promise.resolve(this.buildStandardAnalysis(mode, request, request.schema));
   }
 
@@ -244,6 +268,75 @@ export class FakeLLMAdapter implements LLMAdapter {
       risks: ['数据缺失和样本量会影响描述的稳定性。'],
       limitations: ['这是事实观察，不是包含交易成本与成交假设的回测。'],
       disclaimer: '仅供研究记录，不构成投资建议。',
+    };
+  }
+
+  /**
+   * 版本提议 测试输出（M2-S2）：默认把基线定义的每条 selection rule 追加
+   * ' && quote.close > 0'（无 rule 时改 metadata.style），保证 hash 变化且可校验；
+   * 标记注入见 TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL 上方注释。
+   */
+  private buildStrategyVersionProposal(data: unknown): Record<string, unknown> {
+    const record = asRecord(data);
+    const description = readString(asRecord(record?.strategy), 'description') ?? '';
+    const facts = Array.isArray(record?.facts) ? (record.facts as readonly unknown[]) : [];
+    const firstFactId =
+      facts
+        .map((fact) => readString(asRecord(fact), 'id'))
+        .find((id): id is string => id !== null) ?? 'runs:window';
+    if (description.includes('proposal-fixture:schema-error')) {
+      return {
+        definition: 'not-a-dsl-object',
+        changeSummary: '测试：非结构化输出',
+        factReferences: [firstFactId],
+      };
+    }
+    const base = asRecord(asRecord(record?.baseVersion)?.definition);
+    const definition: Record<string, unknown> =
+      base === null
+        ? {
+            schemaVersion: 1,
+            metadata: { style: 'fixture' },
+            universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+            selection: {
+              logic: 'all',
+              rules: [
+                { id: 'fixture', name: '测试规则', when: 'quote.close > 0', evidence: ['收盘价'] },
+              ],
+            },
+            signals: { entry: [], exit: [], risk: [] },
+          }
+        : (JSON.parse(JSON.stringify(base)) as Record<string, unknown>);
+    if (description.includes('proposal-fixture:unchanged')) {
+      return {
+        definition,
+        changeSummary: '测试：与基线一致',
+        factReferences: [firstFactId],
+      };
+    }
+    const selection = asRecord(definition.selection);
+    const rules = Array.isArray(selection?.rules) ? (selection.rules as unknown[]) : [];
+    const suffix = description.includes('proposal-fixture:unknown-field')
+      ? ' && quote.fixtureUnknown > 0'
+      : ' && quote.close > 0';
+    if (rules.length > 0) {
+      definition.selection = {
+        ...(selection ?? {}),
+        rules: rules.map((rule) => {
+          const record2 = asRecord(rule) ?? {};
+          return {
+            ...record2,
+            when: `${readString(record2, 'when') ?? 'quote.close > 0'}${suffix}`,
+          };
+        }),
+      };
+    } else {
+      definition.metadata = { ...(asRecord(definition.metadata) ?? {}), style: 'fixture-tuned' };
+    }
+    return {
+      definition,
+      changeSummary: '测试提议：在基线规则上追加收敛条件',
+      factReferences: [firstFactId],
     };
   }
 

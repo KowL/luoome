@@ -752,6 +752,152 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
   ]);
 };
 
+const AUTONOMY_ACTION_KIND = {
+  'propose-version': 'AI 提议版本',
+  'publish-version': '发布版本',
+  pause: '自动暂停',
+};
+
+const AUTONOMY_ACTION_STATUS = {
+  drafted: ['已起草', 'badge-neutral'],
+  validating: ['验证中', 'badge-neutral'],
+  eligible: ['待发布', 'badge-important'],
+  blocked: ['待人工确认', 'badge-important'],
+  confirmed: ['已确认', 'badge-active'],
+  published: ['已发布', 'badge-active'],
+  rejected: ['已否决', 'badge-paused'],
+  failed: ['失败', 'badge-pos'],
+  executed: ['已执行', 'badge-active'],
+};
+
+/** ruleSnapshot 的指标摘要：只取确定性事实字段，不渲染未知结构。 */
+const autonomySnapshotSummary = (snapshot) => {
+  if (snapshot === null || typeof snapshot !== 'object') return undefined;
+  const parts = [];
+  if (typeof snapshot.sampleCount === 'number') parts.push(`样本 ${snapshot.sampleCount}`);
+  if (typeof snapshot.benchmarkCoverage === 'number') {
+    parts.push(`benchmark 覆盖 ${snapshot.benchmarkCoverage.toFixed(2)}`);
+  }
+  if (typeof snapshot.avgExcessReturn === 'number') {
+    parts.push(`平均超额 ${snapshot.avgExcessReturn.toFixed(4)}`);
+  }
+  if (typeof snapshot.medianExcessReturn === 'number') {
+    parts.push(`中位数超额 ${snapshot.medianExcessReturn.toFixed(4)}`);
+  }
+  if (typeof snapshot.candidateVersionId === 'string') {
+    parts.push(`候选版本 ${snapshot.candidateVersionId}`);
+  }
+  return parts.length === 0 ? undefined : parts.join(' · ');
+};
+
+/**
+ * 自治动作时间线（M2-S4，DDD §5）：读 list_strategy_autonomy_actions；
+ * blocked 动作提供确认发布/否决入口（write 闸口由服务端强制）。
+ */
+const renderAutonomyActions = async (strategy, setStatus, refresh) => {
+  const result = await cachedGet(
+    `/api/strategies/${encodeURIComponent(strategy.id)}/autonomy-actions?limit=50`,
+  );
+  if (!result.ok) {
+    return el('section', 'strategy-schedule-panel', [
+      el('h3', null, '自治动作时间线'),
+      el('p', 'status error', errorText(result)),
+    ]);
+  }
+  const rows = (result.data.actions ?? []).map((action) => {
+    const buttons = [];
+    if (action.status === 'blocked') {
+      const confirm = el('button', 'btn btn-primary btn-sm', '确认发布');
+      confirm.type = 'button';
+      confirm.addEventListener('click', async () => {
+        const confirmed = await confirmDialog({
+          title: '确认发布候选版本',
+          message:
+            '确认发布该晋级动作关联的候选版本并切换为当前版本？发布会改变策略行为，但不会自动交易。',
+          confirmLabel: '确认发布',
+        });
+        if (!confirmed) return;
+        confirm.disabled = true;
+        const published = await post(
+          `/api/strategies/${encodeURIComponent(strategy.id)}/autonomy-actions/${encodeURIComponent(action.id)}/confirm`,
+          {},
+        );
+        confirm.disabled = false;
+        if (!published.ok) {
+          setStatus(errorText(published), true);
+          featureCache.clear();
+          await refresh();
+          return;
+        }
+        featureCache.clear();
+        setStatus('候选版本已发布');
+        await refresh();
+      });
+      const reject = el('button', 'btn btn-outline btn-sm', '否决');
+      reject.type = 'button';
+      reject.addEventListener('click', async () => {
+        const confirmed = await confirmDialog({
+          title: '否决晋级动作',
+          message: '确认否决该晋级动作？其候选版本不会发布，动作进入终态 rejected。',
+          confirmLabel: '否决',
+          danger: true,
+        });
+        if (!confirmed) return;
+        reject.disabled = true;
+        const rejected = await post(
+          `/api/strategies/${encodeURIComponent(strategy.id)}/autonomy-actions/${encodeURIComponent(action.id)}/reject`,
+          {},
+        );
+        reject.disabled = false;
+        if (!rejected.ok) {
+          setStatus(errorText(rejected), true);
+          featureCache.clear();
+          await refresh();
+          return;
+        }
+        featureCache.clear();
+        setStatus('晋级动作已否决');
+        await refresh();
+      });
+      buttons.push(confirm, reject);
+    }
+    const summary = autonomySnapshotSummary(action.ruleSnapshot);
+    return el('article', 'entity-item', [
+      el('div', 'flex gap-2', [
+        el('strong', null, AUTONOMY_ACTION_KIND[action.kind] ?? action.kind),
+        badge(AUTONOMY_ACTION_STATUS[action.status], action.status),
+        ...(action.attempts > 0
+          ? [el('span', 'badge badge-neutral', `重试 ${action.attempts}`)]
+          : []),
+      ]),
+      el(
+        'p',
+        'muted',
+        `创建于 ${fmtDateTime(action.createdAt)}${action.completedAt ? ` · 完成于 ${fmtDateTime(action.completedAt)}` : ''}`,
+      ),
+      ...(summary === undefined ? [] : [el('p', 'mono muted', summary)]),
+      ...(action.aiNarrative ? [el('p', null, action.aiNarrative)] : []),
+      ...(action.lastError ? [el('p', 'status error', action.lastError)] : []),
+      ...(buttons.length === 0 ? [] : [el('div', 'row-actions', buttons)]),
+    ]);
+  });
+  return el('section', 'strategy-schedule-panel', [
+    el('div', 'strategy-tab-heading', [
+      el('div', null, [
+        el('h3', null, '自治动作时间线'),
+        el(
+          'p',
+          'muted',
+          '每周策略自治运行产生的提议 / 发布 / 暂停审计记录；待人工确认的动作可在此一键处理。确认发布只改变策略版本，不会自动交易。',
+        ),
+      ]),
+    ]),
+    ...(rows.length === 0
+      ? [el('p', 'placeholder', '暂无自治动作记录；每周自治运行后会出现在这里。')]
+      : [el('div', 'entity-list', rows)]),
+  ]);
+};
+
 export const renderSettings = async (strategyId, setStatus, refresh) => {
   const [result, scheduleResult, preflightHistoryResult] = await Promise.all([
     cachedGet(`/api/strategies/${encodeURIComponent(strategyId)}`),
@@ -768,6 +914,7 @@ export const renderSettings = async (strategyId, setStatus, refresh) => {
     setStatus,
     refresh,
   );
+  const autonomyPanel = await renderAutonomyActions(strategy, setStatus, refresh);
   const preflightHistory = preflightHistoryResult.ok
     ? preflightHistoryResult.data
     : {
@@ -889,6 +1036,7 @@ export const renderSettings = async (strategyId, setStatus, refresh) => {
       ? [el('p', 'placeholder', '尚无版本，请创建第一个版本草案。')]
       : versionRows),
     subscriptionPanel,
+    autonomyPanel,
     el('div', 'strategy-automation-grid', [
       renderScheduleSettings(strategy, scheduleResult.data.schedule, setStatus, refresh),
       renderPreflightHistory(preflightHistory),

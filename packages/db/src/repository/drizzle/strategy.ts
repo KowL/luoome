@@ -718,7 +718,8 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       strategy?.status !== 'active' ||
       version?.strategyId !== run.strategyId ||
       version.validationStatus !== 'valid' ||
-      version.publishedAt === null
+      // evaluation scope 的持久化 run 是非发布验证证据，允许绑定未发布 valid version。
+      (version.publishedAt === null && run.scope !== 'evaluation')
     ) {
       throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
     }
@@ -787,7 +788,8 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         strategy?.status !== 'active' ||
         version?.strategyId !== bundle.run.strategyId ||
         version.validationStatus !== 'valid' ||
-        version.publishedAt === null
+        // evaluation scope 的持久化 run 是非发布验证证据，允许绑定未发布 valid version。
+        (version.publishedAt === null && bundle.run.scope !== 'evaluation')
       ) {
         throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
       }

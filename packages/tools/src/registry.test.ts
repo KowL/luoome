@@ -184,6 +184,11 @@ const EXPECTED_TOOL_NAMES = [
   'get_account_performance',
   'list_account_performance_snapshots',
   'audit_account_performance_snapshots',
+  // M2：Strategy 自主管理动作（list 只读；confirm/reject 为 blocked 人工队列 write 入口；
+  // 创建/转移为 workflow-only，不进公共 registry）
+  'list_strategy_autonomy_actions',
+  'confirm_strategy_autonomy_action',
+  'reject_strategy_autonomy_action',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -253,6 +258,9 @@ describe('toolRegistry', () => {
       'save_report',
       'save_watch_trigger',
       'set_report_delivery_status',
+      'create_strategy_autonomy_action',
+      'transition_strategy_autonomy_action',
+      'generate_strategy_version_proposal',
       'list_tactics',
       'get_tactic',
       'run_tactic',
@@ -337,6 +345,7 @@ describe('toolRegistry', () => {
       'cancel_strategy_evaluation_session',
       'close_holding',
       'complete_strategy_observations',
+      'confirm_strategy_autonomy_action',
       'create_account',
       'create_alert_plan',
       'create_chat_session',
@@ -363,6 +372,7 @@ describe('toolRegistry', () => {
       'publish_strategy_version',
       'record_advice_outcome',
       'record_strategy_evaluation_day',
+      'reject_strategy_autonomy_action',
       'rename_chat_session',
       'renew_strategy_schedule_claim',
       'resume_strategy',

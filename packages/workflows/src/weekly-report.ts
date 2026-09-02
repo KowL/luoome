@@ -590,6 +590,101 @@ const strategyReviewWeekSection = async (
   };
 };
 
+const AUTONOMY_KIND_LABELS: Record<string, string> = {
+  pause: '自动暂停',
+  'propose-version': '提议版本',
+  'publish-version': '发布版本',
+};
+
+const autonomySnapshotSummary = (action: {
+  readonly ruleSnapshot?: Record<string, unknown> | undefined;
+}): string => {
+  const snapshot = action.ruleSnapshot;
+  if (snapshot === undefined) return '';
+  const sampleCount = snapshot.sampleCount;
+  const benchmarkCoverage = snapshot.benchmarkCoverage;
+  const avgExcessReturn = snapshot.avgExcessReturn;
+  const medianExcessReturn = snapshot.medianExcessReturn;
+  const parts: string[] = [];
+  if (typeof sampleCount === 'number') parts.push(`完整样本 ${sampleCount}`);
+  if (typeof benchmarkCoverage === 'number') {
+    parts.push(`基准覆盖 ${(benchmarkCoverage * 100).toFixed(1)}%`);
+  }
+  if (typeof avgExcessReturn === 'number') {
+    parts.push(`平均超额 ${(avgExcessReturn * 100).toFixed(2)}%`);
+  }
+  if (typeof medianExcessReturn === 'number') {
+    parts.push(`中位超额 ${(medianExcessReturn * 100).toFixed(2)}%`);
+  }
+  return parts.length === 0 ? '' : ` · ${parts.join(' · ')}`;
+};
+
+/**
+ * 「AI 管理动作」（DDD strategy-ai-lifecycle §4，M2-S1）：本周 StrategyAutonomyAction
+ * 的事实列表。detail 只读 ruleSnapshot 的确定性指标，不引用 aiNarrative 做判定式表述。
+ */
+const strategyAutonomyActionsWeekSection = async (
+  periodStart: string,
+  periodEnd: string,
+  now: Date,
+  ctx: WorkflowContext,
+): Promise<ReportSectionPiece> => {
+  const result = await ctx.tools.list_strategy_autonomy_actions.execute({
+    since: new Date(`${periodStart}T00:00:00+08:00`),
+    until: new Date(`${periodEnd}T23:59:59.999+08:00`),
+    limit: 500,
+  });
+  if (!result.ok) {
+    return unavailableSection(
+      'strategy-autonomy-actions',
+      'AI 管理动作',
+      false,
+      now,
+      'strategy-autonomy-actions',
+      result.error.kind,
+    );
+  }
+  const evidence = [
+    localEvidence(
+      'strategy-autonomy-actions:0',
+      'strategy-autonomy-actions',
+      now,
+      'tool:list_strategy_autonomy_actions',
+    ),
+  ];
+  return {
+    evidence,
+    section: {
+      key: 'strategy-autonomy-actions',
+      title: 'AI 管理动作',
+      required: false,
+      status: 'complete',
+      dataAsOf: now,
+      blocks: [
+        {
+          kind: 'list',
+          items: result.data.actions.map((action) => ({
+            title: `${AUTONOMY_KIND_LABELS[action.kind] ?? action.kind} · ${action.status}`,
+            detail: `${action.strategyId}${autonomySnapshotSummary(action)}`,
+            entityKind: 'strategy' as const,
+            entityId: action.strategyId,
+          })),
+        },
+        {
+          kind: 'text',
+          tone: 'factual',
+          text:
+            result.data.total === 0
+              ? '本周没有 AI 管理动作。'
+              : '以上为确定性规则触发并落库的管理动作；AI 解释文本不参与任何状态判定。',
+        },
+      ],
+      evidenceIds: evidence.map((item) => item.id),
+      missingDimensions: [],
+    },
+  };
+};
+
 const adviceOutcomesWeekSection = async (
   input: WeeklyInput,
   periodStart: string,
@@ -1449,6 +1544,7 @@ const runWeeklyReport = async (
           alerts,
           signalOutcomes,
           strategyReview,
+          autonomyActions,
           adviceOutcomes,
           events,
           decisionLoopData,
@@ -1458,6 +1554,7 @@ const runWeeklyReport = async (
           alertFeedbackSection(periodStart, generatedAt, ctx),
           signalObservationWeekSection(periodStart, periodEnd, generatedAt, ctx),
           strategyReviewWeekSection(periodStart, generatedAt, ctx),
+          strategyAutonomyActionsWeekSection(periodStart, periodEnd, generatedAt, ctx),
           adviceOutcomesWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
           nextWeekEventsSection(periodEnd, generatedAt, ctx),
           loadDecisionLoopScope(input, periodStart, periodEnd, ctx),
@@ -1491,6 +1588,7 @@ const runWeeklyReport = async (
           alerts,
           signalOutcomes,
           strategyReview,
+          autonomyActions,
           adviceOutcomes,
           tradeAttribution,
           behaviorPatterns,

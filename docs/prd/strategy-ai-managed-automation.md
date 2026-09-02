@@ -1,6 +1,7 @@
 # 策略自动化与 AI 管理 PRD
 
-> 状态：已确认立项（2026-09-01）
+> 状态：M1 报告中心已交付（2026-09-01）；M2 AI 生命周期管理已交付（2026-09-02，实施记录见
+> [Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) §8）
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 关联文档：[策略工作台 PRD](./strategy-v2.md)、[Strategy DSL PRD](./strategy-dsl.md)、
 > [AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)、

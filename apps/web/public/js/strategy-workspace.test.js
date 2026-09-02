@@ -1973,6 +1973,145 @@ describe('Phase B 洞察与调度', () => {
     ).toBe('2');
   });
 
+  it('设置 tab 展示自治动作时间线，blocked 动作可确认发布与否决', async () => {
+    invalidateSettingsCache();
+    const posts = [];
+    const statusMessages = [];
+    let refreshes = 0;
+    globalThis.fetch = async (path, init) => {
+      const url = String(path);
+      if (url.includes('/autonomy-actions/') && init?.method === 'POST') {
+        posts.push(url);
+        return jsonResponse({
+          ok: true,
+          data: {
+            action: {
+              id: 'action-blocked',
+              status: url.endsWith('/confirm') ? 'published' : 'rejected',
+            },
+          },
+        });
+      }
+      if (url.includes('/autonomy-actions')) {
+        return jsonResponse({
+          ok: true,
+          data: {
+            total: 2,
+            actions: [
+              {
+                id: 'action-blocked',
+                kind: 'propose-version',
+                status: 'blocked',
+                strategyId: 'autonomy-ui',
+                strategyVersionId: 'v2',
+                trigger: 'weekly-review',
+                ruleSnapshot: { candidateVersionId: 'v2' },
+                aiNarrative: '晋级门未通过：验证样本不足',
+                factReferences: [],
+                attempts: 1,
+                createdAt: '2026-08-30T02:00:00.000Z',
+                updatedAt: '2026-08-30T02:00:00.000Z',
+              },
+              {
+                id: 'action-pause',
+                kind: 'pause',
+                status: 'executed',
+                strategyId: 'autonomy-ui',
+                trigger: 'weekly-review',
+                ruleSnapshot: {
+                  sampleCount: 25,
+                  benchmarkCoverage: 0.95,
+                  avgExcessReturn: -0.02,
+                  medianExcessReturn: -0.01,
+                  thresholds: {},
+                },
+                factReferences: [],
+                attempts: 0,
+                createdAt: '2026-08-23T02:00:00.000Z',
+                updatedAt: '2026-08-23T02:00:00.000Z',
+                completedAt: '2026-08-23T02:00:00.000Z',
+              },
+            ],
+          },
+        });
+      }
+      if (url.includes('/recommendation-preflights')) {
+        return jsonResponse({ ok: true, data: { runs: [], reasonCounts: [], limitations: [] } });
+      }
+      if (url.endsWith('/schedule')) return jsonResponse({ ok: true, data: { schedule: null } });
+      if (url.includes('/api/strategies/') && url.endsWith('/watchlists')) {
+        return jsonResponse({ ok: true, data: { subscriptions: [] } });
+      }
+      if (url === '/api/watchlists') return jsonResponse({ ok: true, data: { items: [] } });
+      return jsonResponse({
+        ok: true,
+        data: {
+          strategy: {
+            id: 'autonomy-ui',
+            name: '自治策略',
+            status: 'active',
+            currentVersionId: 'v1',
+          },
+          versions: [],
+        },
+      });
+    };
+    const node = await renderSettings(
+      'autonomy-ui',
+      (message, isError) => statusMessages.push({ message, isError }),
+      async () => {
+        refreshes += 1;
+      },
+    );
+    expect(node.textContent).toContain('自治动作时间线');
+    expect(node.textContent).toContain('AI 提议版本');
+    expect(node.textContent).toContain('待人工确认');
+    expect(node.textContent).toContain('自动暂停');
+    expect(node.textContent).toContain('已执行');
+    expect(node.textContent).toContain('晋级门未通过：验证样本不足');
+    expect(node.textContent).toContain('样本 25');
+    expect(node.textContent).toContain('候选版本 v2');
+    expect(node.textContent).toContain('重试 1');
+    // 只有 blocked 动作有操作按钮
+    expect(
+      node.querySelectorAll('button').filter((b) => b.textContent === '确认发布'),
+    ).toHaveLength(1);
+    expect(node.querySelectorAll('button').filter((b) => b.textContent === '否决')).toHaveLength(1);
+
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '确认发布')
+      .click();
+    await flush();
+    expect(modalBody.textContent).toContain('确认发布该晋级动作关联的候选版本');
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '确认发布')
+      .click();
+    await flush();
+    expect(posts).toEqual(['/api/strategies/autonomy-ui/autonomy-actions/action-blocked/confirm']);
+    expect(refreshes).toBe(1);
+    expect(statusMessages.at(-1)).toEqual({ message: '候选版本已发布', isError: undefined });
+
+    node
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '否决')
+      .click();
+    await flush();
+    expect(modalBody.textContent).toContain('其候选版本不会发布');
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '否决')
+      .click();
+    await flush();
+    expect(posts).toEqual([
+      '/api/strategies/autonomy-ui/autonomy-actions/action-blocked/confirm',
+      '/api/strategies/autonomy-ui/autonomy-actions/action-blocked/reject',
+    ]);
+    expect(refreshes).toBe(2);
+    expect(statusMessages.at(-1)).toEqual({ message: '晋级动作已否决', isError: undefined });
+  });
+
   it('闭环 tab 展示事实、阶段 Advice 与显式 Trade 链接，并保留未知状态', async () => {
     globalThis.fetch = async (path) => {
       expect(String(path)).toContain('/decision-cycles');

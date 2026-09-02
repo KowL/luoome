@@ -20,6 +20,7 @@ export default defineConfig({
       'apps/web/src/server.test.ts',
       'apps/web/src/data-transfer.test.ts',
       'apps/web/src/strategy-scheduler.test.ts',
+      'apps/web/src/strategy-autonomy-scheduler.test.ts',
       'apps/web/src/portfolio-performance-scheduler.test.ts',
       'apps/web/public/js/**/*.test.js',
     ],

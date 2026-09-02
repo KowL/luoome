@@ -12,6 +12,7 @@ import {
   type StrategyRun,
   type StrategyRunBundle,
   type StrategyRunRepository,
+  type StrategyRunScope,
   type StrategySignal,
   type StrategyVersion,
 } from '@luoome/core';
@@ -100,16 +101,23 @@ export class InMemoryStrategyRepository implements StrategyRepository {
     });
   }
 
-  isRunnableVersion(strategyId: string, versionId: string): boolean {
+  /**
+   * 可运行版本判定：operational run 只接受 published valid version；
+   * evaluation scope 的持久化 run 是非发布验证证据（publication=non-publishing，
+   * 不进生产股票池），允许绑定未发布 valid version（M2 候选版本独立验证链路）。
+   */
+  isRunnableVersion(strategyId: string, versionId: string, scope?: StrategyRunScope): boolean {
     const strategy = this.strategies.get(strategyId);
     const version = this.versions.get(versionId);
-    return (
-      strategy !== undefined &&
-      strategy.status === 'active' &&
-      version?.strategyId === strategyId &&
-      version.validationStatus === 'valid' &&
-      version.publishedAt !== undefined
-    );
+    if (
+      strategy === undefined ||
+      strategy.status !== 'active' ||
+      version?.strategyId !== strategyId ||
+      version.validationStatus !== 'valid'
+    ) {
+      return false;
+    }
+    return version.publishedAt !== undefined || scope === 'evaluation';
   }
 
   async findVersionById(id: string): Promise<StrategyVersion | null> {
@@ -413,7 +421,9 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
   async saveStartedRun(run: StrategyRun): Promise<void> {
     assertStrategyRunInvariants(run);
     if (run.status !== 'running') throw new InvariantError('saveStartedRun 只接受 running');
-    if (!this.strategyRepository.isRunnableVersion(run.strategyId, run.strategyVersionId)) {
+    if (
+      !this.strategyRepository.isRunnableVersion(run.strategyId, run.strategyVersionId, run.scope)
+    ) {
       throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
     }
     if (this.runs.has(run.id)) throw new InvariantError(`StrategyRun.runId 已存在: ${run.id}`);
@@ -437,6 +447,7 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       !this.strategyRepository.isRunnableVersion(
         bundle.run.strategyId,
         bundle.run.strategyVersionId,
+        bundle.run.scope,
       )
     ) {
       throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');

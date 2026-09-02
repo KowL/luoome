@@ -641,6 +641,95 @@ describe('Web runtime bootstrap', () => {
     }
   });
 
+  it('策略自治周调度器仅在 write 与 external 双显式开启时启动', async () => {
+    const previousWrite = process.env.LUOOME_EXPOSE_WRITE;
+    const previousExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
+    const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
+    const previousMarketSources = process.env.LUOOME_MARKET_SOURCES;
+    const originalInfo = console.info;
+    const logs: string[] = [];
+    delete process.env.LUOOME_EXPOSE_WRITE;
+    delete process.env.LUOOME_EXPOSE_EXTERNAL;
+    process.env.LUOOME_MARKET_PROVIDER = 'real';
+    process.env.LUOOME_MARKET_SOURCES = 'sina';
+    console.info = (...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+    try {
+      const cases = [
+        { label: 'default', capabilities: {}, expectedStarts: 0 },
+        {
+          label: 'write-only',
+          capabilities: { exposeWrite: true, exposeExternal: false },
+          expectedStarts: 0,
+        },
+        {
+          label: 'external-only',
+          capabilities: { exposeWrite: false, exposeExternal: true },
+          expectedStarts: 0,
+        },
+        {
+          label: 'write-and-external',
+          capabilities: { exposeWrite: true, exposeExternal: true },
+          expectedStarts: 1,
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const dir = mkdtempSync(join(tmpdir(), `luoome-autonomy-gate-${testCase.label}-`));
+        let starts = 0;
+        let stops = 0;
+        const logStart = logs.length;
+        let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
+        try {
+          handle = await startWeb({
+            port: 0,
+            dbPath: join(dir, 'luoome.db'),
+            ...testCase.capabilities,
+            strategySchedulerStartImmediately: false,
+            portfolioPerformanceSchedulerFactory: () => ({
+              tick: async () => {},
+              stop: () => {},
+            }),
+            strategyAutonomySchedulerFactory: () => {
+              starts += 1;
+              return {
+                tick: async () => {},
+                stop: () => {
+                  stops += 1;
+                },
+              };
+            },
+          });
+          expect(starts).toBe(testCase.expectedStarts);
+          const caseLogs = logs.slice(logStart).join('\n');
+          if (testCase.expectedStarts === 0) {
+            expect(caseLogs).toContain('策略自治周调度器未启动');
+            expect(caseLogs).toContain('LUOOME_EXPOSE_WRITE=true');
+            expect(caseLogs).toContain('LUOOME_EXPOSE_EXTERNAL=true');
+          } else {
+            expect(caseLogs).not.toContain('策略自治周调度器未启动');
+          }
+          handle.stop(true);
+          handle = undefined;
+          expect(stops).toBe(testCase.expectedStarts);
+        } finally {
+          handle?.stop(true);
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      console.info = originalInfo;
+      if (previousWrite === undefined) delete process.env.LUOOME_EXPOSE_WRITE;
+      else process.env.LUOOME_EXPOSE_WRITE = previousWrite;
+      if (previousExternal === undefined) delete process.env.LUOOME_EXPOSE_EXTERNAL;
+      else process.env.LUOOME_EXPOSE_EXTERNAL = previousExternal;
+      if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
+      else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;
+      if (previousMarketSources === undefined) delete process.env.LUOOME_MARKET_SOURCES;
+      else process.env.LUOOME_MARKET_SOURCES = previousMarketSources;
+    }
+  });
+
   it('starts with an empty database and never inserts sample records', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-empty-runtime-'));
     try {
@@ -2096,6 +2185,272 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       }),
     );
     expect(crossOrigin.status).toBe(403);
+  });
+});
+
+describe('Strategy 自治动作 API（M2-S4）', () => {
+  const mutationRequest = (path: string, origin = 'http://test'): Request =>
+    new Request(`http://test${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: '{}',
+    });
+
+  const validDefinition = () => ({
+    schemaVersion: 1,
+    metadata: { horizon: 'short' },
+    universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+    selection: {
+      logic: 'all',
+      rules: [
+        { id: 'positive-price', name: '价格有效', when: 'quote.close > 0', evidence: ['价格有效'] },
+      ],
+    },
+    signals: { entry: [], exit: [], risk: [] },
+  });
+
+  it('按策略列出自治动作，并支持 status 过滤', async () => {
+    await appCtx.repos.strategyAutonomyAction.save({
+      id: 'web-autonomy-list-pause',
+      kind: 'pause',
+      status: 'executed',
+      strategyId: 'web-autonomy-list-strategy',
+      trigger: 'weekly-review',
+      ruleSnapshot: {
+        sampleCount: 25,
+        benchmarkCoverage: 0.95,
+        avgExcessReturn: -0.02,
+        medianExcessReturn: -0.01,
+        thresholds: {},
+      },
+      factReferences: [],
+      attempts: 0,
+      createdAt: new Date('2026-08-30T02:00:00.000Z'),
+      updatedAt: new Date('2026-08-30T02:00:00.000Z'),
+      completedAt: new Date('2026-08-30T02:00:00.000Z'),
+    });
+    await appCtx.repos.strategyAutonomyAction.save({
+      id: 'web-autonomy-list-blocked',
+      kind: 'propose-version',
+      status: 'blocked',
+      strategyId: 'web-autonomy-list-strategy',
+      strategyVersionId: 'web-autonomy-list-version',
+      trigger: 'weekly-review',
+      ruleSnapshot: { candidateVersionId: 'web-autonomy-list-version' },
+      factReferences: [],
+      attempts: 0,
+      createdAt: new Date('2026-08-31T02:00:00.000Z'),
+      updatedAt: new Date('2026-08-31T02:00:00.000Z'),
+    });
+
+    const listed = await app.fetch(
+      new Request('http://test/api/strategies/web-autonomy-list-strategy/autonomy-actions'),
+    );
+    expect(listed.status).toBe(200);
+    const listedBody = (await listed.json()) as {
+      ok: boolean;
+      data?: { actions: Array<{ id: string }>; total: number };
+    };
+    expect(listedBody.data?.total).toBe(2);
+    expect(listedBody.data?.actions.map((action) => action.id)).toEqual([
+      'web-autonomy-list-blocked',
+      'web-autonomy-list-pause',
+    ]);
+
+    const filtered = await app.fetch(
+      new Request(
+        'http://test/api/strategies/web-autonomy-list-strategy/autonomy-actions?status=blocked',
+      ),
+    );
+    const filteredBody = (await filtered.json()) as {
+      ok: boolean;
+      data?: { actions: Array<{ id: string; status: string }>; total: number };
+    };
+    expect(filteredBody.data?.total).toBe(1);
+    expect(filteredBody.data?.actions[0]?.status).toBe('blocked');
+
+    // 其他策略不可见
+    const others = await app.fetch(
+      new Request('http://test/api/strategies/no-such-strategy/autonomy-actions'),
+    );
+    const othersBody = (await others.json()) as { data?: { total: number } };
+    expect(othersBody.data?.total).toBe(0);
+  });
+
+  it('confirm/reject 走 write 闸口与 Origin 校验，拒绝非 blocked 动作', async () => {
+    const gated = createWebApp(await buildTestContext(), {
+      exposeWrite: false,
+      exposeExternal: true,
+    });
+    const denied = await gated.fetch(
+      mutationRequest('/api/strategies/s/autonomy-actions/a/confirm'),
+    );
+    expect(denied.status).toBe(403);
+    const deniedBody = (await denied.json()) as { error?: { kind: string; required?: string } };
+    expect(deniedBody.error?.kind).toBe('permission_denied');
+    expect(deniedBody.error?.required).toContain('LUOOME_EXPOSE_WRITE');
+
+    const crossOrigin = await app.fetch(
+      mutationRequest('/api/strategies/s/autonomy-actions/a/reject', 'https://evil.example'),
+    );
+    expect(crossOrigin.status).toBe(403);
+
+    const missing = await app.fetch(
+      mutationRequest('/api/strategies/s/autonomy-actions/no-such-action/confirm'),
+    );
+    expect(missing.status).toBe(404);
+
+    const executed = await app.fetch(
+      mutationRequest(
+        '/api/strategies/web-autonomy-list-strategy/autonomy-actions/web-autonomy-list-pause/confirm',
+      ),
+    );
+    expect(executed.status).toBe(400);
+    const executedBody = (await executed.json()) as { error?: { kind: string } };
+    expect(executedBody.error?.kind).toBe('invalid_input');
+  });
+
+  it('确认发布：blocked → published 并切换策略当前版本；否决：blocked → rejected', async () => {
+    const strategyId = 'web-autonomy-strategy';
+    expect(
+      (
+        await app.fetch(
+          new Request('http://test/api/strategies', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', origin: 'http://test' },
+            body: JSON.stringify({ id: strategyId, name: '自治策略', description: 'M2-S4' }),
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const createdVersion = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/versions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ definition: validDefinition(), changeSummary: '候选版本' }),
+      }),
+    );
+    const createdBody = (await createdVersion.json()) as {
+      data?: { version: { id: string } };
+    };
+    const candidateId = createdBody.data?.version.id ?? '';
+    expect(candidateId.length).toBeGreaterThan(0);
+    expect(
+      (
+        await app.fetch(
+          new Request(`http://test/api/strategies/${strategyId}/validate`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', origin: 'http://test' },
+            body: JSON.stringify({ versionId: candidateId }),
+          }),
+        )
+      ).status,
+    ).toBe(200);
+
+    const at = new Date('2026-08-30T02:00:00.000Z');
+    await appCtx.repos.strategyAutonomyAction.save({
+      id: 'web-autonomy-confirm',
+      kind: 'propose-version',
+      status: 'blocked',
+      strategyId,
+      strategyVersionId: candidateId,
+      trigger: 'weekly-review',
+      ruleSnapshot: { candidateVersionId: candidateId },
+      factReferences: [],
+      attempts: 0,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const confirmed = await app.fetch(
+      mutationRequest(
+        `/api/strategies/${strategyId}/autonomy-actions/web-autonomy-confirm/confirm`,
+      ),
+    );
+    expect(confirmed.status).toBe(200);
+    const confirmedBody = (await confirmed.json()) as {
+      data?: { action: { status: string; completedAt?: string } };
+    };
+    expect(confirmedBody.data?.action.status).toBe('published');
+    expect(confirmedBody.data?.action.completedAt).toBeDefined();
+
+    const detail = (await (
+      await app.fetch(new Request(`http://test/api/strategies/${strategyId}`))
+    ).json()) as { data?: { strategy: { currentVersionId?: string } } };
+    expect(detail.data?.strategy.currentVersionId).toBe(candidateId);
+
+    // 终态后不可再次确认
+    const again = await app.fetch(
+      mutationRequest(
+        `/api/strategies/${strategyId}/autonomy-actions/web-autonomy-confirm/confirm`,
+      ),
+    );
+    expect(again.status).toBe(400);
+
+    await appCtx.repos.strategyAutonomyAction.save({
+      id: 'web-autonomy-reject',
+      kind: 'propose-version',
+      status: 'blocked',
+      strategyId,
+      strategyVersionId: candidateId,
+      trigger: 'weekly-review',
+      ruleSnapshot: { candidateVersionId: candidateId },
+      factReferences: [],
+      attempts: 0,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const rejected = await app.fetch(
+      mutationRequest(`/api/strategies/${strategyId}/autonomy-actions/web-autonomy-reject/reject`),
+    );
+    expect(rejected.status).toBe(200);
+    const rejectedBody = (await rejected.json()) as {
+      data?: { action: { status: string } };
+    };
+    expect(rejectedBody.data?.action.status).toBe('rejected');
+  });
+
+  it('手动触发 strategy-autonomy-weekly 需要 write+external 双闸口，空库可运行', async () => {
+    const gated = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: false,
+    });
+    const denied = await gated.fetch(
+      mutationRequest('/api/workflows/strategy-autonomy-weekly/run'),
+    );
+    expect(denied.status).toBe(403);
+    const deniedBody = (await denied.json()) as { error?: { kind: string; required?: string } };
+    expect(deniedBody.error?.kind).toBe('permission_denied');
+    expect(deniedBody.error?.required).toContain('LUOOME_EXPOSE_EXTERNAL');
+
+    const crossOrigin = await app.fetch(
+      mutationRequest('/api/workflows/strategy-autonomy-weekly/run', 'https://evil.example'),
+    );
+    expect(crossOrigin.status).toBe(403);
+
+    // 独立空 context：锁定「无用户策略时各步骤零动作」的基线语义，
+    // 避免共享 appCtx 中已 seed 的策略把测试拖进 AI 提议路径。
+    const emptyApp = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    const ran = await emptyApp.fetch(
+      mutationRequest('/api/workflows/strategy-autonomy-weekly/run'),
+    );
+    expect(ran.status).toBe(200);
+    const body = (await ran.json()) as {
+      ok: boolean;
+      data?: {
+        evaluated: number;
+        paused: number;
+        proposals: { validating: number };
+        promotion: { published: number; blocked: number };
+      };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data?.evaluated).toBe(0);
+    expect(body.data?.paused).toBe(0);
+    expect(body.data?.proposals.validating).toBe(0);
+    expect(body.data?.promotion.published).toBe(0);
   });
 });
 

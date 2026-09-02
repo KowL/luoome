@@ -171,6 +171,50 @@ describe('data transfer', () => {
     reopened.close();
   });
 
+  it('自治动作审计随 strategies 分类导出并回导', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    const at = new Date('2026-08-30T02:00:00Z');
+    await source.repos.strategyAutonomyAction.save({
+      id: 'action-export-1',
+      kind: 'pause',
+      status: 'executed',
+      strategyId: 'strategy-export',
+      trigger: 'weekly-review',
+      ruleSnapshot: {
+        sampleCount: 25,
+        benchmarkCoverage: 0.95,
+        avgExcessReturn: -0.02,
+        medianExcessReturn: -0.01,
+        thresholds: { minSampleCount: 20 },
+      },
+      aiNarrative: '超额收益持续为负，按冻结阈值自动暂停',
+      factReferences: ['strategy-insight-facts:strategy-export:t5'],
+      attempts: 0,
+      createdAt: at,
+      updatedAt: at,
+      completedAt: at,
+    });
+    source.close();
+
+    const archive = exportDataArchive(sourcePath, ['strategies']);
+    expect(archive.tables.strategy_autonomy_actions).toHaveLength(1);
+    expect(archive.tables.accounts).toBeUndefined();
+
+    const targetPath = databasePath();
+    const target = createDrizzleRepos(targetPath);
+    target.close();
+    expect(() => importDataArchive(targetPath, archive)).not.toThrow();
+    const reopened = createDrizzleRepos(targetPath);
+    expect(await reopened.repos.strategyAutonomyAction.findById('action-export-1')).toMatchObject({
+      kind: 'pause',
+      status: 'executed',
+      aiNarrative: '超额收益持续为负，按冻结阈值自动暂停',
+      ruleSnapshot: { sampleCount: 25 },
+    });
+    reopened.close();
+  });
+
   it('拒绝未知表且不写入任何行', () => {
     const path = databasePath();
     const handle = createDrizzleRepos(path);

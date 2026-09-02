@@ -2,6 +2,10 @@
 
 > 状态：Wave A～Wave C 已实施；Wave D 开发中
 > 日期：2026-08-30
+> 2026-09-02 修订：`eligible-for-human-review` 的人工评审语义已被
+> [策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md) 扩展——eligible 版本由
+> strategy-autonomy-weekly 自动接 publish（晋级门阈值不变），人工评审只处理 blocked；
+> 见 [Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)。
 > 开发计划：[Strategy 实验、晋级与反馈闭环开发计划](../strategy-experiment-feedback-development-plan.md)
 > 对应需求：[策略工作台 PRD](../prd/strategy-v2.md)、[AI 投资决策闭环产品总纲](../prd/ai-investment-decision-loop.md)
 > 上位设计：[策略工作台详细设计](./strategy-workspace-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)

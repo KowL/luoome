@@ -2,6 +2,9 @@
 
 > 状态：核心实现已落地；真实跨日性能、持续生产观察与 R5 T+5 仍按开发计划持续验收
 > 日期：2026-08-20
+> 2026-09-02 修订：evaluation scope 的 persist run 允许绑定未发布 valid 版本（operational 拒绝
+> 语义不变），作为自治验证与 Web 实验页独立验证的前置；见
+> [Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md) §8。
 > 关联计划：[Strategy 日运行与评估可靠性开发计划](../strategy-reliability-development-plan.md)
 > 影响范围：core、db、tools、workflows、Web/CLI/MCP 读取面
 

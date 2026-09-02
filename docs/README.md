@@ -63,6 +63,7 @@
 | [AI 投资决策闭环 Phase 2 完成计划](./ddd/decision-loop-phase2-completion-plan.md) | 真实复盘目标用户旅程、冻结契约、竖向切片、迁移/安全/测试、浏览器验收与外部数据门禁 |
 | [Phase 3 基本面 PIT 因子与横截面评分详细设计](./ddd/fundamental-factor-scoring-phase3-detailed-design.md) | 财务事实 vintage、因子 registry、横截面评分、版本审计与真实数据门禁 |
 | [Strategy 实验、晋级与反馈闭环详细设计](./ddd/strategy-experiment-feedback-detailed-design.md) | 组合能力门禁、评分分解、DSL Catalog、实验上下文、人工晋级和 RecommendationPolicy V2 |
+| [Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) | StrategyAutonomyAction 实体、自动暂停阈值、AI 提议/验证/晋级门自动发布编排 |
 
 ## 当前开发计划
 

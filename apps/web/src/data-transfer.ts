@@ -15,6 +15,7 @@ import {
   assertSignalObservationInvariants,
   assertStockEventInvariants,
   assertStockInvariants,
+  assertStrategyAutonomyActionInvariants,
   assertStrategyInvariants,
   assertStrategyRunInvariants,
   assertStrategyScheduleInvariants,
@@ -48,6 +49,7 @@ import {
   SignalObservationSchema,
   StockEventSchema,
   StockSchema,
+  StrategyAutonomyActionSchema,
   StrategyResultSchema,
   StrategyRunSchema,
   StrategyScheduleSchema,
@@ -97,6 +99,7 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'strategy_signals',
     'strategy_schedules',
     'strategy_watchlist_subscriptions',
+    'strategy_autonomy_actions',
   ],
   watchlists: [
     'stocks',
@@ -277,6 +280,10 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   strategy_watchlist_subscriptions: domainValidator(
     StrategyWatchlistSubscriptionSchema,
     assertStrategyWatchlistSubscriptionInvariants,
+  ),
+  strategy_autonomy_actions: domainValidator(
+    StrategyAutonomyActionSchema,
+    assertStrategyAutonomyActionInvariants,
   ),
   watchlists: domainValidator(WatchlistSchema, assertWatchlistInvariants),
   watchlist_members: domainValidator(WatchlistMemberSchema, assertWatchlistMemberInvariants),

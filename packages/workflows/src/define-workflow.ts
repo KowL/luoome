@@ -16,8 +16,12 @@ import type {
   CompleteStrategyObservationsOutput,
   ComputeIndicatorsInput,
   ComputeIndicatorsOutput,
+  CreateStrategyAutonomyActionInput,
+  CreateStrategyAutonomyActionOutput,
   CreateStrategyObservationCandidatesInput,
   CreateStrategyObservationCandidatesOutput,
+  CreateStrategyVersionInput,
+  CreateStrategyVersionOutput,
   DragonTigerListInput,
   DragonTigerListOutput,
   FetchNewsInput,
@@ -34,6 +38,8 @@ import type {
   GenerateStrategyInsightOutput,
   GenerateStrategyRecommendationsInput,
   GenerateStrategyRecommendationsOutput,
+  GenerateStrategyVersionProposalInput,
+  GenerateStrategyVersionProposalOutput,
   GetAccountInput,
   GetAccountOutput,
   GetAccountPerformanceInput,
@@ -62,8 +68,12 @@ import type {
   GetStockUniverseStatusOutput,
   GetStrategyEvaluationSessionInput,
   GetStrategyEvaluationSessionOutput,
+  GetStrategyExperimentContextInput,
+  GetStrategyExperimentContextOutput,
+  GetStrategyInput,
   GetStrategyInsightFactsInput,
   GetStrategyInsightFactsOutput,
+  GetStrategyOutput,
   GetStrategyPitUniverseInput,
   GetStrategyPitUniverseOutput,
   GetStrategyRunInput,
@@ -94,6 +104,8 @@ import type {
   ListStockEventsOutput,
   ListStrategiesInput,
   ListStrategiesOutput,
+  ListStrategyAutonomyActionsInput,
+  ListStrategyAutonomyActionsOutput,
   ListStrategyEvaluationDaysInput,
   ListStrategyEvaluationDaysOutput,
   ListStrategyResultViewsInput,
@@ -116,8 +128,12 @@ import type {
   MarketOutlookOutput,
   NorthboundFlowInput,
   NorthboundFlowOutput,
+  PauseStrategyInput,
+  PauseStrategyOutput,
   PrepareStrategyDataInput,
   PrepareStrategyDataOutput,
+  PublishStrategyVersionInput,
+  PublishStrategyVersionOutput,
   PullResearchVaultGitInput,
   PullResearchVaultGitOutput,
   ReconcileStaleWorkflowRunsInput,
@@ -172,10 +188,16 @@ import type {
   SyncStrategyWatchlistSubscriptionsOutput,
   SyncWatchlistSourceInput,
   SyncWatchlistSourceOutput,
+  TransitionStrategyAutonomyActionInput,
+  TransitionStrategyAutonomyActionOutput,
+  ValidateStrategyVersionInput,
+  ValidateStrategyVersionOutput,
 } from '@luoome/tools';
 import {
   claimDueStrategySchedulesTool,
+  createStrategyAutonomyActionTool,
   finishStrategyScheduleClaimTool,
+  generateStrategyVersionProposalTool,
   getWatchTriggerDeliveryStatsTool,
   listWatchRuleStatesTool,
   pullResearchVaultGitTool,
@@ -191,6 +213,7 @@ import {
   syncStrategyWatchlistSubscriptionsTool,
   syncWatchlistSourceTool,
   toolRegistry,
+  transitionStrategyAutonomyActionTool,
 } from '@luoome/tools';
 import type { z } from 'zod';
 
@@ -304,6 +327,44 @@ export interface WorkflowToolMap {
   >;
   // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
   readonly list_strategies: ToolAccessor<typeof ListStrategiesInput, typeof ListStrategiesOutput>;
+  readonly pause_strategy: ToolAccessor<typeof PauseStrategyInput, typeof PauseStrategyOutput>;
+  readonly publish_strategy_version: ToolAccessor<
+    typeof PublishStrategyVersionInput,
+    typeof PublishStrategyVersionOutput
+  >;
+  // M2-S1：Strategy 自主管理动作审计（docs/ddd/strategy-ai-lifecycle-detailed-design.md §4）
+  readonly list_strategy_autonomy_actions: ToolAccessor<
+    typeof ListStrategyAutonomyActionsInput,
+    typeof ListStrategyAutonomyActionsOutput
+  >;
+  /** workflow-only；自治写入面不进入公共 registry/MCP discovery。 */
+  readonly create_strategy_autonomy_action: ToolAccessor<
+    typeof CreateStrategyAutonomyActionInput,
+    typeof CreateStrategyAutonomyActionOutput
+  >;
+  /** workflow-only；自治写入面不进入公共 registry/MCP discovery。 */
+  readonly transition_strategy_autonomy_action: ToolAccessor<
+    typeof TransitionStrategyAutonomyActionInput,
+    typeof TransitionStrategyAutonomyActionOutput
+  >;
+  /** workflow-only（M2-S2）；AI 版本提议只读事实 + 调 LLM，不持久化。 */
+  readonly generate_strategy_version_proposal: ToolAccessor<
+    typeof GenerateStrategyVersionProposalInput,
+    typeof GenerateStrategyVersionProposalOutput
+  >;
+  readonly get_strategy: ToolAccessor<typeof GetStrategyInput, typeof GetStrategyOutput>;
+  readonly get_strategy_experiment_context: ToolAccessor<
+    typeof GetStrategyExperimentContextInput,
+    typeof GetStrategyExperimentContextOutput
+  >;
+  readonly create_strategy_version: ToolAccessor<
+    typeof CreateStrategyVersionInput,
+    typeof CreateStrategyVersionOutput
+  >;
+  readonly validate_strategy_version: ToolAccessor<
+    typeof ValidateStrategyVersionInput,
+    typeof ValidateStrategyVersionOutput
+  >;
   readonly run_strategy: ToolAccessor<typeof RunStrategyInput, typeof RunStrategyOutput>;
   readonly get_strategy_schedule: ToolAccessor<
     typeof GetStrategyScheduleInput,
@@ -538,6 +599,9 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     saveWatchRuleStatesTool,
     setWatchTriggerDeliveryStatusTool,
     syncStrategyWatchlistSubscriptionsTool,
+    createStrategyAutonomyActionTool,
+    transitionStrategyAutonomyActionTool,
+    generateStrategyVersionProposalTool,
   ]) {
     accessors[internalTool.name] = {
       execute: (input) => internalTool.execute(input, ctx),

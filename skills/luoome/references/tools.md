@@ -10,7 +10,8 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Stock discovery and calculations: `search_stocks`, `compute_indicators`. Indicators include
   RSI14, MA20/MA60 distance and cross recency, plus Bollinger 20-day bands, bandwidth and position.
 - Strategies and signals: `list_strategies`, `get_strategy`, `list_strategy_runs`,
-  `get_strategy_run`, `strategy_signals_by_stock`. `run_local_selector_research` performs a
+  `get_strategy_run`, `strategy_signals_by_stock`, `list_strategy_autonomy_actions` (audit trail
+  of AI-managed lifecycle actions such as automatic pauses). `run_local_selector_research` performs a
   deterministic PIT cross-sectional research ranking from batch qfq DailyBar revisions; its score
   is a same-batch rank, not a probability. `assess_adaptive_personality` only checks whether an
   immutable parameter version has separate training/validation evidence; `unavailable` means no
@@ -47,7 +48,10 @@ Use advice tools only for an explicit analysis request:
 ## Write
 
 Write tools create or change local records, including accounts, holdings, trades, Strategies,
-Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback. Before calling one:
+Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback.
+`confirm_strategy_autonomy_action` and `reject_strategy_autonomy_action` are the human-review
+queue for AI-managed Strategy lifecycle: they only act on `blocked` actions, and confirm
+publishes the candidate version. Before calling one:
 
 1. Read the target state and resolve stable IDs.
 2. Restate exact values, especially stock, side, quantity, price, time and account.

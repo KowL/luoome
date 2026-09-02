@@ -91,6 +91,7 @@ const resolveVersion = async (
   strategyId: string,
   requestedVersionId: string | undefined,
   allowDraft: boolean,
+  allowUnpublishedForEvaluation: boolean,
   ctx: ToolContext,
 ): Promise<
   StrategyVersion | ReturnType<typeof errInvalidInput> | ReturnType<typeof errNotFound>
@@ -105,7 +106,9 @@ const resolveVersion = async (
   if (version.strategyId !== strategy.id || version.validationStatus !== 'valid') {
     return errInvalidInput('run_strategy 只能运行同一 Strategy 的 valid version');
   }
-  if (!allowDraft && version.publishedAt === undefined) {
+  // 绑定 evaluation session 的持久化 run 是非发布验证证据（scope=evaluation），
+  // 允许运行未发布 valid 版本；其它 persist 运行仍只接受 published 版本。
+  if (!allowDraft && version.publishedAt === undefined && !allowUnpublishedForEvaluation) {
     return errInvalidInput('persist=true 只能运行同一 Strategy 的 published valid version');
   }
   return version;
@@ -143,7 +146,13 @@ export const runStrategyTool = defineTool({
     if (input.mode !== 'replay' && input.universeAsOf !== undefined) {
       return errInvalidInput('universeAsOf 只允许用于 mode=replay');
     }
-    const resolved = await resolveVersion(input.strategyId, input.versionId, !input.persist, ctx);
+    const resolved = await resolveVersion(
+      input.strategyId,
+      input.versionId,
+      !input.persist,
+      input.evaluationSessionId !== undefined,
+      ctx,
+    );
     if ('ok' in resolved) return resolved;
     const version = resolved;
     const leaseOwner = `run-strategy:${globalThis.crypto.randomUUID()}`;

@@ -14,6 +14,10 @@ export interface SignalObservationStats {
   readonly p75ReturnPct?: number;
   readonly averageBenchmarkReturnPct?: number;
   readonly averageExcessReturnPct?: number;
+  /** 超额收益（returnPct - benchmarkReturnPct）的中位数；无可用超额样本时缺省。 */
+  readonly medianExcessReturnPct?: number;
+  /** 完整样本中 benchmarkStatus=complete 的覆盖率；无完整样本时为 0。 */
+  readonly benchmarkCoverage: number;
   readonly averageMaxFavorableExcursionPct?: number;
   readonly averageMaxAdverseExcursionPct?: number;
   readonly observedAsOf?: Date;
@@ -133,6 +137,10 @@ export const aggregateSignalObservationStats = (
         uniqueStocks: new Set(rows.map((row) => row.stockId)).size,
         missingRate: rows.length === 0 ? 0 : (rows.length - complete.length) / rows.length,
         observationIds: rows.map((row) => row.id).sort(),
+        benchmarkCoverage:
+          complete.length === 0
+            ? 0
+            : complete.filter((row) => row.benchmarkStatus === 'complete').length / complete.length,
       };
       const averageReturnPct = average(returns);
       const medianReturnPct = percentile(returns, 0.5);
@@ -140,6 +148,7 @@ export const aggregateSignalObservationStats = (
       const p75ReturnPct = percentile(returns, 0.75);
       const averageBenchmarkReturnPct = average(benchmarks);
       const averageExcessReturnPct = average(excess);
+      const medianExcessReturnPct = percentile(excess, 0.5);
       const averageMaxFavorableExcursionPct = average(mfe);
       const averageMaxAdverseExcursionPct = average(mae);
       return {
@@ -150,6 +159,7 @@ export const aggregateSignalObservationStats = (
         ...(p75ReturnPct === undefined ? {} : { p75ReturnPct }),
         ...(averageBenchmarkReturnPct === undefined ? {} : { averageBenchmarkReturnPct }),
         ...(averageExcessReturnPct === undefined ? {} : { averageExcessReturnPct }),
+        ...(medianExcessReturnPct === undefined ? {} : { medianExcessReturnPct }),
         ...(averageMaxFavorableExcursionPct === undefined
           ? {}
           : { averageMaxFavorableExcursionPct }),

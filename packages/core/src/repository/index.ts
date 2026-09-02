@@ -53,6 +53,11 @@ import type {
   StrategySignal,
   StrategyVersion,
 } from '../entity/strategy.js';
+import type {
+  StrategyAutonomyAction,
+  StrategyAutonomyActionKind,
+  StrategyAutonomyActionStatus,
+} from '../entity/strategy-autonomy-action.js';
 import type { StrictBacktestMarketFact, StrictBacktestRun } from '../entity/strategy-backtest.js';
 import type {
   DailyBarRevision,
@@ -382,6 +387,8 @@ export interface RepositoryRegistry {
   /** 严格回测运行与 PIT 可成交性/公司行动事实；与 operational/evaluation run 隔离。 */
   readonly strategyBacktest: StrategyBacktestRepository;
   readonly strategyWatchlistSubscription: StrategyWatchlistSubscriptionRepository;
+  /** M2-S0：Strategy 自主管理动作（提议/发布/暂停）审计。 */
+  readonly strategyAutonomyAction: StrategyAutonomyActionRepository;
   readonly watchlist: WatchlistRepository;
   readonly watchlistMember: WatchlistMemberRepository;
   readonly alertPlan: AlertPlanRepository;
@@ -753,6 +760,36 @@ export interface StrategyWatchlistSubscriptionRepository {
     readonly watchlistId?: string;
     readonly status?: StrategyWatchlistSubscriptionStatus;
   }): Promise<readonly StrategyWatchlistSubscription[]>;
+}
+
+/**
+ * M2-S0：Strategy 自主管理动作审计（docs/ddd/strategy-ai-lifecycle-detailed-design.md §2/§4）。
+ * save 为按 id 的 upsert；状态转移走 updateStatus 的 expectedStatus 乐观并发，防止并发转移互相覆盖。
+ */
+export interface StrategyAutonomyActionRepository {
+  save(action: StrategyAutonomyAction): Promise<void>;
+  findById(id: string): Promise<StrategyAutonomyAction | null>;
+  /** 按 createdAt 倒序（id 倒序决胜）；limit 在排序后截断。 */
+  list(filter?: {
+    readonly strategyId?: string;
+    readonly kind?: StrategyAutonomyActionKind;
+    readonly status?: StrategyAutonomyActionStatus;
+    readonly since?: Date;
+    readonly limit?: number;
+  }): Promise<readonly StrategyAutonomyAction[]>;
+  /**
+   * 仅当当前 status === expectedStatus 才完成转移；动作不存在或状态已被并发修改时返回 null。
+   * 转移必须是状态机（§2.2）内的边，否则抛 InvariantError；completedAt/lastError/attempts 为随转移携带的补丁。
+   */
+  updateStatus(input: {
+    readonly id: string;
+    readonly expectedStatus: StrategyAutonomyActionStatus;
+    readonly status: StrategyAutonomyActionStatus;
+    readonly updatedAt: Date;
+    readonly completedAt?: Date;
+    readonly lastError?: string;
+    readonly attempts?: number;
+  }): Promise<StrategyAutonomyAction | null>;
 }
 
 export interface WatchlistRepository {

@@ -74,6 +74,7 @@ import {
   openingReportWorkflow,
   replayStrategyRangeWorkflow,
   runIntradayWatchObserved,
+  strategyAutonomyWeeklyWorkflow,
   syncResearchVaultRemoteWorkflow,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
@@ -98,6 +99,10 @@ import {
   ResearchVaultSettingsStore,
   SaveResearchVaultSettingsSchema,
 } from './research-vault-settings.js';
+import {
+  STRATEGY_AUTONOMY_SCHEDULER_INTERVAL_MS,
+  startStrategyAutonomyScheduler,
+} from './strategy-autonomy-scheduler.js';
 import { STRATEGY_SCHEDULER_INTERVAL_MS, startStrategyScheduler } from './strategy-scheduler.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
@@ -1767,6 +1772,30 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/api/strategies/:id/schedule', (c) =>
     callTool('get_strategy_schedule', { strategyId: c.req.param('id') }),
   );
+  // M2-S4：策略自治动作时间线（read）与人工队列确认/否决（write 闸口，DDD §5）。
+  app.get('/api/strategies/:id/autonomy-actions', (c) => {
+    const kind = c.req.query('kind');
+    const status = c.req.query('status');
+    const since = c.req.query('since');
+    const limit = c.req.query('limit');
+    return callTool('list_strategy_autonomy_actions', {
+      strategyId: c.req.param('id'),
+      ...(kind === undefined ? {} : { kind }),
+      ...(status === undefined ? {} : { status }),
+      ...(since === undefined ? {} : { since }),
+      ...(limit === undefined ? {} : { limit: Number(limit) }),
+    });
+  });
+  app.post('/api/strategies/:id/autonomy-actions/:actionId/confirm', (c) =>
+    targetMutation(c.req.raw, 'write', 'confirm_strategy_autonomy_action', {
+      actionId: c.req.param('actionId'),
+    }),
+  );
+  app.post('/api/strategies/:id/autonomy-actions/:actionId/reject', (c) =>
+    targetMutation(c.req.raw, 'write', 'reject_strategy_autonomy_action', {
+      actionId: c.req.param('actionId'),
+    }),
+  );
   app.get('/api/strategies/:id/recommendation-preflights', (c) => {
     const limit = c.req.query('limit');
     return callTool('get_strategy_recommendation_preflight_history', {
@@ -2895,6 +2924,15 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult(await workflow.run(input, contextForRequest()));
   });
 
+  // M2-S4：手动触发周度策略自治 workflow（write+external 双闸口，与 /api/reports/run/:kind 同模式）。
+  app.post('/api/workflows/strategy-autonomy-weekly/run', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    return jsonResult(
+      await strategyAutonomyWeeklyWorkflow.run({ mode: 'manual' }, contextForRequest()),
+    );
+  });
+
   app.get('/api/reports/:id/render', (c) =>
     callTool('render_report', {
       reportId: c.req.param('id'),
@@ -3082,6 +3120,10 @@ export interface StartWebOptions {
   readonly portfolioPerformanceSchedulerIntervalMs?: number;
   /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
   readonly portfolioPerformanceSchedulerFactory?: typeof startPortfolioPerformanceScheduler;
+  /** 仅供测试缩短 tick；生产每 30 分钟检查一次是否到周日。 */
+  readonly strategyAutonomySchedulerIntervalMs?: number;
+  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
+  readonly strategyAutonomySchedulerFactory?: typeof startStrategyAutonomyScheduler;
 }
 
 export interface WebServerHandle {
@@ -3128,6 +3170,14 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
             PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
         })
       : undefined;
+  // M2-S4：周度策略自治调度；与账户绩效同一双能力闸口（write 落审计动作 + external 取行情/AI）。
+  const strategyAutonomyScheduler =
+    exposeWrite && exposeExternal
+      ? (options.strategyAutonomySchedulerFactory ?? startStrategyAutonomyScheduler)(ctx, {
+          intervalMs:
+            options.strategyAutonomySchedulerIntervalMs ?? STRATEGY_AUTONOMY_SCHEDULER_INTERVAL_MS,
+        })
+      : undefined;
   ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
   if (!exposeWrite) {
     ctx.logger.info(
@@ -3145,11 +3195,18 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
       { exposeWrite, exposeExternal },
     );
   }
+  if (strategyAutonomyScheduler === undefined) {
+    ctx.logger.info(
+      `策略自治周调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
+      { exposeWrite, exposeExternal },
+    );
+  }
   return {
     port: server.port ?? options.port,
     stop: (closeActiveConnections) => {
       scheduler.stop();
       portfolioPerformanceScheduler?.stop();
+      strategyAutonomyScheduler?.stop();
       server.stop(closeActiveConnections);
     },
   };

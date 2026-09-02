@@ -28,6 +28,7 @@ export { DrizzleStockRepository } from './stock.js';
 export { DrizzleStockEventRepository } from './stock-event.js';
 export { DrizzleStockUniverseRepository } from './stock-universe.js';
 export { DrizzleStrategyRepository, DrizzleStrategyRunRepository } from './strategy.js';
+export { DrizzleStrategyAutonomyActionRepository } from './strategy-autonomy-action.js';
 export { DrizzleStrategyBacktestRepository } from './strategy-backtest.js';
 export {
   DrizzleStrategyDataCheckpointRepository,

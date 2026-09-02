@@ -38,6 +38,7 @@ import {
   type StockEvent,
   type StockUniverseEntry,
   type Strategy,
+  type StrategyAutonomyAction,
   type StrategyDataCheckpoint,
   type StrategyDataCheckpointMember,
   type StrategyEvaluationDay,
@@ -580,6 +581,30 @@ const makeStrategyWatchlistSubscription = (
   sourceKey: 'strategy:strategy-1',
   status: 'active',
   createdBy: 'user-1',
+  createdAt: T1,
+  updatedAt: T1,
+  ...overrides,
+});
+
+const PAUSE_RULE_SNAPSHOT = {
+  sampleCount: 24,
+  benchmarkCoverage: 0.95,
+  avgExcessReturn: -0.01,
+  medianExcessReturn: -0.008,
+  thresholds: { minSampleCount: 20, minBenchmarkCoverage: 0.9, cooldownDays: 30 },
+};
+
+const makeStrategyAutonomyAction = (
+  id: string,
+  overrides: Partial<StrategyAutonomyAction> = {},
+): StrategyAutonomyAction => ({
+  id,
+  kind: 'propose-version',
+  status: 'drafted',
+  strategyId: 'strategy-1',
+  trigger: 'weekly-review',
+  factReferences: [],
+  attempts: 0,
   createdAt: T1,
   updatedAt: T1,
   ...overrides,
@@ -2515,6 +2540,59 @@ export const registerRepositoryContractTests = (
         expect(await repos.strategyRun.findRunById(pinned.id)).toEqual(pinned);
       });
 
+      it('evaluation scope 的持久化 run 可绑定未发布 valid version，operational scope 仍拒绝', async () => {
+        const draft = makeStrategyVersion('strategy-1', 2, {
+          id: 'strategy-1-v2-draft',
+          createdAt: T2,
+          publishedAt: undefined,
+        });
+        await repos.strategy.createVersion(draft);
+
+        // evaluation run 是非发布验证证据（publication=non-publishing），允许未发布候选版本。
+        const evaluationRun = makeStrategyRun('run-draft-evaluation', {
+          strategyVersionId: draft.id,
+          scope: 'evaluation',
+          publication: {
+            status: 'non-publishing',
+            reasons: ['evaluation-scope'],
+            decidedAt: T2,
+          },
+        });
+        await repos.strategyRun.commitRun({ run: evaluationRun, results: [], signals: [] });
+        expect(await repos.strategyRun.findRunById(evaluationRun.id)).toEqual(evaluationRun);
+
+        const startedEvaluation = makeStrategyRun('run-draft-evaluation-started', {
+          strategyVersionId: draft.id,
+          scope: 'evaluation',
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+        });
+        await repos.strategyRun.saveStartedRun(startedEvaluation);
+        expect(await repos.strategyRun.findRunById(startedEvaluation.id)).toEqual(
+          startedEvaluation,
+        );
+
+        // operational run 仍只接受 published 版本（生产股票池保护不变）。
+        const operationalRun = makeStrategyRun('run-draft-operational', {
+          strategyVersionId: draft.id,
+          scope: 'operational',
+        });
+        await expect(
+          repos.strategyRun.commitRun({ run: operationalRun, results: [], signals: [] }),
+        ).rejects.toThrow('StrategyRun 必须绑定 active Strategy 的 published valid version');
+        const startedOperational = makeStrategyRun('run-draft-operational-started', {
+          strategyVersionId: draft.id,
+          scope: 'operational',
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+        });
+        await expect(repos.strategyRun.saveStartedRun(startedOperational)).rejects.toThrow(
+          'StrategyRun 必须绑定 active Strategy 的 published valid version',
+        );
+      });
+
       it('commitRun 原子写入后 results 按 rank/stock 排序', async () => {
         await repos.strategyRun.commitRun({
           run: makeStrategyRun('run-1'),
@@ -2810,6 +2888,198 @@ export const registerRepositoryContractTests = (
             makeStrategyWatchlistSubscription('bad-cancel', {
               status: 'cancelled',
               updatedAt: T2,
+            }),
+          ),
+        ).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('StrategyAutonomyActionRepository', () => {
+      it('save/findById 往返一致；list 支持过滤、since 与 limit，按 createdAt 倒序', async () => {
+        const propose = makeStrategyAutonomyAction('action-propose');
+        const pause = makeStrategyAutonomyAction('action-pause', {
+          kind: 'pause',
+          status: 'executed',
+          strategyId: 'strategy-2',
+          ruleSnapshot: PAUSE_RULE_SNAPSHOT,
+          createdAt: T2,
+          updatedAt: T2,
+          completedAt: T2,
+        });
+        const published = makeStrategyAutonomyAction('action-publish', {
+          kind: 'publish-version',
+          status: 'published',
+          strategyVersionId: 'strategy-1-v2',
+          ruleSnapshot: { gate: 'eligible' },
+          createdAt: T3,
+          updatedAt: T3,
+          completedAt: T3,
+        });
+        await repos.strategyAutonomyAction.save(propose);
+        await repos.strategyAutonomyAction.save(pause);
+        await repos.strategyAutonomyAction.save(published);
+        expect(await repos.strategyAutonomyAction.findById('action-propose')).toEqual(propose);
+        expect(await repos.strategyAutonomyAction.findById('missing')).toBeNull();
+        expect((await repos.strategyAutonomyAction.list()).map((action) => action.id)).toEqual([
+          'action-publish',
+          'action-pause',
+          'action-propose',
+        ]);
+        expect(
+          (await repos.strategyAutonomyAction.list({ strategyId: 'strategy-2' })).map(
+            (action) => action.id,
+          ),
+        ).toEqual(['action-pause']);
+        expect(
+          (await repos.strategyAutonomyAction.list({ kind: 'publish-version' })).map(
+            (action) => action.id,
+          ),
+        ).toEqual(['action-publish']);
+        expect(
+          (await repos.strategyAutonomyAction.list({ status: 'drafted' })).map(
+            (action) => action.id,
+          ),
+        ).toEqual(['action-propose']);
+        expect(
+          (await repos.strategyAutonomyAction.list({ since: T2 })).map((action) => action.id),
+        ).toEqual(['action-publish', 'action-pause']);
+        expect(
+          (await repos.strategyAutonomyAction.list({ limit: 2 })).map((action) => action.id),
+        ).toEqual(['action-publish', 'action-pause']);
+      });
+
+      it('save 同 id 为 upsert；ruleSnapshot/aiNarrative/attempts 完整往返', async () => {
+        await repos.strategyAutonomyAction.save(makeStrategyAutonomyAction('action-1'));
+        const updated = makeStrategyAutonomyAction('action-1', {
+          strategyVersionId: 'strategy-1-v2',
+          evaluationSessionId: 'session-1',
+          status: 'validating',
+          ruleSnapshot: { gate: 'pending' },
+          aiNarrative: '提议提高动量阈值',
+          factReferences: ['fact-1'],
+          attempts: 1,
+          lastError: 'publish timeout',
+          updatedAt: T2,
+        });
+        await repos.strategyAutonomyAction.save(updated);
+        expect(await repos.strategyAutonomyAction.findById('action-1')).toEqual(updated);
+        expect(await repos.strategyAutonomyAction.list()).toHaveLength(1);
+      });
+
+      it('updateStatus 按 expectedStatus 乐观转移并携带补丁字段', async () => {
+        await repos.strategyAutonomyAction.save(
+          makeStrategyAutonomyAction('action-1', { strategyVersionId: 'strategy-1-v2' }),
+        );
+        const validating = await repos.strategyAutonomyAction.updateStatus({
+          id: 'action-1',
+          expectedStatus: 'drafted',
+          status: 'validating',
+          updatedAt: T2,
+        });
+        expect(validating).toMatchObject({ id: 'action-1', status: 'validating' });
+        // 状态漂移：再次以 drafted 为预期转移返回 null，且不改变已落库状态
+        expect(
+          await repos.strategyAutonomyAction.updateStatus({
+            id: 'action-1',
+            expectedStatus: 'drafted',
+            status: 'failed',
+            updatedAt: T3,
+            completedAt: T3,
+            lastError: 'concurrent',
+          }),
+        ).toBeNull();
+        expect((await repos.strategyAutonomyAction.findById('action-1'))?.status).toBe(
+          'validating',
+        );
+        expect(
+          await repos.strategyAutonomyAction.updateStatus({
+            id: 'missing',
+            expectedStatus: 'drafted',
+            status: 'validating',
+            updatedAt: T3,
+          }),
+        ).toBeNull();
+        const eligible = await repos.strategyAutonomyAction.updateStatus({
+          id: 'action-1',
+          expectedStatus: 'validating',
+          status: 'eligible',
+          updatedAt: T3,
+          attempts: 2,
+        });
+        expect(eligible).toMatchObject({ status: 'eligible', attempts: 2 });
+        const published = await repos.strategyAutonomyAction.updateStatus({
+          id: 'action-1',
+          expectedStatus: 'eligible',
+          status: 'published',
+          updatedAt: T3,
+          completedAt: T3,
+        });
+        expect(published).toMatchObject({ status: 'published', completedAt: T3 });
+        expect(await repos.strategyAutonomyAction.findById('action-1')).toEqual(published);
+      });
+
+      it('updateStatus 拒绝状态机外的转移与违反不变量的补丁', async () => {
+        await repos.strategyAutonomyAction.save(
+          makeStrategyAutonomyAction('action-1', { strategyVersionId: 'strategy-1-v2' }),
+        );
+        await expect(
+          repos.strategyAutonomyAction.updateStatus({
+            id: 'action-1',
+            expectedStatus: 'drafted',
+            status: 'published',
+            updatedAt: T2,
+            completedAt: T2,
+          }),
+        ).rejects.toThrow(InvariantError);
+        // 非终态转移携带 completedAt 违反不变量
+        await expect(
+          repos.strategyAutonomyAction.updateStatus({
+            id: 'action-1',
+            expectedStatus: 'drafted',
+            status: 'validating',
+            updatedAt: T2,
+            completedAt: T2,
+          }),
+        ).rejects.toThrow(InvariantError);
+        expect((await repos.strategyAutonomyAction.findById('action-1'))?.status).toBe('drafted');
+      });
+
+      it('违反不变量时拒绝落库（pause 缺指标阈值 / 非终态带 completedAt）', async () => {
+        await expect(
+          repos.strategyAutonomyAction.save(
+            makeStrategyAutonomyAction('bad-pause', {
+              kind: 'pause',
+              status: 'executed',
+              ruleSnapshot: { conclusion: 'underperform' },
+              completedAt: T2,
+            }),
+          ),
+        ).rejects.toThrow(InvariantError);
+        await expect(
+          repos.strategyAutonomyAction.save(
+            makeStrategyAutonomyAction('bad-completed', { completedAt: T2 }),
+          ),
+        ).rejects.toThrow(InvariantError);
+      });
+
+      it('publish-version 的 strategyVersionId 在动作创建后不可变', async () => {
+        await repos.strategyAutonomyAction.save(
+          makeStrategyAutonomyAction('action-publish', {
+            kind: 'publish-version',
+            status: 'published',
+            strategyVersionId: 'strategy-1-v2',
+            ruleSnapshot: { gate: 'eligible' },
+            completedAt: T2,
+          }),
+        );
+        await expect(
+          repos.strategyAutonomyAction.save(
+            makeStrategyAutonomyAction('action-publish', {
+              kind: 'publish-version',
+              status: 'published',
+              strategyVersionId: 'strategy-1-v3',
+              ruleSnapshot: { gate: 'eligible' },
+              completedAt: T2,
             }),
           ),
         ).rejects.toThrow(InvariantError);

@@ -37,6 +37,7 @@ import type {
   StockCode,
   StockEvent,
   Strategy,
+  StrategyAutonomyAction,
   StrategyDataCheckpoint,
   StrategyDataCheckpointMember,
   StrategyEvaluationDay,
@@ -987,6 +988,42 @@ export const strategyBacktestMarketFacts = sqliteTable(
   }),
 );
 
+/** M2-S0：Strategy 自主管理动作审计；DDL 与 client.ts ensureSchema 同步。 */
+export const strategyAutonomyActions = sqliteTable(
+  'strategy_autonomy_actions',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').$type<StrategyAutonomyAction['kind']>().notNull(),
+    status: text('status').$type<StrategyAutonomyAction['status']>().notNull(),
+    strategyId: text('strategy_id').notNull(),
+    strategyVersionId: text('strategy_version_id'),
+    evaluationSessionId: text('evaluation_session_id'),
+    trigger: text('trigger').$type<StrategyAutonomyAction['trigger']>().notNull(),
+    ruleSnapshot: text('rule_snapshot_json', { mode: 'json' }).$type<
+      StrategyAutonomyAction['ruleSnapshot'] | null
+    >(),
+    aiNarrative: text('ai_narrative'),
+    factReferences: text('fact_references_json', { mode: 'json' })
+      .$type<readonly string[]>()
+      .notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    strategyCreatedIdx: index('strategy_autonomy_actions_strategy_created_idx').on(
+      t.strategyId,
+      t.createdAt,
+    ),
+    statusCreatedIdx: index('strategy_autonomy_actions_status_created_idx').on(
+      t.status,
+      t.createdAt,
+    ),
+  }),
+);
+
 export const signalObservations = sqliteTable(
   'signal_observations',
   {
@@ -1707,6 +1744,7 @@ export const schema = {
   strategyEvaluationDays,
   strategyBacktestRuns,
   strategyBacktestMarketFacts,
+  strategyAutonomyActions,
   signalObservations,
   notifications,
   // v0.6 起

@@ -113,6 +113,11 @@ import {
   listPendingStrategyObservationsTool,
 } from './tools/signal-observation.js';
 import {
+  confirmStrategyAutonomyActionTool,
+  listStrategyAutonomyActionsTool,
+  rejectStrategyAutonomyActionTool,
+} from './tools/strategy-autonomy-action.js';
+import {
   createStrictStrategyBacktestTool,
   getStrictStrategyBacktestTool,
   listStrictStrategyBacktestsTool,
@@ -389,6 +394,11 @@ export const toolRegistry: Registry = createRegistry([
   createStrategyObservationCandidatesTool,
   getStrategyInsightFactsTool,
   generateStrategyInsightTool,
+  // M2：Strategy 自主管理动作（list 只读；confirm/reject 为 blocked 人工队列写入口；
+  // 创建/转移为 workflow-only，不进公共 registry）
+  listStrategyAutonomyActionsTool,
+  confirmStrategyAutonomyActionTool,
+  rejectStrategyAutonomyActionTool,
   generateStrategyRecommendationsTool,
   getStrategyScheduleTool,
   setStrategyScheduleTool,
