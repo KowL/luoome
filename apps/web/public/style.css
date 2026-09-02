@@ -6670,6 +6670,48 @@ body > .modal {
   outline-offset: -2px;
 }
 
+/* 高级 tab 折叠分组：summary 与 tab 按钮同一视觉语言，展开后按钮内联排列 */
+.strategy-tabs-advanced {
+  display: flex;
+  flex: none;
+}
+
+/* host 改为 flex 后 UA 的 details 折叠隐藏不再生效，显式兜底 */
+.strategy-tabs-advanced:not([open]) > button {
+  display: none;
+}
+
+.strategy-tabs-advanced summary {
+  flex: none;
+  padding: 9px 12px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.strategy-tabs-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.strategy-tabs-advanced summary::after {
+  content: '▾';
+  margin-left: 4px;
+  font-size: var(--text-xs);
+}
+
+.strategy-tabs-advanced summary:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.strategy-tabs-advanced summary.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
 .strategy-tab-panel {
   min-width: 0;
 }

@@ -22,7 +22,13 @@ import {
   renderStrategyExperiment,
 } from './strategy-workspace-experiment.js';
 import { renderInsights } from './strategy-workspace-insights.js';
-import { buildStrategyHash, parseStrategyHash } from './strategy-workspace-route.js';
+import {
+  ADVANCED_TABS,
+  BASIC_TABS,
+  buildStrategyHash,
+  parseStrategyHash,
+  STRATEGY_TABS,
+} from './strategy-workspace-route.js';
 import { buildRunDetailContent, openRunDetail, renderRuns } from './strategy-workspace-runs.js';
 import { invalidateSettingsCache, renderSettings } from './strategy-workspace-settings.js';
 
@@ -389,6 +395,15 @@ describe('strategy workspace route state', () => {
     expect(buildStrategyHash({ strategyId: 's1', tab: 'cycle', runId: 'run-1' })).toBe(
       '#strategies?strategyId=s1&tab=cycle&runId=run-1',
     );
+  });
+
+  it('高级 tab 收深：基础 + 高级恰好覆盖全部 tab，高级 tab 直接 URL 仍可解析', () => {
+    expect([...BASIC_TABS, ...ADVANCED_TABS].sort()).toEqual([...STRATEGY_TABS].sort());
+    expect(BASIC_TABS).toEqual(['overview', 'pool', 'runs', 'settings']);
+    expect(ADVANCED_TABS).toEqual(['experiment', 'insights', 'cycle']);
+    for (const tab of ADVANCED_TABS) {
+      expect(parseStrategyHash(`#strategies?strategyId=s1&tab=${tab}`).tab).toBe(tab);
+    }
   });
 });
 

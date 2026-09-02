@@ -3,6 +3,7 @@ import {
   isHoliday,
   isWeekend,
   type ReportEvidence,
+  type ReportMissingDimension,
   ReportSchema,
   ReportScopeSchema,
   type ToolResult,
@@ -432,6 +433,155 @@ const signalObservationWeekSection = async (
           kind: 'text',
           tone: missingDimensions.length === 0 ? 'factual' : 'warning',
           text: data.limitations.join('；'),
+        },
+      ],
+      evidenceIds: evidence.map((item) => item.id),
+      missingDimensions,
+    },
+  };
+};
+
+const MIN_STRATEGY_REVIEW_SAMPLE = 10;
+
+/**
+ * 「策略复盘」（PRD strategy-ai-managed-automation §5 M1）：对每个本周有 published
+ * operational run 的 active 策略，复用 generate_strategy_insight 的确定性事实
+ * （T+1/T+3/T+5 观察统计）与 AI 解读；AI 失败由 tool 内部降级 facts-only，
+ * 样本不足与 benchmark 不可用在文本中显式标注，不展示伪精度。
+ */
+const strategyReviewWeekSection = async (
+  periodStart: string,
+  now: Date,
+  ctx: WorkflowContext,
+): Promise<ReportSectionPiece> => {
+  const [strategies, runs] = await Promise.all([
+    ctx.tools.list_strategies.execute({ filter: { status: 'active' } }),
+    ctx.tools.list_strategy_runs.execute({
+      scope: 'operational',
+      publication: 'published',
+      since: new Date(`${periodStart}T00:00:00+08:00`),
+      limit: 500,
+    }),
+  ]);
+  if (!strategies.ok) {
+    return unavailableSection(
+      'strategy-review',
+      '策略复盘',
+      false,
+      now,
+      'strategy-review.strategies',
+      strategies.error.kind,
+    );
+  }
+  if (!runs.ok) {
+    return unavailableSection(
+      'strategy-review',
+      '策略复盘',
+      false,
+      now,
+      'strategy-review.runs',
+      runs.error.kind,
+    );
+  }
+
+  const publishedStrategyIds = new Set(runs.data.runs.map((run) => run.strategyId));
+  const reviewed = strategies.data.strategies.filter((strategy) =>
+    publishedStrategyIds.has(strategy.id),
+  );
+  const evidence: ReportEvidence[] = [
+    localEvidence('strategy-review:runs', 'strategy-review.runs', now, 'tool:list_strategy_runs'),
+  ];
+  const missingDimensions: ReportMissingDimension[] = [];
+  const rows: Record<string, string | number | boolean | null>[] = [];
+  const narratives: string[] = [];
+  for (const strategy of reviewed) {
+    const insight = await ctx.tools.generate_strategy_insight.execute({ strategyId: strategy.id });
+    if (!insight.ok) {
+      missingDimensions.push(
+        missing(
+          `strategy-review.insight.${strategy.id}`,
+          `${strategy.name} 的策略洞察不可用`,
+          insight.error.kind,
+        ),
+      );
+      continue;
+    }
+    evidence.push(
+      localEvidence(
+        `strategy-review:insight:${strategy.id}`,
+        `strategy-review.insight.${strategy.id}`,
+        now,
+        'tool:generate_strategy_insight',
+      ),
+    );
+    const notes: string[] = [];
+    if (insight.data.provider === 'facts-only') {
+      notes.push('AI 不可用，以下为确定性事实摘要');
+    }
+    for (const observation of insight.data.facts.observations) {
+      rows.push({
+        strategy: strategy.name,
+        horizon: observation.horizon,
+        total: observation.total,
+        complete: observation.complete,
+        missingRate: observation.total === 0 ? null : observation.missingRate,
+        averageExcessReturnPct:
+          observation.benchmarkStatus === 'complete'
+            ? (observation.averageExcessReturnPct ?? null)
+            : null,
+        benchmarkStatus: observation.benchmarkStatus,
+      });
+      if (observation.complete === 0) {
+        notes.push(`${observation.horizon.toUpperCase()} 尚无完整观察样本`);
+        continue;
+      }
+      if (observation.complete < MIN_STRATEGY_REVIEW_SAMPLE) {
+        notes.push(
+          `${observation.horizon.toUpperCase()} 完整样本 ${observation.complete} 条，样本不足，只作描述性参考`,
+        );
+      }
+      if (observation.benchmarkStatus === 'unavailable') {
+        notes.push(`${observation.horizon.toUpperCase()} benchmark 不可用，不展示超额收益`);
+      }
+    }
+    narratives.push(
+      `【${strategy.name}】${insight.data.insight.headline}：${insight.data.insight.summary}${
+        notes.length === 0 ? '' : `（${notes.join('；')}）`
+      }`,
+    );
+  }
+  const status = missingDimensions.length === 0 ? ('complete' as const) : ('partial' as const);
+  return {
+    evidence,
+    section: {
+      key: 'strategy-review',
+      title: '策略复盘',
+      required: false,
+      status,
+      dataAsOf: now,
+      blocks: [
+        {
+          kind: 'table' as const,
+          columns: [
+            { key: 'strategy', label: '策略' },
+            { key: 'horizon', label: '观察周期' },
+            { key: 'total', label: '样本数' },
+            { key: 'complete', label: '完整样本' },
+            { key: 'missingRate', label: '缺失率' },
+            { key: 'averageExcessReturnPct', label: '平均超额表现' },
+            { key: 'benchmarkStatus', label: 'Benchmark 状态' },
+          ],
+          rows,
+        },
+        {
+          kind: 'text' as const,
+          tone: status === 'complete' ? ('factual' as const) : ('warning' as const),
+          text:
+            narratives.length > 0
+              ? narratives.join('\n')
+              : reviewed.length === 0
+                ? '本周没有 active 策略的 published 运行，无需复盘。'
+                : '策略洞察均不可用，详见缺失维度。',
         },
       ],
       evidenceIds: evidence.map((item) => item.id),
@@ -1293,16 +1443,25 @@ const runWeeklyReport = async (
       title: `${periodStart} 至 ${periodEnd} 周报`,
       inputSummary: { marketDates: dates, notify: input.notify ?? input.mode === 'scheduled' },
       buildSections: async (generatedAt) => {
-        const [market, account, alerts, signalOutcomes, adviceOutcomes, events, decisionLoopData] =
-          await Promise.all([
-            marketWeekSection(dates, generatedAt, ctx),
-            accountWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
-            alertFeedbackSection(periodStart, generatedAt, ctx),
-            signalObservationWeekSection(periodStart, periodEnd, generatedAt, ctx),
-            adviceOutcomesWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
-            nextWeekEventsSection(periodEnd, generatedAt, ctx),
-            loadDecisionLoopScope(input, periodStart, periodEnd, ctx),
-          ]);
+        const [
+          market,
+          account,
+          alerts,
+          signalOutcomes,
+          strategyReview,
+          adviceOutcomes,
+          events,
+          decisionLoopData,
+        ] = await Promise.all([
+          marketWeekSection(dates, generatedAt, ctx),
+          accountWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
+          alertFeedbackSection(periodStart, generatedAt, ctx),
+          signalObservationWeekSection(periodStart, periodEnd, generatedAt, ctx),
+          strategyReviewWeekSection(periodStart, generatedAt, ctx),
+          adviceOutcomesWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
+          nextWeekEventsSection(periodEnd, generatedAt, ctx),
+          loadDecisionLoopScope(input, periodStart, periodEnd, ctx),
+        ]);
         const tradeAttribution = tradeAttributionWeekSection(decisionLoopData, generatedAt);
         const behaviorPatterns = behaviorPatternsWeekSection(input, decisionLoopData, generatedAt);
         const dataQuality = dataQualityWeekSection(
@@ -1331,6 +1490,7 @@ const runWeeklyReport = async (
           account,
           alerts,
           signalOutcomes,
+          strategyReview,
           adviceOutcomes,
           tradeAttribution,
           behaviorPatterns,

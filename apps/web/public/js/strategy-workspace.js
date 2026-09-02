@@ -11,7 +11,13 @@ import {
   renderOverview,
   renderPool,
 } from './strategy-workspace-overview.js';
-import { buildStrategyHash, parseStrategyHash, TAB_LABELS } from './strategy-workspace-route.js';
+import {
+  ADVANCED_TABS,
+  BASIC_TABS,
+  buildStrategyHash,
+  parseStrategyHash,
+  TAB_LABELS,
+} from './strategy-workspace-route.js';
 import { invalidateRunsCache, renderRuns } from './strategy-workspace-runs.js';
 import { invalidateSettingsCache, renderSettings } from './strategy-workspace-settings.js';
 import {
@@ -81,16 +87,32 @@ const renderWorkspaceDetail = async (strategyId, state, setStatus, epoch) => {
   };
   const tabs = el('div', 'strategy-tabs');
   tabs.setAttribute('role', 'tablist');
-  const tabButtons = Object.entries(TAB_LABELS).map(([key, label]) => {
-    const button = el('button', state.tab === key ? 'active' : '', label);
+  const makeTabButton = (key) => {
+    const button = el('button', state.tab === key ? 'active' : '', TAB_LABELS[key]);
     button.type = 'button';
     button.setAttribute('role', 'tab');
     button.setAttribute('aria-selected', String(state.tab === key));
     button.tabIndex = state.tab === key ? 0 : -1;
     button.addEventListener('click', () => navigate(state, { tab: key }));
-    tabs.append(button);
     return button;
-  });
+  };
+  const tabButtons = [];
+  for (const key of BASIC_TABS) {
+    const button = makeTabButton(key);
+    tabs.append(button);
+    tabButtons.push(button);
+  }
+  // 高级 tab（实验 / AI 洞察 / 闭环）收进折叠分组；当前 tab 命中高级组时分组展开并高亮入口
+  const advancedOpen = ADVANCED_TABS.includes(state.tab);
+  const advanced = el('details', 'strategy-tabs-advanced');
+  if (advancedOpen) advanced.open = true;
+  advanced.append(el('summary', advancedOpen ? 'active' : '', '高级'));
+  for (const key of ADVANCED_TABS) {
+    const button = makeTabButton(key);
+    advanced.append(button);
+    tabButtons.push(button);
+  }
+  tabs.append(advanced);
   tabs.addEventListener('keydown', (event) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();

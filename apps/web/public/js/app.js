@@ -25,6 +25,7 @@ import {
   renderDashboard,
   renderDataHealth,
   renderHoldings,
+  renderHome,
   renderReports,
   renderResearch,
   renderReview,
@@ -73,6 +74,7 @@ const startClock = () => {
 /* ============ 路由分发 ============ */
 
 const ROUTES = [
+  'home',
   'dashboard',
   'indices',
   'market',
@@ -92,7 +94,7 @@ const ROUTES = [
 ];
 
 const showRoute = async (name) => {
-  const safe = ROUTES.includes(name) ? name : 'dashboard';
+  const safe = ROUTES.includes(name) ? name : 'home';
   // 离开行情页时停止 60s 自动刷新并销毁图表（设计 §11.4）。
   if (safe !== 'market') teardownMarket();
   // 离开指数页时停止 10s 分时刷新定时器。
@@ -112,7 +114,9 @@ const showRoute = async (name) => {
     else node.removeAttribute('aria-current');
   });
   try {
-    if (safe === 'dashboard') {
+    if (safe === 'home') {
+      await renderHome(setStatus);
+    } else if (safe === 'dashboard') {
       await renderDashboard(setStatus);
       // 市场行情区块（概览 / 迷你热力 / 要闻）只按路由进入加载一次，不进 5s 轮询
       await renderDashboardMarketBlocks();
@@ -158,7 +162,7 @@ const currentHash = () => {
   const path = window.location.pathname.replace(/^\/|\/$/g, '');
   if (path === 'watch' || path === 'groups') return 'alerts';
   if (path === 'tactics') return 'strategies';
-  return ROUTES.includes(path) ? path : 'dashboard';
+  return ROUTES.includes(path) ? path : 'home';
 };
 
 /* ============ 设置页二级菜单（#settings?tab=ai|market|notify|data|system） ============ */

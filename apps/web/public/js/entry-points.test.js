@@ -71,6 +71,58 @@ describe('报告页入口', () => {
   });
 });
 
+describe('首页 = 最新收盘报告', () => {
+  it('侧栏首项为「首页」，#route-home 与 #home-report 容器齐全', () => {
+    expect(html).toContain('href="#home" data-route="home"');
+    expect(html.indexOf('data-route="home"')).toBeLessThan(html.indexOf('data-route="dashboard"'));
+    expect(html).toContain('id="route-home"');
+    expect(html).toContain('id="home-report"');
+    expect(html).toContain('href="#reports"');
+  });
+
+  it('app.js 默认路由改为 home 并接入 renderHome；dashboard 降级为二级路由不删除', () => {
+    expect(appJs).toContain("'home'");
+    expect(appJs).toContain("ROUTES.includes(name) ? name : 'home'");
+    expect(appJs).toContain("ROUTES.includes(path) ? path : 'home'");
+    expect(appJs).toContain('renderHome(setStatus)');
+    expect(appJs).toContain('renderDashboard(setStatus)');
+  });
+
+  it('首页复用 list_reports/get_report 现有 API；空态诚实说明生成路径', () => {
+    const pages = read('./pages.js');
+    expect(pages).toContain("callApi('/api/reports?kind=closing&limit=1')");
+    expect(pages).toContain('reportSheetNodes');
+    expect(pages).toContain('尚无收盘报告');
+    expect(pages).toContain('去「报告」页生成');
+  });
+
+  it('报告 advice 条目深链接 #advice?id=…，建议页按 id 置顶定位', () => {
+    const pages = read('./pages.js');
+    expect(pages).toContain('`#advice?id=${' + 'encodeURIComponent(item.entityId)}`');
+    expect(pages).toContain('routeAdviceId');
+    expect(pages).toContain('data-advice-id');
+    expect(pages).toContain('card.dataset.adviceId = advice.id');
+  });
+});
+
+describe('策略工作台高级 tab 收深', () => {
+  const route = read('./strategy-workspace-route.js');
+  const workspace = read('./strategy-workspace.js');
+
+  it('路由文件声明基础 / 高级 tab 分组（实验、AI 洞察、闭环收深）', () => {
+    expect(route).toContain("export const BASIC_TABS = ['overview', 'pool', 'runs', 'settings']");
+    expect(route).toContain("export const ADVANCED_TABS = ['experiment', 'insights', 'cycle']");
+  });
+
+  it('tab 条基础按钮 + 「高级」折叠分组；高级 tab 的渲染分发保持直连', () => {
+    expect(workspace).toContain('strategy-tabs-advanced');
+    expect(workspace).toContain('ADVANCED_TABS.includes(state.tab)');
+    expect(workspace).toContain("state.tab === 'experiment'");
+    expect(workspace).toContain("state.tab === 'insights'");
+    expect(workspace).toContain("state.tab === 'cycle'");
+  });
+});
+
 describe('飞书通知设置入口', () => {
   it('提供脱敏 Webhook 配置与显式测试按钮', () => {
     expect(html).toContain('id="feishu-settings-form"');

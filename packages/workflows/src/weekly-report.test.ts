@@ -3,6 +3,10 @@ import {
   type AShareSentimentSnapshot,
   money,
   type SignalObservation,
+  type StrategyDslV1,
+  type StrategyVersion,
+  strategyDefinitionHash,
+  type ToolContext,
 } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
@@ -122,6 +126,151 @@ const pendingSignalObservation = (): SignalObservation => ({
   },
 });
 
+const seedStrategyWithPublishedRun = async (ctx: ToolContext): Promise<void> => {
+  const definition: StrategyDslV1 = {
+    schemaVersion: 1,
+    metadata: {},
+    universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+    selection: {
+      logic: 'all',
+      rules: [{ id: 'all', name: '全选', when: 'true', evidence: ['fixture'] }],
+    },
+    signals: {
+      entry: [
+        {
+          id: 'entry',
+          name: '测试入场',
+          when: 'true',
+          score: '80',
+          direction: 'bullish' as const,
+          evidence: ['fixture'],
+        },
+      ],
+      exit: [],
+      risk: [],
+    },
+  };
+  const version: StrategyVersion = {
+    id: 'weekly-strategy-v1',
+    strategyId: 'weekly-strategy',
+    version: 1,
+    definition,
+    definitionHash: strategyDefinitionHash(definition),
+    validationStatus: 'valid',
+    validationErrors: [],
+    publishedAt: new Date('2026-07-27T01:00:00.000Z'),
+    createdAt: new Date('2026-07-27T01:00:00.000Z'),
+  };
+  await ctx.repos.strategy.create({
+    id: 'weekly-strategy',
+    name: '周复盘策略',
+    description: 'test',
+    owner: 'user',
+    status: 'active',
+    currentVersionId: version.id,
+    createdAt: new Date('2026-07-27T01:00:00.000Z'),
+    updatedAt: new Date('2026-07-27T01:00:00.000Z'),
+  });
+  await ctx.repos.strategy.createVersion(version);
+  const startedAt = new Date('2026-07-28T07:30:00.000Z');
+  const finishedAt = new Date('2026-07-28T07:31:00.000Z');
+  await ctx.repos.strategyRun.commitRun({
+    run: {
+      id: 'weekly-strategy-run-1',
+      strategyId: 'weekly-strategy',
+      strategyVersionId: version.id,
+      mode: 'scheduled',
+      coverage: 'CN_A_SHARES_SH_SZ',
+      dataAsOf: new Date('2026-07-28T07:00:00.000Z'),
+      startedAt,
+      finishedAt,
+      status: 'complete',
+      scope: 'operational',
+      inputSnapshot: {
+        schemaVersion: 2,
+        strategyVersionId: version.id,
+        definitionHash: version.definitionHash,
+        evaluatorVersion: 'test',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        stockIds: ['600519.SH'],
+        stockIdChecksum: '0'.repeat(64),
+        requestedBy: 'scheduled',
+      },
+      providerStatuses: [],
+      summary: {
+        schemaVersion: 2,
+        universeCount: 1,
+        evaluatedCount: 1,
+        selectedCount: 1,
+        signalCount: 1,
+        partialCount: 0,
+        failedCount: 0,
+        failureSamples: [],
+      },
+      publication: { status: 'published', reasons: [], decidedAt: finishedAt },
+    },
+    results: [
+      {
+        runId: 'weekly-strategy-run-1',
+        stockId: '600519.SH',
+        selected: true,
+        score: 80,
+        rank: 1,
+        ruleEvaluations: [],
+        evidence: ['fixture'],
+        dataAsOf: new Date('2026-07-28T07:00:00.000Z'),
+      },
+    ],
+    signals: [
+      {
+        id: 'weekly-review-signal-1',
+        strategyId: 'weekly-strategy',
+        strategyVersionId: version.id,
+        runId: 'weekly-strategy-run-1',
+        ruleId: 'entry',
+        stockId: '600519.SH',
+        ts: startedAt,
+        score: 80,
+        direction: 'bullish',
+        evidence: ['fixture'],
+        evaluationSnapshot: {},
+      },
+    ],
+  });
+  const observationBase: Omit<SignalObservation, 'id' | 'horizon' | 'benchmarkStatus'> = {
+    sourceKind: 'strategy-signal',
+    sourceId: 'weekly-review-signal-1',
+    stockId: '600519.SH',
+    baselinePrice: 100,
+    baselineAt: new Date('2026-07-28T08:00:00.000Z'),
+    closePrice: 110,
+    returnPct: 0.1,
+    maxFavorableExcursionPct: 0.12,
+    maxAdverseExcursionPct: -0.02,
+    status: 'complete',
+    provenance: {
+      provider: 'weekly-fixture',
+      observedAt: new Date('2026-07-29T08:00:00.000Z'),
+      fetchedAt: now,
+      freshness: 'fresh',
+    },
+    observedAt: new Date('2026-07-29T08:00:00.000Z'),
+  };
+  await ctx.repos.signalObservation.save({
+    ...observationBase,
+    id: 'weekly-review-observation-t1',
+    horizon: 't1',
+    benchmarkReturnPct: 0.02,
+    benchmarkStatus: 'complete',
+  });
+  await ctx.repos.signalObservation.save({
+    ...observationBase,
+    id: 'weekly-review-observation-t3',
+    horizon: 't3',
+    benchmarkStatus: 'unavailable',
+  });
+};
+
 describe('weekly-report workflow', () => {
   it('按本周真实交易日生成趋势，不把自然日周末纳入周期', async () => {
     const requestedDates: string[] = [];
@@ -157,6 +306,7 @@ describe('weekly-report workflow', () => {
       'account-week',
       'alert-feedback',
       'signal-outcomes',
+      'strategy-review',
       'advice-outcomes',
       'trade-attribution',
       'behavior-patterns',
@@ -379,5 +529,136 @@ describe('weekly-report workflow', () => {
     );
     const tradeTable = tradeAttribution?.blocks.find((block) => block.kind === 'table');
     expect(tradeTable?.kind === 'table' ? tradeTable.rows : []).toHaveLength(0);
+  });
+
+  it('策略复盘 section 汇总策略级 T+N 观察统计并复用 AI 洞察文本', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedStrategyWithPublishedRun(ctx);
+
+    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'strategy-review');
+    expect(section).toMatchObject({
+      title: '策略复盘',
+      required: false,
+      status: 'complete',
+      missingDimensions: [],
+    });
+    const table = section?.blocks.find((block) => block.kind === 'table');
+    const rows = table?.kind === 'table' ? table.rows : [];
+    const t1 = rows.find((row) => row.horizon === 't1');
+    expect(t1).toMatchObject({
+      strategy: '周复盘策略',
+      total: 1,
+      complete: 1,
+      benchmarkStatus: 'complete',
+    });
+    expect(
+      typeof t1?.averageExcessReturnPct === 'number' ? t1.averageExcessReturnPct : 0,
+    ).toBeCloseTo(0.08, 12);
+    expect(rows.find((row) => row.horizon === 't3')).toMatchObject({
+      strategy: '周复盘策略',
+      complete: 1,
+      averageExcessReturnPct: null,
+      benchmarkStatus: 'unavailable',
+    });
+    const text = section?.blocks.find((block) => block.kind === 'text');
+    const textValue = text?.kind === 'text' ? text.text : '';
+    expect(textValue).toContain('策略事实观察');
+    expect(textValue).toContain('样本不足');
+    expect(textValue).toContain('benchmark 不可用');
+    const serialized = JSON.stringify(section?.blocks);
+    for (const field of [
+      '"decision"',
+      '"positionSize"',
+      '"stopLoss"',
+      '"takeProfit"',
+      '"confidence"',
+    ]) {
+      expect(serialized).not.toContain(field);
+    }
+  });
+
+  it('AI 不可用时策略复盘退化为 facts-only 摘要且 section 保持 complete', async () => {
+    const baseCtx = await buildTestContext({ clock: () => now });
+    await seedStrategyWithPublishedRun(baseCtx);
+    const failingCtx: ToolContext = {
+      ...baseCtx,
+      adapters: {
+        ...baseCtx.adapters,
+        llm: {
+          name: 'failing-llm',
+          generate: async () => {
+            throw new Error('provider unavailable');
+          },
+        },
+      },
+    };
+
+    const result = await weeklyReportWorkflow.run(
+      { periodEnd: '2026-07-31', notify: false },
+      failingCtx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'strategy-review');
+    expect(section).toMatchObject({
+      required: false,
+      status: 'complete',
+      missingDimensions: [],
+    });
+    const text = section?.blocks.find((block) => block.kind === 'text');
+    const textValue = text?.kind === 'text' ? text.text : '';
+    expect(textValue).toContain('事实摘要');
+    expect(textValue).toContain('AI 不可用');
+  });
+
+  it('策略运行读取失败时策略复盘 section unavailable，且不改变整份报告状态', async () => {
+    const controlCtx = await buildTestContext({ clock: () => now });
+    const control = await weeklyReportWorkflow.run(
+      { periodEnd: '2026-07-31', notify: false },
+      controlCtx,
+    );
+    const baseCtx = await buildTestContext({ clock: () => now });
+    const failingRunRepo = new Proxy(baseCtx.repos.strategyRun, {
+      get: (target, property, receiver) => {
+        if (property === 'listRuns') {
+          return async () => {
+            throw new Error('strategy run store down');
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const failingCtx: ToolContext = {
+      ...baseCtx,
+      repos: { ...baseCtx.repos, strategyRun: failingRunRepo },
+    };
+
+    const broken = await weeklyReportWorkflow.run(
+      { periodEnd: '2026-07-31', notify: false },
+      failingCtx,
+    );
+
+    expect(control.ok).toBe(true);
+    expect(broken.ok).toBe(true);
+    if (!control.ok || !broken.ok) return;
+    const controlSection = control.data.report.sections.find(
+      (item) => item.key === 'strategy-review',
+    );
+    expect(controlSection?.status).toBe('complete');
+    const section = broken.data.report.sections.find((item) => item.key === 'strategy-review');
+    expect(section?.status).toBe('unavailable');
+    expect(
+      section?.blocks.every((block) => block.kind === 'text' && block.tone === 'warning'),
+    ).toBe(true);
+    expect(broken.data.report.missingDimensions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ dimension: 'strategy-review.runs' })]),
+    );
+    expect(broken.data.report.status).toBe(control.data.report.status);
   });
 });

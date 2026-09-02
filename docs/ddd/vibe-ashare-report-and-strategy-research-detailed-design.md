@@ -760,6 +760,7 @@ section：
 | `important-triggers` | 是 | 当日 | 重要 WatchTrigger 与处理状态 |
 | `group-changes` | 是 | 当日刷新 | 动态分组 entered/exited/stale |
 | `advice-expiry` | 是 | 当日 | 今日到期、失效 Advice |
+| `strategy-actions` | 否 | 当日 | 当日 published operational run 信号概览 + 策略 Advice 链接与 reasoning 摘要 |
 | `next-events` | 是 | 当前同步批次 | 下一交易日关键 StockEvent |
 
 “强势标的”“首板机会”只能作为 market-pulse 的事实表格，列出筛选条件和证据。
@@ -775,6 +776,7 @@ section：
 | `account-week` | 是 | 周度估值变化与最大回撤；口径不完整时 partial |
 | `alert-feedback` | 是 | 预警处理率、有用率、失败送达 |
 | `signal-outcomes` | 否 | SignalObservation 样本数、缺失率和 T+N 真实表现 |
+| `strategy-review` | 否 | active 策略的 T+1/T+3/T+5 观察统计 + AI 洞察文本（facts-only 降级标注） |
 | `research-changes` | 否 | 新增笔记与 thesis 版本变化 |
 | `next-week-events` | 是 | 下一周重要 StockEvent |
 

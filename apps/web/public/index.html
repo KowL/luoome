@@ -54,6 +54,7 @@
   <div class="app-shell">
     <aside class="sidebar" aria-label="主导航">
       <ul class="nav" role="navigation">
+        <li><a class="nav-item" href="#home" data-route="home"><span>首页</span></a></li>
         <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>看盘</span></a></li>
         <li><a class="nav-item" href="#indices" data-route="indices"><span>指数</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
@@ -73,6 +74,21 @@
     </aside>
 
     <main class="content" id="content">
+      <!-- route: home（首页 = 最新收盘报告；PRD strategy-ai-managed-automation §4.1/§5） -->
+      <section id="route-home" class="route" data-route="home" hidden>
+        <div class="route-header">
+          <div>
+            <span class="section-kicker">LATEST CLOSING REPORT</span>
+            <h1>收盘报告</h1>
+            <div class="route-meta">最新一份收盘复盘 · 历史与手动生成见「报告」页</div>
+          </div>
+          <a href="#reports" class="btn btn-outline btn-sm">全部报告 →</a>
+        </div>
+        <article class="card report-sheet" id="home-report">
+          <p class="placeholder">加载中…</p>
+        </article>
+      </section>
+
       <!-- route: dashboard（看盘主页） -->
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div class="route-header">

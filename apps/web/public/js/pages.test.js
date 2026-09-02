@@ -8,6 +8,8 @@ import {
   errorKindLabel,
   filterAdvices,
   outcomeInputOf,
+  reportEntityHref,
+  routeAdviceId,
   routeStockId,
   sortBoardItems,
   watchRunSummaryText,
@@ -75,6 +77,18 @@ describe('行情关联深链接', () => {
     expect(filterAdvices(advices, 'all', '002594.SZ')).toHaveLength(2);
     expect(filterAdvices(advices, 'buy', '002594.SZ')).toEqual([advices[0]]);
     expect(filterAdvices(advices, 'buy', null)).toEqual([advices[0], advices[2]]);
+  });
+
+  it('报告 list 条目：advice 带 id 深链接到建议页，routeAdviceId 解析', () => {
+    expect(reportEntityHref({ entityKind: 'advice', entityId: 'adv-1' })).toBe('#advice?id=adv-1');
+    expect(reportEntityHref({ entityKind: 'advice', entityId: 'a b' })).toBe('#advice?id=a%20b');
+    expect(reportEntityHref({ entityKind: 'stock', entityId: '000001.SZ' })).toBe(
+      '#market?stockId=000001.SZ&range=3m',
+    );
+    expect(reportEntityHref({ entityKind: 'unknown-kind', entityId: 'x' })).toBeNull();
+    expect(routeAdviceId('#advice?id=adv-1')).toBe('adv-1');
+    expect(routeAdviceId('#advice')).toBeNull();
+    expect(routeAdviceId('#advice?id=%20')).toBeNull();
   });
 });
 

@@ -49,6 +49,12 @@ const routeStockId = (hash = window.location.hash) => {
   return value === undefined || value.length === 0 ? null : value;
 };
 
+/** 报告 list block 的 advice 深链接（#advice?id=…）：定位到具体建议条目。 */
+const routeAdviceId = (hash = window.location.hash) => {
+  const value = parseRouteHash(hash).params.get('id')?.trim();
+  return value === undefined || value.length === 0 ? null : value;
+};
+
 const filterAdvices = (advices, decision, stockId) =>
   advices.filter(
     (advice) =>
@@ -980,6 +986,12 @@ const renderAdviceList = async (setStatus) => {
   const filter = $('#advice-filter')?.value ?? 'all';
   const stockId = routeStockId();
   const filtered = filterAdvices(all, filter, stockId);
+  // 报告深链接（#advice?id=…）：目标建议置顶到第一页，保证渲染后可见可定位
+  const targetAdviceId = routeAdviceId();
+  if (targetAdviceId !== null) {
+    const targetIndex = filtered.findIndex((advice) => advice.id === targetAdviceId);
+    if (targetIndex > 0) filtered.unshift(...filtered.splice(targetIndex, 1));
+  }
   const modeBtn = $('#btn-advice-delete-mode');
   if (modeBtn !== null) modeBtn.textContent = adviceSelectMode ? '取消' : '删除';
   let paginationWrap = list.nextElementSibling;
@@ -997,8 +1009,8 @@ const renderAdviceList = async (setStatus) => {
     const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
     mount(
       list,
-      pageItems.map((advice) =>
-        adviceCard(
+      pageItems.map((advice) => {
+        const card = adviceCard(
           advice,
           adviceSelectMode
             ? {
@@ -1010,8 +1022,10 @@ const renderAdviceList = async (setStatus) => {
                 },
               }
             : {},
-        ),
-      ),
+        );
+        card.dataset.adviceId = advice.id;
+        return card;
+      }),
     );
   }
   const renderBatchBar = () => {
@@ -1067,6 +1081,16 @@ const renderAdviceList = async (setStatus) => {
   } else {
     renderPage();
     mount(paginationWrap, pagination.root);
+    // 深链接目标：标记 + 滚动定位（与持仓页 route-target 同一视觉语言）
+    if (targetAdviceId !== null) {
+      const targetCard = list.querySelector(
+        `.advice-card[data-advice-id="${CSS.escape(targetAdviceId)}"]`,
+      );
+      if (targetCard !== null) {
+        targetCard.classList.add('route-target');
+        targetCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    }
   }
   renderBatchBar();
   setStatus(
@@ -1098,7 +1122,7 @@ const reportStatusBadge = (status) =>
 const reportEntityHref = (item) => {
   if (item.entityKind === 'stock') return buildMarketLink(item.entityId);
   if (item.entityKind === 'stock-group' || item.entityKind === 'watch-plan') return '#groups';
-  if (item.entityKind === 'advice') return '#advice';
+  if (item.entityKind === 'advice') return `#advice?id=${encodeURIComponent(item.entityId)}`;
   if (item.entityKind === 'research-note' || item.entityKind === 'stock-event') return '#research';
   return null;
 };
@@ -1173,54 +1197,11 @@ const reportBlockNode = (block) => {
   return el('div', 'report-table-wrap', table);
 };
 
-const downloadReport = async (reportId, format) => {
-  const result = await callApi(`/api/reports/${reportId}/render?format=${format}`);
-  if (!result.ok) return;
-  const blob = new Blob([result.data.content], { type: result.data.contentType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${reportId}.${format === 'markdown' ? 'md' : 'txt'}`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-};
-
-const deleteReport = async (reportId, setStatus) => {
-  const result = await callApi(`/api/reports/${reportId}`, { method: 'DELETE', body: '{}' });
-  if (!result.ok) {
-    setStatus(`报告删除失败：${result.error.kind}`, true);
-    return;
-  }
-  selectedReportId = null;
-  await renderReports(setStatus);
-};
-
-const loadReportDetail = async (reportId, setStatus) => {
-  selectedReportId = reportId;
-  const result = await callApi(`/api/reports/${reportId}`);
-  if (!result.ok) {
-    setStatus(`报告加载失败：${result.error.kind}`, true);
-    return;
-  }
-  const report = result.data.report;
-  const detail = $('#report-detail');
-  const markdown = el('button', 'btn btn-outline btn-sm', '导出 Markdown');
-  const plain = el('button', 'btn btn-outline btn-sm', '导出纯文本');
-  const remove = el('button', 'btn btn-outline btn-sm', '删除');
-  markdown.type = 'button';
-  plain.type = 'button';
-  remove.type = 'button';
-  markdown.addEventListener('click', () => void downloadReport(report.id, 'markdown'));
-  plain.addEventListener('click', () => void downloadReport(report.id, 'plain-text'));
-  remove.addEventListener('click', () => {
-    openConfirmModal({
-      title: '删除报告',
-      message: `确定删除「${report.title}」？删除后不可恢复。`,
-      confirmLabel: '删除',
-      onConfirm: () => void deleteReport(report.id, setStatus),
-    });
-  });
-
+/**
+ * 报告 sheet 通用渲染（报告页详情与首页共用）：header + sections + provenance。
+ * actions 为右上角操作区节点（报告页传导出/删除按钮；首页只传状态 badge）。
+ */
+const reportSheetNodes = (report, actions = []) => {
   const nodes = [
     el('header', 'report-sheet-header', [
       el('div', null, [
@@ -1232,12 +1213,7 @@ const loadReportDetail = async (reportId, setStatus) => {
           `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}`,
         ),
       ]),
-      el('div', 'report-sheet-actions', [
-        reportStatusBadge(report.status),
-        markdown,
-        plain,
-        remove,
-      ]),
+      el('div', 'report-sheet-actions', actions),
     ]),
     el('div', 'report-asof', [
       el('span', null, `DATA AS OF ${fmtDateTime(report.dataAsOf)}`),
@@ -1286,7 +1262,106 @@ const loadReportDetail = async (reportId, setStatus) => {
       ]),
     );
   }
-  mount(detail, nodes);
+  return nodes;
+};
+
+/**
+ * 首页 = 最新收盘报告（PRD strategy-ai-managed-automation §4.1/§5）。
+ * 复用 list_reports + get_report，不新增绕过 tools 的端点；
+ * 空库 / 无收盘报告时给诚实空态与生成路径说明。
+ */
+const renderHome = async (setStatus) => {
+  const container = $('#home-report');
+  if (container === null) return;
+  const result = await callApi('/api/reports?kind=closing&limit=1');
+  if (!result.ok) {
+    mount(container, el('p', 'placeholder', `收盘报告加载失败：${result.error.kind}`));
+    setStatus(`收盘报告加载失败：${result.error.kind}`, true);
+    return;
+  }
+  const latest = (result.data.reports ?? [])[0];
+  if (latest === undefined) {
+    const toReports = el('a', 'btn btn-outline btn-sm', '去「报告」页生成');
+    toReports.setAttribute('href', '#reports');
+    mount(
+      container,
+      el('div', 'report-empty', [
+        el('span', 'report-empty-mark', 'R'),
+        el('h2', null, '尚无收盘报告'),
+        el(
+          'p',
+          null,
+          '收盘报告在每日收盘后的策略日循环中自动生成；也可以到「报告」页选择交易日手动生成一份。',
+        ),
+        toReports,
+      ]),
+    );
+    setStatus('尚无收盘报告');
+    return;
+  }
+  const detail = await callApi(`/api/reports/${latest.id}`);
+  if (!detail.ok) {
+    mount(container, el('p', 'placeholder', `收盘报告加载失败：${detail.error.kind}`));
+    setStatus(`收盘报告加载失败：${detail.error.kind}`, true);
+    return;
+  }
+  const report = detail.data.report;
+  mount(container, reportSheetNodes(report, [reportStatusBadge(report.status)]));
+  setStatus(`最新收盘报告 · ${report.periodEnd}`);
+};
+
+const downloadReport = async (reportId, format) => {
+  const result = await callApi(`/api/reports/${reportId}/render?format=${format}`);
+  if (!result.ok) return;
+  const blob = new Blob([result.data.content], { type: result.data.contentType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${reportId}.${format === 'markdown' ? 'md' : 'txt'}`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
+
+const deleteReport = async (reportId, setStatus) => {
+  const result = await callApi(`/api/reports/${reportId}`, { method: 'DELETE', body: '{}' });
+  if (!result.ok) {
+    setStatus(`报告删除失败：${result.error.kind}`, true);
+    return;
+  }
+  selectedReportId = null;
+  await renderReports(setStatus);
+};
+
+const loadReportDetail = async (reportId, setStatus) => {
+  selectedReportId = reportId;
+  const result = await callApi(`/api/reports/${reportId}`);
+  if (!result.ok) {
+    setStatus(`报告加载失败：${result.error.kind}`, true);
+    return;
+  }
+  const report = result.data.report;
+  const detail = $('#report-detail');
+  const markdown = el('button', 'btn btn-outline btn-sm', '导出 Markdown');
+  const plain = el('button', 'btn btn-outline btn-sm', '导出纯文本');
+  const remove = el('button', 'btn btn-outline btn-sm', '删除');
+  markdown.type = 'button';
+  plain.type = 'button';
+  remove.type = 'button';
+  markdown.addEventListener('click', () => void downloadReport(report.id, 'markdown'));
+  plain.addEventListener('click', () => void downloadReport(report.id, 'plain-text'));
+  remove.addEventListener('click', () => {
+    openConfirmModal({
+      title: '删除报告',
+      message: `确定删除「${report.title}」？删除后不可恢复。`,
+      confirmLabel: '删除',
+      onConfirm: () => void deleteReport(report.id, setStatus),
+    });
+  });
+
+  mount(
+    detail,
+    reportSheetNodes(report, [reportStatusBadge(report.status), markdown, plain, remove]),
+  );
   document.querySelectorAll('.report-history-item').forEach((node) => {
     node.classList.toggle('active', node.dataset.reportId === reportId);
   });
@@ -3005,13 +3080,16 @@ export {
   renderDashboard,
   renderDataHealth,
   renderHoldings,
+  renderHome,
   renderReports,
   renderResearch,
   renderReview,
   renderSettings,
   renderSettingsAccount,
   renderWorkflowRuns,
+  reportEntityHref,
   resetAdviceDeleteMode,
+  routeAdviceId,
   routeStockId,
   runWatchOnce,
   sortBoardItems,

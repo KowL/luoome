@@ -34,6 +34,7 @@
 | [Strategy DSL](./prd/strategy-dsl.md) | 将现有 Tactic 重构为版本化 Strategy、运行结果与信号模型 |
 | [策略工作台](./prd/strategy-v2.md) | Strategy 的执行记录、派生股票池/候选池、运行 Diff、真实信号观察与版本迭代 |
 | [统一 Watchlist](./prd/watchlist.md) | 统一手工、Strategy、AI 与 Portfolio 来源的机会观察和生命周期 |
+| [策略自动化与 AI 管理](./prd/strategy-ai-managed-automation.md) | 报告中心（收盘行动清单、周报复盘）与 AI 策略生命周期管理（提议、门禁自动发布、自动暂停） |
 
 ## 技术设计（DDD）
 

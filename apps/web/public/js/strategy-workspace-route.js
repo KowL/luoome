@@ -18,6 +18,14 @@ export const TAB_LABELS = {
   settings: '设置',
 };
 
+/**
+ * 默认导航只展示基础 tab；实验 / AI 洞察 / 闭环属高级功能
+ * （PRD strategy-ai-managed-automation §4.1），收进「高级」折叠分组。
+ * 收深只影响导航呈现：parseStrategyHash/renderTabContent 不变，直接 URL 仍可进入。
+ */
+export const BASIC_TABS = ['overview', 'pool', 'runs', 'settings'];
+export const ADVANCED_TABS = ['experiment', 'insights', 'cycle'];
+
 export const parseStrategyHash = (hash) => {
   const raw = String(hash ?? '').replace(/^#/, '');
   const queryIndex = raw.indexOf('?');

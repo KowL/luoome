@@ -330,6 +330,140 @@ const nextEventsSection = async (date: string, now: Date, ctx: WorkflowContext) 
   };
 };
 
+const STRATEGY_ADVICE_SOURCE_TOOL = 'analyze_strategy_candidate';
+
+/**
+ * 「策略行动」（PRD strategy-ai-managed-automation §4.1/§4.2）：
+ * 事实层为当日 published operational run 的信号概览 + 当日策略 Advice 链接（entityKind='advice'，
+ * 不含 Advice 决策字段名，decision 值仅以文本展示）；解读层只组装 Advice 已有 reasoning，不发起 LLM。
+ */
+const strategyActionsSection = async (
+  date: string,
+  now: Date,
+  ctx: WorkflowContext,
+): Promise<ReportSectionPiece> => {
+  const dayStart = new Date(`${date}T00:00:00+08:00`);
+  const [strategies, runs, advices] = await Promise.all([
+    ctx.tools.list_strategies.execute({ filter: { status: 'active' } }),
+    ctx.tools.list_strategy_runs.execute({
+      scope: 'operational',
+      publication: 'published',
+      since: dayStart,
+      limit: 500,
+    }),
+    ctx.tools.get_advice.execute({
+      sourceTool: STRATEGY_ADVICE_SOURCE_TOOL,
+      since: dayStart,
+      until: new Date(dayStart.getTime() + DAY_MS - 1),
+      includeExpired: true,
+      limit: 500,
+    }),
+  ]);
+  if (!strategies.ok) {
+    return unavailableSection(
+      'strategy-actions',
+      '策略行动',
+      false,
+      now,
+      'strategy-actions.strategies',
+      strategies.error.kind,
+    );
+  }
+  if (!runs.ok) {
+    return unavailableSection(
+      'strategy-actions',
+      '策略行动',
+      false,
+      now,
+      'strategy-actions.runs',
+      runs.error.kind,
+    );
+  }
+  if (!advices.ok) {
+    return unavailableSection(
+      'strategy-actions',
+      '策略行动',
+      false,
+      now,
+      'strategy-actions.advice',
+      advices.error.kind,
+    );
+  }
+
+  const dayRuns = runs.data.runs.filter((run) => dateInShanghai(run.dataAsOf) === date);
+  const latestRunByStrategy = new Map<string, (typeof dayRuns)[number]>();
+  for (const run of dayRuns) {
+    if (!latestRunByStrategy.has(run.strategyId)) latestRunByStrategy.set(run.strategyId, run);
+  }
+  const dayAdvices = advices.data.advices.filter(
+    (advice) => dateInShanghai(advice.createdAt) === date,
+  );
+  const summaryCount = (
+    run: (typeof dayRuns)[number] | undefined,
+    key: 'selectedCount' | 'signalCount',
+  ) => {
+    const value = run?.summary?.[key];
+    return typeof value === 'number' ? value : null;
+  };
+  const evidence = [
+    localEvidence('strategy-actions:runs', 'strategy-actions.runs', now, 'tool:list_strategy_runs'),
+    localEvidence('strategy-actions:advice', 'strategy-actions.advice', now, 'tool:get_advice'),
+  ];
+  return {
+    evidence,
+    section: {
+      key: 'strategy-actions',
+      title: '策略行动',
+      required: false,
+      status: 'complete' as const,
+      dataAsOf: now,
+      blocks: [
+        {
+          kind: 'table' as const,
+          columns: [
+            { key: 'strategy', label: '策略' },
+            { key: 'selectedCount', label: '入选数' },
+            { key: 'signalCount', label: '信号数' },
+          ],
+          rows: strategies.data.strategies.map((strategy) => {
+            const run = latestRunByStrategy.get(strategy.id);
+            return {
+              strategy: strategy.name,
+              selectedCount: summaryCount(run, 'selectedCount'),
+              signalCount: summaryCount(run, 'signalCount'),
+            };
+          }),
+        },
+        {
+          kind: 'list' as const,
+          items: dayAdvices.map((advice) => ({
+            title: advice.stockName ?? advice.subjectId,
+            detail: `${advice.decision} · 有效期至 ${dateInShanghai(advice.validUntil)}`,
+            entityKind: 'advice' as const,
+            entityId: advice.id,
+          })),
+        },
+        {
+          kind: 'text' as const,
+          tone: 'factual' as const,
+          text:
+            dayAdvices.length === 0
+              ? `${date} 无策略建议（推荐未启用、预检全部过滤或 AI 不可用均会导致无建议）。`
+              : [
+                  `${date} 策略建议 ${dayAdvices.length} 条：`,
+                  ...dayAdvices.map(
+                    (advice) =>
+                      `${advice.stockName ?? advice.subjectId}：${advice.reasoning.premise}`,
+                  ),
+                ].join('\n'),
+        },
+      ],
+      evidenceIds: evidence.map((item) => item.id),
+      missingDimensions: [],
+    },
+  };
+};
+
 const runClosingReport = async (
   input: ClosingInput,
   ctx: WorkflowContext,
@@ -366,14 +500,24 @@ const runClosingReport = async (
               'ashare-sentiment',
               sentiment.error.kind,
             );
-        const [performance, triggers, groupChanges, adviceExpiry, nextEvents] = await Promise.all([
-          accountPerformance(input, generatedAt, ctx),
-          triggersSection(date, generatedAt, ctx),
-          groupChangesSection(date, generatedAt, ctx),
-          adviceExpirySection(date, generatedAt, ctx),
-          nextEventsSection(date, generatedAt, ctx),
-        ]);
-        return [market, performance, triggers, groupChanges, adviceExpiry, nextEvents];
+        const [performance, triggers, groupChanges, adviceExpiry, strategyActions, nextEvents] =
+          await Promise.all([
+            accountPerformance(input, generatedAt, ctx),
+            triggersSection(date, generatedAt, ctx),
+            groupChangesSection(date, generatedAt, ctx),
+            adviceExpirySection(date, generatedAt, ctx),
+            strategyActionsSection(date, generatedAt, ctx),
+            nextEventsSection(date, generatedAt, ctx),
+          ]);
+        return [
+          market,
+          performance,
+          triggers,
+          groupChanges,
+          adviceExpiry,
+          strategyActions,
+          nextEvents,
+        ];
       },
     },
     ctx,
