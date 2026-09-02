@@ -59,8 +59,12 @@ pause:            executed（创建即终态，动作已完成）
 
 ## 3. 编排：strategy-autonomy-weekly workflow
 
-新 workflow，每周运行一次（挂在 Web 调度器现有周节奏上，与 weekly-report 同触发点、先 autonomy 后 report，
-使周报能包含本周动作）。只通过 `ctx.tools.*` 编排，分四步，任一步失败不影响其它策略与其它步骤：
+新 workflow，每周运行一次（挂在 Web 调度器现有周节奏上）。「先 autonomy 后 report」不依赖
+调度顺序，由嵌套触发实现：本 workflow 的收尾 step 在自治完成后嵌套调用 weekly-report
+（periodEnd 回溯到最近 A 股交易日），使周报能包含本周动作；日报侧对称地由
+strategy-daily-cycle 在完成当日 scheduled 正式运行后嵌套触发 closing-report。
+只通过 `ctx.tools.*` 编排，自治分五步（暂停→归档→提议→推进→复核）加收尾的周报嵌套触发，
+任一步失败不影响其它策略与其它步骤：
 
 ### 3.1 自动暂停（先于提议，先止损再优化）
 

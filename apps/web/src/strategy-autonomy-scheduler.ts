@@ -92,7 +92,8 @@ export const startStrategyAutonomyScheduler = (
         result.data.failed +
         result.data.proposals.failed +
         result.data.validation.failed +
-        result.data.promotion.failed;
+        result.data.promotion.failed +
+        (result.data.weeklyReport?.status === 'failed' ? 1 : 0);
       await ctx.repos.workflowRun.save({
         ...base,
         status: failedCount > 0 ? 'partial' : 'succeeded',
@@ -103,6 +104,7 @@ export const startStrategyAutonomyScheduler = (
           proposalsValidating: result.data.proposals.validating,
           promotionPublished: result.data.promotion.published,
           promotionBlocked: result.data.promotion.blocked,
+          weeklyReport: result.data.weeklyReport?.status,
         },
       });
       ctx.logger.info('策略自治周调度完成', {

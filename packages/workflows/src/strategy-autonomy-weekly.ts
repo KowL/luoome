@@ -1,8 +1,15 @@
-import { assessStrategyInitialPublication, type StrategyAutonomyAction } from '@luoome/core';
+import {
+  assessStrategyInitialPublication,
+  dateInShanghai,
+  isHoliday,
+  isWeekend,
+  type StrategyAutonomyAction,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './define-workflow.js';
 import { replayStrategyRangeWorkflow } from './replay-strategy-range.js';
+import { weeklyReportWorkflow } from './weekly-report.js';
 
 /**
  * 自动暂停阈值（docs/ddd/strategy-ai-lifecycle-detailed-design.md §3.1，已冻结）。
@@ -155,6 +162,16 @@ export const StrategyAutonomyWeeklyOutput = AutonomyValidationOutput.extend({
     failed: z.number().int().nonnegative(),
     items: z.array(PromotionItemSchema),
   }),
+  /** 收尾嵌套触发的周报结果；报告失败只记 failed，不影响本周自治动作事实。 */
+  weeklyReport: z
+    .object({
+      status: z.enum(['generated', 'failed']),
+      reportId: z.string().min(1).optional(),
+      periodStart: z.string().optional(),
+      periodEnd: z.string(),
+      error: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 export type StrategyAutonomyWeeklyOutputT = z.infer<typeof StrategyAutonomyWeeklyOutput>;
 
@@ -1519,13 +1536,56 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
   });
 };
 
+/**
+ * 周报嵌套触发（§3「先 autonomy 后 report」的落地）：自治周循环完成后嵌套调用
+ * weekly-report，使周报包含本周自治动作。weekly-report 的 periodEnd 必须是 A 股交易日，
+ * 取运行日（调度在周日）向前回溯的最近交易日；save_report 按 kind|scope|period 逻辑键
+ * upsert，重复触发覆盖同键报告。报告失败只记 weeklyReport.status=failed，
+ * 不回滚本周已落库的自治动作。
+ */
+const runWeeklyReportTrigger: WorkflowStep = async (prev, ctx) => {
+  const carried = StrategyAutonomyWeeklyOutput.parse(prev);
+  let cursor = ctx.clock();
+  while (isWeekend(cursor) || isHoliday(cursor)) cursor = new Date(cursor.getTime() - DAY_MS);
+  const periodEnd = dateInShanghai(cursor);
+  const report = await weeklyReportWorkflow.run(
+    { periodEnd, scope: { kind: 'all-accounts' }, mode: 'scheduled' },
+    ctx,
+  );
+  if (!report.ok) {
+    ctx.logger.warn('strategy-autonomy-weekly: 周报生成失败，本周自治动作不受影响', {
+      error: report.error,
+    });
+    return StrategyAutonomyWeeklyOutput.parse({
+      ...carried,
+      weeklyReport: { status: 'failed', periodEnd, error: errorText(report.error) },
+    });
+  }
+  return StrategyAutonomyWeeklyOutput.parse({
+    ...carried,
+    weeklyReport: {
+      status: 'generated',
+      reportId: report.data.report.id,
+      periodStart: report.data.report.periodStart,
+      periodEnd: report.data.report.periodEnd,
+    },
+  });
+};
+
 export const strategyAutonomyWeeklyWorkflow = defineWorkflow<
   StrategyAutonomyWeeklyInputT,
   StrategyAutonomyWeeklyOutputT
 >({
   name: 'strategy-autonomy-weekly',
   description:
-    '周度策略自治（M2）：自动暂停跑输策略 → 自治暂停满 28 天仍跑输则自动归档 → AI 提议（调参或每周最多 1 个全新策略）并建验证 session → 推进 validating session → 门禁复核（首发用首发门禁，晋级用晋级门；eligible 自动发布、blocked 进人工队列）；逐策略/逐动作隔离失败',
+    '周度策略自治（M2）：自动暂停跑输策略 → 自治暂停满 28 天仍跑输则自动归档 → AI 提议（调参或每周最多 1 个全新策略）并建验证 session → 推进 validating session → 门禁复核（首发用首发门禁，晋级用晋级门；eligible 自动发布、blocked 进人工队列）→ 嵌套触发 weekly-report 周报；逐策略/逐动作隔离失败',
   input: StrategyAutonomyWeeklyInput,
-  steps: [runAutonomy, runArchival, runProposals, runValidationSessions, runPromotionReview],
+  steps: [
+    runAutonomy,
+    runArchival,
+    runProposals,
+    runValidationSessions,
+    runPromotionReview,
+    runWeeklyReportTrigger,
+  ],
 });

@@ -4,6 +4,7 @@ import {
   createStrategyDailyCycleAuditInputSummary,
   createStrategyDailyCycleAuditOutputSummary,
   DEFAULT_STRATEGY_RUN_ACCEPTANCE_POLICY,
+  dateInShanghai,
   isHoliday,
   isWeekend,
   readStrategyRunSnapshot,
@@ -13,6 +14,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
+import { closingReportWorkflow } from './closing-report.js';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 export const StrategyDailyCycleInput = z.object({
@@ -761,6 +763,26 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     if (!finished.ok) {
       status = 'failed';
       reason = errorText(finished.error);
+    }
+    // 收盘复盘并入日循环（PRD strategy-ai-managed-automation §5 M1「零人工出报告」）：
+    // 本轮完成了当日 scheduled 正式运行时嵌套触发 closing-report。daily cycle 是
+    // per-schedule 的，同一交易日多个 schedule 会各触发一次——save_report 按
+    // kind|scope|period 逻辑键 upsert，后触发覆盖同键报告而非报错。报告失败只把本轮
+    // 记 partial，不回滚任何已提交事实；显式历史 asOf 运行不触发。
+    if (runId !== undefined && input.asOf === undefined) {
+      const report = await closingReportWorkflow.run(
+        {
+          date: dateInShanghai(auditDataAsOf),
+          scope: { kind: 'all-accounts' },
+          mode: 'scheduled',
+        },
+        ctx,
+      );
+      if (!report.ok && status !== 'failed') {
+        status = 'partial';
+        const reportError = `收盘复盘生成失败: ${errorText(report.error)}`;
+        reason = reason === undefined ? reportError : `${reason}；${reportError}`;
+      }
     }
     await finishAudit({
       strategyId: schedule.strategyId,

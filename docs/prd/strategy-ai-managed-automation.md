@@ -122,7 +122,9 @@ AI 可基于 DSL catalog 从头组合新策略（不限于调参）。全新策�
 
 ### 验收
 
-- 每日收盘后无需人工操作，打开首页即见"今日信号 Top 10 + 完整建议 + 其余事实清单"；
+- 每日收盘后无需人工操作，打开首页即见"今日信号 Top 10 + 完整建议 + 其余事实清单"
+  （2026-09-02 已闭环：closing-report 由 strategy-daily-cycle 完成当日 scheduled 正式运行后
+  嵌套触发，weekly-report 由 strategy-autonomy-weekly 完成后嵌套触发，save_report 幂等 upsert）；
 - AI 服务不可用时报告主体照常生成，仅解读层缺失并标注；
 - 报告 block 不含 Advice 决策字段，完整建议经链接进入 Advice 本体；
 - `bun run test:all`、`typecheck`、`lint` 通过；Web 改动完成真实浏览器验收。

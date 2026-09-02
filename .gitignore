@@ -51,4 +51,5 @@ coverage/
 .playwright-cli/
 .learnings/
 .claude/
+.pi-subagents/
 output/

@@ -1517,3 +1517,77 @@ describe('strategy-autonomy-weekly · AI 全新策略（§9.2）', () => {
     expect(strategy?.currentVersionId).toBeUndefined();
   });
 });
+
+describe('strategy-autonomy-weekly · 周报嵌套触发', () => {
+  it('自治周循环完成后触发 weekly-report，periodEnd 回溯到最近 A 股交易日', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({ mode: 'scheduled' }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // now=2026-09-02 周三（Asia/Shanghai），本身是交易日，periodEnd 即当日。
+    expect(result.data.weeklyReport).toMatchObject({
+      status: 'generated',
+      periodEnd: '2026-09-02',
+    });
+    const reports = await ctx.repos.report.list({ kind: 'weekly' });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.id).toBe(result.data.weeklyReport?.reportId);
+  });
+
+  it('调度日落在周末时 periodEnd 回溯到上周五', async () => {
+    // Asia/Shanghai 2026-08-30 周日 10:00
+    const sunday = new Date('2026-08-30T02:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => sunday });
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({ mode: 'scheduled' }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.weeklyReport).toMatchObject({
+      status: 'generated',
+      periodEnd: '2026-08-28',
+    });
+  });
+
+  it('周报生成失败只记 weeklyReport failed，自治结果不受影响且不回滚', async () => {
+    const base = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(base);
+    await seedActiveStrategy(base, {
+      id: 'strategy-report-down',
+      name: '报告故障策略',
+      samples: 20,
+    });
+    const reportRepo = base.repos.report;
+    const ctx: ToolContext = {
+      ...base,
+      repos: {
+        ...base.repos,
+        report: {
+          upsertForPeriod: async () => {
+            throw new Error('report store unavailable');
+          },
+          findById: (...args: Parameters<typeof reportRepo.findById>) =>
+            reportRepo.findById(...args),
+          findByPeriod: (...args: Parameters<typeof reportRepo.findByPeriod>) =>
+            reportRepo.findByPeriod(...args),
+          list: (...args: Parameters<typeof reportRepo.list>) => reportRepo.list(...args),
+          setDeliveryStatus: (...args: Parameters<typeof reportRepo.setDeliveryStatus>) =>
+            reportRepo.setDeliveryStatus(...args),
+          remove: (...args: Parameters<typeof reportRepo.remove>) => reportRepo.remove(...args),
+        },
+      },
+    };
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({ mode: 'scheduled' }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.weeklyReport).toMatchObject({ status: 'failed', periodEnd: '2026-09-02' });
+    // 自治动作照常落库（pause 已执行），周报失败不回滚。
+    expect(result.data.paused).toBe(1);
+    const strategy = await ctx.repos.strategy.findById('strategy-report-down');
+    expect(strategy?.status).toBe('paused');
+  });
+});

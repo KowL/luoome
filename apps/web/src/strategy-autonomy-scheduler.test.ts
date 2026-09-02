@@ -126,4 +126,24 @@ describe('strategy autonomy scheduler', () => {
     await first;
     scheduler.stop();
   });
+
+  it('周报嵌套触发失败时本轮记 partial', async () => {
+    const ctx = await buildTestContext({ clock: () => SUNDAY });
+    const scheduler = startStrategyAutonomyScheduler(ctx, {
+      intervalMs: 60_000,
+      startImmediately: false,
+      run: async () => ({
+        ok: true as const,
+        data: {
+          ...emptyOutput(),
+          weeklyReport: { status: 'failed' as const, periodEnd: '2026-08-28', error: 'boom' },
+        },
+      }),
+    });
+    await scheduler.tick();
+    const recorded = await ctx.repos.workflowRun.findById('strategy-autonomy-weekly:2026-08-23');
+    expect(recorded?.status).toBe('partial');
+    expect(recorded?.outputSummary).toMatchObject({ weeklyReport: 'failed' });
+    scheduler.stop();
+  });
 });

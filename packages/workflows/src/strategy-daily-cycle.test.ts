@@ -16,8 +16,9 @@ const NOW = new Date('2026-08-10T10:00:00.000Z');
 
 const seedSchedule = async (
   ctx: ToolContext,
-  options: { readonly withSignal?: boolean } = {},
+  options: { readonly withSignal?: boolean; readonly key?: string } = {},
 ): Promise<void> => {
+  const key = options.key ?? 'cycle';
   await seedTestStockUniverse(ctx, { limit: 1, observedAt: NOW });
   const definition: StrategyDslV1 = {
     schemaVersion: 1,
@@ -45,8 +46,8 @@ const seedSchedule = async (
     },
   };
   const version: StrategyVersion = {
-    id: 'cycle-v1',
-    strategyId: 'cycle-strategy',
+    id: `${key}-v1`,
+    strategyId: `${key}-strategy`,
     version: 1,
     definition,
     definitionHash: strategyDefinitionHash(definition),
@@ -56,7 +57,7 @@ const seedSchedule = async (
     createdAt: NOW,
   };
   await ctx.repos.strategy.create({
-    id: 'cycle-strategy',
+    id: `${key}-strategy`,
     name: '日循环故障矩阵',
     description: 'test',
     owner: 'user',
@@ -67,8 +68,8 @@ const seedSchedule = async (
   });
   await ctx.repos.strategy.createVersion(version);
   const schedule: StrategySchedule = {
-    id: 'cycle-schedule',
-    strategyId: 'cycle-strategy',
+    id: `${key}-schedule`,
+    strategyId: `${key}-strategy`,
     cron: '0 18 * * 1-5',
     timezone: 'Asia/Shanghai',
     enabled: true,
@@ -478,5 +479,135 @@ describe('strategy-daily-cycle reliability matrix', () => {
       reason: 'schedule-day-duplicate',
     });
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toHaveLength(1);
+  });
+
+  it('生产日运行完成后嵌套触发收盘报告；同日多个 schedule 各触发一次，报告按键 upsert 不报错', async () => {
+    const base = await buildTestContext({ clock: () => NOW });
+    const stockUniverse: StockUniverseManagerLike = {
+      name: 'stock-universe',
+      sources: ['test-source'],
+      fetchStockUniverse: async () => ({
+        source: 'test-source',
+        coverage: 'CN_A_SHARES_SH_SZ' as const,
+        observedAt: NOW,
+        complete: true,
+        reportedTotal: 1,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: '600519' as StockCode,
+            exchange: 'SH' as const,
+            name: '贵州茅台',
+            listingStatus: 'listed' as const,
+          },
+        ],
+      }),
+    };
+    const ctx: ToolContext = { ...base, adapters: { ...base.adapters, stockUniverse } };
+    await seedSchedule(ctx, { key: 'cycle-a' });
+    await seedSchedule(ctx, { key: 'cycle-b' });
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-reports', limit: 2, leaseMinutes: 5 },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items).toHaveLength(2);
+    for (const item of result.data.items) {
+      expect(item.runId).toBeDefined();
+      expect(item.status).not.toBe('failed');
+    }
+    // 两个 schedule 各触发一次 closing-report（两次 workflow 审计），
+    // save_report 按 kind|scope|period 逻辑键 upsert：同键报告只有一份，后触发覆盖。
+    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
+      2,
+    );
+    const reports = await ctx.repos.report.list({ kind: 'closing' });
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      kind: 'closing',
+      periodStart: '2026-08-10',
+      periodEnd: '2026-08-10',
+    });
+  });
+
+  it('收盘报告生成失败时本轮记 partial，不回滚已提交的 run', async () => {
+    const base = await buildTestContext({ clock: () => NOW });
+    const stockUniverse: StockUniverseManagerLike = {
+      name: 'stock-universe',
+      sources: ['test-source'],
+      fetchStockUniverse: async () => ({
+        source: 'test-source',
+        coverage: 'CN_A_SHARES_SH_SZ' as const,
+        observedAt: NOW,
+        complete: true,
+        reportedTotal: 1,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: '600519' as StockCode,
+            exchange: 'SH' as const,
+            name: '贵州茅台',
+            listingStatus: 'listed' as const,
+          },
+        ],
+      }),
+    };
+    await seedSchedule(base);
+    const reportRepo = base.repos.report;
+    const ctx: ToolContext = {
+      ...base,
+      adapters: { ...base.adapters, stockUniverse },
+      repos: {
+        ...base.repos,
+        report: {
+          upsertForPeriod: async () => {
+            throw new Error('report store unavailable');
+          },
+          findById: (...args: Parameters<typeof reportRepo.findById>) =>
+            reportRepo.findById(...args),
+          findByPeriod: (...args: Parameters<typeof reportRepo.findByPeriod>) =>
+            reportRepo.findByPeriod(...args),
+          list: (...args: Parameters<typeof reportRepo.list>) => reportRepo.list(...args),
+          setDeliveryStatus: (...args: Parameters<typeof reportRepo.setDeliveryStatus>) =>
+            reportRepo.setDeliveryStatus(...args),
+          remove: (...args: Parameters<typeof reportRepo.remove>) => reportRepo.remove(...args),
+        },
+      },
+    };
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-report-failure', leaseMinutes: 5 },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items[0]?.status).toBe('partial');
+    expect(result.data.items[0]?.reason).toContain('收盘复盘生成失败');
+    const runs = await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'complete', publication: { status: 'published' } });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+  });
+
+  it('显式历史 asOf 运行不触发收盘报告', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    await seedSchedule(ctx);
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-historical-no-report', asOf: NOW, leaseMinutes: 5 },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items[0]?.runId).toBeDefined();
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
+      0,
+    );
   });
 });
