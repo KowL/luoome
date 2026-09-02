@@ -6,6 +6,8 @@ import type {
   AnalyzeStockOutput,
   AnalyzeStrategyCandidateInput,
   AnalyzeStrategyCandidateOutput,
+  ArchiveStrategyInput,
+  ArchiveStrategyOutput,
   BatchQuoteInput,
   BatchQuoteOutput,
   CancelStrategyEvaluationSessionInput,
@@ -18,8 +20,10 @@ import type {
   ComputeIndicatorsOutput,
   CreateStrategyAutonomyActionInput,
   CreateStrategyAutonomyActionOutput,
+  CreateStrategyInput,
   CreateStrategyObservationCandidatesInput,
   CreateStrategyObservationCandidatesOutput,
+  CreateStrategyOutput,
   CreateStrategyVersionInput,
   CreateStrategyVersionOutput,
   DragonTigerListInput,
@@ -328,6 +332,13 @@ export interface WorkflowToolMap {
   // v0.3 新增：战法 + 通知 + 大盘观点 + outcome 回填
   readonly list_strategies: ToolAccessor<typeof ListStrategiesInput, typeof ListStrategiesOutput>;
   readonly pause_strategy: ToolAccessor<typeof PauseStrategyInput, typeof PauseStrategyOutput>;
+  /** M2 §9.1：归档 paused 策略（终态）；同时移除其调度配置。 */
+  readonly archive_strategy: ToolAccessor<
+    typeof ArchiveStrategyInput,
+    typeof ArchiveStrategyOutput
+  >;
+  /** M2 §9.2：AI 全新策略提议的落库入口（初始状态 draft，发布前无 schedule）。 */
+  readonly create_strategy: ToolAccessor<typeof CreateStrategyInput, typeof CreateStrategyOutput>;
   readonly publish_strategy_version: ToolAccessor<
     typeof PublishStrategyVersionInput,
     typeof PublishStrategyVersionOutput

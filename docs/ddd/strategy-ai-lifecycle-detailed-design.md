@@ -1,6 +1,6 @@
 # Strategy AI 生命周期管理详细设计（M2）
 
-> 状态：已实施（2026-09-02，M2-S0～S4 全部交付；实施偏差见 §8）
+> 状态：已实施（2026-09-02，M2-S0～S4 全部交付，实施偏差见 §8；§9 回补同日交付，实施记录见 §9.3）
 > 上位 PRD：[策略自动化与 AI 管理 PRD](../prd/strategy-ai-managed-automation.md) §6
 > 关联：[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、
 > [Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)
@@ -12,10 +12,11 @@ M2 让 AI 接管策略生命周期：提议版本（调参或创造新策略）�
 
 显式不做：
 
-- 自动归档：归档是生命周期退出语义，误操作成本高且暂停已覆盖"停止信号"的实际效果；
-  PRD §4.4 中"归档全自动"收敛为 M2 只自动暂停，归档保留人工（PRD 偏差，已确认可接受时再回补）。
 - 自动 resume：自动暂停的策略只能人工恢复，防止暂停/恢复震荡。
 - 盘中触发、组合权重编排、运维自愈（均为 PRD 非目标）。
+
+（历史说明：M2-S0～S4 曾把「自动归档」与「AI 创造全新策略」列为显式不做；两者经用户确认后
+按 §9 回补并于 2026-09-02 交付。）
 
 ## 2. 领域实体：StrategyAutonomyAction
 
@@ -172,3 +173,70 @@ M2-S0～S4 全部交付，相对上文设计的实际偏差：
   策略的新版本），两者均为待用户确认的后续切片。
 - 验收：vitest 1789 / test:db 365 / test:web 401 全绿，typecheck、lint 通过；Web 时间线与
   blocked 确认/否决经真实浏览器验收。
+
+## 9. 回补设计（2026-09-02，用户确认后冻结）
+
+### 9.1 自动归档
+
+只针对"自治暂停后持续无起色"的策略，不直接归档 active 策略：
+
+| 条件 | 阈值（冻结） |
+|---|---|
+| 当前状态 | status=paused 且 owner=user |
+| 暂停来源 | 最近一次 kind=pause 的自治 action 由本系统产生（trigger=weekly-review） |
+| 暂停时长 | 距今 ≥ 28 个自然日 |
+| 观察统计 | 仍满足 §3.1 暂停阈值全部条件（样本/覆盖/均值/中位数） |
+
+执行：新增 `archive_strategy` write tool（包装既有 repository `archive(id, at)`；builtin 拒绝），
+落 kind=archive 的 action（status 创建即 executed；ruleSnapshot 在 pause 五 key 基础上加
+`pausedSinceDays`）。归档为终态，无自动恢复；用户只可人工复制重建。归档后调度不再运行该策略
+（实现时确认 claim 只覆盖 active 策略的 schedule，若不是则一并收口）。
+
+### 9.2 AI 创造全新策略
+
+提议步骤扩展：AI 除调参外可返回"全新策略提议"（name + description + definition）。链路：
+
+```text
+create_strategy（owner=user）→ create_strategy_version → validate（valid 才继续）
+→ action(propose-version, strategyId=新策略) → evaluation session
+→ 首发门禁（见下）→ 自动 publish
+```
+
+首发门禁（core 新增 `assessStrategyInitialPublication` 纯函数，复用晋级门阈值）：候选版本
+valid 且未发布 + 验证 session complete + ≥20 验证交易日 + vintage 覆盖 1.0 + ≥30 完整观察 +
+benchmark 覆盖 ≥0.9；不检查 base/parent/diff（新策略无基线）。门禁不过 → blocked 进人工队列，
+语义与版本晋级一致。
+
+限额与防膨胀：每周最多 1 个全新策略提议；新策略首个版本发布前其 schedule 不存在，不产生
+生产信号（发布后才可配置调度）；draft 状态策略不参与自动暂停/归档判定。
+
+### 9.3 实施记录（2026-09-02）
+
+§9.1/§9.2 同日交付，相对设计的实际偏差与落地细节：
+
+- **evaluation-scope 不变量再次放宽**：M2-S0 已允许 evaluation scope 绑定未发布 valid 版本；
+  本次为支持新策略（draft）首发前的独立验证，`run_strategy` 与双仓储的 run 绑定判定进一步允许
+  「draft Strategy + evaluation scope」的持久化 run。operational 语义不变（仍要求 active +
+  published valid），draft 策略无 schedule、不产生生产信号，有 contract test 钉住。
+- **claim 收口结论**：`claim_due_strategy_schedules` 只按 schedule 到期抢占、不感知策略状态
+  （非 active 仅标记 eligible=false 跳过），因此若 archived 策略残留 schedule 会被反复空抢占。
+  收口方式：`archive_strategy` 归档时同步 `strategySchedule.removeByStrategyId` 移除调度配置。
+- **create_strategy 初始状态**：沿用既有 draft；发布前不可配置 schedule
+  （`set_strategy_schedule` 要求 active 且已发布），operational run 对 draft 拒绝，
+  因此新策略首发前不产生生产信号。
+- **首发门禁 reasons 设计**：`assessStrategyInitialPublication` 复用晋级门枚举的证据类子集
+  （candidate-version-missing / candidate-already-published / candidate-not-valid /
+  validation-session-missing / validation-version-mismatch / validation-not-complete /
+  validation-days-insufficient / pit-vintage-coverage-insufficient / observations-insufficient /
+  benchmark-coverage-insufficient），不出现 base/parent/diff 类 reason；输出沿用
+  StrategyPromotionAssessment 结构（blocked | eligible-for-human-review）。
+- **全新策略限额判定**：每周全局限额按 7 天内 propose-version 动作的
+  ruleSnapshot.proposalKind='new-strategy' 标记计数（持久事实，跨周次有效；failed 动作也占限额）。
+- **「自治暂停」的判定**：trigger 枚举目前只有 weekly-review，人工暂停（pause_strategy tool）
+  不落 pause 动作，因此「无自治 pause 动作」即视为人工暂停、不参与归档。已知边界：自治暂停后
+  人工 resume 再人工暂停的序列会以最近一次自治 pause 的 createdAt 计时（接受，记录在案）。
+- **门禁复核的指标装配**：首发门禁复用 `get_strategy_experiment_context` 的 promotion 指标
+  （validationTradingDays/vintageCoverageRatio/completeObservationCount/benchmarkCoverageRatio），
+  只替换判定函数，不新增装配路径。
+- **Web UI 未动**：kind=archive 动作在工作台时间线按原始 key 展示（标签映射未新增），
+  周报标签已补「自动归档」。

@@ -592,6 +592,7 @@ const strategyReviewWeekSection = async (
 
 const AUTONOMY_KIND_LABELS: Record<string, string> = {
   pause: '自动暂停',
+  archive: '自动归档',
   'propose-version': '提议版本',
   'publish-version': '发布版本',
 };

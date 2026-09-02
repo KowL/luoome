@@ -14,6 +14,7 @@ const emptyOutput = (): StrategyAutonomyWeeklyOutputT => ({
   paused: 0,
   failed: 0,
   items: [],
+  archive: { evaluated: 0, archived: 0, failed: 0, items: [] },
   proposals: { evaluated: 0, validating: 0, skipped: 0, failed: 0, items: [] },
   validation: { evaluated: 0, advanced: 0, incomplete: 0, failed: 0, items: [] },
   promotion: { evaluated: 0, published: 0, blocked: 0, retry: 0, pending: 0, failed: 0, items: [] },

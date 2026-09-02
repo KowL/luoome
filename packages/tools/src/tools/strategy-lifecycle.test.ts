@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
 import { runStrategyTool } from './run-strategy.js';
 import {
+  archiveStrategyTool,
   createStrategyTool,
   createStrategyVersionTool,
   deleteStrategyTool,
@@ -360,5 +361,42 @@ describe('Strategy lifecycle tools', () => {
     const deleted = await deleteStrategyTool.execute({ strategyId: 'referenced-strategy' }, ctx);
     expect(deleted.ok).toBe(false);
     expect(await ctx.repos.strategy.findById('referenced-strategy')).not.toBeNull();
+  });
+
+  it('archive_strategy 只归档 paused 的用户 Strategy，并移除其调度配置', async () => {
+    const ctx = await buildTestContext();
+    await createStrategyTool.execute(
+      { id: 'archive-me', name: '待归档策略', description: '验证归档' },
+      ctx,
+    );
+    // draft 不可归档
+    const draftArchive = await archiveStrategyTool.execute({ strategyId: 'archive-me' }, ctx);
+    expect(draftArchive).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+
+    const version = await createStrategyVersionTool.execute(
+      { strategyId: 'archive-me', definition: validDefinition() },
+      ctx,
+    );
+    expect(version.ok).toBe(true);
+    if (!version.ok) return;
+    await validateStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
+    await publishStrategyVersionTool.execute({ versionId: version.data.version.id }, ctx);
+    await setStrategyScheduleTool.execute({ strategyId: 'archive-me', cron: '0 18 * * 1-5' }, ctx);
+    // active 不可归档
+    const activeArchive = await archiveStrategyTool.execute({ strategyId: 'archive-me' }, ctx);
+    expect(activeArchive).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+
+    await pauseStrategyTool.execute({ strategyId: 'archive-me' }, ctx);
+    const archived = await archiveStrategyTool.execute({ strategyId: 'archive-me' }, ctx);
+    expect(archived.ok).toBe(true);
+    if (!archived.ok) return;
+    expect(archived.data.strategy.status).toBe('archived');
+    // 归档为终态：重复归档拒绝，调度配置已被移除（归档后不再被 claim）
+    const again = await archiveStrategyTool.execute({ strategyId: 'archive-me' }, ctx);
+    expect(again).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+    expect(await ctx.repos.strategySchedule.findByStrategyId('archive-me')).toBeNull();
+
+    const missing = await archiveStrategyTool.execute({ strategyId: 'missing' }, ctx);
+    expect(missing).toMatchObject({ ok: false, error: { kind: 'not_found' } });
   });
 });

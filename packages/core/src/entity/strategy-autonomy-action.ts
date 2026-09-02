@@ -6,6 +6,7 @@ export const StrategyAutonomyActionKindSchema = z.enum([
   'propose-version',
   'publish-version',
   'pause',
+  'archive',
 ]);
 export type StrategyAutonomyActionKind = z.infer<typeof StrategyAutonomyActionKindSchema>;
 
@@ -75,10 +76,19 @@ export const STRATEGY_AUTONOMY_PAUSE_SNAPSHOT_REQUIRED_KEYS = [
 ] as const;
 
 /**
- * Strategy 自主管理动作（提议 / 发布 / 暂停）的持久化审计实体（M2-S0）。
+ * kind=archive 的 ruleSnapshot 在 pause 五 key 基础上加 pausedSinceDays
+ * （docs/ddd/strategy-ai-lifecycle-detailed-design.md §9.1）。
+ */
+export const STRATEGY_AUTONOMY_ARCHIVE_SNAPSHOT_REQUIRED_KEYS = [
+  ...STRATEGY_AUTONOMY_PAUSE_SNAPSHOT_REQUIRED_KEYS,
+  'pausedSinceDays',
+] as const;
+
+/**
+ * Strategy 自主管理动作（提议 / 发布 / 暂停 / 归档）的持久化审计实体（M2-S0）。
  *
  * publish-version 不独立创建：它由 propose-version 的 eligible→published 转移记录，
- * 因此 status 恒为 published；pause 创建即终态（executed）。
+ * 因此 status 恒为 published；pause 与 archive 创建即终态（executed）。
  */
 export const StrategyAutonomyActionSchema = z.object({
   id: z.string().min(1),
@@ -146,21 +156,25 @@ export const assertStrategyAutonomyActionInvariants = (action: StrategyAutonomyA
       );
     }
   }
-  if (action.kind === 'pause' && action.status !== 'executed') {
-    throw new InvariantError('pause 创建即终态，status 必须为 executed');
+  if (action.kind === 'pause' || action.kind === 'archive') {
+    if (action.status !== 'executed') {
+      throw new InvariantError(`${action.kind} 创建即终态，status 必须为 executed`);
+    }
   }
-  if (action.kind === 'publish-version' || action.kind === 'pause') {
+  if (action.kind === 'publish-version' || action.kind === 'pause' || action.kind === 'archive') {
     if (action.ruleSnapshot === undefined) {
       throw new InvariantError(`${action.kind} 必须携带触发时的 ruleSnapshot`);
     }
   }
-  if (action.kind === 'pause') {
-    const missing = STRATEGY_AUTONOMY_PAUSE_SNAPSHOT_REQUIRED_KEYS.filter(
-      (key) => action.ruleSnapshot?.[key] === undefined,
-    );
+  if (action.kind === 'pause' || action.kind === 'archive') {
+    const requiredKeys =
+      action.kind === 'archive'
+        ? STRATEGY_AUTONOMY_ARCHIVE_SNAPSHOT_REQUIRED_KEYS
+        : STRATEGY_AUTONOMY_PAUSE_SNAPSHOT_REQUIRED_KEYS;
+    const missing = requiredKeys.filter((key) => action.ruleSnapshot?.[key] === undefined);
     if (missing.length > 0) {
       throw new InvariantError(
-        `pause 的 ruleSnapshot 必须包含完整指标与阈值，缺少：${missing.join(', ')}`,
+        `${action.kind} 的 ruleSnapshot 必须包含完整指标与阈值，缺少：${missing.join(', ')}`,
       );
     }
   }

@@ -1,4 +1,5 @@
 import {
+  buildStrategySchedule,
   money,
   type StrategyAutonomyAction,
   type StrategyDslV1,
@@ -191,6 +192,25 @@ const existingProposeAction = (
   attempts: 0,
   createdAt,
   updatedAt: createdAt,
+});
+
+/** 模块级 validating 动作 fixture（默认 8 天前创建，避开 7 天提议冷却窗口）。 */
+const validatingActionFixture = (
+  strategyId: string,
+  overrides: Partial<StrategyAutonomyAction> = {},
+): StrategyAutonomyAction => ({
+  id: `${strategyId}-propose-validating`,
+  kind: 'propose-version',
+  status: 'validating',
+  strategyId,
+  strategyVersionId: `${strategyId}:v2`,
+  evaluationSessionId: `${strategyId}-session`,
+  trigger: 'weekly-review',
+  factReferences: [],
+  attempts: 0,
+  createdAt: new Date(now.getTime() - 8 * 86_400_000),
+  updatedAt: new Date(now.getTime() - 8 * 86_400_000),
+  ...overrides,
 });
 
 /** 与 FakeLLMAdapter strategy_version_proposal 默认输出一致：基线规则 when 追加收敛条件。 */
@@ -1045,5 +1065,455 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
     expect(action?.completedAt).toBeDefined();
     const strategy = await ctx.repos.strategy.findById('strategy-republish');
     expect(strategy?.currentVersionId).toBe('strategy-republish:v2');
+  });
+});
+
+describe('strategy-autonomy-weekly · 自动归档（§9.1）', () => {
+  const DAY = 86_400_000;
+
+  const seedPausedStrategy = async (
+    ctx: ToolContext,
+    options: SeedOptions & { readonly pausedDaysAgo: number },
+  ): Promise<void> => {
+    await seedActiveStrategy(ctx, options);
+    const pausedAt = new Date(now.getTime() - options.pausedDaysAgo * DAY);
+    await ctx.repos.strategy.pause(options.id, pausedAt);
+  };
+
+  it('自治暂停满 28 天且统计仍命中阈值 → 归档为终态并落 kind=archive 动作', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedPausedStrategy(ctx, {
+      id: 'strategy-stale',
+      name: '长期跑输策略',
+      samples: 20,
+      pausedDaysAgo: 35,
+    });
+    const pausedAt = new Date(now.getTime() - 35 * DAY);
+    await ctx.repos.strategyAutonomyAction.save(existingPauseAction('strategy-stale', pausedAt));
+    await ctx.repos.strategySchedule.save(
+      buildStrategySchedule({
+        strategyId: 'strategy-stale',
+        cron: '0 18 * * 1-5',
+        timezone: 'Asia/Shanghai',
+        enabled: true,
+        now,
+      }),
+    );
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.archive).toMatchObject({ evaluated: 1, archived: 1, failed: 0 });
+    expect(result.data.archive.items[0]).toMatchObject({
+      strategyId: 'strategy-stale',
+      decision: 'archived',
+    });
+    const strategy = await ctx.repos.strategy.findById('strategy-stale');
+    expect(strategy?.status).toBe('archived');
+    // 收口：归档后调度配置被移除，claim 不再抢占该策略
+    expect(await ctx.repos.strategySchedule.findByStrategyId('strategy-stale')).toBeNull();
+    const actions = await ctx.repos.strategyAutonomyAction.list({
+      strategyId: 'strategy-stale',
+      kind: 'archive',
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      kind: 'archive',
+      status: 'executed',
+      trigger: 'weekly-review',
+    });
+    expect(actions[0]?.completedAt).toBeDefined();
+    expect(actions[0]?.ruleSnapshot).toMatchObject({
+      sampleCount: 20,
+      benchmarkCoverage: 1,
+      pausedSinceDays: 35,
+    });
+    const archiveThresholds = actions[0]?.ruleSnapshot?.thresholds as
+      | Record<string, unknown>
+      | undefined;
+    expect(archiveThresholds?.minPausedDays).toBe(28);
+    expect(actions[0]?.factReferences).toContain(
+      'strategy-autonomy-action:strategy-stale-pause-history',
+    );
+  });
+
+  it('自治暂停未满 28 天不动', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedPausedStrategy(ctx, {
+      id: 'strategy-recent',
+      name: '近期暂停策略',
+      samples: 20,
+      pausedDaysAgo: 10,
+    });
+    await ctx.repos.strategyAutonomyAction.save(
+      existingPauseAction('strategy-recent', new Date(now.getTime() - 10 * DAY)),
+    );
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.archive).toMatchObject({ evaluated: 1, archived: 0, failed: 0 });
+    expect(result.data.archive.items[0]?.decision).toBe('kept');
+    expect(result.data.archive.items[0]?.reasons.join()).toContain('未满');
+    expect((await ctx.repos.strategy.findById('strategy-recent'))?.status).toBe('paused');
+    expect(
+      await ctx.repos.strategyAutonomyAction.list({
+        strategyId: 'strategy-recent',
+        kind: 'archive',
+      }),
+    ).toEqual([]);
+  });
+
+  it('统计已恢复（超额转正）不归档', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedPausedStrategy(ctx, {
+      id: 'strategy-recovered',
+      name: '统计恢复策略',
+      samples: 20,
+      excess: 0.03,
+      pausedDaysAgo: 40,
+    });
+    await ctx.repos.strategyAutonomyAction.save(
+      existingPauseAction('strategy-recovered', new Date(now.getTime() - 40 * DAY)),
+    );
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.archive.items[0]?.decision).toBe('kept');
+    expect(result.data.archive.items[0]?.reasons.join()).toContain('不再满足归档条件');
+    expect((await ctx.repos.strategy.findById('strategy-recovered'))?.status).toBe('paused');
+  });
+
+  it('人工暂停（无自治 pause 动作）不参与自动归档', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedPausedStrategy(ctx, {
+      id: 'strategy-manual',
+      name: '人工暂停策略',
+      samples: 20,
+      pausedDaysAgo: 60,
+    });
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.archive.items[0]?.decision).toBe('kept');
+    expect(result.data.archive.items[0]?.reasons.join()).toContain('人工暂停');
+    expect((await ctx.repos.strategy.findById('strategy-manual'))?.status).toBe('paused');
+  });
+});
+
+describe('strategy-autonomy-weekly · AI 全新策略（§9.2）', () => {
+  const DAY = 86_400_000;
+
+  it('全新策略提议全链：create_strategy → 首版本 → 校验 → 验证 session → 动作', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedActiveStrategy(ctx, {
+      id: 'strategy-inspire',
+      name: '启发策略',
+      samples: 10,
+      description: 'proposal-fixture:new-strategy',
+    });
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const item = result.data.proposals.items.find(
+      (entry) => entry.strategyId !== 'strategy-inspire',
+    );
+    expect(item).toMatchObject({ decision: 'validating', proposalProvider: 'fake-llm' });
+    const newId = item?.strategyId ?? '';
+    const created = await ctx.repos.strategy.findById(newId);
+    expect(created).toMatchObject({ name: 'fixture 全新策略', owner: 'user' });
+    const versions = await ctx.repos.strategy.listVersions(newId);
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ version: 1, validationStatus: 'valid' });
+    expect(versions[0]?.parentVersionId).toBeUndefined();
+    const actions = await ctx.repos.strategyAutonomyAction.list({
+      strategyId: newId,
+      kind: 'propose-version',
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.ruleSnapshot).toMatchObject({ proposalKind: 'new-strategy' });
+    expect(actions[0]?.ruleSnapshot?.baseVersionId).toBeUndefined();
+    const session = await ctx.repos.strategyEvaluation.findSessionById(
+      actions[0]?.evaluationSessionId ?? '',
+    );
+    expect(session).toMatchObject({ strategyId: newId, strategyVersionId: versions[0]?.id });
+    // 同周期推进验证（draft 策略的 evaluation run 允许持久化）；fixture 缺 PIT vintage，
+    // 首发门禁拦截进人工队列，策略保持 draft、未发布、无 schedule。
+    expect(session?.status).toBe('complete');
+    expect(actions[0]?.status).toBe('blocked');
+    expect(actions[0]?.lastError).toContain('pit-vintage-coverage-insufficient');
+    expect(created?.status).toBe('draft');
+    expect(created?.currentVersionId).toBeUndefined();
+    expect(await ctx.repos.strategySchedule.findByStrategyId(newId)).toBeNull();
+    // 30 天窗口的逐日 replay 推进在并行全量运行时可能超过默认 5s 超时。
+  }, 30_000);
+
+  it('全新策略提议全局限额：本周已有 new-strategy 动作则跳过', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedActiveStrategy(ctx, {
+      id: 'strategy-quota',
+      name: '限额策略',
+      samples: 10,
+      description: 'proposal-fixture:new-strategy',
+    });
+    // 本周已存在一个全新策略提议动作（failed 终态也占限额）。
+    await ctx.repos.strategyAutonomyAction.save({
+      ...existingProposeAction(
+        'strategy-earlier',
+        'strategy-earlier:v1',
+        new Date(now.getTime() - 3 * DAY),
+      ),
+      status: 'failed',
+      lastError: '校验未通过',
+      completedAt: new Date(now.getTime() - 3 * DAY),
+      ruleSnapshot: { proposalKind: 'new-strategy' },
+    });
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const item = result.data.proposals.items.find((entry) => entry.strategyId === 'strategy-quota');
+    expect(item?.decision).toBe('skipped');
+    expect(item?.reasons.join()).toContain('全局限额');
+    // 没有创建任何新策略
+    expect((await ctx.repos.strategy.list()).map((strategy) => strategy.id)).toEqual([
+      'strategy-quota',
+    ]);
+  });
+
+  it('首发门禁通过 → 自动 publish，新策略从 draft 变 active', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    // AI 创造的新策略：draft 状态、单个未发布 valid 版本、无基线。
+    await ctx.repos.strategy.create({
+      id: 'strategy-first',
+      name: '首发策略',
+      description: '首发门禁通过测试',
+      owner: 'user',
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.strategy.createVersion({
+      id: 'strategy-first:v1',
+      strategyId: 'strategy-first',
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      createdAt: now,
+    });
+    const sessionId = 'strategy-first-session';
+    const from = new Date('2026-08-03T00:00:00.000Z');
+    const to = new Date('2026-08-31T00:00:00.000Z');
+    await ctx.repos.strategyEvaluation.saveSession({
+      id: sessionId,
+      strategyId: 'strategy-first',
+      strategyVersionId: 'strategy-first:v1',
+      from,
+      to,
+      status: 'complete',
+      definitionHash: strategyDefinitionHash(definition),
+      createdAt: new Date(now.getTime() - 8 * DAY),
+      finishedAt: new Date(now.getTime() - DAY),
+    });
+    const days: Date[] = [];
+    for (let t = from.getTime(); t <= to.getTime(); t += DAY) {
+      const day = new Date(t);
+      const dow = day.getUTCDay();
+      if (dow !== 0 && dow !== 6) days.push(day);
+    }
+    expect(days.length).toBeGreaterThanOrEqual(20);
+    const evalRunId = 'strategy-first-eval-run';
+    for (const [index, day] of days.entries()) {
+      await ctx.repos.strategyEvaluation.saveDay({
+        sessionId,
+        dataAsOf: day,
+        status: 'complete',
+        vintageStatus: 'available',
+        ...(index === 0 ? { runId: evalRunId } : {}),
+      });
+    }
+    const stockIds = Array.from(
+      { length: 30 },
+      (_, index) => `62${String(index).padStart(4, '0')}.SH`,
+    );
+    await ctx.repos.strategyRun.commitRun({
+      run: {
+        id: evalRunId,
+        strategyId: 'strategy-first',
+        strategyVersionId: 'strategy-first:v1',
+        mode: 'replay',
+        scope: 'evaluation',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        dataAsOf: baselineAt,
+        startedAt: baselineAt,
+        finishedAt: baselineAt,
+        status: 'complete',
+        inputSnapshot: {},
+        providerStatuses: [],
+        summary: {
+          schemaVersion: 3,
+          dataHealth: 'complete',
+          universeCount: stockIds.length,
+          evaluatedCount: stockIds.length,
+          selectedCount: stockIds.length,
+          signalCount: stockIds.length,
+          incompleteCount: 0,
+          failedCount: 0,
+          failureSamples: [],
+        },
+      },
+      results: stockIds.map((stockId, index) => ({
+        runId: evalRunId,
+        stockId,
+        selected: true,
+        score: 80,
+        rank: index + 1,
+        ruleEvaluations: [],
+        evidence: ['命中'],
+        dataAsOf: baselineAt,
+      })),
+      signals: stockIds.map((stockId, index) => ({
+        id: `strategy-first-eval-signal-${index}`,
+        strategyId: 'strategy-first',
+        strategyVersionId: 'strategy-first:v1',
+        runId: evalRunId,
+        ruleId: 'quality',
+        stockId,
+        ts: baselineAt,
+        score: 80,
+        direction: 'bullish' as const,
+        evidence: ['命中'],
+        evaluationSnapshot: {},
+      })),
+    });
+    for (const [index, stockId] of stockIds.entries()) {
+      await ctx.repos.signalObservation.save({
+        id: `strategy-first-observation-${index}`,
+        sourceKind: 'strategy-signal',
+        sourceId: `strategy-first-eval-signal-${index}`,
+        stockId,
+        baselinePrice: money(100),
+        baselineAt,
+        horizon: 't5',
+        closePrice: money(105),
+        returnPct: 0.05,
+        maxFavorableExcursionPct: 0.06,
+        maxAdverseExcursionPct: -0.01,
+        benchmarkReturnPct: 0.01,
+        benchmarkStatus: 'complete',
+        status: 'complete',
+        provenance: { provider: 'fixture', observedAt, fetchedAt: now, freshness: 'fresh' },
+        observedAt,
+      });
+    }
+    await ctx.repos.strategyAutonomyAction.save(
+      validatingActionFixture('strategy-first', {
+        strategyVersionId: 'strategy-first:v1',
+      }),
+    );
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.promotion).toMatchObject({ evaluated: 1, published: 1, blocked: 0 });
+    expect(result.data.promotion.items[0]).toMatchObject({ decision: 'published' });
+    const action = await ctx.repos.strategyAutonomyAction.findById(
+      'strategy-first-propose-validating',
+    );
+    expect(action?.status).toBe('published');
+    const strategy = await ctx.repos.strategy.findById('strategy-first');
+    expect(strategy).toMatchObject({ status: 'active', currentVersionId: 'strategy-first:v1' });
+    const version = await ctx.repos.strategy.findVersionById('strategy-first:v1');
+    expect(version?.publishedAt).toBeDefined();
+  });
+
+  it('首发门禁未通过（观察不足）→ blocked 进人工队列，新策略保持 draft 未发布', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await ctx.repos.strategy.create({
+      id: 'strategy-first-blocked',
+      name: '首发拦截策略',
+      description: '首发门禁拦截测试',
+      owner: 'user',
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.strategy.createVersion({
+      id: 'strategy-first-blocked:v1',
+      strategyId: 'strategy-first-blocked',
+      version: 1,
+      definition,
+      definitionHash: strategyDefinitionHash(definition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      createdAt: now,
+    });
+    const sessionId = 'strategy-first-blocked-session';
+    const from = new Date('2026-08-03T00:00:00.000Z');
+    const to = new Date('2026-08-31T00:00:00.000Z');
+    await ctx.repos.strategyEvaluation.saveSession({
+      id: sessionId,
+      strategyId: 'strategy-first-blocked',
+      strategyVersionId: 'strategy-first-blocked:v1',
+      from,
+      to,
+      status: 'complete',
+      definitionHash: strategyDefinitionHash(definition),
+      createdAt: new Date(now.getTime() - 8 * DAY),
+      finishedAt: new Date(now.getTime() - DAY),
+    });
+    for (let t = from.getTime(); t <= to.getTime(); t += DAY) {
+      const day = new Date(t);
+      const dow = day.getUTCDay();
+      if (dow === 0 || dow === 6) continue;
+      await ctx.repos.strategyEvaluation.saveDay({
+        sessionId,
+        dataAsOf: day,
+        status: 'complete',
+        vintageStatus: 'available',
+      });
+    }
+    await ctx.repos.strategyAutonomyAction.save(
+      validatingActionFixture('strategy-first-blocked', {
+        strategyVersionId: 'strategy-first-blocked:v1',
+      }),
+    );
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.promotion).toMatchObject({ evaluated: 1, blocked: 1, published: 0 });
+    expect(result.data.promotion.items[0]?.decision).toBe('blocked');
+    // 首发门禁不查 base/parent/diff：reasons 只含证据类条目
+    expect(result.data.promotion.items[0]?.reasons).toContain('observations-insufficient');
+    expect(result.data.promotion.items[0]?.reasons).not.toContain('base-version-missing');
+    const action = await ctx.repos.strategyAutonomyAction.findById(
+      'strategy-first-blocked-propose-validating',
+    );
+    expect(action?.status).toBe('blocked');
+    const strategy = await ctx.repos.strategy.findById('strategy-first-blocked');
+    expect(strategy).toMatchObject({ status: 'draft' });
+    expect(strategy?.currentVersionId).toBeUndefined();
   });
 });

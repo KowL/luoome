@@ -2112,6 +2112,34 @@ export const registerRepositoryContractTests = (
         });
       });
 
+      it('archive 只允许 paused 的用户 Strategy，归档为终态（M2 §9.1）', async () => {
+        await repos.strategy.create(makeStrategy('strategy-1'));
+        // draft 不可归档
+        await expect(repos.strategy.archive('strategy-1', T1)).rejects.toThrow(InvariantError);
+        const version = makeStrategyVersion('strategy-1');
+        await repos.strategy.createVersion(version);
+        await repos.strategy.activateVersion('strategy-1', version.id, T1);
+        // active 不可归档
+        await expect(repos.strategy.archive('strategy-1', T2)).rejects.toThrow(InvariantError);
+        await repos.strategy.pause('strategy-1', T2);
+        await repos.strategy.archive('strategy-1', T3);
+        expect(await repos.strategy.findById('strategy-1')).toMatchObject({
+          status: 'archived',
+          updatedAt: T3,
+        });
+        // archived 是终态：不可再次归档、不可恢复
+        await expect(repos.strategy.archive('strategy-1', T3)).rejects.toThrow(InvariantError);
+        await expect(repos.strategy.resume('strategy-1', T3)).rejects.toThrow(InvariantError);
+        // builtin 不可归档；不存在的 id 拒绝
+        await repos.strategy.create(
+          makeStrategy('strategy-builtin', { owner: 'builtin', status: 'paused' }),
+        );
+        await expect(repos.strategy.archive('strategy-builtin', T3)).rejects.toThrow(
+          InvariantError,
+        );
+        await expect(repos.strategy.archive('missing', T3)).rejects.toThrow(InvariantError);
+      });
+
       it('remove 删除 Strategy 身份与全部版本', async () => {
         await repos.strategy.create(makeStrategy('strategy-remove'));
         await repos.strategy.createVersion(makeStrategyVersion('strategy-remove'));
@@ -2591,6 +2619,52 @@ export const registerRepositoryContractTests = (
         await expect(repos.strategyRun.saveStartedRun(startedOperational)).rejects.toThrow(
           'StrategyRun 必须绑定 active Strategy 的 published valid version',
         );
+      });
+
+      it('draft Strategy 只允许 evaluation scope 的持久化 run（M2 §9.2 新策略首发验证）', async () => {
+        await repos.strategy.create(makeStrategy('strategy-new'));
+        const version = makeStrategyVersion('strategy-new', 1, {
+          id: 'strategy-new-v1',
+          publishedAt: undefined,
+        });
+        await repos.strategy.createVersion(version);
+
+        // 新策略首发前的独立验证：draft + evaluation scope 允许（非发布验证证据）。
+        const evaluationRun = makeStrategyRun('run-new-evaluation', {
+          strategyId: 'strategy-new',
+          strategyVersionId: version.id,
+          scope: 'evaluation',
+          publication: {
+            status: 'non-publishing',
+            reasons: ['evaluation-scope'],
+            decidedAt: T2,
+          },
+        });
+        await repos.strategyRun.commitRun({ run: evaluationRun, results: [], signals: [] });
+        expect(await repos.strategyRun.findRunById(evaluationRun.id)).toEqual(evaluationRun);
+
+        const startedEvaluation = makeStrategyRun('run-new-evaluation-started', {
+          strategyId: 'strategy-new',
+          strategyVersionId: version.id,
+          scope: 'evaluation',
+          status: 'running',
+          finishedAt: undefined,
+          summary: undefined,
+        });
+        await repos.strategyRun.saveStartedRun(startedEvaluation);
+        expect(await repos.strategyRun.findRunById(startedEvaluation.id)).toEqual(
+          startedEvaluation,
+        );
+
+        // operational run 仍拒绝 draft Strategy（生产信号保护不变）。
+        const operationalRun = makeStrategyRun('run-new-operational', {
+          strategyId: 'strategy-new',
+          strategyVersionId: version.id,
+          scope: 'operational',
+        });
+        await expect(
+          repos.strategyRun.commitRun({ run: operationalRun, results: [], signals: [] }),
+        ).rejects.toThrow('StrategyRun 必须绑定 active Strategy 的 published valid version');
       });
 
       it('commitRun 原子写入后 results 按 rank/stock 排序', async () => {

@@ -16,23 +16,50 @@ export const GenerateStrategyVersionProposalInput = z.object({
   windowDays: z.number().int().min(7).max(180).default(30),
 });
 
-/** AI 提议的结构化输出：定义必须过 StrategyDslV1Schema，未知字段在 validate 阶段拒绝。 */
-export const StrategyVersionProposalSchema = z.object({
-  definition: StrategyDslV1Schema,
-  changeSummary: z.string().min(1).max(500),
-  factReferences: z.array(z.string().min(1).max(200)).min(1).max(50),
-});
+/**
+ * AI 提议的结构化输出（DDD §9.2）：definition 必须过 StrategyDslV1Schema，未知字段在
+ * validate 阶段拒绝。kind=parameter-tuning 为对基线的调参提议；kind=new-strategy 为
+ * 全新策略提议（附 name/description/完整 definition，每周全局限额由 workflow 执行）。
+ */
+export const StrategyVersionProposalSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('parameter-tuning'),
+    definition: StrategyDslV1Schema,
+    changeSummary: z.string().min(1).max(500),
+    factReferences: z.array(z.string().min(1).max(200)).min(1).max(50),
+  }),
+  z.object({
+    kind: z.literal('new-strategy'),
+    name: z.string().min(1).max(80),
+    description: z.string().min(1).max(1000),
+    definition: StrategyDslV1Schema,
+    changeSummary: z.string().min(1).max(500),
+    factReferences: z.array(z.string().min(1).max(200)).min(1).max(50),
+  }),
+]);
 
 export const GenerateStrategyVersionProposalOutput = z.discriminatedUnion('proposed', [
   z.object({
     proposed: z.literal(true),
     provider: z.string().min(1),
-    proposal: z.object({
-      definition: StrategyDslV1Schema,
-      definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
-      changeSummary: z.string().min(1).max(500),
-      factReferences: z.array(z.string().min(1).max(200)).min(1).max(50),
-    }),
+    proposal: z.discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('parameter-tuning'),
+        definition: StrategyDslV1Schema,
+        definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
+        changeSummary: z.string().min(1).max(500),
+        factReferences: z.array(z.string().min(1).max(200)).min(1).max(50),
+      }),
+      z.object({
+        kind: z.literal('new-strategy'),
+        name: z.string().min(1).max(80),
+        description: z.string().min(1).max(1000),
+        definition: StrategyDslV1Schema,
+        definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
+        changeSummary: z.string().min(1).max(500),
+        factReferences: z.array(z.string().min(1).max(200)).min(1).max(50),
+      }),
+    ]),
   }),
   z.object({
     proposed: z.literal(false),
@@ -44,8 +71,10 @@ export const GenerateStrategyVersionProposalOutput = z.discriminatedUnion('propo
 ]);
 
 const PROPOSAL_RULES =
-  '只基于 data.baseVersion.definition 做调参式修改（调整阈值/增删规则），不创造全新策略；' +
-  'definition 必须与基线有实质差异；expression 只能使用 data.dslFields 列出的白名单字段路径与比较/逻辑运算符；' +
+  '默认基于 data.baseVersion.definition 做调参式修改（kind=parameter-tuning：调整阈值/增删规则），' +
+  'definition 必须与基线有实质差异；' +
+  '只有当事实证据指向与基线无关的全新机会时才返回 kind=new-strategy（附 name/description/完整 definition）；' +
+  'expression 只能使用 data.dslFields 列出的白名单字段路径与比较/逻辑运算符；' +
   'factReferences 只能引用 data.facts 中存在的 fact id；changeSummary 用一句话说明假设与风险，不得给出买卖建议或收益承诺。';
 
 /**
@@ -129,8 +158,9 @@ export const generateStrategyVersionProposalTool = defineTool({
         lastInvalidReason = `AI 提议引用了不存在的事实: ${unknownRefs.join(', ')}`;
         continue;
       }
-      const definitionHash = strategyDefinitionHash(parsed.data.definition);
-      if (definitionHash === baseVersion.definitionHash) {
+      const proposal = parsed.data;
+      const definitionHash = strategyDefinitionHash(proposal.definition);
+      if (proposal.kind === 'parameter-tuning' && definitionHash === baseVersion.definitionHash) {
         return {
           proposed: false as const,
           provider: ctx.adapters.llm.name,
@@ -138,16 +168,25 @@ export const generateStrategyVersionProposalTool = defineTool({
           reason: 'AI 提议与当前基线版本定义一致，无实质变更',
         };
       }
+      // AI 文本落库前过既有 prompt-injection 清理（DDD §6）
+      const shared = {
+        definition: proposal.definition,
+        definitionHash,
+        changeSummary: sanitizeAdviceText(proposal.changeSummary),
+        factReferences: proposal.factReferences,
+      };
       return {
         proposed: true as const,
         provider: ctx.adapters.llm.name,
-        proposal: {
-          definition: parsed.data.definition,
-          definitionHash,
-          // AI 文本落库前过既有 prompt-injection 清理（DDD §6）
-          changeSummary: sanitizeAdviceText(parsed.data.changeSummary),
-          factReferences: parsed.data.factReferences,
-        },
+        proposal:
+          proposal.kind === 'new-strategy'
+            ? {
+                kind: 'new-strategy' as const,
+                name: sanitizeAdviceText(proposal.name),
+                description: sanitizeAdviceText(proposal.description),
+                ...shared,
+              }
+            : { kind: 'parameter-tuning' as const, ...shared },
       };
     }
     if (lastThrown !== undefined) {

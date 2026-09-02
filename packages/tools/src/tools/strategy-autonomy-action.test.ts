@@ -229,6 +229,49 @@ describe('strategy autonomy 人工队列 tools（confirm/reject）', () => {
     expect(version?.publishedAt).toBeDefined();
   });
 
+  it('confirm：全新策略首发（draft、无基线版本）同样可确认发布（§9.2）', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await ctx.repos.strategy.create({
+      id: 'strategy-new',
+      name: 'AI 新策略',
+      description: '首发人工确认',
+      owner: 'user',
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.strategy.createVersion({
+      id: 'strategy-new:v1',
+      strategyId: 'strategy-new',
+      version: 1,
+      definition: baseDefinition,
+      definitionHash: strategyDefinitionHash(baseDefinition),
+      validationStatus: 'valid',
+      validationErrors: [],
+      createdAt: now,
+    });
+    await createStrategyAutonomyActionTool.execute(
+      {
+        action: blockedAction({
+          strategyId: 'strategy-new',
+          strategyVersionId: 'strategy-new:v1',
+        }),
+      },
+      ctx,
+    );
+
+    const result = await confirmStrategyAutonomyActionTool.execute(
+      { actionId: 'action-blocked' },
+      ctx,
+    );
+
+    expect(result).toMatchObject({ ok: true, data: { action: { status: 'published' } } });
+    const strategy = await ctx.repos.strategy.findById('strategy-new');
+    expect(strategy).toMatchObject({ status: 'active', currentVersionId: 'strategy-new:v1' });
+    const version = await ctx.repos.strategy.findVersionById('strategy-new:v1');
+    expect(version?.publishedAt).toBeDefined();
+  });
+
   it('confirm：发布失败回 blocked 并记 lastError', async () => {
     const ctx = await buildTestContext({ clock: () => now });
     // validationStatus=pending 的候选版本不可发布。

@@ -51,7 +51,9 @@ Write tools create or change local records, including accounts, holdings, trades
 Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback.
 `confirm_strategy_autonomy_action` and `reject_strategy_autonomy_action` are the human-review
 queue for AI-managed Strategy lifecycle: they only act on `blocked` actions, and confirm
-publishes the candidate version. Before calling one:
+publishes the candidate version. `archive_strategy` finalizes a paused user Strategy as a
+terminal state (no automatic resume) and removes its schedule; active, draft and builtin
+Strategies are rejected. Before calling one:
 
 1. Read the target state and resolve stable IDs.
 2. Restate exact values, especially stock, side, quantity, price, time and account.

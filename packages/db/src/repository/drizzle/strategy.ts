@@ -36,6 +36,23 @@ type ResultRow = typeof strategyResults.$inferSelect;
 type SignalRow = typeof strategySignals.$inferSelect;
 type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
 
+/**
+ * 可运行版本判定（M2 自治验证，docs/ddd/strategy-ai-lifecycle-detailed-design.md §8/§9.2）：
+ * evaluation scope 的持久化 run 是非发布验证证据，允许绑定未发布 valid version，
+ * 也允许 draft 状态的 Strategy（AI 新策略首发前的独立验证；draft 无 schedule、
+ * 不产生生产信号）；operational 仍要求 active Strategy 的 published valid version。
+ */
+const isRunnableStrategyVersion = (
+  strategy: StrategyRow | undefined,
+  version: VersionRow | undefined,
+  run: { readonly strategyId: string; readonly scope?: StrategyRun['scope'] },
+): boolean =>
+  strategy !== undefined &&
+  (strategy.status === 'active' || (run.scope === 'evaluation' && strategy.status === 'draft')) &&
+  version?.strategyId === run.strategyId &&
+  version.validationStatus === 'valid' &&
+  (version.publishedAt !== null || run.scope === 'evaluation');
+
 // publication_status 为空时只允许兼容存量非 V4 行；新 Summary V4 缺 publication
 // 必须保持 withheld/unknown，不能被 legacy fallback 误当成 current。
 const legacyPublishedRunCondition = () =>
@@ -357,6 +374,20 @@ export class DrizzleStrategyRepository implements StrategyRepository {
       }
       tx.update(strategies)
         .set({ status: 'active', updatedAt: at })
+        .where(eq(strategies.id, strategyId))
+        .run();
+    });
+  }
+
+  async archive(strategyId: string, at: Date): Promise<void> {
+    this.db.transaction((tx) => {
+      const strategy = tx.select().from(strategies).where(eq(strategies.id, strategyId)).get();
+      if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${strategyId}`);
+      if (strategy.owner !== 'user' || strategy.status !== 'paused') {
+        throw new InvariantError('只有 paused 的用户 Strategy 可归档');
+      }
+      tx.update(strategies)
+        .set({ status: 'archived', updatedAt: at })
         .where(eq(strategies.id, strategyId))
         .run();
     });
@@ -714,13 +745,7 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       .from(strategyVersions)
       .where(eq(strategyVersions.id, run.strategyVersionId))
       .get();
-    if (
-      strategy?.status !== 'active' ||
-      version?.strategyId !== run.strategyId ||
-      version.validationStatus !== 'valid' ||
-      // evaluation scope 的持久化 run 是非发布验证证据，允许绑定未发布 valid version。
-      (version.publishedAt === null && run.scope !== 'evaluation')
-    ) {
+    if (!isRunnableStrategyVersion(strategy, version, run)) {
       throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
     }
     this.db
@@ -784,13 +809,7 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
         .from(strategyVersions)
         .where(eq(strategyVersions.id, bundle.run.strategyVersionId))
         .get();
-      if (
-        strategy?.status !== 'active' ||
-        version?.strategyId !== bundle.run.strategyId ||
-        version.validationStatus !== 'valid' ||
-        // evaluation scope 的持久化 run 是非发布验证证据，允许绑定未发布 valid version。
-        (version.publishedAt === null && bundle.run.scope !== 'evaluation')
-      ) {
+      if (!isRunnableStrategyVersion(strategy, version, bundle.run)) {
         throw new InvariantError('StrategyRun 必须绑定 active Strategy 的 published valid version');
       }
       tx.insert(strategyRuns).values(runValues).run();

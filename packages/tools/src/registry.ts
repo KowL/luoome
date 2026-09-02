@@ -146,6 +146,7 @@ import {
   getStrategyInsightFactsTool,
 } from './tools/strategy-insight.js';
 import {
+  archiveStrategyTool,
   createStrategyTool,
   createStrategyVersionTool,
   deleteStrategyTool,
@@ -361,6 +362,7 @@ export const toolRegistry: Registry = createRegistry([
   publishStrategyVersionTool,
   pauseStrategyTool,
   resumeStrategyTool,
+  archiveStrategyTool,
   runStrategyTool,
   trialStrategyTool,
   prepareStrategyDataTool,

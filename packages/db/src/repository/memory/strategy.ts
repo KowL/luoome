@@ -104,17 +104,21 @@ export class InMemoryStrategyRepository implements StrategyRepository {
   /**
    * 可运行版本判定：operational run 只接受 published valid version；
    * evaluation scope 的持久化 run 是非发布验证证据（publication=non-publishing，
-   * 不进生产股票池），允许绑定未发布 valid version（M2 候选版本独立验证链路）。
+   * 不进生产股票池），允许绑定未发布 valid version（M2 候选版本独立验证链路），
+   * 也允许 draft 状态的 Strategy（M2 §9.2 AI 新策略首发前的独立验证；
+   * draft 无 schedule、不产生生产信号）。
    */
   isRunnableVersion(strategyId: string, versionId: string, scope?: StrategyRunScope): boolean {
     const strategy = this.strategies.get(strategyId);
     const version = this.versions.get(versionId);
     if (
       strategy === undefined ||
-      strategy.status !== 'active' ||
       version?.strategyId !== strategyId ||
       version.validationStatus !== 'valid'
     ) {
+      return false;
+    }
+    if (strategy.status !== 'active' && !(scope === 'evaluation' && strategy.status === 'draft')) {
       return false;
     }
     return version.publishedAt !== undefined || scope === 'evaluation';
@@ -196,6 +200,15 @@ export class InMemoryStrategyRepository implements StrategyRepository {
       throw new InvariantError('恢复需要 paused 用户 Strategy 及已发布 valid currentVersion');
     }
     this.strategies.set(strategyId, { ...strategy, status: 'active', updatedAt: at });
+  }
+
+  async archive(strategyId: string, at: Date): Promise<void> {
+    const strategy = this.strategies.get(strategyId);
+    if (strategy === undefined) throw new InvariantError(`Strategy 不存在: ${strategyId}`);
+    if (strategy.owner !== 'user' || strategy.status !== 'paused') {
+      throw new InvariantError('只有 paused 的用户 Strategy 可归档');
+    }
+    this.strategies.set(strategyId, { ...strategy, status: 'archived', updatedAt: at });
   }
 }
 

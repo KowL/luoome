@@ -184,3 +184,89 @@ export const assessStrategyPromotion = (
     limitations: [...new Set(limitations)],
   });
 };
+
+export interface AssessStrategyInitialPublicationInput {
+  readonly candidateVersion?: StrategyPromotionVersionFact;
+  readonly validation?: {
+    readonly sessionId: string;
+    readonly strategyVersionId: string;
+    readonly status: 'running' | 'complete' | 'partial' | 'failed';
+    readonly tradingDays: number;
+    readonly vintageCoverageRatio: number;
+  };
+  readonly observations?: {
+    readonly completeObservationCount: number;
+    readonly benchmarkCoverageRatio: number;
+  };
+  readonly policy?: StrategyPromotionPolicy;
+  readonly factReferences?: readonly string[];
+  readonly limitations?: readonly string[];
+}
+
+/**
+ * 全新策略的首发门禁（docs/ddd/strategy-ai-lifecycle-detailed-design.md §9.2）：
+ * 复用晋级门阈值，但不检查 base/parent/diff（新策略无基线版本）。
+ * 同样只评估证据质量，不看收益正负，不做任何持久化或外部调用。
+ */
+export const assessStrategyInitialPublication = (
+  input: AssessStrategyInitialPublicationInput,
+): StrategyPromotionAssessment => {
+  const policy = StrategyPromotionPolicySchema.parse(
+    input.policy ?? DEFAULT_STRATEGY_PROMOTION_POLICY,
+  );
+  const validationTradingDays = input.validation?.tradingDays ?? 0;
+  const vintageCoverageRatio = input.validation?.vintageCoverageRatio ?? 0;
+  const completeObservationCount = input.observations?.completeObservationCount ?? 0;
+  const benchmarkCoverageRatio = input.observations?.benchmarkCoverageRatio ?? 0;
+  const reasons: StrategyPromotionReason[] = [];
+
+  const candidate = input.candidateVersion;
+  if (candidate === undefined) {
+    reasons.push('candidate-version-missing');
+  } else {
+    if (candidate.publishedAt !== undefined) reasons.push('candidate-already-published');
+    if (candidate.validationStatus !== 'valid') reasons.push('candidate-not-valid');
+  }
+
+  if (input.validation === undefined) {
+    reasons.push('validation-session-missing');
+  } else {
+    if (candidate !== undefined && input.validation.strategyVersionId !== candidate.id) {
+      reasons.push('validation-version-mismatch');
+    }
+    if (input.validation.status !== 'complete') reasons.push('validation-not-complete');
+  }
+  if (validationTradingDays < policy.minValidationTradingDays) {
+    reasons.push('validation-days-insufficient');
+  }
+  if (vintageCoverageRatio < policy.minVintageCoverageRatio) {
+    reasons.push('pit-vintage-coverage-insufficient');
+  }
+  if (completeObservationCount < policy.minCompleteObservations) {
+    reasons.push('observations-insufficient');
+  }
+  if (benchmarkCoverageRatio < policy.minBenchmarkCoverageRatio) {
+    reasons.push('benchmark-coverage-insufficient');
+  }
+
+  const stableReasons = uniqueInPolicyOrder(reasons);
+  const limitations = [
+    '该门禁只检查候选版本质量、独立验证和观察覆盖，不依据收益正负做首发判断。',
+    '全新策略没有基线版本，不做 base/parent/definition diff 对比。',
+    'eligible-for-human-review 仅表示证据质量允许人工评审，不代表发布建议、未来收益或自动交易。',
+    ...(input.limitations ?? []),
+  ];
+  return StrategyPromotionAssessmentSchema.parse({
+    policyVersion: policy.policyVersion,
+    status: stableReasons.length === 0 ? 'eligible-for-human-review' : 'blocked',
+    reasons: stableReasons,
+    metrics: {
+      validationTradingDays,
+      vintageCoverageRatio,
+      completeObservationCount,
+      benchmarkCoverageRatio,
+    },
+    factReferences: [...new Set(input.factReferences ?? [])],
+    limitations: [...new Set(limitations)],
+  });
+};

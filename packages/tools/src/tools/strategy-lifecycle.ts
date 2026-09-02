@@ -383,3 +383,34 @@ export const resumeStrategyTool = defineTool({
     return { strategy: resumed };
   },
 });
+
+export const ArchiveStrategyInput = z.object({ strategyId: z.string().min(1) });
+export const ArchiveStrategyOutput = z.object({ strategy: StrategySchema });
+
+/**
+ * 归档为生命周期终态（docs/ddd/strategy-ai-lifecycle-detailed-design.md §9.1）：
+ * 只允许 paused 的用户 Strategy（active/draft 拒绝），builtin 拒绝，无自动恢复。
+ * 归档同时移除其调度配置——claim_due_strategy_schedules 只按 schedule 到期抢占、
+ * 不感知策略状态，不删配置会让 archived 策略每周被抢占再跳过。
+ */
+export const archiveStrategyTool = defineTool({
+  name: 'archive_strategy',
+  description:
+    '归档 paused 的用户 Strategy（终态，不可自动恢复；同时移除其调度配置）；不触发任何交易',
+  sideEffect: 'write',
+  input: ArchiveStrategyInput,
+  output: ArchiveStrategyOutput,
+  handler: async (input, ctx) => {
+    const strategy = await ctx.repos.strategy.findById(input.strategyId);
+    if (strategy === null) return errNotFound('Strategy', input.strategyId);
+    if (strategy.owner === 'builtin') return errInvalidInput('builtin Strategy 不可修改');
+    if (strategy.status !== 'paused') {
+      return errInvalidInput(`只有 paused 的 Strategy 可归档: ${strategy.id}`);
+    }
+    await ctx.repos.strategy.archive(strategy.id, ctx.clock());
+    await ctx.repos.strategySchedule.removeByStrategyId(strategy.id);
+    const archived = await ctx.repos.strategy.findById(strategy.id);
+    if (archived === null) return errNotFound('Strategy', strategy.id);
+    return { strategy: archived };
+  },
+});

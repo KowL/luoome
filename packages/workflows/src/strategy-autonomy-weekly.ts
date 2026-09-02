@@ -1,7 +1,7 @@
-import type { StrategyAutonomyAction } from '@luoome/core';
+import { assessStrategyInitialPublication, type StrategyAutonomyAction } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './define-workflow.js';
 import { replayStrategyRangeWorkflow } from './replay-strategy-range.js';
 
 /**
@@ -25,6 +25,13 @@ export const STRATEGY_AUTONOMY_PAUSE_THRESHOLDS = {
  */
 export const STRATEGY_AUTONOMY_PROPOSE_COOLDOWN_DAYS = 7;
 export const STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS = 30;
+
+/**
+ * 自动归档与全新策略提议限额（docs/ddd/strategy-ai-lifecycle-detailed-design.md §9，
+ * 已冻结）。只允许通过改代码变更，不做运行期配置（DDD §6 红线）。
+ */
+export const STRATEGY_AUTONOMY_ARCHIVE_MIN_PAUSED_DAYS = 28;
+export const STRATEGY_AUTONOMY_NEW_STRATEGY_WEEKLY_LIMIT = 1;
 
 const DAY_MS = 86_400_000;
 
@@ -103,7 +110,28 @@ const PromotionItemSchema = z.object({
   error: z.string().min(1).optional(),
 });
 
-const AutonomyProposalOutput = AutonomyPauseOutput.extend({
+const ArchiveItemSchema = z.object({
+  strategyId: z.string().min(1),
+  strategyName: z.string().min(1),
+  /** archived=已归档（终态）；kept=不满足归档条件；error=步骤异常。 */
+  decision: z.enum(['archived', 'kept', 'error']),
+  reasons: z.array(z.string()),
+  actionId: z.string().min(1).optional(),
+  /** AI 解释文本的提供者；AI 未配置/失败时缺省（动作照常完成）。 */
+  narrativeProvider: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
+});
+
+const AutonomyArchiveOutput = AutonomyPauseOutput.extend({
+  archive: z.object({
+    evaluated: z.number().int().nonnegative(),
+    archived: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    items: z.array(ArchiveItemSchema),
+  }),
+});
+
+const AutonomyProposalOutput = AutonomyArchiveOutput.extend({
   proposals: ProposalSectionSchema,
 });
 
@@ -141,6 +169,60 @@ const errorText = (error: {
       ? error.cause
       : String(error.kind ?? 'unknown error');
 
+interface PauseThresholdStats {
+  readonly sampleCount: number;
+  readonly benchmarkCoverage: number;
+  readonly avgExcessReturn?: number;
+  readonly medianExcessReturn?: number;
+  readonly blockers: readonly string[];
+}
+
+/**
+ * 暂停阈值（§3.1）的 T+5 统计读取与判定，自动暂停与自动归档（§9.1）共用：
+ * blockers 为空表示命中全部暂停阈值。
+ */
+const readPauseThresholdStats = async (
+  ctx: WorkflowContext,
+  strategyId: string,
+): Promise<
+  | { readonly ok: true; readonly stats: PauseThresholdStats }
+  | { readonly ok: false; readonly error: string }
+> => {
+  const thresholds = STRATEGY_AUTONOMY_PAUSE_THRESHOLDS;
+  const facts = await ctx.tools.get_strategy_insight_facts.execute({ strategyId });
+  if (!facts.ok) return { ok: false, error: errorText(facts.error) };
+  const t5 = facts.data.observations.find((item) => item.horizon === thresholds.horizon);
+  const sampleCount = t5?.complete ?? 0;
+  const benchmarkCoverage = t5?.benchmarkCoverage ?? 0;
+  const avgExcessReturn = t5?.averageExcessReturnPct;
+  const medianExcessReturn = t5?.medianExcessReturnPct;
+  const blockers: string[] = [];
+  if (sampleCount < thresholds.minSampleCount) {
+    blockers.push(`完整样本不足（${sampleCount} < ${thresholds.minSampleCount}）`);
+  }
+  if (benchmarkCoverage < thresholds.minBenchmarkCoverage) {
+    blockers.push(
+      `benchmark 覆盖不足（${benchmarkCoverage.toFixed(2)} < ${thresholds.minBenchmarkCoverage}）`,
+    );
+  }
+  if (avgExcessReturn === undefined || avgExcessReturn >= thresholds.maxAvgExcessReturn) {
+    blockers.push('平均超额收益未显著为负');
+  }
+  if (medianExcessReturn === undefined || medianExcessReturn >= thresholds.maxMedianExcessReturn) {
+    blockers.push('超额收益中位数未显著为负');
+  }
+  return {
+    ok: true,
+    stats: {
+      sampleCount,
+      benchmarkCoverage,
+      ...(avgExcessReturn === undefined ? {} : { avgExcessReturn }),
+      ...(medianExcessReturn === undefined ? {} : { medianExcessReturn }),
+      blockers,
+    },
+  };
+};
+
 /**
  * §3.1 自动暂停（先止损再优化）：对每个 active 用户策略读取 T+5 观察统计，
  * 命中全部冻结阈值且不在冷却窗口内则暂停并落 kind=pause 的审计动作。
@@ -158,48 +240,25 @@ const runAutonomy: WorkflowStep = async (_prev, ctx) => {
   const items: z.infer<typeof AutonomyItemSchema>[] = [];
   for (const strategy of listed.data.strategies) {
     try {
-      const facts = await ctx.tools.get_strategy_insight_facts.execute({
-        strategyId: strategy.id,
-      });
-      if (!facts.ok) {
+      const evaluated = await readPauseThresholdStats(ctx, strategy.id);
+      if (!evaluated.ok) {
         items.push({
           strategyId: strategy.id,
           strategyName: strategy.name,
           decision: 'error',
           reasons: ['观察事实读取失败'],
-          error: errorText(facts.error),
+          error: evaluated.error,
         });
         continue;
       }
-      const t5 = facts.data.observations.find((item) => item.horizon === thresholds.horizon);
-      const sampleCount = t5?.complete ?? 0;
-      const benchmarkCoverage = t5?.benchmarkCoverage ?? 0;
-      const avgExcessReturn = t5?.averageExcessReturnPct;
-      const medianExcessReturn = t5?.medianExcessReturnPct;
-      const blockers: string[] = [];
-      if (sampleCount < thresholds.minSampleCount) {
-        blockers.push(`完整样本不足（${sampleCount} < ${thresholds.minSampleCount}）`);
-      }
-      if (benchmarkCoverage < thresholds.minBenchmarkCoverage) {
-        blockers.push(
-          `benchmark 覆盖不足（${benchmarkCoverage.toFixed(2)} < ${thresholds.minBenchmarkCoverage}）`,
-        );
-      }
-      if (avgExcessReturn === undefined || avgExcessReturn >= thresholds.maxAvgExcessReturn) {
-        blockers.push('平均超额收益未显著为负');
-      }
-      if (
-        medianExcessReturn === undefined ||
-        medianExcessReturn >= thresholds.maxMedianExcessReturn
-      ) {
-        blockers.push('超额收益中位数未显著为负');
-      }
+      const { sampleCount, benchmarkCoverage, avgExcessReturn, medianExcessReturn, blockers } =
+        evaluated.stats;
       if (blockers.length > 0) {
         items.push({
           strategyId: strategy.id,
           strategyName: strategy.name,
           decision: 'kept',
-          reasons: blockers,
+          reasons: [...blockers],
         });
         continue;
       }
@@ -320,17 +379,197 @@ const runAutonomy: WorkflowStep = async (_prev, ctx) => {
 };
 
 /**
+ * §9.1 自动归档（在暂停之后）：对 status=paused 且 owner=user 的策略，满足全部冻结条件
+ * 则归档——最近一次 kind=pause 的自治动作（trigger=weekly-review）距今 ≥28 个自然日，
+ * 且当前 T+5 统计仍命中全部暂停阈值。执行 archive_strategy（同时移除调度配置）并落
+ * kind=archive 动作（创建即 executed，ruleSnapshot 含 pause 五 key + pausedSinceDays）。
+ * 人工暂停（无自治 pause 动作）不参与归档；draft/active 策略不在本步骤的列表过滤内。
+ */
+const runArchival: WorkflowStep = async (prev, ctx) => {
+  const carried = AutonomyPauseOutput.parse(prev);
+  const now = ctx.clock();
+  const listed = await ctx.tools.list_strategies.execute({
+    filter: { status: 'paused', owner: 'user' },
+  });
+  if (!listed.ok) return listed;
+
+  const items: z.infer<typeof ArchiveItemSchema>[] = [];
+  for (const strategy of listed.data.strategies) {
+    try {
+      const pauses = await ctx.tools.list_strategy_autonomy_actions.execute({
+        strategyId: strategy.id,
+        kind: 'pause',
+        limit: 1,
+      });
+      if (!pauses.ok) {
+        items.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          decision: 'error',
+          reasons: ['暂停历史读取失败'],
+          error: errorText(pauses.error),
+        });
+        continue;
+      }
+      // list 按 createdAt 倒序，取最近一次自治 pause 动作。
+      const lastPause = pauses.data.actions[0];
+      if (lastPause === undefined) {
+        items.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          decision: 'kept',
+          reasons: ['无自治 pause 动作（人工暂停不参与自动归档）'],
+        });
+        continue;
+      }
+      const pausedSinceDays = Math.floor((now.getTime() - lastPause.createdAt.getTime()) / DAY_MS);
+      if (pausedSinceDays < STRATEGY_AUTONOMY_ARCHIVE_MIN_PAUSED_DAYS) {
+        items.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          decision: 'kept',
+          reasons: [
+            `自治暂停未满 ${STRATEGY_AUTONOMY_ARCHIVE_MIN_PAUSED_DAYS} 个自然日（已 ${pausedSinceDays} 天）`,
+          ],
+        });
+        continue;
+      }
+      const evaluated = await readPauseThresholdStats(ctx, strategy.id);
+      if (!evaluated.ok) {
+        items.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          decision: 'error',
+          reasons: ['观察事实读取失败'],
+          error: evaluated.error,
+        });
+        continue;
+      }
+      const { sampleCount, benchmarkCoverage, avgExcessReturn, medianExcessReturn, blockers } =
+        evaluated.stats;
+      if (blockers.length > 0) {
+        items.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          decision: 'kept',
+          reasons: blockers.map((blocker) => `当前统计不再满足归档条件：${blocker}`),
+        });
+        continue;
+      }
+
+      const archived = await ctx.tools.archive_strategy.execute({ strategyId: strategy.id });
+      if (!archived.ok) {
+        items.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          decision: 'error',
+          reasons: ['归档执行失败'],
+          error: errorText(archived.error),
+        });
+        continue;
+      }
+
+      let aiNarrative: string | undefined;
+      let narrativeProvider: string | undefined;
+      const insight = await ctx.tools.generate_strategy_insight.execute({
+        strategyId: strategy.id,
+      });
+      if (insight.ok && insight.data.provider !== 'facts-only') {
+        aiNarrative = `${insight.data.insight.headline}：${insight.data.insight.summary}`;
+        narrativeProvider = insight.data.provider;
+      } else if (!insight.ok) {
+        ctx.logger.warn('strategy-autonomy-weekly: AI 解释文本生成失败，aiNarrative 缺省', {
+          strategyId: strategy.id,
+          error: insight.error,
+        });
+      }
+
+      const actionId = `strategy-autonomy-action-${globalThis.crypto.randomUUID()}`;
+      const created = await ctx.tools.create_strategy_autonomy_action.execute({
+        action: {
+          id: actionId,
+          kind: 'archive',
+          status: 'executed',
+          strategyId: strategy.id,
+          trigger: 'weekly-review',
+          ruleSnapshot: {
+            sampleCount,
+            benchmarkCoverage,
+            avgExcessReturn,
+            medianExcessReturn,
+            thresholds: {
+              ...STRATEGY_AUTONOMY_PAUSE_THRESHOLDS,
+              minPausedDays: STRATEGY_AUTONOMY_ARCHIVE_MIN_PAUSED_DAYS,
+            },
+            pausedSinceDays,
+          },
+          ...(aiNarrative === undefined ? {} : { aiNarrative }),
+          factReferences: [
+            `strategy-insight-facts:${strategy.id}:${STRATEGY_AUTONOMY_PAUSE_THRESHOLDS.horizon}`,
+            `strategy-autonomy-action:${lastPause.id}`,
+          ],
+          createdAt: now,
+          updatedAt: now,
+          completedAt: now,
+        },
+      });
+      if (!created.ok) {
+        // 归档已生效但审计落库失败：动作不回滚，按单策略失败记录，人工可补查。
+        items.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          decision: 'error',
+          reasons: ['归档已生效，审计动作落库失败'],
+          ...(narrativeProvider === undefined ? {} : { narrativeProvider }),
+          error: errorText(created.error),
+        });
+        continue;
+      }
+      items.push({
+        strategyId: strategy.id,
+        strategyName: strategy.name,
+        decision: 'archived',
+        reasons: [
+          `自治暂停已满 ${pausedSinceDays} 天且当前 T+5 统计仍命中全部暂停阈值，归档为终态`,
+        ],
+        actionId,
+        ...(narrativeProvider === undefined ? {} : { narrativeProvider }),
+      });
+    } catch (error) {
+      items.push({
+        strategyId: strategy.id,
+        strategyName: strategy.name,
+        decision: 'error',
+        reasons: ['策略归档处理异常'],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return AutonomyArchiveOutput.parse({
+    ...carried,
+    archive: {
+      evaluated: items.length,
+      archived: items.filter((item) => item.decision === 'archived').length,
+      failed: items.filter((item) => item.decision === 'error').length,
+      items,
+    },
+  });
+};
+
+/**
  * §3.2/§3.3 AI 提议 + 自动验证：对每个未被本周暂停的 active 用户策略，
  * 冷却（7 天内已有 propose-version 动作则跳过）→ 事实装配（get_strategy_experiment_context）
  * → AI 提议（generate_strategy_version_proposal，workflow-only）→ definitionHash 去重
- * → create_strategy_version → validate_strategy_version → 落 kind=propose-version 动作
- * → start_strategy_evaluation_session 并转移 validating。
+ * → create_strategy_version → validate → session → propose-version 动作 → validating。
+ * §9.2：AI 也可返回全新策略提议（kind=new-strategy，全局限额每周 1 个），链路为
+ * create_strategy（draft）→ 首版本 → validate → session → 动作；首发无基线，
+ * 门禁复核走 assessStrategyInitialPublication 而非 assessStrategyPromotion。
  * AI 未配置/调用失败（adapter_error）当周跳过不落动作；AI 输出不合规、版本校验
  * invalid 或 session 创建失败落 failed 动作。session 的逐日推进复用既有 evaluation
  * 作业化机制（replay-strategy-range），本步骤不同步等待。
  */
 const runProposals: WorkflowStep = async (prev, ctx) => {
-  const autonomy = AutonomyPauseOutput.parse(prev);
+  const autonomy = AutonomyArchiveOutput.parse(prev);
   const now = ctx.clock();
   const pausedThisRun = new Set(
     autonomy.items.filter((item) => item.decision === 'paused').map((item) => item.strategyId),
@@ -339,6 +578,26 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
     filter: { status: 'active', owner: 'user' },
   });
   if (!listed.ok) return listed;
+
+  // §9.2 限额：每周最多 1 个全新策略提议（全局限额，跨周次按动作 ruleSnapshot 标记判定）。
+  const newStrategySince = new Date(
+    now.getTime() - STRATEGY_AUTONOMY_PROPOSE_COOLDOWN_DAYS * DAY_MS,
+  );
+  const recentProposalsAll = await ctx.tools.list_strategy_autonomy_actions.execute({
+    kind: 'propose-version',
+    since: newStrategySince,
+    limit: 1000,
+  });
+  if (!recentProposalsAll.ok) return recentProposalsAll;
+  let newStrategyQuotaUsed =
+    recentProposalsAll.data.actions.filter(
+      (action) => action.ruleSnapshot?.proposalKind === 'new-strategy',
+    ).length >= STRATEGY_AUTONOMY_NEW_STRATEGY_WEEKLY_LIMIT;
+
+  const windowTo = new Date(utcMidnight(now).getTime() - DAY_MS);
+  const windowFrom = new Date(
+    windowTo.getTime() - (STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS - 1) * DAY_MS,
+  );
 
   /** 已创建（或无需）版本后落 failed 审计动作：drafted → failed，保留 lastError。 */
   const recordFailedProposal = async (input: {
@@ -374,6 +633,134 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
     });
     if (!transitioned.ok) return { actionId, ok: false, error: errorText(transitioned.error) };
     return { actionId, ok: true };
+  };
+
+  /**
+   * 候选版本创建后的公共尾段（调参与全新策略分支共用）：validate → 建验证窗口 session →
+   * 落 kind=propose-version 动作（drafted）→ 转移 validating；失败按既有语义落 failed
+   * 动作或记 error（已生效的版本/session 不回滚，人工可补查）。
+   */
+  const startValidation = async (input: {
+    readonly strategyId: string;
+    readonly strategyName: string;
+    readonly candidateId: string;
+    readonly candidateVersion: number;
+    readonly ruleSnapshot: Record<string, unknown>;
+    readonly factReferences: readonly string[];
+    readonly proposalProvider: string;
+  }): Promise<z.infer<typeof ProposalItemSchema>> => {
+    const validated = await ctx.tools.validate_strategy_version.execute({
+      versionId: input.candidateId,
+      strategyId: input.strategyId,
+    });
+    if (!validated.ok || validated.data.version.validationStatus !== 'valid') {
+      const lastError = !validated.ok
+        ? errorText(validated.error)
+        : `候选版本校验未通过: ${validated.data.version.validationErrors.join('; ')}`;
+      const recorded = await recordFailedProposal({
+        strategyId: input.strategyId,
+        lastError,
+        ruleSnapshot: input.ruleSnapshot,
+        factReferences: input.factReferences,
+        strategyVersionId: input.candidateId,
+      });
+      return {
+        strategyId: input.strategyId,
+        strategyName: input.strategyName,
+        decision: recorded.ok ? 'failed' : 'error',
+        reasons: [lastError],
+        actionId: recorded.actionId,
+        strategyVersionId: input.candidateId,
+        proposalProvider: input.proposalProvider,
+        ...(recorded.error === undefined ? {} : { error: recorded.error }),
+      };
+    }
+
+    const session = await ctx.tools.start_strategy_evaluation_session.execute({
+      strategyId: input.strategyId,
+      versionId: input.candidateId,
+      from: windowFrom,
+      to: windowTo,
+    });
+    if (!session.ok) {
+      const lastError = `验证 session 创建失败: ${errorText(session.error)}`;
+      const recorded = await recordFailedProposal({
+        strategyId: input.strategyId,
+        lastError,
+        ruleSnapshot: input.ruleSnapshot,
+        factReferences: input.factReferences,
+        strategyVersionId: input.candidateId,
+      });
+      return {
+        strategyId: input.strategyId,
+        strategyName: input.strategyName,
+        decision: recorded.ok ? 'failed' : 'error',
+        reasons: [lastError],
+        actionId: recorded.actionId,
+        strategyVersionId: input.candidateId,
+        proposalProvider: input.proposalProvider,
+        ...(recorded.error === undefined ? {} : { error: recorded.error }),
+      };
+    }
+
+    const actionId = `strategy-autonomy-action-${globalThis.crypto.randomUUID()}`;
+    const createdAction = await ctx.tools.create_strategy_autonomy_action.execute({
+      action: {
+        id: actionId,
+        kind: 'propose-version',
+        status: 'drafted',
+        strategyId: input.strategyId,
+        strategyVersionId: input.candidateId,
+        evaluationSessionId: session.data.session.id,
+        trigger: 'weekly-review',
+        ruleSnapshot: input.ruleSnapshot,
+        factReferences: [...input.factReferences],
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    if (!createdAction.ok) {
+      return {
+        strategyId: input.strategyId,
+        strategyName: input.strategyName,
+        decision: 'error',
+        reasons: ['版本与验证 session 已生效，审计动作落库失败'],
+        strategyVersionId: input.candidateId,
+        evaluationSessionId: session.data.session.id,
+        proposalProvider: input.proposalProvider,
+        error: errorText(createdAction.error),
+      };
+    }
+    const validating = await ctx.tools.transition_strategy_autonomy_action.execute({
+      id: actionId,
+      expectedStatus: 'drafted',
+      status: 'validating',
+    });
+    if (!validating.ok) {
+      return {
+        strategyId: input.strategyId,
+        strategyName: input.strategyName,
+        decision: 'error',
+        reasons: ['审计动作 drafted → validating 转移失败'],
+        actionId,
+        strategyVersionId: input.candidateId,
+        evaluationSessionId: session.data.session.id,
+        proposalProvider: input.proposalProvider,
+        error: errorText(validating.error),
+      };
+    }
+    return {
+      strategyId: input.strategyId,
+      strategyName: input.strategyName,
+      decision: 'validating',
+      reasons: [
+        `AI 提议版本 v${input.candidateVersion} 校验通过，已创建 ${STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS} 天验证窗口的独立评估 session`,
+      ],
+      actionId,
+      strategyVersionId: input.candidateId,
+      evaluationSessionId: session.data.session.id,
+      proposalProvider: input.proposalProvider,
+    };
   };
 
   const items: z.infer<typeof ProposalItemSchema>[] = [];
@@ -506,6 +893,100 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
       }
       const proposal = proposed.data.proposal;
 
+      if (proposal.kind === 'new-strategy') {
+        // §9.2 全新策略分支：create_strategy（初始 draft，发布前无 schedule）→ 首版本 →
+        // 校验 → 验证 session → propose-version 动作；全局限额每周 1 个。
+        if (newStrategyQuotaUsed) {
+          items.push({
+            strategyId: strategy.id,
+            strategyName: strategy.name,
+            decision: 'skipped',
+            reasons: [
+              `每周全新策略提议全局限额（${STRATEGY_AUTONOMY_NEW_STRATEGY_WEEKLY_LIMIT} 个）已用完`,
+            ],
+            proposalProvider: proposed.data.provider,
+          });
+          continue;
+        }
+        const createdStrategy = await ctx.tools.create_strategy.execute({
+          name: proposal.name,
+          description: proposal.description,
+        });
+        if (!createdStrategy.ok) {
+          const lastError = `全新策略创建失败: ${errorText(createdStrategy.error)}`;
+          const recorded = await recordFailedProposal({
+            strategyId: strategy.id,
+            lastError,
+            ruleSnapshot: {
+              proposalKind: 'new-strategy',
+              proposalProvider: proposed.data.provider,
+            },
+            factReferences: baseReferences,
+          });
+          items.push({
+            strategyId: strategy.id,
+            strategyName: strategy.name,
+            decision: recorded.ok ? 'failed' : 'error',
+            reasons: [lastError],
+            actionId: recorded.actionId,
+            proposalProvider: proposed.data.provider,
+            ...(recorded.error === undefined ? {} : { error: recorded.error }),
+          });
+          continue;
+        }
+        newStrategyQuotaUsed = true;
+        const newStrategy = createdStrategy.data.strategy;
+        const newReferences = [`strategy:${newStrategy.id}`, ...proposal.factReferences];
+        const newRuleSnapshot = {
+          proposalKind: 'new-strategy',
+          proposalProvider: proposed.data.provider,
+          cooldownDays: STRATEGY_AUTONOMY_PROPOSE_COOLDOWN_DAYS,
+          validationWindowDays: STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS,
+        };
+        const createdNewVersion = await ctx.tools.create_strategy_version.execute({
+          strategyId: newStrategy.id,
+          definition: proposal.definition,
+          changeSummary: proposal.changeSummary,
+          factReferences: proposal.factReferences,
+        });
+        if (!createdNewVersion.ok) {
+          const lastError = `全新策略首个版本创建失败: ${errorText(createdNewVersion.error)}`;
+          const recorded = await recordFailedProposal({
+            strategyId: newStrategy.id,
+            lastError,
+            ruleSnapshot: newRuleSnapshot,
+            factReferences: newReferences,
+          });
+          items.push({
+            strategyId: newStrategy.id,
+            strategyName: newStrategy.name,
+            decision: recorded.ok ? 'failed' : 'error',
+            reasons: [lastError],
+            actionId: recorded.actionId,
+            proposalProvider: proposed.data.provider,
+            ...(recorded.error === undefined ? {} : { error: recorded.error }),
+          });
+          continue;
+        }
+        const newCandidate = createdNewVersion.data.version;
+        items.push(
+          await startValidation({
+            strategyId: newStrategy.id,
+            strategyName: newStrategy.name,
+            candidateId: newCandidate.id,
+            candidateVersion: newCandidate.version,
+            ruleSnapshot: {
+              ...newRuleSnapshot,
+              candidateVersionId: newCandidate.id,
+              candidateDefinitionHash: newCandidate.definitionHash,
+            },
+            factReferences: newReferences,
+            proposalProvider: proposed.data.provider,
+          }),
+        );
+        continue;
+      }
+
       const detail = await ctx.tools.get_strategy.execute({ strategyId: strategy.id });
       if (!detail.ok) {
         items.push({
@@ -563,127 +1044,17 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
       };
       const factReferences = [...baseReferences, ...proposal.factReferences];
 
-      const validated = await ctx.tools.validate_strategy_version.execute({
-        versionId: candidate.id,
-        strategyId: strategy.id,
-      });
-      if (!validated.ok || validated.data.version.validationStatus !== 'valid') {
-        const lastError = !validated.ok
-          ? errorText(validated.error)
-          : `候选版本校验未通过: ${validated.data.version.validationErrors.join('; ')}`;
-        const recorded = await recordFailedProposal({
-          strategyId: strategy.id,
-          lastError,
-          ruleSnapshot,
-          factReferences,
-          strategyVersionId: candidate.id,
-        });
-        items.push({
+      items.push(
+        await startValidation({
           strategyId: strategy.id,
           strategyName: strategy.name,
-          decision: recorded.ok ? 'failed' : 'error',
-          reasons: [lastError],
-          actionId: recorded.actionId,
-          strategyVersionId: candidate.id,
+          candidateId: candidate.id,
+          candidateVersion: candidate.version,
+          ruleSnapshot,
+          factReferences,
           proposalProvider: proposed.data.provider,
-          ...(recorded.error === undefined ? {} : { error: recorded.error }),
-        });
-        continue;
-      }
-
-      const windowTo = new Date(utcMidnight(now).getTime() - DAY_MS);
-      const windowFrom = new Date(
-        windowTo.getTime() - (STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS - 1) * DAY_MS,
+        }),
       );
-      const session = await ctx.tools.start_strategy_evaluation_session.execute({
-        strategyId: strategy.id,
-        versionId: candidate.id,
-        from: windowFrom,
-        to: windowTo,
-      });
-      if (!session.ok) {
-        const lastError = `验证 session 创建失败: ${errorText(session.error)}`;
-        const recorded = await recordFailedProposal({
-          strategyId: strategy.id,
-          lastError,
-          ruleSnapshot,
-          factReferences,
-          strategyVersionId: candidate.id,
-        });
-        items.push({
-          strategyId: strategy.id,
-          strategyName: strategy.name,
-          decision: recorded.ok ? 'failed' : 'error',
-          reasons: [lastError],
-          actionId: recorded.actionId,
-          strategyVersionId: candidate.id,
-          proposalProvider: proposed.data.provider,
-          ...(recorded.error === undefined ? {} : { error: recorded.error }),
-        });
-        continue;
-      }
-
-      const actionId = `strategy-autonomy-action-${globalThis.crypto.randomUUID()}`;
-      const createdAction = await ctx.tools.create_strategy_autonomy_action.execute({
-        action: {
-          id: actionId,
-          kind: 'propose-version',
-          status: 'drafted',
-          strategyId: strategy.id,
-          strategyVersionId: candidate.id,
-          evaluationSessionId: session.data.session.id,
-          trigger: 'weekly-review',
-          ruleSnapshot,
-          factReferences,
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
-      if (!createdAction.ok) {
-        // 版本与 session 已生效但审计落库失败：不回滚，按单策略失败记录，人工可补查。
-        items.push({
-          strategyId: strategy.id,
-          strategyName: strategy.name,
-          decision: 'error',
-          reasons: ['版本与验证 session 已生效，审计动作落库失败'],
-          strategyVersionId: candidate.id,
-          evaluationSessionId: session.data.session.id,
-          proposalProvider: proposed.data.provider,
-          error: errorText(createdAction.error),
-        });
-        continue;
-      }
-      const validating = await ctx.tools.transition_strategy_autonomy_action.execute({
-        id: actionId,
-        expectedStatus: 'drafted',
-        status: 'validating',
-      });
-      if (!validating.ok) {
-        items.push({
-          strategyId: strategy.id,
-          strategyName: strategy.name,
-          decision: 'error',
-          reasons: ['审计动作 drafted → validating 转移失败'],
-          actionId,
-          strategyVersionId: candidate.id,
-          evaluationSessionId: session.data.session.id,
-          proposalProvider: proposed.data.provider,
-          error: errorText(validating.error),
-        });
-        continue;
-      }
-      items.push({
-        strategyId: strategy.id,
-        strategyName: strategy.name,
-        decision: 'validating',
-        reasons: [
-          `AI 提议版本 v${candidate.version} 校验通过，已创建 ${STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS} 天验证窗口的独立评估 session`,
-        ],
-        actionId,
-        strategyVersionId: candidate.id,
-        evaluationSessionId: session.data.session.id,
-        proposalProvider: proposed.data.provider,
-      });
     } catch (error) {
       items.push({
         strategyId: strategy.id,
@@ -1040,9 +1411,30 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         });
         continue;
       }
-      const promotion = experiment.data.promotion;
-      if (promotion.status === 'blocked') {
-        const lastError = `晋级门未通过: ${promotion.reasons.join(', ')}`;
+      // §9.2：策略无基线版本（AI 全新策略首发）时用首发门禁 assessStrategyInitialPublication
+      // 替代晋级门（不查 base/parent/diff）；指标复用 experiment context 的 promotion 装配。
+      const assessment =
+        experiment.data.baseVersion === undefined
+          ? assessStrategyInitialPublication({
+              ...(experiment.data.candidateVersion === undefined
+                ? {}
+                : { candidateVersion: experiment.data.candidateVersion }),
+              validation: {
+                sessionId: session.id,
+                strategyVersionId: session.strategyVersionId,
+                status: session.status,
+                tradingDays: experiment.data.promotion.metrics.validationTradingDays,
+                vintageCoverageRatio: experiment.data.promotion.metrics.vintageCoverageRatio,
+              },
+              observations: {
+                completeObservationCount:
+                  experiment.data.promotion.metrics.completeObservationCount,
+                benchmarkCoverageRatio: experiment.data.promotion.metrics.benchmarkCoverageRatio,
+              },
+            })
+          : experiment.data.promotion;
+      if (assessment.status === 'blocked') {
+        const lastError = `晋级门未通过: ${assessment.reasons.join(', ')}`;
         const eligible = await ctx.tools.transition_strategy_autonomy_action.execute({
           id: action.id,
           expectedStatus: 'validating',
@@ -1081,7 +1473,7 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
           strategyId: action.strategyId,
           strategyVersionId: action.strategyVersionId,
           decision: 'blocked',
-          reasons: [...promotion.reasons],
+          reasons: [...assessment.reasons],
         });
         continue;
       }
@@ -1133,7 +1525,7 @@ export const strategyAutonomyWeeklyWorkflow = defineWorkflow<
 >({
   name: 'strategy-autonomy-weekly',
   description:
-    '周度策略自治（M2-S1~S3）：自动暂停跑输策略 → AI 提议并建验证 session → 推进 validating session → 晋级门复核（eligible 自动发布、blocked 进人工队列）；逐策略/逐动作隔离失败',
+    '周度策略自治（M2）：自动暂停跑输策略 → 自治暂停满 28 天仍跑输则自动归档 → AI 提议（调参或每周最多 1 个全新策略）并建验证 session → 推进 validating session → 门禁复核（首发用首发门禁，晋级用晋级门；eligible 自动发布、blocked 进人工队列）；逐策略/逐动作隔离失败',
   input: StrategyAutonomyWeeklyInput,
-  steps: [runAutonomy, runProposals, runValidationSessions, runPromotionReview],
+  steps: [runAutonomy, runArchival, runProposals, runValidationSessions, runPromotionReview],
 });

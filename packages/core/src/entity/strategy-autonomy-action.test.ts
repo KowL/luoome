@@ -5,6 +5,7 @@ import {
   assertStrategyAutonomyActionInvariants,
   assertStrategyAutonomyActionTransition,
   STRATEGY_AUTONOMY_ACTION_TRANSITIONS,
+  STRATEGY_AUTONOMY_ARCHIVE_SNAPSHOT_REQUIRED_KEYS,
   STRATEGY_AUTONOMY_PAUSE_SNAPSHOT_REQUIRED_KEYS,
   type StrategyAutonomyAction,
   StrategyAutonomyActionSchema,
@@ -193,5 +194,42 @@ describe('StrategyAutonomyAction', () => {
     }
     // 转移表不读 aiNarrative：只以 status 为键
     expect(Object.keys(STRATEGY_AUTONOMY_ACTION_TRANSITIONS)).toHaveLength(9);
+  });
+
+  it('archive 创建即终态，ruleSnapshot 必须含 pause 五 key 与 pausedSinceDays', () => {
+    const archiveSnapshot = { ...PAUSE_SNAPSHOT, pausedSinceDays: 35 };
+    const archived = makeAction({
+      kind: 'archive',
+      status: 'executed',
+      ruleSnapshot: archiveSnapshot,
+      completedAt: T1,
+    });
+    expect(() => assertStrategyAutonomyActionInvariants(archived)).not.toThrow();
+    for (const key of STRATEGY_AUTONOMY_ARCHIVE_SNAPSHOT_REQUIRED_KEYS) {
+      expect(Object.hasOwn(archiveSnapshot, key)).toBe(true);
+    }
+
+    // 非终态拒绝（archive 无人工队列，创建即 executed）
+    expect(() =>
+      assertStrategyAutonomyActionInvariants(
+        makeAction({ kind: 'archive', status: 'drafted', ruleSnapshot: archiveSnapshot }),
+      ),
+    ).toThrow(InvariantError);
+    // 缺 ruleSnapshot 或缺 pausedSinceDays 都拒绝
+    expect(() =>
+      assertStrategyAutonomyActionInvariants(
+        makeAction({ kind: 'archive', status: 'executed', completedAt: T1 }),
+      ),
+    ).toThrow(InvariantError);
+    expect(() =>
+      assertStrategyAutonomyActionInvariants(
+        makeAction({
+          kind: 'archive',
+          status: 'executed',
+          ruleSnapshot: PAUSE_SNAPSHOT,
+          completedAt: T1,
+        }),
+      ),
+    ).toThrow(/pausedSinceDays/);
   });
 });

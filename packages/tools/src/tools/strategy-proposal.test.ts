@@ -59,6 +59,7 @@ describe('generate_strategy_version_proposal', () => {
       data: { proposed: true, provider: 'fake-llm' },
     });
     if (!result.ok || !result.data.proposed) return;
+    expect(result.data.proposal.kind).toBe('parameter-tuning');
     expect(result.data.proposal.definitionHash).not.toBe(strategyDefinitionHash(definition));
     expect(result.data.proposal.definition.selection.rules[0]?.when).toBe(
       'quote.close > 10 && quote.close > 0',
@@ -164,6 +165,7 @@ describe('generate_strategy_version_proposal', () => {
           name: 'bad-ref-llm',
           generate: async <T>() =>
             ({
+              kind: 'parameter-tuning',
               definition,
               changeSummary: '引用伪造事实',
               factReferences: ['fact:not-exist'],
@@ -183,5 +185,27 @@ describe('generate_strategy_version_proposal', () => {
     });
     if (!result.ok || result.data.proposed) return;
     expect(result.data.reason).toContain('fact:not-exist');
+  });
+
+  it('new-strategy 分支：返回 name/description/definition，不做 unchanged 判定', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedStrategy(ctx, { description: 'proposal-fixture:new-strategy' });
+
+    const result = await generateStrategyVersionProposalTool.execute(
+      { strategyId: 'strategy-1' },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: { proposed: true, provider: 'fake-llm' },
+    });
+    if (!result.ok || !result.data.proposed) return;
+    expect(result.data.proposal.kind).toBe('new-strategy');
+    if (result.data.proposal.kind !== 'new-strategy') return;
+    expect(result.data.proposal.name).toBe('fixture 全新策略');
+    expect(result.data.proposal.description).toContain('全新策略');
+    expect(result.data.proposal.definitionHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.data.proposal.factReferences).toEqual(['runs:window']);
   });
 });

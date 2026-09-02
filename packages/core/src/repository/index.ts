@@ -586,6 +586,11 @@ export interface StrategyRepository {
   publishVersion(strategyId: string, versionId: string, at: Date): Promise<void>;
   pause(strategyId: string, at: Date): Promise<void>;
   resume(strategyId: string, at: Date): Promise<void>;
+  /**
+   * 归档为终态（M2 §9.1）：只允许 paused 的用户 Strategy；无自动恢复路径，
+   * 用户只可人工复制重建。调度清理由调用方（archive_strategy tool）负责。
+   */
+  archive(strategyId: string, at: Date): Promise<void>;
 }
 
 export interface StrategyRunRepository {

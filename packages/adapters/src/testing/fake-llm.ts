@@ -23,8 +23,10 @@ export const TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL = 'strategy_version_propo
  * - 'proposal-fixture:schema-error'  → 输出非 DSL 结构（tool 侧 schema 校验失败）
  * - 'proposal-fixture:unknown-field' → 输出引用未注册字段的定义（validate 阶段判 invalid）
  * - 'proposal-fixture:unchanged'     → 原样返回基线定义（unchanged 分支）
- * 无标记时默认在基线每条 selection rule 的 when 后追加 ' && quote.close > 0'
- * （无 selection rule 时改 metadata.style），保证 definitionHash 与基线不同且可通过校验。
+ * - 'proposal-fixture:new-strategy'  → 返回 kind=new-strategy 的全新策略提议（M2 §9.2）
+ * 无标记时默认返回 kind=parameter-tuning：在基线每条 selection rule 的 when 后追加
+ * ' && quote.close > 0'（无 selection rule 时改 metadata.style），保证 definitionHash
+ * 与基线不同且可通过校验。
  */
 
 /**
@@ -291,6 +293,33 @@ export class FakeLLMAdapter implements LLMAdapter {
         factReferences: [firstFactId],
       };
     }
+    if (description.includes('proposal-fixture:new-strategy')) {
+      // 全新策略分支（M2 §9.2）：独立定义，不基于基线调参。
+      return {
+        kind: 'new-strategy',
+        name: 'fixture 全新策略',
+        description: '测试：AI 基于 DSL catalog 提议的全新策略',
+        definition: {
+          schemaVersion: 1,
+          metadata: { style: 'fixture-new', horizon: 'short' },
+          universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
+          selection: {
+            logic: 'all',
+            rules: [
+              {
+                id: 'fixture-new',
+                name: '新策略规则',
+                when: 'quote.close > 0',
+                evidence: ['收盘价'],
+              },
+            ],
+          },
+          signals: { entry: [], exit: [], risk: [] },
+        },
+        changeSummary: '测试提议：创造全新策略',
+        factReferences: [firstFactId],
+      };
+    }
     const base = asRecord(asRecord(record?.baseVersion)?.definition);
     const definition: Record<string, unknown> =
       base === null
@@ -309,6 +338,7 @@ export class FakeLLMAdapter implements LLMAdapter {
         : (JSON.parse(JSON.stringify(base)) as Record<string, unknown>);
     if (description.includes('proposal-fixture:unchanged')) {
       return {
+        kind: 'parameter-tuning',
         definition,
         changeSummary: '测试：与基线一致',
         factReferences: [firstFactId],
@@ -334,6 +364,7 @@ export class FakeLLMAdapter implements LLMAdapter {
       definition.metadata = { ...(asRecord(definition.metadata) ?? {}), style: 'fixture-tuned' };
     }
     return {
+      kind: 'parameter-tuning',
       definition,
       changeSummary: '测试提议：在基线规则上追加收敛条件',
       factReferences: [firstFactId],
