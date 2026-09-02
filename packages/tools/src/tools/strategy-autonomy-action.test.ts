@@ -227,6 +227,21 @@ describe('strategy autonomy 人工队列 tools（confirm/reject）', () => {
     expect(strategy?.status).toBe('active');
     const version = await ctx.repos.strategy.findVersionById('strategy-1:v2');
     expect(version?.publishedAt).toBeDefined();
+    // 人工确认发布同样落 kind=publish-version 审计动作（gate=human-confirm）。
+    const publishRecords = await ctx.repos.strategyAutonomyAction.list({
+      strategyId: 'strategy-1',
+      kind: 'publish-version',
+    });
+    expect(publishRecords).toHaveLength(1);
+    expect(publishRecords[0]).toMatchObject({
+      status: 'published',
+      strategyVersionId: 'strategy-1:v2',
+      trigger: 'weekly-review',
+    });
+    expect(publishRecords[0]?.ruleSnapshot).toMatchObject({
+      gate: 'human-confirm',
+      publishedVersion: 2,
+    });
   });
 
   it('confirm：全新策略首发（draft、无基线版本）同样可确认发布（§9.2）', async () => {

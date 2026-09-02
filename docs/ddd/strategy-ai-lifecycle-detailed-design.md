@@ -48,11 +48,15 @@ StrategyAutonomyAction
 
 ```text
 propose-version:  drafted → validating → eligible → published
-                              │             └→ blocked（进人工队列 → confirmed→published / rejected）
+                              │       └→ blocked（进人工队列 → confirmed→published / rejected）
                               └→ failed
 publish-version:  由 propose-version 的 eligible→published 转移记录，不独立创建
 pause:            executed（创建即终态，动作已完成）
 ```
+
+备注：晋级门不过走 `validating→blocked` 直达（不经 eligible），避免中转失败把 blocked 动作
+滞留在 eligible、进而在下一周期被当作「发布失败重试」直接发布；人工确认后发布失败走
+`confirmed→blocked` 回滚回人工队列。
 
 人工队列语义：blocked 只是状态，Web 提供确认（→ 走 publish）与否决（→ rejected）入口；
 不新增通知渠道，周报汇总可见。
@@ -172,7 +176,9 @@ M2-S0～S4 全部交付，相对上文设计的实际偏差：
   同一 workflow 同一推进序列），partial/failed session 先 resume 再 replay。
 - **eligible 滞留重试**：发布失败的 eligible 动作在后续 weekly cycle 直接重试 publish
   （attempts 累加），是 §3.4「保留 eligible 下次重试」的落地。
-- **blocked 状态路径**：状态机无 validating→blocked 直达边，实际走 validating→eligible→blocked。
+- **blocked 状态路径**：初版状态机无 validating→blocked 直达边，实际走 validating→eligible→
+  blocked；后发现若 eligible→blocked 中转失败会泄漏（下周不重跑门禁直接发布），已改为
+  `validating→blocked` 直达（§2.2）。
 - **自动归档未实施**：按 §1 只做自动暂停；**AI 创造全新策略未开放**（§3.2 已收敛为只提议现有
   策略的新版本），两者均为待用户确认的后续切片。
 - 验收：vitest 1789 / test:db 365 / test:web 401 全绿，typecheck、lint 通过；Web 时间线与
@@ -244,3 +250,8 @@ benchmark 覆盖 ≥0.9；不检查 base/parent/diff（新策略无基线）。�
   只替换判定函数，不新增装配路径。
 - **Web UI 未动**：kind=archive 动作在工作台时间线按原始 key 展示（标签映射未新增），
   周报标签已补「自动归档」。
+- **publish-version 落库已实现**（补 §2.2「由 eligible→published 转移记录」）：自动发布
+  （`publishEligible`）与人工确认（`confirm_strategy_autonomy_action`）在发布成功后均落
+  kind=publish-version 动作，ruleSnapshot 记 `gate`（eligible | human-confirm）、`publishedVersion`
+  与 attempts；自动路径额外携带晋级门指标（validationTradingDays/vintageCoverageRatio/
+  completeObservationCount/benchmarkCoverageRatio）。周报摘要对发布动作展示「发布 vN」。

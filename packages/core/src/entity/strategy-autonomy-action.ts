@@ -44,10 +44,13 @@ export const STRATEGY_AUTONOMY_ACTION_TRANSITIONS: Record<
   readonly StrategyAutonomyActionStatus[]
 > = {
   drafted: ['validating', 'failed'],
-  validating: ['eligible', 'failed'],
+  // validating→blocked 直达：晋级门不过直接进人工队列，避免经 eligible 中转后
+  // 若 eligible→blocked 转移失败会泄漏为「下周不重跑门禁直接发布」。
+  validating: ['eligible', 'blocked', 'failed'],
   eligible: ['published', 'blocked'],
   blocked: ['confirmed', 'rejected'],
-  confirmed: ['published'],
+  // confirmed→blocked：人工确认后发布失败回滚回人工队列，保留乐观并发。
+  confirmed: ['published', 'blocked'],
   published: [],
   rejected: [],
   failed: [],

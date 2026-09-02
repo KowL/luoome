@@ -606,6 +606,7 @@ const autonomySnapshotSummary = (action: {
   const benchmarkCoverage = snapshot.benchmarkCoverage;
   const avgExcessReturn = snapshot.avgExcessReturn;
   const medianExcessReturn = snapshot.medianExcessReturn;
+  const publishedVersion = snapshot.publishedVersion;
   const parts: string[] = [];
   if (typeof sampleCount === 'number') parts.push(`完整样本 ${sampleCount}`);
   if (typeof benchmarkCoverage === 'number') {
@@ -617,6 +618,7 @@ const autonomySnapshotSummary = (action: {
   if (typeof medianExcessReturn === 'number') {
     parts.push(`中位超额 ${(medianExcessReturn * 100).toFixed(2)}%`);
   }
+  if (typeof publishedVersion === 'number') parts.push(`发布 v${publishedVersion}`);
   return parts.length === 0 ? '' : ` · ${parts.join(' · ')}`;
 };
 
@@ -626,13 +628,14 @@ const autonomySnapshotSummary = (action: {
  */
 const strategyAutonomyActionsWeekSection = async (
   periodStart: string,
-  periodEnd: string,
   now: Date,
   ctx: WorkflowContext,
 ): Promise<ReportSectionPiece> => {
+  // until 用 now（周报生成时刻）而非 periodEnd：自治动作在周日生成，晚于回溯到
+  // 上周五的 periodEnd，若用 periodEnd 作上界会把「本周动作」全部排除。
   const result = await ctx.tools.list_strategy_autonomy_actions.execute({
     since: new Date(`${periodStart}T00:00:00+08:00`),
-    until: new Date(`${periodEnd}T23:59:59.999+08:00`),
+    until: now,
     limit: 500,
   });
   if (!result.ok) {
@@ -1555,7 +1558,7 @@ const runWeeklyReport = async (
           alertFeedbackSection(periodStart, generatedAt, ctx),
           signalObservationWeekSection(periodStart, periodEnd, generatedAt, ctx),
           strategyReviewWeekSection(periodStart, generatedAt, ctx),
-          strategyAutonomyActionsWeekSection(periodStart, periodEnd, generatedAt, ctx),
+          strategyAutonomyActionsWeekSection(periodStart, generatedAt, ctx),
           adviceOutcomesWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
           nextWeekEventsSection(periodEnd, generatedAt, ctx),
           loadDecisionLoopScope(input, periodStart, periodEnd, ctx),

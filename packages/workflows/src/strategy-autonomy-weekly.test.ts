@@ -978,6 +978,23 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
     expect(strategy?.status).toBe('active');
     const version = await ctx.repos.strategy.findVersionById('strategy-gate-pass:v2');
     expect(version?.publishedAt).toBeDefined();
+    // 发布事件落 kind=publish-version 审计动作（DDD §2.2），带晋级门指标快照。
+    const publishRecords = await ctx.repos.strategyAutonomyAction.list({
+      strategyId: 'strategy-gate-pass',
+      kind: 'publish-version',
+    });
+    expect(publishRecords).toHaveLength(1);
+    expect(publishRecords[0]).toMatchObject({
+      status: 'published',
+      strategyVersionId: 'strategy-gate-pass:v2',
+      trigger: 'weekly-review',
+    });
+    expect(publishRecords[0]?.ruleSnapshot).toMatchObject({
+      gate: 'eligible',
+      publishedVersion: 2,
+      validationTradingDays: expect.any(Number),
+      benchmarkCoverageRatio: expect.any(Number),
+    });
   });
 
   it('session 推进后仍未 complete → 不评估，动作留在 validating', async () => {
@@ -1549,6 +1566,37 @@ describe('strategy-autonomy-weekly · 周报嵌套触发', () => {
       status: 'generated',
       periodEnd: '2026-08-28',
     });
+  });
+
+  it('周日运行：当日创建的自治动作出现在周报 AI 管理动作 section（不在周五 periodEnd 之前被截断）', async () => {
+    // Asia/Shanghai 2026-08-30 周日 10:00；自治动作（pause）在周日创建，晚于回溯的
+    // 上周五 periodEnd=2026-08-28，必须仍被周报收录。
+    const sunday = new Date('2026-08-30T02:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => sunday });
+    await seedTestStockUniverse(ctx);
+    await seedActiveStrategy(ctx, {
+      id: 'strategy-sunday-pause',
+      name: '周日暂停策略',
+      samples: 20,
+    });
+
+    const result = await strategyAutonomyWeeklyWorkflow.run({ mode: 'scheduled' }, ctx);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.paused).toBe(1);
+    expect(result.data.weeklyReport).toMatchObject({
+      status: 'generated',
+      periodEnd: '2026-08-28',
+    });
+
+    const reports = await ctx.repos.report.list({ kind: 'weekly' });
+    expect(reports).toHaveLength(1);
+    const section = reports[0]?.sections.find((item) => item.key === 'strategy-autonomy-actions');
+    const list = section?.blocks.find((block) => block.kind === 'list');
+    const items = list?.kind === 'list' ? list.items : [];
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ entityKind: 'strategy', entityId: 'strategy-sunday-pause' });
   });
 
   it('周报生成失败只记 weeklyReport failed，自治结果不受影响且不回滚', async () => {

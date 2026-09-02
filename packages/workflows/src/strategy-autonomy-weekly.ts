@@ -1267,8 +1267,8 @@ const runValidationSessions: WorkflowStep = async (prev, ctx) => {
  * - validating 且 session complete 的动作：复用 get_strategy_experiment_context 的
  *   promotion 装配（assessStrategyPromotion 阈值不动）；
  *   eligible-for-human-review → validating→eligible→publish→published；
- *   blocked → validating→eligible→blocked（状态机无 validating→blocked 直达边），
- *   lastError 记 reasons 摘要；
+ *   blocked → validating→blocked（直达，不经 eligible，避免中转移失败泄漏为
+ *   下周不重跑门禁直接发布），lastError 记 reasons 摘要；
  * - session 未 complete → 不评估，留在 validating；
  * - eligible 动作（含上周发布失败保留的）：直接重试 publish，失败保持 eligible 并
  *   原地补 attempts+1/lastError（create_strategy_autonomy_action 的 upsert 语义）。
@@ -1293,9 +1293,19 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
 
   const items: z.infer<typeof PromotionItemSchema>[] = [];
 
-  /** 发布并重试记账：eligible →（publish）→ published；失败保持 eligible 且 attempts+1。 */
+  /**
+   * 发布并重试记账：eligible →（publish）→ published；失败保持 eligible 且 attempts+1。
+   * 发布成功后落 kind=publish-version 审计动作（DDD §2.2「由 eligible→published 转移记录，
+   * 不独立创建」）：ruleSnapshot 记录发布方式与（首发/晋级门）指标，发布失败路径不落。
+   */
   const publishEligible = async (
     action: StrategyAutonomyAction,
+    gateMetrics?: {
+      readonly validationTradingDays: number;
+      readonly vintageCoverageRatio: number;
+      readonly completeObservationCount: number;
+      readonly benchmarkCoverageRatio: number;
+    },
   ): Promise<z.infer<typeof PromotionItemSchema>> => {
     if (action.strategyVersionId === undefined) {
       return {
@@ -1343,12 +1353,44 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         error: errorText(transitioned.error),
       };
     }
+    const publishedVersion = published.data.version.version;
+    const record = await ctx.tools.create_strategy_autonomy_action.execute({
+      action: {
+        id: `publish-${action.id}`,
+        kind: 'publish-version',
+        status: 'published',
+        strategyId: action.strategyId,
+        strategyVersionId: action.strategyVersionId,
+        trigger: 'weekly-review',
+        ruleSnapshot: {
+          gate: 'eligible',
+          publishedVersion,
+          attempts: action.attempts,
+          ...(gateMetrics ?? {}),
+        },
+        factReferences: [],
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      },
+    });
+    if (!record.ok) {
+      return {
+        actionId: action.id,
+        strategyId: action.strategyId,
+        strategyVersionId: action.strategyVersionId,
+        decision: 'error',
+        reasons: ['版本已发布且动作已转 published，但 publish-version 审计动作落库失败'],
+        error: errorText(record.error),
+      };
+    }
     return {
       actionId: action.id,
       strategyId: action.strategyId,
       strategyVersionId: action.strategyVersionId,
       decision: 'published',
-      reasons: [`候选版本已发布并切换为 currentVersion（v${published.data.version.version}）`],
+      reasons: [`候选版本已发布并切换为 currentVersion（v${publishedVersion}）`],
     };
   };
 
@@ -1452,25 +1494,9 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
           : experiment.data.promotion;
       if (assessment.status === 'blocked') {
         const lastError = `晋级门未通过: ${assessment.reasons.join(', ')}`;
-        const eligible = await ctx.tools.transition_strategy_autonomy_action.execute({
-          id: action.id,
-          expectedStatus: 'validating',
-          status: 'eligible',
-        });
-        if (!eligible.ok) {
-          items.push({
-            actionId: action.id,
-            strategyId: action.strategyId,
-            strategyVersionId: action.strategyVersionId,
-            decision: 'error',
-            reasons: ['动作 validating → eligible 转移失败'],
-            error: errorText(eligible.error),
-          });
-          continue;
-        }
         const blocked = await ctx.tools.transition_strategy_autonomy_action.execute({
           id: action.id,
-          expectedStatus: 'eligible',
+          expectedStatus: 'validating',
           status: 'blocked',
           lastError,
         });
@@ -1480,7 +1506,7 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
             strategyId: action.strategyId,
             strategyVersionId: action.strategyVersionId,
             decision: 'error',
-            reasons: ['动作 eligible → blocked 转移失败'],
+            reasons: ['动作 validating → blocked 转移失败'],
             error: errorText(blocked.error),
           });
           continue;
@@ -1511,7 +1537,14 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         });
         continue;
       }
-      items.push(await publishEligible(eligible.data.action));
+      items.push(
+        await publishEligible(eligible.data.action, {
+          validationTradingDays: experiment.data.promotion.metrics.validationTradingDays,
+          vintageCoverageRatio: experiment.data.promotion.metrics.vintageCoverageRatio,
+          completeObservationCount: experiment.data.promotion.metrics.completeObservationCount,
+          benchmarkCoverageRatio: experiment.data.promotion.metrics.benchmarkCoverageRatio,
+        }),
+      );
     } catch (error) {
       items.push({
         actionId: action.id,

@@ -167,12 +167,14 @@ describe('StrategyAutonomyAction', () => {
       ['drafted', 'validating'],
       ['drafted', 'failed'],
       ['validating', 'eligible'],
+      ['validating', 'blocked'],
       ['validating', 'failed'],
       ['eligible', 'published'],
       ['eligible', 'blocked'],
       ['blocked', 'confirmed'],
       ['blocked', 'rejected'],
       ['confirmed', 'published'],
+      ['confirmed', 'blocked'],
     ];
     for (const [from, to] of legal) {
       expect(() => assertStrategyAutonomyActionTransition(from, to)).not.toThrow();
@@ -180,7 +182,6 @@ describe('StrategyAutonomyAction', () => {
     const illegal: Array<[StrategyAutonomyAction['status'], StrategyAutonomyAction['status']]> = [
       ['drafted', 'published'],
       ['drafted', 'drafted'],
-      ['validating', 'blocked'],
       ['eligible', 'confirmed'],
       ['confirmed', 'rejected'],
       ['blocked', 'published'],

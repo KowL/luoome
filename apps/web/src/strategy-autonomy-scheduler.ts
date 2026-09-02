@@ -90,6 +90,7 @@ export const startStrategyAutonomyScheduler = (
       }
       const failedCount =
         result.data.failed +
+        result.data.archive.failed +
         result.data.proposals.failed +
         result.data.validation.failed +
         result.data.promotion.failed +

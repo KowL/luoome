@@ -39,10 +39,11 @@ export const listStrategyAutonomyActionsTool = defineTool({
       ...(input.status === undefined ? {} : { status: input.status }),
       ...(input.since === undefined ? {} : { since: input.since }),
     });
-    const actions = listed
-      .filter((action) => input.until === undefined || action.createdAt <= input.until)
-      .slice(0, input.limit);
-    return { actions, total: actions.length };
+    const filtered = listed.filter(
+      (action) => input.until === undefined || action.createdAt <= input.until,
+    );
+    const actions = filtered.slice(0, input.limit);
+    return { actions, total: filtered.length };
   },
 });
 
@@ -182,12 +183,18 @@ export const confirmStrategyAutonomyActionTool = defineTool({
       ctx,
     );
     if (!published.ok) {
-      await ctx.repos.strategyAutonomyAction.save({
-        ...confirmed,
+      const rolledBack = await ctx.repos.strategyAutonomyAction.updateStatus({
+        id: action.id,
+        expectedStatus: 'confirmed',
         status: 'blocked',
         lastError: `确认后发布失败: ${toolErrorText(published.error)}`,
         updatedAt: ctx.clock(),
       });
+      if (rolledBack === null) {
+        return errInvalidInput(
+          `确认后发布失败，且动作 confirmed → blocked 回滚失败（状态已被并发修改）: ${toolErrorText(published.error)}`,
+        );
+      }
       return published;
     }
     const done = await ctx.repos.strategyAutonomyAction.updateStatus({
@@ -199,6 +206,32 @@ export const confirmStrategyAutonomyActionTool = defineTool({
     });
     if (done === null) {
       return errInvalidInput('候选版本已发布，但动作 confirmed → published 转移失败，请人工核对');
+    }
+    try {
+      const now = ctx.clock();
+      await ctx.repos.strategyAutonomyAction.save({
+        id: `publish-${action.id}`,
+        kind: 'publish-version',
+        status: 'published',
+        strategyId: action.strategyId,
+        strategyVersionId: action.strategyVersionId,
+        trigger: 'weekly-review',
+        ruleSnapshot: {
+          gate: 'human-confirm',
+          publishedVersion: published.data.version.version,
+        },
+        factReferences: [],
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      });
+    } catch (error) {
+      return errInvalidInput(
+        `候选版本已发布，但 publish-version 审计动作落库失败，请人工核对: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
     return { action: done };
   },

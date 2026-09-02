@@ -87,7 +87,7 @@ const PROPOSAL_RULES =
 export const generateStrategyVersionProposalTool = defineTool({
   name: 'generate_strategy_version_proposal',
   description: '基于实验事实由 AI 生成 StrategyVersion 提议（workflow-only，不持久化）',
-  sideEffect: 'advice',
+  sideEffect: 'external',
   input: GenerateStrategyVersionProposalInput,
   output: GenerateStrategyVersionProposalOutput,
   handler: async (input, ctx) => {
