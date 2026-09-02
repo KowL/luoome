@@ -1096,11 +1096,15 @@ describe('行情源设置 API', () => {
       });
       const ctx = await buildWebContext(
         join(dir, 'luoome.db'),
-        { LUOOME_HOME: dir, LUOOME_MARKET_PROVIDER: 'real' },
+        {
+          LUOOME_HOME: dir,
+          LUOOME_MARKET_PROVIDER: 'real',
+          LUOOME_NEWS_SOURCES: 'eastmoney',
+        },
         { sources: { eastmoney } },
       );
       // 非行情 factory（news）复用注入实例，而非自构走全局 fetch 的新实例
-      await ctx.news?.fetchNews({ limit: 5 });
+      await ctx.news?.fetchNews({ page: 1, limit: 5 });
       expect(sharedFetch).toHaveBeenCalled();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -4157,6 +4161,15 @@ describe('Web 财经要闻 API', () => {
     expect(body.ok).toBe(true);
     expect(body.data?.source).toBe('eastmoney');
     expect(body.data?.items[0]?.title).toContain('降准');
+  });
+
+  it('page 与 source 透传给 tool manager', async () => {
+    const fetchNews = mock(stubNewsManager({}).fetchNews);
+    const manager = { ...stubNewsManager({}), fetchNews };
+    const testApp = createWebApp(await buildTestContext({ news: manager }));
+    const r = await testApp.fetch(new Request('http://test/api/news?limit=8&page=3&source=10jqka'));
+    expect(r.status).toBe(200);
+    expect(fetchNews).toHaveBeenCalledWith({ limit: 8, page: 3, source: '10jqka' });
   });
 
   it('limit 越界 → invalid_input (400)', async () => {

@@ -1113,6 +1113,22 @@ code {
   gap: var(--space-4);
 }
 
+.topbar-stock-search {
+  width: clamp(260px, 32vw, 460px);
+  margin-inline: auto;
+}
+
+.topbar-stock-search .market-search input {
+  height: 38px;
+  background: color-mix(in srgb, var(--panel-alt) 86%, transparent);
+  border-color: var(--line-strong);
+}
+
+.topbar-stock-search .market-search-results {
+  z-index: 60;
+  box-shadow: var(--shadow-lg);
+}
+
 .topbar .clock {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -1708,19 +1724,9 @@ html.has-bg-image .bg-layer {
   margin-top: 4px;
 }
 
-/* 股票搜索框放路由头右侧、对齐标题（仪表盘 / 行情页共用） */
-.route-header .market-search {
-  width: 260px;
-  align-self: center;
-}
-
 @media (max-width: 720px) {
   .route-header {
     flex-wrap: wrap;
-  }
-
-  .route-header .market-search {
-    width: 100%;
   }
 }
 
@@ -6433,6 +6439,59 @@ body > .modal {
 }
 
 /* 看盘页财经要闻列表 */
+.news-card-header {
+  align-items: flex-start;
+}
+
+.news-tabs {
+  display: flex;
+  gap: 18px;
+  margin-top: 8px;
+}
+
+.news-tab {
+  position: relative;
+  padding: 0 0 7px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.news-tab::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  content: '';
+  opacity: 0;
+  transform: scaleX(0.4);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.news-tab.active {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.news-tab.active::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+.news-scroll {
+  max-height: 330px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 5px;
+  scrollbar-width: thin;
+}
+
 .news-list {
   display: grid;
   gap: var(--space-2);
@@ -6459,8 +6518,15 @@ body > .modal {
 
 .news-title {
   display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-size: var(--text-sm);
   color: var(--ink);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
   text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
@@ -6474,6 +6540,56 @@ body > .modal {
 .news-meta {
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+.news-load-sentinel {
+  position: sticky;
+  bottom: 0;
+  width: 100%;
+  padding: 10px 0 6px;
+  border: 0;
+  background: linear-gradient(to bottom, transparent, var(--panel-solid) 38%);
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.news-load-sentinel:not(:disabled):hover {
+  color: var(--accent);
+}
+
+.news-load-sentinel:disabled {
+  cursor: default;
+}
+
+.news-load-sentinel.is-error {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.news-detail {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.news-detail-meta {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.news-detail-summary {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.news-detail-link {
+  justify-self: start;
+  text-decoration: none;
 }
 
 /* ============================================================
@@ -6517,6 +6633,33 @@ body > .modal {
   border-radius: var(--radius-sm);
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+}
+
+.stock-code-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition:
+    color var(--duration) var(--ease),
+    text-decoration-color var(--duration) var(--ease);
+}
+
+.stock-code-link:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.stock-code-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dragon-detail-title .stock-code-link {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
 }
 
 /* ============================================================
@@ -8392,6 +8535,11 @@ body > .modal {
     justify-content: space-between;
   }
 
+  .topbar-stock-search {
+    width: 100%;
+    grid-row: 2;
+  }
+
   .route-header {
     align-items: flex-start;
     flex-direction: column;
@@ -8772,6 +8920,30 @@ body > .modal {
   margin: 0;
 }
 
+.market-quote-code-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+
+.market-quote-code-link[href]::after {
+  color: currentColor;
+  content: '↗';
+  font-size: 0.82em;
+  opacity: 0.58;
+  transform: translateY(-1px);
+}
+
+.market-quote-code-link[href]:hover,
+.market-quote-code-link[href]:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .market-quote-badges {
   display: flex;
   gap: var(--space-2, 8px);
@@ -8808,6 +8980,25 @@ body > .modal {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--space-3);
   margin-top: var(--space-3);
+}
+
+.market-quote-section-label {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.market-valuation-grid {
+  margin-top: var(--space-2);
+}
+
+.market-valuation-grid .num {
+  font-variant-numeric: tabular-nums;
 }
 
 .market-quote-cell {

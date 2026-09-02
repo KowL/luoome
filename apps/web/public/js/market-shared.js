@@ -120,6 +120,16 @@ const changeClass = (change) =>
       ? 'text-pos'
       : 'text-neg';
 
+/** 行情卡代码展示直接使用完整 stockId；其中已包含交易所后缀。 */
+const stockCodeLabel = (stock) => stock.id;
+
+/** luoome A 股 stockId → 雪球个股页；非法或非沪深北代码不生成外链。 */
+const xueqiuStockUrl = (stockId) => {
+  if (typeof stockId !== 'string') return null;
+  const match = /^(\d{6})\.(SH|SZ|BJ)$/.exec(stockId.trim().toUpperCase());
+  return match === null ? null : `https://xueqiu.com/S/${match[2]}${match[1]}`;
+};
+
 export {
   buildMarketHash,
   buildMarketLink,
@@ -135,4 +145,6 @@ export {
   sessionLabel,
   sourceLabel,
   sourceSummary,
+  stockCodeLabel,
+  xueqiuStockUrl,
 };

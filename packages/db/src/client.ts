@@ -479,6 +479,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
       amount REAL,
       turnover_rate REAL,
       prev_close REAL,
+      total_shares REAL,
+      float_shares REAL,
+      total_market_cap REAL,
+      float_market_cap REAL,
+      pe_dynamic REAL,
+      pe_ttm REAL,
+      pe_static REAL,
+      ps_ttm REAL,
+      pb REAL,
       source TEXT NOT NULL,
       CONSTRAINT price_snapshots_pk PRIMARY KEY (stock_id, observed_at, source)
     )
@@ -486,6 +495,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   migratePriceSnapshotTimeColumns(db);
   migratePriceSnapshotPrevCloseColumn(db);
   migratePriceSnapshotAmountColumns(db);
+  migratePriceSnapshotValuationColumns(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS price_snapshots_stock_observed_idx
     ON price_snapshots (stock_id, observed_at)
@@ -1359,6 +1369,27 @@ const migratePriceSnapshotAmountColumns = (db: DrizzleDb): void => {
   }
   if (!cols.some((c) => c.name === 'turnover_rate')) {
     db.run(sql`ALTER TABLE price_snapshots ADD COLUMN turnover_rate REAL`);
+  }
+};
+
+/** price_snapshots 补齐单股详情所需的股本、市值与估值字段（幂等）。 */
+const migratePriceSnapshotValuationColumns = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(price_snapshots)`);
+  if (cols.length === 0) return;
+  const have = new Set(cols.map((column) => column.name));
+  const definitions = [
+    ['total_shares', 'REAL'],
+    ['float_shares', 'REAL'],
+    ['total_market_cap', 'REAL'],
+    ['float_market_cap', 'REAL'],
+    ['pe_dynamic', 'REAL'],
+    ['pe_ttm', 'REAL'],
+    ['pe_static', 'REAL'],
+    ['ps_ttm', 'REAL'],
+    ['pb', 'REAL'],
+  ] as const;
+  for (const [name, type] of definitions) {
+    if (!have.has(name)) db.run(sql.raw(`ALTER TABLE price_snapshots ADD COLUMN ${name} ${type}`));
   }
 };
 

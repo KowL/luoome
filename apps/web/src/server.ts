@@ -258,8 +258,8 @@ export const resolveDbPath = (): string => {
 
 /**
  * 进程级共享数据源实例集（docs/ddd/source-pluggability-and-observation-design.md §4.6/§4.7）。
- * 当前仅 EastmoneySource；组装根创建一次后分发给 market 与五个非行情 factory，
- * 行情源热更新复用同一实例。
+ * EastmoneySource 由组装根创建一次后分发给 market 与五个非行情 factory，
+ * 行情源热更新复用同一实例；其它域专属来源由对应 factory 管理。
  */
 export interface WebSourceSet {
   readonly eastmoney?: EastmoneySource;
@@ -1608,6 +1608,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    *
    * 参数：
    *   limit (可选) 1-100，默认 30
+   *   page (可选) 从 1 开始，默认 1
    *   category / keyword (可选) 透传 tool
    *
    * 上游不可达：tool 返回 adapter_error；web 包成 HTTP 502。
@@ -1616,10 +1617,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const input: Record<string, unknown> = {};
     const limit = c.req.query('limit');
     if (limit !== undefined) input.limit = Number.parseInt(limit, 10);
+    const page = c.req.query('page');
+    if (page !== undefined) input.page = Number.parseInt(page, 10);
     const category = c.req.query('category');
     if (category !== undefined) input.category = category;
     const keyword = c.req.query('keyword');
     if (keyword !== undefined) input.keyword = keyword;
+    const source = c.req.query('source');
+    if (source !== undefined) input.source = source;
     const r = await invokeTool('fetch_news', input);
     if (r.ok) return jsonResult(r);
     if (r.error.kind === 'invalid_input') return jsonResult(r);

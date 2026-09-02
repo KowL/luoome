@@ -12,6 +12,7 @@ const noopLogger: Logger = {
 };
 
 const baseQuery: FetchNewsQuery = {
+  page: 1,
   limit: 30,
   source: 'eastmoney',
 };
@@ -58,7 +59,7 @@ describe('createNewsManagerFromEnv', () => {
     const m = createNewsManagerFromEnv({}, { logger: noopLogger });
     expect(m.name).toBe('news');
     expect(typeof m.fetchNews).toBe('function');
-    expect(m.sources).toEqual(['eastmoney']);
+    expect(m.sources).toEqual(['eastmoney', '10jqka']);
   });
 
   it('配置未注册数据源时启动期失败，不做隐式 Eastmoney fallback', () => {
@@ -103,7 +104,7 @@ describe('createNewsManagerFromEnv', () => {
   it('status() 暴露 registry 观测（binding 未执行时无执行事实）', () => {
     const m = createNewsManagerFromEnv({}, { logger: noopLogger });
     const status = m.status();
-    expect(status).toHaveLength(1);
+    expect(status).toHaveLength(2);
     expect(status[0]).toMatchObject({
       dataset: 'finance-news',
       source: 'eastmoney',
@@ -130,9 +131,10 @@ describe('createNewsManagerFromEnv', () => {
     expect(data.items[2]?.category).toBe('市场');
     expect(data.items[0]?.publishedAt.toISOString()).toBe('2026-08-22T02:12:00.000Z');
 
-    // 固定拉取池 100 条
+    // 无筛选时按请求 limit 拉取，支持逐页加载且不跳项
     const calledUrl = String((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
-    expect(calledUrl).toContain('page_size=100');
+    expect(calledUrl).toContain('page_index=1');
+    expect(calledUrl).toContain('page_size=30');
   });
 
   it('category / keyword 过滤在 manager 侧执行，limit 截断', async () => {

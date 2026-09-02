@@ -27,17 +27,17 @@ export interface NewsFetchResult {
   readonly items: NewsRawItem[];
 }
 
-/** 单个数据源适配器（当前仅 EastmoneySource 实现；name 用于错误 / 日志标识）。 */
+/** 单个财经要闻数据源适配器；name 用于错误 / 日志标识。 */
 export interface NewsAdapterLike {
   readonly name: string;
-  /** 拉取最新一页要闻（pageSize 条，按发布时间倒序）；无数据时返回空 items，不抛错。 */
-  fetchNews(pageSize: number): Promise<NewsFetchResult>;
+  /** 拉取指定页要闻（按发布时间倒序）；无数据时返回空 items，不抛错。 */
+  fetchNews(page: number, pageSize: number): Promise<NewsFetchResult>;
 }
 
 /** 财经要闻域的 capability map（SourceRegistry 实例化，§6.2）。 */
 export type NewsCapabilityMap = {
   readonly 'finance-news': {
-    readonly request: { readonly pageSize: number };
+    readonly request: { readonly page: number; readonly pageSize: number };
     readonly result: NewsFetchResult;
   };
 };

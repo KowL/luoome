@@ -125,4 +125,29 @@ describe('QuoteSchema', () => {
 
     expect(result.success).toBe(false);
   });
+
+  it('股本、市值和估值字段可选透传；估值允许负值，规模字段拒绝负值', () => {
+    const base = {
+      stockId: '300857.SZ',
+      observedAt: '2026-07-28T07:00:00.000Z',
+      open: 250,
+      high: 260,
+      low: 248,
+      close: 254,
+      volume: 10_000,
+      source: 'eastmoney',
+    };
+    expect(
+      QuoteSchema.parse({
+        ...base,
+        totalShares: 489_363_040,
+        totalMarketCap: 124_538_000_049.6,
+        peTtm: -48.44,
+        psTtm: 12.34,
+        pb: 20.55,
+      }),
+    ).toMatchObject({ peTtm: -48.44, psTtm: 12.34, pb: 20.55 });
+    expect(QuoteSchema.safeParse({ ...base, totalMarketCap: -1 }).success).toBe(false);
+    expect(QuoteSchema.parse(base).peTtm).toBeUndefined();
+  });
 });

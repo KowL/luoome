@@ -20,6 +20,8 @@ import {
   sessionLabel,
   sourceLabel,
   sourceSummary,
+  stockCodeLabel,
+  xueqiuStockUrl,
 } from './market.js';
 
 describe('hash 参数解析与序列化', () => {
@@ -133,7 +135,21 @@ describe('最近查看', () => {
   });
 });
 
+describe('行情代码展示', () => {
+  it('stock.id 已含交易所后缀时不重复追加 exchange', () => {
+    expect(stockCodeLabel({ id: '300857.SZ', exchange: 'SZ' })).toBe('300857.SZ');
+  });
+});
+
 describe('展示 helper', () => {
+  it('沪深北 A 股代码映射为雪球个股链接，非法代码不生成链接', () => {
+    expect(xueqiuStockUrl('300857.SZ')).toBe('https://xueqiu.com/S/SZ300857');
+    expect(xueqiuStockUrl('600519.SH')).toBe('https://xueqiu.com/S/SH600519');
+    expect(xueqiuStockUrl('920000.BJ')).toBe('https://xueqiu.com/S/BJ920000');
+    expect(xueqiuStockUrl('00700.HK')).toBeNull();
+    expect(xueqiuStockUrl('invalid')).toBeNull();
+  });
+
   it('来源文案：主源 / 备用源 / 未知', () => {
     expect(sourceLabel('eastmoney')).toBe('东方财富');
     expect(sourceLabel('tencent')).toBe('腾讯行情（备用源）');

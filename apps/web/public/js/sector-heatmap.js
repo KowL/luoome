@@ -7,6 +7,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
+import { stockCodeLink } from './stock-link.js';
 import { el } from './ui.js';
 
 const formatPct = (n) => `${n > 0 ? '+' : ''}${(n * 100).toFixed(2)}%`;
@@ -48,10 +49,18 @@ const sectorTileStyle = (changePct) => {
 
 const renderTile = (item) => {
   const style = sectorTileStyle(item.changePct);
+  const leadingStock =
+    item.leadingStockCode === undefined
+      ? el('span', '', item.leadingStockName ?? '--')
+      : stockCodeLink(
+          item.leadingStockCode,
+          item.leadingStockName ?? item.leadingStockCode,
+          'sector-leading-stock-link',
+        );
   const tile = el('div', 'sector-tile', [
     el('div', 'sector-tile-name', item.name),
     el('div', 'sector-tile-pct', formatPct(item.changePct)),
-    el('div', 'sector-tile-lead', item.leadingStockName ?? '--'),
+    el('div', 'sector-tile-lead', leadingStock),
   ]);
   tile.style.background = style.background;
   tile.style.color = style.color;

@@ -13,7 +13,8 @@
 
 import { callApi } from './api.js';
 import { formatAmount } from './market-shared.js';
-import { openModal } from './modal.js';
+import { closeModal, openModal } from './modal.js';
+import { stockCodeLink } from './stock-link.js';
 import { $, el, mount } from './ui.js';
 
 const REFRESH_MS = 60_000;
@@ -165,6 +166,8 @@ const renderFilterTabs = () => {
 };
 
 const openDetail = (entry) => {
+  const codeLink = stockCodeLink(entry.code, entry.code);
+  codeLink.addEventListener('click', closeModal);
   const body = el('div', '', [
     el('div', 'stat-grid dragon-detail-grid', [
       stat('收盘价', formatPrice(entry.close)),
@@ -197,7 +200,7 @@ const openDetail = (entry) => {
       ),
     ]),
   ]);
-  openModal(`${entry.name}（${entry.code}）`, body);
+  openModal(el('span', 'dragon-detail-title', [`${entry.name}（`, codeLink, '）']), body);
 };
 
 const renderRow = (entry) => {

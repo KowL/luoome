@@ -11,6 +11,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { stockCodeLink } from './stock-link.js';
 import { $, el, mount } from './ui.js';
 
 const dateInShanghai = () => {
@@ -43,7 +44,7 @@ const formatEntry = (entry) => {
   const priceCell = el('span', entry.corrected === true ? 'corrected-mark' : '', priceStr);
   if (priceTitle.length > 0) priceCell.title = priceTitle;
   return el('tr', '', [
-    el('td', 'code', entry.code),
+    el('td', 'code', stockCodeLink(entry.code, entry.code)),
     el('td', '', entry.name ?? '--'),
     el('td', 'num', priceCell),
     el('td', 'num pos', formatPct(entry.changePct)),

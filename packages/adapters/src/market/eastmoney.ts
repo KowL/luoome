@@ -117,6 +117,15 @@ interface EastmoneyQuoteResponse {
     readonly f168?: number; // 换手率%
     readonly f169?: number; // 涨跌额
     readonly f170?: number; // 涨跌幅%
+    readonly f84?: number; // 总股本（股）
+    readonly f85?: number; // 流通股本（股）
+    readonly f116?: number; // 总市值（元）
+    readonly f117?: number; // 流通市值（元）
+    readonly f162?: number; // 动态市盈率
+    readonly f163?: number; // 静态市盈率
+    readonly f164?: number; // 市盈率 TTM
+    readonly f167?: number; // 市净率
+    readonly f245?: number; // 市销率 TTM
   };
 }
 
@@ -250,7 +259,8 @@ const suggestExchange = (item: EastmoneySuggestItem): Exchange | undefined => {
   }
 };
 
-const QUOTE_FIELDS = 'f43,f44,f45,f46,f47,f48,f60,f57,f58,f124,f168,f169,f170';
+const QUOTE_FIELDS =
+  'f43,f44,f45,f46,f47,f48,f60,f57,f58,f84,f85,f116,f117,f124,f162,f163,f164,f167,f168,f169,f170,f245';
 const KLINE_FIELDS = '1,2,3,4,5,6,8,9';
 /** suggest 接口公开 token（Eastmoney Web 前端同款，无需鉴权）。 */
 const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
@@ -302,6 +312,15 @@ interface EastmoneyQuoteValues {
   readonly prevClose?: number;
   readonly turnoverRatePct?: number;
   readonly upstreamAtSec?: number;
+  readonly totalShares?: number;
+  readonly floatShares?: number;
+  readonly totalMarketCap?: number;
+  readonly floatMarketCap?: number;
+  readonly peDynamic?: number;
+  readonly peTtm?: number;
+  readonly peStatic?: number;
+  readonly psTtm?: number;
+  readonly pb?: number;
 }
 
 const asNumber = (value: number | string | undefined): number | undefined =>
@@ -339,6 +358,23 @@ const buildEastmoneyQuote = (
     ...(values.prevClose !== undefined && values.prevClose > 0
       ? { prevClose: money(values.prevClose) }
       : {}),
+    ...(values.totalShares !== undefined && values.totalShares >= 0
+      ? { totalShares: values.totalShares }
+      : {}),
+    ...(values.floatShares !== undefined && values.floatShares >= 0
+      ? { floatShares: values.floatShares }
+      : {}),
+    ...(values.totalMarketCap !== undefined && values.totalMarketCap >= 0
+      ? { totalMarketCap: values.totalMarketCap }
+      : {}),
+    ...(values.floatMarketCap !== undefined && values.floatMarketCap >= 0
+      ? { floatMarketCap: values.floatMarketCap }
+      : {}),
+    ...(values.peDynamic !== undefined ? { peDynamic: values.peDynamic } : {}),
+    ...(values.peTtm !== undefined ? { peTtm: values.peTtm } : {}),
+    ...(values.peStatic !== undefined ? { peStatic: values.peStatic } : {}),
+    ...(values.psTtm !== undefined ? { psTtm: values.psTtm } : {}),
+    ...(values.pb !== undefined ? { pb: values.pb } : {}),
     source: 'eastmoney',
   };
 };
@@ -376,6 +412,15 @@ export const fetchEastmoneyQuote = async (
   const prevClose = asNumber(d.f60);
   const turnoverRatePct = asNumber(d.f168);
   const upstreamAtSec = asNumber(d.f124);
+  const totalShares = asNumber(d.f84);
+  const floatShares = asNumber(d.f85);
+  const totalMarketCap = asNumber(d.f116);
+  const floatMarketCap = asNumber(d.f117);
+  const peDynamic = asNumber(d.f162);
+  const peStatic = asNumber(d.f163);
+  const peTtm = asNumber(d.f164);
+  const pb = asNumber(d.f167);
+  const psTtm = asNumber(d.f245);
   return buildEastmoneyQuote(
     stockCode.toUpperCase(),
     {
@@ -388,6 +433,15 @@ export const fetchEastmoneyQuote = async (
       ...(prevClose !== undefined ? { prevClose } : {}),
       ...(turnoverRatePct !== undefined ? { turnoverRatePct } : {}),
       ...(upstreamAtSec !== undefined ? { upstreamAtSec } : {}),
+      ...(totalShares !== undefined ? { totalShares } : {}),
+      ...(floatShares !== undefined ? { floatShares } : {}),
+      ...(totalMarketCap !== undefined ? { totalMarketCap } : {}),
+      ...(floatMarketCap !== undefined ? { floatMarketCap } : {}),
+      ...(peDynamic !== undefined ? { peDynamic } : {}),
+      ...(peTtm !== undefined ? { peTtm } : {}),
+      ...(peStatic !== undefined ? { peStatic } : {}),
+      ...(psTtm !== undefined ? { psTtm } : {}),
+      ...(pb !== undefined ? { pb } : {}),
     },
     http.clock,
   );

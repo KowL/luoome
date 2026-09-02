@@ -1,6 +1,6 @@
 /* apps/web/public/js/entry-points.test.js —— 行情页入口结构断言。
  *
- * 「行情」不再有侧栏菜单项，入口改为：持仓 / Watchlist 点击股票、仪表盘搜索；
+ * 「行情」不再有侧栏菜单项，入口改为：持仓 / Watchlist 点击股票、顶栏搜索；
  * #market 路由与 #route-market section 必须保留（深链接仍可用）。
  * 无 DOM 环境，直接对 index.html / app.js 源码做结构断言。
  */
@@ -38,12 +38,11 @@ describe('侧栏与路由结构', () => {
 });
 
 describe('行情页入口', () => {
-  it('行情页搜索容器保留（页内换股票）', () => {
-    expect(html).toContain('id="market-search"');
-  });
-
-  it('仪表盘有股票搜索容器', () => {
-    expect(html).toContain('id="dashboard-stock-search"');
+  it('股票搜索统一放在顶栏，仪表盘和行情页不再重复展示', () => {
+    expect(html).toContain('id="topbar-stock-search"');
+    expect(html).not.toContain('id="market-search"');
+    expect(html).not.toContain('id="dashboard-stock-search"');
+    expect(appJs).toContain('bindTopbarStockSearch');
   });
 });
 
@@ -276,7 +275,15 @@ describe('看盘页市场行情区块', () => {
   });
 
   it('要闻区块走 /api/news（fetch_news tool）', () => {
-    expect(read('./dashboard-market.js')).toContain('/api/news');
+    const news = read('./dashboard-market.js');
+    expect(news).toContain('/api/news');
+    expect(news).toContain('encodeURIComponent(source)');
+    expect(news).toContain('wrap.onscroll');
+    expect(news).toContain('openModal(item.title');
+    expect(html).toContain('data-news-source="eastmoney"');
+    expect(html).toContain('data-news-source="10jqka"');
+    expect(html).toContain('data-news-source="10jqka">同花顺</button>');
+    expect(html).not.toContain('id="dash-news-meta"');
   });
 
   it('板块页支持日期上下文、列表排序与双侧 15 个极值热力图', () => {
@@ -292,10 +299,24 @@ describe('看盘页市场行情区块', () => {
 });
 
 describe('行情页指数条', () => {
-  it('行情页有 #market-indices 容器，走 /api/market/indices 与共用 index-strip', () => {
-    expect(html).toContain('id="market-indices"');
-    expect(read('./market.js')).toContain('/api/market/indices');
-    expect(read('./index-strip.js')).toContain('renderIndexStrip');
+  it('个股详情移除标题区和指数条', () => {
+    const marketSection = html.slice(
+      html.indexOf('id="route-market"'),
+      html.indexOf('id="route-holdings"'),
+    );
+    expect(marketSection).not.toContain('class="route-header"');
+    expect(html).not.toContain('id="market-indices"');
+    expect(read('./market.js')).not.toContain('/api/market/indices');
+  });
+});
+
+describe('个股估值信息', () => {
+  it('报价卡展示市值、PE、PS、PB 与股本字段', () => {
+    expect(html).toContain('id="market-quote-total-market-cap"');
+    expect(html).toContain('id="market-quote-pe-ttm"');
+    expect(html).toContain('id="market-quote-ps-ttm"');
+    expect(html).toContain('id="market-quote-pb"');
+    expect(read('./market-quote.js')).toContain('quote.quote.totalMarketCap');
   });
 });
 
@@ -346,6 +367,14 @@ describe('指数页结构', () => {
 });
 
 describe('行情页空态 A 股情绪面板', () => {
+  it('报价头股票代码是安全的新标签页雪球外链', () => {
+    expect(html).toContain('class="muted mono market-quote-code-link"');
+    expect(html).toContain('id="market-quote-code"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(read('./market-quote.js')).toContain('xueqiuStockUrl(stock.id)');
+  });
+
   it('空态容器存在，数据源为 get_ashare_sentiment（includeIndexes: false）', () => {
     expect(html).toContain('id="market-sentiment"');
     const sentiment = read('./market-sentiment.js');
@@ -443,9 +472,16 @@ describe('龙虎榜页面入口', () => {
     expect(dragonJs).toContain('dragon-seat-table');
     expect(dragonJs).toContain('60_000');
     expect(dragonJs).toContain("document.visibilityState !== 'visible'");
-    expect(dragonJs).toContain("import { openModal } from './modal.js'");
+    expect(dragonJs).toContain("import { closeModal, openModal } from './modal.js'");
+    expect(dragonJs).toContain('stockCodeLink(entry.code, entry.code)');
     expect(dragonJs).toContain("'non-trading-day'");
     expect(dragonJs).toContain("'empty-list'");
+  });
+
+  it('涨停梯队代码与板块领涨股复用行情链接组件', () => {
+    expect(read('./limit-up-ladder.js')).toContain('stockCodeLink(entry.code, entry.code)');
+    expect(read('./sector-heatmap.js')).toContain('stockCodeLink(');
+    expect(read('./sectors.js')).toContain('stockCodeLink(');
   });
 
   it('服务端暴露 GET /api/dragon-tiger（dragon_tiger_list tool）', () => {

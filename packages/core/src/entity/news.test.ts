@@ -64,13 +64,15 @@ describe('NewsItemSchema', () => {
 describe('FetchNewsQuerySchema', () => {
   it('缺省合法；limit 默认 30；source 为可选路由约束（未传 = 按配置顺序）', () => {
     const r = FetchNewsQuerySchema.parse({});
+    expect(r.page).toBe(1);
     expect(r.limit).toBe(30);
     expect(r.category).toBeUndefined();
     expect(r.keyword).toBeUndefined();
     expect(r.source).toBeUndefined();
   });
 
-  it('limit 越界 / 空 keyword 拒绝', () => {
+  it('page / limit 越界、空 keyword 拒绝', () => {
+    expect(FetchNewsQuerySchema.safeParse({ page: 0 }).success).toBe(false);
     expect(FetchNewsQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
     expect(FetchNewsQuerySchema.safeParse({ keyword: '  ' }).success).toBe(false);
   });

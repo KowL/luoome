@@ -2,7 +2,7 @@ import { money, type Quote, stockCode } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
-import { resolveQuotes } from './resolve-quotes.js';
+import { resolveQuote, resolveQuotes } from './resolve-quotes.js';
 
 describe('internal/resolveQuotes', () => {
   it('实时拉取落库；解析失败的 stockId 记 unresolved', async () => {
@@ -13,6 +13,43 @@ describe('internal/resolveQuotes', () => {
       expect.objectContaining({ stockId: '002594.SZ', status: 'ok', retrieval: 'live' }),
     ]);
     expect(await ctx.repos.quote.latestByStock('002594.SZ')).not.toBeNull();
+  });
+
+  it('单只股票走 fetchQuote，保留详情估值字段而不经过批量快照', async () => {
+    const ctx = await buildTestContext();
+    const now = ctx.clock();
+    const market = {
+      ...ctx.adapters.market,
+      fetchQuote: (): Promise<Quote> =>
+        Promise.resolve({
+          stockId: '002594.SZ',
+          observedAt: now,
+          fetchedAt: now,
+          timestampSource: 'retrieval',
+          ts: now,
+          open: money(100),
+          high: money(101),
+          low: money(99),
+          close: money(100.5),
+          volume: 1234,
+          totalMarketCap: 200_000_000_000,
+          peTtm: 19.6,
+          psTtm: 2.7,
+          pb: 3.8,
+          source: 'eastmoney',
+        }),
+      batchQuote: (): Promise<Map<string, Quote>> => Promise.reject(new Error('not expected')),
+    };
+    const item = await resolveQuote(
+      { ...ctx, adapters: { ...ctx.adapters, market } },
+      '002594.SZ',
+      { context: 'display' },
+    );
+    expect(item).toMatchObject({
+      status: 'ok',
+      retrieval: 'live',
+      quote: { totalMarketCap: 200_000_000_000, peTtm: 19.6, psTtm: 2.7, pb: 3.8 },
+    });
   });
 
   it('实时缺席回退本地最近快照（local-fallback）', async () => {

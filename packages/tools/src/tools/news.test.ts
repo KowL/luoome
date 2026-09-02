@@ -86,6 +86,7 @@ describe('fetch_news tool', () => {
     const r = await fetchNewsTool.execute({}, makeCtx(manager));
     expect(r.ok).toBe(true);
     expect(fetchNews).toHaveBeenCalledWith({
+      page: 1,
       limit: 30,
     });
 

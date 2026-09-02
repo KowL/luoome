@@ -26,9 +26,9 @@ const BASE_URL = 'https://np-listapi.eastmoney.com/comm/web/getNewsByColumns';
 const COLUMN_HEADLINES = '350';
 
 /** 要闻列表 URL；reqTrace 为必填的毫秒时间戳参数。 */
-export const newsListUrl = (pageSize: number, reqTrace: number): string =>
+export const newsListUrl = (page: number, pageSize: number, reqTrace: number): string =>
   `${BASE_URL}?client=web&biz=web_news_col&column=${COLUMN_HEADLINES}&order=1&needInteract=0` +
-  `&page_index=1&page_size=${pageSize}&req_trace=${reqTrace}`;
+  `&page_index=${page}&page_size=${pageSize}&req_trace=${reqTrace}`;
 
 /** 'YYYY-MM-DD HH:mm:ss'（Asia/Shanghai）→ ISO（显式 +08:00，避免依赖运行环境时区）。 */
 const parseShowTime = (v: unknown): string | undefined => {

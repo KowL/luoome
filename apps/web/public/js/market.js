@@ -12,7 +12,6 @@
 'use strict';
 
 import { callApi } from './api.js';
-import { renderIndexStrip } from './index-strip.js';
 import { createMarketChart, createMinuteBarChart } from './market-chart.js';
 import { renderLimitUpFacts, renderMarkers } from './market-facts.js';
 import {
@@ -30,7 +29,6 @@ import {
   parseRouteHash,
   pushRecentView,
 } from './market-shared.js';
-import { createStockSearchBox } from './search-box.js';
 import { $, el, mount } from './ui.js';
 
 /* ============ 页面状态（§11.4） ============ */
@@ -38,7 +36,7 @@ import { $, el, mount } from './ui.js';
 const RECENT_KEY = 'luoome.market.recent';
 const REFRESH_ACTIVE_MS = 60_000;
 const REFRESH_IDLE_MS = 300_000;
-const EMPTY_TIP = '搜索并选择一只股票查看行情；支持深链接 #market?stockId=002594.SZ&range=3m。';
+const EMPTY_TIP = '请从顶栏搜索并选择一只股票；支持深链接 #market?stockId=002594.SZ&range=3m。';
 
 const state = {
   stockId: null,
@@ -118,8 +116,8 @@ const teardownMarket = () => {
 
 /* ============ 搜索（§11.5）：交互在 search-box.js，本页只提供去向 ============ */
 
-/** 写最近查看并跳转行情深链接；行情页换股票与仪表盘搜索共用此入口。 */
-const navigateToStock = (stock) => {
+/** 写最近查看并跳转行情深链接；顶栏搜索默认打开最新行情上下文。 */
+const navigateToStock = (stock, { resetContext = false } = {}) => {
   const recent = pushRecentView(loadRecent(), {
     id: stock.id,
     code: stock.code,
@@ -127,13 +125,9 @@ const navigateToStock = (stock) => {
     exchange: stock.exchange,
   });
   saveRecent(recent);
-  window.location.hash = buildMarketHash(stock.id, state.range, state.date, state.granularity);
-};
-
-const bindSearch = () => {
-  const wrap = $('#market-search');
-  if (wrap === null) return;
-  createStockSearchBox(wrap, { onSelect: (stock) => navigateToStock(stock) });
+  window.location.hash = resetContext
+    ? buildMarketHash(stock.id, '3m', null, 'day')
+    : buildMarketHash(stock.id, state.range, state.date, state.granularity);
 };
 
 const renderRecent = () => {
@@ -159,13 +153,6 @@ const renderRecent = () => {
 };
 
 /* ============ 加载与渲染 ============ */
-
-/** 行情页顶部指数条：与 dashboard 共用 index-strip；失败静默（指数条只是辅助信息）。 */
-const loadMarketIndices = async () => {
-  const r = await callApi('/api/market/indices');
-  if (!r.ok) return;
-  renderIndexStrip('market-indices', r.data, null);
-};
 
 const showBanner = (message) => {
   const banner = $('#market-banner');
@@ -515,13 +502,11 @@ const loadMarketView = async () => {
 
 /** 路由入口：app.js 在 #market（含深链接参数变化）时调用。 */
 const renderMarket = async (setStatus) => {
-  bindSearch();
   bindRangeSwitch();
   bindChartTabs();
   bindMarkerToggle();
   bindVisibility();
   renderRecent();
-  void loadMarketIndices();
   const { params } = parseRouteHash(window.location.hash);
   const stockId = params.get('stockId');
   const range = normalizeMarketRange(params.get('range'));
@@ -595,5 +580,7 @@ export {
   sessionLabel,
   sourceLabel,
   sourceSummary,
+  stockCodeLabel,
+  xueqiuStockUrl,
 } from './market-shared.js';
 export { navigateToStock, renderMarket, teardownMarket };

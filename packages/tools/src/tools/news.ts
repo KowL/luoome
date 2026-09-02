@@ -17,9 +17,9 @@ export const FetchNewsOutput = NewsListSchema;
 export const fetchNewsTool = defineTool({
   name: 'fetch_news',
   description:
-    '拉取东方财富财经要闻流：id/标题/摘要/分类/来源媒体/发布时间/原文链接，按发布时间倒序。' +
+    '分页拉取东方财富或同花顺财经要闻流：id/标题/摘要/分类/来源媒体/发布时间/原文链接，按发布时间倒序。' +
     '可选 category（宏观/市场/行业/公司/监管/海外/商品/资金/政策，标题关键词推断）与 keyword（标题/摘要包含）过滤，' +
-    'limit 默认 30 上限 100。空 items + warnings=["empty-list"] 表示无匹配。',
+    'source 选择数据源，page 从 1 开始，limit 默认 30 上限 100。空 items + warnings=["empty-list"] 表示无匹配。',
   sideEffect: 'read',
   input: FetchNewsInput,
   output: FetchNewsOutput,

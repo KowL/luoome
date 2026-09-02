@@ -11,6 +11,7 @@
 'use strict';
 
 import { callApi } from './api.js';
+import { openModal } from './modal.js';
 import { renderSectorHeatmap, selectSectorExtremes } from './sector-heatmap.js';
 import { $, el, mount } from './ui.js';
 
@@ -141,40 +142,117 @@ const renderMiniHeatmap = async () => {
   mount(wrap, grid);
 };
 
-/* ---- 财经要闻（/api/news，点击跳原文） ---- */
+/* ---- 财经要闻（双源分页；滚动到底加载更多；点击弹出详情） ---- */
+
+const NEWS_PAGE_SIZE = 8;
+let newsRequestId = 0;
+
+const shouldLoadNewsOnScroll = (container) =>
+  container.scrollHeight - container.scrollTop - container.clientHeight < 48;
+
+const showNewsDetail = (item) => {
+  const time = new Date(item.publishedAt).toLocaleString('zh-CN', { hour12: false });
+  const source = item.source ?? '未知来源';
+  const body = el('article', 'news-detail', [
+    el('div', 'news-detail-meta', `${source} · ${time}`),
+    el('p', 'news-detail-summary', item.summary || item.title),
+  ]);
+  if (typeof item.url === 'string' && item.url.length > 0) {
+    const link = el('a', 'btn btn-primary news-detail-link', '查看原文 ↗');
+    link.setAttribute('href', item.url);
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noopener noreferrer');
+    body.append(link);
+  }
+  openModal(item.title, body);
+};
 
 const newsRow = (item) => {
-  const title = el('a', 'news-title', item.title);
-  if (typeof item.url === 'string' && item.url.length > 0) {
-    title.setAttribute('href', item.url);
-    title.setAttribute('target', '_blank');
-    title.setAttribute('rel', 'noopener noreferrer');
-  }
-  return el('div', 'news-row', [
+  const title = el('button', 'news-title', item.title);
+  title.type = 'button';
+  title.addEventListener('click', () => showNewsDetail(item));
+  const row = el('div', 'news-row', [
     el('span', 'news-dot'),
     el('div', 'news-main', [
       title,
       el('div', 'news-meta', `${item.source ?? '东方财富'} · ${fmtRelativeTime(item.publishedAt)}`),
     ]),
   ]);
+  return row;
+};
+
+const renderNewsSource = async (source) => {
+  const wrap = $('#dash-news-list');
+  if (wrap === null) return;
+  const requestId = ++newsRequestId;
+  wrap.onscroll = null;
+  let page = 1;
+  let loading = false;
+  let finished = false;
+  let lastScrollLoadAt = 0;
+  const list = el('div', 'news-list');
+  const sentinel = el('button', 'news-load-sentinel', '加载更多');
+  sentinel.type = 'button';
+  mount(wrap, [list, sentinel]);
+
+  const loadPage = async () => {
+    if (loading || finished) return;
+    loading = true;
+    sentinel.disabled = true;
+    sentinel.textContent = '正在加载…';
+    const r = await callApi(
+      `/api/news?limit=${NEWS_PAGE_SIZE}&page=${page}&source=${encodeURIComponent(source)}`,
+    );
+    if (requestId !== newsRequestId) return;
+    if (!r.ok) {
+      sentinel.textContent = `加载失败，点击重试（${r.error?.kind ?? 'internal'}）`;
+      sentinel.classList.add('is-error');
+      sentinel.disabled = false;
+      loading = false;
+      return;
+    }
+    sentinel.classList.remove('is-error');
+    const items = r.data?.items ?? [];
+    const knownIds = new Set(Array.from(list.children, (node) => node.dataset.newsId));
+    for (const item of items) {
+      if (knownIds.has(String(item.id))) continue;
+      const row = newsRow(item);
+      row.dataset.newsId = String(item.id);
+      list.append(row);
+    }
+    page += 1;
+    finished = items.length < NEWS_PAGE_SIZE;
+    sentinel.textContent = finished ? '已加载全部快讯' : '加载更多';
+    sentinel.disabled = finished;
+    if (page === 2 && items.length === 0) sentinel.textContent = '（暂无快讯）';
+    loading = false;
+  };
+
+  sentinel.addEventListener('click', () => {
+    if (performance.now() - lastScrollLoadAt < 1_500) return;
+    void loadPage();
+  });
+  await loadPage();
+  wrap.onscroll = () => {
+    if (!shouldLoadNewsOnScroll(wrap)) return;
+    lastScrollLoadAt = performance.now();
+    void loadPage();
+  };
 };
 
 const renderNews = async () => {
-  const wrap = $('#dash-news-list');
-  if (wrap === null) return;
-  const r = await callApi('/api/news?limit=8');
-  if (!r.ok) {
-    mount(wrap, el('p', 'placeholder', `要闻加载失败（${r.error?.kind ?? 'internal'}）。`));
-    return;
-  }
-  const items = r.data?.items ?? [];
-  if (items.length === 0) {
-    mount(wrap, el('p', 'placeholder', '（暂无所选分类要闻）'));
-    return;
-  }
-  mount(wrap, el('div', 'news-list', items.map(newsRow)));
-  const meta = $('#dash-news-meta');
-  if (meta !== null && r.data?.asOf !== undefined) meta.textContent = `共 ${r.data.total} 条`;
+  const tabs = Array.from(document.querySelectorAll('[data-news-source]'));
+  const activate = async (tab) => {
+    for (const item of tabs) {
+      const selected = item === tab;
+      item.classList.toggle('active', selected);
+      item.setAttribute('aria-selected', String(selected));
+    }
+    await renderNewsSource(tab.dataset.newsSource);
+  };
+  for (const tab of tabs) tab.onclick = () => void activate(tab);
+  const active = tabs.find((tab) => tab.classList.contains('active')) ?? tabs[0];
+  if (active !== undefined) await activate(active);
 };
 
 /** 进入 dashboard 路由时调用一次；三区块并发加载、独立降级。 */
@@ -182,4 +260,11 @@ const renderDashboardMarketBlocks = async () => {
   await Promise.all([renderOverview(), renderMiniHeatmap(), renderNews()]);
 };
 
-export { firstProbeDay, fmtRelativeTime, overviewStats, prevDay, renderDashboardMarketBlocks };
+export {
+  firstProbeDay,
+  fmtRelativeTime,
+  overviewStats,
+  prevDay,
+  renderDashboardMarketBlocks,
+  shouldLoadNewsOnScroll,
+};

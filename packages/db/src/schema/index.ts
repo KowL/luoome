@@ -394,6 +394,15 @@ export const priceSnapshots = sqliteTable(
     turnoverRatePct: real('turnover_rate'),
     /** 昨收（可选）：数据源给得出才填；缓存保留后，DB 降级路径不再丢涨幅基准。 */
     prevClose: real('prev_close').$type<Money>(),
+    totalShares: real('total_shares'),
+    floatShares: real('float_shares'),
+    totalMarketCap: real('total_market_cap'),
+    floatMarketCap: real('float_market_cap'),
+    peDynamic: real('pe_dynamic'),
+    peTtm: real('pe_ttm'),
+    peStatic: real('pe_static'),
+    psTtm: real('ps_ttm'),
+    pb: real('pb'),
     source: text('source').notNull(),
   },
   (t) => ({

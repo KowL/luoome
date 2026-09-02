@@ -302,8 +302,8 @@ export class EastmoneySource
 
   // ---------- news（要闻滚动栏目） ----------
 
-  async fetchNews(pageSize: number): Promise<NewsFetchResult> {
-    const raw = await this.json(newsListUrl(pageSize, this.now()));
+  async fetchNews(page: number, pageSize: number): Promise<NewsFetchResult> {
+    const raw = await this.json(newsListUrl(page, pageSize, this.now()));
     return { items: parseNewsList(raw) };
   }
 }
