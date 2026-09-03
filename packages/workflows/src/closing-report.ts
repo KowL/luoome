@@ -308,6 +308,11 @@ const strategyActionsSection = async (
     const quote = advice.basedOn.quotes?.[advice.subjectId];
     const parts: string[] = [];
     if (quote !== undefined) parts.push(`现价 ${quote.close}`);
+    const pricePlan: string[] = [];
+    if (advice.entryPrice !== undefined) pricePlan.push(`买点 ${advice.entryPrice}`);
+    if (advice.targetPrice !== undefined) pricePlan.push(`卖点 ${advice.targetPrice}`);
+    if (advice.stopLoss !== undefined) pricePlan.push(`止损 ${advice.stopLoss}`);
+    if (pricePlan.length > 0) parts.push(pricePlan.join(' / '));
     parts.push(advice.reasoning.premise);
     if (advice.risks.length > 0) parts.push(`风险：${advice.risks.join('；')}`);
     parts.push(`有效期至 ${dateInShanghai(advice.validUntil)}`);

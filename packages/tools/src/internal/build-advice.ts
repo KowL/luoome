@@ -16,6 +16,12 @@ export const AdviceLLMSchema = z.object({
   decision: AdviceDecisionSchema,
   confidence: z.number().min(0).max(100),
   horizon: AdviceHorizonSchema,
+  /** 买点（buy 时建议给出；与 quote.close 同单位）；观望可缺省。 */
+  entryPrice: z.number().positive().optional(),
+  /** 卖点/目标价（buy 时建议给出）；观望可缺省。 */
+  targetPrice: z.number().positive().optional(),
+  /** 止损价（buy 时建议给出，须低于 entryPrice）；观望可缺省。 */
+  stopLoss: z.number().positive().optional(),
   reasoning: AdviceReasoningSchema,
   risks: z.array(z.string()),
 });

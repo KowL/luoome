@@ -116,6 +116,13 @@ export interface Advice {
   readonly decision: AdviceDecision;
   readonly confidence: number; // 0-100
   readonly horizon: AdviceHorizon;
+  /**
+   * 操作价位建议（AI 基于近期走势 + 策略信号给出）；观望（watch）或信息不足时可缺省。
+   * entryPrice=建议买点；targetPrice=建议卖点/目标价；stopLoss=止损价。
+   */
+  readonly entryPrice?: Money;
+  readonly targetPrice?: Money;
+  readonly stopLoss?: Money;
   readonly reasoning: AdviceReasoning;
   readonly risks: readonly string[];
   readonly disclaimers: readonly string[]; // 必填，至少包含 STANDARD_DISCLAIMERS
@@ -236,6 +243,9 @@ export const AdviceSchema = z.object({
   decision: AdviceDecisionSchema,
   confidence: z.number().min(0).max(100),
   horizon: AdviceHorizonSchema,
+  entryPrice: MoneySchema.optional(),
+  targetPrice: MoneySchema.optional(),
+  stopLoss: MoneySchema.optional(),
   reasoning: AdviceReasoningSchema,
   risks: z.array(z.string()),
   disclaimers: z.array(z.string()).min(1),

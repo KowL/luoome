@@ -9,6 +9,7 @@ import {
   type DailyBar,
   isPublishableOperationalRun,
   type MarketDataAdapterLike,
+  money,
   type Quote,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
@@ -44,6 +45,9 @@ const STRATEGY_ADVICE_SYSTEM = `analyze_stock:strategy_candidate
 - watch 仅用于存在明确风险信号（显著回落/破位、冲高回落派发、量价背离等）或信息不足以判断时，
   并说明观察什么条件可转为买入。
 - avoid 用于明确利空或信号前提已被破坏时。
+- buy 必须输出 entryPrice（建议买点，参考 quote.close 与均线/支撑位）、targetPrice（目标卖点）
+  和 stopLoss（止损，须低于 entryPrice）；三者均为与 quote.close 同单位的价格。
+- watch 可缺省价位；若给出价位，在 premise 说明触发买入的条件与对应价位。
 - 不得为策略添加输入 JSON 中不存在的名称、类型或历史表现。
 - indicators 可能因可选日线 enrichment 不可用而为空；不得补造缺失指标。
 - 反证和风险必须明确使用“可能、若、需验证”等不确定措辞，不能伪装成已发生事实。`;
@@ -263,6 +267,9 @@ export const analyzeStrategyCandidateTool = defineTool({
       decision: normalizeStrategyCandidateDecision(llmOutput.decision, position !== null),
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,
+      ...(llmOutput.entryPrice === undefined ? {} : { entryPrice: money(llmOutput.entryPrice) }),
+      ...(llmOutput.targetPrice === undefined ? {} : { targetPrice: money(llmOutput.targetPrice) }),
+      ...(llmOutput.stopLoss === undefined ? {} : { stopLoss: money(llmOutput.stopLoss) }),
       reasoning,
       risks: groundStrategyAdviceRisks(llmOutput.risks),
       disclaimers: [...STANDARD_DISCLAIMERS],

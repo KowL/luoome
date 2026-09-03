@@ -1,6 +1,7 @@
 import {
   type AShareSentimentManagerLike,
   type AShareSentimentSnapshot,
+  money,
   STANDARD_DISCLAIMERS,
   type StrategyDslV1,
   type StrategyVersion,
@@ -205,6 +206,9 @@ const seedStrategyAdvice = async (ctx: ToolContext, date: string): Promise<void>
     decision: 'buy',
     confidence: 60,
     horizon: 'short',
+    entryPrice: money(10.5),
+    targetPrice: money(12),
+    stopLoss: money(9.8),
     reasoning: {
       premise: '策略信号触发且量价配合，值得买入。',
       evidence: ['fixture evidence'],
@@ -289,6 +293,9 @@ describe('closing-report workflow', () => {
     ]);
     const item = list?.kind === 'list' ? list.items[0] : undefined;
     expect(item?.detail).toContain('买入');
+    expect(item?.detail).toContain('买点 10.5');
+    expect(item?.detail).toContain('卖点 12');
+    expect(item?.detail).toContain('止损 9.8');
     expect(item?.detail).toContain('策略信号触发且量价配合');
     const text = section?.blocks.find((block) => block.kind === 'text');
     expect(text?.kind === 'text' ? text.text : '').toContain('值得买入');
