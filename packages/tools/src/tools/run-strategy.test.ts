@@ -9,6 +9,7 @@ import {
   type StrategyDslV1,
   type StrategySignalEmission,
   type StrategyVersion,
+  stockCode,
   strategyDefinitionHash,
 } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
@@ -826,6 +827,47 @@ describe('run_strategy', () => {
       sourceKind: 'strategy-signal',
     });
     expect(observations).toEqual([]);
+  });
+
+  it('策略匹配排除 ST/*ST 股票（按名称前缀判定，含显式 stockIds）', async () => {
+    const ctx = await buildTestContext();
+    const observedAt = new Date('2026-07-28T08:00:00.000Z');
+    await ctx.repos.stockUniverse.applySnapshot({
+      syncId: 'sync-st-universe',
+      appliedAt: observedAt,
+      snapshot: {
+        source: 'test-universe',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        observedAt,
+        complete: true,
+        reportedTotal: 2,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: stockCode('600519'),
+            exchange: 'SH' as const,
+            name: '贵州茅台',
+            listingStatus: 'listed' as const,
+          },
+          {
+            stockId: '000001.SZ',
+            code: stockCode('000001'),
+            exchange: 'SZ' as const,
+            name: 'ST测试',
+            listingStatus: 'listed' as const,
+          },
+        ],
+      },
+    });
+    await seedStrategy(ctx);
+    const result = await runStrategyTool.execute(
+      { strategyId: 'scan-strategy', stockIds: ['600519.SH', '000001.SZ'] },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.results.map((item) => item.stockId)).toEqual(['600519.SH']);
+    expect(result.data.run.summary).toMatchObject({ universeCount: 1, evaluatedCount: 1 });
   });
 
   it('keeps the current scan cutoff when one stock has stale observations', async () => {

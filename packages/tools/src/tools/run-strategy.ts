@@ -13,6 +13,7 @@ import {
   getStrategySignalEmission,
   inspectStrategyDefinitionReferences,
   isPublishableOperationalRun,
+  isSTName,
   readStrategyRunSnapshot,
   STRATEGY_EVALUATOR_CODE_HASH,
   STRATEGY_EVALUATOR_VERSION,
@@ -258,6 +259,12 @@ export const runStrategyTool = defineTool({
       candidateIds = [...new Set(requestedIds)]
         .filter((stockId) => includeSet === undefined || includeSet.has(stockId))
         .filter((stockId) => !excludeSet.has(stockId))
+        // ST/*ST 为风险警示股票，策略匹配统一排除：按名称前缀动态判定，
+        // 不依赖 DSL 静态 excludeStockIds（ST 状态每天可能变，硬编码列表无法维护）。
+        .filter((stockId) => {
+          const stock = validationById.get(stockId);
+          return stock === undefined || !isSTName(stock.name);
+        })
         .sort();
       const activeById = new Map(validationStocks.map((stock) => [stock.id, stock]));
 
