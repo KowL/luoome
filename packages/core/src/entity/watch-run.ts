@@ -14,7 +14,11 @@ export const WatchRunSchema = z.object({
   evaluatedPools: z.number().int().nonnegative(),
   evaluatedStocks: z.number().int().nonnegative(),
   triggered: z.number().int().nonnegative(),
+  /** 保留旧契约：尝试投递的触发数，包含失败和仅日志。 */
   notified: z.number().int().nonnegative(),
+  /** 缺省表示历史轮次未记录，不能推断为 0。 */
+  delivered: z.number().int().nonnegative().optional(),
+  unknownRules: z.number().int().nonnegative().optional(),
   suppressedByCooldown: z.number().int().nonnegative(),
   /** v0.7 策略预警（docs/ddd/strategy-watchlist-unification-detailed-design.md §3.6/§4/§11）：方案 / 全局每日上限命中被抑制条数。 */
   suppressedByDailyLimit: z.number().int().nonnegative(),
@@ -45,6 +49,9 @@ export const assertWatchRunInvariants = (run: WatchRun): void => {
   }
   if (run.notified + run.suppressedByCooldown + run.suppressedByDailyLimit > run.triggered) {
     throw new InvariantError('watch run 抑制分组合计 > triggered');
+  }
+  if (run.delivered !== undefined && run.delivered + run.notifyFailed > run.notified) {
+    throw new InvariantError('watch run delivered + notifyFailed > notified');
   }
   if (run.notifyFailed > run.notified) {
     throw new InvariantError('watch run notifyFailed > notified');

@@ -3535,6 +3535,107 @@ export const registerRepositoryContractTests = (
     });
 
     describe('WatchTriggerRepository', () => {
+      it('求值提交同时保存触发和边沿，失效 owner 无法覆盖', async () => {
+        await repos.watchTrigger.acquireExecution('owner', T0, T2);
+        const state = {
+          poolId: 'pool-1',
+          stockId: '002594.SZ',
+          ruleId: 'r_fixture',
+          active: true,
+          lastEvaluatedAt: T1,
+        };
+        const input = {
+          owner: 'owner',
+          now: T1,
+          triggers: [makeWatchTrigger('atomic')],
+          states: [state],
+        };
+        expect(await repos.watchTrigger.commitEvaluation(input)).toBe(true);
+        expect(await repos.watchTrigger.findById('atomic')).toMatchObject({ id: 'atomic' });
+        expect(await repos.watchRuleState.listByPool('pool-1')).toMatchObject([state]);
+        expect(
+          await repos.watchTrigger.commitEvaluation({
+            ...input,
+            owner: 'stale-owner',
+            triggers: [makeWatchTrigger('rejected')],
+            states: [{ ...state, active: false }],
+          }),
+        ).toBe(false);
+        expect(await repos.watchTrigger.findById('rejected')).toBeNull();
+        expect(await repos.watchRuleState.listByPool('pool-1')).toMatchObject([state]);
+      });
+
+      it('批次中一条非法触发不会留下部分触发或边沿', async () => {
+        await repos.watchTrigger.acquireExecution('owner', T0, T2);
+        await expect(
+          repos.watchTrigger.commitEvaluation({
+            owner: 'owner',
+            now: T1,
+            triggers: [makeWatchTrigger('valid'), makeWatchTrigger('invalid', { evidence: [] })],
+            states: [
+              {
+                poolId: 'pool-1',
+                stockId: '002594.SZ',
+                ruleId: 'r_fixture',
+                active: true,
+                lastEvaluatedAt: T1,
+              },
+            ],
+          }),
+        ).rejects.toThrow();
+        expect(await repos.watchTrigger.findById('valid')).toBeNull();
+        expect(await repos.watchRuleState.listByPool('pool-1')).toEqual([]);
+      });
+
+      it('执行租约互斥，过期接管后旧 owner 不能续租或释放新租约', async () => {
+        expect(await repos.watchTrigger.acquireExecution('a', T0, T1)).toBe(true);
+        expect(await repos.watchTrigger.acquireExecution('b', T0, T1)).toBe(false);
+        expect(await repos.watchTrigger.renewExecution('a', T0, T2)).toBe(true);
+        expect(await repos.watchTrigger.acquireExecution('b', T1, T3)).toBe(false);
+        expect(await repos.watchTrigger.acquireExecution('b', T2, T3)).toBe(true);
+        expect(await repos.watchTrigger.renewExecution('a', T2, FAR_FUTURE)).toBe(false);
+        await repos.watchTrigger.releaseExecution('a');
+        expect(await repos.watchTrigger.acquireExecution('c', T2, T3)).toBe(false);
+        await repos.watchTrigger.releaseExecution('b');
+        expect(await repos.watchTrigger.acquireExecution('c', T2, T3)).toBe(true);
+      });
+
+      it('投递前记录尝试，pending 和重试也占每日额度，回写不重复计数', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('delivery', {
+            deliveryStatus: 'pending',
+            notified: false,
+          }),
+        );
+        expect(await repos.watchTrigger.countAttemptedSince(FAR_PAST)).toBe(0);
+        await repos.watchTrigger.beginDelivery(['delivery'], T1);
+        expect(await repos.watchTrigger.findById('delivery')).toMatchObject({
+          deliveryAttempts: 1,
+          lastDeliveryAttemptAt: T1,
+          deliveryStatus: 'pending',
+        });
+        expect(await repos.watchTrigger.countAttemptedSince(FAR_PAST)).toBe(1);
+        await repos.watchTrigger.setDeliveryStatus(['delivery'], 'failed');
+        await repos.watchTrigger.beginDelivery(['delivery'], T2);
+        await repos.watchTrigger.setDeliveryStatus(['delivery'], 'sent', 'notification');
+        expect(await repos.watchTrigger.findById('delivery')).toMatchObject({
+          deliveryAttempts: 2,
+          lastDeliveryAttemptAt: T2,
+          notificationId: 'notification',
+        });
+        expect(await repos.watchTrigger.countAttemptedSince(FAR_PAST)).toBe(2);
+      });
+
+      it('旧失败记录重试时保留原来一次尝试', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('legacy-failed', { deliveryStatus: 'failed' }),
+        );
+        await repos.watchTrigger.beginDelivery(['legacy-failed'], T1);
+        expect(await repos.watchTrigger.findById('legacy-failed')).toMatchObject({
+          deliveryAttempts: 2,
+        });
+      });
+
       it('save + findById 往返一致', async () => {
         const t = makeWatchTrigger('tr-1');
         await repos.watchTrigger.save(t);
@@ -3716,6 +3817,15 @@ export const registerRepositoryContractTests = (
     });
 
     describe('WatchRunRepository', () => {
+      it('区分历史未记录与无法求值、仅日志的健康指标，更新保持一致', async () => {
+        const old = makeWatchRun('run-health');
+        await repos.watchRun.save(old);
+        expect(await repos.watchRun.findById(old.id)).toEqual(old);
+        const current = { ...old, delivered: 0, unknownRules: 3 };
+        await repos.watchRun.save(current);
+        expect(await repos.watchRun.findById(old.id)).toEqual(current);
+      });
+
       it('running → succeeded upsert，latest/listRecent 按 startedAt 倒序', async () => {
         await repos.watchRun.save(
           makeWatchRun('run-1', {

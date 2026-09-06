@@ -190,7 +190,8 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 ```
 
 - `sync-stock-events`：空列表不删旧事件；单 provider 失败标 stale 并记 `partial`/`failed`。未配置数据源时记 `succeeded`、`upserted=0`。
-- `evaluate-event-rules`：盘前一次，`intraday-watch` 不评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 推送。
+- `evaluate-event-rules`：盘前一次，`intraday-watch` 不重新评估 event-date 规则；`normal` 优先级仅记录，`important/urgent` 走飞书，未配置时标记 `fallback-log`。
+- 预警试跑不写正式触发或改变边沿状态。盘中循环与事件任务共用执行租约；失败及中断投递由后续盘中循环或事件执行补偿，当日最多尝试三次，重试间隔 1 分钟、5 分钟，仍受每日额度限制。
 - `post-market-data`：非交易日跳过；目录失败不阻断相关股票日线，局部失败返回 `partial`。
 - 内置 `run-strategy-schedules`：每次 tick 原子抢占到期配置；非交易日或暂停策略跳过并推进，
   多实例与手工正式运行由租约防重。策略启用推荐政策后，完成运行会按评分、排名、每轮上限和冷却

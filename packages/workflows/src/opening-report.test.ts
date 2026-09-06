@@ -284,44 +284,54 @@ describe('opening-report workflow', () => {
     });
   });
 
-  it('通知失败时保留报告并把 deliveryStatus 记为 failed', async () => {
-    const manager: AShareSentimentManagerLike = {
-      status: () => [],
-      fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
-    };
-    const base = await buildTestContext({
-      clock: () => generatedAt,
-      ashareSentiment: manager,
-    });
-    const ctx = {
-      ...base,
-      notification: {
-        send: async (input: {
-          channel: 'feishu' | 'log';
-          payload: { title: string; content: string; level: string };
-        }) => ({
-          notification: {
-            id: 'failed-report-notification',
-            channel: input.channel,
-            payload: input.payload,
-            result: 'failed',
-            errorMessage: 'fixture delivery failure',
-            sentAt: generatedAt,
-          },
-        }),
-      },
-    };
+  it.each(['failed', 'suppressed'] as const)(
+    '通知 %s 时保留报告并记录真实投递状态',
+    async (notificationResult) => {
+      const manager: AShareSentimentManagerLike = {
+        status: () => [],
+        fetch: async () => ({ ok: true, data: sentimentSnapshot() }),
+      };
+      const base = await buildTestContext({
+        clock: () => generatedAt,
+        ashareSentiment: manager,
+      });
+      const ctx = {
+        ...base,
+        notification: {
+          send: async (input: {
+            channel: 'feishu' | 'log';
+            payload: { title: string; content: string; level: string };
+          }) => ({
+            notification: {
+              id: 'failed-report-notification',
+              channel: input.channel,
+              payload: input.payload,
+              result: notificationResult,
+              errorMessage: 'fixture delivery failure',
+              sentAt: generatedAt,
+            },
+          }),
+        },
+      };
 
-    const result = await openingReportWorkflow.run({ date: '2026-07-27', mode: 'scheduled' }, ctx);
+      const result = await openingReportWorkflow.run(
+        { date: '2026-07-27', mode: 'scheduled' },
+        ctx,
+      );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.notified).toBe(false);
-    expect(result.data.report.deliveryStatus).toBe('failed');
-    const stored = await getReportTool.execute({ id: result.data.report.id }, ctx);
-    expect(stored).toMatchObject({
-      ok: true,
-      data: { report: { deliveryStatus: 'failed' } },
-    });
-  });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.notified).toBe(false);
+      expect(result.data.report.deliveryStatus).toBe(
+        notificationResult === 'failed' ? 'failed' : 'fallback-log',
+      );
+      const stored = await getReportTool.execute({ id: result.data.report.id }, ctx);
+      expect(stored).toMatchObject({
+        ok: true,
+        data: {
+          report: { deliveryStatus: notificationResult === 'failed' ? 'failed' : 'fallback-log' },
+        },
+      });
+    },
+  );
 });

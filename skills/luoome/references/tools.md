@@ -61,7 +61,17 @@ Strategies are rejected. Before calling one:
 4. Call using the discovered input schema.
 5. Verify the returned result and re-read state when correctness matters.
 
+`create_strategy_observation_candidates` defaults to published operational runs. Evaluation observations
+require an explicit `evaluationSessionId` matching a completed run in that session; they remain research
+facts and never create Watchlist membership or Advice. `complete_strategy_observations` can restrict
+completion to `runIds` and uses local qfq bars only.
+
 Internal persistence tools such as watch-run or trigger recording are intended for workflows; do not invoke them for normal user requests unless their MCP description explicitly supports the requested operation.
+
+`watch_execution`, `commit_watch_evaluation`, `begin_watch_delivery` are workflow-only write
+primitives; `list_watch_delivery_retries` is workflow-only read. They are not in public registry/MCP
+discovery. Alert previews do not write triggers or consume live state. Live delivery retries are
+bounded to three attempts within the Shanghai calendar day and count against daily quotas.
 
 `subscribe_strategy_to_watchlist` and `unsubscribe_strategy_from_watchlist` are the explicit subscription
 contract. A Strategy has no Watchlist projection without an active subscription. Published operational runs

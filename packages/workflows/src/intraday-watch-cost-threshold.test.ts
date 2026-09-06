@@ -386,8 +386,17 @@ describe('intraday-watch cost-threshold 规则', () => {
       createdAt: T0,
       updatedAt: T0,
     });
+    const plan = await ctx.repos.alertPlan.findById('persist-check');
+    if (!plan?.rules[0]) throw new Error('missing fixture rule');
+    await ctx.repos.watchRuleState.upsert({
+      poolId: plan.id,
+      stockId: '002594.SZ',
+      ruleId: plan.rules[0].id,
+      active: false,
+      lastEvaluatedAt: T0,
+    });
     const r = await intradayWatchWorkflow.run(
-      { alertPlanIds: ['persist-check'], notify: false },
+      { alertPlanIds: ['persist-check'], notify: true },
       ctx as unknown as ToolContext,
     );
     expect(r.ok).toBe(true);
@@ -400,7 +409,7 @@ describe('intraday-watch cost-threshold 规则', () => {
     expect(persisted[0]?.direction).toBe('buy');
   });
 
-  it('cooldown：30 分钟内第二次跑同样价格 → notified=false，但仍落库', async () => {
+  it('cooldown：30 分钟内再次进入条件被抑制，仍保留触发事实', async () => {
     const { ctx } = await setupCtx({ '002594.SZ': 108.35 });
     await savePlan(ctx, {
       id: 'cooldown-pool',
@@ -416,33 +425,31 @@ describe('intraday-watch cost-threshold 规则', () => {
       createdAt: T0,
       updatedAt: T0,
     });
-    // v0.7：notify=true 的 bootstrap 默认不 emit。先跑一轮 dry-run 完成 bootstrap，
-    // 期间 state 被写为 active=true + 一次 ATTEMPTED 触发落库（dry-run 自身不占 cooldown）。
-    const rDry = await intradayWatchWorkflow.run(
-      { alertPlanIds: ['cooldown-pool'], notify: false },
+    const plan = await ctx.repos.alertPlan.findById('cooldown-pool');
+    if (!plan?.rules[0]) throw new Error('missing fixture rule');
+    const inactive = {
+      poolId: plan.id,
+      stockId: '002594.SZ',
+      ruleId: plan.rules[0].id,
+      active: false,
+      lastEvaluatedAt: T0,
+    };
+    await ctx.repos.watchRuleState.upsert(inactive);
+    const first = await intradayWatchWorkflow.run(
+      { alertPlanIds: [plan.id], notify: true },
       ctx as unknown as ToolContext,
     );
-    expect(rDry.ok).toBe(true);
-    if (!rDry.ok) return;
-    expect(rDry.data.triggers).toHaveLength(1);
-
-    // 第二轮 notify=true：active=true → on-enter 不再 emit，但首轮那条 ATTEMPTED 已在冷却窗内
-    // → 这里不该有新触发（NOT notified=false from cooldown），仅当有「上升沿」才会被冷却抑制
-    // 调整预期：dry-run 落库的触发 deliveryStatus='not-requested'（不占 cooldown），
-    // notify=true 首轮应触发新上升沿 → cooldown 命中上次 dry-run 触发（同 currentStock）。
-    // 简化：直接清掉 dry-run 的触发记录，再跑 notify=true 一次，预期 notified=true。
-    const dryRunTrigger = rDry.data.triggers[0];
-    if (dryRunTrigger === undefined) throw new Error('expected one dry-run trigger');
-    await ctx.repos.watchTrigger.remove(dryRunTrigger.id);
-
-    const r1 = await intradayWatchWorkflow.run(
-      { alertPlanIds: ['cooldown-pool'], notify: true },
+    expect(first.ok && first.data.notified).toBe(1);
+    await ctx.repos.watchRuleState.upsert(inactive);
+    const second = await intradayWatchWorkflow.run(
+      { alertPlanIds: [plan.id], notify: true },
       ctx as unknown as ToolContext,
     );
-    expect(r1.ok).toBe(true);
-    if (!r1.ok) return;
-    // 第二轮 notify=true 状态机 active=true → on-enter 默认不 emit
-    // （停在这里：cooldown 语义由 §7/§4 决定，本例体现 v0.7 默认行为）
-    expect(r1.data.triggers).toHaveLength(0);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.triggers).toHaveLength(1);
+    expect(second.data.triggers[0]?.deliveryStatus).toBe('suppressed-cooldown');
+    expect(second.data.notified).toBe(0);
+    expect(await ctx.repos.watchTrigger.listByPool(plan.id)).toHaveLength(2);
   });
 });

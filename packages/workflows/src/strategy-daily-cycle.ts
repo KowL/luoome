@@ -713,16 +713,21 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
                   strategyId: schedule.strategyId,
                   runId,
                   policy: schedule.recommendationPolicy,
+                  mode: 'scheduled',
                 });
                 if (!recommendations.ok) {
                   status = 'partial';
                   reason = errorText(recommendations.error);
-                } else if (recommendations.data.notificationFailed > 0) {
+                } else if (
+                  recommendations.data.notificationFailed > 0 ||
+                  recommendations.data.generationFailed > 0 ||
+                  (recommendations.data.preflight?.unavailable ?? 0) > 0
+                ) {
                   adviceCount = recommendations.data.advices.length;
                   notificationFailed = recommendations.data.notificationFailed;
                   preflight = recommendations.data.preflight;
                   status = 'partial';
-                  reason = `${recommendations.data.notificationFailed} 条通知发送失败`;
+                  reason = `${recommendations.data.preflight?.unavailable ?? 0} 条数据不可用；${recommendations.data.generationFailed} 条建议生成失败；${recommendations.data.notificationFailed} 条通知发送失败`;
                 } else {
                   adviceCount = recommendations.data.advices.length;
                   notificationFailed = recommendations.data.notificationFailed;

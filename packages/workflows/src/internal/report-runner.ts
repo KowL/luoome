@@ -158,8 +158,8 @@ export const executeReportWorkflow = async (
         notificationErrorKind = rendered.error.kind;
       } else {
         const notification = await ctx.tools.send_notification.execute({
-          channel: 'log',
-          log: {
+          channel: 'feishu',
+          feishu: {
             title: deliveredReport.title,
             content: rendered.data.content.slice(0, 5000),
             level: deliveredReport.status === 'complete' ? 'success' : 'warn',
@@ -169,7 +169,7 @@ export const executeReportWorkflow = async (
           notificationFailed = true;
           notificationErrorKind = notification.ok ? 'delivery_failed' : notification.error.kind;
         } else {
-          notified = true;
+          notified = notification.data.notification.result === 'success';
           const deliveryStatus =
             notification.data.notification.result === 'suppressed' ? 'fallback-log' : 'sent';
           const delivered = await ctx.tools.set_report_delivery_status.execute({

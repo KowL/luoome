@@ -774,6 +774,13 @@ const AUTONOMY_ACTION_STATUS = {
 const autonomySnapshotSummary = (snapshot) => {
   if (snapshot === null || typeof snapshot !== 'object') return undefined;
   const parts = [];
+  if (typeof snapshot.validationFrom === 'string' && typeof snapshot.validationTo === 'string') {
+    parts.push(
+      `${snapshot.validationMode === 'historical-replay' ? '历史回放' : '验证区间'} ${snapshot.validationFrom.slice(0, 10)} 至 ${snapshot.validationTo.slice(0, 10)}`,
+    );
+  }
+  if (typeof snapshot.observationsReadyAt === 'string')
+    parts.push(`收益数据截至 ${fmtDateTime(snapshot.observationsReadyAt)}（末日 T+5）`);
   if (typeof snapshot.sampleCount === 'number') parts.push(`样本 ${snapshot.sampleCount}`);
   if (typeof snapshot.benchmarkCoverage === 'number') {
     parts.push(`benchmark 覆盖 ${snapshot.benchmarkCoverage.toFixed(2)}`);

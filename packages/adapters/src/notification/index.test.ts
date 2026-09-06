@@ -1,5 +1,5 @@
 import type { NotificationRepository, RepositoryRegistry } from '@luoome/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FeishuWebhookAdapter } from './feishu.js';
 import { LogChannelAdapter } from './log-channel.js';
@@ -195,12 +195,18 @@ describe('notification/NotificationManager', () => {
 
   it('feishu 未配置 → result=suppressed', async () => {
     const { repos, notif } = makeRepos();
-    const mgr = new NotificationManager({ repos, logger: noopLogger, idGenerator: () => 'n-1' });
+    const info = vi.fn();
+    const mgr = new NotificationManager({
+      repos,
+      logger: { ...noopLogger, info },
+      idGenerator: () => 'n-1',
+    });
     const r = await mgr.send({
       channel: 'feishu',
       payload: { title: 't', content: 'c', level: 'info' },
     });
     expect(r.notification.result).toBe('suppressed');
+    expect(info).toHaveBeenCalledWith('[luoome/notify] t — c', { level: 'info', title: 't' });
     expect(notif.rows.size).toBe(1);
   });
 

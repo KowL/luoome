@@ -2702,6 +2702,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
                 evaluatedStocks: latestRun.evaluatedStocks ?? 0,
                 triggered: latestRun.triggered ?? 0,
                 notified: latestRun.notified ?? 0,
+                delivered: latestRun.delivered ?? null,
+                unknownRules: latestRun.unknownRules ?? null,
                 suppressedByCooldown: latestRun.suppressedByCooldown ?? 0,
                 suppressedByDailyLimit: latestRun.suppressedByDailyLimit ?? 0,
                 notifyFailed: latestRun.notifyFailed ?? 0,

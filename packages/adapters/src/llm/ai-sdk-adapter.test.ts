@@ -2,7 +2,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { AISDKAdapter } from './ai-sdk-adapter.js';
-import type { ResolvedAIModelProfile } from './model-catalog.js';
+import { AIModelCatalog, type ResolvedAIModelProfile } from './model-catalog.js';
 
 const TestSchema = z.object({
   decision: z.enum(['buy', 'sell', 'hold']),
@@ -53,6 +53,66 @@ const profile = (
 });
 
 describe('llm/ai-sdk-adapter', () => {
+  it('对象联合向兼容 API 发送顶层 object，同时保留分支校验', async () => {
+    const schema = z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('parameter-tuning'), changeSummary: z.string() }),
+      z.object({ kind: z.literal('new-strategy'), name: z.string() }),
+    ]);
+    let response = { kind: 'parameter-tuning', changeSummary: '收紧阈值' };
+    const requests: Record<string, unknown>[] = [];
+    const catalog = new AIModelCatalog(
+      {
+        version: 1,
+        providers: {
+          test: {
+            type: 'openai-compatible',
+            baseURL: 'https://provider.test/v1',
+            apiKeyEnv: 'TEST_API_KEY',
+          },
+        },
+        profiles: {
+          generation: { model: 'test:model' },
+          agent: { model: 'test:model' },
+        },
+      },
+      { TEST_API_KEY: 'test-key' },
+      {
+        fetchImpl: (async (_url, init) => {
+          requests.push(JSON.parse(String(init?.body)));
+          return Response.json({
+            id: 'completion-test',
+            object: 'chat.completion',
+            created: 0,
+            model: 'model',
+            choices: [
+              {
+                index: 0,
+                message: { role: 'assistant', content: JSON.stringify(response) },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+          });
+        }) as typeof fetch,
+      },
+    );
+    const adapter = new AISDKAdapter(catalog.resolve('generation'));
+    await expect(adapter.generate({ system: 'proposal', schema, data: {} })).resolves.toMatchObject(
+      response,
+    );
+    expect(requests[0]).toMatchObject({
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          schema: { type: 'object', oneOf: expect.any(Array) },
+        },
+      },
+    });
+
+    response = { kind: 'new-strategy', changeSummary: '缺少必填 name' };
+    await expect(adapter.generate({ system: 'proposal', schema, data: {} })).rejects.toThrow();
+  });
+
   it('Output.object 解析并以原 Zod schema 校验', async () => {
     const adapter = new AISDKAdapter(profile(mockModel('{"decision":"hold","confidence":65}')));
     const out = await adapter.generate<z.infer<typeof TestSchema>>({

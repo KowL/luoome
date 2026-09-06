@@ -853,6 +853,18 @@ export interface AlertPlanRepository {
  * - countAttemptedSince 每日上限（方案 / 全局）计数用，poolId=null 为全局。
  */
 export interface WatchTriggerRepository {
+  /** 所有预警 workflow 共用租约，串行保护边沿、配额与发送。 */
+  acquireExecution(owner: string, now: Date, until: Date): Promise<boolean>;
+  renewExecution(owner: string, now: Date, until: Date): Promise<boolean>;
+  releaseExecution(owner: string): Promise<void>;
+  commitEvaluation(input: {
+    readonly owner: string;
+    readonly now: Date;
+    readonly triggers: readonly WatchTrigger[];
+    readonly states: readonly WatchRuleState[];
+  }): Promise<boolean>;
+  /** 发送前持久化尝试，崩溃留下 pending 供有限重试。 */
+  beginDelivery(ids: readonly string[], at: Date): Promise<void>;
   save(trigger: WatchTrigger): Promise<void>;
   findById(id: string): Promise<WatchTrigger | null>;
   /** 审计 / 复盘：按 createdAt 倒序。 */
@@ -883,7 +895,8 @@ export interface WatchTriggerRepository {
     readonly eventId?: string;
   }): Promise<readonly WatchTrigger[]>;
   /**
-   * 统计 since 以来 ATTEMPTED 状态的触发数。poolId 缺省 / null 为全局计数（每日上限用）。
+   * 统计 since 以来触发的投递尝试数（含已开始的 pending 与重试）；旧 ATTEMPTED 记录计一次。
+   * poolId 缺省 / null 为全局计数。
    */
   countAttemptedSince(since: Date, poolId?: string | null): Promise<number>;
   /**

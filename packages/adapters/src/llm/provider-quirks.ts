@@ -38,11 +38,28 @@ export const normalizeOpenAISchema = (value: unknown): unknown => {
   return normalized;
 };
 
-export const toNormalizedJsonSchema = (schema: z.ZodType): Record<string, unknown> =>
-  normalizeOpenAISchema(z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' })) as Record<
-    string,
-    unknown
-  >;
+export const toNormalizedJsonSchema = (schema: z.ZodType): Record<string, unknown> => {
+  const normalized = normalizeOpenAISchema(
+    z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }),
+  ) as Record<string, unknown>;
+  const variants = normalized.oneOf ?? normalized.anyOf;
+  if (
+    normalized.type === undefined &&
+    Array.isArray(variants) &&
+    variants.length > 0 &&
+    variants.every(
+      (variant: unknown) =>
+        variant !== null &&
+        typeof variant === 'object' &&
+        'type' in variant &&
+        variant.type === 'object',
+    )
+  ) {
+    // MiniMax 要求顶层 type；对象联合补充它不改变 oneOf/anyOf 的分支约束。
+    normalized.type = 'object';
+  }
+  return normalized;
+};
 
 export const stripThinkAndFences = (text: string): string => {
   const thinkClose = /<\/think>/gi;

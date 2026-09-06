@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
+import { signalObservationDueAt } from '../entity/signal-observation.js';
 import { canonicalStrategyDefinitionJson, type StrategyVersion } from '../entity/strategy.js';
+import { dateInShanghai, isHoliday, isWeekend } from '../trading-calendar.js';
 
 export const StrategyPromotionPolicySchema = z.object({
   policyVersion: z.literal('strategy-promotion-v1'),
@@ -268,5 +270,107 @@ export const assessStrategyInitialPublication = (
     },
     factReferences: [...new Set(input.factReferences ?? [])],
     limitations: [...new Set(limitations)],
+  });
+};
+
+export const STRATEGY_AUTOMATIC_VALIDATION_TRADING_DAYS = 20;
+
+/** Session 使用 UTC 日期键；从已有 T+5 收盘结果的最近交易日向前选取历史样本。 */
+export const strategyAutomaticValidationWindow = (evaluatedAt: Date) => {
+  let cursor = new Date(`${dateInShanghai(evaluatedAt)}T00:00:00Z`);
+  const days: Date[] = [];
+  while (days.length < STRATEGY_AUTOMATIC_VALIDATION_TRADING_DAYS) {
+    if (
+      !isWeekend(cursor) &&
+      !isHoliday(cursor) &&
+      signalObservationDueAt(new Date(`${dateInShanghai(cursor)}T15:00:00+08:00`), 't5') <=
+        evaluatedAt
+    ) {
+      days.push(cursor);
+    }
+    cursor = new Date(cursor.getTime() - 86_400_000);
+  }
+  const from = days[days.length - 1] as Date;
+  const to = days[0] as Date;
+  const readyAt = signalObservationDueAt(new Date(`${dateInShanghai(to)}T15:00:00+08:00`), 't5');
+  return { from, to, readyAt };
+};
+
+export const StrategyAutomaticPublicationAssessmentSchema = z.object({
+  policyVersion: z.enum(['strategy-auto-publication-v1', 'strategy-auto-publication-v2']),
+  status: z.enum(['blocked', 'eligible']),
+  reasons: z.array(
+    z.union([
+      StrategyPromotionReasonSchema,
+      z.enum([
+        'strategy-not-active-or-draft',
+        'validation-overlaps-proposal',
+        'validation-observations-not-mature',
+        'performance-unavailable',
+        'average-excess-not-positive',
+        'median-excess-not-positive',
+      ]),
+    ]),
+  ),
+  metrics: StrategyPromotionAssessmentSchema.shape.metrics.extend({
+    averageExcessReturnPct: z.number().finite().optional(),
+    medianExcessReturnPct: z.number().finite().optional(),
+    validationFrom: z.coerce.date(),
+    validationTo: z.coerce.date(),
+    observationsReadyAt: z.coerce.date(),
+  }),
+  factReferences: z.array(z.string()),
+  limitations: z.array(z.string()),
+});
+export type StrategyAutomaticPublicationAssessment = z.infer<
+  typeof StrategyAutomaticPublicationAssessmentSchema
+>;
+
+export const assessStrategyAutomaticPublication = (input: {
+  readonly evidence: StrategyPromotionAssessment;
+  readonly strategyStatus: 'draft' | 'active' | 'paused' | 'archived';
+  readonly validationFrom: Date;
+  readonly validationTo: Date;
+  readonly now: Date;
+  readonly performance?:
+    | {
+        readonly averageExcessReturnPct?: number | undefined;
+        readonly medianExcessReturnPct?: number | undefined;
+      }
+    | undefined;
+}): StrategyAutomaticPublicationAssessment => {
+  const reasons: StrategyAutomaticPublicationAssessment['reasons'] = [...input.evidence.reasons];
+  if (input.strategyStatus !== 'active' && input.strategyStatus !== 'draft')
+    reasons.push('strategy-not-active-or-draft');
+  const observationsReadyAt = signalObservationDueAt(
+    new Date(`${dateInShanghai(input.validationTo)}T15:00:00+08:00`),
+    't5',
+  );
+  if (input.now < observationsReadyAt) reasons.push('validation-observations-not-mature');
+  const { averageExcessReturnPct, medianExcessReturnPct } = input.performance ?? {};
+  if (averageExcessReturnPct === undefined || medianExcessReturnPct === undefined)
+    reasons.push('performance-unavailable');
+  if (averageExcessReturnPct !== undefined && averageExcessReturnPct <= 0)
+    reasons.push('average-excess-not-positive');
+  if (medianExcessReturnPct !== undefined && medianExcessReturnPct <= 0)
+    reasons.push('median-excess-not-positive');
+  return StrategyAutomaticPublicationAssessmentSchema.parse({
+    policyVersion: 'strategy-auto-publication-v2',
+    status: reasons.length === 0 ? 'eligible' : 'blocked',
+    reasons,
+    metrics: {
+      ...input.evidence.metrics,
+      averageExcessReturnPct,
+      medianExcessReturnPct,
+      validationFrom: input.validationFrom,
+      validationTo: input.validationTo,
+      observationsReadyAt,
+    },
+    factReferences: input.evidence.factReferences,
+    limitations: [
+      '自动发布基于冻结规则的历史回放，检查历史 T+5 平均、中位超额收益均为正，不等待提议后的未来交易日。',
+      '超额收益相对于沪深 300 基准，属于描述性观察，未证明相对旧版本改善，不包含费用或真实交易执行。',
+      '历史区间可能参与过策略提议或调参，不能据此宣称样本外有效；AI 不参与回放匹配和收益计算。历史表现不代表未来收益，策略发布不会自动下单。',
+    ],
   });
 };

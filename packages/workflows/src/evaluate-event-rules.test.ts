@@ -179,7 +179,7 @@ describe('evaluate-event-rules workflow', () => {
     let now = CLOCK();
     const ctx = await buildTestContext({ clock: () => now });
     const event = await seedAlertPlanWithEventRule(ctx);
-    await evaluateEventRulesWorkflow.run({ dryRun: true }, ctx);
+    await evaluateEventRulesWorkflow.run({}, ctx);
     now = new Date('2026-07-29T01:00:00.000Z');
     await ctx.repos.stockEvent.save({
       ...event,
@@ -187,7 +187,7 @@ describe('evaluate-event-rules workflow', () => {
       updatedAt: now,
     });
 
-    const second = await evaluateEventRulesWorkflow.run({ dryRun: true }, ctx);
+    const second = await evaluateEventRulesWorkflow.run({}, ctx);
 
     expect(second.ok).toBe(true);
     if (!second.ok) return;

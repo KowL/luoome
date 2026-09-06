@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assessStrategyAutomaticPublication,
   assessStrategyInitialPublication,
   assessStrategyPromotion,
   DEFAULT_STRATEGY_PROMOTION_POLICY,
   StrategyPromotionAssessmentSchema,
+  strategyAutomaticValidationWindow,
 } from './promotion.js';
 
 const hash = (digit: string): string => digit.repeat(64);
@@ -223,5 +225,78 @@ describe('assessStrategyInitialPublication', () => {
       completeObservationCount: 0,
       benchmarkCoverageRatio: 0,
     });
+  });
+});
+
+describe('自动发布门禁', () => {
+  const proposalAt = new Date('2026-08-05T08:00:00Z');
+  const automaticInput = () => ({
+    evidence: assessStrategyPromotion(completeInput()),
+    strategyStatus: 'active' as const,
+    proposedAt: proposalAt,
+    candidateCreatedAt: proposalAt,
+    validationFrom: new Date('2026-07-02T00:00:00Z'),
+    validationTo: new Date('2026-07-29T00:00:00Z'),
+    now: new Date('2026-08-05T08:00:00Z'),
+    performance: { averageExcessReturnPct: 0.02, medianExcessReturnPct: 0.01 },
+  });
+
+  it('验证窗口回溯 20 个历史交易日，末日 T+5 已有结果，不等待未来', () => {
+    const window = strategyAutomaticValidationWindow(new Date('2026-09-02T16:30:00Z'));
+    expect(window.from.toISOString()).toBe('2026-07-30T00:00:00.000Z');
+    expect(window.to.toISOString()).toBe('2026-08-26T00:00:00.000Z');
+    expect(window.readyAt.toISOString()).toBe('2026-09-02T07:00:00.000Z');
+  });
+
+  it.each([
+    '2026-09-02T06:59:59Z',
+    '2026-09-02T07:00:00Z',
+    '2026-09-06T02:00:00Z',
+    '2026-10-01T02:00:00Z',
+  ])('盘前、收盘、周末或节假日 %s 选择的收益截止时间不晚于当前时点', (at) => {
+    const now = new Date(at);
+    const window = strategyAutomaticValidationWindow(now);
+    expect(window.readyAt.getTime()).toBeLessThanOrEqual(now.getTime());
+    expect(window.to.getTime()).toBeLessThan(now.getTime());
+    expect(window.from.getTime()).toBeLessThan(window.to.getTime());
+  });
+
+  it('历史验证早于提议和版本创建，完整证据与正向超额仍允许发布', () => {
+    expect(assessStrategyAutomaticPublication(automaticInput())).toMatchObject({
+      status: 'eligible',
+      reasons: [],
+    });
+  });
+
+  it.each([
+    ['策略已暂停', { strategyStatus: 'paused' as const }, 'strategy-not-active-or-draft'],
+    [
+      '平均超额非正',
+      { performance: { averageExcessReturnPct: 0, medianExcessReturnPct: 0.01 } },
+      'average-excess-not-positive',
+    ],
+    [
+      '中位超额非正',
+      { performance: { averageExcessReturnPct: 0.02, medianExcessReturnPct: -0.01 } },
+      'median-excess-not-positive',
+    ],
+    ['收益指标缺失', { performance: undefined }, 'performance-unavailable'],
+    [
+      '末日观察未成熟',
+      { now: new Date('2026-08-05T06:59:00Z') },
+      'validation-observations-not-mature',
+    ],
+  ])('%s 阻止自动发布', (_label, override, reason) => {
+    const result = assessStrategyAutomaticPublication({ ...automaticInput(), ...override });
+    expect(result.status).toBe('blocked');
+    expect(result.reasons).toContain(reason);
+  });
+
+  it('有效性检查不会绕过现有证据覆盖门禁', () => {
+    const result = assessStrategyAutomaticPublication({
+      ...automaticInput(),
+      evidence: assessStrategyPromotion({}),
+    });
+    expect(result.reasons).toContain('observations-insufficient');
   });
 });

@@ -169,6 +169,8 @@ export const WatchTriggerSchema = z.object({
   deliveryStatus: DeliveryStatusSchema,
   /** 关联的 Notification 记录（发送成功 / 失败后回写）。 */
   notificationId: z.string().optional(),
+  deliveryAttempts: z.number().int().nonnegative().optional(),
+  lastDeliveryAttemptAt: z.coerce.date().optional(),
   /** 求值快照：输入值 / 阈值 / 窗口 / 数据时间；至少包含 ruleId / kind / quoteClose / quoteTs / threshold。 */
   evalSnapshot: z.record(z.string(), z.unknown()),
   notified: z.boolean(),

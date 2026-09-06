@@ -517,7 +517,8 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 
 **Vibe A 股报告迁移 Phase 3**：`opening-report`、`closing-report` 与
 `weekly-report` 共用报告 runner，经 `ctx.tools.*` 采集证据、保存 Report、记录
-`WorkflowRun` 并执行通知状态迁移。定时模式默认通知；通知失败不回滚报告，只把投递状态
+`WorkflowRun` 并执行通知状态迁移。定时模式默认经飞书通知；未配置飞书时保存日志并记 `fallback-log`，`notified=false`。
+通知失败不回滚报告，只把投递状态
 记为 `failed`、运行审计记为 `partial`。CLI 通过 `workflow run ... --mode` 触发，
 Web 通过同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
 
@@ -813,6 +814,12 @@ type ToolError =
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
 - `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
+- 预警执行：`intraday-watch` 与 `evaluate-event-rules` 共用 SQLite 租约（120 秒有效期、30 秒心跳，
+  工具调用前检查所有权）；并发调用返回可重试错误。`commit_watch_evaluation` 在同一事务校验 owner
+  并提交 Trigger + WatchRuleState，试跑不进入提交。通知前保存 deliveryAttempts/lastDeliveryAttemptAt，
+  后续轮次补偿当日 failed/pending（最多三次，退避 1/5 分钟，停用计划/移除成员/额度不足时不发送）。
+  每日额度包含重试和已开始发送的 pending；WatchRun 本轮触发列表可以包含同 id 的补偿投递。
+  飞书没有端到端幂等确认：外部已接收但本地回写前崩溃时，补偿仍可能重复，不能承诺恰好一次送达。
 - **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` / `market-outlook` 通过
   `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
   日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。

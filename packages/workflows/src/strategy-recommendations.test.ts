@@ -130,6 +130,8 @@ describe('strategy-recommendations workflow', () => {
         runId: run.id,
         advices: [],
         skippedCooldown: 1,
+        attempted: 0,
+        generationFailed: 0,
         notificationFailed: 0,
       },
     });

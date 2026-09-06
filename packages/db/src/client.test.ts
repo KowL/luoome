@@ -1,12 +1,69 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos, ensureSchema } from './client.js';
-import { makeAccount, makeReport } from './repository/contract-tests.js';
+import {
+  makeAccount,
+  makeReport,
+  makeWatchRun,
+  makeWatchTrigger,
+} from './repository/contract-tests.js';
 import * as schema from './schema/index.js';
 import { accounts } from './schema/index.js';
 
 describe('createDrizzleRepos / ensureSchema', () => {
+  it('不同数据库连接也不能同时取得预警租约', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'luoome-watch-lease-'));
+    const first = createDrizzleRepos(join(directory, 'test.sqlite'));
+    const second = createDrizzleRepos(join(directory, 'test.sqlite'));
+    try {
+      const now = new Date('2026-07-27T02:00:00Z');
+      const until = new Date(now.getTime() + 120_000);
+      const claims = await Promise.all([
+        first.repos.watchTrigger.acquireExecution('first', now, until),
+        second.repos.watchTrigger.acquireExecution('second', now, until),
+      ]);
+      expect(claims.filter(Boolean)).toHaveLength(1);
+      await first.repos.watchTrigger.releaseExecution('first');
+      expect(await second.repos.watchTrigger.acquireExecution('second', now, until)).toBe(true);
+    } finally {
+      first.close();
+      second.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('预警投递迁移保留旧数据并可重复执行', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      await handle.repos.watchTrigger.save(
+        makeWatchTrigger('legacy-watch', {
+          deliveryStatus: 'pending',
+          notified: false,
+        }),
+      );
+      handle.db.run(sql`ALTER TABLE watch_triggers DROP COLUMN delivery_attempts`);
+      handle.db.run(sql`ALTER TABLE watch_triggers DROP COLUMN last_delivery_attempt_at`);
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      expect(await handle.repos.watchTrigger.findById('legacy-watch')).toMatchObject({
+        id: 'legacy-watch',
+      });
+      await handle.repos.watchTrigger.beginDelivery(
+        ['legacy-watch'],
+        new Date('2026-07-27T02:00:00Z'),
+      );
+      expect(await handle.repos.watchTrigger.findById('legacy-watch')).toMatchObject({
+        deliveryAttempts: 1,
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
   it('ResearchIndex 使用 FTS5 搜索并返回可审计 chunk ordinal', async () => {
     const handle = createDrizzleRepos(':memory:');
     try {
@@ -134,6 +191,28 @@ describe('createDrizzleRepos / ensureSchema', () => {
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('旧 WatchRun 幂等补齐健康指标，历史缺省保持未知', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      await handle.repos.watchRun.save(makeWatchRun('old-watch'));
+      handle.db.run(sql`ALTER TABLE watch_runs DROP COLUMN delivered`);
+      handle.db.run(sql`ALTER TABLE watch_runs DROP COLUMN unknown_rules`);
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      const old = await handle.repos.watchRun.findById('old-watch');
+      expect(old).toEqual(makeWatchRun('old-watch'));
+      await handle.repos.watchRun.save(
+        makeWatchRun('old-watch', { delivered: 0, unknownRules: 2 }),
+      );
+      expect(await handle.repos.watchRun.findById('old-watch')).toMatchObject({
+        delivered: 0,
+        unknownRules: 2,
+      });
+    } finally {
+      handle.close();
     }
   });
 

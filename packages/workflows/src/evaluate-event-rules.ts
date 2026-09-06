@@ -10,7 +10,11 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './define-workflow.js';
+import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import {
+  type WatchWorkflowStep as WorkflowStep,
+  watchExecutionStep,
+} from './internal/watch-execution.js';
 
 const recordRun = async (ctx: WorkflowContext, run: WorkflowRun): Promise<void> => {
   const result = await ctx.tools.record_workflow_run.execute({ run });
@@ -54,7 +58,7 @@ const dayDiff = (eventAt: Date, now: Date): number =>
 
 export const EvaluateEventRulesInput = z.object({
   mode: z.enum(['manual', 'scheduled', 'daemon']).default('scheduled'),
-  /** true 时不发送通知，仅落库（试跑）。 */
+  /** true 时仅返回求值计数，不写正式触发或消耗去重。 */
   dryRun: z.boolean().default(false),
 });
 
@@ -101,7 +105,7 @@ const buildEvidence = (event: StockEvent): string[] => {
   return ev;
 };
 
-const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
+const stepEvaluate: WorkflowStep = async (prev, ctx) => {
   const input = prev as EvaluateEventRulesInputT;
   const now = ctx.clock();
   const runId = `wfr_${globalThis.crypto.randomUUID().slice(0, 8)}`;
@@ -185,6 +189,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
               (trigger) => trigger.ruleId === rule.id && trigger.eventId === event.id,
             );
             const already = existing.some((t) => {
+              if (t.evalSnapshot.preview === true) return false;
               const snapshot = t.evalSnapshot as { remindDay?: number; occursAt?: string };
               return snapshot.remindDay === d && snapshot.occursAt === event.occursAt.toISOString();
             });
@@ -234,13 +239,43 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
               notified: false,
               createdAt: now,
             };
-            requireToolData(
-              'save_watch_trigger',
-              await ctx.tools.save_watch_trigger.execute(trigger),
-            );
+            if (!input.dryRun) {
+              requireToolData(
+                'commit_watch_evaluation',
+                await ctx.tools.commit_watch_evaluation.execute({
+                  owner: ctx.watchExecutionOwner,
+                  triggers: [trigger],
+                  states: [],
+                }),
+              );
+            }
             triggered += 1;
             if (deliveryStatus === 'pending') pending.push(trigger);
           }
+        }
+      }
+      if (!input.dryRun) {
+        const retries = requireToolData(
+          'list_watch_delivery_retries',
+          await ctx.tools.list_watch_delivery_retries.execute({ poolId: plan.id }),
+        );
+        const selected = new Set(pending.map((trigger) => trigger.id));
+        for (const trigger of retries.triggers) {
+          if (
+            selected.has(trigger.id) ||
+            trigger.ruleKind !== 'event-date' ||
+            !stockIds.includes(trigger.stockId)
+          )
+            continue;
+          if (!rules.some((rule) => rule.id === trigger.ruleId)) continue;
+          if (
+            usedGlobal >= globalLimit ||
+            (usedByPlan.get(plan.id) ?? 0) >= plan.dailyNotificationLimit
+          )
+            continue;
+          pending.push({ ...trigger, deliveryStatus: 'pending' });
+          usedGlobal += 1;
+          usedByPlan.set(plan.id, (usedByPlan.get(plan.id) ?? 0) + 1);
         }
       }
     }
@@ -259,8 +294,15 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
           t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
         return `· ${prio}${t.stockId} — ${t.reason}`;
       });
+      requireToolData(
+        'begin_watch_delivery',
+        await ctx.tools.begin_watch_delivery.execute({
+          triggerIds: group.map((trigger) => trigger.id),
+        }),
+      );
       const r = await ctx.tools.send_notification.execute({
-        log: {
+        channel: 'feishu',
+        feishu: {
           title: `事件提醒 ${alertPlanId} ${group.length} 条`,
           content: lines.join('\n'),
           level: 'info',
@@ -276,6 +318,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx: WorkflowContext) => {
         notificationId = r.data.notification.id;
       } else if (r.data.notification.result === 'failed') {
         status = 'failed';
+        notificationId = r.data.notification.id;
         sendFailed = true;
       } else {
         notificationId = r.data.notification.id;
@@ -334,5 +377,5 @@ export const evaluateEventRulesWorkflow = defineWorkflow<
   name: 'evaluate-event-rules',
   description: '每日盘前求值 event-date 规则，落 WatchTrigger 并按送达矩阵发送',
   input: EvaluateEventRulesInput,
-  steps: [stepEvaluate],
+  steps: [watchExecutionStep([stepEvaluate])],
 });

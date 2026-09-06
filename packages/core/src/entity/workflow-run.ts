@@ -100,7 +100,12 @@ export const workflowRunToUnified = (run: WorkflowRun): UnifiedRun => ({
  */
 export const watchRunToUnified = (run: WatchRun): UnifiedRun => {
   const status: UnifiedRun['status'] =
-    run.status === 'succeeded' && run.notifyFailed > 0 ? 'partial' : run.status;
+    run.status === 'succeeded' &&
+    (run.notifyFailed > 0 ||
+      (run.unknownRules ?? 0) > 0 ||
+      (run.delivered !== undefined && run.delivered < run.notified))
+      ? 'partial'
+      : run.status;
   return {
     source: 'watch',
     name: 'intraday-watch',
@@ -116,6 +121,8 @@ export const watchRunToUnified = (run: WatchRun): UnifiedRun => {
       suppressedByCooldown: run.suppressedByCooldown,
       suppressedByDailyLimit: run.suppressedByDailyLimit,
       notifyFailed: run.notifyFailed,
+      ...(run.delivered === undefined ? {} : { delivered: run.delivered }),
+      ...(run.unknownRules === undefined ? {} : { unknownRules: run.unknownRules }),
     },
     ...(run.error !== undefined ? { error: run.error } : {}),
   };

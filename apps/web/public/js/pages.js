@@ -114,7 +114,7 @@ const watchRunSummaryText = (latest) =>
   latest === null
     ? '跑一轮后显示评估指标'
     : `评估 ${latest.evaluatedPools} 个方案 / ${latest.evaluatedStocks} 只股票 · ` +
-      `触发 ${latest.triggered} · 通知 ${latest.notified}`;
+      `触发 ${latest.triggered} · 尝试通知 ${latest.notified} · 送达 ${latest.delivered ?? '未记录'} · 无法求值 ${latest.unknownRules ?? '未记录'}`;
 
 /* ---- 看板 / 指数条 / 今日预警渲染 ---- */
 
@@ -341,7 +341,7 @@ const renderDashboard = async (setStatus) => {
       pending: '待发',
       sent: '已发',
       failed: '失败',
-      'fallback-log': '降级',
+      'fallback-log': '仅日志（未送达）',
     };
     $('#dash-metric-priority').textContent = formatMetricDistribution(
       metrics.priorityCounts,
@@ -360,6 +360,10 @@ const renderDashboard = async (setStatus) => {
         ? `样本 ${noiseSample}/30`
         : `${(metrics.noiseRate * 100).toFixed(1)}%（n=${noiseSample}）`;
     const metaParts = [];
+    if ((metrics.latestRun?.unknownRules ?? 0) > 0)
+      metaParts.push(`${metrics.latestRun.unknownRules} 条规则无法求值`);
+    if ((metrics.deliveryStatusCounts?.['fallback-log'] ?? 0) > 0)
+      metaParts.push('存在仅写日志的提醒，请检查飞书配置');
     if (metrics.latestRun && metrics.latestRun.notifyFailed > 0) {
       metaParts.push(`⚠ ${metrics.latestRun.notifyFailed} 条发送失败`);
     }
@@ -881,7 +885,7 @@ const cancelAnalyzeAllHoldings = () => {
 const HEALTH_LABELS = {
   never: '尚未运行',
   running: '正在运行',
-  healthy: '运行正常',
+  healthy: '心跳正常',
   stale: '心跳超时',
   failed: '最近运行失败',
 };

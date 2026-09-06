@@ -3,9 +3,11 @@ import {
   assertWatchTriggerInvariants,
   type DeliveryStatus,
   type TriggerFeedback,
+  WatchRuleStateSchema,
   type WatchTrigger,
   type WatchTriggerRepository,
 } from '@luoome/core';
+import type { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 
 const ATTEMPTED: ReadonlySet<DeliveryStatus> = new Set(ATTEMPTED_DELIVERY_STATUSES);
 
@@ -15,6 +17,49 @@ const ATTEMPTED: ReadonlySet<DeliveryStatus> = new Set(ATTEMPTED_DELIVERY_STATUS
  */
 export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   private readonly items = new Map<string, WatchTrigger>();
+  private execution: { owner: string; until: Date } | undefined;
+  constructor(private readonly states: InMemoryWatchRuleStateRepository) {}
+
+  async commitEvaluation(
+    input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
+  ): Promise<boolean> {
+    if (this.execution?.owner !== input.owner || this.execution.until <= input.now) return false;
+    for (const trigger of input.triggers) assertWatchTriggerInvariants(trigger);
+    for (const state of input.states) WatchRuleStateSchema.parse(state);
+    for (const trigger of input.triggers) this.put(trigger);
+    for (const state of input.states) this.states.put(state);
+    return true;
+  }
+
+  async acquireExecution(owner: string, now: Date, until: Date): Promise<boolean> {
+    if (this.execution !== undefined && this.execution.until > now) return false;
+    this.execution = { owner, until };
+    return true;
+  }
+
+  async renewExecution(owner: string, now: Date, until: Date): Promise<boolean> {
+    if (this.execution?.owner !== owner || this.execution.until <= now) return false;
+    this.execution = { owner, until };
+    return true;
+  }
+
+  async releaseExecution(owner: string): Promise<void> {
+    if (this.execution?.owner === owner) this.execution = undefined;
+  }
+
+  async beginDelivery(ids: readonly string[], at: Date): Promise<void> {
+    for (const id of ids) {
+      const trigger = this.items.get(id);
+      if (!trigger) continue;
+      this.items.set(id, {
+        ...trigger,
+        deliveryStatus: 'pending',
+        deliveryAttempts:
+          (trigger.deliveryAttempts ?? (ATTEMPTED.has(trigger.deliveryStatus) ? 1 : 0)) + 1,
+        lastDeliveryAttemptAt: at,
+      });
+    }
+  }
 
   put(trigger: WatchTrigger): void {
     assertWatchTriggerInvariants(trigger);
@@ -91,11 +136,16 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
 
   async countAttemptedSince(since: Date, poolId?: string | null): Promise<number> {
     const sinceMs = since.getTime();
-    return [...this.items.values()].filter((t) => {
-      if (t.createdAt.getTime() < sinceMs) return false;
-      if (poolId !== undefined && poolId !== null && t.poolId !== poolId) return false;
-      return ATTEMPTED.has(t.deliveryStatus);
-    }).length;
+    return [...this.items.values()]
+      .filter((t) => {
+        if (t.createdAt.getTime() < sinceMs) return false;
+        if (poolId !== undefined && poolId !== null && t.poolId !== poolId) return false;
+        return true;
+      })
+      .reduce(
+        (sum, t) => sum + (t.deliveryAttempts ?? (ATTEMPTED.has(t.deliveryStatus) ? 1 : 0)),
+        0,
+      );
   }
 
   async setDeliveryStatus(

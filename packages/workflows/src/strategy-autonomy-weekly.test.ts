@@ -7,7 +7,7 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { strategyAutonomyWeeklyWorkflow } from './strategy-autonomy-weekly.js';
 
@@ -230,10 +230,9 @@ const fakeProposedDefinition: StrategyDslV1 = {
 };
 
 describe('strategy-autonomy-weekly · AI 提议与自动验证', () => {
-  it('正常提议：AI 产出 → 建版本 → 校验 valid → 落动作 → 建验证 session → 同周期推进至晋级门', async () => {
+  it('正常提议：AI 产出 → 建版本 → 校验 valid → 落动作 → 建验证 session → 同周期回放历史并检查数据门禁', async () => {
     const ctx = await buildTestContext({ clock: () => now });
     await seedTestStockUniverse(ctx);
-    // 样本不足暂停阈值，策略保持 active 进入提议步骤。
     await seedActiveStrategy(ctx, { id: 'strategy-propose', name: '待优化策略', samples: 10 });
 
     const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
@@ -266,8 +265,6 @@ describe('strategy-autonomy-weekly · AI 提议与自动验证', () => {
     });
     expect(actions).toHaveLength(1);
     const action = actions[0];
-    // M2-S3 起同周期继续推进验证并做晋级门复核；fixture 缺少 vintage/观察事实，
-    // 动作从 validating 进入 blocked 人工队列（S2 的链路断言不受影响）。
     expect(action).toMatchObject({
       kind: 'propose-version',
       status: 'blocked',
@@ -281,7 +278,8 @@ describe('strategy-autonomy-weekly · AI 提议与自动验证', () => {
     expect(action?.ruleSnapshot).toMatchObject({
       baseVersionId: 'strategy-propose:v1',
       candidateVersionId: candidate?.id,
-      validationWindowDays: 30,
+      validationWindowDays: 20,
+      validationWindowUnit: 'trading-day',
     });
 
     const session = await ctx.repos.strategyEvaluation.findSessionById(
@@ -291,22 +289,17 @@ describe('strategy-autonomy-weekly · AI 提议与自动验证', () => {
       strategyId: 'strategy-propose',
       strategyVersionId: candidate?.id,
     });
-    // 验证窗口：30 个自然日，结束于昨天（UTC 日界）。
-    expect(session?.from.toISOString()).toBe('2026-08-03T00:00:00.000Z');
-    expect(session?.to.toISOString()).toBe('2026-09-01T00:00:00.000Z');
-    // M2-S3 起同周期继续推进 session 并做晋级门复核：fixture 缺少 PIT vintage
-    // 与观察事实，session 推进为 complete 后晋级门拦截，动作进入 blocked 人工队列。
+    expect(session?.from.toISOString()).toBe('2026-07-30T00:00:00.000Z');
+    expect(session?.to.toISOString()).toBe('2026-08-26T00:00:00.000Z');
     expect(session?.status).toBe('complete');
     const days = await ctx.repos.strategyEvaluation.listDays(session?.id ?? '');
-    expect(days.length).toBeGreaterThanOrEqual(20);
-    expect(days.every((day) => day.status === 'complete')).toBe(true);
+    expect(days).toHaveLength(20);
 
     const proposed = await ctx.repos.strategyAutonomyAction.findById(action?.id ?? '');
     expect(proposed?.status).toBe('blocked');
-    expect(proposed?.lastError).toContain('pit-vintage-coverage-insufficient');
+    expect(proposed?.lastError).toContain('晋级门未通过');
     expect(result.data.validation.items[0]?.decision).toBe('advanced');
     expect(result.data.promotion.items[0]?.decision).toBe('blocked');
-    // 30 天窗口的逐日 replay 推进在并行全量运行时可能超过默认 5s 超时。
   }, 30_000);
 
   it('本周刚被自动暂停的策略跳过提议', async () => {
@@ -485,7 +478,7 @@ describe('strategy-autonomy-weekly · AI 提议与自动验证', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.proposals).toMatchObject({ validating: 0, skipped: 1 });
-    expect(result.data.proposals.items[0]?.reasons.join()).toContain('冷却窗口');
+    expect(result.data.proposals.items[0]?.reasons.join()).toContain('已有候选');
     expect(await ctx.repos.strategy.listVersions('strategy-propose-cooldown')).toHaveLength(1);
     expect(
       await ctx.repos.strategyAutonomyAction.list({
@@ -772,7 +765,7 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
       parentVersionId: `${strategyId}:v1`,
       validationStatus,
       validationErrors: [],
-      createdAt: now,
+      createdAt: new Date('2026-07-24T08:00:00Z'),
     });
   };
 
@@ -790,10 +783,58 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
     factReferences: [],
     attempts: 0,
     // 避开 7 天提议冷却窗口，让提议步骤走 definitionHash 去重跳过而非冷却跳过。
-    createdAt: new Date(now.getTime() - 8 * DAY_MS),
+    createdAt: new Date('2026-07-24T08:00:00Z'),
     updatedAt: new Date(now.getTime() - 8 * DAY_MS),
     ...overrides,
   });
+
+  it('旧 v1 未来等待动作切换为历史回放，保留原 session 审计', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await seedTestStockUniverse(ctx);
+    await seedActiveStrategy(ctx, {
+      id: 'strategy-legacy-wait',
+      name: '历史切换策略',
+      samples: 10,
+    });
+    await seedCandidateVersion(ctx, 'strategy-legacy-wait');
+    const original = validatingAction('strategy-legacy-wait', {
+      ruleSnapshot: { automaticPublicationPolicy: 'strategy-auto-publication-v1' },
+    });
+    await ctx.repos.strategyEvaluation.saveSession({
+      id: original.evaluationSessionId as string,
+      strategyId: original.strategyId,
+      strategyVersionId: original.strategyVersionId as string,
+      from: new Date('2026-09-03T00:00:00Z'),
+      to: new Date('2026-10-08T00:00:00Z'),
+      status: 'running',
+      definitionHash: strategyDefinitionHash(fakeProposedDefinition),
+      createdAt: now,
+    });
+    await ctx.repos.strategyAutonomyAction.save(original);
+    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.validation.items[0]?.decision).toBe('advanced');
+    const action = await ctx.repos.strategyAutonomyAction.findById(original.id);
+    expect(action?.evaluationSessionId).not.toBe(original.evaluationSessionId);
+    expect(action?.ruleSnapshot).toMatchObject({
+      automaticPublicationPolicy: 'strategy-auto-publication-v2',
+      validationMode: 'historical-replay',
+      supersededEvaluationSessionId: original.evaluationSessionId,
+      validationFrom: '2026-07-30T00:00:00.000Z',
+      validationTo: '2026-08-26T00:00:00.000Z',
+    });
+    const session = await ctx.repos.strategyEvaluation.findSessionById(
+      action?.evaluationSessionId ?? '',
+    );
+    expect(session?.status).toBe('complete');
+    expect(await ctx.repos.strategyEvaluation.listDays(session?.id ?? '')).toHaveLength(20);
+    expect(
+      await ctx.repos.strategyEvaluation.findSessionById(original.evaluationSessionId as string),
+    ).toMatchObject({ status: 'running', to: new Date('2026-10-08T00:00:00Z') });
+    // 没有 PIT 历史的数据不能因取消等待而获得发布资格。
+    expect(action?.status).toBe('blocked');
+  }, 30_000);
 
   it('running session 被逐日推进至 complete；晋级门未通过 → 动作 blocked 并记 reasons', async () => {
     const ctx = await buildTestContext({ clock: () => now });
@@ -801,8 +842,8 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
     await seedActiveStrategy(ctx, { id: 'strategy-gate-block', name: '门禁拦截策略', samples: 10 });
     await seedCandidateVersion(ctx, 'strategy-gate-block');
     const sessionId = 'strategy-gate-block-session';
-    const from = new Date('2026-08-27T00:00:00.000Z');
-    const to = new Date('2026-08-28T00:00:00.000Z');
+    const from = new Date('2026-08-20T00:00:00.000Z');
+    const to = new Date('2026-08-21T00:00:00.000Z');
     await ctx.repos.strategyEvaluation.saveSession({
       id: sessionId,
       strategyId: 'strategy-gate-block',
@@ -847,155 +888,277 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
     expect(action?.completedAt).toBeUndefined();
   });
 
-  it('晋级门通过 → 自动 publish 候选版本，动作转移 published', async () => {
-    const ctx = await buildTestContext({ clock: () => now });
-    await seedTestStockUniverse(ctx);
-    await seedActiveStrategy(ctx, { id: 'strategy-gate-pass', name: '晋级策略', samples: 10 });
-    await seedCandidateVersion(ctx, 'strategy-gate-pass');
-    const sessionId = 'strategy-gate-pass-session';
-    const from = new Date('2026-08-03T00:00:00.000Z');
-    const to = new Date('2026-08-31T00:00:00.000Z');
-    await ctx.repos.strategyEvaluation.saveSession({
-      id: sessionId,
-      strategyId: 'strategy-gate-pass',
-      strategyVersionId: 'strategy-gate-pass:v2',
-      from,
-      to,
-      status: 'complete',
-      definitionHash: strategyDefinitionHash(fakeProposedDefinition),
-      createdAt: new Date(now.getTime() - 8 * DAY_MS),
-      finishedAt: new Date(now.getTime() - DAY_MS),
-    });
-    // 21 个 complete 且 vintage available 的交易日（满足 ≥20 与 vintage 覆盖 1.0）。
-    const days = weekdays(from, to);
-    expect(days.length).toBeGreaterThanOrEqual(20);
-    const evalRunId = 'strategy-gate-pass-eval-run';
-    for (const [index, day] of days.entries()) {
-      await ctx.repos.strategyEvaluation.saveDay({
-        sessionId,
-        dataAsOf: day,
-        status: 'complete',
-        vintageStatus: 'available',
-        ...(index === 0 ? { runId: evalRunId } : {}),
-      });
-    }
-    // 候选版本的 evaluation run：30 个信号各带一条 benchmark 完整的 T+5 观察。
-    const stockIds = Array.from(
-      { length: 30 },
-      (_, index) => `61${String(index).padStart(4, '0')}.SH`,
-    );
-    await ctx.repos.strategyRun.commitRun({
-      run: {
-        id: evalRunId,
+  it.each([
+    {
+      scenario: '验证信号自动补齐 T+5',
+      status: 'validating',
+      excess: 0.04,
+      overlap: false,
+      blocked: false,
+    },
+    {
+      scenario: '完整独立验证',
+      status: 'validating',
+      excess: 0.04,
+      overlap: false,
+      blocked: false,
+    },
+    { scenario: '负超额', status: 'validating', excess: -0.01, overlap: false, blocked: true },
+    {
+      scenario: '切换后审计失败只补记账',
+      status: 'eligible',
+      excess: 0.04,
+      overlap: false,
+      blocked: false,
+    },
+    {
+      scenario: '发布错误后复核再重试',
+      status: 'eligible',
+      excess: 0.04,
+      overlap: false,
+      blocked: false,
+    },
+    {
+      scenario: '历史验证早于提议仍可发布',
+      status: 'validating',
+      excess: 0.04,
+      overlap: true,
+      blocked: false,
+    },
+    {
+      scenario: '发布重试重新通过门禁',
+      status: 'eligible',
+      excess: 0.04,
+      overlap: false,
+      blocked: false,
+    },
+    {
+      scenario: '发布重试未通过门禁',
+      status: 'eligible',
+      excess: -0.01,
+      overlap: false,
+      blocked: true,
+    },
+  ] as const)(
+    '$scenario 决定是否自动发布',
+    async ({ scenario, status, excess, overlap, blocked }) => {
+      const ctx = await buildTestContext({ clock: () => now });
+      await seedTestStockUniverse(ctx);
+      await seedActiveStrategy(ctx, { id: 'strategy-gate-pass', name: '晋级策略', samples: 10 });
+      await seedCandidateVersion(ctx, 'strategy-gate-pass');
+      const sessionId = 'strategy-gate-pass-session';
+      const from = new Date('2026-07-27T00:00:00.000Z');
+      const to = new Date('2026-08-24T00:00:00.000Z');
+      await ctx.repos.strategyEvaluation.saveSession({
+        id: sessionId,
         strategyId: 'strategy-gate-pass',
         strategyVersionId: 'strategy-gate-pass:v2',
-        mode: 'replay',
-        scope: 'evaluation',
-        coverage: 'CN_A_SHARES_SH_SZ',
-        dataAsOf: baselineAt,
-        startedAt: baselineAt,
-        finishedAt: baselineAt,
+        from,
+        to,
         status: 'complete',
-        inputSnapshot: {},
-        providerStatuses: [],
-        summary: {
-          schemaVersion: 3,
-          dataHealth: 'complete',
-          universeCount: stockIds.length,
-          evaluatedCount: stockIds.length,
-          selectedCount: stockIds.length,
-          signalCount: stockIds.length,
-          incompleteCount: 0,
-          failedCount: 0,
-          failureSamples: [],
-        },
-      },
-      results: stockIds.map((stockId, index) => ({
-        runId: evalRunId,
-        stockId,
-        selected: true,
-        score: 80,
-        rank: index + 1,
-        ruleEvaluations: [],
-        evidence: ['命中'],
-        dataAsOf: baselineAt,
-      })),
-      signals: stockIds.map((stockId, index) => ({
-        id: `strategy-gate-pass-eval-signal-${index}`,
-        strategyId: 'strategy-gate-pass',
-        strategyVersionId: 'strategy-gate-pass:v2',
-        runId: evalRunId,
-        ruleId: 'quality',
-        stockId,
-        ts: baselineAt,
-        score: 80,
-        direction: 'bullish' as const,
-        evidence: ['命中'],
-        evaluationSnapshot: {},
-      })),
-    });
-    for (const [index, stockId] of stockIds.entries()) {
-      await ctx.repos.signalObservation.save({
-        id: `strategy-gate-pass-observation-${index}`,
-        sourceKind: 'strategy-signal',
-        sourceId: `strategy-gate-pass-eval-signal-${index}`,
-        stockId,
-        baselinePrice: money(100),
-        baselineAt,
-        horizon: 't5',
-        closePrice: money(105),
-        returnPct: 0.05,
-        maxFavorableExcursionPct: 0.06,
-        maxAdverseExcursionPct: -0.01,
-        benchmarkReturnPct: 0.01,
-        benchmarkStatus: 'complete',
-        status: 'complete',
-        provenance: {
-          provider: 'fixture',
-          observedAt,
-          fetchedAt: now,
-          freshness: 'fresh',
-        },
-        observedAt,
+        definitionHash: strategyDefinitionHash(fakeProposedDefinition),
+        createdAt: new Date(now.getTime() - 8 * DAY_MS),
+        finishedAt: new Date(now.getTime() - DAY_MS),
       });
-    }
-    await ctx.repos.strategyAutonomyAction.save(validatingAction('strategy-gate-pass'));
+      // 21 个 complete 且 vintage available 的交易日（满足 ≥20 与 vintage 覆盖 1.0）。
+      const days = weekdays(from, to);
+      expect(days.length).toBeGreaterThanOrEqual(20);
+      const evalRunId = 'strategy-gate-pass-eval-run';
+      for (const [index, day] of days.entries()) {
+        await ctx.repos.strategyEvaluation.saveDay({
+          sessionId,
+          dataAsOf: day,
+          status: 'complete',
+          vintageStatus: 'available',
+          ...(index === 0 ? { runId: evalRunId } : {}),
+        });
+      }
+      // 候选版本的 evaluation run：30 个信号各带一条 benchmark 完整的 T+5 观察。
+      const stockIds = Array.from(
+        { length: 30 },
+        (_, index) => `61${String(index).padStart(4, '0')}.SH`,
+      );
+      await ctx.repos.strategyRun.commitRun({
+        run: {
+          id: evalRunId,
+          strategyId: 'strategy-gate-pass',
+          strategyVersionId: 'strategy-gate-pass:v2',
+          mode: 'replay',
+          scope: 'evaluation',
+          coverage: 'CN_A_SHARES_SH_SZ',
+          dataAsOf: baselineAt,
+          startedAt: baselineAt,
+          finishedAt: baselineAt,
+          status: 'complete',
+          inputSnapshot: {},
+          providerStatuses: [],
+          summary: {
+            schemaVersion: 3,
+            dataHealth: 'complete',
+            universeCount: stockIds.length,
+            evaluatedCount: stockIds.length,
+            selectedCount: stockIds.length,
+            signalCount: stockIds.length,
+            incompleteCount: 0,
+            failedCount: 0,
+            failureSamples: [],
+          },
+        },
+        results: stockIds.map((stockId, index) => ({
+          runId: evalRunId,
+          stockId,
+          selected: true,
+          score: 80,
+          rank: index + 1,
+          ruleEvaluations: [],
+          evidence: ['命中'],
+          dataAsOf: baselineAt,
+        })),
+        signals: stockIds.map((stockId, index) => ({
+          id: `strategy-gate-pass-eval-signal-${index}`,
+          strategyId: 'strategy-gate-pass',
+          strategyVersionId: 'strategy-gate-pass:v2',
+          runId: evalRunId,
+          ruleId: 'quality',
+          stockId,
+          ts: baselineAt,
+          score: 80,
+          direction: 'bullish' as const,
+          evidence: ['命中'],
+          evaluationSnapshot: { baseline: { price: 100, at: baselineAt, provider: 'fixture' } },
+        })),
+      });
+      if (scenario !== '验证信号自动补齐 T+5')
+        for (const [index, stockId] of stockIds.entries()) {
+          await ctx.repos.signalObservation.save({
+            id: `strategy-gate-pass-observation-${index}`,
+            sourceKind: 'strategy-signal',
+            sourceId: `strategy-gate-pass-eval-signal-${index}`,
+            stockId,
+            baselinePrice: money(100),
+            baselineAt,
+            horizon: 't5',
+            closePrice: money(105),
+            returnPct: 0.01 + excess,
+            maxFavorableExcursionPct: 0.06,
+            maxAdverseExcursionPct: -0.01,
+            benchmarkReturnPct: 0.01,
+            benchmarkStatus: 'complete',
+            status: 'complete',
+            provenance: {
+              provider: 'fixture',
+              observedAt,
+              fetchedAt: now,
+              freshness: 'fresh',
+            },
+            observedAt,
+          });
+        }
+      if (scenario === '验证信号自动补齐 T+5') {
+        await ctx.repos.dailyBar.saveMany(
+          [...stockIds, '000300.SH'].flatMap((stockId) =>
+            [
+              '2026-08-20',
+              '2026-08-21',
+              '2026-08-24',
+              '2026-08-25',
+              '2026-08-26',
+              '2026-08-27',
+            ].map((date, index) => ({
+              stockId,
+              date: new Date(`${date}T00:00:00Z`),
+              adjustment: 'qfq' as const,
+              source: 'fixture',
+              open: money(100),
+              high: money(106),
+              low: money(99),
+              close: money(stockId === '000300.SH' ? 100 + index / 5 : 100 + index),
+              volume: 1_000_000,
+            })),
+          ),
+        );
+        expect(
+          await ctx.repos.signalObservation.list({
+            sourceIds: stockIds.map((_, index) => `strategy-gate-pass-eval-signal-${index}`),
+          }),
+        ).toHaveLength(0);
+      }
+      await ctx.repos.strategyAutonomyAction.save(
+        validatingAction('strategy-gate-pass', {
+          status,
+          createdAt: new Date(overlap ? '2026-08-01T08:00:00Z' : '2026-07-24T08:00:00Z'),
+        }),
+      );
 
-    const result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+      const publisher = vi.spyOn(ctx.repos.strategy, 'publishVersion');
+      const originalTransition = ctx.repos.strategyAutonomyAction.updateStatus.bind(
+        ctx.repos.strategyAutonomyAction,
+      );
+      const transition = vi.spyOn(ctx.repos.strategyAutonomyAction, 'updateStatus');
+      if (scenario === '切换后审计失败只补记账') {
+        transition.mockImplementation(async (input) =>
+          input.status === 'published' ? null : originalTransition(input),
+        );
+      }
+      if (scenario === '发布错误后复核再重试')
+        publisher.mockRejectedValueOnce(new Error('fixture publish failure'));
+      let result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+      if (scenario === '切换后审计失败只补记账' || scenario === '发布错误后复核再重试') {
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.data.promotion).toMatchObject(
+          scenario === '切换后审计失败只补记账'
+            ? { failed: 1, published: 0 }
+            : { retry: 1, published: 0 },
+        );
+        transition.mockImplementation(originalTransition);
+        result = await strategyAutonomyWeeklyWorkflow.run({}, ctx);
+        expect(publisher).toHaveBeenCalledTimes(scenario === '切换后审计失败只补记账' ? 1 : 2);
+      }
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.validation.items[0]?.decision).toBe('already-complete');
-    expect(result.data.promotion).toMatchObject({ evaluated: 1, published: 1, blocked: 0 });
-    expect(result.data.promotion.items[0]).toMatchObject({ decision: 'published' });
-    const action = await ctx.repos.strategyAutonomyAction.findById(
-      'strategy-gate-pass-propose-validating',
-    );
-    expect(action?.status).toBe('published');
-    expect(action?.completedAt).toBeDefined();
-    const strategy = await ctx.repos.strategy.findById('strategy-gate-pass');
-    expect(strategy?.currentVersionId).toBe('strategy-gate-pass:v2');
-    expect(strategy?.status).toBe('active');
-    const version = await ctx.repos.strategy.findVersionById('strategy-gate-pass:v2');
-    expect(version?.publishedAt).toBeDefined();
-    // 发布事件落 kind=publish-version 审计动作（DDD §2.2），带晋级门指标快照。
-    const publishRecords = await ctx.repos.strategyAutonomyAction.list({
-      strategyId: 'strategy-gate-pass',
-      kind: 'publish-version',
-    });
-    expect(publishRecords).toHaveLength(1);
-    expect(publishRecords[0]).toMatchObject({
-      status: 'published',
-      strategyVersionId: 'strategy-gate-pass:v2',
-      trigger: 'weekly-review',
-    });
-    expect(publishRecords[0]?.ruleSnapshot).toMatchObject({
-      gate: 'eligible',
-      publishedVersion: 2,
-      validationTradingDays: expect.any(Number),
-      benchmarkCoverageRatio: expect.any(Number),
-    });
-  });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      if (blocked) {
+        expect(result.data.promotion).toMatchObject({ evaluated: 1, blocked: 1, published: 0 });
+        expect(result.data.promotion.items[0]?.reasons).toContain('average-excess-not-positive');
+        expect((await ctx.repos.strategy.findById('strategy-gate-pass'))?.currentVersionId).toBe(
+          'strategy-gate-pass:v1',
+        );
+        return;
+      }
+      if (status === 'validating')
+        expect(result.data.validation.items[0]?.decision).toBe('already-complete');
+      expect(result.data.promotion).toMatchObject({ evaluated: 1, published: 1, blocked: 0 });
+      expect(result.data.promotion.items[0]).toMatchObject({ decision: 'published' });
+      const action = await ctx.repos.strategyAutonomyAction.findById(
+        'strategy-gate-pass-propose-validating',
+      );
+      expect(action?.status).toBe('published');
+      expect(action?.completedAt).toBeDefined();
+      const strategy = await ctx.repos.strategy.findById('strategy-gate-pass');
+      expect(strategy?.currentVersionId).toBe('strategy-gate-pass:v2');
+      expect(strategy?.status).toBe('active');
+      const version = await ctx.repos.strategy.findVersionById('strategy-gate-pass:v2');
+      expect(version?.publishedAt).toBeDefined();
+      // 发布事件落 kind=publish-version 审计动作（DDD §2.2），带晋级门指标快照。
+      const publishRecords = await ctx.repos.strategyAutonomyAction.list({
+        strategyId: 'strategy-gate-pass',
+        kind: 'publish-version',
+      });
+      expect(publishRecords).toHaveLength(1);
+      expect(publishRecords[0]).toMatchObject({
+        status: 'published',
+        strategyVersionId: 'strategy-gate-pass:v2',
+        trigger: 'weekly-review',
+      });
+      expect(publishRecords[0]?.ruleSnapshot).toMatchObject({
+        gate: 'eligible',
+        publishedVersion: 2,
+        validationTradingDays: expect.any(Number),
+        benchmarkCoverageRatio: expect.any(Number),
+      });
+    },
+  );
 
   it('session 推进后仍未 complete → 不评估，动作留在 validating', async () => {
     const ctx = await buildTestContext({ clock: () => now });
@@ -1005,8 +1168,8 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
       id: sessionId,
       strategyId: 'strategy-stuck',
       strategyVersionId: 'strategy-stuck:v2',
-      from: new Date('2026-08-27T00:00:00.000Z'),
-      to: new Date('2026-08-28T00:00:00.000Z'),
+      from: new Date('2026-08-20T00:00:00.000Z'),
+      to: new Date('2026-08-21T00:00:00.000Z'),
       status: 'running',
       definitionHash: 'a'.repeat(64),
       createdAt: new Date(now.getTime() - 8 * DAY_MS),
@@ -1028,7 +1191,7 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
     expect(action?.completedAt).toBeUndefined();
   });
 
-  it('eligible 动作发布失败 → 保持 eligible，attempts+1 且记 lastError', async () => {
+  it('eligible 缺少验证证据 → blocked 且不尝试发布', async () => {
     const ctx = await buildTestContext({ clock: () => now });
     await seedTestStockUniverse(ctx);
     await seedActiveStrategy(ctx, { id: 'strategy-retry', name: '重试策略', samples: 10 });
@@ -1046,18 +1209,18 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.promotion).toMatchObject({ retry: 1, published: 0 });
-    expect(result.data.promotion.items[0]).toMatchObject({ decision: 'retry' });
+    expect(result.data.promotion).toMatchObject({ blocked: 1, published: 0 });
+    expect(result.data.promotion.items[0]).toMatchObject({ decision: 'blocked' });
     const action = await ctx.repos.strategyAutonomyAction.findById('strategy-retry-eligible');
-    expect(action?.status).toBe('eligible');
-    expect(action?.attempts).toBe(1);
-    expect(action?.lastError).toContain('发布失败');
+    expect(action?.status).toBe('blocked');
+    expect(action?.attempts).toBe(0);
+    expect(action?.lastError).toContain('历史验证');
     expect(action?.completedAt).toBeUndefined();
     const strategy = await ctx.repos.strategy.findById('strategy-retry');
     expect(strategy?.currentVersionId).toBe('strategy-retry:v1');
   });
 
-  it('eligible 动作发布重试成功 → published 并切换 currentVersion', async () => {
+  it('旧 eligible 缺少验证证据 → 不得直接切换 currentVersion', async () => {
     const ctx = await buildTestContext({ clock: () => now });
     await seedTestStockUniverse(ctx);
     await seedActiveStrategy(ctx, { id: 'strategy-republish', name: '补发布策略', samples: 10 });
@@ -1076,12 +1239,12 @@ describe('strategy-autonomy-weekly · session 推进与晋级门复核（M2-S3�
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.promotion).toMatchObject({ published: 1, retry: 0 });
+    expect(result.data.promotion).toMatchObject({ published: 0, blocked: 1 });
     const action = await ctx.repos.strategyAutonomyAction.findById('strategy-republish-eligible');
-    expect(action?.status).toBe('published');
-    expect(action?.completedAt).toBeDefined();
+    expect(action?.status).toBe('blocked');
+    expect(action?.completedAt).toBeUndefined();
     const strategy = await ctx.repos.strategy.findById('strategy-republish');
-    expect(strategy?.currentVersionId).toBe('strategy-republish:v2');
+    expect(strategy?.currentVersionId).toBe('strategy-republish:v1');
   });
 });
 
@@ -1271,7 +1434,7 @@ describe('strategy-autonomy-weekly · AI 全新策略（§9.2）', () => {
     // 首发门禁拦截进人工队列，策略保持 draft、未发布、无 schedule。
     expect(session?.status).toBe('complete');
     expect(actions[0]?.status).toBe('blocked');
-    expect(actions[0]?.lastError).toContain('pit-vintage-coverage-insufficient');
+    expect(actions[0]?.lastError).toContain('晋级门未通过');
     expect(created?.status).toBe('draft');
     expect(created?.currentVersionId).toBeUndefined();
     expect(await ctx.repos.strategySchedule.findByStrategyId(newId)).toBeNull();
@@ -1323,7 +1486,7 @@ describe('strategy-autonomy-weekly · AI 全新策略（§9.2）', () => {
       description: '首发门禁通过测试',
       owner: 'user',
       status: 'draft',
-      createdAt: now,
+      createdAt: new Date('2026-07-24T08:00:00Z'),
       updatedAt: now,
     });
     await ctx.repos.strategy.createVersion({
@@ -1334,11 +1497,11 @@ describe('strategy-autonomy-weekly · AI 全新策略（§9.2）', () => {
       definitionHash: strategyDefinitionHash(definition),
       validationStatus: 'valid',
       validationErrors: [],
-      createdAt: now,
+      createdAt: new Date('2026-07-24T08:00:00Z'),
     });
     const sessionId = 'strategy-first-session';
-    const from = new Date('2026-08-03T00:00:00.000Z');
-    const to = new Date('2026-08-31T00:00:00.000Z');
+    const from = new Date('2026-07-27T00:00:00.000Z');
+    const to = new Date('2026-08-24T00:00:00.000Z');
     await ctx.repos.strategyEvaluation.saveSession({
       id: sessionId,
       strategyId: 'strategy-first',
@@ -1444,6 +1607,7 @@ describe('strategy-autonomy-weekly · AI 全新策略（§9.2）', () => {
     await ctx.repos.strategyAutonomyAction.save(
       validatingActionFixture('strategy-first', {
         strategyVersionId: 'strategy-first:v1',
+        createdAt: new Date('2026-07-24T08:00:00Z'),
       }),
     );
 
@@ -1486,8 +1650,8 @@ describe('strategy-autonomy-weekly · AI 全新策略（§9.2）', () => {
       createdAt: now,
     });
     const sessionId = 'strategy-first-blocked-session';
-    const from = new Date('2026-08-03T00:00:00.000Z');
-    const to = new Date('2026-08-31T00:00:00.000Z');
+    const from = new Date('2026-07-27T00:00:00.000Z');
+    const to = new Date('2026-08-24T00:00:00.000Z');
     await ctx.repos.strategyEvaluation.saveSession({
       id: sessionId,
       strategyId: 'strategy-first-blocked',

@@ -4,7 +4,9 @@ import {
   AdviceOutcomeSchema,
   AdviceQuerySchema,
   AdviceSchema,
+  isAdviceQuoteCurrent,
   STANDARD_DISCLAIMERS,
+  StrategyAdviceAnalysisSchema,
 } from './advice.js';
 import { QuoteSchema } from './quote.js';
 
@@ -90,5 +92,72 @@ describe('entity zod schemas (z.coerce.date 约定)', () => {
     expect(outcome.tradeIds).toEqual([]);
     expect(outcome.pnl).toBe(12.3457);
     expect(outcome.recordedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('新策略建议契约', () => {
+  const analysis = {
+    decision: 'watch',
+    confidence: 60,
+    horizon: 'short',
+    reasoning: {
+      premise: '观察条件',
+      evidence: ['价格突破'],
+      counterEvidence: ['成交不足'],
+    },
+    risks: ['波动较高'],
+  };
+  it('允许无价位观察，拒绝缺少反证或不成立的买入价格计划', () => {
+    expect(StrategyAdviceAnalysisSchema.safeParse(analysis).success).toBe(true);
+    for (const invalid of [
+      { ...analysis, decision: 'buy' },
+      { ...analysis, risks: [] },
+      { ...analysis, reasoning: { ...analysis.reasoning, counterEvidence: ['  '] } },
+      { ...analysis, entryPrice: 10, targetPrice: 12, stopLoss: 10.000001 },
+      { ...analysis, entryPrice: 10, targetPrice: 10.000001, stopLoss: 9 },
+    ])
+      expect(StrategyAdviceAnalysisSchema.safeParse(invalid).success).toBe(false);
+  });
+  it.each([
+    ['盘中及时', '2026-09-02T10:00:00+08:00', '2026-09-02T09:58:00+08:00', 'quote', true],
+    ['盘中过时', '2026-09-02T10:00:00+08:00', '2026-09-02T09:56:00+08:00', 'quote', false],
+    ['未来报价', '2026-09-02T10:00:00+08:00', '2026-09-02T10:01:00+08:00', 'quote', false],
+    ['午休收盘', '2026-09-02T12:30:00+08:00', '2026-09-02T11:30:00+08:00', 'quote', true],
+    ['夜间收盘', '2026-09-02T18:30:00+08:00', '2026-09-02T15:00:00+08:00', 'quote', true],
+    ['周末最近交易日', '2026-09-06T12:30:00+08:00', '2026-09-04T15:00:00+08:00', 'quote', true],
+    ['盘前前一交易日', '2026-09-07T09:20:00+08:00', '2026-09-04T15:00:00+08:00', 'quote', true],
+    [
+      '过旧日线',
+      '2026-09-07T18:30:00+08:00',
+      '2026-09-04T00:00:00Z',
+      'daily-bar-fallback:fixture',
+      false,
+    ],
+    [
+      '当前日线',
+      '2026-09-07T18:30:00+08:00',
+      '2026-09-07T00:00:00Z',
+      'daily-bar-fallback:fixture',
+      true,
+    ],
+    [
+      '盘中日线不能冒充实时',
+      '2026-09-07T10:00:00+08:00',
+      '2026-09-07T00:00:00Z',
+      'daily-bar-fallback:fixture',
+      false,
+    ],
+  ])('%s', (_name, now, observedAt, source, expected) => {
+    const quote = QuoteSchema.parse({
+      stockId: 'fixture',
+      ts: observedAt,
+      open: 10,
+      high: 10,
+      low: 10,
+      close: 10,
+      volume: 1,
+      source,
+    });
+    expect(isAdviceQuoteCurrent(quote, new Date(now))).toBe(expected);
   });
 });

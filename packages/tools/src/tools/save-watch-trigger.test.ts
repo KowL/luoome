@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-
+import { toolRegistry } from '../registry.js';
 import { buildTestContext } from '../testing/context.js';
 import { saveWatchTriggerTool } from './save-watch-trigger.js';
+import {
+  beginWatchDeliveryTool,
+  commitWatchEvaluationTool,
+  listWatchDeliveryRetriesTool,
+  watchExecutionTool,
+} from './workflow-operations.js';
 
 const T0 = new Date('2026-07-21T02:00:00.000Z');
 
@@ -24,6 +30,38 @@ const triggerInput = () => ({
 });
 
 describe('save_watch_trigger', () => {
+  it('预警租约和投递工具不暴露到公共 registry，边界拒绝无效 owner', async () => {
+    const names = new Set(toolRegistry.all().map((tool) => tool.name));
+    for (const tool of [
+      watchExecutionTool,
+      commitWatchEvaluationTool,
+      beginWatchDeliveryTool,
+      listWatchDeliveryRetriesTool,
+    ]) {
+      expect(names.has(tool.name)).toBe(false);
+    }
+    const ctx = await buildTestContext();
+    expect(await watchExecutionTool.execute({ action: 'acquire', owner: '' }, ctx)).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+  });
+
+  it('未持有租约不能提交任何预警触发', async () => {
+    const ctx = await buildTestContext();
+    expect(
+      await commitWatchEvaluationTool.execute(
+        {
+          owner: 'not-owner',
+          triggers: [triggerInput()],
+          states: [],
+        },
+        ctx,
+      ),
+    ).toMatchObject({ ok: false, error: { kind: 'lease_lost_before_commit' } });
+    expect(await ctx.repos.watchTrigger.listRecent({})).toEqual([]);
+  });
+
   it('落库：合法 trigger → 持久化 + 字段一致', async () => {
     const ctx = await buildTestContext();
     const r = await saveWatchTriggerTool.execute(triggerInput(), ctx);

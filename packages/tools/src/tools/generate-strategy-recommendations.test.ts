@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildTestContext, seedTestStockUniverse } from '../testing/context.js';
+import { analyzeStrategyCandidateTool } from './analyze-strategy-candidate.js';
 import { generateStrategyRecommendationsTool } from './generate-strategy-recommendations.js';
 import { prepareStrategyDataTool } from './prepare-strategy-data.js';
 import { runStrategyTool } from './run-strategy.js';
@@ -113,6 +114,119 @@ const v2Policy = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe('generate_strategy_recommendations V2 preflight', () => {
+  it('fills Top N from eligible candidates after skipping a higher-ranked holding', async () => {
+    const { ctx, run } = await seedRun(5);
+    const rows = (await ctx.repos.strategyRun.listResults(run.id))
+      .filter((row) => row.selected)
+      .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+    const first = rows[0];
+    const second = rows[1];
+    if (first === undefined || second === undefined) throw new Error('two candidates required');
+    await ctx.repos.holding.save({
+      id: 'top-ranked-holding',
+      accountId: ctx.user.defaultAccountId,
+      stockId: first.stockId,
+      quantity: 100,
+      availableQuantity: 100,
+      avgCost: money(10),
+      openedAt: NOW,
+      closedAt: null,
+    });
+    const holding = await ctx.repos.holding.findByAccountAndStock(
+      ctx.user.defaultAccountId,
+      second.stockId,
+    );
+    if (holding !== null) await ctx.repos.holding.remove(holding.id);
+    const result = await generateStrategyRecommendationsTool.execute(
+      {
+        strategyId: 'recommend-v2',
+        runId: run.id,
+        policy: { ...v2Policy(), maxPerRun: 1 },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.advices.map((advice) => advice.subjectId)).toEqual([second.stockId]);
+  });
+
+  it('rejects stale fallback quotes before calling the LLM at the single-candidate entry point', async () => {
+    const { ctx, run } = await seedRun(5);
+    await ctx.repos.quote.save(await ctx.adapters.market.fetchQuote('000858.SZ'));
+    vi.spyOn(ctx.adapters.market, 'fetchQuote').mockRejectedValue(new Error('offline'));
+    vi.spyOn(ctx.adapters.market, 'fetchDailyBars').mockResolvedValue([]);
+    const llm = vi.spyOn(ctx.adapters.llm, 'generate');
+    const result = await analyzeStrategyCandidateTool.execute(
+      {
+        strategyId: 'recommend-v2',
+        runId: run.id,
+        stockId: '000858.SZ',
+      },
+      { ...ctx, clock: () => new Date('2026-09-02T10:00:00Z') },
+    );
+    expect(result.ok).toBe(false);
+    expect(llm).not.toHaveBeenCalled();
+    expect(await ctx.repos.advice.query({ includeExpired: true })).toHaveLength(0);
+  });
+
+  it('does not persist contradictory prices or empty risk evidence returned by the LLM', async () => {
+    const { ctx, run } = await seedRun(5);
+    vi.spyOn(ctx.adapters.llm, 'generate').mockResolvedValue({
+      decision: 'buy',
+      confidence: 85,
+      horizon: 'short',
+      entryPrice: 10,
+      targetPrice: 9,
+      stopLoss: 12,
+      reasoning: { premise: 'test', evidence: ['test'], counterEvidence: [] },
+      risks: [],
+    });
+    const result = await analyzeStrategyCandidateTool.execute(
+      {
+        strategyId: 'recommend-v2',
+        runId: run.id,
+        stockId: '000858.SZ',
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe('llm_error');
+    expect(await ctx.repos.advice.query({ includeExpired: true })).toHaveLength(0);
+  });
+
+  it('records a failed scheduled batch without presenting failure as no opportunity', async () => {
+    const { ctx, run } = await seedRun(5);
+    vi.spyOn(ctx.adapters.llm, 'generate').mockRejectedValue(new Error('fixture LLM unavailable'));
+    const result = await generateStrategyRecommendationsTool.execute(
+      {
+        strategyId: 'recommend-v2',
+        runId: run.id,
+        mode: 'scheduled',
+        policy: { ...v2Policy({ skipExistingHolding: false }), maxPerRun: 1 },
+      },
+      ctx,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      data: { attempted: 1, generationFailed: 1, advices: [] },
+    });
+    const audits = await ctx.repos.workflowRun.listRecent({
+      workflowName: 'strategy-recommendations',
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      mode: 'scheduled',
+      status: 'partial',
+      outputSummary: {
+        strategyId: 'recommend-v2',
+        runId: run.id,
+        attempted: 1,
+        generationFailed: 1,
+        adviceCount: 0,
+      },
+    });
+  });
+
   it('skips an existing holding before invoking the LLM', async () => {
     const { ctx, run } = await seedRun(1);
     const llm = vi.spyOn(ctx.adapters.llm, 'generate');

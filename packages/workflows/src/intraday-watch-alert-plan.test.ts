@@ -3,7 +3,7 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import { describe, expect, it } from 'vitest';
 
-import { intradayWatchWorkflow } from './intraday-watch.js';
+import { intradayWatchWorkflow, runIntradayWatchObserved } from './intraday-watch.js';
 
 describe('intraday-watch target model', () => {
   it('只从 enabled AlertPlan + WatchlistMember 解析扫描对象', async () => {
@@ -159,14 +159,17 @@ describe('intraday-watch target model', () => {
     }
     const ctx = withFixedQuoteAdapter(base, { '688981.SH': 100 });
 
-    const result = await intradayWatchWorkflow.run(
+    const result = await runIntradayWatchObserved(
       { alertPlanIds: ['all-unknown-alert'], notify: false },
       ctx,
+      'once',
     );
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.triggers).toEqual([]);
+    expect(result.data.unknownRules).toBe(1);
+    expect(await base.repos.watchRun.latest()).toMatchObject({ unknownRules: 1, delivered: 0 });
   });
 
   it('logic=ALL 时一条规则为 false 即使另一条 unknown 也产生恢复 Trigger', async () => {
@@ -254,12 +257,20 @@ describe('intraday-watch target model', () => {
     );
     const ctx = withFixedQuoteAdapter(base, { '600519.SH': 100 });
 
+    await base.repos.watchRuleState.upsert({
+      poolId: 'daily-alert',
+      stockId: '600519.SH',
+      ruleId: 'above-50',
+      active: false,
+      lastEvaluatedAt: now,
+    });
+
     const first = await intradayWatchWorkflow.run(
-      { alertPlanIds: ['daily-alert'], notify: false },
+      { alertPlanIds: ['daily-alert'], notify: true },
       ctx,
     );
     const second = await intradayWatchWorkflow.run(
-      { alertPlanIds: ['daily-alert'], notify: false },
+      { alertPlanIds: ['daily-alert'], notify: true },
       ctx,
     );
 
@@ -270,58 +281,99 @@ describe('intraday-watch target model', () => {
     expect(second.data.triggers).toEqual([]);
   });
 
-  it('notifyOnRecovery=true 时发送恢复通知并返回最终送达状态', async () => {
-    const now = new Date('2026-08-09T02:00:00.000Z');
-    const base = await buildTestContext({ clock: () => now });
-    await createWatchlistTool.execute(
-      {
-        id: 'recovery-watchlist',
-        name: '恢复观察',
-        kind: 'personal',
-        membershipPolicy: 'manual',
-      },
-      base,
-    );
-    await addWatchlistMemberTool.execute(
-      { watchlistId: 'recovery-watchlist', stockId: '600519.SH' },
-      base,
-    );
-    await createAlertPlanTool.execute(
-      {
-        id: 'recovery-alert',
-        name: '恢复提醒',
-        watchlistId: 'recovery-watchlist',
-        notifyOnRecovery: true,
-        cooldownMinutes: 0,
-        rules: [{ id: 'above-100', kind: 'price-level', level: 100, side: 'above' }],
-      },
-      base,
-    );
-    await base.repos.watchRuleState.upsert({
-      alertPlanId: 'recovery-alert',
-      poolId: 'recovery-alert',
-      stockId: '600519.SH',
-      ruleId: 'above-100',
-      active: true,
-      lastEvaluatedAt: new Date(now.getTime() - 60_000),
-      lastValue: 1,
-    });
-    const ctx = withFixedQuoteAdapter(base, { '600519.SH': 90 });
+  it.each(['success', 'suppressed', 'failed'] as const)(
+    '恢复提醒投递 %s，尝试数与送达数分开保存',
+    async (deliveryResult) => {
+      const now = new Date('2026-08-09T02:00:00.000Z');
+      const base = await buildTestContext({ clock: () => now });
+      await createWatchlistTool.execute(
+        {
+          id: 'recovery-watchlist',
+          name: '恢复观察',
+          kind: 'personal',
+          membershipPolicy: 'manual',
+        },
+        base,
+      );
+      await addWatchlistMemberTool.execute(
+        { watchlistId: 'recovery-watchlist', stockId: '600519.SH' },
+        base,
+      );
+      await createAlertPlanTool.execute(
+        {
+          id: 'recovery-alert',
+          name: '恢复提醒',
+          watchlistId: 'recovery-watchlist',
+          notifyOnRecovery: true,
+          cooldownMinutes: 0,
+          rules: [{ id: 'above-100', kind: 'price-level', level: 100, side: 'above' }],
+        },
+        base,
+      );
+      await base.repos.watchRuleState.upsert({
+        alertPlanId: 'recovery-alert',
+        poolId: 'recovery-alert',
+        stockId: '600519.SH',
+        ruleId: 'above-100',
+        active: true,
+        lastEvaluatedAt: new Date(now.getTime() - 60_000),
+        lastValue: 1,
+      });
+      const marketCtx = withFixedQuoteAdapter(base, { '600519.SH': 90 });
+      const ctx = {
+        ...marketCtx,
+        notification: {
+          send: async (input: {
+            channel: 'feishu' | 'log';
+            payload: {
+              title: string;
+              content: string;
+              level: 'info' | 'warn' | 'error' | 'success';
+            };
+          }) => {
+            const notification = {
+              id: 'fixture-delivery',
+              channel: input.channel,
+              payload: input.payload,
+              result: deliveryResult,
+              sentAt: now,
+              ...(deliveryResult === 'failed' ? { errorMessage: 'fixture failure' } : {}),
+            };
+            await base.repos.notification.save(notification);
+            return { notification };
+          },
+        },
+      };
+      const expectedStatus =
+        deliveryResult === 'success'
+          ? 'sent'
+          : deliveryResult === 'suppressed'
+            ? 'fallback-log'
+            : 'failed';
 
-    const result = await intradayWatchWorkflow.run(
-      { alertPlanIds: ['recovery-alert'], notify: true },
-      ctx,
-    );
+      const result = await runIntradayWatchObserved(
+        { alertPlanIds: ['recovery-alert'], notify: true },
+        ctx,
+        'once',
+      );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.triggers).toHaveLength(1);
-    expect(result.data.triggers[0]).toMatchObject({
-      triggerType: 'recovered',
-      deliveryStatus: 'sent',
-      notified: true,
-    });
-    const saved = await base.repos.watchTrigger.findById(result.data.triggers[0]?.id ?? '');
-    expect(saved).toMatchObject({ deliveryStatus: 'sent', notified: true });
-  });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.triggers).toHaveLength(1);
+      expect(result.data.delivered).toBe(deliveryResult === 'success' ? 1 : 0);
+      expect(await base.repos.watchRun.latest()).toMatchObject({
+        notified: 1,
+        delivered: deliveryResult === 'success' ? 1 : 0,
+      });
+      expect(result.data.triggers[0]).toMatchObject({
+        triggerType: 'recovered',
+        deliveryStatus: expectedStatus,
+        notified: true,
+      });
+      const saved = await base.repos.watchTrigger.findById(result.data.triggers[0]?.id ?? '');
+      expect(saved).toMatchObject({ deliveryStatus: expectedStatus, notified: true });
+      const notifications = await base.repos.notification.listRecent({});
+      expect(notifications.at(-1)?.channel).toBe('feishu');
+    },
+  );
 });

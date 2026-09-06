@@ -16,6 +16,7 @@ import {
 
 export const CreateStrategyObservationCandidatesInput = z.object({
   runId: z.string().min(1),
+  evaluationSessionId: z.string().min(1).optional(),
 });
 
 export const CreateStrategyObservationCandidatesOutput = z.object({
@@ -61,15 +62,30 @@ const baselineFromSignal = (signal: StrategySignal): StrategySignalBaseline | un
 
 export const createStrategyObservationCandidatesTool = defineTool({
   name: 'create_strategy_observation_candidates',
-  description: '仅为已发布 operational StrategyRun 创建事实表现观察候选；不创建建议或交易',
+  description: '为已发布正式运行或显式关联的验证运行创建事实观察；不创建建议或交易',
   sideEffect: 'write',
   input: CreateStrategyObservationCandidatesInput,
   output: CreateStrategyObservationCandidatesOutput,
   handler: async (input, ctx: ToolContext) => {
     const run = await ctx.repos.strategyRun.findRunById(input.runId);
     if (run === null) return errNotFound('StrategyRun', input.runId);
-    if (!isPublishableOperationalRun(run)) {
-      return errInvalidInput('只有 published operational StrategyRun 才能创建观察候选');
+    if (input.evaluationSessionId !== undefined) {
+      const session = await ctx.repos.strategyEvaluation.findSessionById(input.evaluationSessionId);
+      const days = await ctx.repos.strategyEvaluation.listDays(input.evaluationSessionId);
+      if (
+        session === null ||
+        run.scope !== 'evaluation' ||
+        run.status !== 'complete' ||
+        session.strategyId !== run.strategyId ||
+        session.strategyVersionId !== run.strategyVersionId ||
+        !days.some((day) => day.status === 'complete' && day.runId === run.id)
+      ) {
+        return errInvalidInput('验证观察必须关联同一 session 的已完成 evaluation 运行');
+      }
+    } else if (!isPublishableOperationalRun(run)) {
+      return errInvalidInput(
+        '只有 published operational StrategyRun 或显式验证 session 才能创建观察候选',
+      );
     }
     const signals = await ctx.repos.strategyRun.signalsByRun(input.runId);
     const baselineBySignal = new Map(

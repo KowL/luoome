@@ -19,6 +19,8 @@ const toWatchRun = (row: WatchRunRow): WatchRun => ({
   suppressedByCooldown: row.suppressedByCooldown,
   suppressedByDailyLimit: row.suppressedByDailyLimit,
   notifyFailed: row.notifyFailed,
+  ...(row.delivered === null ? {} : { delivered: row.delivered }),
+  ...(row.unknownRules === null ? {} : { unknownRules: row.unknownRules }),
   ...(row.error !== null ? { error: row.error } : {}),
 });
 
@@ -40,6 +42,8 @@ export class DrizzleWatchRunRepository implements WatchRunRepository {
       suppressedByCooldown: run.suppressedByCooldown,
       suppressedByDailyLimit: run.suppressedByDailyLimit,
       notifyFailed: run.notifyFailed,
+      delivered: run.delivered ?? null,
+      unknownRules: run.unknownRules ?? null,
       ...(run.error !== undefined ? { error: run.error } : { error: null }),
     };
     this.db

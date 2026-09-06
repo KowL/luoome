@@ -45,6 +45,10 @@ export class DrizzleWatchRuleStateRepository implements WatchRuleStateRepository
   }
 
   async upsert(state: WatchRuleState): Promise<void> {
+    this.put(state);
+  }
+
+  put(state: WatchRuleState): void {
     this.db
       .insert(watchRuleStates)
       .values(fromDomain(state))

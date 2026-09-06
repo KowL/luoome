@@ -8,6 +8,7 @@ import {
   isStrategyRecommendationPolicyV2,
   type Quote,
   type Stock,
+  StrategyRecommendationBatchSummarySchema,
   type StrategyRecommendationCooldownFact,
   type StrategyRecommendationHoldingFact,
   StrategyRecommendationPolicySchema,
@@ -39,6 +40,7 @@ export const GenerateStrategyRecommendationsInput = z.object({
   runId: z.string().min(1),
   policy: StrategyRecommendationPolicySchema,
   trigger: ActiveStrategyRecommendationTriggerSchema.default('run'),
+  mode: z.enum(['manual', 'scheduled']).default('manual'),
   stockIds: z.array(z.string().min(1)).max(200).optional(),
 });
 export const GenerateStrategyRecommendationsOutput = z.object({
@@ -47,6 +49,8 @@ export const GenerateStrategyRecommendationsOutput = z.object({
   advices: z.array(AdviceSchema),
   skippedCooldown: z.number().int().nonnegative(),
   notificationFailed: z.number().int().nonnegative(),
+  attempted: z.number().int().nonnegative().default(0),
+  generationFailed: z.number().int().nonnegative().default(0),
   preflight: StrategyRecommendationPreflightSummarySchema.optional(),
 });
 
@@ -331,7 +335,7 @@ const notifyAdvice = async (
     },
     ctx,
   );
-  return notification.ok;
+  return notification.ok && notification.data.notification.result === 'success';
 };
 
 type GenerateStrategyRecommendationsInputT = z.output<typeof GenerateStrategyRecommendationsInput>;
@@ -351,16 +355,18 @@ const generateV2Recommendations = async (
   const eligible = listed.rows
     .filter(({ stock }) => input.stockIds === undefined || input.stockIds.includes(stock.stockId))
     .filter(({ view }) => (view.result.rank ?? Number.MAX_SAFE_INTEGER) <= input.policy.maxRank)
-    .filter(({ view }) => (view.result.score ?? -1) >= input.policy.minScore)
-    .slice(0, input.policy.maxPerRun);
+    .filter(({ view }) => (view.result.score ?? -1) >= input.policy.minScore);
   const evaluatedAt = ctx.clock();
   const facts = await assembleV2Facts(eligible, input.runId, input.strategyId, ctx);
   const advices: z.output<typeof AdviceSchema>[] = [];
   const details: StrategyRecommendationPreflight[] = [];
   let skippedCooldown = 0;
   let notificationFailed = 0;
+  let attempted = 0;
+  let generationFailed = 0;
 
   for (const row of eligible) {
+    if (attempted >= input.policy.maxPerRun) break;
     const stockId = row.stock.stockId;
     const stock = facts.stockById.get(stockId);
     const quote = facts.quoteByStock.get(stockId);
@@ -429,6 +435,7 @@ const generateV2Recommendations = async (
       continue;
     }
 
+    attempted += 1;
     const generated = await analyzeStrategyCandidateTool.execute(
       {
         strategyId: input.strategyId,
@@ -438,7 +445,10 @@ const generateV2Recommendations = async (
       },
       ctx,
     );
-    if (!generated.ok) continue;
+    if (!generated.ok) {
+      generationFailed += 1;
+      continue;
+    }
     advices.push(generated.data.advice);
     if (
       input.policy.notify &&
@@ -454,8 +464,45 @@ const generateV2Recommendations = async (
     advices,
     skippedCooldown,
     notificationFailed,
+    attempted,
+    generationFailed,
     preflight: summarizePreflight(details),
   };
+};
+
+const saveBatchAudit = async (
+  input: GenerateStrategyRecommendationsInputT,
+  result: z.output<typeof GenerateStrategyRecommendationsOutput>,
+  ctx: ToolContext,
+) => {
+  const now = ctx.clock();
+  const summary = StrategyRecommendationBatchSummarySchema.parse({
+    strategyId: input.strategyId,
+    runId: input.runId,
+    accountId: ctx.user.defaultAccountId,
+    adviceCount: result.advices.length,
+    attempted: result.attempted,
+    generationFailed: result.generationFailed,
+    skippedCooldown: result.skippedCooldown,
+    notificationFailed: result.notificationFailed,
+    preflight: result.preflight,
+  });
+  await ctx.repos.workflowRun.save({
+    id: `strategy-recommendations:${globalThis.crypto.randomUUID()}`,
+    workflowName: 'strategy-recommendations',
+    mode: input.mode,
+    status:
+      result.generationFailed > 0 ||
+      result.notificationFailed > 0 ||
+      (result.preflight?.unavailable ?? 0) > 0
+        ? 'partial'
+        : 'succeeded',
+    startedAt: now,
+    finishedAt: now,
+    outputSummary: summary,
+    providerStatuses: [],
+  });
+  return result;
 };
 
 export const generateStrategyRecommendationsTool = defineTool({
@@ -467,13 +514,13 @@ export const generateStrategyRecommendationsTool = defineTool({
   output: GenerateStrategyRecommendationsOutput,
   handler: async (input, ctx: ToolContext) => {
     if (!input.policy.enabled) {
-      return {
+      return GenerateStrategyRecommendationsOutput.parse({
         strategyId: input.strategyId,
         runId: input.runId,
         advices: [],
         skippedCooldown: 0,
         notificationFailed: 0,
-      };
+      });
     }
     const listed = await listStrategyResultViewsTool.execute(
       {
@@ -490,7 +537,8 @@ export const generateStrategyRecommendationsTool = defineTool({
     if (!listed.ok) return listed;
     const policy = input.policy;
     if (isStrategyRecommendationPolicyV2(policy)) {
-      return generateV2Recommendations({ ...input, policy }, listed.data, ctx);
+      const result = await generateV2Recommendations({ ...input, policy }, listed.data, ctx);
+      return saveBatchAudit(input, result, ctx);
     }
     if (!isPublishableOperationalRun(listed.data.run)) {
       return errInvalidInput('只有已发布且通过完整性门禁的 operational StrategyRun 才能生成推荐');
@@ -498,13 +546,15 @@ export const generateStrategyRecommendationsTool = defineTool({
     const eligible = listed.data.rows
       .filter(({ stock }) => input.stockIds === undefined || input.stockIds.includes(stock.stockId))
       .filter(({ view }) => (view.result.rank ?? Number.MAX_SAFE_INTEGER) <= input.policy.maxRank)
-      .filter(({ view }) => (view.result.score ?? -1) >= input.policy.minScore)
-      .slice(0, input.policy.maxPerRun);
+      .filter(({ view }) => (view.result.score ?? -1) >= input.policy.minScore);
     const advices: z.output<typeof AdviceSchema>[] = [];
     let skippedCooldown = 0;
     let notificationFailed = 0;
+    let attempted = 0;
+    let generationFailed = 0;
     const since = new Date(ctx.clock().getTime() - input.policy.cooldownHours * 60 * 60 * 1000);
     for (const row of eligible) {
+      if (attempted >= input.policy.maxPerRun) break;
       const previous = await getAdviceTool.execute(
         {
           subjectKind: 'stock',
@@ -527,6 +577,7 @@ export const generateStrategyRecommendationsTool = defineTool({
         skippedCooldown += 1;
         continue;
       }
+      attempted += 1;
       const generated = await analyzeStrategyCandidateTool.execute(
         {
           strategyId: input.strategyId,
@@ -536,7 +587,10 @@ export const generateStrategyRecommendationsTool = defineTool({
         },
         ctx,
       );
-      if (!generated.ok) continue;
+      if (!generated.ok) {
+        generationFailed += 1;
+        continue;
+      }
       advices.push(generated.data.advice);
       if (!input.policy.notify) continue;
       const advice = generated.data.advice;
@@ -561,14 +615,21 @@ export const generateStrategyRecommendationsTool = defineTool({
         },
         ctx,
       );
-      if (!notification.ok) notificationFailed += 1;
+      if (!notification.ok || notification.data.notification.result !== 'success')
+        notificationFailed += 1;
     }
-    return {
-      strategyId: input.strategyId,
-      runId: input.runId,
-      advices,
-      skippedCooldown,
-      notificationFailed,
-    };
+    return saveBatchAudit(
+      input,
+      {
+        strategyId: input.strategyId,
+        runId: input.runId,
+        advices,
+        skippedCooldown,
+        notificationFailed,
+        attempted,
+        generationFailed,
+      },
+      ctx,
+    );
   },
 });

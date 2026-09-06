@@ -1,9 +1,16 @@
 import {
+  assessStrategyAutomaticPublication,
   assessStrategyInitialPublication,
   dateInShanghai,
   isHoliday,
   isWeekend,
+  STRATEGY_AUTOMATIC_VALIDATION_TRADING_DAYS,
+  type StrategyAutomaticPublicationAssessment,
+  StrategyAutomaticPublicationAssessmentSchema,
   type StrategyAutonomyAction,
+  type StrategyVersion,
+  signalObservationDueAt,
+  strategyAutomaticValidationWindow,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -27,11 +34,10 @@ export const STRATEGY_AUTONOMY_PAUSE_THRESHOLDS = {
 /**
  * 提议冷却与自动验证窗口（docs/ddd/strategy-ai-lifecycle-detailed-design.md §3.2/§3.3，
  * 已冻结）。只允许通过改代码变更，不做运行期配置（DDD §6 红线）。
- * 验证窗口与既有事实观察默认窗口同口径（30 个自然日，约 20+ 个交易日，覆盖晋级门
- * ≥20 验证交易日的输入要求）；窗口结束于昨天，避开当日尚未完成的 PIT 数据。
+ * 自动验证回放已有 T+5 结果的 20 个历史交易日，不等待提议后的未来行情。
  */
 export const STRATEGY_AUTONOMY_PROPOSE_COOLDOWN_DAYS = 7;
-export const STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS = 30;
+export const STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS = STRATEGY_AUTOMATIC_VALIDATION_TRADING_DAYS;
 
 /**
  * 自动归档与全新策略提议限额（docs/ddd/strategy-ai-lifecycle-detailed-design.md §9，
@@ -41,10 +47,6 @@ export const STRATEGY_AUTONOMY_ARCHIVE_MIN_PAUSED_DAYS = 28;
 export const STRATEGY_AUTONOMY_NEW_STRATEGY_WEEKLY_LIMIT = 1;
 
 const DAY_MS = 86_400_000;
-
-/** UTC 当日 00:00（与 Web 历史评估 session 的 from/to 口径一致）。 */
-const utcMidnight = (date: Date): Date =>
-  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 
 export const StrategyAutonomyWeeklyInput = z.object({
   mode: z.enum(['manual', 'scheduled']).default('manual'),
@@ -611,10 +613,7 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
       (action) => action.ruleSnapshot?.proposalKind === 'new-strategy',
     ).length >= STRATEGY_AUTONOMY_NEW_STRATEGY_WEEKLY_LIMIT;
 
-  const windowTo = new Date(utcMidnight(now).getTime() - DAY_MS);
-  const windowFrom = new Date(
-    windowTo.getTime() - (STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS - 1) * DAY_MS,
-  );
+  const { from: windowFrom, to: windowTo, readyAt } = strategyAutomaticValidationWindow(now);
 
   /** 已创建（或无需）版本后落 failed 审计动作：drafted → failed，保留 lastError。 */
   const recordFailedProposal = async (input: {
@@ -730,7 +729,15 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
         strategyVersionId: input.candidateId,
         evaluationSessionId: session.data.session.id,
         trigger: 'weekly-review',
-        ruleSnapshot: input.ruleSnapshot,
+        ruleSnapshot: {
+          ...input.ruleSnapshot,
+          validationWindowUnit: 'trading-day',
+          validationFrom: windowFrom.toISOString(),
+          validationTo: windowTo.toISOString(),
+          observationsReadyAt: readyAt.toISOString(),
+          automaticPublicationPolicy: 'strategy-auto-publication-v2',
+          validationMode: 'historical-replay',
+        },
         factReferences: [...input.factReferences],
         createdAt: now,
         updatedAt: now,
@@ -771,7 +778,7 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
       strategyName: input.strategyName,
       decision: 'validating',
       reasons: [
-        `AI 提议版本 v${input.candidateVersion} 校验通过，已创建 ${STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS} 天验证窗口的独立评估 session`,
+        `AI 提议版本 v${input.candidateVersion} 校验通过，已创建 ${STRATEGY_AUTONOMY_VALIDATION_WINDOW_DAYS} 个历史交易日的规则回放，使用已有 T+5 结果评估`,
       ],
       actionId,
       strategyVersionId: input.candidateId,
@@ -798,8 +805,7 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
       const recentProposals = await ctx.tools.list_strategy_autonomy_actions.execute({
         strategyId: strategy.id,
         kind: 'propose-version',
-        since: cooldownSince,
-        limit: 1,
+        limit: 1000,
       });
       if (!recentProposals.ok) {
         items.push({
@@ -811,13 +817,21 @@ const runProposals: WorkflowStep = async (prev, ctx) => {
         });
         continue;
       }
-      if (recentProposals.data.total > 0) {
+      const inflight = recentProposals.data.actions.some((action) =>
+        ['drafted', 'validating', 'eligible'].includes(action.status),
+      );
+      if (
+        inflight ||
+        recentProposals.data.actions.some((action) => action.createdAt >= cooldownSince)
+      ) {
         items.push({
           strategyId: strategy.id,
           strategyName: strategy.name,
           decision: 'skipped',
           reasons: [
-            `冷却窗口内（${STRATEGY_AUTONOMY_PROPOSE_COOLDOWN_DAYS} 个自然日）已存在 propose-version 动作`,
+            inflight
+              ? '已有候选正在验证或等待发布，完成后再提议'
+              : `冷却窗口内（${STRATEGY_AUTONOMY_PROPOSE_COOLDOWN_DAYS} 个自然日）已存在 propose-version 动作`,
           ],
         });
         continue;
@@ -1113,7 +1127,7 @@ const runValidationSessions: WorkflowStep = async (prev, ctx) => {
   if (!listed.ok) return listed;
 
   const items: z.infer<typeof ValidationItemSchema>[] = [];
-  for (const action of listed.data.actions) {
+  for (let action of listed.data.actions) {
     try {
       const patchError = async (lastError: string) => {
         await ctx.tools.create_strategy_autonomy_action.execute({
@@ -1132,7 +1146,59 @@ const runValidationSessions: WorkflowStep = async (prev, ctx) => {
         });
         continue;
       }
-      const sessionId = action.evaluationSessionId;
+      let sessionId = action.evaluationSessionId;
+      if (
+        action.ruleSnapshot?.automaticPublicationPolicy === 'strategy-auto-publication-v1' &&
+        action.strategyVersionId !== undefined
+      ) {
+        const window = strategyAutomaticValidationWindow(ctx.clock());
+        const historical = await ctx.tools.start_strategy_evaluation_session.execute({
+          strategyId: action.strategyId,
+          versionId: action.strategyVersionId,
+          from: window.from,
+          to: window.to,
+        });
+        if (!historical.ok) {
+          const lastError = `历史验证 session 创建失败: ${errorText(historical.error)}`;
+          await patchError(lastError);
+          items.push({
+            actionId: action.id,
+            strategyId: action.strategyId,
+            decision: 'error',
+            reasons: [lastError],
+            error: lastError,
+          });
+          continue;
+        }
+        const updated = {
+          ...action,
+          evaluationSessionId: historical.data.session.id,
+          updatedAt: ctx.clock(),
+          ruleSnapshot: {
+            ...action.ruleSnapshot,
+            supersededEvaluationSessionId: action.evaluationSessionId,
+            automaticPublicationPolicy: 'strategy-auto-publication-v2',
+            validationMode: 'historical-replay',
+            validationFrom: window.from.toISOString(),
+            validationTo: window.to.toISOString(),
+            observationsReadyAt: window.readyAt.toISOString(),
+          },
+        };
+        const saved = await ctx.tools.create_strategy_autonomy_action.execute({ action: updated });
+        if (!saved.ok) {
+          const lastError = `历史验证审计保存失败: ${errorText(saved.error)}`;
+          items.push({
+            actionId: action.id,
+            strategyId: action.strategyId,
+            decision: 'error',
+            reasons: [lastError],
+            error: lastError,
+          });
+          continue;
+        }
+        action = updated;
+        sessionId = historical.data.session.id;
+      }
       const fetched = await ctx.tools.get_strategy_evaluation_session.execute({ sessionId });
       if (!fetched.ok) {
         const lastError = `验证 session 读取失败: ${errorText(fetched.error)}`;
@@ -1158,6 +1224,20 @@ const runValidationSessions: WorkflowStep = async (prev, ctx) => {
           decision: 'error',
           reasons: [lastError],
           error: lastError,
+        });
+        continue;
+      }
+      const readyAt = signalObservationDueAt(
+        new Date(`${dateInShanghai(session.to)}T15:00:00+08:00`),
+        't5',
+      );
+      if (ctx.clock() < readyAt) {
+        items.push({
+          actionId: action.id,
+          strategyId: action.strategyId,
+          evaluationSessionId: sessionId,
+          decision: 'incomplete',
+          reasons: [`历史验证区间的末日 T+5 数据尚未完整，等待 ${readyAt.toISOString()}`],
         });
         continue;
       }
@@ -1262,17 +1342,7 @@ const runValidationSessions: WorkflowStep = async (prev, ctx) => {
   });
 };
 
-/**
- * §3.4 门禁复核与自动发布：
- * - validating 且 session complete 的动作：复用 get_strategy_experiment_context 的
- *   promotion 装配（assessStrategyPromotion 阈值不动）；
- *   eligible-for-human-review → validating→eligible→publish→published；
- *   blocked → validating→blocked（直达，不经 eligible，避免中转移失败泄漏为
- *   下周不重跑门禁直接发布），lastError 记 reasons 摘要；
- * - session 未 complete → 不评估，留在 validating；
- * - eligible 动作（含上周发布失败保留的）：直接重试 publish，失败保持 eligible 并
- *   原地补 attempts+1/lastError（create_strategy_autonomy_action 的 upsert 语义）。
- */
+/** 每次发布（含重试）均复核历史验证、证据质量与超额收益，并先保存门禁审计。 */
 const runPromotionReview: WorkflowStep = async (prev, ctx) => {
   const carried = AutonomyValidationOutput.parse(prev);
   const now = ctx.clock();
@@ -1300,12 +1370,8 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
    */
   const publishEligible = async (
     action: StrategyAutonomyAction,
-    gateMetrics?: {
-      readonly validationTradingDays: number;
-      readonly vintageCoverageRatio: number;
-      readonly completeObservationCount: number;
-      readonly benchmarkCoverageRatio: number;
-    },
+    assessment: StrategyAutomaticPublicationAssessment,
+    alreadyPublished?: StrategyVersion,
   ): Promise<z.infer<typeof PromotionItemSchema>> => {
     if (action.strategyVersionId === undefined) {
       return {
@@ -1315,10 +1381,13 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         reasons: ['eligible 动作缺少 strategyVersionId，无法发布'],
       };
     }
-    const published = await ctx.tools.publish_strategy_version.execute({
-      versionId: action.strategyVersionId,
-      strategyId: action.strategyId,
-    });
+    const published =
+      alreadyPublished === undefined
+        ? await ctx.tools.publish_strategy_version.execute({
+            versionId: action.strategyVersionId,
+            strategyId: action.strategyId,
+          })
+        : { ok: true as const, data: { version: alreadyPublished } };
     if (!published.ok) {
       const lastError = `发布失败: ${errorText(published.error)}`;
       await ctx.tools.create_strategy_autonomy_action.execute({
@@ -1366,7 +1435,8 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
           gate: 'eligible',
           publishedVersion,
           attempts: action.attempts,
-          ...(gateMetrics ?? {}),
+          ...assessment.metrics,
+          automaticPublication: assessment,
         },
         factReferences: [],
         attempts: 0,
@@ -1394,28 +1464,21 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
     };
   };
 
-  for (const action of eligibleListed.data.actions) {
-    try {
-      items.push(await publishEligible(action));
-    } catch (error) {
-      items.push({
-        actionId: action.id,
-        strategyId: action.strategyId,
-        decision: 'error',
-        reasons: ['发布重试处理异常'],
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  for (const action of validatingListed.data.actions) {
+  for (const action of [...eligibleListed.data.actions, ...validatingListed.data.actions]) {
     try {
       if (action.strategyVersionId === undefined || action.evaluationSessionId === undefined) {
+        const lastError = '自动发布缺少候选版本或历史验证 session';
+        const blocked = await ctx.tools.transition_strategy_autonomy_action.execute({
+          id: action.id,
+          expectedStatus: action.status,
+          status: 'blocked',
+          lastError,
+        });
         items.push({
           actionId: action.id,
           strategyId: action.strategyId,
-          decision: 'error',
-          reasons: ['validating 动作缺少 strategyVersionId 或 evaluationSessionId'],
+          decision: blocked.ok ? 'blocked' : 'error',
+          reasons: [lastError],
         });
         continue;
       }
@@ -1443,13 +1506,63 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         });
         continue;
       }
-      if (session.status !== 'complete') {
+      const observationsReadyAt = signalObservationDueAt(
+        new Date(`${dateInShanghai(session.to)}T15:00:00+08:00`),
+        't5',
+      );
+      if (session.status !== 'complete' || now < observationsReadyAt) {
         items.push({
           actionId: action.id,
           strategyId: action.strategyId,
           strategyVersionId: action.strategyVersionId,
           decision: 'pending',
-          reasons: [`验证 session 未 complete（当前 ${session.status}），本周期不评估`],
+          reasons: [
+            `验证或末日 T+5 观察尚未完成（${session.status}），最早评估时间 ${observationsReadyAt.toISOString()}`,
+          ],
+        });
+        continue;
+      }
+
+      const days = await ctx.tools.list_strategy_evaluation_days.execute({ sessionId });
+      if (!days.ok) return days;
+      const validationRunIds = [
+        ...new Set(
+          days.data.days.flatMap((day) =>
+            day.status === 'complete' && day.runId !== undefined ? [day.runId] : [],
+          ),
+        ),
+      ];
+      let observationError: string | undefined;
+      for (const runId of validationRunIds) {
+        const created = await ctx.tools.create_strategy_observation_candidates.execute({
+          runId,
+          evaluationSessionId: sessionId,
+        });
+        if (!created.ok) {
+          observationError = errorText(created.error);
+          break;
+        }
+        let scanned: number;
+        do {
+          const completed = await ctx.tools.complete_strategy_observations.execute({
+            runIds: [runId],
+            limit: 5000,
+          });
+          if (!completed.ok) {
+            observationError = errorText(completed.error);
+            break;
+          }
+          scanned = completed.data.scanned;
+        } while (scanned === 5000);
+        if (observationError !== undefined) break;
+      }
+      if (observationError !== undefined) {
+        items.push({
+          actionId: action.id,
+          strategyId: action.strategyId,
+          decision: 'error',
+          reasons: ['历史验证观察补全失败，保留动作待重试'],
+          error: observationError,
         });
         continue;
       }
@@ -1458,6 +1571,7 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         strategyId: action.strategyId,
         candidateVersionId: action.strategyVersionId,
         validationSessionId: sessionId,
+        observationHorizon: 't5',
       });
       if (!experiment.ok) {
         items.push({
@@ -1470,9 +1584,24 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         });
         continue;
       }
+      const candidate = experiment.data.candidateVersion;
+      const priorGate = StrategyAutomaticPublicationAssessmentSchema.safeParse(
+        action.ruleSnapshot?.automaticPublication,
+      );
+      if (
+        action.status === 'eligible' &&
+        candidate?.publishedAt !== undefined &&
+        experiment.data.strategy.currentVersionId === candidate.id &&
+        priorGate.success &&
+        priorGate.data.status === 'eligible'
+      ) {
+        // 版本切换已成功、动作记账失败时仅补审计，不再次发布或恢复已暂停策略。
+        items.push(await publishEligible(action, priorGate.data, candidate));
+        continue;
+      }
       // §9.2：策略无基线版本（AI 全新策略首发）时用首发门禁 assessStrategyInitialPublication
       // 替代晋级门（不查 base/parent/diff）；指标复用 experiment context 的 promotion 装配。
-      const assessment =
+      const evidenceAssessment =
         experiment.data.baseVersion === undefined
           ? assessStrategyInitialPublication({
               ...(experiment.data.candidateVersion === undefined
@@ -1492,11 +1621,36 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
               },
             })
           : experiment.data.promotion;
+      const assessment = assessStrategyAutomaticPublication({
+        evidence: evidenceAssessment,
+        strategyStatus: experiment.data.strategy.status,
+        validationFrom: session.from,
+        validationTo: session.to,
+        now,
+        performance: experiment.data.observations.stats.find((stats) => stats.horizon === 't5'),
+      });
+      const audited = await ctx.tools.create_strategy_autonomy_action.execute({
+        action: {
+          ...action,
+          updatedAt: now,
+          ruleSnapshot: { ...action.ruleSnapshot, automaticPublication: assessment },
+        },
+      });
+      if (!audited.ok) {
+        items.push({
+          actionId: action.id,
+          strategyId: action.strategyId,
+          decision: 'error',
+          reasons: ['自动发布门禁审计保存失败'],
+          error: errorText(audited.error),
+        });
+        continue;
+      }
       if (assessment.status === 'blocked') {
         const lastError = `晋级门未通过: ${assessment.reasons.join(', ')}`;
         const blocked = await ctx.tools.transition_strategy_autonomy_action.execute({
           id: action.id,
-          expectedStatus: 'validating',
+          expectedStatus: action.status,
           status: 'blocked',
           lastError,
         });
@@ -1521,11 +1675,14 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         continue;
       }
 
-      const eligible = await ctx.tools.transition_strategy_autonomy_action.execute({
-        id: action.id,
-        expectedStatus: 'validating',
-        status: 'eligible',
-      });
+      const eligible =
+        action.status === 'eligible'
+          ? audited
+          : await ctx.tools.transition_strategy_autonomy_action.execute({
+              id: action.id,
+              expectedStatus: 'validating',
+              status: 'eligible',
+            });
       if (!eligible.ok) {
         items.push({
           actionId: action.id,
@@ -1537,14 +1694,7 @@ const runPromotionReview: WorkflowStep = async (prev, ctx) => {
         });
         continue;
       }
-      items.push(
-        await publishEligible(eligible.data.action, {
-          validationTradingDays: experiment.data.promotion.metrics.validationTradingDays,
-          vintageCoverageRatio: experiment.data.promotion.metrics.vintageCoverageRatio,
-          completeObservationCount: experiment.data.promotion.metrics.completeObservationCount,
-          benchmarkCoverageRatio: experiment.data.promotion.metrics.benchmarkCoverageRatio,
-        }),
-      );
+      items.push(await publishEligible(eligible.data.action, assessment));
     } catch (error) {
       items.push({
         actionId: action.id,

@@ -23,6 +23,8 @@ export const StrategyRecommendationsOutput = z.object({
   advices: z.array(AdviceSchema),
   skippedCooldown: z.number().int().nonnegative(),
   notificationFailed: z.number().int().nonnegative(),
+  attempted: z.number().int().nonnegative(),
+  generationFailed: z.number().int().nonnegative(),
   preflight: StrategyRecommendationPreflightSummarySchema.optional(),
 });
 export type StrategyRecommendationsOutputT = z.infer<typeof StrategyRecommendationsOutput>;

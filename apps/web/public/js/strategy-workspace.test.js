@@ -2005,7 +2005,13 @@ describe('Phase B 洞察与调度', () => {
                 strategyId: 'autonomy-ui',
                 strategyVersionId: 'v2',
                 trigger: 'weekly-review',
-                ruleSnapshot: { candidateVersionId: 'v2' },
+                ruleSnapshot: {
+                  candidateVersionId: 'v2',
+                  validationMode: 'historical-replay',
+                  validationFrom: '2026-07-30T00:00:00Z',
+                  validationTo: '2026-08-26T00:00:00Z',
+                  observationsReadyAt: '2026-09-02T07:00:00Z',
+                },
                 aiNarrative: '晋级门未通过：验证样本不足',
                 factReferences: [],
                 attempts: 1,
@@ -2064,6 +2070,10 @@ describe('Phase B 洞察与调度', () => {
       },
     );
     expect(node.textContent).toContain('自治动作时间线');
+    expect(node.textContent).toContain('历史回放 2026-07-30 至 2026-08-26');
+    expect(node.textContent).toContain('末日 T+5');
+    expect(node.textContent).toContain('收益数据截至');
+    expect(node.textContent).not.toContain('最早评估');
     expect(node.textContent).toContain('AI 提议版本');
     expect(node.textContent).toContain('待人工确认');
     expect(node.textContent).toContain('自动暂停');

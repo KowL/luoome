@@ -9,13 +9,11 @@ import { intradayWatchWorkflow } from './intraday-watch.js';
 /**
  * strategy-signal 规则路径单测。
  *
- * 信号窗口语义：只读当日 Asia/Shanghai 00:00 起的持久化 StrategySignal，
- * 历史信号不参与命中（避免历史信号命中后永远 active）。
+ * 信号窗口语义：读取上一交易日至今的持久化 StrategySignal，按信号身份防重。
  */
 
 const T0 = new Date('2026-07-28T01:00:00.000Z'); // 当日 09:00 Asia/Shanghai
 const NOW = new Date('2026-07-28T02:00:00.000Z'); // 当日 10:00 Asia/Shanghai
-const YESTERDAY = new Date('2026-07-27T01:00:00.000Z'); // 前一上海日 09:00
 const STOCK = '002594.SZ';
 
 const DEFINITION: StrategyDslV1 = {
@@ -168,13 +166,34 @@ describe('intraday-watch strategy-signal 规则', () => {
     expect(trigger?.evidence).toContain('放量突破');
   });
 
-  it('历史信号（前一上海日）不进入信号窗口 → 不触发', async () => {
+  it.each(['ANY', 'ALL'] as const)(
+    '%s：上一交易日盘后信号在次日首次扫描触发，随后不重复',
+    async (logic) => {
+      const ctx = await buildTestContext({ clock: () => NOW });
+      await seedSignalSetup(ctx, new Date('2026-07-27T10:00:00Z'));
+      const plan = await ctx.repos.alertPlan.findById('sig-plan');
+      if (plan === null) throw new Error('fixture plan missing');
+      await ctx.repos.alertPlan.save({ ...plan, logic });
+      const r = await intradayWatchWorkflow.run({ alertPlanIds: ['sig-plan'], notify: true }, ctx);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.data.triggers).toHaveLength(1);
+      const second = await intradayWatchWorkflow.run(
+        { alertPlanIds: ['sig-plan'], notify: true },
+        ctx,
+      );
+      expect(second.ok && second.data.triggers).toEqual([]);
+    },
+  );
+
+  it('超过上一交易日的信号不触发', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
-    await seedSignalSetup(ctx, YESTERDAY);
-    const r = await intradayWatchWorkflow.run({ alertPlanIds: ['sig-plan'], notify: false }, ctx);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.data.triggers).toEqual([]);
+    await seedSignalSetup(ctx, new Date('2026-07-24T10:00:00Z'));
+    const result = await intradayWatchWorkflow.run(
+      { alertPlanIds: ['sig-plan'], notify: false },
+      ctx,
+    );
+    expect(result.ok && result.data.triggers).toEqual([]);
   });
 
   it('quote 缺失时触发不带 quote 字段，整轮不被不变量打断', async () => {
@@ -182,7 +201,7 @@ describe('intraday-watch strategy-signal 规则', () => {
     await seedSignalSetup(base, T0);
     const ctx = withFixedQuoteAdapter(base, {});
     const r = await intradayWatchWorkflow.run(
-      { alertPlanIds: ['sig-plan'], notify: false },
+      { alertPlanIds: ['sig-plan'], notify: true },
       ctx as ToolContext,
     );
     expect(r.ok).toBe(true);

@@ -82,6 +82,15 @@ describe('strategy signal observation tools', () => {
         observations: [{ status: 'pending' }, { status: 'pending' }],
       },
     });
+    expect(
+      await completeStrategyObservationsTool.execute({ runIds: ['missing-run'] }, ctx),
+    ).toMatchObject({
+      ok: true,
+      data: { scanned: 0, completed: 0 },
+    });
+    expect(await ctx.repos.signalObservation.findById(pending('t3').id)).toMatchObject({
+      status: 'pending',
+    });
     const result = await completeStrategyObservationsTool.execute({}, ctx);
     expect(result).toMatchObject({
       ok: true,

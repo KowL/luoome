@@ -32,6 +32,24 @@ describe('llm/provider-quirks', () => {
     expect(properties.meta?.additionalProperties).toBe(true);
   });
 
+  it.each([
+    z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('existing'), version: z.number() }),
+      z.object({ kind: z.literal('new'), name: z.string() }),
+    ]),
+    z.union([z.object({ version: z.number() }), z.object({ name: z.string() })]),
+  ])('对象联合补充顶层 type，保留原有分支约束', (schema) => {
+    const original = z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' });
+    expect(toNormalizedJsonSchema(schema)).toEqual({ ...original, type: 'object' });
+  });
+
+  it('混合类型联合不强制为 object', () => {
+    const schema = z.union([z.object({ name: z.string() }), z.string(), z.null()]);
+    expect(toNormalizedJsonSchema(schema)).toEqual(
+      z.toJSONSchema(schema, { io: 'input', unrepresentable: 'any' }),
+    );
+  });
+
   it('剥离 think 与代码围栏后仍用原 Zod schema 校验', () => {
     const schema = z.object({ decision: z.literal('hold'), confidence: z.number() });
     const raw = '<think>internal</think>\n```json\n{"decision":"hold","confidence":65}\n```';

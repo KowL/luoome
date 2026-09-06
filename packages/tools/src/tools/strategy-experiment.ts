@@ -105,6 +105,7 @@ const SignalObservationStatsSchema = z.object({
   p75ReturnPct: z.number().finite().optional(),
   averageBenchmarkReturnPct: z.number().finite().optional(),
   averageExcessReturnPct: z.number().finite().optional(),
+  medianExcessReturnPct: z.number().finite().optional(),
   averageMaxFavorableExcursionPct: z.number().finite().optional(),
   averageMaxAdverseExcursionPct: z.number().finite().optional(),
   observedAsOf: z.coerce.date().optional(),
@@ -141,6 +142,7 @@ const StrategyExperimentObservationHorizonSchema = z.object({
   p75ReturnPct: z.number().finite().optional(),
   averageBenchmarkReturnPct: z.number().finite().optional(),
   averageExcessReturnPct: z.number().finite().optional(),
+  medianExcessReturnPct: z.number().finite().optional(),
   averageMaxFavorableExcursionPct: z.number().finite().optional(),
   averageMaxAdverseExcursionPct: z.number().finite().optional(),
   observedAsOf: z.coerce.date().optional(),
@@ -367,6 +369,9 @@ const horizonSummary = (
     ...(stats?.averageExcessReturnPct === undefined
       ? {}
       : { averageExcessReturnPct: stats.averageExcessReturnPct }),
+    ...(stats?.medianExcessReturnPct === undefined
+      ? {}
+      : { medianExcessReturnPct: stats.medianExcessReturnPct }),
     ...(stats?.averageMaxFavorableExcursionPct === undefined
       ? {}
       : { averageMaxFavorableExcursionPct: stats.averageMaxFavorableExcursionPct }),

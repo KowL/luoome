@@ -97,28 +97,35 @@ AI 解释文本（失败则缺省）。builtin 策略永不自动暂停（publis
   晋级门的 base/candidate 关系需要另行定义；列为 M2 后续切片）。
 
 AI 输出必须先过 `validate_strategy_version`（validationStatus=valid 才落库 action 并进入验证）；
-invalid 则 action=failed 并记录校验错误。每个策略每周最多 1 个提议；提议与现有 draft 定义相同
+invalid 则 action=failed 并记录校验错误。每个策略每周最多 1 个提议；已有 drafted/validating/eligible 候选时等待其处理完成；提议与现有 draft 定义相同
 （definitionHash 相等）时不重复创建。
 
 ### 3.3 自动验证
 
-propose 动作落库后，为候选版本创建独立验证 session（复用 `start_strategy_evaluation_session`
-链），action 进入 validating。session 的逐日推进复用既有 evaluation 作业化机制，不在本
-workflow 内同步等待。
+propose 动作落库后，为冻结的候选规则创建历史验证 session（复用 `start_strategy_evaluation_session`），
+action 进入 validating。窗口取最近 20 个已有完整 T+5 收盘结果的历史交易日，同周期复用
+`replay-strategy-range` 求值，不等待提议后的未来交易日。AI 只提议规则，不参与回放匹配或收益计算。
+PIT 历史缺失仍如实记为不可用，不用当前数据替代；窗口与收益数据截止时间写入 ruleSnapshot。
+旧 v1 等待动作在下次推进时关联新的历史 session，原 session id 保留在审计中，不改写旧结果。
+历史区间未强制与提议输入隔离，因此不能宣称样本外有效或已经控制调参过拟合。
 
 ### 3.4 门禁复核与自动发布
 
-每次 weekly cycle 对所有 status=validating 的 propose action 复核：
+每次 weekly cycle 对 validating 与 eligible（包含发布失败重试）逐一复核：
 
-1. 验证 session complete 且该版本观察统计满足晋级门输入；
-2. 复用 `get_strategy_experiment_context` 的装配逻辑（或抽其公共部分）调用
-   `assessStrategyPromotion`（阈值不动：≥20 验证交易日、vintage 覆盖 1.0、≥30 完整观察、
-   benchmark 覆盖 ≥0.9）；
-3. eligible → `publish_strategy_version`（既有语义：原子切换 currentVersion 并置回 active），
-   action → published；
-4. blocked → action → blocked，进人工队列，附 reasons 明细。
+1. 验证 session complete 且末日 T+5 已成熟，否则保持等待。
+2. 按 session 的已完成运行显式创建观察候选，再限定 runIds 用本地 qfq 日线补齐 T+1/T+3/T+5；
+   此步骤不生成 Advice、不进入 Watchlist，失败保留动作待重试。复用 `get_strategy_experiment_context` 装配证据；`assessStrategyPromotion`（首发使用
+   `assessStrategyInitialPublication`）继续检查版本关系、≥20 验证交易日、vintage 覆盖 1.0、
+   ≥30 完整 T+5 观察、benchmark 覆盖 ≥0.9。此门仅是证据门，不直接授权自动发布。
+3. `assessStrategyAutomaticPublication`（`strategy-auto-publication-v2`）额外要求：历史 T+5 平均、中位超额收益均 >0；
+   验证区间可以早于提议日和候选创建日。指标缺失或任一条件不满足即
+   blocked，记录 reasons；每次评估的指标、窗口和限制先写入动作审计，再决定发布。
+4. 全部门禁通过才调用 `publish_strategy_version` 并将 action 转为 published；失败则保留
+   eligible、累加 attempts，下次重新检查全部门禁。旧 eligible 缺少验证身份时进入 blocked。
 
-发布失败（tool 错误）保留 eligible 状态下次重试，记录 attempts。
+自动门禁只比较沪深 300 基准，未证明相对旧版本改善；描述性观察不含费用和执行，不是收益保证。
+人工评审仍可处理 blocked；不存在自动下单路径。
 
 ## 4. 存储与接口
 
@@ -174,8 +181,8 @@ M2-S0～S4 全部交付，相对上文设计的实际偏差：
   （`strategy-autonomy-weekly:<上海周一日期>`）判重，failed 允许同周重试。
 - **session 推进**：workflow 内嵌套调用 `replay-strategy-range`（与 Web startEvaluationJob
   同一 workflow 同一推进序列），partial/failed session 先 resume 再 replay。
-- **eligible 滞留重试**：发布失败的 eligible 动作在后续 weekly cycle 直接重试 publish
-  （attempts 累加），是 §3.4「保留 eligible 下次重试」的落地。
+- **eligible 滞留重试**：发布失败的 eligible 动作在后续 weekly cycle 重新检查 §3.4 全部门禁，
+  通过后才重试 publish（attempts 累加），不能凭旧状态跳过独立验证和有效性检查。
 - **blocked 状态路径**：初版状态机无 validating→blocked 直达边，实际走 validating→eligible→
   blocked；后发现若 eligible→blocked 中转失败会泄漏（下周不重跑门禁直接发布），已改为
   `validating→blocked` 直达（§2.2）。

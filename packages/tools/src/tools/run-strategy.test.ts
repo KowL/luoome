@@ -943,74 +943,115 @@ describe('run_strategy', () => {
     expect(commitTimes[0]?.getTime()).toBeGreaterThan(result.data.run.finishedAt?.getTime() ?? 0);
   });
 
-  it('scheduled run reads the checkpoint revision instead of a later mutable projection', async () => {
-    const now = new Date('2026-08-12T09:00:00.000Z');
-    const base = await buildTestContext({ clock: () => now });
-    await seedTestStockUniverse(base, { limit: 1, observedAt: now });
-    await seedStrategy(base);
-    const checkpointBar: DailyBar = {
-      stockId: '600519.SH',
-      date: new Date('2026-08-12T00:00:00.000Z'),
-      open: money(10),
-      high: money(11),
-      low: money(9),
-      close: money(10),
-      volume: 1_000_000,
-      adjustment: 'qfq',
-      source: 'checkpoint-fixture',
-    };
-    const ctx = {
-      ...base,
-      adapters: {
-        ...base.adapters,
-        market: {
-          ...base.adapters.market,
-          fetchDailyBars: () => Promise.resolve([checkpointBar]),
+  it.each(['scheduled', 'replay'] as const)(
+    '%s observation creation preserves signal baseline and enforces session scope',
+    async (mode) => {
+      const now = new Date('2026-08-12T09:00:00.000Z');
+      const base = await buildTestContext({ clock: () => now });
+      await seedTestStockUniverse(base, { limit: 1, observedAt: now });
+      await seedStrategy(base);
+      const checkpointBar: DailyBar = {
+        stockId: '600519.SH',
+        date: new Date('2026-08-12T00:00:00.000Z'),
+        open: money(10),
+        high: money(11),
+        low: money(9),
+        close: money(10),
+        volume: 1_000_000,
+        adjustment: 'qfq',
+        source: 'checkpoint-fixture',
+      };
+      const ctx = {
+        ...base,
+        adapters: {
+          ...base.adapters,
+          market: {
+            ...base.adapters.market,
+            fetchDailyBars: () => Promise.resolve([checkpointBar]),
+          },
         },
-      },
-    };
-    const prepared = await prepareStrategyDataTool.execute({ strategyId: 'scan-strategy' }, ctx);
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) return;
+      };
+      const prepared = await prepareStrategyDataTool.execute({ strategyId: 'scan-strategy' }, ctx);
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) return;
 
-    await ctx.repos.dailyBar.saveMany([{ ...checkpointBar, close: money(99) }]);
-    const result = await runStrategyTool.execute(
-      {
-        strategyId: 'scan-strategy',
-        mode: 'scheduled',
-        dataCheckpointId: prepared.data.checkpoint.id,
-      },
-      ctx,
-    );
+      if (mode === 'scheduled') {
+        await ctx.repos.dailyBar.saveMany([{ ...checkpointBar, close: money(99) }]);
+      }
+      const result = await runStrategyTool.execute(
+        {
+          strategyId: 'scan-strategy',
+          mode,
+          ...(mode === 'replay' ? { asOf: now } : {}),
+          dataCheckpointId: prepared.data.checkpoint.id,
+        },
+        ctx,
+      );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.signals[0]?.evaluationSnapshot.baseline).toMatchObject({ price: 10 });
-    const candidates = await createStrategyObservationCandidatesTool.execute(
-      { runId: result.data.run.id },
-      ctx,
-    );
-    expect(candidates).toMatchObject({
-      ok: true,
-      data: {
-        baselines: {
-          available: 1,
-          unavailable: 0,
-          providers: { 'checkpoint-fixture': 1 },
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(result.data.signals[0]?.evaluationSnapshot.baseline).toMatchObject({ price: 10 });
+      let evaluationSessionId: string | undefined;
+      if (mode === 'replay') {
+        const denied = await createStrategyObservationCandidatesTool.execute(
+          { runId: result.data.run.id },
+          ctx,
+        );
+        expect(denied).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+        evaluationSessionId = 'observation-session';
+        await ctx.repos.strategyEvaluation.saveSession({
+          id: evaluationSessionId,
+          strategyId: 'scan-strategy',
+          strategyVersionId: 'scan-strategy-v1',
+          from: now,
+          to: now,
+          status: 'complete',
+          definitionHash: result.data.run.inputSnapshot.definitionHash as string,
+          createdAt: now,
+        });
+        expect(
+          await createStrategyObservationCandidatesTool.execute(
+            { runId: result.data.run.id, evaluationSessionId },
+            ctx,
+          ),
+        ).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+        await ctx.repos.strategyEvaluation.saveDay({
+          sessionId: evaluationSessionId,
+          dataAsOf: result.data.run.dataAsOf,
+          status: 'complete',
+          vintageStatus: 'available',
+          runId: result.data.run.id,
+        });
+      }
+      const candidates = await createStrategyObservationCandidatesTool.execute(
+        {
+          runId: result.data.run.id,
+          ...(evaluationSessionId === undefined ? {} : { evaluationSessionId }),
         },
-        horizons: {
-          t1: { created: 1, skipped: 0 },
-          t5: { created: 1, skipped: 0 },
+        ctx,
+      );
+      expect(candidates).toMatchObject({
+        ok: true,
+        data: {
+          baselines: {
+            available: 1,
+            unavailable: 0,
+            providers: { 'checkpoint-fixture': 1 },
+          },
+          horizons: {
+            t1: { created: 1, skipped: 0 },
+            t5: { created: 1, skipped: 0 },
+          },
         },
-      },
-    });
-    expect(result.data.run.inputSnapshot).toMatchObject({
-      dataCheckpoint: {
-        id: prepared.data.checkpoint.id,
-        checksum: prepared.data.checkpoint.dataChecksum,
-      },
-    });
-  });
+      });
+      expect(result.data.run.inputSnapshot).toMatchObject({
+        dataCheckpoint: {
+          id: prepared.data.checkpoint.id,
+          checksum: prepared.data.checkpoint.dataChecksum,
+        },
+      });
+    },
+  );
 
   it('scheduled daily-bar-only signals preserve the checkpoint close as observation baseline', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');

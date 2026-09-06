@@ -152,6 +152,15 @@ export const isWeekend = (date: Date): boolean => {
   return wd === 0 || wd === 6;
 };
 
+/** 上一交易日的上海日期；盘后信号在下一交易日仍可被观察。 */
+export const previousTradingDate = (date: Date): Holiday => {
+  let cursor = new Date(`${dateInShanghai(date)}T00:00:00+08:00`);
+  do {
+    cursor = new Date(cursor.getTime() - 86_400_000);
+  } while (isWeekend(cursor) || isHoliday(cursor));
+  return dateInShanghai(cursor);
+};
+
 /**
  * 解析 `LUOOME_A_SHARE_HOLIDAYS` 环境变量。
  * 格式：逗号分隔 YYYY-MM-DD 字符串；空 / undefined 返回空 Map。

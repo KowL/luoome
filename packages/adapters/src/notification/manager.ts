@@ -91,6 +91,7 @@ export class NotificationManager {
     try {
       if (input.channel === 'feishu') {
         if (this.feishu === undefined) {
+          await this.log.send(input.payload);
           result = 'suppressed';
           this.logger.warn('[notify] feishu 未配置，降级为 suppressed', { id });
         } else {

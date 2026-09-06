@@ -1008,6 +1008,11 @@ export const ensureSchema = (db: DrizzleDb): void => {
   // notification_id / eval_snapshot / feedback / feedback_at，并把 cooldown 索引改用 rule_id
   // （§3.4 / §3.7）。
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS watch_execution_lease (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, until INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_triggers (
       id TEXT PRIMARY KEY,
       alert_plan_id TEXT,
@@ -1034,6 +1039,15 @@ export const ensureSchema = (db: DrizzleDb): void => {
   `);
   migrateStrategyAlertTriggerColumns(db);
   migrateRuoTriggerColumns(db);
+  const watchDeliveryColumns = new Set(
+    db.all<{ name: string }>(sql`PRAGMA table_info(watch_triggers)`).map((column) => column.name),
+  );
+  if (!watchDeliveryColumns.has('delivery_attempts')) {
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN delivery_attempts INTEGER`);
+  }
+  if (!watchDeliveryColumns.has('last_delivery_attempt_at')) {
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN last_delivery_attempt_at INTEGER`);
+  }
   // 重建索引（列从 rule_kind 改到 rule_id）
   db.run(sql`DROP INDEX IF EXISTS watch_triggers_pool_stock_rule_ts_idx`);
   db.run(
@@ -1077,7 +1091,9 @@ export const ensureSchema = (db: DrizzleDb): void => {
       suppressed_by_cooldown INTEGER NOT NULL,
       error TEXT,
       suppressed_by_daily_limit INTEGER NOT NULL DEFAULT 0,
-      notify_failed INTEGER NOT NULL DEFAULT 0
+      notify_failed INTEGER NOT NULL DEFAULT 0,
+      delivered INTEGER,
+      unknown_rules INTEGER
     )
   `);
   migrateStrategyAlertRunColumns(db);
@@ -1569,6 +1585,9 @@ const migrateStrategyAlertRunColumns = (db: DrizzleDb): void => {
     );
   if (!have.has('notify_failed'))
     db.run(sql`ALTER TABLE watch_runs ADD COLUMN notify_failed INTEGER NOT NULL DEFAULT 0`);
+  if (!have.has('delivered')) db.run(sql`ALTER TABLE watch_runs ADD COLUMN delivered INTEGER`);
+  if (!have.has('unknown_rules'))
+    db.run(sql`ALTER TABLE watch_runs ADD COLUMN unknown_rules INTEGER`);
 };
 
 /**

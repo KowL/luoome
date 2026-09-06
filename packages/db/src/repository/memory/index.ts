@@ -190,8 +190,8 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const notification = new InMemoryNotificationRepository();
   // v0.6 起
   const alertPlan = new InMemoryAlertPlanRepository();
-  const watchTrigger = new InMemoryWatchTriggerRepository();
   const watchRuleState = new InMemoryWatchRuleStateRepository();
+  const watchTrigger = new InMemoryWatchTriggerRepository(watchRuleState);
   const watchRun = new InMemoryWatchRunRepository();
   // ruo 迁移起
   const researchIndex = new InMemoryResearchIndexRepository();

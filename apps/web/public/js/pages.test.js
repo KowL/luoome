@@ -35,7 +35,22 @@ describe('盯盘最近一轮摘要', () => {
       triggered: 2,
       notified: 1,
     };
-    expect(watchRunSummaryText(latest)).toBe('评估 3 个方案 / 12 只股票 · 触发 2 · 通知 1');
+    expect(watchRunSummaryText(latest)).toBe(
+      '评估 3 个方案 / 12 只股票 · 触发 2 · 尝试通知 1 · 送达 未记录 · 无法求值 未记录',
+    );
+  });
+
+  it('正常心跳仍单独呈现未送达和无法求值', () => {
+    expect(
+      watchRunSummaryText({
+        evaluatedPools: 1,
+        evaluatedStocks: 2,
+        triggered: 1,
+        notified: 1,
+        delivered: 0,
+        unknownRules: 2,
+      }),
+    ).toContain('尝试通知 1 · 送达 0 · 无法求值 2');
   });
 
   it('尚无运行记录时给占位文案', () => {

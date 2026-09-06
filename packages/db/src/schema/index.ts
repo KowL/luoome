@@ -1267,6 +1267,12 @@ export const membershipSnapshots = sqliteTable(
  * - ruleKind 保留（展示 + 旧查询）；ALL 组合触发的 ruleKind 取组合中优先级最高的 kind，
  *   ruleId 固定为 'composite'。
  */
+export const watchExecutionLease = sqliteTable('watch_execution_lease', {
+  id: text('id').primaryKey(),
+  owner: text('owner').notNull(),
+  until: integer('until', { mode: 'timestamp_ms' }).notNull(),
+});
+
 export const watchTriggers = sqliteTable(
   'watch_triggers',
   {
@@ -1301,6 +1307,8 @@ export const watchTriggers = sqliteTable(
     feedbackAt: integer('feedback_at', { mode: 'timestamp_ms' }),
     /** ruo 迁移：event-date 触发关联的公司事件 id（非 event-date 触发为空）。 */
     eventId: text('event_id'),
+    deliveryAttempts: integer('delivery_attempts'),
+    lastDeliveryAttemptAt: integer('last_delivery_attempt_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     /** cooldown 查询 lastForKey 走这条。 */
@@ -1367,6 +1375,8 @@ export const watchRuns = sqliteTable(
     suppressedByDailyLimit: integer('suppressed_by_daily_limit').notNull(),
     /** v0.7 策略预警：发送失败条数（面板告警）。 */
     notifyFailed: integer('notify_failed').notNull(),
+    delivered: integer('delivered'),
+    unknownRules: integer('unknown_rules'),
   },
   (t) => ({
     startedAtIdx: index('watch_runs_started_at_idx').on(t.startedAt),

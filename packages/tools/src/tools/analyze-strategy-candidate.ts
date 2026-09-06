@@ -7,12 +7,15 @@ import {
   AdviceSchema,
   assertAdviceInvariants,
   type DailyBar,
+  isActiveSignalObservationHorizon,
+  isAdviceQuoteCurrent,
   isPublishableOperationalRun,
   type MarketDataAdapterLike,
   money,
   type Quote,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
+  StrategyAdviceAnalysisSchema,
   type StrategyResult,
   type StrategySignal,
   type ToolContext,
@@ -21,8 +24,6 @@ import { z } from 'zod';
 
 import { defineTool, errAdapterError, errInvalidInput, errNotFound } from '../define-tool.js';
 import {
-  type AdviceLLMOutput,
-  AdviceLLMSchema,
   computeValidUntil,
   extractLlmRaw,
   sanitizeAdviceReasoning,
@@ -40,16 +41,15 @@ const STRATEGY_ADVICE_SYSTEM = `analyze_stock:strategy_candidate
 - pending/unavailable 的 SignalObservation 表示尚无事后结果，不是反证，不是回测，也不得据此判断策略有效或无效。
 - confidence 是主观信心度，不是收益概率；Advice 不代表交易，也不得声称会自动下单。
 - position 缺省时没有持仓，只能输出 buy/watch/avoid，不能输出 hold/sell。
-- 信号看多（signal.direction=bullish）且 quote 未明确违背信号前提时，应明确输出 buy，
-  并在 premise 给出买入理由、risks 给出主要风险；不要因细微波动就退回 watch。
-- watch 仅用于存在明确风险信号（显著回落/破位、冲高回落派发、量价背离等）或信息不足以判断时，
-  并说明观察什么条件可转为买入。
+- 看多信号仅是研究线索。只有当前证据足以支持、风险和反证已核对且价格计划合理时才输出 buy。
+- 证据不足或条件尚未满足时输出 watch，并说明需要观察的条件；不能为了给出行动而预设买入。
 - avoid 用于明确利空或信号前提已被破坏时。
 - buy 必须输出 entryPrice（建议买点，参考 quote.close 与均线/支撑位）、targetPrice（目标卖点）
   和 stopLoss（止损，须低于 entryPrice）；三者均为与 quote.close 同单位的价格。
 - watch 可缺省价位；若给出价位，在 premise 说明触发买入的条件与对应价位。
 - 不得为策略添加输入 JSON 中不存在的名称、类型或历史表现。
 - indicators 可能因可选日线 enrichment 不可用而为空；不得补造缺失指标。
+- 必须提供非空反证和风险；有价位时必须满足 0 < stopLoss < entryPrice < targetPrice。
 - 反证和风险必须明确使用“可能、若、需验证”等不确定措辞，不能伪装成已发生事实。`;
 
 export const AnalyzeStrategyCandidateInput = z.object({
@@ -178,11 +178,13 @@ export const analyzeStrategyCandidateTool = defineTool({
     const signals = (await ctx.repos.strategyRun.signalsByRun(run.id)).filter(
       (signal) => signal.stockId === stock.id,
     );
-    const observations = await ctx.repos.signalObservation.list({
-      sourceKind: 'strategy-signal',
-      sourceIds: signals.map((signal) => signal.id),
-      limit: 200,
-    });
+    const observations = (
+      await ctx.repos.signalObservation.list({
+        sourceKind: 'strategy-signal',
+        sourceIds: signals.map((signal) => signal.id),
+        limit: 200,
+      })
+    ).filter((item) => isActiveSignalObservationHorizon(item.horizon));
     const now = ctx.clock();
     // 行情走统一 resolveQuote：实时拉取，上游缺席回退本地最近快照。
     const [quoteItem, bars, position] = await Promise.all([
@@ -190,16 +192,16 @@ export const analyzeStrategyCandidateTool = defineTool({
       fetchStrategyCandidateBars(ctx.adapters.market, stock.id, now),
       ctx.repos.holding.findByAccountAndStock(ctx.user.defaultAccountId, stock.id),
     ]);
-    const quote =
-      quoteItem !== undefined && quoteItem.status === 'ok'
-        ? quoteItem.quote
-        : quoteFromLatestStrategyBar(bars, now);
+    const quote = [
+      quoteItem?.status === 'ok' ? quoteItem.quote : undefined,
+      quoteFromLatestStrategyBar(bars, now),
+    ].find((item) => item !== undefined && isAdviceQuoteCurrent(item, now));
     if (quote === undefined) {
       return errAdapterError(
         ctx.adapters.market.name,
         quoteItem !== undefined && quoteItem.status === 'unavailable'
           ? quoteItem.reason
-          : 'quote_unavailable',
+          : 'quote_stale_or_unavailable',
         true,
       );
     }
@@ -216,36 +218,75 @@ export const analyzeStrategyCandidateTool = defineTool({
           }
         : observation,
     );
-    const llmOutput = await ctx.adapters.llm.generate<AdviceLLMOutput>({
-      system: STRATEGY_ADVICE_SYSTEM,
-      schema: AdviceLLMSchema,
-      data: {
-        stockId: stock.id,
-        code: stock.code,
-        name: stock.name,
-        quote,
-        indicators,
-        strategy: {
-          strategyId: run.strategyId,
-          strategyVersionId: run.strategyVersionId,
-          runId: run.id,
-          dataAsOf: run.dataAsOf,
-          result: groundedResult,
-          signals,
-          observations: observationsForPrompt,
-        },
-        ...(position === null
-          ? {}
-          : { position: { avgCost: position.avgCost, quantity: position.quantity } }),
+    const analysisData = {
+      stockId: stock.id,
+      code: stock.code,
+      name: stock.name,
+      quote,
+      indicators,
+      strategy: {
+        strategyId: run.strategyId,
+        strategyVersionId: run.strategyVersionId,
+        runId: run.id,
+        dataAsOf: run.dataAsOf,
+        result: groundedResult,
+        signals,
+        observations: observationsForPrompt,
       },
-    });
-    const llmRaw = extractLlmRaw(llmOutput);
-    const reasoning = groundStrategyAdviceReasoning(
-      llmOutput.reasoning,
-      groundedResult,
-      signals,
-      observations,
-    );
+      ...(position === null || position.quantity === 0 || position.closedAt !== null
+        ? {}
+        : { position: { avgCost: position.avgCost, quantity: position.quantity } }),
+    };
+    let llmOutput: z.infer<typeof StrategyAdviceAnalysisSchema> | undefined;
+    let llmRaw: string | undefined;
+    let failure = 'AI 输出未通过建议约束';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const generated = await ctx.adapters.llm.generate<
+          z.infer<typeof StrategyAdviceAnalysisSchema>
+        >({
+          system: `${STRATEGY_ADVICE_SYSTEM}${attempt === 0 ? '' : `\n请修复上次输出：${failure}`}`,
+          schema: StrategyAdviceAnalysisSchema,
+          data: analysisData,
+        });
+        const parsed = StrategyAdviceAnalysisSchema.safeParse(generated);
+        if (!parsed.success) {
+          failure = parsed.error.issues.map((issue) => issue.message).join('；');
+          continue;
+        }
+        const grounded = StrategyAdviceAnalysisSchema.safeParse({
+          ...parsed.data,
+          reasoning: groundStrategyAdviceReasoning(
+            parsed.data.reasoning,
+            groundedResult,
+            signals,
+            observations,
+          ),
+          risks: groundStrategyAdviceRisks(parsed.data.risks),
+        });
+        if (!grounded.success) {
+          failure = '事实校验后反证或风险为空，请补充具体且可核对的限制';
+          continue;
+        }
+        llmOutput = grounded.data;
+        llmRaw = extractLlmRaw(generated);
+        break;
+      } catch {
+        failure = 'AI 调用失败或输出无效';
+      }
+    }
+    if (llmOutput === undefined) {
+      return {
+        ok: false as const,
+        error: {
+          kind: 'llm_error' as const,
+          provider: ctx.adapters.llm.name,
+          cause: failure,
+          retryable: true,
+        },
+      };
+    }
+    const reasoning = llmOutput.reasoning;
     const strategyEvidence = {
       strategyId: run.strategyId,
       strategyVersionId: run.strategyVersionId,
@@ -264,14 +305,17 @@ export const analyzeStrategyCandidateTool = defineTool({
       subjectKind: 'stock',
       subjectId: stock.id,
       stockName: stock.name,
-      decision: normalizeStrategyCandidateDecision(llmOutput.decision, position !== null),
+      decision: normalizeStrategyCandidateDecision(
+        llmOutput.decision,
+        position !== null && position.quantity > 0 && position.closedAt === null,
+      ),
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,
       ...(llmOutput.entryPrice === undefined ? {} : { entryPrice: money(llmOutput.entryPrice) }),
       ...(llmOutput.targetPrice === undefined ? {} : { targetPrice: money(llmOutput.targetPrice) }),
       ...(llmOutput.stopLoss === undefined ? {} : { stopLoss: money(llmOutput.stopLoss) }),
       reasoning,
-      risks: groundStrategyAdviceRisks(llmOutput.risks),
+      risks: llmOutput.risks,
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'analyze_strategy_candidate',
       sourceWorkflow: 'strategy-recommendations',
@@ -280,7 +324,7 @@ export const analyzeStrategyCandidateTool = defineTool({
         indicators: { [stock.id]: indicators },
         strategy: strategyEvidence,
         ...(llmRaw === undefined ? {} : { llmReasoning: llmRaw }),
-        dataAsOf: now,
+        dataAsOf: quote.observedAt,
       },
       validFrom: now,
       validUntil: computeValidUntil(llmOutput.horizon, now),

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 import { nextCronOccurrence, validateCronExpression, validateTimeZone } from '../strategy/cron.js';
+import { StrategyRecommendationPreflightSummarySchema } from '../strategy/recommendation-preflight.js';
 import {
   type ActiveSignalObservationHorizon,
   ActiveSignalObservationHorizonSchema,
@@ -155,3 +156,15 @@ export const buildStrategySchedule = (input: {
   assertStrategyScheduleInvariants(schedule);
   return schedule;
 };
+
+export const StrategyRecommendationBatchSummarySchema = z.object({
+  strategyId: z.string().min(1),
+  runId: z.string().min(1),
+  accountId: z.string().min(1),
+  adviceCount: z.number().int().nonnegative(),
+  attempted: z.number().int().nonnegative(),
+  generationFailed: z.number().int().nonnegative(),
+  skippedCooldown: z.number().int().nonnegative(),
+  notificationFailed: z.number().int().nonnegative(),
+  preflight: StrategyRecommendationPreflightSummarySchema.optional(),
+});

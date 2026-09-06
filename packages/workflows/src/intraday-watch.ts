@@ -6,6 +6,7 @@ import {
   assertWatchTriggerInvariants,
   type DeliveryStatus,
   type Money,
+  previousTradingDate,
   type Quote,
   type Stock,
   type ToolContext,
@@ -16,7 +17,11 @@ import {
 import { recordWatchRunTool } from '@luoome/tools';
 import { z } from 'zod';
 
-import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './define-workflow.js';
+import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
+import {
+  type WatchWorkflowStep as WorkflowStep,
+  watchExecutionStep,
+} from './internal/watch-execution.js';
 
 /**
  * intraday-watch workflow
@@ -80,6 +85,8 @@ export const IntradayWatchOutput = z.object({
   suppressedByCooldown: z.number().int().nonnegative(),
   suppressedByDailyLimit: z.number().int().nonnegative(),
   notifyFailed: z.number().int().nonnegative(),
+  unknownRules: z.number().int().nonnegative(),
+  delivered: z.number().int().nonnegative(),
 });
 
 export type IntradayWatchOutputT = z.infer<typeof IntradayWatchOutput>;
@@ -125,7 +132,12 @@ interface PrevClosesState extends QuotesState {
  * - value=unknown：行情缺失 / 求值抛错，状态保持不变
  */
 type EvalResult =
-  | { readonly kind: 'true'; readonly evaluatedValue: number; readonly evidence: readonly string[] }
+  | {
+      readonly kind: 'true';
+      readonly evaluatedValue: number;
+      readonly evidence: readonly string[];
+      readonly signalId?: string;
+    }
   | {
       readonly kind: 'false';
       readonly evaluatedValue: number;
@@ -138,6 +150,7 @@ interface EvaluatedState extends PrevClosesState {
   readonly candidates: readonly WatchTrigger[];
   /** 求值后待写回的 WatchRuleState（含初始化 / 变更 / 不变）。 */
   readonly nextStates: readonly WatchRuleState[];
+  readonly unknownRules: number;
 }
 
 // ---------- helpers ----------
@@ -392,7 +405,7 @@ const resolveMembers = async (
 /**
  * strategy-signal 只读取持久化事实，不在盘中运行 Strategy。
  * 信号窗口 since 取当日 Asia/Shanghai 00:00：Strategy 按日（盘前/盘中）运行产出信号，
- * 只看当日信号，避免历史信号命中后永远 active。
+ * 信号有效至下一交易日收盘；持久化触发中的 signalId 防止重启后重复提醒。
  */
 const evaluateStrategySignalRuleMember = async (
   rule: AlertRule & { kind: 'strategy-signal' },
@@ -441,6 +454,7 @@ const evaluateStrategySignalRuleMember = async (
       kind: pass ? 'true' : 'false',
       evaluatedValue: signal.score,
       evidence: [...signal.evidence],
+      signalId: signal.id,
       score: signal.score,
       direction:
         signal.direction === 'bullish' ? 'buy' : signal.direction === 'bearish' ? 'sell' : 'watch',
@@ -550,6 +564,8 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
   const nextStates: WatchRuleState[] = [];
   let unknownCount = 0;
   const triggeredToday = new Set<string>();
+  const seenSignals = new Set<string>();
+  const signalSince = new Date(`${previousTradingDate(now)}T00:00:00+08:00`);
 
   // 6a：批量加载该池状态（按 pool 进行顺序处理；池数一般 O(10)）
   for (const pool of state.pools) {
@@ -561,15 +577,27 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
     const members = state.members.get(pool.id) ?? [];
     if (members.length === 0) continue;
 
-    if (pool.triggerMode === 'daily-first') {
+    if (
+      pool.triggerMode === 'daily-first' ||
+      evaluableRules.some((rule) => rule.kind === 'strategy-signal')
+    ) {
       const recent = await ctx.tools.list_watch_triggers.execute({
         alertPlanId: pool.id,
-        since: startOfTodayShanghai(now),
+        since: signalSince,
         limit: 10_000,
       });
       if (!recent.ok) return recent;
       for (const trigger of recent.data.triggers) {
-        if (trigger.triggerType === 'triggered') {
+        if (trigger.evalSnapshot.preview === true) continue;
+        if (
+          typeof trigger.evalSnapshot.signalId === 'string' &&
+          trigger.evalSnapshot.preview !== true
+        ) {
+          seenSignals.add(
+            `${pool.id}|${trigger.stockId}|${trigger.ruleId}|${trigger.evalSnapshot.signalId}`,
+          );
+        }
+        if (trigger.triggerType === 'triggered' && trigger.createdAt >= startOfTodayShanghai(now)) {
           triggeredToday.add(`${pool.id}|${trigger.stockId}|${trigger.ruleId}`);
         }
       }
@@ -599,12 +627,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         }
       > | null = null;
       if (rule.kind === 'strategy-signal') {
-        tacticResults = await evaluateStrategySignalRuleMember(
-          rule,
-          members,
-          startOfTodayShanghai(now),
-          ctx,
-        );
+        tacticResults = await evaluateStrategySignalRuleMember(rule, members, signalSince, ctx);
       }
 
       for (const member of members) {
@@ -642,8 +665,14 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         const sm = stepStateMachine(prevState, evaluation, rule, now);
         // dry-run（notify=false）下，bootstrap=true 也视作 emit（§11：试跑可见当前命中）
         const isDryRun = state.input.notify === false;
+        const signalKey =
+          evaluation.kind === 'true' && evaluation.signalId !== undefined
+            ? `${pool.id}|${member.stockId}|${rule.id}|${evaluation.signalId}`
+            : undefined;
         const bootstrapEmits =
-          sm.emitTrigger || (isDryRun && prevState === undefined && evaluation.kind === 'true');
+          signalKey !== undefined
+            ? !seenSignals.has(signalKey)
+            : sm.emitTrigger || (isDryRun && prevState === undefined && evaluation.kind === 'true');
 
         const nextState: WatchRuleState = {
           ...sm.next,
@@ -654,7 +683,10 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
         };
         nextStates.push(nextState);
 
-        if (pool.logic === 'ANY' && bootstrapEmits) {
+        const dailyAllowed =
+          pool.triggerMode !== 'daily-first' ||
+          !alreadyTriggeredToday(triggeredToday, pool.id, member.stockId, rule.id);
+        if (pool.logic === 'ANY' && bootstrapEmits && dailyAllowed) {
           // bootstrapEmits 仅在 evaluation.kind='true' 时成立（state machine 保证）
           const evalTrue: EvalResult =
             evaluation.kind === 'true'
@@ -684,12 +716,18 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
             priority,
             deliveryStatus: 'not-requested', // placeholder, stepResolveDelivery 会覆盖
-            evalSnapshot: snapshot,
+            evalSnapshot: {
+              ...snapshot,
+              ...(evalTrue.kind === 'true' && evalTrue.signalId !== undefined
+                ? { signalId: evalTrue.signalId, preview: isDryRun }
+                : {}),
+            },
             notified: false,
             createdAt: now,
           };
           assertWatchTriggerInvariants(trigger);
           candidates.push(trigger);
+          if (signalKey !== undefined) seenSignals.add(signalKey);
           triggeredToday.add(`${pool.id}|${member.stockId}|${rule.id}`);
         }
 
@@ -729,9 +767,9 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
 
         // active=true → true：按 triggerMode 决定 repeat / daily-first（§5）
         if (
+          !bootstrapEmits &&
           evaluation.kind === 'true' &&
-          prevState !== undefined &&
-          prevState.active &&
+          prevState?.active &&
           pool.logic === 'ANY' &&
           // sm.next.active 也应当为 true（保留）
           (pool.triggerMode === 'repeat' ||
@@ -803,9 +841,22 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
           ruleId: compositeId,
         });
         const compositeKey = `${pool.id}|${member.stockId}|${compositeId}`;
+        const signalIds = evaluableRules
+          .flatMap((rule) => {
+            const result = evaluationByStockRule.get(`${member.stockId}|${rule.id}`);
+            return result?.kind === 'true' && result.signalId !== undefined
+              ? [`${rule.id}:${result.signalId}`]
+              : [];
+          })
+          .sort();
+        const compositeSignalId = signalIds.length === 0 ? undefined : JSON.stringify(signalIds);
+        const unseenSignal =
+          compositeSignalId !== undefined &&
+          !seenSignals.has(`${compositeKey}|${compositeSignalId}`);
         const emitCompositeTrigger =
           evaluation.kind === 'true' &&
-          (sm.emitTrigger ||
+          (pool.triggerMode !== 'daily-first' || !triggeredToday.has(compositeKey)) &&
+          ((compositeSignalId === undefined ? sm.emitTrigger : unseenSignal) ||
             (state.input.notify === false && prev === undefined) ||
             (prev?.active === true &&
               (pool.triggerMode === 'repeat' ||
@@ -835,13 +886,21 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
             priority,
             deliveryStatus: 'not-requested',
-            evalSnapshot: { composite: true, rules: evaluableRules.map((r) => r.kind) },
+            evalSnapshot: {
+              composite: true,
+              rules: evaluableRules.map((r) => r.kind),
+              ...(compositeSignalId === undefined
+                ? {}
+                : { signalId: compositeSignalId, preview: state.input.notify === false }),
+            },
             notified: false,
             createdAt: now,
           };
           assertWatchTriggerInvariants(trigger);
           candidates.push(trigger);
           triggeredToday.add(compositeKey);
+          if (compositeSignalId !== undefined)
+            seenSignals.add(`${compositeKey}|${compositeSignalId}`);
         }
         if (sm.emitRecovered && pool.notifyOnRecovery) {
           const quote = state.quotes.get(member.stockId);
@@ -879,7 +938,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
     unknown: unknownCount,
     states: nextStates.length,
   });
-  return { ...state, candidates, nextStates } satisfies EvaluatedState;
+  return { ...state, candidates, nextStates, unknownRules: unknownCount } satisfies EvaluatedState;
 };
 
 /** 已当天触发过：读取本轮开始前的持久化 key，并随本轮候选追加。 */
@@ -1082,7 +1141,7 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
   for (const cand of state.candidates) {
     const pool = state.pools.find((p) => p.id === cand.poolId);
     if (pool === undefined) continue;
-    // 7. cooldown（先于 daily limit，§4 关键顺序约束；试跑 notify=false 同样询问，但命中只落抑制不占配额）
+    // 冷却优先于每日额度；试跑不进入送达决策。
     const cdCutoff = new Date(now.getTime() - pool.cooldownMinutes * 60_000);
     const cooldown = cooldownByKey.get(`${cand.poolId}|${cand.stockId}|${cand.ruleId}`);
     const cooldownHit =
@@ -1093,7 +1152,9 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
 
     // 9. 优先级映射（normal → not-requested；试跑 / recovered + 默认关 → not-requested）
     const recoveryRequested = cand.triggerType === 'recovered' && pool.notifyOnRecovery === true;
-    if (cand.triggerType === 'recovered' && !recoveryRequested) {
+    if (!state.input.notify) {
+      deliveryStatus = 'not-requested';
+    } else if (cand.triggerType === 'recovered' && !recoveryRequested) {
       deliveryStatus = 'not-requested';
     } else if (cand.priority === 'normal' && !recoveryRequested) {
       // Phase 1 不做 15 分钟聚合，普通优先级只记录（§8 表格）
@@ -1107,33 +1168,10 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
     ) {
       deliveryStatus = 'suppressed-daily-limit';
       suppressedByDailyLimit += 1;
-    } else if (!state.input.notify) {
-      // 试跑：占位 not-requested，不消耗配额（lastForKey 只数 ATTEMPTED）
-      deliveryStatus = 'not-requested';
     } else {
       deliveryStatus = 'pending';
-      // pending 不计入配额，但若后续发送失败成 'failed' 会回写（setDeliveryStatus 不计数）
-    }
-
-    // 与 pickup 配额相关的占位：先按照 ATTEMPTED_STATUSES 决定哪些会让配额增 1
-    if (
-      deliveryStatus === 'pending' &&
-      (cand.priority !== 'normal' || recoveryRequested) &&
-      cooldownHit === null
-    ) {
-      // 标记为「将要发生 ATTEMPT」—— 实际发送后再回写 deliveryStatus，notifyFailed 时不计数
-      // 这里只用于卡每日上限：如果命中 daily limit 应转为 suppressed-daily-limit
-      const projectedPool = (usedByPool.get(pool.id) ?? 0) + 1;
-      const projectedGlobal = usedGlobal + 1;
-      if (projectedPool > pool.dailyNotificationLimit || projectedGlobal > globalLimit) {
-        deliveryStatus = 'suppressed-daily-limit';
-        suppressedByDailyLimit += 1;
-      } else {
-        // pending 不占配额（lastForKey 只数 ATTEMPTED），但下一轮 ATTEMPT 后的 lastForKey 会算
-        // 这里简单处理：把 ATTEMPT 计数延后到 send 后回写阶段体现
-        usedByPool.set(pool.id, projectedPool);
-        usedGlobal = projectedGlobal;
-      }
+      usedByPool.set(pool.id, (usedByPool.get(pool.id) ?? 0) + 1);
+      usedGlobal += 1;
     }
 
     const persisted: WatchTrigger = {
@@ -1142,17 +1180,42 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
       notified: (ATTEMPTED_DELIVERY_STATUSES as readonly string[]).includes(deliveryStatus),
     };
     assertWatchTriggerInvariants(persisted);
-    const saved = await ctx.tools.save_watch_trigger.execute(persisted);
-    if (!saved.ok) return saved;
     out.push(persisted);
   }
 
-  // 写回 WatchRuleState
-  if (state.nextStates.length > 0) {
-    const savedStates = await ctx.tools.save_watch_rule_states.execute({
+  if (state.input.notify) {
+    const committed = await ctx.tools.commit_watch_evaluation.execute({
+      owner: ctx.watchExecutionOwner,
+      triggers: out,
       states: [...state.nextStates],
     });
-    if (!savedStates.ok) return savedStates;
+    if (!committed.ok) return committed;
+  }
+
+  if (state.input.notify) {
+    const newIds = new Set(out.map((trigger) => trigger.id));
+    for (const pool of state.pools) {
+      if (state.skipped.has(pool.id)) continue;
+      const retries = await ctx.tools.list_watch_delivery_retries.execute({ poolId: pool.id });
+      if (!retries.ok) return retries;
+      const members = new Set((state.members.get(pool.id) ?? []).map((member) => member.stockId));
+      for (const trigger of retries.data.triggers) {
+        if (newIds.has(trigger.id) || !members.has(trigger.stockId)) continue;
+        if (
+          trigger.ruleId !== 'composite' &&
+          !pool.rules.some((rule) => rule.id === trigger.ruleId)
+        )
+          continue;
+        if (
+          usedGlobal >= globalLimit ||
+          (usedByPool.get(pool.id) ?? 0) >= pool.dailyNotificationLimit
+        )
+          continue;
+        out.push({ ...trigger, deliveryStatus: 'pending' });
+        usedGlobal += 1;
+        usedByPool.set(pool.id, (usedByPool.get(pool.id) ?? 0) + 1);
+      }
+    }
   }
 
   return {
@@ -1168,6 +1231,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
   const triggers = state.triggers;
   let notifiedCount = 0;
   let notifyFailed = 0;
+  let delivered = 0;
   const finalDelivery = new Map<
     string,
     { status: DeliveryStatus; notificationId?: string; notified: boolean }
@@ -1182,16 +1246,21 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     byPool.set(t.poolId, arr);
   }
   for (const [poolId, group] of byPool.entries()) {
-    notifiedCount += group.length;
     const lines = group.map((t) => {
-      const dir = t.direction === 'buy' ? '买' : t.direction === 'sell' ? '卖' : '观察';
+      const dir =
+        t.direction === 'buy' ? '向上变化' : t.direction === 'sell' ? '向下变化' : '观察变化';
       const prio =
         t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
       return `· ${prio}[${dir}] ${t.stockId} @ ${t.quote ? t.quote.close.toFixed(2) : '—'} — ${t.reason}`;
     });
     const content = lines.join('\n');
+    const attempt = await ctx.tools.begin_watch_delivery.execute({
+      triggerIds: group.map((t) => t.id),
+    });
+    if (!attempt.ok) return attempt;
     const r = await ctx.tools.send_notification.execute({
-      log: {
+      channel: 'feishu',
+      feishu: {
         title: `盘中提醒 池-${poolId} ${group.length} 条`,
         content,
         level: 'info',
@@ -1212,10 +1281,13 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
       notificationId = r.data.notification.id;
     } else if (r.data.notification.result === 'failed') {
       deliveryStatus = 'failed';
+      notificationId = r.data.notification.id;
       notifyFailed += group.length;
     } else {
       notificationId = r.data.notification.id;
     }
+    notifiedCount += group.length;
+    if (deliveryStatus === 'sent') delivered += group.length;
     const delivery = await ctx.tools.set_watch_trigger_delivery_status.execute({
       triggerIds: group.map((t) => t.id),
       status: deliveryStatus,
@@ -1257,6 +1329,8 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     suppressedByCooldown: state.suppressedByCooldown,
     suppressedByDailyLimit: state.suppressedByDailyLimit,
     notifyFailed,
+    unknownRules: state.unknownRules,
+    delivered,
   });
 };
 
@@ -1274,13 +1348,15 @@ export const intradayWatchWorkflow = defineWorkflow<
   description: '单轮盘中盯盘评估（v0.7 策略预警）',
   input: IntradayWatchInput,
   steps: [
-    stepLoadPlans,
-    stepResolveMembers,
-    stepBatchQuote,
-    stepLoadPrevCloses,
-    stepEvaluateRules,
-    stepResolveDelivery,
-    stepNotifyAndSummary,
+    watchExecutionStep([
+      stepLoadPlans,
+      stepResolveMembers,
+      stepBatchQuote,
+      stepLoadPrevCloses,
+      stepEvaluateRules,
+      stepResolveDelivery,
+      stepNotifyAndSummary,
+    ]),
   ],
 });
 
@@ -1332,6 +1408,8 @@ export const runIntradayWatchObserved = async (
           suppressedByCooldown: result.data.suppressedByCooldown,
           suppressedByDailyLimit: result.data.suppressedByDailyLimit,
           notifyFailed: result.data.notifyFailed,
+          delivered: result.data.delivered,
+          unknownRules: result.data.unknownRules,
         },
         ctx,
       )

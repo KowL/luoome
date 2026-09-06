@@ -10,10 +10,14 @@ import type {
   ArchiveStrategyOutput,
   BatchQuoteInput,
   BatchQuoteOutput,
+  BeginWatchDeliveryInput,
+  BeginWatchDeliveryOutput,
   CancelStrategyEvaluationSessionInput,
   CancelStrategyEvaluationSessionOutput,
   ClaimDueStrategySchedulesInput,
   ClaimDueStrategySchedulesOutput,
+  CommitWatchEvaluationInput,
+  CommitWatchEvaluationOutput,
   CompleteStrategyObservationsInput,
   CompleteStrategyObservationsOutput,
   ComputeIndicatorsInput,
@@ -120,6 +124,8 @@ import type {
   ListStrategyWatchlistSubscriptionsOutput,
   ListTradesInput,
   ListTradesOutput,
+  ListWatchDeliveryRetriesInput,
+  ListWatchDeliveryRetriesOutput,
   ListWatchlistChangesInput,
   ListWatchlistChangesOutput,
   ListWatchlistsInput,
@@ -128,6 +134,8 @@ import type {
   ListWatchRuleStatesOutput,
   ListWatchTriggersInput,
   ListWatchTriggersOutput,
+  ListWorkflowRunsInput,
+  ListWorkflowRunsOutput,
   MarketOutlookInput,
   MarketOutlookOutput,
   NorthboundFlowInput,
@@ -196,13 +204,18 @@ import type {
   TransitionStrategyAutonomyActionOutput,
   ValidateStrategyVersionInput,
   ValidateStrategyVersionOutput,
+  WatchExecutionInput,
+  WatchExecutionOutput,
 } from '@luoome/tools';
 import {
+  beginWatchDeliveryTool,
   claimDueStrategySchedulesTool,
+  commitWatchEvaluationTool,
   createStrategyAutonomyActionTool,
   finishStrategyScheduleClaimTool,
   generateStrategyVersionProposalTool,
   getWatchTriggerDeliveryStatsTool,
+  listWatchDeliveryRetriesTool,
   listWatchRuleStatesTool,
   pullResearchVaultGitTool,
   reconcileStaleStrategyRunsTool,
@@ -218,6 +231,7 @@ import {
   syncWatchlistSourceTool,
   toolRegistry,
   transitionStrategyAutonomyActionTool,
+  watchExecutionTool,
 } from '@luoome/tools';
 import type { z } from 'zod';
 
@@ -278,6 +292,10 @@ export interface WorkflowToolMap {
   readonly list_strategy_watchlist_subscriptions: ToolAccessor<
     typeof ListStrategyWatchlistSubscriptionsInput,
     typeof ListStrategyWatchlistSubscriptionsOutput
+  >;
+  readonly list_workflow_runs: ToolAccessor<
+    typeof ListWorkflowRunsInput,
+    typeof ListWorkflowRunsOutput
   >;
   readonly get_advice: ToolAccessor<typeof GetAdviceInput, typeof GetAdviceOutput>;
   readonly get_advice_stats: ToolAccessor<typeof GetAdviceStatsInput, typeof GetAdviceStatsOutput>;
@@ -543,6 +561,19 @@ export interface WorkflowToolMap {
     typeof GetWatchTriggerDeliveryStatsInput,
     typeof GetWatchTriggerDeliveryStatsOutput
   >;
+  readonly watch_execution: ToolAccessor<typeof WatchExecutionInput, typeof WatchExecutionOutput>;
+  readonly commit_watch_evaluation: ToolAccessor<
+    typeof CommitWatchEvaluationInput,
+    typeof CommitWatchEvaluationOutput
+  >;
+  readonly begin_watch_delivery: ToolAccessor<
+    typeof BeginWatchDeliveryInput,
+    typeof BeginWatchDeliveryOutput
+  >;
+  readonly list_watch_delivery_retries: ToolAccessor<
+    typeof ListWatchDeliveryRetriesInput,
+    typeof ListWatchDeliveryRetriesOutput
+  >;
   // 连板天梯（Phase 1，docs/ddd/limit-up-ladder-detailed-design.md §7）
   readonly limit_up_ladder: ToolAccessor<typeof LimitUpLadderInput, typeof LimitUpLadderOutput>;
   readonly limit_up_ladder_compare: ToolAccessor<
@@ -595,6 +626,10 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     execute: (input) => syncWatchlistSourceTool.execute(input, ctx),
   };
   for (const internalTool of [
+    commitWatchEvaluationTool,
+    watchExecutionTool,
+    beginWatchDeliveryTool,
+    listWatchDeliveryRetriesTool,
     recordWatchRunTool,
     recordWorkflowRunTool,
     pullResearchVaultGitTool,

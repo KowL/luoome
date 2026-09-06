@@ -228,6 +228,7 @@ export const listPendingStrategyObservationsTool = defineTool({
 });
 
 export const CompleteStrategyObservationsInput = z.object({
+  runIds: z.array(z.string().min(1)).min(1).max(100).optional(),
   limit: z.number().int().min(1).max(5000).default(1000),
 });
 export const CompleteStrategyObservationsOutput = z.object({
@@ -252,8 +253,19 @@ export const completeStrategyObservationsTool = defineTool({
   input: CompleteStrategyObservationsInput,
   output: CompleteStrategyObservationsOutput,
   handler: async (input, ctx) => {
+    const sourceIds =
+      input.runIds === undefined
+        ? undefined
+        : (
+            await Promise.all(
+              input.runIds.map((runId) => ctx.repos.strategyRun.signalsByRun(runId)),
+            )
+          )
+            .flat()
+            .map((signal) => signal.id);
     const pending = await ctx.repos.signalObservation.list({
       sourceKind: 'strategy-signal',
+      ...(sourceIds === undefined ? {} : { sourceIds }),
       status: 'pending',
       horizons: SIGNAL_OBSERVATION_HORIZONS,
       dueBefore: ctx.clock(),

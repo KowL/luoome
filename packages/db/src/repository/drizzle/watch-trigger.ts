@@ -2,13 +2,15 @@ import {
   ATTEMPTED_DELIVERY_STATUSES,
   assertWatchTriggerInvariants,
   type DeliveryStatus,
+  WatchRuleStateSchema,
   type WatchTrigger,
   type WatchTriggerRepository,
 } from '@luoome/core';
-import { and, desc, eq, gte, inArray, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import { type Schema, watchTriggers } from '../../schema/index.js';
+import { type Schema, watchExecutionLease, watchTriggers } from '../../schema/index.js';
+import { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';
 
 // drizzle inArray 对 narrow text 列 + 联合字符串入参的泛型不匹配；改用 or(eq,...) 等价（语义不变）。
 const inAttempted = (): SQL => {
@@ -52,6 +54,10 @@ const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
   priority: row.priority as WatchTrigger['priority'],
   deliveryStatus: row.deliveryStatus as DeliveryStatus,
   ...(row.notificationId !== null ? { notificationId: row.notificationId } : {}),
+  ...(row.deliveryAttempts === null ? {} : { deliveryAttempts: row.deliveryAttempts }),
+  ...(row.lastDeliveryAttemptAt === null
+    ? {}
+    : { lastDeliveryAttemptAt: row.lastDeliveryAttemptAt }),
   evalSnapshot: row.evalSnapshot as Record<string, unknown>,
   ...(row.feedback !== null ? { feedback: row.feedback as WatchTrigger['feedback'] & string } : {}),
   ...(row.feedbackAt !== null ? { feedbackAt: row.feedbackAt } : {}),
@@ -70,7 +76,82 @@ const ATTEMPTED: readonly DeliveryStatus[] = [...ATTEMPTED_DELIVERY_STATUSES];
 export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
+  async commitEvaluation(
+    input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
+  ): Promise<boolean> {
+    for (const trigger of input.triggers) assertWatchTriggerInvariants(trigger);
+    for (const state of input.states) WatchRuleStateSchema.parse(state);
+    return this.db.transaction((tx) => {
+      const lease = tx
+        .select()
+        .from(watchExecutionLease)
+        .where(
+          and(eq(watchExecutionLease.owner, input.owner), gt(watchExecutionLease.until, input.now)),
+        )
+        .get();
+      if (!lease) return false;
+      const triggers = new DrizzleWatchTriggerRepository(tx);
+      const states = new DrizzleWatchRuleStateRepository(tx);
+      for (const trigger of input.triggers) triggers.put(trigger);
+      for (const state of input.states) states.put(state);
+      return true;
+    });
+  }
+
+  async acquireExecution(owner: string, now: Date, until: Date): Promise<boolean> {
+    return (
+      this.db
+        .insert(watchExecutionLease)
+        .values({ id: 'watch', owner, until })
+        .onConflictDoUpdate({
+          target: watchExecutionLease.id,
+          set: { owner, until },
+          setWhere: lte(watchExecutionLease.until, now),
+        })
+        .returning()
+        .all().length === 1
+    );
+  }
+
+  async renewExecution(owner: string, now: Date, until: Date): Promise<boolean> {
+    return (
+      this.db
+        .update(watchExecutionLease)
+        .set({ until })
+        .where(
+          and(
+            eq(watchExecutionLease.id, 'watch'),
+            eq(watchExecutionLease.owner, owner),
+            gt(watchExecutionLease.until, now),
+          ),
+        )
+        .returning()
+        .all().length === 1
+    );
+  }
+
+  async releaseExecution(owner: string): Promise<void> {
+    this.db.delete(watchExecutionLease).where(eq(watchExecutionLease.owner, owner)).run();
+  }
+
+  async beginDelivery(ids: readonly string[], at: Date): Promise<void> {
+    if (ids.length === 0) return;
+    this.db
+      .update(watchTriggers)
+      .set({
+        deliveryStatus: 'pending',
+        deliveryAttempts: sql`coalesce(${watchTriggers.deliveryAttempts}, case when ${inAttempted()} then 1 else 0 end) + 1`,
+        lastDeliveryAttemptAt: at,
+      })
+      .where(inArray(watchTriggers.id, [...ids]))
+      .run();
+  }
+
   async save(trigger: WatchTrigger): Promise<void> {
+    this.put(trigger);
+  }
+
+  private put(trigger: WatchTrigger): void {
     assertWatchTriggerInvariants(trigger);
     this.db
       .insert(watchTriggers)
@@ -91,6 +172,8 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         priority: trigger.priority,
         deliveryStatus: trigger.deliveryStatus,
         notificationId: trigger.notificationId ?? null,
+        deliveryAttempts: trigger.deliveryAttempts ?? null,
+        lastDeliveryAttemptAt: trigger.lastDeliveryAttemptAt ?? null,
         evalSnapshot: trigger.evalSnapshot,
         feedback: trigger.feedback ?? null,
         feedbackAt: trigger.feedbackAt ?? null,
@@ -107,6 +190,8 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
           priority: trigger.priority,
           deliveryStatus: trigger.deliveryStatus,
           notificationId: trigger.notificationId ?? null,
+          deliveryAttempts: trigger.deliveryAttempts ?? null,
+          lastDeliveryAttemptAt: trigger.lastDeliveryAttemptAt ?? null,
           evalSnapshot: trigger.evalSnapshot,
           notified: trigger.notified,
         },
@@ -193,16 +278,18 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   async countAttemptedSince(since: Date, poolId?: string | null): Promise<number> {
-    const conditions: SQL[] = [inAttempted(), gte(watchTriggers.createdAt, since)];
+    const conditions: SQL[] = [gte(watchTriggers.createdAt, since)];
     if (poolId !== undefined && poolId !== null) {
       conditions.push(eq(watchTriggers.poolId, poolId));
     }
     const rows = this.db
-      .select({ id: watchTriggers.id })
+      .select({
+        attempts: sql<number>`coalesce(${watchTriggers.deliveryAttempts}, case when ${inAttempted()} then 1 else 0 end)`,
+      })
       .from(watchTriggers)
       .where(and(...conditions))
       .all();
-    return rows.length;
+    return rows.reduce((sum, row) => sum + row.attempts, 0);
   }
 
   async setDeliveryStatus(

@@ -5,6 +5,7 @@ import {
   type ReportBlock,
   ReportSchema,
   ReportScopeSchema,
+  StrategyRecommendationBatchSummarySchema,
   type ToolResult,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -227,7 +228,7 @@ const adviceDecisionLabel = (decision: string): string => {
 };
 
 /**
- * 「策略行动」：当日策略建议按方向分组，buy 优先为「值得买入」，逐条给出操作建议
+ * 「策略行动」：当日策略建议按方向分组，呈现 AI 判断与未分析候选事实
  * （现价 + 理由 + 风险 + 有效期）。decision 值仅以文本展示，block 不含决策字段 key
  * （report 不变量约束），entityKind='advice' 链接回 Advice 本体。
  */
@@ -237,7 +238,7 @@ const strategyActionsSection = async (
   ctx: WorkflowContext,
 ): Promise<ReportSectionPiece> => {
   const dayStart = new Date(`${date}T00:00:00+08:00`);
-  const [strategies, runs, advices] = await Promise.all([
+  const [strategies, runs, advices, batches] = await Promise.all([
     ctx.tools.list_strategies.execute({ filter: { status: 'active' } }),
     ctx.tools.list_strategy_runs.execute({
       scope: 'operational',
@@ -251,6 +252,12 @@ const strategyActionsSection = async (
       until: new Date(dayStart.getTime() + DAY_MS - 1),
       includeExpired: true,
       limit: 500,
+    }),
+    ctx.tools.list_workflow_runs.execute({
+      workflowName: 'strategy-recommendations',
+      since: dayStart,
+      limit: 200,
+      includeWatch: false,
     }),
   ]);
   if (!strategies.ok) {
@@ -299,23 +306,113 @@ const strategyActionsSection = async (
     const value = run?.summary?.[key];
     return typeof value === 'number' ? value : null;
   };
+  const batchByRun = new Map<string, z.infer<typeof StrategyRecommendationBatchSummarySchema>>();
+  const gaps = [];
+  if (!batches.ok)
+    gaps.push(
+      missing('strategy-actions.analysis-status', '建议批次审计不可用', batches.error.kind),
+    );
+  else
+    for (const batch of batches.data.runs) {
+      if (dateInShanghai(batch.startedAt) !== date) continue;
+      const parsed = StrategyRecommendationBatchSummarySchema.safeParse(batch.summary);
+      if (parsed.success && !batchByRun.has(parsed.data.runId))
+        batchByRun.set(parsed.data.runId, parsed.data);
+    }
+  const analysisByStrategy = new Map<string, string>();
+  const pendingItems: { title: string; detail: string; entityKind: 'stock'; entityId: string }[] =
+    [];
+  for (const strategy of strategies.data.strategies) {
+    const run = latestRunByStrategy.get(strategy.id);
+    if (run === undefined) {
+      analysisByStrategy.set(strategy.id, '今日未运行');
+      continue;
+    }
+    const batch = batchByRun.get(run.id);
+    const adviceCount = dayAdvices.filter(
+      (advice) => advice.basedOn.strategy?.strategyId === strategy.id,
+    ).length;
+    if (batch !== undefined) {
+      const skipped = batch.preflight?.skipped ?? batch.skippedCooldown;
+      const unavailable = batch.preflight?.unavailable ?? 0;
+      analysisByStrategy.set(
+        strategy.id,
+        `最近批次生成 ${batch.adviceCount} 条；预检跳过 ${skipped} 条；数据不可用 ${unavailable} 条；生成失败 ${batch.generationFailed} 条`,
+      );
+      if (batch.generationFailed > 0 || unavailable > 0)
+        gaps.push(
+          missing(
+            `strategy-actions.analysis.${strategy.id}`,
+            `${batch.generationFailed} 条生成失败，${unavailable} 条数据不可用`,
+            'analysis-incomplete',
+          ),
+        );
+    } else if (adviceCount > 0) {
+      analysisByStrategy.set(strategy.id, `已有 ${adviceCount} 条建议；无批次审计`);
+    } else {
+      const schedule = await ctx.tools.get_strategy_schedule.execute({ strategyId: strategy.id });
+      const enabled = schedule.ok && schedule.data.schedule?.recommendationPolicy?.enabled === true;
+      analysisByStrategy.set(
+        strategy.id,
+        enabled ? '尚未分析完成' : schedule.ok ? '自动分析未开启；候选未分析' : '分析配置不可用',
+      );
+      if (enabled || !schedule.ok)
+        gaps.push(
+          missing(
+            `strategy-actions.analysis.${strategy.id}`,
+            enabled ? '存在正式运行，尚无分析结果' : '分析配置不可用',
+            'analysis-unavailable',
+          ),
+        );
+    }
+    const detail = await ctx.tools.get_strategy_run.execute({ runId: run.id });
+    if (!detail.ok) {
+      gaps.push(
+        missing(`strategy-actions.candidates.${strategy.id}`, '候选事实不可用', detail.error.kind),
+      );
+      continue;
+    }
+    const named = new Map(detail.data.stocks.map((stock) => [stock.stockId, stock.stockName]));
+    for (const result of detail.data.results.filter((result) => result.selected)) {
+      if (
+        dayAdvices.some(
+          (advice) =>
+            advice.subjectId === result.stockId && advice.basedOn.strategy?.runId === run.id,
+        )
+      )
+        continue;
+      const preflight = batch?.preflight?.details.find((item) => item.stockId === result.stockId);
+      pendingItems.push({
+        title: named.get(result.stockId) ?? result.stockId,
+        detail: `${strategy.name} · ${preflight?.status === 'skipped' ? `预检跳过：${preflight.reasons.map((reason) => reason.code).join('、')}` : preflight?.status === 'unavailable' ? '数据不可用，未分析' : '未分析或分析未完成'} · 规则分 ${result.score ?? '未知'}`,
+        entityKind: 'stock',
+        entityId: result.stockId,
+      });
+    }
+  }
   const buyAdvices = dayAdvices.filter((advice) => advice.decision === 'buy');
   const watchAdvices = dayAdvices.filter((advice) => advice.decision === 'watch');
+  const holdAdvices = dayAdvices.filter((advice) => advice.decision === 'hold');
   const avoidAdvices = dayAdvices.filter(
     (advice) => advice.decision === 'sell' || advice.decision === 'avoid',
   );
   const adviceActionDetail = (advice: (typeof dayAdvices)[number]): string => {
     const quote = advice.basedOn.quotes?.[advice.subjectId];
     const parts: string[] = [];
-    if (quote !== undefined) parts.push(`现价 ${quote.close}`);
+    if (quote !== undefined)
+      parts.push(`参考价 ${quote.close}（行情时间 ${quote.observedAt.toISOString()}）`);
     const pricePlan: string[] = [];
     if (advice.entryPrice !== undefined) pricePlan.push(`买点 ${advice.entryPrice}`);
     if (advice.targetPrice !== undefined) pricePlan.push(`卖点 ${advice.targetPrice}`);
     if (advice.stopLoss !== undefined) pricePlan.push(`止损 ${advice.stopLoss}`);
     if (pricePlan.length > 0) parts.push(pricePlan.join(' / '));
     parts.push(advice.reasoning.premise);
+    parts.push(`反证：${advice.reasoning.counterEvidence.join('；') || '历史建议未记录'}`);
     if (advice.risks.length > 0) parts.push(`风险：${advice.risks.join('；')}`);
-    parts.push(`有效期至 ${dateInShanghai(advice.validUntil)}`);
+    parts.push(
+      `有效期至 ${advice.validUntil.toISOString()}${advice.validUntil <= now ? '（已过期）' : ''}`,
+    );
+    parts.push(advice.disclaimers.join('；'));
     return parts.join(' · ');
   };
   const adviceItem = (advice: (typeof dayAdvices)[number]) => ({
@@ -335,6 +432,7 @@ const strategyActionsSection = async (
         { key: 'strategy', label: '策略' },
         { key: 'selectedCount', label: '入选数' },
         { key: 'signalCount', label: '信号数' },
+        { key: 'analysis', label: '分析状态' },
       ],
       rows: strategies.data.strategies.map((strategy) => {
         const run = latestRunByStrategy.get(strategy.id);
@@ -342,6 +440,7 @@ const strategyActionsSection = async (
           strategy: strategy.name,
           selectedCount: summaryCount(run, 'selectedCount'),
           signalCount: summaryCount(run, 'signalCount'),
+          analysis: analysisByStrategy.get(strategy.id) ?? '分析状态不可用',
         };
       }),
     },
@@ -350,8 +449,10 @@ const strategyActionsSection = async (
       tone: 'factual',
       text:
         buyAdvices.length === 0
-          ? `${date} 无值得买入的策略标的。`
-          : `值得买入（${buyAdvices.length}）：`,
+          ? dayAdvices.length === 0
+            ? `${date} 今日尚无策略建议；未分析不代表不存在机会。`
+            : `${date} 已有分析中暂无买入判断。`
+          : `AI 买入判断（${buyAdvices.length}，请核对条件与风险）：`,
     },
   ];
   if (buyAdvices.length > 0) {
@@ -365,17 +466,27 @@ const strategyActionsSection = async (
     blocks.push({ kind: 'text', tone: 'factual', text: `回避（${avoidAdvices.length}）：` });
     blocks.push({ kind: 'list', items: avoidAdvices.map(adviceItem) });
   }
+  if (holdAdvices.length > 0)
+    blocks.push(
+      { kind: 'text', tone: 'factual', text: `持有判断（${holdAdvices.length}）：` },
+      { kind: 'list', items: holdAdvices.map(adviceItem) },
+    );
+  if (pendingItems.length > 0)
+    blocks.push(
+      { kind: 'text', tone: 'factual', text: `候选事实（${pendingItems.length} 条尚无建议）：` },
+      { kind: 'list', items: pendingItems },
+    );
   return {
     evidence,
     section: {
       key: 'strategy-actions',
       title: '策略行动',
       required: false,
-      status: 'complete' as const,
+      status: gaps.length > 0 ? ('partial' as const) : ('complete' as const),
       dataAsOf: now,
       blocks,
       evidenceIds: evidence.map((item) => item.id),
-      missingDimensions: [],
+      missingDimensions: gaps,
     },
   };
 };

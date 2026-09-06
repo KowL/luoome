@@ -1,7 +1,7 @@
 # 策略自动化与 AI 管理 PRD
 
 > 状态：M1 报告中心已交付（2026-09-01）；M2 AI 生命周期管理已交付（2026-09-02，实施记录见
-> [Strategy AI 生命周期管理详细设计](./ddd/strategy-ai-lifecycle-detailed-design.md) §8）
+> [Strategy AI 生命周期管理详细设计](../ddd/strategy-ai-lifecycle-detailed-design.md) §8）
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 关联文档：[策略工作台 PRD](./strategy-v2.md)、[Strategy DSL PRD](./strategy-dsl.md)、
 > [AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)、
@@ -16,7 +16,7 @@ StrategySchedule 自动运行（已存在）
   → daily-cycle 末尾自动候选分析（Top N 信号自动产出 Advice）
   → 收盘报告"策略行动"section（事实层 + AI 解读层）
   → 每周策略复盘（观察统计 → AI 提议）
-  → 提议自动进入独立验证（≥20 交易日、≥30 观察，阈值不动）
+  → 提议自动进入历史规则回放（≥20 交易日、≥30 观察，阈值不动）
   → 晋级门通过自动发布 / 不通过进人工队列
   → 暂停与归档按确定性规则自动执行并在报告中通知
 ```
@@ -88,7 +88,7 @@ StrategySchedule 自动运行（已存在）
 | 操作 | 自主权 |
 |---|---|
 | 暂停 / 归档策略 | 全自动；触发条件为确定性统计规则，AI 只生成解释文本；结果进日报/周报通知 |
-| 发布新版本（含 AI 创造的全新策略） | AI 提议 → 独立验证 session（≥20 交易日、≥30 完整观察、benchmark 覆盖 ≥90%，阈值不动）→ `assessStrategyPromotion` eligible → 自动 publish；blocked 进待确认队列人工处理 |
+| 发布新版本（含 AI 创造的全新策略） | AI 提议 → 冻结规则的历史验证 session（≥20 交易日、≥30 完整 T+5 观察、benchmark 覆盖 ≥90%）→ 证据门及自动发布门均通过（平均、中位超额均 >0）→ 自动 publish；blocked 进待确认队列人工处理 |
 | 修改已发布版本 | 禁止（既有不变量，不变） |
 
 晋级门是确定性代码自动执行，"人工确认"被"门禁自动放行"替代；新策略从提议到生效天然有
@@ -135,9 +135,11 @@ AI 可基于 DSL catalog 从头组合新策略（不限于调参）。全新策�
 
 1. **提议管道**：按周报复盘节奏（或观察样本达标触发），AI 基于观察统计与 DSL catalog 生成
    版本提议（调参或新策略 draft），落库并在周报可见；复用 `propose_strategy_version_draft`。
-2. **自动验证**：提议自动创建独立验证 session（复用 strategy-evaluation / replay 链）。
-3. **门禁自动放行**：`assessStrategyPromotion` 返回 eligible-for-human-review 后自动接 publish；
-   blocked 进待确认队列，Web 提供一键确认/否决。
+2. **自动验证**：提议后选取最近 20 个已有 T+5 结果的历史交易日创建验证 session，同周期推进规则回放，
+   AI 不参与历史信号匹配和收益计算，也无需等待未来 20 日；
+   验证处理中不重复提议，页面展示历史区间和收益数据截止时间。
+3. **门禁自动放行**：证据门通过后，额外检查历史 T+5 平均及中位超额均为正。
+   发布重试也重新复核；blocked 进待确认队列，Web 提供确认/否决。该观察不代表未来收益。
 4. **自动暂停/归档**：确定性统计触发规则（如近 N 周期超额收益显著为负且样本达标，阈值在
    实现前冻结进 DDD），AI 生成解释文本；执行结果进日报/周报。
 5. **周报 "AI 管理动作" section**：本周提议、验证进度、发布、暂停的完整审计记录。

@@ -13,6 +13,10 @@ export class InMemoryWatchRuleStateRepository implements WatchRuleStateRepositor
   }
 
   async upsert(state: WatchRuleState): Promise<void> {
+    this.put(state);
+  }
+
+  put(state: WatchRuleState): void {
     // alertPlanId 缺省时回填 poolId（与 drizzle 写入语义一致）。
     const stored =
       state.alertPlanId === undefined ? { ...state, alertPlanId: state.poolId } : state;

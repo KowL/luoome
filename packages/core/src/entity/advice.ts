@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-import { type Money, MoneySchema } from '../types/branded.js';
+import { dateInShanghai, isHoliday, isWeekend, previousTradingDate } from '../trading-calendar.js';
+import { type Money, MoneySchema, money } from '../types/branded.js';
 import { type TechnicalIndicators, TechnicalIndicatorsSchema } from './indicator-set.js';
 import { type Quote, QuoteSchema } from './quote.js';
 import { ActiveSignalObservationHorizonSchema } from './signal-observation.js';
@@ -197,6 +198,71 @@ export const AdviceReasoningSchema = z.object({
   evidence: z.array(z.string()),
   counterEvidence: z.array(z.string()),
 });
+
+/** 新生成的个股策略判断使用严格契约，历史 Advice 继续由 AdviceSchema 读取。 */
+export const StrategyAdviceAnalysisSchema = z
+  .object({
+    decision: AdviceDecisionSchema,
+    confidence: z.number().min(0).max(100),
+    horizon: AdviceHorizonSchema,
+    entryPrice: z.number().finite().positive().optional(),
+    targetPrice: z.number().finite().positive().optional(),
+    stopLoss: z.number().finite().positive().optional(),
+    reasoning: AdviceReasoningSchema.extend({
+      premise: z.string().trim().min(1),
+      evidence: z.array(z.string().trim().min(1)).min(1),
+      counterEvidence: z.array(z.string().trim().min(1)).min(1),
+    }),
+    risks: z.array(z.string().trim().min(1)).min(1),
+  })
+  .superRefine((advice, ctx) => {
+    const { entryPrice, targetPrice, stopLoss } = advice;
+    if (
+      advice.decision === 'buy' ||
+      entryPrice !== undefined ||
+      targetPrice !== undefined ||
+      stopLoss !== undefined
+    ) {
+      if (entryPrice === undefined || targetPrice === undefined || stopLoss === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['entryPrice'],
+          message: '买入或给出价位时必须同时提供买点、目标价和止损价',
+        });
+      } else if (
+        !(
+          money(stopLoss) > 0 &&
+          money(stopLoss) < money(entryPrice) &&
+          money(entryPrice) < money(targetPrice)
+        )
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['stopLoss'],
+          message: '价格必须满足 0 < 止损价 < 买点 < 目标价',
+        });
+      }
+    }
+  });
+
+export const isAdviceQuoteCurrent = (quote: Quote, now: Date): boolean => {
+  if (quote.observedAt > now) return false;
+  const local = new Date(now.getTime() + 8 * 3_600_000);
+  const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
+  const tradingDate = !isWeekend(now) && !isHoliday(now);
+  const today = dateInShanghai(now);
+  const expectedDate = tradingDate && minutes >= 570 ? today : previousTradingDate(now);
+  if (dateInShanghai(quote.observedAt) !== expectedDate) return false;
+  const dailyBar = quote.source.startsWith('daily-bar-fallback:');
+  if (dailyBar) return expectedDate !== today || minutes >= 900;
+  const cutoff =
+    tradingDate && minutes >= 570 && minutes <= 900
+      ? minutes > 690 && minutes < 780
+        ? new Date(`${today}T11:30:00+08:00`)
+        : now
+      : new Date(`${expectedDate}T15:00:00+08:00`);
+  return quote.observedAt.getTime() >= cutoff.getTime() - 180_000;
+};
 
 // 存量 basedOn JSON 可能仍含已下线的 tacticSignals key；zod object 默认 strip，
 // 读出时静默忽略，不需要保留旧 schema。

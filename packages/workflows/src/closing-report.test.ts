@@ -217,7 +217,19 @@ const seedStrategyAdvice = async (ctx: ToolContext, date: string): Promise<void>
     risks: ['fixture risk'],
     disclaimers: [...STANDARD_DISCLAIMERS],
     sourceTool: 'analyze_strategy_candidate',
-    basedOn: { dataAsOf: createdAt },
+    basedOn: {
+      dataAsOf: createdAt,
+      strategy: {
+        strategyId: 'closing-strategy',
+        strategyVersionId: 'closing-strategy-v1',
+        runId: `closing-strategy-run-${date}`,
+        stockId: '600519.SH',
+        resultEvidence: ['fixture'],
+        signalIds: [`closing-strategy-signal-${date}`],
+        observationIds: [],
+        recommendationTrigger: 'run',
+      },
+    },
     validFrom: createdAt,
     validUntil: new Date(createdAt.getTime() + 3 * 86_400_000),
     createdAt,
@@ -263,6 +275,38 @@ describe('closing-report workflow', () => {
     ]);
   });
 
+  it('分析失败批次保留候选，报告如实呈现失败而非无机会', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    await seedStrategyWithPublishedRun(ctx, '2026-07-27');
+    await ctx.repos.workflowRun.save({
+      id: 'failed-analysis-batch',
+      workflowName: 'strategy-recommendations',
+      mode: 'scheduled',
+      status: 'partial',
+      startedAt: now,
+      finishedAt: now,
+      providerStatuses: [],
+      outputSummary: {
+        strategyId: 'closing-strategy',
+        runId: 'closing-strategy-run-2026-07-27',
+        accountId: ctx.user.defaultAccountId,
+        adviceCount: 0,
+        attempted: 1,
+        generationFailed: 1,
+        skippedCooldown: 0,
+        notificationFailed: 0,
+      },
+    });
+    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'strategy-actions');
+    expect(section?.status).toBe('partial');
+    expect(JSON.stringify(section)).toContain('生成失败 1 条');
+    expect(JSON.stringify(section)).toContain('600519.SH');
+    expect(JSON.stringify(section)).not.toContain('无值得买入');
+  });
+
   it('策略行动 section 汇总当日 published 运行概览并以链接引用策略 Advice', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     await seedStrategyWithPublishedRun(ctx, '2026-07-27');
@@ -281,7 +325,12 @@ describe('closing-report workflow', () => {
     });
     const table = section?.blocks.find((block) => block.kind === 'table');
     expect(table?.kind === 'table' ? table.rows : []).toEqual([
-      { strategy: '收盘策略', selectedCount: 1, signalCount: 1 },
+      {
+        strategy: '收盘策略',
+        selectedCount: 1,
+        signalCount: 1,
+        analysis: '已有 1 条建议；无批次审计',
+      },
     ]);
     const list = section?.blocks.find((block) => block.kind === 'list');
     expect(list?.kind === 'list' ? list.items : []).toEqual([
@@ -298,7 +347,7 @@ describe('closing-report workflow', () => {
     expect(item?.detail).toContain('止损 9.8');
     expect(item?.detail).toContain('策略信号触发且量价配合');
     const text = section?.blocks.find((block) => block.kind === 'text');
-    expect(text?.kind === 'text' ? text.text : '').toContain('值得买入');
+    expect(text?.kind === 'text' ? text.text : '').toContain('AI 买入判断');
     const serialized = JSON.stringify(section?.blocks);
     for (const field of [
       '"decision"',
@@ -329,7 +378,23 @@ describe('closing-report workflow', () => {
     const list = section?.blocks.find((block) => block.kind === 'list');
     expect(list?.kind === 'list' ? list.items : []).toEqual([]);
     const text = section?.blocks.find((block) => block.kind === 'text');
-    expect(text?.kind === 'text' ? text.text : '').toContain('无值得买入的策略标的');
+    expect(text?.kind === 'text' ? text.text : '').toContain('今日尚无策略建议');
+  });
+
+  it('有信号但未生成建议时显示待分析事实，不推断不存在买入机会', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    await seedStrategyWithPublishedRun(ctx, '2026-07-27');
+    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'strategy-actions');
+    expect(JSON.stringify(section?.blocks)).not.toContain('无值得买入');
+    expect(JSON.stringify(section?.blocks)).toContain('未分析');
+    expect(
+      section?.blocks.some(
+        (block) => block.kind === 'list' && block.items.some((item) => item.entityKind === 'stock'),
+      ),
+    ).toBe(true);
   });
 
   it('策略数据读取失败时策略行动 section unavailable，且不改变整份报告状态', async () => {

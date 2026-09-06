@@ -36,6 +36,9 @@ SignalObservation 的有效观察周期固定为 T+1/T+3/T+5；T+20 已退役，
 > 跨日性能样本与真实运行记录继续作为运营观测，不设置固定交易日数量的完成门禁。详细契约见
 > [Strategy 日运行与历史评估详细设计](./docs/ddd/strategy-daily-cycle-and-replay-detailed-design.md)。
 
+AI 可以提议修改策略；候选版本冻结后，历史匹配和收益计算由确定性规则引擎执行，AI 不介入。
+自动发布使用已有结果的历史验证区间，不强制等待提议后的 20 个交易日；历史样本门槛不等于等待期。
+
 ### StrategySchedule
 
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
@@ -45,7 +48,12 @@ definitionHash。`luoome start` / Web 长期运行进程每分钟自动唤醒到
 RecommendationPolicy 继续按 V1 语义执行；只有显式 `schemaVersion=2` 的 policy 才执行账户级确定性预检。
 V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因、流动性、数据新鲜度、信号冲突和冷却；
 事实缺失时返回 unavailable，只有 eligible 候选才生成可追溯 Advice。配置的 T+n 观察完成时可再次生成阶段建议，
-并可选择日志或飞书通知。推荐失败不回滚已提交的 StrategyRun，任何建议与通知都不会自动交易。
+并可选择日志或飞书通知。`maxPerRun` 限制进入 AI 分析的候选数（每个候选最多两次模型请求）；预检跳过、冷却或数据不可用的候选
+不占用名额，按排名继续检查后续候选。推荐批次记录尝试、生成失败、预检和投递结果；失败不回滚
+已提交的 StrategyRun。收盘报告区分未分析、未开启、预检跳过、数据不可用与生成失败，未分析
+不等于没有机会。个股策略分析独立校验行情时效，保留真实行情时间；新建议必须有反证和风险，
+买入价格计划满足 0 < 止损 < 买点 < 目标（按持久化价格精度校验），无效输出最多重试一次后失败。
+任何建议与通知都不会自动交易。
 
 可靠性目标已落地为把调度、数据准备、正式运行、观察补全、洞察和可选推荐收进一个有 WorkflowRun
 审计的 daily cycle；租约使用 heartbeat + fencing token。外部观察 cron 只保留为幂等补偿任务，
@@ -115,6 +123,12 @@ StrategySignal，不临时运行全市场 Strategy。
 某个 Watchlist 成员命中 AlertPlan 规则后产生的可审计事实，包含规则、方向、证据、数据时间和
 送达状态。删除 AlertPlan 不删除 Trigger 历史。
 
+试跑只返回求值结果，不写 WatchTrigger、边沿状态或信号观察，不消耗正式去重与额度；运行审计仍可记录。
+`daily-first` 对同一计划、股票、规则的当日所有进入边沿生效。盘中与事件预警共享数据库执行租约，
+触发与边沿状态原子提交。投递前持久化尝试次数；失败或中断的 pending 最多尝试三次，分别退避
+1 分钟、5 分钟，且仅在触发当日（上海自然日）、计划与成员仍有效、额度允许时补偿。盘中循环
+也接手事件提醒的失败投递。重试计入计划和全局每日额度，成功与 fallback-log 不自动重试。
+
 ### 个性化报告（Report）
 
 回答“某个周期发生了什么、哪些数据不可用、应去哪里继续研究”。报告保存结构化事实、数据
@@ -168,6 +182,10 @@ success（可带 dataAsOf）/ failure（带错误词表 kind）/ ignored 三态�
 - disabled Watchlist 不进入 AlertPlan 扫描；AlertPlan 不拥有成员。
 - 删除被 AlertPlan 引用的 Watchlist 必须拒绝。
 - portfolio 来源只暴露当前账户范围，不在通知中泄漏敏感数量。
+- 盘后 StrategySignal 可在下一交易日触发预警，按信号身份去重；试跑不消耗正式触发。
+- WatchRun 的 succeeded/healthy 表达心跳，`unknownRules` 表达无法求值，`delivered` 表达送达；
+  旧 `notified` 仍是尝试数（含失败和仅日志），历史缺省指标显示未记录。盘中预警和定时报表走
+  飞书；未配置时落日志并标记 fallback-log，不能宣称已送达。
 - Advice 与真实交易严格分离；Strategy、AlertPlan、WatchTrigger 都不会自动下单。
 - write/external 必须显式 opt-in；Agent 的持久化、发布、正式运行和同步必须先确认。
 
