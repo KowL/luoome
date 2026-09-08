@@ -32,6 +32,8 @@ import type {
   CreateStrategyVersionOutput,
   DragonTigerListInput,
   DragonTigerListOutput,
+  EvaluateTradingPlanBudgetInput,
+  EvaluateTradingPlanBudgetOutput,
   FetchNewsInput,
   FetchNewsOutput,
   FetchQuoteInput,
@@ -52,6 +54,8 @@ import type {
   GetAccountOutput,
   GetAccountPerformanceInput,
   GetAccountPerformanceOutput,
+  GetAccountSnapshotInput,
+  GetAccountSnapshotOutput,
   GetAdviceInput,
   GetAdviceOutput,
   GetAdviceStatsInput,
@@ -88,6 +92,8 @@ import type {
   GetStrategyRunOutput,
   GetStrategyScheduleInput,
   GetStrategyScheduleOutput,
+  GetTradingPlanInput,
+  GetTradingPlanOutput,
   GetWatchlistInput,
   GetWatchlistOutput,
   GetWatchTriggerDeliveryStatsInput,
@@ -96,6 +102,8 @@ import type {
   LimitUpLadderCompareOutput,
   LimitUpLadderInput,
   LimitUpLadderOutput,
+  ListAccountSnapshotsInput,
+  ListAccountSnapshotsOutput,
   ListAccountsInput,
   ListAccountsOutput,
   ListAlertPlansInput,
@@ -124,6 +132,8 @@ import type {
   ListStrategyWatchlistSubscriptionsOutput,
   ListTradesInput,
   ListTradesOutput,
+  ListTradingPlansInput,
+  ListTradingPlansOutput,
   ListWatchDeliveryRetriesInput,
   ListWatchDeliveryRetriesOutput,
   ListWatchlistChangesInput,
@@ -164,8 +174,12 @@ import type {
   ResumeStrategyEvaluationSessionOutput,
   RunStrategyInput,
   RunStrategyOutput,
+  SaveAccountSnapshotInput,
+  SaveAccountSnapshotOutput,
   SaveReportInput,
   SaveReportOutput,
+  SaveTradingPlanInput,
+  SaveTradingPlanOutput,
   SaveWatchRuleStatesInput,
   SaveWatchRuleStatesOutput,
   SaveWatchTriggerInput,
@@ -282,6 +296,18 @@ export interface WorkflowToolMap {
   readonly list_accounts: ToolAccessor<typeof ListAccountsInput, typeof ListAccountsOutput>;
   readonly list_alert_plans: ToolAccessor<typeof ListAlertPlansInput, typeof ListAlertPlansOutput>;
   readonly get_account: ToolAccessor<typeof GetAccountInput, typeof GetAccountOutput>;
+  readonly get_account_snapshot: ToolAccessor<
+    typeof GetAccountSnapshotInput,
+    typeof GetAccountSnapshotOutput
+  >;
+  readonly list_account_snapshots: ToolAccessor<
+    typeof ListAccountSnapshotsInput,
+    typeof ListAccountSnapshotsOutput
+  >;
+  readonly save_account_snapshot: ToolAccessor<
+    typeof SaveAccountSnapshotInput,
+    typeof SaveAccountSnapshotOutput
+  >;
   readonly get_account_performance: ToolAccessor<
     typeof GetAccountPerformanceInput,
     typeof GetAccountPerformanceOutput
@@ -320,6 +346,19 @@ export interface WorkflowToolMap {
   readonly analyze_position: ToolAccessor<
     typeof AnalyzePositionInput,
     typeof AnalyzePositionOutput
+  >;
+  readonly save_trading_plan: ToolAccessor<
+    typeof SaveTradingPlanInput,
+    typeof SaveTradingPlanOutput
+  >;
+  readonly get_trading_plan: ToolAccessor<typeof GetTradingPlanInput, typeof GetTradingPlanOutput>;
+  readonly list_trading_plans: ToolAccessor<
+    typeof ListTradingPlansInput,
+    typeof ListTradingPlansOutput
+  >;
+  readonly evaluate_trading_plan_budget: ToolAccessor<
+    typeof EvaluateTradingPlanBudgetInput,
+    typeof EvaluateTradingPlanBudgetOutput
   >;
   // v0.2 新增
   readonly fetch_quote: ToolAccessor<typeof FetchQuoteInput, typeof FetchQuoteOutput>;

@@ -16,6 +16,7 @@ import { z } from 'zod';
 
 import { closingReportWorkflow } from './closing-report.js';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { tradingPlanDailyCycleWorkflow } from './trading-plan-daily-cycle.js';
 
 export const StrategyDailyCycleInput = z.object({
   owner: z.string().min(1).optional(),
@@ -104,6 +105,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
   });
   if (!claimed.ok) return claimed;
   const items: z.infer<typeof CycleItemSchema>[] = [];
+  let cycleDate: string | undefined;
   for (const claim of claimed.data.items) {
     const { schedule, lease } = claim;
     let phase: z.infer<typeof CycleItemSchema>['phase'] = 'claim';
@@ -246,6 +248,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     const workflowRunId = `workflow-strategy-daily-cycle-${globalThis.crypto.randomUUID()}`;
     const workflowStartedAt = ctx.clock();
     const auditDataAsOf = input.asOf ?? workflowStartedAt;
+    cycleDate ??= dateInShanghai(auditDataAsOf);
     const auditInputSummary = createStrategyDailyCycleAuditInputSummary({
       strategyId: schedule.strategyId,
       scheduleId: schedule.id,
@@ -769,26 +772,6 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       status = 'failed';
       reason = errorText(finished.error);
     }
-    // 收盘复盘并入日循环（PRD strategy-ai-managed-automation §5 M1「零人工出报告」）：
-    // 本轮完成了当日 scheduled 正式运行时嵌套触发 closing-report。daily cycle 是
-    // per-schedule 的，同一交易日多个 schedule 会各触发一次——save_report 按
-    // kind|scope|period 逻辑键 upsert，后触发覆盖同键报告而非报错。报告失败只把本轮
-    // 记 partial，不回滚任何已提交事实；显式历史 asOf 运行不触发。
-    if (runId !== undefined && input.asOf === undefined) {
-      const report = await closingReportWorkflow.run(
-        {
-          date: dateInShanghai(auditDataAsOf),
-          scope: { kind: 'all-accounts' },
-          mode: 'scheduled',
-        },
-        ctx,
-      );
-      if (!report.ok && status !== 'failed') {
-        status = 'partial';
-        const reportError = `收盘复盘生成失败: ${errorText(report.error)}`;
-        reason = reason === undefined ? reportError : `${reason}；${reportError}`;
-      }
-    }
     await finishAudit({
       strategyId: schedule.strategyId,
       scheduleId: schedule.id,
@@ -803,6 +786,35 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       ...(preflight === undefined ? {} : { preflight }),
       ...(reason === undefined ? {} : { reason }),
     });
+  }
+  // 一个账户/交易日只编排一次计划与主报告；策略 schedule 只负责完成共享发现事实。
+  // 计划先于报告生成，报告和盘中监控都消费同一组不可变计划版本。
+  if (input.asOf === undefined && items.some((item) => item.runId !== undefined)) {
+    const planning = await tradingPlanDailyCycleWorkflow.run({}, ctx);
+    if (!planning.ok) {
+      ctx.logger.warn('strategy-daily-cycle: trading plan batch failed', { error: planning.error });
+    }
+    const report = await closingReportWorkflow.run(
+      {
+        date: cycleDate ?? dateInShanghai(ctx.clock()),
+        scope: { kind: 'all-accounts' },
+        mode: 'scheduled',
+      },
+      ctx,
+    );
+    if (!report.ok) {
+      ctx.logger.warn('strategy-daily-cycle: unified closing report failed', {
+        error: report.error,
+      });
+      const reportError = `收盘复盘生成失败: ${errorText(report.error)}`;
+      for (const item of items) {
+        if (item.runId === undefined || item.status === 'failed' || item.status === 'skipped') {
+          continue;
+        }
+        item.status = 'partial';
+        item.reason = item.reason === undefined ? reportError : `${item.reason}；${reportError}`;
+      }
+    }
   }
   return StrategyDailyCycleOutput.parse({
     items,

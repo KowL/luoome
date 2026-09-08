@@ -4,6 +4,7 @@
 export * from './context.js';
 // 实体
 export * from './entity/account.js';
+export * from './entity/account-snapshot.js';
 export * from './entity/advice.js';
 export * from './entity/alert-plan.js';
 export * from './entity/ashare-sentiment.js';
@@ -42,6 +43,7 @@ export * from './entity/strategy-checkpoint.js';
 export * from './entity/strategy-schedule.js';
 export * from './entity/strategy-watchlist-subscription.js';
 export * from './entity/trade.js';
+export * from './entity/trading-plan.js';
 export * from './entity/watch-run.js';
 export * from './entity/watch-trigger.js';
 export * from './entity/watchlist.js';
@@ -50,6 +52,7 @@ export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
 export * from './portfolio/performance.js';
+export * from './portfolio/trading-plan-budget.js';
 // 仓储接口
 export * from './repository/index.js';
 export * from './research-vault.js';

@@ -1,4 +1,5 @@
 import type { Account } from '../entity/account.js';
+import type { AccountSnapshot } from '../entity/account-snapshot.js';
 import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
@@ -72,6 +73,7 @@ import type {
   StrategyWatchlistSubscriptionStatus,
 } from '../entity/strategy-watchlist-subscription.js';
 import type { Trade } from '../entity/trade.js';
+import type { TradingPlan, TradingPlanQuery } from '../entity/trading-plan.js';
 import type { WatchRun } from '../entity/watch-run.js';
 import type {
   DeliveryStatus,
@@ -107,6 +109,15 @@ export interface AccountRepository {
   save(account: Account): Promise<void>;
   findById(id: string): Promise<Account | null>;
   list(): Promise<Account[]>;
+  remove(id: string): Promise<void>;
+}
+
+/** 用户手动维护的账户估值与持仓版本；同一账户只能有一个当前版本。 */
+export interface AccountSnapshotRepository {
+  save(snapshot: AccountSnapshot): Promise<void>;
+  findById(id: string): Promise<AccountSnapshot | null>;
+  latestByAccount(accountId: string): Promise<AccountSnapshot | null>;
+  listByAccount(accountId: string, limit?: number): Promise<readonly AccountSnapshot[]>;
   remove(id: string): Promise<void>;
 }
 
@@ -324,6 +335,15 @@ export interface AdviceRepository {
   remove(id: string): Promise<void>;
 }
 
+/** 逐股结构化计划版本；版本 immutable，active 状态切换由新版本替代表达。 */
+export interface TradingPlanRepository {
+  save(plan: TradingPlan): Promise<void>;
+  findByVersionId(versionId: string): Promise<TradingPlan | null>;
+  list(query?: TradingPlanQuery): Promise<readonly TradingPlan[]>;
+  latestByPlanId(planId: string): Promise<TradingPlan | null>;
+  remove(versionId: string): Promise<void>;
+}
+
 export interface ReportRepository {
   upsertForPeriod(report: Report): Promise<Report>;
   findById(id: string): Promise<Report | null>;
@@ -347,6 +367,7 @@ export interface ReportRepository {
 
 export interface RepositoryRegistry {
   readonly account: AccountRepository;
+  readonly accountSnapshot: AccountSnapshotRepository;
   readonly stock: StockRepository;
   /** 本地股票目录完整快照与同步审计。 */
   readonly stockUniverse: StockUniverseRepository;
@@ -358,6 +379,7 @@ export interface RepositoryRegistry {
   readonly portfolioCorporateAction: PortfolioCorporateActionRepository;
   readonly portfolioPerformanceSnapshot: PortfolioPerformanceSnapshotRepository;
   readonly advice: AdviceRepository;
+  readonly tradingPlan: TradingPlanRepository;
   /** A 股个性化简报历史；按 kind/scope/period 逻辑键幂等更新。 */
   readonly report: ReportRepository;
   /** v0.2 起；MarketDataManager 等会调 save / latestByStock。 */

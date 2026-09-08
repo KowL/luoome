@@ -119,9 +119,14 @@ export interface Advice {
   readonly horizon: AdviceHorizon;
   /**
    * 操作价位建议（AI 基于近期走势 + 策略信号给出）；观望（watch）或信息不足时可缺省。
-   * entryPrice=建议买点；targetPrice=建议卖点/目标价；stopLoss=止损价。
+   * entryPrice=兼容旧 Advice 的建议买点；entryPriceLow/High 是新计划使用的入场区间；
+   * targetPositionPct 是按账户总资产计算的目标仓位；targetPrice=建议卖点/目标价；
+   * stopLoss=止损价。
    */
   readonly entryPrice?: Money;
+  readonly entryPriceLow?: Money;
+  readonly entryPriceHigh?: Money;
+  readonly targetPositionPct?: number;
   readonly targetPrice?: Money;
   readonly stopLoss?: Money;
   readonly reasoning: AdviceReasoning;
@@ -206,6 +211,9 @@ export const StrategyAdviceAnalysisSchema = z
     confidence: z.number().min(0).max(100),
     horizon: AdviceHorizonSchema,
     entryPrice: z.number().finite().positive().optional(),
+    entryPriceLow: z.number().finite().positive().optional(),
+    entryPriceHigh: z.number().finite().positive().optional(),
+    targetPositionPct: z.number().finite().min(0).max(100).optional(),
     targetPrice: z.number().finite().positive().optional(),
     stopLoss: z.number().finite().positive().optional(),
     reasoning: AdviceReasoningSchema.extend({
@@ -216,10 +224,14 @@ export const StrategyAdviceAnalysisSchema = z
     risks: z.array(z.string().trim().min(1)).min(1),
   })
   .superRefine((advice, ctx) => {
-    const { entryPrice, targetPrice, stopLoss } = advice;
+    const { entryPrice, entryPriceLow, entryPriceHigh, targetPositionPct, targetPrice, stopLoss } =
+      advice;
     if (
       advice.decision === 'buy' ||
       entryPrice !== undefined ||
+      entryPriceLow !== undefined ||
+      entryPriceHigh !== undefined ||
+      targetPositionPct !== undefined ||
       targetPrice !== undefined ||
       stopLoss !== undefined
     ) {
@@ -230,16 +242,27 @@ export const StrategyAdviceAnalysisSchema = z
           message: '买入或给出价位时必须同时提供买点、目标价和止损价',
         });
       } else if (
+        (entryPriceLow === undefined) !== (entryPriceHigh === undefined) ||
+        (entryPriceLow !== undefined &&
+          entryPriceHigh !== undefined &&
+          entryPriceLow > entryPriceHigh) ||
+        (advice.decision === 'buy' &&
+          (entryPriceLow === undefined ||
+            entryPriceHigh === undefined ||
+            targetPositionPct === undefined)) ||
         !(
           money(stopLoss) > 0 &&
           money(stopLoss) < money(entryPrice) &&
           money(entryPrice) < money(targetPrice)
-        )
+        ) ||
+        (entryPriceLow !== undefined &&
+          entryPriceHigh !== undefined &&
+          !(money(stopLoss) < money(entryPriceLow) && money(entryPriceHigh) < money(targetPrice)))
       ) {
         ctx.addIssue({
           code: 'custom',
           path: ['stopLoss'],
-          message: '价格必须满足 0 < 止损价 < 买点 < 目标价',
+          message: '价格必须满足 0 < 止损价 < 入场区间 <= 目标价；买入还必须提供目标仓位',
         });
       }
     }
@@ -310,6 +333,9 @@ export const AdviceSchema = z.object({
   confidence: z.number().min(0).max(100),
   horizon: AdviceHorizonSchema,
   entryPrice: MoneySchema.optional(),
+  entryPriceLow: MoneySchema.optional(),
+  entryPriceHigh: MoneySchema.optional(),
+  targetPositionPct: z.number().finite().min(0).max(100).optional(),
   targetPrice: MoneySchema.optional(),
   stopLoss: MoneySchema.optional(),
   reasoning: AdviceReasoningSchema,

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   type Account,
+  type AccountSnapshot,
   type Advice,
   type AdviceOutcome,
   type AlertPlan,
@@ -58,6 +59,7 @@ import {
   strictBacktestHash,
   strictBacktestSpecHash,
   type Trade,
+  type TradingPlan,
   type Watchlist,
   type WatchlistMemberSource,
   type WatchlistSyncRun,
@@ -249,6 +251,69 @@ export const makeAccount = (id: string, overrides: Partial<Account> = {}): Accou
   currency: 'CNY',
   initialCapital: money(1_000_000),
   createdAt: T0,
+  ...overrides,
+});
+
+const makeAccountSnapshot = (
+  id: string,
+  version: number,
+  overrides: Partial<AccountSnapshot> = {},
+): AccountSnapshot => ({
+  id,
+  accountId: 'acc-1',
+  version,
+  asOf: T1,
+  cashBalance: money(900),
+  stockMarketValue: money(0),
+  totalAssets: money(900),
+  status: 'complete',
+  positions: [],
+  source: 'manual',
+  createdAt: T1,
+  ...overrides,
+});
+
+const makeTradingPlan = (
+  id: string,
+  version: number,
+  overrides: Partial<TradingPlan> = {},
+): TradingPlan => ({
+  id,
+  version,
+  accountId: 'acc-1',
+  stockId: 'stk-1',
+  industry: '制造业',
+  status: 'active',
+  action: 'hold',
+  entryConditions: [],
+  invalidEntryConditions: [],
+  position: {
+    currentPct: 0,
+    targetPct: 0,
+    deltaPct: 0,
+    constraintStatus: 'passed',
+    constraintReasons: [],
+    prerequisiteActions: [],
+  },
+  holding: {
+    minTradingDays: 1,
+    maxTradingDays: 5,
+    nextReviewAt: T2,
+    earlyExitConditions: [],
+    extensionBasis: [],
+  },
+  exit: { conditions: [], triggerConditions: [], canSellNow: true },
+  validFrom: T1,
+  validUntil: T3,
+  invalidationConditions: [],
+  accountSnapshotId: 'snapshot-1',
+  accountSnapshotVersion: 1,
+  marketFacts: [],
+  evidence: [],
+  source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
+  explanation: { supportingEvidenceIds: [], counterEvidence: [], risks: [], unknowns: [] },
+  confidence: 50,
+  createdAt: T1,
   ...overrides,
 });
 
@@ -831,6 +896,64 @@ export const registerRepositoryContractTests = (
       it('违反不变量时拒绝（initialCapital < 0）', async () => {
         const bad = makeAccount('acc-bad', { initialCapital: money(-1) });
         await expect(repos.account.save(bad)).rejects.toThrow(InvariantError);
+      });
+    });
+
+    describe('AccountSnapshotRepository', () => {
+      it('保存版本并按账户倒序读取，incomplete 快照保持不可用', async () => {
+        await repos.accountSnapshot.save(makeAccountSnapshot('snapshot-1', 1));
+        await repos.accountSnapshot.save(
+          makeAccountSnapshot('snapshot-2', 2, {
+            asOf: T2,
+            status: 'needs-reconciliation',
+            cashBalance: money(900),
+            stockMarketValue: null,
+            totalAssets: null,
+          }),
+        );
+        expect(await repos.accountSnapshot.findById('snapshot-1')).toEqual(
+          makeAccountSnapshot('snapshot-1', 1),
+        );
+        expect((await repos.accountSnapshot.latestByAccount('acc-1'))?.version).toBe(2);
+        expect(
+          (await repos.accountSnapshot.listByAccount('acc-1')).map((item) => item.version),
+        ).toEqual([2, 1]);
+      });
+
+      it('同 id 重放幂等且 remove 后不可读', async () => {
+        const snapshot = makeAccountSnapshot('snapshot-1', 1);
+        await repos.accountSnapshot.save(snapshot);
+        await repos.accountSnapshot.save(snapshot);
+        await repos.accountSnapshot.remove(snapshot.id);
+        expect(await repos.accountSnapshot.findById(snapshot.id)).toBeNull();
+      });
+    });
+
+    describe('TradingPlanRepository', () => {
+      it('版本身份不可变，重复保存同一版本幂等', async () => {
+        const plan = makeTradingPlan('plan-1', 1);
+        await repos.tradingPlan.save(plan);
+        await repos.tradingPlan.save(plan);
+        expect(await repos.tradingPlan.findByVersionId('plan-1:v1')).toEqual(plan);
+        await expect(repos.tradingPlan.save({ ...plan, confidence: 51 })).rejects.toThrow(
+          'immutable',
+        );
+      });
+
+      it('activeOnly 只返回每个计划的最新 active 版本', async () => {
+        await repos.tradingPlan.save(makeTradingPlan('plan-1', 1));
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-1', 2, {
+            status: 'superseded',
+            supersedesVersionId: 'plan-1:v1',
+            createdAt: T2,
+          }),
+        );
+        await repos.tradingPlan.save(makeTradingPlan('plan-2', 1));
+        expect(await repos.tradingPlan.list({ activeOnly: true })).toEqual([
+          makeTradingPlan('plan-2', 1),
+        ]);
+        expect(await repos.tradingPlan.latestByPlanId('plan-1')).toMatchObject({ version: 2 });
       });
     });
 

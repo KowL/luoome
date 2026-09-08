@@ -3,6 +3,7 @@ import {
   AdviceDataSnapshotSchema,
   AdviceSchema,
   assertAdviceInvariants,
+  money,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -91,6 +92,18 @@ export const analyzePositionTool = defineTool({
       decision: llmOutput.decision,
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,
+      ...(llmOutput.entryPrice === undefined ? {} : { entryPrice: money(llmOutput.entryPrice) }),
+      ...(llmOutput.entryPriceLow === undefined
+        ? {}
+        : { entryPriceLow: money(llmOutput.entryPriceLow) }),
+      ...(llmOutput.entryPriceHigh === undefined
+        ? {}
+        : { entryPriceHigh: money(llmOutput.entryPriceHigh) }),
+      ...(llmOutput.targetPositionPct === undefined
+        ? {}
+        : { targetPositionPct: llmOutput.targetPositionPct }),
+      ...(llmOutput.targetPrice === undefined ? {} : { targetPrice: money(llmOutput.targetPrice) }),
+      ...(llmOutput.stopLoss === undefined ? {} : { stopLoss: money(llmOutput.stopLoss) }),
       reasoning: sanitizeAdviceReasoning(llmOutput.reasoning),
       risks: sanitizeAdviceRisks(llmOutput.risks),
       disclaimers: [...STANDARD_DISCLAIMERS],

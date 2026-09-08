@@ -27,6 +27,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [MVP 2.0：AI 股票投研自动化工作流](./prd/mvp2-ai-stock-research-automation.md) | 盘后计划与统一报告、基于实时市场证据的盘中 AI 动态判断、低频交易与账户仓位约束（讨论整理稿，待实施） |
 | [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照的页面、tool、与下游联动边界 |
 | [ruo 能力迁移产品设计](./prd/ruo-feature-migration-product-design.md) | 研究档案、公司事件、数据新鲜度与真实复盘 |
 | [AI 投资决策闭环产品总纲](./prd/ai-investment-decision-loop.md) | 发现、研究、观察、Advice、行动与复盘的整体对象关系 |

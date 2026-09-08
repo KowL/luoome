@@ -1,10 +1,12 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   AccountSchema,
+  AccountSnapshotSchema,
   AdviceOutcomeSchema,
   AdviceSchema,
   AlertPlanSchema,
   assertAccountInvariants,
+  assertAccountSnapshotInvariants,
   assertAdviceInvariants,
   assertAlertPlanInvariants,
   assertChatMessageInvariants,
@@ -22,6 +24,7 @@ import {
   assertStrategyVersionInvariants,
   assertStrategyWatchlistSubscriptionInvariants,
   assertTradeInvariants,
+  assertTradingPlanInvariants,
   assertWatchlistInvariants,
   assertWatchlistMemberInvariants,
   assertWatchlistMemberSourceInvariants,
@@ -58,6 +61,7 @@ import {
   StrategyVersionSchema,
   StrategyWatchlistSubscriptionSchema,
   TradeSchema,
+  TradingPlanSchema,
   WatchlistMemberSchema,
   WatchlistMemberSourceSchema,
   WatchlistSchema,
@@ -84,6 +88,7 @@ export type DataTransferCategory = (typeof DATA_TRANSFER_CATEGORIES)[number];
 const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>> = {
   portfolio: [
     'accounts',
+    'account_snapshots',
     'stocks',
     'holdings',
     'trades',
@@ -121,6 +126,7 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'notifications',
     'signal_observations',
     'workflow_runs',
+    'trading_plans',
   ],
   'market-data': [
     'stocks',
@@ -262,6 +268,7 @@ const researchDocumentFtsSchema = z.object({
 
 const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   accounts: domainValidator(AccountSchema, assertAccountInvariants),
+  account_snapshots: domainValidator(AccountSnapshotSchema, assertAccountSnapshotInvariants),
   stocks: domainValidator(StockSchema, assertStockInvariants),
   holdings: domainValidator(HoldingSchema, assertHoldingInvariants, (row) => {
     return { ...omitNulls(row), closedAt: row.closedAt };
@@ -321,6 +328,7 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   notifications: domainValidator(NotificationSchema, assertNotificationInvariants),
   signal_observations: domainValidator(SignalObservationSchema, assertSignalObservationInvariants),
   workflow_runs: domainValidator(WorkflowRunSchema, assertWorkflowRunInvariants),
+  trading_plans: domainValidator(TradingPlanSchema, assertTradingPlanInvariants),
   stock_universe_memberships: domainValidator(stockUniverseMembershipSchema),
   stock_universe_sync_runs: domainValidator(stockUniverseSyncRunSchema),
   price_snapshots: domainValidator(QuoteSchema),

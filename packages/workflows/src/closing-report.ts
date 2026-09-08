@@ -491,6 +491,121 @@ const strategyActionsSection = async (
   };
 };
 
+/**
+ * 交易计划是盘后报告与盘中监控共用的结构化来源；报告只投影计划，不从 Markdown 反解析执行条件。
+ */
+const tradingPlansSection = async (
+  scope: ClosingInput['scope'],
+  now: Date,
+  ctx: WorkflowContext,
+): Promise<ReportSectionPiece> => {
+  const result = await ctx.tools.list_trading_plans.execute({
+    ...(scope.kind === 'account' ? { accountId: scope.accountId } : {}),
+    limit: 500,
+  });
+  if (!result.ok) {
+    return unavailableSection(
+      'trading-plans',
+      '交易计划',
+      true,
+      now,
+      'trading-plans',
+      result.error.kind,
+    );
+  }
+  const latest = new Map<string, (typeof result.data.plans)[number]>();
+  for (const plan of result.data.plans) {
+    const current = latest.get(plan.id);
+    if (
+      current === undefined ||
+      plan.version > current.version ||
+      (plan.version === current.version && plan.createdAt > current.createdAt)
+    ) {
+      latest.set(plan.id, plan);
+    }
+  }
+  const plans = [...latest.values()].sort(
+    (left, right) => left.stockId.localeCompare(right.stockId) || right.version - left.version,
+  );
+  const evidence = [
+    localEvidence('trading-plans:0', 'trading-plans', now, 'tool:list_trading_plans'),
+  ];
+  const missingDimensions =
+    plans.length > 0
+      ? []
+      : [
+          missing(
+            'trading-plans.coverage',
+            '今日尚无结构化交易计划；未生成计划不等于没有机会',
+            'planning-incomplete',
+          ),
+        ];
+  return {
+    evidence,
+    section: {
+      key: 'trading-plans',
+      title: '交易计划',
+      required: true,
+      status: plans.length > 0 ? 'complete' : 'partial',
+      dataAsOf: now,
+      blocks: [
+        {
+          kind: 'table',
+          columns: [
+            { key: 'account', label: '账户' },
+            { key: 'stock', label: '股票' },
+            { key: 'action', label: '动作' },
+            { key: 'status', label: '状态' },
+            { key: 'version', label: '计划版本' },
+            { key: 'entryRange', label: '入场区间' },
+            { key: 'entryConditions', label: '入场条件' },
+            { key: 'exitConditions', label: '退出条件' },
+            { key: 'currentPct', label: '当前仓位%' },
+            { key: 'targetPct', label: '目标仓位%' },
+            { key: 'holdingDays', label: '预计持有交易日' },
+            { key: 'risk', label: '风险' },
+            { key: 'unknowns', label: '未知 / 前置条件' },
+            { key: 'validUntil', label: '有效期至' },
+          ],
+          rows: plans.map((plan) => ({
+            account: plan.accountId,
+            stock: plan.stockName ?? plan.stockId,
+            action: plan.action,
+            status: plan.status,
+            version: `v${plan.version}`,
+            entryRange:
+              plan.entryPriceLow === undefined || plan.entryPriceHigh === undefined
+                ? '未提供'
+                : `${plan.entryPriceLow}-${plan.entryPriceHigh}`,
+            entryConditions:
+              plan.entryConditions.map((condition) => condition.description).join('；') || '无',
+            exitConditions: plan.exit.conditions.join('；') || '未记录',
+            currentPct: plan.position.currentPct,
+            targetPct: plan.position.targetPct,
+            holdingDays: `${plan.holding.minTradingDays}-${plan.holding.maxTradingDays}`,
+            risk: plan.explanation.risks.join('；') || '未记录',
+            unknowns:
+              [...plan.explanation.unknowns, ...plan.position.prerequisiteActions].join('；') ||
+              '无',
+            validUntil: plan.validUntil.toISOString(),
+          })),
+        },
+        ...(plans.length === 0
+          ? [
+              {
+                kind: 'text' as const,
+                tone: 'warning' as const,
+                text: '账户快照、持仓复核或候选分析尚未形成可呈现的结构化计划；请区分研究未完成与没有合格机会。',
+              },
+            ]
+          : []),
+      ],
+      evidenceIds: evidence.map((item) => item.id),
+      missingDimensions,
+    },
+  };
+};
+
 const runClosingReport = async (
   input: ClosingInput,
   ctx: WorkflowContext,
@@ -527,15 +642,16 @@ const runClosingReport = async (
               'ashare-sentiment',
               sentiment.error.kind,
             );
-        const [performance, triggers, adviceExpiry, strategyActions, nextEvents] =
+        const [performance, triggers, adviceExpiry, strategyActions, plans, nextEvents] =
           await Promise.all([
             accountPerformance(input, generatedAt, ctx),
             triggersSection(date, generatedAt, ctx),
             adviceExpirySection(date, generatedAt, ctx),
             strategyActionsSection(date, generatedAt, ctx),
+            tradingPlansSection(input.scope, generatedAt, ctx),
             nextEventsSection(date, generatedAt, ctx),
           ]);
-        return [market, performance, triggers, adviceExpiry, strategyActions, nextEvents];
+        return [market, performance, triggers, adviceExpiry, strategyActions, plans, nextEvents];
       },
     },
     ctx,

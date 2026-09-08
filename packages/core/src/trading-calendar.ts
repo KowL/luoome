@@ -161,6 +161,19 @@ export const previousTradingDate = (date: Date): Holiday => {
   return dateInShanghai(cursor);
 };
 
+/** 在 A 股交易日历上向前/向后移动指定交易日数量，不把自然日当作持有周期。 */
+export const addTradingDays = (date: Date, days: number): Date => {
+  if (!Number.isInteger(days)) throw new Error('trading day offset must be an integer');
+  const direction = days < 0 ? -1 : 1;
+  let remaining = Math.abs(days);
+  let cursor = new Date(date.getTime());
+  while (remaining > 0) {
+    cursor = new Date(cursor.getTime() + direction * 86_400_000);
+    if (!isWeekend(cursor) && !isHoliday(cursor)) remaining -= 1;
+  }
+  return cursor;
+};
+
 /**
  * 解析 `LUOOME_A_SHARE_HOLIDAYS` 环境变量。
  * 格式：逗号分隔 YYYY-MM-DD 字符串；空 / undefined 返回空 Map。

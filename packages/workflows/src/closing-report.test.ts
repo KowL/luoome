@@ -271,6 +271,7 @@ describe('closing-report workflow', () => {
       'important-triggers',
       'advice-expiry',
       'strategy-actions',
+      'trading-plans',
       'next-events',
     ]);
   });

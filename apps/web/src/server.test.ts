@@ -521,6 +521,42 @@ describe('报告 API', () => {
   });
 });
 
+describe('MVP2 账户快照与交易计划 API', () => {
+  it('通过 write 闸口保存手工账户快照，并读取当前快照与计划列表', async () => {
+    const localApp = createWebApp(await buildTestContext(), {
+      exposeWrite: true,
+      exposeExternal: true,
+    });
+    const saved = await localApp.fetch(
+      new Request('http://test/api/account/snapshot', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ cashBalance: 1000, positions: [] }),
+      }),
+    );
+    const savedBody = (await saved.json()) as {
+      ok: boolean;
+      data?: { snapshot: { status: string; version: number } };
+    };
+    expect(saved.status).toBe(200);
+    expect(savedBody).toMatchObject({
+      ok: true,
+      data: { snapshot: { status: 'complete', version: 1 } },
+    });
+
+    const current = await localApp.fetch(new Request('http://test/api/account/snapshot'));
+    expect(current.status).toBe(200);
+    expect((await current.json()) as { ok: boolean }).toMatchObject({ ok: true });
+
+    const plans = await localApp.fetch(new Request('http://test/api/trading-plans'));
+    expect(plans.status).toBe(200);
+    expect((await plans.json()) as { ok: boolean; data: { plans: unknown[] } }).toMatchObject({
+      ok: true,
+      data: { plans: [] },
+    });
+  });
+});
+
 describe('Web runtime bootstrap', () => {
   it('基本面 adapter 默认不注入，显式 mock 重建 context 后才注入且保持 not-ready', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'luoome-fundamental-context-'));

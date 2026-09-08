@@ -519,10 +519,10 @@ describe('strategy-daily-cycle reliability matrix', () => {
       expect(item.runId).toBeDefined();
       expect(item.status).not.toBe('failed');
     }
-    // 两个 schedule 各触发一次 closing-report（两次 workflow 审计），
-    // save_report 按 kind|scope|period 逻辑键 upsert：同键报告只有一份，后触发覆盖。
+    // 统一日循环只触发一次 closing-report；save_report 按 kind|scope|period
+    // 逻辑键幂等保存，因此同日只保留一份主报告。
     expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
-      2,
+      1,
     );
     const reports = await ctx.repos.report.list({ kind: 'closing' });
     expect(reports).toHaveLength(1);
