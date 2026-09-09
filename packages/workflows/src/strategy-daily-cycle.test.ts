@@ -508,7 +508,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     await seedSchedule(ctx, { key: 'cycle-b' });
 
     const result = await strategyDailyCycleWorkflow.run(
-      { owner: 'cycle-reports', limit: 2, leaseMinutes: 5 },
+      { owner: 'cycle-reports', limit: 1, leaseMinutes: 5 },
       ctx,
     );
 
@@ -531,6 +531,11 @@ describe('strategy-daily-cycle reliability matrix', () => {
       periodStart: '2026-08-10',
       periodEnd: '2026-08-10',
     });
+    const strategySection = reports[0]?.sections.find(
+      (section) => section.key === 'strategy-actions',
+    );
+    const strategyTable = strategySection?.blocks.find((block) => block.kind === 'table');
+    expect(strategyTable?.kind === 'table' ? strategyTable.rows : []).toHaveLength(2);
   });
 
   it('收盘报告生成失败时本轮记 partial，不回滚已提交的 run', async () => {

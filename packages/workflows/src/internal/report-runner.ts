@@ -46,6 +46,25 @@ export const executeReportWorkflow = async (
   ctx: WorkflowContext,
 ): Promise<ReportRunResult | ToolResult<never>> => {
   const generatedAt = ctx.clock();
+  if (input.mode === 'scheduled') {
+    const existing = await ctx.tools.get_report.execute({
+      kind: input.kind,
+      scope: input.scope,
+      periodEnd: input.periodEnd,
+    });
+    if (
+      existing.ok &&
+      (existing.data.report.deliveryStatus === 'sent' ||
+        existing.data.report.deliveryStatus === 'fallback-log')
+    ) {
+      return {
+        report: existing.data.report,
+        created: false,
+        workflowRunId: existing.data.report.workflowRunId,
+        notified: false,
+      };
+    }
+  }
   const workflowRunId = `workflow-${input.kind}-${randomUUID()}`;
   const inputSummary = {
     scope: input.scope,

@@ -204,6 +204,8 @@ export const TradingPlanQuerySchema = z.object({
   stockId: z.string().min(1).optional(),
   status: TradingPlanStatusSchema.optional(),
   activeOnly: z.boolean().optional(),
+  /** activeOnly 时可指定评估时点；缺省表示不做有效期过滤。 */
+  asOf: z.coerce.date().optional(),
   limit: z.number().int().positive().max(500).optional(),
 });
 export type TradingPlanQuery = z.infer<typeof TradingPlanQuerySchema>;

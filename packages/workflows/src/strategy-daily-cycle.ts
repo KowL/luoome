@@ -11,6 +11,7 @@ import {
   STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
   StrategyRecommendationPreflightSummarySchema,
+  type StrategySchedule,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -20,7 +21,7 @@ import { tradingPlanDailyCycleWorkflow } from './trading-plan-daily-cycle.js';
 
 export const StrategyDailyCycleInput = z.object({
   owner: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(20).default(1),
+  limit: z.number().int().min(1).max(100).default(1),
   leaseMinutes: z.number().int().min(5).max(240).default(30),
   asOf: z.coerce.date().optional(),
   concurrency: z.number().int().min(1).max(64).default(8),
@@ -63,6 +64,17 @@ export const StrategyDailyCycleOutput = z.object({
 });
 export type StrategyDailyCycleOutputT = z.infer<typeof StrategyDailyCycleOutput>;
 
+type ClaimedScheduleItem = {
+  readonly schedule: StrategySchedule;
+  readonly eligible: boolean;
+  readonly lease: {
+    readonly owner: string;
+    readonly fence: number;
+    readonly leaseUntil: Date;
+  };
+  readonly reason: string | undefined;
+};
+
 const errorText = (error: {
   readonly kind?: unknown;
   readonly message?: unknown;
@@ -98,15 +110,33 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       error: reconciled.error,
     });
   }
-  const claimed = await ctx.tools.claim_due_strategy_schedules.execute({
-    owner,
-    limit: input.limit,
-    leaseMinutes: input.leaseMinutes,
-  });
-  if (!claimed.ok) return claimed;
+  // Shared plan/report artifacts must see every schedule that was due at this tick. The
+  // caller's limit controls the first claim batch, then the loop drains any remaining due rows.
+  const claims: ClaimedScheduleItem[] = [];
+  let claimLimit = input.limit;
+  while (true) {
+    const claimed = await ctx.tools.claim_due_strategy_schedules.execute({
+      owner,
+      limit: claimLimit,
+      leaseMinutes: input.leaseMinutes,
+    });
+    if (!claimed.ok) return claimed;
+    claims.push(
+      ...claimed.data.items.map(
+        (item): ClaimedScheduleItem => ({
+          schedule: item.schedule,
+          eligible: item.eligible,
+          lease: item.lease,
+          reason: item.reason,
+        }),
+      ),
+    );
+    if (claimed.data.items.length < claimLimit) break;
+    claimLimit = 100;
+  }
   const items: z.infer<typeof CycleItemSchema>[] = [];
   let cycleDate: string | undefined;
-  for (const claim of claimed.data.items) {
+  for (const claim of claims) {
     const { schedule, lease } = claim;
     let phase: z.infer<typeof CycleItemSchema>['phase'] = 'claim';
     let status: z.infer<typeof CycleItemSchema>['status'] = 'skipped';

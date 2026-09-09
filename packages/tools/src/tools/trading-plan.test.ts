@@ -13,16 +13,21 @@ const makePlan = (input: {
   readonly accountId: string;
   readonly snapshotId: string;
   readonly snapshotVersion: number;
+  readonly stockId?: string;
+  readonly stockName?: string;
+  readonly industry?: string;
   readonly targetPct?: number;
   readonly status?: 'draft' | 'active';
+  readonly validFrom?: Date;
+  readonly validUntil?: Date;
 }) =>
   TradingPlanSchema.parse({
-    id: `account:${input.accountId}:stock:601398.SH`,
+    id: `account:${input.accountId}:stock:${input.stockId ?? '601398.SH'}`,
     version: 1,
     accountId: input.accountId,
-    stockId: '601398.SH',
-    stockName: '601398',
-    industry: '银行',
+    stockId: input.stockId ?? '601398.SH',
+    stockName: input.stockName ?? input.stockId ?? '601398',
+    industry: input.industry ?? '银行',
     status: input.status ?? 'active',
     action: 'enter',
     entryPriceLow: 70,
@@ -45,8 +50,8 @@ const makePlan = (input: {
       extensionBasis: [],
     },
     exit: { conditions: [], canSellNow: false },
-    validFrom: new Date('2026-09-08T00:00:00.000Z'),
-    validUntil: new Date('2026-09-30T00:00:00.000Z'),
+    validFrom: input.validFrom ?? new Date('2026-09-08T00:00:00.000Z'),
+    validUntil: input.validUntil ?? new Date('2026-09-30T00:00:00.000Z'),
     invalidationConditions: ['账户快照版本改变'],
     accountSnapshotId: input.snapshotId,
     accountSnapshotVersion: input.snapshotVersion,
@@ -143,5 +148,56 @@ describe('trading plan tools', () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(JSON.stringify(result.error)).toContain('当前快照');
+  });
+
+  it('过期 active 计划不再占用预算', async () => {
+    const now = new Date('2026-09-15T02:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const snapshot = await saveAccountSnapshotTool.execute(
+      { accountId: ctx.user.defaultAccountId, cashBalance: 1000, positions: [] },
+      ctx,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    const expiredUntil = new Date('2026-09-14T00:00:00.000Z');
+    await ctx.repos.tradingPlan.save(
+      makePlan({
+        accountId: ctx.user.defaultAccountId,
+        snapshotId: snapshot.data.snapshot.id,
+        snapshotVersion: snapshot.data.snapshot.version,
+        stockId: '600036.SH',
+        validUntil: expiredUntil,
+        targetPct: 15,
+      }),
+    );
+    await ctx.repos.tradingPlan.save(
+      makePlan({
+        accountId: ctx.user.defaultAccountId,
+        snapshotId: snapshot.data.snapshot.id,
+        snapshotVersion: snapshot.data.snapshot.version,
+        stockId: '601398.SH',
+        validUntil: expiredUntil,
+        targetPct: 15,
+      }),
+    );
+    const result = await saveTradingPlanTool.execute(
+      {
+        plan: makePlan({
+          accountId: ctx.user.defaultAccountId,
+          snapshotId: snapshot.data.snapshot.id,
+          snapshotVersion: snapshot.data.snapshot.version,
+          stockId: '600519.SH',
+          targetPct: 10,
+        }),
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    const active = await listTradingPlansTool.execute(
+      { accountId: ctx.user.defaultAccountId, activeOnly: true, asOf: now },
+      ctx,
+    );
+    expect(active.ok).toBe(true);
+    if (active.ok) expect(active.data.plans.map((plan) => plan.stockId)).toEqual(['600519.SH']);
   });
 });

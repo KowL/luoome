@@ -91,6 +91,10 @@ import type {
   WatchlistSyncRun,
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
+import type {
+  TradingPlanBudgetLimits,
+  TradingPlanBudgetResult,
+} from '../portfolio/trading-plan-budget.js';
 import type { ResearchSearchHit } from '../research-vault.js';
 import type { StrategyDailyCycleAuditQuery } from '../strategy/daily-cycle-audit.js';
 import type {
@@ -338,6 +342,14 @@ export interface AdviceRepository {
 /** 逐股结构化计划版本；版本 immutable，active 状态切换由新版本替代表达。 */
 export interface TradingPlanRepository {
   save(plan: TradingPlan): Promise<void>;
+  /** 在同一持久化事务内读取当前计划预算并条件写入 active 版本。 */
+  saveIfBudgetAvailable(input: {
+    readonly plan: TradingPlan;
+    readonly snapshot: AccountSnapshot;
+    readonly stocks: ReadonlyMap<string, Stock>;
+    readonly limits: TradingPlanBudgetLimits;
+    readonly asOf: Date;
+  }): Promise<{ readonly saved: boolean; readonly budget: TradingPlanBudgetResult }>;
   findByVersionId(versionId: string): Promise<TradingPlan | null>;
   list(query?: TradingPlanQuery): Promise<readonly TradingPlan[]>;
   latestByPlanId(planId: string): Promise<TradingPlan | null>;

@@ -456,6 +456,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
       decision TEXT NOT NULL,
       confidence REAL NOT NULL,
       horizon TEXT NOT NULL,
+      entry_price REAL,
+      entry_price_low REAL,
+      entry_price_high REAL,
+      target_position_pct REAL,
+      target_price REAL,
+      stop_loss REAL,
       reasoning TEXT NOT NULL,
       risks TEXT NOT NULL,
       disclaimers TEXT NOT NULL,
@@ -467,7 +473,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       created_at INTEGER NOT NULL
     )
   `);
-  migrateAdviceStockNameColumn(db);
+  migrateAdviceColumns(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS advices_subject_idx ON advices (subject_kind, subject_id)
   `);
@@ -1345,12 +1351,20 @@ export const ensureSchema = (db: DrizzleDb): void => {
  * advices 表补 stock_name 列（v0.8 起，幂等）。
  * 旧库无此列时 ALTER ADD；新库 DDL 已含，直接跳过。
  */
-const migrateAdviceStockNameColumn = (db: DrizzleDb): void => {
+const migrateAdviceColumns = (db: DrizzleDb): void => {
   const cols = db.all<{ name: string }>(sql`PRAGMA table_info(advices)`);
   if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === 'stock_name')) {
-    db.run(sql`ALTER TABLE advices ADD COLUMN stock_name TEXT`);
-  }
+  const have = new Set(cols.map((column) => column.name));
+  if (!have.has('stock_name')) db.run(sql`ALTER TABLE advices ADD COLUMN stock_name TEXT`);
+  if (!have.has('entry_price')) db.run(sql`ALTER TABLE advices ADD COLUMN entry_price REAL`);
+  if (!have.has('entry_price_low'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN entry_price_low REAL`);
+  if (!have.has('entry_price_high'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN entry_price_high REAL`);
+  if (!have.has('target_position_pct'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN target_position_pct REAL`);
+  if (!have.has('target_price')) db.run(sql`ALTER TABLE advices ADD COLUMN target_price REAL`);
+  if (!have.has('stop_loss')) db.run(sql`ALTER TABLE advices ADD COLUMN stop_loss REAL`);
 };
 
 /** StrategyVersion AI 审计字段，旧库按可空 JSON 列幂等补齐。 */

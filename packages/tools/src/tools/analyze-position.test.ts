@@ -1,7 +1,7 @@
-import { STANDARD_DISCLAIMERS } from '@luoome/core';
+import { accountSnapshotPositionId, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
-
 import { buildTestContext } from '../testing/context.js';
+import { saveAccountSnapshotTool } from './account-snapshot.js';
 import { analyzePositionTool } from './analyze-position.js';
 
 describe('analyze_position', () => {
@@ -55,5 +55,53 @@ describe('analyze_position', () => {
     const result = await analyzePositionTool.execute({}, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');
+  });
+
+  it('快照中存在但没有 legacy Holding 时仍可分析，且不伪造成本价', async () => {
+    const ctx = await buildTestContext({
+      advices: [],
+      clock: () => new Date('2026-07-17T07:00:00.000Z'),
+    });
+    const snapshot = await saveAccountSnapshotTool.execute(
+      {
+        accountId: ctx.user.defaultAccountId,
+        cashBalance: 900_000,
+        positions: [
+          {
+            stockId: '000858.SZ',
+            quantity: 100,
+            availableQuantity: 100,
+            marketValue: 10_000,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    let observedHolding: Record<string, unknown> | undefined;
+    const llm = ctx.adapters.llm;
+    const observedCtx = {
+      ...ctx,
+      adapters: {
+        ...ctx.adapters,
+        llm: {
+          name: llm.name,
+          generate: async <T = unknown>(
+            request: Parameters<typeof llm.generate>[0],
+          ): Promise<T> => {
+            observedHolding = (request.data as { holding: Record<string, unknown> }).holding;
+            return llm.generate<T>(request);
+          },
+        },
+      },
+    };
+    const result = await analyzePositionTool.execute(
+      { holdingId: accountSnapshotPositionId(ctx.user.defaultAccountId, '000858.SZ') },
+      observedCtx,
+    );
+    expect(result.ok).toBe(true);
+    expect(observedHolding).toMatchObject({ quantity: 100, availableQuantity: 100 });
+    expect(observedHolding).not.toHaveProperty('avgCost');
   });
 });

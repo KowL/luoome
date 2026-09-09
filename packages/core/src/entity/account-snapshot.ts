@@ -30,6 +30,27 @@ export const AccountPositionSnapshotSchema = z.object({
 });
 export type AccountPositionSnapshot = z.infer<typeof AccountPositionSnapshotSchema>;
 
+/**
+ * 快照持仓没有独立的 Holding 行时使用的稳定引用。
+ * 该引用只标识快照中的持仓，不把市值倒推成历史成本。
+ */
+export const accountSnapshotPositionId = (accountId: string, stockId: string): string =>
+  `account-snapshot-position:${accountId}:${stockId}`;
+
+export const parseAccountSnapshotPositionId = (
+  id: string,
+): { readonly accountId: string; readonly stockId: string } | null => {
+  const prefix = 'account-snapshot-position:';
+  if (!id.startsWith(prefix)) return null;
+  const remainder = id.slice(prefix.length);
+  const separator = remainder.lastIndexOf(':');
+  if (separator <= 0 || separator === remainder.length - 1) return null;
+  return {
+    accountId: remainder.slice(0, separator),
+    stockId: remainder.slice(separator + 1),
+  };
+};
+
 export const AccountSnapshotSchema = z.object({
   id: z.string().min(1),
   accountId: z.string().min(1),

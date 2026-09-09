@@ -70,6 +70,8 @@ import type {
   GetHoldingOutput,
   GetPreviousClosesInput,
   GetPreviousClosesOutput,
+  GetReportInput,
+  GetReportOutput,
   GetResearchDocumentInput,
   GetResearchDocumentOutput,
   GetResearchTopicInput,
@@ -551,6 +553,7 @@ export interface WorkflowToolMap {
     typeof ReconcileStaleWorkflowRunsOutput
   >;
   readonly save_report: ToolAccessor<typeof SaveReportInput, typeof SaveReportOutput>;
+  readonly get_report: ToolAccessor<typeof GetReportInput, typeof GetReportOutput>;
   readonly render_report: ToolAccessor<typeof RenderReportInput, typeof RenderReportOutput>;
   readonly set_report_delivery_status: ToolAccessor<
     typeof SetReportDeliveryStatusInput,

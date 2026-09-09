@@ -1,5 +1,7 @@
 import {
+  type AccountSnapshot,
   type Advice,
+  accountSnapshotPositionId,
   addTradingDays,
   dateInShanghai,
   isAdviceQuoteCurrent,
@@ -7,7 +9,6 @@ import {
   type TradingPlan,
   TradingPlanSchema,
 } from '@luoome/core';
-import type { ListHoldingsOutput } from '@luoome/tools';
 import { z } from 'zod';
 
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
@@ -39,8 +40,34 @@ export const TradingPlanDailyCycleOutput = z.object({
 });
 export type TradingPlanDailyCycleOutputT = z.infer<typeof TradingPlanDailyCycleOutput>;
 
-type HoldingItem = z.output<typeof ListHoldingsOutput>['holdings'][number];
-export type TradingPlanHoldingContext = HoldingItem;
+export type TradingPlanHoldingContext = {
+  readonly holding: {
+    readonly id: string;
+    readonly accountId: string;
+    readonly stockId: string;
+    readonly quantity: number;
+    readonly availableQuantity: number;
+    readonly closedAt: Date | null;
+    readonly avgCost?: number;
+    readonly openedAt?: Date;
+  };
+  readonly stockName: string;
+};
+
+export const snapshotPositionHoldingContext = (
+  snapshot: AccountSnapshot,
+  position: AccountSnapshot['positions'][number],
+): TradingPlanHoldingContext => ({
+  holding: {
+    id: accountSnapshotPositionId(snapshot.accountId, position.stockId),
+    accountId: snapshot.accountId,
+    stockId: position.stockId,
+    quantity: position.quantity,
+    availableQuantity: position.availableQuantity,
+    closedAt: null,
+  },
+  stockName: position.stockId,
+});
 
 const errorText = (error: {
   readonly kind?: unknown;
@@ -55,7 +82,7 @@ const errorText = (error: {
 
 const roundPct = (value: number): number => Math.round(value * 100) / 100;
 
-const actionForAdvice = (advice: Advice, holding: HoldingItem | undefined) => {
+const actionForAdvice = (advice: Advice, holding: TradingPlanHoldingContext | undefined) => {
   if (holding !== undefined) {
     switch (advice.decision) {
       case 'buy':
@@ -95,7 +122,10 @@ const holdingWindow = (horizon: Advice['horizon']): { min: number; max: number }
   }
 };
 
-const adviceStockId = (advice: Advice, holdings: readonly HoldingItem[]): string | null => {
+const adviceStockId = (
+  advice: Advice,
+  holdings: readonly TradingPlanHoldingContext[],
+): string | null => {
   if (advice.subjectKind === 'stock') return advice.subjectId;
   if (advice.subjectKind === 'position') {
     return holdings.find((item) => item.holding.id === advice.subjectId)?.holding.stockId ?? null;
@@ -116,7 +146,7 @@ export const buildTradingPlanFromAdvice = (input: {
   readonly accountId: string;
   readonly snapshot: z.infer<typeof import('@luoome/core').AccountSnapshotSchema>;
   readonly advice: Advice;
-  readonly holding?: HoldingItem;
+  readonly holding?: TradingPlanHoldingContext;
   readonly previous: readonly TradingPlan[];
   readonly now: Date;
 }): TradingPlan => {
@@ -373,25 +403,26 @@ const run = async (
     };
   }
   const snapshot = snapshotResult.data.snapshot;
+  const errors: Array<z.infer<typeof PlanErrorSchema>> = [];
   const holdingsResult = await ctx.tools.list_holdings.execute({ accountId, status: 'active' });
   if (!holdingsResult.ok) {
-    return {
-      accountId,
-      date,
-      status: 'partial',
-      snapshotId: snapshot.id,
-      snapshotVersion: snapshot.version,
-      plans: [],
-      holdingReviews: 0,
-      candidateReviews: 0,
-      errors: [{ stockId: accountId, stage: 'holding', reason: errorText(holdingsResult.error) }],
-    };
+    errors.push({ stockId: accountId, stage: 'holding', reason: errorText(holdingsResult.error) });
   }
-  const holdings = holdingsResult.data.holdings;
+  const legacyHoldings = holdingsResult.ok ? holdingsResult.data.holdings : [];
+  const legacyByStock = new Map(
+    legacyHoldings.map((item) => [item.holding.stockId, item] as const),
+  );
+  // The complete account snapshot is the authoritative position set. Ledger holdings only
+  // enrich analysis when available; they must not decide whether a snapshot position exists.
+  const holdings = snapshot.positions
+    .filter((position) => position.quantity > 0)
+    .map((position) => ({
+      ...snapshotPositionHoldingContext(snapshot, position),
+      stockName: legacyByStock.get(position.stockId)?.stockName ?? position.stockId,
+    }));
   const existingResult = await ctx.tools.list_trading_plans.execute({ accountId, limit: 500 });
   const existing = existingResult.ok ? existingResult.data.plans : [];
-  const errors: Array<z.infer<typeof PlanErrorSchema>> = [];
-  const advices: Array<{ advice: Advice; holding?: HoldingItem }> = [];
+  const advices: Array<{ advice: Advice; holding?: TradingPlanHoldingContext }> = [];
   const positionResults = await Promise.all(
     holdings.map(async (holding) => ({
       holding,
@@ -422,6 +453,7 @@ const run = async (
     const byStock = new Map<string, Advice>();
     for (const adviceValue of candidatesResult.data.advices) {
       const advice = adviceValue as Advice;
+      if (advice.basedOn.strategy?.accountId !== accountId) continue;
       const stockId = adviceStockId(advice, holdings);
       if (stockId === null || holdingStocks.has(stockId)) continue;
       const current = byStock.get(stockId);

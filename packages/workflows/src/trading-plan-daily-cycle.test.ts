@@ -1,7 +1,17 @@
-import { AccountSnapshotSchema, type Advice, AdviceSchema } from '@luoome/core';
+import {
+  AccountSnapshotSchema,
+  type Advice,
+  AdviceSchema,
+  STANDARD_DISCLAIMERS,
+} from '@luoome/core';
+import { saveAccountSnapshotTool } from '@luoome/tools';
+import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { buildTradingPlanFromAdvice } from './trading-plan-daily-cycle.js';
+import {
+  buildTradingPlanFromAdvice,
+  tradingPlanDailyCycleWorkflow,
+} from './trading-plan-daily-cycle.js';
 
 const NOW = new Date('2026-07-17T07:00:00.000Z');
 const STOCK_ID = '600519.SH';
@@ -50,7 +60,7 @@ describe('trading plan daily cycle', () => {
         counterEvidence: ['市场宽度仍有限'],
       },
       risks: ['波动扩大'],
-      disclaimers: ['测试免责声明'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'analyze_strategy_candidate',
       basedOn: {
         quotes: {
@@ -86,5 +96,101 @@ describe('trading plan daily cycle', () => {
     expect(plan.entryPriceLow).toBe(100);
     expect(plan.entryPriceHigh).toBe(105);
     expect(plan.entryConditions[0]).toMatchObject({ value: 100, valueTo: 105 });
+  });
+
+  it('以完整账户快照中的持仓作为复核来源，即使没有 legacy Holding 也会分析', async () => {
+    const now = new Date('2026-07-17T07:00:00.000Z');
+    const ctx = await buildTestContext({ advices: [], clock: () => now });
+    const snapshot = await saveAccountSnapshotTool.execute(
+      {
+        accountId: ctx.user.defaultAccountId,
+        cashBalance: 900_000,
+        positions: [{ stockId: '000858.SZ', quantity: 100, marketValue: 10_000 }],
+      },
+      ctx,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    let positionCalls = 0;
+    let observedHolding: Record<string, unknown> | undefined;
+    const llm = ctx.adapters.llm;
+    const observedCtx = {
+      ...ctx,
+      adapters: {
+        ...ctx.adapters,
+        llm: {
+          name: llm.name,
+          generate: async <T = unknown>(
+            request: Parameters<typeof llm.generate>[0],
+          ): Promise<T> => {
+            if (request.system === 'analyze_position') {
+              positionCalls += 1;
+              observedHolding = (request.data as { holding: Record<string, unknown> }).holding;
+            }
+            return llm.generate<T>(request);
+          },
+        },
+      },
+    };
+    const result = await tradingPlanDailyCycleWorkflow.run({}, observedCtx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.holdingReviews).toBe(1);
+    expect(positionCalls).toBe(1);
+    expect(observedHolding).not.toHaveProperty('avgCost');
+  });
+
+  it('拒绝把其它账户的策略 Advice 变成目标账户的交易计划', async () => {
+    const now = new Date('2026-07-17T07:00:00.000Z');
+    const advice = AdviceSchema.parse({
+      id: 'cross-account-advice',
+      subjectKind: 'stock',
+      subjectId: '000858.SZ',
+      stockName: '五粮液',
+      decision: 'watch',
+      confidence: 80,
+      horizon: 'short',
+      reasoning: {
+        premise: '跨账户测试候选',
+        evidence: ['测试事实'],
+        counterEvidence: ['仍需验证'],
+      },
+      risks: ['测试风险'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_strategy_candidate',
+      basedOn: {
+        strategy: {
+          strategyId: 'strategy-default',
+          strategyVersionId: 'strategy-default-v1',
+          runId: 'run-default',
+          stockId: '000858.SZ',
+          accountId: 'default-account',
+          resultEvidence: [],
+          signalIds: [],
+          observationIds: [],
+          recommendationTrigger: 'run',
+        },
+        dataAsOf: now,
+      },
+      validFrom: now,
+      validUntil: new Date('2026-07-20T07:00:00.000Z'),
+      createdAt: now,
+    }) as Advice;
+    const targetAccountId = 'a1b2c3d4-0001-4000-8000-000000000001';
+    const ctx = await buildTestContext({ advices: [advice], clock: () => now });
+    const snapshot = await saveAccountSnapshotTool.execute(
+      { accountId: targetAccountId, cashBalance: 100_000, positions: [] },
+      ctx,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    const result = await tradingPlanDailyCycleWorkflow.run(
+      { accountId: targetAccountId, date: '2026-07-17' },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.candidateReviews).toBe(0);
+    expect(result.data.plans).toHaveLength(0);
   });
 });
