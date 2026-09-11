@@ -2,7 +2,10 @@ import {
   type Advice,
   AdviceDataSnapshotSchema,
   AdviceSchema,
+  accountSnapshotPositionId,
   assertAdviceInvariants,
+  money,
+  parseAccountSnapshotPositionId,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -40,9 +43,42 @@ export const analyzePositionTool = defineTool({
   output: AnalyzePositionOutput,
   handler: async (input, ctx) => {
     const holding = await ctx.repos.holding.findById(input.holdingId);
-    if (holding === null) return errNotFound('Holding', input.holdingId);
-    const stock = await ctx.repos.stock.findById(holding.stockId);
-    if (stock === null) return errNotFound('Stock', holding.stockId);
+    const snapshotPositionRef = parseAccountSnapshotPositionId(input.holdingId);
+    let accountId: string;
+    let stockId: string;
+    let quantity: number;
+    let availableQuantity: number;
+    let avgCost: number | undefined;
+    let openedAt: Date | undefined;
+    if (holding !== null) {
+      accountId = holding.accountId;
+      stockId = holding.stockId;
+      quantity = holding.quantity;
+      availableQuantity = holding.availableQuantity;
+      avgCost = holding.avgCost;
+      openedAt = holding.openedAt;
+    } else if (snapshotPositionRef !== null) {
+      accountId = snapshotPositionRef.accountId;
+      stockId = snapshotPositionRef.stockId;
+      const snapshot = await ctx.repos.accountSnapshot.latestByAccount(accountId);
+      const position = snapshot?.positions.find((item) => item.stockId === stockId);
+      if (snapshot === null || position === undefined || position.quantity <= 0) {
+        return errNotFound('AccountSnapshotPosition', input.holdingId);
+      }
+      quantity = position.quantity;
+      availableQuantity = position.availableQuantity;
+      // Snapshot market value is current valuation, not historical cost. Enrich with
+      // a ledger holding only when one exists; otherwise leave cost/entry time absent.
+      const ledgerHolding = await ctx.repos.holding.findByAccountAndStock(accountId, stockId);
+      if (ledgerHolding !== null && ledgerHolding.closedAt === null) {
+        avgCost = ledgerHolding.avgCost;
+        openedAt = ledgerHolding.openedAt;
+      }
+    } else {
+      return errNotFound('Holding', input.holdingId);
+    }
+    const stock = await ctx.repos.stock.findById(stockId);
+    if (stock === null) return errNotFound('Stock', stockId);
 
     const now = ctx.clock();
     // 行情走统一 resolveQuote：实时拉取，上游缺席回退本地最近快照。
@@ -73,9 +109,10 @@ export const analyzePositionTool = defineTool({
         code: stock.code,
         name: stock.name,
         holding: {
-          avgCost: holding.avgCost,
-          quantity: holding.quantity,
-          openedAt: holding.openedAt,
+          ...(avgCost === undefined ? {} : { avgCost }),
+          quantity,
+          availableQuantity,
+          ...(openedAt === undefined ? {} : { openedAt }),
         },
         quote,
         indicators,
@@ -86,11 +123,23 @@ export const analyzePositionTool = defineTool({
     const advice: Advice = {
       id: globalThis.crypto.randomUUID(),
       subjectKind: 'position',
-      subjectId: holding.id,
+      subjectId: holding?.id ?? accountSnapshotPositionId(accountId, stockId),
       stockName: stock.name,
       decision: llmOutput.decision,
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,
+      ...(llmOutput.entryPrice === undefined ? {} : { entryPrice: money(llmOutput.entryPrice) }),
+      ...(llmOutput.entryPriceLow === undefined
+        ? {}
+        : { entryPriceLow: money(llmOutput.entryPriceLow) }),
+      ...(llmOutput.entryPriceHigh === undefined
+        ? {}
+        : { entryPriceHigh: money(llmOutput.entryPriceHigh) }),
+      ...(llmOutput.targetPositionPct === undefined
+        ? {}
+        : { targetPositionPct: llmOutput.targetPositionPct }),
+      ...(llmOutput.targetPrice === undefined ? {} : { targetPrice: money(llmOutput.targetPrice) }),
+      ...(llmOutput.stopLoss === undefined ? {} : { stopLoss: money(llmOutput.stopLoss) }),
       reasoning: sanitizeAdviceReasoning(llmOutput.reasoning),
       risks: sanitizeAdviceRisks(llmOutput.risks),
       disclaimers: [...STANDARD_DISCLAIMERS],

@@ -11,15 +11,17 @@ import {
   STRATEGY_OBSERVATION_BENCHMARK_DATASET_VERSION,
   STRATEGY_OBSERVATION_BENCHMARK_STOCK_ID,
   StrategyRecommendationPreflightSummarySchema,
+  type StrategySchedule,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { closingReportWorkflow } from './closing-report.js';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
+import { tradingPlanDailyCycleWorkflow } from './trading-plan-daily-cycle.js';
 
 export const StrategyDailyCycleInput = z.object({
   owner: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(20).default(1),
+  limit: z.number().int().min(1).max(100).default(1),
   leaseMinutes: z.number().int().min(5).max(240).default(30),
   asOf: z.coerce.date().optional(),
   concurrency: z.number().int().min(1).max(64).default(8),
@@ -62,6 +64,17 @@ export const StrategyDailyCycleOutput = z.object({
 });
 export type StrategyDailyCycleOutputT = z.infer<typeof StrategyDailyCycleOutput>;
 
+type ClaimedScheduleItem = {
+  readonly schedule: StrategySchedule;
+  readonly eligible: boolean;
+  readonly lease: {
+    readonly owner: string;
+    readonly fence: number;
+    readonly leaseUntil: Date;
+  };
+  readonly reason: string | undefined;
+};
+
 const errorText = (error: {
   readonly kind?: unknown;
   readonly message?: unknown;
@@ -97,14 +110,33 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       error: reconciled.error,
     });
   }
-  const claimed = await ctx.tools.claim_due_strategy_schedules.execute({
-    owner,
-    limit: input.limit,
-    leaseMinutes: input.leaseMinutes,
-  });
-  if (!claimed.ok) return claimed;
+  // Shared plan/report artifacts must see every schedule that was due at this tick. The
+  // caller's limit controls the first claim batch, then the loop drains any remaining due rows.
+  const claims: ClaimedScheduleItem[] = [];
+  let claimLimit = input.limit;
+  while (true) {
+    const claimed = await ctx.tools.claim_due_strategy_schedules.execute({
+      owner,
+      limit: claimLimit,
+      leaseMinutes: input.leaseMinutes,
+    });
+    if (!claimed.ok) return claimed;
+    claims.push(
+      ...claimed.data.items.map(
+        (item): ClaimedScheduleItem => ({
+          schedule: item.schedule,
+          eligible: item.eligible,
+          lease: item.lease,
+          reason: item.reason,
+        }),
+      ),
+    );
+    if (claimed.data.items.length < claimLimit) break;
+    claimLimit = 100;
+  }
   const items: z.infer<typeof CycleItemSchema>[] = [];
-  for (const claim of claimed.data.items) {
+  let cycleDate: string | undefined;
+  for (const claim of claims) {
     const { schedule, lease } = claim;
     let phase: z.infer<typeof CycleItemSchema>['phase'] = 'claim';
     let status: z.infer<typeof CycleItemSchema>['status'] = 'skipped';
@@ -246,6 +278,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     const workflowRunId = `workflow-strategy-daily-cycle-${globalThis.crypto.randomUUID()}`;
     const workflowStartedAt = ctx.clock();
     const auditDataAsOf = input.asOf ?? workflowStartedAt;
+    cycleDate ??= dateInShanghai(auditDataAsOf);
     const auditInputSummary = createStrategyDailyCycleAuditInputSummary({
       strategyId: schedule.strategyId,
       scheduleId: schedule.id,
@@ -769,26 +802,6 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       status = 'failed';
       reason = errorText(finished.error);
     }
-    // 收盘复盘并入日循环（PRD strategy-ai-managed-automation §5 M1「零人工出报告」）：
-    // 本轮完成了当日 scheduled 正式运行时嵌套触发 closing-report。daily cycle 是
-    // per-schedule 的，同一交易日多个 schedule 会各触发一次——save_report 按
-    // kind|scope|period 逻辑键 upsert，后触发覆盖同键报告而非报错。报告失败只把本轮
-    // 记 partial，不回滚任何已提交事实；显式历史 asOf 运行不触发。
-    if (runId !== undefined && input.asOf === undefined) {
-      const report = await closingReportWorkflow.run(
-        {
-          date: dateInShanghai(auditDataAsOf),
-          scope: { kind: 'all-accounts' },
-          mode: 'scheduled',
-        },
-        ctx,
-      );
-      if (!report.ok && status !== 'failed') {
-        status = 'partial';
-        const reportError = `收盘复盘生成失败: ${errorText(report.error)}`;
-        reason = reason === undefined ? reportError : `${reason}；${reportError}`;
-      }
-    }
     await finishAudit({
       strategyId: schedule.strategyId,
       scheduleId: schedule.id,
@@ -803,6 +816,35 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       ...(preflight === undefined ? {} : { preflight }),
       ...(reason === undefined ? {} : { reason }),
     });
+  }
+  // 一个账户/交易日只编排一次计划与主报告；策略 schedule 只负责完成共享发现事实。
+  // 计划先于报告生成，报告和盘中监控都消费同一组不可变计划版本。
+  // 触发条件是「本轮领到了到期 schedule」而不是「至少一个策略跑成功」：全部失败或
+  // 全部未发布时也必须产生当日计划批次与报告，不能静默无产物（PRD §7.3、§11）。
+  if (input.asOf === undefined && claims.length > 0) {
+    const planning = await tradingPlanDailyCycleWorkflow.run({}, ctx);
+    if (!planning.ok) {
+      ctx.logger.warn('strategy-daily-cycle: trading plan batch failed', { error: planning.error });
+    }
+    const report = await closingReportWorkflow.run(
+      {
+        date: cycleDate ?? dateInShanghai(ctx.clock()),
+        scope: { kind: 'all-accounts' },
+        mode: 'scheduled',
+      },
+      ctx,
+    );
+    if (!report.ok) {
+      ctx.logger.warn('strategy-daily-cycle: unified closing report failed', {
+        error: report.error,
+      });
+      const reportError = `收盘复盘生成失败: ${errorText(report.error)}`;
+      for (const item of items) {
+        if (item.runId === undefined || item.status === 'failed') continue;
+        item.status = 'partial';
+        item.reason = item.reason === undefined ? reportError : `${item.reason}；${reportError}`;
+      }
+    }
   }
   return StrategyDailyCycleOutput.parse({
     items,

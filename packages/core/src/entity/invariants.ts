@@ -62,6 +62,27 @@ export const assertAdviceInvariants = (a: Advice): void => {
   if (a.reasoning.premise.length === 0) {
     throw new InvariantError('reasoning.premise must not be empty');
   }
+  if ((a.entryPriceLow === undefined) !== (a.entryPriceHigh === undefined)) {
+    throw new InvariantError('entry price range must provide both low and high');
+  }
+  if (a.entryPriceLow !== undefined && a.entryPriceHigh !== undefined) {
+    if (a.entryPriceLow > a.entryPriceHigh) {
+      throw new InvariantError('entry price range is inverted');
+    }
+    if (
+      a.stopLoss !== undefined &&
+      a.targetPrice !== undefined &&
+      !(a.stopLoss < a.entryPriceLow && a.entryPriceHigh < a.targetPrice)
+    ) {
+      throw new InvariantError('entry price range must fit between stopLoss and targetPrice');
+    }
+    if (
+      a.entryPrice !== undefined &&
+      (a.entryPrice < a.entryPriceLow || a.entryPrice > a.entryPriceHigh)
+    ) {
+      throw new InvariantError('entryPrice must lie inside the entry price range');
+    }
+  }
 };
 
 export const assertAccountInvariants = (a: Account): void => {

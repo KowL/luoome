@@ -1,10 +1,12 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   AccountSchema,
+  AccountSnapshotSchema,
   AdviceOutcomeSchema,
   AdviceSchema,
   AlertPlanSchema,
   assertAccountInvariants,
+  assertAccountSnapshotInvariants,
   assertAdviceInvariants,
   assertAlertPlanInvariants,
   assertChatMessageInvariants,
@@ -22,6 +24,7 @@ import {
   assertStrategyVersionInvariants,
   assertStrategyWatchlistSubscriptionInvariants,
   assertTradeInvariants,
+  assertTradingPlanInvariants,
   assertWatchlistInvariants,
   assertWatchlistMemberInvariants,
   assertWatchlistMemberSourceInvariants,
@@ -58,6 +61,8 @@ import {
   StrategyVersionSchema,
   StrategyWatchlistSubscriptionSchema,
   TradeSchema,
+  TradingPlanSchema,
+  tradingPlanVersionId,
   WatchlistMemberSchema,
   WatchlistMemberSourceSchema,
   WatchlistSchema,
@@ -84,6 +89,7 @@ export type DataTransferCategory = (typeof DATA_TRANSFER_CATEGORIES)[number];
 const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>> = {
   portfolio: [
     'accounts',
+    'account_snapshots',
     'stocks',
     'holdings',
     'trades',
@@ -121,6 +127,7 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'notifications',
     'signal_observations',
     'workflow_runs',
+    'trading_plans',
   ],
   'market-data': [
     'stocks',
@@ -209,6 +216,51 @@ const decodeStorageRow = (row: Record<string, unknown>): Record<string, unknown>
 const omitNulls = (row: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(row).filter(([, value]) => value !== null));
 
+const accountSnapshotStorageRow = (row: Record<string, unknown>): Record<string, unknown> => {
+  const decoded = decodeStorageRow(row);
+  const { note, ...requiredFields } = decoded;
+  return note === null ? requiredFields : { ...requiredFields, note };
+};
+
+const validateTradingPlanStorageRow = (row: Record<string, unknown>): void => {
+  const rawPlan = row.plan_json;
+  const planValue =
+    typeof rawPlan === 'string'
+      ? JSON.parse(rawPlan)
+      : rawPlan !== null && typeof rawPlan === 'object'
+        ? rawPlan
+        : undefined;
+  const plan = TradingPlanSchema.parse(planValue);
+  assertTradingPlanInvariants(plan);
+  const metadata: Readonly<Record<string, unknown>> = {
+    version_id: row.version_id,
+    plan_id: row.plan_id,
+    version: row.version,
+    account_id: row.account_id,
+    stock_id: row.stock_id,
+    status: row.status,
+    valid_from: row.valid_from,
+    valid_until: row.valid_until,
+    created_at: row.created_at,
+  };
+  const expected: Readonly<Record<string, unknown>> = {
+    version_id: tradingPlanVersionId(plan),
+    plan_id: plan.id,
+    version: plan.version,
+    account_id: plan.accountId,
+    stock_id: plan.stockId,
+    status: plan.status,
+    valid_from: plan.validFrom.getTime(),
+    valid_until: plan.validUntil.getTime(),
+    created_at: plan.createdAt.getTime(),
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (metadata[key] !== value) {
+      throw new Error(`trading_plans ${key} 与 plan_json 元数据不一致`);
+    }
+  }
+};
+
 type DomainValidator = (row: Record<string, unknown>) => void;
 const domainValidator = (
   schema: z.ZodType,
@@ -262,6 +314,11 @@ const researchDocumentFtsSchema = z.object({
 
 const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   accounts: domainValidator(AccountSchema, assertAccountInvariants),
+  account_snapshots: domainValidator(
+    AccountSnapshotSchema,
+    assertAccountSnapshotInvariants,
+    accountSnapshotStorageRow,
+  ),
   stocks: domainValidator(StockSchema, assertStockInvariants),
   holdings: domainValidator(HoldingSchema, assertHoldingInvariants, (row) => {
     return { ...omitNulls(row), closedAt: row.closedAt };
@@ -321,6 +378,7 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   notifications: domainValidator(NotificationSchema, assertNotificationInvariants),
   signal_observations: domainValidator(SignalObservationSchema, assertSignalObservationInvariants),
   workflow_runs: domainValidator(WorkflowRunSchema, assertWorkflowRunInvariants),
+  trading_plans: validateTradingPlanStorageRow,
   stock_universe_memberships: domainValidator(stockUniverseMembershipSchema),
   stock_universe_sync_runs: domainValidator(stockUniverseSyncRunSchema),
   price_snapshots: domainValidator(QuoteSchema),

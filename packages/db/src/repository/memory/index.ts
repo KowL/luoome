@@ -1,5 +1,6 @@
 import type {
   Account,
+  AccountSnapshot,
   Advice,
   AlertPlan,
   ChatMessage,
@@ -26,11 +27,13 @@ import type {
   StrategySchedule,
   StrategyVersion,
   Trade,
+  TradingPlan,
   WatchRun,
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
 import { InMemoryAccountRepository } from './account.js';
+import { InMemoryAccountSnapshotRepository } from './account-snapshot.js';
 import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
@@ -69,6 +72,7 @@ import {
 import { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
 import { InMemoryStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
 import { InMemoryTradeRepository } from './trade.js';
+import { InMemoryTradingPlanRepository } from './trading-plan.js';
 import { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 import { InMemoryWatchRunRepository } from './watch-run.js';
 import { InMemoryWatchTriggerRepository } from './watch-trigger.js';
@@ -76,6 +80,7 @@ import { InMemoryWatchlistMemberRepository, InMemoryWatchlistRepository } from '
 import { InMemoryWorkflowRunRepository } from './workflow-run.js';
 
 export { InMemoryAccountRepository } from './account.js';
+export { InMemoryAccountSnapshotRepository } from './account-snapshot.js';
 export { InMemoryAdviceRepository } from './advice.js';
 export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
@@ -114,6 +119,7 @@ export {
 export { InMemoryStrategyScheduleRepository } from './strategy-schedule.js';
 export { InMemoryStrategyWatchlistSubscriptionRepository } from './strategy-watchlist-subscription.js';
 export { InMemoryTradeRepository } from './trade.js';
+export { InMemoryTradingPlanRepository } from './trading-plan.js';
 export { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 export { InMemoryWatchRunRepository } from './watch-run.js';
 export { InMemoryWatchTriggerRepository } from './watch-trigger.js';
@@ -123,9 +129,11 @@ export { InMemoryWorkflowRunRepository } from './workflow-run.js';
 /** createInMemoryRepos 的可选种子数据（同步写入，含不变量断言）。 */
 export interface InMemorySeed {
   readonly accounts?: readonly Account[];
+  readonly accountSnapshots?: readonly AccountSnapshot[];
   readonly stocks?: readonly Stock[];
   readonly holdings?: readonly Holding[];
   readonly trades?: readonly Trade[];
+  readonly tradingPlans?: readonly TradingPlan[];
   readonly portfolioCashFlows?: readonly PortfolioCashFlow[];
   readonly portfolioCorporateActions?: readonly PortfolioCorporateAction[];
   readonly advices?: readonly Advice[];
@@ -159,11 +167,13 @@ export interface InMemorySeed {
 /** 构造全部 in-memory repository，可选灌入种子。 */
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
+  const accountSnapshot = new InMemoryAccountSnapshotRepository();
   const stock = new InMemoryStockRepository();
   const stockUniverse = new InMemoryStockUniverseRepository(stock);
   const limitUpLadderSnapshot = new InMemoryLimitUpLadderSnapshotRepository();
   const holding = new InMemoryHoldingRepository();
   const trade = new InMemoryTradeRepository();
+  const tradingPlan = new InMemoryTradingPlanRepository();
   const portfolioCashFlow = new InMemoryPortfolioCashFlowRepository();
   const portfolioCorporateAction = new InMemoryPortfolioCorporateActionRepository();
   const portfolioPerformanceSnapshot = new InMemoryPortfolioPerformanceSnapshotRepository();
@@ -202,9 +212,11 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const workflowRun = new InMemoryWorkflowRunRepository();
   if (seed !== undefined) {
     for (const a of seed.accounts ?? []) account.put(a);
+    for (const snapshot of seed.accountSnapshots ?? []) accountSnapshot.put(snapshot);
     for (const s of seed.stocks ?? []) stock.put(s);
     for (const h of seed.holdings ?? []) holding.put(h);
     for (const t of seed.trades ?? []) trade.put(t);
+    for (const plan of seed.tradingPlans ?? []) tradingPlan.put(plan);
     for (const flow of seed.portfolioCashFlows ?? []) void portfolioCashFlow.save(flow);
     for (const action of seed.portfolioCorporateActions ?? [])
       void portfolioCorporateAction.save(action);
@@ -243,11 +255,13 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   }
   return {
     account,
+    accountSnapshot,
     stock,
     stockUniverse,
     limitUpLadderSnapshot,
     holding,
     trade,
+    tradingPlan,
     portfolioCashFlow,
     portfolioCorporateAction,
     portfolioPerformanceSnapshot,

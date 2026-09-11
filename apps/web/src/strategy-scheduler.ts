@@ -6,6 +6,8 @@ import {
 } from '@luoome/workflows';
 
 export const STRATEGY_SCHEDULER_INTERVAL_MS = 60_000;
+/** 单次 tick 领取同一生产日的全部到期 schedule，避免过早生成共享计划/报告。 */
+export const STRATEGY_SCHEDULER_BATCH_LIMIT = 100;
 
 export interface StrategySchedulerTuning {
   readonly leaseMinutes: number;
@@ -78,7 +80,12 @@ export const startStrategyScheduler = (
   const owner = options.owner ?? `luoome:${process.pid}:${globalThis.crypto.randomUUID()}`;
   const tuning = options.tuning ?? strategySchedulerTuningFromEnv();
   const run =
-    options.run ?? (() => strategyDailyCycleWorkflow.run({ owner, limit: 1, ...tuning }, ctx));
+    options.run ??
+    (() =>
+      strategyDailyCycleWorkflow.run(
+        { owner, limit: STRATEGY_SCHEDULER_BATCH_LIMIT, ...tuning },
+        ctx,
+      ));
   let stopped = false;
   let running = false;
 

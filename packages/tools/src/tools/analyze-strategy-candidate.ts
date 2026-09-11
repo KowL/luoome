@@ -44,9 +44,12 @@ const STRATEGY_ADVICE_SYSTEM = `analyze_stock:strategy_candidate
 - 看多信号仅是研究线索。只有当前证据足以支持、风险和反证已核对且价格计划合理时才输出 buy。
 - 证据不足或条件尚未满足时输出 watch，并说明需要观察的条件；不能为了给出行动而预设买入。
 - avoid 用于明确利空或信号前提已被破坏时。
-- buy 必须输出 entryPrice（建议买点，参考 quote.close 与均线/支撑位）、targetPrice（目标卖点）
-  和 stopLoss（止损，须低于 entryPrice）；三者均为与 quote.close 同单位的价格。
+- buy 必须输出 entryPriceLow、entryPriceHigh（参考 quote.close 与均线/支撑位，形成入场区间）、
+  entryPrice（区间内的代表性买点）、targetPositionPct（按账户总资产的目标仓位百分比）、
+  targetPrice（目标卖点）和 stopLoss（止损，须低于 entryPriceLow）；价格均与 quote.close 同单位。
 - watch 可缺省价位；若给出价位，在 premise 说明触发买入的条件与对应价位。
+- 入场区间必须满足 0 < stopLoss < entryPriceLow <= entryPrice <= entryPriceHigh < targetPrice，
+  targetPositionPct 必须在 0 到 100 之间。
 - 不得为策略添加输入 JSON 中不存在的名称、类型或历史表现。
 - indicators 可能因可选日线 enrichment 不可用而为空；不得补造缺失指标。
 - 必须提供非空反证和风险；有价位时必须满足 0 < stopLoss < entryPrice < targetPrice。
@@ -312,6 +315,15 @@ export const analyzeStrategyCandidateTool = defineTool({
       confidence: llmOutput.confidence,
       horizon: llmOutput.horizon,
       ...(llmOutput.entryPrice === undefined ? {} : { entryPrice: money(llmOutput.entryPrice) }),
+      ...(llmOutput.entryPriceLow === undefined
+        ? {}
+        : { entryPriceLow: money(llmOutput.entryPriceLow) }),
+      ...(llmOutput.entryPriceHigh === undefined
+        ? {}
+        : { entryPriceHigh: money(llmOutput.entryPriceHigh) }),
+      ...(llmOutput.targetPositionPct === undefined
+        ? {}
+        : { targetPositionPct: llmOutput.targetPositionPct }),
       ...(llmOutput.targetPrice === undefined ? {} : { targetPrice: money(llmOutput.targetPrice) }),
       ...(llmOutput.stopLoss === undefined ? {} : { stopLoss: money(llmOutput.stopLoss) }),
       reasoning,

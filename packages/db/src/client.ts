@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import {
   DrizzleAccountRepository,
+  DrizzleAccountSnapshotRepository,
   DrizzleAdviceRepository,
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
@@ -37,6 +38,7 @@ import {
   DrizzleStrategyScheduleRepository,
   DrizzleStrategyWatchlistSubscriptionRepository,
   DrizzleTradeRepository,
+  DrizzleTradingPlanRepository,
   DrizzleWatchlistMemberRepository,
   DrizzleWatchlistRepository,
   DrizzleWatchRuleStateRepository,
@@ -221,6 +223,30 @@ export const ensureSchema = (db: DrizzleDb): void => {
       initial_capital REAL NOT NULL,
       created_at INTEGER NOT NULL
     )
+  `);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS account_snapshots (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      as_of INTEGER NOT NULL,
+      cash_balance REAL,
+      stock_market_value REAL,
+      total_assets REAL,
+      status TEXT NOT NULL,
+      positions_json TEXT NOT NULL,
+      source TEXT NOT NULL,
+      note TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS account_snapshots_account_version_unique
+    ON account_snapshots (account_id, version)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS account_snapshots_account_as_of_idx
+    ON account_snapshots (account_id, as_of)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS stocks (
@@ -430,6 +456,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
       decision TEXT NOT NULL,
       confidence REAL NOT NULL,
       horizon TEXT NOT NULL,
+      entry_price REAL,
+      entry_price_low REAL,
+      entry_price_high REAL,
+      target_position_pct REAL,
+      target_price REAL,
+      stop_loss REAL,
       reasoning TEXT NOT NULL,
       risks TEXT NOT NULL,
       disclaimers TEXT NOT NULL,
@@ -441,7 +473,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       created_at INTEGER NOT NULL
     )
   `);
-  migrateAdviceStockNameColumn(db);
+  migrateAdviceColumns(db);
   db.run(sql`
     CREATE INDEX IF NOT EXISTS advices_subject_idx ON advices (subject_kind, subject_id)
   `);
@@ -1284,6 +1316,31 @@ export const ensureSchema = (db: DrizzleDb): void => {
     sql`CREATE INDEX IF NOT EXISTS reports_status_period_end_idx ON reports (status, period_end)`,
   );
   db.run(sql`CREATE INDEX IF NOT EXISTS reports_workflow_run_idx ON reports (workflow_run_id)`);
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS trading_plans (
+      version_id TEXT PRIMARY KEY,
+      plan_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      account_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      valid_from INTEGER NOT NULL,
+      valid_until INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      plan_json TEXT NOT NULL
+    )
+  `);
+  db.run(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS trading_plans_plan_version_unique
+    ON trading_plans (plan_id, version)
+  `);
+  db.run(sql`
+    CREATE INDEX IF NOT EXISTS trading_plans_account_stock_status_idx
+    ON trading_plans (account_id, stock_id, status)
+  `);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS trading_plans_created_at_idx ON trading_plans (created_at)`,
+  );
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
   // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
@@ -1294,12 +1351,20 @@ export const ensureSchema = (db: DrizzleDb): void => {
  * advices 表补 stock_name 列（v0.8 起，幂等）。
  * 旧库无此列时 ALTER ADD；新库 DDL 已含，直接跳过。
  */
-const migrateAdviceStockNameColumn = (db: DrizzleDb): void => {
+const migrateAdviceColumns = (db: DrizzleDb): void => {
   const cols = db.all<{ name: string }>(sql`PRAGMA table_info(advices)`);
   if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === 'stock_name')) {
-    db.run(sql`ALTER TABLE advices ADD COLUMN stock_name TEXT`);
-  }
+  const have = new Set(cols.map((column) => column.name));
+  if (!have.has('stock_name')) db.run(sql`ALTER TABLE advices ADD COLUMN stock_name TEXT`);
+  if (!have.has('entry_price')) db.run(sql`ALTER TABLE advices ADD COLUMN entry_price REAL`);
+  if (!have.has('entry_price_low'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN entry_price_low REAL`);
+  if (!have.has('entry_price_high'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN entry_price_high REAL`);
+  if (!have.has('target_position_pct'))
+    db.run(sql`ALTER TABLE advices ADD COLUMN target_position_pct REAL`);
+  if (!have.has('target_price')) db.run(sql`ALTER TABLE advices ADD COLUMN target_price REAL`);
+  if (!have.has('stop_loss')) db.run(sql`ALTER TABLE advices ADD COLUMN stop_loss REAL`);
 };
 
 /** StrategyVersion AI 审计字段，旧库按可空 JSON 列幂等补齐。 */
@@ -1663,6 +1728,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
+    accountSnapshot: new DrizzleAccountSnapshotRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),
@@ -1672,6 +1738,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
     portfolioCorporateAction: new DrizzlePortfolioCorporateActionRepository(db),
     portfolioPerformanceSnapshot: new DrizzlePortfolioPerformanceSnapshotRepository(db),
     advice: new DrizzleAdviceRepository(db),
+    tradingPlan: new DrizzleTradingPlanRepository(db),
     report: new DrizzleReportRepository(db),
     quote: new DrizzleQuoteRepository(db),
     dailyBar: new DrizzleDailyBarRepository(db),

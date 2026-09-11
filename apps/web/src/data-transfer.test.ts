@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { money, STANDARD_DISCLAIMERS, stockCode } from '@luoome/core';
+import { money, STANDARD_DISCLAIMERS, stockCode, TradingPlanSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { exportDataArchive, importDataArchive } from './data-transfer.js';
 
@@ -17,6 +17,49 @@ const databasePath = (): string => {
   dirs.push(dir);
   return join(dir, 'luoome.db');
 };
+
+const transferPlan = (snapshotId: string) =>
+  TradingPlanSchema.parse({
+    id: 'account:account-1:stock:600519.SH',
+    version: 1,
+    accountId: 'account-1',
+    stockId: '600519.SH',
+    stockName: '贵州茅台',
+    industry: '白酒',
+    status: 'active',
+    action: 'enter',
+    entryPriceLow: 100,
+    entryPriceHigh: 105,
+    entryConditions: [],
+    invalidEntryConditions: [],
+    position: {
+      currentPct: 0,
+      targetPct: 10,
+      deltaPct: 10,
+      constraintStatus: 'passed',
+      constraintReasons: [],
+      prerequisiteActions: [],
+    },
+    holding: {
+      minTradingDays: 1,
+      maxTradingDays: 5,
+      nextReviewAt: new Date('2026-08-12T00:00:00Z'),
+      earlyExitConditions: [],
+      extensionBasis: [],
+    },
+    exit: { conditions: [], canSellNow: false },
+    validFrom: new Date('2026-08-11T00:00:00Z'),
+    validUntil: new Date('2026-08-20T00:00:00Z'),
+    invalidationConditions: [],
+    accountSnapshotId: snapshotId,
+    accountSnapshotVersion: 1,
+    marketFacts: [],
+    evidence: [],
+    source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
+    explanation: { supportingEvidenceIds: [], counterEvidence: [], risks: [], unknowns: [] },
+    confidence: 60,
+    createdAt: new Date('2026-08-11T00:00:00Z'),
+  });
 
 describe('data transfer', () => {
   it('按分类导出并合并导入', async () => {
@@ -169,6 +212,135 @@ describe('data transfer', () => {
     });
     expect((await reopened.repos.watchRun.findById('watch-run-1'))?.notified).toBe(2);
     reopened.close();
+  });
+
+  it('Advice SQLite roundtrip 保留交易计划消费的价位区间和目标仓位', async () => {
+    const path = databasePath();
+    const handle = createDrizzleRepos(path);
+    await handle.repos.advice.save({
+      id: 'advice-plan-fields',
+      subjectKind: 'stock',
+      subjectId: '600519.SH',
+      decision: 'buy',
+      confidence: 80,
+      horizon: 'short',
+      entryPrice: money(102),
+      entryPriceLow: money(100),
+      entryPriceHigh: money(105),
+      targetPositionPct: 10,
+      targetPrice: money(120),
+      stopLoss: money(95),
+      reasoning: {
+        premise: '价位条件满足',
+        evidence: ['报价可核对'],
+        counterEvidence: ['波动仍需观察'],
+      },
+      risks: ['市场风险'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      basedOn: { dataAsOf: new Date('2026-08-11T00:00:00Z') },
+      validFrom: new Date('2026-08-11T00:00:00Z'),
+      validUntil: new Date('2026-08-14T00:00:00Z'),
+      createdAt: new Date('2026-08-11T00:00:00Z'),
+    });
+    const reread = await handle.repos.advice.findById('advice-plan-fields');
+    handle.close();
+    expect(reread).toMatchObject({
+      entryPrice: 102,
+      entryPriceLow: 100,
+      entryPriceHigh: 105,
+      targetPositionPct: 10,
+      targetPrice: 120,
+      stopLoss: 95,
+    });
+  });
+
+  it('交易计划备份使用 storage metadata 校验后可以回导', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    const snapshot = {
+      id: 'snapshot-transfer-plan',
+      accountId: 'account-1',
+      version: 1,
+      asOf: new Date('2026-08-11T00:00:00Z'),
+      cashBalance: money(1000),
+      stockMarketValue: money(0),
+      totalAssets: money(1000),
+      status: 'complete' as const,
+      positions: [],
+      source: 'manual' as const,
+      createdAt: new Date('2026-08-11T00:00:00Z'),
+    };
+    await source.repos.accountSnapshot.save(snapshot);
+    await source.repos.tradingPlan.save(transferPlan(snapshot.id));
+    source.close();
+
+    const archive = exportDataArchive(sourcePath, ['advice-reports']);
+    const targetPath = databasePath();
+    const target = createDrizzleRepos(targetPath);
+    target.close();
+    expect(() => importDataArchive(targetPath, archive)).not.toThrow();
+  });
+
+  it('拒绝 storage metadata 与 plan_json 不一致的交易计划行', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    const snapshot = {
+      id: 'snapshot-tampered-plan',
+      accountId: 'account-1',
+      version: 1,
+      asOf: new Date('2026-08-11T00:00:00Z'),
+      cashBalance: money(1000),
+      stockMarketValue: money(0),
+      totalAssets: money(1000),
+      status: 'complete' as const,
+      positions: [],
+      source: 'manual' as const,
+      createdAt: new Date('2026-08-11T00:00:00Z'),
+    };
+    await source.repos.accountSnapshot.save(snapshot);
+    await source.repos.tradingPlan.save(transferPlan(snapshot.id));
+    source.close();
+
+    const archive = exportDataArchive(sourcePath, ['advice-reports']);
+    const planRows = archive.tables.trading_plans ?? [];
+    const tampered = {
+      ...archive,
+      tables: {
+        ...archive.tables,
+        trading_plans: planRows.map((row) => ({ ...row, status: 'draft' })),
+      },
+    };
+    const targetPath = databasePath();
+    const target = createDrizzleRepos(targetPath);
+    target.close();
+    expect(() => importDataArchive(targetPath, tampered)).toThrow(
+      'trading_plans status 与 plan_json 元数据不一致',
+    );
+  });
+
+  it('待核对账户快照导出回导时保留 required nullable 估值字段', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    await source.repos.accountSnapshot.save({
+      id: 'snapshot-needs-reconciliation',
+      accountId: 'account-1',
+      version: 1,
+      asOf: new Date('2026-08-11T00:00:00Z'),
+      cashBalance: null,
+      stockMarketValue: null,
+      totalAssets: null,
+      status: 'needs-reconciliation',
+      positions: [],
+      source: 'manual',
+      createdAt: new Date('2026-08-11T00:00:00Z'),
+    });
+    source.close();
+
+    const archive = exportDataArchive(sourcePath, ['portfolio']);
+    const targetPath = databasePath();
+    const target = createDrizzleRepos(targetPath);
+    target.close();
+    expect(() => importDataArchive(targetPath, archive)).not.toThrow();
   });
 
   it('自治动作审计随 strategies 分类导出并回导', async () => {

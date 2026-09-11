@@ -1,5 +1,6 @@
 import type {
   AccountKind,
+  AccountSnapshot,
   AdviceDataSnapshot,
   AdviceDecision,
   AdviceHorizon,
@@ -57,6 +58,7 @@ import type {
   StrictBacktestSpec,
   TradeSide,
   TradeSource,
+  TradingPlan,
   Watchlist,
   WatchlistMember,
   WatchlistMemberSource,
@@ -109,6 +111,34 @@ export const accounts = sqliteTable('accounts', {
   initialCapital: real('initial_capital').$type<Money>().notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
+
+/** 用户手动维护的账户估值版本；不由建议/信号自动写入。 */
+export const accountSnapshots = sqliteTable(
+  'account_snapshots',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    version: integer('version').notNull(),
+    asOf: integer('as_of', { mode: 'timestamp_ms' }).notNull(),
+    cashBalance: real('cash_balance').$type<number | null>(),
+    stockMarketValue: real('stock_market_value').$type<number | null>(),
+    totalAssets: real('total_assets').$type<number | null>(),
+    status: text('status').$type<AccountSnapshot['status']>().notNull(),
+    positions: text('positions_json', { mode: 'json' })
+      .$type<AccountSnapshot['positions']>()
+      .notNull(),
+    source: text('source').$type<AccountSnapshot['source']>().notNull(),
+    note: text('note'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    accountVersionUnique: uniqueIndex('account_snapshots_account_version_unique').on(
+      t.accountId,
+      t.version,
+    ),
+    accountAsOfIdx: index('account_snapshots_account_as_of_idx').on(t.accountId, t.asOf),
+  }),
+);
 
 export const stocks = sqliteTable(
   'stocks',
@@ -343,6 +373,12 @@ export const advices = sqliteTable(
     decision: text('decision').$type<AdviceDecision>().notNull(),
     confidence: real('confidence').notNull(),
     horizon: text('horizon').$type<AdviceHorizon>().notNull(),
+    entryPrice: real('entry_price').$type<Money>(),
+    entryPriceLow: real('entry_price_low').$type<Money>(),
+    entryPriceHigh: real('entry_price_high').$type<Money>(),
+    targetPositionPct: real('target_position_pct'),
+    targetPrice: real('target_price').$type<Money>(),
+    stopLoss: real('stop_loss').$type<Money>(),
     reasoning: text('reasoning', { mode: 'json' }).$type<AdviceReasoning>().notNull(),
     risks: text('risks', { mode: 'json' }).$type<readonly string[]>().notNull(),
     disclaimers: text('disclaimers', { mode: 'json' }).$type<readonly string[]>().notNull(),
@@ -1690,6 +1726,32 @@ export const reports = sqliteTable(
   }),
 );
 
+/** 逐股结构化交易计划的不可变版本；plan_json 是唯一完整领域载荷。 */
+export const tradingPlans = sqliteTable(
+  'trading_plans',
+  {
+    versionId: text('version_id').primaryKey(),
+    planId: text('plan_id').notNull(),
+    version: integer('version').notNull(),
+    accountId: text('account_id').notNull(),
+    stockId: text('stock_id').notNull(),
+    status: text('status').$type<TradingPlan['status']>().notNull(),
+    validFrom: integer('valid_from', { mode: 'timestamp_ms' }).notNull(),
+    validUntil: integer('valid_until', { mode: 'timestamp_ms' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    plan: text('plan_json', { mode: 'json' }).$type<TradingPlan>().notNull(),
+  },
+  (t) => ({
+    planVersionUnique: uniqueIndex('trading_plans_plan_version_unique').on(t.planId, t.version),
+    accountStockStatusIdx: index('trading_plans_account_stock_status_idx').on(
+      t.accountId,
+      t.stockId,
+      t.status,
+    ),
+    createdAtIdx: index('trading_plans_created_at_idx').on(t.createdAt),
+  }),
+);
+
 export const chatSessions = sqliteTable(
   'chat_sessions',
   {
@@ -1721,6 +1783,7 @@ export const chatMessages = sqliteTable(
 export const schema = {
   schemaMigrations,
   accounts,
+  accountSnapshots,
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,
@@ -1782,6 +1845,7 @@ export const schema = {
   stockEvents,
   workflowRuns,
   reports,
+  tradingPlans,
   chatSessions,
   chatMessages,
 } as const;

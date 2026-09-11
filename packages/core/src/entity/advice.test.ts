@@ -118,6 +118,27 @@ describe('新策略建议契约', () => {
     ])
       expect(StrategyAdviceAnalysisSchema.safeParse(invalid).success).toBe(false);
   });
+  it('买入必须给出落在入场区间内的代表性买点和目标仓位', () => {
+    const buy = {
+      ...analysis,
+      decision: 'buy',
+      entryPrice: 102,
+      entryPriceLow: 100,
+      entryPriceHigh: 105,
+      targetPositionPct: 10,
+      targetPrice: 120,
+      stopLoss: 95,
+    };
+    expect(StrategyAdviceAnalysisSchema.safeParse(buy).success).toBe(true);
+    for (const invalid of [
+      { ...buy, entryPrice: 99 },
+      { ...buy, entryPrice: 106 },
+      { ...buy, targetPositionPct: undefined },
+      { ...buy, entryPriceLow: undefined },
+      { ...buy, entryPriceHigh: 99 },
+    ])
+      expect(StrategyAdviceAnalysisSchema.safeParse(invalid).success).toBe(false);
+  });
   it.each([
     ['盘中及时', '2026-09-02T10:00:00+08:00', '2026-09-02T09:58:00+08:00', 'quote', true],
     ['盘中过时', '2026-09-02T10:00:00+08:00', '2026-09-02T09:56:00+08:00', 'quote', false],

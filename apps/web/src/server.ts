@@ -71,11 +71,13 @@ import {
 } from '@luoome/tools';
 import {
   closingReportWorkflow,
+  intradayTradingPlanWatchWorkflow,
   openingReportWorkflow,
   replayStrategyRangeWorkflow,
   runIntradayWatchObserved,
   strategyAutonomyWeeklyWorkflow,
   syncResearchVaultRemoteWorkflow,
+  tradingPlanDailyCycleWorkflow,
   weeklyReportWorkflow,
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
@@ -1479,6 +1481,33 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
+
+  app.get('/api/account/snapshot', () => callTool('get_account_snapshot', {}));
+  app.post('/api/account/snapshot', (c) =>
+    targetMutation(c.req.raw, 'write', 'save_account_snapshot'),
+  );
+  app.get('/api/account/snapshots', (c) =>
+    callTool('list_account_snapshots', {
+      limit: intQuery(c.req.query('limit'), 30, 1),
+    }),
+  );
+
+  app.get('/api/trading-plans', (c) => {
+    const input: Record<string, unknown> = {
+      activeOnly: c.req.query('activeOnly') !== 'false',
+    };
+    for (const key of ['accountId', 'stockId', 'status'] as const) {
+      const value = c.req.query(key);
+      if (value !== undefined && value.length > 0) input[key] = value;
+    }
+    const limit = Number(c.req.query('limit'));
+    if (Number.isInteger(limit) && limit > 0) input.limit = Math.min(limit, 500);
+    return callTool('list_trading_plans', input);
+  });
+
+  app.get('/api/trading-plans/:versionId', (c) =>
+    callTool('get_trading_plan', { versionId: c.req.param('versionId') }),
+  );
 
   const intQuery = (raw: string | undefined, fallback: number, min: number): number => {
     if (raw === undefined || raw.trim() === '') return fallback;
@@ -2925,6 +2954,24 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     };
     return jsonResult(await workflow.run(input, contextForRequest()));
   });
+
+  const runMvp2Workflow = async (
+    c: Context,
+    workflow: typeof tradingPlanDailyCycleWorkflow | typeof intradayTradingPlanWatchWorkflow,
+  ): Promise<Response> => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(await workflow.run(body.data, contextForRequest()));
+  };
+
+  app.post('/api/workflows/trading-plan-daily-cycle/run', (c) =>
+    runMvp2Workflow(c, tradingPlanDailyCycleWorkflow),
+  );
+  app.post('/api/workflows/intraday-trading-plan-watch/run', (c) =>
+    runMvp2Workflow(c, intradayTradingPlanWatchWorkflow),
+  );
 
   // M2-S4：手动触发周度策略自治 workflow（write+external 双闸口，与 /api/reports/run/:kind 同模式）。
   app.post('/api/workflows/strategy-autonomy-weekly/run', async (c) => {

@@ -508,7 +508,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     await seedSchedule(ctx, { key: 'cycle-b' });
 
     const result = await strategyDailyCycleWorkflow.run(
-      { owner: 'cycle-reports', limit: 2, leaseMinutes: 5 },
+      { owner: 'cycle-reports', limit: 1, leaseMinutes: 5 },
       ctx,
     );
 
@@ -519,10 +519,10 @@ describe('strategy-daily-cycle reliability matrix', () => {
       expect(item.runId).toBeDefined();
       expect(item.status).not.toBe('failed');
     }
-    // 两个 schedule 各触发一次 closing-report（两次 workflow 审计），
-    // save_report 按 kind|scope|period 逻辑键 upsert：同键报告只有一份，后触发覆盖。
+    // 统一日循环只触发一次 closing-report；save_report 按 kind|scope|period
+    // 逻辑键幂等保存，因此同日只保留一份主报告。
     expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
-      2,
+      1,
     );
     const reports = await ctx.repos.report.list({ kind: 'closing' });
     expect(reports).toHaveLength(1);
@@ -531,6 +531,11 @@ describe('strategy-daily-cycle reliability matrix', () => {
       periodStart: '2026-08-10',
       periodEnd: '2026-08-10',
     });
+    const strategySection = reports[0]?.sections.find(
+      (section) => section.key === 'strategy-actions',
+    );
+    const strategyTable = strategySection?.blocks.find((block) => block.kind === 'table');
+    expect(strategyTable?.kind === 'table' ? strategyTable.rows : []).toHaveLength(2);
   });
 
   it('收盘报告生成失败时本轮记 partial，不回滚已提交的 run', async () => {
@@ -608,6 +613,36 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
     expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
       0,
+    );
+  });
+
+  it('领取到 schedule 但没有产生 run 时仍生成当日计划批次与主报告', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    // 指向不存在的 Strategy：schedule 被领取但不可运行，本轮没有任何 runId。
+    await ctx.repos.strategySchedule.save({
+      id: 'ineligible-schedule',
+      strategyId: 'missing-strategy',
+      cron: '0 18 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+      nextRunAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-silent-day', leaseMinutes: 5 },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items).toHaveLength(1);
+    expect(result.data.items[0]?.runId).toBeUndefined();
+    expect(result.data.items[0]?.status).toBe('skipped');
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
+    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
+      1,
     );
   });
 });

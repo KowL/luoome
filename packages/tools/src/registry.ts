@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
+import {
+  getAccountSnapshotTool,
+  listAccountSnapshotsTool,
+  saveAccountSnapshotTool,
+} from './tools/account-snapshot.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
@@ -188,6 +193,12 @@ import { syncDailyBarsTool } from './tools/sync-daily-bars.js';
 import { syncQuotesTool } from './tools/sync-quotes.js';
 import { syncStockEventsTool } from './tools/sync-stock-events.js';
 import { syncStockUniverseTool } from './tools/sync-stock-universe.js';
+import {
+  evaluateTradingPlanBudgetTool,
+  getTradingPlanTool,
+  listTradingPlansTool,
+  saveTradingPlanTool,
+} from './tools/trading-plan.js';
 import { updateHoldingTool } from './tools/update-holding.js';
 import { updateStockEventTool } from './tools/update-stock-event.js';
 import {
@@ -317,6 +328,9 @@ export const toolRegistry: Registry = createRegistry([
   listAccountsTool,
   createAccountTool,
   getAccountTool,
+  saveAccountSnapshotTool,
+  getAccountSnapshotTool,
+  listAccountSnapshotsTool,
   listHoldingsTool,
   listTradesTool,
   getHoldingTool,
@@ -332,6 +346,10 @@ export const toolRegistry: Registry = createRegistry([
   analyzeStockTool,
   analyzeStrategyCandidateTool,
   analyzePositionTool,
+  saveTradingPlanTool,
+  getTradingPlanTool,
+  listTradingPlansTool,
+  evaluateTradingPlanBudgetTool,
   fetchQuoteTool,
   batchQuoteTool,
   fetchIndexQuotesTool,

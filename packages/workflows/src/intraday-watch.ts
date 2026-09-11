@@ -16,12 +16,12 @@ import {
 } from '@luoome/core';
 import { recordWatchRunTool } from '@luoome/tools';
 import { z } from 'zod';
-
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
 import {
   type WatchWorkflowStep as WorkflowStep,
   watchExecutionStep,
 } from './internal/watch-execution.js';
+import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.js';
 
 /**
  * intraday-watch workflow
@@ -87,6 +87,8 @@ export const IntradayWatchOutput = z.object({
   notifyFailed: z.number().int().nonnegative(),
   unknownRules: z.number().int().nonnegative(),
   delivered: z.number().int().nonnegative(),
+  /** MVP2：同一轮盘中检查的结构化交易计划结果。 */
+  tradingPlanWatch: z.unknown().optional(),
 });
 
 export type IntradayWatchOutputT = z.infer<typeof IntradayWatchOutput>;
@@ -1368,6 +1370,16 @@ export const runIntradayWatchObserved = async (
   ctx: ToolContext,
   mode: 'once' | 'daemon',
 ): Promise<ToolResult<IntradayWatchOutputT>> => {
+  const errorText = (error: {
+    readonly kind?: unknown;
+    readonly message?: unknown;
+    readonly cause?: unknown;
+  }): string =>
+    typeof error.message === 'string'
+      ? error.message
+      : typeof error.cause === 'string'
+        ? error.cause
+        : String(error.kind ?? 'unknown error');
   const id = `watch-run-${crypto.randomUUID()}`;
   const startedAt = ctx.clock();
   const initial = await recordWatchRunTool.execute(
@@ -1392,8 +1404,33 @@ export const runIntradayWatchObserved = async (
   }
 
   const result = await intradayWatchWorkflow.run(input, ctx);
+  const planWatch = result.ok
+    ? await intradayTradingPlanWatchWorkflow.run(
+        {
+          notify: IntradayWatchInput.safeParse(input).success
+            ? IntradayWatchInput.parse(input).notify
+            : true,
+        },
+        ctx,
+      )
+    : undefined;
+  const combined =
+    result.ok && planWatch !== undefined
+      ? {
+          ...result,
+          data: {
+            ...result.data,
+            tradingPlanWatch: planWatch.ok
+              ? planWatch.data
+              : { status: 'blocked', errors: [errorText(planWatch.error)] },
+          },
+        }
+      : result;
+  const finalResult = combined.ok
+    ? { ok: true as const, data: IntradayWatchOutput.parse(combined.data) }
+    : combined;
   const finishedAt = ctx.clock();
-  const terminal = result.ok
+  const terminal = finalResult.ok
     ? await recordWatchRunTool.execute(
         {
           id,
@@ -1401,15 +1438,15 @@ export const runIntradayWatchObserved = async (
           status: 'succeeded',
           startedAt,
           finishedAt,
-          evaluatedPools: result.data.evaluatedPlans,
-          evaluatedStocks: result.data.evaluatedStocks,
-          triggered: result.data.triggers.length,
-          notified: result.data.notified,
-          suppressedByCooldown: result.data.suppressedByCooldown,
-          suppressedByDailyLimit: result.data.suppressedByDailyLimit,
-          notifyFailed: result.data.notifyFailed,
-          delivered: result.data.delivered,
-          unknownRules: result.data.unknownRules,
+          evaluatedPools: finalResult.data.evaluatedPlans,
+          evaluatedStocks: finalResult.data.evaluatedStocks,
+          triggered: finalResult.data.triggers.length,
+          notified: finalResult.data.notified,
+          suppressedByCooldown: finalResult.data.suppressedByCooldown,
+          suppressedByDailyLimit: finalResult.data.suppressedByDailyLimit,
+          notifyFailed: finalResult.data.notifyFailed,
+          delivered: finalResult.data.delivered,
+          unknownRules: finalResult.data.unknownRules,
         },
         ctx,
       )
@@ -1428,12 +1465,12 @@ export const runIntradayWatchObserved = async (
           suppressedByDailyLimit: 0,
           notifyFailed: 0,
           // WatchRun.error 上限 2000 字；超长序列化截断，避免心跳写库失败
-          error: JSON.stringify(result.error).slice(0, 2000),
+          error: JSON.stringify(finalResult.error).slice(0, 2000),
         },
         ctx,
       );
   if (!terminal.ok) {
     ctx.logger.warn('[intraday-watch] 写入 terminal 心跳失败', { error: terminal.error });
   }
-  return result;
+  return finalResult;
 };

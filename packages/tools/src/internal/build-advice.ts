@@ -18,6 +18,12 @@ export const AdviceLLMSchema = z.object({
   horizon: AdviceHorizonSchema,
   /** 买点（buy 时建议给出；与 quote.close 同单位）；观望可缺省。 */
   entryPrice: z.number().positive().optional(),
+  /** 新计划使用的入场价格下限；与 entryPriceHigh 一起形成区间。 */
+  entryPriceLow: z.number().positive().optional(),
+  /** 新计划使用的入场价格上限；与 entryPriceLow 一起形成区间。 */
+  entryPriceHigh: z.number().positive().optional(),
+  /** 按账户总资产计算的目标仓位百分比；缺省时只能形成条件草案。 */
+  targetPositionPct: z.number().min(0).max(100).optional(),
   /** 卖点/目标价（buy 时建议给出）；观望可缺省。 */
   targetPrice: z.number().positive().optional(),
   /** 止损价（buy 时建议给出，须低于 entryPrice）；观望可缺省。 */

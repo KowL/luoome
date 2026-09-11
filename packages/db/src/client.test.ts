@@ -1,12 +1,14 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { money } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
 import { createDrizzleRepos, ensureSchema } from './client.js';
 import {
   makeAccount,
+  makeAdvice,
   makeReport,
   makeWatchRun,
   makeWatchTrigger,
@@ -191,6 +193,55 @@ describe('createDrizzleRepos / ensureSchema', () => {
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('旧 advices 表启动迁移补齐交易计划消费字段并保留幂等读写', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`ALTER TABLE advices DROP COLUMN entry_price`);
+      handle.db.run(sql`ALTER TABLE advices DROP COLUMN entry_price_low`);
+      handle.db.run(sql`ALTER TABLE advices DROP COLUMN entry_price_high`);
+      handle.db.run(sql`ALTER TABLE advices DROP COLUMN target_position_pct`);
+      handle.db.run(sql`ALTER TABLE advices DROP COLUMN target_price`);
+      handle.db.run(sql`ALTER TABLE advices DROP COLUMN stop_loss`);
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+
+      const columns = handle.db
+        .all<{ name: string }>(sql`PRAGMA table_info(advices)`)
+        .map((column) => column.name);
+      expect(columns).toEqual(
+        expect.arrayContaining([
+          'entry_price',
+          'entry_price_low',
+          'entry_price_high',
+          'target_position_pct',
+          'target_price',
+          'stop_loss',
+        ]),
+      );
+
+      await handle.repos.advice.save(
+        makeAdvice('legacy-advice-plan-fields', {
+          entryPrice: money(102),
+          entryPriceLow: money(100),
+          entryPriceHigh: money(105),
+          targetPositionPct: 10,
+          targetPrice: money(120),
+          stopLoss: money(95),
+        }),
+      );
+      expect(await handle.repos.advice.findById('legacy-advice-plan-fields')).toMatchObject({
+        entryPrice: 102,
+        entryPriceLow: 100,
+        entryPriceHigh: 105,
+        targetPositionPct: 10,
+        targetPrice: 120,
+        stopLoss: 95,
+      });
+    } finally {
+      handle.close();
     }
   });
 
