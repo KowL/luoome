@@ -276,7 +276,6 @@ export const buildTradingPlanFromAdvice = (input: {
     conditions: [
       ...(advice.stopLoss === undefined ? [] : [`价格触及止损 ${advice.stopLoss}`]),
       ...(advice.targetPrice === undefined ? [] : [`价格达到目标 ${advice.targetPrice}`]),
-      ...advice.reasoning.counterEvidence,
     ],
     triggerConditions: [
       ...(advice.stopLoss === undefined

@@ -217,6 +217,59 @@ describe('assertAdviceInvariants', () => {
     const a = { ...validAdvice(), reasoning: { ...validAdvice().reasoning, premise: '' } };
     expect(() => assertAdviceInvariants(a)).toThrow(/premise/);
   });
+
+  it('rejects a half-specified entry price range', () => {
+    expect(() => assertAdviceInvariants({ ...validAdvice(), entryPriceLow: money(10) })).toThrow(
+      /both low and high/,
+    );
+    expect(() => assertAdviceInvariants({ ...validAdvice(), entryPriceHigh: money(10) })).toThrow(
+      /both low and high/,
+    );
+  });
+
+  it('rejects an inverted entry price range', () => {
+    const a = {
+      ...validAdvice(),
+      entryPriceLow: money(12),
+      entryPriceHigh: money(10),
+    };
+    expect(() => assertAdviceInvariants(a)).toThrow(/inverted/);
+  });
+
+  it('rejects an entry range outside stopLoss / targetPrice', () => {
+    const a = {
+      ...validAdvice(),
+      entryPriceLow: money(10),
+      entryPriceHigh: money(12),
+      stopLoss: money(11),
+      targetPrice: money(20),
+    };
+    expect(() => assertAdviceInvariants(a)).toThrow(/between stopLoss and targetPrice/);
+  });
+
+  it('rejects a representative buy point outside the entry range', () => {
+    const a = {
+      ...validAdvice(),
+      entryPrice: money(9),
+      entryPriceLow: money(10),
+      entryPriceHigh: money(12),
+      stopLoss: money(8),
+      targetPrice: money(20),
+    };
+    expect(() => assertAdviceInvariants(a)).toThrow(/inside the entry price range/);
+  });
+
+  it('accepts a representative buy point on the entry range edges', () => {
+    const base = {
+      ...validAdvice(),
+      entryPriceLow: money(10),
+      entryPriceHigh: money(12),
+      stopLoss: money(8),
+      targetPrice: money(20),
+    };
+    expect(() => assertAdviceInvariants({ ...base, entryPrice: money(10) })).not.toThrow();
+    expect(() => assertAdviceInvariants({ ...base, entryPrice: money(12) })).not.toThrow();
+  });
 });
 
 describe('assertAccountInvariants', () => {

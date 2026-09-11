@@ -615,4 +615,34 @@ describe('strategy-daily-cycle reliability matrix', () => {
       0,
     );
   });
+
+  it('领取到 schedule 但没有产生 run 时仍生成当日计划批次与主报告', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    // 指向不存在的 Strategy：schedule 被领取但不可运行，本轮没有任何 runId。
+    await ctx.repos.strategySchedule.save({
+      id: 'ineligible-schedule',
+      strategyId: 'missing-strategy',
+      cron: '0 18 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+      nextRunAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    const result = await strategyDailyCycleWorkflow.run(
+      { owner: 'cycle-silent-day', leaseMinutes: 5 },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.items).toHaveLength(1);
+    expect(result.data.items[0]?.runId).toBeUndefined();
+    expect(result.data.items[0]?.status).toBe('skipped');
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
+    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
+      1,
+    );
+  });
 });

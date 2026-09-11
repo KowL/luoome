@@ -281,6 +281,43 @@ describe('data transfer', () => {
     expect(() => importDataArchive(targetPath, archive)).not.toThrow();
   });
 
+  it('拒绝 storage metadata 与 plan_json 不一致的交易计划行', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    const snapshot = {
+      id: 'snapshot-tampered-plan',
+      accountId: 'account-1',
+      version: 1,
+      asOf: new Date('2026-08-11T00:00:00Z'),
+      cashBalance: money(1000),
+      stockMarketValue: money(0),
+      totalAssets: money(1000),
+      status: 'complete' as const,
+      positions: [],
+      source: 'manual' as const,
+      createdAt: new Date('2026-08-11T00:00:00Z'),
+    };
+    await source.repos.accountSnapshot.save(snapshot);
+    await source.repos.tradingPlan.save(transferPlan(snapshot.id));
+    source.close();
+
+    const archive = exportDataArchive(sourcePath, ['advice-reports']);
+    const planRows = archive.tables.trading_plans ?? [];
+    const tampered = {
+      ...archive,
+      tables: {
+        ...archive.tables,
+        trading_plans: planRows.map((row) => ({ ...row, status: 'draft' })),
+      },
+    };
+    const targetPath = databasePath();
+    const target = createDrizzleRepos(targetPath);
+    target.close();
+    expect(() => importDataArchive(targetPath, tampered)).toThrow(
+      'trading_plans status 与 plan_json 元数据不一致',
+    );
+  });
+
   it('待核对账户快照导出回导时保留 required nullable 估值字段', async () => {
     const sourcePath = databasePath();
     const source = createDrizzleRepos(sourcePath);

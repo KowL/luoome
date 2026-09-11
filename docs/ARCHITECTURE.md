@@ -310,6 +310,12 @@ WorkflowRun 阶段审计与 `get_strategy_reliability_summary` 已落地；汇�
 运行并输出阶段 P50/P95/max。跨交易日生产证据和真实全市场性能预算继续属于 Roadmap 的运营观测，
 不能把设计目标误报为已验收事实，也不设置固定交易日数量门禁。
 
+**MVP 2.0 盘后/盘中切片**：`strategy-daily-cycle` 一次 tick 会领取全部到期 schedule（调用方的
+`limit` 只决定首批，剩余继续 drain），然后为账户/交易日只编排一次 `trading-plan-daily-cycle` 与
+`closing-report`。触发条件是「本轮领到到期 schedule」，而不是「至少一个策略跑成功」：全部失败或
+全部不可运行时仍生成当日计划批次与报告，避免静默无产物。`closing-report` 的 `scheduled` 模式在
+发布前先按 `kind/scope/periodEnd` 读回同键报告，已 `sent`/`fallback-log` 时不重复生成与投递。
+
 ### 4.7 Adapter（adapters 包）
 
 每个外部依赖通过 adapter 接入。行情对外暴露稳定的 `MarketDataAdapterLike` Gateway，
@@ -814,6 +820,14 @@ type ToolError =
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
 - `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
+- `trading-plan-daily-cycle`：账户级盘后计划批次 —— 以账户快照持仓为准（ledger Holding 只在存在时补充
+  成本与开仓时间，不由市值倒推），全部持仓独立复核 + 当日候选建议 → `TradingPlan` 不可变版本 →
+  组合预算校验；快照待核对时不激活精确仓位计划，同一轮还需生成报告与盘中监控消费的同一组版本
+- `intraday-trading-plan-watch`：按新鲜行情求值当前有效计划的入场/退出/风险条件，风险与退出条件命中
+  时先做 AI 复核并保留原始触发事实与计划版本；发布前重新校验账户快照版本、计划版本、行情时效、
+  条件是否仍成立与 10 分钟发布时限（以上游事件时间为计时起点），在同一租约内提交 Trigger +
+  WatchRuleState。单条候选过期、失效或条件恢复只丢弃该条，不阻断同轮其它信号；失败/中断投递作为
+  重试候选，普通优先级才受冷却与每日额度压制
 - 预警执行：`intraday-watch` 与 `evaluate-event-rules` 共用 SQLite 租约（120 秒有效期、30 秒心跳，
   工具调用前检查所有权）；并发调用返回可重试错误。`commit_watch_evaluation` 在同一事务校验 owner
   并提交 Trigger + WatchRuleState，试跑不进入提交。通知前保存 deliveryAttempts/lastDeliveryAttemptAt，

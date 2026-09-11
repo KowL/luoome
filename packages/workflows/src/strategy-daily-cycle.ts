@@ -819,7 +819,9 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
   }
   // 一个账户/交易日只编排一次计划与主报告；策略 schedule 只负责完成共享发现事实。
   // 计划先于报告生成，报告和盘中监控都消费同一组不可变计划版本。
-  if (input.asOf === undefined && items.some((item) => item.runId !== undefined)) {
+  // 触发条件是「本轮领到了到期 schedule」而不是「至少一个策略跑成功」：全部失败或
+  // 全部未发布时也必须产生当日计划批次与报告，不能静默无产物（PRD §7.3、§11）。
+  if (input.asOf === undefined && claims.length > 0) {
     const planning = await tradingPlanDailyCycleWorkflow.run({}, ctx);
     if (!planning.ok) {
       ctx.logger.warn('strategy-daily-cycle: trading plan batch failed', { error: planning.error });
@@ -838,9 +840,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       });
       const reportError = `收盘复盘生成失败: ${errorText(report.error)}`;
       for (const item of items) {
-        if (item.runId === undefined || item.status === 'failed' || item.status === 'skipped') {
-          continue;
-        }
+        if (item.runId === undefined || item.status === 'failed') continue;
         item.status = 'partial';
         item.reason = item.reason === undefined ? reportError : `${item.reason}；${reportError}`;
       }

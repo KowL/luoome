@@ -1,4 +1,4 @@
-import { TradingPlanSchema } from '@luoome/core';
+import { TradingPlanSchema, WatchTriggerSchema } from '@luoome/core';
 import { saveAccountSnapshotTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
@@ -6,13 +6,13 @@ import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.
 
 const NOW = new Date('2026-07-17T07:00:00.000Z');
 
-const makePlan = (accountId: string, snapshotId: string) =>
+const makePlan = (accountId: string, snapshotId: string, stockId = '002594.SZ') =>
   TradingPlanSchema.parse({
-    id: `account:${accountId}:stock:002594.SZ`,
+    id: `account:${accountId}:stock:${stockId}`,
     version: 1,
     accountId,
-    stockId: '002594.SZ',
-    stockName: '比亚迪',
+    stockId,
+    stockName: stockId,
     industry: '汽车',
     status: 'active',
     action: 'enter',
@@ -279,5 +279,93 @@ describe('intraday trading plan watch', () => {
     });
     expect(records[0]?.deliveryStatus).toBe('sent');
     expect(records[0]?.deliveryAttempts).toBe(2);
+  });
+
+  it('超过时限的未投递重试不阻断其它股票的新信号', async () => {
+    let now = NOW;
+    const base = await buildTestContext({ clock: () => now });
+    const accountId = base.user.defaultAccountId;
+    const snapshot = await saveAccountSnapshotTool.execute(
+      { accountId, cashBalance: 1000, positions: [] },
+      base,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    await base.repos.tradingPlan.save(makePlan(accountId, snapshot.data.snapshot.id));
+
+    const notification = base.notification;
+    if (notification === undefined) throw new Error('test notification manager missing');
+    let calls = 0;
+    const flakyCtx = {
+      ...base,
+      notification: {
+        send: async (input: Parameters<typeof notification.send>[0]) => {
+          calls += 1;
+          if (calls === 1) throw new Error('synthetic channel outage');
+          return notification.send(input);
+        },
+      },
+    };
+
+    // 第一轮：边沿命中但渠道失败，触发以 failed 状态持久化，成为重试候选。
+    const first = await intradayTradingPlanWatchWorkflow.run({ notify: true }, flakyCtx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.triggers[0]?.deliveryStatus).toBe('failed');
+
+    // 第三轮：另一只股票出现全新边沿；同轮里那条已超过 10 分钟的重试只能丢弃自己。
+    now = new Date(NOW.getTime() + 12 * 60_000);
+    await base.repos.tradingPlan.save(makePlan(accountId, snapshot.data.snapshot.id, '600519.SH'));
+    const third = await intradayTradingPlanWatchWorkflow.run({ notify: true }, base);
+    expect(third.ok).toBe(true);
+    if (!third.ok) return;
+    expect(third.data.errors).toEqual(['002594.SZ 盘中信号超过 10 分钟发布时限，放弃本轮信号']);
+    expect(third.data.delivered).toBe(1);
+    expect(third.data.triggers.find((trigger) => trigger.deliveryStatus === 'sent')?.stockId).toBe(
+      '600519.SH',
+    );
+  });
+
+  it('10 分钟时限以触发证据的上游时间为起点', async () => {
+    const base = await buildTestContext({ clock: () => NOW });
+    const accountId = base.user.defaultAccountId;
+    const snapshot = await saveAccountSnapshotTool.execute(
+      { accountId, cashBalance: 1000, positions: [] },
+      base,
+    );
+    expect(snapshot.ok).toBe(true);
+    if (!snapshot.ok) return;
+    const plan = makePlan(accountId, snapshot.data.snapshot.id);
+    await base.repos.tradingPlan.save(plan);
+    const versionId = `${plan.id}:v${plan.version}`;
+    // 11 分钟前观测到的上游价格：检测时间才刚发生，但事件本身已经超时。
+    await base.repos.watchTrigger.save(
+      WatchTriggerSchema.parse({
+        id: 'stale-upstream-evidence',
+        poolId: `trading-plan-watch:${accountId}`,
+        stockId: '002594.SZ',
+        ruleKind: 'price-level',
+        ruleId: `${versionId}:entry-now`,
+        direction: 'buy',
+        reason: '过期重试',
+        evidence: ['plan:fixture'],
+        priority: 'normal',
+        deliveryStatus: 'pending',
+        evalSnapshot: {
+          planVersionId: versionId,
+          conditionId: 'entry-now',
+          quoteObservedAt: new Date(NOW.getTime() - 11 * 60_000).toISOString(),
+        },
+        notified: false,
+        createdAt: NOW,
+      }),
+    );
+
+    const result = await intradayTradingPlanWatchWorkflow.run({ notify: true }, base);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.errors).toEqual(['002594.SZ 盘中信号超过 10 分钟发布时限，放弃本轮信号']);
+    // 同轮新检测到的边沿仍然投递。
+    expect(result.data.delivered).toBe(1);
   });
 });

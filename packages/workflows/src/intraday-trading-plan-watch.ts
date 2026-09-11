@@ -129,12 +129,19 @@ const directionForCondition = (
   return 'watch';
 };
 
-const factForMarketFact = (fact: TradingPlanMarketFact): TradingPlanConditionFact => ({
-  metric: ['price', 'changePct', 'marketIndexChangePct', 'marketBreadthPct'].includes(fact.metric)
-    ? (fact.metric as TradingPlanConditionFact['metric'])
-    : 'price',
-  value: fact.value,
-});
+/** 计划的 metric 是开放字符串；无法归类时不能把非价格度量冒充成价格事实（PRD §6.2）。 */
+const conditionMetric = (value: string): TradingPlanConditionFact['metric'] | undefined =>
+  value === 'price' ||
+  value === 'changePct' ||
+  value === 'marketIndexChangePct' ||
+  value === 'marketBreadthPct'
+    ? value
+    : undefined;
+
+const factForMarketFact = (fact: TradingPlanMarketFact): TradingPlanConditionFact | undefined => {
+  const metric = conditionMetric(fact.metric);
+  return metric === undefined ? undefined : { metric, value: fact.value };
+};
 
 const conditionFacts = (
   plan: TradingPlan,
@@ -143,7 +150,8 @@ const conditionFacts = (
 ): ReadonlyMap<string, TradingPlanConditionFact> => {
   const facts = new Map<string, TradingPlanConditionFact>();
   for (const fact of plan.marketFacts) {
-    if (fact.status === 'available') facts.set(fact.id, factForMarketFact(fact));
+    const conditionFact = fact.status === 'available' ? factForMarketFact(fact) : undefined;
+    if (conditionFact !== undefined) facts.set(fact.id, conditionFact);
   }
   if (quote === undefined) return facts;
   if (condition.metric === 'price') {
@@ -343,8 +351,29 @@ const reviewTriggeredHoldings = async (
 };
 
 type PublicationValidation =
-  | { readonly ok: true; readonly candidates: readonly Candidate[] }
+  | {
+      readonly ok: true;
+      readonly candidates: readonly Candidate[];
+      /** 单条候选被丢弃的原因；其它候选仍可发布。 */
+      readonly dropped: readonly string[];
+    }
   | { readonly ok: false; readonly reason: string };
+
+/**
+ * 10 分钟发布时限的计时起点：优先取触发证据的可信上游事件时间，缺失或
+ * 不可解析时才退回规则检测时间（PRD §8.2「以首次触发证据的可信上游事件时间作为计时起点」）。
+ */
+const publicationAgeStart = (trigger: WatchTrigger): Date => {
+  const observedAt = trigger.evalSnapshot.quoteObservedAt;
+  const parsed =
+    observedAt instanceof Date
+      ? observedAt
+      : typeof observedAt === 'string'
+        ? new Date(observedAt)
+        : undefined;
+  if (parsed === undefined || Number.isNaN(parsed.getTime())) return trigger.createdAt;
+  return parsed.getTime() <= trigger.createdAt.getTime() ? parsed : trigger.createdAt;
+};
 
 const latestPlanById = (plans: readonly TradingPlan[], planId: string): TradingPlan | undefined =>
   plans
@@ -360,7 +389,7 @@ const validatePublication = async (
   ctx: WorkflowContext,
 ): Promise<PublicationValidation> => {
   const now = ctx.clock();
-  if (candidates.length === 0) return { ok: true, candidates: [] };
+  if (candidates.length === 0) return { ok: true, candidates: [], dropped: [] };
   const currentSnapshotResult = await ctx.tools.get_account_snapshot.execute({ accountId });
   if (!currentSnapshotResult.ok) {
     return {
@@ -393,13 +422,13 @@ const validatePublication = async (
     quoteResult.data.items.map((item) => [item.stockId, item as BatchQuoteItem]),
   );
   const validated: Candidate[] = [];
+  const dropped: string[] = [];
   for (const candidate of candidates) {
-    const ageMs = now.getTime() - candidate.trigger.createdAt.getTime();
+    // 单条候选过期/失效只丢弃该条：否则一条超过时限的重试会阻断同轮所有其它信号。
+    const ageMs = now.getTime() - publicationAgeStart(candidate.trigger).getTime();
     if (ageMs < 0 || ageMs > MAX_PUBLICATION_AGE_MS) {
-      return {
-        ok: false,
-        reason: `${candidate.plan.stockId} 盘中信号超过 10 分钟发布时限，放弃本轮信号`,
-      };
+      dropped.push(`${candidate.plan.stockId} 盘中信号超过 10 分钟发布时限，放弃本轮信号`);
+      continue;
     }
     const currentPlan = latestPlanById(
       plansResult.data.plans,
@@ -417,7 +446,8 @@ const validatePublication = async (
         currentPlan.status !== 'active' &&
         currentPlan.status !== 'draft')
     ) {
-      return { ok: false, reason: `${candidate.plan.stockId} 发布前交易计划版本已变化或失效` };
+      dropped.push(`${candidate.plan.stockId} 发布前交易计划版本已变化或失效`);
+      continue;
     }
     const quoteItem = quotes.get(candidate.plan.stockId);
     const quote =
@@ -427,10 +457,12 @@ const validatePublication = async (
       quote.observedAt.getTime() > now.getTime() ||
       now.getTime() - quote.observedAt.getTime() > MAX_PUBLICATION_AGE_MS
     ) {
-      return { ok: false, reason: `${candidate.plan.stockId} 发布前实时行情已过期` };
+      dropped.push(`${candidate.plan.stockId} 发布前实时行情已过期`);
+      continue;
     }
     if (evaluate(candidate.plan, candidate.condition, quote) !== true) {
-      return { ok: false, reason: `${candidate.plan.stockId} 发布前条件已恢复，放弃本轮信号` };
+      dropped.push(`${candidate.plan.stockId} 发布前条件已恢复，放弃本轮信号`);
+      continue;
     }
     if (candidate.isRetry === true) {
       validated.push(candidate);
@@ -449,7 +481,7 @@ const validatePublication = async (
       });
     }
   }
-  return { ok: true, candidates: validated };
+  return { ok: true, candidates: validated, dropped };
 };
 
 const run = async (
@@ -790,6 +822,7 @@ const run = async (
         errors: [...errors, publication.reason],
       };
     }
+    errors.push(...publication.dropped);
     const deliveryBySourceId = new Map(deliveryTriggers.map((trigger) => [trigger.id, trigger]));
     finalTriggers = publication.candidates.map((candidate) => {
       const source = deliveryBySourceId.get(candidate.sourceTriggerId ?? candidate.trigger.id);

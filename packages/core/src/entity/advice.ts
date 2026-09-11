@@ -257,12 +257,19 @@ export const StrategyAdviceAnalysisSchema = z
         ) ||
         (entryPriceLow !== undefined &&
           entryPriceHigh !== undefined &&
-          !(money(stopLoss) < money(entryPriceLow) && money(entryPriceHigh) < money(targetPrice)))
+          !(
+            money(stopLoss) < money(entryPriceLow) && money(entryPriceHigh) < money(targetPrice)
+          )) ||
+        (entryPriceLow !== undefined &&
+          entryPriceHigh !== undefined &&
+          entryPrice !== undefined &&
+          !(entryPriceLow <= entryPrice && entryPrice <= entryPriceHigh))
       ) {
         ctx.addIssue({
           code: 'custom',
           path: ['stopLoss'],
-          message: '价格必须满足 0 < 止损价 < 入场区间 <= 目标价；买入还必须提供目标仓位',
+          message:
+            '价格必须满足 0 < 止损价 < 入场区间 <= 目标价，且买点落在入场区间内；买入还必须提供目标仓位',
         });
       }
     }

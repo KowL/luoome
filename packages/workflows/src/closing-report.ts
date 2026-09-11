@@ -564,6 +564,7 @@ const tradingPlansSection = async (
             { key: 'targetPct', label: '目标仓位%' },
             { key: 'holdingDays', label: '预计持有交易日' },
             { key: 'risk', label: '风险' },
+            { key: 'counterEvidence', label: '反证' },
             { key: 'unknowns', label: '未知 / 前置条件' },
             { key: 'validUntil', label: '有效期至' },
           ],
@@ -584,6 +585,7 @@ const tradingPlansSection = async (
             targetPct: plan.position.targetPct,
             holdingDays: `${plan.holding.minTradingDays}-${plan.holding.maxTradingDays}`,
             risk: plan.explanation.risks.join('；') || '未记录',
+            counterEvidence: plan.explanation.counterEvidence.join('；') || '未记录',
             unknowns:
               [...plan.explanation.unknowns, ...plan.position.prerequisiteActions].join('；') ||
               '无',

@@ -76,6 +76,12 @@ export const assertAdviceInvariants = (a: Advice): void => {
     ) {
       throw new InvariantError('entry price range must fit between stopLoss and targetPrice');
     }
+    if (
+      a.entryPrice !== undefined &&
+      (a.entryPrice < a.entryPriceLow || a.entryPrice > a.entryPriceHigh)
+    ) {
+      throw new InvariantError('entryPrice must lie inside the entry price range');
+    }
   }
 };
 

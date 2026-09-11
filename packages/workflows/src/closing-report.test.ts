@@ -276,6 +276,32 @@ describe('closing-report workflow', () => {
     ]);
   });
 
+  it('scheduled 模式对同键已投递报告幂等，不重复生成与投递', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const first = await closingReportWorkflow.run(
+      { date: '2026-07-27', notify: false, mode: 'scheduled' },
+      ctx,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.created).toBe(true);
+    await ctx.repos.report.setDeliveryStatus(first.data.report.id, 'sent');
+
+    const second = await closingReportWorkflow.run(
+      { date: '2026-07-27', notify: false, mode: 'scheduled' },
+      ctx,
+    );
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.created).toBe(false);
+    expect(second.data.notified).toBe(false);
+    expect(second.data.report.id).toBe(first.data.report.id);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
+    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
+      1,
+    );
+  });
+
   it('分析失败批次保留候选，报告如实呈现失败而非无机会', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     await seedStrategyWithPublishedRun(ctx, '2026-07-27');

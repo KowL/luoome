@@ -2,11 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { buildTestContext } from '@luoome/tools/testing';
 import type { RunStrategySchedulesOutputT } from '@luoome/workflows';
 
-import {
-  STRATEGY_SCHEDULER_BATCH_LIMIT,
-  startStrategyScheduler,
-  strategySchedulerTuningFromEnv,
-} from './strategy-scheduler.js';
+import { startStrategyScheduler, strategySchedulerTuningFromEnv } from './strategy-scheduler.js';
 
 const emptyResult = (): RunStrategySchedulesOutputT => ({
   items: [],
@@ -17,10 +13,6 @@ const emptyResult = (): RunStrategySchedulesOutputT => ({
 });
 
 describe('strategy scheduler', () => {
-  it('单次 tick 批量领取到期 schedule，给共享计划和报告留下完整输入', () => {
-    expect(STRATEGY_SCHEDULER_BATCH_LIMIT).toBe(100);
-  });
-
   it('从环境变量读取有界的 Strategy 生产参数，并拒绝危险值', () => {
     expect(
       strategySchedulerTuningFromEnv({
