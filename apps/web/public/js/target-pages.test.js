@@ -8,11 +8,16 @@ import {
   appendMemberStock,
   buildAlertPlanMutationInput,
   deriveWatchlistViews,
+  filterTriggersBySource,
   parseMemberStockIds,
   sortStocksByQuote,
   stocksOfList,
   summarizeMemberSources,
+  summarizeTriggerSources,
+  triggerDeliveryBadgeClass,
+  triggerDeliveryLabel,
   triggerMetaText,
+  triggerSourceLabel,
 } from './target-pages.js';
 
 describe('批量成员输入', () => {
@@ -111,6 +116,77 @@ describe('触发条目时间行', () => {
     expect(text.startsWith('plan-1 · 数据 ')).toBe(true);
     // triggeredAt 早已不存在；误读会得到 Invalid Date
     expect(text.includes('Invalid Date')).toBe(false);
+  });
+
+  it('预警计划触发显示计划名而不是裸 id', () => {
+    expect(
+      triggerSourceLabel(
+        { alertPlanId: 'plan-1', poolId: 'plan-1' },
+        { alertPlanNames: { 'plan-1': '重要价位' } },
+      ),
+    ).toBe('重要价位');
+  });
+
+  it('交易计划监控触发显示来源名并区分本账户', () => {
+    const trigger = { poolId: 'trading-plan-watch:acc-1' };
+    expect(triggerSourceLabel(trigger)).toBe('交易计划监控');
+    expect(triggerSourceLabel(trigger, { tradingPlanAccountId: 'acc-1' })).toBe(
+      '交易计划监控（本账户）',
+    );
+    expect(triggerSourceLabel(trigger, { tradingPlanAccountId: 'acc-2' })).toBe('交易计划监控');
+  });
+
+  it('未知来源保留原始 poolId，不发明名称', () => {
+    expect(triggerSourceLabel({ poolId: 'legacy-pool' })).toBe('legacy-pool');
+  });
+
+  it('副标题带命中条件：优先评估快照描述，否则用规则类型', () => {
+    expect(
+      triggerMetaText({
+        alertPlanId: 'plan-1',
+        createdAt: '2026-07-29T08:00:00.000Z',
+        evalSnapshot: { conditionDescription: '价格处于入场区间 100-105' },
+      }),
+    ).toContain('价格处于入场区间 100-105');
+    expect(
+      triggerMetaText({
+        alertPlanId: 'plan-1',
+        createdAt: '2026-07-29T08:00:00.000Z',
+        ruleKind: 'price-level',
+      }),
+    ).toContain('价格条件');
+  });
+
+  it('送达状态与优先级都有可读标签', () => {
+    expect(triggerDeliveryLabel('sent')).toBe('已送达');
+    expect(triggerDeliveryLabel('failed')).toBe('投递失败');
+    expect(triggerDeliveryLabel('suppressed-cooldown')).toBe('冷却抑制');
+    expect(triggerDeliveryLabel(undefined)).toBeNull();
+    expect(triggerDeliveryBadgeClass('sent')).toBe('badge badge-delivery-sent');
+    expect(triggerDeliveryBadgeClass(undefined)).toBe('badge badge-delivery-not-requested');
+  });
+
+  it('按来源分类、计数与过滤', () => {
+    const triggers = [
+      { alertPlanId: 'plan-1', poolId: 'plan-1' },
+      { poolId: 'trading-plan-watch:acc-1' },
+      { poolId: 'trading-plan-watch:acc-2' },
+      { poolId: 'legacy-pool' },
+    ];
+    const alertPlanIds = new Set(['plan-1']);
+    expect(summarizeTriggerSources(triggers, alertPlanIds)).toEqual({
+      all: 4,
+      'alert-plan': 1,
+      'trading-plan': 2,
+      other: 1,
+    });
+    expect(filterTriggersBySource(triggers, 'all', alertPlanIds)).toHaveLength(4);
+    expect(filterTriggersBySource(triggers, 'alert-plan', alertPlanIds)).toEqual([triggers[0]]);
+    expect(filterTriggersBySource(triggers, 'trading-plan', alertPlanIds)).toEqual([
+      triggers[1],
+      triggers[2],
+    ]);
+    expect(filterTriggersBySource(triggers, 'other', alertPlanIds)).toEqual([triggers[3]]);
   });
 });
 

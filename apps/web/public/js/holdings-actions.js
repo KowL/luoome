@@ -7,7 +7,7 @@
 
 import { callApi } from './api.js';
 import { closeModal, openModal } from './modal.js';
-import { el, fmtNum } from './ui.js';
+import { $, el, fmtNum } from './ui.js';
 
 /* ============ 依赖注入 ============ */
 
@@ -17,6 +17,11 @@ let notify = () => {};
 export const initHoldingsActions = ({ refresh, setStatus }) => {
   onRefresh = refresh;
   notify = setStatus;
+  const snapshotButton = $('#btn-account-snapshot');
+  if (snapshotButton !== null && snapshotButton.dataset.bound !== '1') {
+    snapshotButton.dataset.bound = '1';
+    snapshotButton.addEventListener('click', () => void openAccountSnapshotFromHoldings(setStatus));
+  }
 };
 
 /* ============ 表单小件 ============ */
@@ -38,6 +43,17 @@ const fieldWrap = (label, control, hint) => {
   node.append(control);
   if (hint !== undefined) node.append(el('span', 'hint', hint));
   return node;
+};
+
+const makeSelect = (id, options) => {
+  const select = el('select');
+  select.id = id;
+  for (const [value, label] of options) {
+    const option = el('option', null, label);
+    option.value = value;
+    select.append(option);
+  }
+  return select;
 };
 
 const actionsRow = (confirmLabel, { danger = false, onConfirm } = {}) => {
@@ -62,6 +78,87 @@ const parsePositiveNumber = (raw) => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+const parseNonNegativeInt = (raw) => {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+};
+
+const parseNonNegativeNumber = (raw) => {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+/**
+ * 账户快照表单的服务端错误提示：未入库标的给出可执行的下一步，而不是裸 not_found。
+ */
+export const snapshotErrorText = (error) => {
+  if (
+    error !== null &&
+    typeof error === 'object' &&
+    error.kind === 'not_found' &&
+    error.entity === 'Stock'
+  ) {
+    return `股票 ${error.id} 不在股票目录中：请先在「持仓」页用「+ 新增持仓」登记后重试`;
+  }
+  return toolErrorText(error);
+};
+
+/**
+ * 账户快照输入校验（与 save_account_snapshot 的前置规则对齐，可单测）。
+ * - complete：必须提供 cashBalance；
+ * - needs-reconciliation：现金可选，服务端不提供精确总资产；
+ * - unavailable：现金不写入，只保留持仓数量事实。
+ * 返回 { input } 或 { error }。
+ */
+export const buildAccountSnapshotInput = ({
+  status = 'complete',
+  cashBalance = null,
+  note = '',
+  positions = [],
+} = {}) => {
+  if (cashBalance !== null && (!Number.isFinite(cashBalance) || cashBalance < 0)) {
+    return { error: '现金余额必须是非负数字' };
+  }
+  if (status === 'complete' && cashBalance === null) {
+    return { error: '「完整」快照必须填写现金余额；只更新了持仓请选「待核对」' };
+  }
+  const cleaned = [];
+  for (const [index, position] of positions.entries()) {
+    const label = `第 ${index + 1} 行`;
+    if (typeof position.stockId !== 'string' || position.stockId.length === 0) {
+      return { error: `${label}：请先选择股票或输入完整带后缀代码` };
+    }
+    if (!Number.isInteger(position.quantity) || position.quantity < 0) {
+      return { error: `${label}：数量必须是非负整数` };
+    }
+    if (
+      !Number.isInteger(position.availableQuantity) ||
+      position.availableQuantity < 0 ||
+      position.availableQuantity > position.quantity
+    ) {
+      return { error: `${label}：可卖数量必须是不超过数量的非负整数` };
+    }
+    if (!Number.isFinite(position.marketValue) || position.marketValue < 0) {
+      return { error: `${label}：市值必须是非负数字` };
+    }
+    cleaned.push({
+      stockId: position.stockId,
+      quantity: position.quantity,
+      availableQuantity: position.availableQuantity,
+      marketValue: position.marketValue,
+    });
+  }
+  const trimmedNote = typeof note === 'string' ? note.trim() : '';
+  return {
+    input: {
+      status,
+      positions: cleaned,
+      ...(cashBalance === null || status === 'unavailable' ? {} : { cashBalance }),
+      ...(trimmedNote === '' ? {} : { note: trimmedNote }),
+    },
+  };
+};
+
 export const toolErrorText = (error) => {
   if (error === null || typeof error !== 'object') return '提交失败';
   if (error.kind === 'permission_denied') {
@@ -78,8 +175,18 @@ export const quotePriceFromResult = (result) => {
   return typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
 };
 
-/** 提交公共流程：禁用按钮 → 调 tool → 失败上屏 / 成功关窗 + 刷新 + 状态提示。 */
-const submitTool = async (btn, errorNode, name, input, successMessage) => {
+/**
+ * 提交公共流程：禁用按钮 → 调 tool → 失败上屏 / 成功关窗 + 刷新 + 状态提示。
+ * onSuccess 缺省用注入的 refresh；formatError 可换成更具体的提示文案。
+ */
+const submitTool = async (
+  btn,
+  errorNode,
+  name,
+  input,
+  successMessage,
+  { onSuccess = onRefresh, formatError = toolErrorText } = {},
+) => {
   btn.disabled = true;
   errorNode.textContent = '';
   try {
@@ -88,11 +195,11 @@ const submitTool = async (btn, errorNode, name, input, successMessage) => {
       body: JSON.stringify({ input }),
     });
     if (!r.ok) {
-      errorNode.textContent = toolErrorText(r.error);
+      errorNode.textContent = formatError(r.error);
       return;
     }
     closeModal();
-    await onRefresh();
+    await onSuccess();
     notify(successMessage);
   } catch (error) {
     errorNode.textContent = error instanceof Error ? error.message : String(error);
@@ -119,10 +226,88 @@ export const openConfirmModal = ({ title, message, confirmLabel = '确认', onCo
 
 /* ============ 新增持仓（add_trade buy，建仓即写交易） ============ */
 
+/**
+ * 股票输入框的检索行为：search_stocks 只查本地股票库，未入库的代码按位数给出后缀候选。
+ * 选中后经 onSelect 通知调用方；resolve() 返回当前可用的股票 id。
+ * unknownHint 由调用方决定：建仓会自动登记 stub，账户快照则需要先登记。
+ */
+const attachStockPicker = ({ input, list, onSelect, unknownHint = '（未入库）' }) => {
+  let selected = { id: '', name: '' };
+  let timer = 0;
+
+  const pick = (id, label, name = '') => {
+    selected = { id, name };
+    input.value = label;
+    list.hidden = true;
+    onSelect?.(id, name);
+  };
+
+  /** 代码形态输入的兜底候选：未入库的标的按位数给出交易所后缀建议。 */
+  const syntheticCandidates = (q) => {
+    if (/^\d{6}$/.test(q)) return [`${q}.SH`, `${q}.SZ`];
+    if (/^\d{4,5}$/.test(q)) return [`${q}.HK`];
+    if (/^[A-Za-z]{1,5}$/.test(q)) return [`${q.toUpperCase()}.US`];
+    return [];
+  };
+
+  input.addEventListener('input', () => {
+    selected = { id: '', name: '' };
+    window.clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length === 0) {
+      list.hidden = true;
+      return;
+    }
+    // 已输入完整带后缀代码：直接当选定，不再检索。
+    if (STOCK_ID_PATTERN.test(q.toUpperCase())) {
+      list.hidden = true;
+      onSelect?.(q.toUpperCase(), '');
+      return;
+    }
+    timer = window.setTimeout(() => {
+      void (async () => {
+        const r = await callApi('/api/tools/search_stocks/call', {
+          method: 'POST',
+          body: JSON.stringify({ input: { query: q, limit: 8 } }),
+        });
+        const stocks = r.ok && Array.isArray(r.data?.stocks) ? r.data.stocks : [];
+        const items = stocks.map((s) => {
+          const item = el('div', 'autocomplete-item', `${s.id} · ${s.name}`);
+          item.addEventListener('click', () => pick(s.id, `${s.id} ${s.name}`, s.name));
+          return item;
+        });
+        // 库内无结果时才给代码后缀兜底候选（外部源已接入，真实候选优先）
+        const extras =
+          stocks.length === 0
+            ? syntheticCandidates(q).map((id) => {
+                const item = el('div', 'autocomplete-item', `${id} ·${unknownHint}`);
+                item.addEventListener('click', () => pick(id, id));
+                return item;
+              })
+            : [];
+        const all = [...items, ...extras];
+        if (all.length === 0) {
+          list.hidden = true;
+          return;
+        }
+        list.replaceChildren(...all);
+        list.hidden = false;
+      })();
+    }, 300);
+  });
+
+  return {
+    resolve: () => {
+      if (selected.id.length > 0) return selected.id;
+      const first = input.value.trim().toUpperCase().split(/\s+/)[0] ?? '';
+      return STOCK_ID_PATTERN.test(first) ? first : null;
+    },
+    selectedName: () => selected.name,
+  };
+};
+
 export const openAddHoldingModal = () => {
   const stockInput = makeInput('f-stock', { placeholder: '代码或名称，如 601398 / 比亚迪' });
-  let selectedStockId = '';
-  let selectedStockName = '';
   let priceRequest = 0;
   const acList = el('div', 'autocomplete-list');
   acList.hidden = true;
@@ -161,78 +346,14 @@ export const openAddHoldingModal = () => {
     })();
   };
 
-  const pickStock = (id, label, name = '') => {
-    selectedStockId = id;
-    selectedStockName = name;
-    stockInput.value = label;
-    acList.hidden = true;
-    fillCurrentPrice(id, name);
-  };
-
-  /**
-   * 代码形态输入的兜底候选：search_stocks 只查本地股票库，未入库的新股
-   * 按位数给出交易所后缀建议（建仓时 add_trade 自动补 stub 登记）。
-   */
-  const syntheticCandidates = (q) => {
-    if (/^\d{6}$/.test(q)) return [`${q}.SH`, `${q}.SZ`];
-    if (/^\d{4,5}$/.test(q)) return [`${q}.HK`];
-    if (/^[A-Za-z]{1,5}$/.test(q)) return [`${q.toUpperCase()}.US`];
-    return [];
-  };
-
-  let timer = 0;
-  stockInput.addEventListener('input', () => {
-    selectedStockId = '';
-    selectedStockName = '';
-    window.clearTimeout(timer);
-    const q = stockInput.value.trim();
-    if (q.length === 0) {
-      acList.hidden = true;
-      return;
-    }
-    // 已输入完整带后缀代码：直接当选定，自动带现价
-    if (STOCK_ID_PATTERN.test(q.toUpperCase())) {
-      acList.hidden = true;
-      fillCurrentPrice(q.toUpperCase());
-      return;
-    }
-    timer = window.setTimeout(() => {
-      void (async () => {
-        const r = await callApi('/api/tools/search_stocks/call', {
-          method: 'POST',
-          body: JSON.stringify({ input: { query: q, limit: 8 } }),
-        });
-        const stocks = r.ok && Array.isArray(r.data?.stocks) ? r.data.stocks : [];
-        const items = stocks.map((s) => {
-          const item = el('div', 'autocomplete-item', `${s.id} · ${s.name}`);
-          item.addEventListener('click', () => pickStock(s.id, `${s.id} ${s.name}`, s.name));
-          return item;
-        });
-        // 库内无结果时才给代码后缀兜底候选（外部源已接入，真实候选优先）
-        const extras =
-          stocks.length === 0
-            ? syntheticCandidates(q).map((id) => {
-                const item = el('div', 'autocomplete-item', `${id} ·（未入库，建仓时自动登记）`);
-                item.addEventListener('click', () => pickStock(id, id));
-                return item;
-              })
-            : [];
-        const all = [...items, ...extras];
-        if (all.length === 0) {
-          acList.hidden = true;
-          return;
-        }
-        acList.replaceChildren(...all);
-        acList.hidden = false;
-      })();
-    }, 300);
+  const picker = attachStockPicker({
+    input: stockInput,
+    list: acList,
+    onSelect: (id, name) => fillCurrentPrice(id, name),
+    unknownHint: '（未入库，建仓时自动登记）',
   });
 
-  const resolveStockId = () => {
-    if (selectedStockId.length > 0) return selectedStockId;
-    const first = stockInput.value.trim().toUpperCase().split(/\s+/)[0] ?? '';
-    return STOCK_ID_PATTERN.test(first) ? first : null;
-  };
+  const resolveStockId = () => picker.resolve();
 
   const body = el('div', null, [
     fieldWrap('股票', acWrap, '输名称搜库内股票；输 6 位代码自动给出 .SH/.SZ 候选'),
@@ -268,7 +389,7 @@ export const openAddHoldingModal = () => {
           'add_trade',
           {
             stockId,
-            ...(selectedStockName.length > 0 ? { stockName: selectedStockName } : {}),
+            ...(picker.selectedName().length > 0 ? { stockName: picker.selectedName() } : {}),
             side: 'buy',
             quantity,
             price,
@@ -420,4 +541,177 @@ export const openCloseConfirm = (holding) => {
     }),
   ]);
   openModal(`平仓 · ${holding.stockName}（${holding.stockId}）`, body);
+};
+/* ============ 账户快照（save_account_snapshot） ============ */
+
+/**
+ * 账户快照登记：现金 + 持仓估值 → 新的账户事实版本。
+ * 只写账户事实，不生成建议、不改变持仓；现金与持仓估值必须来自同一次核对。
+ * 传入 latest 时预填上一版快照：快照是整体替换，不预填等于默认清空已有持仓。
+ * 持仓标的需已在股票目录中（未入库的股票先在「持仓」页登记）。
+ */
+export const openAccountSnapshotModal = ({ onSaved, latest } = {}) => {
+  const cashInput = makeInput('snapshot-cash', {
+    type: 'number',
+    placeholder: '当前现金余额（元）',
+    value:
+      latest?.cashBalance === null || latest?.cashBalance === undefined
+        ? ''
+        : String(latest.cashBalance),
+  });
+  const statusSelect = makeSelect('snapshot-status', [
+    ['complete', '完整（现金与持仓已核对）'],
+    ['needs-reconciliation', '待核对（只更新了持仓）'],
+    ['unavailable', '不可用（资金与持仓都无法核对）'],
+  ]);
+  if (latest?.status !== undefined) statusSelect.value = latest.status;
+  const noteInput = makeInput('snapshot-note', {
+    placeholder: '可选：核对说明',
+    value: latest?.note ?? '',
+  });
+  const rowsRoot = el('div', 'snapshot-rows');
+  const rows = [];
+  const errorNode = el('p', 'modal-error');
+  const statusHint = el('span', 'hint', '');
+
+  /** 状态决定现金与总资产是否可用；「不可用」时不写入现金，避免写下无法核对的事实。 */
+  const syncStatusState = () => {
+    const status = statusSelect.value;
+    cashInput.disabled = status === 'unavailable';
+    statusHint.textContent =
+      status === 'complete'
+        ? '必须填写现金余额；总资产 = 现金 + 持仓市值，由服务端计算'
+        : status === 'needs-reconciliation'
+          ? '现金可选；待核对快照保留现金与持仓事实，但不提供精确总资产，精确仓位与可建仓建议会暂停'
+          : '现金不写入；只保留持仓数量与不可用状态';
+  };
+  statusSelect.addEventListener('change', syncStatusState);
+
+  const addRow = (position) => {
+    const index = rows.length + 1;
+    const stockInput = makeInput(`snapshot-stock-${index}`, {
+      placeholder: '代码或名称，如 601398 / 工商银行',
+      value: position?.stockId ?? '',
+    });
+    const acList = el('div', 'autocomplete-list');
+    acList.hidden = true;
+    const acWrap = el('div', 'autocomplete', [stockInput, acList]);
+    const qtyInput = makeInput(`snapshot-qty-${index}`, {
+      type: 'number',
+      placeholder: '数量（股）',
+      value: position === undefined ? '' : String(position.quantity),
+    });
+    const availInput = makeInput(`snapshot-avail-${index}`, {
+      type: 'number',
+      placeholder: '可卖数量（可空，默认=数量）',
+      value: position === undefined ? '' : String(position.availableQuantity),
+    });
+    const valueInput = makeInput(`snapshot-value-${index}`, {
+      type: 'number',
+      placeholder: '当前市值（元）',
+      value: position === undefined ? '' : String(position.marketValue),
+    });
+    const picker = attachStockPicker({
+      input: stockInput,
+      list: acList,
+      unknownHint: '（未入库，需先在「持仓」页登记）',
+    });
+    const rowState = { picker, qtyInput, availInput, valueInput };
+    const row = el('div', 'snapshot-row', [
+      el('div', 'field', [el('label', null, '股票'), acWrap]),
+      el('div', 'field', [el('label', null, '数量'), qtyInput]),
+      el('div', 'field', [el('label', null, '可卖'), availInput]),
+      el('div', 'field', [el('label', null, '市值'), valueInput]),
+    ]);
+    const remove = el('button', 'btn btn-outline btn-sm', '移除');
+    remove.type = 'button';
+    remove.addEventListener('click', () => {
+      rows.splice(rows.indexOf(rowState), 1);
+      row.remove();
+    });
+    row.append(remove);
+    rows.push(rowState);
+    rowsRoot.append(row);
+  };
+
+  // 有上一版快照时按其持仓预填，不再额外留一行空行。
+  const initialPositions = latest?.positions ?? [];
+  if (initialPositions.length === 0) addRow();
+  for (const position of initialPositions) addRow(position);
+  const addButton = el('button', 'btn btn-outline btn-sm', '+ 添加持仓');
+  addButton.type = 'button';
+  addButton.addEventListener('click', () => addRow());
+
+  const collect = () =>
+    buildAccountSnapshotInput({
+      status: statusSelect.value,
+      cashBalance: (() => {
+        const raw = cashInput.value.trim();
+        if (raw === '' || statusSelect.value === 'unavailable') return null;
+        const parsed = parseNonNegativeNumber(raw);
+        return parsed === null ? Number.NaN : parsed;
+      })(),
+      note: noteInput.value,
+      positions: rows.map((row) => {
+        const quantity = parseNonNegativeInt(row.qtyInput.value.trim());
+        const rawAvailable = row.availInput.value.trim();
+        const availableQuantity =
+          rawAvailable === '' ? quantity : parseNonNegativeInt(rawAvailable);
+        const marketValue = parseNonNegativeNumber(row.valueInput.value.trim());
+        return {
+          stockId: row.picker.resolve() ?? '',
+          quantity: quantity ?? Number.NaN,
+          availableQuantity: availableQuantity ?? Number.NaN,
+          marketValue: marketValue ?? Number.NaN,
+        };
+      }),
+    });
+
+  const body = el('div', null, [
+    fieldWrap('现金余额', cashInput, '总资产 = 现金 + 持仓市值；两者必须同一次核对'),
+    el('div', 'field', [el('label', null, '快照状态'), statusSelect, statusHint]),
+    fieldWrap(
+      '持仓',
+      rowsRoot,
+      latest?.positions?.length
+        ? '市值是当前估值，不是买入成本；已按上一版快照预填，确认后再保存'
+        : '市值是当前估值，不是买入成本',
+    ),
+    addButton,
+    fieldWrap('备注', noteInput),
+    errorNode,
+    actionsRow('保存快照', {
+      onConfirm: (btn) => {
+        const collected = collect();
+        if (collected.error !== undefined) {
+          errorNode.textContent = collected.error;
+          return;
+        }
+        void submitTool(
+          btn,
+          errorNode,
+          'save_account_snapshot',
+          collected.input,
+          '账户快照已保存',
+          { onSuccess: onSaved ?? onRefresh, formatError: snapshotErrorText },
+        );
+      },
+    }),
+  ]);
+  syncStatusState();
+  openModal('登记账户快照', body);
+};
+
+/** 持仓页入口：先读最新快照（供整体替换前预填），再打开登记窗。 */
+const openAccountSnapshotFromHoldings = async (setStatus) => {
+  const result = await callApi('/api/account/snapshots?limit=1');
+  if (!result.ok) {
+    setStatus(toolErrorText(result.error), true);
+    return;
+  }
+  const latest = (result.data?.snapshots ?? [])[0];
+  openAccountSnapshotModal({
+    ...(latest === undefined ? {} : { latest }),
+    onSaved: onRefresh,
+  });
 };

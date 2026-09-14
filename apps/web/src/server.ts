@@ -2426,7 +2426,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   });
   app.get('/api/watch/triggers', (c) => {
     const input: Record<string, unknown> = {};
-    for (const key of ['alertPlanId', 'stockId', 'ruleKind', 'ruleId', 'since'] as const) {
+    for (const key of [
+      'alertPlanId',
+      'poolId',
+      'stockId',
+      'ruleKind',
+      'ruleId',
+      'since',
+    ] as const) {
       const value = c.req.query(key);
       if (value !== undefined) input[key] = value;
     }
