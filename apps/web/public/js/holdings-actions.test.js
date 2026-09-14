@@ -3,7 +3,9 @@ import { describe, expect, it } from 'bun:test';
 import {
   buildAccountSnapshotInput,
   quotePriceFromResult,
+  snapshotButtonLabel,
   snapshotErrorText,
+  snapshotStatusNotice,
   toolErrorText,
 } from './holdings-actions.js';
 
@@ -128,5 +130,25 @@ describe('账户快照错误提示', () => {
     expect(snapshotErrorText({ kind: 'invalid_input', message: '快照不合法' })).toContain(
       '快照不合法',
     );
+  });
+});
+
+describe('账户快照状态文案', () => {
+  it('缺失 / 待核对 / 不可用各自给出明确后果，完整时不占位', () => {
+    expect(snapshotStatusNotice(undefined)?.title).toBe('尚未登记账户快照');
+    expect(snapshotStatusNotice({ version: 3, status: 'needs-reconciliation' })?.detail).toContain(
+      '精确仓位与当前可执行建仓建议已暂停',
+    );
+    expect(snapshotStatusNotice({ version: 2, status: 'unavailable' })?.detail).toContain(
+      '无法计算仓位与组合预算',
+    );
+    expect(snapshotStatusNotice({ version: 1, status: 'complete' })).toBeNull();
+  });
+
+  it('按钮文案跟随状态：登记 / 核对并保存 / 更新', () => {
+    expect(snapshotButtonLabel(undefined)).toBe('登记账户快照');
+    expect(snapshotButtonLabel({ status: 'needs-reconciliation' })).toBe('核对并保存快照');
+    expect(snapshotButtonLabel({ status: 'unavailable' })).toBe('核对并保存快照');
+    expect(snapshotButtonLabel({ status: 'complete' })).toBe('更新账户快照');
   });
 });

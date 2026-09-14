@@ -21,6 +21,7 @@ export const initHoldingsActions = ({ refresh, setStatus }) => {
   if (snapshotButton !== null && snapshotButton.dataset.bound !== '1') {
     snapshotButton.dataset.bound = '1';
     snapshotButton.addEventListener('click', () => void openAccountSnapshotFromHoldings(setStatus));
+    void refreshSnapshotButtonLabel();
   }
 };
 
@@ -86,6 +87,40 @@ const parseNonNegativeInt = (raw) => {
 const parseNonNegativeNumber = (raw) => {
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+/**
+ * 账户快照状态提示：只有非 complete 或缺失时才需要提醒，complete 不占位。
+ */
+export const snapshotStatusNotice = (snapshot) => {
+  if (snapshot === undefined) {
+    return {
+      tone: 'warning',
+      title: '尚未登记账户快照',
+      detail:
+        '账户现金与持仓估值是仓位分母；没有快照时盘后计划只能停在草案，盘中监控也没有可求值的计划。',
+    };
+  }
+  if (snapshot.status === 'needs-reconciliation') {
+    return {
+      tone: 'warning',
+      title: '账户快照待核对',
+      detail: `v${snapshot.version} 只同步了持仓，现金与持仓未一致：精确仓位与当前可执行建仓建议已暂停。核对现金后再保存一次。`,
+    };
+  }
+  if (snapshot.status === 'unavailable') {
+    return {
+      tone: 'warning',
+      title: '账户事实不可用',
+      detail: `v${snapshot.version} 没有可用的现金与持仓估值：无法计算仓位与组合预算，只能保留条件研究。`,
+    };
+  }
+  return null;
+};
+
+export const snapshotButtonLabel = (snapshot) => {
+  if (snapshot === undefined) return '登记账户快照';
+  return snapshot.status === 'complete' ? '更新账户快照' : '核对并保存快照';
 };
 
 /**
@@ -702,6 +737,20 @@ export const openAccountSnapshotModal = ({ onSaved, latest } = {}) => {
   openModal('登记账户快照', body);
 };
 
+/**
+ * 持仓页「账户快照」按钮文案跟随最新快照状态：缺失=登记、待核对/不可用=核对并保存、完整=更新。
+ */
+const refreshSnapshotButtonLabel = async () => {
+  const button = $('#btn-account-snapshot');
+  if (button === null) return;
+  const result = await callApi('/api/account/snapshots?limit=1');
+  const latest = result.ok ? (result.data?.snapshots ?? [])[0] : undefined;
+  button.textContent = snapshotButtonLabel(latest);
+  const needsAttention = latest !== undefined && latest.status !== 'complete';
+  button.classList.toggle('btn-primary', needsAttention);
+  button.classList.toggle('btn-outline', !needsAttention);
+};
+
 /** 持仓页入口：先读最新快照（供整体替换前预填），再打开登记窗。 */
 const openAccountSnapshotFromHoldings = async (setStatus) => {
   const result = await callApi('/api/account/snapshots?limit=1');
@@ -712,6 +761,9 @@ const openAccountSnapshotFromHoldings = async (setStatus) => {
   const latest = (result.data?.snapshots ?? [])[0];
   openAccountSnapshotModal({
     ...(latest === undefined ? {} : { latest }),
-    onSaved: onRefresh,
+    onSaved: async () => {
+      await onRefresh();
+      await refreshSnapshotButtonLabel();
+    },
   });
 };

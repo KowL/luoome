@@ -5,7 +5,12 @@
  */
 
 import { callApi } from './api.js';
-import { openAccountSnapshotModal, toolErrorText } from './holdings-actions.js';
+import {
+  openAccountSnapshotModal,
+  snapshotButtonLabel,
+  snapshotStatusNotice,
+  toolErrorText,
+} from './holdings-actions.js';
 import { openModal } from './modal.js';
 import { el, fmtDateTime, fmtNum, mount } from './ui.js';
 
@@ -114,6 +119,66 @@ export const planVersionsOf = (plans, planId) =>
     .sort((left, right) => right.version - left.version);
 
 export const planVersionId = (plan) => `${plan.id}:v${plan.version}`;
+
+const conditionSummary = (conditions) => {
+  const lines = (conditions ?? []).map((condition) => condition.description);
+  return lines.length === 0 ? '无' : lines.join('；');
+};
+
+const listText = (items) => {
+  const lines = (items ?? []).filter((line) => typeof line === 'string' && line.trim().length > 0);
+  return lines.length === 0 ? '无' : lines.join('；');
+};
+
+const priceText = (value) => fmtPrice(value) ?? '未设置';
+
+const holdingText = (plan) =>
+  `${plan.holding?.minTradingDays ?? '--'} - ${plan.holding?.maxTradingDays ?? '--'}`;
+
+/** 版本差异：只列出真正变化的字段，不把“没变”渲染成变化。 */
+export const planDiff = (previous, current) => {
+  if (previous === undefined || current === undefined) return [];
+  const rows = [];
+  const push = (label, before, after) => {
+    if (before !== after) rows.push({ label, before, after });
+  };
+  push('状态', planStatusLabel(previous.status), planStatusLabel(current.status));
+  push('动作', planActionLabel(previous.action), planActionLabel(current.action));
+  push('入场区间', planEntryText(previous), planEntryText(current));
+  push(
+    '入场条件',
+    conditionSummary(previous.entryConditions),
+    conditionSummary(current.entryConditions),
+  );
+  push('目标仓位', planTargetText(previous), planTargetText(current));
+  push('止损', priceText(previous.exit?.stopLoss), priceText(current.exit?.stopLoss));
+  push('止盈', priceText(previous.exit?.takeProfit), priceText(current.exit?.takeProfit));
+  push('预计持有交易日', holdingText(previous), holdingText(current));
+  push(
+    '下次复核',
+    fmtDateTime(previous.holding?.nextReviewAt),
+    fmtDateTime(current.holding?.nextReviewAt),
+  );
+  push('有效期至', fmtDateTime(previous.validUntil), fmtDateTime(current.validUntil));
+  push(
+    '反证',
+    listText(previous.explanation?.counterEvidence),
+    listText(current.explanation?.counterEvidence),
+  );
+  push('风险', listText(previous.explanation?.risks), listText(current.explanation?.risks));
+  push('未知', listText(previous.explanation?.unknowns), listText(current.explanation?.unknowns));
+  return rows;
+};
+
+/** 上一版：优先用 supersedesVersionId 精确匹配，否则回退到同计划 version-1。 */
+export const previousVersionOf = (plan, versions) => {
+  const list = versions ?? [];
+  if (plan.supersedesVersionId !== undefined) {
+    const explicit = list.find((item) => planVersionId(item) === plan.supersedesVersionId);
+    if (explicit !== undefined) return explicit;
+  }
+  return list.find((item) => item.id === plan.id && item.version === plan.version - 1);
+};
 
 const conditionLines = (conditions) =>
   (conditions ?? []).map(
@@ -231,6 +296,39 @@ const sectionNode = (section) =>
 export const openTradingPlanDetail = (plan, versions = [plan]) => {
   const body = el('div', 'plan-detail');
   const versionBar = el('div', 'flex gap-2');
+  const diffRoot = el('div', 'plan-diff');
+
+  /** 上一版差异：先在本页版本列表里找，找不到再按 supersedesVersionId 读确切版本。 */
+  const loadDiff = (subject) => {
+    mount(diffRoot, []);
+    if (subject.supersedesVersionId === undefined) return;
+    const local = previousVersionOf(subject, versions);
+    if (local !== undefined) {
+      renderDiff(local, subject);
+      return;
+    }
+    void (async () => {
+      const result = await callApi(
+        `/api/trading-plans/${encodeURIComponent(subject.supersedesVersionId)}`,
+      );
+      if (!result.ok) return;
+      renderDiff(result.data.plan, subject);
+    })();
+  };
+
+  const renderDiff = (previous, subject) => {
+    const rows = planDiff(previous, subject);
+    if (rows.length === 0) return;
+    mount(diffRoot, [
+      el('h3', null, `与上一版本（v${previous.version}）的差异`),
+      ...rows.map((row) =>
+        el('p', 'plan-detail-line', `${row.label}：${row.before} → ${row.after}`),
+      ),
+      ...(subject.explanation?.changeSummary === undefined
+        ? []
+        : [el('p', 'hint', `变更说明：${subject.explanation.changeSummary}`)]),
+    ]);
+  };
 
   const render = (subject) => {
     const buttons = versions.map((item) => {
@@ -266,6 +364,7 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
         el('span', 'muted', `${subject.stockName ?? subject.stockId} · v${subject.version}`),
       ]),
       ...(versions.length <= 1 ? [] : [versionBar]),
+      diffRoot,
       ...planDetailSections(subject).map(sectionNode),
       el(
         'p',
@@ -274,6 +373,7 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
       ),
     ]);
     if (versions.length > 1) mount(versionBar, buttons);
+    loadDiff(subject);
   };
 
   render(plan);
@@ -284,7 +384,7 @@ const snapshotEntry = ({ hasSnapshot, onSnapshotSaved, latestSnapshot }) => {
   const button = el(
     'button',
     `btn ${hasSnapshot ? 'btn-outline' : 'btn-primary'} btn-sm`,
-    hasSnapshot ? '更新账户快照' : '登记账户快照',
+    snapshotButtonLabel(hasSnapshot ? latestSnapshot : undefined),
   );
   button.type = 'button';
   button.addEventListener('click', () =>
@@ -293,14 +393,11 @@ const snapshotEntry = ({ hasSnapshot, onSnapshotSaved, latestSnapshot }) => {
       ...(latestSnapshot === undefined ? {} : { latest: latestSnapshot }),
     }),
   );
-  if (hasSnapshot) return el('div', 'flex gap-2', [button]);
+  const notice = snapshotStatusNotice(hasSnapshot ? latestSnapshot : undefined);
+  if (notice === null) return el('div', 'flex gap-2', [button]);
   return el('div', 'plan-guidance', [
-    el('strong', null, '尚未登记账户快照'),
-    el(
-      'p',
-      'hint',
-      '账户现金与持仓估值是仓位分母；没有快照时盘后计划只能停在草案，盘中监控也没有可求值的计划。',
-    ),
+    el('strong', null, notice.title),
+    el('p', 'hint', notice.detail),
     button,
   ]);
 };
@@ -326,13 +423,16 @@ export const renderTradingPlanPanel = ({
   const latestSnapshot = snapshots[0];
   const latest = latestPlanVersions(plans);
   const activeCount = latest.filter((plan) => plan.status === 'active').length;
+  const incomplete = latestSnapshot !== undefined && latestSnapshot.status !== 'complete';
   if (meta !== null) {
     meta.textContent =
       latest.length === 0
         ? hasSnapshot
-          ? '暂无计划'
+          ? incomplete
+            ? `账户快照待核对 v${latestSnapshot.version}`
+            : '暂无计划'
           : '缺少账户快照'
-        : `${latest.length} 个 · 生效 ${activeCount}`;
+        : `${latest.length} 个 · 生效 ${activeCount}${incomplete ? ' · 账户待核对' : ''}`;
   }
   if (latest.length === 0) {
     mount(root, [

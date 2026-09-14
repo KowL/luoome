@@ -7,6 +7,7 @@ import {
   latestPlanVersions,
   planActionLabel,
   planDetailSections,
+  planDiff,
   planDraftNote,
   planEntryText,
   planMetaText,
@@ -15,6 +16,7 @@ import {
   planTargetText,
   planVersionId,
   planVersionsOf,
+  previousVersionOf,
 } from './trading-plan-panel.js';
 
 const makePlan = (overrides = {}) => ({
@@ -274,5 +276,67 @@ describe('计划详情分区', () => {
     expect(lines).toContain('策略：strategy-1');
     expect(lines).toContain('建议：adv1');
     expect(lines).toContain('price 102.00CNY · 可用');
+  });
+});
+
+describe('版本差异', () => {
+  const previous = makePlan({ version: 1 });
+  const current = makePlan({
+    version: 2,
+    supersedesVersionId: 'account:acc1:stock:600519.SH:v1',
+    entryPriceLow: 98,
+    entryPriceHigh: 103,
+    position: { ...makePlan().position, targetPct: 8, deltaPct: 8 },
+    exit: { ...makePlan().exit, stopLoss: 92 },
+    explanation: {
+      ...makePlan().explanation,
+      counterEvidence: ['成交量不足', '板块资金净流出'],
+    },
+  });
+
+  it('只列出真正变化的字段', () => {
+    const rows = planDiff(previous, current);
+    const labels = rows.map((row) => row.label);
+    expect(labels).toContain('入场区间');
+    expect(labels).toContain('目标仓位');
+    expect(labels).toContain('止损');
+    expect(labels).toContain('反证');
+    // 没变的字段不出现（避免把“没变”渲染成变化）
+    expect(labels).not.toContain('动作');
+    expect(labels).not.toContain('预计持有交易日');
+  });
+
+  it('差异行给出前后值', () => {
+    const entry = planDiff(previous, current).find((row) => row.label === '入场区间');
+    expect(entry).toEqual({
+      label: '入场区间',
+      before: '100.00 - 105.00',
+      after: '98.00 - 103.00',
+    });
+  });
+
+  it('完全相同的两版没有差异', () => {
+    expect(planDiff(previous, makePlan({ version: 2 }))).toEqual([]);
+  });
+
+  it('缺少任一侧时不编造差异', () => {
+    expect(planDiff(undefined, current)).toEqual([]);
+    expect(planDiff(previous, undefined)).toEqual([]);
+  });
+
+  it('上一版优先按 supersedesVersionId 精确匹配', () => {
+    const versions = [current, previous, makePlan({ version: 0 })];
+    expect(previousVersionOf(current, versions)?.version).toBe(1);
+  });
+
+  it('没有 supersedesVersionId 时回退到同计划 version-1', () => {
+    const planV3 = makePlan({ version: 3 });
+    const versions = [makePlan({ version: 1 }), makePlan({ version: 2 }), planV3];
+    expect(previousVersionOf(planV3, versions)?.version).toBe(2);
+  });
+
+  it('上一版不在列表里时返回 undefined（由调用方决定是否回源读取）', () => {
+    const planV9 = makePlan({ version: 9 });
+    expect(previousVersionOf(planV9, [planV9])).toBeUndefined();
   });
 });
