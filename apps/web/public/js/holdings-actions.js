@@ -6,8 +6,18 @@
 'use strict';
 
 import { callApi } from './api.js';
+import {
+  actionsRow,
+  fieldWrap,
+  makeInput,
+  makeSelect,
+  parseNonNegativeInt,
+  parseNonNegativeNumber,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from './form-kit.js';
 import { closeModal, openModal } from './modal.js';
-import { $, el, fmtNum } from './ui.js';
+import { $, el, fmtNum, toolErrorText } from './ui.js';
 
 /* ============ 依赖注入 ============ */
 
@@ -25,69 +35,7 @@ export const initHoldingsActions = ({ refresh, setStatus }) => {
   }
 };
 
-/* ============ 表单小件 ============ */
-
 const STOCK_ID_PATTERN = /^[A-Z0-9]{1,12}\.(SH|SZ|BJ|HK|US)$/;
-
-const makeInput = (id, { type = 'text', value = '', placeholder = '' } = {}) => {
-  const input = el('input');
-  input.id = id;
-  input.type = type;
-  if (placeholder.length > 0) input.placeholder = placeholder;
-  if (value.length > 0) input.value = value;
-  return input;
-};
-
-const fieldWrap = (label, control, hint) => {
-  const node = el('div', 'field');
-  node.append(el('label', null, label));
-  node.append(control);
-  if (hint !== undefined) node.append(el('span', 'hint', hint));
-  return node;
-};
-
-const makeSelect = (id, options) => {
-  const select = el('select');
-  select.id = id;
-  for (const [value, label] of options) {
-    const option = el('option', null, label);
-    option.value = value;
-    select.append(option);
-  }
-  return select;
-};
-
-const actionsRow = (confirmLabel, { danger = false, onConfirm } = {}) => {
-  const row = el('div', 'modal-actions');
-  const cancel = el('button', 'btn btn-outline', '取消');
-  cancel.type = 'button';
-  cancel.addEventListener('click', closeModal);
-  const ok = el('button', danger ? 'btn btn-danger' : 'btn btn-primary', confirmLabel);
-  ok.type = 'button';
-  ok.addEventListener('click', () => void onConfirm(ok));
-  row.append(cancel, ok);
-  return row;
-};
-
-const parsePositiveInt = (raw) => {
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
-
-const parsePositiveNumber = (raw) => {
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
-
-const parseNonNegativeInt = (raw) => {
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 0 ? n : null;
-};
-
-const parseNonNegativeNumber = (raw) => {
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-};
 
 /**
  * 账户快照状态提示：只有非 complete 或缺失时才需要提醒，complete 不占位。
@@ -192,16 +140,6 @@ export const buildAccountSnapshotInput = ({
       ...(trimmedNote === '' ? {} : { note: trimmedNote }),
     },
   };
-};
-
-export const toolErrorText = (error) => {
-  if (error === null || typeof error !== 'object') return '提交失败';
-  if (error.kind === 'permission_denied') {
-    const required = error.required ?? '当前操作未开启';
-    return `权限校验失败：${required}`;
-  }
-  const detail = error.message ?? error.cause ?? '';
-  return detail === '' ? String(error.kind) : `${error.kind}：${detail}`;
 };
 
 /** fetch_quote 返回 { quote }；集中解析，避免 UI 误读不存在的 data.price。 */

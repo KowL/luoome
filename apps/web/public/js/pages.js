@@ -30,6 +30,7 @@ import {
   mount,
   sortableHeader,
   statBlock,
+  toolErrorText,
 } from './ui.js';
 
 /* 跨自动刷新保留的列表排序状态（dashboard 5s、holdings 10s 会重绘，不持久则排序瞬间失效） */
@@ -2415,17 +2416,6 @@ const renderResearch = async (setStatus) => {
       .map((item) => item.trim())
       .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index);
 
-  const writeErrorText = (error) => {
-    if (!error || typeof error !== 'object') return '写入失败';
-    if (error.kind === 'permission_denied') {
-      return `写入未开启：${error.required ?? '请设置 LUOOME_EXPOSE_WRITE=true 并重试'}`;
-    }
-    return error.message ?? error.cause ?? error.required ?? '写入失败';
-  };
-
-  const toolErrorText = (error, fallback) =>
-    error?.message ?? error?.required ?? error?.cause ?? error?.kind ?? fallback;
-
   const writeResearch = async (button, toolName, input, label) => {
     if (button !== null) button.disabled = true;
     if (writeStatus !== null) {
@@ -2440,7 +2430,7 @@ const renderResearch = async (setStatus) => {
       if (!response.ok) {
         if (writeStatus !== null) {
           writeStatus.className = 'research-write-status error';
-          writeStatus.textContent = writeErrorText(response.error);
+          writeStatus.textContent = toolErrorText(response.error, '写入失败');
         }
         return;
       }

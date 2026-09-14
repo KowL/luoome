@@ -6,8 +6,8 @@ import {
   snapshotButtonLabel,
   snapshotErrorText,
   snapshotStatusNotice,
-  toolErrorText,
 } from './holdings-actions.js';
+import { toolErrorText } from './ui.js';
 
 describe('新增持仓行情价格', () => {
   it('从 fetch_quote 的 data.quote.close 中读取现价', () => {

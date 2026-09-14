@@ -9,10 +9,9 @@ import {
   openAccountSnapshotModal,
   snapshotButtonLabel,
   snapshotStatusNotice,
-  toolErrorText,
 } from './holdings-actions.js';
 import { openModal } from './modal.js';
-import { el, fmtDateTime, fmtNum, mount } from './ui.js';
+import { el, fmtDateTime, fmtNum, mount, toolErrorText } from './ui.js';
 
 const ACTION_LABELS = {
   observe: '观察',

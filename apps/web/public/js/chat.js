@@ -4,7 +4,7 @@
 import { consumeUIMessageStream } from './ai-ui-stream.js';
 import { callApi } from './api.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
-import { $, adviceCard, el, mount } from './ui.js';
+import { $, adviceCard, el, mount, resultErrorText } from './ui.js';
 
 const feed = [];
 let sessions = [];
@@ -36,7 +36,6 @@ const TOOL_LABELS = {
 };
 
 const toolLabel = (tool) => TOOL_LABELS[tool] ?? tool;
-const errorText = (result, fallback) => result?.error?.message ?? result?.error?.cause ?? fallback;
 const trimLeadingChatWhitespace = (text) => text.trimStart();
 
 const SCENARIO_LABELS = {
@@ -235,7 +234,7 @@ const draftCard = (draft) => {
         renderChat();
       }
     } else {
-      settle(`执行失败：${errorText(result, '未知错误')}`, false);
+      settle(`执行失败：${resultErrorText(result, '未知错误')}`, false);
     }
   });
   editBtn.addEventListener('click', () => {
@@ -342,7 +341,7 @@ const renameSession = async (session) => {
     body: JSON.stringify({ title }),
   });
   if (!result.ok) {
-    await alertDialog('重命名失败', errorText(result, '未知错误'));
+    await alertDialog('重命名失败', resultErrorText(result, '未知错误'));
     return;
   }
   await refreshSessions();
@@ -361,7 +360,7 @@ const deleteSession = async (session) => {
     method: 'DELETE',
   });
   if (!result.ok) {
-    await alertDialog('删除失败', errorText(result, '未知错误'));
+    await alertDialog('删除失败', resultErrorText(result, '未知错误'));
     return;
   }
   if (activeSessionId === session.id) {
@@ -461,7 +460,7 @@ const selectSession = async (sessionId) => {
   if (sending || sessionId === activeSessionId) return;
   const result = await callApi(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
   if (!result.ok) {
-    await alertDialog('读取会话失败', errorText(result, '未知错误'));
+    await alertDialog('读取会话失败', resultErrorText(result, '未知错误'));
     return;
   }
   activeSessionId = sessionId;
@@ -489,7 +488,7 @@ const createSession = async () => {
     body: JSON.stringify({}),
   });
   if (!result.ok) {
-    await alertDialog('创建会话失败', errorText(result, '无法创建会话'));
+    await alertDialog('创建会话失败', resultErrorText(result, '无法创建会话'));
     return null;
   }
   const session = result.data.session;

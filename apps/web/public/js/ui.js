@@ -372,6 +372,23 @@ const createPagination = (options = {}) => {
   return { root, setState, getState };
 };
 
+/**
+ * ToolError → 用户可读文案（全站统一口径）。
+ * 保留既有「kind：detail」前缀便于定位；权限失败单独说明缺哪个能力。
+ */
+const toolErrorText = (error, fallback = '操作失败') => {
+  if (error === null || typeof error !== 'object') return fallback;
+  if (error.kind === 'permission_denied') {
+    return `权限校验失败：${error.required ?? '当前操作未开启'}`;
+  }
+  const detail = error.message ?? error.cause ?? error.required ?? '';
+  if (detail !== '') return error.kind === undefined ? detail : `${error.kind}：${detail}`;
+  return error.kind ?? fallback;
+};
+
+/** ToolResult → 用户可读文案（result.error 上的同一个翻译）。 */
+const resultErrorText = (result, fallback) => toolErrorText(result?.error, fallback);
+
 export {
   $,
   $$,
@@ -387,6 +404,8 @@ export {
   fmtPct,
   fmtSigned,
   mount,
+  resultErrorText,
   sortableHeader,
   statBlock,
+  toolErrorText,
 };

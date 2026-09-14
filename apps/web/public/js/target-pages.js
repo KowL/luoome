@@ -1,4 +1,5 @@
 import { callApi, getAccountId } from './api.js';
+import { makeInput, makeSelect, makeTextarea } from './form-kit.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
@@ -15,17 +16,12 @@ import {
   fmtNum,
   fmtSigned,
   mount,
+  resultErrorText,
   sortableHeader,
   statBlock,
 } from './ui.js';
 
 const defaultOrderForKey = (key) => (key === 'price' ? 'asc' : 'desc');
-
-const errorText = (result) => {
-  const error = result?.error;
-  if (error === undefined) return '操作失败';
-  return `${error.kind ?? 'error'}：${error.message ?? error.required ?? error.cause ?? '操作失败'}`;
-};
 
 const post = (path, input, method = 'POST') =>
   callApi(path, { method, body: JSON.stringify(input) });
@@ -153,13 +149,13 @@ export const renderTriggerHistory = ({ root, meta }) => {
   const counts = summarizeTriggerSources(triggers, alertPlanIds);
   const filtered = filterTriggersBySource(triggers, triggerSourceFilter, alertPlanIds);
   if (meta !== null) {
-    const select = el('select');
-    select.id = 'alerts-trigger-source';
-    for (const option of TRIGGER_SOURCE_FILTERS) {
-      const node = el('option', null, `${option.label}（${counts[option.id] ?? 0}）`);
-      node.value = option.id;
-      select.append(node);
-    }
+    const select = makeSelect(
+      'alerts-trigger-source',
+      TRIGGER_SOURCE_FILTERS.map((option) => [
+        option.id,
+        `${option.label}（${counts[option.id] ?? 0}）`,
+      ]),
+    );
     select.value = triggerSourceFilter;
     select.addEventListener('change', () => {
       triggerSourceFilter = select.value;
@@ -517,7 +513,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
   // 拉取期间用户已切走其它 tab，不再回填
   if (watchlistStockTab !== watchlistId) return;
   if (!result.ok) {
-    mount(view, el('p', 'status error', errorText(result)));
+    mount(view, el('p', 'status error', resultErrorText(result)));
     return;
   }
   const { watchlist, alertPlans } = result.data;
@@ -552,7 +548,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
       input,
       'PATCH',
     );
-    setStatus(updated.ok ? '关注列表已更新' : errorText(updated), !updated.ok);
+    setStatus(updated.ok ? '关注列表已更新' : resultErrorText(updated), !updated.ok);
     await renderWatchlists(setStatus);
   });
 
@@ -566,7 +562,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
     if (!confirmed) return;
     const archived = await post(`/api/watchlists/${encodeURIComponent(watchlist.id)}/archive`, {});
     if (!archived.ok) {
-      setStatus(errorText(archived), true);
+      setStatus(resultErrorText(archived), true);
       return;
     }
     watchlistStockTab = 'all';
@@ -684,7 +680,9 @@ const renderListPane = async (watchlistId, views, setStatus) => {
       if (currentRequest !== requestId || searchInput.value.trim() !== query) return;
       if (!response.ok) {
         candidates = [];
-        resultList.replaceChildren(el('p', 'member-picker-empty modal-error', errorText(response)));
+        resultList.replaceChildren(
+          el('p', 'member-picker-empty modal-error', resultErrorText(response)),
+        );
         resultList.hidden = false;
         return;
       }
@@ -750,7 +748,7 @@ const renderListPane = async (watchlistId, views, setStatus) => {
           { members },
         );
         if (!added.ok) {
-          errorNode.textContent = errorText(added);
+          errorNode.textContent = resultErrorText(added);
           submit.disabled = false;
           return;
         }
@@ -814,12 +812,12 @@ const renderListPane = async (watchlistId, views, setStatus) => {
       const updated = await patchMember(watchlist.id, stock.stockId, {
         priority: priority.value,
       });
-      setStatus(updated.ok ? '优先级已更新' : errorText(updated), !updated.ok);
+      setStatus(updated.ok ? '优先级已更新' : resultErrorText(updated), !updated.ok);
     });
     const archive = actionButton('归档', async (button) => {
       button.disabled = true;
       const archived = await archiveMember(watchlist.id, stock.stockId);
-      setStatus(archived.ok ? `${stock.stockId} 已归档` : errorText(archived), !archived.ok);
+      setStatus(archived.ok ? `${stock.stockId} 已归档` : resultErrorText(archived), !archived.ok);
       await renderWatchlists(setStatus);
     });
     const sources = membership.sources ?? [];
@@ -1050,7 +1048,7 @@ export const renderWatchlists = async (setStatus) => {
   const view = $('#watchlists-view');
   if (view === null) return;
   if (!result.ok) {
-    mount(view, el('p', 'status error', errorText(result)));
+    mount(view, el('p', 'status error', resultErrorText(result)));
     return;
   }
   lastWatchlistOverview = result.data;
@@ -1161,7 +1159,10 @@ const editAlertPlan = async (plan, setStatus) => {
     input,
     creating ? 'POST' : 'PATCH',
   );
-  setStatus(result.ok ? (creating ? '预警已创建' : '预警已更新') : errorText(result), !result.ok);
+  setStatus(
+    result.ok ? (creating ? '预警已创建' : '预警已更新') : resultErrorText(result),
+    !result.ok,
+  );
   return result.ok;
 };
 
@@ -1178,7 +1179,7 @@ const planCard = (plan, setStatus) => {
     });
     if (!confirmed) return;
     const result = await post(`/api/alert-plans/${encodeURIComponent(plan.id)}`, {}, 'DELETE');
-    setStatus(result.ok ? '预警已删除' : errorText(result), !result.ok);
+    setStatus(result.ok ? '预警已删除' : resultErrorText(result), !result.ok);
     if (result.ok) await renderAlerts(setStatus);
   });
   return el('div', 'entity-item', [
@@ -1260,7 +1261,7 @@ export const renderAlerts = async (setStatus) => {
         el('p', 'placeholder', '暂无预警计划。'),
       );
     } else {
-      mount(plansRoot, el('p', 'status error', errorText(plansResult)));
+      mount(plansRoot, el('p', 'status error', resultErrorText(plansResult)));
     }
   }
   if (triggersRoot !== null) {
@@ -1272,7 +1273,7 @@ export const renderAlerts = async (setStatus) => {
       });
       renderTriggerHistory({ root: triggersRoot, meta: $('#alerts-trigger-meta') });
     } else {
-      mount(triggersRoot, el('p', 'status error', errorText(triggersResult)));
+      mount(triggersRoot, el('p', 'status error', resultErrorText(triggersResult)));
     }
   }
   renderTradingPlanPanel({
@@ -1287,23 +1288,17 @@ export const renderAlerts = async (setStatus) => {
 };
 
 const openStrategyCreateModal = (setStatus, refresh) => {
-  const nameInput = el('input');
-  nameInput.type = 'text';
-  nameInput.placeholder = '策略名称';
-  const descInput = el('input');
-  descInput.type = 'text';
-  descInput.placeholder = '策略描述';
-  const defInput = el('textarea', 'strategy-def-input');
-  defInput.rows = 16;
+  const nameInput = makeInput('strategy-create-name', { placeholder: '策略名称' });
+  const descInput = makeInput('strategy-create-desc', { placeholder: '策略描述' });
+  const defInput = makeTextarea('strategy-create-definition', {
+    rows: 16,
+    value: JSON.stringify(templateDefinition, null, 2),
+  });
+  defInput.classList.add('strategy-def-input');
   defInput.spellcheck = false;
   defInput.wrap = 'off';
-  defInput.value = JSON.stringify(templateDefinition, null, 2);
 
-  const templateSelect = el('select');
-  const customOption = document.createElement('option');
-  customOption.value = '';
-  customOption.textContent = '自定义策略（空白模板）';
-  templateSelect.append(customOption);
+  const templateSelect = makeSelect('strategy-create-template', [['', '自定义策略（空白模板）']]);
   const templateHint = el('p', 'hint', '加载模板中…');
 
   let selectedTemplate = null;
@@ -1323,7 +1318,7 @@ const openStrategyCreateModal = (setStatus, refresh) => {
   const loadTemplates = async () => {
     const result = await callApi('/api/strategy-templates');
     if (!result.ok) {
-      templateHint.textContent = errorText(result);
+      templateHint.textContent = resultErrorText(result);
       templateHint.className = 'status error';
       return;
     }
@@ -1367,7 +1362,7 @@ const openStrategyCreateModal = (setStatus, refresh) => {
       button.disabled = true;
       const created = await post('/api/strategies', { name, description });
       if (!created.ok) {
-        setStatus(errorText(created), true);
+        setStatus(resultErrorText(created), true);
         button.disabled = false;
         return;
       }
@@ -1377,7 +1372,7 @@ const openStrategyCreateModal = (setStatus, refresh) => {
       );
       button.disabled = false;
       if (!versioned.ok) {
-        setStatus(errorText(versioned), true);
+        setStatus(resultErrorText(versioned), true);
         return;
       }
       closeModal();
@@ -1425,7 +1420,7 @@ export const initTargetActions = ({ setStatus, refresh }) => {
       kind: 'personal',
       membershipPolicy: 'mixed',
     });
-    setStatus(result.ok ? '关注列表已创建' : errorText(result), !result.ok);
+    setStatus(result.ok ? '关注列表已创建' : resultErrorText(result), !result.ok);
     // 创建成功后切到新列表的 tab
     if (result.ok) watchlistStockTab = result.data.watchlist.id;
     await refresh('watchlists');
@@ -1438,7 +1433,7 @@ export const initTargetActions = ({ setStatus, refresh }) => {
     setStatus(
       result.ok
         ? `预警计划试跑完成：${result.data.evaluatedPlans} 个计划，${result.data.triggers.length} 条触发`
-        : errorText(result),
+        : resultErrorText(result),
       !result.ok,
     );
     await refresh('alerts');
