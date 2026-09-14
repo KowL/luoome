@@ -487,10 +487,25 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   };
 
   // —— 同源静态仪表盘（原生 HTML/JS，无构建步骤）——
-  const serveFile = (file: string, contentType: string) => (): Response =>
-    new Response(Bun.file(join(PUBLIC_DIR, file)), {
-      headers: { 'content-type': contentType },
-    });
+  /**
+   * 静态资源响应：按 mtime+size 生成 ETag，并用 `no-cache` 让浏览器每次重新校验。
+   * 本地工具没有构建步骤，隐式缓存会让改完的前端模块继续跑旧代码；未修改时回 304，不重复传输。
+   */
+  const staticResponse = (request: Request, file: string, contentType: string): Response => {
+    const bunFile = Bun.file(join(PUBLIC_DIR, file));
+    if (bunFile.size === 0) return new Response('not found', { status: 404 });
+    const etag = `W/"${bunFile.lastModified}-${bunFile.size}"`;
+    const headers = { 'content-type': contentType, 'cache-control': 'no-cache', etag };
+    if (request.headers.get('if-none-match') === etag) {
+      return new Response(null, { status: 304, headers });
+    }
+    return new Response(bunFile, { headers });
+  };
+
+  const serveFile =
+    (file: string, contentType: string) =>
+    (c: Context): Response =>
+      staticResponse(c.req.raw, file, contentType);
   app.get('/', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/style.css', serveFile('style.css', 'text/css; charset=utf-8'));
   app.get('/tactics', serveFile('index.html', 'text/html; charset=utf-8'));
@@ -529,9 +544,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (filename.includes('/') || filename.includes('..')) {
       return new Response('forbidden', { status: 403 });
     }
-    return new Response(Bun.file(join(PUBLIC_DIR, 'js', filename)), {
-      headers: { 'content-type': 'text/javascript; charset=utf-8' },
-    });
+    return staticResponse(c.req.raw, join('js', filename), 'text/javascript; charset=utf-8');
   });
 
   // —— HTTP API（统一 ToolResult 形状）——

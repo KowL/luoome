@@ -73,6 +73,45 @@ describe('Web 信息架构', () => {
   });
 });
 
+describe('静态资源缓存策略', () => {
+  it('HTML 与前端模块带 ETag 且禁用隐式缓存，未修改时回 304', async () => {
+    const html = await app.fetch(new Request('http://test/'));
+    expect(html.status).toBe(200);
+    expect(html.headers.get('cache-control')).toBe('no-cache');
+    const etag = html.headers.get('etag');
+    expect(etag).toBeTruthy();
+
+    const revalidated = await app.fetch(
+      new Request('http://test/', { headers: { 'if-none-match': etag ?? '' } }),
+    );
+    expect(revalidated.status).toBe(304);
+
+    const module = await app.fetch(new Request('http://test/js/app.js'));
+    expect(module.status).toBe(200);
+    expect(module.headers.get('cache-control')).toBe('no-cache');
+    expect(module.headers.get('etag')).toBeTruthy();
+  });
+
+  it('spa 壳路由与 style.css 走同一缓存策略', async () => {
+    for (const path of ['/alerts', '/reports', '/style.css']) {
+      const response = await app.fetch(new Request(`http://test${path}`));
+      expect([path, response.status]).toEqual([path, 200]);
+      expect([path, response.headers.get('cache-control')]).toEqual([path, 'no-cache']);
+    }
+  });
+
+  it('不存在的模块返回 404，而不是空 200（避免 typo 的 import 静默变成空模块）', async () => {
+    const missing = await app.fetch(new Request('http://test/js/does-not-exist.js'));
+    expect(missing.status).toBe(404);
+  });
+
+  it('vendor 图表库保持固定版本长缓存', async () => {
+    const vendor = await app.fetch(new Request('http://test/vendor/lightweight-charts-5.2.0.mjs'));
+    expect(vendor.status).toBe(200);
+    expect(vendor.headers.get('cache-control')).toContain('immutable');
+  });
+});
+
 describe('账户绩效 API', () => {
   it('使用账户真实交易与行情事实计算每日估值，并要求 external opt-in', async () => {
     const guarded = createWebApp(await buildTestContext(), { exposeExternal: false });
