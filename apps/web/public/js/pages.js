@@ -1193,8 +1193,8 @@ const reportBlockNode = (block) => {
 };
 
 /**
- * 报告 sheet 通用渲染（报告页详情与首页共用）：header + sections + provenance。
- * actions 为右上角操作区节点（报告页传导出/删除按钮；首页只传状态 badge）。
+ * 报告 sheet 通用渲染（报告列表详情与手动生成结果共用）：header + sections + provenance。
+ * actions 为右上角操作区节点（导出/删除按钮与状态 badge）。
  */
 const reportSheetNodes = (report, actions = []) => {
   const nodes = [
@@ -1261,50 +1261,8 @@ const reportSheetNodes = (report, actions = []) => {
 };
 
 /**
- * 首页 = 最新收盘报告（PRD strategy-ai-managed-automation §4.1/§5）。
- * 复用 list_reports + get_report，不新增绕过 tools 的端点；
- * 空库 / 无收盘报告时给诚实空态与生成路径说明。
+ * 导出报告的 Markdown / 纯文本内容。
  */
-const renderHome = async (setStatus) => {
-  const container = $('#home-report');
-  if (container === null) return;
-  const result = await callApi('/api/reports?kind=closing&limit=1');
-  if (!result.ok) {
-    mount(container, el('p', 'placeholder', `收盘报告加载失败：${result.error.kind}`));
-    setStatus(`收盘报告加载失败：${result.error.kind}`, true);
-    return;
-  }
-  const latest = (result.data.reports ?? [])[0];
-  if (latest === undefined) {
-    const toReports = el('a', 'btn btn-outline btn-sm', '去「报告」页生成');
-    toReports.setAttribute('href', '#reports');
-    mount(
-      container,
-      el('div', 'report-empty', [
-        el('span', 'report-empty-mark', 'R'),
-        el('h2', null, '尚无收盘报告'),
-        el(
-          'p',
-          null,
-          '收盘报告在每日收盘后的策略日循环中自动生成；也可以到「报告」页选择交易日手动生成一份。',
-        ),
-        toReports,
-      ]),
-    );
-    setStatus('尚无收盘报告');
-    return;
-  }
-  const detail = await callApi(`/api/reports/${latest.id}`);
-  if (!detail.ok) {
-    mount(container, el('p', 'placeholder', `收盘报告加载失败：${detail.error.kind}`));
-    setStatus(`收盘报告加载失败：${detail.error.kind}`, true);
-    return;
-  }
-  const report = detail.data.report;
-  mount(container, reportSheetNodes(report, [reportStatusBadge(report.status)]));
-  setStatus(`最新收盘报告 · ${report.periodEnd}`);
-};
-
 const downloadReport = async (reportId, format) => {
   const result = await callApi(`/api/reports/${reportId}/render?format=${format}`);
   if (!result.ok) return;
@@ -3075,7 +3033,6 @@ export {
   renderDashboard,
   renderDataHealth,
   renderHoldings,
-  renderHome,
   renderReports,
   renderResearch,
   renderReview,

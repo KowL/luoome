@@ -2,6 +2,8 @@
 
 > 状态：M1 报告中心已交付（2026-09-01）；M2 AI 生命周期管理已交付（2026-09-02，实施记录见
 > [Strategy AI 生命周期管理详细设计](../ddd/strategy-ai-lifecycle-detailed-design.md) §8）
+> 后续变更（2026-09-11）：Web 独立「首页」已移除；最新收盘报告改为在「报告」页查看（默认选中最新一份）。
+> 本文 §3.1/§4.1/§5 中“Web 首页渲染最新收盘报告”的要求仅作历史记录，当前行为以代码与测试为准。
 > 上位约束：[CONTEXT.md](../../CONTEXT.md)、[架构说明](../ARCHITECTURE.md)、[安全说明](../SECURITY.md)
 > 关联文档：[策略工作台 PRD](./strategy-v2.md)、[Strategy DSL PRD](./strategy-dsl.md)、
 > [AI 投资决策闭环产品总纲](./ai-investment-decision-loop.md)、

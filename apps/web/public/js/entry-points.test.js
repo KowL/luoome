@@ -70,29 +70,17 @@ describe('报告页入口', () => {
   });
 });
 
-describe('首页 = 最新收盘报告', () => {
-  it('侧栏首项为「首页」，#route-home 与 #home-report 容器齐全', () => {
-    expect(html).toContain('href="#home" data-route="home"');
-    expect(html.indexOf('data-route="home"')).toBeLessThan(html.indexOf('data-route="dashboard"'));
-    expect(html).toContain('id="route-home"');
-    expect(html).toContain('id="home-report"');
-    expect(html).toContain('href="#reports"');
-  });
-
-  it('app.js 默认路由改为 home 并接入 renderHome；dashboard 降级为二级路由不删除', () => {
-    expect(appJs).toContain("'home'");
-    expect(appJs).toContain("ROUTES.includes(name) ? name : 'home'");
-    expect(appJs).toContain("ROUTES.includes(path) ? path : 'home'");
-    expect(appJs).toContain('renderHome(setStatus)');
+describe('首页已移除', () => {
+  it('侧栏与路由容器不再包含 #home；看盘为默认路由', () => {
+    expect(html).not.toContain('href="#home"');
+    expect(html).not.toContain('data-route="home"');
+    expect(html).not.toContain('id="route-home"');
+    expect(html).not.toContain('id="home-report"');
+    expect(appJs).not.toContain("'home'");
+    expect(appJs).not.toContain('renderHome');
+    expect(appJs).toContain("ROUTES.includes(name) ? name : 'dashboard'");
+    expect(appJs).toContain("ROUTES.includes(path) ? path : 'dashboard'");
     expect(appJs).toContain('renderDashboard(setStatus)');
-  });
-
-  it('首页复用 list_reports/get_report 现有 API；空态诚实说明生成路径', () => {
-    const pages = read('./pages.js');
-    expect(pages).toContain("callApi('/api/reports?kind=closing&limit=1')");
-    expect(pages).toContain('reportSheetNodes');
-    expect(pages).toContain('尚无收盘报告');
-    expect(pages).toContain('去「报告」页生成');
   });
 
   it('报告 advice 条目深链接 #advice?id=…，建议页按 id 置顶定位', () => {
