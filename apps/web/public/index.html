@@ -335,6 +335,7 @@
             <h2>明细</h2>
             <div class="card-meta">
               <button id="btn-holding-add" class="btn btn-primary btn-sm" type="button">+ 新增持仓</button>
+              <button id="btn-account-snapshot" class="btn btn-outline btn-sm" type="button">账户快照</button>
               <button id="btn-holdings-analyze" class="btn btn-outline btn-sm" type="button">分析全部</button>
               <button id="btn-holdings-analyze-cancel" class="btn btn-outline btn-sm" type="button" hidden>取消分析</button>
             </div>
@@ -435,7 +436,17 @@
           <div id="alerts-list" class="entity-list"><p class="placeholder">加载中…</p></div>
         </div>
         <div class="card mt-4">
-          <div class="card-header"><h2>触发历史</h2><div class="card-meta">包含策略证据与数据时间</div></div>
+          <div class="card-header">
+            <h2>交易计划</h2>
+            <div id="alerts-plans-meta" class="card-meta">--</div>
+          </div>
+          <div id="alerts-plans" class="entity-list"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header">
+            <h2>触发历史</h2>
+            <div id="alerts-trigger-meta" class="card-meta">--</div>
+          </div>
           <div id="alerts-triggers"><p class="placeholder">加载中…</p></div>
         </div>
       </section>

@@ -9216,3 +9216,39 @@ body > .modal {
 .inline-field input {
   min-width: 140px;
 }
+
+/* ============ 「预警」页交易计划分区（MVP2） ============ */
+
+/* 缺失账户快照时的登记入口；虚线边框表示这是待补充的账户事实，不是错误态。 */
+.plan-guidance {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+}
+
+.plan-detail-section {
+  margin-bottom: var(--space-3);
+}
+
+.plan-detail-section h3 {
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+  letter-spacing: 0.04em;
+}
+
+.plan-detail-line {
+  margin: 0 0 2px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.snapshot-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+}

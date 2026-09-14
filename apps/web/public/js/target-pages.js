@@ -1,10 +1,11 @@
-import { callApi } from './api.js';
+import { callApi, getAccountId } from './api.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
   invalidateStrategyWorkspaceCache,
   renderStrategyWorkspacePage,
 } from './strategy-workspace.js';
+import { renderTradingPlanPanel } from './trading-plan-panel.js';
 import {
   $,
   compareValues,
@@ -43,9 +44,147 @@ export const appendMemberStock = (selected, stock, existingStockIds = []) => {
   return unavailable.has(stock.id) ? selected : [...selected, stock];
 };
 
-/** 触发条目时间行；字段名与 WatchTriggerSchema（只有 createdAt）对齐。 */
-export const triggerMetaText = (trigger) =>
-  `${trigger.alertPlanId} · 数据 ${new Date(trigger.createdAt).toLocaleString('zh-CN')}`;
+/** 触发条目副标题：来源名称 · 命中条件 · 数据时间（字段名与 WatchTriggerSchema 对齐）。 */
+const RULE_KIND_LABELS = {
+  'price-level': '价格条件',
+  'price-change': '涨跌幅度',
+  'cost-threshold': '成本阈值',
+  'strategy-signal': '策略信号',
+  'event-date': '事件日期',
+  tactic: '旧规则',
+};
+
+const DELIVERY_LABELS = {
+  'not-requested': '未请求投递',
+  'suppressed-cooldown': '冷却抑制',
+  'suppressed-daily-limit': '日额度抑制',
+  pending: '待投递',
+  sent: '已送达',
+  failed: '投递失败',
+  'fallback-log': '仅记录日志',
+};
+
+/** 交易计划监控的触发池前缀（intraday-trading-plan-watch）。 */
+export const TRADING_PLAN_POOL_PREFIX = 'trading-plan-watch:';
+
+export const triggerSourceLabel = (trigger, { alertPlanNames = {}, tradingPlanAccountId } = {}) => {
+  const poolId = trigger.alertPlanId ?? trigger.poolId ?? '';
+  const planName = alertPlanNames[poolId];
+  if (planName !== undefined) return planName;
+  if (poolId.startsWith(TRADING_PLAN_POOL_PREFIX)) {
+    const accountId = poolId.slice(TRADING_PLAN_POOL_PREFIX.length);
+    return tradingPlanAccountId !== undefined && accountId === tradingPlanAccountId
+      ? '交易计划监控（本账户）'
+      : '交易计划监控';
+  }
+  return poolId;
+};
+
+const TRIGGER_PRIORITY_LABELS = { urgent: '急', important: '重要', normal: '普通' };
+const TRIGGER_PRIORITY_BADGES = {
+  urgent: 'badge-urgent',
+  important: 'badge-important',
+  normal: 'badge-normal',
+};
+
+const triggerConditionText = (trigger) => {
+  const described = trigger.evalSnapshot?.conditionDescription;
+  if (typeof described === 'string' && described.trim().length > 0) return described.trim();
+  const ruleKind = trigger.ruleKind;
+  return typeof ruleKind === 'string' ? (RULE_KIND_LABELS[ruleKind] ?? ruleKind) : null;
+};
+
+export const triggerDeliveryLabel = (status) =>
+  status === undefined ? null : (DELIVERY_LABELS[status] ?? status);
+
+export const triggerDeliveryBadgeClass = (status) =>
+  `badge badge-delivery-${status ?? 'not-requested'}`;
+
+export const triggerPriorityLabel = (priority) =>
+  TRIGGER_PRIORITY_LABELS[priority] ?? priority ?? '--';
+
+export const triggerPriorityBadgeClass = (priority) =>
+  `badge ${TRIGGER_PRIORITY_BADGES[priority] ?? ''}`;
+
+export const triggerMetaText = (trigger, labels) =>
+  [
+    triggerSourceLabel(trigger, labels),
+    triggerConditionText(trigger),
+    `数据 ${fmtDateTime(trigger.createdAt)}`,
+  ]
+    .filter((part) => part !== null && part !== undefined)
+    .join(' · ');
+
+/** 触发来源分类：预警计划 / 交易计划监控 / 其它。 */
+export const triggerSourceKind = (trigger, alertPlanIds = new Set()) => {
+  const poolId = trigger.alertPlanId ?? trigger.poolId ?? '';
+  if (poolId.startsWith(TRADING_PLAN_POOL_PREFIX)) return 'trading-plan';
+  if (alertPlanIds.has(poolId)) return 'alert-plan';
+  return 'other';
+};
+
+export const summarizeTriggerSources = (triggers, alertPlanIds = new Set()) => {
+  const counts = { all: triggers.length, 'alert-plan': 0, 'trading-plan': 0, other: 0 };
+  for (const trigger of triggers) counts[triggerSourceKind(trigger, alertPlanIds)] += 1;
+  return counts;
+};
+
+export const filterTriggersBySource = (triggers, source, alertPlanIds = new Set()) =>
+  source === 'all'
+    ? triggers
+    : triggers.filter((trigger) => {
+        const kind = triggerSourceKind(trigger, alertPlanIds);
+        return source === 'other' ? kind === 'other' : kind === source;
+      });
+
+/** 触发历史过滤状态；只影响渲染，不影响请求。 */
+const TRIGGER_SOURCE_FILTERS = [
+  { id: 'all', label: '全部来源' },
+  { id: 'alert-plan', label: '预警计划' },
+  { id: 'trading-plan', label: '交易计划监控' },
+];
+
+let triggerSourceFilter = 'all';
+let triggerHistoryState = { triggers: [], alertPlanIds: new Set(), labels: {} };
+
+export const renderTriggerHistory = ({ root, meta }) => {
+  if (root === null) return;
+  const { triggers, alertPlanIds, labels } = triggerHistoryState;
+  const counts = summarizeTriggerSources(triggers, alertPlanIds);
+  const filtered = filterTriggersBySource(triggers, triggerSourceFilter, alertPlanIds);
+  if (meta !== null) {
+    const select = el('select');
+    select.id = 'alerts-trigger-source';
+    for (const option of TRIGGER_SOURCE_FILTERS) {
+      const node = el('option', null, `${option.label}（${counts[option.id] ?? 0}）`);
+      node.value = option.id;
+      select.append(node);
+    }
+    select.value = triggerSourceFilter;
+    select.addEventListener('change', () => {
+      triggerSourceFilter = select.value;
+      renderTriggerHistory({ root, meta });
+    });
+    mount(meta, select);
+  }
+  if (filtered.length === 0) {
+    mount(
+      root,
+      el('p', 'placeholder', triggers.length === 0 ? '暂无触发记录。' : '该来源暂无触发记录。'),
+    );
+    return;
+  }
+  mountPaginated(
+    root,
+    filtered,
+    (trigger) => triggerCard(trigger, labels),
+    el('p', 'placeholder', '暂无触发记录。'),
+  );
+};
+
+export const setTriggerHistoryState = ({ triggers, alertPlanIds, labels }) => {
+  triggerHistoryState = { triggers, alertPlanIds, labels };
+};
 
 export const buildAlertPlanMutationInput = (values, { editing = false } = {}) => {
   let rules;
@@ -1058,12 +1197,19 @@ const planCard = (plan, setStatus) => {
   ]);
 };
 
-const triggerCard = (trigger) =>
-  el('div', 'entity-item', [
+const triggerCard = (trigger, labels) => {
+  const delivery = triggerDeliveryLabel(trigger.deliveryStatus);
+  const priority = trigger.priority ?? 'normal';
+  return el('div', 'entity-item', [
     el('strong', null, `${trigger.stockId} · ${trigger.ruleKind}`),
-    el('div', 'muted', triggerMetaText(trigger)),
+    el('div', 'muted', triggerMetaText(trigger, labels)),
+    el('div', 'row-actions', [
+      el('span', triggerDeliveryBadgeClass(trigger.deliveryStatus), delivery ?? '--'),
+      el('span', triggerPriorityBadgeClass(priority), triggerPriorityLabel(priority)),
+    ]),
     el('div', null, (trigger.evidence ?? []).join('；')),
   ]);
+};
 
 const mountPaginated = (root, items, renderItem, emptyNode) => {
   if (root === null) return;
@@ -1092,20 +1238,24 @@ const mountPaginated = (root, items, renderItem, emptyNode) => {
 };
 
 export const renderAlerts = async (setStatus) => {
-  const [plansResult, triggersResult] = await Promise.all([
+  const [plansResult, triggersResult, tradingPlansResult, snapshotsResult] = await Promise.all([
     callApi('/api/alert-plans'),
-    callApi('/api/watch/triggers?limit=50'),
+    callApi('/api/watch/triggers?limit=200'),
+    callApi('/api/trading-plans?activeOnly=false&limit=200'),
+    callApi('/api/account/snapshots?limit=1'),
   ]);
   const plansRoot = $('#alerts-list');
   const triggersRoot = $('#alerts-triggers');
+  const alertPlans = plansResult.ok ? (plansResult.data.plans ?? []) : [];
+  const alertPlanIds = new Set(alertPlans.map((plan) => plan.id));
+  const alertPlanNames = Object.fromEntries(alertPlans.map((plan) => [plan.id, `${plan.name}`]));
   if (plansRoot !== null) {
-    const plans = plansResult.ok ? (plansResult.data.plans ?? []) : [];
     const meta = $('#alerts-meta');
-    if (meta !== null) meta.textContent = `${plans.length} 个`;
+    if (meta !== null) meta.textContent = `${alertPlans.length} 个`;
     if (plansResult.ok) {
       mountPaginated(
         plansRoot,
-        plans,
+        alertPlans,
         (plan) => planCard(plan, setStatus),
         el('p', 'placeholder', '暂无预警计划。'),
       );
@@ -1114,13 +1264,25 @@ export const renderAlerts = async (setStatus) => {
     }
   }
   if (triggersRoot !== null) {
-    const triggers = triggersResult.ok ? (triggersResult.data.triggers ?? []) : [];
     if (triggersResult.ok) {
-      mountPaginated(triggersRoot, triggers, triggerCard, el('p', 'placeholder', '暂无触发记录。'));
+      setTriggerHistoryState({
+        triggers: triggersResult.data.triggers ?? [],
+        alertPlanIds,
+        labels: { alertPlanNames, tradingPlanAccountId: getAccountId() },
+      });
+      renderTriggerHistory({ root: triggersRoot, meta: $('#alerts-trigger-meta') });
     } else {
       mount(triggersRoot, el('p', 'status error', errorText(triggersResult)));
     }
   }
+  renderTradingPlanPanel({
+    root: $('#alerts-plans'),
+    meta: $('#alerts-plans-meta'),
+    result: tradingPlansResult,
+    snapshotResult: snapshotsResult,
+    onSnapshotSaved: () => renderAlerts(setStatus),
+    setStatus,
+  });
   void setStatus;
 };
 
