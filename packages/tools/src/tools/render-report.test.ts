@@ -48,6 +48,51 @@ const reportFixture = (): Report => ({
 });
 
 describe('render_report tool', () => {
+  it('list 引用用中文标签 + 保留 id，便于阅读与溯源', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    await ctx.repos.report.upsertForPeriod({
+      ...reportFixture(),
+      id: 'report-plan-ref',
+      // 必填 section 全 complete 时报告状态必须同步为 complete（Report 不变量）。
+      status: 'complete',
+      missingDimensions: [],
+      sections: [
+        {
+          key: 'trading-plans',
+          title: '交易计划',
+          required: true,
+          status: 'complete',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                {
+                  title: '贵州茅台 · enter · v2',
+                  detail: '入场 98-103 · 目标 8% · active',
+                  entityKind: 'trading-plan',
+                  entityId: 'account:acc-1:stock:600519.SH:v2',
+                },
+              ],
+            },
+          ],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+    });
+
+    const result = await renderReportTool.execute(
+      { reportId: 'report-plan-ref', format: 'markdown' },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.content).toContain(
+      '- 贵州茅台 · enter · v2（交易计划:account:acc-1:stock:600519.SH:v2） — 入场 98-103 · 目标 8% · active',
+    );
+  });
+
   it('metrics 的 ratio 值渲染为百分比，null 渲染为不可用，displayValue 优先', async () => {
     const ctx = await buildTestContext({ clock: () => now });
     await ctx.repos.report.upsertForPeriod(reportFixture());

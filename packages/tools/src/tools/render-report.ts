@@ -13,6 +13,21 @@ export const RenderReportOutput = z.object({
   contentType: z.string(),
 });
 
+/** 引用标签：entityKind 是内部枚举，报告正文用中文，id 保留以便溯源。 */
+const ENTITY_LABELS: Readonly<Record<string, string>> = {
+  stock: '股票',
+  strategy: '策略',
+  watchlist: '关注分组',
+  'alert-plan': '预警计划',
+  advice: '建议',
+  'trading-plan': '交易计划',
+  'stock-event': '事件',
+  'research-note': '研究资料',
+  'watch-trigger': '触发记录',
+  'stock-group': '旧分组',
+  'watch-plan': '旧预警',
+};
+
 const displayValue = (value: ReportValue): string => {
   if (value === null) return '不可用';
   if (typeof value === 'boolean') return value ? '是' : '否';
@@ -39,7 +54,9 @@ const renderBlockMarkdown = (block: ReportBlock): string[] => {
   if (block.kind === 'list') {
     return block.items.map((item) => {
       const entity =
-        item.entityKind === undefined ? '' : `（${item.entityKind}:${item.entityId ?? ''}）`;
+        item.entityKind === undefined
+          ? ''
+          : `（${ENTITY_LABELS[item.entityKind] ?? item.entityKind}:${item.entityId ?? ''}）`;
       return `- ${item.title}${entity}${item.detail === undefined ? '' : ` — ${item.detail}`}`;
     });
   }
