@@ -106,6 +106,9 @@ export const TEST_ACCOUNT: Account = {
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(1000000),
+  // 与 TEST_HOLDINGS / TEST_TRADES 的账本口径一致（全部买入口径、不计手续费）：
+  // 1,000,000 − Σ(交易数量 × 价格) = 327,150，保证 fixture 对账差额为 0。
+  cashBalance: money(327_150),
   createdAt: new Date('2026-01-05T01:00:00.000Z'),
 };
 
@@ -116,6 +119,7 @@ export const TEST_ACCOUNT_LONGTERM: Account = {
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(500_000),
+  cashBalance: money(500_000),
   createdAt: new Date('2026-02-01T01:00:00.000Z'),
 };
 
@@ -126,6 +130,7 @@ export const TEST_ACCOUNT_SHORTTERM: Account = {
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(200_000),
+  cashBalance: money(200_000),
   createdAt: new Date('2026-03-01T01:00:00.000Z'),
 };
 

@@ -221,6 +221,9 @@ export const ensureSchema = (db: DrizzleDb): void => {
       kind TEXT NOT NULL,
       currency TEXT NOT NULL,
       initial_capital REAL NOT NULL,
+      -- DEFAULT 0 只为兼容绕过 repo 的历史/测试插入；应用写路径始终写入真实余额，
+      -- 真正的旧库没有该列，由 migrateAccountCashBalance 按本金回填。
+      cash_balance REAL NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     )
   `);
@@ -1343,6 +1346,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   );
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
+  migrateAccountCashBalance(db);
   // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
   migrateLegacyBuiltinStrategyOwners(db);
 };
@@ -1677,6 +1681,31 @@ const migrateLegacyAccountKinds = (db: DrizzleDb): void => {
   if (changes > 0) {
     console.warn(`[migrate] accounts: 将 ${changes} 行 kind=mock 升级为 real（v0.5 → MVP 兼容）`);
   }
+};
+
+/**
+ * accounts 补 cash_balance 列（v0.8 起，幂等）。
+ *
+ * 旧库没有现金字段：新增列后按「开户即入金」回填为 initial_capital，
+ * 之后由交易/持仓/资金流水在同一事务内增减（口径见 core portfolio/ledger）。
+ * 旧库的列是 nullable（ALTER ADD COLUMN 无法带 NOT NULL），应用写路径始终写值，
+ * 因此不影响不变量；新库的 DDL 直接声明 NOT NULL。
+ */
+const migrateAccountCashBalance = (db: DrizzleDb): void => {
+  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(accounts)`);
+  if (cols.length === 0) return;
+  if (cols.some((column) => column.name === 'cash_balance')) return;
+  db.run(sql`ALTER TABLE accounts ADD COLUMN cash_balance REAL`);
+  const result = db.run(
+    sql`UPDATE accounts SET cash_balance = initial_capital WHERE cash_balance IS NULL`,
+  );
+  const changes =
+    typeof result === 'object' && result !== null && 'changes' in result
+      ? Number((result as { changes: unknown }).changes)
+      : 0;
+  console.warn(
+    `[migrate] accounts: 新增 cash_balance 列并按本金回填 ${changes} 行（开户即入金口径）`,
+  );
 };
 
 const migrateLegacyBuiltinStrategyOwners = (db: DrizzleDb): void => {

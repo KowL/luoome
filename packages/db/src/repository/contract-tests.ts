@@ -250,6 +250,7 @@ export const makeAccount = (id: string, overrides: Partial<Account> = {}): Accou
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(1_000_000),
+  cashBalance: money(1_000_000),
   createdAt: T0,
   ...overrides,
 });

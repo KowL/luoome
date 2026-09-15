@@ -68,6 +68,7 @@ const validAccount = (): Account => ({
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(1_000_000),
+  cashBalance: money(1_000_000),
   createdAt: NOW,
 });
 

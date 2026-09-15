@@ -22,6 +22,7 @@ const account: Account = {
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(100_000),
+  cashBalance: money(100_000),
   createdAt: NOW,
 };
 

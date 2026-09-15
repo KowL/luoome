@@ -1,3 +1,4 @@
+import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -524,6 +525,46 @@ describe('createDrizzleRepos / ensureSchema', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+  it('旧 accounts 表启动迁移补 cash_balance 并按本金回填（幂等）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-accounts-cash-'));
+    const dbPath = join(dir, 'legacy.sqlite');
+    try {
+      // 1) 手工造一张没有 cash_balance 的旧表（模拟 v0.7 及更早的库）
+      const legacy = new Database(dbPath);
+      legacy.exec(`
+        CREATE TABLE accounts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          currency TEXT NOT NULL,
+          initial_capital REAL NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `);
+      legacy
+        .query(
+          `INSERT INTO accounts (id, name, kind, currency, initial_capital, created_at) VALUES (?,?,?,?,?,?)`,
+        )
+        .run('legacy-acc', '旧账户', 'real', 'CNY', 250000, 1750000000000);
+      legacy.close();
+
+      // 2) ensureSchema 自动补列并按本金回填
+      const handle = createDrizzleRepos(dbPath);
+      const account = await handle.repos.account.findById('legacy-acc');
+      expect(account).toMatchObject({ initialCapital: 250000, cashBalance: 250000 });
+      ensureSchema(handle.db); // 幂等：再跑一次不重复加列、不覆盖已有余额
+      await handle.repos.account.save({
+        ...(account as NonNullable<typeof account>),
+        cashBalance: money(180_000),
+      });
+      ensureSchema(handle.db);
+      expect((await handle.repos.account.findById('legacy-acc'))?.cashBalance).toBe(180_000);
+      handle.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('阶段 C 存量迁移：v0.5 → MVP accounts.kind=mock 自动升级为 real（幂等）', async () => {
     // 1) 手工建 accounts 表 + 灌 3 条 v0.5 旧 mock 行（绕过 repo.save 的 invariant）
     const handle = createDrizzleRepos(':memory:');

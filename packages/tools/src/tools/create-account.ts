@@ -36,6 +36,8 @@ export const createAccountTool = defineTool({
       kind: 'real',
       currency: input.currency,
       initialCapital: money(input.initialCapital),
+      // 开户即入金：现金余额从本金开始，之后由交易/持仓/流水增减。
+      cashBalance: money(input.initialCapital),
       createdAt: ctx.clock(),
     };
     await ctx.repos.account.save(account);

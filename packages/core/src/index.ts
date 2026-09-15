@@ -51,6 +51,7 @@ export * from './entity/workflow-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
+export * from './portfolio/ledger.js';
 export * from './portfolio/performance.js';
 export * from './portfolio/trading-plan-budget.js';
 // 仓储接口

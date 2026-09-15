@@ -25,6 +25,7 @@ const account: Account = {
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(100_000),
+  cashBalance: money(100_000),
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
 };
 

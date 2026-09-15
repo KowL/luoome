@@ -98,6 +98,10 @@ export const assertAccountInvariants = (a: Account): void => {
   if (a.initialCapital < 0) {
     throw new InvariantError('initialCapital < 0');
   }
+  // 现金余额是账本事实：不允许为负（买入/登记超出资金时应当先纠错，而不是记出负余额）。
+  if (a.cashBalance < 0) {
+    throw new InvariantError('cashBalance < 0');
+  }
 };
 
 export const assertStockInvariants = (s: Stock): void => {

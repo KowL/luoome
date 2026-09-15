@@ -71,6 +71,7 @@ describe('data transfer', () => {
       kind: 'real',
       currency: 'CNY',
       initialCapital: money(1000),
+      cashBalance: money(1000),
       createdAt: new Date('2026-08-11T00:00:00Z'),
     });
     source.close();
@@ -411,6 +412,7 @@ describe('data transfer', () => {
       kind: 'real',
       currency: 'CNY',
       initialCapital: money(100),
+      cashBalance: money(100),
       createdAt: new Date('2026-08-11T00:00:00Z'),
     });
     handle.close();
@@ -489,6 +491,7 @@ describe('data transfer', () => {
       kind: 'real',
       currency: 'CNY',
       initialCapital: money(100),
+      cashBalance: money(100),
       createdAt: new Date('2026-08-11T00:00:00Z'),
     });
     await handle.repos.stock.save({

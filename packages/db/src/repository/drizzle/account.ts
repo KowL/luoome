@@ -21,6 +21,7 @@ export class DrizzleAccountRepository implements AccountRepository {
       kind: account.kind,
       currency: account.currency,
       initialCapital: account.initialCapital,
+      cashBalance: account.cashBalance,
       createdAt: account.createdAt,
     };
     this.db

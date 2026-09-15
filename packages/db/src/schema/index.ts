@@ -109,6 +109,8 @@ export const accounts = sqliteTable('accounts', {
   /** ISO 4217 三字母币种代码。 */
   currency: text('currency').notNull(),
   initialCapital: real('initial_capital').$type<Money>().notNull(),
+  /** 当前现金余额：由交易/持仓/资金流水在同一事务内增减，口径见 core portfolio/ledger。 */
+  cashBalance: real('cash_balance').$type<Money>().notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
