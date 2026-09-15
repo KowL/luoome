@@ -1,4 +1,6 @@
 import {
+  applyCashDelta,
+  cashImpactOfTrade,
   type Holding,
   HoldingSchema,
   money,
@@ -168,8 +170,12 @@ export const addTradeTool = defineTool({
     }
     // 先完成持仓侧的所有业务校验，避免无持仓/超卖等 invalid_input 留下孤立 Trade。
     await ensureStockStub(input.stockId, ctx, input.stockName);
-    await ctx.repos.trade.save(trade);
-    await ctx.repos.holding.save(holding);
+    // 现金按成交价增减（不计手续费）；账户余额 + 交易 + 持仓同事务提交。
+    const accountAfter = {
+      ...account,
+      cashBalance: applyCashDelta(account.cashBalance, cashImpactOfTrade(trade)),
+    };
+    await ctx.repos.ledger.applyTrade({ account: accountAfter, trade, holding });
     return { trade, holding };
   },
 });

@@ -1,4 +1,10 @@
-import { type Holding, HoldingSchema, money } from '@luoome/core';
+import {
+  applyCashDelta,
+  cashImpactOfHoldingChange,
+  type Holding,
+  HoldingSchema,
+  money,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
@@ -48,7 +54,17 @@ export const updateHoldingTool = defineTool({
       availableQuantity,
       ...(input.avgCost !== undefined ? { avgCost: money(input.avgCost) } : {}),
     };
-    await ctx.repos.holding.save(holding);
+    const account = await ctx.repos.account.findById(holding.accountId);
+    if (account === null) return errNotFound('Account', holding.accountId);
+    // 纠错同样要同步现金：数量/成本变化按成本差额回补或扣减（口径见 core portfolio/ledger）。
+    const accountAfter = {
+      ...account,
+      cashBalance: applyCashDelta(
+        account.cashBalance,
+        cashImpactOfHoldingChange(existing, holding),
+      ),
+    };
+    await ctx.repos.ledger.applyHolding({ account: accountAfter, holding });
     return { holding };
   },
 });

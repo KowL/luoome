@@ -44,6 +44,7 @@ import {
   InMemoryFundamentalScoreVersionRepository,
 } from './fundamental-score.js';
 import { InMemoryHoldingRepository } from './holding.js';
+import { InMemoryLedgerRepository } from './ledger.js';
 import { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 import { InMemoryMinuteBarRepository } from './minute-bar.js';
 import { InMemoryNotificationRepository } from './notification.js';
@@ -255,6 +256,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   }
   return {
     account,
+    ledger: new InMemoryLedgerRepository(account, trade, holding, portfolioCashFlow),
     accountSnapshot,
     stock,
     stockUniverse,

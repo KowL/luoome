@@ -1402,6 +1402,77 @@ export const registerRepositoryContractTests = (
       });
     });
 
+    describe('LedgerRepository（账户事实原子写入）', () => {
+      const makeFlow = (
+        id: string,
+        overrides: Partial<PortfolioCashFlow> = {},
+      ): PortfolioCashFlow => ({
+        id,
+        accountId: 'acc-1',
+        occurredAt: T1,
+        kind: 'deposit',
+        amount: 10_000,
+        currency: 'CNY',
+        source: 'manual',
+        createdAt: T1,
+        ...overrides,
+      });
+
+      it('applyTrade 同一次提交写入账户余额 + 交易 + 持仓', async () => {
+        await repos.account.save(makeAccount('acc-1', { cashBalance: money(100_000) }));
+        const trade = makeTrade('t-ledger', { price: money(10), quantity: quantity(100) });
+        const holding = makeHolding('h-ledger', { quantity: 100, availableQuantity: 100 });
+
+        await repos.ledger.applyTrade({
+          account: makeAccount('acc-1', { cashBalance: money(99_000) }),
+          trade,
+          holding,
+        });
+
+        expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(99_000);
+        expect(await repos.trade.findById('t-ledger')).toEqual(trade);
+        expect(await repos.holding.findById('h-ledger')).toEqual(holding);
+      });
+
+      it('applyHolding 只改余额与持仓', async () => {
+        await repos.account.save(makeAccount('acc-1', { cashBalance: money(100_000) }));
+        const holding = makeHolding('h-ledger-2', { quantity: 200, availableQuantity: 200 });
+
+        await repos.ledger.applyHolding({
+          account: makeAccount('acc-1', { cashBalance: money(98_000) }),
+          holding,
+        });
+
+        expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(98_000);
+        expect(await repos.holding.findById('h-ledger-2')).toEqual(holding);
+      });
+
+      it('applyCashFlow 同一次提交写入账户余额 + 资金流水', async () => {
+        await repos.account.save(makeAccount('acc-1', { cashBalance: money(100_000) }));
+        const flow = makeFlow('flow-ledger');
+
+        await repos.ledger.applyCashFlow({
+          account: makeAccount('acc-1', { cashBalance: money(110_000) }),
+          flow,
+        });
+
+        expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(110_000);
+        expect(await repos.portfolioCashFlow.findById('flow-ledger')).toEqual(flow);
+      });
+
+      it('违反不变量时整笔拒绝（不写余额也不写事实）', async () => {
+        await repos.account.save(makeAccount('acc-1', { cashBalance: money(100_000) }));
+        await expect(
+          repos.ledger.applyHolding({
+            account: makeAccount('acc-1', { cashBalance: money(-1) }),
+            holding: makeHolding('h-ledger-3'),
+          }),
+        ).rejects.toThrow(InvariantError);
+        expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(100_000);
+        expect(await repos.holding.findById('h-ledger-3')).toBeNull();
+      });
+    });
+
     describe('Portfolio performance repositories', () => {
       it('现金流按账户和时间范围隔离，支持 upsert/remove', async () => {
         const flow: PortfolioCashFlow = {

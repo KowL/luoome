@@ -117,6 +117,28 @@ export interface AccountRepository {
 }
 
 /** 用户手动维护的账户估值与持仓版本；同一账户只能有一个当前版本。 */
+/**
+ * 账户事实写入：把「账户现金余额」与账本事实（交易 / 持仓 / 资金流水）作为**一次原子提交**。
+ *
+ * 现金是账户上的余额字段，若与交易分开写，崩溃或失败会留下「持仓变了、钱没变」的漂移，
+ * 而分母错了比没有分母更危险。所有改动账户事实的写路径都必须走这里，不要各自 save。
+ */
+export interface LedgerRepository {
+  /** 交易 + 持仓 + 账户余额一起提交（买入扣现金、卖出加现金，按成交价，不计手续费）。 */
+  applyTrade(input: {
+    readonly account: Account;
+    readonly trade: Trade;
+    readonly holding: Holding;
+  }): Promise<void>;
+  /** 持仓改动（登记 / 纠错 / 平仓）+ 账户余额一起提交（按持仓成本差额结算）。 */
+  applyHolding(input: { readonly account: Account; readonly holding: Holding }): Promise<void>;
+  /** 资金流水 + 账户余额一起提交（入金/转入/分红为增，出金/转出/费/税为减）。 */
+  applyCashFlow(input: {
+    readonly account: Account;
+    readonly flow: PortfolioCashFlow;
+  }): Promise<void>;
+}
+
 export interface AccountSnapshotRepository {
   save(snapshot: AccountSnapshot): Promise<void>;
   findById(id: string): Promise<AccountSnapshot | null>;
@@ -379,6 +401,8 @@ export interface ReportRepository {
 
 export interface RepositoryRegistry {
   readonly account: AccountRepository;
+  /** 账户事实的原子写入（现金余额 + 交易/持仓/流水）。 */
+  readonly ledger: LedgerRepository;
   readonly accountSnapshot: AccountSnapshotRepository;
   readonly stock: StockRepository;
   /** 本地股票目录完整快照与同步审计。 */

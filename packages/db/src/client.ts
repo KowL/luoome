@@ -13,6 +13,7 @@ import {
   DrizzleFundamentalScoreRunRepository,
   DrizzleFundamentalScoreVersionRepository,
   DrizzleHoldingRepository,
+  DrizzleLedgerRepository,
   DrizzleLimitUpLadderSnapshotRepository,
   DrizzleMinuteBarRepository,
   DrizzleNotificationRepository,
@@ -1757,6 +1758,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
+    ledger: new DrizzleLedgerRepository(db),
     accountSnapshot: new DrizzleAccountSnapshotRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
