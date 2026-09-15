@@ -5,13 +5,14 @@
  */
 
 import { callApi } from './api.js';
+import { makeSelect } from './form-kit.js';
 import {
   openAccountSnapshotModal,
   snapshotButtonLabel,
   snapshotStatusNotice,
 } from './holdings-actions.js';
 import { openModal } from './modal.js';
-import { el, fmtDateTime, fmtNum, mount, toolErrorText } from './ui.js';
+import { $, el, fmtDateTime, fmtNum, mount, toolErrorText } from './ui.js';
 
 const ACTION_LABELS = {
   observe: '观察',
@@ -417,6 +418,110 @@ const snapshotEntry = ({ hasSnapshot, onSnapshotSaved, latestSnapshot }) => {
   ]);
 };
 
+/** 计划状态筛选：生效 / 草案 / 历史（被替代、撤销、过期）。 */
+export const PLAN_STATUS_FILTERS = [
+  { id: 'all', label: '全部状态' },
+  { id: 'active', label: '生效' },
+  { id: 'draft', label: '草案' },
+  { id: 'history', label: '历史状态' },
+];
+
+/** 动作筛选：按「该不该动手」归类，不逐个动作堆选项。 */
+export const PLAN_ACTION_FILTERS = [
+  { id: 'all', label: '全部动作' },
+  { id: 'open', label: '建仓 / 加仓' },
+  { id: 'keep', label: '持有 / 观察' },
+  { id: 'risk', label: '减仓 / 退出 / 回避' },
+];
+
+const ACTION_FILTER_MATCH = {
+  open: ['enter', 'add'],
+  keep: ['hold', 'observe'],
+  risk: ['reduce', 'exit', 'avoid'],
+};
+
+export const filterPlansByStatus = (plans, status) => {
+  if (status === undefined || status === 'all') return plans ?? [];
+  if (status === 'history') {
+    return (plans ?? []).filter((plan) => !['active', 'draft'].includes(plan.status));
+  }
+  return (plans ?? []).filter((plan) => plan.status === status);
+};
+
+export const filterPlansByAction = (plans, action) => {
+  if (action === undefined || action === 'all') return plans ?? [];
+  const allowed = ACTION_FILTER_MATCH[action];
+  return allowed === undefined
+    ? (plans ?? [])
+    : (plans ?? []).filter((plan) => allowed.includes(plan.action));
+};
+
+let planStatusFilter = 'all';
+let planActionFilter = 'all';
+let planPanelState = { plans: [], latest: [] };
+
+const visiblePlans = (latest, status, action) =>
+  filterPlansByAction(filterPlansByStatus(latest, status), action);
+
+/** 只重绘列表部分，筛选栏保持在原位。 */
+const renderPlanList = (root) => {
+  const filterBar = root.querySelector('.plan-filters');
+  const visible = visiblePlans(planPanelState.latest, planStatusFilter, planActionFilter);
+  const rows =
+    visible.length === 0
+      ? [el('p', 'placeholder', '当前筛选条件下没有计划。')]
+      : visible.map(planRow);
+  mount(root, [...(filterBar === null ? [] : [filterBar]), ...rows]);
+};
+
+const planRow = (plan) => {
+  const detail = el('button', 'btn btn-outline btn-sm', '详情');
+  detail.type = 'button';
+  detail.addEventListener('click', () =>
+    openTradingPlanDetail(plan, planVersionsOf(planPanelState.plans, plan.id)),
+  );
+  const draftNote = planDraftNote(plan);
+  return el('div', 'entity-item', [
+    el('strong', null, `${plan.stockName ?? plan.stockId} · ${planActionLabel(plan.action)}`),
+    el('div', 'muted', planMetaText(plan)),
+    ...(draftNote === null ? [] : [el('div', 'hint', draftNote)]),
+    el('div', 'flex gap-2', [
+      el('span', `badge ${planStatusBadgeClass(plan.status)}`, planStatusLabel(plan.status)),
+      detail,
+    ]),
+  ]);
+};
+
+/** 计划筛选栏：两个维度都带计数；切换后只重绘列表。 */
+const planFilterBar = () => {
+  const { latest } = planPanelState;
+  const statusSelect = makeSelect(
+    'alerts-plan-status-filter',
+    PLAN_STATUS_FILTERS.map((option) => [
+      option.id,
+      `${option.label}（${filterPlansByStatus(latest, option.id).length}）`,
+    ]),
+  );
+  statusSelect.value = planStatusFilter;
+  const actionSelect = makeSelect(
+    'alerts-plan-action-filter',
+    PLAN_ACTION_FILTERS.map((option) => [
+      option.id,
+      `${option.label}（${filterPlansByAction(latest, option.id).length}）`,
+    ]),
+  );
+  actionSelect.value = planActionFilter;
+  const onChange = () => {
+    planStatusFilter = statusSelect.value;
+    planActionFilter = actionSelect.value;
+    const root = $('#alerts-plans');
+    if (root !== null) renderPlanList(root);
+  };
+  statusSelect.addEventListener('change', onChange);
+  actionSelect.addEventListener('change', onChange);
+  return el('div', 'flex gap-2 plan-filters', [statusSelect, actionSelect]);
+};
+
 export const renderTradingPlanPanel = ({
   root,
   meta,
@@ -462,25 +567,9 @@ export const renderTradingPlanPanel = ({
     ]);
     return;
   }
-  mount(root, [
-    ...latest.map((plan) => {
-      const detail = el('button', 'btn btn-outline btn-sm', '详情');
-      detail.type = 'button';
-      detail.addEventListener('click', () =>
-        openTradingPlanDetail(plan, planVersionsOf(plans, plan.id)),
-      );
-      const draftNote = planDraftNote(plan);
-      return el('div', 'entity-item', [
-        el('strong', null, `${plan.stockName ?? plan.stockId} · ${planActionLabel(plan.action)}`),
-        el('div', 'muted', planMetaText(plan)),
-        ...(draftNote === null ? [] : [el('div', 'hint', draftNote)]),
-        el('div', 'flex gap-2', [
-          el('span', `badge ${planStatusBadgeClass(plan.status)}`, planStatusLabel(plan.status)),
-          detail,
-        ]),
-      ]);
-    }),
-    snapshotEntry({ hasSnapshot, onSnapshotSaved, latestSnapshot }),
-  ]);
+  planPanelState = { plans, latest };
+  mount(root, planFilterBar());
+  renderPlanList(root);
+  root.append(snapshotEntry({ hasSnapshot, onSnapshotSaved, latestSnapshot }));
   void setStatus;
 };

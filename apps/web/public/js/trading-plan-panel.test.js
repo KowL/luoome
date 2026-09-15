@@ -4,6 +4,8 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  filterPlansByAction,
+  filterPlansByStatus,
   latestPlanVersions,
   planActionLabel,
   planDetailSections,
@@ -338,5 +340,35 @@ describe('版本差异', () => {
   it('上一版不在列表里时返回 undefined（由调用方决定是否回源读取）', () => {
     const planV9 = makePlan({ version: 9 });
     expect(previousVersionOf(planV9, [planV9])).toBeUndefined();
+  });
+});
+
+describe('计划筛选', () => {
+  const plans = [
+    makePlan({ id: 'a', stockId: '600519.SH', status: 'active', action: 'enter' }),
+    makePlan({ id: 'b', stockId: '000001.SZ', status: 'draft', action: 'observe' }),
+    makePlan({ id: 'c', stockId: '300750.SZ', status: 'expired', action: 'exit' }),
+    makePlan({ id: 'd', stockId: '600036.SH', status: 'active', action: 'reduce' }),
+  ];
+
+  it('状态筛选区分生效 / 草案 / 历史', () => {
+    expect(filterPlansByStatus(plans, 'all').map((p) => p.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(filterPlansByStatus(plans, 'active').map((p) => p.id)).toEqual(['a', 'd']);
+    expect(filterPlansByStatus(plans, 'draft').map((p) => p.id)).toEqual(['b']);
+    expect(filterPlansByStatus(plans, 'history').map((p) => p.id)).toEqual(['c']);
+  });
+
+  it('动作筛选按「该不该动手」归类', () => {
+    expect(filterPlansByAction(plans, 'all').map((p) => p.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(filterPlansByAction(plans, 'open').map((p) => p.id)).toEqual(['a']);
+    expect(filterPlansByAction(plans, 'keep').map((p) => p.id)).toEqual(['b']);
+    expect(filterPlansByAction(plans, 'risk').map((p) => p.id)).toEqual(['c', 'd']);
+  });
+
+  it('筛选维度可叠加，缺省与未知值不误删', () => {
+    const active = filterPlansByStatus(plans, 'active');
+    expect(filterPlansByAction(active, 'risk').map((p) => p.id)).toEqual(['d']);
+    expect(filterPlansByStatus(undefined, 'active')).toEqual([]);
+    expect(filterPlansByAction(plans, 'unknown')).toEqual(plans);
   });
 });
