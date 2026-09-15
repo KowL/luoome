@@ -379,6 +379,22 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
   openModal('交易计划详情', body);
 };
 
+/**
+ * 按确切版本打开计划详情（报告页引用入口）：先读该版本，再尽量补齐同计划的历史版本，
+ * 便于在弹窗里切换与查看差异。返回读版本的 ToolResult，失败由调用方提示。
+ */
+export const openTradingPlanDetailByVersionId = async (versionId) => {
+  const result = await callApi(`/api/trading-plans/${encodeURIComponent(versionId)}`);
+  if (!result.ok) return result;
+  const plan = result.data.plan;
+  const siblings = await callApi(
+    `/api/trading-plans?activeOnly=false&stockId=${encodeURIComponent(plan.stockId)}&limit=200`,
+  );
+  const list = siblings.ok ? (siblings.data?.plans ?? []) : [];
+  openTradingPlanDetail(plan, planVersionsOf(list, plan.id));
+  return result;
+};
+
 const snapshotEntry = ({ hasSnapshot, onSnapshotSaved, latestSnapshot }) => {
   const button = el(
     'button',

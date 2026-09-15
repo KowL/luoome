@@ -71,6 +71,7 @@ const ListBlockSchema = z.object({
             'stock-event',
             'research-note',
             'advice',
+            'trading-plan',
           ])
           .optional(),
         entityId: z.string().optional(),

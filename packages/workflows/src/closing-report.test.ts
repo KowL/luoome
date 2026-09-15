@@ -7,6 +7,7 @@ import {
   type StrategyVersion,
   strategyDefinitionHash,
   type ToolContext,
+  TradingPlanSchema,
 } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
@@ -300,6 +301,89 @@ describe('closing-report workflow', () => {
     expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
       1,
     );
+  });
+
+  it('交易计划段带可点击引用（entityKind=trading-plan + 确切版本 id）', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const plan = TradingPlanSchema.parse({
+      id: 'account:acc-1:stock:600519.SH',
+      version: 2,
+      accountId: 'acc-1',
+      stockId: '600519.SH',
+      stockName: '贵州茅台',
+      industry: '白酒',
+      status: 'active',
+      action: 'enter',
+      entryPriceLow: 98,
+      entryPriceHigh: 103,
+      entryConditions: [
+        {
+          id: 'entry',
+          kind: 'price-range',
+          phase: 'entry',
+          metric: 'price',
+          comparator: 'between',
+          value: 98,
+          valueTo: 103,
+          description: '价格处于入场区间 98-103',
+        },
+      ],
+      invalidEntryConditions: [],
+      position: {
+        currentPct: 0,
+        targetPct: 8,
+        deltaPct: 8,
+        constraintStatus: 'passed',
+        constraintReasons: [],
+        prerequisiteActions: [],
+      },
+      holding: {
+        minTradingDays: 1,
+        maxTradingDays: 5,
+        nextReviewAt: new Date('2026-07-28T00:00:00.000Z'),
+        earlyExitConditions: [],
+        extensionBasis: [],
+      },
+      exit: { conditions: [], triggerConditions: [], canSellNow: false },
+      validFrom: new Date('2026-07-27T00:00:00.000Z'),
+      validUntil: new Date('2026-08-02T00:00:00.000Z'),
+      invalidationConditions: ['账户快照版本改变'],
+      accountSnapshotId: 'snapshot-1',
+      accountSnapshotVersion: 1,
+      marketFacts: [],
+      evidence: [],
+      source: {
+        strategyIds: [],
+        strategyVersionIds: [],
+        runIds: [],
+        signalIds: [],
+        adviceIds: [],
+      },
+      explanation: {
+        supportingEvidenceIds: [],
+        counterEvidence: [],
+        risks: [],
+        unknowns: [],
+      },
+      confidence: 60,
+      createdAt: new Date('2026-07-27T00:00:00.000Z'),
+    });
+    await ctx.repos.tradingPlan.save(plan);
+
+    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'trading-plans');
+    expect(section?.status).toBe('complete');
+    const list = section?.blocks.find((block) => block.kind === 'list');
+    expect(list?.kind === 'list' ? list.items : []).toEqual([
+      {
+        title: '贵州茅台 · enter · v2',
+        detail: '入场 98-103 · 目标 8% · active',
+        entityKind: 'trading-plan',
+        entityId: 'account:acc-1:stock:600519.SH:v2',
+      },
+    ]);
   });
 
   it('分析失败批次保留候选，报告如实呈现失败而非无机会', async () => {

@@ -593,6 +593,19 @@ const tradingPlansSection = async (
           })),
         },
         ...(plans.length === 0
+          ? []
+          : [
+              {
+                kind: 'list' as const,
+                items: plans.map((plan) => ({
+                  title: `${plan.stockName ?? plan.stockId} · ${plan.action} · v${plan.version}`,
+                  detail: `入场 ${plan.entryPriceLow ?? '未提供'}-${plan.entryPriceHigh ?? '未提供'} · 目标 ${plan.position.targetPct === null ? '不可用' : `${plan.position.targetPct}%`} · ${plan.status}`,
+                  entityKind: 'trading-plan' as const,
+                  entityId: `${plan.id}:v${plan.version}`,
+                })),
+              },
+            ]),
+        ...(plans.length === 0
           ? [
               {
                 kind: 'text' as const,

@@ -16,6 +16,7 @@ import { buildMarketLink, parseRouteHash } from './market.js';
 import { DATASET_LABELS } from './market-sync.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
+import { openTradingPlanDetailByVersionId } from './trading-plan-panel.js';
 import {
   $,
   adviceCard,
@@ -1123,6 +1124,32 @@ const reportEntityHref = (item) => {
   return null;
 };
 
+/**
+ * 报告条目标题：能跳转的实体渲染成链接，交易计划渲染成打开详情弹窗的按钮
+ * （计划没有独立页面，详情即弹窗），都没有则退回纯文本。
+ */
+const reportItemTitle = (item) => {
+  if (item.entityKind === 'trading-plan') {
+    const button = el('button', 'btn-link', item.title);
+    button.type = 'button';
+    button.title = '查看完整计划、版本差异与依据';
+    const errorNode = el('span', 'status error');
+    button.addEventListener('click', () => {
+      void (async () => {
+        button.disabled = true;
+        const result = await openTradingPlanDetailByVersionId(item.entityId);
+        button.disabled = false;
+        errorNode.textContent = result.ok ? '' : `计划读取失败：${toolErrorText(result.error)}`;
+      })();
+    });
+    return el('span', 'report-plan-ref', [button, errorNode]);
+  }
+  const href = reportEntityHref(item);
+  return href === null
+    ? el('strong', null, item.title)
+    : Object.assign(el('a', 'stock-link', item.title), { href });
+};
+
 const reportBlockNode = (block) => {
   if (block.kind === 'text') {
     return el('p', block.tone === 'warning' ? 'report-warning' : 'report-prose', block.text);
@@ -1151,11 +1178,7 @@ const reportBlockNode = (block) => {
       'ul',
       'report-list',
       block.items.map((item) => {
-        const href = reportEntityHref(item);
-        const title =
-          href === null
-            ? el('strong', null, item.title)
-            : Object.assign(el('a', 'stock-link', item.title), { href });
+        const title = reportItemTitle(item);
         return el('li', null, [
           title,
           item.detail === undefined ? '' : el('span', 'muted', ` — ${item.detail}`),
