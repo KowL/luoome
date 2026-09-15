@@ -1,4 +1,4 @@
-import { applyCashDelta, cashImpactOfHoldingChange, HoldingSchema } from '@luoome/core';
+import { HoldingSchema } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
@@ -30,15 +30,11 @@ export const closeHoldingTool = defineTool({
     const holding = { ...existing, closedAt: ctx.clock() };
     const account = await ctx.repos.account.findById(holding.accountId);
     if (account === null) return errNotFound('Account', holding.accountId);
-    // 平仓按持仓成本回补现金（不计盈亏；盈亏请用 add_trade sell 记录成交价）。
-    const accountAfter = {
-      ...account,
-      cashBalance: applyCashDelta(
-        account.cashBalance,
-        cashImpactOfHoldingChange(existing, holding),
-      ),
-    };
-    await ctx.repos.ledger.applyHolding({ account: accountAfter, holding });
+    await ctx.repos.ledger.applyHolding({
+      previousHolding: existing,
+      holding,
+      occurredAt: ctx.clock(),
+    });
     return { holding };
   },
 });

@@ -543,18 +543,13 @@ const run = async (
       errors,
     };
   }
-  // 先刷新行情（batch_quote 会落库），再派生账户事实：盘中不能用昨日收盘当当前市值。
-  const quotesResult = await ctx.tools.batch_quote.execute({
-    stockIds: [...new Set(livePlans.map((plan) => plan.stockId))],
-    context: 'intraday-rule',
-    watchIntervalSeconds: input.watchIntervalSeconds,
-  });
-  if (!quotesResult.ok) {
+  const holdingsResult = await ctx.tools.list_holdings.execute({ accountId, status: 'active' });
+  if (!holdingsResult.ok) {
     return {
       accountId,
       date,
-      status: 'partial',
-      checkedPlans: livePlans.length,
+      status: 'blocked',
+      checkedPlans: 0,
       freshQuotes: 0,
       stalePlans: expiredPlans,
       triggers: [],
@@ -564,12 +559,46 @@ const run = async (
       suppressedByCooldown: 0,
       suppressedByDailyLimit: 0,
       notifyFailed: 0,
-      errors: [...errors, errorText(quotesResult.error)],
+      errors: [...errors, errorText(holdingsResult.error)],
     };
   }
-  const quoteItems = new Map<string, BatchQuoteItem>(
-    quotesResult.data.items.map((item) => [item.stockId, item as BatchQuoteItem]),
-  );
+  // 先刷新行情（batch_quote 会落库），再派生账户事实：盘中不能用昨日收盘当当前市值。
+  const stockIds = [
+    ...new Set([
+      ...livePlans.map((plan) => plan.stockId),
+      ...holdingsResult.data.holdings
+        .filter((item) => item.holding.quantity > 0)
+        .map((item) => item.holding.stockId),
+    ]),
+  ];
+  const quoteItems = new Map<string, BatchQuoteItem>();
+  for (let offset = 0; offset < stockIds.length; offset += 100) {
+    const quotesResult = await ctx.tools.batch_quote.execute({
+      stockIds: stockIds.slice(offset, offset + 100),
+      context: 'intraday-rule',
+      watchIntervalSeconds: input.watchIntervalSeconds,
+    });
+    if (!quotesResult.ok) {
+      return {
+        accountId,
+        date,
+        status: 'partial',
+        checkedPlans: livePlans.length,
+        freshQuotes: 0,
+        stalePlans: expiredPlans,
+        triggers: [],
+        reviewedPlans: [],
+        notified: 0,
+        delivered: 0,
+        suppressedByCooldown: 0,
+        suppressedByDailyLimit: 0,
+        notifyFailed: 0,
+        errors: [...errors, errorText(quotesResult.error)],
+      };
+    }
+    for (const item of quotesResult.data.items)
+      quoteItems.set(item.stockId, item as BatchQuoteItem);
+  }
   const freshQuotes = [...quoteItems.values()].filter(
     (item) => item.status === 'ok' && item.freshness === 'fresh',
   ).length;

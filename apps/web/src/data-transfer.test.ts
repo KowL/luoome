@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { money, STANDARD_DISCLAIMERS, stockCode, TradingPlanSchema } from '@luoome/core';
+import {
+  money,
+  reconcileCashBalance,
+  STANDARD_DISCLAIMERS,
+  stockCode,
+  TradingPlanSchema,
+} from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { exportDataArchive, importDataArchive } from './data-transfer.js';
 
@@ -89,6 +95,60 @@ describe('data transfer', () => {
     const reopened = createDrizzleRepos(targetPath);
     expect((await reopened.repos.account.findById('account-1'))?.name).toBe('主账户');
     reopened.close();
+  });
+
+  it('持仓现金调整随账户导出回导，已平仓历史仍可对账', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    const at = new Date('2026-09-15T02:00:00Z');
+    const account = {
+      id: 'account-1',
+      name: '主账户',
+      kind: 'real' as const,
+      currency: 'CNY',
+      initialCapital: money(10000),
+      cashBalance: money(10000),
+      createdAt: at,
+    };
+    await source.repos.account.save(account);
+    const holding = {
+      id: 'holding-1',
+      accountId: account.id,
+      stockId: '600519.SH',
+      quantity: 100,
+      availableQuantity: 100,
+      avgCost: money(10),
+      openedAt: at,
+      closedAt: null,
+    };
+    await source.repos.ledger.applyHolding({ previousHolding: null, holding, occurredAt: at });
+    await source.repos.ledger.applyHolding({
+      previousHolding: holding,
+      holding: { ...holding, closedAt: at },
+      occurredAt: at,
+    });
+    source.close();
+    const archive = exportDataArchive(sourcePath, ['portfolio']);
+    expect(archive.tables.holding_cash_adjustments).toHaveLength(2);
+    const targetPath = databasePath();
+    createDrizzleRepos(targetPath).close();
+    importDataArchive(targetPath, archive);
+    const target = createDrizzleRepos(targetPath);
+    try {
+      const saved = await target.repos.account.findById(account.id);
+      expect(saved).not.toBeNull();
+      if (saved === null) throw new Error('imported account missing');
+      const result = reconcileCashBalance(saved, {
+        account: saved,
+        holdings: await target.repos.holding.listByAccount(account.id),
+        trades: [],
+        cashFlows: [],
+        holdingAdjustments: await target.repos.ledger.listHoldingAdjustments(account.id),
+      });
+      expect(result).toMatchObject({ reconciled: true, difference: 0, gaps: [] });
+    } finally {
+      target.close();
+    }
   });
 
   it('真实天梯 PIT 快照随 market-data 分类导出并回导', async () => {

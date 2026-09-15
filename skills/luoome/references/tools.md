@@ -6,7 +6,11 @@ MCP discovery is the authoritative tool inventory. Tool names, descriptions and 
 
 Use read tools to identify subjects and inspect current state before deeper analysis or mutation:
 
-- Accounts and positions: `list_accounts`, `get_account`, `list_holdings`, `get_holding`, `list_trades`.
+- Accounts and positions: `list_accounts`, `get_account`, `list_holdings`, `get_holding`, `list_trades`,
+  `get_account_facts`, `reconcile_account_cash`. Account facts are unavailable when quotes are
+  missing, cash does not reconcile, or quantity coverage has gaps. Do not infer precise assets
+  or position sizes from incomplete facts. Cash reconciliation includes persisted holding
+  adjustments, including registrations whose positions have since been sold.
 - Stock discovery and calculations: `search_stocks`, `compute_indicators`. Indicators include
   RSI14, MA20/MA60 distance and cross recency, plus Bollinger 20-day bands, bandwidth and position.
 - Strategies and signals: `list_strategies`, `get_strategy`, `list_strategy_runs`,
@@ -60,6 +64,9 @@ Strategies are rejected. Before calling one:
 3. Obtain explicit authorization for that mutation.
 4. Call using the discovered input schema.
 5. Verify the returned result and re-read state when correctness matters.
+
+Holding writes can reject a concurrent change. Refresh the holding before retrying; never replay
+stale quantities or costs. Cash changes and their ledger records commit together.
 
 `create_strategy_observation_candidates` defaults to published operational runs. Evaluation observations
 require an explicit `evaluationSessionId` matching a completed run in that session; they remain research

@@ -1,6 +1,12 @@
 import { Database } from 'bun:sqlite';
-import type { RepositoryRegistry } from '@luoome/core';
-import { sql } from 'drizzle-orm';
+import {
+  ledgerCoverage,
+  migrateLegacyTradingPlan,
+  money,
+  type RepositoryRegistry,
+  recomputeCashFromLedger,
+} from '@luoome/core';
+import { eq, sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import {
   DrizzleAccountRepository,
@@ -222,7 +228,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       currency TEXT NOT NULL,
       initial_capital REAL NOT NULL,
       -- DEFAULT 0 只为兼容绕过 repo 的历史/测试插入；应用写路径始终写入真实余额，
-      -- 真正的旧库没有该列，由 migrateAccountCashBalance 按本金回填。
+      -- 真正的旧库没有该列，由 migrateAccountCashBalance 按历史账本回填。
       cash_balance REAL NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     )
@@ -1323,6 +1329,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   // 阶段 C 存量数据迁移：v0.5 → MVP（AccountKind 收窄到 'real'）—— 见下方函数。
   migrateLegacyAccountKinds(db);
   migrateAccountCashBalance(db);
+  migrateLegacyTradingPlans(db);
   // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
   migrateLegacyBuiltinStrategyOwners(db);
 };
@@ -1659,28 +1666,104 @@ const migrateLegacyAccountKinds = (db: DrizzleDb): void => {
   }
 };
 
-/**
- * accounts 补 cash_balance 列（v0.8 起，幂等）。
- *
- * 旧库没有现金字段：新增列后按「开户即入金」回填为 initial_capital，
- * 之后由交易/持仓/资金流水在同一事务内增减（口径见 core portfolio/ledger）。
- * 旧库的列是 nullable（ALTER ADD COLUMN 无法带 NOT NULL），应用写路径始终写值，
- * 因此不影响不变量；新库的 DDL 直接声明 NOT NULL。
- */
+/** 迁移检查、建表、历史调整和余额回填必须一起提交，避免中断后留下半迁移。 */
 const migrateAccountCashBalance = (db: DrizzleDb): void => {
-  const cols = db.all<{ name: string }>(sql`PRAGMA table_info(accounts)`);
-  if (cols.length === 0) return;
-  if (cols.some((column) => column.name === 'cash_balance')) return;
-  db.run(sql`ALTER TABLE accounts ADD COLUMN cash_balance REAL`);
-  const result = db.run(
-    sql`UPDATE accounts SET cash_balance = initial_capital WHERE cash_balance IS NULL`,
+  db.transaction(
+    (tx) => {
+      const cols = tx.all<{ name: string }>(sql`PRAGMA table_info(accounts)`);
+      const hadCash = cols.some((column) => column.name === 'cash_balance');
+      const hadAdjustments =
+        tx.get(
+          sql`SELECT name FROM sqlite_master WHERE type='table' AND name='holding_cash_adjustments'`,
+        ) !== undefined;
+      if (!hadCash)
+        tx.run(sql`ALTER TABLE accounts ADD COLUMN cash_balance REAL NOT NULL DEFAULT 0`);
+      tx.run(sql`CREATE TABLE IF NOT EXISTS holding_cash_adjustments (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, holding_id TEXT NOT NULL,
+      stock_id TEXT NOT NULL, amount REAL NOT NULL, quantity_delta INTEGER NOT NULL,
+      occurred_at INTEGER NOT NULL
+    )`);
+      for (const account of tx.select().from(schema.accounts).all()) {
+        const needsCash = !hadCash || account.cashBalance === null;
+        if (hadAdjustments && !needsCash) continue;
+        const holdings = tx
+          .select()
+          .from(schema.holdings)
+          .where(eq(schema.holdings.accountId, account.id))
+          .all();
+        const trades = tx
+          .select()
+          .from(schema.trades)
+          .where(eq(schema.trades.accountId, account.id))
+          .all();
+        let holdingAdjustments = tx
+          .select()
+          .from(schema.holdingCashAdjustments)
+          .where(eq(schema.holdingCashAdjustments.accountId, account.id))
+          .all();
+        // 只能恢复当前未被交易覆盖的持仓成本；无法恢复的历史缺口仍由对账显式报告。
+        const gaps = ledgerCoverage({ holdings, trades, holdingAdjustments });
+        for (const gap of gaps) {
+          if (gap.uncoveredQuantity === 0) continue;
+          const holding = holdings.find(
+            (item) => item.stockId === gap.stockId && item.closedAt === null,
+          );
+          if (holding === undefined) continue;
+          tx.insert(schema.holdingCashAdjustments)
+            .values({
+              id: `legacy-holding:${holding.id}`,
+              accountId: account.id,
+              holdingId: holding.id,
+              stockId: holding.stockId,
+              amount: money(-gap.uncoveredQuantity * holding.avgCost),
+              quantityDelta: gap.uncoveredQuantity,
+              occurredAt: holding.openedAt,
+            })
+            .run();
+        }
+        if (needsCash) {
+          holdingAdjustments = tx
+            .select()
+            .from(schema.holdingCashAdjustments)
+            .where(eq(schema.holdingCashAdjustments.accountId, account.id))
+            .all();
+          const cashFlows = tx
+            .select()
+            .from(schema.portfolioCashFlows)
+            .where(eq(schema.portfolioCashFlows.accountId, account.id))
+            .all();
+          const cashBalance = recomputeCashFromLedger({
+            account,
+            holdings,
+            trades,
+            cashFlows,
+            holdingAdjustments,
+          });
+          // 历史缺口可能使重算为负；保留事实，由账户事实读边界阻止其用于计划预算。
+          tx.update(schema.accounts)
+            .set({ cashBalance })
+            .where(eq(schema.accounts.id, account.id))
+            .run();
+        }
+      }
+    },
+    { behavior: 'immediate' },
   );
-  const changes =
-    typeof result === 'object' && result !== null && 'changes' in result
-      ? Number((result as { changes: unknown }).changes)
-      : 0;
-  console.warn(
-    `[migrate] accounts: 新增 cash_balance 列并按本金回填 ${changes} 行（开户即入金口径）`,
+};
+
+const migrateLegacyTradingPlans = (db: DrizzleDb): void => {
+  db.transaction(
+    (tx) => {
+      for (const row of tx.select().from(schema.tradingPlans).all()) {
+        const migrated = migrateLegacyTradingPlan(row.plan);
+        if (migrated === null) continue;
+        tx.update(schema.tradingPlans)
+          .set({ plan: migrated, status: migrated.status })
+          .where(eq(schema.tradingPlans.versionId, row.versionId))
+          .run();
+      }
+    },
+    { behavior: 'immediate' },
   );
 };
 

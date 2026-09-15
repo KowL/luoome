@@ -32,6 +32,7 @@ import {
   type ResearchDocumentIndex,
   type ResearchHypothesisVersion,
   type ResearchTopicIndex,
+  reconcileCashBalance,
   type SignalObservation,
   STANDARD_DISCLAIMERS,
   type Stock,
@@ -254,7 +255,7 @@ export const makeAccount = (id: string, overrides: Partial<Account> = {}): Accou
   ...overrides,
 });
 
-const makeTradingPlan = (
+export const makeTradingPlan = (
   id: string,
   version: number,
   overrides: Partial<TradingPlan> = {},
@@ -1374,7 +1375,7 @@ export const registerRepositoryContractTests = (
         const holding = makeHolding('h-ledger', { quantity: 100, availableQuantity: 100 });
 
         await repos.ledger.applyTrade({
-          account: makeAccount('acc-1', { cashBalance: money(99_000) }),
+          previousHolding: null,
           trade,
           holding,
         });
@@ -1386,10 +1387,15 @@ export const registerRepositoryContractTests = (
 
       it('applyHolding 只改余额与持仓', async () => {
         await repos.account.save(makeAccount('acc-1', { cashBalance: money(100_000) }));
-        const holding = makeHolding('h-ledger-2', { quantity: 200, availableQuantity: 200 });
+        const holding = makeHolding('h-ledger-2', {
+          quantity: 200,
+          availableQuantity: 200,
+          avgCost: money(10),
+        });
 
         await repos.ledger.applyHolding({
-          account: makeAccount('acc-1', { cashBalance: money(98_000) }),
+          previousHolding: null,
+          occurredAt: T1,
           holding,
         });
 
@@ -1402,7 +1408,6 @@ export const registerRepositoryContractTests = (
         const flow = makeFlow('flow-ledger');
 
         await repos.ledger.applyCashFlow({
-          account: makeAccount('acc-1', { cashBalance: money(110_000) }),
           flow,
         });
 
@@ -1410,12 +1415,83 @@ export const registerRepositoryContractTests = (
         expect(await repos.portfolioCashFlow.findById('flow-ledger')).toEqual(flow);
       });
 
+      it('并发现金流不会丢失余额更新，且不会超额出金', async () => {
+        await repos.account.save(makeAccount('acc-1', { cashBalance: money(1000) }));
+        await Promise.all(
+          [100, 200].map((amount) =>
+            repos.ledger.applyCashFlow({ flow: makeFlow(`deposit-${amount}`, { amount }) }),
+          ),
+        );
+        expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(1300);
+        const withdrawals = await Promise.allSettled(
+          [1, 2].map((n) =>
+            repos.ledger.applyCashFlow({
+              flow: makeFlow(`withdrawal-${n}`, { amount: 1000, kind: 'withdrawal' }),
+            }),
+          ),
+        );
+        expect(withdrawals.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+        expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(300);
+        expect(await repos.portfolioCashFlow.listByAccount('acc-1')).toHaveLength(3);
+      });
+
+      it('过期持仓更新被拒绝，现金与调整记录不被重复写入', async () => {
+        await repos.account.save(makeAccount('acc-1', { cashBalance: money(100000) }));
+        const holding = makeHolding('concurrent', {
+          quantity: 100,
+          availableQuantity: 100,
+          avgCost: money(10),
+        });
+        const results = await Promise.allSettled(
+          [1, 2].map(() =>
+            repos.ledger.applyHolding({ previousHolding: null, holding, occurredAt: T1 }),
+          ),
+        );
+        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+        expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(99000);
+        expect(await repos.ledger.listHoldingAdjustments('acc-1')).toMatchObject([
+          { amount: -1000, quantityDelta: 100 },
+        ]);
+        expect(await repos.ledger.listHoldingAdjustments('acc-2')).toEqual([]);
+      });
+
+      it('持仓登记后卖出，重算仍保留登记成本', async () => {
+        const account = makeAccount('acc-1', {
+          initialCapital: money(100000),
+          cashBalance: money(100000),
+        });
+        await repos.account.save(account);
+        const holding = makeHolding('registered', {
+          quantity: 100,
+          availableQuantity: 100,
+          avgCost: money(10),
+        });
+        await repos.ledger.applyHolding({ previousHolding: null, holding, occurredAt: T1 });
+        await repos.ledger.applyTrade({
+          previousHolding: holding,
+          trade: makeTrade('sold', { side: 'sell', quantity: quantity(100), price: money(12) }),
+          holding: { ...holding, quantity: 0, availableQuantity: 0, closedAt: T2 },
+        });
+        const stored = await repos.account.findById('acc-1');
+        expect(stored?.cashBalance).toBe(100200);
+        if (stored === null) throw new Error('ledger account missing');
+        const result = reconcileCashBalance(stored, {
+          account,
+          holdings: await repos.holding.listByAccount('acc-1'),
+          trades: await repos.trade.listByAccount('acc-1'),
+          cashFlows: [],
+          holdingAdjustments: await repos.ledger.listHoldingAdjustments('acc-1'),
+        });
+        expect(result).toMatchObject({ reconciled: true, difference: 0, gaps: [] });
+      });
+
       it('违反不变量时整笔拒绝（不写余额也不写事实）', async () => {
         await repos.account.save(makeAccount('acc-1', { cashBalance: money(100_000) }));
         await expect(
           repos.ledger.applyHolding({
-            account: makeAccount('acc-1', { cashBalance: money(-1) }),
-            holding: makeHolding('h-ledger-3'),
+            previousHolding: null,
+            occurredAt: T1,
+            holding: makeHolding('h-ledger-3', { avgCost: money(1000) }),
           }),
         ).rejects.toThrow(InvariantError);
         expect((await repos.account.findById('acc-1'))?.cashBalance).toBe(100_000);

@@ -1,10 +1,4 @@
-import {
-  applyCashDelta,
-  cashImpactOfHoldingChange,
-  type Holding,
-  HoldingSchema,
-  money,
-} from '@luoome/core';
+import { type Holding, HoldingSchema, money } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
@@ -71,12 +65,11 @@ export const addHoldingTool = defineTool({
       openedAt: input.openedAt ?? now,
       closedAt: null,
     };
-    // 登记持仓即视为用账户现金买入：现金与持仓必须同一次提交（口径见 core portfolio/ledger）。
-    const accountAfter = {
-      ...account,
-      cashBalance: applyCashDelta(account.cashBalance, cashImpactOfHoldingChange(null, holding)),
-    };
-    await ctx.repos.ledger.applyHolding({ account: accountAfter, holding });
+    await ctx.repos.ledger.applyHolding({
+      previousHolding: null,
+      holding,
+      occurredAt: ctx.clock(),
+    });
     return { holding };
   },
 });

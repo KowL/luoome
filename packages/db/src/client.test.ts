@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { money } from '@luoome/core';
+import { money, quantity } from '@luoome/core';
 import { sql } from 'drizzle-orm';
 import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
@@ -10,7 +10,10 @@ import { createDrizzleRepos, ensureSchema } from './client.js';
 import {
   makeAccount,
   makeAdvice,
+  makeHolding,
   makeReport,
+  makeTrade,
+  makeTradingPlan,
   makeWatchRun,
   makeWatchTrigger,
 } from './repository/contract-tests.js';
@@ -562,6 +565,135 @@ describe('createDrizzleRepos / ensureSchema', () => {
       handle.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('现金迁移重放已有交易、流水与手工持仓成本，且重复启动不重复扣款', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      await handle.repos.account.save(makeAccount('acc-1', { initialCapital: money(100000) }));
+      await handle.repos.trade.save(
+        makeTrade('buy', { quantity: quantity(100), price: money(10) }),
+      );
+      await handle.repos.holding.save(
+        makeHolding('held', { quantity: 100, availableQuantity: 100, avgCost: money(10) }),
+      );
+      await handle.repos.holding.save(
+        makeHolding('manual', {
+          stockId: 'manual-stock',
+          quantity: 200,
+          availableQuantity: 200,
+          avgCost: money(10),
+        }),
+      );
+      await handle.repos.portfolioCashFlow.save({
+        id: 'deposit',
+        accountId: 'acc-1',
+        occurredAt: new Date(),
+        kind: 'deposit',
+        amount: 500,
+        currency: 'CNY',
+        source: 'manual',
+        createdAt: new Date(),
+      });
+      handle.db.run(sql`ALTER TABLE accounts DROP COLUMN cash_balance`);
+      ensureSchema(handle.db);
+      expect((await handle.repos.account.findById('acc-1'))?.cashBalance).toBe(97500);
+      ensureSchema(handle.db);
+      expect((await handle.repos.account.findById('acc-1'))?.cashBalance).toBe(97500);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('现金迁移失败时回滚列和调整记录，下次启动可以重试', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      await handle.repos.account.save(makeAccount('acc-1', { initialCapital: money(100000) }));
+      await handle.repos.holding.save(
+        makeHolding('manual', { quantity: 100, availableQuantity: 100, avgCost: money(10) }),
+      );
+      handle.db.run(sql`ALTER TABLE accounts DROP COLUMN cash_balance`);
+      handle.db.run(sql`DROP TABLE holding_cash_adjustments`);
+      handle.db.run(
+        sql`CREATE TRIGGER reject_migration BEFORE UPDATE ON accounts BEGIN SELECT RAISE(ABORT, 'test migration failure'); END`,
+      );
+      expect(() => ensureSchema(handle.db)).toThrow('test migration failure');
+      expect(
+        handle.db.all<{ name: string }>(sql`PRAGMA table_info(accounts)`).map((row) => row.name),
+      ).not.toContain('cash_balance');
+      expect(
+        handle.db.get(sql`SELECT name FROM sqlite_master WHERE name='holding_cash_adjustments'`),
+      ).toBeUndefined();
+      handle.db.run(sql`DROP TRIGGER reject_migration`);
+      ensureSchema(handle.db);
+      expect((await handle.repos.account.findById('acc-1'))?.cashBalance).toBe(99000);
+      expect(await handle.repos.ledger.listHoldingAdjustments('acc-1')).toHaveLength(1);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('两个独立进程写入同一账户，现金与所有入金流水一致', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'luoome-ledger-concurrency-'));
+    const dbPath = join(directory, 'ledger.sqlite');
+    const handle = createDrizzleRepos(dbPath);
+    await handle.repos.account.save(makeAccount('acc-1', { cashBalance: money(1000) }));
+    handle.close();
+    try {
+      const runChild = async (prefix: string) => {
+        const script = `
+          import { createDrizzleRepos } from ${JSON.stringify(new URL('./client.ts', import.meta.url).pathname)};
+          const handle = createDrizzleRepos(${JSON.stringify(dbPath)});
+          try {
+            for (let i = 0; i < 30; i++) await handle.repos.ledger.applyCashFlow({ flow: {
+              id: ${JSON.stringify(prefix)} + i, accountId: 'acc-1', kind: 'deposit', amount: 1,
+              currency: 'CNY', source: 'manual', occurredAt: new Date(), createdAt: new Date(),
+            }});
+          } finally { handle.close(); }
+        `;
+        const child = Bun.spawn([process.execPath, '-e', script], {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+        expect(stderr).toBe('');
+        expect(code).toBe(0);
+      };
+      await Promise.all([runChild('a-'), runChild('b-')]);
+      const reopened = createDrizzleRepos(dbPath);
+      try {
+        expect((await reopened.repos.account.findById('acc-1'))?.cashBalance).toBe(1060);
+        expect(await reopened.repos.portfolioCashFlow.listByAccount('acc-1')).toHaveLength(60);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('升级保留旧计划的读取能力，并使旧计划失效', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      const plan = makeTradingPlan('legacy', 1, { status: 'active' });
+      await handle.repos.tradingPlan.save(plan);
+      const { accountFactsAsOf, accountFactsDigest, ...rest } = plan;
+      const legacy = JSON.stringify({
+        ...rest,
+        accountSnapshotId: 'snapshot-old',
+        accountSnapshotVersion: 1,
+      });
+      handle.db.run(sql`UPDATE trading_plans SET plan_json = ${legacy}`);
+      ensureSchema(handle.db);
+      expect(await handle.repos.tradingPlan.list()).toMatchObject([
+        { id: 'legacy', status: 'expired' },
+      ]);
+      expect(await handle.repos.tradingPlan.list({ activeOnly: true })).toEqual([]);
+      ensureSchema(handle.db);
+      expect(await handle.repos.tradingPlan.list()).toHaveLength(1);
+    } finally {
+      handle.close();
     }
   });
 

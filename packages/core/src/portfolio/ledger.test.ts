@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Account } from '../entity/account.js';
+import { buildAccountFacts } from '../entity/account-facts.js';
 import type { Holding } from '../entity/holding.js';
 import type { PortfolioCashFlow } from '../entity/portfolio-performance.js';
 import type { Trade } from '../entity/trade.js';
@@ -135,25 +136,37 @@ describe('账本覆盖与对账', () => {
       holdings: [hold],
       trades: [],
       cashFlows: [],
+      holdingAdjustments: [
+        {
+          id: 'registration',
+          accountId: 'acc-1',
+          holdingId: hold.id,
+          stockId: hold.stockId,
+          amount: money(-12000),
+          quantityDelta: 1000,
+          occurredAt: T0,
+        },
+      ],
     });
     expect(replay).toBe(988_000);
     expect(ledgerCoverage({ holdings: [hold], trades: [] })[0]?.uncoveredQuantity).toBe(1000);
   });
 
-  it('持仓多于交易净额时按成本补扣，缺口显式列出', () => {
+  it('持仓缺少交易或调整记录时显式列出缺口，不猜测现金影响', () => {
     const hold = holding({ stockId: '600519.SH', quantity: 100, avgCost: 1450 });
     const trades = [
       trade({ stockId: '600519.SH', side: 'buy', quantity: 100, price: 1450 }),
       trade({ stockId: '600519.SH', side: 'sell', quantity: 100, price: 1500 }),
     ];
-    // 买卖轧差为 0，但持仓仍记 100：多出的持仓按成本补扣（直接登记或漏记买入）
+    // 买卖轧差为 0，但持仓仍记 100：数量缺口不能冒充已知的现金变动。
     const replay = recomputeCashFromLedger({
       account: makeAccount(0),
       holdings: [hold],
       trades,
       cashFlows: [],
+      holdingAdjustments: [],
     });
-    expect(replay).toBe(1_000_000 - 145_000 + 150_000 - 145_000);
+    expect(replay).toBe(1_000_000 - 145_000 + 150_000);
     expect(ledgerCoverage({ holdings: [hold], trades })[0]).toMatchObject({
       holdingQuantity: 100,
       tradedQuantity: 0,
@@ -166,6 +179,7 @@ describe('账本覆盖与对账', () => {
       holdings: [hold],
       trades,
       cashFlows: [],
+      holdingAdjustments: [],
     });
     expect(result.reconciled).toBe(false);
     expect(result.difference).toBe(1_000_000 - replay);
@@ -182,6 +196,7 @@ describe('账本覆盖与对账', () => {
       holdings: [],
       trades,
       cashFlows: [],
+      holdingAdjustments: [],
     });
     expect(replay).toBe(1_000_000 - 145_000 + 300_000);
     expect(ledgerCoverage({ holdings: [], trades })[0]).toMatchObject({
@@ -201,12 +216,14 @@ describe('账本覆盖与对账', () => {
       holdings: [hold],
       trades,
       cashFlows: [],
+      holdingAdjustments: [],
     });
     const result = reconcileCashBalance(makeAccount(stored), {
       account: makeAccount(0),
       holdings: [hold],
       trades,
       cashFlows: [],
+      holdingAdjustments: [],
     });
     expect(result.reconciled).toBe(true);
     expect(result.difference).toBe(0);
@@ -215,6 +232,17 @@ describe('账本覆盖与对账', () => {
 });
 
 describe('账户事实指纹', () => {
+  it('保留历史负现金，但不提供精确资产与仓位', () => {
+    const facts = buildAccountFacts({ account: makeAccount(-100), holdings: [], asOf: T0 });
+    expect(facts).toMatchObject({
+      cashBalance: -100,
+      status: 'unavailable',
+      stockMarketValue: null,
+      totalAssets: null,
+    });
+    expect(facts.reasons.join('；')).toContain('现金为负');
+  });
+
   it('持仓或现金变化都会改变指纹，平仓也算变化', () => {
     const base = makeAccount(900_000);
     const open = holding({ stockId: '600519.SH', quantity: 100, avgCost: 1450 });

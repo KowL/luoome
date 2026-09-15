@@ -384,10 +384,20 @@ const renderDashboard = async (setStatus) => {
 /* ============ holdings ============ */
 
 const renderHoldings = async (setStatus) => {
-  const [r, tradesResult] = await Promise.all([
+  const [r, tradesResult, accountResult] = await Promise.all([
     callApi('/api/holdings'),
     callApi('/api/trades?limit=50'),
+    callApi('/api/tools/get_account/call', {
+      method: 'POST',
+      body: JSON.stringify({ input: {} }),
+    }),
   ]);
+  $('#holdings-stat-cash-balance').textContent = accountResult.ok
+    ? fmtNum(accountResult.data.account.cashBalance)
+    : '--';
+  $('#holdings-stat-cash-label').textContent = accountResult.ok
+    ? `可用资金（${accountResult.data.account.currency}）`
+    : '可用资金（加载失败）';
   const body = $('#holdings-body');
   if (!r.ok) {
     mount(

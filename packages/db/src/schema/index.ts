@@ -257,6 +257,16 @@ export const trades = sqliteTable('trades', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
+export const holdingCashAdjustments = sqliteTable('holding_cash_adjustments', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull(),
+  holdingId: text('holding_id').notNull(),
+  stockId: text('stock_id').notNull(),
+  amount: real('amount').$type<Money>().notNull(),
+  quantityDelta: integer('quantity_delta').notNull(),
+  occurredAt: integer('occurred_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
 export const portfolioCashFlows = sqliteTable(
   'portfolio_cash_flows',
   {
@@ -1764,6 +1774,7 @@ export const schema = {
   holdings,
   trades,
   portfolioCashFlows,
+  holdingCashAdjustments,
   portfolioCorporateActions,
   portfolioPerformanceSnapshots,
   advices,

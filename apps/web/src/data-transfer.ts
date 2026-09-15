@@ -33,6 +33,7 @@ import {
   ChatMessageSchema,
   ChatSessionSchema,
   DailyBarSchema,
+  HoldingCashAdjustmentSchema,
   HoldingSchema,
   LimitUpLadderSchema,
   MembershipSnapshotSchema,
@@ -91,6 +92,7 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
     'holdings',
     'trades',
     'portfolio_cash_flows',
+    'holding_cash_adjustments',
     'portfolio_corporate_actions',
   ],
   strategies: [
@@ -311,6 +313,7 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   }),
   trades: domainValidator(TradeSchema, assertTradeInvariants),
   portfolio_cash_flows: domainValidator(PortfolioCashFlowSchema),
+  holding_cash_adjustments: domainValidator(HoldingCashAdjustmentSchema),
   portfolio_corporate_actions: domainValidator(PortfolioCorporateActionSchema),
   strategies: domainValidator(StrategySchema, assertStrategyInvariants),
   strategy_versions: domainValidator(StrategyVersionSchema, (value) =>

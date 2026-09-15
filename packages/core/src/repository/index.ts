@@ -91,6 +91,7 @@ import type {
   WatchlistSyncRun,
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
+import type { HoldingCashAdjustment } from '../portfolio/ledger.js';
 import type {
   TradingPlanBudgetLimits,
   TradingPlanBudgetResult,
@@ -125,17 +126,19 @@ export interface AccountRepository {
 export interface LedgerRepository {
   /** 交易 + 持仓 + 账户余额一起提交（买入扣现金、卖出加现金，按成交价，不计手续费）。 */
   applyTrade(input: {
-    readonly account: Account;
+    readonly previousHolding: Holding | null;
     readonly trade: Trade;
     readonly holding: Holding;
   }): Promise<void>;
   /** 持仓改动（登记 / 纠错 / 平仓）+ 账户余额一起提交（按持仓成本差额结算）。 */
-  applyHolding(input: { readonly account: Account; readonly holding: Holding }): Promise<void>;
-  /** 资金流水 + 账户余额一起提交（入金/转入/分红为增，出金/转出/费/税为减）。 */
-  applyCashFlow(input: {
-    readonly account: Account;
-    readonly flow: PortfolioCashFlow;
+  applyHolding(input: {
+    readonly previousHolding: Holding | null;
+    readonly holding: Holding;
+    readonly occurredAt: Date;
   }): Promise<void>;
+  /** 资金流水 + 账户余额一起提交（入金/转入/分红为增，出金/转出/费/税为减）。 */
+  applyCashFlow(input: { readonly flow: PortfolioCashFlow }): Promise<void>;
+  listHoldingAdjustments(accountId: string): Promise<readonly HoldingCashAdjustment[]>;
 }
 
 export interface StockRepository {

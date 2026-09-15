@@ -8669,6 +8669,15 @@ body > .modal {
     grid-template-columns: 1fr 1fr;
   }
 
+  #holdings-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #holdings-stats .value {
+    font-size: 20px;
+    overflow-wrap: anywhere;
+  }
+
   .chat-msg {
     max-width: 92%;
   }

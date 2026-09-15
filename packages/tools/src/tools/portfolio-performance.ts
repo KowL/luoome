@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
-  applyCashDelta,
   calculatePortfolioPerformance,
-  cashImpactOfCashFlow,
   isHoliday,
   isWeekend,
   PortfolioCashFlowSchema,
@@ -47,12 +45,7 @@ export const createPortfolioCashFlowTool = defineTool({
       id: `cash-flow-${globalThis.crypto.randomUUID()}`,
       createdAt: ctx.clock(),
     });
-    // 资金流水直接增减现金；与流水记录同事务提交。
-    const accountAfter = {
-      ...account,
-      cashBalance: applyCashDelta(account.cashBalance, cashImpactOfCashFlow(flow)),
-    };
-    await ctx.repos.ledger.applyCashFlow({ account: accountAfter, flow });
+    await ctx.repos.ledger.applyCashFlow({ flow });
     return { flow };
   },
 });

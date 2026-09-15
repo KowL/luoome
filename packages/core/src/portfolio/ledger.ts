@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 
 import type { Account } from '../entity/account.js';
 import type { Holding } from '../entity/holding.js';
 import type { PortfolioCashFlow, PortfolioCashFlowKind } from '../entity/portfolio-performance.js';
 import type { Trade } from '../entity/trade.js';
 import { InvariantError } from '../error/index.js';
-import { type Money, money } from '../types/branded.js';
+import { type Money, MoneySchema, money } from '../types/branded.js';
 
 /**
  * 账户现金与账本的关系（单一真源）。
@@ -64,26 +65,64 @@ export const applyCashDelta = (cash: Money, delta: Money): Money => {
   return next;
 };
 
+export const HoldingCashAdjustmentSchema = z.object({
+  id: z.string().min(1),
+  accountId: z.string().min(1),
+  holdingId: z.string().min(1),
+  stockId: z.string().min(1),
+  amount: MoneySchema,
+  quantityDelta: z.number().int(),
+  occurredAt: z.coerce.date(),
+});
+export type HoldingCashAdjustment = z.infer<typeof HoldingCashAdjustmentSchema>;
+
+export const activeHoldingQuantity = (
+  holding: Pick<Holding, 'quantity' | 'closedAt'> | null,
+): number => (holding === null || holding.closedAt !== null ? 0 : holding.quantity);
+
+/** 持仓在 tool 读取后可能被其它请求修改；拒绝过期计算，避免覆盖数量或重复结算成本。 */
+export const assertLedgerHoldingUnchanged = (
+  actual: Holding | null,
+  expected: Holding | null,
+): void => {
+  const identity = (holding: Holding | null) =>
+    holding === null
+      ? null
+      : [
+          holding.id,
+          holding.accountId,
+          holding.stockId,
+          holding.quantity,
+          holding.availableQuantity,
+          holding.avgCost,
+          holding.openedAt.getTime(),
+          holding.closedAt?.getTime() ?? null,
+        ];
+  if (JSON.stringify(identity(actual)) !== JSON.stringify(identity(expected))) {
+    throw new InvariantError('持仓已被其它请求修改，请刷新后重试');
+  }
+};
+
 export interface LedgerCoverageGap {
   readonly stockId: string;
   readonly holdingQuantity: number;
   /** 交易净额：正数=净买入，负数=净卖出。 */
   readonly tradedQuantity: number;
-  /** 持仓多于净买入：按持仓成本补扣现金（直接登记或漏记买入）。 */
+  /** 持仓多于交易与调整记录：数量缺口，不能猜测现金影响。 */
   readonly uncoveredQuantity: number;
-  /** 净买入多于持仓：有交易却没有对应持仓（漏登记持仓），现金会偏低。 */
+  /** 交易与调整净数量多于持仓：存在未记录的持仓变化。 */
   readonly unmatchedTradeQuantity: number;
-  /** 净卖出数量：卖出多于当前持有，现金会偏高。 */
+  /** 交易与调整合计为净卖出的数量。 */
   readonly oversoldQuantity: number;
 }
 
 /**
- * 持仓与交易的覆盖关系：直接登记的持仓（无交易记录）要按成本补扣现金，
- * 交易多于持仓（漏记卖出）则是一种缺口，对账时显式列出而不是静默混淆。
+ * 持仓与交易、持仓调整的数量覆盖关系；缺口只用于解释，不自动改动现金。
  */
 export const ledgerCoverage = (input: {
   readonly holdings: readonly Pick<Holding, 'stockId' | 'quantity' | 'closedAt'>[];
   readonly trades: readonly Pick<Trade, 'stockId' | 'side' | 'quantity'>[];
+  readonly holdingAdjustments?: readonly Pick<HoldingCashAdjustment, 'stockId' | 'quantityDelta'>[];
 }): readonly LedgerCoverageGap[] => {
   const heldByStock = new Map<string, number>();
   for (const holding of input.holdings) {
@@ -95,19 +134,27 @@ export const ledgerCoverage = (input: {
     const signed = trade.side === 'buy' ? trade.quantity : -trade.quantity;
     tradedByStock.set(trade.stockId, (tradedByStock.get(trade.stockId) ?? 0) + signed);
   }
-  const stockIds = [...new Set([...heldByStock.keys(), ...tradedByStock.keys()])].sort(
-    (left, right) => left.localeCompare(right),
-  );
+  const adjustedByStock = new Map<string, number>();
+  for (const adjustment of input.holdingAdjustments ?? []) {
+    adjustedByStock.set(
+      adjustment.stockId,
+      (adjustedByStock.get(adjustment.stockId) ?? 0) + adjustment.quantityDelta,
+    );
+  }
+  const stockIds = [
+    ...new Set([...heldByStock.keys(), ...tradedByStock.keys(), ...adjustedByStock.keys()]),
+  ].sort((left, right) => left.localeCompare(right));
   return stockIds.map((stockId) => {
     const holdingQuantity = heldByStock.get(stockId) ?? 0;
     const tradedQuantity = tradedByStock.get(stockId) ?? 0;
+    const recordedQuantity = tradedQuantity + (adjustedByStock.get(stockId) ?? 0);
     return {
       stockId,
       holdingQuantity,
       tradedQuantity,
-      uncoveredQuantity: Math.max(0, holdingQuantity - Math.max(0, tradedQuantity)),
-      unmatchedTradeQuantity: Math.max(0, tradedQuantity - holdingQuantity),
-      oversoldQuantity: Math.max(0, -tradedQuantity),
+      uncoveredQuantity: Math.max(0, holdingQuantity - Math.max(0, recordedQuantity)),
+      unmatchedTradeQuantity: Math.max(0, recordedQuantity - holdingQuantity),
+      oversoldQuantity: Math.max(0, -recordedQuantity),
     };
   });
 };
@@ -116,14 +163,15 @@ export interface LedgerReplayInput {
   readonly account: Pick<Account, 'id' | 'initialCapital'>;
   readonly trades: readonly Pick<Trade, 'stockId' | 'side' | 'quantity' | 'price'>[];
   readonly cashFlows: readonly Pick<PortfolioCashFlow, 'kind' | 'amount'>[];
+  readonly holdingAdjustments: readonly HoldingCashAdjustment[];
   readonly holdings: readonly Pick<Holding, 'stockId' | 'quantity' | 'avgCost' | 'closedAt'>[];
 }
 
 /**
  * 按账本重算现金（对账基准，不是日常读写路径）。
  * 口径与写路径一致，不计手续费：
- *   初始资金 + 所有交易 → 现金 + 所有资金流水 + 未被交易覆盖的持仓按成本补扣
- * 覆盖关系见 ledgerCoverage：直接登记的持仓会被补扣，漏记的卖出会体现为缺口。
+ *   初始资金 + 所有交易现金影响 + 所有资金流水 + 持久化的持仓现金调整。
+ * 已卖出或关闭的持仓也能通过调整记录重放原始成本，不依赖剩余持仓反推。
  */
 export const recomputeCashFromLedger = (input: LedgerReplayInput): Money => {
   let cash = money(input.account.initialCapital);
@@ -133,12 +181,8 @@ export const recomputeCashFromLedger = (input: LedgerReplayInput): Money => {
   for (const flow of input.cashFlows) {
     cash = money(cash + cashImpactOfCashFlow(flow));
   }
-  const gaps = ledgerCoverage({ holdings: input.holdings, trades: input.trades });
-  for (const gap of gaps) {
-    if (gap.uncoveredQuantity === 0) continue;
-    const holding = input.holdings.find((item) => item.stockId === gap.stockId);
-    if (holding === undefined) continue;
-    cash = money(cash - money(gap.uncoveredQuantity * holding.avgCost));
+  for (const adjustment of input.holdingAdjustments) {
+    cash = money(cash + adjustment.amount);
   }
   return cash;
 };
@@ -150,7 +194,7 @@ export interface CashReconciliation {
   readonly recomputed: Money;
   readonly difference: Money;
   readonly reconciled: boolean;
-  /** 账本缺口（直接登记持仓 / 漏记卖出），用于解释差额来源。 */
+  /** 交易与持仓调整仍未覆盖的数量缺口，用于解释差额来源。 */
   readonly gaps: readonly LedgerCoverageGap[];
 }
 
@@ -166,7 +210,7 @@ export const reconcileCashBalance = (
     recomputed,
     difference,
     reconciled: difference === 0,
-    gaps: ledgerCoverage({ holdings: ledger.holdings, trades: ledger.trades }).filter(
+    gaps: ledgerCoverage(ledger).filter(
       (gap) =>
         gap.uncoveredQuantity > 0 || gap.unmatchedTradeQuantity > 0 || gap.oversoldQuantity > 0,
     ),

@@ -1,7 +1,7 @@
 import { TradingPlanSchema, WatchTriggerSchema } from '@luoome/core';
 import { addHoldingTool, getAccountFactsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.js';
 
 const NOW = new Date('2026-07-17T07:00:00.000Z');
@@ -105,9 +105,49 @@ describe('intraday trading plan watch', () => {
     if (second.ok) expect(second.data.triggers).toEqual([]);
   });
 
+  it('刷新没有计划的持仓行情，使整账户事实恢复可用', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const facts = await seedFacts(ctx, [{ stockId: '600519.SH', quantity: 100, avgCost: 10 }]);
+    expect(facts.status).toBe('unavailable');
+    await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
+    const result = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: false },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.status).toBe('complete');
+    expect(result.data.triggers).toHaveLength(1);
+    expect(await ctx.repos.quote.latestByStock('600519.SH')).not.toBeNull();
+  });
+
+  it('计划与持仓并集超过 100 只时分批刷新', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const holdings = Array.from({ length: 101 }, (_, i) => ({
+      stockId: `${String(1000 + i).padStart(6, '0')}.SZ`,
+      quantity: 1,
+      avgCost: 1,
+    }));
+    const facts = await seedFacts(ctx, holdings);
+    await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));
+    const result = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: false },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.status).toBe('complete');
+    expect(result.data.freshQuotes).toBe(102);
+    expect(result.data.triggers).toHaveLength(1);
+  });
+
   it('账户事实不可用（持仓缺合格行情）时暂停精确盘中监控', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
-    // 000858.SZ 持仓没有合格行情：账户事实不可用；另有一只股票有计划才会走到该校验。
+    const batchQuote = ctx.adapters.market.batchQuote.bind(ctx.adapters.market);
+    vi.spyOn(ctx.adapters.market, 'batchQuote').mockImplementation((ids) =>
+      batchQuote(ids.filter((id) => id !== '000858.SZ')),
+    );
+    // 上游缺少该持仓的报价，刷新后仍不可用。
     const facts = await seedFacts(ctx, [{ stockId: '000858.SZ', quantity: 100, avgCost: 10 }]);
     expect(facts.status).toBe('unavailable');
     await ctx.repos.tradingPlan.save(makePlan(ACCOUNT_ID, facts.digest));

@@ -2,7 +2,7 @@ import { money, reconcileCashBalance } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
-import { reconcileAccountCashTool } from './account-facts.js';
+import { getAccountFactsTool, reconcileAccountCashTool } from './account-facts.js';
 import { addHoldingTool } from './add-holding.js';
 import { addTradeTool } from './add-trade.js';
 import { closeHoldingTool } from './close-holding.js';
@@ -22,16 +22,18 @@ const accountOf = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
 
 const assertReconciled = async (ctx: Awaited<ReturnType<typeof buildTestContext>>) => {
   const account = await accountOf(ctx);
-  const [holdings, trades, cashFlows] = await Promise.all([
+  const [holdings, trades, cashFlows, holdingAdjustments] = await Promise.all([
     ctx.repos.holding.listByAccount(account.id),
     ctx.repos.trade.listByAccount(account.id),
     ctx.repos.portfolioCashFlow.listByAccount(account.id),
+    ctx.repos.ledger.listHoldingAdjustments(account.id),
   ]);
   const result = reconcileCashBalance(account, {
     account,
     holdings,
     trades,
     cashFlows,
+    holdingAdjustments,
   });
   // 直接登记的持仓本来就没有交易记录（uncovered>0 是预期），
   // 但「净买入多于持仓」和「净卖出」这两类缺口属于账本不一致，必须为空。
@@ -45,6 +47,72 @@ const assertReconciled = async (ctx: Awaited<ReturnType<typeof buildTestContext>
 };
 
 describe('账户现金随账本变化', () => {
+  it('并发入金累加，且超额并发出金只允许一笔成功', async () => {
+    const ctx = await buildTestContext();
+    const before = (await accountOf(ctx)).cashBalance;
+    const deposit = (amount: number) =>
+      createPortfolioCashFlowTool.execute(
+        {
+          accountId: ctx.user.defaultAccountId,
+          kind: 'deposit',
+          amount,
+          occurredAt: ctx.clock(),
+        },
+        ctx,
+      );
+    const deposits = await Promise.all([deposit(100), deposit(200)]);
+    expect(deposits.map((r) => r.ok)).toEqual([true, true]);
+    expect((await accountOf(ctx)).cashBalance).toBe(before + 300);
+    const withdrawals = await Promise.all(
+      [1, 2].map(() =>
+        createPortfolioCashFlowTool.execute(
+          {
+            accountId: ctx.user.defaultAccountId,
+            kind: 'withdrawal',
+            amount: before,
+            occurredAt: ctx.clock(),
+          },
+          ctx,
+        ),
+      ),
+    );
+    expect(withdrawals.filter((r) => r.ok)).toHaveLength(1);
+    expect((await accountOf(ctx)).cashBalance).toBe(300);
+    await assertReconciled(ctx);
+  });
+
+  it('直接登记后部分卖出、改成本、全部卖出都能对账', async () => {
+    const ctx = await buildTestContext();
+    const added = await addHoldingTool.execute(
+      { stockId: '601398.SH', quantity: 100, avgCost: 10 },
+      ctx,
+    );
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    expect(
+      (
+        await addTradeTool.execute(
+          { stockId: '601398.SH', side: 'sell', quantity: 40, price: 12 },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    await assertReconciled(ctx);
+    expect(
+      (await updateHoldingTool.execute({ holdingId: added.data.holding.id, avgCost: 9 }, ctx)).ok,
+    ).toBe(true);
+    await assertReconciled(ctx);
+    expect(
+      (
+        await addTradeTool.execute(
+          { stockId: '601398.SH', side: 'sell', quantity: 60, price: 12 },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    await assertReconciled(ctx);
+  });
+
   it('买入按成交价扣现金、卖出加现金（不计手续费），且字段与账本始终对齐', async () => {
     const ctx = await buildTestContext();
     const before = (await accountOf(ctx)).cashBalance;
@@ -192,6 +260,21 @@ describe('账户现金对账工具', () => {
     expect(result.data.reconciled).toBe(true);
     expect(result.data.difference).toBe(0);
     expect(result.data.gaps).toEqual([]);
+  });
+
+  it('现金漂移或历史负余额不会提供精确资产口径', async () => {
+    const ctx = await buildTestContext();
+    const account = await accountOf(ctx);
+    await ctx.repos.account.save({ ...account, cashBalance: money(account.cashBalance + 1000) });
+    const result = await getAccountFactsTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.facts).toMatchObject({
+      status: 'unavailable',
+      totalAssets: null,
+      stockMarketValue: null,
+    });
+    expect(result.data.facts.reasons.join('；')).toContain('现金与账本重算不一致');
   });
 
   it('人为改错现金后能报出差额（漏记资金）', async () => {

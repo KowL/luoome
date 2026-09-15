@@ -201,6 +201,41 @@ export const TradingPlanSchema = z.object({
 });
 export type TradingPlan = z.infer<typeof TradingPlanSchema>;
 
+const LegacyTradingPlanSchema = TradingPlanSchema.omit({
+  accountFactsAsOf: true,
+  accountFactsDigest: true,
+}).extend({
+  accountSnapshotId: z.string().min(1),
+  accountSnapshotVersion: z.number().int().positive(),
+});
+
+/** 只迁移有旧快照身份且缺少账户事实的历史版本，禁止伪造当前账户指纹。 */
+export const migrateLegacyTradingPlan = (value: unknown): TradingPlan | null => {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    'accountFactsDigest' in value ||
+    'accountFactsAsOf' in value
+  )
+    return null;
+  const legacy = LegacyTradingPlanSchema.safeParse(value);
+  if (!legacy.success) return null;
+  const { accountSnapshotId, accountSnapshotVersion, ...plan } = legacy.data;
+  return TradingPlanSchema.parse({
+    ...plan,
+    status: plan.status === 'active' || plan.status === 'draft' ? 'expired' : plan.status,
+    accountFactsAsOf: plan.createdAt,
+    accountFactsDigest: `legacy-snapshot:${accountSnapshotId}:v${accountSnapshotVersion}`,
+    explanation: {
+      ...plan.explanation,
+      unknowns: [
+        ...plan.explanation.unknowns,
+        '旧账户快照计划已失效，需要基于当前账户事实重新生成',
+      ],
+    },
+  });
+};
+
 export const TradingPlanQuerySchema = z.object({
   accountId: z.string().min(1).optional(),
   stockId: z.string().min(1).optional(),

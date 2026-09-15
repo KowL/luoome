@@ -14,9 +14,13 @@ const inRange = (at: Date, from?: Date, to?: Date): boolean =>
 export class InMemoryPortfolioCashFlowRepository implements PortfolioCashFlowRepository {
   private readonly rows = new Map<string, PortfolioCashFlow>();
 
-  async save(flow: PortfolioCashFlow): Promise<void> {
+  put(flow: PortfolioCashFlow): void {
     const parsed = PortfolioCashFlowSchema.parse(flow);
     this.rows.set(parsed.id, parsed);
+  }
+
+  async save(flow: PortfolioCashFlow): Promise<void> {
+    this.put(flow);
   }
 
   async findById(id: string): Promise<PortfolioCashFlow | null> {

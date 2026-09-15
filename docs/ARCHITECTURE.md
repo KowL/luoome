@@ -571,6 +571,12 @@ Report           个性化结构化事实简报（周期、scope、section/block
 AShareSentimentSnapshot  沪深 A 股日级指数/宽度/封板/炸板/热点证据（维度级完整性）
 ```
 
+账户记账通过 `LedgerRepository` 原子更新账户与交易/持仓/流水：Drizzle 在 IMMEDIATE 事务内读取现金、
+计算增减并校验余额；内存实现串行提交。持仓写入携带读取时的旧持仓，在事务内检查冲突，
+失败不留下任何交易、持仓调整或现金变化。`HoldingCashAdjustment` 持久化手工持仓变化的金额与数量，
+对账重放这些记录；它不作为外部入金或出金计入收益率计算。SQLite 迁移原子回填旧余额与可恢复的调整记录，
+旧快照计划迁移同步 `plan_json` 和外层状态；active/draft 失效后保留历史读取能力。
+
 ### 5.2 Advice 实体（核心）
 
 ```ts
@@ -822,8 +828,9 @@ type ToolError =
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
 - `trading-plan-daily-cycle`：账户级盘后计划批次 —— **以当前持仓（账本 Holding）为唯一复核来源**，
   逐个跑 `analyze_position`（同时把当日行情落库）后再派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
-  候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情）时不激活精确仓位计划
-- `intraday-trading-plan-watch`：先按新鲜行情求值计划条件（`batch_quote` 落库后派生账户事实），
+  候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情或账本未对齐）时不激活精确仓位计划
+- `intraday-trading-plan-watch`：先按有效计划标的与全部当前持仓的并集分批刷新行情（每批最多 100 个），
+  `batch_quote` 落库后派生账户事实，再按新鲜行情求值计划条件，
   风险与退出条件命中时做 AI 复核并保留原始触发事实与计划版本；发布前重新校验账户事实指纹、
   计划版本、行情时效、条件是否仍成立与 10 分钟发布时限（以上游事件时间为计时起点），
   在同一租约内提交 Trigger + WatchRuleState。只监控与当前账户事实指纹一致的计划；单条候选过期、

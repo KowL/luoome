@@ -236,14 +236,16 @@ describe('看盘主页结构', () => {
 });
 
 describe('持仓页汇总卡片', () => {
-  it('持仓页顶部有 holdings-stats（总市值 / 总盈亏 / 持仓数），数据来自 /api/holdings', () => {
+  it('持仓页顶部有 holdings-stats（可用资金 / 总市值 / 总盈亏 / 持仓数），复用账户与持仓接口', () => {
     expect(html).toContain('id="holdings-stats"');
+    expect(html).toContain('id="holdings-stat-cash-balance"');
     expect(html).toContain('id="holdings-stat-total-value"');
     expect(html).toContain('id="holdings-stat-total-pnl"');
     expect(html).toContain('id="holdings-stat-count"');
     const pages = read('./pages.js');
     expect(pages).toContain("$('#holdings-stat-total-value')");
     expect(pages).toContain("$('#holdings-stat-count')");
+    expect(pages).toContain('/api/tools/get_account/call');
   });
 });
 

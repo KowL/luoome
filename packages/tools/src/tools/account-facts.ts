@@ -51,7 +51,24 @@ export const deriveAccountFacts = async (
     if (!isAdviceQuoteCurrent(quote, now)) continue;
     prices.set(stockId, { close: money(quote.close), observedAt: quote.observedAt });
   }
-  return buildAccountFacts({ account, holdings, stocks, prices, asOf: now });
+  const [trades, cashFlows, holdingAdjustments] = await Promise.all([
+    ctx.repos.trade.listByAccount(id),
+    ctx.repos.portfolioCashFlow.listByAccount(id),
+    ctx.repos.ledger.listHoldingAdjustments(id),
+  ]);
+  const reconciliation = reconcileCashBalance(account, {
+    account,
+    holdings,
+    trades,
+    cashFlows,
+    holdingAdjustments,
+  });
+  const extraReasons: string[] = [];
+  if (!reconciliation.reconciled)
+    extraReasons.push('账户现金与账本重算不一致，请核对资金和持仓记录');
+  if (reconciliation.gaps.length > 0)
+    extraReasons.push('持仓与交易、调整记录存在数量缺口，请先核对账本');
+  return buildAccountFacts({ account, holdings, stocks, prices, asOf: now, extraReasons });
 };
 
 export const getAccountFactsTool = defineTool({
@@ -92,8 +109,8 @@ export const ReconcileAccountCashOutput = z.object({
 });
 
 /**
- * 账户现金对账：把账户上的现金余额与账本（初始资金 + 交易 + 资金流水 + 直接登记持仓）
- * 重算结果比一比。差额就是漏记的成交/入金/出金，缺口逐股列出，不用人工找。
+ * 账户现金对账：把账户上的现金余额与账本（初始资金 + 交易 + 资金流水 + 持仓调整）
+ * 重算结果比一比，包含已持久化的手工持仓调整；差额和未覆盖的数量缺口逐股列出。
  */
 export const reconcileAccountCashTool = defineTool({
   name: 'reconcile_account_cash',
@@ -105,12 +122,19 @@ export const reconcileAccountCashTool = defineTool({
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
     const account = await ctx.repos.account.findById(accountId);
     if (account === null) return errNotFound('Account', accountId);
-    const [holdings, trades, cashFlows] = await Promise.all([
+    const [holdings, trades, cashFlows, holdingAdjustments] = await Promise.all([
       ctx.repos.holding.listByAccount(accountId),
       ctx.repos.trade.listByAccount(accountId),
       ctx.repos.portfolioCashFlow.listByAccount(accountId),
+      ctx.repos.ledger.listHoldingAdjustments(accountId),
     ]);
-    const result = reconcileCashBalance(account, { account, holdings, trades, cashFlows });
+    const result = reconcileCashBalance(account, {
+      account,
+      holdings,
+      trades,
+      cashFlows,
+      holdingAdjustments,
+    });
     return {
       accountId: result.accountId,
       stored: result.stored,

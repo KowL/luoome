@@ -61,17 +61,16 @@ export const buildAccountFacts = (input: {
   readonly extraReasons?: readonly string[];
 }): AccountFacts => {
   const reasons = [...(input.extraReasons ?? [])];
+  if (input.account.cashBalance < 0) reasons.push('历史账本重算现金为负，请核对资金和持仓记录');
   const active = input.holdings.filter(
     (holding) => holding.closedAt === null && holding.quantity > 0,
   );
   const positions: AccountFactsPosition[] = [];
-  let missingPrice = 0;
   for (const holding of active) {
     const price = input.prices?.get(holding.stockId);
     const industry =
       input.stocks?.get(holding.stockId)?.industry ?? (holding as { industry?: string }).industry;
     if (price === undefined) {
-      missingPrice += 1;
       reasons.push(`持仓 ${holding.stockId} 缺少合格行情，无法计算市值`);
       continue;
     }
@@ -86,7 +85,9 @@ export const buildAccountFacts = (input: {
     });
   }
   const stockMarketValue =
-    missingPrice === 0 ? round4(positions.reduce((sum, item) => sum + item.marketValue, 0)) : null;
+    reasons.length === 0
+      ? round4(positions.reduce((sum, item) => sum + item.marketValue, 0))
+      : null;
   const totalAssets =
     stockMarketValue === null ? null : round4(input.account.cashBalance + stockMarketValue);
   return {
@@ -97,7 +98,7 @@ export const buildAccountFacts = (input: {
     stockMarketValue,
     totalAssets,
     positions,
-    status: missingPrice === 0 ? 'complete' : 'unavailable',
+    status: reasons.length === 0 ? 'complete' : 'unavailable',
     reasons,
   };
 };
