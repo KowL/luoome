@@ -1,7 +1,6 @@
 import {
-  type AccountSnapshot,
+  type AccountFacts,
   type Advice,
-  accountSnapshotPositionId,
   addTradingDays,
   dateInShanghai,
   isAdviceQuoteCurrent,
@@ -30,8 +29,8 @@ export const TradingPlanDailyCycleOutput = z.object({
   accountId: z.string(),
   date: z.string().date(),
   status: z.enum(['complete', 'partial', 'blocked']),
-  snapshotId: z.string().optional(),
-  snapshotVersion: z.number().int().positive().optional(),
+  accountFactsAsOf: z.date().optional(),
+  accountFactsDigest: z.string().optional(),
   plans: z.array(TradingPlanSchema),
   holdingReviews: z.number().int().nonnegative(),
   candidateReviews: z.number().int().nonnegative(),
@@ -53,21 +52,6 @@ export type TradingPlanHoldingContext = {
   };
   readonly stockName: string;
 };
-
-export const snapshotPositionHoldingContext = (
-  snapshot: AccountSnapshot,
-  position: AccountSnapshot['positions'][number],
-): TradingPlanHoldingContext => ({
-  holding: {
-    id: accountSnapshotPositionId(snapshot.accountId, position.stockId),
-    accountId: snapshot.accountId,
-    stockId: position.stockId,
-    quantity: position.quantity,
-    availableQuantity: position.availableQuantity,
-    closedAt: null,
-  },
-  stockName: position.stockId,
-});
 
 const errorText = (error: {
   readonly kind?: unknown;
@@ -133,27 +117,26 @@ const adviceStockId = (
   return null;
 };
 
-const currentPositionPct = (
-  stockId: string,
-  snapshot: z.infer<typeof import('@luoome/core').AccountSnapshotSchema>,
-): number | null => {
-  if (snapshot.totalAssets === null || snapshot.totalAssets <= 0) return null;
-  const position = snapshot.positions.find((item) => item.stockId === stockId);
-  return position === undefined ? 0 : roundPct((position.marketValue / snapshot.totalAssets) * 100);
+const currentPositionPct = (stockId: string, accountFacts: AccountFacts): number | null => {
+  if (accountFacts.totalAssets === null || accountFacts.totalAssets <= 0) return null;
+  const position = accountFacts.positions.find((item) => item.stockId === stockId);
+  return position === undefined
+    ? 0
+    : roundPct((position.marketValue / accountFacts.totalAssets) * 100);
 };
 
 export const buildTradingPlanFromAdvice = (input: {
   readonly accountId: string;
-  readonly snapshot: z.infer<typeof import('@luoome/core').AccountSnapshotSchema>;
+  readonly accountFacts: AccountFacts;
   readonly advice: Advice;
   readonly holding?: TradingPlanHoldingContext;
   readonly previous: readonly TradingPlan[];
   readonly now: Date;
 }): TradingPlan => {
-  const { advice, holding, snapshot, now } = input;
+  const { advice, holding, accountFacts, now } = input;
   const stockId = adviceStockId(advice, holding === undefined ? [] : [holding]);
   if (stockId === null) throw new Error('advice is not stock or position scoped');
-  const currentPct = currentPositionPct(stockId, snapshot);
+  const currentPct = currentPositionPct(stockId, accountFacts);
   const action = actionForAdvice(advice, holding);
   const targetPct =
     action === 'hold' || action === 'observe'
@@ -198,12 +181,12 @@ export const buildTradingPlanFromAdvice = (input: {
       summary: advice.reasoning.premise,
     },
     {
-      id: `account:${snapshot.id}`,
+      id: `account-facts:${accountFacts.accountId}`,
       kind: 'account' as const,
-      source: 'account-snapshot',
-      observedAt: snapshot.asOf,
+      source: 'account-facts',
+      observedAt: accountFacts.asOf,
       factIds: [],
-      summary: `账户快照 v${snapshot.version}`,
+      summary: `账户事实 ${accountFacts.asOf.toISOString()}（现金 ${accountFacts.cashBalance}）`,
     },
   ];
   const entryConditions =
@@ -241,8 +224,8 @@ export const buildTradingPlanFromAdvice = (input: {
     .sort((a, b) => b.version - a.version)[0];
   const version = (previousVersion?.version ?? 0) + 1;
   const canActivate =
-    snapshot.status === 'complete' &&
-    snapshot.totalAssets !== null &&
+    accountFacts.status === 'complete' &&
+    accountFacts.totalAssets !== null &&
     targetPct !== null &&
     ((action !== 'enter' && action !== 'add') ||
       (advice.entryPriceLow !== undefined &&
@@ -256,7 +239,7 @@ export const buildTradingPlanFromAdvice = (input: {
         ? ['缺少价格区间，不能标为当前可执行建仓']
         : []
       : []),
-    ...(snapshot.status !== 'complete' ? ['账户快照待核对'] : []),
+    ...(accountFacts.status !== 'complete' ? ['账户事实不可用（现金待核对或持仓缺合格行情）'] : []),
     ...(facts.some((fact) => fact.status !== 'available') ? ['行情时间未达到盘中实时资格'] : []),
   ];
   const position = {
@@ -362,8 +345,8 @@ export const buildTradingPlanFromAdvice = (input: {
     ...(previousVersion === undefined
       ? {}
       : { supersedesVersionId: `${previousVersion.id}:v${previousVersion.version}` }),
-    accountSnapshotId: snapshot.id,
-    accountSnapshotVersion: snapshot.version,
+    accountFactsAsOf: accountFacts.asOf,
+    accountFactsDigest: accountFacts.digest,
     marketFacts: facts,
     evidence,
     source,
@@ -389,8 +372,8 @@ const run = async (
   const accountId = input.accountId ?? ctx.user.defaultAccountId;
   const now = ctx.clock();
   const date = input.date ?? dateInShanghai(now);
-  const snapshotResult = await ctx.tools.get_account_snapshot.execute({ accountId });
-  if (!snapshotResult.ok) {
+  const accountResult = await ctx.tools.get_account.execute({ accountId });
+  if (!accountResult.ok) {
     return {
       accountId,
       date,
@@ -398,27 +381,20 @@ const run = async (
       plans: [],
       holdingReviews: 0,
       candidateReviews: 0,
-      errors: [{ stockId: accountId, stage: 'save', reason: errorText(snapshotResult.error) }],
+      errors: [{ stockId: accountId, stage: 'save', reason: `account not found: ${accountId}` }],
     };
   }
-  const snapshot = snapshotResult.data.snapshot;
   const errors: Array<z.infer<typeof PlanErrorSchema>> = [];
+  // 当前持仓就是权威仓位来源（账本持仓），不再经由账户快照。
   const holdingsResult = await ctx.tools.list_holdings.execute({ accountId, status: 'active' });
   if (!holdingsResult.ok) {
     errors.push({ stockId: accountId, stage: 'holding', reason: errorText(holdingsResult.error) });
   }
-  const legacyHoldings = holdingsResult.ok ? holdingsResult.data.holdings : [];
-  const legacyByStock = new Map(
-    legacyHoldings.map((item) => [item.holding.stockId, item] as const),
-  );
-  // The complete account snapshot is the authoritative position set. Ledger holdings only
-  // enrich analysis when available; they must not decide whether a snapshot position exists.
-  const holdings = snapshot.positions
-    .filter((position) => position.quantity > 0)
-    .map((position) => ({
-      ...snapshotPositionHoldingContext(snapshot, position),
-      stockName: legacyByStock.get(position.stockId)?.stockName ?? position.stockId,
-    }));
+  const holdings: TradingPlanHoldingContext[] = (
+    holdingsResult.ok ? holdingsResult.data.holdings : []
+  )
+    .filter((item) => item.holding.quantity > 0)
+    .map((item) => ({ holding: item.holding, stockName: item.stockName }));
   const existingResult = await ctx.tools.list_trading_plans.execute({ accountId, limit: 500 });
   const existing = existingResult.ok ? existingResult.data.plans : [];
   const advices: Array<{ advice: Advice; holding?: TradingPlanHoldingContext }> = [];
@@ -438,6 +414,23 @@ const run = async (
         reason: errorText(item.result.error),
       });
   }
+  // 每个持仓的 analyze_position 已把当日行情落库；现在派生账户事实（现金字段 + 持仓 × 行情）。
+  const accountFactsResult = await ctx.tools.get_account_facts.execute({ accountId });
+  if (!accountFactsResult.ok) {
+    return {
+      accountId,
+      date,
+      status: 'blocked',
+      plans: [],
+      holdingReviews: positionResults.length,
+      candidateReviews: 0,
+      errors: [
+        { stockId: accountId, stage: 'holding', reason: errorText(accountFactsResult.error) },
+      ],
+    };
+  }
+  const accountFacts = accountFactsResult.data.facts;
+
   const dayStart = new Date(`${date}T00:00:00+08:00`);
   const dayEnd = new Date(dayStart.getTime() + 86_400_000 - 1);
   const candidatesResult = await ctx.tools.get_advice.execute({
@@ -479,7 +472,7 @@ const run = async (
       const previousPlans = existing.filter((plan) => plan.stockId === stockId);
       const draft = buildTradingPlanFromAdvice({
         accountId,
-        snapshot,
+        accountFacts,
         advice: item.advice,
         ...(item.holding === undefined ? {} : { holding: item.holding }),
         previous: previousPlans,
@@ -517,8 +510,9 @@ const run = async (
     accountId,
     date,
     status: errors.length === 0 ? 'complete' : plans.length > 0 ? 'partial' : 'blocked',
-    snapshotId: snapshot.id,
-    snapshotVersion: snapshot.version,
+    ...(accountFacts === undefined
+      ? {}
+      : { accountFactsAsOf: accountFacts.asOf, accountFactsDigest: accountFacts.digest }),
     plans,
     holdingReviews: positionResults.length,
     candidateReviews: Math.max(0, advices.length - positionResults.length),

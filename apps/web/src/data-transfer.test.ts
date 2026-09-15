@@ -18,7 +18,7 @@ const databasePath = (): string => {
   return join(dir, 'luoome.db');
 };
 
-const transferPlan = (snapshotId: string) =>
+const transferPlan = () =>
   TradingPlanSchema.parse({
     id: 'account:account-1:stock:600519.SH',
     version: 1,
@@ -51,8 +51,8 @@ const transferPlan = (snapshotId: string) =>
     validFrom: new Date('2026-08-11T00:00:00Z'),
     validUntil: new Date('2026-08-20T00:00:00Z'),
     invalidationConditions: [],
-    accountSnapshotId: snapshotId,
-    accountSnapshotVersion: 1,
+    accountFactsAsOf: new Date('2026-08-11T00:00:00.000Z'),
+    accountFactsDigest: 'data-transfer-plan-digest',
     marketFacts: [],
     evidence: [],
     source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
@@ -272,7 +272,7 @@ describe('data transfer', () => {
       createdAt: new Date('2026-08-11T00:00:00Z'),
     };
     await source.repos.accountSnapshot.save(snapshot);
-    await source.repos.tradingPlan.save(transferPlan(snapshot.id));
+    await source.repos.tradingPlan.save(transferPlan());
     source.close();
 
     const archive = exportDataArchive(sourcePath, ['advice-reports']);
@@ -299,7 +299,7 @@ describe('data transfer', () => {
       createdAt: new Date('2026-08-11T00:00:00Z'),
     };
     await source.repos.accountSnapshot.save(snapshot);
-    await source.repos.tradingPlan.save(transferPlan(snapshot.id));
+    await source.repos.tradingPlan.save(transferPlan());
     source.close();
 
     const archive = exportDataArchive(sourcePath, ['advice-reports']);

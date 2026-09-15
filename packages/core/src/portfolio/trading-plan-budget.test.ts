@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AccountSnapshot } from '../entity/account-snapshot.js';
+import type { AccountFacts } from '../entity/account-facts.js';
 import type { Stock } from '../entity/stock.js';
 import type { TradingPlan } from '../entity/trading-plan.js';
 import { money } from '../types/branded.js';
@@ -8,15 +8,15 @@ import {
   evaluateTradingPlanBudget,
 } from './trading-plan-budget.js';
 
-const snapshot: AccountSnapshot = {
-  id: 'snapshot-1',
+const facts: AccountFacts = {
   accountId: 'a',
-  version: 1,
   asOf: new Date('2026-09-08T00:00:00.000Z'),
+  digest: 'digest-budget-test',
   cashBalance: money(700),
   stockMarketValue: money(300),
   totalAssets: money(1000),
   status: 'complete',
+  reasons: [],
   positions: [
     {
       stockId: '600519.SH',
@@ -33,8 +33,6 @@ const snapshot: AccountSnapshot = {
       industry: '汽车',
     },
   ],
-  source: 'manual',
-  createdAt: new Date('2026-09-08T00:01:00.000Z'),
 };
 
 const stock = (id: string, industry: string): Stock => ({
@@ -84,8 +82,8 @@ const plan = (input: {
     validFrom: new Date('2026-09-08T00:00:00.000Z'),
     validUntil: new Date('2026-09-20T00:00:00.000Z'),
     invalidationConditions: [],
-    accountSnapshotId: 'snapshot-1',
-    accountSnapshotVersion: 1,
+    accountFactsAsOf: new Date('2026-09-08T00:00:00.000Z'),
+    accountFactsDigest: 'digest-budget-test',
     marketFacts: [],
     evidence: [],
     source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
@@ -97,7 +95,7 @@ const plan = (input: {
 describe('trading plan budget', () => {
   it('uses the default 80/15/30 caps and allows a non-increasing plan above a cap', () => {
     const overCapSnapshot = {
-      ...snapshot,
+      ...facts,
       cashBalance: money(600),
       stockMarketValue: money(400),
       positions: [
@@ -118,7 +116,7 @@ describe('trading plan budget', () => {
       ],
     };
     const result = evaluateTradingPlanBudget({
-      snapshot: overCapSnapshot,
+      facts: overCapSnapshot,
       plans: [
         plan({
           id: 'hold-over-cap',
@@ -137,7 +135,7 @@ describe('trading plan budget', () => {
 
   it('combines concurrent increases and blocks single-stock, industry, and total breaches', () => {
     const result = evaluateTradingPlanBudget({
-      snapshot,
+      facts,
       plans: [
         plan({
           id: 'a',
@@ -164,13 +162,14 @@ describe('trading plan budget', () => {
 
   it('returns unavailable when account facts are not reconciled and does not release budget for a pending sell', () => {
     const incomplete = {
-      ...snapshot,
-      status: 'needs-reconciliation' as const,
+      ...facts,
+      status: 'unavailable' as const,
       totalAssets: null,
       stockMarketValue: null,
+      reasons: ['账户现金或持仓行情不可用'],
     };
     const unavailable = evaluateTradingPlanBudget({
-      snapshot: incomplete,
+      facts: incomplete,
       plans: [
         plan({
           id: 'new',
@@ -186,7 +185,7 @@ describe('trading plan budget', () => {
     expect(unavailable.availableStockPct).toBe(null);
 
     const result = evaluateTradingPlanBudget({
-      snapshot,
+      facts,
       plans: [
         plan({
           id: 'sell',
@@ -215,7 +214,7 @@ describe('trading plan budget', () => {
 
   it('does not trust a stale plan position percentage to bypass the single-stock cap', () => {
     const result = evaluateTradingPlanBudget({
-      snapshot,
+      facts,
       plans: [
         plan({
           id: 'stale-position',
@@ -232,10 +231,10 @@ describe('trading plan budget', () => {
   });
 
   it('keeps industry budget unavailable when an existing position has no industry evidence', () => {
-    const existing = snapshot.positions[1];
+    const existing = facts.positions[1];
     if (existing === undefined) throw new Error('fixture position missing');
-    const incompleteIndustry: AccountSnapshot = {
-      ...snapshot,
+    const incompleteIndustry: AccountFacts = {
+      ...facts,
       positions: [
         {
           stockId: existing.stockId,
@@ -249,7 +248,7 @@ describe('trading plan budget', () => {
       cashBalance: money(900),
     };
     const result = evaluateTradingPlanBudget({
-      snapshot: incompleteIndustry,
+      facts: incompleteIndustry,
       plans: [
         plan({
           id: 'new-position',

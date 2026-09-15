@@ -1,4 +1,5 @@
 import type { Account } from '../entity/account.js';
+import type { AccountFacts } from '../entity/account-facts.js';
 import type { AccountSnapshot } from '../entity/account-snapshot.js';
 import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
@@ -367,7 +368,7 @@ export interface TradingPlanRepository {
   /** 在同一持久化事务内读取当前计划预算并条件写入 active 版本。 */
   saveIfBudgetAvailable(input: {
     readonly plan: TradingPlan;
-    readonly snapshot: AccountSnapshot;
+    readonly facts: AccountFacts;
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;

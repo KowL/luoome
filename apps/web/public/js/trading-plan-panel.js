@@ -1,16 +1,57 @@
+/**
+ * 账户事实摘要：现金来自账户字段、市值来自行情、更新时间来自 facts.asOf；
+ * 再附一条对账差额——差额就是漏记的成交或资金流水，不需要人工找。
+ */
+export const accountFactsSummary = ({ factsResult, reconcileResult }) => {
+  if (factsResult === undefined || !factsResult.ok) {
+    return el('div', 'plan-guidance', [
+      el('strong', null, '账户事实不可用'),
+      el('p', 'hint', `读取失败：${toolErrorText(factsResult?.error)}`),
+    ]);
+  }
+  const facts = factsResult.data.facts;
+  const lines = [
+    `现金 ${fmtNum(facts.cashBalance, 2)}`,
+    facts.stockMarketValue === null
+      ? '持仓市值 不可用'
+      : `持仓市值 ${fmtNum(facts.stockMarketValue, 2)}`,
+    facts.totalAssets === null ? '总资产 不可用' : `总资产 ${fmtNum(facts.totalAssets, 2)}`,
+    `更新于 ${fmtDateTime(facts.asOf)}`,
+  ];
+  const reconcile = reconcileResult?.ok ? reconcileResult.data : undefined;
+  const reconcileLine =
+    reconcile === undefined
+      ? null
+      : reconcile.reconciled
+        ? '账本对账：现金余额与账本一致'
+        : `账本对账：相差 ${fmtNum(reconcile.difference, 2)}（可能有未登记的成交或资金流水）`;
+  const incomplete = facts.status !== 'complete';
+  if (!incomplete && (reconcile === undefined || reconcile.reconciled)) {
+    return el(
+      'p',
+      'muted plan-facts',
+      [...lines, ...(reconcileLine === null ? [] : [reconcileLine])].join(' · '),
+    );
+  }
+  return el('div', 'plan-guidance', [
+    el('strong', null, incomplete ? '账户事实不可用' : '账户现金与账本不一致'),
+    el(
+      'p',
+      'hint',
+      incomplete ? facts.reasons.join('；') || '缺少现金或合格行情' : (reconcileLine ?? ''),
+    ),
+    el('p', 'muted plan-facts', lines.join(' · ')),
+  ]);
+};
+
 /* apps/web/public/js/trading-plan-panel.js —— 「预警」页的交易计划分区。
  *
- * 只读取 list_trading_plans / list_account_snapshots 的结果做渲染：计划是研究结论与条件，
+ * 只读取 list_trading_plans / get_account_facts / reconcile_account_cash 的结果做渲染：计划是研究结论与条件，
  * 不是成交、也不会自动下单。缺少账户快照时给出登记入口，因为账户事实缺失时计划只会停在草案。
  */
 
 import { callApi } from './api.js';
 import { makeSelect } from './form-kit.js';
-import {
-  openAccountSnapshotModal,
-  snapshotButtonLabel,
-  snapshotStatusNotice,
-} from './holdings-actions.js';
 import { openModal } from './modal.js';
 import { $, el, fmtDateTime, fmtNum, mount, toolErrorText } from './ui.js';
 
@@ -396,29 +437,6 @@ export const openTradingPlanDetailByVersionId = async (versionId) => {
   return result;
 };
 
-const snapshotEntry = ({ hasSnapshot, onSnapshotSaved, latestSnapshot }) => {
-  const button = el(
-    'button',
-    `btn ${hasSnapshot ? 'btn-outline' : 'btn-primary'} btn-sm`,
-    snapshotButtonLabel(hasSnapshot ? latestSnapshot : undefined),
-  );
-  button.type = 'button';
-  button.addEventListener('click', () =>
-    openAccountSnapshotModal({
-      ...(onSnapshotSaved === undefined ? {} : { onSaved: onSnapshotSaved }),
-      ...(latestSnapshot === undefined ? {} : { latest: latestSnapshot }),
-    }),
-  );
-  const notice = snapshotStatusNotice(hasSnapshot ? latestSnapshot : undefined);
-  if (notice === null) return el('div', 'flex gap-2', [button]);
-  return el('div', 'plan-guidance', [
-    el('strong', null, notice.title),
-    el('p', 'hint', notice.detail),
-    button,
-  ]);
-};
-
-/** 计划状态筛选：生效 / 草案 / 历史（被替代、撤销、过期）。 */
 export const PLAN_STATUS_FILTERS = [
   { id: 'all', label: '全部状态' },
   { id: 'active', label: '生效' },
@@ -526,8 +544,8 @@ export const renderTradingPlanPanel = ({
   root,
   meta,
   result,
-  snapshotResult,
-  onSnapshotSaved,
+  factsResult,
+  reconcileResult,
   setStatus,
 }) => {
   if (root === null) return;
@@ -538,38 +556,32 @@ export const renderTradingPlanPanel = ({
   }
   const plans = result.data?.plans ?? [];
   // 快照读取失败时按“有快照”处理：不把读取故障渲染成“未登记”。
-  const snapshots = snapshotResult?.ok ? (snapshotResult.data?.snapshots ?? []) : [];
-  const hasSnapshot = snapshotResult === undefined || !snapshotResult.ok || snapshots.length > 0;
-  const latestSnapshot = snapshots[0];
+  const facts = factsResult?.ok ? factsResult.data.facts : undefined;
   const latest = latestPlanVersions(plans);
   const activeCount = latest.filter((plan) => plan.status === 'active').length;
-  const incomplete = latestSnapshot !== undefined && latestSnapshot.status !== 'complete';
+  const incomplete = facts !== undefined && facts.status !== 'complete';
   if (meta !== null) {
     meta.textContent =
       latest.length === 0
-        ? hasSnapshot
-          ? incomplete
-            ? `账户快照待核对 v${latestSnapshot.version}`
-            : '暂无计划'
-          : '缺少账户快照'
-        : `${latest.length} 个 · 生效 ${activeCount}${incomplete ? ' · 账户待核对' : ''}`;
+        ? incomplete
+          ? '账户事实不可用'
+          : '暂无计划'
+        : `${latest.length} 个 · 生效 ${activeCount}${incomplete ? ' · 账户事实不可用' : ''}`;
   }
   if (latest.length === 0) {
     mount(root, [
       el(
         'p',
         'placeholder',
-        hasSnapshot
-          ? '尚未生成交易计划。计划在盘后批次里由持仓复核与候选分析产出，未生成计划不等于没有机会。'
-          : '尚未登记账户快照，盘后计划批次无法生成可执行计划。',
+        '尚未生成交易计划。计划在盘后批次里由持仓复核与候选分析产出，未生成计划不等于没有机会。',
       ),
-      snapshotEntry({ hasSnapshot, onSnapshotSaved, latestSnapshot }),
+      accountFactsSummary({ factsResult, reconcileResult }),
     ]);
     return;
   }
   planPanelState = { plans, latest };
   mount(root, planFilterBar());
   renderPlanList(root);
-  root.append(snapshotEntry({ hasSnapshot, onSnapshotSaved, latestSnapshot }));
+  root.append(accountFactsSummary({ factsResult, reconcileResult }));
   void setStatus;
 };

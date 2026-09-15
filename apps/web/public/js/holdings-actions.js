@@ -17,7 +17,7 @@ import {
   parsePositiveNumber,
 } from './form-kit.js';
 import { closeModal, openModal } from './modal.js';
-import { $, el, fmtNum, toolErrorText } from './ui.js';
+import { el, fmtNum, toolErrorText } from './ui.js';
 
 /* ============ 依赖注入 ============ */
 
@@ -27,12 +27,6 @@ let notify = () => {};
 export const initHoldingsActions = ({ refresh, setStatus }) => {
   onRefresh = refresh;
   notify = setStatus;
-  const snapshotButton = $('#btn-account-snapshot');
-  if (snapshotButton !== null && snapshotButton.dataset.bound !== '1') {
-    snapshotButton.dataset.bound = '1';
-    snapshotButton.addEventListener('click', () => void openAccountSnapshotFromHoldings(setStatus));
-    void refreshSnapshotButtonLabel();
-  }
 };
 
 const STOCK_ID_PATTERN = /^[A-Z0-9]{1,12}\.(SH|SZ|BJ|HK|US)$/;
@@ -673,35 +667,4 @@ export const openAccountSnapshotModal = ({ onSaved, latest } = {}) => {
   ]);
   syncStatusState();
   openModal('登记账户快照', body);
-};
-
-/**
- * 持仓页「账户快照」按钮文案跟随最新快照状态：缺失=登记、待核对/不可用=核对并保存、完整=更新。
- */
-const refreshSnapshotButtonLabel = async () => {
-  const button = $('#btn-account-snapshot');
-  if (button === null) return;
-  const result = await callApi('/api/account/snapshots?limit=1');
-  const latest = result.ok ? (result.data?.snapshots ?? [])[0] : undefined;
-  button.textContent = snapshotButtonLabel(latest);
-  const needsAttention = latest !== undefined && latest.status !== 'complete';
-  button.classList.toggle('btn-primary', needsAttention);
-  button.classList.toggle('btn-outline', !needsAttention);
-};
-
-/** 持仓页入口：先读最新快照（供整体替换前预填），再打开登记窗。 */
-const openAccountSnapshotFromHoldings = async (setStatus) => {
-  const result = await callApi('/api/account/snapshots?limit=1');
-  if (!result.ok) {
-    setStatus(toolErrorText(result.error), true);
-    return;
-  }
-  const latest = (result.data?.snapshots ?? [])[0];
-  openAccountSnapshotModal({
-    ...(latest === undefined ? {} : { latest }),
-    onSaved: async () => {
-      await onRefresh();
-      await refreshSnapshotButtonLabel();
-    },
-  });
 };

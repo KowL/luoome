@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type Account,
-  AccountSnapshotSchema,
+  AccountFactsSchema,
+  buildAccountFacts,
   money,
   type Stock,
   stockCode,
@@ -50,26 +51,23 @@ const stocks: readonly Stock[] = [
   },
 ];
 
-const snapshot = AccountSnapshotSchema.parse({
-  id: 'budget-concurrency-snapshot',
-  accountId: ACCOUNT_ID,
-  version: 1,
-  asOf: NOW,
-  cashBalance: 40_000,
-  stockMarketValue: 60_000,
-  totalAssets: 100_000,
-  status: 'complete',
-  positions: [
+const accountFacts = buildAccountFacts({
+  account: { id: ACCOUNT_ID, initialCapital: money(100_000), cashBalance: money(40_000) },
+  holdings: [
     {
+      id: 'concurrency-holding',
+      accountId: ACCOUNT_ID,
       stockId: '000001.SZ',
       quantity: 1000,
       availableQuantity: 1000,
-      marketValue: 60_000,
-      industry: '电力',
+      avgCost: money(60),
+      openedAt: NOW,
+      closedAt: null,
     },
   ],
-  source: 'manual',
-  createdAt: NOW,
+  stocks: new Map([['000001.SZ', { industry: '电力' }]]),
+  prices: new Map([['000001.SZ', { close: money(60), observedAt: NOW }]]),
+  asOf: NOW,
 });
 
 const makePlan = (stockId: string): TradingPlan =>
@@ -105,8 +103,8 @@ const makePlan = (stockId: string): TradingPlan =>
     validFrom: new Date('2026-09-08T00:00:00.000Z'),
     validUntil: new Date('2026-09-30T00:00:00.000Z'),
     invalidationConditions: ['账户快照版本改变'],
-    accountSnapshotId: snapshot.id,
-    accountSnapshotVersion: snapshot.version,
+    accountFactsAsOf: accountFacts.asOf,
+    accountFactsDigest: accountFacts.digest,
     marketFacts: [],
     evidence: [],
     source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
@@ -117,9 +115,9 @@ const makePlan = (stockId: string): TradingPlan =>
 
 const childScript = (clientPath: string): string => `
 import { createDrizzleRepos } from ${JSON.stringify(clientPath)};
-import { AccountSnapshotSchema, TradingPlanSchema, money, stockCode } from '@luoome/core';
+import { AccountFactsSchema, TradingPlanSchema, money, stockCode } from '@luoome/core';
 const now = new Date(${JSON.stringify(NOW.toISOString())});
-const snapshot = AccountSnapshotSchema.parse(JSON.parse(process.env.PR30_SNAPSHOT_JSON));
+const accountFacts = AccountFactsSchema.parse(JSON.parse(process.env.PR30_FACTS_JSON));
 const plan = TradingPlanSchema.parse(JSON.parse(process.env.PR30_PLAN_JSON));
 const stocks = new Map([
   ['000001.SZ', { id: '000001.SZ', code: stockCode('000001'), exchange: 'SZ', name: '基准持仓', industry: '电力' }],
@@ -130,7 +128,7 @@ const handle = createDrizzleRepos(process.env.PR30_DB_PATH);
 try {
   const result = await handle.repos.tradingPlan.saveIfBudgetAvailable({
     plan,
-    snapshot,
+    facts: accountFacts,
     stocks,
     limits: { totalStockPct: 80, singleStockPct: 15, industryPct: 30 },
     asOf: now,
@@ -152,7 +150,7 @@ const childResult = async (
       ...process.env,
       PR30_DB_PATH: dbPath,
       PR30_PLAN_JSON: JSON.stringify(plan),
-      PR30_SNAPSHOT_JSON: JSON.stringify(snapshot),
+      PR30_FACTS_JSON: JSON.stringify(accountFacts),
     },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -171,6 +169,12 @@ const childResult = async (
 };
 
 describe('Drizzle trading plan budget transaction', () => {
+  it('账户事实 fixture 自身合法（子进程脚本按同一 schema 解析）', () => {
+    expect(AccountFactsSchema.parse(JSON.parse(JSON.stringify(accountFacts)))).toEqual(
+      accountFacts,
+    );
+  });
+
   const directories: string[] = [];
 
   afterEach(() => {
@@ -185,7 +189,6 @@ describe('Drizzle trading plan budget transaction', () => {
     const handle = createDrizzleRepos(dbPath);
     await handle.repos.account.save(account);
     for (const stock of stocks) await handle.repos.stock.save(stock);
-    await handle.repos.accountSnapshot.save(snapshot);
     const clientPath = new URL('../../client.ts', import.meta.url).pathname;
     handle.close();
 

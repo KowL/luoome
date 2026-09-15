@@ -1239,12 +1239,14 @@ const mountPaginated = (root, items, renderItem, emptyNode) => {
 };
 
 export const renderAlerts = async (setStatus) => {
-  const [plansResult, triggersResult, tradingPlansResult, snapshotsResult] = await Promise.all([
-    callApi('/api/alert-plans'),
-    callApi('/api/watch/triggers?limit=200'),
-    callApi('/api/trading-plans?activeOnly=false&limit=200'),
-    callApi('/api/account/snapshots?limit=1'),
-  ]);
+  const [plansResult, triggersResult, tradingPlansResult, factsResult, reconcileResult] =
+    await Promise.all([
+      callApi('/api/alert-plans'),
+      callApi('/api/watch/triggers?limit=200'),
+      callApi('/api/trading-plans?activeOnly=false&limit=200'),
+      post('/api/tools/get_account_facts/call', {}),
+      post('/api/tools/reconcile_account_cash/call', {}),
+    ]);
   const plansRoot = $('#alerts-list');
   const triggersRoot = $('#alerts-triggers');
   const alertPlans = plansResult.ok ? (plansResult.data.plans ?? []) : [];
@@ -1280,8 +1282,8 @@ export const renderAlerts = async (setStatus) => {
     root: $('#alerts-plans'),
     meta: $('#alerts-plans-meta'),
     result: tradingPlansResult,
-    snapshotResult: snapshotsResult,
-    onSnapshotSaved: () => renderAlerts(setStatus),
+    factsResult,
+    reconcileResult,
     setStatus,
   });
   void setStatus;

@@ -11,6 +11,8 @@ const EXPECTED_TOOL_NAMES = [
   'get_account',
   'get_account_snapshot',
   'list_account_snapshots',
+  'get_account_facts',
+  'reconcile_account_cash',
   'list_holdings',
   'get_holding',
   'list_trades',

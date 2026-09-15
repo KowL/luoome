@@ -1,5 +1,5 @@
 import {
-  type AccountSnapshot,
+  type AccountFacts,
   type Advice,
   dateInShanghai,
   evaluateTradingPlanCondition,
@@ -16,7 +16,6 @@ import { z } from 'zod';
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
 import {
   buildTradingPlanFromAdvice,
-  snapshotPositionHoldingContext,
   type TradingPlanHoldingContext,
 } from './trading-plan-daily-cycle.js';
 
@@ -225,8 +224,8 @@ const triggerFor = (
       quoteClose: quote?.close,
       quoteObservedAt: quote?.observedAt,
       quoteSource: quote?.source,
-      accountSnapshotId: plan.accountSnapshotId,
-      accountSnapshotVersion: plan.accountSnapshotVersion,
+      accountFactsDigest: plan.accountFactsDigest,
+      accountFactsAsOf: plan.accountFactsAsOf.toISOString(),
       validUntil: plan.validUntil,
     },
     notified: false,
@@ -262,7 +261,7 @@ const notificationContent = (candidate: Candidate): string => {
 const reviewTriggeredHoldings = async (
   candidates: readonly Candidate[],
   accountId: string,
-  snapshot: AccountSnapshot,
+  accountFacts: AccountFacts,
   ctx: WorkflowContext,
 ): Promise<{
   reviews: IntradayTradingPlanWatchOutputT['reviewedPlans'];
@@ -272,10 +271,17 @@ const reviewTriggeredHoldings = async (
     (candidate) => candidate.condition.phase === 'risk' || candidate.condition.phase === 'exit',
   );
   if (riskCandidates.length === 0) return { reviews: [], replacementPlans: new Map() };
+  // 当前持仓来自账本；账户事实只提供现金与市值口径。
+  const holdingsResult = await ctx.tools.list_holdings.execute({ accountId, status: 'active' });
   const holdingByStock = new Map<string, TradingPlanHoldingContext>();
-  for (const position of snapshot.positions) {
-    if (position.quantity <= 0) continue;
-    holdingByStock.set(position.stockId, snapshotPositionHoldingContext(snapshot, position));
+  if (holdingsResult.ok) {
+    for (const item of holdingsResult.data.holdings) {
+      if (item.holding.quantity <= 0) continue;
+      holdingByStock.set(item.holding.stockId, {
+        holding: item.holding,
+        stockName: item.stockName,
+      });
+    }
   }
   const reviews: IntradayTradingPlanWatchOutputT['reviewedPlans'] = [];
   const replacementPlans = new Map<string, TradingPlan>();
@@ -308,7 +314,7 @@ const reviewTriggeredHoldings = async (
     const previous = existingResult.ok ? existingResult.data.plans : [candidate.plan];
     const next = buildTradingPlanFromAdvice({
       accountId,
-      snapshot,
+      accountFacts,
       advice: adviceResult.data.advice as Advice,
       holding,
       previous,
@@ -385,26 +391,25 @@ const latestPlanById = (plans: readonly TradingPlan[], planId: string): TradingP
 const validatePublication = async (
   candidates: readonly Candidate[],
   accountId: string,
-  initialSnapshot: AccountSnapshot,
+  initialFacts: AccountFacts,
   ctx: WorkflowContext,
 ): Promise<PublicationValidation> => {
   const now = ctx.clock();
   if (candidates.length === 0) return { ok: true, candidates: [], dropped: [] };
-  const currentSnapshotResult = await ctx.tools.get_account_snapshot.execute({ accountId });
-  if (!currentSnapshotResult.ok) {
+  const currentFactsResult = await ctx.tools.get_account_facts.execute({ accountId });
+  if (!currentFactsResult.ok) {
     return {
       ok: false,
-      reason: `发布前无法读取账户快照：${errorText(currentSnapshotResult.error)}`,
+      reason: `发布前无法读取账户事实：${errorText(currentFactsResult.error)}`,
     };
   }
-  const currentSnapshot = currentSnapshotResult.data.snapshot;
+  const currentFacts = currentFactsResult.data.facts;
   if (
-    currentSnapshot.id !== initialSnapshot.id ||
-    currentSnapshot.version !== initialSnapshot.version ||
-    currentSnapshot.status !== 'complete' ||
-    currentSnapshot.totalAssets === null
+    currentFacts.digest !== initialFacts.digest ||
+    currentFacts.status !== 'complete' ||
+    currentFacts.totalAssets === null
   ) {
-    return { ok: false, reason: '发布前账户快照已变化或不再完整，放弃本轮信号' };
+    return { ok: false, reason: '发布前账户事实（持仓或现金）已变化或不可用，放弃本轮信号' };
   }
   const plansResult = await ctx.tools.list_trading_plans.execute({ accountId, limit: 500 });
   if (!plansResult.ok) {
@@ -437,8 +442,7 @@ const validatePublication = async (
     if (
       currentPlan === undefined ||
       currentPlan.version !== (candidate.reviewedPlan ?? candidate.plan).version ||
-      currentPlan.accountSnapshotId !== currentSnapshot.id ||
-      currentPlan.accountSnapshotVersion !== currentSnapshot.version ||
+      currentPlan.accountFactsDigest !== currentFacts.digest ||
       currentPlan.validFrom.getTime() > now.getTime() ||
       currentPlan.validUntil.getTime() <= now.getTime() ||
       (candidate.reviewedPlan === undefined && currentPlan.status !== 'active') ||
@@ -492,44 +496,6 @@ const run = async (
   const now = ctx.clock();
   const date = dateInShanghai(now);
   const errors: string[] = [];
-  const snapshotResult = await ctx.tools.get_account_snapshot.execute({ accountId });
-  if (!snapshotResult.ok) {
-    return {
-      accountId,
-      date,
-      status: 'blocked',
-      checkedPlans: 0,
-      freshQuotes: 0,
-      stalePlans: 0,
-      triggers: [],
-      reviewedPlans: [],
-      notified: 0,
-      delivered: 0,
-      suppressedByCooldown: 0,
-      suppressedByDailyLimit: 0,
-      notifyFailed: 0,
-      errors: [errorText(snapshotResult.error)],
-    };
-  }
-  const snapshot = snapshotResult.data.snapshot;
-  if (snapshot.status !== 'complete' || snapshot.totalAssets === null) {
-    return {
-      accountId,
-      date,
-      status: 'blocked',
-      checkedPlans: 0,
-      freshQuotes: 0,
-      stalePlans: 0,
-      triggers: [],
-      reviewedPlans: [],
-      notified: 0,
-      delivered: 0,
-      suppressedByCooldown: 0,
-      suppressedByDailyLimit: 0,
-      notifyFailed: 0,
-      errors: ['账户快照待核对，暂停精确盘中计划监控'],
-    };
-  }
   const plansResult = await ctx.tools.list_trading_plans.execute({
     accountId,
     activeOnly: true,
@@ -553,23 +519,20 @@ const run = async (
       errors: [errorText(plansResult.error)],
     };
   }
-  const plans = plansResult.data.plans.filter(
+  const livePlans = plansResult.data.plans.filter(
     (plan) =>
-      plan.accountSnapshotId === snapshot.id &&
-      plan.accountSnapshotVersion === snapshot.version &&
-      plan.validFrom.getTime() <= now.getTime() &&
-      plan.validUntil.getTime() > now.getTime(),
+      plan.validFrom.getTime() <= now.getTime() && plan.validUntil.getTime() > now.getTime(),
   );
-  const stalePlans = plansResult.data.plans.length - plans.length;
-  if (stalePlans > 0) errors.push(`${stalePlans} 个计划因账户版本或有效期不匹配未监控`);
-  if (plans.length === 0) {
+  const expiredPlans = plansResult.data.plans.length - livePlans.length;
+  if (expiredPlans > 0) errors.push(`${expiredPlans} 个计划因有效期不匹配未监控`);
+  if (livePlans.length === 0) {
     return {
       accountId,
       date,
-      status: stalePlans > 0 ? 'partial' : 'complete',
+      status: expiredPlans > 0 ? 'partial' : 'complete',
       checkedPlans: 0,
       freshQuotes: 0,
-      stalePlans,
+      stalePlans: expiredPlans,
       triggers: [],
       reviewedPlans: [],
       notified: 0,
@@ -580,8 +543,9 @@ const run = async (
       errors,
     };
   }
+  // 先刷新行情（batch_quote 会落库），再派生账户事实：盘中不能用昨日收盘当当前市值。
   const quotesResult = await ctx.tools.batch_quote.execute({
-    stockIds: [...new Set(plans.map((plan) => plan.stockId))],
+    stockIds: [...new Set(livePlans.map((plan) => plan.stockId))],
     context: 'intraday-rule',
     watchIntervalSeconds: input.watchIntervalSeconds,
   });
@@ -590,9 +554,9 @@ const run = async (
       accountId,
       date,
       status: 'partial',
-      checkedPlans: plans.length,
+      checkedPlans: livePlans.length,
       freshQuotes: 0,
-      stalePlans,
+      stalePlans: expiredPlans,
       triggers: [],
       reviewedPlans: [],
       notified: 0,
@@ -609,6 +573,72 @@ const run = async (
   const freshQuotes = [...quoteItems.values()].filter(
     (item) => item.status === 'ok' && item.freshness === 'fresh',
   ).length;
+  const factsResult = await ctx.tools.get_account_facts.execute({ accountId });
+  if (!factsResult.ok) {
+    return {
+      accountId,
+      date,
+      status: 'blocked',
+      checkedPlans: livePlans.length,
+      freshQuotes,
+      stalePlans: expiredPlans,
+      triggers: [],
+      reviewedPlans: [],
+      notified: 0,
+      delivered: 0,
+      suppressedByCooldown: 0,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+      errors: [...errors, errorText(factsResult.error)],
+    };
+  }
+  const accountFacts = factsResult.data.facts;
+  if (accountFacts.status !== 'complete' || accountFacts.totalAssets === null) {
+    return {
+      accountId,
+      date,
+      status: 'blocked',
+      checkedPlans: livePlans.length,
+      freshQuotes,
+      stalePlans: expiredPlans,
+      triggers: [],
+      reviewedPlans: [],
+      notified: 0,
+      delivered: 0,
+      suppressedByCooldown: 0,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+      errors: [
+        ...errors,
+        `账户事实不可用，暂停精确盘中计划监控：${accountFacts.reasons.join('；')}`,
+      ],
+    };
+  }
+  // 只监控基于当前账户事实（持仓 + 现金）的计划；账本变了，旧计划的仓位前提已失效。
+  const plans = livePlans.filter((plan) => plan.accountFactsDigest === accountFacts.digest);
+  const stalePlans = expiredPlans + (livePlans.length - plans.length);
+  if (livePlans.length !== plans.length) {
+    errors.push(`${livePlans.length - plans.length} 个计划因账户事实已变化未监控`);
+  }
+  if (plans.length === 0) {
+    // 有计划但与当前账户事实不匹配：账本变了，旧计划的仓位前提已失效，按 partial 明确暴露。
+    return {
+      accountId,
+      date,
+      status: 'partial',
+      checkedPlans: 0,
+      freshQuotes,
+      stalePlans,
+      triggers: [],
+      reviewedPlans: [],
+      notified: 0,
+      delivered: 0,
+      suppressedByCooldown: 0,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+      errors,
+    };
+  }
   const poolId = `trading-plan-watch:${accountId}`;
   const stateResult = await ctx.tools.list_watch_rule_states.execute({ poolId });
   if (!stateResult.ok) {
@@ -767,12 +797,8 @@ const run = async (
   let finalTriggers = deliveryTriggers;
   let reviewedPlans: IntradayTradingPlanWatchOutputT['reviewedPlans'] = [];
   try {
-    const beforeReviewSnapshot = await ctx.tools.get_account_snapshot.execute({ accountId });
-    if (
-      !beforeReviewSnapshot.ok ||
-      beforeReviewSnapshot.data.snapshot.id !== snapshot.id ||
-      beforeReviewSnapshot.data.snapshot.version !== snapshot.version
-    ) {
+    const beforeReviewFacts = await ctx.tools.get_account_facts.execute({ accountId });
+    if (!beforeReviewFacts.ok || beforeReviewFacts.data.facts.digest !== accountFacts.digest) {
       return {
         accountId,
         date,
@@ -789,13 +815,13 @@ const run = async (
         notifyFailed: 0,
         errors: [
           ...errors,
-          beforeReviewSnapshot.ok
-            ? '账户快照在盘中复核开始前已变化，放弃本轮信号'
-            : errorText(beforeReviewSnapshot.error),
+          beforeReviewFacts.ok
+            ? '账户事实（持仓或现金）在盘中复核开始前已变化，放弃本轮信号'
+            : errorText(beforeReviewFacts.error),
         ],
       };
     }
-    const reviewed = await reviewTriggeredHoldings(candidates, accountId, snapshot, ctx);
+    const reviewed = await reviewTriggeredHoldings(candidates, accountId, accountFacts, ctx);
     reviewedPlans = reviewed.reviews;
     const reviewedCandidates = candidates.map((candidate) => {
       const replacementPlan = reviewed.replacementPlans.get(candidate.trigger.id);
@@ -803,7 +829,7 @@ const run = async (
         ? candidate
         : { ...candidate, reviewedPlan: replacementPlan };
     });
-    const publication = await validatePublication(reviewedCandidates, accountId, snapshot, ctx);
+    const publication = await validatePublication(reviewedCandidates, accountId, accountFacts, ctx);
     if (!publication.ok) {
       return {
         accountId,

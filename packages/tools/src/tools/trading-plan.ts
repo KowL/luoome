@@ -12,6 +12,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { deriveAccountFacts } from './account-facts.js';
 
 export const SaveTradingPlanInput = z.object({
   plan: TradingPlanSchema,
@@ -31,26 +32,19 @@ export const saveTradingPlanTool = defineTool({
   handler: async (input, ctx) => {
     const account = await ctx.repos.account.findById(input.plan.accountId);
     if (account === null) return errNotFound('Account', input.plan.accountId);
-    const snapshot = await ctx.repos.accountSnapshot.findById(input.plan.accountSnapshotId);
-    if (snapshot === null) return errNotFound('AccountSnapshot', input.plan.accountSnapshotId);
-    if (
-      snapshot.accountId !== input.plan.accountId ||
-      snapshot.version !== input.plan.accountSnapshotVersion
-    ) {
-      return errInvalidInput('交易计划引用的账户快照不是该账户的当前版本');
+    // 计划必须基于当前账户事实（现金字段 + 当前持仓 + 行情）：指纹不一致说明账本已变，
+    // 旧前提不再成立，需要重新生成计划而不是沿用。
+    const facts = await deriveAccountFacts(ctx, input.plan.accountId);
+    if (facts === null) return errNotFound('Account', input.plan.accountId);
+    if (input.plan.accountFactsDigest !== facts.digest) {
+      return errInvalidInput('交易计划基于的账户事实已变化（持仓或现金已更新），请重新生成计划');
     }
-    if (input.plan.status === 'active' && snapshot.status !== 'complete') {
-      return errInvalidInput('账户快照待核对时不能激活精确仓位计划');
+    if (input.plan.status === 'active' && facts.status !== 'complete') {
+      return errInvalidInput(
+        `账户事实不可用时不能激活精确仓位计划：${facts.reasons.join('；') || '缺少现金或合格行情'}`,
+      );
     }
     if (input.plan.status === 'active') {
-      const latestSnapshot = await ctx.repos.accountSnapshot.latestByAccount(input.plan.accountId);
-      if (
-        latestSnapshot === null ||
-        latestSnapshot.id !== snapshot.id ||
-        latestSnapshot.version !== snapshot.version
-      ) {
-        return errInvalidInput('只能基于账户当前快照激活交易计划');
-      }
       if (input.plan.position.constraintStatus !== 'passed') {
         return errInvalidInput('只有通过约束校验的计划才能激活');
       }
@@ -64,7 +58,7 @@ export const saveTradingPlanTool = defineTool({
       const otherPlans = active.filter((plan) => plan.id !== input.plan.id);
       const stocks = new Map<string, Stock>();
       const stockIds = new Set([
-        ...snapshot.positions.map((position) => position.stockId),
+        ...facts.positions.map((position) => position.stockId),
         ...otherPlans.map((plan) => plan.stockId),
         input.plan.stockId,
       ]);
@@ -74,7 +68,7 @@ export const saveTradingPlanTool = defineTool({
       }
       const saved = await ctx.repos.tradingPlan.saveIfBudgetAvailable({
         plan: input.plan,
-        snapshot,
+        facts,
         stocks,
         limits: input.limits,
         asOf: ctx.clock(),
@@ -139,8 +133,8 @@ export const evaluateTradingPlanBudgetTool = defineTool({
   output: EvaluateTradingPlanBudgetOutput,
   handler: async (input, ctx) => {
     const accountId = input.accountId ?? ctx.user.defaultAccountId;
-    const snapshot = await ctx.repos.accountSnapshot.latestByAccount(accountId);
-    if (snapshot === null) return errNotFound('AccountSnapshot', accountId);
+    const facts = await deriveAccountFacts(ctx, accountId);
+    if (facts === null) return errNotFound('Account', accountId);
     assertTradingPlanBudgetLimits(input.limits);
     const plans = await ctx.repos.tradingPlan.list({
       accountId,
@@ -150,7 +144,7 @@ export const evaluateTradingPlanBudgetTool = defineTool({
     });
     const stocks = new Map<string, Stock>();
     const stockIds = new Set([
-      ...snapshot.positions.map((position) => position.stockId),
+      ...facts.positions.map((position) => position.stockId),
       ...plans.map((plan) => plan.stockId),
     ]);
     for (const stockId of stockIds) {
@@ -159,12 +153,9 @@ export const evaluateTradingPlanBudgetTool = defineTool({
     }
     return TradingPlanBudgetResultSchema.parse(
       evaluateTradingPlanBudget({
-        snapshot,
-        plans: plans.filter(
-          (plan) =>
-            plan.accountSnapshotId === snapshot.id &&
-            plan.accountSnapshotVersion === snapshot.version,
-        ),
+        facts,
+        // 只合并「基于同一份账户事实」的有效计划：账本变了，旧计划的额度不再占用。
+        plans: plans.filter((plan) => plan.accountFactsDigest === facts.digest),
         stocks,
         limits: input.limits,
       }),

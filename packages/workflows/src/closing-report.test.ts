@@ -348,8 +348,8 @@ describe('closing-report workflow', () => {
       validFrom: new Date('2026-07-27T00:00:00.000Z'),
       validUntil: new Date('2026-08-02T00:00:00.000Z'),
       invalidationConditions: ['账户快照版本改变'],
-      accountSnapshotId: 'snapshot-1',
-      accountSnapshotVersion: 1,
+      accountFactsAsOf: new Date('2026-07-27T00:00:00.000Z'),
+      accountFactsDigest: 'closing-report-plan-digest',
       marketFacts: [],
       evidence: [],
       source: {

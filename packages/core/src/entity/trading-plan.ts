@@ -188,8 +188,10 @@ export const TradingPlanSchema = z.object({
   validUntil: z.coerce.date(),
   invalidationConditions: z.array(z.string().min(1)),
   supersedesVersionId: z.string().min(1).optional(),
-  accountSnapshotId: z.string().min(1),
-  accountSnapshotVersion: z.number().int().positive(),
+  /** 计划所依据的账户事实时间（现金 + 持仓口径）。 */
+  accountFactsAsOf: z.coerce.date(),
+  /** 计划所依据的账户事实指纹；与当前 facts 不一致即视为失效。 */
+  accountFactsDigest: z.string().min(8),
   marketFacts: z.array(TradingPlanMarketFactSchema),
   evidence: z.array(TradingPlanEvidenceSchema),
   source: TradingPlanSourceSchema,

@@ -1,10 +1,5 @@
-import {
-  AccountSnapshotSchema,
-  type Advice,
-  AdviceSchema,
-  STANDARD_DISCLAIMERS,
-} from '@luoome/core';
-import { saveAccountSnapshotTool } from '@luoome/tools';
+import { AccountFactsSchema, type Advice, AdviceSchema, STANDARD_DISCLAIMERS } from '@luoome/core';
+import { addHoldingTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -16,18 +11,20 @@ import {
 const NOW = new Date('2026-07-17T07:00:00.000Z');
 const STOCK_ID = '600519.SH';
 const ACCOUNT_ID = 'account-1';
+/** fixtures 的长期账户：无持仓，适合验证「以当前持仓为复核来源」。 */
+const EMPTY_ACCOUNT_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
 
 describe('trading plan daily cycle', () => {
   it('persists the AI entry range instead of collapsing it to the representative price', () => {
-    const snapshot = AccountSnapshotSchema.parse({
-      id: 'snapshot-1',
+    const accountFacts = AccountFactsSchema.parse({
       accountId: ACCOUNT_ID,
-      version: 1,
       asOf: NOW,
+      digest: 'daily-cycle-test-digest',
       cashBalance: 9000,
       stockMarketValue: 1000,
       totalAssets: 10000,
       status: 'complete',
+      reasons: [],
       positions: [
         {
           stockId: '000001.SZ',
@@ -37,8 +34,6 @@ describe('trading plan daily cycle', () => {
           industry: '银行',
         },
       ],
-      source: 'manual',
-      createdAt: NOW,
     });
     const advice = AdviceSchema.parse({
       id: 'advice-1',
@@ -86,7 +81,7 @@ describe('trading plan daily cycle', () => {
 
     const plan = buildTradingPlanFromAdvice({
       accountId: ACCOUNT_ID,
-      snapshot,
+      accountFacts,
       advice,
       previous: [],
       now: NOW,
@@ -98,19 +93,15 @@ describe('trading plan daily cycle', () => {
     expect(plan.entryConditions[0]).toMatchObject({ value: 100, valueTo: 105 });
   });
 
-  it('以完整账户快照中的持仓作为复核来源，即使没有 legacy Holding 也会分析', async () => {
+  it('以当前持仓作为复核来源（现金来自账户字段）', async () => {
     const now = new Date('2026-07-17T07:00:00.000Z');
     const ctx = await buildTestContext({ advices: [], clock: () => now });
-    const snapshot = await saveAccountSnapshotTool.execute(
-      {
-        accountId: ctx.user.defaultAccountId,
-        cashBalance: 900_000,
-        positions: [{ stockId: '000858.SZ', quantity: 100, marketValue: 10_000 }],
-      },
+    const seeded = await addHoldingTool.execute(
+      { accountId: EMPTY_ACCOUNT_ID, stockId: '000858.SZ', quantity: 100, avgCost: 100 },
       ctx,
     );
-    expect(snapshot.ok).toBe(true);
-    if (!snapshot.ok) return;
+    expect(seeded.ok).toBe(true);
+    if (!seeded.ok) return;
     let positionCalls = 0;
     let observedHolding: Record<string, unknown> | undefined;
     const llm = ctx.adapters.llm;
@@ -132,12 +123,15 @@ describe('trading plan daily cycle', () => {
         },
       },
     };
-    const result = await tradingPlanDailyCycleWorkflow.run({}, observedCtx);
+    const result = await tradingPlanDailyCycleWorkflow.run(
+      { accountId: EMPTY_ACCOUNT_ID },
+      observedCtx,
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.holdingReviews).toBe(1);
     expect(positionCalls).toBe(1);
-    expect(observedHolding).not.toHaveProperty('avgCost');
+    expect(observedHolding).toMatchObject({ quantity: 100 });
   });
 
   it('拒绝把其它账户的策略 Advice 变成目标账户的交易计划', async () => {
@@ -178,12 +172,6 @@ describe('trading plan daily cycle', () => {
     }) as Advice;
     const targetAccountId = 'a1b2c3d4-0001-4000-8000-000000000001';
     const ctx = await buildTestContext({ advices: [advice], clock: () => now });
-    const snapshot = await saveAccountSnapshotTool.execute(
-      { accountId: targetAccountId, cashBalance: 100_000, positions: [] },
-      ctx,
-    );
-    expect(snapshot.ok).toBe(true);
-    if (!snapshot.ok) return;
     const result = await tradingPlanDailyCycleWorkflow.run(
       { accountId: targetAccountId, date: '2026-07-17' },
       ctx,

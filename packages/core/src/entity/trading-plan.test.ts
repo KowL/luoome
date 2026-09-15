@@ -57,8 +57,8 @@ const plan = (overrides: Record<string, unknown> = {}) =>
     validFrom: new Date('2026-09-08T00:00:00.000Z'),
     validUntil: new Date('2026-09-30T00:00:00.000Z'),
     invalidationConditions: ['行情证据过期'],
-    accountSnapshotId: 'snapshot-1',
-    accountSnapshotVersion: 1,
+    accountFactsAsOf: new Date('2026-09-08T00:00:00.000Z'),
+    accountFactsDigest: 'account-facts-test-digest',
     marketFacts: [
       {
         id: 'fact-price',

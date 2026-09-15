@@ -1,7 +1,8 @@
-import { reconcileCashBalance } from '@luoome/core';
+import { money, reconcileCashBalance } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
+import { reconcileAccountCashTool } from './account-facts.js';
 import { addHoldingTool } from './add-holding.js';
 import { addTradeTool } from './add-trade.js';
 import { closeHoldingTool } from './close-holding.js';
@@ -174,5 +175,33 @@ describe('账户现金随账本变化', () => {
     );
     expect(result.ok).toBe(false);
     expect((await accountOf(ctx)).cashBalance).toBe(before);
+  });
+});
+
+describe('账户现金对账工具', () => {
+  it('账本与现金字段一致时 reconciled=true，差额为 0', async () => {
+    const ctx = await buildTestContext();
+    const added = await addTradeTool.execute(
+      { stockId: '601398.SH', side: 'buy', quantity: 100, price: 10, fee: 0 },
+      ctx,
+    );
+    expect(added.ok).toBe(true);
+    const result = await reconcileAccountCashTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.reconciled).toBe(true);
+    expect(result.data.difference).toBe(0);
+    expect(result.data.gaps).toEqual([]);
+  });
+
+  it('人为改错现金后能报出差额（漏记资金）', async () => {
+    const ctx = await buildTestContext();
+    const account = await accountOf(ctx);
+    await ctx.repos.account.save({ ...account, cashBalance: money(account.cashBalance - 500) });
+    const result = await reconcileAccountCashTool.execute({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.reconciled).toBe(false);
+    expect(result.data.difference).toBe(-500);
   });
 });

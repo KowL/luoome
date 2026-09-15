@@ -1,6 +1,5 @@
 import {
-  type AccountSnapshot,
-  assertAccountSnapshotInvariants,
+  type AccountFacts,
   assertTradingPlanBudgetLimits,
   assertTradingPlanInvariants,
   evaluateTradingPlanBudget,
@@ -34,7 +33,7 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
 
   async saveIfBudgetAvailable(input: {
     readonly plan: TradingPlan;
-    readonly snapshot: AccountSnapshot;
+    readonly facts: AccountFacts;
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
@@ -51,7 +50,6 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
     try {
       const plan = TradingPlanSchema.parse(input.plan);
       assertTradingPlanInvariants(plan);
-      assertAccountSnapshotInvariants(input.snapshot);
       assertTradingPlanBudgetLimits(input.limits);
       const latest = new Map<string, TradingPlan>();
       for (const item of this.items.values()) {
@@ -70,12 +68,11 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
           item.status === 'active' &&
           item.validFrom.getTime() <= input.asOf.getTime() &&
           item.validUntil.getTime() > input.asOf.getTime() &&
-          item.accountSnapshotId === input.snapshot.id &&
-          item.accountSnapshotVersion === input.snapshot.version &&
+          item.accountFactsDigest === input.facts.digest &&
           item.id !== plan.id,
       );
       const budget = evaluateTradingPlanBudget({
-        snapshot: input.snapshot,
+        facts: input.facts,
         plans: [...active, plan],
         stocks: input.stocks,
         limits: input.limits,

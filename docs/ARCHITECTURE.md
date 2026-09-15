@@ -820,14 +820,14 @@ type ToolError =
 - `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
 - `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
-- `trading-plan-daily-cycle`：账户级盘后计划批次 —— 以账户快照持仓为准（ledger Holding 只在存在时补充
-  成本与开仓时间，不由市值倒推），全部持仓独立复核 + 当日候选建议 → `TradingPlan` 不可变版本 →
-  组合预算校验；快照待核对时不激活精确仓位计划，同一轮还需生成报告与盘中监控消费的同一组版本
-- `intraday-trading-plan-watch`：按新鲜行情求值当前有效计划的入场/退出/风险条件，风险与退出条件命中
-  时先做 AI 复核并保留原始触发事实与计划版本；发布前重新校验账户快照版本、计划版本、行情时效、
-  条件是否仍成立与 10 分钟发布时限（以上游事件时间为计时起点），在同一租约内提交 Trigger +
-  WatchRuleState。单条候选过期、失效或条件恢复只丢弃该条，不阻断同轮其它信号；失败/中断投递作为
-  重试候选，普通优先级才受冷却与每日额度压制
+- `trading-plan-daily-cycle`：账户级盘后计划批次 —— **以当前持仓（账本 Holding）为唯一复核来源**，
+  逐个跑 `analyze_position`（同时把当日行情落库）后再派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
+  候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情）时不激活精确仓位计划
+- `intraday-trading-plan-watch`：先按新鲜行情求值计划条件（`batch_quote` 落库后派生账户事实），
+  风险与退出条件命中时做 AI 复核并保留原始触发事实与计划版本；发布前重新校验账户事实指纹、
+  计划版本、行情时效、条件是否仍成立与 10 分钟发布时限（以上游事件时间为计时起点），
+  在同一租约内提交 Trigger + WatchRuleState。只监控与当前账户事实指纹一致的计划；单条候选过期、
+  失效或条件恢复只丢弃该条，不阻断同轮其它信号；失败/中断投递作为重试候选
 - 预警执行：`intraday-watch` 与 `evaluate-event-rules` 共用 SQLite 租约（120 秒有效期、30 秒心跳，
   工具调用前检查所有权）；并发调用返回可重试错误。`commit_watch_evaluation` 在同一事务校验 owner
   并提交 Trigger + WatchRuleState，试跑不进入提交。通知前保存 deliveryAttempts/lastDeliveryAttemptAt，

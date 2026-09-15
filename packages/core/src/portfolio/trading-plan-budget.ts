@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AccountSnapshot } from '../entity/account-snapshot.js';
+import type { AccountFacts } from '../entity/account-facts.js';
 import type { Stock } from '../entity/stock.js';
 import type { TradingPlan } from '../entity/trading-plan.js';
 import { InvariantError } from '../error/index.js';
@@ -44,8 +44,8 @@ export const TradingPlanBudgetAllocationSchema = z.object({
 
 export interface TradingPlanBudgetResult {
   readonly accountId: string;
-  readonly snapshotId: string;
-  readonly snapshotVersion: number;
+  readonly asOf: Date;
+  readonly digest: string;
   readonly limits: TradingPlanBudgetLimits;
   readonly currentStockPct: number | null;
   readonly proposedStockPct: number | null;
@@ -57,8 +57,8 @@ export interface TradingPlanBudgetResult {
 
 export const TradingPlanBudgetResultSchema = z.object({
   accountId: z.string().min(1),
-  snapshotId: z.string().min(1),
-  snapshotVersion: z.number().int().positive(),
+  asOf: z.coerce.date(),
+  digest: z.string().min(8),
   limits: TradingPlanBudgetLimitsSchema,
   currentStockPct: z.number().finite().min(0).max(100).nullable(),
   proposedStockPct: z.number().finite().min(0).max(100).nullable(),
@@ -73,29 +73,30 @@ const round = (value: number): number => Math.round(value * 100) / 100;
 /**
  * 把所有可能同时执行的 active plan 合并校验。未登记卖出不提前释放预算，
  * 因此只计算 enter/add 的正向增量；reduce/exit 仍能降低 proposed exposure。
+ * 账户输入是当前事实（现金字段 + 持仓 × 行情），不再依赖手工核对的账户快照。
  */
 export const evaluateTradingPlanBudget = (input: {
-  readonly snapshot: AccountSnapshot;
+  readonly facts: AccountFacts;
   readonly plans: readonly TradingPlan[];
   readonly stocks: ReadonlyMap<string, Stock>;
   readonly limits?: TradingPlanBudgetLimits;
 }): TradingPlanBudgetResult => {
   const limits = input.limits ?? DEFAULT_TRADING_PLAN_BUDGET_LIMITS;
   if (
-    input.snapshot.status !== 'complete' ||
-    input.snapshot.totalAssets === null ||
-    input.snapshot.stockMarketValue === null
+    input.facts.status !== 'complete' ||
+    input.facts.totalAssets === null ||
+    input.facts.stockMarketValue === null
   ) {
     return {
-      accountId: input.snapshot.accountId,
-      snapshotId: input.snapshot.id,
-      snapshotVersion: input.snapshot.version,
+      accountId: input.facts.accountId,
+      asOf: input.facts.asOf,
+      digest: input.facts.digest,
       limits,
       currentStockPct: null,
       proposedStockPct: null,
       availableStockPct: null,
       totalStatus: 'unavailable',
-      reasons: ['账户现金或持仓估值待核对，无法计算精确预算'],
+      reasons: ['账户事实不可用（现金待核对或持仓缺少合格行情），无法计算精确预算'],
       allocations: input.plans.map((plan) => ({
         planId: tradingPlanKey(plan),
         stockId: plan.stockId,
@@ -108,12 +109,12 @@ export const evaluateTradingPlanBudget = (input: {
     };
   }
 
-  const totalAssets = input.snapshot.totalAssets;
-  const currentStockPct = round((input.snapshot.stockMarketValue / totalAssets) * 100);
+  const totalAssets = input.facts.totalAssets;
+  const currentStockPct = round((input.facts.stockMarketValue / totalAssets) * 100);
   const currentByStock = new Map<string, number>();
   const currentByIndustry = new Map<string, number>();
   let hasUnknownCurrentIndustry = false;
-  for (const position of input.snapshot.positions) {
+  for (const position of input.facts.positions) {
     const pct = (position.marketValue / totalAssets) * 100;
     currentByStock.set(position.stockId, round((currentByStock.get(position.stockId) ?? 0) + pct));
     const industry = position.industry ?? input.stocks.get(position.stockId)?.industry;
@@ -223,9 +224,9 @@ export const evaluateTradingPlanBudget = (input: {
     (allocation) => allocation.status === 'unavailable',
   );
   return {
-    accountId: input.snapshot.accountId,
-    snapshotId: input.snapshot.id,
-    snapshotVersion: input.snapshot.version,
+    accountId: input.facts.accountId,
+    asOf: input.facts.asOf,
+    digest: input.facts.digest,
     limits,
     currentStockPct,
     proposedStockPct: round(includedProposed),

@@ -50,6 +50,8 @@ import type {
   GenerateStrategyRecommendationsOutput,
   GenerateStrategyVersionProposalInput,
   GenerateStrategyVersionProposalOutput,
+  GetAccountFactsInput,
+  GetAccountFactsOutput,
   GetAccountInput,
   GetAccountOutput,
   GetAccountPerformanceInput,
@@ -301,6 +303,10 @@ export interface WorkflowToolMap {
   readonly get_account_snapshot: ToolAccessor<
     typeof GetAccountSnapshotInput,
     typeof GetAccountSnapshotOutput
+  >;
+  readonly get_account_facts: ToolAccessor<
+    typeof GetAccountFactsInput,
+    typeof GetAccountFactsOutput
   >;
   readonly list_account_snapshots: ToolAccessor<
     typeof ListAccountSnapshotsInput,
