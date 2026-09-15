@@ -1,3 +1,4 @@
+import { makeCheckbox, makeInput, makeNumberInput, makeSelect, makeTextarea } from './form-kit.js';
 import {
   badge,
   callApi,
@@ -8,6 +9,7 @@ import {
   errorText,
   fmtDateTime,
   metric,
+  openModal,
   post,
 } from './strategy-workspace-shared.js';
 
@@ -56,12 +58,13 @@ const PREFLIGHT_STATUS = {
 };
 
 const openVersionEditor = (strategy, latest, setStatus, refresh) => {
-  const input = el('textarea', 'strategy-def-input');
-  input.rows = 22;
+  const input = makeTextarea('strategy-version-definition', {
+    rows: 22,
+    value: JSON.stringify(latest?.definition ?? {}, null, 2),
+  });
+  input.classList.add('strategy-def-input');
   input.wrap = 'off';
-  input.value = JSON.stringify(latest?.definition ?? {}, null, 2);
-  const summary = el('input');
-  summary.placeholder = '说明本次规则变化';
+  const summary = makeInput('strategy-version-summary', { placeholder: '说明本次规则变化' });
   const submit = el('button', 'btn btn-primary', '创建草案');
   submit.type = 'button';
   submit.addEventListener('click', async () => {
@@ -283,63 +286,51 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
     ...RECOMMENDATION_POLICY_V2_DEFAULTS,
     ...(initialV2 ? existingPolicy.portfolioPreflight : {}),
   };
-  const cron = el('input');
-  cron.id = 'strategy-schedule-cron';
-  cron.value = schedule?.cron ?? '0 18 * * 1-5';
-  cron.placeholder = '0 18 * * 1-5';
-  const timezone = el('input');
-  timezone.id = 'strategy-schedule-timezone';
-  timezone.value = schedule?.timezone ?? 'Asia/Shanghai';
-  const enabled = el('input');
-  enabled.id = 'strategy-schedule-enabled';
-  enabled.type = 'checkbox';
-  enabled.checked = schedule?.enabled ?? true;
-  const recommendationEnabled = el('input');
-  recommendationEnabled.id = 'strategy-recommendation-enabled';
-  recommendationEnabled.type = 'checkbox';
-  recommendationEnabled.checked = existingPolicy?.enabled ?? false;
+  const cron = makeInput('strategy-schedule-cron', {
+    value: schedule?.cron ?? '0 18 * * 1-5',
+    placeholder: '0 18 * * 1-5',
+  });
+  const timezone = makeInput('strategy-schedule-timezone', {
+    value: schedule?.timezone ?? 'Asia/Shanghai',
+  });
+  const enabled = makeCheckbox('strategy-schedule-enabled', schedule?.enabled ?? true);
+  const recommendationEnabled = makeCheckbox(
+    'strategy-recommendation-enabled',
+    existingPolicy?.enabled ?? false,
+  );
   const configuredHorizons = Array.isArray(existingPolicy?.observationHorizons)
     ? existingPolicy.observationHorizons
     : ['t3', 't5'];
   const observationHorizons = ['t1', 't3', 't5'].map((horizon) => {
-    const input = el('input');
-    input.type = 'checkbox';
+    const input = makeCheckbox(undefined, configuredHorizons.includes(horizon));
     input.value = horizon;
-    input.checked = configuredHorizons.includes(horizon);
     return { horizon, input };
   });
-  const minScore = el('input');
-  minScore.type = 'number';
-  minScore.min = '0';
-  minScore.max = '100';
-  minScore.value = String(existingPolicy?.minScore ?? 70);
-  const maxRank = el('input');
-  maxRank.type = 'number';
-  maxRank.min = '1';
-  maxRank.max = '200';
-  maxRank.value = String(existingPolicy?.maxRank ?? 10);
-  const maxPerRun = el('input');
-  maxPerRun.type = 'number';
-  maxPerRun.min = '1';
-  maxPerRun.max = '20';
-  maxPerRun.value = String(existingPolicy?.maxPerRun ?? 3);
-  const cooldownHours = el('input');
-  cooldownHours.type = 'number';
-  cooldownHours.min = '1';
-  cooldownHours.max = '720';
-  cooldownHours.value = String(existingPolicy?.cooldownHours ?? 72);
-  const notify = el('input');
-  notify.type = 'checkbox';
-  notify.checked = existingPolicy?.notify ?? true;
-  const channel = el('select');
-  for (const [value, label] of [
+  const minScore = makeNumberInput(undefined, {
+    value: existingPolicy?.minScore ?? 70,
+    min: '0',
+    max: '100',
+  });
+  const maxRank = makeNumberInput(undefined, {
+    value: existingPolicy?.maxRank ?? 10,
+    min: '1',
+    max: '200',
+  });
+  const maxPerRun = makeNumberInput(undefined, {
+    value: existingPolicy?.maxPerRun ?? 3,
+    min: '1',
+    max: '20',
+  });
+  const cooldownHours = makeNumberInput(undefined, {
+    value: existingPolicy?.cooldownHours ?? 72,
+    min: '1',
+    max: '720',
+  });
+  const notify = makeCheckbox(undefined, existingPolicy?.notify ?? true);
+  const channel = makeSelect(undefined, [
     ['log', '站内日志'],
     ['feishu', '飞书'],
-  ]) {
-    const option = el('option', null, label);
-    option.value = value;
-    channel.append(option);
-  }
+  ]);
   channel.value = existingPolicy?.channel ?? 'log';
 
   const policyBadge = el('span', 'badge badge-neutral', 'Legacy V1');
@@ -349,24 +340,9 @@ const renderScheduleSettings = (strategy, schedule, setStatus, refresh) => {
   const preflightParameters = el('div', 'strategy-preflight-parameters');
   let preflightControls;
 
-  const checkboxControl = (id, checked) => {
-    const input = el('input');
-    input.id = id;
-    input.type = 'checkbox';
-    input.checked = checked === true;
-    return input;
-  };
-  const numberControl = (id, value, { min = '0', max = '100', step = '0.1' } = {}) => {
-    const input = el('input');
-    input.id = id;
-    input.type = 'number';
-    input.min = min;
-    input.max = max;
-    input.step = step;
-    input.placeholder = '留空表示不启用';
-    input.value = value === undefined ? '' : String(value);
-    return input;
-  };
+  const checkboxControl = (id, checked) => makeCheckbox(id, checked);
+  const numberControl = (id, value, { min = '0', max = '100', step = '0.1' } = {}) =>
+    makeNumberInput(id, { value, min, max, step, placeholder: '留空表示不启用' });
   const checkboxLabel = (input, label, note) => {
     const node = el('label', 'strategy-preflight-toggle');
     node.htmlFor = input.id;
@@ -664,12 +640,10 @@ const renderStrategyWatchlistSubscriptions = async (strategy, setStatus, refresh
   const targets = (watchlistsResult.data.items ?? []).filter(
     ({ watchlist }) => watchlist.enabled && watchlist.kind !== 'system',
   );
-  const select = el('select');
-  for (const { watchlist } of targets) {
-    const option = el('option', null, `${watchlist.name} · ${watchlist.id}`);
-    option.value = watchlist.id;
-    select.append(option);
-  }
+  const select = makeSelect(
+    'strategy-watchlist-subscribe-target',
+    targets.map(({ watchlist }) => [watchlist.id, `${watchlist.name} · ${watchlist.id}`]),
+  );
   const subscribe = el('button', 'btn btn-primary btn-sm', '订阅目标 Watchlist');
   subscribe.type = 'button';
   subscribe.disabled = targets.length === 0;

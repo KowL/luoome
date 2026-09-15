@@ -10,16 +10,38 @@ import { el } from './ui.js';
 
 export const makeInput = (id, { type = 'text', value = '', placeholder = '' } = {}) => {
   const input = el('input');
-  input.id = id;
+  if (id !== undefined) input.id = id;
   input.type = type;
   if (placeholder.length > 0) input.placeholder = placeholder;
   if (value.length > 0) input.value = value;
   return input;
 };
 
+/** 复选框：checked 缺省为未选中，label 由调用方拼（各表单的 label 结构不同）。 */
+export const makeCheckbox = (id, checked = false) => {
+  const input = el('input');
+  if (id !== undefined) input.id = id;
+  input.type = 'checkbox';
+  input.checked = checked === true;
+  return input;
+};
+
+/** 数字输入：可带 min/max/step；value 为 undefined 时留空（表示未设置）。 */
+export const makeNumberInput = (id, { value, min, max, step, placeholder = '' } = {}) => {
+  const input = el('input');
+  if (id !== undefined) input.id = id;
+  input.type = 'number';
+  if (min !== undefined) input.min = String(min);
+  if (max !== undefined) input.max = String(max);
+  if (step !== undefined) input.step = String(step);
+  if (placeholder.length > 0) input.placeholder = placeholder;
+  input.value = value === undefined ? '' : String(value);
+  return input;
+};
+
 export const makeSelect = (id, options) => {
   const select = el('select');
-  select.id = id;
+  if (id !== undefined) select.id = id;
   for (const [value, label] of options) {
     const option = el('option', null, label);
     option.value = value;
@@ -30,7 +52,7 @@ export const makeSelect = (id, options) => {
 
 export const makeTextarea = (id, { rows = 4, value = '', placeholder = '' } = {}) => {
   const textarea = el('textarea');
-  textarea.id = id;
+  if (id !== undefined) textarea.id = id;
   textarea.rows = rows;
   if (placeholder.length > 0) textarea.placeholder = placeholder;
   if (value.length > 0) textarea.value = value;
