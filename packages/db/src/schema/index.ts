@@ -1,6 +1,5 @@
 import type {
   AccountKind,
-  AccountSnapshot,
   AdviceDataSnapshot,
   AdviceDecision,
   AdviceHorizon,
@@ -113,34 +112,6 @@ export const accounts = sqliteTable('accounts', {
   cashBalance: real('cash_balance').$type<Money>().notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
-
-/** 用户手动维护的账户估值版本；不由建议/信号自动写入。 */
-export const accountSnapshots = sqliteTable(
-  'account_snapshots',
-  {
-    id: text('id').primaryKey(),
-    accountId: text('account_id').notNull(),
-    version: integer('version').notNull(),
-    asOf: integer('as_of', { mode: 'timestamp_ms' }).notNull(),
-    cashBalance: real('cash_balance').$type<number | null>(),
-    stockMarketValue: real('stock_market_value').$type<number | null>(),
-    totalAssets: real('total_assets').$type<number | null>(),
-    status: text('status').$type<AccountSnapshot['status']>().notNull(),
-    positions: text('positions_json', { mode: 'json' })
-      .$type<AccountSnapshot['positions']>()
-      .notNull(),
-    source: text('source').$type<AccountSnapshot['source']>().notNull(),
-    note: text('note'),
-    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  },
-  (t) => ({
-    accountVersionUnique: uniqueIndex('account_snapshots_account_version_unique').on(
-      t.accountId,
-      t.version,
-    ),
-    accountAsOfIdx: index('account_snapshots_account_as_of_idx').on(t.accountId, t.asOf),
-  }),
-);
 
 export const stocks = sqliteTable(
   'stocks',
@@ -1785,7 +1756,6 @@ export const chatMessages = sqliteTable(
 export const schema = {
   schemaMigrations,
   accounts,
-  accountSnapshots,
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,

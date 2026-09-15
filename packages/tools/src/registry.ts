@@ -2,11 +2,6 @@ import { z } from 'zod';
 
 import type { Tool } from './define-tool.js';
 import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-facts.js';
-import {
-  getAccountSnapshotTool,
-  listAccountSnapshotsTool,
-  saveAccountSnapshotTool,
-} from './tools/account-snapshot.js';
 import { addHoldingTool } from './tools/add-holding.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
@@ -329,9 +324,6 @@ export const toolRegistry: Registry = createRegistry([
   listAccountsTool,
   createAccountTool,
   getAccountTool,
-  saveAccountSnapshotTool,
-  getAccountSnapshotTool,
-  listAccountSnapshotsTool,
   getAccountFactsTool,
   reconcileAccountCashTool,
   listHoldingsTool,

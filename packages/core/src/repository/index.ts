@@ -1,6 +1,5 @@
 import type { Account } from '../entity/account.js';
 import type { AccountFacts } from '../entity/account-facts.js';
-import type { AccountSnapshot } from '../entity/account-snapshot.js';
 import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
@@ -117,7 +116,6 @@ export interface AccountRepository {
   remove(id: string): Promise<void>;
 }
 
-/** 用户手动维护的账户估值与持仓版本；同一账户只能有一个当前版本。 */
 /**
  * 账户事实写入：把「账户现金余额」与账本事实（交易 / 持仓 / 资金流水）作为**一次原子提交**。
  *
@@ -138,14 +136,6 @@ export interface LedgerRepository {
     readonly account: Account;
     readonly flow: PortfolioCashFlow;
   }): Promise<void>;
-}
-
-export interface AccountSnapshotRepository {
-  save(snapshot: AccountSnapshot): Promise<void>;
-  findById(id: string): Promise<AccountSnapshot | null>;
-  latestByAccount(accountId: string): Promise<AccountSnapshot | null>;
-  listByAccount(accountId: string, limit?: number): Promise<readonly AccountSnapshot[]>;
-  remove(id: string): Promise<void>;
 }
 
 export interface StockRepository {
@@ -404,7 +394,6 @@ export interface RepositoryRegistry {
   readonly account: AccountRepository;
   /** 账户事实的原子写入（现金余额 + 交易/持仓/流水）。 */
   readonly ledger: LedgerRepository;
-  readonly accountSnapshot: AccountSnapshotRepository;
   readonly stock: StockRepository;
   /** 本地股票目录完整快照与同步审计。 */
   readonly stockUniverse: StockUniverseRepository;

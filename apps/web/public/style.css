@@ -9246,13 +9246,6 @@ body > .modal {
   color: var(--muted);
 }
 
-.snapshot-row {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr auto;
-  gap: 8px;
-  align-items: end;
-}
-
 /* 计划版本差异（预警页详情弹窗）：与其它详情分区同字号，避免 h3 默认层级跳变。 */
 .plan-diff {
   margin-bottom: var(--space-3);

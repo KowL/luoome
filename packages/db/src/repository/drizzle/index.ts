@@ -1,5 +1,4 @@
 export { DrizzleAccountRepository } from './account.js';
-export { DrizzleAccountSnapshotRepository } from './account-snapshot.js';
 export { DrizzleAdviceRepository } from './advice.js';
 export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';

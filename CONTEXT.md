@@ -151,8 +151,10 @@ StrategySignal，不临时运行全市场 Strategy。
 缺口逐股列出（持仓多于净买入 / 净买入多于持仓 / 净卖出），不需要人工找。分红送转等公司行为
 不自动改现金，由用户通过资金流水或纠错登记。
 
-账户快照（AccountSnapshot）是上一版“用户手工核对”的实现，已不再参与计划、预算与盘中监控；
-表和只读 tool 暂时保留用于读取历史数据，确认无引用后再删除。
+账户快照（AccountSnapshot）是上一版“用户手工核对”的实现，已随本次重构整体删除：实体、仓储、
+SQLite 表（新库不再创建）、`save/get/list_account_snapshot` 三个 tool、Web 入口与数据导出分类都已移除，
+`analyze_position` 也不再接受 `account-snapshot-position:<id>` 这种快照持仓引用。旧库里可能残留
+`account_snapshots` 表，没有任何代码再读写它，可以直接删除。
 
 ### 逐股交易计划（TradingPlan）
 

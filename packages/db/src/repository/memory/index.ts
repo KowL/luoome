@@ -1,6 +1,5 @@
 import type {
   Account,
-  AccountSnapshot,
   Advice,
   AlertPlan,
   ChatMessage,
@@ -33,7 +32,6 @@ import type {
   WorkflowRun,
 } from '@luoome/core';
 import { InMemoryAccountRepository } from './account.js';
-import { InMemoryAccountSnapshotRepository } from './account-snapshot.js';
 import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
@@ -81,7 +79,6 @@ import { InMemoryWatchlistMemberRepository, InMemoryWatchlistRepository } from '
 import { InMemoryWorkflowRunRepository } from './workflow-run.js';
 
 export { InMemoryAccountRepository } from './account.js';
-export { InMemoryAccountSnapshotRepository } from './account-snapshot.js';
 export { InMemoryAdviceRepository } from './advice.js';
 export { InMemoryAlertPlanRepository } from './alert-plan.js';
 export { InMemoryChatRepository } from './chat.js';
@@ -130,7 +127,6 @@ export { InMemoryWorkflowRunRepository } from './workflow-run.js';
 /** createInMemoryRepos 的可选种子数据（同步写入，含不变量断言）。 */
 export interface InMemorySeed {
   readonly accounts?: readonly Account[];
-  readonly accountSnapshots?: readonly AccountSnapshot[];
   readonly stocks?: readonly Stock[];
   readonly holdings?: readonly Holding[];
   readonly trades?: readonly Trade[];
@@ -168,7 +164,6 @@ export interface InMemorySeed {
 /** 构造全部 in-memory repository，可选灌入种子。 */
 export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => {
   const account = new InMemoryAccountRepository();
-  const accountSnapshot = new InMemoryAccountSnapshotRepository();
   const stock = new InMemoryStockRepository();
   const stockUniverse = new InMemoryStockUniverseRepository(stock);
   const limitUpLadderSnapshot = new InMemoryLimitUpLadderSnapshotRepository();
@@ -213,7 +208,6 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const workflowRun = new InMemoryWorkflowRunRepository();
   if (seed !== undefined) {
     for (const a of seed.accounts ?? []) account.put(a);
-    for (const snapshot of seed.accountSnapshots ?? []) accountSnapshot.put(snapshot);
     for (const s of seed.stocks ?? []) stock.put(s);
     for (const h of seed.holdings ?? []) holding.put(h);
     for (const t of seed.trades ?? []) trade.put(t);
@@ -257,7 +251,6 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   return {
     account,
     ledger: new InMemoryLedgerRepository(account, trade, holding, portfolioCashFlow),
-    accountSnapshot,
     stock,
     stockUniverse,
     limitUpLadderSnapshot,

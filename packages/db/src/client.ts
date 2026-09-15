@@ -4,7 +4,6 @@ import { sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
 import {
   DrizzleAccountRepository,
-  DrizzleAccountSnapshotRepository,
   DrizzleAdviceRepository,
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
@@ -227,30 +226,6 @@ export const ensureSchema = (db: DrizzleDb): void => {
       cash_balance REAL NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     )
-  `);
-  db.run(sql`
-    CREATE TABLE IF NOT EXISTS account_snapshots (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      as_of INTEGER NOT NULL,
-      cash_balance REAL,
-      stock_market_value REAL,
-      total_assets REAL,
-      status TEXT NOT NULL,
-      positions_json TEXT NOT NULL,
-      source TEXT NOT NULL,
-      note TEXT,
-      created_at INTEGER NOT NULL
-    )
-  `);
-  db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS account_snapshots_account_version_unique
-    ON account_snapshots (account_id, version)
-  `);
-  db.run(sql`
-    CREATE INDEX IF NOT EXISTS account_snapshots_account_as_of_idx
-    ON account_snapshots (account_id, as_of)
   `);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS stocks (
@@ -1759,7 +1734,6 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
-    accountSnapshot: new DrizzleAccountSnapshotRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),

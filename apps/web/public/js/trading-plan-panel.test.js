@@ -71,8 +71,8 @@ const makePlan = (overrides = {}) => ({
   validFrom: '2026-08-11T00:00:00.000Z',
   validUntil: '2026-08-20T00:00:00.000Z',
   invalidationConditions: ['账户快照版本改变'],
-  accountSnapshotId: 'snapshot-1',
-  accountSnapshotVersion: 3,
+  accountFactsAsOf: '2026-08-11T00:00:00.000Z',
+  accountFactsDigest: 'account-facts-panel-test-digest',
   marketFacts: [
     {
       id: 'price:600519.SH:adv1',
@@ -270,11 +270,11 @@ describe('计划详情分区', () => {
     expect(lines).toContain('不是收益概率');
   });
 
-  it('账户与来源分区带上快照版本、来源 id 与行情事实状态', () => {
+  it('账户与来源分区带上账户事实指纹、来源 id 与行情事实状态', () => {
     const lines = planDetailSections(makePlan())
       .find((section) => section.title === '账户与来源')
       ?.lines.join('\n');
-    expect(lines).toContain('账户快照：snapshot-1（v3）');
+    expect(lines).toContain('账户事实：account-fact…');
     expect(lines).toContain('策略：strategy-1');
     expect(lines).toContain('建议：adv1');
     expect(lines).toContain('price 102.00CNY · 可用');

@@ -1,12 +1,10 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   AccountSchema,
-  AccountSnapshotSchema,
   AdviceOutcomeSchema,
   AdviceSchema,
   AlertPlanSchema,
   assertAccountInvariants,
-  assertAccountSnapshotInvariants,
   assertAdviceInvariants,
   assertAlertPlanInvariants,
   assertChatMessageInvariants,
@@ -89,7 +87,6 @@ export type DataTransferCategory = (typeof DATA_TRANSFER_CATEGORIES)[number];
 const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>> = {
   portfolio: [
     'accounts',
-    'account_snapshots',
     'stocks',
     'holdings',
     'trades',
@@ -216,12 +213,6 @@ const decodeStorageRow = (row: Record<string, unknown>): Record<string, unknown>
 const omitNulls = (row: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(row).filter(([, value]) => value !== null));
 
-const accountSnapshotStorageRow = (row: Record<string, unknown>): Record<string, unknown> => {
-  const decoded = decodeStorageRow(row);
-  const { note, ...requiredFields } = decoded;
-  return note === null ? requiredFields : { ...requiredFields, note };
-};
-
 const validateTradingPlanStorageRow = (row: Record<string, unknown>): void => {
   const rawPlan = row.plan_json;
   const planValue =
@@ -314,11 +305,6 @@ const researchDocumentFtsSchema = z.object({
 
 const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   accounts: domainValidator(AccountSchema, assertAccountInvariants),
-  account_snapshots: domainValidator(
-    AccountSnapshotSchema,
-    assertAccountSnapshotInvariants,
-    accountSnapshotStorageRow,
-  ),
   stocks: domainValidator(StockSchema, assertStockInvariants),
   holdings: domainValidator(HoldingSchema, assertHoldingInvariants, (row) => {
     return { ...omitNulls(row), closedAt: row.closedAt };

@@ -314,7 +314,7 @@ export const planDetailSections = (plan) => {
     {
       title: '账户与来源',
       lines: [
-        `账户快照：${plan.accountSnapshotId}（v${plan.accountSnapshotVersion}）`,
+        `账户事实：${plan.accountFactsDigest.slice(0, 12)}…（${fmtDateTime(plan.accountFactsAsOf)}）`,
         `行业：${plan.industry ?? '未记录'}`,
         `策略：${(plan.source?.strategyIds ?? []).join('、') || '无'}`,
         `运行：${(plan.source?.runIds ?? []).join('、') || '无'}`,

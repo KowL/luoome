@@ -56,8 +56,6 @@ import type {
   GetAccountOutput,
   GetAccountPerformanceInput,
   GetAccountPerformanceOutput,
-  GetAccountSnapshotInput,
-  GetAccountSnapshotOutput,
   GetAdviceInput,
   GetAdviceOutput,
   GetAdviceStatsInput,
@@ -106,8 +104,6 @@ import type {
   LimitUpLadderCompareOutput,
   LimitUpLadderInput,
   LimitUpLadderOutput,
-  ListAccountSnapshotsInput,
-  ListAccountSnapshotsOutput,
   ListAccountsInput,
   ListAccountsOutput,
   ListAlertPlansInput,
@@ -178,8 +174,6 @@ import type {
   ResumeStrategyEvaluationSessionOutput,
   RunStrategyInput,
   RunStrategyOutput,
-  SaveAccountSnapshotInput,
-  SaveAccountSnapshotOutput,
   SaveReportInput,
   SaveReportOutput,
   SaveTradingPlanInput,
@@ -300,21 +294,9 @@ export interface WorkflowToolMap {
   readonly list_accounts: ToolAccessor<typeof ListAccountsInput, typeof ListAccountsOutput>;
   readonly list_alert_plans: ToolAccessor<typeof ListAlertPlansInput, typeof ListAlertPlansOutput>;
   readonly get_account: ToolAccessor<typeof GetAccountInput, typeof GetAccountOutput>;
-  readonly get_account_snapshot: ToolAccessor<
-    typeof GetAccountSnapshotInput,
-    typeof GetAccountSnapshotOutput
-  >;
   readonly get_account_facts: ToolAccessor<
     typeof GetAccountFactsInput,
     typeof GetAccountFactsOutput
-  >;
-  readonly list_account_snapshots: ToolAccessor<
-    typeof ListAccountSnapshotsInput,
-    typeof ListAccountSnapshotsOutput
-  >;
-  readonly save_account_snapshot: ToolAccessor<
-    typeof SaveAccountSnapshotInput,
-    typeof SaveAccountSnapshotOutput
   >;
   readonly get_account_performance: ToolAccessor<
     typeof GetAccountPerformanceInput,

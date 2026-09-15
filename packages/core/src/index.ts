@@ -5,7 +5,6 @@ export * from './context.js';
 // 实体
 export * from './entity/account.js';
 export * from './entity/account-facts.js';
-export * from './entity/account-snapshot.js';
 export * from './entity/advice.js';
 export * from './entity/alert-plan.js';
 export * from './entity/ashare-sentiment.js';

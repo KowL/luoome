@@ -1495,16 +1495,6 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/holdings', () => callTool('list_holdings', {}));
 
-  app.get('/api/account/snapshot', () => callTool('get_account_snapshot', {}));
-  app.post('/api/account/snapshot', (c) =>
-    targetMutation(c.req.raw, 'write', 'save_account_snapshot'),
-  );
-  app.get('/api/account/snapshots', (c) =>
-    callTool('list_account_snapshots', {
-      limit: intQuery(c.req.query('limit'), 30, 1),
-    }),
-  );
-
   app.get('/api/trading-plans', (c) => {
     const input: Record<string, unknown> = {
       activeOnly: c.req.query('activeOnly') !== 'false',

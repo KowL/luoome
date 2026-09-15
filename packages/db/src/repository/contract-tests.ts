@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
   type Account,
-  type AccountSnapshot,
   type Advice,
   type AdviceOutcome,
   type AlertPlan,
@@ -252,25 +251,6 @@ export const makeAccount = (id: string, overrides: Partial<Account> = {}): Accou
   initialCapital: money(1_000_000),
   cashBalance: money(1_000_000),
   createdAt: T0,
-  ...overrides,
-});
-
-const makeAccountSnapshot = (
-  id: string,
-  version: number,
-  overrides: Partial<AccountSnapshot> = {},
-): AccountSnapshot => ({
-  id,
-  accountId: 'acc-1',
-  version,
-  asOf: T1,
-  cashBalance: money(900),
-  stockMarketValue: money(0),
-  totalAssets: money(900),
-  status: 'complete',
-  positions: [],
-  source: 'manual',
-  createdAt: T1,
   ...overrides,
 });
 
@@ -897,36 +877,6 @@ export const registerRepositoryContractTests = (
       it('违反不变量时拒绝（initialCapital < 0）', async () => {
         const bad = makeAccount('acc-bad', { initialCapital: money(-1) });
         await expect(repos.account.save(bad)).rejects.toThrow(InvariantError);
-      });
-    });
-
-    describe('AccountSnapshotRepository', () => {
-      it('保存版本并按账户倒序读取，incomplete 快照保持不可用', async () => {
-        await repos.accountSnapshot.save(makeAccountSnapshot('snapshot-1', 1));
-        await repos.accountSnapshot.save(
-          makeAccountSnapshot('snapshot-2', 2, {
-            asOf: T2,
-            status: 'needs-reconciliation',
-            cashBalance: money(900),
-            stockMarketValue: null,
-            totalAssets: null,
-          }),
-        );
-        expect(await repos.accountSnapshot.findById('snapshot-1')).toEqual(
-          makeAccountSnapshot('snapshot-1', 1),
-        );
-        expect((await repos.accountSnapshot.latestByAccount('acc-1'))?.version).toBe(2);
-        expect(
-          (await repos.accountSnapshot.listByAccount('acc-1')).map((item) => item.version),
-        ).toEqual([2, 1]);
-      });
-
-      it('同 id 重放幂等且 remove 后不可读', async () => {
-        const snapshot = makeAccountSnapshot('snapshot-1', 1);
-        await repos.accountSnapshot.save(snapshot);
-        await repos.accountSnapshot.save(snapshot);
-        await repos.accountSnapshot.remove(snapshot.id);
-        expect(await repos.accountSnapshot.findById(snapshot.id)).toBeNull();
       });
     });
 

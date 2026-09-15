@@ -560,32 +560,35 @@ describe('报告 API', () => {
   });
 });
 
-describe('MVP2 账户快照与交易计划 API', () => {
-  it('通过 write 闸口保存手工账户快照，并读取当前快照与计划列表', async () => {
+describe('MVP2 账户事实与交易计划 API', () => {
+  it('读取账户事实与现金对账，并列出交易计划', async () => {
     const localApp = createWebApp(await buildTestContext(), {
       exposeWrite: true,
       exposeExternal: true,
     });
-    const saved = await localApp.fetch(
-      new Request('http://test/api/account/snapshot', {
+    const facts = await localApp.fetch(
+      new Request('http://test/api/tools/get_account_facts/call', {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: 'http://test' },
-        body: JSON.stringify({ cashBalance: 1000, positions: [] }),
+        body: JSON.stringify({ input: {} }),
       }),
     );
-    const savedBody = (await saved.json()) as {
-      ok: boolean;
-      data?: { snapshot: { status: string; version: number } };
-    };
-    expect(saved.status).toBe(200);
-    expect(savedBody).toMatchObject({
-      ok: true,
-      data: { snapshot: { status: 'complete', version: 1 } },
-    });
+    expect(facts.status).toBe(200);
+    expect((await facts.json()) as { ok: boolean }).toMatchObject({ ok: true });
 
-    const current = await localApp.fetch(new Request('http://test/api/account/snapshot'));
-    expect(current.status).toBe(200);
-    expect((await current.json()) as { ok: boolean }).toMatchObject({ ok: true });
+    const reconcile = await localApp.fetch(
+      new Request('http://test/api/tools/reconcile_account_cash/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({ input: {} }),
+      }),
+    );
+    expect(reconcile.status).toBe(200);
+    const reconcileBody = (await reconcile.json()) as {
+      ok: boolean;
+      data: { reconciled: boolean; difference: number };
+    };
+    expect(reconcileBody).toMatchObject({ ok: true, data: { reconciled: true, difference: 0 } });
 
     const plans = await localApp.fetch(new Request('http://test/api/trading-plans'));
     expect(plans.status).toBe(200);
