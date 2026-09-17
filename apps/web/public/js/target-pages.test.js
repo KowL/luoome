@@ -44,7 +44,7 @@ describe('预警表单', () => {
       buildAlertPlanMutationInput({
         name: '重要价位',
         watchlistId: 'watch-a',
-        rulesJson: '[{"id":"level","kind":"price-level","level":88,"side":"above"}]',
+        rules: [{ id: 'level', kind: 'price-level', level: 88, side: 'above' }],
         logic: 'ALL',
         triggerMode: 'daily-first',
         priority: 'important',
@@ -71,7 +71,7 @@ describe('预警表单', () => {
     const base = {
       name: '预警',
       watchlistId: 'watch-a',
-      rulesJson: '[]',
+      rules: [],
       logic: 'ANY',
       triggerMode: 'on-enter',
       priority: '',
@@ -82,7 +82,7 @@ describe('预警表单', () => {
     };
     expect(() => buildAlertPlanMutationInput(base)).toThrow('至少配置一条规则');
     expect(() =>
-      buildAlertPlanMutationInput({ ...base, rulesJson: '[{}]', dailyNotificationLimit: '0' }),
+      buildAlertPlanMutationInput({ ...base, rules: [{}], dailyNotificationLimit: '0' }),
     ).toThrow('每日通知上限');
   });
 
@@ -91,7 +91,7 @@ describe('预警表单', () => {
       {
         name: '预警',
         watchlistId: 'watch-a',
-        rulesJson: '[{"id":"level","kind":"price-level","level":88,"side":"above"}]',
+        rules: [{ id: 'level', kind: 'price-level', level: 88, side: 'above' }],
         logic: 'ANY',
         triggerMode: 'on-enter',
         priority: '',
@@ -113,7 +113,7 @@ describe('触发条目时间行', () => {
       alertPlanId: 'plan-1',
       createdAt: '2026-07-29T08:00:00.000Z',
     });
-    expect(text.startsWith('plan-1 · 数据 ')).toBe(true);
+    expect(text.startsWith('历史预警（来源已不可用） · 数据 ')).toBe(true);
     // triggeredAt 早已不存在；误读会得到 Invalid Date
     expect(text.includes('Invalid Date')).toBe(false);
   });
@@ -136,8 +136,8 @@ describe('触发条目时间行', () => {
     expect(triggerSourceLabel(trigger, { tradingPlanAccountId: 'acc-2' })).toBe('交易计划监控');
   });
 
-  it('未知来源保留原始 poolId，不发明名称', () => {
-    expect(triggerSourceLabel({ poolId: 'legacy-pool' })).toBe('legacy-pool');
+  it('未知来源展示缺失状态，不暴露内部标识', () => {
+    expect(triggerSourceLabel({ poolId: 'legacy-pool' })).toBe('历史预警（来源已不可用）');
   });
 
   it('副标题带命中条件：优先评估快照描述，否则用规则类型', () => {

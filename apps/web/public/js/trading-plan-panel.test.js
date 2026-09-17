@@ -8,10 +8,12 @@ import {
   filterPlansByStatus,
   latestPlanVersions,
   planActionLabel,
+  planConditionText,
   planDetailSections,
   planDiff,
   planDraftNote,
   planEntryText,
+  planKeyMetrics,
   planMetaText,
   planStatusBadgeClass,
   planStatusLabel,
@@ -270,14 +272,17 @@ describe('计划详情分区', () => {
     expect(lines).toContain('不是收益概率');
   });
 
-  it('账户与来源分区带上账户事实指纹、来源 id 与行情事实状态', () => {
+  it('账户与来源展示时间与来源数量，不展示内部标识', () => {
     const lines = planDetailSections(makePlan())
       .find((section) => section.title === '账户与来源')
       ?.lines.join('\n');
-    expect(lines).toContain('账户事实：account-fact…');
-    expect(lines).toContain('策略：strategy-1');
-    expect(lines).toContain('建议：adv1');
-    expect(lines).toContain('price 102.00CNY · 可用');
+    expect(lines).toContain('账户事实更新：');
+    expect(JSON.stringify(planDetailSections(makePlan()))).not.toContain('account:acc1');
+    expect(lines).not.toContain('account-facts-panel-test-digest');
+    expect(lines).toContain('参考策略：1 个');
+    expect(lines).not.toContain('strategy-1');
+    expect(lines).toContain('参考建议：1 条');
+    expect(lines).toContain('价格 102.00CNY · 可用');
   });
 });
 
@@ -370,5 +375,67 @@ describe('计划筛选', () => {
     expect(filterPlansByAction(active, 'risk').map((p) => p.id)).toEqual(['d']);
     expect(filterPlansByStatus(undefined, 'active')).toEqual([]);
     expect(filterPlansByAction(plans, 'unknown')).toEqual(plans);
+  });
+});
+
+describe('计划关键数据', () => {
+  it('卡片展示生成时价格、区间、退出价格和仓位', () => {
+    const metrics = planKeyMetrics(makePlan());
+    expect(metrics.map((metric) => metric.value)).toEqual([
+      '102.00 元',
+      '100.00 - 105.00',
+      '95.00 / 120.00',
+      '0.00% → 10.00%',
+    ]);
+    expect(metrics[0].note).toContain('sina');
+  });
+  it('缺失、过时及零仓位不会被伪造成实时数据', () => {
+    expect(planKeyMetrics(makePlan({ marketFacts: [] }))[0].value).toBe('未提供');
+    const stale = { ...makePlan().marketFacts[0], status: 'stale' };
+    expect(planKeyMetrics(makePlan({ marketFacts: [stale] }))[0].note).toContain('已过时');
+    expect(
+      planKeyMetrics(makePlan({ position: { currentPct: 10, targetPct: 0, deltaPct: -10 } }))[3]
+        .value,
+    ).toBe('10.00% → 0.00%');
+  });
+  it('文字描述没有数值时仍展示结构化阈值，保留人工确认状态', () => {
+    expect(
+      planConditionText({ ...makePlan().entryConditions[0], description: '等待回调' }),
+    ).toContain('价格 100.00 – 105.00元');
+    expect(
+      planConditionText({
+        kind: 'change-pct-threshold',
+        metric: 'changePct',
+        comparator: 'lte',
+        value: -3,
+        description: '回撤',
+      }),
+    ).toContain('≤ -3.00%');
+    expect(planConditionText({ kind: 'manual-confirmation', description: '核实公告' })).toContain(
+      '需人工确认',
+    );
+  });
+  it('退出触发条件即使缺少文本退出条件仍可见', () => {
+    const plan = makePlan({
+      exit: {
+        ...makePlan().exit,
+        conditions: [],
+        triggerConditions: [
+          {
+            kind: 'price-threshold',
+            phase: 'risk',
+            metric: 'price',
+            comparator: 'lte',
+            value: 95,
+            description: '止损触发',
+          },
+        ],
+      },
+    });
+    expect(
+      planDetailSections(plan)
+        .find((section) => section.title === '退出')
+        .lines.join(''),
+    ).toContain('≤ 95.00元');
   });
 });

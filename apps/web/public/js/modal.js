@@ -101,10 +101,40 @@ export const confirmDialog = ({
  * note: 字段上方的 muted 说明行（可选）。
  * @returns {Promise<object|null>} 确认返回 { key: 文本 }；取消/关闭返回 null。
  */
-export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = false, note }) =>
+export const promptDialog = ({
+  title,
+  fields,
+  confirmLabel = '确定',
+  danger = false,
+  note,
+  onSubmit,
+}) =>
   new Promise((resolve) => {
     activeResolve = resolve;
+    const error = el('p', 'status error');
+    error.setAttribute('role', 'alert');
+    let submitting = false;
+    const submit = async () => {
+      if (submitting) return;
+      try {
+        const values = Object.fromEntries(
+          controls.map(({ key, control, readValue }) => [
+            key,
+            readValue === undefined ? control.value.trim() : readValue(),
+          ]),
+        );
+        submitting = true;
+        if (onSubmit !== undefined) await onSubmit(values);
+        if (activeResolve === resolve) settle(values);
+      } catch (cause) {
+        error.textContent = cause instanceof Error ? cause.message : String(cause);
+      } finally {
+        submitting = false;
+      }
+    };
     const controls = fields.map((field) => {
+      if (field.control !== undefined)
+        return { key: field.key, control: field.control, readValue: field.readValue };
       const control =
         field.options === undefined
           ? field.multiline === true
@@ -129,9 +159,9 @@ export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = 
         }
       }
       control.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
+        if (event.key === 'Enter' && field.multiline !== true && !event.isComposing) {
           event.preventDefault();
-          settle(Object.fromEntries(controls.map(({ key, control: c }) => [key, c.value.trim()])));
+          void submit();
         }
       });
       return { key: field.key, control };
@@ -142,17 +172,13 @@ export const promptDialog = ({ title, fields, confirmLabel = '确定', danger = 
         ...(note === undefined ? [] : [el('p', 'muted', note)]),
         ...controls.map(({ control }, index) => {
           const wrap = el('div', 'field');
+          control.setAttribute('aria-label', fields[index].label);
           wrap.append(el('label', null, fields[index].label));
           wrap.append(control);
           return wrap;
         }),
-        dialogActions(confirmLabel, {
-          danger,
-          onConfirm: () =>
-            settle(
-              Object.fromEntries(controls.map(({ key, control }) => [key, control.value.trim()])),
-            ),
-        }),
+        error,
+        dialogActions(confirmLabel, { danger, onConfirm: () => void submit() }),
       ]),
     );
     controls[0]?.control.focus();

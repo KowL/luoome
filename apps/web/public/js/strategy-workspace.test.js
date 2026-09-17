@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import {
+  alertNumber,
+  createAlertRulesEditor,
+  newAlertRule,
+  parseAlertDays,
+} from './alert-rule-editor.js';
+import { closeModal, promptDialog } from './modal.js';
+import {
   buildBacktestResultContent,
   buildStrictBacktestResultContent,
   parseBacktestStockIds,
@@ -13,6 +20,7 @@ import {
   buildExperimentScoreExpression,
   buildExperimentSimpleExpression,
   createExperimentBlankDefinition,
+  createStrategyDefinitionEditor,
   deriveExperimentStepStates,
   invalidateExperimentCache,
   nextExperimentRuleId,
@@ -2242,5 +2250,168 @@ describe('Phase B 洞察与调度', () => {
     expect(node.textContent).toContain('trade-1');
     expect(node.textContent).toContain('Unknown');
     expect(node.textContent).not.toContain('概率');
+  });
+});
+
+describe('共享规则表单', () => {
+  const click = (root, text) =>
+    root
+      .querySelectorAll('button')
+      .find((button) => button.textContent === text)
+      .click();
+  it('策略表单不改写复杂条件、内部身份和扩展配置', () => {
+    const definition = structuredClone(experimentDefinition);
+    definition.selection.rules[0].when = 'quote.close > 10 && quote.close < 100';
+    const editor = createStrategyDefinitionEditor(definition, experimentCatalog);
+    expect(editor.getValue()).toEqual(definition);
+    expect(editor.root.textContent).not.toContain(definition.selection.rules[0].id);
+    const expression = editor.root
+      .querySelectorAll('textarea')
+      .find((input) => input.className === 'experiment-expression-input');
+    expression.value = 'quote.close > 20 && quote.close < 100';
+    expression.dispatchEvent({ type: 'input' });
+    expect(editor.getValue().selection.rules[0].when).toBe(expression.value);
+    expect(definition.selection.rules[0].when).toContain('> 10');
+  });
+  it('无效 JSON 保留用户输入并阻止读取旧定义，修正后恢复表单', () => {
+    const editor = createStrategyDefinitionEditor(experimentDefinition, experimentCatalog);
+    click(editor.root, 'JSON 高级');
+    const json = editor.root.querySelectorAll('textarea')[0];
+    json.value = '{ broken';
+    json.dispatchEvent({ type: 'input' });
+    click(editor.root, '结构化编辑');
+    click(editor.root, 'JSON 高级');
+    expect(json.value).toBe('{ broken');
+    expect(() => editor.getValue()).toThrow();
+    json.value = JSON.stringify(experimentDefinition);
+    json.dispatchEvent({ type: 'input' });
+    click(editor.root, '结构化编辑');
+    expect(editor.getValue()).toEqual(experimentDefinition);
+  });
+  it('连续修改策略风格、周期和股票范围不会相互覆盖', () => {
+    const editor = createStrategyDefinitionEditor(experimentDefinition, experimentCatalog);
+    const inputs = editor.root.querySelectorAll('input');
+    inputs[0].value = 'momentum';
+    inputs[0].dispatchEvent({ type: 'input' });
+    const horizon = editor.root.querySelectorAll('select')[0];
+    horizon.value = 'long';
+    horizon.dispatchEvent({ type: 'change' });
+    const textareas = editor.root.querySelectorAll('textarea');
+    textareas[0].value = '600519.SH';
+    textareas[0].dispatchEvent({ type: 'input' });
+    textareas[1].value = '000001.SZ';
+    textareas[1].dispatchEvent({ type: 'input' });
+    expect(editor.getValue().metadata).toEqual({
+      ...experimentDefinition.metadata,
+      style: 'momentum',
+      horizon: 'long',
+    });
+    expect(editor.getValue().universe.includeStockIds).toEqual(['600519.SH']);
+    expect(editor.getValue().universe.excludeStockIds).toEqual(['000001.SZ']);
+  });
+  it('预警百分比用百分数输入，往返保留规则身份与可选过滤', () => {
+    const rules = [
+      {
+        id: 'loss-rule',
+        kind: 'cost-threshold',
+        stopLossPct: 0.05,
+        takeProfitPct: 0.15,
+        priority: 'urgent',
+      },
+      {
+        id: 'signal-rule',
+        kind: 'strategy-signal',
+        strategyId: 's1',
+        minScore: 60,
+        ruleId: 'signal-original',
+        direction: 'bullish',
+      },
+    ];
+    const editor = createAlertRulesEditor(rules, { strategies: [{ id: 's1', name: '趋势研究' }] });
+    expect(editor.getValue()).toEqual(rules);
+    const input = editor.root.querySelectorAll('input')[0];
+    expect(input.value).toBe('5');
+    input.value = '8';
+    expect(editor.getValue()[0].stopLossPct).toBe(0.08);
+    expect(editor.getValue()[1].ruleId).toBe('signal-original');
+  });
+  it('增删预警自动生成不同标识，删除到零条阻止保存', () => {
+    const editor = createAlertRulesEditor([newAlertRule('price-level', 'original-rule')]);
+    click(editor.root, '添加条件');
+    const rules = editor.getValue();
+    expect(rules[0].id).toBe('original-rule');
+    expect(rules[1].id).not.toBe('original-rule');
+    click(editor.root, '删除条件');
+    click(editor.root, '删除条件');
+    expect(() => editor.getValue()).toThrow('至少添加');
+  });
+  it('预警切换 JSON 无效时保留文本；清空成本阈值或填错百分比不能保存', () => {
+    const editor = createAlertRulesEditor([newAlertRule('cost-threshold', 'loss-rule')]);
+    const input = editor.root.querySelectorAll('input')[0];
+    input.value = '';
+    expect(() => editor.getValue()).toThrow('至少填写');
+    input.value = '101';
+    expect(() => editor.getValue()).toThrow('超出范围');
+    input.value = '5';
+    click(editor.root, '高级 JSON');
+    const json = editor.root.querySelectorAll('textarea')[0];
+    json.value = '[bad';
+    click(editor.root, '表单编辑');
+    expect(json.value).toBe('[bad');
+    expect(() => editor.getValue()).toThrow();
+  });
+  it('提醒日期允许当天，拒绝超范围、负数和小数；数字空值不被转成零', () => {
+    expect(parseAlertDays('7、3,1，0')).toEqual([7, 3, 1, 0]);
+    for (const value of ['91', '-1', '1.5']) expect(() => parseAlertDays(value)).toThrow();
+    expect(() => alertNumber('', '幅度')).toThrow('请填写');
+  });
+});
+
+describe('表单提交失败恢复', () => {
+  it('服务端拒绝时保留输入，成功重试才关闭弹窗', async () => {
+    let fail = true;
+    let requests = 0;
+    const pending = promptDialog({
+      title: '测试',
+      fields: [{ key: 'name', label: '名称', value: '原配置' }],
+      onSubmit: async () => {
+        requests++;
+        if (fail) throw new Error('配置校验失败');
+      },
+    });
+    const input = modalBody.querySelectorAll('input')[0];
+    input.value = '修改后的配置';
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '确定')
+      .click();
+    await flush();
+    expect(modalOverlay.hidden).toBe(false);
+    expect(input.value).toBe('修改后的配置');
+    expect(modalBody.textContent).toContain('配置校验失败');
+    fail = false;
+    modalBody
+      .querySelectorAll('button')
+      .find((button) => button.textContent === '确定')
+      .click();
+    expect(await pending).toEqual({ name: '修改后的配置' });
+    expect(requests).toBe(2);
+    expect(modalOverlay.hidden).toBe(true);
+  });
+  it('多行证据中回车不会意外提交', async () => {
+    const pending = promptDialog({
+      title: '证据',
+      fields: [{ key: 'evidence', label: '证据', multiline: true }],
+    });
+    modalBody.querySelectorAll('textarea')[0].dispatchEvent({
+      type: 'keydown',
+      key: 'Enter',
+      preventDefault: () => {
+        throw new Error('不应阻止换行');
+      },
+    });
+    expect(modalOverlay.hidden).toBe(false);
+    closeModal();
+    expect(await pending).toBeNull();
   });
 });

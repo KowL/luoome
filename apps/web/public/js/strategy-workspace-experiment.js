@@ -520,21 +520,51 @@ const experimentStatusBadge = (status) => {
   return badge(config, status ?? '未知');
 };
 
-const experimentFieldLabel = (field) =>
-  `${field.path} · ${EXPERIMENT_TYPE_LABELS[field.type] ?? field.type}`;
+const FIELD_LABELS = {
+  'quote.open': '开盘价',
+  'quote.high': '最高价',
+  'quote.low': '最低价',
+  'quote.close': '最新 / 收盘价',
+  'quote.prevClose': '昨日收盘价',
+  'quote.volume': '成交量',
+  'indicators.ma5': '5 日均线',
+  'indicators.ma10': '10 日均线',
+  'indicators.ma20': '20 日均线',
+  'indicators.ma60': '60 日均线',
+  'indicators.rsi14': '14 日相对强弱（RSI）',
+  'indicators.macdDif': 'MACD 快线',
+  'indicators.macdDea': 'MACD 慢线',
+  'indicators.macdHist': 'MACD 柱值',
+  'indicators.volMa5': '5 日均量',
+  'indicators.volMa20': '20 日均量',
+  'indicators.volRatio5_20': '5 / 20 日量比',
+  'indicators.high20': '20 日最高价',
+  'indicators.low20': '20 日最低价',
+  'indicators.momentum20Pct': '20 日涨跌幅',
+  'indicators.maDistance20Pct': '20 日均线偏离幅度',
+  'indicators.maDistance60Pct': '60 日均线偏离幅度',
+  'indicators.daysAboveMa20': '站上 20 日均线天数',
+  'indicators.bollUpper20': '布林线上轨',
+  'indicators.bollMiddle20': '布林线中轨',
+  'indicators.bollLower20': '布林线下轨',
+  'meta.recentLimitUp': '近期是否涨停',
+  'meta.daysSinceLimitUp': '距上次涨停天数',
+  'meta.priceUp': '价格是否上涨',
+  'meta.limitUpLevel': '连板高度',
+};
+const experimentFieldLabel = (field) => FIELD_LABELS[field.path] ?? field.path;
 
 const experimentFieldMeta = (field) => {
   if (field === undefined)
     return el('small', 'experiment-field-meta', '当前 catalog 没有可用字段。');
   const lookback =
-    field.requiredLookback === undefined ? 'lookback —' : `lookback ${field.requiredLookback}d`;
+    field.requiredLookback === undefined ? '' : `需 ${field.requiredLookback} 个交易日数据`;
   const source = EXPERIMENT_DATA_SOURCE_LABELS[field.dataSource] ?? field.dataSource;
-  const unit = field.unit === undefined ? '单位 —' : `单位 ${field.unit}`;
-  return el(
-    'small',
-    'experiment-field-meta',
-    `${field.path} · ${EXPERIMENT_TYPE_LABELS[field.type] ?? field.type} · ${unit} · ${lookback} · ${source}`,
-  );
+  const unit =
+    field.unit === undefined
+      ? ''
+      : `单位：${({ CNY: '元', share: '股', percent: '%', ratio: '比例', 'trading-day': '交易日', board: '板' })[field.unit] ?? field.unit}`;
+  return el('small', 'experiment-field-meta', [unit, lookback, source].filter(Boolean).join(' · '));
 };
 
 const experimentValueText = (value) => {
@@ -822,17 +852,18 @@ const renderExperimentRuleCondition = (rule, catalog, changed, rebuild) => {
   operatorSelect.addEventListener('change', updateExpression);
   value.addEventListener('input', updateExpression);
   if (field === undefined || parsed === undefined) {
-    return el('div', 'experiment-condition-block', [
-      el('div', 'experiment-advanced-expression', [
-        el('span', 'section-kicker', 'ADVANCED EXPRESSION'),
-        el('code', null, rule.when || '未填写'),
-      ]),
-      el(
-        'p',
-        'muted',
-        '该表达式包含结构化编辑器暂不展开的语法；请切换到 JSON 高级模式编辑，服务端会负责校验。',
-      ),
-    ]);
+    const expression = el('textarea', 'experiment-expression-input');
+    expression.rows = 3;
+    expression.value = rule.when ?? '';
+    expression.addEventListener('input', () => {
+      rule.when = expression.value;
+      changed();
+    });
+    return experimentControl(
+      '自定义条件表达式',
+      expression,
+      '复杂条件保留原表达式，可直接修改；其余配置仍可使用表单。',
+    );
   }
   return el('div', 'experiment-condition-block', [
     el('div', 'experiment-condition-grid', [
@@ -878,10 +909,8 @@ const renderExperimentScoreEditor = (label, target, catalog, changed, rebuild) =
     value.value = parsed.value;
     value.addEventListener('input', () => {
       const next = normalizeScoreLiteral(value.value);
-      if (next !== undefined) {
-        target.score = next;
-        changed();
-      }
+      target.score = next ?? value.value;
+      changed();
     });
   } else {
     value.addEventListener('change', () => {
@@ -931,9 +960,9 @@ const renderExperimentRuleCard = (rule, catalog, changed, rebuild, options = {})
   if (options.signal === true) {
     const direction = selectOptions(
       [
-        { value: 'bullish', label: 'bullish / 看多' },
-        { value: 'bearish', label: 'bearish / 看空' },
-        { value: 'neutral', label: 'neutral / 中性' },
+        { value: 'bullish', label: '看多' },
+        { value: 'bearish', label: '看空' },
+        { value: 'neutral', label: '中性' },
       ],
       rule.direction ?? 'bullish',
     );
@@ -944,13 +973,13 @@ const renderExperimentRuleCard = (rule, catalog, changed, rebuild, options = {})
     const emission = rule.emission ?? { mode: 'level', cooldownTradingDays: 0 };
     const emissionMode = selectOptions(
       [
-        { value: 'level', label: 'level / 持续' },
-        { value: 'edge', label: 'edge / 边沿' },
+        { value: 'level', label: '条件持续满足' },
+        { value: 'edge', label: '首次进入条件' },
       ],
       emission.mode ?? 'level',
     );
     emissionMode.addEventListener('change', () => {
-      rule.emission = { ...emission, mode: emissionMode.value };
+      rule.emission = { ...rule.emission, mode: emissionMode.value };
       changed();
     });
     const cooldown = el('input');
@@ -959,14 +988,14 @@ const renderExperimentRuleCard = (rule, catalog, changed, rebuild, options = {})
     cooldown.max = '60';
     cooldown.value = String(emission.cooldownTradingDays ?? 0);
     cooldown.addEventListener('input', () => {
-      rule.emission = { ...emission, cooldownTradingDays: Number(cooldown.value) || 0 };
+      rule.emission = { ...rule.emission, cooldownTradingDays: Number(cooldown.value) || 0 };
       changed();
     });
     controls.push(
       el('div', 'experiment-condition-grid', [
         renderExperimentScoreEditor('信号分数', rule, catalog, changed, rebuild),
         experimentControl('方向', direction),
-        experimentControl('发射模式', emissionMode),
+        experimentControl('信号生成时机', emissionMode),
         experimentControl('冷却交易日', cooldown),
       ]),
     );
@@ -979,7 +1008,7 @@ const renderExperimentRuleCard = (rule, catalog, changed, rebuild, options = {})
     el('div', 'experiment-rule-card-head', [
       el('div', null, [
         el('span', 'section-kicker', options.signal === true ? 'SIGNAL RULE' : 'SELECTION RULE'),
-        el('strong', 'mono', rule.id ?? 'new-rule'),
+        el('strong', null, options.signal === true ? '信号条件' : '筛选条件'),
       ]),
       ...(remove === null ? [] : [remove]),
     ]),
@@ -991,8 +1020,8 @@ const renderExperimentSelection = (definition, catalog, changed, rebuild) => {
   const selection = definition.selection ?? { logic: 'all', rules: [] };
   const logic = selectOptions(
     [
-      { value: 'all', label: 'all / 全部满足' },
-      { value: 'any', label: 'any / 任一满足' },
+      { value: 'all', label: '全部条件满足' },
+      { value: 'any', label: '任一条件满足' },
     ],
     selection.logic ?? 'all',
   );
@@ -1056,13 +1085,14 @@ const renderExperimentScoring = (definition, catalog, changed, rebuild) => {
         'p',
         'muted',
         selectionRules.length === 0
-          ? '先添加至少一条 selection rule，再启用加权评分。'
+          ? '先添加至少一条筛选规则，再启用加权评分。'
           : '可选；启用后权重由服务端 schema 校验，前端不替代领域规则。',
       ),
     ]);
   }
   const components = Array.isArray(scoring.components) ? scoring.components : [];
   const total = components.reduce((sum, component) => sum + (Number(component.weight) || 0), 0);
+  const totalLabel = el('span', 'mono muted', `权重合计 ${(total * 100).toFixed(2)}%`);
   const nextRuleId = nextExperimentScoringRuleId(selectionRules, components);
   const add = experimentButton('添加评分项', 'btn btn-outline btn-sm', async () => {
     Object.assign(definition, appendExperimentScoringComponent(definition));
@@ -1073,10 +1103,7 @@ const renderExperimentScoring = (definition, catalog, changed, rebuild) => {
   return el('section', 'experiment-builder-section', [
     el('div', 'experiment-section-heading', [
       el('div', null, [el('span', 'section-kicker', '02 / SCORING'), el('h4', null, '评分聚合')]),
-      el('div', 'experiment-inline-actions', [
-        el('span', 'mono muted', `权重合计 ${total.toFixed(2)}`),
-        add,
-      ]),
+      el('div', 'experiment-inline-actions', [totalLabel, add]),
     ]),
     ...(components.length === 0
       ? [el('p', 'placeholder', '暂无评分项；服务端会拒绝无法通过 schema 的定义。')]
@@ -1087,7 +1114,7 @@ const renderExperimentScoring = (definition, catalog, changed, rebuild) => {
           const ruleId = selectOptions(
             selectionRules
               .filter((rule) => rule.id === component.ruleId || !usedByOther.has(rule.id))
-              .map((rule) => ({ value: rule.id, label: rule.id })),
+              .map((rule) => ({ value: rule.id, label: rule.name })),
             component.ruleId,
           );
           ruleId.addEventListener('change', () => {
@@ -1096,12 +1123,13 @@ const renderExperimentScoring = (definition, catalog, changed, rebuild) => {
           });
           const weight = el('input');
           weight.type = 'number';
-          weight.min = '0.0001';
-          weight.max = '1';
+          weight.min = '0.000001';
+          weight.max = '100';
           weight.step = '0.01';
-          weight.value = String(component.weight ?? 1);
+          weight.value = String((component.weight ?? 1) * 100);
           weight.addEventListener('input', () => {
-            component.weight = Number(weight.value) || 0;
+            component.weight = Number(weight.value) / 100;
+            totalLabel.textContent = `权重合计 ${(components.reduce((sum, item) => sum + item.weight, 0) * 100).toFixed(2)}%`;
             changed();
           });
           const remove = experimentButton(
@@ -1124,11 +1152,11 @@ const renderExperimentScoring = (definition, catalog, changed, rebuild) => {
           return el('article', 'experiment-score-row', [
             experimentControl('引用规则', ruleId),
             renderExperimentScoreEditor('分数表达式', component, catalog, changed, rebuild),
-            experimentControl('权重', weight),
+            experimentControl('权重（%）', weight),
             remove,
           ]);
         })),
-    el('p', 'muted', '保存前请审阅权重合计；最终合法性仍由服务端校验。'),
+    el('p', 'muted', '权重合计应为 100%；每项分数按权重计入总分。'),
   ]);
 };
 
@@ -1179,7 +1207,7 @@ const renderExperimentStructured = (state, catalog, changed, rebuild) => {
   style.value = metadata.style ?? '';
   style.placeholder = '例如：breakout / quality';
   style.addEventListener('input', () => {
-    definition.metadata = { ...metadata, style: style.value || undefined };
+    definition.metadata = { ...definition.metadata, style: style.value || undefined };
     changed();
   });
   const horizon = selectOptions(
@@ -1192,7 +1220,7 @@ const renderExperimentStructured = (state, catalog, changed, rebuild) => {
     metadata.horizon ?? 'short',
   );
   horizon.addEventListener('change', () => {
-    definition.metadata = { ...metadata, horizon: horizon.value };
+    definition.metadata = { ...definition.metadata, horizon: horizon.value };
     changed();
   });
   const include = el('textarea');
@@ -1202,7 +1230,7 @@ const renderExperimentStructured = (state, catalog, changed, rebuild) => {
   include.addEventListener('input', () => {
     const ids = parseExperimentStockIds(include.value);
     definition.universe = {
-      ...universe,
+      ...definition.universe,
       ...(ids.length === 0 ? { includeStockIds: undefined } : { includeStockIds: ids }),
     };
     if (ids.length === 0) delete definition.universe.includeStockIds;
@@ -1213,7 +1241,10 @@ const renderExperimentStructured = (state, catalog, changed, rebuild) => {
   exclude.value = (universe.excludeStockIds ?? []).join(', ');
   exclude.placeholder = '可选：688xxx.SH';
   exclude.addEventListener('input', () => {
-    definition.universe = { ...universe, excludeStockIds: parseExperimentStockIds(exclude.value) };
+    definition.universe = {
+      ...definition.universe,
+      excludeStockIds: parseExperimentStockIds(exclude.value),
+    };
     changed();
   });
   return el('div', 'experiment-structured-editor', [
@@ -1221,20 +1252,20 @@ const renderExperimentStructured = (state, catalog, changed, rebuild) => {
       el('div', 'experiment-section-heading', [
         el('div', null, [
           el('span', 'section-kicker', '00 / METADATA'),
-          el('h4', null, '实验定义'),
+          el('h4', null, '策略范围'),
         ]),
-        el('span', 'badge badge-neutral', 'server validated'),
+        el('span', 'badge badge-neutral', '保存时校验'),
       ]),
       el('div', 'experiment-field-grid', [
         experimentControl('风格标签', style),
         experimentControl('策略周期', horizon),
         experimentControl(
-          'Universe coverage',
+          '市场范围',
           Object.assign(el('input'), {
-            value: universe.coverage ?? 'CN_A_SHARES_SH_SZ',
+            value: '沪深 A 股',
             readOnly: true,
           }),
-          '固定为 CN_A_SHARES_SH_SZ；编辑器不会改写覆盖白名单。',
+          '包含股票留空时覆盖全部沪深 A 股。',
         ),
       ]),
       el('div', 'experiment-field-grid', [
@@ -1248,7 +1279,55 @@ const renderExperimentStructured = (state, catalog, changed, rebuild) => {
   ]);
 };
 
-const renderExperimentDefinitionEditor = (state, catalog) => {
+// 仅检查编辑器读取的结构；领域合法性仍由服务端校验。
+const assertEditorDefinitionShape = (definition) => {
+  if (
+    definition?.schemaVersion !== 1 ||
+    !definition.metadata ||
+    !definition.universe ||
+    !Array.isArray(definition.selection?.rules) ||
+    !definition.signals ||
+    !['entry', 'exit', 'risk'].every((scope) => Array.isArray(definition.signals[scope])) ||
+    (definition.scoring !== undefined && !Array.isArray(definition.scoring?.components))
+  ) {
+    throw new Error('请提供完整的策略定义：范围、筛选规则和信号分区');
+  }
+  const rules = [...definition.selection.rules, ...Object.values(definition.signals).flat()];
+  if (
+    rules.some((rule) => rule === null || typeof rule !== 'object' || !Array.isArray(rule.evidence))
+  ) {
+    throw new Error('每条规则需要条件、名称和证据列表');
+  }
+};
+
+export const createStrategyDefinitionEditor = (definition, catalog) => {
+  const state = {
+    definition: cloneDefinition(definition ?? createExperimentBlankDefinition(catalog)),
+    mode: 'structured',
+    changeSummary: '',
+  };
+  const root = el('div', 'strategy-form-editor');
+  const render = () =>
+    root.replaceChildren(renderExperimentDefinitionEditor(state, catalog, { standalone: true }));
+  render();
+  return {
+    root,
+    getValue: () => {
+      if (state.jsonError !== undefined) throw new Error(state.jsonError);
+      assertEditorDefinitionShape(state.definition);
+      return cloneDefinition(state.definition);
+    },
+    setValue: (next) => {
+      assertEditorDefinitionShape(next);
+      state.definition = cloneDefinition(next);
+      state.jsonError = undefined;
+      state.mode = 'structured';
+      render();
+    },
+  };
+};
+
+const renderExperimentDefinitionEditor = (state, catalog, { standalone = false } = {}) => {
   const summary = el('input', 'experiment-summary-input');
   summary.type = 'text';
   summary.value = state.changeSummary;
@@ -1305,6 +1384,7 @@ const renderExperimentDefinitionEditor = (state, catalog) => {
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error('策略定义必须是 JSON 对象');
       }
+      assertEditorDefinitionShape(parsed);
       state.definition = parsed;
       state.jsonError = undefined;
       markChanged(false);
@@ -1317,12 +1397,13 @@ const renderExperimentDefinitionEditor = (state, catalog) => {
     }
   });
   const structured = experimentButton('结构化编辑', 'btn btn-outline btn-sm', async () => {
+    if (state.jsonError !== undefined) return;
     state.mode = 'structured';
     renderBody();
   });
   const advanced = experimentButton('JSON 高级', 'btn btn-outline btn-sm', async () => {
     state.mode = 'json';
-    rebuildJsonText();
+    if (state.jsonError === undefined) rebuildJsonText();
     renderBody();
   });
   renderBody();
@@ -1338,9 +1419,11 @@ const renderExperimentDefinitionEditor = (state, catalog) => {
     el(
       'p',
       'muted',
-      '先在本地编辑；“生成未持久化草案”只做外部分析，“保存为持久化草案”才写入版本库。',
+      standalone
+        ? '按栏目配置规则，保存为草案；发布仍需单独操作。'
+        : '先在本地编辑；“生成未持久化草案”只做外部分析，“保存为持久化草案”才写入版本库。',
     ),
-    experimentControl('变更说明', summary),
+    ...(standalone ? [] : [experimentControl('变更说明', summary)]),
     status,
     bodyHost,
   ]);

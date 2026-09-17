@@ -53,6 +53,7 @@ export const accountFactsSummary = ({ factsResult, reconcileResult }) => {
 import { callApi } from './api.js';
 import { makeSelect } from './form-kit.js';
 import { openModal } from './modal.js';
+import { stockIdentityLink } from './stock-link.js';
 import { $, el, fmtDateTime, fmtNum, mount, toolErrorText } from './ui.js';
 
 const ACTION_LABELS = {
@@ -162,7 +163,7 @@ export const planVersionsOf = (plans, planId) =>
 export const planVersionId = (plan) => `${plan.id}:v${plan.version}`;
 
 const conditionSummary = (conditions) => {
-  const lines = (conditions ?? []).map((condition) => condition.description);
+  const lines = (conditions ?? []).map(planConditionText);
   return lines.length === 0 ? '无' : lines.join('；');
 };
 
@@ -221,10 +222,81 @@ export const previousVersionOf = (plan, versions) => {
   return list.find((item) => item.id === plan.id && item.version === plan.version - 1);
 };
 
+const METRIC_LABELS = {
+  price: '价格',
+  changePct: '涨跌幅',
+  marketIndexChangePct: '指数涨跌幅',
+  marketBreadthPct: '市场上涨占比',
+};
+const COMPARATOR_LABELS = { gte: '≥', gt: '>', lte: '≤', lt: '<', eq: '=' };
+const FACT_STATUS_LABELS = {
+  available: '可用',
+  stale: '已过时',
+  unknown: '未知',
+  unavailable: '不可用',
+};
+
+export const planConditionText = (condition) => {
+  if (condition.kind === 'manual-confirmation') return `${condition.description}（需人工确认）`;
+  if (condition.metric === undefined || condition.value === undefined) return condition.description;
+  const unit = condition.metric === 'price' ? '元' : '%';
+  const threshold =
+    condition.comparator === 'between'
+      ? `${fmtNum(condition.value, 2)} – ${fmtNum(condition.valueTo, 2)}${unit}`
+      : `${COMPARATOR_LABELS[condition.comparator] ?? ''} ${fmtNum(condition.value, 2)}${unit}`;
+  return `${condition.description}（${METRIC_LABELS[condition.metric] ?? condition.metric} ${threshold}）`;
+};
+
 const conditionLines = (conditions) =>
   (conditions ?? []).map(
     (condition) =>
-      `${CONDITION_PHASE_LABELS[condition.phase] ?? condition.phase}：${condition.description}`,
+      `${CONDITION_PHASE_LABELS[condition.phase] ?? condition.phase}：${planConditionText(condition)}`,
+  );
+
+export const planKeyMetrics = (plan) => {
+  const quote = (plan.marketFacts ?? [])
+    .filter(
+      (fact) =>
+        fact.metric === 'price' && (fact.stockId === undefined || fact.stockId === plan.stockId),
+    )
+    .sort((a, b) => new Date(b.observedAt) - new Date(a.observedAt))[0];
+  return [
+    {
+      label: '生成时参考价',
+      value:
+        quote === undefined
+          ? '未提供'
+          : `${fmtNum(quote.value, 2)} ${quote.unit === 'CNY' ? '元' : quote.unit}`,
+      note:
+        quote === undefined
+          ? '缺少价格事实'
+          : `${FACT_STATUS_LABELS[quote.status]} · ${fmtDateTime(quote.observedAt)} · ${quote.source}`,
+    },
+    { label: '入场区间', value: planEntryText(plan), note: '元 / 股' },
+    {
+      label: '止损 / 止盈',
+      value: `${priceText(plan.exit?.stopLoss)} / ${priceText(plan.exit?.takeProfit)}`,
+      note: '元 / 股',
+    },
+    {
+      label: '当前 → 目标仓位',
+      value: `${fmtPct(plan.position?.currentPct) ?? '不可用'} → ${planTargetText(plan)}`,
+      note: `调整 ${plan.position?.deltaPct == null ? '不可用' : `${fmtNum(plan.position.deltaPct, 2)} 个百分点`} · 占账户总资产`,
+    },
+  ];
+};
+
+const metricsNode = (plan) =>
+  el(
+    'dl',
+    'plan-metrics',
+    planKeyMetrics(plan).map((metric) =>
+      el('div', 'plan-metric', [
+        el('dt', null, metric.label),
+        el('dd', null, metric.value),
+        el('p', 'muted', metric.note),
+      ]),
+    ),
   );
 
 const exitLines = (plan) => {
@@ -232,6 +304,7 @@ const exitLines = (plan) => {
   const lines = [];
   if (fmtPrice(exit.stopLoss) !== null) lines.push(`止损：${fmtPrice(exit.stopLoss)}`);
   if (fmtPrice(exit.takeProfit) !== null) lines.push(`止盈：${fmtPrice(exit.takeProfit)}`);
+  lines.push(...conditionLines(exit.triggerConditions));
   lines.push(...(exit.conditions ?? []).map((item) => `退出条件：${item}`));
   lines.push(
     exit.canSellNow === true
@@ -243,8 +316,8 @@ const exitLines = (plan) => {
 
 const factLines = (plan) =>
   (plan.marketFacts ?? []).map((fact) => {
-    const status = fact.status === 'available' ? '可用' : fact.status;
-    return `${fact.metric} ${fmtNum(fact.value, 2)}${fact.unit ?? ''} · ${status} · 数据时间 ${fmtDateTime(fact.observedAt)} · 来源 ${fact.source}`;
+    const status = FACT_STATUS_LABELS[fact.status] ?? fact.status;
+    return `${METRIC_LABELS[fact.metric] ?? fact.metric} ${fmtNum(fact.value, 2)}${fact.unit ?? ''} · ${status} · 数据时间 ${fmtDateTime(fact.observedAt)} · 来源 ${fact.source}`;
   });
 
 /** 计划详情分区（纯数据，便于单测与复用）。 */
@@ -256,12 +329,9 @@ export const planDetailSections = (plan) => {
     {
       title: '身份与有效性',
       lines: [
-        `计划版本：${planVersionId(plan)}`,
+        `计划版本：v${plan.version}`,
         `状态：${planStatusLabel(plan.status)} · 动作：${planActionLabel(plan.action)}`,
         `生效：${fmtDateTime(plan.validFrom)} · 有效期至：${fmtDateTime(plan.validUntil)}`,
-        ...(plan.supersedesVersionId === undefined
-          ? []
-          : [`替代版本：${plan.supersedesVersionId}`]),
         ...(plan.invalidationConditions ?? []).map((item) => `失效条件：${item}`),
       ],
     },
@@ -279,7 +349,7 @@ export const planDetailSections = (plan) => {
       title: '仓位',
       lines: [
         `当前：${fmtPct(position.currentPct) ?? '不可用'} · 目标：${fmtPct(position.targetPct) ?? '不可用'} · 差额：${fmtPct(position.deltaPct) ?? '不可用'}`,
-        `约束校验：${position.constraintStatus ?? '--'}${
+        `约束校验：${({ passed: '通过', blocked: '未通过', unavailable: '数据不可用' })[position.constraintStatus] ?? '--'}${
           (position.constraintReasons ?? []).length === 0
             ? ''
             : `（${(position.constraintReasons ?? []).join('；')}）`
@@ -308,22 +378,35 @@ export const planDetailSections = (plan) => {
         ...(explanation.risks ?? []).map((item) => `风险：${item}`),
         ...(explanation.unknowns ?? []).map((item) => `未知：${item}`),
         ...(explanation.changeSummary === undefined ? [] : [`变更：${explanation.changeSummary}`]),
-        `confidence：${fmtNum(plan.confidence, 0)}（不是收益概率）`,
+        `信心评分：${fmtNum(plan.confidence, 0)}（不是收益概率）`,
       ],
     },
     {
       title: '账户与来源',
       lines: [
-        `账户事实：${plan.accountFactsDigest.slice(0, 12)}…（${fmtDateTime(plan.accountFactsAsOf)}）`,
+        `账户事实更新：${fmtDateTime(plan.accountFactsAsOf)}`,
         `行业：${plan.industry ?? '未记录'}`,
-        `策略：${(plan.source?.strategyIds ?? []).join('、') || '无'}`,
-        `运行：${(plan.source?.runIds ?? []).join('、') || '无'}`,
-        `建议：${(plan.source?.adviceIds ?? []).join('、') || '无'}`,
+        `参考策略：${plan.source?.strategyIds.length ?? 0} 个`,
+        `研究运行：${plan.source?.runIds.length ?? 0} 次`,
+        `参考建议：${plan.source?.adviceIds.length ?? 0} 条`,
         ...factLines(plan),
       ],
     },
   ];
 };
+
+const auditNode = (plan) =>
+  el('details', 'plan-audit', [
+    el('summary', null, '查看追溯信息'),
+    ...[
+      `计划版本：${planVersionId(plan)}`,
+      `账户事实指纹：${plan.accountFactsDigest}`,
+      `策略：${listText(plan.source?.strategyIds)}`,
+      `运行：${listText(plan.source?.runIds)}`,
+      `建议：${listText(plan.source?.adviceIds)}`,
+      ...(plan.supersedesVersionId ? [`替代版本：${plan.supersedesVersionId}`] : []),
+    ].map((line) => el('p', 'plan-detail-line', line)),
+  ]);
 
 const sectionNode = (section) =>
   el('section', 'plan-detail-section', [
@@ -402,11 +485,14 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
           planStatusLabel(subject.status),
         ),
         el('span', 'badge badge-neutral', planActionLabel(subject.action)),
-        el('span', 'muted', `${subject.stockName ?? subject.stockId} · v${subject.version}`),
+        stockIdentityLink(subject),
+        el('span', 'muted', `v${subject.version}`),
       ]),
       ...(versions.length <= 1 ? [] : [versionBar]),
+      metricsNode(subject),
       diffRoot,
       ...planDetailSections(subject).map(sectionNode),
+      auditNode(subject),
       el(
         'p',
         'hint',
@@ -500,8 +586,18 @@ const planRow = (plan) => {
   );
   const draftNote = planDraftNote(plan);
   return el('div', 'entity-item', [
-    el('strong', null, `${plan.stockName ?? plan.stockId} · ${planActionLabel(plan.action)}`),
-    el('div', 'muted', planMetaText(plan)),
+    el('div', 'flex gap-2', [
+      stockIdentityLink(plan),
+      el('strong', null, planActionLabel(plan.action)),
+    ]),
+    metricsNode(plan),
+    el('p', 'plan-detail-line', `入场条件：${conditionSummary(plan.entryConditions)}`),
+    el(
+      'p',
+      'muted',
+      `预计持有 ${holdingText(plan)} 个交易日 · 复核 ${fmtDateTime(plan.holding?.nextReviewAt)}`,
+    ),
+    el('p', 'muted', `有效期至 ${fmtDateTime(plan.validUntil)} · v${plan.version}`),
     ...(draftNote === null ? [] : [el('div', 'hint', draftNote)]),
     el('div', 'flex gap-2', [
       el('span', `badge ${planStatusBadgeClass(plan.status)}`, planStatusLabel(plan.status)),

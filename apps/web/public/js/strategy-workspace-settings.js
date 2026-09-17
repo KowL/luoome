@@ -1,4 +1,5 @@
-import { makeCheckbox, makeInput, makeNumberInput, makeSelect, makeTextarea } from './form-kit.js';
+import { makeCheckbox, makeInput, makeNumberInput, makeSelect } from './form-kit.js';
+import { createStrategyDefinitionEditor } from './strategy-workspace-experiment.js';
 import {
   badge,
   callApi,
@@ -57,22 +58,23 @@ const PREFLIGHT_STATUS = {
   unavailable: ['事实不可用', 'badge-neutral'],
 };
 
-const openVersionEditor = (strategy, latest, setStatus, refresh) => {
-  const input = makeTextarea('strategy-version-definition', {
-    rows: 22,
-    value: JSON.stringify(latest?.definition ?? {}, null, 2),
-  });
-  input.classList.add('strategy-def-input');
-  input.wrap = 'off';
+const openVersionEditor = async (strategy, latest, setStatus, refresh) => {
+  const catalogResult = await cachedGet('/api/strategy/dsl-catalog');
+  if (!catalogResult.ok) {
+    setStatus(errorText(catalogResult), true);
+    return;
+  }
+  const editor = createStrategyDefinitionEditor(latest?.definition, catalogResult.data);
+  const formError = el('p', 'status error');
   const summary = makeInput('strategy-version-summary', { placeholder: '说明本次规则变化' });
   const submit = el('button', 'btn btn-primary', '创建草案');
   submit.type = 'button';
   submit.addEventListener('click', async () => {
     let definition;
     try {
-      definition = JSON.parse(input.value);
-    } catch {
-      setStatus('策略定义不是合法 JSON', true);
+      definition = editor.getValue();
+    } catch (error) {
+      formError.textContent = error.message;
       return;
     }
     submit.disabled = true;
@@ -82,7 +84,7 @@ const openVersionEditor = (strategy, latest, setStatus, refresh) => {
     });
     submit.disabled = false;
     if (!result.ok) {
-      setStatus(errorText(result), true);
+      formError.textContent = errorText(result);
       return;
     }
     closeModal();
@@ -95,7 +97,8 @@ const openVersionEditor = (strategy, latest, setStatus, refresh) => {
     el('div', 'modal-form', [
       el('p', 'hint', '发布版本不可原地修改；保存会创建新的不可变版本草案。'),
       summary,
-      input,
+      editor.root,
+      formError,
       el('div', 'modal-actions', [submit]),
     ]),
   );

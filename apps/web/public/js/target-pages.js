@@ -1,11 +1,13 @@
+import { createAlertRulesEditor, newAlertRule } from './alert-rule-editor.js';
 import { callApi, getAccountId } from './api.js';
-import { makeInput, makeSelect, makeTextarea } from './form-kit.js';
+import { makeInput, makeSelect } from './form-kit.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
 import {
   invalidateStrategyWorkspaceCache,
   renderStrategyWorkspacePage,
 } from './strategy-workspace.js';
+import { createStrategyDefinitionEditor } from './strategy-workspace-experiment.js';
 import { renderTradingPlanPanel } from './trading-plan-panel.js';
 import {
   $,
@@ -73,7 +75,7 @@ export const triggerSourceLabel = (trigger, { alertPlanNames = {}, tradingPlanAc
       ? '交易计划监控（本账户）'
       : '交易计划监控';
   }
-  return poolId;
+  return '历史预警（来源已不可用）';
 };
 
 const TRIGGER_PRIORITY_LABELS = { urgent: '急', important: '重要', normal: '普通' };
@@ -183,12 +185,7 @@ export const setTriggerHistoryState = ({ triggers, alertPlanIds, labels }) => {
 };
 
 export const buildAlertPlanMutationInput = (values, { editing = false } = {}) => {
-  let rules;
-  try {
-    rules = JSON.parse(values.rulesJson);
-  } catch {
-    throw new Error('规则必须是合法 JSON');
-  }
+  const rules = values.rules;
   if (!Array.isArray(rules) || rules.length === 0) throw new Error('至少配置一条规则');
   const cooldownMinutes = Number(values.cooldownMinutes);
   const dailyNotificationLimit = Number(values.dailyNotificationLimit);
@@ -205,7 +202,7 @@ export const buildAlertPlanMutationInput = (values, { editing = false } = {}) =>
   const name = values.name.trim();
   const watchlistId = values.watchlistId.trim();
   if (name.length === 0) throw new Error('请输入预警名称');
-  if (watchlistId.length === 0) throw new Error('请输入关注列表 ID');
+  if (watchlistId.length === 0) throw new Error('请选择关注列表');
   return {
     name,
     watchlistId,
@@ -1062,28 +1059,50 @@ const editAlertPlan = async (plan, setStatus) => {
       ? ''
       : watchlistStockTab
     : plan.watchlistId;
+  const [listsResult, strategiesResult] = await Promise.all([
+    callApi('/api/watchlists'),
+    callApi('/api/strategies'),
+  ]);
+  if (!listsResult.ok || !strategiesResult.ok) {
+    setStatus(resultErrorText(!listsResult.ok ? listsResult : strategiesResult), true);
+    return false;
+  }
+  const watchlists = listsResult.data.items.map((item) => item.watchlist);
+  const listOptions = [
+    { value: '', label: '请选择关注列表' },
+    ...watchlists.map((list) => ({ value: list.id, label: list.name })),
+  ];
+  if (watchlistId && !watchlists.some((list) => list.id === watchlistId))
+    listOptions.push({ value: watchlistId, label: '原关注列表（当前不可用）' });
+  const rulesEditor = createAlertRulesEditor(
+    creating ? [newAlertRule('price-level')] : plan.rules,
+    { strategies: strategiesResult.data.strategies ?? [] },
+  );
   const values = await promptDialog({
     title: creating ? '新建预警' : '编辑预警',
-    note: '规则使用 AlertRule JSON 数组；每条规则必须保留稳定且唯一的 id。',
+    note: '选择关注列表并添加提醒条件；规则命中只发送提醒，不会自动交易。',
+    onSubmit: async (values) => {
+      const input = buildAlertPlanMutationInput(values, { editing: !creating });
+      const result = await post(
+        creating ? '/api/alert-plans' : `/api/alert-plans/${encodeURIComponent(plan.id)}`,
+        input,
+        creating ? 'POST' : 'PATCH',
+      );
+      if (!result.ok) throw new Error(resultErrorText(result));
+      setStatus(creating ? '预警已创建' : '预警已更新');
+    },
     fields: [
       {
         key: 'name',
         label: '名称',
-        value: creating ? `${watchlistId || '关注列表'} 价格预警` : plan.name,
+        value: creating ? '价格预警' : plan.name,
       },
-      { key: 'watchlistId', label: '关注列表 ID', value: watchlistId },
+      { key: 'watchlistId', label: '关注列表', value: watchlistId, options: listOptions },
       {
-        key: 'rulesJson',
-        label: '规则 JSON',
-        multiline: true,
-        rows: 10,
-        value: JSON.stringify(
-          creating
-            ? [{ id: 'price-level-1', kind: 'price-level', level: 10, side: 'above' }]
-            : plan.rules,
-          null,
-          2,
-        ),
+        key: 'rules',
+        label: '提醒条件',
+        control: rulesEditor.root,
+        readValue: rulesEditor.getValue,
       },
       {
         key: 'logic',
@@ -1146,24 +1165,7 @@ const editAlertPlan = async (plan, setStatus) => {
     ],
     confirmLabel: creating ? '创建' : '保存',
   });
-  if (values === null) return false;
-  let input;
-  try {
-    input = buildAlertPlanMutationInput(values, { editing: !creating });
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : '预警配置无效', true);
-    return false;
-  }
-  const result = await post(
-    creating ? '/api/alert-plans' : `/api/alert-plans/${encodeURIComponent(plan.id)}`,
-    input,
-    creating ? 'POST' : 'PATCH',
-  );
-  setStatus(
-    result.ok ? (creating ? '预警已创建' : '预警已更新') : resultErrorText(result),
-    !result.ok,
-  );
-  return result.ok;
+  return values !== null;
 };
 
 const planCard = (plan, setStatus) => {
@@ -1187,7 +1189,7 @@ const planCard = (plan, setStatus) => {
     el(
       'span',
       'muted',
-      `${plan.watchlistId} · ${plan.rules.length} 条规则 · ${plan.logic} · ${plan.triggerMode} · 冷却 ${plan.cooldownMinutes} 分钟 · 日上限 ${plan.dailyNotificationLimit}`,
+      `${plan.rules.length} 条规则 · ${plan.logic === 'ALL' ? '全部满足' : '任一满足'} · ${{ 'on-enter': '进入条件时提醒', 'daily-first': '每日首次提醒', repeat: '持续重复提醒' }[plan.triggerMode]} · 冷却 ${plan.cooldownMinutes} 分钟 · 日上限 ${plan.dailyNotificationLimit}`,
     ),
     el(
       'span',
@@ -1202,7 +1204,10 @@ const triggerCard = (trigger, labels) => {
   const delivery = triggerDeliveryLabel(trigger.deliveryStatus);
   const priority = trigger.priority ?? 'normal';
   return el('div', 'entity-item', [
-    el('strong', null, `${trigger.stockId} · ${trigger.ruleKind}`),
+    el('div', 'flex gap-2', [
+      stockIdentityLink(trigger),
+      el('strong', null, RULE_KIND_LABELS[trigger.ruleKind] ?? trigger.ruleKind),
+    ]),
     el('div', 'muted', triggerMetaText(trigger, labels)),
     el('div', 'row-actions', [
       el('span', triggerDeliveryBadgeClass(trigger.deliveryStatus), delivery ?? '--'),
@@ -1289,16 +1294,16 @@ export const renderAlerts = async (setStatus) => {
   void setStatus;
 };
 
-const openStrategyCreateModal = (setStatus, refresh) => {
+const openStrategyCreateModal = async (setStatus, refresh) => {
+  const catalogResult = await callApi('/api/strategy/dsl-catalog');
+  if (!catalogResult.ok) {
+    setStatus(resultErrorText(catalogResult), true);
+    return;
+  }
   const nameInput = makeInput('strategy-create-name', { placeholder: '策略名称' });
   const descInput = makeInput('strategy-create-desc', { placeholder: '策略描述' });
-  const defInput = makeTextarea('strategy-create-definition', {
-    rows: 16,
-    value: JSON.stringify(templateDefinition, null, 2),
-  });
-  defInput.classList.add('strategy-def-input');
-  defInput.spellcheck = false;
-  defInput.wrap = 'off';
+  const editor = createStrategyDefinitionEditor(templateDefinition, catalogResult.data);
+  const formError = el('p', 'status error');
 
   const templateSelect = makeSelect('strategy-create-template', [['', '自定义策略（空白模板）']]);
   const templateHint = el('p', 'hint', '加载模板中…');
@@ -1308,12 +1313,12 @@ const openStrategyCreateModal = (setStatus, refresh) => {
     const template = templates.find((item) => item.id === templateSelect.value) ?? null;
     selectedTemplate = template;
     if (template === null) {
-      defInput.value = JSON.stringify(templateDefinition, null, 2);
+      editor.setValue(templateDefinition);
       return;
     }
     nameInput.value = template.name;
     descInput.value = template.description;
-    defInput.value = JSON.stringify(template.definition, null, 2);
+    editor.setValue(template.definition);
   });
 
   let templates = [];
@@ -1339,6 +1344,7 @@ const openStrategyCreateModal = (setStatus, refresh) => {
   };
   void loadTemplates();
 
+  let createdStrategy;
   const submit = actionButton(
     '创建',
     async (button) => {
@@ -1354,31 +1360,37 @@ const openStrategyCreateModal = (setStatus, refresh) => {
       }
       let definition;
       try {
-        definition = JSON.parse(defInput.value);
-      } catch {
-        setStatus('策略定义不是合法 JSON', true);
+        definition = editor.getValue();
+      } catch (error) {
+        formError.textContent = error.message;
         return;
       }
       const changeSummary =
         selectedTemplate === null ? '自定义创建' : `从模板「${selectedTemplate.name}」创建`;
       button.disabled = true;
-      const created = await post('/api/strategies', { name, description });
-      if (!created.ok) {
-        setStatus(resultErrorText(created), true);
-        button.disabled = false;
-        return;
+      if (createdStrategy === undefined) {
+        const created = await post('/api/strategies', { name, description });
+        if (!created.ok) {
+          formError.textContent = resultErrorText(created);
+          button.disabled = false;
+          return;
+        }
+        createdStrategy = created.data.strategy;
+        nameInput.disabled = true;
+        descInput.disabled = true;
+        templateSelect.disabled = true;
       }
       const versioned = await post(
-        `/api/strategies/${encodeURIComponent(created.data.strategy.id)}/versions`,
+        `/api/strategies/${encodeURIComponent(createdStrategy.id)}/versions`,
         { definition, changeSummary },
       );
       button.disabled = false;
       if (!versioned.ok) {
-        setStatus(resultErrorText(versioned), true);
+        formError.textContent = resultErrorText(versioned);
         return;
       }
       closeModal();
-      selectedStrategyId = created.data.strategy.id;
+      selectedStrategyId = createdStrategy.id;
       invalidateStrategyWorkspaceCache();
       window.location.hash = `#strategies?strategyId=${encodeURIComponent(selectedStrategyId)}&tab=settings&view=rule-near-miss`;
       setStatus(selectedTemplate === null ? '策略已创建' : '策略已从模板创建');
@@ -1396,8 +1408,8 @@ const openStrategyCreateModal = (setStatus, refresh) => {
       nameInput,
       el('p', 'hint', '描述'),
       descInput,
-      el('p', 'hint', '策略定义（JSON，DSL v1；selection 至少一条规则，scoring 权重之和为 1）'),
-      defInput,
+      editor.root,
+      formError,
       el('div', 'modal-actions', [submit]),
     ]),
   );

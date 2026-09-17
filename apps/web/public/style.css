@@ -9265,3 +9265,120 @@ body > .modal {
   font-size: var(--text-sm);
   letter-spacing: 0.04em;
 }
+
+.plan-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.plan-metric {
+  padding: 12px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.plan-metric dt, .plan-metric p {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  margin: 0;
+}
+
+.plan-metric dd {
+  margin: 6px 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.plan-audit {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-audit summary {
+  cursor: pointer;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+@media (max-width: 480px) {
+  .plan-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+#modal-overlay > .modal:has(.strategy-form-editor) {
+  width: min(1000px, 100%);
+}
+
+.alert-rule-card {
+  margin: 12px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-alt);
+}
+
+.alert-rule-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.alert-rule-heading select {
+  flex: 1;
+  min-width: 140px;
+  width: auto;
+}
+
+.alert-rule-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.alert-rule-fields > .hint,
+.alert-event-options {
+  grid-column: 1 / -1;
+}
+
+.alert-event-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.alert-event-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.alert-event-option input[type="checkbox"] {
+  width: auto;
+}
+
+.strategy-form-editor .experiment-editor-panel {
+  padding: 12px;
+}
+
+.strategy-form-editor .experiment-expression-input {
+  width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .alert-rule-fields {
+    grid-template-columns: 1fr;
+  }
+  .strategy-form-editor .experiment-section-heading {
+    align-items: stretch;
+  }
+}
