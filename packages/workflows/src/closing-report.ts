@@ -610,7 +610,7 @@ const tradingPlansSection = async (
               {
                 kind: 'text' as const,
                 tone: 'warning' as const,
-                text: '账户快照、持仓复核或候选分析尚未形成可呈现的结构化计划；请区分研究未完成与没有合格机会。',
+                text: '账户事实、持仓复核或候选分析尚未形成可呈现的结构化计划；请区分研究未完成与没有合格机会。',
               },
             ]
           : []),

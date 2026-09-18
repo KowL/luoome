@@ -26,12 +26,17 @@ export const accountFactsSummary = ({ factsResult, reconcileResult }) => {
         ? '账本对账：现金余额与账本一致'
         : `账本对账：相差 ${fmtNum(reconcile.difference, 2)}（可能有未登记的成交或资金流水）`;
   const incomplete = facts.status !== 'complete';
+  const notes = facts.notes ?? [];
+  const lines2 = [...lines, ...(reconcileLine === null ? [] : [reconcileLine])];
+  if (!incomplete && (reconcile === undefined || reconcile.reconciled) && notes.length === 0) {
+    return el('p', 'muted plan-facts', lines2.join(' · '));
+  }
   if (!incomplete && (reconcile === undefined || reconcile.reconciled)) {
-    return el(
-      'p',
-      'muted plan-facts',
-      [...lines, ...(reconcileLine === null ? [] : [reconcileLine])].join(' · '),
-    );
+    return el('div', 'plan-guidance', [
+      el('strong', null, '账户事实可用（有限制）'),
+      el('p', 'hint', notes.join('；')),
+      el('p', 'muted plan-facts', lines2.join(' · ')),
+    ]);
   }
   return el('div', 'plan-guidance', [
     el('strong', null, incomplete ? '账户事实不可用' : '账户现金与账本不一致'),
@@ -40,7 +45,7 @@ export const accountFactsSummary = ({ factsResult, reconcileResult }) => {
       'hint',
       incomplete ? facts.reasons.join('；') || '缺少现金或合格行情' : (reconcileLine ?? ''),
     ),
-    el('p', 'muted plan-facts', lines.join(' · ')),
+    el('p', 'muted plan-facts', lines2.join(' · ')),
   ]);
 };
 
@@ -101,15 +106,35 @@ const fmtPrice = (value) =>
 const fmtPct = (value) =>
   typeof value === 'number' && Number.isFinite(value) ? `${fmtNum(value, 2)}%` : null;
 
+/** 没有建仓动作的计划不存在入场区间，不该显示成「未提供」让人以为是漏数据。 */
+const NO_ENTRY_ACTIONS = new Set(['hold', 'reduce', 'exit', 'avoid']);
+
 export const planEntryText = (plan) => {
   const low = fmtPrice(plan.entryPriceLow);
   const high = fmtPrice(plan.entryPriceHigh);
-  if (low === null || high === null) return '未提供入场区间';
-  return `${low} - ${high}`;
+  if (low !== null && high !== null) return `${low} - ${high}`;
+  if (NO_ENTRY_ACTIONS.has(plan.action)) return '不适用（无建仓动作）';
+  if (plan.action === 'observe') return '等待条件（未给出价位）';
+  return '未提供入场区间';
 };
 
-export const planTargetText = (plan) =>
-  fmtPct(plan.position?.targetPct) === null ? '目标仓位不可用' : fmtPct(plan.position.targetPct);
+export const planTargetText = (plan) => {
+  const text = fmtPct(plan.position?.targetPct);
+  if (text === null) return '目标仓位不可用';
+  if (plan.position.targetPct === 0 && plan.action === 'observe') return '等待条件（未设置仓位）';
+  return text;
+};
+
+/** 卡片与详情共用的入场条件口径：不适用 / 等待条件 / 未设置，不把缺价位说成漏数据。 */
+export const entryConditionText = (plan) => {
+  const summary = conditionSummary(plan.entryConditions);
+  if ((plan.entryConditions ?? []).length === 0) {
+    if (NO_ENTRY_ACTIONS.has(plan.action)) return '不适用（无建仓动作）';
+    return plan.action === 'observe' ? '等待条件（未给出具体条件）' : '未设置入场条件';
+  }
+  // 观察计划的价位是「等条件」而不是「现在就买」，说清楚语义，避免读成待执行建仓。
+  return plan.action === 'observe' ? `等待条件（满足前不建仓）：${summary}` : summary;
+};
 
 export const planMetaText = (plan) =>
   [
@@ -339,8 +364,11 @@ export const planDetailSections = (plan) => {
       title: '入场',
       lines: [
         `价格区间：${planEntryText(plan)}`,
+        ...(plan.action === 'observe' && conditionLines(plan.entryConditions).length > 0
+          ? ['等待条件（满足前不建仓）']
+          : []),
         ...(conditionLines(plan.entryConditions).length === 0
-          ? ['未设置入场条件']
+          ? [entryConditionText(plan)]
           : conditionLines(plan.entryConditions)),
         ...(plan.invalidEntryConditions ?? []).map((item) => `不可入场：${item}`),
       ],
@@ -591,7 +619,7 @@ const planRow = (plan) => {
       el('strong', null, planActionLabel(plan.action)),
     ]),
     metricsNode(plan),
-    el('p', 'plan-detail-line', `入场条件：${conditionSummary(plan.entryConditions)}`),
+    el('p', 'plan-detail-line', `入场条件：${entryConditionText(plan)}`),
     el(
       'p',
       'muted',

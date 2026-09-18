@@ -230,7 +230,7 @@ export const migrateLegacyTradingPlan = (value: unknown): TradingPlan | null => 
       ...plan.explanation,
       unknowns: [
         ...plan.explanation.unknowns,
-        '旧账户快照计划已失效，需要基于当前账户事实重新生成',
+        '旧计划依据的账户事实已失效，需要基于当前账户事实重新生成',
       ],
     },
   });

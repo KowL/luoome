@@ -3,6 +3,8 @@ import {
   AdviceDecisionSchema,
   AdviceHorizonSchema,
   AdviceReasoningSchema,
+  RULE_FALLBACK_EVIDENCE_MARKER,
+  RULE_FALLBACK_PREMISE_MARKER,
   STANDARD_DISCLAIMERS,
 } from '@luoome/core';
 import { APICallError, NoObjectGeneratedError } from 'ai';
@@ -22,7 +24,7 @@ import type { LLMAdapter, LLMGenerateResult } from './types.js';
  * 注：fallback 不返回 raw；advice.basedOn.llmReasoning 拿不到 raw 时省略。
  */
 
-const FALLBACK_NOTE = 'LLM 推理失败，使用规则 fallback（v0.2 LLMManager）';
+const FALLBACK_NOTE = `LLM 推理失败，使用${RULE_FALLBACK_EVIDENCE_MARKER}（v0.2 LLMManager）`;
 
 export interface LLMManagerOptions {
   readonly adapter: LLMAdapter;
@@ -59,7 +61,7 @@ const fallbackAdvice = (data: unknown): AdviceLLMOutput => {
     confidence,
     horizon: 'short',
     reasoning: {
-      premise: 'LLM 推理不可用，基于规则的保守判断',
+      premise: `${RULE_FALLBACK_PREMISE_MARKER}，基于规则的保守判断`,
       evidence,
       counterEvidence: ['规则 fallback 不考虑基本面 / 新闻 / 战法信号，结果仅供参考'],
     },

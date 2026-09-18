@@ -13,6 +13,48 @@ import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
 
+/**
+ * 最新一条「合格」行情：`latestByStock` 只按时间取，盘前/收盘后的零星报价会把
+ * 上一交易日的收盘价顶掉，于是明明有昨收也会被判为缺行情。这里按时间倒序取第一条
+ * 通过决策资格校验的行情，保证盘前、收盘后、盘中都能得到稳定口径。
+ */
+const latestQualifiedQuote = async (
+  ctx: ToolContext,
+  stockId: string,
+  now: Date,
+): Promise<import('@luoome/core').Quote | null> => {
+  const candidates = await ctx.repos.quote.listInRange(
+    stockId,
+    new Date(now.getTime() - 30 * 86_400_000),
+    now,
+  );
+  const ordered = [...candidates].sort(
+    (left, right) => right.observedAt.getTime() - left.observedAt.getTime(),
+  );
+  for (const quote of ordered) {
+    if (isAdviceQuoteCurrent(quote, now)) return quote;
+  }
+  return null;
+};
+
+const latestQuoteWithinDays = async (
+  ctx: ToolContext,
+  stockId: string,
+  now: Date,
+  days: number,
+): Promise<import('@luoome/core').Quote | null> => {
+  const candidates = await ctx.repos.quote.listInRange(
+    stockId,
+    new Date(now.getTime() - days * 86_400_000),
+    now,
+  );
+  return (
+    [...candidates].sort(
+      (left, right) => right.observedAt.getTime() - left.observedAt.getTime(),
+    )[0] ?? null
+  );
+};
+
 export const GetAccountFactsInput = z.object({
   accountId: z.string().min(1).optional(),
 });
@@ -38,6 +80,8 @@ export const deriveAccountFacts = async (
   const stockIds = [...new Set(holdings.map((holding) => holding.stockId))];
   const now = ctx.clock();
   const prices = new Map<string, AccountPriceFact>();
+  const fallbackReasons: string[] = [];
+  const fallbackNotes: string[] = [];
   const stocks = new Map<string, { industry?: string }>();
   for (const stockId of stockIds) {
     const stock = await ctx.repos.stock.findById(stockId);
@@ -46,10 +90,22 @@ export const deriveAccountFacts = async (
     } else if (stock !== null) {
       stocks.set(stockId, {});
     }
-    const quote = await ctx.repos.quote.latestByStock(stockId);
-    if (quote === null) continue;
-    if (!isAdviceQuoteCurrent(quote, now)) continue;
-    prices.set(stockId, { close: money(quote.close), observedAt: quote.observedAt });
+    const qualified = await latestQualifiedQuote(ctx, stockId, now);
+    if (qualified !== null) {
+      prices.set(stockId, { close: money(qualified.close), observedAt: qualified.observedAt });
+      continue;
+    }
+    // 兜底：停牌 / 刚登记 / 数据源缺当日的标的，用最近 30 天内最后一条行情估值，
+    // 并在 reasons 里明确标注（带限制展示，不冒充当日实时）。
+    const fallback = await latestQuoteWithinDays(ctx, stockId, now, 30);
+    if (fallback === null) {
+      fallbackReasons.push(`持仓 ${stockId} 没有任何可用行情，无法计算市值`);
+      continue;
+    }
+    fallbackNotes.push(
+      `持仓 ${stockId} 使用 ${fallback.observedAt.toISOString().slice(0, 10)} 的收盘价估值（无当日合格行情）`,
+    );
+    prices.set(stockId, { close: money(fallback.close), observedAt: fallback.observedAt });
   }
   const [trades, cashFlows, holdingAdjustments] = await Promise.all([
     ctx.repos.trade.listByAccount(id),
@@ -63,12 +119,20 @@ export const deriveAccountFacts = async (
     cashFlows,
     holdingAdjustments,
   });
-  const extraReasons: string[] = [];
+  const extraReasons: string[] = [...fallbackReasons];
   if (!reconciliation.reconciled)
     extraReasons.push('账户现金与账本重算不一致，请核对资金和持仓记录');
   if (reconciliation.gaps.length > 0)
     extraReasons.push('持仓与交易、调整记录存在数量缺口，请先核对账本');
-  return buildAccountFacts({ account, holdings, stocks, prices, asOf: now, extraReasons });
+  return buildAccountFacts({
+    account,
+    holdings,
+    stocks,
+    prices,
+    asOf: now,
+    extraReasons,
+    notes: fallbackNotes,
+  });
 };
 
 export const getAccountFactsTool = defineTool({

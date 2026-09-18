@@ -12,6 +12,7 @@ import type { Stock } from './stock.js';
  * - 现金来自 Account.cashBalance（由交易/持仓/流水同步维护）；
  * - 市值必须来自行情，不能由用户手填的历史数字代替；
  * - 任何一个有数量的持仓缺少可用行情 → status='unavailable'，不给精确仓位；
+ * - 只有最近收盘价可用的持仓（停牌、刚登记）按最近行情估值，记入 notes 而不是 reasons；
  * - digest 是持仓 + 现金 + 本金的指纹，计划据此判定「账户事实是否已变化」。
  */
 
@@ -40,6 +41,8 @@ export const AccountFactsSchema = z.object({
   status: z.enum(['complete', 'unavailable']),
   /** status=unavailable 的原因（逐条可读），便于 UI 与报告解释。 */
   reasons: z.array(z.string().min(1)),
+  /** 不阻断计算、但需要让用户知道的限制（如某持仓用最近收盘价估值）。 */
+  notes: z.array(z.string().min(1)),
 });
 export type AccountFacts = z.infer<typeof AccountFactsSchema>;
 
@@ -59,6 +62,7 @@ export const buildAccountFacts = (input: {
   readonly prices?: ReadonlyMap<string, AccountPriceFact>;
   readonly asOf: Date;
   readonly extraReasons?: readonly string[];
+  readonly notes?: readonly string[];
 }): AccountFacts => {
   const reasons = [...(input.extraReasons ?? [])];
   if (input.account.cashBalance < 0) reasons.push('历史账本重算现金为负，请核对资金和持仓记录');
@@ -100,6 +104,7 @@ export const buildAccountFacts = (input: {
     positions,
     status: reasons.length === 0 ? 'complete' : 'unavailable',
     reasons,
+    notes: [...(input.notes ?? [])],
   };
 };
 

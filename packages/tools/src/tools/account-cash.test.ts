@@ -246,6 +246,61 @@ describe('账户现金随账本变化', () => {
   });
 });
 
+describe('账户事实的行情口径', () => {
+  const LONGTERM_ACCOUNT_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
+
+  it('只有早于当日口径的行情时按最近价估值，记入 notes 且不阻断', async () => {
+    const ctx = await buildTestContext();
+    const added = await addHoldingTool.execute(
+      { accountId: LONGTERM_ACCOUNT_ID, stockId: '601398.SH', quantity: 1000, avgCost: 10 },
+      ctx,
+    );
+    expect(added.ok).toBe(true);
+    const observedAt = new Date(ctx.clock().getTime() - 20 * 86_400_000);
+    await ctx.repos.quote.save({
+      stockId: '601398.SH',
+      observedAt,
+      fetchedAt: observedAt,
+      timestampSource: 'upstream',
+      ts: observedAt,
+      open: money(12),
+      high: money(12.5),
+      low: money(11.9),
+      close: money(12.34),
+      volume: 1000,
+      source: 'test',
+    });
+
+    const result = await getAccountFactsTool.execute({ accountId: LONGTERM_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.facts).toMatchObject({
+      status: 'complete',
+      stockMarketValue: money(12340),
+      reasons: [],
+    });
+    expect(result.data.facts.notes.join('；')).toContain('601398.SH 使用');
+  });
+
+  it('完全没有行情时整份事实不可用，不给精确资产', async () => {
+    const ctx = await buildTestContext();
+    const added = await addHoldingTool.execute(
+      { accountId: LONGTERM_ACCOUNT_ID, stockId: '601398.SH', quantity: 1000, avgCost: 10 },
+      ctx,
+    );
+    expect(added.ok).toBe(true);
+    const result = await getAccountFactsTool.execute({ accountId: LONGTERM_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.facts).toMatchObject({
+      status: 'unavailable',
+      stockMarketValue: null,
+      totalAssets: null,
+    });
+    expect(result.data.facts.reasons.join('；')).toContain('601398.SH 没有');
+  });
+});
+
 describe('账户现金对账工具', () => {
   it('账本与现金字段一致时 reconciled=true，差额为 0', async () => {
     const ctx = await buildTestContext();

@@ -42,12 +42,13 @@ const STRATEGY_ADVICE_SYSTEM = `analyze_stock:strategy_candidate
 - confidence 是主观信心度，不是收益概率；Advice 不代表交易，也不得声称会自动下单。
 - position 缺省时没有持仓，只能输出 buy/watch/avoid，不能输出 hold/sell。
 - 看多信号仅是研究线索。只有当前证据足以支持、风险和反证已核对且价格计划合理时才输出 buy。
-- 证据不足或条件尚未满足时输出 watch，并说明需要观察的条件；不能为了给出行动而预设买入。
-- avoid 用于明确利空或信号前提已被破坏时。
-- buy 必须输出 entryPriceLow、entryPriceHigh（参考 quote.close 与均线/支撑位，形成入场区间）、
-  entryPrice（区间内的代表性买点）、targetPositionPct（按账户总资产的目标仓位百分比）、
-  targetPrice（目标卖点）和 stopLoss（止损，须低于 entryPriceLow）；价格均与 quote.close 同单位。
-- watch 可缺省价位；若给出价位，在 premise 说明触发买入的条件与对应价位。
+- 证据不足或条件尚未满足时输出 watch：这是「等待条件」的候选计划，不是可以省略价位的空白记录。
+- avoid 用于明确利空或信号前提已被破坏时，可缺省价位。
+- watch 与 buy 都必须输出条件性价格计划：entryPriceLow、entryPriceHigh（参考 quote.close 与均线/支撑位，
+  形成入场区间）、entryPrice（区间内的代表性买点）、targetPositionPct（按账户总资产的目标仓位百分比）、
+  targetPrice（目标卖点）、stopLoss（止损，须低于 entryPriceLow）；价格均与 quote.close 同单位。
+  watch 与 buy 的差别只在「现在是否满足前提」：watch 必须在 premise 写清尚未满足、需要等待的前提条件
+  与对应价位，不能为了给出行动而预设买入；也不得为了让价格计划看起来完整而编造与输入无关的数字。
 - 入场区间必须满足 0 < stopLoss < entryPriceLow <= entryPrice <= entryPriceHigh < targetPrice，
   targetPositionPct 必须在 0 到 100 之间。
 - 不得为策略添加输入 JSON 中不存在的名称、类型或历史表现。
@@ -115,6 +116,32 @@ export const fetchStrategyCandidateBars = async (
   } catch {
     return [];
   }
+};
+
+/** 观察/买入建议必须同时给出区间、买点、目标仓位、目标价与止损，否则计划没有可监控的条件。 */
+export const hasConditionalPricePlan = (
+  advice: Pick<
+    z.infer<typeof StrategyAdviceAnalysisSchema>,
+    | 'decision'
+    | 'entryPrice'
+    | 'entryPriceLow'
+    | 'entryPriceHigh'
+    | 'targetPositionPct'
+    | 'targetPrice'
+    | 'stopLoss'
+  >,
+): boolean => {
+  if (advice.decision === 'buy' || advice.decision === 'watch') {
+    return (
+      advice.entryPrice !== undefined &&
+      advice.entryPriceLow !== undefined &&
+      advice.entryPriceHigh !== undefined &&
+      advice.targetPositionPct !== undefined &&
+      advice.targetPrice !== undefined &&
+      advice.stopLoss !== undefined
+    );
+  }
+  return true;
 };
 
 const GENERATED_STRATEGY_FACT_REJECTION = /更正|回测/;
@@ -255,6 +282,13 @@ export const analyzeStrategyCandidateTool = defineTool({
         const parsed = StrategyAdviceAnalysisSchema.safeParse(generated);
         if (!parsed.success) {
           failure = parsed.error.issues.map((issue) => issue.message).join('；');
+          continue;
+        }
+        // 观察/买入建议都应带条件性价格计划：缺价位先带原因重试一次；仍缺则接受，
+        // 由计划标成「只能作为观察记录」，避免整个候选因为格式问题没有结论。
+        if (!hasConditionalPricePlan(parsed.data) && attempt === 0) {
+          failure =
+            '候选建议必须给出条件性价格计划（entryPriceLow/entryPriceHigh/entryPrice/targetPositionPct/targetPrice/stopLoss）';
           continue;
         }
         const grounded = StrategyAdviceAnalysisSchema.safeParse({

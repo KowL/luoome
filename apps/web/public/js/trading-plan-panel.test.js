@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  entryConditionText,
   filterPlansByAction,
   filterPlansByStatus,
   latestPlanVersions,
@@ -46,14 +47,14 @@ const makePlan = (overrides = {}) => ({
       description: '价格处于入场区间 100-105',
     },
   ],
-  invalidEntryConditions: ['账户快照待核对'],
+  invalidEntryConditions: ['账户事实待核对'],
   position: {
     currentPct: 0,
     targetPct: 10,
     deltaPct: 10,
     constraintStatus: 'passed',
     constraintReasons: [],
-    prerequisiteActions: ['用户手动执行后更新账户快照'],
+    prerequisiteActions: ['用户确认条件满足后手动执行；执行后更新持仓与资金记录'],
   },
   holding: {
     minTradingDays: 1,
@@ -72,7 +73,7 @@ const makePlan = (overrides = {}) => ({
   },
   validFrom: '2026-08-11T00:00:00.000Z',
   validUntil: '2026-08-20T00:00:00.000Z',
-  invalidationConditions: ['账户快照版本改变'],
+  invalidationConditions: ['账户事实变化（持仓或现金变动）'],
   accountFactsAsOf: '2026-08-11T00:00:00.000Z',
   accountFactsDigest: 'account-facts-panel-test-digest',
   marketFacts: [
@@ -138,6 +139,54 @@ describe('计划文案', () => {
     expect(
       planTargetText(makePlan({ position: { ...makePlan().position, targetPct: null } })),
     ).toBe('目标仓位不可用');
+  });
+
+  it('没有建仓动作的计划写不适用，观察计划写等待条件', () => {
+    const hold = makePlan({
+      action: 'hold',
+      entryPriceLow: undefined,
+      entryPriceHigh: undefined,
+      entryConditions: [],
+    });
+    expect(planEntryText(hold)).toBe('不适用（无建仓动作）');
+    expect(planDetailSections(hold)[1].lines).toContain('不适用（无建仓动作）');
+
+    const observe = makePlan({
+      action: 'observe',
+      entryPriceLow: undefined,
+      entryPriceHigh: undefined,
+      entryConditions: [],
+      position: { ...makePlan().position, currentPct: 0, targetPct: 0, deltaPct: 0 },
+    });
+    expect(planEntryText(observe)).toBe('等待条件（未给出价位）');
+    expect(planTargetText(observe)).toBe('等待条件（未设置仓位）');
+    expect(entryConditionText(observe)).toBe('等待条件（未给出具体条件）');
+    expect(entryConditionText(hold)).toBe('不适用（无建仓动作）');
+  });
+
+  it('观察计划带条件性价位时照常展示区间与等待条件', () => {
+    const observe = makePlan({
+      action: 'observe',
+      entryConditions: [
+        {
+          id: 'entry-1',
+          kind: 'price-range',
+          phase: 'entry',
+          metric: 'price',
+          comparator: 'between',
+          value: 100,
+          valueTo: 105,
+          description: '价格处于入场区间 100-105',
+        },
+      ],
+      position: { ...makePlan().position, currentPct: 0, targetPct: 6, deltaPct: 6 },
+    });
+    expect(planEntryText(observe)).toBe('100.00 - 105.00');
+    expect(planTargetText(observe)).toBe('6.00%');
+    expect(planDetailSections(observe)[1].lines).toContain('等待条件（满足前不建仓）');
+    expect(planDetailSections(observe)[1].lines).toContain(
+      '入场：价格处于入场区间 100-105（价格 100.00 – 105.00元）',
+    );
   });
 
   it('卡片元信息包含版本、动作、入场、目标与有效期', () => {

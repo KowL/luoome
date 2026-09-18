@@ -25,6 +25,7 @@ describe('trading plan daily cycle', () => {
       totalAssets: 10000,
       status: 'complete',
       reasons: [],
+      notes: [],
       positions: [
         {
           stockId: '000001.SZ',
@@ -91,6 +92,145 @@ describe('trading plan daily cycle', () => {
     expect(plan.entryPriceLow).toBe(100);
     expect(plan.entryPriceHigh).toBe(105);
     expect(plan.entryConditions[0]).toMatchObject({ value: 100, valueTo: 105 });
+  });
+
+  it('观察候选也带条件性价位、目标仓位与等待条件（watch ≠ 空白记录）', () => {
+    const accountFacts = AccountFactsSchema.parse({
+      accountId: ACCOUNT_ID,
+      asOf: NOW,
+      digest: 'daily-cycle-observe-digest',
+      cashBalance: 10000,
+      stockMarketValue: 0,
+      totalAssets: 10000,
+      status: 'complete',
+      reasons: [],
+      notes: [],
+      positions: [],
+    });
+    const watchAdvice = AdviceSchema.parse({
+      id: 'advice-watch-1',
+      subjectKind: 'stock',
+      subjectId: STOCK_ID,
+      stockName: '贵州茅台',
+      decision: 'watch',
+      confidence: 42,
+      horizon: 'short',
+      entryPrice: 102,
+      entryPriceLow: 100,
+      entryPriceHigh: 105,
+      targetPositionPct: 6,
+      targetPrice: 120,
+      stopLoss: 95,
+      reasoning: {
+        premise: '策略已入选，但需等待回踩确认',
+        evidence: ['量价配合尚未确认'],
+        counterEvidence: ['市场宽度仍有限'],
+      },
+      risks: ['波动扩大'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_strategy_candidate',
+      basedOn: {
+        quotes: {
+          [STOCK_ID]: {
+            stockId: STOCK_ID,
+            observedAt: new Date('2026-07-17T06:59:00.000Z'),
+            fetchedAt: new Date('2026-07-17T06:59:30.000Z'),
+            timestampSource: 'upstream',
+            open: 101,
+            high: 103,
+            low: 99,
+            close: 102,
+            volume: 1000,
+            source: 'fixture',
+          },
+        },
+        dataAsOf: new Date('2026-07-17T06:59:30.000Z'),
+      },
+      validFrom: NOW,
+      validUntil: new Date('2026-07-20T07:00:00.000Z'),
+      createdAt: NOW,
+    }) as Advice;
+
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts,
+      advice: watchAdvice,
+      previous: [],
+      now: NOW,
+    });
+
+    expect(plan.action).toBe('observe');
+    expect(plan.entryPriceLow).toBe(100);
+    expect(plan.entryPriceHigh).toBe(105);
+    expect(plan.entryConditions[0]).toMatchObject({ value: 100, valueTo: 105, phase: 'entry' });
+    expect(plan.position).toMatchObject({ currentPct: 0, targetPct: 6, deltaPct: 6 });
+    expect(plan.exit).toMatchObject({ stopLoss: 95, takeProfit: 120 });
+    expect(plan.position.prerequisiteActions).toEqual(['等待条件满足后重新评估，再决定是否建仓']);
+  });
+
+  it('规则兜底建议只留草案并说明 AI 不可用，不会成为生效计划', () => {
+    const accountFacts = AccountFactsSchema.parse({
+      accountId: ACCOUNT_ID,
+      asOf: NOW,
+      digest: 'daily-cycle-fallback-digest',
+      cashBalance: 10000,
+      stockMarketValue: 0,
+      totalAssets: 10000,
+      status: 'complete',
+      reasons: [],
+      notes: [],
+      positions: [],
+    });
+    const fallbackAdvice = AdviceSchema.parse({
+      id: 'advice-fallback-1',
+      subjectKind: 'stock',
+      subjectId: STOCK_ID,
+      stockName: '贵州茅台',
+      decision: 'watch',
+      confidence: 20,
+      horizon: 'short',
+      reasoning: {
+        premise: 'LLM 推理不可用，基于规则的保守判断',
+        evidence: ['LLM 推理失败，使用规则 fallback（v0.2 LLMManager）'],
+        counterEvidence: ['规则 fallback 不考虑基本面 / 新闻 / 战法信号，结果仅供参考'],
+      },
+      risks: ['规则 fallback 信心度低，不应据此下单'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_strategy_candidate',
+      basedOn: {
+        quotes: {
+          [STOCK_ID]: {
+            stockId: STOCK_ID,
+            observedAt: new Date('2026-07-17T06:59:00.000Z'),
+            fetchedAt: new Date('2026-07-17T06:59:30.000Z'),
+            timestampSource: 'upstream',
+            open: 101,
+            high: 103,
+            low: 99,
+            close: 102,
+            volume: 1000,
+            source: 'fixture',
+          },
+        },
+        dataAsOf: new Date('2026-07-17T06:59:30.000Z'),
+      },
+      validFrom: NOW,
+      validUntil: new Date('2026-07-20T07:00:00.000Z'),
+      createdAt: NOW,
+    }) as Advice;
+
+    const plan = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts,
+      advice: fallbackAdvice,
+      previous: [],
+      now: NOW,
+    });
+
+    expect(plan.status).toBe('draft');
+    expect(plan.explanation.unknowns).toContain(
+      'AI 推理不可用（规则兜底建议），未给出可核验的价格计划',
+    );
   });
 
   it('以当前持仓作为复核来源（现金来自账户字段）', async () => {

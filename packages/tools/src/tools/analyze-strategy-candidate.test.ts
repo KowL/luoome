@@ -5,9 +5,38 @@ import {
   fetchStrategyCandidateBars,
   groundStrategyAdviceReasoning,
   groundStrategyAdviceRisks,
+  hasConditionalPricePlan,
   normalizeStrategyCandidateDecision,
   quoteFromLatestStrategyBar,
 } from './analyze-strategy-candidate.js';
+
+describe('候选建议的条件性价格计划', () => {
+  const prices = {
+    entryPrice: 102,
+    entryPriceLow: 100,
+    entryPriceHigh: 105,
+    targetPositionPct: 6,
+    targetPrice: 120,
+    stopLoss: 95,
+  };
+
+  it('watch / buy 缺任一价位都不算条件性价格计划', () => {
+    expect(hasConditionalPricePlan({ decision: 'watch', ...prices })).toBe(true);
+    expect(hasConditionalPricePlan({ decision: 'buy', ...prices })).toBe(true);
+    expect(hasConditionalPricePlan({ decision: 'watch' })).toBe(false);
+    expect(hasConditionalPricePlan({ decision: 'watch', ...prices, stopLoss: undefined })).toBe(
+      false,
+    );
+    expect(
+      hasConditionalPricePlan({ decision: 'buy', ...prices, targetPositionPct: undefined }),
+    ).toBe(false);
+  });
+
+  it('不含建仓动作的建议不受影响', () => {
+    expect(hasConditionalPricePlan({ decision: 'hold' })).toBe(true);
+    expect(hasConditionalPricePlan({ decision: 'avoid' })).toBe(true);
+  });
+});
 
 describe('analyze_strategy_candidate quote fallback', () => {
   it('uses the newest persisted daily bar with an explicit fallback source', () => {

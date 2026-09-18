@@ -4,6 +4,7 @@ import {
   addTradingDays,
   dateInShanghai,
   isAdviceQuoteCurrent,
+  isRuleFallbackAdvice,
   money,
   type TradingPlan,
   TradingPlanSchema,
@@ -138,9 +139,15 @@ export const buildTradingPlanFromAdvice = (input: {
   if (stockId === null) throw new Error('advice is not stock or position scoped');
   const currentPct = currentPositionPct(stockId, accountFacts);
   const action = actionForAdvice(advice, holding);
+  // 观察计划（候选机会）未持仓时带 AI 给出的目标仓位，表示「条件满足后建仓多少」；
+  // 已持仓的观察仍维持当前仓位，避免把等待条件的候选算成加仓。
+  const candidateTargetPct =
+    action === 'observe' && (currentPct === null || currentPct === 0)
+      ? (advice.targetPositionPct ?? null)
+      : null;
   const targetPct =
     action === 'hold' || action === 'observe'
-      ? currentPct
+      ? (candidateTargetPct ?? currentPct)
       : action === 'exit' || action === 'reduce' || action === 'avoid'
         ? 0
         : (advice.targetPositionPct ?? null);
@@ -189,40 +196,43 @@ export const buildTradingPlanFromAdvice = (input: {
       summary: `账户事实 ${accountFacts.asOf.toISOString()}（现金 ${accountFacts.cashBalance}）`,
     },
   ];
-  const entryConditions =
-    action === 'enter' || action === 'add'
-      ? advice.entryPriceLow !== undefined && advice.entryPriceHigh !== undefined
-        ? [
+  // 观察计划同样携带条件性价位：watch ≠ 空白记录，只是「现在还没满足前提」。
+  const carriesEntryPlan = action === 'enter' || action === 'add' || action === 'observe';
+  const entryConditions = !carriesEntryPlan
+    ? []
+    : advice.entryPriceLow !== undefined && advice.entryPriceHigh !== undefined
+      ? [
+          {
+            id: `entry:${stockId}:${advice.id}`,
+            kind: 'price-range' as const,
+            phase: 'entry' as const,
+            metric: 'price' as const,
+            comparator: 'between' as const,
+            value: advice.entryPriceLow,
+            valueTo: advice.entryPriceHigh,
+            description: `价格处于入场区间 ${advice.entryPriceLow}-${advice.entryPriceHigh}`,
+          },
+        ]
+      : advice.entryPrice === undefined
+        ? []
+        : [
             {
               id: `entry:${stockId}:${advice.id}`,
-              kind: 'price-range' as const,
+              kind: 'price-threshold' as const,
               phase: 'entry' as const,
               metric: 'price' as const,
-              comparator: 'between' as const,
-              value: advice.entryPriceLow,
-              valueTo: advice.entryPriceHigh,
-              description: `价格处于入场区间 ${advice.entryPriceLow}-${advice.entryPriceHigh}`,
+              comparator: 'lte' as const,
+              value: advice.entryPrice,
+              description: `价格不高于建议买点 ${advice.entryPrice}`,
             },
-          ]
-        : advice.entryPrice === undefined
-          ? []
-          : [
-              {
-                id: `entry:${stockId}:${advice.id}`,
-                kind: 'price-threshold' as const,
-                phase: 'entry' as const,
-                metric: 'price' as const,
-                comparator: 'lte' as const,
-                value: advice.entryPrice,
-                description: `价格不高于旧版建议买点 ${advice.entryPrice}`,
-              },
-            ]
-      : [];
+          ];
   const window = holdingWindow(advice.horizon);
   const previousVersion = input.previous
     .filter((plan) => plan.id === `account:${input.accountId}:stock:${stockId}`)
     .sort((a, b) => b.version - a.version)[0];
   const version = (previousVersion?.version ?? 0) + 1;
+  // 规则兜底建议（AI 不可用）没有研究结论，不能变成生效计划，只能留作草案并说明原因。
+  const ruleFallback = isRuleFallbackAdvice(advice);
   const canActivate =
     accountFacts.status === 'complete' &&
     accountFacts.totalAssets !== null &&
@@ -231,15 +241,21 @@ export const buildTradingPlanFromAdvice = (input: {
       (advice.entryPriceLow !== undefined &&
         advice.entryPriceHigh !== undefined &&
         entryConditions.length > 0)) &&
-    facts.every((fact) => fact.status === 'available');
+    facts.every((fact) => fact.status === 'available') &&
+    !ruleFallback;
   const unknowns = [
+    ...(ruleFallback ? ['AI 推理不可用（规则兜底建议），未给出可核验的价格计划'] : []),
     ...(targetPct === null ? ['AI Advice 未提供可核验的目标仓位百分比'] : []),
     ...(advice.entryPriceLow === undefined || advice.entryPriceHigh === undefined
       ? action === 'enter' || action === 'add'
         ? ['缺少价格区间，不能标为当前可执行建仓']
-        : []
+        : action === 'observe'
+          ? ['AI 未给出条件性价格计划，只能作为观察记录']
+          : []
       : []),
     ...(accountFacts.status !== 'complete' ? ['账户事实不可用（现金待核对或持仓缺合格行情）'] : []),
+    ...accountFacts.reasons,
+    ...accountFacts.notes,
     ...(facts.some((fact) => fact.status !== 'available') ? ['行情时间未达到盘中实时资格'] : []),
   ];
   const position = {
@@ -250,8 +266,10 @@ export const buildTradingPlanFromAdvice = (input: {
     constraintReasons: canActivate ? [] : unknowns,
     prerequisiteActions:
       action === 'enter' || action === 'add'
-        ? ['用户确认条件满足后手动执行；执行后更新账户快照']
-        : [],
+        ? ['用户确认条件满足后手动执行；执行后更新持仓与资金记录']
+        : action === 'observe'
+          ? ['等待条件满足后重新评估，再决定是否建仓']
+          : [],
   };
   const exit = {
     ...(advice.stopLoss === undefined ? {} : { stopLoss: money(advice.stopLoss) }),
@@ -317,7 +335,7 @@ export const buildTradingPlanFromAdvice = (input: {
     ...(advice.stockName === undefined ? {} : { stockName: advice.stockName }),
     status: canActivate ? 'active' : 'draft',
     action,
-    ...(action !== 'enter' && action !== 'add'
+    ...(!carriesEntryPlan
       ? {}
       : advice.entryPriceLow !== undefined && advice.entryPriceHigh !== undefined
         ? {
@@ -341,7 +359,11 @@ export const buildTradingPlanFromAdvice = (input: {
     validFrom: advice.validFrom,
     validUntil:
       advice.validUntil.getTime() > now.getTime() ? advice.validUntil : addTradingDays(now, 1),
-    invalidationConditions: ['关键行情事实过期', '账户快照版本改变', '新计划版本替代本版本'],
+    invalidationConditions: [
+      '关键行情事实过期',
+      '账户事实变化（持仓或现金变动）',
+      '新计划版本替代本版本',
+    ],
     ...(previousVersion === undefined
       ? {}
       : { supersedesVersionId: `${previousVersion.id}:v${previousVersion.version}` }),
@@ -431,6 +453,7 @@ const run = async (
   }
   const accountFacts = accountFactsResult.data.facts;
 
+  let candidateReviews = 0;
   const dayStart = new Date(`${date}T00:00:00+08:00`);
   const dayEnd = new Date(dayStart.getTime() + 86_400_000 - 1);
   const candidatesResult = await ctx.tools.get_advice.execute({
@@ -456,6 +479,7 @@ const run = async (
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, input.maxCandidates)) {
       advices.push({ advice });
+      candidateReviews += 1;
     }
   } else {
     errors.push({
@@ -515,7 +539,7 @@ const run = async (
       : { accountFactsAsOf: accountFacts.asOf, accountFactsDigest: accountFacts.digest }),
     plans,
     holdingReviews: positionResults.length,
-    candidateReviews: Math.max(0, advices.length - positionResults.length),
+    candidateReviews,
     errors,
     ...(budgetResult.ok ? { budget: budgetResult.data } : {}),
   });

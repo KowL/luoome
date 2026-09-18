@@ -828,7 +828,9 @@ type ToolError =
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
 - `trading-plan-daily-cycle`：账户级盘后计划批次 —— **以当前持仓（账本 Holding）为唯一复核来源**，
   逐个跑 `analyze_position`（同时把当日行情落库）后再派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
-  候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情或账本未对齐）时不激活精确仓位计划
+  候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情或账本未对齐）时不激活精确仓位计划。
+  候选（`analyze_strategy_candidate`）的 `watch` 也必须给出条件性价格计划（区间/买点/目标仓位/目标价/止损），
+  缺价位时计划标为草案并写明原因；规则兜底建议（AI 不可用）同样只留草案。
 - `intraday-trading-plan-watch`：先按有效计划标的与全部当前持仓的并集分批刷新行情（每批最多 100 个），
   `batch_quote` 落库后派生账户事实，再按新鲜行情求值计划条件，
   风险与退出条件命中时做 AI 复核并保留原始触发事实与计划版本；发布前重新校验账户事实指纹、

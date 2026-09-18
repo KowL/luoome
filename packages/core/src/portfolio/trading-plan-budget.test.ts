@@ -17,6 +17,7 @@ const facts: AccountFacts = {
   totalAssets: money(1000),
   status: 'complete',
   reasons: [],
+  notes: [],
   positions: [
     {
       stockId: '600519.SH',

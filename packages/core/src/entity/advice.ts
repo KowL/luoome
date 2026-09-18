@@ -357,6 +357,17 @@ export const AdviceSchema = z.object({
   outcome: AdviceOutcomeSchema.optional(),
 });
 
+/**
+ * 规则兜底标记：LLMManager 在 AI 两次失败后返回确定性模板，带此标记的建议不是 AI 研究结论，
+ * 不能作为生效计划（与 adapters/llm/manager.ts 的 fallback 输出共用同一段文字）。
+ */
+export const RULE_FALLBACK_PREMISE_MARKER = 'LLM 推理不可用';
+export const RULE_FALLBACK_EVIDENCE_MARKER = '规则 fallback';
+
+export const isRuleFallbackAdvice = (advice: Pick<Advice, 'reasoning'>): boolean =>
+  advice.reasoning.premise.includes(RULE_FALLBACK_PREMISE_MARKER) ||
+  advice.reasoning.evidence.some((line) => line.includes(RULE_FALLBACK_EVIDENCE_MARKER));
+
 export const AdviceQuerySchema = z.object({
   subjectKind: AdviceSubjectKindSchema.optional(),
   subjectId: z.string().optional(),
