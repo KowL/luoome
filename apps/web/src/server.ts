@@ -869,7 +869,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       return result;
     }
     if (indexQuotesCache !== null && now - indexQuotesCache.at < INDEX_QUOTES_STALE_MS) {
-      return { ok: true, data: indexQuotesCache.value };
+      return { ok: true, data: { ...indexQuotesCache.value, stale: true } };
     }
     return result;
   };
@@ -2517,7 +2517,36 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult(await runIntradayWatchObserved(input, contextForRequest(), 'once'));
   });
 
-  app.get('/api/dashboard', async () => {
+  app.get('/api/dashboard/stocks/:stockId', async (c) => {
+    const stockId = c.req.param('stockId');
+    const accountId = contextForRequest().user.defaultAccountId;
+    const [plans, triggers] = await Promise.all([
+      invokeTool('list_trading_plans', { stockId, accountId, activeOnly: false, limit: 200 }),
+      invokeTool('list_watch_triggers', {
+        stockId,
+        since: startOfTodayShanghai(ctxRef.current.clock()),
+        limit: 200,
+      }),
+    ]);
+    return jsonResult({ ok: true, data: { plans, triggers, accountId, canWrite: exposeWrite } });
+  });
+
+  app.get('/api/dashboard', async (c) => {
+    const query = z
+      .object({
+        scope: z.enum(['all', 'holdings', 'watching', 'triggered']).default('all'),
+        watchlistId: z.string().min(1).optional(),
+        page: z.coerce.number().int().min(1).default(1),
+        pageSize: z.coerce.number().int().min(1).max(40).default(40),
+      })
+      .safeParse(c.req.query());
+    if (!query.success)
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: '无效的看板范围或分页参数', issues: [] },
+      });
+    const accountId = contextForRequest().user.defaultAccountId;
+    const { scope, watchlistId, pageSize } = query.data;
     const todayStart = startOfTodayShanghai(ctxRef.current.clock());
     const [holdings, watchlists, alertPlans, watch, triggers, advice, recentTriggers, indexQuotes] =
       await Promise.all([
@@ -2539,7 +2568,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
     // 单项失败降级为警告，不拖垮整个 dashboard（指数条 / 看板仍可空态呈现）。
     const warnings: string[] = [];
-    let indices: { indices: unknown[]; unsupported?: boolean } = { indices: [] };
+    if (!recentTriggers.ok) warnings.push(`今日预警读取失败（${recentTriggers.error.kind}）`);
+    let indices: { indices: unknown[]; unsupported?: boolean; stale?: boolean } = { indices: [] };
     if (indexQuotes.ok) {
       indices = indexQuotes.data as typeof indices;
     } else {
@@ -2559,7 +2589,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const watchlistDetail = (id: string): Promise<ToolResult<unknown>> => {
       const cached = watchlistDetailCache.get(id);
       if (cached !== undefined) return cached;
-      const pending = invokeTool('get_watchlist', { watchlistId: id });
+      const pending = invokeTool('get_watchlist', { watchlistId: id, accountId });
       watchlistDetailCache.set(id, pending);
       return pending;
     };
@@ -2579,7 +2609,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       feedback?: 'handled' | 'useful' | 'useless' | 'ignored';
     }>;
 
-    // —— 实时看板：持仓 ∪ 被启用 AlertPlan 引用的 Watchlist 成员 ——
+    // 展示聚合：先合并和筛选身份，再按页请求行情。
     interface BoardItem {
       stockId: string;
       name: string;
@@ -2598,9 +2628,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         todayPnlPct: number | null;
       } | null;
       watchlists: string[];
-      todayTrigger: { count: number; maxPriority: 'urgent' | 'important' | 'normal' } | null;
+      watchlistIds: string[];
+      sourceKinds: string[];
+      todayTrigger: {
+        count: number;
+        latest: unknown;
+        maxPriority: 'urgent' | 'important' | 'normal';
+      } | null;
     }
-    const BOARD_CAP = 40;
     const holdingRows = (
       holdings.data as {
         holdings: Array<{
@@ -2613,8 +2648,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       }
     ).holdings;
     const board = new Map<string, BoardItem>();
+    let boardComplete = true;
     for (const row of holdingRows) {
-      if (board.size >= BOARD_CAP) break;
       board.set(row.holding.stockId, {
         stockId: row.holding.stockId,
         name: row.stockName,
@@ -2627,62 +2662,107 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           todayPnlPct: row.todayPnlPct,
         },
         watchlists: [],
+        watchlistIds: [],
+        sourceKinds: [],
         todayTrigger: null,
       });
     }
-    const planRows = (
-      alertPlans.data as { plans: Array<{ watchlistId: string; enabled: boolean }> }
-    ).plans;
-    const watchlistById = new Map(watchlistRows.map(({ watchlist }) => [watchlist.id, watchlist]));
-    const watchedWatchlistIds = [
-      ...new Set(
-        planRows
-          .filter((plan) => plan.enabled && plan.watchlistId.length > 0)
-          .map((plan) => plan.watchlistId)
-          .filter((id) => watchlistById.get(id)?.enabled === true),
-      ),
-    ];
+    const watchedWatchlistIds = watchlistRows
+      .filter(({ watchlist }) => watchlist.enabled)
+      .map(({ watchlist }) => watchlist.id);
     const watchedDetails = await Promise.all(watchedWatchlistIds.map((id) => watchlistDetail(id)));
     for (const [index, detail] of watchedDetails.entries()) {
       if (!detail.ok) {
+        boardComplete = false;
         warnings.push(
           `get_watchlist(${watchedWatchlistIds[index]}) 失败（${detail.error.kind}），看板跳过该 Watchlist`,
         );
         continue;
       }
       const { watchlist, members } = detail.data as {
-        watchlist: { name: string };
-        members: Array<{ member: { stockId: string } }>;
+        watchlist: { id: string; name: string };
+        members: Array<{
+          member: { stockId: string };
+          sources: Array<{ kind: string; status: string }>;
+        }>;
       };
-      for (const { member } of members) {
+      for (const { member, sources } of members) {
+        const sourceKinds = sources
+          .filter((source) => source.status !== 'ended')
+          .map((source) => source.kind);
         const existing = board.get(member.stockId);
         if (existing !== undefined) {
           existing.watchlists.push(watchlist.name);
-        } else if (board.size < BOARD_CAP) {
+          existing.watchlistIds.push(watchlist.id);
+          existing.sourceKinds = [...new Set([...existing.sourceKinds, ...sourceKinds])];
+        } else {
           board.set(member.stockId, {
             stockId: member.stockId,
-            name: member.stockId,
+            name: '',
             quote: null,
             changePct: null,
             holding: null,
             watchlists: [watchlist.name],
+            watchlistIds: [watchlist.id],
+            sourceKinds: [...new Set(sourceKinds)],
             todayTrigger: null,
           });
         }
       }
     }
-    await applyBatchQuotes(board, warnings, '看板行情降级为空', { keepExistingChangePct: true });
     const PRIORITY_RANK = { urgent: 0, important: 1, normal: 2 } as const;
     for (const t of todayTriggers) {
       const item = board.get(t.stockId);
-      if (item === undefined) continue;
-      const entry = item.todayTrigger ?? { count: 0, maxPriority: 'normal' as const };
+      if (item === undefined) {
+        if (scope === 'triggered')
+          board.set(t.stockId, {
+            stockId: t.stockId,
+            name: '',
+            quote: null,
+            changePct: null,
+            holding: null,
+            watchlists: [],
+            watchlistIds: [],
+            sourceKinds: [],
+            todayTrigger: { count: 1, maxPriority: t.priority, latest: t },
+          });
+        continue;
+      }
+      const entry = item.todayTrigger ?? { count: 0, latest: t, maxPriority: 'normal' as const };
       entry.count += 1;
       if (PRIORITY_RANK[t.priority] < PRIORITY_RANK[entry.maxPriority]) {
         entry.maxPriority = t.priority;
       }
       item.todayTrigger = entry;
     }
+
+    const filteredBoard = [...board.values()].filter(
+      (item) =>
+        (scope !== 'holdings' || item.holding !== null) &&
+        (scope !== 'watching' || item.watchlists.length > 0) &&
+        (scope !== 'triggered' || item.todayTrigger !== null) &&
+        (watchlistId === undefined || item.watchlistIds.includes(watchlistId)),
+    );
+    filteredBoard.sort(
+      (a, b) =>
+        Number(b.holding !== null) - Number(a.holding !== null) ||
+        a.stockId.localeCompare(b.stockId),
+    );
+    const page = Math.min(query.data.page, Math.max(1, Math.ceil(filteredBoard.length / pageSize)));
+    const pageItems = filteredBoard.slice((page - 1) * pageSize, page * pageSize);
+    await applyBatchQuotes(
+      new Map(pageItems.map((item) => [item.stockId, item])),
+      warnings,
+      '看板行情降级为空',
+      { updateName: true },
+    );
+    if (scope === 'triggered' && !recentTriggers.ok) boardComplete = false;
+    if (
+      scope === 'triggered' &&
+      recentTriggers.ok &&
+      (recentTriggers.data as { total: number }).total > todayTriggers.length
+    )
+      boardComplete = false;
 
     const priorityCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
       acc[t.priority] = (acc[t.priority] ?? 0) + 1;
@@ -2723,12 +2803,28 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         staleWatchlistCount,
         // 看盘主页：指数条 + 实时看板 + 今日预警列表
         indices,
-        board: [...board.values()],
+        board: pageItems,
+        boardQuery: { scope, watchlistId: watchlistId ?? null, page, pageSize },
+        canWrite: exposeWrite,
+        boardCoverage: {
+          total: filteredBoard.length,
+          displayed: pageItems.length,
+          truncated: filteredBoard.length > pageItems.length,
+          complete: boardComplete,
+        },
+        todayTriggerCoverage: {
+          available: recentTriggers.ok,
+          total: recentTriggers.ok ? (recentTriggers.data as { total: number }).total : null,
+          sampled: todayTriggers.length,
+          // Tool 当前最多扫描 10k 条，达到边界时总数只能作为下界。
+          totalIsLowerBound:
+            recentTriggers.ok && (recentTriggers.data as { total: number }).total >= 10_000,
+        },
         todayTriggers,
         meta: { warnings },
         // v0.7 策略预警 dashboard 指标（§11）
         metrics: {
-          todayTotal: todayTriggers.length,
+          todayTotal: recentTriggers.ok ? (recentTriggers.data as { total: number }).total : null,
           priorityCounts,
           deliveryStatusCounts,
           feedbackCounts,

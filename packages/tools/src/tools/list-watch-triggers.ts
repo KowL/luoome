@@ -15,7 +15,7 @@ export const ListWatchTriggersInput = z.object({
 });
 
 export const ListWatchTriggersOutput = z.object({
-  triggers: z.array(WatchTriggerSchema),
+  triggers: z.array(WatchTriggerSchema.extend({ stockName: z.string().optional() })),
   /** 过滤后、limit 前的总数。 */
   total: z.number().int().nonnegative(),
 });
@@ -54,8 +54,19 @@ export const listWatchTriggersTool = defineTool({
       .filter((trigger) => input.ruleId === undefined || trigger.ruleId === input.ruleId)
       .filter((trigger) => input.notified === undefined || trigger.notified === input.notified)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));
+    const page = filtered.slice(0, input.limit);
+    const names = new Map(
+      await Promise.all(
+        [...new Set(page.map((trigger) => trigger.stockId))].map(async (stockId) => {
+          const stock = await ctx.repos.stock.findById(stockId);
+          return [stockId, stock?.name] as const;
+        }),
+      ),
+    );
     return {
-      triggers: z.array(WatchTriggerSchema).parse(filtered.slice(0, input.limit)),
+      triggers: ListWatchTriggersOutput.shape.triggers.parse(
+        page.map((trigger) => ({ ...trigger, stockName: names.get(trigger.stockId) })),
+      ),
       total: filtered.length,
     };
   },

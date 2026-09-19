@@ -6,7 +6,7 @@
 import { initAISettings, renderAISettings } from './ai-settings.js';
 import { callApi, getAccountId, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
-import { renderDashboardMarketBlocks } from './dashboard-market.js';
+import { invalidateDashboardMarket, renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
 import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
@@ -21,6 +21,7 @@ import {
   analyzeAllHoldings,
   bindSettingsActions,
   cancelAnalyzeAllHoldings,
+  invalidateDashboard,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,
@@ -103,6 +104,8 @@ const ROUTES = [
 
 const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
+  invalidateDashboard();
+  invalidateDashboardMarket();
   // 离开行情页时停止 60s 自动刷新并销毁图表（设计 §11.4）。
   if (safe !== 'market') teardownMarket();
   // 离开指数页时停止 10s 分时刷新定时器。
@@ -123,10 +126,11 @@ const showRoute = async (name) => {
   });
   try {
     if (safe === 'dashboard') {
-      await renderDashboard(setStatus);
-      // 市场行情区块（概览 / 迷你热力 / 要闻）只按路由进入加载一次，不进 5s 轮询
-      await renderDashboardMarketBlocks();
-      await renderDataHealth(setStatus);
+      await Promise.all([
+        renderDashboard(setStatus),
+        renderDashboardMarketBlocks(),
+        renderDataHealth(setStatus),
+      ]);
     } else if (safe === 'market') await renderMarket(setStatus);
     else if (safe === 'indices') await renderIndicesPage(setStatus);
     else if (safe === 'holdings') await renderHoldings(setStatus);
@@ -324,6 +328,19 @@ const bindGlobalActions = () => {
   if (analyzeCancelBtn !== null)
     analyzeCancelBtn.addEventListener('click', () => cancelAnalyzeAllHoldings());
 
+  $('#btn-dashboard-refresh')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await Promise.all([
+        renderDashboard(setStatus),
+        renderDashboardMarketBlocks(),
+        renderDataHealth(setStatus),
+      ]);
+    } finally {
+      button.disabled = false;
+    }
+  });
   $('#btn-dashboard-watch-run')?.addEventListener('click', () => void runWatchOnce(setStatus));
 
   const adviceFilter = $('#advice-filter');
@@ -342,13 +359,24 @@ const bindGlobalActions = () => {
   bindAccountSelect();
 };
 
-/* ============ 自动刷新（仪表盘 5s；持仓行情 10s） ============ */
+/* ============ 看盘分区刷新 ============ */
 
 const startDashboardAutoRefresh = () => {
+  const visible = () => document.visibilityState === 'visible' && currentHash() === 'dashboard';
   setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
-    if (currentHash() === 'dashboard') void renderDashboard(setStatus);
-  }, 5000);
+    if (visible()) void renderDashboard(setStatus);
+  }, 15000);
+  setInterval(() => {
+    if (!visible()) return;
+    void renderDashboardMarketBlocks();
+    if (!$('#dashboard-data-health').contains(document.activeElement))
+      void renderDataHealth(setStatus);
+  }, 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (!visible()) return;
+    void renderDashboard(setStatus);
+    void renderDashboardMarketBlocks();
+  });
 };
 
 /** 持仓页盘中行情轮询；页面隐藏或弹窗打开时暂停，避免后台空跑和打断编辑。 */

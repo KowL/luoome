@@ -229,3 +229,49 @@ describe('Watchlist tools', () => {
     expect(result.error.kind).toBe('invalid_input');
   });
 });
+
+describe('Watchlist 账户范围', () => {
+  it('隐藏其它账户的 portfolio 来源，同时保留多来源中的手动关注', async () => {
+    const ctx = await buildTestContext({ clock: () => T0 });
+    await createWatchlistTool.execute(
+      { id: 'scoped-watch', name: '来源隔离', kind: 'personal', membershipPolicy: 'mixed' },
+      ctx,
+    );
+    const synced = await syncWatchlistSourceTool.execute(
+      {
+        watchlistId: 'scoped-watch',
+        sourceKind: 'portfolio',
+        sourceKey: 'portfolio:other',
+        sourceId: 'other',
+        status: 'complete',
+        candidates: [
+          { stockId: '600519.SH', reason: '其它账户持仓', evidence: [] },
+          { stockId: '002594.SZ', reason: '其它账户持仓', evidence: [] },
+        ],
+      },
+      ctx,
+    );
+    expect(synced.ok).toBe(true);
+    await addWatchlistMemberTool.execute(
+      { watchlistId: 'scoped-watch', stockId: '002594.SZ', reason: '独立手动关注' },
+      ctx,
+    );
+    const scoped = await getWatchlistTool.execute(
+      { watchlistId: 'scoped-watch', accountId: 'current' },
+      ctx,
+    );
+    expect(scoped.ok).toBe(true);
+    if (!scoped.ok) return;
+    expect(scoped.data.members.map(({ member }) => member.stockId)).toEqual(['002594.SZ']);
+    expect(scoped.data.members[0]?.sources.map((source) => source.kind)).toEqual(['manual']);
+    const owner = await getWatchlistTool.execute(
+      { watchlistId: 'scoped-watch', accountId: 'other' },
+      ctx,
+    );
+    expect(owner.ok).toBe(true);
+    if (!owner.ok) return;
+    expect(owner.data.members).toHaveLength(2);
+    const unscoped = await getWatchlistTool.execute({ watchlistId: 'scoped-watch' }, ctx);
+    expect(unscoped.ok && unscoped.data.members.length).toBe(2);
+  });
+});

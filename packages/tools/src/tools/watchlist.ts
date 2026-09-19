@@ -104,6 +104,7 @@ export const listWatchlistsTool = defineTool({
 
 export const GetWatchlistInput = z.object({
   watchlistId: z.string().min(1),
+  accountId: z.string().min(1).optional(),
   includeArchivedMembers: z.boolean().default(false),
 });
 export const GetWatchlistOutput = z.object({
@@ -124,14 +125,26 @@ export const getWatchlistTool = defineTool({
     const members = await ctx.repos.watchlistMember.listMembers(watchlist.id, {
       includeArchived: input.includeArchivedMembers,
     });
+    const rows = await Promise.all(
+      members.map(async (member) => {
+        const sources = await ctx.repos.watchlistMember.listSources(member.id);
+        const visibleSources =
+          input.accountId === undefined
+            ? sources
+            : sources.filter(
+                (source) => source.kind !== 'portfolio' || source.sourceId === input.accountId,
+              );
+        return { member, sources: visibleSources };
+      }),
+    );
     return {
       watchlist,
-      members: await Promise.all(
-        members.map(async (member) => ({
-          member,
-          sources: await ctx.repos.watchlistMember.listSources(member.id),
-        })),
-      ),
+      members:
+        input.accountId === undefined
+          ? rows
+          : rows.filter(({ sources }) =>
+              sources.some((source) => input.includeArchivedMembers || source.status !== 'ended'),
+            ),
       alertPlans: await ctx.repos.alertPlan.list({ watchlistId: watchlist.id }),
     };
   },

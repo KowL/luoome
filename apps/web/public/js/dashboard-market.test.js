@@ -5,6 +5,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   firstProbeDay,
   fmtRelativeTime,
+  overviewMeta,
   overviewStats,
   prevDay,
   shouldLoadNewsOnScroll,
@@ -103,5 +104,19 @@ describe('shouldLoadNewsOnScroll', () => {
     expect(shouldLoadNewsOnScroll({ scrollHeight: 700, scrollTop: 100, clientHeight: 330 })).toBe(
       false,
     );
+  });
+});
+
+describe('overviewMeta', () => {
+  it('保留回退交易日与部分可用状态', () => {
+    const text = overviewMeta({
+      date: '2026-09-17',
+      dataAsOf: '2026-09-17T07:00:00Z',
+      breadth: { status: 'complete' },
+      limitUp: { status: 'partial' },
+    });
+    expect(text).toContain('交易日 2026-09-17');
+    expect(text).toContain('数据截至');
+    expect(text).toContain('涨停 部分可用');
   });
 });

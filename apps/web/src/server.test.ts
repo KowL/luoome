@@ -4857,7 +4857,7 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
 
   const BOARD_RULES = [{ id: 'board-rule', kind: 'price-level', side: 'above', level: 15 }];
 
-  it('plan.enabled / watchlist.enabled 过滤、成员去重与 changePct 补全', async () => {
+  it('普通关注不依赖启用预警；停用列表过滤、成员去重与行情补全', async () => {
     // 两个启用 Watchlist 引用同一成员（去重合并）；一个停用方案引用启用池
     // （plan.enabled 过滤）；一个启用方案引用停用池（watchlist.enabled 过滤）。
     for (const [id, name, enabled] of [
@@ -4925,8 +4925,8 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
     expect(mergedItem?.holding).toBeNull();
 
     expect(byStock('002415.SZ').map((item) => item.watchlists)).toEqual([['看板 A']]);
-    // 停用方案引用的成员不进看板（plan.enabled 过滤）
-    expect(byStock('688981.SH')).toHaveLength(0);
+    // 普通关注独立于预警，停用方案不移除关注股票。
+    expect(byStock('688981.SH')).toHaveLength(1);
     // 停用 Watchlist 的成员不进看板（watchlist.enabled 过滤）
     expect(byStock('600900.SH')).toHaveLength(0);
   });
@@ -4961,5 +4961,237 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
     expect(warnings.some((w) => w.includes('get_watchlist(board-wl-a)'))).toBe(true);
     const board = body.data?.board ?? [];
     expect(board.some((item) => item.stockId === '000063.SZ')).toBe(false);
+  });
+});
+
+describe('dashboard 数据覆盖与失败状态', () => {
+  interface CoverageBody {
+    ok: boolean;
+    data: {
+      todayTriggers: unknown[];
+      metrics: { todayTotal: number | null };
+      todayTriggerCoverage: {
+        available: boolean;
+        total: number | null;
+        sampled: number;
+        totalIsLowerBound: boolean;
+      };
+      board: unknown[];
+      boardCoverage: { total: number; displayed: number; truncated: boolean; complete: boolean };
+      holdings: { holdings: unknown[] };
+      meta: { warnings: string[] };
+    };
+  }
+
+  it('今日总数不被 200 条展示上限截断', async () => {
+    const ctx = await buildTestContext();
+    const now = ctx.clock();
+    for (let i = 0; i < 201; i += 1) {
+      const result = await saveWatchTriggerTool.execute(
+        {
+          id: `coverage-trigger-${i}`,
+          poolId: 'coverage-plan',
+          stockId: '002594.SZ',
+          ruleId: 'coverage-rule',
+          ruleKind: 'price-change',
+          triggerType: 'triggered',
+          direction: 'watch',
+          priority: 'normal',
+          deliveryStatus: 'not-requested',
+          notified: false,
+          evalSnapshot: { ruleId: 'coverage-rule' },
+          reason: '覆盖测试',
+          evidence: ['测试事实'],
+          quote: { close: 100, ts: now },
+          createdAt: now,
+        },
+        ctx,
+      );
+      expect(result.ok).toBe(true);
+    }
+    const localApp = createWebApp(ctx);
+    const body = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard'))
+    ).json()) as CoverageBody;
+    expect(body.data.todayTriggers).toHaveLength(200);
+    expect(body.data.metrics.todayTotal).toBe(201);
+    expect(body.data.todayTriggerCoverage).toEqual({
+      available: true,
+      total: 201,
+      sampled: 200,
+      totalIsLowerBound: false,
+    });
+  });
+
+  it('今日查询失败明确返回不可用，不返回零次触发', async () => {
+    const ctx = await buildTestContext();
+    const original = ctx.repos.watchTrigger.listRecent.bind(ctx.repos.watchTrigger);
+    ctx.repos.watchTrigger.listRecent = async (query) => {
+      if (query?.since !== undefined) throw new Error('today unavailable');
+      return original(query);
+    };
+    const localApp = createWebApp(ctx);
+    const body = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard'))
+    ).json()) as CoverageBody;
+    expect(body.ok).toBe(true);
+    expect(body.data.todayTriggerCoverage.available).toBe(false);
+    expect(body.data.metrics.todayTotal).toBeNull();
+    expect(
+      body.data.meta.warnings.some((warning: string) => warning.includes('今日预警读取失败')),
+    ).toBe(true);
+  });
+
+  it('看板显示 40 只时仍报告完整去重范围', async () => {
+    const ctx = await buildTestContext();
+    const localApp = createWebApp(ctx, { exposeWrite: true });
+    const invoke = async (name: string, input: unknown) => {
+      const result = await (
+        await localApp.fetch(
+          new Request(`http://test/api/tools/${name}/call`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ input }),
+          }),
+        )
+      ).json();
+      expect((result as { ok: boolean }).ok).toBe(true);
+    };
+    await invoke('create_watchlist', {
+      id: 'coverage-watchlist',
+      name: '覆盖测试',
+      kind: 'personal',
+      membershipPolicy: 'manual',
+      enabled: true,
+    });
+    const stock = await ctx.repos.stock.findById('002594.SZ');
+    if (stock === null) throw new Error('fixture stock missing');
+    const members = [];
+    for (let i = 0; i < 45; i += 1) {
+      const code = String(100000 + i);
+      const id = `${code}.SZ`;
+      await ctx.repos.stock.save({
+        ...stock,
+        id,
+        code: code as typeof stock.code,
+        name: `覆盖测试 ${i}`,
+      });
+      members.push({ stockId: id });
+    }
+    await invoke('add_watchlist_members', { watchlistId: 'coverage-watchlist', members });
+    await invoke('create_alert_plan', {
+      id: 'coverage-plan',
+      name: '覆盖测试',
+      watchlistId: 'coverage-watchlist',
+      rules: [{ id: 'rule', kind: 'price-level', side: 'above', level: 15 }],
+      enabled: true,
+    });
+    const body = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard'))
+    ).json()) as CoverageBody;
+    expect(body.data.board).toHaveLength(40);
+    expect(body.data.boardCoverage.displayed).toBe(40);
+    expect(body.data.boardCoverage.total).toBe(45 + body.data.holdings.holdings.length);
+    expect(body.data.boardCoverage.truncated).toBe(true);
+    expect(body.data.boardCoverage.complete).toBe(true);
+    const last = (await (
+      await localApp.fetch(
+        new Request(
+          'http://test/api/dashboard?scope=watching&watchlistId=coverage-watchlist&page=3&pageSize=20',
+        ),
+      )
+    ).json()) as CoverageBody;
+    expect(last.data.board).toHaveLength(5);
+    expect(last.data.boardCoverage.total).toBe(45);
+    const ids = (last.data.board as Array<{ stockId: string }>).map((item) => item.stockId);
+    expect(ids).toEqual(['100040.SZ', '100041.SZ', '100042.SZ', '100043.SZ', '100044.SZ']);
+  });
+});
+
+describe('dashboard 范围与关联事实', () => {
+  it('拒绝无效范围和越界分页参数', async () => {
+    for (const query of ['scope=invalid', 'page=0', 'pageSize=41', 'pageSize=NaN']) {
+      expect((await app.fetch(new Request(`http://test/api/dashboard?${query}`))).status).toBe(400);
+    }
+  });
+
+  it('今日触发范围包含已不在持仓或关注里的股票', async () => {
+    const ctx = await buildTestContext();
+    const now = ctx.clock();
+    const saved = await saveWatchTriggerTool.execute(
+      {
+        id: 'orphan-event',
+        poolId: 'historical-plan',
+        stockId: '000063.SZ',
+        ruleId: 'rule',
+        ruleKind: 'price-change',
+        triggerType: 'triggered',
+        direction: 'watch',
+        priority: 'important',
+        deliveryStatus: 'not-requested',
+        notified: false,
+        evalSnapshot: { ruleId: 'rule' },
+        reason: '测试事件证据',
+        evidence: ['测试事实'],
+        quote: { close: 100, ts: now },
+        createdAt: now,
+      },
+      ctx,
+    );
+    expect(saved.ok).toBe(true);
+    const localApp = createWebApp(ctx, { exposeWrite: false });
+    const body = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard?scope=triggered&pageSize=10'))
+    ).json()) as {
+      data: {
+        canWrite: boolean;
+        board: Array<{
+          stockId: string;
+          todayTrigger: { latest: { id: string; evidence: string[] } };
+        }>;
+      };
+    };
+    expect(body.data.canWrite).toBe(false);
+    expect(body.data.board).toHaveLength(1);
+    expect(body.data.board[0]).toMatchObject({
+      stockId: '000063.SZ',
+      todayTrigger: { latest: { id: 'orphan-event', evidence: ['测试事实'] } },
+    });
+    const denied = await localApp.fetch(
+      new Request('http://test/api/watch/triggers/orphan-event/feedback', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ feedback: 'handled' }),
+      }),
+    );
+    expect(denied.status).toBe(403);
+    expect((await ctx.repos.watchTrigger.findById('orphan-event'))?.feedback).toBeUndefined();
+  });
+
+  it('关联计划按当前请求账户与股票查询；计划失败不丢事件', async () => {
+    const ctx = await buildTestContext();
+    const seen: unknown[] = [];
+    ctx.repos.tradingPlan.list = async (query) => {
+      seen.push(query);
+      return [];
+    };
+    const localApp = createWebApp(ctx);
+    const response = await localApp.fetch(
+      new Request('http://test/api/dashboard/stocks/002594.SZ', {
+        headers: { 'x-luoome-account-id': 'selected-account' },
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(seen).toEqual([
+      { accountId: 'selected-account', stockId: '002594.SZ', activeOnly: false, limit: 200 },
+    ]);
+    ctx.repos.tradingPlan.list = async () => {
+      throw new Error('unavailable');
+    };
+    const body = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard/stocks/002594.SZ'))
+    ).json()) as { data: { plans: { ok: boolean }; triggers: { ok: boolean } } };
+    expect(body.data.plans.ok).toBe(false);
+    expect(body.data.triggers.ok).toBe(true);
   });
 });

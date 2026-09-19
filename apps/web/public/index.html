@@ -77,46 +77,35 @@
       <!-- route: dashboard（看盘主页） -->
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div class="route-header">
-          <h1>看盘</h1>
+          <div><h1>看盘</h1><p class="muted dashboard-subtitle">市场概况 · 我的关注 · 今日事件</p></div>
+          <button id="btn-dashboard-refresh" class="btn btn-outline" type="button">刷新看盘</button>
         </div>
+        <div id="dashboard-status" class="dashboard-status" role="status">正在加载看盘数据…</div>
+        <div id="dashboard-warnings" class="dashboard-notice" role="status" hidden></div>
         <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；点击卡片 → #indices 指数页） -->
         <div id="dashboard-indices" class="index-card-grid dashboard-index-grid" aria-label="核心指数"></div>
-        <!-- 市场概览（A 股情绪快照：宽度 / 涨跌停；dashboard-market.js 每次进入路由时加载一次） -->
+        <div class="dashboard-section-heading"><h2>市场概况</h2><span id="dashboard-overview-meta" class="card-meta">等待市场快照</span></div>
         <div id="dashboard-overview" class="stat-grid">
           <div class="stat"><div class="label">上涨家数</div><div class="value text-pos" id="dash-advancing">--</div></div>
           <div class="stat"><div class="label">下跌家数</div><div class="value text-neg" id="dash-declining">--</div></div>
           <div class="stat"><div class="label">涨停封板</div><div class="value" id="dash-sealed">--</div><div class="delta" id="dash-ladder">--</div></div>
           <div class="stat"><div class="label">炸板率</div><div class="value" id="dash-broken-rate">--</div><div class="delta" id="dash-broken-count">--</div></div>
         </div>
-        <div class="dashboard-cols">
-          <div class="card">
-            <div class="card-header">
-              <h2>行业板块热力</h2>
-              <a href="#sectors" class="card-link">查看全部 →</a>
-            </div>
-            <div id="dash-sector-heatmap"><p class="placeholder">加载中…</p></div>
-          </div>
-          <div class="card">
-            <div class="card-header news-card-header">
-              <div>
-                <h2>财经要闻</h2>
-                <div class="news-tabs" role="tablist" aria-label="财经要闻来源">
-                  <button class="news-tab active" type="button" role="tab" aria-selected="true" data-news-source="eastmoney">东方财富</button>
-                  <button class="news-tab" type="button" role="tab" aria-selected="false" data-news-source="10jqka">同花顺</button>
-                </div>
-              </div>
-            </div>
-            <div id="dash-news-list" class="news-scroll"><p class="placeholder">加载中…</p></div>
-          </div>
-        </div>
         <div class="card" id="dashboard-board-card">
-          <div class="card-header"><h2>实时看板</h2><div class="card-meta" id="dashboard-board-meta"></div></div>
+          <div class="card-header"><div><h2>我的看板</h2><p class="card-meta">持仓与启用关注列表 · 关注无需先设置预警</p></div><div class="card-meta" id="dashboard-board-meta"></div></div>
+          <div class="dashboard-board-filters">
+            <label>查看范围 <select id="dashboard-board-scope" aria-label="看板范围"><option value="all">全部</option><option value="holdings">我的持仓</option><option value="watching">我的关注</option><option value="triggered">今日触发</option></select></label>
+            <label>关注列表 <select id="dashboard-board-watchlist" aria-label="筛选关注列表"><option value="">全部关注列表</option></select></label>
+            <a href="#watchlists" class="card-link">管理关注 →</a>
+            <span class="card-meta">持仓优先 · 价格排序仅限本页</span>
+          </div>
+          <p id="dashboard-board-coverage" class="card-meta"></p>
           <div id="dashboard-board"><p class="placeholder">加载中…</p></div>
         </div>
         <div class="dashboard-cols">
           <div class="card">
             <div class="card-header">
-              <h2>今日预警</h2>
+              <div><h2>今日预警</h2><div id="dash-trigger-meta" class="card-meta"></div></div>
               <a href="#alerts" class="card-link">管理 AlertPlan →</a>
             </div>
             <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
@@ -124,6 +113,27 @@
           <div class="card">
             <div class="card-header"><h2>建议 Top 3</h2><div class="card-meta" id="dash-advice-meta"></div></div>
             <div id="dash-advice-list" class="advice-list"><p class="placeholder">加载中…</p></div>
+          </div>
+        </div>
+        <div class="dashboard-cols">
+          <div class="card">
+            <div class="card-header">
+              <div><h2>行业板块热力</h2><div id="dash-sector-meta" class="card-meta">等待板块数据</div></div>
+              <a href="#sectors" class="card-link">查看全部 →</a>
+            </div>
+            <div id="dash-sector-heatmap"><p class="placeholder">加载中…</p></div>
+          </div>
+          <div class="card">
+            <div class="card-header news-card-header">
+              <div>
+                <h2>财经要闻</h2><div id="dash-news-meta" class="card-meta">等待要闻数据</div>
+                <div class="news-tabs" role="tablist" aria-label="财经要闻来源">
+                  <button class="news-tab active" type="button" role="tab" aria-selected="true" data-news-source="eastmoney">东方财富</button>
+                  <button class="news-tab" type="button" role="tab" aria-selected="false" data-news-source="10jqka">同花顺</button>
+                </div>
+              </div>
+            </div>
+            <div id="dash-news-list" class="news-scroll"><p class="placeholder">加载中…</p></div>
           </div>
         </div>
         <!-- v0.7 策略预警指标（docs/.../§11 / §12） -->

@@ -71,6 +71,9 @@ describe('list_watch_triggers', () => {
     if (!result.ok) return;
     expect(result.data.total).toBe(1);
     expect(result.data.triggers.map((trigger) => trigger.id)).toEqual(['trigger-2']);
+    expect(result.data.triggers[0]?.stockName).toBe(
+      (await ctx.repos.stock.findById('002594.SZ'))?.name,
+    );
   });
 
   it('limit 在过滤与倒序之后生效', async () => {

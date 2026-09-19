@@ -104,3 +104,6 @@ Research Vault 的 `pull_research_vault_git` 是 workflow-only，故意不在 re
 Real order placement and cancellation are outside the luoome MCP surface. Do not search for a workaround, call a broker directly, reinterpret a write tool as an order, or claim an Advice was executed.
 
 For permission and response requirements, read [safety and errors](./safety.md).
+
+
+`get_watchlist` accepts optional `accountId` for a scoped view: portfolio sources from other accounts are omitted, while independent manual/strategy sources remain. Omitting it keeps the shared workspace view. `list_watch_triggers` adds `stockName` when the local stock directory can resolve it; missing names must not be inferred from codes. Both remain read-only tools.

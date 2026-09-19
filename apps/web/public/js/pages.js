@@ -14,9 +14,17 @@ import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
 import { DATASET_LABELS } from './market-sync.js';
-import { alertDialog, confirmDialog, promptDialog } from './modal.js';
+import { alertDialog, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
-import { openTradingPlanDetailByVersionId } from './trading-plan-panel.js';
+import { triggerDeliveryLabel, triggerMetaText } from './target-pages.js';
+import {
+  latestPlanVersions,
+  openTradingPlanDetail,
+  openTradingPlanDetailByVersionId,
+  planActionLabel,
+  planStatusLabel,
+  planVersionsOf,
+} from './trading-plan-panel.js';
 import {
   $,
   adviceCard,
@@ -34,7 +42,57 @@ import {
   toolErrorText,
 } from './ui.js';
 
-/* 跨自动刷新保留的列表排序状态（dashboard 5s、holdings 10s 会重绘，不持久则排序瞬间失效） */
+/* 跨自动刷新保留的列表排序状态（dashboard 15s、holdings 10s 会重绘，不持久则排序瞬间失效） */
+let boardPageState = { page: 1, pageSize: 10 };
+let dashboardEpoch = 0;
+let dashboardPending = null;
+let dashboardAccount = null;
+let dashboardHasData = false;
+let pendingBoardFocus = null;
+let boardScope = 'all';
+let boardWatchlistId = '';
+let dashboardCanWrite = false;
+let dashboardAlertLabels = {};
+let dashboardSetStatus = () => {};
+
+const dashboardBoardQuery = ({ scope, watchlistId, page, pageSize }) => {
+  const query = new URLSearchParams({ scope, page: String(page), pageSize: String(pageSize) });
+  if (watchlistId) query.set('watchlistId', watchlistId);
+  return query.toString();
+};
+
+const changeBoardView = (setStatus) => {
+  invalidateDashboard();
+  const active = document.activeElement;
+  pendingBoardFocus =
+    $('#dashboard-board').contains(active) && active.tagName === 'BUTTON'
+      ? active.textContent
+      : null;
+  mount($('#dashboard-board'), el('p', 'placeholder', '正在加载所选范围…'));
+  $('#dashboard-board-meta').textContent = '';
+  $('#dashboard-board-coverage').textContent = '';
+  void renderDashboard(setStatus);
+};
+
+const invalidateDashboard = () => {
+  dashboardEpoch += 1;
+  dashboardPending = null;
+};
+
+const preserveFocus = (container, update) => {
+  const active = document.activeElement;
+  const focused = container.contains(active);
+  const keyOf = (node) =>
+    `${node.tagName}:${node.getAttribute('href') ?? node.dataset.focusKey ?? node.dataset.adviceId ?? node.getAttribute('aria-label') ?? (node.tagName === 'SELECT' ? node.className : node.textContent)}`;
+  const key = focused ? keyOf(active) : null;
+  update();
+  if (!focused || active.isConnected) return;
+  const match = [...container.querySelectorAll('a,button,select,[tabindex]')].find(
+    (node) => keyOf(node) === key,
+  );
+  match?.focus({ preventScroll: true });
+};
+
 let boardSortState = { key: null, order: 'desc' };
 let holdingsSortState = { key: null, order: 'desc' };
 let researchRemoteSyncController = null;
@@ -92,7 +150,19 @@ const stockMarketLink = (stockId, text) => {
  * 看板排序：持仓行置顶（保持服务端返回顺序），其余按 |changePct| 降序，
  * 无涨跌幅（null）排最后。
  */
-const sortBoardItems = (items) => {
+const sortBoardItems = (items, sort = { key: null, order: 'desc' }) => {
+  if (sort.key !== null) {
+    const sortValue = (item) =>
+      sort.key === 'price' ? (item.quote?.close ?? null) : item.changePct;
+    return [...items].sort((a, b) => {
+      const av = sortValue(a);
+      const bv = sortValue(b);
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return (sort.order === 'asc' ? 1 : -1) * compareValues(av, bv);
+    });
+  }
   const holdings = items.filter((item) => item.holding !== null && item.holding !== undefined);
   const rest = items.filter((item) => item.holding === null || item.holding === undefined);
   rest.sort((a, b) => {
@@ -104,11 +174,12 @@ const sortBoardItems = (items) => {
   return [...holdings, ...rest];
 };
 
-/** 看板涨跌平统计；无行情 / 无基准（changePct 为 null）计入平。 */
+/** 缺少行情或昨收基准时单列未知，不计入平盘。 */
 const boardStats = (items) => ({
   up: items.filter((item) => typeof item.changePct === 'number' && item.changePct > 0).length,
   down: items.filter((item) => typeof item.changePct === 'number' && item.changePct < 0).length,
-  flat: items.filter((item) => item.changePct === null || item.changePct === 0).length,
+  flat: items.filter((item) => item.changePct === 0).length,
+  unknown: items.filter((item) => item.changePct === null).length,
 });
 
 /** 盯盘最近一轮评估摘要；字段名与 WatchRunSchema（evaluatedPools 等）对齐。 */
@@ -145,13 +216,197 @@ const renderIndices = (indicesData) => {
     (code) => INDEX_DEFS.find((d) => d.code === code) ?? { code, name: code },
   );
   renderIndexCards('dashboard-indices', defs, indicesData, {
+    showTime: true,
     onSelect: (code) => navigateTo(`indices?code=${encodeURIComponent(code)}`),
   });
 };
 
-const boardAlertCell = (todayTrigger) => {
+const FEEDBACK_LABELS = { handled: '已处理', useful: '有用', useless: '无用', ignored: '忽略' };
+const SOURCE_LABELS = {
+  manual: '手动关注',
+  strategy: '策略',
+  ai: 'AI',
+  portfolio: '账户持仓',
+  import: '导入',
+};
+
+const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '') => {
+  const accountId = getAccountId();
+  const feedbackStatus = el(
+    'p',
+    'muted',
+    `处理反馈：${FEEDBACK_LABELS[trigger.feedback] ?? '未反馈'}`,
+  );
+  feedbackStatus.setAttribute('role', 'status');
+  const feedbackActions = el('div', 'row-actions');
+  const body = el('div', 'dashboard-event-detail', [
+    stockIdentityLink({ stockId: trigger.stockId, stockName }),
+    el('p', null, trigger.reason),
+    el('p', 'muted', triggerMetaText(trigger, dashboardAlertLabels)),
+    el(
+      'p',
+      'muted',
+      `触发记录于 ${fmtDateTime(trigger.createdAt)} · 行情快照于 ${fmtDateTime(trigger.quote?.ts)}`,
+    ),
+    el(
+      'p',
+      null,
+      `通知：${triggerDeliveryLabel(trigger.deliveryStatus) ?? '未记录'} · ${trigger.triggerType === 'recovered' ? '条件恢复' : '条件触发'}`,
+    ),
+    el('h3', null, '触发证据'),
+    el(
+      'ul',
+      null,
+      (trigger.evidence ?? []).map((text) => el('li', null, text)),
+    ),
+    el('details', null, [
+      el('summary', null, '查看规则求值快照'),
+      el('pre', 'dashboard-evidence', JSON.stringify(trigger.evalSnapshot, null, 2)),
+    ]),
+    feedbackStatus,
+    feedbackActions,
+    el('p', 'muted', '反馈仅标记这条事件，不会执行交易或重新发送通知。'),
+  ]);
+  for (const [feedback, label] of Object.entries(FEEDBACK_LABELS)) {
+    const button = el('button', 'btn btn-outline btn-sm', label);
+    button.type = 'button';
+    button.disabled = !dashboardCanWrite;
+    button.addEventListener('click', async () => {
+      if (getAccountId() !== accountId || $('#route-dashboard').hidden) {
+        feedbackStatus.textContent = '账户或页面已变化，请重新打开事件。';
+        return;
+      }
+      for (const node of feedbackActions.children) node.disabled = true;
+      const result = await callApi(
+        `/api/watch/triggers/${encodeURIComponent(trigger.id)}/feedback`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ feedback }),
+        },
+      );
+      if (!body.isConnected || getAccountId() !== accountId) return;
+      for (const node of feedbackActions.children) node.disabled = !dashboardCanWrite;
+      if (!result.ok) {
+        feedbackStatus.textContent = `反馈保存失败：${toolErrorText(result.error)}`;
+        return;
+      }
+      trigger.feedback = result.data.feedback;
+      feedbackStatus.textContent = `处理反馈：${FEEDBACK_LABELS[result.data.feedback]} · 已保存`;
+      invalidateDashboard();
+      void renderDashboard(dashboardSetStatus);
+    });
+    feedbackActions.append(button);
+  }
+  if (!dashboardCanWrite)
+    feedbackActions.append(el('span', 'muted', '当前为只读模式，反馈写入未开启。'));
+  openModal('事件证据与处理反馈', body);
+};
+
+const openDashboardStockContext = async (item) => {
+  const accountId = getAccountId();
+  const epoch = dashboardEpoch;
+  const body = el('div', 'dashboard-stock-context', [
+    stockIdentityLink({ stockId: item.stockId, stockName: item.name }),
+    el('p', 'placeholder', '正在加载事件与计划…'),
+  ]);
+  openModal('事件、计划与研究', body);
+  const result = await callApi(`/api/dashboard/stocks/${encodeURIComponent(item.stockId)}`, {
+    timeoutMs: 20000,
+  });
+  if (
+    !body.isConnected ||
+    $('#modal-overlay').hidden ||
+    epoch !== dashboardEpoch ||
+    accountId !== getAccountId()
+  )
+    return;
+  if (!result.ok) {
+    mount(body, el('p', 'status error', toolErrorText(result.error)));
+    return;
+  }
+  const { plans, triggers } = result.data;
+  const links = el('div', 'row-actions');
+  for (const [route, label] of [
+    ['market', '查看行情'],
+    ['research', '查看研究'],
+    ['advice', '查看建议'],
+  ]) {
+    const link = el('a', 'btn btn-outline btn-sm', label);
+    link.href =
+      route === 'market'
+        ? buildMarketLink(item.stockId)
+        : `#${route}?stockId=${encodeURIComponent(item.stockId)}`;
+    link.addEventListener('click', () => {
+      $('#modal-overlay').hidden = true;
+    });
+    links.append(link);
+  }
+  const planSection = el('div', 'dashboard-context-section', [
+    el('h3', null, '当前账户的计划记录'),
+  ]);
+  if (!plans.ok)
+    planSection.append(el('p', 'status error', `计划读取失败：${toolErrorText(plans.error)}`));
+  else {
+    const list = plans.data.plans;
+    if (list.length === 0) planSection.append(el('p', 'muted', '当前账户尚无该股票的计划记录。'));
+    for (const plan of latestPlanVersions(list)) {
+      const button = el(
+        'button',
+        'btn btn-outline',
+        `${planActionLabel(plan.action)} · 记录状态：${planStatusLabel(plan.status)} · v${plan.version}`,
+      );
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        if (getAccountId() !== accountId) return;
+        openTradingPlanDetail(plan, planVersionsOf(list, plan.id));
+      });
+      planSection.append(
+        el('div', 'dashboard-context-plan', [
+          button,
+          el('p', 'muted', `有效至 ${fmtDateTime(plan.validUntil)}`),
+        ]),
+      );
+    }
+    if (list.length >= 200)
+      planSection.append(el('p', 'muted', '仅展示最近 200 个版本，历史可能不完整。'));
+    if (list.length > 0)
+      planSection.append(el('p', 'muted', '以上为已保存版本，执行条件仍需结合当前账户事实核对。'));
+  }
+  const triggerSection = el('div', 'dashboard-context-section', [el('h3', null, '今日事件')]);
+  if (!triggers.ok)
+    triggerSection.append(
+      el('p', 'status error', `事件读取失败：${toolErrorText(triggers.error)}`),
+    );
+  else {
+    triggerSection.append(
+      el(
+        'p',
+        'muted',
+        `${triggers.data.total >= 10000 ? '至少 ' : ''}${triggers.data.total} 条记录 · 展示最近 ${triggers.data.triggers.length} 条`,
+      ),
+    );
+    for (const trigger of triggers.data.triggers) {
+      const button = el(
+        'button',
+        'btn btn-outline dashboard-event-button',
+        `${fmtTime(trigger.createdAt)} · ${trigger.reason} · ${FEEDBACK_LABELS[trigger.feedback] ?? '未反馈'}`,
+      );
+      button.type = 'button';
+      button.addEventListener('click', () => dashboardTriggerDetail(trigger, item.name));
+      triggerSection.append(button);
+    }
+  }
+  mount(body, [
+    stockIdentityLink({ stockId: item.stockId, stockName: item.name }),
+    links,
+    triggerSection,
+    planSection,
+  ]);
+};
+
+const boardAlertCell = (todayTrigger, stockName) => {
   if (todayTrigger === null || todayTrigger === undefined) return el('span', 'muted', '—');
-  return el('span', 'board-alert', [
+  const button = el('button', 'btn btn-outline btn-sm board-alert', [
     el('span', 'mono', `${todayTrigger.count} 次`),
     el(
       'span',
@@ -159,6 +414,10 @@ const boardAlertCell = (todayTrigger) => {
       ALERT_PRIORITY_LABEL[todayTrigger.maxPriority] ?? todayTrigger.maxPriority,
     ),
   ]);
+  button.type = 'button';
+  button.dataset.focusKey = `event:${todayTrigger.latest.id}`;
+  button.addEventListener('click', () => dashboardTriggerDetail(todayTrigger.latest, stockName));
+  return button;
 };
 
 const boardRow = (item) => {
@@ -167,6 +426,10 @@ const boardRow = (item) => {
   const row = el('tr', item.holding !== null ? 'board-row board-holding' : 'board-row');
   const nameChildren = [stockIdentityLink({ stockId: item.stockId, stockName: item.name })];
   if (item.holding !== null) nameChildren.push(el('span', 'badge badge-holding', '持仓'));
+  const context = el('button', 'btn btn-outline btn-sm', '事件与计划');
+  context.type = 'button';
+  context.dataset.focusKey = `context:${item.stockId}`;
+  context.addEventListener('click', () => void openDashboardStockContext(item));
   row.append(
     el('td', null, el('div', 'board-name-cell', nameChildren)),
     el('td', `num ${chgCls}`, item.quote === null ? '--' : fmtNum(item.quote.close)),
@@ -176,33 +439,90 @@ const boardRow = (item) => {
       null,
       item.watchlists.length === 0
         ? el('span', 'muted', '—')
-        : item.watchlists.map((name) => el('span', 'badge board-group-tag', name)),
+        : [
+            el(
+              'div',
+              null,
+              item.watchlists.map((name) => el('span', 'badge board-group-tag', name)),
+            ),
+            el(
+              'small',
+              'muted',
+              item.sourceKinds.map((kind) => SOURCE_LABELS[kind] ?? kind).join(' · '),
+            ),
+          ],
     ),
-    el('td', null, boardAlertCell(item.todayTrigger)),
+    el('td', null, [
+      boardAlertCell(item.todayTrigger, item.name),
+      el('small', 'muted', item.todayTrigger?.latest.reason ?? ''),
+    ]),
+    el(
+      'td',
+      'board-data-state',
+      item.quote === null
+        ? '行情不可用'
+        : [
+            el(
+              'span',
+              item.quote.freshness === 'stale' || item.quote.retrieval === 'local-fallback'
+                ? 'text-warn'
+                : 'muted',
+              item.quote.freshness === 'stale' || item.quote.retrieval === 'local-fallback'
+                ? '旧快照'
+                : '已获取',
+            ),
+            el(
+              'small',
+              'muted',
+              item.quote.observedAt ? fmtDateTime(item.quote.observedAt) : '时间未知',
+            ),
+          ],
+    ),
   );
-  row.addEventListener('click', (event) => {
-    if (event.target.closest('a, button, input, select, textarea') !== null) return;
-    navigateTo(buildMarketLink(item.stockId));
+  row.append(el('td', null, context));
+  row.setAttribute('role', 'row');
+  const labels = ['股票', '现价', '涨跌幅', '关注来源', '今日预警', '行情时间', '关联'];
+  [...row.children].forEach((cell, index) => {
+    cell.setAttribute('role', 'cell');
+    cell.prepend(el('span', 'board-cell-label', labels[index]));
   });
   return row;
 };
 
 const defaultOrderForKey = (key) => (key === 'price' || key.endsWith('price') ? 'asc' : 'desc');
 
-const renderBoard = (items) => {
+const renderBoard = (items, coverage, setStatus) => {
   const wrap = $('#dashboard-board');
   if (wrap === null) return;
   const meta = $('#dashboard-board-meta');
   if (items.length === 0) {
     if (meta !== null) meta.textContent = '';
-    mount(wrap, el('p', 'placeholder', '看板为空：添加持仓，或启用引用 Watchlist 的 AlertPlan。'));
+    mount(wrap, el('p', 'placeholder', '当前范围没有股票。可切换范围，或到「关注」添加股票。'));
     return;
   }
   const stats = boardStats(items);
   if (meta !== null) {
-    meta.textContent = `${items.length} 只 · 涨${stats.up} 跌${stats.down} 平${stats.flat}`;
+    meta.textContent = `本页 ${items.length} 只 · 涨${stats.up} 跌${stats.down} 平${stats.flat} 未知${stats.unknown}`;
   }
   const listContainer = el('div', 'paginated-list');
+  const mobileSort = el('select', 'board-mobile-sort');
+  mobileSort.setAttribute('aria-label', '本页股票排序');
+  for (const [value, label] of [
+    ['', '默认排序 · 持仓优先'],
+    ['price:asc', '本页现价 · 从低到高'],
+    ['price:desc', '本页现价 · 从高到低'],
+    ['changePct:desc', '本页涨跌幅 · 从高到低'],
+    ['changePct:asc', '本页涨跌幅 · 从低到高'],
+  ]) {
+    const option = el('option', null, label);
+    option.value = value;
+    mobileSort.append(option);
+  }
+  mobileSort.addEventListener('change', () => {
+    const [key, order] = mobileSort.value.split(':');
+    boardSortState = key ? { key, order } : { key: null, order: 'desc' };
+    renderPage();
+  });
   const buildBoardTable = (pageItems) =>
     el('table', 'table board-table', [
       el(
@@ -210,23 +530,16 @@ const renderBoard = (items) => {
         null,
         el('tr', null, [
           el('th', null, '名称'),
-          sortableHeader('现价', 'price', boardSortState, onSort),
-          sortableHeader('涨跌幅', 'changePct', boardSortState, onSort),
+          sortableHeader('本页现价', 'price', boardSortState, onSort),
+          sortableHeader('本页涨跌幅', 'changePct', boardSortState, onSort),
           el('th', null, 'Watchlist'),
           el('th', null, '预警'),
+          el('th', null, '行情时间'),
+          el('th', null, '关联'),
         ]),
       ),
       el('tbody', null, pageItems.map(boardRow)),
     ]);
-  const sortedItems = () => {
-    if (boardSortState.key === null) return sortBoardItems(items);
-    const direction = boardSortState.order === 'asc' ? 1 : -1;
-    return [...items].sort((a, b) => {
-      const getSortValue = (item) =>
-        boardSortState.key === 'price' ? (item.quote?.close ?? null) : (item.changePct ?? null);
-      return direction * compareValues(getSortValue(a), getSortValue(b));
-    });
-  };
   function onSort(key) {
     boardSortState =
       boardSortState.key === key
@@ -235,22 +548,55 @@ const renderBoard = (items) => {
     renderPage();
   }
   function renderPage() {
-    const sorted = sortedItems();
+    const sorted = sortBoardItems(items, boardSortState);
+    mobileSort.value = boardSortState.key ? `${boardSortState.key}:${boardSortState.order}` : '';
     const { page, pageSize } = pagination.getState();
-    mount(listContainer, buildBoardTable(sorted.slice((page - 1) * pageSize, page * pageSize)));
+    boardPageState = { page, pageSize };
+    preserveFocus(listContainer, () => {
+      const table = buildBoardTable(sorted);
+      table.setAttribute('role', 'table');
+      table.setAttribute('aria-label', '个人股票看板');
+      for (const node of table.querySelectorAll('thead,tbody')) {
+        node.setAttribute('role', 'rowgroup');
+      }
+      table.querySelector('thead tr').setAttribute('role', 'row');
+      for (const node of table.querySelectorAll('th')) {
+        node.setAttribute('role', 'columnheader');
+      }
+      mount(listContainer, table);
+    });
   }
-  const pagination = createPagination({ total: items.length, onChange: renderPage });
+  const pagination = createPagination({
+    total: coverage.total,
+    pageSize: boardPageState.pageSize,
+    pageSizes: [10, 20, 40],
+    onChange: ({ page, pageSize }) => {
+      boardPageState = { page, pageSize };
+      changeBoardView(setStatus);
+    },
+  });
+  pagination.setState(boardPageState);
   renderPage();
-  mount(wrap, [listContainer, pagination.root]);
+  preserveFocus(wrap, () => mount(wrap, [mobileSort, listContainer, pagination.root]));
 };
 
 /** 今日预警紧凑行：时间 / 股票 / 方向 / 原因 / 优先级 badge；urgent 行高亮。 */
-const alertRow = (t) => {
+const alertRow = (t, names = new Map()) => {
   const priority = t.priority ?? 'normal';
   const dir = ALERT_DIRECTION_BADGE[t.direction] ?? { cls: '', label: t.direction ?? '--' };
+  const details = el(
+    'button',
+    'btn btn-outline btn-sm',
+    `证据 · ${FEEDBACK_LABELS[t.feedback] ?? '未反馈'}`,
+  );
+  details.type = 'button';
+  details.dataset.focusKey = `event:${t.id}`;
+  details.addEventListener('click', () =>
+    dashboardTriggerDetail(t, t.stockName ?? names.get(t.stockId) ?? ''),
+  );
   return el('div', `alert-row${priority === 'urgent' ? ' alert-urgent' : ''}`, [
     el('span', 'alert-time mono', fmtTime(t.createdAt)),
-    stockMarketLink(t.stockId, t.stockId),
+    stockIdentityLink({ stockId: t.stockId, stockName: t.stockName ?? names.get(t.stockId) ?? '' }),
     el('span', `badge ${dir.cls}`, dir.label),
     el('span', 'alert-reason', typeof t.reason === 'string' ? t.reason : ''),
     el(
@@ -258,6 +604,7 @@ const alertRow = (t) => {
       `badge ${ALERT_PRIORITY_BADGE[priority] ?? ''}`,
       ALERT_PRIORITY_LABEL[priority] ?? priority,
     ),
+    details,
   ]);
 };
 
@@ -269,12 +616,77 @@ const sortAlerts = (triggers) =>
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
 
-const renderDashboard = async (setStatus) => {
-  const result = await callApi('/api/dashboard');
+const renderDashboard = (setStatus) => {
+  const accountId = getAccountId();
+  dashboardSetStatus = setStatus;
+  if (dashboardAccount !== accountId) {
+    invalidateDashboard();
+    boardPageState = { page: 1, pageSize: 10 };
+    dashboardAccount = accountId;
+    dashboardHasData = false;
+    dashboardCanWrite = false;
+    boardWatchlistId = '';
+    for (const id of [
+      'dashboard-board',
+      'dash-advice-list',
+      'dash-trigger-list',
+      'data-health-body',
+    ]) {
+      mount($(`#${id}`), el('p', 'placeholder', '正在加载当前账户…'));
+    }
+    $('#dashboard-warnings').hidden = true;
+    $('#dashboard-board-meta').textContent = '';
+    $('#dashboard-board-coverage').textContent = '';
+    $('#dash-metrics-card').hidden = true;
+    $('#dash-watch-state').textContent = '盯盘状态加载中';
+    setHealth('#dash-watch-dot', 'never');
+    $('#dash-watch-time').textContent = '';
+    $('#dash-watch-run-summary').textContent = '';
+    for (const id of ['dash-alert-count', 'dash-watchlist-count', 'dash-stale-count'])
+      $(`#${id}`).textContent = '--';
+    $('#dash-advice-meta').textContent = '';
+    $('#dash-trigger-meta').textContent = '';
+    $('#dashboard-status').textContent = '正在加载当前账户…';
+  }
+  const scopeSelect = $('#dashboard-board-scope');
+  const watchlistSelect = $('#dashboard-board-watchlist');
+  scopeSelect.value = boardScope;
+  scopeSelect.onchange = () => {
+    boardScope = scopeSelect.value;
+    boardPageState.page = 1;
+    changeBoardView(setStatus);
+  };
+  watchlistSelect.onchange = () => {
+    boardWatchlistId = watchlistSelect.value;
+    boardPageState.page = 1;
+    changeBoardView(setStatus);
+  };
+  if (dashboardPending !== null) return dashboardPending;
+  const epoch = dashboardEpoch;
+  const pending = loadDashboard(setStatus, epoch, accountId).finally(() => {
+    if (dashboardPending === pending) dashboardPending = null;
+  });
+  dashboardPending = pending;
+  return pending;
+};
+
+const loadDashboard = async (setStatus, epoch, accountId) => {
+  const query = dashboardBoardQuery({
+    scope: boardScope,
+    watchlistId: boardWatchlistId,
+    ...boardPageState,
+  });
+  const result = await callApi(`/api/dashboard?${query}`, { timeoutMs: 20000 });
+  if (epoch !== dashboardEpoch || accountId !== getAccountId() || $('#route-dashboard').hidden)
+    return;
   if (!result.ok) {
-    setStatus(`仪表盘加载失败：${result.error.kind}`, true);
+    const notice = $('#dashboard-warnings');
+    notice.hidden = false;
+    notice.textContent = `看盘刷新失败（${result.error.kind}），${dashboardHasData ? '当前显示最后成功结果' : '尚无当前账户数据'}；请重试。`;
+    setStatus(`看盘刷新失败：${result.error.kind}`, true);
     return;
   }
+  dashboardHasData = true;
   const {
     advice: adviceData,
     watchlists,
@@ -288,17 +700,96 @@ const renderDashboard = async (setStatus) => {
   } = result.data;
 
   // 核心指数 4 卡 + 实时看板
-  renderIndices(indices);
-  renderBoard(Array.isArray(board) ? board : []);
+  preserveFocus($('#dashboard-indices'), () => renderIndices(indices));
+  dashboardCanWrite = result.data.canWrite;
+  dashboardAlertLabels = {
+    alertPlanNames: Object.fromEntries(alertPlans.plans.map((plan) => [plan.id, plan.name])),
+    tradingPlanAccountId: getAccountId(),
+  };
+  const options = [
+    ['', '全部关注列表'],
+    ...watchlists.items
+      .filter(({ watchlist }) => watchlist.enabled)
+      .map(({ watchlist }) => [watchlist.id, watchlist.name]),
+  ];
+  if (boardWatchlistId && !options.some(([id]) => id === boardWatchlistId))
+    options.push([boardWatchlistId, '列表已停用或删除']);
+  const select = $('#dashboard-board-watchlist');
+  const signature = JSON.stringify(options);
+  if (select.dataset.options !== signature) {
+    mount(
+      select,
+      options.map(([id, name]) => {
+        const option = el('option', null, name);
+        option.value = id;
+        return option;
+      }),
+    );
+    select.dataset.options = signature;
+  }
+  select.value = boardWatchlistId;
+  boardPageState = { page: result.data.boardQuery.page, pageSize: result.data.boardQuery.pageSize };
+  const coverage = result.data.boardCoverage;
+  renderBoard(board, coverage, setStatus);
+  if (pendingBoardFocus !== null && document.activeElement === document.body) {
+    [...$('#dashboard-board').querySelectorAll('.pagination button')]
+      .find((button) => button.textContent === pendingBoardFocus)
+      ?.focus({ preventScroll: true });
+  }
+  pendingBoardFocus = null;
+  $('#dashboard-board-coverage').textContent = coverage
+    ? `显示 ${coverage.displayed} / ${coverage.complete ? '' : '至少 '}${coverage.total} 只${coverage.truncated ? ' · 可翻页查看其余股票' : ''}${coverage.complete ? '' : ' · 仅覆盖已读取数据'}`
+    : '';
+  if (boardScope === 'triggered')
+    $('#dashboard-board-coverage').textContent +=
+      ' · 基于最近 200 条今日触发，包含已移出关注的股票';
+  $('#dashboard-status').textContent =
+    `看板获取于 ${fmtDateTime(result.data.asOf)} · 自动刷新 15 秒 · 各行情时间见下方`;
+  const warnings = [...(result.data.meta?.warnings ?? [])];
+  if (indices?.stale) warnings.push('指数获取失败，保留最近成功快照');
+  const staleQuotes = (board ?? []).filter(
+    (item) => item.quote?.freshness === 'stale' || item.quote?.retrieval === 'local-fallback',
+  ).length;
+  const missingQuotes = (board ?? []).filter((item) => item.quote === null).length;
+  if (staleQuotes > 0) warnings.push(`${staleQuotes} 只股票使用旧快照`);
+  if (missingQuotes > 0) warnings.push(`${missingQuotes} 只股票行情不可用`);
+  if ((metrics?.latestRun?.unknownRules ?? 0) > 0)
+    warnings.push(`${metrics.latestRun.unknownRules} 条规则无法求值`);
+  if ((metrics?.latestRun?.notifyFailed ?? 0) > 0)
+    warnings.push(`${metrics.latestRun.notifyFailed} 条通知发送失败`);
+  if ((metrics?.deliveryStatusCounts?.['fallback-log'] ?? 0) > 0)
+    warnings.push('部分提醒仅写入日志，未送达');
+  if (watch.state === 'failed' || watch.state === 'stale')
+    warnings.push(`盯盘状态：${healthLabel(watch.state)}`);
+  const notice = $('#dashboard-warnings');
+  notice.textContent = warnings.join('；');
+  notice.hidden = warnings.length === 0;
+  const triggerCoverage = result.data.todayTriggerCoverage;
+  const triggersAvailable = triggerCoverage?.available !== false;
+  const sampled = triggerCoverage && triggerCoverage.total > triggerCoverage.sampled;
+  $('#dash-trigger-meta').textContent = !triggersAvailable
+    ? '读取失败，无法确认今日是否有触发'
+    : `今日 ${triggerCoverage?.totalIsLowerBound ? '至少 ' : ''}${triggerCoverage?.total ?? todayTriggers.length} 条${sampled ? ` · 列表与分布仅覆盖最近 ${triggerCoverage.sampled} 条` : ''}`;
 
   // 今日建议 Top 3（条数与决策分布并入卡片 meta；持仓汇总卡片已移至持仓页）
   const advices = adviceData.advices;
   const top = [...advices].sort((a, b) => b.confidence - a.confidence).slice(0, 3);
-  mount(
-    $('#dash-advice-list'),
-    top.length === 0
-      ? el('p', 'placeholder', '暂无建议，去「持仓」页点「分析全部」生成。')
-      : top.map(adviceCard),
+  const adviceWrap = $('#dash-advice-list');
+  const expanded = new Set(
+    [...adviceWrap.querySelectorAll('.advice-card.expanded')].map((node) => node.dataset.adviceId),
+  );
+  preserveFocus(adviceWrap, () =>
+    mount(
+      adviceWrap,
+      top.length === 0
+        ? el('p', 'placeholder', '暂无建议，去「持仓」页点「分析全部」生成。')
+        : top.map((advice) => {
+            const card = adviceCard(advice);
+            card.dataset.adviceId = advice.id;
+            card.classList.toggle('expanded', expanded.has(advice.id));
+            return card;
+          }),
+    ),
   );
   const byDecision = advices.reduce((acc, a) => {
     acc[a.decision] = (acc[a.decision] ?? 0) + 1;
@@ -323,18 +814,30 @@ const renderDashboard = async (setStatus) => {
 
   // 今日预警（urgent 置顶，至多 8 条）
   const alerts = sortAlerts(Array.isArray(todayTriggers) ? todayTriggers : []).slice(0, 8);
-  mount(
-    $('#dash-trigger-list'),
-    alerts.length === 0
-      ? el('p', 'placeholder', '今日暂无触发。盯盘即使没有信号，也会记录运行心跳。')
-      : el('div', 'alert-list', alerts.map(alertRow)),
+  preserveFocus($('#dash-trigger-list'), () =>
+    mount(
+      $('#dash-trigger-list'),
+      !triggersAvailable
+        ? el('p', 'placeholder', '今日预警暂不可用，请重试；这不代表没有触发。')
+        : alerts.length === 0
+          ? el('p', 'placeholder', '今日暂无触发。盯盘即使没有信号，也会记录运行心跳。')
+          : el(
+              'div',
+              'alert-list',
+              alerts.map((trigger) =>
+                alertRow(trigger, new Map(board.map((item) => [item.stockId, item.name]))),
+              ),
+            ),
+    ),
   );
 
   // v0.7 策略预警指标（§11 / §12）
   if (metrics && typeof metrics === 'object') {
     const card = $('#dash-metrics-card');
     if (card !== null) card.hidden = false;
-    $('#dash-metric-total').textContent = String(metrics.todayTotal ?? 0);
+    $('#dash-metric-total').textContent = triggersAvailable
+      ? `${triggerCoverage?.totalIsLowerBound ? '≥' : ''}${metrics.todayTotal}`
+      : '--';
     const PRIORITY_LABEL = ALERT_PRIORITY_LABEL;
     const DELIVERY_LABEL = {
       'not-requested': '仅记录',
@@ -375,6 +878,11 @@ const renderDashboard = async (setStatus) => {
     if (metrics.latestRun?.error) {
       metaParts.push(`最近一轮失败：${metrics.latestRun.error}`);
     }
+    if (!triggersAvailable) {
+      metaParts.push('今日预警统计读取失败');
+      for (const id of ['dash-metric-priority', 'dash-metric-delivery', 'dash-metric-noise'])
+        $(`#${id}`).textContent = '--';
+    } else if (sampled) metaParts.push(`分布与噪声率仅基于最近 ${triggerCoverage.sampled} 条触发`);
     $('#dash-metrics-meta').textContent = metaParts.join(' · ');
   }
 
@@ -2055,14 +2563,40 @@ const FRESHNESS_LABEL = {
 };
 
 /** 仪表盘数据健康卡片（ruo §8 数据健康组件）。 */
-const renderDataHealth = async (setStatus) => {
+let dataHealthPending = null;
+const renderDataHealth = (setStatus) => {
+  const key = `${dashboardEpoch}:${getAccountId()}`;
+  if (dataHealthPending?.key === key) return dataHealthPending.promise;
+  const promise = loadDataHealth(setStatus).finally(() => {
+    if (dataHealthPending?.promise === promise) dataHealthPending = null;
+  });
+  dataHealthPending = { key, promise };
+  return promise;
+};
+
+const loadDataHealth = async (setStatus) => {
   const body = document.getElementById('data-health-body');
   if (body === null) return;
-  const r = await callApi('/api/market-data-status');
+  const epoch = dashboardEpoch;
+  const accountId = getAccountId();
+  const onDashboard = !$('#route-dashboard').hidden;
+  const r = await callApi('/api/market-data-status', { timeoutMs: 20000 });
+  if (
+    accountId !== getAccountId() ||
+    epoch !== dashboardEpoch ||
+    (onDashboard && $('#route-dashboard').hidden)
+  )
+    return;
   if (!r.ok) {
-    body.textContent = '加载失败';
+    let error = body.querySelector('.data-health-error');
+    if (error === null) {
+      error = el('p', 'data-health-error text-warn');
+      body.prepend(error);
+    }
+    error.textContent = `数据健康刷新失败（${r.error.kind}），保留已获取状态。`;
     return;
   }
+  const expanded = body.querySelector('details')?.open === true;
   const data =
     /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, datasets?: Array<{dataset: string, source: string, freshness: string, dataAsOf?: string, lastSuccessAt?: string, lastErrorKind?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
       r.data
@@ -2128,6 +2662,7 @@ const renderDataHealth = async (setStatus) => {
             ),
           ]),
         ]);
+  if (datasetDetail !== null) datasetDetail.open = expanded;
   mount(
     body,
     el('div', 'data-health-grid', [
@@ -3048,9 +3583,11 @@ export {
   calibrationPnlText,
   calibrationRateText,
   cancelAnalyzeAllHoldings,
+  dashboardBoardQuery,
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
+  invalidateDashboard,
   outcomeInputOf,
   renderAdviceList,
   renderDashboard,

@@ -7,7 +7,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { $, el, fmtNum, fmtSigned, mount } from './ui.js';
+import { $, el, fmtDateTime, fmtNum, fmtSigned, mount } from './ui.js';
 
 const fmtTime = (d) => {
   const date = new Date(d);
@@ -67,6 +67,17 @@ const renderIndexCards = (containerId, defs, indicesData, options = {}) => {
           hasData ? `${fmtSigned(idx.change)}（${fmtSigned(idx.changePct)}%）` : '--',
         ),
       ]);
+      if (options.showTime) {
+        card.append(
+          el(
+            'small',
+            'muted',
+            hasData
+              ? `${indicesData?.stale ? '旧快照 · ' : ''}${fmtDateTime(idx.ts)}`
+              : '行情不可用',
+          ),
+        );
+      }
       if (options.onSelect !== undefined) {
         card.classList.add('clickable');
         card.setAttribute('role', 'button');

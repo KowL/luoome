@@ -4,6 +4,7 @@ import {
   boardStats,
   calibrationPnlText,
   calibrationRateText,
+  dashboardBoardQuery,
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
@@ -153,6 +154,30 @@ describe('决策闭环 Trade 归因', () => {
 });
 
 describe('看板纯函数', () => {
+  it('价格和涨跌幅双向排序均将未知放最后，保留零值且不改变输入', () => {
+    const input = [
+      { stockId: 'missing', quote: null, changePct: null },
+      { stockId: 'low', quote: { close: 10 }, changePct: -2 },
+      { stockId: 'high', quote: { close: 30 }, changePct: 3 },
+      { stockId: 'middle', quote: { close: 20 }, changePct: 0 },
+    ];
+    for (const key of ['price', 'changePct']) {
+      expect(sortBoardItems(input, { key, order: 'asc' }).map((row) => row.stockId)).toEqual([
+        'low',
+        'middle',
+        'high',
+        'missing',
+      ]);
+      expect(sortBoardItems(input, { key, order: 'desc' }).map((row) => row.stockId)).toEqual([
+        'high',
+        'middle',
+        'low',
+        'missing',
+      ]);
+    }
+    expect(input[0].stockId).toBe('missing');
+  });
+
   const item = (stockId, changePct, holding = null) => ({
     stockId,
     name: stockId,
@@ -177,8 +202,34 @@ describe('看板纯函数', () => {
     expect(input[0].stockId).toBe('A');
   });
 
-  it('涨 / 跌 / 平计数（null 计入平）', () => {
+  it('涨 / 跌 / 平 / 未知计数（缺行情不计入平盘）', () => {
     const stats = boardStats([item('A', 1.5), item('B', -2), item('C', 0), item('D', null)]);
-    expect(stats).toEqual({ up: 1, down: 1, flat: 2 });
+    expect(stats).toEqual({ up: 1, down: 1, flat: 1, unknown: 1 });
+  });
+});
+
+describe('看板筛选与分页请求', () => {
+  it('范围和关注列表在服务端分页前过滤，编码列表身份', () => {
+    const query = new URLSearchParams(
+      dashboardBoardQuery({
+        scope: 'watching',
+        watchlistId: 'growth-watch',
+        page: 3,
+        pageSize: 20,
+      }),
+    );
+    expect(Object.fromEntries(query)).toEqual({
+      scope: 'watching',
+      watchlistId: 'growth-watch',
+      page: '3',
+      pageSize: '20',
+    });
+  });
+  it('全部列表不发送空字符串筛选', () => {
+    expect(
+      new URLSearchParams(
+        dashboardBoardQuery({ scope: 'holdings', watchlistId: '', page: 1, pageSize: 10 }),
+      ).has('watchlistId'),
+    ).toBe(false);
   });
 });

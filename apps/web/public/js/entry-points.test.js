@@ -205,14 +205,14 @@ describe('看盘主页结构', () => {
     expect(html).toContain('id="dash-advice-list"');
   });
 
-  it('区块顺序：指数条 → 市场概览 → 热力/要闻两栏 → 看板 → 两栏 → watch rail → 数据健康（页底）', () => {
+  it('区块顺序：指数 → 市场概况 → 个人看板与预警 → 热力/要闻 → 运行与数据健康', () => {
     const order = [
       'id="dashboard-indices"',
       'id="dashboard-overview"',
-      'id="dash-sector-heatmap"',
-      'id="dash-news-list"',
       'id="dashboard-board"',
       'id="dash-trigger-list"',
+      'id="dash-sector-heatmap"',
+      'id="dash-news-list"',
       'id="dash-watch-rail"',
       'id="dashboard-data-health"',
     ];
@@ -250,12 +250,15 @@ describe('持仓页汇总卡片', () => {
 });
 
 describe('看盘页市场行情区块', () => {
-  it('dashboard-market.js 接入 app.js 的 dashboard 路由，且不进 5s 轮询', () => {
+  it('看盘行情与主看板分区刷新，离开路由时失效旧请求', () => {
     const appJs = read('./app.js');
-    expect(appJs).toContain("import { renderDashboardMarketBlocks } from './dashboard-market.js'");
+    expect(appJs).toContain("from './dashboard-market.js'");
+    expect(appJs).toContain('invalidateDashboardMarket();');
     expect(appJs).toContain('renderDashboardMarketBlocks()');
-    // 5s 轮询只调 renderDashboard，行情区块按路由进入加载一次
-    expect(appJs).toContain("currentHash() === 'dashboard') void renderDashboard(setStatus)");
+    expect(appJs).toContain('if (visible()) void renderDashboard(setStatus)');
+    expect(appJs).toContain('}, 15000)');
+    expect(appJs).toContain('}, 60000)');
+    expect(appJs).toContain("document.visibilityState === 'visible'");
   });
 
   it('迷你热力与 sectors 页共用 sector-heatmap.js', () => {
@@ -273,7 +276,7 @@ describe('看盘页市场行情区块', () => {
     expect(html).toContain('data-news-source="eastmoney"');
     expect(html).toContain('data-news-source="10jqka"');
     expect(html).toContain('data-news-source="10jqka">同花顺</button>');
-    expect(html).not.toContain('id="dash-news-meta"');
+    expect(html).toContain('id="dash-news-meta"');
   });
 
   it('板块页支持日期上下文、列表排序与双侧 15 个极值热力图', () => {
@@ -414,7 +417,7 @@ describe('建议页删除', () => {
     expect(pages).toContain("$('#advice-batch-bar')");
     expect(pages).toContain('confirmDelete.disabled = selectedAdviceIds.size === 0');
     expect(pages).toContain(
-      "import { alertDialog, confirmDialog, promptDialog } from './modal.js'",
+      "import { alertDialog, confirmDialog, openModal, promptDialog } from './modal.js'",
     );
     expect(pages).toContain("callApi('/api/advice/delete'");
   });
