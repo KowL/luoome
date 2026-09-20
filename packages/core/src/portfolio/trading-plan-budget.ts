@@ -14,8 +14,15 @@ export const TradingPlanBudgetLimitsSchema = z.object({
   singleStockPct: z.number().finite().min(0).max(100),
 });
 
+/**
+ * 组合预算默认上限。
+ *
+ * 总仓位上限取 100%：账户已经用满或接近用满时，80% 这类"建议上限"会让任何增量计划永久
+ * 停留在草案（用户 2026-09-20 决定）。保留这条校验是为了挡住"多个计划的建议仓位合计超过
+ * 账户总资产"这种不可执行状态（不新增融资路径），而不是限制用户实际愿意持有的比例。
+ */
 export const DEFAULT_TRADING_PLAN_BUDGET_LIMITS: TradingPlanBudgetLimits = {
-  totalStockPct: 80,
+  totalStockPct: 100,
   singleStockPct: 15,
 };
 

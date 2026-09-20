@@ -47,7 +47,7 @@ const stock = (id: string, industry: string): Stock => ({
 const plan = (input: {
   readonly id: string;
   readonly stockId: string;
-  readonly industry: string;
+  readonly industry?: string;
   readonly currentPct: number;
   readonly targetPct: number;
   readonly action?: TradingPlan['action'];
@@ -57,7 +57,7 @@ const plan = (input: {
     version: 1,
     accountId: 'a',
     stockId: input.stockId,
-    industry: input.industry,
+    ...(input.industry === undefined ? {} : { industry: input.industry }),
     status: 'active',
     action: input.action ?? 'add',
     entryPriceLow: money(10),
@@ -229,6 +229,67 @@ describe('trading plan budget', () => {
     });
     expect(result.totalStatus).toBe('blocked');
     expect(result.allocations[0]?.reasons).toContain('single-stock-limit');
+  });
+
+  it('账户仓位已高于 80% 时，增量计划仍可生效（总仓位上限默认 100%）', () => {
+    const mostlyInvested: AccountFacts = {
+      ...facts,
+      cashBalance: money(160),
+      stockMarketValue: money(840),
+      totalAssets: money(1000),
+      positions: [
+        {
+          stockId: '600519.SH',
+          quantity: 42,
+          availableQuantity: 42,
+          marketValue: money(840),
+        },
+      ],
+    };
+    const result = evaluateTradingPlanBudget({
+      facts: mostlyInvested,
+      plans: [
+        plan({
+          id: 'add',
+          stockId: '002594.SZ',
+          currentPct: 0,
+          targetPct: 5,
+        }),
+      ],
+      stocks: new Map(),
+    });
+    expect(result.currentStockPct).toBe(84);
+    expect(result.totalStatus).toBe('passed');
+    expect(result.proposedStockPct).toBe(89);
+    expect(result.availableStockPct).toBe(11);
+  });
+
+  it('建议合计超过账户总资产时仍然阻断（不得超总资产）', () => {
+    const mostlyInvested: AccountFacts = {
+      ...facts,
+      cashBalance: money(160),
+      stockMarketValue: money(840),
+      totalAssets: money(1000),
+      positions: [
+        {
+          stockId: '600519.SH',
+          quantity: 42,
+          availableQuantity: 42,
+          marketValue: money(840),
+        },
+      ],
+    };
+    const result = evaluateTradingPlanBudget({
+      facts: mostlyInvested,
+      plans: [
+        plan({ id: 'a', stockId: '002594.SZ', currentPct: 0, targetPct: 12 }),
+        plan({ id: 'b', stockId: '601398.SH', currentPct: 0, targetPct: 12 }),
+      ],
+      stocks: new Map(),
+    });
+    expect(result.totalStatus).toBe('blocked');
+    expect(result.reasons).toContain('total-stock-limit: 108 > 100');
+    expect(result.availableStockPct).toBe(16);
   });
 
   it('行业信息缺失不再阻断增量计划（行业上限已移除）', () => {
