@@ -7,19 +7,16 @@ import { InvariantError } from '../error/index.js';
 export interface TradingPlanBudgetLimits {
   readonly totalStockPct: number;
   readonly singleStockPct: number;
-  readonly industryPct: number;
 }
 
 export const TradingPlanBudgetLimitsSchema = z.object({
   totalStockPct: z.number().finite().min(0).max(100),
   singleStockPct: z.number().finite().min(0).max(100),
-  industryPct: z.number().finite().min(0).max(100),
 });
 
 export const DEFAULT_TRADING_PLAN_BUDGET_LIMITS: TradingPlanBudgetLimits = {
   totalStockPct: 80,
   singleStockPct: 15,
-  industryPct: 30,
 };
 
 export interface TradingPlanBudgetAllocation {
@@ -112,17 +109,9 @@ export const evaluateTradingPlanBudget = (input: {
   const totalAssets = input.facts.totalAssets;
   const currentStockPct = round((input.facts.stockMarketValue / totalAssets) * 100);
   const currentByStock = new Map<string, number>();
-  const currentByIndustry = new Map<string, number>();
-  let hasUnknownCurrentIndustry = false;
   for (const position of input.facts.positions) {
     const pct = (position.marketValue / totalAssets) * 100;
     currentByStock.set(position.stockId, round((currentByStock.get(position.stockId) ?? 0) + pct));
-    const industry = position.industry ?? input.stocks.get(position.stockId)?.industry;
-    if (industry !== undefined) {
-      currentByIndustry.set(industry, round((currentByIndustry.get(industry) ?? 0) + pct));
-    } else if (position.marketValue > 0) {
-      hasUnknownCurrentIndustry = true;
-    }
   }
 
   const allocations: Array<{
@@ -135,7 +124,6 @@ export const evaluateTradingPlanBudget = (input: {
     reasons: string[];
   }> = [];
   const plannedByStock = new Map<string, number>();
-  const plannedByIndustry = new Map<string, number>();
   const reasons: string[] = [];
   for (const plan of input.plans) {
     const target = plan.position.targetPct;
@@ -154,13 +142,6 @@ export const evaluateTradingPlanBudget = (input: {
     }
     const existingStock = currentByStock.get(plan.stockId) ?? 0;
     const stockIncrement = Math.max(0, target === null ? 0 : target - existingStock);
-    if (
-      (industry === undefined || hasUnknownCurrentIndustry) &&
-      (plan.action === 'enter' || plan.action === 'add' || stockIncrement > 0)
-    ) {
-      status = 'unavailable';
-      allocationReasons.push('industry-unavailable');
-    }
     const sameStock = plannedByStock.get(plan.stockId) ?? 0;
     if (
       stockIncrement > 0 &&
@@ -169,22 +150,9 @@ export const evaluateTradingPlanBudget = (input: {
       status = 'blocked';
       allocationReasons.push('single-stock-limit');
     }
-    if (industry !== undefined) {
-      const existingIndustry = currentByIndustry.get(industry) ?? 0;
-      const sameIndustry = plannedByIndustry.get(industry) ?? 0;
-      if (
-        stockIncrement > 0 &&
-        existingIndustry + sameIndustry + stockIncrement > limits.industryPct + 1e-9
-      ) {
-        status = 'blocked';
-        allocationReasons.push('industry-limit');
-      }
-    }
     const increment = incremental ?? 0;
     if (status === 'included') {
       plannedByStock.set(plan.stockId, round(sameStock + increment));
-      if (industry !== undefined)
-        plannedByIndustry.set(industry, round((plannedByIndustry.get(industry) ?? 0) + increment));
     } else if (allocationReasons.length > 0) {
       reasons.push(`${tradingPlanKey(plan)}: ${allocationReasons.join(',')}`);
     }
@@ -248,6 +216,4 @@ export const assertTradingPlanBudgetLimits = (limits: TradingPlanBudgetLimits): 
     throw new InvariantError('totalStockPct must be within [0,100]');
   if (limits.singleStockPct < 0 || limits.singleStockPct > 100)
     throw new InvariantError('singleStockPct must be within [0,100]');
-  if (limits.industryPct < 0 || limits.industryPct > 100)
-    throw new InvariantError('industryPct must be within [0,100]');
 };

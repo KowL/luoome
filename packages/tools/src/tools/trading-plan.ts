@@ -127,7 +127,7 @@ export const EvaluateTradingPlanBudgetOutput = TradingPlanBudgetResultSchema;
 
 export const evaluateTradingPlanBudgetTool = defineTool({
   name: 'evaluate_trading_plan_budget',
-  description: '按账户当前快照合并校验全部有效计划的总仓位、单股和行业上限',
+  description: '按账户当前事实合并校验全部有效计划的总仓位与单股上限',
   sideEffect: 'read',
   input: EvaluateTradingPlanBudgetInput,
   output: EvaluateTradingPlanBudgetOutput,

@@ -130,7 +130,7 @@ try {
     plan,
     facts: accountFacts,
     stocks,
-    limits: { totalStockPct: 80, singleStockPct: 15, industryPct: 30 },
+    limits: { totalStockPct: 80, singleStockPct: 15 },
     asOf: now,
   });
   console.log(JSON.stringify({ saved: result.saved, status: result.budget.totalStatus }));

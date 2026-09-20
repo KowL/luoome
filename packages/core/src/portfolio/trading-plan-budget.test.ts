@@ -134,7 +134,7 @@ describe('trading plan budget', () => {
     expect(result.totalStatus).toBe('passed');
   });
 
-  it('combines concurrent increases and blocks single-stock, industry, and total breaches', () => {
+  it('combines concurrent increases and blocks single-stock and total breaches', () => {
     const result = evaluateTradingPlanBudget({
       facts,
       plans: [
@@ -231,7 +231,7 @@ describe('trading plan budget', () => {
     expect(result.allocations[0]?.reasons).toContain('single-stock-limit');
   });
 
-  it('keeps industry budget unavailable when an existing position has no industry evidence', () => {
+  it('行业信息缺失不再阻断增量计划（行业上限已移除）', () => {
     const existing = facts.positions[1];
     if (existing === undefined) throw new Error('fixture position missing');
     const incompleteIndustry: AccountFacts = {
@@ -261,7 +261,8 @@ describe('trading plan budget', () => {
       ],
       stocks: new Map([['600519.SH', stock('600519.SH', '食品饮料')]]),
     });
-    expect(result.totalStatus).toBe('unavailable');
-    expect(result.allocations[0]?.reasons).toContain('industry-unavailable');
+    expect(result.totalStatus).toBe('passed');
+    expect(result.allocations[0]?.reasons).toEqual([]);
+    expect(result.allocations[0]?.incrementalPct).toBe(15);
   });
 });
