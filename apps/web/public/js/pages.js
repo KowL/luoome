@@ -46,14 +46,53 @@ import {
 let boardPageState = { page: 1, pageSize: 10 };
 let dashboardEpoch = 0;
 let dashboardPending = null;
+let dashboardController = null;
 let dashboardAccount = null;
 let dashboardHasData = false;
+let boardViewHasData = false;
 let pendingBoardFocus = null;
 let boardScope = 'all';
 let boardWatchlistId = '';
 let dashboardCanWrite = false;
 let dashboardAlertLabels = {};
 let dashboardSetStatus = () => {};
+
+const readDashboardView = (accountId) => {
+  let saved;
+  try {
+    saved = JSON.parse(localStorage.getItem(`luoome.dashboardView:${accountId}`));
+  } catch {
+    saved = null;
+  }
+  return {
+    scope: ['all', 'holdings', 'watching', 'triggered'].includes(saved?.scope)
+      ? saved.scope
+      : 'all',
+    watchlistId: typeof saved?.watchlistId === 'string' ? saved.watchlistId : '',
+    page: Number.isSafeInteger(saved?.page) && saved.page > 0 ? saved.page : 1,
+    pageSize: [10, 20, 40].includes(saved?.pageSize) ? saved.pageSize : 10,
+    sortKey: ['price', 'changePct'].includes(saved?.sortKey) ? saved.sortKey : null,
+    sortOrder: saved?.sortOrder === 'asc' ? 'asc' : 'desc',
+  };
+};
+
+const saveDashboardView = () => {
+  if (dashboardAccount === null || dashboardAccount !== getAccountId()) return;
+  try {
+    localStorage.setItem(
+      `luoome.dashboardView:${dashboardAccount}`,
+      JSON.stringify({
+        scope: boardScope,
+        watchlistId: boardWatchlistId,
+        ...boardPageState,
+        sortKey: boardSortState.key,
+        sortOrder: boardSortState.order,
+      }),
+    );
+  } catch {
+    // 存储被禁用或配额不足时，当前页面仍可正常筛选。
+  }
+};
 
 const dashboardBoardQuery = ({ scope, watchlistId, page, pageSize }) => {
   const query = new URLSearchParams({ scope, page: String(page), pageSize: String(pageSize) });
@@ -62,7 +101,9 @@ const dashboardBoardQuery = ({ scope, watchlistId, page, pageSize }) => {
 };
 
 const changeBoardView = (setStatus) => {
+  saveDashboardView();
   invalidateDashboard();
+  boardViewHasData = false;
   const active = document.activeElement;
   pendingBoardFocus =
     $('#dashboard-board').contains(active) && active.tagName === 'BUTTON'
@@ -74,8 +115,26 @@ const changeBoardView = (setStatus) => {
   void renderDashboard(setStatus);
 };
 
+const dashboardRetry = (message, setStatus) => {
+  const button = el('button', 'btn btn-outline btn-sm', '重试');
+  button.type = 'button';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = '重试中…';
+    try {
+      await renderDashboard(setStatus);
+    } finally {
+      button.disabled = false;
+      button.textContent = '重试';
+    }
+  });
+  return el('div', 'dashboard-retry', [el('p', 'muted', message), button]);
+};
+
 const invalidateDashboard = () => {
   dashboardEpoch += 1;
+  dashboardController?.abort();
+  dashboardController = null;
   dashboardPending = null;
 };
 
@@ -230,7 +289,7 @@ const SOURCE_LABELS = {
   import: '导入',
 };
 
-const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '') => {
+const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '', onBack) => {
   const accountId = getAccountId();
   const feedbackStatus = el(
     'p',
@@ -299,7 +358,144 @@ const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '') =>
   }
   if (!dashboardCanWrite)
     feedbackActions.append(el('span', 'muted', '当前为只读模式，反馈写入未开启。'));
+  if (onBack) {
+    const back = el('button', 'btn btn-outline btn-sm', '返回事件列表');
+    back.type = 'button';
+    back.addEventListener('click', onBack);
+    body.append(back);
+  }
   openModal('事件证据与处理反馈', body);
+};
+
+const openDashboardEventHistory = (asOf) => {
+  const accountId = getAccountId();
+  const date = new Date(asOf).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+  const body = el('div', 'dashboard-event-history');
+  const filters = el('div', 'dashboard-board-filters');
+  const list = el('div');
+  const footer = el('div');
+  const meta = el('p', 'muted', `截至 ${fmtDateTime(asOf)} · 重新打开可查看新增事件`);
+  const selections = {};
+  let page = 1;
+  let requestId = 0;
+  for (const [key, label, options] of [
+    [
+      'priority',
+      '优先级',
+      [
+        ['', '全部'],
+        ['urgent', '紧急'],
+        ['important', '重要'],
+        ['normal', '普通'],
+      ],
+    ],
+    [
+      'feedback',
+      '反馈',
+      [['', '全部'], ['unreviewed', '未反馈'], ...Object.entries(FEEDBACK_LABELS)],
+    ],
+    [
+      'deliveryStatus',
+      '送达',
+      [
+        ['', '全部'],
+        ['sent', '已送达'],
+        ['failed', '失败'],
+        ['fallback-log', '仅日志'],
+        ['pending', '待发送'],
+      ],
+    ],
+  ]) {
+    const select = el('select');
+    select.setAttribute('aria-label', `事件${label}`);
+    for (const [value, text] of options) {
+      const option = el('option', null, text);
+      option.value = value;
+      select.append(option);
+    }
+    select.addEventListener('change', () => {
+      selections[key] = select.value;
+      page = 1;
+      void load();
+    });
+    filters.append(el('label', null, [label, select]));
+  }
+  async function load() {
+    const id = ++requestId;
+    mount(list, el('p', 'placeholder', '正在读取事件…'));
+    mount(footer, []);
+    const query = new URLSearchParams({
+      since: `${date}T00:00:00+08:00`,
+      until: asOf,
+      limit: '20',
+      offset: String((page - 1) * 20),
+    });
+    for (const [key, value] of Object.entries(selections)) if (value) query.set(key, value);
+    const result = await callApi(`/api/watch/triggers?${query}`, { timeoutMs: 20000 });
+    if (
+      id !== requestId ||
+      !body.isConnected ||
+      $('#modal-overlay').hidden ||
+      accountId !== getAccountId() ||
+      $('#route-dashboard').hidden
+    )
+      return;
+    if (!result.ok) {
+      const retry = el('button', 'btn btn-outline btn-sm', '重试读取事件');
+      retry.type = 'button';
+      retry.addEventListener('click', () => void load());
+      mount(list, [el('p', 'muted', `事件读取失败：${toolErrorText(result.error)}`), retry]);
+      return;
+    }
+    const { triggers, total } = result.data;
+    const lastPage = Math.max(1, Math.ceil(total / 20));
+    if (page > lastPage) {
+      page = lastPage;
+      void load();
+      return;
+    }
+    meta.textContent = `共 ${total} 条 · 截至 ${fmtDateTime(asOf)} · 重新打开可查看新增事件`;
+    mount(
+      list,
+      triggers.length === 0
+        ? el('p', 'placeholder', '此筛选条件下暂无事件。')
+        : triggers.map((trigger) => {
+            const button = el('button', 'btn btn-outline dashboard-event-button', [
+              el(
+                'span',
+                null,
+                `${fmtDateTime(trigger.createdAt)} · ${ALERT_PRIORITY_LABEL[trigger.priority]} · ${FEEDBACK_LABELS[trigger.feedback] ?? '未反馈'}`,
+              ),
+              el('span', null, trigger.reason),
+            ]);
+            button.type = 'button';
+            button.addEventListener('click', () =>
+              dashboardTriggerDetail(trigger, trigger.stockName ?? '', () => {
+                openModal('今日全部事件', body);
+                void load();
+              }),
+            );
+            return el('div', 'dashboard-context-section', [
+              stockIdentityLink({ stockId: trigger.stockId, stockName: trigger.stockName }),
+              button,
+            ]);
+          }),
+    );
+    const pagination = createPagination({
+      total,
+      pageSize: 20,
+      pageSizes: [20],
+      onChange: (state) => {
+        page = state.page;
+        void load();
+      },
+    });
+    pagination.setState({ page, pageSize: 20 });
+    mount(footer, pagination.root);
+  }
+  body.append(filters, meta, list, footer);
+  openModal('今日全部事件', body);
+  void load();
 };
 
 const openDashboardStockContext = async (item) => {
@@ -404,23 +600,43 @@ const openDashboardStockContext = async (item) => {
   ]);
 };
 
-const boardAlertCell = (todayTrigger, stockName) => {
-  if (todayTrigger === null || todayTrigger === undefined) return el('span', 'muted', '—');
+const boardTriggerSummary = (trigger, coverage) => {
+  if (!coverage.available)
+    return { label: '未知', priority: '', explanation: '今日预警读取失败，无法确认是否触发。' };
+  const sampled = coverage.total > coverage.sampled;
+  if (trigger === null || trigger === undefined)
+    return {
+      label: sampled ? '样本未见' : '暂无',
+      priority: '',
+      explanation: sampled ? '最近样本中未见该股事件，可在全部事件中查询。' : '今日尚无触发记录。',
+    };
+  return {
+    label: `${sampled ? '至少 ' : ''}${trigger.count} 次`,
+    priority: `${sampled ? '样本最高：' : '今日最高：'}${ALERT_PRIORITY_LABEL[trigger.maxPriority]}`,
+    explanation: `查看最近一条记录。${sampled ? '次数为最近样本中的下界，优先级仅代表样本。' : '优先级为今日记录的最高级别。'}`,
+  };
+};
+
+const boardAlertCell = (todayTrigger, stockName, coverage) => {
+  const summary = boardTriggerSummary(todayTrigger, coverage);
+  if (!coverage.available || todayTrigger === null || todayTrigger === undefined) {
+    const label = el('span', 'muted', summary.label);
+    label.title = summary.explanation;
+    return label;
+  }
   const button = el('button', 'btn btn-outline btn-sm board-alert', [
-    el('span', 'mono', `${todayTrigger.count} 次`),
-    el(
-      'span',
-      `badge ${ALERT_PRIORITY_BADGE[todayTrigger.maxPriority] ?? ''}`,
-      ALERT_PRIORITY_LABEL[todayTrigger.maxPriority] ?? todayTrigger.maxPriority,
-    ),
+    el('span', 'mono', summary.label),
+    el('span', `badge ${ALERT_PRIORITY_BADGE[todayTrigger.maxPriority] ?? ''}`, summary.priority),
   ]);
   button.type = 'button';
+  button.title = summary.explanation;
+  button.setAttribute('aria-label', `${summary.label}，${summary.priority}，查看最近一条记录`);
   button.dataset.focusKey = `event:${todayTrigger.latest.id}`;
   button.addEventListener('click', () => dashboardTriggerDetail(todayTrigger.latest, stockName));
   return button;
 };
 
-const boardRow = (item) => {
+const boardRow = (item, triggerCoverage) => {
   const chgCls =
     item.changePct === null ? '' : item.changePct > 0 ? 'pos' : item.changePct < 0 ? 'neg' : '';
   const row = el('tr', item.holding !== null ? 'board-row board-holding' : 'board-row');
@@ -453,8 +669,8 @@ const boardRow = (item) => {
           ],
     ),
     el('td', null, [
-      boardAlertCell(item.todayTrigger, item.name),
-      el('small', 'muted', item.todayTrigger?.latest.reason ?? ''),
+      boardAlertCell(item.todayTrigger, item.name, triggerCoverage),
+      el('small', 'muted', item.todayTrigger ? `最近记录：${item.todayTrigger.latest.reason}` : ''),
     ]),
     el(
       'td',
@@ -491,13 +707,18 @@ const boardRow = (item) => {
 
 const defaultOrderForKey = (key) => (key === 'price' || key.endsWith('price') ? 'asc' : 'desc');
 
-const renderBoard = (items, coverage, setStatus) => {
+const renderBoard = (items, coverage, triggerCoverage, setStatus) => {
   const wrap = $('#dashboard-board');
   if (wrap === null) return;
   const meta = $('#dashboard-board-meta');
   if (items.length === 0) {
     if (meta !== null) meta.textContent = '';
-    mount(wrap, el('p', 'placeholder', '当前范围没有股票。可切换范围，或到「关注」添加股票。'));
+    mount(
+      wrap,
+      coverage.available && coverage.complete
+        ? el('p', 'placeholder', '当前范围没有股票。可切换范围，或到「关注」添加股票。')
+        : dashboardRetry('当前范围的数据未完整读取，暂时无法确认股票列表。', setStatus),
+    );
     return;
   }
   const stats = boardStats(items);
@@ -521,6 +742,7 @@ const renderBoard = (items, coverage, setStatus) => {
   mobileSort.addEventListener('change', () => {
     const [key, order] = mobileSort.value.split(':');
     boardSortState = key ? { key, order } : { key: null, order: 'desc' };
+    saveDashboardView();
     renderPage();
   });
   const buildBoardTable = (pageItems) =>
@@ -538,13 +760,18 @@ const renderBoard = (items, coverage, setStatus) => {
           el('th', null, '关联'),
         ]),
       ),
-      el('tbody', null, pageItems.map(boardRow)),
+      el(
+        'tbody',
+        null,
+        pageItems.map((item) => boardRow(item, triggerCoverage)),
+      ),
     ]);
   function onSort(key) {
     boardSortState =
       boardSortState.key === key
         ? { key, order: boardSortState.order === 'asc' ? 'desc' : 'asc' }
         : { key, order: defaultOrderForKey(key) };
+    saveDashboardView();
     renderPage();
   }
   function renderPage() {
@@ -621,11 +848,15 @@ const renderDashboard = (setStatus) => {
   dashboardSetStatus = setStatus;
   if (dashboardAccount !== accountId) {
     invalidateDashboard();
-    boardPageState = { page: 1, pageSize: 10 };
+    const view = readDashboardView(accountId);
+    boardPageState = { page: view.page, pageSize: view.pageSize };
+    boardScope = view.scope;
+    boardWatchlistId = view.watchlistId;
+    boardSortState = { key: view.sortKey, order: view.sortOrder };
     dashboardAccount = accountId;
     dashboardHasData = false;
+    boardViewHasData = false;
     dashboardCanWrite = false;
-    boardWatchlistId = '';
     for (const id of [
       'dashboard-board',
       'dash-advice-list',
@@ -650,6 +881,14 @@ const renderDashboard = (setStatus) => {
   }
   const scopeSelect = $('#dashboard-board-scope');
   const watchlistSelect = $('#dashboard-board-watchlist');
+  $('#dashboard-board-reset').onclick = () => {
+    boardScope = 'all';
+    boardWatchlistId = '';
+    watchlistSelect.value = '';
+    boardPageState = { page: 1, pageSize: 10 };
+    boardSortState = { key: null, order: 'desc' };
+    changeBoardView(setStatus);
+  };
   scopeSelect.value = boardScope;
   scopeSelect.onchange = () => {
     boardScope = scopeSelect.value;
@@ -663,30 +902,45 @@ const renderDashboard = (setStatus) => {
   };
   if (dashboardPending !== null) return dashboardPending;
   const epoch = dashboardEpoch;
-  const pending = loadDashboard(setStatus, epoch, accountId).finally(() => {
-    if (dashboardPending === pending) dashboardPending = null;
+  const controller = new AbortController();
+  dashboardController = controller;
+  const pending = loadDashboard(setStatus, epoch, accountId, controller.signal).finally(() => {
+    if (dashboardPending === pending) {
+      dashboardPending = null;
+      dashboardController = null;
+    }
   });
   dashboardPending = pending;
   return pending;
 };
 
-const loadDashboard = async (setStatus, epoch, accountId) => {
+const loadDashboard = async (setStatus, epoch, accountId, signal) => {
   const query = dashboardBoardQuery({
     scope: boardScope,
     watchlistId: boardWatchlistId,
     ...boardPageState,
   });
-  const result = await callApi(`/api/dashboard?${query}`, { timeoutMs: 20000 });
+  const result = await callApi(`/api/dashboard?${query}`, { timeoutMs: 20000, signal });
   if (epoch !== dashboardEpoch || accountId !== getAccountId() || $('#route-dashboard').hidden)
     return;
   if (!result.ok) {
     const notice = $('#dashboard-warnings');
     notice.hidden = false;
-    notice.textContent = `看盘刷新失败（${result.error.kind}），${dashboardHasData ? '当前显示最后成功结果' : '尚无当前账户数据'}；请重试。`;
+    notice.textContent = `看盘刷新失败（${result.error.kind}），${boardViewHasData ? '看板保留最后成功结果' : '当前范围尚未加载成功'}；请重试。`;
+    if (!boardViewHasData) {
+      mount(
+        $('#dashboard-board'),
+        dashboardRetry('所选范围加载失败，请重试或切换范围。', setStatus),
+      );
+    }
+    $('#dashboard-status').textContent = dashboardHasData
+      ? '刷新失败 · 已展示的其它区块保留上次结果'
+      : '加载失败 · 尚无当前账户数据';
     setStatus(`看盘刷新失败：${result.error.kind}`, true);
     return;
   }
   dashboardHasData = true;
+  $('#dashboard-event-history').onclick = () => openDashboardEventHistory(result.data.asOf);
   const {
     advice: adviceData,
     watchlists,
@@ -703,17 +957,19 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
   preserveFocus($('#dashboard-indices'), () => renderIndices(indices));
   dashboardCanWrite = result.data.canWrite;
   dashboardAlertLabels = {
-    alertPlanNames: Object.fromEntries(alertPlans.plans.map((plan) => [plan.id, plan.name])),
+    alertPlanNames: Object.fromEntries(
+      (alertPlans?.plans ?? []).map((plan) => [plan.id, plan.name]),
+    ),
     tradingPlanAccountId: getAccountId(),
   };
   const options = [
     ['', '全部关注列表'],
-    ...watchlists.items
+    ...(watchlists?.items ?? [])
       .filter(({ watchlist }) => watchlist.enabled)
       .map(({ watchlist }) => [watchlist.id, watchlist.name]),
   ];
   if (boardWatchlistId && !options.some(([id]) => id === boardWatchlistId))
-    options.push([boardWatchlistId, '列表已停用或删除']);
+    options.push([boardWatchlistId, watchlists === null ? '列表暂不可用' : '列表已停用或删除']);
   const select = $('#dashboard-board-watchlist');
   const signature = JSON.stringify(options);
   if (select.dataset.options !== signature) {
@@ -730,21 +986,23 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
   select.value = boardWatchlistId;
   boardPageState = { page: result.data.boardQuery.page, pageSize: result.data.boardQuery.pageSize };
   const coverage = result.data.boardCoverage;
-  renderBoard(board, coverage, setStatus);
+  renderBoard(board, coverage, result.data.todayTriggerCoverage, setStatus);
+  if (coverage.available && coverage.complete) saveDashboardView();
+  boardViewHasData = coverage.available;
   if (pendingBoardFocus !== null && document.activeElement === document.body) {
     [...$('#dashboard-board').querySelectorAll('.pagination button')]
       .find((button) => button.textContent === pendingBoardFocus)
       ?.focus({ preventScroll: true });
   }
   pendingBoardFocus = null;
-  $('#dashboard-board-coverage').textContent = coverage
-    ? `显示 ${coverage.displayed} / ${coverage.complete ? '' : '至少 '}${coverage.total} 只${coverage.truncated ? ' · 可翻页查看其余股票' : ''}${coverage.complete ? '' : ' · 仅覆盖已读取数据'}`
-    : '';
+  $('#dashboard-board-coverage').textContent = !coverage.available
+    ? '当前范围暂不可用'
+    : `显示 ${coverage.displayed} / ${coverage.complete ? '' : '至少 '}${coverage.total} 只${coverage.truncated ? ' · 可翻页查看其余股票' : ''}${coverage.complete ? '' : ' · 仅覆盖已读取数据'}`;
   if (boardScope === 'triggered')
     $('#dashboard-board-coverage').textContent +=
       ' · 基于最近 200 条今日触发，包含已移出关注的股票';
   $('#dashboard-status').textContent =
-    `看板获取于 ${fmtDateTime(result.data.asOf)} · 自动刷新 15 秒 · 各行情时间见下方`;
+    `看板获取于 ${fmtDateTime(result.data.asOf)} · 默认刷新间隔 15 秒 · 各行情时间见下方`;
   const warnings = [...(result.data.meta?.warnings ?? [])];
   if (indices?.stale) warnings.push('指数获取失败，保留最近成功快照');
   const staleQuotes = (board ?? []).filter(
@@ -759,7 +1017,7 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
     warnings.push(`${metrics.latestRun.notifyFailed} 条通知发送失败`);
   if ((metrics?.deliveryStatusCounts?.['fallback-log'] ?? 0) > 0)
     warnings.push('部分提醒仅写入日志，未送达');
-  if (watch.state === 'failed' || watch.state === 'stale')
+  if (watch?.state === 'failed' || watch?.state === 'stale')
     warnings.push(`盯盘状态：${healthLabel(watch.state)}`);
   const notice = $('#dashboard-warnings');
   notice.textContent = warnings.join('；');
@@ -772,7 +1030,7 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
     : `今日 ${triggerCoverage?.totalIsLowerBound ? '至少 ' : ''}${triggerCoverage?.total ?? todayTriggers.length} 条${sampled ? ` · 列表与分布仅覆盖最近 ${triggerCoverage.sampled} 条` : ''}`;
 
   // 今日建议 Top 3（条数与决策分布并入卡片 meta；持仓汇总卡片已移至持仓页）
-  const advices = adviceData.advices;
+  const advices = adviceData?.advices ?? [];
   const top = [...advices].sort((a, b) => b.confidence - a.confidence).slice(0, 3);
   const adviceWrap = $('#dash-advice-list');
   const expanded = new Set(
@@ -781,14 +1039,16 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
   preserveFocus(adviceWrap, () =>
     mount(
       adviceWrap,
-      top.length === 0
-        ? el('p', 'placeholder', '暂无建议，去「持仓」页点「分析全部」生成。')
-        : top.map((advice) => {
-            const card = adviceCard(advice);
-            card.dataset.adviceId = advice.id;
-            card.classList.toggle('expanded', expanded.has(advice.id));
-            return card;
-          }),
+      adviceData === null
+        ? dashboardRetry('建议读取失败，暂时无法确认是否有可用建议。', setStatus)
+        : top.length === 0
+          ? el('p', 'placeholder', '暂无建议，去「持仓」页点「分析全部」生成。')
+          : top.map((advice) => {
+              const card = adviceCard(advice);
+              card.dataset.adviceId = advice.id;
+              card.classList.toggle('expanded', expanded.has(advice.id));
+              return card;
+            }),
     ),
   );
   const byDecision = advices.reduce((acc, a) => {
@@ -799,18 +1059,25 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
     .map(([decision, count]) => `${decision}×${count}`)
     .join(' · ');
   $('#dash-advice-meta').textContent =
-    `共 ${advices.length} 条${decisionSummary.length > 0 ? ` · ${decisionSummary}` : ''}`;
+    adviceData === null
+      ? '暂不可用'
+      : `共 ${advices.length} 条${decisionSummary.length > 0 ? ` · ${decisionSummary}` : ''}`;
 
-  setHealth('#dash-watch-dot', watch.state);
-  $('#dash-watch-state').textContent = healthLabel(watch.state);
+  setHealth('#dash-watch-dot', watch?.state ?? 'never');
+  $('#dash-watch-state').textContent =
+    watch === null ? '盯盘状态读取失败' : healthLabel(watch.state);
   $('#dash-watch-time').textContent =
-    watch.latest === null
-      ? '尚未运行'
-      : `最近 ${fmtDateTime(watch.latest.finishedAt ?? watch.latest.startedAt)}`;
-  $('#dash-watch-run-summary').textContent = watchRunSummaryText(watch.latest);
-  $('#dash-alert-count').textContent = String(alertPlans.total);
-  $('#dash-watchlist-count').textContent = String(watchlists.total);
-  $('#dash-stale-count').textContent = String(staleWatchlistCount);
+    watch === null
+      ? '暂不可用，请刷新重试'
+      : watch.latest === null
+        ? '尚未运行'
+        : `最近 ${fmtDateTime(watch.latest.finishedAt ?? watch.latest.startedAt)}`;
+  $('#dash-watch-run-summary').textContent =
+    watch === null ? '无法确认最近一轮运行结果' : watchRunSummaryText(watch.latest);
+  $('#dash-alert-count').textContent = alertPlans === null ? '--' : String(alertPlans.total);
+  $('#dash-watchlist-count').textContent = watchlists === null ? '--' : String(watchlists.total);
+  $('#dash-stale-count').textContent =
+    staleWatchlistCount === null ? '--' : String(staleWatchlistCount);
 
   // 今日预警（urgent 置顶，至多 8 条）
   const alerts = sortAlerts(Array.isArray(todayTriggers) ? todayTriggers : []).slice(0, 8);
@@ -818,7 +1085,7 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
     mount(
       $('#dash-trigger-list'),
       !triggersAvailable
-        ? el('p', 'placeholder', '今日预警暂不可用，请重试；这不代表没有触发。')
+        ? dashboardRetry('今日预警暂不可用，无法确认是否有触发。', setStatus)
         : alerts.length === 0
           ? el('p', 'placeholder', '今日暂无触发。盯盘即使没有信号，也会记录运行心跳。')
           : el(
@@ -857,11 +1124,13 @@ const loadDashboard = async (setStatus, epoch, accountId) => {
       DELIVERY_LABEL,
     );
     const lr = metrics.latestRun ?? {};
-    $('#dash-metric-failed').textContent = `${lr.notifyFailed ?? 0}`;
-    $('#dash-metric-daily-cap').textContent = `${lr.suppressedByDailyLimit ?? 0}`;
+    $('#dash-metric-failed').textContent = watch === null ? '--' : `${lr.notifyFailed ?? 0}`;
+    $('#dash-metric-daily-cap').textContent =
+      watch === null ? '--' : `${lr.suppressedByDailyLimit ?? 0}`;
     const noiseSample = metrics.feedbackTotal ?? 0;
-    $('#dash-metric-noise').textContent =
-      metrics.noiseRate === null
+    $('#dash-metric-noise').textContent = !triggersAvailable
+      ? '--'
+      : metrics.noiseRate === null
         ? `样本 ${noiseSample}/30`
         : `${(metrics.noiseRate * 100).toFixed(1)}%（n=${noiseSample}）`;
     const metaParts = [];
@@ -3580,6 +3849,7 @@ export {
   analyzeAllHoldings,
   bindSettingsActions,
   boardStats,
+  boardTriggerSummary,
   calibrationPnlText,
   calibrationRateText,
   cancelAnalyzeAllHoldings,
@@ -3589,6 +3859,7 @@ export {
   filterAdvices,
   invalidateDashboard,
   outcomeInputOf,
+  readDashboardView,
   renderAdviceList,
   renderDashboard,
   renderDataHealth,

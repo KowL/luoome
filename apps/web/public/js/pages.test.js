@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 
 import {
   boardStats,
+  boardTriggerSummary,
   calibrationPnlText,
   calibrationRateText,
   dashboardBoardQuery,
@@ -9,12 +10,99 @@ import {
   errorKindLabel,
   filterAdvices,
   outcomeInputOf,
+  readDashboardView,
   reportEntityHref,
   routeAdviceId,
   routeStockId,
   sortBoardItems,
   watchRunSummaryText,
 } from './pages.js';
+
+describe('看板单股预警覆盖口径', () => {
+  const trigger = { count: 3, maxPriority: 'important' };
+  it('完整覆盖显示准确次数和今日最高优先级', () => {
+    const result = boardTriggerSummary(trigger, { available: true, total: 10, sampled: 10 });
+    expect(result.label).toBe('3 次');
+    expect(result.priority).toBe('今日最高：重要');
+  });
+  it('样本截断时明确次数下界和样本优先级', () => {
+    const result = boardTriggerSummary(trigger, { available: true, total: 300, sampled: 200 });
+    expect(result.label).toBe('至少 3 次');
+    expect(result.priority).toBe('样本最高：重要');
+    expect(boardTriggerSummary(null, { available: true, total: 300, sampled: 200 }).label).toBe(
+      '样本未见',
+    );
+  });
+  it('读取失败和成功空结果明确区分', () => {
+    expect(boardTriggerSummary(null, { available: false, total: null, sampled: 0 }).label).toBe(
+      '未知',
+    );
+    expect(boardTriggerSummary(null, { available: true, total: 0, sampled: 0 }).label).toBe('暂无');
+  });
+});
+
+describe('看板偏好持久化边界', () => {
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  afterEach(() => {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else Object.defineProperty(globalThis, 'localStorage', originalStorage);
+  });
+  const storage = (getItem) =>
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem } });
+  const defaults = {
+    scope: 'all',
+    watchlistId: '',
+    page: 1,
+    pageSize: 10,
+    sortKey: null,
+    sortOrder: 'desc',
+  };
+  it('不同账户读取各自的范围、页码和排序', () => {
+    storage((key) =>
+      key === 'luoome.dashboardView:a'
+        ? JSON.stringify({
+            scope: 'watching',
+            watchlistId: 'growth',
+            page: 3,
+            pageSize: 20,
+            sortKey: 'changePct',
+            sortOrder: 'asc',
+          })
+        : null,
+    );
+    expect(readDashboardView('a')).toEqual({
+      scope: 'watching',
+      watchlistId: 'growth',
+      page: 3,
+      pageSize: 20,
+      sortKey: 'changePct',
+      sortOrder: 'asc',
+    });
+    expect(readDashboardView('b')).toEqual(defaults);
+  });
+  it.each([
+    'broken json',
+    'null',
+    '[]',
+    JSON.stringify({
+      scope: 'wrong',
+      page: -1,
+      pageSize: 999,
+      watchlistId: {},
+      sortKey: 'wrong',
+      sortOrder: 'wrong',
+    }),
+  ])('无效本地存储恢复默认值 %s', (raw) => {
+    storage(() => raw);
+    expect(readDashboardView('a')).toEqual(defaults);
+  });
+  it('浏览器禁用存储时看板仍能初始化', () => {
+    storage(() => {
+      throw new Error('storage disabled');
+    });
+    expect(readDashboardView('a')).toEqual(defaults);
+  });
+});
 
 describe('confidence 校准 unknown 展示', () => {
   it('无 outcome 样本时不用 0 伪装命中率和平均收益', () => {

@@ -32,6 +32,45 @@ const save = async (
   );
 
 describe('list_watch_triggers', () => {
+  it('分页不改变总数，反馈和优先级在分页前生效', async () => {
+    const ctx = await buildTestContext();
+    for (const id of ['a', 'b', 'c'])
+      await save(ctx, {
+        id,
+        stockId: '002594.SZ',
+        ruleKind: 'price-change',
+        notified: false,
+        createdAt: new Date('2026-07-23T01:00:00Z'),
+      });
+    await ctx.repos.watchTrigger.setFeedback('b', 'handled', ctx.clock());
+    const result = await listWatchTriggersTool.execute(
+      {
+        feedback: 'unreviewed',
+        priority: 'normal',
+        deliveryStatus: ['not-requested'],
+        offset: 1,
+        limit: 1,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.total).toBe(2);
+    expect(result.data.triggers.map((t) => t.id)).toEqual(['a']);
+  });
+
+  it.each([
+    { offset: -1 },
+    { offset: 0.5 },
+    { priority: 'wrong' },
+    { feedback: 'wrong' },
+    { deliveryStatus: ['wrong'] },
+  ])('拒绝无效筛选或分页 %j', async (input) => {
+    const result = await listWatchTriggersTool.execute(input, await buildTestContext());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe('invalid_input');
+  });
+
   it('按池/股票/规则/通知状态筛选并按时间倒序返回', async () => {
     const ctx = await buildTestContext();
     await save(ctx, {

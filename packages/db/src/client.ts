@@ -1076,6 +1076,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(
     sql`CREATE INDEX IF NOT EXISTS watch_triggers_pool_stock_rule_event_idx ON watch_triggers (pool_id, stock_id, rule_id, event_id, created_at)`,
   );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS watch_triggers_created_id_idx ON watch_triggers (created_at, id)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS watch_triggers_stock_created_id_idx ON watch_triggers (stock_id, created_at, id)`,
+  );
   // v0.7 起：边沿状态机表（§3.5）
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watch_rule_states (

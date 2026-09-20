@@ -107,3 +107,5 @@ For permission and response requirements, read [safety and errors](./safety.md).
 
 
 `get_watchlist` accepts optional `accountId` for a scoped view: portfolio sources from other accounts are omitted, while independent manual/strategy sources remain. Omitting it keeps the shared workspace view. `list_watch_triggers` adds `stockName` when the local stock directory can resolve it; missing names must not be inferred from codes. Both remain read-only tools.
+
+`list_watch_triggers` filters in the repository before pagination and returns an exact `total`. Use `offset` (default 0) and `limit` to page; `priority`, `feedback` (including `unreviewed`), `deliveryStatus`, and `triggerType` are supported. For browsing a fixed time window, keep `since` and `until` unchanged across pages. It no longer scans only the latest 10,000 records.

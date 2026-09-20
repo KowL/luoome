@@ -108,6 +108,35 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
     return matches[0] ?? null;
   }
 
+  async query(input: Parameters<WatchTriggerRepository['query']>[0]) {
+    const filtered = [...this.items.values()].filter(
+      (t) =>
+        (input.alertPlanId === undefined || (t.alertPlanId ?? t.poolId) === input.alertPlanId) &&
+        (input.poolId === undefined || t.poolId === input.poolId) &&
+        (input.stockId === undefined || t.stockId === input.stockId) &&
+        (input.ruleKind === undefined || t.ruleKind === input.ruleKind) &&
+        (input.ruleId === undefined || t.ruleId === input.ruleId) &&
+        (input.notified === undefined || t.notified === input.notified) &&
+        (input.priority === undefined || t.priority === input.priority) &&
+        (input.feedback === undefined ||
+          (input.feedback === 'unreviewed'
+            ? t.feedback === undefined
+            : t.feedback === input.feedback)) &&
+        (input.deliveryStatus === undefined || input.deliveryStatus.includes(t.deliveryStatus)) &&
+        (input.triggerType === undefined || t.triggerType === input.triggerType) &&
+        (input.since === undefined || t.createdAt >= input.since) &&
+        (input.until === undefined || t.createdAt <= input.until),
+    );
+    filtered.sort(
+      (a, b) =>
+        b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+    );
+    return {
+      total: filtered.length,
+      triggers: filtered.slice(input.offset, input.offset + input.limit),
+    };
+  }
+
   async listRecent(
     opts: {
       readonly poolId?: string;

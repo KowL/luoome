@@ -1,4 +1,11 @@
-import { WatchRuleKindSchema, WatchTriggerSchema } from '@luoome/core';
+import {
+  AlertPrioritySchema,
+  DeliveryStatusSchema,
+  TriggerFeedbackSchema,
+  TriggerTypeSchema,
+  WatchRuleKindSchema,
+  WatchTriggerSchema,
+} from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
@@ -11,6 +18,12 @@ export const ListWatchTriggersInput = z.object({
   ruleId: z.string().min(1).optional(),
   notified: z.boolean().optional(),
   since: z.coerce.date().optional(),
+  until: z.coerce.date().optional(),
+  priority: AlertPrioritySchema.optional(),
+  feedback: z.union([TriggerFeedbackSchema, z.literal('unreviewed')]).optional(),
+  triggerType: TriggerTypeSchema.optional(),
+  deliveryStatus: z.array(DeliveryStatusSchema).optional(),
+  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
   limit: z.number().int().positive().max(10_000).default(50),
 });
 
@@ -20,41 +33,32 @@ export const ListWatchTriggersOutput = z.object({
   total: z.number().int().nonnegative(),
 });
 
-/**
- * 面向 UI/MCP 的触发审计读取。
- *
- * WatchTriggerRepository 目前是个人本地库，listRecent 没有 count/query contract；
- * 这里一次最多扫描 10k 条近期记录后再做细粒度过滤，避免 limit 先于 stock/rule
- * 过滤导致漏结果。达到 10k 后应演进为 repository query + count。
- */
 export const listWatchTriggersTool = defineTool({
   name: 'list_watch_triggers',
-  description: '查询最近 AlertPlan 触发（可按计划/股票/规则/通知状态过滤，按时间倒序）',
+  description:
+    '查询最近 AlertPlan 触发（按计划/股票/规则/优先级/反馈/通知状态过滤，准确计数并分页）',
   sideEffect: 'read',
   input: ListWatchTriggersInput,
   output: ListWatchTriggersOutput,
   handler: async (input, ctx) => {
-    const recent = await ctx.repos.watchTrigger.listRecent({
-      ...(input.alertPlanId !== undefined
-        ? { poolId: input.alertPlanId }
-        : input.poolId !== undefined
-          ? { poolId: input.poolId }
-          : {}),
-      ...(input.since !== undefined ? { since: input.since } : {}),
-      limit: 10_000,
+    const { triggers: page, total } = await ctx.repos.watchTrigger.query({
+      offset: input.offset,
+      limit: input.limit,
+      ...(input.alertPlanId === undefined ? {} : { alertPlanId: input.alertPlanId }),
+      ...(input.stockId === undefined ? {} : { stockId: input.stockId }),
+      ...(input.ruleKind === undefined ? {} : { ruleKind: input.ruleKind }),
+      ...(input.ruleId === undefined ? {} : { ruleId: input.ruleId }),
+      ...(input.notified === undefined ? {} : { notified: input.notified }),
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
+      ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
+      ...(input.triggerType === undefined ? {} : { triggerType: input.triggerType }),
+      ...(input.deliveryStatus === undefined ? {} : { deliveryStatus: input.deliveryStatus }),
+      ...(input.since === undefined ? {} : { since: input.since }),
+      ...(input.until === undefined ? {} : { until: input.until }),
+      ...(input.alertPlanId === undefined && input.poolId !== undefined
+        ? { poolId: input.poolId }
+        : {}),
     });
-    const filtered = recent
-      .filter((trigger) => input.stockId === undefined || trigger.stockId === input.stockId)
-      .filter(
-        (trigger) =>
-          input.alertPlanId === undefined ||
-          (trigger.alertPlanId ?? trigger.poolId) === input.alertPlanId,
-      )
-      .filter((trigger) => input.ruleKind === undefined || trigger.ruleKind === input.ruleKind)
-      .filter((trigger) => input.ruleId === undefined || trigger.ruleId === input.ruleId)
-      .filter((trigger) => input.notified === undefined || trigger.notified === input.notified)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));
-    const page = filtered.slice(0, input.limit);
     const names = new Map(
       await Promise.all(
         [...new Set(page.map((trigger) => trigger.stockId))].map(async (stockId) => {
@@ -67,7 +71,7 @@ export const listWatchTriggersTool = defineTool({
       triggers: ListWatchTriggersOutput.shape.triggers.parse(
         page.map((trigger) => ({ ...trigger, stockName: names.get(trigger.stockId) })),
       ),
-      total: filtered.length,
+      total,
     };
   },
 });

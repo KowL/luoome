@@ -9649,3 +9649,16 @@ body > .modal {
     width: 100%;
   }
 }
+
+.dashboard-event-history .dashboard-event-button {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: var(--space-2);
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.dashboard-event-history .dashboard-board-filters label {
+  white-space: nowrap;
+}

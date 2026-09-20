@@ -935,6 +935,23 @@ export interface WatchTriggerRepository {
     },
     since: Date,
   ): Promise<WatchTrigger | null>;
+  /** 先筛选再分页；总数与结果取自同一读取快照，createdAt/id 均倒序。 */
+  query(input: {
+    readonly alertPlanId?: string;
+    readonly poolId?: string;
+    readonly stockId?: string;
+    readonly ruleKind?: WatchTrigger['ruleKind'];
+    readonly ruleId?: string;
+    readonly notified?: boolean;
+    readonly priority?: WatchTrigger['priority'];
+    readonly feedback?: NonNullable<WatchTrigger['feedback']> | 'unreviewed';
+    readonly deliveryStatus?: readonly DeliveryStatus[];
+    readonly triggerType?: WatchTrigger['triggerType'];
+    readonly since?: Date;
+    readonly until?: Date;
+    readonly offset: number;
+    readonly limit: number;
+  }): Promise<{ readonly triggers: readonly WatchTrigger[]; readonly total: number }>;
   /** 最近触发（CLI / TUI / MCP 展示用）。 */
   listRecent(opts?: {
     readonly poolId?: string;

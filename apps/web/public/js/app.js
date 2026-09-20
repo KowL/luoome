@@ -362,7 +362,21 @@ const bindGlobalActions = () => {
 /* ============ 看盘分区刷新 ============ */
 
 const startDashboardAutoRefresh = () => {
-  const visible = () => document.visibilityState === 'visible' && currentHash() === 'dashboard';
+  let paused = false;
+  const visible = () =>
+    !paused && document.visibilityState === 'visible' && currentHash() === 'dashboard';
+  $('#btn-dashboard-auto-refresh').addEventListener('click', (event) => {
+    paused = !paused;
+    event.currentTarget.textContent = paused ? '恢复自动更新' : '暂停自动更新';
+    event.currentTarget.setAttribute('aria-pressed', String(paused));
+    $('#dashboard-paused').hidden = !paused;
+    if (paused) {
+      invalidateDashboard();
+    } else if (visible()) {
+      void renderDashboard(setStatus);
+      void renderDashboardMarketBlocks();
+    }
+  });
   setInterval(() => {
     if (visible()) void renderDashboard(setStatus);
   }, 15000);

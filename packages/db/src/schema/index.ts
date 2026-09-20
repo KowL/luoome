@@ -1330,6 +1330,12 @@ export const watchTriggers = sqliteTable(
     lastDeliveryAttemptAt: integer('last_delivery_attempt_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
+    createdIdIdx: index('watch_triggers_created_id_idx').on(t.createdAt, t.id),
+    stockCreatedIdIdx: index('watch_triggers_stock_created_id_idx').on(
+      t.stockId,
+      t.createdAt,
+      t.id,
+    ),
     /** cooldown 查询 lastForKey 走这条。 */
     poolStockRuleTsIdx: index('watch_triggers_pool_stock_rule_ts_idx').on(
       t.poolId,

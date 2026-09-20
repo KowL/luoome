@@ -6,7 +6,20 @@ import {
   type WatchTrigger,
   type WatchTriggerRepository,
 } from '@luoome/core';
-import { and, desc, eq, gt, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { type Schema, watchExecutionLease, watchTriggers } from '../../schema/index.js';
@@ -241,6 +254,51 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
       .orderBy(desc(watchTriggers.createdAt))
       .get();
     return row === undefined ? null : toWatchTrigger(row);
+  }
+
+  async query(input: Parameters<WatchTriggerRepository['query']>[0]) {
+    const conditions: SQL[] = [];
+    if (input.alertPlanId !== undefined)
+      conditions.push(
+        sql`coalesce(${watchTriggers.alertPlanId}, ${watchTriggers.poolId}) = ${input.alertPlanId}`,
+      );
+    for (const key of [
+      'poolId',
+      'stockId',
+      'ruleKind',
+      'ruleId',
+      'notified',
+      'priority',
+      'triggerType',
+    ] as const) {
+      const value = input[key];
+      if (value !== undefined) conditions.push(eq(watchTriggers[key], value));
+    }
+    if (input.feedback !== undefined)
+      conditions.push(
+        input.feedback === 'unreviewed'
+          ? isNull(watchTriggers.feedback)
+          : eq(watchTriggers.feedback, input.feedback),
+      );
+    if (input.deliveryStatus !== undefined)
+      conditions.push(inDeliveryStatuses(input.deliveryStatus));
+    if (input.since !== undefined) conditions.push(gte(watchTriggers.createdAt, input.since));
+    if (input.until !== undefined) conditions.push(lte(watchTriggers.createdAt, input.until));
+    const where = and(...conditions);
+    return this.db.transaction((tx) => {
+      const total =
+        tx.select({ value: count() }).from(watchTriggers).where(where).get()?.value ?? 0;
+      const triggers = tx
+        .select()
+        .from(watchTriggers)
+        .where(where)
+        .orderBy(desc(watchTriggers.createdAt), desc(watchTriggers.id))
+        .limit(input.limit)
+        .offset(input.offset)
+        .all()
+        .map(toWatchTrigger);
+      return { total, triggers };
+    });
   }
 
   async listRecent(

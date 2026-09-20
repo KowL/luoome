@@ -78,9 +78,10 @@
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
         <div class="route-header">
           <div><h1>看盘</h1><p class="muted dashboard-subtitle">市场概况 · 我的关注 · 今日事件</p></div>
-          <button id="btn-dashboard-refresh" class="btn btn-outline" type="button">刷新看盘</button>
+          <div class="row-actions"><button id="btn-dashboard-auto-refresh" class="btn btn-outline" type="button" aria-pressed="false">暂停自动更新</button><button id="btn-dashboard-refresh" class="btn btn-outline" type="button">刷新看盘</button></div>
         </div>
         <div id="dashboard-status" class="dashboard-status" role="status">正在加载看盘数据…</div>
+        <div id="dashboard-paused" class="dashboard-notice" role="status" hidden>自动更新已暂停，可手动刷新或恢复自动更新；已发起的数据检查可能继续完成。</div>
         <div id="dashboard-warnings" class="dashboard-notice" role="status" hidden></div>
         <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；点击卡片 → #indices 指数页） -->
         <div id="dashboard-indices" class="index-card-grid dashboard-index-grid" aria-label="核心指数"></div>
@@ -97,6 +98,7 @@
             <label>查看范围 <select id="dashboard-board-scope" aria-label="看板范围"><option value="all">全部</option><option value="holdings">我的持仓</option><option value="watching">我的关注</option><option value="triggered">今日触发</option></select></label>
             <label>关注列表 <select id="dashboard-board-watchlist" aria-label="筛选关注列表"><option value="">全部关注列表</option></select></label>
             <a href="#watchlists" class="card-link">管理关注 →</a>
+            <button id="dashboard-board-reset" class="btn btn-outline btn-sm" type="button">重置视图</button>
             <span class="card-meta">持仓优先 · 价格排序仅限本页</span>
           </div>
           <p id="dashboard-board-coverage" class="card-meta"></p>
@@ -106,7 +108,7 @@
           <div class="card">
             <div class="card-header">
               <div><h2>今日预警</h2><div id="dash-trigger-meta" class="card-meta"></div></div>
-              <a href="#alerts" class="card-link">管理 AlertPlan →</a>
+              <div class="row-actions"><button id="dashboard-event-history" class="btn btn-outline btn-sm" type="button">查看全部事件</button><a href="#alerts" class="card-link">管理 AlertPlan →</a></div>
             </div>
             <div id="dash-trigger-list"><p class="placeholder">加载中…</p></div>
           </div>

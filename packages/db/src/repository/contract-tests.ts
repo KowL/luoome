@@ -3756,6 +3756,69 @@ export const registerRepositoryContractTests = (
     });
 
     describe('WatchTriggerRepository', () => {
+      it('query 在复合筛选后分页并准确计数，同时间按 id 倒序', async () => {
+        for (const id of ['a', 'c', 'b']) {
+          await repos.watchTrigger.save(
+            makeWatchTrigger(id, {
+              priority: 'important',
+              notified: false,
+              deliveryStatus: 'not-requested',
+            }),
+          );
+        }
+        await repos.watchTrigger.save(makeWatchTrigger('other-stock', { stockId: '600519.SH' }));
+        await repos.watchTrigger.save(makeWatchTrigger('future', { createdAt: T2 }));
+        const query = {
+          alertPlanId: 'pool-1',
+          stockId: '002594.SZ',
+          ruleKind: 'price-change' as const,
+          ruleId: 'r_fixture',
+          priority: 'important' as const,
+          feedback: 'unreviewed' as const,
+          notified: false,
+          deliveryStatus: ['not-requested'] as const,
+          triggerType: 'triggered' as const,
+          since: T1,
+          until: T1,
+          offset: 1,
+          limit: 1,
+        };
+        const page = await repos.watchTrigger.query(query);
+        expect(page.total).toBe(3);
+        expect(page.triggers.map((t) => t.id)).toEqual(['b']);
+        expect(await repos.watchTrigger.query({ ...query, offset: 99 })).toEqual({
+          triggers: [],
+          total: 3,
+        });
+        await repos.watchTrigger.setFeedback('b', 'handled', T2);
+        expect((await repos.watchTrigger.query({ ...query, offset: 0 })).total).toBe(2);
+        expect(
+          (
+            await repos.watchTrigger.query({ ...query, feedback: 'handled', offset: 0 })
+          ).triggers.map((t) => t.id),
+        ).toEqual(['b']);
+        expect((await repos.watchTrigger.query({ ...query, deliveryStatus: [] })).total).toBe(0);
+      });
+
+      it('query 不再截断 1 万条，旧股票记录可以在筛选后查到', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('old-match', { stockId: '600519.SH', createdAt: T0 }),
+        );
+        for (let i = 0; i < 10001; i += 1) {
+          await repos.watchTrigger.save(makeWatchTrigger(`bulk-${String(i).padStart(5, '0')}`));
+        }
+        const all = await repos.watchTrigger.query({ offset: 10001, limit: 1 });
+        expect(all.total).toBe(10002);
+        expect(all.triggers.map((t) => t.id)).toEqual(['old-match']);
+        const filtered = await repos.watchTrigger.query({
+          stockId: '600519.SH',
+          offset: 0,
+          limit: 1,
+        });
+        expect(filtered.total).toBe(1);
+        expect(filtered.triggers[0]?.id).toBe('old-match');
+      }, 20000);
+
       it('求值提交同时保存触发和边沿，失效 owner 无法覆盖', async () => {
         await repos.watchTrigger.acquireExecution('owner', T0, T2);
         const state = {

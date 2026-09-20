@@ -47,7 +47,13 @@ const callApi = async (path, init) => {
     response = await fetch(path, {
       ...rest,
       headers,
-      ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
+      ...(timeoutMs === undefined
+        ? {}
+        : {
+            signal: rest.signal
+              ? AbortSignal.any([rest.signal, AbortSignal.timeout(timeoutMs)])
+              : AbortSignal.timeout(timeoutMs),
+          }),
     });
   } catch (cause) {
     const kind =

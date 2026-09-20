@@ -2436,35 +2436,29 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       'ruleKind',
       'ruleId',
       'since',
-    ] as const) {
+      'until',
+      'priority',
+      'feedback',
+      'triggerType',
+    ]) {
       const value = c.req.query(key);
       if (value !== undefined) input[key] = value;
     }
     const notified = c.req.query('notified');
-    if (notified !== undefined) input.notified = notified === 'true' || notified === '1';
-    const priority = c.req.query('priority');
-    if (priority === 'urgent' || priority === 'important' || priority === 'normal') {
-      input.priority = priority;
-    }
-    const feedback = c.req.query('feedback');
-    if (
-      feedback === 'handled' ||
-      feedback === 'useful' ||
-      feedback === 'useless' ||
-      feedback === 'ignored'
-    ) {
-      input.feedback = feedback;
-    }
-    const triggerType = c.req.query('triggerType');
-    if (triggerType === 'triggered' || triggerType === 'recovered') {
-      input.triggerType = triggerType;
+    if (notified !== undefined) {
+      input.notified =
+        notified === 'true' || notified === '1'
+          ? true
+          : notified === 'false' || notified === '0'
+            ? false
+            : notified;
     }
     const deliveryStatus = c.req.query('deliveryStatus');
-    if (typeof deliveryStatus === 'string' && deliveryStatus.length > 0) {
-      input.deliveryStatus = deliveryStatus.split(',').filter((v) => v.length > 0);
+    if (deliveryStatus !== undefined) input.deliveryStatus = deliveryStatus.split(',');
+    for (const key of ['limit', 'offset']) {
+      const value = c.req.query(key);
+      if (value !== undefined) input[key] = value.trim() === '' ? value : Number(value);
     }
-    const limit = c.req.query('limit');
-    if (limit !== undefined) input.limit = Number(limit);
     return callTool('list_watch_triggers', input);
   });
 
@@ -2559,16 +2553,22 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         invokeTool('list_watch_triggers', { since: todayStart, limit: 200 }),
         invokeIndexQuotes(),
       ]);
-    if (!holdings.ok) return jsonResult(holdings);
-    if (!watchlists.ok) return jsonResult(watchlists);
-    if (!alertPlans.ok) return jsonResult(alertPlans);
-    if (!watch.ok) return jsonResult(watch);
-    if (!triggers.ok) return jsonResult(triggers);
-    if (!advice.ok) return jsonResult(advice);
-
-    // 单项失败降级为警告，不拖垮整个 dashboard（指数条 / 看板仍可空态呈现）。
     const warnings: string[] = [];
-    if (!recentTriggers.ok) warnings.push(`今日预警读取失败（${recentTriggers.error.kind}）`);
+    const sectionErrors: Record<string, { kind: string }> = {};
+    for (const [key, label, result] of [
+      ['holdings', '持仓', holdings],
+      ['watchlists', '关注列表', watchlists],
+      ['alertPlans', '预警计划', alertPlans],
+      ['watch', '盯盘状态', watch],
+      ['triggers', '近期预警', triggers],
+      ['advice', '建议', advice],
+      ['todayTriggers', '今日预警', recentTriggers],
+    ] as const) {
+      if (!result.ok) {
+        sectionErrors[key] = { kind: result.error.kind };
+        warnings.push(`${label}读取失败（${result.error.kind}）`);
+      }
+    }
     let indices: { indices: unknown[]; unsupported?: boolean; stale?: boolean } = { indices: [] };
     if (indexQuotes.ok) {
       indices = indexQuotes.data as typeof indices;
@@ -2577,7 +2577,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     }
 
     const watchlistRows = (
-      watchlists.data as {
+      (watchlists.ok ? watchlists.data : { items: [] }) as {
         items: Array<{
           watchlist: { id: string; name: string; enabled: boolean };
           sourceHealth: { stale: number };
@@ -2593,9 +2593,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       watchlistDetailCache.set(id, pending);
       return pending;
     };
-    const staleWatchlistCount = watchlistRows.filter(
-      ({ sourceHealth }) => sourceHealth.stale > 0,
-    ).length;
+    const staleWatchlistCount = watchlists.ok
+      ? watchlistRows.filter(({ sourceHealth }) => sourceHealth.stale > 0).length
+      : null;
 
     // 策略预警指标（docs/.../§11 / §12）：今日优先级计数 / 送达状态分布 / 反馈分布（噪声率）
     const todayTriggers = (
@@ -2637,7 +2637,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       } | null;
     }
     const holdingRows = (
-      holdings.data as {
+      (holdings.ok ? holdings.data : { holdings: [] }) as {
         holdings: Array<{
           holding: { stockId: string; quantity: number };
           stockName: string;
@@ -2648,7 +2648,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       }
     ).holdings;
     const board = new Map<string, BoardItem>();
-    let boardComplete = true;
+    let boardComplete = holdings.ok && watchlists.ok;
     for (const row of holdingRows) {
       board.set(row.holding.stockId, {
         stockId: row.holding.stockId,
@@ -2787,19 +2787,21 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         : null;
 
     // watch.run 摘要（§11）：最近一轮的发送失败 / 抑制分项
-    const watchData = watch.data as { latest?: Record<string, unknown> | null };
-    const latestRun = watchData.latest ?? null;
+    const watchData = (watch.ok ? watch.data : null) as {
+      latest?: Record<string, unknown> | null;
+    } | null;
+    const latestRun = watchData?.latest ?? null;
 
     return jsonResult({
       ok: true,
       data: {
         asOf: ctxRef.current.clock(),
-        holdings: holdings.data,
-        watchlists: watchlists.data,
-        alertPlans: alertPlans.data,
-        watch: watch.data,
-        triggers: triggers.data,
-        advice: advice.data,
+        holdings: holdings.ok ? holdings.data : null,
+        watchlists: watchlists.ok ? watchlists.data : null,
+        alertPlans: alertPlans.ok ? alertPlans.data : null,
+        watch: watch.ok ? watch.data : null,
+        triggers: triggers.ok ? triggers.data : null,
+        advice: advice.ok ? advice.data : null,
         staleWatchlistCount,
         // 看盘主页：指数条 + 实时看板 + 今日预警列表
         indices,
@@ -2807,6 +2809,15 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         boardQuery: { scope, watchlistId: watchlistId ?? null, page, pageSize },
         canWrite: exposeWrite,
         boardCoverage: {
+          available:
+            (watchlistId === undefined || watchlists.ok) &&
+            (scope === 'holdings'
+              ? holdings.ok
+              : scope === 'watching'
+                ? watchlists.ok
+                : scope === 'triggered'
+                  ? recentTriggers.ok
+                  : holdings.ok || watchlists.ok),
           total: filteredBoard.length,
           displayed: pageItems.length,
           truncated: filteredBoard.length > pageItems.length,
@@ -2816,12 +2827,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           available: recentTriggers.ok,
           total: recentTriggers.ok ? (recentTriggers.data as { total: number }).total : null,
           sampled: todayTriggers.length,
-          // Tool 当前最多扫描 10k 条，达到边界时总数只能作为下界。
-          totalIsLowerBound:
-            recentTriggers.ok && (recentTriggers.data as { total: number }).total >= 10_000,
+          totalIsLowerBound: false,
         },
         todayTriggers,
-        meta: { warnings },
+        meta: { warnings, sectionErrors },
         // v0.7 策略预警 dashboard 指标（§11）
         metrics: {
           todayTotal: recentTriggers.ok ? (recentTriggers.data as { total: number }).total : null,

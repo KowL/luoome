@@ -4965,6 +4965,99 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
 });
 
 describe('dashboard 数据覆盖与失败状态', () => {
+  it('所有股票来源不可用时不将空看板标记为完整，成功空结果仍可区分', async () => {
+    const ctx = await buildTestContext();
+    const fail = async () => {
+      throw new Error('fixture unavailable');
+    };
+    ctx.repos.holding.listByAccount = fail;
+    ctx.repos.watchlist.list = fail;
+    const localApp = createWebApp(ctx);
+    const read = async () =>
+      (await (await localApp.fetch(new Request('http://test/api/dashboard'))).json()) as {
+        data: {
+          board: unknown[];
+          boardCoverage: { available: boolean; complete: boolean };
+          advice: unknown;
+        };
+      };
+    const failed = await read();
+    expect(failed.data.board).toEqual([]);
+    expect(failed.data.boardCoverage.available).toBe(false);
+    expect(failed.data.boardCoverage.complete).toBe(false);
+    expect(failed.data.advice).not.toBeNull();
+    ctx.repos.holding.listByAccount = async () => [];
+    ctx.repos.watchlist.list = async () => [];
+    const empty = await read();
+    expect(empty.data.board).toEqual([]);
+    expect(empty.data.boardCoverage.available).toBe(true);
+    expect(empty.data.boardCoverage.complete).toBe(true);
+  });
+
+  it.each(['advice', 'watch', 'alertPlans', 'triggers'] as const)(
+    '%s 读取失败不阻塞持仓看板，失败区块返回 null 和错误种类',
+    async (section) => {
+      const ctx = await buildTestContext();
+      const fail = async () => {
+        throw new Error('fixture unavailable');
+      };
+      if (section === 'advice') ctx.repos.advice.query = fail;
+      if (section === 'watch') ctx.repos.watchRun.latest = fail;
+      if (section === 'alertPlans') ctx.repos.alertPlan.list = fail;
+      if (section === 'triggers') ctx.repos.watchTrigger.query = fail;
+      const response = await createWebApp(ctx).fetch(new Request('http://test/api/dashboard'));
+      const body = (await response.json()) as {
+        ok: boolean;
+        data: Record<string, unknown> & {
+          board: unknown[];
+          boardCoverage: { available: boolean };
+          meta: { sectionErrors: Record<string, { kind: string }> };
+        };
+      };
+      expect(response.status).toBe(200);
+      expect(body.ok).toBe(true);
+      expect(body.data[section]).toBeNull();
+      expect(body.data.meta.sectionErrors[section]?.kind).toBe('internal');
+      expect(body.data.board.length).toBeGreaterThan(0);
+      expect(body.data.boardCoverage.available).toBe(true);
+    },
+  );
+
+  it.each(['holdings', 'watchlists'] as const)(
+    '%s 失败时标注范围不完整，专属范围不可用且恢复后可重新读取',
+    async (section) => {
+      const ctx = await buildTestContext();
+      const originalHoldings = ctx.repos.holding.listByAccount.bind(ctx.repos.holding);
+      const originalWatchlists = ctx.repos.watchlist.list.bind(ctx.repos.watchlist);
+      const fail = async () => {
+        throw new Error('fixture unavailable');
+      };
+      if (section === 'holdings') ctx.repos.holding.listByAccount = fail;
+      else ctx.repos.watchlist.list = fail;
+      const localApp = createWebApp(ctx);
+      const read = async (scope: string) =>
+        (await (
+          await localApp.fetch(new Request(`http://test/api/dashboard?scope=${scope}`))
+        ).json()) as {
+          data: Record<string, unknown> & {
+            boardCoverage: { available: boolean; complete: boolean };
+          };
+        };
+      const partial = await read('all');
+      expect(partial.data[section]).toBeNull();
+      expect(partial.data.boardCoverage.complete).toBe(false);
+      expect(partial.data.boardCoverage.available).toBe(true);
+      const scope = section === 'holdings' ? 'holdings' : 'watching';
+      expect((await read(scope)).data.boardCoverage.available).toBe(false);
+      ctx.repos.holding.listByAccount = originalHoldings;
+      ctx.repos.watchlist.list = originalWatchlists;
+      const recovered = await read(scope);
+      expect(recovered.data[section]).not.toBeNull();
+      expect(recovered.data.boardCoverage.available).toBe(true);
+      expect(recovered.data.boardCoverage.complete).toBe(true);
+    },
+  );
+
   interface CoverageBody {
     ok: boolean;
     data: {
@@ -5021,12 +5114,37 @@ describe('dashboard 数据覆盖与失败状态', () => {
       sampled: 200,
       totalIsLowerBound: false,
     });
+    const page = (await (
+      await localApp.fetch(
+        new Request(
+          'http://test/api/watch/triggers?offset=200&limit=20&priority=normal&feedback=unreviewed',
+        ),
+      )
+    ).json()) as { data: { total: number; triggers: unknown[] } };
+    expect(page.data.total).toBe(201);
+    expect(page.data.triggers).toHaveLength(1);
+    const empty = (await (
+      await localApp.fetch(new Request('http://test/api/watch/triggers?priority=urgent'))
+    ).json()) as { data: { total: number } };
+    expect(empty.data.total).toBe(0);
+    for (const query of [
+      'offset=-1',
+      'offset=bad',
+      'priority=bad',
+      'feedback=bad',
+      'notified=bad',
+      'deliveryStatus=bad',
+    ]) {
+      expect(
+        (await localApp.fetch(new Request(`http://test/api/watch/triggers?${query}`))).status,
+      ).toBe(400);
+    }
   });
 
   it('今日查询失败明确返回不可用，不返回零次触发', async () => {
     const ctx = await buildTestContext();
-    const original = ctx.repos.watchTrigger.listRecent.bind(ctx.repos.watchTrigger);
-    ctx.repos.watchTrigger.listRecent = async (query) => {
+    const original = ctx.repos.watchTrigger.query.bind(ctx.repos.watchTrigger);
+    ctx.repos.watchTrigger.query = async (query) => {
       if (query?.since !== undefined) throw new Error('today unavailable');
       return original(query);
     };
