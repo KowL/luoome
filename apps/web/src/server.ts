@@ -2514,15 +2514,20 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/api/dashboard/stocks/:stockId', async (c) => {
     const stockId = c.req.param('stockId');
     const accountId = contextForRequest().user.defaultAccountId;
+    const asOf = ctxRef.current.clock();
     const [plans, triggers] = await Promise.all([
       invokeTool('list_trading_plans', { stockId, accountId, activeOnly: false, limit: 200 }),
       invokeTool('list_watch_triggers', {
         stockId,
-        since: startOfTodayShanghai(ctxRef.current.clock()),
-        limit: 200,
+        since: startOfTodayShanghai(asOf),
+        until: asOf,
+        limit: 8,
       }),
     ]);
-    return jsonResult({ ok: true, data: { plans, triggers, accountId, canWrite: exposeWrite } });
+    return jsonResult({
+      ok: true,
+      data: { plans, triggers, accountId, asOf, canWrite: exposeWrite },
+    });
   });
 
   app.get('/api/dashboard', async (c) => {

@@ -367,8 +367,9 @@ const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '', on
   openModal('事件证据与处理反馈', body);
 };
 
-const openDashboardEventHistory = (asOf) => {
+const openDashboardEventHistory = (asOf, stock) => {
   const accountId = getAccountId();
+  const title = stock ? '该股今日事件' : '今日全部事件';
   const date = new Date(asOf).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
   const body = el('div', 'dashboard-event-history');
   const filters = el('div', 'dashboard-board-filters');
@@ -430,6 +431,7 @@ const openDashboardEventHistory = (asOf) => {
       limit: '20',
       offset: String((page - 1) * 20),
     });
+    if (stock) query.set('stockId', stock.stockId);
     for (const [key, value] of Object.entries(selections)) if (value) query.set(key, value);
     const result = await callApi(`/api/watch/triggers?${query}`, { timeoutMs: 20000 });
     if (
@@ -471,7 +473,7 @@ const openDashboardEventHistory = (asOf) => {
             button.type = 'button';
             button.addEventListener('click', () =>
               dashboardTriggerDetail(trigger, trigger.stockName ?? '', () => {
-                openModal('今日全部事件', body);
+                openModal(title, body);
                 void load();
               }),
             );
@@ -493,14 +495,14 @@ const openDashboardEventHistory = (asOf) => {
     pagination.setState({ page, pageSize: 20 });
     mount(footer, pagination.root);
   }
+  if (stock) body.append(stockIdentityLink({ stockId: stock.stockId, stockName: stock.name }));
   body.append(filters, meta, list, footer);
-  openModal('今日全部事件', body);
+  openModal(title, body);
   void load();
 };
 
 const openDashboardStockContext = async (item) => {
   const accountId = getAccountId();
-  const epoch = dashboardEpoch;
   const body = el('div', 'dashboard-stock-context', [
     stockIdentityLink({ stockId: item.stockId, stockName: item.name }),
     el('p', 'placeholder', '正在加载事件与计划…'),
@@ -512,7 +514,7 @@ const openDashboardStockContext = async (item) => {
   if (
     !body.isConnected ||
     $('#modal-overlay').hidden ||
-    epoch !== dashboardEpoch ||
+    $('#route-dashboard').hidden ||
     accountId !== getAccountId()
   )
     return;
@@ -569,6 +571,13 @@ const openDashboardStockContext = async (item) => {
       planSection.append(el('p', 'muted', '以上为已保存版本，执行条件仍需结合当前账户事实核对。'));
   }
   const triggerSection = el('div', 'dashboard-context-section', [el('h3', null, '今日事件')]);
+  const allEvents = el('button', 'btn btn-outline btn-sm', '查看该股全部今日事件');
+  allEvents.type = 'button';
+  allEvents.addEventListener('click', () => {
+    if (getAccountId() !== accountId || $('#route-dashboard').hidden) return;
+    openDashboardEventHistory(result.data.asOf, item);
+  });
+  triggerSection.append(allEvents);
   if (!triggers.ok)
     triggerSection.append(
       el('p', 'status error', `事件读取失败：${toolErrorText(triggers.error)}`),
@@ -578,7 +587,7 @@ const openDashboardStockContext = async (item) => {
       el(
         'p',
         'muted',
-        `${triggers.data.total >= 10000 ? '至少 ' : ''}${triggers.data.total} 条记录 · 展示最近 ${triggers.data.triggers.length} 条`,
+        `${triggers.data.total} 条记录 · 展示最近 ${triggers.data.triggers.length} 条`,
       ),
     );
     for (const trigger of triggers.data.triggers) {

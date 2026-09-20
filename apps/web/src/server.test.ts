@@ -5077,7 +5077,7 @@ describe('dashboard 数据覆盖与失败状态', () => {
   }
 
   it('今日总数不被 200 条展示上限截断', async () => {
-    const ctx = await buildTestContext();
+    const ctx = await buildTestContext({ clock: () => new Date('2026-09-20T02:00:00Z') });
     const now = ctx.clock();
     for (let i = 0; i < 201; i += 1) {
       const result = await saveWatchTriggerTool.execute(
@@ -5123,6 +5123,14 @@ describe('dashboard 数据覆盖与失败状态', () => {
     ).json()) as { data: { total: number; triggers: unknown[] } };
     expect(page.data.total).toBe(201);
     expect(page.data.triggers).toHaveLength(1);
+    const stockSummary = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard/stocks/002594.SZ'))
+    ).json()) as {
+      data: { asOf: string; triggers: { data: { total: number; triggers: unknown[] } } };
+    };
+    expect(stockSummary.data.asOf).toBe(now.toISOString());
+    expect(stockSummary.data.triggers.data.total).toBe(201);
+    expect(stockSummary.data.triggers.data.triggers).toHaveLength(8);
     const empty = (await (
       await localApp.fetch(new Request('http://test/api/watch/triggers?priority=urgent'))
     ).json()) as { data: { total: number } };
