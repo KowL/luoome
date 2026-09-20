@@ -16,7 +16,7 @@ import { buildMarketLink, parseRouteHash } from './market.js';
 import { DATASET_LABELS } from './market-sync.js';
 import { alertDialog, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
-import { triggerDeliveryLabel, triggerMetaText } from './target-pages.js';
+import { triggerDeliveryLabel, triggerMetaText, triggerWhyText } from './target-pages.js';
 import {
   latestPlanVersions,
   openTradingPlanDetail,
@@ -300,7 +300,7 @@ const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '', on
   const feedbackActions = el('div', 'row-actions');
   const body = el('div', 'dashboard-event-detail', [
     stockIdentityLink({ stockId: trigger.stockId, stockName }),
-    el('p', null, trigger.reason),
+    el('p', null, `为什么触发：${triggerWhyText(trigger)}`),
     el('p', 'muted', triggerMetaText(trigger, dashboardAlertLabels)),
     el(
       'p',

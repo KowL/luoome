@@ -3047,6 +3047,38 @@ html.has-bg-image .bg-layer {
   white-space: nowrap;
 }
 
+/* 触发卡片：正文给「为什么触发」，内部标识折叠进 details */
+.trigger-why {
+  margin: 2px 0 0;
+}
+
+.entity-evidence > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.entity-evidence > summary::-webkit-details-marker {
+  display: none;
+}
+
+.entity-evidence > summary::before {
+  content: '▸';
+}
+
+.entity-evidence[open] > summary::before {
+  content: '▾';
+}
+
+.entity-evidence > ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
 /* 详情面板内的信息卡片（版本/成员/trigger 等） */
 .entity-item {
   display: flex;

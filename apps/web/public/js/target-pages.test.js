@@ -17,7 +17,9 @@ import {
   triggerDeliveryBadgeClass,
   triggerDeliveryLabel,
   triggerMetaText,
+  triggerPlanVersionId,
   triggerSourceLabel,
+  triggerWhyText,
 } from './target-pages.js';
 
 describe('批量成员输入', () => {
@@ -140,21 +142,82 @@ describe('触发条目时间行', () => {
     expect(triggerSourceLabel({ poolId: 'legacy-pool' })).toBe('历史预警（来源已不可用）');
   });
 
-  it('副标题带命中条件：优先评估快照描述，否则用规则类型', () => {
+  it('副标题只讲来源与数据时间，命中条件交给「为什么触发」行', () => {
+    const text = triggerMetaText({
+      alertPlanId: 'plan-1',
+      createdAt: '2026-07-29T08:00:00.000Z',
+      evalSnapshot: { conditionDescription: '价格处于入场区间 100-105' },
+    });
+    expect(text).not.toContain('价格处于入场区间 100-105');
     expect(
-      triggerMetaText({
+      triggerWhyText({
         alertPlanId: 'plan-1',
         createdAt: '2026-07-29T08:00:00.000Z',
         evalSnapshot: { conditionDescription: '价格处于入场区间 100-105' },
       }),
-    ).toContain('价格处于入场区间 100-105');
+    ).toBe('命中「价格处于入场区间 100-105」');
     expect(
-      triggerMetaText({
+      triggerWhyText({
         alertPlanId: 'plan-1',
         createdAt: '2026-07-29T08:00:00.000Z',
         ruleKind: 'price-level',
       }),
-    ).toContain('价格条件');
+    ).toBe('命中「价格条件」');
+  });
+
+  it('为什么触发：条件描述 + 当时的观测值 + 来源与数据时间', () => {
+    const text = triggerWhyText({
+      stockId: '601872.SH',
+      ruleKind: 'price-level',
+      createdAt: '2026-09-17T03:24:38.980Z',
+      quote: { close: 21.12, ts: '2026-09-17T03:24:38.980Z' },
+      evalSnapshot: {
+        conditionDescription: '价格不低于目标价 21.1',
+        quoteClose: 21.12,
+        quoteSource: 'eastmoney',
+        quoteObservedAt: '2026-09-17T03:24:38.980Z',
+      },
+    });
+    expect(text).toBe('现价 21.12 元（eastmoney），命中「价格不低于目标价 21.1」');
+  });
+
+  it('缺观测值时只陈述条件，缺条件时退回可读原因，不暴露内部版本标识', () => {
+    expect(
+      triggerWhyText({
+        ruleKind: 'price-level',
+        evalSnapshot: { conditionDescription: '价格跌破 10' },
+      }),
+    ).toBe('命中「价格跌破 10」');
+    expect(
+      triggerWhyText({
+        ruleKind: 'price-level',
+        reason:
+          'hold 计划命中条件：价格不低于目标价 21.1；现价 21.12；计划版本 account:acc:stock:601872.SH:v2',
+      }),
+    ).toBe('hold 计划命中条件：价格不低于目标价 21.1；现价 21.12');
+    expect(triggerWhyText({})).toBe('未记录触发原因');
+  });
+
+  it('数据时间用行情观测时间，而不是记录创建时间', () => {
+    const text = triggerMetaText({
+      alertPlanId: 'plan-1',
+      createdAt: '2026-09-17T03:30:00.000Z',
+      evalSnapshot: {
+        conditionDescription: '价格不低于目标价 21.1',
+        quoteObservedAt: '2026-09-17T03:24:38.980Z',
+      },
+    });
+    expect(text).toContain('03:24:38');
+    expect(text).not.toContain('03:30:00');
+  });
+
+  it('只有交易计划监控的触发才有计划版本入口', () => {
+    expect(
+      triggerPlanVersionId({ evalSnapshot: { planVersionId: 'account:acc:stock:601872.SH:v2' } }),
+    ).toBe('account:acc:stock:601872.SH:v2');
+    expect(
+      triggerPlanVersionId({ evalSnapshot: { conditionDescription: '价格跌破 10' } }),
+    ).toBeNull();
   });
 
   it('送达状态与优先级都有可读标签', () => {

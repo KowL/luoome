@@ -8,7 +8,7 @@ import {
   renderStrategyWorkspacePage,
 } from './strategy-workspace.js';
 import { createStrategyDefinitionEditor } from './strategy-workspace-experiment.js';
-import { renderTradingPlanPanel } from './trading-plan-panel.js';
+import { openTradingPlanDetailByVersionId, renderTradingPlanPanel } from './trading-plan-panel.js';
 import {
   $,
   compareValues,
@@ -104,11 +104,57 @@ export const triggerPriorityLabel = (priority) =>
 export const triggerPriorityBadgeClass = (priority) =>
   `badge ${TRIGGER_PRIORITY_BADGES[priority] ?? ''}`;
 
+const triggerQuoteClose = (trigger) => {
+  const snapshot = trigger.evalSnapshot ?? {};
+  return typeof snapshot.quoteClose === 'number'
+    ? snapshot.quoteClose
+    : typeof trigger.quote?.close === 'number'
+      ? trigger.quote.close
+      : null;
+};
+
+const triggerObservedAt = (trigger) => {
+  const snapshot = trigger.evalSnapshot ?? {};
+  const value =
+    typeof snapshot.quoteObservedAt === 'string'
+      ? snapshot.quoteObservedAt
+      : (trigger.quote?.ts ?? trigger.createdAt);
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+/**
+ * 「为什么触发」：把条件描述与当时的观测值拼成一句可核对的结论。
+ * 缺观测值时只陈述命中的条件，缺条件描述时退回记录里的原因文本（去掉内部版本标识）。
+ */
+export const triggerWhyText = (trigger) => {
+  const condition = triggerConditionText(trigger);
+  const close = triggerQuoteClose(trigger);
+  const source = trigger.evalSnapshot?.quoteSource;
+  const observed =
+    close === null
+      ? null
+      : `${fmtNum(close, 2)} 元${typeof source === 'string' && source.length > 0 ? `（${source}）` : ''}`;
+  if (observed !== null && condition !== null) return `现价 ${observed}，命中「${condition}」`;
+  if (observed !== null) return `现价 ${observed}`;
+  // 没有条件描述时，记录里的原因文本比规则类型标签更具体；去掉内部版本标识。
+  const reason = typeof trigger.reason === 'string' ? trigger.reason.trim() : '';
+  const readable = reason.replace(/；计划版本 [^；]+$/, '');
+  if (readable.length > 0) return readable;
+  if (condition !== null) return `命中「${condition}」`;
+  return '未记录触发原因';
+};
+
+/** 交易计划监控的触发可从评估快照定位到具体计划版本，用于打开计划详情。 */
+export const triggerPlanVersionId = (trigger) => {
+  const versionId = trigger.evalSnapshot?.planVersionId;
+  return typeof versionId === 'string' && versionId.length > 0 ? versionId : null;
+};
+
 export const triggerMetaText = (trigger, labels) =>
   [
     triggerSourceLabel(trigger, labels),
-    triggerConditionText(trigger),
-    `数据 ${fmtDateTime(trigger.createdAt)}`,
+    `数据 ${fmtDateTime(triggerObservedAt(trigger) ?? trigger.createdAt)}`,
   ]
     .filter((part) => part !== null && part !== undefined)
     .join(' · ');
@@ -1200,20 +1246,42 @@ const planCard = (plan, setStatus) => {
   ]);
 };
 
+const triggerPlanButton = (versionId) => {
+  const button = el('button', 'btn btn-outline btn-sm', '查看计划');
+  button.type = 'button';
+  button.addEventListener('click', () => void openTradingPlanDetailByVersionId(versionId));
+  return button;
+};
+
+/** 原始标识只用于排查，默认折叠，不占卡片正文。 */
+const triggerEvidenceDetails = (trigger) =>
+  el('details', 'entity-evidence', [
+    el('summary', null, '原始证据'),
+    el(
+      'ul',
+      'muted',
+      (trigger.evidence ?? []).map((text) => el('li', 'mono', text)),
+    ),
+    el('pre', 'dashboard-evidence', JSON.stringify(trigger.evalSnapshot ?? {}, null, 2)),
+  ]);
+
 const triggerCard = (trigger, labels) => {
   const delivery = triggerDeliveryLabel(trigger.deliveryStatus);
   const priority = trigger.priority ?? 'normal';
+  const versionId = triggerPlanVersionId(trigger);
   return el('div', 'entity-item', [
     el('div', 'flex gap-2', [
       stockIdentityLink(trigger),
       el('strong', null, RULE_KIND_LABELS[trigger.ruleKind] ?? trigger.ruleKind),
     ]),
     el('div', 'muted', triggerMetaText(trigger, labels)),
+    el('p', 'trigger-why', `为什么触发：${triggerWhyText(trigger)}`),
     el('div', 'row-actions', [
       el('span', triggerDeliveryBadgeClass(trigger.deliveryStatus), delivery ?? '--'),
       el('span', triggerPriorityBadgeClass(priority), triggerPriorityLabel(priority)),
+      ...(versionId === null ? [] : [triggerPlanButton(versionId)]),
     ]),
-    el('div', null, (trigger.evidence ?? []).join('；')),
+    triggerEvidenceDetails(trigger),
   ]);
 };
 
