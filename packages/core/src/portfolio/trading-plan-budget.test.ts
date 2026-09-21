@@ -143,14 +143,14 @@ describe('trading plan budget', () => {
           stockId: '600519.SH',
           industry: '食品饮料',
           currentPct: 10,
-          targetPct: 15,
+          targetPct: 30,
         }),
         plan({
           id: 'b',
           stockId: '600519.SH',
           industry: '食品饮料',
           currentPct: 10,
-          targetPct: 15,
+          targetPct: 30,
         }),
       ],
       stocks: new Map([['600519.SH', stock('600519.SH', '食品饮料')]]),
@@ -222,7 +222,7 @@ describe('trading plan budget', () => {
           stockId: '600519.SH',
           industry: '食品饮料',
           currentPct: 0,
-          targetPct: 20,
+          targetPct: 35,
         }),
       ],
       stocks: new Map([['600519.SH', stock('600519.SH', '食品饮料')]]),
@@ -290,6 +290,39 @@ describe('trading plan budget', () => {
     expect(result.totalStatus).toBe('blocked');
     expect(result.reasons).toContain('total-stock-limit: 108 > 100');
     expect(result.availableStockPct).toBe(16);
+  });
+
+  it('单票上限默认 30%：已有 26.68% 的持仓仍可加仓到 30%，超过则阻断', () => {
+    const concentrated: AccountFacts = {
+      ...facts,
+      cashBalance: money(200),
+      stockMarketValue: money(800),
+      totalAssets: money(1000),
+      positions: [
+        {
+          stockId: '603162.SH',
+          quantity: 100,
+          availableQuantity: 100,
+          marketValue: money(267),
+        },
+      ],
+    };
+    const withinCap = evaluateTradingPlanBudget({
+      facts: concentrated,
+      plans: [plan({ id: 'add', stockId: '603162.SH', currentPct: 26.68, targetPct: 30 })],
+      stocks: new Map(),
+    });
+    expect(withinCap.limits).toEqual(DEFAULT_TRADING_PLAN_BUDGET_LIMITS);
+    expect(withinCap.limits.singleStockPct).toBe(30);
+    expect(withinCap.allocations[0]?.status).toBe('included');
+
+    const overCap = evaluateTradingPlanBudget({
+      facts: concentrated,
+      plans: [plan({ id: 'add', stockId: '603162.SH', currentPct: 26.68, targetPct: 32 })],
+      stocks: new Map(),
+    });
+    expect(overCap.totalStatus).toBe('blocked');
+    expect(overCap.allocations[0]?.reasons).toContain('single-stock-limit');
   });
 
   it('行业信息缺失不再阻断增量计划（行业上限已移除）', () => {

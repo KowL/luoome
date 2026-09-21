@@ -108,7 +108,7 @@ describe('trading plan tools', () => {
     const plan = makePlan({
       accountId: ACCOUNT_ID,
       accountFactsDigest: facts.digest,
-      targetPct: 16,
+      targetPct: 31,
     });
     const result = await saveTradingPlanTool.execute({ plan }, ctx);
     expect(result.ok).toBe(false);

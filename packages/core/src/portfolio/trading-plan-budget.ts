@@ -20,10 +20,12 @@ export const TradingPlanBudgetLimitsSchema = z.object({
  * 总仓位上限取 100%：账户已经用满或接近用满时，80% 这类"建议上限"会让任何增量计划永久
  * 停留在草案（用户 2026-09-20 决定）。保留这条校验是为了挡住"多个计划的建议仓位合计超过
  * 账户总资产"这种不可执行状态（不新增融资路径），而不是限制用户实际愿意持有的比例。
+ * 单只股票上限取 30%（用户同日决定，原 15%）：集中度由用户自行判断，超过上限的持仓仍可减仓，
+ * 但不能继续加仓。
  */
 export const DEFAULT_TRADING_PLAN_BUDGET_LIMITS: TradingPlanBudgetLimits = {
   totalStockPct: 100,
-  singleStockPct: 15,
+  singleStockPct: 30,
 };
 
 export interface TradingPlanBudgetAllocation {
