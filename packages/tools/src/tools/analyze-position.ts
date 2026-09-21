@@ -68,47 +68,39 @@ export const analyzePositionTool = defineTool({
     const quote = quoteItem.quote;
     const indicators = computeSimpleIndicators(bars);
 
-    const llmOutput = await ctx.adapters.llm.generate<AdviceLLMOutput>({
-      system: 'analyze_position',
-      schema: AdviceLLMSchema,
-      data: {
-        stockId: stock.id,
-        code: stock.code,
-        name: stock.name,
-        holding: {
-          ...(avgCost === undefined ? {} : { avgCost }),
-          quantity,
-          availableQuantity,
-          ...(openedAt === undefined ? {} : { openedAt }),
-        },
-        quote,
-        indicators,
+    const promptData = {
+      stockId: stock.id,
+      code: stock.code,
+      name: stock.name,
+      holding: {
+        ...(avgCost === undefined ? {} : { avgCost }),
+        quantity,
+        availableQuantity,
+        ...(openedAt === undefined ? {} : { openedAt }),
       },
-    });
-    const llmRaw = extractLlmRaw(llmOutput);
-
-    const advice: Advice = {
+      quote,
+      indicators,
+    };
+    const buildAdvice = (output: AdviceLLMOutput, llmRaw: string | undefined): Advice => ({
       id: globalThis.crypto.randomUUID(),
       subjectKind: 'position',
       subjectId: holding.id,
       stockName: stock.name,
-      decision: llmOutput.decision,
-      confidence: llmOutput.confidence,
-      horizon: llmOutput.horizon,
-      ...(llmOutput.entryPrice === undefined ? {} : { entryPrice: money(llmOutput.entryPrice) }),
-      ...(llmOutput.entryPriceLow === undefined
+      decision: output.decision,
+      confidence: output.confidence,
+      horizon: output.horizon,
+      ...(output.entryPrice === undefined ? {} : { entryPrice: money(output.entryPrice) }),
+      ...(output.entryPriceLow === undefined ? {} : { entryPriceLow: money(output.entryPriceLow) }),
+      ...(output.entryPriceHigh === undefined
         ? {}
-        : { entryPriceLow: money(llmOutput.entryPriceLow) }),
-      ...(llmOutput.entryPriceHigh === undefined
+        : { entryPriceHigh: money(output.entryPriceHigh) }),
+      ...(output.targetPositionPct === undefined
         ? {}
-        : { entryPriceHigh: money(llmOutput.entryPriceHigh) }),
-      ...(llmOutput.targetPositionPct === undefined
-        ? {}
-        : { targetPositionPct: llmOutput.targetPositionPct }),
-      ...(llmOutput.targetPrice === undefined ? {} : { targetPrice: money(llmOutput.targetPrice) }),
-      ...(llmOutput.stopLoss === undefined ? {} : { stopLoss: money(llmOutput.stopLoss) }),
-      reasoning: sanitizeAdviceReasoning(llmOutput.reasoning),
-      risks: sanitizeAdviceRisks(llmOutput.risks),
+        : { targetPositionPct: output.targetPositionPct }),
+      ...(output.targetPrice === undefined ? {} : { targetPrice: money(output.targetPrice) }),
+      ...(output.stopLoss === undefined ? {} : { stopLoss: money(output.stopLoss) }),
+      reasoning: sanitizeAdviceReasoning(output.reasoning),
+      risks: sanitizeAdviceRisks(output.risks),
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'analyze_position',
       basedOn: {
@@ -118,11 +110,45 @@ export const analyzePositionTool = defineTool({
         dataAsOf: now,
       },
       validFrom: now,
-      validUntil: computeValidUntil(llmOutput.horizon, now),
+      validUntil: computeValidUntil(output.horizon, now),
       createdAt: now,
-    };
+    });
 
-    assertAdviceInvariants(advice);
+    // 价格结构（止损 < 买点 < 目标价、买点落在区间内）由不变量校验；上游模型经常给出
+    // 自相矛盾的价位，这里把具体违规原因回灌给它再试一次，避免整只持仓当天没有结论。
+    let advice: Advice | undefined;
+    let failure = 'AI 输出未通过建议约束';
+    for (let attempt = 0; attempt < 2 && advice === undefined; attempt += 1) {
+      const generated = await ctx.adapters.llm.generate<AdviceLLMOutput>({
+        system:
+          attempt === 0 ? 'analyze_position' : `analyze_position\n\n[修复上次输出] ${failure}`,
+        schema: AdviceLLMSchema,
+        data: promptData,
+      });
+      const parsed = AdviceLLMSchema.safeParse(generated);
+      if (!parsed.success) {
+        failure = parsed.error.issues.map((issue) => issue.message).join('；');
+        continue;
+      }
+      const candidate = buildAdvice(parsed.data, extractLlmRaw(generated));
+      try {
+        assertAdviceInvariants(candidate);
+        advice = candidate;
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (advice === undefined) {
+      return {
+        ok: false as const,
+        error: {
+          kind: 'llm_error' as const,
+          provider: ctx.adapters.llm.name,
+          cause: failure,
+          retryable: true,
+        },
+      };
+    }
     await ctx.repos.advice.save(advice);
 
     return {

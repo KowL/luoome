@@ -157,12 +157,21 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
       .all()
       .map(toPlan);
     if (query.activeOnly === true) {
-      const latest = new Map<string, TradingPlan>();
+      // 解析「当前生效版本」：从新到旧找每个计划第一个 active 版本。
+      // - 更新的 superseded / revoked / expired 表示该计划已被明确退役 → 不再监控；
+      // - 更新的 draft 只是「这次没能发布」（例如非交易日跑到、行情不合格），
+      //   不能顶掉仍然有效、正在监控的生效版本，否则该标的会静默失去止损/目标价监控。
+      const chosen = new Map<string, TradingPlan>();
+      const retired = new Set<string>();
       for (const plan of plans) {
-        if (!latest.has(plan.id)) latest.set(plan.id, plan);
+        if (chosen.has(plan.id) || retired.has(plan.id)) continue;
+        if (plan.status === 'active') {
+          chosen.set(plan.id, plan);
+          continue;
+        }
+        if (plan.status !== 'draft') retired.add(plan.id);
       }
-      return [...latest.values()]
-        .filter((plan) => plan.status === 'active')
+      return [...chosen.values()]
         .filter((plan) => query.status === undefined || plan.status === query.status)
         .filter(
           (plan) =>

@@ -536,6 +536,10 @@ const stepBatchQuote: WorkflowStep = async (prev, ctx) => {
 const stepLoadPrevCloses: WorkflowStep = async (prev, ctx) => {
   const state = prev as QuotesState;
   const prevCloses = new Map<string, Money>();
+  if (state.allStockIds.length === 0) {
+    // 没有启用中的预警计划时没有标的可查，属于正常空集，不要每轮记一条校验失败。
+    return { ...state, prevCloses } satisfies PrevClosesState;
+  }
   const result = await ctx.tools.get_previous_closes.execute({
     stockIds: [...state.allStockIds],
   });

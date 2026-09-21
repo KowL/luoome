@@ -40,6 +40,66 @@ describe('analyze_position', () => {
     expect(['buy', 'sell', 'hold', 'watch', 'avoid']).toContain(result.data.advice.decision);
   });
 
+  it('价位自相矛盾时带原因重试一次，第二次合格则照常落库', async () => {
+    const ctx = await buildTestContext({ advices: [] });
+    const systems: string[] = [];
+    let call = 0;
+    const flaky = {
+      ...ctx,
+      adapters: {
+        ...ctx.adapters,
+        llm: {
+          name: ctx.adapters.llm.name,
+          generate: async (request: { system: string }) => {
+            systems.push(request.system);
+            call += 1;
+            return call === 1
+              ? {
+                  // 买点落在区间外（100 不在 110-120）→ 触发不变量，需要重试
+                  decision: 'hold' as const,
+                  confidence: 60,
+                  horizon: 'short' as const,
+                  entryPrice: 100,
+                  entryPriceLow: 110,
+                  entryPriceHigh: 120,
+                  targetPrice: 130,
+                  stopLoss: 95,
+                  reasoning: {
+                    premise: '回调后趋势仍在',
+                    evidence: ['收盘价高于 MA20'],
+                    counterEvidence: ['成交量可能不足'],
+                  },
+                  risks: ['波动可能放大'],
+                }
+              : {
+                  decision: 'hold' as const,
+                  confidence: 60,
+                  horizon: 'short' as const,
+                  entryPrice: 115,
+                  entryPriceLow: 110,
+                  entryPriceHigh: 120,
+                  targetPrice: 130,
+                  stopLoss: 95,
+                  reasoning: {
+                    premise: '回调后趋势仍在',
+                    evidence: ['收盘价高于 MA20'],
+                    counterEvidence: ['成交量可能不足'],
+                  },
+                  risks: ['波动可能放大'],
+                };
+          },
+        },
+      },
+    } as typeof ctx;
+
+    const result = await analyzePositionTool.execute({ holdingId: 'test-holding-002594' }, flaky);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.advice.entryPrice).toBe(115);
+    expect(systems).toHaveLength(2);
+    expect(systems[1]).toContain('entryPrice must lie inside the entry price range');
+  });
+
   it('错误路径：持仓不存在 → not_found', async () => {
     const ctx = await buildTestContext({ advices: [] });
     const result = await analyzePositionTool.execute({ holdingId: 'no-such-holding' }, ctx);

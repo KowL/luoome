@@ -892,6 +892,23 @@ export const registerRepositoryContractTests = (
         );
       });
 
+      it('activeOnly：更新的草案回退到上一个生效版本，退役状态则停止监控', async () => {
+        // 生效版本 + 一个更新的草案（非交易日复核只能落草案）→ 仍监控生效版本。
+        await repos.tradingPlan.save(makeTradingPlan('plan-1', 1));
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-1', 2, { status: 'draft', createdAt: T2 }),
+        );
+        expect(await repos.tradingPlan.list({ activeOnly: true })).toEqual([
+          makeTradingPlan('plan-1', 1),
+        ]);
+
+        // 更新的 superseded / revoked / expired 明确退役该计划 → 不再返回。
+        await repos.tradingPlan.save(
+          makeTradingPlan('plan-1', 3, { status: 'revoked', createdAt: T3 }),
+        );
+        expect(await repos.tradingPlan.list({ activeOnly: true })).toEqual([]);
+      });
+
       it('activeOnly 只返回每个计划的最新 active 版本', async () => {
         await repos.tradingPlan.save(makeTradingPlan('plan-1', 1));
         await repos.tradingPlan.save(
