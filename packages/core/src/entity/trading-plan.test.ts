@@ -4,8 +4,10 @@ import { InvariantError } from '../error/index.js';
 import {
   assertTradingPlanInvariants,
   evaluateTradingPlanCondition,
+  evaluateTradingPlanEntryConditions,
   isMaterialTradingPlanChange,
   TradingPlanSchema,
+  tradingPlanMonitoring,
   tradingPlanVersionId,
 } from './trading-plan.js';
 
@@ -175,5 +177,47 @@ describe('TradingPlan invariants and condition evaluation', () => {
     });
     expect(tradingPlanVersionId(previous)).toBe('account:a:stock:600519.SH:v1');
     expect(isMaterialTradingPlanChange(previous, next, 0)).toBe(true);
+  });
+});
+
+describe('交易计划的监控资格与组合条件', () => {
+  const now = new Date('2026-09-10T00:00:00Z');
+  it('生效状态不等于可监控；账户变化优先给出重新生成入口', () => {
+    const active = plan({ status: 'active' });
+    expect(
+      tradingPlanMonitoring(active, { digest: active.accountFactsDigest, status: 'complete' }, now)
+        .status,
+    ).toBe('ready');
+    expect(
+      tradingPlanMonitoring(active, { digest: 'new-digest', status: 'unavailable' }, now).status,
+    ).toBe('account-changed');
+    expect(tradingPlanMonitoring(active, null, now).status).toBe('unavailable');
+    expect(tradingPlanMonitoring(active, null, active.validUntil).status).toBe('expired');
+    expect(tradingPlanMonitoring(plan(), null, now).status).toBe('draft');
+  });
+  it('所有入场条件满足才就绪，未知前提不能通过', () => {
+    const active = plan();
+    const facts = new Map([['entry-price', { metric: 'price' as const, value: 102 }]]);
+    expect(evaluateTradingPlanEntryConditions(active, facts)).toBe(true);
+    expect(
+      evaluateTradingPlanEntryConditions(
+        {
+          ...active,
+          entryConditions: [
+            ...active.entryConditions,
+            {
+              id: 'manual',
+              kind: 'manual-confirmation',
+              phase: 'entry',
+              description: '等待确认',
+            },
+          ],
+        },
+        facts,
+      ),
+    ).toBeNull();
+    expect(evaluateTradingPlanEntryConditions({ ...active, entryConditions: [] }, facts)).toBe(
+      false,
+    );
   });
 });

@@ -70,7 +70,7 @@ export const getAShareSentimentTool = defineTool({
       ? result.data.breadth
       : unavailable('luoome/market-snapshot', now, 'not_requested', 'market breadth not requested');
     const dataAsOf =
-      indexes.status === 'complete' && indexes.values.length > 0
+      indexes.status !== 'unavailable' && indexes.values.length > 0
         ? new Date(
             Math.min(
               result.data.dataAsOf.getTime(),
@@ -108,19 +108,22 @@ const fetchIndexesForDate = async (
   },
 ) => {
   try {
-    const values = [...(await market.fetchIndexQuotes())];
-    if (values.some((quote) => dateInShanghai(quote.ts) !== date)) {
+    const quotes = [...(await market.fetchIndexQuotes())];
+    const values = quotes.filter((quote) => dateInShanghai(quote.ts) === date);
+    if (values.length === 0) {
       return unavailable(
         market.name,
         now,
-        'date_mismatch',
-        'index quote observed date does not match requested date',
+        quotes.length === 0 ? 'no_data' : 'date_mismatch',
+        quotes.length === 0
+          ? 'index quotes empty'
+          : 'index quote observed date does not match requested date',
       );
     }
     const observedAt =
       values.length === 0 ? now : new Date(Math.min(...values.map((quote) => quote.ts.getTime())));
     return {
-      status: 'complete' as const,
+      status: values.length === quotes.length ? ('complete' as const) : ('partial' as const),
       provenance: [
         {
           provider: market.name,
@@ -129,7 +132,10 @@ const fetchIndexesForDate = async (
           freshness: 'fresh' as const,
         },
       ],
-      warnings: [],
+      warnings:
+        values.length === quotes.length
+          ? []
+          : [`已排除 ${quotes.length - values.length} 条非请求交易日指数，展示其余同日行情`],
       values,
     };
   } catch (error) {

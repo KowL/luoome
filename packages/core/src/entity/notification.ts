@@ -100,3 +100,31 @@ export const DEFAULT_NOTIFICATION_CHANNEL: NotificationChannel = 'log';
 
 /** 飞书卡片标题前缀（与 app 关联，方便用户在飞书群里辨认来源）。 */
 export const NOTIFICATION_BRAND = 'luoome';
+
+/** 通知只展示阅读摘要；内部身份仍保留在 Advice/Trigger/Report 的结构化引用中。 */
+export const notificationText = (text: string, limit = 120): string => {
+  const clean = text
+    .split(/[；;\n]+/)
+    .filter(
+      (part) =>
+        !/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f-]{20,}|(?:StrategyResult|StrategySignal|SignalObservation)\s+(?!evidence)|(?:selected|rank|score|direction)=)/i.test(
+          part,
+        ),
+    )
+    .map((part) => part.replace(/^(?:StrategyResult evidence:|evidence[=:])\s*/i, '').trim())
+    .join('；')
+    .replace(/-?\d+\.\d{3,}/g, (value) => String(Number(Number(value).toFixed(2))))
+    .replace(/[*_`<>[\]]/g, '')
+    .trim();
+  return clean.length <= limit ? clean : `${clean.slice(0, limit - 1)}…`;
+};
+
+export const notificationTime = (date: Date): string =>
+  new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);

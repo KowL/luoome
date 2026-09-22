@@ -1497,7 +1497,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   app.get('/api/trading-plans', (c) => {
     const input: Record<string, unknown> = {
+      accountId: contextForRequest().user.defaultAccountId,
       activeOnly: c.req.query('activeOnly') !== 'false',
+      includeMonitoring: c.req.query('includeMonitoring') === 'true',
     };
     for (const key of ['accountId', 'stockId', 'status'] as const) {
       const value = c.req.query(key);
@@ -3108,7 +3110,12 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/api/reports/:id/render', (c) =>
     callTool('render_report', {
       reportId: c.req.param('id'),
-      format: c.req.query('format') === 'plain-text' ? 'plain-text' : 'markdown',
+      format:
+        c.req.query('format') === 'notification'
+          ? 'notification'
+          : c.req.query('format') === 'plain-text'
+            ? 'plain-text'
+            : 'markdown',
     }),
   );
 

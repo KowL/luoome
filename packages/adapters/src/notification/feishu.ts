@@ -51,7 +51,7 @@ const toFeishuCard = (payload: FeishuPayload): Record<string, unknown> => {
   const elements: unknown[] = [
     {
       tag: 'markdown',
-      content: `**${payload.title}**\n\n${payload.content}`,
+      content: payload.content,
     },
   ];
   const card: Record<string, unknown> = {

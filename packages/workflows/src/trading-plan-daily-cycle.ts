@@ -237,7 +237,7 @@ export const buildTradingPlanFromAdvice = (input: {
     accountFacts.status === 'complete' &&
     accountFacts.totalAssets !== null &&
     targetPct !== null &&
-    ((action !== 'enter' && action !== 'add') ||
+    (!carriesEntryPlan ||
       (advice.entryPriceLow !== undefined &&
         advice.entryPriceHigh !== undefined &&
         entryConditions.length > 0)) &&

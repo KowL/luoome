@@ -180,3 +180,25 @@ describe('trading plan tools', () => {
     if (active.ok) expect(active.data.plans.map((plan) => plan.stockId)).toEqual(['600519.SH']);
   });
 });
+
+it('监控投影披露账户变化且不改写原计划历史', async () => {
+  const now = new Date('2026-09-10T00:00:00Z');
+  const ctx = await buildTestContext({ clock: () => now });
+  const facts = await deriveFacts(ctx);
+  const plan = makePlan({ accountId: ACCOUNT_ID, accountFactsDigest: facts.digest });
+  await ctx.repos.tradingPlan.save(plan);
+  const changed = await addHoldingTool.execute(
+    { accountId: ACCOUNT_ID, stockId: '600519.SH', quantity: 1, avgCost: 100 },
+    ctx,
+  );
+  expect(changed.ok).toBe(true);
+  const result = await listTradingPlansTool.execute(
+    { accountId: ACCOUNT_ID, includeMonitoring: true },
+    ctx,
+  );
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.data.monitoring?.[0]?.status).toBe('account-changed');
+    expect(result.data.plans[0]?.status).toBe('active');
+  }
+});

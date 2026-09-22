@@ -3,9 +3,12 @@ import {
   ActiveStrategyRecommendationTriggerSchema,
   type Advice,
   AdviceSchema,
+  adviceNotificationSummary,
   evaluateStrategyRecommendationPreflight,
   isPublishableOperationalRun,
+  isRuleFallbackAdvice,
   isStrategyRecommendationPolicyV2,
+  notificationText,
   type Quote,
   type Stock,
   StrategyRecommendationBatchSummarySchema,
@@ -317,14 +320,10 @@ const notifyAdvice = async (
   const payload = {
     title: `策略推荐 · ${advice.stockName ?? advice.subjectId}`,
     content: [
-      `${advice.subjectId} · ${advice.decision} · 信心度 ${advice.confidence}`,
-      advice.reasoning.premise,
-      `证据：${advice.reasoning.evidence.join('；') || '暂无'}`,
-      `反证：${advice.reasoning.counterEvidence.join('；') || '暂无'}`,
-      `风险：${advice.risks.join('；') || '暂无'}`,
-      `有效期至 ${advice.validUntil.toISOString()}`,
-      advice.disclaimers.join('\n'),
-    ].join('\n'),
+      adviceNotificationSummary(advice),
+      '完整依据见 luoome「建议」。',
+      [...new Set(advice.disclaimers)].join(' '),
+    ].join('\n\n'),
     level: advice.decision === 'avoid' || advice.decision === 'sell' ? 'warn' : 'info',
   } as const;
   const notification = await sendNotificationTool.execute(
@@ -336,6 +335,38 @@ const notifyAdvice = async (
     ctx,
   );
   return notification.ok && notification.data.notification.result === 'success';
+};
+
+const notifyFallbackBatch = async (
+  advices: readonly z.output<typeof AdviceSchema>[],
+  channel: 'log' | 'feishu',
+  ctx: ToolContext,
+): Promise<boolean> => {
+  const fallback = advices.filter(isRuleFallbackAdvice);
+  if (fallback.length === 0) return true;
+  const names = [
+    ...new Set(
+      fallback.map((advice) => notificationText(advice.stockName ?? advice.subjectId, 24)),
+    ),
+  ];
+  const payload = {
+    title: '策略分析未完成',
+    content: [
+      `**${fallback.length} 只候选未形成研究结论**`,
+      names.slice(0, 6).join('、') + (names.length > 6 ? ` 等 ${names.length} 只` : ''),
+      'AI 暂不可用，本轮仅保存规则兜底记录，不作为买卖依据。请稍后重新分析。',
+      '候选和诊断详情见 luoome「策略 / 建议」。',
+    ].join('\n\n'),
+    level: 'warn' as const,
+  };
+  const result = await sendNotificationTool.execute(
+    {
+      channel,
+      ...(channel === 'feishu' ? { feishu: payload } : { log: payload }),
+    },
+    ctx,
+  );
+  return result.ok && result.data.notification.result === 'success';
 };
 
 type GenerateStrategyRecommendationsInputT = z.output<typeof GenerateStrategyRecommendationsInput>;
@@ -452,11 +483,15 @@ const generateV2Recommendations = async (
     advices.push(generated.data.advice);
     if (
       input.policy.notify &&
+      !isRuleFallbackAdvice(generated.data.advice) &&
       !(await notifyAdvice(generated.data.advice, input.policy.channel, ctx))
     ) {
       notificationFailed += 1;
     }
   }
+
+  if (input.policy.notify && !(await notifyFallbackBatch(advices, input.policy.channel, ctx)))
+    notificationFailed += 1;
 
   return {
     strategyId: input.strategyId,
@@ -594,30 +629,12 @@ export const generateStrategyRecommendationsTool = defineTool({
       advices.push(generated.data.advice);
       if (!input.policy.notify) continue;
       const advice = generated.data.advice;
-      const payload = {
-        title: `策略推荐 · ${advice.stockName ?? advice.subjectId}`,
-        content: [
-          `${advice.subjectId} · ${advice.decision} · 信心度 ${advice.confidence}`,
-          advice.reasoning.premise,
-          `证据：${advice.reasoning.evidence.join('；') || '暂无'}`,
-          `反证：${advice.reasoning.counterEvidence.join('；') || '暂无'}`,
-          `风险：${advice.risks.join('；') || '暂无'}`,
-          `有效期至 ${advice.validUntil.toISOString()}`,
-          advice.disclaimers.join('\n'),
-        ].join('\n'),
-        level: advice.decision === 'avoid' || advice.decision === 'sell' ? 'warn' : 'info',
-      } as const;
-      const notification = await sendNotificationTool.execute(
-        {
-          channel: input.policy.channel,
-          ...(input.policy.channel === 'feishu' ? { feishu: payload } : { log: payload }),
-          adviceId: advice.id,
-        },
-        ctx,
-      );
-      if (!notification.ok || notification.data.notification.result !== 'success')
+      if (!isRuleFallbackAdvice(advice) && !(await notifyAdvice(advice, input.policy.channel, ctx)))
         notificationFailed += 1;
     }
+    if (input.policy.notify && !(await notifyFallbackBatch(advices, input.policy.channel, ctx)))
+      notificationFailed += 1;
+
     return saveBatchAudit(
       input,
       {

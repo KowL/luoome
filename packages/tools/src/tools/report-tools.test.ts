@@ -121,7 +121,7 @@ describe('report tools', () => {
     expect(rendered.ok).toBe(true);
     if (!rendered.ok) return;
     expect(rendered.data.contentType).toBe('text/markdown; charset=utf-8');
-    expect(rendered.data.content).toContain('部分可用');
+    expect(rendered.data.content).toContain('部分数据待补齐');
     expect(rendered.data.content).toContain('数据截止');
     expect(rendered.data.content).toContain('宽度源超时');
     expect(rendered.data.content).toContain('eastmoney');

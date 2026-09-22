@@ -1908,7 +1908,7 @@ const reportStatusBadge = (status) =>
   el(
     'span',
     `badge ${status === 'partial' ? 'badge-warn' : 'badge-fresh'}`,
-    status === 'partial' ? '部分可用' : '完整',
+    status === 'partial' ? '部分数据待补齐' : '完整',
   );
 
 const reportEntityHref = (item) => {
@@ -1950,25 +1950,39 @@ const reportBlockNode = (block) => {
     return el('p', block.tone === 'warning' ? 'report-warning' : 'report-prose', block.text);
   }
   if (block.kind === 'metrics') {
-    return el(
-      'div',
-      'report-metrics',
-      block.items.map((item) => {
-        const text =
-          item.displayValue ??
-          (item.value === null || item.value === undefined
-            ? '不可用'
-            : item.unit === 'ratio' && typeof item.value === 'number'
-              ? fmtPct(item.value, 1)
-              : `${item.value}${item.unit ?? ''}`);
-        return el('div', 'report-metric', [
-          el('span', 'report-metric-label', item.label),
-          el('strong', 'report-metric-value', text),
-        ]);
-      }),
+    const available = block.items.filter(
+      (item) => item.value != null || item.displayValue !== undefined,
     );
+    const missing = block.items.filter(
+      (item) => item.value == null && item.displayValue === undefined,
+    );
+    return el('div', null, [
+      el(
+        'div',
+        'report-metrics',
+        available.map((item) => {
+          const text =
+            item.displayValue ??
+            (item.unit === 'ratio' && typeof item.value === 'number'
+              ? fmtPct(item.value, 1)
+              : `${typeof item.value === 'number' ? item.value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : item.value}${item.unit ?? ''}`);
+          return el('div', 'report-metric', [
+            el('span', 'report-metric-label', item.label),
+            el('strong', 'report-metric-value', text),
+          ]);
+        }),
+      ),
+      missing.length === 0
+        ? null
+        : el(
+            'p',
+            'muted',
+            `未展示指标：${missing.map((item) => item.label).join('、')}（缺少计算所需数据）。`,
+          ),
+    ]);
   }
   if (block.kind === 'list') {
+    if (block.items.length === 0) return el('p', 'muted', '暂无记录。');
     return el(
       'ul',
       'report-list',
@@ -1981,6 +1995,12 @@ const reportBlockNode = (block) => {
       }),
     );
   }
+  if (block.rows.length === 0) return el('p', 'muted', '暂无记录。');
+  const columns = block.columns.filter((column) =>
+    block.rows.some((row) => row[column.key] != null),
+  );
+  const missing = block.columns.filter((column) => !columns.includes(column));
+  if (columns.length === 0) return el('p', 'muted', '暂无可展示的统计结果。');
   const table = el('table', 'report-table');
   table.append(
     el(
@@ -1989,7 +2009,7 @@ const reportBlockNode = (block) => {
       el(
         'tr',
         null,
-        block.columns.map((column) => el('th', null, column.label)),
+        columns.map((column) => el('th', null, column.label)),
       ),
     ),
   );
@@ -2001,14 +2021,31 @@ const reportBlockNode = (block) => {
         el(
           'tr',
           null,
-          block.columns.map((column) =>
-            el('td', null, row[column.key] === null ? '不可用' : String(row[column.key] ?? '—')),
+          columns.map((column) =>
+            el(
+              'td',
+              null,
+              row[column.key] == null
+                ? '—'
+                : typeof row[column.key] === 'number'
+                  ? row[column.key].toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+                  : String(row[column.key]),
+            ),
           ),
         ),
       ),
     ),
   );
-  return el('div', 'report-table-wrap', table);
+  return el('div', 'report-table-wrap', [
+    table,
+    missing.length === 0
+      ? null
+      : el(
+          'p',
+          'muted',
+          `未展示列：${missing.map((column) => column.label).join('、')}（缺少计算所需数据）；表内 — 表示该项数据尚缺。`,
+        ),
+  ]);
 };
 
 /**
@@ -2030,34 +2067,48 @@ const reportSheetNodes = (report, actions = []) => {
       el('div', 'report-sheet-actions', actions),
     ]),
     el('div', 'report-asof', [
-      el('span', null, `DATA AS OF ${fmtDateTime(report.dataAsOf)}`),
-      el('span', null, `GENERATED ${fmtDateTime(report.generatedAt)}`),
+      el('span', null, `数据截止 ${fmtDateTime(report.dataAsOf)}`),
+      el('span', null, `生成时间 ${fmtDateTime(report.generatedAt)}`),
     ]),
   ];
   for (const section of report.sections) {
     const sectionNode = el('section', `report-section report-section-${section.status}`, [
       el('div', 'report-section-head', [
-        el('div', null, [
-          el('span', 'report-section-key', section.key),
-          el('h3', null, section.title),
-        ]),
+        el('div', null, [el('h3', null, section.title)]),
         el(
           'span',
           `badge ${section.status === 'complete' ? 'badge-fresh' : 'badge-warn'}`,
-          section.status,
+          { complete: '已更新', partial: '部分数据待补齐', unavailable: '待获取数据' }[
+            section.status
+          ],
         ),
       ]),
       ...section.blocks.map(reportBlockNode),
-      ...section.missingDimensions.map((missing) =>
-        el(
-          'div',
-          'report-missing',
-          `${missing.dimension} · ${missing.reason}${missing.retryable ? ' · 可重试' : ''}`,
-        ),
-      ),
     ]);
     nodes.push(sectionNode);
   }
+  const gaps = [
+    ...new Map(
+      [
+        ...report.sections.flatMap((section) => section.missingDimensions),
+        ...report.missingDimensions,
+      ].map((gap) => [`${gap.dimension}:${gap.reason}`, gap]),
+    ).values(),
+  ];
+  if (gaps.length > 0)
+    nodes.push(
+      el('details', 'report-provenance', [
+        el('summary', null, `数据说明（${gaps.length} 项待补齐）`),
+        el('p', 'muted', '以下缺口不代表零值；已取得的数据仍可阅读。'),
+        ...gaps.map((gap) =>
+          el(
+            'p',
+            'report-missing',
+            `${gap.dimension} · ${gap.reason}${gap.retryable ? ' · 可重试' : ''}`,
+          ),
+        ),
+      ]),
+    );
   if (report.evidence.length > 0) {
     nodes.push(
       el('details', 'report-provenance', [
@@ -3891,6 +3942,7 @@ export {
   renderSettingsAccount,
   renderWorkflowRuns,
   reportEntityHref,
+  reportSheetNodes,
   resetAdviceDeleteMode,
   routeAdviceId,
   routeStockId,

@@ -116,6 +116,42 @@ describe('get_ashare_sentiment', () => {
     });
   });
 
+  it('同批混有跨日指数时保留同日行情，空响应不会宣称完整', async () => {
+    const base = await buildTestContext({ clock: () => now, ashareSentiment: manager });
+    const quote = {
+      code: '000001',
+      name: '上证指数',
+      close: MoneySchema.parse(3600),
+      change: 12,
+      changePct: 0.33,
+      ts: observedAt,
+      source: 'fixture',
+    };
+    for (const quotes of [
+      [quote, { ...quote, code: 'HSI', ts: new Date('2026-07-27T07:00:00Z') }],
+      [],
+    ]) {
+      const result = await getAShareSentimentTool.execute(
+        { date: '2026-07-28' },
+        {
+          ...base,
+          adapters: {
+            ...base.adapters,
+            market: { ...base.adapters.market, fetchIndexQuotes: async () => quotes },
+          },
+        },
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.data.snapshot.indexes.status).toBe(
+        quotes.length === 0 ? 'unavailable' : 'partial',
+      );
+      expect(result.data.snapshot.indexes.values).toEqual(
+        quotes.length === 0 ? undefined : [quote],
+      );
+    }
+  });
+
   it('历史交易日拒绝混入当前实时指数并返回维度 unavailable', async () => {
     const historical = baseSnapshot();
     historical.date = '2026-07-27';

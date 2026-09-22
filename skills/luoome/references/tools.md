@@ -108,4 +108,20 @@ For permission and response requirements, read [safety and errors](./safety.md).
 
 `get_watchlist` accepts optional `accountId` for a scoped view: portfolio sources from other accounts are omitted, while independent manual/strategy sources remain. Omitting it keeps the shared workspace view. `list_watch_triggers` adds `stockName` when the local stock directory can resolve it; missing names must not be inferred from codes. Both remain read-only tools.
 
-`list_watch_triggers` filters in the repository before pagination and returns an exact `total`. Use `offset` (default 0) and `limit` to page; `priority`, `feedback` (including `unreviewed`), `deliveryStatus`, and `triggerType` are supported. For browsing a fixed time window, keep `since` and `until` unchanged across pages. It no longer scans only the latest 10,000 records.
+`list_watch_triggers` filters in the repository before pagination and returns an exact `total`. Use `offset` (default 0) and `limit` to page; `priority`, `feedback` (including `unreviewed`), `deliveryStatus`, and `triggerType` are supported. For browsing a fixed time window, keep `since` and `until` unchanged across pages. It no longer scans only the latest 10,000 records. Set `includeSummary: true` to also receive priority, delivery and feedback counts and per-stock counts, highest priority and latest event across the entire filtered window, independently of pagination. Summary is omitted by default. Use `orderBy: "priority"` to sort urgent, important, then normal before pagination; within a priority, newer events come first with descending ID as a tie-breaker. The default `orderBy: "recent"` preserves chronological browsing. Summary latest events always follow time order.
+
+### 交易计划与盘中通知
+
+- `list_trading_plans` 可传 `includeMonitoring=true`，读取每个版本的监控资格、阻塞原因与下一步；
+  `active` 是保存状态，`ready` 是当前资格，均不能证明后台正在监控或飞书已送达。
+- `intraday-trading-plan-watch` 按全部入场条件合成单个提醒，风险/退出条件优先；盘中不调用 AI、不自动改写计划。
+  观察条件满足只提示重新评估；未持仓风险只提示暂停入场。通知保留反证、风险和卖出限制。
+- `notify=false` 为不消耗边沿与通知额度的试跑；正式调用仍需 write/external 授权。
+  Workflow 输出已移除 `reviewedPlans`，后续计划版本由盘后批次或用户主动复核产生。
+
+### 飞书摘要
+
+`render_report` 支持 `format=notification`，输出有长度预算的移动通知摘要；完整内容仍用
+`markdown` / `plain-text`。摘要仅允许市场、策略研究、预警和事件板块，不包含账户估值、持仓仓位、交易计划、
+交易归因及个人复盘，也不披露其数据缺口；隐藏内部 ID、原始证据和宽表格，保留研究风险及有效期。
+策略推荐将同一批次的规则兜底合并为「分析未完成」通知，不能把它当作 AI 推荐或交易依据。

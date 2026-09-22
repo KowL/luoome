@@ -1316,7 +1316,7 @@ export const renderAlerts = async (setStatus) => {
     await Promise.all([
       callApi('/api/alert-plans'),
       callApi('/api/watch/triggers?limit=200'),
-      callApi('/api/trading-plans?activeOnly=false&limit=200'),
+      callApi('/api/trading-plans?activeOnly=false&includeMonitoring=true&limit=200'),
       post('/api/tools/get_account_facts/call', {}),
       post('/api/tools/reconcile_account_cash/call', {}),
     ]);

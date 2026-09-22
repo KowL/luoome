@@ -243,6 +243,27 @@ const sentimentManager = (): AShareSentimentManagerLike => ({
 });
 
 describe('closing-report workflow', () => {
+  it('飞书使用通知摘要，保留风险有效期而不发送完整表格和证据 ID', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    await seedStrategyWithPublishedRun(ctx, '2026-07-27');
+    await seedStrategyAdvice(ctx, '2026-07-27');
+    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: true }, ctx);
+    expect(result.ok).toBe(true);
+    const notifications = await ctx.repos.notification.listRecent();
+    expect(notifications).toHaveLength(1);
+    const payload = notifications[0]?.payload;
+    expect(payload?.title).toBe('2026-07-27 收盘复盘');
+    expect(payload?.content).toContain('贵州茅台');
+    expect(payload?.content).toContain('反证：fixture counter');
+    expect(payload?.content).toContain('风险：fixture risk');
+    expect(payload?.content).toContain('有效至');
+    expect(payload?.content).not.toContain('closing-strategy-advice');
+    expect(payload?.content).not.toContain('| ---');
+    expect(payload?.content).not.toMatch(/账户当日估值变化|交易计划|账本累计盈亏|目标仓位/);
+    expect(payload?.content).not.toContain('# 2026-07-27');
+    expect(payload?.content.length).toBeLessThan(4200);
+  });
+
   it('使用当日市场证据并保存六个收盘事实 section', async () => {
     const requestedDates: string[] = [];
     const manager: AShareSentimentManagerLike = {
@@ -259,6 +280,9 @@ describe('closing-report workflow', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(requestedDates).toEqual(['2026-07-27']);
+    expect(
+      result.data.report.sections.find((section) => section.key === 'trading-plans'),
+    ).toMatchObject({ status: 'complete', missingDimensions: [] });
     expect(result.data.report).toMatchObject({
       kind: 'closing',
       periodStart: '2026-07-27',
@@ -275,6 +299,30 @@ describe('closing-report workflow', () => {
       'trading-plans',
       'next-events',
     ]);
+  });
+
+  it('单日报告补取上一交易日作为收益基点，未配置的基准不生成空占位', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const snapshots = await ctx.repos.portfolioPerformanceSnapshot.listByAccount(
+      ctx.user.defaultAccountId,
+    );
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots[0]).toMatchObject({
+      from: new Date('2026-07-24T00:00:00.000Z'),
+      to: new Date('2026-07-27T00:00:00.000Z'),
+    });
+    const performance = result.data.report.sections.find(
+      (section) => section.key === 'account-performance',
+    );
+    const metrics =
+      performance?.blocks.flatMap((block) => (block.kind === 'metrics' ? block.items : [])) ?? [];
+    expect(metrics.some((metric) => metric.key === 'benchmarkTwrPct')).toBe(false);
+    expect(
+      metrics.filter((metric) => metric.key === 'twrPct').every((metric) => metric.value !== null),
+    ).toBe(true);
   });
 
   it('scheduled 模式对同键已投递报告幂等，不重复生成与投递', async () => {

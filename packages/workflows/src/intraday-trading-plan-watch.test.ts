@@ -80,7 +80,7 @@ const seedFacts = async (
 };
 
 describe('intraday trading plan watch', () => {
-  it('uses fresh intraday evidence, persists an edge, and does not repeat it', async () => {
+  it('试跑不消耗正式边沿，正式触发后不重复发送', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     const facts = await seedFacts(ctx);
     const plan = makePlan(ACCOUNT_ID, facts.digest);
@@ -97,12 +97,138 @@ describe('intraday trading plan watch', () => {
     expect(first.data.triggers).toHaveLength(1);
     expect(first.data.triggers[0]?.deliveryStatus).toBe('not-requested');
 
+    expect(await ctx.repos.watchRuleState.listByPool(`trading-plan-watch:${ACCOUNT_ID}`)).toEqual(
+      [],
+    );
+    expect(
+      await ctx.repos.watchTrigger.listRecent({ poolId: `trading-plan-watch:${ACCOUNT_ID}` }),
+    ).toEqual([]);
+    const formal = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(formal.ok && formal.data.triggers.length).toBe(1);
     const second = await intradayTradingPlanWatchWorkflow.run(
-      { accountId: ACCOUNT_ID, notify: false },
+      { accountId: ACCOUNT_ID, notify: true },
       ctx,
     );
     expect(second.ok).toBe(true);
     if (second.ok) expect(second.data.triggers).toEqual([]);
+  });
+
+  it('入场按全部条件求值，部分满足不提醒；全部满足只发一条且保留全部证据', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const facts = await seedFacts(ctx);
+    const plan = makePlan(ACCOUNT_ID, facts.digest);
+    const second = {
+      ...plan.entryConditions[0],
+      kind: 'price-threshold' as const,
+      phase: 'entry' as const,
+      metric: 'price' as const,
+      comparator: 'gte' as const,
+      id: 'entry-second',
+      value: 100000,
+      description: '第二个条件',
+    };
+    await ctx.repos.tradingPlan.save({
+      ...plan,
+      entryConditions: [...plan.entryConditions, second],
+    });
+    const first = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: false },
+      ctx,
+    );
+    expect(first.ok && first.data.triggers).toEqual([]);
+    await ctx.repos.tradingPlan.save({
+      ...plan,
+      version: 2,
+      entryConditions: [...plan.entryConditions, { ...second, value: 0 }],
+    });
+    const next = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: false },
+      ctx,
+    );
+    expect(next.ok && next.data.triggers.length).toBe(1);
+    if (next.ok)
+      expect(next.data.triggers[0]?.evalSnapshot.conditionIds).toEqual([
+        'entry-now',
+        'entry-second',
+      ]);
+  });
+
+  it('风险命中时不发送入场提醒，未持仓风险不伪装成卖出指令', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const facts = await seedFacts(ctx);
+    const plan = makePlan(ACCOUNT_ID, facts.digest);
+    await ctx.repos.tradingPlan.save({
+      ...plan,
+      exit: {
+        ...plan.exit,
+        triggerConditions: [
+          {
+            ...plan.entryConditions[0],
+            kind: 'price-threshold' as const,
+            metric: 'price' as const,
+            comparator: 'gte' as const,
+            value: 0,
+            id: 'stop',
+            phase: 'risk',
+            description: '入场前已失效',
+          },
+        ],
+      },
+    });
+    const result = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: false },
+      ctx,
+    );
+    expect(result.ok && result.data.triggers.length).toBe(1);
+    if (result.ok) {
+      expect(result.data.triggers[0]?.priority).toBe('urgent');
+      expect(result.data.triggers[0]?.direction).toBe('watch');
+      expect(result.data.triggers[0]?.evalSnapshot.nextStep).toContain('暂停入场');
+    }
+  });
+
+  it('人工确认与过期市场事实不能由价格命中代替', async () => {
+    for (const kind of ['manual-confirmation', 'market-fact'] as const) {
+      const ctx = await buildTestContext({ clock: () => NOW });
+      const facts = await seedFacts(ctx);
+      const plan = makePlan(ACCOUNT_ID, facts.digest);
+      await ctx.repos.tradingPlan.save({
+        ...plan,
+        entryConditions: [
+          ...plan.entryConditions,
+          {
+            id: 'confirmation',
+            kind,
+            phase: 'entry',
+            factId: 'market',
+            description: '等待确认',
+          },
+        ],
+        marketFacts: [
+          {
+            id: 'market',
+            metric: 'price',
+            value: 1,
+            unit: 'CNY',
+            source: 'fixture',
+            observedAt: new Date(NOW.getTime() - 11 * 60000),
+            fetchedAt: NOW,
+            timestampSource: 'upstream',
+            frequency: 'quote',
+            status: 'available',
+          },
+        ],
+      });
+      const result = await intradayTradingPlanWatchWorkflow.run(
+        { accountId: ACCOUNT_ID, notify: false },
+        ctx,
+      );
+      expect(result.ok && result.data.triggers).toEqual([]);
+      expect(result.ok && result.data.status).toBe('partial');
+    }
   });
 
   it('刷新没有计划的持仓行情，使整账户事实恢复可用', async () => {
@@ -159,7 +285,7 @@ describe('intraday trading plan watch', () => {
     expect(result.data.errors.join('｜')).toContain('账户事实不可用');
   });
 
-  it('风险触发经 AI 复核后仍发送原始风险事实，并展示最新计划版本', async () => {
+  it('风险立即通知，不调用 AI 或改写计划，保留原始事实和下一步', async () => {
     const base = await buildTestContext({
       clock: () => NOW,
       advices: [],
@@ -188,6 +314,7 @@ describe('intraday trading plan watch', () => {
       },
     });
     await base.repos.tradingPlan.save(riskPlan);
+    const generate = vi.fn();
     let sends = 0;
     let content = '';
     const notification = base.notification;
@@ -198,18 +325,10 @@ describe('intraday trading plan watch', () => {
         ...base.adapters,
         llm: {
           name: 'review-fixture',
-          generate: async <T = unknown>(): Promise<T> =>
-            ({
-              decision: 'hold' as const,
-              confidence: 60,
-              horizon: 'short' as const,
-              reasoning: {
-                premise: '量价仍需观察',
-                evidence: ['价格条件已命中'],
-                counterEvidence: ['价格低于原止损'],
-              },
-              risks: ['继续下跌风险'],
-            }) as T,
+          generate: async <T = unknown>(): Promise<T> => {
+            generate();
+            throw new Error('盘中通知不得等待 AI');
+          },
         },
       },
       notification: {
@@ -226,13 +345,20 @@ describe('intraday trading plan watch', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.reviewedPlans[0]?.status).toBe('saved');
+    expect(
+      (await base.repos.tradingPlan.list({ accountId: ACCOUNT_ID })).map((item) => item.version),
+    ).toEqual([1]);
     expect(result.data.triggers[0]?.deliveryStatus).toBe('sent');
     expect(result.data.notified).toBe(1);
     expect(sends).toBe(1);
-    expect(content).toContain('计划版本：account:');
-    expect(content).toContain(':v2');
-    expect(content).toContain('原触发计划版本：');
+    expect(content).not.toContain('account:');
+    expect(content).not.toContain(':v1');
+    expect(result.data.triggers[0]?.evalSnapshot.planVersionId).toBe(`${plan.id}:v1`);
+    expect(content).toContain('北京时间');
+    expect(content.length).toBeLessThan(800);
+    expect(content).toContain('请优先复核持仓');
+    expect(content).toContain('反证：');
+    expect(generate).not.toHaveBeenCalled();
   });
 
   it('发布前发现账户事实变化时不提交边沿或发送旧信号', async () => {
