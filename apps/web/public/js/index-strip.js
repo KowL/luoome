@@ -7,13 +7,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { $, el, fmtDateTime, fmtNum, fmtSigned, mount } from './ui.js';
-
-const fmtTime = (d) => {
-  const date = new Date(d);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', { hour12: false });
-};
+import { $, el, fmtDateTime, fmtNum, fmtSigned, fmtTime, mount } from './ui.js';
 
 /** 渲染指数条到 containerId 容器；数据来自 /api/dashboard 或 /api/market/indices 的 indices 字段。 */
 const renderIndexStrip = (containerId, indicesData, asOf) => {
@@ -46,6 +40,7 @@ const renderIndexStrip = (containerId, indicesData, asOf) => {
  * 渲染固定指数卡片（看盘页 4 卡 / 指数页 6 卡共用）。
  * 与 strip 不同：数据缺失 / unsupported 时卡片仍渲染，值降级为 '--'（用户要求看到卡片结构）。
  * onSelect 非空时卡片可点击（指数页选中切换分时图），selectedCode 命中的卡加 selected class。
+ * showStaleTime：看盘页开启，仅当快照为旧快照 / 缺数据时才在卡片上补时间说明。
  */
 const renderIndexCards = (containerId, defs, indicesData, options = {}) => {
   const wrap = $(`#${containerId}`);
@@ -67,16 +62,13 @@ const renderIndexCards = (containerId, defs, indicesData, options = {}) => {
           hasData ? `${fmtSigned(idx.change)}（${fmtSigned(idx.changePct)}%）` : '--',
         ),
       ]);
-      if (options.showTime) {
-        card.append(
-          el(
-            'small',
-            'muted',
-            hasData
-              ? `${indicesData?.stale ? '旧快照 · ' : ''}${fmtDateTime(idx.ts)}`
-              : '行情不可用',
-          ),
-        );
+      // 4 张卡共用同一快照时刻，正常行情不再逐卡重复；只有旧快照 / 缺数据才提示。
+      if (options.showStaleTime) {
+        const stale = indicesData?.stale === true;
+        if (!hasData || stale)
+          card.append(
+            el('small', 'muted', hasData ? `旧快照 · ${fmtDateTime(idx.ts)}` : '行情不可用'),
+          );
       }
       if (options.onSelect !== undefined) {
         card.classList.add('clickable');

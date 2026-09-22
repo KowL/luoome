@@ -2578,7 +2578,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (indexQuotes.ok) {
       indices = indexQuotes.data as typeof indices;
     } else {
-      warnings.push(`fetch_index_quotes 失败（${indexQuotes.error.kind}），指数行情降级为空`);
+      warnings.push(`指数行情读取失败（${indexQuotes.error.kind}），指数卡暂不可用`);
     }
 
     const watchlistRows = (
@@ -2672,15 +2672,18 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         todayTrigger: null,
       });
     }
-    const watchedWatchlistIds = watchlistRows
-      .filter(({ watchlist }) => watchlist.enabled)
-      .map(({ watchlist }) => watchlist.id);
-    const watchedDetails = await Promise.all(watchedWatchlistIds.map((id) => watchlistDetail(id)));
-    for (const [index, detail] of watchedDetails.entries()) {
+    const watchedWatchlists = watchlistRows.filter(({ watchlist }) => watchlist.enabled);
+    const watchedDetails = await Promise.all(
+      watchedWatchlists.map(async ({ watchlist }) => ({
+        watchlist,
+        detail: await watchlistDetail(watchlist.id),
+      })),
+    );
+    for (const { watchlist: watchedWatchlist, detail } of watchedDetails) {
       if (!detail.ok) {
         boardComplete = false;
         warnings.push(
-          `get_watchlist(${watchedWatchlistIds[index]}) 失败（${detail.error.kind}），看板跳过该 Watchlist`,
+          `关注列表「${watchedWatchlist.name}」读取失败（${detail.error.kind}），看板跳过该列表`,
         );
         continue;
       }

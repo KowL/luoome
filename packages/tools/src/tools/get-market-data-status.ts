@@ -2,6 +2,7 @@ import type { MarketSourceStatus, SourceStatus } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool } from '../define-tool.js';
+import { computeMarketSession } from '../internal/market-view.js';
 import { computeRelevantStockIds } from './sync-stock-events.js';
 
 /** 新鲜度阈值：最新快照超过 15 分钟视为 stale（Phase 1 简化，不区分盘中/盘后）。 */
@@ -40,6 +41,8 @@ export const GetMarketDataStatusOutput = z.object({
     })
     .nullable(),
   watchlistStale: z.array(z.object({ watchlistId: z.string(), name: z.string() })),
+  /** A 股当前交易时段（core 交易日历计算，与行情页 / cli watch 同一套口径）。 */
+  marketSession: z.enum(['pre-open', 'trading', 'midday-break', 'closed', 'non-trading-day']),
 });
 
 /**
@@ -50,6 +53,7 @@ export const GetMarketDataStatusOutput = z.object({
  *   freshness 走 §4.3 状态机（lastErrorKind → unavailable；否则按 dataAsOf 阈值；否则 unknown）
  * - watchHealth：最近 WatchRun 摘要
  * - watchlistStale：存在 stale 成员来源的启用 Watchlist
+ * - marketSession：当前交易时段（顶栏时段徽标与行情页共用，不在前端重算交易日历）
  */
 export const getMarketDataStatusTool = defineTool({
   name: 'get_market_data_status',
@@ -171,6 +175,12 @@ export const getMarketDataStatusTool = defineTool({
       }
     }
 
-    return { providers, datasets, watchHealth, watchlistStale };
+    return {
+      providers,
+      datasets,
+      watchHealth,
+      watchlistStale,
+      marketSession: computeMarketSession(now),
+    };
   },
 });

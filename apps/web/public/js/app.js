@@ -15,6 +15,7 @@ import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { navigateToStock, renderMarket, teardownMarket } from './market.js';
 import { initMarketSettings, renderMarketSettings } from './market-settings.js';
+import { sessionLabel } from './market-shared.js';
 import { initMarketSync, renderMarketSyncStatus } from './market-sync.js';
 import { initModal } from './modal.js';
 import {
@@ -51,34 +52,140 @@ import { $ } from './ui.js';
 
 const statusEl = () => $('#status');
 
+/** 成功类状态条 4 秒后自动隐去（自动刷新每 15s 弹一次会一直挡着内容）；错误类保留到下一次状态更新。 */
+const STATUS_VISIBLE_MS = 4000;
+let statusTimer = null;
+
 const setStatus = (message, isError = false) => {
   const node = statusEl();
   if (node === null) return;
   node.textContent = message;
   node.hidden = false;
   node.className = isError ? 'status error' : 'status';
+  if (statusTimer !== null) clearTimeout(statusTimer);
+  statusTimer =
+    isError || STATUS_VISIBLE_MS <= 0
+      ? null
+      : setTimeout(() => {
+          node.hidden = true;
+        }, STATUS_VISIBLE_MS);
 };
 
-/* ============ 顶栏时钟 ============ */
+/** 顶栏高度随断点变化（≤640 变两行）：实测后写回 --topbar-h，供 sticky 偏移（侧栏、报告台账等）复用。 */
+const syncTopbarHeight = () => {
+  const bar = document.querySelector('.topbar');
+  if (bar === null) return;
+  const height = Math.round(bar.getBoundingClientRect().height);
+  if (height > 0) document.documentElement.style.setProperty('--topbar-h', `${height}px`);
+};
+
+const observeTopbarHeight = () => {
+  const bar = document.querySelector('.topbar');
+  if (bar === null) return;
+  syncTopbarHeight();
+  if (typeof ResizeObserver === 'undefined') {
+    window.addEventListener('resize', syncTopbarHeight);
+    return;
+  }
+  new ResizeObserver(syncTopbarHeight).observe(bar);
+};
+
+/* ============ 顶栏时钟 + 交易时段 ============ */
+
+/** 交易时段：来自服务端 get_market_data_status 的 marketSession，不在前端重算交易日历。 */
+let marketSession = null;
+
+const renderMarketSession = () => {
+  const chip = $('#topbar-session');
+  if (chip === null) return;
+  if (marketSession === null) {
+    chip.hidden = true;
+    return;
+  }
+  chip.textContent = sessionLabel(marketSession);
+  chip.classList.toggle('is-quiet', marketSession !== 'trading');
+  chip.hidden = false;
+};
+
+const refreshMarketSession = async () => {
+  const result = await callApi('/api/market-data-status', { timeoutMs: 10000 });
+  // 失败保留上一枚徽标：时段指示不值得报错打扰
+  if (!result.ok) return;
+  marketSession = result.data?.marketSession ?? null;
+  renderMarketSession();
+};
 
 const startClock = () => {
   const tick = () => {
-    const node = $('#topbar-clock');
-    if (node !== null) {
-      node.textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    const now = new Date();
+    const [hour = '--', minute = '--', second = '--'] = now
+      .toLocaleTimeString('zh-CN', { hour12: false })
+      .split(':');
+    const time = $('#topbar-time');
+    const sec = $('#topbar-sec');
+    if (time !== null) time.textContent = `${hour}:${minute}`;
+    if (sec !== null) sec.textContent = `:${second}`;
+    const clock = $('#topbar-clock');
+    if (clock !== null) {
+      const session = marketSession === null ? '' : ` · ${sessionLabel(marketSession)}`;
+      const label = `${now.toLocaleString('zh-CN', { hour12: false })}（Asia/Shanghai）${session}`;
+      if (clock.title !== label) clock.title = label;
     }
   };
   tick();
   setInterval(tick, 1000);
 };
 
+const startMarketSession = () => {
+  void refreshMarketSession();
+  setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    void refreshMarketSession();
+  }, 60_000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void refreshMarketSession();
+  });
+};
+
+/** 快捷键提示：Mac 用 ⌘K，其余平台用 Ctrl K。 */
+const searchShortcutHint = () =>
+  /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘K' : 'Ctrl K';
+
+/** 弹层打开时不抢快捷键（弹窗优先响应自己的键盘事件）。 */
+const overlayOpen = () =>
+  $('#modal-overlay')?.hidden === false ||
+  $('#theme-drawer')?.classList.contains('is-open') === true;
+
+/** `/` 聚焦搜索（输入控件里不抢），⌘K / Ctrl K 任何位置都聚焦。 */
+const bindSearchShortcut = (focusSearch) => {
+  document.addEventListener('keydown', (event) => {
+    const target = event.target;
+    const typing =
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable);
+    const withModifier = event.metaKey || event.ctrlKey;
+    const isSlash = event.key === '/' && !withModifier && !event.altKey;
+    const isCmdK = withModifier && !event.altKey && event.key.toLowerCase() === 'k';
+    if (!isSlash && !isCmdK) return;
+    if (isSlash && typing) return;
+    if (overlayOpen()) return;
+    event.preventDefault();
+    focusSearch();
+  });
+};
+
 const bindTopbarStockSearch = () => {
   const wrap = $('#topbar-stock-search');
   if (wrap === null || wrap.childElementCount > 0) return;
-  createStockSearchBox(wrap, {
+  const box = createStockSearchBox(wrap, {
     placeholder: '搜索代码 / 名称',
+    shortcutHint: searchShortcutHint(),
     onSelect: (stock) => navigateToStock(stock, { resetContext: true }),
   });
+  bindSearchShortcut(() => box?.focus());
 };
 
 /* ============ 路由分发 ============ */
@@ -102,8 +209,14 @@ const ROUTES = [
   'settings',
 ];
 
+/** 上一帧显示的路由：只在换页时回到顶部，同页重绘（自动刷新、账户切换）不动滚动位置。 */
+let shownRoute = null;
+
 const showRoute = async (name) => {
   const safe = ROUTES.includes(name) ? name : 'dashboard';
+  // 换页回到页面顶部：各页高度不同，沿用上一页的滚动位置会停在半截卡片或 K 线图上
+  if (shownRoute !== safe) window.scrollTo({ top: 0, left: 0 });
+  shownRoute = safe;
   invalidateDashboard();
   invalidateDashboardMarket();
   // 离开行情页时停止 60s 自动刷新并销毁图表（设计 §11.4）。
@@ -417,6 +530,8 @@ bindTopbarTheme();
 bindTopbarStockSearch();
 bindGlobalActions();
 startClock();
+startMarketSession();
+observeTopbarHeight();
 startDashboardAutoRefresh();
 startQuoteAutoRefresh();
 void initAccountSelect();

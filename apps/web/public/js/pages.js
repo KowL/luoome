@@ -28,6 +28,7 @@ import {
 import {
   $,
   adviceCard,
+  adviceSubjectLine,
   compareValues,
   createPagination,
   decisionBadge,
@@ -36,6 +37,7 @@ import {
   fmtNum,
   fmtPct,
   fmtSigned,
+  fmtTime,
   mount,
   sortableHeader,
   statBlock,
@@ -110,7 +112,6 @@ const changeBoardView = (setStatus) => {
       ? active.textContent
       : null;
   mount($('#dashboard-board'), el('p', 'placeholder', '正在加载所选范围…'));
-  $('#dashboard-board-meta').textContent = '';
   $('#dashboard-board-coverage').textContent = '';
   void renderDashboard(setStatus);
 };
@@ -241,20 +242,21 @@ const boardStats = (items) => ({
   unknown: items.filter((item) => item.changePct === null).length,
 });
 
-/** 盯盘最近一轮评估摘要；字段名与 WatchRunSchema（evaluatedPools 等）对齐。 */
-const watchRunSummaryText = (latest) =>
-  latest === null
-    ? '跑一轮后显示评估指标'
-    : `评估 ${latest.evaluatedPools} 个方案 / ${latest.evaluatedStocks} 只股票 · ` +
-      `触发 ${latest.triggered} · 尝试通知 ${latest.notified} · 送达 ${latest.delivered ?? '未记录'} · 无法求值 ${latest.unknownRules ?? '未记录'}`;
+/**
+ * 盯盘最近一轮评估摘要；字段名与 WatchRunSchema（evaluatedPools 等）对齐。
+ * 一轮没有任何可评估标的时只报这一件事，不铺 5 个 0（状态由状态行单独呈现）。
+ */
+const watchRunSummaryText = (latest) => {
+  if (latest === null) return '跑一轮后显示评估指标';
+  if (latest.evaluatedPools === 0 && latest.evaluatedStocks === 0)
+    return '最近一轮没有可评估的标的 · 运行心跳已记录';
+  return (
+    `评估 ${latest.evaluatedPools} 个方案 / ${latest.evaluatedStocks} 只股票 · ` +
+    `触发 ${latest.triggered} · 尝试通知 ${latest.notified} · 送达 ${latest.delivered ?? '未记录'} · 无法求值 ${latest.unknownRules ?? '未记录'}`
+  );
+};
 
 /* ---- 看板 / 指数条 / 今日预警渲染 ---- */
-
-const fmtTime = (d) => {
-  const date = new Date(d);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', { hour12: false });
-};
 
 const ALERT_PRIORITY_LABEL = { urgent: '急', important: '重要', normal: '普通' };
 const ALERT_PRIORITY_BADGE = {
@@ -275,7 +277,7 @@ const renderIndices = (indicesData) => {
     (code) => INDEX_DEFS.find((d) => d.code === code) ?? { code, name: code },
   );
   renderIndexCards('dashboard-indices', defs, indicesData, {
-    showTime: true,
+    showStaleTime: true,
     onSelect: (code) => navigateTo(`indices?code=${encodeURIComponent(code)}`),
   });
 };
@@ -645,6 +647,27 @@ const boardAlertCell = (todayTrigger, stockName, coverage) => {
   return button;
 };
 
+/**
+ * 看板行情新鲜度（纯函数）：同一次刷新里逐行时间戳基本相同，正常行情不额外提示；
+ * 只有旧快照 / 本地兜底才算降级并补时间（隔日快照必须带日期，否则会被误读成当天盘中）。
+ */
+const quoteState = (quote) => {
+  const degraded = quote.freshness === 'stale' || quote.retrieval === 'local-fallback';
+  return {
+    label: degraded ? '旧快照' : '已获取',
+    warn: degraded,
+    at: degraded ? (quote.observedAt ? fmtDateTime(quote.observedAt) : '时间未知') : '',
+  };
+};
+
+const boardQuoteCell = (item) => {
+  if (item.quote === null) return ['--', el('small', 'board-quote-note', '行情不可用')];
+  const price = fmtNum(item.quote.close);
+  const state = quoteState(item.quote);
+  // 正常行情不占位：否则每行都是同一个刷新时刻；异常才在现价下补一行
+  return state.warn ? [price, el('small', 'board-quote-note', `旧快照 · ${state.at}`)] : [price];
+};
+
 const boardRow = (item, triggerCoverage) => {
   const chgCls =
     item.changePct === null ? '' : item.changePct > 0 ? 'pos' : item.changePct < 0 ? 'neg' : '';
@@ -657,7 +680,7 @@ const boardRow = (item, triggerCoverage) => {
   context.addEventListener('click', () => void openDashboardStockContext(item));
   row.append(
     el('td', null, el('div', 'board-name-cell', nameChildren)),
-    el('td', `num ${chgCls}`, item.quote === null ? '--' : fmtNum(item.quote.close)),
+    el('td', `num ${chgCls}`, boardQuoteCell(item)),
     el('td', `num ${chgCls}`, item.changePct === null ? '--' : `${fmtSigned(item.changePct)}%`),
     el(
       'td',
@@ -681,32 +704,10 @@ const boardRow = (item, triggerCoverage) => {
       boardAlertCell(item.todayTrigger, item.name, triggerCoverage),
       el('small', 'muted', item.todayTrigger ? `最近记录：${item.todayTrigger.latest.reason}` : ''),
     ]),
-    el(
-      'td',
-      'board-data-state',
-      item.quote === null
-        ? '行情不可用'
-        : [
-            el(
-              'span',
-              item.quote.freshness === 'stale' || item.quote.retrieval === 'local-fallback'
-                ? 'text-warn'
-                : 'muted',
-              item.quote.freshness === 'stale' || item.quote.retrieval === 'local-fallback'
-                ? '旧快照'
-                : '已获取',
-            ),
-            el(
-              'small',
-              'muted',
-              item.quote.observedAt ? fmtDateTime(item.quote.observedAt) : '时间未知',
-            ),
-          ],
-    ),
   );
   row.append(el('td', null, context));
   row.setAttribute('role', 'row');
-  const labels = ['股票', '现价', '涨跌幅', '关注来源', '今日预警', '行情时间', '关联'];
+  const labels = ['股票', '现价', '涨跌幅', '关注来源', '今日预警', '关联'];
   [...row.children].forEach((cell, index) => {
     cell.setAttribute('role', 'cell');
     cell.prepend(el('span', 'board-cell-label', labels[index]));
@@ -719,9 +720,21 @@ const defaultOrderForKey = (key) => (key === 'price' || key.endsWith('price') ? 
 const renderBoard = (items, coverage, triggerCoverage, setStatus) => {
   const wrap = $('#dashboard-board');
   if (wrap === null) return;
-  const meta = $('#dashboard-board-meta');
+  const stats = boardStats(items);
+  // 条数只说一次：本页条数 / 覆盖总数 + 本页涨跌分布合成一行（在筛选区下方）
+  const coverageEl = $('#dashboard-board-coverage');
+  if (coverageEl !== null) {
+    coverageEl.textContent = !coverage.available
+      ? '当前范围暂不可用'
+      : [
+          `显示 ${coverage.displayed} / ${coverage.complete ? '' : '至少 '}${coverage.total} 只`,
+          `涨${stats.up} 跌${stats.down} 平${stats.flat} 未知${stats.unknown}`,
+          ...(coverage.truncated ? ['可翻页查看其余股票'] : []),
+          ...(coverage.complete ? [] : ['仅覆盖已读取数据']),
+          ...(boardScope === 'triggered' ? ['基于最近 200 条今日触发，包含已移出关注的股票'] : []),
+        ].join(' · ');
+  }
   if (items.length === 0) {
-    if (meta !== null) meta.textContent = '';
     mount(
       wrap,
       coverage.available && coverage.complete
@@ -729,10 +742,6 @@ const renderBoard = (items, coverage, triggerCoverage, setStatus) => {
         : dashboardRetry('当前范围的数据未完整读取，暂时无法确认股票列表。', setStatus),
     );
     return;
-  }
-  const stats = boardStats(items);
-  if (meta !== null) {
-    meta.textContent = `本页 ${items.length} 只 · 涨${stats.up} 跌${stats.down} 平${stats.flat} 未知${stats.unknown}`;
   }
   const listContainer = el('div', 'paginated-list');
   const mobileSort = el('select', 'board-mobile-sort');
@@ -765,7 +774,6 @@ const renderBoard = (items, coverage, triggerCoverage, setStatus) => {
           sortableHeader('本页涨跌幅', 'changePct', boardSortState, onSort),
           el('th', null, 'Watchlist'),
           el('th', null, '预警'),
-          el('th', null, '行情时间'),
           el('th', null, '关联'),
         ]),
       ),
@@ -875,7 +883,6 @@ const renderDashboard = (setStatus) => {
       mount($(`#${id}`), el('p', 'placeholder', '正在加载当前账户…'));
     }
     $('#dashboard-warnings').hidden = true;
-    $('#dashboard-board-meta').textContent = '';
     $('#dashboard-board-coverage').textContent = '';
     $('#dash-metrics-card').hidden = true;
     $('#dash-watch-state').textContent = '盯盘状态加载中';
@@ -1004,14 +1011,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
       ?.focus({ preventScroll: true });
   }
   pendingBoardFocus = null;
-  $('#dashboard-board-coverage').textContent = !coverage.available
-    ? '当前范围暂不可用'
-    : `显示 ${coverage.displayed} / ${coverage.complete ? '' : '至少 '}${coverage.total} 只${coverage.truncated ? ' · 可翻页查看其余股票' : ''}${coverage.complete ? '' : ' · 仅覆盖已读取数据'}`;
-  if (boardScope === 'triggered')
-    $('#dashboard-board-coverage').textContent +=
-      ' · 基于最近 200 条今日触发，包含已移出关注的股票';
-  $('#dashboard-status').textContent =
-    `看板获取于 ${fmtDateTime(result.data.asOf)} · 默认刷新间隔 15 秒 · 各行情时间见下方`;
+  $('#dashboard-status').textContent = `看板更新于 ${fmtTime(result.data.asOf)} · 15 秒自动刷新`;
   const warnings = [...(result.data.meta?.warnings ?? [])];
   if (indices?.stale) warnings.push('指数获取失败，保留最近成功快照');
   const staleQuotes = (board ?? []).filter(
@@ -1026,8 +1026,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
     warnings.push(`${metrics.latestRun.notifyFailed} 条通知发送失败`);
   if ((metrics?.deliveryStatusCounts?.['fallback-log'] ?? 0) > 0)
     warnings.push('部分提醒仅写入日志，未送达');
-  if (watch?.state === 'failed' || watch?.state === 'stale')
-    warnings.push(`盯盘状态：${healthLabel(watch.state)}`);
+  // 盯盘状态不在这里重复：下面的盯盘状态行已经写了同一句话
   const notice = $('#dashboard-warnings');
   notice.textContent = warnings.join('；');
   notice.hidden = warnings.length === 0;
@@ -1053,7 +1052,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
         : top.length === 0
           ? el('p', 'placeholder', '暂无建议，去「持仓」页点「分析全部」生成。')
           : top.map((advice) => {
-              const card = adviceCard(advice);
+              const card = adviceCard(advice, { compact: true });
               card.dataset.adviceId = advice.id;
               card.classList.toggle('expanded', expanded.has(advice.id));
               return card;
@@ -2632,7 +2631,6 @@ const renderReview = async (setStatus) => {
     mount(
       list,
       advices.map((a) => {
-        const code = String(a.subjectId).split('.')[0] || a.subjectId;
         const li = el('div', 'advice-card');
         const status = a.outcome === undefined ? '（待回填）' : a.outcome.outcome;
         const pnlText = a.outcome?.pnl !== undefined ? `  盈亏 ${fmtSigned(a.outcome.pnl)}` : '';
@@ -2647,12 +2645,12 @@ const renderReview = async (setStatus) => {
                   ? []
                   : [`持有 ${a.outcome.holdingHours}h`]),
                 ...(Array.isArray(a.outcome.tradeIds) && a.outcome.tradeIds.length > 0
-                  ? [`交易 ${a.outcome.tradeIds.join(',')}`]
+                  ? [`交易 ${a.outcome.tradeIds.length} 笔`]
                   : []),
               ];
         li.append(
           el('div', 'row-1', [
-            el('div', 'subject', [el('span', 'code', code), a.subjectId]),
+            adviceSubjectLine(a),
             el('span', 'badge', `${a.decision} · 信心 ${a.confidence}%`),
           ]),
         );
@@ -2879,7 +2877,10 @@ const loadDataHealth = async (setStatus) => {
     /** @type {{providers: Array<{provider: string, freshness: string, latestObservedAt?: string}>, datasets?: Array<{dataset: string, source: string, freshness: string, dataAsOf?: string, lastSuccessAt?: string, lastErrorKind?: string}>, watchHealth: {state: string, triggered?: number, notifyFailed?: number}|null, watchlistStale: Array<{watchlistId: string, name: string}>}} */ (
       r.data
     );
-  const providerEls = data.providers.map((p) => {
+  // 未使用过的行情源（freshness=unknown）只报数量，避免一行「未知 —」占一排
+  const activeProviders = data.providers.filter((p) => p.freshness !== 'unknown');
+  const unusedProviderCount = data.providers.length - activeProviders.length;
+  const providerEls = activeProviders.map((p) => {
     const meta = FRESHNESS_LABEL[p.freshness] ?? FRESHNESS_LABEL.unknown;
     const observed = p.latestObservedAt
       ? new Date(p.latestObservedAt).toLocaleString('zh-CN', { hour12: false })
@@ -2894,6 +2895,7 @@ const loadDataHealth = async (setStatus) => {
     wh === null
       ? 'watch 从未运行'
       : `watch ${wh.state}（今日触发 ${wh.triggered ?? 0}，失败 ${wh.notifyFailed ?? 0}）`;
+  // stale Watchlist 只列名称（watchlistId 是内部标识，需要排查时到关注列表页看）
   const stale =
     data.watchlistStale.length === 0
       ? null
@@ -2902,9 +2904,7 @@ const loadDataHealth = async (setStatus) => {
           el(
             'ul',
             null,
-            data.watchlistStale.map((item) =>
-              el('li', null, `${item.name}（${item.watchlistId}）`),
-            ),
+            data.watchlistStale.map((item) => el('li', null, item.name)),
           ),
         ]);
   // 数据集明细（ruo §8 读模型的 datasets，此前被丢弃）：折叠展示 per-dataset 观测
@@ -2934,7 +2934,11 @@ const loadDataHealth = async (setStatus) => {
                   el('td', null, ds.source),
                   el('td', meta.cls, meta.label),
                   el('td', null, fmtTime(ds.dataAsOf ?? ds.lastSuccessAt)),
-                  el('td', 'muted', ds.lastErrorKind ?? ''),
+                  el(
+                    'td',
+                    'muted',
+                    ds.lastErrorKind ? errorKindLabel({ kind: ds.lastErrorKind }) : '',
+                  ),
                 ]);
               }),
             ),
@@ -2944,7 +2948,13 @@ const loadDataHealth = async (setStatus) => {
   mount(
     body,
     el('div', 'data-health-grid', [
-      el('div', 'data-health-providers', [el('h3', null, '行情源'), ...providerEls]),
+      el('div', 'data-health-providers', [
+        el('h3', null, '行情源'),
+        ...providerEls,
+        ...(unusedProviderCount === 0
+          ? []
+          : [el('span', 'muted data-health-unused', `未使用 ${unusedProviderCount} 个来源`)]),
+      ]),
       el('div', 'data-health-watch', [el('h3', null, 'watch 健康'), el('p', null, watchText)]),
       ...(stale !== null ? [stale] : []),
       ...(datasetDetail !== null ? [datasetDetail] : []),
@@ -3868,6 +3878,7 @@ export {
   filterAdvices,
   invalidateDashboard,
   outcomeInputOf,
+  quoteState,
   readDashboardView,
   renderAdviceList,
   renderDashboard,

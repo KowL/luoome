@@ -3601,6 +3601,26 @@ describe('MVP dashboard / watch API', () => {
     expect(body.data?.unsupported).toBe(true);
   });
 
+  it('指数行情读取失败时给中文降级文案，不把 tool 名当作给用户看的说明', async () => {
+    class FailingIndexAdapter extends FixedQuoteAdapter {
+      override fetchIndexQuotes(): Promise<never> {
+        return Promise.reject(new Error('upstream unavailable'));
+      }
+    }
+    const localCtx: ToolContext = {
+      ...appCtx,
+      adapters: { ...appCtx.adapters, market: new FailingIndexAdapter({ quotes: {} }) },
+    };
+    const localApp = createWebApp(localCtx, { exposeWrite: true, exposeExternal: true });
+    const r = await localApp.fetch(new Request('http://test/api/dashboard'));
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean; data?: { meta: { warnings: string[] } } };
+    expect(body.ok).toBe(true);
+    const warnings = body.data?.meta.warnings ?? [];
+    expect(warnings.some((w) => w.includes('指数行情读取失败'))).toBe(true);
+    expect(warnings.some((w) => w.includes('fetch_index_quotes'))).toBe(false);
+  });
+
   it('/api/market/indices：15s TTL 内第二次命中缓存（上游 fetchIndexQuotes 只调一次）', async () => {
     class CountingIndexAdapter extends FixedQuoteAdapter {
       calls = 0;
@@ -4931,7 +4951,7 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
     expect(byStock('600900.SH')).toHaveLength(0);
   });
 
-  it('get_watchlist 失败降级为 warning，看板跳过该 Watchlist', async () => {
+  it('get_watchlist 失败降级为 warning，看板跳过该 Watchlist（不暴露 id 与 tool 名）', async () => {
     // findById 只被 get_watchlist 使用；list_watchlists 走 list，不受影响的
     // Watchlist 行仍会通过 enabled 过滤进入待拉详情列表。
     // repo 是类实例，不能用展开（丢原型方法）；用原型保持的包装覆写 findById。
@@ -4958,7 +4978,7 @@ describe('dashboard 看板 Watchlist 合并路径', () => {
     const body = (await r.json()) as DashboardBody;
     expect(body.ok).toBe(true);
     const warnings = body.data?.meta.warnings ?? [];
-    expect(warnings.some((w) => w.includes('get_watchlist(board-wl-a)'))).toBe(true);
+    expect(warnings.some((w) => w.includes('关注列表「看板 A」读取失败'))).toBe(true);
     const board = body.data?.board ?? [];
     expect(board.some((item) => item.stockId === '000063.SZ')).toBe(false);
   });

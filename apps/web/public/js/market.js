@@ -125,9 +125,12 @@ const navigateToStock = (stock, { resetContext = false } = {}) => {
     exchange: stock.exchange,
   });
   saveRecent(recent);
-  window.location.hash = resetContext
+  const next = resetContext
     ? buildMarketHash(stock.id, '3m', null, 'day')
     : buildMarketHash(stock.id, state.range, state.date, state.granularity);
+  // 打开某只股票的详情页，先回到顶部报价卡；hash 没变时不会触发 hashchange，这里显式回滚
+  window.scrollTo({ top: 0, left: 0 });
+  window.location.hash = next;
 };
 
 const renderRecent = () => {
@@ -543,6 +546,9 @@ const renderMarket = async (setStatus) => {
     state.range !== range ||
     state.date !== date ||
     state.granularity !== granularity;
+  // 换股等于打开新的详情页：回到顶部报价卡，而不是停在上一只的 K 线位置
+  // （同股只换 range / 粒度时不动滚动位置，图表就在视口里）
+  if (state.stockId !== stockId) window.scrollTo({ top: 0, left: 0 });
   state.stockId = stockId;
   state.range = range;
   state.date = date;

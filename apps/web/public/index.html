@@ -40,14 +40,13 @@
     <div id="topbar-stock-search" class="topbar-stock-search" aria-label="股票搜索"></div>
     <div class="topbar-meta">
       <label class="account-select-wrap" for="account-select">
-        <span class="muted">账户</span>
+        <span class="account-select-label">账户</span>
         <select id="account-select" class="account-select" aria-label="切换账户"></select>
       </label>
-      <button id="theme-drawer-toggle" class="btn btn-ghost btn-sm" type="button" aria-label="切换皮肤颜色">
-        <span aria-hidden="true">◈</span>
-        <span>主题</span>
-      </button>
-      <span class="clock" id="topbar-clock"></span>
+      <span class="clock" id="topbar-clock" title="">
+        <span class="clock-session" id="topbar-session" hidden></span>
+        <span class="clock-time" id="topbar-time">--:--</span><span class="clock-sec" id="topbar-sec"></span>
+      </span>
     </div>
   </header>
 
@@ -71,6 +70,12 @@
         <li><a class="nav-item" href="#chat" data-route="chat"><span>对话</span></a></li>
         <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
       </ul>
+      <div class="sidebar-foot">
+        <button id="theme-drawer-toggle" class="btn btn-ghost btn-sm" type="button" aria-label="切换皮肤颜色">
+          <span aria-hidden="true">◈</span>
+          <span>主题</span>
+        </button>
+      </div>
     </aside>
 
     <main class="content" id="content">
@@ -93,7 +98,7 @@
           <div class="stat"><div class="label">炸板率</div><div class="value" id="dash-broken-rate">--</div><div class="delta" id="dash-broken-count">--</div></div>
         </div>
         <div class="card" id="dashboard-board-card">
-          <div class="card-header"><div><h2>我的看板</h2><p class="card-meta">持仓与启用关注列表 · 关注无需先设置预警</p></div><div class="card-meta" id="dashboard-board-meta"></div></div>
+          <div class="card-header"><div><h2>我的看板</h2><p class="card-meta">持仓与启用关注列表 · 关注无需先设置预警</p></div></div>
           <div class="dashboard-board-filters">
             <label>查看范围 <select id="dashboard-board-scope" aria-label="看板范围"><option value="all">全部</option><option value="holdings">我的持仓</option><option value="watching">我的关注</option><option value="triggered">今日触发</option></select></label>
             <label>关注列表 <select id="dashboard-board-watchlist" aria-label="筛选关注列表"><option value="">全部关注列表</option></select></label>

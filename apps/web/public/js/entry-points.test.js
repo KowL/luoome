@@ -31,6 +31,64 @@ describe('侧栏与路由结构', () => {
     expect(appJs).toContain("document.querySelectorAll('.nav-item')");
   });
 
+  it('换页回到页面顶部，同页重绘（自动刷新 / 账户切换）不动滚动位置', () => {
+    expect(appJs).toContain('if (shownRoute !== safe) window.scrollTo({ top: 0, left: 0 });');
+    expect(appJs).toContain('shownRoute = safe;');
+  });
+
+  it('行情页换股回到顶部报价卡，打开详情页不落在 K 线位置', () => {
+    const market = read('./market.js');
+    // 一次换股（跨页/页内按 stockId 变化）+ 一次 navigateToStock（同股重复点击 hash 不变也能生效）
+    expect(market.split('window.scrollTo({ top: 0, left: 0 })').length - 1).toBe(2);
+    expect(market).toContain(
+      'if (state.stockId !== stockId) window.scrollTo({ top: 0, left: 0 });',
+    );
+  });
+
+  it('顶栏布局：两行断点、时段徽标、控件同高与搜索快捷键', () => {
+    const css = read('../style.css');
+    // 账户标签与时钟秒数在 ≤1020 让位
+    expect(css).toContain('.topbar .account-select-label,');
+    // ≤640 两行：搜索整行，品牌与账户/时钟同行
+    expect(css).toContain('grid-template-columns: auto minmax(0, 1fr);');
+    expect(css).toContain('grid-column: 1 / -1;');
+    // 顶栏自身高度写死；--topbar-h 只是实测输出（运行时由 app.js 回写）
+    expect(css).toContain('--topbar-h: 93px;');
+    // 搜索靠右（与账户 / 时钟同簇），不再居中
+    const searchRule = css.slice(
+      css.indexOf('.topbar-stock-search {'),
+      css.indexOf('.topbar-stock-search .market-search input'),
+    );
+    expect(searchRule).toContain('flex: 0 1 230px;');
+    expect(searchRule).toContain('max-width: 230px;');
+    expect(searchRule).toContain('margin-left: auto;');
+    expect(searchRule).not.toContain('margin-inline: auto;');
+
+    expect(html).toContain('id="topbar-session"');
+    expect(html).toContain('id="topbar-time"');
+    expect(html).toContain('id="topbar-sec"');
+
+    const appJs = read('./app.js');
+    // 时段不在前端重算交易日历，来自服务端 get_market_data_status
+    expect(appJs).toContain('/api/market-data-status');
+    expect(appJs).toContain('sessionLabel(marketSession)');
+    expect(appJs).toContain('syncTopbarHeight');
+    expect(appJs).toContain("event.key.toLowerCase() === 'k'");
+    expect(appJs).toContain("event.key === '/'");
+  });
+
+  it('搜索框带 combobox / listbox 语义与快捷键提示', () => {
+    const box = read('./search-box.js');
+    expect(box).toContain("input.type = 'search'");
+    expect(box).toContain("input.setAttribute('role', 'combobox')");
+    expect(box).toContain("input.setAttribute('aria-expanded', 'false')");
+    expect(box).toContain("input.setAttribute('aria-controls', listboxId)");
+    expect(box).toContain("box.setAttribute('role', 'listbox')");
+    expect(box).toContain("item.setAttribute('role', 'option')");
+    expect(box).toContain('aria-activedescendant');
+    expect(box).toContain("el('kbd', 'search-hint', shortcutHint)");
+  });
+
   it('预警页面菜单使用简化文案「预警」', () => {
     expect(html).toMatch(/href="#alerts" data-route="alerts"><span>预警<\/span>/);
     expect(html).not.toMatch(/href="#alerts" data-route="alerts"><span>预警计划<\/span>/);
@@ -163,8 +221,15 @@ describe('研究 managed 写入入口', () => {
 });
 
 describe('主题皮肤入口', () => {
-  it('顶栏存在主题抽屉按钮，抽屉面板与主题卡片齐全', () => {
-    expect(html).toContain('id="theme-drawer-toggle"');
+  it('主题入口在侧栏底部，不再占用顶栏', () => {
+    const topbar = html.slice(html.indexOf('class="topbar"'), html.indexOf('</header>'));
+    const sidebar = html.slice(html.indexOf('class="sidebar"'), html.indexOf('</aside>'));
+    expect(topbar).not.toContain('theme-drawer-toggle');
+    expect(sidebar).toContain('class="sidebar-foot"');
+    expect(sidebar).toContain('id="theme-drawer-toggle"');
+  });
+
+  it('抽屉面板与主题卡片齐全', () => {
     expect(html).toContain('id="theme-drawer"');
     expect(html).toContain('id="theme-grid"');
     expect(html).toContain('id="follow-system-input"');
@@ -200,7 +265,7 @@ describe('看盘主页结构', () => {
     expect(html).toContain('id="dash-sector-heatmap"');
     expect(html).toContain('id="dash-news-list"');
     expect(html).toContain('id="dashboard-board"');
-    expect(html).toContain('id="dashboard-board-meta"');
+    expect(html).toContain('id="dashboard-board-coverage"');
     expect(html).toContain('id="dash-trigger-list"');
     expect(html).toContain('id="dash-advice-list"');
   });
@@ -327,6 +392,24 @@ describe('看盘页指数卡片', () => {
     const pages = read('./pages.js');
     expect(pages).toContain('indices?code=');
     expect(pages).toContain('encodeURIComponent(code)');
+  });
+});
+
+describe('看盘页时间展示去重', () => {
+  it('卡片 meta 不再写抓取时刻，全页只保留顶部一处刷新时间', () => {
+    expect(read('./dashboard-market.js')).not.toContain('获取于');
+    const pages = read('./pages.js');
+    expect(pages).not.toContain('看板获取于');
+    expect(pages).toContain('看板更新于');
+    expect(read('./index-strip.js')).not.toContain("? '旧快照 · ' : ''");
+  });
+
+  it('看板行情状态不再单列：条数与涨跌分布只在覆盖行写一次', () => {
+    const pages = read('./pages.js');
+    expect(pages).not.toContain('dashboard-board-meta');
+    expect(pages).not.toContain('行情状态');
+    expect(pages).toContain('board-quote-note');
+    expect(pages).toMatch(/涨\$\{stats\.up\} 跌\$\{stats\.down\}/);
   });
 });
 

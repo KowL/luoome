@@ -95,6 +95,14 @@ const fmtDateTime = (d) => {
   return date.toLocaleString('zh-CN', { hour12: false });
 };
 
+/** 钟点 HH:mm:ss；看盘页整体刷新时刻用（同日内的刷新无需重复写日期）。 */
+const fmtTime = (d) => {
+  if (d === undefined || d === null) return '--';
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleTimeString('zh-CN', { hour12: false });
+};
+
 /**
  * Advice 完整卡片（含 expand 切换）。
  * options.onToggleSelect 非空时行首渲染勾选框（建议页选择模式的批量删除）；
@@ -110,9 +118,32 @@ const HORIZON_LABELS = {
   long: '长期',
 };
 
+/** 股票标的 id 形如 300857.SZ；其余标的（持仓 / 账户 / 板块）的 subjectId 是内部标识。 */
+const STOCK_SUBJECT_ID = /^\d{6}\.(SH|SZ|BJ)$/;
+
+/**
+ * 建议标的展示模型（纯函数）。subjectId 对持仓 / 板块建议是内部标识（如 `manual-holding-<uuid>`），
+ * 不上面屏；只有确实是股票代码时才作为第二个字段返回。名称缺失时退回截断后的 subjectId。
+ */
+const adviceSubjectModel = (advice) => {
+  const subjectId = String(advice.subjectId ?? '');
+  const name = typeof advice.stockName === 'string' ? advice.stockName.trim() : '';
+  return {
+    label: name === '' ? subjectId.split('.')[0] || subjectId : name,
+    code: STOCK_SUBJECT_ID.test(subjectId) ? subjectId : '',
+  };
+};
+
+const adviceSubjectLine = (advice) => {
+  const { label, code } = adviceSubjectModel(advice);
+  const parts = [el('span', 'code', label)];
+  if (code !== '') parts.push(el('span', 'subject-id muted mono', code));
+  return el('div', 'subject', parts);
+};
+
 const adviceCard = (advice, options = {}) => {
-  const code = String(advice.subjectId ?? '').split('.')[0] || String(advice.subjectId ?? '');
-  const card = el('article', 'advice-card');
+  // compact：看盘 Top 3 预览位；摘要截成 2 行，元信息只留周期与有效期（全文到建议页看）
+  const card = el('article', options.compact === true ? 'advice-card compact' : 'advice-card');
   const premise = advice.reasoning?.premise ?? '';
   const evidence = Array.isArray(advice.reasoning?.evidence) ? advice.reasoning.evidence : [];
   const counter = Array.isArray(advice.reasoning?.counterEvidence)
@@ -122,8 +153,6 @@ const adviceCard = (advice, options = {}) => {
   const disclaimers = Array.isArray(advice.disclaimers) ? advice.disclaimers : [];
 
   // row-1: [勾选框] 标的 + 决策 badge
-  const primaryLabel =
-    typeof advice.stockName === 'string' && advice.stockName.length > 0 ? advice.stockName : code;
   const row1Parts = [];
   if (options.onToggleSelect !== undefined) {
     const checkbox = el('input', 'advice-select');
@@ -135,10 +164,7 @@ const adviceCard = (advice, options = {}) => {
     });
     row1Parts.push(checkbox);
   }
-  row1Parts.push(
-    el('div', 'subject', [el('span', 'code', primaryLabel), String(advice.subjectId ?? '')]),
-    decisionBadge(advice.decision),
-  );
+  row1Parts.push(adviceSubjectLine(advice), decisionBadge(advice.decision));
   const row1 = el('div', 'row-1', row1Parts);
   card.append(row1);
 
@@ -148,7 +174,7 @@ const adviceCard = (advice, options = {}) => {
   // row-2: 信心度 + 周期 + 建议时间 + validUntil + outcome
   const horizonLabel = HORIZON_LABELS[advice.horizon] ?? advice.horizon ?? '--';
   const row2Parts = [confidenceBar(advice.confidence), `周期 ${horizonLabel}`];
-  if (advice.createdAt !== undefined) {
+  if (advice.createdAt !== undefined && options.compact !== true) {
     row2Parts.push(`建议时间 ${fmtDateTime(advice.createdAt)}`);
   }
   if (advice.validUntil !== undefined) {
@@ -161,7 +187,8 @@ const adviceCard = (advice, options = {}) => {
     if (o.benchmarkPnl !== undefined) row2Parts.push(`基准 ${fmtSigned(o.benchmarkPnl)}`);
     if (o.holdingHours !== undefined) row2Parts.push(`持有 ${o.holdingHours}h`);
     if (Array.isArray(o.tradeIds) && o.tradeIds.length > 0) {
-      row2Parts.push(`交易 ${o.tradeIds.join(',')}`);
+      // 交易记录 id 是内部标识，且持仓页列表不展示 id，只报笔数
+      row2Parts.push(`交易 ${o.tradeIds.length} 笔`);
     }
   }
   card.append(
@@ -393,6 +420,8 @@ export {
   $,
   $$,
   adviceCard,
+  adviceSubjectLine,
+  adviceSubjectModel,
   compareValues,
   confidenceBar,
   createPagination,
@@ -403,6 +432,7 @@ export {
   fmtNum,
   fmtPct,
   fmtSigned,
+  fmtTime,
   mount,
   resultErrorText,
   sortableHeader,

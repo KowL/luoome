@@ -6,7 +6,7 @@
 import { callApi } from './api.js';
 import { openModal } from './modal.js';
 import { renderSectorHeatmap, selectSectorExtremes } from './sector-heatmap.js';
-import { $, el, fmtDateTime, mount } from './ui.js';
+import { $, el, fmtTime, mount } from './ui.js';
 
 let marketEpoch = 0;
 let marketPending = null;
@@ -21,7 +21,7 @@ const invalidateDashboardMarket = () => {
 
 const overviewMeta = (snapshot) => {
   const states = { complete: '完整', partial: '部分可用', unavailable: '不可用' };
-  return `交易日 ${snapshot.date} · 数据截至 ${fmtDateTime(snapshot.dataAsOf)} · 上涨/下跌 ${states[snapshot.breadth.status]} · 涨停 ${states[snapshot.limitUp.status]}`;
+  return `交易日 ${snapshot.date} · 数据截至 ${fmtTime(snapshot.dataAsOf)} · 上涨/下跌 ${states[snapshot.breadth.status]} · 涨停 ${states[snapshot.limitUp.status]}`;
 };
 
 /** 今日（Asia/Shanghai）YYYY-MM-DD。 */
@@ -144,8 +144,8 @@ const renderMiniHeatmap = async (epoch) => {
       mount(wrap, el('p', 'placeholder', '板块暂不可用，可点击「刷新看盘」重试。'));
     return;
   }
-  meta.dataset.lastSuccess = `行情源获取于 ${fmtDateTime(r.data.asOf)} · 每 60 秒检查更新`;
-  meta.textContent = meta.dataset.lastSuccess;
+  meta.dataset.lastSuccess = '板块行情已加载';
+  meta.textContent = `${meta.dataset.lastSuccess} · 每 60 秒检查更新`;
   const items = selectSectorExtremes(r.data?.items ?? [], 15);
   if (items.length === 0) {
     mount(wrap, el('p', 'placeholder', '（无板块数据）'));
@@ -240,8 +240,6 @@ const renderNewsSource = async (source) => {
       mounted = true;
     }
     const meta = $('#dash-news-meta');
-    meta.dataset.lastSuccess = `${source === 'eastmoney' ? '东方财富' : '同花顺'} · 获取于 ${fmtDateTime(new Date())}`;
-    meta.textContent = meta.dataset.lastSuccess;
     sentinel.classList.remove('is-error');
     const items = r.data?.items ?? [];
     const knownIds = new Set(Array.from(list.children, (node) => node.dataset.newsId));
@@ -256,6 +254,8 @@ const renderNewsSource = async (source) => {
     sentinel.textContent = finished ? '已加载全部快讯' : '加载更多';
     sentinel.disabled = finished;
     if (page === 2 && items.length === 0) sentinel.textContent = '（暂无快讯）';
+    meta.dataset.lastSuccess = `已加载 ${list.children.length} 条`;
+    meta.textContent = meta.dataset.lastSuccess;
     loading = false;
   };
 
@@ -293,7 +293,7 @@ const renderNewsSource = async (source) => {
       }),
     );
     if (previousScroll > 0) wrap.scrollTop = previousScroll + wrap.scrollHeight - previousHeight;
-    meta.dataset.lastSuccess = `${source === 'eastmoney' ? '东方财富' : '同花顺'} · 获取于 ${fmtDateTime(new Date())}`;
+    meta.dataset.lastSuccess = `已加载 ${list.children.length} 条`;
     meta.textContent = meta.dataset.lastSuccess;
   };
   wrap.onscroll = () => {

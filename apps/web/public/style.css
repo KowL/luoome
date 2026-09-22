@@ -1021,7 +1021,9 @@ code {
   justify-content: space-between;
   gap: var(--space-5);
   padding: 0 var(--space-5);
-  height: var(--topbar-h);
+  /* 自身高度写死，--topbar-h 只作为「实测输出」供 sticky 偏移使用
+     （否则运行时回写实测值会反过来改掉顶栏高度）。≤640 两行时改为 auto。 */
+  height: 56px;
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -1110,16 +1112,22 @@ code {
 .topbar .topbar-meta {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
+/* 搜索：可伸缩，不被右侧组挤压（原先 clamp 下界会被 flex-shrink 吃掉） */
 .topbar-stock-search {
-  width: clamp(260px, 32vw, 460px);
-  margin-inline: auto;
+  /* 定长 230px（旧 460 的一半）：窄屏才允许收缩，不再被右侧组挤到不可用 */
+  flex: 0 1 230px;
+  min-width: 0;
+  max-width: 230px;
+  /* 靠右：搜索与账户 / 时钟组成右簇，左侧留白由 auto margin 吸收（不再居中） */
+  margin-left: auto;
 }
 
 .topbar-stock-search .market-search input {
-  height: 38px;
+  height: 36px;
+  padding-right: 56px;
   background: color-mix(in srgb, var(--panel-alt) 86%, transparent);
   border-color: var(--line-strong);
 }
@@ -1130,15 +1138,36 @@ code {
 }
 
 .topbar .clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--accent);
   letter-spacing: 0.08em;
-  padding: 4px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: rgba(13, 158, 136, 0.05);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 交易时段徽标（服务端 computeMarketSession）：盘中用强调色，其余静默 */
+.topbar .clock-session {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  letter-spacing: 0;
+}
+
+.topbar .clock-session.is-quiet {
+  background: rgba(72, 86, 108, 0.1);
+  color: var(--muted);
 }
 
 .topbar .account-select-wrap {
@@ -1146,33 +1175,49 @@ code {
   align-items: center;
   gap: var(--space-2);
   font-size: var(--text-sm);
+  color: var(--muted);
+  min-width: 0;
 }
 
 .topbar .account-select {
+  height: 32px;
+  max-width: 11rem;
   background: var(--panel-alt);
   color: var(--ink);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  padding: 5px 8px;
+  padding: 0 8px;
   font-size: var(--text-sm);
   font-family: var(--font-body);
+  text-overflow: ellipsis;
 }
 
 .topbar .account-select:hover {
   border-color: var(--accent);
 }
 
-/* 顶栏主题切换入口 */
-#theme-drawer-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ink-soft);
+/* 顶栏搜索的快捷键提示；输入或聚焦时让位 */
+.market-search .search-hint {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  pointer-events: none;
 }
 
-#theme-drawer-toggle:hover {
-  color: var(--accent);
+.market-search:focus-within .search-hint,
+.market-search.has-value .search-hint {
+  display: none;
 }
+
+/* 顶栏主题切换入口已移至侧栏底部（见 .sidebar-foot） */
 
 /* 右侧抽屉 */
 .drawer {
@@ -1488,10 +1533,30 @@ html.has-bg-image .bg-layer {
   position: sticky;
   top: var(--topbar-h);
   align-self: start;
+  display: flex;
+  flex-direction: column;
   height: calc(100vh - var(--topbar-h));
   overflow-y: auto;
   border-right: 1px solid var(--line);
   padding: var(--space-4) 0;
+}
+
+/* 侧栏底部：低频设置入口（主题） */
+.sidebar-foot {
+  margin-top: auto;
+  padding: var(--space-3) var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+#theme-drawer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+}
+
+#theme-drawer-toggle:hover {
+  color: var(--accent);
 }
 
 .sidebar .nav {
@@ -3732,6 +3797,15 @@ html.has-bg-image .bg-layer {
   color: var(--ink-soft);
   font-size: var(--text-sm);
   margin: 0 0 8px;
+}
+
+/* 看盘 Top 3 预览位：摘要截 2 行，完整推理在建议页展开 */
+.advice-card.compact .premise {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
 }
 
 .advice-card .row-2 {
@@ -8492,15 +8566,33 @@ body > .modal {
     border-right: none;
     border-bottom: 1px solid var(--line);
     padding: var(--space-2) var(--space-3);
+    /* 横向导航条：导航滚动，主题入口固定在右侧 */
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .sidebar .nav {
-    width: 100%;
+    flex: 1 1 auto;
+    min-width: 0;
     max-width: 100%;
     flex-direction: row;
     overflow-x: auto;
     padding: 0;
     gap: 4px;
+  }
+
+  .sidebar-foot {
+    margin-top: 0;
+    padding: 0;
+    border-top: none;
+    flex: none;
+  }
+
+  /* 顶栏：账户标签与时钟秒数让位（搜索宽度由基准 flex-basis 控制） */
+  .topbar .account-select-label,
+  .topbar .clock-sec {
+    display: none;
   }
 
   .sidebar .nav-item {
@@ -8550,12 +8642,25 @@ body > .modal {
 }
 
 @media (max-width: 640px) {
+  /* 顶栏两行：品牌 + 账户/时钟（图标化）；搜索整行。
+     下面的 --topbar-h 只是无 JS 时的估值，运行时由 observeTopbarHeight() 实测回写。 */
+  :root {
+    --topbar-h: 93px;
+  }
+
   .topbar {
     height: auto;
     padding: var(--space-2) var(--space-3);
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
     gap: var(--space-2);
+  }
+
+  .topbar .brand {
+    grid-column: 1;
+    grid-row: 1;
+    font-size: 18px;
   }
 
   .topbar .brand small {
@@ -8563,13 +8668,24 @@ body > .modal {
   }
 
   .topbar .topbar-meta {
-    width: 100%;
-    justify-content: space-between;
+    grid-column: 2;
+    grid-row: 1;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    min-width: 0;
   }
 
   .topbar-stock-search {
-    width: 100%;
+    grid-column: 1 / -1;
     grid-row: 2;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .market-search .search-hint {
+    display: none;
   }
 
   .route-header {
@@ -9458,17 +9574,12 @@ body > .modal {
   overflow-x: auto;
 }
 
-.board-data-state {
-  min-width: 130px;
-  font-size: var(--text-sm);
-}
-
-.board-data-state small {
+.board-quote-note {
   display: block;
-}
-
-.board-data-state .text-warn {
-  color: var(--tea);
+  margin-top: 2px;
+  color: var(--warning);
+  font-size: var(--text-xs);
+  font-weight: normal;
 }
 
 #route-dashboard .card-meta {

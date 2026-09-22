@@ -10,6 +10,7 @@ import {
   errorKindLabel,
   filterAdvices,
   outcomeInputOf,
+  quoteState,
   readDashboardView,
   reportEntityHref,
   routeAdviceId,
@@ -17,6 +18,14 @@ import {
   sortBoardItems,
   watchRunSummaryText,
 } from './pages.js';
+import { adviceSubjectModel, fmtDateTime } from './ui.js';
+
+const quote = (overrides = {}) => ({
+  freshness: 'fresh',
+  retrieval: 'remote',
+  observedAt: '2026-02-06T06:30:12Z',
+  ...overrides,
+});
 
 describe('看板单股预警覆盖口径', () => {
   const trigger = { count: 3, maxPriority: 'important' };
@@ -144,6 +153,19 @@ describe('盯盘最近一轮摘要', () => {
 
   it('尚无运行记录时给占位文案', () => {
     expect(watchRunSummaryText(null)).toBe('跑一轮后显示评估指标');
+  });
+
+  it('没有可评估标的时不铺开 5 个 0', () => {
+    expect(
+      watchRunSummaryText({
+        evaluatedPools: 0,
+        evaluatedStocks: 0,
+        triggered: 0,
+        notified: 0,
+        delivered: 0,
+        unknownRules: 0,
+      }),
+    ).toBe('最近一轮没有可评估的标的 · 运行心跳已记录');
   });
 });
 
@@ -293,6 +315,57 @@ describe('看板纯函数', () => {
   it('涨 / 跌 / 平 / 未知计数（缺行情不计入平盘）', () => {
     const stats = boardStats([item('A', 1.5), item('B', -2), item('C', 0), item('D', null)]);
     expect(stats).toEqual({ up: 1, down: 1, flat: 1, unknown: 1 });
+  });
+});
+
+describe('看盘页时间展示去重', () => {
+  it('看板正常行情只给状态，不重复行级时间戳', () => {
+    expect(quoteState(quote())).toEqual({ label: '已获取', warn: false, at: '' });
+  });
+
+  it('旧快照与本地兜底才算降级并补时间；缺时间显式标注', () => {
+    const observedAt = '2026-02-06T06:30:12Z';
+    const stale = quoteState(quote({ freshness: 'stale' }));
+    expect(stale.label).toBe('旧快照');
+    expect(stale.warn).toBe(true);
+    expect(stale.at).toBe(fmtDateTime(observedAt));
+    expect(quoteState(quote({ retrieval: 'local-fallback' })).label).toBe('旧快照');
+    expect(quoteState(quote({ freshness: 'stale', observedAt: null })).at).toBe('时间未知');
+  });
+});
+
+describe('建议卡片标的一行', () => {
+  it('持仓建议只在屏上显示名称，不泄露内部 subjectId', () => {
+    expect(
+      adviceSubjectModel({
+        subjectKind: 'position',
+        subjectId: 'manual-holding-b637b869-4eb7-4063-88db-80b86efd333',
+        stockName: '协创数据',
+      }),
+    ).toEqual({ label: '协创数据', code: '' });
+  });
+
+  it('股票建议保留交易所代码；名称缺失时退回截断代码', () => {
+    expect(
+      adviceSubjectModel({ subjectKind: 'stock', subjectId: '300857.SZ', stockName: '协创数据' }),
+    ).toEqual({ label: '协创数据', code: '300857.SZ' });
+    expect(adviceSubjectModel({ subjectKind: 'stock', subjectId: '300857.SZ' })).toEqual({
+      label: '300857',
+      code: '300857.SZ',
+    });
+  });
+
+  it('市场 / 板块主题保留可读的 subjectId 作为名称；无名称的持仓不把 id 当代码', () => {
+    expect(
+      adviceSubjectModel({ subjectKind: 'market', subjectId: 'AI', stockName: undefined }),
+    ).toEqual({ label: 'AI', code: '' });
+    expect(
+      adviceSubjectModel({
+        subjectKind: 'position',
+        subjectId: 'manual-holding-9f2c',
+        stockName: '  ',
+      }),
+    ).toEqual({ label: 'manual-holding-9f2c', code: '' });
   });
 });
 

@@ -204,4 +204,17 @@ describe('tool/get_market_data_status', () => {
     if (!result.ok) return;
     expect(result.data.watchlistStale).toEqual([{ watchlistId: 'stale-watch', name: '过期观察' }]);
   });
+
+  it('marketSession 走 core 交易日历（顶栏时段徽标不自己算时段）', async () => {
+    const sessionAt = async (iso: string) => {
+      const ctx = await buildTestContext({ clock: () => new Date(iso) });
+      const result = await getMarketDataStatusTool.execute({}, ctx);
+      expect(result.ok).toBe(true);
+      return result.ok ? result.data.marketSession : null;
+    };
+    // 2026-07-17 是周五：上海 10:00 盘中、15:30 已收盘；07-18 是周六
+    expect(await sessionAt('2026-07-17T02:00:00.000Z')).toBe('trading');
+    expect(await sessionAt('2026-07-17T07:30:00.000Z')).toBe('closed');
+    expect(await sessionAt('2026-07-18T02:00:00.000Z')).toBe('non-trading-day');
+  });
 });
