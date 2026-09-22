@@ -121,7 +121,9 @@ export const marketPulse = (
     };
   }
   const value = snapshot.limitUp.value;
-  const indexQuotes = snapshot.indexes.status === 'complete' ? (snapshot.indexes.values ?? []) : [];
+  const indexQuotes = snapshot.indexes.values ?? [];
+  const breadth = snapshot.breadth.value;
+  const themes = snapshot.themes.value;
   return {
     evidence,
     section: {
@@ -147,8 +149,38 @@ export const marketPulse = (
               label: '最高连板',
               value: value?.maxLadderLevel ?? null,
             },
+            ...(breadth === undefined
+              ? []
+              : [
+                  { key: 'advancing', label: '上涨家数', value: breadth.advancing },
+                  { key: 'declining', label: '下跌家数', value: breadth.declining },
+                  { key: 'unchanged', label: '平盘家数', value: breadth.unchanged },
+                ]),
           ],
         },
+        ...(breadth === undefined
+          ? []
+          : [
+              {
+                kind: 'text' as const,
+                text: `涨跌统计覆盖 ${breadth.total} 只股票${snapshot.breadth.status === 'partial' ? '，仅代表已取得有效涨跌幅的样本，非全市场统计' : ''}。`,
+                tone: 'factual' as const,
+              },
+            ]),
+        ...(themes === undefined || themes.industries.length === 0
+          ? []
+          : [
+              {
+                kind: 'text' as const,
+                text: `涨停/炸板样本行业：${themes.industries
+                  .slice(0, 5)
+                  .map((item) => `${item.name} ${item.count} 只`)
+                  .join(
+                    '、',
+                  )}。${themes.concepts.length === 0 ? '当前来源未提供概念题材分类。' : ''}`,
+                tone: 'factual' as const,
+              },
+            ]),
         ...(indexQuotes.length === 0
           ? []
           : [
@@ -318,7 +350,7 @@ export const portfolioSection = async (
     accountIds.map((accountId) => ctx.tools.list_holdings.execute({ accountId })),
   );
   const performanceDate = asOfDate ?? dateInShanghai(now);
-  const performanceFrom = performanceRange?.fromDate ?? performanceDate;
+  const performanceFrom = performanceRange?.fromDate ?? previousTradingDay(performanceDate);
   const performanceTo = performanceRange?.toDate ?? performanceDate;
   const performanceResults = await Promise.all(
     accountIds.map((accountId) =>
@@ -365,13 +397,11 @@ export const portfolioSection = async (
   const periodValueChange =
     periodStartValue === null || periodEndValue === null ? null : periodEndValue - periodStartValue;
   const periodTwrValues = performanceValues.map((value) => value.twrPct);
-  const periodTwrPct = allPeriodValuesAvailable(periodTwrValues)
-    ? periodTwrValues.reduce((total, value) => total + value, 0)
-    : null;
+  const periodTwrPct = accountIds.length === 1 ? (periodTwrValues[0] ?? null) : null;
   const drawdownValues = performanceValues.map((value) => value.maxDrawdownPct);
-  const maxDrawdownPct = allPeriodValuesAvailable(drawdownValues)
-    ? Math.min(...drawdownValues)
-    : null;
+  const maxDrawdownPct = accountIds.length === 1 ? (drawdownValues[0] ?? null) : null;
+  const benchmarkTwrPct =
+    accountIds.length === 1 ? performanceValues[0]?.benchmarkTwrPct : undefined;
   const evidence = [
     localEvidence('overnight-portfolio:0', 'overnight-portfolio', now, 'local/holdings'),
     localEvidence(
@@ -405,7 +435,7 @@ export const portfolioSection = async (
       ? [
           missing(
             'overnight-portfolio.valuation',
-            '部分估值日缺少行情，收益指标保持 unavailable',
+            '部分估值日缺少行情，相关收益指标未展示；请补齐对应交易日日线后重新生成报告',
             'no_data',
           ),
         ]
@@ -439,7 +469,7 @@ export const portfolioSection = async (
             ...(ranged
               ? [
                   { key: 'periodStartValue', label: '期初估值', value: periodStartValue },
-                  { key: 'periodTwrPct', label: '区间 TWR', value: periodTwrPct, unit: '%' },
+                  { key: 'periodTwrPct', label: '区间收益率', value: periodTwrPct, unit: '%' },
                   {
                     key: 'maxDrawdownPct',
                     label: '区间最大回撤',
@@ -459,36 +489,34 @@ export const portfolioSection = async (
             },
             {
               key: 'totalPnl',
-              label: '账本总 PnL',
+              label: '账本累计盈亏',
               value:
+                performanceValues.length !== accountIds.length ||
                 performanceValues.length === 0 ||
                 performanceValues.some((value) => value.totalPnl === undefined)
                   ? null
                   : performanceValues.reduce((total, value) => total + Number(value.totalPnl), 0),
             },
-            {
-              key: 'twrPct',
-              label: 'TWR',
-              value:
-                performanceValues.length === 0 ||
-                performanceValues.some((value) => value.twrPct === undefined)
-                  ? null
-                  : performanceValues.reduce((total, value) => total + Number(value.twrPct), 0),
-              unit: '%（账户合计仅作观察）',
-            },
-            {
-              key: 'benchmarkTwrPct',
-              label: 'Benchmark TWR',
-              value:
-                performanceValues.length === 0 ||
-                performanceValues.some((value) => value.benchmarkTwrPct === undefined)
-                  ? null
-                  : performanceValues.reduce(
-                      (total, value) => total + Number(value.benchmarkTwrPct),
-                      0,
-                    ),
-              unit: '%（未加权）',
-            },
+            ...(!ranged && periodTwrPct !== null
+              ? [
+                  {
+                    key: 'twrPct',
+                    label: '当日收益率',
+                    value: periodTwrPct,
+                    unit: '%',
+                  },
+                ]
+              : []),
+            ...(benchmarkTwrPct === undefined
+              ? []
+              : [
+                  {
+                    key: 'benchmarkTwrPct',
+                    label: ranged ? '区间基准收益率' : '当日基准收益率',
+                    value: benchmarkTwrPct,
+                    unit: '%',
+                  },
+                ]),
           ],
         },
       ],

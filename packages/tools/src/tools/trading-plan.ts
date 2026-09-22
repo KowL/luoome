@@ -5,8 +5,11 @@ import {
   type Stock,
   TradingPlanBudgetLimitsSchema,
   TradingPlanBudgetResultSchema,
+  type TradingPlanMonitoring,
+  TradingPlanMonitoringSchema,
   TradingPlanQuerySchema,
   TradingPlanSchema,
+  tradingPlanMonitoring,
   tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -106,16 +109,33 @@ export const getTradingPlanTool = defineTool({
   },
 });
 
-export const ListTradingPlansInput = TradingPlanQuerySchema;
-export const ListTradingPlansOutput = z.object({ plans: z.array(TradingPlanSchema) });
+export const ListTradingPlansInput = TradingPlanQuerySchema.extend({
+  includeMonitoring: z.boolean().optional(),
+});
+export const ListTradingPlansOutput = z.object({
+  plans: z.array(TradingPlanSchema),
+  monitoring: z.array(TradingPlanMonitoringSchema).optional(),
+});
 
 export const listTradingPlansTool = defineTool({
   name: 'list_trading_plans',
-  description: '查询结构化交易计划及当前有效版本',
+  description: '查询结构化交易计划及当前有效版本，可附带监控资格与阻塞原因',
   sideEffect: 'read',
   input: ListTradingPlansInput,
   output: ListTradingPlansOutput,
-  handler: async (input, ctx) => ({ plans: [...(await ctx.repos.tradingPlan.list(input))] }),
+  handler: async (input, ctx) => {
+    const { includeMonitoring, ...query } = input;
+    const plans = [...(await ctx.repos.tradingPlan.list(query))];
+    if (!includeMonitoring) return { plans };
+    const monitoring: TradingPlanMonitoring[] = [];
+    for (const accountId of new Set(plans.map((plan) => plan.accountId))) {
+      const facts = await deriveAccountFacts(ctx, accountId);
+      for (const plan of plans.filter((item) => item.accountId === accountId)) {
+        monitoring.push(tradingPlanMonitoring(plan, facts, ctx.clock()));
+      }
+    }
+    return { plans, monitoring };
+  },
 });
 
 const BudgetInput = z.object({

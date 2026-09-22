@@ -1263,7 +1263,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     const r = await ctx.tools.send_notification.execute({
       channel: 'feishu',
       feishu: {
-        title: `盘中提醒 池-${poolId} ${group.length} 条`,
+        title: `盘中提醒 · ${state.pools.find((pool) => pool.id === poolId)?.name ?? '关注列表'} · ${group.length} 条`,
         content,
         level: 'info',
       },

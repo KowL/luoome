@@ -12,6 +12,7 @@ import {
   outcomeInputOf,
   readDashboardView,
   reportEntityHref,
+  reportSheetNodes,
   routeAdviceId,
   routeStockId,
   sortBoardItems,
@@ -319,5 +320,87 @@ describe('看板筛选与分页请求', () => {
         dashboardBoardQuery({ scope: 'holdings', watchlistId: '', page: 1, pageSize: 10 }),
       ).has('watchlistId'),
     ).toBe(false);
+  });
+});
+
+describe('复盘报告阅读层级', () => {
+  it('正文保留有效值和零值，空项合并说明，缺口折叠且仍可追溯', () => {
+    const originalDocument = globalThis.document;
+    const originalNode = globalThis.Node;
+    class TestNode {
+      constructor(tag = '', text = '') {
+        this.tag = tag;
+        this.children = [];
+        this.text = text;
+      }
+      append(...children) {
+        this.children.push(...children);
+      }
+      set textContent(value) {
+        this.text = value;
+      }
+      get textContent() {
+        return this.text + this.children.map((child) => child.textContent).join('');
+      }
+    }
+    globalThis.Node = TestNode;
+    globalThis.document = {
+      createElement: (tag) => new TestNode(tag),
+      createTextNode: (text) => new TestNode('', text),
+    };
+    try {
+      const gap = {
+        dimension: 'market-pulse.breadth',
+        reason: '上游样本覆盖不完整',
+        retryable: true,
+      };
+      const nodes = reportSheetNodes({
+        title: '收盘复盘',
+        kind: 'closing',
+        periodStart: '2026-09-21',
+        periodEnd: '2026-09-21',
+        dataAsOf: '2026-09-21T07:00:00Z',
+        generatedAt: '2026-09-21T09:00:00Z',
+        evidence: [],
+        missingDimensions: [gap],
+        sections: [
+          {
+            key: 'market-pulse',
+            title: '市场脉搏',
+            status: 'partial',
+            missingDimensions: [gap],
+            blocks: [
+              {
+                kind: 'metrics',
+                items: [
+                  { label: '封板家数', value: 0 },
+                  { label: '指数样本', value: null },
+                ],
+              },
+              {
+                kind: 'table',
+                columns: [
+                  { key: 'name', label: '策略' },
+                  { key: 'count', label: '信号数' },
+                ],
+                rows: [{ name: '突破', count: null }],
+              },
+            ],
+          },
+        ],
+      });
+      const section = nodes.find((node) => node.tag === 'section');
+      expect(section.textContent).toContain('封板家数0');
+      expect(section.textContent).toContain('未展示指标：指数样本');
+      expect(section.textContent).toContain('未展示列：信号数');
+      expect(section.textContent).not.toMatch(/不可用|market-pulse|上游样本/);
+      const notes = nodes.find((node) => node.tag === 'details');
+      expect(notes.textContent).toContain('上游样本覆盖不完整');
+      expect(notes.textContent.split('上游样本覆盖不完整')).toHaveLength(2);
+      expect(notes.open).toBeUndefined();
+    } finally {
+      globalThis.document = originalDocument;
+      globalThis.Node = originalNode;
+    }
   });
 });

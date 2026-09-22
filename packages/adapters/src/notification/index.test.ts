@@ -100,6 +100,7 @@ describe('notification/FeishuWebhookAdapter', () => {
     const body = JSON.parse((fetchCalls[0]?.body as string) ?? '{}');
     expect(body.msg_type).toBe('interactive');
     expect(body.card.header.title.content).toContain('t');
+    expect(body.card.elements).toEqual([{ tag: 'markdown', content: 'c' }]);
   });
 
   it('业务码 StatusCode != 0 → 抛 FeishuAdapterError fatal', async () => {

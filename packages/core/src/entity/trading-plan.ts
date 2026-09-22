@@ -1,7 +1,7 @@
 import { z } from 'zod';
-
 import { InvariantError } from '../error/index.js';
 import { MoneySchema } from '../types/branded.js';
+import type { AccountFacts } from './account-facts.js';
 
 export const TradingPlanActionSchema = z.enum([
   'observe',
@@ -352,7 +352,7 @@ export const evaluateTradingPlanCondition = (
   if (condition.kind === 'manual-confirmation') return null;
   if (condition.kind === 'market-fact') {
     if (condition.factId === undefined) return null;
-    return facts.has(condition.factId);
+    return facts.has(condition.factId) ? true : null;
   }
   if (
     condition.metric === undefined ||
@@ -378,4 +378,74 @@ export const evaluateTradingPlanCondition = (
         ? null
         : fact.value >= condition.value && fact.value <= condition.valueTo;
   }
+};
+
+export const TradingPlanMonitoringSchema = z.object({
+  versionId: z.string(),
+  status: z.enum([
+    'ready',
+    'draft',
+    'inactive',
+    'expired',
+    'scheduled',
+    'account-changed',
+    'unavailable',
+    'no-conditions',
+  ]),
+  reason: z.string(),
+  nextStep: z.string(),
+});
+export type TradingPlanMonitoring = z.infer<typeof TradingPlanMonitoringSchema>;
+
+export const tradingPlanMonitoring = (
+  plan: TradingPlan,
+  facts: Pick<AccountFacts, 'digest' | 'status'> | null,
+  now: Date,
+): TradingPlanMonitoring => {
+  const result = (
+    status: TradingPlanMonitoring['status'],
+    reason: string,
+    nextStep: string,
+  ): TradingPlanMonitoring => ({ versionId: tradingPlanVersionId(plan), status, reason, nextStep });
+  if (plan.status === 'draft')
+    return result(
+      'draft',
+      '草案未通过生效门槛',
+      plan.position.constraintReasons.join('；') ||
+        plan.explanation.unknowns.join('；') ||
+        '补齐证据后重新生成计划',
+    );
+  if (plan.status !== 'active') return result('inactive', '历史版本不参与监控', '查看当前计划版本');
+  if (plan.validUntil <= now) return result('expired', '计划已超过有效期', '重新运行盘后计划批次');
+  if (plan.validFrom > now) return result('scheduled', '尚未到计划生效时间', '等待生效时间');
+  if (facts !== null && facts.digest !== plan.accountFactsDigest)
+    return result('account-changed', '持仓或现金变化，计划前提已失效', '基于当前账户重新生成计划');
+  if (facts === null || facts.status !== 'complete')
+    return result('unavailable', '账户事实不可用', '刷新持仓行情并检查账户对账');
+  if (plan.position.constraintStatus !== 'passed')
+    return result(
+      'unavailable',
+      '计划约束未通过',
+      plan.position.constraintReasons.join('；') || '重新生成计划',
+    );
+  if (plan.entryConditions.length + plan.exit.triggerConditions.length === 0)
+    return result('no-conditions', '没有可检查的盘中条件', '复核并补充结构化条件');
+  return result('ready', '计划具备监控资格', '等待新鲜行情；实际运行与送达请查看预警记录');
+};
+
+export const evaluateTradingPlanEntryConditions = (
+  plan: TradingPlan,
+  facts: ReadonlyMap<string, TradingPlanConditionFact>,
+): boolean | null => {
+  if (plan.entryConditions.length === 0) return false;
+  const exits = plan.exit.triggerConditions.map((condition) =>
+    evaluateTradingPlanCondition(condition, facts),
+  );
+  if (exits.includes(true)) return false;
+  const entries = plan.entryConditions.map((condition) =>
+    evaluateTradingPlanCondition(condition, facts),
+  );
+  if (entries.includes(false)) return false;
+  if (entries.includes(null) || exits.includes(null)) return null;
+  return true;
 };

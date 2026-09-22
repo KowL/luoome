@@ -303,7 +303,7 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
       const r = await ctx.tools.send_notification.execute({
         channel: 'feishu',
         feishu: {
-          title: `事件提醒 ${alertPlanId} ${group.length} 条`,
+          title: `事件提醒 · ${plans.find((plan) => plan.id === alertPlanId)?.name ?? '关注列表'} · ${group.length} 条`,
           content: lines.join('\n'),
           level: 'info',
         },

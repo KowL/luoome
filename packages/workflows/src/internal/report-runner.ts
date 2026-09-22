@@ -170,7 +170,7 @@ export const executeReportWorkflow = async (
       deliveredReport = { ...deliveredReport, deliveryStatus: 'pending' };
       const rendered = await ctx.tools.render_report.execute({
         reportId: deliveredReport.id,
-        format: 'markdown',
+        format: 'notification',
       });
       if (!rendered.ok) {
         notificationFailed = true;
@@ -180,7 +180,7 @@ export const executeReportWorkflow = async (
           channel: 'feishu',
           feishu: {
             title: deliveredReport.title,
-            content: rendered.data.content.slice(0, 5000),
+            content: rendered.data.content,
             level: deliveredReport.status === 'complete' ? 'success' : 'warn',
           },
         });

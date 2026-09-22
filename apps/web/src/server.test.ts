@@ -19,6 +19,7 @@ import type {
   SourceStatus,
   ToolContext,
 } from '@luoome/core';
+import { TradingPlanSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
@@ -475,6 +476,16 @@ describe('报告 API', () => {
       data?: { content: string };
     };
     expect(renderedBody.data?.content).toContain('# Web 收盘复盘');
+    const notification = await app.fetch(
+      new Request(`http://test/api/reports/${report.id}/render?format=notification`),
+    );
+    const notificationBody = (await notification.json()) as {
+      ok: boolean;
+      data: { content: string };
+    };
+    expect(notificationBody.ok).toBe(true);
+    expect(notificationBody.data.content).toContain('完整报告与证据见 luoome');
+    expect(notificationBody.data.content).not.toContain(`# ${report.title}`);
   });
 
   it('删除端点移除报告，重复删除返回 not_found', async () => {
@@ -596,6 +607,89 @@ describe('MVP2 账户事实与交易计划 API', () => {
       ok: true,
       data: { plans: [] },
     });
+  });
+});
+
+describe('交易计划监控资格 API', () => {
+  it('默认与请求账户的计划各自隔离，不混入其它账户的监控投影', async () => {
+    const ctx = await buildTestContext();
+    const [first, second] = await ctx.repos.account.list();
+    if (first === undefined || second === undefined) throw new Error('fixture accounts missing');
+    const now = ctx.clock();
+    for (const account of [first, second]) {
+      await ctx.repos.tradingPlan.save(
+        TradingPlanSchema.parse({
+          id: `account:${account.id}:stock:600519.SH`,
+          version: 1,
+          accountId: account.id,
+          stockId: '600519.SH',
+          status: 'draft',
+          action: 'observe',
+          entryConditions: [],
+          invalidEntryConditions: [],
+          position: {
+            currentPct: null,
+            targetPct: null,
+            deltaPct: null,
+            constraintStatus: 'unavailable',
+            constraintReasons: ['待复核'],
+            prerequisiteActions: [],
+          },
+          holding: {
+            minTradingDays: 1,
+            maxTradingDays: 3,
+            nextReviewAt: now,
+            earlyExitConditions: [],
+            extensionBasis: [],
+          },
+          exit: { conditions: [], canSellNow: false },
+          validFrom: now,
+          validUntil: new Date(now.getTime() + 86400000),
+          invalidationConditions: [],
+          accountFactsAsOf: now,
+          accountFactsDigest: 'fixture-digest',
+          marketFacts: [],
+          evidence: [],
+          source: {
+            strategyIds: [],
+            strategyVersionIds: [],
+            runIds: [],
+            signalIds: [],
+            adviceIds: [],
+          },
+          explanation: { supportingEvidenceIds: [], counterEvidence: [], risks: [], unknowns: [] },
+          confidence: 0,
+          createdAt: now,
+        }),
+      );
+    }
+    const local = createWebApp({ ...ctx, user: { ...ctx.user, defaultAccountId: first.id } });
+    for (const account of [first, second]) {
+      const response = await local.fetch(
+        new Request('http://test/api/trading-plans?activeOnly=false&includeMonitoring=true', {
+          headers: account === first ? {} : { 'x-luoome-account-id': account.id },
+        }),
+      );
+      const body = (await response.json()) as {
+        data: { plans: { accountId: string }[]; monitoring: unknown[] };
+      };
+      expect(body.data.plans.map((plan) => plan.accountId)).toEqual([account.id]);
+      expect(body.data.monitoring).toHaveLength(1);
+    }
+  });
+
+  it('显式请求监控投影时返回结果，普通历史查询保持轻量', async () => {
+    const ctx = await buildTestContext();
+    const local = createWebApp(ctx);
+    const response = await local.fetch(
+      new Request('http://test/api/trading-plans?activeOnly=false&includeMonitoring=true'),
+    );
+    expect(await response.json()).toMatchObject({ ok: true, data: { plans: [], monitoring: [] } });
+    const history = await local.fetch(
+      new Request('http://test/api/trading-plans?activeOnly=false'),
+    );
+    const body = (await history.json()) as { data: { monitoring?: unknown } };
+    expect(body.data.monitoring).toBeUndefined();
   });
 });
 

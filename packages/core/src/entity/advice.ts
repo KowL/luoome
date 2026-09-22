@@ -1,8 +1,8 @@
 import { z } from 'zod';
-
 import { dateInShanghai, isHoliday, isWeekend, previousTradingDate } from '../trading-calendar.js';
 import { type Money, MoneySchema, money } from '../types/branded.js';
 import { type TechnicalIndicators, TechnicalIndicatorsSchema } from './indicator-set.js';
+import { notificationText, notificationTime } from './notification.js';
 import { type Quote, QuoteSchema } from './quote.js';
 import { ActiveSignalObservationHorizonSchema } from './signal-observation.js';
 
@@ -378,3 +378,33 @@ export const AdviceQuerySchema = z.object({
   includeExpired: z.boolean().optional(),
   limit: z.number().int().positive().optional(),
 });
+
+export const adviceNotificationSummary = (advice: z.output<typeof AdviceSchema>): string => {
+  if (isRuleFallbackAdvice(advice)) return 'AI 分析未完成，仅有规则兜底，暂不形成交易判断。';
+  const decision = {
+    buy: '考虑买入',
+    sell: '考虑卖出',
+    hold: '持有观察',
+    watch: '等待确认',
+    avoid: '暂时回避',
+  }[advice.decision];
+  const prices = [
+    ...(advice.entryPriceLow !== undefined && advice.entryPriceHigh !== undefined
+      ? [`入场 ${advice.entryPriceLow.toFixed(2)}–${advice.entryPriceHigh.toFixed(2)}`]
+      : advice.entryPrice !== undefined
+        ? [`参考买点 ${advice.entryPrice.toFixed(2)}`]
+        : []),
+    ...(advice.stopLoss === undefined ? [] : [`止损 ${advice.stopLoss.toFixed(2)}`]),
+    ...(advice.targetPrice === undefined ? [] : [`目标 ${advice.targetPrice.toFixed(2)}`]),
+  ];
+  return [
+    `**${decision}** · ${notificationText(advice.reasoning.premise, 100) || '请核对完整研究结论'}`,
+    ...(prices.length === 0 ? [] : [prices.join(' · ')]),
+    ...(advice.targetPositionPct === undefined
+      ? []
+      : [`目标仓位 ${advice.targetPositionPct.toFixed(1)}%（占账户总资产）`]),
+    `反证：${notificationText(advice.reasoning.counterEvidence.join('；'), 100) || '未提供，需人工核对'}`,
+    `风险：${notificationText(advice.risks.join('；'), 100) || '未提供，需人工核对'}`,
+    `数据 ${notificationTime(advice.basedOn.dataAsOf)} · 有效至 ${notificationTime(advice.validUntil)}（北京时间）`,
+  ].join('\n');
+};

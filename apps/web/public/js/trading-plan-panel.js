@@ -52,7 +52,7 @@ export const accountFactsSummary = ({ factsResult, reconcileResult }) => {
 /* apps/web/public/js/trading-plan-panel.js —— 「预警」页的交易计划分区。
  *
  * 只读取 list_trading_plans / get_account_facts / reconcile_account_cash 的结果做渲染：计划是研究结论与条件，
- * 不是成交、也不会自动下单。缺少账户快照时给出登记入口，因为账户事实缺失时计划只会停在草案。
+ * 不是成交、也不会自动下单。按服务端监控资格说明阻塞原因与下一步。
  */
 
 import { callApi } from './api.js';
@@ -590,7 +590,13 @@ export const filterPlansByAction = (plans, action) => {
 
 let planStatusFilter = 'all';
 let planActionFilter = 'all';
-let planPanelState = { plans: [], latest: [] };
+let planPanelState = {
+  plans: [],
+  latest: [],
+  monitoring: [],
+  factsResult: undefined,
+  reconcileResult: undefined,
+};
 
 const visiblePlans = (latest, status, action) =>
   filterPlansByAction(filterPlansByStatus(latest, status), action);
@@ -603,7 +609,11 @@ const renderPlanList = (root) => {
     visible.length === 0
       ? [el('p', 'placeholder', '当前筛选条件下没有计划。')]
       : visible.map(planRow);
-  mount(root, [...(filterBar === null ? [] : [filterBar]), ...rows]);
+  mount(root, [
+    ...(filterBar === null ? [] : [filterBar]),
+    ...rows,
+    accountFactsSummary(planPanelState),
+  ]);
 };
 
 const planRow = (plan) => {
@@ -613,13 +623,26 @@ const planRow = (plan) => {
     openTradingPlanDetail(plan, planVersionsOf(planPanelState.plans, plan.id)),
   );
   const draftNote = planDraftNote(plan);
+  const monitoring = planPanelState.monitoring.find(
+    (item) => item.versionId === planVersionId(plan),
+  );
   return el('div', 'entity-item', [
     el('div', 'flex gap-2', [
       stockIdentityLink(plan),
       el('strong', null, planActionLabel(plan.action)),
     ]),
     metricsNode(plan),
-    el('p', 'plan-detail-line', `入场条件：${entryConditionText(plan)}`),
+    el('p', 'plan-detail-line', `入场条件（全部满足）：${entryConditionText(plan)}`),
+    el('div', 'plan-guidance', [
+      el('strong', null, monitoring?.status === 'ready' ? '可监控 · 等待条件' : '未就绪'),
+      el(
+        'p',
+        'hint',
+        monitoring === undefined
+          ? '监控资格未读取，请刷新后重试'
+          : `${monitoring.reason}。下一步：${monitoring.nextStep}`,
+      ),
+    ]),
     el(
       'p',
       'muted',
@@ -682,7 +705,10 @@ export const renderTradingPlanPanel = ({
   // 快照读取失败时按“有快照”处理：不把读取故障渲染成“未登记”。
   const facts = factsResult?.ok ? factsResult.data.facts : undefined;
   const latest = latestPlanVersions(plans);
-  const activeCount = latest.filter((plan) => plan.status === 'active').length;
+  const monitoring = result.data?.monitoring ?? [];
+  const readyCount = latest.filter((plan) =>
+    monitoring.some((item) => item.versionId === planVersionId(plan) && item.status === 'ready'),
+  ).length;
   const incomplete = facts !== undefined && facts.status !== 'complete';
   if (meta !== null) {
     meta.textContent =
@@ -690,7 +716,7 @@ export const renderTradingPlanPanel = ({
         ? incomplete
           ? '账户事实不可用'
           : '暂无计划'
-        : `${latest.length} 个 · 生效 ${activeCount}${incomplete ? ' · 账户事实不可用' : ''}`;
+        : `${latest.length} 个 · 可监控 ${readyCount} · 待处理 ${latest.filter((plan) => ['active', 'draft'].includes(plan.status)).length - readyCount}${incomplete ? ' · 账户事实不可用' : ''}`;
   }
   if (latest.length === 0) {
     mount(root, [
@@ -703,9 +729,8 @@ export const renderTradingPlanPanel = ({
     ]);
     return;
   }
-  planPanelState = { plans, latest };
+  planPanelState = { plans, latest, monitoring, factsResult, reconcileResult };
   mount(root, planFilterBar());
   renderPlanList(root);
-  root.append(accountFactsSummary({ factsResult, reconcileResult }));
   void setStatus;
 };

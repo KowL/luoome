@@ -9,7 +9,7 @@ import { getReportTool, listWorkflowRunsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
-import { openingReportWorkflow } from './opening-report.js';
+import { marketPulse, openingReportWorkflow } from './opening-report.js';
 
 const generatedAt = new Date('2026-07-27T01:00:00.000Z');
 const marketAsOf = new Date('2026-07-24T07:00:00.000Z');
@@ -81,6 +81,41 @@ const sentimentSnapshot = (): AShareSentimentSnapshot => ({
 });
 
 describe('opening-report workflow', () => {
+  it('部分市场数据仍展示有效指数、涨跌样本和行业，并保留覆盖限制', () => {
+    const snapshot = sentimentSnapshot();
+    snapshot.indexes = {
+      ...snapshot.indexes,
+      status: 'partial',
+      values: [
+        {
+          code: '000001',
+          name: '上证指数',
+          close: money(3600),
+          change: 12,
+          changePct: 0.33,
+          ts: marketAsOf,
+          source: 'fixture',
+        },
+      ],
+    };
+    snapshot.breadth = {
+      ...snapshot.breadth,
+      status: 'partial',
+      value: { advancing: 3000, declining: 2000, unchanged: 50, total: 5050 },
+    };
+    const result = marketPulse(snapshot);
+    expect(result.section.status).toBe('partial');
+    const content = JSON.stringify(result.section.blocks);
+    expect(content).toContain('上证指数 +0.33%');
+    expect(content).toContain('上涨家数');
+    expect(content).toContain('非全市场统计');
+    expect(content).toContain('半导体 4 只');
+    expect(content).toContain('当前来源未提供概念题材分类');
+    expect(result.section.missingDimensions.map((gap) => gap.dimension)).toContain(
+      'market-pulse.breadth',
+    );
+  });
+
   it('周一使用上周五市场证据，幂等保存结构化报告并写入 partial 审计', async () => {
     const requestedDates: string[] = [];
     const manager: AShareSentimentManagerLike = {

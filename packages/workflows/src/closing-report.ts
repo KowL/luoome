@@ -1,7 +1,10 @@
 import {
+  adviceNotificationSummary,
   dateInShanghai,
   isHoliday,
   isWeekend,
+  notificationText,
+  notificationTime,
   type ReportBlock,
   ReportSchema,
   ReportScopeSchema,
@@ -105,6 +108,7 @@ const triggersSection = async (date: string, now: Date, ctx: WorkflowContext) =>
           items: result.data.triggers.map((trigger) => ({
             title: `${trigger.stockId} · ${trigger.ruleKind}`,
             detail: `${trigger.priority} · ${trigger.deliveryStatus}`,
+            notificationSummary: `${trigger.priority === 'urgent' ? '紧急' : trigger.priority === 'important' ? '重要' : '提醒'} · ${trigger.deliveryStatus === 'sent' ? '已送达' : trigger.deliveryStatus === 'failed' ? '投递失败' : trigger.deliveryStatus === 'fallback-log' ? '仅记日志' : '尚未送达'}\n${notificationText(trigger.reason, 90) || '请核对原始触发条件'} · ${notificationTime(trigger.createdAt)}（北京时间）`,
             entityKind: 'watch-trigger' as const,
             entityId: trigger.id,
           })),
@@ -144,7 +148,8 @@ const adviceExpirySection = async (date: string, now: Date, ctx: WorkflowContext
         {
           kind: 'list' as const,
           items: expiring.map((advice) => ({
-            title: advice.subjectId,
+            title:
+              advice.stockName ?? (advice.subjectKind === 'stock' ? advice.subjectId : '持仓建议'),
             detail: `有效期至 ${dateInShanghai(advice.validUntil)}`,
             entityKind: 'advice' as const,
             entityId: advice.id,
@@ -337,7 +342,12 @@ const strategyActionsSection = async (
       const unavailable = batch.preflight?.unavailable ?? 0;
       analysisByStrategy.set(
         strategy.id,
-        `最近批次生成 ${batch.adviceCount} 条；预检跳过 ${skipped} 条；数据不可用 ${unavailable} 条；生成失败 ${batch.generationFailed} 条`,
+        [
+          `最近批次生成 ${batch.adviceCount} 条`,
+          ...(skipped > 0 ? [`预检跳过 ${skipped} 条`] : []),
+          ...(unavailable > 0 ? [`数据待补齐 ${unavailable} 条`] : []),
+          ...(batch.generationFailed > 0 ? [`生成失败 ${batch.generationFailed} 条`] : []),
+        ].join('；'),
       );
       if (batch.generationFailed > 0 || unavailable > 0)
         gaps.push(
@@ -418,6 +428,7 @@ const strategyActionsSection = async (
   const adviceItem = (advice: (typeof dayAdvices)[number]) => ({
     title: advice.stockName ?? advice.subjectId,
     detail: `${adviceDecisionLabel(advice.decision)} · ${adviceActionDetail(advice)}`,
+    notificationSummary: adviceNotificationSummary(advice),
     entityKind: 'advice' as const,
     entityId: advice.id,
   });
@@ -438,8 +449,8 @@ const strategyActionsSection = async (
         const run = latestRunByStrategy.get(strategy.id);
         return {
           strategy: strategy.name,
-          selectedCount: summaryCount(run, 'selectedCount'),
-          signalCount: summaryCount(run, 'signalCount'),
+          selectedCount: run === undefined ? '未运行' : summaryCount(run, 'selectedCount'),
+          signalCount: run === undefined ? '未运行' : summaryCount(run, 'signalCount'),
           analysis: analysisByStrategy.get(strategy.id) ?? '分析状态不可用',
         };
       }),
@@ -530,23 +541,13 @@ const tradingPlansSection = async (
   const evidence = [
     localEvidence('trading-plans:0', 'trading-plans', now, 'tool:list_trading_plans'),
   ];
-  const missingDimensions =
-    plans.length > 0
-      ? []
-      : [
-          missing(
-            'trading-plans.coverage',
-            '今日尚无结构化交易计划；未生成计划不等于没有机会',
-            'planning-incomplete',
-          ),
-        ];
   return {
     evidence,
     section: {
       key: 'trading-plans',
       title: '交易计划',
       required: true,
-      status: plans.length > 0 ? 'complete' : 'partial',
+      status: 'complete',
       dataAsOf: now,
       blocks: [
         {
@@ -616,7 +617,7 @@ const tradingPlansSection = async (
           : []),
       ],
       evidenceIds: evidence.map((item) => item.id),
-      missingDimensions,
+      missingDimensions: [],
     },
   };
 };

@@ -58,6 +58,7 @@ const ListBlockSchema = z.object({
       .object({
         title: z.string().min(1),
         detail: z.string().optional(),
+        notificationSummary: z.string().max(1500).optional(),
         entityKind: z
           .enum([
             'stock',

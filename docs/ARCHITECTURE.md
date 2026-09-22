@@ -833,16 +833,27 @@ type ToolError =
   缺价位时计划标为草案并写明原因；规则兜底建议（AI 不可用）同样只留草案。
 - `intraday-trading-plan-watch`：先按有效计划标的与全部当前持仓的并集分批刷新行情（每批最多 100 个），
   `batch_quote` 落库后派生账户事实，再按新鲜行情求值计划条件，
-  风险与退出条件命中时做 AI 复核并保留原始触发事实与计划版本；发布前重新校验账户事实指纹、
+  入场条件按 ALL 合成单个边沿，风险/退出命中阻止入场提醒；风险直接通知原始触发事实与计划版本，
+  不调用 AI 或自动改写计划；发布前重新校验账户事实指纹、
   计划版本、行情时效、条件是否仍成立与 10 分钟发布时限（以上游事件时间为计时起点），
   在同一租约内提交 Trigger + WatchRuleState。只监控与当前账户事实指纹一致的计划；单条候选过期、
-  失效或条件恢复只丢弃该条，不阻断同轮其它信号；失败/中断投递作为重试候选
+  失效或条件恢复只丢弃该条且不消耗该边沿，不阻断同轮其它信号；失败/中断投递作为重试候选。
+  全程复用共享预警租约与续租保护；试跑不保存 Trigger/边沿/投递次数。通知披露下一步、反证和卖出限制。
 - 预警执行：`intraday-watch` 与 `evaluate-event-rules` 共用 SQLite 租约（120 秒有效期、30 秒心跳，
   工具调用前检查所有权）；并发调用返回可重试错误。`commit_watch_evaluation` 在同一事务校验 owner
   并提交 Trigger + WatchRuleState，试跑不进入提交。通知前保存 deliveryAttempts/lastDeliveryAttemptAt，
   后续轮次补偿当日 failed/pending（最多三次，退避 1/5 分钟，停用计划/移除成员/额度不足时不发送）。
   每日额度包含重试和已开始发送的 pending；WatchRun 本轮触发列表可以包含同 id 的补偿投递。
   飞书没有端到端幂等确认：外部已接收但本地回写前崩溃时，补偿仍可能重复，不能承诺恰好一次送达。
+  `render_report(format=notification)` 从结构化报告生成有长度预算的移动摘要，不截取完整 Markdown；
+  `markdown/plain-text` 继续保留完整证据。列表可保存 `notificationSummary` 作为生成时的阅读投影，
+  旧报告缺少该字段时仅提供核对入口，不从长文本猜测交易结论。飞书适配器只在卡头展示标题。
+  通知板块采用显式允许列表，仅包含市场、策略研究、预警和事件；账户估值/仓位/交易计划、交易归因、
+  个人行为与混合数据质量板块留在完整报告，私有板块缺口不参与通知告警。存量建议摘要去除目标仓位行。
+  正文空指标聚合说明，全空表格列省略，诊断缺口去重后集中展示；结构化快照保留原始 null 和缺失原因。
+  单日账户绩效向前取一个交易日作为收益基点；未配置基准不输出空指标，多账户 TWR/回撤不做算术聚合。
+  情绪指数按请求交易日逐条筛选，混合日期仅使该维度 partial，不丢弃同日行情；空返回仍为 unavailable。
+  推荐 V1/V2 共用建议摘要，规则兜底按单批合并提示，仍保存逐股 Advice 和推荐批次审计。
 - **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` / `market-outlook` 通过
   `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
   日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。

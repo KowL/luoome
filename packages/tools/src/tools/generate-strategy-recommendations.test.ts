@@ -486,3 +486,101 @@ describe('generate_strategy_recommendations V2 preflight', () => {
     expect(llm).not.toHaveBeenCalled();
   });
 });
+
+describe('策略推荐手机通知', () => {
+  it.each([1, 2])('V%s 多个 AI 兜底只发送一条分析未完成提示', async (version) => {
+    const { ctx, run } = await seedRun(5);
+    vi.spyOn(ctx.adapters.llm, 'generate').mockResolvedValue({
+      decision: 'watch',
+      confidence: 20,
+      horizon: 'short',
+      reasoning: {
+        premise: 'LLM 推理不可用，基于规则的保守判断',
+        evidence: ['规则 fallback'],
+        counterEvidence: ['不包含基本面研究'],
+      },
+      risks: ['不应据此下单'],
+    });
+    const policy =
+      version === 2
+        ? { ...v2Policy({ skipExistingHolding: false }), notify: true, channel: 'feishu' as const }
+        : {
+            enabled: true,
+            minScore: 70,
+            maxRank: 10,
+            maxPerRun: 3,
+            cooldownHours: 72,
+            notify: true,
+            channel: 'feishu' as const,
+          };
+    const result = await generateStrategyRecommendationsTool.execute(
+      { strategyId: 'recommend-v2', runId: run.id, policy },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.advices).toHaveLength(3);
+    const notifications = await ctx.repos.notification.listRecent();
+    expect(notifications).toHaveLength(1);
+    const payload = notifications[0]?.payload;
+    expect(payload?.title).toBe('策略分析未完成');
+    expect(payload?.content).toContain('3 只候选未形成研究结论');
+    expect(payload?.content).not.toMatch(
+      /StrategyResult|StrategySignal|SignalObservation|信心度|strategy-run/,
+    );
+    expect(payload?.content.length).toBeLessThan(400);
+    expect(result.data.advices[0]?.reasoning.evidence.length).toBeGreaterThan(0);
+  });
+});
+
+it('正常建议只展示结论、价位、风险和有效期；内部事实仍随建议保存', async () => {
+  const { ctx, run } = await seedRun(5);
+  vi.spyOn(ctx.adapters.llm, 'generate').mockResolvedValue({
+    decision: 'buy',
+    confidence: 80,
+    horizon: 'short',
+    entryPriceLow: 10,
+    entryPriceHigh: 11,
+    entryPrice: 10.5,
+    targetPositionPct: 5,
+    stopLoss: 9,
+    targetPrice: 13,
+    reasoning: {
+      premise: '突破后等待回踩确认',
+      evidence: ['站上二十日均线'],
+      counterEvidence: ['成交量仍需确认'],
+    },
+    risks: ['跌破支撑可能扩大回撤'],
+  });
+  const result = await generateStrategyRecommendationsTool.execute(
+    {
+      strategyId: 'recommend-v2',
+      runId: run.id,
+      policy: {
+        enabled: true,
+        minScore: 70,
+        maxRank: 10,
+        maxPerRun: 1,
+        cooldownHours: 72,
+        notify: true,
+        channel: 'feishu',
+      },
+    },
+    ctx,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.data.advices).toHaveLength(1);
+  const payload = (await ctx.repos.notification.listRecent())[0]?.payload;
+  expect(payload?.content).toContain('考虑买入');
+  expect(payload?.content).toContain('10.00–11.00');
+  expect(payload?.content).toContain('止损 9.00');
+  expect(payload?.content).toContain('反证：成交量仍需确认');
+  expect(payload?.content).toContain('风险：跌破支撑可能扩大回撤');
+  expect(payload?.content).toContain('有效至');
+  expect(payload?.content).not.toMatch(
+    /StrategyResult|StrategySignal|SignalObservation|信心度|strategy-run|T10:/,
+  );
+  expect(payload?.content.length).toBeLessThan(700);
+  expect(result.data.advices[0]?.reasoning.evidence.join('；')).toContain('StrategyResult');
+});

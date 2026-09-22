@@ -166,6 +166,18 @@ describe('trading plan daily cycle', () => {
     expect(plan.position).toMatchObject({ currentPct: 0, targetPct: 6, deltaPct: 6 });
     expect(plan.exit).toMatchObject({ stopLoss: 95, takeProfit: 120 });
     expect(plan.position.prerequisiteActions).toEqual(['等待条件满足后重新评估，再决定是否建仓']);
+    const incompleteAdvice = { ...watchAdvice };
+    delete incompleteAdvice.entryPriceLow;
+    delete incompleteAdvice.entryPriceHigh;
+    const incomplete = buildTradingPlanFromAdvice({
+      accountId: ACCOUNT_ID,
+      accountFacts,
+      advice: incompleteAdvice,
+      previous: [],
+      now: NOW,
+    });
+    expect(incomplete.status).toBe('draft');
+    expect(incomplete.explanation.unknowns).toContain('AI 未给出条件性价格计划，只能作为观察记录');
   });
 
   it('规则兜底建议只留草案并说明 AI 不可用，不会成为生效计划', () => {
