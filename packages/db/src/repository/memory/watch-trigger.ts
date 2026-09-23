@@ -6,6 +6,7 @@ import {
   WatchRuleStateSchema,
   type WatchTrigger,
   type WatchTriggerRepository,
+  type WatchTriggerSummary,
 } from '@luoome/core';
 import type { InMemoryWatchRuleStateRepository } from './watch-rule-state.js';
 
@@ -131,9 +132,54 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
       (a, b) =>
         b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
     );
+    let summary: WatchTriggerSummary | undefined;
+    if (input.includeSummary) {
+      const priorityCounts: Record<string, number> = {};
+      const deliveryStatusCounts: Record<string, number> = {};
+      const feedbackCounts: Record<string, number> = {};
+      const stocks = new Map<
+        string,
+        {
+          stockId: string;
+          count: number;
+          maxPriority: WatchTrigger['priority'];
+          latest: WatchTrigger;
+        }
+      >();
+      const rank = { urgent: 0, important: 1, normal: 2 };
+      for (const trigger of filtered) {
+        priorityCounts[trigger.priority] = (priorityCounts[trigger.priority] ?? 0) + 1;
+        deliveryStatusCounts[trigger.deliveryStatus] =
+          (deliveryStatusCounts[trigger.deliveryStatus] ?? 0) + 1;
+        if (trigger.feedback !== undefined)
+          feedbackCounts[trigger.feedback] = (feedbackCounts[trigger.feedback] ?? 0) + 1;
+        const stock = stocks.get(trigger.stockId) ?? {
+          stockId: trigger.stockId,
+          count: 0,
+          maxPriority: trigger.priority,
+          latest: trigger,
+        };
+        stock.count += 1;
+        if (rank[trigger.priority] < rank[stock.maxPriority]) stock.maxPriority = trigger.priority;
+        stocks.set(trigger.stockId, stock);
+      }
+      summary = {
+        priorityCounts,
+        deliveryStatusCounts,
+        feedbackCounts,
+        stocks: [...stocks.values()].sort((a, b) =>
+          a.stockId < b.stockId ? -1 : a.stockId > b.stockId ? 1 : 0,
+        ),
+      };
+    }
+    if (input.orderBy === 'priority') {
+      const rank = { urgent: 0, important: 1, normal: 2 };
+      filtered.sort((a, b) => rank[a.priority] - rank[b.priority]);
+    }
     return {
       total: filtered.length,
       triggers: filtered.slice(input.offset, input.offset + input.limit),
+      ...(summary === undefined ? {} : { summary }),
     };
   }
 

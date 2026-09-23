@@ -23,6 +23,8 @@ export const ListWatchTriggersInput = z.object({
   feedback: z.union([TriggerFeedbackSchema, z.literal('unreviewed')]).optional(),
   triggerType: TriggerTypeSchema.optional(),
   deliveryStatus: z.array(DeliveryStatusSchema).optional(),
+  includeSummary: z.boolean().default(false),
+  orderBy: z.enum(['recent', 'priority']).default('recent'),
   offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
   limit: z.number().int().positive().max(10_000).default(50),
 });
@@ -31,18 +33,39 @@ export const ListWatchTriggersOutput = z.object({
   triggers: z.array(WatchTriggerSchema.extend({ stockName: z.string().optional() })),
   /** 过滤后、limit 前的总数。 */
   total: z.number().int().nonnegative(),
+  summary: z
+    .object({
+      priorityCounts: z.record(z.string(), z.number().int().nonnegative()),
+      deliveryStatusCounts: z.record(z.string(), z.number().int().nonnegative()),
+      feedbackCounts: z.record(z.string(), z.number().int().nonnegative()),
+      stocks: z.array(
+        z.object({
+          stockId: z.string(),
+          count: z.number().int().positive(),
+          maxPriority: AlertPrioritySchema,
+          latest: WatchTriggerSchema,
+        }),
+      ),
+    })
+    .optional(),
 });
 
 export const listWatchTriggersTool = defineTool({
   name: 'list_watch_triggers',
   description:
-    '查询最近 AlertPlan 触发（按计划/股票/规则/优先级/反馈/通知状态过滤，准确计数并分页）',
+    '查询最近 AlertPlan 触发（按计划/股票/规则/优先级/反馈/通知状态过滤，准确计数并分页，支持时间或优先级排序，可选 includeSummary 返回筛选范围的完整统计）',
   sideEffect: 'read',
   input: ListWatchTriggersInput,
   output: ListWatchTriggersOutput,
   handler: async (input, ctx) => {
-    const { triggers: page, total } = await ctx.repos.watchTrigger.query({
+    const {
+      triggers: page,
+      total,
+      summary,
+    } = await ctx.repos.watchTrigger.query({
       offset: input.offset,
+      includeSummary: input.includeSummary,
+      orderBy: input.orderBy,
       limit: input.limit,
       ...(input.alertPlanId === undefined ? {} : { alertPlanId: input.alertPlanId }),
       ...(input.stockId === undefined ? {} : { stockId: input.stockId }),
@@ -72,6 +95,7 @@ export const listWatchTriggersTool = defineTool({
         page.map((trigger) => ({ ...trigger, stockName: names.get(trigger.stockId) })),
       ),
       total,
+      ...(summary === undefined ? {} : { summary: { ...summary, stocks: [...summary.stocks] } }),
     };
   },
 });

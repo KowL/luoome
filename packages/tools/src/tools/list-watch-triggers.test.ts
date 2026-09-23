@@ -45,6 +45,7 @@ describe('list_watch_triggers', () => {
     await ctx.repos.watchTrigger.setFeedback('b', 'handled', ctx.clock());
     const result = await listWatchTriggersTool.execute(
       {
+        includeSummary: true,
         feedback: 'unreviewed',
         priority: 'normal',
         deliveryStatus: ['not-requested'],
@@ -56,10 +57,41 @@ describe('list_watch_triggers', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.total).toBe(2);
+    expect(result.data.summary).toMatchObject({
+      priorityCounts: { normal: 2 },
+      feedbackCounts: {},
+      stocks: [{ count: 2, latest: { id: 'c' } }],
+    });
     expect(result.data.triggers.map((t) => t.id)).toEqual(['a']);
   });
 
+  it('优先级排序透传到分页查询，默认仍按时间返回', async () => {
+    const ctx = await buildTestContext();
+    await save(ctx, {
+      id: 'old',
+      stockId: '002594.SZ',
+      ruleKind: 'price-change',
+      notified: false,
+      createdAt: new Date('2026-07-23T01:00:00Z'),
+    });
+    await save(ctx, {
+      id: 'new',
+      stockId: '002594.SZ',
+      ruleKind: 'price-change',
+      notified: false,
+      createdAt: new Date('2026-07-23T02:00:00Z'),
+    });
+    const old = await ctx.repos.watchTrigger.findById('old');
+    if (!old) throw new Error('missing fixture');
+    await ctx.repos.watchTrigger.save({ ...old, priority: 'urgent' });
+    const priority = await listWatchTriggersTool.execute({ orderBy: 'priority', limit: 1 }, ctx);
+    const recent = await listWatchTriggersTool.execute({ limit: 1 }, ctx);
+    expect(priority.ok && priority.data.triggers[0]?.id).toBe('old');
+    expect(recent.ok && recent.data.triggers[0]?.id).toBe('new');
+  });
+
   it.each([
+    { orderBy: 'invalid' },
     { offset: -1 },
     { offset: 0.5 },
     { priority: 'wrong' },

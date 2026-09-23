@@ -264,7 +264,6 @@ const ALERT_PRIORITY_BADGE = {
   important: 'badge-important',
   normal: 'badge-normal',
 };
-const ALERT_PRIORITY_ORDER = { urgent: 0, important: 1, normal: 2 };
 const ALERT_DIRECTION_BADGE = {
   buy: { cls: 'badge-buy', label: '买入' },
   sell: { cls: 'badge-sell', label: '卖出' },
@@ -614,17 +613,12 @@ const openDashboardStockContext = async (item) => {
 const boardTriggerSummary = (trigger, coverage) => {
   if (!coverage.available)
     return { label: '未知', priority: '', explanation: '今日预警读取失败，无法确认是否触发。' };
-  const sampled = coverage.total > coverage.sampled;
   if (trigger === null || trigger === undefined)
-    return {
-      label: sampled ? '样本未见' : '暂无',
-      priority: '',
-      explanation: sampled ? '最近样本中未见该股事件，可在全部事件中查询。' : '今日尚无触发记录。',
-    };
+    return { label: '暂无', priority: '', explanation: '今日尚无触发记录。' };
   return {
-    label: `${sampled ? '至少 ' : ''}${trigger.count} 次`,
-    priority: `${sampled ? '样本最高：' : '今日最高：'}${ALERT_PRIORITY_LABEL[trigger.maxPriority]}`,
-    explanation: `查看最近一条记录。${sampled ? '次数为最近样本中的下界，优先级仅代表样本。' : '优先级为今日记录的最高级别。'}`,
+    label: `${trigger.count} 次`,
+    priority: `今日最高：${ALERT_PRIORITY_LABEL[trigger.maxPriority]}`,
+    explanation: '查看最近一条记录。优先级为今日记录的最高级别。',
   };
 };
 
@@ -852,14 +846,6 @@ const alertRow = (t, names = new Map()) => {
   ]);
 };
 
-const sortAlerts = (triggers) =>
-  [...triggers].sort((a, b) => {
-    const pa = ALERT_PRIORITY_ORDER[a.priority] ?? ALERT_PRIORITY_ORDER.normal;
-    const pb = ALERT_PRIORITY_ORDER[b.priority] ?? ALERT_PRIORITY_ORDER.normal;
-    if (pa !== pb) return pa - pb;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
-
 const renderDashboard = (setStatus) => {
   const accountId = getAccountId();
   dashboardSetStatus = setStatus;
@@ -1035,7 +1021,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
   const sampled = triggerCoverage && triggerCoverage.total > triggerCoverage.sampled;
   $('#dash-trigger-meta').textContent = !triggersAvailable
     ? '读取失败，无法确认今日是否有触发'
-    : `今日 ${triggerCoverage?.totalIsLowerBound ? '至少 ' : ''}${triggerCoverage?.total ?? todayTriggers.length} 条${sampled ? ` · 列表与分布仅覆盖最近 ${triggerCoverage.sampled} 条` : ''}`;
+    : `今日 ${triggerCoverage?.totalIsLowerBound ? '至少 ' : ''}${triggerCoverage?.total ?? todayTriggers.length} 条${sampled ? ` · 按优先级展示 ${triggerCoverage.sampled} 条，统计覆盖今日全部事件` : ''}`;
 
   // 今日建议 Top 3（条数与决策分布并入卡片 meta；持仓汇总卡片已移至持仓页）
   const advices = adviceData?.advices ?? [];
@@ -1088,7 +1074,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
     staleWatchlistCount === null ? '--' : String(staleWatchlistCount);
 
   // 今日预警（urgent 置顶，至多 8 条）
-  const alerts = sortAlerts(Array.isArray(todayTriggers) ? todayTriggers : []).slice(0, 8);
+  const alerts = Array.isArray(todayTriggers) ? todayTriggers : [];
   preserveFocus($('#dash-trigger-list'), () =>
     mount(
       $('#dash-trigger-list'),
@@ -1159,7 +1145,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
       metaParts.push('今日预警统计读取失败');
       for (const id of ['dash-metric-priority', 'dash-metric-delivery', 'dash-metric-noise'])
         $(`#${id}`).textContent = '--';
-    } else if (sampled) metaParts.push(`分布与噪声率仅基于最近 ${triggerCoverage.sampled} 条触发`);
+    } else metaParts.push('分布覆盖今日全部事件，噪声率基于全部已反馈记录');
     $('#dash-metrics-meta').textContent = metaParts.join(' · ');
   }
 

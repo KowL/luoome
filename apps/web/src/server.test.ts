@@ -5190,7 +5190,7 @@ describe('dashboard 数据覆盖与失败状态', () => {
     };
   }
 
-  it('今日总数不被 200 条展示上限截断', async () => {
+  it('首页从超过 200 条事件中优先展示紧急事件，完整统计不受 8 条预览限制', async () => {
     const ctx = await buildTestContext({ clock: () => new Date('2026-09-20T02:00:00Z') });
     const now = ctx.clock();
     for (let i = 0; i < 201; i += 1) {
@@ -5216,26 +5216,66 @@ describe('dashboard 数据覆盖与失败状态', () => {
       );
       expect(result.ok).toBe(true);
     }
+    const source = await ctx.repos.watchTrigger.findById('coverage-trigger-0');
+    if (!source) throw new Error('missing fixture');
+    await ctx.repos.watchTrigger.save({
+      ...source,
+      id: 'older-urgent',
+      stockId: '600519.SH',
+      priority: 'urgent',
+      createdAt: new Date(now.getTime() - 1000),
+    });
+    await ctx.repos.watchTrigger.setFeedback('older-urgent', 'useless', now);
+    for (let i = 0; i < 29; i += 1)
+      await ctx.repos.watchTrigger.setFeedback(`coverage-trigger-${i}`, 'useful', now);
     const localApp = createWebApp(ctx);
     const body = (await (
       await localApp.fetch(new Request('http://test/api/dashboard'))
     ).json()) as CoverageBody;
-    expect(body.data.todayTriggers).toHaveLength(200);
-    expect(body.data.metrics.todayTotal).toBe(201);
+    expect(body.data.todayTriggers).toHaveLength(8);
+    expect(body.data.todayTriggers[0]).toMatchObject({ id: 'older-urgent', priority: 'urgent' });
+    expect(body.data.metrics.todayTotal).toBe(202);
     expect(body.data.todayTriggerCoverage).toEqual({
       available: true,
-      total: 201,
-      sampled: 200,
+      total: 202,
+      sampled: 8,
       totalIsLowerBound: false,
     });
+    expect(body.data.metrics).toMatchObject({
+      priorityCounts: { normal: 201, urgent: 1 },
+      deliveryStatusCounts: { 'not-requested': 202 },
+      feedbackCounts: { useful: 29, useless: 1 },
+      feedbackTotal: 30,
+      noiseRate: 1 / 30,
+    });
+    expect(body.data.board).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stockId: '002594.SZ',
+          todayTrigger: expect.objectContaining({ count: 201 }),
+        }),
+      ]),
+    );
+    const triggered = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard?scope=triggered'))
+    ).json()) as CoverageBody;
+    expect(triggered.data.boardCoverage.complete).toBe(true);
+    expect(triggered.data.board).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stockId: '600519.SH',
+          todayTrigger: expect.objectContaining({ count: 1, maxPriority: 'urgent' }),
+        }),
+      ]),
+    );
     const page = (await (
       await localApp.fetch(
         new Request(
-          'http://test/api/watch/triggers?offset=200&limit=20&priority=normal&feedback=unreviewed',
+          'http://test/api/watch/triggers?offset=171&limit=20&priority=normal&feedback=unreviewed',
         ),
       )
     ).json()) as { data: { total: number; triggers: unknown[] } };
-    expect(page.data.total).toBe(201);
+    expect(page.data.total).toBe(172);
     expect(page.data.triggers).toHaveLength(1);
     const stockSummary = (await (
       await localApp.fetch(new Request('http://test/api/dashboard/stocks/002594.SZ'))
@@ -5248,7 +5288,7 @@ describe('dashboard 数据覆盖与失败状态', () => {
     const empty = (await (
       await localApp.fetch(new Request('http://test/api/watch/triggers?priority=urgent'))
     ).json()) as { data: { total: number } };
-    expect(empty.data.total).toBe(0);
+    expect(empty.data.total).toBe(1);
     for (const query of [
       'offset=-1',
       'offset=bad',

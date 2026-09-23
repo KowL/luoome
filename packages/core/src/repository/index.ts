@@ -896,6 +896,18 @@ export interface AlertPlanRepository {
   remove(id: string): Promise<void>;
 }
 
+export interface WatchTriggerSummary {
+  readonly priorityCounts: Readonly<Record<string, number>>;
+  readonly deliveryStatusCounts: Readonly<Record<string, number>>;
+  readonly feedbackCounts: Readonly<Record<string, number>>;
+  readonly stocks: readonly {
+    readonly stockId: string;
+    readonly count: number;
+    readonly maxPriority: WatchTrigger['priority'];
+    readonly latest: WatchTrigger;
+  }[];
+}
+
 /**
  * 盯盘触发仓储（v0.6 起，v0.7 策略预警扩展）。
  * - 每次 watch 评估 fire 的 trigger 都写入；被 cooldown 抑制的也写（deliveryStatus 标记），便于事后复盘"今天压了多少条"。
@@ -935,7 +947,7 @@ export interface WatchTriggerRepository {
     },
     since: Date,
   ): Promise<WatchTrigger | null>;
-  /** 先筛选再分页；总数与结果取自同一读取快照，createdAt/id 均倒序。 */
+  /** 先筛选和排序再分页；总数与结果取自同一读取快照，同优先级按 createdAt/id 倒序。 */
   query(input: {
     readonly alertPlanId?: string;
     readonly poolId?: string;
@@ -951,7 +963,13 @@ export interface WatchTriggerRepository {
     readonly until?: Date;
     readonly offset: number;
     readonly limit: number;
-  }): Promise<{ readonly triggers: readonly WatchTrigger[]; readonly total: number }>;
+    readonly includeSummary?: boolean;
+    readonly orderBy?: 'recent' | 'priority';
+  }): Promise<{
+    readonly triggers: readonly WatchTrigger[];
+    readonly total: number;
+    readonly summary?: WatchTriggerSummary;
+  }>;
   /** 最近触发（CLI / TUI / MCP 展示用）。 */
   listRecent(opts?: {
     readonly poolId?: string;

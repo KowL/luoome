@@ -35,12 +35,12 @@ describe('看板单股预警覆盖口径', () => {
     expect(result.label).toBe('3 次');
     expect(result.priority).toBe('今日最高：重要');
   });
-  it('样本截断时明确次数下界和样本优先级', () => {
+  it('列表截断不影响完整统计', () => {
     const result = boardTriggerSummary(trigger, { available: true, total: 300, sampled: 200 });
-    expect(result.label).toBe('至少 3 次');
-    expect(result.priority).toBe('样本最高：重要');
+    expect(result.label).toBe('3 次');
+    expect(result.priority).toBe('今日最高：重要');
     expect(boardTriggerSummary(null, { available: true, total: 300, sampled: 200 }).label).toBe(
-      '样本未见',
+      '暂无',
     );
   });
   it('读取失败和成功空结果明确区分', () => {

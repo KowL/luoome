@@ -3817,6 +3817,97 @@ export const registerRepositoryContractTests = (
         expect((await repos.watchTrigger.query({ ...query, deliveryStatus: [] })).total).toBe(0);
       });
 
+      it('query summary 聚合完整筛选范围，最高优先级与最新记录独立', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('older', { priority: 'urgent', createdAt: T0 }),
+        );
+        await repos.watchTrigger.save(makeWatchTrigger('latest', { createdAt: T1 }));
+        await repos.watchTrigger.setFeedback('older', 'useless', T2);
+        await repos.watchTrigger.save(
+          makeWatchTrigger('other', { stockId: '600519.SH', createdAt: T0 }),
+        );
+        const result = await repos.watchTrigger.query({
+          offset: 0,
+          limit: 1,
+          includeSummary: true,
+        });
+        expect(result.triggers.map((t) => t.id)).toEqual(['latest']);
+        expect(result.summary).toMatchObject({
+          priorityCounts: { urgent: 1, normal: 2 },
+          deliveryStatusCounts: { sent: 3 },
+          feedbackCounts: { useless: 1 },
+          stocks: [
+            { stockId: '002594.SZ', count: 2, maxPriority: 'urgent', latest: { id: 'latest' } },
+            { stockId: '600519.SH', count: 1, maxPriority: 'normal', latest: { id: 'other' } },
+          ],
+        });
+        const filtered = await repos.watchTrigger.query({
+          since: T1,
+          offset: 99,
+          limit: 1,
+          includeSummary: true,
+        });
+        expect(filtered.triggers).toEqual([]);
+        expect(filtered.summary).toMatchObject({
+          priorityCounts: { normal: 1 },
+          feedbackCounts: {},
+          stocks: [{ count: 1, maxPriority: 'normal' }],
+        });
+        const empty = await repos.watchTrigger.query({
+          since: T2,
+          offset: 0,
+          limit: 1,
+          includeSummary: true,
+        });
+        expect(empty.summary).toEqual({
+          priorityCounts: {},
+          deliveryStatusCounts: {},
+          feedbackCounts: {},
+          stocks: [],
+        });
+        expect((await repos.watchTrigger.query({ offset: 0, limit: 1 })).summary).toBeUndefined();
+      });
+
+      it('优先级排序在分页前生效，同级按时间和 ID 排序且不改变最新记录汇总', async () => {
+        await repos.watchTrigger.save(
+          makeWatchTrigger('urgent-a', { priority: 'urgent', createdAt: T0 }),
+        );
+        await repos.watchTrigger.save(
+          makeWatchTrigger('urgent-b', { priority: 'urgent', createdAt: T0 }),
+        );
+        await repos.watchTrigger.save(
+          makeWatchTrigger('urgent-new', { priority: 'urgent', createdAt: T1 }),
+        );
+        await repos.watchTrigger.save(
+          makeWatchTrigger('important', { priority: 'important', createdAt: T2 }),
+        );
+        await repos.watchTrigger.save(makeWatchTrigger('normal', { createdAt: T3 }));
+        const first = await repos.watchTrigger.query({
+          orderBy: 'priority',
+          offset: 0,
+          limit: 2,
+          includeSummary: true,
+        });
+        expect(first.total).toBe(5);
+        expect(first.triggers.map((t) => t.id)).toEqual(['urgent-new', 'urgent-b']);
+        expect(first.summary?.stocks[0]).toMatchObject({
+          count: 5,
+          maxPriority: 'urgent',
+          latest: { id: 'normal' },
+        });
+        const second = await repos.watchTrigger.query({ orderBy: 'priority', offset: 2, limit: 3 });
+        expect(second.triggers.map((t) => t.id)).toEqual(['urgent-a', 'important', 'normal']);
+        const recent = await repos.watchTrigger.query({ offset: 0, limit: 1 });
+        expect(recent.triggers[0]?.id).toBe('normal');
+        const filtered = await repos.watchTrigger.query({
+          since: T1,
+          orderBy: 'priority',
+          offset: 0,
+          limit: 5,
+        });
+        expect(filtered.triggers.map((t) => t.id)).toEqual(['urgent-new', 'important', 'normal']);
+      });
+
       it('query 不再截断 1 万条，旧股票记录可以在筛选后查到', async () => {
         await repos.watchTrigger.save(
           makeWatchTrigger('old-match', { stockId: '600519.SH', createdAt: T0 }),
@@ -3824,8 +3915,13 @@ export const registerRepositoryContractTests = (
         for (let i = 0; i < 10001; i += 1) {
           await repos.watchTrigger.save(makeWatchTrigger(`bulk-${String(i).padStart(5, '0')}`));
         }
-        const all = await repos.watchTrigger.query({ offset: 10001, limit: 1 });
+        const all = await repos.watchTrigger.query({
+          offset: 10001,
+          limit: 1,
+          includeSummary: true,
+        });
         expect(all.total).toBe(10002);
+        expect(all.summary?.stocks.map((s) => s.count)).toEqual([10001, 1]);
         expect(all.triggers.map((t) => t.id)).toEqual(['old-match']);
         const filtered = await repos.watchTrigger.query({
           stockId: '600519.SH',

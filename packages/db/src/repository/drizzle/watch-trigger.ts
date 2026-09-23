@@ -5,12 +5,14 @@ import {
   WatchRuleStateSchema,
   type WatchTrigger,
   type WatchTriggerRepository,
+  type WatchTriggerSummary,
 } from '@luoome/core';
 import {
   and,
   count,
   desc,
   eq,
+  getTableColumns,
   gt,
   gte,
   inArray,
@@ -292,12 +294,74 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         .select()
         .from(watchTriggers)
         .where(where)
-        .orderBy(desc(watchTriggers.createdAt), desc(watchTriggers.id))
+        .orderBy(
+          ...(input.orderBy === 'priority'
+            ? [
+                sql`case ${watchTriggers.priority} when 'urgent' then 0 when 'important' then 1 else 2 end`,
+              ]
+            : []),
+          desc(watchTriggers.createdAt),
+          desc(watchTriggers.id),
+        )
         .limit(input.limit)
         .offset(input.offset)
         .all()
         .map(toWatchTrigger);
-      return { total, triggers };
+      let summary: WatchTriggerSummary | undefined;
+      if (input.includeSummary) {
+        const distribution = (
+          column:
+            | typeof watchTriggers.priority
+            | typeof watchTriggers.deliveryStatus
+            | typeof watchTriggers.feedback,
+        ) =>
+          Object.fromEntries(
+            tx
+              .select({ key: column, value: count() })
+              .from(watchTriggers)
+              .where(where)
+              .groupBy(column)
+              .all()
+              .flatMap((row) => (row.key === null ? [] : [[row.key, row.value]])),
+          );
+        const ranked = tx
+          .select({
+            ...getTableColumns(watchTriggers),
+            rowRank:
+              sql<number>`row_number() over (partition by ${watchTriggers.stockId} order by ${watchTriggers.createdAt} desc, ${watchTriggers.id} desc)`.as(
+                'row_rank',
+              ),
+            stockCount: sql<number>`count(*) over (partition by ${watchTriggers.stockId})`.as(
+              'stock_count',
+            ),
+            priorityRank:
+              sql<number>`min(case ${watchTriggers.priority} when 'urgent' then 0 when 'important' then 1 else 2 end) over (partition by ${watchTriggers.stockId})`.as(
+                'priority_rank',
+              ),
+          })
+          .from(watchTriggers)
+          .where(where)
+          .as('ranked');
+        const stocks = tx
+          .select()
+          .from(ranked)
+          .where(eq(ranked.rowRank, 1))
+          .orderBy(ranked.stockId)
+          .all();
+        summary = {
+          priorityCounts: distribution(watchTriggers.priority),
+          deliveryStatusCounts: distribution(watchTriggers.deliveryStatus),
+          feedbackCounts: distribution(watchTriggers.feedback),
+          stocks: stocks.map((row) => ({
+            stockId: row.stockId,
+            count: row.stockCount,
+            maxPriority:
+              row.priorityRank === 0 ? 'urgent' : row.priorityRank === 1 ? 'important' : 'normal',
+            latest: toWatchTrigger(row),
+          })),
+        };
+      }
+      return { total, triggers, ...(summary === undefined ? {} : { summary }) };
     });
   }
 

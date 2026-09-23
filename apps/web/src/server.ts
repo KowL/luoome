@@ -48,6 +48,7 @@ import {
   type ToolContext,
   type ToolError,
   type ToolResult,
+  type WatchTriggerSummary,
 } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import {
@@ -2548,7 +2549,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       });
     const accountId = contextForRequest().user.defaultAccountId;
     const { scope, watchlistId, pageSize } = query.data;
-    const todayStart = startOfTodayShanghai(ctxRef.current.clock());
+    const asOf = ctxRef.current.clock();
+    const todayStart = startOfTodayShanghai(asOf);
     const [holdings, watchlists, alertPlans, watch, triggers, advice, recentTriggers, indexQuotes] =
       await Promise.all([
         invokeTool('list_holdings', {}),
@@ -2557,7 +2559,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         invokeTool('get_watch_status', {}),
         invokeTool('list_watch_triggers', { limit: 8 }),
         invokeTool('get_advice', { limit: 8 }),
-        invokeTool('list_watch_triggers', { since: todayStart, limit: 200 }),
+        invokeTool('list_watch_triggers', {
+          since: todayStart,
+          until: asOf,
+          limit: 8,
+          orderBy: 'priority',
+          includeSummary: true,
+        }),
         invokeIndexQuotes(),
       ]);
     const warnings: string[] = [];
@@ -2604,17 +2612,15 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       ? watchlistRows.filter(({ sourceHealth }) => sourceHealth.stale > 0).length
       : null;
 
-    // 策略预警指标（docs/.../§11 / §12）：今日优先级计数 / 送达状态分布 / 反馈分布（噪声率）
-    const todayTriggers = (
-      recentTriggers.ok
-        ? (recentTriggers.data as { triggers: Array<Record<string, unknown>> }).triggers
-        : []
-    ) as Array<{
-      stockId: string;
-      priority: 'urgent' | 'important' | 'normal';
-      deliveryStatus: string;
-      feedback?: 'handled' | 'useful' | 'useless' | 'ignored';
-    }>;
+    const todayData = recentTriggers.ok
+      ? (recentTriggers.data as {
+          triggers: unknown[];
+          total: number;
+          summary: WatchTriggerSummary;
+        })
+      : null;
+    const todayTriggers = todayData?.triggers ?? [];
+    const todaySummary = todayData?.summary;
 
     // 展示聚合：先合并和筛选身份，再按页请求行情。
     interface BoardItem {
@@ -2720,30 +2726,28 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         }
       }
     }
-    const PRIORITY_RANK = { urgent: 0, important: 1, normal: 2 } as const;
-    for (const t of todayTriggers) {
-      const item = board.get(t.stockId);
-      if (item === undefined) {
-        if (scope === 'triggered')
-          board.set(t.stockId, {
-            stockId: t.stockId,
-            name: '',
-            quote: null,
-            changePct: null,
-            holding: null,
-            watchlists: [],
-            watchlistIds: [],
-            sourceKinds: [],
-            todayTrigger: { count: 1, maxPriority: t.priority, latest: t },
-          });
-        continue;
+    for (const summary of todaySummary?.stocks ?? []) {
+      const item = board.get(summary.stockId);
+      const todayTrigger = {
+        count: summary.count,
+        maxPriority: summary.maxPriority,
+        latest: summary.latest,
+      };
+      if (item !== undefined) {
+        item.todayTrigger = todayTrigger;
+      } else if (scope === 'triggered') {
+        board.set(summary.stockId, {
+          stockId: summary.stockId,
+          name: '',
+          quote: null,
+          changePct: null,
+          holding: null,
+          watchlists: [],
+          watchlistIds: [],
+          sourceKinds: [],
+          todayTrigger,
+        });
       }
-      const entry = item.todayTrigger ?? { count: 0, latest: t, maxPriority: 'normal' as const };
-      entry.count += 1;
-      if (PRIORITY_RANK[t.priority] < PRIORITY_RANK[entry.maxPriority]) {
-        entry.maxPriority = t.priority;
-      }
-      item.todayTrigger = entry;
     }
 
     const filteredBoard = [...board.values()].filter(
@@ -2767,26 +2771,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       { updateName: true },
     );
     if (scope === 'triggered' && !recentTriggers.ok) boardComplete = false;
-    if (
-      scope === 'triggered' &&
-      recentTriggers.ok &&
-      (recentTriggers.data as { total: number }).total > todayTriggers.length
-    )
-      boardComplete = false;
-
-    const priorityCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
-      acc[t.priority] = (acc[t.priority] ?? 0) + 1;
-      return acc;
-    }, {});
-    const deliveryStatusCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
-      acc[t.deliveryStatus] = (acc[t.deliveryStatus] ?? 0) + 1;
-      return acc;
-    }, {});
-    const feedbackCounts = todayTriggers.reduce<Record<string, number>>((acc, t) => {
-      if (t.feedback === undefined) return acc;
-      acc[t.feedback] = (acc[t.feedback] ?? 0) + 1;
-      return acc;
-    }, {});
+    const priorityCounts = todaySummary?.priorityCounts ?? {};
+    const deliveryStatusCounts = todaySummary?.deliveryStatusCounts ?? {};
+    const feedbackCounts = todaySummary?.feedbackCounts ?? {};
 
     // 噪声率（§11）：样本 ≥ 30 才展示，避免误读
     const feedbackTotal = Object.values(feedbackCounts).reduce((s, n) => s + n, 0);
@@ -2805,7 +2792,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return jsonResult({
       ok: true,
       data: {
-        asOf: ctxRef.current.clock(),
+        asOf,
         holdings: holdings.ok ? holdings.data : null,
         watchlists: watchlists.ok ? watchlists.data : null,
         alertPlans: alertPlans.ok ? alertPlans.data : null,
