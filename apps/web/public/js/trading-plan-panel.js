@@ -146,7 +146,7 @@ export const planMetaText = (plan) =>
   ].join(' · ');
 
 /** 草案不能执行的原因：约束未通过时优先展示约束原因，否则展示未知项。 */
-export const planDraftNote = (plan) => {
+export const planDraftReasons = (plan) => {
   if (plan.status !== 'draft') return null;
   const reasons = [
     ...new Set(
@@ -155,8 +155,56 @@ export const planDraftNote = (plan) => {
       ),
     ),
   ];
-  if (reasons.length > 0) return `草案原因：${reasons.join('；')}`;
-  return plan.position?.constraintStatus === 'passed' ? null : '草案：约束校验未通过，暂不可执行';
+  if (reasons.length > 0) return reasons.join('；');
+  return plan.position?.constraintStatus === 'passed' ? null : '约束校验未通过，暂不可执行';
+};
+
+export const planDraftNote = (plan) => {
+  const reasons = planDraftReasons(plan);
+  return reasons === null ? null : `草案原因：${reasons}`;
+};
+
+/** 行下方的补充说明：草案原因与监控说明同源时不重复排一遍。 */
+export const planRowNote = (row, monitoring) => {
+  const { plan, newerDraft } = row;
+  if (plan.status !== 'draft') return supersededDraftNote(newerDraft, plan);
+  const reasons = planDraftReasons(plan);
+  if (reasons === null) return null;
+  const guidance = `${monitoring?.reason ?? ''}；${monitoring?.nextStep ?? ''}`;
+  return guidance.includes(reasons) ? null : `草案原因：${reasons}`;
+};
+
+/** 行上是当前生效版本、但存在更新草案时提醒：草案没发布，不影响仍在跑的版本。 */
+export const supersededDraftNote = (draft, current) => {
+  if (draft === undefined || current === undefined) return null;
+  const reason = planDraftNote(draft) ?? '草案未通过生效门槛';
+  return `更新的草案 v${draft.version} 未发布（当前生效 v${current.version}）· ${reason}`;
+};
+
+/** 版本倒序：先比版本号，再比创建时间（同版本冲突时较新的一条在前）。 */
+const byVersionDesc = (left, right) =>
+  right.version - left.version ||
+  new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+
+/**
+ * 当前版本解析（与服务端 activeOnly 同一规则）：
+ * 从新到旧找第一个 active 版本；更新的 draft 只是「这次没发布」，不顶掉仍在监控的生效版本；
+ * 更新的 superseded / revoked / expired 表示该计划已被明确退役 → 交给历史记录展示。
+ * 没有任何 active 版本时退回最新草案（否则「一直没发布」的计划会彻底不可见）。
+ */
+export const currentPlanVersion = (versions) => {
+  const sorted = [...(versions ?? [])].sort(byVersionDesc);
+  if (sorted.length === 0) return null;
+  for (const plan of sorted) {
+    if (plan.status === 'active') return { plan, kind: 'current' };
+    // 更新的 draft 只是「这次没发布」，继续往下找仍在监控的生效版本；
+    // superseded / revoked / expired 表示计划已被明确退役，不再有当前版本。
+    if (plan.status !== 'draft') break;
+  }
+  const newest = sorted[0];
+  return newest.status === 'draft'
+    ? { plan: newest, kind: 'draft' }
+    : { plan: newest, kind: 'history' };
 };
 
 /** 每个计划只展示最高版本；同版本冲突时取较新创建的一条。 */
@@ -551,10 +599,12 @@ export const openTradingPlanDetailByVersionId = async (versionId) => {
   return result;
 };
 
+/** 状态筛选：按「现在能不能盯」分组，记录状态（生效 / 草案 / 已替代…）只在详情里看。 */
 export const PLAN_STATUS_FILTERS = [
-  { id: 'all', label: '全部状态' },
-  { id: 'active', label: '生效' },
-  { id: 'draft', label: '草案' },
+  { id: 'all', label: '全部' },
+  { id: 'ready', label: '可监控' },
+  { id: 'pending', label: '待处理' },
+  { id: 'expired', label: '已过期' },
   { id: 'history', label: '历史状态' },
 ];
 
@@ -572,39 +622,115 @@ const ACTION_FILTER_MATCH = {
   risk: ['reduce', 'exit', 'avoid'],
 };
 
-export const filterPlansByStatus = (plans, status) => {
-  if (status === undefined || status === 'all') return plans ?? [];
-  if (status === 'history') {
-    return (plans ?? []).filter((plan) => !['active', 'draft'].includes(plan.status));
-  }
-  return (plans ?? []).filter((plan) => plan.status === status);
+/** 监控资格 → 展示分组；资格读不到时不假装可监控。 */
+const ELIGIBILITY_BY_MONITORING = {
+  ready: 'ready',
+  expired: 'expired',
+  draft: 'pending',
+  scheduled: 'pending',
+  'account-changed': 'pending',
+  unavailable: 'pending',
+  'no-conditions': 'pending',
+  inactive: 'history',
 };
 
-export const filterPlansByAction = (plans, action) => {
-  if (action === undefined || action === 'all') return plans ?? [];
+const ELIGIBILITY_ORDER = { ready: 0, pending: 1, expired: 2, history: 3 };
+
+/** 监控资格优先，读不到资格时历史记录归历史，其余按待处理。 */
+export const planRowEligibility = (row) => {
+  const status = row?.monitoring?.status;
+  const known = status === undefined ? undefined : ELIGIBILITY_BY_MONITORING[status];
+  if (known !== undefined) return known;
+  return row?.kind === 'history' ? 'history' : 'pending';
+};
+
+/** 已解析过的行直接用缓存的分组，避免重复判定。 */
+const eligibilityOf = (row) => row.eligibility ?? planRowEligibility(row);
+
+/** 行徽标：展示监控资格，记录状态只在详情与版本差异里看。 */
+export const planRowStatus = (row) => {
+  const eligibility = planRowEligibility(row);
+  if (eligibility === 'ready') return { label: '可监控', cls: 'badge-active' };
+  if (eligibility === 'expired') return { label: '已过期', cls: 'badge-warn' };
+  if (eligibility === 'history')
+    return { label: planStatusLabel(row.plan.status), cls: planStatusBadgeClass(row.plan.status) };
+  return row.monitoring?.status === 'draft'
+    ? { label: '草案', cls: 'badge-draft' }
+    : { label: '未就绪', cls: 'badge-warn' };
+};
+
+/**
+ * 计划行：每个计划一行（当前版本解析与服务端 activeOnly 一致），
+ * 带监控资格与「更新的草案未发布」信息。
+ */
+export const buildPlanRows = (plans, monitoring = []) => {
+  const monitoringByVersion = new Map(monitoring.map((item) => [item.versionId, item]));
+  const byPlan = new Map();
+  for (const plan of plans ?? []) {
+    const versions = byPlan.get(plan.id) ?? [];
+    versions.push(plan);
+    byPlan.set(plan.id, versions);
+  }
+  const rows = [];
+  for (const versions of byPlan.values()) {
+    const resolved = currentPlanVersion(versions);
+    if (resolved === null) continue;
+    const { plan, kind } = resolved;
+    const newerDraft =
+      kind === 'current'
+        ? [...versions].sort(byVersionDesc).find(
+            (item) => item.status === 'draft' && byVersionDesc(item, plan) < 0, // 比当前版本更新
+          )
+        : undefined;
+    const row = {
+      plan,
+      kind,
+      newerDraft,
+      monitoring: monitoringByVersion.get(planVersionId(plan)),
+    };
+    rows.push({ ...row, eligibility: planRowEligibility(row) });
+  }
+  return rows.sort(
+    (left, right) =>
+      (ELIGIBILITY_ORDER[left.eligibility] ?? 9) - (ELIGIBILITY_ORDER[right.eligibility] ?? 9) ||
+      String(left.plan.stockId).localeCompare(String(right.plan.stockId)) ||
+      right.plan.version - left.plan.version,
+  );
+};
+
+/** 筛选（状态 + 动作可叠加）；「全部」不含已过期——过期记录要展开筛选项才看。 */
+export const filterPlanRows = (rows, status, action) => {
+  const list = rows ?? [];
+  const byStatus =
+    status === undefined || status === 'all'
+      ? list.filter((row) => eligibilityOf(row) !== 'expired')
+      : list.filter((row) => eligibilityOf(row) === status);
   const allowed = ACTION_FILTER_MATCH[action];
   return allowed === undefined
-    ? (plans ?? [])
-    : (plans ?? []).filter((plan) => allowed.includes(plan.action));
+    ? byStatus
+    : byStatus.filter((row) => allowed.includes(row.plan.action));
+};
+
+/** 筛选栏与头部的计数（全部行，不受当前筛选影响）。 */
+export const countPlanRows = (rows) => {
+  const counts = { ready: 0, pending: 0, expired: 0, history: 0, total: (rows ?? []).length };
+  for (const row of rows ?? []) counts[eligibilityOf(row)] += 1;
+  return counts;
 };
 
 let planStatusFilter = 'all';
 let planActionFilter = 'all';
 let planPanelState = {
   plans: [],
-  latest: [],
-  monitoring: [],
+  rows: [],
   factsResult: undefined,
   reconcileResult: undefined,
 };
 
-const visiblePlans = (latest, status, action) =>
-  filterPlansByAction(filterPlansByStatus(latest, status), action);
-
 /** 只重绘列表部分，筛选栏保持在原位。 */
 const renderPlanList = (root) => {
   const filterBar = root.querySelector('.plan-filters');
-  const visible = visiblePlans(planPanelState.latest, planStatusFilter, planActionFilter);
+  const visible = filterPlanRows(planPanelState.rows, planStatusFilter, planActionFilter);
   const rows =
     visible.length === 0
       ? [el('p', 'placeholder', '当前筛选条件下没有计划。')]
@@ -616,16 +742,16 @@ const renderPlanList = (root) => {
   ]);
 };
 
-const planRow = (plan) => {
+const planRow = (row) => {
+  const { plan, monitoring } = row;
   const detail = el('button', 'btn btn-outline btn-sm', '详情');
   detail.type = 'button';
   detail.addEventListener('click', () =>
     openTradingPlanDetail(plan, planVersionsOf(planPanelState.plans, plan.id)),
   );
-  const draftNote = planDraftNote(plan);
-  const monitoring = planPanelState.monitoring.find(
-    (item) => item.versionId === planVersionId(plan),
-  );
+  const badge = planRowStatus(row);
+  // 行上是监控资格，记录状态（生效/草案/已替代…）只在详情与版本差异里看
+  const draftNote = planRowNote(row, monitoring);
   return el('div', 'entity-item', [
     el('div', 'flex gap-2', [
       stockIdentityLink(plan),
@@ -634,13 +760,13 @@ const planRow = (plan) => {
     metricsNode(plan),
     el('p', 'plan-detail-line', `入场条件（全部满足）：${entryConditionText(plan)}`),
     el('div', 'plan-guidance', [
-      el('strong', null, monitoring?.status === 'ready' ? '可监控 · 等待条件' : '未就绪'),
+      el('strong', null, monitoring === undefined ? '监控资格未读取' : monitoring.reason),
       el(
         'p',
         'hint',
         monitoring === undefined
-          ? '监控资格未读取，请刷新后重试'
-          : `${monitoring.reason}。下一步：${monitoring.nextStep}`,
+          ? '请刷新后重试；未确认资格前不会按可监控对待'
+          : `下一步：${monitoring.nextStep}`,
       ),
     ]),
     el(
@@ -650,21 +776,18 @@ const planRow = (plan) => {
     ),
     el('p', 'muted', `有效期至 ${fmtDateTime(plan.validUntil)} · v${plan.version}`),
     ...(draftNote === null ? [] : [el('div', 'hint', draftNote)]),
-    el('div', 'flex gap-2', [
-      el('span', `badge ${planStatusBadgeClass(plan.status)}`, planStatusLabel(plan.status)),
-      detail,
-    ]),
+    el('div', 'flex gap-2', [el('span', `badge ${badge.cls}`, badge.label), detail]),
   ]);
 };
 
 /** 计划筛选栏：两个维度都带计数；切换后只重绘列表。 */
 const planFilterBar = () => {
-  const { latest } = planPanelState;
+  const { rows } = planPanelState;
   const statusSelect = makeSelect(
     'alerts-plan-status-filter',
     PLAN_STATUS_FILTERS.map((option) => [
       option.id,
-      `${option.label}（${filterPlansByStatus(latest, option.id).length}）`,
+      `${option.label}（${filterPlanRows(rows, option.id, planActionFilter).length}）`,
     ]),
   );
   statusSelect.value = planStatusFilter;
@@ -672,7 +795,7 @@ const planFilterBar = () => {
     'alerts-plan-action-filter',
     PLAN_ACTION_FILTERS.map((option) => [
       option.id,
-      `${option.label}（${filterPlansByAction(latest, option.id).length}）`,
+      `${option.label}（${filterPlanRows(rows, planStatusFilter, option.id).length}）`,
     ]),
   );
   actionSelect.value = planActionFilter;
@@ -704,21 +827,27 @@ export const renderTradingPlanPanel = ({
   const plans = result.data?.plans ?? [];
   // 快照读取失败时按“有快照”处理：不把读取故障渲染成“未登记”。
   const facts = factsResult?.ok ? factsResult.data.facts : undefined;
-  const latest = latestPlanVersions(plans);
   const monitoring = result.data?.monitoring ?? [];
-  const readyCount = latest.filter((plan) =>
-    monitoring.some((item) => item.versionId === planVersionId(plan) && item.status === 'ready'),
-  ).length;
+  // 当前版本解析与服务端 activeOnly 一致：草案不顶掉仍在监控的生效版本。
+  const rows = buildPlanRows(plans, monitoring);
+  const counts = countPlanRows(rows);
   const incomplete = facts !== undefined && facts.status !== 'complete';
   if (meta !== null) {
     meta.textContent =
-      latest.length === 0
+      rows.length === 0
         ? incomplete
           ? '账户事实不可用'
           : '暂无计划'
-        : `${latest.length} 个 · 可监控 ${readyCount} · 待处理 ${latest.filter((plan) => ['active', 'draft'].includes(plan.status)).length - readyCount}${incomplete ? ' · 账户事实不可用' : ''}`;
+        : [
+            `${rows.length} 个`,
+            `可监控 ${counts.ready}`,
+            `待处理 ${counts.pending}`,
+            ...(counts.expired === 0 ? [] : [`已过期 ${counts.expired}`]),
+            ...(counts.history === 0 ? [] : [`历史 ${counts.history}`]),
+            ...(incomplete ? ['账户事实不可用'] : []),
+          ].join(' · ');
   }
-  if (latest.length === 0) {
+  if (rows.length === 0) {
     mount(root, [
       el(
         'p',
@@ -729,7 +858,7 @@ export const renderTradingPlanPanel = ({
     ]);
     return;
   }
-  planPanelState = { plans, latest, monitoring, factsResult, reconcileResult };
+  planPanelState = { plans, rows, factsResult, reconcileResult };
   mount(root, planFilterBar());
   renderPlanList(root);
   void setStatus;
