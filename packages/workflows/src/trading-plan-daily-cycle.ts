@@ -130,6 +130,7 @@ export const buildTradingPlanFromAdvice = (input: {
   readonly accountId: string;
   readonly accountFacts: AccountFacts;
   readonly advice: Advice;
+  readonly supportingAdvices?: readonly Advice[];
   readonly holding?: TradingPlanHoldingContext;
   readonly previous: readonly TradingPlan[];
   readonly now: Date;
@@ -137,6 +138,27 @@ export const buildTradingPlanFromAdvice = (input: {
   const { advice, holding, accountFacts, now } = input;
   const stockId = adviceStockId(advice, holding === undefined ? [] : [holding]);
   if (stockId === null) throw new Error('advice is not stock or position scoped');
+  const sourceAdvices = [
+    advice,
+    ...(input.supportingAdvices ?? []).filter((item) => item.id !== advice.id),
+  ];
+  const actionTerms = (item: Advice) =>
+    JSON.stringify([
+      item.decision,
+      item.horizon,
+      item.entryPriceLow ?? null,
+      item.entryPriceHigh ?? null,
+      item.targetPositionPct ?? null,
+      item.stopLoss ?? null,
+      item.targetPrice ?? null,
+    ]);
+  const conflictingAdvices = sourceAdvices.filter(
+    (item) => !isRuleFallbackAdvice(item) && actionTerms(item) !== actionTerms(advice),
+  );
+  const conflictReason =
+    conflictingAdvices.length === 0
+      ? undefined
+      : `同股策略建议的动作、价格或仓位条件不一致（${[advice.id, ...conflictingAdvices.map((item) => item.id)].join('、')}），需要重新研究`;
   const currentPct = currentPositionPct(stockId, accountFacts);
   const action = actionForAdvice(advice, holding);
   // 观察计划（候选机会）未持仓时带 AI 给出的目标仓位，表示「条件满足后建仓多少」；
@@ -151,42 +173,42 @@ export const buildTradingPlanFromAdvice = (input: {
       : action === 'exit' || action === 'reduce' || action === 'avoid'
         ? 0
         : (advice.targetPositionPct ?? null);
-  const quote = advice.basedOn.quotes?.[stockId];
-  const factStatus =
-    quote === undefined
-      ? ('unknown' as const)
-      : quote.observedAt.getTime() > now.getTime()
+  const facts = sourceAdvices.flatMap((item) => {
+    const quote = item.basedOn.quotes?.[stockId];
+    if (quote === undefined) return [];
+    const status =
+      quote.observedAt.getTime() > now.getTime()
         ? ('unknown' as const)
         : isAdviceQuoteCurrent(quote, now)
           ? ('available' as const)
           : ('stale' as const);
-  const facts =
-    quote === undefined
-      ? []
-      : [
-          {
-            id: `price:${stockId}:${advice.id}`,
-            stockId,
-            metric: 'price',
-            value: quote.close,
-            unit: 'CNY',
-            source: quote.source,
-            observedAt: quote.observedAt,
-            fetchedAt: quote.fetchedAt,
-            timestampSource: quote.timestampSource,
-            frequency: 'quote',
-            status: factStatus,
-          },
-        ];
+    return [
+      {
+        id: `price:${stockId}:${item.id}`,
+        stockId,
+        metric: 'price',
+        value: quote.close,
+        unit: 'CNY',
+        source: quote.source,
+        observedAt: quote.observedAt,
+        fetchedAt: quote.fetchedAt,
+        timestampSource: quote.timestampSource,
+        frequency: 'quote',
+        status,
+      },
+    ];
+  });
   const evidence = [
-    {
-      id: `advice:${advice.id}`,
+    ...sourceAdvices.map((item) => ({
+      id: `advice:${item.id}`,
       kind: 'strategy' as const,
-      source: advice.sourceTool ?? 'advice',
-      observedAt: advice.basedOn.dataAsOf,
-      factIds: facts.map((fact) => fact.id),
-      summary: advice.reasoning.premise,
-    },
+      source: item.sourceTool ?? 'advice',
+      observedAt: item.basedOn.dataAsOf,
+      factIds: facts
+        .filter((fact) => fact.id === `price:${stockId}:${item.id}`)
+        .map((fact) => fact.id),
+      summary: item.reasoning.premise,
+    })),
     {
       id: `account-facts:${accountFacts.accountId}`,
       kind: 'account' as const,
@@ -242,8 +264,10 @@ export const buildTradingPlanFromAdvice = (input: {
         advice.entryPriceHigh !== undefined &&
         entryConditions.length > 0)) &&
     facts.every((fact) => fact.status === 'available') &&
-    !ruleFallback;
+    !ruleFallback &&
+    conflictReason === undefined;
   const unknowns = [
+    ...(conflictReason === undefined ? [] : [conflictReason]),
     ...(ruleFallback ? ['AI 推理不可用（规则兜底建议），未给出可核验的价格计划'] : []),
     ...(targetPct === null ? ['AI Advice 未提供可核验的目标仓位百分比'] : []),
     ...(advice.entryPriceLow === undefined || advice.entryPriceHigh === undefined
@@ -262,7 +286,11 @@ export const buildTradingPlanFromAdvice = (input: {
     currentPct,
     targetPct,
     deltaPct: currentPct !== null && targetPct !== null ? roundPct(targetPct - currentPct) : null,
-    constraintStatus: canActivate ? ('passed' as const) : ('unavailable' as const),
+    constraintStatus: canActivate
+      ? ('passed' as const)
+      : conflictReason === undefined
+        ? ('unavailable' as const)
+        : ('blocked' as const),
     constraintReasons: canActivate ? [] : unknowns,
     prerequisiteActions:
       action === 'enter' || action === 'add'
@@ -311,22 +339,19 @@ export const buildTradingPlanFromAdvice = (input: {
       ? { unavailableReason: '当前持仓可卖数量为 0' }
       : {}),
   };
-  const source =
-    advice.basedOn.strategy === undefined
-      ? {
-          strategyIds: [],
-          strategyVersionIds: [],
-          runIds: [],
-          signalIds: [],
-          adviceIds: [advice.id],
-        }
-      : {
-          strategyIds: [advice.basedOn.strategy.strategyId],
-          strategyVersionIds: [advice.basedOn.strategy.strategyVersionId],
-          runIds: [advice.basedOn.strategy.runId],
-          signalIds: [...advice.basedOn.strategy.signalIds],
-          adviceIds: [advice.id],
-        };
+  const source = {
+    strategyIds: [
+      ...new Set(sourceAdvices.flatMap((item) => item.basedOn.strategy?.strategyId ?? [])),
+    ],
+    strategyVersionIds: [
+      ...new Set(sourceAdvices.flatMap((item) => item.basedOn.strategy?.strategyVersionId ?? [])),
+    ],
+    runIds: [...new Set(sourceAdvices.flatMap((item) => item.basedOn.strategy?.runId ?? []))],
+    signalIds: [
+      ...new Set(sourceAdvices.flatMap((item) => item.basedOn.strategy?.signalIds ?? [])),
+    ],
+    adviceIds: sourceAdvices.map((item) => item.id),
+  };
   return TradingPlanSchema.parse({
     id: `account:${input.accountId}:stock:${stockId}`,
     version,
@@ -374,8 +399,10 @@ export const buildTradingPlanFromAdvice = (input: {
     source,
     explanation: {
       supportingEvidenceIds: evidence.map((item) => item.id),
-      counterEvidence: [...advice.reasoning.counterEvidence],
-      risks: [...advice.risks],
+      counterEvidence: [
+        ...new Set(sourceAdvices.flatMap((item) => item.reasoning.counterEvidence)),
+      ],
+      risks: [...new Set(sourceAdvices.flatMap((item) => item.risks))],
       unknowns,
       ...(previousVersion === undefined
         ? {}
@@ -463,22 +490,46 @@ const run = async (
     includeExpired: true,
     limit: 500,
   });
+  const candidateGroups = new Map<string, Advice[]>();
   if (candidatesResult.ok) {
     const holdingStocks = new Set(holdings.map((item) => item.holding.stockId));
-    const byStock = new Map<string, Advice>();
     for (const adviceValue of candidatesResult.data.advices) {
       const advice = adviceValue as Advice;
-      if (advice.basedOn.strategy?.accountId !== accountId) continue;
+      const strategy = advice.basedOn.strategy;
+      if (strategy?.accountId !== accountId) continue;
+      if (advice.validFrom > now || advice.validUntil <= now) continue;
       const stockId = adviceStockId(advice, holdings);
-      if (stockId === null || holdingStocks.has(stockId)) continue;
-      const current = byStock.get(stockId);
-      if (current === undefined || advice.confidence > current.confidence)
-        byStock.set(stockId, advice as Advice);
+      if (stockId === null) continue;
+      const group = candidateGroups.get(stockId) ?? [];
+      const priorIndex = group.findIndex(
+        (item) => item.basedOn.strategy?.strategyId === strategy.strategyId,
+      );
+      if (priorIndex < 0) group.push(advice);
+      else {
+        const prior = group[priorIndex] as Advice;
+        if (
+          advice.createdAt > prior.createdAt ||
+          (advice.createdAt.getTime() === prior.createdAt.getTime() && advice.id > prior.id)
+        )
+          group[priorIndex] = advice;
+      }
+      candidateGroups.set(stockId, group);
     }
-    for (const advice of [...byStock.values()]
-      .sort((a, b) => b.confidence - a.confidence)
+    const preferred = (group: readonly Advice[]): Advice =>
+      [...group].sort(
+        (a, b) =>
+          Number(isRuleFallbackAdvice(a)) - Number(isRuleFallbackAdvice(b)) ||
+          b.confidence - a.confidence ||
+          a.id.localeCompare(b.id),
+      )[0] as Advice;
+    for (const [, group] of [...candidateGroups.entries()]
+      .filter(([stockId]) => !holdingStocks.has(stockId))
+      .sort(
+        (a, b) =>
+          preferred(b[1]).confidence - preferred(a[1]).confidence || a[0].localeCompare(b[0]),
+      )
       .slice(0, input.maxCandidates)) {
-      advices.push({ advice });
+      advices.push({ advice: preferred(group) });
       candidateReviews += 1;
     }
   } else {
@@ -498,6 +549,9 @@ const run = async (
         accountId,
         accountFacts,
         advice: item.advice,
+        supportingAdvices:
+          candidateGroups.get(stockId)?.filter((supporting) => supporting.id !== item.advice.id) ??
+          [],
         ...(item.holding === undefined ? {} : { holding: item.holding }),
         previous: previousPlans,
         now,

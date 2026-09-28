@@ -425,6 +425,87 @@ describe('weekly-report workflow', () => {
     );
   });
 
+  it('隔周补报预警反馈只统计目标周，超过明细页上限仍用全量分布', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-08-03T10:00:00.000Z') });
+    const base = {
+      poolId: 'weekly-alert-pool',
+      stockId: '002594.SZ',
+      ruleId: 'weekly-rule',
+      ruleKind: 'price-level' as const,
+      triggerType: 'triggered' as const,
+      direction: 'watch' as const,
+      reason: '固定测试条件',
+      evidence: ['固定测试事实'],
+      priority: 'normal' as const,
+      evalSnapshot: { ruleId: 'weekly-rule' },
+    };
+    const weekAt = new Date('2026-07-30T06:00:00.000Z');
+    for (let index = 0; index < 501; index += 1) {
+      await ctx.repos.watchTrigger.save({
+        ...base,
+        id: `weekly-trigger-${String(index).padStart(3, '0')}`,
+        createdAt: new Date(weekAt.getTime() + index * 1_000),
+        deliveryStatus: index === 0 ? 'failed' : 'not-requested',
+        notified: index === 0,
+        ...(index === 0 ? { feedback: 'useful' as const, feedbackAt: weekAt } : {}),
+      });
+    }
+    await ctx.repos.watchTrigger.save({
+      ...base,
+      id: 'following-week-trigger',
+      createdAt: new Date('2026-08-03T06:00:00.000Z'),
+      deliveryStatus: 'failed',
+      notified: true,
+      feedback: 'useless',
+    });
+    await ctx.repos.watchTrigger.save({
+      ...base,
+      id: 'current-account-trigger',
+      poolId: `trading-plan-watch:${ctx.user.defaultAccountId}`,
+      createdAt: new Date('2026-07-30T07:00:00.000Z'),
+      deliveryStatus: 'sent',
+      notified: true,
+      feedback: 'useful',
+    });
+
+    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'alert-feedback');
+    const metrics = section?.blocks.find((block) => block.kind === 'metrics');
+    expect(metrics?.kind === 'metrics' ? metrics.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'triggered', value: 502 }),
+        expect.objectContaining({ key: 'feedbackCount', value: 2 }),
+        expect.objectContaining({ key: 'usefulRate', value: 1 }),
+        expect.objectContaining({ key: 'deliveryFailed', label: '渠道投递失败', value: 1 }),
+      ]),
+    );
+
+    const accountReport = await weeklyReportWorkflow.run(
+      {
+        periodEnd: '2026-07-31',
+        scope: { kind: 'account', accountId: ctx.user.defaultAccountId },
+        notify: false,
+      },
+      ctx,
+    );
+    expect(accountReport.ok).toBe(true);
+    if (!accountReport.ok) return;
+    const accountSection = accountReport.data.report.sections.find(
+      (item) => item.key === 'alert-feedback',
+    );
+    const accountMetrics = accountSection?.blocks.find((block) => block.kind === 'metrics');
+    expect(accountMetrics?.kind === 'metrics' ? accountMetrics.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'triggered', value: 1 }),
+        expect.objectContaining({ key: 'feedbackCount', value: 1 }),
+        expect.objectContaining({ key: 'deliveryFailed', value: 0 }),
+      ]),
+    );
+    expect(JSON.stringify(accountSection)).toContain('全局关注预警不并入账户反馈率');
+  });
+
   it('将 signal observation 和 Advice outcome 以描述性统计写入周报', async () => {
     const ctx = await buildTestContext({ clock: () => now });
     await ctx.repos.signalObservation.save(completeSignalObservation());
@@ -580,6 +661,35 @@ describe('weekly-report workflow', () => {
     ]) {
       expect(serialized).not.toContain(field);
     }
+  });
+
+  it('回补旧周报不把下一周的 published 策略运行算入旧周', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-08-03T10:00:00.000Z') });
+    await seedStrategyWithPublishedRun(ctx);
+
+    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-24', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'strategy-review');
+    const table = section?.blocks.find((block) => block.kind === 'table');
+    const text = section?.blocks.find((block) => block.kind === 'text');
+    expect(table?.kind === 'table' ? table.rows : []).toEqual([]);
+    expect(text?.kind === 'text' ? text.text : '').toBe('本周没有可复盘的 published 策略运行。');
+  });
+
+  it('策略在周后暂停仍保留其历史正式运行的周复盘', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-08-03T10:00:00.000Z') });
+    await seedStrategyWithPublishedRun(ctx);
+    await ctx.repos.strategy.pause('weekly-strategy', new Date('2026-08-01T02:00:00.000Z'));
+
+    const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((item) => item.key === 'strategy-review');
+    const table = section?.blocks.find((block) => block.kind === 'table');
+    expect(table?.kind === 'table' ? table.rows : []).toEqual(
+      expect.arrayContaining([expect.objectContaining({ strategy: '周复盘策略' })]),
+    );
   });
 
   it('AI 不可用时策略复盘退化为 facts-only 摘要且 section 保持 complete', async () => {

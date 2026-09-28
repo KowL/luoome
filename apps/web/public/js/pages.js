@@ -16,7 +16,12 @@ import { buildMarketLink, parseRouteHash } from './market.js';
 import { DATASET_LABELS } from './market-sync.js';
 import { alertDialog, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
-import { triggerDeliveryLabel, triggerMetaText, triggerWhyText } from './target-pages.js';
+import {
+  triggerChannelTimingText,
+  triggerDeliveryLabel,
+  triggerMetaText,
+  triggerWhyText,
+} from './target-pages.js';
 import {
   latestPlanVersions,
   openTradingPlanDetail,
@@ -58,6 +63,7 @@ let boardWatchlistId = '';
 let dashboardCanWrite = false;
 let dashboardAlertLabels = {};
 let dashboardSetStatus = () => {};
+let dashboardReportFetchedAt = 0;
 
 const readDashboardView = (accountId) => {
   let saved;
@@ -174,6 +180,55 @@ const routeAdviceId = (hash = window.location.hash) => {
   return value === undefined || value.length === 0 ? null : value;
 };
 
+const routeReportId = (hash = window.location.hash) => {
+  const value = parseRouteHash(hash).params.get('id')?.trim();
+  return value === undefined || value.length === 0 ? null : value;
+};
+
+const reportDeliveryLabel = (status) =>
+  ({
+    sent: '已提交渠道',
+    pending: '待发送',
+    failed: '发送失败',
+    'fallback-log': '仅写日志',
+    'not-requested': '未请求通知',
+  })[status] ?? '状态未记录';
+
+const dashboardClosingReportNode = (report) => {
+  if (report === null)
+    return el('p', 'muted', '当前账户暂无收盘报告。18:00 后可在这里查看主报告和补充版本。');
+  const link = el('a', null, report.title);
+  link.href = `#reports?id=${encodeURIComponent(report.id)}`;
+  return el('div', 'dashboard-closing-summary', [
+    el('div', 'dashboard-closing-title', [
+      link,
+      el(
+        'span',
+        'muted',
+        `${report.periodEnd} · ${report.version > 1 ? `补充 v${report.version}` : '主报告 v1'}`,
+      ),
+    ]),
+    el('div', 'dashboard-closing-meta', [
+      reportStatusBadge(report.status),
+      el('span', 'muted', `通知：${reportDeliveryLabel(report.deliveryStatus)}`),
+      el('span', 'muted', `生成于 ${fmtDateTime(report.generatedAt)}`),
+    ]),
+  ]);
+};
+
+const loadDashboardClosingReport = async (accountId, epoch, signal) => {
+  const query = new URLSearchParams({ kind: 'closing', scope: 'account', accountId, limit: '1' });
+  const result = await callApi(`/api/reports?${query}`, { signal });
+  if (epoch !== dashboardEpoch || accountId !== getAccountId() || $('#route-dashboard').hidden)
+    return;
+  const body = $('#dashboard-closing-report');
+  if (!result.ok) {
+    mount(body, el('p', 'muted', `收盘报告暂不可用：${result.error.kind}`));
+    return;
+  }
+  mount(body, dashboardClosingReportNode(result.data.reports?.[0] ?? null));
+};
+
 const filterAdvices = (advices, decision, stockId) =>
   advices.filter(
     (advice) =>
@@ -243,7 +298,7 @@ const boardStats = (items) => ({
 });
 
 /**
- * 盯盘最近一轮评估摘要；字段名与 WatchRunSchema（evaluatedPools 等）对齐。
+ * 盯盘最近一轮评估摘要；渠道受理数由 Web API 从 WatchRun 的历史字段投影。
  * 一轮没有任何可评估标的时只报这一件事，不铺 5 个 0（状态由状态行单独呈现）。
  */
 const watchRunSummaryText = (latest) => {
@@ -252,7 +307,7 @@ const watchRunSummaryText = (latest) => {
     return '最近一轮没有可评估的标的 · 运行心跳已记录';
   return (
     `评估 ${latest.evaluatedPools} 个方案 / ${latest.evaluatedStocks} 只股票 · ` +
-    `触发 ${latest.triggered} · 尝试通知 ${latest.notified} · 送达 ${latest.delivered ?? '未记录'} · 无法求值 ${latest.unknownRules ?? '未记录'}`
+    `触发 ${latest.triggered} · 尝试通知 ${latest.notified} · 渠道受理 ${latest.channelAccepted ?? '未记录'} · 无法求值 ${latest.unknownRules ?? '未记录'}`
   );
 };
 
@@ -292,6 +347,7 @@ const SOURCE_LABELS = {
 
 const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '', onBack) => {
   const accountId = getAccountId();
+  const channelTiming = triggerChannelTimingText(trigger);
   const feedbackStatus = el(
     'p',
     'muted',
@@ -313,6 +369,16 @@ const dashboardTriggerDetail = (trigger, stockName = trigger.stockName ?? '', on
       null,
       `通知：${triggerDeliveryLabel(trigger.deliveryStatus) ?? '未记录'} · ${trigger.triggerType === 'recovered' ? '条件恢复' : '条件触发'}`,
     ),
+    ...(channelTiming === null ? [] : [el('p', 'muted', channelTiming)]),
+    ...(typeof trigger.evalSnapshot?.publicationReason === 'string'
+      ? [
+          el(
+            'p',
+            'trigger-publication-reason',
+            `发布复查：${trigger.evalSnapshot.publicationReason}`,
+          ),
+        ]
+      : []),
     el('h3', null, '触发证据'),
     el(
       'ul',
@@ -398,13 +464,16 @@ const openDashboardEventHistory = (asOf, stock) => {
     ],
     [
       'deliveryStatus',
-      '送达',
+      '投递',
       [
         ['', '全部'],
-        ['sent', '已送达'],
+        ['sent', '渠道已受理'],
         ['failed', '失败'],
         ['fallback-log', '仅日志'],
         ['pending', '待发送'],
+        ['expired', '信号超时'],
+        ['unverifiable', '时延不可核验'],
+        ['invalidated', '发布前已失效'],
       ],
     ],
   ]) {
@@ -860,6 +929,7 @@ const renderDashboard = (setStatus) => {
     dashboardHasData = false;
     boardViewHasData = false;
     dashboardCanWrite = false;
+    dashboardReportFetchedAt = 0;
     for (const id of [
       'dashboard-board',
       'dash-advice-list',
@@ -880,6 +950,7 @@ const renderDashboard = (setStatus) => {
     $('#dash-advice-meta').textContent = '';
     $('#dash-trigger-meta').textContent = '';
     $('#dashboard-status').textContent = '正在加载当前账户…';
+    mount($('#dashboard-closing-report'), el('p', 'muted', '正在读取最新报告…'));
   }
   const scopeSelect = $('#dashboard-board-scope');
   const watchlistSelect = $('#dashboard-board-watchlist');
@@ -906,6 +977,10 @@ const renderDashboard = (setStatus) => {
   const epoch = dashboardEpoch;
   const controller = new AbortController();
   dashboardController = controller;
+  if (Date.now() - dashboardReportFetchedAt >= 60_000) {
+    dashboardReportFetchedAt = Date.now();
+    void loadDashboardClosingReport(accountId, epoch, controller.signal);
+  }
   const pending = loadDashboard(setStatus, epoch, accountId, controller.signal).finally(() => {
     if (dashboardPending === pending) {
       dashboardPending = null;
@@ -1011,7 +1086,7 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
   if ((metrics?.latestRun?.notifyFailed ?? 0) > 0)
     warnings.push(`${metrics.latestRun.notifyFailed} 条通知发送失败`);
   if ((metrics?.deliveryStatusCounts?.['fallback-log'] ?? 0) > 0)
-    warnings.push('部分提醒仅写入日志，未送达');
+    warnings.push('部分提醒仅写入日志，未提交渠道');
   // 盯盘状态不在这里重复：下面的盯盘状态行已经写了同一句话
   const notice = $('#dashboard-warnings');
   notice.textContent = warnings.join('；');
@@ -1105,9 +1180,9 @@ const loadDashboard = async (setStatus, epoch, accountId, signal) => {
       'suppressed-cooldown': '冷却',
       'suppressed-daily-limit': '日上限',
       pending: '待发',
-      sent: '已发',
+      sent: '渠道受理',
       failed: '失败',
-      'fallback-log': '仅日志（未送达）',
+      'fallback-log': '仅日志（未提交渠道）',
     };
     $('#dash-metric-priority').textContent = formatMetricDistribution(
       metrics.priorityCounts,
@@ -2047,7 +2122,7 @@ const reportSheetNodes = (report, actions = []) => {
         el(
           'p',
           'report-period',
-          `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}`,
+          `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}${report.kind === 'closing' ? ` · ${report.version > 1 ? `补充 v${report.version}` : '主报告 v1'}` : ''}`,
         ),
       ]),
       el('div', 'report-sheet-actions', actions),
@@ -2055,6 +2130,7 @@ const reportSheetNodes = (report, actions = []) => {
     el('div', 'report-asof', [
       el('span', null, `数据截止 ${fmtDateTime(report.dataAsOf)}`),
       el('span', null, `生成时间 ${fmtDateTime(report.generatedAt)}`),
+      el('span', null, `通知：${reportDeliveryLabel(report.deliveryStatus)}`),
     ]),
   ];
   for (const section of report.sections) {
@@ -2138,12 +2214,15 @@ const deleteReport = async (reportId, setStatus) => {
     return;
   }
   selectedReportId = null;
+  window.location.hash = '#reports';
   await renderReports(setStatus);
 };
 
 const loadReportDetail = async (reportId, setStatus) => {
   selectedReportId = reportId;
+  const accountId = getAccountId();
   const result = await callApi(`/api/reports/${reportId}`);
+  if (accountId !== getAccountId() || selectedReportId !== reportId) return;
   if (!result.ok) {
     setStatus(`报告加载失败：${result.error.kind}`, true);
     return;
@@ -2196,9 +2275,16 @@ const renderReports = async (setStatus) => {
         if (kind === undefined || date === undefined || date.length === 0 || state === null) return;
         state.textContent = '生成中…';
         button.disabled = true;
+        const accountId = getAccountId();
         const generated = await callApi(`/api/reports/run/${kind}`, {
           method: 'POST',
-          body: JSON.stringify({ date, notify: false }),
+          body: JSON.stringify({
+            date,
+            notify: false,
+            ...(kind === 'closing' && accountId.length > 0
+              ? { scope: { kind: 'account', accountId } }
+              : {}),
+          }),
         });
         button.disabled = false;
         if (!generated.ok) {
@@ -2207,6 +2293,7 @@ const renderReports = async (setStatus) => {
           return;
         }
         selectedReportId = generated.data.report.id;
+        window.location.hash = `#reports?id=${encodeURIComponent(selectedReportId)}`;
         state.textContent =
           generated.data.report.status === 'partial' ? '已生成 · 部分可用' : '已生成 · 完整';
         await renderReports(setStatus);
@@ -2218,12 +2305,36 @@ const renderReports = async (setStatus) => {
   const params = new URLSearchParams({ limit: '30' });
   if (kind.length > 0) params.set('kind', kind);
   if (status.length > 0) params.set('status', status);
-  const result = await callApi(`/api/reports?${params.toString()}`);
-  if (!result.ok) {
-    setStatus(`报告历史加载失败：${result.error.kind}`, true);
+  const accountId = getAccountId();
+  const globalParams = new URLSearchParams(params);
+  globalParams.set('scope', 'all-accounts');
+  const scopedParams = new URLSearchParams(params);
+  scopedParams.set('scope', 'account');
+  scopedParams.set('accountId', accountId);
+  const [globalResult, accountResult] = await Promise.all([
+    callApi(`/api/reports?${globalParams.toString()}`),
+    ...(accountId.length > 0 ? [callApi(`/api/reports?${scopedParams.toString()}`)] : []),
+  ]);
+  if (accountId !== getAccountId()) return;
+  if (!globalResult.ok || (accountResult !== undefined && !accountResult.ok)) {
+    setStatus(
+      `报告历史加载失败：${!globalResult.ok ? globalResult.error.kind : accountResult.error.kind}`,
+      true,
+    );
     return;
   }
-  const reports = result.data.reports ?? [];
+  const reports = [
+    ...(globalResult.data.reports ?? []),
+    ...(accountResult?.data.reports ?? []),
+  ].sort(
+    (left, right) =>
+      right.periodEnd.localeCompare(left.periodEnd) ||
+      (right.version ?? 1) - (left.version ?? 1) ||
+      new Date(right.generatedAt).getTime() - new Date(left.generatedAt).getTime(),
+  );
+  const requestedId = routeReportId();
+  if (requestedId !== null && reports.some((report) => report.id === requestedId))
+    selectedReportId = requestedId;
   $('#report-history-meta').textContent = `${reports.length} 份`;
   const history = $('#report-history');
   if (reports.length === 0) {
@@ -2238,13 +2349,21 @@ const renderReports = async (setStatus) => {
         const button = el('button', 'report-history-item', [
           el('span', 'report-history-kind', REPORT_KIND_LABEL[report.kind] ?? report.kind),
           el('strong', null, report.title),
+          report.kind === 'closing'
+            ? el('span', 'muted', report.version > 1 ? `补充 v${report.version}` : '主报告 v1')
+            : null,
           el('span', 'report-history-period', report.periodEnd),
           reportStatusBadge(report.status),
+          el('span', 'report-history-asof', `通知：${reportDeliveryLabel(report.deliveryStatus)}`),
           el('span', 'report-history-asof', `截至 ${fmtDateTime(report.dataAsOf)}`),
         ]);
         button.type = 'button';
         button.dataset.reportId = report.id;
-        button.addEventListener('click', () => void loadReportDetail(report.id, setStatus));
+        button.addEventListener('click', () => {
+          selectedReportId = report.id;
+          window.location.hash = `#reports?id=${encodeURIComponent(report.id)}`;
+          void loadReportDetail(report.id, setStatus);
+        });
         return button;
       }),
     );
@@ -3910,6 +4029,7 @@ export {
   calibrationRateText,
   cancelAnalyzeAllHoldings,
   dashboardBoardQuery,
+  dashboardClosingReportNode,
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
@@ -3927,10 +4047,12 @@ export {
   renderSettings,
   renderSettingsAccount,
   renderWorkflowRuns,
+  reportDeliveryLabel,
   reportEntityHref,
   reportSheetNodes,
   resetAdviceDeleteMode,
   routeAdviceId,
+  routeReportId,
   routeStockId,
   runWatchOnce,
   sortBoardItems,

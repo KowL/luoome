@@ -1,5 +1,6 @@
 import {
   type FeishuPayload,
+  InvariantError,
   type LogPayload,
   NOTIFICATION_BRAND,
   type Notification,
@@ -69,12 +70,29 @@ export class NotificationManager {
    * 调用方负责把 channel + payload 准备好；本函数不重试、不抛。
    */
   async send(input: {
+    readonly id?: string;
     readonly channel: NotificationChannel;
     readonly payload: NotificationPayload;
     readonly adviceId?: string;
     readonly tacticSignalId?: string;
   }): Promise<NotificationSendOutcome> {
-    const id = this.idGen();
+    const id = input.id ?? this.idGen();
+    if (input.id !== undefined) {
+      const existing = await this.repos.notification.findById(id);
+      if (existing !== null) {
+        if (existing.channel !== input.channel) {
+          throw new InvariantError(`notification id already belongs to another payload: ${id}`);
+        }
+        if (existing.result === 'success' || existing.result === 'suppressed') {
+          if (JSON.stringify(existing.payload) !== JSON.stringify(input.payload)) {
+            throw new InvariantError(`notification id already belongs to another payload: ${id}`);
+          }
+          if (existing.result === 'success' || this.feishu === undefined) {
+            return { notification: existing };
+          }
+        }
+      }
+    }
     const sentAt = this.clock();
     const base = {
       id,

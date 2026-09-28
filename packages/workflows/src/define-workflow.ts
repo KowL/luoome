@@ -10,6 +10,8 @@ import type {
   ArchiveStrategyOutput,
   BatchQuoteInput,
   BatchQuoteOutput,
+  BeginAccountPlanBatchInput,
+  BeginAccountPlanBatchOutput,
   BeginWatchDeliveryInput,
   BeginWatchDeliveryOutput,
   CancelStrategyEvaluationSessionInput,
@@ -40,6 +42,8 @@ import type {
   FetchQuoteOutput,
   FetchSectorQuotesInput,
   FetchSectorQuotesOutput,
+  FinishAccountPlanBatchInput,
+  FinishAccountPlanBatchOutput,
   FinishStrategyEvaluationSessionInput,
   FinishStrategyEvaluationSessionOutput,
   FinishStrategyScheduleClaimInput,
@@ -56,6 +60,8 @@ import type {
   GetAccountOutput,
   GetAccountPerformanceInput,
   GetAccountPerformanceOutput,
+  GetAccountPlanBatchInput,
+  GetAccountPlanBatchOutput,
   GetAdviceInput,
   GetAdviceOutput,
   GetAdviceStatsInput,
@@ -220,12 +226,15 @@ import type {
   WatchExecutionOutput,
 } from '@luoome/tools';
 import {
+  beginAccountPlanBatchTool,
   beginWatchDeliveryTool,
   claimDueStrategySchedulesTool,
   commitWatchEvaluationTool,
   createStrategyAutonomyActionTool,
+  finishAccountPlanBatchTool,
   finishStrategyScheduleClaimTool,
   generateStrategyVersionProposalTool,
+  getAccountPlanBatchTool,
   getWatchTriggerDeliveryStatsTool,
   listWatchDeliveryRetriesTool,
   listWatchRuleStatesTool,
@@ -535,6 +544,18 @@ export interface WorkflowToolMap {
     typeof RecordWorkflowRunInput,
     typeof RecordWorkflowRunOutput
   >;
+  readonly begin_account_plan_batch: ToolAccessor<
+    typeof BeginAccountPlanBatchInput,
+    typeof BeginAccountPlanBatchOutput
+  >;
+  readonly get_account_plan_batch: ToolAccessor<
+    typeof GetAccountPlanBatchInput,
+    typeof GetAccountPlanBatchOutput
+  >;
+  readonly finish_account_plan_batch: ToolAccessor<
+    typeof FinishAccountPlanBatchInput,
+    typeof FinishAccountPlanBatchOutput
+  >;
   /** workflow-only；不进入公共 registry/MCP discovery。 */
   readonly reconcile_stale_workflow_runs: ToolAccessor<
     typeof ReconcileStaleWorkflowRunsInput,
@@ -662,6 +683,9 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     listWatchDeliveryRetriesTool,
     recordWatchRunTool,
     recordWorkflowRunTool,
+    beginAccountPlanBatchTool,
+    getAccountPlanBatchTool,
+    finishAccountPlanBatchTool,
     pullResearchVaultGitTool,
     reconcileStaleStrategyRunsTool,
     reconcileStaleWorkflowRunsTool,

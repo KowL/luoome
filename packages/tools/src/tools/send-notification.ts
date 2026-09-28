@@ -24,6 +24,7 @@ const LogPayloadInputSchema = z.object({
 });
 
 export const SendNotificationInput = z.object({
+  notificationId: z.string().min(1).optional(),
   channel: NotificationChannelSchema.optional(),
   feishu: FeishuPayloadInputSchema.optional(),
   log: LogPayloadInputSchema.optional(),
@@ -76,6 +77,7 @@ export const sendNotificationTool = defineTool({
       };
     }
     const r = await manager.send({
+      ...(input.notificationId === undefined ? {} : { id: input.notificationId }),
       channel,
       payload,
       ...(input.adviceId !== undefined ? { adviceId: input.adviceId } : {}),

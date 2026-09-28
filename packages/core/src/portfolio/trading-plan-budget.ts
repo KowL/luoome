@@ -137,11 +137,13 @@ export const evaluateTradingPlanBudget = (input: {
   for (const plan of input.plans) {
     const target = plan.position.targetPct;
     const current = currentByStock.get(plan.stockId) ?? 0;
-    const incremental = target === null || current === null ? null : Math.max(0, target - current);
+    const sameStock = plannedByStock.get(plan.stockId) ?? 0;
+    // 多个计划的 targetPct 都表示执行后的同一只股票仓位，按最高目标预留一次。
+    const incremental = target === null ? null : Math.max(0, target - current - sameStock);
     const industry = plan.industry ?? input.stocks.get(plan.stockId)?.industry;
     const allocationReasons: string[] = [];
     let status: TradingPlanBudgetAllocation['status'] = 'included';
-    if (target === null || current === null) {
+    if (target === null) {
       status = 'unavailable';
       allocationReasons.push('position-percentage-unavailable');
     }
@@ -149,12 +151,10 @@ export const evaluateTradingPlanBudget = (input: {
       status = 'unavailable';
       allocationReasons.push('plan-constraint-unavailable');
     }
-    const existingStock = currentByStock.get(plan.stockId) ?? 0;
-    const stockIncrement = Math.max(0, target === null ? 0 : target - existingStock);
-    const sameStock = plannedByStock.get(plan.stockId) ?? 0;
     if (
-      stockIncrement > 0 &&
-      existingStock + sameStock + stockIncrement > limits.singleStockPct + 1e-9
+      incremental !== null &&
+      incremental > 0 &&
+      current + sameStock + incremental > limits.singleStockPct + 1e-9
     ) {
       status = 'blocked';
       allocationReasons.push('single-stock-limit');

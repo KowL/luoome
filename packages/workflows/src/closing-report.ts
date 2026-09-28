@@ -3,12 +3,15 @@ import {
   dateInShanghai,
   isHoliday,
   isWeekend,
+  nextCronOccurrence,
   notificationText,
   notificationTime,
+  type Report,
   type ReportBlock,
   ReportSchema,
   ReportScopeSchema,
   StrategyRecommendationBatchSummarySchema,
+  type StrategySchedule,
   type ToolResult,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -21,6 +24,7 @@ import {
   marketPulse,
   missing,
   portfolioSection,
+  previousTradingDay,
   shanghaiDate,
   unavailableSection,
 } from './opening-report.js';
@@ -30,6 +34,8 @@ export const ClosingReportInput = z.object({
   scope: ReportScopeSchema.default({ kind: 'all-accounts' }),
   notify: z.boolean().optional(),
   mode: z.enum(['manual', 'scheduled']).default('manual'),
+  supplement: z.boolean().optional(),
+  planBatchStatus: z.enum(['complete', 'partial', 'blocked']).optional(),
 });
 
 export const ClosingReportOutput = z.object({
@@ -78,9 +84,15 @@ const accountPerformance = async (
   };
 };
 
-const triggersSection = async (date: string, now: Date, ctx: WorkflowContext) => {
+const triggersSection = async (
+  date: string,
+  now: Date,
+  ctx: WorkflowContext,
+  scope: ClosingInput['scope'],
+) => {
   const since = new Date(`${date}T00:00:00+08:00`);
-  const result = await ctx.tools.list_watch_triggers.execute({ since, limit: 500 });
+  const until = new Date(since.getTime() + DAY_MS - 1);
+  const result = await ctx.tools.list_watch_triggers.execute({ since, until, limit: 500 });
   if (!result.ok) {
     return unavailableSection(
       'important-triggers',
@@ -91,6 +103,12 @@ const triggersSection = async (date: string, now: Date, ctx: WorkflowContext) =>
       result.error.kind,
     );
   }
+  const triggers =
+    scope.kind === 'account'
+      ? result.data.triggers.filter(
+          (trigger) => trigger.poolId === `trading-plan-watch:${scope.accountId}`,
+        )
+      : result.data.triggers;
   const evidence = [
     localEvidence('important-triggers:0', 'important-triggers', now, 'local/watch-triggers'),
   ];
@@ -105,10 +123,10 @@ const triggersSection = async (date: string, now: Date, ctx: WorkflowContext) =>
       blocks: [
         {
           kind: 'list' as const,
-          items: result.data.triggers.map((trigger) => ({
+          items: triggers.map((trigger) => ({
             title: `${trigger.stockId} · ${trigger.ruleKind}`,
             detail: `${trigger.priority} · ${trigger.deliveryStatus}`,
-            notificationSummary: `${trigger.priority === 'urgent' ? '紧急' : trigger.priority === 'important' ? '重要' : '提醒'} · ${trigger.deliveryStatus === 'sent' ? '已送达' : trigger.deliveryStatus === 'failed' ? '投递失败' : trigger.deliveryStatus === 'fallback-log' ? '仅记日志' : '尚未送达'}\n${notificationText(trigger.reason, 90) || '请核对原始触发条件'} · ${notificationTime(trigger.createdAt)}（北京时间）`,
+            notificationSummary: `${trigger.priority === 'urgent' ? '紧急' : trigger.priority === 'important' ? '重要' : '提醒'} · ${trigger.deliveryStatus === 'sent' ? '渠道已受理，设备状态未知' : trigger.deliveryStatus === 'failed' ? '投递失败' : trigger.deliveryStatus === 'fallback-log' ? '仅记日志' : '尚未投递'}\n${notificationText(trigger.reason, 90) || '请核对原始触发条件'} · ${notificationTime(trigger.createdAt)}（北京时间）`,
             entityKind: 'watch-trigger' as const,
             entityId: trigger.id,
           })),
@@ -120,7 +138,170 @@ const triggersSection = async (date: string, now: Date, ctx: WorkflowContext) =>
   };
 };
 
-const adviceExpirySection = async (date: string, now: Date, ctx: WorkflowContext) => {
+const priorDayReviewSection = async (
+  date: string,
+  accountId: string,
+  now: Date,
+  ctx: WorkflowContext,
+): Promise<ReportSectionPiece> => {
+  const priorDate = previousTradingDay(date);
+  const since = new Date(`${priorDate}T00:00:00+08:00`);
+  const until = new Date(since.getTime() + DAY_MS - 1);
+  const [plans, triggers, trades] = await Promise.all([
+    ctx.tools.list_trading_plans.execute({
+      accountId,
+      createdSince: since,
+      createdUntil: until,
+      limit: 500,
+    }),
+    ctx.tools.list_watch_triggers.execute({
+      poolId: `trading-plan-watch:${accountId}`,
+      since,
+      until,
+      limit: 500,
+    }),
+    ctx.tools.list_trades.execute({ accountId, since, until, limit: 500 }),
+  ]);
+  const changedPlans = plans.ok ? plans.data.plans : [];
+  const gaps = [
+    ...(!plans.ok
+      ? [missing('prior-day-review.plans', '前一交易日计划版本读取失败', plans.error.kind)]
+      : plans.data.plans.length >= 500
+        ? [
+            missing(
+              'prior-day-review.plans',
+              '计划版本读取达到 500 条，变更统计可能不完整',
+              'limit',
+            ),
+          ]
+        : []),
+    ...(!triggers.ok
+      ? [missing('prior-day-review.triggers', '前一交易日提醒读取失败', triggers.error.kind)]
+      : triggers.data.total > triggers.data.triggers.length
+        ? [missing('prior-day-review.triggers', '提醒明细超过读取上限', 'limit')]
+        : []),
+    ...(!trades.ok
+      ? [missing('prior-day-review.trades', '前一交易日交易记录读取失败', trades.error.kind)]
+      : trades.data.total > trades.data.trades.length
+        ? [missing('prior-day-review.trades', '交易明细超过读取上限', 'limit')]
+        : []),
+  ];
+  const evidence = [
+    ...(plans.ok
+      ? [
+          localEvidence(
+            'prior-day-review:plans',
+            'prior-day-review',
+            now,
+            'tool:list_trading_plans',
+          ),
+        ]
+      : []),
+    ...(triggers.ok
+      ? [
+          localEvidence(
+            'prior-day-review:triggers',
+            'prior-day-review',
+            now,
+            'tool:list_watch_triggers',
+          ),
+        ]
+      : []),
+    ...(trades.ok
+      ? [localEvidence('prior-day-review:trades', 'prior-day-review', now, 'tool:list_trades')]
+      : []),
+  ];
+  const blocks: ReportBlock[] = [
+    {
+      kind: 'metrics',
+      items: [
+        {
+          key: 'planVersions',
+          label: '前一交易日新增计划版本',
+          value: plans.ok ? changedPlans.length : null,
+        },
+        {
+          key: 'triggerCount',
+          label: '前一交易日提醒',
+          value: triggers.ok ? triggers.data.total : null,
+        },
+        {
+          key: 'registeredTrades',
+          label: '前一交易日已登记交易',
+          value: trades.ok ? trades.data.total : null,
+        },
+      ],
+    },
+    {
+      kind: 'text',
+      tone: 'warning',
+      text: `${priorDate} 的提醒与已登记交易分别列示；同股票、同日期不能证明提醒被执行。没有已登记交易不等于实际没有交易，未平仓或未回填结果的盈亏保持未知。信号后续表现另见复盘页的观察统计。`,
+    },
+    {
+      kind: 'list',
+      items: changedPlans.slice(0, 20).map((plan) => ({
+        title: `${plan.stockName ?? plan.stockId} · ${plan.action} · v${plan.version}`,
+        detail: `${plan.status} · ${notificationTime(plan.createdAt)}（北京时间）`,
+        entityKind: 'trading-plan',
+        entityId: `${plan.id}:v${plan.version}`,
+      })),
+    },
+    {
+      kind: 'list',
+      items: triggers.ok
+        ? triggers.data.triggers.slice(0, 20).map((trigger) => ({
+            title: `${trigger.stockName ?? trigger.stockId} · ${trigger.ruleKind}`,
+            detail: `${notificationTime(trigger.createdAt)}（北京时间） · ${trigger.deliveryStatus === 'sent' ? '渠道已受理，设备状态未知' : trigger.deliveryStatus === 'failed' ? '投递失败' : trigger.deliveryStatus === 'fallback-log' ? '仅记日志' : trigger.deliveryStatus === 'not-requested' ? '未请求通知' : '尚未完成投递'}`,
+            entityKind: 'watch-trigger' as const,
+            entityId: trigger.id,
+          }))
+        : [],
+    },
+    {
+      kind: 'table',
+      columns: [
+        { key: 'id', label: '交易 ID' },
+        { key: 'stock', label: '股票' },
+        { key: 'side', label: '方向' },
+        { key: 'quantity', label: '数量' },
+        { key: 'price', label: '成交价' },
+        { key: 'executedAt', label: '成交时间' },
+        { key: 'adviceId', label: '显式关联 Advice' },
+      ],
+      rows: trades.ok
+        ? trades.data.trades.slice(0, 20).map((trade) => ({
+            id: trade.id,
+            stock: trade.stockId,
+            side: trade.side === 'buy' ? '买入' : '卖出',
+            quantity: trade.quantity,
+            price: trade.price,
+            executedAt: `${notificationTime(trade.executedAt)}（北京时间）`,
+            adviceId: trade.adviceId ?? '未关联',
+          }))
+        : [],
+    },
+  ];
+  return {
+    evidence,
+    section: {
+      key: 'prior-day-review',
+      title: `${priorDate} 计划、提醒与实际执行`,
+      required: true,
+      status: gaps.length === 0 ? 'complete' : 'partial',
+      dataAsOf: now,
+      blocks,
+      evidenceIds: evidence.map((item) => item.id),
+      missingDimensions: gaps,
+    },
+  };
+};
+
+const adviceExpirySection = async (
+  date: string,
+  now: Date,
+  ctx: WorkflowContext,
+  scope: ClosingInput['scope'],
+) => {
   const result = await ctx.tools.get_advice.execute({ includeExpired: true, limit: 500 });
   if (!result.ok) {
     return unavailableSection(
@@ -132,8 +313,28 @@ const adviceExpirySection = async (date: string, now: Date, ctx: WorkflowContext
       result.error.kind,
     );
   }
+  const holdings =
+    scope.kind === 'account'
+      ? await ctx.tools.list_holdings.execute({ accountId: scope.accountId, status: 'all' })
+      : undefined;
+  if (holdings !== undefined && !holdings.ok)
+    return unavailableSection(
+      'advice-expiry',
+      '建议有效期',
+      true,
+      now,
+      'advice-expiry.holdings',
+      holdings.error.kind,
+    );
+  const holdingIds = new Set(
+    holdings?.ok ? holdings.data.holdings.map((item) => item.holding.id) : [],
+  );
   const expiring = result.data.advices.filter(
-    (advice) => dateInShanghai(advice.validUntil) === date,
+    (advice) =>
+      dateInShanghai(advice.validUntil) === date &&
+      (scope.kind === 'all-accounts' ||
+        advice.basedOn.strategy?.accountId === scope.accountId ||
+        (advice.subjectKind === 'position' && holdingIds.has(advice.subjectId))),
   );
   const evidence = [localEvidence('advice-expiry:0', 'advice-expiry', now, 'local/advice')];
   return {
@@ -232,6 +433,23 @@ const adviceDecisionLabel = (decision: string): string => {
   }
 };
 
+export const scheduledRunExpectedAt = (
+  schedule: StrategySchedule,
+  date: string,
+): Date | undefined => {
+  if (!schedule.enabled) return undefined;
+  const dayStart = new Date(`${date}T00:00:00+08:00`);
+  if (isWeekend(dayStart) || isHoliday(dayStart)) return undefined;
+  const expectedAt = nextCronOccurrence(
+    schedule.cron,
+    schedule.timezone,
+    new Date(dayStart.getTime() - 60_000),
+  );
+  return dateInShanghai(expectedAt) === date && expectedAt >= schedule.createdAt
+    ? expectedAt
+    : undefined;
+};
+
 /**
  * 「策略行动」：当日策略建议按方向分组，呈现 AI 判断与未分析候选事实
  * （现价 + 理由 + 风险 + 有效期）。decision 值仅以文本展示，block 不含决策字段 key
@@ -241,6 +459,7 @@ const strategyActionsSection = async (
   date: string,
   now: Date,
   ctx: WorkflowContext,
+  scope: ClosingInput['scope'],
 ): Promise<ReportSectionPiece> => {
   const dayStart = new Date(`${date}T00:00:00+08:00`);
   const [strategies, runs, advices, batches] = await Promise.all([
@@ -269,7 +488,7 @@ const strategyActionsSection = async (
     return unavailableSection(
       'strategy-actions',
       '策略行动',
-      false,
+      true,
       now,
       'strategy-actions.strategies',
       strategies.error.kind,
@@ -279,7 +498,7 @@ const strategyActionsSection = async (
     return unavailableSection(
       'strategy-actions',
       '策略行动',
-      false,
+      true,
       now,
       'strategy-actions.runs',
       runs.error.kind,
@@ -289,20 +508,22 @@ const strategyActionsSection = async (
     return unavailableSection(
       'strategy-actions',
       '策略行动',
-      false,
+      true,
       now,
       'strategy-actions.advice',
       advices.error.kind,
     );
   }
 
-  const dayRuns = runs.data.runs.filter((run) => dateInShanghai(run.dataAsOf) === date);
+  const dayRuns = runs.data.runs.filter((run) => dateInShanghai(run.startedAt) === date);
   const latestRunByStrategy = new Map<string, (typeof dayRuns)[number]>();
   for (const run of dayRuns) {
     if (!latestRunByStrategy.has(run.strategyId)) latestRunByStrategy.set(run.strategyId, run);
   }
   const dayAdvices = advices.data.advices.filter(
-    (advice) => dateInShanghai(advice.createdAt) === date,
+    (advice) =>
+      dateInShanghai(advice.createdAt) === date &&
+      (scope.kind === 'all-accounts' || advice.basedOn.strategy?.accountId === scope.accountId),
   );
   const summaryCount = (
     run: (typeof dayRuns)[number] | undefined,
@@ -330,7 +551,39 @@ const strategyActionsSection = async (
   for (const strategy of strategies.data.strategies) {
     const run = latestRunByStrategy.get(strategy.id);
     if (run === undefined) {
-      analysisByStrategy.set(strategy.id, '今日未运行');
+      const schedule = await ctx.tools.get_strategy_schedule.execute({ strategyId: strategy.id });
+      const expectedAt = schedule.ok
+        ? schedule.data.schedule === null
+          ? undefined
+          : scheduledRunExpectedAt(schedule.data.schedule, date)
+        : undefined;
+      if (!schedule.ok) {
+        analysisByStrategy.set(strategy.id, '调度状态不可用');
+        gaps.push(
+          missing(
+            `strategy-actions.run.${strategy.id}`,
+            '无法判断预期策略是否完成',
+            schedule.error.kind,
+          ),
+        );
+      } else if (expectedAt !== undefined) {
+        const pending = expectedAt > now;
+        analysisByStrategy.set(strategy.id, pending ? '今日正式运行待开始' : '今日正式运行未完成');
+        gaps.push(
+          missing(
+            `strategy-actions.run.${strategy.id}`,
+            pending ? '预期策略今日尚未到运行时间' : '预期策略今日没有已发布正式运行',
+            pending ? 'run-pending' : 'run-missing',
+          ),
+        );
+      } else {
+        analysisByStrategy.set(
+          strategy.id,
+          schedule.data.schedule?.enabled === true
+            ? '今日尚无预期正式运行'
+            : '今日未运行；自动调度未开启',
+        );
+      }
       continue;
     }
     const batch = batchByRun.get(run.id);
@@ -492,7 +745,7 @@ const strategyActionsSection = async (
     section: {
       key: 'strategy-actions',
       title: '策略行动',
-      required: false,
+      required: true,
       status: gaps.length > 0 ? ('partial' as const) : ('complete' as const),
       dataAsOf: now,
       blocks,
@@ -509,6 +762,7 @@ const tradingPlansSection = async (
   scope: ClosingInput['scope'],
   now: Date,
   ctx: WorkflowContext,
+  planBatchStatus?: ClosingInput['planBatchStatus'],
 ): Promise<ReportSectionPiece> => {
   const result = await ctx.tools.list_trading_plans.execute({
     ...(scope.kind === 'account' ? { accountId: scope.accountId } : {}),
@@ -541,13 +795,25 @@ const tradingPlansSection = async (
   const evidence = [
     localEvidence('trading-plans:0', 'trading-plans', now, 'tool:list_trading_plans'),
   ];
+  const missingDimensions =
+    planBatchStatus === undefined || planBatchStatus === 'complete'
+      ? []
+      : [
+          missing(
+            'trading-plans.daily-cycle',
+            planBatchStatus === 'blocked'
+              ? '账户持仓与候选计划批次未完成'
+              : '账户持仓与候选计划批次部分完成',
+            planBatchStatus === 'blocked' ? 'plan-batch-blocked' : 'plan-batch-partial',
+          ),
+        ];
   return {
     evidence,
     section: {
       key: 'trading-plans',
       title: '交易计划',
       required: true,
-      status: 'complete',
+      status: missingDimensions.length === 0 ? 'complete' : 'partial',
       dataAsOf: now,
       blocks: [
         {
@@ -617,9 +883,39 @@ const tradingPlansSection = async (
           : []),
       ],
       evidenceIds: evidence.map((item) => item.id),
-      missingDimensions: [],
+      missingDimensions,
     },
   };
+};
+
+const planActionFingerprint = (report: Report): string => {
+  const table = report.sections
+    .find((section) => section.key === 'trading-plans')
+    ?.blocks.find((block) => block.kind === 'table');
+  if (table?.kind !== 'table') return '';
+  return JSON.stringify(
+    table.rows.map((row) => [
+      row.account,
+      row.stock,
+      row.action,
+      row.status,
+      row.entryRange,
+      row.entryConditions,
+      row.exitConditions,
+      row.targetPct,
+    ]),
+  );
+};
+
+const shouldNotifyClosingSupplement = (previous: Report, next: Report): boolean => {
+  const previousMissing = previous.sections
+    .filter((section) => section.required)
+    .flatMap((section) => section.missingDimensions.map((gap) => gap.dimension));
+  const currentMissing = new Set(next.missingDimensions.map((gap) => gap.dimension));
+  return (
+    previousMissing.some((dimension) => !currentMissing.has(dimension)) ||
+    planActionFingerprint(previous) !== planActionFingerprint(next)
+  );
 };
 
 const runClosingReport = async (
@@ -640,6 +936,8 @@ const runClosingReport = async (
       kind: 'closing',
       template: 'closing-v1',
       mode: input.mode,
+      ...(input.supplement === undefined ? {} : { supplement: input.supplement }),
+      shouldNotifySupplement: shouldNotifyClosingSupplement,
       notify: input.notify ?? input.mode === 'scheduled',
       scope: input.scope,
       periodStart: date,
@@ -658,16 +956,28 @@ const runClosingReport = async (
               'ashare-sentiment',
               sentiment.error.kind,
             );
-        const [performance, triggers, adviceExpiry, strategyActions, plans, nextEvents] =
+        const [performance, triggers, adviceExpiry, strategyActions, plans, priorDay, nextEvents] =
           await Promise.all([
             accountPerformance(input, generatedAt, ctx),
-            triggersSection(date, generatedAt, ctx),
-            adviceExpirySection(date, generatedAt, ctx),
-            strategyActionsSection(date, generatedAt, ctx),
-            tradingPlansSection(input.scope, generatedAt, ctx),
+            triggersSection(date, generatedAt, ctx, input.scope),
+            adviceExpirySection(date, generatedAt, ctx, input.scope),
+            strategyActionsSection(date, generatedAt, ctx, input.scope),
+            tradingPlansSection(input.scope, generatedAt, ctx, input.planBatchStatus),
+            input.scope.kind === 'account'
+              ? priorDayReviewSection(date, input.scope.accountId, generatedAt, ctx)
+              : Promise.resolve(null),
             nextEventsSection(date, generatedAt, ctx),
           ]);
-        return [market, performance, triggers, adviceExpiry, strategyActions, plans, nextEvents];
+        return [
+          market,
+          performance,
+          triggers,
+          adviceExpiry,
+          strategyActions,
+          plans,
+          ...(priorDay === null ? [] : [priorDay]),
+          nextEvents,
+        ];
       },
     },
     ctx,

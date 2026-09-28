@@ -4,6 +4,7 @@ import {
   type Advice,
   type AdviceOutcome,
   type AlertPlan,
+  buildAccountFacts,
   type ChatMessage,
   type ChatSession,
   CURRENT_STRATEGY_EVALUATOR_IDENTITY,
@@ -882,6 +883,54 @@ export const registerRepositoryContractTests = (
     });
 
     describe('TradingPlanRepository', () => {
+      it('预算提交时复核账户事实，拒绝生成后发生的现金或持仓变化', async () => {
+        const account = makeAccount('budget-account');
+        const stock = makeStock('stk-1', '002594');
+        await repos.account.save(account);
+        await repos.stock.save(stock);
+        const facts = buildAccountFacts({ account, holdings: [], asOf: T2 });
+        const input = {
+          facts,
+          stocks: new Map([[stock.id, stock]]),
+          limits: { totalStockPct: 100, singleStockPct: 30 },
+          asOf: T2,
+        };
+        const first = makeTradingPlan('budget-1', 1, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+        });
+        expect(
+          await repos.tradingPlan.saveIfBudgetAvailable({ ...input, plan: first }),
+        ).toMatchObject({
+          saved: true,
+        });
+
+        await repos.account.save({ ...account, cashBalance: money(900_000) });
+        const second = makeTradingPlan('budget-2', 1, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+        });
+        expect(await repos.tradingPlan.saveIfBudgetAvailable({ ...input, plan: second })).toEqual({
+          saved: false,
+          reason: 'account-facts-changed',
+        });
+        expect(await repos.tradingPlan.findByVersionId('budget-2:v1')).toBeNull();
+
+        await repos.account.save(account);
+        await repos.holding.save(
+          makeHolding('budget-holding', {
+            accountId: account.id,
+            quantity: 100,
+            availableQuantity: 100,
+          }),
+        );
+        expect(await repos.tradingPlan.saveIfBudgetAvailable({ ...input, plan: second })).toEqual({
+          saved: false,
+          reason: 'account-facts-changed',
+        });
+        expect(await repos.tradingPlan.findByVersionId('budget-2:v1')).toBeNull();
+      });
+
       it('版本身份不可变，重复保存同一版本幂等', async () => {
         const plan = makeTradingPlan('plan-1', 1);
         await repos.tradingPlan.save(plan);
@@ -923,6 +972,21 @@ export const registerRepositoryContractTests = (
           makeTradingPlan('plan-2', 1),
         ]);
         expect(await repos.tradingPlan.latestByPlanId('plan-1')).toMatchObject({ version: 2 });
+      });
+
+      it('计划版本创建时间先于 limit 过滤，旧日复盘不被较新版本挤出', async () => {
+        const old = makeTradingPlan('plan-old', 1, { createdAt: T1 });
+        const target = makeTradingPlan('plan-target', 1, { createdAt: T2 });
+        const newer = makeTradingPlan('plan-newer', 1, { createdAt: T3 });
+        await repos.tradingPlan.save(old);
+        await repos.tradingPlan.save(target);
+        await repos.tradingPlan.save(newer);
+
+        expect(
+          await repos.tradingPlan.list({ createdSince: T2, createdUntil: T2, limit: 1 }),
+        ).toEqual([target]);
+        expect(await repos.tradingPlan.list({ createdSince: T3, limit: 1 })).toEqual([newer]);
+        expect(await repos.tradingPlan.list({ createdUntil: T1, limit: 1 })).toEqual([old]);
       });
     });
 
@@ -2737,6 +2801,24 @@ export const registerRepositoryContractTests = (
             (run) => run.id,
           ),
         ).toEqual(['run-2']);
+        await repos.strategyRun.commitRun({
+          run: makeStrategyRun('run-3', {
+            startedAt: T3,
+            finishedAt: new Date(T3.getTime() + 60_000),
+          }),
+          results: [],
+          signals: [],
+        });
+        expect(
+          (
+            await repos.strategyRun.listRuns({
+              strategyId: 'strategy-1',
+              since: T1,
+              until: T2,
+              limit: 1,
+            })
+          ).map((run) => run.id),
+        ).toEqual(['run-2']);
       });
 
       it('saveStartedRun 立即可见，commitRun 原子更新为终态', async () => {
@@ -3694,6 +3776,25 @@ export const registerRepositoryContractTests = (
     });
 
     describe('NotificationRepository', () => {
+      it('固定通知身份失败后重试，更新正文与最近尝试时间', async () => {
+        await repos.notification.save(
+          makeNotification('report-notification:report-1', {
+            channel: 'feishu',
+            result: 'failed',
+            errorMessage: 'channel unavailable',
+          }),
+        );
+        const retried = makeNotification('report-notification:report-1', {
+          channel: 'feishu',
+          payload: { title: '更新后的摘要', content: '可恢复的通知正文', level: 'warn' },
+          result: 'success',
+          sentAt: T2,
+        });
+        await repos.notification.save(retried);
+        expect(await repos.notification.findById(retried.id)).toEqual(retried);
+        expect(await repos.notification.listRecent()).toHaveLength(1);
+      });
+
       it('save + findById 往返一致（含可选字段）', async () => {
         const n = makeNotification('n-1', {
           adviceId: 'adv-1',
@@ -3945,20 +4046,33 @@ export const registerRepositoryContractTests = (
           owner: 'owner',
           now: T1,
           triggers: [makeWatchTrigger('atomic')],
+          auditTriggers: [
+            makeWatchTrigger('expired-audit', {
+              deliveryStatus: 'expired',
+              notified: false,
+              evalSnapshot: { publicationReason: '超过 10 分钟' },
+            }),
+          ],
           states: [state],
         };
         expect(await repos.watchTrigger.commitEvaluation(input)).toBe(true);
         expect(await repos.watchTrigger.findById('atomic')).toMatchObject({ id: 'atomic' });
+        expect(await repos.watchTrigger.findById('expired-audit')).toMatchObject({
+          deliveryStatus: 'expired',
+          evalSnapshot: { publicationReason: '超过 10 分钟' },
+        });
         expect(await repos.watchRuleState.listByPool('pool-1')).toMatchObject([state]);
         expect(
           await repos.watchTrigger.commitEvaluation({
             ...input,
             owner: 'stale-owner',
             triggers: [makeWatchTrigger('rejected')],
+            auditTriggers: [makeWatchTrigger('rejected-audit', { deliveryStatus: 'expired' })],
             states: [{ ...state, active: false }],
           }),
         ).toBe(false);
         expect(await repos.watchTrigger.findById('rejected')).toBeNull();
+        expect(await repos.watchTrigger.findById('rejected-audit')).toBeNull();
         expect(await repos.watchRuleState.listByPool('pool-1')).toMatchObject([state]);
       });
 
@@ -3982,6 +4096,50 @@ export const registerRepositoryContractTests = (
         ).rejects.toThrow();
         expect(await repos.watchTrigger.findById('valid')).toBeNull();
         expect(await repos.watchRuleState.listByPool('pool-1')).toEqual([]);
+      });
+
+      it('闭市时原子作废待发送触发并释放边沿，保留已记录的投递尝试', async () => {
+        await repos.watchTrigger.acquireExecution('owner', T0, T3);
+        const state = {
+          poolId: 'pool-1',
+          stockId: '002594.SZ',
+          ruleId: 'r_fixture',
+          active: true,
+          firstTriggeredAt: T1,
+          lastEvaluatedAt: T1,
+        };
+        await repos.watchTrigger.commitEvaluation({
+          owner: 'owner',
+          now: T1,
+          triggers: [makeWatchTrigger('session-pending', { deliveryStatus: 'pending' })],
+          states: [state],
+        });
+        await repos.watchTrigger.beginDelivery(['session-pending'], T1);
+        expect(
+          await repos.watchTrigger.commitEvaluation({
+            owner: 'owner',
+            now: T2,
+            triggers: [],
+            states: [{ ...state, active: false, firstTriggeredAt: undefined }],
+            invalidatePending: {
+              triggerIds: ['session-pending'],
+              reason: '闭市后不再发送',
+            },
+          }),
+        ).toBe(true);
+        expect(await repos.watchTrigger.findById('session-pending')).toMatchObject({
+          deliveryStatus: 'invalidated',
+          deliveryAttempts: 1,
+          lastDeliveryAttemptAt: T1,
+          deliveryCompletedAt: T2,
+          evalSnapshot: {
+            publicationCheckedAt: T2.toISOString(),
+            publicationReason: '闭市后不再发送',
+          },
+        });
+        const states = await repos.watchRuleState.listByPool('pool-1');
+        expect(states).toMatchObject([{ active: false }]);
+        expect(states[0]?.firstTriggeredAt).toBeUndefined();
       });
 
       it('执行租约互斥，过期接管后旧 owner 不能续租或释放新租约', async () => {
@@ -4012,12 +4170,19 @@ export const registerRepositoryContractTests = (
           deliveryStatus: 'pending',
         });
         expect(await repos.watchTrigger.countAttemptedSince(FAR_PAST)).toBe(1);
-        await repos.watchTrigger.setDeliveryStatus(['delivery'], 'failed');
+        await repos.watchTrigger.setDeliveryStatus(['delivery'], 'failed', undefined, T1);
+        expect(await repos.watchTrigger.findById('delivery')).toMatchObject({
+          deliveryCompletedAt: T1,
+        });
         await repos.watchTrigger.beginDelivery(['delivery'], T2);
-        await repos.watchTrigger.setDeliveryStatus(['delivery'], 'sent', 'notification');
+        expect(
+          (await repos.watchTrigger.findById('delivery'))?.deliveryCompletedAt,
+        ).toBeUndefined();
+        await repos.watchTrigger.setDeliveryStatus(['delivery'], 'sent', 'notification', T3);
         expect(await repos.watchTrigger.findById('delivery')).toMatchObject({
           deliveryAttempts: 2,
           lastDeliveryAttemptAt: T2,
+          deliveryCompletedAt: T3,
           notificationId: 'notification',
         });
         expect(await repos.watchTrigger.countAttemptedSince(FAR_PAST)).toBe(2);
@@ -4921,6 +5086,83 @@ export const registerRepositoryContractTests = (
     });
 
     describe('WorkflowRunRepository', () => {
+      it('固定批次跨执行者只领取一次，结束时校验领取令牌', async () => {
+        const running = makeWorkflowRun('batch-once', {
+          workflowName: 'account-plan-batch',
+          status: 'running',
+          startedAt: T1,
+          finishedAt: undefined,
+          inputSummary: { accountId: 'account-1', date: '2026-01-01', claimToken: 'owner-1' },
+        });
+        const claims = await Promise.all([
+          repos.workflowRun.claim(running),
+          repos.workflowRun.claim({
+            ...running,
+            inputSummary: { ...running.inputSummary, claimToken: 'owner-2' },
+          }),
+        ]);
+        expect(claims.filter(Boolean)).toHaveLength(1);
+        const terminal = {
+          ...running,
+          status: 'succeeded' as const,
+          finishedAt: T2,
+          outputSummary: { status: 'complete' },
+        };
+        expect(await repos.workflowRun.finishClaim(terminal, 'owner-2')).toBe(false);
+        expect(await repos.workflowRun.finishClaim(terminal, 'owner-1')).toBe(true);
+        expect(await repos.workflowRun.finishClaim(terminal, 'owner-1')).toBe(false);
+        expect(await repos.workflowRun.claim(running)).toBe(false);
+        expect((await repos.workflowRun.findById('batch-once'))?.status).toBe('succeeded');
+      });
+
+      it('超时批次可重领，旧执行者不能覆盖新结果', async () => {
+        const first = makeWorkflowRun('batch-retry', {
+          workflowName: 'account-plan-batch',
+          status: 'running',
+          startedAt: T1,
+          finishedAt: undefined,
+          inputSummary: { claimToken: 'old' },
+        });
+        expect(await repos.workflowRun.claim(first)).toBe(true);
+        const second = { ...first, startedAt: T2, inputSummary: { claimToken: 'new' } };
+        expect(
+          await repos.workflowRun.claim(second, {
+            staleRunningBefore: T2,
+            failedRetryBefore: T2,
+          }),
+        ).toBe(true);
+        expect(
+          await repos.workflowRun.finishClaim(
+            { ...first, status: 'succeeded', finishedAt: T2 },
+            'old',
+          ),
+        ).toBe(false);
+        expect(
+          await repos.workflowRun.finishClaim(
+            { ...second, status: 'succeeded', finishedAt: T3 },
+            'new',
+          ),
+        ).toBe(true);
+        expect((await repos.workflowRun.findById('batch-retry'))?.inputSummary?.claimToken).toBe(
+          'new',
+        );
+
+        const failedStart = { ...first, id: 'batch-failed' };
+        expect(await repos.workflowRun.claim(failedStart)).toBe(true);
+        expect(
+          await repos.workflowRun.finishClaim(
+            { ...failedStart, status: 'failed', finishedAt: T2, error: 'provider unavailable' },
+            'old',
+          ),
+        ).toBe(true);
+        expect(
+          await repos.workflowRun.claim(
+            { ...second, id: 'batch-failed', startedAt: T3 },
+            { staleRunningBefore: T3, failedRetryBefore: T3 },
+          ),
+        ).toBe(true);
+      });
+
       it('running → succeeded upsert；listRecent 按 startedAt 倒序 + 过滤', async () => {
         await repos.workflowRun.save(
           makeWorkflowRun('w1', { status: 'running', startedAt: T1, finishedAt: undefined }),
@@ -4939,6 +5181,27 @@ export const registerRepositoryContractTests = (
         expect(recent.map((r) => r.id)).toEqual(['w2', 'w1']);
         const byName = await repos.workflowRun.listRecent({ workflowName: 'sync-stock-events' });
         expect(byName.map((r) => r.id)).toEqual(['w1']);
+      });
+
+      it('账户计划批次按输入交易日完整查询，包含隔日重试且排除其它工作流', async () => {
+        for (const [id, workflowName, date, startedAt] of [
+          ['batch-old', 'account-plan-batch', '2026-09-24', T1],
+          ['batch-retry-next-day', 'account-plan-batch', '2026-09-24', T3],
+          ['batch-other-day', 'account-plan-batch', '2026-09-25', T2],
+          ['other-workflow', 'closing-report', '2026-09-24', T2],
+        ] as const) {
+          await repos.workflowRun.save(
+            makeWorkflowRun(id, {
+              workflowName,
+              inputSummary: { date },
+              startedAt,
+              finishedAt: T3,
+            }),
+          );
+        }
+        expect(
+          (await repos.workflowRun.listAccountPlanBatches('2026-09-24')).map((run) => run.id),
+        ).toEqual(['batch-retry-next-day', 'batch-old']);
       });
 
       it('strategy-daily-cycle 先按归属和 dataAsOf 过滤，再应用 limit/offset', async () => {
@@ -5005,6 +5268,86 @@ export const registerRepositoryContractTests = (
     });
 
     describe('ReportRepository', () => {
+      it('投递领取跨重试保持互斥，过期接管后旧执行者不能回写', async () => {
+        await repos.report.upsertForPeriod(makeReport('delivery-claim'));
+        const claim = (attemptId: string, now: Date) =>
+          repos.report.claimDelivery({
+            id: 'delivery-claim',
+            attemptId,
+            now,
+            stalePendingBefore: new Date(now.getTime() - 5 * 60_000),
+            failedRetryBefore: new Date(now.getTime() - 15 * 60_000),
+          });
+        const firstAt = new Date('2026-07-03T01:00:00.000Z');
+        expect(await claim('first', firstAt)).toBe(true);
+        expect(await claim('second', new Date(firstAt.getTime() + 60_000))).toBe(false);
+        const takeoverAt = new Date(firstAt.getTime() + 6 * 60_000);
+        expect(await claim('second', takeoverAt)).toBe(true);
+        expect(
+          await repos.report.finishDelivery({
+            id: 'delivery-claim',
+            attemptId: 'first',
+            status: 'sent',
+            now: takeoverAt,
+          }),
+        ).toBe(false);
+        expect(
+          await repos.report.finishDelivery({
+            id: 'delivery-claim',
+            attemptId: 'second',
+            status: 'failed',
+            now: takeoverAt,
+          }),
+        ).toBe(true);
+        expect(await claim('third', new Date(takeoverAt.getTime() + 14 * 60_000))).toBe(false);
+        const retryAt = new Date(takeoverAt.getTime() + 16 * 60_000);
+        expect(await claim('third', retryAt)).toBe(true);
+        expect(
+          await repos.report.finishDelivery({
+            id: 'delivery-claim',
+            attemptId: 'third',
+            status: 'sent',
+            now: retryAt,
+          }),
+        ).toBe(true);
+        expect(await claim('fourth', new Date(retryAt.getTime() + 60 * 60_000))).toBe(false);
+        expect((await repos.report.findById('delivery-claim'))?.deliveryStatus).toBe('sent');
+      });
+
+      it('仅记日志的报告冷却后可重新领取投递，渠道受理后终止重试', async () => {
+        await repos.report.upsertForPeriod(makeReport('fallback-retry'));
+        const firstAt = new Date('2026-07-03T01:00:00.000Z');
+        const claim = (attemptId: string, now: Date) =>
+          repos.report.claimDelivery({
+            id: 'fallback-retry',
+            attemptId,
+            now,
+            stalePendingBefore: new Date(now.getTime() - 5 * 60_000),
+            failedRetryBefore: new Date(now.getTime() - 15 * 60_000),
+          });
+        expect(await claim('unconfigured', firstAt)).toBe(true);
+        expect(
+          await repos.report.finishDelivery({
+            id: 'fallback-retry',
+            attemptId: 'unconfigured',
+            status: 'fallback-log',
+            now: firstAt,
+          }),
+        ).toBe(true);
+        expect(await claim('too-soon', new Date(firstAt.getTime() + 14 * 60_000))).toBe(false);
+        const retryAt = new Date(firstAt.getTime() + 16 * 60_000);
+        expect(await claim('configured', retryAt)).toBe(true);
+        expect(
+          await repos.report.finishDelivery({
+            id: 'fallback-retry',
+            attemptId: 'configured',
+            status: 'sent',
+            now: retryAt,
+          }),
+        ).toBe(true);
+        expect(await claim('repeated', new Date(retryAt.getTime() + 60 * 60_000))).toBe(false);
+      });
+
       it('upsertForPeriod 后可按 id 和逻辑周期读取', async () => {
         const saved = await repos.report.upsertForPeriod(makeReport('report-1'));
 
@@ -5019,10 +5362,12 @@ export const registerRepositoryContractTests = (
         ).toEqual(saved);
       });
 
-      it('相同逻辑周期重跑保留 id/createdAt，只更新正文与运行引用', async () => {
-        await repos.report.upsertForPeriod(makeReport('report-original'));
-        const rerun = await repos.report.upsertForPeriod(
+      it('收盘补充保留原版本，按版本查询与最新查询均可追溯', async () => {
+        const original = await repos.report.upsertForPeriod(makeReport('report-original'));
+        const supplement = await repos.report.upsertForPeriod(
           makeReport('report-new-id', {
+            version: 2,
+            supersedesReportId: original.id,
             title: '重跑后的收盘复盘',
             workflowRunId: 'workflow-run-2',
             generatedAt: T3,
@@ -5030,10 +5375,41 @@ export const registerRepositoryContractTests = (
           }),
         );
 
-        expect(rerun.id).toBe('report-original');
-        expect(rerun.createdAt).toEqual(T2);
-        expect(rerun.title).toBe('重跑后的收盘复盘');
-        expect(rerun.workflowRunId).toBe('workflow-run-2');
+        expect(supplement.id).toBe('report-new-id');
+        expect(supplement.version).toBe(2);
+        expect((await repos.report.findById(original.id))?.title).toBe(original.title);
+        expect(
+          await repos.report.findByPeriodVersion({
+            kind: 'closing',
+            scopeKey: 'all-accounts',
+            periodStart: '2026-07-02',
+            periodEnd: '2026-07-02',
+            version: 1,
+          }),
+        ).toEqual(original);
+        expect(
+          (
+            await repos.report.findByPeriod({
+              kind: 'closing',
+              scopeKey: 'all-accounts',
+              periodStart: '2026-07-02',
+              periodEnd: '2026-07-02',
+            })
+          )?.id,
+        ).toBe(supplement.id);
+        expect(await repos.report.upsertForPeriod(makeReport('report-overwrite'))).toEqual(
+          original,
+        );
+        await expect(repos.report.remove(original.id)).rejects.toThrow(/has supplements/);
+      });
+
+      it('并发写入同一收盘版本只保留一份主报告', async () => {
+        const [first, second] = await Promise.all([
+          repos.report.upsertForPeriod(makeReport('concurrent-first')),
+          repos.report.upsertForPeriod(makeReport('concurrent-second')),
+        ]);
+        expect(first.id).toBe(second.id);
+        expect(await repos.report.list({ kind: 'closing' })).toHaveLength(1);
       });
 
       it('list 按周期倒序并支持 kind/scope/status/date/limit 过滤', async () => {

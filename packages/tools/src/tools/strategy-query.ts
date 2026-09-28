@@ -41,6 +41,7 @@ export const ListStrategyRunsInput = z.object({
   scope: z.enum(['operational', 'evaluation']).optional(),
   publication: z.enum(['published', 'withheld', 'non-publishing']).optional(),
   since: z.coerce.date().optional(),
+  until: z.coerce.date().optional(),
   limit: z.number().int().positive().max(500).default(50),
 });
 export const ListStrategyRunsOutput = z.object({
@@ -60,6 +61,7 @@ export const listStrategyRunsTool = defineTool({
       ...(input.scope === undefined ? {} : { scope: input.scope }),
       ...(input.publication === undefined ? {} : { publication: input.publication }),
       ...(input.since === undefined ? {} : { since: input.since }),
+      ...(input.until === undefined ? {} : { until: input.until }),
       limit: input.limit,
     });
     return { runs };

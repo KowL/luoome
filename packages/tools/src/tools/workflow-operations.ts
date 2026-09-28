@@ -17,9 +17,16 @@ import {
 export const CommitWatchEvaluationInput = z.object({
   owner: z.string().min(1),
   triggers: z.array(WatchTriggerSchema),
+  auditTriggers: z.array(WatchTriggerSchema).default([]),
   states: z.array(WatchRuleStateSchema),
+  invalidatePending: z
+    .object({ triggerIds: z.array(z.string().min(1)).min(1), reason: z.string().min(1) })
+    .optional(),
 });
-export const CommitWatchEvaluationOutput = z.object({ saved: z.number().int().nonnegative() });
+export const CommitWatchEvaluationOutput = z.object({
+  saved: z.number().int().nonnegative(),
+  invalidatedAt: z.coerce.date().optional(),
+});
 export const commitWatchEvaluationTool = defineTool({
   name: 'commit_watch_evaluation',
   description: 'workflow-only：在租约保护下原子提交预警触发与边沿状态',
@@ -27,7 +34,13 @@ export const commitWatchEvaluationTool = defineTool({
   input: CommitWatchEvaluationInput,
   output: CommitWatchEvaluationOutput,
   handler: async (input, ctx) => {
-    const committed = await ctx.repos.watchTrigger.commitEvaluation({ ...input, now: ctx.clock() });
+    const now = ctx.clock();
+    const { invalidatePending, ...evaluation } = input;
+    const committed = await ctx.repos.watchTrigger.commitEvaluation({
+      ...evaluation,
+      now,
+      ...(invalidatePending === undefined ? {} : { invalidatePending }),
+    });
     if (!committed)
       return {
         ok: false as const,
@@ -47,7 +60,13 @@ export const commitWatchEvaluationTool = defineTool({
       ),
       ctx.repos.signalObservation,
     );
-    return { saved: input.triggers.length };
+    return {
+      saved:
+        input.triggers.length +
+        input.auditTriggers.length +
+        (input.invalidatePending?.triggerIds.length ?? 0),
+      ...(input.invalidatePending === undefined ? {} : { invalidatedAt: now }),
+    };
   },
 });
 
@@ -91,7 +110,10 @@ export const beginWatchDeliveryTool = defineTool({
   },
 });
 
-export const ListWatchDeliveryRetriesInput = z.object({ poolId: z.string().min(1) });
+export const ListWatchDeliveryRetriesInput = z.object({
+  poolId: z.string().min(1),
+  since: z.coerce.date().optional(),
+});
 export const ListWatchDeliveryRetriesOutput = z.object({ triggers: z.array(WatchTriggerSchema) });
 export const listWatchDeliveryRetriesTool = defineTool({
   name: 'list_watch_delivery_retries',
@@ -99,10 +121,11 @@ export const listWatchDeliveryRetriesTool = defineTool({
   sideEffect: 'read',
   input: ListWatchDeliveryRetriesInput,
   output: ListWatchDeliveryRetriesOutput,
-  handler: async ({ poolId }, ctx) => {
+  handler: async ({ poolId, since: sessionStart }, ctx) => {
     const now = ctx.clock();
     const offset = 8 * 60 * 60 * 1000;
-    const since = new Date(Math.floor((now.getTime() + offset) / 86_400_000) * 86_400_000 - offset);
+    const dayStart = Math.floor((now.getTime() + offset) / 86_400_000) * 86_400_000 - offset;
+    const since = new Date(Math.max(dayStart, sessionStart?.getTime() ?? dayStart));
     const triggers = await ctx.repos.watchTrigger.listRecent({
       poolId,
       since,
@@ -160,6 +183,7 @@ export const SetWatchTriggerDeliveryStatusInput = z.object({
 export const SetWatchTriggerDeliveryStatusOutput = z.object({
   triggerIds: z.array(z.string().min(1)),
   status: DeliveryStatusSchema,
+  completedAt: z.coerce.date(),
 });
 export const setWatchTriggerDeliveryStatusTool = defineTool({
   name: 'set_watch_trigger_delivery_status',
@@ -168,12 +192,14 @@ export const setWatchTriggerDeliveryStatusTool = defineTool({
   input: SetWatchTriggerDeliveryStatusInput,
   output: SetWatchTriggerDeliveryStatusOutput,
   handler: async (input, ctx) => {
+    const completedAt = ctx.clock();
     await ctx.repos.watchTrigger.setDeliveryStatus(
       input.triggerIds,
       input.status as DeliveryStatus,
       input.notificationId,
+      completedAt,
     );
-    return { triggerIds: [...input.triggerIds], status: input.status };
+    return { triggerIds: [...input.triggerIds], status: input.status, completedAt };
   },
 });
 

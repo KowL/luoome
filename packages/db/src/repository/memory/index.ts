@@ -169,7 +169,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const limitUpLadderSnapshot = new InMemoryLimitUpLadderSnapshotRepository();
   const holding = new InMemoryHoldingRepository();
   const trade = new InMemoryTradeRepository();
-  const tradingPlan = new InMemoryTradingPlanRepository();
+  const tradingPlan = new InMemoryTradingPlanRepository(account, holding);
   const portfolioCashFlow = new InMemoryPortfolioCashFlowRepository();
   const portfolioCorporateAction = new InMemoryPortfolioCorporateActionRepository();
   const portfolioPerformanceSnapshot = new InMemoryPortfolioPerformanceSnapshotRepository();

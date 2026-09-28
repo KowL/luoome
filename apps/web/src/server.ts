@@ -43,6 +43,7 @@ import {
   BUILTIN_STRATEGY_TEMPLATES,
   DEFAULT_PORTFOLIO_BENCHMARK_NAME,
   DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
+  dateInShanghai,
   NotificationSchema,
   type SideEffect,
   type ToolContext,
@@ -88,6 +89,10 @@ import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
 import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
+import {
+  INTRADAY_PLAN_SCHEDULER_INTERVAL_MS,
+  startIntradayPlanScheduler,
+} from './intraday-plan-scheduler.js';
 import {
   type MarketDatasetStatusRow,
   MarketSettingsStore,
@@ -217,13 +222,7 @@ const KNOWN_UNEXPOSED_TOOLS: Readonly<Record<string, SideEffect>> = {
 };
 
 /** Asia/Shanghai 当日 00:00 的 Date（web 与 workflow 用同口径）。 */
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
-const startOfTodayShanghai = (now: Date): Date => {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-  return new Date(Date.UTC(y, m, d) - SHANGHAI_OFFSET_MS);
-};
+const startOfTodayShanghai = (now: Date): Date => new Date(`${dateInShanghai(now)}T00:00:00+08:00`);
 
 /** ToolResult 错误 → HTTP 状态码（响应体仍是 ToolResult 形状）。 */
 const statusOf = (error: ToolError): number => {
@@ -1177,7 +1176,11 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       }
       return jsonResult({
         ok: true,
-        data: { delivered: true, sentAt: notification.sentAt },
+        data: {
+          channelAccepted: true,
+          deviceDeliveryVerified: false,
+          acceptedAt: notification.sentAt,
+        },
       });
     } catch (error) {
       return jsonResult({
@@ -2430,6 +2433,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       expectedIntervalSeconds: Number.isFinite(interval) ? interval : 60,
     });
   });
+  app.get('/api/watch/delivery-audit', (c) => {
+    const date = c.req.query('date');
+    return callTool('get_intraday_delivery_audit', date === undefined ? {} : { date });
+  });
   app.get('/api/watch/triggers', (c) => {
     const input: Record<string, unknown> = {};
     for (const key of [
@@ -2843,7 +2850,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
                 evaluatedStocks: latestRun.evaluatedStocks ?? 0,
                 triggered: latestRun.triggered ?? 0,
                 notified: latestRun.notified ?? 0,
-                delivered: latestRun.delivered ?? null,
+                channelAccepted: latestRun.delivered ?? null,
+                deviceDelivered: null,
                 unknownRules: latestRun.unknownRules ?? null,
                 suppressedByCooldown: latestRun.suppressedByCooldown ?? 0,
                 suppressedByDailyLimit: latestRun.suppressedByDailyLimit ?? 0,
@@ -3032,6 +3040,14 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const limit = Number(c.req.query('limit'));
     if (Number.isInteger(limit) && limit > 0) input.limit = limit;
     return callTool('list_reports', input);
+  });
+
+  app.get('/api/reports/closing-audit', (c) => {
+    const date = c.req.query('date');
+    return callTool('get_closing_batch_audit', {
+      accountId: contextForRequest().user.defaultAccountId,
+      ...(date === undefined ? {} : { date }),
+    });
   });
 
   app.post('/api/reports/run/:kind', async (c) => {
@@ -3282,6 +3298,16 @@ export interface StartWebOptions {
   readonly strategySchedulerIntervalMs?: number;
   /** 仅供启动级测试关闭立即 tick；生产缺省立即检查。 */
   readonly strategySchedulerStartImmediately?: boolean;
+  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
+  readonly strategySchedulerFactory?: typeof startStrategyScheduler;
+  /** 仅供测试缩短盘中账户计划监控 tick；生产每分钟检查。 */
+  readonly intradayPlanSchedulerIntervalMs?: number;
+  /** 仅供启动级测试关闭立即 tick；生产在交易时段立即检查。 */
+  readonly intradayPlanSchedulerStartImmediately?: boolean;
+  /** `luoome start` 由 CLI 盯盘循环负责盘中计划，避免同进程争抢共享租约。 */
+  readonly intradayPlanSchedulerEnabled?: boolean;
+  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
+  readonly intradayPlanSchedulerFactory?: typeof startIntradayPlanScheduler;
   /** 仅供测试缩短 tick；生产每五分钟检查一次盘后账户绩效快照。 */
   readonly portfolioPerformanceSchedulerIntervalMs?: number;
   /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
@@ -3322,12 +3348,25 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     sources,
   });
   const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
-  const scheduler = startStrategyScheduler(ctx, {
-    intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
-    ...(options.strategySchedulerStartImmediately === undefined
-      ? {}
-      : { startImmediately: options.strategySchedulerStartImmediately }),
-  });
+  const scheduler =
+    exposeWrite && exposeExternal
+      ? (options.strategySchedulerFactory ?? startStrategyScheduler)(ctx, {
+          intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
+          ...(options.strategySchedulerStartImmediately === undefined
+            ? {}
+            : { startImmediately: options.strategySchedulerStartImmediately }),
+        })
+      : undefined;
+  const intradayPlanScheduler =
+    exposeWrite && exposeExternal && options.intradayPlanSchedulerEnabled !== false
+      ? (options.intradayPlanSchedulerFactory ?? startIntradayPlanScheduler)(ctx, {
+          intervalMs:
+            options.intradayPlanSchedulerIntervalMs ?? INTRADAY_PLAN_SCHEDULER_INTERVAL_MS,
+          ...(options.intradayPlanSchedulerStartImmediately === undefined
+            ? {}
+            : { startImmediately: options.intradayPlanSchedulerStartImmediately }),
+        })
+      : undefined;
   const portfolioPerformanceScheduler =
     exposeWrite && exposeExternal
       ? (options.portfolioPerformanceSchedulerFactory ?? startPortfolioPerformanceScheduler)(ctx, {
@@ -3355,6 +3394,18 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
       'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
     );
   }
+  if (scheduler === undefined) {
+    ctx.logger.info(
+      `策略盘后调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
+      { exposeWrite, exposeExternal },
+    );
+  }
+  if (intradayPlanScheduler === undefined && options.intradayPlanSchedulerEnabled !== false) {
+    ctx.logger.info(
+      `盘中账户计划调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
+      { exposeWrite, exposeExternal },
+    );
+  }
   if (portfolioPerformanceScheduler === undefined) {
     ctx.logger.info(
       `账户绩效盘后快照调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
@@ -3370,7 +3421,8 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
   return {
     port: server.port ?? options.port,
     stop: (closeActiveConnections) => {
-      scheduler.stop();
+      scheduler?.stop();
+      intradayPlanScheduler?.stop();
       portfolioPerformanceScheduler?.stop();
       strategyAutonomyScheduler?.stop();
       server.stop(closeActiveConnections);

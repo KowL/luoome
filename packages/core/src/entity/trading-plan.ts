@@ -243,6 +243,9 @@ export const TradingPlanQuerySchema = z.object({
   activeOnly: z.boolean().optional(),
   /** activeOnly 时可指定评估时点；缺省表示不做有效期过滤。 */
   asOf: z.coerce.date().optional(),
+  /** 按版本创建时间过滤（闭区间）；先过滤再应用 limit。 */
+  createdSince: z.coerce.date().optional(),
+  createdUntil: z.coerce.date().optional(),
   limit: z.number().int().positive().max(500).optional(),
 });
 export type TradingPlanQuery = z.infer<typeof TradingPlanQuerySchema>;

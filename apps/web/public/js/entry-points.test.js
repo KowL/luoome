@@ -125,6 +125,7 @@ describe('报告页入口', () => {
     expect(html).toContain('id="report-detail"');
     expect(appJs).toContain("'reports'");
     expect(appJs).toContain('renderReports');
+    expect(html).toContain('id="dashboard-closing-report"');
   });
 });
 

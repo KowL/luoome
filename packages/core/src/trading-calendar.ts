@@ -152,6 +152,22 @@ export const isWeekend = (date: Date): boolean => {
   return wd === 0 || wd === 6;
 };
 
+/** A 股连续竞价时段；午休和 15:00 起不再发布盘中行动信号。 */
+export const isAshareTradingSession = (
+  date: Date,
+  holidays: ReadonlyMap<number, ReadonlySet<Holiday>> = BUILTIN_HOLIDAYS,
+): boolean => {
+  if (isWeekend(date) || isHoliday(date, holidays)) return false;
+  const day = dateInShanghai(date);
+  const time = date.getTime();
+  return (
+    (time >= new Date(`${day}T09:30:00+08:00`).getTime() &&
+      time < new Date(`${day}T11:30:00+08:00`).getTime()) ||
+    (time >= new Date(`${day}T13:00:00+08:00`).getTime() &&
+      time < new Date(`${day}T15:00:00+08:00`).getTime())
+  );
+};
+
 /** 上一交易日的上海日期；盘后信号在下一交易日仍可被观察。 */
 export const previousTradingDate = (date: Date): Holiday => {
   let cursor = new Date(`${dateInShanghai(date)}T00:00:00+08:00`);

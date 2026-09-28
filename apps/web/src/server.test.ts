@@ -421,6 +421,65 @@ describe('研究 Vault API', () => {
 });
 
 describe('报告 API', () => {
+  it('收盘批次审计只返回当前账户，并校验日期', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-09-27T11:00:00.000Z') });
+    const localApp = createWebApp(ctx);
+    const other = (await ctx.repos.account.list()).find(
+      (account) => account.id !== ctx.user.defaultAccountId,
+    );
+    if (other === undefined) throw new Error('fixture second account missing');
+
+    const defaultResponse = await localApp.fetch(
+      new Request('http://test/api/reports/closing-audit?date=2026-09-24'),
+    );
+    const defaultBody = (await defaultResponse.json()) as {
+      ok: boolean;
+      data?: {
+        cutoffPassed: boolean;
+        tradingDay: boolean;
+        accounts: Array<{ accountId: string }>;
+        summary: { knownExpectedAccounts: number; missingMainAfterCutoff: number };
+      };
+    };
+    expect(defaultResponse.status).toBe(200);
+    expect(defaultBody).toMatchObject({
+      ok: true,
+      data: {
+        cutoffPassed: true,
+        tradingDay: true,
+        accounts: [{ accountId: ctx.user.defaultAccountId }],
+        summary: { knownExpectedAccounts: 1, missingMainAfterCutoff: 1 },
+      },
+    });
+
+    const selectedResponse = await localApp.fetch(
+      new Request('http://test/api/reports/closing-audit?date=2026-09-24', {
+        headers: { 'x-luoome-account-id': other.id },
+      }),
+    );
+    const selectedBody = (await selectedResponse.json()) as {
+      ok: boolean;
+      data?: { accounts: Array<{ accountId: string }> };
+    };
+    expect(selectedBody.data?.accounts.map((row) => row.accountId)).toEqual([other.id]);
+
+    const holidayResponse = await localApp.fetch(
+      new Request('http://test/api/reports/closing-audit?date=2026-09-25'),
+    );
+    expect(await holidayResponse.json()).toMatchObject({
+      ok: true,
+      data: {
+        tradingDay: false,
+        summary: { knownExpectedAccounts: 0, missingMainAfterCutoff: 0 },
+      },
+    });
+
+    const invalidResponse = await localApp.fetch(
+      new Request('http://test/api/reports/closing-audit?date=2026-09-99'),
+    );
+    expect(invalidResponse.status).toBe(400);
+  });
+
   it('保存报告后可通过历史、详情和 Markdown 导出端点读取', async () => {
     const now = '2026-07-29T10:00:00.000Z';
     const report = {
@@ -719,7 +778,7 @@ describe('Web runtime bootstrap', () => {
     }
   });
 
-  it('账户绩效 scheduler 仅在 write 与 external 双显式开启时启动', async () => {
+  it('策略、盘中计划与账户绩效 scheduler 仅在 write 与 external 双显式开启时启动', async () => {
     const previousWrite = process.env.LUOOME_EXPOSE_WRITE;
     const previousExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
     const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
@@ -764,6 +823,10 @@ describe('Web runtime bootstrap', () => {
         const dir = mkdtempSync(join(tmpdir(), `luoome-performance-gate-${testCase.label}-`));
         let starts = 0;
         let stops = 0;
+        let strategyStarts = 0;
+        let strategyStops = 0;
+        let intradayStarts = 0;
+        let intradayStops = 0;
         const logStart = logs.length;
         let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
         try {
@@ -772,6 +835,26 @@ describe('Web runtime bootstrap', () => {
             dbPath: join(dir, 'luoome.db'),
             ...testCase.capabilities,
             strategySchedulerStartImmediately: false,
+            strategySchedulerFactory: () => {
+              strategyStarts += 1;
+              return {
+                tick: async () => {},
+                cutoffTick: async () => {},
+                stop: () => {
+                  strategyStops += 1;
+                },
+              };
+            },
+            intradayPlanSchedulerStartImmediately: false,
+            intradayPlanSchedulerFactory: () => {
+              intradayStarts += 1;
+              return {
+                tick: async () => {},
+                stop: () => {
+                  intradayStops += 1;
+                },
+              };
+            },
             portfolioPerformanceSchedulerFactory: () => {
               starts += 1;
               return {
@@ -783,18 +866,26 @@ describe('Web runtime bootstrap', () => {
             },
           });
           expect(starts).toBe(testCase.expectedStarts);
+          expect(strategyStarts).toBe(testCase.expectedStarts);
+          expect(intradayStarts).toBe(testCase.expectedStarts);
           const caseLogs = logs.slice(logStart).join('\n');
           if (testCase.expectedStarts === 0) {
+            expect(caseLogs).toContain('策略盘后调度器未启动');
+            expect(caseLogs).toContain('盘中账户计划调度器未启动');
             expect(caseLogs).toContain('账户绩效盘后快照调度器未启动');
             expect(caseLogs).toContain('LUOOME_EXPOSE_WRITE=true');
             expect(caseLogs).toContain('LUOOME_EXPOSE_EXTERNAL=true');
             expect(caseLogs).toContain(testCase.expectedState);
           } else {
+            expect(caseLogs).not.toContain('策略盘后调度器未启动');
+            expect(caseLogs).not.toContain('盘中账户计划调度器未启动');
             expect(caseLogs).not.toContain('账户绩效盘后快照调度器未启动');
           }
           handle.stop(true);
           handle = undefined;
           expect(stops).toBe(testCase.expectedStarts);
+          expect(strategyStops).toBe(testCase.expectedStarts);
+          expect(intradayStops).toBe(testCase.expectedStarts);
         } finally {
           handle?.stop(true);
           rmSync(dir, { recursive: true, force: true });
@@ -1406,7 +1497,10 @@ describe('飞书设置 API', () => {
         new Request('http://test/api/settings/feishu/test', { method: 'POST' }),
       );
       expect(tested.status).toBe(200);
-      expect(await tested.json()).toMatchObject({ ok: true, data: { delivered: true } });
+      expect(await tested.json()).toMatchObject({
+        ok: true,
+        data: { channelAccepted: true, deviceDeliveryVerified: false },
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -4353,6 +4447,115 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
     expect(body.data?.total).toBeGreaterThanOrEqual(0);
   });
 
+  it('超时审计触发可通过 Web 按状态查询，保留发布复查原因', async () => {
+    const auditCtx = await buildTestContext();
+    const saved = await saveWatchTriggerTool.execute(
+      {
+        id: 'expired-web-audit',
+        poolId: 'trading-plan-watch:test-account',
+        stockId: '002594.SZ',
+        ruleKind: 'price-level',
+        ruleId: 'entry',
+        direction: 'buy',
+        priority: 'normal',
+        deliveryStatus: 'expired',
+        reason: '发布前超时',
+        evidence: ['上游报价'],
+        evalSnapshot: { publicationReason: '超过 10 分钟', firstEventAt: '2026-09-17T02:00:00Z' },
+        notified: false,
+        createdAt: new Date('2026-09-17T02:11:00Z'),
+      },
+      auditCtx,
+    );
+    expect(saved.ok).toBe(true);
+    const response = await createWebApp(auditCtx, { exposeExternal: true }).fetch(
+      new Request('http://test/api/watch/triggers?deliveryStatus=expired'),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: {
+        total: 1,
+        triggers: [
+          { id: 'expired-web-audit', evalSnapshot: { publicationReason: '超过 10 分钟' } },
+        ],
+      },
+    });
+  });
+
+  it('盘中时效审计按当前账户和日期统计完整候选，不将渠道受理当作设备送达', async () => {
+    const auditCtx = await buildTestContext();
+    const date = '2026-09-17';
+    const saved = await saveWatchTriggerTool.execute(
+      {
+        id: 'expired-delivery-audit',
+        poolId: `trading-plan-watch:${auditCtx.user.defaultAccountId}`,
+        stockId: '002594.SZ',
+        ruleKind: 'price-level',
+        ruleId: 'entry',
+        direction: 'buy',
+        priority: 'normal',
+        deliveryStatus: 'expired',
+        reason: '发布前超时',
+        evidence: ['上游报价'],
+        evalSnapshot: { firstEventAt: '2026-09-17T02:00:00Z' },
+        notified: false,
+        createdAt: new Date('2026-09-17T02:11:00Z'),
+      },
+      auditCtx,
+    );
+    expect(saved.ok).toBe(true);
+    const localApp = createWebApp(auditCtx);
+    const response = await localApp.fetch(
+      new Request(`http://test/api/watch/delivery-audit?date=${date}`),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      data: {
+        date,
+        candidateCount: 1,
+        deliveryStatusCounts: { expired: 1 },
+        channelAcceptance: { accepted: 0, notAccepted: 1 },
+        deviceDeliveryVerified: false,
+      },
+    });
+    expect(
+      await saveWatchTriggerTool.execute(
+        {
+          id: 'other-account-delivery-audit',
+          poolId: 'trading-plan-watch:other-account',
+          stockId: '002594.SZ',
+          ruleKind: 'price-level',
+          ruleId: 'entry',
+          direction: 'buy',
+          priority: 'normal',
+          deliveryStatus: 'sent',
+          reason: '另一账户触发',
+          evidence: ['上游报价'],
+          evalSnapshot: { firstEventAt: '2026-09-17T02:00:00Z' },
+          notified: true,
+          createdAt: new Date('2026-09-17T02:01:00Z'),
+        },
+        auditCtx,
+      ),
+    ).toMatchObject({ ok: true });
+    const otherResponse = await localApp.fetch(
+      new Request(`http://test/api/watch/delivery-audit?date=${date}`, {
+        headers: { 'x-luoome-account-id': 'other-account' },
+      }),
+    );
+    expect(otherResponse.status).toBe(200);
+    expect(await otherResponse.json()).toMatchObject({
+      ok: true,
+      data: {
+        accountId: 'other-account',
+        candidateCount: 1,
+        deliveryStatusCounts: { sent: 1, expired: 0 },
+      },
+    });
+  });
+
   it('dashboard metrics 字段齐全（priorityCounts / deliveryStatusCounts / feedbackCounts / latestRun.notifyFailed / suppressedByDailyLimit / noiseRate）', async () => {
     const r = await app.fetch(new Request('http://test/api/dashboard'));
     expect(r.status).toBe(200);
@@ -4374,6 +4577,38 @@ describe('Web 策略预警：模板与反馈（v0.7 §10）', () => {
       expect(latestRun).toHaveProperty('notifyFailed');
       expect(latestRun).toHaveProperty('suppressedByDailyLimit');
     }
+  });
+
+  it('dashboard 将历史 delivered 计数仅投影为渠道受理，设备送达保持未知', async () => {
+    const dashboardCtx = await buildTestContext();
+    const startedAt = new Date('2026-08-21T01:00:00.000Z');
+    await dashboardCtx.repos.watchRun.save({
+      id: 'dashboard-channel-accepted',
+      mode: 'once',
+      status: 'succeeded',
+      startedAt,
+      finishedAt: new Date('2026-08-21T01:01:00.000Z'),
+      evaluatedPools: 1,
+      evaluatedStocks: 1,
+      triggered: 1,
+      notified: 1,
+      delivered: 1,
+      suppressedByCooldown: 0,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+    });
+    const response = await createWebApp(dashboardCtx, { exposeExternal: true }).fetch(
+      new Request('http://test/api/dashboard'),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data?: { metrics?: { latestRun?: Record<string, unknown> | null } };
+    };
+    expect(body.data?.metrics?.latestRun).toMatchObject({
+      channelAccepted: 1,
+      deviceDelivered: null,
+    });
+    expect(body.data?.metrics?.latestRun).not.toHaveProperty('delivered');
   });
 });
 
@@ -5389,6 +5624,51 @@ describe('dashboard 数据覆盖与失败状态', () => {
 });
 
 describe('dashboard 范围与关联事实', () => {
+  it('上海凌晨的今日触发只含当日记录，看盘和个股详情口径一致', async () => {
+    const now = new Date('2026-09-26T16:30:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const base = {
+      poolId: 'test-plan',
+      stockId: '002594.SZ',
+      ruleId: 'price-entry',
+      ruleKind: 'price-level' as const,
+      triggerType: 'triggered' as const,
+      direction: 'watch' as const,
+      priority: 'normal' as const,
+      deliveryStatus: 'not-requested' as const,
+      notified: false,
+      evalSnapshot: { ruleId: 'price-entry' },
+      reason: '价格条件',
+      evidence: ['可核验事实'],
+    };
+    for (const [id, createdAt] of [
+      ['previous-shanghai-day', new Date('2026-09-26T10:00:00.000Z')],
+      ['current-shanghai-day', new Date('2026-09-26T16:15:00.000Z')],
+    ] as const) {
+      expect(await saveWatchTriggerTool.execute({ ...base, id, createdAt }, ctx)).toMatchObject({
+        ok: true,
+      });
+    }
+    const localApp = createWebApp(ctx);
+    const dashboard = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard'))
+    ).json()) as {
+      data: { metrics: { todayTotal: number }; todayTriggers: Array<{ id: string }> };
+    };
+    expect(dashboard.data.metrics.todayTotal).toBe(1);
+    expect(dashboard.data.todayTriggers.map((trigger) => trigger.id)).toEqual([
+      'current-shanghai-day',
+    ]);
+    const detail = (await (
+      await localApp.fetch(new Request('http://test/api/dashboard/stocks/002594.SZ'))
+    ).json()) as {
+      data: { triggers: { data: { triggers: Array<{ id: string }> } } };
+    };
+    expect(detail.data.triggers.data.triggers.map((trigger) => trigger.id)).toEqual([
+      'current-shanghai-day',
+    ]);
+  });
+
   it('拒绝无效范围和越界分页参数', async () => {
     for (const query of ['scope=invalid', 'page=0', 'pageSize=41', 'pageSize=NaN']) {
       expect((await app.fetch(new Request(`http://test/api/dashboard?${query}`))).status).toBe(400);

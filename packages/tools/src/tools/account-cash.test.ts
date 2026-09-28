@@ -249,7 +249,46 @@ describe('账户现金随账本变化', () => {
 describe('账户事实的行情口径', () => {
   const LONGTERM_ACCOUNT_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
 
-  it('只有早于当日口径的行情时按最近价估值，记入 notes 且不阻断', async () => {
+  it.each([
+    ['只有抓取时间', 'retrieval', 0],
+    ['源时间超过盘中 120 秒门槛', 'upstream', 120_001],
+  ] as const)('%s 时保留参考报价，但精确账户事实不可用', async (_label, timestampSource, ageMs) => {
+    const now = new Date('2026-07-17T06:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const added = await addHoldingTool.execute(
+      { accountId: LONGTERM_ACCOUNT_ID, stockId: '601398.SH', quantity: 1000, avgCost: 10 },
+      ctx,
+    );
+    expect(added.ok).toBe(true);
+    const observedAt = new Date(now.getTime() - ageMs);
+    await ctx.repos.quote.save({
+      stockId: '601398.SH',
+      observedAt,
+      fetchedAt: now,
+      timestampSource,
+      ts: observedAt,
+      open: money(12),
+      high: money(12.5),
+      low: money(11.9),
+      close: money(12.34),
+      volume: 1000,
+      source: 'test',
+    });
+
+    const result = await getAccountFactsTool.execute({ accountId: LONGTERM_ACCOUNT_ID }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.facts).toMatchObject({
+      status: 'unavailable',
+      stockMarketValue: null,
+      totalAssets: null,
+      positions: [{ stockId: '601398.SH', price: money(12.34) }],
+    });
+    expect(result.data.facts.reasons.join('；')).toContain('601398.SH 缺少合格行情');
+    expect(result.data.facts.notes.join('；')).toContain('参考报价');
+  });
+
+  it('只有历史报价时保留参考估值，精确账户事实仍不可用', async () => {
     const ctx = await buildTestContext();
     const added = await addHoldingTool.execute(
       { accountId: LONGTERM_ACCOUNT_ID, stockId: '601398.SH', quantity: 1000, avgCost: 10 },
@@ -275,10 +314,12 @@ describe('账户事实的行情口径', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.facts).toMatchObject({
-      status: 'complete',
-      stockMarketValue: money(12340),
-      reasons: [],
+      status: 'unavailable',
+      stockMarketValue: null,
+      totalAssets: null,
+      positions: [{ stockId: '601398.SH', marketValue: money(12340) }],
     });
+    expect(result.data.facts.reasons.join('；')).toContain('601398.SH 缺少合格行情');
     expect(result.data.facts.notes.join('；')).toContain('601398.SH 使用');
   });
 

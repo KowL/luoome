@@ -26,8 +26,29 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   ): Promise<boolean> {
     if (this.execution?.owner !== input.owner || this.execution.until <= input.now) return false;
     for (const trigger of input.triggers) assertWatchTriggerInvariants(trigger);
+    for (const trigger of input.auditTriggers ?? []) assertWatchTriggerInvariants(trigger);
     for (const state of input.states) WatchRuleStateSchema.parse(state);
+    for (const id of input.invalidatePending?.triggerIds ?? []) {
+      if (this.items.get(id)?.deliveryStatus !== 'pending')
+        throw new Error(`pending watch delivery not found: ${id}`);
+    }
+    for (const id of input.invalidatePending?.triggerIds ?? []) {
+      const trigger = this.items.get(id);
+      if (trigger === undefined) continue;
+      this.items.set(id, {
+        ...trigger,
+        deliveryStatus: 'invalidated',
+        deliveryCompletedAt: input.now,
+        notified: false,
+        evalSnapshot: {
+          ...trigger.evalSnapshot,
+          publicationCheckedAt: input.now.toISOString(),
+          publicationReason: input.invalidatePending?.reason,
+        },
+      });
+    }
     for (const trigger of input.triggers) this.put(trigger);
+    for (const trigger of input.auditTriggers ?? []) this.put(trigger);
     for (const state of input.states) this.states.put(state);
     return true;
   }
@@ -58,6 +79,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
         deliveryAttempts:
           (trigger.deliveryAttempts ?? (ATTEMPTED.has(trigger.deliveryStatus) ? 1 : 0)) + 1,
         lastDeliveryAttemptAt: at,
+        deliveryCompletedAt: undefined,
       });
     }
   }
@@ -227,6 +249,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
     ids: readonly string[],
     status: DeliveryStatus,
     notificationId?: string,
+    completedAt?: Date,
   ): Promise<void> {
     for (const id of ids) {
       const t = this.items.get(id);
@@ -235,6 +258,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
         ...t,
         deliveryStatus: status,
         ...(notificationId !== undefined ? { notificationId } : {}),
+        ...(completedAt !== undefined ? { deliveryCompletedAt: completedAt } : {}),
         notified: ATTEMPTED.has(status),
       });
     }

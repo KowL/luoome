@@ -47,8 +47,10 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       .onConflictDoUpdate({
         target: notifications.id,
         set: {
+          payload: notification.payload,
           result: notification.result,
           errorMessage: notification.errorMessage ?? null,
+          sentAt: notification.sentAt,
         },
       })
       .run();

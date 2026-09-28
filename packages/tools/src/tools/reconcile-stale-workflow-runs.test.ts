@@ -41,4 +41,27 @@ describe('reconcile_stale_workflow_runs', () => {
     });
     expect((await ctx.repos.workflowRun.findById('workflow-active'))?.finishedAt).toBeUndefined();
   });
+
+  it('账户计划批次保留更长执行窗口，再以领取令牌收敛', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const startedAt = new Date(NOW.getTime() - 90 * 60_000);
+    await ctx.repos.workflowRun.claim({
+      id: 'account-batch',
+      workflowName: 'account-plan-batch',
+      mode: 'scheduled',
+      status: 'running',
+      startedAt,
+      inputSummary: { claimToken: 'owner-1' },
+      providerStatuses: [],
+    });
+    const early = await reconcileStaleWorkflowRunsTool.execute({ olderThanMinutes: 30 }, ctx);
+    expect(early).toMatchObject({ ok: true, data: { reconciled: 0 } });
+    expect((await ctx.repos.workflowRun.findById('account-batch'))?.status).toBe('running');
+
+    const later = await buildTestContext({ clock: () => new Date(NOW.getTime() + 60 * 60_000) });
+    const lateCtx = { ...later, repos: ctx.repos };
+    const expired = await reconcileStaleWorkflowRunsTool.execute({ olderThanMinutes: 30 }, lateCtx);
+    expect(expired).toMatchObject({ ok: true, data: { reconciled: 1 } });
+    expect((await ctx.repos.workflowRun.findById('account-batch'))?.status).toBe('failed');
+  });
 });

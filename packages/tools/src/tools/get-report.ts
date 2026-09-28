@@ -17,6 +17,7 @@ export const GetReportInput = z
     kind: ReportKindSchema.optional(),
     scope: ReportScopeSchema.optional(),
     periodEnd: z.string().date().optional(),
+    version: z.number().int().positive().optional(),
   })
   .superRefine((input, context) => {
     const byId = input.id !== undefined;
@@ -26,6 +27,9 @@ export const GetReportInput = z
         code: 'custom',
         message: '必须且只能提供 id，或提供 kind + periodEnd',
       });
+    }
+    if (byId && input.version !== undefined) {
+      context.addIssue({ code: 'custom', message: '按 id 查询时不能指定 version' });
     }
   });
 export const GetReportOutput = z.object({ report: ReportSchema });
@@ -64,12 +68,16 @@ export const getReportTool = defineTool({
     if (input.kind === undefined || input.periodEnd === undefined) {
       return errInvalidInput('kind 与 periodEnd 必须同时提供');
     }
-    const report = await ctx.repos.report.findByPeriod({
+    const period = {
       kind: input.kind,
       scopeKey: reportScopeKey(input.scope ?? { kind: 'all-accounts' }),
       periodStart: derivePeriodStart(input.kind, input.periodEnd),
       periodEnd: input.periodEnd,
-    });
+    };
+    const report =
+      input.version === undefined
+        ? await ctx.repos.report.findByPeriod(period)
+        : await ctx.repos.report.findByPeriodVersion({ ...period, version: input.version });
     return report === null ? errNotFound('Report', input.periodEnd) : { report };
   },
 });

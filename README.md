@@ -162,9 +162,18 @@ bun install
 
 ## 自动任务
 
-策略调度已内置：`luoome start` 与 `luoome web serve` 启动后每分钟自动检查一次
+策略调度已内置：同时设置 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 后，
+`luoome start` 与 `luoome web serve` 每分钟自动检查一次
 `StrategySchedule`，进程启动时也会立即检查，不需要配置 crontab。每个策略仍按自己的标准 5 段
 cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由租约防重。
+交易日 16:30 后还会按账户生成并记录盘后计划批次。全部预期策略的日循环和账户批次完成后可
+提前按账户发布主报告；独立的收盘截止检查每分钟运行，18:00 后即使策略或账户批次未完成，
+也会发布标明缺口的主报告，后到结果或账户账本变化形成补充版本。
+盘中账户计划监控在交易日 09:30～11:30、13:00～15:00 默认每分钟检查全部账户；
+交易时段启动时立即检查，持仓变化后最迟在下一轮重新判断计划资格。
+`luoome start` 在上述双能力开关启用时将账户计划监控与 AlertPlan 盯盘顺序执行，避免争抢共享执行租约；
+`luoome web serve` 由 Web 内置调度独立执行账户计划监控。
+`luoome start --no-watch` 会停用盘中账户计划和 AlertPlan 长驻监控；盘后调度仍运行。
 生产参数、每日 fencing/checkpoint/provider/baseline 检查和可靠性汇总见
 [Strategy 生产可靠性运维手册](./docs/runbooks/strategy-reliability-operations.md)。
 
@@ -215,6 +224,6 @@ cron 和 IANA 时区决定实际运行时间；多实例与手工正式运行由
 - Strategy → Watchlist 需要显式持久订阅；可在 Strategy 设置页或对应 Tool 中取消，重复 producerRun 幂等
 - AlertPlan 引用 Watchlist，提供单轮试跑、全局心跳与 Trigger 审计
 - Web 默认仅监听 `127.0.0.1`，mutation 统一显式能力开关 + 同源校验
-- `luoome start` 一键启动 Web + 长驻盯盘
+- `luoome start` 一键启动 Web；双能力开关启用时同时运行长驻盯盘
 
 历史演进见 [docs/ROADMAP.md](./docs/ROADMAP.md)。

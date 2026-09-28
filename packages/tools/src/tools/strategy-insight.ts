@@ -330,18 +330,23 @@ export const collectStrategyInsightFacts = async (
   options: {
     readonly scope?: 'operational' | 'evaluation';
     readonly evaluationSessionId?: string;
+    readonly since?: Date;
+    readonly until?: Date;
   } = {},
 ): Promise<StrategyInsightFacts | null> => {
   const strategy = await ctx.repos.strategy.findById(strategyId);
   if (strategy === null) return null;
   const now = ctx.clock();
-  const from = new Date(now.getTime() - windowDays * DAY_MS);
+  const to = options.until ?? now;
+  const from = options.since ?? new Date(to.getTime() - windowDays * DAY_MS);
+  const actualWindowDays = Math.max(1, Math.ceil((to.getTime() - from.getTime()) / DAY_MS));
   const scope = options.scope ?? 'operational';
   const timeline = await readStrategyRunTimeline(ctx, {
     strategyId,
     scope,
     ...(scope === 'operational' ? { publication: 'published' as const } : {}),
     since: from,
+    until: to,
     limit: 100,
   });
   const allRuns = timeline.entries.map((entry) => entry.run);
@@ -488,7 +493,7 @@ export const collectStrategyInsightFacts = async (
   const facts: z.infer<typeof StrategyInsightFactSchema>[] = [
     {
       id: 'runs:window',
-      label: `${windowDays} 天 ${scope} 运行`,
+      label: `${actualWindowDays} 天 ${scope} 运行`,
       value: `${allRuns.length} 次运行，${usableRuns.length} 次可用，${allRuns.filter((run) => run.status === 'failed').length} 次失败`,
       evidenceIds: evidenceIds(allRuns.map((run) => run.id)),
     },
@@ -553,6 +558,9 @@ export const collectStrategyInsightFacts = async (
     limitations.push('部分信号尚未到观察期或数据不可用，统计存在缺失。');
   }
   limitations.push('事实观察不是回测，不包含成交、费用、滑点或可交易性假设。');
+  if (options.since !== undefined || options.until !== undefined) {
+    limitations.push('历史运行窗口按开始时间筛选；行业目录和 AlertPlan 配置按当前状态读取。');
+  }
 
   return StrategyInsightFactsSchema.parse({
     scope,
@@ -560,7 +568,7 @@ export const collectStrategyInsightFacts = async (
       ? {}
       : { evaluationSessionId: options.evaluationSessionId }),
     strategy: { id: strategy.id, name: strategy.name },
-    window: { days: windowDays, from, to: now },
+    window: { days: actualWindowDays, from, to },
     factsAsOf: now,
     ...(observationAsOf === undefined ? {} : { observationAsOf }),
     runs: {
@@ -585,12 +593,22 @@ export const collectStrategyInsightFacts = async (
   });
 };
 
-export const GetStrategyInsightFactsInput = z.object({
-  strategyId: z.string().min(1),
-  windowDays: z.number().int().min(7).max(180).default(30),
-  scope: z.enum(['operational', 'evaluation']).default('operational'),
-  evaluationSessionId: z.string().min(1).optional(),
-});
+export const GetStrategyInsightFactsInput = z
+  .object({
+    strategyId: z.string().min(1),
+    windowDays: z.number().int().min(7).max(180).default(30),
+    since: z.coerce.date().optional(),
+    until: z.coerce.date().optional(),
+    scope: z.enum(['operational', 'evaluation']).default('operational'),
+    evaluationSessionId: z.string().min(1).optional(),
+  })
+  .refine(
+    (input) => input.since === undefined || input.until === undefined || input.since <= input.until,
+    {
+      path: ['until'],
+      message: 'until 必须不早于 since',
+    },
+  );
 export const GetStrategyInsightFactsOutput = StrategyInsightFactsSchema;
 
 export const getStrategyInsightFactsTool = defineTool({
@@ -602,6 +620,8 @@ export const getStrategyInsightFactsTool = defineTool({
   handler: async (input, ctx) => {
     const facts = await collectStrategyInsightFacts(input.strategyId, input.windowDays, ctx, {
       scope: input.scope,
+      ...(input.since === undefined ? {} : { since: input.since }),
+      ...(input.until === undefined ? {} : { until: input.until }),
       ...(input.evaluationSessionId === undefined
         ? {}
         : { evaluationSessionId: input.evaluationSessionId }),
@@ -670,6 +690,8 @@ export const generateStrategyInsightTool = defineTool({
   handler: async (input, ctx) => {
     const facts = await collectStrategyInsightFacts(input.strategyId, input.windowDays, ctx, {
       scope: input.scope,
+      ...(input.since === undefined ? {} : { since: input.since }),
+      ...(input.until === undefined ? {} : { until: input.until }),
       ...(input.evaluationSessionId === undefined
         ? {}
         : { evaluationSessionId: input.evaluationSessionId }),

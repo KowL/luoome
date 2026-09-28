@@ -199,6 +199,40 @@ describe('strategy insight', () => {
     ).toBe(true);
   });
 
+  it('历史窗口按运行开始时间截断，后续运行与其观察不混入旧周复盘', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-08-15T10:00:00.000Z') });
+    await seedInsight(ctx);
+
+    const oldWeek = await getStrategyInsightFactsTool.execute(
+      {
+        strategyId: 'insight-strategy',
+        since: '2026-07-27T00:00:00.000Z',
+        until: '2026-07-31T15:59:59.999Z',
+      },
+      ctx,
+    );
+    expect(oldWeek).toMatchObject({
+      ok: true,
+      data: {
+        runs: { total: 0, usable: 0 },
+        currentSelection: { selectedCount: 0 },
+      },
+    });
+    expect(oldWeek.ok && oldWeek.data.observations.every((item) => item.total === 0)).toBe(true);
+    const sourceWeek = await getStrategyInsightFactsTool.execute(
+      {
+        strategyId: 'insight-strategy',
+        since: '2026-08-03T00:00:00.000Z',
+        until: '2026-08-09T15:59:59.999Z',
+      },
+      ctx,
+    );
+    expect(sourceWeek).toMatchObject({
+      ok: true,
+      data: { runs: { total: 1, usable: 1 }, currentSelection: { selectedCount: 1 } },
+    });
+  });
+
   it('AI 输出只能引用事实层提供的 fact id', async () => {
     const base = await buildTestContext({ clock: () => now });
     await seedInsight(base);

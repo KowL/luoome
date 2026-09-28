@@ -73,6 +73,7 @@ const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
   ...(row.lastDeliveryAttemptAt === null
     ? {}
     : { lastDeliveryAttemptAt: row.lastDeliveryAttemptAt }),
+  ...(row.deliveryCompletedAt === null ? {} : { deliveryCompletedAt: row.deliveryCompletedAt }),
   evalSnapshot: row.evalSnapshot as Record<string, unknown>,
   ...(row.feedback !== null ? { feedback: row.feedback as WatchTrigger['feedback'] & string } : {}),
   ...(row.feedbackAt !== null ? { feedbackAt: row.feedbackAt } : {}),
@@ -95,6 +96,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
   ): Promise<boolean> {
     for (const trigger of input.triggers) assertWatchTriggerInvariants(trigger);
+    for (const trigger of input.auditTriggers ?? []) assertWatchTriggerInvariants(trigger);
     for (const state of input.states) WatchRuleStateSchema.parse(state);
     return this.db.transaction((tx) => {
       const lease = tx
@@ -105,9 +107,28 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         )
         .get();
       if (!lease) return false;
+      for (const id of input.invalidatePending?.triggerIds ?? []) {
+        const row = tx.select().from(watchTriggers).where(eq(watchTriggers.id, id)).get();
+        if (row?.deliveryStatus !== 'pending')
+          throw new Error(`pending watch delivery not found: ${id}`);
+        tx.update(watchTriggers)
+          .set({
+            deliveryStatus: 'invalidated',
+            deliveryCompletedAt: input.now,
+            notified: false,
+            evalSnapshot: {
+              ...row.evalSnapshot,
+              publicationCheckedAt: input.now.toISOString(),
+              publicationReason: input.invalidatePending?.reason,
+            },
+          })
+          .where(eq(watchTriggers.id, id))
+          .run();
+      }
       const triggers = new DrizzleWatchTriggerRepository(tx);
       const states = new DrizzleWatchRuleStateRepository(tx);
       for (const trigger of input.triggers) triggers.put(trigger);
+      for (const trigger of input.auditTriggers ?? []) triggers.put(trigger);
       for (const state of input.states) states.put(state);
       return true;
     });
@@ -157,6 +178,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         deliveryStatus: 'pending',
         deliveryAttempts: sql`coalesce(${watchTriggers.deliveryAttempts}, case when ${inAttempted()} then 1 else 0 end) + 1`,
         lastDeliveryAttemptAt: at,
+        deliveryCompletedAt: null,
       })
       .where(inArray(watchTriggers.id, [...ids]))
       .run();
@@ -189,6 +211,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         notificationId: trigger.notificationId ?? null,
         deliveryAttempts: trigger.deliveryAttempts ?? null,
         lastDeliveryAttemptAt: trigger.lastDeliveryAttemptAt ?? null,
+        deliveryCompletedAt: trigger.deliveryCompletedAt ?? null,
         evalSnapshot: trigger.evalSnapshot,
         feedback: trigger.feedback ?? null,
         feedbackAt: trigger.feedbackAt ?? null,
@@ -207,6 +230,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
           notificationId: trigger.notificationId ?? null,
           deliveryAttempts: trigger.deliveryAttempts ?? null,
           lastDeliveryAttemptAt: trigger.lastDeliveryAttemptAt ?? null,
+          deliveryCompletedAt: trigger.deliveryCompletedAt ?? null,
           evalSnapshot: trigger.evalSnapshot,
           notified: trigger.notified,
         },
@@ -418,6 +442,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     ids: readonly string[],
     status: DeliveryStatus,
     notificationId?: string,
+    completedAt?: Date,
   ): Promise<void> {
     if (ids.length === 0) return;
     const isAttempted = (ATTEMPTED as readonly DeliveryStatus[]).includes(status);
@@ -426,6 +451,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
       .set({
         deliveryStatus: status,
         notificationId: notificationId ?? null,
+        ...(completedAt === undefined ? {} : { deliveryCompletedAt: completedAt }),
         notified: isAttempted,
       })
       .where(inArray(watchTriggers.id, ids as string[]))

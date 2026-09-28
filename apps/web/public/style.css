@@ -655,6 +655,7 @@ body {
 
 .report-sheet-actions {
   display: flex;
+  max-width: 390px;
   align-items: flex-start;
   justify-content: flex-end;
   flex-wrap: wrap;
@@ -846,6 +847,7 @@ body {
 
   .report-sheet-actions {
     justify-content: flex-start;
+    max-width: none;
   }
 
   .report-source-row {
@@ -3008,21 +3010,24 @@ html.has-bg-image .bg-layer {
   border-color: rgba(86, 184, 240, 0.3);
 }
 
-.badge-delivery-failed {
+.badge-delivery-failed,
+.badge-delivery-expired {
   color: var(--danger);
   background: var(--pos-soft);
   border-color: rgba(224, 72, 79, 0.3);
 }
 
 .badge-delivery-suppressed-cooldown,
-.badge-delivery-suppressed-daily-limit {
+.badge-delivery-suppressed-daily-limit,
+.badge-delivery-unverifiable {
   color: var(--warning);
   background: rgba(217, 119, 6, 0.1);
   border-color: rgba(217, 119, 6, 0.3);
 }
 
 .badge-delivery-not-requested,
-.badge-delivery-fallback-log {
+.badge-delivery-fallback-log,
+.badge-delivery-invalidated {
   color: var(--muted);
   background: rgba(72, 86, 108, 0.08);
   border-color: var(--line);
@@ -3115,6 +3120,12 @@ html.has-bg-image .bg-layer {
 /* 触发卡片：正文给「为什么触发」，内部标识折叠进 details */
 .trigger-why {
   margin: 2px 0 0;
+}
+
+.trigger-publication-reason {
+  margin: 2px 0 0;
+  color: var(--warning);
+  font-size: var(--text-sm);
 }
 
 .entity-evidence > summary {
@@ -9550,6 +9561,40 @@ body > .modal {
   background: var(--accent-soft);
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
+}
+
+.dashboard-closing-report {
+  margin-bottom: var(--space-4);
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(105deg, var(--accent-soft), transparent 52%), var(--surface);
+}
+
+.dashboard-closing-report .card-header {
+  align-items: start;
+}
+
+.dashboard-closing-report h2 {
+  margin: 3px 0 0;
+  font-size: var(--text-md);
+}
+
+.dashboard-closing-summary,
+.dashboard-closing-title {
+  display: grid;
+  gap: 6px;
+}
+
+.dashboard-closing-title a {
+  width: fit-content;
+  font: var(--weight-semibold) var(--text-lg) / 1.4 var(--font-display);
+}
+
+.dashboard-closing-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px var(--space-3);
+  font-size: var(--text-xs);
 }
 
 .dashboard-section-heading {

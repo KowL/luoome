@@ -53,6 +53,7 @@ describe('createDrizzleRepos / ensureSchema', () => {
       );
       handle.db.run(sql`ALTER TABLE watch_triggers DROP COLUMN delivery_attempts`);
       handle.db.run(sql`ALTER TABLE watch_triggers DROP COLUMN last_delivery_attempt_at`);
+      handle.db.run(sql`ALTER TABLE watch_triggers DROP COLUMN delivery_completed_at`);
       ensureSchema(handle.db);
       ensureSchema(handle.db);
       expect(await handle.repos.watchTrigger.findById('legacy-watch')).toMatchObject({
@@ -67,6 +68,220 @@ describe('createDrizzleRepos / ensureSchema', () => {
       });
     } finally {
       handle.close();
+    }
+  });
+
+  it('旧预警行情列放宽约束时保留账户归属和投递完成时间', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      handle.db.run(sql`DROP TABLE watch_triggers`);
+      handle.db.run(sql`
+        CREATE TABLE watch_triggers (
+          id TEXT PRIMARY KEY,
+          alert_plan_id TEXT,
+          pool_id TEXT NOT NULL,
+          stock_id TEXT NOT NULL,
+          rule_kind TEXT NOT NULL,
+          direction TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          evidence TEXT NOT NULL,
+          quote_close REAL NOT NULL,
+          quote_ts INTEGER NOT NULL,
+          notified INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          rule_id TEXT NOT NULL,
+          trigger_type TEXT NOT NULL,
+          priority TEXT NOT NULL,
+          delivery_status TEXT NOT NULL,
+          notification_id TEXT,
+          eval_snapshot TEXT NOT NULL,
+          feedback TEXT,
+          feedback_at INTEGER,
+          event_id TEXT,
+          delivery_attempts INTEGER,
+          last_delivery_attempt_at INTEGER,
+          delivery_completed_at INTEGER
+        )
+      `);
+      const eventAt = new Date('2026-07-27T02:00:00.000Z');
+      const acceptedAt = new Date('2026-07-27T02:00:05.000Z');
+      handle.db.run(sql`
+        INSERT INTO watch_triggers (
+          id, alert_plan_id, pool_id, stock_id, rule_kind, direction, reason,
+          evidence, quote_close, quote_ts, notified, created_at, rule_id,
+          trigger_type, priority, delivery_status, notification_id, eval_snapshot,
+          delivery_attempts, last_delivery_attempt_at, delivery_completed_at
+        ) VALUES (
+          'legacy-not-null', 'plan-1', 'pool-1', 'stock-1', 'price-level', 'buy',
+          '旧记录', '["legacy"]', 10, ${eventAt.getTime()}, 1, ${eventAt.getTime()},
+          'rule-1', 'triggered', 'normal', 'sent', 'notification-1', '{}',
+          1, ${eventAt.getTime()}, ${acceptedAt.getTime()}
+        )
+      `);
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      expect(await handle.repos.watchTrigger.findById('legacy-not-null')).toMatchObject({
+        alertPlanId: 'plan-1',
+        deliveryAttempts: 1,
+        lastDeliveryAttemptAt: eventAt,
+        deliveryCompletedAt: acceptedAt,
+      });
+      const quoteColumns = handle.db.all<{ name: string; notnull: number }>(
+        sql`PRAGMA table_info(watch_triggers)`,
+      );
+      expect(quoteColumns.find((column) => column.name === 'quote_close')?.notnull).toBe(0);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('旧报告按周期唯一索引升级为版本索引，保留原报告且迁移幂等', async () => {
+    const handle = createDrizzleRepos(':memory:');
+    try {
+      await handle.repos.report.upsertForPeriod(makeReport('legacy-report'));
+      handle.db.run(sql`DROP INDEX reports_period_version_unique`);
+      handle.db.run(sql`ALTER TABLE reports DROP COLUMN supersedes_report_id`);
+      handle.db.run(sql`ALTER TABLE reports DROP COLUMN version`);
+      handle.db.run(sql`ALTER TABLE reports DROP COLUMN delivery_attempt_id`);
+      handle.db.run(sql`
+        CREATE UNIQUE INDEX reports_period_unique
+        ON reports (kind, scope_key, period_start, period_end)
+      `);
+
+      ensureSchema(handle.db);
+      ensureSchema(handle.db);
+      const original = await handle.repos.report.findById('legacy-report');
+      expect(original?.version).toBe(1);
+      expect(
+        handle.db.all<{ name: string }>(sql`PRAGMA table_info(reports)`).map((row) => row.name),
+      ).toContain('delivery_attempt_id');
+      const supplement = await handle.repos.report.upsertForPeriod(
+        makeReport('supplement-report', { version: 2, supersedesReportId: 'legacy-report' }),
+      );
+      expect(supplement.version).toBe(2);
+      expect((await handle.repos.report.findById('legacy-report'))?.id).toBe('legacy-report');
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('两个独立进程并发发布同一收盘报告版本时保留唯一主版与补充版', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'luoome-report-concurrency-'));
+    const dbPath = join(directory, 'reports.sqlite');
+    createDrizzleRepos(dbPath).close();
+    const script = `
+      import { createDrizzleRepos } from ${JSON.stringify(new URL('./client.ts', import.meta.url).pathname)};
+      import { ReportSchema } from '@luoome/core';
+      const handle = createDrizzleRepos(process.env.REPORT_CONCURRENCY_DB);
+      try {
+        const report = ReportSchema.parse(JSON.parse(process.env.REPORT_CONCURRENCY_INPUT));
+        const saved = await handle.repos.report.upsertForPeriod(report);
+        console.log(JSON.stringify({ id: saved.id, version: saved.version }));
+      } finally { handle.close(); }
+    `;
+    const publish = async (report: ReturnType<typeof makeReport>) => {
+      const child = Bun.spawn([process.execPath, '-e', script], {
+        // Bun -e 从 cwd 解析 workspace 包；子进程需在 db package 根目录运行。
+        cwd: new URL('../', import.meta.url).pathname,
+        env: {
+          ...process.env,
+          REPORT_CONCURRENCY_DB: dbPath,
+          REPORT_CONCURRENCY_INPUT: JSON.stringify(report),
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(code, stderr).toBe(0);
+      return JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as {
+        id: string;
+        version: number;
+      };
+    };
+    try {
+      const [mainA, mainB] = await Promise.all([
+        publish(makeReport('main-a')),
+        publish(makeReport('main-b')),
+      ]);
+      expect(mainA).toEqual(mainB);
+      expect(mainA.version).toBe(1);
+
+      const [supplementA, supplementB] = await Promise.all([
+        publish(makeReport('supplement-a', { version: 2, supersedesReportId: mainA.id })),
+        publish(makeReport('supplement-b', { version: 2, supersedesReportId: mainA.id })),
+      ]);
+      expect(supplementA).toEqual(supplementB);
+      expect(supplementA.version).toBe(2);
+
+      const handle = createDrizzleRepos(dbPath);
+      try {
+        expect(
+          (await handle.repos.report.list({ kind: 'closing' })).map((item) => item.version),
+        ).toEqual([2, 1]);
+        expect((await handle.repos.report.findById(mainA.id))?.version).toBe(1);
+      } finally {
+        handle.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('两个独立进程只能领取同一报告的一次通知投递', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'luoome-report-delivery-'));
+    const dbPath = join(directory, 'reports.sqlite');
+    const handle = createDrizzleRepos(dbPath);
+    await handle.repos.report.upsertForPeriod(makeReport('delivery-race'));
+    handle.close();
+    const script = `
+      import { createDrizzleRepos } from ${JSON.stringify(new URL('./client.ts', import.meta.url).pathname)};
+      const handle = createDrizzleRepos(process.env.REPORT_DELIVERY_DB);
+      try {
+        const now = new Date('2026-07-03T01:00:00.000Z');
+        const claimed = await handle.repos.report.claimDelivery({
+          id: 'delivery-race', attemptId: process.env.REPORT_DELIVERY_ATTEMPT, now,
+          stalePendingBefore: new Date(now.getTime() - 300000),
+          failedRetryBefore: new Date(now.getTime() - 900000),
+        });
+        console.log(JSON.stringify({ claimed }));
+      } finally { handle.close(); }
+    `;
+    const claim = async (attemptId: string): Promise<boolean> => {
+      const child = Bun.spawn([process.execPath, '-e', script], {
+        cwd: new URL('../', import.meta.url).pathname,
+        env: {
+          ...process.env,
+          REPORT_DELIVERY_DB: dbPath,
+          REPORT_DELIVERY_ATTEMPT: attemptId,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(code, stderr).toBe(0);
+      return (JSON.parse(stdout.trim().split('\n').at(-1) ?? '') as { claimed: boolean }).claimed;
+    };
+    try {
+      const results = await Promise.all([claim('worker-a'), claim('worker-b')]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      const reopened = createDrizzleRepos(dbPath);
+      try {
+        expect((await reopened.repos.report.findById('delivery-race'))?.deliveryStatus).toBe(
+          'pending',
+        );
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 

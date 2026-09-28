@@ -42,9 +42,11 @@ import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
 import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
+import { getClosingBatchAuditTool } from './tools/get-closing-batch-audit.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
 import { getHoldingTool } from './tools/get-holding.js';
+import { getIntradayDeliveryAuditTool } from './tools/get-intraday-delivery-audit.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
 import { getPreviousClosesTool } from './tools/get-previous-closes.js';
 import { getReportTool } from './tools/get-report.js';
@@ -455,6 +457,8 @@ export const toolRegistry: Registry = createRegistry([
   updateHoldingTool,
   closeHoldingTool,
   listWatchTriggersTool,
+  getIntradayDeliveryAuditTool,
+  getClosingBatchAuditTool,
   // v0.7 策略预警：触发反馈（write）
   setWatchTriggerFeedbackTool,
   // ruo 迁移 Phase 1：研究档案 + 公司事件 + 运行状态（docs/ddd/ruo-feature-migration-detailed-design.md §7）

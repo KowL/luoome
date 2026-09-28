@@ -62,6 +62,32 @@ describe('save_watch_trigger', () => {
     expect(await ctx.repos.watchTrigger.listRecent({})).toEqual([]);
   });
 
+  it('发布复查丢弃的触发持久化，但不生成事后观察样本', async () => {
+    const ctx = await buildTestContext();
+    expect(
+      await watchExecutionTool.execute({ action: 'acquire', owner: 'audit-owner' }, ctx),
+    ).toMatchObject({
+      ok: true,
+      data: { acquired: true },
+    });
+    const audit = {
+      ...triggerInput(),
+      id: 'expired-audit',
+      deliveryStatus: 'expired' as const,
+      notified: false,
+      evalSnapshot: { publicationReason: '超过 10 分钟' },
+    };
+    const result = await commitWatchEvaluationTool.execute(
+      { owner: 'audit-owner', triggers: [], auditTriggers: [audit], states: [] },
+      ctx,
+    );
+    expect(result).toMatchObject({ ok: true, data: { saved: 1 } });
+    expect(await ctx.repos.watchTrigger.findById(audit.id)).toMatchObject({
+      deliveryStatus: 'expired',
+    });
+    expect(await ctx.repos.signalObservation.list({ sourceIds: [audit.id] })).toEqual([]);
+  });
+
   it('落库：合法 trigger → 持久化 + 字段一致', async () => {
     const ctx = await buildTestContext();
     const r = await saveWatchTriggerTool.execute(triggerInput(), ctx);

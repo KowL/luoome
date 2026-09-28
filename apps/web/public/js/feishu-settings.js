@@ -87,8 +87,8 @@ const testFeishuSettings = async (setStatus) => {
     );
     return;
   }
-  setPanelState('测试消息已送达', 'ready');
-  setStatus('飞书测试消息发送成功，请在目标群确认');
+  setPanelState('渠道已受理，设备未验证', 'ready');
+  setStatus('飞书测试消息已提交渠道，请在目标群确认是否收到');
 };
 
 const initFeishuSettings = (setStatus) => {

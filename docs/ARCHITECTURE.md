@@ -300,7 +300,7 @@ Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 rep
   SignalObservation。样本未到期保持 pending，不阻塞其他样本；配置的 T+n 节点完成后只对受影响
   股票调用 `strategy-recommendations`。
 
-`luoome start` / `luoome web serve` 在进程内每分钟唤醒 `run-strategy-schedules`，启动时也立即
+`luoome start` / `luoome web serve` 在进程内每分钟唤醒 `strategy-daily-cycle`，启动时也立即
 检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务的外部 cron
 只作为幂等补偿。这些 workflow 都只通过 tool 编排，不直接访问 repository。推荐或通知失败不会
 回滚已原子提交的 StrategyRun，也不会触发交易。
@@ -311,10 +311,27 @@ WorkflowRun 阶段审计与 `get_strategy_reliability_summary` 已落地；汇�
 不能把设计目标误报为已验收事实，也不设置固定交易日数量门禁。
 
 **MVP 2.0 盘后/盘中切片**：`strategy-daily-cycle` 一次 tick 会领取全部到期 schedule（调用方的
-`limit` 只决定首批，剩余继续 drain），然后为账户/交易日只编排一次 `trading-plan-daily-cycle` 与
-`closing-report`。触发条件是「本轮领到到期 schedule」，而不是「至少一个策略跑成功」：全部失败或
-全部不可运行时仍生成当日计划批次与报告，避免静默无产物。`closing-report` 的 `scheduled` 模式在
-发布前先按 `kind/scope/periodEnd` 读回同键报告，已 `sent`/`fallback-log` 时不重复生成与投递。
+`limit` 只决定首批，剩余继续 drain）。交易日 16:30 后按账户及当日已发布策略运行指纹领取
+`account-plan-batch`，批次身份还包含账户账本摘要；持仓或现金变化后旧批次不能充当当前账户结果。
+批次执行 `trading-plan-daily-cycle` 并持久化完成、部分或阻断状态。领取与结束
+均使用原子操作及令牌校验；超时运行被收敛后可重试。Web 有独立的每分钟截止 tick，避免策略与
+计划批次耗时阻塞 18:00 主报告；`closing-report-cutoff` 读取持久化批次状态，即使无 schedule
+或批次未完成，也按账户发布并显式标 partial。当日预期策略均有已发布正式运行且日循环领取
+已结束、全部账户计划批次完成或部分完成时，可在 18:00 前按账户提前发布；未来仍有预期运行、
+策略分析仍在进行或账户批次阻断时等待，不发送阶段性日报。
+重复 tick 不重建主报告。后到策略结果或账户账本变化后重跑的计划批次生成补充版本，原版本按
+ID 或周期版本可读；只有核心缺口补齐或计划行动条件变化才再次通知。
+`web serve` 的盘中账户计划调度每分钟在交易日上午/下午时段顺序检查全部账户，启动时立即检查；
+每个账户仍经 `intraday-trading-plan-watch` workflow 和共享预警租约求值、复查与投递。
+调度重叠 tick 被跳过，停机及午休/闭市停止新账户轮次；`luoome start` 则在同一 CLI
+盯盘循环内先顺序检查账户计划，再运行 AlertPlan，避免争抢共享租约。`start --no-watch` 关闭这两项。
+交易时段由 core 按上海时间和 A 股休市日统一判定为 `[09:30,11:30)`、`[13:00,15:00)`；
+工作流本身也在开始、发布前及每次发送前复核时段，跨过午休或收盘的候选失效并留审计；
+已经提交但尚未发送的触发在同一预警租约和事务中作废并释放对应边沿，使下一交易时段能重新求值。
+若进程在提交后、中断投递前退出，下一交易时段会核对该规则上一次触发；遗留 `pending`
+在同一租约内作废并释放边沿，`failed` 保留失败审计但也释放边沿，重新以当时的行情求值。
+失败投递仅在本次连续竞价时段内重试，午休或隔夜后的新信号不再与旧重试同时发送。
+盘后、盘中、绩效与自治后台调度均要求 write 和 external 同时显式开放。
 
 ### 4.7 Adapter（adapters 包）
 
@@ -394,6 +411,8 @@ Tushare 时必须配置 `TUSHARE_TOKEN`（`TUSHARE_URL` 可选，覆盖默认网
 缺省 `https://fuyao.aicubes.cn`），非法配置在启动期抛错。
 详见 [tushare-market-adapter-design](./ddd/tushare-market-adapter-design.md) 与
 [fuyao-market-adapter-design](./ddd/fuyao-market-adapter-design.md)。
+fuyao 快照信封时间在休市日仍随请求更新，逐股行无行情事件时间；其报价标为
+`timestampSource=retrieval`，全市场快照不填 `observedAt/dataAsOf`，不能作为盘中行动的可信时间证据。
 
 连板天梯、龙虎榜、北向资金、要闻与 A 股日级情绪都不进 `MarketDataManager`，分别由
 `create*ManagerFromEnv` 独立装配；`LUOOME_*_SOURCES` 与 `LUOOME_MARKET_SOURCES` 同构
@@ -507,8 +526,9 @@ coverage 与运行时健康观测的唯一事实来源。生产 `MarketDataManag
 一次性 migration decoder（`schema_migrations` runner 与 verify 命令）已随旧模型整体移除；
 ensureSchema 只保留活表的幂等启动迁移（加列 / 结构演进），存量库的旧物理表不再维护。
 
-**Vibe A 股报告迁移 Phase 1**：新增 `Report` 结构化事实简报，按
-`(kind, scopeKey, periodStart, periodEnd)` 逻辑键幂等保存。正文只允许受限
+**Vibe A 股报告迁移 Phase 1**：新增 `Report` 结构化事实简报；收盘报告按
+`(kind, scopeKey, periodStart, periodEnd, version)` 保存不可变版本，周期查询返回最新版，
+旧版本按 ID 或指定 version 可读；其它报告沿用同周期更新。正文只允许受限
 section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺失时必须为
 `partial` 并保存原因。`ReportRepository` 同时提供 in-memory 与 Drizzle 实现；
 `get_report` / `list_reports` / `render_report` 为 read，`save_report` /
@@ -524,8 +544,26 @@ section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺�
 **Vibe A 股报告迁移 Phase 3**：`opening-report`、`closing-report` 与
 `weekly-report` 共用报告 runner，经 `ctx.tools.*` 采集证据、保存 Report、记录
 `WorkflowRun` 并执行通知状态迁移。定时模式默认经飞书通知；未配置飞书时保存日志并记 `fallback-log`，`notified=false`。
-通知失败不回滚报告，只把投递状态
-记为 `failed`、运行审计记为 `partial`。CLI 通过 `workflow run ... --mode` 触发，
+通知失败不回滚报告，只把投递状态记为 `failed`、运行审计记为 `partial`。报告投递通过
+持久领取令牌互斥，失败后等待 15 分钟、遗留 `pending` 超过 5 分钟可接管；
+18:00 截止 tick 对已有但未完成投递的收盘报告重试，仍使用同一报告版本与通知身份。
+旧执行者失租后不能改写新状态；外部飞书 webhook 本身不承诺恰好一次送达。
+`sent` 仅表示飞书渠道受理，接口和 Web 不把它表述为用户设备已收到；设备回执仍需独立验收。
+账户收盘报告另外读取前一交易日的计划版本、盯盘触发和已登记交易，三类事实分开展示；
+仅有触发或同股票同日期不能推断实际成交，未登记也不能证明未交易。
+计划版本按 `createdSince/createdUntil` 在应用 `limit` 前过滤，历史版本不会被较新的版本挤出复盘窗口。
+隔日补发时按目标交易日封闭区间查询触发，避免将次日事件写入旧报告；
+后补交易只进入不可变补充版本，主版保持原样。
+周报预警反馈按目标周封闭区间和完整分布统计；账户周报只计入该账户计划监控提醒，
+未归属账户的全局关注预警不混入账户反馈率。策略复盘的运行和洞察也按目标周开始时间过滤，
+周后暂停的策略仍保留历史正式运行。洞察中的行业目录与 AlertPlan 配置仍为当前状态，
+历史窗口会明确标记这一限制。
+`get_closing_batch_audit` 按上海日期只读聚合 `account-plan-batch` 的 WorkflowRun、当前账户清单及
+收盘主版/补充版，显示 16:30 批次开始、18:00 截止、报告生成延迟与通知状态。
+审计返回 `tradingDay`；休市日当前账户不计入应出报分母，已有异常批次或报告仍保留在结果中。
+Web `/api/reports/closing-audit` 仅返回当前选中账户；全账户核对使用 Tool。
+历史预期账户从当前清单及留存的批次/报告推断，已删除且无留痕的账户无法据此恢复。
+CLI 通过 `workflow run ... --mode` 触发，
 Web 通过同源 Origin 校验的 `/api/reports/run/:kind` 手动触发。
 
 **Strategy 研究事实**：指标快照可包含最新价、动量、均线与 Bollinger 字段。规则求值的
@@ -829,6 +867,10 @@ type ToolError =
 - `trading-plan-daily-cycle`：账户级盘后计划批次 —— **以当前持仓（账本 Holding）为唯一复核来源**，
   逐个跑 `analyze_position`（同时把当日行情落库）后再派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
   候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情或账本未对齐）时不激活精确仓位计划。
+  盘中持仓估值与行动候选复用 core 的行情资格判断：须有上游事件时间，事件与当前时点均在交易时段，
+  抓取完成不晚于判断时点且事件距判断不超过 120 秒。盘外实时报价仍须有上游时间；规范日线的收盘价
+  按既有交易日口径使用。缺合格行情时，最近报价只保留参考估值和限制说明，账户事实为 `unavailable`，
+  `totalAssets` / `stockMarketValue` 为 `null`，不能借参考价激活其它股票的精确预算或行动计划。
   候选（`analyze_strategy_candidate`）的 `watch` 也必须给出条件性价格计划（区间/买点/目标仓位/目标价/止损），
   缺价位时计划标为草案并写明原因；规则兜底建议（AI 不可用）同样只留草案。
 - `intraday-trading-plan-watch`：先按有效计划标的与全部当前持仓的并集分批刷新行情（每批最多 100 个），
@@ -836,15 +878,27 @@ type ToolError =
   入场条件按 ALL 合成单个边沿，风险/退出命中阻止入场提醒；风险直接通知原始触发事实与计划版本，
   不调用 AI 或自动改写计划；发布前重新校验账户事实指纹、
   计划版本、行情时效、条件是否仍成立与 10 分钟发布时限（以上游事件时间为计时起点），
+  行情刷新和失败重试保留首次可信事件时间，复查时在行情请求结束后重新读取时钟，不能重置该时限，
   在同一租约内提交 Trigger + WatchRuleState。只监控与当前账户事实指纹一致的计划；单条候选过期、
   失效或条件恢复只丢弃该条且不消耗该边沿，不阻断同轮其它信号；失败/中断投递作为重试候选。
   全程复用共享预警租约与续租保护；试跑不保存 Trigger/边沿/投递次数。通知披露下一步、反证和卖出限制。
+  盘中报价还要求 `fetchedAt` 不晚于决策时钟；触发快照保存首次上游事件、首次取得和发布复查时间，
+  WatchTrigger 保存最近一次投递尝试与完成时间。`sent` 的完成时间仅用于计算渠道受理耗时，
+  不代表设备送达。单条候选在发布复查中超时、缺可信事件时间或失效时，
+  同租约原子保存 `expired` / `unverifiable` / `invalidated` 触发审计，不推进边沿、
+  不生成 SignalObservation，也不进入投递重试；已形成候选后的整轮账户事实、计划或行情读取失败
+  同样保存为 `invalidated` / `unverifiable` 审计。候选形成前的数据源失败只保留运行错误，
+  不伪造不存在的市场事件。`get_intraday_delivery_audit` 按账户与上海自然日读取完整触发集合，
+  将渠道受理的 10 分钟内、超时、时点不可核验与未受理状态分别计数；P95 只对时点可核验的
+  渠道受理样本计算，同时展示全部候选分母，不把渠道受理当作设备送达。
 - 预警执行：`intraday-watch` 与 `evaluate-event-rules` 共用 SQLite 租约（120 秒有效期、30 秒心跳，
   工具调用前检查所有权）；并发调用返回可重试错误。`commit_watch_evaluation` 在同一事务校验 owner
   并提交 Trigger + WatchRuleState，试跑不进入提交。通知前保存 deliveryAttempts/lastDeliveryAttemptAt，
   后续轮次补偿当日 failed/pending（最多三次，退避 1/5 分钟，停用计划/移除成员/额度不足时不发送）。
   每日额度包含重试和已开始发送的 pending；WatchRun 本轮触发列表可以包含同 id 的补偿投递。
   飞书没有端到端幂等确认：外部已接收但本地回写前崩溃时，补偿仍可能重复，不能承诺恰好一次送达。
+  WatchRun 的历史 `delivered` 计数只表示渠道受理；Dashboard API 投影为 `channelAccepted`，
+  `deviceDelivered` 保持 `null`，直到有真实设备回执。
   `render_report(format=notification)` 从结构化报告生成有长度预算的移动摘要，不截取完整 Markdown；
   `markdown/plain-text` 继续保留完整证据。列表可保存 `notificationSummary` 作为生成时的阅读投影，
   旧报告缺少该字段时仅提供核对入口，不从长文本猜测交易结论。飞书适配器只在卡头展示标题。

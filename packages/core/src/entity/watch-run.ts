@@ -16,7 +16,7 @@ export const WatchRunSchema = z.object({
   triggered: z.number().int().nonnegative(),
   /** 保留旧契约：尝试投递的触发数，包含失败和仅日志。 */
   notified: z.number().int().nonnegative(),
-  /** 缺省表示历史轮次未记录，不能推断为 0。 */
+  /** 历史字段：渠道受理数，不表示设备送达；缺省表示未记录，不能推断为 0。 */
   delivered: z.number().int().nonnegative().optional(),
   unknownRules: z.number().int().nonnegative().optional(),
   suppressedByCooldown: z.number().int().nonnegative(),

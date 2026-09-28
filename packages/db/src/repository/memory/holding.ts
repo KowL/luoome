@@ -41,6 +41,10 @@ export class InMemoryHoldingRepository implements HoldingRepository {
   }
 
   async listByAccount(accountId: string): Promise<Holding[]> {
+    return this.snapshotByAccount(accountId);
+  }
+
+  snapshotByAccount(accountId: string): Holding[] {
     return [...this.items.values()]
       .filter((h) => h.accountId === accountId)
       .sort((a, b) => a.id.localeCompare(b.id));

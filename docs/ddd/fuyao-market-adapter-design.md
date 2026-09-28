@@ -59,8 +59,9 @@ luoome 的 `DailyBar` 统一前复权（`adjustment: 'qfq'`）。fuyao `prices/h
 
 ### 3.6 时效语义
 
-- 行情快照与 K 线的 `data.timestamp` 是上游最新有效时间，作为 binding 的 `dataAsOf` 提取来源；
-- `timestampSource` 置 `upstream`；`observedAt` 用 `data.timestamp`，`fetchedAt` 用本地时钟，满足 `QuoteSchema` 的 `observedAt ≤ fetchedAt` 不变量；
+- 行情快照信封的 `data.timestamp` 在休市日仍随请求更新，不能作为逐股行情发生时间；快照行没有逐股时间字段；
+- `Quote` 的 `observedAt` 暂以抓取时钟记录，`timestampSource='retrieval'`，不能用于盘中行动资格；全市场快照不填写 `observedAt/dataAsOf`，指数只作为延时源并以抓取时钟显示；
+- 历史 K 线仍以逐根 `date_ms` 代表对应交易日，不从快照信封推断 K 线时效；
 - `tickers/search` 无数据时效语义，不参与 `dataAsOf`。
 
 ### 3.7 失败语义与快速失败
@@ -133,7 +134,7 @@ GET /api/a-share/prices/snapshot?thscodes=600519.SH,000001.SZ
 → item[]: thscode/ticker/last_price/price_change/price_change_ratio_pct/
           open_price/high_price/low_price/prev_price/volume/turnover
 → Quote { price: last_price, open/high/low/preClose, volume（股）, turnover,
-          observedAt: data.timestamp, timestampSource: 'upstream', source: 'fuyao' }
+          observedAt: fetchedAt, timestampSource: 'retrieval', source: 'fuyao' }
 ```
 
 批量去重保序由服务端完成；上游未返回的标的生成 `no_data` 部分失败语义，不伪造占位项。
@@ -184,7 +185,7 @@ interface FuyaoEnvelope<T> {
 }
 ```
 
-`parseFuyaoEnvelope(body)`：`code !== 0` → 按 §5.9 抛结构化 `SourceExecutionError`；`code === 0` 且 `data === null` → `no_data`。信封形状不符（Zod 校验失败）→ `invalid_payload`；非 JSON 响应由 client 在 `res.json()` 处更早拦截为 `invalid_payload`。`data.timestamp` 为 `null`（快照无有效数据）时归一为 `undefined`，由 source 回退本地时钟 + `timestampSource='retrieval'`。
+`parseFuyaoEnvelope(body)`：`code !== 0` → 按 §5.9 抛结构化 `SourceExecutionError`；`code === 0` 且 `data === null` → `no_data`。信封形状不符（Zod 校验失败）→ `invalid_payload`；非 JSON 响应由 client 在 `res.json()` 处更早拦截为 `invalid_payload`。`data.timestamp` 为 `null` 时归一为 `undefined`；行情快照无论信封时间是否存在，都标为仅有抓取时间。
 
 ### 5.9 错误转译
 
@@ -252,7 +253,7 @@ API Key 获取：同花顺账号登录 `https://fuyao.aicubes.cn` → `/admin`�
 ### 10.1 单元测试（`fuyao/{envelope,client,source}.test.ts` + `market/factory.test.ts`，逐条编号）
 
 1. 代码归一：6 位代码加后缀、已带后缀原样、`.BJ`/`.TI`/`.OF`/纯字母 → `unsupported_market`；
-2. snapshot 批量：字段映射到 `Quote`（volume 原样为股、百分数原值保留）、`data.timestamp` → `observedAt` + `timestampSource='upstream'`；
+2. snapshot 批量：字段映射到 `Quote`（volume 原样为股、百分数原值保留），信封时间不冒充逐股发生时间，`timestampSource='retrieval'`；
 3. daily-bars：`adjust=forward` 固定传参、`adjustment='qfq'`、窗口超 10 年抛参数错误；
 4. envelope：`code=0 data=null` → `no_data`；各错误码按 §5.9 转译为结构化 kind；非 JSON / 信封形状不符 → `invalid_payload`；
 5. search：空结果返回空数组（不抛错）；
@@ -275,7 +276,7 @@ fake fetch 注入 fuyao 信封，验证 registry 路由（`LUOOME_MARKET_SOURCES
 
 ### 10.5 端到端验收清单
 
-- [x] 真实 `FUYAO_API_KEY` smoke（2026-08-22，临时脚本 `/tmp/fuyao-smoke.ts`，用完即删）：fetchQuote(600519)、fetchDailyBars（近 30 天 21 根 qfq 日 K）、searchStocks(茅台)、fetchMarketSnapshot（5218 条分页取尽）、fetchIndexQuotes（5 只大盘指数）全链路返回且 `observedAt`/`dataAsOf` 取自信封 `data.timestamp`；
+- [x] 真实 `FUYAO_API_KEY` smoke（2026-08-22，临时脚本 `/tmp/fuyao-smoke.ts`，用完即删）：fetchQuote(600519)、fetchDailyBars（近 30 天 21 根 qfq 日 K）、searchStocks(茅台)、fetchMarketSnapshot（5218 条分页取尽）、fetchIndexQuotes（5 只大盘指数）全链路返回。当时将信封 `data.timestamp` 当作行情时间的判断已撤回，见下方修正；
 - [x] 缺 `FUYAO_API_KEY` 启动期快速失败（buildFuyao 单测）；错误 Key 运行时返回 `code=2003` → `permission`（smoke 验证）；
 - [x] Web 个股行情页在 fuyao 源下渲染正常（2026-08-22，`LUOOME_MARKET_PROVIDER=real LUOOME_MARKET_SOURCES=fuyao` 起 Web，`#market?stockId=600519.SH&range=3m` 实测）：quote 卡片齐全（来源标注 fuyao、非交易日标识正确）、3M 日 K + 均线渲染正常；已知限制照常呈现——名称回退为代码（快照不返回 name）、换手率 `--`；
 - [x] `realtime-index` 放行决策（2026-08-22 静态评估，周六休市无法盘中观察）：**维持只绑 `delayed-index`，不放行**。依据：
@@ -283,6 +284,9 @@ fake fetch 注入 fuyao 信封，验证 registry 路由（`LUOOME_MARKET_SOURCES
   2. 若绑 `realtime-index`，休市 / 延迟场景下指数条会显示"刚刚更新"的假象，违反「Tushare 日线型指数不得进实时接口」同源抑制原则；
   3. `LUOOME_MARKET_SOURCES=fuyao` 单源时 `/api/market/indices` 按既有语义降级为 `{ indices: [], unsupported: true }`（fetch_index_quotes 只路由 realtime-index），行为与 tushare 单源一致，属合法降级而非缺陷。
   后续若要放行，需 fuyao 上游提供真实行情时间戳字段，盘中复核后单独提变更。
+- [x] 2026-09-27 休市日再次实测：A 股快照信封时间距本机抓取仅约 2 秒，逐股行无时间字段；
+  个股/批量报价现统一标 `retrieval`，全市场快照不再填行情观测时间，延时指数只显示抓取时间。
+  真实逐股事件时点仍需具备该字段的其它来源在交易日验证。
 
 ## 11. 后续扩展（不在本设计范围）
 

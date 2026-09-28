@@ -6,33 +6,17 @@
  * - runWatchLoop（在 index.ts 内）负责 IO + 循环 + SIGINT
  */
 
-import type { Quote } from '@luoome/core';
+import { isAshareTradingSession, type Quote } from '@luoome/core';
 
 import {
   BUILTIN_HOLIDAYS,
   defaultHolidaysFilePath,
   type Holiday,
-  isHoliday as isHolidayByCalendar,
   loadHolidaysFromFile,
   mergeHolidayCalendars,
   parseEnvHolidays,
 } from './holidays.js';
 import { luoomeHome } from './paths.js';
-
-/** Asia/Shanghai 时区偏移（+8h，无夏令时）；避免依赖 process.env.TZ / 容器时区漂移。 */
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
-
-/** 把 date 转成 Asia/Shanghai 当日的 wall-clock 数字（小时/分钟/星期）。 */
-const shanghaiParts = (date: Date): { hour: number; minute: number; weekday: number } => {
-  const utcMs = date.getTime();
-  const shMs = (utcMs + SHANGHAI_OFFSET_MS) % (24 * 60 * 60 * 1000);
-  const hour = Math.floor(shMs / (60 * 60 * 1000));
-  const minute = Math.floor((shMs % (60 * 60 * 1000)) / (60 * 1000));
-  // weekday 取 UTC weekday + 偏移（Shanghai = UTC+8，跨日时 weekday 也跟着滚）
-  const shanghaiDate = new Date(utcMs + SHANGHAI_OFFSET_MS);
-  const weekday = shanghaiDate.getUTCDay();
-  return { hour, minute, weekday };
-};
 
 /**
  * 把 `LUOOME_A_SHARE_HOLIDAYS` env、`$LUOOME_HOME/holidays.json`（或
@@ -67,7 +51,7 @@ export const _resetHolidayCache = (): void => {
 };
 
 /**
- * A 股盘中时段判断（北京时间 9:30–11:30 / 13:00–15:00，周一至周五）。
+ * A 股盘中时段判断（北京时间 [9:30,11:30) / [13:00,15:00)，周一至周五）。
  *
  * v0.6 起加入节假日历（默认含 2026 全年；可通过 `LUOOME_A_SHARE_HOLIDAYS` 追加）：
  * - 周末 → 非交易
@@ -80,14 +64,7 @@ export const isTradingHours = (
   date: Date,
   holidays?: ReadonlyMap<number, ReadonlySet<Holiday>>,
 ): boolean => {
-  const cal = holidays ?? getCalendar();
-  if (isHolidayByCalendar(date, cal)) return false;
-  const { hour, minute, weekday } = shanghaiParts(date);
-  if (weekday === 0 || weekday === 6) return false; // 周日 / 周六
-  const t = hour * 60 + minute;
-  const morning = 9 * 60 + 30 <= t && t <= 11 * 60 + 30;
-  const afternoon = 13 * 60 <= t && t <= 15 * 60;
-  return morning || afternoon;
+  return isAshareTradingSession(date, holidays ?? getCalendar());
 };
 
 /**

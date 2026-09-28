@@ -358,6 +358,7 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
       readonly scope?: StrategyRun['scope'];
       readonly publication?: NonNullable<StrategyRun['publication']>['status'];
       readonly since?: Date;
+      readonly until?: Date;
       readonly limit?: number;
     } = {},
   ): Promise<readonly StrategyRun[]> {
@@ -369,7 +370,8 @@ export class InMemoryStrategyRunRepository implements StrategyRunRepository {
           (filter.status === undefined || run.status === filter.status) &&
           (filter.scope === undefined || run.scope === filter.scope) &&
           (filter.publication === undefined || run.publication?.status === filter.publication) &&
-          (filter.since === undefined || run.startedAt >= filter.since),
+          (filter.since === undefined || run.startedAt >= filter.since) &&
+          (filter.until === undefined || run.startedAt <= filter.until),
       )
       .sort(
         (left, right) =>

@@ -134,7 +134,7 @@ describe('trading plan budget', () => {
     expect(result.totalStatus).toBe('passed');
   });
 
-  it('combines concurrent increases and blocks single-stock and total breaches', () => {
+  it('同股多个目标仓位按最高目标预留一次', () => {
     const result = evaluateTradingPlanBudget({
       facts,
       plans: [
@@ -143,22 +143,33 @@ describe('trading plan budget', () => {
           stockId: '600519.SH',
           industry: '食品饮料',
           currentPct: 10,
-          targetPct: 30,
+          targetPct: 20,
         }),
         plan({
           id: 'b',
           stockId: '600519.SH',
           industry: '食品饮料',
           currentPct: 10,
-          targetPct: 30,
+          targetPct: 25,
         }),
       ],
       stocks: new Map([['600519.SH', stock('600519.SH', '食品饮料')]]),
     });
-    expect(result.totalStatus).toBe('blocked');
-    expect(result.allocations.some((item) => item.reasons.includes('single-stock-limit'))).toBe(
-      true,
-    );
+    expect(result.totalStatus).toBe('passed');
+    expect(result.allocations.map((item) => item.incrementalPct)).toEqual([10, 5]);
+    expect(result.proposedStockPct).toBe(45);
+
+    const repeated = evaluateTradingPlanBudget({
+      facts,
+      plans: [
+        plan({ id: 'a', stockId: '600519.SH', currentPct: 10, targetPct: 30 }),
+        plan({ id: 'b', stockId: '600519.SH', currentPct: 10, targetPct: 30 }),
+      ],
+      stocks: new Map(),
+    });
+    expect(repeated.totalStatus).toBe('passed');
+    expect(repeated.allocations.map((item) => item.incrementalPct)).toEqual([20, 0]);
+    expect(repeated.proposedStockPct).toBe(50);
   });
 
   it('returns unavailable when account facts are not reconciled and does not release budget for a pending sell', () => {

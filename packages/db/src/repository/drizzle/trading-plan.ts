@@ -1,5 +1,6 @@
 import {
   type AccountFacts,
+  accountFactsDigest,
   assertTradingPlanBudgetLimits,
   assertTradingPlanInvariants,
   evaluateTradingPlanBudget,
@@ -14,7 +15,7 @@ import {
 import { and, asc, desc, eq, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import { type Schema, tradingPlans } from '../../schema/index.js';
+import { accounts, holdings, type Schema, tradingPlans } from '../../schema/index.js';
 
 type TradingPlanRow = typeof tradingPlans.$inferSelect;
 type DrizzleTransaction = Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0];
@@ -81,15 +82,24 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
-  }): Promise<{
-    readonly saved: boolean;
-    readonly budget: ReturnType<typeof evaluateTradingPlanBudget>;
-  }> {
+  }): ReturnType<TradingPlanRepository['saveIfBudgetAvailable']> {
     const plan = TradingPlanSchema.parse(input.plan);
     assertTradingPlanInvariants(plan);
     assertTradingPlanBudgetLimits(input.limits);
     return this.db.transaction(
       (tx: DrizzleTransaction) => {
+        const account = tx.select().from(accounts).where(eq(accounts.id, plan.accountId)).get();
+        const currentHoldings = tx
+          .select()
+          .from(holdings)
+          .where(eq(holdings.accountId, plan.accountId))
+          .all();
+        if (
+          account === undefined ||
+          accountFactsDigest({ account, holdings: currentHoldings }) !== input.facts.digest
+        ) {
+          return { saved: false, reason: 'account-facts-changed' } as const;
+        }
         const rows = tx
           .select()
           .from(tradingPlans)
@@ -112,17 +122,18 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
         const allocation = budget.allocations.find(
           (item) => item.planId === tradingPlanVersionId(plan),
         );
-        if (allocation?.status !== 'included') return { saved: false, budget };
+        if (allocation?.status !== 'included')
+          return { saved: false, reason: 'budget-exceeded', budget } as const;
         const existing = rows.find((row) => row.versionId === tradingPlanVersionId(plan));
         if (existing !== undefined) {
           const existingPlan = toPlan(existing);
           if (JSON.stringify(existingPlan) !== JSON.stringify(plan)) {
             throw new Error(`trading plan version is immutable: ${tradingPlanVersionId(plan)}`);
           }
-          return { saved: true, budget };
+          return { saved: true, budget } as const;
         }
         tx.insert(tradingPlans).values(toRow(plan)).run();
-        return { saved: true, budget };
+        return { saved: true, budget } as const;
       },
       { behavior: 'immediate' },
     );
@@ -175,13 +186,24 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
         .filter((plan) => query.status === undefined || plan.status === query.status)
         .filter(
           (plan) =>
+            (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
+            (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
+        )
+        .filter(
+          (plan) =>
             query.asOf === undefined ||
             (plan.validFrom.getTime() <= query.asOf.getTime() &&
               plan.validUntil.getTime() > query.asOf.getTime()),
         )
         .slice(0, query.limit ?? 100);
     }
-    return plans.slice(0, query.limit ?? 100);
+    return plans
+      .filter(
+        (plan) =>
+          (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
+          (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
+      )
+      .slice(0, query.limit ?? 100);
   }
 
   async latestByPlanId(planId: string): Promise<TradingPlan | null> {

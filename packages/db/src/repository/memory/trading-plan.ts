@@ -1,5 +1,6 @@
 import {
   type AccountFacts,
+  accountFactsDigest,
   assertTradingPlanBudgetLimits,
   assertTradingPlanInvariants,
   evaluateTradingPlanBudget,
@@ -11,10 +12,17 @@ import {
   TradingPlanSchema,
   tradingPlanVersionId,
 } from '@luoome/core';
+import type { InMemoryAccountRepository } from './account.js';
+import type { InMemoryHoldingRepository } from './holding.js';
 
 export class InMemoryTradingPlanRepository implements TradingPlanRepository {
   private readonly items = new Map<string, TradingPlan>();
   private budgetLock: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly account: InMemoryAccountRepository,
+    private readonly holding: InMemoryHoldingRepository,
+  ) {}
 
   put(plan: TradingPlan): void {
     const parsed = TradingPlanSchema.parse(plan);
@@ -37,10 +45,7 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
-  }): Promise<{
-    readonly saved: boolean;
-    readonly budget: ReturnType<typeof evaluateTradingPlanBudget>;
-  }> {
+  }): ReturnType<TradingPlanRepository['saveIfBudgetAvailable']> {
     const previous = this.budgetLock;
     let release!: () => void;
     this.budgetLock = new Promise<void>((resolve) => {
@@ -51,6 +56,16 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
       const plan = TradingPlanSchema.parse(input.plan);
       assertTradingPlanInvariants(plan);
       assertTradingPlanBudgetLimits(input.limits);
+      const account = this.account.peek(plan.accountId);
+      if (
+        account === null ||
+        accountFactsDigest({
+          account,
+          holdings: this.holding.snapshotByAccount(plan.accountId),
+        }) !== input.facts.digest
+      ) {
+        return { saved: false, reason: 'account-facts-changed' };
+      }
       const latest = new Map<string, TradingPlan>();
       for (const item of this.items.values()) {
         if (item.accountId !== plan.accountId) continue;
@@ -80,7 +95,8 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
       const allocation = budget.allocations.find(
         (item) => item.planId === tradingPlanVersionId(plan),
       );
-      if (allocation?.status !== 'included') return { saved: false, budget };
+      if (allocation?.status !== 'included')
+        return { saved: false, reason: 'budget-exceeded', budget };
       this.put(plan);
       return { saved: true, budget };
     } finally {
@@ -116,6 +132,11 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
         .filter((plan) => query.status === undefined || plan.status === query.status)
         .filter(
           (plan) =>
+            (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
+            (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
+        )
+        .filter(
+          (plan) =>
             query.asOf === undefined ||
             (plan.validFrom.getTime() <= query.asOf.getTime() &&
               plan.validUntil.getTime() > query.asOf.getTime()),
@@ -124,6 +145,11 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
     }
     return filtered
       .filter((plan) => query.status === undefined || plan.status === query.status)
+      .filter(
+        (plan) =>
+          (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
+          (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
+      )
       .slice(0, query.limit ?? 100);
   }
 

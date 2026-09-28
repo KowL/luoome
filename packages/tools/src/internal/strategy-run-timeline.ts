@@ -71,6 +71,7 @@ export const readStrategyRunTimeline = async (
     readonly scope?: StrategyRunScope;
     readonly publication?: StrategyRunPublicationStatus;
     readonly since?: Date;
+    readonly until?: Date;
     readonly limit: number;
   },
 ): Promise<StrategyRunTimeline> => {
@@ -80,6 +81,7 @@ export const readStrategyRunTimeline = async (
     ...(input.scope === undefined ? {} : { scope: input.scope }),
     ...(input.publication === undefined ? {} : { publication: input.publication }),
     ...(input.since === undefined ? {} : { since: input.since }),
+    ...(input.until === undefined ? {} : { until: input.until }),
     limit: input.limit,
   });
   return hydrateStrategyRunTimeline(ctx, runs);

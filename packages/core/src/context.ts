@@ -249,6 +249,7 @@ export interface AuditLoggerLike {
  */
 export interface NotificationManagerLike {
   send(input: {
+    readonly id?: string;
     readonly channel: 'feishu' | 'log';
     readonly payload: NotificationPayload;
     readonly adviceId?: string;

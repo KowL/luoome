@@ -3,6 +3,8 @@ import {
   dateInShanghai,
   evaluateTradingPlanCondition,
   evaluateTradingPlanEntryConditions,
+  isAshareTradingSession,
+  isIntradayQuoteCurrent,
   money,
   notificationText,
   notificationTime,
@@ -53,10 +55,13 @@ export type IntradayTradingPlanWatchOutputT = z.infer<typeof IntradayTradingPlan
 type BatchQuoteItem = {
   readonly stockId: string;
   readonly status: 'ok' | 'unresolved' | 'unavailable';
+  readonly retrieval?: 'live' | 'local-fallback';
   readonly quote?: {
     readonly close: number;
     readonly prevClose?: number;
     readonly observedAt: Date;
+    readonly fetchedAt: Date;
+    readonly timestampSource: 'upstream' | 'retrieval';
     readonly source: string;
   };
   readonly freshness?: 'fresh' | 'stale';
@@ -72,6 +77,13 @@ type Candidate = {
 };
 
 const MAX_PUBLICATION_AGE_MS = 10 * 60_000;
+
+const decisionQuote = (item: BatchQuoteItem | undefined, now: Date) => {
+  if (item?.status !== 'ok' || item.freshness !== 'fresh' || item.retrieval !== 'live')
+    return undefined;
+  const quote = item.quote;
+  return quote !== undefined && isIntradayQuoteCurrent(quote, now) ? quote : undefined;
+};
 
 const errorText = (error: {
   readonly kind?: unknown;
@@ -261,6 +273,8 @@ const triggerFor = (
       adviceIds: plan.source.adviceIds,
       quoteClose: quote?.close,
       quoteObservedAt: quote?.observedAt,
+      firstEventAt: quote?.observedAt.toISOString(),
+      firstAcquiredAt: quote?.fetchedAt.toISOString(),
       quoteSource: quote?.source,
       accountFactsDigest: plan.accountFactsDigest,
       accountFactsAsOf: plan.accountFactsAsOf.toISOString(),
@@ -306,25 +320,35 @@ type PublicationValidation =
   | {
       readonly ok: true;
       readonly candidates: readonly Candidate[];
+      readonly rejected: readonly WatchTrigger[];
       /** 单条候选被丢弃的原因；其它候选仍可发布。 */
       readonly dropped: readonly string[];
     }
-  | { readonly ok: false; readonly reason: string };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly status: 'invalidated' | 'unverifiable';
+    };
 
 /**
- * 10 分钟发布时限的计时起点：优先取触发证据的可信上游事件时间，缺失或
- * 不可解析时才退回规则检测时间（PRD §8.2「以首次触发证据的可信上游事件时间作为计时起点」）。
+ * 10 分钟发布时限的计时起点：优先取首次上游事件时间；旧记录读取原行情时间。
+ * 缺失、不可解析或晚于检测时间时没有可信计时起点，不能把检测时间冒充事件时间。
  */
-const publicationAgeStart = (trigger: WatchTrigger): Date => {
-  const observedAt = trigger.evalSnapshot.quoteObservedAt;
+const publicationAgeStart = (trigger: WatchTrigger): Date | null => {
+  const observedAt = trigger.evalSnapshot.firstEventAt ?? trigger.evalSnapshot.quoteObservedAt;
   const parsed =
     observedAt instanceof Date
       ? observedAt
       : typeof observedAt === 'string'
         ? new Date(observedAt)
         : undefined;
-  if (parsed === undefined || Number.isNaN(parsed.getTime())) return trigger.createdAt;
-  return parsed.getTime() <= trigger.createdAt.getTime() ? parsed : trigger.createdAt;
+  if (
+    parsed === undefined ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getTime() > trigger.createdAt.getTime()
+  )
+    return null;
+  return parsed;
 };
 
 const latestPlanById = (plans: readonly TradingPlan[], planId: string): TradingPlan | undefined =>
@@ -340,13 +364,13 @@ const validatePublication = async (
   initialFacts: AccountFacts,
   ctx: WorkflowContext,
 ): Promise<PublicationValidation> => {
-  const now = ctx.clock();
-  if (candidates.length === 0) return { ok: true, candidates: [], dropped: [] };
+  if (candidates.length === 0) return { ok: true, candidates: [], rejected: [], dropped: [] };
   const currentFactsResult = await ctx.tools.get_account_facts.execute({ accountId });
   if (!currentFactsResult.ok) {
     return {
       ok: false,
       reason: `发布前无法读取账户事实：${errorText(currentFactsResult.error)}`,
+      status: 'unverifiable',
     };
   }
   const currentFacts = currentFactsResult.data.facts;
@@ -355,11 +379,19 @@ const validatePublication = async (
     currentFacts.status !== 'complete' ||
     currentFacts.totalAssets === null
   ) {
-    return { ok: false, reason: '发布前账户事实（持仓或现金）已变化或不可用，放弃本轮信号' };
+    return {
+      ok: false,
+      reason: '发布前账户事实（持仓或现金）已变化或不可用，放弃本轮信号',
+      status: 'invalidated',
+    };
   }
   const plansResult = await ctx.tools.list_trading_plans.execute({ accountId, limit: 500 });
   if (!plansResult.ok) {
-    return { ok: false, reason: `发布前无法读取交易计划：${errorText(plansResult.error)}` };
+    return {
+      ok: false,
+      reason: `发布前无法读取交易计划：${errorText(plansResult.error)}`,
+      status: 'unverifiable',
+    };
   }
   const quoteResult = await ctx.tools.batch_quote.execute({
     stockIds: [...new Set(candidates.map((candidate) => candidate.plan.stockId))],
@@ -367,18 +399,53 @@ const validatePublication = async (
     watchIntervalSeconds: 60,
   });
   if (!quoteResult.ok) {
-    return { ok: false, reason: `发布前无法刷新行情：${errorText(quoteResult.error)}` };
+    return {
+      ok: false,
+      reason: `发布前无法刷新行情：${errorText(quoteResult.error)}`,
+      status: 'unverifiable',
+    };
   }
   const quotes = new Map<string, BatchQuoteItem>(
     quoteResult.data.items.map((item) => [item.stockId, item as BatchQuoteItem]),
   );
+  const now = ctx.clock();
   const validated: Candidate[] = [];
+  const rejected: WatchTrigger[] = [];
   const dropped: string[] = [];
+  const reject = (
+    candidate: Candidate,
+    status: 'expired' | 'unverifiable' | 'invalidated',
+    reason: string,
+  ): void => {
+    dropped.push(reason);
+    rejected.push({
+      ...candidate.trigger,
+      deliveryStatus: status,
+      evalSnapshot: {
+        ...candidate.trigger.evalSnapshot,
+        publicationCheckedAt: now.toISOString(),
+        publicationReason: reason,
+      },
+    });
+  };
   for (const candidate of candidates) {
     // 单条候选过期/失效只丢弃该条：否则一条超过时限的重试会阻断同轮所有其它信号。
-    const ageMs = now.getTime() - publicationAgeStart(candidate.trigger).getTime();
+    const eventAt = publicationAgeStart(candidate.trigger);
+    if (eventAt === null) {
+      reject(
+        candidate,
+        'unverifiable',
+        `${candidate.plan.stockId} 盘中信号缺可信上游事件时间，无法核验 10 分钟发布时限`,
+      );
+      continue;
+    }
+    const ageMs = now.getTime() - eventAt.getTime();
     if (ageMs < 0 || ageMs > MAX_PUBLICATION_AGE_MS) {
-      dropped.push(`${candidate.plan.stockId} 盘中信号超过 10 分钟发布时限，放弃本轮信号`);
+      reject(
+        candidate,
+        ageMs < 0 ? 'unverifiable' : 'expired',
+        `${candidate.plan.stockId} 盘中信号超过 10 分钟发布时限，放弃本轮信号`,
+      );
       continue;
     }
     const currentPlan = latestPlanById(plansResult.data.plans, candidate.plan.id);
@@ -390,26 +457,33 @@ const validatePublication = async (
       currentPlan.validUntil.getTime() <= now.getTime() ||
       currentPlan.status !== 'active'
     ) {
-      dropped.push(`${candidate.plan.stockId} 发布前交易计划版本已变化或失效`);
+      reject(candidate, 'invalidated', `${candidate.plan.stockId} 发布前交易计划版本已变化或失效`);
       continue;
     }
-    const quoteItem = quotes.get(candidate.plan.stockId);
-    const quote =
-      quoteItem?.status === 'ok' && quoteItem.freshness === 'fresh' ? quoteItem.quote : undefined;
-    if (
-      quote === undefined ||
-      quote.observedAt.getTime() > now.getTime() ||
-      now.getTime() - quote.observedAt.getTime() > MAX_PUBLICATION_AGE_MS
-    ) {
-      dropped.push(`${candidate.plan.stockId} 发布前实时行情已过期`);
+    const quote = decisionQuote(quotes.get(candidate.plan.stockId), now);
+    if (quote === undefined) {
+      reject(
+        candidate,
+        'invalidated',
+        `${candidate.plan.stockId} 发布前实时行情不具备可核验决策资格`,
+      );
       continue;
     }
     if (evaluate(candidate.plan, candidate.condition, quote, now) !== true) {
-      dropped.push(`${candidate.plan.stockId} 发布前条件已恢复，放弃本轮信号`);
+      reject(candidate, 'invalidated', `${candidate.plan.stockId} 发布前条件已恢复，放弃本轮信号`);
       continue;
     }
     if (candidate.isRetry === true) {
-      validated.push(candidate);
+      validated.push({
+        ...candidate,
+        trigger: {
+          ...candidate.trigger,
+          evalSnapshot: {
+            ...candidate.trigger.evalSnapshot,
+            publicationCheckedAt: now.toISOString(),
+          },
+        },
+      });
     } else {
       const refreshed = triggerFor(
         candidate.plan,
@@ -421,11 +495,20 @@ const validatePublication = async (
       validated.push({
         ...candidate,
         sourceTriggerId: candidate.sourceTriggerId ?? candidate.trigger.id,
-        trigger: { ...refreshed, createdAt: candidate.trigger.createdAt },
+        trigger: {
+          ...refreshed,
+          createdAt: candidate.trigger.createdAt,
+          evalSnapshot: {
+            ...refreshed.evalSnapshot,
+            firstEventAt: eventAt.toISOString(),
+            firstAcquiredAt: candidate.trigger.evalSnapshot.firstAcquiredAt,
+            publicationCheckedAt: now.toISOString(),
+          },
+        },
       });
     }
   }
-  return { ok: true, candidates: validated, dropped };
+  return { ok: true, candidates: validated, rejected, dropped };
 };
 
 const run = async (
@@ -436,6 +519,23 @@ const run = async (
   const now = ctx.clock();
   const date = dateInShanghai(now);
   const errors: string[] = [];
+  if (!isAshareTradingSession(now)) {
+    return {
+      accountId,
+      date,
+      status: 'blocked',
+      checkedPlans: 0,
+      freshQuotes: 0,
+      stalePlans: 0,
+      triggers: [],
+      notified: 0,
+      delivered: 0,
+      suppressedByCooldown: 0,
+      suppressedByDailyLimit: 0,
+      notifyFailed: 0,
+      errors: ['非交易时段，盘中计划监控未执行'],
+    };
+  }
   const plansResult = await ctx.tools.list_trading_plans.execute({
     accountId,
     activeOnly: true,
@@ -535,8 +635,8 @@ const run = async (
     for (const item of quotesResult.data.items)
       quoteItems.set(item.stockId, item as BatchQuoteItem);
   }
-  const freshQuotes = [...quoteItems.values()].filter(
-    (item) => item.status === 'ok' && item.freshness === 'fresh',
+  const freshQuotes = [...quoteItems.values()].filter((item) =>
+    decisionQuote(item, ctx.clock()),
   ).length;
   const factsResult = await ctx.tools.get_account_facts.execute({ accountId });
   if (!factsResult.ok) {
@@ -622,21 +722,112 @@ const run = async (
       errors: [...errors, errorText(stateResult.error)],
     };
   }
-  const previousStates = new Map(
-    stateResult.data.states.map((state) => [`${state.stockId}:${state.ruleId}`, state]),
+  const sessionStart = new Date(
+    `${date}T${now.getTime() >= new Date(`${date}T13:00:00+08:00`).getTime() ? '13:00' : '09:30'}:00+08:00`,
   );
-  const nextStates = [...stateResult.data.states];
+  const currentRuleIds = new Set(
+    plans.flatMap((plan) =>
+      [...plan.exit.triggerConditions, ...plan.entryConditions.slice(0, 1)].map(
+        (condition) => `${tradingPlanVersionId(plan)}:${condition.id}`,
+      ),
+    ),
+  );
+  const rearmed = new Map<string, (typeof stateResult.data.states)[number]>();
+  const interruptedPendingIds: string[] = [];
+  for (const state of stateResult.data.states) {
+    if (
+      !state.active ||
+      state.lastEvaluatedAt.getTime() >= sessionStart.getTime() ||
+      !currentRuleIds.has(state.ruleId)
+    )
+      continue;
+    const latest = await ctx.tools.list_watch_triggers.execute({
+      poolId,
+      stockId: state.stockId,
+      ruleId: state.ruleId,
+      until: new Date(sessionStart.getTime() - 1),
+      limit: 1,
+    });
+    if (!latest.ok) {
+      return {
+        accountId,
+        date,
+        status: 'blocked',
+        checkedPlans: plans.length,
+        freshQuotes,
+        stalePlans,
+        triggers: [],
+        notified: 0,
+        delivered: 0,
+        suppressedByCooldown: 0,
+        suppressedByDailyLimit: 0,
+        notifyFailed: 0,
+        errors: [...errors, errorText(latest.error)],
+      };
+    }
+    const trigger = latest.data.triggers[0];
+    if (
+      trigger === undefined ||
+      !['pending', 'failed', 'invalidated'].includes(trigger.deliveryStatus)
+    )
+      continue;
+    rearmed.set(`${state.stockId}:${state.ruleId}`, {
+      ...state,
+      active: false,
+      firstTriggeredAt: undefined,
+    });
+    if (trigger.deliveryStatus === 'pending') interruptedPendingIds.push(trigger.id);
+  }
+  if (rearmed.size > 0) {
+    const reset = await ctx.tools.commit_watch_evaluation.execute({
+      owner: ctx.watchExecutionOwner,
+      triggers: [],
+      states: [...rearmed.values()],
+      ...(interruptedPendingIds.length === 0
+        ? {}
+        : {
+            invalidatePending: {
+              triggerIds: interruptedPendingIds,
+              reason: '上个交易时段投递中断，当前时段重新求值',
+            },
+          }),
+    });
+    if (!reset.ok) {
+      return {
+        accountId,
+        date,
+        status: 'blocked',
+        checkedPlans: plans.length,
+        freshQuotes,
+        stalePlans,
+        triggers: [],
+        notified: 0,
+        delivered: 0,
+        suppressedByCooldown: 0,
+        suppressedByDailyLimit: 0,
+        notifyFailed: 0,
+        errors: [...errors, errorText(reset.error)],
+      };
+    }
+  }
+  const previousStates = new Map(
+    stateResult.data.states.map((state) => [
+      `${state.stockId}:${state.ruleId}`,
+      rearmed.get(`${state.stockId}:${state.ruleId}`) ?? state,
+    ]),
+  );
+  const nextStates = [...previousStates.values()];
   const candidates: Candidate[] = [];
   const cooldownKeys: { poolId: string; stockId: string; ruleId: string }[] = [];
   for (const plan of plans) {
-    const quoteItem = quoteItems.get(plan.stockId);
-    const quote =
-      quoteItem?.status === 'ok' && quoteItem.freshness === 'fresh' ? quoteItem.quote : undefined;
+    const quote = decisionQuote(quoteItems.get(plan.stockId), ctx.clock());
     if (
       quote === undefined &&
       plan.entryConditions.length + plan.exit.triggerConditions.length > 0
     ) {
-      errors.push(`${plan.stockId} 缺少合格实时行情，未生成盘中行动信号`);
+      errors.push(
+        `${plan.stockId} 缺少具有可核验上游时间且不超过 120 秒的实时行情，未生成盘中行动信号`,
+      );
     }
     for (const condition of [...plan.exit.triggerConditions, ...plan.entryConditions.slice(0, 1)]) {
       const ruleId = `${tradingPlanVersionId(plan)}:${condition.id}`;
@@ -675,7 +866,10 @@ const run = async (
       }
     }
   }
-  const retriesResult = await ctx.tools.list_watch_delivery_retries.execute({ poolId });
+  const retriesResult = await ctx.tools.list_watch_delivery_retries.execute({
+    poolId,
+    since: sessionStart,
+  });
   if (!retriesResult.ok) {
     errors.push(errorText(retriesResult.error));
   } else {
@@ -745,19 +939,37 @@ const run = async (
   });
   const owner = ctx.watchExecutionOwner;
   let finalTriggers = deliveryTriggers;
-  const beforePublicationFacts = await ctx.tools.get_account_facts.execute({ accountId });
-  if (
-    !beforePublicationFacts.ok ||
-    beforePublicationFacts.data.facts.digest !== accountFacts.digest
-  ) {
+  const publicationFailure = async (
+    reason: string,
+    status: 'invalidated' | 'unverifiable',
+  ): Promise<IntradayTradingPlanWatchOutputT> => {
+    const checkedAt = ctx.clock().toISOString();
+    const auditTriggers: WatchTrigger[] = candidates.map((candidate) => ({
+      ...candidate.trigger,
+      deliveryStatus: status,
+      evalSnapshot: {
+        ...candidate.trigger.evalSnapshot,
+        publicationCheckedAt: checkedAt,
+        publicationReason: reason,
+      },
+    }));
+    const committed =
+      input.notify && auditTriggers.length > 0
+        ? await ctx.tools.commit_watch_evaluation.execute({
+            owner,
+            triggers: [],
+            auditTriggers,
+            states: [],
+          })
+        : null;
     return {
       accountId,
       date,
-      status: 'partial',
+      status: committed !== null && !committed.ok ? 'blocked' : 'partial',
       checkedPlans: plans.length,
       freshQuotes,
       stalePlans,
-      triggers: [],
+      triggers: committed !== null && !committed.ok ? [] : auditTriggers,
       notified: 0,
       delivered: 0,
       suppressedByCooldown,
@@ -765,43 +977,48 @@ const run = async (
       notifyFailed: 0,
       errors: [
         ...errors,
-        beforePublicationFacts.ok
-          ? '账户事实（持仓或现金）在盘中发布开始前已变化，放弃本轮信号'
-          : errorText(beforePublicationFacts.error),
+        reason,
+        ...(committed !== null && !committed.ok ? [errorText(committed.error)] : []),
       ],
     };
+  };
+  if (!isAshareTradingSession(ctx.clock())) {
+    return publicationFailure('非交易时段，盘中行动信号已失效', 'invalidated');
+  }
+  const beforePublicationFacts = await ctx.tools.get_account_facts.execute({ accountId });
+  if (
+    !beforePublicationFacts.ok ||
+    beforePublicationFacts.data.facts.digest !== accountFacts.digest
+  ) {
+    return publicationFailure(
+      beforePublicationFacts.ok
+        ? '账户事实（持仓或现金）在盘中发布开始前已变化，放弃本轮信号'
+        : errorText(beforePublicationFacts.error),
+      beforePublicationFacts.ok ? 'invalidated' : 'unverifiable',
+    );
   }
   const publication = await validatePublication(candidates, accountId, accountFacts, ctx);
   if (!publication.ok) {
-    return {
-      accountId,
-      date,
-      status: 'partial',
-      checkedPlans: plans.length,
-      freshQuotes,
-      stalePlans,
-      triggers: [],
-      notified: 0,
-      delivered: 0,
-      suppressedByCooldown,
-      suppressedByDailyLimit,
-      notifyFailed: 0,
-      errors: [...errors, publication.reason],
-    };
+    return publicationFailure(publication.reason, publication.status);
+  }
+  if (!isAshareTradingSession(ctx.clock())) {
+    return publicationFailure('非交易时段，盘中行动信号已失效', 'invalidated');
   }
   errors.push(...publication.dropped);
   const deliveryBySourceId = new Map(deliveryTriggers.map((trigger) => [trigger.id, trigger]));
-  finalTriggers = publication.candidates.map((candidate) => {
+  const acceptedTriggers = publication.candidates.map((candidate) => {
     const source = deliveryBySourceId.get(candidate.sourceTriggerId ?? candidate.trigger.id);
     return {
       ...candidate.trigger,
       ...(source === undefined ? {} : { deliveryStatus: source.deliveryStatus }),
     };
   });
+  finalTriggers = [...acceptedTriggers, ...publication.rejected];
   const committed = input.notify
     ? await ctx.tools.commit_watch_evaluation.execute({
         owner,
-        triggers: finalTriggers,
+        triggers: acceptedTriggers,
+        auditTriggers: [...publication.rejected],
         states: nextStates.filter(
           (state) =>
             !candidates.some(
@@ -809,7 +1026,7 @@ const run = async (
                 candidate.isRetry !== true &&
                 candidate.trigger.stockId === state.stockId &&
                 candidate.trigger.ruleId === state.ruleId &&
-                !finalTriggers.some(
+                !acceptedTriggers.some(
                   (trigger) => trigger.stockId === state.stockId && trigger.ruleId === state.ruleId,
                 ),
             ),
@@ -837,14 +1054,60 @@ const run = async (
   let delivered = 0;
   let notifyFailed = 0;
   if (input.notify) {
+    const invalidatePending = async (): Promise<void> => {
+      const pending = finalTriggers.filter((trigger) => trigger.deliveryStatus === 'pending');
+      if (pending.length === 0) return;
+      const pendingIds = pending.map((trigger) => trigger.id);
+      const pendingKeys = new Set(pending.map((trigger) => `${trigger.stockId}:${trigger.ruleId}`));
+      const reason = '非交易时段，未发送剩余盘中行动信号';
+      const update = await ctx.tools.commit_watch_evaluation.execute({
+        owner,
+        triggers: [],
+        states: nextStates
+          .filter((state) => pendingKeys.has(`${state.stockId}:${state.ruleId}`))
+          .map((state) => ({ ...state, active: false, firstTriggeredAt: undefined })),
+        invalidatePending: { triggerIds: pendingIds, reason },
+      });
+      errors.push(reason);
+      if (!update.ok) {
+        errors.push(errorText(update.error));
+        return;
+      }
+      finalTriggers = finalTriggers.map((trigger) =>
+        pendingIds.includes(trigger.id)
+          ? {
+              ...trigger,
+              deliveryStatus: 'invalidated',
+              ...(update.data.invalidatedAt === undefined
+                ? {}
+                : {
+                    deliveryCompletedAt: update.data.invalidatedAt,
+                    evalSnapshot: {
+                      ...trigger.evalSnapshot,
+                      publicationCheckedAt: update.data.invalidatedAt.toISOString(),
+                      publicationReason: reason,
+                    },
+                  }),
+            }
+          : trigger,
+      );
+    };
     for (const candidate of publication.candidates) {
       const trigger = finalTriggers.find((item) => item.id === candidate.trigger.id);
       if (trigger === undefined || trigger.deliveryStatus !== 'pending') continue;
+      if (!isAshareTradingSession(ctx.clock())) {
+        await invalidatePending();
+        break;
+      }
       const attempt = await ctx.tools.begin_watch_delivery.execute({ triggerIds: [trigger.id] });
       if (!attempt.ok) {
         errors.push(errorText(attempt.error));
         notifyFailed += 1;
         continue;
+      }
+      if (!isAshareTradingSession(ctx.clock())) {
+        await invalidatePending();
+        break;
       }
       const notification = await ctx.tools.send_notification.execute({
         channel: 'feishu',
@@ -879,6 +1142,9 @@ const run = async (
               ...item,
               deliveryStatus: status,
               ...(notificationId === undefined ? {} : { notificationId }),
+              ...(deliveryUpdate.ok
+                ? { deliveryCompletedAt: deliveryUpdate.data.completedAt }
+                : {}),
             }
           : item,
       );

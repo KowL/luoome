@@ -77,6 +77,11 @@ export const saveTradingPlanTool = defineTool({
         asOf: ctx.clock(),
       });
       if (!saved.saved) {
+        if (saved.reason === 'account-facts-changed') {
+          return errInvalidInput(
+            '交易计划基于的账户事实已变化（持仓或现金已更新），请重新生成计划',
+          );
+        }
         const allocation = saved.budget.allocations.find(
           (item) => item.planId === tradingPlanVersionId(input.plan),
         );

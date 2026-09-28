@@ -1051,7 +1051,10 @@ export const ensureSchema = (db: DrizzleDb): void => {
       eval_snapshot TEXT NOT NULL DEFAULT '{}',
       feedback TEXT,
       feedback_at INTEGER,
-      event_id TEXT
+      event_id TEXT,
+      delivery_attempts INTEGER,
+      last_delivery_attempt_at INTEGER,
+      delivery_completed_at INTEGER
     )
   `);
   migrateStrategyAlertTriggerColumns(db);
@@ -1064,6 +1067,9 @@ export const ensureSchema = (db: DrizzleDb): void => {
   }
   if (!watchDeliveryColumns.has('last_delivery_attempt_at')) {
     db.run(sql`ALTER TABLE watch_triggers ADD COLUMN last_delivery_attempt_at INTEGER`);
+  }
+  if (!watchDeliveryColumns.has('delivery_completed_at')) {
+    db.run(sql`ALTER TABLE watch_triggers ADD COLUMN delivery_completed_at INTEGER`);
   }
   // 重建索引（列从 rule_kind 改到 rule_id）
   db.run(sql`DROP INDEX IF EXISTS watch_triggers_pool_stock_rule_ts_idx`);
@@ -1279,6 +1285,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS reports (
       id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL DEFAULT 1,
+      supersedes_report_id TEXT,
       kind TEXT NOT NULL,
       scope_key TEXT NOT NULL,
       scope_json TEXT NOT NULL,
@@ -1292,14 +1300,19 @@ export const ensureSchema = (db: DrizzleDb): void => {
       evidence_json TEXT NOT NULL,
       missing_dimensions_json TEXT NOT NULL DEFAULT '[]',
       delivery_status TEXT NOT NULL DEFAULT 'not-requested',
+      delivery_attempt_id TEXT,
       workflow_run_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
   `);
+  ensureColumn(db, 'reports', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'reports', 'supersedes_report_id', 'TEXT');
+  ensureColumn(db, 'reports', 'delivery_attempt_id', 'TEXT');
+  db.run(sql`DROP INDEX IF EXISTS reports_period_unique`);
   db.run(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS reports_period_unique
-    ON reports (kind, scope_key, period_start, period_end)
+    CREATE UNIQUE INDEX IF NOT EXISTS reports_period_version_unique
+    ON reports (kind, scope_key, period_start, period_end, version)
   `);
   db.run(sql`CREATE INDEX IF NOT EXISTS reports_period_end_idx ON reports (period_end)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS reports_kind_period_end_idx ON reports (kind, period_end)`);
@@ -1593,10 +1606,20 @@ const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
     (quoteClose !== undefined && quoteClose.notnull === 1) ||
     (quoteTs !== undefined && quoteTs.notnull === 1);
   if (!needRelax) return;
+  const have = new Set(cols.map((column) => column.name));
+  const alertPlanId = have.has('alert_plan_id') ? sql`alert_plan_id` : sql`pool_id`;
+  const deliveryAttempts = have.has('delivery_attempts') ? sql`delivery_attempts` : sql`NULL`;
+  const lastDeliveryAttemptAt = have.has('last_delivery_attempt_at')
+    ? sql`last_delivery_attempt_at`
+    : sql`NULL`;
+  const deliveryCompletedAt = have.has('delivery_completed_at')
+    ? sql`delivery_completed_at`
+    : sql`NULL`;
   db.transaction((tx) => {
     tx.run(sql`
       CREATE TABLE watch_triggers_mig (
         id TEXT PRIMARY KEY,
+        alert_plan_id TEXT,
         pool_id TEXT NOT NULL,
         stock_id TEXT NOT NULL,
         rule_kind TEXT NOT NULL,
@@ -1615,15 +1638,25 @@ const migrateRuoTriggerColumns = (db: DrizzleDb): void => {
         eval_snapshot TEXT NOT NULL DEFAULT '{}',
         feedback TEXT,
         feedback_at INTEGER,
-        event_id TEXT
+        event_id TEXT,
+        delivery_attempts INTEGER,
+        last_delivery_attempt_at INTEGER,
+        delivery_completed_at INTEGER
       )
     `);
     tx.run(sql`
-      INSERT INTO watch_triggers_mig
-      SELECT id, pool_id, stock_id, rule_kind, direction, reason, evidence,
+      INSERT INTO watch_triggers_mig (
+        id, alert_plan_id, pool_id, stock_id, rule_kind, direction, reason, evidence,
+        quote_close, quote_ts, notified, created_at, rule_id, trigger_type,
+        priority, delivery_status, notification_id, eval_snapshot, feedback,
+        feedback_at, event_id, delivery_attempts, last_delivery_attempt_at,
+        delivery_completed_at
+      )
+      SELECT id, ${alertPlanId}, pool_id, stock_id, rule_kind, direction, reason, evidence,
              quote_close, quote_ts, notified, created_at, rule_id, trigger_type,
              priority, delivery_status, notification_id, eval_snapshot, feedback,
-             feedback_at, event_id
+             feedback_at, event_id, ${deliveryAttempts}, ${lastDeliveryAttemptAt},
+             ${deliveryCompletedAt}
       FROM watch_triggers
     `);
     tx.run(sql`DROP TABLE watch_triggers`);

@@ -1,6 +1,7 @@
 // @luoome/workflows 桶导出：defineWorkflow 引擎 + 当前内置 workflows。
 
 export * from './closing-report.js';
+export * from './closing-report-cutoff.js';
 export * from './complete-strategy-observations.js';
 export * from './daily-advice.js';
 export * from './daily-review.js';

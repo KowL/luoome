@@ -1328,6 +1328,7 @@ export const watchTriggers = sqliteTable(
     eventId: text('event_id'),
     deliveryAttempts: integer('delivery_attempts'),
     lastDeliveryAttemptAt: integer('last_delivery_attempt_at', { mode: 'timestamp_ms' }),
+    deliveryCompletedAt: integer('delivery_completed_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     createdIdIdx: index('watch_triggers_created_id_idx').on(t.createdAt, t.id),
@@ -1682,6 +1683,8 @@ export const reports = sqliteTable(
   'reports',
   {
     id: text('id').primaryKey(),
+    version: integer('version').notNull().default(1),
+    supersedesReportId: text('supersedes_report_id'),
     kind: text('kind').$type<Report['kind']>().notNull(),
     scopeKey: text('scope_key').notNull(),
     scope: text('scope_json', { mode: 'json' }).$type<Report['scope']>().notNull(),
@@ -1697,16 +1700,18 @@ export const reports = sqliteTable(
       .$type<Report['missingDimensions']>()
       .notNull(),
     deliveryStatus: text('delivery_status').$type<DeliveryStatus>().notNull(),
+    deliveryAttemptId: text('delivery_attempt_id'),
     workflowRunId: text('workflow_run_id').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => ({
-    periodUnique: uniqueIndex('reports_period_unique').on(
+    periodVersionUnique: uniqueIndex('reports_period_version_unique').on(
       t.kind,
       t.scopeKey,
       t.periodStart,
       t.periodEnd,
+      t.version,
     ),
     periodEndIdx: index('reports_period_end_idx').on(t.periodEnd),
     kindPeriodEndIdx: index('reports_kind_period_end_idx').on(t.kind, t.periodEnd),

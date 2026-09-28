@@ -19,10 +19,13 @@ Use read tools to identify subjects and inspect current state before deeper anal
   deterministic PIT cross-sectional research ranking from batch qfq DailyBar revisions; its score
   is a same-batch rank, not a probability. `assess_adaptive_personality` only checks whether an
   immutable parameter version has separate training/validation evidence; `unavailable` means no
-  adaptive conclusion may be shown.
+  adaptive conclusion may be shown. `list_strategy_runs` supports `since` / `until` on run start
+  time; use both for a historical report window so later runs cannot displace its results.
+  `get_strategy_insight_facts` and `generate_strategy_insight` accept the same historical window;
+  their industry directory and AlertPlan configuration still reflect current state.
 - Watchlists and monitoring: `list_watchlists`, `get_watchlist`, `list_watchlist_changes`,
   `list_strategy_watchlist_subscriptions`.
-  `list_alert_plans`, `list_watch_triggers`, `get_watch_status`.
+  `list_alert_plans`, `list_watch_triggers`, `get_watch_status`, `get_intraday_delivery_audit`.
 - Research and events: `list_research_topics`, `list_research_documents`, `get_stock_research_view`, `get_research_embedding_status`, `list_stock_events`.
   The `profile` returned by `get_stock_research_view` is a ResearchTopic/ResearchDocument read
   model with evidence, counter-evidence and unknowns. It is not a Strategy, Advice or expected-return estimate.
@@ -31,7 +34,9 @@ Use read tools to identify subjects and inspect current state before deeper anal
 - Northbound flow: `northbound_flow` returns the daily northbound (Shanghai + Shenzhen Connect) series — turnover always present; daily net buy/sell amounts are only available before 2024-08-16 (exchange disclosure change) and are `null` afterwards. Pure read-only structured data.
 - Financial news: `fetch_news` returns paged eastmoney or 10jqka headline streams (title, summary, inferred category, media source, publish time, url). Use `source` to select a stream and `page` for pagination. Category is a title-keyword heuristic, not an upstream fact. Pure read-only.
 - Sector quotes: `fetch_sector_quotes` returns eastmoney industry-sector realtime snapshots (code, name, price, changePct, amount, up/down counts, leading stock), sortable by changePct (default) or amount. Pure read-only structured data — never interpret sector strength as a buy/sell signal.
-- Health and audit: `get_market_data_status`, `list_workflow_runs`, advice statistics and calibration tools.
+- Health and audit: `get_market_data_status`, `list_workflow_runs`, `get_closing_batch_audit`,
+  advice statistics and calibration tools. Closing batch audit reads each account's batch runs,
+  main report, supplements and notification state for one trading day.
 
 Market View Phase 4: `get_stock_minute_bars` returns independent OHLCV MinuteBar facts for the
 current session when a configured provider has `minute-bars` capability. It reports partial gaps,
@@ -112,7 +117,10 @@ For permission and response requirements, read [safety and errors](./safety.md).
 
 ### 交易计划与盘中通知
 
+- `get_intraday_delivery_audit` 按账户、上海自然日统计全部持久化盘中行动候选，不受触发历史分页限制；
+  分开返回渠道受理是否在 10 分钟内、超时、失败/抑制等终态及缺失源时间。渠道受理不等于设备送达。
 - `list_trading_plans` 可传 `includeMonitoring=true`，读取每个版本的监控资格、阻塞原因与下一步；
+  `createdSince` / `createdUntil` 按版本创建时间筛选，先过滤再应用 `limit`，可用于交易日复盘；
   `active` 是保存状态，`ready` 是当前资格，均不能证明后台正在监控或飞书已送达。
 - `intraday-trading-plan-watch` 按全部入场条件合成单个提醒，风险/退出条件优先；盘中不调用 AI、不自动改写计划。
   观察条件满足只提示重新评估；未持仓风险只提示暂停入场。通知保留反证、风险和卖出限制。

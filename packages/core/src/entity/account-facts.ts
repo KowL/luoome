@@ -12,7 +12,7 @@ import type { Stock } from './stock.js';
  * - 现金来自 Account.cashBalance（由交易/持仓/流水同步维护）；
  * - 市值必须来自行情，不能由用户手填的历史数字代替；
  * - 任何一个有数量的持仓缺少可用行情 → status='unavailable'，不给精确仓位；
- * - 只有最近收盘价可用的持仓（停牌、刚登记）按最近行情估值，记入 notes 而不是 reasons；
+ * - 不合格报价可保留参考估值与 notes，精确账户事实仍为 unavailable；
  * - digest 是持仓 + 现金 + 本金的指纹，计划据此判定「账户事实是否已变化」。
  */
 

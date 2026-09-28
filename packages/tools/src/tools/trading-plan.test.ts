@@ -76,6 +76,33 @@ const makePlan = (input: {
   });
 
 describe('trading plan tools', () => {
+  it('持仓只有抓取时间报价时不能激活其它股票的精确仓位计划', async () => {
+    const now = new Date('2026-07-17T06:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const added = await addHoldingTool.execute(
+      { accountId: ACCOUNT_ID, stockId: '600519.SH', quantity: 10, avgCost: 1500 },
+      ctx,
+    );
+    expect(added.ok).toBe(true);
+    const quote = await ctx.adapters.market.fetchQuote('600519.SH');
+    await ctx.repos.quote.save(quote);
+    const facts = await deriveFacts(ctx);
+    const result = await saveTradingPlanTool.execute(
+      {
+        plan: makePlan({
+          accountId: ACCOUNT_ID,
+          accountFactsDigest: facts.digest,
+          validFrom: new Date(now.getTime() - 1000),
+          validUntil: new Date(now.getTime() + 60_000),
+        }),
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(JSON.stringify(result.error)).toContain('账户事实不可用');
+    expect(await ctx.repos.tradingPlan.list({ accountId: ACCOUNT_ID })).toEqual([]);
+  });
+
   it('saves an active plan only after account facts and budget validation', async () => {
     const ctx = await buildTestContext();
     const facts = await deriveFacts(ctx);

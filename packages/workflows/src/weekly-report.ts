@@ -206,12 +206,21 @@ const accountWeekSection = async (
 };
 
 const alertFeedbackSection = async (
+  scope: WeeklyInput['scope'],
   periodStart: string,
+  periodEnd: string,
   now: Date,
   ctx: WorkflowContext,
 ): Promise<ReportSectionPiece> => {
   const since = new Date(`${periodStart}T00:00:00+08:00`);
-  const result = await ctx.tools.list_watch_triggers.execute({ since, limit: 500 });
+  const until = new Date(`${periodEnd}T23:59:59.999+08:00`);
+  const result = await ctx.tools.list_watch_triggers.execute({
+    ...(scope.kind === 'account' ? { poolId: `trading-plan-watch:${scope.accountId}` } : {}),
+    since,
+    until,
+    includeSummary: true,
+    limit: 500,
+  });
   if (!result.ok) {
     return unavailableSection(
       'alert-feedback',
@@ -222,14 +231,26 @@ const alertFeedbackSection = async (
       result.error.kind,
     );
   }
+  const summary = result.data.summary;
+  if (summary === undefined) {
+    return unavailableSection(
+      'alert-feedback',
+      '预警反馈',
+      true,
+      now,
+      'watch-triggers.summary',
+      'summary-unavailable',
+    );
+  }
   const evidence = [
     localEvidence('alert-feedback:0', 'alert-feedback', now, 'local/watch-triggers'),
   ];
-  const feedback = result.data.triggers.filter((trigger) => trigger.feedback !== undefined);
-  const useful = feedback.filter((trigger) => trigger.feedback === 'useful').length;
-  const failed = result.data.triggers.filter(
-    (trigger) => trigger.deliveryStatus === 'failed',
-  ).length;
+  const feedbackCount = Object.values(summary.feedbackCounts).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+  const useful = summary.feedbackCounts.useful ?? 0;
+  const failed = summary.deliveryStatusCounts.failed ?? 0;
   return {
     evidence,
     section: {
@@ -243,16 +264,25 @@ const alertFeedbackSection = async (
           kind: 'metrics',
           items: [
             { key: 'triggered', label: '预警数', value: result.data.total },
-            { key: 'feedbackCount', label: '已反馈', value: feedback.length },
+            { key: 'feedbackCount', label: '已反馈', value: feedbackCount },
             {
               key: 'usefulRate',
               label: '有用率',
-              value: feedback.length === 0 ? null : useful / feedback.length,
+              value: feedbackCount === 0 ? null : useful / feedbackCount,
               unit: 'ratio',
             },
-            { key: 'deliveryFailed', label: '送达失败', value: failed },
+            { key: 'deliveryFailed', label: '渠道投递失败', value: failed },
           ],
         },
+        ...(scope.kind === 'account'
+          ? [
+              {
+                kind: 'text' as const,
+                tone: 'factual' as const,
+                text: '账户周报仅统计该账户交易计划监控提醒；未标记账户归属的全局关注预警不并入账户反馈率。',
+              },
+            ]
+          : []),
       ],
       evidenceIds: evidence.map((item) => item.id),
       missingDimensions: [],
@@ -451,15 +481,17 @@ const MIN_STRATEGY_REVIEW_SAMPLE = 10;
  */
 const strategyReviewWeekSection = async (
   periodStart: string,
+  periodEnd: string,
   now: Date,
   ctx: WorkflowContext,
 ): Promise<ReportSectionPiece> => {
   const [strategies, runs] = await Promise.all([
-    ctx.tools.list_strategies.execute({ filter: { status: 'active' } }),
+    ctx.tools.list_strategies.execute({}),
     ctx.tools.list_strategy_runs.execute({
       scope: 'operational',
       publication: 'published',
       since: new Date(`${periodStart}T00:00:00+08:00`),
+      until: new Date(`${periodEnd}T23:59:59.999+08:00`),
       limit: 500,
     }),
   ]);
@@ -491,11 +523,24 @@ const strategyReviewWeekSection = async (
   const evidence: ReportEvidence[] = [
     localEvidence('strategy-review:runs', 'strategy-review.runs', now, 'tool:list_strategy_runs'),
   ];
-  const missingDimensions: ReportMissingDimension[] = [];
+  const missingDimensions: ReportMissingDimension[] =
+    runs.data.runs.length >= 500
+      ? [
+          missing(
+            'strategy-review.run-coverage',
+            '本周正式运行读取达到 500 条，策略复盘可能不完整',
+            'limit',
+          ),
+        ]
+      : [];
   const rows: Record<string, string | number | boolean | null>[] = [];
   const narratives: string[] = [];
   for (const strategy of reviewed) {
-    const insight = await ctx.tools.generate_strategy_insight.execute({ strategyId: strategy.id });
+    const insight = await ctx.tools.generate_strategy_insight.execute({
+      strategyId: strategy.id,
+      since: new Date(`${periodStart}T00:00:00+08:00`),
+      until: new Date(`${periodEnd}T23:59:59.999+08:00`),
+    });
     if (!insight.ok) {
       missingDimensions.push(
         missing(
@@ -580,7 +625,7 @@ const strategyReviewWeekSection = async (
             narratives.length > 0
               ? narratives.join('\n')
               : reviewed.length === 0
-                ? '本周没有 active 策略的 published 运行，无需复盘。'
+                ? '本周没有可复盘的 published 策略运行。'
                 : '策略洞察均不可用，详见缺失维度。',
         },
       ],
@@ -1555,9 +1600,9 @@ const runWeeklyReport = async (
         ] = await Promise.all([
           marketWeekSection(dates, generatedAt, ctx),
           accountWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
-          alertFeedbackSection(periodStart, generatedAt, ctx),
+          alertFeedbackSection(input.scope, periodStart, periodEnd, generatedAt, ctx),
           signalObservationWeekSection(periodStart, periodEnd, generatedAt, ctx),
-          strategyReviewWeekSection(periodStart, generatedAt, ctx),
+          strategyReviewWeekSection(periodStart, periodEnd, generatedAt, ctx),
           strategyAutonomyActionsWeekSection(periodStart, generatedAt, ctx),
           adviceOutcomesWeekSection(input, periodStart, periodEnd, generatedAt, ctx),
           nextWeekEventsSection(periodEnd, generatedAt, ctx),

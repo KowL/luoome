@@ -16,7 +16,7 @@ import {
   type StrategySignal,
   type StrategyVersion,
 } from '@luoome/core';
-import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import {
@@ -571,6 +571,7 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       readonly scope?: StrategyRun['scope'];
       readonly publication?: NonNullable<StrategyRun['publication']>['status'];
       readonly since?: Date;
+      readonly until?: Date;
       readonly limit?: number;
     } = {},
   ): Promise<readonly StrategyRun[]> {
@@ -584,6 +585,7 @@ export class DrizzleStrategyRunRepository implements StrategyRunRepository {
       conditions.push(eq(strategyRuns.publicationStatus, filter.publication));
     }
     if (filter.since !== undefined) conditions.push(gte(strategyRuns.startedAt, filter.since));
+    if (filter.until !== undefined) conditions.push(lte(strategyRuns.startedAt, filter.until));
     const query = this.db
       .select()
       .from(strategyRuns)

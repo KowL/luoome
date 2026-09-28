@@ -34,6 +34,8 @@ interface ExecuteReportWorkflowInput {
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly title: string;
+  readonly supplement?: boolean;
+  readonly shouldNotifySupplement?: (previous: Report, next: Report) => boolean;
   readonly inputSummary?: Record<string, unknown>;
   readonly buildSections: (
     generatedAt: Date,
@@ -41,26 +43,99 @@ interface ExecuteReportWorkflowInput {
   ) => Promise<readonly ReportSectionPiece[]>;
 }
 
+const deliverClaimedReport = async (
+  report: Report,
+  attemptId: string,
+  ctx: WorkflowContext,
+): Promise<{
+  readonly report: Report;
+  readonly notified: boolean;
+  readonly failed: boolean;
+  readonly errorKind?: string;
+}> => {
+  let status: 'sent' | 'fallback-log' | 'failed' = 'failed';
+  let errorKind: string | undefined;
+  const rendered = await ctx.tools.render_report.execute({
+    reportId: report.id,
+    format: 'notification',
+  });
+  if (!rendered.ok) {
+    errorKind = rendered.error.kind;
+  } else {
+    const sent = await ctx.tools.send_notification.execute({
+      ...(report.kind === 'closing' ? { notificationId: `report-notification:${report.id}` } : {}),
+      channel: 'feishu',
+      feishu: {
+        title: report.title,
+        content: rendered.data.content,
+        level: report.status === 'complete' ? 'success' : 'warn',
+      },
+    });
+    if (!sent.ok || sent.data.notification.result === 'failed') {
+      errorKind = sent.ok ? 'delivery_failed' : sent.error.kind;
+    } else {
+      status = sent.data.notification.result === 'suppressed' ? 'fallback-log' : 'sent';
+    }
+  }
+  const finished = await ctx.tools.set_report_delivery_status.execute({
+    reportId: report.id,
+    deliveryStatus: status,
+    attemptId,
+  });
+  if (!finished.ok) errorKind = finished.error.kind;
+  const current = await ctx.tools.get_report.execute({ id: report.id });
+  if (!current.ok) errorKind = current.error.kind;
+  return {
+    report: current.ok ? current.data.report : report,
+    notified: status === 'sent' && finished.ok && current.ok,
+    failed: status === 'failed' || !finished.ok || !current.ok,
+    ...(errorKind === undefined ? {} : { errorKind }),
+  };
+};
+
 export const executeReportWorkflow = async (
   input: ExecuteReportWorkflowInput,
   ctx: WorkflowContext,
 ): Promise<ReportRunResult | ToolResult<never>> => {
   const generatedAt = ctx.clock();
-  if (input.mode === 'scheduled') {
+  let previousReport: Report | undefined;
+  if (input.kind === 'closing' || input.mode === 'scheduled') {
     const existing = await ctx.tools.get_report.execute({
       kind: input.kind,
       scope: input.scope,
       periodEnd: input.periodEnd,
     });
+    if (!existing.ok && existing.error.kind !== 'not_found') return existing;
+    previousReport = existing.ok ? existing.data.report : undefined;
     if (
-      existing.ok &&
-      (existing.data.report.deliveryStatus === 'sent' ||
-        existing.data.report.deliveryStatus === 'fallback-log')
+      previousReport !== undefined &&
+      input.mode === 'scheduled' &&
+      ((input.kind === 'closing' && !input.supplement) ||
+        (input.kind !== 'closing' &&
+          (previousReport.deliveryStatus === 'sent' ||
+            previousReport.deliveryStatus === 'fallback-log')))
     ) {
+      if (input.kind === 'closing' && input.notify && previousReport.deliveryStatus !== 'sent') {
+        const attemptId = randomUUID();
+        const claim = await ctx.tools.save_report.execute({
+          report: previousReport,
+          deliveryAttemptId: attemptId,
+        });
+        if (!claim.ok) return claim;
+        if (claim.data.deliveryClaimed) {
+          const delivery = await deliverClaimedReport(claim.data.report, attemptId, ctx);
+          return {
+            report: delivery.report,
+            created: false,
+            workflowRunId: previousReport.workflowRunId,
+            notified: delivery.notified,
+          };
+        }
+      }
       return {
-        report: existing.data.report,
+        report: previousReport,
         created: false,
-        workflowRunId: existing.data.report.workflowRunId,
+        workflowRunId: previousReport.workflowRunId,
         notified: false,
       };
     }
@@ -120,11 +195,20 @@ export const executeReportWorkflow = async (
     : ('partial' as const);
   const report: Report = {
     id: `report-${input.kind}-${randomUUID()}`,
+    ...(input.kind === 'closing'
+      ? {
+          version: (previousReport?.version ?? 0) + 1,
+          ...(previousReport === undefined ? {} : { supersedesReportId: previousReport.id }),
+        }
+      : {}),
     kind: input.kind,
     scope: input.scope,
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
-    title: input.title,
+    title:
+      input.kind === 'closing' && previousReport !== undefined
+        ? `${input.title}（补充 v${(previousReport.version ?? 1) + 1}）`
+        : input.title,
     generatedAt,
     dataAsOf: requiredAsOf.length === 0 ? generatedAt : new Date(Math.min(...requiredAsOf)),
     status,
@@ -154,63 +238,56 @@ export const executeReportWorkflow = async (
     return saved;
   }
 
+  if (input.kind === 'closing' && !saved.data.created && !input.notify) {
+    const audited = await ctx.tools.record_workflow_run.execute({
+      run: {
+        id: workflowRunId,
+        workflowName: input.workflowName,
+        mode: input.mode,
+        status: saved.data.report.status === 'complete' ? 'succeeded' : 'partial',
+        startedAt: generatedAt,
+        finishedAt: ctx.clock(),
+        inputSummary,
+        outputSummary: {
+          reportId: saved.data.report.id,
+          reportStatus: saved.data.report.status,
+          reused: true,
+          notified: false,
+          deliveryStatus: saved.data.report.deliveryStatus,
+        },
+        providerStatuses: [],
+      },
+    });
+    if (!audited.ok) return audited;
+    return { report: saved.data.report, created: false, workflowRunId, notified: false };
+  }
+
   let deliveredReport = saved.data.report;
+  const shouldNotify =
+    input.notify &&
+    (!input.supplement ||
+      (previousReport !== undefined &&
+        input.shouldNotifySupplement?.(previousReport, deliveredReport) === true));
   let notified = false;
   let notificationFailed = false;
   let notificationErrorKind: string | undefined;
-  if (input.notify) {
-    const pending = await ctx.tools.set_report_delivery_status.execute({
-      reportId: deliveredReport.id,
-      deliveryStatus: 'pending',
+  if (shouldNotify) {
+    const attemptId = randomUUID();
+    const claim = await ctx.tools.save_report.execute({
+      report: deliveredReport,
+      deliveryAttemptId: attemptId,
     });
-    if (!pending.ok) {
+    if (!claim.ok) {
       notificationFailed = true;
-      notificationErrorKind = pending.error.kind;
+      notificationErrorKind = claim.error.kind;
+    } else if (claim.data.deliveryClaimed) {
+      const delivery = await deliverClaimedReport(claim.data.report, attemptId, ctx);
+      deliveredReport = delivery.report;
+      notified = delivery.notified;
+      notificationFailed = delivery.failed;
+      notificationErrorKind = delivery.errorKind;
     } else {
-      deliveredReport = { ...deliveredReport, deliveryStatus: 'pending' };
-      const rendered = await ctx.tools.render_report.execute({
-        reportId: deliveredReport.id,
-        format: 'notification',
-      });
-      if (!rendered.ok) {
-        notificationFailed = true;
-        notificationErrorKind = rendered.error.kind;
-      } else {
-        const notification = await ctx.tools.send_notification.execute({
-          channel: 'feishu',
-          feishu: {
-            title: deliveredReport.title,
-            content: rendered.data.content,
-            level: deliveredReport.status === 'complete' ? 'success' : 'warn',
-          },
-        });
-        if (!notification.ok || notification.data.notification.result === 'failed') {
-          notificationFailed = true;
-          notificationErrorKind = notification.ok ? 'delivery_failed' : notification.error.kind;
-        } else {
-          notified = notification.data.notification.result === 'success';
-          const deliveryStatus =
-            notification.data.notification.result === 'suppressed' ? 'fallback-log' : 'sent';
-          const delivered = await ctx.tools.set_report_delivery_status.execute({
-            reportId: deliveredReport.id,
-            deliveryStatus,
-          });
-          if (!delivered.ok) {
-            notificationFailed = true;
-            notificationErrorKind = delivered.error.kind;
-            notified = false;
-          } else {
-            deliveredReport = { ...deliveredReport, deliveryStatus };
-          }
-        }
-      }
-    }
-    if (notificationFailed && deliveredReport.deliveryStatus === 'pending') {
-      const failed = await ctx.tools.set_report_delivery_status.execute({
-        reportId: deliveredReport.id,
-        deliveryStatus: 'failed',
-      });
-      if (failed.ok) deliveredReport = { ...deliveredReport, deliveryStatus: 'failed' };
+      deliveredReport = claim.data.report;
     }
   }
 
@@ -219,7 +296,7 @@ export const executeReportWorkflow = async (
     ok: item.provenance.freshness !== 'unavailable',
     ...(item.provenance.errorKind === undefined ? {} : { errorKind: item.provenance.errorKind }),
   }));
-  if (input.notify) {
+  if (shouldNotify) {
     providerStatuses.push({
       provider: 'notification',
       ok: !notificationFailed,

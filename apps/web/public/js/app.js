@@ -398,8 +398,9 @@ const initAccountSelect = async () => {
       (a) => `<option value="${a.id}"${a.id === initialId ? ' selected' : ''}>${a.name}</option>`,
     )
     .join('');
-  if (initialId.length > 0 && !hasStored && initialId !== result.currentAccountId) {
-    await selectAccount(initialId);
+  if (initialId.length > 0 && !hasStored) {
+    if (initialId !== result.currentAccountId) await selectAccount(initialId);
+    else setAccountId(initialId);
   } else if (stored.length > 0 && stored !== initialId) {
     await selectAccount(initialId);
   }
@@ -534,5 +535,4 @@ startMarketSession();
 observeTopbarHeight();
 startDashboardAutoRefresh();
 startQuoteAutoRefresh();
-void initAccountSelect();
-void showRoute(currentHash());
+void initAccountSelect().then(() => showRoute(currentHash()));

@@ -123,6 +123,8 @@ const EXPECTED_TOOL_NAMES = [
   // v0.5 W4：confidence 自校准
   'get_confidence_calibration',
   'list_watch_triggers',
+  'get_intraday_delivery_audit',
+  'get_closing_batch_audit',
   'get_watch_status',
   // v0.7 策略预警（docs/ddd/strategy-watchlist-unification-detailed-design.md §9.2）新增
   'set_watch_trigger_feedback',
@@ -209,6 +211,8 @@ describe('toolRegistry', () => {
     expect(toolRegistry.get('analyze_stock')?.sideEffect).toBe('advice');
     expect(toolRegistry.get('fetch_quote')?.sideEffect).toBe('external');
     expect(toolRegistry.get('compute_indicators')?.sideEffect).toBe('read');
+    expect(toolRegistry.get('get_intraday_delivery_audit')?.sideEffect).toBe('read');
+    expect(toolRegistry.get('get_closing_batch_audit')?.sideEffect).toBe('read');
     expect(toolRegistry.get('not_a_tool')).toBeUndefined();
   });
 

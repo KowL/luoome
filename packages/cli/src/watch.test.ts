@@ -20,17 +20,19 @@ describe('isTradingHours (Asia/Shanghai)', () => {
     return d;
   };
 
-  it('周一至周五 9:30–11:30 + 13:00–15:00 → true', () => {
+  it('周一至周五上午和下午交易时段内为 true', () => {
     expect(isTradingHours(tuesday(9, 30))).toBe(true);
-    expect(isTradingHours(tuesday(11, 30))).toBe(true);
+    expect(isTradingHours(tuesday(11, 29))).toBe(true);
     expect(isTradingHours(tuesday(13, 0))).toBe(true);
-    expect(isTradingHours(tuesday(15, 0))).toBe(true);
+    expect(isTradingHours(tuesday(14, 59))).toBe(true);
     expect(isTradingHours(tuesday(10, 0))).toBe(true);
   });
 
   it('11:30–13:00 / 15:00–次日 9:30 → false', () => {
+    expect(isTradingHours(tuesday(11, 30))).toBe(false);
     expect(isTradingHours(tuesday(11, 31))).toBe(false);
     expect(isTradingHours(tuesday(12, 0))).toBe(false);
+    expect(isTradingHours(tuesday(15, 0))).toBe(false);
     expect(isTradingHours(tuesday(15, 1))).toBe(false);
     expect(isTradingHours(tuesday(9, 29))).toBe(false);
   });

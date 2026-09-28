@@ -6,15 +6,18 @@ import {
   calibrationPnlText,
   calibrationRateText,
   dashboardBoardQuery,
+  dashboardClosingReportNode,
   decisionLoopAttributionRate,
   errorKindLabel,
   filterAdvices,
   outcomeInputOf,
   quoteState,
   readDashboardView,
+  reportDeliveryLabel,
   reportEntityHref,
   reportSheetNodes,
   routeAdviceId,
+  routeReportId,
   routeStockId,
   sortBoardItems,
   watchRunSummaryText,
@@ -135,21 +138,21 @@ describe('盯盘最近一轮摘要', () => {
       notified: 1,
     };
     expect(watchRunSummaryText(latest)).toBe(
-      '评估 3 个方案 / 12 只股票 · 触发 2 · 尝试通知 1 · 送达 未记录 · 无法求值 未记录',
+      '评估 3 个方案 / 12 只股票 · 触发 2 · 尝试通知 1 · 渠道受理 未记录 · 无法求值 未记录',
     );
   });
 
-  it('正常心跳仍单独呈现未送达和无法求值', () => {
+  it('正常心跳仍单独呈现渠道受理和无法求值', () => {
     expect(
       watchRunSummaryText({
         evaluatedPools: 1,
         evaluatedStocks: 2,
         triggered: 1,
         notified: 1,
-        delivered: 0,
+        channelAccepted: 0,
         unknownRules: 2,
       }),
-    ).toContain('尝试通知 1 · 送达 0 · 无法求值 2');
+    ).toContain('尝试通知 1 · 渠道受理 0 · 无法求值 2');
   });
 
   it('尚无运行记录时给占位文案', () => {
@@ -163,7 +166,7 @@ describe('盯盘最近一轮摘要', () => {
         evaluatedStocks: 0,
         triggered: 0,
         notified: 0,
-        delivered: 0,
+        channelAccepted: 0,
         unknownRules: 0,
       }),
     ).toBe('最近一轮没有可评估的标的 · 运行心跳已记录');
@@ -397,6 +400,52 @@ describe('看板筛选与分页请求', () => {
 });
 
 describe('复盘报告阅读层级', () => {
+  it('账户报告入口能区分主版、补充版与渠道投递状态', () => {
+    const originalDocument = globalThis.document;
+    const originalNode = globalThis.Node;
+    class TestNode {
+      constructor(tag = '', text = '') {
+        this.tag = tag;
+        this.children = [];
+        this.text = text;
+      }
+      append(...children) {
+        this.children.push(...children);
+      }
+      set textContent(value) {
+        this.text = value;
+      }
+      get textContent() {
+        return this.text + this.children.map((child) => child.textContent).join('');
+      }
+    }
+    globalThis.Node = TestNode;
+    globalThis.document = {
+      createElement: (tag) => new TestNode(tag),
+      createTextNode: (text) => new TestNode('', text),
+    };
+    try {
+      const card = dashboardClosingReportNode({
+        id: 'report-2',
+        title: '账户收盘复盘',
+        periodEnd: '2026-09-21',
+        version: 2,
+        status: 'partial',
+        deliveryStatus: 'fallback-log',
+        generatedAt: '2026-09-21T10:00:00Z',
+      });
+      expect(card.textContent).toContain('补充 v2');
+      expect(card.textContent).toContain('部分数据待补齐');
+      expect(card.textContent).toContain('仅写日志');
+      expect(card.children[0].children[0].href).toBe('#reports?id=report-2');
+      expect(routeReportId('#reports?id=report-2')).toBe('report-2');
+      expect(reportDeliveryLabel('sent')).toBe('已提交渠道');
+    } finally {
+      globalThis.document = originalDocument;
+      globalThis.Node = originalNode;
+    }
+  });
+
   it('正文保留有效值和零值，空项合并说明，缺口折叠且仍可追溯', () => {
     const originalDocument = globalThis.document;
     const originalNode = globalThis.Node;

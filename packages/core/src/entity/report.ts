@@ -126,6 +126,8 @@ export type ReportSection = z.infer<typeof ReportSectionSchema>;
 
 export const ReportSchema = z.object({
   id: z.string().min(1),
+  version: z.number().int().positive().optional(),
+  supersedesReportId: z.string().min(1).optional(),
   kind: ReportKindSchema,
   scope: ReportScopeSchema,
   periodStart: z.string().date(),
@@ -177,6 +179,15 @@ const findAdviceDecisionField = (value: unknown): string | null => {
 };
 
 export const assertReportInvariants = (report: Report): void => {
+  if ((report.version ?? 1) > 1 && report.supersedesReportId === undefined) {
+    throw new InvariantError('report supplement must reference previous report');
+  }
+  if ((report.version ?? 1) === 1 && report.supersedesReportId !== undefined) {
+    throw new InvariantError('report first version cannot supersede another report');
+  }
+  if (report.supersedesReportId === report.id) {
+    throw new InvariantError('report cannot supersede itself');
+  }
   if (report.periodStart > report.periodEnd) {
     throw new InvariantError('report periodStart > periodEnd');
   }

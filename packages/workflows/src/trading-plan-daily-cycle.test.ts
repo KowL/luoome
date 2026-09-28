@@ -333,4 +333,126 @@ describe('trading plan daily cycle', () => {
     expect(result.data.candidateReviews).toBe(0);
     expect(result.data.plans).toHaveLength(0);
   });
+
+  it('同股策略证据合并；关键行动条件冲突时只生成待复核草案', async () => {
+    const accountId = EMPTY_ACCOUNT_ID;
+    const first = AdviceSchema.parse({
+      id: 'same-stock-advice-a',
+      subjectKind: 'stock',
+      subjectId: STOCK_ID,
+      stockName: '贵州茅台',
+      decision: 'buy',
+      confidence: 80,
+      horizon: 'short',
+      entryPriceLow: 100,
+      entryPriceHigh: 105,
+      targetPositionPct: 10,
+      stopLoss: 95,
+      reasoning: {
+        premise: '策略 A 入选',
+        evidence: ['策略 A 事实'],
+        counterEvidence: ['策略 A 反证'],
+      },
+      risks: ['策略 A 风险'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_strategy_candidate',
+      basedOn: {
+        strategy: {
+          strategyId: 'strategy-a',
+          strategyVersionId: 'strategy-a-v1',
+          runId: 'run-a',
+          stockId: STOCK_ID,
+          accountId,
+          resultEvidence: [],
+          signalIds: ['signal-a'],
+          observationIds: [],
+          recommendationTrigger: 'run',
+        },
+        quotes: {
+          [STOCK_ID]: {
+            stockId: STOCK_ID,
+            observedAt: new Date(NOW.getTime() - 60_000),
+            fetchedAt: NOW,
+            timestampSource: 'upstream',
+            open: 101,
+            high: 103,
+            low: 99,
+            close: 102,
+            volume: 1000,
+            source: 'fixture',
+          },
+        },
+        dataAsOf: NOW,
+      },
+      validFrom: NOW,
+      validUntil: new Date('2026-07-20T07:00:00.000Z'),
+      createdAt: NOW,
+    }) as Advice;
+    const second = AdviceSchema.parse({
+      ...first,
+      id: 'same-stock-advice-b',
+      confidence: 70,
+      reasoning: {
+        premise: '策略 B 入选',
+        evidence: ['策略 B 事实'],
+        counterEvidence: ['策略 B 反证'],
+      },
+      risks: ['策略 B 风险'],
+      basedOn: {
+        ...first.basedOn,
+        strategy: {
+          ...first.basedOn.strategy,
+          strategyId: 'strategy-b',
+          strategyVersionId: 'strategy-b-v1',
+          runId: 'run-b',
+          signalIds: ['signal-b'],
+        },
+      },
+    }) as Advice;
+    const superseded = AdviceSchema.parse({
+      ...first,
+      id: 'same-stock-advice-old',
+      decision: 'sell',
+      targetPositionPct: 0,
+      validFrom: new Date(NOW.getTime() - 60_000),
+      createdAt: new Date(NOW.getTime() - 60_000),
+    }) as Advice;
+    const ctx = await buildTestContext({ advices: [first, second, superseded], clock: () => NOW });
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.candidateReviews).toBe(1);
+    expect(result.data.plans).toHaveLength(1);
+    expect(result.data.plans[0]?.source).toMatchObject({
+      strategyIds: ['strategy-a', 'strategy-b'],
+      adviceIds: ['same-stock-advice-a', 'same-stock-advice-b'],
+    });
+    expect(result.data.plans[0]?.marketFacts.map((fact) => fact.id)).toEqual([
+      `price:${STOCK_ID}:same-stock-advice-a`,
+      `price:${STOCK_ID}:same-stock-advice-b`,
+    ]);
+    expect(
+      result.data.plans[0]?.evidence.find((item) => item.id === 'advice:same-stock-advice-b'),
+    ).toMatchObject({ factIds: [`price:${STOCK_ID}:same-stock-advice-b`] });
+    expect(result.data.plans[0]?.explanation.counterEvidence).toEqual([
+      '策略 A 反证',
+      '策略 B 反证',
+    ]);
+
+    const conflicting = AdviceSchema.parse({
+      ...second,
+      decision: 'sell',
+      targetPositionPct: 0,
+    }) as Advice;
+    const conflictCtx = await buildTestContext({
+      advices: [first, conflicting],
+      clock: () => NOW,
+    });
+    const conflict = await tradingPlanDailyCycleWorkflow.run({ accountId }, conflictCtx);
+    expect(conflict.ok).toBe(true);
+    if (!conflict.ok) return;
+    expect(conflict.data.plans[0]?.status).toBe('draft');
+    expect(conflict.data.plans[0]?.position.constraintStatus).toBe('blocked');
+    expect(conflict.data.plans[0]?.explanation.unknowns.join('；')).toContain('条件不一致');
+  });
 });

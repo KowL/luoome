@@ -194,6 +194,37 @@ describe('notification/NotificationManager', () => {
     expect(notif.rows.size).toBe(1);
   });
 
+  it('指定通知身份在失败后可重试，成功后不会再次调用渠道', async () => {
+    const { repos, notif } = makeRepos();
+    let requests = 0;
+    const feishu = new FeishuWebhookAdapter({
+      webhookUrl: 'https://x',
+      fetchImpl: async () => {
+        requests += 1;
+        return requests === 1
+          ? new Response('temporary failure', { status: 503 })
+          : new Response(JSON.stringify({ StatusCode: 0 }), { status: 200 });
+      },
+      logger: noopLogger,
+    });
+    const manager = new NotificationManager({ repos, feishu, logger: noopLogger });
+    const input = {
+      id: 'report-notification:report-1',
+      channel: 'feishu' as const,
+      payload: { title: 'report', content: 'details', level: 'info' as const },
+    };
+    expect((await manager.send(input)).notification.result).toBe('failed');
+    const retried = { ...input, payload: { ...input.payload, content: 'updated details' } };
+    expect((await manager.send(retried)).notification.result).toBe('success');
+    expect((await manager.send(retried)).notification.result).toBe('success');
+    expect(requests).toBe(2);
+    expect(notif.rows.size).toBe(1);
+    expect(notif.rows.get(input.id)?.payload.content).toBe('updated details');
+    await expect(
+      manager.send({ ...input, payload: { ...input.payload, content: 'other report' } }),
+    ).rejects.toThrow('another payload');
+  });
+
   it('feishu 未配置 → result=suppressed', async () => {
     const { repos, notif } = makeRepos();
     const info = vi.fn();
@@ -208,6 +239,33 @@ describe('notification/NotificationManager', () => {
     });
     expect(r.notification.result).toBe('suppressed');
     expect(info).toHaveBeenCalledWith('[luoome/notify] t — c', { level: 'info', title: 't' });
+    expect(notif.rows.size).toBe(1);
+  });
+
+  it('固定通知身份在飞书恢复配置后补投，成功后不重复发送', async () => {
+    const { repos, notif } = makeRepos();
+    const input = {
+      id: 'report-notification:report-recovered',
+      channel: 'feishu' as const,
+      payload: { title: 'report', content: 'details', level: 'info' as const },
+    };
+    const unconfigured = new NotificationManager({ repos, logger: noopLogger });
+    expect((await unconfigured.send(input)).notification.result).toBe('suppressed');
+    expect((await unconfigured.send(input)).notification.result).toBe('suppressed');
+
+    let requests = 0;
+    const feishu = new FeishuWebhookAdapter({
+      webhookUrl: 'https://x',
+      fetchImpl: async () => {
+        requests += 1;
+        return new Response(JSON.stringify({ StatusCode: 0 }), { status: 200 });
+      },
+      logger: noopLogger,
+    });
+    const configured = new NotificationManager({ repos, feishu, logger: noopLogger });
+    expect((await configured.send(input)).notification.result).toBe('success');
+    expect((await configured.send(input)).notification.result).toBe('success');
+    expect(requests).toBe(1);
     expect(notif.rows.size).toBe(1);
   });
 

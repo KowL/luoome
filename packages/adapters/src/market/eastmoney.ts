@@ -111,7 +111,7 @@ interface EastmoneyQuoteResponse {
     readonly f47?: number; // 成交量（手）
     readonly f48?: number; // 成交额（元）
     readonly f60?: number; // 昨收
-    readonly f124?: number; // 行情更新时间（Unix 秒）
+    readonly f86?: number; // stock/get 交易时间（Unix 秒；批量接口使用 f124）
     readonly f57?: string; // 代码
     readonly f58?: string; // 名称
     readonly f168?: number; // 换手率%
@@ -260,7 +260,7 @@ const suggestExchange = (item: EastmoneySuggestItem): Exchange | undefined => {
 };
 
 const QUOTE_FIELDS =
-  'f43,f44,f45,f46,f47,f48,f60,f57,f58,f84,f85,f116,f117,f124,f162,f163,f164,f167,f168,f169,f170,f245';
+  'f43,f44,f45,f46,f47,f48,f60,f57,f58,f84,f85,f86,f116,f117,f162,f163,f164,f167,f168,f169,f170,f245';
 const KLINE_FIELDS = '1,2,3,4,5,6,8,9';
 /** suggest 接口公开 token（Eastmoney Web 前端同款，无需鉴权）。 */
 const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8';
@@ -411,7 +411,7 @@ export const fetchEastmoneyQuote = async (
   const amount = asNumber(d.f48);
   const prevClose = asNumber(d.f60);
   const turnoverRatePct = asNumber(d.f168);
-  const upstreamAtSec = asNumber(d.f124);
+  const upstreamAtSec = asNumber(d.f86);
   const totalShares = asNumber(d.f84);
   const floatShares = asNumber(d.f85);
   const totalMarketCap = asNumber(d.f116);

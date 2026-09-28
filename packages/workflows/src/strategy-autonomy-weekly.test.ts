@@ -1782,9 +1782,15 @@ describe('strategy-autonomy-weekly · 周报嵌套触发', () => {
           },
           findById: (...args: Parameters<typeof reportRepo.findById>) =>
             reportRepo.findById(...args),
+          findByPeriodVersion: (...args: Parameters<typeof reportRepo.findByPeriodVersion>) =>
+            reportRepo.findByPeriodVersion(...args),
           findByPeriod: (...args: Parameters<typeof reportRepo.findByPeriod>) =>
             reportRepo.findByPeriod(...args),
           list: (...args: Parameters<typeof reportRepo.list>) => reportRepo.list(...args),
+          claimDelivery: (...args: Parameters<typeof reportRepo.claimDelivery>) =>
+            reportRepo.claimDelivery(...args),
+          finishDelivery: (...args: Parameters<typeof reportRepo.finishDelivery>) =>
+            reportRepo.finishDelivery(...args),
           setDeliveryStatus: (...args: Parameters<typeof reportRepo.setDeliveryStatus>) =>
             reportRepo.setDeliveryStatus(...args),
           remove: (...args: Parameters<typeof reportRepo.remove>) => reportRepo.remove(...args),

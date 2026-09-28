@@ -358,14 +358,22 @@ export interface AdviceRepository {
 /** 逐股结构化计划版本；版本 immutable，active 状态切换由新版本替代表达。 */
 export interface TradingPlanRepository {
   save(plan: TradingPlan): Promise<void>;
-  /** 在同一持久化事务内读取当前计划预算并条件写入 active 版本。 */
+  /** 在同一持久化事务内核对账户事实、读取当前计划预算并条件写入 active 版本。 */
   saveIfBudgetAvailable(input: {
     readonly plan: TradingPlan;
     readonly facts: AccountFacts;
     readonly stocks: ReadonlyMap<string, Stock>;
     readonly limits: TradingPlanBudgetLimits;
     readonly asOf: Date;
-  }): Promise<{ readonly saved: boolean; readonly budget: TradingPlanBudgetResult }>;
+  }): Promise<
+    | { readonly saved: true; readonly budget: TradingPlanBudgetResult }
+    | {
+        readonly saved: false;
+        readonly reason: 'budget-exceeded';
+        readonly budget: TradingPlanBudgetResult;
+      }
+    | { readonly saved: false; readonly reason: 'account-facts-changed' }
+  >;
   findByVersionId(versionId: string): Promise<TradingPlan | null>;
   list(query?: TradingPlanQuery): Promise<readonly TradingPlan[]>;
   latestByPlanId(planId: string): Promise<TradingPlan | null>;
@@ -375,6 +383,13 @@ export interface TradingPlanRepository {
 export interface ReportRepository {
   upsertForPeriod(report: Report): Promise<Report>;
   findById(id: string): Promise<Report | null>;
+  findByPeriodVersion(input: {
+    readonly kind: ReportKind;
+    readonly scopeKey: string;
+    readonly periodStart: string;
+    readonly periodEnd: string;
+    readonly version: number;
+  }): Promise<Report | null>;
   findByPeriod(input: {
     readonly kind: ReportKind;
     readonly scopeKey: string;
@@ -389,6 +404,19 @@ export interface ReportRepository {
     readonly status?: ReportStatus;
     readonly limit?: number;
   }): Promise<readonly Report[]>;
+  claimDelivery(input: {
+    readonly id: string;
+    readonly attemptId: string;
+    readonly now: Date;
+    readonly stalePendingBefore: Date;
+    readonly failedRetryBefore: Date;
+  }): Promise<boolean>;
+  finishDelivery(input: {
+    readonly id: string;
+    readonly attemptId: string;
+    readonly status: 'sent' | 'fallback-log' | 'failed';
+    readonly now: Date;
+  }): Promise<boolean>;
   setDeliveryStatus(id: string, status: DeliveryStatus): Promise<void>;
   remove(id: string): Promise<void>;
 }
@@ -683,6 +711,7 @@ export interface StrategyRunRepository {
     readonly scope?: StrategyRunScope;
     readonly publication?: StrategyRunPublicationStatus;
     readonly since?: Date;
+    readonly until?: Date;
     /** 按 startedAt 倒序取前 N 条，避免全量拉取。 */
     readonly limit?: number;
   }): Promise<readonly StrategyRun[]>;
@@ -924,7 +953,12 @@ export interface WatchTriggerRepository {
     readonly owner: string;
     readonly now: Date;
     readonly triggers: readonly WatchTrigger[];
+    readonly auditTriggers?: readonly WatchTrigger[];
     readonly states: readonly WatchRuleState[];
+    readonly invalidatePending?: {
+      readonly triggerIds: readonly string[];
+      readonly reason: string;
+    };
   }): Promise<boolean>;
   /** 发送前持久化尝试，崩溃留下 pending 供有限重试。 */
   beginDelivery(ids: readonly string[], at: Date): Promise<void>;
@@ -986,12 +1020,13 @@ export interface WatchTriggerRepository {
    */
   countAttemptedSince(since: Date, poolId?: string | null): Promise<number>;
   /**
-   * 发送后回写：批量更新 deliveryStatus + 可选 notificationId；is-notified 自动按 ATTEMPTED 判定。
+   * 发送后回写：批量更新 deliveryStatus、可选 notificationId 和实际结束时间；is-notified 自动按 ATTEMPTED 判定。
    */
   setDeliveryStatus(
     ids: readonly string[],
     status: DeliveryStatus,
     notificationId?: string,
+    completedAt?: Date,
   ): Promise<void>;
   /** 用户反馈（set_watch_trigger_feedback 写入）。 */
   setFeedback(id: string, feedback: TriggerFeedback, at: Date): Promise<void>;
@@ -1084,6 +1119,13 @@ export interface StockEventRepository {
 /** Workflow 运行审计仓储（ruo 迁移 Phase 1C，docs/.../§3.4）。save 同 id 为 upsert（running → terminal）。 */
 export interface WorkflowRunRepository {
   save(run: WorkflowRun): Promise<void>;
+  /** 原子领取固定 id 的运行；同一批次只允许一个执行者。 */
+  claim(
+    run: WorkflowRun,
+    retry?: { readonly staleRunningBefore: Date; readonly failedRetryBefore: Date },
+  ): Promise<boolean>;
+  /** 仅领取令牌匹配的执行者能结束运行。 */
+  finishClaim(run: WorkflowRun, claimToken: string): Promise<boolean>;
   findById(id: string): Promise<WorkflowRun | null>;
   listRecent(opts?: {
     readonly workflowName?: string;
@@ -1091,6 +1133,8 @@ export interface WorkflowRunRepository {
     readonly since?: Date;
     readonly limit?: number;
   }): Promise<readonly WorkflowRun[]>;
+  /** 按批次输入交易日读取全部账户计划运行，包括隔日重试。 */
+  listAccountPlanBatches(date: string): Promise<readonly WorkflowRun[]>;
   /** Strategy 日循环专用审计查询；归属与 dataAsOf 过滤必须先于 limit/offset。 */
   listStrategyDailyCycleAudits(
     query?: StrategyDailyCycleAuditQuery,

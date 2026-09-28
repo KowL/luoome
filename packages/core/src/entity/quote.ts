@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { isAshareTradingSession } from '../trading-calendar.js';
 import { type Money, MoneySchema } from '../types/branded.js';
 
 /** 单股票稀疏市场观测；ts 是 observedAt 的兼容投影。 */
@@ -35,6 +36,21 @@ export interface Quote {
   readonly pb?: number | undefined;
   readonly source: string;
 }
+
+export const isIntradayQuoteCurrent = (
+  quote: Pick<Quote, 'observedAt' | 'fetchedAt' | 'timestampSource'>,
+  now: Date,
+): boolean => {
+  if (
+    quote.timestampSource !== 'upstream' ||
+    quote.fetchedAt.getTime() > now.getTime() ||
+    !isAshareTradingSession(now) ||
+    !isAshareTradingSession(quote.observedAt)
+  )
+    return false;
+  const ageMs = now.getTime() - quote.observedAt.getTime();
+  return ageMs >= 0 && ageMs <= 120_000;
+};
 
 /** 调用方可消费的规范日线；所有价格都位于前复权（qfq）坐标系。 */
 export interface DailyBar {

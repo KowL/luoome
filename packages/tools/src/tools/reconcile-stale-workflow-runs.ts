@@ -33,14 +33,25 @@ export const reconcileStaleWorkflowRunsTool = defineTool({
   handler: async (input, ctx) => {
     const now = ctx.clock();
     const cutoff = new Date(now.getTime() - input.olderThanMinutes * 60_000);
-    const running = await ctx.repos.workflowRun.listRecent({
-      status: 'running',
-      limit: input.limit,
-    });
+    const [recent, accountBatches] = await Promise.all([
+      ctx.repos.workflowRun.listRecent({ status: 'running', limit: input.limit }),
+      ctx.repos.workflowRun.listRecent({
+        workflowName: 'account-plan-batch',
+        status: 'running',
+        limit: input.limit,
+      }),
+    ]);
+    const running = [
+      ...new Map([...recent, ...accountBatches].map((run) => [run.id, run])).values(),
+    ];
     let skipped = 0;
     const runIds: string[] = [];
     for (const run of running) {
-      if (run.startedAt > cutoff) {
+      const effectiveCutoff =
+        run.workflowName === 'account-plan-batch'
+          ? new Date(Math.min(cutoff.getTime(), now.getTime() - 120 * 60_000))
+          : cutoff;
+      if (run.startedAt > effectiveCutoff) {
         skipped += 1;
         continue;
       }
@@ -56,8 +67,16 @@ export const reconcileStaleWorkflowRunsTool = defineTool({
         },
         error: 'stale_workflow_run_reconciled',
       });
-      await ctx.repos.workflowRun.save(failed);
-      runIds.push(run.id);
+      const claimToken = run.inputSummary?.claimToken;
+      let reconciled: boolean;
+      if (run.workflowName === 'account-plan-batch' && typeof claimToken === 'string') {
+        reconciled = await ctx.repos.workflowRun.finishClaim(failed, claimToken);
+      } else {
+        await ctx.repos.workflowRun.save(failed);
+        reconciled = true;
+      }
+      if (reconciled) runIds.push(run.id);
+      else skipped += 1;
     }
     return {
       scanned: running.length,

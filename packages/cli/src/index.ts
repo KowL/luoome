@@ -560,6 +560,7 @@ const cmdWatch = async (
   _rest: readonly string[],
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
+  runTradingPlans = false,
 ): Promise<number> => {
   const intervalRaw = flagString(flags, 'interval') ?? '60';
   const intervalSec = parsePositiveInt(intervalRaw, 'interval');
@@ -574,7 +575,13 @@ const cmdWatch = async (
   const notify = !flags.has('no-notify');
 
   // 延迟 import：workflow 包包含 LLM / context 等较重依赖
-  const { runIntradayWatchObserved } = await import('@luoome/workflows');
+  const { intradayTradingPlanWatchWorkflow, runIntradayWatchObserved } = await import(
+    '@luoome/workflows'
+  );
+  const planWorkflow = runTradingPlans ? intradayTradingPlanWatchWorkflow : undefined;
+  const listAccountsTool = runTradingPlans
+    ? (await import('@luoome/tools')).listAccountsTool
+    : undefined;
   const { clampInterval, formatTriggersForLog, isTradingHours, nextRunDelayMs } = await import(
     './watch.js'
   );
@@ -646,6 +653,22 @@ const cmdWatch = async (
     }
     firstIteration = false;
     if (!json) console.warn(`[${now.toISOString()}] 跑一轮…`);
+    if (planWorkflow !== undefined && listAccountsTool !== undefined) {
+      const accounts = await listAccountsTool.execute({}, ctx);
+      if (!accounts.ok) {
+        console.error(`盘中计划列出账户失败: ${accounts.error.kind}`);
+      } else {
+        for (const account of accounts.data.accounts) {
+          if (stopping || !isTradingHours(new Date())) break;
+          const planResult = await planWorkflow.run({ accountId: account.id }, ctx);
+          if (!planResult.ok || planResult.data.status !== 'complete') {
+            console.error(
+              `盘中计划账户监控未完成: ${account.id} / ${planResult.ok ? planResult.data.status : planResult.error.kind}`,
+            );
+          }
+        }
+      }
+    }
     const r = await runIntradayWatchObserved(
       {
         ...(alertPlanIds !== undefined ? { alertPlanIds } : {}),
@@ -803,15 +826,32 @@ const cmdStart = async (
   const daemon = maybeDaemonize(flags, json);
   if (daemon !== null) return daemon;
   const mod = (await import('@luoome/web')) as {
-    startWeb: (options: { port: number; host: string }) => Promise<{
+    startWeb: (options: {
+      port: number;
+      host: string;
+      intradayPlanSchedulerEnabled: boolean;
+    }) => Promise<{
       readonly port: number;
       stop(closeActiveConnections?: boolean): void;
     }>;
   };
-  const server = await mod.startWeb({ port, host });
+  const server = await mod.startWeb({
+    port,
+    host,
+    intradayPlanSchedulerEnabled: false,
+  });
   if (!json) console.log(`MVP 已就绪：http://${host}:${server.port}`);
 
-  if (flags.has('no-watch')) {
+  const watchEnabled =
+    !flags.has('no-watch') &&
+    process.env.LUOOME_EXPOSE_WRITE === 'true' &&
+    process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
+  if (!watchEnabled) {
+    if (!flags.has('no-watch') && !json) {
+      console.warn(
+        '盘中自动监控未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true',
+      );
+    }
     await new Promise<void>((resolve) => {
       const stop = (): void => {
         process.off('SIGINT', stop);
@@ -824,7 +864,7 @@ const cmdStart = async (
   }
 
   try {
-    return await cmdWatch([], flags, json);
+    return await cmdWatch([], flags, json, true);
   } finally {
     server.stop(true);
   }

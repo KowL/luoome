@@ -144,9 +144,10 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 启动时校验：trade 必须 false，否则启动失败。
 
 Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须在启动层独立验证其完整副作用集合。
-账户绩效盘后 scheduler 会读取外部行情并持久化日线、快照和 WorkflowRun，因此只有
+策略盘后、盘中账户计划、账户绩效与策略自治 scheduler 会读取外部行情或 AI，并持久化计划、触发、报告、快照或 WorkflowRun，因此只有
 `LUOOME_EXPOSE_WRITE=true` 与 `LUOOME_EXPOSE_EXTERNAL=true` 同时显式开启时才允许启动；缺任一项时
-保持停用并记录原因。不得通过修改 Tool 的单一 `sideEffect` 标签掩盖组合副作用。
+保持停用并记录原因。`luoome start` 的长驻账户计划与 AlertPlan 盯盘循环也受此双闸口约束。
+不得通过修改 Tool 的单一 `sideEffect` 标签掩盖组合副作用。
 
 ## 内置 agent loop
 

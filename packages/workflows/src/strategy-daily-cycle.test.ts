@@ -6,20 +6,30 @@ import type {
   StrategyVersion,
   ToolContext,
 } from '@luoome/core';
-import { strategyDefinitionHash } from '@luoome/core';
+import { money, strategyDefinitionHash } from '@luoome/core';
+import { addHoldingTool, addTradeTool, getIntradayDeliveryAuditTool } from '@luoome/tools';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
-
+import { closingReportWorkflow } from './closing-report.js';
+import { closingReportCutoffWorkflow } from './closing-report-cutoff.js';
+import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.js';
 import { strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
 
 const NOW = new Date('2026-08-10T10:00:00.000Z');
 
 const seedSchedule = async (
   ctx: ToolContext,
-  options: { readonly withSignal?: boolean; readonly key?: string } = {},
+  options: {
+    readonly withSignal?: boolean;
+    readonly key?: string;
+    readonly scheduledAt?: Date;
+    readonly cron?: string;
+    readonly nextRunAt?: Date;
+  } = {},
 ): Promise<void> => {
   const key = options.key ?? 'cycle';
-  await seedTestStockUniverse(ctx, { limit: 1, observedAt: NOW });
+  const scheduledAt = options.scheduledAt ?? NOW;
+  await seedTestStockUniverse(ctx, { limit: 1, observedAt: scheduledAt });
   const definition: StrategyDslV1 = {
     schemaVersion: 1,
     metadata: {},
@@ -53,8 +63,8 @@ const seedSchedule = async (
     definitionHash: strategyDefinitionHash(definition),
     validationStatus: 'valid',
     validationErrors: [],
-    publishedAt: NOW,
-    createdAt: NOW,
+    publishedAt: scheduledAt,
+    createdAt: scheduledAt,
   };
   await ctx.repos.strategy.create({
     id: `${key}-strategy`,
@@ -63,24 +73,201 @@ const seedSchedule = async (
     owner: 'user',
     status: 'active',
     currentVersionId: version.id,
-    createdAt: NOW,
-    updatedAt: NOW,
+    createdAt: scheduledAt,
+    updatedAt: scheduledAt,
   });
   await ctx.repos.strategy.createVersion(version);
   const schedule: StrategySchedule = {
     id: `${key}-schedule`,
     strategyId: `${key}-strategy`,
-    cron: '0 18 * * 1-5',
+    cron: options.cron ?? '0 18 * * 1-5',
     timezone: 'Asia/Shanghai',
     enabled: true,
-    nextRunAt: NOW,
-    createdAt: NOW,
-    updatedAt: NOW,
+    nextRunAt: options.nextRunAt ?? scheduledAt,
+    createdAt: scheduledAt,
+    updatedAt: scheduledAt,
   };
   await ctx.repos.strategySchedule.save(schedule);
 };
 
 describe('strategy-daily-cycle reliability matrix', () => {
+  it('AI 恢复到计划、次日投递重试、登记交易和隔日复盘保持同一事实链', async () => {
+    let currentTime = NOW;
+    let failAI = true;
+    let failNotification = false;
+    let riskPrice: number | undefined;
+    const accountId = 'a1b2c3d4-0001-4000-8000-000000000001';
+    const stockId = '000858.SZ';
+    const ctx = await buildTestContext({
+      advices: [],
+      clock: () => currentTime,
+      marketTimestampSource: 'upstream',
+    });
+    const fetchQuote = ctx.adapters.market.fetchQuote.bind(ctx.adapters.market);
+    ctx.adapters.market.fetchQuote = async (id) => {
+      const quote = await fetchQuote(id);
+      const observedAt =
+        currentTime.getUTCHours() >= 7
+          ? new Date(`${currentTime.toISOString().slice(0, 10)}T07:00:00.000Z`)
+          : currentTime;
+      return {
+        ...quote,
+        ...(id === stockId && riskPrice !== undefined ? { close: money(riskPrice) } : {}),
+        observedAt,
+        ts: observedAt,
+      };
+    };
+    const generate = ctx.adapters.llm.generate.bind(ctx.adapters.llm);
+    ctx.adapters.llm.generate = async <T = unknown>(
+      request: Parameters<typeof generate>[0],
+    ): Promise<T> => {
+      if (!request.system.startsWith('analyze_position')) return generate<T>(request);
+      if (failAI) throw new Error('fixture AI unavailable');
+      const { quote } = request.data as { quote: { close: number } };
+      return {
+        decision: 'hold',
+        confidence: 60,
+        horizon: 'short',
+        entryPrice: quote.close,
+        stopLoss: money(quote.close * 0.95),
+        targetPrice: money(quote.close * 1.1),
+        reasoning: {
+          premise: '测试持仓复核完成',
+          evidence: ['固定行情事实'],
+          counterEvidence: ['价格可能跌破风险条件'],
+        },
+        risks: ['测试波动风险'],
+      } as T;
+    };
+    const notification = ctx.notification;
+    if (notification === undefined) throw new Error('notification fixture missing');
+    const send = notification.send.bind(notification);
+    notification.send = async (input) => {
+      if (!failNotification) return send(input);
+      const failed = {
+        id: input.id ?? 'journey-failed-notification',
+        channel: input.channel,
+        payload: input.payload,
+        result: 'failed' as const,
+        errorMessage: 'fixture channel unavailable',
+        sentAt: currentTime,
+      };
+      await ctx.repos.notification.save(failed);
+      return { notification: failed };
+    };
+    expect(
+      await addHoldingTool.execute({ accountId, stockId, quantity: 100, avgCost: 100 }, ctx),
+    ).toMatchObject({ ok: true });
+
+    const failedCycle = await strategyDailyCycleWorkflow.run({ owner: 'journey-failed-ai' }, ctx);
+    expect(failedCycle.ok).toBe(true);
+    const main = (await ctx.repos.report.list({ kind: 'closing' })).find(
+      (report) => report.scope.kind === 'account' && report.scope.accountId === accountId,
+    );
+    if (main === undefined) throw new Error('main report missing');
+    expect(main.version).toBe(1);
+    expect(main.missingDimensions).toContainEqual(
+      expect.objectContaining({ dimension: 'trading-plans.daily-cycle' }),
+    );
+
+    currentTime = new Date(NOW.getTime() + 16 * 60_000);
+    failAI = false;
+    expect(
+      await strategyDailyCycleWorkflow.run({ owner: 'journey-ai-restored' }, ctx),
+    ).toMatchObject({
+      ok: true,
+    });
+    const supplement = (await ctx.repos.report.list({ kind: 'closing' })).find(
+      (report) => report.supersedesReportId === main.id,
+    );
+    expect(supplement?.version).toBe(2);
+    expect(
+      supplement?.missingDimensions.some((gap) => gap.dimension === 'trading-plans.daily-cycle'),
+    ).toBe(false);
+    expect((await ctx.repos.report.findById(main.id))?.sections).toEqual(main.sections);
+    const plan = (await ctx.repos.tradingPlan.list({ accountId })).find(
+      (candidate) => candidate.stockId === stockId,
+    );
+    if (plan?.exit.stopLoss === undefined) throw new Error('risk plan missing');
+    expect(plan.status).toBe('active');
+    riskPrice = plan.exit.stopLoss - 0.01;
+
+    currentTime = new Date('2026-08-11T02:00:00.000Z');
+    failNotification = true;
+    const signal = await intradayTradingPlanWatchWorkflow.run({ accountId }, ctx);
+    expect(signal.ok).toBe(true);
+    if (!signal.ok) return;
+    expect(signal.data.notifyFailed).toBe(1);
+    const triggerId = signal.data.triggers[0]?.id;
+    if (triggerId === undefined) throw new Error('risk trigger missing');
+    expect(signal.data.triggers[0]?.deliveryStatus).toBe('failed');
+
+    currentTime = new Date('2026-08-11T02:02:00.000Z');
+    failNotification = false;
+    expect(await intradayTradingPlanWatchWorkflow.run({ accountId }, ctx)).toMatchObject({
+      ok: true,
+    });
+    expect(await ctx.repos.watchTrigger.findById(triggerId)).toMatchObject({
+      deliveryStatus: 'sent',
+      deliveryAttempts: 2,
+    });
+    const audit = await getIntradayDeliveryAuditTool.execute(
+      { accountId, date: '2026-08-11' },
+      ctx,
+    );
+    expect(audit).toMatchObject({
+      ok: true,
+      data: {
+        candidateCount: 1,
+        channelAcceptance: { accepted: 1, withinTenMinutes: 1, maxMs: 120_000 },
+        deviceDeliveryVerified: false,
+      },
+    });
+    expect((await ctx.repos.holding.findByAccountAndStock(accountId, stockId))?.quantity).toBe(100);
+    expect(await ctx.repos.trade.listByAccount(accountId)).toEqual([]);
+
+    const trade = await addTradeTool.execute(
+      {
+        accountId,
+        stockId,
+        side: 'sell',
+        quantity: 10,
+        price: riskPrice,
+        executedAt: currentTime,
+        adviceId: plan.source.adviceIds[0],
+      },
+      ctx,
+    );
+    expect(trade.ok).toBe(true);
+    expect((await ctx.repos.holding.findByAccountAndStock(accountId, stockId))?.quantity).toBe(90);
+    const stale = await intradayTradingPlanWatchWorkflow.run({ accountId }, ctx);
+    expect(stale).toMatchObject({ ok: true, data: { stalePlans: 1, triggers: [], notified: 0 } });
+
+    currentTime = new Date('2026-08-11T10:00:00.000Z');
+    expect(
+      await strategyDailyCycleWorkflow.run({ owner: 'journey-next-close' }, ctx),
+    ).toMatchObject({
+      ok: true,
+    });
+    currentTime = new Date('2026-08-12T10:00:00.000Z');
+    const review = await closingReportWorkflow.run(
+      { date: '2026-08-12', scope: { kind: 'account', accountId }, notify: false },
+      ctx,
+    );
+    expect(review.ok).toBe(true);
+    if (!review.ok) return;
+    const section = review.data.report.sections.find((item) => item.key === 'prior-day-review');
+    const metrics = section?.blocks.find((block) => block.kind === 'metrics');
+    expect(metrics?.kind === 'metrics' ? metrics.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'planVersions', value: 1 }),
+        expect.objectContaining({ key: 'triggerCount', value: 1 }),
+        expect.objectContaining({ key: 'registeredTrades', value: 1 }),
+      ]),
+    );
+    expect(JSON.stringify(section)).toContain('同股票、同日期不能证明提醒被执行');
+  });
+
   it('数据 checkpoint 无法建立时失败并推进 schedule，不生成 run', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
     await seedSchedule(ctx);
@@ -481,7 +668,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(await ctx.repos.strategyRun.listRuns({ strategyId: 'cycle-strategy' })).toHaveLength(1);
   });
 
-  it('生产日运行完成后嵌套触发收盘报告；同日多个 schedule 各触发一次，报告按键 upsert 不报错', async () => {
+  it('生产日多个策略共用发现批次，截止后每个账户各发布一份主报告', async () => {
     const base = await buildTestContext({ clock: () => NOW });
     const stockUniverse: StockUniverseManagerLike = {
       name: 'stock-universe',
@@ -519,23 +706,25 @@ describe('strategy-daily-cycle reliability matrix', () => {
       expect(item.runId).toBeDefined();
       expect(item.status).not.toBe('failed');
     }
-    // 统一日循环只触发一次 closing-report；save_report 按 kind|scope|period
-    // 逻辑键幂等保存，因此同日只保留一份主报告。
+    const accountIds = (await ctx.repos.account.list()).map((account) => account.id).sort();
     expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
-      1,
+      accountIds.length,
     );
     const reports = await ctx.repos.report.list({ kind: 'closing' });
-    expect(reports).toHaveLength(1);
-    expect(reports[0]).toMatchObject({
-      kind: 'closing',
-      periodStart: '2026-08-10',
-      periodEnd: '2026-08-10',
-    });
-    const strategySection = reports[0]?.sections.find(
-      (section) => section.key === 'strategy-actions',
-    );
-    const strategyTable = strategySection?.blocks.find((block) => block.kind === 'table');
-    expect(strategyTable?.kind === 'table' ? strategyTable.rows : []).toHaveLength(2);
+    expect(reports).toHaveLength(accountIds.length);
+    expect(
+      reports.map((report) => report.scope.kind === 'account' && report.scope.accountId).sort(),
+    ).toEqual(accountIds);
+    for (const report of reports) {
+      expect(report).toMatchObject({
+        kind: 'closing',
+        periodStart: '2026-08-10',
+        periodEnd: '2026-08-10',
+      });
+      const strategySection = report.sections.find((section) => section.key === 'strategy-actions');
+      const strategyTable = strategySection?.blocks.find((block) => block.kind === 'table');
+      expect(strategyTable?.kind === 'table' ? strategyTable.rows : []).toHaveLength(2);
+    }
   });
 
   it('收盘报告生成失败时本轮记 partial，不回滚已提交的 run', async () => {
@@ -573,9 +762,15 @@ describe('strategy-daily-cycle reliability matrix', () => {
           },
           findById: (...args: Parameters<typeof reportRepo.findById>) =>
             reportRepo.findById(...args),
+          findByPeriodVersion: (...args: Parameters<typeof reportRepo.findByPeriodVersion>) =>
+            reportRepo.findByPeriodVersion(...args),
           findByPeriod: (...args: Parameters<typeof reportRepo.findByPeriod>) =>
             reportRepo.findByPeriod(...args),
           list: (...args: Parameters<typeof reportRepo.list>) => reportRepo.list(...args),
+          claimDelivery: (...args: Parameters<typeof reportRepo.claimDelivery>) =>
+            reportRepo.claimDelivery(...args),
+          finishDelivery: (...args: Parameters<typeof reportRepo.finishDelivery>) =>
+            reportRepo.finishDelivery(...args),
           setDeliveryStatus: (...args: Parameters<typeof reportRepo.setDeliveryStatus>) =>
             reportRepo.setDeliveryStatus(...args),
           remove: (...args: Parameters<typeof reportRepo.remove>) => reportRepo.remove(...args),
@@ -640,9 +835,394 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(result.data.items).toHaveLength(1);
     expect(result.data.items[0]?.runId).toBeUndefined();
     expect(result.data.items[0]?.status).toBe('skipped');
-    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(3);
     expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
-      1,
+      3,
     );
+  });
+
+  it('没有到期策略时，18:00 后仍为每个账户出报且重复 tick 不覆盖主报告', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const first = await strategyDailyCycleWorkflow.run({ owner: 'cutoff-first' }, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.items).toEqual([]);
+    const original = await ctx.repos.report.list({ kind: 'closing' });
+    expect(original).toHaveLength(3);
+
+    const repeated = await strategyDailyCycleWorkflow.run({ owner: 'cutoff-again' }, ctx);
+    expect(repeated.ok).toBe(true);
+    const after = await ctx.repos.report.list({ kind: 'closing' });
+    expect(after.map((report) => report.id)).toEqual(original.map((report) => report.id));
+    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
+      3,
+    );
+  });
+
+  it('截止 tick 在渠道故障恢复后补投已存在的主报告，不生成新版本', async () => {
+    let currentTime = NOW;
+    let failDelivery = true;
+    const base = await buildTestContext({ clock: () => currentTime });
+    const healthyNotification = base.notification;
+    if (healthyNotification === undefined) throw new Error('notification fixture missing');
+    const ctx: ToolContext = {
+      ...base,
+      notification: {
+        send: async (input) => {
+          if (!failDelivery) return healthyNotification.send(input);
+          const notification = {
+            id: input.id ?? 'missing-report-id',
+            channel: input.channel,
+            payload: input.payload,
+            result: 'failed' as const,
+            errorMessage: 'fixture channel unavailable',
+            sentAt: currentTime,
+          };
+          await base.repos.notification.save(notification);
+          return { notification };
+        },
+      },
+    };
+    const first = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.created).toHaveLength(3);
+    const original = await ctx.repos.report.list({ kind: 'closing' });
+    expect(original.map((report) => report.deliveryStatus)).toEqual(['failed', 'failed', 'failed']);
+
+    failDelivery = false;
+    currentTime = new Date(NOW.getTime() + 16 * 60_000);
+    const retry = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.data.created).toEqual([]);
+    expect(retry.data.failed).toEqual([]);
+    const delivered = await ctx.repos.report.list({ kind: 'closing' });
+    expect(delivered.map((report) => report.id)).toEqual(original.map((report) => report.id));
+    expect(delivered.map((report) => report.deliveryStatus)).toEqual(['sent', 'sent', 'sent']);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(3);
+  });
+
+  it('飞书未配置的主报告在渠道恢复后补投，不生成新版本', async () => {
+    let currentTime = NOW;
+    let unconfigured = true;
+    let attempts = 0;
+    const base = await buildTestContext({ clock: () => currentTime });
+    const ctx: ToolContext = {
+      ...base,
+      notification: {
+        send: async (input) => {
+          attempts += 1;
+          const notification = {
+            id: input.id ?? 'missing-report-id',
+            channel: input.channel,
+            payload: input.payload,
+            result: unconfigured ? ('suppressed' as const) : ('success' as const),
+            sentAt: currentTime,
+          };
+          await base.repos.notification.save(notification);
+          return { notification };
+        },
+      },
+    };
+    const first = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(first.ok).toBe(true);
+    const original = await ctx.repos.report.list({ kind: 'closing' });
+    expect(original).toHaveLength(3);
+    expect(original.every((report) => report.deliveryStatus === 'fallback-log')).toBe(true);
+
+    unconfigured = false;
+    currentTime = new Date(NOW.getTime() + 16 * 60_000);
+    const retry = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.data.created).toEqual([]);
+    expect(retry.data.failed).toEqual([]);
+    expect(attempts).toBe(6);
+    const delivered = await ctx.repos.report.list({ kind: 'closing' });
+    expect(delivered.map((report) => report.id)).toEqual(original.map((report) => report.id));
+    expect(delivered.map((report) => report.deliveryStatus)).toEqual(['sent', 'sent', 'sent']);
+  });
+
+  it('跨天缺失主版补记为 partial，历史行情与账户快照明确不可用', async () => {
+    let currentTime = NOW;
+    const ctx = await buildTestContext({ clock: () => currentTime });
+    const first = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const previous = await ctx.repos.report.list({ kind: 'closing' });
+    expect(previous).toHaveLength(3);
+    const missingAccount = (await ctx.repos.account.list())[0];
+    if (missingAccount === undefined) throw new Error('account fixture missing');
+    const missingReport = previous.find(
+      (report) => report.scope.kind === 'account' && report.scope.accountId === missingAccount.id,
+    );
+    if (missingReport === undefined) throw new Error('report fixture missing');
+    await ctx.repos.report.remove(missingReport.id);
+
+    currentTime = new Date('2026-08-11T10:30:00.000Z');
+    const historical = await closingReportCutoffWorkflow.run({ date: '2026-08-10' }, ctx);
+    expect(historical.ok).toBe(true);
+    if (!historical.ok) return;
+    expect(historical.data.created).toEqual([missingAccount.id]);
+    expect(historical.data.failed).toEqual([]);
+    const recovered = await ctx.repos.report.list({ kind: 'closing' });
+    expect(recovered).toHaveLength(3);
+    const gap = recovered.find(
+      (report) => report.scope.kind === 'account' && report.scope.accountId === missingAccount.id,
+    );
+    expect(gap?.status).toBe('partial');
+    expect(gap?.title).toContain('逾期缺口补记');
+    expect(gap?.generatedAt).toEqual(currentTime);
+    expect(gap?.sections.every((section) => section.status === 'unavailable')).toBe(true);
+    expect(
+      gap?.missingDimensions.every((item) => item.errorKind === 'historical_snapshot_unavailable'),
+    ).toBe(true);
+    expect(gap?.missingDimensions.every((item) => item.retryable === false)).toBe(true);
+    expect(
+      gap?.sections.find((section) => section.key === 'historical-recovery')?.blocks[0],
+    ).toMatchObject({ text: expect.stringContaining('不使用当前数据代替') });
+    const repeated = await closingReportCutoffWorkflow.run({ date: '2026-08-10' }, ctx);
+    expect(repeated.ok).toBe(true);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(3);
+  });
+
+  it('18:00 之后新建的账户不计入当天截止报告', async () => {
+    const now = new Date(NOW.getTime() + 20 * 60_000);
+    const ctx = await buildTestContext({ clock: () => now });
+    const lateAccount = (await ctx.repos.account.list())[0];
+    if (lateAccount === undefined) throw new Error('account fixture missing');
+    await ctx.repos.account.save({
+      ...lateAccount,
+      createdAt: new Date(NOW.getTime() + 5 * 60_000),
+    });
+    const cutoff = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(cutoff.ok).toBe(true);
+    if (!cutoff.ok) return;
+    expect(cutoff.data.created).toHaveLength(2);
+    expect(cutoff.data.created).not.toContain(lateAccount.id);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(2);
+  });
+
+  it('截止时间之前没有到期策略时不提前发布空报告', async () => {
+    const beforeCutoff = new Date(NOW.getTime() - 60_000);
+    const ctx = await buildTestContext({ clock: () => beforeCutoff });
+    const result = await strategyDailyCycleWorkflow.run({ owner: 'before-cutoff' }, ctx);
+    expect(result.ok).toBe(true);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual([]);
+  });
+
+  it('预期策略与全部账户批次在 18:00 前完成时提前发布，账本变化形成补充版', async () => {
+    const scheduledAt = new Date('2026-08-10T08:30:00.000Z');
+    let currentTime = new Date('2026-08-10T08:31:00.000Z');
+    const stockUniverse: StockUniverseManagerLike = {
+      name: 'stock-universe',
+      sources: ['test-source'],
+      fetchStockUniverse: async () => ({
+        source: 'test-source',
+        coverage: 'CN_A_SHARES_SH_SZ' as const,
+        observedAt: scheduledAt,
+        complete: true,
+        reportedTotal: 1,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: '600519' as StockCode,
+            exchange: 'SH' as const,
+            name: '贵州茅台',
+            listingStatus: 'listed' as const,
+          },
+        ],
+      }),
+    };
+    const ctx = await buildTestContext({ clock: () => currentTime, stockUniverse });
+    await seedSchedule(ctx, { key: 'early', scheduledAt, cron: '30 16 * * 1-5' });
+    await seedSchedule(ctx, {
+      key: 'later',
+      scheduledAt,
+      cron: '0 17 * * 1-5',
+      nextRunAt: new Date('2026-08-10T09:00:00.000Z'),
+    });
+
+    const first = await strategyDailyCycleWorkflow.run({ owner: 'early-main' }, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.items).toHaveLength(1);
+    expect(first.data.items[0]?.runId).toBeDefined();
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual([]);
+
+    currentTime = new Date('2026-08-10T09:01:00.000Z');
+    const finishClaim = ctx.repos.strategySchedule.finishClaim.bind(ctx.repos.strategySchedule);
+    let releaseFinish = (): void => {};
+    let signalFinish = (): void => {};
+    const finishGate = new Promise<void>((resolve) => {
+      releaseFinish = resolve;
+    });
+    const reachedFinish = new Promise<void>((resolve) => {
+      signalFinish = resolve;
+    });
+    ctx.repos.strategySchedule.finishClaim = async (input) => {
+      if (input.id === 'later-schedule') {
+        signalFinish();
+        await finishGate;
+      }
+      await finishClaim(input);
+    };
+    const running = strategyDailyCycleWorkflow.run({ owner: 'all-ready' }, ctx);
+    await reachedFinish;
+    try {
+      const concurrent = await strategyDailyCycleWorkflow.run({ owner: 'while-finishing' }, ctx);
+      expect(concurrent.ok).toBe(true);
+      expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual([]);
+    } finally {
+      releaseFinish();
+    }
+    const finished = await running;
+    ctx.repos.strategySchedule.finishClaim = finishClaim;
+    expect(finished.ok).toBe(true);
+    if (!finished.ok) return;
+    expect(finished.data.items).toHaveLength(1);
+    expect(finished.data.items[0]?.runId).toBeDefined();
+    const main = await ctx.repos.report.list({ kind: 'closing' });
+    expect(main).toHaveLength(3);
+    expect(main.every((report) => report.version === 1)).toBe(true);
+    expect(main.every((report) => report.generatedAt < NOW)).toBe(true);
+    expect(
+      main.every(
+        (report) =>
+          !report.missingDimensions.some((gap) =>
+            gap.dimension.startsWith('strategy-actions.run.'),
+          ),
+      ),
+    ).toBe(true);
+
+    currentTime = new Date('2026-08-10T09:10:00.000Z');
+    const unchanged = await strategyDailyCycleWorkflow.run({ owner: 'early-repeat' }, ctx);
+    expect(unchanged.ok).toBe(true);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(3);
+
+    const account = (await ctx.repos.account.list())[0];
+    if (account === undefined) throw new Error('account fixture missing');
+    await ctx.repos.account.save({ ...account, cashBalance: money(account.cashBalance + 100) });
+    const changed = await strategyDailyCycleWorkflow.run({ owner: 'early-ledger-change' }, ctx);
+    expect(changed.ok).toBe(true);
+    const after = await ctx.repos.report.list({ kind: 'closing' });
+    expect(after).toHaveLength(4);
+    const accountReports = after.filter(
+      (report) => report.scope.kind === 'account' && report.scope.accountId === account.id,
+    );
+    expect(accountReports.map((report) => report.version)).toEqual([2, 1]);
+    expect(accountReports[1]?.id).toBe(
+      main.find(
+        (report) => report.scope.kind === 'account' && report.scope.accountId === account.id,
+      )?.id,
+    );
+  });
+
+  it('16:30 提前持久化所有账户计划批次，18:00 主报告读取批次状态', async () => {
+    let currentTime = new Date('2026-08-10T08:30:00.000Z');
+    const ctx = await buildTestContext({ clock: () => currentTime });
+    const prepared = await strategyDailyCycleWorkflow.run({ owner: 'early-plan' }, ctx);
+    expect(prepared.ok).toBe(true);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+    const batches = await ctx.repos.workflowRun.listRecent({ workflowName: 'account-plan-batch' });
+    expect(batches).toHaveLength(3);
+    expect(batches.every((batch) => batch.status !== 'running')).toBe(true);
+
+    currentTime = NOW;
+    const cutoff = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(cutoff.ok).toBe(true);
+    if (!cutoff.ok) return;
+    expect(cutoff.data.created).toHaveLength(3);
+    const reports = await ctx.repos.report.list({ kind: 'closing' });
+    expect(reports).toHaveLength(3);
+    for (const report of reports) {
+      const plans = report.sections.find((section) => section.key === 'trading-plans');
+      expect(
+        plans?.missingDimensions.some((gap) => gap.dimension === 'trading-plans.daily-cycle'),
+      ).toBe(false);
+    }
+    const repeated = await strategyDailyCycleWorkflow.run({ owner: 'early-plan-repeat' }, ctx);
+    expect(repeated.ok).toBe(true);
+    expect(
+      await ctx.repos.workflowRun.listRecent({ workflowName: 'account-plan-batch' }),
+    ).toHaveLength(3);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(3);
+  });
+
+  it('计划批次完成后账户账本变化，截止报告不复用旧批次的完成状态', async () => {
+    let currentTime = new Date('2026-08-10T08:30:00.000Z');
+    const ctx = await buildTestContext({ clock: () => currentTime });
+    const early = await strategyDailyCycleWorkflow.run({ owner: 'before-ledger-change' }, ctx);
+    expect(early.ok).toBe(true);
+    const account = (await ctx.repos.account.list())[0];
+    if (account === undefined) return;
+    await ctx.repos.account.save({ ...account, cashBalance: money(account.cashBalance + 100) });
+
+    currentTime = NOW;
+    const cutoff = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(cutoff.ok).toBe(true);
+    const reports = await ctx.repos.report.list({ kind: 'closing' });
+    const changed = reports.find(
+      (report) => report.scope.kind === 'account' && report.scope.accountId === account.id,
+    );
+    const planSection = changed?.sections.find((section) => section.key === 'trading-plans');
+    expect(planSection?.status).toBe('partial');
+    expect(planSection?.missingDimensions).toContainEqual(
+      expect.objectContaining({ dimension: 'trading-plans.daily-cycle' }),
+    );
+  });
+
+  it('截止时账户批次缺失，主报告标 partial，随后批次完成生成补充版本', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const original = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(original.ok).toBe(true);
+    if (!original.ok) return;
+    expect(original.data.created).toHaveLength(3);
+    const primary = await ctx.repos.report.list({ kind: 'closing' });
+    expect(primary).toHaveLength(3);
+    for (const report of primary) {
+      const plans = report.sections.find((section) => section.key === 'trading-plans');
+      expect(plans?.status).toBe('partial');
+      expect(
+        plans?.missingDimensions.some((gap) => gap.dimension === 'trading-plans.daily-cycle'),
+      ).toBe(true);
+    }
+
+    const resumed = await strategyDailyCycleWorkflow.run({ owner: 'late-plan' }, ctx);
+    expect(resumed.ok).toBe(true);
+    const reports = await ctx.repos.report.list({ kind: 'closing' });
+    expect(reports).toHaveLength(6);
+    for (const report of primary) {
+      const supplement = reports.find((item) => item.supersedesReportId === report.id);
+      expect(supplement?.version).toBe(2);
+      expect((await ctx.repos.report.findById(report.id))?.version).toBe(1);
+    }
+  });
+
+  it('主报告发布后才完成的策略批次形成补充版本，不覆盖原报告', async () => {
+    let currentTime = NOW;
+    const ctx = await buildTestContext({ clock: () => currentTime });
+    const first = await strategyDailyCycleWorkflow.run({ owner: 'late-first' }, ctx);
+    expect(first.ok).toBe(true);
+    const originals = await ctx.repos.report.list({ kind: 'closing' });
+    expect(originals).toHaveLength(3);
+    await seedSchedule(ctx, { key: 'late' });
+
+    currentTime = new Date(NOW.getTime() + 60_000);
+    const late = await strategyDailyCycleWorkflow.run(
+      { owner: 'late-second', leaseMinutes: 5 },
+      ctx,
+    );
+    expect(late.ok).toBe(true);
+    if (!late.ok) return;
+    expect(late.data.items).toHaveLength(1);
+    const reports = await ctx.repos.report.list({ kind: 'closing' });
+    expect(reports).toHaveLength(6);
+    for (const original of originals) {
+      const supplement = reports.find((report) => report.supersedesReportId === original.id);
+      expect(supplement?.version).toBe(2);
+      expect((await ctx.repos.report.findById(original.id))?.version).toBe(1);
+    }
   });
 });

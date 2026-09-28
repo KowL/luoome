@@ -258,9 +258,9 @@ export const candlesToBars = (stockId: string, candles: readonly MarketCandle[])
 /**
  * A 股盘中时段纯计算（§8.7）：复用 core 交易日历（与 cli watch 同一套 BUILTIN_HOLIDAYS）。
  * - 周末 / 节假日 → non-trading-day
- * - < 9:30 → pre-open；9:30–11:30 → trading；11:30–13:00 → midday-break；
- *   13:00–15:00 → trading；> 15:00 → closed
- * 边界与 cli isTradingHours 一致（11:30 / 15:00 整点算 trading）。
+ * - < 9:30 → pre-open；[9:30,11:30) → trading；[11:30,13:00) → midday-break；
+ *   [13:00,15:00) → trading；15:00 起 → closed
+ * 边界与盘中计划监控一致。
  */
 export const computeMarketSession = (
   now: Date,
@@ -271,9 +271,9 @@ export const computeMarketSession = (
   const d = new Date(shanghaiMs);
   const t = d.getUTCHours() * 60 + d.getUTCMinutes();
   if (t < 9 * 60 + 30) return 'pre-open';
-  if (t <= 11 * 60 + 30) return 'trading';
+  if (t < 11 * 60 + 30) return 'trading';
   if (t < 13 * 60) return 'midday-break';
-  if (t <= 15 * 60) return 'trading';
+  if (t < 15 * 60) return 'trading';
   return 'closed';
 };
 

@@ -9,11 +9,13 @@ import {
   buildAlertPlanMutationInput,
   deriveWatchlistViews,
   filterTriggersBySource,
+  intradayDeliveryAuditLines,
   parseMemberStockIds,
   sortStocksByQuote,
   stocksOfList,
   summarizeMemberSources,
   summarizeTriggerSources,
+  triggerChannelTimingText,
   triggerDeliveryBadgeClass,
   triggerDeliveryLabel,
   triggerMetaText,
@@ -110,6 +112,27 @@ describe('预警表单', () => {
 });
 
 describe('触发条目时间行', () => {
+  it('时效审计展示全部候选的分母和失败状态，渠道受理不冒充设备送达', () => {
+    const lines = intradayDeliveryAuditLines({
+      candidateCount: 8,
+      deliveryStatusCounts: { sent: 2, failed: 1, expired: 1, pending: 4 },
+      sourceEventTimeUnverifiable: 1,
+      channelAcceptance: {
+        accepted: 2,
+        withinTenMinutes: 1,
+        overTenMinutes: 1,
+        timingUnverifiable: 0,
+        notAccepted: 6,
+        p95Ms: 661_000,
+      },
+    });
+    expect(lines.join(' ')).toContain('盘中行动候选 8 条');
+    expect(lines.join(' ')).toContain('超过 10 分钟 1');
+    expect(lines.join(' ')).toContain('未受理 6 条：投递失败 1 条、信号超时 1 条、待投递 4 条');
+    expect(lines.join(' ')).toContain('源事件时间不可核验 1 条');
+    expect(lines.join(' ')).toContain('设备送达未验证');
+  });
+
   it('读取 WatchTriggerSchema 的 createdAt 字段', () => {
     const text = triggerMetaText({
       alertPlanId: 'plan-1',
@@ -220,13 +243,56 @@ describe('触发条目时间行', () => {
     ).toBeNull();
   });
 
-  it('送达状态与优先级都有可读标签', () => {
-    expect(triggerDeliveryLabel('sent')).toBe('已送达');
+  it('投递状态与优先级都有可读标签', () => {
+    expect(triggerDeliveryLabel('sent')).toBe('渠道已受理');
     expect(triggerDeliveryLabel('failed')).toBe('投递失败');
+    expect(triggerDeliveryLabel('expired')).toBe('信号超时');
+    expect(triggerDeliveryLabel('unverifiable')).toBe('时延不可核验');
+    expect(triggerDeliveryLabel('invalidated')).toBe('发布前已失效');
     expect(triggerDeliveryLabel('suppressed-cooldown')).toBe('冷却抑制');
     expect(triggerDeliveryLabel(undefined)).toBeNull();
     expect(triggerDeliveryBadgeClass('sent')).toBe('badge badge-delivery-sent');
     expect(triggerDeliveryBadgeClass(undefined)).toBe('badge badge-delivery-not-requested');
+  });
+
+  it('渠道受理耗时从首次源事件计算，设备送达始终保持未验证', () => {
+    const eventAt = '2026-09-17T02:00:00.000Z';
+    expect(
+      triggerChannelTimingText({
+        deliveryStatus: 'sent',
+        evalSnapshot: { firstEventAt: eventAt },
+        createdAt: '2026-09-17T02:00:10.000Z',
+        deliveryCompletedAt: '2026-09-17T02:09:30.000Z',
+      }),
+    ).toBe('源事件至渠道受理 9 分 30 秒 · 设备送达未验证');
+    expect(
+      triggerChannelTimingText({
+        deliveryStatus: 'sent',
+        evalSnapshot: { firstEventAt: eventAt },
+        createdAt: '2026-09-17T02:00:10.000Z',
+        deliveryCompletedAt: '2026-09-17T02:11:00.000Z',
+      }),
+    ).toContain('超过 10 分钟');
+    expect(
+      triggerChannelTimingText({
+        deliveryStatus: 'sent',
+        evalSnapshot: { quoteObservedAt: eventAt },
+        createdAt: '2026-09-17T02:00:10.000Z',
+        deliveryCompletedAt: '2026-09-17T02:09:30.000Z',
+      }),
+    ).toContain('源事件至渠道受理 9 分 30 秒');
+    expect(
+      triggerChannelTimingText({
+        deliveryStatus: 'sent',
+        evalSnapshot: { firstEventAt: '2026-09-17T02:01:00.000Z' },
+        createdAt: '2026-09-17T02:00:10.000Z',
+        deliveryCompletedAt: '2026-09-17T02:09:30.000Z',
+      }),
+    ).toBe('渠道受理耗时不可验证 · 设备送达未验证');
+    expect(triggerChannelTimingText({ deliveryStatus: 'sent' })).toBe(
+      '渠道受理耗时不可验证 · 设备送达未验证',
+    );
+    expect(triggerChannelTimingText({ deliveryStatus: 'failed' })).toBeNull();
   });
 
   it('按来源分类、计数与过滤', () => {

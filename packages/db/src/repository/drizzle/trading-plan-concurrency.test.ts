@@ -23,7 +23,7 @@ const account: Account = {
   kind: 'real',
   currency: 'CNY',
   initialCapital: money(100_000),
-  cashBalance: money(100_000),
+  cashBalance: money(40_000),
   createdAt: NOW,
 };
 
@@ -51,20 +51,20 @@ const stocks: readonly Stock[] = [
   },
 ];
 
+const holding = {
+  id: 'concurrency-holding',
+  accountId: ACCOUNT_ID,
+  stockId: '000001.SZ',
+  quantity: 1000,
+  availableQuantity: 1000,
+  avgCost: money(60),
+  openedAt: NOW,
+  closedAt: null,
+};
+
 const accountFacts = buildAccountFacts({
-  account: { id: ACCOUNT_ID, initialCapital: money(100_000), cashBalance: money(40_000) },
-  holdings: [
-    {
-      id: 'concurrency-holding',
-      accountId: ACCOUNT_ID,
-      stockId: '000001.SZ',
-      quantity: 1000,
-      availableQuantity: 1000,
-      avgCost: money(60),
-      openedAt: NOW,
-      closedAt: null,
-    },
-  ],
+  account,
+  holdings: [holding],
   stocks: new Map([['000001.SZ', { industry: '电力' }]]),
   prices: new Map([['000001.SZ', { close: money(60), observedAt: NOW }]]),
   asOf: NOW,
@@ -133,7 +133,7 @@ try {
     limits: { totalStockPct: 80, singleStockPct: 15 },
     asOf: now,
   });
-  console.log(JSON.stringify({ saved: result.saved, status: result.budget.totalStatus }));
+  console.log(JSON.stringify({ saved: result.saved, status: result.saved || result.reason === 'budget-exceeded' ? result.budget.totalStatus : result.reason }));
 } finally {
   handle.close();
 }
@@ -188,6 +188,7 @@ describe('Drizzle trading plan budget transaction', () => {
     const dbPath = join(directory, 'budget.sqlite');
     const handle = createDrizzleRepos(dbPath);
     await handle.repos.account.save(account);
+    await handle.repos.holding.save(holding);
     for (const stock of stocks) await handle.repos.stock.save(stock);
     const clientPath = new URL('../../client.ts', import.meta.url).pathname;
     handle.close();
@@ -204,6 +205,30 @@ describe('Drizzle trading plan budget transaction', () => {
       expect(
         await check.repos.tradingPlan.list({ accountId: ACCOUNT_ID, activeOnly: true, asOf: NOW }),
       ).toHaveLength(1);
+    } finally {
+      check.close();
+    }
+  });
+
+  it('另一进程更新现金后，旧账户指纹不能激活计划', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'luoome-plan-stale-account-'));
+    directories.push(directory);
+    const dbPath = join(directory, 'budget.sqlite');
+    const handle = createDrizzleRepos(dbPath);
+    await handle.repos.account.save(account);
+    await handle.repos.holding.save(holding);
+    for (const stock of stocks) await handle.repos.stock.save(stock);
+    await handle.repos.account.save({ ...account, cashBalance: money(39_000) });
+    handle.close();
+
+    const clientPath = new URL('../../client.ts', import.meta.url).pathname;
+    expect(await childResult(dbPath, makePlan('600036.SH'), clientPath)).toEqual({
+      saved: false,
+      status: 'account-facts-changed',
+    });
+    const check = createDrizzleRepos(dbPath);
+    try {
+      expect(await check.repos.tradingPlan.list({ accountId: ACCOUNT_ID })).toEqual([]);
     } finally {
       check.close();
     }

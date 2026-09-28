@@ -15,6 +15,10 @@ export class InMemoryAccountRepository implements AccountRepository {
   }
 
   async findById(id: string): Promise<Account | null> {
+    return this.peek(id);
+  }
+
+  peek(id: string): Account | null {
     return this.items.get(id) ?? null;
   }
 

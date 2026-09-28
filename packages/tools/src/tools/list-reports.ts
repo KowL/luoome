@@ -20,6 +20,8 @@ export const ListReportsInput = z.object({
 
 export const ReportSummarySchema = z.object({
   id: z.string(),
+  version: z.number().int().positive(),
+  supersedesReportId: z.string().optional(),
   kind: ReportKindSchema,
   scope: ReportScopeSchema,
   periodStart: z.string().date(),
@@ -53,6 +55,10 @@ export const listReportsTool = defineTool({
     return {
       reports: reports.map((report) => ({
         id: report.id,
+        version: report.version ?? 1,
+        ...(report.supersedesReportId === undefined
+          ? {}
+          : { supersedesReportId: report.supersedesReportId }),
         kind: report.kind,
         scope: report.scope,
         periodStart: report.periodStart,

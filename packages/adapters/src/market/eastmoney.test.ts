@@ -15,7 +15,7 @@ const makeQuoteOk = () => ({
   f47: 123456, // volume 手
   f48: 987654321,
   f60: 10400,
-  f124: 1784876400,
+  f86: 1784876400,
   f57: '002594',
   f58: '比亚迪',
   f168: 0.69,
@@ -35,8 +35,12 @@ const makeQuoteOk = () => ({
 describe('market/eastmoney', () => {
   describe('fetchQuote', () => {
     it('成功解析 quote；source=eastmoney', async () => {
+      let requestedFields: string[] = [];
       const adapter = new EastmoneySource({
-        fetchImpl: (async () => new Response(okJson(makeQuoteOk()), { status: 200 })) as never,
+        fetchImpl: (async (url: string) => {
+          requestedFields = new URL(url).searchParams.get('fields')?.split(',') ?? [];
+          return new Response(okJson(makeQuoteOk()), { status: 200 });
+        }) as never,
         clock: () => new Date('2026-07-24T07:00:05.000Z'),
       });
       const q = await adapter.fetchQuote('002594');
@@ -46,6 +50,8 @@ describe('market/eastmoney', () => {
       expect(q.observedAt).toEqual(new Date('2026-07-24T07:00:00.000Z'));
       expect(q.fetchedAt).toEqual(new Date('2026-07-24T07:00:05.000Z'));
       expect(q.timestampSource).toBe('upstream');
+      expect(requestedFields).toContain('f86');
+      expect(requestedFields).not.toContain('f124');
       expect(q).toMatchObject({
         totalShares: 2_000_000_000,
         floatShares: 1_800_000_000,
@@ -58,6 +64,23 @@ describe('market/eastmoney', () => {
         psTtm: 2.7,
       });
     });
+
+    it.each([undefined, 0, -1, '1784876400', 1784876500])(
+      'stock/get 的 f86=%s 时不采信其它字段或抓取时间为上游时间',
+      async (f86) => {
+        const fetchedAt = new Date('2026-07-24T07:00:05.000Z');
+        const adapter = new EastmoneySource({
+          fetchImpl: (async () =>
+            new Response(okJson({ ...makeQuoteOk(), f86, f124: 1784876400 }), {
+              status: 200,
+            })) as never,
+          clock: () => fetchedAt,
+        });
+        const quote = await adapter.fetchQuote('002594');
+        expect(quote.timestampSource).toBe('retrieval');
+        expect(quote.observedAt).toEqual(fetchedAt);
+      },
+    );
 
     it('f60 昨收 → prevClose 填充；f60 缺失 → 无 prevClose', async () => {
       const withPrev = new EastmoneySource({

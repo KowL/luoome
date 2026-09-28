@@ -88,6 +88,10 @@
         <div id="dashboard-status" class="dashboard-status" role="status">正在加载看盘数据…</div>
         <div id="dashboard-paused" class="dashboard-notice" role="status" hidden>自动更新已暂停，可手动刷新或恢复自动更新；已发起的数据检查可能继续完成。</div>
         <div id="dashboard-warnings" class="dashboard-notice" role="status" hidden></div>
+        <div class="card dashboard-closing-report" aria-label="当前账户收盘复盘">
+          <div class="card-header"><div><span class="section-kicker">ACCOUNT CLOSE</span><h2>当前账户收盘复盘</h2></div><a href="#reports" class="card-link">报告历史 →</a></div>
+          <div id="dashboard-closing-report"><p class="muted">正在读取最新报告…</p></div>
+        </div>
         <!-- 核心指数 4 卡（数据空时卡片仍渲染、值 '--'；点击卡片 → #indices 指数页） -->
         <div id="dashboard-indices" class="index-card-grid dashboard-index-grid" aria-label="核心指数"></div>
         <div class="dashboard-section-heading"><h2>市场概况</h2><span id="dashboard-overview-meta" class="card-meta">等待市场快照</span></div>
@@ -159,7 +163,7 @@
               <div class="metric-value" id="dash-metric-priority">--</div>
             </div>
             <div class="metric-cell">
-              <div class="metric-label">送达状态</div>
+              <div class="metric-label">投递状态</div>
               <div class="metric-value" id="dash-metric-delivery">--</div>
             </div>
             <div class="metric-cell">
@@ -442,6 +446,13 @@
             <div id="alerts-plans-meta" class="card-meta">--</div>
           </div>
           <div id="alerts-plans" class="entity-list"><p class="placeholder">加载中…</p></div>
+        </div>
+        <div class="card mt-4">
+          <div class="card-header">
+            <h2>盘中时效审计</h2>
+            <div class="card-meta"><label class="inline-field">日期 <input id="alerts-delivery-audit-date" type="date" /></label></div>
+          </div>
+          <div id="alerts-delivery-audit"><p class="placeholder">加载中…</p></div>
         </div>
         <div class="card mt-4">
           <div class="card-header">

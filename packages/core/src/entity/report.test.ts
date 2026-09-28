@@ -66,6 +66,8 @@ describe('Report', () => {
       makeReport({ dataAsOf: new Date('2026-07-29T11:00:00.000Z') }),
       makeReport({ createdAt: NOW, updatedAt: new Date('2026-07-29T09:00:00.000Z') }),
       makeReport({ periodStart: '2026-07-28' }),
+      makeReport({ version: 2 }),
+      makeReport({ version: 2, supersedesReportId: makeReport().id }),
       makeReport({
         kind: 'weekly',
         periodStart: '2026-07-27',

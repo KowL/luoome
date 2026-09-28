@@ -4,6 +4,8 @@ import {
   type AccountPriceFact,
   buildAccountFacts,
   isAdviceQuoteCurrent,
+  isAshareTradingSession,
+  isIntradayQuoteCurrent,
   MoneySchema,
   money,
   reconcileCashBalance,
@@ -31,8 +33,14 @@ const latestQualifiedQuote = async (
   const ordered = [...candidates].sort(
     (left, right) => right.observedAt.getTime() - left.observedAt.getTime(),
   );
+  const intraday = isAshareTradingSession(now);
   for (const quote of ordered) {
-    if (isAdviceQuoteCurrent(quote, now)) return quote;
+    const qualified = intraday
+      ? isIntradayQuoteCurrent(quote, now)
+      : quote.fetchedAt.getTime() <= now.getTime() &&
+        (quote.timestampSource === 'upstream' || quote.source.startsWith('daily-bar-fallback:')) &&
+        isAdviceQuoteCurrent(quote, now);
+    if (qualified) return quote;
   }
   return null;
 };
@@ -95,15 +103,15 @@ export const deriveAccountFacts = async (
       prices.set(stockId, { close: money(qualified.close), observedAt: qualified.observedAt });
       continue;
     }
-    // 兜底：停牌 / 刚登记 / 数据源缺当日的标的，用最近 30 天内最后一条行情估值，
-    // 并在 reasons 里明确标注（带限制展示，不冒充当日实时）。
+    // 参考估值不能恢复精确账户事实，否则其它股票会沿用这个分母形成行动候选。
     const fallback = await latestQuoteWithinDays(ctx, stockId, now, 30);
     if (fallback === null) {
       fallbackReasons.push(`持仓 ${stockId} 没有任何可用行情，无法计算市值`);
       continue;
     }
+    fallbackReasons.push(`持仓 ${stockId} 缺少合格行情，仅保留参考估值`);
     fallbackNotes.push(
-      `持仓 ${stockId} 使用 ${fallback.observedAt.toISOString().slice(0, 10)} 的收盘价估值（无当日合格行情）`,
+      `持仓 ${stockId} 使用 ${fallback.observedAt.toISOString().slice(0, 10)} 的参考报价估值（无当日合格行情）`,
     );
     prices.set(stockId, { close: money(fallback.close), observedAt: fallback.observedAt });
   }

@@ -17,6 +17,7 @@ export interface FakeMarketAdapterOptions {
   readonly clock?: () => Date;
   /** quote.source 字段，默认 'test'。 */
   readonly source?: string;
+  readonly timestampSource?: Quote['timestampSource'];
 }
 
 const DAY_MS = 86_400_000;
@@ -34,10 +35,12 @@ export class FakeMarketAdapter implements MarketDataAdapter {
 
   private readonly clock: () => Date;
   private readonly source: string;
+  private readonly timestampSource: Quote['timestampSource'];
 
   constructor(options: FakeMarketAdapterOptions = {}) {
     this.clock = options.clock ?? fixedTestClock;
     this.source = options.source ?? 'test';
+    this.timestampSource = options.timestampSource ?? 'retrieval';
   }
 
   fetchQuote(stockCode: string): Promise<Quote> {
@@ -52,12 +55,14 @@ export class FakeMarketAdapter implements MarketDataAdapter {
     const volume = 1_000_000 + (hashString(`volume|${stockCode}`) % 9_000_000);
 
     const fetchedAt = this.clock();
+    const observedAt =
+      this.timestampSource === 'upstream' ? new Date(fetchedAt.getTime() - 1_000) : fetchedAt;
     return Promise.resolve({
       stockId: stock ? stock.id : stockCode,
-      observedAt: fetchedAt,
+      observedAt,
       fetchedAt,
-      timestampSource: 'retrieval',
-      ts: fetchedAt,
+      timestampSource: this.timestampSource,
+      ts: observedAt,
       open,
       high,
       low,

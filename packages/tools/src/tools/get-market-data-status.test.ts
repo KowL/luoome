@@ -214,6 +214,8 @@ describe('tool/get_market_data_status', () => {
     };
     // 2026-07-17 是周五：上海 10:00 盘中、15:30 已收盘；07-18 是周六
     expect(await sessionAt('2026-07-17T02:00:00.000Z')).toBe('trading');
+    expect(await sessionAt('2026-07-17T03:30:00.000Z')).toBe('midday-break');
+    expect(await sessionAt('2026-07-17T07:00:00.000Z')).toBe('closed');
     expect(await sessionAt('2026-07-17T07:30:00.000Z')).toBe('closed');
     expect(await sessionAt('2026-07-18T02:00:00.000Z')).toBe('non-trading-day');
   });

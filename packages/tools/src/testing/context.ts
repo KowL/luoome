@@ -29,6 +29,7 @@ import { createInMemoryRepos, seedData } from '@luoome/db/memory';
 export interface BuildTestContextOptions {
   readonly agent?: AgentRuntimeLike;
   readonly clock?: () => Date;
+  readonly marketTimestampSource?: 'upstream' | 'retrieval';
   readonly logger?: Logger;
   readonly advices?: readonly Advice[];
   /** 可选注入连板天梯 manager（Phase 2 接入 web API 测试）。 */
@@ -76,7 +77,12 @@ export const buildTestContext = async (
   const ctx: ToolContext = {
     repos,
     adapters: {
-      market: new FakeMarketAdapter({ clock: marketClock }),
+      market: new FakeMarketAdapter({
+        clock: marketClock,
+        ...(opts.marketTimestampSource === undefined
+          ? {}
+          : { timestampSource: opts.marketTimestampSource }),
+      }),
       ...(opts.stockUniverse === undefined ? {} : { stockUniverse: opts.stockUniverse }),
       llm: new FakeLLMAdapter(),
     },
@@ -146,6 +152,7 @@ export const seedTestDailyBars = async (ctx: ToolContext): Promise<void> => {
 
 const createTestNotificationManager = (repos: RepositoryRegistry) => ({
   async send(input: {
+    id?: string;
     channel: 'feishu' | 'log';
     payload: {
       title: string;
@@ -156,7 +163,10 @@ const createTestNotificationManager = (repos: RepositoryRegistry) => ({
     adviceId?: string;
     tacticSignalId?: string;
   }): Promise<{ notification: unknown }> {
-    const id = `test-notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = input.id ?? `test-notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const existing = input.id === undefined ? null : await repos.notification.findById(id);
+    if (existing?.result === 'success' || existing?.result === 'suppressed')
+      return { notification: existing };
     const notification = {
       id,
       channel: input.channel,

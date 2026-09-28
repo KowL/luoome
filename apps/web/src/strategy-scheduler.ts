@@ -1,5 +1,8 @@
-import type { ToolContext, ToolResult } from '@luoome/core';
+import { dateInShanghai, type ToolContext, type ToolResult } from '@luoome/core';
 import {
+  type ClosingReportCutoffOutputT,
+  closingReportCutoffWorkflow,
+  previousTradingDay,
   type RunStrategySchedulesOutputT,
   type StrategyDailyCycleOutputT,
   strategyDailyCycleWorkflow,
@@ -57,6 +60,7 @@ export const strategySchedulerTuningFromEnv = (
 
 export interface StrategySchedulerHandle {
   readonly tick: () => Promise<void>;
+  readonly cutoffTick: () => Promise<void>;
   readonly stop: () => void;
 }
 
@@ -66,6 +70,7 @@ export interface StartStrategySchedulerOptions {
   readonly owner?: string;
   readonly tuning?: StrategySchedulerTuning;
   readonly run?: () => Promise<ToolResult<RunStrategySchedulesOutputT | StrategyDailyCycleOutputT>>;
+  readonly runCutoff?: () => Promise<ToolResult<ClosingReportCutoffOutputT>>;
 }
 
 /** Web/luoome start 进程内的策略调度 tick；跨进程防重仍由 StrategySchedule lease 保证。 */
@@ -86,8 +91,39 @@ export const startStrategyScheduler = (
         { owner, limit: STRATEGY_SCHEDULER_BATCH_LIMIT, ...tuning },
         ctx,
       ));
+  const runCutoff =
+    options.runCutoff ??
+    (async () => {
+      const priorDate = previousTradingDay(dateInShanghai(ctx.clock()));
+      const recovered = await closingReportCutoffWorkflow.run({ date: priorDate }, ctx);
+      if (!recovered.ok || recovered.data.failed.length > 0)
+        ctx.logger.error('前一交易日收盘报告补投失败', {
+          date: priorDate,
+          error: recovered.ok ? recovered.data.failed : recovered.error,
+        });
+      return closingReportCutoffWorkflow.run({}, ctx);
+    });
   let stopped = false;
   let running = false;
+  let cutoffRunning = false;
+
+  const cutoffTick = async (): Promise<void> => {
+    if (stopped || cutoffRunning) return;
+    cutoffRunning = true;
+    try {
+      const result = await runCutoff();
+      if (!result.ok || result.data.failed.length > 0)
+        ctx.logger.error('收盘报告截止 tick 失败', {
+          error: result.ok ? result.data.failed : result.error,
+        });
+    } catch (error) {
+      ctx.logger.error('收盘报告截止 tick 异常', {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      cutoffRunning = false;
+    }
+  };
 
   const tick = async (): Promise<void> => {
     if (stopped || running) return;
@@ -123,13 +159,20 @@ export const startStrategyScheduler = (
 
   const timer = setInterval(() => void tick(), intervalMs);
   timer.unref();
-  if (options.startImmediately !== false) void tick();
+  const cutoffTimer = setInterval(() => void cutoffTick(), intervalMs);
+  cutoffTimer.unref();
+  if (options.startImmediately !== false) {
+    void cutoffTick();
+    void tick();
+  }
 
   return {
     tick,
+    cutoffTick,
     stop: () => {
       stopped = true;
       clearInterval(timer);
+      clearInterval(cutoffTimer);
     },
   };
 };

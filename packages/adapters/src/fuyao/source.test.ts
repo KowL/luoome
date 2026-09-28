@@ -5,7 +5,7 @@ import { SourceExecutionError } from '../source-error.js';
 import { FuyaoSource, normalizeFuyaoThscode } from './source.js';
 
 const CLOCK = new Date('2026-08-21T07:00:00.000Z'); // 2026-08-21 15:00 Asia/Shanghai
-const TIMESTAMP_MS = CLOCK.getTime() - 60_000; // 上游时间戳早于本地时钟 → upstream 生效
+const TIMESTAMP_MS = CLOCK.getTime() - 60_000;
 
 const silentLogger = (): Logger => {
   const noop = (): void => {};
@@ -96,7 +96,7 @@ describe('fuyao/normalizeFuyaoThscode（代码归一 §5.2）', () => {
 });
 
 describe('fuyao/FuyaoSource.fetchQuote / batchQuote', () => {
-  it('snapshot 字段映射：volume 为股、observedAt 取 data.timestamp、timestampSource=upstream', async () => {
+  it('snapshot 字段映射：信封时间不能冒充逐股行情时间', async () => {
     const { source, calls } = makeSource((async (url: string) => {
       expect(url).toContain('/api/a-share/prices/snapshot?thscodes=600519.SH');
       return envelope([snapshotRow('600519.SH')]);
@@ -111,8 +111,8 @@ describe('fuyao/FuyaoSource.fetchQuote / batchQuote', () => {
     expect(quote.prevClose).toBe(1256);
     expect(quote.volume).toBe(3098875); // 已是股，不换算
     expect(quote.amount).toBe(3937375200);
-    expect(quote.observedAt.getTime()).toBe(TIMESTAMP_MS);
-    expect(quote.timestampSource).toBe('upstream');
+    expect(quote.observedAt.getTime()).toBe(CLOCK.getTime());
+    expect(quote.timestampSource).toBe('retrieval');
     expect(quote.source).toBe('fuyao');
   });
 
@@ -147,6 +147,7 @@ describe('fuyao/FuyaoSource.fetchQuote / batchQuote', () => {
     expect(calls).toHaveLength(1);
     expect([...result.keys()]).toEqual(['600519']);
     expect(result.get('600519')?.source).toBe('fuyao');
+    expect(result.get('600519')?.timestampSource).toBe('retrieval');
   });
 });
 
@@ -273,8 +274,6 @@ describe('fuyao/FuyaoSource.fetchMarketSnapshot', () => {
       source: 'fuyao',
       coverage: 'CN_A_SHARES_SH_SZ',
       fetchedAt: CLOCK,
-      observedAt: new Date(TIMESTAMP_MS),
-      dataAsOf: new Date(TIMESTAMP_MS),
       completeness: {
         expectedCount: 102,
         receivedCount: 102,
@@ -283,6 +282,8 @@ describe('fuyao/FuyaoSource.fetchMarketSnapshot', () => {
         complete: true,
       },
     });
+    expect(snapshot.observedAt).toBeUndefined();
+    expect(snapshot.dataAsOf).toBeUndefined();
     expect(snapshot.items).toHaveLength(102);
     expect(snapshot.items.at(-2)?.changePct).toBe(-2.5);
   });
@@ -340,7 +341,7 @@ describe('fuyao/FuyaoSource.fetchIndexQuotes', () => {
     turnover: 420000000000,
   });
 
-  it('指数集合对齐 eastmoney 沪深大盘指数；changePct 原值、ts 取信封 timestamp', async () => {
+  it('指数集合对齐 eastmoney 沪深大盘指数；changePct 原值、ts 是抓取时间', async () => {
     const codes = ['000001.SH', '399001.SZ', '399006.SZ', '000300.SH', '000688.SH'];
     const { source, calls } = makeSource((async (url: string) => {
       expect(url).toContain('/api/a-share-index/prices/snapshot?thscodes=');
@@ -359,7 +360,7 @@ describe('fuyao/FuyaoSource.fetchIndexQuotes', () => {
     expect(indices[0]?.close).toBe(3388.06);
     expect(indices[0]?.change).toBe(12.21);
     expect(indices[0]?.changePct).toBe(0.3617); // 百分数原值
-    expect(indices[0]?.ts.getTime()).toBe(TIMESTAMP_MS);
+    expect(indices[0]?.ts.getTime()).toBe(CLOCK.getTime());
     expect(indices[0]?.source).toBe('fuyao');
   });
 

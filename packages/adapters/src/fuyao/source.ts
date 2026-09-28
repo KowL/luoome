@@ -142,14 +142,14 @@ export class FuyaoSource {
   async fetchQuote(stockCode: string): Promise<Quote> {
     const thscode = normalizeFuyaoThscode(stockCode);
     try {
-      const { timestamp, items } = await this.client.get('/api/a-share/prices/snapshot', {
+      const { items } = await this.client.get('/api/a-share/prices/snapshot', {
         thscodes: thscode,
       });
       const row = items[0];
       if (row === undefined) {
         throw noDataError(`fuyao no_data: ${thscode} 快照为空`);
       }
-      const quote = this.toQuote(thscode, row, timestamp);
+      const quote = this.toQuote(thscode, row);
       if (quote === undefined) {
         throw noDataError(`fuyao no_data: ${thscode} 快照价格缺失或为 0（盘前或停牌）`);
       }
@@ -197,7 +197,7 @@ export class FuyaoSource {
     }
     if (pairs.length === 0) return [];
     try {
-      const { timestamp, items } = await this.client.get('/api/a-share/prices/snapshot', {
+      const { items } = await this.client.get('/api/a-share/prices/snapshot', {
         thscodes: pairs.map((pair) => pair.thscode).join(','),
       });
       const byThscode = new Map<string, Record<string, unknown>>();
@@ -209,7 +209,7 @@ export class FuyaoSource {
         const row = byThscode.get(thscode);
         if (row === undefined) continue;
         try {
-          const quote = this.toQuote(thscode, row, timestamp);
+          const quote = this.toQuote(thscode, row);
           if (quote !== undefined) out.push({ input, quote });
         } catch (error) {
           this.logger.warn('fuyao.batchQuote omitted', {
@@ -342,13 +342,11 @@ export class FuyaoSource {
   async fetchMarketSnapshotEnvelope(): Promise<MarketSnapshot> {
     try {
       const items: MarketSnapshotItem[] = [];
-      const observedTimes: number[] = [];
       for (let offset = 0; ; offset += MARKET_SNAPSHOT_PAGE_SIZE) {
-        const { items: rows, timestamp } = await this.client.get('/api/a-share/prices/snapshot', {
+        const { items: rows } = await this.client.get('/api/a-share/prices/snapshot', {
           limit: MARKET_SNAPSHOT_PAGE_SIZE,
           offset,
         });
-        if (timestamp !== undefined) observedTimes.push(timestamp.getTime());
         for (const row of rows) {
           const parsed = SnapshotItemSchema.parse(row);
           const exchange = parsed.thscode.endsWith('.SH')
@@ -378,13 +376,10 @@ export class FuyaoSource {
       }
       const unique = [...new Map(items.map((item) => [item.id, item])).values()];
       const duplicateCount = items.length - unique.length;
-      const observedAt =
-        observedTimes.length === 0 ? undefined : new Date(Math.min(...observedTimes));
       const snapshot = MarketSnapshotSchema.parse({
         coverage: 'CN_A_SHARES_SH_SZ',
         source: 'fuyao',
         fetchedAt: this.clock(),
-        ...(observedAt === undefined ? {} : { observedAt, dataAsOf: observedAt }),
         items: unique,
         completeness: {
           expectedCount: unique.length,
@@ -416,7 +411,7 @@ export class FuyaoSource {
    */
   async fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
     try {
-      const { timestamp, items } = await this.client.get('/api/a-share-index/prices/snapshot', {
+      const { items } = await this.client.get('/api/a-share-index/prices/snapshot', {
         thscodes: MAJOR_INDICES.map((index) => index.thscode).join(','),
       });
       const byThscode = new Map<string, Record<string, unknown>>();
@@ -449,10 +444,7 @@ export class FuyaoSource {
             parsed.price_change_ratio_pct != null && Number.isFinite(parsed.price_change_ratio_pct)
               ? parsed.price_change_ratio_pct
               : 0,
-          ts:
-            timestamp !== undefined && timestamp.getTime() <= fetchedAt.getTime()
-              ? timestamp
-              : fetchedAt,
+          ts: fetchedAt,
           source: 'fuyao',
         });
       }
@@ -488,15 +480,11 @@ export class FuyaoSource {
   }
 
   /**
-   * 快照行 → Quote：volume 已是股、turnover 为元直接映射；observedAt 取信封
-   * data.timestamp（timestampSource='upstream'），上游时间戳缺失或晚于本地时钟
-   * （时钟偏移）时回退本地时钟。价格缺失 / 非正返回 undefined（调用方按 no_data 处理）。
+   * 快照行 → Quote：volume 已是股、turnover 为元直接映射。信封 data.timestamp
+   * 在休市日仍随请求更新，不能证明逐股行情发生时间；快照行也没有逐股时间，
+   * 因此只记录抓取时间并标记 retrieval。价格缺失 / 非正返回 undefined。
    */
-  private toQuote(
-    thscode: string,
-    row: Record<string, unknown>,
-    timestamp: Date | undefined,
-  ): Quote | undefined {
+  private toQuote(thscode: string, row: Record<string, unknown>): Quote | undefined {
     const parsed = SnapshotItemSchema.parse(row);
     const last = parsed.last_price;
     const open = parsed.open_price;
@@ -516,15 +504,12 @@ export class FuyaoSource {
       return undefined;
     }
     const fetchedAt = this.clock();
-    const upstream =
-      timestamp !== undefined && timestamp.getTime() <= fetchedAt.getTime() ? timestamp : undefined;
-    const observedAt = upstream ?? fetchedAt;
     return {
       stockId: thscode,
-      observedAt,
+      observedAt: fetchedAt,
       fetchedAt,
-      timestampSource: upstream === undefined ? 'retrieval' : 'upstream',
-      ts: observedAt,
+      timestampSource: 'retrieval',
+      ts: fetchedAt,
       open: money(open),
       high: money(high),
       low: money(low),

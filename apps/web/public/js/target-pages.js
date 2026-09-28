@@ -57,9 +57,12 @@ const DELIVERY_LABELS = {
   'suppressed-cooldown': '冷却抑制',
   'suppressed-daily-limit': '日额度抑制',
   pending: '待投递',
-  sent: '已送达',
+  sent: '渠道已受理',
   failed: '投递失败',
   'fallback-log': '仅记录日志',
+  expired: '信号超时',
+  unverifiable: '时延不可核验',
+  invalidated: '发布前已失效',
 };
 
 /** 交易计划监控的触发池前缀（intraday-trading-plan-watch）。 */
@@ -94,6 +97,27 @@ const triggerConditionText = (trigger) => {
 
 export const triggerDeliveryLabel = (status) =>
   status === undefined ? null : (DELIVERY_LABELS[status] ?? status);
+
+export const triggerChannelTimingText = (trigger) => {
+  if (trigger.deliveryStatus !== 'sent') return null;
+  const sourceEvent = trigger.evalSnapshot?.firstEventAt ?? trigger.evalSnapshot?.quoteObservedAt;
+  const eventAt = new Date(
+    typeof sourceEvent === 'string' || sourceEvent instanceof Date ? sourceEvent : Number.NaN,
+  );
+  const detectedAt = new Date(trigger.createdAt ?? Number.NaN);
+  const acceptedAt = new Date(trigger.deliveryCompletedAt ?? Number.NaN);
+  const elapsedMs = acceptedAt.getTime() - eventAt.getTime();
+  if (
+    !Number.isFinite(detectedAt.getTime()) ||
+    eventAt.getTime() > detectedAt.getTime() ||
+    !Number.isFinite(elapsedMs) ||
+    elapsedMs < 0
+  )
+    return '渠道受理耗时不可验证 · 设备送达未验证';
+  const seconds = Math.floor(elapsedMs / 1_000);
+  const duration = `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  return `源事件至渠道受理 ${duration}${elapsedMs > 10 * 60_000 ? '（超过 10 分钟）' : ''} · 设备送达未验证`;
+};
 
 export const triggerDeliveryBadgeClass = (status) =>
   `badge badge-delivery-${status ?? 'not-requested'}`;
@@ -190,6 +214,7 @@ const TRIGGER_SOURCE_FILTERS = [
 
 let triggerSourceFilter = 'all';
 let triggerHistoryState = { triggers: [], alertPlanIds: new Set(), labels: {} };
+let deliveryAuditRevision = 0;
 
 export const renderTriggerHistory = ({ root, meta }) => {
   if (root === null) return;
@@ -1267,6 +1292,8 @@ const triggerEvidenceDetails = (trigger) =>
 
 const triggerCard = (trigger, labels) => {
   const delivery = triggerDeliveryLabel(trigger.deliveryStatus);
+  const channelTiming = triggerChannelTimingText(trigger);
+  const publicationReason = trigger.evalSnapshot?.publicationReason;
   const priority = trigger.priority ?? 'normal';
   const versionId = triggerPlanVersionId(trigger);
   return el('div', 'entity-item', [
@@ -1281,8 +1308,31 @@ const triggerCard = (trigger, labels) => {
       el('span', triggerPriorityBadgeClass(priority), triggerPriorityLabel(priority)),
       ...(versionId === null ? [] : [triggerPlanButton(versionId)]),
     ]),
+    ...(channelTiming === null ? [] : [el('p', 'muted', channelTiming)]),
+    ...(typeof publicationReason === 'string'
+      ? [el('p', 'trigger-publication-reason', `发布复查：${publicationReason}`)]
+      : []),
     triggerEvidenceDetails(trigger),
   ]);
+};
+
+export const intradayDeliveryAuditLines = (audit) => {
+  if (audit.candidateCount === 0) return ['当日没有盘中行动候选。'];
+  const channel = audit.channelAcceptance;
+  const statusDetails = Object.entries(audit.deliveryStatusCounts ?? {})
+    .filter(([status, count]) => status !== 'sent' && count > 0)
+    .map(([status, count]) => `${DELIVERY_LABELS[status] ?? status} ${count} 条`);
+  return [
+    `盘中行动候选 ${audit.candidateCount} 条；渠道已受理 ${channel.accepted} 条（10 分钟内 ${channel.withinTenMinutes}、超过 10 分钟 ${channel.overTenMinutes}、时延不可核验 ${channel.timingUnverifiable}）。`,
+    `未受理 ${channel.notAccepted} 条${statusDetails.length === 0 ? '' : `：${statusDetails.join('、')}`}。`,
+    ...(audit.sourceEventTimeUnverifiable > 0
+      ? [`源事件时间不可核验 ${audit.sourceEventTimeUnverifiable} 条。`]
+      : []),
+    ...(channel.p95Ms === null
+      ? []
+      : [`可核验渠道受理耗时 P95 ${Math.ceil(channel.p95Ms / 1000)} 秒。`]),
+    '设备送达未验证；渠道受理不代表设备收到。',
+  ];
 };
 
 const mountPaginated = (root, items, renderItem, emptyNode) => {
@@ -1312,14 +1362,49 @@ const mountPaginated = (root, items, renderItem, emptyNode) => {
 };
 
 export const renderAlerts = async (setStatus) => {
-  const [plansResult, triggersResult, tradingPlansResult, factsResult, reconcileResult] =
-    await Promise.all([
-      callApi('/api/alert-plans'),
-      callApi('/api/watch/triggers?limit=200'),
-      callApi('/api/trading-plans?activeOnly=false&includeMonitoring=true&limit=200'),
-      post('/api/tools/get_account_facts/call', {}),
-      post('/api/tools/reconcile_account_cash/call', {}),
-    ]);
+  const auditRevision = ++deliveryAuditRevision;
+  const accountId = getAccountId();
+  const auditRoot = $('#alerts-delivery-audit');
+  const auditDateInput = $('#alerts-delivery-audit-date');
+  if (auditDateInput !== null) {
+    if (auditDateInput.value.length === 0)
+      auditDateInput.value = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+    auditDateInput.onchange = () => void renderAlerts(setStatus);
+  }
+  const auditDate = auditDateInput?.value;
+  const [
+    plansResult,
+    triggersResult,
+    tradingPlansResult,
+    factsResult,
+    reconcileResult,
+    auditResult,
+  ] = await Promise.all([
+    callApi('/api/alert-plans'),
+    callApi('/api/watch/triggers?limit=200'),
+    accountId === ''
+      ? null
+      : callApi('/api/trading-plans?activeOnly=false&includeMonitoring=true&limit=200'),
+    accountId === '' ? null : post('/api/tools/get_account_facts/call', {}),
+    accountId === '' ? null : post('/api/tools/reconcile_account_cash/call', {}),
+    accountId === '' || auditRoot === null
+      ? null
+      : callApi(`/api/watch/delivery-audit?date=${encodeURIComponent(auditDate)}`),
+  ]);
+  if (auditRoot !== null && auditRevision === deliveryAuditRevision) {
+    mount(
+      auditRoot,
+      accountId === ''
+        ? el('p', 'placeholder', '请先选择账户，再查看盘中时效审计。')
+        : auditResult?.ok
+          ? el(
+              'div',
+              'entity-item',
+              intradayDeliveryAuditLines(auditResult.data).map((line) => el('p', null, line)),
+            )
+          : el('p', 'placeholder', `盘中时效审计不可用：${resultErrorText(auditResult)}`),
+    );
+  }
   const plansRoot = $('#alerts-list');
   const triggersRoot = $('#alerts-triggers');
   const alertPlans = plansResult.ok ? (plansResult.data.plans ?? []) : [];
@@ -1344,12 +1429,18 @@ export const renderAlerts = async (setStatus) => {
       setTriggerHistoryState({
         triggers: triggersResult.data.triggers ?? [],
         alertPlanIds,
-        labels: { alertPlanNames, tradingPlanAccountId: getAccountId() },
+        labels: { alertPlanNames, tradingPlanAccountId: accountId },
       });
       renderTriggerHistory({ root: triggersRoot, meta: $('#alerts-trigger-meta') });
     } else {
       mount(triggersRoot, el('p', 'status error', resultErrorText(triggersResult)));
     }
+  }
+  if (accountId === '') {
+    const meta = $('#alerts-plans-meta');
+    if (meta !== null) meta.textContent = '未选择账户';
+    mount($('#alerts-plans'), el('p', 'placeholder', '请先创建并选择账户，再查看交易计划。'));
+    return;
   }
   renderTradingPlanPanel({
     root: $('#alerts-plans'),

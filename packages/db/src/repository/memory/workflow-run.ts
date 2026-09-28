@@ -19,6 +19,42 @@ export class InMemoryWorkflowRunRepository implements WorkflowRunRepository {
     this.put(run);
   }
 
+  async claim(
+    run: WorkflowRun,
+    retry?: { readonly staleRunningBefore: Date; readonly failedRetryBefore: Date },
+  ): Promise<boolean> {
+    assertWorkflowRunInvariants(run);
+    if (run.status !== 'running') return false;
+    const current = this.items.get(run.id);
+    if (
+      current !== undefined &&
+      (retry === undefined ||
+        !(
+          (current.status === 'running' && current.startedAt < retry.staleRunningBefore) ||
+          (current.status === 'failed' &&
+            current.finishedAt !== undefined &&
+            current.finishedAt < retry.failedRetryBefore)
+        ))
+    )
+      return false;
+    this.items.set(run.id, run);
+    return true;
+  }
+
+  async finishClaim(run: WorkflowRun, claimToken: string): Promise<boolean> {
+    assertWorkflowRunInvariants(run);
+    const current = this.items.get(run.id);
+    if (
+      run.status === 'running' ||
+      run.inputSummary?.claimToken !== claimToken ||
+      current?.status !== 'running' ||
+      current.inputSummary?.claimToken !== claimToken
+    )
+      return false;
+    this.items.set(run.id, run);
+    return true;
+  }
+
   async findById(id: string): Promise<WorkflowRun | null> {
     return this.items.get(id) ?? null;
   }
@@ -39,6 +75,12 @@ export class InMemoryWorkflowRunRepository implements WorkflowRunRepository {
       .filter((r) => r.startedAt.getTime() >= sinceMs)
       .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
       .slice(0, limit);
+  }
+
+  async listAccountPlanBatches(date: string): Promise<readonly WorkflowRun[]> {
+    return [...this.items.values()]
+      .filter((run) => run.workflowName === 'account-plan-batch' && run.inputSummary?.date === date)
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime() || b.id.localeCompare(a.id));
   }
 
   async listStrategyDailyCycleAudits(
