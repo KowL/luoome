@@ -89,11 +89,14 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
     return this.db.transaction(
       (tx: DrizzleTransaction) => {
         const account = tx.select().from(accounts).where(eq(accounts.id, plan.accountId)).get();
+        // digest 口径必须与 deriveAccountFacts 一致：只含当前持仓（未平仓且数量大于 0），
+        // 否则已平仓的历史行会让指纹永远不匹配，激活保存被永久拒绝。
         const currentHoldings = tx
           .select()
           .from(holdings)
           .where(eq(holdings.accountId, plan.accountId))
-          .all();
+          .all()
+          .filter((holding) => holding.closedAt === null && holding.quantity > 0);
         if (
           account === undefined ||
           accountFactsDigest({ account, holdings: currentHoldings }) !== input.facts.digest

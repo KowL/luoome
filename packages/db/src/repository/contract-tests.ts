@@ -931,6 +931,44 @@ export const registerRepositoryContractTests = (
         expect(await repos.tradingPlan.findByVersionId('budget-2:v1')).toBeNull();
       });
 
+      it('已平仓持仓不参与账户事实指纹，不影响激活保存', async () => {
+        const account = makeAccount('budget-closed-account');
+        const stock = makeStock('stk-1', '002594');
+        await repos.account.save(account);
+        await repos.stock.save(stock);
+        const activeHolding = makeHolding('active-holding', { accountId: account.id });
+        await repos.holding.save(activeHolding);
+        await repos.holding.save(
+          makeHolding('closed-holding', {
+            accountId: account.id,
+            stockId: 'stk-closed',
+            quantity: 0,
+            availableQuantity: 0,
+            closedAt: T1,
+          }),
+        );
+        // 与 deriveAccountFacts 同口径：指纹只含当前持仓（未平仓且数量大于 0）
+        const facts = buildAccountFacts({
+          account,
+          holdings: [activeHolding],
+          prices: new Map([[activeHolding.stockId, { close: money(10), observedAt: T1 }]]),
+          asOf: T2,
+        });
+        const plan = makeTradingPlan('budget-closed-plan', 1, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+        });
+        expect(
+          await repos.tradingPlan.saveIfBudgetAvailable({
+            facts,
+            stocks: new Map([[stock.id, stock]]),
+            limits: { totalStockPct: 100, singleStockPct: 30 },
+            asOf: T2,
+            plan,
+          }),
+        ).toMatchObject({ saved: true });
+      });
+
       it('版本身份不可变，重复保存同一版本幂等', async () => {
         const plan = makeTradingPlan('plan-1', 1);
         await repos.tradingPlan.save(plan);

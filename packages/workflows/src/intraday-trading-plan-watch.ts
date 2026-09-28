@@ -385,7 +385,13 @@ const validatePublication = async (
       status: 'invalidated',
     };
   }
-  const plansResult = await ctx.tools.list_trading_plans.execute({ accountId, limit: 500 });
+  // 与监控侧一致只取「当前生效版本」：未发布的草案不能顶掉仍在监控的生效版本，
+  // 否则该标的的风险/退出提醒会被草案无限期压掉（见 activeOnly 的仓储语义）。
+  const plansResult = await ctx.tools.list_trading_plans.execute({
+    accountId,
+    activeOnly: true,
+    limit: 500,
+  });
   if (!plansResult.ok) {
     return {
       ok: false,

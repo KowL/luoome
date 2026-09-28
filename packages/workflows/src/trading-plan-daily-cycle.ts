@@ -554,7 +554,9 @@ const run = async (
           [],
         ...(item.holding === undefined ? {} : { holding: item.holding }),
         previous: previousPlans,
-        now,
+        // 计划在行情抓取与 AI 分析之后构建，必须用构建时刻的时钟；沿用工作流启动时刻会把
+        // retrieval 口径的抓取时间（必然晚于启动时钟）误判为未来时间，计划被压成草案。
+        now: ctx.clock(),
       });
       let saved = await ctx.tools.save_trading_plan.execute({ plan: draft });
       if (!saved.ok && draft.status === 'active') {

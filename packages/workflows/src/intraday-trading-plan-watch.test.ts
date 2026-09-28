@@ -745,6 +745,31 @@ describe('intraday trading plan watch', () => {
     ).toHaveLength(0);
   });
 
+  it('存在更新的未发布草案时，生效版本的行动提醒仍然发布', async () => {
+    const ctx = await buildPlanWatchContext({ clock: () => NOW });
+    const facts = await seedFacts(ctx);
+    const plan = makePlan(ACCOUNT_ID, facts.digest);
+    await ctx.repos.tradingPlan.save(plan);
+    await ctx.repos.tradingPlan.save(
+      TradingPlanSchema.parse({
+        ...plan,
+        version: 2,
+        status: 'draft',
+        supersedesVersionId: `${plan.id}:v1`,
+        invalidEntryConditions: ['行情时间未达到盘中实时资格'],
+        createdAt: new Date(NOW.getTime() + 1000),
+      }),
+    );
+    const result = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.triggers).toMatchObject([{ deliveryStatus: 'sent' }]);
+    expect(result.data.notified).toBe(1);
+  });
+
   it('候选形成后账户账本变化时保存失效审计，且不消耗边沿', async () => {
     const base = await buildPlanWatchContext({ clock: () => NOW, advices: [] });
     const facts = await seedFacts(base);

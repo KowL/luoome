@@ -334,6 +334,80 @@ describe('trading plan daily cycle', () => {
     expect(result.data.plans).toHaveLength(0);
   });
 
+  it('retrieval 抓取时间略晚于工作流启动时钟时，不误判为未来时间而压成草案', async () => {
+    const accountId = EMPTY_ACCOUNT_ID;
+    const advice = AdviceSchema.parse({
+      id: 'retrieval-clock-race-advice',
+      subjectKind: 'stock',
+      subjectId: STOCK_ID,
+      stockName: '贵州茅台',
+      decision: 'buy',
+      confidence: 70,
+      horizon: 'short',
+      entryPriceLow: 100,
+      entryPriceHigh: 105,
+      targetPositionPct: 10,
+      stopLoss: 95,
+      reasoning: {
+        premise: '盘后批次复核',
+        evidence: ['收盘数据完整'],
+        counterEvidence: ['仍需验证'],
+      },
+      risks: ['波动扩大'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_strategy_candidate',
+      basedOn: {
+        strategy: {
+          strategyId: 'strategy-clock-race',
+          strategyVersionId: 'strategy-clock-race-v1',
+          runId: 'run-clock-race',
+          stockId: STOCK_ID,
+          accountId,
+          resultEvidence: [],
+          signalIds: [],
+          observationIds: [],
+          recommendationTrigger: 'run',
+        },
+        quotes: {
+          [STOCK_ID]: {
+            stockId: STOCK_ID,
+            observedAt: new Date(NOW.getTime() + 1500),
+            fetchedAt: new Date(NOW.getTime() + 1500),
+            timestampSource: 'retrieval',
+            open: 101,
+            high: 103,
+            low: 99,
+            close: 102,
+            volume: 1000,
+            source: 'fuyao',
+          },
+        },
+        dataAsOf: new Date(NOW.getTime() + 1500),
+      },
+      validFrom: NOW,
+      validUntil: new Date('2026-07-20T07:00:00.000Z'),
+      createdAt: NOW,
+    }) as Advice;
+    // 工作流启动时取一次时钟；行情抓取与 AI 分析之后构建计划时再取一次，
+    // retrieval 口径的抓取时间介于两者之间，不应被判成未来时间。
+    let started = false;
+    const ctx = await buildTestContext({
+      advices: [advice],
+      clock: () => {
+        if (!started) {
+          started = true;
+          return NOW;
+        }
+        return new Date(NOW.getTime() + 2000);
+      },
+    });
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId, date: '2026-07-17' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.plans).toHaveLength(1);
+    expect(result.data.plans[0]?.status).toBe('active');
+  });
+
   it('同股策略证据合并；关键行动条件冲突时只生成待复核草案', async () => {
     const accountId = EMPTY_ACCOUNT_ID;
     const first = AdviceSchema.parse({

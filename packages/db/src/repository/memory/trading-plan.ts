@@ -57,11 +57,15 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
       assertTradingPlanInvariants(plan);
       assertTradingPlanBudgetLimits(input.limits);
       const account = this.account.peek(plan.accountId);
+      // digest 口径与 deriveAccountFacts 一致：只含当前持仓（未平仓且数量大于 0）。
+      const currentHoldings = this.holding
+        .snapshotByAccount(plan.accountId)
+        .filter((holding) => holding.closedAt === null && holding.quantity > 0);
       if (
         account === null ||
         accountFactsDigest({
           account,
-          holdings: this.holding.snapshotByAccount(plan.accountId),
+          holdings: currentHoldings,
         }) !== input.facts.digest
       ) {
         return { saved: false, reason: 'account-facts-changed' };
