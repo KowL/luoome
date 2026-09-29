@@ -3362,12 +3362,23 @@ export interface StartWebOptions {
   readonly strategyAutonomySchedulerIntervalMs?: number;
   /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
   readonly strategyAutonomySchedulerFactory?: typeof startStrategyAutonomyScheduler;
+  /** 仅供测试注入慢速/模拟聊天流；生产默认复用 AI SDK agent。 */
+  readonly chatStreamRuntime?: ChatStreamRuntime;
+  /** 仅供测试验证连接空闲断线行为；生产固定 WEB_SERVER_IDLE_TIMEOUT_SECONDS。 */
+  readonly idleTimeoutSeconds?: number;
 }
 
 export interface WebServerHandle {
   readonly port: number;
   stop(closeActiveConnections?: boolean): void;
 }
+
+/**
+ * Bun.serve 默认 idleTimeout 只有 10s；流式对话在工具执行后等待下一段模型输出时
+ * 可能更久无字节流动，连接会被服务端掐断（浏览器表现为 network error）。
+ * 取 Bun 上限 255s，覆盖 agent 全程超时（120s）。
+ */
+export const WEB_SERVER_IDLE_TIMEOUT_SECONDS = 255;
 
 /** 启动 Web 与进程内策略调度器；stop() 会同时停止二者。 */
 export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
@@ -3392,8 +3403,16 @@ export const startWeb = async (options: StartWebOptions): Promise<WebServerHandl
     feishuSettingsStore,
     dataTransferDbPath: dbPath,
     sources,
+    ...(options.chatStreamRuntime === undefined
+      ? {}
+      : { chatStreamRuntime: options.chatStreamRuntime }),
   });
-  const server = Bun.serve({ port: options.port, hostname, fetch: app.fetch });
+  const server = Bun.serve({
+    port: options.port,
+    hostname,
+    fetch: app.fetch,
+    idleTimeout: options.idleTimeoutSeconds ?? WEB_SERVER_IDLE_TIMEOUT_SECONDS,
+  });
   const scheduler =
     exposeWrite && exposeExternal
       ? (options.strategySchedulerFactory ?? startStrategyScheduler)(ctx, {

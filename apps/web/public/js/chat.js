@@ -709,7 +709,14 @@ const send = async (requestedText) => {
         await refreshSessions();
       }
     } else {
-      pushMsg('assistant', `请求失败：${error instanceof Error ? error.message : '未知错误'}`);
+      // TypeError 来自 fetch/reader 的连接级失败（服务重启、空闲掐线等），原始 message 对用户无意义。
+      const reason =
+        error instanceof TypeError
+          ? '连接中断，请重试；已生成的部分内容会保留在会话中'
+          : error instanceof Error
+            ? error.message
+            : '未知错误';
+      pushMsg('assistant', `请求失败：${reason}`);
     }
   } finally {
     cancelBtn.remove();

@@ -1041,6 +1041,102 @@ describe('Web runtime bootstrap', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('idleTimeout 覆盖流式对话等待模型响应的空窗（回归：默认 10s 掐断报 network error）', async () => {
+    const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
+    const previousMarketSources = process.env.LUOOME_MARKET_SOURCES;
+    process.env.LUOOME_MARKET_PROVIDER = 'real';
+    process.env.LUOOME_MARKET_SOURCES = 'sina';
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-idle-timeout-'));
+    let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
+    try {
+      const dbPath = join(dir, 'luoome.db');
+      const seedCtx = await buildWebContext(dbPath, {
+        LUOOME_MARKET_PROVIDER: 'real',
+        LUOOME_MARKET_SOURCES: 'sina',
+      });
+      const now = new Date();
+      await seedCtx.repos.chat.saveSession({
+        id: 'idle-session',
+        accountId: seedCtx.user.defaultAccountId,
+        title: '新会话',
+        createdAt: now,
+        updatedAt: now,
+      });
+      // 流已开始（start chunk 已发）后静默 6s，模拟工具执行完等待下一次模型响应的空窗。
+      // Bun 的空闲检查有数秒粒度，idleTimeout: 1 实测约 4s 才掐线，6s 留出余量。
+      const slowRuntime: ChatStreamRuntime = {
+        createUIMessageStreamResponse: async () =>
+          new Response(
+            new ReadableStream({
+              async start(controller) {
+                controller.enqueue('data: {"type":"start","messageId":"m1"}\n\n');
+                await new Promise((resolve) => setTimeout(resolve, 6000));
+                controller.enqueue('data: [DONE]\n\n');
+                controller.close();
+              },
+            }),
+            { headers: { 'content-type': 'text/event-stream' } },
+          ),
+      };
+      const schedulerFactories = {
+        strategySchedulerFactory: () => ({
+          tick: async () => {},
+          cutoffTick: async () => {},
+          stop: () => {},
+        }),
+        intradayPlanSchedulerFactory: () => ({ tick: async () => {}, stop: () => {} }),
+        portfolioPerformanceSchedulerFactory: () => ({ tick: async () => {}, stop: () => {} }),
+        strategyAutonomySchedulerFactory: () => ({ tick: async () => {}, stop: () => {} }),
+      };
+      const postChat = () =>
+        fetch(`http://127.0.0.1:${handle?.port}/api/chat`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'idle-session',
+            messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+          }),
+        });
+
+      handle = await startWeb({
+        port: 0,
+        dbPath,
+        exposeWrite: true,
+        exposeExternal: true,
+        idleTimeoutSeconds: 1,
+        chatStreamRuntime: slowRuntime,
+        ...schedulerFactories,
+      });
+      // idleTimeout 1s < 空窗 6s：headers 先到，服务端在读 body 期间掐断空闲连接
+      // （浏览器侧表现为 reader.read() 抛 TypeError: network error）。
+      const cut = await postChat();
+      expect(cut.status).toBe(200);
+      await expect(cut.text()).rejects.toThrow();
+      handle.stop(true);
+      handle = undefined;
+
+      handle = await startWeb({
+        port: 0,
+        dbPath,
+        exposeWrite: true,
+        exposeExternal: true,
+        idleTimeoutSeconds: 10,
+        chatStreamRuntime: slowRuntime,
+        ...schedulerFactories,
+      });
+      const response = await postChat();
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('[DONE]');
+    } finally {
+      handle?.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+      if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
+      else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;
+      if (previousMarketSources === undefined) delete process.env.LUOOME_MARKET_SOURCES;
+      else process.env.LUOOME_MARKET_SOURCES = previousMarketSources;
+    }
+  }, 30_000);
 });
 
 describe('数据导出导入 API', () => {
