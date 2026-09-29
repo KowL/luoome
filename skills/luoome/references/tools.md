@@ -73,6 +73,16 @@ Strategies are rejected. Before calling one:
 Holding writes can reject a concurrent change. Refresh the holding before retrying; never replay
 stale quantities or costs. Cash changes and their ledger records commit together.
 
+The built-in investment assistant can draft `create_account`, `add_holding`, `update_holding`,
+`close_holding`, and `create_portfolio_cash_flow` in portfolio/general conversations. These change
+local ledger records, never broker orders. Do not guess amounts, quantities, costs, or dates.
+The Web-only `settle_chat_draft` capability requires both write and external opt-in and an
+explicitly approved persisted session/message/toolCallId. It is not exposed through MCP or the
+generic registry. The Web confirmation endpoint executes only saved draft input and returns its
+durable status and actual ToolResult; repeated confirmations do not repeat execution. External
+agents should use the exposed target tools with normal confirmation. Never fabricate assistant
+messages or retry an interrupted `executing` draft before reconciling the actual ledger.
+
 `create_strategy_observation_candidates` defaults to published operational runs. Evaluation observations
 require an explicit `evaluationSessionId` matching a completed run in that session; they remain research
 facts and never create Watchlist membership or Advice. `complete_strategy_observations` can restrict

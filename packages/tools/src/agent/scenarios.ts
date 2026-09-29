@@ -18,6 +18,7 @@ export type AgentDraftKind =
   | 'watchlist'
   | 'alert-plan'
   | 'research'
+  | 'portfolio'
   | 'advice'
   | 'review';
 
@@ -26,6 +27,7 @@ export const AgentDraftKindSchema = z.enum([
   'watchlist',
   'alert-plan',
   'research',
+  'portfolio',
   'advice',
   'review',
 ]);
@@ -55,6 +57,10 @@ export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 - 只使用 Strategy、Watchlist、AlertPlan 目标模型，不得生成或调用旧 Tactic、StockGroup、StockPool。
 - create/update/delete 等写入工具只生成待用户确认的草案；调用它们不代表已经执行；不得调用内部 sync/migration 或 trade。
 - 记录 Advice 结果或创建研究假设版本同样只能生成待确认草案；未提供的盈亏、基准或摘要必须展示为未知，不能用默认值或推测补齐。
+- 账户、持仓和资金流水仅管理本地投资账本；create_account、add_holding、update_holding、close_holding、create_portfolio_cash_flow 只生成逐项待确认草案，不能执行真实开户、转账、买卖或 add_trade。
+- 账本草案的账户、股票、数量、成本、金额、币种与发生时间必须来自用户明确提供的信息或已查询的账本事实；缺失或存在歧义时先澄清，不得推测金额，不得把投资建议转成账本记录。
+- 写入前先查询目标账户与持仓，向用户说明现金影响：开户本金计入现金，登记持仓扣成本，纠错按成本差额增减，关闭持仓按成本回补而非按卖出成交价；入金/转入/分红增加现金，出金/转出/费/税减少现金。现金不足必须纠错，不能自动补一笔入金。
+- 多步账本操作按依赖顺序逐项确认，先创建账户成功并取得真实 id，才能生成其持仓或流水草案；不能编造 id 或把待确认草案当成已完成事实。
 - 添加一个或多个 Watchlist 成员统一调用 add_watchlist_members；一次请求里的全部成员必须放进同一个草案，只确认一次。
 - 研究 Topic/Document/SubjectLink 写入同样只能生成经过 schema 校验的草案；用户确认前不得写 Vault 或索引。
 - 样本 dry-run 不能直接执行，只能在草案中生成 trial_strategy（固定 persist=false）或 trial_strategy_version；正式持久化运行才生成 run_strategy（persist=true）。
@@ -70,8 +76,14 @@ const SHARED_READ_BASELINE = [
   'search_stocks',
   'fetch_quote',
   'batch_quote',
+  'list_accounts',
+  'get_account',
+  'get_account_facts',
+  'reconcile_account_cash',
   'list_holdings',
   'get_holding',
+  'list_trading_plans',
+  'get_trading_plan',
   'list_strategies',
   'get_strategy',
   'strategy_signals_by_stock',
@@ -89,6 +101,11 @@ const SHARED_READ_BASELINE = [
 
 /** 全部可进入 Agent 确认面板的草案工具；场景会进一步收窄 Phase 2 工具。 */
 export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = {
+  create_account: 'portfolio',
+  add_holding: 'portfolio',
+  update_holding: 'portfolio',
+  close_holding: 'portfolio',
+  create_portfolio_cash_flow: 'portfolio',
   create_strategy: 'strategy',
   create_strategy_version: 'strategy',
   propose_strategy_version_draft: 'strategy',
@@ -125,12 +142,27 @@ const withoutDraftTools = (
   ) as Readonly<Record<string, AgentDraftKind>>;
 };
 
-/** 复盘只允许回填 AdviceOutcome；研究场景只允许创建研究假设版本。 */
-const REVIEW_DRAFT_TOOL_KINDS = withoutDraftTools('create_research_hypothesis_version');
-const RESEARCH_DRAFT_TOOL_KINDS = withoutDraftTools('record_advice_outcome');
-const PORTFOLIO_WATCH_DRAFT_TOOL_KINDS = withoutDraftTools(
+const PORTFOLIO_DRAFT_TOOLS = Object.entries(AGENT_DRAFT_TOOL_KINDS)
+  .filter(([, kind]) => kind === 'portfolio')
+  .map(([name]) => name);
+
+/** 账本草案限持仓与通用场景；复盘与研究另按各自范围开放草案。 */
+const REVIEW_DRAFT_TOOL_KINDS = withoutDraftTools(
+  'create_research_hypothesis_version',
+  ...PORTFOLIO_DRAFT_TOOLS,
+);
+const RESEARCH_DRAFT_TOOL_KINDS = withoutDraftTools(
+  'record_advice_outcome',
+  ...PORTFOLIO_DRAFT_TOOLS,
+);
+const PORTFOLIO_DRAFT_TOOL_KINDS = withoutDraftTools(
   'record_advice_outcome',
   'create_research_hypothesis_version',
+);
+const WATCH_DRAFT_TOOL_KINDS = withoutDraftTools(
+  'record_advice_outcome',
+  'create_research_hypothesis_version',
+  ...PORTFOLIO_DRAFT_TOOLS,
 );
 
 const scenario = (
@@ -213,17 +245,17 @@ export const AGENT_SCENARIOS: Readonly<Record<AgentScenarioId, AgentScenario>> =
   ),
   portfolio: scenario(
     'portfolio',
-    '场景：持仓与风险。基于真实持仓、成本与交易记录回答，收益与风险数字必须来自工具结果，不得估算冒充实际值。',
+    '场景：账户、持仓与风险。先用 list_accounts/get_account 确认账户，基于 get_account_facts 与 reconcile_account_cash 核实现金、资产和账本缺口；账户事实不可用时不得输出精确仓位。收益与风险数字必须来自工具结果，不得估算冒充实际值。可查询 TradingPlan 的有效期与监控资格，但计划不等于交易授权；账户、持仓、现金流水登记只能生成待确认草案。',
     PORTFOLIO_READS,
-    ['持仓/成本', '行情', '集中度与绩效', '事件', '历史建议'],
-    PORTFOLIO_WATCH_DRAFT_TOOL_KINDS,
+    ['账户/现金', '持仓/成本', '行情', '集中度与绩效', '交易计划', '历史建议'],
+    PORTFOLIO_DRAFT_TOOL_KINDS,
   ),
   watch: scenario(
     'watch',
     '场景：观察盯盘。说明 Watchlist 变化、触发记录与数据健康；预警与盯盘规则的新建修改只生成待确认草案。',
     WATCH_READS,
     ['Watchlist 变化', '触发记录', '策略信号', '数据健康'],
-    PORTFOLIO_WATCH_DRAFT_TOOL_KINDS,
+    WATCH_DRAFT_TOOL_KINDS,
   ),
   review: scenario(
     'review',

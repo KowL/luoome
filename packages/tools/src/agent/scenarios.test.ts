@@ -30,7 +30,7 @@ describe('agent 场景目录', () => {
   });
 
   it('草案清单全部已注册、kind 合法；Phase 2 草案按场景收窄', () => {
-    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(25);
+    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(30);
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_stock).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_position).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.market_outlook).toBe('advice');
@@ -58,6 +58,37 @@ describe('agent 场景目录', () => {
       expect(AGENT_SCENARIOS[id].draftToolKinds).not.toHaveProperty(
         'create_research_hypothesis_version',
       );
+    }
+  });
+
+  it('账户事实、现金对账和交易计划在所有场景均可查询，账本写入只生成 portfolio/general 草案', () => {
+    const portfolioDrafts = [
+      'create_account',
+      'add_holding',
+      'update_holding',
+      'close_holding',
+      'create_portfolio_cash_flow',
+    ];
+    for (const scenario of Object.values(AGENT_SCENARIOS)) {
+      for (const name of [
+        'list_accounts',
+        'get_account',
+        'get_account_facts',
+        'reconcile_account_cash',
+        'list_trading_plans',
+        'get_trading_plan',
+      ]) {
+        expect(scenario.readToolNames).toContain(name);
+      }
+      expect(scenario.readToolNames).not.toContain('add_trade');
+      expect(scenario.draftToolKinds).not.toHaveProperty('add_trade');
+      for (const name of portfolioDrafts) {
+        expect(scenario.readToolNames).not.toContain(name);
+        expect(toolRegistry.get(name)?.sideEffect).toBe('write');
+        expect(scenario.draftToolKinds[name]).toBe(
+          scenario.id === 'portfolio' || scenario.id === 'general' ? 'portfolio' : undefined,
+        );
+      }
     }
   });
 
@@ -102,6 +133,9 @@ describe('agent 场景目录', () => {
     expect(BASE_INSTRUCTIONS).toContain('风险与未知项');
     expect(BASE_INSTRUCTIONS).toContain('伪完整答案');
     expect(BASE_INSTRUCTIONS).toContain('trial_strategy');
+    expect(BASE_INSTRUCTIONS).toContain('不得推测金额');
+    expect(BASE_INSTRUCTIONS).toContain('不能自动补一笔入金');
+    expect(BASE_INSTRUCTIONS).toContain('逐项确认');
     expect(BASE_INSTRUCTIONS).not.toContain('run_strategy（persist=false）');
   });
 });

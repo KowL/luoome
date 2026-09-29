@@ -459,6 +459,11 @@ Web 点击确认后才进入真实 tool 写路径。`ChatSession` / `ChatMessage
 `ChatRepository` 位于 core，memory 与 drizzle repository 位于 db；Web 会话端点经
 tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 user message，
 服务端加载最近 20 条消息并在 AI SDK `onFinish` 后保存 assistant UI message parts。
+已完成的工具结果和 step 边界保留到下一轮。草案确认使用
+`POST /api/chat/sessions/:id/drafts/:messageId/:toolCallId` → `settle_chat_draft`，仅执行
+服务端存储的输入；repository 通过原子认领和 parts 比较更新保存每项执行状态，重复请求不重复写入。
+执行结果随原消息传回模型，用户文本中的“已执行”不作为凭据。对话和确认都要求 write + external
+显式开启，流与确认请求沿用所选账户 header。SDK 服务端消费流以保存取消后的部分回答，完成时记录用量。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
 ### 4.8 Context

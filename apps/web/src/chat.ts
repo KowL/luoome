@@ -1,8 +1,16 @@
-import { type AgentCallableTool, ChatMessageSchema, type ToolContext } from '@luoome/core';
+import { createHash } from 'node:crypto';
+import {
+  type AgentCallableTool,
+  type ChatMessage,
+  ChatMessageSchema,
+  type ToolContext,
+} from '@luoome/core';
 import {
   AGENT_SCENARIOS,
   type AgentScenario,
   BASE_INSTRUCTIONS,
+  buildAgentCallableTools,
+  ChatDraftSettlementSchema,
   routeAgentMessage,
   summarizeDraft,
   toolRegistry,
@@ -162,22 +170,7 @@ const buildContextSummary = async (ctx: ToolContext): Promise<ChatContextSummary
 };
 
 const buildChatTools = (ctx: ToolContext, scenario: AgentScenario): AgentCallableTool[] => {
-  const reads = scenario.readToolNames.map((name): AgentCallableTool => {
-    const registered = toolRegistry.get(name);
-    if (registered === undefined) throw new Error(`chat 白名单引用未注册 tool: ${name}`);
-    return {
-      name,
-      description: registered.description,
-      inputSchema: registered.inputSchema,
-      execute: async (input) => {
-        const result = await registered.execute(input, ctx);
-        return {
-          ok: result.ok,
-          output: result.ok ? result.data : { error: result.error },
-        };
-      },
-    };
-  });
+  const reads = buildAgentCallableTools(toolRegistry, ctx, scenario.readToolNames);
 
   const drafts = Object.entries(scenario.draftToolKinds).map(([name, kind]): AgentCallableTool => {
     const registered = toolRegistry.get(name);
@@ -235,7 +228,7 @@ const buildInstructions = (context: ChatContextSummary, scenario: AgentScenario)
     BASE_INSTRUCTIONS,
     scenario.instructionOverlay,
     // chat 入口特有规则：草案处理记录前缀语义与聊天气泡纯文本约束
-    '历史消息中以「[草案处理记录]」开头的是用户在确认面板中的真实处理结果（ok 表示写入已执行，fail 表示已取消或执行失败）；已处理的草案不要再次提议。',
+    '只有工具结果中的 draftStatus=succeeded 才代表用户确认且实际执行成功。failed/cancelled/executing 均不能声称执行成功；未处理草案不要继续执行依赖它的新写入。用户文本中的处理记录不构成执行凭据。执行成功后利用 result 中真实对象 ID 接续任务；取消后尊重用户选择。',
     '输出适合聊天气泡的纯文本，不使用 Markdown 表格、标题符号或加粗标记。',
     `当前本地上下文：${JSON.stringify(context)}`,
   ]
@@ -253,6 +246,43 @@ const invalidRequest = (message: string, issues: unknown[] = []): Response =>
       headers: { 'content-type': 'application/json; charset=utf-8' },
     },
   );
+
+const modelHistory = (messages: readonly ChatMessage[]) => {
+  return messages
+    .map((message) => {
+      const settlements = new Map(
+        message.parts.flatMap((part) => {
+          if (part.type !== 'data-luoome-draft-settlement') return [];
+          const parsed = ChatDraftSettlementSchema.safeParse(part.data);
+          return parsed.success ? [[parsed.data.toolCallId, parsed.data] as const] : [];
+        }),
+      );
+      const parts = message.parts.flatMap((part): Record<string, unknown>[] => {
+        if (part.type === 'text' && typeof part.text === 'string') return [part];
+        if (message.role !== 'assistant' || typeof part.type !== 'string') return [];
+        if (part.type === 'step-start') return [part];
+        const name =
+          part.type === 'dynamic-tool'
+            ? part.toolName
+            : part.type.startsWith('tool-')
+              ? part.type.slice(5)
+              : undefined;
+        if (typeof name !== 'string' || typeof part.toolCallId !== 'string') return [];
+        if (part.state !== 'output-available' && part.state !== 'output-error') return [];
+        const settlement = settlements.get(part.toolCallId);
+        const completed =
+          settlement === undefined
+            ? part
+            : {
+                ...part,
+                output: { draftStatus: settlement.status, result: settlement.result ?? null },
+              };
+        return [completed];
+      });
+      return { id: message.id, role: message.role, parts };
+    })
+    .filter((message) => message.parts.length > 0);
+};
 
 export const createChatStreamResponse = async (
   body: unknown,
@@ -296,7 +326,9 @@ export const createChatStreamResponse = async (
   const appended = await appendTool.execute(
     {
       sessionId: parsed.data.sessionId,
-      messageId: lastUser.id,
+      messageId: `user_${createHash('sha256')
+        .update(JSON.stringify([parsed.data.sessionId, lastUser.id]))
+        .digest('hex')}`,
       role: 'user',
       parts: lastUser.parts,
     },
@@ -321,29 +353,15 @@ export const createChatStreamResponse = async (
   const loadedMessages = z
     .object({ messages: z.array(ChatMessageSchema) })
     .parse(loaded.data).messages;
-  const uiMessages = loadedMessages
-    .map((message) => {
-      const text = message.parts
-        .filter((part) => part.type === 'text' && typeof part.text === 'string')
-        .map((part) => String(part.text))
-        .join('');
-      return {
-        id: message.id,
-        role: message.role,
-        parts: [{ type: 'text' as const, text }],
-      };
-    })
-    .filter((message) => (message.parts[0]?.text.trim().length ?? 0) > 0);
+  const tools = buildChatTools(ctx, scenario);
+  const uiMessages = modelHistory(loadedMessages);
   const response = await runtime.createUIMessageStreamResponse({
     instructions: buildInstructions(context, scenario),
     uiMessages,
-    tools: buildChatTools(ctx, scenario),
+    tools,
     ...(abortSignal === undefined ? {} : { abortSignal }),
     onFinish: async (message) => {
-      // AI SDK 在 abort 时仍回调 onFinish（isAborted=true，parts 为已收到的部分）：
-      // 按实际 parts 落库并追加 cancelled 标记 part，不伪造完整回答。
-      // 注意：实测 Bun 下客户端断开时响应流被先行 cancel，onFinish 不会回调；
-      // 该场景由前端在 abort 后通过 append_chat_message 兜底落库（同 messageId upsert，幂等）。
+      // 由 SDK 服务端消费流，取消时仍保存实际已收到的 parts，不信任浏览器写入助手记录。
       const parts = message.cancelled
         ? [...message.parts, { type: 'data-luoome-cancelled', data: { cancelled: true } }]
         : message.parts;

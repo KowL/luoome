@@ -18,12 +18,14 @@ export const buildAgentCallableTools = (
     if (registered === undefined) {
       throw new Error(`agent 白名单引用未注册 tool: ${name}`);
     }
-    const allowed =
-      registered.sideEffect === 'read' ||
-      (registered.sideEffect === 'external' && APPROVED_EXTERNAL_TOOLS.has(registered.name));
+    const allowed = registered.requiredCapabilities.every(
+      (capability) =>
+        capability === 'read' ||
+        (capability === 'external' && APPROVED_EXTERNAL_TOOLS.has(registered.name)),
+    );
     if (!allowed) {
       throw new Error(
-        `agent 白名单禁止 sideEffect=${registered.sideEffect} tool: ${registered.name}`,
+        `agent 白名单禁止 requiredCapabilities=${registered.requiredCapabilities.join(',')} tool: ${registered.name}`,
       );
     }
     return {

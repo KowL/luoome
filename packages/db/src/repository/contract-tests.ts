@@ -5886,6 +5886,83 @@ export const registerRepositoryContractTests = (
     });
 
     describe('ChatRepository', () => {
+      it('并发首次插入只保存一个消息，重复或跨会话 ID 不覆盖原文', async () => {
+        await repos.chat.saveSession(makeChatSession('c1'));
+        await repos.chat.saveSession(makeChatSession('c2'));
+        const first = makeChatMessage('same-id', 'c1', {
+          parts: [{ type: 'text', text: 'first' }],
+          createdAt: T1,
+        });
+        const second = { ...first, parts: [{ type: 'text', text: 'second' }], createdAt: T2 };
+        const results = await Promise.all([
+          repos.chat.insertMessageIfAbsent(first),
+          repos.chat.insertMessageIfAbsent(second),
+        ]);
+        expect(results.filter(Boolean)).toHaveLength(1);
+        const saved = results[0] ? first : second;
+        expect(await repos.chat.findMessageById('c1', 'same-id')).toEqual(saved);
+        expect(await repos.chat.insertMessageIfAbsent(saved)).toBe(false);
+        expect(await repos.chat.insertMessageIfAbsent({ ...second, sessionId: 'c2' })).toBe(false);
+        expect(await repos.chat.findMessageById('c1', 'same-id')).toEqual(saved);
+        expect(await repos.chat.listMessages('c2')).toEqual([]);
+      });
+
+      it('同一毫秒的消息按二进制 ID 顺序截取，memory 与 SQLite 一致', async () => {
+        await repos.chat.saveSession(makeChatSession('c1'));
+        for (const id of ['a', 'B', '_a', 'Za']) {
+          await repos.chat.saveMessage(makeChatMessage(id, 'c1', { createdAt: T1 }));
+        }
+        expect((await repos.chat.listMessages('c1')).map((message) => message.id)).toEqual([
+          'B',
+          'Za',
+          '_a',
+          'a',
+        ]);
+        expect((await repos.chat.listMessages('c1', 2)).map((message) => message.id)).toEqual([
+          '_a',
+          'a',
+        ]);
+      });
+
+      it('截取最近消息并稳定排序；草案状态原子更新不会移动消息', async () => {
+        await repos.chat.saveSession(makeChatSession('c1'));
+        const first = makeChatMessage('m1', 'c1', { createdAt: T1 });
+        const second = makeChatMessage('m2', 'c1', { createdAt: T2 });
+        await repos.chat.saveMessage(first);
+        await repos.chat.saveMessage(second);
+        await repos.chat.saveMessage(makeChatMessage('m3', 'c1', { createdAt: T3 }));
+        expect((await repos.chat.listMessages('c1', 2)).map((message) => message.id)).toEqual([
+          'm2',
+          'm3',
+        ]);
+        expect(await repos.chat.findMessageById('other', 'm2')).toBeNull();
+        const changed = {
+          ...second,
+          parts: [...second.parts, { type: 'data-test', data: 'claimed' }],
+        };
+        const claims = await Promise.all([
+          repos.chat.compareAndSetMessageParts(changed, second.parts),
+          repos.chat.compareAndSetMessageParts(changed, second.parts),
+        ]);
+        expect(claims.filter(Boolean)).toHaveLength(1);
+        expect(await repos.chat.findMessageById('c1', 'm2')).toEqual(changed);
+        expect((await repos.chat.listMessages('c1')).map((message) => message.id)).toEqual([
+          'm1',
+          'm2',
+          'm3',
+        ]);
+        expect(
+          await repos.chat.compareAndSetMessageParts(
+            { ...changed, sessionId: 'other' },
+            changed.parts,
+          ),
+        ).toBe(false);
+        await repos.chat.saveSession(makeChatSession('other'));
+        await expect(repos.chat.saveMessage({ ...changed, sessionId: 'other' })).rejects.toThrow(
+          InvariantError,
+        );
+      });
+
       it('会话按账户隔离并按 updatedAt 倒序', async () => {
         await repos.chat.saveSession(makeChatSession('c1', { updatedAt: T1 }));
         await repos.chat.saveSession(makeChatSession('c2', { updatedAt: T2 }));

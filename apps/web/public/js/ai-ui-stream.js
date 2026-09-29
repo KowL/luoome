@@ -14,21 +14,32 @@ export const consumeUIMessageStream = async (response, onPart) => {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let finished = false;
 
   const consumeLine = (line) => {
     if (!line.startsWith('data:')) return;
     const payload = line.slice(5).trim();
     if (payload.length === 0 || payload === '[DONE]') return;
-    onPart(JSON.parse(payload));
+    const part = JSON.parse(payload);
+    if (part.type === 'finish') finished = true;
+    onPart(part);
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-    for (const line of lines) consumeLine(line);
-    if (done) break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? '';
+      for (const line of lines) consumeLine(line);
+      if (done) break;
+    }
+    if (buffer.length > 0) consumeLine(buffer);
+    if (!finished) throw new Error('回复中途断开，请重试或重新打开会话检查已保存的内容');
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
-  if (buffer.length > 0) consumeLine(buffer);
 };

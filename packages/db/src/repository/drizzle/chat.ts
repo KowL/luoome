@@ -4,8 +4,9 @@ import {
   type ChatMessage,
   type ChatRepository,
   type ChatSession,
+  InvariantError,
 } from '@luoome/core';
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { chatMessages, chatSessions, type Schema } from '../../schema/index.js';
 
@@ -44,11 +45,28 @@ export class DrizzleChatRepository implements ChatRepository {
 
   async saveMessage(message: ChatMessage): Promise<void> {
     assertChatMessageInvariants(message);
-    this.db
-      .insert(chatMessages)
-      .values(message)
-      .onConflictDoUpdate({ target: chatMessages.id, set: message })
-      .run();
+    this.db.transaction((tx) => {
+      const existing = tx.select().from(chatMessages).where(eq(chatMessages.id, message.id)).get();
+      if (existing !== undefined && existing.sessionId !== message.sessionId) {
+        throw new InvariantError('chat message 不可移动到其它会话');
+      }
+      tx.insert(chatMessages)
+        .values(message)
+        .onConflictDoUpdate({ target: chatMessages.id, set: message })
+        .run();
+    });
+  }
+
+  async insertMessageIfAbsent(message: ChatMessage): Promise<boolean> {
+    assertChatMessageInvariants(message);
+    return (
+      this.db
+        .insert(chatMessages)
+        .values(message)
+        .onConflictDoNothing({ target: chatMessages.id })
+        .returning({ id: chatMessages.id })
+        .all().length === 1
+    );
   }
 
   async listMessages(sessionId: string, limit = 200): Promise<readonly ChatMessage[]> {
@@ -56,9 +74,40 @@ export class DrizzleChatRepository implements ChatRepository {
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.sessionId, sessionId))
-      .orderBy(asc(chatMessages.createdAt))
+      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
       .limit(limit)
       .all()
+      .reverse()
       .map((message) => ({ ...message, parts: [...message.parts] }));
+  }
+
+  async findMessageById(sessionId: string, messageId: string): Promise<ChatMessage | null> {
+    const message = this.db
+      .select()
+      .from(chatMessages)
+      .where(and(eq(chatMessages.id, messageId), eq(chatMessages.sessionId, sessionId)))
+      .get();
+    return message === undefined ? null : { ...message, parts: [...message.parts] };
+  }
+
+  async compareAndSetMessageParts(
+    message: ChatMessage,
+    expectedParts: ChatMessage['parts'],
+  ): Promise<boolean> {
+    assertChatMessageInvariants(message);
+    return (
+      this.db
+        .update(chatMessages)
+        .set({ parts: message.parts })
+        .where(
+          and(
+            eq(chatMessages.id, message.id),
+            eq(chatMessages.sessionId, message.sessionId),
+            eq(chatMessages.parts, expectedParts),
+          ),
+        )
+        .returning({ id: chatMessages.id })
+        .all().length === 1
+    );
   }
 }

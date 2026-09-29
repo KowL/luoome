@@ -67,7 +67,7 @@
         <li><a class="nav-item" href="#limit-up" data-route="limit-up"><span>涨停梯队</span></a></li>
         <li><a class="nav-item" href="#dragon-tiger" data-route="dragon-tiger"><span>龙虎榜</span></a></li>
         <li><a class="nav-item" href="#sectors" data-route="sectors"><span>板块热力</span></a></li>
-        <li><a class="nav-item" href="#chat" data-route="chat"><span>对话</span></a></li>
+        <li><a class="nav-item" href="#chat" data-route="chat"><span>AI 助手</span></a></li>
         <li><a class="nav-item" href="#settings" data-route="settings"><span>设置</span></a></li>
       </ul>
       <div class="sidebar-foot">
@@ -747,8 +747,8 @@
       <!-- route: chat（对话助手，docs/ddd/web-chat-design.md §5） -->
       <section id="route-chat" class="route" data-route="chat" hidden>
         <div class="route-header">
-          <h1>对话</h1>
-          <div class="route-meta">持久会话 · AI SDK 流式工具调用 · 写操作确认后才生效</div>
+          <h1>AI 投资助手</h1>
+          <div class="route-meta">查事实 → 确认操作 → 跟进结果 · 会话保存在本地</div>
         </div>
         <div class="chat-workspace">
           <aside class="chat-session-rail" aria-label="会话列表">
@@ -768,7 +768,7 @@
             </div>
           </aside>
           <div class="card chat-card">
-            <div id="chat-log" class="chat-log">
+            <div id="chat-log" class="chat-log" role="log" aria-label="投资助手对话" aria-live="polite">
               <p class="placeholder">正在加载会话…</p>
             </div>
             <form id="chat-form" class="chat-form">
@@ -776,12 +776,14 @@
               <input
                 id="chat-input"
                 type="text"
-                maxlength="2000"
-                placeholder="询问持仓、行情、研究，或让助手生成配置草案…"
+                maxlength="8000"
+                aria-label="向投资助手提问"
+                placeholder="查持仓、记资金、做研究，或配置盯盘提醒…"
                 autocomplete="off"
               />
               <button id="chat-send" class="btn btn-primary chat-send" type="submit">发送</button>
             </form>
+            <p class="chat-boundary">你确认后才修改投资记录。助手不会自动下单；AI 分析不构成投资建议。</p>
           </div>
         </div>
       </section>

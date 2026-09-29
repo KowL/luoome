@@ -2,7 +2,7 @@
 'use strict';
 
 import { consumeUIMessageStream } from './ai-ui-stream.js';
-import { callApi } from './api.js';
+import { apiHeaders, callApi, getAccountId } from './api.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { $, adviceCard, el, mount, resultErrorText } from './ui.js';
 
@@ -11,8 +11,18 @@ let sessions = [];
 let activeSessionId = null;
 let sending = false;
 let initialized = false;
+let activeAccountId = null;
+let activeController = null;
+let viewVersion = 0;
+let settling = false;
 
 const TOOL_LABELS = {
+  create_account: '创建账户',
+  update_account: '更新账户',
+  add_holding: '登记持仓',
+  update_holding: '更新持仓',
+  close_holding: '关闭持仓',
+  create_portfolio_cash_flow: '登记资金流水',
   create_strategy: '创建 Strategy',
   create_strategy_version: '创建 Strategy 版本',
   publish_strategy_version: '发布 Strategy 版本',
@@ -76,64 +86,68 @@ const parseChatRouteHeader = (value) => {
   }
 };
 
-// 草案确认/取消结果以该前缀作为 user 文本消息持久化到会话：
-// 刷新后能把历史草案渲染为已结算，模型下一轮也能看到处理结果而不重复提议。
-const DRAFT_SETTLED_PREFIX = '[草案处理记录]';
-
-const formatDraftSettlement = (tool, ok, text) =>
-  `${DRAFT_SETTLED_PREFIX} ${ok ? 'ok' : 'fail'} ${tool} ${text}`;
-
-const parseDraftSettlement = (text) => {
-  const trimmed = text.trimStart();
-  if (!trimmed.startsWith(DRAFT_SETTLED_PREFIX)) return null;
-  const rest = trimmed.slice(DRAFT_SETTLED_PREFIX.length).trimStart();
-  const ok = rest.startsWith('ok ');
-  if (!ok && !rest.startsWith('fail ')) return null;
-  const body = rest.slice(ok ? 3 : 5);
-  const splitAt = body.indexOf(' ');
-  return {
-    ok,
-    tool: splitAt < 0 ? body : body.slice(0, splitAt),
-    text: splitAt < 0 ? '' : body.slice(splitAt + 1),
-  };
+const legacySettlementText = (text) => {
+  const match = text.trimStart().match(/^\[草案处理记录\] (?:ok|fail) \S+ (.*)$/s);
+  return match?.[1] ?? null;
 };
 
-const recordDraftSettlement = async (draft, text, ok) => {
-  if (activeSessionId === null) return;
-  const result = await callApi('/api/tools/append_chat_message/call', {
-    method: 'POST',
-    body: JSON.stringify({
-      input: {
-        sessionId: activeSessionId,
-        role: 'user',
-        parts: [{ type: 'text', text: formatDraftSettlement(draft.tool, ok, text) }],
-      },
-    }),
-  });
-  if (!result.ok) console.warn('[chat] 草案处理记录写入失败', result.error);
+const draftFromPart = (part, context) => {
+  if (part.output?.__luoomeDraft !== true || part.output.draft === undefined) return null;
+  return { ...part.output.draft, ...context, toolCallId: part.toolCallId };
 };
 
-// 取消消息的 parts：已收到文本（可为空）+ cancelled 标记，供前端兜底落库与历史还原。
-const cancelledAssistantParts = (content) => [
-  ...(content.trim().length > 0 ? [{ type: 'text', text: content }] : []),
-  { type: 'data-luoome-cancelled', data: { cancelled: true } },
-];
+const settlementText = (settlement) => {
+  if (settlement.status === 'cancelled') return '已取消，未执行';
+  if (settlement.status === 'executing') return '正在执行，请稍后检查结果';
+  if (settlement.status === 'succeeded') return `${toolLabel(settlement.tool)}执行成功`;
+  return `执行失败：${resultErrorText(settlement.result, '未知错误')}`;
+};
 
-// 实测 Bun 下客户端断开后服务端 onFinish 不会回调（响应流被先行拆除），由前端把
-// partial 助手消息落库；messageId 取自流的 start chunk，saveMessage 按 id upsert 幂等。
-const persistCancelledAssistant = async (sessionId, messageId, content) => {
-  const result = await callApi('/api/tools/append_chat_message/call', {
+const isSettled = (draft) =>
+  ['succeeded', 'failed', 'cancelled'].includes(draft.settlement?.status);
+
+const shouldContinueAfterDrafts = (drafts) =>
+  drafts.length > 0 &&
+  drafts.every(isSettled) &&
+  drafts.some((draft) => draft.settlement.status === 'succeeded');
+
+const usageText = (metadata) => {
+  const usage = metadata?.usage;
+  if (usage === undefined) return '';
+  const values = [];
+  if (typeof usage.inputTokens === 'number') values.push(`输入 ${usage.inputTokens}`);
+  if (typeof usage.outputTokens === 'number') values.push(`输出 ${usage.outputTokens}`);
+  if (typeof usage.totalTokens === 'number') values.push(`合计 ${usage.totalTokens} tokens`);
+  return values.join(' · ');
+};
+
+const draftDecisionPath = (draft) =>
+  `/api/chat/sessions/${encodeURIComponent(draft.sessionId)}/drafts/${encodeURIComponent(draft.messageId)}/${encodeURIComponent(draft.toolCallId)}`;
+
+const settleDraft = async (draft, approved) => {
+  if (sending || settling || isSettled(draft)) return;
+  const version = viewVersion;
+  settling = true;
+  draft.error = null;
+  renderChat();
+  const response = await callApi(draftDecisionPath(draft), {
     method: 'POST',
-    body: JSON.stringify({
-      input: {
-        sessionId,
-        ...(messageId === null ? {} : { messageId }),
-        role: 'assistant',
-        parts: cancelledAssistantParts(content),
-      },
-    }),
+    headers: apiHeaders(undefined, draft.accountId),
+    body: JSON.stringify({ approved }),
   });
-  if (!result.ok) console.warn('[chat] 取消消息落库失败', result.error);
+  if (version !== viewVersion) return;
+  settling = false;
+  if (response.ok) draft.settlement = response.data;
+  else draft.error = resultErrorText(response, '请求未完成，请重试检查执行结果');
+  renderChat();
+  if (!response.ok) return;
+  const related = feed
+    .filter((entry) => entry.type === 'drafts')
+    .flatMap((entry) => entry.drafts)
+    .filter((item) => item.messageId === draft.messageId);
+  if (shouldContinueAfterDrafts(related)) {
+    await send('请根据刚才草案的实际处理结果，说明完成了哪些操作、当前状态和可选的下一步。');
+  }
 };
 
 const DRAFT_FIELD_SOURCE_LABELS = { default: '默认', inferred: '推断' };
@@ -187,63 +201,62 @@ const draftEditPrefill = (draft) => {
 
 const draftCard = (draft) => {
   const card = el('div', 'chat-draft');
-  card.append(el('div', 'chat-draft-title', `草案 · ${toolLabel(draft.tool)}`));
-  if (draft.settled !== undefined) {
-    card.append(
-      el(
-        'p',
-        draft.settled.ok ? 'chat-draft-settled ok' : 'chat-draft-settled',
-        draft.settled.text,
-      ),
-    );
-    return card;
-  }
+  card.append(el('div', 'chat-draft-title', `待确认 · ${toolLabel(draft.tool)}`));
   if (draft.display !== undefined && draft.display !== null) {
     card.append(draftDisplayNode(draft.display));
   } else {
     card.append(el('p', 'chat-draft-summary', String(draft.summary ?? '')));
     card.append(el('pre', 'chat-draft-input', JSON.stringify(draft.input ?? {}, null, 2)));
   }
-  const confirmBtn = el('button', 'btn btn-primary btn-sm', '确认执行');
-  confirmBtn.type = 'button';
-  const editBtn = el('button', 'btn btn-outline btn-sm', '编辑');
-  editBtn.type = 'button';
-  const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
-  cancelBtn.type = 'button';
-  card.append(el('div', 'chat-draft-actions', [confirmBtn, editBtn, cancelBtn]));
-
-  const settle = (text, ok) => {
-    draft.settled = { text, ok };
-    renderChat();
-    void recordDraftSettlement(draft, text, ok);
-  };
-  confirmBtn.addEventListener('click', async () => {
-    confirmBtn.disabled = true;
-    editBtn.disabled = true;
-    cancelBtn.disabled = true;
-    const result = await callApi(`/api/tools/${draft.tool}/call`, {
-      method: 'POST',
-      body: JSON.stringify({ input: draft.input }),
-    });
-    if (result.ok) {
-      settle(`${toolLabel(draft.tool)}执行成功`, true);
-      // advice 草案确认后返回正式 Advice，用 Advice 页同款卡片渲染进会话。
-      const advice = result.data?.advice;
-      if (draft.kind === 'advice' && advice !== undefined && advice !== null) {
-        feed.push({ type: 'advice', advice });
-        renderChat();
-      }
-    } else {
-      settle(`执行失败：${resultErrorText(result, '未知错误')}`, false);
+  if (draft.settlement !== undefined) {
+    card.append(
+      el(
+        'p',
+        draft.settlement.status === 'succeeded' ? 'chat-draft-settled ok' : 'chat-draft-settled',
+        settlementText(draft.settlement),
+      ),
+    );
+    if (isSettled(draft)) {
+      card.firstElementChild.textContent = `操作记录 · ${toolLabel(draft.tool)}`;
+      const advice = draft.settlement.result?.ok ? draft.settlement.result.data?.advice : null;
+      if (advice !== null && advice !== undefined) card.append(adviceCard(advice));
+      return card;
     }
-  });
-  editBtn.addEventListener('click', () => {
-    const input = $('#chat-input');
-    if (input === null) return;
-    input.value = draftEditPrefill(draft);
-    input.focus();
-  });
-  cancelBtn.addEventListener('click', () => settle('已取消该草案', false));
+  }
+  if (!draft.sessionId || !draft.messageId || !draft.toolCallId) {
+    card.append(el('p', 'chat-draft-warn', '该历史草案缺少执行标识，请让助手重新生成。'));
+    return card;
+  }
+  if (draft.error) card.append(el('p', 'chat-draft-warn', draft.error));
+  const executing = draft.settlement?.status === 'executing';
+  const confirmBtn = el(
+    'button',
+    'btn btn-primary btn-sm',
+    executing ? '检查执行结果' : '确认执行',
+  );
+  confirmBtn.type = 'button';
+  confirmBtn.disabled = sending || settling;
+  confirmBtn.addEventListener('click', () => void settleDraft(draft, true));
+  const buttons = [confirmBtn];
+  if (!executing) {
+    const editBtn = el('button', 'btn btn-outline btn-sm', '修改要求');
+    editBtn.type = 'button';
+    editBtn.disabled = sending || settling;
+    editBtn.addEventListener('click', () => {
+      const input = $('#chat-input');
+      if (input !== null) {
+        input.value = draftEditPrefill(draft);
+        input.focus();
+      }
+    });
+    const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
+    cancelBtn.type = 'button';
+    cancelBtn.disabled = sending || settling;
+    cancelBtn.addEventListener('click', () => void settleDraft(draft, false));
+    buttons.push(editBtn, cancelBtn);
+  }
+  card.append(el('div', 'chat-draft-actions', buttons));
+  if (sending) card.append(el('p', 'chat-draft-settled', '回复保存后即可确认'));
   return card;
 };
 
@@ -261,7 +274,13 @@ const usedActionsNode = (usedActions) => {
           'li',
           null,
           `${action.tool} — ${
-            action.status === 'running' ? '执行中…' : action.ok ? '成功' : '失败'
+            action.status === 'running'
+              ? '处理中…'
+              : action.ok
+                ? action.draft
+                  ? '草案已生成'
+                  : '成功'
+                : '失败'
           }`,
         ),
       ),
@@ -282,16 +301,16 @@ const renderEntry = (entry) => {
   }
   if (entry.type === 'actions') return usedActionsNode(entry.usedActions);
   if (entry.type === 'plan') return planCard(entry.route);
-  if (entry.type === 'advice') return adviceCard(entry.advice);
+  if (entry.type === 'usage') return el('p', 'chat-usage', usageText(entry.metadata));
   return el('div', 'chat-drafts', entry.drafts.map(draftCard));
 };
 
 const emptyState = () => {
   const suggestions = [
-    '总结我的当前持仓',
-    '查询 300857 的行情',
-    '列出最近的研究笔记',
-    '帮我创建一个观察 Watchlist',
+    '检查我的持仓、可用资金与集中度风险',
+    '帮我登记一笔入金，先核对账户和金额',
+    '研究 300857 的机会、风险和反证',
+    '创建一个观察清单，并设置价格提醒',
   ];
   const chips = suggestions.map((text) => {
     const button = el('button', 'chat-suggestion', text);
@@ -308,8 +327,12 @@ const emptyState = () => {
   return el('div', 'chat-empty-state', [
     el('div', 'chat-empty-mark', '◇'),
     el('span', 'section-kicker', 'LOCAL ADVISOR'),
-    el('h2', null, '从一个问题开始'),
-    el('p', null, '会话保存在当前项目数据库中。查询会调用真实工具，写操作只生成待确认草案。'),
+    el('h2', null, '用对话管理你的投资'),
+    el(
+      'p',
+      null,
+      '查询持仓、整理研究、管理资金与盯盘。助手先核对事实，修改经你确认后执行，再说明实际结果。',
+    ),
     el('div', 'chat-suggestions', chips),
   ]);
 };
@@ -319,6 +342,11 @@ const renderChat = () => {
   if (log === null) return;
   mount(log, feed.length === 0 ? emptyState() : feed.map(renderEntry));
   log.scrollTop = log.scrollHeight;
+  const sendButton = $('#chat-send');
+  if (sendButton !== null) sendButton.disabled = sending || settling;
+  const newButton = $('#chat-new-session');
+  if (newButton !== null) newButton.disabled = sending || settling;
+  log.setAttribute('aria-busy', String(sending || settling));
 };
 
 const formatSessionTime = (value) => {
@@ -328,7 +356,7 @@ const formatSessionTime = (value) => {
 };
 
 const renameSession = async (session) => {
-  if (sending) return;
+  if (sending || settling) return;
   const values = await promptDialog({
     title: '重命名会话',
     fields: [{ key: 'title', label: '会话名称', value: session.title }],
@@ -348,7 +376,7 @@ const renameSession = async (session) => {
 };
 
 const deleteSession = async (session) => {
-  if (sending) return;
+  if (sending || settling) return;
   const confirmed = await confirmDialog({
     title: '删除会话',
     message: `删除会话「${session.title}」及全部消息？`,
@@ -403,22 +431,16 @@ const renderSessions = () => {
   );
 };
 
-const persistedFeed = (messages) => {
+const persistedFeed = (messages, context = {}) => {
   const result = [];
-  const pendingDrafts = [];
   for (const message of messages) {
     const text = message.parts
       .filter((part) => part.type === 'text' && typeof part.text === 'string')
       .map((part) => part.text)
       .join('');
-    const settlement = parseDraftSettlement(text);
-    if (settlement !== null) {
-      for (const draft of pendingDrafts) {
-        if (draft.settled === undefined)
-          draft.settled = { text: settlement.text, ok: settlement.ok };
-      }
-      pendingDrafts.length = 0;
-      result.push({ type: 'note', text: settlement.text });
+    const legacyText = legacySettlementText(text);
+    if (legacyText !== null) {
+      result.push({ type: 'note', text: `历史处理记录：${legacyText}` });
       continue;
     }
     const visibleText = trimLeadingChatWhitespace(text);
@@ -434,20 +456,31 @@ const persistedFeed = (messages) => {
       });
     }
     if (message.role !== 'assistant') continue;
+    const settlements = new Map(
+      message.parts
+        .filter((part) => part.type === 'data-luoome-draft-settlement')
+        .map((part) => [part.data?.toolCallId, part.data]),
+    );
     const actions = [];
     const drafts = [];
     for (const part of message.parts) {
+      if (part.type === 'data-luoome-usage') result.push({ type: 'usage', metadata: part.data });
       if (typeof part.type !== 'string' || !part.type.startsWith('tool-')) continue;
       const output = part.output;
       actions.push({
         toolCallId: part.toolCallId,
         tool: part.type.slice(5),
-        status: part.state === 'input-streaming' ? 'running' : 'finished',
+        status: ['input-streaming', 'input-available'].includes(part.state)
+          ? 'running'
+          : 'finished',
         ok: part.state === 'output-available' && output?.error === undefined,
+        draft: output?.__luoomeDraft === true,
       });
-      if (output?.__luoomeDraft === true && output.draft !== undefined) {
-        drafts.push(output.draft);
-        pendingDrafts.push(output.draft);
+      const draft = draftFromPart(part, { ...context, messageId: message.id });
+      if (draft !== null) {
+        const settlement = settlements.get(part.toolCallId);
+        if (settlement !== undefined) draft.settlement = settlement;
+        drafts.push(draft);
       }
     }
     if (actions.length > 0) result.push({ type: 'actions', usedActions: actions });
@@ -457,21 +490,33 @@ const persistedFeed = (messages) => {
 };
 
 const selectSession = async (sessionId) => {
-  if (sending || sessionId === activeSessionId) return;
+  if (sending || settling || sessionId === activeSessionId) return;
+  const version = viewVersion;
+  const accountId = activeAccountId ?? getAccountId();
   const result = await callApi(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
+  if (version !== viewVersion) return;
   if (!result.ok) {
     await alertDialog('读取会话失败', resultErrorText(result, '未知错误'));
     return;
   }
   activeSessionId = sessionId;
-  feed.splice(0, feed.length, ...persistedFeed(result.data.messages ?? []));
+  feed.splice(
+    0,
+    feed.length,
+    ...persistedFeed(result.data.messages ?? [], {
+      sessionId,
+      accountId,
+    }),
+  );
   renderSessions();
   renderChat();
   $('#chat-input')?.focus();
 };
 
 const refreshSessions = async () => {
+  const version = viewVersion;
   const result = await callApi('/api/chat/sessions');
+  if (version !== viewVersion) return false;
   if (!result.ok) {
     sessions = [];
     renderSessions();
@@ -483,10 +528,12 @@ const refreshSessions = async () => {
 };
 
 const createSession = async () => {
+  const version = viewVersion;
   const result = await callApi('/api/chat/sessions', {
     method: 'POST',
     body: JSON.stringify({}),
   });
+  if (version !== viewVersion) return null;
   if (!result.ok) {
     await alertDialog('创建会话失败', resultErrorText(result, '无法创建会话'));
     return null;
@@ -511,15 +558,18 @@ const removeEntry = (target) => {
   if (index >= 0) feed.splice(index, 1);
 };
 
-const send = async () => {
+const send = async (requestedText) => {
   const input = $('#chat-input');
-  if (input === null || sending) return;
-  const text = input.value.trim();
+  if (input === null || sending || settling) return;
+  const text = (requestedText ?? input.value).trim();
   if (text.length === 0) return;
   sending = true;
   const sendBtn = $('#chat-send');
   if (sendBtn !== null) sendBtn.disabled = true;
   const controller = new AbortController();
+  activeController = controller;
+  const version = viewVersion;
+  const accountId = getAccountId();
   // 流式期间显示「取消」：abort 会断流，服务端透传 request.signal 中断 runtime。
   const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
   cancelBtn.type = 'button';
@@ -527,16 +577,14 @@ const send = async () => {
   cancelBtn.addEventListener('click', () => controller.abort());
   $('#chat-form')?.append(cancelBtn);
   let assistantEntry = null;
-  // catch 块需要引用：取消时把 partial 消息兜底落库（服务端 onFinish 此时不会回调）
   let sessionId = null;
   let assistantMessageId = null;
-  let fetchSent = false;
 
   try {
     if (activeSessionId === null && (await createSession()) === null) return;
     sessionId = activeSessionId;
     if (sessionId === null) return;
-    input.value = '';
+    if (requestedText === undefined) input.value = '';
     pushMsg('user', text);
     const statusEntry = { type: 'status', text: '正在连接模型…' };
     const actionsEntry = { type: 'actions', usedActions: [] };
@@ -555,8 +603,7 @@ const send = async () => {
     const ensureActions = () => {
       if (!feed.includes(actionsEntry)) feed.push(actionsEntry);
     };
-    const headers = new Headers({ 'content-type': 'application/json' });
-    fetchSent = true;
+    const headers = apiHeaders({ 'content-type': 'application/json' }, accountId);
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers,
@@ -572,15 +619,17 @@ const send = async () => {
         ],
       }),
     });
+    if (version !== viewVersion) return;
     const route = parseChatRouteHeader(response.headers.get('x-luoome-chat-route'));
     if (route !== null) feed.push({ type: 'plan', route });
     await consumeUIMessageStream(response, (part) => {
+      if (version !== viewVersion) return;
       if (part.type === 'start') {
         if (typeof part.messageId === 'string') assistantMessageId = part.messageId;
       } else if (part.type === 'start-step') {
         statusEntry.text = '模型正在推理…';
       } else if (part.type === 'tool-input-available') {
-        statusEntry.text = `正在执行 ${part.toolName}…`;
+        statusEntry.text = `正在处理 ${toolLabel(part.toolName)}…`;
         const action = {
           toolCallId: part.toolCallId,
           tool: part.toolName,
@@ -596,9 +645,15 @@ const send = async () => {
         if (action !== undefined) {
           action.status = 'finished';
           action.ok = part.output?.error === undefined;
+          action.draft = part.output?.__luoomeDraft === true;
         }
         if (part.output?.__luoomeDraft === true && part.output.draft !== undefined) {
-          feed.push({ type: 'drafts', drafts: [part.output.draft] });
+          const draft = draftFromPart(part, {
+            sessionId,
+            messageId: assistantMessageId,
+            accountId,
+          });
+          feed.push({ type: 'drafts', drafts: [draft] });
         }
       } else if (part.type === 'tool-output-error') {
         const action = toolCalls.get(part.toolCallId);
@@ -606,6 +661,13 @@ const send = async () => {
           action.status = 'finished';
           action.ok = false;
         }
+      } else if (part.type === 'finish' && part.messageMetadata?.usage !== undefined) {
+        feed.push({ type: 'usage', metadata: part.messageMetadata });
+      } else if (part.type === 'data-luoome-usage') {
+        feed.push({ type: 'usage', metadata: part.data });
+      } else if (part.type === 'abort') {
+        controller.abort();
+        throw new DOMException('响应已停止', 'AbortError');
       } else if (part.type === 'text-start') {
         statusEntry.text = '正在生成回答…';
         ensureAssistant();
@@ -619,14 +681,16 @@ const send = async () => {
       }
       renderChat();
     });
+    if (version !== viewVersion) return;
     removeEntry(statusEntry);
-    if (assistantEntry.content.trim().length === 0) {
-      assistantEntry.content = '模型没有返回文本，请重试。';
+    if (assistantEntry.content.trim().length === 0 && toolCalls.size === 0) {
+      assistantEntry.content = '模型没有返回内容，请重试。';
       ensureAssistant();
     }
     renderChat();
     await refreshSessions();
   } catch (error) {
+    if (version !== viewVersion) return;
     const status = feed.findLast((entry) => entry.type === 'status');
     if (status !== undefined) removeEntry(status);
     if (controller.signal.aborted) {
@@ -635,27 +699,29 @@ const send = async () => {
         assistantEntry.cancelled = true;
         if (!feed.includes(assistantEntry)) feed.push(assistantEntry);
         renderChat();
-        // 客户端断开后服务端 onFinish 不会回调，前端兜底落库 partial + cancelled 标记。
-        if (fetchSent && sessionId !== null) {
-          await persistCancelledAssistant(sessionId, assistantMessageId, assistantEntry.content);
-        }
         await refreshSessions();
       }
     } else {
       pushMsg('assistant', `请求失败：${error instanceof Error ? error.message : '未知错误'}`);
     }
   } finally {
-    sending = false;
     cancelBtn.remove();
-    if (sendBtn !== null) sendBtn.disabled = false;
-    input.focus();
+    if (activeController === controller) {
+      sending = false;
+      activeController = null;
+      if (sendBtn !== null) sendBtn.disabled = false;
+      renderChat();
+      input.focus();
+    }
   }
 };
 
 const initChat = () => {
   if (initialized) return;
   initialized = true;
-  $('#chat-new-session')?.addEventListener('click', () => void createSession());
+  $('#chat-new-session')?.addEventListener('click', () => {
+    if (!sending && !settling) void createSession();
+  });
   $('#chat-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
     void send();
@@ -663,6 +729,14 @@ const initChat = () => {
 };
 
 const refreshChat = async () => {
+  const accountId = getAccountId();
+  if (accountId === activeAccountId && (sending || settling)) return;
+  viewVersion += 1;
+  activeController?.abort();
+  activeController = null;
+  sending = false;
+  settling = false;
+  activeAccountId = accountId;
   activeSessionId = null;
   feed.splice(0);
   if (!(await refreshSessions())) {
@@ -675,16 +749,18 @@ const refreshChat = async () => {
 };
 
 export {
-  cancelledAssistantParts,
+  draftDecisionPath,
   draftEditPrefill,
+  draftFromPart,
   formatDraftFieldValue,
-  formatDraftSettlement,
   initChat,
   parseChatRouteHeader,
-  parseDraftSettlement,
   persistedFeed,
   planCardLines,
   refreshChat,
   renderChat,
+  settlementText,
+  shouldContinueAfterDrafts,
   trimLeadingChatWhitespace,
+  usageText,
 };
