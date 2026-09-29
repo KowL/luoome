@@ -5907,6 +5907,17 @@ export const registerRepositoryContractTests = (
         expect(await repos.chat.listMessages('c2')).toEqual([]);
       });
 
+      it('会话归属由 tool 层校验：session 不存在时两种实现同样写入并可读回', async () => {
+        await repos.chat.saveMessage(makeChatMessage('orphan-1', 'missing-session'));
+        expect(
+          await repos.chat.insertMessageIfAbsent(makeChatMessage('orphan-2', 'missing-session')),
+        ).toBe(true);
+        expect((await repos.chat.listMessages('missing-session')).map((item) => item.id)).toEqual([
+          'orphan-1',
+          'orphan-2',
+        ]);
+      });
+
       it('同一毫秒的消息按二进制 ID 顺序截取，memory 与 SQLite 一致', async () => {
         await repos.chat.saveSession(makeChatSession('c1'));
         for (const id of ['a', 'B', '_a', 'Za']) {

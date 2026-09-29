@@ -95,19 +95,24 @@ export class DrizzleChatRepository implements ChatRepository {
     expectedParts: ChatMessage['parts'],
   ): Promise<boolean> {
     assertChatMessageInvariants(message);
-    return (
-      this.db
-        .update(chatMessages)
+    // 在事务内读后比对再写，与 memory 实现同一 JSON 语义；不依赖列文本的序列化细节。
+    return this.db.transaction((tx) => {
+      const current = tx
+        .select()
+        .from(chatMessages)
+        .where(and(eq(chatMessages.id, message.id), eq(chatMessages.sessionId, message.sessionId)))
+        .get();
+      if (
+        current === undefined ||
+        JSON.stringify(current.parts) !== JSON.stringify(expectedParts)
+      ) {
+        return false;
+      }
+      tx.update(chatMessages)
         .set({ parts: message.parts })
-        .where(
-          and(
-            eq(chatMessages.id, message.id),
-            eq(chatMessages.sessionId, message.sessionId),
-            eq(chatMessages.parts, expectedParts),
-          ),
-        )
-        .returning({ id: chatMessages.id })
-        .all().length === 1
-    );
+        .where(eq(chatMessages.id, message.id))
+        .run();
+      return true;
+    });
   }
 }

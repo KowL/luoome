@@ -220,11 +220,12 @@ Obsidian Headless fallback。它默认关闭；只有 `LUOOME_RESEARCH_REMOTE_SY
 ## 写入类工具的二次确认
 
 Web 对话和草案确认要求 write + external 双 opt-in 和同源 Origin。浏览器只能提交用户文本与
-`approved` 决定，不能补写 assistant/control parts 或替换草案输入。`settle_chat_draft` 校验会话账户、
+`approved` 决定，不能补写 assistant/control parts 或替换草案输入；该限制在 Web 通用 tool 路由层
+强制，经 MCP 暴露的 write 面属于本机可信调用方，不在此限制内。`settle_chat_draft` 校验会话账户、
 消息与 toolCallId、草案工具白名单和当前输入 schema；它仅由 Web 专用确认端点调用，不进入通用 registry、MCP 或模型可调用工具表。
 执行前以 repository 比较更新认领草案，执行结果按同一调用 ID 持久化。终态不可重放，进程中断遗留的
-executing 状态不自动重试，需先核对实际业务数据。模型下一轮读取真实 ToolResult，用户伪造的文本处理记录
-不能作为成功凭据。
+executing 状态不自动重试，需先核对实际业务数据；核对后可显式取消该草案（终态，不会补执行）。
+模型下一轮读取真实 ToolResult，用户伪造的文本处理记录不能作为成功凭据。
 
 write 类工具通过 MCP 暴露时，`add_trade` 必须带 `confirm: true` 才执行。这是协议层约定，agent 应当向用户复述交易详情后，再调一次带 `confirm: true`。
 

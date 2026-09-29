@@ -18,7 +18,6 @@ let settling = false;
 
 const TOOL_LABELS = {
   create_account: '创建账户',
-  update_account: '更新账户',
   add_holding: '登记持仓',
   update_holding: '更新持仓',
   close_holding: '关闭持仓',
@@ -98,7 +97,8 @@ const draftFromPart = (part, context) => {
 
 const settlementText = (settlement) => {
   if (settlement.status === 'cancelled') return '已取消，未执行';
-  if (settlement.status === 'executing') return '正在执行，请稍后检查结果';
+  if (settlement.status === 'executing')
+    return '执行中；若页面或进程曾中断，请核对实际账本后可取消该草案';
   if (settlement.status === 'succeeded') return `${toolLabel(settlement.tool)}执行成功`;
   return `执行失败：${resultErrorText(settlement.result, '未知错误')}`;
 };
@@ -138,7 +138,7 @@ const settleDraft = async (draft, approved) => {
   if (version !== viewVersion) return;
   settling = false;
   if (response.ok) draft.settlement = response.data;
-  else draft.error = resultErrorText(response, '请求未完成，请重试检查执行结果');
+  else draft.error = resultErrorText(response, '请求未完成，请刷新会话后重试');
   renderChat();
   if (!response.ok) return;
   const related = feed
@@ -229,16 +229,20 @@ const draftCard = (draft) => {
   }
   if (draft.error) card.append(el('p', 'chat-draft-warn', draft.error));
   const executing = draft.settlement?.status === 'executing';
-  const confirmBtn = el(
-    'button',
-    'btn btn-primary btn-sm',
-    executing ? '检查执行结果' : '确认执行',
-  );
-  confirmBtn.type = 'button';
-  confirmBtn.disabled = sending || settling;
-  confirmBtn.addEventListener('click', () => void settleDraft(draft, true));
-  const buttons = [confirmBtn];
-  if (!executing) {
+  const buttons = [];
+  if (executing) {
+    // executing 不会自行推进：核对账本后可显式取消（终态），再让助手重新生成草案。
+    const cancelExecutingBtn = el('button', 'btn btn-outline btn-sm', '取消该草案');
+    cancelExecutingBtn.type = 'button';
+    cancelExecutingBtn.disabled = sending || settling;
+    cancelExecutingBtn.addEventListener('click', () => void settleDraft(draft, false));
+    buttons.push(cancelExecutingBtn);
+  } else {
+    const confirmBtn = el('button', 'btn btn-primary btn-sm', '确认执行');
+    confirmBtn.type = 'button';
+    confirmBtn.disabled = sending || settling;
+    confirmBtn.addEventListener('click', () => void settleDraft(draft, true));
+    buttons.push(confirmBtn);
     const editBtn = el('button', 'btn btn-outline btn-sm', '修改要求');
     editBtn.type = 'button';
     editBtn.disabled = sending || settling;
@@ -465,6 +469,9 @@ const persistedFeed = (messages, context = {}) => {
     const drafts = [];
     for (const part of message.parts) {
       if (part.type === 'data-luoome-usage') result.push({ type: 'usage', metadata: part.data });
+      if (part.type === 'data-luoome-stream-error') {
+        result.push({ type: 'note', text: String(part.data?.message ?? 'AI 响应失败，请重试') });
+      }
       if (typeof part.type !== 'string' || !part.type.startsWith('tool-')) continue;
       const output = part.output;
       actions.push({

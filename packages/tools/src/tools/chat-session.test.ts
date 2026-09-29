@@ -8,8 +8,8 @@ import {
   getChatSessionTool,
   listChatSessionsTool,
   renameChatSessionTool,
-  settleChatDraftTool,
 } from './chat-session.js';
+import { settleChatDraftTool } from './settle-chat-draft.js';
 
 describe('chat session tools', () => {
   it('创建、自动标题、读取、重命名和级联删除会话', async () => {
@@ -246,6 +246,41 @@ describe('chat draft settlement', () => {
     expect((await ctx.repos.account.findById(ctx.user.defaultAccountId))?.cashBalance).toEqual(
       before?.cashBalance,
     );
+  });
+
+  it('遗留执行中草案核对账本后可显式取消，取消是终态且不会补执行', async () => {
+    const { ctx, sessionId, message } = await setup();
+    await ctx.repos.chat.compareAndSetMessageParts(
+      {
+        ...message,
+        parts: [
+          ...message.parts,
+          {
+            type: 'data-luoome-draft-settlement',
+            data: { toolCallId: 'first', tool: 'create_portfolio_cash_flow', status: 'executing' },
+          },
+        ],
+      },
+      message.parts,
+    );
+    const before = await ctx.repos.account.findById(ctx.user.defaultAccountId);
+    const cancelled = await settleChatDraftTool.execute(
+      { sessionId, messageId: 'drafts', toolCallId: 'first', approved: false },
+      ctx,
+    );
+    expect(cancelled.ok && cancelled.data.status).toBe('cancelled');
+    const replay = await settleChatDraftTool.execute(
+      { sessionId, messageId: 'drafts', toolCallId: 'first', approved: true },
+      ctx,
+    );
+    expect(replay).toEqual(cancelled);
+    expect((await ctx.repos.account.findById(ctx.user.defaultAccountId))?.cashBalance).toEqual(
+      before?.cashBalance,
+    );
+    const saved = await ctx.repos.chat.findMessageById(sessionId, 'drafts');
+    expect(
+      saved?.parts.find((part) => part.type === 'data-luoome-draft-settlement')?.data,
+    ).toMatchObject({ toolCallId: 'first', status: 'cancelled' });
   });
 
   it('工具名不匹配或 trade 草案不能执行', async () => {

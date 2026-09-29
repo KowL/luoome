@@ -84,6 +84,7 @@ export * from './tools/sector-quote.js';
 export * from './tools/send-notification.js';
 export * from './tools/set-report-delivery-status.js';
 export * from './tools/set-watch-trigger-feedback.js';
+export * from './tools/settle-chat-draft.js';
 export * from './tools/signal-observation.js';
 export * from './tools/strategy-autonomy-action.js';
 export * from './tools/strategy-backtest.js';

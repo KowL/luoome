@@ -15,11 +15,14 @@ export const ChatMessagePartSchema = z
   .refine((part) => typeof part.type === 'string', 'chat message part.type 必须是 string');
 export type ChatMessagePart = z.infer<typeof ChatMessagePartSchema>;
 
+/** 单条消息 parts 上限；草案确认占用一个 part 存放处理标记，确认前须核对剩余空间。 */
+export const CHAT_MESSAGE_PARTS_MAX = 100;
+
 export const ChatMessageSchema = z.object({
   id: z.string().min(1).max(200),
   sessionId: z.string().min(1).max(100),
   role: z.enum(['user', 'assistant']),
-  parts: z.array(ChatMessagePartSchema).min(1).max(100),
+  parts: z.array(ChatMessagePartSchema).min(1).max(CHAT_MESSAGE_PARTS_MAX),
   createdAt: z.coerce.date(),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;

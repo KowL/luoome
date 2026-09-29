@@ -48,18 +48,12 @@ export class InMemoryChatRepository implements ChatRepository {
   }
 
   async saveMessage(message: ChatMessage): Promise<void> {
-    if (!this.sessions.has(message.sessionId)) {
-      throw new Error(`chat session 不存在: ${message.sessionId}`);
-    }
     this.putMessage(message);
   }
 
   async insertMessageIfAbsent(message: ChatMessage): Promise<boolean> {
     assertChatMessageInvariants(message);
     if (this.messages.has(message.id)) return false;
-    if (!this.sessions.has(message.sessionId)) {
-      throw new Error(`chat session 不存在: ${message.sessionId}`);
-    }
     this.messages.set(message.id, message);
     return true;
   }

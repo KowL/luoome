@@ -10,7 +10,8 @@ import {
   type AgentScenario,
   BASE_INSTRUCTIONS,
   buildAgentCallableTools,
-  ChatDraftSettlementSchema,
+  chatToolNameOfPart,
+  parseChatDraftSettlements,
   routeAgentMessage,
   summarizeDraft,
   toolRegistry,
@@ -251,22 +252,13 @@ const modelHistory = (messages: readonly ChatMessage[]) => {
   return messages
     .map((message) => {
       const settlements = new Map(
-        message.parts.flatMap((part) => {
-          if (part.type !== 'data-luoome-draft-settlement') return [];
-          const parsed = ChatDraftSettlementSchema.safeParse(part.data);
-          return parsed.success ? [[parsed.data.toolCallId, parsed.data] as const] : [];
-        }),
+        parseChatDraftSettlements(message.parts).map((item) => [item.toolCallId, item] as const),
       );
       const parts = message.parts.flatMap((part): Record<string, unknown>[] => {
         if (part.type === 'text' && typeof part.text === 'string') return [part];
         if (message.role !== 'assistant' || typeof part.type !== 'string') return [];
         if (part.type === 'step-start') return [part];
-        const name =
-          part.type === 'dynamic-tool'
-            ? part.toolName
-            : part.type.startsWith('tool-')
-              ? part.type.slice(5)
-              : undefined;
+        const name = chatToolNameOfPart(part);
         if (typeof name !== 'string' || typeof part.toolCallId !== 'string') return [];
         if (part.state !== 'output-available' && part.state !== 'output-error') return [];
         const settlement = settlements.get(part.toolCallId);

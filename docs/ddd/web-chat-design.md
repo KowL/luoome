@@ -82,7 +82,7 @@ sessionId + 本轮 user message
 - db 同时提供 memory 与 drizzle 实现，共享 contract 验证最近消息截取、账户隔离、排序、级联删除、消息原子插入与 parts 比较更新。
 - tools 提供 create/list/get/rename/delete/append 和 `settle_chat_draft`；会话消息不可通过 append 覆盖，重复相同输入幂等返回。
 - 每个草案按 `messageId + toolCallId` 记录 `executing / succeeded / failed / cancelled`。执行前原子认领，完成后替换该标记；重复请求返回已保存状态，同一消息的草案串行处理。
-- 若进程在认领后中断，保留 `executing`，不自动重试；用户需核对账本后再决定下一步。这保证不会重复执行，但不把中断后的结果冒充确定成功。
+- 若进程在认领后中断，保留 `executing`，不自动重试；用户核对账本后可通过确认端点 `approved=false` 显式取消（终态，不会补执行），再让助手重新生成草案。这保证不会重复执行，但不把中断后的结果冒充确定成功。
 - 旧版文本处理记录没有调用 ID，不能推断同一工具的多个草案是否分别执行；检测到此类记录时要求核对数据并重新生成，避免升级后重复执行旧草案。
 
 ### 4. 动作白名单与门控

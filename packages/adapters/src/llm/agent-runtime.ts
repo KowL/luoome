@@ -277,7 +277,15 @@ export class AISDKAgentRuntime implements AgentRuntimeLike {
                 id: responseMessage.id,
                 parts: [
                   ...(responseMessage.parts as unknown as readonly Record<string, unknown>[]),
-                  ...(streamFailed ? [{ type: 'text', text: STREAM_ERROR_MESSAGE }] : []),
+                  // 失败标记用 data part 持久化：text part 会作为助手发言进入下一轮模型历史。
+                  ...(streamFailed
+                    ? [
+                        {
+                          type: 'data-luoome-stream-error',
+                          data: { message: STREAM_ERROR_MESSAGE },
+                        },
+                      ]
+                    : []),
                   {
                     type: 'data-luoome-usage',
                     data: {
