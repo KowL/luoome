@@ -78,6 +78,28 @@ describe('routeAgentMessage', () => {
     expect(write.needsAdvice).toBe(false);
   });
 
+  it('资金管理路由至 portfolio，并区分查询与记录意图', () => {
+    for (const message of ['现金余额多少', '帮我对账', '查看入金流水', '交易计划有效吗']) {
+      expect(routeAgentMessage(message, EMPTY_CONTEXT)).toMatchObject({
+        scenario: 'portfolio',
+        involvesWrite: false,
+      });
+    }
+    for (const message of [
+      '登记入金 10000 元',
+      '录入已有持仓',
+      '纠错持仓数量',
+      '平仓记录',
+      '开户',
+    ]) {
+      expect(routeAgentMessage(message, EMPTY_CONTEXT)).toMatchObject({
+        scenario: 'portfolio',
+        involvesWrite: true,
+        needsAdvice: false,
+      });
+    }
+  });
+
   it('确定性：同样输入同样输出', () => {
     const context: AgentRouteContext = {
       ...EMPTY_CONTEXT,

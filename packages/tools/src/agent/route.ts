@@ -24,7 +24,25 @@ export interface AgentRoute {
 const SCENARIO_KEYWORDS: Readonly<Record<Exclude<AgentScenarioId, 'general'>, readonly string[]>> =
   {
     review: ['复盘', '回顾', '准不准', '校准', '表现如何', '命中率', '效果如何'],
-    portfolio: ['持仓', '成本', '仓位', '亏', '赚', '风险', '账户'],
+    portfolio: [
+      '持仓',
+      '成本',
+      '仓位',
+      '亏',
+      '赚',
+      '风险',
+      '账户',
+      '开户',
+      '现金',
+      '入金',
+      '出金',
+      '转入',
+      '转出',
+      '流水',
+      '对账',
+      '平仓',
+      '交易计划',
+    ],
     watch: ['盯盘', '预警', '提醒', '触发', '观察池', '监控'],
     research: ['研究', '分析', '调研', '基本面', '笔记', '资料'],
   };
@@ -43,6 +61,13 @@ const WRITE_INTENT_WORDS = [
   '订阅',
   '暂停',
   '发布',
+  '登记',
+  '录入',
+  '记录',
+  '纠错',
+  '修正',
+  '开户',
+  '平仓',
 ];
 
 /** 命中优先级：review > portfolio > watch > research > general。 */

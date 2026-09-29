@@ -8,6 +8,7 @@ import type {
   Logger,
 } from '@luoome/core';
 import {
+  consumeStream,
   createAgentUIStreamResponse,
   NoObjectGeneratedError,
   Output,
@@ -33,6 +34,23 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TRACE_KEYS = 20;
 const THINK_OPEN = '<think>';
 const THINK_CLOSE = '</think>';
+const STREAM_ERROR_MESSAGE = 'AI 响应失败，请检查模型配置后重试。';
+
+const sanitizeStreamErrors =
+  <TOOLS extends ToolSet>(): StreamTextTransform<TOOLS> =>
+  () =>
+    new TransformStream<TextStreamPart<TOOLS>, TextStreamPart<TOOLS>>({
+      transform(chunk, controller) {
+        if (chunk.type === 'error' || chunk.type === 'tool-error') {
+          // Transform 在 SDK 的错误日志回调之前运行，避免 provider 响应和凭据进入日志。
+          controller.enqueue({ ...chunk, error: new Error(STREAM_ERROR_MESSAGE) });
+        } else if (chunk.type === 'abort') {
+          controller.enqueue({ type: 'abort' });
+        } else {
+          controller.enqueue(chunk);
+        }
+      },
+    });
 
 const markerPrefixSuffixLength = (value: string, marker: string): number => {
   const limit = Math.min(value.length, marker.length - 1);
@@ -50,7 +68,7 @@ const stripThinkStream =
 
     const drain = (
       controller: TransformStreamDefaultController<TextStreamPart<TOOLS>>,
-      source: TextStreamPart<TOOLS>,
+      source: Extract<TextStreamPart<TOOLS>, { type: 'text-delta' | 'text-end' }>,
       final: boolean,
     ): void => {
       while (buffer.length > 0) {
@@ -62,15 +80,18 @@ const stripThinkStream =
             continue;
           }
           if (final) buffer = '';
-          else buffer = buffer.slice(-markerPrefixSuffixLength(buffer, THINK_CLOSE));
+          else {
+            const retained = markerPrefixSuffixLength(buffer, THINK_CLOSE);
+            buffer = retained === 0 ? '' : buffer.slice(-retained);
+          }
           return;
         }
 
         const openAt = buffer.indexOf(THINK_OPEN);
         if (openAt >= 0) {
           const visible = buffer.slice(0, openAt);
-          if (visible.length > 0 && source.type === 'text-delta') {
-            controller.enqueue({ ...source, text: visible });
+          if (visible.length > 0) {
+            controller.enqueue({ ...source, type: 'text-delta', text: visible });
           }
           buffer = buffer.slice(openAt + THINK_OPEN.length);
           insideThink = true;
@@ -79,8 +100,8 @@ const stripThinkStream =
 
         const retained = final ? 0 : markerPrefixSuffixLength(buffer, THINK_OPEN);
         const visible = retained === 0 ? buffer : buffer.slice(0, -retained);
-        if (visible.length > 0 && source.type === 'text-delta') {
-          controller.enqueue({ ...source, text: visible });
+        if (visible.length > 0) {
+          controller.enqueue({ ...source, type: 'text-delta', text: visible });
         }
         buffer = retained === 0 ? '' : buffer.slice(-retained);
         return;
@@ -183,13 +204,17 @@ export class AISDKAgentRuntime implements AgentRuntimeLike {
   }
 
   async createUIMessageStreamResponse(request: AgentUIStreamRequest): Promise<Response> {
+    let totalUsage: AgentTokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let finishReason = 'other';
+    let streamFailed = false;
     const tools = Object.fromEntries(
       request.tools.map((callable) => [
         callable.name,
         tool({
           description: callable.description,
           inputSchema: toValidatedAISchema(callable.inputSchema as z.ZodType),
-          execute: async (input) => {
+          execute: async (input, { abortSignal }) => {
+            abortSignal?.throwIfAborted();
             const result = await callable.execute(input);
             return result.output;
           },
@@ -208,28 +233,59 @@ export class AISDKAgentRuntime implements AgentRuntimeLike {
       ],
       maxRetries: this.profile.maxRetries,
       onStepFinish: (step) => {
+        const usage = usageProjection(step.usage);
+        totalUsage = {
+          inputTokens: totalUsage.inputTokens + usage.inputTokens,
+          outputTokens: totalUsage.outputTokens + usage.outputTokens,
+          totalTokens: totalUsage.totalTokens + usage.totalTokens,
+        };
         this.logger.debug('agent_ui_stream: step finished', {
           finishReason: step.finishReason,
-          usage: usageProjection(step.usage),
+          usage,
           toolCalls: step.toolCalls.map((call) => call.toolName),
         });
       },
     });
     return createAgentUIStreamResponse({
       agent,
-      uiMessages: [...request.uiMessages],
+      // 内存仓储的领域输出可能含 Date；模型消息边界只接受可序列化的 JSON，与 SQLite 回读一致。
+      uiMessages: JSON.parse(JSON.stringify(request.uiMessages)),
+      generateMessageId: () => `assistant_${crypto.randomUUID()}`,
       ...(request.abortSignal === undefined ? {} : { abortSignal: request.abortSignal }),
       timeout: { totalMs: this.runtimeConfig.timeoutMs },
-      ...(this.profile.quirks.recoverMalformedText
-        ? { experimental_transform: stripThinkStream<typeof tools>() }
-        : {}),
+      experimental_transform: [
+        sanitizeStreamErrors<typeof tools>(),
+        ...(this.profile.quirks.recoverMalformedText ? [stripThinkStream<typeof tools>()] : []),
+      ],
+      sendReasoning: false,
+      consumeSseStream: consumeStream,
+      onError: () => {
+        streamFailed = true;
+        return STREAM_ERROR_MESSAGE;
+      },
+      messageMetadata: ({ part }) => {
+        if (part.type !== 'finish') return undefined;
+        totalUsage = usageProjection(part.totalUsage);
+        finishReason = part.finishReason;
+        return { usage: totalUsage, finishReason };
+      },
       ...(request.onFinish === undefined
         ? {}
         : {
             onFinish: async ({ responseMessage, isAborted }) => {
               await request.onFinish?.({
                 id: responseMessage.id,
-                parts: responseMessage.parts as unknown as readonly Record<string, unknown>[],
+                parts: [
+                  ...(responseMessage.parts as unknown as readonly Record<string, unknown>[]),
+                  ...(streamFailed ? [{ type: 'text', text: STREAM_ERROR_MESSAGE }] : []),
+                  {
+                    type: 'data-luoome-usage',
+                    data: {
+                      usage: totalUsage,
+                      finishReason: isAborted ? 'abort' : streamFailed ? 'error' : finishReason,
+                    },
+                  },
+                ],
                 cancelled: isAborted,
               });
             },

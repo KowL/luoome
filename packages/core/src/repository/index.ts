@@ -631,6 +631,14 @@ export interface ChatRepository {
   listSessions(accountId: string, limit?: number): Promise<readonly ChatSession[]>;
   removeSession(id: string): Promise<void>;
   saveMessage(message: ChatMessage): Promise<void>;
+  /** 仅插入新 messageId；重复 ID 返回 false，永不覆盖已保存内容。 */
+  insertMessageIfAbsent(message: ChatMessage): Promise<boolean>;
+  findMessageById(sessionId: string, messageId: string): Promise<ChatMessage | null>;
+  /** 原子替换 parts；并发确认只有一个调用能认领草案，且不改变消息的时间顺序。 */
+  compareAndSetMessageParts(
+    message: ChatMessage,
+    expectedParts: ChatMessage['parts'],
+  ): Promise<boolean>;
   listMessages(sessionId: string, limit?: number): Promise<readonly ChatMessage[]>;
 }
 

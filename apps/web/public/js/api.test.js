@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { ACCOUNT_KEY, callApi } from './api.js';
+import { ACCOUNT_KEY, apiHeaders, callApi } from './api.js';
 
 const originalFetch = globalThis.fetch;
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -12,6 +12,24 @@ afterEach(() => {
 });
 
 describe('Web API request context', () => {
+  it('流式请求复用账户 header，草案确认锁定原账户而非切换后的账户', async () => {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: { getItem: () => 'account-new' },
+    });
+    const headers = apiHeaders({ 'content-type': 'application/json' }, 'account-original');
+    expect(headers.get('x-luoome-account-id')).toBe('account-original');
+    let received;
+    globalThis.fetch = async (_path, init) => {
+      received = init.headers;
+      return Response.json({ ok: true, data: {} });
+    };
+    await callApi('/api/chat/sessions/session/drafts/message/call', { headers });
+    expect(received.get('x-luoome-account-id')).toBe('account-original');
+    await callApi('/api/chat', { headers: apiHeaders(undefined, '') });
+    expect(received.get('x-luoome-account-id')).toBe('');
+  });
+
   it('同时设置超时和调用方 signal 时，调用方仍能取消请求', async () => {
     const controller = new AbortController();
     let received;

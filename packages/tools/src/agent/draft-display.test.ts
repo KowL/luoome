@@ -1,7 +1,89 @@
 import { describe, expect, it } from 'vitest';
+import { toolRegistry } from '../registry.js';
 import { DraftDisplaySchema, summarizeDraft } from './draft-display.js';
 
 describe('summarizeDraft', () => {
+  const portfolioDisplay = (tool: string, input: Record<string, unknown>) => {
+    const target = toolRegistry.get(tool);
+    if (target === undefined) throw new Error(`missing tool: ${tool}`);
+    const display = summarizeDraft({
+      tool,
+      kind: 'portfolio',
+      input,
+      parsed: target.inputSchema.parse(input) as Record<string, unknown>,
+      description: target.description,
+    });
+    expect(DraftDisplaySchema.safeParse(display).success).toBe(true);
+    return display;
+  };
+
+  it('账户草案显示本金、币种与按账本精度初始化的现金', () => {
+    const display = portfolioDisplay('create_account', {
+      name: '长期账户',
+      currency: 'cny',
+      initialCapital: 10000.12346,
+    });
+    expect(display.targetObject).toBe('投资账本账户「长期账户」');
+    expect(display.fields).toEqual(
+      expect.arrayContaining([
+        { name: '币种', value: 'CNY', source: 'user' },
+        { name: '初始现金余额', value: 10000.1235, source: 'inferred' },
+      ]),
+    );
+  });
+
+  it('持仓登记展示真实成本扣款口径与全部隐式默认值', () => {
+    const display = portfolioDisplay('add_holding', {
+      stockId: '000001.SZ',
+      quantity: 100,
+      avgCost: 10.12345,
+    });
+    expect(display.fields).toEqual(
+      expect.arrayContaining([
+        { name: '现金变化（账户币种）', value: -1012.35, source: 'inferred' },
+        { name: '账户', value: '当前默认账户', source: 'default' },
+        { name: '可卖数量（股）', value: 100, source: 'default' },
+        { name: '建仓时间', value: '确认执行时的当前时间', source: 'default' },
+      ]),
+    );
+    expect(display.ambiguous).toHaveLength(3);
+  });
+
+  it('持仓纠错与关闭保留现金口径和缺失原成本的说明，不编造现金金额', () => {
+    const update = portfolioDisplay('update_holding', { holdingId: 'h-1', avgCost: 20 });
+    expect(update.fields.find((item) => item.name === '现金影响')?.value).toContain('成本');
+    expect(update.fields.map((item) => item.name)).not.toContain('修正后数量（股）');
+    expect(update.ambiguous).toEqual(['现金变化金额需结合当前持仓核对；本草案未包含原持仓成本']);
+    const close = portfolioDisplay('close_holding', { holdingId: 'h-1' });
+    expect(close.fields.find((item) => item.name === '现金影响')?.value).toContain('不按成交价');
+    expect(close.fields.find((item) => item.name === '操作性质')?.value).toContain('不会卖出股票');
+    expect(close.ambiguous).toEqual(['现金回补金额需结合当前持仓核对；本草案未包含原持仓成本']);
+  });
+
+  it.each([
+    ['deposit', '入金', 200],
+    ['withdrawal', '出金', -200],
+    ['dividend', '分红', 200],
+    ['fee', '费用', -200],
+    ['tax', '税费', -200],
+    ['transfer-in', '转入', 200],
+    ['transfer-out', '转出', -200],
+  ])('流水 %s 显示中文类型 %s 与正确现金方向', (kind, label, impact) => {
+    const display = portfolioDisplay('create_portfolio_cash_flow', {
+      accountId: 'a-1',
+      occurredAt: '2026-09-28T09:00:00+08:00',
+      kind,
+      amount: 200,
+    });
+    expect(display.targetObject).toBe(`账户资金流水「${label}」`);
+    expect(display.fields).toEqual(
+      expect.arrayContaining([
+        { name: '现金变化', value: impact, source: 'inferred' },
+        { name: '币种', value: 'CNY', source: 'default' },
+      ]),
+    );
+  });
+
   it('create_watchlist：targetObject 与 user/default 来源判定', () => {
     const display = summarizeDraft({
       tool: 'create_watchlist',

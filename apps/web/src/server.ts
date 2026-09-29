@@ -67,6 +67,7 @@ import {
   listStrategyEvaluationDaysTool,
   listStrictStrategyBacktestsTool,
   resumeStrategyEvaluationSessionTool,
+  settleChatDraftTool,
   startStrategyEvaluationSessionTool,
   syncStrategyWatchlistSubscriptionsTool,
   toolRegistry,
@@ -1313,6 +1314,37 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);
     return callTool('delete_chat_session', { sessionId: c.req.param('id') });
+  });
+  app.post('/api/chat/sessions/:id/drafts/:messageId/:toolCallId', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      body = null;
+    }
+    const parsed = z.object({ approved: z.boolean() }).strict().safeParse(body);
+    if (!parsed.success)
+      return jsonResult({
+        ok: false,
+        error: {
+          kind: 'invalid_input',
+          message: '确认请求必须是 { approved: boolean }，不能替换草案输入',
+          issues: [],
+        },
+      });
+    return jsonResult(
+      await settleChatDraftTool.execute(
+        {
+          sessionId: c.req.param('id'),
+          messageId: c.req.param('messageId'),
+          toolCallId: c.req.param('toolCallId'),
+          approved: parsed.data.approved,
+        },
+        contextForRequest(),
+      ),
+    );
   });
 
   app.post('/api/settings/ai', async (c) => {
@@ -2945,6 +2977,8 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   // 对话助手：AI SDK UI Message Stream（SSE），web 内部端点，不进 toolRegistry。
   app.post('/api/chat', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
     let body: unknown;
     try {
       body = await c.req.json();
@@ -3278,6 +3312,18 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       typeof body === 'object' && body !== null && 'input' in body
         ? (body as { input: unknown }).input
         : {};
+    if (name === 'append_chat_message') {
+      const userMessage = z
+        .object({
+          role: z.literal('user'),
+          parts: z
+            .array(z.object({ type: z.literal('text'), text: z.string().min(1) }).strict())
+            .min(1),
+        })
+        .safeParse(input);
+      if (!userMessage.success)
+        return jsonResult(permissionDenied('助手消息和草案执行记录只能由服务器生成'));
+    }
     return jsonResult(await tool.execute(input, contextForRequest()));
   });
 

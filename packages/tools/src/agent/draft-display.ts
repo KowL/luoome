@@ -1,7 +1,16 @@
 // 草案 display 投影：按 tool 一组纯函数，从已校验的 draft input 生成卡片摘要（设计 §6.2）。
 // 无专用 summarizer 的 tool 回落到最小投影（targetObject 用 tool 描述 + raw fields），不阻塞流程。
 
+import {
+  cashImpactOfCashFlow,
+  cashImpactOfHoldingChange,
+  money,
+  type PortfolioCashFlowKind,
+} from '@luoome/core';
 import { z } from 'zod';
+import type { AddHoldingInput } from '../tools/add-holding.js';
+import type { CreateAccountInput } from '../tools/create-account.js';
+import type { CreatePortfolioCashFlowInput } from '../tools/portfolio-performance.js';
 import type { AgentDraftKind } from './scenarios.js';
 
 export const DraftDisplayFieldSchema = z.object({
@@ -63,7 +72,138 @@ interface DraftSummarySpec {
 
 type DraftSummarizer = (raw: ParsedInput, parsed: ParsedInput) => DraftSummarySpec;
 
+const CASH_FLOW_LABELS: Readonly<Record<PortfolioCashFlowKind, string>> = {
+  deposit: '入金',
+  withdrawal: '出金',
+  dividend: '分红',
+  fee: '费用',
+  tax: '税费',
+  'transfer-in': '转入',
+  'transfer-out': '转出',
+};
+
 const SUMMARIZERS: Readonly<Record<string, DraftSummarizer>> = {
+  create_account: (raw, parsed) => {
+    const input = parsed as z.infer<typeof CreateAccountInput>;
+    return {
+      targetObject: `投资账本账户「${input.name}」`,
+      fields: [
+        ...(input.id === undefined ? [] : [field(raw, parsed, 'id', '账户 ID')]),
+        field(raw, parsed, 'name', '名称'),
+        field(raw, parsed, 'currency', '币种'),
+        field(raw, parsed, 'initialCapital', '初始本金'),
+        { name: '初始现金余额', value: money(input.initialCapital), source: 'inferred' },
+        {
+          name: '操作性质',
+          value: '创建本地投资账本记录，不会在券商开户或转账',
+          source: 'default',
+        },
+      ],
+    };
+  },
+  add_holding: (raw, parsed) => {
+    const input = parsed as z.infer<typeof AddHoldingInput>;
+    return {
+      targetObject: `登记持仓「${input.stockName ?? input.stockId}」`,
+      fields: [
+        field(raw, parsed, 'accountId', '账户', input.accountId ?? '当前默认账户'),
+        field(raw, parsed, 'stockId', '股票'),
+        ...(input.stockName === undefined ? [] : [field(raw, parsed, 'stockName', '股票名称')]),
+        field(raw, parsed, 'quantity', '持仓数量（股）'),
+        field(raw, parsed, 'avgCost', '平均成本价（账户币种）'),
+        field(
+          raw,
+          parsed,
+          'availableQuantity',
+          '可卖数量（股）',
+          input.availableQuantity ?? input.quantity,
+        ),
+        field(raw, parsed, 'openedAt', '建仓时间', input.openedAt ?? '确认执行时的当前时间'),
+        {
+          name: '现金变化（账户币种）',
+          value: cashImpactOfHoldingChange(null, {
+            quantity: input.quantity,
+            avgCost: money(input.avgCost),
+            closedAt: null,
+          }),
+          source: 'inferred',
+        },
+        {
+          name: '操作性质',
+          value: '登记已有持仓并扣减成本；现金不足时拒绝，不会买入股票',
+          source: 'default',
+        },
+      ],
+      ambiguous: [
+        ...(input.accountId === undefined ? ['未显式指定账户，将使用当前默认账户'] : []),
+        ...(input.availableQuantity === undefined
+          ? ['未指定可卖数量，将全部记为可卖；请核对卖出限制']
+          : []),
+        ...(input.openedAt === undefined ? ['未指定建仓时间，将记录为确认执行时间'] : []),
+      ],
+    };
+  },
+  update_holding: (raw, parsed) => ({
+    targetObject: `纠错持仓「${text(parsed.holdingId)}」`,
+    fields: [
+      field(raw, parsed, 'holdingId', '持仓 ID'),
+      ...(parsed.quantity === undefined
+        ? []
+        : [field(raw, parsed, 'quantity', '修正后数量（股）')]),
+      ...(parsed.availableQuantity === undefined
+        ? []
+        : [field(raw, parsed, 'availableQuantity', '修正后可卖数量（股）')]),
+      ...(parsed.avgCost === undefined
+        ? []
+        : [field(raw, parsed, 'avgCost', '修正后成本价（账户币种）')]),
+      {
+        name: '现金影响',
+        value: '按原持仓成本减修正后成本增减现金；仅改可卖数量不改变现金，现金不足时拒绝',
+        source: 'default',
+      },
+      { name: '操作性质', value: '纠正账本记录，不会买卖股票', source: 'default' },
+    ],
+    ambiguous: ['现金变化金额需结合当前持仓核对；本草案未包含原持仓成本'],
+  }),
+  close_holding: (raw, parsed) => ({
+    targetObject: `关闭持仓记录「${text(parsed.holdingId)}」`,
+    fields: [
+      field(raw, parsed, 'holdingId', '持仓 ID'),
+      {
+        name: '现金影响',
+        value: '将当前持仓成本回补到账户现金；不按成交价计算，不记录实际卖出收益',
+        source: 'default',
+      },
+      {
+        name: '操作性质',
+        value: '标记账本持仓为已关闭并保留历史，不会卖出股票',
+        source: 'default',
+      },
+    ],
+    ambiguous: ['现金回补金额需结合当前持仓核对；本草案未包含原持仓成本'],
+  }),
+  create_portfolio_cash_flow: (raw, parsed) => {
+    const input = parsed as z.infer<typeof CreatePortfolioCashFlowInput>;
+    return {
+      targetObject: `账户资金流水「${CASH_FLOW_LABELS[input.kind]}」`,
+      fields: [
+        field(raw, parsed, 'accountId', '账户'),
+        field(raw, parsed, 'kind', '流水类型', CASH_FLOW_LABELS[input.kind]),
+        field(raw, parsed, 'amount', '金额'),
+        field(raw, parsed, 'currency', '币种'),
+        field(raw, parsed, 'occurredAt', '发生时间'),
+        field(raw, parsed, 'source', '来源'),
+        ...(input.stockId === undefined ? [] : [field(raw, parsed, 'stockId', '关联股票')]),
+        ...(input.note === undefined ? [] : [field(raw, parsed, 'note', '备注')]),
+        { name: '现金变化', value: cashImpactOfCashFlow(input), source: 'inferred' },
+        {
+          name: '操作性质',
+          value: '记录已发生的资金变化并更新账本现金；不会发起实际转账',
+          source: 'default',
+        },
+      ],
+    };
+  },
   create_strategy: (raw, parsed) => ({
     targetObject: `Strategy「${text(parsed.name)}」`,
     fields: [

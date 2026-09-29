@@ -1,9 +1,11 @@
 import type { AgentRuntimeLike, AgentRuntimeRequest, AgentRuntimeResult } from '@luoome/core';
 import { STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { AGENT_SCENARIOS, BASE_INSTRUCTIONS } from '../agent/scenarios.js';
 import { buildAgentCallableTools } from '../agent-whitelist.js';
-import { toolRegistry } from '../registry.js';
+import { defineTool } from '../define-tool.js';
+import { createRegistry, toolRegistry } from '../registry.js';
 import { buildTestContext } from '../testing/context.js';
 import { agentRunTool } from './agent-run.js';
 
@@ -159,6 +161,25 @@ class AdviceDraftRuntime implements AgentRuntimeLike {
 }
 
 describe('agent_run', () => {
+  it.each(['write', 'advice', 'trade', 'external'] as const)(
+    '查询白名单拒绝以 read 包装的未批准组合能力 %s',
+    async (capability) => {
+      const ctx = await buildTestContext();
+      const tool = defineTool({
+        name: 'unsafe_read',
+        description: '组合副作用不能绕过 Agent 只读门控',
+        sideEffect: 'read',
+        requiredCapabilities: ['read', capability],
+        input: z.object({}),
+        output: z.object({}),
+        handler: () => ({}),
+      });
+      expect(() => buildAgentCallableTools(createRegistry([tool]), ctx, ['unsafe_read'])).toThrow(
+        'agent 白名单禁止',
+      );
+    },
+  );
+
   it('未注入 agent runtime 时返回 permission_denied', async () => {
     const ctx = await buildTestContext();
     const result = await agentRunTool.execute({ message: '检查持仓' }, ctx);
@@ -237,6 +258,112 @@ describe('agent_run', () => {
       expect.objectContaining({ kind: 'research', tool: 'create_research_topic' }),
     ]);
     expect(result.data.usedTools).toEqual([]);
+  });
+
+  it('账户、持仓与流水草案通过 schema 校验并显示现金影响，生成阶段不写账本', async () => {
+    const ctx = await buildTestContext();
+    const accountId = ctx.user.defaultAccountId;
+    const holdings = await ctx.repos.holding.listByAccount(accountId);
+    const holdingId = holdings[0]?.id;
+    if (holdingId === undefined) throw new Error('fixture holding missing');
+    const before = {
+      accounts: await ctx.repos.account.list(),
+      holdings,
+      flows: await ctx.repos.portfolioCashFlow.listByAccount(accountId),
+      adjustments: await ctx.repos.ledger.listHoldingAdjustments(accountId),
+    };
+    const runtime = new AdviceDraftRuntime([
+      {
+        kind: 'portfolio',
+        tool: 'create_account',
+        input: { name: '新账本', currency: 'CNY', initialCapital: 10000 },
+        summary: '新增账本草案',
+      },
+      {
+        kind: 'portfolio',
+        tool: 'add_holding',
+        input: { accountId, stockId: '000001.SZ', quantity: 100, avgCost: 10 },
+        summary: '登记历史持仓草案',
+      },
+      {
+        kind: 'portfolio',
+        tool: 'update_holding',
+        input: { holdingId, avgCost: 20 },
+        summary: '修正成本草案',
+      },
+      {
+        kind: 'portfolio',
+        tool: 'close_holding',
+        input: { holdingId },
+        summary: '关闭历史持仓草案',
+      },
+      {
+        kind: 'portfolio',
+        tool: 'create_portfolio_cash_flow',
+        input: {
+          accountId,
+          kind: 'deposit',
+          amount: 1000,
+          occurredAt: '2026-09-28T09:00:00+08:00',
+        },
+        summary: '登记入金草案',
+      },
+    ]);
+    const result = await agentRunTool.execute(
+      { message: '核对账本登记草案', scenario: 'portfolio' },
+      { ...ctx, agent: runtime },
+    );
+    if (!result.ok) throw new Error('agent_run should succeed');
+    expect(result.data.drafts).toHaveLength(5);
+    for (const draft of result.data.drafts) {
+      expect(draft.kind).toBe('portfolio');
+      expect(draft.display?.fields.some((item) => item.name.includes('现金'))).toBe(true);
+    }
+    expect(result.data.usedTools).toEqual([]);
+    expect({
+      accounts: await ctx.repos.account.list(),
+      holdings: await ctx.repos.holding.listByAccount(accountId),
+      flows: await ctx.repos.portfolioCashFlow.listByAccount(accountId),
+      adjustments: await ctx.repos.ledger.listHoldingAdjustments(accountId),
+    }).toEqual(before);
+  });
+
+  it('账本草案拒绝缺少金额、错误类型、add_trade 及非账本场景', async () => {
+    const runtime = new AdviceDraftRuntime([
+      {
+        kind: 'portfolio',
+        tool: 'create_account',
+        input: { name: '缺本金', currency: 'CNY' },
+        summary: '金额缺失',
+      },
+      {
+        kind: 'strategy',
+        tool: 'create_account',
+        input: { name: '错类型', currency: 'CNY', initialCapital: 10000 },
+        summary: '错误类型',
+      },
+      { kind: 'portfolio', tool: 'add_trade', input: {}, summary: '禁止生成交易草案' },
+    ]);
+    const ctx = await buildTestContext({ agent: runtime });
+    const result = await agentRunTool.execute({ message: '检查草案', scenario: 'portfolio' }, ctx);
+    if (!result.ok) throw new Error('agent_run should succeed');
+    expect(result.data.drafts).toEqual([]);
+    expect(result.data.risks).toContain('3 条无效写入草案已被安全门控丢弃');
+
+    const validDraft = new AdviceDraftRuntime([
+      {
+        kind: 'portfolio',
+        tool: 'create_account',
+        input: { name: '新账本', currency: 'CNY', initialCapital: 10000 },
+        summary: '待确认账本草案',
+      },
+    ]);
+    const watch = await agentRunTool.execute(
+      { message: '检查草案', scenario: 'watch' },
+      { ...ctx, agent: validDraft },
+    );
+    if (!watch.ok) throw new Error('agent_run should succeed');
+    expect(watch.data.drafts).toEqual([]);
   });
 
   it('模型输出缺 unknowns/partialFailures 字段时按默认值兼容', async () => {

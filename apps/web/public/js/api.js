@@ -25,6 +25,14 @@ const setAccountId = (accountId) => {
   }
 };
 
+const apiHeaders = (init, accountId = getAccountId()) => {
+  const headers = new Headers(init);
+  if (!headers.has('x-luoome-account-id')) {
+    headers.set('x-luoome-account-id', accountId);
+  }
+  return headers;
+};
+
 /**
  * 调用后端 API。
  * @param {string} path 路径（必须以 / 开头）
@@ -34,11 +42,7 @@ const setAccountId = (accountId) => {
  */
 const callApi = async (path, init) => {
   const { timeoutMs, ...rest } = init ?? {};
-  const headers = new Headers(rest.headers);
-  const accountId = getAccountId();
-  if (accountId.length > 0 && !headers.has('x-luoome-account-id')) {
-    headers.set('x-luoome-account-id', accountId);
-  }
+  const headers = apiHeaders(rest.headers);
   if (rest.body !== undefined && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }
@@ -72,4 +76,4 @@ const callApi = async (path, init) => {
   return body;
 };
 
-export { ACCOUNT_KEY, callApi, getAccountId, setAccountId };
+export { ACCOUNT_KEY, apiHeaders, callApi, getAccountId, setAccountId };

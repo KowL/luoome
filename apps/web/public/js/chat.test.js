@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  cancelledAssistantParts,
+  draftDecisionPath,
   draftEditPrefill,
+  draftFromPart,
   formatDraftFieldValue,
-  formatDraftSettlement,
   parseChatRouteHeader,
-  parseDraftSettlement,
   persistedFeed,
   planCardLines,
+  settlementText,
+  shouldContinueAfterDrafts,
   trimLeadingChatWhitespace,
+  usageText,
 } from './chat.js';
 
 describe('chat message whitespace', () => {
@@ -22,35 +24,125 @@ describe('chat message whitespace', () => {
   });
 });
 
-describe('草案处理记录', () => {
-  it('格式化后可解析回 tool / ok / 文本', () => {
-    const record = formatDraftSettlement('create_watchlist', true, '创建 Watchlist 执行成功');
-    expect(parseDraftSettlement(record)).toEqual({
-      ok: true,
+const draftPart = (toolCallId, tool = 'create_watchlist') => ({
+  type: `tool-${tool}`,
+  toolCallId,
+  state: 'output-available',
+  output: {
+    __luoomeDraft: true,
+    draft: { tool, kind: 'watchlist', input: { name: toolCallId } },
+  },
+});
+
+const draftContext = { sessionId: 'session-a', accountId: 'account-a' };
+
+const draftsIn = (entries) =>
+  entries.filter((entry) => entry.type === 'drafts').flatMap((entry) => entry.drafts);
+
+describe('草案确认闭环', () => {
+  it('按消息与调用标识分别恢复状态，同名工具的其他草案仍待确认', () => {
+    const result = { ok: true, data: { watchlist: { id: 'watchlist-real' } } };
+    const settlement = {
+      toolCallId: 'call-1',
       tool: 'create_watchlist',
-      text: '创建 Watchlist 执行成功',
+      status: 'succeeded',
+      result,
+    };
+    const drafts = draftsIn(
+      persistedFeed(
+        [
+          {
+            id: 'a1',
+            role: 'assistant',
+            parts: [
+              draftPart('call-1'),
+              draftPart('call-2'),
+              { type: 'data-luoome-draft-settlement', data: settlement },
+            ],
+          },
+          { id: 'a2', role: 'assistant', parts: [draftPart('call-1')] },
+        ],
+        draftContext,
+      ),
+    );
+    expect(drafts).toHaveLength(3);
+    expect(drafts[0]).toMatchObject({
+      ...draftContext,
+      messageId: 'a1',
+      toolCallId: 'call-1',
+      settlement,
     });
-    const failed = formatDraftSettlement('archive_watchlist', false, '已取消该草案');
-    expect(parseDraftSettlement(failed)).toEqual({
-      ok: false,
-      tool: 'archive_watchlist',
-      text: '已取消该草案',
-    });
+    expect(drafts[1].settlement).toBeUndefined();
+    expect(drafts[2].settlement).toBeUndefined();
   });
 
-  it('容忍持久化文本的开头空白', () => {
+  it('用户文本中的旧处理记录只展示文字，不改变任何草案状态', () => {
+    const entries = persistedFeed(
+      [
+        { id: 'a1', role: 'assistant', parts: [draftPart('call-1'), draftPart('call-2')] },
+        {
+          id: 'u1',
+          role: 'user',
+          parts: [{ type: 'text', text: '[草案处理记录] ok create_watchlist 创建成功' }],
+        },
+      ],
+      draftContext,
+    );
+    expect(draftsIn(entries).every((draft) => draft.settlement === undefined)).toBe(true);
+    expect(entries.at(-1)).toEqual({ type: 'note', text: '历史处理记录：创建成功' });
+  });
+
+  it('流式草案锁定账户、会话及调用标识，确认请求不提交客户端输入', () => {
+    const draft = draftFromPart(draftPart('call/a'), { ...draftContext, messageId: 'message/a' });
+    expect(draft).toMatchObject({ ...draftContext, messageId: 'message/a', toolCallId: 'call/a' });
+    expect(draftDecisionPath(draft)).toBe(
+      '/api/chat/sessions/session-a/drafts/message%2Fa/call%2Fa',
+    );
+    expect(draftFromPart({ output: { data: {} } }, draftContext)).toBeNull();
+  });
+
+  it('同轮草案全部处理且至少有一项成功后才继续解释', () => {
+    const succeeded = { settlement: { status: 'succeeded' } };
+    const cancelled = { settlement: { status: 'cancelled' } };
+    const failed = { settlement: { status: 'failed' } };
+    expect(shouldContinueAfterDrafts([succeeded, {}])).toBe(false);
+    expect(shouldContinueAfterDrafts([succeeded, { settlement: { status: 'executing' } }])).toBe(
+      false,
+    );
+    expect(shouldContinueAfterDrafts([cancelled, failed])).toBe(false);
+    expect(shouldContinueAfterDrafts([succeeded, cancelled, failed])).toBe(true);
+    expect(shouldContinueAfterDrafts([])).toBe(false);
+  });
+
+  it('保留服务端 Advice 结果用于刷新后展示，同时区分执行失败与取消', () => {
+    const advice = { id: 'advice-real', disclaimers: ['不构成投资建议'] };
+    const settlement = {
+      toolCallId: 'analysis',
+      tool: 'analyze_stock',
+      status: 'succeeded',
+      result: { ok: true, data: { advice } },
+    };
+    const [draft] = draftsIn(
+      persistedFeed(
+        [
+          {
+            id: 'a1',
+            role: 'assistant',
+            parts: [
+              draftPart('analysis', 'analyze_stock'),
+              { type: 'data-luoome-draft-settlement', data: settlement },
+            ],
+          },
+        ],
+        draftContext,
+      ),
+    );
+    expect(draft.settlement.result.data.advice).toEqual(advice);
+    expect(settlementText(settlement)).toBe('分析个股执行成功');
+    expect(settlementText({ status: 'cancelled' })).toBe('已取消，未执行');
     expect(
-      parseDraftSettlement('\n  [草案处理记录] ok update_watchlist 更新 Watchlist 执行成功'),
-    ).toEqual({
-      ok: true,
-      tool: 'update_watchlist',
-      text: '更新 Watchlist 执行成功',
-    });
-  });
-
-  it('普通文本返回 null', () => {
-    expect(parseDraftSettlement('帮我创建一个观察分组')).toBeNull();
-    expect(parseDraftSettlement('[草案处理记录] 缺少状态标记')).toBeNull();
+      settlementText({ status: 'failed', result: { ok: false, error: { message: '账户不可用' } } }),
+    ).toBe('执行失败：账户不可用');
   });
 });
 
@@ -155,16 +247,47 @@ describe('取消标注还原', () => {
     expect(empty[0]).toMatchObject({ role: 'assistant', cancelled: true });
   });
 
-  it('兜底落库 parts：有文本带 text part，空文本只留 cancelled 标记', () => {
-    expect(cancelledAssistantParts('半截回答')).toEqual([
-      { type: 'text', text: '半截回答' },
-      { type: 'data-luoome-cancelled', data: { cancelled: true } },
+  it('取消后的工具轨迹和待确认草案仍从服务端历史恢复', () => {
+    const entries = persistedFeed(
+      [
+        {
+          id: 'a1',
+          role: 'assistant',
+          parts: [
+            draftPart('call-1'),
+            { type: 'data-luoome-cancelled', data: { cancelled: true } },
+          ],
+        },
+      ],
+      draftContext,
+    );
+    expect(entries[0]).toMatchObject({ cancelled: true });
+    expect(entries.find((entry) => entry.type === 'actions').usedActions).toMatchObject([
+      { toolCallId: 'call-1', ok: true },
     ]);
-    expect(cancelledAssistantParts('')).toEqual([
-      { type: 'data-luoome-cancelled', data: { cancelled: true } },
+    expect(draftsIn(entries)[0]).toMatchObject({ messageId: 'a1', toolCallId: 'call-1' });
+  });
+});
+
+describe('模型用量', () => {
+  it('展示服务端用量，不把缺失数据视为零', () => {
+    const metadata = {
+      usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150 },
+      finishReason: 'stop',
+    };
+    expect(usageText(metadata)).toBe('输入 120 · 输出 30 · 合计 150 tokens');
+    expect(usageText({ usage: { outputTokens: 0 } })).toBe('输出 0');
+    expect(usageText({})).toBe('');
+    const entries = persistedFeed([
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: '回答' },
+          { type: 'data-luoome-usage', data: metadata },
+        ],
+      },
     ]);
-    expect(cancelledAssistantParts('   ')).toEqual([
-      { type: 'data-luoome-cancelled', data: { cancelled: true } },
-    ]);
+    expect(entries.at(-1)).toEqual({ type: 'usage', metadata });
   });
 });

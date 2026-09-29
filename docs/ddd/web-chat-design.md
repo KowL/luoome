@@ -1,26 +1,26 @@
 # Web 对话助手设计：`/api/chat` + draft-and-confirm
 
-> 状态：**已实现**（2026-07-26 迁移为 AI SDK `ToolLoopAgent` + UI Message Stream，并加入项目数据库持久化会话；保留 draft 确认卡片）。本文档是对话助手设计的唯一事实来源。
+> 状态：**已实现**（AI SDK `ToolLoopAgent` + UI Message Stream、账户会话、服务端草案确认与投资管理闭环）。本文档描述当前对话契约。
 > 关联：[Strategy 与统一 Watchlist 详细设计](./strategy-watchlist-unification-detailed-design.md)（聊天只生成目标模型 draft）。
 
 ## 目标
 
-Web 端提供一个与 LLM 对话的入口（通用助手，非仅分组创建），覆盖：分组/盯盘池管理、持仓与行情查询、战法与建议查询等。写操作一律 **draft-and-confirm**：LLM 拟配置，人确认后才落库。
+Web 端提供个人投资助手，覆盖账户与现金、持仓、行情研究、Strategy、Watchlist、AlertPlan 和建议。写操作一律 **draft-and-confirm**：AI 拟定操作，用户确认后执行，真实结果进入下一轮对话。
 
-## 已确认决策（2026-07-26）
+## 已确认决策
 
-- **draft-and-confirm**：LLM 产出的 write 类动作不直接执行，作为 draft 返回前端；用户点「确认」后走既有 `/api/tools/:name/call` 落库
+- **draft-and-confirm**：LLM 产出的 write / advice / 策略执行动作不直接执行；用户通过会话草案端点确认，`settle_chat_draft` 只执行持久化的输入
 - **历史归服务端**：会话和 UI message parts 按账户写入项目 SQLite；客户端只提交 `sessionId` 和本轮 user message，服务端读取最近 20 条可信历史
 - **账户隔离**：所有会话读写都通过 tools 校验当前 `defaultAccountId`，切换账户后前端重新加载对应会话列表
-- **定位通用助手**：不限于分组创建；read 类动作白名单适当放宽（见 §3）
+- **场景工具**：研究、持仓、盯盘、复盘和通用场景共享事实查询，并按场景限定草案类型
 - **原生 agent tool loop**：由 adapters 内的 AI SDK `ToolLoopAgent.stream()` 完成推理、工具调用和文本流；Web 不再维护另一套动作 JSON 协议
 - **标准 UI Message Stream**：`POST /api/chat` 返回 `text/event-stream` 与 `x-vercel-ai-ui-message-stream: v1`；原生 JS 前端消费协议，不要求 React
 
 ## 关键约束（现状）
 
 - generation 仍使用结构化 `LLMAdapterLike.generate`；聊天使用 `AISDKAgentRuntime.createUIMessageStreamResponse`，AI SDK 类型不进入 core
-- web 端 tool 暴露面：read + advice + write 放行，external 仅白名单 `fetch_quote`（`apps/web/src/server.ts`）
-- LLM 必须由 AI SDK 模型目录的 `generation` profile 配置真实模型；调用失败时返回明确的保守 fallback
+- 对话和草案确认要求 `write + external` 显式开启，并执行同源 Origin 检查；trade 始终不可达
+- 普通结构化分析使用模型目录的 `generation` profile，对话使用 `agent` profile；未配置或调用失败均明确报错，不伪造成功回答
 
 ## 设计
 
@@ -49,8 +49,9 @@ interface ChatRequest {
 - `GET /api/chat/sessions/:id`：读取会话及消息
 - `PATCH /api/chat/sessions/:id`：重命名
 - `DELETE /api/chat/sessions/:id`：删除会话和消息
+- `POST /api/chat/sessions/:id/drafts/:messageId/:toolCallId`：提交 `{ approved: boolean }`，确认或取消一个已保存的草案；禁止携带替代输入
 
-创建、重命名和删除沿用 Web 同源 Origin 闸口。
+所有写端点沿用 Web 同源 Origin 闸口；流请求和确认请求携带 `X-Luoome-Account-Id`，避免非默认账户错位。
 
 ### 2. 服务端 agent 流程
 
@@ -70,30 +71,38 @@ sessionId + 本轮 user message
 - tool 返回失败时作为 `{ error: ToolError }` 交还模型，并通过 UI stream 展示失败状态。
 - agent 受 profile 的 timeout / retry 与 runtime 的最大步数约束。
 - 服务端不采信客户端提供的旧历史；工具调用 parts 与草案输出一并落库，以便重新打开会话后恢复动作轨迹。
+- 下一轮保留已完成的 tool parts 和 step 边界；已确认草案的模型侧 output 携带 `draftStatus` 和真实 `ToolResult`，包括新对象 ID。用户输入的“已执行”文本不构成执行凭据。
+- SDK 在服务端消费流；取消时仍保存已收到的部分及取消标记。前端不再补写 assistant 消息。完成时发送 usage metadata，并持久化 `data-luoome-usage`。
+- 流错误统一脱敏，不输出 provider 响应正文、URL、密钥或内部推理。
 
 ### 3. 会话领域与仓储
 
 - core 定义 `ChatSession`、`ChatMessage`、`ChatRepository`，不依赖 AI SDK。
 - `ChatMessage.parts` 保存 AI SDK UI message 的 SDK 无关 JSON 投影，当前角色限定为 user / assistant。
-- db 同时提供 memory 与 drizzle 实现，并用共享 repository contract 验证账户隔离、排序和级联删除。
-- tools 提供 create/list/get/rename/delete/append 六个会话能力；Web API 只做协议适配，不直接访问 repository。
+- db 同时提供 memory 与 drizzle 实现，共享 contract 验证最近消息截取、账户隔离、排序、级联删除、消息原子插入与 parts 比较更新。
+- tools 提供 create/list/get/rename/delete/append 和 `settle_chat_draft`；会话消息不可通过 append 覆盖，重复相同输入幂等返回。
+- 每个草案按 `messageId + toolCallId` 记录 `executing / succeeded / failed / cancelled`。执行前原子认领，完成后替换该标记；重复请求返回已保存状态，同一消息的草案串行处理。
+- 若进程在认领后中断，保留 `executing`，不自动重试；用户需核对账本后再决定下一步。这保证不会重复执行，但不把中断后的结果冒充确定成功。
+- 旧版文本处理记录没有调用 ID，不能推断同一工具的多个草案是否分别执行；检测到此类记录时要求核对数据并重新生成，避免升级后重复执行旧草案。
 
 ### 4. 动作白名单与门控
 
-- **自动执行**：`search_stocks` / `fetch_quote` / `batch_quote` / `list_holdings` / `get_holding` / `list_strategies` / `get_strategy` / `list_strategy_runs` / `get_strategy_run` / `strategy_signals_by_stock` / `list_watchlists` / `get_watchlist` / `list_watchlist_changes` / `list_alert_plans` / `list_watch_triggers` / `get_advice` / `get_advice_stats` / `list_trades` / `list_research_notes`
-- **自动执行（advice，有 LLM 成本，v1.1 再开）**：`analyze_stock` / `analyze_position` / `market_outlook` —— v1 先不开，避免 chat→advice 嵌套 LLM 的延迟与成本失控；回复中引导用户去对应页面
-- **draft（write，确认后执行）**：`create_strategy` / `create_strategy_version` / `publish_strategy_version` / `pause_strategy` / `run_strategy` / `create_watchlist` / `update_watchlist` / `archive_watchlist` / `add_watchlist_members`（单个或多个成员均合并为一条）/ `update_watchlist_member` / `archive_watchlist_member` / `create_alert_plan` / `update_alert_plan` / `delete_alert_plan`
-- **拒绝**：除 `fetch_quote` / `batch_quote` 外的 external、advice 与所有 trade 工具不传给 agent，模型无法调用
-- 执行门控复用 web 现有 sideEffect 规则；chat 不新增特权通道
+- 清单以 `packages/tools/src/agent/scenarios.ts` 与 `agent-whitelist.ts` 为准；同时校验 `sideEffect` 与全部 `requiredCapabilities`，只有查询及逐项批准的 external 能力自动执行。
+- 账户、持仓、现金对账、交易计划和研究等查询返回事实；行情缺失或账本不平时必须披露 unavailable，不估算成精确可用资产。
+- `portfolio/general` 可拟定 `create_account`、`add_holding`、`update_holding`、`close_holding`、`create_portfolio_cash_flow` 草案。现金变动按已有 core 账本规则展示；数量、成本、金额及时间不得猜测。它们维护本地记录，不向券商发单。
+- Strategy / Watchlist / AlertPlan / 研究写入沿用场景草案。多个 Watchlist 成员合并为 `add_watchlist_members` 一条确认。
+- `analyze_stock`、`analyze_position`、`market_outlook` 作为待确认 Advice 草案；确认后展示正式建议卡及反证、风险、免责声明、有效期。
+- `settle_chat_draft` 是 tools 层的 Web 内部能力，不进入通用 registry、MCP 或模型的工具表；其 write + external 组合能力仅供专用用户确认端点调用，避免外部 Agent 借此绕过目标工具的暴露配置。所有 trade 工具均拒绝。
 
 ### 5. 上下文摘要（data.context）
 
 每轮请求服务端注入的轻量摘要（控制 token）：
 
 - 当前账户 id + 名称
-- 分组清单（id + name + resolver.kind + 成员数，不含成员明细）
-- 战法清单（id + name + tag）
+- Watchlist 清单（id + name + kind + membershipPolicy）
+- Strategy 清单（id + name + status）与 AlertPlan 清单
 - 持仓 stockIds（不含行情；LLM 要行情走 `batch_quote` action）
+- 数据健康降级摘要
 
 明细一律让 LLM 通过 action 按需拉取，不预塞。
 
@@ -104,21 +113,22 @@ sessionId + 本轮 user message
 - 会话与消息存项目数据库，不使用 `sessionStorage`；首次用户消息自动生成会话标题
 - `fetch` + `ReadableStream` 手工消费 AI SDK UI SSE（当前静态前端无 bundler，不引入 React hook）
 - `text-delta` 增量更新助手气泡；step / tool parts 驱动“推理中、执行中、成功/失败”状态
-- draft tool 的 `tool-output-available` 渲染确认卡片；点击确认后才调用 `/api/tools/:name/call`
+- draft tool 的 `tool-output-available` 渲染确认卡片；回复保存后才允许确认，调用会话草案端点，不发送模型输入副本
+- 卡片绑定创建时的账户、会话、消息与调用 ID。刷新后恢复每项独立执行状态与 Advice；全部草案处理完成且有成功执行时，助手自动继续总结真实结果
+- 同步展示模型实际 token 用量；执行期间阻止切换会话造成错写，账户切换丢弃旧视图的异步结果
 - 网络、HTTP 和 stream error 都落为明确的助手错误气泡
 
 ### 7. 测试
 
 - adapter 测试验证真实 `createAgentUIStreamResponse` 产出 v1 SSE
-- repository contract 覆盖账户隔离、消息顺序和会话级联删除
+- repository contract 覆盖账户隔离、最近消息顺序、并发插入、原子认领和会话级联删除
 - server 测试验证 UIMessage 边界、服务端最近 20 条历史、assistant 落库、会话 API、canonical tool 白名单和 draft 不写库
-- 浏览器流消费器测试覆盖跨 chunk SSE 与非 2xx ToolResult 错误
+- 服务端测试覆盖不可替换输入、重复确认、取消、失败、账户 header、同源闸口与跨轮真实结果；浏览器流消费器测试覆盖跨 chunk SSE、用量、流截断与非 2xx 错误
 
 ## 明确不做（v1）
 
 - 不做云端同步、跨项目同步和会话分享
-- 不开放 advice 类动作（v1.1 评估成本后开）
-- 不做 LLM 直接执行 write / external / trade（draft-and-confirm 是硬边界，对齐 advice ≠ trade）
+- 不做 LLM 自主写账本、执行策略或下单（draft-and-confirm 是硬边界，对齐 advice ≠ trade）
 - 不做语音、附件、富媒体输入
 
 ## 已知边界
@@ -126,4 +136,4 @@ sessionId + 本轮 user message
 - 模型必须支持 tool calling；不兼容的 OpenAI-compatible 服务会以 stream error 明确失败
 - 项目数据库中的历史会进入 prompt；system prompt 不依赖历史中的“助手承诺”做任何权限判断
 - prompt 注入面：用户消息与持久化历史都会进 prompt；写操作有确认卡兜底，read 动作无副作用，残余风险是 LLM 回复被诱导说错话——靠 reply 中保留 disclaimers 与 usedActions 透明展示缓解
-- 真实 LLM 不可用时 chat 返回明确 fallback，不伪造分析结果
+- 真实 LLM 不可用时 chat 返回明确错误，不伪造分析结果
