@@ -8,6 +8,7 @@ import {
   appendMemberStock,
   buildAlertPlanMutationInput,
   deriveWatchlistViews,
+  filterTriggers,
   filterTriggersBySource,
   intradayDeliveryAuditLines,
   parseMemberStockIds,
@@ -316,6 +317,31 @@ describe('触发条目时间行', () => {
       triggers[2],
     ]);
     expect(filterTriggersBySource(triggers, 'other', alertPlanIds)).toEqual([triggers[3]]);
+  });
+
+  it('多维过滤：投递状态与优先级可叠加，缺省值按未请求投递/普通处理', () => {
+    const triggers = [
+      { poolId: 'trading-plan-watch:acc-1', deliveryStatus: 'sent', priority: 'urgent' },
+      { poolId: 'trading-plan-watch:acc-1', deliveryStatus: 'sent' },
+      { poolId: 'trading-plan-watch:acc-1', deliveryStatus: 'invalidated', priority: 'important' },
+      { poolId: 'trading-plan-watch:acc-1' },
+      { alertPlanId: 'plan-1', poolId: 'plan-1', deliveryStatus: 'sent', priority: 'urgent' },
+    ];
+    expect(filterTriggers(triggers)).toHaveLength(5);
+    expect(filterTriggers(triggers, { delivery: 'sent' })).toEqual([
+      triggers[0],
+      triggers[1],
+      triggers[4],
+    ]);
+    expect(filterTriggers(triggers, { delivery: 'not-requested' })).toEqual([triggers[3]]);
+    expect(filterTriggers(triggers, { priority: 'normal' })).toEqual([triggers[1], triggers[3]]);
+    expect(filterTriggers(triggers, { delivery: 'sent', priority: 'urgent' })).toEqual([
+      triggers[0],
+      triggers[4],
+    ]);
+    expect(
+      filterTriggers(triggers, { source: 'alert-plan', priority: 'urgent' }, new Set(['plan-1'])),
+    ).toEqual([triggers[4]]);
   });
 });
 

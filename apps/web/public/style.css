@@ -1973,6 +1973,40 @@ html.has-bg-image .bg-layer {
   font-family: var(--font-mono);
 }
 
+/* 可折叠卡片：header 整行可点，右端 chevron 表示状态；折叠后只留 header。 */
+.card-collapsible > .card-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.card-collapsible > .card-header::after {
+  content: '▾';
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.card-collapsible.card-collapsed > .card-header {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom-color: transparent;
+}
+
+.card-collapsible.card-collapsed > .card-header::after {
+  content: '▸';
+}
+
+.card-collapsible.card-collapsed > :not(.card-header) {
+  display: none;
+}
+
+/* 触发历史的多维过滤（来源 / 投递状态 / 优先级）。 */
+.trigger-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+
 .performance-audit {
   margin-top: 18px;
   border-top: 1px solid var(--line);
@@ -3120,6 +3154,36 @@ html.has-bg-image .bg-layer {
 /* 触发卡片：正文给「为什么触发」，内部标识折叠进 details */
 .trigger-why {
   margin: 2px 0 0;
+}
+
+/* 触发历史（紧凑版）：头部一行 + 为什么触发 + 一行元信息。 */
+.trigger-row {
+  gap: 4px;
+}
+
+.trigger-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.trigger-row-spacer {
+  flex: 1;
+}
+
+.trigger-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 10px;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+/* 展开原始证据时占整行，不给 meta 行挤高度。 */
+.trigger-row-meta .entity-evidence[open] {
+  flex-basis: 100%;
 }
 
 .trigger-publication-reason {
@@ -9445,6 +9509,52 @@ body > .modal {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin: 12px 0;
+}
+
+/* 计划行（紧凑版）：一行一个计划，关键数字内联成 chip，完整字段在详情弹窗。 */
+.plan-row {
+  gap: 6px;
+}
+
+.plan-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plan-row-spacer {
+  flex: 1;
+}
+
+.plan-row-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: var(--text-sm);
+}
+
+.plan-chip {
+  color: var(--muted);
+}
+
+.plan-chip-label {
+  margin-right: 4px;
+}
+
+.plan-chip strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-row-meta {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+#alerts-plans > .pagination {
+  margin-top: 8px;
 }
 
 .plan-metric {

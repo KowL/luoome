@@ -59,7 +59,7 @@ import { callApi } from './api.js';
 import { makeSelect } from './form-kit.js';
 import { openModal } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
-import { $, el, fmtDateTime, fmtNum, mount, toolErrorText } from './ui.js';
+import { $, createPagination, el, fmtDateTime, fmtNum, mount, toolErrorText } from './ui.js';
 
 const ACTION_LABELS = {
   observe: '观察',
@@ -720,6 +720,7 @@ export const countPlanRows = (rows) => {
 
 let planStatusFilter = 'all';
 let planActionFilter = 'all';
+let planPagination = null;
 let planPanelState = {
   plans: [],
   rows: [],
@@ -727,57 +728,89 @@ let planPanelState = {
   reconcileResult: undefined,
 };
 
-/** 只重绘列表部分，筛选栏保持在原位。 */
-const renderPlanList = (root) => {
-  const filterBar = root.querySelector('.plan-filters');
-  const visible = filterPlanRows(planPanelState.rows, planStatusFilter, planActionFilter);
-  const rows =
-    visible.length === 0
-      ? [el('p', 'placeholder', '当前筛选条件下没有计划。')]
-      : visible.map(planRow);
-  mount(root, [
-    ...(filterBar === null ? [] : [filterBar]),
-    ...rows,
-    accountFactsSummary(planPanelState),
-  ]);
+/** 仓位 chip：维持不变时不重复「当前 → 目标」两个相同数字；观察计划的目标仓位是「等待条件」，不算维持。 */
+const planPositionChipValue = (plan) => {
+  const current = fmtPct(plan.position?.currentPct);
+  if (plan.position?.deltaPct === 0 && current !== null && plan.action !== 'observe')
+    return `${current}（维持）`;
+  return `${current ?? '不可用'} → ${planTargetText(plan)}`;
 };
 
+const planRowChip = (label, value) =>
+  el('span', 'plan-chip', [el('span', 'plan-chip-label', label), el('strong', null, value)]);
+
+/**
+ * 计划行（紧凑版）：行内只放扫读决策需要的信息——身份、动作、监控资格、关键价位与仓位；
+ * 入场条件、依据与账户来源等完整字段都在详情弹窗里。可监控是常态，资格说明只在非可监控时占行。
+ */
 const planRow = (row) => {
   const { plan, monitoring } = row;
+  const badge = planRowStatus(row);
   const detail = el('button', 'btn btn-outline btn-sm', '详情');
   detail.type = 'button';
   detail.addEventListener('click', () =>
     openTradingPlanDetail(plan, planVersionsOf(planPanelState.plans, plan.id)),
   );
-  const badge = planRowStatus(row);
-  // 行上是监控资格，记录状态（生效/草案/已替代…）只在详情与版本差异里看
+  const metrics = planKeyMetrics(plan);
   const draftNote = planRowNote(row, monitoring);
-  return el('div', 'entity-item', [
-    el('div', 'flex gap-2', [
+  const monitoringLine =
+    monitoring === undefined
+      ? el('p', 'hint', '监控资格未读取，请刷新后重试；未确认资格前不会按可监控对待')
+      : monitoring.status === 'ready'
+        ? null
+        : el('p', 'hint', `${monitoring.reason} · 下一步：${monitoring.nextStep}`);
+  return el('div', 'entity-item plan-row', [
+    el('div', 'plan-row-head', [
       stockIdentityLink(plan),
       el('strong', null, planActionLabel(plan.action)),
+      el('span', `badge ${badge.cls}`, badge.label),
+      el('span', 'plan-row-spacer'),
+      detail,
     ]),
-    metricsNode(plan),
-    el('p', 'plan-detail-line', `入场条件（全部满足）：${entryConditionText(plan)}`),
-    el('div', 'plan-guidance', [
-      el('strong', null, monitoring === undefined ? '监控资格未读取' : monitoring.reason),
-      el(
-        'p',
-        'hint',
-        monitoring === undefined
-          ? '请刷新后重试；未确认资格前不会按可监控对待'
-          : `下一步：${monitoring.nextStep}`,
+    el('div', 'plan-row-metrics', [
+      planRowChip('参考', metrics[0].value),
+      // 无建仓动作的计划没有入场区间，整列略去而不是写「不适用」凑数。
+      ...(NO_ENTRY_ACTIONS.has(plan.action) ? [] : [planRowChip('入场', planEntryText(plan))]),
+      planRowChip(
+        '止损 / 止盈',
+        `${priceText(plan.exit?.stopLoss)} / ${priceText(plan.exit?.takeProfit)}`,
       ),
+      planRowChip('仓位', planPositionChipValue(plan)),
     ]),
+    ...(NO_ENTRY_ACTIONS.has(plan.action)
+      ? []
+      : [
+          el(
+            'p',
+            'plan-detail-line',
+            // 观察计划的条件是「等条件」而不是「全部满足后执行」，文案直接给结论，不加执行口径前缀。
+            plan.action === 'observe'
+              ? entryConditionText(plan)
+              : `入场条件（全部满足）：${entryConditionText(plan)}`,
+          ),
+        ]),
+    ...(monitoringLine === null ? [] : [monitoringLine]),
+    ...(draftNote === null ? [] : [el('div', 'hint', draftNote)]),
     el(
       'p',
-      'muted',
-      `预计持有 ${holdingText(plan)} 个交易日 · 复核 ${fmtDateTime(plan.holding?.nextReviewAt)}`,
+      'muted plan-row-meta',
+      `预计持有 ${holdingText(plan)} 个交易日 · 复核 ${fmtDateTime(plan.holding?.nextReviewAt)} · 有效期至 ${fmtDateTime(plan.validUntil)} · v${plan.version}`,
     ),
-    el('p', 'muted', `有效期至 ${fmtDateTime(plan.validUntil)} · v${plan.version}`),
-    ...(draftNote === null ? [] : [el('div', 'hint', draftNote)]),
-    el('div', 'flex gap-2', [el('span', `badge ${badge.cls}`, badge.label), detail]),
   ]);
+};
+
+/** 只重绘行列表与分页，筛选栏与账户事实摘要保持在原位。 */
+const renderPlanList = (listWrap, { resetPage = false } = {}) => {
+  const visible = filterPlanRows(planPanelState.rows, planStatusFilter, planActionFilter);
+  planPagination.setState({ total: visible.length, ...(resetPage ? { page: 1 } : {}) });
+  const { page, pageSize } = planPagination.getState();
+  const pageItems = visible.slice((page - 1) * pageSize, page * pageSize);
+  mount(
+    listWrap,
+    pageItems.length === 0
+      ? [el('p', 'placeholder', '当前筛选条件下没有计划。')]
+      : pageItems.map(planRow),
+  );
 };
 
 /** 计划筛选栏：两个维度都带计数；切换后只重绘列表。 */
@@ -802,8 +835,8 @@ const planFilterBar = () => {
   const onChange = () => {
     planStatusFilter = statusSelect.value;
     planActionFilter = actionSelect.value;
-    const root = $('#alerts-plans');
-    if (root !== null) renderPlanList(root);
+    const listWrap = $('#alerts-plans-list');
+    if (listWrap !== null) renderPlanList(listWrap, { resetPage: true });
   };
   statusSelect.addEventListener('change', onChange);
   actionSelect.addEventListener('change', onChange);
@@ -859,7 +892,21 @@ export const renderTradingPlanPanel = ({
     return;
   }
   planPanelState = { plans, rows, factsResult, reconcileResult };
-  mount(root, planFilterBar());
-  renderPlanList(root);
+  const listWrap = el('div', 'entity-list');
+  listWrap.id = 'alerts-plans-list';
+  planPagination = createPagination({
+    total: rows.length,
+    pageSize: 20,
+    pageSizes: [10, 20, 50],
+    onChange: () => renderPlanList(listWrap),
+  });
+  // 账户事实放列表前：藏在几十张卡片后面等于没有。
+  mount(root, [
+    accountFactsSummary(planPanelState),
+    planFilterBar(),
+    listWrap,
+    planPagination.root,
+  ]);
+  renderPlanList(listWrap);
   void setStatus;
 };

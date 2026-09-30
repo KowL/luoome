@@ -205,6 +205,28 @@ export const filterTriggersBySource = (triggers, source, alertPlanIds = new Set(
         return source === 'other' ? kind === 'other' : kind === source;
       });
 
+/** 触发历史的多维筛选：来源 + 投递状态 + 优先级，三个维度可叠加。 */
+export const filterTriggers = (
+  triggers,
+  { source = 'all', delivery = 'all', priority = 'all' } = {},
+  alertPlanIds = new Set(),
+) =>
+  filterTriggersBySource(triggers, source, alertPlanIds).filter(
+    (trigger) =>
+      (delivery === 'all' || (trigger.deliveryStatus ?? 'not-requested') === delivery) &&
+      (priority === 'all' || (trigger.priority ?? 'normal') === priority),
+  );
+
+/** 按字段计数（投递状态 / 优先级过滤选项用），缺省值由 read 归一。 */
+const countTriggerField = (triggers, read) => {
+  const counts = {};
+  for (const trigger of triggers ?? []) {
+    const key = read(trigger);
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+};
+
 /** 触发历史过滤状态；只影响渲染，不影响请求。 */
 const TRIGGER_SOURCE_FILTERS = [
   { id: 'all', label: '全部来源' },
@@ -213,40 +235,95 @@ const TRIGGER_SOURCE_FILTERS = [
 ];
 
 let triggerSourceFilter = 'all';
+let triggerDeliveryFilter = 'all';
+let triggerPriorityFilter = 'all';
 let triggerHistoryState = { triggers: [], alertPlanIds: new Set(), labels: {} };
 let deliveryAuditRevision = 0;
 
+/** 数据刷新后旧选项可能已不存在，回落到「全部」而不是卡在失效值上。 */
+const validFilterValue = (options, value) =>
+  options.some(([optionValue]) => optionValue === value) ? value : 'all';
+
 export const renderTriggerHistory = ({ root, meta }) => {
   if (root === null) return;
-  const { triggers, alertPlanIds, labels } = triggerHistoryState;
-  const counts = summarizeTriggerSources(triggers, alertPlanIds);
-  const filtered = filterTriggersBySource(triggers, triggerSourceFilter, alertPlanIds);
+  const { triggers, alertPlanIds } = triggerHistoryState;
+  const sourceCounts = summarizeTriggerSources(triggers, alertPlanIds);
+  const deliveryCounts = countTriggerField(triggers, (t) => t.deliveryStatus ?? 'not-requested');
+  const priorityCounts = countTriggerField(triggers, (t) => t.priority ?? 'normal');
+  const sourceOptions = TRIGGER_SOURCE_FILTERS.map((option) => [
+    option.id,
+    `${option.label}（${sourceCounts[option.id] ?? 0}）`,
+  ]);
+  const deliveryOptions = [
+    ['all', `全部状态（${triggers.length}）`],
+    ...Object.keys(DELIVERY_LABELS)
+      .filter((status) => deliveryCounts[status] > 0)
+      .map((status) => [status, `${DELIVERY_LABELS[status]}（${deliveryCounts[status]}）`]),
+    ...Object.keys(deliveryCounts)
+      .filter((status) => !(status in DELIVERY_LABELS))
+      .map((status) => [status, `${status}（${deliveryCounts[status]}）`]),
+  ];
+  const priorityOptions = [
+    ['all', `全部优先级（${triggers.length}）`],
+    ...['urgent', 'important', 'normal']
+      .filter((priority) => priorityCounts[priority] > 0)
+      .map((priority) => [
+        priority,
+        `${TRIGGER_PRIORITY_LABELS[priority]}（${priorityCounts[priority]}）`,
+      ]),
+  ];
+  triggerSourceFilter = validFilterValue(sourceOptions, triggerSourceFilter);
+  triggerDeliveryFilter = validFilterValue(deliveryOptions, triggerDeliveryFilter);
+  triggerPriorityFilter = validFilterValue(priorityOptions, triggerPriorityFilter);
+  const filtered = filterTriggers(
+    triggers,
+    {
+      source: triggerSourceFilter,
+      delivery: triggerDeliveryFilter,
+      priority: triggerPriorityFilter,
+    },
+    alertPlanIds,
+  );
   if (meta !== null) {
-    const select = makeSelect(
-      'alerts-trigger-source',
-      TRIGGER_SOURCE_FILTERS.map((option) => [
-        option.id,
-        `${option.label}（${counts[option.id] ?? 0}）`,
+    const filterSelect = (id, options, value, onChange) => {
+      const select = makeSelect(id, options);
+      select.value = value;
+      select.addEventListener('change', () => {
+        onChange(select.value);
+        renderTriggerHistory({ root, meta });
+      });
+      return select;
+    };
+    mount(
+      meta,
+      el('div', 'trigger-filters', [
+        filterSelect('alerts-trigger-source', sourceOptions, triggerSourceFilter, (value) => {
+          triggerSourceFilter = value;
+        }),
+        filterSelect('alerts-trigger-delivery', deliveryOptions, triggerDeliveryFilter, (value) => {
+          triggerDeliveryFilter = value;
+        }),
+        filterSelect('alerts-trigger-priority', priorityOptions, triggerPriorityFilter, (value) => {
+          triggerPriorityFilter = value;
+        }),
       ]),
     );
-    select.value = triggerSourceFilter;
-    select.addEventListener('change', () => {
-      triggerSourceFilter = select.value;
-      renderTriggerHistory({ root, meta });
-    });
-    mount(meta, select);
   }
   if (filtered.length === 0) {
     mount(
       root,
-      el('p', 'placeholder', triggers.length === 0 ? '暂无触发记录。' : '该来源暂无触发记录。'),
+      el(
+        'p',
+        'placeholder',
+        triggers.length === 0 ? '暂无触发记录。' : '当前筛选条件下暂无触发记录。',
+      ),
     );
     return;
   }
   mountPaginated(
     root,
     filtered,
-    (trigger) => triggerCard(trigger, labels),
+    (trigger) => triggerCard(trigger),
     el('p', 'placeholder', '暂无触发记录。'),
   );
 };
@@ -1290,29 +1367,42 @@ const triggerEvidenceDetails = (trigger) =>
     el('pre', 'dashboard-evidence', JSON.stringify(trigger.evalSnapshot ?? {}, null, 2)),
   ]);
 
-const triggerCard = (trigger, labels) => {
+/**
+ * 触发条目（紧凑版）：头部放身份与投递/优先级徽标，正文只有「为什么触发」，
+ * 数据时间与渠道耗时合成一行元信息。「普通」是默认优先级，不单独占徽标；
+ * 来源不再逐条展示——页内触发基本都来自交易计划监控，来源交给右上角过滤表达。
+ */
+const triggerCard = (trigger) => {
   const delivery = triggerDeliveryLabel(trigger.deliveryStatus);
   const channelTiming = triggerChannelTimingText(trigger);
   const publicationReason = trigger.evalSnapshot?.publicationReason;
   const priority = trigger.priority ?? 'normal';
   const versionId = triggerPlanVersionId(trigger);
-  return el('div', 'entity-item', [
-    el('div', 'flex gap-2', [
+  return el('div', 'entity-item trigger-row', [
+    el('div', 'trigger-row-head', [
       stockIdentityLink(trigger),
-      el('strong', null, RULE_KIND_LABELS[trigger.ruleKind] ?? trigger.ruleKind),
-    ]),
-    el('div', 'muted', triggerMetaText(trigger, labels)),
-    el('p', 'trigger-why', `为什么触发：${triggerWhyText(trigger)}`),
-    el('div', 'row-actions', [
+      el('span', 'muted', RULE_KIND_LABELS[trigger.ruleKind] ?? trigger.ruleKind),
+      el('span', 'trigger-row-spacer'),
       el('span', triggerDeliveryBadgeClass(trigger.deliveryStatus), delivery ?? '--'),
-      el('span', triggerPriorityBadgeClass(priority), triggerPriorityLabel(priority)),
+      ...(priority === 'normal'
+        ? []
+        : [el('span', triggerPriorityBadgeClass(priority), triggerPriorityLabel(priority))]),
       ...(versionId === null ? [] : [triggerPlanButton(versionId)]),
     ]),
-    ...(channelTiming === null ? [] : [el('p', 'muted', channelTiming)]),
+    el('p', 'trigger-why', `为什么触发：${triggerWhyText(trigger)}`),
+    el('div', 'trigger-row-meta muted', [
+      el(
+        'span',
+        null,
+        [`数据 ${fmtDateTime(triggerObservedAt(trigger) ?? trigger.createdAt)}`, channelTiming]
+          .filter(Boolean)
+          .join(' · '),
+      ),
+      triggerEvidenceDetails(trigger),
+    ]),
     ...(typeof publicationReason === 'string'
       ? [el('p', 'trigger-publication-reason', `发布复查：${publicationReason}`)]
       : []),
-    triggerEvidenceDetails(trigger),
   ]);
 };
 
@@ -1574,7 +1664,43 @@ const openStrategyCreateModal = async (setStatus, refresh) => {
   );
 };
 
+const COLLAPSED_CARDS_KEY = 'luoome.collapsedCards';
+
+const readCollapsedCards = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COLLAPSED_CARDS_KEY));
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+};
+
+/** 可折叠卡片：点 header 折叠/展开并持久化；header 内的控件（过滤 select、日期等）不触发折叠。 */
+const initCollapsibleCards = () => {
+  for (const card of document.querySelectorAll('.card-collapsible[data-collapse-id]')) {
+    const id = card.dataset.collapseId;
+    card.classList.toggle('card-collapsed', readCollapsedCards().has(id));
+    const header = card.querySelector('.card-header');
+    if (header === null) continue;
+    header.addEventListener('click', (event) => {
+      // 过滤区（card-meta）与其中的控件不触发折叠。
+      if (event.target.closest('.card-meta, select, input, button, a, label')) return;
+      const next = !card.classList.contains('card-collapsed');
+      card.classList.toggle('card-collapsed', next);
+      const stored = readCollapsedCards();
+      if (next) stored.add(id);
+      else stored.delete(id);
+      try {
+        localStorage.setItem(COLLAPSED_CARDS_KEY, JSON.stringify([...stored]));
+      } catch {
+        // 存储被禁用时折叠只在本次会话内生效。
+      }
+    });
+  }
+};
+
 export const initTargetActions = ({ setStatus, refresh }) => {
+  initCollapsibleCards();
   $('#btn-strategy-create')?.addEventListener('click', () =>
     openStrategyCreateModal(setStatus, refresh),
   );
