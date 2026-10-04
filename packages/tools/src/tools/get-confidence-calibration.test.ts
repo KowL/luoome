@@ -4,6 +4,18 @@ import { buildTestContext } from '../testing/context.js';
 import { getConfidenceCalibrationTool } from './get-confidence-calibration.js';
 import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
+const accountEvidence = (stockId: string, accountId: string) => ({
+  strategyId: 'calibration-strategy',
+  strategyVersionId: 'calibration-version',
+  runId: 'calibration-run',
+  stockId,
+  accountId,
+  resultEvidence: [],
+  signalIds: [],
+  observationIds: [],
+  recommendationTrigger: 'run' as const,
+});
+
 describe('get_confidence_calibration', () => {
   it('正常路径：空 advice 库 → 全 0 bucket，total=0', async () => {
     const ctx = await buildTestContext({ advices: [] });
@@ -12,12 +24,12 @@ describe('get_confidence_calibration', () => {
     if (!result.ok) return;
     expect(result.data.totalAdvices).toBe(0);
     expect(result.data.totalWithOutcome).toBe(0);
-    expect(result.data.overallHitRate).toBe(0);
+    expect(result.data.overallHitRate).toBeNull();
     expect(result.data.buckets).toHaveLength(10);
     for (const b of result.data.buckets) {
       expect(b.total).toBe(0);
       expect(b.withOutcome).toBe(0);
-      expect(b.hitRate).toBe(0);
+      expect(b.hitRate).toBeNull();
     }
   });
 
@@ -82,7 +94,10 @@ describe('get_confidence_calibration', () => {
           '投资有风险，决策需自行承担。',
           '市场有不可预测性，过往表现不代表未来收益。',
         ],
-        basedOn: { dataAsOf: now },
+        basedOn: {
+          dataAsOf: now,
+          strategy: accountEvidence(a.subjectId, ctx.user.defaultAccountId),
+        },
         validFrom: now,
         validUntil: new Date(now.getTime() + 3 * 86_400_000),
         createdAt: now,
@@ -122,7 +137,7 @@ describe('get_confidence_calibration', () => {
       expect(b3.withOutcome).toBe(1);
       expect(b3.hits).toBe(0);
       expect(b3.hitRate).toBe(0);
-      expect(b3.avgPnl).toBe(-5);
+      expect(b3.avgPnl).toBeNull();
     }
     // bucket6 = 60-69：adv-mid；hits=1
     const b6 = result.data.buckets[6];
@@ -172,7 +187,10 @@ describe('get_confidence_calibration', () => {
           '投资有风险，决策需自行承担。',
           '市场有不可预测性，过往表现不代表未来收益。',
         ],
-        basedOn: { dataAsOf: now },
+        basedOn: {
+          dataAsOf: now,
+          strategy: accountEvidence('002594.SZ', ctx.user.defaultAccountId),
+        },
         validFrom: now,
         validUntil: new Date(now.getTime() + 3 * 86_400_000),
         createdAt: now,
@@ -222,7 +240,10 @@ describe('get_confidence_calibration', () => {
           '投资有风险，决策需自行承担。',
           '市场有不可预测性，过往表现不代表未来收益。',
         ],
-        basedOn: { dataAsOf: createdAt },
+        basedOn: {
+          dataAsOf: createdAt,
+          strategy: accountEvidence('002594.SZ', ctx.user.defaultAccountId),
+        },
         validFrom: createdAt,
         validUntil: new Date(createdAt.getTime() + 3 * 86_400_000),
         createdAt,

@@ -45,6 +45,7 @@ import {
   DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,
   dateInShanghai,
   NotificationSchema,
+  type Report,
   type SideEffect,
   type ToolContext,
   type ToolError,
@@ -564,6 +565,34 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     return tool.execute(input, contextForRequest());
   };
 
+  const decisionAccountTools = new Set([
+    'get_decision_review_context',
+    'list_decision_reviews',
+    'save_decision_review',
+    'record_decision_trade',
+    'get_decision_write_receipt',
+    'record_advice_outcome',
+    'set_watch_trigger_feedback',
+  ]);
+  const bindDecisionAccount = (
+    request: Request,
+    input: unknown,
+  ): { input: Record<string, unknown> } | { denied: ToolResult<never> } => {
+    const object =
+      typeof input === 'object' && input !== null && !Array.isArray(input)
+        ? (input as Record<string, unknown>)
+        : {};
+    const accountId = contextForRequest().user.defaultAccountId;
+    if (object.accountId !== undefined && object.accountId !== accountId) {
+      return { denied: permissionDenied('请求账户与当前账户选择不一致') };
+    }
+    const headerId = request.headers.get('x-luoome-account-id')?.trim();
+    if (headerId !== undefined && headerId.length > 0 && headerId !== accountId) {
+      return { denied: permissionDenied('账户选择已变化，请刷新后重试') };
+    }
+    return { input: { ...object, accountId } };
+  };
+
   const getEvaluationSession = (input: { sessionId: string }) =>
     getStrategyEvaluationSessionTool.execute(input, ctxRef.current);
   const listEvaluationDays = (input: { sessionId: string }) =>
@@ -831,6 +860,20 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const body = await parseJsonObject(request);
     if (!('parsed' in body)) return jsonResult(body);
     return jsonResult(await invokeTool(toolName, { ...body.data, ...fixedInput }));
+  };
+
+  const decisionMutation = async (
+    request: Request,
+    name: string,
+    fixed: Record<string, unknown> = {},
+  ) => {
+    const denied = requireMutationCapabilities(request, ['write']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(request);
+    if (!('parsed' in body)) return jsonResult(body);
+    const bound = bindDecisionAccount(request, { ...body.data, ...fixed });
+    if ('denied' in bound) return jsonResult(bound.denied);
+    return jsonResult(await invokeTool(name, bound.input));
   };
 
   app.get('/api/research/embeddings/status', () => callTool('get_research_embedding_status', {}));
@@ -1739,6 +1782,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const until = c.req.query('until');
     const side = c.req.query('side');
     const limit = c.req.query('limit');
+    const cursor = c.req.query('cursor');
+    const asOf = c.req.query('asOf');
+    if (cursor !== undefined) input.cursor = cursor;
+    if (asOf !== undefined) input.asOf = asOf;
     if (stockId !== undefined) input.stockId = stockId;
     if (since !== undefined) input.since = since;
     if (until !== undefined) input.until = until;
@@ -2534,7 +2581,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       });
     }
-    return jsonResult(await invokeTool('set_watch_trigger_feedback', { triggerId: id, feedback }));
+    const bound = bindDecisionAccount(c.req.raw, { triggerId: id, feedback });
+    if ('denied' in bound) return jsonResult(bound.denied);
+    return jsonResult(await invokeTool('set_watch_trigger_feedback', bound.input));
   });
 
   app.post('/api/watch/run-once', async (c) => {
@@ -3156,13 +3205,97 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     }),
   );
 
+  app.get('/api/reports/:id/decision-review-status', async (c) => {
+    const bound = bindDecisionAccount(c.req.raw, {});
+    if ('denied' in bound) return jsonResult(bound.denied);
+    const report = await invokeTool('get_report', { id: c.req.param('id') });
+    if (!report.ok) return jsonResult(report);
+    const value = (report.data as { report: Report }).report;
+    const accountId = bound.input.accountId;
+    if (
+      value.scope.kind !== 'account' ||
+      value.scope.accountId !== accountId ||
+      (value.kind !== 'closing' && value.kind !== 'weekly')
+    )
+      return jsonResult(permissionDenied('此报告不属于当前账户复盘范围'));
+    const latest = await invokeTool('get_report', {
+      kind: value.kind,
+      scope: value.scope,
+      periodEnd: value.periodEnd,
+    });
+    if (!latest.ok) return jsonResult(latest);
+    const snapshot = await invokeTool('get_decision_review_snapshot', {
+      accountId,
+      periodStart: value.periodStart,
+      periodEnd: value.periodEnd,
+    });
+    if (!snapshot.ok) return jsonResult(snapshot);
+    const latestReport = (latest.data as { report: Report }).report;
+    const currentSnapshot = (snapshot.data as { snapshot: { inputFingerprint: string } }).snapshot;
+    return jsonResult({
+      ok: true,
+      data: {
+        latestReportId: latestReport.id,
+        canRefresh:
+          latestReport.id === value.id &&
+          latestReport.decisionReviewSnapshot?.inputFingerprint !==
+            currentSnapshot.inputFingerprint,
+        snapshotMissing: value.decisionReviewSnapshot === undefined,
+        currentFingerprint: currentSnapshot.inputFingerprint,
+      },
+    });
+  });
+  app.post('/api/reports/:id/decision-review-refresh', (c) =>
+    decisionMutation(c.req.raw, 'refresh_decision_review_report', { reportId: c.req.param('id') }),
+  );
+
   app.get('/api/reports/:id', (c) => callTool('get_report', { id: c.req.param('id') }));
 
   app.delete('/api/reports/:id', (c) =>
     targetMutation(c.req.raw, 'write', 'delete_report', { reportId: c.req.param('id') }),
   );
 
-  // 复盘趋势图：按天聚合命中率（confidence>=70 且 followed 且 pnl>0 占比）。
+  app.get('/api/decision-reviews/context', (c) => {
+    const bound = bindDecisionAccount(c.req.raw, {
+      accountId: c.req.query('accountId'),
+      subject: { kind: c.req.query('subjectKind'), id: c.req.query('subjectId') },
+      ...(c.req.query('revision') === undefined
+        ? {}
+        : { revision: Number(c.req.query('revision')) }),
+    });
+    if ('denied' in bound) return jsonResult(bound.denied);
+    return callTool('get_decision_review_context', bound.input);
+  });
+  app.get('/api/decision-reviews', (c) => {
+    const bound = bindDecisionAccount(c.req.raw, {
+      accountId: c.req.query('accountId'),
+      stockId: c.req.query('stockId'),
+      subjectKind: c.req.query('subjectKind'),
+      since: c.req.query('since'),
+      until: c.req.query('until'),
+      cursor: c.req.query('cursor'),
+      timeBasis: c.req.query('timeBasis'),
+      throughSequence:
+        c.req.query('throughSequence') === undefined
+          ? undefined
+          : Number(c.req.query('throughSequence')),
+      limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')),
+    });
+    if ('denied' in bound) return jsonResult(bound.denied);
+    return callTool(
+      'list_decision_reviews',
+      Object.fromEntries(Object.entries(bound.input).filter(([, value]) => value !== undefined)),
+    );
+  });
+  app.post('/api/decision-reviews', (c) => decisionMutation(c.req.raw, 'save_decision_review'));
+  app.post('/api/decision-trades', (c) => decisionMutation(c.req.raw, 'record_decision_trade'));
+  app.get('/api/decision-writes/:requestId', (c) => {
+    const bound = bindDecisionAccount(c.req.raw, { requestId: c.req.param('requestId') });
+    if ('denied' in bound) return jsonResult(bound.denied);
+    return callTool('get_decision_write_receipt', bound.input);
+  });
+
+  // 复盘趋势图：按天聚合当前账户明确 followed 且填有盈亏的样本。
   // 默认 30 天窗口；advice 不足则返回空序列（前端 fallback 显示 byDecision）。
   app.get('/api/review/trend', async (c) => {
     const daysRaw = c.req.query('days');
@@ -3176,25 +3309,18 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (!adviceResult.ok) return jsonResult(adviceResult);
     interface AdviceRow {
       createdAt: Date;
-      confidence: number;
       outcome?: { outcome: string; pnl?: number };
     }
     const rows = adviceResult.data as { advices: AdviceRow[] };
-    // 按 createdAt.toDateString() 桶聚合
+    // 与 V2 统计使用同一已填盈亏样本分母。
     const buckets = new Map<string, { total: number; hits: number }>();
     for (const a of rows.advices) {
       const d = new Date(a.createdAt);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       const cur = buckets.get(key) ?? { total: 0, hits: 0 };
+      if (a.outcome?.outcome !== 'followed' || a.outcome.pnl === undefined) continue;
       cur.total += 1;
-      if (
-        a.outcome !== undefined &&
-        a.outcome.outcome === 'followed' &&
-        a.confidence >= 70 &&
-        (a.outcome.pnl ?? 0) > 0
-      ) {
-        cur.hits += 1;
-      }
+      if (a.outcome.pnl > 0) cur.hits += 1;
       buckets.set(key, cur);
     }
     const series = Array.from(buckets.entries())
@@ -3203,7 +3329,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         date,
         total: v.total,
         hits: v.hits,
-        hitRate: v.total === 0 ? 0 : v.hits / v.total,
+        hitRate: v.total === 0 ? null : v.hits / v.total,
       }));
     return jsonResult({ ok: true, data: { days, series } });
   });
@@ -3263,7 +3389,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         typeof body === 'object' && body !== null && 'input' in body
           ? (body as { input: object }).input
           : {};
-      return jsonResult(await invokeTool('record_advice_outcome', { adviceId: id, ...input }));
+      const bound = bindDecisionAccount(c.req.raw, { ...input, adviceId: id });
+      if ('denied' in bound) return jsonResult(bound.denied);
+      return jsonResult(await invokeTool('record_advice_outcome', bound.input));
     });
   }
 
@@ -3323,6 +3451,11 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         .safeParse(input);
       if (!userMessage.success)
         return jsonResult(permissionDenied('助手消息和草案执行记录只能由服务器生成'));
+    }
+    if (decisionAccountTools.has(name)) {
+      const bound = bindDecisionAccount(c.req.raw, input);
+      if ('denied' in bound) return jsonResult(bound.denied);
+      return jsonResult(await tool.execute(bound.input, contextForRequest()));
     }
     return jsonResult(await tool.execute(input, contextForRequest()));
   });

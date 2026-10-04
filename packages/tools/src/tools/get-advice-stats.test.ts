@@ -1,9 +1,11 @@
-import { type Advice, type AdviceRepository, money, STANDARD_DISCLAIMERS } from '@luoome/core';
+import { TEST_ACCOUNT } from '@luoome/adapters/testing';
+import { type Advice, type AdviceRepository, STANDARD_DISCLAIMERS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildContext } from '../context.js';
 import { buildTestContext } from '../testing/context.js';
 import { getAdviceStatsTool } from './get-advice-stats.js';
+import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const makeAdvice = (id: string, decision: Advice['decision'], confidence: number): Advice => ({
   id,
@@ -16,7 +18,20 @@ const makeAdvice = (id: string, decision: Advice['decision'], confidence: number
   risks: [],
   disclaimers: [...STANDARD_DISCLAIMERS],
   sourceTool: 'analyze_stock',
-  basedOn: { dataAsOf: new Date('2026-01-01T00:00:00.000Z') },
+  basedOn: {
+    dataAsOf: new Date('2026-01-01T00:00:00.000Z'),
+    strategy: {
+      strategyId: 'test-strategy',
+      strategyVersionId: 'test-version',
+      runId: 'test-run',
+      stockId: '002594.SZ',
+      accountId: TEST_ACCOUNT.id,
+      resultEvidence: [],
+      signalIds: [],
+      observationIds: [],
+      recommendationTrigger: 'run',
+    },
+  },
   validFrom: new Date('2026-01-01T00:00:00.000Z'),
   validUntil: new Date('2026-01-04T00:00:00.000Z'),
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -30,13 +45,11 @@ const seedTwo = (): Advice[] => [
 describe('get_advice_stats', () => {
   it('正常路径：总数 / 平均信心度 / outcome 比例 / 命中率 / 按决策分解', async () => {
     const ctx = await buildTestContext({ advices: seedTwo() });
-    await ctx.repos.advice.recordOutcome('stats-s1', {
-      adviceId: 'stats-s1',
-      tradeIds: [],
-      outcome: 'followed',
-      pnl: money(500),
-      recordedAt: new Date('2026-01-05T00:00:00.000Z'),
-    });
+    const recorded = await recordAdviceOutcomeTool.execute(
+      { adviceId: 'stats-s1', outcome: 'followed', pnl: 500 },
+      ctx,
+    );
+    expect(recorded.ok).toBe(true);
 
     const result = await getAdviceStatsTool.execute({}, ctx);
     expect(result.ok).toBe(true);
@@ -48,8 +61,8 @@ describe('get_advice_stats', () => {
     expect(stats.outcomeRate.followed).toBe(0.5);
     expect(stats.outcomeRate.partiallyFollowed).toBe(0);
     expect(stats.outcomeRate.ignored).toBe(0);
-    expect(stats.pnlWhenFollowed).toBe(500);
-    expect(stats.pnlWhenIgnored).toBe(0);
+    expect(stats.pnlWhenFollowed).toBeNull();
+    expect(stats.pnlWhenIgnored).toBeNull();
     // confidence 80 >= 70 且 followed 且 pnl > 0 → 命中。
     expect(stats.hitRate).toBe(1);
 
@@ -68,11 +81,11 @@ describe('get_advice_stats', () => {
     if (!result.ok) return;
     expect(result.data.totalAdvices).toBe(0);
     expect(result.data.avgConfidence).toBe(0);
-    expect(result.data.hitRate).toBe(0);
+    expect(result.data.hitRate).toBeNull();
     expect(result.data.byDecision.buy?.totalAdvices).toBe(0);
   });
 
-  it('AdviceRepository 正式 outcome 查询契约可直接用于统计', async () => {
+  it('账户统计不读取 AdviceRepository 的旧全局 outcome', async () => {
     const mockCtx = await buildTestContext({ advices: seedTwo() });
     const base = mockCtx.repos.advice;
     // 只通过 AdviceRepository 正式接口转发，不依赖具体 DB 实现的额外方法。
@@ -98,7 +111,7 @@ describe('get_advice_stats', () => {
     if (!result.ok) return;
     expect(result.data.totalAdvices).toBe(2);
     expect(result.data.outcomeRate.followed).toBe(0);
-    expect(result.data.hitRate).toBe(0);
+    expect(result.data.hitRate).toBeNull();
   });
 
   it('错误路径：非法 since → invalid_input', async () => {

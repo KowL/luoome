@@ -1,16 +1,14 @@
-import {
-  type Advice,
-  type AdviceOutcome,
-  AdviceSubjectKindSchema,
-  type Money,
-  MoneySchema,
-  money,
-} from '@luoome/core';
+import { type Advice, type AdviceOutcome, AdviceSubjectKindSchema } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool } from '../define-tool.js';
+import { defineTool, errNotFound } from '../define-tool.js';
+import {
+  accountAdviceOutcomes,
+  accountScopedAdvices,
+} from '../internal/account-advice-outcomes.js';
 
 export const GetConfidenceCalibrationInput = z.object({
+  accountId: z.string().min(1).optional(),
   subjectKind: AdviceSubjectKindSchema.optional(),
   /** ISO 日期时间字符串；按 createdAt 过滤（闭区间下界）。 */
   since: z.coerce.date().optional(),
@@ -33,16 +31,19 @@ const CalibrationBucketSchema = z.object({
   total: z.number().int().nonnegative(),
   withOutcome: z.number().int().nonnegative(),
   hits: z.number().int().nonnegative(),
-  hitRate: z.number().min(0).max(1),
-  avgPnl: MoneySchema,
+  followedWithPnl: z.number().int().nonnegative(),
+  hitRate: z.number().min(0).max(1).nullable(),
+  avgPnl: z.null(),
   avgConfidence: z.number().min(0).max(100),
 });
 
 export const GetConfidenceCalibrationOutput = z.object({
+  schemaVersion: z.literal(2),
   buckets: z.array(CalibrationBucketSchema),
   totalAdvices: z.number().int().nonnegative(),
   totalWithOutcome: z.number().int().nonnegative(),
-  overallHitRate: z.number().min(0).max(1),
+  overallHitRate: z.number().min(0).max(1).nullable(),
+  followedWithPnl: z.number().int().nonnegative(),
   calibratedAt: z.coerce.date(),
 });
 
@@ -77,8 +78,6 @@ const bucketIndexOf = (confidence: number): number => {
   return Math.max(0, idx);
 };
 
-const zeroMoney = (): Money => money(0);
-
 const computeBuckets = (
   advices: readonly Advice[],
   outcomes: ReadonlyMap<string, AdviceOutcome>,
@@ -87,13 +86,13 @@ const computeBuckets = (
     total: number;
     withOutcome: number;
     hits: number;
-    pnlSum: number;
+    followedWithPnl: number;
     confidenceSum: number;
   }> = BUCKET_LABELS.map(() => ({
     total: 0,
     withOutcome: 0,
     hits: 0,
-    pnlSum: 0,
+    followedWithPnl: 0,
     confidenceSum: 0,
   }));
 
@@ -106,22 +105,28 @@ const computeBuckets = (
     const outcome = outcomes.get(advice.id);
     if (outcome === undefined) continue;
     bucket.withOutcome += 1;
-    if (outcome.pnl !== undefined) bucket.pnlSum += outcome.pnl;
-    if (outcome.outcome === 'followed' && outcome.pnl !== undefined && outcome.pnl > 0) {
-      bucket.hits += 1;
+    if (outcome.outcome === 'followed' && outcome.pnl !== undefined) {
+      bucket.followedWithPnl += 1;
+      if (outcome.pnl > 0) bucket.hits += 1;
     }
   }
 
   return BUCKET_LABELS.map((label, i) => {
-    const agg = buckets[i] ?? { total: 0, withOutcome: 0, hits: 0, pnlSum: 0, confidenceSum: 0 };
-    const avgPnl = agg.withOutcome === 0 ? zeroMoney() : ((agg.pnlSum / agg.withOutcome) as Money);
+    const agg = buckets[i] ?? {
+      total: 0,
+      withOutcome: 0,
+      hits: 0,
+      followedWithPnl: 0,
+      confidenceSum: 0,
+    };
     return {
       range: label,
       total: agg.total,
       withOutcome: agg.withOutcome,
       hits: agg.hits,
-      hitRate: agg.withOutcome === 0 ? 0 : agg.hits / agg.withOutcome,
-      avgPnl,
+      followedWithPnl: agg.followedWithPnl,
+      hitRate: agg.followedWithPnl === 0 ? null : agg.hits / agg.followedWithPnl,
+      avgPnl: null,
       avgConfidence: agg.total === 0 ? 0 : Math.round((agg.confidenceSum / agg.total) * 100) / 100,
     };
   });
@@ -144,28 +149,35 @@ export const getConfidenceCalibrationTool = defineTool({
   input: GetConfidenceCalibrationInput,
   output: GetConfidenceCalibrationOutput,
   handler: async (input, ctx) => {
-    const advices = await ctx.repos.advice.query({
-      ...(input.subjectKind !== undefined ? { subjectKind: input.subjectKind } : {}),
-      ...(input.since !== undefined ? { since: input.since } : {}),
-      ...(input.until !== undefined ? { until: input.until } : {}),
-      includeExpired: true,
-    });
+    const accountId = input.accountId ?? ctx.user.defaultAccountId;
+    if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
+      return errNotFound('Account', accountId);
+    const advices = await accountScopedAdvices(
+      ctx,
+      accountId,
+      await ctx.repos.advice.query({
+        ...(input.subjectKind !== undefined ? { subjectKind: input.subjectKind } : {}),
+        ...(input.since !== undefined ? { since: input.since } : {}),
+        ...(input.until !== undefined ? { until: input.until } : {}),
+        includeExpired: true,
+      }),
+    );
 
-    const outcomes = new Map<string, AdviceOutcome>();
-    for (const outcome of await ctx.repos.advice.listOutcomes()) {
-      outcomes.set(outcome.adviceId, outcome);
-    }
+    const outcomes = await accountAdviceOutcomes(ctx, accountId);
 
     const buckets = computeBuckets(advices, outcomes);
     const totalAdvices = advices.length;
-    const totalWithOutcome = outcomes.size;
+    const totalWithOutcome = advices.filter((advice) => outcomes.has(advice.id)).length;
+    const followedWithPnl = buckets.reduce((sum, bucket) => sum + bucket.followedWithPnl, 0);
     let overallHits = 0;
     for (const b of buckets) overallHits += b.hits;
     return {
+      schemaVersion: 2 as const,
       buckets,
       totalAdvices,
       totalWithOutcome,
-      overallHitRate: totalWithOutcome === 0 ? 0 : overallHits / totalWithOutcome,
+      overallHitRate: followedWithPnl === 0 ? null : overallHits / followedWithPnl,
+      followedWithPnl,
       calibratedAt: ctx.clock(),
     };
   },

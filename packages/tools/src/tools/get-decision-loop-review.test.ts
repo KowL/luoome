@@ -1,9 +1,10 @@
 import { TEST_ACCOUNT, TEST_ACCOUNT_LONGTERM, TEST_TRADES } from '@luoome/adapters/testing';
-import { money, type Trade } from '@luoome/core';
+import type { Trade } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import { getDecisionLoopReviewTool } from './get-decision-loop-review.js';
+import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const NOW = new Date('2026-08-01T00:00:00.000Z');
 
@@ -60,20 +61,31 @@ describe('get_decision_loop_review', () => {
       })
     )[0];
     if (advice === undefined) throw new Error('test advice missing');
-
-    await ctx.repos.advice.recordOutcome(advice.id, {
-      adviceId: advice.id,
-      tradeIds: [TEST_TRADES[0]?.id ?? 'test-trade-0001'],
-      outcome: 'followed',
-      pnl: money(120),
-      recordedAt: NOW,
+    const sourceAt = new Date('2026-05-05T00:00:00.000Z');
+    await ctx.repos.advice.save({
+      ...advice,
+      basedOn: { ...advice.basedOn, dataAsOf: sourceAt },
+      validFrom: sourceAt,
+      createdAt: sourceAt,
     });
+
     await ctx.repos.trade.save({
       ...(TEST_TRADES[0] as Trade),
       adviceId: advice.id,
       researchHypothesisVersionId: 'hypothesis_review',
       strategyVersionId: 'review-strategy-v1',
     });
+    const outcome = await recordAdviceOutcomeTool.execute(
+      {
+        adviceId: advice.id,
+        accountId: TEST_ACCOUNT.id,
+        outcome: 'followed',
+        tradeIds: [TEST_TRADES[0]?.id ?? 'test-trade-0001'],
+        pnl: 120,
+      },
+      ctx,
+    );
+    expect(outcome).toEqual(expect.objectContaining({ ok: true }));
     await ctx.repos.researchHypothesisVersion.create({
       id: 'hypothesis_review',
       topicId: 'topic_review',

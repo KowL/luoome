@@ -6,9 +6,14 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool } from '../define-tool.js';
+import { defineTool, errNotFound } from '../define-tool.js';
+import {
+  accountAdviceOutcomes,
+  attachAccountAdviceOutcomes,
+} from '../internal/account-advice-outcomes.js';
 
 export const GetAdviceInput = z.object({
+  accountId: z.string().min(1).optional(),
   subjectKind: AdviceSubjectKindSchema.optional(),
   subjectId: z.string().min(1).optional(),
   decision: AdviceDecisionSchema.optional(),
@@ -34,6 +39,9 @@ export const getAdviceTool = defineTool({
   input: GetAdviceInput,
   output: GetAdviceOutput,
   handler: async (input, ctx) => {
+    const accountId = input.accountId ?? ctx.user.defaultAccountId;
+    if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
+      return errNotFound('Account', accountId);
     const filter: AdviceQuery = {
       ...(input.subjectKind !== undefined ? { subjectKind: input.subjectKind } : {}),
       ...(input.subjectId !== undefined ? { subjectId: input.subjectId } : {}),
@@ -44,7 +52,9 @@ export const getAdviceTool = defineTool({
       includeExpired: input.includeExpired,
       limit: input.limit,
     };
-    const advices = await ctx.repos.advice.query(filter);
+    const raw = await ctx.repos.advice.query(filter);
+    const outcomes = await accountAdviceOutcomes(ctx, accountId);
+    const advices = attachAccountAdviceOutcomes(raw, outcomes);
     // core Advice 的数组字段是 readonly，经 schema parse 得到输出类型（运行时零改动）。
     return { advices: z.array(AdviceSchema).parse(advices), total: advices.length };
   },

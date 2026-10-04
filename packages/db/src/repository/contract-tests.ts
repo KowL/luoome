@@ -5441,6 +5441,42 @@ export const registerRepositoryContractTests = (
         await expect(repos.report.remove(original.id)).rejects.toThrow(/has supplements/);
       });
 
+      it('同周期周报保留不可变主版和补充版', async () => {
+        const weekly = makeReport('weekly-original', {
+          kind: 'weekly',
+          periodStart: '2026-06-29',
+          periodEnd: '2026-07-02',
+          title: '原周报',
+        });
+        const original = await repos.report.upsertForPeriod(weekly);
+        const attemptedOverwrite = await repos.report.upsertForPeriod({
+          ...weekly,
+          id: 'weekly-overwrite',
+          title: '不应覆盖',
+        });
+        expect(attemptedOverwrite.id).toBe(original.id);
+        expect((await repos.report.findById(original.id))?.title).toBe('原周报');
+        const supplement = await repos.report.upsertForPeriod({
+          ...weekly,
+          id: 'weekly-supplement',
+          version: 2,
+          supersedesReportId: original.id,
+          title: '周报补充',
+        });
+        expect(supplement.version).toBe(2);
+        expect((await repos.report.findById(original.id))?.title).toBe('原周报');
+        expect(
+          (
+            await repos.report.findByPeriod({
+              kind: 'weekly',
+              scopeKey: 'all-accounts',
+              periodStart: '2026-06-29',
+              periodEnd: '2026-07-02',
+            })
+          )?.id,
+        ).toBe(supplement.id);
+      });
+
       it('并发写入同一收盘版本只保留一份主报告', async () => {
         const [first, second] = await Promise.all([
           repos.report.upsertForPeriod(makeReport('concurrent-first')),

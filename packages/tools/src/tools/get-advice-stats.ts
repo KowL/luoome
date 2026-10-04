@@ -4,16 +4,17 @@ import {
   AdviceDecisionSchema,
   type AdviceOutcome,
   AdviceSubjectKindSchema,
-  addMoney,
-  type Money,
-  MoneySchema,
-  money,
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool } from '../define-tool.js';
+import { defineTool, errNotFound } from '../define-tool.js';
+import {
+  accountAdviceOutcomes,
+  accountScopedAdvices,
+} from '../internal/account-advice-outcomes.js';
 
 export const GetAdviceStatsInput = z.object({
+  accountId: z.string().min(1).optional(),
   subjectKind: AdviceSubjectKindSchema.optional(),
   subjectId: z.string().min(1).optional(),
   /** ISO 日期时间字符串；按 createdAt 过滤（闭区间下界）。 */
@@ -29,17 +30,20 @@ export const GetAdviceStatsInput = z.object({
  * byDecision 分解（叶子不再嵌套），字段与 core AdviceStats 其余部分对齐。
  */
 const flatStatsSchema = z.object({
+  schemaVersion: z.literal(2),
   totalAdvices: z.number().int().nonnegative(),
   avgConfidence: z.number().min(0).max(100),
+  feedbackCount: z.number().int().nonnegative(),
+  followedWithPnl: z.number().int().nonnegative(),
   outcomeRate: z.object({
-    followed: z.number().min(0).max(1),
-    partiallyFollowed: z.number().min(0).max(1),
-    ignored: z.number().min(0).max(1),
+    followed: z.number().min(0).max(1).nullable(),
+    partiallyFollowed: z.number().min(0).max(1).nullable(),
+    ignored: z.number().min(0).max(1).nullable(),
   }),
-  pnlWhenFollowed: MoneySchema,
-  pnlWhenIgnored: MoneySchema,
-  /** confidence >= 70 且 followed 且 pnl > 0 的比例（分母：followed 且已记录 pnl 的条数）。 */
-  hitRate: z.number().min(0).max(1),
+  pnlWhenFollowed: z.null(),
+  pnlWhenIgnored: z.null(),
+  /** 用户明确 followed 且填写 pnl 的样本中盈利比例。 */
+  hitRate: z.number().min(0).max(1).nullable(),
 });
 
 export const GetAdviceStatsOutput = flatStatsSchema.extend({
@@ -61,8 +65,6 @@ const computeFlatStats = (
   let followed = 0;
   let partiallyFollowed = 0;
   let ignored = 0;
-  let pnlWhenFollowed: Money = money(0);
-  let pnlWhenIgnored: Money = money(0);
   let followedWithPnl = 0;
   let hits = 0;
 
@@ -75,27 +77,28 @@ const computeFlatStats = (
 
     if (outcome.pnl === undefined) continue;
     if (outcome.outcome === 'followed') {
-      pnlWhenFollowed = addMoney(pnlWhenFollowed, outcome.pnl);
       followedWithPnl += 1;
-      if (advice.confidence >= 70 && outcome.pnl > 0) hits += 1;
-    } else if (outcome.outcome === 'ignored') {
-      pnlWhenIgnored = addMoney(pnlWhenIgnored, outcome.pnl);
+      if (outcome.pnl > 0) hits += 1;
     }
   }
 
-  const rate = (n: number): number => (totalAdvices === 0 ? 0 : n / totalAdvices);
+  const feedbackCount = followed + partiallyFollowed + ignored;
+  const rate = (n: number): number | null => (totalAdvices === 0 ? null : n / totalAdvices);
 
   return {
+    schemaVersion: 2,
     totalAdvices,
     avgConfidence,
+    feedbackCount,
+    followedWithPnl,
     outcomeRate: {
       followed: rate(followed),
       partiallyFollowed: rate(partiallyFollowed),
       ignored: rate(ignored),
     },
-    pnlWhenFollowed,
-    pnlWhenIgnored,
-    hitRate: followedWithPnl === 0 ? 0 : hits / followedWithPnl,
+    pnlWhenFollowed: null,
+    pnlWhenIgnored: null,
+    hitRate: followedWithPnl === 0 ? null : hits / followedWithPnl,
   };
 };
 
@@ -126,19 +129,23 @@ export const getAdviceStatsTool = defineTool({
   input: GetAdviceStatsInput,
   output: GetAdviceStatsOutput,
   handler: async (input, ctx) => {
-    const advices = await ctx.repos.advice.query({
-      ...(input.subjectKind !== undefined ? { subjectKind: input.subjectKind } : {}),
-      ...(input.subjectId !== undefined ? { subjectId: input.subjectId } : {}),
-      ...(input.since !== undefined ? { since: input.since } : {}),
-      ...(input.until !== undefined ? { until: input.until } : {}),
-      // 统计复盘不应被有效期截断（ARCHITECTURE §6.4），固定包含过期 advice。
-      includeExpired: true,
-    });
+    const accountId = input.accountId ?? ctx.user.defaultAccountId;
+    if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
+      return errNotFound('Account', accountId);
+    const advices = await accountScopedAdvices(
+      ctx,
+      accountId,
+      await ctx.repos.advice.query({
+        ...(input.subjectKind !== undefined ? { subjectKind: input.subjectKind } : {}),
+        ...(input.subjectId !== undefined ? { subjectId: input.subjectId } : {}),
+        ...(input.since !== undefined ? { since: input.since } : {}),
+        ...(input.until !== undefined ? { until: input.until } : {}),
+        // 统计复盘不应被有效期截断（ARCHITECTURE §6.4），固定包含过期 advice。
+        includeExpired: true,
+      }),
+    );
 
-    const outcomes = new Map<string, AdviceOutcome>();
-    for (const outcome of await ctx.repos.advice.listOutcomes()) {
-      outcomes.set(outcome.adviceId, outcome);
-    }
+    const outcomes = await accountAdviceOutcomes(ctx, accountId);
 
     return { ...computeFlatStats(advices, outcomes), byDecision: byDecisionOf(advices, outcomes) };
   },

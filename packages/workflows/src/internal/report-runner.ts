@@ -53,6 +53,8 @@ const deliverClaimedReport = async (
   readonly failed: boolean;
   readonly errorKind?: string;
 }> => {
+  if (report.notificationPolicy === 'never')
+    return { report, notified: false, failed: true, errorKind: 'notification_forbidden' };
   let status: 'sent' | 'fallback-log' | 'failed' = 'failed';
   let errorKind: string | undefined;
   const rendered = await ctx.tools.render_report.execute({
@@ -99,7 +101,7 @@ export const executeReportWorkflow = async (
 ): Promise<ReportRunResult | ToolResult<never>> => {
   const generatedAt = ctx.clock();
   let previousReport: Report | undefined;
-  if (input.kind === 'closing' || input.mode === 'scheduled') {
+  if (input.kind === 'closing' || input.kind === 'weekly' || input.mode === 'scheduled') {
     const existing = await ctx.tools.get_report.execute({
       kind: input.kind,
       scope: input.scope,
@@ -112,13 +114,29 @@ export const executeReportWorkflow = async (
       input.mode === 'scheduled' &&
       ((input.kind === 'closing' && !input.supplement) ||
         (input.kind !== 'closing' &&
+          input.kind !== 'weekly' &&
           (previousReport.deliveryStatus === 'sent' ||
             previousReport.deliveryStatus === 'fallback-log')))
     ) {
-      if (input.kind === 'closing' && input.notify && previousReport.deliveryStatus !== 'sent') {
+      if (input.kind === 'closing' && input.notify) {
+        const main = await ctx.tools.get_report.execute({
+          kind: input.kind,
+          scope: input.scope,
+          periodEnd: input.periodEnd,
+          version: 1,
+        });
+        if (!main.ok) return main;
+        const deliverable = main.data.report;
+        if (deliverable.deliveryStatus === 'sent' || deliverable.notificationPolicy === 'never')
+          return {
+            report: previousReport,
+            created: false,
+            workflowRunId: previousReport.workflowRunId,
+            notified: false,
+          };
         const attemptId = randomUUID();
         const claim = await ctx.tools.save_report.execute({
-          report: previousReport,
+          report: deliverable,
           deliveryAttemptId: attemptId,
         });
         if (!claim.ok) return claim;
@@ -182,6 +200,106 @@ export const executeReportWorkflow = async (
     return { ok: false, error: { kind: 'internal', cause: message } };
   }
 
+  let decisionReviewSnapshot: Report['decisionReviewSnapshot'];
+  if (
+    input.scope.kind === 'account' &&
+    (input.kind === 'closing' || input.kind === 'weekly') &&
+    input.template !== 'closing-historical-gap-v1'
+  ) {
+    const snapshot = await ctx.tools.get_decision_review_snapshot.execute({
+      accountId: input.scope.accountId,
+      periodStart: input.periodStart,
+      periodEnd: input.periodEnd,
+    });
+    if (!snapshot.ok) return snapshot;
+    decisionReviewSnapshot = snapshot.data.snapshot;
+    const since = new Date(`${input.periodStart}T00:00:00.000+08:00`);
+    const until = new Date(`${input.periodEnd}T23:59:59.999+08:00`);
+    const review = await ctx.tools.get_decision_loop_review.execute({
+      accountId: input.scope.accountId,
+      since,
+      until,
+      limit: 1000,
+    });
+    const evidenceId = `decision-review:${decisionReviewSnapshot.inputFingerprint}`;
+    pieces = [
+      ...pieces,
+      {
+        section: {
+          key: 'decision-review',
+          title: '账户决策与复盘',
+          required: false,
+          status: review.ok ? 'complete' : 'unavailable',
+          dataAsOf: generatedAt,
+          blocks: review.ok
+            ? [
+                {
+                  kind: 'metrics',
+                  items: [
+                    {
+                      key: 'decisionRecords',
+                      label: '明确复盘记录',
+                      value: review.data.decisionRecords.total,
+                    },
+                    {
+                      key: 'linkedTrades',
+                      label: '明确关联成交',
+                      value: review.data.decisionRecords.linkedTrades,
+                    },
+                    {
+                      key: 'pendingAdvice',
+                      label: '待核对建议',
+                      value: review.data.advice.pending,
+                    },
+                    {
+                      key: 'triggerFeedback',
+                      label: '提醒反馈',
+                      value: review.data.decisionRecords.triggerFeedbackCount,
+                    },
+                  ],
+                },
+                {
+                  kind: 'text',
+                  tone: 'factual',
+                  text: '以上为用户明确记录的账户事实；未知盈亏不计为零，不从提醒推断成交。',
+                },
+              ]
+            : [
+                {
+                  kind: 'text',
+                  tone: 'warning',
+                  text: '账户复盘读取失败，历史报告仍保留已有区块。',
+                },
+              ],
+          evidenceIds: review.ok ? [evidenceId] : [],
+          missingDimensions: review.ok
+            ? []
+            : [
+                {
+                  dimension: 'decision-review',
+                  reason: '账户复盘读取失败',
+                  errorKind: review.error.kind,
+                  retryable: true,
+                },
+              ],
+        },
+        evidence: review.ok
+          ? [
+              {
+                id: evidenceId,
+                dimension: 'decision-review',
+                provenance: {
+                  provider: 'local/decision-review',
+                  observedAt: generatedAt,
+                  fetchedAt: generatedAt,
+                  freshness: 'fresh',
+                },
+              },
+            ]
+          : [],
+      },
+    ];
+  }
   const sections = pieces.map((piece) => piece.section);
   const evidence = pieces.flatMap((piece) => piece.evidence);
   const missingDimensions = sections.flatMap((section) => section.missingDimensions);
@@ -195,7 +313,7 @@ export const executeReportWorkflow = async (
     : ('partial' as const);
   const report: Report = {
     id: `report-${input.kind}-${randomUUID()}`,
-    ...(input.kind === 'closing'
+    ...(input.kind === 'closing' || input.kind === 'weekly'
       ? {
           version: (previousReport?.version ?? 0) + 1,
           ...(previousReport === undefined ? {} : { supersedesReportId: previousReport.id }),
@@ -206,7 +324,7 @@ export const executeReportWorkflow = async (
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
     title:
-      input.kind === 'closing' && previousReport !== undefined
+      (input.kind === 'closing' || input.kind === 'weekly') && previousReport !== undefined
         ? `${input.title}（补充 v${(previousReport.version ?? 1) + 1}）`
         : input.title,
     generatedAt,
@@ -216,11 +334,52 @@ export const executeReportWorkflow = async (
     evidence: [...evidence],
     missingDimensions,
     deliveryStatus: 'not-requested',
+    notificationPolicy: 'eligible',
+    ...(decisionReviewSnapshot === undefined ? {} : { decisionReviewSnapshot }),
     workflowRunId,
     createdAt: generatedAt,
     updatedAt: generatedAt,
   };
-  const saved = await ctx.tools.save_report.execute({ report });
+  const comparableSections = (value: Report) =>
+    value.sections.map(({ dataAsOf: _dataAsOf, ...section }) => section);
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === 'object' && !(value instanceof Date)
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([key, nested]) => [key, canonical(nested)]),
+          )
+        : value;
+  const unchangedWeekly =
+    input.kind === 'weekly' &&
+    previousReport !== undefined &&
+    JSON.stringify(
+      canonical({
+        sections: comparableSections(previousReport),
+        evidenceIds: previousReport.evidence.map((item) => item.id),
+        missingDimensions: previousReport.missingDimensions,
+      }),
+    ) ===
+      JSON.stringify(
+        canonical({
+          sections: comparableSections(report),
+          evidenceIds: report.evidence.map((item) => item.id),
+          missingDimensions: report.missingDimensions,
+        }),
+      );
+  const reviewChangedWeeklySupplement =
+    input.kind === 'weekly' &&
+    previousReport !== undefined &&
+    previousReport.decisionReviewSnapshot?.inputFingerprint !==
+      report.decisionReviewSnapshot?.inputFingerprint;
+  const reportToSave: Report = reviewChangedWeeklySupplement
+    ? { ...report, notificationPolicy: 'never' }
+    : report;
+  const saved = await ctx.tools.save_report.execute({
+    report: unchangedWeekly && previousReport !== undefined ? previousReport : reportToSave,
+  });
   if (!saved.ok) {
     await ctx.tools.record_workflow_run.execute({
       run: {
@@ -238,7 +397,11 @@ export const executeReportWorkflow = async (
     return saved;
   }
 
-  if (input.kind === 'closing' && !saved.data.created && !input.notify) {
+  if (
+    (input.kind === 'closing' || input.kind === 'weekly') &&
+    !saved.data.created &&
+    !input.notify
+  ) {
     const audited = await ctx.tools.record_workflow_run.execute({
       run: {
         id: workflowRunId,
@@ -265,9 +428,12 @@ export const executeReportWorkflow = async (
   let deliveredReport = saved.data.report;
   const shouldNotify =
     input.notify &&
-    (!input.supplement ||
-      (previousReport !== undefined &&
-        input.shouldNotifySupplement?.(previousReport, deliveredReport) === true));
+    deliveredReport.notificationPolicy !== 'never' &&
+    (deliveredReport.id === previousReport?.id
+      ? deliveredReport.deliveryStatus !== 'sent'
+      : (!input.supplement && (input.kind !== 'weekly' || previousReport === undefined)) ||
+        (previousReport !== undefined &&
+          input.shouldNotifySupplement?.(previousReport, deliveredReport) === true));
   let notified = false;
   let notificationFailed = false;
   let notificationErrorKind: string | undefined;

@@ -27,10 +27,10 @@ describe('tool/record_advice_outcome', () => {
       reasoning: { premise: '等待结果', evidence: ['e'], counterEvidence: [] },
       risks: ['r'],
       disclaimers: [...STANDARD_DISCLAIMERS],
-      basedOn: { dataAsOf: new Date() },
-      validFrom: new Date(),
-      validUntil: new Date(Date.now() + 86_400_000),
-      createdAt: new Date(),
+      basedOn: { dataAsOf: new Date('2026-04-01T00:00:00Z') },
+      validFrom: new Date('2026-04-01T00:00:00Z'),
+      validUntil: new Date('2026-05-10T00:00:00Z'),
+      createdAt: new Date('2026-04-01T00:00:00Z'),
     };
     await ctx.repos.advice.save(advice);
 
@@ -42,7 +42,15 @@ describe('tool/record_advice_outcome', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.outcome.pnl).toBeUndefined();
-    expect((await ctx.repos.advice.findOutcome(advice.id))?.pnl).toBeUndefined();
+    expect(await ctx.repos.advice.findOutcome(advice.id)).toBeNull();
+    expect(
+      (
+        await ctx.repos.decisionReview.findBySubject({
+          accountId: ctx.user.defaultAccountId,
+          subject: { kind: 'advice', id: advice.id },
+        })
+      )?.revision.content.adviceFeedback?.pnl,
+    ).toBeUndefined();
   });
 
   it('advice 存在 + 关联交易 → outcome 字段完整落库', async () => {
@@ -59,10 +67,10 @@ describe('tool/record_advice_outcome', () => {
       risks: ['r'],
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'analyze_stock',
-      basedOn: { dataAsOf: new Date() },
-      validFrom: new Date(),
-      validUntil: new Date(Date.now() + 86400000),
-      createdAt: new Date(),
+      basedOn: { dataAsOf: new Date('2026-04-01T00:00:00Z') },
+      validFrom: new Date('2026-04-01T00:00:00Z'),
+      validUntil: new Date('2026-05-10T00:00:00Z'),
+      createdAt: new Date('2026-04-01T00:00:00Z'),
     };
     await ctx.repos.advice.save(adv);
 
@@ -102,10 +110,10 @@ describe('tool/record_advice_outcome', () => {
       risks: ['r'],
       disclaimers: [...STANDARD_DISCLAIMERS],
       sourceTool: 'analyze_stock',
-      basedOn: { dataAsOf: new Date() },
-      validFrom: new Date(),
-      validUntil: new Date(Date.now() + 86400000),
-      createdAt: new Date(),
+      basedOn: { dataAsOf: new Date('2026-04-01T00:00:00Z') },
+      validFrom: new Date('2026-04-01T00:00:00Z'),
+      validUntil: new Date('2026-05-10T00:00:00Z'),
+      createdAt: new Date('2026-04-01T00:00:00Z'),
     };
     await ctx.repos.advice.save(advice);
 
@@ -136,7 +144,7 @@ describe('tool/record_advice_outcome', () => {
         ctx,
       );
       expect(foreign.ok).toBe(false);
-      if (!foreign.ok) expect(foreign.error.kind).toBe('invalid_input');
+      if (!foreign.ok) expect(foreign.error.kind).toBe('permission_denied');
     }
   });
 });

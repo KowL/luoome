@@ -28,6 +28,8 @@ export const setReportDeliveryStatusTool = defineTool({
   handler: async (input, ctx) => {
     const report = await ctx.repos.report.findById(input.reportId);
     if (report === null) return errNotFound('Report', input.reportId);
+    if (report.notificationPolicy === 'never' && input.deliveryStatus !== 'not-requested')
+      return errInvalidInput('此报告禁止通知投递');
     if (input.attemptId !== undefined) {
       const status = input.deliveryStatus;
       if (status !== 'sent' && status !== 'fallback-log' && status !== 'failed') {

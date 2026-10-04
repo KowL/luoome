@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import { getStrategyDecisionCyclesTool } from './get-strategy-decision-cycles.js';
+import { recordAdviceOutcomeTool } from './record-advice-outcome.js';
 
 const NOW = new Date('2026-08-08T10:00:00.000Z');
 const STRATEGY_ID = 'cycle-strategy';
@@ -208,13 +209,6 @@ const seedAdviceAndTrades = async (ctx: Awaited<ReturnType<typeof buildTestConte
     validUntil: new Date('2026-08-12T10:00:00.000Z'),
     createdAt: NOW,
   });
-  await ctx.repos.advice.recordOutcome(adviceId, {
-    adviceId,
-    tradeIds: ['cycle-trade-explicit'],
-    outcome: 'followed',
-    pnl: money(120),
-    recordedAt: NOW,
-  });
   await ctx.repos.trade.save({
     id: 'cycle-trade-explicit',
     accountId: ctx.user.defaultAccountId,
@@ -229,6 +223,14 @@ const seedAdviceAndTrades = async (ctx: Awaited<ReturnType<typeof buildTestConte
     strategyVersionId: VERSION_ID,
     createdAt: NOW,
   });
+  expect(
+    (
+      await recordAdviceOutcomeTool.execute(
+        { adviceId, outcome: 'followed', tradeIds: ['cycle-trade-explicit'], pnl: 120 },
+        ctx,
+      )
+    ).ok,
+  ).toBe(true);
   await ctx.repos.trade.save({
     id: 'cycle-trade-version-only',
     accountId: ctx.user.defaultAccountId,
@@ -272,11 +274,10 @@ describe('get_strategy_decision_cycles', () => {
     });
     expect(cycle?.trades.map((trade) => trade.id)).toEqual(['cycle-trade-explicit']);
     expect(cycle?.tradeLinks).toEqual([
-      { tradeId: 'cycle-trade-explicit', adviceId: 'cycle-advice-1', relation: 'trade.adviceId' },
       {
         tradeId: 'cycle-trade-explicit',
         adviceId: 'cycle-advice-1',
-        relation: 'advice.outcome.tradeIds',
+        relation: 'decision-review.tradeIds',
       },
     ]);
     expect(result.data.evidenceIds).toEqual(

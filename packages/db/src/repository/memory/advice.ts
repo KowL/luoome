@@ -25,8 +25,8 @@ export class InMemoryAdviceRepository implements AdviceRepository {
   async findById(id: string): Promise<Advice | null> {
     const advice = this.items.get(id);
     if (advice === undefined) return null;
-    const outcome = await this.findOutcome(id);
-    return outcome === null ? advice : { ...advice, outcome };
+    const { outcome: _outcome, ...base } = advice;
+    return base;
   }
 
   /** 过滤语义与 Drizzle 实现逐条对齐（见 DrizzleAdviceRepository.query 注释）。 */
@@ -50,12 +50,7 @@ export class InMemoryAdviceRepository implements AdviceRepository {
       (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id),
     );
     if (filter.limit !== undefined) out = out.slice(0, filter.limit);
-    return Promise.all(
-      out.map(async (a) => {
-        const outcome = await this.findOutcome(a.id);
-        return outcome === null ? a : { ...a, outcome };
-      }),
-    );
+    return out.map(({ outcome: _outcome, ...advice }) => advice);
   }
 
   async recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void> {

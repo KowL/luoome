@@ -31,6 +31,7 @@ export const ReportSummarySchema = z.object({
   dataAsOf: z.coerce.date(),
   status: ReportStatusSchema,
   deliveryStatus: DeliveryStatusSchema,
+  notificationPolicy: z.enum(['eligible', 'never']).optional(),
 });
 
 export const ListReportsOutput = z.object({
@@ -68,6 +69,9 @@ export const listReportsTool = defineTool({
         dataAsOf: report.dataAsOf,
         status: report.status,
         deliveryStatus: report.deliveryStatus,
+        ...(report.notificationPolicy === undefined
+          ? {}
+          : { notificationPolicy: report.notificationPolicy }),
       })),
     };
   },

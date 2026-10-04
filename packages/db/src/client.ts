@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
 import {
   ledgerCoverage,
   migrateLegacyTradingPlan,
@@ -14,6 +15,8 @@ import {
   DrizzleAlertPlanRepository,
   DrizzleChatRepository,
   DrizzleDailyBarRepository,
+  DrizzleDecisionReviewRepository,
+  DrizzleDecisionTradeRepository,
   DrizzleFinancialFactRepository,
   DrizzleFundamentalScoreRunRepository,
   DrizzleFundamentalScoreVersionRepository,
@@ -74,6 +77,42 @@ const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: 
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
+    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL, stock_id TEXT, source_occurred_at INTEGER NOT NULL,
+    context_json TEXT NOT NULL, context_hash TEXT NOT NULL,
+    current_revision INTEGER NOT NULL, created_at INTEGER NOT NULL
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS decision_reviews_account_subject_unique ON decision_reviews (account_id, subject_kind, subject_id)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS decision_reviews_account_time_idx ON decision_reviews (account_id, source_occurred_at, id)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS decision_review_revisions (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT, review_id TEXT NOT NULL,
+    revision INTEGER NOT NULL, content_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL, trade_fact_hashes_json TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL, change_note TEXT
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS decision_review_revisions_review_version_unique ON decision_review_revisions (review_id, revision)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS decision_review_revisions_review_sequence_idx ON decision_review_revisions (review_id, sequence)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS decision_review_trade_links (
+    review_id TEXT NOT NULL, account_id TEXT NOT NULL, trade_id TEXT NOT NULL,
+    revision INTEGER NOT NULL, PRIMARY KEY (review_id, trade_id)
+  )`);
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS decision_review_trade_links_account_trade_idx ON decision_review_trade_links (account_id, trade_id)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS decision_write_receipts (
+    account_id TEXT NOT NULL, request_id TEXT NOT NULL, command TEXT NOT NULL,
+    request_hash TEXT NOT NULL, result_json TEXT NOT NULL, committed_at INTEGER NOT NULL,
+    PRIMARY KEY (account_id, request_id)
+  )`);
   db.run(sql`
     CREATE TABLE IF NOT EXISTS research_topic_index (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT, tags TEXT NOT NULL,
@@ -1300,6 +1339,8 @@ export const ensureSchema = (db: DrizzleDb): void => {
       evidence_json TEXT NOT NULL,
       missing_dimensions_json TEXT NOT NULL DEFAULT '[]',
       delivery_status TEXT NOT NULL DEFAULT 'not-requested',
+      notification_policy TEXT,
+      decision_review_snapshot TEXT,
       delivery_attempt_id TEXT,
       workflow_run_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
@@ -1309,6 +1350,12 @@ export const ensureSchema = (db: DrizzleDb): void => {
   ensureColumn(db, 'reports', 'version', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'reports', 'supersedes_report_id', 'TEXT');
   ensureColumn(db, 'reports', 'delivery_attempt_id', 'TEXT');
+  ensureColumn(db, 'reports', 'notification_policy', 'TEXT');
+  ensureColumn(db, 'reports', 'decision_review_snapshot', 'TEXT');
+  db.run(sql`CREATE TABLE IF NOT EXISTS report_refresh_receipts (
+    account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
+    report_id TEXT NOT NULL, PRIMARY KEY (account_id, request_id)
+  )`);
   db.run(sql`DROP INDEX IF EXISTS reports_period_unique`);
   db.run(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS reports_period_version_unique
@@ -1351,6 +1398,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   migrateLegacyTradingPlans(db);
   // 旧版把模板误播种为 builtin Strategy；升级后保留数据但转换成可编辑、可删除的用户实例。
   migrateLegacyBuiltinStrategyOwners(db);
+  migrateLegacyDecisionTradeLinks(db);
 };
 
 /**
@@ -1806,6 +1854,176 @@ const migrateLegacyTradingPlans = (db: DrizzleDb): void => {
   );
 };
 
+const migrateLegacyDecisionTradeLinks = (db: DrizzleDb): void => {
+  const migrationId = 'mvp3-legacy-explicit-trade-links-v1';
+  const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  db.transaction(
+    (tx) => {
+      const priorMigration = tx
+        .select()
+        .from(schema.schemaMigrations)
+        .where(eq(schema.schemaMigrations.id, migrationId))
+        .get();
+      const groups = new Map<
+        string,
+        {
+          accountId: string;
+          adviceId: string;
+          stockId: string | null;
+          occurredAt: Date;
+          source: Record<string, unknown>;
+          tradeRows: (typeof schema.trades.$inferSelect)[];
+        }
+      >();
+      let missing = 0;
+      let invalid = 0;
+      for (const trade of tx.select().from(schema.trades).all()) {
+        if (trade.adviceId === null) continue;
+        const advice = tx
+          .select()
+          .from(schema.advices)
+          .where(eq(schema.advices.id, trade.adviceId))
+          .get();
+        if (advice === undefined) {
+          missing++;
+          continue;
+        }
+        let stockId: string | null = null;
+        if (advice.subjectKind === 'stock') {
+          stockId = advice.subjectId;
+          if (
+            advice.basedOn.strategy?.accountId !== undefined &&
+            advice.basedOn.strategy.accountId !== trade.accountId
+          ) {
+            invalid++;
+            continue;
+          }
+        } else if (advice.subjectKind === 'position') {
+          const holding = tx
+            .select()
+            .from(schema.holdings)
+            .where(eq(schema.holdings.id, advice.subjectId))
+            .get();
+          if (holding === undefined || holding.accountId !== trade.accountId) {
+            invalid++;
+            continue;
+          }
+          stockId = holding.stockId;
+        } else if (advice.subjectKind === 'portfolio') {
+          if (advice.subjectId !== trade.accountId) {
+            invalid++;
+            continue;
+          }
+        } else {
+          invalid++;
+          continue;
+        }
+        if (
+          (stockId !== null && trade.stockId !== stockId) ||
+          trade.executedAt < advice.createdAt
+        ) {
+          invalid++;
+          continue;
+        }
+        const key = JSON.stringify([trade.accountId, trade.adviceId]);
+        const group = groups.get(key);
+        if (group !== undefined) group.tradeRows.push(trade);
+        else
+          groups.set(key, {
+            accountId: trade.accountId,
+            adviceId: trade.adviceId,
+            stockId,
+            occurredAt: advice.createdAt,
+            source: JSON.parse(JSON.stringify(advice)),
+            tradeRows: [trade],
+          });
+      }
+      let created = 0;
+      let skippedExisting = 0;
+      for (const group of groups.values()) {
+        const old = tx
+          .select()
+          .from(schema.decisionReviews)
+          .where(
+            sql`${schema.decisionReviews.accountId} = ${group.accountId} AND ${schema.decisionReviews.subjectKind} = 'advice' AND ${schema.decisionReviews.subjectId} = ${group.adviceId}`,
+          )
+          .get();
+        if (old !== undefined) {
+          skippedExisting++;
+          continue;
+        }
+        if (group.tradeRows.length > 100) {
+          invalid += group.tradeRows.length;
+          continue;
+        }
+        const subject = { kind: 'advice' as const, id: group.adviceId };
+        const id = hash([group.accountId, subject.kind, subject.id]);
+        const capturedAt = new Date();
+        const context = {
+          schemaVersion: 1 as const,
+          capturedAt,
+          sourceDataAsOf: null,
+          captureOrigin: 'legacy-explicit-link' as const,
+          source: group.source,
+          contextHash: hash({ subject, source: group.source }),
+        };
+        const tradeIds = group.tradeRows.map((row) => row.id).sort();
+        const content = { tradeIds, adviceFeedback: null, triggerFeedback: null, note: null };
+        tx.insert(schema.decisionReviews)
+          .values({
+            id,
+            accountId: group.accountId,
+            subjectKind: 'advice',
+            subjectId: group.adviceId,
+            stockId: group.stockId,
+            sourceOccurredAt: group.occurredAt,
+            context,
+            contextHash: context.contextHash,
+            currentRevision: 1,
+            createdAt: capturedAt,
+          })
+          .run();
+        tx.insert(schema.decisionReviewRevisions)
+          .values({
+            reviewId: id,
+            revision: 1,
+            content,
+            contentHash: hash(content),
+            tradeFactHashes: Object.fromEntries(group.tradeRows.map((row) => [row.id, hash(row)])),
+            recordedAt: capturedAt,
+            changeNote: null,
+          })
+          .run();
+        for (const tradeId of tradeIds)
+          tx.insert(schema.decisionReviewTradeLinks)
+            .values({
+              reviewId: id,
+              accountId: group.accountId,
+              tradeId,
+              revision: 1,
+            })
+            .run();
+        created++;
+      }
+      if (priorMigration === undefined || created > 0) {
+        tx.insert(schema.schemaMigrations)
+          .values({
+            id: migrationId,
+            appliedAt: new Date(),
+            checksum: hash(migrationId),
+            details: { created, missing, invalid, skippedExisting },
+          })
+          .onConflictDoUpdate({
+            target: schema.schemaMigrations.id,
+            set: { appliedAt: new Date(), details: { created, missing, invalid, skippedExisting } },
+          })
+          .run();
+      }
+    },
+    { behavior: 'immediate' },
+  );
+};
+
 const migrateLegacyBuiltinStrategyOwners = (db: DrizzleDb): void => {
   const result = db.run(sql`UPDATE strategies SET owner = 'user' WHERE owner = 'builtin'`);
   const changes =
@@ -1856,6 +2074,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   const repos: RepositoryRegistry = {
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
+    decisionReview: new DrizzleDecisionReviewRepository(db),
+    decisionTrade: new DrizzleDecisionTradeRepository(db),
     stock: new DrizzleStockRepository(db),
     stockUniverse: new DrizzleStockUniverseRepository(db),
     limitUpLadderSnapshot: new DrizzleLimitUpLadderSnapshotRepository(db),

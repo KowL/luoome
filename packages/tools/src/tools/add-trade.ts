@@ -1,6 +1,8 @@
 import {
+  applyTradeToHolding,
   type Holding,
   HoldingSchema,
+  InvariantError,
   money,
   quantity,
   type Trade,
@@ -125,46 +127,11 @@ export const addTradeTool = defineTool({
     };
     const existing = await ctx.repos.holding.findByAccountAndStock(accountId, input.stockId);
     let holding: Holding;
-    if (input.side === 'buy') {
-      if (existing === null || existing.closedAt !== null) {
-        // 新开仓 / 重新开仓（复用旧行 id，(accountId, stockId) 唯一约束）
-        holding = {
-          id: existing?.id ?? manualId('holding'),
-          accountId,
-          stockId: input.stockId,
-          quantity: input.quantity,
-          availableQuantity: input.quantity,
-          avgCost: money(input.price),
-          openedAt: executedAt,
-          closedAt: null,
-        };
-      } else {
-        const totalQuantity = existing.quantity + input.quantity;
-        holding = {
-          ...existing,
-          quantity: totalQuantity,
-          availableQuantity: existing.availableQuantity + input.quantity,
-          avgCost: money(
-            (existing.quantity * existing.avgCost + input.quantity * input.price) / totalQuantity,
-          ),
-        };
-      }
-    } else {
-      if (existing === null || existing.closedAt !== null) {
-        return errInvalidInput(`无持仓可卖: ${input.stockId}`);
-      }
-      if (input.quantity > existing.availableQuantity) {
-        return errInvalidInput(
-          `可卖数量不足: 可卖 ${existing.availableQuantity}，卖出 ${input.quantity}`,
-        );
-      }
-      const remain = existing.quantity - input.quantity;
-      holding = {
-        ...existing,
-        quantity: remain,
-        availableQuantity: existing.availableQuantity - input.quantity,
-        ...(remain === 0 ? { closedAt: executedAt } : {}),
-      };
+    try {
+      holding = applyTradeToHolding(existing, trade, manualId('holding'));
+    } catch (error) {
+      if (error instanceof InvariantError) return errInvalidInput(error.message);
+      throw error;
     }
     // 先完成持仓侧的所有业务校验，避免无持仓/超卖等 invalid_input 留下孤立 Trade。
     await ensureStockStub(input.stockId, ctx, input.stockName);

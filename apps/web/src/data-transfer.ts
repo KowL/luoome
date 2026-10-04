@@ -33,6 +33,11 @@ import {
   ChatMessageSchema,
   ChatSessionSchema,
   DailyBarSchema,
+  DecisionReviewContentSchema,
+  DecisionReviewContextSchema,
+  DecisionReviewRevisionSchema,
+  DecisionReviewSchema,
+  DecisionTradeCommitResultSchema,
   HoldingCashAdjustmentSchema,
   HoldingSchema,
   LimitUpLadderSchema,
@@ -71,6 +76,7 @@ import {
   WatchTriggerSchema,
   WorkflowRunSchema,
 } from '@luoome/core';
+import { createDrizzleRepos } from '@luoome/db';
 import { z } from 'zod';
 
 export const DATA_TRANSFER_CATEGORIES = [
@@ -122,7 +128,12 @@ const CATEGORY_TABLES: Readonly<Record<DataTransferCategory, readonly string[]>>
   'advice-reports': [
     'advices',
     'advice_outcomes',
+    'decision_reviews',
+    'decision_review_revisions',
+    'decision_review_trade_links',
+    'decision_write_receipts',
     'reports',
+    'report_refresh_receipts',
     'notifications',
     'signal_observations',
     'workflow_runs',
@@ -305,6 +316,85 @@ const researchDocumentFtsSchema = z.object({
   body: z.string(),
 });
 
+const decisionReviewStorageSchema = z.object({
+  id: z.string().min(1),
+  account_id: z.string().min(1),
+  subject_kind: z.enum(['advice', 'trading-plan-version', 'watch-trigger']),
+  subject_id: z.string().min(1),
+  stock_id: z.string().nullable(),
+  source_occurred_at: z.number().int(),
+  context_json: z.string(),
+  context_hash: z.string().min(1),
+  current_revision: z.number().int().positive(),
+  created_at: z.number().int(),
+});
+const validateDecisionReviewStorageRow: DomainValidator = (row) => {
+  const parsed = decisionReviewStorageSchema.parse(row);
+  const context = DecisionReviewContextSchema.parse(JSON.parse(parsed.context_json));
+  if (context.contextHash !== parsed.context_hash) throw new Error('context_hash 与快照不一致');
+  DecisionReviewSchema.parse({
+    id: parsed.id,
+    accountId: parsed.account_id,
+    subject: { kind: parsed.subject_kind, id: parsed.subject_id },
+    stockId: parsed.stock_id,
+    sourceOccurredAt: parsed.source_occurred_at,
+    context,
+    currentRevision: parsed.current_revision,
+    createdAt: parsed.created_at,
+  });
+};
+const validateDecisionRevisionStorageRow: DomainValidator = (row) => {
+  const parsed = z
+    .object({
+      sequence: z.number().int().positive(),
+      review_id: z.string().min(1),
+      revision: z.number().int().positive(),
+      content_json: z.string(),
+      content_hash: z.string().min(1),
+      trade_fact_hashes_json: z.string(),
+      recorded_at: z.number().int(),
+      change_note: z.string().nullable(),
+    })
+    .parse(row);
+  const content = DecisionReviewContentSchema.parse(JSON.parse(parsed.content_json));
+  DecisionReviewRevisionSchema.parse({
+    reviewId: parsed.review_id,
+    revision: parsed.revision,
+    sequence: parsed.sequence,
+    content,
+    contentHash: parsed.content_hash,
+    tradeFactHashes: JSON.parse(parsed.trade_fact_hashes_json),
+    recordedAt: parsed.recorded_at,
+    changeNote: parsed.change_note,
+  });
+};
+const validateDecisionTradeLinkStorageRow: DomainValidator = (row) => {
+  z.object({
+    review_id: z.string().min(1),
+    account_id: z.string().min(1),
+    trade_id: z.string().min(1),
+    revision: z.number().int().positive(),
+  }).parse(row);
+};
+const validateDecisionReceiptStorageRow: DomainValidator = (row) => {
+  const parsed = z
+    .object({
+      account_id: z.string().min(1),
+      request_id: z.uuid(),
+      command: z.enum(['save_decision_review', 'record_decision_trade']),
+      request_hash: z.string().min(1),
+      result_json: z.string(),
+      committed_at: z.number().int(),
+    })
+    .parse(row);
+  const result: unknown = JSON.parse(parsed.result_json);
+  if (parsed.command === 'record_decision_trade') DecisionTradeCommitResultSchema.parse(result);
+  else
+    z.object({ review: DecisionReviewSchema, revision: DecisionReviewRevisionSchema }).parse(
+      result,
+    );
+};
+
 const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   accounts: domainValidator(AccountSchema, assertAccountInvariants),
   stocks: domainValidator(StockSchema, assertStockInvariants),
@@ -363,7 +453,19 @@ const TABLE_VALIDATORS: Readonly<Record<string, DomainValidator>> = {
   }),
   advices: domainValidator(AdviceSchema, assertAdviceInvariants),
   advice_outcomes: domainValidator(AdviceOutcomeSchema),
+  decision_reviews: validateDecisionReviewStorageRow,
+  decision_review_revisions: validateDecisionRevisionStorageRow,
+  decision_review_trade_links: validateDecisionTradeLinkStorageRow,
+  decision_write_receipts: validateDecisionReceiptStorageRow,
   reports: domainValidator(ReportSchema, assertReportInvariants),
+  report_refresh_receipts: (row) => {
+    z.object({
+      account_id: z.string().min(1),
+      request_id: z.uuid(),
+      request_hash: z.string().min(1),
+      report_id: z.string().min(1),
+    }).parse(row);
+  },
   notifications: domainValidator(NotificationSchema, assertNotificationInvariants),
   signal_observations: domainValidator(SignalObservationSchema, assertSignalObservationInvariants),
   workflow_runs: domainValidator(WorkflowRunSchema, assertWorkflowRunInvariants),
@@ -482,6 +584,136 @@ const parseArchive = (value: unknown): LuoomeDataArchive => {
   };
 };
 
+const DECISION_IMMUTABLE_KEYS: Readonly<Record<string, readonly (readonly string[])[]>> = {
+  decision_review_revisions: [['sequence'], ['review_id', 'revision']],
+  decision_write_receipts: [['account_id', 'request_id']],
+  report_refresh_receipts: [['account_id', 'request_id']],
+};
+
+const validateDecisionGraph = (db: Database, archive: ReturnType<typeof parseArchive>): void => {
+  const reviewIds = new Set((archive.tables.decision_reviews ?? []).map((row) => String(row.id)));
+  for (const row of archive.tables.decision_review_revisions ?? [])
+    reviewIds.add(String(row.review_id));
+  for (const row of archive.tables.decision_review_trade_links ?? [])
+    reviewIds.add(String(row.review_id));
+  for (const trade of archive.tables.trades ?? []) {
+    const affected = db
+      .query<{ review_id: string }, [string, string]>(
+        `SELECT review_id FROM decision_review_trade_links WHERE trade_id = ?
+         UNION SELECT r.review_id FROM decision_review_revisions r,
+         json_each(r.content_json, '$.tradeIds') t WHERE t.value = ?`,
+      )
+      .all(String(trade.id), String(trade.id));
+    for (const row of affected) reviewIds.add(row.review_id);
+  }
+  for (const id of reviewIds) {
+    const review = db.query('SELECT * FROM decision_reviews WHERE id = ?').get(id) as Record<
+      string,
+      unknown
+    > | null;
+    if (!review) throw new Error(`复盘修订引用不存在的主体: ${id}`);
+    const revisions = db
+      .query('SELECT * FROM decision_review_revisions WHERE review_id = ? ORDER BY revision')
+      .all(id) as Record<string, unknown>[];
+    if (
+      revisions.length !== review.current_revision ||
+      revisions.some((row, index) => row.revision !== index + 1)
+    )
+      throw new Error(`复盘修订不连续或 current_revision 不一致: ${id}`);
+    const current = revisions.at(-1);
+    if (!current) throw new Error(`复盘缺少当前修订: ${id}`);
+    const content = DecisionReviewContentSchema.parse(JSON.parse(String(current.content_json)));
+    const links = db
+      .query('SELECT * FROM decision_review_trade_links WHERE review_id = ?')
+      .all(id) as Record<string, unknown>[];
+    const linked = links.map((row) => String(row.trade_id)).sort();
+    if (JSON.stringify(linked) !== JSON.stringify([...content.tradeIds].sort()))
+      throw new Error(`复盘当前修订与成交关联不一致: ${id}`);
+    for (const link of links) {
+      const trade = db
+        .query('SELECT account_id, stock_id FROM trades WHERE id = ?')
+        .get(String(link.trade_id)) as { account_id: string; stock_id: string } | null;
+      if (
+        !trade ||
+        trade.account_id !== review.account_id ||
+        link.account_id !== review.account_id ||
+        (review.stock_id !== null && trade.stock_id !== review.stock_id) ||
+        link.revision !== review.current_revision
+      )
+        throw new Error(`复盘成交归属不一致: ${id}`);
+    }
+    for (const revision of revisions) {
+      const history = DecisionReviewContentSchema.parse(JSON.parse(String(revision.content_json)));
+      for (const tradeId of history.tradeIds) {
+        const trade = db
+          .query('SELECT account_id, stock_id FROM trades WHERE id = ?')
+          .get(tradeId) as { account_id: string; stock_id: string } | null;
+        if (
+          !trade ||
+          trade.account_id !== review.account_id ||
+          (review.stock_id !== null && trade.stock_id !== review.stock_id)
+        )
+          throw new Error(`历史复盘成交归属不一致: ${id}`);
+      }
+    }
+  }
+  const reportReceipts = [...(archive.tables.report_refresh_receipts ?? [])];
+  for (const report of archive.tables.reports ?? []) {
+    reportReceipts.push(
+      ...db
+        .query<Record<string, unknown>, [string]>(
+          'SELECT * FROM report_refresh_receipts WHERE report_id = ?',
+        )
+        .all(String(report.id)),
+    );
+  }
+  for (const row of reportReceipts) {
+    const report = db
+      .query('SELECT scope_json, notification_policy FROM reports WHERE id = ?')
+      .get(String(row.report_id)) as {
+      scope_json: string;
+      notification_policy: string | null;
+    } | null;
+    const scope =
+      report === null
+        ? null
+        : (JSON.parse(report.scope_json) as { kind: string; accountId?: string });
+    if (scope?.kind !== 'account' || scope.accountId !== row.account_id)
+      throw new Error(`报告补充回执归属不一致: ${row.request_id}`);
+  }
+  for (const row of archive.tables.decision_write_receipts ?? []) {
+    const result = JSON.parse(String(row.result_json)) as Record<string, unknown>;
+    const reviews =
+      row.command === 'save_decision_review'
+        ? [result]
+        : (result.reviews as Record<string, unknown>[]);
+    for (const item of reviews) {
+      const review = item.review as { id: string; accountId: string };
+      const revision = item.revision as { reviewId: string; revision: number };
+      if (
+        review.accountId !== row.account_id ||
+        revision.reviewId !== review.id ||
+        !db
+          .query('SELECT 1 FROM decision_review_revisions WHERE review_id = ? AND revision = ?')
+          .get(review.id, revision.revision)
+      )
+        throw new Error(`复盘回执归属或修订不存在: ${row.request_id}`);
+    }
+    if (row.command === 'record_decision_trade') {
+      const trade = result.trade as { id: string; accountId: string };
+      const account = result.account as { id: string };
+      if (
+        trade.accountId !== row.account_id ||
+        account.id !== row.account_id ||
+        !db
+          .query('SELECT 1 FROM trades WHERE id = ? AND account_id = ?')
+          .get(trade.id, row.account_id)
+      )
+        throw new Error(`成交回执归属不一致: ${row.request_id}`);
+    }
+  }
+};
+
 export const importDataArchive = (
   dbPath: string,
   value: unknown,
@@ -506,6 +738,90 @@ export const importDataArchive = (
           if (keys.length === 0 || keys.length !== Object.keys(row).length) {
             throw new Error(`表 ${table} 包含未知或空字段`);
           }
+          const immutableKeys = DECISION_IMMUTABLE_KEYS[table];
+          if (immutableKeys !== undefined) {
+            let duplicate = false;
+            for (const key of immutableKeys) {
+              const existing = db
+                .query<unknown, SQLQueryBindings[]>(
+                  `SELECT * FROM ${quoteIdentifier(table)} WHERE ${key.map((part) => `${quoteIdentifier(part)} = ?`).join(' AND ')}`,
+                )
+                .get(...key.map((part) => row[part] as string | number)) as Record<
+                string,
+                unknown
+              > | null;
+              if (existing === null) continue;
+              if (
+                Object.keys(existing).length !== Object.keys(row).length ||
+                Object.keys(existing).some((part) => existing[part] !== row[part])
+              )
+                throw new Error(`表 ${table} 已有不可变身份但内容不同`);
+              duplicate = true;
+            }
+            if (duplicate) continue;
+          }
+          if (table === 'decision_reviews') {
+            const existing = db
+              .query(`SELECT * FROM decision_reviews WHERE id = ? OR
+                (account_id = ? AND subject_kind = ? AND subject_id = ?)`)
+              .get(
+                String(row.id),
+                String(row.account_id),
+                String(row.subject_kind),
+                String(row.subject_id),
+              ) as Record<string, unknown> | null;
+            if (
+              existing !== null &&
+              (Object.keys(existing).some(
+                (part) => part !== 'current_revision' && existing[part] !== row[part],
+              ) ||
+                Number(row.current_revision) < Number(existing.current_revision))
+            )
+              throw new Error('复盘主体身份或冻结上下文与已有记录不一致');
+          }
+          if (table === 'reports') {
+            const existing = db
+              .query<Record<string, unknown>, [string, string, string, string, string, number]>(
+                `SELECT * FROM reports WHERE id = ? OR
+               (kind = ? AND scope_key = ? AND period_start = ? AND period_end = ? AND version = ?)`,
+              )
+              .get(
+                String(row.id),
+                String(row.kind),
+                String(row.scope_key),
+                String(row.period_start),
+                String(row.period_end),
+                Number(row.version ?? 1),
+              );
+            if (
+              existing !== null &&
+              (existing.kind === 'closing' ||
+                existing.kind === 'weekly' ||
+                existing.notification_policy === 'never')
+            ) {
+              const deliveryFields = new Set([
+                'delivery_status',
+                'delivery_attempt_id',
+                'updated_at',
+              ]);
+              if (
+                Object.keys(existing).some(
+                  (part) => !deliveryFields.has(part) && existing[part] !== row[part],
+                )
+              )
+                throw new Error('报告已有不可变版本但内容不同');
+              continue;
+            }
+          }
+          if (table === 'decision_review_trade_links') {
+            const existing = db
+              .query(
+                'SELECT * FROM decision_review_trade_links WHERE review_id = ? AND trade_id = ?',
+              )
+              .get(String(row.review_id), String(row.trade_id)) as Record<string, unknown> | null;
+            if (existing !== null && existing.account_id !== row.account_id)
+              throw new Error('复盘成交关联不能改写账户归属');
+          }
           const placeholders = keys.map(() => '?').join(', ');
           const sql = `INSERT OR REPLACE INTO ${quoteIdentifier(table)} (${keys.map(quoteIdentifier).join(', ')}) VALUES (${placeholders})`;
           const bindings = keys.map((key) => row[key]);
@@ -520,8 +836,10 @@ export const importDataArchive = (
         }
         counts[table] = rows.length;
       }
+      validateDecisionGraph(db, archive);
     });
     apply();
+    if (archive.tables.trades?.length) createDrizzleRepos(dbPath).close();
     return {
       imported: Object.values(counts).reduce((sum, count) => sum + count, 0),
       tables: counts,

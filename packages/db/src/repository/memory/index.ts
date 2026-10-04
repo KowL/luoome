@@ -36,6 +36,7 @@ import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
 import { InMemoryChatRepository } from './chat.js';
 import { InMemoryDailyBarRepository } from './daily-bar.js';
+import { InMemoryDecisionReviewRepository } from './decision-review.js';
 import { InMemoryFinancialFactRepository } from './financial-fact.js';
 import {
   InMemoryFundamentalScoreRunRepository,
@@ -77,6 +78,7 @@ import { InMemoryWatchRunRepository } from './watch-run.js';
 import { InMemoryWatchTriggerRepository } from './watch-trigger.js';
 import { InMemoryWatchlistMemberRepository, InMemoryWatchlistRepository } from './watchlist.js';
 import { InMemoryWorkflowRunRepository } from './workflow-run.js';
+import { MemoryWriteLock } from './write-lock.js';
 
 export { InMemoryAccountRepository } from './account.js';
 export { InMemoryAdviceRepository } from './advice.js';
@@ -172,6 +174,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   const tradingPlan = new InMemoryTradingPlanRepository(account, holding);
   const portfolioCashFlow = new InMemoryPortfolioCashFlowRepository();
   const portfolioCorporateAction = new InMemoryPortfolioCorporateActionRepository();
+  const decisionWriteLock = new MemoryWriteLock();
   const portfolioPerformanceSnapshot = new InMemoryPortfolioPerformanceSnapshotRepository();
   const advice = new InMemoryAdviceRepository();
   const report = new InMemoryReportRepository();
@@ -248,9 +251,29 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     for (const version of seed.researchHypothesisVersions ?? [])
       void researchHypothesisVersion.create(version);
   }
+  const ledger = new InMemoryLedgerRepository(
+    account,
+    trade,
+    holding,
+    portfolioCashFlow,
+    decisionWriteLock,
+  );
+  const decisionReview = new InMemoryDecisionReviewRepository(
+    trade,
+    account,
+    holding,
+    ledger,
+    portfolioCashFlow,
+    portfolioCorporateAction,
+    decisionWriteLock,
+  );
+  watchTrigger.setDecisionReviewRepository(decisionReview);
+  report.setDecisionReviewRepository(decisionReview, trade, decisionWriteLock);
   return {
     account,
-    ledger: new InMemoryLedgerRepository(account, trade, holding, portfolioCashFlow),
+    ledger,
+    decisionReview,
+    decisionTrade: decisionReview,
     stock,
     stockUniverse,
     limitUpLadderSnapshot,

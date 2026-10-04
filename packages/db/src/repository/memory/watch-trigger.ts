@@ -1,6 +1,7 @@
 import {
   ATTEMPTED_DELIVERY_STATUSES,
   assertWatchTriggerInvariants,
+  type DecisionReviewRepository,
   type DeliveryStatus,
   type TriggerFeedback,
   WatchRuleStateSchema,
@@ -18,8 +19,13 @@ const ATTEMPTED: ReadonlySet<DeliveryStatus> = new Set(ATTEMPTED_DELIVERY_STATUS
  */
 export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   private readonly items = new Map<string, WatchTrigger>();
+  private decisionReview: DecisionReviewRepository | null = null;
   private execution: { owner: string; until: Date } | undefined;
   constructor(private readonly states: InMemoryWatchRuleStateRepository) {}
+
+  setDecisionReviewRepository(repository: DecisionReviewRepository): void {
+    this.decisionReview = repository;
+  }
 
   async commitEvaluation(
     input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
@@ -132,7 +138,23 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   async query(input: Parameters<WatchTriggerRepository['query']>[0]) {
-    const filtered = [...this.items.values()].filter(
+    const projected: WatchTrigger[] =
+      input.accountId === undefined
+        ? [...this.items.values()]
+        : await Promise.all(
+            [...this.items.values()].map(async (trigger) => {
+              const current = await this.decisionReview?.findBySubject({
+                accountId: input.accountId!,
+                subject: { kind: 'watch-trigger', id: trigger.id },
+              });
+              const { feedback: _legacy, feedbackAt: _legacyAt, ...base } = trigger;
+              const feedback = current?.revision.content.triggerFeedback;
+              return feedback === null || feedback === undefined
+                ? base
+                : { ...base, feedback, feedbackAt: current!.revision.recordedAt };
+            }),
+          );
+    const filtered = projected.filter(
       (t) =>
         (input.alertPlanId === undefined || (t.alertPlanId ?? t.poolId) === input.alertPlanId) &&
         (input.poolId === undefined || t.poolId === input.poolId) &&

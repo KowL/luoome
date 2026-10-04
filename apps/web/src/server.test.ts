@@ -19,7 +19,7 @@ import type {
   SourceStatus,
   ToolContext,
 } from '@luoome/core';
-import { TradingPlanSchema } from '@luoome/core';
+import { ReportSchema, TradingPlanSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
@@ -71,6 +71,38 @@ describe('Web 信息架构', () => {
     expect(html).toContain('id="review-performance-audit-table"');
     expect(html).toContain('id="research-remote-sync-btn"');
     expect(html).toContain('仅在工作树干净且可 fast-forward 时拉取');
+  });
+});
+
+describe('决策与复盘 API 账户绑定', () => {
+  it('薄路由和通用工具路由拒绝与当前账户选择不一致的 accountId', async () => {
+    const local = createWebApp(await buildTestContext(), { exposeWrite: true });
+    const header = { 'x-luoome-account-id': TEST_ACCOUNT.id };
+    const context = await local.fetch(
+      new Request(
+        'http://test/api/decision-reviews/context?accountId=other&subjectKind=advice&subjectId=example',
+        { headers: header },
+      ),
+    );
+    expect((await json(context)).error).toMatchObject({ kind: 'permission_denied' });
+    const generic = await local.fetch(
+      new Request('http://test/api/tools/get_decision_review_context/call', {
+        method: 'POST',
+        headers: { ...header, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          input: { accountId: 'other', subject: { kind: 'advice', id: 'example' } },
+        }),
+      }),
+    );
+    expect((await json(generic)).error).toMatchObject({ kind: 'permission_denied' });
+    const trade = await local.fetch(
+      new Request('http://test/api/tools/record_decision_trade/call', {
+        method: 'POST',
+        headers: { ...header, 'content-type': 'application/json' },
+        body: JSON.stringify({ input: {} }),
+      }),
+    );
+    expect((await json(trade)).error).toMatchObject({ kind: 'permission_denied' });
   });
 });
 
@@ -545,6 +577,102 @@ describe('报告 API', () => {
     expect(notificationBody.ok).toBe(true);
     expect(notificationBody.data.content).toContain('完整报告与证据见 luoome');
     expect(notificationBody.data.content).not.toContain(`# ${report.title}`);
+  });
+
+  it('账户报告仅对本账户显示后补状态，刷新写入不可通知版本', async () => {
+    const now = new Date('2026-09-04T10:00:00.000Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const accountId = ctx.user.defaultAccountId;
+    const local = createWebApp(ctx, { exposeWrite: true });
+    const report = ReportSchema.parse({
+      id: 'web-decision-report',
+      version: 1,
+      kind: 'closing',
+      scope: { kind: 'account', accountId },
+      periodStart: '2026-09-03',
+      periodEnd: '2026-09-03',
+      title: '账户复盘',
+      generatedAt: now,
+      dataAsOf: now,
+      status: 'complete',
+      sections: [
+        {
+          key: 'original',
+          title: '原版',
+          required: true,
+          status: 'complete',
+          blocks: [{ kind: 'text', text: '旧版事实' }],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+      evidence: [],
+      missingDimensions: [],
+      deliveryStatus: 'sent',
+      workflowRunId: 'web-decision-workflow',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.repos.report.upsertForPeriod(report);
+    const status = await local.fetch(
+      new Request('http://test/api/reports/web-decision-report/decision-review-status', {
+        headers: { 'x-luoome-account-id': accountId },
+      }),
+    );
+    expect(await status.json()).toMatchObject({
+      ok: true,
+      data: {
+        canRefresh: true,
+        snapshotMissing: true,
+        latestReportId: report.id,
+      },
+    });
+    const input = {
+      expectedLatestReportId: report.id,
+      requestId: 'b5bfa5c8-e1e0-4d68-a9e3-944d667ac733',
+    };
+    const url = 'http://test/api/reports/web-decision-report/decision-review-refresh';
+    const request = () =>
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://test',
+          'x-luoome-account-id': accountId,
+        },
+        body: JSON.stringify(input),
+      });
+    const first = (await (await local.fetch(request())).json()) as {
+      ok: boolean;
+      data: { report: { id: string; notificationPolicy: string }; created: boolean };
+    };
+    expect(first).toMatchObject({
+      ok: true,
+      data: {
+        created: true,
+        report: {
+          notificationPolicy: 'never',
+        },
+      },
+    });
+    const replay = (await (await local.fetch(request())).json()) as {
+      ok: boolean;
+      data: { report: { id: string }; replayed: boolean };
+    };
+    expect(replay).toMatchObject({ ok: true, data: { replayed: true } });
+    expect(replay.data.report.id).toBe(first.data.report.id);
+    const cross = await local.fetch(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://test',
+          'x-luoome-account-id': 'another-account',
+        },
+        body: JSON.stringify(input),
+      }),
+    );
+    expect(await cross.json()).toMatchObject({ ok: false, error: { kind: 'not_found' } });
   });
 
   it('删除端点移除报告，重复删除返回 not_found', async () => {
@@ -5575,9 +5703,9 @@ describe('dashboard 数据覆盖与失败状态', () => {
     expect(body.data.metrics).toMatchObject({
       priorityCounts: { normal: 201, urgent: 1 },
       deliveryStatusCounts: { 'not-requested': 202 },
-      feedbackCounts: { useful: 29, useless: 1 },
-      feedbackTotal: 30,
-      noiseRate: 1 / 30,
+      feedbackCounts: {},
+      feedbackTotal: 0,
+      noiseRate: null,
     });
     expect(body.data.board).toEqual(
       expect.arrayContaining([
@@ -5602,11 +5730,11 @@ describe('dashboard 数据覆盖与失败状态', () => {
     const page = (await (
       await localApp.fetch(
         new Request(
-          'http://test/api/watch/triggers?offset=171&limit=20&priority=normal&feedback=unreviewed',
+          'http://test/api/watch/triggers?offset=200&limit=20&priority=normal&feedback=unreviewed',
         ),
       )
     ).json()) as { data: { total: number; triggers: unknown[] } };
-    expect(page.data.total).toBe(172);
+    expect(page.data.total).toBe(201);
     expect(page.data.triggers).toHaveLength(1);
     const stockSummary = (await (
       await localApp.fetch(new Request('http://test/api/dashboard/stocks/002594.SZ'))

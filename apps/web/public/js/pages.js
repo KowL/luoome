@@ -4,6 +4,7 @@
 'use strict';
 
 import { callApi, getAccountId } from './api.js';
+import { openDecisionReview } from './decision-review-ui.js';
 import {
   openCloseConfirm,
   openConfirmModal,
@@ -193,6 +194,10 @@ const reportDeliveryLabel = (status) =>
     'fallback-log': '仅写日志',
     'not-requested': '未请求通知',
   })[status] ?? '状态未记录';
+const reportNotificationLabel = (report) =>
+  report.notificationPolicy === 'never'
+    ? '按策略不通知'
+    : reportDeliveryLabel(report.deliveryStatus);
 
 const dashboardClosingReportNode = (report) => {
   if (report === null)
@@ -210,7 +215,7 @@ const dashboardClosingReportNode = (report) => {
     ]),
     el('div', 'dashboard-closing-meta', [
       reportStatusBadge(report.status),
-      el('span', 'muted', `通知：${reportDeliveryLabel(report.deliveryStatus)}`),
+      el('span', 'muted', `通知：${reportNotificationLabel(report)}`),
       el('span', 'muted', `生成于 ${fmtDateTime(report.generatedAt)}`),
     ]),
   ]);
@@ -242,9 +247,11 @@ const decisionLoopAttributionRate = (trades) => {
   return (trades.total - trades.unattributed) / trades.total;
 };
 
-const calibrationRateText = (rate, withOutcome) => (withOutcome === 0 ? '--' : fmtPct(rate));
+const calibrationRateText = (rate, withOutcome) =>
+  withOutcome === 0 || rate == null ? '--' : fmtPct(rate);
 
-const calibrationPnlText = (pnl, withOutcome) => (withOutcome === 0 ? '--' : fmtSigned(pnl));
+const calibrationPnlText = (pnl, withOutcome) =>
+  withOutcome === 0 || pnl == null ? '--' : fmtSigned(pnl);
 
 const formatMetricDistribution = (counts, label) => {
   const entries = Object.entries(counts ?? {});
@@ -2130,7 +2137,7 @@ const reportSheetNodes = (report, actions = []) => {
     el('div', 'report-asof', [
       el('span', null, `数据截止 ${fmtDateTime(report.dataAsOf)}`),
       el('span', null, `生成时间 ${fmtDateTime(report.generatedAt)}`),
-      el('span', null, `通知：${reportDeliveryLabel(report.deliveryStatus)}`),
+      el('span', null, `通知：${reportNotificationLabel(report)}`),
     ]),
   ];
   for (const section of report.sections) {
@@ -2218,6 +2225,70 @@ const deleteReport = async (reportId, setStatus) => {
   await renderReports(setStatus);
 };
 
+const reportReviewRefreshButton = (report, accountId, status, setStatus, onSaved) => {
+  const pendingKey = `luoome.reportReviewPending:${accountId}:${report.id}`;
+  let pending;
+  try {
+    pending = JSON.parse(sessionStorage.getItem(pendingKey) ?? 'null');
+  } catch {
+    pending = null;
+  }
+  if (!status.canRefresh && !pending) return null;
+  let uncertain = pending !== null;
+  const refresh = el(
+    'button',
+    'btn btn-outline btn-sm',
+    pending ? '重试上次复盘补充' : '生成复盘补充版',
+  );
+  refresh.type = 'button';
+  refresh.addEventListener('click', async () => {
+    if (refresh.disabled) return;
+    if (getAccountId() !== accountId) return setStatus('账户已切换，请切回原账户。', true);
+    const input = pending ?? {
+      requestId: crypto.randomUUID(),
+      expectedLatestReportId: status.latestReportId,
+    };
+    try {
+      sessionStorage.setItem(pendingKey, JSON.stringify(input));
+    } catch {
+      return setStatus('浏览器无法保存未决请求，请开启此标签页的会话存储后重试。', true);
+    }
+    pending = input;
+    refresh.disabled = true;
+    const result = await callApi(`/api/reports/${report.id}/decision-review-refresh`, {
+      method: 'POST',
+      headers: { 'x-luoome-account-id': accountId },
+      body: JSON.stringify(input),
+    });
+    refresh.disabled = false;
+    if (getAccountId() !== accountId) return;
+    if (!result.ok) {
+      if (
+        !uncertain &&
+        ['invalid_input', 'not_found', 'invariant_violation'].includes(result.error?.kind)
+      ) {
+        sessionStorage.removeItem(pendingKey);
+        pending = null;
+        refresh.disabled = true;
+        return setStatus(
+          `未生成复盘补充版：${toolErrorText(result.error)}。请重新选择最新报告。`,
+          true,
+        );
+      }
+      uncertain = true;
+      refresh.textContent = '重试上次复盘补充';
+      return setStatus(
+        `复盘补充结果未确认：${toolErrorText(result.error)}。请用同一按钮重试。`,
+        true,
+      );
+    }
+    sessionStorage.removeItem(pendingKey);
+    pending = null;
+    await onSaved(result.data.report.id);
+  });
+  return refresh;
+};
+
 const loadReportDetail = async (reportId, setStatus) => {
   selectedReportId = reportId;
   const accountId = getAccountId();
@@ -2246,10 +2317,33 @@ const loadReportDetail = async (reportId, setStatus) => {
     });
   });
 
-  mount(
-    detail,
-    reportSheetNodes(report, [reportStatusBadge(report.status), markdown, plain, remove]),
-  );
+  const reportActions = [reportStatusBadge(report.status), markdown, plain, remove];
+  if (
+    report.scope.kind === 'account' &&
+    report.scope.accountId === accountId &&
+    (report.kind === 'closing' || report.kind === 'weekly')
+  ) {
+    const status = await callApi(`/api/reports/${report.id}/decision-review-status`, {
+      headers: { 'x-luoome-account-id': accountId },
+    });
+    if (accountId !== getAccountId() || selectedReportId !== reportId) return;
+    if (status.ok) {
+      const refresh = reportReviewRefreshButton(
+        report,
+        accountId,
+        status.data,
+        setStatus,
+        async (id) => {
+          await renderReports(setStatus);
+          await loadReportDetail(id, setStatus);
+        },
+      );
+      if (refresh) reportActions.push(refresh);
+    }
+    if (status.ok && status.data.snapshotMissing)
+      reportActions.push(el('span', 'muted', '此报告尚未包含新版复盘'));
+  }
+  mount(detail, reportSheetNodes(report, reportActions));
   document.querySelectorAll('.report-history-item').forEach((node) => {
     node.classList.toggle('active', node.dataset.reportId === reportId);
   });
@@ -2354,7 +2448,7 @@ const renderReports = async (setStatus) => {
             : null,
           el('span', 'report-history-period', report.periodEnd),
           reportStatusBadge(report.status),
-          el('span', 'report-history-asof', `通知：${reportDeliveryLabel(report.deliveryStatus)}`),
+          el('span', 'report-history-asof', `通知：${reportNotificationLabel(report)}`),
           el('span', 'report-history-asof', `截至 ${fmtDateTime(report.dataAsOf)}`),
         ]);
         button.type = 'button';
@@ -2702,7 +2796,11 @@ const renderReview = async (setStatus) => {
   mount(grid, [
     statBlock('总条数', String(stats.totalAdvices)),
     statBlock('平均信心度', stats.avgConfidence.toFixed(1)),
-    statBlock('命中率', calibrationRateText(stats.hitRate, outcomeSamples)),
+    statBlock(
+      '填报盈利占比',
+      calibrationRateText(stats.hitRate, stats.followedWithPnl),
+      `${stats.followedWithPnl} 条明确跟随且已填盈亏`,
+    ),
     statBlock(
       '跟单盈亏',
       calibrationPnlText(stats.pnlWhenFollowed, outcomeSamples),
@@ -2740,12 +2838,12 @@ const renderReview = async (setStatus) => {
   if (calR.ok) {
     const cal = calR.data;
     $('#review-calibration-meta').textContent =
-      `${cal.totalAdvices} 条 / ${cal.totalWithOutcome} 已回填 · 整体命中率 ${calibrationRateText(cal.overallHitRate, cal.totalWithOutcome)}`;
+      `${cal.totalAdvices} 条 / ${cal.totalWithOutcome} 已回填 · 明确跟随且已填盈亏 ${cal.followedWithPnl} 条 · 填报盈利占比 ${calibrationRateText(cal.overallHitRate, cal.followedWithPnl)}`;
     const tbody = $('#review-calibration-table tbody');
     tbody.innerHTML = cal.buckets
       .map((b) => {
         const hitColor =
-          b.withOutcome === 0 ? '' : b.hitRate >= 0.7 ? 'pos' : b.hitRate <= 0.3 ? 'neg' : 'warn';
+          b.hitRate === null ? '' : b.hitRate >= 0.7 ? 'pos' : b.hitRate <= 0.3 ? 'neg' : 'warn';
         const pnlClass =
           b.withOutcome === 0 ? '' : b.avgPnl > 0 ? 'pos' : b.avgPnl < 0 ? 'neg' : '';
         return (
@@ -2766,8 +2864,8 @@ const renderReview = async (setStatus) => {
   }
 
   // 趋势图：当前接口按决策维度聚合，保持事实口径，不创建演示数据。
-  const decisionData = (outcomeSamples === 0 ? [] : Object.entries(stats.byDecision ?? {}))
-    .filter(([, s]) => s.totalAdvices > 0)
+  const decisionData = Object.entries(stats.byDecision ?? {})
+    .filter(([, s]) => s.hitRate !== null)
     .map(([decision, s]) => ({ label: decision, hitRate: s.hitRate }));
   renderTrend(decisionData);
 
@@ -2817,15 +2915,16 @@ const renderReview = async (setStatus) => {
           `有效至 ${fmtDateTime(a.validUntil)}`,
         ]);
         li.append(row2);
-        if (a.outcome === undefined) {
-          const btn = el('button', 'btn btn-outline btn-sm', '回填 outcome');
-          btn.type = 'button';
-          btn.addEventListener('click', (event) => {
-            event.stopPropagation();
-            fillOutcomeForm(a.id, a.decision);
-          });
-          li.append(btn);
-        }
+        const btn = el('button', 'btn btn-outline btn-sm', '决策与复盘');
+        btn.type = 'button';
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          void openDecisionReview(
+            { kind: 'advice', id: a.id },
+            { onSaved: () => renderReview(setStatus) },
+          );
+        });
+        li.append(btn);
         return li;
       }),
     );
@@ -2855,54 +2954,6 @@ const outcomeInputOf = (values) => {
     ...(tradeIds.length > 0 ? { tradeIds } : {}),
     ...(String(values.notes ?? '').length > 0 ? { notes: values.notes } : {}),
   };
-};
-
-const fillOutcomeForm = async (adviceId, decision) => {
-  const values = await promptDialog({
-    title: `回填 outcome（${adviceId.slice(0, 8)} · 决策 ${decision}）`,
-    fields: [
-      {
-        key: 'outcome',
-        label: '执行情况',
-        value: 'followed',
-        options: [
-          { value: 'followed', label: '跟随' },
-          { value: 'partially_followed', label: '部分跟随' },
-          { value: 'ignored', label: '忽略' },
-        ],
-      },
-      {
-        key: 'pnl',
-        label: '实际盈亏（人民币，可负）',
-        placeholder: '未知或未平仓时留空',
-      },
-      { key: 'benchmarkPnl', label: '同期基准盈亏（可选）', placeholder: '选填' },
-      { key: 'holdingHours', label: '持有时长（小时，可选）', placeholder: '选填' },
-      {
-        key: 'tradeIds',
-        label: '关联交易 ID（可选，逗号分隔）',
-        placeholder: '例如 trade-1,trade-2',
-      },
-      { key: 'notes', label: '备注（可选）', placeholder: '选填' },
-    ],
-    confirmLabel: '回填',
-  });
-  if (values === null) return;
-  const r = await callApi(`/api/review/${adviceId}/outcome`, {
-    method: 'POST',
-    body: JSON.stringify({
-      input: outcomeInputOf(values),
-    }),
-  });
-  if (r.ok) {
-    setStatus(`outcome 已回填 ${adviceId.slice(0, 8)}`);
-    await renderReview(setStatus);
-  } else {
-    setStatus(
-      `回填失败：${r.error.kind}${r.error.message !== undefined ? `（${r.error.message}）` : ''}`,
-      true,
-    );
-  }
 };
 
 /* ============ settings ============ */
@@ -4049,6 +4100,7 @@ export {
   renderWorkflowRuns,
   reportDeliveryLabel,
   reportEntityHref,
+  reportReviewRefreshButton,
   reportSheetNodes,
   resetAdviceDeleteMode,
   routeAdviceId,

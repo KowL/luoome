@@ -634,6 +634,42 @@ describe('closing-report workflow', () => {
     expect(sends).toBe(2);
   });
 
+  it('截止重试只投递主版，不投递标记 never 的后补版本', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const input = { date: '2026-07-27', mode: 'scheduled' as const, notify: false };
+    const first = await closingReportWorkflow.run(input, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const main = first.data.report;
+    const supplement = await ctx.repos.report.upsertForPeriod({
+      ...main,
+      id: 'review-supplement-never',
+      version: 2,
+      supersedesReportId: main.id,
+      notificationPolicy: 'never',
+      deliveryStatus: 'not-requested',
+    });
+    expect(
+      await ctx.repos.report.claimDelivery({
+        id: supplement.id,
+        attemptId: 'forbidden',
+        now,
+        stalePendingBefore: now,
+        failedRetryBefore: now,
+      }),
+    ).toBe(false);
+    const retried = await closingReportWorkflow.run({ ...input, notify: true }, ctx);
+    expect(retried.ok).toBe(true);
+    if (!retried.ok) return;
+    expect(retried.data.notified).toBe(true);
+    expect((await ctx.repos.report.findById(main.id))?.deliveryStatus).toBe('sent');
+    expect((await ctx.repos.report.findById(supplement.id))?.deliveryStatus).toBe('not-requested');
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
+    const again = await closingReportWorkflow.run({ ...input, notify: true }, ctx);
+    expect(again.ok && again.data.notified).toBe(false);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
+  });
+
   it('进程中断留下 pending 投递后，超时接管同一报告版本', async () => {
     let current = now;
     const ctx = await buildTestContext({

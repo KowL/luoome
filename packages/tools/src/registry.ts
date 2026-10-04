@@ -28,6 +28,12 @@ import { closeHoldingTool } from './tools/close-holding.js';
 import { computeIndicatorsTool } from './tools/compute-indicators.js';
 import { createAccountTool } from './tools/create-account.js';
 import { createStrategyObservationCandidatesTool } from './tools/create-strategy-observation-candidates.js';
+import {
+  getDecisionReviewContextTool,
+  getDecisionWriteReceiptTool,
+  listDecisionReviewsTool,
+  saveDecisionReviewTool,
+} from './tools/decision-review.js';
 import { deleteAdviceTool } from './tools/delete-advice.js';
 import { deleteReportTool } from './tools/delete-report.js';
 import { deleteStockEventTool } from './tools/delete-stock-event.js';
@@ -45,6 +51,7 @@ import { getAShareSentimentTool } from './tools/get-ashare-sentiment.js';
 import { getClosingBatchAuditTool } from './tools/get-closing-batch-audit.js';
 import { getConfidenceCalibrationTool } from './tools/get-confidence-calibration.js';
 import { getDecisionLoopReviewTool } from './tools/get-decision-loop-review.js';
+import { getDecisionReviewSnapshotTool } from './tools/get-decision-review-snapshot.js';
 import { getHoldingTool } from './tools/get-holding.js';
 import { getIntradayDeliveryAuditTool } from './tools/get-intraday-delivery-audit.js';
 import { getMarketDataStatusTool } from './tools/get-market-data-status.js';
@@ -77,6 +84,8 @@ import {
 } from './tools/portfolio-performance.js';
 import { prepareStrategyDataTool } from './tools/prepare-strategy-data.js';
 import { recordAdviceOutcomeTool } from './tools/record-advice-outcome.js';
+import { recordDecisionTradeTool } from './tools/record-decision-trade.js';
+import { refreshDecisionReviewReportTool } from './tools/refresh-decision-review-report.js';
 import { renderReportTool } from './tools/render-report.js';
 import {
   evaluateResearchEmbeddingsTool,
@@ -335,6 +344,13 @@ export const toolRegistry: Registry = createRegistry([
   getAdviceStatsTool,
   getConfidenceCalibrationTool,
   getDecisionLoopReviewTool,
+  getDecisionReviewSnapshotTool,
+  refreshDecisionReviewReportTool,
+  getDecisionReviewContextTool,
+  listDecisionReviewsTool,
+  getDecisionWriteReceiptTool,
+  saveDecisionReviewTool,
+  recordDecisionTradeTool,
   getStrategyDecisionCyclesTool,
   getStrategyRecommendationPreflightHistoryTool,
   getFinancialFactsTool,

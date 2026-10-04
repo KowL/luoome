@@ -8,9 +8,10 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool } from '../define-tool.js';
+import { defineTool, errNotFound } from '../define-tool.js';
 
 export const ListWatchTriggersInput = z.object({
+  accountId: z.string().min(1).optional(),
   alertPlanId: z.string().min(1).optional(),
   poolId: z.string().min(1).optional(),
   stockId: z.string().min(1).optional(),
@@ -58,11 +59,15 @@ export const listWatchTriggersTool = defineTool({
   input: ListWatchTriggersInput,
   output: ListWatchTriggersOutput,
   handler: async (input, ctx) => {
+    const accountId = input.accountId ?? ctx.user.defaultAccountId;
+    if (!accountId || (await ctx.repos.account.findById(accountId)) === null)
+      return errNotFound('Account', accountId);
     const {
       triggers: page,
       total,
       summary,
     } = await ctx.repos.watchTrigger.query({
+      accountId,
       offset: input.offset,
       includeSummary: input.includeSummary,
       orderBy: input.orderBy,

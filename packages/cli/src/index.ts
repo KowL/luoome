@@ -148,8 +148,6 @@ const fmtDateTime = (value: unknown): string => {
 
 const fmtPercent = (ratio: number): string => `${(ratio * 100).toFixed(1)}%`;
 
-const fmtMoney = (value: number): string => value.toFixed(2);
-
 const printJson = (value: unknown): void => {
   console.log(JSON.stringify(value, null, 2));
 };
@@ -400,13 +398,14 @@ interface FlatStatsView {
   readonly totalAdvices: number;
   readonly avgConfidence: number;
   readonly outcomeRate: {
-    readonly followed: number;
-    readonly partiallyFollowed: number;
-    readonly ignored: number;
+    readonly followed: number | null;
+    readonly partiallyFollowed: number | null;
+    readonly ignored: number | null;
   };
-  readonly pnlWhenFollowed: number;
-  readonly pnlWhenIgnored: number;
-  readonly hitRate: number;
+  readonly pnlWhenFollowed: null;
+  readonly pnlWhenIgnored: null;
+  readonly hitRate: number | null;
+  readonly followedWithPnl: number;
 }
 
 interface AdviceStatsData extends FlatStatsView {
@@ -435,6 +434,7 @@ const cmdAdviceStats = async (
       return 1;
     }
     const stats = result.data as AdviceStatsData;
+    const rate = (value: number | null) => (value === null ? '未知' : fmtPercent(value));
     if (json) {
       printJson(result);
       return 0;
@@ -443,23 +443,21 @@ const cmdAdviceStats = async (
     console.log(`建议准确率统计（${window}，口径含已过期 advice）`);
     console.log(
       `总条数 ${stats.totalAdvices}  平均信心度 ${stats.avgConfidence}  ` +
-        `命中率(高信心跟单盈利) ${fmtPercent(stats.hitRate)}`,
+        `填报盈利占比（${stats.followedWithPnl} 条） ${rate(stats.hitRate)}`,
     );
     console.log(
-      `outcome 比例: followed ${fmtPercent(stats.outcomeRate.followed)} / ` +
-        `partially_followed ${fmtPercent(stats.outcomeRate.partiallyFollowed)} / ` +
-        `ignored ${fmtPercent(stats.outcomeRate.ignored)}`,
+      `outcome 比例: followed ${rate(stats.outcomeRate.followed)} / ` +
+        `partially_followed ${rate(stats.outcomeRate.partiallyFollowed)} / ` +
+        `ignored ${rate(stats.outcomeRate.ignored)}`,
     );
-    console.log(
-      `跟单 PnL ${fmtMoney(stats.pnlWhenFollowed)}  忽略 PnL ${fmtMoney(stats.pnlWhenIgnored)}`,
-    );
+    console.log('单条建议盈亏合计不提供（多个依据可能指向同一成交）');
     const decisionRows = Object.entries(stats.byDecision).map(([decision, s]) => [
       decision,
       String(s.totalAdvices),
       String(s.avgConfidence),
-      fmtPercent(s.hitRate),
-      fmtMoney(s.pnlWhenFollowed),
-      fmtMoney(s.pnlWhenIgnored),
+      rate(s.hitRate),
+      '未知',
+      '未知',
     ]);
     console.log('\n按决策分解:');
     console.log(
