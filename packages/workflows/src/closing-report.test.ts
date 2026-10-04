@@ -14,6 +14,8 @@ import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
 import { closingReportWorkflow } from './closing-report.js';
+import { buildWorkflowTools } from './define-workflow.js';
+import { executeReportWorkflow } from './internal/report-runner.js';
 
 const now = new Date('2026-07-27T10:00:00.000Z');
 const marketAsOf = new Date('2026-07-27T07:00:00.000Z');
@@ -668,6 +670,76 @@ describe('closing-report workflow', () => {
     const again = await closingReportWorkflow.run({ ...input, notify: true }, ctx);
     expect(again.ok && again.data.notified).toBe(false);
     expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
+  });
+
+  it('认领结果禁止通知时按策略跳过，不记为投递失败或渠道成功', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const tools = buildWorkflowTools(ctx);
+    let claims = 0;
+    const result = await executeReportWorkflow(
+      {
+        workflowName: 'closing-report',
+        kind: 'closing',
+        template: 'closing-v1',
+        mode: 'manual',
+        notify: true,
+        scope: { kind: 'all-accounts' },
+        periodStart: '2026-07-27',
+        periodEnd: '2026-07-27',
+        title: '收盘报告',
+        buildSections: async () => [
+          {
+            section: {
+              key: 'summary',
+              title: '账户事实',
+              required: true,
+              status: 'complete',
+              blocks: [],
+              evidenceIds: [],
+              missingDimensions: [],
+            },
+            evidence: [],
+          },
+        ],
+      },
+      {
+        ...ctx,
+        tools: {
+          ...tools,
+          save_report: {
+            execute: async (input) => {
+              const saved = await tools.save_report.execute({ report: input.report });
+              if (!saved.ok || input.deliveryAttemptId === undefined) return saved;
+              claims += 1;
+              return {
+                ok: true,
+                data: {
+                  report: { ...saved.data.report, notificationPolicy: 'never' },
+                  created: false,
+                  deliveryClaimed: true,
+                },
+              };
+            },
+          },
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      notified: false,
+      report: { notificationPolicy: 'never', deliveryStatus: 'not-requested' },
+    });
+    expect(claims).toBe(1);
+    expect(await ctx.repos.notification.listRecent()).toEqual([]);
+    const [run] = await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' });
+    expect(run).toMatchObject({
+      status: 'succeeded',
+      outputSummary: {
+        notified: false,
+        notificationSkippedByPolicy: true,
+        deliveryStatus: 'not-requested',
+      },
+      providerStatuses: [],
+    });
   });
 
   it('进程中断留下 pending 投递后，超时接管同一报告版本', async () => {

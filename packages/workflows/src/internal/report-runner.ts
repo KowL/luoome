@@ -51,10 +51,11 @@ const deliverClaimedReport = async (
   readonly report: Report;
   readonly notified: boolean;
   readonly failed: boolean;
+  readonly skippedByPolicy?: true;
   readonly errorKind?: string;
 }> => {
   if (report.notificationPolicy === 'never')
-    return { report, notified: false, failed: true, errorKind: 'notification_forbidden' };
+    return { report, notified: false, failed: false, skippedByPolicy: true };
   let status: 'sent' | 'fallback-log' | 'failed' = 'failed';
   let errorKind: string | undefined;
   const rendered = await ctx.tools.render_report.execute({
@@ -436,6 +437,7 @@ export const executeReportWorkflow = async (
           input.shouldNotifySupplement?.(previousReport, deliveredReport) === true));
   let notified = false;
   let notificationFailed = false;
+  let notificationSkippedByPolicy = false;
   let notificationErrorKind: string | undefined;
   if (shouldNotify) {
     const attemptId = randomUUID();
@@ -451,6 +453,7 @@ export const executeReportWorkflow = async (
       deliveredReport = delivery.report;
       notified = delivery.notified;
       notificationFailed = delivery.failed;
+      notificationSkippedByPolicy = delivery.skippedByPolicy === true;
       notificationErrorKind = delivery.errorKind;
     } else {
       deliveredReport = claim.data.report;
@@ -462,7 +465,7 @@ export const executeReportWorkflow = async (
     ok: item.provenance.freshness !== 'unavailable',
     ...(item.provenance.errorKind === undefined ? {} : { errorKind: item.provenance.errorKind }),
   }));
-  if (shouldNotify) {
+  if (shouldNotify && !notificationSkippedByPolicy) {
     providerStatuses.push({
       provider: 'notification',
       ok: !notificationFailed,
@@ -485,6 +488,7 @@ export const executeReportWorkflow = async (
         missingDimensions: deliveredReport.missingDimensions.length,
         notified,
         deliveryStatus: deliveredReport.deliveryStatus,
+        ...(notificationSkippedByPolicy ? { notificationSkippedByPolicy: true } : {}),
       },
       providerStatuses,
     },
