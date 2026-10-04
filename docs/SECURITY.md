@@ -227,7 +227,7 @@ Web 对话和草案确认要求 write + external 双 opt-in 和同源 Origin。�
 executing 状态不自动重试，需先核对实际业务数据；核对后可显式取消该草案（终态，不会补执行）。
 模型下一轮读取真实 ToolResult，用户伪造的文本处理记录不能作为成功凭据。
 
-write 类工具通过 MCP 暴露时，`add_trade` 必须带 `confirm: true` 才执行。这是协议层约定，agent 应当向用户复述交易详情后，再调一次带 `confirm: true`。
+`add_trade` 与 `record_decision_trade` 属于 trade 类工具，永不通过 MCP 暴露；`confirm: true` 不能绕过这一边界。设置 `LUOOME_EXPOSE_TRADE=true` 会触发 MCP 启动硬卡。Web 的实际成交录入只登记用户已在系统外完成的成交，要求 write opt-in、同源校验、当前账户绑定与明确的尚未入账确认，不调用券商下单。
 
 ## 数据完整性
 

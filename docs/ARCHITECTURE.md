@@ -661,7 +661,7 @@ export interface AdviceDataSnapshot {
   readonly dataAsOf: Date;               // 数据截止时间
 }
 
-// 建议结果回填（事后验证）
+// 建议结果的兼容输出；当前账户反馈由 DecisionReviewRevision 投影
 export interface AdviceOutcome {
   readonly adviceId: string;
   readonly outcome: 'followed' | 'partially_followed' | 'ignored';
@@ -683,7 +683,9 @@ export interface AdviceOutcome {
 - `Advice.confidence` ∈ [0, 100]
 - `Advice.disclaimers.length >= 1`（不能为空）
 - `Advice.validUntil > Advice.validFrom`
-- `AdviceOutcome.outcome === 'followed'` 时必须能链回 trade
+- DecisionReview 的来源快照和历史修订不可覆盖；更新需匹配 expectedRevision
+- 成交关联必须校验账户、股票与来源时间；用户 followed 反馈与成交关联彼此独立
+- 相同账户的同一 requestId 不得用于不同请求内容；成交、账本、复盘修订与回执原子提交
 
 ## 6. Advisor 模型（核心）
 
@@ -781,25 +783,42 @@ LLM 推理部分用 schema-constrained decoding（OpenAI structured outputs / An
 
 ### 6.4 复盘层
 
-`AdviceOutcome` 是建议的事后追踪：
+`DecisionReview` 是账户决策记录的权威实体，以账户和明确来源唯一；来源为 Advice、
+TradingPlanVersion 或 WatchTrigger。`context` 在首次保存时冻结，来源删除后继续可读。
+`DecisionReviewRevision` 追加保存完整内容、成交事实指纹与全局序列；当前关联表是最新修订的投影。
+旧 `AdviceOutcome` 和 Trigger feedback 的无账户数据不再直接供当前统计使用，兼容读写 tool
+通过当前账户的复盘修订投影结果。启动迁移仅接收可验证的旧 `Trade.adviceId` 显式关联，
+既有记录不被覆盖，也不据此生成 followed 反馈。
 
-- 用户调 `record_advice_outcome({ adviceId, outcome, pnl })` 回填
-- 或工具自动跟踪：检测到 advice 对应持仓已平仓 / 触发止盈止损 → 提示用户回填
-- 工具 `get_advice_stats({ subjectId?, since, until })` 算某股票 / 某段时间的建议准确率、平均信心度
+`get_decision_review_context` 返回冻结依据、当前及历史修订、显式后续观察、关联成交状态与账本资格。
+只有沿来源身份校验过的 SignalObservation 能作为后续事实，不按同股或相近日期推断证据链。
+`save_decision_review` 校验 contextHash 和 expectedRevision 后追加修订；
+`record_decision_trade` 登记系统外已完成但尚未入账的成交，事务内同时保存 Trade、Holding、
+Account.cashBalance、所选来源修订和请求回执。该路径只允许对账可用账本的顺序追加，
+不调用券商，sideEffect 为 trade，MCP 永不暴露。
 
-```ts
-interface AdviceStats {
-  totalAdvices: number;
-  avgConfidence: number;
-  outcomeRate: { followed: number; partiallyFollowed: number; ignored: number };
-  pnlWhenFollowed: Money;
-  pnlWhenIgnored: Money;
-  hitRate: number;             // confidence >= 70 且 followed 且 pnl > 0 的比例
-  byDecision: Record<AdviceDecision, AdviceStats>;
-}
-```
+写请求由 `accountId + requestId` 标识：同键同内容返回已保存回执，同键异内容拒绝；
+账本、来源或修订已变化时要求刷新确认，任一提交失败不得留下部分成交或关联。
+Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源校验，并将请求绑定到当前账户。
+页面在发送前保存未决请求，恢复时校验原账户并查询回执或复用原请求，避免丢失响应后重复入账。
+导出包含修订、关联与回执；合并导入在事务中校验跨账户关系和不可变内容冲突，失败全量回滚。
 
-复盘是 advisor 的灵魂：没有它，advice 就是黑盒。
+`list_decision_reviews` 支持 `source`（依据发生时间）与 `recorded`（修订记录时间）两种口径，
+时间窗口为 `[since, until)`。游标绑定账户、筛选条件与修订水位；`recorded` 返回窗口内的修订活动，
+不能被解释为当时生成的依据。成交选择分页绑定事实快照，事实变动时要求重新读取。
+
+`get_advice_stats`、`get_confidence_calibration` 与 `get_decision_loop_review` 使用账户口径，
+输出 schemaVersion 2。统计包含已过期建议；通用股票建议只有被本账户明确记录后才进入该账户样本。
+`feedbackCount / withOutcome` 表示明确反馈数，`followedWithPnl` 表示 followed 且明确填写盈亏的样本数；
+`hitRate` 是该样本中 pnl > 0 的比例，无样本时为 null。未记录、未填盈亏与明确零盈亏分别处理，
+不汇总可能重复关联的主观盈亏；`pnlWhenFollowed / pnlWhenIgnored / avgPnl` 保持 null。
+这些指标是填报样本的描述，不是交易收益率、收益承诺或 confidence 对应的成功概率。
+
+账户收盘/周报以 `decisionReviewSnapshot` 保存窗口、修订水位、修订身份与当前成交事实指纹。
+`refresh_decision_review_report` 只消费本地事实，在校验最新报告、修订水位与成交指纹后原子追加
+不可变版本和幂等回执，原报告及其其它章节保留。复盘补充版的 `notificationPolicy=never`
+同时由 workflow、tool 与 repository 的投递路径约束，不能认领、重试或改写成可投递状态。
+正常主报告及研究补充版保持原通知政策；周报事实未变时复用原报告，原失败投递仍可按原政策重试。
 
 ### 6.5 Advice 有效期限
 
