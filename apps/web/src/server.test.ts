@@ -19,7 +19,7 @@ import type {
   SourceStatus,
   ToolContext,
 } from '@luoome/core';
-import { ReportSchema, TradingPlanSchema } from '@luoome/core';
+import { money, ReportSchema, TradingPlanSchema } from '@luoome/core';
 import { createDrizzleRepos } from '@luoome/db';
 import { saveReportTool, saveWatchTriggerTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
@@ -103,6 +103,84 @@ describe('决策与复盘 API 账户绑定', () => {
       }),
     );
     expect((await json(trade)).error).toMatchObject({ kind: 'permission_denied' });
+  });
+
+  it('成交专用路由要求 write、同源与账户一致，明确确认后仅入账一次', async () => {
+    const ctx = await buildTestContext();
+    const accountId = ctx.user.defaultAccountId;
+    const state = await ctx.repos.decisionTrade.getLedgerState(accountId);
+    const before = await ctx.repos.account.findById(accountId);
+    if (state === null || before === null) throw new Error('missing account ledger fixture');
+    const tradesBefore = await ctx.repos.trade.listByAccount(accountId);
+    const input = {
+      requestId: crypto.randomUUID(),
+      accountId,
+      expectedLedgerStateHash: state.hash,
+      confirmedNotRecorded: true,
+      stockId: '002594.SZ',
+      side: 'buy',
+      quantity: 1,
+      price: 100,
+      fee: 0,
+      executedAt: ctx.clock().toISOString(),
+      sources: [],
+    };
+    const request = (body = input, origin = 'http://test') =>
+      new Request('http://test/api/decision-trades', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-luoome-account-id': accountId,
+          origin,
+        },
+        body: JSON.stringify(body),
+      });
+    const guarded = createWebApp(ctx, { exposeWrite: false, exposeExternal: false });
+    const disabled = await guarded.fetch(request());
+    expect(disabled.status).toBe(403);
+    expect(await disabled.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'permission_denied' },
+    });
+
+    const local = createWebApp(ctx, { exposeWrite: true, exposeExternal: false });
+    for (const denied of [
+      request(input, 'https://other.example'),
+      request({ ...input, accountId: 'another-account' }),
+    ]) {
+      const response = await local.fetch(denied);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: { kind: 'permission_denied' },
+      });
+    }
+    const unconfirmed = await local.fetch(request({ ...input, confirmedNotRecorded: false }));
+    expect(unconfirmed.status).toBe(400);
+    expect(await unconfirmed.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+    expect(await ctx.repos.trade.listByAccount(accountId)).toEqual(tradesBefore);
+    expect((await ctx.repos.account.findById(accountId))?.cashBalance).toBe(before.cashBalance);
+
+    const first = await local.fetch(request());
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as { data: { result: unknown } };
+    expect(firstBody).toMatchObject({
+      ok: true,
+      data: { requestId: input.requestId, replayed: false, result: { trade: { accountId } } },
+    });
+    const retry = await local.fetch(request());
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({
+      ok: true,
+      data: { requestId: input.requestId, replayed: true, result: firstBody.data.result },
+    });
+    expect(await ctx.repos.trade.listByAccount(accountId)).toHaveLength(tradesBefore.length + 1);
+    expect((await ctx.repos.account.findById(accountId))?.cashBalance).toBe(
+      money(before.cashBalance - 100),
+    );
   });
 });
 
