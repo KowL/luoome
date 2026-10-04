@@ -246,20 +246,26 @@ export const getDecisionReviewContextTool = defineTool({
     const ledgerState = await ctx.repos.decisionTrade.getLedgerState(accountId);
     const stockId = current?.review.stockId ?? source?.stockId ?? null;
     const occurredAt = current?.review.sourceOccurredAt ?? source?.occurredAt ?? null;
-    const allTrades = await ctx.repos.trade.listByAccount(accountId);
-    const eligible = allTrades.filter(
-      (trade) =>
-        (stockId === null || trade.stockId === stockId) &&
-        (occurredAt === null || trade.executedAt >= occurredAt),
-    );
+    const eligible = await ctx.repos.trade.listByAccount(accountId, {
+      ...(stockId === null ? {} : { stockId }),
+      ...(occurredAt === null ? {} : { executedAtFrom: occurredAt }),
+      order: 'desc',
+      limit: 20,
+    });
     const selectedIds = new Set(
       selected?.revision.content.tradeIds ?? current?.revision.content.tradeIds ?? [],
     );
+    const selectedTrades = await Promise.all(
+      [...selectedIds].map((id) => ctx.repos.trade.findById(id)),
+    );
     const candidateTrades = [
       ...new Map(
-        [...eligible.slice(-20), ...allTrades.filter((trade) => selectedIds.has(trade.id))].map(
-          (trade) => [trade.id, trade],
-        ),
+        [
+          ...eligible,
+          ...selectedTrades.flatMap((trade) =>
+            trade !== null && trade.accountId === accountId ? [trade] : [],
+          ),
+        ].map((trade) => [trade.id, trade]),
       ).values(),
     ].sort((a, b) => b.executedAt.getTime() - a.executedAt.getTime() || b.id.localeCompare(a.id));
     const observations = await explicitObservations(ctx, input.subject, stockId);

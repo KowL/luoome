@@ -201,7 +201,16 @@ export interface HoldingRepository {
 export interface TradeRepository {
   save(trade: Trade): Promise<void>;
   findById(id: string): Promise<Trade | null>;
-  listByAccount(accountId: string): Promise<Trade[]>;
+  listByAccount(
+    accountId: string,
+    filter?: {
+      readonly stockId?: string;
+      /** 包含起点，筛选先于排序和截取。 */
+      readonly executedAtFrom?: Date;
+      readonly order?: 'asc' | 'desc';
+      readonly limit?: number;
+    },
+  ): Promise<Trade[]>;
   remove(id: string): Promise<void>;
 }
 
