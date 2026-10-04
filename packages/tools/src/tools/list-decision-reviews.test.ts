@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
 import { listDecisionReviewsTool } from './decision-review.js';
 
@@ -112,4 +112,131 @@ describe('list_decision_reviews', () => {
     );
     expect(mismatch).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
   });
+
+  it.each([
+    { timeBasis: 'source' as const, truncated: false },
+    { timeBasis: 'recorded' as const, truncated: false },
+    { timeBasis: 'source' as const, truncated: true },
+    { timeBasis: 'recorded' as const, truncated: true },
+  ])(
+    '$timeBasis 翻页复用统计快照（truncated=$truncated），兼容旧游标',
+    async ({ timeBasis, truncated }) => {
+      const ctx = await buildTestContext();
+      const accountId = ctx.user.defaultAccountId;
+      const content = {
+        tradeIds: [],
+        adviceFeedback: { outcome: 'ignored' as const },
+        triggerFeedback: null,
+        note: null,
+      };
+      const views = [];
+      for (let index = 0; index < 3; index += 1) {
+        const occurredAt = new Date(`2026-09-0${index + 1}T00:00:00Z`);
+        const saved = await ctx.repos.decisionReview.commit({
+          accountId,
+          requestId: `page-request-${index}`,
+          requestHash: `page-hash-${index}`,
+          expectedRevision: 0,
+          review: {
+            id: `page-review-${index}`,
+            accountId,
+            subject: { kind: 'advice', id: `page-advice-${index}` },
+            stockId: '002594.SZ',
+            sourceOccurredAt: occurredAt,
+            context: {
+              schemaVersion: 1,
+              capturedAt: occurredAt,
+              sourceDataAsOf: null,
+              captureOrigin: 'user',
+              source: {},
+              contextHash: `page-context-${index}`,
+            },
+            createdAt: occurredAt,
+          },
+          content,
+          contentHash: `page-content-${index}`,
+          tradeFactHashes: {},
+          changeNote: null,
+          recordedAt: occurredAt,
+        });
+        views.push(saved.result);
+      }
+      const method = timeBasis === 'source' ? 'list' : 'listActivity';
+      const query = vi.spyOn(ctx.repos.decisionReview, method);
+      const firstView = views[0];
+      if (firstView === undefined) throw new Error('missing seeded review');
+      const statistics = truncated ? Array.from({ length: 10001 }, () => firstView) : views;
+      query.mockResolvedValueOnce(statistics);
+      const first = await listDecisionReviewsTool.execute({ accountId, timeBasis, limit: 1 }, ctx);
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(first.data.nextCursor).not.toBeNull();
+      if (first.data.nextCursor === null) return;
+      expect(first.data.total).toBe(truncated ? null : 3);
+      expect(first.data.coverage).toEqual({
+        status: truncated ? 'partial' : 'complete',
+        processed: truncated ? 10000 : 3,
+        knownTotal: truncated ? 10001 : 3,
+        truncated,
+      });
+      expect(query.mock.calls.map(([filter]) => filter.limit)).toEqual([10001, 2]);
+
+      query.mockClear();
+      const next = await listDecisionReviewsTool.execute(
+        { accountId, timeBasis, limit: 1, cursor: first.data.nextCursor },
+        ctx,
+      );
+      expect(next.ok).toBe(true);
+      if (!next.ok) return;
+      expect(next.data.records.map((view) => view.review.id)).toEqual(['page-review-1']);
+      expect(next.data.total).toBe(first.data.total);
+      expect(next.data.coverage).toEqual(first.data.coverage);
+      expect(next.data.throughSequence).toBe(first.data.throughSequence);
+      expect(query.mock.calls.map(([filter]) => filter.limit)).toEqual([2]);
+
+      const legacy = JSON.parse(Buffer.from(first.data.nextCursor, 'base64url').toString('utf8'));
+      delete legacy.knownTotal;
+      query.mockClear();
+      query.mockResolvedValueOnce(statistics);
+      const resumed = await listDecisionReviewsTool.execute(
+        {
+          accountId,
+          timeBasis,
+          limit: 1,
+          cursor: Buffer.from(JSON.stringify(legacy)).toString('base64url'),
+        },
+        ctx,
+      );
+      expect(resumed.ok).toBe(true);
+      if (!resumed.ok) return;
+      expect(resumed.data.records).toEqual(next.data.records);
+      expect(resumed.data.total).toBe(first.data.total);
+      expect(resumed.data.coverage).toEqual(first.data.coverage);
+      expect(query.mock.calls.map(([filter]) => filter.limit)).toEqual([10001, 2]);
+      expect(resumed.data.nextCursor).not.toBeNull();
+      if (resumed.data.nextCursor === null) return;
+      query.mockClear();
+      const last = await listDecisionReviewsTool.execute(
+        { accountId, timeBasis, limit: 1, cursor: resumed.data.nextCursor },
+        ctx,
+      );
+      expect(last.ok && last.data.records.map((view) => view.review.id)).toEqual(['page-review-0']);
+      expect(last.ok && last.data.nextCursor).toBeNull();
+      expect(query.mock.calls.map(([filter]) => filter.limit)).toEqual([2]);
+
+      query.mockClear();
+      const invalid = await listDecisionReviewsTool.execute(
+        {
+          accountId,
+          timeBasis,
+          cursor: Buffer.from(JSON.stringify({ ...legacy, knownTotal: 10002 })).toString(
+            'base64url',
+          ),
+        },
+        ctx,
+      );
+      expect(invalid).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+      expect(query).not.toHaveBeenCalled();
+    },
+  );
 });

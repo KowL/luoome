@@ -438,6 +438,7 @@ export const listDecisionReviewsTool = defineTool({
       id?: string | undefined;
       recordedAt?: string | undefined;
       sequence?: number | undefined;
+      knownTotal?: number | undefined;
     } | null = null;
     if (input.cursor !== undefined) {
       try {
@@ -451,6 +452,7 @@ export const listDecisionReviewsTool = defineTool({
             id: z.string().optional(),
             recordedAt: z.iso.datetime().optional(),
             sequence: z.number().int().positive().optional(),
+            knownTotal: z.number().int().min(0).max(10001).optional(),
           })
           .parse(JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8')));
       } catch {
@@ -483,10 +485,14 @@ export const listDecisionReviewsTool = defineTool({
       throughSequence,
     };
     const source = input.timeBasis === 'source';
-    const all = source
-      ? await ctx.repos.decisionReview.list({ ...base, limit: 10001 })
-      : await ctx.repos.decisionReview.listActivity({ ...base, limit: 10001 });
-    const truncated = all.length > 10000;
+    // 旧游标没有统计快照时补算一次，后续页沿用同一筛选与修订水位的覆盖率。
+    const knownTotal =
+      cursor?.knownTotal ??
+      (source
+        ? await ctx.repos.decisionReview.list({ ...base, limit: 10001 })
+        : await ctx.repos.decisionReview.listActivity({ ...base, limit: 10001 })
+      ).length;
+    const truncated = knownTotal > 10000;
     const page = source
       ? await ctx.repos.decisionReview.list({
           ...base,
@@ -512,6 +518,7 @@ export const listDecisionReviewsTool = defineTool({
               filterHash,
               throughSequence,
               timeBasis: input.timeBasis,
+              knownTotal,
               ...(source
                 ? { occurredAt: last.review.sourceOccurredAt.toISOString(), id: last.review.id }
                 : {
@@ -530,11 +537,11 @@ export const listDecisionReviewsTool = defineTool({
         timeBasis: input.timeBasis,
       },
       throughSequence,
-      total: truncated ? null : all.length,
+      total: truncated ? null : knownTotal,
       coverage: {
         status: truncated ? ('partial' as const) : ('complete' as const),
-        processed: Math.min(all.length, 10000),
-        knownTotal: all.length,
+        processed: Math.min(knownTotal, 10000),
+        knownTotal,
         truncated,
       },
       nextCursor,

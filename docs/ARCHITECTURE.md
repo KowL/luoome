@@ -805,7 +805,9 @@ Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源�
 
 `list_decision_reviews` 支持 `source`（依据发生时间）与 `recorded`（修订记录时间）两种口径，
 时间窗口为 `[since, until)`。游标绑定账户、筛选条件与修订水位；`recorded` 返回窗口内的修订活动，
-不能被解释为当时生成的依据。成交选择分页绑定事实快照，事实变动时要求重新读取。
+不能被解释为当时生成的依据。复盘列表在首页最多扫描 10001 条计算 total/coverage，并将统计
+快照随游标沿用；旧游标缺少快照时补算一次。超过 10000 条时仍返回 total=null、partial 与 truncated。
+成交选择分页绑定事实快照，事实变动时要求重新读取。
 
 `get_advice_stats`、`get_confidence_calibration` 与 `get_decision_loop_review` 使用账户口径，
 输出 schemaVersion 2。统计包含已过期建议；通用股票建议只有被本账户明确记录后才进入该账户样本。
