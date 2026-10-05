@@ -305,7 +305,8 @@ Web API 不做 token 校验。浏览器账户切换会将当前账户 id 通过 
 | **AlertPlan** | 规则管理、手动试跑和 Trigger 审计；试跑不自动交易。 |
 | **研究** | 配置本地 Obsidian Vault、同步索引、创建 Topic、导入本地正文或远程 URL。 |
 | **建议** | 历史 + decision 过滤。 |
-| **复盘** | 准确率统计 + **confidence 校准表** + outcome 回填。 |
+| **复盘** | 当前账户的明确反馈、成交归因、事后观察与 confidence 校准表；从建议进入「决策与复盘」。 |
+| **报告** | 查看与导出报告；账户收盘/周报支持根据后补记录生成不可通知的复盘补充版。 |
 | **对话** | AI SDK 投资助手；查询账户、现金、持仓、计划与研究资料，确认后登记持仓/资金流水、管理关注列表与提醒，并继续解释执行结果。会话、动作和用量可回看。 |
 | **设置** | 数据源 / AI / 账户，以及可按分类选择的本地 JSON 数据导出与合并导入。 |
 
@@ -353,7 +354,7 @@ opt-in 追加：
 
 - **TUI**：持仓 / 建议全部按新账户重读。list_holdings 等读路径走 `ctx.user.defaultAccountId`。
 - **Web**：账户下拉切换会触发 `/api/account/select`，然后 reload 当前路由。
-- **MCP**：agent 通过 `add_trade({ accountId: '...' })` 显式选账户，缺省用当前 ctx 默认。
+- **CLI / MCP**：账户相关 tool 可通过 `accountId` 显式选账户，缺省使用当前上下文账户；MCP 不暴露 `add_trade` 或 `record_decision_trade`。
 
 ### 7.1 给新账户加仓（演示）
 
@@ -375,41 +376,66 @@ luoome tools call add_trade --input '{
 
 ## 8. 复盘与 confidence 校准
 
-luoome 的 advice 永远是「带答卷 + 等批改」的状态。复盘 = 把结果写回来，让系统慢慢变聪明。
+复盘将当时依据、用户明确记录的行动和后来观察放在当前账户下回看。切换账户后，反馈和统计随账户切换。
+建议采纳、实际成交和事后涨跌各自记录；系统不会从其中一项推断另外两项。
 
-### 8.1 回填 outcome
+### 8.1 记录与修改复盘
 
-三种粒度，越准确越好：
+先确认顶栏账户，再从建议、交易计划版本或提醒详情打开「决策与复盘」。弹窗展示当时依据、
+反证、风险、有效期与明确关联的事后观察；没有显式观察链时会说明缺失，不按同股拼接。
 
-1. **CLI**（推荐，prompt 一问一答）：
-   ```bash
-   luoome advice outcome <adviceId> --followed true --pnl 80
-   ```
-2. **Web**：去「复盘」tab 点「回填 outcome」按钮。
-3. **agent / MCP**：`record_advice_outcome` 工具。
+- **填写反馈或备注**：Advice 可记录跟随、部分跟随或忽略；提醒可记录已处理、有用、无用或忽略。
+  盈亏未知时留空，0 仅用于明确核对过的零盈亏。保存需要 `LUOOME_EXPOSE_WRITE=true`。
+- **关联已有成交**：在当前账户和股票下选择已有交易记录，列表可继续加载；保存关联不会再次入账，
+  也不会自动把建议标为已采纳。
+- **登记尚未入账的实际成交**：仅用于已在系统外完成的成交。核对方向、数量、价格、费用和北京时间，
+  明确确认尚未登记后提交；成交、持仓、现金与所选依据关联一起保存。账本未对齐、余额或可卖数量不足、
+  成交时间不符合顺序追加窗口时会拒绝，不会部分保存。
+
+首次保存会冻结来源依据，每次修改追加新修订。可以查看旧修订；编辑需回到最新版本。
+来源删除后仍能查看冻结快照，来源过期和成交事实变化会保留提示。遇到修订冲突时先刷新、核对最新内容。
+
+若提交后网络中断或结果未确认，当前标签页会保留未决请求。回到原账户后先点「查询上次未决提交」，
+需要重试时使用「复用原请求重试」；确认结果前不能创建新的提交。切换账户不会把原请求改投新账户。
+未决请求保存在当前标签页的会话存储中，关闭标签页前应先核对交易流水与提交结果。
+若服务端明确拒绝提交，点击「确认未提交并重新加载」核对同键回执；确认没有成功提交后会重新读取
+最新上下文，允许修改内容后新建请求。网络结果未知时仍保留原请求，不能用此方式跳过核对。
+
+CLI 仍可用 `luoome advice outcome <adviceId> --followed true --pnl 80` 记录当前账户的明确反馈；
+MCP 在开启 write 能力后可用 `record_advice_outcome` 或 `save_decision_review`。
+这些反馈入口不会登记成交，成交类 tool 不通过 MCP 暴露。
+
+旧版本没有账户归属的反馈仍留在历史数据中，不会自动分摊到当前账户。迁移只恢复可验证的旧成交与
+Advice 显式关联，不据此生成采纳反馈；需要时由用户重新核对并记录。
 
 ### 8.2 看 confidence 校准
 
-`get_confidence_calibration` 把历史 advice 按 confidence 桶（0-9 / 10-19 / ... / 90-100）聚合 hitRate。
+`get_confidence_calibration` 将当前账户的历史 Advice（包含已过期建议）按 confidence 分桶。
+通用股票建议在本账户明确记录后才纳入账户样本。CLI 可显式指定账户：
 
 ```bash
-luoome tools call get_confidence_calibration --input '{}'
+luoome tools call get_confidence_calibration --input '{"accountId":"你的账户 ID"}'
 ```
 
-返回每桶的 `total / withOutcome / hits / hitRate / avgPnl / avgConfidence`。
+每桶的 `total` 是建议数，`withOutcome` 是明确反馈数，`followedWithPnl` 是明确跟随且已填盈亏的样本数。
+`hits` 只计算最后这组样本中盈利的条数；`hitRate = hits / followedWithPnl`，页面显示为「填报盈利占比」。
+没有合格样本时显示未知，不用 0 代替。主观填报盈亏不做跨建议加总，`avgPnl` 等聚合盈亏字段保持未知。
 
-读法（v0.5 W4）：
+这张表用于检查已填报样本与信心度之间的关系。样本量、未反馈记录和用户选择都会影响结果，
+它不等于账户收益率，也不能把某个 confidence 桶理解为未来成功概率。
+TUI 按 `[c]`，Web「复盘」页都可查看。
 
-- **高信心桶 hitRate 高**：confidence 校准有效；
-- **高信心桶 hitRate 低**：系统 confidence **可能高估**——该考虑收紧 prompt / 调整 calibration；
-- **低信心桶 hitRate 高**：系统 **偏保守**——可以适当抬信心；
-- **整体命中率（overallHitRate）**：长期跟踪的胜率近似。
+### 8.3 报告中的复盘与后补
 
-> TUI 按 `[c]`，Web 去「复盘」tab 都能看到这张校准表。
+账户收盘报告和周报会保存生成时使用的复盘修订与成交事实。用户后来补录或修改后，在最新报告详情中
+可点「生成复盘补充版」，只根据已保存的本地事实更新复盘章节，保留旧版本和其它报告内容。
+旧报告尚未包含新版复盘时会明确提示。补充请求结果未确认时，用同一按钮重试，不会重复创建同一请求的版本。
 
-### 8.3 日报 / 周报
+复盘补充版显示「按策略不通知」，不会额外发送通知，后续定时任务与投递重试也不能改变这一策略。
+正常主报告及原研究补充版仍遵循原有通知规则。生成复盘补充需要 write 能力，不要求开启外部调用。
 
-`luoome daily-review [--since 7d]` 跑内置 daily-review workflow，写报告到 `~/.luoome/reports/`。可在 [workflows 包](../packages/workflows/src/daily-review.ts) 看到执行步骤。
+`luoome daily-review [--since 7d]` 仍运行独立的 daily-review workflow，写报告到 `~/.luoome/reports/`。
+执行步骤见 [workflows 包](../packages/workflows/src/daily-review.ts)。
 
 ---
 
@@ -442,7 +468,7 @@ luoome tools call get_confidence_calibration --input '{}'
 | `LUOOME_RESEARCH_EMBEDDING_ENABLED` | `false` | 显式挂载 Research embedding 外部 capability；默认仍为本地 FTS5 |
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | embedding 模型目录路径；密钥由目录里的 `apiKeyEnv` 从环境读取 |
 | `LUOOME_RESEARCH_REMOTE_SYNC` | `false` | `git` 启用独立安全拉取 workflow；不配置则完全不装配 |
-| `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行 write tool 与 outcome 回填端点 |
+| `LUOOME_EXPOSE_WRITE` | `false` | MCP 追加 write tool；Web 放行复盘、报告补充等本地写入端点 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | MCP 放行外部副作用；Web 放行白名单内 external tool（fetch_quote、盯盘 run-once 等） |
 | `LUOOME_EXPOSE_TRADE` | `false`（**硬卡**） | `=true` 时启动即抛错退出 |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web 设置页配置，缺失降级为 log channel |
@@ -489,9 +515,10 @@ Web 设置页已内置 Kimi（`kimi-k3` / `MOONSHOT_API_KEY`）与 DeepSeek
 配置损坏时会进入配置模式，不会阻止设置页启动；保存后配置立即生效。API Key 只写入
 本地 `0600` 密钥文件，页面只显示“已配置”状态，不会读取或回显原值。
 
-### 11.6 `get_confidence_calibration` 全 0 桶
+### 11.6 `get_confidence_calibration` 没有盈利占比
 
-历史 advice 还没回填 outcome。灌 5–10 条 outcome 就能看到形状：`luoome advice outcome <id> --followed true --pnl 100 --holding-hours 24`。
+先确认当前账户。只有该账户明确标记 followed 且填写盈亏的记录参与填报盈利占比；
+没有这类样本时返回 null、页面显示未知。按实际情况补充反馈，尚未确认的盈亏保持留空。
 
 ### 11.7 切账户后持仓没变？
 

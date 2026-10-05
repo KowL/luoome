@@ -1,5 +1,5 @@
 import { assertTradeInvariants, type Trade, type TradeRepository } from '@luoome/core';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gte } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 import { type Schema, trades } from '../../schema/index.js';
@@ -53,15 +53,25 @@ export class DrizzleTradeRepository implements TradeRepository {
     return row === undefined ? null : fromRow(row);
   }
 
-  /** 按执行时间升序（id 决胜），与内存实现保持一致。 */
-  async listByAccount(accountId: string): Promise<Trade[]> {
-    return this.db
+  async listByAccount(
+    accountId: string,
+    filter: Parameters<TradeRepository['listByAccount']>[1] = {},
+  ): Promise<Trade[]> {
+    const order = filter.order === 'desc' ? desc : asc;
+    const query = this.db
       .select()
       .from(trades)
-      .where(eq(trades.accountId, accountId))
-      .orderBy(asc(trades.executedAt), asc(trades.id))
-      .all()
-      .map(fromRow);
+      .where(
+        and(
+          eq(trades.accountId, accountId),
+          filter.stockId === undefined ? undefined : eq(trades.stockId, filter.stockId),
+          filter.executedAtFrom === undefined
+            ? undefined
+            : gte(trades.executedAt, filter.executedAtFrom),
+        ),
+      )
+      .orderBy(order(trades.executedAt), order(trades.id));
+    return (filter.limit === undefined ? query : query.limit(filter.limit)).all().map(fromRow);
   }
 
   async remove(id: string): Promise<void> {

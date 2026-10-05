@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildTestContext } from '../testing/context.js';
 import { listWatchTriggersTool } from './list-watch-triggers.js';
 import { saveWatchTriggerTool } from './save-watch-trigger.js';
+import { setWatchTriggerFeedbackTool } from './set-watch-trigger-feedback.js';
 
 const save = async (
   ctx: Awaited<ReturnType<typeof buildTestContext>>,
@@ -42,7 +43,11 @@ describe('list_watch_triggers', () => {
         notified: false,
         createdAt: new Date('2026-07-23T01:00:00Z'),
       });
-    await ctx.repos.watchTrigger.setFeedback('b', 'handled', ctx.clock());
+    const feedback = await setWatchTriggerFeedbackTool.execute(
+      { triggerId: 'b', feedback: 'handled' },
+      ctx,
+    );
+    expect(feedback.ok).toBe(true);
     const result = await listWatchTriggersTool.execute(
       {
         includeSummary: true,

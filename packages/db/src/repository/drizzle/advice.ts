@@ -117,7 +117,7 @@ export class DrizzleAdviceRepository implements AdviceRepository {
   async findById(id: string): Promise<Advice | null> {
     const row = this.db.select().from(advices).where(eq(advices.id, id)).get();
     if (row === undefined) return null;
-    return toAdvice(row, await this.findOutcome(id));
+    return toAdvice(row, null);
   }
 
   /**
@@ -142,8 +142,7 @@ export class DrizzleAdviceRepository implements AdviceRepository {
       .where(and(...conditions))
       .orderBy(desc(advices.createdAt), desc(advices.id));
     const rows = filter.limit !== undefined ? base.limit(filter.limit).all() : base.all();
-    const outcomes = await Promise.all(rows.map((r) => this.findOutcome(r.id)));
-    return rows.map((r, i) => toAdvice(r, outcomes[i] ?? null));
+    return rows.map((r) => toAdvice(r, null));
   }
 
   async recordOutcome(adviceId: string, outcome: AdviceOutcome): Promise<void> {

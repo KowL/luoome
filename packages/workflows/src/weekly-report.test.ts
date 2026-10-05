@@ -1,13 +1,17 @@
 import {
   type AShareSentimentManagerLike,
   type AShareSentimentSnapshot,
-  money,
   type SignalObservation,
   type StrategyDslV1,
   type StrategyVersion,
   strategyDefinitionHash,
   type ToolContext,
 } from '@luoome/core';
+import {
+  getDecisionReviewContextTool,
+  recordAdviceOutcomeTool,
+  saveDecisionReviewTool,
+} from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -354,8 +358,8 @@ describe('weekly-report workflow', () => {
     expect(adviceOutcomes?.missingDimensions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          dimension: 'advice-outcomes.pending',
-          errorKind: 'outcome_pending',
+          dimension: 'advice-outcomes.samples',
+          errorKind: 'no_data',
         }),
       ]),
     );
@@ -364,12 +368,12 @@ describe('weekly-report workflow', () => {
       adviceMetrics?.kind === 'metrics'
         ? adviceMetrics.items.find((item) => item.key === 'totalAdvices')?.value
         : undefined,
-    ).toBe(2);
+    ).toBe(0);
     expect(
       adviceMetrics?.kind === 'metrics'
         ? adviceMetrics.items.find((item) => item.key === 'outcomeMissingRate')?.value
         : undefined,
-    ).toBe(1);
+    ).toBeNull();
     const tradeAttribution = result.data.report.sections.find(
       (section) => section.key === 'trade-attribution',
     );
@@ -476,8 +480,8 @@ describe('weekly-report workflow', () => {
     expect(metrics?.kind === 'metrics' ? metrics.items : []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'triggered', value: 502 }),
-        expect.objectContaining({ key: 'feedbackCount', value: 2 }),
-        expect.objectContaining({ key: 'usefulRate', value: 1 }),
+        expect.objectContaining({ key: 'feedbackCount', value: 0 }),
+        expect.objectContaining({ key: 'usefulRate', value: null }),
         expect.objectContaining({ key: 'deliveryFailed', label: '渠道投递失败', value: 1 }),
       ]),
     );
@@ -499,7 +503,7 @@ describe('weekly-report workflow', () => {
     expect(accountMetrics?.kind === 'metrics' ? accountMetrics.items : []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'triggered', value: 1 }),
-        expect.objectContaining({ key: 'feedbackCount', value: 1 }),
+        expect.objectContaining({ key: 'feedbackCount', value: 0 }),
         expect.objectContaining({ key: 'deliveryFailed', value: 0 }),
       ]),
     );
@@ -513,20 +517,32 @@ describe('weekly-report workflow', () => {
     const advices = await ctx.repos.advice.query({ includeExpired: true, limit: 500 });
     const [followed, ignored] = advices;
     if (followed === undefined || ignored === undefined) throw new Error('fixture advice missing');
-    await ctx.repos.advice.recordOutcome(followed.id, {
-      adviceId: followed.id,
-      tradeIds: [],
-      outcome: 'followed',
-      pnl: money(100),
-      benchmarkPnl: money(20),
-      recordedAt: now,
-    });
-    await ctx.repos.advice.recordOutcome(ignored.id, {
-      adviceId: ignored.id,
-      tradeIds: [],
-      outcome: 'ignored',
-      recordedAt: now,
-    });
+    expect(
+      (
+        await recordAdviceOutcomeTool.execute(
+          {
+            adviceId: followed.id,
+            outcome: 'followed',
+            tradeIds: [],
+            pnl: 100,
+            benchmarkPnl: 20,
+          },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await recordAdviceOutcomeTool.execute(
+          {
+            adviceId: ignored.id,
+            outcome: 'ignored',
+            tradeIds: [],
+          },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
 
     const result = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
 
@@ -574,16 +590,38 @@ describe('weekly-report workflow', () => {
 
   it('账户范围周报只投影指定账户的交易归因', async () => {
     const ctx = await buildTestContext({ clock: () => now });
-    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 500 }))[0];
     const seedTrade = (await ctx.repos.trade.listByAccount(ctx.user.defaultAccountId))[0];
-    if (advice === undefined || seedTrade === undefined) throw new Error('fixture fact missing');
+    if (seedTrade === undefined) throw new Error('fixture trade missing');
+    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 500 }))[0];
+    if (advice === undefined) throw new Error('fixture advice missing');
+    const adviceAt = new Date('2026-07-29T00:00:00.000Z');
+    const linkedAdvice = {
+      ...advice,
+      id: 'weekly-linked-advice',
+      subjectKind: 'stock' as const,
+      subjectId: seedTrade.stockId,
+      basedOn: { ...advice.basedOn, dataAsOf: adviceAt },
+      validFrom: adviceAt,
+      createdAt: adviceAt,
+    };
+    await ctx.repos.advice.save(linkedAdvice);
     await ctx.repos.trade.save({
       ...seedTrade,
       id: 'weekly-attributed-trade',
       executedAt: new Date('2026-07-30T02:30:00.000Z'),
-      adviceId: advice.id,
+      adviceId: linkedAdvice.id,
     });
 
+    expect(
+      await recordAdviceOutcomeTool.execute(
+        {
+          adviceId: linkedAdvice.id,
+          outcome: 'followed',
+          tradeIds: ['weekly-attributed-trade'],
+        },
+        ctx,
+      ),
+    ).toEqual(expect.objectContaining({ ok: true }));
     const result = await weeklyReportWorkflow.run(
       {
         periodEnd: '2026-07-31',
@@ -838,5 +876,113 @@ describe('weekly-report workflow', () => {
     expect(list?.kind === 'list' ? list.items : []).toHaveLength(0);
     const text = section?.blocks.find((block) => block.kind === 'text');
     expect(text?.kind === 'text' ? text.text : '').toContain('本周没有 AI 管理动作');
+  });
+
+  it('原周报投递失败后复用原版重试，内容补充版禁止投递', async () => {
+    let current = now;
+    let sends = 0;
+    const base = await buildTestContext({ clock: () => current });
+    const ctx: ToolContext = {
+      ...base,
+      notification: {
+        send: async (input) => {
+          sends += 1;
+          const notification = {
+            id: input.id ?? `weekly-notification-${sends}`,
+            channel: input.channel,
+            payload: input.payload,
+            result: sends === 1 ? ('failed' as const) : ('success' as const),
+            sentAt: current,
+          };
+          await base.repos.notification.save(notification);
+          return { notification };
+        },
+      },
+    };
+    const input = { periodEnd: '2026-07-31', notify: true };
+    const first = await weeklyReportWorkflow.run(input, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.report.deliveryStatus).toBe('failed');
+    current = new Date(now.getTime() + 16 * 60_000);
+    const retry = await weeklyReportWorkflow.run(input, ctx);
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.data.report.id).toBe(first.data.report.id);
+    expect(retry.data.report.deliveryStatus).toBe('sent');
+    expect(sends).toBe(2);
+    const supplement = await ctx.repos.report.upsertForPeriod({
+      ...first.data.report,
+      id: 'weekly-review-supplement-never',
+      version: 2,
+      supersedesReportId: first.data.report.id,
+      notificationPolicy: 'never',
+      deliveryStatus: 'not-requested',
+    });
+    expect(
+      await ctx.repos.report.claimDelivery({
+        id: supplement.id,
+        attemptId: 'forbidden',
+        now: current,
+        stalePendingBefore: current,
+        failedRetryBefore: current,
+      }),
+    ).toBe(false);
+    await weeklyReportWorkflow.run(input, ctx);
+    expect(sends).toBe(2);
+  });
+
+  it('同一事实重复生成周报复用原版本', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const first = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    const second = await weeklyReportWorkflow.run({ periodEnd: '2026-07-31', notify: false }, ctx);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(second.data.report.id).toBe(first.data.report.id);
+    expect(second.data.created).toBe(false);
+    expect(await ctx.repos.report.list({ kind: 'weekly' })).toHaveLength(1);
+  });
+
+  it('账户复盘变化生成的周报补充版绝不额外通知', async () => {
+    const ctx = await buildTestContext({ clock: () => now });
+    const input = {
+      periodEnd: '2026-07-31',
+      scope: { kind: 'account' as const, accountId: ctx.user.defaultAccountId },
+      notify: true,
+    };
+    const first = await weeklyReportWorkflow.run(input, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const advice = (await ctx.repos.advice.query({ includeExpired: true, limit: 1 }))[0];
+    if (!advice) throw new Error('advice fixture missing');
+    const subject = { kind: 'advice' as const, id: advice.id };
+    const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok || preview.data.context === null) return;
+    const saved = await saveDecisionReviewTool.execute(
+      {
+        requestId: crypto.randomUUID(),
+        subject,
+        contextHash: preview.data.context.contextHash,
+        expectedRevision: 0,
+        content: {
+          tradeIds: [],
+          adviceFeedback: { outcome: 'ignored' },
+          triggerFeedback: null,
+          note: '本周复盘',
+        },
+      },
+      ctx,
+    );
+    expect(saved.ok).toBe(true);
+    const second = await weeklyReportWorkflow.run(input, ctx);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.report.id).not.toBe(first.data.report.id);
+    expect(second.data.report.notificationPolicy).toBe('never');
+    expect(second.data.report.deliveryStatus).toBe('not-requested');
+    expect(second.data.notified).toBe(false);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
   });
 });

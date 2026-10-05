@@ -1,10 +1,13 @@
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   money,
+  quantity,
+  ReportSchema,
   reconcileCashBalance,
   STANDARD_DISCLAIMERS,
   stockCode,
@@ -68,6 +71,321 @@ const transferPlan = () =>
   });
 
 describe('data transfer', () => {
+  it('主报告无变化刷新回执可回导，同时保留账户与不可变版本约束', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    const now = new Date('2026-09-30T10:00:00Z');
+    const report = ReportSchema.parse({
+      id: 'report-noop',
+      version: 1,
+      kind: 'closing',
+      scope: { kind: 'account', accountId: 'account-1' },
+      periodStart: '2026-09-30',
+      periodEnd: '2026-09-30',
+      title: '账户日报',
+      generatedAt: now,
+      dataAsOf: now,
+      status: 'complete',
+      sections: [
+        {
+          key: 'review',
+          title: '复盘',
+          required: true,
+          status: 'complete',
+          blocks: [{ kind: 'text', text: '已核对' }],
+          evidenceIds: [],
+          missingDimensions: [],
+        },
+      ],
+      evidence: [],
+      missingDimensions: [],
+      deliveryStatus: 'not-requested',
+      notificationPolicy: 'eligible',
+      workflowRunId: 'workflow-noop',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await source.repos.report.upsertForPeriod(report);
+    const requestId = crypto.randomUUID();
+    await source.repos.report.reuseDecisionReviewReport({
+      accountId: 'account-1',
+      reportId: report.id,
+      requestId,
+      requestHash: 'noop-hash',
+      throughSequence: 0,
+    });
+    source.close();
+    const archive = exportDataArchive(sourcePath, ['advice-reports']);
+    const targetPath = databasePath();
+    createDrizzleRepos(targetPath).close();
+    importDataArchive(targetPath, archive);
+    importDataArchive(targetPath, archive);
+    const target = createDrizzleRepos(targetPath);
+    expect(
+      (await target.repos.report.findRefreshReceipt({ accountId: 'account-1', requestId }))?.report
+        .id,
+    ).toBe(report.id);
+    target.close();
+    const receipt = archive.tables.report_refresh_receipts?.[0];
+    const storedReport = archive.tables.reports?.[0];
+    if (!receipt || !storedReport) throw new Error('report receipt fixture missing');
+    const incoming = (tables: typeof archive.tables) => ({ ...archive, tables });
+    expect(() =>
+      importDataArchive(
+        targetPath,
+        incoming({ report_refresh_receipts: [{ ...receipt, request_hash: 'other' }] }),
+      ),
+    ).toThrow('不可变身份');
+    expect(() =>
+      importDataArchive(
+        targetPath,
+        incoming({
+          report_refresh_receipts: [
+            { ...receipt, account_id: 'account-2', request_id: crypto.randomUUID() },
+          ],
+        }),
+      ),
+    ).toThrow('归属不一致');
+    expect(() =>
+      importDataArchive(
+        targetPath,
+        incoming({
+          report_refresh_receipts: [
+            { ...receipt, report_id: 'missing', request_id: crypto.randomUUID() },
+          ],
+        }),
+      ),
+    ).toThrow('归属不一致');
+    expect(() =>
+      importDataArchive(
+        targetPath,
+        incoming({
+          reports: [
+            {
+              ...storedReport,
+              scope_key: 'account:account-2',
+              scope_json: JSON.stringify({ kind: 'account', accountId: 'account-2' }),
+            },
+          ],
+        }),
+      ),
+    ).toThrow('不可变版本');
+    const never = {
+      ...storedReport,
+      id: 'report-never',
+      version: 2,
+      supersedes_report_id: report.id,
+      notification_policy: 'never',
+    };
+    importDataArchive(targetPath, incoming({ reports: [never] }));
+    expect(() =>
+      importDataArchive(
+        targetPath,
+        incoming({ reports: [{ ...never, notification_policy: 'eligible' }] }),
+      ),
+    ).toThrow('不可变版本');
+    expect(() =>
+      importDataArchive(
+        targetPath,
+        incoming({ reports: [{ ...never, id: 'replacement-report' }] }),
+      ),
+    ).toThrow('不可变版本');
+    const verify = new Database(targetPath);
+    expect(
+      verify.query('SELECT notification_policy FROM reports WHERE id = ?').get(never.id),
+    ).toEqual({ notification_policy: 'never' });
+    verify.close();
+  });
+
+  it('仅导入成交也校验既有复盘历史关联，并阻止逻辑主体身份替换', async () => {
+    const path = databasePath();
+    const db = createDrizzleRepos(path);
+    const now = new Date('2026-09-30T10:00:00Z');
+    const trade = {
+      id: 'trade-linked',
+      accountId: 'account-1',
+      stockId: '600519.SH',
+      side: 'buy' as const,
+      quantity: quantity(1),
+      price: money(100),
+      fee: money(0),
+      executedAt: now,
+      source: 'manual' as const,
+      createdAt: now,
+    };
+    await db.repos.trade.save(trade);
+    const review = {
+      id: 'review-linked',
+      accountId: 'account-1',
+      subject: { kind: 'advice' as const, id: 'advice-linked' },
+      stockId: trade.stockId,
+      sourceOccurredAt: now,
+      createdAt: now,
+      context: {
+        schemaVersion: 1 as const,
+        capturedAt: now,
+        sourceDataAsOf: null,
+        captureOrigin: 'user' as const,
+        source: {},
+        contextHash: 'context',
+      },
+    };
+    const content = {
+      tradeIds: [trade.id],
+      adviceFeedback: null,
+      triggerFeedback: null,
+      note: null,
+    };
+    const hash = createHash('sha256').update(JSON.stringify(trade)).digest('hex');
+    await db.repos.decisionReview.commit({
+      accountId: review.accountId,
+      requestId: crypto.randomUUID(),
+      requestHash: 'r1',
+      expectedRevision: 0,
+      review,
+      content,
+      contentHash: 'content-1',
+      tradeFactHashes: { [trade.id]: hash },
+      changeNote: null,
+      recordedAt: now,
+    });
+    await db.repos.decisionReview.commit({
+      accountId: review.accountId,
+      requestId: crypto.randomUUID(),
+      requestHash: 'r2',
+      expectedRevision: 1,
+      review,
+      content: { ...content, tradeIds: [], note: '取消关联' },
+      contentHash: 'content-2',
+      tradeFactHashes: {},
+      changeNote: '更正',
+      recordedAt: now,
+    });
+    db.close();
+    const archive = exportDataArchive(path, ['portfolio', 'advice-reports']);
+    const storedTrade = archive.tables.trades?.[0];
+    const storedReview = archive.tables.decision_reviews?.[0];
+    if (!storedTrade || !storedReview) throw new Error('linked review fixture missing');
+    expect(() =>
+      importDataArchive(path, {
+        ...archive,
+        tables: { trades: [{ ...storedTrade, account_id: 'account-2' }] },
+      }),
+    ).toThrow('历史复盘成交归属不一致');
+    expect(() =>
+      importDataArchive(path, {
+        ...archive,
+        tables: { decision_reviews: [{ ...storedReview, id: 'replacement-review' }] },
+      }),
+    ).toThrow('主体身份');
+    const verify = new Database(path);
+    expect(verify.query('SELECT account_id FROM trades WHERE id = ?').get(trade.id)).toEqual({
+      account_id: 'account-1',
+    });
+    expect(verify.query('SELECT id FROM decision_reviews').all()).toEqual([{ id: review.id }]);
+    verify.close();
+  });
+
+  it('复盘修订与提交回执随 advice-reports 完整回导', async () => {
+    const sourcePath = databasePath();
+    const source = createDrizzleRepos(sourcePath);
+    const subject = { kind: 'advice' as const, id: 'advice-archive' };
+    const review = {
+      id: 'review-archive',
+      accountId: 'account-1',
+      subject,
+      stockId: '600519.SH',
+      sourceOccurredAt: new Date('2026-09-01T00:00:00Z'),
+      context: {
+        schemaVersion: 1 as const,
+        capturedAt: new Date('2026-09-02T00:00:00Z'),
+        sourceDataAsOf: null,
+        captureOrigin: 'user' as const,
+        source: { id: subject.id },
+        contextHash: 'context-archive',
+      },
+      createdAt: new Date('2026-09-02T00:00:00Z'),
+    };
+    const content = {
+      tradeIds: [],
+      adviceFeedback: { outcome: 'ignored' as const },
+      triggerFeedback: null,
+      note: '记录于账户',
+    };
+    await source.repos.decisionReview.commit({
+      accountId: 'account-1',
+      requestId: crypto.randomUUID(),
+      requestHash: 'request-archive',
+      expectedRevision: 0,
+      review,
+      content,
+      contentHash: 'content-archive',
+      tradeFactHashes: {},
+      changeNote: null,
+      recordedAt: new Date('2026-09-02T00:00:00Z'),
+    });
+    source.close();
+    const archive = exportDataArchive(sourcePath, ['advice-reports']);
+    expect(archive.tables.decision_reviews).toHaveLength(1);
+    expect(archive.tables.decision_review_revisions).toHaveLength(1);
+    expect(archive.tables.decision_write_receipts).toHaveLength(1);
+    const targetPath = databasePath();
+    createDrizzleRepos(targetPath).close();
+    importDataArchive(targetPath, archive);
+    const target = createDrizzleRepos(targetPath);
+    expect(
+      (await target.repos.decisionReview.findBySubject({ accountId: 'account-1', subject }))
+        ?.revision.content,
+    ).toEqual(content);
+    const duplicate = structuredClone(archive);
+    const receipt = duplicate.tables.decision_write_receipts?.[0];
+    if (!receipt) throw new Error('receipt fixture missing');
+    (receipt as { request_hash: string }).request_hash = 'rewritten-request';
+    expect(() => importDataArchive(targetPath, duplicate)).toThrow('不可变身份');
+    expect(
+      (await target.repos.decisionReview.findBySubject({ accountId: 'account-1', subject }))
+        ?.revision.content,
+    ).toEqual(content);
+    target.close();
+
+    const crossPath = databasePath();
+    const cross = createDrizzleRepos(crossPath);
+    await cross.repos.trade.save({
+      id: 'cross-account-trade',
+      accountId: 'account-2',
+      stockId: '600519.SH',
+      side: 'buy',
+      quantity: quantity(1),
+      price: money(100),
+      fee: money(0),
+      executedAt: new Date('2026-09-03T00:00:00Z'),
+      source: 'manual',
+      createdAt: new Date('2026-09-03T00:00:00Z'),
+    });
+    cross.close();
+    const crossArchive: typeof archive = {
+      ...structuredClone(archive),
+      tables: {
+        ...structuredClone(archive.tables),
+        decision_review_trade_links: [
+          {
+            review_id: review.id,
+            account_id: 'account-1',
+            trade_id: 'cross-account-trade',
+            revision: 1,
+          },
+        ],
+      },
+    };
+    const revision = crossArchive.tables.decision_review_revisions?.[0];
+    if (!revision) throw new Error('revision fixture missing');
+    const linkedContent = { ...content, tradeIds: ['cross-account-trade'] };
+    (revision as { content_json: string }).content_json = JSON.stringify(linkedContent);
+    expect(() => importDataArchive(crossPath, crossArchive)).toThrow('归属不一致');
+    const crossDb = new Database(crossPath);
+    expect(crossDb.query('SELECT count(*) AS n FROM decision_reviews').get()).toEqual({ n: 0 });
+    crossDb.close();
+  });
   it('按分类导出并合并导入', async () => {
     const sourcePath = databasePath();
     const source = createDrizzleRepos(sourcePath);
@@ -263,7 +581,7 @@ describe('data transfer', () => {
     expect((await reopened.repos.advice.findById('advice-1'))?.disclaimers).toEqual([
       ...STANDARD_DISCLAIMERS,
     ]);
-    expect((await reopened.repos.advice.findById('advice-1'))?.outcome).toMatchObject({
+    expect(await reopened.repos.advice.findOutcome('advice-1')).toMatchObject({
       tradeIds: ['trade-1'],
       outcome: 'partially_followed',
       pnl: -12.5,

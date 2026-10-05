@@ -56,6 +56,7 @@ export const accountFactsSummary = ({ factsResult, reconcileResult }) => {
  */
 
 import { callApi } from './api.js';
+import { openDecisionReview } from './decision-review-ui.js';
 import { makeSelect } from './form-kit.js';
 import { openModal } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
@@ -569,6 +570,16 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
       diffRoot,
       ...planDetailSections(subject).map(sectionNode),
       auditNode(subject),
+      (() => {
+        const button = el('button', 'btn btn-outline btn-sm', '决策与复盘');
+        button.type = 'button';
+        button.addEventListener(
+          'click',
+          () =>
+            void openDecisionReview({ kind: 'trading-plan-version', id: planVersionId(subject) }),
+        );
+        return button;
+      })(),
       el(
         'p',
         'hint',

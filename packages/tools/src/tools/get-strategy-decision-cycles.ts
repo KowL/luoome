@@ -18,6 +18,11 @@ import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import {
+  accountAdviceOutcomes,
+  accountScopedAdvices,
+  attachAccountAdviceOutcomes,
+} from '../internal/account-advice-outcomes.js';
+import {
   collectStrategyObservationEvidence,
   type StrategyObservationEvidence,
 } from '../internal/strategy-observation-evidence.js';
@@ -41,7 +46,7 @@ const ObservationProgressSchema = z.object({
 const TradeLinkSchema = z.object({
   tradeId: z.string().min(1),
   adviceId: z.string().min(1),
-  relation: z.enum(['trade.adviceId', 'advice.outcome.tradeIds']),
+  relation: z.literal('decision-review.tradeIds'),
 });
 
 const ExcludedRunSchema = z.object({
@@ -200,20 +205,12 @@ function explicitTradeRelations(
     if (adviceRow.basedOn?.strategy?.stockId !== stockId) continue;
     const outcomeTradeIds = adviceRow.outcome?.tradeIds ?? [];
     for (const trade of trades) {
-      if (trade.adviceId === adviceRow.id) {
-        if (trade.stockId !== stockId) {
-          unknowns.push(`Advice ${adviceRow.id} 的 Trade ${trade.id} 股票不匹配，未纳入本周期。`);
-          continue;
-        }
-        linkedTradeIds.add(trade.id);
-        links.push({ tradeId: trade.id, adviceId: adviceRow.id, relation: 'trade.adviceId' });
-      }
       if (trade.stockId === stockId && outcomeTradeIds.includes(trade.id)) {
         linkedTradeIds.add(trade.id);
         links.push({
           tradeId: trade.id,
           adviceId: adviceRow.id,
-          relation: 'advice.outcome.tradeIds',
+          relation: 'decision-review.tradeIds',
         });
       }
     }
@@ -314,7 +311,7 @@ async function loadCycle(
   const limitations = [
     '周期由 strategyId + runId + stockId 派生，不新增持久化闭环实体。',
     'SignalObservation 是信号后的确定性事实观察，不是回测，也不包含成交、费用或滑点假设。',
-    'Trade 只按 Advice ID 或 AdviceOutcome.tradeIds 显式归因；不会从 strategyVersionId、日期或股票推断周期。',
+    'Trade 只按当前账户复盘修订中的明确关联归因；不会从旧登记字段、日期或股票推断周期。',
     'replay、evaluation、withheld 与 non-publishing 运行不会进入生产闭环或触发 Advice。',
     ...observationEvidence.limitations,
   ];
@@ -393,6 +390,7 @@ export const getStrategyDecisionCyclesTool = defineTool({
     }
 
     const accountTrades = await ctx.repos.trade.listByAccount(accountId);
+    const accountOutcomes = await accountAdviceOutcomes(ctx, accountId);
     const adviceByStock = new Map<string, Advice[]>();
     const resultsByRun = new Map<string, StrategyResult[]>();
     const allResults = await ctx.repos.strategyRun.listResultsByRuns(runs.map((run) => run.id));
@@ -423,12 +421,19 @@ export const getStrategyDecisionCyclesTool = defineTool({
         if (!adviceByStock.has(stockId)) {
           adviceByStock.set(
             stockId,
-            await ctx.repos.advice.query({
-              subjectKind: 'stock',
-              subjectId: stockId,
-              includeExpired: true,
-              limit: 5_000,
-            }),
+            attachAccountAdviceOutcomes(
+              await accountScopedAdvices(
+                ctx,
+                accountId,
+                await ctx.repos.advice.query({
+                  subjectKind: 'stock',
+                  subjectId: stockId,
+                  includeExpired: true,
+                  limit: 5_000,
+                }),
+              ),
+              accountOutcomes,
+            ),
           );
         }
         cycles.push(
@@ -451,7 +456,7 @@ export const getStrategyDecisionCyclesTool = defineTool({
     const limitations = unique([
       '只返回 published operational StrategyRun 的生产候选周期；replay/evaluation/withheld/non-publishing 被排除。',
       '周期以 strategyId + runId + stockId 派生；没有独立闭环持久化实体。',
-      'Trade 归因需要 Advice ID 或 AdviceOutcome.tradeIds 的显式关系；仅有 strategyVersionId 不足以归入周期。',
+      'Trade 归因需要当前账户复盘记录中的显式关系；仅有登记时来源或 strategyVersionId 不足以归入周期。',
       ...cycles.flatMap((cycle) => cycle.limitations),
     ]);
     const evidenceIds = unique([

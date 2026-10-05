@@ -24,13 +24,13 @@ luoome 是本地工具 + MCP server + advisor agent。五类潜在威胁：
 | `advice` | 生成建议（含 LLM 推理） | ✅ MCP / Web / CLI / TUI |
 | `write` | 写本地状态 | ⚠️ opt-in |
 | `external` | 触发第三方副作用 | ⚠️ opt-in |
-| `trade` | 触发真实资金动作 | ❌ 永不 |
+| `trade` | 成交记账（影响现金与持仓）或真实资金动作 | ❌ MCP / 通用 Web 工具路由永不暴露 |
 
 一个 tool 同时需要多类授权时，通过 `requiredCapabilities` 声明组合能力，Web 与 MCP
 必须逐项满足后才能暴露。例如 `import_remote_research_document` 会访问外部网络并写入
 本地 Vault，因此同时要求 `write` 与 `external`，只开启其中任一能力都不能调用。
 
-### trade 永不暴露（硬约束）
+### trade 永不通过 MCP 暴露（硬约束）
 
 MCP server 启动时检查 `LUOOME_EXPOSE_TRADE`：
 
@@ -41,6 +41,20 @@ if (env.LUOOME_EXPOSE_TRADE === 'true') {
 ```
 
 这条规则**无法通过配置绕过**。代码层硬卡。
+
+Web 通用路由 `/api/tools/:name/call` 同样拒绝所有 `trade` 工具。本地 Web 的人工成交
+录入可经专用路由暴露，但必须同时满足以下条件：
+
+- 只登记用户在系统外已经完成的成交；不得下单、撤单、调用券商执行接口或触发外部资金动作。
+- 路由固定绑定经过审查的记账工具，不接受任意工具名，也不进入 MCP 或模型可调用工具表。
+- 要求显式 write opt-in、同源校验（请求提供 Origin 时）、当前账户绑定，以及用户明确确认该成交尚未入账。
+- 校验成交输入、来源与账本指纹及预期修订；成交、持仓、现金、复盘与请求回执原子提交，
+  以请求 ID 保证重试幂等。
+
+`POST /api/decision-trades` 绑定 `record_decision_trade`，是上述例外。保留其 `trade`
+分类，是因为登记成交会联动现金与持仓，风险高于普通状态写入；该分类不意味着工具必然下单。
+专用路由的 write 授权仅适用于上述人工记账边界，不是把 `trade` 统一降为 `write`，也不受
+`LUOOME_EXPOSE_TRADE` 开关放行。任何新增专用路由都须逐项满足这些条件。
 
 研究正文和全文搜索属于私人研究能力，MCP 暴露时还必须显式设置 `LUOOME_EXPOSE_RESEARCH=true`；未开启时只允许不含正文的本地索引页面。Vault 正文、frontmatter、附件名和搜索片段均视为不可信数据，不进入 system prompt，不输出绝对 Vault 路径或凭证。
 
@@ -227,7 +241,7 @@ Web 对话和草案确认要求 write + external 双 opt-in 和同源 Origin。�
 executing 状态不自动重试，需先核对实际业务数据；核对后可显式取消该草案（终态，不会补执行）。
 模型下一轮读取真实 ToolResult，用户伪造的文本处理记录不能作为成功凭据。
 
-write 类工具通过 MCP 暴露时，`add_trade` 必须带 `confirm: true` 才执行。这是协议层约定，agent 应当向用户复述交易详情后，再调一次带 `confirm: true`。
+`add_trade` 与 `record_decision_trade` 属于 trade 类工具，永不通过 MCP 暴露；`confirm: true` 不能绕过这一边界。设置 `LUOOME_EXPOSE_TRADE=true` 会触发 MCP 启动硬卡。Web 的实际成交录入只登记用户已在系统外完成的成交，要求 write opt-in、同源校验、当前账户绑定与明确的尚未入账确认，不调用券商下单。
 
 ## 数据完整性
 

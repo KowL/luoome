@@ -1777,6 +1777,14 @@ describe('strategy-autonomy-weekly · 周报嵌套触发', () => {
       repos: {
         ...base.repos,
         report: {
+          reuseDecisionReviewReport: (
+            ...args: Parameters<typeof reportRepo.reuseDecisionReviewReport>
+          ) => reportRepo.reuseDecisionReviewReport(...args),
+          findRefreshReceipt: (...args: Parameters<typeof reportRepo.findRefreshReceipt>) =>
+            reportRepo.findRefreshReceipt(...args),
+          appendDecisionReviewSupplement: (
+            ...args: Parameters<typeof reportRepo.appendDecisionReviewSupplement>
+          ) => reportRepo.appendDecisionReviewSupplement(...args),
           upsertForPeriod: async () => {
             throw new Error('report store unavailable');
           },

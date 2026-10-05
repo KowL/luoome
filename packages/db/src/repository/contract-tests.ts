@@ -1451,6 +1451,32 @@ export const registerRepositoryContractTests = (
         expect(list.map((t) => t.id)).toEqual(['t-1', 't-2']);
       });
 
+      it('listByAccount 先按账户、股票和包含起点的时间过滤，再稳定排序和截取', async () => {
+        for (const trade of [
+          makeTrade('before', { executedAt: T0 }),
+          makeTrade('boundary', { executedAt: T1 }),
+          makeTrade('latest-a', { executedAt: T2 }),
+          makeTrade('latest-b', { executedAt: T2 }),
+          makeTrade('other-stock', { stockId: 'stk-2', executedAt: T3 }),
+          makeTrade('other-account', { accountId: 'acc-2', executedAt: T3 }),
+        ])
+          await repos.trade.save(trade);
+        const filter = { stockId: 'stk-1', executedAtFrom: T1 };
+        expect((await repos.trade.listByAccount('acc-1', filter)).map((t) => t.id)).toEqual([
+          'boundary',
+          'latest-a',
+          'latest-b',
+        ]);
+        expect(
+          (await repos.trade.listByAccount('acc-1', { ...filter, order: 'desc', limit: 2 })).map(
+            (t) => t.id,
+          ),
+        ).toEqual(['latest-b', 'latest-a']);
+        expect(await repos.trade.listByAccount('acc-1', { ...filter, executedAtFrom: T3 })).toEqual(
+          [],
+        );
+      });
+
       it('违反不变量时拒绝（quantity <= 0 / price <= 0 / fee < 0）', async () => {
         await expect(
           repos.trade.save(makeTrade('t-bad-1', { quantity: quantity(0) })),
@@ -5439,6 +5465,42 @@ export const registerRepositoryContractTests = (
           original,
         );
         await expect(repos.report.remove(original.id)).rejects.toThrow(/has supplements/);
+      });
+
+      it('同周期周报保留不可变主版和补充版', async () => {
+        const weekly = makeReport('weekly-original', {
+          kind: 'weekly',
+          periodStart: '2026-06-29',
+          periodEnd: '2026-07-02',
+          title: '原周报',
+        });
+        const original = await repos.report.upsertForPeriod(weekly);
+        const attemptedOverwrite = await repos.report.upsertForPeriod({
+          ...weekly,
+          id: 'weekly-overwrite',
+          title: '不应覆盖',
+        });
+        expect(attemptedOverwrite.id).toBe(original.id);
+        expect((await repos.report.findById(original.id))?.title).toBe('原周报');
+        const supplement = await repos.report.upsertForPeriod({
+          ...weekly,
+          id: 'weekly-supplement',
+          version: 2,
+          supersedesReportId: original.id,
+          title: '周报补充',
+        });
+        expect(supplement.version).toBe(2);
+        expect((await repos.report.findById(original.id))?.title).toBe('原周报');
+        expect(
+          (
+            await repos.report.findByPeriod({
+              kind: 'weekly',
+              scopeKey: 'all-accounts',
+              periodStart: '2026-06-29',
+              periodEnd: '2026-07-02',
+            })
+          )?.id,
+        ).toBe(supplement.id);
       });
 
       it('并发写入同一收盘版本只保留一份主报告', async () => {

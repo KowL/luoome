@@ -3,6 +3,14 @@ import type { AccountFacts } from '../entity/account-facts.js';
 import type { Advice, AdviceOutcome, AdviceOutcomeQuery, AdviceQuery } from '../entity/advice.js';
 import type { AlertPlan } from '../entity/alert-plan.js';
 import type { ChatMessage, ChatSession } from '../entity/chat-session.js';
+import type {
+  DecisionReview,
+  DecisionReviewContent,
+  DecisionReviewRevision,
+  DecisionReviewSubject,
+  DecisionReviewWithRevision,
+  DecisionTradeCommitResult,
+} from '../entity/decision-review.js';
 import type { FinancialFact, FinancialVintage } from '../entity/fundamental.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
@@ -91,6 +99,7 @@ import type {
   WatchlistSyncRun,
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
+import type { DecisionLedgerState } from '../portfolio/decision-ledger-state.js';
 import type { HoldingCashAdjustment } from '../portfolio/ledger.js';
 import type {
   TradingPlanBudgetLimits,
@@ -192,8 +201,94 @@ export interface HoldingRepository {
 export interface TradeRepository {
   save(trade: Trade): Promise<void>;
   findById(id: string): Promise<Trade | null>;
-  listByAccount(accountId: string): Promise<Trade[]>;
+  listByAccount(
+    accountId: string,
+    filter?: {
+      readonly stockId?: string;
+      /** 包含起点，筛选先于排序和截取。 */
+      readonly executedAtFrom?: Date;
+      readonly order?: 'asc' | 'desc';
+      readonly limit?: number;
+    },
+  ): Promise<Trade[]>;
   remove(id: string): Promise<void>;
+}
+
+export interface DecisionReviewRepository {
+  findBySubject(input: {
+    readonly accountId: string;
+    readonly subject: DecisionReviewSubject;
+  }): Promise<DecisionReviewWithRevision | null>;
+  findById(input: {
+    readonly accountId: string;
+    readonly id: string;
+    readonly revision?: number;
+  }): Promise<DecisionReviewWithRevision | null>;
+  list(input: {
+    readonly accountId: string;
+    readonly stockId?: string;
+    readonly subjectKind?: DecisionReviewSubject['kind'];
+    readonly since?: Date;
+    readonly until?: Date;
+    readonly cursor?: { readonly occurredAt: Date; readonly id: string };
+    readonly throughSequence?: number;
+    readonly limit?: number;
+  }): Promise<readonly DecisionReviewWithRevision[]>;
+  latestSequence(accountId: string): Promise<number>;
+  listActivity(input: {
+    readonly accountId: string;
+    readonly stockId?: string;
+    readonly subjectKind?: DecisionReviewSubject['kind'];
+    readonly since?: Date;
+    readonly until?: Date;
+    readonly cursor?: { readonly recordedAt: Date; readonly sequence: number };
+    readonly throughSequence?: number;
+    readonly limit?: number;
+  }): Promise<readonly DecisionReviewWithRevision[]>;
+  listRevisions(input: {
+    readonly accountId: string;
+    readonly reviewId: string;
+  }): Promise<readonly DecisionReviewRevision[]>;
+  findWriteReceipt(input: {
+    readonly accountId: string;
+    readonly requestId: string;
+  }): Promise<{ readonly requestHash: string; readonly result: DecisionReviewWithRevision } | null>;
+  commit(input: {
+    readonly accountId: string;
+    readonly requestId: string;
+    readonly requestHash: string;
+    readonly expectedRevision: number;
+    readonly review: Omit<DecisionReview, 'currentRevision'>;
+    readonly content: DecisionReviewContent;
+    readonly contentHash: string;
+    readonly tradeFactHashes: Readonly<Record<string, string>>;
+    readonly changeNote: string | null;
+    readonly recordedAt: Date;
+  }): Promise<{ readonly result: DecisionReviewWithRevision; readonly replayed: boolean }>;
+}
+
+export interface DecisionTradeRepository {
+  getLedgerState(accountId: string): Promise<DecisionLedgerState | null>;
+  findReceipt(input: {
+    readonly accountId: string;
+    readonly requestId: string;
+  }): Promise<{ readonly requestHash: string; readonly result: DecisionTradeCommitResult } | null>;
+  commitTrade(input: {
+    readonly accountId: string;
+    readonly requestId: string;
+    readonly requestHash: string;
+    readonly expectedLedgerStateHash: string;
+    readonly previousHolding: Holding | null;
+    readonly trade: Trade;
+    readonly holding: Holding;
+    readonly changes: readonly {
+      readonly review: Omit<DecisionReview, 'currentRevision'>;
+      readonly expectedRevision: number;
+      readonly content: DecisionReviewContent;
+      readonly contentHash: string;
+      readonly tradeFactHashes: Readonly<Record<string, string>>;
+    }[];
+  }): Promise<{ readonly result: DecisionTradeCommitResult; readonly replayed: boolean }>;
 }
 
 export interface PortfolioCashFlowRepository {
@@ -382,6 +477,23 @@ export interface TradingPlanRepository {
 
 export interface ReportRepository {
   upsertForPeriod(report: Report): Promise<Report>;
+  findRefreshReceipt(input: {
+    readonly accountId: string;
+    readonly requestId: string;
+  }): Promise<{ readonly requestHash: string; readonly report: Report } | null>;
+  reuseDecisionReviewReport(input: {
+    readonly accountId: string;
+    readonly reportId: string;
+    readonly requestId: string;
+    readonly requestHash: string;
+    readonly throughSequence: number;
+  }): Promise<Report>;
+  appendDecisionReviewSupplement(input: {
+    readonly report: Report;
+    readonly expectedLatestReportId: string;
+    readonly requestId: string;
+    readonly requestHash: string;
+  }): Promise<{ readonly report: Report; readonly created: boolean; readonly replayed: boolean }>;
   findById(id: string): Promise<Report | null>;
   findByPeriodVersion(input: {
     readonly kind: ReportKind;
@@ -432,6 +544,8 @@ export interface RepositoryRegistry {
   readonly limitUpLadderSnapshot: LimitUpLadderSnapshotRepository;
   readonly holding: HoldingRepository;
   readonly trade: TradeRepository;
+  readonly decisionReview: DecisionReviewRepository;
+  readonly decisionTrade: DecisionTradeRepository;
   readonly portfolioCashFlow: PortfolioCashFlowRepository;
   readonly portfolioCorporateAction: PortfolioCorporateActionRepository;
   readonly portfolioPerformanceSnapshot: PortfolioPerformanceSnapshotRepository;
@@ -991,6 +1105,7 @@ export interface WatchTriggerRepository {
   ): Promise<WatchTrigger | null>;
   /** 先筛选和排序再分页；总数与结果取自同一读取快照，同优先级按 createdAt/id 倒序。 */
   query(input: {
+    readonly accountId?: string;
     readonly alertPlanId?: string;
     readonly poolId?: string;
     readonly stockId?: string;

@@ -17,11 +17,20 @@ export class InMemoryTradeRepository implements TradeRepository {
     return this.items.get(id) ?? null;
   }
 
-  /** 按执行时间升序（id 决胜），与 Drizzle 实现保持一致。 */
-  async listByAccount(accountId: string): Promise<Trade[]> {
-    return [...this.items.values()]
-      .filter((t) => t.accountId === accountId)
+  async listByAccount(
+    accountId: string,
+    filter: Parameters<TradeRepository['listByAccount']>[1] = {},
+  ): Promise<Trade[]> {
+    const rows = [...this.items.values()]
+      .filter(
+        (t) =>
+          t.accountId === accountId &&
+          (filter.stockId === undefined || t.stockId === filter.stockId) &&
+          (filter.executedAtFrom === undefined || t.executedAt >= filter.executedAtFrom),
+      )
       .sort((a, b) => a.executedAt.getTime() - b.executedAt.getTime() || a.id.localeCompare(b.id));
+    if (filter.order === 'desc') rows.reverse();
+    return filter.limit === undefined ? rows : rows.slice(0, filter.limit);
   }
 
   async remove(id: string): Promise<void> {

@@ -1,5 +1,6 @@
 import { createAlertRulesEditor, newAlertRule } from './alert-rule-editor.js';
 import { callApi, getAccountId } from './api.js';
+import { openDecisionReview } from './decision-review-ui.js';
 import { makeInput, makeSelect } from './form-kit.js';
 import { closeModal, confirmDialog, openModal, promptDialog } from './modal.js';
 import { stockIdentityLink } from './stock-link.js';
@@ -1388,6 +1389,16 @@ const triggerCard = (trigger) => {
         ? []
         : [el('span', triggerPriorityBadgeClass(priority), triggerPriorityLabel(priority))]),
       ...(versionId === null ? [] : [triggerPlanButton(versionId)]),
+      actionButton('决策与复盘', () =>
+        openDecisionReview(
+          { kind: 'watch-trigger', id: trigger.id },
+          {
+            onSaved: async () => {
+              await renderAlerts(() => {});
+            },
+          },
+        ),
+      ),
     ]),
     el('p', 'trigger-why', `为什么触发：${triggerWhyText(trigger)}`),
     el('div', 'trigger-row-meta muted', [

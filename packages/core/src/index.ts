@@ -9,6 +9,7 @@ export * from './entity/advice.js';
 export * from './entity/alert-plan.js';
 export * from './entity/ashare-sentiment.js';
 export * from './entity/chat-session.js';
+export * from './entity/decision-review.js';
 export * from './entity/dragon-tiger.js';
 export * from './entity/fundamental.js';
 export * from './entity/holding.js';
@@ -51,6 +52,8 @@ export * from './entity/workflow-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
+export * from './portfolio/apply-trade-to-holding.js';
+export * from './portfolio/decision-ledger-state.js';
 export * from './portfolio/ledger.js';
 export * from './portfolio/performance.js';
 export * from './portfolio/trading-plan-budget.js';

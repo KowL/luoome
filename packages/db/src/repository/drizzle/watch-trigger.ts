@@ -24,7 +24,13 @@ import {
 } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import { type Schema, watchExecutionLease, watchTriggers } from '../../schema/index.js';
+import {
+  decisionReviewRevisions,
+  decisionReviews,
+  type Schema,
+  watchExecutionLease,
+  watchTriggers,
+} from '../../schema/index.js';
 import { DrizzleWatchRuleStateRepository } from './watch-rule-state.js';
 
 // drizzle inArray 对 narrow text 列 + 联合字符串入参的泛型不匹配；改用 or(eq,...) 等价（语义不变）。
@@ -284,6 +290,17 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
 
   async query(input: Parameters<WatchTriggerRepository['query']>[0]) {
     const conditions: SQL[] = [];
+    const accountFeedback =
+      input.accountId === undefined
+        ? null
+        : sql<string | null>`(
+      SELECT json_extract(r.content_json, '$.triggerFeedback')
+      FROM decision_reviews d JOIN decision_review_revisions r
+        ON r.review_id = d.id AND r.revision = d.current_revision
+      WHERE d.account_id = ${input.accountId} AND d.subject_kind = 'watch-trigger'
+        AND d.subject_id = ${watchTriggers.id}
+      LIMIT 1
+    )`;
     if (input.alertPlanId !== undefined)
       conditions.push(
         sql`coalesce(${watchTriggers.alertPlanId}, ${watchTriggers.poolId}) = ${input.alertPlanId}`,
@@ -302,9 +319,13 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     }
     if (input.feedback !== undefined)
       conditions.push(
-        input.feedback === 'unreviewed'
-          ? isNull(watchTriggers.feedback)
-          : eq(watchTriggers.feedback, input.feedback),
+        accountFeedback === null
+          ? input.feedback === 'unreviewed'
+            ? isNull(watchTriggers.feedback)
+            : eq(watchTriggers.feedback, input.feedback)
+          : input.feedback === 'unreviewed'
+            ? sql`${accountFeedback} IS NULL`
+            : sql`${accountFeedback} = ${input.feedback}`,
       );
     if (input.deliveryStatus !== undefined)
       conditions.push(inDeliveryStatuses(input.deliveryStatus));
@@ -330,14 +351,15 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         .limit(input.limit)
         .offset(input.offset)
         .all()
-        .map(toWatchTrigger);
+        .map((row) => this.projectAccountFeedback(tx, row, input.accountId));
       let summary: WatchTriggerSummary | undefined;
       if (input.includeSummary) {
         const distribution = (
           column:
             | typeof watchTriggers.priority
             | typeof watchTriggers.deliveryStatus
-            | typeof watchTriggers.feedback,
+            | typeof watchTriggers.feedback
+            | SQL<string | null>,
         ) =>
           Object.fromEntries(
             tx
@@ -375,18 +397,53 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
         summary = {
           priorityCounts: distribution(watchTriggers.priority),
           deliveryStatusCounts: distribution(watchTriggers.deliveryStatus),
-          feedbackCounts: distribution(watchTriggers.feedback),
+          feedbackCounts: distribution(accountFeedback ?? watchTriggers.feedback),
           stocks: stocks.map((row) => ({
             stockId: row.stockId,
             count: row.stockCount,
             maxPriority:
               row.priorityRank === 0 ? 'urgent' : row.priorityRank === 1 ? 'important' : 'normal',
-            latest: toWatchTrigger(row),
+            latest: this.projectAccountFeedback(tx, row, input.accountId),
           })),
         };
       }
       return { total, triggers, ...(summary === undefined ? {} : { summary }) };
     });
+  }
+
+  private projectAccountFeedback(
+    tx: Parameters<Parameters<BunSQLiteDatabase<Schema>['transaction']>[0]>[0],
+    row: typeof watchTriggers.$inferSelect,
+    accountId?: string,
+  ): WatchTrigger {
+    const trigger = toWatchTrigger(row);
+    if (accountId === undefined) return trigger;
+    const found = tx
+      .select({
+        content: decisionReviewRevisions.content,
+        recordedAt: decisionReviewRevisions.recordedAt,
+      })
+      .from(decisionReviews)
+      .innerJoin(
+        decisionReviewRevisions,
+        and(
+          eq(decisionReviewRevisions.reviewId, decisionReviews.id),
+          eq(decisionReviewRevisions.revision, decisionReviews.currentRevision),
+        ),
+      )
+      .where(
+        and(
+          eq(decisionReviews.accountId, accountId),
+          eq(decisionReviews.subjectKind, 'watch-trigger'),
+          eq(decisionReviews.subjectId, row.id),
+        ),
+      )
+      .get();
+    const { feedback: _old, feedbackAt: _oldAt, ...base } = trigger;
+    const feedback = found?.content.triggerFeedback;
+    return feedback === undefined || feedback === null
+      ? base
+      : { ...base, feedback, feedbackAt: found!.recordedAt };
   }
 
   async listRecent(

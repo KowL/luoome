@@ -55,7 +55,8 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 - **持仓建议**：每个持仓的继续持有 / 加仓 / 减仓 / 清仓建议
 - **市场观点**：每日大盘观点、行业轮动、热点板块
 - **风险预警**：跌破止损位、触发风控规则、异常波动
-- **confidence 自校准**：历史 advice 按信心桶聚合 hitRate，告诉你系统 confidence 是否被高估
+- **账户决策与复盘**：从建议、交易计划版本或提醒回看当时依据，记录反馈、关联真实成交，并保留修订历史
+- **confidence 校准**：按当前账户的明确反馈展示各信心桶的填报盈利占比与样本数，缺失盈亏不计为零
 
 每条建议都带：**决策 + 信心度 + 有效期 + 核心论点 + 支持证据 + 反证 + 风险点 + 免责声明**。
 
@@ -100,7 +101,7 @@ homebrew/
 | `LUOOME_RESEARCH_EMBEDDING_ENABLED` | 关 | `=true`：显式挂载 Research embedding 外部 capability；默认搜索仍为本地 FTS5 |
 | `LUOOME_RESEARCH_EMBEDDING_CONFIG` | `$LUOOME_HOME/research-embeddings.json` | OpenAI-compatible embedding 模型目录；只写 `apiKeyEnv` 名，不写密钥 |
 | `LUOOME_RESEARCH_REMOTE_SYNC` | 关 | `=git`：启用独立 Git-only Vault 拉取 workflow；仍需 write/external 双 opt-in |
-| `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 挂载 outcome 回填 endpoint |
+| `LUOOME_EXPOSE_WRITE` | 关 | `=true`：MCP 追加 write 类 tool；Web 放行复盘、报告补充等本地写入入口 |
 | `LUOOME_EXPOSE_EXTERNAL` | 关 | `=true`：MCP 追加 external 类 tool |
 | `LUOOME_EXPOSE_TRADE` | 关（**硬卡**） | `=true` 时 MCP server 启动即抛错退出（trade 永不暴露） |
 | `LUOOME_FEISHU_WEBHOOK_URL` | — | 飞书通知 webhook；也可在 Web「设置 → 飞书通知」中配置，缺失时通知降级为 log |

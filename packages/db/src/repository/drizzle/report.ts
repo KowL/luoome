@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   assertReportDeliveryTransition,
   assertReportInvariants,
@@ -7,11 +8,12 @@ import {
   type ReportRepository,
   ReportSchema,
   reportScopeKey,
+  TradeSchema,
 } from '@luoome/core';
-import { and, desc, eq, gte, lte, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
-import { reports, type Schema } from '../../schema/index.js';
+import { reports, type Schema, trades } from '../../schema/index.js';
 
 type ReportRow = typeof reports.$inferSelect;
 
@@ -32,6 +34,10 @@ const toReport = (row: ReportRow): Report => {
     evidence: row.evidence,
     missingDimensions: row.missingDimensions,
     deliveryStatus: row.deliveryStatus,
+    ...(row.notificationPolicy === null ? {} : { notificationPolicy: row.notificationPolicy }),
+    ...(row.decisionReviewSnapshot === null
+      ? {}
+      : { decisionReviewSnapshot: row.decisionReviewSnapshot }),
     workflowRunId: row.workflowRunId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -57,6 +63,8 @@ const toRow = (report: Report): typeof reports.$inferInsert => ({
   evidence: report.evidence,
   missingDimensions: report.missingDimensions,
   deliveryStatus: report.deliveryStatus,
+  notificationPolicy: report.notificationPolicy ?? null,
+  decisionReviewSnapshot: report.decisionReviewSnapshot ?? null,
   deliveryAttemptId: null,
   workflowRunId: report.workflowRunId,
   createdAt: report.createdAt,
@@ -89,10 +97,10 @@ export class DrizzleReportRepository implements ReportRepository {
       reports.periodEnd,
       reports.version,
     ];
-    if (parsed.kind === 'closing') {
+    if (parsed.kind === 'closing' || parsed.kind === 'weekly') {
       this.db.insert(reports).values(row).onConflictDoNothing({ target: conflictTarget }).run();
       const saved = await this.findByPeriodVersion({ ...key, version });
-      if (saved === null) throw new InvariantError('closing report insert did not produce a row');
+      if (saved === null) throw new InvariantError('versioned report insert did not produce a row');
       return saved;
     }
     this.db
@@ -111,6 +119,8 @@ export class DrizzleReportRepository implements ReportRepository {
           evidence: row.evidence,
           missingDimensions: row.missingDimensions,
           deliveryStatus: row.deliveryStatus,
+          notificationPolicy: row.notificationPolicy,
+          decisionReviewSnapshot: row.decisionReviewSnapshot,
           workflowRunId: row.workflowRunId,
           updatedAt: row.updatedAt,
         },
@@ -119,6 +129,154 @@ export class DrizzleReportRepository implements ReportRepository {
     const saved = await this.findByPeriodVersion({ ...key, version });
     if (saved === null) throw new Error('report upsert did not produce a readable row');
     return saved;
+  }
+
+  async findRefreshReceipt(input: Parameters<ReportRepository['findRefreshReceipt']>[0]) {
+    const receipt = this.db.all<{ requestHash: string; reportId: string }>(sql`
+      SELECT request_hash AS requestHash, report_id AS reportId FROM report_refresh_receipts
+      WHERE account_id = ${input.accountId} AND request_id = ${input.requestId}
+    `)[0];
+    if (receipt === undefined) return null;
+    const report = await this.findById(receipt.reportId);
+    if (report === null) throw new InvariantError('report refresh receipt target missing');
+    return { requestHash: receipt.requestHash, report };
+  }
+
+  async reuseDecisionReviewReport(
+    input: Parameters<ReportRepository['reuseDecisionReviewReport']>[0],
+  ) {
+    return this.db.transaction(
+      (tx) => {
+        const receipt = tx.all<{ requestHash: string; reportId: string }>(sql`
+        SELECT request_hash AS requestHash, report_id AS reportId FROM report_refresh_receipts
+        WHERE account_id = ${input.accountId} AND request_id = ${input.requestId}
+      `)[0];
+        if (receipt !== undefined) {
+          if (receipt.requestHash !== input.requestHash)
+            throw new InvariantError('report refresh request identity conflict');
+          const row = tx.select().from(reports).where(eq(reports.id, receipt.reportId)).get();
+          if (row === undefined) throw new InvariantError('report refresh receipt target missing');
+          return toReport(row);
+        }
+        const row = tx.select().from(reports).where(eq(reports.id, input.reportId)).get();
+        if (
+          row === undefined ||
+          row.scope.kind !== 'account' ||
+          row.scope.accountId !== input.accountId
+        )
+          throw new InvariantError('report refresh scope changed');
+        const latest = tx
+          .select()
+          .from(reports)
+          .where(
+            and(
+              eq(reports.kind, row.kind),
+              eq(reports.scopeKey, row.scopeKey),
+              eq(reports.periodStart, row.periodStart),
+              eq(reports.periodEnd, row.periodEnd),
+            ),
+          )
+          .orderBy(desc(reports.version))
+          .limit(1)
+          .get();
+        if (latest?.id !== row.id) throw new InvariantError('report latest version changed');
+        const watermark =
+          tx.all<{ sequence: number | null }>(sql`
+        SELECT max(r.sequence) AS sequence FROM decision_review_revisions r
+        JOIN decision_reviews d ON d.id = r.review_id WHERE d.account_id = ${input.accountId}
+      `)[0]?.sequence ?? 0;
+        if (watermark !== input.throughSequence)
+          throw new InvariantError('decision review facts changed before report commit');
+        tx.run(sql`INSERT INTO report_refresh_receipts (account_id, request_id, request_hash, report_id)
+        VALUES (${input.accountId}, ${input.requestId}, ${input.requestHash}, ${row.id})`);
+        return toReport(row);
+      },
+      { behavior: 'immediate' },
+    );
+  }
+
+  async appendDecisionReviewSupplement(
+    input: Parameters<ReportRepository['appendDecisionReviewSupplement']>[0],
+  ) {
+    return this.db.transaction(
+      (tx) => {
+        const snapshot = input.report.decisionReviewSnapshot;
+        if (
+          snapshot === undefined ||
+          input.report.notificationPolicy !== 'never' ||
+          input.report.scope.kind !== 'account' ||
+          input.report.scope.accountId !== snapshot.accountId
+        )
+          throw new InvariantError(
+            'decision review supplement requires account snapshot and never policy',
+          );
+        const receipt = tx.all<{ requestHash: string; reportId: string }>(sql`
+        SELECT request_hash AS requestHash, report_id AS reportId FROM report_refresh_receipts
+        WHERE account_id = ${snapshot.accountId} AND request_id = ${input.requestId}
+      `)[0];
+        if (receipt !== undefined) {
+          if (receipt.requestHash !== input.requestHash)
+            throw new InvariantError('report refresh request identity conflict');
+          const row = tx.select().from(reports).where(eq(reports.id, receipt.reportId)).get();
+          if (row === undefined) throw new InvariantError('report refresh receipt target missing');
+          return { report: toReport(row), created: false, replayed: true };
+        }
+        const latest = tx
+          .select()
+          .from(reports)
+          .where(
+            and(
+              eq(reports.kind, input.report.kind),
+              eq(reports.scopeKey, reportScopeKey(input.report.scope)),
+              eq(reports.periodStart, input.report.periodStart),
+              eq(reports.periodEnd, input.report.periodEnd),
+            ),
+          )
+          .orderBy(desc(reports.version))
+          .limit(1)
+          .get();
+        if (
+          latest?.id !== input.expectedLatestReportId ||
+          input.report.supersedesReportId !== latest.id ||
+          input.report.version !== latest.version + 1
+        )
+          throw new InvariantError('report latest version changed');
+        const watermark =
+          tx.all<{ sequence: number | null }>(sql`
+        SELECT max(r.sequence) AS sequence FROM decision_review_revisions r
+        JOIN decision_reviews d ON d.id = r.review_id WHERE d.account_id = ${snapshot.accountId}
+      `)[0]?.sequence ?? 0;
+        if (watermark !== snapshot.throughSequence)
+          throw new InvariantError('decision review facts changed before report commit');
+        for (const [id, hash] of Object.entries(snapshot.tradeFactHashes)) {
+          const row = tx.select().from(trades).where(eq(trades.id, id)).get();
+          const current =
+            row === undefined
+              ? 'missing'
+              : createHash('sha256')
+                  .update(
+                    JSON.stringify(
+                      TradeSchema.parse({
+                        ...row,
+                        adviceId: row.adviceId ?? undefined,
+                        researchHypothesisVersionId: row.researchHypothesisVersionId ?? undefined,
+                        strategyVersionId: row.strategyVersionId ?? undefined,
+                      }),
+                    ),
+                  )
+                  .digest('hex');
+          if (current !== hash)
+            throw new InvariantError('decision review trade facts changed before report commit');
+        }
+        const parsed = ReportSchema.parse(input.report);
+        assertReportInvariants(parsed);
+        tx.insert(reports).values(toRow(parsed)).run();
+        tx.run(sql`INSERT INTO report_refresh_receipts (account_id, request_id, request_hash, report_id)
+        VALUES (${snapshot.accountId}, ${input.requestId}, ${input.requestHash}, ${parsed.id})`);
+        return { report: parsed, created: true, replayed: false };
+      },
+      { behavior: 'immediate' },
+    );
   }
 
   async findById(id: string): Promise<Report | null> {
@@ -201,6 +359,8 @@ export class DrizzleReportRepository implements ReportRepository {
   async setDeliveryStatus(id: string, status: DeliveryStatus): Promise<void> {
     const current = await this.findById(id);
     if (current === null) return;
+    if (current.notificationPolicy === 'never' && status !== 'not-requested')
+      throw new InvariantError('never report cannot enter delivery');
     assertReportDeliveryTransition(current.deliveryStatus, status);
     this.db
       .update(reports)
@@ -226,6 +386,7 @@ export class DrizzleReportRepository implements ReportRepository {
       .where(
         and(
           eq(reports.id, input.id),
+          or(eq(reports.notificationPolicy, 'eligible'), isNull(reports.notificationPolicy)),
           or(
             eq(reports.deliveryStatus, 'not-requested'),
             and(
@@ -260,6 +421,7 @@ export class DrizzleReportRepository implements ReportRepository {
       .where(
         and(
           eq(reports.id, input.id),
+          or(eq(reports.notificationPolicy, 'eligible'), isNull(reports.notificationPolicy)),
           eq(reports.deliveryStatus, 'pending'),
           eq(reports.deliveryAttemptId, input.attemptId),
         ),

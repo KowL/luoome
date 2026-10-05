@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import {
   boardStats,
@@ -15,6 +15,7 @@ import {
   readDashboardView,
   reportDeliveryLabel,
   reportEntityHref,
+  reportReviewRefreshButton,
   reportSheetNodes,
   routeAdviceId,
   routeReportId,
@@ -524,5 +525,128 @@ describe('复盘报告阅读层级', () => {
       globalThis.document = originalDocument;
       globalThis.Node = originalNode;
     }
+  });
+});
+
+describe('复盘报告补充请求恢复', () => {
+  const originals = new Map(
+    ['document', 'Node', 'localStorage', 'sessionStorage', 'fetch'].map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key),
+    ]),
+  );
+  let account;
+  let pending;
+  let requests;
+  let saved;
+  let messages;
+  beforeEach(() => {
+    account = 'account-a';
+    pending = new Map();
+    requests = [];
+    saved = [];
+    messages = [];
+    class TestNode {
+      addEventListener(_name, listener) {
+        this.click = listener;
+      }
+    }
+    const values = {
+      Node: TestNode,
+      document: { createElement: () => new TestNode() },
+      localStorage: { getItem: () => account },
+      sessionStorage: {
+        getItem: (key) => pending.get(key) ?? null,
+        setItem: (key, value) => pending.set(key, value),
+        removeItem: (key) => pending.delete(key),
+      },
+      fetch: async (_url, init) => {
+        requests.push(init);
+        return Response.json({ ok: false, error: { kind: 'internal' } });
+      },
+    };
+    for (const [key, value] of Object.entries(values))
+      Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  });
+  afterEach(() => {
+    for (const [key, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  });
+  const button = () =>
+    reportReviewRefreshButton(
+      { id: 'report-original' },
+      'account-a',
+      { canRefresh: true, latestReportId: 'report-original' },
+      (message) => messages.push(message),
+      async (id) => saved.push(id),
+    );
+
+  it('丢失响应后同一按钮及重新打开均复用原请求', async () => {
+    const first = button();
+    await first.click();
+    await first.click();
+    const reopened = button();
+    globalThis.fetch = async (_url, init) => {
+      requests.push(init);
+      return Response.json({ ok: true, data: { report: { id: 'report-next' } } });
+    };
+    await reopened.click();
+    expect(new Set(requests.map((request) => JSON.parse(request.body).requestId)).size).toBe(1);
+    expect(
+      requests.every((request) => request.headers.get('x-luoome-account-id') === 'account-a'),
+    ).toBe(true);
+    expect(saved).toEqual(['report-next']);
+    expect(pending.size).toBe(0);
+  });
+
+  it('首次明确拒绝释放请求并要求读取最新报告', async () => {
+    globalThis.fetch = async () => Response.json({ ok: false, error: { kind: 'invalid_input' } });
+    const refresh = button();
+    await refresh.click();
+    expect(pending.size).toBe(0);
+    expect(refresh.disabled).toBe(true);
+    expect(messages.at(-1)).toContain('重新选择最新报告');
+  });
+
+  it('曾有未知结果时，重试拒绝仍保留原请求', async () => {
+    const refresh = button();
+    await refresh.click();
+    const original = [...pending.values()][0];
+    globalThis.fetch = async () => Response.json({ ok: false, error: { kind: 'invalid_input' } });
+    await refresh.click();
+    expect([...pending.values()][0]).toBe(original);
+    expect(refresh.disabled).toBe(false);
+  });
+
+  it('账户切换与会话存储失败均阻止发出请求', async () => {
+    const refresh = button();
+    account = 'account-b';
+    await refresh.click();
+    expect(requests).toHaveLength(0);
+    account = 'account-a';
+    sessionStorage.setItem = () => {
+      throw new Error('disabled');
+    };
+    await refresh.click();
+    expect(requests).toHaveLength(0);
+    expect(messages.at(-1)).toContain('无法保存未决请求');
+  });
+
+  it('发送期间不会并发重发同一请求', async () => {
+    let finish;
+    globalThis.fetch = async (_url, init) => {
+      requests.push(init);
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    const refresh = button();
+    const sending = refresh.click();
+    await refresh.click();
+    expect(requests).toHaveLength(1);
+    finish(Response.json({ ok: false, error: { kind: 'internal' } }));
+    await sending;
   });
 });

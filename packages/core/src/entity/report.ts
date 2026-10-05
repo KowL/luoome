@@ -124,6 +124,20 @@ export const ReportSectionSchema = z.object({
 });
 export type ReportSection = z.infer<typeof ReportSectionSchema>;
 
+export const DecisionReviewReportSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  accountId: z.string().min(1),
+  periodStart: z.string().date(),
+  periodEnd: z.string().date(),
+  throughSequence: z.number().int().nonnegative(),
+  revisionIds: z.array(
+    z.object({ reviewId: z.string().min(1), revision: z.number().int().positive() }),
+  ),
+  tradeFactHashes: z.record(z.string(), z.string()),
+  inputFingerprint: z.string().length(64),
+});
+export type DecisionReviewReportSnapshot = z.infer<typeof DecisionReviewReportSnapshotSchema>;
+
 export const ReportSchema = z.object({
   id: z.string().min(1),
   version: z.number().int().positive().optional(),
@@ -140,6 +154,8 @@ export const ReportSchema = z.object({
   evidence: z.array(ReportEvidenceSchema),
   missingDimensions: z.array(ReportMissingDimensionSchema).default([]),
   deliveryStatus: DeliveryStatusSchema.default('not-requested'),
+  notificationPolicy: z.enum(['eligible', 'never']).optional(),
+  decisionReviewSnapshot: DecisionReviewReportSnapshotSchema.optional(),
   workflowRunId: z.string().min(1),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
@@ -179,6 +195,17 @@ const findAdviceDecisionField = (value: unknown): string | null => {
 };
 
 export const assertReportInvariants = (report: Report): void => {
+  if (
+    report.decisionReviewSnapshot !== undefined &&
+    (report.scope.kind !== 'account' ||
+      report.scope.accountId !== report.decisionReviewSnapshot.accountId ||
+      report.periodStart !== report.decisionReviewSnapshot.periodStart ||
+      report.periodEnd !== report.decisionReviewSnapshot.periodEnd)
+  )
+    throw new InvariantError('decision review snapshot scope/window mismatch');
+  if (report.notificationPolicy === 'never' && report.deliveryStatus !== 'not-requested') {
+    throw new InvariantError('never report cannot enter delivery');
+  }
   if ((report.version ?? 1) > 1 && report.supersedesReportId === undefined) {
     throw new InvariantError('report supplement must reference previous report');
   }

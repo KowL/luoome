@@ -46,6 +46,12 @@ data and are never synthesized from `PriceSnapshot` or cumulative `IntradayMinut
 Prefer one filtered list or batch tool over repeated per-item calls. `batch_quote` is classified as external because it contacts a market source.
 Use `add_watchlist_members` for one or more manual Watchlist additions so the whole request is validated and confirmed once.
 
+Account-scoped decision review reads: `get_decision_review_context`, `list_decision_reviews`,
+`get_decision_write_receipt`, and `get_decision_review_snapshot`. Keep the account and
+`throughSequence` fixed while paging; `timeBasis` selects source time or revision recording time
+for the half-open `since`/`until` window.
+A missing feedback or PnL remains unknown rather than zero.
+
 ## Advice
 
 Use advice tools only for an explicit analysis request:
@@ -69,6 +75,12 @@ Strategies are rejected. Before calling one:
 3. Obtain explicit authorization for that mutation.
 4. Call using the discovered input schema.
 5. Verify the returned result and re-read state when correctness matters.
+
+`save_decision_review` records explicit account feedback and trade links; `refresh_decision_review_report`
+creates an immutable local-only closing/weekly supplement with `notificationPolicy=never`.
+`record_decision_trade` registers an already executed external trade into the local ledger and is
+classified `trade`; MCP does not expose it. Never use it to place an order. Use a stable
+`requestId` and check the receipt before retrying an uncertain response.
 
 Holding writes can reject a concurrent change. Refresh the holding before retrying; never replay
 stale quantities or costs. Cash changes and their ledger records commit together.

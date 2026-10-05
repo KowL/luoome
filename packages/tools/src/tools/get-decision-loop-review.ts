@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errNotFound } from '../define-tool.js';
+import { accountAdviceOutcomes } from '../internal/account-advice-outcomes.js';
 
 const REVIEW_LIMIT = 1000;
 
@@ -108,6 +109,7 @@ const ResearchHypothesisSummarySchema = z.object({
 });
 
 export const GetDecisionLoopReviewOutput = z.object({
+  schemaVersion: z.literal(2),
   accountId: z.string().min(1),
   stockId: z.string().min(1).optional(),
   scope: z.object({
@@ -119,6 +121,12 @@ export const GetDecisionLoopReviewOutput = z.object({
     until: z.coerce.date().optional(),
   }),
   advice: AdviceReviewSchema,
+  decisionRecords: z.object({
+    total: z.number().int().nonnegative(),
+    linkedTrades: z.number().int().nonnegative(),
+    triggerFeedbackCount: z.number().int().nonnegative(),
+    planRecordCount: z.number().int().nonnegative(),
+  }),
   trades: TradeAttributionSchema,
   signalObservations: SignalReviewSchema,
   researchHypothesisVersions: z.array(ResearchHypothesisSummarySchema),
@@ -146,10 +154,13 @@ const adviceBelongsToScope = (
   accountId: string,
   accountStockIds: ReadonlySet<string>,
   positionIdsByStock: ReadonlyMap<string, ReadonlySet<string>>,
+  selectedSharedAdviceIds: ReadonlySet<string>,
 ): boolean => {
   if (advice.subjectKind === 'stock') {
+    const owner = advice.basedOn.strategy?.accountId;
+    if (owner !== accountId && !selectedSharedAdviceIds.has(advice.id)) return false;
     return input.stockId === undefined
-      ? accountStockIds.has(advice.subjectId)
+      ? accountStockIds.has(advice.subjectId) || owner === accountId
       : advice.subjectId === input.stockId;
   }
   if (advice.subjectKind === 'position') {
@@ -228,7 +239,7 @@ export const getDecisionLoopReviewTool = defineTool({
         ...(input.since === undefined ? {} : { since: input.since }),
         ...(input.until === undefined ? {} : { until: input.until }),
         includeExpired: true,
-        limit: input.limit,
+        limit: 10000,
       }),
       ctx.repos.signalObservation.list({
         ...(input.since === undefined ? {} : { from: input.since }),
@@ -237,6 +248,21 @@ export const getDecisionLoopReviewTool = defineTool({
         limit: input.limit,
       }),
     ]);
+    const allReviews = await ctx.repos.decisionReview.list({ accountId, limit: 10000 });
+    const outcomeByAdvice = await accountAdviceOutcomes(ctx, accountId);
+    const selectedSharedAdviceIds = new Set(
+      allReviews
+        .filter(({ review }) => review.subject.kind === 'advice')
+        .map(({ review }) => review.subject.id),
+    );
+    const currentLinkedTradeIds = new Set(
+      allReviews.flatMap(({ revision }) => revision.content.tradeIds),
+    );
+    const linkedAdviceTradeIds = new Set(
+      allReviews
+        .filter(({ review }) => review.subject.kind === 'advice')
+        .flatMap(({ revision }) => revision.content.tradeIds),
+    );
 
     const accountStockIds = stockIdsForAccount(allAccountTrades, holdings);
     const positionIdsByStock = new Map<string, ReadonlySet<string>>();
@@ -246,7 +272,14 @@ export const getDecisionLoopReviewTool = defineTool({
     }
 
     const advices = allAdvices.filter((advice) =>
-      adviceBelongsToScope(advice, input, accountId, accountStockIds, positionIdsByStock),
+      adviceBelongsToScope(
+        advice,
+        input,
+        accountId,
+        accountStockIds,
+        positionIdsByStock,
+        selectedSharedAdviceIds,
+      ),
     );
     const trades = allAccountTrades.filter(
       (trade) =>
@@ -259,17 +292,18 @@ export const getDecisionLoopReviewTool = defineTool({
         : observation.stockId === input.stockId,
     );
 
-    const backfilled = advices.filter((advice) => advice.outcome !== undefined).length;
+    const backfilled = advices.filter((advice) => outcomeByAdvice.has(advice.id)).length;
     const outcomeDistribution = { followed: 0, partiallyFollowed: 0, ignored: 0 };
     for (const advice of advices) {
-      if (advice.outcome?.outcome === 'followed') outcomeDistribution.followed += 1;
-      else if (advice.outcome?.outcome === 'partially_followed') {
+      const outcome = outcomeByAdvice.get(advice.id);
+      if (outcome?.outcome === 'followed') outcomeDistribution.followed += 1;
+      else if (outcome?.outcome === 'partially_followed') {
         outcomeDistribution.partiallyFollowed += 1;
-      } else if (advice.outcome?.outcome === 'ignored') outcomeDistribution.ignored += 1;
+      } else if (outcome?.outcome === 'ignored') outcomeDistribution.ignored += 1;
     }
 
     const attributionCounts = {
-      advice: trades.filter((trade) => trade.adviceId !== undefined).length,
+      advice: trades.filter((trade) => linkedAdviceTradeIds.has(trade.id)).length,
       researchHypothesisVersion: trades.filter(
         (trade) => trade.researchHypothesisVersionId !== undefined,
       ).length,
@@ -277,7 +311,7 @@ export const getDecisionLoopReviewTool = defineTool({
     };
     const unattributed = trades.filter(
       (trade) =>
-        trade.adviceId === undefined &&
+        !currentLinkedTradeIds.has(trade.id) &&
         trade.researchHypothesisVersionId === undefined &&
         trade.strategyVersionId === undefined,
     ).length;
@@ -301,9 +335,7 @@ export const getDecisionLoopReviewTool = defineTool({
       .flatMap(({ version }) => (version === null ? [] : [summaryOf(version)]))
       .sort((left, right) => right.version - left.version || left.id.localeCompare(right.id));
 
-    const referencedAdviceIds = [
-      ...new Set(trades.flatMap((trade) => (trade.adviceId === undefined ? [] : [trade.adviceId]))),
-    ];
+    const referencedAdviceIds = [...selectedSharedAdviceIds];
     const referencedStrategyVersionIds = [
       ...new Set(
         trades.flatMap((trade) =>
@@ -347,8 +379,8 @@ export const getDecisionLoopReviewTool = defineTool({
     if (allObservations.length >= input.limit) {
       unknowns.push(`SignalObservation 读取达到 limit=${input.limit}，统计可能未覆盖更早样本。`);
     }
-    if (allAdvices.length >= input.limit) {
-      unknowns.push(`Advice 读取达到 limit=${input.limit}，统计可能未覆盖更早建议。`);
+    if (allAdvices.length >= 10000) {
+      unknowns.push('Advice 读取达到 10000 条，统计覆盖不完整。');
     }
 
     const limitations = [
@@ -370,6 +402,7 @@ export const getDecisionLoopReviewTool = defineTool({
     const dataAsOf = ctx.clock();
     const signalReview = buildSignalReview(observations);
     return {
+      schemaVersion: 2 as const,
       accountId,
       ...(input.stockId === undefined ? {} : { stockId: input.stockId }),
       scope: {
@@ -385,6 +418,17 @@ export const getDecisionLoopReviewTool = defineTool({
         backfilled,
         pending: advices.length - backfilled,
         outcomeDistribution,
+      },
+      decisionRecords: {
+        total: allReviews.length,
+        linkedTrades: trades.filter((trade) => currentLinkedTradeIds.has(trade.id)).length,
+        triggerFeedbackCount: allReviews.filter(
+          ({ review, revision }) =>
+            review.subject.kind === 'watch-trigger' && revision.content.triggerFeedback !== null,
+        ).length,
+        planRecordCount: allReviews.filter(
+          ({ review }) => review.subject.kind === 'trading-plan-version',
+        ).length,
       },
       trades: {
         total: trades.length,

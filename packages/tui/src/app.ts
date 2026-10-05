@@ -204,16 +204,16 @@ const detailLines = (row: HoldingRow, advice: AdviceView): string[] => {
 };
 
 const statsLines = (stats: StatsView): string[] => {
+  const pct = (value: number | null) => (value === null ? '未知' : formatPct(value));
   const lines: string[] = [
     `统计口径：全部建议（含已过期）`,
     '',
     `总条数：${stats.totalAdvices}    平均信心度：${stats.avgConfidence.toFixed(1)}%`,
-    `跟单比例：${formatPct(stats.outcomeRate.followed)}    ` +
-      `部分跟单：${formatPct(stats.outcomeRate.partiallyFollowed)}    ` +
-      `忽略：${formatPct(stats.outcomeRate.ignored)}`,
-    `跟单盈亏：${formatSigned(stats.pnlWhenFollowed)}    ` +
-      `忽略盈亏：${formatSigned(stats.pnlWhenIgnored)}`,
-    `高信心命中率（信心≥70 且跟单盈利）：${formatPct(stats.hitRate)}`,
+    `跟单比例：${pct(stats.outcomeRate.followed)}    ` +
+      `部分跟单：${pct(stats.outcomeRate.partiallyFollowed)}    ` +
+      `忽略：${pct(stats.outcomeRate.ignored)}`,
+    `单条建议盈亏合计：不提供（多个依据可能指向同一成交）`,
+    `填报盈利占比（${stats.followedWithPnl} 条已填跟单结果）：${pct(stats.hitRate)}`,
     '',
     '【按决策分解】',
   ];
@@ -223,8 +223,7 @@ const statsLines = (stats: StatsView): string[] => {
     if (s.totalAdvices === 0) continue;
     lines.push(
       `  ${padEnd(decision.toUpperCase(), 7)}${padStart(String(s.totalAdvices), 3)} 条    ` +
-        `平均信心 ${s.avgConfidence.toFixed(1)}%    命中率 ${formatPct(s.hitRate)}    ` +
-        `跟单盈亏 ${formatSigned(s.pnlWhenFollowed)}`,
+        `平均信心 ${s.avgConfidence.toFixed(1)}%    填报盈利占比 ${pct(s.hitRate)}`,
     );
   }
   lines.push('', '[esc] 关闭    [↑/↓] 滚动');
@@ -762,13 +761,14 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
   };
 
   const calibrationLines = (data: CalibrationView): string[] => {
+    const pct = (value: number | null) => (value === null ? '未知' : formatPct(value));
     const lines: string[] = [
       `总条数：${data.totalAdvices}    已回填：${data.totalWithOutcome}    ` +
-        `整体命中率：${formatPct(data.overallHitRate)}`,
+        `填报盈利占比：${pct(data.overallHitRate)}`,
       `生成时间：${formatDateTime(data.calibratedAt)}`,
       '',
       `${padEnd('信心桶', 9)}${padStart('条', 4)}  ${padStart('回填', 4)}  ` +
-        `${padStart('命中', 4)}  ${padStart('hit', 7)}  ${padStart('avgPnl', 10)}  ${padStart('avgConf', 7)}`,
+        `${padStart('盈利', 4)}  ${padStart('比例', 7)}  ${padStart('盈亏合计', 10)}  ${padStart('avgConf', 7)}`,
       ''.padEnd(60, '-'),
     ];
     for (const b of data.buckets) {
@@ -776,7 +776,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       lines.push(
         `${padEnd(range, 9)}${padStart(String(b.total), 4)}  ` +
           `${padStart(String(b.withOutcome), 4)}  ${padStart(String(b.hits), 4)}  ` +
-          `${padStart(formatPct(b.hitRate), 7)}  ${padStart(formatSigned(b.avgPnl), 10)}  ` +
+          `${padStart(pct(b.hitRate), 7)}  ${padStart('不提供', 10)}  ` +
           `${padStart(b.avgConfidence.toFixed(1), 7)}`,
       );
     }

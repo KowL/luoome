@@ -54,7 +54,7 @@ describe('report tools', () => {
 
   it('list_reports 返回轻量摘要并按筛选条件查询', async () => {
     const ctx = await buildTestContext();
-    await saveReportTool.execute({ report: makeReport() }, ctx);
+    await saveReportTool.execute({ report: makeReport({ notificationPolicy: 'never' }) }, ctx);
 
     const result = await listReportsTool.execute(
       {
@@ -73,6 +73,7 @@ describe('report tools', () => {
     expect(result.data.reports).toHaveLength(1);
     expect(result.data.reports[0]).not.toHaveProperty('sections');
     expect(result.data.reports[0]?.title).toBe('A 股收盘复盘');
+    expect(result.data.reports[0]?.notificationPolicy).toBe('never');
   });
 
   it('render_report 的 Markdown 明示数据截止时间、partial、缺失原因和 provenance', async () => {

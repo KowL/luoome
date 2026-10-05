@@ -198,6 +198,14 @@ const EXPECTED_TOOL_NAMES = [
   'list_strategy_autonomy_actions',
   'confirm_strategy_autonomy_action',
   'reject_strategy_autonomy_action',
+  // MVP3 账户级决策与复盘
+  'get_decision_review_context',
+  'get_decision_review_snapshot',
+  'list_decision_reviews',
+  'get_decision_write_receipt',
+  'save_decision_review',
+  'refresh_decision_review_report',
+  'record_decision_trade',
 ] as const;
 
 describe('toolRegistry', () => {
@@ -282,17 +290,19 @@ describe('toolRegistry', () => {
     ]) {
       expect(names).not.toContain(hidden);
     }
-    expect(toolRegistry.all().filter((tool) => tool.sideEffect === 'trade')).toEqual([]);
+    expect(
+      toolRegistry
+        .all()
+        .filter((tool) => tool.sideEffect === 'trade')
+        .map((tool) => tool.name),
+    ).toEqual(['record_decision_trade']);
   });
 
-  it('AUDIT：工具表不含 trade 副作用（advice × trade 隔离硬约束）', () => {
-    for (const tool of toolRegistry.all()) {
-      expect(tool.sideEffect).not.toBe('trade');
-    }
+  it('AUDIT：成交登记明确声明 trade 副作用', () => {
     const sideEffects = new Set(toolRegistry.all().map((t) => t.sideEffect));
     // v0.2 末态：read / write / external / advice / trade
     // 当前注册表：read / advice / external
-    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read', 'write']);
+    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read', 'trade', 'write']);
     const adviceTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'advice')
@@ -384,12 +394,14 @@ describe('toolRegistry', () => {
       'publish_strategy_version',
       'record_advice_outcome',
       'record_strategy_evaluation_day',
+      'refresh_decision_review_report',
       'reject_strategy_autonomy_action',
       'rename_chat_session',
       'renew_strategy_schedule_claim',
       'resume_strategy',
       'resume_strategy_evaluation_session',
       'run_fundamental_score',
+      'save_decision_review',
       'save_trading_plan',
       'set_strategy_schedule',
       'set_watch_trigger_feedback',

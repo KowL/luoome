@@ -72,6 +72,8 @@ import type {
   GetConfidenceCalibrationOutput,
   GetDecisionLoopReviewInput,
   GetDecisionLoopReviewOutput,
+  GetDecisionReviewSnapshotInput,
+  GetDecisionReviewSnapshotOutput,
   GetHoldingInput,
   GetHoldingOutput,
   GetPreviousClosesInput,
@@ -336,6 +338,10 @@ export interface WorkflowToolMap {
   readonly get_decision_loop_review: ToolAccessor<
     typeof GetDecisionLoopReviewInput,
     typeof GetDecisionLoopReviewOutput
+  >;
+  readonly get_decision_review_snapshot: ToolAccessor<
+    typeof GetDecisionReviewSnapshotInput,
+    typeof GetDecisionReviewSnapshotOutput
   >;
   readonly analyze_stock: ToolAccessor<typeof AnalyzeStockInput, typeof AnalyzeStockOutput>;
   readonly analyze_strategy_candidate: ToolAccessor<

@@ -3,6 +3,8 @@ export { DrizzleAdviceRepository } from './advice.js';
 export { DrizzleAlertPlanRepository } from './alert-plan.js';
 export { DrizzleChatRepository } from './chat.js';
 export { DrizzleDailyBarRepository } from './daily-bar.js';
+export { DrizzleDecisionReviewRepository } from './decision-review.js';
+export { DrizzleDecisionTradeRepository } from './decision-trade.js';
 export { DrizzleFinancialFactRepository } from './financial-fact.js';
 export {
   DrizzleFundamentalScoreRunRepository,

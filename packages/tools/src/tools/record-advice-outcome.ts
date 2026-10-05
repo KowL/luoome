@@ -1,10 +1,15 @@
-import { type Advice, type AdviceOutcome, AdviceOutcomeSchema, money } from '@luoome/core';
+import { type AdviceOutcome, AdviceOutcomeSchema, money } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
+import { defineTool, errNotFound } from '../define-tool.js';
+import { getDecisionReviewContextTool, saveDecisionReviewTool } from './decision-review.js';
 
 export const RecordAdviceOutcomeInput = z.object({
   adviceId: z.string().min(1),
+  accountId: z.string().min(1).optional(),
+  requestId: z.uuid().optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+  changeNote: z.string().max(2000).optional(),
   /** 执行结果；显式枚举避免 Web/TUI 将部分跟随误转为 ignored。 */
   outcome: z.enum(['followed', 'partially_followed', 'ignored']),
   /** 关联的成交记录；空数组表示未关联具体成交。 */
@@ -41,21 +46,37 @@ export const recordAdviceOutcomeTool = defineTool({
   input: RecordAdviceOutcomeInput,
   output: RecordAdviceOutcomeOutput,
   handler: async (input, ctx) => {
-    const advice: Advice | null = await ctx.repos.advice.findById(input.adviceId);
-    if (advice === null) return errNotFound('Advice', input.adviceId);
-
-    for (const tradeId of input.tradeIds) {
-      const trade = await ctx.repos.trade.findById(tradeId);
-      if (trade === null) return errNotFound('Trade', tradeId);
-      if (trade.accountId !== ctx.user.defaultAccountId) {
-        return errInvalidInput(`Trade ${tradeId} 不属于当前账户`);
-      }
-      if (advice.subjectKind === 'stock' && trade.stockId !== advice.subjectId) {
-        return errInvalidInput(`Trade ${tradeId} 的标的与 Advice ${advice.id} 不一致`);
-      }
-    }
-
-    const now = ctx.clock();
+    const accountId = input.accountId ?? ctx.user.defaultAccountId;
+    const subject = { kind: 'advice' as const, id: input.adviceId };
+    const preview = await getDecisionReviewContextTool.execute({ accountId, subject }, ctx);
+    if (!preview.ok) return preview;
+    if (preview.data.context === null) return errNotFound('Advice', input.adviceId);
+    const expectedRevision =
+      input.expectedRevision ?? preview.data.current?.review.currentRevision ?? 0;
+    const saved = await saveDecisionReviewTool.execute(
+      {
+        accountId,
+        subject,
+        requestId: input.requestId ?? crypto.randomUUID(),
+        contextHash: preview.data.context.contextHash,
+        expectedRevision,
+        content: {
+          tradeIds: input.tradeIds,
+          adviceFeedback: {
+            outcome: input.outcome,
+            ...(input.pnl === undefined ? {} : { pnl: input.pnl }),
+            ...(input.benchmarkPnl === undefined ? {} : { benchmarkPnl: input.benchmarkPnl }),
+            ...(input.holdingHours === undefined ? {} : { holdingHours: input.holdingHours }),
+          },
+          triggerFeedback: null,
+          note: input.notes ?? null,
+        },
+        ...(input.changeNote === undefined ? {} : { changeNote: input.changeNote }),
+      },
+      ctx,
+    );
+    if (!saved.ok) return saved;
+    const now = saved.data.result.revision.recordedAt;
     const outcomeKind: AdviceOutcome['outcome'] = input.outcome;
     const outcome: AdviceOutcome = {
       adviceId: input.adviceId,
@@ -67,7 +88,6 @@ export const recordAdviceOutcomeTool = defineTool({
       ...(input.notes === undefined ? {} : { notes: input.notes }),
       recordedAt: now,
     };
-    await ctx.repos.advice.recordOutcome(input.adviceId, outcome);
     return { outcome: AdviceOutcomeSchema.parse(outcome) };
   },
 });

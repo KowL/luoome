@@ -7,6 +7,8 @@ import type {
   AdviceSubjectKind,
   AlertPlan,
   ChatMessagePart,
+  DecisionReviewContent,
+  DecisionReviewContext,
   DeliveryStatus,
   Exchange,
   FinancialFact,
@@ -112,6 +114,92 @@ export const accounts = sqliteTable('accounts', {
   cashBalance: real('cash_balance').$type<Money>().notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
+
+export const decisionReviews = sqliteTable(
+  'decision_reviews',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    subjectKind: text('subject_kind')
+      .$type<'advice' | 'trading-plan-version' | 'watch-trigger'>()
+      .notNull(),
+    subjectId: text('subject_id').notNull(),
+    stockId: text('stock_id'),
+    sourceOccurredAt: integer('source_occurred_at', { mode: 'timestamp_ms' }).notNull(),
+    context: text('context_json', { mode: 'json' }).$type<DecisionReviewContext>().notNull(),
+    contextHash: text('context_hash').notNull(),
+    currentRevision: integer('current_revision').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({
+    subjectUnique: uniqueIndex('decision_reviews_account_subject_unique').on(
+      t.accountId,
+      t.subjectKind,
+      t.subjectId,
+    ),
+    accountTimeIdx: index('decision_reviews_account_time_idx').on(
+      t.accountId,
+      t.sourceOccurredAt,
+      t.id,
+    ),
+  }),
+);
+
+export const decisionReviewRevisions = sqliteTable(
+  'decision_review_revisions',
+  {
+    sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+    reviewId: text('review_id').notNull(),
+    revision: integer('revision').notNull(),
+    content: text('content_json', { mode: 'json' }).$type<DecisionReviewContent>().notNull(),
+    contentHash: text('content_hash').notNull(),
+    tradeFactHashes: text('trade_fact_hashes_json', { mode: 'json' })
+      .$type<Record<string, string>>()
+      .notNull(),
+    recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+    changeNote: text('change_note'),
+  },
+  (t) => ({
+    revisionUnique: uniqueIndex('decision_review_revisions_review_version_unique').on(
+      t.reviewId,
+      t.revision,
+    ),
+    reviewSequenceIdx: index('decision_review_revisions_review_sequence_idx').on(
+      t.reviewId,
+      t.sequence,
+    ),
+  }),
+);
+
+export const decisionReviewTradeLinks = sqliteTable(
+  'decision_review_trade_links',
+  {
+    reviewId: text('review_id').notNull(),
+    accountId: text('account_id').notNull(),
+    tradeId: text('trade_id').notNull(),
+    revision: integer('revision').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.reviewId, t.tradeId] }),
+    accountTradeIdx: index('decision_review_trade_links_account_trade_idx').on(
+      t.accountId,
+      t.tradeId,
+    ),
+  }),
+);
+
+export const decisionWriteReceipts = sqliteTable(
+  'decision_write_receipts',
+  {
+    accountId: text('account_id').notNull(),
+    requestId: text('request_id').notNull(),
+    command: text('command').notNull(),
+    requestHash: text('request_hash').notNull(),
+    result: text('result_json', { mode: 'json' }).$type<unknown>().notNull(),
+    committedAt: integer('committed_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.accountId, t.requestId] }) }),
+);
 
 export const stocks = sqliteTable(
   'stocks',
@@ -1700,6 +1788,10 @@ export const reports = sqliteTable(
       .$type<Report['missingDimensions']>()
       .notNull(),
     deliveryStatus: text('delivery_status').$type<DeliveryStatus>().notNull(),
+    notificationPolicy: text('notification_policy').$type<Report['notificationPolicy']>(),
+    decisionReviewSnapshot: text('decision_review_snapshot', { mode: 'json' }).$type<
+      Report['decisionReviewSnapshot']
+    >(),
     deliveryAttemptId: text('delivery_attempt_id'),
     workflowRunId: text('workflow_run_id').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -1777,6 +1869,10 @@ export const chatMessages = sqliteTable(
 export const schema = {
   schemaMigrations,
   accounts,
+  decisionReviews,
+  decisionReviewRevisions,
+  decisionReviewTradeLinks,
+  decisionWriteReceipts,
   stocks,
   stockUniverseMemberships,
   stockUniverseSyncRuns,

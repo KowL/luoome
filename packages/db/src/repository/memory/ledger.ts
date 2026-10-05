@@ -19,15 +19,16 @@ import type { InMemoryAccountRepository } from './account.js';
 import type { InMemoryHoldingRepository } from './holding.js';
 import type { InMemoryPortfolioCashFlowRepository } from './portfolio-performance.js';
 import type { InMemoryTradeRepository } from './trade.js';
+import { MemoryWriteLock } from './write-lock.js';
 
 export class InMemoryLedgerRepository implements LedgerRepository {
   private readonly adjustments = new Map<string, HoldingCashAdjustment>();
-  private lock: Promise<void> = Promise.resolve();
   constructor(
     private readonly account: InMemoryAccountRepository,
     private readonly trade: InMemoryTradeRepository,
     private readonly holding: InMemoryHoldingRepository,
     private readonly cashFlow: InMemoryPortfolioCashFlowRepository,
+    private readonly lock = new MemoryWriteLock(),
   ) {}
 
   async applyTrade(input: Parameters<LedgerRepository['applyTrade']>[0]): Promise<void> {
@@ -112,16 +113,6 @@ export class InMemoryLedgerRepository implements LedgerRepository {
   }
 
   private async write(action: () => Promise<void>): Promise<void> {
-    const previous = this.lock;
-    let release!: () => void;
-    this.lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      await action();
-    } finally {
-      release();
-    }
+    await this.lock.run(action);
   }
 }
