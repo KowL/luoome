@@ -115,6 +115,11 @@ homebrew/
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 | `LUOOME_PORT` | 5173 | Web 端口（与 `--port` 等价） |
 
+默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
+分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；
+已成功的报价保留原来源。缺失时间的报价会标记 `retrieval`，不能作为盘中行动的可信时间证据。
+Tushare 与扶摇继续按显式配置接入，各能力与最近运行状态可通过 `get_market_data_status` 查询。
+
 AI 模型由 adapters 内的 AI SDK Provider Registry 统一管理。`providers` 可声明
 `openai-compatible`、`anthropic` 或 `gateway`，`profiles.generation` 与
 `profiles.agent` 可分别选择 `provider:model`、默认生成参数和运行预算。旧

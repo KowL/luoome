@@ -20,13 +20,14 @@ import {
   isWeekend,
   QuoteSchema,
 } from '@luoome/core';
-import { sourceErrorKindOf } from '../source-error.js';
+import { invalidPayloadError, sourceErrorKindOf } from '../source-error.js';
 import { DailyBarCache, type LRUStats, QuoteCache } from './cache.js';
-import type {
-  MarketCapability,
-  MarketCapabilityMap,
-  MarketSourceRegistry,
-  MarketSourceStatus,
+import {
+  type MarketCapability,
+  type MarketCapabilityMap,
+  type MarketSourceRegistry,
+  type MarketSourceStatus,
+  quoteMatchesStock,
 } from './source-registry.js';
 import type { MarketDataAdapter } from './types.js';
 
@@ -38,9 +39,6 @@ const PROBE_STOCK_ID = '600519.SH';
 const PROBE_SEARCH_QUERY = '茅台';
 /** 日 K 探测窗口：两周，含交易日的概率高且响应轻。 */
 const PROBE_DAILY_BARS_WINDOW_MS = 14 * 86_400_000;
-
-/** 批量结果与请求代码匹配用：去掉 .SH/.SZ/.BJ 后缀，兼容源返回带后缀而调用方传裸代码（如 fuyao）。 */
-const baseOf = (code: string): string => code.replace(/\.(SH|SZ|BJ)$/i, '');
 
 const rangeContainsTradingDay = (range: DateRange): boolean => {
   const cursor = new Date(range.start);
@@ -332,9 +330,15 @@ export class MarketDataManager implements MarketDataAdapter {
         }
         return cached;
       },
-      parse: (raw) => QuoteSchema.parse(raw),
+      parse: (raw) => {
+        const quote = QuoteSchema.parse(raw);
+        if (!quoteMatchesStock(quote.stockId, stockCode)) {
+          throw invalidPayloadError('market quote does not match requested stock');
+        }
+        return quote;
+      },
       onSuccess: (quote) => {
-        this.quoteCache.set(quote);
+        this.quoteCache.set(quote, stockCode);
       },
       rateLimiter: this.rateLimiter,
       logLabel: 'manager.fetchQuote',
@@ -350,8 +354,8 @@ export class MarketDataManager implements MarketDataAdapter {
   async batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>> {
     const result = new Map<string, Quote>();
     if (stockCodes.length === 0) return result;
-    const toFetch: string[] = [];
-    for (const code of stockCodes) {
+    let toFetch: string[] = [];
+    for (const code of new Set(stockCodes)) {
       const cached = this.quoteCache.get(code);
       if (cached !== undefined) {
         result.set(code, cached);
@@ -361,37 +365,39 @@ export class MarketDataManager implements MarketDataAdapter {
     }
     if (toFetch.length === 0) return result;
 
-    // batch-quote 优先：一次请求取整批（源原生多代码快照）。返回中缺漏的标的不补拉，
-    // 记 warn 后遗漏该只（对齐「单只失败只遗漏该只」的批量读语义）；批量路径全部失败
-    // 或无任何 batch binding（如源组合只有 tushare）时，降级为有界逐股扇出兜底，
-    // 不让批量读路径整体失败。
-    try {
-      const quotes = await this.routeWithFallback({
-        capability: 'batch-quote',
-        request: { stockIds: toFetch },
-        parse: (raw) => raw.map((quote) => QuoteSchema.parse(quote)),
-        onSuccess: (batch) => {
-          for (const quote of batch) {
-            this.quoteCache.set(quote);
-          }
-        },
-        rateLimiter: this.rateLimiter,
-        logLabel: 'manager.batchQuote',
-        logContext: { stockCount: toFetch.length },
-        exhausted: (lastError) => lastError,
-      });
-      const byId = new Map(quotes.map((quote) => [baseOf(quote.stockId), quote] as const));
-      for (const code of toFetch) {
-        const quote = byId.get(baseOf(code)) ?? byId.get(code);
-        if (quote === undefined) {
-          this.logger.warn('manager.batchQuote omitted missing quote', { stockCode: code });
-        } else {
+    for (const source of this.registry.sources('batch-quote')) {
+      if (toFetch.length === 0) break;
+      this.recordCall(source.source);
+      try {
+        await this.rateLimiter.acquire();
+        const raw = await source.execute({ stockIds: toFetch });
+        const quotes = raw.flatMap((item) => {
+          const parsed = QuoteSchema.safeParse(item);
+          return parsed.success ? [parsed.data] : [];
+        });
+        for (const code of toFetch) {
+          const matches = quotes.filter((quote) => quoteMatchesStock(quote.stockId, code));
+          // 重复身份的响应不选任意一行，交给后续来源补齐。
+          if (matches.length !== 1) continue;
+          const quote = matches[0] as Quote;
           result.set(code, quote);
+          this.quoteCache.set(quote, code);
         }
+        toFetch = toFetch.filter((code) => !result.has(code));
+        if (toFetch.length > 0) {
+          this.recordFailure(source.source);
+          this.logger.warn('manager.batchQuote incomplete source, trying remaining stocks', {
+            source: source.source,
+            missingCount: toFetch.length,
+          });
+        }
+      } catch (error) {
+        this.recordFailure(source.source);
+        this.logger.warn('manager.batchQuote source failed', {
+          source: source.source,
+          error: errorMessage(error),
+        });
       }
-      return result;
-    } catch {
-      // 批量路径不可用 → 逐股扇出兜底
     }
 
     // 有界逐股 fallback；单只全源失败只遗漏该只，不让批量读路径整体失败。

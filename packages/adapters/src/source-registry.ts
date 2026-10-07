@@ -29,7 +29,7 @@ export interface SourceBinding<M extends CapabilityMap, C extends keyof M & stri
   readonly configurationReady: boolean;
   execute(input: M[C]['request']): Promise<M[C]['result']>;
   /** 每个 binding 必须显式声明 resolved result 如何影响观测。 */
-  observationOf(result: M[C]['result']): SourceResultObservation;
+  observationOf(result: M[C]['result'], input: M[C]['request']): SourceResultObservation;
 }
 
 export type AnyBinding<M extends CapabilityMap> = {
@@ -87,7 +87,7 @@ export class SourceRegistry<M extends CapabilityMap> {
             this.observations.set(key, observation);
             try {
               const result = await typed.execute(input);
-              const observed = typed.observationOf(result);
+              const observed = typed.observationOf(result, input);
               if (observed.outcome === 'success') {
                 observation.lastSuccessAt = this.clock();
                 delete observation.lastErrorKind;

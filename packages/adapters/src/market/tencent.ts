@@ -26,12 +26,9 @@ import { SinaStockUniverseAdapter } from '../stock-universe/sina.js';
  * Tencent 行情适配器（v0.2 起备用源，主要覆盖 A 股；港股支持有限）。
  *
  * 公开 API（无需鉴权）：
- * - 实时快照（A 股 + 港股）：
- *   `https://qt.gtimg.cn/q={prefixedCode}` 返回 GBK 文本
- *   或 `https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={prefixedCode}` 返回 JSON
- *   为简单起见用 JSON 接口：`https://web.ifzq.gtimg.cn/appstock/app/stockDetail2/marketView?code={prefixedCode}`
- *   实际 JSON 行情接口：`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={prefixedCode},day,,,320,qfq`
- *   返回的 `qfqday` 或 `day` 字段是 K 线数据。
+ * - 实时快照：`https://qt.gtimg.cn/q={prefixedCode}` 返回 GBK 文本。
+ * - 分时累计序列：minute/query；不能用采样价格代替快照 OHLC。
+ * - 前复权日线：fqkline/get 的 qfqday 字段。
  * - 全市场快照（沪深 A 股）：`https://qt.gtimg.cn/q={prefixedCode,...}`，GBK 文本批量返回。
  *
  * 设计要点：
@@ -87,7 +84,7 @@ const isIndexCode = (stockCode: string): boolean =>
 const TENCENT_MARKET_SNAPSHOT_PATTERN = /v_(sh|sz)(\d{6})="([^"]*)";?/g;
 
 /** 批量快照行（qt.gtimg.cn）：与全市场快照同端点，扩到 bj（北交所）。 */
-const TENCENT_BATCH_QUOTE_PATTERN = /v_(sh|sz|bj)(\d{6})="([^"]*)";?/g;
+const TENCENT_BATCH_QUOTE_PATTERN = /v_(sh|sz|bj|hk)(\d{5,6})="([^"]*)";?/g;
 
 /** 指数快照行（qt.gtimg.cn）：hs 代码 6 位数字，恒生为 hkHSI（字母代码）。 */
 const TENCENT_INDEX_QUOTE_PATTERN = /v_(sh|sz|hk)([0-9A-Za-z]+)="([^"]*)";?/g;
@@ -126,7 +123,7 @@ export interface TencentAdapterOptions {
   /** mkline 分钟 K 线端点；默认 ifzq.gtimg.cn（web. 前缀主机对该路径 301 后空响应，2026-10 实测）。 */
   readonly baseMinuteKlineUrl?: string;
   readonly baseSearchUrl?: string;
-  /** qt.gtimg.cn 快照（GBK 文本）：仅用于补昨收，分钟端点无此字段。 */
+  /** qt.gtimg.cn 原生单股快照（GBK 文本）。 */
   readonly baseRtQuoteUrl?: string;
   /** qt.gtimg.cn 批量全市场快照端点。 */
   readonly baseMarketSnapshotUrl?: string;
@@ -228,7 +225,7 @@ export class TencentAdapter {
   /**
    * minute 端点原始行：data.<code>.data.data 是 "HHMM price cumVolume cumAmount"
    * 字符串数组（volume 手 / amount 元，均为当日累计口径），date 是交易日期。
-   * fetchQuote 与 fetchIntradayMinutes 共用；空数组不抛错（盘前合法空态），由调用方决定。
+   * fetchIntradayMinutes 使用；空数组不抛错（盘前合法空态），由调用方决定。
    */
   private async fetchMinuteRows(
     code: string,
@@ -244,63 +241,20 @@ export class TencentAdapter {
     };
   }
 
-  /**
-   * 拉快照。取末行价为最新价、首行价为 open、全程最大/最小为 high/low。
-   */
   async fetchQuote(stockCode: string): Promise<Quote> {
     const code = toPrefixedCode(stockCode);
-    const { date, rows: minutes } = await this.fetchMinuteRows(code);
-    if (minutes.length === 0) {
+    const text = await this.getText(`${this.baseRtQuoteUrl}=${code}`, 'gbk');
+    const fields = parseTencentQuoteRows(text).get(code);
+    const quote =
+      fields === undefined ? undefined : buildTencentQuote(stockCode, code, fields, this.clock());
+    if (quote === undefined) {
       throw new TencentAdapterError('no_data', `Tencent 快照缺价: code=${code}`);
     }
-    const prices: number[] = [];
-    for (const row of minutes) {
-      const price = Number(row.split(' ')[1]);
-      if (!Number.isFinite(price) || price <= 0) continue;
-      prices.push(price);
-    }
-    const open = prices[0];
-    const close = prices.at(-1);
-    // 分钟行第三列是当日累计量（手），取末行即可，求和会重复计数
-    const lastVolume = Number(minutes.at(-1)?.split(' ')[2]);
-    // 第四列是当日累计成交额（元，2026-08 实测与 qt 快照成交额口径一致）
-    const lastAmount = Number(minutes.at(-1)?.split(' ')[3]);
-    if (open === undefined || close === undefined) {
-      throw new TencentAdapterError('no_data', `Tencent 快照缺价: code=${code}`);
-    }
-    const fetchedAt = this.clock();
-    const lastTime = minutes.at(-1)?.split(' ')[0];
-    const upstreamAt =
-      date === undefined || lastTime === undefined
-        ? undefined
-        : parseTencentMinuteTime(date, lastTime);
-    const observedAt =
-      upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
-        ? upstreamAt
-        : fetchedAt;
-    const rtSnapshot = await this.fetchRtSnapshot(code);
-    return {
-      stockId: stockCode.toUpperCase(),
-      observedAt,
-      fetchedAt,
-      timestampSource: observedAt === fetchedAt ? 'retrieval' : 'upstream',
-      ts: observedAt,
-      open: money(open),
-      high: money(Math.max(...prices)),
-      low: money(Math.min(...prices)),
-      close: money(close),
-      volume: Number.isFinite(lastVolume) && lastVolume > 0 ? lastVolume * 100 : 0, // 手 → 股
-      ...(Number.isFinite(lastAmount) && lastAmount > 0 ? { amount: lastAmount } : {}),
-      ...(rtSnapshot.prevClose !== undefined ? { prevClose: money(rtSnapshot.prevClose) } : {}),
-      ...(rtSnapshot.turnoverRatePct !== undefined
-        ? { turnoverRatePct: rtSnapshot.turnoverRatePct }
-        : {}),
-      source: 'tencent',
-    };
+    return quote;
   }
 
   /**
-   * 当日分时分钟序列：与 fetchQuote 同 minute 端点，整行保留累计口径；
+   * 当日分时分钟序列：minute 端点，整行保留累计口径；
    * 时间 / 价格非法的行丢弃。盘前 / 非交易日端点返回空数组（合法空态，不抛错）。
    */
   async fetchIntradayMinutes(stockCode: string): Promise<readonly IntradayMinute[]> {
@@ -328,37 +282,6 @@ export class TencentAdapter {
     return points;
   }
 
-  /**
-   * qt.gtimg.cn 快照（best-effort，GBK 文本，~ 分隔）：第 4 段为昨收、第 38 段为
-   * 换手率%（2026-08 实测）。分钟端点无这两个字段；失败返回空对象，不拖垮主快照流程。
-   */
-  private async fetchRtSnapshot(
-    code: string,
-  ): Promise<{ prevClose?: number; turnoverRatePct?: number }> {
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const res = await this.fetchImpl(`${this.baseRtQuoteUrl}=${code}`, {
-        signal: controller.signal,
-      });
-      if (!res.ok) return {};
-      const buf = await res.arrayBuffer();
-      // TS 的 Encoding 联合不含 'gbk'，Bun 运行时支持；qt.gtimg.cn 是 GBK 文本
-      const text = new TextDecoder('gbk' as never).decode(buf);
-      const parts = text.match(/="([^"]*)"/)?.[1]?.split('~');
-      const prev = Number(parts?.[4]);
-      const turnover = Number(parts?.[38]);
-      return {
-        ...(Number.isFinite(prev) && prev > 0 ? { prevClose: prev } : {}),
-        ...(Number.isFinite(turnover) && turnover >= 0 ? { turnoverRatePct: turnover } : {}),
-      };
-    } catch {
-      return {};
-    } finally {
-      clearTimeout(timeoutHandle);
-    }
-  }
-
   async batchQuote(stockCodes: readonly string[]): Promise<Map<string, Quote>> {
     const result = new Map<string, Quote>();
     await Promise.all(
@@ -378,7 +301,7 @@ export class TencentAdapter {
    * （GBK 文本，`v_<prefixed>="~ 分隔行"`，与全市场快照同端点）。
    * 字段布局（2026-08-22 实盘验证）：[3]最新价 [4]昨收 [5]今开 [6]成交量(手)
    * [30]行情时间 [33]最高 [34]最低 [37]成交额(万) [38]换手率%——时间 / 昨收 /
-   * 换手率与 fetchRtSnapshot、fetchMarketSnapshotEnvelope 共用同一份解析函数。
+   * 单股与批量报价共用快照解析；港股成交量为股、成交额为原币单位。
    * 无法识别 / 上游未返回 / 价格非法的标的只丢弃该只，不伪造占位项。
    */
   async fetchBatchQuotes(stockIds: readonly string[]): Promise<Quote[]> {
@@ -396,49 +319,22 @@ export class TencentAdapter {
       `${this.baseMarketSnapshotUrl}=${pairs.map((pair) => pair.prefixed).join(',')}`,
       'gbk',
     );
-    const rows = new Map<string, readonly string[]>();
-    for (const match of text.matchAll(TENCENT_BATCH_QUOTE_PATTERN)) {
-      const prefixed = `${match[1]}${match[2]}`;
-      const raw = match[3];
-      if (raw === undefined) continue;
-      rows.set(prefixed, raw.split('~'));
-    }
+    const rows = parseTencentQuoteRows(text);
     const fetchedAt = this.clock();
     const quotes: Quote[] = [];
+    let invalidRow: TencentAdapterError | undefined;
     for (const { stockId, prefixed } of pairs) {
       const fields = rows.get(prefixed);
       if (fields === undefined) continue;
-      const close = positiveNumber(fields[3]);
-      if (close === undefined) continue;
-      const upstreamAt = parseTencentSnapshotTime(fields[30]);
-      const observedAt =
-        upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
-          ? upstreamAt
-          : fetchedAt;
-      const open = positiveNumber(fields[5]);
-      const high = positiveNumber(fields[33]);
-      const low = positiveNumber(fields[34]);
-      const prevClose = positiveNumber(fields[4]);
-      const volumeLots = finiteNumber(fields[6]);
-      const amountWan = finiteNumber(fields[37]);
-      const turnover = finiteNumber(fields[38]);
-      quotes.push({
-        stockId,
-        observedAt,
-        fetchedAt,
-        timestampSource: observedAt === fetchedAt ? 'retrieval' : 'upstream',
-        ts: observedAt,
-        open: money(open ?? close),
-        high: money(high ?? close),
-        low: money(low ?? close),
-        close: money(close),
-        volume: volumeLots !== undefined && volumeLots > 0 ? volumeLots * 100 : 0, // 手 → 股
-        ...(amountWan !== undefined && amountWan > 0 ? { amount: amountWan * 10_000 } : {}), // 万 → 元
-        ...(prevClose !== undefined ? { prevClose: money(prevClose) } : {}),
-        ...(turnover !== undefined && turnover >= 0 ? { turnoverRatePct: turnover } : {}),
-        source: 'tencent',
-      });
+      try {
+        const quote = buildTencentQuote(stockId, prefixed, fields, fetchedAt);
+        if (quote !== undefined) quotes.push(quote);
+      } catch (error) {
+        if (!(error instanceof TencentAdapterError)) throw error;
+        invalidRow = error;
+      }
     }
+    if (quotes.length === 0 && invalidRow !== undefined) throw invalidRow;
     return quotes;
   }
 
@@ -510,6 +406,9 @@ export class TencentAdapter {
     interval: MinuteBarInterval,
   ): Promise<readonly MinuteBar[]> {
     const code = toPrefixedCode(stockCode);
+    if (!/^(sh|sz|bj)\d{6}$/.test(code)) {
+      throw new TencentAdapterError('unsupported_market', 'Tencent 分钟 OHLCV 仅支持 A 股');
+    }
     const freq = TENCENT_MINUTE_KLINE_FREQ[interval];
     const url = `${this.baseMinuteKlineUrl}?param=${code},${freq},,${MINUTE_KLINE_COUNT}`;
     const json = await this.getJson<{
@@ -524,10 +423,20 @@ export class TencentAdapter {
     if (!Array.isArray(rawList)) {
       throw new TencentAdapterError('no_data', `Tencent 分钟线缺 ${freq} 节点: code=${code}`);
     }
-    const rows = rawList.filter(
-      (row): row is readonly string[] =>
-        Array.isArray(row) && row.length >= 6 && typeof row[0] === 'string',
-    );
+    const rows = rawList.map((row): readonly string[] => {
+      if (
+        !Array.isArray(row) ||
+        row.length < 6 ||
+        !row.slice(0, 6).every((value: unknown) => typeof value === 'string') ||
+        parseTencentMinuteBarTime(row[0]) === undefined
+      ) {
+        throw new TencentAdapterError(
+          'invalid_payload',
+          'invalid_payload: Tencent 分钟线行或时间无效',
+        );
+      }
+      return row;
+    });
     const latestDate = rows.reduce((max, row) => {
       const date = (row[0] as string).slice(0, 8);
       return date > max ? date : max;
@@ -536,20 +445,55 @@ export class TencentAdapter {
       throw new TencentAdapterError('no_data', `Tencent 分钟线为空: code=${code}`);
     }
     const fetchedAt = this.clock();
+    const fetchedDate = new Date(fetchedAt.getTime() + 8 * 3_600_000)
+      .toISOString()
+      .slice(0, 10)
+      .replaceAll('-', '');
+    if (latestDate > fetchedDate) {
+      throw new TencentAdapterError(
+        'invalid_payload',
+        'invalid_payload: Tencent 分钟线交易日在未来',
+      );
+    }
     const intervalMs = Number.parseInt(interval, 10) * 60_000;
+    let previousEnd = 0;
     try {
       const bars = rows.flatMap((row) => {
         const label = row[0] as string;
         if (!label.startsWith(latestDate)) return [];
         const endedAt = parseTencentMinuteBarTime(label);
-        if (endedAt === undefined || endedAt.getTime() > fetchedAt.getTime()) return [];
-        const open = Number(row[1]);
-        const close = Number(row[2]);
-        const high = Number(row[3]);
-        const low = Number(row[4]);
-        const volumeLots = Number(row[5]);
-        if (![open, close, high, low].every((n) => Number.isFinite(n) && n > 0)) return [];
-        if (!Number.isFinite(volumeLots) || volumeLots < 0) return [];
+        if (endedAt === undefined) {
+          throw new TencentAdapterError(
+            'invalid_payload',
+            'invalid_payload: Tencent 分钟线时间无效',
+          );
+        }
+        if (endedAt.getTime() > fetchedAt.getTime()) return [];
+        if (endedAt.getTime() <= previousEnd) {
+          throw new TencentAdapterError(
+            'invalid_payload',
+            'invalid_payload: Tencent 分钟线重复或乱序',
+          );
+        }
+        previousEnd = endedAt.getTime();
+        const open = positiveNumber(row[1]);
+        const close = positiveNumber(row[2]);
+        const high = positiveNumber(row[3]);
+        const low = positiveNumber(row[4]);
+        const volumeLots = finiteNumber(row[5]);
+        if (
+          open === undefined ||
+          close === undefined ||
+          high === undefined ||
+          low === undefined ||
+          volumeLots === undefined ||
+          volumeLots < 0
+        ) {
+          throw new TencentAdapterError(
+            'invalid_payload',
+            'invalid_payload: Tencent 分钟线价格或量缺失',
+          );
+        }
         return [
           MinuteBarSchema.parse({
             stockId: stockCode.toUpperCase(),
@@ -688,20 +632,26 @@ export class TencentAdapter {
       const name = fields[1]?.trim();
       if (close === undefined || name === undefined || name === '') continue;
       const prevClose = positiveNumber(fields[4]);
-      const change = finiteNumber(fields[31]) ?? (prevClose === undefined ? 0 : close - prevClose);
+      const change =
+        finiteNumber(fields[31]) ?? (prevClose === undefined ? undefined : close - prevClose);
       const changePct =
-        finiteNumber(fields[32]) ?? (prevClose === undefined ? 0 : (change / prevClose) * 100);
+        finiteNumber(fields[32]) ??
+        (prevClose === undefined || change === undefined ? undefined : (change / prevClose) * 100);
       const upstreamAt = parseTencentSnapshotTime(fields[30]);
+      if (
+        change === undefined ||
+        changePct === undefined ||
+        upstreamAt === undefined ||
+        upstreamAt > fetchedAt
+      )
+        continue;
       indices.push({
         code: spec.code,
         name,
         close: money(close),
         change,
         changePct,
-        ts:
-          upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
-            ? upstreamAt
-            : fetchedAt,
+        ts: upstreamAt,
         source: 'tencent',
       });
     }
@@ -793,20 +743,97 @@ const finiteNumber = (value: string | undefined): number | undefined => {
 };
 
 const parseTencentSnapshotTime = (value: string | undefined): Date | undefined => {
-  if (value === undefined || !/^\d{14}$/.test(value)) return undefined;
-  const parsed = new Date(
-    `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T` +
-      `${value.slice(8, 10)}:${value.slice(10, 12)}:${value.slice(12, 14)}+08:00`,
-  );
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  if (value === undefined) return undefined;
+  const compact = /^\d{14}$/.test(value)
+    ? value
+    : /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+      ? value.replace(/[/ :]/g, '')
+      : undefined;
+  if (compact === undefined) return undefined;
+  const local =
+    `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T` +
+    `${compact.slice(8, 10)}:${compact.slice(10, 12)}:${compact.slice(12, 14)}`;
+  const parsed = new Date(`${local}+08:00`);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return new Date(parsed.getTime() + 8 * 3_600_000).toISOString().slice(0, 19) === local
+    ? parsed
+    : undefined;
+};
+
+const parseTencentQuoteRows = (text: string): Map<string, readonly string[]> => {
+  const rows = new Map<string, readonly string[]>();
+  let recognized = false;
+  for (const match of text.matchAll(TENCENT_BATCH_QUOTE_PATTERN)) {
+    recognized = true;
+    const raw = match[3];
+    if (raw === undefined || raw === '') continue;
+    const prefixed = `${match[1]}${match[2]}`;
+    if (rows.has(prefixed)) {
+      throw new TencentAdapterError('invalid_payload', 'invalid_payload: Tencent 快照身份重复');
+    }
+    rows.set(prefixed, raw.split('~'));
+  }
+  if (!recognized && !text.includes('v_pv_none_match=')) {
+    throw new TencentAdapterError('invalid_payload', 'invalid_payload: Tencent 快照响应格式无效');
+  }
+  return rows;
+};
+
+const buildTencentQuote = (
+  stockId: string,
+  prefixed: string,
+  fields: readonly string[],
+  fetchedAt: Date,
+): Quote | undefined => {
+  const close = positiveNumber(fields[3]);
+  if (close === undefined) return undefined;
+  const open = positiveNumber(fields[5]);
+  const high = positiveNumber(fields[33]);
+  const low = positiveNumber(fields[34]);
+  const volume = finiteNumber(fields[6]);
+  if (
+    fields[2] !== prefixed.slice(2) ||
+    open === undefined ||
+    high === undefined ||
+    low === undefined ||
+    volume === undefined ||
+    volume < 0 ||
+    high < Math.max(open, close) ||
+    low > Math.min(open, close) ||
+    low > high
+  ) {
+    throw new TencentAdapterError(
+      'invalid_payload',
+      'invalid_payload: Tencent 快照身份或 OHLCV 无效',
+    );
+  }
+  const upstreamAt = parseTencentSnapshotTime(fields[30]);
+  const hasUpstreamTime = upstreamAt !== undefined && upstreamAt <= fetchedAt;
+  const observedAt = hasUpstreamTime ? upstreamAt : fetchedAt;
+  const prevClose = positiveNumber(fields[4]);
+  const amount = finiteNumber(fields[37]);
+  const turnover = finiteNumber(fields[38]);
+  const isHongKong = prefixed.startsWith('hk');
+  return {
+    stockId: stockId.trim().toUpperCase(),
+    observedAt,
+    fetchedAt,
+    timestampSource: hasUpstreamTime ? 'upstream' : 'retrieval',
+    ts: observedAt,
+    open: money(open),
+    high: money(high),
+    low: money(low),
+    close: money(close),
+    volume: volume * (isHongKong ? 1 : 100),
+    ...(amount !== undefined && amount >= 0
+      ? { amount: isHongKong ? amount : Math.round(amount * 1_000_000) / 100 }
+      : {}),
+    ...(prevClose === undefined ? {} : { prevClose: money(prevClose) }),
+    ...(turnover !== undefined && turnover >= 0 ? { turnoverRatePct: turnover } : {}),
+    source: 'tencent',
+  };
 };
 
 /** mkline 桶标签（YYYYMMDDHHMM，上海时区）→ 绝对时间。 */
-const parseTencentMinuteBarTime = (value: string): Date | undefined => {
-  if (!/^\d{12}$/.test(value)) return undefined;
-  const parsed = new Date(
-    `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T` +
-      `${value.slice(8, 10)}:${value.slice(10, 12)}:00+08:00`,
-  );
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-};
+const parseTencentMinuteBarTime = (value: string): Date | undefined =>
+  /^\d{12}$/.test(value) ? parseTencentSnapshotTime(`${value}00`) : undefined;

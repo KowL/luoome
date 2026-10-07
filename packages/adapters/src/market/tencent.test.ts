@@ -5,98 +5,113 @@ import { TencentAdapter, TencentAdapterError } from './tencent.js';
 
 describe('market/tencent', () => {
   describe('fetchQuote', () => {
-    // 真实 API 形状（2026-07 实测）：data 以 prefixed code 为 key，
-    // 内层 data.data 是 "HHMM price volume amount" 分钟行数组
-    const minuteBody = (code: string) =>
-      JSON.stringify({
-        code: 0,
-        data: {
-          [code]: {
-            data: { date: '20260724', data: ['0930 375 100 37500.00', '1530 380 120 45600.00'] },
-          },
-        },
+    const quoteBody = (code: string, overrides: Record<number, string> = {}) => {
+      const fields = Array.from({ length: 39 }, () => '');
+      Object.assign(fields, {
+        2: code.slice(2),
+        3: '380',
+        4: '370',
+        5: '374',
+        6: '120',
+        30: '20260724153000',
+        33: '390',
+        34: '365',
+        37: '4.56',
+        38: '0.35',
+        ...overrides,
       });
+      return `v_${code}="${fields.join('~')}";`;
+    };
 
-    it('解析 minute 接口；source=tencent', async () => {
+    it('原生快照保留真实 OHLC 和上游时间，只请求一次', async () => {
+      const urls: string[] = [];
       const adapter = new TencentAdapter({
-        fetchImpl: (async () => new Response(minuteBody('hk00700'), { status: 200 })) as never,
+        fetchImpl: (async (url: string | URL | Request) => {
+          urls.push(String(url));
+          return new Response(quoteBody('sh600519'));
+        }) as unknown as typeof fetch,
+        clock: () => new Date('2026-07-24T08:00:00.000Z'),
+      });
+      const q = await adapter.fetchQuote('600519.SH');
+      expect(q).toMatchObject({
+        stockId: '600519.SH',
+        open: 374,
+        high: 390,
+        low: 365,
+        close: 380,
+        volume: 12_000,
+        amount: 45_600,
+        prevClose: 370,
+        turnoverRatePct: 0.35,
+        source: 'tencent',
+        timestampSource: 'upstream',
+      });
+      expect(q.observedAt).toEqual(new Date('2026-07-24T07:30:00.000Z'));
+      expect(q.fetchedAt).toEqual(new Date('2026-07-24T08:00:00.000Z'));
+      expect(urls).toEqual(['https://qt.gtimg.cn/q=sh600519']);
+    });
+
+    it('港股量 / 额保持上游股数和原币金额，斜杠日期按上海时区解析', async () => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () =>
+          new Response(
+            quoteBody('hk00700', {
+              6: '3569893',
+              37: '1511808953.728',
+              30: '2026/07/24 15:30:00',
+            }),
+          )) as unknown as typeof fetch,
         clock: () => new Date('2026-07-24T08:00:00.000Z'),
       });
       const q = await adapter.fetchQuote('00700');
-      expect(q.close).toBe(380);
-      expect(q.open).toBe(375);
-      expect(q.high).toBe(380);
-      expect(q.low).toBe(375);
-      expect(q.volume).toBe(12_000); // 分钟量为累计口径：末行 120 手 × 100 = 股
-      expect(q.amount).toBe(45600); // 分钟额同为累计口径：末行第四列（元）
-      expect(q.source).toBe('tencent');
-      expect(q.observedAt).toEqual(new Date('2026-07-24T07:30:00.000Z'));
-      expect(q.fetchedAt).toEqual(new Date('2026-07-24T08:00:00.000Z'));
+      expect(q.volume).toBe(3569893);
+      expect(q.amount).toBe(1511808953.728);
       expect(q.timestampSource).toBe('upstream');
+      expect(q.observedAt).toEqual(new Date('2026-07-24T07:30:00.000Z'));
     });
 
-    it('缺价抛错', async () => {
+    it.each([{ 5: '' }, { 33: '370' }, { 6: '' }, { 6: '-1' }, { 2: '000001' }])(
+      '缺失 / 错误 OHLCV 或身份拒绝而不合成行情：%j',
+      async (overrides) => {
+        const adapter = new TencentAdapter({
+          fetchImpl: (async () =>
+            new Response(quoteBody('sh600519', overrides))) as unknown as typeof fetch,
+        });
+        await expect(adapter.fetchQuote('600519.SH')).rejects.toMatchObject({
+          kind: 'invalid_payload',
+        });
+      },
+    );
+
+    it.each(['', '20260230153000', '20260724170000'])(
+      '缺失、非法或未来时间保持 retrieval 来源：%s',
+      async (timestamp) => {
+        const adapter = new TencentAdapter({
+          fetchImpl: (async () =>
+            new Response(quoteBody('sh600519', { 30: timestamp }))) as unknown as typeof fetch,
+          clock: () => new Date('2026-07-24T08:00:00.000Z'),
+        });
+        const quote = await adapter.fetchQuote('600519.SH');
+        expect(quote.timestampSource).toBe('retrieval');
+        expect(quote.observedAt).toEqual(quote.fetchedAt);
+      },
+    );
+
+    it('上游时间恰好等于抓取时间仍是 upstream；真实零成交量不当成缺失', async () => {
       const adapter = new TencentAdapter({
-        fetchImpl: (async () => new Response(JSON.stringify({}), { status: 200 })) as never,
+        fetchImpl: (async () =>
+          new Response(quoteBody('sh600519', { 6: '0', 37: '0' }))) as unknown as typeof fetch,
+        clock: () => new Date('2026-07-24T07:30:00.000Z'),
       });
-      await expect(adapter.fetchQuote('00700')).rejects.toBeInstanceOf(TencentAdapterError);
+      const quote = await adapter.fetchQuote('600519.SH');
+      expect(quote).toMatchObject({ volume: 0, amount: 0, timestampSource: 'upstream' });
     });
 
-    it('qt 快照第 4 段为昨收、第 38 段为换手率 → 填充；qt 失败 → 两字段缺省不抛错', async () => {
-      const segments = Array.from({ length: 39 }, () => '');
-      segments[0] = '1';
-      segments[1] = '贵州茅台';
-      segments[2] = '600519';
-      segments[4] = '370';
-      segments[38] = '0.35';
-      const rtBody = (code: string) => `v_${code}="${segments.join('~')}";`;
-      const withRt = new TencentAdapter({
-        fetchImpl: ((url: string) =>
-          Promise.resolve(
-            new Response(
-              String(url).includes('qt.gtimg.cn') ? rtBody('sh600519') : minuteBody('sh600519'),
-              { status: 200 },
-            ),
-          )) as never,
-      });
-      const q1 = await withRt.fetchQuote('600519');
-      expect(q1.prevClose).toBe(370);
-      expect(q1.turnoverRatePct).toBe(0.35);
-
-      const rtDown = new TencentAdapter({
-        fetchImpl: ((url: string) =>
-          String(url).includes('qt.gtimg.cn')
-            ? Promise.reject(new Error('rt down'))
-            : Promise.resolve(new Response(minuteBody('sh600519'), { status: 200 }))) as never,
-      });
-      const q2 = await rtDown.fetchQuote('600519');
-      expect(q2.close).toBe(380);
-      expect(q2.prevClose).toBeUndefined();
-      expect(q2.turnoverRatePct).toBeUndefined();
-    });
-
-    it('港股代码 → hk 前缀', async () => {
-      const capturedUrls: string[] = [];
+    it('qt 失败时返回错误，不能用分时采样推算高低价', async () => {
       const adapter = new TencentAdapter({
-        fetchImpl: ((url: string) => {
-          capturedUrls.push(String(url));
-          return Promise.resolve(new Response(minuteBody('hk00700'), { status: 200 }));
-        }) as never,
+        fetchImpl: (async () => new Response('down', { status: 503 })) as unknown as typeof fetch,
       });
-      await adapter.fetchQuote('00700');
-      expect(capturedUrls[0]).toContain('code=hk00700');
-    });
-
-    it('SH 代码 → sh 前缀', async () => {
-      const capturedUrls: string[] = [];
-      const adapter = new TencentAdapter({
-        fetchImpl: ((url: string) => {
-          capturedUrls.push(String(url));
-          return Promise.resolve(new Response(minuteBody('sh600519'), { status: 200 }));
-        }) as never,
-      });
-      await adapter.fetchQuote('600519');
-      expect(capturedUrls[0]).toContain('code=sh600519');
+      await expect(adapter.fetchQuote('600519')).rejects.toMatchObject({ kind: 'upstream_error' });
     });
   });
 
@@ -283,6 +298,10 @@ describe('market/tencent', () => {
       fields[1] = 'ignored by directory';
       fields[2] = code;
       fields[3] = close;
+      fields[5] = close;
+      fields[33] = close;
+      fields[34] = close;
+      fields[6] = '100';
       fields[30] = '20260813161452';
       fields[32] = changePct;
       return `v_${exchange}${code}="${fields.join('~')}";`;
@@ -343,6 +362,10 @@ describe('market/tencent', () => {
       fields[0] = exchange === 'sh' ? '1' : '51';
       fields[2] = code;
       fields[3] = close;
+      fields[5] = close;
+      fields[33] = close;
+      fields[34] = close;
+      fields[6] = '100';
       fields[30] = '20260813161452';
       fields[32] = changePct;
       return `v_${exchange}${code}="${fields.join('~')}";`;
@@ -393,6 +416,7 @@ describe('market/tencent', () => {
       readonly prevClose: string;
       readonly change: string;
       readonly changePct: string;
+      readonly timestamp?: string;
     }
 
     const gbkBody = (lines: readonly IndexLineSpec[]): Response => {
@@ -402,7 +426,8 @@ describe('market/tencent', () => {
         const fields = Array.from({ length: 39 }, () => '');
         fields[3] = line.close;
         fields[4] = line.prevClose;
-        fields[30] = '20260813161452';
+        fields[30] =
+          line.timestamp ?? (line.prefixed === 'hkHSI' ? '2026/08/13 16:14:52' : '20260813161452');
         fields[31] = line.change;
         fields[32] = line.changePct;
         const head = `v_${line.prefixed}="${fields.slice(0, 1).join('~')}~`;
@@ -487,6 +512,7 @@ describe('market/tencent', () => {
       });
       expect(indices.at(-1)?.code).toBe('HSI');
       expect(indices.at(-1)?.name).toBe('恒生指数');
+      expect(indices.at(-1)?.ts).toEqual(new Date('2026-08-13T08:14:52.000Z'));
     });
 
     it('涨跌额 / 涨跌幅缺失时按昨收回算', async () => {
@@ -507,6 +533,35 @@ describe('market/tencent', () => {
       expect(indices).toHaveLength(1);
       expect(indices[0]?.change).toBeCloseTo(1.48);
       expect(indices[0]?.changePct).toBeCloseTo(0.038, 2);
+    });
+
+    it.each(['', '20260230161452', '20260814161452'])(
+      '缺失、非法或未来指数时间不能冒充实时：%s',
+      async (timestamp) => {
+        const adapter = new TencentAdapter({
+          fetchImpl: (async () =>
+            gbkBody([
+              { ...(ALL_INDICES[0] as IndexLineSpec), timestamp },
+            ])) as unknown as typeof fetch,
+          clock: () => new Date('2026-08-13T09:00:00.000Z'),
+        });
+        await expect(adapter.fetchIndexQuotes()).rejects.toMatchObject({ kind: 'no_data' });
+      },
+    );
+
+    it('无涨跌字段也无昨收时不合成零涨跌', async () => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () =>
+          gbkBody([
+            {
+              ...(ALL_INDICES[0] as IndexLineSpec),
+              prevClose: '',
+              change: '',
+              changePct: '',
+            },
+          ])) as unknown as typeof fetch,
+      });
+      await expect(adapter.fetchIndexQuotes()).rejects.toMatchObject({ kind: 'no_data' });
     });
 
     it('单只缺失只跳过该只；全部缺失抛 TencentAdapterError', async () => {
@@ -540,6 +595,33 @@ describe('market/tencent', () => {
       ['202609301455', '1256.05', '1258.62', '1259.20', '1256.00', '555.00'],
       ['202609301500', '1258.60', '1258.62', '1258.62', '1256.05', '979.00'],
     ] as const;
+
+    it.each([
+      ['202602301500', '100', '100', '101', '99', '10'],
+      ['202609301500', '100', '100', '101', '99', ''],
+    ])('非法日期或缺失成交量不能静默丢弃', async (...row) => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () =>
+          new Response(mklineBody('sh600519', 'm5', [row]))) as unknown as typeof fetch,
+        clock: () => new Date('2026-09-30T08:00:00.000Z'),
+      });
+      await expect(adapter.fetchMinuteBars('600519.SH', '5m')).rejects.toMatchObject({
+        kind: 'invalid_payload',
+      });
+    });
+
+    it('重复桶时间拒绝，避免重复成交量', async () => {
+      const adapter = new TencentAdapter({
+        fetchImpl: (async () =>
+          new Response(
+            mklineBody('sh600519', 'm5', [M5_ROWS[1], M5_ROWS[1]]),
+          )) as unknown as typeof fetch,
+        clock: () => new Date('2026-09-30T08:00:00.000Z'),
+      });
+      await expect(adapter.fetchMinuteBars('600519.SH', '5m')).rejects.toMatchObject({
+        kind: 'invalid_payload',
+      });
+    });
 
     it('按最新交易日过滤；标签为桶结束时间；volume 手 → 股；source=tencent', async () => {
       const urls: string[] = [];
@@ -635,7 +717,7 @@ describe('market/tencent', () => {
       );
     });
 
-    it('非法价格行跳过；违反 OHLC 不变量 → invalid_payload', async () => {
+    it('非法价格不能静默丢弃；违反 OHLC 不变量 → invalid_payload', async () => {
       const skipped = new TencentAdapter({
         fetchImpl: (async () =>
           new Response(
@@ -647,7 +729,9 @@ describe('market/tencent', () => {
           )) as never,
         clock: () => new Date('2026-09-30T08:00:00.000Z'),
       });
-      await expect(skipped.fetchMinuteBars('600519', '5m')).resolves.toHaveLength(1);
+      await expect(skipped.fetchMinuteBars('600519', '5m')).rejects.toMatchObject({
+        kind: 'invalid_payload',
+      });
 
       const violated = new TencentAdapter({
         fetchImpl: (async () =>

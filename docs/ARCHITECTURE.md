@@ -357,7 +357,7 @@ interface MarketCapabilityBinding<C extends MarketCapability> {
   readonly coverage: readonly MarketCoverage[];
   readonly configurationReady: boolean;
   execute(input: CapabilityRequestMap[C]): Promise<CapabilityResultMap[C]>;
-  observationOf(result: CapabilityResultMap[C]): SourceResultObservation;
+  observationOf(result: CapabilityResultMap[C], input: CapabilityRequestMap[C]): SourceResultObservation;
 }
 ```
 
@@ -369,23 +369,28 @@ Adapter manager 提供：
 - 限速（per-adapter 配额）
 - 股票搜索路由（空数组不降级、抛错才降级）
 - 批量快照：`batch-quote` capability（第 10 种）让原生支持多代码单请求的源
-  （eastmoney ulist、tencent qt 批量、fuyao snapshot 批量）一次请求取整批；
-  `batchQuote` 先路由 batch binding 并把结果回写 quoteCache，返回中缺漏的标的记 warn 遗漏，
-  批量路径全部失败或无 binding 时降级为有界逐股扇出；批量结果与请求代码按 base code
-  （忽略 .SH/.SZ/.BJ 后缀）匹配，兼容源返回带后缀而调用方传裸代码
+  （eastmoney ulist、tencent qt、sina hq、fuyao snapshot）一次请求取整批；
+  `batchQuote` 保留每个来源的有效成功项，按启用顺序仅向后续批量源补取缺失项，最后对
+  剩余股票做有界逐股重试。单行校验失败或重复身份只影响对应股票，未请求的行不写缓存；
+  原生批量空返回记 `no_data`，部分返回记 `partial_data`，完整结果用最早的可信上游时间
+  表达 `dataAsOf`；含 retrieval 时间时不声明数据新鲜度。结果按请求 key 回写缓存，允许
+  裸代码请求匹配带后缀响应，但不同交易所后缀不能相互匹配。
 - 全市场快照路由（为扫描候选补充可选快照价，也供 LLM 分组生成候选上下文；
   `run_strategy` 全市场扫描的候选身份全集必须来自
   `StockUniverse coverage='CN_A_SHARES_SH_SZ' status='active'`，快照不得增删候选。
   Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟；
   eastmoney 实现走 `clist/get` 分页，覆盖沪深主板 + 创业板 + 科创板）
 - 指数行情严格区分 `realtime-index` 与 `delayed-index`；Tushare 日线型指数数据不能进入实时接口
+- 腾讯单股与批量报价共用 qt 原生 OHLCV，不从分时采样推算高低价；A 股量/额从手/万换算，
+  港股保持股数与原币金额。新浪与腾讯缺少有效 OHLCV 时拒绝该行，不合成价格或成交量。
+  腾讯指数要求有效的上游时间，恒生指数的斜杠日期也按交易所时区解析，缺失时间不能冒充实时。
 - 连续分钟 OHLCV 必须走显式 `minute-bars` capability；不得把 `intraday-minutes` 或 PriceSnapshot
   区间查询冒充 MinuteBar，provider 不可用时由 Tool 返回 partial/unavailable
 
 数据源路由底座是泛型 `SourceRegistry<CapabilityMap>`（adapters/source-registry.ts）：
 market 域的 `MarketSourceRegistry` 只是它的收窄薄壳，五个非行情域（连板天梯、龙虎榜、
 北向资金、要闻、A 股情绪）各自用同一泛型装配。registry 的 `execute` 包装层是唯一观测点：
-binding 用必填 `observationOf(result)` 把已 resolve 的结果分类为
+binding 用必填 `observationOf(result, input)` 把已 resolve 的结果分类为
 `success`（可带 `dataAsOf`）/ `failure(kind)` / `ignored` 三态，进程内内存态、重启归零；
 `lastErrorKind` 存在即 `unavailable`，否则按 `dataAsOf` 阈值判 fresh/stale，否则 `unknown`，
 不回退 `lastSuccessAt`。错误词表统一为 core 的 `SourceErrorKind`，传输与解析失败经

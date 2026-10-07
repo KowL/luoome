@@ -9,7 +9,11 @@ import { tushareConfigFromEnv } from '../tushare/client.js';
 import { QuoteCache } from './cache.js';
 import { MarketDataManager } from './manager.js';
 import { SinaAdapter } from './sina.js';
-import { type AnyMarketCapabilityBinding, MarketSourceRegistry } from './source-registry.js';
+import {
+  type AnyMarketCapabilityBinding,
+  batchQuoteObservation,
+  MarketSourceRegistry,
+} from './source-registry.js';
 import { TencentAdapter } from './tencent.js';
 import { TushareMarketAdapter } from './tushare.js';
 
@@ -151,7 +155,7 @@ const buildFuyao = (
 const CN_SH_SZ = ['CN_A_SHARES_SH_SZ'] as const satisfies readonly MarketCoverage[];
 const CN_ALL = ['CN_A_SHARES_SH_SZ', 'CN_A_SHARES_BJ'] as const satisfies readonly MarketCoverage[];
 
-/** binding 契约：resolved 结果统一视为 success；dataAsOf 有则更新、无则清除（§4.3）。 */
+/** 不沿用旧 dataAsOf，避免 retrieval 报价继承上一份可信事件时间。 */
 const successObservation = (dataAsOf: Date | undefined): SourceResultObservation =>
   dataAsOf === undefined ? { outcome: 'success' } : { outcome: 'success', dataAsOf };
 
@@ -173,7 +177,8 @@ const commonBindings = (
     coverage,
     configurationReady: true,
     execute: ({ stockId }) => adapter.fetchQuote(stockId),
-    observationOf: (quote) => successObservation(quote.observedAt),
+    observationOf: (quote) =>
+      successObservation(quote.timestampSource === 'upstream' ? quote.observedAt : undefined),
   },
   {
     capability: 'daily-bars',
@@ -201,16 +206,7 @@ const eastmoneyBindings = (adapter: EastmoneySource): AnyMarketCapabilityBinding
     coverage: CN_ALL,
     configurationReady: true,
     execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
-    observationOf: (quotes) =>
-      successObservation(
-        quotes.reduce<Date | undefined>(
-          (latest, quote) =>
-            latest === undefined || quote.observedAt.getTime() > latest.getTime()
-              ? quote.observedAt
-              : latest,
-          undefined,
-        ),
-      ),
+    observationOf: batchQuoteObservation,
   },
   {
     capability: 'market-snapshot',
@@ -260,16 +256,7 @@ const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] 
     coverage: CN_ALL,
     configurationReady: true,
     execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
-    observationOf: (quotes) =>
-      successObservation(
-        quotes.reduce<Date | undefined>(
-          (latest, quote) =>
-            latest === undefined || quote.observedAt.getTime() > latest.getTime()
-              ? quote.observedAt
-              : latest,
-          undefined,
-        ),
-      ),
+    observationOf: batchQuoteObservation,
   },
   {
     capability: 'market-snapshot',
@@ -326,7 +313,8 @@ const sinaBindings = (adapter: SinaAdapter): AnyMarketCapabilityBinding[] => [
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: ({ stockId }) => adapter.fetchQuote(stockId),
-    observationOf: (quote) => successObservation(quote.observedAt),
+    observationOf: (quote) =>
+      successObservation(quote.timestampSource === 'upstream' ? quote.observedAt : undefined),
   },
   {
     capability: 'batch-quote',
@@ -334,16 +322,7 @@ const sinaBindings = (adapter: SinaAdapter): AnyMarketCapabilityBinding[] => [
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
-    observationOf: (quotes) =>
-      successObservation(
-        quotes.reduce<Date | undefined>(
-          (latest, quote) =>
-            latest === undefined || quote.observedAt.getTime() > latest.getTime()
-              ? quote.observedAt
-              : latest,
-          undefined,
-        ),
-      ),
+    observationOf: batchQuoteObservation,
   },
   {
     capability: 'daily-bars',
@@ -394,16 +373,7 @@ const fuyaoBindings = (adapter: FuyaoSource): AnyMarketCapabilityBinding[] => [
     coverage: CN_SH_SZ,
     configurationReady: true,
     execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
-    observationOf: (quotes) =>
-      successObservation(
-        quotes.reduce<Date | undefined>(
-          (latest, quote) =>
-            latest === undefined || quote.observedAt.getTime() > latest.getTime()
-              ? quote.observedAt
-              : latest,
-          undefined,
-        ),
-      ),
+    observationOf: batchQuoteObservation,
   },
   {
     capability: 'market-snapshot',

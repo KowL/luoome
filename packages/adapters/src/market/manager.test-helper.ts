@@ -13,9 +13,13 @@ import type {
 } from '@luoome/core';
 import type { SourceResultObservation } from '../source-registry.js';
 import { MarketDataManager, type MarketDataManagerOptions } from './manager.js';
-import { type AnyMarketCapabilityBinding, MarketSourceRegistry } from './source-registry.js';
+import {
+  type AnyMarketCapabilityBinding,
+  batchQuoteObservation,
+  MarketSourceRegistry,
+} from './source-registry.js';
 
-/** 与 factory 同契约：resolved 即 success；dataAsOf 有则更新、无则清除。 */
+/** 与 factory 一样，缺少可信数据时间时清除旧 dataAsOf。 */
 const successObservation = (dataAsOf: Date | undefined): SourceResultObservation =>
   dataAsOf === undefined ? { outcome: 'success' } : { outcome: 'success', dataAsOf };
 
@@ -87,7 +91,8 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: ({ stockId }) => source.fetchQuote(stockId),
-        observationOf: (quote) => successObservation(quote.observedAt),
+        observationOf: (quote) =>
+          successObservation(quote.timestampSource === 'upstream' ? quote.observedAt : undefined),
       },
       {
         capability: 'daily-bars',
@@ -106,16 +111,7 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: ({ stockIds }) => fetchBatchQuotes(stockIds),
-        observationOf: (quotes) =>
-          successObservation(
-            quotes.reduce<Date | undefined>(
-              (latest, quote) =>
-                latest === undefined || quote.observedAt.getTime() > latest.getTime()
-                  ? quote.observedAt
-                  : latest,
-              undefined,
-            ),
-          ),
+        observationOf: batchQuoteObservation,
       });
     }
     const searchStocks = source.searchStocks?.bind(source);
@@ -163,7 +159,7 @@ const testRegistry = (
         coverage: TEST_COVERAGE,
         configurationReady: true,
         execute: () => fetchIndexQuotes(),
-        observationOf: (indices) =>
+        observationOf: (indices: readonly IndexQuote[]) =>
           successObservation(
             indices.reduce<Date | undefined>(
               (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),

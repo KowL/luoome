@@ -94,7 +94,7 @@ export class SinaAdapter {
     if (fields === undefined) {
       throw new SinaAdapterError('no_data', `no_data: Sina 快照缺行 code=${code}`);
     }
-    const quote = buildSinaQuote(stockCode.toUpperCase(), fields, this.clock);
+    const quote = buildSinaQuote(stockCode.trim().toUpperCase(), fields, this.clock);
     if (quote === undefined) {
       throw new SinaAdapterError('no_data', `no_data: Sina 快照缺价 code=${code}`);
     }
@@ -118,12 +118,19 @@ export class SinaAdapter {
     if (pairs.length === 0) return [];
     const rows = await this.fetchHqRows(pairs.map((pair) => pair.prefixed));
     const quotes: Quote[] = [];
+    let invalidRow: SinaAdapterError | undefined;
     for (const { stockId, prefixed } of pairs) {
       const fields = rows.get(prefixed);
       if (fields === undefined) continue;
-      const quote = buildSinaQuote(stockId, fields, this.clock);
-      if (quote !== undefined) quotes.push(quote);
+      try {
+        const quote = buildSinaQuote(stockId, fields, this.clock);
+        if (quote !== undefined) quotes.push(quote);
+      } catch (error) {
+        if (!(error instanceof SinaAdapterError)) throw error;
+        invalidRow = error;
+      }
     }
+    if (quotes.length === 0 && invalidRow !== undefined) throw invalidRow;
     return quotes;
   }
 
@@ -159,11 +166,19 @@ export class SinaAdapter {
       clearTimeout(timeout);
     }
     const rows = new Map<string, readonly string[]>();
+    let recognized = false;
     for (const match of text.matchAll(/hq_str_((?:sh|sz)\d{6})="([^"]*)";?/g)) {
+      recognized = true;
       const prefixed = match[1];
       const raw = match[2];
       if (prefixed === undefined || raw === undefined || raw === '') continue;
+      if (rows.has(prefixed)) {
+        throw new SinaAdapterError('invalid_payload', 'invalid_payload: Sina 快照身份重复');
+      }
       rows.set(prefixed, raw.split(','));
+    }
+    if (!recognized) {
+      throw new SinaAdapterError('invalid_payload', 'invalid_payload: Sina 快照响应格式无效');
     }
     return rows;
   }
@@ -329,11 +344,18 @@ const isIndexCode = (stockCode: string): boolean =>
   /^(000001|000300|000688)\.SH$|^(399001|399006)\.SZ$/i.test(stockCode.trim());
 
 const positiveNumber = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
   const number = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(number) && number > 0 ? number : undefined;
 };
 
 const nonnegativeNumber = (value: unknown): number | undefined => {
+  if (
+    (typeof value !== 'number' && typeof value !== 'string') ||
+    (typeof value === 'string' && value.trim() === '')
+  ) {
+    return undefined;
+  }
   const number = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(number) && number >= 0 ? number : undefined;
 };
@@ -381,18 +403,29 @@ const buildSinaQuote = (
   const prevClose = positiveNumber(fields[2]);
   const volume = nonnegativeNumber(fields[8]);
   const amount = nonnegativeNumber(fields[9]);
+  if (
+    open === undefined ||
+    high === undefined ||
+    low === undefined ||
+    volume === undefined ||
+    high < Math.max(open, close) ||
+    low > Math.min(open, close) ||
+    low > high
+  ) {
+    throw new SinaAdapterError('invalid_payload', 'invalid_payload: Sina 快照 OHLCV 无效');
+  }
   return {
     stockId,
     observedAt,
     fetchedAt,
     timestampSource: observedAt === fetchedAt ? 'retrieval' : 'upstream',
     ts: observedAt,
-    open: money(open ?? close),
-    high: money(high ?? close),
-    low: money(low ?? close),
+    open: money(open),
+    high: money(high),
+    low: money(low),
     close: money(close),
-    volume: volume !== undefined ? brandQuantity(Math.round(volume)) : brandQuantity(0),
-    ...(amount !== undefined && amount > 0 ? { amount } : {}),
+    volume: brandQuantity(Math.round(volume)),
+    ...(amount === undefined ? {} : { amount }),
     ...(prevClose !== undefined ? { prevClose: money(prevClose) } : {}),
     source: 'sina',
   };
@@ -409,7 +442,9 @@ const parseSinaHqTime = (date: string | undefined, time: string | undefined): Da
     return undefined;
   }
   const parsed = new Date(`${date}T${time}+08:00`);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  const local = new Date(parsed.getTime() + 8 * 3_600_000).toISOString().slice(0, 19);
+  return local === `${date}T${time}` ? parsed : undefined;
 };
 
 export const sinaQfqFactorForDate = factorForDate;

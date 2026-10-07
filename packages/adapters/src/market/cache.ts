@@ -118,8 +118,8 @@ export class QuoteCache {
     return this.lru.get(stockCode);
   }
 
-  set(quote: Quote): void {
-    this.lru.set(quote.stockId, quote, this.ttlMs);
+  set(quote: Quote, requestedId: string = quote.stockId): void {
+    this.lru.set(requestedId, quote, this.ttlMs);
   }
 
   clear(): void {

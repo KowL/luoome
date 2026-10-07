@@ -9,6 +9,21 @@ const silentLogger = (): Logger => {
   return { debug: noop, info: noop, warn: noop, error: noop };
 };
 
+const tencentQuoteLine = (code: string, price: number = 250): string => {
+  const fields = Array.from({ length: 39 }, () => '');
+  Object.assign(fields, {
+    2: code.slice(2),
+    3: String(price),
+    4: String(price - 1),
+    5: String(price),
+    6: '10',
+    30: '20260930150000',
+    33: String(price + 1),
+    34: String(price - 1),
+  });
+  return `v_${code}="${fields.join('~')}";`;
+};
+
 describe('market/factory', () => {
   it('env 缺省 → 启动期报配置错误', () => {
     expect(() => createMarketAdapterFromEnv({}, { logger: silentLogger() })).toThrow(
@@ -119,28 +134,18 @@ describe('market/factory', () => {
         logger: silentLogger(),
         fetchImpl: ((url: string) => {
           urls.push(String(url));
-          // Eastmoney（push2）一律失败；Tencent（ifzq）返回 minute 形状
+          // Eastmoney 失败后使用 Tencent 原生快照
           if (String(url).includes('push2')) {
             return Promise.resolve(new Response('boom', { status: 500 }));
           }
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                code: 0,
-                data: {
-                  hk00700: { data: { data: ['0930 375 100 37500.00', '1530 380 120 45600.00'] } },
-                },
-              }),
-              { status: 200 },
-            ),
-          );
+          return Promise.resolve(new Response(tencentQuoteLine('hk00700', 380)));
         }) as never,
       },
     );
     const q = await adapter.fetchQuote('00700.HK');
     expect(q.source).toBe('tencent');
     expect(urls.some((u) => u.includes('push2'))).toBe(true);
-    expect(urls.some((u) => u.includes('ifzq'))).toBe(true);
+    expect(urls.some((u) => u.includes('qt.gtimg.cn'))).toBe(true);
   });
 
   it('real：全源失败 → 明确抛错，不生成行情', async () => {
@@ -152,6 +157,78 @@ describe('market/factory', () => {
       },
     );
     await expect(adapter.fetchQuote('002594.SZ')).rejects.toThrow(/all market sources failed/i);
+  });
+
+  it('默认批量链路仅向腾讯补东方财富缺失项，观测保留主源 partial_data', async () => {
+    const urls: string[] = [];
+    const adapter = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real' },
+      {
+        logger: silentLogger(),
+        clock: () => new Date('2026-09-30T08:00:00.000Z'),
+        fetchImpl: (async (input: string | URL | Request) => {
+          const url = String(input);
+          urls.push(url);
+          if (url.includes('ulist.np')) {
+            return new Response(
+              JSON.stringify({
+                rc: 0,
+                data: {
+                  diff: [
+                    {
+                      f12: '600519',
+                      f13: 1,
+                      f2: 1258,
+                      f17: 1239,
+                      f15: 1268,
+                      f16: 1236,
+                      f5: 38331,
+                      f124: new Date('2026-09-30T07:00:00.000Z').getTime() / 1000,
+                    },
+                  ],
+                },
+              }),
+            );
+          }
+          if (url.includes('qt.gtimg.cn/q=sz000001'))
+            return new Response(tencentQuoteLine('sz000001', 11));
+          throw new Error('unexpected source request');
+        }) as unknown as typeof fetch,
+      },
+    );
+    const quotes = await adapter.batchQuote(['600519.SH', '000001.SZ']);
+    expect(quotes.get('600519.SH')?.source).toBe('eastmoney');
+    expect(quotes.get('000001.SZ')?.source).toBe('tencent');
+    expect(urls).toHaveLength(2);
+    expect(
+      adapter
+        .marketSourceStatus()
+        .find((s) => s.dataset === 'batch-quote' && s.source === 'eastmoney')?.lastErrorKind,
+    ).toBe('partial_data');
+    expect(
+      adapter
+        .marketSourceStatus()
+        .find((s) => s.dataset === 'batch-quote' && s.source === 'tencent')?.lastErrorKind,
+    ).toBeUndefined();
+    await adapter.fetchQuote('000001.SZ');
+    expect(urls).toHaveLength(2);
+  });
+
+  it('retrieval 报价不声明来源 dataAsOf，避免把抓取成功视为行情新鲜', async () => {
+    const adapter = createMarketAdapterFromEnv(
+      { LUOOME_MARKET_PROVIDER: 'real', LUOOME_MARKET_SOURCES: 'tencent' },
+      {
+        logger: silentLogger(),
+        fetchImpl: (async () =>
+          new Response(
+            tencentQuoteLine('sz000001').replace('20260930150000', ''),
+          )) as unknown as typeof fetch,
+      },
+    );
+    expect((await adapter.fetchQuote('000001.SZ')).timestampSource).toBe('retrieval');
+    expect(
+      adapter.marketSourceStatus().find((s) => s.dataset === 'quote')?.dataAsOf,
+    ).toBeUndefined();
   });
 
   it('LUOOME_MARKET_SOURCES 含 tushare + TUSHARE_TOKEN：主备失败 → finalFallback 返回 source=tushare', async () => {
@@ -221,11 +298,8 @@ describe('market/factory', () => {
         fetchImpl: (async (input: string | URL | Request) => {
           const url = String(input);
           calls.push(url);
-          if (url.includes('web.ifzq.gtimg.cn')) {
-            return new Response(
-              JSON.stringify({ code: 0, data: { sz002594: { data: { data: ['0930 250 10'] } } } }),
-              { status: 200 },
-            );
+          if (url.includes('qt.gtimg.cn')) {
+            return new Response(tencentQuoteLine('sz002594'));
           }
           return new Response('unexpected', { status: 500 });
         }) as typeof fetch,
@@ -233,8 +307,8 @@ describe('market/factory', () => {
     );
     const quote = await adapter.fetchQuote('002594.SZ');
     expect(quote.source).toBe('tencent');
-    // tencent 分钟快照 + qt 昨收补取各一次；全程不触达 eastmoney
-    expect(calls.filter((u) => u.includes('web.ifzq.gtimg.cn'))).toHaveLength(1);
+    // Tencent 原生快照一次请求；全程不触达 eastmoney
+    expect(calls.filter((u) => u.includes('qt.gtimg.cn'))).toHaveLength(1);
     expect(calls.some((u) => u.includes('eastmoney'))).toBe(false);
   });
 

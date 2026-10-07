@@ -35,6 +35,25 @@ const demoBinding = (
 });
 
 describe('SourceRegistry（泛型）', () => {
+  it('观测收到原始请求，可将范围不完整的 resolved 结果记为失败', async () => {
+    const registry = new SourceRegistry<TestCapabilityMap>(
+      [
+        demoBinding({
+          execute: () => Promise.resolve({ value: 1 }),
+          observationOf: (result, input) =>
+            input.key === String(result.value)
+              ? { outcome: 'success' }
+              : { outcome: 'failure', kind: 'partial_data' },
+        }),
+      ],
+      () => new Date(),
+    );
+    const source = registry.sources('demo')[0];
+    await source?.execute({ key: '2' });
+    expect(registry.describe()[0]?.lastErrorKind).toBe('partial_data');
+    await source?.execute({ key: '1' });
+    expect(registry.describe()[0]?.lastErrorKind).toBeUndefined();
+  });
   it('重复绑定与 configurationReady=false 启动期抛错', () => {
     const binding = demoBinding({ execute: () => Promise.resolve({ value: 1 }) });
     expect(

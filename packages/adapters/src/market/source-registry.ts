@@ -12,13 +12,46 @@ import type {
   SourceStatus,
   StockSearchCandidate,
 } from '@luoome/core';
+import { QuoteSchema } from '@luoome/core';
 
 import {
   type AnyBinding,
   type SourceBinding,
   type SourceHandle,
   SourceRegistry,
+  type SourceResultObservation,
 } from '../source-registry.js';
+
+export const quoteMatchesStock = (actual: string, requested: string): boolean => {
+  const actualId = actual.trim().toUpperCase();
+  const requestedId = requested.trim().toUpperCase();
+  if (actualId === requestedId) return true;
+  // 裸代码兼容不应把带不同交易所后缀的两个标的合并。
+  return !requestedId.includes('.') && actualId.replace(/\.(SH|SZ|BJ)$/, '') === requestedId;
+};
+
+export const batchQuoteObservation = (
+  quotes: readonly Quote[],
+  { stockIds }: { readonly stockIds: readonly string[] },
+): SourceResultObservation => {
+  if (stockIds.length === 0) return { outcome: 'ignored' };
+  const valid = quotes.flatMap((quote) => {
+    const parsed = QuoteSchema.safeParse(quote);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const requested = [...new Set(stockIds)];
+  const matched = requested.flatMap((stockId) => {
+    const matches = valid.filter((quote) => quoteMatchesStock(quote.stockId, stockId));
+    return matches.length === 1 ? matches : [];
+  });
+  if (matched.length === 0) return { outcome: 'failure', kind: 'no_data' };
+  if (matched.length !== requested.length) return { outcome: 'failure', kind: 'partial_data' };
+  if (matched.some((quote) => quote.timestampSource !== 'upstream')) return { outcome: 'success' };
+  return {
+    outcome: 'success',
+    dataAsOf: new Date(Math.min(...matched.map((quote) => quote.observedAt.getTime()))),
+  };
+};
 
 /**
  * 行情域的 SourceRegistry 实例化（薄壳）：capability map 注入 10 种行情能力的

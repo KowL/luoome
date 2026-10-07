@@ -70,7 +70,7 @@ export class EastmoneySource implements
 - 不再单独引入 `SourceObservation` 模块：泛化后的 registry 的 `execute` 包装层就是观测点，所有域一个机制；
 - 内存态、进程重启归零，与行情域现状一致；CONTEXT.md「数据源观测」条目按此登记；
 - **只记录源失败**：调用方输入错误（`invalid_input`）、非交易日早退不计入；
-- binding 使用必填 `observationOf(result)` 对已 resolve 的结果分类，避免把 `ok:false`、`unsupported_date` 或空结果误记为成功：
+- binding 使用必填 `observationOf(result, input)` 对已 resolve 的结果分类，按请求范围判断完整性，避免把 `ok:false`、`unsupported_date` 或空结果误记为成功：
   - `{ outcome: 'success', dataAsOf? }`：更新 `lastSuccessAt`，清除 `lastErrorKind`；只在提供 `dataAsOf` 时更新该字段，否则清除旧值；
   - `{ outcome: 'failure', kind }`：只更新 `lastAttemptAt` / `lastErrorKind`，保留上一份 `lastSuccessAt` / `dataAsOf` 供诊断；
   - `{ outcome: 'ignored' }`：仅保留 `lastAttemptAt`，不改变成功、错误与数据时间；用于调用方输入限制或该源明确不支持的历史窗口。
@@ -167,7 +167,7 @@ export interface SourceBinding<M extends CapabilityMap, C extends keyof M & stri
   readonly configurationReady: boolean;
   execute(input: M[C]['request']): Promise<M[C]['result']>;
   /** 每个 binding 必须显式声明 resolved result 如何影响观测。 */
-  observationOf(result: M[C]['result']): SourceResultObservation;
+  observationOf(result: M[C]['result'], input: M[C]['request']): SourceResultObservation;
 }
 
 export type AnyBinding<M extends CapabilityMap> = {

@@ -6,7 +6,7 @@ describe('market/SinaAdapter', () => {
   it('将 raw 日线与真实 qfq 因子合成为 qfq DailyBar，成交量保持股', async () => {
     const urls: string[] = [];
     const adapter = new SinaAdapter({
-      fetchImpl: (async (input) => {
+      fetchImpl: (async (input: string | URL | Request) => {
         const url = String(input);
         urls.push(url);
         if (url.endsWith('/qfq.js')) {
@@ -34,7 +34,7 @@ describe('market/SinaAdapter', () => {
             },
           ]),
         );
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
 
     const bars = await adapter.fetchDailyBars('600519.SH', {
@@ -80,14 +80,14 @@ describe('market/SinaAdapter', () => {
 
   it('因子响应缺失时拒绝把 raw 行伪装成 qfq', async () => {
     const adapter = new SinaAdapter({
-      fetchImpl: (async (input) => {
+      fetchImpl: (async (input: string | URL | Request) => {
         if (String(input).endsWith('/qfq.js')) return new Response('var sh600519qfq={"data":[]};');
         return new Response(
           JSON.stringify([
             { day: '2026-08-12', open: '100', high: '101', low: '99', close: '100', volume: '10' },
           ]),
         );
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
 
     await expect(
@@ -102,6 +102,11 @@ describe('market/SinaAdapter', () => {
     /** hq 文本行真实布局（2026-10-05 实盘）：[1]今开 [2]昨收 [3]最新 [4]高 [5]低 [8]量(股) [9]额(元) [30]日期 [31]时间。 */
     const HQ_LINE =
       'var hq_str_sh600519="贵州茅台,1239.530,1235.580,1258.620,1268.000,1236.050,1258.620,1258.650,3833098,4797246636.000,1445,1258.620,100,1258.440,100,1258.160,200,1258.050,4100,1258.000,200,1258.650,300,1258.660,100,1258.680,200,1258.690,8000,1258.750,2026-09-30,15:34:59,00,";';
+    const hqWith = (overrides: Record<number, string>): string => {
+      const fields = HQ_LINE.split('"')[1]?.split(',') ?? [];
+      Object.assign(fields, overrides);
+      return `var hq_str_sh600519="${fields.join(',')}";`;
+    };
 
     it('解析快照字段；volume 已是股不转换；observedAt 按上游时间', async () => {
       const adapter = new SinaAdapter({
@@ -166,6 +171,51 @@ describe('market/SinaAdapter', () => {
         fetchImpl: (async () => new Response('x', { status: 403 })) as unknown as typeof fetch,
       });
       await expect(adapter.fetchQuote('600519.SH')).rejects.toThrow(/403/);
+    });
+
+    it.each([{ 1: '' }, { 4: '1200' }, { 8: '' }, { 8: '-1' }])(
+      '缺失 OHLCV 和矛盾价格拒绝而不合成行情：%j',
+      async (overrides) => {
+        const adapter = new SinaAdapter({
+          fetchImpl: (async () => new Response(hqWith(overrides))) as unknown as typeof fetch,
+        });
+        await expect(adapter.fetchQuote('600519.SH')).rejects.toMatchObject({
+          kind: 'invalid_payload',
+        });
+      },
+    );
+
+    it('真实零成交量和金额保留；非法日期不能变成 upstream 时间', async () => {
+      const adapter = new SinaAdapter({
+        fetchImpl: (async () =>
+          new Response(hqWith({ 8: '0', 9: '0', 30: '2026-02-30' }))) as unknown as typeof fetch,
+        clock: () => new Date('2026-09-30T08:00:00.000Z'),
+      });
+      const quote = await adapter.fetchQuote('600519.SH');
+      expect(quote).toMatchObject({ volume: 0, amount: 0, timestampSource: 'retrieval' });
+      expect(quote.observedAt).toEqual(quote.fetchedAt);
+    });
+
+    it('HTTP 200 错误页仍是 invalid_payload；空报价行是合法缺失', async () => {
+      const invalid = new SinaAdapter({
+        fetchImpl: (async () => new Response('<html>blocked</html>')) as unknown as typeof fetch,
+      });
+      await expect(invalid.fetchBatchQuotes(['600519.SH'])).rejects.toMatchObject({
+        kind: 'invalid_payload',
+      });
+      const empty = new SinaAdapter({
+        fetchImpl: (async () => new Response('var hq_str_sh600519="";')) as unknown as typeof fetch,
+      });
+      await expect(empty.fetchBatchQuotes(['600519.SH'])).resolves.toEqual([]);
+    });
+
+    it('批量坏行只影响对应股票，保留其它正常报价供 manager 补齐', async () => {
+      const invalid = hqWith({ 8: '' }).replaceAll('sh600519', 'sz000001');
+      const adapter = new SinaAdapter({
+        fetchImpl: (async () => new Response(`${HQ_LINE}\n${invalid}`)) as unknown as typeof fetch,
+      });
+      const quotes = await adapter.fetchBatchQuotes(['600519.SH', '000001.SZ']);
+      expect(quotes.map((quote) => quote.stockId)).toEqual(['600519.SH']);
     });
   });
 });

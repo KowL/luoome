@@ -273,7 +273,7 @@ describe('market/manager', () => {
       expect(primary.callCount).toBe(0);
     });
 
-    it('batch 缺漏标的：遗漏该只，不逐股补拉', async () => {
+    it('batch 缺漏标的：只对缺漏项逐股补拉，保留批量成功项', async () => {
       const primary = new StubBatchPrimary();
       primary.dropIds = ['B'];
       const mgr = createTestMarketDataManager({
@@ -282,8 +282,82 @@ describe('market/manager', () => {
       });
       const result = await mgr.batchQuote(['A', 'B', 'C']);
       expect(primary.batchCallCount).toBe(1);
-      expect([...result.keys()].sort()).toEqual(['A', 'C']);
-      expect(primary.callCount).toBe(0);
+      expect([...result.keys()].sort()).toEqual(['A', 'B', 'C']);
+      expect(primary.callCount).toBe(1);
+      expect(mgr.marketSourceStatus().find((s) => s.dataset === 'batch-quote')).toMatchObject({
+        lastErrorKind: 'partial_data',
+      });
+    });
+
+    it('原生备用批量只补缺漏项，不替换主源成功报价', async () => {
+      const primary = new StubBatchPrimary();
+      primary.dropIds = ['B', 'C'];
+      const fallback = new StubBatchPrimary();
+      fallback.dropIds = ['C'];
+      const fetchBatch = fallback.fetchBatchQuotes.bind(fallback);
+      fallback.fetchBatchQuotes = async (ids) =>
+        (await fetchBatch(ids)).map((quote) => ({
+          ...quote,
+          close: money(200),
+          source: 'tencent',
+        }));
+      const mgr = createTestMarketDataManager({ primary, fallback, logger: silentLogger });
+
+      const result = await mgr.batchQuote(['A', 'B', 'C', 'A']);
+
+      expect(primary.batchIds).toEqual(['A', 'B', 'C']);
+      expect(fallback.batchIds).toEqual(['B', 'C']);
+      expect(result.get('A')?.source).toBe('eastmoney');
+      expect(result.get('B')?.source).toBe('tencent');
+      expect(result.get('C')?.source).toBe('eastmoney');
+      expect(primary.callCount).toBe(1);
+      expect(fallback.callCount).toBe(0);
+      await mgr.fetchQuote('B');
+      expect(primary.callCount).toBe(1);
+    });
+
+    it('单行非法不丢弃其它股票，空响应和重复身份继续降级', async () => {
+      const primary = new StubBatchPrimary();
+      const fetchBatch = primary.fetchBatchQuotes.bind(primary);
+      primary.fetchBatchQuotes = async (ids) => {
+        const quotes = await fetchBatch(ids);
+        return quotes.flatMap((quote) =>
+          quote.stockId === 'B'
+            ? [{ ...quote, volume: -1 }]
+            : quote.stockId === 'C'
+              ? [quote, quote]
+              : [quote],
+        );
+      };
+      const fallback = new StubBatchPrimary();
+      fallback.dropIds = ['B', 'C'];
+      const mgr = createTestMarketDataManager({ primary, fallback, logger: silentLogger });
+
+      const result = await mgr.batchQuote(['A', 'B', 'C']);
+
+      expect(result.size).toBe(3);
+      expect(fallback.batchIds).toEqual(['B', 'C']);
+      expect(primary.callCount).toBe(2);
+      expect(
+        mgr.marketSourceStatus().find((s) => s.source.endsWith('#2') && s.dataset === 'batch-quote')
+          ?.lastErrorKind,
+      ).toBe('no_data');
+    });
+
+    it('带交易所后缀的不同标的不合并，裸代码结果按请求 key 缓存', async () => {
+      const primary = new StubBatchPrimary();
+      const fetchBatch = primary.fetchBatchQuotes.bind(primary);
+      primary.fetchBatchQuotes = async () => {
+        const [quote] = await fetchBatch(['000001.SZ']);
+        return quote === undefined ? [] : [quote];
+      };
+      const mgr = createTestMarketDataManager({ primary, logger: silentLogger });
+      const result = await mgr.batchQuote(['000001.SH', '000001']);
+      expect(result.get('000001.SH')?.stockId).toBe('000001.SH');
+      expect(result.get('000001')?.stockId).toBe('000001.SZ');
+      expect(primary.callCount).toBe(1);
+      await mgr.fetchQuote('000001');
+      expect(primary.callCount).toBe(1);
     });
 
     it('batch 全源失败：降级为逐股扇出兜底', async () => {
