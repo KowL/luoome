@@ -4,15 +4,20 @@ import {
   type DailyBar,
   type DateRange,
   type Exchange,
+  type IndexQuote,
   type IntradayMinute,
   type MarketSnapshot,
   type MarketSnapshotItem,
   MarketSnapshotSchema,
+  type MinuteBar,
+  type MinuteBarInterval,
+  MinuteBarSchema,
   money,
   type Quote,
   type StockSearchCandidate,
   type StockUniverseSourceLike,
 } from '@luoome/core';
+import { ZodError } from 'zod';
 
 import { httpStatusErrorKind, isAbortError, SourceExecutionError } from '../source-error.js';
 import { SinaStockUniverseAdapter } from '../stock-universe/sina.js';
@@ -84,12 +89,42 @@ const TENCENT_MARKET_SNAPSHOT_PATTERN = /v_(sh|sz)(\d{6})="([^"]*)";?/g;
 /** 批量快照行（qt.gtimg.cn）：与全市场快照同端点，扩到 bj（北交所）。 */
 const TENCENT_BATCH_QUOTE_PATTERN = /v_(sh|sz|bj)(\d{6})="([^"]*)";?/g;
 
+/** 指数快照行（qt.gtimg.cn）：hs 代码 6 位数字，恒生为 hkHSI（字母代码）。 */
+const TENCENT_INDEX_QUOTE_PATTERN = /v_(sh|sz|hk)([0-9A-Za-z]+)="([^"]*)";?/g;
+
+/**
+ * 主要大盘指数（与 eastmoney MAJOR_INDICES 同一集合）。
+ * code 以本表为准：hkHSI 响应第 2 段可能带市场前缀，不回读上游字段。
+ */
+const MAJOR_INDEX_SPECS = [
+  { prefixed: 'sh000001', code: '000001' }, // 上证指数
+  { prefixed: 'sz399001', code: '399001' }, // 深证成指
+  { prefixed: 'sz399006', code: '399006' }, // 创业板指
+  { prefixed: 'sh000300', code: '000300' }, // 沪深300
+  { prefixed: 'sh000688', code: '000688' }, // 科创50
+  { prefixed: 'hkHSI', code: 'HSI' }, // 恒生指数
+] as const;
+
+/** mkline 分钟周期参数（2026-10-05 实盘验证：m1/m5/m15/m30/m60 均支持）。 */
+const TENCENT_MINUTE_KLINE_FREQ: Readonly<Record<MinuteBarInterval, string>> = {
+  '1m': 'm1',
+  '5m': 'm5',
+  '15m': 'm15',
+  '30m': 'm30',
+  '60m': 'm60',
+};
+
+/** mkline 单次请求桶数：m1 全日 240 桶，留余量取 400（响应跨多日，按最新交易日过滤）。 */
+const MINUTE_KLINE_COUNT = 400;
+
 export interface TencentAdapterOptions {
   readonly clock?: () => Date;
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
   readonly baseQuoteUrl?: string;
   readonly baseKlineUrl?: string;
+  /** mkline 分钟 K 线端点；默认 ifzq.gtimg.cn（web. 前缀主机对该路径 301 后空响应，2026-10 实测）。 */
+  readonly baseMinuteKlineUrl?: string;
   readonly baseSearchUrl?: string;
   /** qt.gtimg.cn 快照（GBK 文本）：仅用于补昨收，分钟端点无此字段。 */
   readonly baseRtQuoteUrl?: string;
@@ -157,6 +192,7 @@ export class TencentAdapter {
   private readonly fetchImpl: typeof fetch;
   private readonly baseQuoteUrl: string;
   private readonly baseKlineUrl: string;
+  private readonly baseMinuteKlineUrl: string;
   private readonly baseSearchUrl: string;
   private readonly baseRtQuoteUrl: string;
   private readonly baseMarketSnapshotUrl: string;
@@ -171,6 +207,8 @@ export class TencentAdapter {
       options.baseQuoteUrl ?? 'https://web.ifzq.gtimg.cn/appstock/app/minute/query';
     this.baseKlineUrl =
       options.baseKlineUrl ?? 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get';
+    this.baseMinuteKlineUrl =
+      options.baseMinuteKlineUrl ?? 'https://ifzq.gtimg.cn/appstock/app/kline/mkline';
     this.baseSearchUrl = options.baseSearchUrl ?? 'https://smartbox.gtimg.cn/s3/';
     this.baseRtQuoteUrl = options.baseRtQuoteUrl ?? 'https://qt.gtimg.cn/q';
     this.baseMarketSnapshotUrl = options.baseMarketSnapshotUrl ?? 'https://qt.gtimg.cn/q';
@@ -460,6 +498,92 @@ export class TencentAdapter {
   }
 
   /**
+   * 当前交易日原生分钟 OHLCV（minute-bars 第二来源）：mkline 端点返回真实分钟桶
+   * `[YYYYMMDDHHMM, open, close, high, low, volume(手), …]`，标签是桶结束时间
+   * （2026-10-05 实盘验证：m5 末桶 15:00、m60 首桶 10:30），不是分时累计端点，
+   * 满足 MinuteBar「只接受 provider 明确给出的 OHLCV」契约。
+   * 响应跨多日：按最新交易日过滤对齐 rt_min 的当日语义；标签晚于 fetchedAt 的
+   * 未收盘桶丢弃（不伪造 endedAt）；amount 列口径未验证，不填。
+   */
+  async fetchMinuteBars(
+    stockCode: string,
+    interval: MinuteBarInterval,
+  ): Promise<readonly MinuteBar[]> {
+    const code = toPrefixedCode(stockCode);
+    const freq = TENCENT_MINUTE_KLINE_FREQ[interval];
+    const url = `${this.baseMinuteKlineUrl}?param=${code},${freq},,${MINUTE_KLINE_COUNT}`;
+    const json = await this.getJson<{
+      code: number;
+      msg?: string;
+      data?: Readonly<Record<string, Record<string, unknown> | undefined>>;
+    }>(url);
+    if (json.code !== 0 || json.data === undefined) {
+      throw new TencentAdapterError('upstream_error', `Tencent 分钟线失败: code=${json.code}`);
+    }
+    const rawList = json.data[code]?.[freq];
+    if (!Array.isArray(rawList)) {
+      throw new TencentAdapterError('no_data', `Tencent 分钟线缺 ${freq} 节点: code=${code}`);
+    }
+    const rows = rawList.filter(
+      (row): row is readonly string[] =>
+        Array.isArray(row) && row.length >= 6 && typeof row[0] === 'string',
+    );
+    const latestDate = rows.reduce((max, row) => {
+      const date = (row[0] as string).slice(0, 8);
+      return date > max ? date : max;
+    }, '');
+    if (latestDate === '') {
+      throw new TencentAdapterError('no_data', `Tencent 分钟线为空: code=${code}`);
+    }
+    const fetchedAt = this.clock();
+    const intervalMs = Number.parseInt(interval, 10) * 60_000;
+    try {
+      const bars = rows.flatMap((row) => {
+        const label = row[0] as string;
+        if (!label.startsWith(latestDate)) return [];
+        const endedAt = parseTencentMinuteBarTime(label);
+        if (endedAt === undefined || endedAt.getTime() > fetchedAt.getTime()) return [];
+        const open = Number(row[1]);
+        const close = Number(row[2]);
+        const high = Number(row[3]);
+        const low = Number(row[4]);
+        const volumeLots = Number(row[5]);
+        if (![open, close, high, low].every((n) => Number.isFinite(n) && n > 0)) return [];
+        if (!Number.isFinite(volumeLots) || volumeLots < 0) return [];
+        return [
+          MinuteBarSchema.parse({
+            stockId: stockCode.toUpperCase(),
+            interval,
+            endedAt,
+            open: money(open),
+            high: money(high),
+            low: money(low),
+            close: money(close),
+            volume: brandQuantity(Math.round(volumeLots * 100)), // 手 → 股
+            adjustment: 'raw',
+            source: 'tencent',
+            fetchedAt,
+            completeness: fetchedAt.getTime() - endedAt.getTime() < intervalMs ? 'live' : 'closed',
+          }),
+        ];
+      });
+      if (bars.length === 0) {
+        throw new TencentAdapterError('no_data', `Tencent 分钟线无有效桶: code=${code}`);
+      }
+      return bars;
+    } catch (error) {
+      if (error instanceof ZodError) {
+        throw new TencentAdapterError(
+          'invalid_payload',
+          `invalid_payload: Tencent 分钟线不变量校验失败: ${error.message}`,
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
    * 批量拉取沪深 A 股实时快照。
    *
    * Tencent 只接受显式代码列表，因此先读取真实 Sina 当前目录，再按 500 只分批请求。
@@ -539,6 +663,55 @@ export class TencentAdapter {
   }
 
   /**
+   * 大盘指数实时行情（realtime-index 第二来源）：qt.gtimg.cn 批量端点一次请求全部
+   * 指数（与批量快照同端点，GBK 文本）。字段布局同股票快照：[1]名称 [3]最新点位
+   * [4]昨收 [30]行情时间 [31]涨跌额 [32]涨跌幅%；涨跌额 / 涨跌幅缺失时按昨收回算。
+   * 单只缺失 / 缺价只跳过该只，全部缺失抛 TencentAdapterError（对齐 eastmoney 语义）。
+   */
+  async fetchIndexQuotes(): Promise<readonly IndexQuote[]> {
+    const text = await this.getText(
+      `${this.baseMarketSnapshotUrl}=${MAJOR_INDEX_SPECS.map((spec) => spec.prefixed).join(',')}`,
+      'gbk',
+    );
+    const rows = new Map<string, readonly string[]>();
+    for (const match of text.matchAll(TENCENT_INDEX_QUOTE_PATTERN)) {
+      const raw = match[3];
+      if (raw === undefined) continue;
+      rows.set(`${match[1]}${match[2]}`, raw.split('~'));
+    }
+    const fetchedAt = this.clock();
+    const indices: IndexQuote[] = [];
+    for (const spec of MAJOR_INDEX_SPECS) {
+      const fields = rows.get(spec.prefixed);
+      if (fields === undefined) continue;
+      const close = positiveNumber(fields[3]);
+      const name = fields[1]?.trim();
+      if (close === undefined || name === undefined || name === '') continue;
+      const prevClose = positiveNumber(fields[4]);
+      const change = finiteNumber(fields[31]) ?? (prevClose === undefined ? 0 : close - prevClose);
+      const changePct =
+        finiteNumber(fields[32]) ?? (prevClose === undefined ? 0 : (change / prevClose) * 100);
+      const upstreamAt = parseTencentSnapshotTime(fields[30]);
+      indices.push({
+        code: spec.code,
+        name,
+        close: money(close),
+        change,
+        changePct,
+        ts:
+          upstreamAt !== undefined && upstreamAt.getTime() <= fetchedAt.getTime()
+            ? upstreamAt
+            : fetchedAt,
+        source: 'tencent',
+      });
+    }
+    if (indices.length === 0) {
+      throw new TencentAdapterError('no_data', 'Tencent 指数行情全部缺失');
+    }
+    return indices;
+  }
+
+  /**
    * 外部股票搜索（v0.8 起）：smartbox 接口，GBK 文本 + \uXXXX 转义。
    * 空结果返回 []；HTTP 错误抛 TencentAdapterError。
    */
@@ -614,6 +787,7 @@ const positiveNumber = (value: string | undefined): number | undefined => {
 };
 
 const finiteNumber = (value: string | undefined): number | undefined => {
+  if (value === undefined || value.trim() === '') return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 };
@@ -623,6 +797,16 @@ const parseTencentSnapshotTime = (value: string | undefined): Date | undefined =
   const parsed = new Date(
     `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T` +
       `${value.slice(8, 10)}:${value.slice(10, 12)}:${value.slice(12, 14)}+08:00`,
+  );
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
+/** mkline 桶标签（YYYYMMDDHHMM，上海时区）→ 绝对时间。 */
+const parseTencentMinuteBarTime = (value: string): Date | undefined => {
+  if (!/^\d{12}$/.test(value)) return undefined;
+  const parsed = new Date(
+    `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T` +
+      `${value.slice(8, 10)}:${value.slice(10, 12)}:00+08:00`,
   );
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 };

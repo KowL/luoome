@@ -56,8 +56,18 @@ marked partial rather than silently truncated.
 
 The manager has a dedicated 15-second `(stockId, interval)` cache and a 500 requests/minute
 minute limiter. Empty results are not cached. Provider errors are logged and returned to the Tool
-for local fallback. No other registered source is allowed to claim `minute-bars`; in particular,
-`intraday-minutes` is never an implicit fallback.
+for local fallback. `intraday-minutes` is never an implicit fallback: the Tencent cumulative
+minute endpoint cannot be differenced into bars.
+
+Second source (2026-10-05): Tencent `mkline` (`ifzq.gtimg.cn/appstock/app/kline/mkline`) is bound
+as an explicit `minute-bars` source alongside Tushare. Unlike the cumulative `minute/query`
+endpoint, mkline returns true per-bucket OHLCV `[bucketEndLabel, open, close, high, low, volume
+(lots)]` for m1/m5/m15/m30/m60 (live-verified), so it satisfies the "provider-supplied OHLCV
+only" rule. The adapter filters the multi-day response to the latest trading day to match the
+current-session contract, drops buckets whose end label is later than `fetchedAt` instead of
+fabricating timestamps, and omits `amount` because that column's unit is unverified. Any further
+source claiming `minute-bars` must meet the same bar semantics; cumulative or quote-synthesized
+series remain prohibited.
 
 Tushare's general historical minute API is end-of-day and separately permissioned
 ([minute data](https://tushare.pro/document/1?doc_id=234)); this slice does not call it through the

@@ -102,6 +102,9 @@ describe('MarketSettingsStore', () => {
     ).toMatchObject({ bound: true, label: '日 K' });
     expect(
       sina?.capabilities.find((capability) => capability.capability === 'quote'),
+    ).toMatchObject({ bound: true });
+    expect(
+      sina?.capabilities.find((capability) => capability.capability === 'search'),
     ).toMatchObject({ bound: false });
     // 无运行态叠加时：enabled → unknown，disabled → off
     expect(sina?.health).toBe('unknown');

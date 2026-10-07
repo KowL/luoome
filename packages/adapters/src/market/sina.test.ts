@@ -97,4 +97,75 @@ describe('market/SinaAdapter', () => {
       }),
     ).rejects.toThrow('unsupported_adjustment');
   });
+
+  describe('fetchQuote / fetchBatchQuotes（hq.sinajs.cn）', () => {
+    /** hq 文本行真实布局（2026-10-05 实盘）：[1]今开 [2]昨收 [3]最新 [4]高 [5]低 [8]量(股) [9]额(元) [30]日期 [31]时间。 */
+    const HQ_LINE =
+      'var hq_str_sh600519="贵州茅台,1239.530,1235.580,1258.620,1268.000,1236.050,1258.620,1258.650,3833098,4797246636.000,1445,1258.620,100,1258.440,100,1258.160,200,1258.050,4100,1258.000,200,1258.650,300,1258.660,100,1258.680,200,1258.690,8000,1258.750,2026-09-30,15:34:59,00,";';
+
+    it('解析快照字段；volume 已是股不转换；observedAt 按上游时间', async () => {
+      const adapter = new SinaAdapter({
+        fetchImpl: (async () => new Response(HQ_LINE)) as unknown as typeof fetch,
+        clock: () => new Date('2026-09-30T08:00:00.000Z'),
+      });
+      const quote = await adapter.fetchQuote('600519.SH');
+      expect(quote).toMatchObject({
+        stockId: '600519.SH',
+        open: 1239.53,
+        prevClose: 1235.58,
+        close: 1258.62,
+        high: 1268.0,
+        low: 1236.05,
+        volume: 3_833_098, // 新浪 volume 已是股
+        amount: 4_797_246_636,
+        source: 'sina',
+        timestampSource: 'upstream',
+      });
+      expect(quote.observedAt).toEqual(new Date('2026-09-30T07:34:59.000Z')); // 15:34:59 +08:00
+    });
+
+    it('请求带 Referer 头（无 Referer 上游 403）', async () => {
+      let seenReferer: string | null = null;
+      const adapter = new SinaAdapter({
+        fetchImpl: (async (_input: unknown, init?: RequestInit) => {
+          seenReferer = new Headers(init?.headers).get('Referer');
+          return new Response(HQ_LINE);
+        }) as unknown as typeof fetch,
+      });
+      await adapter.fetchQuote('600519');
+      expect(seenReferer).toBe('https://finance.sina.com.cn');
+    });
+
+    it('停牌缺价（最新价为 0）抛 no_data', async () => {
+      const suspended = HQ_LINE.replace(',1258.620,1268.000,', ',0.000,0.000,');
+      const adapter = new SinaAdapter({
+        fetchImpl: (async () => new Response(suspended)) as unknown as typeof fetch,
+      });
+      await expect(adapter.fetchQuote('600519.SH')).rejects.toThrow(/no_data/);
+    });
+
+    it('批量单次请求；缺行 / 缺价只丢弃该只', async () => {
+      const urls: string[] = [];
+      const szLine =
+        'var hq_str_sz000001="平安银行,11.20,11.25,11.30,11.40,11.10,11.30,11.31,5000000,56500000.000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2026-09-30,15:35:00,00,";';
+      const adapter = new SinaAdapter({
+        fetchImpl: ((input: unknown) => {
+          urls.push(String(input));
+          return Promise.resolve(new Response(`${HQ_LINE}\n${szLine}`));
+        }) as unknown as typeof fetch,
+      });
+      const quotes = await adapter.fetchBatchQuotes(['600519.SH', '000001.SZ', '999999.SH']);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain('sh600519,sz000001,sh999999');
+      expect(quotes.map((q) => q.stockId)).toEqual(['600519.SH', '000001.SZ']);
+      expect(quotes[1]).toMatchObject({ close: 11.3, prevClose: 11.25, source: 'sina' });
+    });
+
+    it('HTTP 错误抛 SinaAdapterError', async () => {
+      const adapter = new SinaAdapter({
+        fetchImpl: (async () => new Response('x', { status: 403 })) as unknown as typeof fetch,
+      });
+      await expect(adapter.fetchQuote('600519.SH')).rejects.toThrow(/403/);
+    });
+  });
 });

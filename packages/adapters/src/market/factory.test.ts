@@ -46,6 +46,10 @@ describe('market/factory', () => {
       'tencent:market-snapshot',
       'tencent:market-snapshot-envelope',
       'tencent:intraday-minutes',
+      'tencent:realtime-index',
+      'tencent:minute-bars',
+      'sina:quote',
+      'sina:batch-quote',
       'sina:daily-bars',
     ]);
   });

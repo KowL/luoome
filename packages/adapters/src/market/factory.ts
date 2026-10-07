@@ -295,9 +295,56 @@ const tencentBindings = (adapter: TencentAdapter): AnyMarketCapabilityBinding[] 
     execute: ({ stockId }) => adapter.fetchIntradayMinutes(stockId),
     observationOf: (points) => successObservation(points.at(-1)?.time),
   },
+  {
+    capability: 'realtime-index',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: () => adapter.fetchIndexQuotes(),
+    observationOf: (indices) =>
+      successObservation(
+        indices.reduce<Date | undefined>(
+          (latest, index) => (latest === undefined || index.ts > latest ? index.ts : latest),
+          undefined,
+        ),
+      ),
+  },
+  {
+    capability: 'minute-bars',
+    source: adapter.name,
+    coverage: CN_ALL,
+    configurationReady: true,
+    execute: ({ stockId, interval }) => adapter.fetchMinuteBars(stockId, interval),
+    observationOf: (bars) => successObservation(bars.at(-1)?.endedAt),
+  },
 ];
 
 const sinaBindings = (adapter: SinaAdapter): AnyMarketCapabilityBinding[] => [
+  {
+    capability: 'quote',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockId }) => adapter.fetchQuote(stockId),
+    observationOf: (quote) => successObservation(quote.observedAt),
+  },
+  {
+    capability: 'batch-quote',
+    source: adapter.name,
+    coverage: CN_SH_SZ,
+    configurationReady: true,
+    execute: ({ stockIds }) => adapter.fetchBatchQuotes(stockIds),
+    observationOf: (quotes) =>
+      successObservation(
+        quotes.reduce<Date | undefined>(
+          (latest, quote) =>
+            latest === undefined || quote.observedAt.getTime() > latest.getTime()
+              ? quote.observedAt
+              : latest,
+          undefined,
+        ),
+      ),
+  },
   {
     capability: 'daily-bars',
     source: adapter.name,
