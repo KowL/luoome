@@ -115,23 +115,23 @@ export const planEntryText = (plan) => {
   const high = fmtPrice(plan.entryPriceHigh);
   if (low !== null && high !== null) return `${low} - ${high}`;
   if (NO_ENTRY_ACTIONS.has(plan.action)) return '不适用（无建仓动作）';
-  if (plan.action === 'observe') return '等待条件（未给出价位）';
+  if (plan.action === 'observe') return '待补全条件价位';
   return '未提供入场区间';
 };
 
 export const planTargetText = (plan) => {
   const text = fmtPct(plan.position?.targetPct);
   if (text === null) return '目标仓位不可用';
-  if (plan.position.targetPct === 0 && plan.action === 'observe') return '等待条件（未设置仓位）';
+  if (plan.position.targetPct === 0 && plan.action === 'observe') return '未设置条件仓位';
   return text;
 };
 
-/** 卡片与详情共用的入场条件口径：不适用 / 等待条件 / 未设置，不把缺价位说成漏数据。 */
+/** 缺少条件需要补全，已有观察条件才进入等待。 */
 export const entryConditionText = (plan) => {
   const summary = conditionSummary(plan.entryConditions);
   if ((plan.entryConditions ?? []).length === 0) {
     if (NO_ENTRY_ACTIONS.has(plan.action)) return '不适用（无建仓动作）';
-    return plan.action === 'observe' ? '等待条件（未给出具体条件）' : '未设置入场条件';
+    return plan.action === 'observe' ? '待补全具体条件' : '未设置入场条件';
   }
   // 观察计划的价位是「等条件」而不是「现在就买」，说清楚语义，避免读成待执行建仓。
   return plan.action === 'observe' ? `等待条件（满足前不建仓）：${summary}` : summary;
@@ -180,32 +180,6 @@ export const supersededDraftNote = (draft, current) => {
   if (draft === undefined || current === undefined) return null;
   const reason = planDraftNote(draft) ?? '草案未通过生效门槛';
   return `更新的草案 v${draft.version} 未发布（当前生效 v${current.version}）· ${reason}`;
-};
-
-/** 版本倒序：先比版本号，再比创建时间（同版本冲突时较新的一条在前）。 */
-const byVersionDesc = (left, right) =>
-  right.version - left.version ||
-  new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
-
-/**
- * 当前版本解析（与服务端 activeOnly 同一规则）：
- * 从新到旧找第一个 active 版本；更新的 draft 只是「这次没发布」，不顶掉仍在监控的生效版本；
- * 更新的 superseded / revoked / expired 表示该计划已被明确退役 → 交给历史记录展示。
- * 没有任何 active 版本时退回最新草案（否则「一直没发布」的计划会彻底不可见）。
- */
-export const currentPlanVersion = (versions) => {
-  const sorted = [...(versions ?? [])].sort(byVersionDesc);
-  if (sorted.length === 0) return null;
-  for (const plan of sorted) {
-    if (plan.status === 'active') return { plan, kind: 'current' };
-    // 更新的 draft 只是「这次没发布」，继续往下找仍在监控的生效版本；
-    // superseded / revoked / expired 表示计划已被明确退役，不再有当前版本。
-    if (plan.status !== 'draft') break;
-  }
-  const newest = sorted[0];
-  return newest.status === 'draft'
-    ? { plan: newest, kind: 'draft' }
-    : { plan: newest, kind: 'history' };
 };
 
 /** 每个计划只展示最高版本；同版本冲突时取较新创建的一条。 */
@@ -395,7 +369,7 @@ const factLines = (plan) =>
   });
 
 /** 计划详情分区（纯数据，便于单测与复用）。 */
-export const planDetailSections = (plan) => {
+export const planDetailSections = (plan, monitoring) => {
   const position = plan.position ?? {};
   const holding = plan.holding ?? {};
   const explanation = plan.explanation ?? {};
@@ -404,8 +378,16 @@ export const planDetailSections = (plan) => {
       title: '身份与有效性',
       lines: [
         `计划版本：v${plan.version}`,
-        `状态：${planStatusLabel(plan.status)} · 动作：${planActionLabel(plan.action)}`,
-        `生效：${fmtDateTime(plan.validFrom)} · 有效期至：${fmtDateTime(plan.validUntil)}`,
+        ...(monitoring === undefined
+          ? []
+          : [
+              `当前状态：${planRowStatus({ plan, monitoring }).label}`,
+              ...(monitoring.status === 'ready'
+                ? []
+                : [`${monitoring.reason} · 下一步：${monitoring.nextStep}`]),
+            ]),
+        `生成状态：${planStatusLabel(plan.status)} · 动作：${planActionLabel(plan.action)}`,
+        `生效：${fmtDateTime(plan.validFrom)} · 有效期至：${fmtDateTime(monitoring?.expiresAt ?? plan.validUntil)}`,
         ...(plan.invalidationConditions ?? []).map((item) => `失效条件：${item}`),
       ],
     },
@@ -438,7 +420,10 @@ export const planDetailSections = (plan) => {
       title: '持有',
       lines: [
         `预计持有交易日：${holding.minTradingDays ?? '--'} - ${holding.maxTradingDays ?? '--'}`,
-        `下次复核：${fmtDateTime(holding.nextReviewAt)}`,
+        `下次复核：${fmtDateTime(monitoring?.nextReviewAt ?? holding.nextReviewAt)}`,
+        ...(monitoring?.lastReviewedAt === undefined
+          ? []
+          : [`最近复核：${fmtDateTime(monitoring.lastReviewedAt)}`]),
         ...(holding.earlyExitConditions ?? []).map((item) => `提前退出：${item}`),
         ...(holding.extensionBasis ?? []).map((item) => `允许延长的依据：${item}`),
       ],
@@ -494,7 +479,8 @@ const sectionNode = (section) =>
 /**
  * 计划详情弹窗；多版本时可直接切换历史版本（走 get_trading_plan 读确切版本）。
  */
-export const openTradingPlanDetail = (plan, versions = [plan]) => {
+export const openTradingPlanDetail = (plan, versions = [plan], monitoring = []) => {
+  const monitoringByVersion = new Map(monitoring.map((item) => [item.versionId, item]));
   const body = el('div', 'plan-detail');
   const versionBar = el('div', 'flex gap-2');
   const diffRoot = el('div', 'plan-diff');
@@ -532,6 +518,11 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
   };
 
   const render = (subject) => {
+    const qualification = monitoringByVersion.get(planVersionId(subject));
+    const badge =
+      qualification === undefined
+        ? { label: planStatusLabel(subject.status), cls: planStatusBadgeClass(subject.status) }
+        : planRowStatus({ plan: subject, monitoring: qualification });
     const buttons = versions.map((item) => {
       const button = el(
         'button',
@@ -549,6 +540,7 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
             versionBar.append(el('span', 'status error', `v${item.version} 读取失败`));
             return;
           }
+          monitoringByVersion.set(result.data.monitoring.versionId, result.data.monitoring);
           render(result.data.plan);
         })();
       });
@@ -556,11 +548,7 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
     });
     mount(body, [
       el('div', 'flex gap-2', [
-        el(
-          'span',
-          `badge ${planStatusBadgeClass(subject.status)}`,
-          planStatusLabel(subject.status),
-        ),
+        el('span', `badge ${badge.cls}`, badge.label),
         el('span', 'badge badge-neutral', planActionLabel(subject.action)),
         stockIdentityLink(subject),
         el('span', 'muted', `v${subject.version}`),
@@ -568,7 +556,7 @@ export const openTradingPlanDetail = (plan, versions = [plan]) => {
       ...(versions.length <= 1 ? [] : [versionBar]),
       metricsNode(subject),
       diffRoot,
-      ...planDetailSections(subject).map(sectionNode),
+      ...planDetailSections(subject, qualification).map(sectionNode),
       auditNode(subject),
       (() => {
         const button = el('button', 'btn btn-outline btn-sm', '决策与复盘');
@@ -603,20 +591,28 @@ export const openTradingPlanDetailByVersionId = async (versionId) => {
   if (!result.ok) return result;
   const plan = result.data.plan;
   const siblings = await callApi(
-    `/api/trading-plans?activeOnly=false&stockId=${encodeURIComponent(plan.stockId)}&limit=200`,
+    `/api/trading-plans?activeOnly=false&stockId=${encodeURIComponent(plan.stockId)}&includeMonitoring=true&limit=200`,
   );
   const list = siblings.ok ? (siblings.data?.plans ?? []) : [];
-  openTradingPlanDetail(plan, planVersionsOf(list, plan.id));
+  if (!list.some((item) => planVersionId(item) === versionId)) list.push(plan);
+  openTradingPlanDetail(plan, planVersionsOf(list, plan.id), [
+    ...(siblings.ok ? siblings.data.monitoring : []),
+    result.data.monitoring,
+  ]);
   return result;
 };
 
 /** 状态筛选：按「现在能不能盯」分组，记录状态（生效 / 草案 / 已替代…）只在详情里看。 */
 export const PLAN_STATUS_FILTERS = [
-  { id: 'all', label: '全部' },
+  { id: 'current', label: '当前计划' },
   { id: 'ready', label: '可监控' },
-  { id: 'pending', label: '待处理' },
+  { id: 'pending', label: '待补全' },
+  { id: 'unavailable', label: '等待数据' },
+  { id: 'scheduled', label: '待生效' },
+  { id: 'invalidated', label: '已失效' },
   { id: 'expired', label: '已过期' },
-  { id: 'history', label: '历史状态' },
+  { id: 'history', label: '历史版本' },
+  { id: 'all', label: '全部记录' },
 ];
 
 /** 动作筛选：按「该不该动手」归类，不逐个动作堆选项。 */
@@ -638,14 +634,22 @@ const ELIGIBILITY_BY_MONITORING = {
   ready: 'ready',
   expired: 'expired',
   draft: 'pending',
-  scheduled: 'pending',
-  'account-changed': 'pending',
-  unavailable: 'pending',
+  scheduled: 'scheduled',
+  'account-changed': 'invalidated',
+  unavailable: 'unavailable',
   'no-conditions': 'pending',
   inactive: 'history',
 };
 
-const ELIGIBILITY_ORDER = { ready: 0, pending: 1, expired: 2, history: 3 };
+const ELIGIBILITY_ORDER = {
+  ready: 0,
+  scheduled: 1,
+  pending: 2,
+  unavailable: 3,
+  invalidated: 4,
+  expired: 5,
+  history: 6,
+};
 
 /** 监控资格优先，读不到资格时历史记录归历史，其余按待处理。 */
 export const planRowEligibility = (row) => {
@@ -663,59 +667,50 @@ export const planRowStatus = (row) => {
   const eligibility = planRowEligibility(row);
   if (eligibility === 'ready') return { label: '可监控', cls: 'badge-active' };
   if (eligibility === 'expired') return { label: '已过期', cls: 'badge-warn' };
+  if (eligibility === 'invalidated') return { label: '已失效', cls: 'badge-warn' };
+  if (eligibility === 'unavailable') return { label: '等待数据', cls: 'badge-warn' };
+  if (eligibility === 'scheduled') return { label: '待生效', cls: 'badge-neutral' };
   if (eligibility === 'history')
     return { label: planStatusLabel(row.plan.status), cls: planStatusBadgeClass(row.plan.status) };
   return row.monitoring?.status === 'draft'
-    ? { label: '草案', cls: 'badge-draft' }
+    ? { label: '待补全', cls: 'badge-draft' }
     : { label: '未就绪', cls: 'badge-warn' };
 };
 
 /**
- * 计划行：每个计划一行（当前版本解析与服务端 activeOnly 一致），
+ * 计划行：每个计划按服务端当前版本投影展示一行，
  * 带监控资格与「更新的草案未发布」信息。
  */
-export const buildPlanRows = (plans, monitoring = []) => {
+export const buildPlanRows = (plans, monitoring = [], views = []) => {
   const monitoringByVersion = new Map(monitoring.map((item) => [item.versionId, item]));
-  const byPlan = new Map();
-  for (const plan of plans ?? []) {
-    const versions = byPlan.get(plan.id) ?? [];
-    versions.push(plan);
-    byPlan.set(plan.id, versions);
-  }
-  const rows = [];
-  for (const versions of byPlan.values()) {
-    const resolved = currentPlanVersion(versions);
-    if (resolved === null) continue;
-    const { plan, kind } = resolved;
-    const newerDraft =
-      kind === 'current'
-        ? [...versions].sort(byVersionDesc).find(
-            (item) => item.status === 'draft' && byVersionDesc(item, plan) < 0, // 比当前版本更新
-          )
-        : undefined;
-    const row = {
-      plan,
-      kind,
-      newerDraft,
-      monitoring: monitoringByVersion.get(planVersionId(plan)),
-    };
-    rows.push({ ...row, eligibility: planRowEligibility(row) });
-  }
-  return rows.sort(
-    (left, right) =>
-      (ELIGIBILITY_ORDER[left.eligibility] ?? 9) - (ELIGIBILITY_ORDER[right.eligibility] ?? 9) ||
-      String(left.plan.stockId).localeCompare(String(right.plan.stockId)) ||
-      right.plan.version - left.plan.version,
-  );
+  const plansByVersion = new Map(plans.map((plan) => [planVersionId(plan), plan]));
+  return views
+    .map((view) => {
+      const row = {
+        plan: plansByVersion.get(view.versionId),
+        kind: view.kind,
+        newerDraft: plansByVersion.get(view.draftVersionId),
+        monitoring: monitoringByVersion.get(view.versionId),
+      };
+      return { ...row, eligibility: planRowEligibility(row) };
+    })
+    .sort(
+      (left, right) =>
+        (ELIGIBILITY_ORDER[left.eligibility] ?? 9) - (ELIGIBILITY_ORDER[right.eligibility] ?? 9) ||
+        String(left.plan.stockId).localeCompare(String(right.plan.stockId)) ||
+        right.plan.version - left.plan.version,
+    );
 };
 
-/** 筛选（状态 + 动作可叠加）；「全部」不含已过期——过期记录要展开筛选项才看。 */
+/** 当前列表只展示仍需跟踪或补全的计划；历史记录通过筛选查看。 */
 export const filterPlanRows = (rows, status, action) => {
   const list = rows ?? [];
   const byStatus =
-    status === undefined || status === 'all'
-      ? list.filter((row) => eligibilityOf(row) !== 'expired')
-      : list.filter((row) => eligibilityOf(row) === status);
+    status === undefined || status === 'current'
+      ? list.filter((row) => !['expired', 'history', 'invalidated'].includes(eligibilityOf(row)))
+      : status === 'all'
+        ? list
+        : list.filter((row) => eligibilityOf(row) === status);
   const allowed = ACTION_FILTER_MATCH[action];
   return allowed === undefined
     ? byStatus
@@ -724,16 +719,26 @@ export const filterPlanRows = (rows, status, action) => {
 
 /** 筛选栏与头部的计数（全部行，不受当前筛选影响）。 */
 export const countPlanRows = (rows) => {
-  const counts = { ready: 0, pending: 0, expired: 0, history: 0, total: (rows ?? []).length };
+  const counts = {
+    ready: 0,
+    pending: 0,
+    unavailable: 0,
+    scheduled: 0,
+    invalidated: 0,
+    expired: 0,
+    history: 0,
+    total: (rows ?? []).length,
+  };
   for (const row of rows ?? []) counts[eligibilityOf(row)] += 1;
   return counts;
 };
 
-let planStatusFilter = 'all';
+let planStatusFilter = 'current';
 let planActionFilter = 'all';
 let planPagination = null;
 let planPanelState = {
   plans: [],
+  monitoring: [],
   rows: [],
   factsResult: undefined,
   reconcileResult: undefined,
@@ -759,8 +764,9 @@ const planRow = (row) => {
   const badge = planRowStatus(row);
   const detail = el('button', 'btn btn-outline btn-sm', '详情');
   detail.type = 'button';
-  detail.addEventListener('click', () =>
-    openTradingPlanDetail(plan, planVersionsOf(planPanelState.plans, plan.id)),
+  detail.addEventListener(
+    'click',
+    () => void openTradingPlanDetailByVersionId(planVersionId(plan)),
   );
   const metrics = planKeyMetrics(plan);
   const draftNote = planRowNote(row, monitoring);
@@ -805,7 +811,7 @@ const planRow = (row) => {
     el(
       'p',
       'muted plan-row-meta',
-      `预计持有 ${holdingText(plan)} 个交易日 · 复核 ${fmtDateTime(plan.holding?.nextReviewAt)} · 有效期至 ${fmtDateTime(plan.validUntil)} · v${plan.version}`,
+      `预计持有 ${holdingText(plan)} 个交易日 · ${monitoring?.lastReviewedAt === undefined ? '' : `最近复核 ${fmtDateTime(monitoring.lastReviewedAt)} · `}下次复核 ${fmtDateTime(monitoring?.nextReviewAt ?? plan.holding?.nextReviewAt)} · 有效期至 ${fmtDateTime(monitoring?.expiresAt ?? plan.validUntil)} · v${plan.version}`,
     ),
   ]);
 };
@@ -873,7 +879,7 @@ export const renderTradingPlanPanel = ({
   const facts = factsResult?.ok ? factsResult.data.facts : undefined;
   const monitoring = result.data?.monitoring ?? [];
   // 当前版本解析与服务端 activeOnly 一致：草案不顶掉仍在监控的生效版本。
-  const rows = buildPlanRows(plans, monitoring);
+  const rows = buildPlanRows(plans, monitoring, result.data.views);
   const counts = countPlanRows(rows);
   const incomplete = facts !== undefined && facts.status !== 'complete';
   if (meta !== null) {
@@ -885,7 +891,10 @@ export const renderTradingPlanPanel = ({
         : [
             `${rows.length} 个`,
             `可监控 ${counts.ready}`,
-            `待处理 ${counts.pending}`,
+            `待补全 ${counts.pending}`,
+            ...(counts.unavailable === 0 ? [] : [`等待数据 ${counts.unavailable}`]),
+            ...(counts.scheduled === 0 ? [] : [`待生效 ${counts.scheduled}`]),
+            ...(counts.invalidated === 0 ? [] : [`已失效 ${counts.invalidated}`]),
             ...(counts.expired === 0 ? [] : [`已过期 ${counts.expired}`]),
             ...(counts.history === 0 ? [] : [`历史 ${counts.history}`]),
             ...(incomplete ? ['账户事实不可用'] : []),
@@ -902,7 +911,7 @@ export const renderTradingPlanPanel = ({
     ]);
     return;
   }
-  planPanelState = { plans, rows, factsResult, reconcileResult };
+  planPanelState = { plans, monitoring, rows, factsResult, reconcileResult };
   const listWrap = el('div', 'entity-list');
   listWrap.id = 'alerts-plans-list';
   planPagination = createPagination({

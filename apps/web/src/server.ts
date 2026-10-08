@@ -1577,8 +1577,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
   app.get('/api/trading-plans', (c) => {
     const input: Record<string, unknown> = {
       accountId: contextForRequest().user.defaultAccountId,
-      activeOnly: c.req.query('activeOnly') !== 'false',
+      activeOnly: c.req.query('activeOnly') !== 'false' && c.req.query('currentOnly') !== 'true',
       includeMonitoring: c.req.query('includeMonitoring') === 'true',
+      currentOnly: c.req.query('currentOnly') === 'true',
     };
     for (const key of ['accountId', 'stockId', 'status'] as const) {
       const value = c.req.query(key);

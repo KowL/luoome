@@ -1,5 +1,12 @@
-import { AccountFactsSchema, type Advice, AdviceSchema, STANDARD_DISCLAIMERS } from '@luoome/core';
-import { addHoldingTool } from '@luoome/tools';
+import {
+  AccountFactsSchema,
+  type Advice,
+  AdviceSchema,
+  money,
+  STANDARD_DISCLAIMERS,
+  tradingPlanExpiresAt,
+} from '@luoome/core';
+import { addHoldingTool, getTradingPlanTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -14,7 +21,180 @@ const ACCOUNT_ID = 'account-1';
 /** fixtures 的长期账户：无持仓，适合验证「以当前持仓为复核来源」。 */
 const EMPTY_ACCOUNT_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
 
+const candidateAdvice = (now: Date, overrides: Partial<Advice> = {}): Advice => ({
+  id: `cycle-advice:${now.toISOString()}`,
+  subjectKind: 'stock',
+  subjectId: STOCK_ID,
+  stockName: '贵州茅台',
+  decision: 'buy',
+  confidence: 75,
+  horizon: 'short',
+  entryPriceLow: money(100),
+  entryPriceHigh: money(105),
+  targetPositionPct: 10,
+  stopLoss: money(95),
+  targetPrice: money(120),
+  reasoning: {
+    premise: '回撤后等待区间确认',
+    evidence: ['趋势结构保持'],
+    counterEvidence: ['成交量不足'],
+  },
+  risks: ['波动风险'],
+  disclaimers: [...STANDARD_DISCLAIMERS],
+  sourceTool: 'analyze_strategy_candidate',
+  basedOn: {
+    strategy: {
+      strategyId: 'cycle-strategy',
+      strategyVersionId: 'cycle-strategy-v1',
+      runId: `cycle-run:${now.toISOString()}`,
+      stockId: STOCK_ID,
+      accountId: EMPTY_ACCOUNT_ID,
+      resultEvidence: [],
+      signalIds: [],
+      observationIds: [],
+      recommendationTrigger: 'run',
+    },
+    quotes: {
+      [STOCK_ID]: {
+        stockId: STOCK_ID,
+        ts: new Date(now.getTime() - 60_000),
+        observedAt: new Date(now.getTime() - 60_000),
+        fetchedAt: now,
+        timestampSource: 'upstream',
+        open: money(101),
+        high: money(103),
+        low: money(99),
+        close: money(102),
+        volume: 1000,
+        source: 'fixture',
+      },
+    },
+    dataAsOf: now,
+  },
+  validFrom: now,
+  validUntil: new Date(now.getTime() + 86_400_000),
+  createdAt: now,
+  ...overrides,
+});
+
 describe('trading plan daily cycle', () => {
+  it('复核无变化时维持原版本与硬期限，新的 Advice 留在复核审计中', async () => {
+    let now = NOW;
+    const ctx = await buildTestContext({ clock: () => now, advices: [candidateAdvice(now)] });
+    const first = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.createdPlans).toBe(1);
+    expect(first.data.plans[0]?.validUntil).toEqual(new Date('2026-07-24T07:00:00Z'));
+    now = new Date('2026-07-20T07:00:00Z');
+    const reviewed = candidateAdvice(now);
+    await ctx.repos.advice.save(reviewed);
+    const second = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.createdPlans).toBe(0);
+    expect(second.data.maintainedPlans).toBe(1);
+    expect(second.data.plans[0]).toEqual(first.data.plans[0]);
+    expect(second.data.reviews[0]).toMatchObject({
+      outcome: 'maintained',
+      adviceIds: [reviewed.id],
+      reviewedAt: now,
+    });
+    expect(await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID })).toHaveLength(1);
+    const audits = await ctx.repos.workflowRun.listRecent({
+      workflowName: 'trading-plan-daily-cycle',
+    });
+    expect(audits.some((run) => run.outputSummary?.maintainedPlans === 1)).toBe(true);
+    const review = second.data.reviews[0];
+    if (review === undefined) throw new Error('review missing');
+    const read = await getTradingPlanTool.execute({ versionId: review.versionId }, ctx);
+    expect(read.ok && read.data.monitoring).toMatchObject({
+      lastReviewedAt: now,
+      nextReviewAt: new Date('2026-07-21T07:00:00Z'),
+      expiresAt: first.data.plans[0]?.validUntil,
+    });
+  });
+
+  it('价位改变或原计划到期时发布新版本，不能无证据自动续期', async () => {
+    let now = NOW;
+    const ctx = await buildTestContext({ clock: () => now, advices: [candidateAdvice(now)] });
+    await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    now = new Date('2026-07-20T07:00:00Z');
+    await ctx.repos.advice.save(candidateAdvice(now, { entryPriceHigh: money(106) }));
+    const changed = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(changed.ok).toBe(true);
+    if (!changed.ok) return;
+    expect(changed.data.plans[0]).toMatchObject({ version: 2, entryPriceHigh: 106 });
+    now = changed.data.plans[0]?.validUntil ?? now;
+    await ctx.repos.advice.save(candidateAdvice(now, { entryPriceHigh: money(106) }));
+    const renewed = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(renewed.ok).toBe(true);
+    if (!renewed.ok) return;
+    expect(renewed.data.plans[0]?.version).toBe(3);
+    expect(renewed.data.createdPlans).toBe(1);
+  });
+
+  it('相同受阻草案重复生成不续命，超过两个交易日后补齐才发布新版', async () => {
+    let now = NOW;
+    const fallback = (date: Date) =>
+      candidateAdvice(date, {
+        decision: 'watch',
+        reasoning: {
+          premise: 'LLM 推理不可用',
+          evidence: ['使用规则 fallback'],
+          counterEvidence: ['缺少 AI 研究'],
+        },
+      });
+    const ctx = await buildTestContext({ clock: () => now, advices: [fallback(now)] });
+    const first = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.status).toBe('partial');
+    expect(first.data.draftPlans).toBe(1);
+    const draft = first.data.plans[0];
+    if (draft === undefined) throw new Error('draft missing');
+    expect(tradingPlanExpiresAt(draft)).toEqual(new Date('2026-07-21T07:00:00Z'));
+    now = new Date('2026-07-20T07:00:00Z');
+    await ctx.repos.advice.save(fallback(now));
+    const repeated = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(repeated.ok && repeated.data.reviews[0]?.outcome).toBe('unchanged-draft');
+    now = new Date('2026-07-21T07:00:00Z');
+    await ctx.repos.advice.save(fallback(now));
+    const expired = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(expired.ok && expired.data.plans[0]).toEqual(draft);
+    expect(await ctx.repos.tradingPlan.list({ accountId: EMPTY_ACCOUNT_ID })).toHaveLength(1);
+    now = new Date(now.getTime() + 1000);
+    await ctx.repos.advice.save(candidateAdvice(now));
+    const recovered = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(recovered.ok && recovered.data.plans[0]).toMatchObject({ version: 2, status: 'active' });
+  });
+
+  it('草案修订有实质变化时可以保留新版，但仍继承首次受阻的截止时间', async () => {
+    let now = NOW;
+    const fallback = (date: Date, risks = ['波动风险']) =>
+      candidateAdvice(date, {
+        decision: 'watch',
+        risks,
+        reasoning: {
+          premise: 'LLM 推理不可用',
+          evidence: ['使用规则 fallback'],
+          counterEvidence: ['缺少 AI 研究'],
+        },
+      });
+    const ctx = await buildTestContext({ clock: () => now, advices: [fallback(now)] });
+    const first = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    now = new Date('2026-07-20T07:00:00Z');
+    await ctx.repos.advice.save(fallback(now, ['波动风险', '新增风险']));
+    const revised = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    expect(revised.ok).toBe(true);
+    if (!revised.ok) return;
+    expect(revised.data.plans[0]?.version).toBe(2);
+    expect(revised.data.plans[0]?.validUntil).toEqual(first.data.plans[0]?.validUntil);
+    expect(revised.data.createdPlans).toBe(1);
+  });
+
   it('persists the AI entry range instead of collapsing it to the representative price', () => {
     const accountFacts = AccountFactsSchema.parse({
       accountId: ACCOUNT_ID,

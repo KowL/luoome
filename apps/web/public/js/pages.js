@@ -2141,19 +2141,23 @@ const reportSheetNodes = (report, actions = []) => {
     ]),
   ];
   for (const section of report.sections) {
-    const sectionNode = el('section', `report-section report-section-${section.status}`, [
-      el('div', 'report-section-head', [
-        el('div', null, [el('h3', null, section.title)]),
-        el(
-          'span',
-          `badge ${section.status === 'complete' ? 'badge-fresh' : 'badge-warn'}`,
-          { complete: '已更新', partial: '部分数据待补齐', unavailable: '待获取数据' }[
-            section.status
-          ],
-        ),
-      ]),
-      ...section.blocks.map(reportBlockNode),
-    ]);
+    const sectionNode = el(
+      'section',
+      `report-section report-section-${section.status}${section.key === 'trading-plans' ? ' report-section-trading-plans' : ''}`,
+      [
+        el('div', 'report-section-head', [
+          el('div', null, [el('h3', null, section.title)]),
+          el(
+            'span',
+            `badge ${section.status === 'complete' ? 'badge-fresh' : 'badge-warn'}`,
+            { complete: '已更新', partial: '部分数据待补齐', unavailable: '待获取数据' }[
+              section.status
+            ],
+          ),
+        ]),
+        ...section.blocks.map(reportBlockNode),
+      ],
+    );
     nodes.push(sectionNode);
   }
   const gaps = [

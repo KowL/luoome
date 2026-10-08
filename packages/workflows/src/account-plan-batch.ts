@@ -104,7 +104,10 @@ export const runAccountPlanBatch = async (
   let error: string | undefined;
   let outputSummary: Record<string, unknown>;
   try {
-    const result = await tradingPlanDailyCycleWorkflow.run({ accountId, date }, ctx);
+    const result = await tradingPlanDailyCycleWorkflow.run(
+      { accountId, date, mode: 'scheduled' },
+      ctx,
+    );
     if (!result.ok) {
       error = errorText(result.error);
       outputSummary = { status: 'blocked', error };
@@ -121,6 +124,10 @@ export const runAccountPlanBatch = async (
         holdingReviews: result.data.holdingReviews,
         candidateReviews: result.data.candidateReviews,
         planCount: result.data.plans.length,
+        createdPlans: result.data.createdPlans,
+        maintainedPlans: result.data.maintainedPlans,
+        draftPlans: result.data.draftPlans,
+        reviews: result.data.reviews,
         errors: result.data.errors,
       };
     }

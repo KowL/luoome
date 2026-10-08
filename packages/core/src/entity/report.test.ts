@@ -60,6 +60,18 @@ describe('Report', () => {
     expect(report.sections[0]?.blocks[0]?.kind).toBe('metrics');
   });
 
+  it('保留完整输入指纹，拒绝不完整的指纹', () => {
+    const fixture = makeReport();
+    const withFingerprint = (inputFingerprint: string) => ({
+      ...fixture,
+      sections: fixture.sections.map((section) => ({ ...section, inputFingerprint })),
+    });
+    expect(ReportSchema.parse(withFingerprint('a'.repeat(64))).sections[0]?.inputFingerprint).toBe(
+      'a'.repeat(64),
+    );
+    expect(ReportSchema.safeParse(withFingerprint('incomplete')).success).toBe(false);
+  });
+
   it('拒绝不一致的周期与时间顺序', () => {
     const invalidReports: Report[] = [
       makeReport({ periodStart: '2026-07-30', periodEnd: '2026-07-29' }),

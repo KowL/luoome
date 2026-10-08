@@ -172,6 +172,84 @@ describe('trading plan budget', () => {
     expect(repeated.proposedStockPct).toBe(50);
   });
 
+  it.each([
+    ['hold', 23],
+    ['hold', 27],
+    ['observe', 23],
+    ['observe', 27],
+  ] as const)(
+    '%s 维持计划在行情仓位变为 %s 后按当前仓位求值，不占用建仓预算',
+    (action, currentPct) => {
+      const currentFacts: AccountFacts = {
+        ...facts,
+        cashBalance: money(100),
+        stockMarketValue: money(900),
+        positions: facts.positions.map((position, index) => ({
+          ...position,
+          marketValue: money(index === 0 ? currentPct * 10 : 900 - currentPct * 10),
+        })),
+      };
+      const maintained = plan({
+        id: 'maintained',
+        stockId: '600519.SH',
+        currentPct: 25,
+        targetPct: 25,
+        action,
+      });
+      const result = evaluateTradingPlanBudget({
+        facts: currentFacts,
+        plans: [
+          maintained,
+          plan({ id: 'new', stockId: '601398.SH', currentPct: 0, targetPct: 9, action: 'enter' }),
+        ],
+        stocks: new Map(),
+      });
+      expect(result.totalStatus).toBe('passed');
+      expect(result.proposedStockPct).toBe(99);
+      expect(result.availableStockPct).toBe(1);
+      expect(result.allocations).toMatchObject([
+        { targetPct: currentPct, incrementalPct: 0, status: 'included' },
+        { targetPct: 9, incrementalPct: 9, status: 'included' },
+      ]);
+      expect(maintained.position).toMatchObject({ currentPct: 25, targetPct: 25, deltaPct: 0 });
+    },
+  );
+
+  it.each(['hold', 'observe'] as const)('%s 的明确更高目标仍按当前行情仓位预留增量', (action) => {
+    const result = evaluateTradingPlanBudget({
+      facts,
+      plans: [
+        plan({ id: 'higher-target', stockId: '600519.SH', currentPct: 12, targetPct: 15, action }),
+      ],
+      stocks: new Map(),
+    });
+    expect(result.allocations[0]).toMatchObject({
+      targetPct: 15,
+      incrementalPct: 5,
+      status: 'included',
+    });
+    expect(result.proposedStockPct).toBe(35);
+  });
+
+  it.each(['enter', 'add', 'observe'] as const)(
+    '%s 的建仓目标不能被视作维持持仓而释放预算',
+    (action) => {
+      const result = evaluateTradingPlanBudget({
+        facts,
+        plans: [
+          plan({ id: 'entry-target', stockId: '601398.SH', currentPct: 0, targetPct: 9, action }),
+        ],
+        stocks: new Map(),
+      });
+      expect(result.allocations[0]).toMatchObject({
+        targetPct: 9,
+        incrementalPct: 9,
+        status: 'included',
+      });
+      expect(result.proposedStockPct).toBe(39);
+    },
+  );
+
   it('returns unavailable when account facts are not reconciled and does not release budget for a pending sell', () => {
     const incomplete = {
       ...facts,

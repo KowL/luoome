@@ -76,6 +76,142 @@ const makePlan = (input: {
   });
 
 describe('trading plan tools', () => {
+  it.each(['active', 'revoked'] as const)(
+    '旧生效版被 %s 替代后详情与历史列表都停止监控',
+    async (status) => {
+      const now = new Date('2026-09-09T02:00:00Z');
+      const ctx = await buildTestContext({ clock: () => now });
+      const facts = await deriveFacts(ctx);
+      const active = {
+        ...makePlan({ accountId: ACCOUNT_ID, accountFactsDigest: facts.digest }),
+        entryConditions: [
+          {
+            id: 'entry-price',
+            kind: 'price-range' as const,
+            phase: 'entry' as const,
+            metric: 'price' as const,
+            comparator: 'between' as const,
+            value: 70,
+            valueTo: 72,
+            description: '价格进入入场区间',
+          },
+        ],
+      };
+      await ctx.repos.tradingPlan.save(active);
+      await ctx.repos.tradingPlan.save({ ...active, version: 2, status, createdAt: now });
+      const read = await getTradingPlanTool.execute({ versionId: `${active.id}:v1` }, ctx);
+      expect(read.ok && read.data.monitoring.status).toBe('inactive');
+      const listed = await listTradingPlansTool.execute(
+        { accountId: ACCOUNT_ID, activeOnly: false, includeMonitoring: true },
+        ctx,
+      );
+      expect(
+        listed.ok &&
+          listed.data.monitoring?.find((item) => item.versionId === `${active.id}:v1`)?.status,
+      ).toBe('inactive');
+      const activeHistory = await listTradingPlansTool.execute(
+        { accountId: ACCOUNT_ID, status: 'active', includeMonitoring: true },
+        ctx,
+      );
+      expect(
+        activeHistory.ok &&
+          activeHistory.data.monitoring?.find((item) => item.versionId === `${active.id}:v1`)
+            ?.status,
+      ).toBe('inactive');
+      const historical = await listTradingPlansTool.execute(
+        {
+          accountId: ACCOUNT_ID,
+          currentOnly: true,
+          includeMonitoring: true,
+          createdUntil: new Date(now.getTime() - 1),
+        },
+        ctx,
+      );
+      expect(historical.ok && historical.data.monitoring?.[0]?.status).toBe('ready');
+      const historicalList = await listTradingPlansTool.execute(
+        {
+          accountId: ACCOUNT_ID,
+          status: 'active',
+          includeMonitoring: true,
+          createdUntil: new Date(now.getTime() - 1),
+        },
+        ctx,
+      );
+      expect(historicalList.ok && historicalList.data.monitoring?.[0]?.status).toBe('ready');
+    },
+  );
+
+  it('当前视图保留原生效版与修订草案，过期后改为展示新草案', async () => {
+    let now = new Date('2026-09-09T02:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    const facts = await deriveFacts(ctx);
+    const active = TradingPlanSchema.parse({
+      ...makePlan({
+        accountId: ACCOUNT_ID,
+        accountFactsDigest: facts.digest,
+        validUntil: new Date('2026-09-10T02:00:00Z'),
+      }),
+      entryConditions: [
+        {
+          id: 'entry-price',
+          kind: 'price-range',
+          phase: 'entry',
+          metric: 'price',
+          comparator: 'between',
+          value: 70,
+          valueTo: 72,
+          description: '价格进入入场区间',
+        },
+      ],
+    });
+    const draft = {
+      ...active,
+      version: 2,
+      status: 'draft' as const,
+      createdAt: now,
+      validUntil: new Date('2026-09-30T00:00:00Z'),
+    };
+    await ctx.repos.tradingPlan.save(active);
+    await ctx.repos.tradingPlan.save(draft);
+    const listed = await listTradingPlansTool.execute(
+      { accountId: ACCOUNT_ID, currentOnly: true, includeMonitoring: true, limit: 1 },
+      ctx,
+    );
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.data.plans).toHaveLength(2);
+    expect(
+      listed.data.monitoring?.find((item) => item.versionId === `${active.id}:v1`)?.status,
+    ).toBe('ready');
+    expect(
+      listed.data.monitoring?.find((item) => item.versionId === `${active.id}:v2`)?.status,
+    ).toBe('draft');
+    const activeRead = await getTradingPlanTool.execute({ versionId: `${active.id}:v1` }, ctx);
+    expect(activeRead.ok && activeRead.data.monitoring.status).toBe('ready');
+    expect(listed.data.views?.[0]).toMatchObject({
+      versionId: `${active.id}:v1`,
+      draftVersionId: `${active.id}:v2`,
+    });
+    now = active.validUntil;
+    const next = await listTradingPlansTool.execute(
+      { accountId: ACCOUNT_ID, currentOnly: true, includeMonitoring: true },
+      ctx,
+    );
+    expect(next.ok && next.data.views?.[0]).toMatchObject({
+      versionId: `${active.id}:v2`,
+      kind: 'draft',
+    });
+    now = new Date('2026-09-11T02:00:00Z');
+    const expired = await getTradingPlanTool.execute({ versionId: `${active.id}:v2` }, ctx);
+    expect(expired.ok && expired.data.monitoring).toMatchObject({
+      status: 'expired',
+      expiresAt: now,
+    });
+    expect(await ctx.repos.tradingPlan.findByVersionId(`${active.id}:v2`)).toEqual(
+      TradingPlanSchema.parse(draft),
+    );
+  });
+
   it('持仓只有抓取时间报价时不能激活其它股票的精确仓位计划', async () => {
     const now = new Date('2026-07-17T06:00:00.000Z');
     const ctx = await buildTestContext({ clock: () => now });

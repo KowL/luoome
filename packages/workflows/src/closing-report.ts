@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   adviceNotificationSummary,
   dateInShanghai,
@@ -13,6 +15,11 @@ import {
   StrategyRecommendationBatchSummarySchema,
   type StrategySchedule,
   type ToolResult,
+  type TradingPlan,
+  type TradingPlanMonitoring,
+  type TradingPlanReview,
+  TradingPlanReviewSchema,
+  tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -138,11 +145,104 @@ const triggersSection = async (
   };
 };
 
+type PlanReviewAudit = {
+  reviews: Array<TradingPlanReview & { accountId: string }>;
+  available: boolean;
+  issue?: { reason: string; errorKind: string };
+};
+
+const planReviewAudit = async (
+  since: Date,
+  until: Date,
+  scope: ClosingInput['scope'],
+  ctx: WorkflowContext,
+): Promise<PlanReviewAudit> => {
+  const result = await ctx.tools.list_workflow_runs.execute({
+    workflowName: 'trading-plan-daily-cycle',
+    since,
+    includeWatch: false,
+    limit: 200,
+  });
+  if (!result.ok)
+    return {
+      reviews: [],
+      available: false,
+      issue: {
+        reason: '计划复核审计读取失败，不能确认维持或新增数量',
+        errorKind: result.error.kind,
+      },
+    };
+  const reviews: PlanReviewAudit['reviews'] = [];
+  let invalid = false;
+  for (const run of result.data.runs) {
+    if (run.startedAt > until) continue;
+    const accountId = run.inputSummary?.accountId;
+    if (typeof accountId !== 'string') {
+      invalid = true;
+      continue;
+    }
+    if (scope.kind === 'account' && accountId !== scope.accountId) continue;
+    if (!Array.isArray(run.summary?.reviews)) {
+      invalid = true;
+      continue;
+    }
+    for (const value of run.summary.reviews) {
+      const parsed = TradingPlanReviewSchema.safeParse(value);
+      if (!parsed.success) {
+        invalid = true;
+        continue;
+      }
+      if (parsed.data.reviewedAt < since || parsed.data.reviewedAt > until) continue;
+      reviews.push({ ...parsed.data, accountId });
+    }
+  }
+  return {
+    reviews,
+    available: true,
+    ...(result.data.runs.length >= 200
+      ? { issue: { reason: '计划复核审计达到 200 条读取上限，统计可能不完整', errorKind: 'limit' } }
+      : invalid
+        ? {
+            issue: {
+              reason: '部分计划复核审计缺少账户或明细，统计可能不完整',
+              errorKind: 'incomplete-audit',
+            },
+          }
+        : {}),
+  };
+};
+
+const reviewMetrics = (audit: PlanReviewAudit, reviews: PlanReviewAudit['reviews']) => {
+  const versions = (outcome: TradingPlanReview['outcome']) =>
+    new Set(
+      reviews
+        .filter((review) => review.outcome === outcome)
+        .map((review) => `${review.accountId}:${review.versionId}`),
+    );
+  const created = versions('created');
+  const retained = (outcome: TradingPlanReview['outcome']) =>
+    [...versions(outcome)].filter((id) => !created.has(id)).length;
+  return [
+    { key: 'reviewCreated', label: '已记录新增版本', value: audit.available ? created.size : null },
+    {
+      key: 'reviewMaintained',
+      label: '已记录维持原版',
+      value: audit.available ? retained('maintained') : null,
+    },
+    {
+      key: 'reviewUnchangedDraft',
+      label: '已记录重复草案复核',
+      value: audit.available ? retained('unchanged-draft') : null,
+    },
+  ];
+};
+
 const priorDayReviewSection = async (
   date: string,
   accountId: string,
   now: Date,
   ctx: WorkflowContext,
+  audit: PlanReviewAudit,
 ): Promise<ReportSectionPiece> => {
   const priorDate = previousTradingDay(date);
   const since = new Date(`${priorDate}T00:00:00+08:00`);
@@ -163,7 +263,23 @@ const priorDayReviewSection = async (
     ctx.tools.list_trades.execute({ accountId, since, until, limit: 500 }),
   ]);
   const changedPlans = plans.ok ? plans.data.plans : [];
+  const reviews = audit.reviews.filter(
+    (review) => review.reviewedAt >= since && review.reviewedAt <= until,
+  );
+  const createdVersions = new Set(
+    reviews.filter((review) => review.outcome === 'created').map((review) => review.versionId),
+  );
+  const retained = new Map<string, (typeof reviews)[number]>();
+  for (const review of reviews) {
+    if (review.outcome === 'created' || createdVersions.has(review.versionId)) continue;
+    const previous = retained.get(review.versionId);
+    if (previous === undefined || review.reviewedAt > previous.reviewedAt)
+      retained.set(review.versionId, review);
+  }
   const gaps = [
+    ...(audit.issue === undefined
+      ? []
+      : [missing('prior-day-review.reviews', audit.issue.reason, audit.issue.errorKind)]),
     ...(!plans.ok
       ? [missing('prior-day-review.plans', '前一交易日计划版本读取失败', plans.error.kind)]
       : plans.data.plans.length >= 500
@@ -187,6 +303,16 @@ const priorDayReviewSection = async (
         : []),
   ];
   const evidence = [
+    ...(audit.available
+      ? [
+          localEvidence(
+            'prior-day-review:reviews',
+            'prior-day-review',
+            now,
+            'tool:list_workflow_runs',
+          ),
+        ]
+      : []),
     ...(plans.ok
       ? [
           localEvidence(
@@ -220,6 +346,7 @@ const priorDayReviewSection = async (
           label: '前一交易日新增计划版本',
           value: plans.ok ? changedPlans.length : null,
         },
+        ...reviewMetrics(audit, reviews),
         {
           key: 'triggerCount',
           label: '前一交易日提醒',
@@ -240,12 +367,33 @@ const priorDayReviewSection = async (
     {
       kind: 'list',
       items: changedPlans.slice(0, 20).map((plan) => ({
-        title: `${plan.stockName ?? plan.stockId} · ${plan.action} · v${plan.version}`,
-        detail: `${plan.status} · ${notificationTime(plan.createdAt)}（北京时间）`,
+        title: `${plan.stockName ?? plan.stockId} · ${PLAN_ACTION_LABELS[plan.action]} · v${plan.version}`,
+        detail: `${PLAN_RECORD_LABELS[plan.status]} · ${notificationTime(plan.createdAt)}（北京时间）`,
         entityKind: 'trading-plan',
         entityId: `${plan.id}:v${plan.version}`,
       })),
     },
+    ...([...retained.values()].length === 0
+      ? []
+      : [
+          {
+            kind: 'text' as const,
+            tone: 'factual' as const,
+            text: `前一交易日复核后沿用的版本（${retained.size} 项${retained.size > 20 ? '，展示最近 20 项' : ''}；没有新增版本也属于已复核）：`,
+          },
+          {
+            kind: 'list' as const,
+            items: [...retained.values()]
+              .sort((a, b) => b.reviewedAt.getTime() - a.reviewedAt.getTime())
+              .slice(0, 20)
+              .map((review) => ({
+                title: `${review.stockId} · ${review.outcome === 'maintained' ? '维持原计划' : '草案仍待补全'}`,
+                detail: `${notificationTime(review.reviewedAt)}（北京时间）${review.reasons.length === 0 ? '' : ` · ${review.reasons.join('；')}`}`,
+                entityKind: 'trading-plan' as const,
+                entityId: review.versionId,
+              })),
+          },
+        ]),
     {
       kind: 'list',
       items: triggers.ok
@@ -758,16 +906,83 @@ const strategyActionsSection = async (
 /**
  * 交易计划是盘后报告与盘中监控共用的结构化来源；报告只投影计划，不从 Markdown 反解析执行条件。
  */
+const PLAN_ACTION_LABELS: Record<TradingPlan['action'], string> = {
+  observe: '观察',
+  enter: '建仓',
+  add: '加仓',
+  hold: '持有',
+  reduce: '减仓',
+  exit: '退出',
+  avoid: '回避',
+};
+const PLAN_RECORD_LABELS: Record<TradingPlan['status'], string> = {
+  active: '生效',
+  draft: '草案',
+  superseded: '已替代',
+  revoked: '已撤销',
+  expired: '已过期',
+};
+const PLAN_MONITOR_LABELS: Record<TradingPlanMonitoring['status'], string> = {
+  ready: '可监控',
+  draft: '待补全',
+  'no-conditions': '待补全',
+  unavailable: '等待数据',
+  scheduled: '待生效',
+  'account-changed': '已失效',
+  expired: '已过期',
+  inactive: '已退役',
+};
+const PLAN_TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+const planTime = (date: Date) => PLAN_TIME_FORMAT.format(date);
+
+const planReference = (plan: TradingPlan, monitoring: TradingPlanMonitoring) => ({
+  title: `${plan.stockName ?? plan.stockId} · ${PLAN_ACTION_LABELS[plan.action]} · v${plan.version}`,
+  detail: [
+    PLAN_MONITOR_LABELS[monitoring.status],
+    `条件：${plan.entryConditions.map((item) => item.description).join('；') || (['hold', 'reduce', 'exit', 'avoid'].includes(plan.action) ? '无建仓动作' : '待补全具体条件')}`,
+    `止损 / 止盈：${plan.exit.stopLoss ?? '未提供'} / ${plan.exit.takeProfit ?? '未提供'}`,
+    `退出：${plan.exit.conditions.join('；') || '未记录'}${plan.exit.unavailableReason === undefined ? '' : `（${plan.exit.unavailableReason}）`}`,
+    `最近复核：${monitoring.lastReviewedAt === undefined ? '暂无记录' : planTime(monitoring.lastReviewedAt)}`,
+    `下次复核：${planTime(monitoring.nextReviewAt)}`,
+    `有效至：${planTime(monitoring.expiresAt)}`,
+    `反证：${plan.explanation.counterEvidence.join('；') || '未记录'}`,
+    `风险：${plan.explanation.risks.join('；') || '未记录'}`,
+    `前置条件：${[...plan.explanation.unknowns, ...plan.position.prerequisiteActions].join('；') || '无'}`,
+    `信心评分：${plan.confidence}（非收益概率）`,
+    `下一步：${monitoring.nextStep}`,
+  ].join(' · '),
+  entityKind: 'trading-plan' as const,
+  entityId: tradingPlanVersionId(plan),
+});
+
 const tradingPlansSection = async (
+  date: string,
   scope: ClosingInput['scope'],
   now: Date,
   ctx: WorkflowContext,
+  audit: PlanReviewAudit,
   planBatchStatus?: ClosingInput['planBatchStatus'],
 ): Promise<ReportSectionPiece> => {
-  const result = await ctx.tools.list_trading_plans.execute({
-    ...(scope.kind === 'account' ? { accountId: scope.accountId } : {}),
-    limit: 500,
-  });
+  const since = new Date(`${date}T00:00:00+08:00`);
+  const until = new Date(Math.min(now.getTime(), since.getTime() + DAY_MS - 1));
+  const [result, accounts] = await Promise.all([
+    ctx.tools.list_trading_plans.execute({
+      ...(scope.kind === 'account' ? { accountId: scope.accountId } : {}),
+      currentOnly: true,
+      includeMonitoring: true,
+      createdUntil: until,
+      limit: 500,
+    }),
+    ctx.tools.list_accounts.execute({}),
+  ]);
   if (!result.ok) {
     return unavailableSection(
       'trading-plans',
@@ -778,25 +993,77 @@ const tradingPlansSection = async (
       result.error.kind,
     );
   }
-  const latest = new Map<string, (typeof result.data.plans)[number]>();
-  for (const plan of result.data.plans) {
-    const current = latest.get(plan.id);
-    if (
-      current === undefined ||
-      plan.version > current.version ||
-      (plan.version === current.version && plan.createdAt > current.createdAt)
-    ) {
-      latest.set(plan.id, plan);
-    }
-  }
-  const plans = [...latest.values()].sort(
-    (left, right) => left.stockId.localeCompare(right.stockId) || right.version - left.version,
+  const { views, monitoring } = result.data;
+  if (views === undefined || monitoring === undefined)
+    throw new Error('交易计划查询未返回监控投影');
+  const byVersion = new Map(result.data.plans.map((plan) => [tradingPlanVersionId(plan), plan]));
+  const monitoringByVersion = new Map(monitoring.map((item) => [item.versionId, item]));
+  const projection = (versionId: string) => {
+    const plan = byVersion.get(versionId);
+    const qualification = monitoringByVersion.get(versionId);
+    if (plan === undefined || qualification === undefined) throw new Error('交易计划投影引用缺失');
+    return { plan, monitoring: qualification };
+  };
+  const rows = views.map((view) => projection(view.versionId));
+  const revisions = views.flatMap((view) =>
+    view.draftVersionId === undefined ? [] : [projection(view.draftVersionId)],
   );
+  const current = rows.filter(
+    (row) => !['expired', 'account-changed', 'inactive'].includes(row.monitoring.status),
+  );
+  const stopped = rows.filter((row) =>
+    ['expired', 'account-changed', 'inactive'].includes(row.monitoring.status),
+  );
+  const priority: Record<TradingPlanMonitoring['status'], number> = {
+    draft: 0,
+    'no-conditions': 0,
+    unavailable: 1,
+    scheduled: 2,
+    ready: 3,
+    expired: 4,
+    'account-changed': 4,
+    inactive: 4,
+  };
+  current.sort(
+    (a, b) =>
+      priority[a.monitoring.status] - priority[b.monitoring.status] ||
+      a.monitoring.expiresAt.getTime() - b.monitoring.expiresAt.getTime() ||
+      a.plan.stockId.localeCompare(b.plan.stockId),
+  );
+  const presented = current.slice(0, 20);
+  const names = new Map(
+    accounts.ok ? accounts.data.accounts.map((account) => [account.id, account.name]) : [],
+  );
+  const reviews = audit.reviews.filter(
+    (review) => review.reviewedAt >= since && review.reviewedAt <= until,
+  );
+  const pendingDrafts = new Set(
+    [...current, ...revisions]
+      .filter((row) => row.plan.status === 'draft')
+      .map((row) => tradingPlanVersionId(row.plan)),
+  );
+  const count = (...statuses: TradingPlanMonitoring['status'][]) =>
+    rows.filter((row) => statuses.includes(row.monitoring.status)).length;
+  const inputFingerprint = createHash('sha256')
+    .update(
+      JSON.stringify(
+        [...rows, ...revisions]
+          .map(({ plan, monitoring }) => [tradingPlanVersionId(plan), monitoring.status] as const)
+          .sort((a, b) => a[0].localeCompare(b[0])),
+      ),
+    )
+    .digest('hex');
   const evidence = [
     localEvidence('trading-plans:0', 'trading-plans', now, 'tool:list_trading_plans'),
+    ...(audit.available
+      ? [localEvidence('trading-plans:reviews', 'trading-plans', now, 'tool:list_workflow_runs')]
+      : []),
+    ...(accounts.ok
+      ? [localEvidence('trading-plans:accounts', 'trading-plans', now, 'tool:list_accounts')]
+      : []),
   ];
-  const missingDimensions =
-    planBatchStatus === undefined || planBatchStatus === 'complete'
+  const missingDimensions = [
+    ...(planBatchStatus === undefined || planBatchStatus === 'complete'
       ? []
       : [
           missing(
@@ -806,7 +1073,32 @@ const tradingPlansSection = async (
               : '账户持仓与候选计划批次部分完成',
             planBatchStatus === 'blocked' ? 'plan-batch-blocked' : 'plan-batch-partial',
           ),
-        ];
+        ]),
+    ...(pendingDrafts.size === 0
+      ? []
+      : [
+          missing(
+            'trading-plans.drafts',
+            `${pendingDrafts.size} 份草案或修订尚未发布，需补齐前提`,
+            'drafts-pending',
+          ),
+        ]),
+    ...(audit.issue === undefined
+      ? []
+      : [missing('trading-plans.reviews', audit.issue.reason, audit.issue.errorKind)]),
+    ...(accounts.ok
+      ? []
+      : [
+          missing(
+            'trading-plans.accounts',
+            '账户名称读取失败，暂以账户身份显示',
+            accounts.error.kind,
+          ),
+        ]),
+    ...(views.length < 500
+      ? []
+      : [missing('trading-plans.limit', '计划读取达到 500 项上限，状态统计可能不完整', 'limit')]),
+  ];
   return {
     evidence,
     section: {
@@ -815,69 +1107,143 @@ const tradingPlansSection = async (
       required: true,
       status: missingDimensions.length === 0 ? 'complete' : 'partial',
       dataAsOf: now,
+      inputFingerprint,
       blocks: [
+        {
+          kind: 'metrics',
+          items: [
+            { key: 'ready', label: '可监控', value: count('ready') },
+            { key: 'pending', label: '待补全', value: count('draft', 'no-conditions') },
+            { key: 'unavailable', label: '等待数据', value: count('unavailable') },
+            { key: 'scheduled', label: '待生效', value: count('scheduled') },
+            { key: 'revisionDrafts', label: '未发布修订', value: revisions.length },
+            { key: 'expired', label: '已过期', value: count('expired') },
+            {
+              key: 'invalidated',
+              label: '已失效 / 退役',
+              value: count('account-changed', 'inactive'),
+            },
+          ],
+        },
+        {
+          kind: 'text',
+          tone: 'factual',
+          text: `${date} 复核记录（按确切版本去重，本日新增版本的重复复核不另计为维持）：`,
+        },
+        { kind: 'metrics', items: reviewMetrics(audit, reviews) },
+        {
+          kind: 'text',
+          tone: 'factual',
+          text: `${reviews.length === 0 ? '目标日尚无可用的计划复核明细，不能据此确认全部计划已复核。' : '新增版本包括草案修订；沿用旧版本也属于已复核。'} 计划版本截至 ${planTime(until)}（北京时间），资格按报告生成时的账户事实和有效期核验；可监控不代表已运行、已送达或已成交。`,
+        },
+        {
+          kind: 'text',
+          tone: 'factual',
+          text: `下一交易日跟踪清单（${current.length} 项${current.length > presented.length ? `，按待补全、等待数据与到期时间优先展示 ${presented.length} 项，其余见预警页` : ''}）：`,
+        },
         {
           kind: 'table',
           columns: [
-            { key: 'account', label: '账户' },
-            { key: 'stock', label: '股票' },
-            { key: 'action', label: '动作' },
-            { key: 'status', label: '状态' },
-            { key: 'version', label: '计划版本' },
+            ...(scope.kind === 'all-accounts' ? [{ key: 'account', label: '账户' }] : []),
+            { key: 'stockLabel', label: '股票 / 版本' },
+            { key: 'actionLabel', label: '动作' },
+            { key: 'eligibility', label: '当前资格' },
             { key: 'entryRange', label: '入场区间' },
-            { key: 'entryConditions', label: '入场条件' },
-            { key: 'exitConditions', label: '退出条件' },
-            { key: 'currentPct', label: '当前仓位%' },
-            { key: 'targetPct', label: '目标仓位%' },
-            { key: 'holdingDays', label: '预计持有交易日' },
-            { key: 'risk', label: '风险' },
-            { key: 'counterEvidence', label: '反证' },
-            { key: 'unknowns', label: '未知 / 前置条件' },
-            { key: 'validUntil', label: '有效期至' },
+            { key: 'targetLabel', label: '目标仓位' },
+            { key: 'nextStep', label: '下一步' },
+            { key: 'validUntil', label: '有效期至（北京时间）' },
           ],
-          rows: plans.map((plan) => ({
-            account: plan.accountId,
+          rows: presented.map(({ plan, monitoring }) => ({
+            account: names.get(plan.accountId) ?? plan.accountId,
+            accountId: plan.accountId,
             stock: plan.stockName ?? plan.stockId,
+            stockLabel: `${plan.stockName ?? plan.stockId} · v${plan.version}`,
             action: plan.action,
+            actionLabel: PLAN_ACTION_LABELS[plan.action],
             status: plan.status,
+            monitoringStatus: monitoring.status,
+            eligibility: PLAN_MONITOR_LABELS[monitoring.status],
+            nextStep: monitoring.nextStep,
             version: `v${plan.version}`,
             entryRange:
               plan.entryPriceLow === undefined || plan.entryPriceHigh === undefined
-                ? '未提供'
+                ? ['hold', 'reduce', 'exit', 'avoid'].includes(plan.action)
+                  ? '无建仓动作'
+                  : '待补全'
                 : `${plan.entryPriceLow}-${plan.entryPriceHigh}`,
             entryConditions:
               plan.entryConditions.map((condition) => condition.description).join('；') || '无',
             exitConditions: plan.exit.conditions.join('；') || '未记录',
             currentPct: plan.position.currentPct,
             targetPct: plan.position.targetPct,
+            targetLabel:
+              plan.position.targetPct === null
+                ? '不可用'
+                : plan.action === 'observe' && plan.position.targetPct === 0
+                  ? '未设置条件仓位'
+                  : `${plan.position.targetPct}%`,
             holdingDays: `${plan.holding.minTradingDays}-${plan.holding.maxTradingDays}`,
             risk: plan.explanation.risks.join('；') || '未记录',
             counterEvidence: plan.explanation.counterEvidence.join('；') || '未记录',
             unknowns:
               [...plan.explanation.unknowns, ...plan.position.prerequisiteActions].join('；') ||
               '无',
-            validUntil: plan.validUntil.toISOString(),
+            validUntil: planTime(monitoring.expiresAt),
           })),
         },
-        ...(plans.length === 0
+        ...(presented.length === 0
           ? []
           : [
               {
                 kind: 'list' as const,
-                items: plans.map((plan) => ({
-                  title: `${plan.stockName ?? plan.stockId} · ${plan.action} · v${plan.version}`,
-                  detail: `入场 ${plan.entryPriceLow ?? '未提供'}-${plan.entryPriceHigh ?? '未提供'} · 目标 ${plan.position.targetPct === null ? '不可用' : `${plan.position.targetPct}%`} · ${plan.status}`,
+                items: presented.map(({ plan, monitoring }) => planReference(plan, monitoring)),
+              },
+            ]),
+        ...(revisions.length === 0
+          ? []
+          : [
+              {
+                kind: 'text' as const,
+                tone: 'warning' as const,
+                text: `未发布的修订草案（${revisions.length} 项${revisions.length > 20 ? '，展示前 20 项，其余见预警页' : ''}）：原生效版本仍有效时继续保留，草案不会替代它。`,
+              },
+              {
+                kind: 'list' as const,
+                items: revisions.slice(0, 20).map(({ plan, monitoring }) => ({
+                  title: `${plan.stockName ?? plan.stockId} · 修订草案 v${plan.version}`,
+                  detail: `${monitoring.nextStep} · 截止 ${planTime(monitoring.expiresAt)}（北京时间）`,
                   entityKind: 'trading-plan' as const,
-                  entityId: `${plan.id}:v${plan.version}`,
+                  entityId: tradingPlanVersionId(plan),
                 })),
               },
             ]),
-        ...(plans.length === 0
+        ...(stopped.length === 0
+          ? []
+          : [
+              {
+                kind: 'text' as const,
+                tone: 'factual' as const,
+                text: `退出当前跟踪的记录（${stopped.length} 项${stopped.length > 10 ? '，展示最近 10 项' : ''}）：保留历史，补齐前提后重新复核，不自动续期。`,
+              },
+              {
+                kind: 'list' as const,
+                items: stopped
+                  .sort((a, b) => b.plan.createdAt.getTime() - a.plan.createdAt.getTime())
+                  .slice(0, 10)
+                  .map(({ plan, monitoring }) => ({
+                    title: `${plan.stockName ?? plan.stockId} · ${PLAN_MONITOR_LABELS[monitoring.status]} · v${plan.version}`,
+                    detail: `${monitoring.reason} · 有效至 ${planTime(monitoring.expiresAt)}（北京时间） · 下一步：${monitoring.nextStep}`,
+                    entityKind: 'trading-plan' as const,
+                    entityId: tradingPlanVersionId(plan),
+                  })),
+              },
+            ]),
+        ...(current.length === 0
           ? [
               {
                 kind: 'text' as const,
                 tone: 'warning' as const,
-                text: '账户事实、持仓复核或候选分析尚未形成可呈现的结构化计划；请区分研究未完成与没有合格机会。',
+                text: '目前没有仍需跟踪的当前计划；请结合草案、过期、失效与复核记录区分研究未完成和没有合格机会。',
               },
             ]
           : []),
@@ -895,7 +1261,7 @@ const planActionFingerprint = (report: Report): string => {
   if (table?.kind !== 'table') return '';
   return JSON.stringify(
     table.rows.map((row) => [
-      row.account,
+      row.accountId ?? row.account,
       row.stock,
       row.action,
       row.status,
@@ -903,6 +1269,9 @@ const planActionFingerprint = (report: Report): string => {
       row.entryConditions,
       row.exitConditions,
       row.targetPct,
+      row.version,
+      row.risk,
+      row.counterEvidence,
     ]),
   );
 };
@@ -912,10 +1281,17 @@ const shouldNotifyClosingSupplement = (previous: Report, next: Report): boolean 
     .filter((section) => section.required)
     .flatMap((section) => section.missingDimensions.map((gap) => gap.dimension));
   const currentMissing = new Set(next.missingDimensions.map((gap) => gap.dimension));
-  return (
-    previousMissing.some((dimension) => !currentMissing.has(dimension)) ||
-    planActionFingerprint(previous) !== planActionFingerprint(next)
-  );
+  const previousFingerprint = previous.sections.find(
+    (section) => section.key === 'trading-plans',
+  )?.inputFingerprint;
+  const nextFingerprint = next.sections.find(
+    (section) => section.key === 'trading-plans',
+  )?.inputFingerprint;
+  const plansChanged =
+    previousFingerprint === undefined || nextFingerprint === undefined
+      ? planActionFingerprint(previous) !== planActionFingerprint(next)
+      : previousFingerprint !== nextFingerprint;
+  return previousMissing.some((dimension) => !currentMissing.has(dimension)) || plansChanged;
 };
 
 const runClosingReport = async (
@@ -945,7 +1321,16 @@ const runClosingReport = async (
       title: `${date} 收盘复盘`,
       inputSummary: { marketDate: date, notify: input.notify ?? input.mode === 'scheduled' },
       buildSections: async (generatedAt) => {
-        const sentiment = await ctx.tools.get_ashare_sentiment.execute({ date });
+        const since = new Date(
+          `${input.scope.kind === 'account' ? previousTradingDay(date) : date}T00:00:00+08:00`,
+        );
+        const until = new Date(
+          Math.min(generatedAt.getTime(), new Date(`${date}T23:59:59.999+08:00`).getTime()),
+        );
+        const [sentiment, audit] = await Promise.all([
+          ctx.tools.get_ashare_sentiment.execute({ date }),
+          planReviewAudit(since, until, input.scope, ctx),
+        ]);
         const market = sentiment.ok
           ? marketPulse(sentiment.data.snapshot)
           : unavailableSection(
@@ -962,9 +1347,9 @@ const runClosingReport = async (
             triggersSection(date, generatedAt, ctx, input.scope),
             adviceExpirySection(date, generatedAt, ctx, input.scope),
             strategyActionsSection(date, generatedAt, ctx, input.scope),
-            tradingPlansSection(input.scope, generatedAt, ctx, input.planBatchStatus),
+            tradingPlansSection(date, input.scope, generatedAt, ctx, audit, input.planBatchStatus),
             input.scope.kind === 'account'
-              ? priorDayReviewSection(date, input.scope.accountId, generatedAt, ctx)
+              ? priorDayReviewSection(date, input.scope.accountId, generatedAt, ctx, audit)
               : Promise.resolve(null),
             nextEventsSection(date, generatedAt, ctx),
           ]);

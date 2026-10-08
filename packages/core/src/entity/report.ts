@@ -118,6 +118,7 @@ export const ReportSectionSchema = z.object({
   required: z.boolean(),
   status: ReportSectionStatusSchema,
   dataAsOf: z.coerce.date().optional(),
+  inputFingerprint: z.string().length(64).optional(),
   blocks: z.array(ReportBlockSchema),
   evidenceIds: z.array(z.string()).default([]),
   missingDimensions: z.array(ReportMissingDimensionSchema).default([]),

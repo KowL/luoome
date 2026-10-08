@@ -135,8 +135,14 @@ export const evaluateTradingPlanBudget = (input: {
   const plannedByStock = new Map<string, number>();
   const reasons: string[] = [];
   for (const plan of input.plans) {
-    const target = plan.position.targetPct;
     const current = currentByStock.get(plan.stockId) ?? 0;
+    const maintainsPosition =
+      (plan.action === 'hold' ||
+        (plan.action === 'observe' && (plan.position.currentPct ?? 0) > 0)) &&
+      plan.position.targetPct !== null &&
+      plan.position.targetPct === plan.position.currentPct;
+    // 原版维持计划不随行情重写，旧百分比不能被解释成新的加仓额度。
+    const target = maintainsPosition ? current : plan.position.targetPct;
     const sameStock = plannedByStock.get(plan.stockId) ?? 0;
     // 多个计划的 targetPct 都表示执行后的同一只股票仓位，按最高目标预留一次。
     const incremental = target === null ? null : Math.max(0, target - current - sameStock);

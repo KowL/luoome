@@ -7,9 +7,17 @@ import {
   type StrategyVersion,
   strategyDefinitionHash,
   type ToolContext,
+  type TradingPlanReview,
   TradingPlanSchema,
+  tradingPlanVersionId,
 } from '@luoome/core';
-import { addTradeTool, getReportTool, saveWatchTriggerTool } from '@luoome/tools';
+import {
+  addTradeTool,
+  getAccountFactsTool,
+  getReportTool,
+  recordWorkflowRunTool,
+  saveWatchTriggerTool,
+} from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -19,6 +27,97 @@ import { executeReportWorkflow } from './internal/report-runner.js';
 
 const now = new Date('2026-07-27T10:00:00.000Z');
 const marketAsOf = new Date('2026-07-27T07:00:00.000Z');
+const EMPTY_ACCOUNT_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
+
+const planFixture = (digest: string, overrides: Record<string, unknown> = {}) =>
+  TradingPlanSchema.parse({
+    id: `account:${EMPTY_ACCOUNT_ID}:stock:600519.SH`,
+    version: 1,
+    accountId: EMPTY_ACCOUNT_ID,
+    stockId: '600519.SH',
+    stockName: '贵州茅台',
+    status: 'active',
+    action: 'observe',
+    entryPriceLow: 100,
+    entryPriceHigh: 105,
+    entryConditions: [
+      {
+        id: 'entry',
+        kind: 'price-range',
+        phase: 'entry',
+        metric: 'price',
+        comparator: 'between',
+        value: 100,
+        valueTo: 105,
+        description: '等待价格进入 100-105 元区间',
+      },
+    ],
+    invalidEntryConditions: [],
+    position: {
+      currentPct: 0,
+      targetPct: 10,
+      deltaPct: 10,
+      constraintStatus: 'passed',
+      constraintReasons: [],
+      prerequisiteActions: [],
+    },
+    holding: {
+      minTradingDays: 1,
+      maxTradingDays: 5,
+      nextReviewAt: new Date('2026-07-24T10:00:00Z'),
+      earlyExitConditions: [],
+      extensionBasis: [],
+    },
+    exit: {
+      stopLoss: 95,
+      takeProfit: 120,
+      conditions: ['跌破止损后暂停入场'],
+      triggerConditions: [],
+      canSellNow: false,
+    },
+    validFrom: new Date('2026-07-23T10:00:00Z'),
+    validUntil: new Date('2026-07-31T10:00:00Z'),
+    invalidationConditions: ['账户事实变化'],
+    accountFactsAsOf: now,
+    accountFactsDigest: digest,
+    marketFacts: [],
+    evidence: [],
+    source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
+    explanation: {
+      supportingEvidenceIds: [],
+      counterEvidence: ['成交量不足'],
+      risks: ['波动风险'],
+      unknowns: [],
+    },
+    confidence: 60,
+    createdAt: new Date('2026-07-23T10:00:00Z'),
+    ...overrides,
+  });
+
+const seedPlanReviews = async (
+  ctx: ToolContext,
+  accountId: string,
+  reviewedAt: Date,
+  reviews: TradingPlanReview[],
+) => {
+  const result = await recordWorkflowRunTool.execute(
+    {
+      run: {
+        id: `plan-review:${accountId}:${reviewedAt.toISOString()}`,
+        workflowName: 'trading-plan-daily-cycle',
+        mode: 'manual',
+        status: 'succeeded',
+        startedAt: reviewedAt,
+        finishedAt: reviewedAt,
+        inputSummary: { accountId },
+        outputSummary: { reviews },
+        providerStatuses: [],
+      },
+    },
+    ctx,
+  );
+  if (!result.ok) throw new Error('plan review fixture failed');
+};
 
 const snapshot = (): AShareSentimentSnapshot => ({
   date: '2026-07-27',
@@ -251,6 +350,289 @@ const sentimentManager = (): AShareSentimentManagerLike => ({
 });
 
 describe('closing-report workflow', () => {
+  it('计划复盘保留有效旧版，单列修订草案与已过期记录，展示实际截止时间', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const facts = await getAccountFactsTool.execute({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    if (!facts.ok) throw new Error('facts fixture missing');
+    const active = planFixture(facts.data.facts.digest);
+    const draft = planFixture(facts.data.facts.digest, {
+      version: 2,
+      status: 'draft',
+      createdAt: new Date('2026-07-27T08:00:00Z'),
+      position: {
+        ...active.position,
+        constraintStatus: 'unavailable',
+        constraintReasons: ['AI 推理不可用'],
+      },
+    });
+    const expired = planFixture(facts.data.facts.digest, {
+      id: `account:${EMPTY_ACCOUNT_ID}:stock:601398.SH`,
+      stockId: '601398.SH',
+      stockName: '工商银行',
+      status: 'draft',
+      createdAt: new Date('2026-07-20T08:00:00Z'),
+      validUntil: new Date('2026-08-20T08:00:00Z'),
+    });
+    await ctx.repos.tradingPlan.save(active);
+    await ctx.repos.tradingPlan.save(draft);
+    await ctx.repos.tradingPlan.save(expired);
+    const result = await closingReportWorkflow.run(
+      {
+        date: '2026-07-27',
+        scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
+        notify: false,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((s) => s.key === 'trading-plans');
+    const table = section?.blocks.find((b) => b.kind === 'table');
+    expect(table?.kind === 'table' ? table.rows : []).toMatchObject([
+      { stock: '贵州茅台', version: 'v1', monitoringStatus: 'ready' },
+    ]);
+    const metrics = section?.blocks.find((b) => b.kind === 'metrics');
+    expect(metrics).toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({ key: 'ready', value: 1 }),
+        expect.objectContaining({ key: 'expired', value: 1 }),
+        expect.objectContaining({ key: 'revisionDrafts', value: 1 }),
+      ]),
+    });
+    const items = section?.blocks.flatMap((b) => (b.kind === 'list' ? b.items : [])) ?? [];
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: '贵州茅台 · 观察 · v1',
+          entityId: tradingPlanVersionId(active),
+        }),
+        expect.objectContaining({
+          entityId: tradingPlanVersionId(draft),
+          detail: expect.stringContaining('AI 推理不可用'),
+        }),
+        expect.objectContaining({
+          entityId: tradingPlanVersionId(expired),
+          detail: expect.stringContaining('2026/07/22'),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(section)).not.toContain('2026-08-20');
+    expect(section?.status).toBe('partial');
+  });
+
+  it('复核按目标日和账户归属统计，重复维持只计一次，前一日也能看到未新增版本的复核', async () => {
+    const ctx = await buildTestContext({
+      clock: () => new Date('2026-07-28T10:00:00Z'),
+      ashareSentiment: sentimentManager(),
+    });
+    const facts = await getAccountFactsTool.execute({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    if (!facts.ok) throw new Error('facts fixture missing');
+    const active = planFixture(facts.data.facts.digest);
+    await ctx.repos.tradingPlan.save(active);
+    for (const [accountId, at, outcome] of [
+      [EMPTY_ACCOUNT_ID, '2026-07-24T08:00:00Z', 'maintained'],
+      [EMPTY_ACCOUNT_ID, '2026-07-27T08:00:00Z', 'maintained'],
+      [EMPTY_ACCOUNT_ID, '2026-07-27T09:00:00Z', 'maintained'],
+      ['other-account', '2026-07-27T09:00:00Z', 'created'],
+      [EMPTY_ACCOUNT_ID, '2026-07-28T08:00:00Z', 'created'],
+    ] as const) {
+      await seedPlanReviews(ctx, accountId, new Date(at), [
+        {
+          stockId: active.stockId,
+          versionId: tradingPlanVersionId(active),
+          outcome,
+          reviewedAt: new Date(at),
+          adviceIds: ['fixture-advice'],
+          reasons: [],
+        },
+      ]);
+    }
+    const result = await closingReportWorkflow.run(
+      {
+        date: '2026-07-27',
+        scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
+        notify: false,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((s) => s.key === 'trading-plans');
+    const metrics = section?.blocks.filter((b) => b.kind === 'metrics').flatMap((b) => b.items);
+    expect(metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'reviewCreated', value: 0 }),
+        expect.objectContaining({ key: 'reviewMaintained', value: 1 }),
+      ]),
+    );
+    const prior = result.data.report.sections.find((s) => s.key === 'prior-day-review');
+    expect(prior?.blocks.find((b) => b.kind === 'metrics')).toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({ key: 'planVersions', value: 0 }),
+        expect.objectContaining({ key: 'reviewMaintained', value: 1 }),
+      ]),
+    });
+    expect(prior?.blocks.flatMap((b) => (b.kind === 'list' ? b.items : []))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: expect.stringContaining('维持原计划'),
+          entityId: tradingPlanVersionId(active),
+        }),
+      ]),
+    );
+  });
+
+  it('本日新增版本再次复核只计新增，不能同时计为维持原版', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const facts = await getAccountFactsTool.execute({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    if (!facts.ok) throw new Error('facts fixture missing');
+    const active = planFixture(facts.data.facts.digest, {
+      createdAt: new Date('2026-07-27T08:00:00Z'),
+    });
+    await ctx.repos.tradingPlan.save(active);
+    for (const [at, outcome] of [
+      ['2026-07-27T08:00:00Z', 'created'],
+      ['2026-07-27T09:00:00Z', 'maintained'],
+    ] as const) {
+      const reviewedAt = new Date(at);
+      await seedPlanReviews(ctx, EMPTY_ACCOUNT_ID, reviewedAt, [
+        {
+          stockId: active.stockId,
+          versionId: tradingPlanVersionId(active),
+          outcome,
+          reviewedAt,
+          adviceIds: [],
+          reasons: [],
+        },
+      ]);
+    }
+    const result = await closingReportWorkflow.run(
+      {
+        date: '2026-07-27',
+        scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
+        notify: false,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const section = result.data.report.sections.find((s) => s.key === 'trading-plans');
+    const metrics = section?.blocks.filter((b) => b.kind === 'metrics').flatMap((b) => b.items);
+    expect(metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'reviewCreated', value: 1 }),
+        expect.objectContaining({ key: 'reviewMaintained', value: 0 }),
+      ]),
+    );
+  });
+
+  it('复核审计读取失败时保留未知数量，不能显示成零次复核', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    ctx.repos.workflowRun.listRecent = async () => {
+      throw new Error('复核审计暂不可用');
+    };
+    const result = await closingReportWorkflow.run(
+      {
+        date: '2026-07-27',
+        scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
+        notify: false,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const key of ['trading-plans', 'prior-day-review']) {
+      const section = result.data.report.sections.find((s) => s.key === key);
+      const metrics = section?.blocks.filter((b) => b.kind === 'metrics').flatMap((b) => b.items);
+      expect(metrics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: 'reviewCreated', value: null }),
+          expect.objectContaining({ key: 'reviewMaintained', value: null }),
+        ]),
+      );
+      expect(section?.status).toBe('partial');
+      expect(section?.missingDimensions).toEqual(
+        expect.arrayContaining([expect.objectContaining({ dimension: `${key}.reviews` })]),
+      );
+    }
+  });
+
+  it('补充报告仅更新复核记录时保存新版，维持相同条件不再次通知', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const facts = await getAccountFactsTool.execute({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    if (!facts.ok) throw new Error('facts fixture missing');
+    const active = planFixture(facts.data.facts.digest);
+    await ctx.repos.tradingPlan.save(active);
+    const input = {
+      date: '2026-07-27',
+      scope: { kind: 'account' as const, accountId: EMPTY_ACCOUNT_ID },
+      notify: true,
+      mode: 'scheduled' as const,
+    };
+    const first = await closingReportWorkflow.run(input, ctx);
+    expect(first.ok && first.data.notified).toBe(true);
+    const reviewedAt = new Date('2026-07-27T09:00:00Z');
+    await seedPlanReviews(ctx, EMPTY_ACCOUNT_ID, reviewedAt, [
+      {
+        stockId: active.stockId,
+        versionId: tradingPlanVersionId(active),
+        outcome: 'maintained',
+        reviewedAt,
+        adviceIds: ['fresh-advice'],
+        reasons: [],
+      },
+    ]);
+    const result = await closingReportWorkflow.run({ ...input, supplement: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.report.version).toBe(2);
+    expect(result.data.notified).toBe(false);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
+  });
+
+  it('跟踪清单只展示前 20 项时，其余计划的版本变化仍触发补充通知', async () => {
+    const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
+    const facts = await getAccountFactsTool.execute({ accountId: EMPTY_ACCOUNT_ID }, ctx);
+    if (!facts.ok) throw new Error('facts fixture missing');
+    const plans = Array.from({ length: 21 }, (_, index) => {
+      const stockId = `${600_000 + index}.SH`;
+      return planFixture(facts.data.facts.digest, {
+        id: `account:${EMPTY_ACCOUNT_ID}:stock:${stockId}`,
+        stockId,
+        stockName: `测试股票 ${index}`,
+      });
+    });
+    for (const plan of plans) await ctx.repos.tradingPlan.save(plan);
+    const input = {
+      date: '2026-07-27',
+      scope: { kind: 'account' as const, accountId: EMPTY_ACCOUNT_ID },
+      notify: true,
+      mode: 'scheduled' as const,
+    };
+    const first = await closingReportWorkflow.run(input, ctx);
+    expect(first.ok && first.data.notified).toBe(true);
+    const last = plans.at(-1);
+    if (last === undefined) throw new Error('plan fixture missing');
+    await ctx.repos.tradingPlan.save({
+      ...last,
+      version: 2,
+      createdAt: now,
+      explanation: { ...last.explanation, risks: ['新增风险，需重新核对'] },
+    });
+    const result = await closingReportWorkflow.run({ ...input, supplement: true }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const table = result.data.report.sections
+      .find((section) => section.key === 'trading-plans')
+      ?.blocks.find((block) => block.kind === 'table');
+    expect(table?.kind === 'table' ? table.rows : []).toHaveLength(20);
+    expect(table?.kind === 'table' ? table.rows.map((row) => row.stock) : []).not.toContain(
+      last.stockName,
+    );
+    expect(result.data.notified).toBe(true);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(2);
+  });
+
   it('账户报告只展示本账户的策略建议与有效期', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     await seedStrategyWithPublishedRun(ctx, '2026-07-27');
@@ -912,8 +1294,8 @@ describe('closing-report workflow', () => {
     const list = section?.blocks.find((block) => block.kind === 'list');
     expect(list?.kind === 'list' ? list.items : []).toEqual([
       {
-        title: '贵州茅台 · enter · v2',
-        detail: '入场 98-103 · 目标 8% · active',
+        title: '贵州茅台 · 建仓 · v2',
+        detail: expect.stringContaining('等待数据 · 条件：价格处于入场区间 98-103'),
         entityKind: 'trading-plan',
         entityId: 'account:acc-1:stock:600519.SH:v2',
       },

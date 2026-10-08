@@ -1127,7 +1127,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     );
   });
 
-  it('16:30 提前持久化所有账户计划批次，18:00 主报告读取批次状态', async () => {
+  it('16:30 持久化账户计划批次，18:00 报告保留草案批次的 partial 状态', async () => {
     let currentTime = new Date('2026-08-10T08:30:00.000Z');
     const ctx = await buildTestContext({ clock: () => currentTime });
     const prepared = await strategyDailyCycleWorkflow.run({ owner: 'early-plan' }, ctx);
@@ -1136,6 +1136,14 @@ describe('strategy-daily-cycle reliability matrix', () => {
     const batches = await ctx.repos.workflowRun.listRecent({ workflowName: 'account-plan-batch' });
     expect(batches).toHaveLength(3);
     expect(batches.every((batch) => batch.status !== 'running')).toBe(true);
+    expect(
+      batches.some(
+        (batch) =>
+          typeof batch.outputSummary?.draftPlans === 'number' &&
+          batch.outputSummary.draftPlans > 0 &&
+          batch.outputSummary.status === 'partial',
+      ),
+    ).toBe(true);
 
     currentTime = NOW;
     const cutoff = await closingReportCutoffWorkflow.run({}, ctx);
@@ -1145,10 +1153,14 @@ describe('strategy-daily-cycle reliability matrix', () => {
     const reports = await ctx.repos.report.list({ kind: 'closing' });
     expect(reports).toHaveLength(3);
     for (const report of reports) {
+      if (report.scope.kind !== 'account') throw new Error('account report expected');
+      const accountId = report.scope.accountId;
+      const batch = batches.find((item) => item.inputSummary?.accountId === accountId);
+      if (batch === undefined) throw new Error('account batch missing');
       const plans = report.sections.find((section) => section.key === 'trading-plans');
       expect(
         plans?.missingDimensions.some((gap) => gap.dimension === 'trading-plans.daily-cycle'),
-      ).toBe(false);
+      ).toBe(batch.outputSummary?.status !== 'complete');
     }
     const repeated = await strategyDailyCycleWorkflow.run({ owner: 'early-plan-repeat' }, ctx);
     expect(repeated.ok).toBe(true);

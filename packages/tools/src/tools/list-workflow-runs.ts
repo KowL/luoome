@@ -15,6 +15,7 @@ export const UnifiedRunSchema = z.object({
   status: z.enum(['running', 'succeeded', 'partial', 'failed']),
   startedAt: z.coerce.date(),
   finishedAt: z.coerce.date().optional(),
+  inputSummary: z.record(z.string(), z.unknown()).optional(),
   summary: z.record(z.string(), z.unknown()).optional(),
   error: z.string().optional(),
 });

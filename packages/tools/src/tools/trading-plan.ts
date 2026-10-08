@@ -3,19 +3,45 @@ import {
   DEFAULT_TRADING_PLAN_BUDGET_LIMITS,
   evaluateTradingPlanBudget,
   type Stock,
+  type ToolContext,
   TradingPlanBudgetLimitsSchema,
   TradingPlanBudgetResultSchema,
   type TradingPlanMonitoring,
   TradingPlanMonitoringSchema,
   TradingPlanQuerySchema,
+  type TradingPlanReview,
+  TradingPlanReviewSchema,
   TradingPlanSchema,
+  TradingPlanViewSchema,
   tradingPlanMonitoring,
   tradingPlanVersionId,
+  tradingPlanView,
 } from '@luoome/core';
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import { deriveAccountFacts } from './account-facts.js';
+
+const latestReviews = async (ctx: ToolContext, accountId: string) => {
+  const runs = await ctx.repos.workflowRun.listRecent({
+    workflowName: 'trading-plan-daily-cycle',
+    limit: 200,
+  });
+  const reviews = new Map<string, TradingPlanReview>();
+  for (const run of runs) {
+    if (run.inputSummary?.accountId !== accountId || !Array.isArray(run.outputSummary?.reviews))
+      continue;
+    for (const value of run.outputSummary.reviews) {
+      const parsed = TradingPlanReviewSchema.safeParse(value);
+      if (!parsed.success) continue;
+      const review = parsed.data;
+      const previous = reviews.get(review.versionId);
+      if (previous === undefined || review.reviewedAt > previous.reviewedAt)
+        reviews.set(review.versionId, review);
+    }
+  }
+  return reviews;
+};
 
 export const SaveTradingPlanInput = z.object({
   plan: TradingPlanSchema,
@@ -100,7 +126,10 @@ export const saveTradingPlanTool = defineTool({
 export const GetTradingPlanInput = z.object({
   versionId: z.string().min(1),
 });
-export const GetTradingPlanOutput = z.object({ plan: TradingPlanSchema });
+export const GetTradingPlanOutput = z.object({
+  plan: TradingPlanSchema,
+  monitoring: TradingPlanMonitoringSchema,
+});
 
 export const getTradingPlanTool = defineTool({
   name: 'get_trading_plan',
@@ -110,7 +139,25 @@ export const getTradingPlanTool = defineTool({
   output: GetTradingPlanOutput,
   handler: async (input, ctx) => {
     const plan = await ctx.repos.tradingPlan.findByVersionId(input.versionId);
-    return plan === null ? errNotFound('TradingPlan', input.versionId) : { plan };
+    if (plan === null) return errNotFound('TradingPlan', input.versionId);
+    const facts = await deriveAccountFacts(ctx, plan.accountId);
+    const reviews = await latestReviews(ctx, plan.accountId);
+    const versions = await ctx.repos.tradingPlan.list({
+      accountId: plan.accountId,
+      stockId: plan.stockId,
+      currentOnly: true,
+      limit: 1,
+    });
+    return {
+      plan,
+      monitoring: tradingPlanMonitoring(
+        plan,
+        facts,
+        ctx.clock(),
+        reviews.get(input.versionId),
+        versions,
+      ),
+    };
   },
 });
 
@@ -120,6 +167,7 @@ export const ListTradingPlansInput = TradingPlanQuerySchema.extend({
 export const ListTradingPlansOutput = z.object({
   plans: z.array(TradingPlanSchema),
   monitoring: z.array(TradingPlanMonitoringSchema).optional(),
+  views: z.array(TradingPlanViewSchema).optional(),
 });
 
 export const listTradingPlansTool = defineTool({
@@ -130,16 +178,51 @@ export const listTradingPlansTool = defineTool({
   output: ListTradingPlansOutput,
   handler: async (input, ctx) => {
     const { includeMonitoring, ...query } = input;
-    const plans = [...(await ctx.repos.tradingPlan.list(query))];
+    const now = ctx.clock();
+    const plans = [
+      ...(await ctx.repos.tradingPlan.list({
+        ...query,
+        ...(query.currentOnly === true && query.asOf === undefined ? { asOf: now } : {}),
+      })),
+    ];
     if (!includeMonitoring) return { plans };
     const monitoring: TradingPlanMonitoring[] = [];
+    const views: z.infer<typeof TradingPlanViewSchema>[] = [];
     for (const accountId of new Set(plans.map((plan) => plan.accountId))) {
       const facts = await deriveAccountFacts(ctx, accountId);
-      for (const plan of plans.filter((item) => item.accountId === accountId)) {
-        monitoring.push(tradingPlanMonitoring(plan, facts, ctx.clock()));
+      const reviews = await latestReviews(ctx, accountId);
+      const accountPlans = plans.filter((item) => item.accountId === accountId);
+      const versions =
+        query.currentOnly === true
+          ? accountPlans
+          : await ctx.repos.tradingPlan.list({
+              accountId,
+              stockId: query.stockId,
+              currentOnly: true,
+              createdUntil: query.createdUntil,
+              limit: 500,
+            });
+      for (const plan of accountPlans) {
+        monitoring.push(
+          tradingPlanMonitoring(
+            plan,
+            facts,
+            now,
+            reviews.get(tradingPlanVersionId(plan)),
+            versions.filter((version) => version.id === plan.id),
+          ),
+        );
+      }
+      for (const planId of new Set(accountPlans.map((plan) => plan.id))) {
+        const view = tradingPlanView(
+          accountPlans.filter((plan) => plan.id === planId),
+          now,
+          facts,
+        );
+        if (view !== null) views.push(view);
       }
     }
-    return { plans, monitoring };
+    return { plans, monitoring, views };
   },
 });
 

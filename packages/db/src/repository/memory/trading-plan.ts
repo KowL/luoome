@@ -5,6 +5,7 @@ import {
   assertTradingPlanInvariants,
   evaluateTradingPlanBudget,
   type Stock,
+  selectTradingPlans,
   type TradingPlan,
   type TradingPlanBudgetLimits,
   type TradingPlanQuery,
@@ -70,26 +71,10 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
       ) {
         return { saved: false, reason: 'account-facts-changed' };
       }
-      const latest = new Map<string, TradingPlan>();
-      for (const item of this.items.values()) {
-        if (item.accountId !== plan.accountId) continue;
-        const current = latest.get(item.id);
-        if (
-          current === undefined ||
-          item.version > current.version ||
-          (item.version === current.version && item.createdAt > current.createdAt)
-        ) {
-          latest.set(item.id, item);
-        }
-      }
-      const active = [...latest.values()].filter(
-        (item) =>
-          item.status === 'active' &&
-          item.validFrom.getTime() <= input.asOf.getTime() &&
-          item.validUntil.getTime() > input.asOf.getTime() &&
-          item.accountFactsDigest === input.facts.digest &&
-          item.id !== plan.id,
-      );
+      const active = selectTradingPlans(
+        [...this.items.values()].filter((item) => item.accountId === plan.accountId),
+        { activeOnly: true, asOf: input.asOf, limit: this.items.size || 1 },
+      ).filter((item) => item.accountFactsDigest === input.facts.digest && item.id !== plan.id);
       const budget = evaluateTradingPlanBudget({
         facts: input.facts,
         plans: [...active, plan],
@@ -117,44 +102,7 @@ export class InMemoryTradingPlanRepository implements TradingPlanRepository {
       .filter((plan) => query.accountId === undefined || plan.accountId === query.accountId)
       .filter((plan) => query.stockId === undefined || plan.stockId === query.stockId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.version - a.version);
-    if (query.activeOnly === true) {
-      // 解析「当前生效版本」：从新到旧找每个计划第一个 active 版本。
-      // - 更新的 superseded / revoked / expired 表示该计划已被明确退役 → 不再监控；
-      // - 更新的 draft 只是「这次没能发布」（例如非交易日跑到、行情不合格），
-      //   不能顶掉仍然有效、正在监控的生效版本，否则该标的会静默失去止损/目标价监控。
-      const chosen = new Map<string, TradingPlan>();
-      const retired = new Set<string>();
-      for (const plan of filtered) {
-        if (chosen.has(plan.id) || retired.has(plan.id)) continue;
-        if (plan.status === 'active') {
-          chosen.set(plan.id, plan);
-          continue;
-        }
-        if (plan.status !== 'draft') retired.add(plan.id);
-      }
-      return [...chosen.values()]
-        .filter((plan) => query.status === undefined || plan.status === query.status)
-        .filter(
-          (plan) =>
-            (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
-            (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
-        )
-        .filter(
-          (plan) =>
-            query.asOf === undefined ||
-            (plan.validFrom.getTime() <= query.asOf.getTime() &&
-              plan.validUntil.getTime() > query.asOf.getTime()),
-        )
-        .slice(0, query.limit ?? 100);
-    }
-    return filtered
-      .filter((plan) => query.status === undefined || plan.status === query.status)
-      .filter(
-        (plan) =>
-          (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
-          (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
-      )
-      .slice(0, query.limit ?? 100);
+    return selectTradingPlans(filtered, query);
   }
 
   async latestByPlanId(planId: string): Promise<TradingPlan | null> {

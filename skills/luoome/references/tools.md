@@ -152,8 +152,14 @@ For permission and response requirements, read [safety and errors](./safety.md).
 - `get_intraday_delivery_audit` 按账户、上海自然日统计全部持久化盘中行动候选，不受触发历史分页限制；
   分开返回渠道受理是否在 10 分钟内、超时、失败/抑制等终态及缺失源时间。渠道受理不等于设备送达。
 - `list_trading_plans` 可传 `includeMonitoring=true`，读取每个版本的监控资格、阻塞原因与下一步；
+  同时返回服务端选择的当前版本 `views` 和实际截止时间 `monitoring.expiresAt`；
+  `lastReviewedAt` / `nextReviewAt` 结合复核审计呈现最近与下次复核时间，不修改原版本期限。
+  `currentOnly=true` 按账户、股票计划聚合后应用 `limit`，保留主版本与最新修订草案。
+  `get_trading_plan` 返回不可变原始计划与当前监控资格。草案最多两个交易日，重复生成不续命。
   `createdSince` / `createdUntil` 按版本创建时间筛选，先过滤再应用 `limit`，可用于交易日复盘；
   `active` 是保存状态，`ready` 是当前资格，均不能证明后台正在监控或飞书已送达。
+- `list_workflow_runs` 返回 `inputSummary`，可按留存的账户归属识别计划复核；`summary.reviews` 中的
+  新增、维持与重复草案按目标日和确切版本统计，不能用“没有新增版本”推断未复核。
 - `intraday-trading-plan-watch` 按全部入场条件合成单个提醒，风险/退出条件优先；盘中不调用 AI、不自动改写计划。
   观察条件满足只提示重新评估；未持仓风险只提示暂停入场。通知保留反证、风险和卖出限制。
 - `notify=false` 为不消耗边沿与通知额度的试跑；正式调用仍需 write/external 授权。

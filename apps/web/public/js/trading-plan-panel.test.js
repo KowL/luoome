@@ -6,7 +6,6 @@ import { describe, expect, it } from 'bun:test';
 import {
   buildPlanRows,
   countPlanRows,
-  currentPlanVersion,
   entryConditionText,
   filterPlanRows,
   latestPlanVersions,
@@ -119,6 +118,13 @@ const makePlan = (overrides = {}) => ({
   ...overrides,
 });
 
+const view = (plan, kind = 'current', draft) => ({
+  planId: plan.id,
+  versionId: planVersionId(plan),
+  kind,
+  ...(draft === undefined ? {} : { draftVersionId: planVersionId(draft) }),
+});
+
 describe('计划文案', () => {
   it('动作与状态标签未知值原样回退', () => {
     expect(planActionLabel('enter')).toBe('建仓');
@@ -164,9 +170,9 @@ describe('计划文案', () => {
       entryConditions: [],
       position: { ...makePlan().position, currentPct: 0, targetPct: 0, deltaPct: 0 },
     });
-    expect(planEntryText(observe)).toBe('等待条件（未给出价位）');
-    expect(planTargetText(observe)).toBe('等待条件（未设置仓位）');
-    expect(entryConditionText(observe)).toBe('等待条件（未给出具体条件）');
+    expect(planEntryText(observe)).toBe('待补全条件价位');
+    expect(planTargetText(observe)).toBe('未设置条件仓位');
+    expect(entryConditionText(observe)).toBe('待补全具体条件');
     expect(entryConditionText(hold)).toBe('不适用（无建仓动作）');
   });
 
@@ -315,29 +321,25 @@ describe('版本聚合', () => {
       planVersionsOf(plans, 'account:acc1:stock:600519.SH').map((plan) => plan.version),
     ).toEqual([2, 1]);
   });
-
-  it('当前版本取最新 active，更新的草案不顶掉仍在监控的生效版本', () => {
-    const active = makePlan({ version: 9, status: 'active' });
-    const draft = makePlan({ version: 10, status: 'draft', createdAt: '2026-08-13T00:00:00.000Z' });
-    expect(currentPlanVersion([active, draft])).toEqual({ plan: active, kind: 'current' });
-    expect(currentPlanVersion([draft, active])).toEqual({ plan: active, kind: 'current' });
-  });
-
-  it('没有 active 版本时退回最新草案；更新的退役状态按历史记录', () => {
-    const draft = makePlan({ version: 2, status: 'draft' });
-    expect(currentPlanVersion([makePlan({ version: 1, status: 'expired' }), draft])).toEqual({
-      plan: draft,
-      kind: 'draft',
-    });
-    const revoked = makePlan({ version: 3, status: 'revoked' });
-    expect(currentPlanVersion([makePlan({ version: 1, status: 'active' }), revoked])).toEqual({
-      plan: revoked,
-      kind: 'history',
-    });
-  });
 });
 
 describe('计划详情分区', () => {
+  it('过期草案显示当前资格，保留原始生成状态供追溯', () => {
+    const plan = makePlan({ status: 'draft' });
+    const sections = planDetailSections(plan, {
+      versionId: planVersionId(plan),
+      status: 'expired',
+      reason: '计划已超过有效期',
+      nextStep: '基于新证据重新复核计划',
+      expiresAt: '2026-07-20T07:00:00Z',
+      nextReviewAt: '2026-07-20T07:00:00Z',
+    });
+    expect(sections[0].lines).toContain('当前状态：已过期');
+    expect(sections[0].lines).toContain('生成状态：草案 · 动作：建仓');
+    expect(sections[0].lines).toContain('计划已超过有效期 · 下一步：基于新证据重新复核计划');
+    expect(plan.status).toBe('draft');
+  });
+
   it('覆盖入场、仓位、持有、退出、依据与账户来源', () => {
     const titles = planDetailSections(makePlan()).map((section) => section.title);
     expect(titles).toEqual([
@@ -464,6 +466,7 @@ describe('计划行与监控资格', () => {
         monitoring(planVersionId(readyPlan), 'ready'),
         monitoring(planVersionId({ ...expiredPlan, version: 2 }), 'expired'),
       ],
+      [view(readyPlan), view({ ...expiredPlan, version: 2 })],
     );
     expect(rows.map((row) => row.plan.stockId).sort()).toEqual(['000001.SZ', '600519.SH']);
     expect(rows.find((row) => row.plan.stockId === '600519.SH').eligibility).toBe('ready');
@@ -475,7 +478,11 @@ describe('计划行与监控资格', () => {
   it('草案不顶掉在跑的生效版本：行显示生效版本并提醒未发布的草案', () => {
     const active = makePlan({ version: 8, status: 'active' });
     const draft = makePlan({ version: 9, status: 'draft', createdAt: '2026-08-13T00:00:00.000Z' });
-    const [row] = buildPlanRows([active, draft], [monitoring(planVersionId(active), 'ready')]);
+    const [row] = buildPlanRows(
+      [active, draft],
+      [monitoring(planVersionId(active), 'ready')],
+      [view(active, 'current', draft)],
+    );
     expect(row.plan.version).toBe(8);
     expect(row.eligibility).toBe('ready');
     expect(row.newerDraft?.version).toBe(9);
@@ -483,9 +490,32 @@ describe('计划行与监控资格', () => {
   });
 
   it('没有当前版本的计划不生成行（工作版本已被退役）', () => {
-    const rows = buildPlanRows([makePlan({ status: 'revoked' })]);
+    const retired = makePlan({ status: 'revoked' });
+    const rows = buildPlanRows([retired], [], [view(retired, 'history')]);
     expect(rows).toHaveLength(1);
     expect(rows[0].eligibility).toBe('history');
+  });
+
+  it('使用服务端选择的新草案，旧生效版不能遮住它', () => {
+    const active = makePlan();
+    const draft = makePlan({ status: 'draft', version: 2 });
+    const [row] = buildPlanRows(
+      [active, draft],
+      [monitoring(planVersionId(draft), 'draft')],
+      [view(draft, 'draft')],
+    );
+    expect(row.plan).toBe(draft);
+    expect(row.eligibility).toBe('pending');
+  });
+
+  it.each([
+    ['unavailable', '等待数据', 'unavailable'],
+    ['scheduled', '待生效', 'scheduled'],
+    ['account-changed', '已失效', 'invalidated'],
+  ])('%s 不再统一归为待补全', (status, label, eligibility) => {
+    const row = { plan: makePlan(), kind: 'current', monitoring: monitoring('x', status) };
+    expect(planRowEligibility(row)).toBe(eligibility);
+    expect(planRowStatus(row).label).toBe(label);
   });
 
   it('资格读不到时不假装可监控；徽标与记录状态解耦', () => {
@@ -509,7 +539,7 @@ describe('计划行与监控资格', () => {
         ...row,
         monitoring: { versionId: 'x', status: 'draft', reason: '', nextStep: '' },
       }),
-    ).toEqual({ label: '草案', cls: 'badge-draft' });
+    ).toEqual({ label: '待补全', cls: 'badge-draft' });
   });
 });
 
@@ -537,8 +567,14 @@ describe('计划筛选', () => {
     },
   ].map((row) => ({ ...row, eligibility: planRowEligibility(row) }));
 
-  it('「全部」不含已过期，其余按监控资格分组', () => {
-    expect(filterPlanRows(rows, 'all', 'all').map((row) => row.plan.id)).toEqual(['a', 'b', 'd']);
+  it('默认当前计划隐藏失效与历史，全部记录包含过期计划', () => {
+    expect(filterPlanRows(rows, 'current', 'all').map((row) => row.plan.id)).toEqual(['a', 'b']);
+    expect(filterPlanRows(rows, 'all', 'all').map((row) => row.plan.id)).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+    ]);
     expect(filterPlanRows(rows, 'ready', 'all').map((row) => row.plan.id)).toEqual(['a']);
     expect(filterPlanRows(rows, 'pending', 'all').map((row) => row.plan.id)).toEqual(['b']);
     expect(filterPlanRows(rows, 'expired', 'all').map((row) => row.plan.id)).toEqual(['c']);
@@ -546,13 +582,22 @@ describe('计划筛选', () => {
   });
 
   it('计数覆盖全部行（含默认不显示的已过期）', () => {
-    expect(countPlanRows(rows)).toEqual({ total: 4, ready: 1, pending: 1, expired: 1, history: 1 });
+    expect(countPlanRows(rows)).toEqual({
+      total: 4,
+      ready: 1,
+      pending: 1,
+      unavailable: 0,
+      scheduled: 0,
+      invalidated: 0,
+      expired: 1,
+      history: 1,
+    });
   });
 
   it('动作筛选按「该不该动手」归类', () => {
     expect(filterPlanRows(rows, 'all', 'open').map((row) => row.plan.id)).toEqual(['a']);
     expect(filterPlanRows(rows, 'all', 'keep').map((row) => row.plan.id)).toEqual(['b']);
-    expect(filterPlanRows(rows, 'all', 'risk').map((row) => row.plan.id)).toEqual(['d']);
+    expect(filterPlanRows(rows, 'all', 'risk').map((row) => row.plan.id)).toEqual(['c', 'd']);
   });
 
   it('筛选维度可叠加，缺省与未知值不误删', () => {
@@ -561,6 +606,7 @@ describe('计划筛选', () => {
     expect(filterPlanRows(rows, 'all', 'unknown').map((row) => row.plan.id)).toEqual([
       'a',
       'b',
+      'c',
       'd',
     ]);
     expect(filterPlanRows(rows, 'unknown', 'all')).toEqual([]);

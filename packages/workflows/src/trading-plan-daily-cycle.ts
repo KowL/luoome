@@ -1,13 +1,21 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   type AccountFacts,
   type Advice,
   addTradingDays,
   dateInShanghai,
   isAdviceQuoteCurrent,
+  isMaterialTradingPlanChange,
   isRuleFallbackAdvice,
   money,
+  resolveTradingPlanVersions,
+  TRADING_PLAN_DRAFT_TRADING_DAYS,
   type TradingPlan,
+  TradingPlanReviewSchema,
   TradingPlanSchema,
+  tradingPlanExpiresAt,
+  tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
 
@@ -17,6 +25,7 @@ export const TradingPlanDailyCycleInput = z.object({
   accountId: z.string().min(1).optional(),
   date: z.string().date().optional(),
   maxCandidates: z.number().int().positive().max(10).default(10),
+  mode: z.enum(['manual', 'scheduled']).default('manual'),
 });
 export type TradingPlanDailyCycleInputT = z.infer<typeof TradingPlanDailyCycleInput>;
 
@@ -36,6 +45,10 @@ export const TradingPlanDailyCycleOutput = z.object({
   holdingReviews: z.number().int().nonnegative(),
   candidateReviews: z.number().int().nonnegative(),
   errors: z.array(PlanErrorSchema),
+  reviews: z.array(TradingPlanReviewSchema).default([]),
+  createdPlans: z.number().int().nonnegative().default(0),
+  maintainedPlans: z.number().int().nonnegative().default(0),
+  draftPlans: z.number().int().nonnegative().default(0),
   budget: z.unknown().optional(),
 });
 export type TradingPlanDailyCycleOutputT = z.infer<typeof TradingPlanDailyCycleOutput>;
@@ -158,7 +171,7 @@ export const buildTradingPlanFromAdvice = (input: {
   const conflictReason =
     conflictingAdvices.length === 0
       ? undefined
-      : `同股策略建议的动作、价格或仓位条件不一致（${[advice.id, ...conflictingAdvices.map((item) => item.id)].join('、')}），需要重新研究`;
+      : '同股策略建议的动作、价格或仓位条件不一致，需要重新研究';
   const currentPct = currentPositionPct(stockId, accountFacts);
   const action = actionForAdvice(advice, holding);
   // 观察计划（候选机会）未持仓时带 AI 给出的目标仓位，表示「条件满足后建仓多少」；
@@ -255,7 +268,11 @@ export const buildTradingPlanFromAdvice = (input: {
   const version = (previousVersion?.version ?? 0) + 1;
   // 规则兜底建议（AI 不可用）没有研究结论，不能变成生效计划，只能留作草案并说明原因。
   const ruleFallback = isRuleFallbackAdvice(advice);
+  const sourcesCurrent = sourceAdvices.every(
+    (item) => item.validFrom <= now && item.validUntil > now,
+  );
   const canActivate =
+    sourcesCurrent &&
     accountFacts.status === 'complete' &&
     accountFacts.totalAssets !== null &&
     targetPct !== null &&
@@ -267,6 +284,7 @@ export const buildTradingPlanFromAdvice = (input: {
     !ruleFallback &&
     conflictReason === undefined;
   const unknowns = [
+    ...(!sourcesCurrent ? ['来源建议不在有效期内，需要新证据'] : []),
     ...(conflictReason === undefined ? [] : [conflictReason]),
     ...(ruleFallback ? ['AI 推理不可用（规则兜底建议），未给出可核验的价格计划'] : []),
     ...(targetPct === null ? ['AI Advice 未提供可核验的目标仓位百分比'] : []),
@@ -352,6 +370,12 @@ export const buildTradingPlanFromAdvice = (input: {
     ],
     adviceIds: sourceAdvices.map((item) => item.id),
   };
+  const draftDeadline = addTradingDays(now, TRADING_PLAN_DRAFT_TRADING_DAYS);
+  const previousDraftDeadline =
+    previousVersion?.status === 'draft' &&
+    previousVersion.accountFactsDigest === accountFacts.digest
+      ? tradingPlanExpiresAt(previousVersion)
+      : undefined;
   return TradingPlanSchema.parse({
     id: `account:${input.accountId}:stock:${stockId}`,
     version,
@@ -381,9 +405,12 @@ export const buildTradingPlanFromAdvice = (input: {
       extensionBasis: ['新证据仍支持原市场前提并通过发布前校验'],
     },
     exit,
-    validFrom: advice.validFrom,
-    validUntil:
-      advice.validUntil.getTime() > now.getTime() ? advice.validUntil : addTradingDays(now, 1),
+    validFrom: now,
+    validUntil: canActivate
+      ? addTradingDays(now, Math.max(1, window.max))
+      : previousDraftDeadline !== undefined && previousDraftDeadline > now
+        ? new Date(Math.min(draftDeadline.getTime(), previousDraftDeadline.getTime()))
+        : draftDeadline,
     invalidationConditions: [
       '关键行情事实过期',
       '账户事实变化（持仓或现金变动）',
@@ -423,7 +450,7 @@ const run = async (
   const date = input.date ?? dateInShanghai(now);
   const accountResult = await ctx.tools.get_account.execute({ accountId });
   if (!accountResult.ok) {
-    return {
+    return TradingPlanDailyCycleOutput.parse({
       accountId,
       date,
       status: 'blocked',
@@ -431,7 +458,7 @@ const run = async (
       holdingReviews: 0,
       candidateReviews: 0,
       errors: [{ stockId: accountId, stage: 'save', reason: `account not found: ${accountId}` }],
-    };
+    });
   }
   const errors: Array<z.infer<typeof PlanErrorSchema>> = [];
   // 当前持仓就是权威仓位来源（账本持仓），不再经由账户快照。
@@ -444,8 +471,23 @@ const run = async (
   )
     .filter((item) => item.holding.quantity > 0)
     .map((item) => ({ holding: item.holding, stockName: item.stockName }));
-  const existingResult = await ctx.tools.list_trading_plans.execute({ accountId, limit: 500 });
-  const existing = existingResult.ok ? existingResult.data.plans : [];
+  const existingResult = await ctx.tools.list_trading_plans.execute({
+    accountId,
+    currentOnly: true,
+    limit: 500,
+  });
+  if (!existingResult.ok) {
+    return TradingPlanDailyCycleOutput.parse({
+      accountId,
+      date,
+      status: 'blocked',
+      plans: [],
+      holdingReviews: 0,
+      candidateReviews: 0,
+      errors: [{ stockId: accountId, stage: 'save', reason: errorText(existingResult.error) }],
+    });
+  }
+  const existing = existingResult.data.plans;
   const advices: Array<{ advice: Advice; holding?: TradingPlanHoldingContext }> = [];
   const positionResults = await Promise.all(
     holdings.map(async (holding) => ({
@@ -466,7 +508,7 @@ const run = async (
   // 每个持仓的 analyze_position 已把当日行情落库；现在派生账户事实（现金字段 + 持仓 × 行情）。
   const accountFactsResult = await ctx.tools.get_account_facts.execute({ accountId });
   if (!accountFactsResult.ok) {
-    return {
+    return TradingPlanDailyCycleOutput.parse({
       accountId,
       date,
       status: 'blocked',
@@ -476,7 +518,7 @@ const run = async (
       errors: [
         { stockId: accountId, stage: 'holding', reason: errorText(accountFactsResult.error) },
       ],
-    };
+    });
   }
   const accountFacts = accountFactsResult.data.facts;
 
@@ -540,11 +582,13 @@ const run = async (
     });
   }
   const plans: TradingPlan[] = [];
+  const reviews: Array<z.infer<typeof TradingPlanReviewSchema>> = [];
   for (const item of advices) {
     const stockId = adviceStockId(item.advice, item.holding === undefined ? [] : [item.holding]);
     if (stockId === null) continue;
     try {
       const previousPlans = existing.filter((plan) => plan.stockId === stockId);
+      const prior = resolveTradingPlanVersions(previousPlans);
       const draft = buildTradingPlanFromAdvice({
         accountId,
         accountFacts,
@@ -558,11 +602,58 @@ const run = async (
         // retrieval 口径的抓取时间（必然晚于启动时钟）误判为未来时间，计划被压成草案。
         now: ctx.clock(),
       });
+      const reuse = (candidate: TradingPlan): TradingPlan | undefined => {
+        const latest = prior.latest;
+        if (latest === undefined || latest.accountFactsDigest !== candidate.accountFactsDigest)
+          return undefined;
+        if (candidate.status === 'draft' && latest.status === 'draft') {
+          if (
+            tradingPlanExpiresAt(latest) <= ctx.clock() ||
+            !isMaterialTradingPlanChange(latest, candidate)
+          )
+            return latest;
+        }
+        if (
+          candidate.status === 'active' &&
+          latest.status === 'active' &&
+          latest.validFrom <= ctx.clock() &&
+          latest.validUntil > ctx.clock() &&
+          !isMaterialTradingPlanChange(latest, candidate)
+        )
+          return latest;
+        return undefined;
+      };
+      const remember = (
+        plan: TradingPlan,
+        outcome: z.infer<typeof TradingPlanReviewSchema>['outcome'],
+        reviewed = draft,
+      ) => {
+        plans.push(plan);
+        reviews.push({
+          stockId,
+          versionId: tradingPlanVersionId(plan),
+          outcome,
+          reviewedAt: ctx.clock(),
+          adviceIds: draft.source.adviceIds,
+          reasons: plan.status === 'draft' ? reviewed.position.constraintReasons : [],
+        });
+      };
+      const maintained = reuse(draft);
+      if (maintained !== undefined) {
+        remember(maintained, maintained.status === 'active' ? 'maintained' : 'unchanged-draft');
+        continue;
+      }
       let saved = await ctx.tools.save_trading_plan.execute({ plan: draft });
       if (!saved.ok && draft.status === 'active') {
         const blocked = TradingPlanSchema.parse({
           ...draft,
           status: 'draft',
+          validUntil:
+            prior.latest?.status === 'draft' &&
+            prior.latest.accountFactsDigest === draft.accountFactsDigest &&
+            tradingPlanExpiresAt(prior.latest) > ctx.clock()
+              ? tradingPlanExpiresAt(prior.latest)
+              : addTradingDays(draft.createdAt, TRADING_PLAN_DRAFT_TRADING_DAYS),
           position: {
             ...draft.position,
             constraintStatus: 'blocked',
@@ -573,9 +664,14 @@ const run = async (
             unknowns: [...draft.explanation.unknowns, errorText(saved.error)],
           },
         });
+        const unchanged = reuse(blocked);
+        if (unchanged !== undefined) {
+          remember(unchanged, 'unchanged-draft', blocked);
+          continue;
+        }
         saved = await ctx.tools.save_trading_plan.execute({ plan: blocked });
       }
-      if (saved.ok) plans.push(saved.data.plan);
+      if (saved.ok) remember(saved.data.plan, 'created', saved.data.plan);
       else errors.push({ stockId, stage: 'save', reason: errorText(saved.error) });
     } catch (error) {
       errors.push({
@@ -586,10 +682,16 @@ const run = async (
     }
   }
   const budgetResult = await ctx.tools.evaluate_trading_plan_budget.execute({ accountId });
-  return TradingPlanDailyCycleOutput.parse({
+  const draftPlans = plans.filter((plan) => plan.status === 'draft').length;
+  const output = TradingPlanDailyCycleOutput.parse({
     accountId,
     date,
-    status: errors.length === 0 ? 'complete' : plans.length > 0 ? 'partial' : 'blocked',
+    status:
+      errors.length === 0 && draftPlans === 0
+        ? 'complete'
+        : plans.length > 0
+          ? 'partial'
+          : 'blocked',
     ...(accountFacts === undefined
       ? {}
       : { accountFactsAsOf: accountFacts.asOf, accountFactsDigest: accountFacts.digest }),
@@ -597,8 +699,42 @@ const run = async (
     holdingReviews: positionResults.length,
     candidateReviews,
     errors,
+    reviews,
+    createdPlans: reviews.filter((review) => review.outcome === 'created').length,
+    maintainedPlans: reviews.filter((review) => review.outcome === 'maintained').length,
+    draftPlans,
     ...(budgetResult.ok ? { budget: budgetResult.data } : {}),
   });
+  const audited = await ctx.tools.record_workflow_run.execute({
+    run: {
+      id: randomUUID(),
+      workflowName: 'trading-plan-daily-cycle',
+      mode: input.mode,
+      status:
+        output.status === 'complete'
+          ? 'succeeded'
+          : output.status === 'partial'
+            ? 'partial'
+            : 'failed',
+      startedAt: now,
+      finishedAt: ctx.clock(),
+      inputSummary: { accountId, date },
+      outputSummary: {
+        createdPlans: output.createdPlans,
+        maintainedPlans: output.maintainedPlans,
+        draftPlans,
+        reviews,
+        errors,
+      },
+      providerStatuses: [],
+      ...(output.status === 'blocked' ? { error: '交易计划复核未完成' } : {}),
+    },
+  });
+  if (!audited.ok) {
+    output.errors.push({ stockId: accountId, stage: 'save', reason: errorText(audited.error) });
+    if (output.status === 'complete') output.status = 'partial';
+  }
+  return output;
 };
 
 export const tradingPlanDailyCycleWorkflow = defineWorkflow<

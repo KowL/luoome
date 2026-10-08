@@ -52,6 +52,7 @@ describe('record_workflow_run', () => {
     expect(listed.data.runs[0]).toMatchObject({
       name: 'opening-report',
       status: 'partial',
+      inputSummary: { periodEnd: '2026-07-27', template: 'opening-v1' },
       summary: { reportId: 'report-opening-1' },
     });
   });

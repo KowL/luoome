@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
+import { addTradingDays } from '../trading-calendar.js';
 import { MoneySchema } from '../types/branded.js';
 import type { AccountFacts } from './account-facts.js';
 
@@ -241,6 +242,8 @@ export const TradingPlanQuerySchema = z.object({
   stockId: z.string().min(1).optional(),
   status: TradingPlanStatusSchema.optional(),
   activeOnly: z.boolean().optional(),
+  /** 当前列表按计划聚合后应用 limit，同时保留最新修订草案。 */
+  currentOnly: z.boolean().optional(),
   /** activeOnly 时可指定评估时点；缺省表示不做有效期过滤。 */
   asOf: z.coerce.date().optional(),
   /** 按版本创建时间过滤（闭区间）；先过滤再应用 limit。 */
@@ -307,40 +310,198 @@ export const assertTradingPlanInvariants = (plan: TradingPlan): void => {
 export const tradingPlanVersionId = (plan: Pick<TradingPlan, 'id' | 'version'>): string =>
   `${plan.id}:v${plan.version}`;
 
+export const TRADING_PLAN_DRAFT_TRADING_DAYS = 2;
+
+export const tradingPlanExpiresAt = (plan: TradingPlan): Date =>
+  plan.status === 'draft'
+    ? new Date(
+        Math.min(
+          plan.validUntil.getTime(),
+          addTradingDays(plan.createdAt, TRADING_PLAN_DRAFT_TRADING_DAYS).getTime(),
+        ),
+      )
+    : plan.validUntil;
+
+export const resolveTradingPlanVersions = (versions: readonly TradingPlan[]) => {
+  const sorted = [...versions].sort(
+    (a, b) => b.version - a.version || b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+  let active: TradingPlan | undefined;
+  let draft: TradingPlan | undefined;
+  for (const plan of sorted) {
+    if (plan.status === 'active') {
+      active = plan;
+      break;
+    }
+    if (plan.status !== 'draft') break;
+    draft ??= plan;
+  }
+  return { latest: sorted[0], active, draft };
+};
+
+export const TradingPlanViewSchema = z.object({
+  planId: z.string(),
+  versionId: z.string(),
+  kind: z.enum(['current', 'draft', 'history']),
+  draftVersionId: z.string().optional(),
+});
+export type TradingPlanView = z.infer<typeof TradingPlanViewSchema>;
+
+export const TradingPlanReviewSchema = z.object({
+  stockId: z.string(),
+  versionId: z.string(),
+  outcome: z.enum(['created', 'maintained', 'unchanged-draft']),
+  reviewedAt: z.coerce.date(),
+  adviceIds: z.array(z.string()),
+  reasons: z.array(z.string()),
+});
+export type TradingPlanReview = z.infer<typeof TradingPlanReviewSchema>;
+
+export const tradingPlanView = (
+  versions: readonly TradingPlan[],
+  now: Date,
+  facts: Pick<AccountFacts, 'digest'> | null,
+): TradingPlanView | null => {
+  const { latest, active, draft } = resolveTradingPlanVersions(versions);
+  if (latest === undefined) return null;
+  const live = (plan: TradingPlan | undefined): plan is TradingPlan =>
+    plan !== undefined &&
+    tradingPlanExpiresAt(plan) > now &&
+    (facts === null || plan.accountFactsDigest === facts.digest);
+  const plan = live(active) ? active : live(draft) ? draft : latest;
+  return {
+    planId: plan.id,
+    versionId: tradingPlanVersionId(plan),
+    kind: plan.status === 'active' ? 'current' : plan.status === 'draft' ? 'draft' : 'history',
+    ...(plan === active && live(draft) ? { draftVersionId: tradingPlanVersionId(draft) } : {}),
+  };
+};
+
+export const selectTradingPlans = (
+  plans: readonly TradingPlan[],
+  query: TradingPlanQuery,
+): TradingPlan[] => {
+  const sorted = [...plans].sort(
+    (a, b) =>
+      b.createdAt.getTime() - a.createdAt.getTime() ||
+      b.version - a.version ||
+      tradingPlanVersionId(a).localeCompare(tradingPlanVersionId(b)),
+  );
+  const matches = (plan: TradingPlan): boolean =>
+    (query.status === undefined || plan.status === query.status) &&
+    (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
+    (query.createdUntil === undefined || plan.createdAt <= query.createdUntil);
+  if (query.activeOnly !== true && query.currentOnly !== true)
+    return sorted.filter(matches).slice(0, query.limit ?? 100);
+  const groups = new Map<string, TradingPlan[]>();
+  for (const plan of sorted) {
+    if (
+      query.currentOnly === true &&
+      query.createdUntil !== undefined &&
+      plan.createdAt > query.createdUntil
+    )
+      continue;
+    const group = groups.get(plan.id) ?? [];
+    group.push(plan);
+    groups.set(plan.id, group);
+  }
+  const selected: TradingPlan[] = [];
+  let count = 0;
+  const orderedGroups = [...groups.values()];
+  if (query.currentOnly === true && query.asOf !== undefined) {
+    const asOf = query.asOf;
+    const liveRank = (versions: readonly TradingPlan[]) => {
+      const { active, draft } = resolveTradingPlanVersions(versions);
+      return [active, draft].some((plan) => plan !== undefined && tradingPlanExpiresAt(plan) > asOf)
+        ? 0
+        : 1;
+    };
+    orderedGroups.sort((a, b) => liveRank(a) - liveRank(b));
+  }
+  for (const versions of orderedGroups) {
+    const { latest, active } = resolveTradingPlanVersions(versions);
+    if (query.activeOnly === true) {
+      if (
+        active === undefined ||
+        !matches(active) ||
+        (query.asOf !== undefined &&
+          (active.validFrom > query.asOf || active.validUntil <= query.asOf))
+      )
+        continue;
+      selected.push(active);
+    } else {
+      const current = [latest, ...(active === latest ? [] : [active])].filter(
+        (plan): plan is TradingPlan => plan !== undefined && matches(plan),
+      );
+      if (current.length === 0) continue;
+      selected.push(...current);
+    }
+    if (++count >= (query.limit ?? 100)) break;
+  }
+  return selected;
+};
+
 export const isRiskAction = (action: TradingPlanAction): boolean =>
   action === 'reduce' || action === 'exit' || action === 'avoid';
 
-export const isMaterialTradingPlanChange = (
-  previous: TradingPlan,
-  next: TradingPlan,
-  baselineTargetPct: number | null,
-): boolean => {
-  if (previous.action !== next.action) return true;
-  if (
-    previous.entryPriceLow !== next.entryPriceLow ||
-    previous.entryPriceHigh !== next.entryPriceHigh
-  )
-    return true;
-  if (
-    previous.exit.stopLoss !== next.exit.stopLoss ||
-    previous.exit.takeProfit !== next.exit.takeProfit
-  )
-    return true;
-  if (previous.entryConditions.length !== next.entryConditions.length) return true;
-  if (JSON.stringify(previous.entryConditions) !== JSON.stringify(next.entryConditions))
-    return true;
-  if (
-    JSON.stringify(previous.exit.triggerConditions) !== JSON.stringify(next.exit.triggerConditions)
-  )
-    return true;
-  if (previous.invalidationConditions.join('|') !== next.invalidationConditions.join('|'))
-    return true;
-  if (previous.position.constraintStatus !== next.position.constraintStatus) return true;
-  if (isRiskAction(next.action)) return true;
-  const target = next.position.targetPct;
-  if (target !== null && baselineTargetPct !== null && Math.abs(target - baselineTargetPct) >= 2)
-    return true;
-  return false;
+export const isMaterialTradingPlanChange = (previous: TradingPlan, next: TradingPlan): boolean => {
+  const strings = (items: readonly string[]) => [...new Set(items)].sort();
+  const conditions = (plan: TradingPlan, items: readonly TradingPlanCondition[]) =>
+    items
+      .map(({ id: _id, description, factId, ...condition }) => {
+        const fact = plan.marketFacts.find((item) => item.id === factId);
+        return {
+          ...condition,
+          ...(condition.kind === 'manual-confirmation' ? { description } : {}),
+          ...(fact === undefined
+            ? {}
+            : {
+                fact: {
+                  stockId: fact.stockId,
+                  metric: fact.metric,
+                  value: fact.value,
+                  unit: fact.unit,
+                  status: fact.status,
+                },
+              }),
+        };
+      })
+      .map((condition) => JSON.stringify(condition))
+      .sort();
+  const terms = (plan: TradingPlan) => ({
+    status: plan.status,
+    action: plan.action,
+    accountFactsDigest: plan.accountFactsDigest,
+    entryPriceLow: plan.entryPriceLow,
+    entryPriceHigh: plan.entryPriceHigh,
+    entryConditions: conditions(plan, plan.entryConditions),
+    invalidEntryConditions: strings(plan.invalidEntryConditions),
+    targetPct:
+      (plan.action === 'hold' ||
+        (plan.action === 'observe' && (plan.position.currentPct ?? 0) > 0)) &&
+      plan.position.targetPct === plan.position.currentPct
+        ? 'maintain'
+        : plan.position.targetPct,
+    constraintStatus: plan.position.constraintStatus,
+    constraintReasons: strings(plan.position.constraintReasons),
+    prerequisiteActions: strings(plan.position.prerequisiteActions),
+    minTradingDays: plan.holding.minTradingDays,
+    maxTradingDays: plan.holding.maxTradingDays,
+    earlyExitConditions: strings(plan.holding.earlyExitConditions),
+    extensionBasis: strings(plan.holding.extensionBasis),
+    stopLoss: plan.exit.stopLoss,
+    takeProfit: plan.exit.takeProfit,
+    exitConditions: conditions(plan, plan.exit.triggerConditions),
+    exitReasons: strings(plan.exit.conditions),
+    canSellNow: plan.exit.canSellNow,
+    invalidationConditions: strings(plan.invalidationConditions),
+    strategyIds: strings(plan.source.strategyIds),
+    strategyVersionIds: strings(plan.source.strategyVersionIds),
+    counterEvidence: strings(plan.explanation.counterEvidence),
+    risks: strings(plan.explanation.risks),
+    unknowns: strings(plan.explanation.unknowns),
+  });
+  return JSON.stringify(terms(previous)) !== JSON.stringify(terms(next));
 };
 
 export interface TradingPlanConditionFact {
@@ -385,6 +546,9 @@ export const evaluateTradingPlanCondition = (
 
 export const TradingPlanMonitoringSchema = z.object({
   versionId: z.string(),
+  expiresAt: z.coerce.date(),
+  nextReviewAt: z.coerce.date(),
+  lastReviewedAt: z.coerce.date().optional(),
   status: z.enum([
     'ready',
     'draft',
@@ -404,12 +568,50 @@ export const tradingPlanMonitoring = (
   plan: TradingPlan,
   facts: Pick<AccountFacts, 'digest' | 'status'> | null,
   now: Date,
+  review?: TradingPlanReview,
+  versions?: readonly TradingPlan[],
 ): TradingPlanMonitoring => {
+  const expiresAt = tradingPlanExpiresAt(plan);
+  const reviewedAt =
+    review !== undefined && review.reviewedAt <= now ? review.reviewedAt : undefined;
   const result = (
     status: TradingPlanMonitoring['status'],
     reason: string,
     nextStep: string,
-  ): TradingPlanMonitoring => ({ versionId: tradingPlanVersionId(plan), status, reason, nextStep });
+  ): TradingPlanMonitoring => ({
+    versionId: tradingPlanVersionId(plan),
+    expiresAt,
+    nextReviewAt: new Date(
+      Math.min(
+        (reviewedAt === undefined
+          ? plan.holding.nextReviewAt
+          : addTradingDays(reviewedAt, Math.max(1, plan.holding.minTradingDays))
+        ).getTime(),
+        expiresAt.getTime(),
+      ),
+    ),
+    ...(reviewedAt === undefined ? {} : { lastReviewedAt: reviewedAt }),
+    status,
+    reason,
+    nextStep,
+  });
+  if (plan.status === 'expired') return result('expired', '计划已过期', '基于新证据重新复核计划');
+  if (plan.status !== 'active' && plan.status !== 'draft')
+    return result('inactive', '历史版本不参与监控', '查看当前计划版本');
+  if (versions !== undefined) {
+    const { active, draft } = resolveTradingPlanVersions(
+      versions.filter((version) => version.id === plan.id),
+    );
+    const current = plan.status === 'active' ? active : draft;
+    if (current === undefined || tradingPlanVersionId(current) !== tradingPlanVersionId(plan))
+      return result('inactive', '计划已被后续版本替代', '查看当前计划版本');
+  }
+  if (tradingPlanExpiresAt(plan) <= now)
+    return result('expired', '计划已超过有效期', '基于新证据重新复核计划');
+  if (facts !== null && facts.digest !== plan.accountFactsDigest)
+    return result('account-changed', '持仓或现金变化，计划前提已失效', '基于当前账户重新生成计划');
+  if (facts !== null && facts.status !== 'complete')
+    return result('unavailable', '账户事实不可用', '刷新持仓行情并检查账户对账');
   if (plan.status === 'draft')
     return result(
       'draft',
@@ -418,11 +620,7 @@ export const tradingPlanMonitoring = (
         plan.explanation.unknowns.join('；') ||
         '补齐证据后重新生成计划',
     );
-  if (plan.status !== 'active') return result('inactive', '历史版本不参与监控', '查看当前计划版本');
-  if (plan.validUntil <= now) return result('expired', '计划已超过有效期', '重新运行盘后计划批次');
   if (plan.validFrom > now) return result('scheduled', '尚未到计划生效时间', '等待生效时间');
-  if (facts !== null && facts.digest !== plan.accountFactsDigest)
-    return result('account-changed', '持仓或现金变化，计划前提已失效', '基于当前账户重新生成计划');
   if (facts === null || facts.status !== 'complete')
     return result('unavailable', '账户事实不可用', '刷新持仓行情并检查账户对账');
   if (plan.position.constraintStatus !== 'passed')

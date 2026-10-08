@@ -883,6 +883,71 @@ export const registerRepositoryContractTests = (
     });
 
     describe('TradingPlanRepository', () => {
+      it('最新修订为草案时，原生效计划仍占用预算', async () => {
+        const account = makeAccount('budget-draft-account');
+        await repos.account.save(account);
+        const facts = buildAccountFacts({ account, holdings: [], asOf: T2 });
+        const position = {
+          currentPct: 0,
+          targetPct: 15,
+          deltaPct: 15,
+          constraintStatus: 'passed' as const,
+          constraintReasons: [],
+          prerequisiteActions: [],
+        };
+        const active = makeTradingPlan('budget-draft-1', 1, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+          position,
+        });
+        await repos.tradingPlan.save(active);
+        await repos.tradingPlan.save({ ...active, version: 2, status: 'draft', createdAt: T2 });
+        const next = makeTradingPlan('budget-draft-2', 1, {
+          accountId: account.id,
+          accountFactsDigest: facts.digest,
+          stockId: 'stk-2',
+          position: { ...position, targetPct: 10, deltaPct: 10 },
+        });
+        const saved = await repos.tradingPlan.saveIfBudgetAvailable({
+          plan: next,
+          facts,
+          stocks: new Map(),
+          limits: { totalStockPct: 20, singleStockPct: 30 },
+          asOf: T2,
+        });
+        expect(saved).toMatchObject({ saved: false, reason: 'budget-exceeded' });
+        expect(await repos.tradingPlan.findByVersionId('budget-draft-2:v1')).toBeNull();
+      });
+
+      it('当前列表先按计划聚合再应用 limit，保留旧生效版和最新修订', async () => {
+        await repos.tradingPlan.save(makeTradingPlan('many-versions', 1));
+        for (let version = 2; version <= 12; version++) {
+          await repos.tradingPlan.save(
+            makeTradingPlan('many-versions', version, { status: 'draft', createdAt: T2 }),
+          );
+        }
+        await repos.tradingPlan.save(makeTradingPlan('another-stock', 1, { stockId: 'stk-2' }));
+        const plans = await repos.tradingPlan.list({ currentOnly: true, limit: 2 });
+        expect(plans.map((plan) => `${plan.id}:v${plan.version}`)).toEqual([
+          'many-versions:v12',
+          'many-versions:v1',
+          'another-stock:v1',
+        ]);
+        expect(await repos.tradingPlan.list({ currentOnly: true, limit: 1 })).toHaveLength(2);
+      });
+
+      it('按报告截止时间聚合当前版本，之后的撤销不能遮住当时版本', async () => {
+        const active = makeTradingPlan('report-cutoff', 1, { createdAt: T1 });
+        await repos.tradingPlan.save(active);
+        await repos.tradingPlan.save({ ...active, version: 2, status: 'revoked', createdAt: T3 });
+        expect(await repos.tradingPlan.list({ currentOnly: true, createdUntil: T2 })).toEqual([
+          active,
+        ]);
+        expect(await repos.tradingPlan.list({ currentOnly: true })).toMatchObject([
+          { version: 2, status: 'revoked' },
+        ]);
+      });
+
       it('预算提交时复核账户事实，拒绝生成后发生的现金或持仓变化', async () => {
         const account = makeAccount('budget-account');
         const stock = makeStock('stk-1', '002594');
@@ -5413,9 +5478,19 @@ export const registerRepositoryContractTests = (
       });
 
       it('upsertForPeriod 后可按 id 和逻辑周期读取', async () => {
-        const saved = await repos.report.upsertForPeriod(makeReport('report-1'));
+        const fixture = makeReport('report-1');
+        const saved = await repos.report.upsertForPeriod({
+          ...fixture,
+          sections: fixture.sections.map((section) => ({
+            ...section,
+            inputFingerprint: 'a'.repeat(64),
+          })),
+        });
 
         expect((await repos.report.findById(saved.id))?.title).toBe('收盘复盘-report-1');
+        expect((await repos.report.findById(saved.id))?.sections[0]?.inputFingerprint).toBe(
+          'a'.repeat(64),
+        );
         expect(
           await repos.report.findByPeriod({
             kind: 'closing',

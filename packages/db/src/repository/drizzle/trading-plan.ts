@@ -5,6 +5,7 @@ import {
   assertTradingPlanInvariants,
   evaluateTradingPlanBudget,
   type Stock,
+  selectTradingPlans,
   type TradingPlan,
   type TradingPlanBudgetLimits,
   type TradingPlanQuery,
@@ -38,21 +39,6 @@ const toRow = (plan: TradingPlan) => ({
   createdAt: plan.createdAt,
   plan,
 });
-
-const latestByPlan = (plans: readonly TradingPlan[]): TradingPlan[] => {
-  const latest = new Map<string, TradingPlan>();
-  for (const plan of plans) {
-    const current = latest.get(plan.id);
-    if (
-      current === undefined ||
-      plan.version > current.version ||
-      (plan.version === current.version && plan.createdAt > current.createdAt)
-    ) {
-      latest.set(plan.id, plan);
-    }
-  }
-  return [...latest.values()];
-};
 
 export class DrizzleTradingPlanRepository implements TradingPlanRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
@@ -108,7 +94,11 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
           .from(tradingPlans)
           .where(eq(tradingPlans.accountId, plan.accountId))
           .all();
-        const currentPlans = latestByPlan(rows.map(toPlan)).filter(
+        const currentPlans = selectTradingPlans(rows.map(toPlan), {
+          activeOnly: true,
+          asOf: input.asOf,
+          limit: rows.length || 1,
+        }).filter(
           (item) =>
             item.status === 'active' &&
             item.validFrom.getTime() <= input.asOf.getTime() &&
@@ -155,7 +145,7 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
     const conditions: SQL[] = [];
     if (query.accountId !== undefined) conditions.push(eq(tradingPlans.accountId, query.accountId));
     if (query.stockId !== undefined) conditions.push(eq(tradingPlans.stockId, query.stockId));
-    if (query.status !== undefined && query.activeOnly !== true) {
+    if (query.status !== undefined && query.activeOnly !== true && query.currentOnly !== true) {
       conditions.push(eq(tradingPlans.status, query.status));
     }
     const where = conditions.length === 0 ? undefined : and(...conditions);
@@ -170,43 +160,7 @@ export class DrizzleTradingPlanRepository implements TradingPlanRepository {
       )
       .all()
       .map(toPlan);
-    if (query.activeOnly === true) {
-      // 解析「当前生效版本」：从新到旧找每个计划第一个 active 版本。
-      // - 更新的 superseded / revoked / expired 表示该计划已被明确退役 → 不再监控；
-      // - 更新的 draft 只是「这次没能发布」（例如非交易日跑到、行情不合格），
-      //   不能顶掉仍然有效、正在监控的生效版本，否则该标的会静默失去止损/目标价监控。
-      const chosen = new Map<string, TradingPlan>();
-      const retired = new Set<string>();
-      for (const plan of plans) {
-        if (chosen.has(plan.id) || retired.has(plan.id)) continue;
-        if (plan.status === 'active') {
-          chosen.set(plan.id, plan);
-          continue;
-        }
-        if (plan.status !== 'draft') retired.add(plan.id);
-      }
-      return [...chosen.values()]
-        .filter((plan) => query.status === undefined || plan.status === query.status)
-        .filter(
-          (plan) =>
-            (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
-            (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
-        )
-        .filter(
-          (plan) =>
-            query.asOf === undefined ||
-            (plan.validFrom.getTime() <= query.asOf.getTime() &&
-              plan.validUntil.getTime() > query.asOf.getTime()),
-        )
-        .slice(0, query.limit ?? 100);
-    }
-    return plans
-      .filter(
-        (plan) =>
-          (query.createdSince === undefined || plan.createdAt >= query.createdSince) &&
-          (query.createdUntil === undefined || plan.createdAt <= query.createdUntil),
-      )
-      .slice(0, query.limit ?? 100);
+    return selectTradingPlans(plans, query);
   }
 
   async latestByPlanId(planId: string): Promise<TradingPlan | null> {

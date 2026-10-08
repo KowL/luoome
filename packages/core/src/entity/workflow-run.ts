@@ -77,6 +77,7 @@ export interface UnifiedRun {
   status: 'running' | 'succeeded' | 'partial' | 'failed';
   startedAt: Date;
   finishedAt?: Date;
+  inputSummary?: Record<string, unknown>;
   summary?: Record<string, unknown>;
   error?: string;
 }
@@ -89,6 +90,7 @@ export const workflowRunToUnified = (run: WorkflowRun): UnifiedRun => ({
   status: run.status,
   startedAt: run.startedAt,
   ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
+  ...(run.inputSummary !== undefined ? { inputSummary: run.inputSummary } : {}),
   ...(run.outputSummary !== undefined ? { summary: run.outputSummary } : {}),
   ...(run.error !== undefined ? { error: run.error } : {}),
 });

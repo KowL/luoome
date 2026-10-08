@@ -930,16 +930,30 @@ describe('交易计划监控资格 API', () => {
     }
     const local = createWebApp({ ...ctx, user: { ...ctx.user, defaultAccountId: first.id } });
     for (const account of [first, second]) {
+      const plan = await ctx.repos.tradingPlan.findByVersionId(
+        `account:${account.id}:stock:600519.SH:v1`,
+      );
+      if (plan === null) throw new Error('fixture plan missing');
+      await ctx.repos.tradingPlan.save({ ...plan, version: 2 });
       const response = await local.fetch(
-        new Request('http://test/api/trading-plans?activeOnly=false&includeMonitoring=true', {
-          headers: account === first ? {} : { 'x-luoome-account-id': account.id },
-        }),
+        new Request(
+          'http://test/api/trading-plans?currentOnly=true&includeMonitoring=true&limit=1',
+          {
+            headers: account === first ? {} : { 'x-luoome-account-id': account.id },
+          },
+        ),
       );
       const body = (await response.json()) as {
-        data: { plans: { accountId: string }[]; monitoring: unknown[] };
+        data: {
+          plans: { accountId: string; version: number }[];
+          monitoring: unknown[];
+          views: { versionId: string }[];
+        };
       };
       expect(body.data.plans.map((plan) => plan.accountId)).toEqual([account.id]);
       expect(body.data.monitoring).toHaveLength(1);
+      expect(body.data.plans[0]?.version).toBe(2);
+      expect(body.data.views[0]?.versionId).toBe(`account:${account.id}:stock:600519.SH:v2`);
     }
   });
 
