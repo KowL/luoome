@@ -43,6 +43,16 @@ current session when a configured provider has `minute-bars` capability. It repo
 stale local fallback, or unavailable explicitly; historical dates are limited to retained local
 data and are never synthesized from `PriceSnapshot` or cumulative `IntradayMinute` rows.
 
+Market View chart contract: `get_stock_market_view` returns quote, candles, indicators and
+`markers` — chart facts pinned to trading days (trade / advice / watch-trigger / strategy-signal /
+report / research / limit-up). Marker field rules:
+`date` is always the day-level fact date; under weekly/monthly `granularity` the server adds
+`barDate` pointing at the last bar of the aggregation bucket, so chart annotations must anchor on
+`barDate ?? date` (a marker whose whole bucket is suspended gets no `barDate`).
+`direction` (`bullish` / `bearish` / `neutral`) and `ruleId` are present only on strategy-signal
+markers — direction drives annotation coloring/grouping, ruleId identifies the triggering rule
+(for example to collapse consecutive same-rule signals). Treat both as absent for other fact kinds.
+
 Prefer one filtered list or batch tool over repeated per-item calls. `batch_quote` is classified as external because it contacts a market source.
 Use `add_watchlist_members` for one or more manual Watchlist additions so the whole request is validated and confirmed once.
 
