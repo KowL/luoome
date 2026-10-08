@@ -574,6 +574,14 @@ routeParams = hash 中 ? 之后的 URLSearchParams
 - 无 bars 时不创建空 chart，显示明确错误/空态；
 - 不展示“实时”字样，只写“行情获取于 HH:mm:ss”。
 
+关联事实标注（K 线 marker 与图表事实 chip）：
+
+- marker 契约含可选 `direction`（策略信号方向）、`barDate`（周/月 K 对齐所属桶末根 bar）、`ruleId`（连续触发合并）；`date` 恒为日级事实日期；
+- K 线标注按 bar 落点 + tone + 方向聚合，组内多条降为「类型×N」；标注超过 12 个时省略文字只留图形；策略信号按方向红多绿空；
+- 图表事实 chip 按日期+类型+方向分组，超过 10 组折叠为「展开其余 N 组」；同一规则同一方向相邻交易日（间隔 ≤4 自然日）的信号合并为「连续 N 日」run chip；
+- chip 单击在 K 线定位并短暂高亮对应 bar，跳转留给新标签打开；
+- 副图指标 MACD / RSI / KDJ 可切换，与「策略信号」开关一样持久化到 localStorage。
+
 ### 11.4 页面状态
 
 `market.js` 维护单页状态：

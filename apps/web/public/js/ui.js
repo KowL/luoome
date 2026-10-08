@@ -40,7 +40,9 @@ const el = (tag, className, children) => {
 const mount = (container, content) => {
   container.replaceChildren();
   if (content === null || content === undefined) return;
-  if (Array.isArray(content)) container.append(...content);
+  // 与 el 的数组分支同口径：跳过 null / undefined / false，不把空槽位渲染成文本
+  if (Array.isArray(content))
+    container.append(...content.filter((c) => c !== null && c !== undefined && c !== false));
   else container.append(content);
 };
 

@@ -121,7 +121,12 @@ export const MarketFactMarkerSchema = z.object({
   /** 策略信号方向；前端据此给标注上色与分组，非信号类事实缺省。 */
   direction: z.enum(['bullish', 'bearish', 'neutral']).optional(),
   /** 周 / 月 K 下对齐到所属桶末根 bar 的日期；日 K 缺省（与 date 相同）。 */
-  barDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  barDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  /** 策略信号的规则标识；前端据此做连续触发合并，非信号类事实缺省。 */
+  ruleId: z.string().min(1).optional(),
 });
 
 export const GetStockMarketViewOutput = z.object({
@@ -395,6 +400,7 @@ export const getStockMarketViewTool = defineTool({
           href: `#strategies?stockId=${encodeURIComponent(stock.id)}`,
           tone: 'fact' as const,
           direction: signal.direction,
+          ruleId: signal.ruleId,
           at: signal.ts,
         })),
       ...reports

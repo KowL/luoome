@@ -251,8 +251,8 @@ export const alignMarkersToBars = <T extends { readonly date: string }>(
   markers: readonly T[],
   candles: readonly MarketCandle[],
   granularity: MarketViewGranularity,
-): readonly (T & { readonly barDate?: string })[] => {
-  if (granularity === 'day') return markers;
+): (T & { readonly barDate?: string })[] => {
+  if (granularity === 'day') return [...markers];
   const barDateByBucket = new Map<string, string>();
   for (const candle of candles) {
     const key = granularity === 'week' ? weekBucketKey(candle.date) : candle.date.slice(0, 7);

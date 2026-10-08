@@ -7,8 +7,10 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   clusterMarkers,
+  computeKdjSeries,
   computeMacdSeries,
   computeMaSeries,
+  computeRsiSeries,
   DOWN_COLOR,
   symmetricRangeAroundBase,
   toCandleData,
@@ -108,10 +110,51 @@ describe('MACD(12,26,9) 计算', () => {
     expect(last.dea).toBeGreaterThan(0);
     expect(last.macd).toBeCloseTo(2 * (last.dif - last.dea));
   });
-
   it('序列不足 slow 根时返回空', () => {
     expect(computeMacdSeries(trending(20))).toEqual([]);
     expect(computeMacdSeries([])).toEqual([]);
+  });
+});
+
+describe('RSI(14) 计算', () => {
+  const trending = (n, start = 10, step = 0.1) =>
+    Array.from({ length: n }, (_, i) =>
+      candle(`2026-07-${String(i + 1).padStart(2, '0')}`, 0, start + i * step),
+    );
+
+  it('前 period-1 根不输出，之后每根输出', () => {
+    const data = computeRsiSeries(trending(20));
+    expect(data).toHaveLength(20 - 14);
+    expect(data[0].time).toBe('2026-07-15');
+  });
+
+  it('只涨不跌 RSI=100；只跌不涨 RSI=0；序列不足返回空', () => {
+    expect(computeRsiSeries(trending(20)).at(-1).value).toBe(100);
+    expect(computeRsiSeries(trending(20, 20, -0.1)).at(-1).value).toBe(0);
+    expect(computeRsiSeries(trending(10))).toEqual([]);
+  });
+});
+
+describe('KDJ(9,3,3) 计算', () => {
+  it('窗口不足 9 根不输出；价格不变时 RSV=50，K=D=J=50', () => {
+    const flat = Array.from({ length: 12 }, (_, i) =>
+      candle(`2026-07-${String(i + 1).padStart(2, '0')}`, 10, 10),
+    );
+    const data = computeKdjSeries(flat);
+    expect(data).toHaveLength(12 - 8);
+    const last = data.at(-1);
+    expect(last.k).toBe(50);
+    expect(last.d).toBe(50);
+    expect(last.j).toBe(50);
+  });
+
+  it('持续收在窗口最高价：K/D 趋近 100 且 K > D', () => {
+    const up = Array.from({ length: 20 }, (_, i) =>
+      candle(`2026-07-${String(i + 1).padStart(2, '0')}`, 10 + i, 10 + i + 1),
+    );
+    const last = computeKdjSeries(up).at(-1);
+    expect(last.k).toBeGreaterThan(last.d);
+    expect(last.d).toBeGreaterThan(50);
   });
 });
 
@@ -308,7 +351,12 @@ describe('关联事实 marker 转换', () => {
       tone: 'fact',
       direction: 'bullish',
     });
-    expect(toMarkerData([marker('s1', '2026-07-20', '2026-07-22'), marker('s2', '2026-07-21', '2026-07-22')])).toEqual([
+    expect(
+      toMarkerData([
+        marker('s1', '2026-07-20', '2026-07-22'),
+        marker('s2', '2026-07-21', '2026-07-22'),
+      ]),
+    ).toEqual([
       {
         time: '2026-07-22',
         position: 'aboveBar',

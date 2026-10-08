@@ -35,6 +35,8 @@ import { $, el, mount } from './ui.js';
 
 const RECENT_KEY = 'luoome.market.recent';
 const MARKER_TOGGLE_KEY = 'luoome.market.showMarkers';
+const SUBPANE_KEY = 'luoome.market.subPane';
+const SUBPANES = ['macd', 'rsi', 'kdj'];
 const REFRESH_ACTIVE_MS = 60_000;
 const REFRESH_IDLE_MS = 300_000;
 const EMPTY_TIP = '请从顶栏搜索并选择一只股票；支持深链接 #market?stockId=002594.SZ&range=3m。';
@@ -51,6 +53,24 @@ const loadMarkerToggle = () => {
 const saveMarkerToggle = (on) => {
   try {
     localStorage.setItem(MARKER_TOGGLE_KEY, on ? '1' : '0');
+  } catch {
+    /* 隐私模式 / quota：忽略 */
+  }
+};
+
+/** 副图指标偏好持久化；非法值回退 macd。 */
+const loadSubPane = () => {
+  try {
+    const raw = localStorage.getItem(SUBPANE_KEY);
+    return SUBPANES.includes(raw) ? raw : 'macd';
+  } catch {
+    return 'macd';
+  }
+};
+
+const saveSubPane = (name) => {
+  try {
+    localStorage.setItem(SUBPANE_KEY, name);
   } catch {
     /* 隐私模式 / quota：忽略 */
   }
@@ -74,6 +94,8 @@ const state = {
   bound: false,
   /** 「策略信号」开关：true 时 K 线图上叠加策略/Advice/交易标注（§11 关联事实）。 */
   showMarkers: loadMarkerToggle(),
+  /** 副图指标：macd / rsi / kdj，持久化偏好。 */
+  subPane: loadSubPane(),
 };
 
 const loadRecent = () => {
@@ -242,6 +264,33 @@ const bindMarkerToggle = () => {
   });
 };
 
+/* ============ 副图指标切换（MACD / RSI / KDJ，仅 K 线 tab 有意义） ============ */
+
+const paintSubpaneSwitch = () => {
+  const wrap = $('#market-subpane-switch');
+  if (wrap === null) return;
+  wrap.querySelectorAll('button[data-subpane]').forEach((node) => {
+    node.classList.toggle('active', node.getAttribute('data-subpane') === state.subPane);
+  });
+};
+
+const bindSubpaneSwitch = () => {
+  const wrap = $('#market-subpane-switch');
+  if (wrap === null || wrap.dataset.bound === '1') return;
+  wrap.dataset.bound = '1';
+  wrap.addEventListener('click', (event) => {
+    const target =
+      event.target instanceof Element ? event.target.closest('button[data-subpane]') : null;
+    if (target === null) return;
+    const next = target.getAttribute('data-subpane');
+    if (next === null || !SUBPANES.includes(next) || next === state.subPane) return;
+    state.subPane = next;
+    saveSubPane(next);
+    paintSubpaneSwitch();
+    state.chart?.setSubPane(next);
+  });
+};
+
 /* ============ 独立 MinuteBar：分时 / 分钟 K，共用真实 raw OHLCV 与状态账本 ============ */
 
 const MINUTE_WARNING_LABELS = {
@@ -294,6 +343,11 @@ const paintChartTabs = () => {
   // range 只对 K 线粒度有意义（分钟 tab 固定当日序列）
   const rangeSwitch = $('#market-range-switch');
   if (rangeSwitch !== null) rangeSwitch.hidden = !onKline;
+  // 副图指标与策略信号标注只对 K 线有意义（分时 / 分钟 K 有自己的布局）
+  const subpaneSwitch = $('#market-subpane-switch');
+  if (subpaneSwitch !== null) subpaneSwitch.hidden = !onKline;
+  const markerToggle = $('#market-marker-toggle');
+  if (markerToggle !== null) markerToggle.hidden = !onKline;
   const intradayWrap = $('#market-intraday-chart');
   const minuteHasBars = Array.isArray(state.minuteData?.bars) && state.minuteData.bars.length > 0;
   if (intradayWrap !== null) intradayWrap.hidden = onKline || !minuteHasBars;
@@ -400,7 +454,10 @@ const renderData = async (data, requestId) => {
   renderQuoteHeader(data);
   renderIndicators(data);
   renderLinks(data);
-  renderMarkers(data, state.stockId ?? undefined);
+  renderMarkers(data, state.stockId ?? undefined, (date) => {
+    state.chart?.focusDate(date);
+    $('#market-chart')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
   renderLimitUpFacts(data);
   paintRangeSwitch();
 
@@ -427,6 +484,8 @@ const renderData = async (data, requestId) => {
     candles: data.candles,
     markers: state.showMarkers ? (data.markers ?? []) : [],
   });
+  // 新图表实例默认 macd；持久化偏好是其它副图时回刷
+  state.chart.setSubPane(state.subPane);
   paintChartTabs();
 };
 
@@ -527,9 +586,11 @@ const renderMarket = async (setStatus) => {
   bindRangeSwitch();
   bindChartTabs();
   bindMarkerToggle();
+  bindSubpaneSwitch();
   bindVisibility();
   // 持久化的开关状态要在每次进页时回刷到按钮上（含刷新 / 换股回来）
   paintMarkerToggle();
+  paintSubpaneSwitch();
   renderRecent();
   const { params } = parseRouteHash(window.location.hash);
   const stockId = params.get('stockId');

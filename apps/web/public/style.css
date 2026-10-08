@@ -598,6 +598,7 @@ body {
 }
 
 .report-sheet {
+  min-width: 0;
   min-height: 560px;
   background:
     linear-gradient(180deg, rgba(13, 158, 136, 0.035), transparent 180px),
@@ -757,6 +758,14 @@ body {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--text-sm);
+}
+
+.report-section-trading-plans .report-table {
+  min-width: 40rem;
+}
+
+.report-section-trading-plans .report-table th {
+  white-space: nowrap;
 }
 
 .report-table th,
@@ -5246,6 +5255,12 @@ textarea::placeholder {
   color: var(--neg);
 }
 
+/* 连续触发合并 chip：双线框区分「区间事实」与单日事实 */
+.market-marker-run {
+  border-style: double;
+  border-width: 3px;
+}
+
 .market-marker-more {
   padding: 0.2rem 0.45rem;
   border: 1px dashed var(--line);
@@ -5259,6 +5274,19 @@ textarea::placeholder {
 .market-marker-more:hover {
   color: var(--ink);
   border-color: var(--ink);
+}
+
+@keyframes market-marker-flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 8px rgba(147, 51, 234, 0);
+  }
+}
+
+.market-marker-flash {
+  animation: market-marker-flash 0.9s ease-out;
 }
 
 .research-results-list {

@@ -213,6 +213,74 @@ const computeMacdSeries = (candles, fast = 12, slow = 26, signal = 9) => {
   return out;
 };
 
+/**
+ * RSI(period) Wilder 平滑：首个值用前 period 根简单平均，之后递推
+ * avg = (avg×(period-1) + 当前) / period；序列不足 period+1 根返回空。
+ */
+const computeRsiSeries = (candles, period = 14) => {
+  let avgGain = 0;
+  let avgLoss = 0;
+  const out = [];
+  for (let i = 1; i < candles.length; i += 1) {
+    const change = candles[i].close - candles[i - 1].close;
+    const gain = Math.max(change, 0);
+    const loss = Math.max(-change, 0);
+    if (i <= period) {
+      avgGain += gain / period;
+      avgLoss += loss / period;
+    } else {
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+    if (i >= period) {
+      const value = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+      out.push({ time: candles[i].date, value });
+    }
+  }
+  return out;
+};
+
+/**
+ * KDJ(n,3,3)：RSV = (close - LLV(n)) / (HHV(n) - LLV(n)) × 100，
+ * K/D 以 50 为种子做 1/3 平滑，J = 3K - 2D；窗口不足 n 根不输出。
+ */
+const computeKdjSeries = (candles, n = 9) => {
+  let k = 50;
+  let d = 50;
+  const out = [];
+  for (let i = 0; i < candles.length; i += 1) {
+    const window = candles.slice(Math.max(0, i - n + 1), i + 1);
+    const low = Math.min(...window.map((candle) => candle.low));
+    const high = Math.max(...window.map((candle) => candle.high));
+    const rsv = high === low ? 50 : ((candles[i].close - low) / (high - low)) * 100;
+    k = (2 * k + rsv) / 3;
+    d = (2 * d + k) / 3;
+    if (i >= n - 1) out.push({ time: candles[i].date, k, d, j: 3 * k - 2 * d });
+  }
+  return out;
+};
+
+/** 副图指标定义：标签、序列键与图例配色（pane 2 共用同一组序列槽位）。 */
+const SUBPANE_DEFS = {
+  macd: {
+    label: 'MACD(12,26,9)',
+    lines: [
+      ['dif', 'DIF', MACD_COLORS.dif],
+      ['dea', 'DEA', MACD_COLORS.dea],
+      ['macd', 'MACD', null], // 柱，图例颜色随符号
+    ],
+  },
+  rsi: { label: 'RSI(14)', lines: [['rsi', 'RSI', '#3f66d8']] },
+  kdj: {
+    label: 'KDJ(9,3,3)',
+    lines: [
+      ['k', 'K', '#d97706'],
+      ['d', 'D', '#3f66d8'],
+      ['j', 'J', '#9333ea'],
+    ],
+  },
+};
+
 let libPromise = null;
 /** 动态 import 固定 vendor URL；整个页面共享一次加载。 */
 const loadLightweightCharts = () => {
@@ -232,6 +300,8 @@ const loadLightweightCharts = () => {
  * @returns {Promise<{
  *   setData: (data: { candles: Array<object>, markers?: Array<object> }) => void,
  *   setMarkers: (markers: Array<object>) => void,
+ *   setSubPane: (name: 'macd' | 'rsi' | 'kdj') => void,
+ *   focusDate: (date: string) => void,
  *   resize: (width: number, height: number) => void,
  *   destroy: () => void,
  * }>}
@@ -310,7 +380,7 @@ const createMarketChart = async (container, options = {}) => {
       1,
     ),
   };
-  // pane 2：MACD 双线 + 柱，共用 pane 2 默认价格轴。
+  // pane 2：副图指标槽位，MACD 默认可见，RSI / KDJ 由 setSubPane 切换。
   const difSeries = chart.addSeries(
     lc.LineSeries,
     { color: MACD_COLORS.dif, lineWidth: 1, priceLineVisible: false, lastValueVisible: false },
@@ -322,6 +392,52 @@ const createMarketChart = async (container, options = {}) => {
     2,
   );
   const macdSeries = chart.addSeries(lc.HistogramSeries, { lastValueVisible: false }, 2);
+  const rsiSeries = chart.addSeries(
+    lc.LineSeries,
+    {
+      color: '#3f66d8',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      visible: false,
+    },
+    2,
+  );
+  const kdjSeries = {
+    k: chart.addSeries(
+      lc.LineSeries,
+      {
+        color: '#d97706',
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: false,
+      },
+      2,
+    ),
+    d: chart.addSeries(
+      lc.LineSeries,
+      {
+        color: '#3f66d8',
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: false,
+      },
+      2,
+    ),
+    j: chart.addSeries(
+      lc.LineSeries,
+      {
+        color: '#9333ea',
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: false,
+      },
+      2,
+    ),
+  };
 
   // pane 高度比例：主图 5 / 成交量 2 / MACD 2。
   chart.panes()[0]?.setStretchFactor(5);
@@ -355,10 +471,16 @@ const createMarketChart = async (container, options = {}) => {
   const volumeLegendValue = legendSpan(legendPanes[1]);
   const volumeMa5Span = legendSpan(legendPanes[1], '', MA_COLORS.ma5);
   const volumeMa10Span = legendSpan(legendPanes[1], '', MA_COLORS.ma10);
-  legendSpan(legendPanes[2], 'MACD(12,26,9)', 'var(--muted)');
-  const difSpan = legendSpan(legendPanes[2], '', MACD_COLORS.dif);
-  const deaSpan = legendSpan(legendPanes[2], '', MACD_COLORS.dea);
-  const macdSpan = legendSpan(legendPanes[2]);
+  const subpaneLabelSpan = legendSpan(legendPanes[2], SUBPANE_DEFS.macd.label, 'var(--muted)');
+  const subpaneValueSpans = [
+    legendSpan(legendPanes[2]),
+    legendSpan(legendPanes[2]),
+    legendSpan(legendPanes[2]),
+  ];
+
+  let subPane = 'macd';
+  /** 当前副图的图例条目：[key, prefix, color]；MACD 柱颜色随符号，这里给 null。 */
+  const subpaneLines = () => SUBPANE_DEFS[subPane].lines;
 
   const fmtPrice = (value) => value.toFixed(2);
   const setValueSpan = (node, prefix, value, fmt) => {
@@ -377,12 +499,25 @@ const createMarketChart = async (container, options = {}) => {
     setValueSpan(volumeLegendValue, '', values.volume, formatVolume);
     setValueSpan(volumeMa5Span, 'MA5', values.volumeMa5, formatVolume);
     setValueSpan(volumeMa10Span, 'MA10', values.volumeMa10, formatVolume);
-    setValueSpan(difSpan, 'DIF', values.dif, fmtPrice);
-    setValueSpan(deaSpan, 'DEA', values.dea, fmtPrice);
-    setValueSpan(macdSpan, 'MACD', values.macd, fmtPrice);
-    if (typeof values.macd === 'number' && Number.isFinite(values.macd)) {
-      macdSpan.style.color = values.macd >= 0 ? UP_COLOR : DOWN_COLOR;
-    }
+    // 副图图例：按当前指标渲染对应键值，未用槽位隐藏
+    const lines = subpaneLines();
+    subpaneValueSpans.forEach((span, index) => {
+      const line = lines[index];
+      if (line === undefined) {
+        span.hidden = true;
+        return;
+      }
+      const [key, prefix, color] = line;
+      setValueSpan(span, prefix, values.sub?.[key], fmtPrice);
+      if (color !== null) {
+        span.style.color = color;
+      } else {
+        const value = values.sub?.[key];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          span.style.color = value >= 0 ? UP_COLOR : DOWN_COLOR;
+        }
+      }
+    });
   };
 
   /** 图例对齐各 pane 顶边（pane 高度在布局后才可读）。 */
@@ -409,9 +544,15 @@ const createMarketChart = async (container, options = {}) => {
       volume: data.get(volumeSeries)?.value,
       volumeMa5: data.get(volumeMaSeries.ma5)?.value,
       volumeMa10: data.get(volumeMaSeries.ma10)?.value,
-      dif: data.get(difSeries)?.value,
-      dea: data.get(deaSeries)?.value,
-      macd: data.get(macdSeries)?.value,
+      sub: {
+        dif: data.get(difSeries)?.value,
+        dea: data.get(deaSeries)?.value,
+        macd: data.get(macdSeries)?.value,
+        rsi: data.get(rsiSeries)?.value,
+        k: data.get(kdjSeries.k)?.value,
+        d: data.get(kdjSeries.d)?.value,
+        j: data.get(kdjSeries.j)?.value,
+      },
     });
   });
 
@@ -423,14 +564,42 @@ const createMarketChart = async (container, options = {}) => {
   });
   observer.observe(container);
 
+  /* ---- 事实 chip 定位：聚焦指定日期附近的 K 线并短暂高亮 ---- */
+  const FOCUS_CONTEXT_BARS = 10;
+  const FOCUS_HIGHLIGHT_MS = 3200;
+  let currentCandles = [];
+  let baseMarkers = [];
+  let highlightTime = null;
+  let highlightTimer = null;
+
+  const paintMarkers = () => {
+    const data = toMarkerData(baseMarkers);
+    if (highlightTime !== null) {
+      data.push({
+        time: highlightTime,
+        position: 'aboveBar',
+        shape: 'circle',
+        color: '#9333ea',
+        text: '',
+      });
+      // lightweight-charts 要求 marker 按 time 升序；高亮追加后重排
+      data.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+    }
+    markerApi.setMarkers(data);
+  };
+
   return {
     setData({ candles, markers = [] }) {
+      currentCandles = candles;
+      baseMarkers = markers;
       const maData = Object.fromEntries(
         MA_DEFS.map(([key, period]) => [key, computeMaSeries(candles, period)]),
       );
       const volumeMa5Data = computeMaSeries(candles, 5, (candle) => candle.volume);
       const volumeMa10Data = computeMaSeries(candles, 10, (candle) => candle.volume);
       const macdData = computeMacdSeries(candles);
+      const rsiData = computeRsiSeries(candles);
+      const kdjData = computeKdjSeries(candles);
       candleSeries.setData(toCandleData(candles));
       for (const [key] of MA_DEFS) maSeries[key].setData(maData[key]);
       volumeSeries.setData(toVolumeData(candles));
@@ -445,23 +614,71 @@ const createMarketChart = async (container, options = {}) => {
           color: d.macd >= 0 ? UP_COLOR : DOWN_COLOR,
         })),
       );
-      markerApi.setMarkers(toMarkerData(markers));
+      rsiSeries.setData(rsiData);
+      kdjSeries.k.setData(kdjData.map((item) => ({ time: item.time, value: item.k })));
+      kdjSeries.d.setData(kdjData.map((item) => ({ time: item.time, value: item.d })));
+      kdjSeries.j.setData(kdjData.map((item) => ({ time: item.time, value: item.j })));
+      paintMarkers();
       chart.timeScale().fitContent();
       const lastMacd = macdData.at(-1);
+      const lastKdj = kdjData.at(-1);
       lastValues = {
         ma: Object.fromEntries(MA_DEFS.map(([key]) => [key, maData[key].at(-1)?.value])),
         volume: candles.at(-1)?.volume,
         volumeMa5: volumeMa5Data.at(-1)?.value,
         volumeMa10: volumeMa10Data.at(-1)?.value,
-        dif: lastMacd?.dif,
-        dea: lastMacd?.dea,
-        macd: lastMacd?.macd,
+        sub: {
+          dif: lastMacd?.dif,
+          dea: lastMacd?.dea,
+          macd: lastMacd?.macd,
+          rsi: rsiData.at(-1)?.value,
+          k: lastKdj?.k,
+          d: lastKdj?.d,
+          j: lastKdj?.j,
+        },
       };
       applyLegendValues(lastValues);
       layoutLegends();
     },
     setMarkers(markers) {
-      markerApi.setMarkers(toMarkerData(markers));
+      baseMarkers = markers;
+      paintMarkers();
+    },
+    /** 切换副图指标（MACD / RSI / KDJ）：只切可见性与图例，序列数据常驻。 */
+    setSubPane(next) {
+      if (SUBPANE_DEFS[next] === undefined || next === subPane) return;
+      subPane = next;
+      const visible = next === 'macd';
+      difSeries.applyOptions({ visible });
+      deaSeries.applyOptions({ visible });
+      macdSeries.applyOptions({ visible });
+      rsiSeries.applyOptions({ visible: next === 'rsi' });
+      kdjSeries.k.applyOptions({ visible: next === 'kdj' });
+      kdjSeries.d.applyOptions({ visible: next === 'kdj' });
+      kdjSeries.j.applyOptions({ visible: next === 'kdj' });
+      subpaneLabelSpan.textContent = SUBPANE_DEFS[next].label;
+      if (lastValues !== null) applyLegendValues(lastValues);
+    },
+    /**
+     * 事实 chip 联动：把可视区居中到 date 附近的 K 线并短暂高亮对应 bar。
+     * date 是日级事实日期；周 / 月 K 下定位到「不早于该日期」的第一根 bar。
+     */
+    focusDate(date) {
+      if (currentCandles.length === 0) return;
+      const found = currentCandles.findIndex((candle) => candle.date >= date);
+      const index = found === -1 ? currentCandles.length - 1 : found;
+      chart.timeScale().setVisibleLogicalRange({
+        from: index - FOCUS_CONTEXT_BARS,
+        to: index + FOCUS_CONTEXT_BARS,
+      });
+      highlightTime = currentCandles[index]?.date ?? null;
+      paintMarkers();
+      if (highlightTimer !== null) clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        highlightTimer = null;
+        highlightTime = null;
+        paintMarkers();
+      }, FOCUS_HIGHLIGHT_MS);
     },
     resize(width, nextHeight) {
       chart.applyOptions({
@@ -472,6 +689,7 @@ const createMarketChart = async (container, options = {}) => {
     },
     destroy() {
       observer.disconnect();
+      if (highlightTimer !== null) clearTimeout(highlightTimer);
       for (const legend of legendPanes) legend.remove();
       chart.remove();
     },
@@ -655,8 +873,10 @@ const createMinuteBarChart = async (container, mode = 'line') => {
 
 export {
   clusterMarkers,
+  computeKdjSeries,
   computeMacdSeries,
   computeMaSeries,
+  computeRsiSeries,
   createIntradayChart,
   createMarketChart,
   createMinuteBarChart,
