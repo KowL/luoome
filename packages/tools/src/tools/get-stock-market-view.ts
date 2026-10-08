@@ -20,6 +20,7 @@ import {
 import { ensureStockStub, STOCK_ID_PATTERN } from '../internal/manual-entry.js';
 import {
   aggregateCandles,
+  alignMarkersToBars,
   buildMarketCandles,
   buildMarketDataStatus,
   candlesToBars,
@@ -119,6 +120,8 @@ export const MarketFactMarkerSchema = z.object({
   tone: z.enum(['action', 'advice', 'fact']),
   /** 策略信号方向；前端据此给标注上色与分组，非信号类事实缺省。 */
   direction: z.enum(['bullish', 'bearish', 'neutral']).optional(),
+  /** 周 / 月 K 下对齐到所属桶末根 bar 的日期；日 K 缺省（与 date 相同）。 */
+  barDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const GetStockMarketViewOutput = z.object({
@@ -438,6 +441,8 @@ export const getStockMarketViewTool = defineTool({
     ]
       .sort((a, b) => a.at.getTime() - b.at.getTime() || a.factId.localeCompare(b.factId))
       .map(({ at: _at, ...marker }) => marker);
+    // 周 / 月 K：给 marker 补 barDate 对齐聚合 bar；date 保持日级事实口径（§8 图表事实）。
+    const alignedMarkers = alignMarkersToBars(markers, candles, input.granularity);
 
     return {
       stock: { id: stock.id, code: stock.code, name: stock.name, exchange: stock.exchange },
@@ -454,7 +459,7 @@ export const getStockMarketViewTool = defineTool({
         marketSession: session,
         warnings: barsTruncated ? [...status.warnings, 'bars-truncated' as const] : status.warnings,
       },
-      markers,
+      markers: alignedMarkers,
       limitUp,
     };
   },

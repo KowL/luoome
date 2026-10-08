@@ -297,6 +297,28 @@ describe('关联事实 marker 转换', () => {
     ]);
   });
 
+  it('周 / 月 K：marker 用 barDate 落点并按 barDate 聚合', () => {
+    const marker = (id, date, barDate) => ({
+      date,
+      ...(barDate === undefined ? {} : { barDate }),
+      factKind: 'strategy-signal',
+      factId: id,
+      title: '策略信号 bullish',
+      href: '#strategy',
+      tone: 'fact',
+      direction: 'bullish',
+    });
+    expect(toMarkerData([marker('s1', '2026-07-20', '2026-07-22'), marker('s2', '2026-07-21', '2026-07-22')])).toEqual([
+      {
+        time: '2026-07-22',
+        position: 'aboveBar',
+        shape: 'square',
+        color: UP_COLOR,
+        text: '信号×2',
+      },
+    ]);
+  });
+
   it('无方向字段的旧 marker 仍按原配色渲染', () => {
     const data = toMarkerData([
       {

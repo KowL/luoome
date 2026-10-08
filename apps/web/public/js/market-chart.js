@@ -51,16 +51,20 @@ const toVolumeData = (candles) =>
 /** K 线标注带文字的上限：超过后只留图形，避免密集信号的文字互相覆盖（§11.3）。 */
 const MARKER_TEXT_LIMIT = 12;
 
+/** 标注在图上的落点：周 / 月 K 下用服务端对齐的 barDate，日 K 用日级 date。 */
+const markerBarTime = (marker) => marker.barDate ?? marker.date;
+
 /**
  * 同日同 tone 同方向的关联事实合并为一个标注（同一视觉槽位），
  * 组内 >1 条时文字降为「类型×N」；组顺序保持首条出现顺序。
  * 方向进聚合键：多 / 空信号不互相吞掉，颜色才保持单一语义。
+ * 周 / 月 K 按 barDate 聚合：同一桶内的事实合并为一个标注。
  */
 const clusterMarkers = (markers) => {
   const groups = [];
   const byKey = new Map();
   for (const marker of markers) {
-    const key = `${marker.date}|${marker.tone}|${marker.direction ?? ''}`;
+    const key = `${markerBarTime(marker)}|${marker.tone}|${marker.direction ?? ''}`;
     const group = byKey.get(key);
     if (group === undefined) {
       const created = { marker, count: 1 };
@@ -90,7 +94,7 @@ const toMarkerData = (markers) => {
   const clustered = clusterMarkers(markers);
   const withText = clustered.length <= MARKER_TEXT_LIMIT;
   return clustered.map(({ marker, count }) => ({
-    time: marker.date,
+    time: markerBarTime(marker),
     position: marker.tone === 'action' ? 'belowBar' : 'aboveBar',
     shape: marker.tone === 'action' ? 'arrowUp' : marker.tone === 'advice' ? 'circle' : 'square',
     color: markerColor(marker),

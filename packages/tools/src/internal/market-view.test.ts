@@ -1,7 +1,7 @@
 import { money } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
-import { aggregateCandles, type MarketCandle } from './market-view.js';
+import { aggregateCandles, alignMarkersToBars, type MarketCandle } from './market-view.js';
 
 /** internal/market-view 纯函数测试（aggregateCandles：日 K → 周 / 月 K 聚合）。 */
 
@@ -130,5 +130,44 @@ describe('aggregateCandles', () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toMatchObject({ date: '2026-01-01', open: 50, close: 52 });
     expect(out[1]).toMatchObject({ date: '2026-01-05', open: 53, close: 54 });
+  });
+});
+
+describe('alignMarkersToBars', () => {
+  const candles = [
+    makeCandle('2026-07-20'), // 周一
+    makeCandle('2026-07-22'), // 周三 → 周桶末根
+    makeCandle('2026-07-27'), // 下周一
+    makeCandle('2026-07-28'),
+  ];
+
+  it('day 粒度不补 barDate，原样返回', () => {
+    const markers = [{ date: '2026-07-21', factId: 's1' }];
+    expect(alignMarkersToBars(markers, candles, 'day')).toEqual(markers);
+  });
+
+  it('周粒度：marker 补所属 ISO 周末根 bar 的 barDate，日级 date 不变', () => {
+    const out = alignMarkersToBars(
+      [{ date: '2026-07-20', factId: 's1' }, { date: '2026-07-22', factId: 's2' }],
+      candles,
+      'week',
+    );
+    expect(out).toEqual([
+      { date: '2026-07-20', factId: 's1', barDate: '2026-07-22' },
+      // barDate 与 date 相同则不冗余补字段
+      { date: '2026-07-22', factId: 's2' },
+    ]);
+  });
+
+  it('月粒度：marker 补月末根 bar 的 barDate；所属桶无 bar 时不补', () => {
+    const out = alignMarkersToBars(
+      [{ date: '2026-07-20', factId: 's1' }, { date: '2026-08-03', factId: 's2' }],
+      candles,
+      'month',
+    );
+    expect(out).toEqual([
+      { date: '2026-07-20', factId: 's1', barDate: '2026-07-28' },
+      { date: '2026-08-03', factId: 's2' },
+    ]);
   });
 });

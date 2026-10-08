@@ -241,6 +241,30 @@ export const aggregateCandles = (
   });
 };
 
+/**
+ * 周 / 月 K 下给 marker 补 barDate：marker.date 保持日级事实日期（图表事实列表口径），
+ * barDate 指向所属桶的末根 bar 日期，供图表标注对齐（lightweight-charts 要求
+ * marker time 与 bar time 精确匹配，日级日期在周 / 月 K 上会静默丢失）。
+ * candles 须为聚合前的日级序列；所属桶无 bar（整桶停牌）的 marker 不补 barDate。
+ */
+export const alignMarkersToBars = <T extends { readonly date: string }>(
+  markers: readonly T[],
+  candles: readonly MarketCandle[],
+  granularity: MarketViewGranularity,
+): readonly (T & { readonly barDate?: string })[] => {
+  if (granularity === 'day') return markers;
+  const barDateByBucket = new Map<string, string>();
+  for (const candle of candles) {
+    const key = granularity === 'week' ? weekBucketKey(candle.date) : candle.date.slice(0, 7);
+    barDateByBucket.set(key, candle.date);
+  }
+  return markers.map((marker) => {
+    const key = granularity === 'week' ? weekBucketKey(marker.date) : marker.date.slice(0, 7);
+    const barDate = barDateByBucket.get(key);
+    return barDate === undefined || barDate === marker.date ? marker : { ...marker, barDate };
+  });
+};
+
 /** candles → computeSimpleIndicators 的计算形状（§8.6：指标与输出 candles 同源）。 */
 export const candlesToBars = (stockId: string, candles: readonly MarketCandle[]): DailyBar[] =>
   candles.map((c) => ({
