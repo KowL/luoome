@@ -148,7 +148,10 @@ describe('alignMarkersToBars', () => {
 
   it('周粒度：marker 补所属 ISO 周末根 bar 的 barDate，日级 date 不变', () => {
     const out = alignMarkersToBars(
-      [{ date: '2026-07-20', factId: 's1' }, { date: '2026-07-22', factId: 's2' }],
+      [
+        { date: '2026-07-20', factId: 's1' },
+        { date: '2026-07-22', factId: 's2' },
+      ],
       candles,
       'week',
     );
@@ -161,7 +164,10 @@ describe('alignMarkersToBars', () => {
 
   it('月粒度：marker 补月末根 bar 的 barDate；所属桶无 bar 时不补', () => {
     const out = alignMarkersToBars(
-      [{ date: '2026-07-20', factId: 's1' }, { date: '2026-08-03', factId: 's2' }],
+      [
+        { date: '2026-07-20', factId: 's1' },
+        { date: '2026-08-03', factId: 's2' },
+      ],
       candles,
       'month',
     );
