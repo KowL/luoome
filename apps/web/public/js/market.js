@@ -34,9 +34,27 @@ import { $, el, mount } from './ui.js';
 /* ============ 页面状态（§11.4） ============ */
 
 const RECENT_KEY = 'luoome.market.recent';
+const MARKER_TOGGLE_KEY = 'luoome.market.showMarkers';
 const REFRESH_ACTIVE_MS = 60_000;
 const REFRESH_IDLE_MS = 300_000;
 const EMPTY_TIP = '请从顶栏搜索并选择一只股票；支持深链接 #market?stockId=002594.SZ&range=3m。';
+
+/** 「策略信号」开关偏好持久化；隐私模式 / quota 失败时回退默认关闭。 */
+const loadMarkerToggle = () => {
+  try {
+    return localStorage.getItem(MARKER_TOGGLE_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const saveMarkerToggle = (on) => {
+  try {
+    localStorage.setItem(MARKER_TOGGLE_KEY, on ? '1' : '0');
+  } catch {
+    /* 隐私模式 / quota：忽略 */
+  }
+};
 
 const state = {
   stockId: null,
@@ -55,7 +73,7 @@ const state = {
   refreshTimer: null,
   bound: false,
   /** 「策略信号」开关：true 时 K 线图上叠加策略/Advice/交易标注（§11 关联事实）。 */
-  showMarkers: false,
+  showMarkers: loadMarkerToggle(),
 };
 
 const loadRecent = () => {
@@ -218,6 +236,7 @@ const bindMarkerToggle = () => {
   toggle.dataset.bound = '1';
   toggle.addEventListener('click', () => {
     state.showMarkers = !state.showMarkers;
+    saveMarkerToggle(state.showMarkers);
     paintMarkerToggle();
     applyMarkerVisibility();
   });
@@ -381,7 +400,7 @@ const renderData = async (data, requestId) => {
   renderQuoteHeader(data);
   renderIndicators(data);
   renderLinks(data);
-  renderMarkers(data);
+  renderMarkers(data, state.stockId ?? undefined);
   renderLimitUpFacts(data);
   paintRangeSwitch();
 
@@ -509,6 +528,8 @@ const renderMarket = async (setStatus) => {
   bindChartTabs();
   bindMarkerToggle();
   bindVisibility();
+  // 持久化的开关状态要在每次进页时回刷到按钮上（含刷新 / 换股回来）
+  paintMarkerToggle();
   renderRecent();
   const { params } = parseRouteHash(window.location.hash);
   const stockId = params.get('stockId');

@@ -117,6 +117,8 @@ export const MarketFactMarkerSchema = z.object({
   title: z.string().min(1).max(200),
   href: z.string().min(1),
   tone: z.enum(['action', 'advice', 'fact']),
+  /** 策略信号方向；前端据此给标注上色与分组，非信号类事实缺省。 */
+  direction: z.enum(['bullish', 'bearish', 'neutral']).optional(),
 });
 
 export const GetStockMarketViewOutput = z.object({
@@ -389,6 +391,7 @@ export const getStockMarketViewTool = defineTool({
           title: `策略信号 ${signal.direction}`,
           href: `#strategies?stockId=${encodeURIComponent(stock.id)}`,
           tone: 'fact' as const,
+          direction: signal.direction,
           at: signal.ts,
         })),
       ...reports

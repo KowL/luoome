@@ -123,6 +123,32 @@ const changeClass = (change) =>
 /** 行情卡代码展示直接使用完整 stockId；其中已包含交易所后缀。 */
 const stockCodeLabel = (stock) => stock.id;
 
+/** 关联事实类型 → 短标签：图表事实 chip 与 K 线聚合标注共用同一口径（§11.3）。 */
+const factKindLabel = (factKind) =>
+  factKind === 'trade'
+    ? '交易'
+    : factKind === 'advice'
+      ? 'Advice'
+      : factKind === 'watch-trigger'
+        ? '触发'
+        : factKind === 'strategy-signal'
+          ? '信号'
+          : factKind === 'report'
+            ? '报告'
+            : factKind === 'limit-up'
+              ? '涨停'
+              : '研究';
+
+/** 策略信号方向 → 短标签；未知方向回退 null，不凭空造方向（§11.3）。 */
+const signalDirectionLabel = (direction) =>
+  direction === 'bullish'
+    ? '多'
+    : direction === 'bearish'
+      ? '空'
+      : direction === 'neutral'
+        ? '中性'
+        : null;
+
 /** luoome A 股 stockId → 雪球个股页；非法或非沪深北代码不生成外链。 */
 const xueqiuStockUrl = (stockId) => {
   if (typeof stockId !== 'string') return null;
@@ -135,6 +161,7 @@ export {
   buildMarketLink,
   changeClass,
   createRequestTracker,
+  factKindLabel,
   fetchedAtLabel,
   formatAmount,
   formatVolume,
@@ -143,6 +170,7 @@ export {
   parseRouteHash,
   pushRecentView,
   sessionLabel,
+  signalDirectionLabel,
   sourceLabel,
   sourceSummary,
   stockCodeLabel,

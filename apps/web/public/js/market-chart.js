@@ -10,7 +10,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { formatVolume } from './market-shared.js';
+import { factKindLabel, formatVolume } from './market-shared.js';
 
 /** 固定版本 vendor URL；升级依赖时与 server.ts 路由、package.json 同步（§12.1）。 */
 const LIGHTWEIGHT_CHARTS_URL = '/vendor/lightweight-charts-5.2.0.mjs';
@@ -48,15 +48,59 @@ const toCandleData = (candles) =>
 const toVolumeData = (candles) =>
   candles.map((c) => ({ time: c.date, value: c.volume, color: volumeColor(c) }));
 
-/** MarketFactMarker[] → Lightweight Charts series markers. */
-const toMarkerData = (markers) =>
-  markers.map((marker) => ({
+/** K 线标注带文字的上限：超过后只留图形，避免密集信号的文字互相覆盖（§11.3）。 */
+const MARKER_TEXT_LIMIT = 12;
+
+/**
+ * 同日同 tone 同方向的关联事实合并为一个标注（同一视觉槽位），
+ * 组内 >1 条时文字降为「类型×N」；组顺序保持首条出现顺序。
+ * 方向进聚合键：多 / 空信号不互相吞掉，颜色才保持单一语义。
+ */
+const clusterMarkers = (markers) => {
+  const groups = [];
+  const byKey = new Map();
+  for (const marker of markers) {
+    const key = `${marker.date}|${marker.tone}|${marker.direction ?? ''}`;
+    const group = byKey.get(key);
+    if (group === undefined) {
+      const created = { marker, count: 1 };
+      byKey.set(key, created);
+      groups.push(created);
+    } else {
+      group.count += 1;
+    }
+  }
+  return groups;
+};
+
+/** 标注配色：交易红箭头、Advice 黄点；策略信号按方向红多绿空，其余事实蓝。 */
+const markerColor = (marker) =>
+  marker.tone === 'action'
+    ? UP_COLOR
+    : marker.tone === 'advice'
+      ? '#f5c542'
+      : marker.direction === 'bullish'
+        ? UP_COLOR
+        : marker.direction === 'bearish'
+          ? DOWN_COLOR
+          : '#5ea8ff';
+
+/** MarketFactMarker[] → Lightweight Charts series markers（同日同 tone 同方向先聚合）。 */
+const toMarkerData = (markers) => {
+  const clustered = clusterMarkers(markers);
+  const withText = clustered.length <= MARKER_TEXT_LIMIT;
+  return clustered.map(({ marker, count }) => ({
     time: marker.date,
     position: marker.tone === 'action' ? 'belowBar' : 'aboveBar',
     shape: marker.tone === 'action' ? 'arrowUp' : marker.tone === 'advice' ? 'circle' : 'square',
-    color: marker.tone === 'action' ? UP_COLOR : marker.tone === 'advice' ? '#f5c542' : '#5ea8ff',
-    text: marker.title.slice(0, 24),
+    color: markerColor(marker),
+    text: !withText
+      ? ''
+      : count > 1
+        ? `${factKindLabel(marker.factKind)}×${count}`
+        : marker.title.slice(0, 24),
   }));
+};
 
 /** 分时点 → 价格 Line 数据（time 为 Unix 秒；p.time 来自 JSON 是 ISO 字符串）。 */
 const toIntradayLineData = (points) =>
@@ -606,6 +650,7 @@ const createMinuteBarChart = async (container, mode = 'line') => {
 };
 
 export {
+  clusterMarkers,
   computeMacdSeries,
   computeMaSeries,
   createIntradayChart,

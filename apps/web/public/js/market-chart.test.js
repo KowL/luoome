@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  clusterMarkers,
   computeMacdSeries,
   computeMaSeries,
   DOWN_COLOR,
@@ -231,5 +232,96 @@ describe('关联事实 marker 转换', () => {
         text: 'Advice buy',
       },
     ]);
+  });
+
+  it('同日同 tone 的多条信号聚合为一个标注，文字降为「信号×N」', () => {
+    const signal = (id, title) => ({
+      date: '2026-07-24',
+      factKind: 'strategy-signal',
+      factId: id,
+      title,
+      href: '#strategy',
+      tone: 'fact',
+    });
+    expect(toMarkerData([signal('s1', '策略信号 buy'), signal('s2', '策略信号 buy')])).toEqual([
+      {
+        time: '2026-07-24',
+        position: 'aboveBar',
+        shape: 'square',
+        color: '#5ea8ff',
+        text: '信号×2',
+      },
+    ]);
+  });
+
+  it('同日不同 tone 不合并，视觉槽位语义保留', () => {
+    const base = { date: '2026-07-24', href: '#x', title: 't' };
+    const clustered = clusterMarkers([
+      { ...base, factKind: 'trade', factId: 't1', tone: 'action' },
+      { ...base, factKind: 'strategy-signal', factId: 's1', tone: 'fact' },
+      { ...base, factKind: 'strategy-signal', factId: 's2', tone: 'fact' },
+    ]);
+    expect(clustered.map((group) => [group.marker.factId, group.count])).toEqual([
+      ['t1', 1],
+      ['s1', 2],
+    ]);
+  });
+
+  it('同日同 tone 不同方向不合并，并按方向上色（红多绿空）', () => {
+    const signal = (id, direction) => ({
+      date: '2026-07-24',
+      factKind: 'strategy-signal',
+      factId: id,
+      title: `策略信号 ${direction}`,
+      href: '#strategy',
+      tone: 'fact',
+      direction,
+    });
+    expect(
+      toMarkerData([signal('s1', 'bullish'), signal('s2', 'bullish'), signal('s3', 'bearish')]),
+    ).toEqual([
+      {
+        time: '2026-07-24',
+        position: 'aboveBar',
+        shape: 'square',
+        color: UP_COLOR,
+        text: '信号×2',
+      },
+      {
+        time: '2026-07-24',
+        position: 'aboveBar',
+        shape: 'square',
+        color: DOWN_COLOR,
+        text: '策略信号 bearish',
+      },
+    ]);
+  });
+
+  it('无方向字段的旧 marker 仍按原配色渲染', () => {
+    const data = toMarkerData([
+      {
+        date: '2026-07-24',
+        factKind: 'strategy-signal',
+        factId: 's1',
+        title: '策略信号 bullish',
+        href: '#strategy',
+        tone: 'fact',
+      },
+    ]);
+    expect(data[0].color).toBe('#5ea8ff');
+  });
+
+  it('标注数量超过文字上限时全部省略文字，只留图形', () => {
+    const markers = Array.from({ length: 13 }, (_, i) => ({
+      date: `2026-07-${String(i + 1).padStart(2, '0')}`,
+      factKind: 'strategy-signal',
+      factId: `s${i}`,
+      title: '策略信号 buy',
+      href: '#strategy',
+      tone: 'fact',
+    }));
+    const data = toMarkerData(markers);
+    expect(data).toHaveLength(13);
+    expect(data.every((marker) => marker.text === '')).toBe(true);
   });
 });

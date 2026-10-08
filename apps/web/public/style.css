@@ -5236,6 +5236,31 @@ textarea::placeholder {
   border-color: rgba(94, 168, 255, 0.45);
 }
 
+.market-marker-bullish {
+  border-color: rgba(224, 72, 79, 0.55);
+  color: var(--pos);
+}
+
+.market-marker-bearish {
+  border-color: rgba(15, 157, 88, 0.55);
+  color: var(--neg);
+}
+
+.market-marker-more {
+  padding: 0.2rem 0.45rem;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.market-marker-more:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
 .research-results-list {
   list-style: none;
   margin: 0;
