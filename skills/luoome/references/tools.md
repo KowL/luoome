@@ -87,7 +87,10 @@ Strategies are rejected. Before calling one:
 5. Verify the returned result and re-read state when correctness matters.
 
 `save_decision_review` records explicit account feedback and trade links; `refresh_decision_review_report`
-creates an immutable local-only closing/weekly supplement with `notificationPolicy=never`.
+creates an immutable local-only weekly supplement with `notificationPolicy=never`. Closing reviews
+wait for the daily Strategies and account plan batch, then generate once; reruns reuse the report
+and closing review supplements are rejected. `list_reports` returns the latest report per period
+and scope; older saved records remain accessible by ID or explicit version.
 `record_decision_trade` registers an already executed external trade into the local ledger and is
 classified `trade`; MCP does not expose it. Never use it to place an order. Use a stable
 `requestId` and check the receipt before retrying an uncertain response.

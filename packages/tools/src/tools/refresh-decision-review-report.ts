@@ -22,7 +22,7 @@ export const RefreshDecisionReviewReportOutput = z.object({
 
 export const refreshDecisionReviewReportTool = defineTool({
   name: 'refresh_decision_review_report',
-  description: '仅以已落库账户复盘事实生成收盘/周报不可通知补充版',
+  description: '仅以已落库账户复盘事实生成周报不可通知补充版；收盘复盘生成后保持原样',
   sideEffect: 'write',
   input: RefreshDecisionReviewReportInput,
   output: RefreshDecisionReviewReportOutput,
@@ -51,6 +51,7 @@ export const refreshDecisionReviewReportTool = defineTool({
       if (receipt.requestHash !== requestHash) return errInvalidInput('请求 ID 已用于其他报告补充');
       return { report: receipt.report, created: false, replayed: true, notified: false as const };
     }
+    if (source.kind === 'closing') return errInvalidInput('收盘复盘只生成一份，不再追加补充版');
     const latest = await ctx.repos.report.findByPeriod({
       kind: source.kind,
       scopeKey: `account:${accountId}`,

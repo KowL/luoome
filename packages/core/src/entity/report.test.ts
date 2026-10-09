@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertReportInvariants, type Report, ReportSchema } from './report.js';
+import { assertReportInvariants, type Report, ReportSchema, reportDisplayTitle } from './report.js';
 
 const NOW = new Date('2026-07-29T10:00:00.000Z');
 const DATA_AS_OF = new Date('2026-07-29T08:00:00.000Z');
@@ -53,6 +53,11 @@ const makeReport = (overrides: Partial<Report> = {}): Report => ({
 });
 
 describe('Report', () => {
+  it('收盘历史版本展示统一标题，周报保留补充标记', () => {
+    const title = '2026-07-29 收盘复盘（补充 v2）（复盘补充 v3）';
+    expect(reportDisplayTitle({ kind: 'closing', title })).toBe('2026-07-29 收盘复盘');
+    expect(reportDisplayTitle({ kind: 'weekly', title })).toBe(title);
+  });
   it('接受结构化的完整收盘报告', () => {
     const report = ReportSchema.parse(makeReport());
 

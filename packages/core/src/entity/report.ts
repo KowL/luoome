@@ -163,6 +163,9 @@ export const ReportSchema = z.object({
 });
 export type Report = z.infer<typeof ReportSchema>;
 
+export const reportDisplayTitle = (report: Pick<Report, 'kind' | 'title'>): string =>
+  report.kind === 'closing' ? report.title.replace(/（(?:复盘)?补充 v\d+）/g, '') : report.title;
+
 const weekStart = (date: string): string => {
   const value = new Date(`${date}T00:00:00.000Z`);
   const daysSinceMonday = (value.getUTCDay() + 6) % 7;

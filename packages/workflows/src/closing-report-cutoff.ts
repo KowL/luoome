@@ -2,7 +2,7 @@ import { dateInShanghai, isHoliday, isWeekend } from '@luoome/core';
 import { z } from 'zod';
 
 import { currentStrategyFingerprint, getAccountPlanBatchStatus } from './account-plan-batch.js';
-import { closingReportWorkflow } from './closing-report.js';
+import { closingReportStrategiesReady, closingReportWorkflow } from './closing-report.js';
 import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 import { executeReportWorkflow } from './internal/report-runner.js';
 import { unavailableSection } from './opening-report.js';
@@ -29,13 +29,16 @@ const run: WorkflowStep = async (previous, ctx) => {
   const now = ctx.clock();
   const date = input.date ?? dateInShanghai(now);
   const cutoff = new Date(`${date}T18:00:00+08:00`);
+  const planStart = new Date(`${date}T16:30:00+08:00`);
   const created: string[] = [];
   const failed: string[] = [];
-  if (now < cutoff || isWeekend(cutoff) || isHoliday(cutoff)) return { date, created, failed };
+  if (now < planStart || isWeekend(cutoff) || isHoliday(cutoff)) return { date, created, failed };
   const accounts = await ctx.tools.list_accounts.execute({});
   if (!accounts.ok) return accounts;
   const fingerprint =
     date === dateInShanghai(now) ? await currentStrategyFingerprint(date, ctx) : null;
+  const strategiesReady =
+    date !== dateInShanghai(now) || (await closingReportStrategiesReady(date, now, ctx));
   const outcomes: Array<'created' | 'failed' | 'existing'> = [];
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -63,6 +66,10 @@ const run: WorkflowStep = async (previous, ctx) => {
       }
       if (existing.error.kind !== 'not_found') {
         outcomes[index] = 'failed';
+        continue;
+      }
+      if (!strategiesReady) {
+        outcomes[index] = 'existing';
         continue;
       }
       if (account.createdAt > cutoff) {
@@ -143,6 +150,10 @@ const run: WorkflowStep = async (previous, ctx) => {
         facts.ok ? facts.data.facts.digest : null,
         ctx,
       );
+      if (planBatchStatus === 'blocked') {
+        outcomes[index] = 'existing';
+        continue;
+      }
       const report = await closingReportWorkflow.run(
         { date, scope, mode: 'scheduled', planBatchStatus },
         ctx,
@@ -165,7 +176,7 @@ export const closingReportCutoffWorkflow = defineWorkflow<
   ClosingReportCutoffOutputT
 >({
   name: 'closing-report-cutoff',
-  description: '18:00 按持久化账户计划批次状态发布每账户主报告',
+  description: '等待当日策略与账户计划批次完成后统一发布每账户的一份收盘报告',
   input: ClosingReportCutoffInput,
   steps: [run],
 });

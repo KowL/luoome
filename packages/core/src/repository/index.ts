@@ -514,6 +514,7 @@ export interface ReportRepository {
     readonly from?: string;
     readonly to?: string;
     readonly status?: ReportStatus;
+    readonly latestOnly?: boolean;
     readonly limit?: number;
   }): Promise<readonly Report[]>;
   claimDelivery(input: {

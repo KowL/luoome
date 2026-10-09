@@ -41,6 +41,44 @@ const makeReport = (overrides: Partial<Report> = {}): Report => ({
 });
 
 describe('report tools', () => {
+  it('历史收盘报告只列最新版且阅读与导出统一标题，写入不能再追加版本', async () => {
+    const ctx = await buildTestContext();
+    let previous = await ctx.repos.report.upsertForPeriod(makeReport());
+    for (const version of [2, 3]) {
+      previous = await ctx.repos.report.upsertForPeriod(
+        makeReport({
+          id: `legacy-report-${version}`,
+          version,
+          supersedesReportId: previous.id,
+          title: `A 股收盘复盘（补充 v${version}）`,
+        }),
+      );
+    }
+    const listed = await listReportsTool.execute({ kind: 'closing', limit: 1 }, ctx);
+    expect(listed).toMatchObject({
+      ok: true,
+      data: { reports: [{ id: previous.id, title: 'A 股收盘复盘' }] },
+    });
+    const found = await getReportTool.execute({ id: previous.id }, ctx);
+    expect(found).toMatchObject({ ok: true, data: { report: { title: 'A 股收盘复盘' } } });
+    const rendered = await renderReportTool.execute(
+      { reportId: previous.id, format: 'markdown' },
+      ctx,
+    );
+    expect(rendered.ok && rendered.data.content.startsWith('# A 股收盘复盘\n')).toBe(true);
+    const rejected = await saveReportTool.execute(
+      {
+        report: makeReport({
+          id: 'new-supplement',
+          version: 4,
+          supersedesReportId: previous.id,
+        }),
+      },
+      ctx,
+    );
+    expect(rejected).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(3);
+  });
   it('save_report 保存后，get_report 可按稳定 id 读取', async () => {
     const ctx = await buildTestContext();
     const saved = await saveReportTool.execute({ report: makeReport() }, ctx);

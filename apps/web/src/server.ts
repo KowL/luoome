@@ -3160,6 +3160,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     const input = {
       ...raw,
       mode: 'manual' as const,
+      ...(kind === 'closing' ? { planBatchStatus: undefined } : {}),
       ...(kind === 'weekly' && typeof raw.date === 'string'
         ? { periodEnd: raw.date, date: undefined }
         : {}),
@@ -3238,6 +3239,7 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
       data: {
         latestReportId: latestReport.id,
         canRefresh:
+          value.kind === 'weekly' &&
           latestReport.id === value.id &&
           latestReport.decisionReviewSnapshot?.inputFingerprint !==
             currentSnapshot.inputFingerprint,

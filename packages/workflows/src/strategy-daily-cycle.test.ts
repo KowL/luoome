@@ -7,11 +7,18 @@ import type {
   ToolContext,
 } from '@luoome/core';
 import { money, strategyDefinitionHash } from '@luoome/core';
-import { addHoldingTool, addTradeTool, getIntradayDeliveryAuditTool } from '@luoome/tools';
+import {
+  addHoldingTool,
+  addTradeTool,
+  getAccountFactsTool,
+  getIntradayDeliveryAuditTool,
+} from '@luoome/tools';
 import { buildTestContext, seedTestStockUniverse } from '@luoome/tools/testing';
 import { describe, expect, it } from 'vitest';
+import { currentStrategyFingerprint, runAccountPlanBatch } from './account-plan-batch.js';
 import { closingReportWorkflow } from './closing-report.js';
 import { closingReportCutoffWorkflow } from './closing-report-cutoff.js';
+import { buildWorkflowTools } from './define-workflow.js';
 import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.js';
 import { strategyDailyCycleWorkflow } from './strategy-daily-cycle.js';
 
@@ -90,7 +97,129 @@ const seedSchedule = async (
   await ctx.repos.strategySchedule.save(schedule);
 };
 
+const prepareAccountPlans = async (ctx: ToolContext, date = '2026-08-10') => {
+  const workflow = { ...ctx, tools: buildWorkflowTools(ctx) };
+  const fingerprint = await currentStrategyFingerprint(date, workflow);
+  if (fingerprint === null) throw new Error('strategy fingerprint fixture missing');
+  for (const account of await ctx.repos.account.list()) {
+    const facts = await getAccountFactsTool.execute({ accountId: account.id }, ctx);
+    if (!facts.ok) throw new Error('account facts fixture missing');
+    const batch = await runAccountPlanBatch(
+      account.id,
+      date,
+      fingerprint,
+      facts.data.facts.digest,
+      workflow,
+    );
+    expect(batch.status).not.toBe('blocked');
+  }
+};
+
 describe('strategy-daily-cycle reliability matrix', () => {
+  it('手动生成同样等待账户计划完成，再生成一份并复用', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const input = {
+      date: '2026-08-10',
+      scope: { kind: 'account' as const, accountId: ctx.user.defaultAccountId },
+      notify: false,
+    };
+    expect(await closingReportWorkflow.run(input, ctx)).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+    await prepareAccountPlans(ctx);
+    const first = await closingReportWorkflow.run(input, ctx);
+    expect(first).toMatchObject({ ok: true, data: { created: true, report: { version: 1 } } });
+    const again = await closingReportWorkflow.run(input, ctx);
+    expect(again).toMatchObject({ ok: true, data: { created: false } });
+    if (first.ok && again.ok) expect(again.data.report.id).toBe(first.data.report.id);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
+  });
+  it('18:00 也等待未完成的策略，随后将全部策略结果和账户计划统一出报', async () => {
+    const stockUniverse: StockUniverseManagerLike = {
+      name: 'stock-universe',
+      sources: ['test-source'],
+      fetchStockUniverse: async () => ({
+        source: 'test-source',
+        coverage: 'CN_A_SHARES_SH_SZ',
+        observedAt: NOW,
+        complete: true,
+        reportedTotal: 1,
+        entries: [
+          {
+            stockId: '600519.SH',
+            code: '600519' as StockCode,
+            exchange: 'SH',
+            name: '贵州茅台',
+            listingStatus: 'listed',
+          },
+        ],
+      }),
+    };
+    const ctx = await buildTestContext({ clock: () => NOW, stockUniverse });
+    await prepareAccountPlans(ctx);
+    await seedSchedule(ctx, { key: 'not-finished' });
+    expect(await closingReportCutoffWorkflow.run({}, ctx)).toMatchObject({
+      ok: true,
+      data: { created: [] },
+    });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+    const result = await strategyDailyCycleWorkflow.run({ owner: 'finish-before-report' }, ctx);
+    expect(result).toMatchObject({ ok: true, data: { items: [{ runId: expect.any(String) }] } });
+    const reports = await ctx.repos.report.list({ kind: 'closing' });
+    expect(reports).toHaveLength(3);
+    for (const report of reports) {
+      expect(report.version).toBe(1);
+      const table = report.sections
+        .find((section) => section.key === 'strategy-actions')
+        ?.blocks.find((block) => block.kind === 'table');
+      expect(table?.kind === 'table' ? table.rows : []).toHaveLength(1);
+    }
+  });
+
+  it('独立截止 tick 与计划批次并发时等待提交，再保存并通知唯一报告', async () => {
+    const ctx = await buildTestContext({ clock: () => NOW });
+    const finish = ctx.repos.workflowRun.finishClaim.bind(ctx.repos.workflowRun);
+    let release = (): void => {};
+    let signal = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      signal = resolve;
+    });
+    let held = false;
+    ctx.repos.workflowRun.finishClaim = async (run, token) => {
+      if (run.workflowName === 'account-plan-batch' && !held) {
+        held = true;
+        signal();
+        await gate;
+      }
+      return finish(run, token);
+    };
+    const running = strategyDailyCycleWorkflow.run({ owner: 'plan-in-flight' }, ctx);
+    await reached;
+    try {
+      expect(await closingReportCutoffWorkflow.run({}, ctx)).toMatchObject({
+        ok: true,
+        data: { created: [], failed: [] },
+      });
+      expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+    } finally {
+      release();
+    }
+    expect(await running).toMatchObject({ ok: true });
+    const reports = await ctx.repos.report.list({ kind: 'closing' });
+    expect(reports).toHaveLength(3);
+    expect(
+      reports.every((report) => report.version === 1 && report.deliveryStatus === 'sent'),
+    ).toBe(true);
+    await closingReportCutoffWorkflow.run({}, ctx);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual(reports);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(3);
+  });
+
   it('AI 恢复到计划、次日投递重试、登记交易和隔日复盘保持同一事实链', async () => {
     let currentTime = NOW;
     let failAI = true;
@@ -161,30 +290,30 @@ describe('strategy-daily-cycle reliability matrix', () => {
 
     const failedCycle = await strategyDailyCycleWorkflow.run({ owner: 'journey-failed-ai' }, ctx);
     expect(failedCycle.ok).toBe(true);
-    const main = (await ctx.repos.report.list({ kind: 'closing' })).find(
-      (report) => report.scope.kind === 'account' && report.scope.accountId === accountId,
-    );
-    if (main === undefined) throw new Error('main report missing');
-    expect(main.version).toBe(1);
-    expect(main.missingDimensions).toContainEqual(
-      expect.objectContaining({ dimension: 'trading-plans.daily-cycle' }),
-    );
+    expect(
+      (await ctx.repos.report.list({ kind: 'closing' })).some(
+        (report) => report.scope.kind === 'account' && report.scope.accountId === accountId,
+      ),
+    ).toBe(false);
 
     currentTime = new Date(NOW.getTime() + 16 * 60_000);
     failAI = false;
     expect(
       await strategyDailyCycleWorkflow.run({ owner: 'journey-ai-restored' }, ctx),
-    ).toMatchObject({
-      ok: true,
-    });
-    const supplement = (await ctx.repos.report.list({ kind: 'closing' })).find(
-      (report) => report.supersedesReportId === main.id,
+    ).toMatchObject({ ok: true });
+    const main = (await ctx.repos.report.list({ kind: 'closing' })).find(
+      (report) => report.scope.kind === 'account' && report.scope.accountId === accountId,
     );
-    expect(supplement?.version).toBe(2);
+    expect(main?.version).toBe(1);
+    expect(main?.supersedesReportId).toBeUndefined();
     expect(
-      supplement?.missingDimensions.some((gap) => gap.dimension === 'trading-plans.daily-cycle'),
+      main?.missingDimensions.some((gap) => gap.dimension === 'trading-plans.daily-cycle'),
     ).toBe(false);
-    expect((await ctx.repos.report.findById(main.id))?.sections).toEqual(main.sections);
+    expect(
+      (await ctx.repos.report.list({ kind: 'closing' })).filter(
+        (report) => report.scope.kind === 'account' && report.scope.accountId === accountId,
+      ),
+    ).toHaveLength(1);
     const plan = (await ctx.repos.tradingPlan.list({ accountId })).find(
       (candidate) => candidate.stockId === stockId,
     );
@@ -250,6 +379,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
       ok: true,
     });
     currentTime = new Date('2026-08-12T10:00:00.000Z');
+    await prepareAccountPlans(ctx, '2026-08-12');
     const review = await closingReportWorkflow.run(
       { date: '2026-08-12', scope: { kind: 'account', accountId }, notify: false },
       ctx,
@@ -891,6 +1021,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
         },
       },
     };
+    await prepareAccountPlans(ctx);
     const first = await closingReportCutoffWorkflow.run({}, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
@@ -933,6 +1064,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
         },
       },
     };
+    await prepareAccountPlans(ctx);
     const first = await closingReportCutoffWorkflow.run({}, ctx);
     expect(first.ok).toBe(true);
     const original = await ctx.repos.report.list({ kind: 'closing' });
@@ -955,6 +1087,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
   it('跨天缺失主版补记为 partial，历史行情与账户快照明确不可用', async () => {
     let currentTime = NOW;
     const ctx = await buildTestContext({ clock: () => currentTime });
+    await prepareAccountPlans(ctx);
     const first = await closingReportCutoffWorkflow.run({}, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
@@ -1004,6 +1137,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
       ...lateAccount,
       createdAt: new Date(NOW.getTime() + 5 * 60_000),
     });
+    await prepareAccountPlans(ctx);
     const cutoff = await closingReportCutoffWorkflow.run({}, ctx);
     expect(cutoff.ok).toBe(true);
     if (!cutoff.ok) return;
@@ -1020,7 +1154,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual([]);
   });
 
-  it('预期策略与全部账户批次在 18:00 前完成时提前发布，账本变化形成补充版', async () => {
+  it('等待全部策略和账户计划后统一发布，账本后续变化不追加报告', async () => {
     const scheduledAt = new Date('2026-08-10T08:30:00.000Z');
     let currentTime = new Date('2026-08-10T08:31:00.000Z');
     const stockUniverse: StockUniverseManagerLike = {
@@ -1115,24 +1249,30 @@ describe('strategy-daily-cycle reliability matrix', () => {
     const changed = await strategyDailyCycleWorkflow.run({ owner: 'early-ledger-change' }, ctx);
     expect(changed.ok).toBe(true);
     const after = await ctx.repos.report.list({ kind: 'closing' });
-    expect(after).toHaveLength(4);
+    expect(after).toHaveLength(3);
     const accountReports = after.filter(
       (report) => report.scope.kind === 'account' && report.scope.accountId === account.id,
     );
-    expect(accountReports.map((report) => report.version)).toEqual([2, 1]);
-    expect(accountReports[1]?.id).toBe(
+    expect(accountReports.map((report) => report.version)).toEqual([1]);
+    expect(accountReports[0]?.id).toBe(
       main.find(
         (report) => report.scope.kind === 'account' && report.scope.accountId === account.id,
       )?.id,
     );
   });
 
-  it('16:30 持久化账户计划批次，18:00 报告保留草案批次的 partial 状态', async () => {
+  it('无当日预期策略时 18:00 完成账户计划再生成一份报告', async () => {
     let currentTime = new Date('2026-08-10T08:30:00.000Z');
     const ctx = await buildTestContext({ clock: () => currentTime });
     const prepared = await strategyDailyCycleWorkflow.run({ owner: 'early-plan' }, ctx);
     expect(prepared.ok).toBe(true);
     expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+    expect(
+      await ctx.repos.workflowRun.listRecent({ workflowName: 'account-plan-batch' }),
+    ).toHaveLength(0);
+    currentTime = NOW;
+    const finished = await strategyDailyCycleWorkflow.run({ owner: 'ready-plan' }, ctx);
+    expect(finished.ok).toBe(true);
     const batches = await ctx.repos.workflowRun.listRecent({ workflowName: 'account-plan-batch' });
     expect(batches).toHaveLength(3);
     expect(batches.every((batch) => batch.status !== 'running')).toBe(true);
@@ -1149,7 +1289,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     const cutoff = await closingReportCutoffWorkflow.run({}, ctx);
     expect(cutoff.ok).toBe(true);
     if (!cutoff.ok) return;
-    expect(cutoff.data.created).toHaveLength(3);
+    expect(cutoff.data.created).toHaveLength(0);
     const reports = await ctx.repos.report.list({ kind: 'closing' });
     expect(reports).toHaveLength(3);
     for (const report of reports) {
@@ -1173,8 +1313,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
   it('计划批次完成后账户账本变化，截止报告不复用旧批次的完成状态', async () => {
     let currentTime = new Date('2026-08-10T08:30:00.000Z');
     const ctx = await buildTestContext({ clock: () => currentTime });
-    const early = await strategyDailyCycleWorkflow.run({ owner: 'before-ledger-change' }, ctx);
-    expect(early.ok).toBe(true);
+    await prepareAccountPlans(ctx);
     const account = (await ctx.repos.account.list())[0];
     if (account === undefined) return;
     await ctx.repos.account.save({ ...account, cashBalance: money(account.cashBalance + 100) });
@@ -1186,41 +1325,38 @@ describe('strategy-daily-cycle reliability matrix', () => {
     const changed = reports.find(
       (report) => report.scope.kind === 'account' && report.scope.accountId === account.id,
     );
-    const planSection = changed?.sections.find((section) => section.key === 'trading-plans');
-    expect(planSection?.status).toBe('partial');
-    expect(planSection?.missingDimensions).toContainEqual(
-      expect.objectContaining({ dimension: 'trading-plans.daily-cycle' }),
-    );
+    expect(changed).toBeUndefined();
+    expect(reports).toHaveLength(2);
+    const finished = await strategyDailyCycleWorkflow.run({ owner: 'after-ledger-change' }, ctx);
+    expect(finished.ok).toBe(true);
+    const final = await ctx.repos.report.list({ kind: 'closing' });
+    expect(final).toHaveLength(3);
+    expect(
+      final.find(
+        (report) => report.scope.kind === 'account' && report.scope.accountId === account.id,
+      )?.version,
+    ).toBe(1);
   });
 
-  it('截止时账户批次缺失，主报告标 partial，随后批次完成生成补充版本', async () => {
+  it('18:00 时计划批次缺失先等待，批次完成后才生成唯一报告', async () => {
     const ctx = await buildTestContext({ clock: () => NOW });
-    const original = await closingReportCutoffWorkflow.run({}, ctx);
-    expect(original.ok).toBe(true);
-    if (!original.ok) return;
-    expect(original.data.created).toHaveLength(3);
-    const primary = await ctx.repos.report.list({ kind: 'closing' });
-    expect(primary).toHaveLength(3);
-    for (const report of primary) {
-      const plans = report.sections.find((section) => section.key === 'trading-plans');
-      expect(plans?.status).toBe('partial');
-      expect(
-        plans?.missingDimensions.some((gap) => gap.dimension === 'trading-plans.daily-cycle'),
-      ).toBe(true);
-    }
-
+    const waiting = await closingReportCutoffWorkflow.run({}, ctx);
+    expect(waiting).toMatchObject({ ok: true, data: { created: [], failed: [] } });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
     const resumed = await strategyDailyCycleWorkflow.run({ owner: 'late-plan' }, ctx);
     expect(resumed.ok).toBe(true);
     const reports = await ctx.repos.report.list({ kind: 'closing' });
-    expect(reports).toHaveLength(6);
-    for (const report of primary) {
-      const supplement = reports.find((item) => item.supersedesReportId === report.id);
-      expect(supplement?.version).toBe(2);
-      expect((await ctx.repos.report.findById(report.id))?.version).toBe(1);
-    }
+    expect(reports).toHaveLength(3);
+    expect(
+      reports.every((report) => report.version === 1 && report.supersedesReportId === undefined),
+    ).toBe(true);
+    expect(await strategyDailyCycleWorkflow.run({ owner: 'late-plan-repeat' }, ctx)).toMatchObject({
+      ok: true,
+    });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual(reports);
   });
 
-  it('主报告发布后才完成的策略批次形成补充版本，不覆盖原报告', async () => {
+  it('报告发布后新增的策略照常运行，不追加或改写收盘报告', async () => {
     let currentTime = NOW;
     const ctx = await buildTestContext({ clock: () => currentTime });
     const first = await strategyDailyCycleWorkflow.run({ owner: 'late-first' }, ctx);
@@ -1238,11 +1374,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     if (!late.ok) return;
     expect(late.data.items).toHaveLength(1);
     const reports = await ctx.repos.report.list({ kind: 'closing' });
-    expect(reports).toHaveLength(6);
-    for (const original of originals) {
-      const supplement = reports.find((report) => report.supersedesReportId === original.id);
-      expect(supplement?.version).toBe(2);
-      expect((await ctx.repos.report.findById(original.id))?.version).toBe(1);
-    }
+    expect(reports).toEqual(originals);
+    expect(reports.every((report) => report.version === 1)).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import {
   ReportKindSchema,
   ReportSchema,
   ReportScopeSchema,
+  reportDisplayTitle,
   reportScopeKey,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -63,7 +64,9 @@ export const getReportTool = defineTool({
   handler: async (input, ctx) => {
     if (input.id !== undefined) {
       const report = await ctx.repos.report.findById(input.id);
-      return report === null ? errNotFound('Report', input.id) : { report };
+      return report === null
+        ? errNotFound('Report', input.id)
+        : { report: { ...report, title: reportDisplayTitle(report) } };
     }
     if (input.kind === undefined || input.periodEnd === undefined) {
       return errInvalidInput('kind 与 periodEnd 必须同时提供');
@@ -78,6 +81,8 @@ export const getReportTool = defineTool({
       input.version === undefined
         ? await ctx.repos.report.findByPeriod(period)
         : await ctx.repos.report.findByPeriodVersion({ ...period, version: input.version });
-    return report === null ? errNotFound('Report', input.periodEnd) : { report };
+    return report === null
+      ? errNotFound('Report', input.periodEnd)
+      : { report: { ...report, title: reportDisplayTitle(report) } };
   },
 });

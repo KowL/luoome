@@ -8,7 +8,6 @@ import {
   nextCronOccurrence,
   notificationText,
   notificationTime,
-  type Report,
   type ReportBlock,
   ReportSchema,
   ReportScopeSchema,
@@ -22,7 +21,7 @@ import {
   tradingPlanVersionId,
 } from '@luoome/core';
 import { z } from 'zod';
-
+import { currentStrategyFingerprint, getAccountPlanBatchStatus } from './account-plan-batch.js';
 import { defineWorkflow, type WorkflowContext } from './define-workflow.js';
 import { executeReportWorkflow, type ReportSectionPiece } from './internal/report-runner.js';
 import {
@@ -41,7 +40,6 @@ export const ClosingReportInput = z.object({
   scope: ReportScopeSchema.default({ kind: 'all-accounts' }),
   notify: z.boolean().optional(),
   mode: z.enum(['manual', 'scheduled']).default('manual'),
-  supplement: z.boolean().optional(),
   planBatchStatus: z.enum(['complete', 'partial', 'blocked']).optional(),
 });
 
@@ -596,6 +594,55 @@ export const scheduledRunExpectedAt = (
   return dateInShanghai(expectedAt) === date && expectedAt >= schedule.createdAt
     ? expectedAt
     : undefined;
+};
+
+export const closingReportStrategiesReady = async (
+  date: string,
+  now: Date,
+  ctx: WorkflowContext,
+): Promise<boolean> => {
+  const strategies = await ctx.tools.list_strategies.execute({ filter: { status: 'active' } });
+  if (!strategies.ok) return false;
+  const schedules = await Promise.all(
+    strategies.data.strategies.map((strategy) =>
+      ctx.tools.get_strategy_schedule.execute({ strategyId: strategy.id }),
+    ),
+  );
+  if (schedules.some((result) => !result.ok)) return false;
+  const expected = strategies.data.strategies.flatMap((strategy, index) => {
+    const schedule = schedules[index];
+    if (!schedule?.ok || schedule.data.schedule === null) return [];
+    const expectedAt = scheduledRunExpectedAt(schedule.data.schedule, date);
+    return expectedAt === undefined
+      ? []
+      : [{ strategyId: strategy.id, expectedAt, schedule: schedule.data.schedule }];
+  });
+  if (expected.length === 0) return now >= new Date(`${date}T18:00:00+08:00`);
+  if (
+    expected.some(
+      (item) =>
+        item.expectedAt > now ||
+        item.schedule.nextRunAt === undefined ||
+        item.schedule.nextRunAt <= now ||
+        item.schedule.lastRunId === undefined,
+    )
+  )
+    return false;
+  const since = new Date(`${date}T00:00:00+08:00`);
+  const runs = await ctx.tools.list_strategy_runs.execute({
+    scope: 'operational',
+    publication: 'published',
+    since,
+    until: new Date(since.getTime() + 24 * 60 * 60_000 - 1),
+    limit: 500,
+  });
+  if (!runs.ok || runs.data.runs.length === 500) return false;
+  const published = new Set(
+    runs.data.runs.filter((run) => dateInShanghai(run.startedAt) === date).map((run) => run.id),
+  );
+  return expected.every(
+    (item) => item.schedule.lastRunId !== undefined && published.has(item.schedule.lastRunId),
+  );
 };
 
 /**
@@ -1254,46 +1301,6 @@ const tradingPlansSection = async (
   };
 };
 
-const planActionFingerprint = (report: Report): string => {
-  const table = report.sections
-    .find((section) => section.key === 'trading-plans')
-    ?.blocks.find((block) => block.kind === 'table');
-  if (table?.kind !== 'table') return '';
-  return JSON.stringify(
-    table.rows.map((row) => [
-      row.accountId ?? row.account,
-      row.stock,
-      row.action,
-      row.status,
-      row.entryRange,
-      row.entryConditions,
-      row.exitConditions,
-      row.targetPct,
-      row.version,
-      row.risk,
-      row.counterEvidence,
-    ]),
-  );
-};
-
-const shouldNotifyClosingSupplement = (previous: Report, next: Report): boolean => {
-  const previousMissing = previous.sections
-    .filter((section) => section.required)
-    .flatMap((section) => section.missingDimensions.map((gap) => gap.dimension));
-  const currentMissing = new Set(next.missingDimensions.map((gap) => gap.dimension));
-  const previousFingerprint = previous.sections.find(
-    (section) => section.key === 'trading-plans',
-  )?.inputFingerprint;
-  const nextFingerprint = next.sections.find(
-    (section) => section.key === 'trading-plans',
-  )?.inputFingerprint;
-  const plansChanged =
-    previousFingerprint === undefined || nextFingerprint === undefined
-      ? planActionFingerprint(previous) !== planActionFingerprint(next)
-      : previousFingerprint !== nextFingerprint;
-  return previousMissing.some((dimension) => !currentMissing.has(dimension)) || plansChanged;
-};
-
 const runClosingReport = async (
   input: ClosingInput,
   ctx: WorkflowContext,
@@ -1306,14 +1313,57 @@ const runClosingReport = async (
       error: { kind: 'invalid_input', message: `${date} 不是 A 股交易日`, issues: [] },
     };
   }
+  if (date === dateInShanghai(ctx.clock()) && input.planBatchStatus === undefined) {
+    const existing = await ctx.tools.get_report.execute({
+      kind: 'closing',
+      scope: input.scope,
+      periodEnd: date,
+    });
+    if (!existing.ok && existing.error.kind !== 'not_found') return existing;
+    if (!existing.ok) {
+      let ready = await closingReportStrategiesReady(date, ctx.clock(), ctx);
+      if (ready) {
+        const fingerprint = await currentStrategyFingerprint(date, ctx);
+        let accountIds: string[];
+        if (input.scope.kind === 'account') accountIds = [input.scope.accountId];
+        else {
+          const accounts = await ctx.tools.list_accounts.execute({});
+          if (!accounts.ok) return accounts;
+          accountIds = accounts.data.accounts.map((account) => account.id);
+        }
+        for (const accountId of accountIds) {
+          const facts = await ctx.tools.get_account_facts.execute({ accountId });
+          if (!facts.ok) return facts;
+          const status = await getAccountPlanBatchStatus(
+            accountId,
+            date,
+            fingerprint,
+            facts.data.facts.digest,
+            ctx,
+          );
+          if (status === 'blocked') {
+            ready = false;
+            break;
+          }
+        }
+      }
+      if (!ready)
+        return {
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: '当日策略或账户交易计划尚未完成，完成后再统一生成收盘复盘',
+            issues: [],
+          },
+        };
+    }
+  }
   const result = await executeReportWorkflow(
     {
       workflowName: 'closing-report',
       kind: 'closing',
       template: 'closing-v1',
       mode: input.mode,
-      ...(input.supplement === undefined ? {} : { supplement: input.supplement }),
-      shouldNotifySupplement: shouldNotifyClosingSupplement,
       notify: input.notify ?? input.mode === 'scheduled',
       scope: input.scope,
       periodStart: date,

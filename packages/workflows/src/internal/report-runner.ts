@@ -34,8 +34,6 @@ interface ExecuteReportWorkflowInput {
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly title: string;
-  readonly supplement?: boolean;
-  readonly shouldNotifySupplement?: (previous: Report, next: Report) => boolean;
   readonly inputSummary?: Record<string, unknown>;
   readonly buildSections: (
     generatedAt: Date,
@@ -112,9 +110,8 @@ export const executeReportWorkflow = async (
     previousReport = existing.ok ? existing.data.report : undefined;
     if (
       previousReport !== undefined &&
-      input.mode === 'scheduled' &&
-      ((input.kind === 'closing' && !input.supplement) ||
-        (input.kind !== 'closing' &&
+      (input.kind === 'closing' ||
+        (input.mode === 'scheduled' &&
           input.kind !== 'weekly' &&
           (previousReport.deliveryStatus === 'sent' ||
             previousReport.deliveryStatus === 'fallback-log')))
@@ -316,8 +313,10 @@ export const executeReportWorkflow = async (
     id: `report-${input.kind}-${randomUUID()}`,
     ...(input.kind === 'closing' || input.kind === 'weekly'
       ? {
-          version: (previousReport?.version ?? 0) + 1,
-          ...(previousReport === undefined ? {} : { supersedesReportId: previousReport.id }),
+          version: input.kind === 'closing' ? 1 : (previousReport?.version ?? 0) + 1,
+          ...(input.kind !== 'weekly' || previousReport === undefined
+            ? {}
+            : { supersedesReportId: previousReport.id }),
         }
       : {}),
     kind: input.kind,
@@ -325,7 +324,7 @@ export const executeReportWorkflow = async (
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
     title:
-      (input.kind === 'closing' || input.kind === 'weekly') && previousReport !== undefined
+      input.kind === 'weekly' && previousReport !== undefined
         ? `${input.title}（补充 v${(previousReport.version ?? 1) + 1}）`
         : input.title,
     generatedAt,
@@ -432,9 +431,7 @@ export const executeReportWorkflow = async (
     deliveredReport.notificationPolicy !== 'never' &&
     (deliveredReport.id === previousReport?.id
       ? deliveredReport.deliveryStatus !== 'sent'
-      : (!input.supplement && (input.kind !== 'weekly' || previousReport === undefined)) ||
-        (previousReport !== undefined &&
-          input.shouldNotifySupplement?.(previousReport, deliveredReport) === true));
+      : input.kind !== 'weekly' || previousReport === undefined);
   let notified = false;
   let notificationFailed = false;
   let notificationSkippedByPolicy = false;

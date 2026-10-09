@@ -16,9 +16,9 @@ import {
 import { z } from 'zod';
 
 import { currentStrategyFingerprint, runAccountPlanBatch } from './account-plan-batch.js';
-import { closingReportWorkflow, scheduledRunExpectedAt } from './closing-report.js';
+import { closingReportStrategiesReady } from './closing-report.js';
 import { closingReportCutoffWorkflow } from './closing-report-cutoff.js';
-import { defineWorkflow, type WorkflowContext, type WorkflowStep } from './define-workflow.js';
+import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 export const StrategyDailyCycleInput = z.object({
   owner: z.string().min(1).optional(),
@@ -97,55 +97,6 @@ const scheduledRunDataAsOf = (run: {
   // The checkpoint timestamp is the cycle's trading-day key and is therefore the correct
   // identity for preventing a second cron tick on the same day.
   return readStrategyRunSnapshot(run.inputSnapshot).dataCheckpoint?.dataAsOf ?? run.dataAsOf;
-};
-
-const allExpectedStrategiesPublished = async (
-  date: string,
-  now: Date,
-  ctx: WorkflowContext,
-): Promise<boolean> => {
-  const strategies = await ctx.tools.list_strategies.execute({ filter: { status: 'active' } });
-  if (!strategies.ok) return false;
-  const schedules = await Promise.all(
-    strategies.data.strategies.map((strategy) =>
-      ctx.tools.get_strategy_schedule.execute({ strategyId: strategy.id }),
-    ),
-  );
-  if (schedules.some((result) => !result.ok)) return false;
-  const expected = strategies.data.strategies.flatMap((strategy, index) => {
-    const schedule = schedules[index];
-    if (!schedule?.ok || schedule.data.schedule === null) return [];
-    const expectedAt = scheduledRunExpectedAt(schedule.data.schedule, date);
-    return expectedAt === undefined
-      ? []
-      : [{ strategyId: strategy.id, expectedAt, schedule: schedule.data.schedule }];
-  });
-  if (
-    expected.length === 0 ||
-    expected.some(
-      (item) =>
-        item.expectedAt > now ||
-        item.schedule.nextRunAt === undefined ||
-        item.schedule.nextRunAt <= now ||
-        item.schedule.lastRunId === undefined,
-    )
-  )
-    return false;
-  const since = new Date(`${date}T00:00:00+08:00`);
-  const runs = await ctx.tools.list_strategy_runs.execute({
-    scope: 'operational',
-    publication: 'published',
-    since,
-    until: new Date(since.getTime() + 24 * 60 * 60_000 - 1),
-    limit: 500,
-  });
-  if (!runs.ok || runs.data.runs.length === 500) return false;
-  const published = new Set(
-    runs.data.runs.filter((run) => dateInShanghai(run.startedAt) === date).map((run) => run.id),
-  );
-  return expected.every(
-    (item) => item.schedule.lastRunId !== undefined && published.has(item.schedule.lastRunId),
-  );
 };
 
 const runCycle: WorkflowStep = async (previous, ctx) => {
@@ -867,125 +818,34 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       ...(reason === undefined ? {} : { reason }),
     });
   }
-  // 策略只负责共享发现；16:30 后账户计划按当日已发布策略快照独立生成。
-  // Web 的独立截止 tick 可在本轮长时间分析期间发布主报告；本轮完成后兜底发布与补充。
   const reportNow = ctx.clock();
   const reportDate = cycleDate ?? dateInShanghai(reportNow);
   const planStart = new Date(`${reportDate}T16:30:00+08:00`);
-  const reportCutoff = new Date(`${reportDate}T18:00:00+08:00`);
   let cutoff: Awaited<ReturnType<typeof closingReportCutoffWorkflow.run>> | undefined;
   if (
     input.asOf === undefined &&
     reportNow >= planStart &&
-    !isWeekend(reportCutoff) &&
-    !isHoliday(reportCutoff)
+    !isWeekend(planStart) &&
+    !isHoliday(planStart) &&
+    (await closingReportStrategiesReady(reportDate, reportNow, ctx))
   ) {
     const accounts = await ctx.tools.list_accounts.execute({});
     const fingerprint = await currentStrategyFingerprint(reportDate, ctx);
-    const hasNewStrategyResult = items.some((item) => item.status !== 'skipped');
     if (!accounts.ok) {
       ctx.logger.warn('strategy-daily-cycle: account listing failed', { error: accounts.error });
     } else {
-      const planStatuses = new Map<string, 'complete' | 'partial' | 'blocked'>();
-      const newlyFinished = new Set<string>();
       for (const account of accounts.data.accounts) {
         const facts = await ctx.tools.get_account_facts.execute({ accountId: account.id });
-        const batch =
-          fingerprint === null || !facts.ok
-            ? { status: 'blocked' as const, newlyFinished: false }
-            : await runAccountPlanBatch(
-                account.id,
-                reportDate,
-                fingerprint,
-                facts.data.facts.digest,
-                ctx,
-              );
-        planStatuses.set(account.id, batch.status);
-        if (batch.newlyFinished) newlyFinished.add(account.id);
-      }
-      const reportAtEnd = ctx.clock();
-      const createdEarly = new Set<string>();
-      if (
-        reportAtEnd < reportCutoff &&
-        accounts.data.accounts.length > 0 &&
-        [...planStatuses.values()].every((status) => status !== 'blocked') &&
-        (await allExpectedStrategiesPublished(reportDate, reportAtEnd, ctx)) &&
-        ctx.clock() < reportCutoff
-      ) {
-        for (const account of accounts.data.accounts) {
-          const report = await closingReportWorkflow.run(
-            {
-              date: reportDate,
-              scope: { kind: 'account', accountId: account.id },
-              mode: 'scheduled',
-              planBatchStatus: planStatuses.get(account.id),
-            },
+        if (fingerprint !== null && facts.ok)
+          await runAccountPlanBatch(
+            account.id,
+            reportDate,
+            fingerprint,
+            facts.data.facts.digest,
             ctx,
           );
-          if (report.ok && report.data.created) createdEarly.add(account.id);
-          if (!report.ok)
-            ctx.logger.warn('strategy-daily-cycle: early closing report failed', {
-              accountId: account.id,
-              error: report.error,
-            });
-        }
       }
-      if (ctx.clock() >= reportCutoff) cutoff = await closingReportCutoffWorkflow.run({}, ctx);
-      for (const account of accounts.data.accounts) {
-        const scope = { kind: 'account' as const, accountId: account.id };
-        const planBatchStatus = planStatuses.get(account.id) ?? 'blocked';
-        const existing = await ctx.tools.get_report.execute({
-          kind: 'closing',
-          scope,
-          periodEnd: reportDate,
-        });
-        if (!existing.ok) {
-          if (existing.error.kind === 'not_found') continue;
-          ctx.logger.warn('strategy-daily-cycle: report lookup failed', {
-            accountId: account.id,
-            error: existing.error,
-          });
-          continue;
-        }
-        const planBatchGap = existing.data.report.sections
-          .find((section) => section.key === 'trading-plans')
-          ?.missingDimensions.find(
-            (dimension) => dimension.dimension === 'trading-plans.daily-cycle',
-          );
-        const planBatchImproved =
-          planBatchGap !== undefined &&
-          (planBatchStatus === 'complete' ||
-            (planBatchStatus === 'partial' && planBatchGap.errorKind === 'plan-batch-blocked'));
-        if (
-          (cutoff?.ok && cutoff.data.created.includes(account.id)) ||
-          createdEarly.has(account.id) ||
-          (!hasNewStrategyResult && !newlyFinished.has(account.id) && !planBatchImproved)
-        )
-          continue;
-        const report = await closingReportWorkflow.run(
-          {
-            date: reportDate,
-            scope,
-            mode: 'scheduled',
-            supplement: true,
-            planBatchStatus,
-          },
-          ctx,
-        );
-        if (!report.ok) {
-          ctx.logger.warn('strategy-daily-cycle: unified closing report failed', {
-            accountId: account.id,
-            error: report.error,
-          });
-          const reportError = `收盘复盘生成失败: ${errorText(report.error)}`;
-          for (const item of items) {
-            if (item.runId === undefined || item.status === 'failed') continue;
-            item.status = 'partial';
-            item.reason =
-              item.reason === undefined ? reportError : `${item.reason}；${reportError}`;
-          }
-        }
-      }
+      cutoff = await closingReportCutoffWorkflow.run({ date: reportDate }, ctx);
     }
   }
   if (cutoff !== undefined && (!cutoff.ok || cutoff.data.failed.length > 0)) {

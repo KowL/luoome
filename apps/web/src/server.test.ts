@@ -657,7 +657,26 @@ describe('报告 API', () => {
     expect(notificationBody.data.content).not.toContain(`# ${report.title}`);
   });
 
-  it('账户报告仅对本账户显示后补状态，刷新写入不可通知版本', async () => {
+  it('手动收盘 API 不能用请求体伪造批次完成状态提前出报', async () => {
+    const ctx = await buildTestContext({ clock: () => new Date('2026-08-10T10:00:00.000Z') });
+    const local = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
+    const response = await local.fetch(
+      new Request('http://test/api/reports/run/closing', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://test' },
+        body: JSON.stringify({
+          date: '2026-08-10',
+          scope: { kind: 'account', accountId: ctx.user.defaultAccountId },
+          notify: false,
+          planBatchStatus: 'complete',
+        }),
+      }),
+    );
+    expect(await response.json()).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(0);
+  });
+
+  it('账户周报仅对本账户显示后补状态，收盘复盘禁止追加版本', async () => {
     const now = new Date('2026-09-04T10:00:00.000Z');
     const ctx = await buildTestContext({ clock: () => now });
     const accountId = ctx.user.defaultAccountId;
@@ -665,9 +684,9 @@ describe('报告 API', () => {
     const report = ReportSchema.parse({
       id: 'web-decision-report',
       version: 1,
-      kind: 'closing',
+      kind: 'weekly',
       scope: { kind: 'account', accountId },
-      periodStart: '2026-09-03',
+      periodStart: '2026-08-31',
       periodEnd: '2026-09-03',
       title: '账户复盘',
       generatedAt: now,
@@ -691,6 +710,38 @@ describe('报告 API', () => {
       createdAt: now,
       updatedAt: now,
     });
+    const closing = {
+      ...report,
+      id: 'web-closing-report',
+      kind: 'closing' as const,
+      periodStart: report.periodEnd,
+    };
+    await ctx.repos.report.upsertForPeriod(closing);
+    const closingStatus = await local.fetch(
+      new Request('http://test/api/reports/web-closing-report/decision-review-status', {
+        headers: { 'x-luoome-account-id': accountId },
+      }),
+    );
+    expect(await closingStatus.json()).toMatchObject({ ok: true, data: { canRefresh: false } });
+    const closingRefresh = await local.fetch(
+      new Request('http://test/api/reports/web-closing-report/decision-review-refresh', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'http://test',
+          'x-luoome-account-id': accountId,
+        },
+        body: JSON.stringify({
+          expectedLatestReportId: closing.id,
+          requestId: '01daaed6-07fa-4f1b-af32-d4b62d0e0a5',
+        }),
+      }),
+    );
+    expect(await closingRefresh.json()).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_input' },
+    });
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
     await ctx.repos.report.upsertForPeriod(report);
     const status = await local.fetch(
       new Request('http://test/api/reports/web-decision-report/decision-review-status', {

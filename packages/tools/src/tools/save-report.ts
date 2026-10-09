@@ -1,7 +1,7 @@
 import { assertReportInvariants, ReportSchema, reportScopeKey } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool } from '../define-tool.js';
+import { defineTool, errInvalidInput } from '../define-tool.js';
 
 export const SaveReportInput = z.object({
   report: ReportSchema,
@@ -16,7 +16,7 @@ export const SaveReportOutput = z.object({
 
 export const saveReportTool = defineTool({
   name: 'save_report',
-  description: '按 kind/scope/period/version 保存结构化市场报告；收盘报告版本不可覆盖',
+  description: '保存结构化市场报告；收盘复盘每个周期和范围只生成一份，生成后不可覆盖',
   sideEffect: 'write',
   input: SaveReportInput,
   output: SaveReportOutput,
@@ -29,6 +29,8 @@ export const saveReportTool = defineTool({
       periodEnd: input.report.periodEnd,
       version: input.report.version ?? 1,
     });
+    if (input.report.kind === 'closing' && (input.report.version ?? 1) > 1 && existing === null)
+      return errInvalidInput('收盘复盘只生成一份，不再追加补充版');
     const report = await ctx.repos.report.upsertForPeriod(input.report);
     const created = existing === null && report.id === input.report.id;
     if (input.deliveryAttemptId === undefined) return { report, created };

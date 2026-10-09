@@ -3,6 +3,7 @@ import {
   ReportKindSchema,
   ReportScopeSchema,
   ReportStatusSchema,
+  reportDisplayTitle,
   reportScopeKey,
 } from '@luoome/core';
 import { z } from 'zod';
@@ -40,12 +41,13 @@ export const ListReportsOutput = z.object({
 
 export const listReportsTool = defineTool({
   name: 'list_reports',
-  description: '查询报告历史摘要，不返回 sections/evidence 大字段',
+  description: '按周期查询最新报告摘要，每个周期和范围只返回一份，不返回 sections/evidence 大字段',
   sideEffect: 'read',
   input: ListReportsInput,
   output: ListReportsOutput,
   handler: async (input, ctx) => {
     const reports = await ctx.repos.report.list({
+      latestOnly: true,
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
       ...(input.scope !== undefined ? { scopeKey: reportScopeKey(input.scope) } : {}),
       ...(input.from !== undefined ? { from: input.from } : {}),
@@ -64,7 +66,7 @@ export const listReportsTool = defineTool({
         scope: report.scope,
         periodStart: report.periodStart,
         periodEnd: report.periodEnd,
-        title: report.title,
+        title: reportDisplayTitle(report),
         generatedAt: report.generatedAt,
         dataAsOf: report.dataAsOf,
         status: report.status,

@@ -5397,6 +5397,45 @@ export const registerRepositoryContractTests = (
     });
 
     describe('ReportRepository', () => {
+      it('最新报告先按周期收敛再应用状态和条数筛选，历史仍可读取', async () => {
+        const first = await repos.report.upsertForPeriod(makeReport('history-main'));
+        const gap = { dimension: 'market', reason: '源不可用', retryable: true };
+        const latest = await repos.report.upsertForPeriod(
+          makeReport('history-latest', {
+            version: 2,
+            supersedesReportId: first.id,
+            status: 'partial',
+            sections: [
+              {
+                key: 'market',
+                title: '市场',
+                required: true,
+                status: 'unavailable',
+                blocks: [{ kind: 'text', text: '源不可用', tone: 'warning' }],
+                evidenceIds: [],
+                missingDimensions: [gap],
+              },
+            ],
+            missingDimensions: [gap],
+          }),
+        );
+        const earlier = await repos.report.upsertForPeriod(
+          makeReport('earlier-report', {
+            periodStart: '2026-07-01',
+            periodEnd: '2026-07-01',
+          }),
+        );
+        expect(
+          (await repos.report.list({ latestOnly: true, limit: 2 })).map((report) => report.id),
+        ).toEqual([latest.id, earlier.id]);
+        expect(
+          (await repos.report.list({ latestOnly: true, status: 'complete', limit: 2 })).map(
+            (report) => report.id,
+          ),
+        ).toEqual([earlier.id]);
+        expect(await repos.report.findById(first.id)).toEqual(first);
+        expect(await repos.report.list()).toHaveLength(3);
+      });
       it('投递领取跨重试保持互斥，过期接管后旧执行者不能回写', async () => {
         await repos.report.upsertForPeriod(makeReport('delivery-claim'));
         const claim = (attemptId: string, now: Date) =>

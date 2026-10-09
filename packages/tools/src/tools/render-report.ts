@@ -1,4 +1,10 @@
-import { notificationTime, type Report, type ReportBlock, type ReportValue } from '@luoome/core';
+import {
+  notificationTime,
+  type Report,
+  type ReportBlock,
+  type ReportValue,
+  reportDisplayTitle,
+} from '@luoome/core';
 import { z } from 'zod';
 import { defineTool, errNotFound } from '../define-tool.js';
 import { renderReportNotification } from '../internal/report-notification.js';
@@ -98,7 +104,7 @@ const renderBlockMarkdown = (block: ReportBlock): string[] => {
 
 const renderMarkdown = (report: Report): string => {
   const lines = [
-    `# ${report.title}`,
+    `# ${reportDisplayTitle(report)}`,
     '',
     `- 周期：${report.periodStart} 至 ${report.periodEnd}`,
     `- 数据概况：${report.status === 'partial' ? '部分数据待补齐，已展示可核验结果' : '完整'}`,

@@ -29,6 +29,9 @@ const now = new Date('2026-07-27T10:00:00.000Z');
 const marketAsOf = new Date('2026-07-27T07:00:00.000Z');
 const EMPTY_ACCOUNT_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
 
+const generateClosingSnapshot = (input: Record<string, unknown>, ctx: ToolContext) =>
+  closingReportWorkflow.run({ planBatchStatus: 'complete', ...input }, ctx);
+
 const planFixture = (digest: string, overrides: Record<string, unknown> = {}) =>
   TradingPlanSchema.parse({
     id: `account:${EMPTY_ACCOUNT_ID}:stock:600519.SH`,
@@ -376,7 +379,7 @@ describe('closing-report workflow', () => {
     await ctx.repos.tradingPlan.save(active);
     await ctx.repos.tradingPlan.save(draft);
     await ctx.repos.tradingPlan.save(expired);
-    const result = await closingReportWorkflow.run(
+    const result = await generateClosingSnapshot(
       {
         date: '2026-07-27',
         scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
@@ -447,7 +450,7 @@ describe('closing-report workflow', () => {
         },
       ]);
     }
-    const result = await closingReportWorkflow.run(
+    const result = await generateClosingSnapshot(
       {
         date: '2026-07-27',
         scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
@@ -506,7 +509,7 @@ describe('closing-report workflow', () => {
         },
       ]);
     }
-    const result = await closingReportWorkflow.run(
+    const result = await generateClosingSnapshot(
       {
         date: '2026-07-27',
         scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
@@ -531,7 +534,7 @@ describe('closing-report workflow', () => {
     ctx.repos.workflowRun.listRecent = async () => {
       throw new Error('复核审计暂不可用');
     };
-    const result = await closingReportWorkflow.run(
+    const result = await generateClosingSnapshot(
       {
         date: '2026-07-27',
         scope: { kind: 'account', accountId: EMPTY_ACCOUNT_ID },
@@ -557,7 +560,7 @@ describe('closing-report workflow', () => {
     }
   });
 
-  it('补充报告仅更新复核记录时保存新版，维持相同条件不再次通知', async () => {
+  it('报告发布后的复核记录不再生成版本或重复通知', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     const facts = await getAccountFactsTool.execute({ accountId: EMPTY_ACCOUNT_ID }, ctx);
     if (!facts.ok) throw new Error('facts fixture missing');
@@ -569,7 +572,7 @@ describe('closing-report workflow', () => {
       notify: true,
       mode: 'scheduled' as const,
     };
-    const first = await closingReportWorkflow.run(input, ctx);
+    const first = await generateClosingSnapshot(input, ctx);
     expect(first.ok && first.data.notified).toBe(true);
     const reviewedAt = new Date('2026-07-27T09:00:00Z');
     await seedPlanReviews(ctx, EMPTY_ACCOUNT_ID, reviewedAt, [
@@ -582,15 +585,18 @@ describe('closing-report workflow', () => {
         reasons: [],
       },
     ]);
-    const result = await closingReportWorkflow.run({ ...input, supplement: true }, ctx);
+    const result = await generateClosingSnapshot({ ...input, supplement: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.report.version).toBe(2);
+    expect(result.data.report.version).toBe(1);
+    expect(result.data.report.id).toBe(first.ok ? first.data.report.id : undefined);
+    expect(result.data.created).toBe(false);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
     expect(result.data.notified).toBe(false);
     expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
   });
 
-  it('跟踪清单只展示前 20 项时，其余计划的版本变化仍触发补充通知', async () => {
+  it('计划后续变化仍更新计划记录，已生成的报告和通知保持一份', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     const facts = await getAccountFactsTool.execute({ accountId: EMPTY_ACCOUNT_ID }, ctx);
     if (!facts.ok) throw new Error('facts fixture missing');
@@ -609,7 +615,7 @@ describe('closing-report workflow', () => {
       notify: true,
       mode: 'scheduled' as const,
     };
-    const first = await closingReportWorkflow.run(input, ctx);
+    const first = await generateClosingSnapshot(input, ctx);
     expect(first.ok && first.data.notified).toBe(true);
     const last = plans.at(-1);
     if (last === undefined) throw new Error('plan fixture missing');
@@ -619,7 +625,7 @@ describe('closing-report workflow', () => {
       createdAt: now,
       explanation: { ...last.explanation, risks: ['新增风险，需重新核对'] },
     });
-    const result = await closingReportWorkflow.run({ ...input, supplement: true }, ctx);
+    const result = await generateClosingSnapshot({ ...input, supplement: true }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const table = result.data.report.sections
@@ -629,8 +635,10 @@ describe('closing-report workflow', () => {
     expect(table?.kind === 'table' ? table.rows.map((row) => row.stock) : []).not.toContain(
       last.stockName,
     );
-    expect(result.data.notified).toBe(true);
-    expect(await ctx.repos.notification.listRecent()).toHaveLength(2);
+    expect(result.data.created).toBe(false);
+    expect(result.data.report).toEqual(first.ok ? first.data.report : undefined);
+    expect(result.data.notified).toBe(false);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
   });
 
   it('账户报告只展示本账户的策略建议与有效期', async () => {
@@ -660,7 +668,7 @@ describe('closing-report workflow', () => {
       });
     }
 
-    const first = await closingReportWorkflow.run(
+    const first = await generateClosingSnapshot(
       {
         date: '2026-07-27',
         scope: { kind: 'account', accountId: firstAccount.id },
@@ -668,7 +676,7 @@ describe('closing-report workflow', () => {
       },
       ctx,
     );
-    const second = await closingReportWorkflow.run(
+    const second = await generateClosingSnapshot(
       {
         date: '2026-07-27',
         scope: { kind: 'account', accountId: secondAccount.id },
@@ -688,7 +696,7 @@ describe('closing-report workflow', () => {
 
   it('账户计划批次阻断时，交易计划区块和整份报告保持 partial', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
-    const result = await closingReportWorkflow.run(
+    const result = await generateClosingSnapshot(
       { date: '2026-07-27', planBatchStatus: 'blocked', notify: false },
       ctx,
     );
@@ -708,7 +716,7 @@ describe('closing-report workflow', () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     await seedStrategyWithPublishedRun(ctx, '2026-07-27');
     await seedStrategyAdvice(ctx, '2026-07-27');
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: true }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: true }, ctx);
     expect(result.ok).toBe(true);
     const notifications = await ctx.repos.notification.listRecent();
     expect(notifications).toHaveLength(1);
@@ -736,7 +744,7 @@ describe('closing-report workflow', () => {
     };
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: manager });
 
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -794,7 +802,7 @@ describe('closing-report workflow', () => {
       ).toMatchObject({ ok: true });
     }
 
-    const result = await closingReportWorkflow.run(
+    const result = await generateClosingSnapshot(
       { date: '2026-07-27', scope: { kind: 'account', accountId }, notify: false },
       ctx,
     );
@@ -807,7 +815,7 @@ describe('closing-report workflow', () => {
     expect(items?.[0]?.notificationSummary).not.toContain('已送达');
   });
 
-  it('前一交易日提醒不视作成交，用户补登交易后仅在不可变补充版展示实际执行', async () => {
+  it('前一交易日提醒不视作成交，后补交易保留在账本且不改写已生成的复盘', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     const accountId = ctx.user.defaultAccountId;
     const triggeredAt = new Date('2026-07-24T06:00:00.000Z');
@@ -833,7 +841,7 @@ describe('closing-report workflow', () => {
     ).toMatchObject({ ok: true });
 
     const scope = { kind: 'account' as const, accountId };
-    const main = await closingReportWorkflow.run({ date: '2026-07-27', scope, notify: false }, ctx);
+    const main = await generateClosingSnapshot({ date: '2026-07-27', scope, notify: false }, ctx);
     expect(main.ok).toBe(true);
     if (!main.ok) return;
     const reviewOf = (report: typeof main.data.report) => {
@@ -865,30 +873,19 @@ describe('closing-report workflow', () => {
     );
     expect(registered.ok).toBe(true);
     if (!registered.ok) return;
-    const supplement = await closingReportWorkflow.run(
+    const supplement = await generateClosingSnapshot(
       { date: '2026-07-27', scope, notify: false, supplement: true },
       ctx,
     );
     expect(supplement.ok).toBe(true);
     if (!supplement.ok) return;
     const second = reviewOf(supplement.data.report);
-    expect(supplement.data.report.version).toBe(2);
-    expect(second.metrics?.kind === 'metrics' ? second.metrics.items : []).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ key: 'triggerCount', value: 1 }),
-        expect.objectContaining({ key: 'registeredTrades', value: 1 }),
-      ]),
-    );
-    expect(second.tradeTable?.kind === 'table' ? second.tradeTable.rows : []).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: registered.data.trade.id,
-          side: '买入',
-          executedAt: '07/24 15:00（北京时间）',
-          adviceId: '未关联',
-        }),
-      ]),
-    );
+    expect(supplement.data.created).toBe(false);
+    expect(supplement.data.report.id).toBe(main.data.report.id);
+    expect(supplement.data.report.version).toBe(1);
+    expect(second).toEqual(first);
+    expect(await ctx.repos.trade.findById(registered.data.trade.id)).not.toBeNull();
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
     const savedMain = await ctx.repos.report.findById(main.data.report.id);
     expect(savedMain?.version).toBe(1);
     expect(reviewOf(savedMain ?? main.data.report).metrics).toEqual(first.metrics);
@@ -896,7 +893,7 @@ describe('closing-report workflow', () => {
 
   it('单日报告补取上一交易日作为收益基点，未配置的基准不生成空占位', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const snapshots = await ctx.repos.portfolioPerformanceSnapshot.listByAccount(
@@ -920,7 +917,7 @@ describe('closing-report workflow', () => {
 
   it('scheduled 模式对同键已投递报告幂等，不重复生成与投递', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
-    const first = await closingReportWorkflow.run(
+    const first = await generateClosingSnapshot(
       { date: '2026-07-27', notify: false, mode: 'scheduled' },
       ctx,
     );
@@ -929,7 +926,7 @@ describe('closing-report workflow', () => {
     expect(first.data.created).toBe(true);
     await ctx.repos.report.setDeliveryStatus(first.data.report.id, 'sent');
 
-    const second = await closingReportWorkflow.run(
+    const second = await generateClosingSnapshot(
       { date: '2026-07-27', notify: false, mode: 'scheduled' },
       ctx,
     );
@@ -953,8 +950,8 @@ describe('closing-report workflow', () => {
       notify: true,
     };
     const results = await Promise.all([
-      closingReportWorkflow.run(input, ctx),
-      closingReportWorkflow.run(input, ctx),
+      generateClosingSnapshot(input, ctx),
+      generateClosingSnapshot(input, ctx),
     ]);
     expect(results.every((result) => result.ok)).toBe(true);
     expect(results.filter((result) => result.ok && result.data.created)).toHaveLength(1);
@@ -989,19 +986,19 @@ describe('closing-report workflow', () => {
       },
     };
     const input = { date: '2026-07-27', mode: 'scheduled' as const, notify: true };
-    const first = await closingReportWorkflow.run(input, ctx);
+    const first = await generateClosingSnapshot(input, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     expect(first.data.report.deliveryStatus).toBe('failed');
     expect(sends).toBe(1);
 
     current = new Date(now.getTime() + 10 * 60_000);
-    const cooling = await closingReportWorkflow.run(input, ctx);
+    const cooling = await generateClosingSnapshot(input, ctx);
     expect(cooling.ok && cooling.data.notified).toBe(false);
     expect(sends).toBe(1);
 
     current = new Date(now.getTime() + 16 * 60_000);
-    const retried = await closingReportWorkflow.run(input, ctx);
+    const retried = await generateClosingSnapshot(input, ctx);
     expect(retried.ok).toBe(true);
     if (!retried.ok) return;
     expect(retried.data.report.id).toBe(first.data.report.id);
@@ -1014,14 +1011,14 @@ describe('closing-report workflow', () => {
     expect(notifications[0]?.id).toBe(`report-notification:${first.data.report.id}`);
     expect(notifications[0]?.result).toBe('success');
 
-    await closingReportWorkflow.run(input, ctx);
+    await generateClosingSnapshot(input, ctx);
     expect(sends).toBe(2);
   });
 
   it('截止重试只投递主版，不投递标记 never 的后补版本', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     const input = { date: '2026-07-27', mode: 'scheduled' as const, notify: false };
-    const first = await closingReportWorkflow.run(input, ctx);
+    const first = await generateClosingSnapshot(input, ctx);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const main = first.data.report;
@@ -1042,14 +1039,14 @@ describe('closing-report workflow', () => {
         failedRetryBefore: now,
       }),
     ).toBe(false);
-    const retried = await closingReportWorkflow.run({ ...input, notify: true }, ctx);
+    const retried = await generateClosingSnapshot({ ...input, notify: true }, ctx);
     expect(retried.ok).toBe(true);
     if (!retried.ok) return;
     expect(retried.data.notified).toBe(true);
     expect((await ctx.repos.report.findById(main.id))?.deliveryStatus).toBe('sent');
     expect((await ctx.repos.report.findById(supplement.id))?.deliveryStatus).toBe('not-requested');
     expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
-    const again = await closingReportWorkflow.run({ ...input, notify: true }, ctx);
+    const again = await generateClosingSnapshot({ ...input, notify: true }, ctx);
     expect(again.ok && again.data.notified).toBe(false);
     expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
   });
@@ -1130,7 +1127,7 @@ describe('closing-report workflow', () => {
       clock: () => current,
       ashareSentiment: sentimentManager(),
     });
-    const first = await closingReportWorkflow.run(
+    const first = await generateClosingSnapshot(
       { date: '2026-07-27', mode: 'scheduled', notify: false },
       ctx,
     );
@@ -1146,7 +1143,7 @@ describe('closing-report workflow', () => {
       }),
     ).toBe(true);
     current = new Date(now.getTime() + 6 * 60_000);
-    const recovered = await closingReportWorkflow.run(
+    const recovered = await generateClosingSnapshot(
       { date: '2026-07-27', mode: 'scheduled', notify: true },
       ctx,
     );
@@ -1165,58 +1162,32 @@ describe('closing-report workflow', () => {
     ).toBe(false);
   });
 
-  it('后到计划结果生成补充版本，原报告仍可按版本与 id 读取', async () => {
+  it('手动重跑、定时重跑与旧补充请求都复用同一报告', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
-    const first = await closingReportWorkflow.run(
-      { date: '2026-07-27', mode: 'scheduled', notify: true, planBatchStatus: 'blocked' },
+    const first = await generateClosingSnapshot(
+      { date: '2026-07-27', mode: 'scheduled', notify: true, planBatchStatus: 'partial' },
       ctx,
     );
     expect(first.ok).toBe(true);
     if (!first.ok) return;
-    const supplement = await closingReportWorkflow.run(
-      {
-        date: '2026-07-27',
-        mode: 'scheduled',
-        notify: true,
-        supplement: true,
-        planBatchStatus: 'complete',
-      },
-      ctx,
-    );
-    expect(supplement.ok).toBe(true);
-    if (!supplement.ok) return;
-    expect(first.data.report.version).toBe(1);
-    expect(supplement.data.report).toMatchObject({
-      version: 2,
-      supersedesReportId: first.data.report.id,
-    });
-    expect(supplement.data.report.id).not.toBe(first.data.report.id);
-    expect(supplement.data.notified).toBe(true);
-    expect(await ctx.repos.notification.listRecent()).toHaveLength(2);
-    expect(
-      (await ctx.repos.report.findById(first.data.report.id))?.sections.find(
-        (section) => section.key === 'trading-plans',
-      )?.status,
-    ).toBe('partial');
-    const oldVersion = await getReportTool.execute(
+    for (const mode of ['manual', 'scheduled'] as const) {
+      const repeated = await generateClosingSnapshot(
+        { date: '2026-07-27', mode, notify: true, supplement: true, planBatchStatus: 'complete' },
+        ctx,
+      );
+      expect(repeated).toMatchObject({ ok: true, data: { created: false, notified: false } });
+      if (repeated.ok) expect(repeated.data.report).toEqual(first.data.report);
+    }
+    const saved = await getReportTool.execute(
       { kind: 'closing', periodEnd: '2026-07-27', version: 1 },
       ctx,
     );
-    expect(oldVersion.ok && oldVersion.data.report.id).toBe(first.data.report.id);
-    const silent = await closingReportWorkflow.run(
-      {
-        date: '2026-07-27',
-        mode: 'scheduled',
-        notify: true,
-        supplement: true,
-        planBatchStatus: 'complete',
-      },
-      ctx,
+    expect(saved.ok && saved.data.report.id).toBe(first.data.report.id);
+    expect(await ctx.repos.notification.listRecent()).toHaveLength(1);
+    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(1);
+    expect(await ctx.repos.workflowRun.listRecent({ workflowName: 'closing-report' })).toHaveLength(
+      1,
     );
-    expect(silent.ok).toBe(true);
-    if (silent.ok) expect(silent.data.notified).toBe(false);
-    expect(await ctx.repos.notification.listRecent()).toHaveLength(2);
-    expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(3);
   });
 
   it('交易计划段带可点击引用（entityKind=trading-plan + 确切版本 id）', async () => {
@@ -1286,7 +1257,7 @@ describe('closing-report workflow', () => {
     });
     await ctx.repos.tradingPlan.save(plan);
 
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const section = result.data.report.sections.find((item) => item.key === 'trading-plans');
@@ -1308,7 +1279,7 @@ describe('closing-report workflow', () => {
       accountId: ctx.user.defaultAccountId,
       createdAt: new Date('2026-07-24T08:00:00.000Z'),
     });
-    const accountReport = await closingReportWorkflow.run(
+    const accountReport = await generateClosingSnapshot(
       {
         date: '2026-07-27',
         scope: { kind: 'account', accountId: ctx.user.defaultAccountId },
@@ -1351,7 +1322,7 @@ describe('closing-report workflow', () => {
         notificationFailed: 0,
       },
     });
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const section = result.data.report.sections.find((item) => item.key === 'strategy-actions');
@@ -1366,7 +1337,7 @@ describe('closing-report workflow', () => {
     await seedStrategyWithPublishedRun(ctx, '2026-07-27');
     await seedStrategyAdvice(ctx, '2026-07-27');
 
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -1417,7 +1388,7 @@ describe('closing-report workflow', () => {
   it('当日无策略运行且无策略 Advice 时退化为事实说明，不算缺失', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
 
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -1438,7 +1409,7 @@ describe('closing-report workflow', () => {
   it('有信号但未生成建议时显示待分析事实，不推断不存在买入机会', async () => {
     const ctx = await buildTestContext({ clock: () => now, ashareSentiment: sentimentManager() });
     await seedStrategyWithPublishedRun(ctx, '2026-07-27');
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const section = result.data.report.sections.find((item) => item.key === 'strategy-actions');
@@ -1465,7 +1436,7 @@ describe('closing-report workflow', () => {
       updatedAt: now,
     });
 
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -1495,7 +1466,7 @@ describe('closing-report workflow', () => {
       updatedAt: now,
     });
 
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const section = result.data.report.sections.find((item) => item.key === 'strategy-actions');
@@ -1526,7 +1497,7 @@ describe('closing-report workflow', () => {
       updatedAt: beforeSchedule,
     });
 
-    const result = await closingReportWorkflow.run({ date: '2026-07-27', notify: false }, ctx);
+    const result = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, ctx);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -1547,7 +1518,7 @@ describe('closing-report workflow', () => {
       clock: () => now,
       ashareSentiment: sentimentManager(),
     });
-    const control = await closingReportWorkflow.run(
+    const control = await generateClosingSnapshot(
       { date: '2026-07-27', notify: false },
       controlCtx,
     );
@@ -1571,10 +1542,7 @@ describe('closing-report workflow', () => {
       repos: { ...baseCtx.repos, strategy: failingStrategyRepo },
     };
 
-    const broken = await closingReportWorkflow.run(
-      { date: '2026-07-27', notify: false },
-      failingCtx,
-    );
+    const broken = await generateClosingSnapshot({ date: '2026-07-27', notify: false }, failingCtx);
 
     expect(control.ok).toBe(true);
     expect(broken.ok).toBe(true);

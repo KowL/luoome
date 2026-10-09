@@ -229,23 +229,38 @@ export class InMemoryReportRepository implements ReportRepository {
       readonly from?: string;
       readonly to?: string;
       readonly status?: Report['status'];
+      readonly latestOnly?: boolean;
       readonly limit?: number;
     } = {},
   ): Promise<readonly Report[]> {
-    return [...this.items.values()]
+    const reports = [...this.items.values()]
       .filter((report) => input.kind === undefined || report.kind === input.kind)
       .filter(
         (report) => input.scopeKey === undefined || reportScopeKey(report.scope) === input.scopeKey,
       )
       .filter((report) => input.from === undefined || report.periodEnd >= input.from)
       .filter((report) => input.to === undefined || report.periodEnd <= input.to)
-      .filter((report) => input.status === undefined || report.status === input.status)
       .sort(
         (a, b) =>
           b.periodEnd.localeCompare(a.periodEnd) ||
           (b.version ?? 1) - (a.version ?? 1) ||
           b.generatedAt.getTime() - a.generatedAt.getTime(),
-      )
+      );
+    const seen = new Set<string>();
+    return reports
+      .filter((report) => {
+        if (!input.latestOnly) return true;
+        const key = [
+          report.kind,
+          reportScopeKey(report.scope),
+          report.periodStart,
+          report.periodEnd,
+        ].join('|');
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .filter((report) => input.status === undefined || report.status === input.status)
       .slice(0, input.limit ?? 30);
   }
 

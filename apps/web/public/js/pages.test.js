@@ -401,7 +401,7 @@ describe('看板筛选与分页请求', () => {
 });
 
 describe('复盘报告阅读层级', () => {
-  it('账户报告入口能区分主版、补充版与渠道投递状态', () => {
+  it('账户报告入口展示日期与渠道状态，不再展示版本标签', () => {
     const originalDocument = globalThis.document;
     const originalNode = globalThis.Node;
     class TestNode {
@@ -435,7 +435,9 @@ describe('复盘报告阅读层级', () => {
         deliveryStatus: 'fallback-log',
         generatedAt: '2026-09-21T10:00:00Z',
       });
-      expect(card.textContent).toContain('补充 v2');
+      expect(card.textContent).toContain('2026-09-21');
+      expect(card.textContent).not.toContain('补充 v2');
+      expect(card.textContent).not.toContain('主报告 v1');
       expect(card.textContent).toContain('部分数据待补齐');
       expect(card.textContent).toContain('仅写日志');
       expect(card.children[0].children[0].href).toBe('#reports?id=report-2');
@@ -582,6 +584,18 @@ describe('复盘报告补充请求恢复', () => {
       (message) => messages.push(message),
       async (id) => saved.push(id),
     );
+
+  it('收盘报告不再提供复盘补充入口', () => {
+    expect(
+      reportReviewRefreshButton(
+        { id: 'closing-report', kind: 'closing' },
+        'account-a',
+        { canRefresh: true, latestReportId: 'closing-report' },
+        () => {},
+        async () => {},
+      ),
+    ).toBeNull();
+  });
 
   it('丢失响应后同一按钮及重新打开均复用原请求', async () => {
     const first = button();

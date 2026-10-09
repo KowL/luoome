@@ -336,6 +336,7 @@ export class DrizzleReportRepository implements ReportRepository {
       readonly from?: string;
       readonly to?: string;
       readonly status?: Report['status'];
+      readonly latestOnly?: boolean;
       readonly limit?: number;
     } = {},
   ): Promise<readonly Report[]> {
@@ -345,6 +346,13 @@ export class DrizzleReportRepository implements ReportRepository {
     if (input.from !== undefined) conditions.push(gte(reports.periodEnd, input.from));
     if (input.to !== undefined) conditions.push(lte(reports.periodEnd, input.to));
     if (input.status !== undefined) conditions.push(eq(reports.status, input.status));
+    if (input.latestOnly)
+      conditions.push(sql`NOT EXISTS (
+        SELECT 1 FROM reports newer
+        WHERE newer.kind = ${reports.kind} AND newer.scope_key = ${reports.scopeKey}
+          AND newer.period_start = ${reports.periodStart} AND newer.period_end = ${reports.periodEnd}
+          AND newer.version > ${reports.version}
+      )`);
     const where = conditions.length === 0 ? undefined : and(...conditions);
     return this.db
       .select()

@@ -7,13 +7,13 @@ import { setReportDeliveryStatusTool } from './set-report-delivery-status.js';
 
 const now = new Date('2026-09-04T10:00:00.000Z');
 
-it('复盘补充保留原版、同键重试幂等，且 never 版不能进入通知状态', async () => {
+it('周报复盘补充保留原版、同键重试幂等，且 never 版不能进入通知状态', async () => {
   const ctx = await buildTestContext({ clock: () => now });
   const accountId = ctx.user.defaultAccountId;
   const original = ReportSchema.parse({
     id: 'report-review-original',
     version: 1,
-    kind: 'closing',
+    kind: 'weekly',
     scope: { kind: 'account', accountId },
     periodStart: '2026-09-03',
     periodEnd: '2026-09-03',
@@ -39,6 +39,18 @@ it('复盘补充保留原版、同键重试幂等，且 never 版不能进入通
     createdAt: now,
     updatedAt: now,
   });
+  const closing = { ...original, id: 'closing-report', kind: 'closing' as const };
+  await ctx.repos.report.upsertForPeriod(closing);
+  const rejected = await refreshDecisionReviewReportTool.execute(
+    {
+      reportId: closing.id,
+      expectedLatestReportId: closing.id,
+      requestId: 'be63612a-a9cf-472f-917c-710897b38d67',
+    },
+    ctx,
+  );
+  expect(rejected).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+  expect(await ctx.repos.report.list({ kind: 'closing' })).toEqual([closing]);
   await ctx.repos.report.upsertForPeriod(original);
   const input = {
     reportId: original.id,
@@ -84,7 +96,7 @@ it('复盘补充保留原版、同键重试幂等，且 never 版不能进入通
     ctx,
   );
   expect(unchanged.ok && unchanged.data.created).toBe(false);
-  expect(await ctx.repos.report.list({ kind: 'closing' })).toHaveLength(2);
+  expect(await ctx.repos.report.list({ kind: 'weekly' })).toHaveLength(2);
 });
 
 it('事实水位变化后重算指纹，同一前驱并发只能追加一个版本', async () => {

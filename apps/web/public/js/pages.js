@@ -201,18 +201,11 @@ const reportNotificationLabel = (report) =>
 
 const dashboardClosingReportNode = (report) => {
   if (report === null)
-    return el('p', 'muted', '当前账户暂无收盘报告。18:00 后可在这里查看主报告和补充版本。');
+    return el('p', 'muted', '当前账户暂无收盘报告。当日策略和账户交易计划完成后统一生成。');
   const link = el('a', null, report.title);
   link.href = `#reports?id=${encodeURIComponent(report.id)}`;
   return el('div', 'dashboard-closing-summary', [
-    el('div', 'dashboard-closing-title', [
-      link,
-      el(
-        'span',
-        'muted',
-        `${report.periodEnd} · ${report.version > 1 ? `补充 v${report.version}` : '主报告 v1'}`,
-      ),
-    ]),
+    el('div', 'dashboard-closing-title', [link, el('span', 'muted', report.periodEnd)]),
     el('div', 'dashboard-closing-meta', [
       reportStatusBadge(report.status),
       el('span', 'muted', `通知：${reportNotificationLabel(report)}`),
@@ -2129,7 +2122,7 @@ const reportSheetNodes = (report, actions = []) => {
         el(
           'p',
           'report-period',
-          `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}${report.kind === 'closing' ? ` · ${report.version > 1 ? `补充 v${report.version}` : '主报告 v1'}` : ''}`,
+          `${report.periodStart}${report.periodStart === report.periodEnd ? '' : ` — ${report.periodEnd}`}`,
         ),
       ]),
       el('div', 'report-sheet-actions', actions),
@@ -2230,6 +2223,7 @@ const deleteReport = async (reportId, setStatus) => {
 };
 
 const reportReviewRefreshButton = (report, accountId, status, setStatus, onSaved) => {
+  if (report.kind === 'closing') return null;
   const pendingKey = `luoome.reportReviewPending:${accountId}:${report.id}`;
   let pending;
   try {
@@ -2345,7 +2339,7 @@ const loadReportDetail = async (reportId, setStatus) => {
       if (refresh) reportActions.push(refresh);
     }
     if (status.ok && status.data.snapshotMissing)
-      reportActions.push(el('span', 'muted', '此报告尚未包含新版复盘'));
+      reportActions.push(el('span', 'muted', '此报告未包含账户决策记录'));
   }
   mount(detail, reportSheetNodes(report, reportActions));
   document.querySelectorAll('.report-history-item').forEach((node) => {
@@ -2386,14 +2380,18 @@ const renderReports = async (setStatus) => {
         });
         button.disabled = false;
         if (!generated.ok) {
-          state.textContent = `失败 · ${generated.error.kind}`;
-          setStatus(`报告生成失败：${generated.error.kind}`, true);
+          const message = generated.error.message ?? toolErrorText(generated.error);
+          state.textContent = message;
+          setStatus(`报告生成失败：${message}`, true);
           return;
         }
         selectedReportId = generated.data.report.id;
         window.location.hash = `#reports?id=${encodeURIComponent(selectedReportId)}`;
-        state.textContent =
-          generated.data.report.status === 'partial' ? '已生成 · 部分可用' : '已生成 · 完整';
+        state.textContent = generated.data.created
+          ? generated.data.report.status === 'partial'
+            ? '已生成 · 部分可用'
+            : '已生成 · 完整'
+          : '已存在 · 复用当日报告';
         await renderReports(setStatus);
       });
     });
@@ -2447,9 +2445,6 @@ const renderReports = async (setStatus) => {
         const button = el('button', 'report-history-item', [
           el('span', 'report-history-kind', REPORT_KIND_LABEL[report.kind] ?? report.kind),
           el('strong', null, report.title),
-          report.kind === 'closing'
-            ? el('span', 'muted', report.version > 1 ? `补充 v${report.version}` : '主报告 v1')
-            : null,
           el('span', 'report-history-period', report.periodEnd),
           reportStatusBadge(report.status),
           el('span', 'report-history-asof', `通知：${reportNotificationLabel(report)}`),
