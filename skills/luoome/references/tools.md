@@ -173,7 +173,8 @@ For permission and response requirements, read [safety and errors](./safety.md).
 - `list_workflow_runs` 返回 `inputSummary`，可按留存的账户归属识别计划复核；`summary.reviews` 中的
   新增、维持与重复草案按目标日和确切版本统计，不能用“没有新增版本”推断未复核。
 - `intraday-trading-plan-watch` 按全部入场条件合成单个提醒，风险/退出条件优先；盘中不调用 AI、不自动改写计划。
-  观察条件满足只提示重新评估；未持仓风险只提示暂停入场。通知保留反证、风险和卖出限制。
+  观察条件满足只提示重新评估；未持仓计划不投递止损/目标价/退出提醒，只留 not-requested 记录。
+  通知保留反证、风险和卖出限制；冷却对所有优先级生效，消息级别按优先级分级。
 - `notify=false` 为不消耗边沿与通知额度的试跑；正式调用仍需 write/external 授权。
   Workflow 输出已移除 `reviewedPlans`，后续计划版本由盘后批次或用户主动复核产生。
 

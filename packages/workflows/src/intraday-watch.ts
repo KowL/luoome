@@ -5,7 +5,9 @@ import {
   ATTEMPTED_DELIVERY_STATUSES,
   assertWatchTriggerInvariants,
   type DeliveryStatus,
+  highestAlertPriority,
   type Money,
+  notificationLevelForAlertPriority,
   previousTradingDate,
   type Quote,
   type Stock,
@@ -37,7 +39,7 @@ import { intradayTradingPlanWatchWorkflow } from './intraday-trading-plan-watch.
  *       **6c. logic=ALL：合成 composite 虚拟规则 → 同一边沿判定**
  *   7.  cooldown 过滤（**改用 (poolId,stockId,ruleId) 维度；只数 ATTEMPTED**）
  *   8.  **每日上限过滤（方案级 + 全局；update_config 默认 50）**
- *   9.  **优先级映射：normal → not-requested；其余 → pending**
+ *   9.  **优先级映射：所有优先级都可投递，normal 与 urgent 同样受 cooldown 与每日上限约束**
  *   10. notify=true：按池切片 send_notification → sent / failed / fallback-log，
  *       回写 deliveryStatus + notificationId；notify=false（试跑）→ not-requested，
  *       不占 cooldown。
@@ -716,7 +718,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             ruleId: rule.id,
             direction,
             triggerType: 'triggered',
-            reason: makeReason(rule, evaluation.evaluatedValue, member),
+            reason: makeReason(rule, evaluation.evaluatedValue),
             evidence: [...evaluation.evidence],
             // quote 缺失时按 schema 允许省略 quote 字段，而不是写 close=0 触发不变量
             ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
@@ -756,7 +758,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             ruleId: rule.id,
             direction,
             triggerType: 'recovered',
-            reason: `已退出 active：${makeReason(rule, evaluation.evaluatedValue, member)}`,
+            reason: `已退出 active：${makeReason(rule, evaluation.evaluatedValue)}`,
             evidence: [...evaluation.evidence],
             // quote 缺失时按 schema 允许省略 quote 字段，而不是写 close=0 触发不变量
             ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
@@ -800,7 +802,7 @@ const stepEvaluateRules: WorkflowStep = async (prev, ctx) => {
             ruleId: rule.id,
             direction,
             triggerType: 'triggered',
-            reason: makeReason(rule, evaluation.evaluatedValue, member),
+            reason: makeReason(rule, evaluation.evaluatedValue),
             evidence: [...evaluation.evidence],
             // quote 缺失时按 schema 允许省略 quote 字段，而不是写 close=0 触发不变量
             ...(quote === undefined ? {} : { quote: { close: quote.close, ts: quote.ts } }),
@@ -1047,20 +1049,20 @@ const ruleKindThreshold = (rule: AlertRule): Record<string, unknown> => {
   return {};
 };
 
-const makeReason = (rule: AlertRule, value: number, member: PoolMember): string => {
+const makeReason = (rule: AlertRule, value: number): string => {
   if (rule.kind === 'price-change') {
-    return `${member.stockId} 日内变动 ${(value * 100).toFixed(2)}% ≥ ${(rule.pct * 100).toFixed(2)}%`;
+    return `日内变动 ${(value * 100).toFixed(2)}% ≥ ${(rule.pct * 100).toFixed(2)}%`;
   }
   if (rule.kind === 'cost-threshold') {
     const v = (value * 100).toFixed(2);
     if (rule.stopLossPct !== undefined && value <= -rule.stopLossPct)
-      return `止损 收益 ${v}% ≤ -${rule.stopLossPct * 100}%`;
+      return `止损 收益 ${v}% ≤ -${(rule.stopLossPct * 100).toFixed(2)}%`;
     if (rule.takeProfitPct !== undefined && value >= rule.takeProfitPct)
-      return `止盈 收益 ${v}% ≥ ${rule.takeProfitPct * 100}%`;
+      return `止盈 收益 ${v}% ≥ ${(rule.takeProfitPct * 100).toFixed(2)}%`;
     return `成本阈值 收益 ${v}%`;
   }
   if (rule.kind === 'price-level') {
-    return `价位穿越 level=${rule.level} side=${rule.side} diff=${value.toFixed(2)}`;
+    return `价位穿越 level=${rule.level.toFixed(2)} side=${rule.side} diff=${value.toFixed(2)}`;
   }
   return `策略命中 score=${value.toFixed(1)}`;
 };
@@ -1156,14 +1158,12 @@ const stepResolveDelivery: WorkflowStep = async (prev, ctx) => {
         : null;
     let deliveryStatus: DeliveryStatus = 'pending';
 
-    // 9. 优先级映射（normal → not-requested；试跑 / recovered + 默认关 → not-requested）
+    // 9. 送达决策：所有优先级都可投递；冷却与每日上限对所有优先级生效。
+    //    试跑、以及 notifyOnRecovery 未开启的 recovered → not-requested。
     const recoveryRequested = cand.triggerType === 'recovered' && pool.notifyOnRecovery === true;
     if (!state.input.notify) {
       deliveryStatus = 'not-requested';
     } else if (cand.triggerType === 'recovered' && !recoveryRequested) {
-      deliveryStatus = 'not-requested';
-    } else if (cand.priority === 'normal' && !recoveryRequested) {
-      // Phase 1 不做 15 分钟聚合，普通优先级只记录（§8 表格）
       deliveryStatus = 'not-requested';
     } else if (cooldownHit !== null) {
       deliveryStatus = 'suppressed-cooldown';
@@ -1253,8 +1253,7 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
   }
   for (const [poolId, group] of byPool.entries()) {
     const lines = group.map((t) => {
-      const dir =
-        t.direction === 'buy' ? '向上变化' : t.direction === 'sell' ? '向下变化' : '观察变化';
+      const dir = t.direction === 'buy' ? '关注买入' : t.direction === 'sell' ? '关注卖出' : '观察';
       const prio =
         t.priority === 'urgent' ? '【急】' : t.priority === 'important' ? '【重要】' : '';
       return `· ${prio}[${dir}] ${t.stockId} @ ${t.quote ? t.quote.close.toFixed(2) : '—'} — ${t.reason}`;
@@ -1269,7 +1268,9 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
       feishu: {
         title: `盘中提醒 · ${state.pools.find((pool) => pool.id === poolId)?.name ?? '关注列表'} · ${group.length} 条`,
         content,
-        level: 'info',
+        level: notificationLevelForAlertPriority(
+          highestAlertPriority(group.map((t) => t.priority)),
+        ),
       },
     });
     let deliveryStatus: DeliveryStatus = 'sent';

@@ -6,6 +6,7 @@ import {
   isAshareTradingSession,
   isIntradayQuoteCurrent,
   money,
+  notificationLevelForAlertPriority,
   notificationText,
   notificationTime,
   type TradingPlan,
@@ -115,6 +116,10 @@ const priorityForCondition = (
   return 'normal';
 };
 
+/**
+ * 退出/风险条件只在持仓时才可能形成提醒。未持仓时它们仍会命中（并照常推进边沿状态和
+ * 阻止入场提醒），但只留 not-requested 记录，因此这里必须把这类条件标成观察而不是卖出。
+ */
 const directionForCondition = (
   plan: TradingPlan,
   condition: TradingPlanCondition,
@@ -197,6 +202,14 @@ const evaluate = (
 const isEntry = (plan: TradingPlan, condition: TradingPlanCondition): boolean =>
   plan.entryConditions.some((item) => item.id === condition.id);
 
+/**
+ * 预警只报告持仓股的操作（止损/目标价/退出条件）和买入候选。
+ * 未持仓时计划的止损与目标价只是入场前提的一部分，不构成可执行操作，不投递提醒
+ * （仍记录为 not-requested 留痕，并照常更新边沿，因此止损命中会继续阻止入场提醒）。
+ */
+const shouldAlert = (plan: TradingPlan, condition: TradingPlanCondition): boolean =>
+  isEntry(plan, condition) || (plan.position.currentPct ?? 0) > 0;
+
 const conditionDescription = (plan: TradingPlan, condition: TradingPlanCondition): string =>
   isEntry(plan, condition)
     ? `全部入场条件满足：${plan.entryConditions.map((item) => item.description).join('；')}`
@@ -248,7 +261,7 @@ const triggerFor = (
     direction: directionForCondition(plan, condition),
     triggerType: 'triggered',
     reason:
-      `${actionLabels[plan.action]}计划：${conditionDescription(plan, condition)}；${quoteText}；计划版本 ${versionId}`.slice(
+      `${actionLabels[plan.action]}计划：${conditionDescription(plan, condition)}；${quoteText}`.slice(
         0,
         500,
       ),
@@ -288,6 +301,7 @@ const triggerFor = (
 const notificationContent = (candidate: Candidate): string => {
   const plan = candidate.plan;
   const quote = candidate.trigger.quote;
+  const held = (plan.position.currentPct ?? 0) > 0;
   return [
     `**${notificationText(conditionDescription(plan, candidate.condition), 130)}**`,
     `现价 ${quote?.close.toFixed(2) ?? '待核对'} · 原计划${actionLabels[plan.action]}`,
@@ -298,14 +312,17 @@ const notificationContent = (candidate: Candidate): string => {
       plan.entryPriceHigh !== undefined
         ? [`入场 ${plan.entryPriceLow.toFixed(2)}–${plan.entryPriceHigh.toFixed(2)}`]
         : []),
-      ...(plan.exit.stopLoss === undefined ? [] : [`止损 ${plan.exit.stopLoss.toFixed(2)}`]),
+      // 未持仓时这个价是入场前提的失效线，而不是现有仓位的止损价。
+      ...(plan.exit.stopLoss === undefined
+        ? []
+        : [`${held ? '止损' : '失效价'} ${plan.exit.stopLoss.toFixed(2)}`]),
       ...(plan.exit.takeProfit === undefined ? [] : [`目标价 ${plan.exit.takeProfit.toFixed(2)}`]),
       ...(plan.position.targetPct === null
         ? []
         : [`目标仓位 ${plan.position.targetPct.toFixed(1)}%`]),
     ].join(' · '),
-    `反证：${notificationText(plan.explanation.counterEvidence.join('；'), 90) || '未记录，请核对原计划'}`,
-    `风险：${notificationText(plan.explanation.risks.join('；'), 90) || '未记录，请核对原计划'}`,
+    `反证：${notificationText(plan.explanation.counterEvidence.join('；'), 120) || '未记录，请核对原计划'}`,
+    `风险：${notificationText(plan.explanation.risks.join('；'), 120) || '未记录，请核对原计划'}`,
     ...(plan.explanation.unknowns.length === 0
       ? []
       : [`待确认：${notificationText(plan.explanation.unknowns.join('；'), 90)}`]),
@@ -314,6 +331,13 @@ const notificationContent = (candidate: Candidate): string => {
   ]
     .filter(Boolean)
     .join('\n\n');
+};
+
+/** 飞书标题：按条件语义分类，未持仓的观察计划不能写成「入场」。 */
+const notificationTitle = (plan: TradingPlan, condition: TradingPlanCondition): string => {
+  if (condition.phase === 'risk') return '计划风险提醒';
+  if (isEntry(plan, condition)) return plan.action === 'observe' ? '观察条件就绪' : '入场条件就绪';
+  return condition.phase === 'hold' ? '计划持有提醒' : '计划退出提醒';
 };
 
 type PublicationValidation =
@@ -824,6 +848,8 @@ const run = async (
   );
   const nextStates = [...previousStates.values()];
   const candidates: Candidate[] = [];
+  /** 不构成持仓操作的条件（未持仓计划的止损/目标价）：只留可复盘的记录，不走投递。 */
+  const recordedTriggers: WatchTrigger[] = [];
   const cooldownKeys: { poolId: string; stockId: string; ruleId: string }[] = [];
   for (const plan of plans) {
     const quote = decisionQuote(quoteItems.get(plan.stockId), ctx.clock());
@@ -867,8 +893,12 @@ const run = async (
       else nextStates.push(nextState);
       if (value && !previousState?.active) {
         const trigger = triggerFor(plan, condition, quote, now, poolId);
-        candidates.push({ trigger, plan, condition });
-        cooldownKeys.push({ poolId, stockId: plan.stockId, ruleId });
+        if (shouldAlert(plan, condition)) {
+          candidates.push({ trigger, plan, condition });
+          cooldownKeys.push({ poolId, stockId: plan.stockId, ruleId });
+        } else {
+          recordedTriggers.push(trigger);
+        }
       }
     }
   }
@@ -926,13 +956,17 @@ const run = async (
     const trigger = candidate.trigger;
     if (!input.notify) return trigger;
     const key = `${trigger.stockId}:${trigger.ruleId}`;
-    const bypassOrdinaryLimits = candidate.isRetry === true || trigger.priority !== 'normal';
-    if (!bypassOrdinaryLimits && cooldowns.has(key)) {
+    // 重试是已受理触发的补投，不该再被冷却或额度拦一次。
+    const isRetry = candidate.isRetry === true;
+    // 冷却对所有优先级生效：价格在阈值附近来回穿越时，紧急提醒也不能每次穿越都推一条。
+    if (!isRetry && cooldowns.has(key)) {
       suppressedByCooldown += 1;
       return { ...trigger, deliveryStatus: 'suppressed-cooldown' as const };
     }
+    // 每日上限只约束常规提醒：额度用来限制噪音，不能把风险提醒挤掉。
     if (
-      !bypassOrdinaryLimits &&
+      !isRetry &&
+      trigger.priority === 'normal' &&
       (globalAttempted >= input.dailyNotificationLimit ||
         poolAttempted >= input.dailyNotificationLimit)
     ) {
@@ -950,15 +984,18 @@ const run = async (
     status: 'invalidated' | 'unverifiable',
   ): Promise<IntradayTradingPlanWatchOutputT> => {
     const checkedAt = ctx.clock().toISOString();
-    const auditTriggers: WatchTrigger[] = candidates.map((candidate) => ({
-      ...candidate.trigger,
-      deliveryStatus: status,
-      evalSnapshot: {
-        ...candidate.trigger.evalSnapshot,
-        publicationCheckedAt: checkedAt,
-        publicationReason: reason,
-      },
-    }));
+    const auditTriggers: WatchTrigger[] = [
+      ...candidates.map((candidate) => ({
+        ...candidate.trigger,
+        deliveryStatus: status,
+        evalSnapshot: {
+          ...candidate.trigger.evalSnapshot,
+          publicationCheckedAt: checkedAt,
+          publicationReason: reason,
+        },
+      })),
+      ...recordedTriggers,
+    ];
     const committed =
       input.notify && auditTriggers.length > 0
         ? await ctx.tools.commit_watch_evaluation.execute({
@@ -1019,12 +1056,12 @@ const run = async (
       ...(source === undefined ? {} : { deliveryStatus: source.deliveryStatus }),
     };
   });
-  finalTriggers = [...acceptedTriggers, ...publication.rejected];
+  finalTriggers = [...acceptedTriggers, ...publication.rejected, ...recordedTriggers];
   const committed = input.notify
     ? await ctx.tools.commit_watch_evaluation.execute({
         owner,
         triggers: acceptedTriggers,
-        auditTriggers: [...publication.rejected],
+        auditTriggers: [...publication.rejected, ...recordedTriggers],
         states: nextStates.filter(
           (state) =>
             !candidates.some(
@@ -1118,14 +1155,9 @@ const run = async (
       const notification = await ctx.tools.send_notification.execute({
         channel: 'feishu',
         feishu: {
-          title: `${candidate.condition.phase === 'risk' ? '计划风险提醒' : isEntry(candidate.plan, candidate.condition) ? '入场条件就绪' : '计划退出提醒'} · ${candidate.plan.stockName ?? candidate.plan.stockId}`,
+          title: `${notificationTitle(candidate.plan, candidate.condition)} · ${candidate.plan.stockName ?? candidate.plan.stockId}`,
           content: notificationContent(candidate),
-          level:
-            trigger.priority === 'urgent'
-              ? 'error'
-              : trigger.priority === 'important'
-                ? 'warn'
-                : 'info',
+          level: notificationLevelForAlertPriority(trigger.priority),
         },
       });
       const status = !notification.ok

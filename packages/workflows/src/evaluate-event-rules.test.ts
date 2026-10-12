@@ -112,16 +112,16 @@ describe('evaluate-event-rules workflow', () => {
     expect(second.data.deduped).toBe(1);
   });
 
-  it('normal 优先级 → not-requested（仅记录，不发送）', async () => {
+  it('normal 优先级同样投递，不因优先级而被静默', async () => {
     const ctx = await buildTestContext({ clock: CLOCK });
     await seedAlertPlanWithEventRule(ctx, { importance: 'normal' });
     const r = await evaluateEventRulesWorkflow.run({}, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.data.triggered).toBe(1);
-    expect(r.data.notified).toBe(0);
+    expect(r.data.notified).toBe(1);
     const triggers = await ctx.repos.watchTrigger.listRecent({ poolId: 'evt-alert' });
-    expect(triggers[0]?.deliveryStatus).toBe('not-requested');
+    expect(triggers[0]).toMatchObject({ priority: 'normal', deliveryStatus: 'sent' });
   });
 
   it('事件规则未指定优先级时继承 AlertPlan 默认优先级', async () => {

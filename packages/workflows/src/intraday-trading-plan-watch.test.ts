@@ -1,4 +1,4 @@
-import { TradingPlanSchema, WatchTriggerSchema } from '@luoome/core';
+import { money, TradingPlanSchema, WatchTriggerSchema } from '@luoome/core';
 import { addHoldingTool, getAccountFactsTool } from '@luoome/tools';
 import { buildTestContext } from '@luoome/tools/testing';
 import { describe, expect, it, vi } from 'vitest';
@@ -483,7 +483,7 @@ describe('intraday trading plan watch', () => {
       ]);
   });
 
-  it('风险命中时不发送入场提醒，未持仓风险不伪装成卖出指令', async () => {
+  it('未持仓时风险命中既不提醒入场也不伪装成卖出操作，但边沿仍更新', async () => {
     const ctx = await buildPlanWatchContext({ clock: () => NOW });
     const facts = await seedFacts(ctx);
     const plan = makePlan(ACCOUNT_ID, facts.digest);
@@ -506,15 +506,183 @@ describe('intraday trading plan watch', () => {
       },
     });
     const result = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(result.ok && result.data.notified).toBe(0);
+    // 未持仓的计划失效不是操作提醒：只留 not-requested 记录，也不伪装成卖出指令。
+    expect(result.ok && result.data.triggers).toMatchObject([
+      {
+        ruleId: `${plan.id}:v1:stop`,
+        direction: 'watch',
+        priority: 'urgent',
+        deliveryStatus: 'not-requested',
+        evalSnapshot: { nextStep: '尚未持仓，原入场前提已变化；暂停入场并重新评估计划' },
+      },
+    ]);
+    // 止损命中继续阻止入场提醒，边沿状态用于复盘仍照常推进。
+    expect(await ctx.repos.watchRuleState.listByPool(`trading-plan-watch:${ACCOUNT_ID}`)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ruleId: `${plan.id}:v1:stop`, active: true }),
+        expect.objectContaining({ ruleId: `${plan.id}:v1:entry-now`, active: false }),
+      ]),
+    );
+  });
+
+  it('同一轮里只对持仓计划的止损建提醒，未持仓计划的风险条件只留痕', async () => {
+    const ctx = await buildPlanWatchContext({ clock: () => NOW });
+    const facts = await seedFacts(ctx, [{ stockId: '002594.SZ', quantity: 1000, avgCost: 100 }]);
+    const stop = (stockId: string, id: string) => ({
+      id,
+      kind: 'price-threshold' as const,
+      phase: 'risk' as const,
+      metric: 'price' as const,
+      comparator: 'lte' as const,
+      value: 1_000_000,
+      description: `${stockId} 价格触及止损`,
+    });
+    const unheld = makePlan(ACCOUNT_ID, facts.digest, '600519.SH');
+    const held = makePlan(ACCOUNT_ID, facts.digest, '002594.SZ');
+    await ctx.repos.tradingPlan.save(
+      TradingPlanSchema.parse({
+        ...held,
+        action: 'hold',
+        entryConditions: [],
+        position: { ...held.position, currentPct: 10, targetPct: 10, deltaPct: 0 },
+        exit: {
+          ...held.exit,
+          canSellNow: true,
+          triggerConditions: [stop('002594.SZ', 'stop-held')],
+        },
+      }),
+    );
+    await ctx.repos.tradingPlan.save({
+      ...unheld,
+      action: 'hold',
+      entryConditions: [],
+      position: { ...unheld.position, currentPct: 0, targetPct: 0, deltaPct: 0 },
+      exit: { ...unheld.exit, triggerConditions: [stop('600519.SH', 'stop-unheld')] },
+    });
+
+    const result = await intradayTradingPlanWatchWorkflow.run(
       { accountId: ACCOUNT_ID, notify: false },
       ctx,
     );
-    expect(result.ok && result.data.triggers.length).toBe(1);
-    if (result.ok) {
-      expect(result.data.triggers[0]?.priority).toBe('urgent');
-      expect(result.data.triggers[0]?.direction).toBe('watch');
-      expect(result.data.triggers[0]?.evalSnapshot.nextStep).toContain('暂停入场');
-    }
+    expect(result.ok && result.data.triggers).toMatchObject([
+      {
+        stockId: '002594.SZ',
+        direction: 'sell',
+        priority: 'urgent',
+        ruleId: `${held.id}:v1:stop-held`,
+      },
+      {
+        stockId: '600519.SH',
+        direction: 'watch',
+        deliveryStatus: 'not-requested',
+        ruleId: `${unheld.id}:v1:stop-unheld`,
+      },
+    ]);
+  });
+
+  it('未持仓的观察计划按观察口径命名，止损价标成失效价，reason 不带内部版本号', async () => {
+    const base = await buildPlanWatchContext({ clock: () => NOW });
+    const facts = await seedFacts(base);
+    const plan = makePlan(ACCOUNT_ID, facts.digest);
+    await base.repos.tradingPlan.save(
+      TradingPlanSchema.parse({
+        ...plan,
+        action: 'observe',
+        exit: { ...plan.exit, stopLoss: 1, canSellNow: false },
+      }),
+    );
+    let title = '';
+    let content = '';
+    const notification = base.notification;
+    if (notification === undefined) throw new Error('test notification manager missing');
+    const ctx = {
+      ...base,
+      notification: {
+        send: async (input: Parameters<typeof notification.send>[0]) => {
+          title = input.payload.title;
+          content = input.payload.content;
+          return notification.send(input);
+        },
+      },
+    };
+    const result = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(title).toBe('观察条件就绪 · 002594.SZ');
+    expect(content).toContain('失效价 1.00');
+    expect(content).not.toContain('止损');
+    expect(result.data.triggers).toHaveLength(1);
+    expect(result.data.triggers[0]?.reason).toContain('观察计划：');
+    expect(result.data.triggers[0]?.reason).not.toContain('计划版本');
+  });
+
+  it('紧急止损提醒也受冷却约束，价格反复穿越不会连续推送', async () => {
+    let now = NOW;
+    let price = 100;
+    const ctx = await buildPlanWatchContext({ clock: () => now });
+    const facts = await seedFacts(ctx, [{ stockId: '002594.SZ', quantity: 1000, avgCost: 100 }]);
+    const plan = makePlan(ACCOUNT_ID, facts.digest);
+    await ctx.repos.tradingPlan.save(
+      TradingPlanSchema.parse({
+        ...plan,
+        action: 'hold',
+        entryConditions: [],
+        position: { ...plan.position, currentPct: 10, targetPct: 10, deltaPct: 0 },
+        exit: {
+          ...plan.exit,
+          canSellNow: true,
+          triggerConditions: [
+            {
+              id: 'stop-loss',
+              kind: 'price-threshold',
+              phase: 'risk',
+              metric: 'price',
+              comparator: 'lte',
+              value: 100,
+              description: '价格触及止损',
+            },
+          ],
+        },
+      }),
+    );
+    const originalBatch = ctx.adapters.market.batchQuote.bind(ctx.adapters.market);
+    ctx.adapters.market.batchQuote = async (stockIds) => {
+      const quotes = await originalBatch(stockIds);
+      for (const [stockId, quote] of quotes) quotes.set(stockId, { ...quote, close: money(price) });
+      return quotes;
+    };
+
+    const first = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(first.ok && first.data.triggers[0]?.deliveryStatus).toBe('sent');
+
+    price = 101;
+    const recovered = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(recovered.ok && recovered.data.triggers).toEqual([]);
+
+    now = new Date(NOW.getTime() + 5 * 60_000);
+    price = 100;
+    const again = await intradayTradingPlanWatchWorkflow.run(
+      { accountId: ACCOUNT_ID, notify: true },
+      ctx,
+    );
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.data.triggers[0]?.deliveryStatus).toBe('suppressed-cooldown');
+    expect(again.data.notified).toBe(0);
+    expect(again.data.suppressedByCooldown).toBe(1);
   });
 
   it('人工确认与过期市场事实不能由价格命中代替', async () => {
