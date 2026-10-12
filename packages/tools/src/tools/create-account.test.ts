@@ -4,6 +4,31 @@ import { buildTestContext } from '../testing/context.js';
 import { createAccountTool } from './create-account.js';
 
 describe('create_account', () => {
+  it('refuses an additional hosted account even when the outer gate grants write access', async () => {
+    const base = await buildTestContext();
+    const before = await base.repos.account.list();
+    const result = await createAccountTool.execute(
+      { name: '额外账户', currency: 'CNY', initialCapital: 0 },
+      {
+        ...base,
+        identity: {
+          mode: 'hosted',
+          userId: base.user.id,
+          tenantId: 'tenant-one',
+          tenantGeneration: 1,
+          actor: 'user',
+          requestId: 'create-one',
+        },
+        hostedAuthorization: () => null,
+      },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: 'permission_denied', required: 'hosted:single-default-account' },
+    });
+    expect(await base.repos.account.list()).toEqual(before);
+  });
+
   it('creates a real account without inserting any holdings or trades', async () => {
     const ctx = await buildTestContext();
     const before = await ctx.repos.account.list();

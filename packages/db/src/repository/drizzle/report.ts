@@ -35,6 +35,9 @@ const toReport = (row: ReportRow): Report => {
     missingDimensions: row.missingDimensions,
     deliveryStatus: row.deliveryStatus,
     ...(row.notificationPolicy === null ? {} : { notificationPolicy: row.notificationPolicy }),
+    ...(row.watchlistFactsSnapshot === null
+      ? {}
+      : { watchlistFactsSnapshot: row.watchlistFactsSnapshot }),
     ...(row.decisionReviewSnapshot === null
       ? {}
       : { decisionReviewSnapshot: row.decisionReviewSnapshot }),
@@ -64,6 +67,7 @@ const toRow = (report: Report): typeof reports.$inferInsert => ({
   missingDimensions: report.missingDimensions,
   deliveryStatus: report.deliveryStatus,
   notificationPolicy: report.notificationPolicy ?? null,
+  watchlistFactsSnapshot: report.watchlistFactsSnapshot ?? null,
   decisionReviewSnapshot: report.decisionReviewSnapshot ?? null,
   deliveryAttemptId: null,
   workflowRunId: report.workflowRunId,
@@ -97,7 +101,11 @@ export class DrizzleReportRepository implements ReportRepository {
       reports.periodEnd,
       reports.version,
     ];
-    if (parsed.kind === 'closing' || parsed.kind === 'weekly') {
+    if (
+      parsed.kind === 'closing' ||
+      parsed.kind === 'weekly' ||
+      parsed.kind === 'watchlist-facts'
+    ) {
       this.db.insert(reports).values(row).onConflictDoNothing({ target: conflictTarget }).run();
       const saved = await this.findByPeriodVersion({ ...key, version });
       if (saved === null) throw new InvariantError('versioned report insert did not produce a row');

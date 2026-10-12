@@ -7,6 +7,11 @@ description: Use when the user asks about their luoome portfolio, holdings, trad
 
 Use the connected luoome MCP server to query and maintain the user's local investment workspace. The Skill defines when and how to use luoome; MCP provides the typed tools and permission boundary.
 
+This Skill targets local mode. Hosted platform identity, subscriptions, jobs, payments, notifications, privacy
+and recovery tools use a private server/worker registry and are not exposed through MCP or model discovery.
+Do not attempt to reach them through generic calls or shell fallback. Hosted personal facts and feedback use
+the authenticated Web product; its production providers and release gates are separate from local MCP setup.
+
 ## Before calling tools
 
 1. Confirm that luoome MCP tools are available. If not, stop and direct the user to [MCP setup](./references/mcp-setup.md); do not silently fall back to shell or another data source.
@@ -26,6 +31,7 @@ See [tool selection](./references/tools.md), [example workflows](./references/ex
 
 ## Response rules
 
+- Account profile editing uses the write tool `update_account` for the name only; it does not change opening capital, currency or cash. Hosted mode supplies one default account and disallows creating additional accounts.
 - Separate observed data, system-calculated values and generated advice.
 - For Advice, report `decision`, `confidence`, `horizon`, premise, supporting evidence, counter-evidence, risks, disclaimers and `validUntil` when present.
 - Do not convert confidence into certainty or present luoome as a licensed investment adviser.

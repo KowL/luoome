@@ -35,6 +35,44 @@ describe('defineTool execute 错误模型', () => {
     expect(result.error.message).toContain('test_double');
   });
 
+  it('schema transforms that throw still return redacted ToolResult failures and audit once', async () => {
+    const events: AuditLogEvent[] = [];
+    const audited = {
+      ...ctx,
+      auditLog: { write: (event: AuditLogEvent) => void events.push(event) },
+    };
+    const inputTool = defineTool({
+      name: 'test_input_throw',
+      description: 'fixture',
+      sideEffect: 'write',
+      input: z.string().transform(() => {
+        throw new Error('bad https://private.test/input Bearer private-token');
+      }),
+      output: z.string(),
+      handler: () => 'unused',
+    });
+    const outputTool = defineTool({
+      name: 'test_output_throw',
+      description: 'fixture',
+      sideEffect: 'write',
+      input: z.string(),
+      output: z.string().refine(() => {
+        throw new Error('bad /Users/private/payment-output');
+      }),
+      handler: (input) => input,
+    });
+    const inputFailure = await inputTool.execute('input', audited);
+    const outputFailure = await outputTool.execute('output', audited);
+    expect(inputFailure).toMatchObject({ ok: false, error: { kind: 'internal' } });
+    expect(outputFailure).toMatchObject({ ok: false, error: { kind: 'internal' } });
+    expect(JSON.stringify(inputFailure)).not.toContain('private-token');
+    expect(JSON.stringify(outputFailure)).not.toContain('/Users/private');
+    expect(events).toHaveLength(2);
+    expect(
+      events.every((event) => event.result === 'error' && event.errorKind === 'internal'),
+    ).toBe(true);
+  });
+
   it('input issues 也会清理绝对路径和 URL', async () => {
     const tool = defineTool({
       name: 'test_sensitive_input',
@@ -64,6 +102,52 @@ describe('defineTool execute 错误模型', () => {
     const result = await doubleTool.execute(null, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('invalid_input');
+  });
+
+  it('hosted 直接执行必须具有当前 operation 授权，不能绕过 invoker', async () => {
+    const hosted = {
+      ...ctx,
+      identity: Object.freeze({
+        mode: 'hosted' as const,
+        userId: ctx.user.id,
+        tenantId: 't1',
+        tenantGeneration: 1,
+        actor: 'user' as const,
+        requestId: 'r1',
+      }),
+    };
+    expect(await doubleTool.execute({ n: 21 }, hosted)).toEqual({
+      ok: false,
+      error: { kind: 'permission_denied', required: 'hosted-operation' },
+    });
+    const calls: unknown[] = [];
+    const guarded = {
+      ...hosted,
+      hostedAuthorization: (name: string, input: unknown, capabilities: readonly string[]) => {
+        calls.push({ name, input, capabilities });
+        return null;
+      },
+    };
+    expect(await doubleTool.execute({ n: 21 }, guarded)).toEqual({
+      ok: true,
+      data: { doubled: 42 },
+    });
+    expect(calls).toEqual([{ name: 'test_double', input: { n: 21 }, capabilities: ['read'] }]);
+    expect(
+      await doubleTool.execute(
+        { n: 1 },
+        {
+          ...guarded,
+          hostedAuthorization: () => ({
+            ok: false as const,
+            error: { kind: 'permission_denied' as const, required: 'hosted-operation:blocked' },
+          }),
+        },
+      ),
+    ).toEqual({
+      ok: false,
+      error: { kind: 'permission_denied', required: 'hosted-operation:blocked' },
+    });
   });
 
   it('handler 返回 errNotFound → 原样透传 not_found', async () => {

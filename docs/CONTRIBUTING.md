@@ -462,6 +462,20 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 
 ---
 
+## 托管开发与验证
+
+托管改动遵循同一依赖方向，额外检查入口身份、私有 registry 和持久恢复协议。
+`bun --no-env-file run hosted:web`、`hosted:worker`、`hosted:ops` 分别启动 Web、独立 worker 与固定运维命令；
+环境与停止写者要求见[托管运行手册](./runbooks/hosted-personal-subscription.md)。
+platform Tools 与 Tenant 执行 Tools 不加入 generic/MCP/model discovery。
+新增能力需同时验证用户 HTTP、worker、间接 workflow 和拒绝路径，不能只测试业务 handler。
+
+`test:db` / `test:web` 使用 Bun；Vitest 明确排除 Bun SQLite 和托管 Web 文件。
+真实进程 crash 用隔离临时目录和 fixture 验证，不使用个人数据。
+100 Tenant 压测入口为 `bun --no-env-file apps/worker/src/fixture-load.ts --fixture /absolute/output.json`，
+只构造模拟 provider 并清理临时库；指标不代表供应商额度或生产容量。
+UI 修改除自动测试外，实际启动并检查手机、双用户/双标签、到期与断线恢复，记录 fixture 边界。
+
 ## 致谢
 
 感谢每一个想动手改这个项目的人。luoome 不是想做平台，是想做"个人真能用的 advisor agent"。如果你的改动让它更贴近这个目标，那就是好的贡献。

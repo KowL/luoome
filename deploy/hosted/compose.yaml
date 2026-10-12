@@ -1,0 +1,85 @@
+x-service: &service
+  image: luoome-hosted:${LUOOME_RELEASE:?set an immutable release tag}
+  build:
+    context: ../..
+    dockerfile: deploy/hosted/Dockerfile
+    args:
+      BUN_IMAGE: ${BUN_IMAGE:?set a pinned Bun image}
+  restart: unless-stopped
+  user: "1000:1000"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 120s
+  environment: &environment
+    LUOOME_MODE: hosted
+    HOSTED_ENVIRONMENT: production
+    HOSTED_DATA_ROOT: /var/lib/luoome
+    HOSTED_DELETION_LEDGER_ROOT: /var/lib/luoome-deletions
+    HOSTED_AUTH_SECRET_FILE: /run/secrets/hosted_auth_key
+    HOSTED_PRODUCT_POLICY: hosted-web-v2
+    HOSTED_PROVIDER_MODE: configured
+    HOSTED_PROVIDERS_MODULE: /app/operator/providers.ts
+    PUBLIC_ORIGIN: https://${HOSTED_DOMAIN:?set the public hostname}
+    HOSTED_TRUSTED_PROXY_IP: 172.28.0.2
+    HOSTED_REGISTRATION_ENABLED: ${HOSTED_REGISTRATION_ENABLED:-false}
+    HOSTED_REGISTRATION_LIMIT: ${HOSTED_REGISTRATION_LIMIT:-30}
+    HOSTED_RUNTIME_LIMIT: ${HOSTED_RUNTIME_LIMIT:-16}
+    LUOOME_EXPOSE_WRITE: "true"
+    LUOOME_EXPOSE_EXTERNAL: "true"
+    PORT: "5173"
+    LUOOME_HOST: 0.0.0.0
+  volumes:
+    - tenant_data:/var/lib/luoome
+    - deletion_ledger:/var/lib/luoome-deletions
+    - ./operator/providers.ts:/app/operator/providers.ts:ro
+  secrets: [hosted_auth_key]
+  tmpfs: [/tmp]
+  networks: [backend]
+
+services:
+  web:
+    <<: *service
+    healthcheck:
+      test: [CMD, bun, --no-env-file, -e, "const r=await fetch('http://127.0.0.1:5173/health/ready');if(!r.ok)process.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    <<: *service
+    command: [bun, --no-env-file, apps/worker/src/index.ts]
+    environment:
+      <<: *environment
+      HOSTED_WORKER_INSTANCE_ID: primary
+    healthcheck:
+      test: [CMD, bun, --no-env-file, -e, "const h=JSON.parse(await Bun.file('/var/lib/luoome/worker-health-primary.json').text());if(h.stopped||Date.now()-h.lastLoopAt>120000)process.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  caddy:
+    image: ${CADDY_IMAGE:?set a reviewed Caddy image tag or digest}
+    restart: unless-stopped
+    ports: ["443:443"]
+    environment:
+      HOSTED_DOMAIN: ${HOSTED_DOMAIN:?set the public hostname}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      backend:
+        ipv4_address: 172.28.0.2
+
+secrets:
+  hosted_auth_key:
+    file: ./secrets/hosted-auth-key
+volumes:
+  tenant_data:
+  deletion_ledger:
+  caddy_data:
+  caddy_config:
+networks:
+  backend:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

@@ -32,6 +32,10 @@ export class InMemoryReportRepository implements ReportRepository {
   private trades: TradeRepository | null = null;
   private decisionWriteLock = new MemoryWriteLock();
 
+  snapshotForExport(): Report[] {
+    return structuredClone([...this.items.values()]);
+  }
+
   setDecisionReviewRepository(
     repository: DecisionReviewRepository,
     trades: TradeRepository,
@@ -68,7 +72,10 @@ export class InMemoryReportRepository implements ReportRepository {
     }
     const existingId = this.idsByLogicalKey.get(logicalKey(parsed));
     const existing = existingId === undefined ? undefined : this.items.get(existingId);
-    if (existing !== undefined && (parsed.kind === 'closing' || parsed.kind === 'weekly')) {
+    if (
+      existing !== undefined &&
+      (parsed.kind === 'closing' || parsed.kind === 'weekly' || parsed.kind === 'watchlist-facts')
+    ) {
       return existing;
     }
     const saved =

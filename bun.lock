@@ -25,6 +25,17 @@
         "zod": "^4.4.3",
       },
     },
+    "apps/worker": {
+      "name": "@luoome/worker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@luoome/adapters": "workspace:*",
+        "@luoome/core": "workspace:*",
+        "@luoome/db": "workspace:*",
+        "@luoome/tools": "workspace:*",
+        "@luoome/web": "workspace:*",
+      },
+    },
     "packages/adapters": {
       "name": "@luoome/adapters",
       "version": "0.1.0",
@@ -162,6 +173,8 @@
     "@luoome/tui": ["@luoome/tui@workspace:packages/tui"],
 
     "@luoome/web": ["@luoome/web@workspace:apps/web"],
+
+    "@luoome/worker": ["@luoome/worker@workspace:apps/worker"],
 
     "@luoome/workflows": ["@luoome/workflows@workspace:packages/workflows"],
 

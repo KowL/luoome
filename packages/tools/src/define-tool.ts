@@ -1,5 +1,7 @@
 import {
+  type AuditLoggerLike,
   InvariantError,
+  type Logger,
   type SideEffect,
   type ToolContext,
   type ToolError,
@@ -41,7 +43,14 @@ export const errLeaseLostBeforeCommit = (
 });
 
 /** defineTool 的输入定义（ARCHITECTURE §4.4：一次定义，多处生效）。 */
-export interface ToolDefinition<I, O> {
+export interface TypedExecutionContext {
+  readonly clock: () => Date;
+  readonly logger: Logger;
+  readonly auditLog?: AuditLoggerLike;
+  readonly auditCaller?: string;
+}
+
+export interface TypedToolDefinition<I, O, C> {
   readonly name: string;
   readonly description: string;
   readonly sideEffect: SideEffect;
@@ -58,11 +67,10 @@ export interface ToolDefinition<I, O> {
    * 业务逻辑。返回 O 表示成功；返回 ToolResult（errNotFound 等）表示业务错误；
    * 抛 InvariantError → invariant_violation；抛其他异常 → internal。
    */
-  readonly handler: (
-    input: I,
-    ctx: ToolContext,
-  ) => Promise<O | ToolResult<never>> | O | ToolResult<never>;
+  readonly handler: (input: I, ctx: C) => Promise<O | ToolResult<never>> | O | ToolResult<never>;
 }
+
+export interface ToolDefinition<I, O> extends TypedToolDefinition<I, O, ToolContext> {}
 
 /**
  * Tool 对象（docs/archive/plan.md 跨包契约）。
@@ -72,15 +80,17 @@ export interface ToolDefinition<I, O> {
  * - handler 抛 InvariantError → { kind: 'invariant_violation' }
  * - 其他异常 / output 校验失败 → { kind: 'internal' }
  */
-export interface Tool<I = unknown, O = unknown> {
+export interface TypedTool<I, O, C> {
   readonly name: string;
   readonly description: string;
   readonly sideEffect: SideEffect;
   readonly requiredCapabilities: readonly SideEffect[];
   readonly inputSchema: z.ZodType<I>;
   readonly outputSchema: z.ZodType<O>;
-  execute(input: unknown, ctx: ToolContext): Promise<ToolResult<O>>;
+  execute(input: unknown, ctx: C): Promise<ToolResult<O>>;
 }
+
+export interface Tool<I = unknown, O = unknown> extends TypedTool<I, O, ToolContext> {}
 
 /** 检测 handler 主动返回的业务错误（{ ok: false, error: { kind } } 形状）。 */
 const isToolErrorResult = (
@@ -135,10 +145,11 @@ const sanitizeToolError = (error: ToolError): ToolError => {
 };
 
 const writeAudit = async (
-  ctx: ToolContext,
+  ctx: TypedExecutionContext,
   tool: string,
   sideEffect: SideEffect,
   result: ToolResult<unknown>,
+  caller: string,
 ): Promise<void> => {
   if (sideEffect === 'read' || ctx.auditLog === undefined) return;
   try {
@@ -148,18 +159,25 @@ const writeAudit = async (
       sideEffect,
       result: result.ok ? 'ok' : 'error',
       ...(result.ok ? {} : { errorKind: result.error.kind }),
-      caller: ctx.auditCaller ?? ctx.user.id,
+      caller: ctx.auditCaller ?? caller,
     });
   } catch (error) {
     // 审计 sink 故障不能改变 tool 协议；保留可定位 warning，避免静默丢审计。
     ctx.logger.warn('tool audit log write failed', {
       tool,
-      error: error instanceof Error ? error.message : String(error),
+      error: redactErrorText(error instanceof Error ? error.message : String(error)),
     });
   }
 };
 
-export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> => {
+export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
+  definition: TypedToolDefinition<I, O, C>,
+  auditCaller: (ctx: C) => string,
+  authorize?: (
+    input: unknown,
+    ctx: C,
+  ) => Promise<ToolResult<never> | null> | ToolResult<never> | null,
+): TypedTool<I, O, C> => {
   const { name, description, sideEffect, input, output, handler } = definition;
   const requiredCapabilities = [
     ...new Set(definition.requiredCapabilities ?? [sideEffect]),
@@ -176,8 +194,32 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
   // （断言工具表中不存在 sideEffect === 'trade' 的 tool）兜底；
   // v0.2+ 若引入 write/external tool，应在 ctx 组装层按 sideEffect 裁剪能力。
 
-  const execute = async (rawInput: unknown, ctx: ToolContext): Promise<ToolResult<O>> => {
-    const parsed = input.safeParse(rawInput);
+  const execute = async (rawInput: unknown, ctx: C): Promise<ToolResult<O>> => {
+    const audit = (result: ToolResult<unknown>): Promise<void> =>
+      writeAudit(ctx, name, sideEffect, result, auditCaller(ctx));
+    const failure = async (error: unknown): Promise<ToolResult<O>> => {
+      const result: ToolResult<O> =
+        error instanceof InvariantError
+          ? {
+              ok: false,
+              error: { kind: 'invariant_violation', message: redactErrorText(error.message) },
+            }
+          : {
+              ok: false,
+              error: {
+                kind: 'internal',
+                cause: `tool "${name}": ${redactErrorText(error instanceof Error ? error.message : String(error))}`,
+              },
+            };
+      await audit(result);
+      return result;
+    };
+    let parsed: ReturnType<typeof input.safeParse>;
+    try {
+      parsed = input.safeParse(rawInput);
+    } catch (error) {
+      return failure(error);
+    }
     if (!parsed.success) {
       const result: ToolResult<O> = {
         ok: false,
@@ -191,32 +233,16 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
         ok: false,
         error: sanitizeToolError(result.error),
       };
-      await writeAudit(ctx, name, sideEffect, safeResult);
+      await audit(safeResult);
       return safeResult;
     }
 
     let result: O | ToolResult<never>;
     try {
-      result = await handler(parsed.data, ctx);
+      const denied = await authorize?.(rawInput, ctx);
+      result = denied ?? (await handler(parsed.data, ctx));
     } catch (error) {
-      if (error instanceof InvariantError) {
-        const toolResult: ToolResult<O> = {
-          ok: false,
-          error: {
-            kind: 'invariant_violation',
-            message: redactErrorText(error.message),
-          },
-        };
-        await writeAudit(ctx, name, sideEffect, toolResult);
-        return toolResult;
-      }
-      const cause = redactErrorText(error instanceof Error ? error.message : String(error));
-      const toolResult: ToolResult<O> = {
-        ok: false,
-        error: { kind: 'internal', cause: `tool "${name}": ${cause}` },
-      };
-      await writeAudit(ctx, name, sideEffect, toolResult);
-      return toolResult;
+      return failure(error);
     }
 
     if (isToolErrorResult(result)) {
@@ -224,11 +250,16 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
         ok: false,
         error: sanitizeToolError(result.error),
       };
-      await writeAudit(ctx, name, sideEffect, safeResult);
+      await audit(safeResult);
       return safeResult;
     }
 
-    const outParsed = output.safeParse(result);
+    let outParsed: ReturnType<typeof output.safeParse>;
+    try {
+      outParsed = output.safeParse(result);
+    } catch (error) {
+      return failure(error);
+    }
     if (!outParsed.success) {
       const toolResult: ToolResult<O> = {
         ok: false,
@@ -239,11 +270,11 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
           ),
         },
       };
-      await writeAudit(ctx, name, sideEffect, toolResult);
+      await audit(toolResult);
       return toolResult;
     }
     const toolResult: ToolResult<O> = { ok: true, data: outParsed.data };
-    await writeAudit(ctx, name, sideEffect, toolResult);
+    await audit(toolResult);
     return toolResult;
   };
 
@@ -257,3 +288,20 @@ export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =
     execute,
   };
 };
+
+export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =>
+  defineTypedTool(
+    definition,
+    (ctx: ToolContext) => ctx.user.id,
+    (input, ctx) => {
+      if (ctx.identity?.mode !== 'hosted') return null;
+      if (ctx.hostedAuthorization === undefined) {
+        return { ok: false, error: { kind: 'permission_denied', required: 'hosted-operation' } };
+      }
+      return ctx.hostedAuthorization(
+        definition.name,
+        input,
+        definition.requiredCapabilities ?? [definition.sideEffect],
+      );
+    },
+  );

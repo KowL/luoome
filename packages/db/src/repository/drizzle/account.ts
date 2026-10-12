@@ -3,6 +3,7 @@ import {
   type AccountRepository,
   AccountSchema,
   assertAccountInvariants,
+  InvariantError,
 } from '@luoome/core';
 import { asc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
@@ -12,6 +13,28 @@ import { accounts, type Schema } from '../../schema/index.js';
 /** Account 的 Drizzle 实现（ARCHITECTURE §4.3）。行结构与实体一致，无需 mapper。 */
 export class DrizzleAccountRepository implements AccountRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
+
+  async ensureSingleDefault(account: Account): Promise<Account> {
+    assertAccountInvariants(account);
+    return this.db.transaction(
+      (tx) => {
+        const existing = tx.select().from(accounts).limit(2).all();
+        if (existing.length > 1) {
+          throw new InvariantError('托管租户必须只有一个默认投资账户');
+        }
+        if (existing[0] !== undefined) return AccountSchema.parse(existing[0]);
+        tx.insert(accounts).values(account).run();
+        return account;
+      },
+      { behavior: 'immediate' },
+    );
+  }
+
+  async updateName(id: string, name: string): Promise<Account | null> {
+    return (
+      this.db.update(accounts).set({ name }).where(eq(accounts.id, id)).returning().get() ?? null
+    );
+  }
 
   async save(account: Account): Promise<void> {
     assertAccountInvariants(account);

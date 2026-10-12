@@ -83,6 +83,12 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
  * @param ctx 可选；缺省时按上注构造默认 ctx，退出时自动关闭数据库。
  */
 export const startTuiApp = async (ctx?: ToolContext): Promise<void> => {
+  if (
+    (process.env.LUOOME_MODE !== undefined && process.env.LUOOME_MODE !== 'local') ||
+    ctx?.identity?.mode === 'hosted'
+  ) {
+    throw new Error('TUI is local-only');
+  }
   if (ctx !== undefined) {
     await runTui(ctx);
     return;

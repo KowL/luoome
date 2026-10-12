@@ -52,6 +52,11 @@ export * from './entity/workflow-run.js';
 export * from './env-file.js';
 // 错误模型
 export * from './error/index.js';
+export * from './hosted/auth.js';
+export * from './hosted/index.js';
+export * from './hosted/notification.js';
+export * from './hosted/payment-port.js';
+export * from './hosted/tenant.js';
 export * from './portfolio/apply-trade-to-holding.js';
 export * from './portfolio/decision-ledger-state.js';
 export * from './portfolio/ledger.js';

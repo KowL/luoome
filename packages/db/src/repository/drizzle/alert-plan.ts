@@ -27,6 +27,10 @@ export class DrizzleAlertPlanRepository implements AlertPlanRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
   async save(plan: AlertPlan): Promise<void> {
+    this.put(plan);
+  }
+
+  put(plan: AlertPlan): void {
     assertAlertPlanInvariants(plan);
     const values = {
       id: plan.id,

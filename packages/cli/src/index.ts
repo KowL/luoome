@@ -932,6 +932,9 @@ const run = async (argv: readonly string[]): Promise<number> => {
     printHelp();
     return 0;
   }
+  if (process.env.LUOOME_MODE === 'hosted' && !(cmd === 'web' && sub === 'serve')) {
+    throw new CliUsageError('hosted 模式使用 web serve 与独立 apps/worker 入口');
+  }
 
   if (cmd === 'tools') {
     if (sub === 'list') {
@@ -1009,7 +1012,13 @@ const run = async (argv: readonly string[]): Promise<number> => {
 
 const main = async (): Promise<void> => {
   try {
-    loadProjectEnv();
+    const mode = process.env.LUOOME_MODE ?? 'local';
+    if (mode !== 'local' && mode !== 'hosted')
+      throw new CliUsageError('LUOOME_MODE 仅支持 local 或 hosted');
+    if (mode === 'local') loadProjectEnv();
+    if (mode === 'local' && process.env.LUOOME_MODE === 'hosted') {
+      throw new CliUsageError('hosted 模式必须在加载本地环境文件前显式选择');
+    }
     process.exitCode = await run(process.argv.slice(2));
   } catch (error) {
     if (error instanceof CliUsageError) {

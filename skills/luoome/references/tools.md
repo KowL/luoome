@@ -2,6 +2,11 @@
 
 MCP discovery is the authoritative tool inventory. Tool names, descriptions and input schemas may evolve; inspect the connected tool schema before calling it. For local diagnosis, `luoome tools list --json` lists registry metadata and `luoome tools inspect <name>` shows a tool schema.
 
+Hosted capabilities are private: platform auth/subscription/usage/payment/notification/privacy/recovery tools,
+Tenant durable execution and personal import/facts/conditions/feedback tools require trusted hosted identity.
+They are not part of this MCP inventory. Local read/write/advice/external classifications below remain unchanged;
+do not infer a new MCP permission from an exported TypeScript tool or a hosted HTTP route.
+
 ## Read
 
 Use read tools to identify subjects and inspect current state before deeper analysis or mutation:
@@ -74,6 +79,10 @@ Use advice tools only for an explicit analysis request:
 
 Write tools create or change local records, including accounts, holdings, trades, Strategies,
 Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback.
+`update_account` only changes an account name; opening capital, currency and cash balance are not editable profile fields.
+Use the existing cash-flow tools for actual funding records. Hosted users have one automatically initialized,
+empty CNY account; `create_account` remains available for local multi-account use but is rejected in hosted mode.
+`ensure_default_account` is an internal hosted worker operation and is excluded from MCP discovery.
 `confirm_strategy_autonomy_action` and `reject_strategy_autonomy_action` are the human-review
 queue for AI-managed Strategy lifecycle: they only act on `blocked` actions, and confirm
 publishes the candidate version. `archive_strategy` finalizes a paused user Strategy as a

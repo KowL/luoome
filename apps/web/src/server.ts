@@ -86,11 +86,11 @@ import {
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
 import { ZodError, z } from 'zod';
-
 import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
 import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
+import { resolveRuntimeMode } from './hosted-config.js';
 import {
   INTRADAY_PLAN_SCHEDULER_INTERVAL_MS,
   startIntradayPlanScheduler,
@@ -284,6 +284,8 @@ export const buildWebContext = async (
   env: Readonly<Record<string, string | undefined>> = process.env,
   deps: { readonly sources?: WebSourceSet } = {},
 ): Promise<ToolContext> => {
+  if (resolveRuntimeMode({ ...env }) !== 'local')
+    throw new Error('shared Web context is local-only');
   const now = (): Date => new Date();
   mkdirSync(dirname(dbPath), { recursive: true });
   const handle = createDrizzleRepos(dbPath);
@@ -387,6 +389,13 @@ export const buildWebContext = async (
 };
 
 export interface CreateWebAppOptions {
+  /** Hosted 外壳完成认证后注入不可变请求上下文；后台执行另持 runtime 租约。 */
+  readonly hosted?: {
+    readonly request: (c: Context) => {
+      readonly context: ToolContext;
+      readonly retain: () => () => void;
+    };
+  };
   /** write tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_WRITE。 */
   readonly exposeWrite?: boolean;
   /** external tools/routes 必须显式开启；默认读取 LUOOME_EXPOSE_EXTERNAL。 */
@@ -440,13 +449,36 @@ const mutationPermission = (request: Request): ToolResult<never> | null => {
  * 接受 ctx 引用对象 { current } 而非裸 ToolContext。浏览器账户选择通过
  * X-Luoome-Account-Id 形成 request-scoped context；无 header 的本地调用沿用默认账户。
  */
-export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptions = {}): Hono => {
+export const createWebApp = (
+  initialCtx: ToolContext | undefined,
+  options: CreateWebAppOptions = {},
+): Hono => {
+  if (initialCtx?.identity?.mode === 'hosted' && options.hosted === undefined)
+    throw new Error('hosted identity requires the hosted Web entry');
+  if (initialCtx === undefined && options.hosted === undefined)
+    throw new Error('local Web requires a context');
   // 兼容无 header 的本地调用，同时为浏览器请求提供 request-scoped 账户选择。
   // 这样不同 tab 的 localStorage 账户不会再互相覆盖共享进程上下文。
-  const ctxRef: { current: ToolContext } = { current: initialCtx };
-  const requestStorage = new AsyncLocalStorage<Request>();
+  let localContext = initialCtx;
+  const requestStorage = new AsyncLocalStorage<{
+    request: Request;
+    context?: ToolContext;
+    retain?: () => () => void;
+  }>();
+  const ctxRef = {
+    get current(): ToolContext {
+      const context =
+        options.hosted === undefined ? localContext : requestStorage.getStore()?.context;
+      if (context === undefined) throw new Error('Web request context unavailable');
+      return context;
+    },
+    set current(context: ToolContext) {
+      if (options.hosted !== undefined) throw new Error('Hosted request context is immutable');
+      localContext = context;
+    },
+  };
   const chatRuntimeRef: { current: ChatStreamRuntime | undefined } = {
-    current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx.agent),
+    current: options.chatStreamRuntime ?? asChatStreamRuntime(initialCtx?.agent),
   };
   const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
   const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
@@ -460,7 +492,12 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   /** 浏览器 api.js 从 localStorage 发送的账户选择；没有时沿用本地默认账户。 */
   const contextForRequest = (): ToolContext => {
-    const request = requestStorage.getStore();
+    const request = requestStorage.getStore()?.request;
+    if (options.hosted !== undefined)
+      return {
+        ...ctxRef.current,
+        ...(request === undefined ? {} : { abortSignal: request.signal }),
+      };
     const accountId = request?.headers.get('x-luoome-account-id')?.trim();
     return {
       ...ctxRef.current,
@@ -471,7 +508,15 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     };
   };
 
-  app.use('*', async (c, next) => requestStorage.run(c.req.raw, next));
+  app.use('*', async (c, next) =>
+    requestStorage.run(
+      {
+        request: c.req.raw,
+        ...(c.req.path.startsWith('/api/') ? options.hosted?.request(c) : {}),
+      },
+      next,
+    ),
+  );
 
   const requireMutationCapabilities = (
     request: Request,
@@ -493,7 +538,11 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
    * 静态资源响应：按 mtime+size 生成 ETag，并用 `no-cache` 让浏览器每次重新校验。
    * 本地工具没有构建步骤，隐式缓存会让改完的前端模块继续跑旧代码；未修改时回 304，不重复传输。
    */
-  const staticResponse = (request: Request, file: string, contentType: string): Response => {
+  const staticResponse = async (
+    request: Request,
+    file: string,
+    contentType: string,
+  ): Promise<Response> => {
     const bunFile = Bun.file(join(PUBLIC_DIR, file));
     if (bunFile.size === 0) return new Response('not found', { status: 404 });
     const etag = `W/"${bunFile.lastModified}-${bunFile.size}"`;
@@ -501,12 +550,23 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     if (request.headers.get('if-none-match') === etag) {
       return new Response(null, { status: 304, headers });
     }
+    if (options.hosted !== undefined && file === 'index.html') {
+      return new Response(
+        (await bunFile.text()).replace(
+          '<body>',
+          '<body data-runtime="hosted" class="auth-pending">',
+        ),
+        {
+          headers: { ...headers, 'cache-control': 'no-store' },
+        },
+      );
+    }
     return new Response(bunFile, { headers });
   };
 
   const serveFile =
     (file: string, contentType: string) =>
-    (c: Context): Response =>
+    (c: Context): Promise<Response> =>
       staticResponse(c.req.raw, file, contentType);
   app.get('/', serveFile('index.html', 'text/html; charset=utf-8'));
   app.get('/style.css', serveFile('style.css', 'text/css; charset=utf-8'));
@@ -617,10 +677,16 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
     readonly to: string;
     readonly stockIds: string[] | undefined;
   };
+  const jobKey = (id: string): string =>
+    ctxRef.current.identity?.mode === 'hosted'
+      ? `${ctxRef.current.identity.tenantId}:${ctxRef.current.identity.tenantGeneration}:${id}`
+      : id;
   const evaluationJobs = new Map<string, Promise<void>>();
 
   const startEvaluationJob = (sessionId: string, input: EvaluationJobInput): void => {
-    if (evaluationJobs.has(sessionId)) return;
+    const key = jobKey(sessionId);
+    if (evaluationJobs.has(key)) return;
+    const release = requestStorage.getStore()?.retain?.();
     const job = (async (): Promise<void> => {
       const result = await replayStrategyRangeWorkflow.run(
         {
@@ -668,9 +734,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         });
       })
       .finally(() => {
-        evaluationJobs.delete(sessionId);
+        evaluationJobs.delete(key);
+        release?.();
       });
-    evaluationJobs.set(sessionId, job);
+    evaluationJobs.set(key, job);
   };
 
   const evaluationSnapshot = async (sessionId: string): Promise<ToolResult<unknown>> => {
@@ -705,7 +772,9 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
 
   const strictBacktestJobs = new Map<string, Promise<void>>();
   const startStrictBacktestJob = (backtestRunId: string, strategyId: string): void => {
-    if (strictBacktestJobs.has(backtestRunId)) return;
+    const key = jobKey(backtestRunId);
+    if (strictBacktestJobs.has(key)) return;
+    const release = requestStorage.getStore()?.retain?.();
     const job = executeStrictStrategyBacktestTool
       .execute({ backtestRunId }, ctxRef.current)
       .then((result) => {
@@ -725,9 +794,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         });
       })
       .finally(() => {
-        strictBacktestJobs.delete(backtestRunId);
+        strictBacktestJobs.delete(key);
+        release?.();
       });
-    strictBacktestJobs.set(backtestRunId, job);
+    strictBacktestJobs.set(key, job);
   };
 
   interface BatchQuoteTarget {
@@ -3042,7 +3112,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       });
     }
-    const runtime = chatRuntimeRef.current;
+    const runtime =
+      options.hosted === undefined
+        ? chatRuntimeRef.current
+        : asChatStreamRuntime(contextForRequest().agent);
     if (runtime === undefined) {
       return new Response(
         JSON.stringify({
@@ -3050,7 +3123,10 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
           error: {
             kind: 'llm_error',
             provider: contextForRequest().adapters.llm.name,
-            cause: 'AI 模型尚未配置，请前往设置页完成 LLM 设置',
+            cause:
+              options.hosted === undefined
+                ? 'AI 模型尚未配置，请前往设置页完成 LLM 设置'
+                : 'AI 模型尚未配置，请联系服务管理员',
             retryable: false,
           },
         }),
@@ -3060,7 +3136,13 @@ export const createWebApp = (initialCtx: ToolContext, options: CreateWebAppOptio
         },
       );
     }
-    return createChatStreamResponse(body, contextForRequest(), runtime, c.req.raw.signal);
+    return createChatStreamResponse(
+      body,
+      contextForRequest(),
+      runtime,
+      c.req.raw.signal,
+      requestStorage.getStore()?.retain,
+    );
   });
 
   app.get('/api/stocks/search', async (c) => {
@@ -3518,6 +3600,15 @@ export const WEB_SERVER_IDLE_TIMEOUT_SECONDS = 255;
 
 /** 启动 Web 与进程内策略调度器；stop() 会同时停止二者。 */
 export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
+  if (resolveRuntimeMode() === 'hosted') {
+    if (options.dbPath !== undefined)
+      throw new Error('hosted mode does not accept a shared local database path');
+    const { startHostedWeb } = await import('./hosted-start.js');
+    return startHostedWeb({
+      port: options.port,
+      ...(options.host === undefined ? {} : { host: options.host }),
+    });
+  }
   const dbPath = options.dbPath ?? resolveDbPath();
   // 行情源以设置页持久化的值为准（含启动装配），不能只读 process.env。
   const marketSettingsStore = new MarketSettingsStore(process.env);

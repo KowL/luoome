@@ -9,6 +9,10 @@ import {
 } from '@luoome/core';
 import { eq, sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
+import { DrizzleTenantRepository } from './hosted/tenant-client.js';
+import { DrizzleTenantExportRepository } from './hosted/tenant-export-client.js';
+import { ensureTenantExportSchema } from './hosted/tenant-export-schema.js';
+import { ensureTenantSchema } from './hosted/tenant-schema.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -77,6 +81,8 @@ const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: 
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  ensureTenantSchema(db);
+  ensureTenantExportSchema(db);
   db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
     id TEXT PRIMARY KEY, account_id TEXT NOT NULL, subject_kind TEXT NOT NULL,
     subject_id TEXT NOT NULL, stock_id TEXT, source_occurred_at INTEGER NOT NULL,
@@ -1213,11 +1219,13 @@ export const ensureSchema = (db: DrizzleDb): void => {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS watchlist_member_sources (
       id TEXT PRIMARY KEY, member_id TEXT NOT NULL, kind TEXT NOT NULL, source_key TEXT NOT NULL,
-      source_id TEXT, source_version_id TEXT, sync_run_id TEXT, reason TEXT NOT NULL,
+      source_id TEXT, source_version_id TEXT, sync_run_id TEXT, owner_user_id TEXT, import_batch_id TEXT, reason TEXT NOT NULL,
       score REAL, rank INTEGER, status TEXT NOT NULL, evidence_json TEXT NOT NULL,
       data_as_of INTEGER, valid_from INTEGER NOT NULL, valid_until INTEGER
     )
   `);
+  ensureColumn(db, 'watchlist_member_sources', 'owner_user_id', 'TEXT');
+  ensureColumn(db, 'watchlist_member_sources', 'import_batch_id', 'TEXT');
   db.run(sql`
     CREATE INDEX IF NOT EXISTS watchlist_sources_member_status_idx
     ON watchlist_member_sources (member_id, status)
@@ -1340,6 +1348,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
       missing_dimensions_json TEXT NOT NULL DEFAULT '[]',
       delivery_status TEXT NOT NULL DEFAULT 'not-requested',
       notification_policy TEXT,
+      watchlist_facts_snapshot TEXT,
       decision_review_snapshot TEXT,
       delivery_attempt_id TEXT,
       workflow_run_id TEXT NOT NULL,
@@ -1352,6 +1361,7 @@ export const ensureSchema = (db: DrizzleDb): void => {
   ensureColumn(db, 'reports', 'delivery_attempt_id', 'TEXT');
   ensureColumn(db, 'reports', 'notification_policy', 'TEXT');
   ensureColumn(db, 'reports', 'decision_review_snapshot', 'TEXT');
+  ensureColumn(db, 'reports', 'watchlist_facts_snapshot', 'TEXT');
   db.run(sql`CREATE TABLE IF NOT EXISTS report_refresh_receipts (
     account_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
     report_id TEXT NOT NULL, PRIMARY KEY (account_id, request_id)
@@ -2052,8 +2062,12 @@ export interface DrizzleReposHandle {
  * 驱动为 Bun 内置 bun:sqlite（drizzle-orm/bun-sqlite），CLI/TUI/Web/MCP 均以
  * bun 启动时可直接加载；vitest 需跑在 Bun 运行时（`bun test` / `bun --bun run vitest`）。
  */
-export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
+export const createDrizzleRepos = (
+  dbPath: string,
+  options: { readonly migrate?: boolean } = {},
+): DrizzleReposHandle => {
   const sqlite = new Database(dbPath);
+  sqlite.exec('PRAGMA foreign_keys = ON');
   // Web chat、策略调度器和确认面板会并发写同一文件。SQLite 默认遇到写锁立即失败；
   // 给短事务留出等待窗口，WAL 下读请求仍可并发。
   sqlite.exec('PRAGMA busy_timeout = 5000');
@@ -2064,7 +2078,7 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   }
   const db = drizzle(sqlite, { schema });
   try {
-    ensureSchema(db);
+    if (options.migrate !== false) ensureSchema(db);
   } catch (error) {
     // 迁移失败时释放 sqlite 句柄，避免调用方重试时泄漏文件锁。
     sqlite.close();
@@ -2072,6 +2086,8 @@ export const createDrizzleRepos = (dbPath: string): DrizzleReposHandle => {
   }
   const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
+    hostedTenant: new DrizzleTenantRepository(db),
+    hostedExports: new DrizzleTenantExportRepository(db),
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
     decisionReview: new DrizzleDecisionReviewRepository(db),

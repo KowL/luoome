@@ -57,6 +57,8 @@ export const WatchlistMemberSourceSchema = z.object({
   sourceId: z.string().optional(),
   sourceVersionId: z.string().optional(),
   syncRunId: z.string().optional(),
+  ownerUserId: z.string().min(1).optional(),
+  importBatchId: z.string().min(1).optional(),
   reason: z.string().min(1).max(1000),
   score: z.number().min(0).max(100).optional(),
   rank: z.number().int().positive().optional(),

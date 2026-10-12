@@ -9,6 +9,11 @@ Strategy、Watchlist、AlertPlan、笔记与建议能力以 tool 形式暴露，
 - 作为 **Web** 管理看板、持仓、Strategy、Watchlist 与 AlertPlan
 - 作为 **MCP server** 被 Claude Desktop / OpenClaw / Hermes 等 agent 直接调用，并让它们替你做"分析 → 建议 → 行动"的推理
 
+显式 `hosted` 模式在原 Web 页面上增加邮箱登录、用户数据隔离与支付订阅，保留自选、策略、
+预警、持仓和复盘。每位用户自动拥有一个可修改名称的默认投资账户，不提供新增或切换账户。
+当前为开发验证阶段，真实供应商和生产放行尚待验收；
+详见[托管运行手册](./docs/runbooks/hosted-personal-subscription.md)。
+
 ## 名字
 
 **luoome = 织机 + 罗网**
@@ -76,6 +81,7 @@ packages/
   tui/         opentui 应用
 apps/
   web/         Hono + 同源静态仪表盘
+  worker/      托管持久任务、通知/支付对账及离线恢复入口
 docs/          全部文档（架构 / 路线图 / 安全 / 交接 / 用户手册 / 设计文档 / backlog）
 homebrew/
   luoome.rb    Homebrew formula（brew tap KowL/luoome && brew install luoome）
@@ -85,6 +91,7 @@ homebrew/
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
+| `LUOOME_MODE` | `local` | 显式 `hosted` 使用独立控制库与 Tenant；托管配置见下文 |
 | `LUOOME_HOME` | `~/.luoome` | 数据目录（含 `luoome.db`、`ai-models.json`） |
 | `LUOOME_MARKET_PROVIDER` | 必填 | 仅支持 `real`：Eastmoney → Tencent → Sina；全源失败明确报错 |
 | `LUOOME_FUNDAMENTAL_PROVIDER` | 可选 | 默认不装配；仅显式设置 `mock` 才注入固定 PIT fixture，gate 永远为 `not-ready`，不代表真实数据可用 |
@@ -114,6 +121,12 @@ homebrew/
 | `LUOOME_STRATEGY_DATA_REQUEST_TIMEOUT_MS` | `20000` | Strategy 单成员行情请求超时（毫秒）；范围 500～120000 |
 | `LUOOME_LOG` | info | `debug` / `info` / `warn` / `error` / `silent` |
 | `LUOOME_PORT` | 5173 | Web 端口（与 `--port` 等价） |
+
+上表行情、LLM 和用户设置属于 local 装配。hosted 不加载本地 `.env` 或个人模型目录，必须用
+`bun --no-env-file run hosted:web` 与 `bun --no-env-file run hosted:worker`，并显式配置
+`HOSTED_DATA_ROOT`、固定 HTTPS `PUBLIC_ORIGIN`、auth secret、产品策略和 provider 模式。
+完整配置、运营套餐、生产 secret 与备份恢复命令见[托管运行手册](./docs/runbooks/hosted-personal-subscription.md)。
+生产拒绝 fixture provider，注册默认关闭；托管 CLI/TUI/MCP 拒绝复用本地共享数据库。
 
 默认行情链路无需供应商密钥：报价由东方财富、腾讯、新浪按顺序提供；指数有东方财富与腾讯，
 分钟 OHLCV 有腾讯原生 K 线。批量报价逐源补齐缺失股票，最后只对剩余项逐股重试；

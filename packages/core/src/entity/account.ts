@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-import { type Money, MoneySchema } from '../types/branded.js';
+import { type Money, MoneySchema, money } from '../types/branded.js';
+
+export const DEFAULT_ACCOUNT_ID = 'default-account';
+export const AccountNameSchema = z.string().trim().min(1).max(120);
 
 /** 账户类型：仅真实账户。 */
 export type AccountKind = 'real';
@@ -32,4 +35,14 @@ export const AccountSchema = z.object({
   initialCapital: MoneySchema,
   cashBalance: MoneySchema,
   createdAt: z.coerce.date(),
+});
+
+export const createDefaultAccount = (now: Date): Account => ({
+  id: DEFAULT_ACCOUNT_ID,
+  name: '默认投资账户',
+  kind: 'real',
+  currency: 'CNY',
+  initialCapital: money(0),
+  cashBalance: money(0),
+  createdAt: now,
 });

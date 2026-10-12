@@ -18,6 +18,11 @@ build/
 
 # Luoome runtime data
 .luoome/
+deploy/hosted/secrets/
+deploy/hosted/operator/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.db
 *.db-journal
 *.db-wal

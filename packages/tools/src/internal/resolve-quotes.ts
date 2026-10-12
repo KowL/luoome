@@ -82,6 +82,14 @@ export const resolveQuotes = async (
   const fetched = new Map<string, Quote>();
   for (let offset = 0; offset < resolved.length; offset += RESOLVE_CHUNK_SIZE) {
     const chunk = resolved.slice(offset, offset + RESOLVE_CHUNK_SIZE);
+    const canRefresh = async (): Promise<boolean> =>
+      ctx.identity?.mode !== 'hosted' ||
+      (ctx.hostedAuthorization !== undefined &&
+        (await ctx.hostedAuthorization('batch_quote', { stockIds: chunk.map((s) => s.id) }, [
+          'write',
+          'external',
+        ])) === null);
+    if (!(await canRefresh())) continue;
     try {
       const first = chunk[0];
       const quotes =
@@ -91,6 +99,7 @@ export const resolveQuotes = async (
             ])
           : await ctx.adapters.market.batchQuote(chunk.map((s) => s.id));
       const liveQuotes = [...quotes.values()].map((quote) => QuoteSchema.parse(quote));
+      if (!(await canRefresh())) continue;
       await Promise.all(liveQuotes.map((quote) => ctx.repos.quote.save(quote)));
       for (const quote of liveQuotes) fetched.set(quote.stockId, quote);
     } catch (error) {

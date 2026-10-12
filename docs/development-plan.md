@@ -6,6 +6,12 @@
 > 事实来源：[领域语言](../CONTEXT.md)、[架构说明](./ARCHITECTURE.md)、
 > [产品需求](./README.md#产品需求prd)、[技术设计](./README.md#技术设计ddd) 与当前代码、测试
 
+> 2026-10-10 新增个人订阅托管方向的[开发改造计划](./hosted-personal-subscription-development-plan.md)
+> 与[详细设计](./ddd/hosted-personal-subscription-detailed-design.md)。2026-10-12 按用户纠偏修订为原 Web
+> 增量登录、支付订阅、用户隔离和唯一默认投资账户；原业务功能保留。旧 facts-only 验收不是本版整站验收。
+> [运行手册](./runbooks/hosted-personal-subscription.md)与[验收记录](./archive/hosted-personal-subscription-fixture-acceptance.md)
+> 列明边界；本页既有本地能力的验收记录不代表托管服务已对外开放。
+
 ## 1. 目标与排序原则
 
 后续开发分为四层，按以下顺序推进：

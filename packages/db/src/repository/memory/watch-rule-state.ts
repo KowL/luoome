@@ -4,6 +4,10 @@ import type { WatchRuleState, WatchRuleStateRepository } from '@luoome/core';
 export class InMemoryWatchRuleStateRepository implements WatchRuleStateRepository {
   private readonly items = new Map<string, WatchRuleState>();
 
+  snapshotForHostedEvaluation(): WatchRuleState[] {
+    return structuredClone([...this.items.values()]);
+  }
+
   private static key(s: WatchRuleState): string {
     return `${s.poolId}|${s.stockId}|${s.ruleId}`;
   }
@@ -30,6 +34,10 @@ export class InMemoryWatchRuleStateRepository implements WatchRuleStateRepositor
   }
 
   async removeByPool(poolId: string): Promise<void> {
+    this.deleteByPool(poolId);
+  }
+
+  deleteByPool(poolId: string): void {
     for (const [k, v] of this.items) {
       if (v.poolId === poolId) this.items.delete(k);
     }

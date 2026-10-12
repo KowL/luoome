@@ -3,7 +3,15 @@ import { type AlertPlan, type AlertPlanRepository, assertAlertPlanInvariants } f
 export class InMemoryAlertPlanRepository implements AlertPlanRepository {
   private readonly items = new Map<string, AlertPlan>();
 
+  snapshotForExport(): AlertPlan[] {
+    return structuredClone([...this.items.values()]);
+  }
+
   async save(plan: AlertPlan): Promise<void> {
+    this.put(plan);
+  }
+
+  put(plan: AlertPlan): void {
     assertAlertPlanInvariants(plan);
     this.items.set(plan.id, plan);
   }
@@ -25,6 +33,10 @@ export class InMemoryAlertPlanRepository implements AlertPlanRepository {
   }
 
   async remove(id: string): Promise<void> {
+    this.delete(id);
+  }
+
+  delete(id: string): void {
     this.items.delete(id);
   }
 }

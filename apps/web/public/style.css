@@ -10028,3 +10028,28 @@ body > .modal {
 .dashboard-event-history .dashboard-board-filters label {
   white-space: nowrap;
 }
+
+/* 登录期间保持原页面不可见，避免旧会话内容短暂显示。 */
+body.auth-pending > :not(#hosted-auth):not(.bg-layer) { display: none !important; }
+.hosted-auth { width: min(440px, calc(100% - 32px)); margin: 12vh auto 40px; position: relative; }
+.hosted-auth h1 { margin-bottom: 16px; }
+.hosted-auth form, .hosted-account-form { display: grid; gap: 16px; }
+.hosted-auth form { margin-top: 24px; }
+.hosted-auth input:not([type="checkbox"]), .hosted-account-form input,
+#hosted-notifications input[type="time"] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.hosted-check { display: flex; align-items: center; gap: 10px; margin: 16px 0; }
+.hosted-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
+.hosted-order { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+#hosted-subscription p, #hosted-notifications p { margin: 12px 0; }
+#hosted-subscription h3, #hosted-notifications h3 { margin-top: 24px; }
+#hosted-notifications .field { display: inline-flex; flex-direction: column; gap: 6px; margin: 0 16px 16px 0; }
+.hosted-account-form { margin-bottom: 24px; }
+
+#modal-body .status { position: static; max-width: none; margin: 12px 0; }
+#modal-body .status:empty { display: none; }
+body.auth-pending { font-size: 0; }
+.hosted-auth { font-size: var(--text-base, 14px); }
+@media (max-width: 640px) {
+  body[data-runtime="hosted"] .topbar .clock { display: none; }
+  body[data-runtime="hosted"] .topbar-meta { gap: 4px; }
+}

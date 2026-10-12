@@ -336,3 +336,33 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 - [x] LLM 输出 sanitized 审计生效
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
+
+## 个人订阅托管边界
+
+hosted已有身份/隔离/支付/恢复基础设施；本次在其上复用原Web业务，默认一个投资账户。
+安全边界用于保护用户和平台权限，不以旧facts-only范围替代现有产品。新融合路径尚需本版独立验收，
+真实运营与供应商门禁见[运行手册](./runbooks/hosted-personal-subscription.md#7-生产放行门禁)。
+
+- 显式hosted不读取个人`.env`、共享本地DB或用户home模型配置；Bun启动要求`--no-env-file`。
+  固定HTTPS `PUBLIC_ORIGIN`，生产拒绝fixture provider，注册默认关闭直到实际放行条件完成。
+- 邮箱OTP为6位/5分钟/5次尝试，平台存HMAC；邮箱/IP/全站有预算。session token仅存hash，cookie
+  使用Secure/HttpOnly/SameSite=Lax/Path=/；已有idle7天/absolute30天参数、会话轮换和敏感操作再认证保持。
+- 浏览器mutation校验固定Origin和会话CSRF；登录挑战只豁免已有会话/CSRF，仍查Origin及限流。
+  支付raw-body webhook独立验签；可信代理头不能替代身份。客户端Tenant、账户、owner、价格和预算不能覆写服务端事实。
+- 平台registry不进入模型/MCP/generic HTTP。原业务Tool、专用API、SSE、确认草案和worker统一按当前Tenant授权。
+  本人的Advice、账户金额和研究资料按原业务契约可见；跨租户读取/写入/聚合必须拒绝，不能只通过前端删除字段保护。
+- hosted服务端只绑定唯一默认Account；新增/切换在HTTP、generic Tool和AI草案路径都拒绝。
+  `update_account`只收名称，不能覆盖本金/现金/币种；内部初始化不对普通用户/模型开放。local多账户行为不变。
+- 保留原AI/研究入口，但模型只能使用当前Tenant/Account与已授权工具，消耗受订阅及预算约束。
+  provider未装配明确不可用，不伪造模型输出。平台LLM/数据源密钥、任意Vault路径/Git凭据/整库恢复不是租户设置权限。
+- 建议与交易继续分离；自动证券交易禁止，trade不进入MCP/模型/通用Web路由；人工登记已完成成交仍走既有专用契约。
+- Tenant目录使用opaque ID、owner/generation/schema manifest与私有权限，拒绝符号链接越界。
+  应用进程可访问挂载的多个租户，因此不将此当作用户代码OS沙箱。
+- 发送前检查权益、当前规则/成员、目的地及偏好；unknown邮件按provider契约查询，不盲目重发。
+  个人/全局实际尝试预算与站内展示分离；平台日志不记录投资、模型或邮件正文。
+- 到期历史读取不隐式刷新行情或调用模型；导出允许本人私人资料，不含平台鉴权/密钥/成本或受限市场缓存，下载再次鉴权并no-store。
+- 删除先撤销访问/递增generation，再排空各进程请求、SSE和执行者；独立tombstone先于清目录持久化。
+  恢复应用最新删除ledger，必要财务记录与私人资料分离；旧会话、导出和邮件不得被备份复活。
+- 硬退出残留写活动不自动过期；恢复须停写、撤销旧fence并核对回执/支付/费用，不通过手改DB或伪造零成本解锁。
+
+旧fixture验收不覆盖尚未接通的原业务/SSE/自动调度。正式条款同意、真实模型/数据/支付/邮件以及生产演练均需相应独立证据。

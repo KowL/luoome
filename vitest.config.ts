@@ -16,9 +16,11 @@ export default defineConfig({
       'packages/db/src/seed.test.ts',
       'packages/db/src/repository/drizzle/**',
       'packages/db/src/repository/decision-review.contract.test.ts',
+      'packages/db/src/hosted/**',
       // apps/web 的 server 测试顶层 import @luoome/db（bun:sqlite），由 bun runner 执行；
       // public/js 的 DOM-free 单测也复用 bun:test，由 test:web 一并执行。
       'apps/web/src/server.test.ts',
+      'apps/web/src/hosted-*.test.ts',
       'apps/web/src/data-transfer.test.ts',
       'apps/web/src/strategy-scheduler.test.ts',
       'apps/web/src/intraday-plan-scheduler.test.ts',

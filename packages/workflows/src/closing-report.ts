@@ -10,7 +10,7 @@ import {
   notificationTime,
   type ReportBlock,
   ReportSchema,
-  ReportScopeSchema,
+  AccountReportScopeSchema as ReportScopeSchema,
   StrategyRecommendationBatchSummarySchema,
   type StrategySchedule,
   type ToolResult,

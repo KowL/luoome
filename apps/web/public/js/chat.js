@@ -2,7 +2,14 @@
 'use strict';
 
 import { consumeUIMessageStream } from './ai-ui-stream.js';
-import { apiHeaders, callApi, getAccountId } from './api.js';
+import {
+  acceptApiResponse,
+  apiHeaders,
+  apiRequestSignal,
+  callApi,
+  getAccountId,
+  getSessionEpoch,
+} from './api.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { $, adviceCard, el, mount, resultErrorText } from './ui.js';
 
@@ -611,10 +618,11 @@ const send = async (requestedText) => {
       if (!feed.includes(actionsEntry)) feed.push(actionsEntry);
     };
     const headers = apiHeaders({ 'content-type': 'application/json' }, accountId);
+    const sessionEpoch = getSessionEpoch();
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers,
-      signal: controller.signal,
+      signal: apiRequestSignal(controller.signal),
       body: JSON.stringify({
         sessionId,
         messages: [
@@ -626,11 +634,11 @@ const send = async (requestedText) => {
         ],
       }),
     });
-    if (version !== viewVersion) return;
+    if (!acceptApiResponse(response, sessionEpoch) || version !== viewVersion) return;
     const route = parseChatRouteHeader(response.headers.get('x-luoome-chat-route'));
     if (route !== null) feed.push({ type: 'plan', route });
     await consumeUIMessageStream(response, (part) => {
-      if (version !== viewVersion) return;
+      if (version !== viewVersion || sessionEpoch !== getSessionEpoch()) return;
       if (part.type === 'start') {
         if (typeof part.messageId === 'string') assistantMessageId = part.messageId;
       } else if (part.type === 'start-step') {

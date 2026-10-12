@@ -21,6 +21,7 @@ import type { Exchange } from './entity/stock.js';
 import type { EventImportance, StockEventKind, StockEventStatus } from './entity/stock-event.js';
 import type { MarketCoverage, StockUniverseSnapshot } from './entity/stock-universe.js';
 import type { ToolErrorKind } from './error/index.js';
+import type { ExecutionIdentity } from './hosted/auth.js';
 import type { RepositoryRegistry } from './repository/index.js';
 import type {
   ResearchEmbeddingAdapterLike,
@@ -29,6 +30,7 @@ import type {
   ResearchVaultGitSyncAdapterLike,
 } from './research-vault.js';
 import type { SourceErrorKind, SourceStatus } from './source.js';
+import type { ToolResult } from './types/result.js';
 import type { SideEffect } from './types/side-effect.js';
 
 /**
@@ -258,6 +260,12 @@ export interface NotificationManagerLike {
 }
 
 export interface ToolContext {
+  readonly identity?: Readonly<ExecutionIdentity>;
+  readonly hostedAuthorization?: (
+    toolName: string,
+    input: unknown,
+    requiredCapabilities: readonly SideEffect[],
+  ) => Promise<ToolResult<never> | null> | ToolResult<never> | null;
   readonly repos: RepositoryRegistry;
   readonly adapters: {
     readonly market: MarketDataAdapterLike;

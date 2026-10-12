@@ -281,6 +281,7 @@ export const createChatStreamResponse = async (
   ctx: ToolContext,
   runtime: ChatStreamRuntime,
   abortSignal?: AbortSignal,
+  retainRuntime?: () => () => void,
 ): Promise<Response> => {
   const parsed = ChatStreamRequestSchema.safeParse(body);
   if (!parsed.success) {
@@ -347,41 +348,53 @@ export const createChatStreamResponse = async (
     .parse(loaded.data).messages;
   const tools = buildChatTools(ctx, scenario);
   const uiMessages = modelHistory(loadedMessages);
-  const response = await runtime.createUIMessageStreamResponse({
-    instructions: buildInstructions(context, scenario),
-    uiMessages,
-    tools,
-    ...(abortSignal === undefined ? {} : { abortSignal }),
-    onFinish: async (message) => {
-      // 由 SDK 服务端消费流，取消时仍保存实际已收到的 parts，不信任浏览器写入助手记录。
-      const parts = message.cancelled
-        ? [...message.parts, { type: 'data-luoome-cancelled', data: { cancelled: true } }]
-        : message.parts;
-      const result = await appendTool.execute(
-        {
-          sessionId: parsed.data.sessionId,
-          ...(message.id.trim().length === 0 ? {} : { messageId: message.id }),
-          role: 'assistant',
-          parts,
-        },
-        ctx,
-      );
-      if (!result.ok) {
-        ctx.logger.warn('[chat] assistant message 持久化失败', {
-          sessionId: parsed.data.sessionId,
-          errorKind: result.error.kind,
-          error:
-            result.error.kind === 'invalid_input'
-              ? result.error.message
-              : result.error.kind === 'internal'
-                ? result.error.cause
-                : undefined,
-          messageIdLength: message.id.length,
-          partTypes: parts.map((part) => part.type),
-        });
-      }
-    },
-  });
+  // SDK 会继续消费客户端已取消的流；保存回调结束前不能释放租户数据库。
+  const release = retainRuntime?.();
+  let response: Response;
+  try {
+    response = await runtime.createUIMessageStreamResponse({
+      instructions: buildInstructions(context, scenario),
+      uiMessages,
+      tools,
+      ...(abortSignal === undefined ? {} : { abortSignal }),
+      onFinish: async (message) => {
+        try {
+          // 由 SDK 服务端消费流，取消时仍保存实际已收到的 parts，不信任浏览器写入助手记录。
+          const parts = message.cancelled
+            ? [...message.parts, { type: 'data-luoome-cancelled', data: { cancelled: true } }]
+            : message.parts;
+          const result = await appendTool.execute(
+            {
+              sessionId: parsed.data.sessionId,
+              ...(message.id.trim().length === 0 ? {} : { messageId: message.id }),
+              role: 'assistant',
+              parts,
+            },
+            ctx,
+          );
+          if (!result.ok) {
+            ctx.logger.warn('[chat] assistant message 持久化失败', {
+              sessionId: parsed.data.sessionId,
+              errorKind: result.error.kind,
+              error:
+                result.error.kind === 'invalid_input'
+                  ? result.error.message
+                  : result.error.kind === 'internal'
+                    ? result.error.cause
+                    : undefined,
+              messageIdLength: message.id.length,
+              partTypes: parts.map((part) => part.type),
+            });
+          }
+        } finally {
+          release?.();
+        }
+      },
+    });
+  } catch (error) {
+    release?.();
+    throw error;
+  }
   response.headers.set('x-luoome-chat-session-id', parsed.data.sessionId);
   // header 只能是 ASCII：路由 JSON 含中文维度名，URL-encode 后由前端 decodeURIComponent 还原。
   response.headers.set(

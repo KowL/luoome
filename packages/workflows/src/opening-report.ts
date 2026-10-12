@@ -6,8 +6,8 @@ import {
   type ReportEvidence,
   type ReportMissingDimension,
   ReportSchema,
-  type ReportScope,
-  ReportScopeSchema,
+  type AccountReportScope as ReportScope,
+  AccountReportScopeSchema as ReportScopeSchema,
   type ReportSection,
   type ToolResult,
 } from '@luoome/core';

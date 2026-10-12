@@ -42,6 +42,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [个人订阅托管版详细设计](./ddd/hosted-personal-subscription-detailed-design.md) | 原 Web 增量登录、单默认账户、用户隔离、支付订阅与后台恢复契约 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
@@ -72,6 +73,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [个人订阅托管版开发改造计划](./hosted-personal-subscription-development-plan.md) | 原页面复用改造切片、旧工程证据与新业务验收、外部前置条件 |
 | [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |
 | [Strategy 实验、晋级与反馈闭环开发计划](./strategy-experiment-feedback-development-plan.md) | 把草案、同样本试算、独立验证、真实观察和人工发布收口为可执行波次 |
@@ -88,10 +90,13 @@
 |---|---|
 | [Strategy 生产可靠性运维手册](./runbooks/strategy-reliability-operations.md) | 调度参数、fencing/checkpoint/provider/baseline/T+1/T+3/T+5 日检、P50/P95/max 周报与真实 provider smoke |
 | [Tushare 集成手册](./runbooks/tushare-integration.md) | 配置、启动顺序、验证和故障排查 |
+| [个人订阅托管版运行与恢复](./runbooks/hosted-personal-subscription.md) | 显式启动、私有存储、provider 装配、写屏障、备份恢复、外部对账与生产门禁 |
 
 ## 历史归档
 
 `archive/` 保存已完成阶段的计划、任务规格和验收快照，仅用于追溯，不作为当前实现契约。当前行为以代码、长期维护文档及对应 PRD/DDD 为准。
+
+- [个人订阅托管版隔离验收](./archive/hosted-personal-subscription-fixture-acceptance.md) — 工程测试、浏览器、100 Tenant fixture 压测与尚未通过的真实渠道门禁
 
 - [v0.1 实施计划](./archive/plan.md)
 - [v0.1 Agent 任务规格](./archive/MVP-TASK.md)

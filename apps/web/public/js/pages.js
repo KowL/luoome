@@ -3,7 +3,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { callApi, getAccountId } from './api.js';
+import { callApi, getAccountId, isHostedMode } from './api.js';
 import { openDecisionReview } from './decision-review-ui.js';
 import {
   openCloseConfirm,
@@ -3029,6 +3029,49 @@ const renderSettingsAccount = async () => {
       el('p', null, `总盈亏：${fmtSigned(r.data.totalPnL)}（${fmtPct(r.data.totalPnLPct)}）`),
     ]),
   );
+  if (isHostedMode()) {
+    const result = await callApi('/api/accounts');
+    if (!result.ok) return;
+    const account = result.data.accounts[0];
+    const form = el('form', 'hosted-account-form');
+    const label = el('label', 'field', '账户名称');
+    const input = el('input');
+    input.id = 'hosted-account-name';
+    input.value = account.name;
+    input.required = true;
+    input.maxLength = 120;
+    label.htmlFor = input.id;
+    label.append(input);
+    const submit = el('button', 'btn btn-primary btn-sm', '保存账户信息');
+    submit.type = 'submit';
+    const status = el('p', 'muted');
+    status.setAttribute('role', 'status');
+    form.append(
+      label,
+      el(
+        'p',
+        'muted',
+        `币种：${account.currency} · 开户本金：${fmtNum(account.initialCapital)}。资金变动请使用入金 / 出金记录。`,
+      ),
+      submit,
+      status,
+    );
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      const saved = await callApi('/api/tools/update_account/call', {
+        method: 'POST',
+        body: JSON.stringify({ input: { name: input.value.trim() } }),
+      });
+      submit.disabled = false;
+      status.textContent = saved.ok
+        ? '账户信息已保存。'
+        : saved.error?.required?.startsWith('entitlement:')
+          ? '请续费后再修改账户信息。'
+          : '保存失败，请稍后重试。';
+    });
+    box.prepend(form);
+  }
 };
 
 /* ============================================================

@@ -4,7 +4,7 @@ import { InvariantError } from '../error/index.js';
 import { DataProvenanceSchema } from './provenance.js';
 import { DeliveryStatusSchema } from './watch-trigger.js';
 
-export const ReportKindSchema = z.enum(['opening', 'closing', 'weekly']);
+export const ReportKindSchema = z.enum(['opening', 'closing', 'weekly', 'watchlist-facts']);
 export type ReportKind = z.infer<typeof ReportKindSchema>;
 
 export const ReportStatusSchema = z.enum(['complete', 'partial']);
@@ -16,14 +16,21 @@ export type ReportSectionStatus = z.infer<typeof ReportSectionStatusSchema>;
 export const ReportValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 export type ReportValue = z.infer<typeof ReportValueSchema>;
 
-export const ReportScopeSchema = z.discriminatedUnion('kind', [
+export const AccountReportScopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('all-accounts') }),
   z.object({ kind: z.literal('account'), accountId: z.string().min(1) }),
 ]);
+export type AccountReportScope = z.infer<typeof AccountReportScopeSchema>;
+export const ReportScopeSchema = z.discriminatedUnion('kind', [
+  ...AccountReportScopeSchema.options,
+  z.object({ kind: z.literal('watchlist'), watchlistId: z.string().min(1) }),
+]);
 export type ReportScope = z.infer<typeof ReportScopeSchema>;
 
-export const reportScopeKey = (scope: ReportScope): string =>
-  scope.kind === 'all-accounts' ? 'all-accounts' : `account:${scope.accountId}`;
+export const reportScopeKey = (scope: ReportScope): string => {
+  if (scope.kind === 'all-accounts') return 'all-accounts';
+  return scope.kind === 'account' ? `account:${scope.accountId}` : `watchlist:${scope.watchlistId}`;
+};
 
 const MetricBlockSchema = z.object({
   kind: z.literal('metrics'),
@@ -139,6 +146,16 @@ export const DecisionReviewReportSnapshotSchema = z.object({
 });
 export type DecisionReviewReportSnapshot = z.infer<typeof DecisionReviewReportSnapshotSchema>;
 
+export const WatchlistFactsSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  watchlistRevision: z.string().regex(/^[a-f0-9]{64}$/),
+  ruleFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  inputFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  rendererVersion: z.literal('hosted-facts-v1'),
+  frozenInput: z.record(z.string(), z.unknown()),
+});
+export type WatchlistFactsSnapshot = z.infer<typeof WatchlistFactsSnapshotSchema>;
+
 export const ReportSchema = z.object({
   id: z.string().min(1),
   version: z.number().int().positive().optional(),
@@ -157,6 +174,7 @@ export const ReportSchema = z.object({
   deliveryStatus: DeliveryStatusSchema.default('not-requested'),
   notificationPolicy: z.enum(['eligible', 'never']).optional(),
   decisionReviewSnapshot: DecisionReviewReportSnapshotSchema.optional(),
+  watchlistFactsSnapshot: WatchlistFactsSnapshotSchema.optional(),
   workflowRunId: z.string().min(1),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
@@ -199,6 +217,16 @@ const findAdviceDecisionField = (value: unknown): string | null => {
 };
 
 export const assertReportInvariants = (report: Report): void => {
+  if ((report.kind === 'watchlist-facts') !== (report.scope.kind === 'watchlist'))
+    throw new InvariantError('watchlist facts kind and scope must appear together');
+  if ((report.kind === 'watchlist-facts') !== (report.watchlistFactsSnapshot !== undefined))
+    throw new InvariantError('watchlist facts requires a frozen input snapshot');
+  if (
+    report.kind === 'watchlist-facts' &&
+    (report.version ?? 1) > 1 &&
+    report.notificationPolicy !== 'never'
+  )
+    throw new InvariantError('updated watchlist facts report must never notify');
   if (
     report.decisionReviewSnapshot !== undefined &&
     (report.scope.kind !== 'account' ||

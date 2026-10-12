@@ -228,10 +228,22 @@ import type {
   WatchExecutionOutput,
 } from '@luoome/tools';
 import {
+  type BuildPersonalAlertEvaluationInput,
+  type BuildPersonalAlertEvaluationOutput,
+  type BuildWatchlistFactsInput,
+  type BuildWatchlistFactsOutput,
   beginAccountPlanBatchTool,
   beginWatchDeliveryTool,
+  buildPersonalAlertEvaluationTool,
+  buildWatchlistFactsTool,
+  type CommitPersonalAlertEvaluationInput,
+  type CommitPersonalAlertEvaluationOutput,
+  type CommitWatchlistFactsInput,
+  type CommitWatchlistFactsOutput,
   claimDueStrategySchedulesTool,
+  commitPersonalAlertEvaluationTool,
   commitWatchEvaluationTool,
+  commitWatchlistFactsTool,
   createStrategyAutonomyActionTool,
   finishAccountPlanBatchTool,
   finishStrategyScheduleClaimTool,
@@ -273,6 +285,22 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
 export interface WorkflowToolMap {
+  readonly build_watchlist_facts: ToolAccessor<
+    typeof BuildWatchlistFactsInput,
+    typeof BuildWatchlistFactsOutput
+  >;
+  readonly commit_watchlist_facts: ToolAccessor<
+    typeof CommitWatchlistFactsInput,
+    typeof CommitWatchlistFactsOutput
+  >;
+  readonly build_personal_alert_evaluation: ToolAccessor<
+    typeof BuildPersonalAlertEvaluationInput,
+    typeof BuildPersonalAlertEvaluationOutput
+  >;
+  readonly commit_personal_alert_evaluation: ToolAccessor<
+    typeof CommitPersonalAlertEvaluationInput,
+    typeof CommitPersonalAlertEvaluationOutput
+  >;
   readonly list_research_topics: ToolAccessor<
     typeof ListResearchTopicsInput,
     typeof ListResearchTopicsOutput
@@ -683,6 +711,10 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     execute: (input) => syncWatchlistSourceTool.execute(input, ctx),
   };
   for (const internalTool of [
+    buildWatchlistFactsTool,
+    commitWatchlistFactsTool,
+    buildPersonalAlertEvaluationTool,
+    commitPersonalAlertEvaluationTool,
     commitWatchEvaluationTool,
     watchExecutionTool,
     beginWatchDeliveryTool,

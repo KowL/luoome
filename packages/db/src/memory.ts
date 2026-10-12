@@ -4,5 +4,8 @@
 // 加载；node 运行的 vitest 无法解析 'bun:sqlite'。本入口只导出不依赖 driver 的
 // 公共 API（in-memory repos + seedData），供纯内存测试组装路径使用。
 
+export * from './hosted/platform-memory.js';
+export * from './hosted/tenant-export-memory.js';
+export * from './hosted/tenant-memory.js';
 export * from './repository/memory/index.js';
 export * from './seed.js';

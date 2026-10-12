@@ -23,6 +23,10 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   private execution: { owner: string; until: Date } | undefined;
   constructor(private readonly states: InMemoryWatchRuleStateRepository) {}
 
+  snapshotForExport(): WatchTrigger[] {
+    return structuredClone([...this.items.values()]);
+  }
+
   setDecisionReviewRepository(repository: DecisionReviewRepository): void {
     this.decisionReview = repository;
   }
@@ -30,6 +34,12 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
   async commitEvaluation(
     input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
   ): Promise<boolean> {
+    return this.commitHostedEvaluation(input);
+  }
+
+  commitHostedEvaluation(
+    input: Parameters<WatchTriggerRepository['commitEvaluation']>[0],
+  ): boolean {
     if (this.execution?.owner !== input.owner || this.execution.until <= input.now) return false;
     for (const trigger of input.triggers) assertWatchTriggerInvariants(trigger);
     for (const trigger of input.auditTriggers ?? []) assertWatchTriggerInvariants(trigger);
@@ -73,6 +83,18 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
 
   async releaseExecution(owner: string): Promise<void> {
     if (this.execution?.owner === owner) this.execution = undefined;
+  }
+
+  invalidateHostedPending(poolId: string, now: Date): void {
+    for (const [id, trigger] of this.items) {
+      if (trigger.poolId === poolId && trigger.deliveryStatus === 'pending')
+        this.items.set(id, {
+          ...trigger,
+          deliveryStatus: 'invalidated',
+          deliveryCompletedAt: now,
+          notified: false,
+        });
+    }
   }
 
   async beginDelivery(ids: readonly string[], at: Date): Promise<void> {

@@ -5,7 +5,7 @@ import {
   type ReportEvidence,
   type ReportMissingDimension,
   ReportSchema,
-  ReportScopeSchema,
+  AccountReportScopeSchema as ReportScopeSchema,
   type ToolResult,
 } from '@luoome/core';
 import type { GetDecisionLoopReviewOutput, ListTradesOutput } from '@luoome/tools';

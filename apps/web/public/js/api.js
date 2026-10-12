@@ -5,9 +5,49 @@
 
 /** localStorage 中的当前账户 id key（v0.5 W3 多账户切换）。 */
 const ACCOUNT_KEY = 'luoome.accountId';
+let hostedSession = null;
+let hostedAccountId = '';
+let sessionEpoch = 0;
+let sessionController = new AbortController();
+let onSessionExpired = () => {};
+
+const isHostedMode = () => globalThis.document?.body?.dataset.runtime === 'hosted';
+const getHostedSession = () => hostedSession;
+const getSessionEpoch = () => sessionEpoch;
+const clearHostedSession = () => {
+  sessionController.abort();
+  sessionController = new AbortController();
+  sessionEpoch += 1;
+  hostedSession = null;
+  hostedAccountId = '';
+};
+const configureHostedSession = (session) => {
+  if (hostedSession?.user.id !== session.user.id) clearHostedSession();
+  hostedSession = session;
+};
+const onHostedSessionExpired = (handler) => {
+  onSessionExpired = handler;
+};
+const sessionError = () => ({
+  ok: false,
+  error: { kind: 'permission_denied', required: 'auth:session' },
+});
+const apiRequestSignal = (signal) => {
+  if (!isHostedMode()) return signal;
+  return signal ? AbortSignal.any([signal, sessionController.signal]) : sessionController.signal;
+};
+const acceptApiResponse = (response, epoch) => {
+  if (!isHostedMode()) return true;
+  if (sessionEpoch !== epoch) return false;
+  if (response.status !== 401 || hostedSession === null) return true;
+  clearHostedSession();
+  onSessionExpired();
+  return false;
+};
 
 /** 读当前账户 id（无则返回空串）。 */
 const getAccountId = () => {
+  if (isHostedMode()) return hostedAccountId;
   try {
     return localStorage.getItem(ACCOUNT_KEY) ?? '';
   } catch {
@@ -17,6 +57,10 @@ const getAccountId = () => {
 
 /** 写当前账户 id。 */
 const setAccountId = (accountId) => {
+  if (isHostedMode()) {
+    hostedAccountId = accountId;
+    return;
+  }
   try {
     if (accountId.length > 0) localStorage.setItem(ACCOUNT_KEY, accountId);
     else localStorage.removeItem(ACCOUNT_KEY);
@@ -27,6 +71,13 @@ const setAccountId = (accountId) => {
 
 const apiHeaders = (init, accountId = getAccountId()) => {
   const headers = new Headers(init);
+  if (isHostedMode()) {
+    headers.set('x-luoome-account-id', hostedAccountId);
+    if (hostedSession !== null) headers.set('x-luoome-user-id', hostedSession.user.id);
+    else headers.delete('x-luoome-user-id');
+    headers.set('x-csrf-token', hostedSession?.csrfToken ?? '');
+    return headers;
+  }
   if (!headers.has('x-luoome-account-id')) {
     headers.set('x-luoome-account-id', accountId);
   }
@@ -41,6 +92,14 @@ const apiHeaders = (init, accountId = getAccountId()) => {
  * @returns {Promise<{ok: boolean, data?: unknown, error?: object}>}
  */
 const callApi = async (path, init) => {
+  const epoch = sessionEpoch;
+  if (
+    isHostedMode() &&
+    hostedSession === null &&
+    path !== '/api/me' &&
+    !path.startsWith('/api/auth/')
+  )
+    return sessionError();
   const { timeoutMs, ...rest } = init ?? {};
   const headers = apiHeaders(rest.headers);
   if (rest.body !== undefined && !headers.has('content-type')) {
@@ -51,13 +110,14 @@ const callApi = async (path, init) => {
     response = await fetch(path, {
       ...rest,
       headers,
-      ...(timeoutMs === undefined
-        ? {}
-        : {
-            signal: rest.signal
-              ? AbortSignal.any([rest.signal, AbortSignal.timeout(timeoutMs)])
-              : AbortSignal.timeout(timeoutMs),
-          }),
+      ...(isHostedMode() ? { credentials: 'same-origin', cache: 'no-store' } : {}),
+      signal: apiRequestSignal(
+        timeoutMs === undefined
+          ? rest.signal
+          : rest.signal
+            ? AbortSignal.any([rest.signal, AbortSignal.timeout(timeoutMs)])
+            : AbortSignal.timeout(timeoutMs),
+      ),
     });
   } catch (cause) {
     const kind =
@@ -67,13 +127,29 @@ const callApi = async (path, init) => {
         : 'adapter_error';
     return { ok: false, error: { kind, cause: String(cause) } };
   }
+  if (!acceptApiResponse(response, epoch)) return sessionError();
   let body;
   try {
     body = await response.json();
   } catch {
     return { ok: false, error: { kind: 'internal', cause: `HTTP ${response.status}` } };
   }
+  if (isHostedMode() && epoch !== sessionEpoch) return sessionError();
   return body;
 };
 
-export { ACCOUNT_KEY, apiHeaders, callApi, getAccountId, setAccountId };
+export {
+  ACCOUNT_KEY,
+  acceptApiResponse,
+  apiHeaders,
+  apiRequestSignal,
+  callApi,
+  clearHostedSession,
+  configureHostedSession,
+  getAccountId,
+  getHostedSession,
+  getSessionEpoch,
+  isHostedMode,
+  onHostedSessionExpired,
+  setAccountId,
+};

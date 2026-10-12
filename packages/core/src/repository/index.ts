@@ -121,6 +121,8 @@ import type {
 
 export interface AccountRepository {
   save(account: Account): Promise<void>;
+  ensureSingleDefault(account: Account): Promise<Account>;
+  updateName(id: string, name: string): Promise<Account | null>;
   findById(id: string): Promise<Account | null>;
   list(): Promise<Account[]>;
   remove(id: string): Promise<void>;
@@ -535,6 +537,8 @@ export interface ReportRepository {
 }
 
 export interface RepositoryRegistry {
+  readonly hostedTenant?: import('../hosted/tenant.js').TenantRepository;
+  readonly hostedExports?: import('../hosted/privacy.js').TenantExportRepository;
   readonly account: AccountRepository;
   /** 账户事实的原子写入（现金余额 + 交易/持仓/流水）。 */
   readonly ledger: LedgerRepository;

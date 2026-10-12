@@ -56,6 +56,12 @@ export const startMcpServer = async (
   opts: StartMcpServerOptions = {},
 ): Promise<McpServerHandle> => {
   const env = opts.env ?? process.env;
+  if (
+    (env.LUOOME_MODE !== undefined && env.LUOOME_MODE !== 'local') ||
+    opts.context?.ctx.identity?.mode === 'hosted'
+  ) {
+    throw new Error('hosted mode does not expose MCP');
+  }
   const allowedSideEffects = resolveAllowedSideEffects(env);
 
   const { ctx, close: closeCtx } = opts.context ?? (await createServerContext(env));

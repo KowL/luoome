@@ -206,6 +206,7 @@ import {
   listTradingPlansTool,
   saveTradingPlanTool,
 } from './tools/trading-plan.js';
+import { updateAccountTool } from './tools/update-account.js';
 import { updateHoldingTool } from './tools/update-holding.js';
 import { updateStockEventTool } from './tools/update-stock-event.js';
 import {
@@ -334,6 +335,7 @@ export const toolRegistry: Registry = createRegistry([
   agentRunTool,
   listAccountsTool,
   createAccountTool,
+  updateAccountTool,
   getAccountTool,
   getAccountFactsTool,
   reconcileAccountCashTool,

@@ -4,13 +4,15 @@
 'use strict';
 
 import { initAISettings, renderAISettings } from './ai-settings.js';
-import { callApi, getAccountId, setAccountId } from './api.js';
+import { callApi, getAccountId, isHostedMode, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
 import { invalidateDashboardMarket, renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
 import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
+import { initializeHostedSession } from './hosted-session.js';
+import { renderHostedNotifications, renderHostedSubscription } from './hosted-settings.js';
 import { renderIndicesPage, teardownIndices } from './indices.js';
 import { renderLimitUpLadder } from './limit-up-ladder.js';
 import { navigateToStock, renderMarket, teardownMarket } from './market.js';
@@ -213,6 +215,7 @@ const ROUTES = [
 let shownRoute = null;
 
 const showRoute = async (name) => {
+  if (isHostedMode() && document.body.classList.contains('auth-pending')) return;
   const safe = ROUTES.includes(name) ? name : 'dashboard';
   // 换页回到页面顶部：各页高度不同，沿用上一页的滚动位置会停在半截卡片或 K 线图上
   if (shownRoute !== safe) window.scrollTo({ top: 0, left: 0 });
@@ -290,10 +293,13 @@ const currentHash = () => {
 
 /* ============ 设置页二级菜单（#settings?tab=ai|market|notify|data|system） ============ */
 
-const SETTINGS_TABS = ['ai', 'market', 'notify', 'data', 'system'];
+const SETTINGS_TABS = ['ai', 'market', 'notify', 'data', 'system', 'subscription'];
 
 const settingsTab = (hash = window.location.hash) => {
-  const tab = new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ?? 'ai';
+  const tab =
+    new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ??
+    (isHostedMode() ? 'subscription' : 'ai');
+  if (isHostedMode() && !['subscription', 'notify', 'system'].includes(tab)) return 'subscription';
   return SETTINGS_TABS.includes(tab) ? tab : 'ai';
 };
 
@@ -308,7 +314,11 @@ const renderSettingsTab = async (setStatus, tab) => {
     if (active) node.setAttribute('aria-current', 'true');
     else node.removeAttribute('aria-current');
   });
-  if (tab === 'ai') {
+  if (isHostedMode() && tab === 'subscription') {
+    await renderHostedSubscription(setStatus);
+  } else if (isHostedMode() && tab === 'notify') {
+    await renderHostedNotifications(setStatus);
+  } else if (tab === 'ai') {
     initAISettings(setStatus);
     await renderAISettings(setStatus);
   } else if (tab === 'market') {
@@ -527,12 +537,15 @@ window.__luoome = {
 };
 
 initTheme();
-bindTopbarTheme();
-bindTopbarStockSearch();
-bindGlobalActions();
-startClock();
-startMarketSession();
-observeTopbarHeight();
-startDashboardAutoRefresh();
-startQuoteAutoRefresh();
-void initAccountSelect().then(() => showRoute(currentHash()));
+const sessionReady = await initializeHostedSession();
+if (sessionReady !== false) {
+  bindTopbarTheme();
+  bindTopbarStockSearch();
+  bindGlobalActions();
+  startClock();
+  startMarketSession();
+  observeTopbarHeight();
+  startDashboardAutoRefresh();
+  startQuoteAutoRefresh();
+  void initAccountSelect().then(() => showRoute(currentHash()));
+}

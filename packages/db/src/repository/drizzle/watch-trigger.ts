@@ -57,7 +57,7 @@ const combineConditions = (conditions: readonly SQL[]): SQL => {
 
 type TriggerRow = typeof watchTriggers.$inferSelect;
 
-const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
+export const toWatchTrigger = (row: TriggerRow): WatchTrigger => ({
   id: row.id,
   ...(row.alertPlanId === null ? {} : { alertPlanId: row.alertPlanId }),
   poolId: row.poolId,
@@ -194,7 +194,7 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     this.put(trigger);
   }
 
-  private put(trigger: WatchTrigger): void {
+  put(trigger: WatchTrigger): void {
     assertWatchTriggerInvariants(trigger);
     this.db
       .insert(watchTriggers)

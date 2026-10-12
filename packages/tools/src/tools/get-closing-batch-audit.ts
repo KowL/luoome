@@ -107,7 +107,7 @@ export const getClosingBatchAuditTool = defineTool({
         if (input.accountId === undefined) legacyAllAccountReports += 1;
         continue;
       }
-      if (!scoped(report.scope.accountId)) continue;
+      if (report.scope.kind !== 'account' || !scoped(report.scope.accountId)) continue;
       const group = reportGroups.get(report.scope.accountId) ?? [];
       reportGroups.set(report.scope.accountId, [...group, report]);
     }

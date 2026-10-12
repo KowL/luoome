@@ -1,17 +1,86 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { ACCOUNT_KEY, apiHeaders, callApi } from './api.js';
+import {
+  ACCOUNT_KEY,
+  apiHeaders,
+  callApi,
+  clearHostedSession,
+  configureHostedSession,
+  getAccountId,
+  getHostedSession,
+  onHostedSessionExpired,
+  setAccountId,
+} from './api.js';
 
 const originalFetch = globalThis.fetch;
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   if (originalStorage === undefined) delete globalThis.localStorage;
   else Object.defineProperty(globalThis, 'localStorage', originalStorage);
+  clearHostedSession();
+  onHostedSessionExpired(() => {});
+  if (originalDocument === undefined) delete globalThis.document;
+  else Object.defineProperty(globalThis, 'document', originalDocument);
 });
 
 describe('Web API request context', () => {
+  const hosted = () =>
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { body: { dataset: { runtime: 'hosted' } } },
+    });
+
+  it('hosted bootstrap sends no stale identity, then binds CSRF and the single account in memory', async () => {
+    hosted();
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => 'previous-user-account',
+        setItem: () => {
+          throw new Error('must not persist');
+        },
+      },
+    });
+    expect(getAccountId()).toBe('');
+    expect(apiHeaders().has('x-luoome-user-id')).toBe(false);
+    configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'csrf-a' });
+    setAccountId('default-account');
+    const headers = apiHeaders({
+      'x-luoome-user-id': 'user-b',
+      'x-csrf-token': 'csrf-b',
+      'x-luoome-account-id': 'forged',
+    });
+    expect(headers.get('x-luoome-user-id')).toBe('user-a');
+    expect(headers.get('x-csrf-token')).toBe('csrf-a');
+    expect(headers.get('x-luoome-account-id')).toBe('default-account');
+    clearHostedSession();
+    expect(getAccountId()).toBe('');
+  });
+
+  it('hosted discards an old response after switching identity and clears rejected sessions', async () => {
+    hosted();
+    configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'csrf-a' });
+    let finish;
+    globalThis.fetch = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const pending = callApi('/api/watchlists');
+    configureHostedSession({ user: { id: 'user-b' }, csrfToken: 'csrf-b' });
+    finish(Response.json({ ok: true, data: { private: 'A' } }));
+    expect((await pending).ok).toBe(false);
+    let expired = false;
+    onHostedSessionExpired(() => {
+      expired = true;
+    });
+    globalThis.fetch = async () => Response.json({ ok: false }, { status: 401 });
+    expect((await callApi('/api/review')).ok).toBe(false);
+    expect(expired).toBe(true);
+    expect(getHostedSession()).toBeNull();
+  });
   it('流式请求复用账户 header，草案确认锁定原账户而非切换后的账户', async () => {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,

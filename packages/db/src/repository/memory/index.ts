@@ -31,6 +31,8 @@ import type {
   WatchTrigger,
   WorkflowRun,
 } from '@luoome/core';
+import { InMemoryTenantExportRepository } from '../../hosted/tenant-export-memory.js';
+import { InMemoryTenantRepository } from '../../hosted/tenant-memory.js';
 import { InMemoryAccountRepository } from './account.js';
 import { InMemoryAdviceRepository } from './advice.js';
 import { InMemoryAlertPlanRepository } from './alert-plan.js';
@@ -269,7 +271,26 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
   );
   watchTrigger.setDecisionReviewRepository(decisionReview);
   report.setDecisionReviewRepository(decisionReview, trade, decisionWriteLock);
+  const hostedTenant = new InMemoryTenantRepository({
+    stock,
+    report,
+    watchlist,
+    watchlistMember,
+    watchTrigger,
+    alertPlan,
+    watchRuleState,
+  });
+  const hostedExports = new InMemoryTenantExportRepository(() => ({
+    watchlists: watchlist.snapshotForExport(),
+    ...watchlistMember.snapshotForExport(),
+    alertPlans: alertPlan.snapshotForExport(),
+    triggers: watchTrigger.snapshotForExport(),
+    reports: report.snapshotForExport(),
+    feedback: hostedTenant.snapshotPersonalFeedbackForExport(),
+  }));
   return {
+    hostedTenant,
+    hostedExports,
     account,
     ledger,
     decisionReview,

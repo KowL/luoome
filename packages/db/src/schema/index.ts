@@ -1295,6 +1295,8 @@ export const watchlistMemberSources = sqliteTable(
     sourceId: text('source_id'),
     sourceVersionId: text('source_version_id'),
     syncRunId: text('sync_run_id'),
+    ownerUserId: text('owner_user_id'),
+    importBatchId: text('import_batch_id'),
     reason: text('reason').notNull(),
     score: real('score'),
     rank: integer('rank'),
@@ -1789,6 +1791,9 @@ export const reports = sqliteTable(
       .notNull(),
     deliveryStatus: text('delivery_status').$type<DeliveryStatus>().notNull(),
     notificationPolicy: text('notification_policy').$type<Report['notificationPolicy']>(),
+    watchlistFactsSnapshot: text('watchlist_facts_snapshot', { mode: 'json' }).$type<
+      Report['watchlistFactsSnapshot']
+    >(),
     decisionReviewSnapshot: text('decision_review_snapshot', { mode: 'json' }).$type<
       Report['decisionReviewSnapshot']
     >(),
