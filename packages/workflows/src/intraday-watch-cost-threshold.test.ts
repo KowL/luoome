@@ -452,4 +452,54 @@ describe('intraday-watch cost-threshold 规则', () => {
     expect(second.data.notified).toBe(0);
     expect(await ctx.repos.watchTrigger.listByPool(plan.id)).toHaveLength(2);
   });
+
+  it('urgent 触发按 error 级别投递，方向标签写关注卖出', async () => {
+    const { ctx } = await setupCtx({ '002594.SZ': 90 });
+    await savePlan(ctx, {
+      id: 'level-pool',
+      name: '级别',
+      groupId: HOLDINGS_GROUP_ID,
+      rules: [{ kind: 'cost-threshold', stopLossPct: 0.05 }],
+      cooldownMinutes: 30,
+      logic: 'ANY',
+      triggerMode: 'on-enter',
+      dailyNotificationLimit: 20,
+      notifyOnRecovery: false,
+      enabled: true,
+      createdAt: T0,
+      updatedAt: T0,
+    });
+    const plan = await ctx.repos.alertPlan.findById('level-pool');
+    const rule = plan?.rules[0];
+    if (plan === null || rule === undefined) throw new Error('missing fixture rule');
+    await ctx.repos.watchRuleState.upsert({
+      poolId: plan.id,
+      stockId: '002594.SZ',
+      ruleId: rule.id,
+      active: false,
+      lastEvaluatedAt: T0,
+    });
+    const sent: { level: string; content: string }[] = [];
+    const notification = ctx.notification;
+    if (notification === undefined) throw new Error('test notification manager missing');
+    const patched = {
+      ...ctx,
+      notification: {
+        send: async (input: Parameters<typeof notification.send>[0]) => {
+          sent.push({ level: input.payload.level, content: input.payload.content });
+          return notification.send(input);
+        },
+      },
+    };
+    const r = await intradayWatchWorkflow.run(
+      { alertPlanIds: [plan.id], notify: true },
+      patched as unknown as ToolContext,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.notified).toBe(1);
+    expect(sent[0]?.level).toBe('error');
+    expect(sent[0]?.content).toContain('[关注卖出]');
+    expect(sent[0]?.content).toContain('止损 收益 -8.63% ≤ -5.00%');
+  });
 });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { InvariantError } from '../error/index.js';
 import { type Money, MoneySchema } from '../types/branded.js';
+import type { NotificationLevel } from './notification.js';
 import { EventImportanceSchema, StockEventKindSchema } from './stock-event.js';
 
 /**
@@ -227,6 +228,23 @@ export const assertWatchTriggerInvariants = (t: WatchTrigger): void => {
   }
   // evalSnapshot 是评估细节包，要求至少含 ruleId 一项，put 在 workflow 端保证；runtime 不重复断言。
 };
+
+/** 告警优先级 → 通知级别：让飞书卡片与日志按紧急度着色，三个预警引擎共用同一映射。 */
+export const notificationLevelForAlertPriority = (priority: AlertPriority): NotificationLevel =>
+  priority === 'urgent' ? 'error' : priority === 'important' ? 'warn' : 'info';
+
+const ALERT_PRIORITY_RANK: Record<AlertPriority, number> = {
+  urgent: 2,
+  important: 1,
+  normal: 0,
+};
+
+/** 一组告警里的最高优先级；空集合返回 normal。聚合通知按它决定紧急度。 */
+export const highestAlertPriority = (priorities: readonly AlertPriority[]): AlertPriority =>
+  priorities.reduce<AlertPriority>(
+    (acc, priority) => (ALERT_PRIORITY_RANK[priority] > ALERT_PRIORITY_RANK[acc] ? priority : acc),
+    'normal',
+  );
 
 // Money re-export for callers that want the branded type without touching branded.ts.
 export type { Money };

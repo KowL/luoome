@@ -3,6 +3,8 @@ import {
   type AlertPriority,
   type AlertRule,
   eventImportanceToPriority,
+  highestAlertPriority,
+  notificationLevelForAlertPriority,
   type StockEvent,
   type ToolResult,
   type WatchTrigger,
@@ -200,8 +202,9 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
 
             const priority: AlertPriority =
               rule.priority ?? plan.priority ?? eventImportanceToPriority(event.importance);
+            // 所有优先级都可投递（与盘中 AlertPlan / 交易计划一致）；事件规则本身按 remindDay 去重。
             let deliveryStatus: WatchTrigger['deliveryStatus'] = 'not-requested';
-            if (!input.dryRun && priority !== 'normal') {
+            if (!input.dryRun) {
               if (
                 (usedByPlan.get(plan.id) ?? 0) >= plan.dailyNotificationLimit ||
                 usedGlobal >= globalLimit
@@ -305,7 +308,9 @@ const stepEvaluate: WorkflowStep = async (prev, ctx) => {
         feishu: {
           title: `事件提醒 · ${plans.find((plan) => plan.id === alertPlanId)?.name ?? '关注列表'} · ${group.length} 条`,
           content: lines.join('\n'),
-          level: 'info',
+          level: notificationLevelForAlertPriority(
+            highestAlertPriority(group.map((trigger) => trigger.priority)),
+          ),
         },
       });
       let status: WatchTrigger['deliveryStatus'] = 'sent';

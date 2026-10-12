@@ -4,6 +4,8 @@ import { money } from '../types/branded.js';
 import {
   assertWatchTriggerInvariants,
   CostThresholdRuleSchema,
+  highestAlertPriority,
+  notificationLevelForAlertPriority,
   PriceChangeRuleSchema,
   PriceLevelRuleSchema,
   WatchTriggerSchema,
@@ -125,5 +127,19 @@ describe('WatchTrigger invariants', () => {
     expect(() => assertWatchTriggerInvariants({ ...baseTrigger(), evidence: [] })).toThrow(
       /evidence/,
     );
+  });
+});
+
+describe('告警优先级投影', () => {
+  it('按优先级映射通知级别', () => {
+    expect(notificationLevelForAlertPriority('urgent')).toBe('error');
+    expect(notificationLevelForAlertPriority('important')).toBe('warn');
+    expect(notificationLevelForAlertPriority('normal')).toBe('info');
+  });
+
+  it('取一组告警里的最高优先级，空集合回退 normal', () => {
+    expect(highestAlertPriority(['normal', 'urgent', 'important'])).toBe('urgent');
+    expect(highestAlertPriority(['normal', 'important'])).toBe('important');
+    expect(highestAlertPriority([])).toBe('normal');
   });
 });

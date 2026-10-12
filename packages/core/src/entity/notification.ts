@@ -102,21 +102,39 @@ export const DEFAULT_NOTIFICATION_CHANNEL: NotificationChannel = 'log';
 export const NOTIFICATION_BRAND = 'luoome';
 
 /** 通知只展示阅读摘要；内部身份仍保留在 Advice/Trigger/Report 的结构化引用中。 */
-export const notificationText = (text: string, limit = 120): string => {
-  const clean = text
-    .split(/[；;\n]+/)
-    .filter(
-      (part) =>
-        !/(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f-]{20,}|(?:StrategyResult|StrategySignal|SignalObservation)\s+(?!evidence)|(?:selected|rank|score|direction)=)/i.test(
-          part,
-        ),
-    )
-    .map((part) => part.replace(/^(?:StrategyResult evidence:|evidence[=:])\s*/i, '').trim())
-    .join('；')
+const notificationPartFilter =
+  /(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f-]{20,}|(?:StrategyResult|StrategySignal|SignalObservation)\s+(?!evidence)|(?:selected|rank|score|direction)=)/i;
+
+const cleanNotificationPart = (part: string): string =>
+  part
+    .replace(/^(?:StrategyResult evidence:|evidence[=:])\s*/i, '')
     .replace(/-?\d+\.\d{3,}/g, (value) => String(Number(Number(value).toFixed(2))))
     .replace(/[*_`<>[\]]/g, '')
     .trim();
-  return clean.length <= limit ? clean : `${clean.slice(0, limit - 1)}…`;
+
+/**
+ * 分段摘要：超出 limit 时优先保留完整分段，而不是在句子中间截断
+ * （例：反证/风险按「；」写多条，截断后不能出现半句 `…bollPosition20=0…`）。
+ * 单段本身就超限时才退化为按字数硬截断。
+ */
+export const notificationText = (text: string, limit = 120): string => {
+  const parts = text
+    .split(/[；;\n]+/)
+    .filter((part) => !notificationPartFilter.test(part))
+    .map(cleanNotificationPart)
+    .filter((part) => part.length > 0);
+  const clean = parts.join('；');
+  if (clean.length <= limit) return clean;
+  const kept: string[] = [];
+  let length = 0;
+  for (const part of parts) {
+    const next = kept.length === 0 ? part.length : length + 1 + part.length;
+    if (next > limit) break;
+    kept.push(part);
+    length = next;
+  }
+  const joined = kept.join('；');
+  return joined.length > 0 ? joined : `${clean.slice(0, limit - 1)}…`;
 };
 
 export const notificationTime = (date: Date): string =>

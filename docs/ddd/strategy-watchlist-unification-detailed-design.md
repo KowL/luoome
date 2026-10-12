@@ -922,6 +922,9 @@ load enabled AlertPlans
 - stale strategy/ai source 不等于 Member 不可扫描；页面和触发证据必须显示 stale。
 - strategy-signal rule 只读取持久化 StrategySignal，不在盘中临时跑全市场 Strategy。
 - cost-threshold 只对存在 Holding 的 Member 求值，否则 unknown。
+- 所有优先级都进入投递：normal 与 urgent 同样受 cooldown 和每日上限约束，紧急度只决定消息
+  level（urgent→error / important→warn / normal→info）与标题前缀；notifyOnRecovery 未开启的
+  recovered 与试跑仍为 not-requested。
 - AlertPlan 不拥有成员；删除被引用 Watchlist 被拒绝。
 
 ## 11. Tools

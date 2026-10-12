@@ -268,8 +268,8 @@ interface StockEventProvider {
      direction='watch', priority=event.importance 映射,
      reason=事件标题 + 距今天数, evidence=[provider, sourceUrl, occursAt],
      evalSnapshot={ eventId, eventKind, remindDay: d, importance, stale }
-5. 送达：走策略预警 DDD §8 的判定矩阵（normal → not-requested 仅记录；
-   important/urgent → pending → 发送）；cooldown 键含 eventId + remindDay
+5. 送达：normal 与 important/urgent 都可投递（normal 不再降级为仅记录）；
+   cooldown 键含 eventId + remindDay
 ```
 
 边界语义：

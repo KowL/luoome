@@ -131,6 +131,64 @@ describe('intraday-watch dailyBars 接入（v0.6.1）', () => {
     expect(r.data.triggers).toEqual([]);
   });
 
+  it('normal 优先级同样投递，消息按方向标签与紧急度呈现且原因不重复股票代码', async () => {
+    const ctx = await setupCtx({ '600519.SH': 100 });
+    await ctx.repos.dailyBar.saveMany([
+      {
+        stockId: '600519.SH',
+        date: T_YESTERDAY,
+        open: money(95),
+        high: money(95),
+        low: money(95),
+        close: money(95),
+        volume: 1_000_000,
+        adjustment: 'qfq',
+        source: 'intraday-test',
+      },
+    ]);
+    // 正式（notify=true）不在 bootstrap 轮触发：先落一条 inactive 边沿模拟上一轮已求值。
+    const plan = await ctx.repos.alertPlan.findById('p-change');
+    const rule = plan?.rules[0];
+    if (plan === null || rule === undefined) throw new Error('missing fixture plan');
+    await ctx.repos.watchRuleState.upsert({
+      poolId: plan.id,
+      stockId: '600519.SH',
+      ruleId: rule.id,
+      active: false,
+      lastEvaluatedAt: T0,
+    });
+    const sent: { title: string; content: string; level: string }[] = [];
+    const notification = ctx.notification;
+    if (notification === undefined) throw new Error('test notification manager missing');
+    const patched = {
+      ...ctx,
+      notification: {
+        send: async (input: Parameters<typeof notification.send>[0]) => {
+          sent.push({
+            title: input.payload.title,
+            content: input.payload.content,
+            level: input.payload.level,
+          });
+          return notification.send(input);
+        },
+      },
+    };
+    const r = await intradayWatchWorkflow.run(
+      { alertPlanIds: ['p-change'], notify: true },
+      patched,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data.notified).toBe(1);
+    expect(r.data.triggers[0]?.deliveryStatus).toBe('sent');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.level).toBe('info');
+    expect(sent[0]?.title).toBe('盘中提醒 · price-change · 1 条');
+    expect(sent[0]?.content).toContain('[关注买入] 600519.SH @ 100.00');
+    expect(sent[0]?.content).toContain('— 日内变动 5.26% ≥ 4.00%');
+    expect(sent[0]?.content).not.toContain('600519.SH 日内变动');
+  });
+
   it('dailyBars 两条 → latestBefore(., now, 1) 取最新一根', async () => {
     // seed day-before=90, yesterday=95；latestBefore(., now, 1) 应取 95（非 90）
     const ctx = await setupCtx({ '600519.SH': 100 });
