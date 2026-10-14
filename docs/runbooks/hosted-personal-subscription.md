@@ -206,3 +206,56 @@ external reconciliation、审查和 resume。未查明的 provider 状态不能�
 
 外部门禁未满足时保持注册关闭。原策略/AI/复盘入口已纳入 v2；完整定时业务队列、逐项额度计量、
 个人通知到原业务投递链及真实 provider 仍须按改造计划验收。自动证券交易始终禁止。
+
+## 8. 2026-10-14 服务器部署记录
+
+本次完成容器部署和内部验证，**尚未开放公网登录或收费**。
+
+| 项目 | 实际状态 |
+|---|---|
+| 服务器 | `ubuntu@134.175.83.56`，Ubuntu 24.04，Docker 27.5.1 / Compose 2.32.4 |
+| 已有服务 | `adshare-api`（8000）和 `postgresql`（5432）保持运行，未改目录、数据、端口或容器 |
+| 当前源码 | `/opt/luoome/current` → `/opt/luoome/releases/90898f5`，从 Git archive 上传，不含未提交文件 |
+| 应用镜像 | `luoome:90898f5`，镜像 ID `sha256:1f3d95fdb478ea1d95bfeaa46f244a806dc7816b3b927696dcf0619e94fab980` |
+| 独立项目 | Compose project `luoome`；`luoome-web-1`、`luoome-worker-1`、`luoome-caddy-1` |
+| 持久化 | `luoome_tenant_data`、`luoome_deletion_ledger`、`luoome_caddy_data`、`luoome_caddy_config` |
+| 配置 | `/opt/luoome/config/production.env`、`/opt/luoome/config/plan.json` |
+| 密钥 | `/opt/luoome/secrets/hosted-auth-key`、`/opt/luoome/secrets/smtp-password`；0600，未输出或进入 Git |
+| 运行权限 | 应用 UID/GID 1000、只读根文件系统；业务卷目录 0700 |
+| 注册/套餐 | 注册关闭；零额度预部署套餐，不代表正式定价或开放试用 |
+| 健康 | worker healthy；Web live=200、ready=503（`service:email-unconfigured`），因此容器标为 unhealthy |
+| 公网入口 | 临时 `134-175-83-56.sslip.io` 被腾讯云/DNSPod 转向 webblock，ACME 返回 566/校验失败；Caddy 已停止以暂停重试 |
+
+Bun 基础镜像固定为 `oven/bun@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4`；
+Caddy 固定为 `caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d`。
+服务器完成 frozen-lockfile 安装、镜像构建与 Compose 配置校验。运维 status 显示 maintenance=open、
+activities=0，任务、未知成本、支付、通知和删除待审计数均为 0。
+
+通过 SSH 隧道在真实 Chrome 中验证登录页，浏览器未出现私人业务内容；未登录访问
+`/api/accounts`、`/api/watchlists`、`/api/strategies` 均为 401。唯一控制台网络错误为预期的 `/api/me` 401。
+本地截图位于 `output/playwright/deployment-login-90898f5.png`（不提交）。
+本地全量验证：`test` 2367、`test:db` 621、`test:web` 646 项通过；typecheck、lint、build 通过，
+lint 保留 82 条既有警告。启动测试涵盖 no-env、代理 IP、TLS、失败回收和 CLI 数据目录隔离。
+
+临时查看登录页（仅经 SSH，本命令不开放公网 HTTP；容器重建后先重新确认其 IP）：
+
+```sh
+ssh ubuntu@134.175.83.56 'sudo docker inspect luoome-web-1 --format "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"'
+# 本次地址为 172.28.0.129
+ssh -N -L 127.0.0.1:45173:172.28.0.129:5173 ubuntu@134.175.83.56
+# 本机浏览器打开 http://127.0.0.1:45173；仅验证登录页，不改写 HTTPS/Origin 约束。
+```
+
+查看实例状态（服务器上执行）：
+
+```sh
+cd /opt/luoome/current
+sudo docker compose -p luoome --env-file /opt/luoome/config/production.env -f deploy/hosted/compose.yaml ps -a
+sudo docker compose -p luoome --env-file /opt/luoome/config/production.env -f deploy/hosted/compose.yaml exec -T worker bun --no-env-file apps/worker/src/operations.ts status
+```
+
+恢复公网验收前需提供可在该服务器使用的正式域名，以及 SMTP 主机、端口、发件邮箱和用户名；
+SMTP 密码/授权码写入服务器的 `smtp-password` 文件。更新 `production.env` 的域名与 SMTP 字段后，
+保持注册关闭并重新 `up -d --no-build`，验证可信 HTTPS、真实邮件送达和登录。
+开放注册前还需审核 `plan.json` 的实际额度，并完成 §7 中与开放范围对应的验收。
+支付商户、AI 密钥、研究通知和完整定时业务调度不在本次已验证能力内。
