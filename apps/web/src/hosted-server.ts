@@ -803,12 +803,14 @@ export const createHostedWebApp = (
     hostedJsonResult({ ok: true, data: { status: 'live', mode: 'hosted' } }),
   );
   app.get('/health/ready', () =>
-    options.maintenance.state().mode === 'open'
-      ? hostedJsonResult({
-          ok: true,
-          data: { status: 'ready', mode: 'hosted', fixture: config.providerMode === 'fixture' },
-        })
-      : hostedJsonResult(denied('hosted:maintenance'), 503),
+    !options.emailOtp.configured
+      ? hostedJsonResult(denied('service:email-unconfigured'), 503)
+      : options.maintenance.state().mode === 'open'
+        ? hostedJsonResult({
+            ok: true,
+            data: { status: 'ready', mode: 'hosted', fixture: config.providerMode === 'fixture' },
+          })
+        : hostedJsonResult(denied('hosted:maintenance'), 503),
   );
   if (config.productPolicyVersion === 'hosted-web-v2') {
     app.use('/api/*', async (c, next) => {

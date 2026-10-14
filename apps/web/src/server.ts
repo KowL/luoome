@@ -86,34 +86,21 @@ import {
 } from '@luoome/workflows';
 import { type Context, Hono } from 'hono';
 import { ZodError, z } from 'zod';
-import { AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
+import { type AISettingsStore, SaveAISettingsSchema } from './ai-settings.js';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { DATA_TRANSFER_CATEGORIES, exportDataArchive, importDataArchive } from './data-transfer.js';
-import { FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
+import { type FeishuSettingsStore, SaveFeishuSettingsSchema } from './feishu-settings.js';
 import { resolveRuntimeMode } from './hosted-config.js';
 import {
-  INTRADAY_PLAN_SCHEDULER_INTERVAL_MS,
-  startIntradayPlanScheduler,
-} from './intraday-plan-scheduler.js';
-import {
   type MarketDatasetStatusRow,
-  MarketSettingsStore,
+  type MarketSettingsStore,
   SaveMarketSettingsSchema,
   withRuntimeStatus,
 } from './market-settings.js';
 import {
-  PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
-  startPortfolioPerformanceScheduler,
-} from './portfolio-performance-scheduler.js';
-import {
-  ResearchVaultSettingsStore,
+  type ResearchVaultSettingsStore,
   SaveResearchVaultSettingsSchema,
 } from './research-vault-settings.js';
-import {
-  STRATEGY_AUTONOMY_SCHEDULER_INTERVAL_MS,
-  startStrategyAutonomyScheduler,
-} from './strategy-autonomy-scheduler.js';
-import { STRATEGY_SCHEDULER_INTERVAL_MS, startStrategyScheduler } from './strategy-scheduler.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -3550,45 +3537,15 @@ export const createWebApp = (
 
 export interface StartWebOptions {
   readonly port: number;
-  /** 缺省仅监听本机，避免把个人投资数据意外暴露到局域网。 */
+  /** 默认监听回环地址，由反向代理终止 HTTPS。 */
   readonly host?: string;
-  /** 缺省 resolveDbPath()（$LUOOME_HOME/luoome.db）。 */
+  /** 旧调用方传入共享数据库时显式拒绝，避免错误地切回无认证服务。 */
   readonly dbPath?: string;
-  /** write API 与后台任务必须显式开启；缺省读取 LUOOME_EXPOSE_WRITE。 */
-  readonly exposeWrite?: boolean;
-  /** external API 与后台任务必须显式开启；缺省读取 LUOOME_EXPOSE_EXTERNAL。 */
-  readonly exposeExternal?: boolean;
-  /** 仅供测试缩短 tick；生产固定每分钟检查一次。 */
-  readonly strategySchedulerIntervalMs?: number;
-  /** 仅供启动级测试关闭立即 tick；生产缺省立即检查。 */
-  readonly strategySchedulerStartImmediately?: boolean;
-  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
-  readonly strategySchedulerFactory?: typeof startStrategyScheduler;
-  /** 仅供测试缩短盘中账户计划监控 tick；生产每分钟检查。 */
-  readonly intradayPlanSchedulerIntervalMs?: number;
-  /** 仅供启动级测试关闭立即 tick；生产在交易时段立即检查。 */
-  readonly intradayPlanSchedulerStartImmediately?: boolean;
-  /** `luoome start` 由 CLI 盯盘循环负责盘中计划，避免同进程争抢共享租约。 */
-  readonly intradayPlanSchedulerEnabled?: boolean;
-  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
-  readonly intradayPlanSchedulerFactory?: typeof startIntradayPlanScheduler;
-  /** 仅供测试缩短 tick；生产每五分钟检查一次盘后账户绩效快照。 */
-  readonly portfolioPerformanceSchedulerIntervalMs?: number;
-  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
-  readonly portfolioPerformanceSchedulerFactory?: typeof startPortfolioPerformanceScheduler;
-  /** 仅供测试缩短 tick；生产每 30 分钟检查一次是否到周日。 */
-  readonly strategyAutonomySchedulerIntervalMs?: number;
-  /** 仅供启动级测试观察 capability gate；生产使用真实 scheduler。 */
-  readonly strategyAutonomySchedulerFactory?: typeof startStrategyAutonomyScheduler;
-  /** 仅供测试注入慢速/模拟聊天流；生产默认复用 AI SDK agent。 */
-  readonly chatStreamRuntime?: ChatStreamRuntime;
-  /** 仅供测试验证连接空闲断线行为；生产固定 WEB_SERVER_IDLE_TIMEOUT_SECONDS。 */
-  readonly idleTimeoutSeconds?: number;
 }
 
 export interface WebServerHandle {
   readonly port: number;
-  stop(closeActiveConnections?: boolean): void;
+  stop(closeActiveConnections?: boolean): Promise<void>;
 }
 
 /**
@@ -3598,126 +3555,13 @@ export interface WebServerHandle {
  */
 export const WEB_SERVER_IDLE_TIMEOUT_SECONDS = 255;
 
-/** 启动 Web 与进程内策略调度器；stop() 会同时停止二者。 */
+/** Web 始终经认证外壳启动；业务调度由按租户绑定的 worker 执行。 */
 export const startWeb = async (options: StartWebOptions): Promise<WebServerHandle> => {
-  if (resolveRuntimeMode() === 'hosted') {
-    if (options.dbPath !== undefined)
-      throw new Error('hosted mode does not accept a shared local database path');
-    const { startHostedWeb } = await import('./hosted-start.js');
-    return startHostedWeb({
-      port: options.port,
-      ...(options.host === undefined ? {} : { host: options.host }),
-    });
-  }
-  const dbPath = options.dbPath ?? resolveDbPath();
-  // 行情源以设置页持久化的值为准（含启动装配），不能只读 process.env。
-  const marketSettingsStore = new MarketSettingsStore(process.env);
-  const researchVaultSettingsStore = new ResearchVaultSettingsStore(process.env);
-  const feishuSettingsStore = new FeishuSettingsStore(process.env);
-  // composition root 持有进程级 SourceSet（§4.7）：主装配与热更新共用同一实例
-  const sources: WebSourceSet = { eastmoney: new EastmoneySource() };
-  const ctx = await buildWebContext(dbPath, researchVaultSettingsStore.runtimeEnv(), { sources });
-  const aiSettingsStore = new AISettingsStore(process.env);
-  const hostname = options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1';
-  const exposeWrite = options.exposeWrite ?? process.env.LUOOME_EXPOSE_WRITE === 'true';
-  const exposeExternal = options.exposeExternal ?? process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
-  const app = createWebApp(ctx, {
-    exposeWrite,
-    exposeExternal,
-    aiSettingsStore,
-    marketSettingsStore,
-    researchVaultSettingsStore,
-    feishuSettingsStore,
-    dataTransferDbPath: dbPath,
-    sources,
-    ...(options.chatStreamRuntime === undefined
-      ? {}
-      : { chatStreamRuntime: options.chatStreamRuntime }),
-  });
-  const server = Bun.serve({
+  if (options.dbPath !== undefined)
+    throw new Error('Web service does not accept a shared local database path');
+  const { startHostedWeb } = await import('./hosted-start.js');
+  return startHostedWeb({
     port: options.port,
-    hostname,
-    fetch: app.fetch,
-    idleTimeout: options.idleTimeoutSeconds ?? WEB_SERVER_IDLE_TIMEOUT_SECONDS,
+    ...(options.host === undefined ? {} : { host: options.host }),
   });
-  const scheduler =
-    exposeWrite && exposeExternal
-      ? (options.strategySchedulerFactory ?? startStrategyScheduler)(ctx, {
-          intervalMs: options.strategySchedulerIntervalMs ?? STRATEGY_SCHEDULER_INTERVAL_MS,
-          ...(options.strategySchedulerStartImmediately === undefined
-            ? {}
-            : { startImmediately: options.strategySchedulerStartImmediately }),
-        })
-      : undefined;
-  const intradayPlanScheduler =
-    exposeWrite && exposeExternal && options.intradayPlanSchedulerEnabled !== false
-      ? (options.intradayPlanSchedulerFactory ?? startIntradayPlanScheduler)(ctx, {
-          intervalMs:
-            options.intradayPlanSchedulerIntervalMs ?? INTRADAY_PLAN_SCHEDULER_INTERVAL_MS,
-          ...(options.intradayPlanSchedulerStartImmediately === undefined
-            ? {}
-            : { startImmediately: options.intradayPlanSchedulerStartImmediately }),
-        })
-      : undefined;
-  const portfolioPerformanceScheduler =
-    exposeWrite && exposeExternal
-      ? (options.portfolioPerformanceSchedulerFactory ?? startPortfolioPerformanceScheduler)(ctx, {
-          intervalMs:
-            options.portfolioPerformanceSchedulerIntervalMs ??
-            PORTFOLIO_PERFORMANCE_SCHEDULER_INTERVAL_MS,
-        })
-      : undefined;
-  // M2-S4：周度策略自治调度；与账户绩效同一双能力闸口（write 落审计动作 + external 取行情/AI）。
-  const strategyAutonomyScheduler =
-    exposeWrite && exposeExternal
-      ? (options.strategyAutonomySchedulerFactory ?? startStrategyAutonomyScheduler)(ctx, {
-          intervalMs:
-            options.strategyAutonomySchedulerIntervalMs ?? STRATEGY_AUTONOMY_SCHEDULER_INTERVAL_MS,
-        })
-      : undefined;
-  ctx.logger.info(`luoome web 已启动: http://${hostname}:${server.port}`);
-  if (!exposeWrite) {
-    ctx.logger.info(
-      'write 能力未开启：设置 LUOOME_EXPOSE_WRITE=true 后重启可启用持仓/预警等写操作',
-    );
-  }
-  if (!exposeExternal) {
-    ctx.logger.info(
-      'external 能力未开启：设置 LUOOME_EXPOSE_EXTERNAL=true 后重启可启用行情同步/盯盘等外部调用',
-    );
-  }
-  if (scheduler === undefined) {
-    ctx.logger.info(
-      `策略盘后调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
-      { exposeWrite, exposeExternal },
-    );
-  }
-  if (intradayPlanScheduler === undefined && options.intradayPlanSchedulerEnabled !== false) {
-    ctx.logger.info(
-      `盘中账户计划调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
-      { exposeWrite, exposeExternal },
-    );
-  }
-  if (portfolioPerformanceScheduler === undefined) {
-    ctx.logger.info(
-      `账户绩效盘后快照调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
-      { exposeWrite, exposeExternal },
-    );
-  }
-  if (strategyAutonomyScheduler === undefined) {
-    ctx.logger.info(
-      `策略自治周调度器未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true（write=${exposeWrite ? '已开启' : '未开启'}，external=${exposeExternal ? '已开启' : '未开启'}）`,
-      { exposeWrite, exposeExternal },
-    );
-  }
-  return {
-    port: server.port ?? options.port,
-    stop: (closeActiveConnections) => {
-      scheduler?.stop();
-      intradayPlanScheduler?.stop();
-      portfolioPerformanceScheduler?.stop();
-      strategyAutonomyScheduler?.stop();
-      server.stop(closeActiveConnections);
-    },
-  };
 };

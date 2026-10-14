@@ -49,7 +49,7 @@ class Luoome < Formula
     libexec.install Dir["*"]
     (bin/"luoome").write <<~SH
       #!/bin/sh
-      exec bun "#{libexec}/packages/cli/src/index.ts" "$@"
+      exec bun --no-env-file "#{libexec}/packages/cli/src/index.ts" "$@"
     SH
     (bin/"luoome").chmod 0755
 

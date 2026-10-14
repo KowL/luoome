@@ -465,7 +465,7 @@ export const myWorkflow = defineWorkflow<MyWorkflowInput, MyWorkflowOutput>({
 ## 托管开发与验证
 
 托管改动遵循同一依赖方向，额外检查入口身份、私有 registry 和持久恢复协议。
-`bun --no-env-file run hosted:web`、`hosted:worker`、`hosted:ops` 分别启动 Web、独立 worker 与固定运维命令；
+`bun --no-env-file run web`、`worker`、`ops` 分别启动 Web、独立 worker 与固定运维命令；
 环境与停止写者要求见[托管运行手册](./runbooks/hosted-personal-subscription.md)。
 platform Tools 与 Tenant 执行 Tools 不加入 generic/MCP/model discovery。
 新增能力需同时验证用户 HTTP、worker、间接 workflow 和拒绝路径，不能只测试业务 handler。

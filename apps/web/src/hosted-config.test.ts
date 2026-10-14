@@ -15,7 +15,7 @@ const configuration = {
   HOSTED_PROVIDER_MODE: 'fixture',
 };
 
-describe('explicit hosted configuration', () => {
+describe('authenticated Web configuration', () => {
   it('requires disabled dotenv loading and a separate production deletion journal', () => {
     expect(() => assertHostedEnvironmentIsolation([])).toThrow('no-env-file');
     expect(() => assertHostedEnvironmentIsolation(['--no-env-file'])).not.toThrow();
@@ -44,14 +44,30 @@ describe('explicit hosted configuration', () => {
       loadHostedConfig({ ...configuration, HOSTED_TRUSTED_PROXY_IP: '127.0.0.1' }).trustedProxyIp,
     ).toBe('127.0.0.1');
   });
-  it('keeps local as the default and rejects invalid modes', () => {
+  it('retains the internal single-user mode parser without using it to select a Web server', () => {
     expect(resolveRuntimeMode({})).toBe('local');
     expect(() => resolveRuntimeMode({ LUOOME_MODE: 'cloud' })).toThrow();
     expect(() => loadHostedConfig({})).toThrow();
+    for (const mode of [undefined, 'local', 'hosted', 'obsolete']) {
+      expect(loadHostedConfig({ ...configuration, LUOOME_MODE: mode }).mode).toBe('hosted');
+    }
+    expect(
+      loadHostedConfig({
+        ...configuration,
+        LUOOME_MODE: undefined,
+        HOSTED_PRODUCT_POLICY: undefined,
+        HOSTED_PROVIDER_MODE: undefined,
+      }),
+    ).toMatchObject({
+      mode: 'hosted',
+      productPolicyVersion: 'hosted-web-v2',
+      providerMode: 'configured',
+    });
   });
 
   it('requires every identity, storage and policy setting without leaking the secret', () => {
     for (const key of Object.keys(configuration)) {
+      if (['LUOOME_MODE', 'HOSTED_PRODUCT_POLICY', 'HOSTED_PROVIDER_MODE'].includes(key)) continue;
       const env: Record<string, string | undefined> = { ...configuration, [key]: undefined };
       expect(() => loadHostedConfig(env)).toThrow();
     }

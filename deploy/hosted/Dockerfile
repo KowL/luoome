@@ -13,6 +13,6 @@ COPY --from=dependencies /app /app
 RUN mkdir -p /var/lib/luoome /var/lib/luoome-deletions /app/operator \
   && chown -R 1000:1000 /var/lib/luoome /var/lib/luoome-deletions /app/operator
 USER 1000:1000
-ENV LUOOME_MODE=hosted PORT=5173 LUOOME_HOST=0.0.0.0
+ENV PORT=5173 LUOOME_HOST=0.0.0.0
 EXPOSE 5173
 CMD ["bun", "--no-env-file", "apps/web/src/index.ts"]

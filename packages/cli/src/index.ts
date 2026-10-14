@@ -761,15 +761,10 @@ const cmdTui = (): Promise<number> => runLazyEntry('@luoome/tui', 'startTuiApp',
  * W5 联调已对齐：docs/archive/plan.md 未写死导出名，此处以 web 包实现为准。
  * 默认后台运行（同 start），--foreground 保持前台。
  */
-const cmdWebServe = (flags: ReadonlyMap<string, string | boolean>): Promise<number> => {
-  const portRaw = flagString(flags, 'port') ?? '5173';
-  const port = parsePositiveInt(portRaw, 'port');
-  if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
-  const host = flagString(flags, 'host') ?? '127.0.0.1';
-  const daemon = maybeDaemonize(flags, false);
-  if (daemon !== null) return Promise.resolve(daemon);
-  return runLazyEntry('@luoome/web', 'startWeb', [{ port, host }]);
-};
+const cmdWebServe = (
+  flags: ReadonlyMap<string, string | boolean>,
+  json: boolean,
+): Promise<number> => cmdStart(flags, json);
 
 /**
  * 一键 restart：按端口反查旧 PID 优雅停掉，再 start；省去「查 PID → kill → 启动」的组合命令。
@@ -779,7 +774,7 @@ const cmdRestart = async (
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
 ): Promise<number> => {
-  const port = parsePositiveInt(flagString(flags, 'port') ?? '5173', 'port');
+  const port = parsePositiveInt(flagString(flags, 'port') ?? process.env.PORT ?? '5173', 'port');
   if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
 
   const oldPid = await findPidOnPort(port);
@@ -813,59 +808,40 @@ const maybeDaemonize = (
   return 0;
 };
 
-/** 一键 MVP：同一进程启动 Web，并在后台职责上进入 watch 长驻循环。 */
 const cmdStart = async (
   flags: ReadonlyMap<string, string | boolean>,
   json: boolean,
 ): Promise<number> => {
-  const port = parsePositiveInt(flagString(flags, 'port') ?? '5173', 'port');
+  if (flags.has('interval') || flags.has('no-watch')) {
+    throw new CliUsageError(
+      'Web 后台任务由独立 worker 执行；--interval/--no-watch 不再用于 Web 启动',
+    );
+  }
+  const port = parsePositiveInt(flagString(flags, 'port') ?? process.env.PORT ?? '5173', 'port');
   if (port > 65535) throw new CliUsageError(`flag --port 超出范围: ${port}`);
-  const host = flagString(flags, 'host') ?? '127.0.0.1';
+  const host = flagString(flags, 'host') ?? process.env.LUOOME_HOST ?? '127.0.0.1';
   const daemon = maybeDaemonize(flags, json);
   if (daemon !== null) return daemon;
   const mod = (await import('@luoome/web')) as {
-    startWeb: (options: {
-      port: number;
-      host: string;
-      intradayPlanSchedulerEnabled: boolean;
-    }) => Promise<{
+    startWeb: (options: { port: number; host: string }) => Promise<{
       readonly port: number;
-      stop(closeActiveConnections?: boolean): void;
+      stop(closeActiveConnections?: boolean): Promise<void>;
     }>;
   };
-  const server = await mod.startWeb({
-    port,
-    host,
-    intradayPlanSchedulerEnabled: false,
+  const server = await mod.startWeb({ port, host });
+  if (!json)
+    console.log(`Web 已启动，端口 ${server.port}；后台任务请单独运行 bun --no-env-file run worker`);
+  await new Promise<void>((resolve) => {
+    const stop = (): void => {
+      process.off('SIGINT', stop);
+      process.off('SIGTERM', stop);
+      resolve();
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
   });
-  if (!json) console.log(`MVP 已就绪：http://${host}:${server.port}`);
-
-  const watchEnabled =
-    !flags.has('no-watch') &&
-    process.env.LUOOME_EXPOSE_WRITE === 'true' &&
-    process.env.LUOOME_EXPOSE_EXTERNAL === 'true';
-  if (!watchEnabled) {
-    if (!flags.has('no-watch') && !json) {
-      console.warn(
-        '盘中自动监控未启动：需要同时显式开启 LUOOME_EXPOSE_WRITE=true 与 LUOOME_EXPOSE_EXTERNAL=true',
-      );
-    }
-    await new Promise<void>((resolve) => {
-      const stop = (): void => {
-        process.off('SIGINT', stop);
-        resolve();
-      };
-      process.on('SIGINT', stop);
-    });
-    server.stop(true);
-    return 0;
-  }
-
-  try {
-    return await cmdWatch([], flags, json, true);
-  } finally {
-    server.stop(true);
-  }
+  await server.stop(true);
+  return 0;
 };
 
 // ---------- help / 分发 ----------
@@ -899,20 +875,21 @@ Advice:
 Surfaces:
   mcp serve                    启动 MCP stdio server（env 控制暴露面）
   tui                          启动终端 TUI
-  start [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch] [--foreground]
-                               一键启动完整 MVP（Web + 盘中盯盘）；默认后台运行，日志
+  start [--port 5173] [--host 127.0.0.1] [--foreground]
+                               启动需要登录的 Web；后台任务使用独立 worker。默认后台运行，日志
                                追加到 $LUOOME_HOME/logs/luoome.log，--foreground 前台跑
-  restart [--port 5173] [--host 127.0.0.1] [--interval 60] [--no-watch] [--foreground]
+  restart [--port 5173] [--host 127.0.0.1] [--foreground]
                                按端口反查旧进程 SIGTERM 后再 start，无需手动 kill
   web serve [--port 5173] [--host 127.0.0.1] [--foreground]
-                               仅启动 Web 仪表盘；默认后台运行（同 start）
+                               与 start 使用同一登录/订阅 Web 入口；默认后台运行
   workflow run <name>          跑内置 workflow（含策略调度、统一交易计划、盘中监控、绩效快照与报告）
   watch [--interval 60] [--alert-plan <id>] [--once] [--no-notify]
                                 盘中长驻盯盘；Ctrl+C 优雅退出
                                 仅扫描启用的 AlertPlan 与其 Watchlist 成员
 
 环境变量:
-  LUOOME_HOME   数据目录（默认 ~/.luoome）；SQLite 位于 $LUOOME_HOME/luoome.db
+  LUOOME_HOME   单机 CLI/TUI/MCP 数据目录（默认 ~/.luoome）
+  Web          使用显式服务配置；见 docs/runbooks/hosted-personal-subscription.md
 
 --since/--until 支持相对时长（30m / 24h / 7d / 4w）或 ISO 日期。`);
 };
@@ -932,10 +909,6 @@ const run = async (argv: readonly string[]): Promise<number> => {
     printHelp();
     return 0;
   }
-  if (process.env.LUOOME_MODE === 'hosted' && !(cmd === 'web' && sub === 'serve')) {
-    throw new CliUsageError('hosted 模式使用 web serve 与独立 apps/worker 入口');
-  }
-
   if (cmd === 'tools') {
     if (sub === 'list') {
       cmdToolsList(json);
@@ -996,7 +969,7 @@ const run = async (argv: readonly string[]): Promise<number> => {
   if (cmd === 'tui') return cmdTui();
 
   if (cmd === 'web') {
-    if (sub === 'serve') return cmdWebServe(flags);
+    if (sub === 'serve') return cmdWebServe(flags, json);
     throw new CliUsageError(`未知 web 子命令: "${sub ?? ''}"（支持 serve）`);
   }
 
@@ -1010,16 +983,25 @@ const run = async (argv: readonly string[]): Promise<number> => {
   throw new CliUsageError(`未知命令: "${cmd}"（运行 luoome --help 查看用法）`);
 };
 
+export const runCli = async (argv: readonly string[]): Promise<number> => {
+  const { positional } = parseArgv(argv);
+  const [cmd, sub] = positional;
+  const launchesWeb = cmd === 'start' || cmd === 'restart' || (cmd === 'web' && sub === 'serve');
+  if (launchesWeb) {
+    if (!process.execArgv.includes('--no-env-file')) {
+      throw new CliUsageError(
+        'Web 启动必须禁用隐式环境文件：bun --no-env-file packages/cli/src/index.ts <command>',
+      );
+    }
+  } else {
+    loadProjectEnv();
+  }
+  return run(argv);
+};
+
 const main = async (): Promise<void> => {
   try {
-    const mode = process.env.LUOOME_MODE ?? 'local';
-    if (mode !== 'local' && mode !== 'hosted')
-      throw new CliUsageError('LUOOME_MODE 仅支持 local 或 hosted');
-    if (mode === 'local') loadProjectEnv();
-    if (mode === 'local' && process.env.LUOOME_MODE === 'hosted') {
-      throw new CliUsageError('hosted 模式必须在加载本地环境文件前显式选择');
-    }
-    process.exitCode = await run(process.argv.slice(2));
+    process.exitCode = await runCli(process.argv.slice(2));
   } catch (error) {
     if (error instanceof CliUsageError) {
       console.error(`error: ${error.message}`);
@@ -1034,4 +1016,4 @@ const main = async (): Promise<void> => {
   }
 };
 
-await main();
+if (import.meta.main) await main();

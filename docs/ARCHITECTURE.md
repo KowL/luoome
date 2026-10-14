@@ -1145,11 +1145,12 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 - 多用户 / 多设备同步：默认不做，提供 export/import
 - LLM 提供商：OpenAI / Anthropic / 国内大模型（DeepSeek / Kimi / Qwen / GLM）的成本-质量-延迟三角
 
-## 16. 个人订阅托管装配
+## 16. 个人订阅服务装配
 
-`LUOOME_MODE` 默认 `local`；hosted 已有身份、control/Tenant存储、任务、支付、通知及恢复基础设施。
-2026-10-12 的融合目标是在认证外壳内复用原 `createWebApp` 和 `apps/web/public/index.html`，
-不以独立事实应用替代原业务。该融合与真实provider的验收状态分别记录在[开发计划](./hosted-personal-subscription-development-plan.md)。
+Web 启动不再按 `LUOOME_MODE` 分流，统一通过身份、control/Tenant 存储、任务、支付、通知及恢复基础设施。
+认证外壳复用原 `createWebApp` 和 `apps/web/public/index.html`；普通 CLI/TUI/MCP 保留单机能力。
+内置生产装配接入 SMTP 和真实行情，支付与研究邮件未配置时返回不可用；部署约束见
+[服务运行手册](./runbooks/hosted-personal-subscription.md)。
 
 身份、订阅、Job、用量、投递和支付放在 `control.sqlite`；私人业务分别落入各Tenant的SQLite。
 core的`hosted/`只定义实体与不变量；db的memory/Drizzle实现共享contract tests。每个hosted Tenant

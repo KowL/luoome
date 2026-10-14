@@ -15,7 +15,7 @@ export const assertHostedEnvironmentIsolation = (
   args: readonly string[] = process.execArgv,
 ): void => {
   if (!args.includes('--no-env-file'))
-    throw new Error('hosted launch requires bun --no-env-file to disable implicit dotenv loading');
+    throw new Error('Web service requires bun --no-env-file to disable implicit dotenv loading');
 };
 
 export interface HostedConfig {
@@ -40,8 +40,8 @@ const ConfigSchema = z.object({
   dataRoot: z.string().min(1).refine(isAbsolute),
   publicOrigin: z.url(),
   authSecret: z.string().min(32),
-  productPolicyVersion: HostedProductPolicyVersionSchema,
-  providerMode: z.enum(['fixture', 'configured']),
+  productPolicyVersion: HostedProductPolicyVersionSchema.default('hosted-web-v2'),
+  providerMode: z.enum(['fixture', 'configured']).default('configured'),
   runtimeLimit: z.coerce.number().int().min(1).max(100).default(16),
   registrationLimit: z.coerce.number().int().min(1).max(100).default(30),
 });
@@ -49,7 +49,6 @@ const ConfigSchema = z.object({
 export const loadHostedConfig = (
   env: Record<string, string | undefined> = process.env,
 ): HostedConfig => {
-  if (resolveRuntimeMode(env) !== 'hosted') throw new Error('hosted mode must be explicit');
   let authSecret = env.HOSTED_AUTH_SECRET;
   if (env.HOSTED_AUTH_SECRET_FILE !== undefined) {
     if (authSecret !== undefined) throw new Error('configure only one hosted auth secret source');

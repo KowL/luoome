@@ -70,7 +70,10 @@ const createStderrLogger = (): Logger => {
  * 空数据库保持为空；本函数不会自动写入账户、股票、持仓、交易、建议或盯盘配置。
  */
 export const createCliContext = async (): Promise<CliContextHandle> => {
-  if (process.env.LUOOME_MODE !== undefined && process.env.LUOOME_MODE !== 'local') {
+  if (
+    process.env.HOSTED_DATA_ROOT !== undefined ||
+    (process.env.LUOOME_MODE !== undefined && process.env.LUOOME_MODE !== 'local')
+  ) {
     throw new Error('CLI business context is local-only');
   }
   const home = luoomeHome();

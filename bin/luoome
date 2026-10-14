@@ -14,4 +14,4 @@ if ! command -v bun >/dev/null 2>&1; then
   fi
 fi
 
-exec bun run "${ROOT_DIR}/packages/cli/src/index.ts" "$@"
+exec bun --no-env-file run "${ROOT_DIR}/packages/cli/src/index.ts" "$@"

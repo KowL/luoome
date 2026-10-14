@@ -32,7 +32,7 @@ describe('respawnDetached', () => {
       readonly string[],
       Record<string, unknown>,
     ];
-    expect(command).toEqual([process.execPath, ...process.argv.slice(1)]);
+    expect(command).toEqual([process.execPath, '--no-env-file', ...process.argv.slice(1)]);
     expect(options).toMatchObject({
       detached: true,
       stdio: ['ignore', expect.any(Number), expect.any(Number)],

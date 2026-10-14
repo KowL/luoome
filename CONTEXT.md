@@ -43,8 +43,9 @@ AI 可以提议修改策略；候选版本冻结后，历史匹配和收益计�
 
 回答“已发布策略何时自动运行”。它是独立于 StrategyVersion 的可变运行配置，使用标准 5 段
 cron、IANA 时区、启停状态、nextRunAt 和可选 StrategyRecommendationPolicy；修改调度不改变
-definitionHash。`luoome start` / Web 长期运行进程每分钟自动唤醒到期调度 workflow，实例间通过
-调度租约和正式运行租约防重。非交易日与暂停策略不运行。存量无 `schemaVersion` 的
+definitionHash。调度 workflow 通过调度租约和正式运行租约防重；单机工具可显式执行。
+统一登录 Web 不再启动单机调度器，原业务的按用户自动调度尚待接入独立 worker。
+非交易日与暂停策略不运行。存量无 `schemaVersion` 的
 RecommendationPolicy 继续按 V1 语义执行；只有显式 `schemaVersion=2` 的 policy 才执行账户级确定性预检。
 V2 在调用 AI 前检查账户、持仓、行业/单仓暴露、同策略归因、流动性、数据新鲜度、信号冲突和冷却；
 事实缺失时返回 unavailable，只有 eligible 候选才生成可追溯 Advice。配置的 T+n 观察完成时可再次生成阶段建议，

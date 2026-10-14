@@ -1,35 +1,41 @@
-# 个人订阅托管版运行与恢复
+# 个人订阅服务运行与恢复
 
 本手册当前入口为 `hosted-web-v2`：在原 Web 上接入登录、用户隔离、订阅和唯一默认投资账户。
-默认运行模式仍为 `local`，生产注册默认关闭。旧 `hosted-facts-v1` 仅保留历史验证入口，
-其单独页面不是本版产品入口。原有业务功能不因托管而从产品范围删除。
+Web 不再按 `LUOOME_MODE` 分流，所有启动入口均需要登录，生产注册默认关闭。
+旧 `hosted-facts-v1` 只供历史测试，公开启动入口拒绝该策略。
 v2 本轮实现与验证见[改造计划 §2.3](../hosted-personal-subscription-development-plan.md#23-本轮落地与验收记录)；
 旧事实版工程证据见[历史验收记录](../archive/hosted-personal-subscription-fixture-acceptance.md)。
-真实数据授权、邮件/支付接入、生产容器运行及异机恢复尚未验收，不能据此开放收费。
+真实 SMTP 验证码已实现；实际投递、支付、完整业务调度及异机恢复仍须验收，不能据此开放收费。
 
 ## 1. 启动契约
 
-所有命令从仓库根运行。托管进程和启动它的 Bun 父进程均必须禁用隐式 dotenv：
+所有命令从仓库根运行。服务进程和启动它的 Bun 父进程均必须禁用隐式 dotenv：
 
 ```sh
-bun --no-env-file run hosted:web
-bun --no-env-file run hosted:worker
+bun --no-env-file run web
+bun --no-env-file run worker
 ```
 
 Web 不启动本地 scheduler。worker 是独立进程，串行执行持久任务；首期每节点只运行一个 worker。
-CLI、TUI、MCP 在 `LUOOME_MODE=hosted` 下拒绝本地共享上下文，不会退回 `$LUOOME_HOME`。
+`luoome start`、`luoome web serve` 使用同一登录入口，不加载个人 `.env`。
+CLI 在存在 `HOSTED_DATA_ROOT` 时拒绝打开单机业务库；单机工具继续使用自己的环境配置。
 
 | 变量 | 约束 |
 |---|---|
-| `LUOOME_MODE` | 必须显式 `hosted` |
 | `HOSTED_ENVIRONMENT` | `development` 或 `production` |
 | `HOSTED_DATA_ROOT` | 专用绝对路径，不能使用个人本地数据目录 |
 | `HOSTED_DELETION_LEDGER_ROOT` | 生产必填，必须在 data root 的真实路径之外，独立持久卷 |
 | `PUBLIC_ORIGIN` | 单一固定 HTTPS origin，无路径、用户信息或尾部 `/` |
 | `HOSTED_AUTH_SECRET_FILE` | 推荐 secret 文件；与 `HOSTED_AUTH_SECRET` 互斥，至少 32 字符，文件不超过 4 KiB |
-| `HOSTED_PRODUCT_POLICY` | 本版使用 `hosted-web-v2`，历史 fixture 可显式使用 `hosted-facts-v1` |
+| `HOSTED_PRODUCT_POLICY` | 默认且公开启动只接受 `hosted-web-v2`，无需设置 |
 | `HOSTED_PROVIDER_MODE` | `fixture` 仅开发；生产必须 `configured` |
-| `HOSTED_PROVIDERS_MODULE` | configured 模式必填，可信运营代码的绝对路径 |
+| `HOSTED_PLAN_FILE` | 内置装配必填，绝对 JSON 路径，符合 `PlanVersionSchema`；套餐由运营审核 |
+| `HOSTED_JOB_BUDGET_MICRO` | 内置装配必填，单任务成本预算，正整数微元 |
+| `HOSTED_PROVIDERS_MODULE` | 可选可信运营代码的绝对路径；覆盖内置装配 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_FROM` | SMTP 主机、端口（默认 465）、单一发件邮箱 |
+| `SMTP_USER` / `SMTP_PASSWORD_FILE` | 认证用户名和密码文件；密码文件不超过 4 KiB，与 `SMTP_PASSWORD` 互斥 |
+| `SMTP_SECURE` | 默认按端口判定；465 使用 `true`，587 使用 `false` 并强制 STARTTLS，始终验证证书 |
+| `HOSTED_AI_ENABLED` / `LUOOME_AI_CONFIG` | 默认关闭 AI；启用须显式提供绝对模型目录和对应密钥，不读取个人模型文件 |
 | `LUOOME_EXPOSE_WRITE` / `LUOOME_EXPOSE_EXTERNAL` | 分别显式 `true`，否则相应能力关闭 |
 | `LUOOME_EXPOSE_TRADE` | 禁止 `true`，启动硬拒绝 |
 | `HOSTED_REGISTRATION_ENABLED` | 默认关闭；开放前必须完成 §7 |
@@ -40,14 +46,17 @@ CLI、TUI、MCP 在 `LUOOME_MODE=hosted` 下拒绝本地共享上下文，不会
 | `HOSTED_WORKER_INSTANCE_ID` | worker 健康文件标识，Compose 固定 `primary` |
 | `HOSTED_TLS_CERT_FILE` / `HOSTED_TLS_KEY_FILE` | 可选本机 TLS，必须成对设置；生产由 Caddy 终止 TLS |
 
-providers 模块导出 `createHostedProviders(config)`，提供 `HostedProviders`：OTP、邮件、支付、
-行情端口，获准的股票目录、运营套餐版本，以及两个任务的冻结价格/预算策略。
-configured 装配拒绝 fixture provider、fake-market、fixture 套餐及未配置端口。
+内置装配使用真实 SMTP、真实行情/股票目录 manager 和运营套餐，初始股票目录为空，不注入测试数据。
+真实支付与研究通知邮件当前未装配，返回不可用；可选 providers 模块导出 `createHostedProviders(config)`
+覆盖这些端口及任务价格/预算策略。生产装配拒绝 fixture provider、fake-market 与 fixture 套餐。
+SMTP 未配置时仅允许注册关闭的预上线启动；`/health/ready` 返回 503，不能称为登录服务就绪。
+SMTP 适配器只把最终成功回执记为 accepted；明确拒绝记 failed，可能已发送的超时/断线记 unknown，
+不自动重发，不记录验证码或 SMTP 凭证。配置有效不等于已经验证邮箱送达。
 v2 通过可选 `createTenantContext(base)` 补全租户专用的 LLM/Agent、行情 manager、Vault 和通知能力；
 不得注入其他租户的数据库、共享私人缓存或可读取任意路径的 adapter。Web 始终重新绑定可信身份和仓储。
 未装配能力返回不可用；fixture 的模拟 LLM 不代表真实 AI 服务已验收。
 首次注册授予一次 7 天试用；套餐价格由服务器发布，浏览器不能传入价格、权益或额度。
-模块是可信部署代码，禁止用户上传或通过产品设置修改。仓库目前没有选定任何真实供应商。
+模块是可信部署代码，禁止用户上传或通过产品设置修改。SMTP 的实际供应商和凭证由部署者提供。
 
 目录结构：
 
@@ -71,7 +80,9 @@ HOSTED_DELETION_LEDGER_ROOT/      不随业务备份回退的删除 tombstone
 
 配置位于 [deploy/hosted](../../deploy/hosted/compose.yaml)。生产参考文件为
 [production.env.example](../../deploy/hosted/production.env.example)，需由运营替换占位符、审核并固定镜像版本。
-`operator/providers.ts` 与 `secrets/hosted-auth-key` 由部署管理提供，均不进入 Git。
+`operator/plan.json`、`secrets/hosted-auth-key` 与 `secrets/smtp-password` 由部署管理提供，均不进入 Git。
+SMTP 尚未配置时提供空密码文件并保持 `SMTP_HOST` 为空。AI 如需开启，应额外挂载只读模型文件、
+设置 `LUOOME_AI_CONFIG` 并注入相应供应商密钥；仅修改开关不会自动发现个人配置。
 镜像进程为 UID/GID 1000，根文件系统只读、移除 Linux capabilities，只有 Caddy 发布 443。
 真实 provider 的凭证应由其部署 secret 管理读取，不能写在 providers 源码或浏览器设置里。
 
@@ -81,14 +92,13 @@ docker compose --env-file /absolute/operator/production.env -f deploy/hosted/com
 docker compose --env-file /absolute/operator/production.env -f deploy/hosted/compose.yaml up -d
 ```
 
-上述 build/up 是待生产演练的操作步骤，本轮只执行过 Compose 配置校验，未执行部署。
 宿主机 secret 文件须让容器 UID 1000 可读且其他用户不可读；文件 bind 的权限不会由 Compose
 secret 的声明自动纠正。持久卷也须预先分配给 UID/GID 1000。不要通过放宽目录权限解决启动失败。
 生产进入服务前验证真实 HTTPS、代理地址、网络出口、存储加密/备份权限和供应商限流。
 
 ## 3. 健康与日常对账
 
-- `/health/live` 与 `/health/ready` 不包含私人内容；写屏障冻结/排空时返回 503。
+- `/health/live` 表示进程存活；`/health/ready` 在写屏障冻结/排空或 SMTP 未配置时返回 503，不包含私人内容。
 - `worker-health-primary.json` 的循环心跳超过 120 秒或 `stopped=true` 判为不健康。
 - 检查 pending/needs-review Job、held reservation、unknown provider cost、支付/退款积压、
   unknown 邮件和未完成删除；数据库本身不直接暴露为管理 HTTP API。
@@ -98,19 +108,19 @@ secret 的声明自动纠正。持久卷也须预先分配给 UID/GID 1000。不
   渠道 `accepted` 仅表示受理，`delivered` 必须有可信回执；unknown 先查询，不能盲重发。
 
 ```sh
-bun --no-env-file run hosted:ops status
+bun --no-env-file run ops status
 ```
 
-status 只输出屏障状态和积压计数。当前真实 provider 尚未接入，生产未知成本的供应商账单取证、
+status 只输出屏障状态和积压计数。真实支付及研究通知渠道尚未接入，生产未知成本的供应商账单取证、
 告警接收渠道和定时异地备份仍需运营实现并演练。
 
 ## 4. 一致备份
 
-运维命令仍需显式托管环境配置。备份可在进程存活时执行：共享 control 屏障先阻止新写、等待所有
+运维命令仍需显式服务环境配置。备份可在进程存活时执行：共享 control 屏障先阻止新写、等待所有
 Web/worker/provider 活动完成，再冻结并执行 `VACUUM INTO`。空闲 DB 句柄不算写活动，不能遗漏 WAL 内容。
 
 ```sh
-bun --no-env-file run hosted:ops backup --destination /absolute/backups/new-recovery-set
+bun --no-env-file run ops backup --destination /absolute/backups/new-recovery-set
 ```
 
 目标必须是新的 data root 外目录。备份包含 control、全部 Tenant DB、manifest、vault 和导出文件；
@@ -128,9 +138,9 @@ bun --no-env-file run hosted:ops backup --destination /absolute/backups/new-reco
 这个参数是运营对停写事实的显式断言，不会替你停止进程。
 
 ```sh
-bun --no-env-file run hosted:ops restore --source /absolute/backups/recovery-set --destination /absolute/new-data-root --deletion-ledger /absolute/latest-deletion-ledger --writers-stopped
-bun --no-env-file run hosted:ops status --data-root /absolute/new-data-root
-bun --no-env-file run hosted:ops reconcile --data-root /absolute/new-data-root --deletion-ledger /absolute/latest-deletion-ledger --writers-stopped
+bun --no-env-file run ops restore --source /absolute/backups/recovery-set --destination /absolute/new-data-root --deletion-ledger /absolute/latest-deletion-ledger --writers-stopped
+bun --no-env-file run ops status --data-root /absolute/new-data-root
+bun --no-env-file run ops reconcile --data-root /absolute/new-data-root --deletion-ledger /absolute/latest-deletion-ledger --writers-stopped
 ```
 
 只允许恢复到新目录；验证文件哈希、SQLite integrity、平台版本与 Tenant manifest。
@@ -142,7 +152,7 @@ bun --no-env-file run hosted:ops reconcile --data-root /absolute/new-data-root -
 供应商查询是独立的固定运维入口，需要 write/external 双 opt-in 和可信 configured providers：
 
 ```sh
-bun --no-env-file run hosted:ops reconcile-external --data-root /absolute/new-data-root --writers-stopped
+bun --no-env-file run ops reconcile-external --data-root /absolute/new-data-root --writers-stopped
 ```
 
 每轮有界查询原订单、退款和 unknown 邮件，保持冻结，不发信、不重新下单、不申请退款。
@@ -152,7 +162,7 @@ bun --no-env-file run hosted:ops reconcile-external --data-root /absolute/new-da
 这种真实渠道取证、审查与结算流程在生产放行前必须完成供应商专项验收。
 
 ```sh
-bun --no-env-file run hosted:ops resume --data-root /absolute/new-data-root --writers-stopped
+bun --no-env-file run ops resume --data-root /absolute/new-data-root --writers-stopped
 ```
 
 只有同一恢复报告的 `unresolvedResults=0` 且全部 pendingReview 计数为 0，resume 才解除屏障。
@@ -165,7 +175,7 @@ bun --no-env-file run hosted:ops resume --data-root /absolute/new-data-root --wr
 仍在执行，再显式恢复残留活动：
 
 ```sh
-bun --no-env-file run hosted:ops recover-stopped-writers --deletion-ledger /absolute/latest-deletion-ledger --writers-stopped
+bun --no-env-file run ops recover-stopped-writers --deletion-ledger /absolute/latest-deletion-ledger --writers-stopped
 ```
 
 该操作将当前库冻结为新的 restore owner、撤销旧凭证/fence，并按回执离线对账；随后仍需 §5 的

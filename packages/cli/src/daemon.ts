@@ -26,7 +26,7 @@ export const respawnDetached = (): DaemonHandle => {
   mkdirSync(dirname(logPath), { recursive: true });
   const fd = openSync(logPath, 'a');
   try {
-    const proc = Bun.spawn([process.execPath, ...process.argv.slice(1)], {
+    const proc = Bun.spawn([process.execPath, '--no-env-file', ...process.argv.slice(1)], {
       detached: true,
       stdio: ['ignore', fd, fd],
       env: { ...process.env, [DAEMON_ENV]: '1' },

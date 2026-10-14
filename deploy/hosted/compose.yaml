@@ -1,5 +1,5 @@
 x-service: &service
-  image: luoome-hosted:${LUOOME_RELEASE:?set an immutable release tag}
+  image: luoome:${LUOOME_RELEASE:?set an immutable release tag}
   build:
     context: ../..
     dockerfile: deploy/hosted/Dockerfile
@@ -12,14 +12,20 @@ x-service: &service
   security_opt: [no-new-privileges:true]
   stop_grace_period: 120s
   environment: &environment
-    LUOOME_MODE: hosted
     HOSTED_ENVIRONMENT: production
     HOSTED_DATA_ROOT: /var/lib/luoome
     HOSTED_DELETION_LEDGER_ROOT: /var/lib/luoome-deletions
     HOSTED_AUTH_SECRET_FILE: /run/secrets/hosted_auth_key
-    HOSTED_PRODUCT_POLICY: hosted-web-v2
     HOSTED_PROVIDER_MODE: configured
-    HOSTED_PROVIDERS_MODULE: /app/operator/providers.ts
+    HOSTED_PLAN_FILE: /app/operator/plan.json
+    HOSTED_JOB_BUDGET_MICRO: ${HOSTED_JOB_BUDGET_MICRO:?set a positive per-job budget}
+    HOSTED_AI_ENABLED: ${HOSTED_AI_ENABLED:-false}
+    SMTP_HOST: ${SMTP_HOST:-}
+    SMTP_PORT: ${SMTP_PORT:-465}
+    SMTP_FROM: ${SMTP_FROM:-}
+    SMTP_USER: ${SMTP_USER:-}
+    SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+    SMTP_SECURE: ${SMTP_SECURE:-true}
     PUBLIC_ORIGIN: https://${HOSTED_DOMAIN:?set the public hostname}
     HOSTED_TRUSTED_PROXY_IP: 172.28.0.2
     HOSTED_REGISTRATION_ENABLED: ${HOSTED_REGISTRATION_ENABLED:-false}
@@ -27,13 +33,14 @@ x-service: &service
     HOSTED_RUNTIME_LIMIT: ${HOSTED_RUNTIME_LIMIT:-16}
     LUOOME_EXPOSE_WRITE: "true"
     LUOOME_EXPOSE_EXTERNAL: "true"
+    LUOOME_MARKET_PROVIDER: real
     PORT: "5173"
     LUOOME_HOST: 0.0.0.0
   volumes:
     - tenant_data:/var/lib/luoome
     - deletion_ledger:/var/lib/luoome-deletions
-    - ./operator/providers.ts:/app/operator/providers.ts:ro
-  secrets: [hosted_auth_key]
+    - ./operator/plan.json:/app/operator/plan.json:ro
+  secrets: [hosted_auth_key, smtp_password]
   tmpfs: [/tmp]
   networks: [backend]
 
@@ -73,6 +80,8 @@ services:
 secrets:
   hosted_auth_key:
     file: ./secrets/hosted-auth-key
+  smtp_password:
+    file: ./secrets/smtp-password
 volumes:
   tenant_data:
   deletion_ledger:
@@ -83,3 +92,4 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/24
+          ip_range: 172.28.0.128/25

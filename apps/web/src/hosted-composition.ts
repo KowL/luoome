@@ -28,6 +28,7 @@ import {
 } from '@luoome/tools/platform';
 import type { HostedConfig } from './hosted-config.js';
 import { prepareDeletionLedger } from './hosted-privacy.js';
+import { createHostedProviders } from './hosted-providers.js';
 import { prepareHostedDataRoot, TenantRuntimeManager } from './hosted-runtime.js';
 
 export interface HostedProviders {
@@ -51,8 +52,8 @@ export const loadConfiguredHostedProviders = async (
       throw new Error('fixture mode cannot load a live provider module');
     return undefined;
   }
-  if (modulePath === undefined || !isAbsolute(modulePath))
-    throw new Error('configured hosted mode requires an explicit absolute HOSTED_PROVIDERS_MODULE');
+  if (modulePath === undefined) return createHostedProviders(config, env);
+  if (!isAbsolute(modulePath)) throw new Error('HOSTED_PROVIDERS_MODULE must be an absolute path');
   const module = (await import(pathToFileURL(modulePath).href)) as {
     createHostedProviders?: (config: HostedConfig) => HostedProviders | Promise<HostedProviders>;
   };
@@ -145,8 +146,8 @@ export const openHostedService = (
     Object.values(providers.jobPolicies).some((policy) => policy.budgetMicro <= 0)
   )
     throw new Error('configured jobs require explicit nonzero provider budgets');
-  if (!providers.emailOtp.configured)
-    throw new Error('hosted email OTP provider is not configured');
+  if (!providers.emailOtp.configured && config.registrationEnabled)
+    throw new Error('registration requires a configured email OTP provider');
   if (providers.trialPlan.productPolicyVersion !== config.productPolicyVersion)
     throw new Error('hosted provider plan must match the configured product policy');
   const root = prepareHostedDataRoot(config.dataRoot);

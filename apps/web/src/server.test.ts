@@ -4,7 +4,7 @@
 
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeAll, describe, expect, it, mock } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -31,7 +31,12 @@ import type { ChatStreamRuntime } from './chat.js';
 import { FeishuSettingsStore } from './feishu-settings.js';
 import { MarketSettingsStore } from './market-settings.js';
 import { ResearchVaultSettingsStore } from './research-vault-settings.js';
-import { buildWebContext, createWebApp, startWeb } from './server.js';
+import {
+  buildWebContext,
+  createWebApp,
+  startWeb,
+  WEB_SERVER_IDLE_TIMEOUT_SECONDS,
+} from './server.js';
 
 let app: Hono;
 let appCtx: ToolContext;
@@ -1049,218 +1054,21 @@ describe('Web runtime bootstrap', () => {
     }
   });
 
-  it('策略、盘中计划与账户绩效 scheduler 仅在 write 与 external 双显式开启时启动', async () => {
-    const previousWrite = process.env.LUOOME_EXPOSE_WRITE;
-    const previousExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
-    const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
-    const previousMarketSources = process.env.LUOOME_MARKET_SOURCES;
-    const originalInfo = console.info;
-    const logs: string[] = [];
-    delete process.env.LUOOME_EXPOSE_WRITE;
-    delete process.env.LUOOME_EXPOSE_EXTERNAL;
-    process.env.LUOOME_MARKET_PROVIDER = 'real';
-    process.env.LUOOME_MARKET_SOURCES = 'sina';
-    console.info = (...args: unknown[]) => {
-      logs.push(args.map(String).join(' '));
-    };
+  it('统一入口拒绝共享数据库，不再根据旧模式和能力开关启动单机 Web', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'luoome-web-entry-'));
+    const previousMode = process.env.LUOOME_MODE;
+    const dbPath = join(dir, 'shared.db');
     try {
-      const cases = [
-        {
-          label: 'default',
-          capabilities: {},
-          expectedStarts: 0,
-          expectedState: 'write=未开启，external=未开启',
-        },
-        {
-          label: 'write-only',
-          capabilities: { exposeWrite: true, exposeExternal: false },
-          expectedStarts: 0,
-          expectedState: 'write=已开启，external=未开启',
-        },
-        {
-          label: 'external-only',
-          capabilities: { exposeWrite: false, exposeExternal: true },
-          expectedStarts: 0,
-          expectedState: 'write=未开启，external=已开启',
-        },
-        {
-          label: 'write-and-external',
-          capabilities: { exposeWrite: true, exposeExternal: true },
-          expectedStarts: 1,
-          expectedState: 'write=已开启，external=已开启',
-        },
-      ] as const;
-      for (const testCase of cases) {
-        const dir = mkdtempSync(join(tmpdir(), `luoome-performance-gate-${testCase.label}-`));
-        let starts = 0;
-        let stops = 0;
-        let strategyStarts = 0;
-        let strategyStops = 0;
-        let intradayStarts = 0;
-        let intradayStops = 0;
-        const logStart = logs.length;
-        let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
-        try {
-          handle = await startWeb({
-            port: 0,
-            dbPath: join(dir, 'luoome.db'),
-            ...testCase.capabilities,
-            strategySchedulerStartImmediately: false,
-            strategySchedulerFactory: () => {
-              strategyStarts += 1;
-              return {
-                tick: async () => {},
-                cutoffTick: async () => {},
-                stop: () => {
-                  strategyStops += 1;
-                },
-              };
-            },
-            intradayPlanSchedulerStartImmediately: false,
-            intradayPlanSchedulerFactory: () => {
-              intradayStarts += 1;
-              return {
-                tick: async () => {},
-                stop: () => {
-                  intradayStops += 1;
-                },
-              };
-            },
-            portfolioPerformanceSchedulerFactory: () => {
-              starts += 1;
-              return {
-                tick: async () => {},
-                stop: () => {
-                  stops += 1;
-                },
-              };
-            },
-          });
-          expect(starts).toBe(testCase.expectedStarts);
-          expect(strategyStarts).toBe(testCase.expectedStarts);
-          expect(intradayStarts).toBe(testCase.expectedStarts);
-          const caseLogs = logs.slice(logStart).join('\n');
-          if (testCase.expectedStarts === 0) {
-            expect(caseLogs).toContain('策略盘后调度器未启动');
-            expect(caseLogs).toContain('盘中账户计划调度器未启动');
-            expect(caseLogs).toContain('账户绩效盘后快照调度器未启动');
-            expect(caseLogs).toContain('LUOOME_EXPOSE_WRITE=true');
-            expect(caseLogs).toContain('LUOOME_EXPOSE_EXTERNAL=true');
-            expect(caseLogs).toContain(testCase.expectedState);
-          } else {
-            expect(caseLogs).not.toContain('策略盘后调度器未启动');
-            expect(caseLogs).not.toContain('盘中账户计划调度器未启动');
-            expect(caseLogs).not.toContain('账户绩效盘后快照调度器未启动');
-          }
-          handle.stop(true);
-          handle = undefined;
-          expect(stops).toBe(testCase.expectedStarts);
-          expect(strategyStops).toBe(testCase.expectedStarts);
-          expect(intradayStops).toBe(testCase.expectedStarts);
-        } finally {
-          handle?.stop(true);
-          rmSync(dir, { recursive: true, force: true });
-        }
+      for (const mode of [undefined, 'local', 'hosted']) {
+        if (mode === undefined) delete process.env.LUOOME_MODE;
+        else process.env.LUOOME_MODE = mode;
+        await expect(startWeb({ port: 0, dbPath })).rejects.toThrow('shared local database');
+        expect(existsSync(dbPath)).toBe(false);
       }
     } finally {
-      console.info = originalInfo;
-      if (previousWrite === undefined) delete process.env.LUOOME_EXPOSE_WRITE;
-      else process.env.LUOOME_EXPOSE_WRITE = previousWrite;
-      if (previousExternal === undefined) delete process.env.LUOOME_EXPOSE_EXTERNAL;
-      else process.env.LUOOME_EXPOSE_EXTERNAL = previousExternal;
-      if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
-      else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;
-      if (previousMarketSources === undefined) delete process.env.LUOOME_MARKET_SOURCES;
-      else process.env.LUOOME_MARKET_SOURCES = previousMarketSources;
-    }
-  });
-
-  it('策略自治周调度器仅在 write 与 external 双显式开启时启动', async () => {
-    const previousWrite = process.env.LUOOME_EXPOSE_WRITE;
-    const previousExternal = process.env.LUOOME_EXPOSE_EXTERNAL;
-    const previousMarketProvider = process.env.LUOOME_MARKET_PROVIDER;
-    const previousMarketSources = process.env.LUOOME_MARKET_SOURCES;
-    const originalInfo = console.info;
-    const logs: string[] = [];
-    delete process.env.LUOOME_EXPOSE_WRITE;
-    delete process.env.LUOOME_EXPOSE_EXTERNAL;
-    process.env.LUOOME_MARKET_PROVIDER = 'real';
-    process.env.LUOOME_MARKET_SOURCES = 'sina';
-    console.info = (...args: unknown[]) => {
-      logs.push(args.map(String).join(' '));
-    };
-    try {
-      const cases = [
-        { label: 'default', capabilities: {}, expectedStarts: 0 },
-        {
-          label: 'write-only',
-          capabilities: { exposeWrite: true, exposeExternal: false },
-          expectedStarts: 0,
-        },
-        {
-          label: 'external-only',
-          capabilities: { exposeWrite: false, exposeExternal: true },
-          expectedStarts: 0,
-        },
-        {
-          label: 'write-and-external',
-          capabilities: { exposeWrite: true, exposeExternal: true },
-          expectedStarts: 1,
-        },
-      ] as const;
-      for (const testCase of cases) {
-        const dir = mkdtempSync(join(tmpdir(), `luoome-autonomy-gate-${testCase.label}-`));
-        let starts = 0;
-        let stops = 0;
-        const logStart = logs.length;
-        let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
-        try {
-          handle = await startWeb({
-            port: 0,
-            dbPath: join(dir, 'luoome.db'),
-            ...testCase.capabilities,
-            strategySchedulerStartImmediately: false,
-            portfolioPerformanceSchedulerFactory: () => ({
-              tick: async () => {},
-              stop: () => {},
-            }),
-            strategyAutonomySchedulerFactory: () => {
-              starts += 1;
-              return {
-                tick: async () => {},
-                stop: () => {
-                  stops += 1;
-                },
-              };
-            },
-          });
-          expect(starts).toBe(testCase.expectedStarts);
-          const caseLogs = logs.slice(logStart).join('\n');
-          if (testCase.expectedStarts === 0) {
-            expect(caseLogs).toContain('策略自治周调度器未启动');
-            expect(caseLogs).toContain('LUOOME_EXPOSE_WRITE=true');
-            expect(caseLogs).toContain('LUOOME_EXPOSE_EXTERNAL=true');
-          } else {
-            expect(caseLogs).not.toContain('策略自治周调度器未启动');
-          }
-          handle.stop(true);
-          handle = undefined;
-          expect(stops).toBe(testCase.expectedStarts);
-        } finally {
-          handle?.stop(true);
-          rmSync(dir, { recursive: true, force: true });
-        }
-      }
-    } finally {
-      console.info = originalInfo;
-      if (previousWrite === undefined) delete process.env.LUOOME_EXPOSE_WRITE;
-      else process.env.LUOOME_EXPOSE_WRITE = previousWrite;
-      if (previousExternal === undefined) delete process.env.LUOOME_EXPOSE_EXTERNAL;
-      else process.env.LUOOME_EXPOSE_EXTERNAL = previousExternal;
-      if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
-      else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;
-      if (previousMarketSources === undefined) delete process.env.LUOOME_MARKET_SOURCES;
-      else process.env.LUOOME_MARKET_SOURCES = previousMarketSources;
+      if (previousMode === undefined) delete process.env.LUOOME_MODE;
+      else process.env.LUOOME_MODE = previousMode;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1319,7 +1127,7 @@ describe('Web runtime bootstrap', () => {
     process.env.LUOOME_MARKET_PROVIDER = 'real';
     process.env.LUOOME_MARKET_SOURCES = 'sina';
     const dir = mkdtempSync(join(tmpdir(), 'luoome-idle-timeout-'));
-    let handle: Awaited<ReturnType<typeof startWeb>> | undefined;
+    let handle: Bun.Server<undefined> | undefined;
     try {
       const dbPath = join(dir, 'luoome.db');
       const seedCtx = await buildWebContext(dbPath, {
@@ -1350,16 +1158,17 @@ describe('Web runtime bootstrap', () => {
             { headers: { 'content-type': 'text/event-stream' } },
           ),
       };
-      const schedulerFactories = {
-        strategySchedulerFactory: () => ({
-          tick: async () => {},
-          cutoffTick: async () => {},
-          stop: () => {},
-        }),
-        intradayPlanSchedulerFactory: () => ({ tick: async () => {}, stop: () => {} }),
-        portfolioPerformanceSchedulerFactory: () => ({ tick: async () => {}, stop: () => {} }),
-        strategyAutonomySchedulerFactory: () => ({ tick: async () => {}, stop: () => {} }),
-      };
+      const startTestListener = (idleTimeout: number) =>
+        Bun.serve({
+          port: 0,
+          hostname: '127.0.0.1',
+          fetch: createWebApp(seedCtx, {
+            exposeWrite: true,
+            exposeExternal: true,
+            chatStreamRuntime: slowRuntime,
+          }).fetch,
+          idleTimeout,
+        });
       const postChat = () =>
         fetch(`http://127.0.0.1:${handle?.port}/api/chat`, {
           method: 'POST',
@@ -1370,37 +1179,21 @@ describe('Web runtime bootstrap', () => {
           }),
         });
 
-      handle = await startWeb({
-        port: 0,
-        dbPath,
-        exposeWrite: true,
-        exposeExternal: true,
-        idleTimeoutSeconds: 1,
-        chatStreamRuntime: slowRuntime,
-        ...schedulerFactories,
-      });
+      handle = startTestListener(1);
       // idleTimeout 1s < 空窗 6s：headers 先到，服务端在读 body 期间掐断空闲连接
       // （浏览器侧表现为 reader.read() 抛 TypeError: network error）。
       const cut = await postChat();
       expect(cut.status).toBe(200);
       await expect(cut.text()).rejects.toThrow();
-      handle.stop(true);
+      await handle.stop(true);
       handle = undefined;
 
-      handle = await startWeb({
-        port: 0,
-        dbPath,
-        exposeWrite: true,
-        exposeExternal: true,
-        idleTimeoutSeconds: 10,
-        chatStreamRuntime: slowRuntime,
-        ...schedulerFactories,
-      });
+      handle = startTestListener(WEB_SERVER_IDLE_TIMEOUT_SECONDS);
       const response = await postChat();
       expect(response.status).toBe(200);
       expect(await response.text()).toContain('[DONE]');
     } finally {
-      handle?.stop(true);
+      await handle?.stop(true);
       rmSync(dir, { recursive: true, force: true });
       if (previousMarketProvider === undefined) delete process.env.LUOOME_MARKET_PROVIDER;
       else process.env.LUOOME_MARKET_PROVIDER = previousMarketProvider;

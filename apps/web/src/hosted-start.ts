@@ -6,6 +6,7 @@ import {
 } from './hosted-composition.js';
 import { assertHostedEnvironmentIsolation, loadHostedConfig } from './hosted-config.js';
 import { createHostedWebApp } from './hosted-server.js';
+import { WEB_SERVER_IDLE_TIMEOUT_SECONDS } from './server.js';
 
 export const startHostedWeb = async (options: {
   readonly port: number;
@@ -14,6 +15,12 @@ export const startHostedWeb = async (options: {
 }) => {
   assertHostedEnvironmentIsolation();
   const config = loadHostedConfig();
+  if (config.productPolicyVersion !== 'hosted-web-v2')
+    throw new Error('Web service requires the complete Web product policy hosted-web-v2');
+  const cert = process.env.HOSTED_TLS_CERT_FILE;
+  const key = process.env.HOSTED_TLS_KEY_FILE;
+  if ((cert === undefined) !== (key === undefined))
+    throw new Error('Web TLS needs both certificate and key');
   const service = openHostedService(
     config,
     options.providers ?? (await loadConfiguredHostedProviders(config)),
@@ -41,10 +48,6 @@ export const startHostedWeb = async (options: {
           : address;
       },
     });
-    const cert = process.env.HOSTED_TLS_CERT_FILE;
-    const key = process.env.HOSTED_TLS_KEY_FILE;
-    if ((cert === undefined) !== (key === undefined))
-      throw new Error('hosted TLS needs both certificate and key');
     const server = Bun.serve({
       port: options.port,
       hostname: options.host ?? process.env.LUOOME_HOST ?? '127.0.0.1',
@@ -53,14 +56,12 @@ export const startHostedWeb = async (options: {
         if (address !== undefined) addresses.set(request, address);
         return app.fetch(request);
       },
-      idleTimeout: 60,
+      idleTimeout: WEB_SERVER_IDLE_TIMEOUT_SECONDS,
       ...(cert === undefined || key === undefined
         ? {}
         : { tls: { cert: Bun.file(cert), key: Bun.file(key) } }),
     });
-    console.info(
-      `luoome hosted listening on port ${server.port}; providers=${config.providerMode}`,
-    );
+    console.info(`luoome Web listening on port ${server.port}; providers=${config.providerMode}`);
     return {
       port: server.port as number,
       stop: async (closeActiveConnections = false) => {

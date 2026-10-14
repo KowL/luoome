@@ -75,7 +75,7 @@ if ! command -v bun >/dev/null 2>&1; then
     exit 1
   fi
 fi
-exec bun "$SRC_DIR/packages/cli/src/index.ts" "\$@"
+exec bun --no-env-file "$SRC_DIR/packages/cli/src/index.ts" "\$@"
 EOF
 chmod +x "$BIN_DIR/luoome"
 

@@ -88,7 +88,7 @@ if errorlevel 1 (
     exit /b 1
   )
 )
-bun "$CliEntry" %*
+bun --no-env-file "$CliEntry" %*
 "@
 Set-Content -Path $Shim -Value $ShimContent -Encoding ascii
 

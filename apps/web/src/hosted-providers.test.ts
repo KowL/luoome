@@ -1,0 +1,180 @@
+import { afterEach, describe, expect, it } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createInMemoryRepos } from '@luoome/db';
+import { buildContext } from '@luoome/tools';
+import { loadConfiguredHostedProviders, openHostedService } from './hosted-composition.js';
+import { loadHostedConfig } from './hosted-config.js';
+import { createEmailOtpFromEnv, createHostedProviders } from './hosted-providers.js';
+import { createHostedWebApp } from './hosted-server.js';
+
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+const setup = () => {
+  const root = mkdtempSync(join(tmpdir(), 'luoome-providers-'));
+  roots.push(root);
+  const planFile = join(root, 'plan.json');
+  writeFileSync(
+    planFile,
+    JSON.stringify({
+      id: 'operator-preview-v1',
+      code: 'preview',
+      currency: 'CNY',
+      priceMinor: 0,
+      durationMonths: 1,
+      productPolicyVersion: 'hosted-web-v2',
+      publishedAt: '2026-10-14T00:00:00Z',
+      limits: {
+        watchlistStocks: 20,
+        enabledRules: 5,
+        dailyJobs: 5,
+        concurrentJobs: 1,
+        queuedJobs: 5,
+        researchUnits: 10,
+      },
+    }),
+  );
+  const config = loadHostedConfig({
+    HOSTED_ENVIRONMENT: 'production',
+    HOSTED_DATA_ROOT: join(root, 'data'),
+    HOSTED_DELETION_LEDGER_ROOT: join(root, 'ledger'),
+    PUBLIC_ORIGIN: 'https://example.invalid',
+    HOSTED_AUTH_SECRET: 'provider-tests-only-auth-key-32-characters',
+  });
+  const env = {
+    HOSTED_PLAN_FILE: planFile,
+    HOSTED_JOB_BUDGET_MICRO: '1000',
+    LUOOME_MARKET_PROVIDER: 'real',
+  };
+  return { root, config, env };
+};
+
+describe('production Web providers', () => {
+  it('uses built-in live providers without a custom module or fake data', async () => {
+    const { config, env } = setup();
+    const providers = await loadConfiguredHostedProviders(config, env);
+    expect(providers?.market.name).not.toBe('fake-market');
+    expect(providers?.stockSeed).toEqual([]);
+    expect(providers?.payment.configured).toBe(false);
+    expect(providers?.notification.configured).toBe(false);
+    expect(providers?.emailOtp.providerKind).toBe('live');
+    await expect(
+      loadConfiguredHostedProviders(config, { ...env, HOSTED_PROVIDERS_MODULE: 'relative.ts' }),
+    ).rejects.toThrow('absolute');
+  });
+
+  it('requires an explicit plan, budgets and AI configuration without reading local settings', () => {
+    const { config, env } = setup();
+    expect(() => createHostedProviders(config, {})).toThrow('HOSTED_PLAN_FILE');
+    expect(() => createHostedProviders(config, { ...env, HOSTED_JOB_BUDGET_MICRO: '0' })).toThrow(
+      'HOSTED_JOB_BUDGET_MICRO',
+    );
+    expect(() => createHostedProviders(config, { ...env, HOSTED_AI_ENABLED: 'true' })).toThrow(
+      'LUOOME_AI_CONFIG',
+    );
+    expect(() => createHostedProviders({ ...config, registrationEnabled: true }, env)).toThrow(
+      'SMTP',
+    );
+  });
+
+  it('keeps tenant repositories and identity while leaving absent AI explicitly unavailable', async () => {
+    const { config, env } = setup();
+    const providers = createHostedProviders(config, {
+      ...env,
+      LUOOME_FEISHU_WEBHOOK_URL: 'https://example.invalid/private-hook',
+    });
+    const base = buildContext({
+      repos: createInMemoryRepos(),
+      adapters: {
+        market: providers.market,
+        llm: {
+          name: 'unset',
+          generate: async () => {
+            throw new Error('unset');
+          },
+        },
+      },
+    });
+    if (!providers.createTenantContext) throw new Error('tenant context factory missing');
+    const bound = providers.createTenantContext(base);
+    expect(bound.repos).toBe(base.repos);
+    expect(bound.identity).toBe(base.identity);
+    expect(bound.adapters.stockUniverse).toBeDefined();
+    expect(bound.agent).toBeUndefined();
+    expect(bound.adapters.llm.name).toBe('ai-unconfigured');
+    expect(bound.researchVault).toBeUndefined();
+  });
+
+  it('can serve a closed deployment but reports login unready and denies business APIs without SMTP', async () => {
+    const { config, env } = setup();
+    const providers = createHostedProviders(config, env);
+    expect(() => openHostedService({ ...config, registrationEnabled: true }, providers)).toThrow(
+      'email OTP',
+    );
+    const service = openHostedService(config, providers);
+    try {
+      const app = createHostedWebApp({
+        config,
+        repos: service.repos,
+        runtimes: service.runtimes,
+        maintenance: service.maintenance,
+        emailOtp: providers.emailOtp,
+        market: providers.market,
+        jobPolicies: providers.jobPolicies,
+      });
+      expect((await app.request('https://example.invalid/health/live')).status).toBe(200);
+      const ready = await app.request('https://example.invalid/health/ready');
+      expect(ready.status).toBe(503);
+      expect(await ready.json()).toMatchObject({
+        ok: false,
+        error: { required: 'service:email-unconfigured' },
+      });
+      expect((await app.request('https://example.invalid/api/accounts')).status).toBe(401);
+    } finally {
+      service.close();
+    }
+  });
+});
+
+describe('SMTP environment boundary', () => {
+  it('keeps email unavailable until configured and rejects incomplete or ambiguous settings', () => {
+    expect(createEmailOtpFromEnv({}).configured).toBe(false);
+    expect(() => createEmailOtpFromEnv({ SMTP_FROM: 'login@example.invalid' })).toThrow(
+      'SMTP_HOST',
+    );
+    expect(() =>
+      createEmailOtpFromEnv({ SMTP_HOST: 'smtp.example.invalid', SMTP_USER: 'user' }),
+    ).toThrow('both');
+    expect(() =>
+      createEmailOtpFromEnv({
+        SMTP_HOST: 'smtp.example.invalid',
+        SMTP_PASSWORD: 'private',
+        SMTP_PASSWORD_FILE: '/absent',
+      }),
+    ).toThrow('only one');
+  });
+  it('loads a bounded password file and configures encrypted SMTP without sending mail', () => {
+    const { root } = setup();
+    const passwordFile = join(root, 'smtp-password');
+    writeFileSync(passwordFile, 'test-password\n', { mode: 0o600 });
+    expect(
+      createEmailOtpFromEnv({
+        SMTP_HOST: 'smtp.example.invalid',
+        SMTP_PORT: '587',
+        SMTP_FROM: 'login@example.invalid',
+        SMTP_USER: 'user',
+        SMTP_PASSWORD_FILE: passwordFile,
+      }).configured,
+    ).toBe(true);
+    writeFileSync(passwordFile, 'x'.repeat(4097));
+    expect(() =>
+      createEmailOtpFromEnv({
+        SMTP_HOST: 'smtp.example.invalid',
+        SMTP_PASSWORD_FILE: passwordFile,
+      }),
+    ).toThrow('invalid service configuration');
+  });
+});
