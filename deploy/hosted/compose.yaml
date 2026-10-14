@@ -66,7 +66,7 @@ services:
   caddy:
     image: ${CADDY_IMAGE:?set a reviewed Caddy image tag or digest}
     restart: unless-stopped
-    ports: ["443:443"]
+    ports: ["80:80", "443:443"]
     environment:
       HOSTED_DOMAIN: ${HOSTED_DOMAIN:?set the public hostname}
     volumes:

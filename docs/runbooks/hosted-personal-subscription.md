@@ -83,7 +83,8 @@ HOSTED_DELETION_LEDGER_ROOT/      不随业务备份回退的删除 tombstone
 `operator/plan.json`、`secrets/hosted-auth-key` 与 `secrets/smtp-password` 由部署管理提供，均不进入 Git。
 SMTP 尚未配置时提供空密码文件并保持 `SMTP_HOST` 为空。AI 如需开启，应额外挂载只读模型文件、
 设置 `LUOOME_AI_CONFIG` 并注入相应供应商密钥；仅修改开关不会自动发现个人配置。
-镜像进程为 UID/GID 1000，根文件系统只读、移除 Linux capabilities，只有 Caddy 发布 443。
+应用进程为 UID/GID 1000，根文件系统只读、移除 Linux capabilities，只有 Caddy 发布 80/443。
+80 端口用于 ACME HTTP 校验与 HTTPS 跳转，业务请求通过 443 反向代理；应用 5173 不对外发布。
 真实 provider 的凭证应由其部署 secret 管理读取，不能写在 providers 源码或浏览器设置里。
 
 ```sh
