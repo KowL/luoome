@@ -23,6 +23,7 @@ import { getTableColumns, getTableName, sql } from 'drizzle-orm';
 import {
   createDrizzlePlatformRepos,
   ensurePlatformSchema,
+  PLATFORM_SCHEMA_VERSION,
   type PlatformReposHandle,
 } from './platform-client.js';
 import { createInMemoryPlatformRepos } from './platform-memory.js';
@@ -355,6 +356,319 @@ for (const mode of ['memory', 'drizzle'] as const) {
       for (const handle of handles.splice(0)) handle.close();
     });
 
+    const llmPricing = {
+      version: 'fixture-peak-v1',
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+      currency: 'CNY' as const,
+      inputMicroPerMillion: 2_000_000,
+      cachedInputMicroPerMillion: 40_000,
+      outputMicroPerMillion: 8_000_000,
+    };
+    const llmReservation = (tenant: Tenant, operationId = 'llm-op') => ({
+      operationId,
+      tenantId: tenant.id,
+      generation: tenant.generation,
+      owner: 'fixture-owner',
+      leaseUntil: minute(2),
+      inputHash: 'a'.repeat(64),
+      pricing: llmPricing,
+      budgetMicro: 10_000,
+      periodBudgetMicro: 100_000,
+      now: NOW,
+    });
+    it('DS-7 跨服务期/跨日重试保留原预占，unknown 不重发或释放，结算不重复扣额', async () => {
+      const repos = setup();
+      const { tenant } = await activeTenant(repos, 'llm', 10, minute(1));
+      const input = llmReservation(tenant);
+      const [first, replay] = await Promise.all([
+        repos.llm.reserve(input),
+        repos.llm.reserve(input),
+      ]);
+      expect(first.periodId).toBe('period:llm');
+      expect(replay.id).toBe(first.id);
+      const attempt = await repos.llm.begin({
+        owner: 'fixture-owner',
+        operationId: input.operationId,
+        id: 'llm-attempt-1',
+        requestHash: 'b'.repeat(64),
+        reservedCostMicro: 9000,
+        pricing: llmPricing,
+        now: NOW,
+      });
+      expect(attempt.usageState).toBe('unknown');
+      expect(attempt.confirmedCostMicro).toBeNull();
+      await expect(
+        repos.llm.settle({
+          operationId: input.operationId,
+          capture: false,
+          now: NOW,
+          executionStopped: true,
+        }),
+      ).rejects.toThrow('usage_unknown');
+      await expect(
+        repos.llm.begin({
+          owner: 'fixture-owner',
+          operationId: input.operationId,
+          id: 'llm-attempt-2',
+          requestHash: 'b'.repeat(64),
+          reservedCostMicro: 9000,
+          pricing: llmPricing,
+          now: NOW,
+        }),
+      ).rejects.toThrow('usage_unknown');
+      const order = await purchase(repos, tenant, 'llm-renewal');
+      await repos.payments.applyVerifiedPaymentEvent({
+        event: paidEvent(order, 'llm-renewal'),
+        periodId: 'paid:llm-renewal',
+        now: NOW,
+      });
+      const tomorrow = minute(24 * 60);
+      expect(
+        await repos.llm.execution({
+          operationId: input.operationId,
+          owner: 'fixture-owner',
+          action: 'acquire',
+          now: tomorrow,
+          leaseUntil: new Date(tomorrow.getTime() + 120_000),
+        }),
+      ).toBe(true);
+      expect(
+        (
+          await repos.llm.reserve({
+            ...input,
+            now: tomorrow,
+            leaseUntil: new Date(tomorrow.getTime() + 120_000),
+          })
+        ).periodId,
+      ).toBe(first.periodId);
+      const confirmed = await repos.llm.complete({
+        operationId: input.operationId,
+        id: attempt.id,
+        tokens: { input: 1000, cachedInput: 200, output: 500 },
+        receiptId: 'provider-fixture-receipt',
+        now: tomorrow,
+      });
+      expect(confirmed.confirmedCostMicro).toBe(5608);
+      await Promise.all([
+        repos.llm.settle({
+          operationId: input.operationId,
+          capture: true,
+          now: tomorrow,
+          executionStopped: true,
+        }),
+        repos.llm.settle({
+          operationId: input.operationId,
+          capture: true,
+          now: tomorrow,
+          executionStopped: true,
+        }),
+      ]);
+      const entries = await repos.jobs.listUsage({ tenantId: tenant.id });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ periodId: first.periodId, delta: 1 });
+      expect(
+        (await repos.subscriptions.currentEntitlement({ tenantId: tenant.id, now: tomorrow }))
+          ?.capturedUnits,
+      ).toBe(0);
+    });
+    it('DS-7 control lease fencing 拒绝旧执行者结算与续租，过期可接管且不重复扣额', async () => {
+      const repos = setup();
+      const { tenant } = await activeTenant(repos, 'llm-fencing');
+      const input = llmReservation(tenant);
+      await repos.llm.reserve(input);
+      expect(
+        await repos.llm.execution({
+          operationId: input.operationId,
+          owner: 'successor',
+          action: 'acquire',
+          now: NOW,
+          leaseUntil: minute(4),
+        }),
+      ).toBe(false);
+      expect(
+        await repos.llm.execution({
+          operationId: input.operationId,
+          owner: 'successor',
+          action: 'acquire',
+          now: minute(3),
+          leaseUntil: minute(5),
+        }),
+      ).toBe(true);
+      expect(
+        await repos.llm.execution({
+          operationId: input.operationId,
+          owner: input.owner,
+          action: 'renew',
+          now: minute(3),
+          leaseUntil: minute(5),
+        }),
+      ).toBe(false);
+      await expect(
+        repos.llm.settle({
+          operationId: input.operationId,
+          owner: input.owner,
+          capture: false,
+          now: minute(3),
+        }),
+      ).rejects.toThrow('lease_lost');
+      await expect(
+        repos.llm.begin({
+          operationId: input.operationId,
+          owner: input.owner,
+          id: 'stale-http',
+          requestHash: 'b'.repeat(64),
+          reservedCostMicro: 100,
+          pricing: llmPricing,
+          now: minute(3),
+        }),
+      ).rejects.toThrow('lease_lost');
+      expect((await repos.llm.find(input.operationId))?.state).toBe('held');
+      await repos.llm.settle({
+        operationId: input.operationId,
+        owner: 'successor',
+        capture: true,
+        now: minute(3),
+      });
+      await repos.llm.settle({
+        operationId: input.operationId,
+        owner: 'successor',
+        capture: true,
+        now: minute(3),
+      });
+      expect(await repos.jobs.listUsage({ tenantId: tenant.id })).toHaveLength(1);
+    });
+    it('DS-7 总预算阻止并发穿透，失败释放额度但保留已发生成本，释放幂等', async () => {
+      const repos = setup();
+      const { tenant } = await activeTenant(repos, 'budget');
+      const first = { ...llmReservation(tenant), periodBudgetMicro: 10_000 };
+      await repos.llm.reserve(first);
+      await expect(repos.llm.reserve({ ...first, operationId: 'another' })).rejects.toThrow(
+        'budget_exhausted',
+      );
+      await repos.llm.begin({
+        owner: 'fixture-owner',
+        operationId: first.operationId,
+        id: 'budget-attempt',
+        requestHash: 'b'.repeat(64),
+        reservedCostMicro: 9000,
+        pricing: llmPricing,
+        now: NOW,
+      });
+      await repos.llm.complete({
+        operationId: first.operationId,
+        id: 'budget-attempt',
+        tokens: { input: 1000, cachedInput: 200, output: 500 },
+        receiptId: 'budget-receipt',
+        now: NOW,
+      });
+      await repos.llm.settle({
+        operationId: first.operationId,
+        capture: false,
+        now: NOW,
+        executionStopped: true,
+      });
+      await repos.llm.settle({
+        operationId: first.operationId,
+        capture: true,
+        now: NOW,
+        executionStopped: true,
+      });
+      expect(await repos.jobs.listUsage({ tenantId: tenant.id })).toHaveLength(0);
+      await expect(repos.llm.reserve({ ...first, operationId: 'another' })).rejects.toThrow(
+        'budget_exhausted',
+      );
+      expect(
+        (await repos.llm.reserve({ ...first, operationId: 'another', periodBudgetMicro: 20_000 }))
+          .state,
+      ).toBe('held');
+      expect((await repos.llm.costs())[0]?.confirmedMicro).toBe(5608);
+    });
+    it('DS-7 成本按租户归属，确认 token/单价不可覆盖，unknown 成本独立呈现', async () => {
+      const repos = setup();
+      const a = await activeTenant(repos, 'cost-a');
+      const b = await activeTenant(repos, 'cost-b');
+      await repos.llm.reserve(llmReservation(a.tenant, 'cost-a'));
+      await repos.llm.reserve(llmReservation(b.tenant, 'cost-b'));
+      for (const operationId of ['cost-a', 'cost-b'])
+        await repos.llm.begin({
+          owner: 'fixture-owner',
+          operationId,
+          id: operationId,
+          requestHash: 'b'.repeat(64),
+          reservedCostMicro: 9000,
+          pricing: llmPricing,
+          now: NOW,
+        });
+      const tokens = { input: 1000, cachedInput: 200, output: 500 };
+      await repos.llm.complete({
+        operationId: 'cost-a',
+        id: 'cost-a',
+        tokens,
+        receiptId: 'receipt-a',
+        now: NOW,
+      });
+      await expect(
+        repos.llm.complete({
+          operationId: 'cost-a',
+          id: 'cost-a',
+          tokens: { ...tokens, output: 0 },
+          receiptId: 'receipt-a',
+          now: NOW,
+        }),
+      ).rejects.toThrow('immutable');
+      await expect(repos.llm.reserve(llmReservation(b.tenant, 'cost-a'))).rejects.toThrow(
+        'identity',
+      );
+      expect(await repos.llm.costs()).toEqual([
+        expect.objectContaining({
+          tenantId: a.tenant.id,
+          confirmedMicro: 5608,
+          unknownAttempts: 0,
+          inputTokens: 1000,
+          cachedInputTokens: 200,
+          outputTokens: 500,
+        }),
+        expect.objectContaining({
+          tenantId: b.tenant.id,
+          confirmedMicro: 0,
+          unknownAttempts: 1,
+          reservedMicro: 9000,
+        }),
+      ]);
+      expect(await repos.llm.costs({ since: minute(1) })).toEqual([]);
+    });
+    it('DS-7 额度耗尽/暂停阻断新调用，已发生的成本仍可核对结算', async () => {
+      const repos = setup();
+      const { tenant } = await activeTenant(repos, 'quota', 1);
+      await repos.llm.reserve(llmReservation(tenant, 'one'));
+      await expect(repos.llm.reserve(llmReservation(tenant, 'two'))).rejects.toThrow(
+        'quota_exhausted',
+      );
+      await repos.tenants.suspend({ id: tenant.id, generation: tenant.generation, now: NOW });
+      await expect(
+        repos.llm.begin({
+          owner: 'fixture-owner',
+          operationId: 'one',
+          id: 'blocked',
+          requestHash: 'b'.repeat(64),
+          reservedCostMicro: 100,
+          pricing: llmPricing,
+          now: NOW,
+        }),
+      ).rejects.toThrow('operation_closed');
+      expect(
+        (
+          await repos.llm.settle({
+            operationId: 'one',
+            capture: false,
+            now: NOW,
+            executionStopped: true,
+          })
+        ).state,
+      ).toBe('released');
+    });
+
     it('consumes one challenge once and atomically creates one tenant, provisioning job, and session', async () => {
       const repos = setup();
       await repos.auth.createChallenge({ challenge: challenge('a'), now: NOW, limits });
@@ -366,6 +680,92 @@ for (const mode of ['memory', 'drizzle'] as const) {
       expect(await repos.tenants.list()).toHaveLength(1);
       expect(await repos.jobs.list({ states: ['queued'] })).toHaveLength(1);
       expect((await repos.auth.findChallenge('challenge:a'))?.consumedAt).toEqual(NOW);
+    });
+
+    it('atomically installs a password, prevents OTP overwrite, and fences password login against a concurrent change', async () => {
+      const repos = setup();
+      const passwordHash = `scrypt-v1$${'A'.repeat(22)}$${'B'.repeat(43)}`;
+      const nextHash = `scrypt-v1$${'C'.repeat(22)}$${'D'.repeat(43)}`;
+      await repos.auth.createChallenge({ challenge: challenge('password'), now: NOW, limits });
+      const registered = await repos.auth.consumeChallengeAndCreateSession({
+        ...consume('password'),
+        passwordHash,
+      });
+      if (!registered.authenticated) throw new Error('registration failed');
+      expect(await repos.auth.findPasswordByUserId(registered.user.id)).toEqual({
+        id: registered.user.id,
+        passwordHash,
+        updatedAt: NOW,
+      });
+      const login = await repos.auth.createPasswordSession({
+        userId: registered.user.id,
+        expectedPasswordHash: passwordHash,
+        now: NOW,
+        session: session('password-login'),
+      });
+      expect(login?.user.id).toBe(registered.user.id);
+      await repos.auth.createChallenge({
+        challenge: challenge('overwrite', minute(1), registered.user.email as string),
+        now: minute(1),
+        limits,
+      });
+      expect(
+        await repos.auth.consumeChallengeAndCreateSession({
+          ...consume('overwrite', minute(1)),
+          passwordHash: nextHash,
+        }),
+      ).toEqual({ authenticated: false });
+      expect(
+        await repos.auth.changePassword({
+          userId: registered.user.id,
+          sessionId: registered.session.id,
+          expectedPasswordHash: passwordHash,
+          passwordHash: nextHash,
+          now: minute(1),
+        }),
+      ).toBe(true);
+      expect(
+        await repos.auth.createPasswordSession({
+          userId: registered.user.id,
+          expectedPasswordHash: passwordHash,
+          now: minute(1),
+          session: session('stale', minute(1)),
+        }),
+      ).toBeNull();
+      expect(
+        await repos.auth.resolveSession({
+          tokenHash: login?.session.tokenHash as string,
+          now: minute(1),
+        }),
+      ).toBeNull();
+      expect((await repos.auth.findPasswordByUserId(registered.user.id))?.passwordHash).toBe(
+        nextHash,
+      );
+      const deleting = await repos.tenants.beginDeletion({
+        id: registered.tenant.id,
+        generation: 1,
+        now: minute(1),
+      });
+      await repos.tenants.completeDeletion({
+        id: registered.tenant.id,
+        generation: deleting.generation,
+        now: minute(1),
+      });
+      expect(await repos.auth.findPasswordByUserId(registered.user.id)).toBeNull();
+    });
+
+    it('bounds password attempts atomically and releases the budget after fifteen minutes', async () => {
+      const repos = setup();
+      const input = { emailHash: 'email-key-hash', ipHash: 'ip-key-hash', now: NOW };
+      const attempts = await Promise.all(
+        Array.from({ length: 11 }, (_, index) =>
+          repos.auth.reservePasswordAttempt({ ...input, id: `attempt-${index}` }),
+        ),
+      );
+      expect(attempts.filter(Boolean)).toHaveLength(10);
+      expect(
+        await repos.auth.reservePasswordAttempt({ ...input, id: 'later', now: minute(15) }),
+      ).toBe(true);
     });
 
     it('limits verification to five total attempts and rejects expired or failed-delivery challenges', async () => {
@@ -1707,7 +2107,7 @@ describe('platform SQLite lifecycle', () => {
         handle.db.all<{ version: number }>(
           sql`SELECT version FROM hosted_schema_versions WHERE id = 1`,
         )[0]?.version,
-      ).toBe(1);
+      ).toBe(PLATFORM_SCHEMA_VERSION);
     } finally {
       handle.close();
     }

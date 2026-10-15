@@ -1,7 +1,7 @@
 import { assertReportInvariants, ReportSchema, reportScopeKey } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errInvalidInput } from '../define-tool.js';
+import { defineTool, errInvalidInput, errLeaseLostBeforeCommit } from '../define-tool.js';
 
 export const SaveReportInput = z.object({
   report: ReportSchema,
@@ -31,9 +31,20 @@ export const saveReportTool = defineTool({
     });
     if (input.report.kind === 'closing' && (input.report.version ?? 1) > 1 && existing === null)
       return errInvalidInput('收盘复盘只生成一份，不再追加补充版');
-    const report = await ctx.repos.report.upsertForPeriod(input.report);
+    const report =
+      ctx.reportExecutionOwner === undefined
+        ? await ctx.repos.report.upsertForPeriod(input.report)
+        : await ctx.repos.reportAutomation.commit(
+            input.report,
+            ctx.reportExecutionOwner,
+            ctx.clock(),
+          );
+    if (report === null) return errLeaseLostBeforeCommit('报告生成租约已失效');
     const created = existing === null && report.id === input.report.id;
     if (input.deliveryAttemptId === undefined) return { report, created };
+    // 托管开收盘报告只能由 worker 的 DeliveryIntent 领取，避免手工入口并行走旧投递锁。
+    if (ctx.identity?.mode === 'hosted' && ['opening', 'closing'].includes(report.kind))
+      return { report, created, deliveryClaimed: false };
     const now = ctx.clock();
     const deliveryClaimed = await ctx.repos.report.claimDelivery({
       id: report.id,

@@ -10045,6 +10045,16 @@ body.auth-pending > :not(#hosted-auth):not(.bg-layer) { display: none !important
 #hosted-notifications .field { display: inline-flex; flex-direction: column; gap: 6px; margin: 0 16px 16px 0; }
 .hosted-account-form { margin-bottom: 24px; }
 
+.hosted-admin-user { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.hosted-admin-user-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.hosted-admin-user-head p { margin: 4px 0; }
+.hosted-admin-user-head .hosted-actions { margin: 0; }
+.hosted-admin-detail { margin-top: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.hosted-admin-detail h4 { margin: 20px 0 8px; }
+.hosted-admin-detail p { margin: 6px 0; }
+.hosted-admin-payment select, .hosted-admin-payment input { width: 100%; max-width: 420px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); margin: 6px 0; }
+.hosted-admin-payment .field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+
 #modal-body .status { position: static; max-width: none; margin: 12px 0; }
 #modal-body .status:empty { display: none; }
 body.auth-pending { font-size: 0; }

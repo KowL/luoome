@@ -1,4 +1,4 @@
-import { callApi, getHostedSession } from './api.js';
+import { callApi, getHostedSession, randomRequestId } from './api.js';
 
 const node = (tag, text, className) => {
   const result = document.createElement(tag);
@@ -36,6 +36,78 @@ const button = (text, action, setStatus) => {
   return element;
 };
 
+export const createHostedPasswordForm = ({ initial = false, onChanged }) => {
+  const form = node('form', undefined, 'hosted-account-form');
+  form.id = 'hosted-password-form';
+  form.append(node('h3', initial ? '设置登录密码' : '修改登录密码'));
+  const passwordInput = (id, text, autocomplete, minimum) => {
+    const label = node('label', text, 'field');
+    label.htmlFor = id;
+    const input = node('input');
+    input.id = id;
+    input.type = 'password';
+    input.autocomplete = autocomplete;
+    input.minLength = minimum;
+    input.maxLength = 128;
+    input.required = true;
+    label.append(input);
+    form.append(label);
+    return input;
+  };
+  const current = initial
+    ? null
+    : passwordInput('hosted-current-password', '当前密码', 'current-password', 1);
+  const next = passwordInput('hosted-new-password', '新密码（8～128 位）', 'new-password', 8);
+  const confirm = passwordInput('hosted-password-confirm', '确认新密码', 'new-password', 8);
+  const submit = node('button', initial ? '设置密码' : '修改密码', 'btn btn-primary btn-sm');
+  submit.type = 'submit';
+  const status = node('p', undefined, 'muted');
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  form.append(
+    node('p', '保存后所有旧会话将退出，请使用邮箱账号和新密码重新登录。', 'muted'),
+    submit,
+    status,
+  );
+  let saving = false;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (saving || !form.reportValidity()) return;
+    if (next.value !== confirm.value) {
+      status.textContent = '两次输入的密码不一致。';
+      return;
+    }
+    saving = true;
+    submit.disabled = true;
+    status.textContent = '正在保存…';
+    const result = await callApi('/api/me/password', {
+      method: 'POST',
+      body: JSON.stringify({
+        newPassword: next.value,
+        ...(current ? { currentPassword: current.value } : {}),
+      }),
+    });
+    saving = false;
+    submit.disabled = false;
+    if (!result.ok) {
+      status.textContent =
+        result.error?.required === 'auth:recent-email-verification'
+          ? '邮箱验证已过期，请退出后通过“首次设置密码”重新验证邮箱。'
+          : result.error?.required === 'auth:password-rate-limit'
+            ? '尝试过于频繁，请 15 分钟后重试。'
+            : result.error?.required === 'auth:valid-credentials'
+              ? '当前密码不正确，或密码已被修改，请重新登录后再试。'
+              : '保存失败，请稍后重试。';
+      return;
+    }
+    form.reset();
+    submit.disabled = true;
+    status.textContent = '密码已保存，请重新登录。';
+    await onChanged();
+  });
+  return form;
+};
+
 export const renderHostedSubscription = async (setStatus) => {
   const box = document.getElementById('hosted-subscription');
   if (!box) return;
@@ -68,7 +140,7 @@ export const renderHostedSubscription = async (setStatus) => {
           ? '创建模拟续费订单'
           : `购买 ${plan.durationMonths} 个月 · ${amount(plan.priceMinor, plan.currency)}`,
         async () => {
-          requestId ??= crypto.randomUUID();
+          requestId ??= randomRequestId();
           const result = await post('/api/subscription/orders', {
             planVersionId: plan.id,
             requestId,

@@ -15,7 +15,7 @@ import {
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool, errNotFound } from '../define-tool.js';
+import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
 import { collectStrategyObservationEvidence } from '../internal/strategy-observation-evidence.js';
 import { readStrategyRunTimeline } from '../internal/strategy-run-timeline.js';
 
@@ -88,6 +88,7 @@ export const StrategyInsightFactsSchema = z.object({
     to: z.coerce.date(),
   }),
   factsAsOf: z.coerce.date(),
+  dataAsOf: z.coerce.date().optional(),
   observationAsOf: z.coerce.date().optional(),
   runs: z.object({
     total: z.number().int().nonnegative(),
@@ -570,6 +571,7 @@ export const collectStrategyInsightFacts = async (
     strategy: { id: strategy.id, name: strategy.name },
     window: { days: actualWindowDays, from, to },
     factsAsOf: now,
+    ...(currentRun === undefined ? {} : { dataAsOf: currentRun.dataAsOf }),
     ...(observationAsOf === undefined ? {} : { observationAsOf }),
     runs: {
       total: allRuns.length,
@@ -648,7 +650,9 @@ export const StrategyInsightNarrativeSchema = z.object({
   disclaimer: z.string().min(1).max(300),
 });
 
-export const GenerateStrategyInsightInput = GetStrategyInsightFactsInput;
+export const GenerateStrategyInsightInput = GetStrategyInsightFactsInput.safeExtend({
+  runId: z.string().min(1).optional(),
+});
 export const GenerateStrategyInsightOutput = z.object({
   facts: StrategyInsightFactsSchema,
   insight: StrategyInsightNarrativeSchema,
@@ -697,6 +701,8 @@ export const generateStrategyInsightTool = defineTool({
         : { evaluationSessionId: input.evaluationSessionId }),
     });
     if (facts === null) return errNotFound('Strategy', input.strategyId);
+    if (input.runId !== undefined && input.runId !== facts.currentSelection.runId)
+      return errInvalidInput('洞察运行身份与当前已发布结果不一致');
     const allowed = new Set(facts.facts.map((fact) => fact.id));
     let lastError = 'AI 洞察生成失败';
     for (let attempt = 0; attempt < 2; attempt += 1) {

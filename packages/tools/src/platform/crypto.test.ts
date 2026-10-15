@@ -3,17 +3,28 @@ import {
   createAuthChallengeDigest,
   deriveCsrfToken,
   hashCsrfToken,
+  hashLoginPassword,
   hashSessionToken,
   randomAuthId,
   randomOtpCode,
   randomSessionToken,
   requireAuthSecret,
   verifyCsrfToken,
+  verifyLoginPassword,
 } from './crypto.js';
 
 const secret = 'fixture-authentication-secret-32-bytes-minimum';
 
 describe('hosted authentication cryptography', () => {
+  it('salts password hashes independently and distinguishes passwords including whitespace', async () => {
+    const password = ' fixture-password ';
+    const first = await hashLoginPassword(password);
+    const second = await hashLoginPassword(password);
+    expect(first).not.toBe(second);
+    expect(first).not.toContain(password);
+    expect(await verifyLoginPassword(password, first)).toBe(true);
+    expect(await verifyLoginPassword(password.trim(), first)).toBe(false);
+  });
   it('uses 256-bit opaque identities and sessions and exactly six OTP digits', () => {
     expect(Buffer.from(randomAuthId(), 'base64url').length).toBe(32);
     expect(Buffer.from(randomSessionToken(), 'base64url').length).toBe(32);

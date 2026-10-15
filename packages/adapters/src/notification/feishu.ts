@@ -148,11 +148,13 @@ export class FeishuWebhookAdapter {
     try {
       json = await res.json();
     } catch {
-      // 200 但非 JSON — 仍视为成功（飞书偶发行为）
-      this.logger?.info('feishu webhook sent', { status: res.status });
-      return { ok: true, statusCode: res.status };
+      throw new FeishuAdapterError('feishu acknowledgement is unverifiable', undefined, true);
     }
-    const statusCode = (json as { StatusCode?: unknown })?.StatusCode;
+    const statusCode =
+      (json as { StatusCode?: unknown; code?: unknown })?.StatusCode ??
+      (json as { code?: unknown })?.code;
+    if (typeof statusCode !== 'number')
+      throw new FeishuAdapterError('feishu acknowledgement is unverifiable', undefined, true);
     if (typeof statusCode === 'number' && statusCode !== 0) {
       const msg = (json as { msg?: unknown })?.msg ?? 'unknown';
       this.logger?.error('feishu webhook business error', { statusCode, msg });

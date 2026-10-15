@@ -1,5 +1,6 @@
+import { money, stockCode } from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { intradayWatchWorkflow } from './intraday-watch.js';
 
@@ -16,6 +17,76 @@ describe('intraday-watch workflow', () => {
     expect(r.data.evaluatedStocks).toBe(0);
     expect(r.data.notified).toBe(0);
     expect(r.data.suppressedByCooldown).toBe(0);
+    expect(r.data.quoteBatches).toBe(0);
+    expect(r.data.unavailableQuoteStocks).toBe(0);
+  });
+
+  it('按一轮跨计划去重标的每 100 只计一批，陈旧/缺失行情只增加 unknown', async () => {
+    const now = new Date('2026-10-15T02:00:00Z');
+    const ctx = await buildTestContext({ clock: () => now });
+    await ctx.repos.watchlist.save({
+      id: 'batch-watchlist',
+      name: 'batch',
+      kind: 'personal',
+      membershipPolicy: 'manual',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const ids = Array.from({ length: 101 }, (_, i) => `${String(600000 + i)}.SH`);
+    for (const id of ids) {
+      await ctx.repos.stock.save({ id, code: stockCode(id.slice(0, 6)), exchange: 'SH', name: id });
+      await ctx.repos.watchlistMember.saveMember({
+        id: `batch-watchlist:${id}`,
+        watchlistId: 'batch-watchlist',
+        stockId: id,
+        stage: 'watching',
+        priority: 'normal',
+        firstAddedAt: now,
+        lastActivityAt: now,
+      });
+    }
+    for (const id of ['one', 'two'])
+      await ctx.repos.alertPlan.save({
+        id,
+        name: id,
+        watchlistId: 'batch-watchlist',
+        rules: [{ id: 'price', kind: 'price-level', level: 1, side: 'above' }],
+        cooldownMinutes: 30,
+        logic: 'ANY',
+        triggerMode: 'on-enter',
+        dailyNotificationLimit: 20,
+        notifyOnRecovery: false,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    const observedAt = new Date(now.getTime() - 600_000);
+    await ctx.repos.quote.save({
+      stockId: ids[0] as string,
+      source: 'fixture',
+      observedAt,
+      fetchedAt: observedAt,
+      ts: observedAt,
+      timestampSource: 'upstream',
+      open: money(10),
+      high: money(10),
+      low: money(10),
+      close: money(10),
+      volume: 100,
+    });
+    const batch = vi.spyOn(ctx.adapters.market, 'batchQuote').mockResolvedValue(new Map());
+    vi.spyOn(ctx.adapters.market, 'fetchDailyBars').mockResolvedValue([]);
+    const result = await intradayWatchWorkflow.run({ notify: false }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.evaluatedPlans).toBe(2);
+    expect(result.data.evaluatedStocks).toBe(101);
+    expect(result.data.quoteBatches).toBe(2);
+    expect(result.data.unavailableQuoteStocks).toBe(101);
+    expect(result.data.unknownRules).toBe(202);
+    expect(result.data.triggers).toEqual([]);
+    expect(batch.mock.calls.map(([stocks]) => stocks.length)).toEqual([6, 100, 1]);
   });
 
   it('启用的 AlertPlan 引用停用 Watchlist 时不评估其旧成员', async () => {

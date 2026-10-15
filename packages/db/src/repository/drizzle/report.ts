@@ -17,7 +17,7 @@ import { reports, type Schema, trades } from '../../schema/index.js';
 
 type ReportRow = typeof reports.$inferSelect;
 
-const toReport = (row: ReportRow): Report => {
+export const toReport = (row: ReportRow): Report => {
   const report = ReportSchema.parse({
     id: row.id,
     version: row.version,
@@ -49,7 +49,7 @@ const toReport = (row: ReportRow): Report => {
   return report;
 };
 
-const toRow = (report: Report): typeof reports.$inferInsert => ({
+export const toRow = (report: Report): typeof reports.$inferInsert => ({
   id: report.id,
   version: report.version ?? 1,
   supersedesReportId: report.supersedesReportId ?? null,
@@ -102,6 +102,7 @@ export class DrizzleReportRepository implements ReportRepository {
       reports.version,
     ];
     if (
+      parsed.kind === 'opening' ||
       parsed.kind === 'closing' ||
       parsed.kind === 'weekly' ||
       parsed.kind === 'watchlist-facts'

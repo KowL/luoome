@@ -13,7 +13,6 @@ import type {
   StockSearchCandidate,
 } from '@luoome/core';
 import { QuoteSchema } from '@luoome/core';
-
 import {
   type AnyBinding,
   type SourceBinding,
@@ -21,6 +20,7 @@ import {
   SourceRegistry,
   type SourceResultObservation,
 } from '../source-registry.js';
+import type { MarketRequestCoordinator } from './request-coordinator.js';
 
 export const quoteMatchesStock = (actual: string, requested: string): boolean => {
   const actualId = actual.trim().toUpperCase();
@@ -73,7 +73,10 @@ export type MarketCapability =
   | 'minute-bars';
 
 export type MarketCapabilityMap = {
-  readonly quote: { readonly request: { readonly stockId: string }; readonly result: Quote };
+  readonly quote: {
+    readonly request: { readonly stockId: string; readonly requireDetails?: boolean };
+    readonly result: Quote;
+  };
   /**
    * 原生批量快照（C2）：request 是一组 stockId，result 是不占位的 Quote 数组
    * （缺漏标的不出现在结果中）。只有 HTTP API 真实支持多代码单请求的源才绑定。
@@ -137,7 +140,11 @@ export type MarketSourceStatus = Omit<SourceStatus, 'dataset' | 'coverage'> & {
 export class MarketSourceRegistry {
   private readonly registry: SourceRegistry<MarketCapabilityMap>;
 
-  constructor(bindings: readonly AnyMarketCapabilityBinding[], clock: () => Date) {
+  constructor(
+    bindings: readonly AnyMarketCapabilityBinding[],
+    clock: () => Date,
+    private readonly coordinator?: MarketRequestCoordinator,
+  ) {
     this.registry = new SourceRegistry(bindings, clock);
   }
 
@@ -145,7 +152,14 @@ export class MarketSourceRegistry {
     capability: C,
     constraint?: { readonly coverage?: MarketCoverage },
   ): readonly MarketCapabilityHandle<C>[] {
-    const handles = this.registry.sources(capability);
+    const handles = this.registry.sources(capability).map((handle) => ({
+      ...handle,
+      // 缓存命中和合并等待不进入 execute 观测包装，不能冒充一次上游成功。
+      execute: (input: MarketCapabilityMap[C]['request']) =>
+        this.coordinator === undefined
+          ? handle.execute(input)
+          : this.coordinator.execute(handle, input),
+    }));
     if (constraint?.coverage === undefined) return handles;
     const coverage = constraint.coverage;
     return handles.filter((handle) => handle.coverage.includes(coverage));

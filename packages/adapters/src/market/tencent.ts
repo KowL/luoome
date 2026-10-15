@@ -687,7 +687,7 @@ export class TencentAdapter {
       // utf-8 解码无损，反转义由 parseTencentSearchHint 负责。
       return new TextDecoder(encoding as never).decode(buf);
     } catch (error) {
-      if (error instanceof TencentAdapterError) throw error;
+      if (error instanceof SourceExecutionError) throw error;
       throw new TencentAdapterError(
         isAbortError(error) ? 'timeout' : 'network',
         `fetch 失败: ${error instanceof Error ? error.message : String(error)}`,
@@ -719,7 +719,7 @@ export class TencentAdapter {
         );
       }
     } catch (error) {
-      if (error instanceof TencentAdapterError) throw error;
+      if (error instanceof SourceExecutionError) throw error;
       throw new TencentAdapterError(
         isAbortError(error) ? 'timeout' : 'network',
         `fetch 失败: ${error instanceof Error ? error.message : String(error)}`,

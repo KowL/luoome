@@ -74,6 +74,12 @@ import {
   toolRegistry,
 } from '@luoome/tools';
 import {
+  getHostedWatchSettingsTool,
+  listHostedWatchDeliveriesTool,
+  saveHostedWatchSettingsTool,
+  testHostedWatchSettingsTool,
+} from '@luoome/tools/hosted';
+import {
   closingReportWorkflow,
   intradayTradingPlanWatchWorkflow,
   openingReportWorkflow,
@@ -1181,6 +1187,37 @@ export const createWebApp = (
   });
 
   // ===== 飞书通知设置 =====
+  app.get('/api/notifications/feishu', async () => {
+    const ctx = contextForRequest();
+    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
+    return jsonResult(await getHostedWatchSettingsTool.execute({}, ctx));
+  });
+  app.get('/api/notifications/watch-deliveries', async () => {
+    const ctx = contextForRequest();
+    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
+    return jsonResult(await listHostedWatchDeliveriesTool.execute({}, ctx));
+  });
+  app.post('/api/notifications/feishu', async (c) => {
+    const permission = requireMutationCapabilities(c.req.raw, ['write']);
+    if (permission !== null) return jsonResult(permission);
+    const ctx = contextForRequest();
+    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
+    try {
+      return jsonResult(await saveHostedWatchSettingsTool.execute(await c.req.json(), ctx));
+    } catch {
+      return jsonResult({
+        ok: false,
+        error: { kind: 'invalid_input', message: '飞书配置必须是 JSON 对象', issues: [] },
+      });
+    }
+  });
+  app.post('/api/notifications/feishu/test', async (c) => {
+    const permission = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (permission !== null) return jsonResult(permission);
+    const ctx = contextForRequest();
+    if (ctx.identity?.mode !== 'hosted') return jsonResult(permissionDenied('hosted:tenant'));
+    return jsonResult(await testHostedWatchSettingsTool.execute({}, ctx));
+  });
   app.get('/api/settings/feishu', () => {
     if (feishuSettingsStore === undefined) {
       return jsonResult(notFound('FeishuSettingsStore', 'default'));

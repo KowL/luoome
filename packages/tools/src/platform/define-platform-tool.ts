@@ -83,6 +83,8 @@ export const definePlatformTool = <I, O>(
           return ctx.principal.workerId;
         case 'webhook':
           return `webhook:${ctx.principal.provider}`;
+        case 'admin':
+          return `admin:${ctx.principal.userId}`;
         case 'anonymous':
           return 'anonymous';
       }

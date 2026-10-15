@@ -6,6 +6,7 @@ import {
   type StockUniverseSourceLike,
   stockCode,
 } from '@luoome/core';
+import { SourceExecutionError } from '../source-error.js';
 
 const DEFAULT_COUNT_URL =
   'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount';
@@ -151,6 +152,7 @@ export class SinaStockUniverseAdapter implements StockUniverseSourceLike {
       if (!response.ok) throw new Error(`network: sina HTTP ${response.status}`);
       return response;
     } catch (error) {
+      if (error instanceof SourceExecutionError) throw error;
       if (
         error instanceof Error &&
         /^(network|invalid_payload|partial_data):/.test(error.message)

@@ -1,5 +1,6 @@
 import {
   type AuditLoggerLike,
+  HostedLLMError,
   InvariantError,
   type Logger,
   type SideEffect,
@@ -199,18 +200,30 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
       writeAudit(ctx, name, sideEffect, result, auditCaller(ctx));
     const failure = async (error: unknown): Promise<ToolResult<O>> => {
       const result: ToolResult<O> =
-        error instanceof InvariantError
+        error instanceof HostedLLMError
           ? {
               ok: false,
-              error: { kind: 'invariant_violation', message: redactErrorText(error.message) },
-            }
-          : {
-              ok: false,
               error: {
-                kind: 'internal',
-                cause: `tool "${name}": ${redactErrorText(error instanceof Error ? error.message : String(error))}`,
+                kind: 'adapter_error',
+                adapter: 'hosted-llm',
+                cause: error.code,
+                recoverable: ['busy', 'usage_unknown', 'provider_failed', 'lease_lost'].includes(
+                  error.code,
+                ),
               },
-            };
+            }
+          : error instanceof InvariantError
+            ? {
+                ok: false,
+                error: { kind: 'invariant_violation', message: redactErrorText(error.message) },
+              }
+            : {
+                ok: false,
+                error: {
+                  kind: 'internal',
+                  cause: `tool "${name}": ${redactErrorText(error instanceof Error ? error.message : String(error))}`,
+                },
+              };
       await audit(result);
       return result;
     };
@@ -291,7 +304,15 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
 
 export const defineTool = <I, O>(definition: ToolDefinition<I, O>): Tool<I, O> =>
   defineTypedTool(
-    definition,
+    {
+      ...definition,
+      handler: (input, ctx) =>
+        ctx.llmExecution === undefined
+          ? definition.handler(input, ctx)
+          : ctx.llmExecution.run(definition.name, input, ctx, async (scoped) =>
+              definition.handler(input, scoped),
+            ),
+    },
     (ctx: ToolContext) => ctx.user.id,
     (input, ctx) => {
       if (ctx.identity?.mode !== 'hosted') return null;

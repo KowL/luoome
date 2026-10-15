@@ -1152,6 +1152,10 @@ Web 启动不再按 `LUOOME_MODE` 分流，统一通过身份、control/Tenant �
 内置生产装配接入 SMTP 和真实行情，支付与研究邮件未配置时返回不可用；部署约束见
 [服务运行手册](./runbooks/hosted-personal-subscription.md)。
 
+认证传输默认要求固定 HTTPS origin 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
+固定 Origin、CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
+登录页通过匿名只读 `/api/auth/config` 获取邮件配置、注册及传输开关，不读取用户身份或部署凭证。
+
 身份、订阅、Job、用量、投递和支付放在 `control.sqlite`；私人业务分别落入各Tenant的SQLite。
 core的`hosted/`只定义实体与不变量；db的memory/Drizzle实现共享contract tests。每个hosted Tenant
 自动一个默认投资Account；空库原子初始化，已有唯一账户原样复用，多账户异常保留数据并停止自动迁移。

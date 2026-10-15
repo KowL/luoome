@@ -220,6 +220,7 @@ const reconcileAndSchedule = async (service: HostedService, platform: PlatformCo
       const invocation = await workerInvocation(service, tenant, lease);
       const ctx = contextForHostedTools(invocation, hostedExecutionToolNames, false);
       await reconcileHostedTenantOutbox(tenant, ctx, platform);
+      if (service.config.productPolicyVersion === 'hosted-web-v2') continue;
       if (
         !service.config.exposeExternal ||
         tenant.status !== 'active' ||

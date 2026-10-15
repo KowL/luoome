@@ -1,4 +1,4 @@
-import type { AgentRuntimeLike, Logger } from '@luoome/core';
+import type { Logger } from '@luoome/core';
 import { AISDKAgentRuntime } from './agent-runtime.js';
 import { AISDKAdapter } from './ai-sdk-adapter.js';
 import { LLMManager } from './manager.js';
@@ -7,7 +7,7 @@ import type { LLMAdapter } from './types.js';
 
 export interface AIStack {
   readonly llm: LLMAdapter;
-  readonly agent: AgentRuntimeLike;
+  readonly agent: AISDKAgentRuntime;
 }
 
 export const createAIStackFromEnv = (
@@ -15,6 +15,7 @@ export const createAIStackFromEnv = (
   options: {
     readonly logger: Logger;
     readonly fetchImpl?: typeof fetch;
+    readonly fallback?: 'rules' | 'throw';
     readonly readFile?: (path: string) => string;
   },
 ): AIStack => {
@@ -25,6 +26,7 @@ export const createAIStackFromEnv = (
   return {
     llm: new LLMManager({
       logger: options.logger,
+      ...(options.fallback === undefined ? {} : { fallback: options.fallback }),
       adapter: new AISDKAdapter(catalog.resolve('generation')),
     }),
     agent: new AISDKAgentRuntime(catalog.resolve('agent'), { logger: options.logger }),

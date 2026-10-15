@@ -7,6 +7,8 @@ export * from './daily-advice.js';
 export * from './daily-review.js';
 export * from './define-workflow.js';
 export * from './evaluate-event-rules.js';
+export * from './hosted-reports.js';
+export * from './hosted-strategy.js';
 export * from './intraday-trading-plan-watch.js';
 export * from './intraday-watch.js';
 export * from './opening-report.js';

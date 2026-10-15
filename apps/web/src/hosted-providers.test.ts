@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,6 +53,47 @@ const setup = () => {
 };
 
 describe('production Web providers', () => {
+  it('shares public quote cache and HTTP quota across independently assembled Web/worker providers', async () => {
+    const { config, env } = setup();
+    const fields = Array.from({ length: 39 }, () => '');
+    Object.assign(fields, {
+      2: '002594',
+      3: '250',
+      4: '249',
+      5: '250',
+      6: '10',
+      30: '20261015100000',
+      33: '251',
+      34: '249',
+    });
+    const fetchMock = spyOn(globalThis, 'fetch').mockImplementation((async () => {
+      await Bun.sleep(20);
+      return new Response(`v_sz002594="${fields.join('~')}";`);
+    }) as unknown as typeof fetch);
+    try {
+      const settings = {
+        ...env,
+        LUOOME_MARKET_SOURCES: 'tencent',
+        LUOOME_MARKET_REQUESTS_PER_WINDOW: '1',
+      };
+      const web = createHostedProviders(config, settings);
+      const worker = createHostedProviders(config, settings);
+      const [a, b] = await Promise.all([
+        web.market.fetchQuote('002594.SZ'),
+        worker.market.fetchQuote('002594.SZ'),
+      ]);
+      expect(a.observedAt).toEqual(b.observedAt);
+      expect(Number(a.close)).toBe(250);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const restarted = createHostedProviders(config, settings);
+      expect((await restarted.market.fetchQuote('002594.SZ')).observedAt).toEqual(a.observedAt);
+      expect((await worker.market.batchQuote(['600519.SH', '600000.SH'])).size).toBe(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it('uses built-in live providers without a custom module or fake data', async () => {
     const { config, env } = setup();
     const providers = await loadConfiguredHostedProviders(config, env);

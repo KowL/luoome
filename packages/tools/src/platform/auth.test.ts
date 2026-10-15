@@ -1,7 +1,9 @@
 import { UnconfiguredEmailOtpAdapter } from '@luoome/adapters/hosted';
 import { describe, expect, it } from 'vitest';
 import {
+  changeLoginPasswordTool,
   createAuthSessionTool,
+  createPasswordSessionTool,
   getPlatformMeTool,
   requestAuthChallengeTool,
   resolveAuthSessionTool,
@@ -18,6 +20,124 @@ import {
 } from './testing-context.js';
 
 describe('platform login tools', () => {
+  it('requires email verification for password registration, then signs in without sending email', async () => {
+    const fixture = buildPlatformTestContext();
+    const challenge = await requestAuthChallengeTool.execute(
+      { email: 'Password@Example.test' },
+      fixture.ctx,
+    );
+    if (!challenge.ok) throw new Error('challenge failed');
+    const code = fixture.emailOtp.getMessage(challenge.data.challengeId)?.code;
+    const registered = await createAuthSessionTool.execute(
+      { challengeId: challenge.data.challengeId, code, password: 'fixture-password' },
+      fixture.ctx,
+    );
+    if (!registered.ok) throw new Error('registration failed');
+    const credential = await fixture.ctx.repos.auth.findPasswordByUserId(registered.data.user.id);
+    expect(credential?.passwordHash).not.toContain('fixture-password');
+    expect(registered.data.user).not.toHaveProperty('passwordHash');
+    const loggedIn = await createPasswordSessionTool.execute(
+      { email: 'password@example.test', password: 'fixture-password' },
+      fixture.ctx,
+    );
+    expect(loggedIn.ok && loggedIn.data.userId).toBe(registered.data.user.id);
+    expect(await fixture.ctx.repos.tenants.list()).toHaveLength(1);
+    expect(
+      (
+        await createPasswordSessionTool.execute(
+          { email: 'password@example.test', password: 'wrong-password' },
+          fixture.ctx,
+        )
+      ).ok,
+    ).toBe(false);
+    expect(
+      (
+        await createPasswordSessionTool.execute(
+          { email: 'unknown@example.test', password: 'wrong-password' },
+          fixture.ctx,
+        )
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('lets a recently verified legacy user set a password, then verifies the current password and revokes all sessions', async () => {
+    const fixture = buildPlatformTestContext();
+    const legacy = await loginPlatformTestUser(fixture);
+    expect(
+      await changeLoginPasswordTool.execute({ newPassword: 'fixture-first-password' }, legacy.ctx),
+    ).toEqual({ ok: true, data: { changed: true, requiresLogin: true } });
+    expect(
+      (await resolveAuthSessionTool.execute({ sessionToken: legacy.sessionToken }, fixture.ctx)).ok,
+    ).toBe(false);
+    const loggedIn = await createPasswordSessionTool.execute(
+      { email: legacy.user.email, password: 'fixture-first-password' },
+      fixture.ctx,
+    );
+    if (!loggedIn.ok) throw new Error('password login failed');
+    const resolved = await resolveAuthSessionTool.execute(
+      { sessionToken: loggedIn.data.sessionToken },
+      fixture.ctx,
+    );
+    if (!resolved.ok) throw new Error('session failed');
+    const ctx = buildPlatformContext({ ...fixture.ctx, principal: resolved.data.principal });
+    expect(
+      (
+        await changeLoginPasswordTool.execute(
+          { currentPassword: 'wrong-password', newPassword: 'fixture-second-password' },
+          ctx,
+        )
+      ).ok,
+    ).toBe(false);
+    expect(
+      (
+        await changeLoginPasswordTool.execute(
+          { currentPassword: 'fixture-first-password', newPassword: 'fixture-second-password' },
+          ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await createPasswordSessionTool.execute(
+          { email: legacy.user.email, password: 'fixture-first-password' },
+          fixture.ctx,
+        )
+      ).ok,
+    ).toBe(false);
+    expect(
+      (
+        await createPasswordSessionTool.execute(
+          { email: legacy.user.email, password: 'fixture-second-password' },
+          fixture.ctx,
+        )
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await resolveAuthSessionTool.execute(
+          { sessionToken: loggedIn.data.sessionToken },
+          fixture.ctx,
+        )
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('does not install a password from an expired legacy verification or leak credentials through errors', async () => {
+    let now = new Date(PLATFORM_TEST_NOW);
+    const fixture = buildPlatformTestContext({ clock: () => now });
+    const legacy = await loginPlatformTestUser(fixture);
+    now = new Date(now.getTime() + 600_001);
+    const result = await changeLoginPasswordTool.execute(
+      { newPassword: 'private-new-password' },
+      legacy.ctx,
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: 'permission_denied', required: 'auth:recent-email-verification' },
+    });
+    expect(JSON.stringify(result)).not.toContain('private-new-password');
+    expect(await fixture.ctx.repos.auth.findPasswordByUserId(legacy.user.id)).toBeNull();
+  });
   it('stores only HMAC/hash credentials and creates exactly one provisioning tenant', async () => {
     const fixture = buildPlatformTestContext();
     const requested = await requestAuthChallengeTool.execute(
@@ -255,11 +375,52 @@ describe('platform login tools', () => {
     expect(JSON.stringify(result)).not.toContain(PLATFORM_TEST_SECRET);
   });
 
+  it('does not acknowledge delivery when the SMTP outcome is unknown', async () => {
+    const fixture = buildPlatformTestContext();
+    const result = await requestAuthChallengeTool.execute(
+      { email: 'r@example.test' },
+      {
+        ...fixture.ctx,
+        emailOtp: {
+          configured: true,
+          name: 'unknown-fixture',
+          providerKind: 'fixture',
+          sendChallenge: async () => ({ state: 'unknown' as const }),
+        },
+      },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        kind: 'adapter_error',
+        adapter: 'email-otp',
+        cause: 'challenge_delivery_unknown',
+        recoverable: true,
+      },
+    });
+  });
+
   it('rejects fixture providers in production', () => {
     const fixture = buildPlatformTestContext();
     expect(() => buildPlatformContext({ ...fixture.ctx, environment: 'production' })).toThrow(
       'Fixture email provider',
     );
+  });
+
+  it('keeps platform HTTP origins behind a trusted explicit opt-in', () => {
+    const fixture = buildPlatformTestContext();
+    const http = { ...fixture.ctx, publicOrigin: 'http://example.test:5173' };
+    expect(() => buildPlatformContext(http)).toThrow('HTTPS');
+    expect(buildPlatformContext({ ...http, allowInsecureHttp: true }).publicOrigin).toBe(
+      http.publicOrigin,
+    );
+    expect(() =>
+      buildPlatformContext({
+        ...http,
+        allowInsecureHttp: true,
+        publicOrigin: 'http://example.test/path',
+      }),
+    ).toThrow();
   });
 
   it('prevents new registrations after the cap without blocking existing users', async () => {

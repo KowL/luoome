@@ -289,6 +289,9 @@ Tenant 状态为 `provisioning → active ↔ suspended → deleting → deleted
 - 并发验证按 emailKey 原子查找/创建 User；首次建立 Tenant 与 provisioning Job 同属 control 事务，不产生重复租户。
   尚在 provisioning 的会话只能读取初始化状态和退出，不能进入业务 API。重发同一用途验证码时旧 challenge 作废。
 - cookie 使用 `__Host-luoome_session; Secure; HttpOnly; SameSite=Lax; Path=/`，不设 Domain，不把 token 放 localStorage。
+- 临时 HTTP 功能验证需显式配置 `HOSTED_ALLOW_INSECURE_HTTP=true` 与固定 HTTP `PUBLIC_ORIGIN`；
+  使用独立的 `luoome_http_session; HttpOnly; SameSite=Lax; Path=/`。HTTPS 不接受该 Cookie；
+  HTTP 验证不满足生产 TLS 门禁，Origin/CSRF、限流及租户隔离仍生效。
 - idle 7 天、absolute 30 天；登出立即撤销该会话，停用/删除用户撤销全部会话。
 - 删除账户、改邮箱等敏感操作要求最近 10 分钟重新验证；首期不做密码和自行换邮箱，换邮箱流程后置。
 
@@ -310,6 +313,7 @@ hosted 采用固定 `PUBLIC_ORIGIN`。除下面列举的匿名登录端点外，
 
 | HTTP | 输入摘要 | 主体/结果 |
 |---|---|---|
+| `GET /api/auth/config` | 无 | 匿名只读；邮件是否配置、注册是否开启、是否使用安全传输；无私人数据 |
 | `POST /api/auth/challenges` | email | 匿名受限；通用确认、challengeId |
 | `POST /api/auth/sessions` | challengeId/code/acceptTerms | 单次消费；Set-Cookie，不回传 token；开发告知不是正式法律同意 |
 | `DELETE /api/auth/session` | CSRF | 当前会话；撤销并清 cookie |

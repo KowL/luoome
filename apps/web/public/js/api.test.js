@@ -9,12 +9,14 @@ import {
   getAccountId,
   getHostedSession,
   onHostedSessionExpired,
+  randomRequestId,
   setAccountId,
 } from './api.js';
 
 const originalFetch = globalThis.fetch;
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -24,9 +26,21 @@ afterEach(() => {
   onHostedSessionExpired(() => {});
   if (originalDocument === undefined) delete globalThis.document;
   else Object.defineProperty(globalThis, 'document', originalDocument);
+  Object.defineProperty(globalThis, 'crypto', originalCrypto);
 });
 
 describe('Web API request context', () => {
+  it('generates distinct UUID request IDs when an HTTP browser does not expose randomUUID', () => {
+    const getRandomValues = crypto.getRandomValues.bind(crypto);
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: { getRandomValues },
+    });
+    const first = randomRequestId();
+    const second = randomRequestId();
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(first).not.toBe(second);
+  });
   const hosted = () =>
     Object.defineProperty(globalThis, 'document', {
       configurable: true,

@@ -35,6 +35,7 @@ export const PlatformPrincipalSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('worker'), workerId: Id, requestId: Id }),
   z.object({ kind: z.literal('webhook'), provider: Id, eventId: Id, requestId: Id }),
+  z.object({ kind: z.literal('admin'), userId: Id, requestId: Id, ipKey: Digest }),
 ]);
 
 export type PlatformPrincipal = z.infer<typeof PlatformPrincipalSchema>;
@@ -57,6 +58,7 @@ export interface PlatformContext {
   readonly notification?: HostedNotificationPort;
   readonly payment?: HostedPaymentPort;
   readonly publicOrigin?: string;
+  readonly allowInsecureHttp?: boolean;
   readonly registration: { readonly enabled: boolean; readonly maxUsers: number };
   readonly authChallengeLimits: AuthChallengeLimits;
   readonly capabilities: { readonly write: boolean; readonly external: boolean };
@@ -90,12 +92,15 @@ export const buildPlatformContext = (input: BuildPlatformContextInput): Platform
   if (input.publicOrigin !== undefined) {
     const origin = new URL(input.publicOrigin);
     if (
-      origin.protocol !== 'https:' ||
+      (origin.protocol !== 'https:' &&
+        !(origin.protocol === 'http:' && input.allowInsecureHttp === true)) ||
       origin.origin !== input.publicOrigin ||
       origin.username ||
       origin.password
     )
-      throw new Error('Hosted notification origin must be a fixed HTTPS origin');
+      throw new Error(
+        'Hosted notification origin must be a fixed HTTPS origin; HTTP requires explicit opt-in',
+      );
   }
   z.object({ enabled: z.boolean(), maxUsers: z.number().int().positive() }).parse(
     input.registration,

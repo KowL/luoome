@@ -9,6 +9,8 @@ Use the connected luoome MCP server to query and maintain the user's local inves
 
 This Skill targets local mode. Hosted platform identity, subscriptions, jobs, payments, notifications, privacy
 and recovery tools use a private server/worker registry and are not exposed through MCP or model discovery.
+Email verification, password login and password changes are private Web identity operations; never request
+the user's login password or email verification code through MCP, or invoke these via generic tools.
 Do not attempt to reach them through generic calls or shell fallback. Hosted personal facts and feedback use
 the authenticated Web product; its production providers and release gates are separate from local MCP setup.
 

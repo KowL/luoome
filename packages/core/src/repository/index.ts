@@ -15,7 +15,11 @@ import type { FinancialFact, FinancialVintage } from '../entity/fundamental.js';
 import type { Holding } from '../entity/holding.js';
 import type { LimitUpLadder, LimitUpLadderSource } from '../entity/limit-up-ladder.js';
 import type { MinuteBar, MinuteBarInterval } from '../entity/minute-bar.js';
-import type { Notification, NotificationResult } from '../entity/notification.js';
+import type {
+  Notification,
+  NotificationResult,
+  WatchDeliveryRepository,
+} from '../entity/notification.js';
 import type {
   PortfolioCashFlow,
   PortfolioCorporateAction,
@@ -99,6 +103,7 @@ import type {
   WatchlistSyncRun,
 } from '../entity/watchlist.js';
 import type { WorkflowRun } from '../entity/workflow-run.js';
+import type { ReportAutomationRepository } from '../hosted/report-automation.js';
 import type { DecisionLedgerState } from '../portfolio/decision-ledger-state.js';
 import type { HoldingCashAdjustment } from '../portfolio/ledger.js';
 import type {
@@ -558,6 +563,7 @@ export interface RepositoryRegistry {
   readonly tradingPlan: TradingPlanRepository;
   /** A 股个性化简报历史；按 kind/scope/period 逻辑键幂等更新。 */
   readonly report: ReportRepository;
+  readonly reportAutomation: ReportAutomationRepository;
   /** v0.2 起；MarketDataManager 等会调 save / latestByStock。 */
   readonly quote: QuoteRepository;
   /** v0.2 起；MarketDataManager fetchDailyBars 命中本地缓存时直接走 findInRange。 */
@@ -592,6 +598,7 @@ export interface RepositoryRegistry {
   readonly alertPlan: AlertPlanRepository;
   /** v0.3 起；send_notification 落库 + 复盘查询。 */
   readonly notification: NotificationRepository;
+  readonly watchDelivery: WatchDeliveryRepository;
   /** v0.6 起；盯盘触发持久化 + cooldown 查询（intraday-watch workflow 用）。 */
   readonly watchTrigger: WatchTriggerRepository;
   /** v0.7 策略预警；边沿状态机持久化 + 批量加载。 */
@@ -1088,7 +1095,7 @@ export interface WatchTriggerRepository {
     };
   }): Promise<boolean>;
   /** 发送前持久化尝试，崩溃留下 pending 供有限重试。 */
-  beginDelivery(ids: readonly string[], at: Date): Promise<void>;
+  beginDelivery(ids: readonly string[], at: Date, owner?: string): Promise<boolean>;
   save(trigger: WatchTrigger): Promise<void>;
   findById(id: string): Promise<WatchTrigger | null>;
   /** 审计 / 复盘：按 createdAt 倒序。 */
@@ -1155,7 +1162,8 @@ export interface WatchTriggerRepository {
     status: DeliveryStatus,
     notificationId?: string,
     completedAt?: Date,
-  ): Promise<void>;
+    owner?: string,
+  ): Promise<boolean>;
   /** 用户反馈（set_watch_trigger_feedback 写入）。 */
   setFeedback(id: string, feedback: TriggerFeedback, at: Date): Promise<void>;
   remove(id: string): Promise<void>;
@@ -1246,6 +1254,17 @@ export interface StockEventRepository {
 
 /** Workflow 运行审计仓储（ruo 迁移 Phase 1C，docs/.../§3.4）。save 同 id 为 upsert（running → terminal）。 */
 export interface WorkflowRunRepository {
+  /** 可续租的后台执行槽；owner 是每次领取的 fencing token，结束后等待 nextRunAt。 */
+  execution(input: {
+    readonly id: string;
+    readonly workflowName: string;
+    readonly action: 'acquire' | 'renew' | 'release';
+    readonly owner: string;
+    readonly now: Date;
+    readonly leaseUntil: Date;
+    readonly nextRunAt: Date;
+    readonly output?: Record<string, unknown>;
+  }): Promise<boolean>;
   save(run: WorkflowRun): Promise<void>;
   /** 原子领取固定 id 的运行；同一批次只允许一个执行者。 */
   claim(

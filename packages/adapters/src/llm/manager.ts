@@ -3,6 +3,7 @@ import {
   AdviceDecisionSchema,
   AdviceHorizonSchema,
   AdviceReasoningSchema,
+  HostedLLMError,
   RULE_FALLBACK_EVIDENCE_MARKER,
   RULE_FALLBACK_PREMISE_MARKER,
   STANDARD_DISCLAIMERS,
@@ -29,6 +30,7 @@ const FALLBACK_NOTE = `LLM 推理失败，使用${RULE_FALLBACK_EVIDENCE_MARKER}
 export interface LLMManagerOptions {
   readonly adapter: LLMAdapter;
   readonly logger: Logger;
+  readonly fallback?: 'rules' | 'throw';
 }
 
 /** Fallback 输出 schema（与 AdviceLLMSchema 对齐）。 */
@@ -101,9 +103,11 @@ export class LLMManager implements LLMAdapter {
   readonly name: string;
   private readonly inner: LLMAdapter;
   private readonly logger: Logger;
+  private readonly fallback: 'rules' | 'throw';
 
   constructor(options: LLMManagerOptions) {
     this.logger = options.logger;
+    this.fallback = options.fallback ?? 'rules';
     this.inner = options.adapter;
     this.name = this.inner.name;
   }
@@ -114,6 +118,7 @@ export class LLMManager implements LLMAdapter {
     try {
       return await this.inner.generate<T>(request);
     } catch (error) {
+      if (error instanceof HostedLLMError) throw error;
       firstError = error;
       this.logger.warn('llm-manager: 第一次 LLM 调用失败，准备重试', {
         error: error instanceof Error ? error.message : String(error),
@@ -130,12 +135,14 @@ export class LLMManager implements LLMAdapter {
         };
         return await this.inner.generate<T>(retryRequest);
       } catch (retryError) {
+        if (this.fallback === 'throw' || retryError instanceof HostedLLMError) throw retryError;
         this.logger.warn('llm-manager: 重试仍失败，走规则 fallback', {
           error: retryError instanceof Error ? retryError.message : String(retryError),
         });
       }
     }
 
+    if (this.fallback === 'throw') throw firstError;
     // 规则 fallback：返回明确标记的低信心确定性判断。
     const fallbackData = this.buildFallbackResult<T>(request);
     this.logger.error('llm-manager: 走规则 fallback', { decision: this.preview(fallbackData) });

@@ -9,6 +9,7 @@ import {
   callApi,
   getAccountId,
   getSessionEpoch,
+  randomRequestId,
 } from './api.js';
 import { alertDialog, confirmDialog, promptDialog } from './modal.js';
 import { $, adviceCard, el, mount, resultErrorText } from './ui.js';
@@ -627,7 +628,7 @@ const send = async (requestedText) => {
         sessionId,
         messages: [
           {
-            id: `user_${crypto.randomUUID()}`,
+            id: `user_${randomRequestId()}`,
             role: 'user',
             parts: [{ type: 'text', text }],
           },

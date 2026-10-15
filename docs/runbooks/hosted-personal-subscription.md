@@ -25,7 +25,8 @@ CLI 在存在 `HOSTED_DATA_ROOT` 时拒绝打开单机业务库；单机工具�
 | `HOSTED_ENVIRONMENT` | `development` 或 `production` |
 | `HOSTED_DATA_ROOT` | 专用绝对路径，不能使用个人本地数据目录 |
 | `HOSTED_DELETION_LEDGER_ROOT` | 生产必填，必须在 data root 的真实路径之外，独立持久卷 |
-| `PUBLIC_ORIGIN` | 单一固定 HTTPS origin，无路径、用户信息或尾部 `/` |
+| `PUBLIC_ORIGIN` | 单一固定 origin，默认要求 HTTPS，无路径、用户信息或尾部 `/` |
+| `HOSTED_ALLOW_INSECURE_HTTP` | 默认 `false`；临时 HTTP 功能验证时显式设为 `true` |
 | `HOSTED_AUTH_SECRET_FILE` | 推荐 secret 文件；与 `HOSTED_AUTH_SECRET` 互斥，至少 32 字符，文件不超过 4 KiB |
 | `HOSTED_PRODUCT_POLICY` | 默认且公开启动只接受 `hosted-web-v2`，无需设置 |
 | `HOSTED_PROVIDER_MODE` | `fixture` 仅开发；生产必须 `configured` |
@@ -43,6 +44,22 @@ CLI 在存在 `HOSTED_DATA_ROOT` 时拒绝打开单机业务库；单机工具�
 | `HOSTED_RUNTIME_LIMIT` | 每进程最多打开的 Tenant DB，默认 16，上限 100 |
 | `HOSTED_TRUSTED_PROXY_IP` | 可选，单一明确 IP；只信任该连接地址传入的单值有效 X-Forwarded-For |
 | `LUOOME_HOST` / `PORT` | Web 默认回环地址；Compose 内为 `0.0.0.0:5173`，不发布该端口 |
+
+### 临时 HTTP 注册登录
+
+暂不配置 TLS 时，可显式设置 `HOSTED_ALLOW_INSECURE_HTTP=true`，并将 `PUBLIC_ORIGIN` 设为
+实际访问的固定 HTTP origin（含非默认端口）。Compose 默认仍由 `HOSTED_DOMAIN` 生成 HTTPS origin；
+显式 `PUBLIC_ORIGIN` 会覆盖该默认值。HTTP 直连的端口映射由部署环境提供。
+
+该入口会明文传输验证码和会话，只用于临时功能验证，不满足 §7 的正式生产放行要求。
+HTTP 使用独立 `luoome_http_session` Cookie，保留 HttpOnly、SameSite=Lax、固定 Origin、CSRF、
+验证码限流与租户隔离；HTTPS 继续使用带 Secure 的 `__Host-luoome_session`，不接受 HTTP Cookie。
+切换回 HTTPS 后须重新登录，并关闭 HTTP 开关及直连映射。
+
+注册仍由 `HOSTED_REGISTRATION_ENABLED` 显式控制，并受 `HOSTED_REGISTRATION_LIMIT` 限制；
+关闭注册不妨碍已有用户登录。验证码邮件必须由 SMTP 受理后才返回成功，结果未知或失败会提示重试。
+页面提供 60 秒重发倒计时和 5 分钟有效期；首次邮箱验证自动创建 User/Tenant，worker 幂等初始化
+唯一默认投资账户，初始化完成后进入原 Web。`GET /api/auth/config` 只公开邮件配置、注册与传输开关。
 | `HOSTED_WORKER_INSTANCE_ID` | worker 健康文件标识，Compose 固定 `primary` |
 | `HOSTED_TLS_CERT_FILE` / `HOSTED_TLS_KEY_FILE` | 可选本机 TLS，必须成对设置；生产由 Caddy 终止 TLS |
 
@@ -206,56 +223,3 @@ external reconciliation、审查和 resume。未查明的 provider 状态不能�
 
 外部门禁未满足时保持注册关闭。原策略/AI/复盘入口已纳入 v2；完整定时业务队列、逐项额度计量、
 个人通知到原业务投递链及真实 provider 仍须按改造计划验收。自动证券交易始终禁止。
-
-## 8. 2026-10-14 服务器部署记录
-
-本次完成容器部署和内部验证，**尚未开放公网登录或收费**。
-
-| 项目 | 实际状态 |
-|---|---|
-| 服务器 | `ubuntu@134.175.83.56`，Ubuntu 24.04，Docker 27.5.1 / Compose 2.32.4 |
-| 已有服务 | `adshare-api`（8000）和 `postgresql`（5432）保持运行，未改目录、数据、端口或容器 |
-| 当前源码 | `/opt/luoome/current` → `/opt/luoome/releases/90898f5`，从 Git archive 上传，不含未提交文件 |
-| 应用镜像 | `luoome:90898f5`，镜像 ID `sha256:1f3d95fdb478ea1d95bfeaa46f244a806dc7816b3b927696dcf0619e94fab980` |
-| 独立项目 | Compose project `luoome`；`luoome-web-1`、`luoome-worker-1`、`luoome-caddy-1` |
-| 持久化 | `luoome_tenant_data`、`luoome_deletion_ledger`、`luoome_caddy_data`、`luoome_caddy_config` |
-| 配置 | `/opt/luoome/config/production.env`、`/opt/luoome/config/plan.json` |
-| 密钥 | `/opt/luoome/secrets/hosted-auth-key`、`/opt/luoome/secrets/smtp-password`；0600，未输出或进入 Git |
-| 运行权限 | 应用 UID/GID 1000、只读根文件系统；业务卷目录 0700 |
-| 注册/套餐 | 注册关闭；零额度预部署套餐，不代表正式定价或开放试用 |
-| 健康 | worker healthy；Web live=200、ready=503（`service:email-unconfigured`），因此容器标为 unhealthy |
-| 公网入口 | 临时 `134-175-83-56.sslip.io` 被腾讯云/DNSPod 转向 webblock，ACME 返回 566/校验失败；Caddy 已停止以暂停重试 |
-
-Bun 基础镜像固定为 `oven/bun@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4`；
-Caddy 固定为 `caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d`。
-服务器完成 frozen-lockfile 安装、镜像构建与 Compose 配置校验。运维 status 显示 maintenance=open、
-activities=0，任务、未知成本、支付、通知和删除待审计数均为 0。
-
-通过 SSH 隧道在真实 Chrome 中验证登录页，浏览器未出现私人业务内容；未登录访问
-`/api/accounts`、`/api/watchlists`、`/api/strategies` 均为 401。唯一控制台网络错误为预期的 `/api/me` 401。
-本地截图位于 `output/playwright/deployment-login-90898f5.png`（不提交）。
-本地全量验证：`test` 2367、`test:db` 621、`test:web` 646 项通过；typecheck、lint、build 通过，
-lint 保留 82 条既有警告。启动测试涵盖 no-env、代理 IP、TLS、失败回收和 CLI 数据目录隔离。
-
-临时查看登录页（仅经 SSH，本命令不开放公网 HTTP；容器重建后先重新确认其 IP）：
-
-```sh
-ssh ubuntu@134.175.83.56 'sudo docker inspect luoome-web-1 --format "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"'
-# 本次地址为 172.28.0.129
-ssh -N -L 127.0.0.1:45173:172.28.0.129:5173 ubuntu@134.175.83.56
-# 本机浏览器打开 http://127.0.0.1:45173；仅验证登录页，不改写 HTTPS/Origin 约束。
-```
-
-查看实例状态（服务器上执行）：
-
-```sh
-cd /opt/luoome/current
-sudo docker compose -p luoome --env-file /opt/luoome/config/production.env -f deploy/hosted/compose.yaml ps -a
-sudo docker compose -p luoome --env-file /opt/luoome/config/production.env -f deploy/hosted/compose.yaml exec -T worker bun --no-env-file apps/worker/src/operations.ts status
-```
-
-恢复公网验收前需提供可在该服务器使用的正式域名，以及 SMTP 主机、端口、发件邮箱和用户名；
-SMTP 密码/授权码写入服务器的 `smtp-password` 文件。更新 `production.env` 的域名与 SMTP 字段后，
-保持注册关闭并重新 `up -d --no-build`，验证可信 HTTPS、真实邮件送达和登录。
-开放注册前还需审核 `plan.json` 的实际额度，并完成 §7 中与开放范围对应的验收。
-支付商户、AI 密钥、研究通知和完整定时业务调度不在本次已验证能力内。

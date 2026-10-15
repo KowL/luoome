@@ -153,7 +153,7 @@ export class SinaAdapter {
       }
       text = await response.text();
     } catch (error) {
-      if (error instanceof SinaAdapterError) throw error;
+      if (error instanceof SourceExecutionError) throw error;
       const kind =
         typeof error === 'object' &&
         error !== null &&
@@ -309,7 +309,7 @@ export class SinaAdapter {
       }
       return response;
     } catch (error) {
-      if (error instanceof SinaAdapterError) throw error;
+      if (error instanceof SourceExecutionError) throw error;
       const kind =
         typeof error === 'object' &&
         error !== null &&

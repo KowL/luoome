@@ -30,6 +30,9 @@ export const SendNotificationInput = z.object({
   log: LogPayloadInputSchema.optional(),
   adviceId: z.string().min(1).optional(),
   tacticSignalId: z.string().min(1).optional(),
+  watchDelivery: z
+    .object({ owner: z.string().min(1), triggerIds: z.array(z.string().min(1)).min(1) })
+    .optional(),
 });
 
 export const SendNotificationOutput = z.object({
@@ -82,6 +85,7 @@ export const sendNotificationTool = defineTool({
       payload,
       ...(input.adviceId !== undefined ? { adviceId: input.adviceId } : {}),
       ...(input.tacticSignalId !== undefined ? { tacticSignalId: input.tacticSignalId } : {}),
+      ...(input.watchDelivery === undefined ? {} : { watchDelivery: input.watchDelivery }),
     });
     return { notification: NotificationSchema.parse(r.notification) };
   },

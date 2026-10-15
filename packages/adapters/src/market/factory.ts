@@ -8,6 +8,7 @@ import type { SourceResultObservation } from '../source-registry.js';
 import { tushareConfigFromEnv } from '../tushare/client.js';
 import { QuoteCache } from './cache.js';
 import { MarketDataManager } from './manager.js';
+import type { MarketRequestCoordinator } from './request-coordinator.js';
 import { SinaAdapter } from './sina.js';
 import {
   type AnyMarketCapabilityBinding,
@@ -40,6 +41,7 @@ export interface CreateMarketAdapterDeps {
   readonly quoteCacheTtlMs?: number;
   /** 组装根共享的供应商实例；注入时对应分支复用而不自构（§4.6）。 */
   readonly sources?: { readonly eastmoney?: EastmoneySource; readonly fuyao?: FuyaoSource };
+  readonly requestCoordinator?: MarketRequestCoordinator;
 }
 
 export const MarketSourceIdSchema = z.enum(['eastmoney', 'sina', 'tencent', 'tushare', 'fuyao']);
@@ -76,16 +78,21 @@ export const createMarketAdapterFromEnv = (
 
   const clockOpt = deps.clock === undefined ? {} : { clock: deps.clock };
 
-  const sourceOpts = {
+  const sourceOptsFor = (source: MarketSourceId) => ({
     ...clockOpt,
-    ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
-  };
+    ...(deps.requestCoordinator === undefined
+      ? deps.fetchImpl === undefined
+        ? {}
+        : { fetchImpl: deps.fetchImpl }
+      : { fetchImpl: deps.requestCoordinator.fetchFor(source, deps.fetchImpl) }),
+  });
 
   const sourceOrder =
     deps.sourceOrder === undefined
       ? marketSourceOrderFromEnv(env)
       : MarketSourceOrderSchema.parse(deps.sourceOrder);
   const bindings = sourceOrder.flatMap((source) => {
+    const sourceOpts = sourceOptsFor(source);
     switch (source) {
       case 'eastmoney': {
         const adapter = deps.sources?.eastmoney ?? new EastmoneySource(sourceOpts);
@@ -112,13 +119,14 @@ export const createMarketAdapterFromEnv = (
     }
   });
   const clock = deps.clock ?? ((): Date => new Date());
-  const registry = new MarketSourceRegistry(bindings, clock);
+  const registry = new MarketSourceRegistry(bindings, clock, deps.requestCoordinator);
 
   return new MarketDataManager({
     registry,
+    ...(deps.requestCoordinator === undefined ? {} : { rateLimitPerSec: Number.POSITIVE_INFINITY }),
     ...(deps.quoteCacheTtlMs === undefined
       ? {}
-      : { quoteCache: new QuoteCache(1024, deps.quoteCacheTtlMs) }),
+      : { quoteCache: new QuoteCache(1024, deps.quoteCacheTtlMs, clock) }),
     logger: deps.logger,
     clock,
   });

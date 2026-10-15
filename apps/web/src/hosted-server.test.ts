@@ -32,22 +32,28 @@ const harness = (
     exposeExternal?: boolean;
     productPolicy?: 'hosted-facts-v1' | 'hosted-web-v2';
     createTenantContext?: (base: ToolContext) => ToolContext;
+    origin?: string;
+    registrationEnabled?: boolean;
+    adminEmails?: string;
   } = {},
 ) => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-hosted-http-'));
+  const publicOrigin = input.origin ?? origin;
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   let now = new Date('2026-10-12T06:00:00Z');
   const config = loadHostedConfig({
     LUOOME_MODE: 'hosted',
     HOSTED_ENVIRONMENT: 'development',
     HOSTED_DATA_ROOT: root,
-    PUBLIC_ORIGIN: origin,
+    PUBLIC_ORIGIN: publicOrigin,
+    HOSTED_ALLOW_INSECURE_HTTP: publicOrigin.startsWith('http:') ? 'true' : 'false',
     HOSTED_AUTH_SECRET: 'fixture-auth-secret-32-characters-minimum',
     HOSTED_PRODUCT_POLICY: input.productPolicy ?? 'hosted-facts-v1',
     HOSTED_PROVIDER_MODE: 'fixture',
     LUOOME_EXPOSE_WRITE: 'true',
     LUOOME_EXPOSE_EXTERNAL: input.exposeExternal === false ? 'false' : 'true',
-    HOSTED_REGISTRATION_ENABLED: 'true',
+    HOSTED_REGISTRATION_ENABLED: input.registrationEnabled === false ? 'false' : 'true',
+    ...(input.adminEmails === undefined ? {} : { HOSTED_ADMIN_EMAILS: input.adminEmails }),
   });
   const service = openHostedService(config, undefined, () => now);
   cleanups.push(service.close);
@@ -78,10 +84,10 @@ const harness = (
     headers?: Record<string, string>,
   ) => {
     const response = await app.fetch(
-      new Request(`${origin}${path}`, {
+      new Request(`${publicOrigin}${path}`, {
         method,
         headers: {
-          origin,
+          origin: publicOrigin,
           'content-type': 'application/json',
           ...(cookie === undefined ? {} : { cookie }),
           ...(csrf === undefined ? {} : { 'x-csrf-token': csrf }),
@@ -102,13 +108,31 @@ const harness = (
     const loggedIn = await request('/api/auth/sessions', 'POST', {
       challengeId: challenge.result.data.challengeId,
       code,
+      password: 'fixture-login-password',
       acceptTerms: true,
     });
     expect(loggedIn.response.status).toBe(200);
     expect(loggedIn.result.ok && 'sessionToken' in loggedIn.result.data).toBe(false);
     const setCookie = loggedIn.response.headers.get('set-cookie');
-    expect(setCookie).toContain('Secure; HttpOnly; SameSite=Lax; Path=/');
+    expect(setCookie).toContain('HttpOnly; SameSite=Lax; Path=/');
+    if (publicOrigin.startsWith('https:')) expect(setCookie).toContain('Secure;');
+    else expect(setCookie).not.toContain('Secure;');
     const cookie = setCookie?.split(';')[0] as string;
+    const me = await request('/api/me', 'GET', undefined, cookie);
+    if (!me.result.ok) throw new Error('me failed');
+    return {
+      cookie,
+      csrf: me.result.data.csrfToken as string,
+      tenant: me.result.data.tenant as { id: string; status: string },
+    };
+  };
+  const relogin = async (email: string) => {
+    const loggedIn = await request('/api/auth/password-sessions', 'POST', {
+      email,
+      password: 'fixture-login-password',
+    });
+    expect(loggedIn.response.status).toBe(200);
+    const cookie = loggedIn.response.headers.get('set-cookie')?.split(';')[0] as string;
     const me = await request('/api/me', 'GET', undefined, cookie);
     if (!me.result.ok) throw new Error('me failed');
     return {
@@ -125,6 +149,7 @@ const harness = (
     now: () => now,
     request,
     login,
+    relogin,
     advance: (milliseconds: number) => {
       now = new Date(now.getTime() + milliseconds);
     },
@@ -171,6 +196,100 @@ const importStocks = async (
 };
 
 describe('hosted HTTP boundary', () => {
+  test('public login configuration reveals only service switches and is not a mutation exemption', async () => {
+    const h = harness({ registrationEnabled: false });
+    const config = await h.request('/api/auth/config');
+    expect(config.result).toEqual({
+      ok: true,
+      data: { emailConfigured: true, registrationEnabled: false, secureTransport: true },
+    });
+    expect(config.response.headers.get('cache-control')).toBe('no-store');
+    expect((await h.request('/api/auth/config', 'POST', {})).response.status).toBe(401);
+    expect((await h.request('/api/accounts')).response.status).toBe(401);
+  });
+
+  test('temporary HTTP registration provisions one default account, preserves CSRF and revokes its own cookie', async () => {
+    const h = harness({
+      origin: 'http://hosted.example.invalid:5173',
+      productPolicy: 'hosted-web-v2',
+    });
+    const auth = await h.login('http@example.invalid');
+    expect(auth.cookie).toStartWith('luoome_http_session=');
+    expect((await h.request('/api/auth/config')).result).toEqual({
+      ok: true,
+      data: { emailConfigured: true, registrationEnabled: true, secureTransport: false },
+    });
+    expect(
+      (
+        await h.request(
+          '/api/me',
+          'GET',
+          undefined,
+          auth.cookie.replace('luoome_http_session', '__Host-luoome_session'),
+        )
+      ).response.status,
+    ).toBe(401);
+    expect(
+      (
+        await h.request(
+          '/api/auth/challenges',
+          'POST',
+          { email: 'other@example.invalid' },
+          undefined,
+          undefined,
+          { origin: 'http://other.example.invalid' },
+        )
+      ).response.status,
+    ).toBe(403);
+    await runHostedWorkerOnce(h.service);
+    const accounts = await h.request('/api/accounts', 'GET', undefined, auth.cookie);
+    expect(accounts.result.ok && (accounts.result.data.accounts as unknown[]).length).toBe(1);
+    expect((await h.request('/api/auth/session', 'DELETE', {}, auth.cookie)).response.status).toBe(
+      403,
+    );
+    const logout = await h.request('/api/auth/session', 'DELETE', {}, auth.cookie, auth.csrf);
+    expect(logout.response.headers.get('set-cookie')).toBe(
+      'luoome_http_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+    );
+    expect((await h.request('/api/me', 'GET', undefined, auth.cookie)).response.status).toBe(401);
+  });
+
+  test('HTTPS sessions never accept a temporary HTTP cookie', async () => {
+    const h = harness();
+    const auth = await h.login('https@example.invalid');
+    expect(auth.cookie).toStartWith('__Host-luoome_session=');
+    expect(
+      (
+        await h.request(
+          '/api/me',
+          'GET',
+          undefined,
+          auth.cookie.replace('__Host-luoome_session', 'luoome_http_session'),
+        )
+      ).response.status,
+    ).toBe(401);
+  });
+
+  test('switching an existing workspace to HTTPS rejects HTTP sessions even if the cookie is renamed', async () => {
+    const h = harness({ origin: 'http://hosted.example.invalid:5173' });
+    const auth = await h.login('http-transition@example.invalid');
+    const httpsApp = createHostedWebApp({
+      config: { ...h.config, publicOrigin: origin, allowInsecureHttp: false },
+      repos: h.service.repos,
+      runtimes: h.service.runtimes,
+      maintenance: h.service.maintenance,
+      market: h.service.providers.market,
+      emailOtp: h.service.providers.emailOtp,
+      jobPolicies: h.service.providers.jobPolicies,
+      clock: h.now,
+    });
+    const response = await httpsApp.fetch(
+      new Request(`${origin}/api/me`, {
+        headers: { cookie: auth.cookie.replace('luoome_http_session', '__Host-luoome_session') },
+      }),
+    );
+    expect(response.status).toBe(401);
+  });
   test('fixed Origin, CSRF, no-store, anonymous auth and deny-by-default surfaces', async () => {
     const h = harness();
     expect((await h.request('/api/me')).response.status).toBe(401);
@@ -1333,7 +1452,7 @@ describe('hosted original Web subscription integration', () => {
     });
     if (original === null) throw new Error('missing trial');
     h.advance(original.period.endsAt.getTime() - h.now().getTime() + 1);
-    const current = await h.login('expiry@example.invalid');
+    const current = await h.relogin('expiry@example.invalid');
     for (const path of [
       '/api/accounts',
       '/api/watchlists',
@@ -1439,3 +1558,122 @@ test.each(['completion', 'client cancellation'] as const)(
     });
   },
 );
+
+describe('hosted admin console boundary', () => {
+  test('admin lists users, records one operator payment and toggles user status', async () => {
+    const h = harness({ adminEmails: 'boss@example.invalid' });
+    const boss = await h.login('boss@example.invalid');
+    const member = await h.login('member@example.invalid');
+    await runHostedWorkerOnce(h.service);
+    await runHostedWorkerOnce(h.service);
+
+    const me = await h.request('/api/me', 'GET', undefined, boss.cookie);
+    expect(me.result.ok && me.result.data.admin).toBe(true);
+    const memberMe = await h.request('/api/me', 'GET', undefined, member.cookie);
+    expect(memberMe.result.ok && memberMe.result.data.admin).toBe(false);
+
+    expect(
+      (await h.request('/api/admin/users', 'GET', undefined, member.cookie)).response.status,
+    ).toBe(403);
+    const listed = await h.request('/api/admin/users', 'GET', undefined, boss.cookie);
+    expect(listed.result.ok).toBe(true);
+    if (!listed.result.ok) throw new Error('list failed');
+    const rows = listed.result.data.users as Array<{
+      user: { emailKey: string };
+      tenant: { id: string };
+      entitlement: { period: { status: string; endsAt: string } } | null;
+    }>;
+    expect(rows.map((row) => row.user.emailKey).sort()).toEqual([
+      'boss@example.invalid',
+      'member@example.invalid',
+    ]);
+    const memberRow = rows.find((row) => row.user.emailKey === 'member@example.invalid');
+    if (memberRow === undefined) throw new Error('member row missing');
+    expect(memberRow.entitlement?.period.status).toBe('trial');
+
+    const detail = await h.request(
+      `/api/admin/users/${memberRow.tenant.id}`,
+      'GET',
+      undefined,
+      boss.cookie,
+    );
+    expect(detail.result.ok).toBe(true);
+    if (!detail.result.ok) throw new Error('detail failed');
+    const plans = await h.service.repos.subscriptions.listPlans();
+    const plan = plans[0];
+    if (plan === undefined) throw new Error('plan missing');
+
+    const recorded = await h.request(
+      `/api/admin/users/${memberRow.tenant.id}/operator-payments`,
+      'POST',
+      {
+        planVersionId: plan.id,
+        reference: '微信转账 2026-10-15',
+        requestId: 'operator-http-1',
+      },
+      boss.cookie,
+      boss.csrf,
+    );
+    expect(recorded.result.ok).toBe(true);
+    if (!recorded.result.ok) throw new Error(JSON.stringify(recorded.result));
+    expect(recorded.result.data.order).toMatchObject({
+      state: 'paid',
+      provider: 'operator-manual',
+      reconciliation: 'none',
+    });
+    expect(recorded.result.data.period).toMatchObject({
+      status: 'paid',
+      startsAt: memberRow.entitlement?.period.endsAt,
+    });
+    const replay = await h.request(
+      `/api/admin/users/${memberRow.tenant.id}/operator-payments`,
+      'POST',
+      {
+        planVersionId: plan.id,
+        reference: '微信转账 2026-10-15',
+        requestId: 'operator-http-1',
+      },
+      boss.cookie,
+      boss.csrf,
+    );
+    expect(replay.result.ok && replay.result.data.replayed).toBe(true);
+
+    const memberId = (detail.result.data.user as { id: string }).id;
+    expect(
+      (
+        await h.request(
+          `/api/admin/users/${memberId}/status`,
+          'POST',
+          { status: 'disabled' },
+          member.cookie,
+          member.csrf,
+        )
+      ).response.status,
+    ).toBe(403);
+    const disabled = await h.request(
+      `/api/admin/users/${memberId}/status`,
+      'POST',
+      { status: 'disabled' },
+      boss.cookie,
+      boss.csrf,
+    );
+    expect(disabled.result.ok && disabled.result.data.user).toMatchObject({ status: 'disabled' });
+    expect((await h.request('/api/me', 'GET', undefined, member.cookie)).response.status).toBe(401);
+    const enabled = await h.request(
+      `/api/admin/users/${memberId}/status`,
+      'POST',
+      { status: 'active' },
+      boss.cookie,
+      boss.csrf,
+    );
+    expect(enabled.result.ok && enabled.result.data.user).toMatchObject({ status: 'active' });
+
+    const csrfMissing = await h.request(
+      `/api/admin/users/${memberId}/status`,
+      'POST',
+      { status: 'disabled' },
+      boss.cookie,
+    );
+    expect(csrfMissing.response.status).toBe(403);
+  });
+});

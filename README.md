@@ -97,7 +97,8 @@ Web、worker 和运维命令共用显式服务配置，不读取个人目录或�
 |---|---|
 | `HOSTED_ENVIRONMENT` | `development` 或 `production`，业务入口相同 |
 | `HOSTED_DATA_ROOT` | 独立服务数据目录，不能使用个人单机数据目录 |
-| `PUBLIC_ORIGIN` | 固定 HTTPS origin；开发也使用本机 TLS 或可信反向代理 |
+| `PUBLIC_ORIGIN` | 固定访问 origin，默认要求 HTTPS；临时 HTTP 验证须显式开启下项 |
+| `HOSTED_ALLOW_INSECURE_HTTP` | 默认 `false`；设为 `true` 才允许固定 HTTP origin，仅用于临时功能验证 |
 | `HOSTED_AUTH_SECRET_FILE` | 会话密钥文件；生产用部署 secret 提供 |
 | `HOSTED_PLAN_FILE` / `HOSTED_JOB_BUDGET_MICRO` | 运营套餐 JSON 与明确的单任务成本预算 |
 | `SMTP_HOST` / `SMTP_FROM` / `SMTP_USER` / `SMTP_PASSWORD_FILE` | 邮箱验证码 SMTP 配置；未配置时登录不可用，注册必须保持关闭 |

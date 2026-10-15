@@ -22,6 +22,7 @@ import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 export const StrategyDailyCycleInput = z.object({
   owner: z.string().min(1).optional(),
+  deferReports: z.boolean().default(false),
   limit: z.number().int().min(1).max(100).default(1),
   leaseMinutes: z.number().int().min(5).max(240).default(30),
   asOf: z.coerce.date().optional(),
@@ -145,6 +146,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     let runId: string | undefined;
     let checkpointId: string | undefined;
     let insightProvider: string | undefined;
+    let insightFacts: Record<string, unknown> | undefined;
     let watchlistSync:
       | {
           status: 'complete' | 'partial' | 'failed' | 'skipped';
@@ -324,6 +326,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             publication,
             summary: runSummary,
             insightProvider,
+            insightFacts,
             watchlistSync,
             adviceCount,
             notificationFailed,
@@ -374,13 +377,36 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         });
         continue;
       }
-      const duplicate = priorRuns.data.runs.some(
+      // 上次可能已提交正式结果，却在创建观察前退出；跨日接管也复用原信号补齐候选。
+      const published = priorRuns.data.runs.find(
+        (run) =>
+          run.mode === 'scheduled' &&
+          run.status === 'complete' &&
+          run.publication?.status === 'published',
+      );
+      if (published !== undefined) {
+        const recovered = await ctx.tools.create_strategy_observation_candidates.execute({
+          runId: published.id,
+        });
+        if (!recovered.ok) {
+          await finishAudit({
+            strategyId: schedule.strategyId,
+            scheduleId: schedule.id,
+            status: 'failed',
+            phase: 'observations',
+            runId: published.id,
+            reason: errorText(recovered.error),
+          });
+          continue;
+        }
+      }
+      const duplicate = priorRuns.data.runs.find(
         (run) =>
           run.mode === 'scheduled' &&
           readStrategyRunSnapshot(run.inputSnapshot).requestedBy === 'scheduled' &&
           utcDayKey(scheduledRunDataAsOf(run)) === utcDayKey(auditDataAsOf),
       );
-      if (duplicate) {
+      if (duplicate !== undefined) {
         status = 'skipped';
         phase = 'finish';
         reason = 'schedule-day-duplicate';
@@ -730,14 +756,24 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
               beginPhase('insight');
               const insight = await ctx.tools.generate_strategy_insight.execute({
                 strategyId: schedule.strategyId,
+                runId,
                 windowDays: 30,
               });
               if (insight.ok) {
                 insightProvider = insight.data.provider;
+                insightFacts = insight.data.facts;
                 if (insight.data.provider === 'facts-only') status = 'partial';
               } else {
                 status = 'partial';
                 reason = errorText(insight.error);
+                const facts = await ctx.tools.get_strategy_insight_facts.execute({
+                  strategyId: schedule.strategyId,
+                  windowDays: 30,
+                });
+                if (facts.ok) {
+                  insightProvider = 'facts-only';
+                  insightFacts = facts.data;
+                }
               }
               if (scheduleLeaseLost) {
                 reason = 'lease_lost_before_commit';
@@ -845,7 +881,8 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
             ctx,
           );
       }
-      cutoff = await closingReportCutoffWorkflow.run({ date: reportDate }, ctx);
+      if (!input.deferReports)
+        cutoff = await closingReportCutoffWorkflow.run({ date: reportDate }, ctx);
     }
   }
   if (cutoff !== undefined && (!cutoff.ok || cutoff.data.failed.length > 0)) {

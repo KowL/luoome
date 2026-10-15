@@ -11,6 +11,7 @@ import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
 import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
+import { renderHostedAdmin } from './hosted-admin.js';
 import { initializeHostedSession } from './hosted-session.js';
 import { renderHostedNotifications, renderHostedSubscription } from './hosted-settings.js';
 import { renderIndicesPage, teardownIndices } from './indices.js';
@@ -209,6 +210,7 @@ const ROUTES = [
   'sectors',
   'chat',
   'settings',
+  'admin',
 ];
 
 /** 上一帧显示的路由：只在换页时回到顶部，同页重绘（自动刷新、账户切换）不动滚动位置。 */
@@ -273,6 +275,8 @@ const showRoute = async (name) => {
     } else if (safe === 'settings') {
       renderSettings(setStatus);
       await renderSettingsTab(setStatus, settingsTab());
+    } else if (safe === 'admin') {
+      await renderHostedAdmin(setStatus);
     }
   } catch (error) {
     setStatus(`路由错误：${error instanceof Error ? error.message : String(error)}`, true);

@@ -1,4 +1,4 @@
-import { callApi, getAccountId } from './api.js';
+import { callApi, getAccountId, randomRequestId } from './api.js';
 import {
   actionsRow,
   fieldWrap,
@@ -381,7 +381,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
         note: note.value.trim() || null,
       };
       const input = {
-        requestId: crypto.randomUUID(),
+        requestId: randomRequestId(),
         subject,
         contextHash: context.context?.contextHash,
         expectedRevision: context.current?.review.currentRevision ?? 0,
@@ -455,7 +455,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
           `账本暂不可顺序追加：${context.ledgerState?.reasons.join('；') ?? '状态缺失'}`,
         );
       const input = {
-        requestId: crypto.randomUUID(),
+        requestId: randomRequestId(),
         expectedLedgerStateHash: context.ledgerState.hash,
         confirmedNotRecorded: true,
         stockId: context.stockId,

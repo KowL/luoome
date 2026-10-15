@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   HostedExecutionIdentitySchema,
+  LoginPasswordSchema,
   normalizeLoginEmail,
   sessionHasRecentAuthentication,
 } from './auth.js';
 
 describe('hosted authentication contracts', () => {
+  it('bounds new passwords without trimming spaces or changing their spelling', () => {
+    expect(LoginPasswordSchema.safeParse('short').success).toBe(false);
+    expect(LoginPasswordSchema.safeParse('x'.repeat(129)).success).toBe(false);
+    expect(LoginPasswordSchema.parse('  password  ')).toBe('  password  ');
+  });
   it('preserves delivery spelling, dot and plus tag while normalizing the unique key', () => {
     expect(normalizeLoginEmail('  A.B+Research@Example.com  ')).toEqual({
       email: 'A.B+Research@Example.com',

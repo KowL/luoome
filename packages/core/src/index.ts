@@ -54,14 +54,17 @@ export * from './env-file.js';
 export * from './error/index.js';
 export * from './hosted/auth.js';
 export * from './hosted/index.js';
+export * from './hosted/llm.js';
 export * from './hosted/notification.js';
 export * from './hosted/payment-port.js';
+export * from './hosted/report-automation.js';
 export * from './hosted/tenant.js';
 export * from './portfolio/apply-trade-to-holding.js';
 export * from './portfolio/decision-ledger-state.js';
 export * from './portfolio/ledger.js';
 export * from './portfolio/performance.js';
 export * from './portfolio/trading-plan-budget.js';
+export * from './public-market-store.js';
 // 仓储接口
 export * from './repository/index.js';
 export * from './research-vault.js';

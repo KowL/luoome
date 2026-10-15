@@ -5215,6 +5215,33 @@ export const registerRepositoryContractTests = (
     });
 
     describe('WorkflowRunRepository', () => {
+      it('执行槽 heartbeat 延期、未释放崩溃接管、旧 token 拒绝、结束后按分钟等待', async () => {
+        const start = new Date('2026-10-15T10:00:00Z');
+        const call = (action: 'acquire' | 'renew' | 'release', owner: string, seconds: number) => {
+          const now = new Date(start.getTime() + seconds * 1000);
+          return repos.workflowRun.execution({
+            id: 'strategy-execution',
+            workflowName: 'hosted-strategy-execution',
+            action,
+            owner,
+            now,
+            leaseUntil: new Date(now.getTime() + 120_000),
+            nextRunAt: new Date(start.getTime() + 360_000),
+          });
+        };
+        expect(await call('acquire', 'old-token', 0)).toBe(true);
+        expect(await call('acquire', 'other-token', 1)).toBe(false);
+        expect(await call('renew', 'old-token', 90)).toBe(true);
+        expect(await call('acquire', 'new-token', 121)).toBe(false);
+        expect(await call('acquire', 'new-token', 210)).toBe(true);
+        expect(await call('renew', 'old-token', 211)).toBe(false);
+        expect(await call('release', 'old-token', 211)).toBe(false);
+        expect(await call('release', 'new-token', 211)).toBe(true);
+        expect(await call('acquire', 'next-token', 359)).toBe(false);
+        expect(await call('acquire', 'next-token', 360)).toBe(true);
+        expect(await call('release', 'next-token', 480)).toBe(false);
+      });
+
       it('固定批次跨执行者只领取一次，结束时校验领取令牌', async () => {
         const running = makeWorkflowRun('batch-once', {
           workflowName: 'account-plan-batch',

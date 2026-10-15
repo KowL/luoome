@@ -1,6 +1,8 @@
+import { platformAdminTools } from './admin.js';
 import { platformAuthTools } from './auth.js';
 import type { PlatformTool } from './define-platform-tool.js';
 import { platformJobTools } from './jobs.js';
+import { platformLLMTools } from './llm.js';
 import { platformNotificationTools } from './notifications.js';
 import { platformPaymentTools } from './payments.js';
 import { platformPrivacyTools } from './privacy.js';
@@ -19,6 +21,8 @@ export const createPlatformRegistry = (tools: readonly PlatformTool[]) => {
 };
 
 export const platformToolRegistry = createPlatformRegistry([
+  ...platformLLMTools,
+  ...platformAdminTools,
   ...platformAuthTools,
   ...platformJobTools,
   ...platformNotificationTools,

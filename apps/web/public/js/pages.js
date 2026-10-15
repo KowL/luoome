@@ -3,7 +3,7 @@
 // biome-ignore lint/suspicious/noRedundantUseStrict: 模块默认严格模式
 'use strict';
 
-import { callApi, getAccountId, isHostedMode } from './api.js';
+import { callApi, getAccountId, isHostedMode, randomRequestId } from './api.js';
 import { openDecisionReview } from './decision-review-ui.js';
 import {
   openCloseConfirm,
@@ -11,6 +11,8 @@ import {
   openEditModal,
   openTradeModal,
 } from './holdings-actions.js';
+import { restartHostedSession } from './hosted-session.js';
+import { createHostedPasswordForm } from './hosted-settings.js';
 import { DASHBOARD_INDEX_CODES, INDEX_DEFS } from './index-defs.js';
 import { renderIndexCards } from './index-strip.js';
 import { buildMarketLink, parseRouteHash } from './market.js';
@@ -192,6 +194,8 @@ const reportDeliveryLabel = (status) =>
     pending: '待发送',
     failed: '发送失败',
     'fallback-log': '仅写日志',
+    unverifiable: '结果待核实，未自动重发',
+    invalidated: '待发通知已停止',
     'not-requested': '未请求通知',
   })[status] ?? '状态未记录';
 const reportNotificationLabel = (report) =>
@@ -2243,7 +2247,7 @@ const reportReviewRefreshButton = (report, accountId, status, setStatus, onSaved
     if (refresh.disabled) return;
     if (getAccountId() !== accountId) return setStatus('账户已切换，请切回原账户。', true);
     const input = pending ?? {
-      requestId: crypto.randomUUID(),
+      requestId: randomRequestId(),
       expectedLatestReportId: status.latestReportId,
     };
     try {
@@ -3071,6 +3075,13 @@ const renderSettingsAccount = async () => {
           : '保存失败，请稍后重试。';
     });
     box.prepend(form);
+    box.append(
+      createHostedPasswordForm({
+        onChanged: async () => {
+          setTimeout(restartHostedSession, 1000);
+        },
+      }),
+    );
   }
 };
 

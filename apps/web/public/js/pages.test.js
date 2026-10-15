@@ -443,6 +443,8 @@ describe('复盘报告阅读层级', () => {
       expect(card.children[0].children[0].href).toBe('#reports?id=report-2');
       expect(routeReportId('#reports?id=report-2')).toBe('report-2');
       expect(reportDeliveryLabel('sent')).toBe('已提交渠道');
+      expect(reportDeliveryLabel('unverifiable')).toBe('结果待核实，未自动重发');
+      expect(reportDeliveryLabel('invalidated')).toBe('待发通知已停止');
     } finally {
       globalThis.document = originalDocument;
       globalThis.Node = originalNode;

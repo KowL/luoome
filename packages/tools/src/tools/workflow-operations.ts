@@ -1,12 +1,13 @@
 import {
   type DeliveryStatus,
   DeliveryStatusSchema,
+  hostedQuietUntil,
   WatchRuleStateSchema,
   WatchTriggerSchema,
 } from '@luoome/core';
 import { z } from 'zod';
 
-import { defineTool } from '../define-tool.js';
+import { defineTool, errLeaseLostBeforeCommit } from '../define-tool.js';
 import {
   observationsForWatchTrigger,
   saveObservationCandidates,
@@ -88,15 +89,39 @@ export const watchExecutionTool = defineTool({
       await ctx.repos.watchTrigger.releaseExecution(owner);
       return { acquired: false };
     }
-    return {
-      acquired: await (action === 'acquire'
-        ? ctx.repos.watchTrigger.acquireExecution(owner, now, until)
-        : ctx.repos.watchTrigger.renewExecution(owner, now, until)),
-    };
+    const acquired = await (action === 'acquire'
+      ? ctx.repos.watchTrigger.acquireExecution(owner, now, until)
+      : ctx.repos.watchTrigger.renewExecution(owner, now, until));
+    if (acquired && action === 'acquire' && ctx.identity?.mode === 'hosted') {
+      for (const intent of await ctx.repos.watchDelivery.recover(owner, now)) {
+        const status =
+          intent.state === 'accepted'
+            ? 'sent'
+            : intent.state === 'unknown'
+              ? 'unverifiable'
+              : intent.state === 'suppressed'
+                ? intent.errorKind === 'fallback-log'
+                  ? 'fallback-log'
+                  : 'invalidated'
+                : null;
+        if (status !== null)
+          await ctx.repos.watchTrigger.setDeliveryStatus(
+            [intent.resultRef],
+            status,
+            intent.notificationId ?? undefined,
+            now,
+            owner,
+          );
+      }
+    }
+    return { acquired };
   },
 });
 
-export const BeginWatchDeliveryInput = z.object({ triggerIds: z.array(z.string().min(1)).min(1) });
+export const BeginWatchDeliveryInput = z.object({
+  triggerIds: z.array(z.string().min(1)).min(1),
+  owner: z.string().min(1).optional(),
+});
 export const BeginWatchDeliveryOutput = z.object({ started: z.number().int().nonnegative() });
 export const beginWatchDeliveryTool = defineTool({
   name: 'begin_watch_delivery',
@@ -104,8 +129,28 @@ export const beginWatchDeliveryTool = defineTool({
   sideEffect: 'write',
   input: BeginWatchDeliveryInput,
   output: BeginWatchDeliveryOutput,
-  handler: async ({ triggerIds }, ctx) => {
-    await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock());
+  handler: async ({ triggerIds, owner }, ctx) => {
+    if (ctx.identity?.mode === 'hosted') {
+      if (owner === undefined) return errLeaseLostBeforeCommit('预警投递缺少执行令牌');
+      if (
+        !(await ctx.repos.watchDelivery.prepare({
+          owner,
+          triggerIds,
+          tenantId: ctx.identity.tenantId,
+          generation: ctx.identity.tenantGeneration,
+          now: ctx.clock(),
+        }))
+      )
+        return errLeaseLostBeforeCommit();
+      const settings = await ctx.repos.watchDelivery.settings();
+      if (hostedQuietUntil(settings.quietHours, ctx.clock()) !== null)
+        return {
+          ok: false as const,
+          error: { kind: 'permission_denied' as const, required: 'notification:quiet-hours' },
+        };
+    }
+    if (!(await ctx.repos.watchTrigger.beginDelivery(triggerIds, ctx.clock(), owner)))
+      return errLeaseLostBeforeCommit();
     return { started: triggerIds.length };
   },
 });
@@ -179,6 +224,7 @@ export const SetWatchTriggerDeliveryStatusInput = z.object({
   triggerIds: z.array(z.string().min(1)).min(1),
   status: DeliveryStatusSchema,
   notificationId: z.string().min(1).optional(),
+  owner: z.string().min(1).optional(),
 });
 export const SetWatchTriggerDeliveryStatusOutput = z.object({
   triggerIds: z.array(z.string().min(1)),
@@ -193,12 +239,16 @@ export const setWatchTriggerDeliveryStatusTool = defineTool({
   output: SetWatchTriggerDeliveryStatusOutput,
   handler: async (input, ctx) => {
     const completedAt = ctx.clock();
-    await ctx.repos.watchTrigger.setDeliveryStatus(
+    if (ctx.identity?.mode === 'hosted' && input.owner === undefined)
+      return errLeaseLostBeforeCommit();
+    const saved = await ctx.repos.watchTrigger.setDeliveryStatus(
       input.triggerIds,
       input.status as DeliveryStatus,
       input.notificationId,
       completedAt,
+      input.owner,
     );
+    if (!saved) return errLeaseLostBeforeCommit();
     return { triggerIds: [...input.triggerIds], status: input.status, completedAt };
   },
 });

@@ -6,6 +6,8 @@ export * from './hosted/maintenance.js';
 export * from './hosted/platform-client.js';
 export * from './hosted/platform-memory.js';
 export * from './hosted/platform-schema.js';
+export * from './hosted/public-market-client.js';
+export * from './hosted/public-market-memory.js';
 export * from './hosted/tenant-client.js';
 export * from './hosted/tenant-export-client.js';
 export * from './hosted/tenant-export-memory.js';

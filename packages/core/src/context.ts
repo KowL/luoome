@@ -256,10 +256,21 @@ export interface NotificationManagerLike {
     readonly payload: NotificationPayload;
     readonly adviceId?: string;
     readonly tacticSignalId?: string;
+    readonly watchDelivery?: { readonly owner: string; readonly triggerIds: readonly string[] };
   }): Promise<{ readonly notification: unknown }>;
 }
 
 export interface ToolContext {
+  readonly llmOperationScope?: string;
+  readonly llmExecution?: {
+    run<T>(
+      name: string,
+      input: unknown,
+      ctx: ToolContext,
+      work: (ctx: ToolContext) => Promise<T>,
+    ): Promise<T>;
+  };
+  readonly reportExecutionOwner?: string;
   readonly identity?: Readonly<ExecutionIdentity>;
   readonly hostedAuthorization?: (
     toolName: string,

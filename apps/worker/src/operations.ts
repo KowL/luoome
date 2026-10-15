@@ -6,6 +6,7 @@ import {
   createSqliteMaintenanceGate,
   PLATFORM_SCHEMA_VERSION,
 } from '@luoome/db';
+import { getHostedLLMCostsTool } from '@luoome/tools/platform';
 import { createHostedBackup } from '../../web/src/hosted-backup.js';
 import { assertHostedEnvironmentIsolation, loadHostedConfig } from '../../web/src/hosted-config.js';
 import {
@@ -28,6 +29,8 @@ export const runHostedOperations = async (
     allowPositionals: false,
     options: {
       source: { type: 'string' },
+      since: { type: 'string' },
+      until: { type: 'string' },
       destination: { type: 'string' },
       'data-root': { type: 'string' },
       'deletion-ledger': { type: 'string' },
@@ -43,6 +46,7 @@ export const runHostedOperations = async (
       'reconcile-external',
       'resume',
       'status',
+      'llm-costs',
       'recover-stopped-writers',
     ].includes(command ?? '')
   )
@@ -107,6 +111,17 @@ export const runHostedOperations = async (
         config,
         writersStopped: true,
       });
+    }
+    if (command === 'llm-costs') {
+      const result = await getHostedLLMCostsTool.execute(
+        {
+          ...(values.since === undefined ? {} : { since: values.since }),
+          ...(values.until === undefined ? {} : { until: values.until }),
+        },
+        createHostedOperatorContext(handle.repos, config),
+      );
+      if (!result.ok) throw new Error(result.error.kind);
+      return result.data;
     }
     if (command === 'status')
       return {

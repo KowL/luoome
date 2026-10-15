@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import { HostedQuietHoursSchema } from '../hosted/notification.js';
+import { DeliveryIntentSchema } from '../hosted/platform.js';
+import type { AlertPlan } from './alert-plan.js';
+import type { WatchTrigger } from './watch-trigger.js';
+import type { Watchlist, WatchlistMember } from './watchlist.js';
 
 /**
  * 通知（v0.3 起，ARCHITECTURE §5.1 扩字段 + plan-v0.2-v0.3 §2.5）。
@@ -75,6 +80,95 @@ export const NotificationSchema = z.object({
   tacticSignalId: z.string().optional(),
   sentAt: z.coerce.date(),
 });
+
+export const FeishuWebhookUrlSchema = z
+  .url()
+  .max(2048)
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'open.feishu.cn' &&
+      /^\/open-apis\/bot\/v2\/hook\/[A-Za-z0-9_-]+$/.test(url.pathname) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  }, '仅支持飞书自定义机器人的 HTTPS Webhook');
+
+export const WatchNotificationSettingsSchema = z.object({
+  enabled: z.boolean(),
+  webhookUrl: FeishuWebhookUrlSchema.nullable(),
+  quietHours: HostedQuietHoursSchema,
+  revision: z.number().int().nonnegative(),
+  bindingVersion: z.number().int().positive(),
+});
+export type WatchNotificationSettings = z.infer<typeof WatchNotificationSettingsSchema>;
+export const defaultWatchNotificationSettings = (): WatchNotificationSettings => ({
+  enabled: true,
+  webhookUrl: null,
+  revision: 0,
+  bindingVersion: 1,
+  quietHours: { enabled: false, startMinutes: 1320, endMinutes: 480, timeZone: 'Asia/Shanghai' },
+});
+
+export const WatchDeliveryIntentSchema = DeliveryIntentSchema.omit({ channel: true }).extend({
+  channel: z.literal('feishu'),
+  executionOwner: z.string().min(1),
+  notificationId: z.string().nullable(),
+});
+export type WatchDeliveryIntent = z.infer<typeof WatchDeliveryIntentSchema>;
+export const isWatchAlertDeliveryEligible = (
+  trigger: WatchTrigger,
+  plan: Pick<AlertPlan, 'enabled' | 'logic' | 'rules'> | null | undefined,
+  watchlist: Pick<Watchlist, 'enabled'> | null | undefined,
+  member: Pick<WatchlistMember, 'stage'> | null | undefined,
+): boolean =>
+  plan?.enabled === true &&
+  (trigger.ruleId === 'composite'
+    ? plan.logic === 'ALL'
+    : plan.rules.some((rule) => rule.id === trigger.ruleId)) &&
+  watchlist?.enabled === true &&
+  member !== null &&
+  member !== undefined &&
+  member.stage !== 'archived';
+
+export interface WatchDeliveryRepository {
+  settings(): Promise<WatchNotificationSettings>;
+  saveSettings(input: {
+    expectedRevision: number;
+    enabled: boolean;
+    webhookUrl: string | null;
+    quietHours: WatchNotificationSettings['quietHours'];
+    now: Date;
+  }): Promise<WatchNotificationSettings>;
+  prepare(input: {
+    owner: string;
+    tenantId: string;
+    generation: number;
+    triggerIds: readonly string[];
+    now: Date;
+  }): Promise<boolean>;
+  claim(input: {
+    owner: string;
+    attemptId: string;
+    triggerIds: readonly string[];
+    now: Date;
+  }): Promise<readonly WatchDeliveryIntent[] | null>;
+  complete(input: {
+    owner: string;
+    attemptId: string;
+    triggerIds: readonly string[];
+    state: 'accepted' | 'failed' | 'unknown' | 'suppressed';
+    notificationId: string;
+    errorKind: string | null;
+    now: Date;
+  }): Promise<boolean>;
+  recover(owner: string, now: Date): Promise<readonly WatchDeliveryIntent[]>;
+  suppressPending(reason: string, now: Date): Promise<number>;
+  list(): Promise<readonly WatchDeliveryIntent[]>;
+}
 
 // ---------- 不变量 ----------
 

@@ -62,6 +62,111 @@ const nextTradingDay = (date: string): string => {
   throw new Error(`无法解析 ${date} 的下一 A 股交易日`);
 };
 
+const adviceCalibrationSection = async (
+  date: string,
+  accountId: string,
+  generatedAt: Date,
+  ctx: WorkflowContext,
+): Promise<ReportSectionPiece> => {
+  const periodStart = dateInShanghai(new Date(shanghaiDate(date).getTime() - 29 * DAY_MS));
+  const until = new Date(
+    Math.min(generatedAt.getTime(), new Date(`${date}T23:59:59.999+08:00`).getTime()),
+  );
+  const calibration = await ctx.tools.get_confidence_calibration.execute({
+    accountId,
+    since: new Date(`${periodStart}T00:00:00+08:00`),
+    until,
+  });
+  const scope: ReportBlock = {
+    kind: 'text',
+    tone: 'factual',
+    text: `账户范围：${accountId}。建议生成时间范围：${periodStart} 至 ${notificationTime(until)}（北京时间，含已过期建议）；明确反馈截至本报告生成时。`,
+  };
+  if (!calibration.ok) {
+    const unavailable = unavailableSection(
+      'advice-calibration',
+      '近期建议校准摘要',
+      true,
+      generatedAt,
+      'decision-review',
+      calibration.error.kind,
+    );
+    return {
+      ...unavailable,
+      section: {
+        ...unavailable.section,
+        blocks: [{ ...scope, tone: 'warning' }, ...unavailable.section.blocks],
+      },
+    };
+  }
+  const { totalAdvices, totalWithOutcome, followedWithPnl, overallHitRate } = calibration.data;
+  const evidence = [
+    localEvidence(
+      'advice-calibration:0',
+      'advice-calibration',
+      calibration.data.calibratedAt,
+      'local/decision-review',
+    ),
+  ];
+  return {
+    evidence,
+    section: {
+      key: 'advice-calibration',
+      title: '近期建议校准摘要',
+      required: true,
+      status: 'complete',
+      dataAsOf: calibration.data.calibratedAt,
+      blocks: [
+        scope,
+        {
+          kind: 'metrics',
+          items: [
+            {
+              key: 'adviceSampleCount',
+              label: '账户建议样本量',
+              value: totalAdvices,
+              ...(totalAdvices === 0 ? { displayValue: '暂无建议样本' } : {}),
+            },
+            {
+              key: 'explicitFeedbackCount',
+              label: '明确反馈样本量',
+              value: totalWithOutcome,
+              ...(totalWithOutcome === 0 ? { displayValue: '暂无明确反馈' } : {}),
+            },
+            {
+              key: 'feedbackCoverage',
+              label: '反馈覆盖率',
+              unit: 'ratio',
+              value: totalAdvices === 0 ? null : totalWithOutcome / totalAdvices,
+              ...(totalAdvices === 0 ? { displayValue: '暂无建议样本，无法计算' } : {}),
+            },
+            {
+              key: 'followedWithReportedPnlCount',
+              label: '已采纳且填报盈亏样本量',
+              value: followedWithPnl,
+              ...(followedWithPnl === 0 ? { displayValue: '暂无有效盈亏样本' } : {}),
+            },
+            {
+              key: 'reportedProfitShare',
+              label: '填报盈利占比',
+              value: overallHitRate,
+              unit: 'ratio',
+              ...(overallHitRate === null ? { displayValue: '暂无有效盈亏样本，无法计算' } : {}),
+            },
+          ],
+        },
+        {
+          kind: 'text',
+          tone: 'factual',
+          text: '反馈覆盖率 = 当前账户明确反馈样本量 / 账户建议样本量。填报盈利占比仅统计用户明确采纳且填写盈亏的样本；未知盈亏保持缺失，零盈亏仅来自用户明确填报。该占比不代表账户收益率、预测准确率或未来成功概率。',
+        },
+      ],
+      evidenceIds: evidence.map((item) => item.id),
+      missingDimensions: [],
+    },
+  };
+};
+
 const accountPerformance = async (
   input: ClosingInput,
   now: Date,
@@ -1391,18 +1496,29 @@ const runClosingReport = async (
               'ashare-sentiment',
               sentiment.error.kind,
             );
-        const [performance, triggers, adviceExpiry, strategyActions, plans, priorDay, nextEvents] =
-          await Promise.all([
-            accountPerformance(input, generatedAt, ctx),
-            triggersSection(date, generatedAt, ctx, input.scope),
-            adviceExpirySection(date, generatedAt, ctx, input.scope),
-            strategyActionsSection(date, generatedAt, ctx, input.scope),
-            tradingPlansSection(date, input.scope, generatedAt, ctx, audit, input.planBatchStatus),
-            input.scope.kind === 'account'
-              ? priorDayReviewSection(date, input.scope.accountId, generatedAt, ctx, audit)
-              : Promise.resolve(null),
-            nextEventsSection(date, generatedAt, ctx),
-          ]);
+        const [
+          performance,
+          triggers,
+          adviceExpiry,
+          strategyActions,
+          plans,
+          priorDay,
+          nextEvents,
+          calibration,
+        ] = await Promise.all([
+          accountPerformance(input, generatedAt, ctx),
+          triggersSection(date, generatedAt, ctx, input.scope),
+          adviceExpirySection(date, generatedAt, ctx, input.scope),
+          strategyActionsSection(date, generatedAt, ctx, input.scope),
+          tradingPlansSection(date, input.scope, generatedAt, ctx, audit, input.planBatchStatus),
+          input.scope.kind === 'account'
+            ? priorDayReviewSection(date, input.scope.accountId, generatedAt, ctx, audit)
+            : Promise.resolve(null),
+          nextEventsSection(date, generatedAt, ctx),
+          input.scope.kind === 'account'
+            ? adviceCalibrationSection(date, input.scope.accountId, generatedAt, ctx)
+            : Promise.resolve(null),
+        ]);
         return [
           market,
           performance,
@@ -1412,6 +1528,7 @@ const runClosingReport = async (
           plans,
           ...(priorDay === null ? [] : [priorDay]),
           nextEvents,
+          ...(calibration === null ? [] : [calibration]),
         ];
       },
     },

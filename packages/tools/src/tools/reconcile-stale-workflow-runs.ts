@@ -47,6 +47,11 @@ export const reconcileStaleWorkflowRunsTool = defineTool({
     let skipped = 0;
     const runIds: string[] = [];
     for (const run of running) {
+      // 可续租的执行槽由原子过期接管处理，不能按 startedAt 终止仍有心跳的任务。
+      if (typeof run.inputSummary?.executionLeaseUntilMs === 'number') {
+        skipped += 1;
+        continue;
+      }
       const effectiveCutoff =
         run.workflowName === 'account-plan-batch'
           ? new Date(Math.min(cutoff.getTime(), now.getTime() - 120 * 60_000))

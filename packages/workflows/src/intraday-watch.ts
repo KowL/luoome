@@ -83,6 +83,9 @@ export const IntradayWatchOutput = z.object({
   triggers: z.array(WatchTriggerSummarySchema),
   evaluatedPlans: z.number().int().nonnegative(),
   evaluatedStocks: z.number().int().nonnegative(),
+  /** 一轮按跨计划去重标的、每批最多 100 只计量；不是 provider HTTP 次数或订阅扣额。 */
+  quoteBatches: z.number().int().nonnegative(),
+  unavailableQuoteStocks: z.number().int().nonnegative(),
   notified: z.number().int().nonnegative(),
   suppressedByCooldown: z.number().int().nonnegative(),
   suppressedByDailyLimit: z.number().int().nonnegative(),
@@ -123,6 +126,7 @@ interface MembersState {
 
 interface QuotesState extends MembersState {
   readonly quotes: ReadonlyMap<string, Quote>;
+  readonly quoteBatches: number;
 }
 
 interface PrevClosesState extends QuotesState {
@@ -518,21 +522,22 @@ const stepResolveMembers: WorkflowStep = async (prev, ctx) => {
 
 const stepBatchQuote: WorkflowStep = async (prev, ctx) => {
   const state = prev as MembersState;
-  if (state.allStockIds.length === 0) {
-    return { ...state, quotes: new Map<string, Quote>() } satisfies QuotesState;
-  }
-  const r = await ctx.tools.batch_quote.execute({
-    stockIds: [...state.allStockIds],
-    context: 'intraday-rule',
-  });
-  if (!r.ok) return r;
   const map = new Map<string, Quote>();
-  for (const item of r.data.items) {
-    if (item.status === 'ok' && item.freshness === 'fresh') {
-      map.set(item.stockId, item.quote);
+  let quoteBatches = 0;
+  for (let offset = 0; offset < state.allStockIds.length; offset += 100) {
+    const r = await ctx.tools.batch_quote.execute({
+      stockIds: state.allStockIds.slice(offset, offset + 100),
+      context: 'intraday-rule',
+    });
+    quoteBatches += 1;
+    if (!r.ok) return r;
+    for (const item of r.data.items) {
+      if (item.status === 'ok' && item.freshness === 'fresh') {
+        map.set(item.stockId, item.quote);
+      }
     }
   }
-  return { ...state, quotes: map } satisfies QuotesState;
+  return { ...state, quotes: map, quoteBatches } satisfies QuotesState;
 };
 
 const stepLoadPrevCloses: WorkflowStep = async (prev, ctx) => {
@@ -1332,6 +1337,8 @@ const stepNotifyAndSummary: WorkflowStep = async (prev, ctx) => {
     }),
     evaluatedPlans: state.pools.length,
     evaluatedStocks: state.allStockIds.length,
+    quoteBatches: state.quoteBatches,
+    unavailableQuoteStocks: state.allStockIds.length - state.quotes.size,
     notified: notifiedCount,
     suppressedByCooldown: state.suppressedByCooldown,
     suppressedByDailyLimit: state.suppressedByDailyLimit,

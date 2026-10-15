@@ -74,7 +74,10 @@ export class InMemoryReportRepository implements ReportRepository {
     const existing = existingId === undefined ? undefined : this.items.get(existingId);
     if (
       existing !== undefined &&
-      (parsed.kind === 'closing' || parsed.kind === 'weekly' || parsed.kind === 'watchlist-facts')
+      (parsed.kind === 'opening' ||
+        parsed.kind === 'closing' ||
+        parsed.kind === 'weekly' ||
+        parsed.kind === 'watchlist-facts')
     ) {
       return existing;
     }

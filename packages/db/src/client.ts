@@ -9,10 +9,14 @@ import {
 } from '@luoome/core';
 import { eq, sql } from 'drizzle-orm';
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite';
+import { createDrizzleReportAutomationRepository } from './hosted/report-automation-client.js';
+import { ensureReportAutomationSchema } from './hosted/report-automation-schema.js';
 import { DrizzleTenantRepository } from './hosted/tenant-client.js';
 import { DrizzleTenantExportRepository } from './hosted/tenant-export-client.js';
 import { ensureTenantExportSchema } from './hosted/tenant-export-schema.js';
 import { ensureTenantSchema } from './hosted/tenant-schema.js';
+import { createDrizzleWatchDeliveryRepository } from './hosted/watch-delivery-client.js';
+import { ensureWatchDeliverySchema } from './hosted/watch-delivery-schema.js';
 import {
   DrizzleAccountRepository,
   DrizzleAdviceRepository,
@@ -81,6 +85,8 @@ const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: 
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  ensureWatchDeliverySchema(db);
+  ensureReportAutomationSchema(db);
   ensureTenantSchema(db);
   ensureTenantExportSchema(db);
   db.run(sql`CREATE TABLE IF NOT EXISTS decision_reviews (
@@ -2088,6 +2094,8 @@ export const createDrizzleRepos = (
   const repos: RepositoryRegistry = {
     hostedTenant: new DrizzleTenantRepository(db),
     hostedExports: new DrizzleTenantExportRepository(db),
+    watchDelivery: createDrizzleWatchDeliveryRepository(db),
+    reportAutomation: createDrizzleReportAutomationRepository(db),
     account: new DrizzleAccountRepository(db),
     ledger: new DrizzleLedgerRepository(db),
     decisionReview: new DrizzleDecisionReviewRepository(db),

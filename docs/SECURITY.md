@@ -344,9 +344,12 @@ hosted已有身份/隔离/支付/恢复基础设施；本次在其上复用原We
 真实运营与供应商门禁见[运行手册](./runbooks/hosted-personal-subscription.md#7-生产放行门禁)。
 
 - 显式hosted不读取个人`.env`、共享本地DB或用户home模型配置；Bun启动要求`--no-env-file`。
-  固定HTTPS `PUBLIC_ORIGIN`，生产拒绝fixture provider，注册默认关闭直到实际放行条件完成。
+  固定 `PUBLIC_ORIGIN` 默认要求HTTPS；临时HTTP验证仅在部署显式设置 `HOSTED_ALLOW_INSECURE_HTTP=true`
+  时允许，不能作为生产放行依据。生产拒绝fixture provider，注册默认关闭直到实际放行条件完成。
 - 邮箱OTP为6位/5分钟/5次尝试，平台存HMAC；邮箱/IP/全站有预算。session token仅存hash，cookie
   使用Secure/HttpOnly/SameSite=Lax/Path=/；已有idle7天/absolute30天参数、会话轮换和敏感操作再认证保持。
+  临时HTTP入口使用独立的 `luoome_http_session`，保留HttpOnly/SameSite/Path及Origin/CSRF保护；
+  验证码与会话在HTTP中不加密。HTTPS入口不接受该Cookie，切换HTTPS后须重新登录。
 - 浏览器mutation校验固定Origin和会话CSRF；登录挑战只豁免已有会话/CSRF，仍查Origin及限流。
   支付raw-body webhook独立验签；可信代理头不能替代身份。客户端Tenant、账户、owner、价格和预算不能覆写服务端事实。
 - 平台registry不进入模型/MCP/generic HTTP。原业务Tool、专用API、SSE、确认草案和worker统一按当前Tenant授权。

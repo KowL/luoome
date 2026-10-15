@@ -37,6 +37,17 @@ import {
   watchExecutionTool,
 } from '../tools/workflow-operations.js';
 import type { HostedInvocation } from './invoke.js';
+import { deliverHostedReportTool, hostedReportExecutionTool } from './report.js';
+import { hostedStrategyExecutionTool } from './strategy.js';
+import {
+  claimHostedWatchTickTool,
+  createHostedWatchNotificationManager,
+  finishHostedWatchTickTool,
+  getHostedWatchSettingsTool,
+  listHostedWatchDeliveriesTool,
+  saveHostedWatchSettingsTool,
+  testHostedWatchSettingsTool,
+} from './watch.js';
 
 export const HOSTED_WEB_POLICY_VERSION = 'hosted-web-v2' as const;
 
@@ -224,6 +235,15 @@ export const hostedWebPublicToolNames: readonly string[] = Object.freeze([
 ]);
 
 const internalTools: readonly Tool[] = [
+  hostedReportExecutionTool,
+  hostedStrategyExecutionTool,
+  deliverHostedReportTool,
+  getHostedWatchSettingsTool,
+  saveHostedWatchSettingsTool,
+  testHostedWatchSettingsTool,
+  listHostedWatchDeliveriesTool,
+  claimHostedWatchTickTool,
+  finishHostedWatchTickTool,
   beginAccountPlanBatchTool,
   finishAccountPlanBatchTool,
   getAccountPlanBatchTool,
@@ -346,6 +366,17 @@ export const contextForHostedWebTools = (
   options: HostedWebToolOptions = {},
 ): ToolContext => ({
   ...invocation.context,
+  notification: {
+    send: async (input) => {
+      if (input.watchDelivery !== undefined)
+        return createHostedWatchNotificationManager(invocation.context, () =>
+          authorizeHostedWebRequest(invocation, true),
+        ).send(input);
+      const original = invocation.context.notification;
+      if (original === undefined) throw new Error('notification manager unavailable');
+      return original.send(input);
+    },
+  },
   hostedAuthorization: async (name, input, declaredCapabilities) => {
     const tool = approved.get(name);
     if (tool === undefined) return denied('hosted:web-tool');

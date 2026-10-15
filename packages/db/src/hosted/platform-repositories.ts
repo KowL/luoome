@@ -24,6 +24,7 @@ import {
   type TenantTombstone,
   type UsageReservation,
 } from '@luoome/core';
+import { createPlatformLLMRepository } from './platform-llm.js';
 import { createPlatformPayments } from './platform-payments.js';
 import type { PlatformStore } from './platform-store.js';
 
@@ -36,6 +37,24 @@ const digestEquals = (left: string, right: string): boolean => {
 };
 const sameValue = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right);
+
+const assertFreshSession = (
+  session: Omit<HostedSession, 'userId' | 'tenantId'>,
+  now: Date,
+): void => {
+  if (
+    session.createdAt.getTime() !== now.getTime() ||
+    session.lastSeenAt.getTime() !== now.getTime() ||
+    session.revokedAt !== null ||
+    session.idleExpiresAt <= now ||
+    session.idleExpiresAt.getTime() - now.getTime() > 7 * DAY ||
+    session.absoluteExpiresAt <= now ||
+    session.absoluteExpiresAt.getTime() - now.getTime() > 30 * DAY ||
+    session.idleExpiresAt > session.absoluteExpiresAt
+  ) {
+    throw new InvariantError('session lifetime or initial state is invalid');
+  }
+};
 
 export const createPlatformRepositories = (store: PlatformStore): PlatformRepositoryRegistry => {
   const tenantFor = (id: string, generation?: number): Tenant => {
@@ -187,6 +206,7 @@ export const createPlatformRepositories = (store: PlatformStore): PlatformReposi
   const eraseTenantControlData = (current: Tenant, tombstone: TenantTombstone, now: Date): void => {
     const user = store.get('users', current.ownerUserId);
     if (user !== null) {
+      store.remove('passwords', user.id);
       for (const challenge of store.list('challenges', { emailKey: user.emailKey }))
         store.remove('challenges', challenge.id);
       for (const session of store.list('sessions', { userId: user.id }))
@@ -259,6 +279,7 @@ export const createPlatformRepositories = (store: PlatformStore): PlatformReposi
   };
 
   const registry: PlatformRepositoryRegistry = {
+    llm: createPlatformLLMRepository(store, entitlement, tenantFor),
     privacy: {
       async requestExport({ metadata, userId, now }) {
         return store.transaction(() => {
@@ -617,6 +638,91 @@ export const createPlatformRepositories = (store: PlatformStore): PlatformReposi
       async findUserById(id) {
         return store.get('users', id);
       },
+      async setUserStatus({ userId, status, now }) {
+        return store.transaction(() => {
+          const user = store.get('users', userId);
+          if (user === null) throw new InvariantError('user not found');
+          if (user.status === 'deleted') throw new InvariantError('deleted user is terminal');
+          const next = { ...user, status, updatedAt: now };
+          store.put('users', next);
+          if (status === 'disabled') revokeUser(userId, now);
+          return next;
+        });
+      },
+      async findPasswordByUserId(userId) {
+        return store.get('passwords', userId);
+      },
+      async findPasswordByEmail(emailKey) {
+        const user = store.list('users', { emailKey })[0];
+        return user === undefined ? null : { user, credential: store.get('passwords', user.id) };
+      },
+      async reservePasswordAttempt({ id, emailHash, ipHash, now }) {
+        return store.transaction(() => {
+          for (const old of store.list('passwordAttempts'))
+            if (old.createdAt.getTime() <= now.getTime() - 15 * 60_000)
+              store.remove('passwordAttempts', old.id);
+          const recent = store.list('passwordAttempts');
+          if (
+            recent.filter((item) => item.emailHash === emailHash).length >= 10 ||
+            recent.filter((item) => item.ipHash === ipHash).length >= 30 ||
+            recent.length >= 500
+          )
+            return false;
+          if (store.get('passwordAttempts', id) !== null)
+            throw new InvariantError('password attempt id already exists');
+          store.put('passwordAttempts', { id, emailHash, ipHash, createdAt: now });
+          return true;
+        });
+      },
+      async createPasswordSession(input) {
+        return store.transaction(() => {
+          const user = store.get('users', input.userId);
+          const credential = store.get('passwords', input.userId);
+          const tenant = store.list('tenants', { ownerUserId: input.userId })[0];
+          if (
+            user?.status !== 'active' ||
+            credential?.passwordHash !== input.expectedPasswordHash ||
+            tenant === undefined ||
+            ['deleting', 'deleted'].includes(tenant.status)
+          )
+            return null;
+          if (
+            store.get('sessions', input.session.id) !== null ||
+            store.list('sessions', { tokenHash: input.session.tokenHash }).length > 0
+          )
+            throw new InvariantError('session token or id already exists');
+          assertFreshSession(input.session, input.now);
+          if (input.rotateSessionId !== undefined) {
+            const old = store.get('sessions', input.rotateSessionId);
+            if (old?.userId === user.id) store.put('sessions', { ...old, revokedAt: input.now });
+          }
+          const session = { ...input.session, userId: user.id, tenantId: tenant.id };
+          store.put('sessions', session);
+          return { user, tenant, session };
+        });
+      },
+      async changePassword({ userId, sessionId, expectedPasswordHash, passwordHash, now }) {
+        return store.transaction(() => {
+          const session = store.get('sessions', sessionId);
+          const credential = store.get('passwords', userId);
+          if (
+            store.get('users', userId)?.status !== 'active' ||
+            session?.userId !== userId ||
+            session.revokedAt !== null ||
+            session.idleExpiresAt <= now ||
+            session.absoluteExpiresAt <= now ||
+            (credential?.passwordHash ?? null) !== expectedPasswordHash ||
+            (credential === null && now.getTime() - session.createdAt.getTime() > 10 * 60_000)
+          )
+            return false;
+          store.put('passwords', { id: userId, passwordHash, updatedAt: now });
+          revokeUser(userId, now);
+          const user = store.get('users', userId)!;
+          for (const challenge of store.list('challenges', { emailKey: user.emailKey }))
+            store.put('challenges', { ...challenge, invalidatedAt: now });
+          return true;
+        });
+      },
       async createChallenge({ challenge, now, limits }) {
         return store.transaction(() => {
           if (
@@ -695,6 +801,12 @@ export const createPlatformRepositories = (store: PlatformStore): PlatformReposi
           if (!digestEquals(challenge.digest, input.digest))
             return { authenticated: false as const };
           let user = store.list('users', { emailKey: challenge.emailKey })[0];
+          if (
+            challenge.purpose === 'login' &&
+            user !== undefined &&
+            store.get('passwords', user.id) !== null
+          )
+            return { authenticated: false as const };
           let tenant =
             user === undefined ? undefined : store.list('tenants', { ownerUserId: user.id })[0];
           if (
@@ -715,18 +827,7 @@ export const createPlatformRepositories = (store: PlatformStore): PlatformReposi
           const tokenConflict = store.list('sessions', { tokenHash: input.session.tokenHash })[0];
           if (tokenConflict !== undefined || store.get('sessions', input.session.id) !== null)
             throw new InvariantError('session token or id already exists');
-          if (
-            input.session.createdAt.getTime() !== now.getTime() ||
-            input.session.lastSeenAt.getTime() !== now.getTime() ||
-            input.session.revokedAt !== null ||
-            input.session.idleExpiresAt <= now ||
-            input.session.idleExpiresAt.getTime() - now.getTime() > 7 * DAY ||
-            input.session.absoluteExpiresAt <= now ||
-            input.session.absoluteExpiresAt.getTime() - now.getTime() > 30 * DAY ||
-            input.session.idleExpiresAt > input.session.absoluteExpiresAt
-          ) {
-            throw new InvariantError('session lifetime or initial state is invalid');
-          }
+          assertFreshSession(input.session, now);
           let provisioningJob: HostedJob | null = null;
           if (user === undefined) {
             if (
@@ -788,6 +889,14 @@ export const createPlatformRepositories = (store: PlatformStore): PlatformReposi
             store.put('jobs', provisioningJob);
           }
           if (tenant === undefined) throw new InvariantError('authenticated user has no tenant');
+          if (input.passwordHash !== undefined) {
+            store.put('passwords', {
+              id: user.id,
+              passwordHash: input.passwordHash,
+              updatedAt: now,
+            });
+            revokeUser(user.id, now);
+          }
           if (input.rotateSessionId !== undefined) {
             const old = store.get('sessions', input.rotateSessionId);
             if (old !== null && old.userId === user.id && old.revokedAt === null)

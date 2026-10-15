@@ -166,6 +166,8 @@ import type {
   PublishStrategyVersionOutput,
   PullResearchVaultGitInput,
   PullResearchVaultGitOutput,
+  ReconcileStaleStrategyRunsInput,
+  ReconcileStaleStrategyRunsOutput,
   ReconcileStaleWorkflowRunsInput,
   ReconcileStaleWorkflowRunsOutput,
   RecordAdviceOutcomeInput,
@@ -268,6 +270,13 @@ import {
   transitionStrategyAutonomyActionTool,
   watchExecutionTool,
 } from '@luoome/tools';
+import {
+  deliverHostedReportTool,
+  type HostedStrategyExecutionInput,
+  type HostedStrategyExecutionOutput,
+  hostedReportExecutionTool,
+  hostedStrategyExecutionTool,
+} from '@luoome/tools/hosted';
 import type { z } from 'zod';
 
 /**
@@ -285,6 +294,18 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
 export interface WorkflowToolMap {
+  readonly hosted_strategy_execution: ToolAccessor<
+    typeof HostedStrategyExecutionInput,
+    typeof HostedStrategyExecutionOutput
+  >;
+  readonly hosted_report_execution: ToolAccessor<
+    typeof hostedReportExecutionTool.inputSchema,
+    typeof hostedReportExecutionTool.outputSchema
+  >;
+  readonly deliver_hosted_report: ToolAccessor<
+    typeof deliverHostedReportTool.inputSchema,
+    typeof deliverHostedReportTool.outputSchema
+  >;
   readonly build_watchlist_facts: ToolAccessor<
     typeof BuildWatchlistFactsInput,
     typeof BuildWatchlistFactsOutput
@@ -591,6 +612,10 @@ export interface WorkflowToolMap {
     typeof FinishAccountPlanBatchOutput
   >;
   /** workflow-only；不进入公共 registry/MCP discovery。 */
+  readonly reconcile_stale_strategy_runs: ToolAccessor<
+    typeof ReconcileStaleStrategyRunsInput,
+    typeof ReconcileStaleStrategyRunsOutput
+  >;
   readonly reconcile_stale_workflow_runs: ToolAccessor<
     typeof ReconcileStaleWorkflowRunsInput,
     typeof ReconcileStaleWorkflowRunsOutput
@@ -711,6 +736,9 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     execute: (input) => syncWatchlistSourceTool.execute(input, ctx),
   };
   for (const internalTool of [
+    hostedReportExecutionTool,
+    hostedStrategyExecutionTool,
+    deliverHostedReportTool,
     buildWatchlistFactsTool,
     commitWatchlistFactsTool,
     buildPersonalAlertEvaluationTool,

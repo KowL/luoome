@@ -52,6 +52,25 @@ export const platformSessions = sqliteTable(
     index('hosted_sessions_user_idx').on(table.userId),
   ],
 );
+export const platformPasswords = sqliteTable('hosted_passwords', {
+  ...record(),
+  id: text('id')
+    .primaryKey()
+    .references(() => platformUsers.id),
+});
+export const platformPasswordAttempts = sqliteTable(
+  'hosted_password_attempts',
+  {
+    ...record(),
+    emailHash: text('email_hash').notNull(),
+    ipHash: text('ip_hash').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('hosted_password_attempts_email_idx').on(table.emailHash, table.createdAt),
+    index('hosted_password_attempts_ip_idx').on(table.ipHash, table.createdAt),
+  ],
+);
 export const platformPlans = sqliteTable('hosted_plan_versions', record());
 export const platformPeriods = sqliteTable(
   'hosted_subscription_periods',
@@ -268,6 +287,8 @@ export const platformDeletions = sqliteTable(
 );
 
 export const platformSchema = {
+  passwords: platformPasswords,
+  passwordAttempts: platformPasswordAttempts,
   users: platformUsers,
   tenants: platformTenants,
   challenges: platformChallenges,

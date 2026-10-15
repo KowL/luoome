@@ -58,3 +58,4 @@ coverage/
 .claude/
 .pi-subagents/
 output/
+.kimi-work/

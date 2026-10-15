@@ -5,6 +5,9 @@ import {
 import { assertHostedEnvironmentIsolation, loadHostedConfig } from '../../web/src/hosted-config.js';
 import { writePrivateArtifact } from '../../web/src/hosted-runtime.js';
 import { runHostedWorkerOnce } from '../../web/src/hosted-worker.js';
+import { runHostedReportPass } from './reports.js';
+import { runHostedStrategyPass } from './strategy.js';
+import { runHostedWatchPass } from './watch.js';
 
 export const startHostedWorker = async () => {
   assertHostedEnvironmentIsolation();
@@ -23,15 +26,20 @@ export const startHostedWorker = async () => {
       JSON.stringify({ lastLoopAt: Date.now(), stopped }),
     );
   let stopped = false;
+  const heartbeat = setInterval(() => health(stopped), 10_000);
   const finished = (async () => {
     try {
       health(false);
       while (!stopped) {
         const result = await runHostedWorkerOnce(service, workerId);
+        await runHostedWatchPass(service, workerId, () => stopped);
+        await runHostedStrategyPass(service, workerId, () => stopped);
+        await runHostedReportPass(service, workerId, () => stopped);
         health(false);
         if (!result.processed) await Bun.sleep(1_000);
       }
     } finally {
+      clearInterval(heartbeat);
       health(true);
       service.close();
     }

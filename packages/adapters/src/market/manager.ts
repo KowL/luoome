@@ -313,7 +313,10 @@ export class MarketDataManager implements MarketDataAdapter {
   ): Promise<Quote> {
     return this.routeWithFallback({
       capability: 'quote',
-      request: { stockId: stockCode },
+      request: {
+        stockId: stockCode,
+        ...(options.requireDetails === true ? { requireDetails: true } : {}),
+      },
       readCache: () => {
         const cached = this.quoteCache.get(stockCode);
         if (cached !== undefined) {

@@ -97,7 +97,12 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
     }
   }
 
-  async beginDelivery(ids: readonly string[], at: Date): Promise<void> {
+  ownsExecution(owner: string, now: Date): boolean {
+    return this.execution?.owner === owner && this.execution.until > now;
+  }
+
+  async beginDelivery(ids: readonly string[], at: Date, owner?: string): Promise<boolean> {
+    if (owner !== undefined && !this.ownsExecution(owner, at)) return false;
     for (const id of ids) {
       const trigger = this.items.get(id);
       if (!trigger) continue;
@@ -110,6 +115,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
         deliveryCompletedAt: undefined,
       });
     }
+    return true;
   }
 
   put(trigger: WatchTrigger): void {
@@ -294,7 +300,13 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
     status: DeliveryStatus,
     notificationId?: string,
     completedAt?: Date,
-  ): Promise<void> {
+    owner?: string,
+  ): Promise<boolean> {
+    if (
+      owner !== undefined &&
+      (completedAt === undefined || !this.ownsExecution(owner, completedAt))
+    )
+      return false;
     for (const id of ids) {
       const t = this.items.get(id);
       if (t === undefined) continue;
@@ -306,6 +318,7 @@ export class InMemoryWatchTriggerRepository implements WatchTriggerRepository {
         notified: ATTEMPTED.has(status),
       });
     }
+    return true;
   }
 
   async setFeedback(id: string, feedback: TriggerFeedback, at: Date): Promise<void> {

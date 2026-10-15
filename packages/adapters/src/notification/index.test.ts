@@ -113,6 +113,35 @@ describe('notification/FeishuWebhookAdapter', () => {
     });
   });
 
+  it.each(['{}', 'not-json', '{"StatusCode":"0"}'])(
+    'HTTP 200 的不可核验回执 %s 不算渠道受理',
+    async (body) => {
+      const adapter = new FeishuWebhookAdapter({
+        webhookUrl: 'https://x',
+        fetchImpl: async () => new Response(body, { status: 200 }),
+        logger: noopLogger,
+      });
+      await expect(adapter.send({ title: 't', content: 'c', level: 'info' })).rejects.toMatchObject(
+        {
+          name: 'FeishuAdapterError',
+          statusCode: undefined,
+        },
+      );
+    },
+  );
+
+  it('code=0 的渠道回执可确认受理', async () => {
+    const adapter = new FeishuWebhookAdapter({
+      webhookUrl: 'https://x',
+      fetchImpl: async () => Response.json({ code: 0 }),
+      logger: noopLogger,
+    });
+    await expect(adapter.send({ title: 't', content: 'c', level: 'info' })).resolves.toEqual({
+      ok: true,
+      statusCode: 200,
+    });
+  });
+
   it('HTTP 5xx → 抛 FeishuAdapterError recoverable', async () => {
     const fetchImpl = async (): Promise<Response> => new Response('upstream', { status: 503 });
     const a = new FeishuWebhookAdapter({ webhookUrl: 'https://x', fetchImpl, logger: noopLogger });

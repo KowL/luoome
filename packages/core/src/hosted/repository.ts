@@ -1,3 +1,4 @@
+import type { PlatformLLMRepository } from './llm.js';
 import type { HostedQuietHours, NotificationPreferences } from './notification.js';
 import type {
   HostedPaymentAttempt,
@@ -43,6 +44,40 @@ export interface AuthChallengeLimits {
 
 export interface PlatformAuthRepository {
   findUserById(id: string): Promise<HostedUser | null>;
+  setUserStatus(input: {
+    readonly userId: string;
+    readonly status: 'active' | 'disabled';
+    readonly now: Date;
+  }): Promise<HostedUser>;
+  findPasswordByUserId(userId: string): Promise<HostedPasswordCredential | null>;
+  findPasswordByEmail(emailKey: string): Promise<{
+    readonly user: HostedUser;
+    readonly credential: HostedPasswordCredential | null;
+  } | null>;
+  reservePasswordAttempt(input: {
+    readonly id: string;
+    readonly emailHash: string;
+    readonly ipHash: string;
+    readonly now: Date;
+  }): Promise<boolean>;
+  createPasswordSession(input: {
+    readonly userId: string;
+    readonly expectedPasswordHash: string;
+    readonly now: Date;
+    readonly session: Omit<HostedSession, 'userId' | 'tenantId'>;
+    readonly rotateSessionId?: string;
+  }): Promise<{
+    readonly user: HostedUser;
+    readonly tenant: Tenant;
+    readonly session: HostedSession;
+  } | null>;
+  changePassword(input: {
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly expectedPasswordHash: string | null;
+    readonly passwordHash: string;
+    readonly now: Date;
+  }): Promise<boolean>;
   createChallenge(input: {
     readonly challenge: AuthChallenge;
     readonly now: Date;
@@ -65,6 +100,7 @@ export interface PlatformAuthRepository {
     readonly registration: { readonly enabled: boolean; readonly maxUsers: number };
     readonly session: Omit<HostedSession, 'userId' | 'tenantId'>;
     readonly rotateSessionId?: string;
+    readonly passwordHash?: string;
   }): Promise<
     | { readonly authenticated: false }
     | {
@@ -280,6 +316,7 @@ export interface PlatformDeliveryRepository {
 }
 
 export interface PlatformRepositoryRegistry {
+  readonly llm: PlatformLLMRepository;
   readonly auth: PlatformAuthRepository;
   readonly tenants: PlatformTenantRepository;
   readonly subscriptions: PlatformSubscriptionRepository;
@@ -426,3 +463,5 @@ export interface PlatformPaymentRepository {
     readonly disposition?: HostedPaymentEvent['disposition'];
   }): Promise<readonly HostedPaymentEvent[]>;
 }
+
+import type { HostedPasswordCredential } from './auth.js';

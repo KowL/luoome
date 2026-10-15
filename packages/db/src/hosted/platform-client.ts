@@ -6,6 +6,7 @@ import {
   HostedDeletionSchema,
   HostedExportMetadataSchema,
   HostedJobSchema,
+  HostedPasswordCredentialSchema,
   HostedPaymentAttemptSchema,
   HostedPaymentEventSchema,
   HostedRefundSchema,
@@ -13,6 +14,7 @@ import {
   HostedUserSchema,
   InvariantError,
   NotificationPreferencesSchema,
+  PasswordLoginAttemptSchema,
   PlanVersionSchema,
   PlatformInboxSchema,
   PlatformJobCursorSchema,
@@ -32,10 +34,12 @@ import { type PlatformSchema, platformSchema } from './platform-schema.js';
 import type { PlatformRecords, PlatformStore, PlatformTable } from './platform-store.js';
 
 export type PlatformDrizzleDb = BunSQLiteDatabase<PlatformSchema>;
-export const PLATFORM_SCHEMA_VERSION = 1;
+export const PLATFORM_SCHEMA_VERSION = 2;
 
 const schemas = {
   users: HostedUserSchema,
+  passwords: HostedPasswordCredentialSchema,
+  passwordAttempts: PasswordLoginAttemptSchema,
   tenants: TenantSchema,
   challenges: AuthChallengeSchema,
   sessions: HostedSessionSchema,
@@ -71,6 +75,8 @@ export const ensurePlatformSchema = (db: PlatformDrizzleDb): void => {
         throw new InvariantError('platform schema is newer than this application');
       const tables = [
         'hosted_users (id TEXT PRIMARY KEY, value_json TEXT NOT NULL, email_key TEXT NOT NULL)',
+        'hosted_passwords (id TEXT PRIMARY KEY REFERENCES hosted_users(id), value_json TEXT NOT NULL)',
+        'hosted_password_attempts (id TEXT PRIMARY KEY, value_json TEXT NOT NULL, email_hash TEXT NOT NULL, ip_hash TEXT NOT NULL, created_at INTEGER NOT NULL)',
         'hosted_tenants (id TEXT PRIMARY KEY, value_json TEXT NOT NULL, owner_user_id TEXT NOT NULL REFERENCES hosted_users(id), status TEXT NOT NULL)',
         'hosted_auth_challenges (id TEXT PRIMARY KEY, value_json TEXT NOT NULL, email_key TEXT NOT NULL, purpose TEXT NOT NULL, ip_hash TEXT NOT NULL, created_at INTEGER NOT NULL)',
         'hosted_sessions (id TEXT PRIMARY KEY, value_json TEXT NOT NULL, token_hash TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES hosted_users(id), tenant_id TEXT NOT NULL REFERENCES hosted_tenants(id))',
@@ -95,6 +101,8 @@ export const ensurePlatformSchema = (db: PlatformDrizzleDb): void => {
       for (const table of tables) db.run(sql.raw(`CREATE TABLE IF NOT EXISTS ${table}`));
       const indexes = [
         'UNIQUE INDEX hosted_users_email_key_unique ON hosted_users (email_key)',
+        'INDEX hosted_password_attempts_email_idx ON hosted_password_attempts (email_hash, created_at)',
+        'INDEX hosted_password_attempts_ip_idx ON hosted_password_attempts (ip_hash, created_at)',
         'UNIQUE INDEX hosted_tenants_owner_unique ON hosted_tenants (owner_user_id)',
         'INDEX hosted_challenges_email_time_idx ON hosted_auth_challenges (email_key, created_at)',
         'INDEX hosted_challenges_ip_time_idx ON hosted_auth_challenges (ip_hash, created_at)',

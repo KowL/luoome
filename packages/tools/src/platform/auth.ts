@@ -6,7 +6,9 @@ import {
   HostedSessionSchema,
   HostedUserSchema,
   LoginEmailSchema,
+  LoginPasswordSchema,
   normalizeLoginEmail,
+  sessionHasRecentAuthentication,
   TenantSchema,
   type ToolResult,
 } from '@luoome/core';
@@ -15,12 +17,16 @@ import { errAdapterError } from '../define-tool.js';
 import { PlatformPrincipalSchema } from './context.js';
 import {
   createAuthChallengeDigest,
+  DUMMY_PASSWORD_HASH,
   deriveCsrfToken,
   hashCsrfToken,
+  hashLoginEmail,
+  hashLoginPassword,
   hashSessionToken,
   randomAuthId,
   randomOtpCode,
   randomSessionToken,
+  verifyLoginPassword,
 } from './crypto.js';
 import { definePlatformTool } from './define-platform-tool.js';
 
@@ -89,6 +95,8 @@ export const requestAuthChallengeTool = definePlatformTool({
       });
       if (delivery.state === 'failed')
         return errAdapterError('email-otp', 'challenge_delivery_failed', true);
+      if (delivery.state === 'unknown')
+        return errAdapterError('email-otp', 'challenge_delivery_unknown', true);
     } catch {
       await ctx.repos.auth.setChallengeDelivery({
         id: challengeId,
@@ -107,7 +115,11 @@ export const createAuthSessionTool = definePlatformTool({
   sideEffect: 'write',
   actors: ['anonymous', 'user'],
   input: z
-    .object({ challengeId: z.string().min(1).max(160), code: z.string().regex(/^\d{6}$/) })
+    .object({
+      challengeId: z.string().min(1).max(160),
+      code: z.string().regex(/^\d{6}$/),
+      password: LoginPasswordSchema.optional(),
+    })
     .strict(),
   output: z.object({
     sessionToken: z.string(),
@@ -118,8 +130,15 @@ export const createAuthSessionTool = definePlatformTool({
   }),
   handler: async (input, ctx) => {
     const challenge = await ctx.repos.auth.findChallenge(input.challengeId);
-    if (challenge === null) return authDenied();
     const now = ctx.clock();
+    if (
+      challenge === null ||
+      challenge.expiresAt <= now ||
+      challenge.consumedAt !== null ||
+      challenge.invalidatedAt !== null ||
+      challenge.attempts >= 5
+    )
+      return authDenied();
     const sessionToken = randomSessionToken();
     const csrfToken = deriveCsrfToken(ctx.authSecret, sessionToken);
     const result = await ctx.repos.auth.consumeChallengeAndCreateSession({
@@ -135,6 +154,9 @@ export const createAuthSessionTool = definePlatformTool({
       tenantId: randomAuthId(),
       provisioningJobId: randomAuthId(),
       registration: ctx.registration,
+      ...(input.password === undefined
+        ? {}
+        : { passwordHash: await hashLoginPassword(input.password) }),
       ...(ctx.principal.kind === 'user' ? { rotateSessionId: ctx.principal.sessionId } : {}),
       session: {
         id: randomAuthId(),
@@ -155,6 +177,107 @@ export const createAuthSessionTool = definePlatformTool({
       tenant: result.tenant,
       session: result.session,
     };
+  },
+});
+
+export const createPasswordSessionTool = definePlatformTool({
+  name: 'create_password_session',
+  description: 'Establish a rate-limited session using a verified email and password.',
+  sideEffect: 'write',
+  actors: ['anonymous', 'user'],
+  input: z.object({ email: LoginEmailSchema, password: z.string().min(1).max(128) }).strict(),
+  output: z.object({ sessionToken: z.string(), userId: z.string(), tenantStatus: z.string() }),
+  handler: async (input, ctx) => {
+    if (ctx.principal.kind !== 'anonymous' && ctx.principal.kind !== 'user') return authDenied();
+    const { emailKey } = normalizeLoginEmail(input.email);
+    const now = ctx.clock();
+    const allowed = await ctx.repos.auth.reservePasswordAttempt({
+      id: randomAuthId(),
+      emailHash: hashLoginEmail(ctx.authSecret, emailKey),
+      ipHash: ctx.principal.ipKey,
+      now,
+    });
+    if (!allowed)
+      return {
+        ok: false,
+        error: { kind: 'permission_denied', required: 'auth:password-rate-limit' },
+      };
+    const account = await ctx.repos.auth.findPasswordByEmail(emailKey);
+    const passwordHash = account?.credential?.passwordHash ?? DUMMY_PASSWORD_HASH;
+    const valid = await verifyLoginPassword(input.password, passwordHash);
+    if (!valid || account?.credential === null || account === null) return authDenied();
+    const sessionToken = randomSessionToken();
+    const csrfToken = deriveCsrfToken(ctx.authSecret, sessionToken);
+    const result = await ctx.repos.auth.createPasswordSession({
+      userId: account.user.id,
+      expectedPasswordHash: passwordHash,
+      now,
+      ...(ctx.principal.kind === 'user' ? { rotateSessionId: ctx.principal.sessionId } : {}),
+      session: {
+        id: randomAuthId(),
+        tokenHash: hashSessionToken(sessionToken),
+        csrfHash: hashCsrfToken(csrfToken),
+        createdAt: now,
+        lastSeenAt: now,
+        idleExpiresAt: new Date(now.getTime() + AUTH_SESSION_IDLE_TTL_MS),
+        absoluteExpiresAt: new Date(now.getTime() + AUTH_SESSION_ABSOLUTE_TTL_MS),
+        revokedAt: null,
+      },
+    });
+    if (result === null) return authDenied();
+    return { sessionToken, userId: result.user.id, tenantStatus: result.tenant.status };
+  },
+});
+
+export const changeLoginPasswordTool = definePlatformTool({
+  name: 'change_login_password',
+  description:
+    'Set an initial password or verify the current password before changing it and revoking sessions.',
+  sideEffect: 'write',
+  actors: ['user'],
+  input: z
+    .object({
+      currentPassword: z.string().min(1).max(128).optional(),
+      newPassword: LoginPasswordSchema,
+    })
+    .strict(),
+  output: z.object({ changed: z.literal(true), requiresLogin: z.literal(true) }),
+  handler: async (input, ctx) => {
+    if (ctx.principal.kind !== 'user') return authDenied();
+    const now = ctx.clock();
+    const credential = await ctx.repos.auth.findPasswordByUserId(ctx.principal.userId);
+    if (credential === null) {
+      if (!sessionHasRecentAuthentication(ctx.principal.authenticatedAt, now))
+        return {
+          ok: false,
+          error: { kind: 'permission_denied', required: 'auth:recent-email-verification' },
+        };
+    } else {
+      const allowed = await ctx.repos.auth.reservePasswordAttempt({
+        id: randomAuthId(),
+        emailHash: hashLoginEmail(ctx.authSecret, ctx.principal.userId),
+        ipHash: ctx.principal.ipKey,
+        now,
+      });
+      if (!allowed)
+        return {
+          ok: false,
+          error: { kind: 'permission_denied', required: 'auth:password-rate-limit' },
+        };
+      if (
+        input.currentPassword === undefined ||
+        !(await verifyLoginPassword(input.currentPassword, credential.passwordHash))
+      )
+        return authDenied();
+    }
+    const changed = await ctx.repos.auth.changePassword({
+      userId: ctx.principal.userId,
+      sessionId: ctx.principal.sessionId,
+      expectedPasswordHash: credential?.passwordHash ?? null,
+      passwordHash: await hashLoginPassword(input.newPassword),
+      now,
+    });
+    return changed ? { changed: true as const, requiresLogin: true as const } : authDenied();
   },
 });
 
@@ -219,6 +342,7 @@ export const getPlatformMeTool = definePlatformTool({
     csrfToken: z.string(),
     authenticatedAt: z.date(),
     sessionExpiresAt: z.date(),
+    passwordConfigured: z.boolean(),
   }),
   handler: async (_input, ctx) => {
     if (ctx.principal.kind !== 'user') return authDenied();
@@ -245,6 +369,7 @@ export const getPlatformMeTool = definePlatformTool({
       csrfToken: ctx.principal.csrfToken,
       authenticatedAt: result.session.createdAt,
       sessionExpiresAt: result.session.idleExpiresAt,
+      passwordConfigured: (await ctx.repos.auth.findPasswordByUserId(result.user.id)) !== null,
     };
   },
 });
@@ -266,6 +391,8 @@ export const revokeAuthSessionTool = definePlatformTool({
 export const platformAuthTools = [
   requestAuthChallengeTool,
   createAuthSessionTool,
+  createPasswordSessionTool,
+  changeLoginPasswordTool,
   resolveAuthSessionTool,
   getPlatformMeTool,
   revokeAuthSessionTool,

@@ -114,6 +114,7 @@ export const StrategyDailyCycleAuditOutputSummarySchema = z.object({
   publication: z.string().min(1).optional(),
   summary: z.record(z.string(), z.unknown()).optional(),
   insightProvider: z.string().min(1).optional(),
+  insightFacts: z.record(z.string(), z.unknown()).optional(),
   watchlistSync: StrategyDailyCycleWatchlistSyncSchema.optional(),
   adviceCount: z.number().int().nonnegative().optional(),
   notificationFailed: z.number().int().nonnegative().optional(),

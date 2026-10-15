@@ -13,6 +13,7 @@
     "@luoome/core": "workspace:*",
     "@luoome/db": "workspace:*",
     "@luoome/tools": "workspace:*",
+    "@luoome/workflows": "workspace:*",
     "@luoome/web": "workspace:*"
   }
 }

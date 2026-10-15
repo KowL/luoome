@@ -172,11 +172,12 @@ describe('intraday trading plan watch', () => {
     const originalBegin = ctx.repos.watchTrigger.beginDelivery.bind(ctx.repos.watchTrigger);
     let crossed = false;
     ctx.repos.watchTrigger.beginDelivery = async (...args) => {
-      await originalBegin(...args);
+      const started = await originalBegin(...args);
       if (!crossed) {
         crossed = true;
         now = new Date('2026-07-17T07:00:00.000Z');
       }
+      return started;
     };
     const notification = ctx.notification;
     if (notification === undefined) throw new Error('test notification manager missing');

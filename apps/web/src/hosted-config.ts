@@ -24,6 +24,7 @@ export interface HostedConfig {
   readonly dataRoot: string;
   readonly deletionLedgerRoot: string;
   readonly publicOrigin: string;
+  readonly allowInsecureHttp: boolean;
   readonly authSecret: string;
   readonly productPolicyVersion: HostedProductPolicyVersion;
   readonly providerMode: 'fixture' | 'configured';
@@ -33,6 +34,7 @@ export interface HostedConfig {
   readonly registrationLimit: number;
   readonly registrationEnabled: boolean;
   readonly trustedProxyIp: string | null;
+  readonly adminEmails: readonly string[];
 }
 
 const ConfigSchema = z.object({
@@ -74,14 +76,18 @@ export const loadHostedConfig = (
     );
   }
   const config = parsed.data;
+  const allowInsecureHttp =
+    z.enum(['true', 'false']).default('false').parse(env.HOSTED_ALLOW_INSECURE_HTTP) === 'true';
   const url = new URL(config.publicOrigin);
   if (
     url.origin !== config.publicOrigin ||
     url.username !== '' ||
     url.password !== '' ||
-    url.protocol !== 'https:'
+    (url.protocol !== 'https:' && !(url.protocol === 'http:' && allowInsecureHttp))
   ) {
-    throw new Error('PUBLIC_ORIGIN must be a fixed HTTPS origin');
+    throw new Error(
+      'PUBLIC_ORIGIN must be a fixed HTTPS origin; HTTP requires HOSTED_ALLOW_INSECURE_HTTP=true',
+    );
   }
   if (config.environment === 'production' && config.providerMode === 'fixture') {
     throw new Error('fixture providers cannot serve production');
@@ -106,12 +112,20 @@ export const loadHostedConfig = (
   const trustedProxyIp = env.HOSTED_TRUSTED_PROXY_IP ?? null;
   if (trustedProxyIp !== null && isIP(trustedProxyIp) === 0)
     throw new Error('HOSTED_TRUSTED_PROXY_IP must be one explicit IP address');
+  const adminEmails = (env.HOSTED_ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  if (adminEmails.some((value) => !z.email().safeParse(value).success))
+    throw new Error('HOSTED_ADMIN_EMAILS must be a comma-separated list of email addresses');
   return Object.freeze({
     mode: 'hosted',
     ...config,
+    allowInsecureHttp,
     dataRoot,
     deletionLedgerRoot,
     trustedProxyIp,
+    adminEmails: Object.freeze(adminEmails),
     exposeWrite: env.LUOOME_EXPOSE_WRITE === 'true',
     exposeExternal: env.LUOOME_EXPOSE_EXTERNAL === 'true',
     registrationEnabled: env.HOSTED_REGISTRATION_ENABLED === 'true',

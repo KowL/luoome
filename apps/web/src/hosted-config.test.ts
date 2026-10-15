@@ -100,4 +100,23 @@ describe('authenticated Web configuration', () => {
     expect(Object.isFrozen(config)).toBe(true);
     expect(() => loadHostedConfig({ ...configuration, HOSTED_RUNTIME_LIMIT: '0' })).toThrow();
   });
+
+  it('allows a fixed HTTP origin only with the explicit temporary transport opt-in', () => {
+    const http = { ...configuration, PUBLIC_ORIGIN: 'http://example.test:5173' };
+    expect(() => loadHostedConfig(http)).toThrow('HTTPS');
+    expect(() => loadHostedConfig({ ...http, HOSTED_ALLOW_INSECURE_HTTP: 'false' })).toThrow();
+    expect(loadHostedConfig({ ...http, HOSTED_ALLOW_INSECURE_HTTP: 'true' }).publicOrigin).toBe(
+      http.PUBLIC_ORIGIN,
+    );
+    for (const value of ['yes', '1', 'TRUE'])
+      expect(() => loadHostedConfig({ ...http, HOSTED_ALLOW_INSECURE_HTTP: value })).toThrow();
+    for (const origin of [
+      'http://example.test/path',
+      'http://user@example.test',
+      'ftp://example.test',
+    ])
+      expect(() =>
+        loadHostedConfig({ ...http, PUBLIC_ORIGIN: origin, HOSTED_ALLOW_INSECURE_HTTP: 'true' }),
+      ).toThrow();
+  });
 });

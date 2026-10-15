@@ -4,12 +4,14 @@ import type {
   HostedDeletion,
   HostedExportMetadata,
   HostedJob,
+  HostedPasswordCredential,
   HostedPaymentAttempt,
   HostedPaymentEvent,
   HostedRefund,
   HostedSession,
   HostedUser,
   NotificationPreferences,
+  PasswordLoginAttempt,
   PlanVersion,
   PlatformResultEvent,
   ProviderAttempt,
@@ -23,6 +25,8 @@ import type {
 
 export interface PlatformRecords {
   users: HostedUser;
+  passwords: HostedPasswordCredential;
+  passwordAttempts: PasswordLoginAttempt;
   tenants: Tenant;
   challenges: AuthChallenge;
   sessions: HostedSession;
@@ -59,6 +63,8 @@ export interface PlatformStore {
 
 export const PLATFORM_TABLES: readonly PlatformTable[] = [
   'users',
+  'passwords',
+  'passwordAttempts',
   'tenants',
   'challenges',
   'sessions',

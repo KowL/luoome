@@ -2,5 +2,8 @@ export * from './execution.js';
 export * from './invoke.js';
 export * from './privacy.js';
 export * from './read.js';
+export * from './report.js';
+export * from './strategy.js';
 export * from './submit.js';
+export * from './watch.js';
 export * from './web.js';

@@ -25,6 +25,20 @@ export type HostedExecutionIdentity = z.infer<typeof HostedExecutionIdentitySche
 export type ExecutionIdentity = z.infer<typeof ExecutionIdentitySchema>;
 
 export const LoginEmailSchema = z.string().trim().max(254).email();
+export const LoginPasswordSchema = z.string().min(8).max(128);
+export const HostedPasswordCredentialSchema = z.object({
+  id: z.string().min(1).max(160),
+  passwordHash: z.string().regex(/^scrypt-v1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/),
+  updatedAt: z.coerce.date(),
+});
+export type HostedPasswordCredential = z.infer<typeof HostedPasswordCredentialSchema>;
+export const PasswordLoginAttemptSchema = z.object({
+  id: z.string().min(1).max(160),
+  emailHash: z.string().min(1).max(256),
+  ipHash: z.string().min(1).max(256),
+  createdAt: z.coerce.date(),
+});
+export type PasswordLoginAttempt = z.infer<typeof PasswordLoginAttemptSchema>;
 
 export const normalizeLoginEmail = (email: string): { email: string; emailKey: string } => {
   const address = LoginEmailSchema.parse(email);

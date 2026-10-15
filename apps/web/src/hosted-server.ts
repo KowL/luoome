@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type {
   EmailOtpPort,
@@ -14,6 +14,7 @@ import type {
   ToolError,
   ToolResult,
 } from '@luoome/core';
+import { LoginPasswordSchema } from '@luoome/core';
 import type { HostedMaintenanceGate } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
 import {
@@ -27,20 +28,25 @@ import {
   applyHostedPaymentWebhookTool,
   buildPlatformContext,
   cancelHostedJobTool,
+  changeLoginPasswordTool,
   createAuthSessionTool,
   createHostedSubscriptionOrderTool,
+  createPasswordSessionTool,
   getHostedExportTool,
   getHostedJobTool,
   getHostedNotificationPreferencesTool,
   getHostedSubscriptionTool,
   getHostedUsageTool,
+  getHostedUserDetailTool,
   getPlatformMeTool,
   hashAuthIp,
   listHostedDeliveriesTool,
   listHostedSubscriptionOrdersTool,
+  listHostedUsersTool,
   type PlatformContext,
   type PlatformPrincipal,
   queryHostedSubscriptionOrderTool,
+  recordHostedOperatorPaymentTool,
   requestAuthChallengeTool,
   requestHostedDeletionTool,
   requestHostedExportTool,
@@ -48,6 +54,7 @@ import {
   resolveHostedExportDownloadTool,
   revokeAuthSessionTool,
   saveHostedNotificationPreferencesTool,
+  setHostedUserStatusTool,
   verifyCsrfToken,
   verifyHostedPaymentWebhookTool,
 } from '@luoome/tools/platform';
@@ -58,7 +65,6 @@ import { bindHostedDefaultAccount } from './hosted-context.js';
 import type { TenantRuntimeLease, TenantRuntimeManager } from './hosted-runtime.js';
 import { createWebApp } from './server.js';
 
-const SESSION_COOKIE = '__Host-luoome_session';
 const MAX_JSON_BYTES = 2 * 1_048_576;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/hosted/', import.meta.url));
 
@@ -172,18 +178,26 @@ const readText = async (request: JsonRequest, maximumBytes: number): Promise<str
 const readJson = async (request: JsonRequest): Promise<unknown> =>
   JSON.parse(await readText(request, MAX_JSON_BYTES));
 
-const cookieToken = (request: Request): string | null => {
+const cookieToken = (request: Request, name: string): string | null => {
   const values = (request.headers.get('cookie') ?? '')
     .split(';')
     .map((value) => value.trim())
-    .filter((value) => value.startsWith(`${SESSION_COOKIE}=`));
-  return values.length === 1 ? (values[0]?.slice(SESSION_COOKIE.length + 1) ?? null) : null;
+    .filter((value) => value.startsWith(`${name}=`));
+  return values.length === 1 ? (values[0]?.slice(name.length + 1) ?? null) : null;
 };
 
 export const createHostedWebApp = (
   options: CreateHostedWebAppOptions,
 ): Hono<{ Variables: Variables }> => {
   const { config } = options;
+  const secureTransport = new URL(config.publicOrigin).protocol === 'https:';
+  // HTTP 会话不能通过改名 Cookie 升级为 HTTPS 会话。
+  const authSecret = secureTransport
+    ? config.authSecret
+    : createHmac('sha256', config.authSecret).update('luoome-http-auth-v1').digest('hex');
+  const cookieName = secureTransport ? '__Host-luoome_session' : 'luoome_http_session';
+  const sessionCookie = (token: string, maxAge: number) =>
+    `${cookieName}=${token}; ${secureTransport ? 'Secure; ' : ''}HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
   const clock = options.clock ?? (() => new Date());
   const logger = options.logger ?? console;
   const capabilities = { write: config.exposeWrite, external: config.exposeExternal };
@@ -191,12 +205,13 @@ export const createHostedWebApp = (
     buildPlatformContext({
       repos: options.repos,
       principal,
-      authSecret: config.authSecret,
+      authSecret,
       environment: config.environment,
       emailOtp: options.emailOtp,
       ...(options.notification === undefined ? {} : { notification: options.notification }),
       ...(options.payment === undefined ? {} : { payment: options.payment }),
       publicOrigin: config.publicOrigin,
+      allowInsecureHttp: config.allowInsecureHttp,
       registration: { enabled: config.registrationEnabled, maxUsers: config.registrationLimit },
       capabilities,
       clock,
@@ -208,6 +223,16 @@ export const createHostedWebApp = (
     requestId: crypto.randomUUID(),
     ipKey: hashAuthIp(config.authSecret, options.clientIp?.(request) ?? 'untrusted-entry'),
   });
+  const adminPlatform = (c: Context<{ Variables: Variables }>): PlatformContext | null => {
+    const { user } = c.get('auth');
+    if (!config.adminEmails.includes(user.emailKey)) return null;
+    return platform({
+      kind: 'admin',
+      userId: user.id,
+      requestId: crypto.randomUUID(),
+      ipKey: hashAuthIp(config.authSecret, options.clientIp?.(c.req.raw) ?? 'untrusted-entry'),
+    });
+  };
   const app = new Hono<{ Variables: Variables }>();
   app.onError(() =>
     hostedJsonResult({
@@ -233,8 +258,21 @@ export const createHostedWebApp = (
     if (mutation && request.headers.get('origin') !== config.publicOrigin) {
       return hostedJsonResult(denied('security:fixed-origin'));
     }
-    const authPath = c.req.path === '/api/auth/challenges' || c.req.path === '/api/auth/sessions';
-    const token = cookieToken(request);
+    const authPath = [
+      '/api/auth/challenges',
+      '/api/auth/sessions',
+      '/api/auth/password-sessions',
+    ].includes(c.req.path);
+    if (c.req.path === '/api/auth/config' && request.method === 'GET')
+      return hostedJsonResult({
+        ok: true,
+        data: {
+          emailConfigured: options.emailOtp.configured,
+          registrationEnabled: config.registrationEnabled,
+          secureTransport,
+        },
+      });
+    const token = cookieToken(request, cookieName);
     if (authPath && token === null) {
       c.set('platform', platform(anonymous(request)));
       return next();
@@ -265,7 +303,16 @@ export const createHostedWebApp = (
     ) {
       return hostedJsonResult(denied('security:csrf'));
     }
-    if (authPath || c.req.path === '/api/me' || c.req.path === '/api/auth/session') return next();
+    if (
+      authPath ||
+      c.req.path === '/api/me' ||
+      c.req.path === '/api/me/password' ||
+      c.req.path === '/api/auth/session' ||
+      c.req.path.startsWith('/api/admin/')
+    )
+      return next();
+    if ((await options.repos.auth.findPasswordByUserId(user.id)) === null)
+      return hostedJsonResult(denied('auth:password-setup'), 403);
     if (tenant.status !== 'active' && tenant.status !== 'suspended') {
       return hostedJsonResult(denied('hosted:tenant-initializing'), 503);
     }
@@ -321,9 +368,19 @@ export const createHostedWebApp = (
         clock,
         logger,
       });
+      const idempotencyKey = c.req.header('Idempotency-Key');
+      if (idempotencyKey !== undefined && !z.uuid().safeParse(idempotencyKey).success)
+        return hostedJsonResult({
+          ok: false,
+          error: { kind: 'invalid_input', message: 'Idempotency-Key must be a UUID', issues: [] },
+        });
+      const llmBase =
+        idempotencyKey === undefined
+          ? base
+          : { ...base, llmOperationScope: `web:${idempotencyKey}` };
       const context =
         config.productPolicyVersion === 'hosted-web-v2'
-          ? await bindHostedDefaultAccount(base, options.createTenantContext)
+          ? await bindHostedDefaultAccount(llmBase, options.createTenantContext)
           : base;
       if (config.productPolicyVersion === 'hosted-web-v2') {
         if (selected && selected !== context.user.defaultAccountId)
@@ -449,6 +506,7 @@ export const createHostedWebApp = (
         .object({
           challengeId: z.string(),
           code: z.string(),
+          password: LoginPasswordSchema,
           acceptTerms: z.literal(true),
         })
         .strict()
@@ -458,6 +516,7 @@ export const createHostedWebApp = (
         {
           challengeId: parsed.data.challengeId,
           code: parsed.data.code,
+          password: parsed.data.password,
         },
         c.get('platform'),
       );
@@ -469,10 +528,36 @@ export const createHostedWebApp = (
           tenantStatus: result.data.tenant.status,
         },
       });
-      response.headers.set(
-        'set-cookie',
-        `${SESSION_COOKIE}=${result.data.sessionToken}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
-      );
+      response.headers.set('set-cookie', sessionCookie(result.data.sessionToken, 2592000));
+      return response;
+    }),
+  );
+  app.post(
+    '/api/auth/password-sessions',
+    post(async (input, c) => {
+      const result = await createPasswordSessionTool.execute(input, c.get('platform'));
+      if (!result.ok)
+        return hostedJsonResult(
+          result,
+          result.error.kind === 'permission_denied' &&
+            result.error.required === 'auth:password-rate-limit'
+            ? 429
+            : 401,
+        );
+      const response = hostedJsonResult({
+        ok: true,
+        data: { userId: result.data.userId, tenantStatus: result.data.tenantStatus },
+      });
+      response.headers.set('set-cookie', sessionCookie(result.data.sessionToken, 2592000));
+      return response;
+    }),
+  );
+  app.post(
+    '/api/me/password',
+    post(async (input, c) => {
+      const result = await changeLoginPasswordTool.execute(input, c.get('platform'));
+      const response = hostedJsonResult(result);
+      if (result.ok) response.headers.set('set-cookie', sessionCookie('', 0));
       return response;
     }),
   );
@@ -486,6 +571,7 @@ export const createHostedWebApp = (
               ...result.data,
               productPolicyVersion: config.productPolicyVersion,
               fixture: config.providerMode === 'fixture',
+              admin: config.adminEmails.includes(c.get('auth').user.emailKey),
             },
           }
         : result,
@@ -494,11 +580,7 @@ export const createHostedWebApp = (
   app.delete('/api/auth/session', async (c) => {
     const result = await revokeAuthSessionTool.execute({}, c.get('platform'));
     const response = hostedJsonResult(result);
-    if (result.ok)
-      response.headers.set(
-        'set-cookie',
-        `${SESSION_COOKIE}=; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
-      );
+    if (result.ok) response.headers.set('set-cookie', sessionCookie('', 0));
     return response;
   });
 
@@ -651,6 +733,48 @@ export const createHostedWebApp = (
       );
     }),
   );
+  app.get('/api/admin/users', async (c) => {
+    const ctx = adminPlatform(c);
+    if (ctx === null) return hostedJsonResult(denied('hosted:admin'));
+    return hostedJsonResult(await listHostedUsersTool.execute({}, ctx));
+  });
+  app.get('/api/admin/users/:tenantId', async (c) => {
+    const ctx = adminPlatform(c);
+    if (ctx === null) return hostedJsonResult(denied('hosted:admin'));
+    return hostedJsonResult(
+      await getHostedUserDetailTool.execute({ tenantId: c.req.param('tenantId') }, ctx),
+    );
+  });
+  app.post(
+    '/api/admin/users/:tenantId/operator-payments',
+    post(async (input, c) => {
+      const ctx = adminPlatform(c);
+      if (ctx === null) return hostedJsonResult(denied('hosted:admin'));
+      if (!z.record(z.string(), z.unknown()).safeParse(input).success)
+        return hostedJsonResult(invalid());
+      return hostedJsonResult(
+        await recordHostedOperatorPaymentTool.execute(
+          { ...(input as Record<string, unknown>), tenantId: c.req.param('tenantId') },
+          ctx,
+        ),
+      );
+    }),
+  );
+  app.post(
+    '/api/admin/users/:userId/status',
+    post(async (input, c) => {
+      const ctx = adminPlatform(c);
+      if (ctx === null) return hostedJsonResult(denied('hosted:admin'));
+      if (!z.record(z.string(), z.unknown()).safeParse(input).success)
+        return hostedJsonResult(invalid());
+      return hostedJsonResult(
+        await setHostedUserStatusTool.execute(
+          { ...(input as Record<string, unknown>), userId: c.req.param('userId') },
+          ctx,
+        ),
+      );
+    }),
+  );
   app.post('/api/webhooks/payment', async (c) => {
     let rawBody: string;
     try {
@@ -788,11 +912,7 @@ export const createHostedWebApp = (
           : result,
         result.ok ? 202 : undefined,
       );
-      if (result.ok)
-        response.headers.set(
-          'set-cookie',
-          `${SESSION_COOKIE}=; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
-        );
+      if (result.ok) response.headers.set('set-cookie', sessionCookie('', 0));
       return response;
     }),
   );

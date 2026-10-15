@@ -1,3 +1,4 @@
+import { randomRequestId } from './api.js';
 import { fieldWrap, makeInput, makeNumberInput, makeSelect, makeTextarea } from './form-kit.js';
 import { el } from './ui.js';
 
@@ -22,7 +23,7 @@ const PRIORITIES = [
   ['urgent', '紧急'],
 ];
 
-export const newAlertRule = (kind, id = `rule-${crypto.randomUUID()}`) => {
+export const newAlertRule = (kind, id = `rule-${randomRequestId()}`) => {
   const defaults = {
     'price-level': { level: 10, side: 'above' },
     'price-change': { pct: 0.05, direction: 'any' },

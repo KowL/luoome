@@ -13,6 +13,7 @@ import type {
   HostedPaymentPort,
   MarketDataAdapterLike,
   PlanVersion,
+  PlatformRepositoryRegistry,
   Stock,
   ToolContext,
 } from '@luoome/core';
@@ -32,6 +33,7 @@ import { createHostedProviders } from './hosted-providers.js';
 import { prepareHostedDataRoot, TenantRuntimeManager } from './hosted-runtime.js';
 
 export interface HostedProviders {
+  readonly bindPlatform?: (repos: PlatformRepositoryRegistry) => void;
   readonly emailOtp: EmailOtpPort;
   readonly notification: HostedNotificationPort;
   readonly payment: HostedPaymentPort;
@@ -174,6 +176,7 @@ export const openHostedService = (
     } finally {
       startup.release();
     }
+    providers.bindPlatform?.(handle.repos);
     const runtimes = new TenantRuntimeManager(root, config.runtimeLimit, Date.now, {
       maintenance,
       isCurrent: async (manifest) => {
@@ -195,6 +198,7 @@ export const openHostedService = (
         notification: providers.notification,
         payment: providers.payment,
         publicOrigin: config.publicOrigin,
+        allowInsecureHttp: config.allowInsecureHttp,
         registration: { enabled: config.registrationEnabled, maxUsers: config.registrationLimit },
         capabilities: { write: config.exposeWrite, external: config.exposeExternal },
         jobPolicies: providers.jobPolicies,

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { InvariantError } from '../error/index.js';
+import { HostedLLMPricingSchema, HostedLLMTokensSchema, hostedLLMCost } from './llm.js';
 
 const Id = z.string().min(1).max(160);
 const Digest = z.string().min(1).max(256);
@@ -159,6 +160,16 @@ export const HostedJobSchema = z.object({
 export type HostedJob = z.infer<typeof HostedJobSchema>;
 
 export const UsageReservationSchema = z.object({
+  llm: z
+    .object({
+      owner: Id,
+      leaseUntil: Time,
+      inputHash: Digest,
+      generation: z.number().int().positive(),
+      pricing: HostedLLMPricingSchema,
+      periodBudgetMicro: Count,
+    })
+    .optional(),
   id: Id,
   operationId: Id,
   tenantId: Id,
@@ -186,6 +197,10 @@ export const UsageEntrySchema = z.object({
 export type UsageEntry = z.infer<typeof UsageEntrySchema>;
 
 export const ProviderAttemptSchema = z.object({
+  pricing: HostedLLMPricingSchema.optional(),
+  tokens: HostedLLMTokensSchema.optional(),
+  requestHash: Digest.optional(),
+  receiptId: z.string().max(256).optional(),
   id: Id,
   operationId: Id,
   step: Id,
@@ -301,6 +316,13 @@ export const assertUsageReservationInvariants = (reservation: UsageReservation):
 };
 
 export const assertProviderAttemptInvariants = (attempt: ProviderAttempt): void => {
+  if (
+    attempt.pricing !== undefined &&
+    attempt.usageState === 'confirmed' &&
+    (attempt.tokens === undefined ||
+      attempt.confirmedCostMicro !== hostedLLMCost(attempt.tokens, attempt.pricing))
+  )
+    throw new InvariantError('LLM confirmed cost must match token usage and frozen pricing');
   if ((attempt.usageState === 'confirmed') !== (attempt.confirmedCostMicro !== null)) {
     throw new InvariantError('confirmed cost requires confirmed usage');
   }

@@ -106,7 +106,7 @@ export const runAccountPlanBatch = async (
   try {
     const result = await tradingPlanDailyCycleWorkflow.run(
       { accountId, date, mode: 'scheduled' },
-      ctx,
+      { ...ctx, llmOperationScope: id },
     );
     if (!result.ok) {
       error = errorText(result.error);

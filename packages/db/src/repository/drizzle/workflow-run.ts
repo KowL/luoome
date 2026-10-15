@@ -46,6 +46,61 @@ const toRow = (run: WorkflowRun): typeof workflowRuns.$inferInsert => ({
 export class DrizzleWorkflowRunRepository implements WorkflowRunRepository {
   constructor(private readonly db: BunSQLiteDatabase<Schema>) {}
 
+  async execution(input: Parameters<WorkflowRunRepository['execution']>[0]): Promise<boolean> {
+    const now = input.now.getTime();
+    if (input.action === 'acquire') {
+      const row = toRow({
+        id: input.id,
+        workflowName: input.workflowName,
+        mode: 'scheduled',
+        status: 'running',
+        startedAt: input.now,
+        providerStatuses: [],
+        inputSummary: {
+          claimToken: input.owner,
+          executionLeaseUntilMs: input.leaseUntil.getTime(),
+          heartbeatAtMs: now,
+        },
+      });
+      const acquired = this.db
+        .insert(workflowRuns)
+        .values(row)
+        .onConflictDoUpdate({
+          target: workflowRuns.id,
+          set: row,
+          setWhere: sql`(${workflowRuns.status} = 'running' AND json_extract(${workflowRuns.inputSummary}, '$.executionLeaseUntilMs') <= ${now})
+          OR (${workflowRuns.status} != 'running' AND json_extract(${workflowRuns.outputSummary}, '$.nextRunAtMs') <= ${now})`,
+        })
+        .returning({ id: workflowRuns.id })
+        .get();
+      return acquired !== undefined;
+    }
+    const updated = this.db
+      .update(workflowRuns)
+      .set(
+        input.action === 'renew'
+          ? {
+              inputSummary: sql`json_set(${workflowRuns.inputSummary}, '$.executionLeaseUntilMs', ${input.leaseUntil.getTime()}, '$.heartbeatAtMs', ${now})`,
+            }
+          : {
+              status: 'succeeded',
+              finishedAt: input.now,
+              outputSummary: { ...input.output, nextRunAtMs: input.nextRunAt.getTime() },
+            },
+      )
+      .where(
+        and(
+          eq(workflowRuns.id, input.id),
+          eq(workflowRuns.status, 'running'),
+          sql`json_extract(${workflowRuns.inputSummary}, '$.claimToken') = ${input.owner}`,
+          sql`json_extract(${workflowRuns.inputSummary}, '$.executionLeaseUntilMs') > ${now}`,
+        ),
+      )
+      .returning({ id: workflowRuns.id })
+      .get();
+    return updated !== undefined;
+  }
+
   async save(run: WorkflowRun): Promise<void> {
     assertWorkflowRunInvariants(run);
     const row = toRow(run);

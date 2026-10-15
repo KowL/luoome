@@ -176,18 +176,35 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     this.db.delete(watchExecutionLease).where(eq(watchExecutionLease.owner, owner)).run();
   }
 
-  async beginDelivery(ids: readonly string[], at: Date): Promise<void> {
-    if (ids.length === 0) return;
-    this.db
-      .update(watchTriggers)
-      .set({
-        deliveryStatus: 'pending',
-        deliveryAttempts: sql`coalesce(${watchTriggers.deliveryAttempts}, case when ${inAttempted()} then 1 else 0 end) + 1`,
-        lastDeliveryAttemptAt: at,
-        deliveryCompletedAt: null,
-      })
-      .where(inArray(watchTriggers.id, [...ids]))
-      .run();
+  ownsExecution(owner: string, now: Date): boolean {
+    return (
+      this.db
+        .select()
+        .from(watchExecutionLease)
+        .where(and(eq(watchExecutionLease.owner, owner), gt(watchExecutionLease.until, now)))
+        .get() !== undefined
+    );
+  }
+
+  async beginDelivery(ids: readonly string[], at: Date, owner?: string): Promise<boolean> {
+    return this.db.transaction(
+      () => {
+        if (owner !== undefined && !this.ownsExecution(owner, at)) return false;
+        if (ids.length === 0) return true;
+        this.db
+          .update(watchTriggers)
+          .set({
+            deliveryStatus: 'pending',
+            deliveryAttempts: sql`coalesce(${watchTriggers.deliveryAttempts}, case when ${inAttempted()} then 1 else 0 end) + 1`,
+            lastDeliveryAttemptAt: at,
+            deliveryCompletedAt: null,
+          })
+          .where(inArray(watchTriggers.id, [...ids]))
+          .run();
+        return true;
+      },
+      { behavior: 'immediate' },
+    );
   }
 
   async save(trigger: WatchTrigger): Promise<void> {
@@ -245,6 +262,10 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
   }
 
   async findById(id: string): Promise<WatchTrigger | null> {
+    return this.getForDelivery(id);
+  }
+
+  getForDelivery(id: string): WatchTrigger | null {
     const row = this.db.select().from(watchTriggers).where(eq(watchTriggers.id, id)).get();
     return row === undefined ? null : toWatchTrigger(row);
   }
@@ -500,19 +521,31 @@ export class DrizzleWatchTriggerRepository implements WatchTriggerRepository {
     status: DeliveryStatus,
     notificationId?: string,
     completedAt?: Date,
-  ): Promise<void> {
-    if (ids.length === 0) return;
-    const isAttempted = (ATTEMPTED as readonly DeliveryStatus[]).includes(status);
-    this.db
-      .update(watchTriggers)
-      .set({
-        deliveryStatus: status,
-        notificationId: notificationId ?? null,
-        ...(completedAt === undefined ? {} : { deliveryCompletedAt: completedAt }),
-        notified: isAttempted,
-      })
-      .where(inArray(watchTriggers.id, ids as string[]))
-      .run();
+    owner?: string,
+  ): Promise<boolean> {
+    return this.db.transaction(
+      () => {
+        if (
+          owner !== undefined &&
+          (completedAt === undefined || !this.ownsExecution(owner, completedAt))
+        )
+          return false;
+        if (ids.length === 0) return true;
+        const isAttempted = (ATTEMPTED as readonly DeliveryStatus[]).includes(status);
+        this.db
+          .update(watchTriggers)
+          .set({
+            deliveryStatus: status,
+            notificationId: notificationId ?? null,
+            ...(completedAt === undefined ? {} : { deliveryCompletedAt: completedAt }),
+            notified: isAttempted,
+          })
+          .where(inArray(watchTriggers.id, ids as string[]))
+          .run();
+        return true;
+      },
+      { behavior: 'immediate' },
+    );
   }
 
   async setFeedback(

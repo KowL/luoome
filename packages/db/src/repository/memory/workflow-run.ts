@@ -15,6 +15,58 @@ export class InMemoryWorkflowRunRepository implements WorkflowRunRepository {
     this.items.set(run.id, run);
   }
 
+  async execution(input: Parameters<WorkflowRunRepository['execution']>[0]): Promise<boolean> {
+    const current = this.items.get(input.id);
+    const now = input.now.getTime();
+    if (input.action === 'acquire') {
+      if (
+        current !== undefined &&
+        !(current.status === 'running'
+          ? Number(current.inputSummary?.executionLeaseUntilMs) <= now
+          : Number(current.outputSummary?.nextRunAtMs) <= now)
+      )
+        return false;
+      this.put({
+        id: input.id,
+        workflowName: input.workflowName,
+        mode: 'scheduled',
+        status: 'running',
+        startedAt: input.now,
+        providerStatuses: [],
+        inputSummary: {
+          claimToken: input.owner,
+          executionLeaseUntilMs: input.leaseUntil.getTime(),
+          heartbeatAtMs: now,
+        },
+      });
+      return true;
+    }
+    if (
+      current?.status !== 'running' ||
+      current.inputSummary?.claimToken !== input.owner ||
+      !(Number(current.inputSummary?.executionLeaseUntilMs) > now)
+    )
+      return false;
+    if (input.action === 'renew') {
+      this.put({
+        ...current,
+        inputSummary: {
+          ...current.inputSummary,
+          executionLeaseUntilMs: input.leaseUntil.getTime(),
+          heartbeatAtMs: now,
+        },
+      });
+    } else {
+      this.put({
+        ...current,
+        status: 'succeeded',
+        finishedAt: input.now,
+        outputSummary: { ...input.output, nextRunAtMs: input.nextRunAt.getTime() },
+      });
+    }
+    return true;
+  }
+
   async save(run: WorkflowRun): Promise<void> {
     this.put(run);
   }

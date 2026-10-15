@@ -1044,6 +1044,21 @@
             </div>
           </section>
         </form>
+        <form id="hosted-watch-feishu" class="card" data-settings-pane="notify" hidden autocomplete="off">
+          <div class="card-header"><h2>预警与报告飞书通知</h2><span id="hosted-watch-feishu-configured" class="muted">正在读取</span></div>
+          <p class="muted">仅发送到你自己的飞书机器人。未配置时留日志；渠道受理不等于设备送达。</p>
+          <label class="field" for="hosted-watch-feishu-url">飞书自定义机器人 Webhook
+            <input id="hosted-watch-feishu-url" type="password" placeholder="留空保留已保存的绑定" maxlength="2048" autocomplete="off" />
+          </label>
+          <label class="hosted-check"><input id="hosted-watch-feishu-enabled" type="checkbox" />启用飞书通知</label>
+          <label class="hosted-check"><input id="hosted-watch-feishu-clear" type="checkbox" />清除绑定并停止待发提醒</label>
+          <div class="feishu-channel-actions">
+            <button class="btn btn-primary" type="submit">保存飞书设置</button>
+            <button id="hosted-watch-feishu-test" class="btn btn-outline" type="button">发送测试消息</button>
+          </div>
+          <p id="hosted-watch-feishu-status" role="status" aria-live="polite" class="muted"></p>
+          <div id="hosted-watch-deliveries" class="muted"></div>
+        </form>
         <div class="card data-transfer-card" data-settings-pane="data">
           <div class="card-header">
             <div><span class="section-kicker">LOCAL DATA</span><h2>数据导出与导入</h2></div>
@@ -1161,5 +1176,6 @@
   </div>
 
   <script type="module" src="/js/app.js" defer></script>
+  <script type="module" src="/js/hosted-watch-settings.js" defer></script>
 </body>
 </html>
