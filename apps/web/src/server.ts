@@ -76,6 +76,7 @@ import {
 import {
   getHostedWatchSettingsTool,
   listHostedWatchDeliveriesTool,
+  resolveHostedWatchNotificationTool,
   saveHostedWatchSettingsTool,
   testHostedWatchSettingsTool,
 } from '@luoome/tools/hosted';
@@ -107,6 +108,7 @@ import {
   type ResearchVaultSettingsStore,
   SaveResearchVaultSettingsSchema,
 } from './research-vault-settings.js';
+import { createWorkspaceDraft, workspaceSnapshot } from './workspace.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -427,15 +429,6 @@ const asChatStreamRuntime = (value: unknown): ChatStreamRuntime | undefined => {
   return undefined;
 };
 
-const mutationPermission = (request: Request): ToolResult<never> | null => {
-  // 同源 Origin 校验挡住浏览器被恶意站点带着执行本地 mutation。
-  const origin = request.headers.get('origin');
-  if (origin !== null && origin !== new URL(request.url).origin) {
-    return permissionDenied('跨站 Origin 不允许执行本地 mutation');
-  }
-  return null;
-};
-
 /** 构造 Hono app（注入 ctx，便于测试与复用）。 */
 /**
  * 构造 Hono app（注入 ctx，便于测试与复用）。
@@ -450,6 +443,15 @@ export const createWebApp = (
     throw new Error('hosted identity requires the hosted Web entry');
   if (initialCtx === undefined && options.hosted === undefined)
     throw new Error('local Web requires a context');
+  const mutationPermission = (request: Request): ToolResult<never> | null => {
+    // 托管入口已按外部传输策略校验 Origin 和 CSRF，不能再按代理内部 HTTP URL 拒绝。
+    if (options.hosted !== undefined) return null;
+    const origin = request.headers.get('origin');
+    if (origin !== null && origin !== new URL(request.url).origin) {
+      return permissionDenied('跨站 Origin 不允许执行本地 mutation');
+    }
+    return null;
+  };
   // 兼容无 header 的本地调用，同时为浏览器请求提供 request-scoped 账户选择。
   // 这样不同 tab 的 localStorage 账户不会再互相覆盖共享进程上下文。
   let localContext = initialCtx;
@@ -1419,6 +1421,22 @@ export const createWebApp = (
   });
 
   app.get('/api/chat/sessions', () => callTool('list_chat_sessions', { limit: 100 }));
+  app.get('/api/workspace', async () => jsonResult(await workspaceSnapshot(contextForRequest())));
+  app.post('/api/workspace/drafts', async (c) => {
+    const denied = requireMutationCapabilities(c.req.raw, ['write', 'external']);
+    if (denied !== null) return jsonResult(denied);
+    const body = await parseJsonObject(c.req.raw);
+    if (!('parsed' in body)) return jsonResult(body);
+    return jsonResult(await createWorkspaceDraft(body.data, contextForRequest()));
+  });
+  app.get('/api/watch/notifications/:triggerId', async (c) =>
+    jsonResult(
+      await resolveHostedWatchNotificationTool.execute(
+        { triggerId: c.req.param('triggerId') },
+        contextForRequest(),
+      ),
+    ),
+  );
   app.post('/api/chat/sessions', async (c) => {
     const denied = requireMutationCapabilities(c.req.raw, ['write']);
     if (denied !== null) return jsonResult(denied);

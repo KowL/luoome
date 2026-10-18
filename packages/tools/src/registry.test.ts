@@ -4,6 +4,11 @@ import { createRegistry, toolRegistry } from './registry.js';
 
 // 工具库存快照：新增 tool 时同步本列表与下方 sideEffect 断言。
 const EXPECTED_TOOL_NAMES = [
+  'research_investment_directions',
+  'get_investment_workspace',
+  'save_investment_consensus',
+  'set_investment_tracking',
+  'get_investment_candidates',
   // v0.1
   'agent_run',
   'list_accounts',
@@ -315,6 +320,7 @@ describe('toolRegistry', () => {
       'analyze_strategy_candidate',
       'generate_strategy_recommendations',
       'market_outlook',
+      'research_investment_directions',
     ]);
     const externalTools = toolRegistry
       .all()
@@ -403,7 +409,9 @@ describe('toolRegistry', () => {
       'resume_strategy_evaluation_session',
       'run_fundamental_score',
       'save_decision_review',
+      'save_investment_consensus',
       'save_trading_plan',
+      'set_investment_tracking',
       'set_strategy_schedule',
       'set_watch_trigger_feedback',
       'start_strategy_evaluation_session',

@@ -1,6 +1,9 @@
 import type { ToolContext, ToolResult } from '@luoome/core';
 import { addWatchlistMemberTool, createAlertPlanTool, createWatchlistTool } from '@luoome/tools';
-import { createHostedWatchNotificationManager } from '@luoome/tools/hosted';
+import {
+  createHostedWatchNotificationManager,
+  resolveHostedWatchNotificationTool,
+} from '@luoome/tools/hosted';
 import { buildTestContext } from '@luoome/tools/testing';
 import { withFixedQuoteAdapter } from '@luoome/tools/testing/fixed-quote-adapter';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -99,6 +102,44 @@ const setup = async (event = false, configured = true) => {
 };
 
 describe('hosted watch delivery', () => {
+  it('opens the exact trigger with current AlertPlan state and refuses a foreign account source', async () => {
+    const { ctx, run } = await setup();
+    await run();
+    const trigger = (await ctx.repos.watchTrigger.listRecent({}))[0];
+    if (trigger === undefined) throw new Error('fixture trigger missing');
+    expect(
+      await resolveHostedWatchNotificationTool.execute({ triggerId: trigger.id }, ctx),
+    ).toMatchObject({
+      ok: true,
+      data: {
+        trigger: { id: trigger.id },
+        alertPlan: { id: 'plan', enabled: true },
+        state: 'requires-recheck',
+        currentActionAllowed: false,
+      },
+    });
+    const plan = await ctx.repos.alertPlan.findById('plan');
+    if (plan === null) throw new Error('fixture plan missing');
+    await ctx.repos.alertPlan.save({ ...plan, enabled: false });
+    expect(
+      await resolveHostedWatchNotificationTool.execute({ triggerId: trigger.id }, ctx),
+    ).toMatchObject({
+      ok: true,
+      data: { alertPlan: { enabled: false }, state: 'changed', currentActionAllowed: false },
+    });
+    const foreign = {
+      ...trigger,
+      id: 'foreign-source',
+      poolId: 'trading-plan-watch:other-account',
+    };
+    await ctx.repos.watchTrigger.save(foreign);
+    expect(
+      await resolveHostedWatchNotificationTool.execute({ triggerId: foreign.id }, ctx),
+    ).toMatchObject({ ok: false, error: { kind: 'not_found' } });
+    expect(
+      await resolveHostedWatchNotificationTool.execute({ triggerId: 'missing' }, ctx),
+    ).toMatchObject({ ok: false, error: { kind: 'not_found' } });
+  });
   it('heartbeats retain exclusive execution while an upstream request is in flight', async () => {
     const { ctx, run, advance, http } = await setup();
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });

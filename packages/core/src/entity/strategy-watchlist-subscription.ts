@@ -20,6 +20,15 @@ export const StrategyWatchlistSubscriptionSchema = z.object({
   sourceKey: z.string().min(1),
   status: StrategyWatchlistSubscriptionStatusSchema,
   createdBy: z.string().min(1),
+  investmentBinding: z
+    .object({
+      ownerUserId: z.string().min(1),
+      accountId: z.string().min(1),
+      consensusId: z.string().min(1),
+      consensusVersion: z.number().int().positive(),
+      strategyVersionId: z.string().min(1),
+    })
+    .optional(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
   cancelledAt: z.coerce.date().optional(),
@@ -33,6 +42,12 @@ export const assertStrategyWatchlistSubscriptionInvariants = (
   StrategyWatchlistSubscriptionSchema.parse(subscription);
   if (subscription.sourceKey !== `strategy:${subscription.strategyId}`) {
     throw new InvariantError('StrategyWatchlistSubscription.sourceKey 必须由 strategyId 派生');
+  }
+  if (
+    subscription.investmentBinding !== undefined &&
+    subscription.investmentBinding.ownerUserId !== subscription.createdBy
+  ) {
+    throw new InvariantError('investment subscription owner must match createdBy');
   }
   if (subscription.updatedAt < subscription.createdAt) {
     throw new InvariantError('StrategyWatchlistSubscription.updatedAt 不能早于 createdAt');

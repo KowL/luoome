@@ -1,4 +1,10 @@
-import { callApi, getAccountId, randomRequestId } from './api.js';
+import {
+  callApi,
+  getAccountId,
+  getHostedSession,
+  getSessionEpoch,
+  randomRequestId,
+} from './api.js';
 import {
   actionsRow,
   fieldWrap,
@@ -11,6 +17,10 @@ import { closeModal, openModal } from './modal.js';
 import { el, fmtDateTime, toolErrorText } from './ui.js';
 
 const PENDING_KEY = 'luoome.decisionPending';
+const pendingKey = () =>
+  getHostedSession() === null
+    ? PENDING_KEY
+    : `${PENDING_KEY}:${getHostedSession().user.id}:${getAccountId()}`;
 let volatilePending = null;
 let pendingBusy = false;
 let redrawPending = () => {};
@@ -33,7 +43,7 @@ const emptyContent = () => ({
 });
 const pendingRead = () => {
   try {
-    return JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? 'null') ?? volatilePending;
+    return JSON.parse(sessionStorage.getItem(pendingKey()) ?? 'null') ?? volatilePending;
   } catch {
     return volatilePending;
   }
@@ -41,7 +51,7 @@ const pendingRead = () => {
 const pendingWrite = (value) => {
   volatilePending = value;
   try {
-    sessionStorage.setItem(PENDING_KEY, JSON.stringify(value));
+    sessionStorage.setItem(pendingKey(), JSON.stringify(value));
     return true;
   } catch {
     volatilePending = null;
@@ -51,11 +61,17 @@ const pendingWrite = (value) => {
 const pendingClear = () => {
   volatilePending = null;
   try {
-    sessionStorage.removeItem(PENDING_KEY);
+    sessionStorage.removeItem(pendingKey());
   } catch {
     /* 无可清理 */
   }
 };
+globalThis.document?.addEventListener?.('luoome:identity-cleared', () => {
+  volatilePending = null;
+  pendingBusy = false;
+  redrawPending = () => {};
+  closeModal();
+});
 const shanghaiLocalNow = () => {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
@@ -101,12 +117,14 @@ const labelCheckbox = (text, checked) => {
 
 export const openDecisionReview = async (subject, { onSaved = async () => {}, revision } = {}) => {
   const accountAtOpen = getAccountId();
+  const epochAtOpen = getSessionEpoch();
+  const isCurrent = () => getAccountId() === accountAtOpen && getSessionEpoch() === epochAtOpen;
   const query = new URLSearchParams({ subjectKind: subject.kind, subjectId: subject.id });
   if (revision !== undefined) query.set('revision', String(revision));
   const response = await callApi(`/api/decision-reviews/context?${query}`, {
     headers: { 'x-luoome-account-id': accountAtOpen },
   });
-  if (getAccountId() !== accountAtOpen) return;
+  if (!isCurrent()) return;
   if (!response.ok) {
     openModal('决策与复盘', el('p', 'status error', toolErrorText(response.error)));
     return;
@@ -237,7 +255,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
     let nextCursor = null;
     let asOf = null;
     moreTrades.addEventListener('click', async () => {
-      if (getAccountId() !== accountAtOpen) return showError('账户已切换，请重新打开。');
+      if (!isCurrent()) return showError('账户已切换，请重新打开。');
       const query = new URLSearchParams({ stockId: context.stockId, limit: '50' });
       if (context.sourceOccurredAt) query.set('since', context.sourceOccurredAt);
       if (nextCursor) query.set('cursor', nextCursor);
@@ -245,7 +263,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
       moreTrades.disabled = true;
       const result = await accountRequest(`/api/trades?${query}`);
       moreTrades.disabled = false;
-      if (getAccountId() !== accountAtOpen) return;
+      if (!isCurrent()) return;
       if (!result.ok) return showError(`${toolErrorText(result.error)}。请刷新选择器。`);
       asOf = result.data.asOf;
       for (const trade of result.data.trades) appendTradeChoice(trade.id, trade);
@@ -256,10 +274,13 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
   }
   const pendingPanel = el('div', 'decision-pending-panel');
   const setPendingBusy = (busy) => {
+    if (!isCurrent()) return;
     pendingBusy = busy;
     redrawPending();
   };
   const sendPending = async (pending, canConfirmRejection) => {
+    if (!isCurrent())
+      return { ok: false, error: { kind: 'permission_denied', required: 'auth:session' } };
     setPendingBusy(true);
     // Persist uncertainty before sending so reloading cannot discard an in-flight write.
     if (!pendingWrite({ ...pending, outcome: 'unknown' })) {
@@ -274,6 +295,8 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
       method: 'POST',
       body: JSON.stringify(pending.input),
     });
+    // A response from a prior login cannot rewrite the current user's pending request.
+    if (!isCurrent()) return result;
     if (!result.ok && canConfirmRejection && rejectedKinds.has(result.error?.kind))
       pendingWrite({ ...pending, outcome: 'rejected' });
     setPendingBusy(false);
@@ -300,11 +323,12 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
     retry.disabled = pendingBusy;
     queryReceipt.addEventListener('click', async () => {
       if (pendingBusy) return;
-      if (getAccountId() !== pending.accountId) return showError('账户已切换，请切回原账户。');
+      if (!isCurrent() || getAccountId() !== pending.accountId)
+        return showError('账户已切换，请切回原账户。');
       setPendingBusy(true);
       const receipt = await accountRequest(`/api/decision-writes/${pending.input.requestId}`);
       setPendingBusy(false);
-      if (getAccountId() !== pending.accountId) return;
+      if (!isCurrent() || getAccountId() !== pending.accountId) return;
       if (receipt.ok) {
         pendingClear();
         await saved();
@@ -318,9 +342,10 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
     });
     retry.addEventListener('click', async () => {
       if (pendingBusy) return;
-      if (getAccountId() !== pending.accountId) return showError('账户已切换，请切回原账户。');
+      if (!isCurrent() || getAccountId() !== pending.accountId)
+        return showError('账户已切换，请切回原账户。');
       const result = await sendPending(pending, pending.outcome === 'rejected');
-      if (getAccountId() !== pending.accountId) return;
+      if (!isCurrent() || getAccountId() !== pending.accountId) return;
       if (!result.ok) return showError(toolErrorText(result.error));
       pendingClear();
       await saved();
@@ -332,11 +357,12 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
       reload.disabled = pendingBusy;
       reload.addEventListener('click', async () => {
         if (pendingBusy) return;
-        if (getAccountId() !== pending.accountId) return showError('账户已切换，请切回原账户。');
+        if (!isCurrent() || getAccountId() !== pending.accountId)
+          return showError('账户已切换，请切回原账户。');
         setPendingBusy(true);
         const receipt = await accountRequest(`/api/decision-writes/${pending.input.requestId}`);
         setPendingBusy(false);
-        if (getAccountId() !== pending.accountId) return;
+        if (!isCurrent() || getAccountId() !== pending.accountId) return;
         if (receipt.ok) {
           pendingClear();
           await saved();
@@ -350,14 +376,14 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
   };
   redrawPending = showPending;
   const saved = async () => {
-    if (getAccountId() === accountAtOpen) {
+    if (isCurrent()) {
       closeModal();
       await onSaved();
     }
   };
   const saveActions = actionsRow('保存复盘', {
     onConfirm: async (button) => {
-      if (getAccountId() !== accountAtOpen) return showError('账户已切换，请重新打开。');
+      if (!isCurrent()) return showError('账户已切换，请重新打开。');
       if (pendingRead()) return showError('仍有未决请求，请先查询回执或复用原请求。');
       if (
         context.selectedRevision !== null &&
@@ -394,7 +420,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
       showPending();
       const result = await sendPending(pendingRead(), true);
       button.disabled = false;
-      if (getAccountId() !== accountAtOpen) return;
+      if (!isCurrent()) return;
       if (!result.ok)
         return showError(
           `${toolErrorText(result.error)}。草稿已保留；冲突时请刷新上下文后重新确认。`,
@@ -434,7 +460,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
     const register = el('button', 'btn btn-primary', '确认登记并关联此依据');
     register.type = 'button';
     register.addEventListener('click', async () => {
-      if (getAccountId() !== accountAtOpen) return showError('账户已切换，请重新打开。');
+      if (!isCurrent()) return showError('账户已切换，请重新打开。');
       const amount = Number(quantity.value);
       const actualPrice = Number(price.value);
       const actualFee = Number(fee.value);
@@ -478,7 +504,7 @@ export const openDecisionReview = async (subject, { onSaved = async () => {}, re
       showPending();
       const result = await sendPending(pendingRead(), true);
       register.disabled = false;
-      if (getAccountId() !== accountAtOpen) return;
+      if (!isCurrent()) return;
       if (!result.ok)
         return showError(
           `${toolErrorText(result.error)}。请先查同键回执或刷新账本，不要生成新请求重复登记。`,

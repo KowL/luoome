@@ -11,6 +11,7 @@ export {
   DrizzleFundamentalScoreVersionRepository,
 } from './fundamental-score.js';
 export { DrizzleHoldingRepository } from './holding.js';
+export { DrizzleInvestmentWorkspaceRepository } from './investment-workspace.js';
 export { DrizzleLedgerRepository } from './ledger.js';
 export { DrizzleLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 export { DrizzleMinuteBarRepository } from './minute-bar.js';

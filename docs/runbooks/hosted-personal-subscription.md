@@ -25,7 +25,7 @@ CLI 在存在 `HOSTED_DATA_ROOT` 时拒绝打开单机业务库；单机工具�
 | `HOSTED_ENVIRONMENT` | `development` 或 `production` |
 | `HOSTED_DATA_ROOT` | 专用绝对路径，不能使用个人本地数据目录 |
 | `HOSTED_DELETION_LEDGER_ROOT` | 生产必填，必须在 data root 的真实路径之外，独立持久卷 |
-| `PUBLIC_ORIGIN` | 单一固定 origin，默认要求 HTTPS，无路径、用户信息或尾部 `/` |
+| `PUBLIC_ORIGIN` | 通知链接默认 origin 及传输策略，不限制访问域名或端口；默认 HTTPS，无路径、用户信息或尾部 `/` |
 | `HOSTED_ALLOW_INSECURE_HTTP` | 默认 `false`；临时 HTTP 功能验证时显式设为 `true` |
 | `HOSTED_AUTH_SECRET_FILE` | 推荐 secret 文件；与 `HOSTED_AUTH_SECRET` 互斥，至少 32 字符，文件不超过 4 KiB |
 | `HOSTED_PRODUCT_POLICY` | 默认且公开启动只接受 `hosted-web-v2`，无需设置 |
@@ -48,11 +48,13 @@ CLI 在存在 `HOSTED_DATA_ROOT` 时拒绝打开单机业务库；单机工具�
 ### 临时 HTTP 注册登录
 
 暂不配置 TLS 时，可显式设置 `HOSTED_ALLOW_INSECURE_HTTP=true`，并将 `PUBLIC_ORIGIN` 设为
-实际访问的固定 HTTP origin（含非默认端口）。Compose 默认仍由 `HOSTED_DOMAIN` 生成 HTTPS origin；
+通知链接使用的 HTTP origin（含非默认端口）。Compose 默认仍由 `HOSTED_DOMAIN` 生成 HTTPS origin；
 显式 `PUBLIC_ORIGIN` 会覆盖该默认值。HTTP 直连的端口映射由部署环境提供。
+访问域名和端口无需逐一登记；浏览器请求的 Origin 必须与实际 Host（含端口）及配置的传输协议一致。
+反向代理必须透传原始 Host（Nginx 使用 `$http_host` 保留端口）；不通过转发头接受任意来源。
 
 该入口会明文传输验证码和会话，只用于临时功能验证，不满足 §7 的正式生产放行要求。
-HTTP 使用独立 `luoome_http_session` Cookie，保留 HttpOnly、SameSite=Lax、固定 Origin、CSRF、
+HTTP 使用独立 `luoome_http_session` Cookie，保留 HttpOnly、SameSite=Lax、同源 Origin、CSRF、
 验证码限流与租户隔离；HTTPS 继续使用带 Secure 的 `__Host-luoome_session`，不接受 HTTP Cookie。
 切换回 HTTPS 后须重新登录，并关闭 HTTP 开关及直连映射。
 

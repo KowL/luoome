@@ -27,6 +27,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [AI 投资协作首页与移动端核心体验 PRD](./prd/ai-investment-workspace.md) | 已确认需求、核心旅程、手机交互、方向共识与记忆、跟踪记录、验收标准及实施切片 |
 | [MVP 2.0：AI 股票投研自动化工作流](./prd/mvp2-ai-stock-research-automation.md) | 盘后计划、账户报告、基于实时市场证据的确定性盘中提醒与仓位约束（2026-09-28 验收通过；后续决定以 CONTEXT.md 为准） |
 | [连板天梯产品文档](./prd/limit-up-ladder-product.md) | 涨停梯队快照的页面、tool、与下游联动边界 |
 | [ruo 能力迁移产品设计](./prd/ruo-feature-migration-product-design.md) | 研究档案、公司事件、数据新鲜度与真实复盘 |
@@ -43,6 +44,7 @@
 | 文档 | 范围 |
 |---|---|
 | [个人订阅托管版详细设计](./ddd/hosted-personal-subscription-detailed-design.md) | 原 Web 增量登录、单默认账户、用户隔离、支付订阅与后台恢复契约 |
+| [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
 | [ruo 能力迁移详细设计](./ddd/ruo-feature-migration-detailed-design.md) | StockEvent、WorkflowRun 与事件规则；旧 ResearchNote 设计已被替代 |
 | [连板天梯详细设计](./ddd/limit-up-ladder-detailed-design.md) | A 股涨停梯队快照的 schema、东方财富涨停池 adapter、缓存与端到端集成 |
@@ -73,6 +75,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |
 | [个人订阅托管版开发改造计划](./hosted-personal-subscription-development-plan.md) | 原页面复用改造切片、旧工程证据与新业务验收、外部前置条件 |
 | [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |
 | [Strategy 日运行与评估可靠性开发计划](./strategy-reliability-development-plan.md) | 基于 2026-07-01～2026-08-11 模拟和正式运行证据制定的 P0/P1/P2 实施顺序 |

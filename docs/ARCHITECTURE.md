@@ -471,6 +471,14 @@ tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 us
 显式开启，流与确认请求沿用所选账户 header。SDK 服务端消费流以保存取消后的部分回答，完成时记录用量。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
 
+AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
+聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
+每轮独立装载当前结构化共识，不能靠最近 20 条聊天推断同意。首页的三项方向操作经
+`POST /api/workspace/drafts` 生成服务器草案，再复用原确认协议；不接受客户端执行结果。
+托管确切提醒读取使用专用 `/api/watch/notifications/:triggerId`，私有 resolver 不进入通用 discovery。
+原始触发与当前资格分开，始终不把历史触发当作当前行动许可。手机讨论与恢复契约见
+[AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md)。
+
 ### 4.8 Context
 
 所有 tool / workflow handler 收到的 `ctx`：
@@ -1152,8 +1160,9 @@ Web 启动不再按 `LUOOME_MODE` 分流，统一通过身份、control/Tenant �
 内置生产装配接入 SMTP 和真实行情，支付与研究邮件未配置时返回不可用；部署约束见
 [服务运行手册](./runbooks/hosted-personal-subscription.md)。
 
-认证传输默认要求固定 HTTPS origin 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
-固定 Origin、CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
+认证传输默认要求 HTTPS 与 Secure Cookie；临时 HTTP 验证须显式 opt-in，使用独立 Cookie。
+浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。
+CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
 登录页通过匿名只读 `/api/auth/config` 获取邮件配置、注册及传输开关，不读取用户身份或部署凭证。
 
 身份、订阅、Job、用量、投递和支付放在 `control.sqlite`；私人业务分别落入各Tenant的SQLite。

@@ -43,6 +43,7 @@ const hash = (input: unknown) =>
     .update(JSON.stringify(canonical(input)))
     .digest('hex');
 export const hostedLLMToolNames: ReadonlySet<string> = new Set([
+  'research_investment_directions',
   'analyze_stock',
   'analyze_position',
   'analyze_strategy_candidate',

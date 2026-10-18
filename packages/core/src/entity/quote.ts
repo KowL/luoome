@@ -96,6 +96,9 @@ export interface IndexQuote {
   readonly changePct: number; // 涨跌幅（%）
   readonly ts: Date;
   readonly source: string;
+  readonly observedAt?: Date | undefined;
+  readonly fetchedAt?: Date | undefined;
+  readonly timestampSource?: 'upstream' | 'retrieval' | 'unknown' | undefined;
 }
 
 export const QuoteSchema = z
@@ -212,4 +215,7 @@ export const IndexQuoteSchema = z.object({
   changePct: z.number(),
   ts: z.coerce.date(),
   source: z.string().min(1),
+  observedAt: z.coerce.date().optional(),
+  fetchedAt: z.coerce.date().optional(),
+  timestampSource: z.enum(['upstream', 'retrieval', 'unknown']).optional(),
 });

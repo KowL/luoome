@@ -15,6 +15,7 @@ export * from './entity/fundamental.js';
 export * from './entity/holding.js';
 export * from './entity/indicator-set.js';
 export * from './entity/invariants.js';
+export * from './entity/investment-workspace.js';
 export * from './entity/limit-up-ladder.js';
 export * from './entity/market.js';
 export * from './entity/market-provider.js';
@@ -67,6 +68,7 @@ export * from './portfolio/trading-plan-budget.js';
 export * from './public-market-store.js';
 // 仓储接口
 export * from './repository/index.js';
+export * from './repository/investment-workspace.js';
 export * from './research-vault.js';
 // 数据源可插拔与统一观测端口（SourceId / SourceErrorKind / SourceStatus）
 export * from './source.js';

@@ -4,6 +4,83 @@ import type {
   HostedNotificationRequest,
   HostedNotificationResult,
 } from '@luoome/core';
+import { z } from 'zod';
+import {
+  createSmtpEmailTransport,
+  type SmtpEmailOptions,
+  type SmtpEmailTransport,
+  sendSmtpEmail,
+} from './smtp.js';
+
+export type { SmtpEmailTransport } from './smtp.js';
+
+export interface SmtpHostedNotificationOptions extends SmtpEmailOptions {
+  readonly publicOrigin: string;
+  readonly allowInsecureHttp?: boolean;
+}
+
+const SmtpNotificationSchema = z.object({
+  subject: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^[^\r\n]+$/),
+  message: z.string().min(1).max(5000),
+  authenticatedUrl: z.url(),
+});
+
+export class SmtpHostedNotificationAdapter implements HostedNotificationPort {
+  readonly name = 'hosted-email-smtp';
+  readonly providerKind = 'live' as const;
+  readonly configured = true;
+  readonly idempotency = 'unsupported' as const;
+  private readonly transport: SmtpEmailTransport;
+  private readonly from: string;
+  private readonly publicOrigin: string;
+
+  constructor(
+    options: SmtpHostedNotificationOptions,
+    dependencies: { readonly transport?: SmtpEmailTransport } = {},
+  ) {
+    const origin = z.url().safeParse(options.publicOrigin);
+    if (!origin.success) throw new Error('invalid notification public origin');
+    const url = new URL(origin.data);
+    if (
+      url.origin !== options.publicOrigin ||
+      url.username !== '' ||
+      url.password !== '' ||
+      (url.protocol !== 'https:' &&
+        !(url.protocol === 'http:' && options.allowInsecureHttp === true))
+    )
+      throw new Error('notification requires a fixed HTTPS origin; HTTP requires explicit opt-in');
+    this.publicOrigin = url.origin;
+    const smtp = createSmtpEmailTransport(options, dependencies.transport);
+    this.from = smtp.from;
+    this.transport = smtp.transport;
+  }
+
+  async send(input: HostedNotificationRequest): Promise<HostedNotificationResult> {
+    const parsed = SmtpNotificationSchema.safeParse(input);
+    if (!parsed.success) return { state: 'failed', errorKind: 'provider-rejected' };
+    const url = new URL(parsed.data.authenticatedUrl);
+    if (url.origin !== this.publicOrigin || url.username !== '' || url.password !== '')
+      return { state: 'failed', errorKind: 'provider-rejected' };
+    const result = await sendSmtpEmail(this.transport, {
+      from: this.from,
+      destination: input.destination,
+      subject: parsed.data.subject,
+      text: `${parsed.data.message}\n\n查看详情（需要登录）：${url.href}\n\n请以应用内最新状态为准。本提醒不代表成交或自动下单。`,
+    });
+    return result.state === 'rejected'
+      ? { state: 'failed', errorKind: 'provider-rejected' }
+      : result;
+  }
+
+  async lookup(): Promise<HostedNotificationLookupResult> {
+    // SMTP provides neither an intent lookup nor an idempotent resend contract.
+    return { state: 'unknown' };
+  }
+}
 
 export class UnconfiguredHostedNotificationAdapter implements HostedNotificationPort {
   readonly name = 'hosted-email-unconfigured';

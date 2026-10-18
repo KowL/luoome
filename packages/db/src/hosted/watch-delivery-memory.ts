@@ -1,5 +1,7 @@
 import {
   defaultWatchNotificationSettings,
+  hostedTradingPlanTriggerSource,
+  isAshareTradingSession,
   isWatchAlertDeliveryEligible,
   type WatchDeliveryIntent,
   type WatchNotificationSettings,
@@ -43,7 +45,10 @@ export const createMemoryWatchDeliveryRepository = (deps: {
     owns: (owner, now) => deps.watchTrigger.ownsExecution(owner, now),
     trigger: (id) =>
       deps.watchTrigger.snapshotForExport().find((trigger) => trigger.id === id) ?? null,
-    eligible: (trigger) => {
+    eligible: (trigger, now) => {
+      const source = hostedTradingPlanTriggerSource(trigger);
+      // Synthetic plan pools have no AlertPlan; the sender rechecks the live plan and ledger.
+      if (source !== null) return source.validUntil > now && isAshareTradingSession(now);
       const plan = deps.alertPlan.snapshotForExport().find((entry) => entry.id === trigger.poolId);
       if (plan === undefined) return false;
       const watchlist = deps.watchlist

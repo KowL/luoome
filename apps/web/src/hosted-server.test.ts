@@ -33,12 +33,16 @@ const harness = (
     productPolicy?: 'hosted-facts-v1' | 'hosted-web-v2';
     createTenantContext?: (base: ToolContext) => ToolContext;
     origin?: string;
+    requestOrigin?: string;
+    transportOrigin?: string;
     registrationEnabled?: boolean;
     adminEmails?: string;
   } = {},
 ) => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-hosted-http-'));
   const publicOrigin = input.origin ?? origin;
+  const inputOrigin = input.requestOrigin ?? publicOrigin;
+  const transportOrigin = input.transportOrigin ?? inputOrigin;
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   let now = new Date('2026-10-12T06:00:00Z');
   const config = loadHostedConfig({
@@ -84,10 +88,10 @@ const harness = (
     headers?: Record<string, string>,
   ) => {
     const response = await app.fetch(
-      new Request(`${publicOrigin}${path}`, {
+      new Request(`${transportOrigin}${path}`, {
         method,
         headers: {
-          origin: publicOrigin,
+          origin: inputOrigin,
           'content-type': 'application/json',
           ...(cookie === undefined ? {} : { cookie }),
           ...(csrf === undefined ? {} : { 'x-csrf-token': csrf }),
@@ -290,7 +294,81 @@ describe('hosted HTTP boundary', () => {
     );
     expect(response.status).toBe(401);
   });
-  test('fixed Origin, CSRF, no-store, anonymous auth and deny-by-default surfaces', async () => {
+  test.each([
+    ['http://hosted.example.invalid', 'http://hosted.example.invalid:5173', undefined],
+    ['http://hosted.example.invalid', 'http://another.example.invalid:8080', undefined],
+    [origin, 'https://another.example.invalid:5443', undefined],
+    [origin, 'https://alias.example.invalid', 'http://alias.example.invalid'],
+  ])(
+    'login and authenticated mutations use the actual address: %s → %s',
+    async (configured, actual, transport) => {
+      const h = harness({
+        origin: configured,
+        requestOrigin: actual,
+        productPolicy: 'hosted-web-v2',
+        ...(transport === undefined ? {} : { transportOrigin: transport }),
+      });
+      const auth = await h.login('address@example.invalid');
+      await runHostedWorkerOnce(h.service);
+      expect(
+        (
+          await h.request(
+            '/api/watchlists',
+            'POST',
+            { name: 'alias', kind: 'personal', membershipPolicy: 'manual' },
+            auth.cookie,
+            auth.csrf,
+          )
+        ).response.status,
+      ).toBe(200);
+      expect(
+        (await h.request('/api/auth/session', 'DELETE', {}, auth.cookie)).response.status,
+      ).toBe(403);
+      expect(
+        (await h.request('/api/auth/session', 'DELETE', {}, auth.cookie, auth.csrf)).response
+          .status,
+      ).toBe(200);
+      expect((await h.relogin('address@example.invalid')).cookie).toBeTruthy();
+    },
+  );
+
+  test('proxy HTTP transport retains configured HTTPS policy and checks the requested host', async () => {
+    const h = harness();
+    const response = await h.app.fetch(
+      new Request('http://alias.example.invalid/api/auth/password-sessions', {
+        method: 'POST',
+        headers: { origin: 'https://alias.example.invalid', 'content-type': 'application/json' },
+        body: '{}',
+      }),
+    );
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ ok: false, error: { kind: 'invalid_input' } });
+  });
+
+  test.each([
+    undefined,
+    'null',
+    'https://evil.invalid',
+    `${origin}/`,
+    'http://hosted.example.invalid',
+  ])('rejects absent, malformed or cross-site Origin: %s', async (requestOrigin) => {
+    const h = harness();
+    const response = await h.app.fetch(
+      new Request(`${origin}/api/auth/password-sessions`, {
+        method: 'POST',
+        headers: {
+          ...(requestOrigin === undefined ? {} : { origin: requestOrigin }),
+          'x-forwarded-host': 'evil.invalid',
+          'x-forwarded-proto': 'http',
+          'content-type': 'application/json',
+        },
+        body: '{}',
+      }),
+    );
+    expect(response.status).toBe(403);
+  });
+
+  test('same Origin, CSRF, no-store, anonymous auth and deny-by-default surfaces', async () => {
     const h = harness();
     expect((await h.request('/api/me')).response.status).toBe(401);
     const wrongOrigin = await h.request(
@@ -1279,6 +1357,58 @@ describe('hosted HTTP boundary', () => {
 });
 
 describe('hosted original Web subscription integration', () => {
+  test('首页与确切提醒入口延续登录、租户隔离和草案来源保护', async () => {
+    const h = harness({ productPolicy: 'hosted-web-v2' });
+    expect((await h.request('/api/workspace')).response.status).toBe(401);
+    expect((await h.request('/api/watch/notifications/foreign-trigger')).response.status).toBe(401);
+    const first = await h.login('workspace-a@example.invalid');
+    const second = await h.login('workspace-b@example.invalid');
+    await runHostedWorkerOnce(h.service);
+    await runHostedWorkerOnce(h.service);
+    const workspace = await h.request('/api/workspace', 'GET', undefined, first.cookie);
+    expect(workspace.result).toMatchObject({
+      ok: true,
+      data: { accountId: 'default-account', investment: { ok: true, data: { consensus: null } } },
+    });
+    const session = await h.request('/api/chat/sessions', 'POST', {}, first.cookie, first.csrf);
+    if (!session.result.ok) throw new Error('fixture session missing');
+    const sessionId = (session.result.data.session as { id: string }).id;
+    const draft = {
+      sessionId,
+      tool: 'research_investment_directions',
+      userText: '研究已有范围',
+      input: { requestId: 'private-research', question: '研究已有范围' },
+    };
+    expect(
+      (await h.request('/api/workspace/drafts', 'POST', draft, first.cookie)).response.status,
+    ).toBe(403);
+    expect(
+      (await h.request('/api/workspace/drafts', 'POST', draft, second.cookie, second.csrf)).response
+        .status,
+    ).toBe(404);
+    expect(
+      (await h.request('/api/workspace/drafts', 'POST', draft, first.cookie, first.csrf)).result.ok,
+    ).toBe(true);
+    expect(
+      (await h.request(`/api/chat/sessions/${sessionId}`, 'GET', undefined, second.cookie)).response
+        .status,
+    ).toBe(404);
+    expect(
+      (await h.request('/api/watch/notifications/foreign-trigger', 'GET', undefined, second.cookie))
+        .response.status,
+    ).toBe(404);
+    expect(
+      (
+        await h.request(
+          '/api/tools/resolve_hosted_watch_notification/call',
+          'POST',
+          { input: { triggerId: 'foreign-trigger' } },
+          first.cookie,
+          first.csrf,
+        )
+      ).response.status,
+    ).toBe(404);
+  });
   test('reuses the original shell and protects every business API before login', async () => {
     const h = harness({ productPolicy: 'hosted-web-v2' });
     const shell = await h.app.fetch(new Request(`${origin}/`));

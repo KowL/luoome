@@ -9,6 +9,11 @@ do not infer a new MCP permission from an exported TypeScript tool or a hosted H
 
 ## Read
 
+`get_investment_workspace` reads account-owned direction research, immutable confirmed consensus,
+effective recent intent and independent tracking attempts across days. `get_investment_candidates`
+merges stocks across confirmed directions and provides verified `analyze_strategy_candidate` inputs.
+Read these before direction discussions; missing, expired or changed evidence limits conclusions.
+
 Use read tools to identify subjects and inspect current state before deeper analysis or mutation:
 
 - Accounts and positions: `list_accounts`, `get_account`, `list_holdings`, `get_holding`, `list_trades`,
@@ -74,8 +79,25 @@ Use advice tools only for an explicit analysis request:
 - `analyze_stock` for a stock-level recommendation.
 - `analyze_position` for a recommendation grounded in an existing holding.
 - `market_outlook` for a market or sector view.
+- `research_investment_directions` compares up to three directions from actual market breadth,
+  qualified A-share index or sentiment facts when no preset Strategy is available; explicit
+  Strategy selections continue to use published runs. Keep source, scope, observation time,
+  objections, waiting/abandon conditions and validity. Market directions may be confirmed but
+  cannot start stock tracking without a real Strategy/candidate mapping. Check
+  `trackingEligibility` and `unmappedDirections`; never invent IDs or auto-create a Strategy.
+  The tool additionally requires write and external opt-in. Confirm research cost first;
+  unavailable/failed research has no conclusion. Missing news cannot support catalyst claims.
 
 ## Write
+
+`save_investment_consensus` confirms or revises only future research preferences using
+`expectedVersion` and a request ID. Omitted patch fields preserve previous choices. A revision
+pauses this feature's previous candidate subscriptions and requires a separate confirmed
+`set_investment_tracking` start. Neither operation changes holdings, TradingPlans or holding-risk
+monitoring. Tracking creates dedicated Watchlists and existing Strategy subscriptions only;
+it does not enable paid research, schedules, AlertPlans, notifications or trades. Inspect actual
+tracking results: a saved consensus is not proof of running tasks. A failed attempt can be retried
+with a new request ID; an interrupted starting attempt requires checking actual state first.
 
 Write tools create or change local records, including accounts, holdings, trades, Strategies,
 Watchlists, explicit Strategy → Watchlist subscriptions, AlertPlans, stock events and feedback.

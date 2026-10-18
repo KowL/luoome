@@ -1,4 +1,26 @@
 import { z } from 'zod';
+import type { WatchTrigger } from '../entity/watch-trigger.js';
+
+const HostedTradingPlanTriggerSourceSchema = z.object({
+  planVersionId: z.string().min(1),
+  conditionId: z.string().min(1),
+  accountFactsDigest: z.string().min(1),
+  validUntil: z.coerce.date(),
+});
+
+export const hostedTradingPlanTriggerSource = (trigger: WatchTrigger) => {
+  const prefix = 'trading-plan-watch:';
+  if (!trigger.poolId.startsWith(prefix)) return null;
+  const accountId = trigger.poolId.slice(prefix.length);
+  const parsed = HostedTradingPlanTriggerSourceSchema.safeParse(trigger.evalSnapshot);
+  if (
+    accountId.length === 0 ||
+    !parsed.success ||
+    trigger.ruleId !== `${parsed.data.planVersionId}:${parsed.data.conditionId}`
+  )
+    return null;
+  return { accountId, ...parsed.data };
+};
 
 export const HostedQuietHoursSchema = z
   .object({

@@ -90,6 +90,44 @@ const claim = (repos: RepositoryRegistry, now = T0, owner = 'owner-A') =>
 
 const contract = (name: string, factory: () => RepositoryRegistry) =>
   describe(name, () => {
+    test('recognizes persisted trading-plan sources without requiring a synthetic AlertPlan, and rejects malformed sources', async () => {
+      const repos = factory();
+      await seed(repos);
+      const original = await repos.watchTrigger.findById('trigger');
+      if (original === null) throw new Error('fixture trigger missing');
+      for (const valid of [true, false]) {
+        const id = valid ? 'plan-trigger' : 'malformed-plan-trigger';
+        await repos.watchTrigger.save({
+          ...original,
+          id,
+          poolId: 'trading-plan-watch:account-A',
+          ruleId: 'version-1:stop',
+          evalSnapshot: valid
+            ? {
+                planVersionId: 'version-1',
+                conditionId: 'stop',
+                accountFactsDigest: 'fixture-digest',
+                validUntil: new Date('2026-10-16T07:00:00Z'),
+              }
+            : {},
+        });
+        await repos.watchDelivery.prepare({
+          owner: 'owner-A',
+          tenantId: 'tenant-A',
+          generation: 1,
+          triggerIds: [id],
+          now: T0,
+        });
+        const claimed = await repos.watchDelivery.claim({
+          owner: 'owner-A',
+          attemptId: 'plan-attempt',
+          triggerIds: [id],
+          now: T0,
+        });
+        if (valid) expect(claimed).toHaveLength(1);
+        else expect(claimed).toBeNull();
+      }
+    });
     test('acceptance is persisted without fabricating a delivered receipt', async () => {
       const repos = factory();
       await seed(repos);

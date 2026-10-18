@@ -57,6 +57,7 @@ export * from './tools/get-strategy-recommendation-preflight-history.js';
 export * from './tools/get-strategy-reliability-summary.js';
 export * from './tools/get-watch-status.js';
 export * from './tools/hosted-tenant.js';
+export * from './tools/investment-workspace.js';
 export * from './tools/limit-up-ladder.js';
 export * from './tools/list-accounts.js';
 export * from './tools/list-holdings.js';

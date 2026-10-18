@@ -97,7 +97,7 @@ Web、worker 和运维命令共用显式服务配置，不读取个人目录或�
 |---|---|
 | `HOSTED_ENVIRONMENT` | `development` 或 `production`，业务入口相同 |
 | `HOSTED_DATA_ROOT` | 独立服务数据目录，不能使用个人单机数据目录 |
-| `PUBLIC_ORIGIN` | 固定访问 origin，默认要求 HTTPS；临时 HTTP 验证须显式开启下项 |
+| `PUBLIC_ORIGIN` | 通知链接的默认 origin 及传输策略，不限定访问域名或端口；默认 HTTPS，HTTP 须显式开启下项 |
 | `HOSTED_ALLOW_INSECURE_HTTP` | 默认 `false`；设为 `true` 才允许固定 HTTP origin，仅用于临时功能验证 |
 | `HOSTED_AUTH_SECRET_FILE` | 会话密钥文件；生产用部署 secret 提供 |
 | `HOSTED_PLAN_FILE` / `HOSTED_JOB_BUDGET_MICRO` | 运营套餐 JSON 与明确的单任务成本预算 |
@@ -189,7 +189,7 @@ bun --no-env-file run web
 bun --no-env-file run worker
 ```
 
-浏览器打开配置的 `PUBLIC_ORIGIN`，通过邮箱验证码登录。开发与生产均使用这些命令；
+浏览器打开服务的可达地址，通过邮箱验证码登录。开发与生产均使用这些命令；
 开发使用独立数据目录、测试套餐及邮件配置，生产使用审核后的部署配置。配置缺失会明确失败，不会退回免登录页面。
 
 `./bin/luoome start`、`restart` 和 `web serve` 也启动同一认证 Web，默认后台运行，日志追加到

@@ -20,7 +20,11 @@ import {
   getWorkerTenantTool,
   listWorkerHostedTenantsTool,
 } from '@luoome/tools/platform';
-import { evaluateEventRulesWorkflow, intradayWatchWorkflow } from '@luoome/workflows';
+import {
+  evaluateEventRulesWorkflow,
+  intradayTradingPlanWatchWorkflow,
+  intradayWatchWorkflow,
+} from '@luoome/workflows';
 import type { HostedService } from '../../web/src/hosted-composition.js';
 import { bindHostedDefaultAccount } from '../../web/src/hosted-context.js';
 
@@ -145,20 +149,36 @@ export const runHostedWatchPass = async (
           now >= new Date(`${day}T08:50:00+08:00`) &&
           now < new Date(`${day}T15:00:00+08:00`);
         if (!intraday && !events) continue;
-        const ctx = contextForHostedWebTools(invocation);
+        const ctx = contextForHostedWebTools(invocation, {
+          notificationPublicOrigin: service.config.publicOrigin,
+        });
         summary.tenants += 1;
         const run = data(await claimHostedWatchTickTool.execute({}, ctx));
         if (run === null) continue;
         const outputs: Record<string, unknown> = {};
         let status: 'succeeded' | 'partial' | 'failed' = 'succeeded';
-        if (intraday && !stopped()) {
+        if (intraday && !stopped() && isAshareTradingSession(service.clock())) {
+          const plans = await intradayTradingPlanWatchWorkflow.run(
+            { accountId: context.user.defaultAccountId, notify: true },
+            ctx,
+          );
+          if (plans.ok) {
+            outputs.tradingPlans = plans.data;
+            if (plans.data.status !== 'complete') status = 'partial';
+          } else {
+            status = 'failed';
+            outputs.tradingPlanError = plans.error.kind;
+          }
+        }
+        if (intraday && !stopped() && isAshareTradingSession(service.clock())) {
           const result = await intradayWatchWorkflow.run({ notify: true }, ctx);
           summary.ticks += 1;
           if (result.ok) {
             const scan = result.data;
             outputs.intraday = scan;
             summary.quoteBatches += scan.quoteBatches;
-            if (scan.notifyFailed > 0) status = 'partial';
+            if ((scan.notifyFailed > 0 || scan.unknownRules > 0) && status === 'succeeded')
+              status = 'partial';
             await recordWatchRunTool.execute(
               {
                 id: run.id,

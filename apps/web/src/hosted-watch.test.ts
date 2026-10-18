@@ -3,7 +3,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FixtureEmailOtpAdapter } from '@luoome/adapters/hosted';
-import { QuoteSchema, type ToolResult } from '@luoome/core';
+import { money, QuoteSchema, type ToolResult, TradingPlanSchema } from '@luoome/core';
+import {
+  addHoldingTool,
+  buildContext,
+  createPortfolioCashFlowTool,
+  getAccountFactsTool,
+  getDecisionReviewContextTool,
+  recordDecisionTradeTool,
+} from '@luoome/tools';
+import { resolveHostedWatchNotificationTool } from '@luoome/tools/hosted';
 import { runHostedWatchPass } from '../../worker/src/watch.js';
 import { openHostedService } from './hosted-composition.js';
 import { loadHostedConfig } from './hosted-config.js';
@@ -159,6 +168,314 @@ const setup = () => {
     now: () => now,
   };
 };
+
+const holdingPlanFixture = async (
+  h: ReturnType<typeof setup>,
+  auth: Awaited<ReturnType<ReturnType<typeof setup>['login']>>,
+) => {
+  const tenant = await h.service.repos.tenants.findById(auth.tenantId);
+  if (tenant === null) throw new Error('fixture tenant missing');
+  const lease = h.service.runtimes.acquire({
+    tenantId: tenant.id,
+    ownerUserId: tenant.ownerUserId,
+    generation: tenant.generation,
+    schemaVersion: tenant.schemaVersion,
+  });
+  cleanups.push(lease.release);
+  const account = (await lease.runtime.repos.account.list())[0];
+  if (account === undefined) throw new Error('fixture account missing');
+  const ctx = buildContext({
+    mode: 'hosted',
+    identity: {
+      mode: 'hosted',
+      actor: 'worker',
+      userId: tenant.ownerUserId,
+      tenantId: tenant.id,
+      tenantGeneration: tenant.generation,
+      requestId: 'plan-fixture',
+    },
+    hostedAuthorization: async () => null,
+    repos: lease.runtime.repos,
+    user: { id: tenant.ownerUserId, defaultAccountId: account.id },
+    adapters: {
+      market: h.service.providers.market,
+      llm: {
+        name: 'no-ai',
+        generate: async () => {
+          throw new Error('unexpected AI');
+        },
+      },
+    },
+    clock: h.now,
+  });
+  expect(
+    (
+      await createPortfolioCashFlowTool.execute(
+        { accountId: account.id, occurredAt: h.now(), kind: 'deposit', amount: 100_000 },
+        ctx,
+      )
+    ).ok,
+  ).toBe(true);
+  expect(
+    (await addHoldingTool.execute({ stockId: '600519.SH', quantity: 100, avgCost: 100 }, ctx)).ok,
+  ).toBe(true);
+  h.price(100);
+  const quote = (await h.service.providers.market.batchQuote(['600519.SH'])).get('600519.SH');
+  if (quote === undefined) throw new Error('fixture quote missing');
+  await ctx.repos.quote.save(quote);
+  const result = await getAccountFactsTool.execute({}, ctx);
+  if (!result.ok || result.data.facts.status !== 'complete')
+    throw new Error('fixture facts unavailable');
+  const plan = TradingPlanSchema.parse({
+    id: `account:${account.id}:stock:600519.SH`,
+    version: 1,
+    accountId: account.id,
+    stockId: '600519.SH',
+    stockName: 'fixture',
+    status: 'active',
+    action: 'hold',
+    entryConditions: [],
+    invalidEntryConditions: [],
+    position: {
+      currentPct: 10,
+      targetPct: 10,
+      deltaPct: 0,
+      constraintStatus: 'passed',
+      constraintReasons: [],
+      prerequisiteActions: [],
+    },
+    holding: {
+      minTradingDays: 1,
+      maxTradingDays: 5,
+      nextReviewAt: new Date('2026-10-16T08:00:00Z'),
+      earlyExitConditions: [],
+      extensionBasis: [],
+    },
+    exit: {
+      stopLoss: 95,
+      takeProfit: 120,
+      conditions: ['跌破止损'],
+      triggerConditions: [
+        {
+          id: 'stop',
+          kind: 'price-threshold',
+          phase: 'risk',
+          metric: 'price',
+          comparator: 'lte',
+          value: 95,
+          description: '跌破95',
+        },
+      ],
+      canSellNow: true,
+    },
+    accountFactsDigest: result.data.facts.digest,
+    accountFactsAsOf: h.now(),
+    marketFacts: [],
+    evidence: [],
+    source: { strategyIds: [], strategyVersionIds: [], runIds: [], signalIds: [], adviceIds: [] },
+    explanation: {
+      supportingEvidenceIds: [],
+      counterEvidence: ['波动可能恢复'],
+      risks: ['缺口风险'],
+      unknowns: [],
+    },
+    confidence: 60,
+    invalidationConditions: ['账本变化'],
+    validFrom: h.now(),
+    validUntil: new Date('2026-10-20T07:00:00Z'),
+    createdAt: h.now(),
+  });
+  await ctx.repos.tradingPlan.save(plan);
+  return { ctx, plan };
+};
+
+test('worker monitors held trading plans without a browser, fences retries and links a tenant-owned trigger', async () => {
+  const h = setup();
+  const first = await h.login('held-plan@example.invalid');
+  const other = await h.login('other-plan@example.invalid');
+  const { ctx, plan } = await holdingPlanFixture(h, first);
+  await h.request(
+    '/api/notifications/feishu',
+    { expectedRevision: 0, webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/held-plan' },
+    first,
+  );
+  await runHostedWatchPass(h.service, 'before-risk');
+  h.price(90);
+  h.advance(60_000);
+  const payloads: string[] = [];
+  const http = spyOn(globalThis, 'fetch').mockImplementation((async (_input, init) => {
+    payloads.push(String(init?.body));
+    return new Response(JSON.stringify({ StatusCode: 0 }));
+  }) as typeof fetch);
+  cleanups.push(() => http.mockRestore());
+  await Promise.all([
+    runHostedWatchPass(h.service, 'held-A'),
+    runHostedWatchPass(h.service, 'held-B'),
+  ]);
+  const triggers = await ctx.repos.watchTrigger.listRecent({});
+  expect(triggers).toHaveLength(1);
+  const trigger = triggers[0];
+  if (trigger === undefined) throw new Error('plan trigger missing');
+  expect(trigger).toMatchObject({ direction: 'sell', priority: 'urgent', deliveryStatus: 'sent' });
+  expect(await ctx.repos.watchDelivery.list()).toMatchObject([
+    { state: 'accepted', attempt: 1, deliveredAt: null },
+  ]);
+  expect(payloads).toHaveLength(1);
+  expect(payloads[0]).toContain(
+    `https://ds2.example.invalid/#alerts?triggerId=${encodeURIComponent(trigger.id)}`,
+  );
+  expect(payloads[0]).toContain('缺口风险');
+  expect((await h.request('/api/watch/triggers', undefined, other)).result).toMatchObject({
+    ok: true,
+    data: { triggers: [] },
+  });
+  h.advance(60_000);
+  await runHostedWatchPass(h.service, 'held-after-restart');
+  expect(payloads).toHaveLength(1);
+  expect(await ctx.repos.trade.listByAccount(plan.accountId)).toEqual([]);
+  const runs = await ctx.repos.workflowRun.listRecent({ workflowName: 'hosted-alerts', limit: 10 });
+  expect(
+    runs.some(
+      (run) =>
+        (run.outputSummary?.tradingPlans as { checkedPlans?: number } | undefined)?.checkedPlans ===
+        1,
+    ),
+  ).toBe(true);
+  const current = await resolveHostedWatchNotificationTool.execute({ triggerId: trigger.id }, ctx);
+  expect(current).toMatchObject({
+    ok: true,
+    data: {
+      state: 'requires-recheck',
+      currentActionAllowed: false,
+      monitoring: { status: 'ready' },
+    },
+  });
+  expect(
+    (
+      await createPortfolioCashFlowTool.execute(
+        { accountId: plan.accountId, occurredAt: h.now(), kind: 'deposit', amount: 1 },
+        ctx,
+      )
+    ).ok,
+  ).toBe(true);
+  expect(
+    await resolveHostedWatchNotificationTool.execute({ triggerId: trigger.id }, ctx),
+  ).toMatchObject({
+    ok: true,
+    data: {
+      state: 'changed',
+      currentActionAllowed: false,
+      monitoring: { status: 'account-changed' },
+      trigger: { evalSnapshot: { accountFactsDigest: plan.accountFactsDigest } },
+    },
+  });
+  const subject = { kind: 'watch-trigger', id: trigger.id } as const;
+  const preview = await getDecisionReviewContextTool.execute({ subject }, ctx);
+  if (!preview.ok || preview.data.context === null)
+    throw new Error('fixture review context unavailable');
+  const ledger = await ctx.repos.decisionTrade.getLedgerState(plan.accountId);
+  if (ledger === null) throw new Error('fixture ledger unavailable');
+  const before = await ctx.repos.account.findById(plan.accountId);
+  const input = {
+    requestId: crypto.randomUUID(),
+    expectedLedgerStateHash: ledger.hash,
+    confirmedNotRecorded: true,
+    stockId: plan.stockId,
+    side: 'sell',
+    quantity: 25,
+    price: 90,
+    fee: 0,
+    executedAt: h.now().toISOString(),
+    sources: [{ subject, contextHash: preview.data.context.contextHash, expectedRevision: 0 }],
+  };
+  const recorded = await recordDecisionTradeTool.execute(input, ctx);
+  expect(recorded).toMatchObject({
+    ok: true,
+    data: {
+      replayed: false,
+      result: {
+        trade: { quantity: 25 },
+        reviews: [
+          {
+            review: { subject },
+            revision: { content: { triggerFeedback: null, adviceFeedback: null } },
+          },
+        ],
+      },
+    },
+  });
+  expect(await recordDecisionTradeTool.execute(input, ctx)).toMatchObject({
+    ok: true,
+    data: { replayed: true },
+  });
+  expect(
+    (await ctx.repos.holding.findByAccountAndStock(plan.accountId, plan.stockId))?.quantity,
+  ).toBe(75);
+  const after = await ctx.repos.account.findById(plan.accountId);
+  expect(after?.cashBalance).toBe(money((before?.cashBalance ?? 0) + 2250));
+  expect(await ctx.repos.trade.listByAccount(plan.accountId)).toHaveLength(1);
+});
+
+test.each(['account-changed', 'version-revoked', 'binding-revoked'] as const)(
+  'held plan notification rechecks %s after claim and stops before external send',
+  async (condition) => {
+    const h = setup();
+    const auth = await h.login(`race-${condition}@example.invalid`);
+    const { ctx, plan } = await holdingPlanFixture(h, auth);
+    await h.request(
+      '/api/notifications/feishu',
+      { expectedRevision: 0, webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/race' },
+      auth,
+    );
+    await runHostedWatchPass(h.service, 'before-race');
+    h.price(90);
+    h.advance(60_000);
+    const claim = ctx.repos.watchDelivery.claim.bind(ctx.repos.watchDelivery);
+    const hook = spyOn(ctx.repos.watchDelivery, 'claim').mockImplementationOnce(async (input) => {
+      const claimed = await claim(input);
+      if (condition === 'account-changed') {
+        const result = await createPortfolioCashFlowTool.execute(
+          { accountId: plan.accountId, occurredAt: h.now(), kind: 'deposit', amount: 1 },
+          ctx,
+        );
+        if (!result.ok) throw new Error('fixture race deposit failed');
+      } else if (condition === 'version-revoked') {
+        await ctx.repos.tradingPlan.save({
+          ...plan,
+          version: 2,
+          status: 'revoked',
+          createdAt: h.now(),
+        });
+      } else {
+        const settings = await ctx.repos.watchDelivery.settings();
+        await ctx.repos.watchDelivery.saveSettings({
+          ...settings,
+          expectedRevision: settings.revision,
+          enabled: false,
+          now: h.now(),
+        });
+      }
+      return claimed;
+    });
+    cleanups.push(() => hook.mockRestore());
+    const http = spyOn(globalThis, 'fetch').mockImplementation(
+      (async () => new Response(JSON.stringify({ StatusCode: 0 }))) as unknown as typeof fetch,
+    );
+    cleanups.push(() => http.mockRestore());
+    await runHostedWatchPass(h.service, 'raced-worker');
+    expect(http).not.toHaveBeenCalled();
+    expect(await ctx.repos.watchDelivery.list()).toMatchObject([
+      {
+        state: 'suppressed',
+        errorKind: condition === 'binding-revoked' ? 'recipient-unavailable' : 'conditions-changed',
+        deliveredAt: null,
+      },
+    ]);
+    expect(await ctx.repos.watchTrigger.listRecent({})).toMatchObject([
+      { deliveryStatus: 'invalidated' },
+    ]);
+  },
+);
 
 test('authenticated tenant settings stay private and worker concurrency/restart does not duplicate triggers or acceptance', async () => {
   const h = setup();

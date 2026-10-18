@@ -193,8 +193,11 @@ export const sendHostedDeliveryTool = definePlatformTool({
       currentPreferences.detail === 'summary' && input.summary !== undefined
         ? `${input.summary}\n请登录查看来源、截止时间和缺口。`
         : '有新的自选摘要或条件提醒，请登录查看。';
-    const url = new URL('/#watchlist', ctx.publicOrigin);
-    url.hash = `watchlist?resultRef=${encodeURIComponent(claimed.resultRef)}`;
+    const url = new URL('/', ctx.publicOrigin);
+    const trigger = claimed.businessKey === `watch-trigger:${claimed.resultRef}`;
+    url.hash = trigger
+      ? `alerts?${new URLSearchParams({ triggerId: claimed.resultRef })}`
+      : `reports?${new URLSearchParams({ reportId: claimed.resultRef })}`;
     let outcome: Awaited<ReturnType<typeof provider.send>>;
     try {
       outcome = await provider.send({

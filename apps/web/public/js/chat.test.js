@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { clearHostedSession, configureHostedSession, setAccountId } from './api.js';
 
 import {
   draftDecisionPath,
@@ -15,6 +16,79 @@ import {
 } from './chat.js';
 
 describe('chat message whitespace', () => {
+  it('恢复历史期间切换用户，不把原用户的草稿和讨论主体恢复给新用户', async () => {
+    const originals = new Map(
+      ['document', 'sessionStorage', 'fetch'].map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(globalThis, key),
+      ]),
+    );
+    const input = { value: '' };
+    const values = new Map();
+    const events = new EventTarget();
+    const install = (key, value) =>
+      Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+    try {
+      install('document', {
+        body: { dataset: { runtime: 'hosted' } },
+        querySelector: (selector) => (selector === '#chat-input' ? input : null),
+        addEventListener: events.addEventListener.bind(events),
+        dispatchEvent: events.dispatchEvent.bind(events),
+      });
+      install('sessionStorage', {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key),
+      });
+      configureHostedSession({ user: { id: 'user-a' }, csrfToken: 'a' });
+      setAccountId('account');
+      sessionStorage.setItem(
+        'luoome.workspace.chat',
+        JSON.stringify({
+          identity: 'user-a:account',
+          sessionId: 'session-a',
+          subjects: [{ ref: { kind: 'stock', id: '002594.SZ' }, label: 'A 的私人讨论' }],
+          draft: 'A 的未发送内容',
+        }),
+      );
+      let complete;
+      let requested;
+      const started = new Promise((resolve) => {
+        requested = resolve;
+      });
+      install('fetch', async (path) => {
+        if (path === '/api/chat/sessions')
+          return Response.json({ ok: true, data: { sessions: [{ id: 'session-a' }] } });
+        return new Promise((resolve) => {
+          complete = resolve;
+          requested();
+        });
+      });
+      const { refreshChat } = await import('./chat.js?identity-recovery-regression');
+      const refreshing = refreshChat();
+      await started;
+      configureHostedSession({ user: { id: 'user-b' }, csrfToken: 'b' });
+      setAccountId('account');
+      complete(Response.json({ ok: true, data: { messages: [] } }));
+      await refreshing;
+      expect(input.value).toBe('');
+      expect(sessionStorage.getItem('luoome.workspace.chat')).toBeNull();
+    } finally {
+      clearHostedSession();
+      for (const [key, descriptor] of originals) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+        else delete globalThis[key];
+      }
+    }
+  });
+
+  it('刷新后的未完成问题保持待核对，不自动重发或伪造回答', () => {
+    const entries = persistedFeed([
+      { id: 'saved-user', role: 'user', parts: [{ type: 'text', text: '继续研究' }] },
+    ]);
+    expect(entries[0]).toMatchObject({ type: 'msg', role: 'user', content: '继续研究' });
+    expect(entries.at(-1)?.text).toContain('不会自动重发操作');
+  });
   it('移除 AI SDK / think 清理后残留的开头空行', () => {
     expect(trimLeadingChatWhitespace('\n\n  \n好的，我来查看。')).toBe('好的，我来查看。');
   });
@@ -40,6 +114,43 @@ const draftsIn = (entries) =>
   entries.filter((entry) => entry.type === 'drafts').flatMap((entry) => entry.drafts);
 
 describe('草案确认闭环', () => {
+  it.each([
+    ['unavailable', '事实不足，未生成方向'],
+    ['failed', '研究未完成，未生成可用方向'],
+  ])('研究记录保存成功但 %s 时，不把写入成功显示为研究成功', (status, text) => {
+    const result = settlementText({
+      tool: 'research_investment_directions',
+      status: 'succeeded',
+      result: { ok: true, data: { research: { status, limitations: ['实际证据未满足要求'] } } },
+    });
+    expect(result).toContain(text);
+    expect(result).toContain('实际证据未满足要求');
+    expect(result).not.toContain('执行成功');
+  });
+
+  it('共识保存、部分跟踪和跟踪失败分别展示，不宣称已经开始盯盘或送达', () => {
+    const settlement = (tool, data) =>
+      settlementText({
+        tool,
+        status: 'succeeded',
+        result: { ok: true, data },
+      });
+    expect(
+      settlement('save_investment_consensus', {
+        consensus: { version: 2, status: 'confirmed' },
+      }),
+    ).toContain('共识 v2 已保存；方向跟踪需另行确认');
+    expect(settlement('set_investment_tracking', { tracking: { status: 'partial' } })).toContain(
+      '候选同步部分可用',
+    );
+    expect(settlement('set_investment_tracking', { tracking: { status: 'failed' } })).toContain(
+      '方向跟踪启动失败',
+    );
+    expect(settlement('set_investment_tracking', { tracking: { status: 'tracking' } })).toContain(
+      '后台运行与手机送达仍需核对',
+    );
+  });
+
   it('按消息与调用标识分别恢复状态，同名工具的其他草案仍待确认', () => {
     const result = { ok: true, data: { watchlist: { id: 'watchlist-real' } } };
     const settlement = {

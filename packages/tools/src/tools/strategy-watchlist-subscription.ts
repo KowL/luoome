@@ -1,6 +1,8 @@
 import {
   assertStrategyWatchlistSubscriptionInvariants,
   getStrategyRunDataHealth,
+  investmentResearchEnabled,
+  isInvestmentEvidenceCurrent,
   isPublishableOperationalRun,
   type StrategyWatchlistSubscription,
   StrategyWatchlistSubscriptionSchema,
@@ -259,6 +261,39 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
       }));
     const items: z.infer<typeof StrategyWatchlistSyncItemSchema>[] = [];
     for (const subscription of subscriptions) {
+      const binding = subscription.investmentBinding;
+      if (binding !== undefined) {
+        const consensus = (
+          await ctx.repos.investmentWorkspace.listConsensus({
+            ownerUserId: binding.ownerUserId,
+            accountId: binding.accountId,
+            limit: 1,
+          })
+        )[0];
+        const strategy = await ctx.repos.strategy.findById(input.strategyId);
+        if (
+          binding.ownerUserId !== ctx.user.id ||
+          binding.accountId !== ctx.user.defaultAccountId ||
+          consensus === undefined ||
+          consensus.id !== binding.consensusId ||
+          consensus.version !== binding.consensusVersion ||
+          !investmentResearchEnabled(consensus, ctx.clock()) ||
+          !isInvestmentEvidenceCurrent(run.dataAsOf, ctx.clock()) ||
+          strategy?.status !== 'active' ||
+          strategy.currentVersionId !== binding.strategyVersionId ||
+          run.strategyVersionId !== binding.strategyVersionId
+        ) {
+          items.push({
+            subscription,
+            status: 'skipped',
+            entered: 0,
+            exited: 0,
+            unchanged: 0,
+            error: '方向共识授权已暂停、过期、需复核或版本已改变；不再补入新候选。',
+          });
+          continue;
+        }
+      }
       const synced = await ctx.repos.watchlist.findById(subscription.watchlistId);
       if (synced === null) {
         items.push({
@@ -322,7 +357,8 @@ export const syncStrategyWatchlistSubscriptionsTool = defineTool({
     return {
       strategyId: input.strategyId,
       producerRunId: input.producerRunId,
-      status: failed > 0 ? 'failed' : partial > 0 ? 'partial' : 'complete',
+      status:
+        failed > 0 ? 'failed' : partial > 0 ? 'partial' : complete > 0 ? 'complete' : 'skipped',
       items,
       complete,
       partial,

@@ -184,7 +184,8 @@ const routeAdviceId = (hash = window.location.hash) => {
 };
 
 const routeReportId = (hash = window.location.hash) => {
-  const value = parseRouteHash(hash).params.get('id')?.trim();
+  const params = parseRouteHash(hash).params;
+  const value = (params.get('reportId') ?? params.get('id'))?.trim();
   return value === undefined || value.length === 0 ? null : value;
 };
 
@@ -2298,6 +2299,14 @@ const loadReportDetail = async (reportId, setStatus) => {
   if (accountId !== getAccountId() || selectedReportId !== reportId) return;
   if (!result.ok) {
     setStatus(`报告加载失败：${result.error.kind}`, true);
+    mount(
+      $('#report-detail'),
+      el(
+        'p',
+        'placeholder',
+        '这份确切报告已删除、无权访问或暂不可用。请核对当前登录用户；不会用其它报告替代。',
+      ),
+    );
     return;
   }
   const report = result.data.report;
@@ -2433,8 +2442,7 @@ const renderReports = async (setStatus) => {
       new Date(right.generatedAt).getTime() - new Date(left.generatedAt).getTime(),
   );
   const requestedId = routeReportId();
-  if (requestedId !== null && reports.some((report) => report.id === requestedId))
-    selectedReportId = requestedId;
+  if (requestedId !== null) selectedReportId = requestedId;
   $('#report-history-meta').textContent = `${reports.length} 份`;
   const history = $('#report-history');
   if (reports.length === 0) {
@@ -2442,6 +2450,7 @@ const renderReports = async (setStatus) => {
     // 删除最后一份报告后详情区同步清空，避免展示已删除内容
     selectedReportId = null;
     mount($('#report-detail'), el('p', 'placeholder', '暂无报告。'));
+    if (requestedId !== null) await loadReportDetail(requestedId, setStatus);
   } else {
     mount(
       history,
@@ -2465,9 +2474,10 @@ const renderReports = async (setStatus) => {
       }),
     );
     const nextId =
-      reports.some((report) => report.id === selectedReportId) && selectedReportId !== null
+      requestedId ??
+      (reports.some((report) => report.id === selectedReportId) && selectedReportId !== null
         ? selectedReportId
-        : reports[0].id;
+        : reports[0].id);
     await loadReportDetail(nextId, setStatus);
   }
   for (const id of ['report-kind-filter', 'report-status-filter']) {

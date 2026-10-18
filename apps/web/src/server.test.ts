@@ -1169,27 +1169,27 @@ describe('Web runtime bootstrap', () => {
           }).fetch,
           idleTimeout,
         });
-      const postChat = () =>
+      const postChat = (messageId: string) =>
         fetch(`http://127.0.0.1:${handle?.port}/api/chat`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             sessionId: 'idle-session',
-            messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
+            messages: [{ id: messageId, role: 'user', parts: [{ type: 'text', text: '你好' }] }],
           }),
         });
 
       handle = startTestListener(1);
       // idleTimeout 1s < 空窗 6s：headers 先到，服务端在读 body 期间掐断空闲连接
       // （浏览器侧表现为 reader.read() 抛 TypeError: network error）。
-      const cut = await postChat();
+      const cut = await postChat('idle-cut');
       expect(cut.status).toBe(200);
       await expect(cut.text()).rejects.toThrow();
       await handle.stop(true);
       handle = undefined;
 
       handle = startTestListener(WEB_SERVER_IDLE_TIMEOUT_SECONDS);
-      const response = await postChat();
+      const response = await postChat('idle-complete');
       expect(response.status).toBe(200);
       expect(await response.text()).toContain('[DONE]');
     } finally {

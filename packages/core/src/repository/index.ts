@@ -542,6 +542,7 @@ export interface ReportRepository {
 }
 
 export interface RepositoryRegistry {
+  readonly investmentWorkspace: import('./investment-workspace.js').InvestmentWorkspaceRepository;
   readonly hostedTenant?: import('../hosted/tenant.js').TenantRepository;
   readonly hostedExports?: import('../hosted/privacy.js').TenantExportRepository;
   readonly account: AccountRepository;

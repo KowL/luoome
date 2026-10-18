@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { clearHostedSession, configureHostedSession, setAccountId } from './api.js';
 
 const originals = new Map(
   ['Node', 'document', 'localStorage', 'sessionStorage', 'fetch'].map((key) => [
@@ -90,7 +91,10 @@ beforeEach(async () => {
     ['#modal-overlay', new TestNode('div')],
   ]);
   install('Node', TestNode);
+  const events = new EventTarget();
   install('document', {
+    addEventListener: events.addEventListener.bind(events),
+    dispatchEvent: events.dispatchEvent.bind(events),
     createElement: (tag) => new TestNode(tag),
     createTextNode: (text) => Object.assign(new TestNode(), { textContent: text }),
     querySelector: (selector) => nodes.get(selector) ?? null,
@@ -115,6 +119,7 @@ beforeEach(async () => {
   ({ openDecisionReview } = await import(`./decision-review-ui.js?case=${caseId++}`));
 });
 afterEach(() => {
+  clearHostedSession();
   for (const [key, descriptor] of originals) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else delete globalThis[key];
@@ -122,6 +127,55 @@ afterEach(() => {
 });
 
 describe('决策复盘未决请求恢复', () => {
+  const login = (userId) => {
+    document.body = { dataset: { runtime: 'hosted' } };
+    configureHostedSession({ user: { id: userId }, csrfToken: `csrf-${userId}` });
+    setAccountId('account-a');
+  };
+
+  it('切换登录用户后旧写入响应不能把私人未决请求写进新用户存储', async () => {
+    login('user-a');
+    let complete;
+    respond = () =>
+      new Promise((resolve) => {
+        complete = resolve;
+      });
+    await openDecisionReview(subject);
+    await click('保存复盘');
+    const keyA = `${pendingKey}:user-a:account-a`;
+    const requestA = JSON.parse(sessionStorage.getItem(keyA));
+    expect(requestA.outcome).toBe('unknown');
+    login('user-b');
+    complete(refusal());
+    await settle();
+    expect(sessionStorage.getItem(`${pendingKey}:user-b:account-a`)).toBeNull();
+    expect(JSON.parse(sessionStorage.getItem(keyA))).toEqual(requestA);
+  });
+
+  it('退出重登同一账户后旧回执不能修改新会话或执行保存回调', async () => {
+    login('user-a');
+    let saved = 0;
+    let complete;
+    respond = () =>
+      new Promise((resolve) => {
+        complete = resolve;
+      });
+    await openDecisionReview(subject, {
+      onSaved: () => {
+        saved++;
+      },
+    });
+    await click('保存复盘');
+    const key = `${pendingKey}:user-a:account-a`;
+    const original = sessionStorage.getItem(key);
+    clearHostedSession();
+    login('user-a');
+    complete({ ok: true, data: {} });
+    await settle();
+    expect(sessionStorage.getItem(key)).toBe(original);
+    expect(saved).toBe(0);
+  });
+
   it('原子拒绝后核对回执，重新读取修订并允许新请求', async () => {
     await openDecisionReview(subject);
     await click('保存复盘');

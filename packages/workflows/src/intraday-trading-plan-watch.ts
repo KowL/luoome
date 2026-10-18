@@ -1163,10 +1163,13 @@ const run = async (
       const status = !notification.ok
         ? 'failed'
         : notification.data.notification.result === 'suppressed'
-          ? 'fallback-log'
+          ? notification.data.notification.errorMessage === undefined
+            ? 'fallback-log'
+            : 'invalidated'
           : notification.data.notification.result === 'failed'
             ? 'failed'
             : 'sent';
+      if (status === 'invalidated') errors.push('发送前计划、账户或通知权限已变化，提醒已停止');
       const notificationId = notification.ok ? notification.data.notification.id : undefined;
       const deliveryUpdate = await ctx.tools.set_watch_trigger_delivery_status.execute({
         triggerIds: [trigger.id],

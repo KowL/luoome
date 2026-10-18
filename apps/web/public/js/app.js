@@ -21,6 +21,7 @@ import { initMarketSettings, renderMarketSettings } from './market-settings.js';
 import { sessionLabel } from './market-shared.js';
 import { initMarketSync, renderMarketSyncStatus } from './market-sync.js';
 import { initModal } from './modal.js';
+import { renderNotificationTarget } from './notification-target.js';
 import {
   analyzeAllHoldings,
   bindSettingsActions,
@@ -50,6 +51,7 @@ import {
 } from './target-pages.js';
 import { bindTopbarTheme, initTheme } from './theme.js';
 import { $ } from './ui.js';
+import { mountWorkspaceChatRoute, renderInvestmentWorkspace } from './workspace.js';
 
 /* ============ 状态行 ============ */
 
@@ -245,6 +247,7 @@ const showRoute = async (name) => {
   try {
     if (safe === 'dashboard') {
       await Promise.all([
+        renderInvestmentWorkspace(),
         renderDashboard(setStatus),
         renderDashboardMarketBlocks(),
         renderDataHealth(setStatus),
@@ -254,7 +257,8 @@ const showRoute = async (name) => {
     else if (safe === 'holdings') await renderHoldings(setStatus);
     else if (safe === 'strategies') await renderStrategies(setStatus);
     else if (safe === 'watchlists') await renderWatchlists(setStatus);
-    else if (safe === 'alerts') await renderAlerts(setStatus);
+    else if (safe === 'alerts')
+      await Promise.all([renderAlerts(setStatus), renderNotificationTarget()]);
     else if (safe === 'research') {
       await renderResearch(setStatus);
     } else if (safe === 'advice') {
@@ -271,6 +275,7 @@ const showRoute = async (name) => {
       await renderSectors(setStatus);
     } else if (safe === 'chat') {
       initChat();
+      mountWorkspaceChatRoute();
       await refreshChat();
     } else if (safe === 'settings') {
       renderSettings(setStatus);
@@ -461,6 +466,7 @@ const bindGlobalActions = () => {
     button.disabled = true;
     try {
       await Promise.all([
+        renderInvestmentWorkspace(),
         renderDashboard(setStatus),
         renderDashboardMarketBlocks(),
         renderDataHealth(setStatus),

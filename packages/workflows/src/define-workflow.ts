@@ -76,6 +76,10 @@ import type {
   GetDecisionReviewSnapshotOutput,
   GetHoldingInput,
   GetHoldingOutput,
+  GetInvestmentCandidatesInput,
+  GetInvestmentCandidatesOutput,
+  GetInvestmentWorkspaceInput,
+  GetInvestmentWorkspaceOutput,
   GetPreviousClosesInput,
   GetPreviousClosesOutput,
   GetReportInput,
@@ -180,10 +184,14 @@ import type {
   RenderReportOutput,
   RenewStrategyScheduleClaimInput,
   RenewStrategyScheduleClaimOutput,
+  ResearchInvestmentDirectionsInput,
+  ResearchInvestmentDirectionsOutput,
   ResumeStrategyEvaluationSessionInput,
   ResumeStrategyEvaluationSessionOutput,
   RunStrategyInput,
   RunStrategyOutput,
+  SaveInvestmentConsensusInput,
+  SaveInvestmentConsensusOutput,
   SaveReportInput,
   SaveReportOutput,
   SaveTradingPlanInput,
@@ -198,6 +206,8 @@ import type {
   SearchStocksOutput,
   SendNotificationInput,
   SendNotificationOutput,
+  SetInvestmentTrackingInput,
+  SetInvestmentTrackingOutput,
   SetReportDeliveryStatusInput,
   SetReportDeliveryStatusOutput,
   SetWatchTriggerDeliveryStatusInput,
@@ -294,6 +304,26 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
 export interface WorkflowToolMap {
+  readonly research_investment_directions: ToolAccessor<
+    typeof ResearchInvestmentDirectionsInput,
+    typeof ResearchInvestmentDirectionsOutput
+  >;
+  readonly get_investment_workspace: ToolAccessor<
+    typeof GetInvestmentWorkspaceInput,
+    typeof GetInvestmentWorkspaceOutput
+  >;
+  readonly save_investment_consensus: ToolAccessor<
+    typeof SaveInvestmentConsensusInput,
+    typeof SaveInvestmentConsensusOutput
+  >;
+  readonly set_investment_tracking: ToolAccessor<
+    typeof SetInvestmentTrackingInput,
+    typeof SetInvestmentTrackingOutput
+  >;
+  readonly get_investment_candidates: ToolAccessor<
+    typeof GetInvestmentCandidatesInput,
+    typeof GetInvestmentCandidatesOutput
+  >;
   readonly hosted_strategy_execution: ToolAccessor<
     typeof HostedStrategyExecutionInput,
     typeof HostedStrategyExecutionOutput

@@ -1,4 +1,6 @@
 import {
+  hostedTradingPlanTriggerSource,
+  isAshareTradingSession,
   isWatchAlertDeliveryEligible,
   WatchDeliveryIntentSchema,
   WatchNotificationSettingsSchema,
@@ -54,7 +56,10 @@ export const createDrizzleWatchDeliveryRepository = (db: DrizzleDb) =>
         .where(and(eq(watchExecutionLease.owner, owner), gt(watchExecutionLease.until, now)))
         .get() !== undefined,
     trigger: (id) => new DrizzleWatchTriggerRepository(db).getForDelivery(id),
-    eligible: (trigger) => {
+    eligible: (trigger, now) => {
+      const source = hostedTradingPlanTriggerSource(trigger);
+      // Current version and ledger are checked again by the hosted sender before external IO.
+      if (source !== null) return source.validUntil > now && isAshareTradingSession(now);
       const plan = db.select().from(alertPlans).where(eq(alertPlans.id, trigger.poolId)).get();
       if (plan === undefined) return false;
       const watchlist = db

@@ -64,6 +64,13 @@ import { getStrategyDecisionCyclesTool } from './tools/get-strategy-decision-cyc
 import { getStrategyRecommendationPreflightHistoryTool } from './tools/get-strategy-recommendation-preflight-history.js';
 import { getStrategyReliabilitySummaryTool } from './tools/get-strategy-reliability-summary.js';
 import { getWatchStatusTool } from './tools/get-watch-status.js';
+import {
+  getInvestmentCandidatesTool,
+  getInvestmentWorkspaceTool,
+  researchInvestmentDirectionsTool,
+  saveInvestmentConsensusTool,
+  setInvestmentTrackingTool,
+} from './tools/investment-workspace.js';
 import { limitUpLadderCompareTool, limitUpLadderTool } from './tools/limit-up-ladder.js';
 import { listAccountsTool } from './tools/list-accounts.js';
 import { listHoldingsTool } from './tools/list-holdings.js';
@@ -458,6 +465,11 @@ export const toolRegistry: Registry = createRegistry([
   recordAdviceOutcomeTool,
   sendNotificationTool,
   marketOutlookTool,
+  researchInvestmentDirectionsTool,
+  getInvestmentWorkspaceTool,
+  saveInvestmentConsensusTool,
+  setInvestmentTrackingTool,
+  getInvestmentCandidatesTool,
   // Phase 1：连板天梯（docs/ddd/limit-up-ladder-detailed-design.md §7）
   limitUpLadderTool,
   limitUpLadderCompareTool,

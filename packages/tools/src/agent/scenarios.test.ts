@@ -30,7 +30,10 @@ describe('agent 场景目录', () => {
   });
 
   it('草案清单全部已注册、kind 合法；Phase 2 草案按场景收窄', () => {
-    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(30);
+    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(33);
+    expect(AGENT_DRAFT_TOOL_KINDS.research_investment_directions).toBe('research');
+    expect(AGENT_DRAFT_TOOL_KINDS.save_investment_consensus).toBe('research');
+    expect(AGENT_DRAFT_TOOL_KINDS.set_investment_tracking).toBe('watchlist');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_stock).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.analyze_position).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.market_outlook).toBe('advice');

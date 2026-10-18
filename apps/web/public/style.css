@@ -5844,13 +5844,15 @@ textarea::placeholder {
   background: rgba(28, 37, 54, 0.03);
 }
 
-.chat-form input {
+.chat-form input,
+.chat-form textarea {
   flex: 1;
   border-color: transparent;
   background: transparent;
 }
 
-.chat-form input:focus {
+.chat-form input:focus,
+.chat-form textarea:focus {
   border-color: rgba(13, 158, 136, 0.32);
 }
 
@@ -10063,3 +10065,127 @@ body.auth-pending { font-size: 0; }
   body[data-runtime="hosted"] .topbar .clock { display: none; }
   body[data-runtime="hosted"] .topbar-meta { gap: 4px; }
 }
+
+/* 投资协作首页：事实、研究与确认共用一条阅读路径。 */
+.investment-workspace {
+  --workspace-accent: #a04c32;
+  --workspace-soft: #f5e9df;
+  max-width: 1180px;
+  margin: 0 auto 36px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.workspace-hero { padding: 24px 4px 36px; border-bottom: 1px solid var(--line-strong); }
+.workspace-eyebrow { display: flex; align-items: center; gap: 10px; font: 600 11px "SFMono-Regular", Menlo, monospace; letter-spacing: .13em; color: var(--workspace-accent); }
+.workspace-ai-mark { font-size: 28px; line-height: 1; }
+.workspace-hero-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.workspace-date { font-size: 12px; color: var(--muted); margin: 24px 0 10px; }
+.workspace-hero h1 { font: 500 clamp(36px, 5vw, 66px)/1.18 "Iowan Old Style", "Songti SC", "STSong", serif; letter-spacing: -.045em; margin: 0; }
+.workspace-orbit { color: var(--workspace-accent); font: 200 clamp(90px, 14vw, 164px)/1 Georgia, serif; transform: rotate(12deg); padding: 0 35px; }
+.workspace-intro { color: var(--ink-soft); max-width: 590px; margin: 20px 0 24px; line-height: 1.9; }
+.workspace-ask { display: flex; justify-content: space-between; gap: 15px; width: 100%; padding: 20px 22px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel-solid); color: var(--ink-soft); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 4px 12px #301b0c05; }
+.workspace-ask span:last-child { color: var(--workspace-accent); font-size: 23px; }
+.workspace-ask:hover { border-color: var(--workspace-accent); }
+.workspace-quick-actions { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 14px; }
+.workspace-quick-actions button { padding: 8px 0; border: 0; background: transparent; color: var(--ink-soft); cursor: pointer; font: inherit; font-size: 12px; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 5px; }
+.workspace-facts { margin: 22px 0 12px; font-size: 12px; line-height: 1.9; color: var(--ink-soft); border-left: 2px solid var(--workspace-accent); padding-left: 14px; }
+.workspace-account { font-size: 12px; border-bottom: 1px solid var(--line); padding-bottom: 20px; }
+.workspace-account-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.workspace-caption, .workspace-boundary { font-size: 12px; line-height: 1.8; color: var(--muted); }
+.workspace-boundary { padding: 24px 0 6px; }
+.workspace-section { padding: 32px 0 8px; }
+.workspace-section-title { display: flex; justify-content: space-between; gap: 12px; align-items: end; margin-bottom: 18px; }
+.workspace-section-title > div > span { color: var(--workspace-accent); font: 500 10px Menlo, monospace; letter-spacing: .08em; }
+.workspace-section h2 { margin: 7px 0 0; font-size: 22px; font-weight: 550; letter-spacing: -.04em; }
+.workspace-section-title > a { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
+.workspace-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.workspace-card { background: var(--panel-solid); border: 1px solid var(--line); border-radius: 5px; padding: 22px; min-width: 0; }
+.workspace-card p { line-height: 1.8; }
+.workspace-card h3 { margin: 18px 0 12px; font-size: 18px; }
+.workspace-card-top { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.workspace-card-index { font: 12px Menlo, monospace; color: var(--muted-2); }
+.workspace-price { font: 500 27px/1.3 "Iowan Old Style", Georgia, serif; letter-spacing: -.03em; margin: 20px 0 5px; }
+.workspace-card-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 16px; }
+.workspace-action { min-height: 44px; padding: 8px 0; background: none; color: var(--workspace-accent); border: 0; cursor: pointer; font: inherit; font-size: 13px; text-align: left; text-underline-offset: 5px; }
+.workspace-action:hover { text-decoration: underline; }
+.workspace-action.secondary { color: var(--ink-soft); font-size: 12px; }
+.workspace-action[aria-pressed="true"] { color: var(--workspace-accent); font-weight: 650; }
+.workspace-state { font-size: 11px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink-soft); display: inline-block; }
+.workspace-empty { grid-column: 1 / -1; padding: 22px; background: var(--panel-alt); border: 1px dashed var(--line-strong); border-radius: 5px; color: var(--ink-soft); line-height: 1.8; }
+.workspace-empty p { margin: 8px 0 0; font-size: 13px; }
+.workspace-direction-start { border-left: 3px solid var(--workspace-accent); padding: 25px 28px; background: linear-gradient(110deg, var(--workspace-soft), var(--panel-alt)); }
+.workspace-direction-start h3 { font-family: "Iowan Old Style", "Songti SC", serif; font-size: 24px; font-weight: 500; margin: 15px 0; }
+.workspace-direction-start p { color: var(--ink-soft); line-height: 1.9; }
+.workspace-risk { font-size: 12px; border-left: 2px solid var(--line-strong); padding-left: 10px; }
+.workspace-report { margin-top: 28px; padding: 22px; border-block: 1px solid var(--line); display: flex; flex-direction: column; align-items: start; gap: 8px; }
+.workspace-market-details { max-width: 1180px; margin: 0 auto; padding: 20px 0; border-top: 1px solid var(--line-strong); }
+.workspace-market-details > summary { cursor: pointer; padding-bottom: 24px; font-size: 16px; }
+.workspace-market-details > summary > span { color: var(--muted); font-size: 12px; margin-left: 12px; }
+.workspace-discussion { margin-top: 24px; scroll-margin-top: calc(var(--topbar-h, 70px) + 12px); }
+.workspace-discussion-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 16px; background: var(--workspace-soft); border: 1px solid var(--line); border-bottom: 0; }
+.workspace-comparison { position: sticky; top: calc(var(--topbar-h, 70px) + 4px); z-index: 8; border: 1px solid var(--line-strong); background: var(--panel-solid); display: flex; gap: 10px 18px; flex-wrap: wrap; align-items: center; padding: 12px; font-size: 12px; box-shadow: 0 5px 15px #0001; }
+.chat-context { padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--line); color: var(--ink-soft); font-size: 12px; }
+#chat-subjects { display: flex; gap: 6px; flex-wrap: wrap; }
+.chat-subject-chip { padding: 5px 8px; background: var(--accent-soft); border-radius: 3px; overflow-wrap: anywhere; }
+.chat-subject-history { font-size: 11px; color: var(--muted); margin: 12px 0 0; overflow-wrap: anywhere; }
+.chat-new-content { align-self: center; background: var(--panel-solid); color: var(--accent-strong); border: 1px solid var(--line-strong); border-radius: 20px; padding: 9px 16px; cursor: pointer; }
+.chat-workspace.chat-inline { min-height: 0; display: block; }
+.chat-inline .chat-session-rail { display: none; }
+.chat-inline .chat-log { height: min(50dvh, 440px); min-height: 220px; }
+.chat-form textarea { resize: vertical; min-height: 44px; max-height: 180px; line-height: 1.6; font: inherit; padding: 10px; }
+.chat-msg { overflow-wrap: anywhere; }
+#route-chat .chat-workspace { min-height: 0; height: max(420px, calc(100dvh - var(--topbar-h, 70px) - 140px)); }
+#route-chat .chat-log { height: auto; flex: 1; }
+.chat-card { position: relative; }
+.chat-form { flex-shrink: 0; flex-wrap: wrap; }
+.chat-form textarea { flex: 1; min-width: 0; }
+.chat-boundary { flex-shrink: 0; }
+[data-theme="dark"] .investment-workspace { --workspace-accent: #e0a48b; --workspace-soft: #34281f; }
+@media (max-width: 680px) {
+  .workspace-hero { padding: 14px 0 28px; }
+  .workspace-hero-heading { gap: 0; }
+  .workspace-hero h1 { font-size: 38px; }
+  .workspace-orbit { font-size: 85px; padding: 0 5px; }
+  .workspace-intro { font-size: 13px; line-height: 1.85; margin: 18px 0; }
+  .workspace-ask { padding: 16px; }
+  .workspace-card-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .workspace-card { padding: 18px; }
+  .workspace-section { padding-top: 28px; }
+  .workspace-section h2 { font-size: 21px; }
+  .workspace-section-title { align-items: start; }
+  .workspace-section-title > .workspace-caption { max-width: 100px; text-align: right; }
+  .workspace-direction-start { padding: 20px; }
+  .workspace-direction-start h3 { font-size: 21px; }
+  .workspace-market-details > summary > span { display: block; margin: 6px 0 0 18px; }
+  .workspace-discussion-head { padding: 10px; flex-wrap: wrap; }
+  #route-chat.active { position: fixed; top: var(--chat-viewport-top, 0px); left: 0; right: 0; height: min(var(--chat-viewport-height, 100dvh), 100dvh); z-index: 70; background: var(--bg); padding: max(10px, env(safe-area-inset-top)) 10px max(6px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; min-width: 0; }
+  #route-chat .route-header { padding: 4px 0 8px; margin: 0; min-height: 44px; flex-shrink: 0; flex-wrap: wrap; }
+  #route-chat .route-header h1 { font-size: 18px; }
+  #route-chat .route-meta { display: none; }
+  #route-chat .chat-workspace { height: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+  #route-chat .chat-session-rail { max-height: 80px; flex-shrink: 0; display: block; }
+  #route-chat .chat-session-head { padding: 6px 10px; }
+  #route-chat .chat-session-head h2, #route-chat .chat-session-foot, #route-chat .chat-session-head .section-kicker { display: none; }
+  #route-chat .chat-session-list { display: flex; flex-direction: row; overflow-x: auto; max-height: 48px; padding: 0 8px 6px; }
+  #route-chat .chat-session-item { min-width: 150px; max-width: 220px; }
+  #route-chat .chat-card { flex: 1; min-height: 0; }
+  #route-chat .chat-log { height: auto; flex: 1; padding: 12px; }
+  .chat-form { gap: 7px; padding: 10px; }
+  .chat-form textarea { font-size: 16px; }
+  .chat-context { padding: 8px 10px; }
+  .chat-boundary { font-size: 10px; padding: 5px 10px; margin: 0; }
+  .chat-inline .chat-form { position: sticky; bottom: 0; background: var(--panel-solid); padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .workspace-hero { animation: workspace-arrive .45s ease-out both; }
+  @keyframes workspace-arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+}
+.workspace-consensus-card { margin-top: 24px; padding: 24px; border: 1px solid var(--line-strong); background: var(--panel-alt); border-radius: 5px; line-height: 1.9; }
+.workspace-consensus-card h3 { font-size: 19px; margin: 0 0 12px; }
+.workspace-consensus-card > .workspace-action { margin-right: 20px; }
+.workspace-objection { font-size: 12px; line-height: 1.8; padding: 12px; background: var(--panel-alt); margin: 12px 0; border-left: 2px solid var(--line-strong); }
+.workspace-objection p { margin: 5px 0; }
+.workspace-evidence { margin: 14px 0; font-size: 12px; line-height: 1.8; }
+.workspace-evidence summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.workspace-candidate { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 10px 0; }
+.notification-target { margin-bottom: 24px; scroll-margin-top: calc(var(--topbar-h, 70px) + 16px); }

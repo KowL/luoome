@@ -177,7 +177,7 @@ describe('unified authenticated Web startup', () => {
           try {
             const response = await fetch('http://127.0.0.1:' + server.port + '/api/auth/challenges', {
               method: 'POST',
-              headers: { 'content-type': 'application/json', origin: process.env.PUBLIC_ORIGIN, 'x-forwarded-for': forwarded },
+              headers: { 'content-type': 'application/json', origin: process.env.PUBLIC_ORIGIN, host: new URL(process.env.PUBLIC_ORIGIN).host, 'x-forwarded-for': forwarded },
               body: JSON.stringify({ email: 'proxy-' + results.length + '@example.invalid' }),
             });
             const body = await response.json();

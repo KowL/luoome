@@ -21,6 +21,9 @@ import {
 } from '@luoome/adapters';
 import {
   SmtpEmailOtpAdapter,
+  type SmtpEmailOtpOptions,
+  type SmtpEmailTransport,
+  SmtpHostedNotificationAdapter,
   UnconfiguredEmailOtpAdapter,
   UnconfiguredHostedNotificationAdapter,
   UnconfiguredHostedPaymentAdapter,
@@ -28,6 +31,7 @@ import {
 import {
   type EmailOtpPort,
   HostedLLMError,
+  type HostedNotificationPort,
   PlanVersionSchema,
   type PlatformRepositoryRegistry,
   type ToolContext,
@@ -47,11 +51,11 @@ const readConfigurationFile = (path: string, maxBytes: number): string => {
   return readFileSync(path, 'utf8');
 };
 
-export const createEmailOtpFromEnv = (env: Environment): EmailOtpPort => {
+const smtpOptionsFromEnv = (env: Environment): SmtpEmailOtpOptions | undefined => {
   if (!env.SMTP_HOST) {
-    if (env.SMTP_FROM || env.SMTP_USER || env.SMTP_PASSWORD)
+    if (env.SMTP_FROM || env.SMTP_USER || env.SMTP_PASSWORD || env.SMTP_PASSWORD_FILE)
       throw new Error('SMTP_HOST is required when configuring email delivery');
-    return new UnconfiguredEmailOtpAdapter();
+    return undefined;
   }
   if (env.SMTP_PASSWORD !== undefined && env.SMTP_PASSWORD_FILE !== undefined)
     throw new Error('configure only one SMTP password source');
@@ -72,20 +76,48 @@ export const createEmailOtpFromEnv = (env: Environment): EmailOtpPort => {
       : z.enum(['true', 'false']).parse(env.SMTP_SECURE) === 'true';
   if ((user === undefined) !== (pass === undefined))
     throw new Error('SMTP authentication requires both username and password');
-  return new SmtpEmailOtpAdapter({
+  return {
     host: env.SMTP_HOST,
     port,
     secure,
     starttls: !secure,
     from: env.SMTP_FROM ?? '',
     ...(user === undefined || pass === undefined ? {} : { auth: { user, pass } }),
-  });
+  };
+};
+
+export const createEmailOtpFromEnv = (
+  env: Environment,
+  dependencies: { readonly transport?: SmtpEmailTransport } = {},
+): EmailOtpPort => {
+  const options = smtpOptionsFromEnv(env);
+  return options === undefined
+    ? new UnconfiguredEmailOtpAdapter()
+    : new SmtpEmailOtpAdapter(options, dependencies);
+};
+
+export const createHostedNotificationFromEnv = (
+  config: Pick<HostedConfig, 'publicOrigin' | 'allowInsecureHttp'>,
+  env: Environment,
+  dependencies: { readonly transport?: SmtpEmailTransport } = {},
+): HostedNotificationPort => {
+  const provider = z
+    .enum(['disabled', 'smtp'])
+    .safeParse(env.HOSTED_NOTIFICATION_PROVIDER ?? 'disabled');
+  if (!provider.success) throw new Error('HOSTED_NOTIFICATION_PROVIDER must be disabled or smtp');
+  if (provider.data === 'disabled') return new UnconfiguredHostedNotificationAdapter();
+  const smtp = smtpOptionsFromEnv(env);
+  if (smtp === undefined) throw new Error('SMTP_HOST is required for hosted SMTP notifications');
+  return new SmtpHostedNotificationAdapter(
+    { ...smtp, publicOrigin: config.publicOrigin, allowInsecureHttp: config.allowInsecureHttp },
+    dependencies,
+  );
 };
 
 export const createHostedProviders = (
   config: HostedConfig,
   env: Environment = process.env,
-  options: { readonly fetchImpl?: typeof fetch } = {},
+  options: { readonly fetchImpl?: typeof fetch; readonly smtpTransport?: SmtpEmailTransport } = {},
 ): HostedProviders => {
   if (!env.HOSTED_PLAN_FILE) throw new Error('HOSTED_PLAN_FILE must specify the operator plan');
   const trialPlan = PlanVersionSchema.parse(
@@ -96,7 +128,10 @@ export const createHostedProviders = (
   const budget = z.coerce.number().int().positive().safe().safeParse(env.HOSTED_JOB_BUDGET_MICRO);
   if (!budget.success)
     throw new Error('HOSTED_JOB_BUDGET_MICRO must be an explicit positive integer');
-  const emailOtp = createEmailOtpFromEnv(env);
+  const smtpDependencies =
+    options.smtpTransport === undefined ? {} : { transport: options.smtpTransport };
+  const emailOtp = createEmailOtpFromEnv(env, smtpDependencies);
+  const notification = createHostedNotificationFromEnv(config, env, smtpDependencies);
   if (config.registrationEnabled && !emailOtp.configured)
     throw new Error('registration requires a configured SMTP provider');
   const aiEnabled = z.enum(['true', 'false']).parse(env.HOSTED_AI_ENABLED ?? 'false') === 'true';
@@ -263,7 +298,7 @@ export const createHostedProviders = (
       ledger = repos.llm;
     },
     emailOtp,
-    notification: new UnconfiguredHostedNotificationAdapter(),
+    notification,
     payment: new UnconfiguredHostedPaymentAdapter(),
     market,
     stockSeed: [],

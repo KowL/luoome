@@ -107,6 +107,37 @@ strict PIT 只读取截止 `asOf` 已公开且已被本地记录的 revision，�
 评分与查询始终披露 `providerKind=mock`、`gate=not-ready`，且尚未接入 Strategy DSL。没有通过真实财务 revision 门禁前，不得用当前行情、
 股票目录行业、测试 fixture 或抓取时间替代生产 PIT 财务事实，也不得开放生产评分入口。
 
+### 参与方向与共识（InvestmentWorkspace）
+
+参与方向是有来源、明确覆盖范围和事实时间的研究提案；新用户不需要先配置 Strategy。
+`strategy-selection` 引用真实 published StrategyRun 与规则，保留确切策略/版本/运行身份；
+无合格预设策略时，`market-participation` 可引用市场广度、A股指数、封板/炸板情绪及供应商
+事件池行业分布的不可变快照，不编造 strategyId/runId。最多比较三个方向，不以有限股票样本或
+事件池推断全市场，不把池内行业计数当成完整板块行情或个股主题映射。缺公告/新闻不造催化。
+缺少合格事实时返回 unavailable，模型或引用失败返回 failed 并保留问题与实际事实。
+
+策略证据在下一交易日上海时间 16:30 到期；市场盘中事实在 observedAt 后20分钟或15:00（较早者）
+到期，收盘事实至下一交易日09:30。来源 unknown/stale、未来或跨日不作为依据；fetchedAt
+不刷新事实时间。IndexQuote 可显式提供 observedAt/fetchedAt/timestampSource；旧 Tencent 上游 ts
+可核验使用，旧 Eastmoney 的抓取时间 ts 不作为市场研究事实时间。真实供应商覆盖与质量另验。
+
+InvestmentConsensus 按用户与账户追加不可变版本，保存主次/回避方向、用户理由、系统反对、
+明确约束、近期意愿、讨论文本快照、复核与有效期。并发确认比较 expectedVersion，旧版本必须
+刷新后重新确认。省略的修改字段保留旧值，删除聊天不撤销共识；近期意愿过复核时间不继续作为
+当前授权。方向始终 research-only，用户坚持也不会把数据或账户硬约束变为可执行。
+
+市场方向可以确认并跨日保留共识，但没有真实策略与股票候选映射时不能开启个股跟踪；
+trackingEligibility 显式说明映射缺口，混合共识仅连接已映射策略并列出 unmappedDirections。
+确认方向不会自动创建或发布 Strategy，也不生成第二套逐股仓位与退出规则。
+共识保存与 InvestmentTracking 的 starting / tracking / partial / failed / paused 分开。
+跟踪只连接专用 Watchlist、Strategy 订阅与已有发布运行；不开启新的付费研究、自动调度或通知。
+方向订阅绑定确切共识和 Strategy 版本；换版、共识/意愿复核到期或暂停新机会时，不再同步新候选。
+共识修订暂停本功能旧方向的候选同步，重新开启需独立确认；它不修改已有持仓、TradingPlan
+或持仓风险提醒。失败可用新请求重试并复用专用列表；starting 表示仍在执行或执行结果待核对，
+不能盲重试。没有启用策略调度时即使候选已同步也标 partial；tracking 只表示接线完成，后台
+实际执行和投递仍以既有运行审计为准。个股研究通过 analyze_strategy_candidate，计划与预算
+继续复用 Advice / TradingPlan；同股多方向合并来源，不重复创建仓位规则。
+
 ### Watchlist
 
 回答“当前持续研究哪些股票”。WatchlistMember 以 `watchlistId + stockId` 唯一，维护

@@ -45,6 +45,7 @@ import {
   finishHostedWatchTickTool,
   getHostedWatchSettingsTool,
   listHostedWatchDeliveriesTool,
+  resolveHostedWatchNotificationTool,
   saveHostedWatchSettingsTool,
   testHostedWatchSettingsTool,
 } from './watch.js';
@@ -53,6 +54,11 @@ export const HOSTED_WEB_POLICY_VERSION = 'hosted-web-v2' as const;
 
 // 新 registry 项必须逐项审核；新增工具不会自动获得托管权限。
 export const hostedWebPublicToolNames: readonly string[] = Object.freeze([
+  'research_investment_directions',
+  'get_investment_workspace',
+  'save_investment_consensus',
+  'set_investment_tracking',
+  'get_investment_candidates',
   'list_chat_sessions',
   'get_chat_session',
   'create_chat_session',
@@ -242,6 +248,7 @@ const internalTools: readonly Tool[] = [
   saveHostedWatchSettingsTool,
   testHostedWatchSettingsTool,
   listHostedWatchDeliveriesTool,
+  resolveHostedWatchNotificationTool,
   claimHostedWatchTickTool,
   finishHostedWatchTickTool,
   beginAccountPlanBatchTool,
@@ -303,6 +310,7 @@ const denied = (required: string): ToolResult<never> => ({
 export interface HostedWebToolOptions {
   /** 仅绑定人工确认的专用成交记账路由；通用工具路由不得开启。 */
   readonly allowDecisionTrade?: boolean;
+  readonly notificationPublicOrigin?: string;
 }
 
 export const authorizeHostedWebRequest = async (
@@ -369,8 +377,12 @@ export const contextForHostedWebTools = (
   notification: {
     send: async (input) => {
       if (input.watchDelivery !== undefined)
-        return createHostedWatchNotificationManager(invocation.context, () =>
-          authorizeHostedWebRequest(invocation, true),
+        return createHostedWatchNotificationManager(
+          invocation.context,
+          () => authorizeHostedWebRequest(invocation, true),
+          options.notificationPublicOrigin === undefined
+            ? {}
+            : { publicOrigin: options.notificationPublicOrigin },
         ).send(input);
       const original = invocation.context.notification;
       if (original === undefined) throw new Error('notification manager unavailable');

@@ -3,6 +3,7 @@ import {
   InvariantError,
   type StrategyWatchlistSubscription,
   type StrategyWatchlistSubscriptionRepository,
+  StrategyWatchlistSubscriptionSchema,
 } from '@luoome/core';
 import { and, desc, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
@@ -22,6 +23,13 @@ const toSubscription = (row: Row): StrategyWatchlistSubscription => ({
   updatedAt: row.updatedAt,
   ...(row.cancelledAt === null ? {} : { cancelledAt: row.cancelledAt }),
   ...(row.cancelledBy === null ? {} : { cancelledBy: row.cancelledBy }),
+  ...(row.investmentBinding === null || row.investmentBinding === undefined
+    ? {}
+    : {
+        investmentBinding: StrategyWatchlistSubscriptionSchema.shape.investmentBinding.parse(
+          row.investmentBinding,
+        ),
+      }),
 });
 
 const values = (subscription: StrategyWatchlistSubscription) => ({
@@ -35,6 +43,7 @@ const values = (subscription: StrategyWatchlistSubscription) => ({
   updatedAt: subscription.updatedAt,
   cancelledAt: subscription.cancelledAt ?? null,
   cancelledBy: subscription.cancelledBy ?? null,
+  investmentBinding: subscription.investmentBinding ?? null,
 });
 
 export class DrizzleStrategyWatchlistSubscriptionRepository

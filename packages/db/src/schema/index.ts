@@ -1248,6 +1248,9 @@ export const strategyWatchlistSubscriptions = sqliteTable(
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
     cancelledAt: integer('cancelled_at', { mode: 'timestamp_ms' }),
     cancelledBy: text('cancelled_by'),
+    investmentBinding: text('investment_binding_json', { mode: 'json' }).$type<
+      StrategyWatchlistSubscription['investmentBinding']
+    >(),
   },
   (t) => ({
     strategyStatusIdx: index('strategy_watchlist_subscriptions_strategy_status_idx').on(
@@ -1871,7 +1874,65 @@ export const chatMessages = sqliteTable(
   }),
 );
 
+export const investmentResearch = sqliteTable(
+  'investment_research',
+  {
+    id: text('id').primaryKey(),
+    ownerUserId: text('owner_user_id').notNull(),
+    accountId: text('account_id').notNull(),
+    requestId: text('request_id').notNull(),
+    requestHash: text('request_hash').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('investment_research_request_unique').on(t.ownerUserId, t.accountId, t.requestId),
+    index('investment_research_owner_time_idx').on(t.ownerUserId, t.accountId, t.createdAt),
+  ],
+);
+
+export const investmentConsensus = sqliteTable(
+  'investment_consensus',
+  {
+    id: text('id').primaryKey(),
+    ownerUserId: text('owner_user_id').notNull(),
+    accountId: text('account_id').notNull(),
+    version: integer('version').notNull(),
+    requestId: text('request_id').notNull(),
+    requestHash: text('request_hash').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('investment_consensus_version_unique').on(t.ownerUserId, t.accountId, t.version),
+    uniqueIndex('investment_consensus_request_unique').on(t.ownerUserId, t.accountId, t.requestId),
+  ],
+);
+
+export const investmentTracking = sqliteTable(
+  'investment_tracking',
+  {
+    id: text('id').primaryKey(),
+    ownerUserId: text('owner_user_id').notNull(),
+    accountId: text('account_id').notNull(),
+    requestId: text('request_id').notNull(),
+    requestHash: text('request_hash').notNull(),
+    status: text('status').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    uniqueIndex('investment_tracking_request_unique').on(t.ownerUserId, t.accountId, t.requestId),
+    uniqueIndex('investment_tracking_starting_unique')
+      .on(t.ownerUserId, t.accountId)
+      .where(sql`status = 'starting'`),
+  ],
+);
+
 export const schema = {
+  investmentResearch,
+  investmentConsensus,
+  investmentTracking,
   schemaMigrations,
   accounts,
   decisionReviews,

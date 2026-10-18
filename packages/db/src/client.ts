@@ -29,6 +29,7 @@ import {
   DrizzleFundamentalScoreRunRepository,
   DrizzleFundamentalScoreVersionRepository,
   DrizzleHoldingRepository,
+  DrizzleInvestmentWorkspaceRepository,
   DrizzleLedgerRepository,
   DrizzleLimitUpLadderSnapshotRepository,
   DrizzleMinuteBarRepository,
@@ -85,6 +86,36 @@ const ensureColumn = (db: DrizzleDb, table: string, column: string, definition: 
  * 后续版本若接入 drizzle-kit migration，本函数应被 migrate 取代。
  */
 export const ensureSchema = (db: DrizzleDb): void => {
+  db.run(sql`CREATE TABLE IF NOT EXISTS investment_research (
+    id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, account_id TEXT NOT NULL,
+    request_id TEXT NOT NULL, request_hash TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_research_request_unique ON investment_research (owner_user_id, account_id, request_id)`,
+  );
+  db.run(
+    sql`CREATE INDEX IF NOT EXISTS investment_research_owner_time_idx ON investment_research (owner_user_id, account_id, created_at)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS investment_consensus (
+    id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, account_id TEXT NOT NULL, version INTEGER NOT NULL,
+    request_id TEXT NOT NULL, request_hash TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_consensus_version_unique ON investment_consensus (owner_user_id, account_id, version)`,
+  );
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_consensus_request_unique ON investment_consensus (owner_user_id, account_id, request_id)`,
+  );
+  db.run(sql`CREATE TABLE IF NOT EXISTS investment_tracking (
+    id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, account_id TEXT NOT NULL,
+    request_id TEXT NOT NULL, request_hash TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT NOT NULL, started_at INTEGER NOT NULL
+  )`);
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_tracking_request_unique ON investment_tracking (owner_user_id, account_id, request_id)`,
+  );
+  db.run(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS investment_tracking_starting_unique ON investment_tracking (owner_user_id, account_id) WHERE status = 'starting'`,
+  );
   ensureWatchDeliverySchema(db);
   ensureReportAutomationSchema(db);
   ensureTenantSchema(db);
@@ -1192,9 +1223,10 @@ export const ensureSchema = (db: DrizzleDb): void => {
       id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, watchlist_id TEXT NOT NULL,
       source_key TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT NOT NULL,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      cancelled_at INTEGER, cancelled_by TEXT
+      cancelled_at INTEGER, cancelled_by TEXT, investment_binding_json TEXT
     )
   `);
+  ensureColumn(db, 'strategy_watchlist_subscriptions', 'investment_binding_json', 'TEXT');
   db.run(sql`
     CREATE INDEX IF NOT EXISTS strategy_watchlist_subscriptions_strategy_status_idx
     ON strategy_watchlist_subscriptions (strategy_id, status)
@@ -2092,6 +2124,7 @@ export const createDrizzleRepos = (
   }
   const researchIndex = new DrizzleResearchIndexRepository(db);
   const repos: RepositoryRegistry = {
+    investmentWorkspace: new DrizzleInvestmentWorkspaceRepository(db),
     hostedTenant: new DrizzleTenantRepository(db),
     hostedExports: new DrizzleTenantExportRepository(db),
     watchDelivery: createDrizzleWatchDeliveryRepository(db),

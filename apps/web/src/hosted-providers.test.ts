@@ -6,7 +6,11 @@ import { createInMemoryRepos } from '@luoome/db';
 import { buildContext } from '@luoome/tools';
 import { loadConfiguredHostedProviders, openHostedService } from './hosted-composition.js';
 import { loadHostedConfig } from './hosted-config.js';
-import { createEmailOtpFromEnv, createHostedProviders } from './hosted-providers.js';
+import {
+  createEmailOtpFromEnv,
+  createHostedNotificationFromEnv,
+  createHostedProviders,
+} from './hosted-providers.js';
 import { createHostedWebApp } from './hosted-server.js';
 
 const roots: string[] = [];
@@ -181,6 +185,44 @@ describe('production Web providers', () => {
 });
 
 describe('SMTP environment boundary', () => {
+  it('requires separate notification opt-in and SMTP configuration without sending mail', () => {
+    const { config, env } = setup();
+    const smtp = {
+      ...env,
+      SMTP_HOST: 'smtp.example.invalid',
+      SMTP_PORT: '587',
+      SMTP_FROM: 'notification@example.invalid',
+    };
+    const transport = {
+      sendMail: async () => {
+        throw new Error('unexpected SMTP IO');
+      },
+    };
+    expect(
+      createHostedProviders(config, smtp, { smtpTransport: transport }).notification.configured,
+    ).toBe(false);
+    const configured = createHostedProviders(
+      config,
+      { ...smtp, HOSTED_NOTIFICATION_PROVIDER: 'smtp' },
+      { smtpTransport: transport },
+    );
+    expect(configured.notification).toMatchObject({
+      configured: true,
+      providerKind: 'live',
+      name: 'hosted-email-smtp',
+      idempotency: 'unsupported',
+    });
+    expect(configured.emailOtp.configured).toBe(true);
+    expect(() =>
+      createHostedNotificationFromEnv(config, { HOSTED_NOTIFICATION_PROVIDER: 'smtp' }),
+    ).toThrow('SMTP_HOST');
+    expect(() =>
+      createHostedNotificationFromEnv(config, { HOSTED_NOTIFICATION_PROVIDER: 'private-value' }),
+    ).toThrow('must be disabled or smtp');
+    expect(() => createEmailOtpFromEnv({ SMTP_PASSWORD_FILE: '/fixture/absent' })).toThrow(
+      'SMTP_HOST',
+    );
+  });
   it('keeps email unavailable until configured and rejects incomplete or ambiguous settings', () => {
     expect(createEmailOtpFromEnv({}).configured).toBe(false);
     expect(() => createEmailOtpFromEnv({ SMTP_FROM: 'login@example.invalid' })).toThrow(

@@ -8,6 +8,7 @@ import {
   apiRequestSignal,
   callApi,
   getAccountId,
+  getHostedSession,
   getSessionEpoch,
   randomRequestId,
 } from './api.js';
@@ -23,8 +24,92 @@ let activeAccountId = null;
 let activeController = null;
 let viewVersion = 0;
 let settling = false;
+let activeSubjects = [];
+let followOutput = true;
+let restoredIdentity = null;
+const renderedEntries = new WeakMap();
+const CHAT_RECOVERY_KEY = 'luoome.workspace.chat';
+const chatIdentity = () => `${getHostedSession()?.user.id ?? 'local'}:${getAccountId()}`;
+const saveChatView = () => {
+  try {
+    sessionStorage.setItem(
+      CHAT_RECOVERY_KEY,
+      JSON.stringify({
+        identity: chatIdentity(),
+        sessionId: activeSessionId,
+        subjects: activeSubjects,
+        draft: $('#chat-input')?.value ?? '',
+      }),
+    );
+  } catch {
+    /* 当前浏览器不支持草稿恢复。 */
+  }
+};
+const recoverChatView = () => {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(CHAT_RECOVERY_KEY) ?? 'null');
+    if (value?.identity === chatIdentity()) return value;
+    sessionStorage.removeItem(CHAT_RECOVERY_KEY);
+  } catch {
+    /* 无可恢复草稿。 */
+  }
+  return null;
+};
+const renderSubjects = () => {
+  const node = $('#chat-subjects');
+  if (node !== null)
+    mount(
+      node,
+      activeSubjects.length === 0
+        ? '全局讨论'
+        : activeSubjects.map((item) => el('span', 'chat-subject-chip', item.label)),
+    );
+  const clear = $('#chat-clear-subjects');
+  if (clear !== null) clear.hidden = activeSubjects.length === 0;
+};
+const setDiscussionSubjects = (subjects) => {
+  if (sending || settling) return false;
+  activeSubjects = subjects.slice(0, 4);
+  renderSubjects();
+  saveChatView();
+  return true;
+};
+const mountChatView = (mode = 'full') => {
+  const workspace = $('#chat-workspace');
+  const host = mode === 'inline' ? $('#workspace-discussion-body') : $('#route-chat');
+  if (workspace === null || host === null) return;
+  host.append(workspace);
+  workspace.classList.toggle('chat-inline', mode === 'inline');
+  renderSubjects();
+};
+const resetChatIdentity = () => {
+  viewVersion += 1;
+  activeController?.abort();
+  activeController = null;
+  sending = false;
+  settling = false;
+  activeAccountId = null;
+  activeSessionId = null;
+  activeSubjects = [];
+  restoredIdentity = null;
+  feed.splice(0);
+  sessions = [];
+  try {
+    sessionStorage.removeItem(CHAT_RECOVERY_KEY);
+  } catch {
+    /* 无可清理。 */
+  }
+  const input = $('#chat-input');
+  if (input !== null) input.value = '';
+  renderSubjects();
+  renderSessions();
+  renderChat();
+};
 
 const TOOL_LABELS = {
+  research_investment_directions: '参与方向研究',
+  save_investment_consensus: '保存参与共识',
+  set_investment_tracking: '调整方向跟踪',
   create_account: '创建账户',
   add_holding: '登记持仓',
   update_holding: '更新持仓',
@@ -107,8 +192,31 @@ const settlementText = (settlement) => {
   if (settlement.status === 'cancelled') return '已取消，未执行';
   if (settlement.status === 'executing')
     return '执行中；若页面或进程曾中断，请核对实际账本后可取消该草案';
-  if (settlement.status === 'succeeded') return `${toolLabel(settlement.tool)}执行成功`;
-  return `执行失败：${resultErrorText(settlement.result, '未知错误')}`;
+  if (settlement.status === 'succeeded') {
+    const data = settlement.result?.ok ? settlement.result.data : null;
+    if (settlement.tool === 'research_investment_directions' && data?.research) {
+      const research = data.research;
+      if (research.status === 'complete') return '方向研究已完成；保存共识与开启跟踪需分别确认。';
+      return `${research.status === 'unavailable' ? '事实不足，未生成方向' : '研究未完成，未生成可用方向'}。${research.limitations.at(-1) ?? '请核对数据与模型状态后重新研究。'}`;
+    }
+    if (settlement.tool === 'save_investment_consensus' && data?.consensus)
+      return data.consensus.status === 'revoked'
+        ? `共识 v${data.consensus.version} 已撤销。`
+        : `共识 v${data.consensus.version} 已保存；方向跟踪需另行确认。`;
+    if (settlement.tool === 'set_investment_tracking' && data?.tracking)
+      return {
+        starting: '跟踪启动尚未完成，请核对实际状态。',
+        tracking: '候选同步已连接；后台运行与手机送达仍需核对。',
+        partial: '候选同步部分可用，请核对未连接方向及调度状态。',
+        failed: '方向跟踪启动失败，已保存的共识仍保留。',
+        paused: '方向新候选同步已暂停；持仓风险监控不受此操作影响。',
+      }[data.tracking.status];
+    return `${toolLabel(settlement.tool)}执行成功`;
+  }
+  const reason = resultErrorText(settlement.result, '未知错误');
+  if (reason.includes('consensus_version_conflict'))
+    return '共识已被其它页面更新。请回首页核对最新版本，再重新提出草案。';
+  return `执行失败：${reason}`;
 };
 
 const isSettled = (draft) =>
@@ -148,6 +256,7 @@ const settleDraft = async (draft, approved) => {
   if (response.ok) draft.settlement = response.data;
   else draft.error = resultErrorText(response, '请求未完成，请刷新会话后重试');
   renderChat();
+  if (response.ok) document.dispatchEvent(new Event('luoome:workspace-updated'));
   if (!response.ok) return;
   const related = feed
     .filter((entry) => entry.type === 'drafts')
@@ -163,6 +272,8 @@ const DRAFT_FIELD_SOURCE_LABELS = { default: '默认', inferred: '推断' };
 const formatDraftFieldValue = (value) => {
   if (Array.isArray(value)) return value.map(formatDraftFieldValue).join('、');
   if (typeof value === 'object' && value !== null) return JSON.stringify(value);
+  if (typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(value))
+    return new Date(value).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
   return String(value ?? '—');
 };
 
@@ -217,10 +328,20 @@ const draftCard = (draft) => {
     card.append(el('pre', 'chat-draft-input', JSON.stringify(draft.input ?? {}, null, 2)));
   }
   if (draft.settlement !== undefined) {
+    const data = draft.settlement.result?.ok ? draft.settlement.result.data : null;
+    const incomplete =
+      (draft.tool === 'research_investment_directions' &&
+        data?.research &&
+        data.research.status !== 'complete') ||
+      (draft.tool === 'set_investment_tracking' &&
+        data?.tracking &&
+        ['starting', 'partial', 'failed'].includes(data.tracking.status));
     card.append(
       el(
         'p',
-        draft.settlement.status === 'succeeded' ? 'chat-draft-settled ok' : 'chat-draft-settled',
+        draft.settlement.status === 'succeeded' && !incomplete
+          ? 'chat-draft-settled ok'
+          : 'chat-draft-settled',
         settlementText(draft.settlement),
       ),
     );
@@ -302,6 +423,12 @@ const usedActionsNode = (usedActions) => {
 };
 
 const renderEntry = (entry) => {
+  if (entry.type === 'subjects')
+    return el(
+      'div',
+      'chat-subject-history',
+      `讨论：${entry.labels.length > 0 ? entry.labels.join(' / ') : '全局'}`,
+    );
   if (entry.type === 'msg') {
     const node = el('div', `chat-msg ${entry.role}`, entry.content);
     if (entry.cancelled === true) node.append(el('span', 'chat-cancelled-mark', '已取消'));
@@ -352,8 +479,26 @@ const emptyState = () => {
 const renderChat = () => {
   const log = $('#chat-log');
   if (log === null) return;
-  mount(log, feed.length === 0 ? emptyState() : feed.map(renderEntry));
-  log.scrollTop = log.scrollHeight;
+  const previousTop = log.scrollTop;
+  const nodes =
+    feed.length === 0
+      ? [emptyState()]
+      : feed.map((entry) => {
+          const signature = JSON.stringify(entry);
+          let rendered = renderedEntries.get(entry);
+          if (rendered?.signature !== signature) {
+            rendered = { signature, node: renderEntry(entry) };
+            renderedEntries.set(entry, rendered);
+          }
+          return rendered.node;
+        });
+  nodes.forEach((node, index) => {
+    if (log.childNodes[index] !== node) log.insertBefore(node, log.childNodes[index] ?? null);
+  });
+  while (log.childNodes.length > nodes.length) log.lastChild.remove();
+  log.scrollTop = followOutput ? log.scrollHeight : previousTop;
+  const newContent = $('#chat-new-content');
+  if (newContent !== null) newContent.hidden = followOutput || !sending;
   const sendButton = $('#chat-send');
   if (sendButton !== null) sendButton.disabled = sending || settling;
   const newButton = $('#chat-new-session');
@@ -391,7 +536,7 @@ const deleteSession = async (session) => {
   if (sending || settling) return;
   const confirmed = await confirmDialog({
     title: '删除会话',
-    message: `删除会话「${session.title}」及全部消息？`,
+    message: `删除会话「${session.title}」及全部消息？已确认共识和持续跟踪会保留，可在首页单独修改或暂停。`,
     confirmLabel: '删除',
     danger: true,
   });
@@ -460,6 +605,9 @@ const persistedFeed = (messages, context = {}) => {
       message.role === 'assistant' &&
       message.parts.some((part) => part.type === 'data-luoome-cancelled');
     if (visibleText.trim().length > 0 || cancelled) {
+      const subjectPart = message.parts.find((part) => part.type === 'data-luoome-subjects');
+      if (subjectPart !== undefined)
+        result.push({ type: 'subjects', labels: subjectPart.data?.labels ?? [] });
       result.push({
         type: 'msg',
         role: message.role,
@@ -501,6 +649,20 @@ const persistedFeed = (messages, context = {}) => {
     if (actions.length > 0) result.push({ type: 'actions', usedActions: actions });
     if (drafts.length > 0) result.push({ type: 'drafts', drafts });
   }
+  if (
+    messages.at(-1)?.role === 'user' &&
+    legacySettlementText(
+      messages
+        .at(-1)
+        .parts.filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join(''),
+    ) === null
+  )
+    result.push({
+      type: 'note',
+      text: '这个问题已保存，回答尚未完成或仍在生成。请稍后核对会话状态；系统不会自动重发操作。',
+    });
   return result;
 };
 
@@ -515,6 +677,15 @@ const selectSession = async (sessionId) => {
     return;
   }
   activeSessionId = sessionId;
+  const subjectPart = [...(result.data.messages ?? [])]
+    .reverse()
+    .flatMap((message) => message.parts)
+    .find((part) => part.type === 'data-luoome-subjects');
+  if (subjectPart?.data?.refs !== undefined)
+    activeSubjects = subjectPart.data.refs.map((ref, index) => ({
+      ref,
+      label: subjectPart.data.labels?.[index] ?? ref.id,
+    }));
   feed.splice(
     0,
     feed.length,
@@ -524,8 +695,9 @@ const selectSession = async (sessionId) => {
     }),
   );
   renderSessions();
+  renderSubjects();
   renderChat();
-  $('#chat-input')?.focus();
+  saveChatView();
 };
 
 const refreshSessions = async () => {
@@ -533,8 +705,6 @@ const refreshSessions = async () => {
   const result = await callApi('/api/chat/sessions');
   if (version !== viewVersion) return false;
   if (!result.ok) {
-    sessions = [];
-    renderSessions();
     return false;
   }
   sessions = Array.isArray(result.data?.sessions) ? result.data.sessions : [];
@@ -556,6 +726,7 @@ const createSession = async () => {
   const session = result.data.session;
   sessions = [session, ...sessions.filter((item) => item.id !== session.id)];
   activeSessionId = session.id;
+  saveChatView();
   feed.splice(0);
   renderSessions();
   renderChat();
@@ -586,7 +757,7 @@ const send = async (requestedText) => {
   const version = viewVersion;
   const accountId = getAccountId();
   // 流式期间显示「取消」：abort 会断流，服务端透传 request.signal 中断 runtime。
-  const cancelBtn = el('button', 'btn btn-outline btn-sm', '取消');
+  const cancelBtn = el('button', 'btn btn-outline btn-sm', '停止回答');
   cancelBtn.type = 'button';
   cancelBtn.id = 'chat-cancel';
   cancelBtn.addEventListener('click', () => controller.abort());
@@ -600,6 +771,10 @@ const send = async (requestedText) => {
     sessionId = activeSessionId;
     if (sessionId === null) return;
     if (requestedText === undefined) input.value = '';
+    if (activeSubjects.length > 0)
+      feed.push({ type: 'subjects', labels: activeSubjects.map((item) => item.label) });
+    followOutput = true;
+    saveChatView();
     pushMsg('user', text);
     const statusEntry = { type: 'status', text: '正在连接模型…' };
     const actionsEntry = { type: 'actions', usedActions: [] };
@@ -626,6 +801,7 @@ const send = async (requestedText) => {
       signal: apiRequestSignal(controller.signal),
       body: JSON.stringify({
         sessionId,
+        subjects: activeSubjects.map((item) => item.ref),
         messages: [
           {
             id: `user_${randomRequestId()}`,
@@ -734,7 +910,7 @@ const send = async (requestedText) => {
       activeController = null;
       if (sendBtn !== null) sendBtn.disabled = false;
       renderChat();
-      input.focus();
+      saveChatView();
     }
   }
 };
@@ -742,6 +918,39 @@ const send = async (requestedText) => {
 const initChat = () => {
   if (initialized) return;
   initialized = true;
+  $('#chat-check-state')?.addEventListener('click', () => void refreshChat());
+  $('#chat-clear-subjects')?.addEventListener('click', () => setDiscussionSubjects([]));
+  $('#chat-input')?.addEventListener('input', saveChatView);
+  $('#chat-input')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+      event.preventDefault();
+      void send();
+    }
+  });
+  $('#chat-log')?.addEventListener('scroll', (event) => {
+    const log = event.currentTarget;
+    followOutput = log.scrollHeight - log.clientHeight - log.scrollTop < 60;
+    if (followOutput && $('#chat-new-content') !== null) $('#chat-new-content').hidden = true;
+  });
+  $('#chat-new-content')?.addEventListener('click', () => {
+    followOutput = true;
+    const log = $('#chat-log');
+    if (log !== null) log.scrollTop = log.scrollHeight;
+    $('#chat-new-content').hidden = true;
+  });
+  const syncViewport = () => {
+    document.documentElement.style.setProperty(
+      '--chat-viewport-height',
+      `${window.visualViewport?.height ?? window.innerHeight}px`,
+    );
+    document.documentElement.style.setProperty(
+      '--chat-viewport-top',
+      `${window.visualViewport?.offsetTop ?? 0}px`,
+    );
+  };
+  window.visualViewport?.addEventListener('resize', syncViewport);
+  window.visualViewport?.addEventListener('scroll', syncViewport);
+  syncViewport();
   $('#chat-new-session')?.addEventListener('click', () => {
     if (!sending && !settling) void createSession();
   });
@@ -754,34 +963,64 @@ const initChat = () => {
 const refreshChat = async () => {
   const accountId = getAccountId();
   if (accountId === activeAccountId && (sending || settling)) return;
-  viewVersion += 1;
+  const identity = chatIdentity();
+  if (restoredIdentity !== null && restoredIdentity !== identity) resetChatIdentity();
+  const recovery = recoverChatView();
+  const preferredSession = activeSessionId ?? recovery?.sessionId;
+  const requestVersion = ++viewVersion;
   activeController?.abort();
   activeController = null;
   sending = false;
   settling = false;
   activeAccountId = accountId;
+  restoredIdentity = identity;
   activeSessionId = null;
-  feed.splice(0);
-  if (!(await refreshSessions())) {
+  const refreshed = await refreshSessions();
+  if (requestVersion !== viewVersion) return;
+  if (!refreshed) {
+    activeSessionId = preferredSession ?? null;
+    if (feed.at(-1)?.text !== '连接暂不可用，保留当前已读取内容。恢复后请重新核对会话状态。')
+      feed.push({
+        type: 'note',
+        text: '连接暂不可用，保留当前已读取内容。恢复后请重新核对会话状态。',
+      });
     renderChat();
     return;
   }
-  const first = sessions[0];
+  const first = sessions.find((session) => session.id === preferredSession) ?? sessions[0];
   if (first !== undefined) await selectSession(first.id);
-  else renderChat();
+  else {
+    feed.splice(0);
+    renderChat();
+  }
+  if (requestVersion !== viewVersion) return;
+  if (recovery?.subjects !== undefined) activeSubjects = recovery.subjects;
+  if (recovery?.draft !== undefined && $('#chat-input') !== null)
+    $('#chat-input').value = recovery.draft;
+  renderSubjects();
+  saveChatView();
 };
+
+globalThis.document?.addEventListener?.('luoome:identity-cleared', resetChatIdentity);
+
+const ensureChatSession = async () => activeSessionId ?? (await createSession())?.id ?? null;
 
 export {
   draftDecisionPath,
   draftEditPrefill,
   draftFromPart,
+  ensureChatSession,
   formatDraftFieldValue,
   initChat,
+  mountChatView,
   parseChatRouteHeader,
   persistedFeed,
   planCardLines,
   refreshChat,
   renderChat,
+  saveChatView,
+  send,
+  setDiscussionSubjects,
   settlementText,
   shouldContinueAfterDrafts,
   trimLeadingChatWhitespace,

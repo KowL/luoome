@@ -255,8 +255,11 @@ export const createHostedWebApp = (
     const request = c.req.raw;
     const mutation = !['GET', 'HEAD'].includes(request.method);
     if (c.req.path === '/api/webhooks/payment' && request.method === 'POST') return next();
-    if (mutation && request.headers.get('origin') !== config.publicOrigin) {
-      return hostedJsonResult(denied('security:fixed-origin'));
+    const requestOrigin = new URL(request.url);
+    // TLS 可由代理终止；Host 保留访问域名和端口，传输策略仍由部署配置决定。
+    requestOrigin.protocol = secureTransport ? 'https:' : 'http:';
+    if (mutation && request.headers.get('origin') !== requestOrigin.origin) {
+      return hostedJsonResult(denied('security:same-origin'));
     }
     const authPath = [
       '/api/auth/challenges',
@@ -963,6 +966,7 @@ export const createHostedWebApp = (
         request: (c) => ({
           context: contextForHostedWebTools(c.get('invocation'), {
             allowDecisionTrade: c.req.method === 'POST' && c.req.path === '/api/decision-trades',
+            notificationPublicOrigin: config.publicOrigin,
           }),
           retain: c.get('retainRuntime'),
         }),

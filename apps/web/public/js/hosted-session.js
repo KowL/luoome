@@ -32,8 +32,8 @@ export const restartHostedSession = () => {
 const errorText = (error) => {
   if (error?.required === 'auth:password-rate-limit') return '登录尝试过于频繁，请 15 分钟后再试。';
   if (error?.required === 'auth:rate-limit') return '发送过于频繁，请稍后重试。';
-  if (error?.required === 'security:fixed-origin')
-    return '当前访问地址与服务配置不一致，请联系管理员。';
+  if (error?.required === 'security:same-origin')
+    return '请求来源与当前页面不一致，请刷新页面后重试。';
   if (error?.cause === 'provider_unconfigured') return '邮件服务尚未配置，请联系管理员。';
   if (error?.cause === 'challenge_delivery_failed') return '验证码邮件发送失败，请稍后重试。';
   if (error?.cause === 'challenge_delivery_unknown')

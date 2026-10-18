@@ -6,6 +6,7 @@ export const sendHostedFeishu = async (
   webhookUrl: string | null,
   id: string,
   payload: NotificationPayload,
+  suppressionKind = 'fallback-log',
 ): Promise<{
   notification: Notification;
   state: 'accepted' | 'failed' | 'unknown' | 'suppressed';
@@ -17,7 +18,7 @@ export const sendHostedFeishu = async (
   if (webhookUrl === null) {
     result = 'suppressed';
     state = 'suppressed';
-    errorKind = 'fallback-log';
+    errorKind = suppressionKind;
   } else {
     try {
       await new FeishuWebhookAdapter({ webhookUrl }).send(payload);
@@ -38,7 +39,9 @@ export const sendHostedFeishu = async (
     payload,
     result,
     sentAt: ctx.clock(),
-    ...(result === 'failed' ? { errorMessage: errorKind as string } : {}),
+    ...(result === 'failed' || (result === 'suppressed' && errorKind !== 'fallback-log')
+      ? { errorMessage: errorKind as string }
+      : {}),
   };
   await ctx.repos.notification.save(notification);
   return { notification, state, errorKind };

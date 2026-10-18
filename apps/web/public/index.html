@@ -54,7 +54,7 @@
   <div class="app-shell">
     <aside class="sidebar" aria-label="主导航">
       <ul class="nav" role="navigation">
-        <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>看盘</span></a></li>
+        <li><a class="nav-item" href="#dashboard" data-route="dashboard"><span>首页</span></a></li>
         <li><a class="nav-item" href="#indices" data-route="indices"><span>指数</span></a></li>
         <li><a class="nav-item" href="#holdings" data-route="holdings"><span>持仓</span></a></li>
         <li><a class="nav-item" href="#strategies" data-route="strategies"><span>策略</span></a></li>
@@ -81,6 +81,27 @@
     <main class="content" id="content">
       <!-- route: dashboard（看盘主页） -->
       <section id="route-dashboard" class="route" data-route="dashboard" hidden>
+        <div id="investment-workspace" class="investment-workspace">
+          <header class="workspace-hero">
+            <div class="workspace-eyebrow"><span class="workspace-ai-mark" aria-hidden="true">✳</span> LUOOME / 共同决策</div>
+            <div class="workspace-hero-heading"><div><p class="workspace-date" id="workspace-date"></p><h1>一起看清，<br>再做决定。</h1></div><span class="workspace-orbit" aria-hidden="true">✳</span></div>
+            <p class="workspace-intro">从已有持仓开始，也可以先聊值得研究的方向。把判断、等待和实际行动，留在同一条线上。</p>
+            <button id="workspace-ask" class="workspace-ask" type="button"><span>现在，想一起研究什么？</span><span aria-hidden="true">↗</span></button>
+            <div class="workspace-quick-actions"><button type="button" data-workspace-prompt="先核对我的持仓变化与风险，说明还缺哪些事实">先看持仓变化</button><button type="button" data-workspace-prompt="研究短线波段参与方向，先说明可用证据与覆盖范围；证据不足时请明确告诉我">寻找参与方向</button><button type="button" data-workspace-prompt="核对当前计划的有效版本、等待条件和跟踪状态">接着看计划</button></div>
+          </header>
+          <section id="workspace-discussion" class="workspace-discussion" aria-label="当前内容讨论" hidden>
+            <div class="workspace-discussion-head"><strong>一起讨论</strong><div class="row-actions"><button id="workspace-expand" class="btn btn-outline btn-sm" type="button">深入展开 ↗</button><button id="workspace-close" class="btn btn-outline btn-sm" type="button">回到卡片</button></div></div>
+            <div id="workspace-discussion-body"></div>
+          </section>
+          <div id="workspace-facts" class="workspace-facts" role="status">正在读取已有事实，研究不会自动启动…</div>
+          <div id="workspace-account" class="workspace-account"></div>
+          <section class="workspace-section" aria-labelledby="workspace-holdings-title"><div class="workspace-section-title"><div><span>01 / MY POSITIONS</span><h2 id="workspace-holdings-title">持仓，先看变化</h2></div><a href="#holdings">管理持仓 ↗</a></div><div id="workspace-holdings" class="workspace-card-grid"><p class="muted">正在读取持仓…</p></div></section>
+          <section class="workspace-section" aria-labelledby="workspace-directions-title"><div class="workspace-section-title"><div><span>02 / FIND A DIRECTION</span><h2 id="workspace-directions-title">方向，留出讨论</h2></div><span class="workspace-caption">研究提案 ≠ 买入决定</span></div><div id="workspace-directions"><p class="muted">正在核对研究状态…</p></div><div id="workspace-consensus"></div></section>
+          <section class="workspace-section" aria-labelledby="workspace-plans-title"><div class="workspace-section-title"><div><span>03 / KEEP THE THREAD</span><h2 id="workspace-plans-title">计划，接着往下走</h2></div><a href="#advice?tab=plans">查看全部 ↗</a></div><div id="workspace-tracking" class="workspace-tracking"></div><div id="workspace-plans" class="workspace-card-grid"><p class="muted">正在核对计划…</p></div></section>
+          <div id="workspace-report"></div>
+          <p class="workspace-boundary">AI 研究供你独立判断。任何方向确认或提醒都不会自动下单；实际成交由你单独核对登记。</p>
+        </div>
+        <details class="workspace-market-details"><summary>行情与原看盘工作台 <span>指数、关注、预警与数据健康</span></summary>
         <div class="route-header">
           <div><h1>看盘</h1><p class="muted dashboard-subtitle">市场概况 · 我的关注 · 今日事件</p></div>
           <div class="row-actions"><button id="btn-dashboard-auto-refresh" class="btn btn-outline" type="button" aria-pressed="false">暂停自动更新</button><button id="btn-dashboard-refresh" class="btn btn-outline" type="button">刷新看盘</button></div>
@@ -200,6 +221,7 @@
           <div class="card-header"><h2>数据健康</h2><div class="card-meta">行情源新鲜度 · watch 健康 · stale Watchlist</div></div>
           <div id="data-health-body" class="data-health">加载中…</div>
         </div>
+        </details>
       </section>
 
       <!-- route: indices（核心指数 + 分时走势） -->
@@ -752,10 +774,10 @@
       <!-- route: chat（对话助手，docs/ddd/web-chat-design.md §5） -->
       <section id="route-chat" class="route" data-route="chat" hidden>
         <div class="route-header">
-          <h1>AI 投资助手</h1>
+          <h1>AI 投资助手</h1><div class="row-actions"><button id="chat-check-state" class="btn btn-outline btn-sm" type="button">核对会话状态</button><button id="chat-return" class="btn btn-outline" type="button" hidden>← 返回原讨论</button></div>
           <div class="route-meta">查事实 → 确认操作 → 跟进结果 · 会话保存在本地</div>
         </div>
-        <div class="chat-workspace">
+        <div id="chat-workspace" class="chat-workspace">
           <aside class="chat-session-rail" aria-label="会话列表">
             <div class="chat-session-head">
               <div>
@@ -773,19 +795,21 @@
             </div>
           </aside>
           <div class="card chat-card">
+            <div class="chat-context"><div id="chat-subjects" aria-label="正在讨论的主体">全局讨论</div><button id="chat-clear-subjects" class="btn btn-ghost btn-sm" type="button" hidden>切回全局</button></div>
             <div id="chat-log" class="chat-log" role="log" aria-label="投资助手对话" aria-live="polite">
               <p class="placeholder">正在加载会话…</p>
             </div>
+            <button id="chat-new-content" class="chat-new-content" type="button" hidden>查看新内容 ↓</button>
             <form id="chat-form" class="chat-form">
               <span class="chat-prompt-mark" aria-hidden="true">›</span>
-              <input
+              <textarea
                 id="chat-input"
-                type="text"
+                rows="1"
                 maxlength="8000"
                 aria-label="向投资助手提问"
                 placeholder="查持仓、记资金、做研究，或配置盯盘提醒…"
                 autocomplete="off"
-              />
+              ></textarea>
               <button id="chat-send" class="btn btn-primary chat-send" type="submit">发送</button>
             </form>
             <p class="chat-boundary">你确认后才修改投资记录。助手不会自动下单；AI 分析不构成投资建议。</p>

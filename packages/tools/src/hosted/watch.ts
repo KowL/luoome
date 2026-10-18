@@ -1,17 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import { FeishuWebhookAdapter } from '@luoome/adapters';
 import {
+  AlertPlanSchema,
   FeishuWebhookUrlSchema,
   HostedQuietHoursSchema,
   hostedQuietUntil,
+  hostedTradingPlanTriggerSource,
+  isAshareTradingSession,
+  isWatchAlertDeliveryEligible,
   type NotificationManagerLike,
+  type NotificationPayload,
   type ToolContext,
   type ToolResult,
+  TradingPlanMonitoringSchema,
+  TradingPlanSchema,
+  tradingPlanMonitoring,
+  tradingPlanVersionId,
   WatchDeliveryIntentSchema,
+  type WatchTrigger,
+  WatchTriggerSchema,
   WorkflowRunSchema,
 } from '@luoome/core';
 import { z } from 'zod';
-import { defineTool, errAdapterError, errInvalidInput } from '../define-tool.js';
+import { defineTool, errAdapterError, errInvalidInput, errNotFound } from '../define-tool.js';
+import { deriveAccountFacts } from '../tools/account-facts.js';
 import { sendHostedFeishu } from './notification-delivery.js';
 
 const view = (
@@ -34,6 +46,127 @@ const workerDenied = (): ToolResult<never> => ({
   ok: false,
   error: { kind: 'permission_denied', required: 'hosted:worker' },
 });
+
+const tradingPlanState = async (trigger: WatchTrigger, ctx: ToolContext) => {
+  const source = hostedTradingPlanTriggerSource(trigger);
+  if (source === null || source.accountId !== ctx.user.defaultAccountId) return null;
+  const plan = await ctx.repos.tradingPlan.findByVersionId(source.planVersionId);
+  if (
+    plan === null ||
+    plan.accountId !== source.accountId ||
+    plan.stockId !== trigger.stockId ||
+    plan.accountFactsDigest !== source.accountFactsDigest ||
+    ![...plan.entryConditions, ...plan.exit.triggerConditions].some(
+      (condition) => condition.id === source.conditionId,
+    )
+  )
+    return null;
+  const [facts, versions] = await Promise.all([
+    deriveAccountFacts(ctx, plan.accountId),
+    ctx.repos.tradingPlan.list({
+      accountId: plan.accountId,
+      stockId: plan.stockId,
+      currentOnly: true,
+      limit: 1,
+    }),
+  ]);
+  return {
+    source,
+    plan,
+    latestVersion: [...versions].sort((a, b) => b.version - a.version).at(0) ?? null,
+    monitoring: tradingPlanMonitoring(plan, facts, ctx.clock(), undefined, versions),
+  };
+};
+
+export const resolveHostedWatchNotificationTool = defineTool({
+  name: 'resolve_hosted_watch_notification',
+  description: '核对确切提醒的原始快照和当前计划状态；历史触发不作为当前行动授权',
+  sideEffect: 'read',
+  input: z.object({ triggerId: z.string().min(1).max(512) }).strict(),
+  output: z.object({
+    trigger: WatchTriggerSchema,
+    sourcePlan: TradingPlanSchema.nullable(),
+    latestVersion: TradingPlanSchema.nullable(),
+    monitoring: TradingPlanMonitoringSchema.nullable(),
+    alertPlan: AlertPlanSchema.nullable(),
+    state: z.enum(['requires-recheck', 'changed', 'unavailable']),
+    changes: z.array(z.string()),
+    currentActionAllowed: z.literal(false),
+    checkedAt: z.coerce.date(),
+  }),
+  handler: async ({ triggerId }, ctx) => {
+    const trigger = await ctx.repos.watchTrigger.findById(triggerId);
+    if (trigger === null) return errNotFound('WatchTrigger', triggerId);
+    if (
+      trigger.poolId.startsWith('trading-plan-watch:') &&
+      trigger.poolId !== `trading-plan-watch:${ctx.user.defaultAccountId}`
+    )
+      return errNotFound('WatchTrigger', triggerId);
+    const state = await tradingPlanState(trigger, ctx);
+    const alertPlan =
+      hostedTradingPlanTriggerSource(trigger) === null
+        ? await ctx.repos.alertPlan.findById(trigger.poolId)
+        : null;
+    const [watchlist, member] =
+      alertPlan === null
+        ? [null, null]
+        : await Promise.all([
+            ctx.repos.watchlist.findById(alertPlan.watchlistId),
+            ctx.repos.watchlistMember.findMember(alertPlan.watchlistId, trigger.stockId),
+          ]);
+    const alertEligible = isWatchAlertDeliveryEligible(trigger, alertPlan, watchlist, member);
+    const changes =
+      state === null
+        ? alertEligible
+          ? ['原提醒计划和成员仍有效；需要使用当前事实重新检查触发条件']
+          : ['原提醒计划已停用、删除、条件变化或成员已退出；请查看原始快照，不沿用原行动']
+        : state.monitoring.status === 'ready'
+          ? ['原计划仍具备监控资格；触发条件需使用当前合格行情重新检查']
+          : [state.monitoring.reason, state.monitoring.nextStep];
+    return {
+      trigger,
+      sourcePlan: state?.plan ?? null,
+      latestVersion: state?.latestVersion ?? null,
+      monitoring: state?.monitoring ?? null,
+      alertPlan,
+      state:
+        state === null
+          ? alertPlan === null
+            ? ('unavailable' as const)
+            : alertEligible
+              ? ('requires-recheck' as const)
+              : ('changed' as const)
+          : state.monitoring.status === 'ready'
+            ? ('requires-recheck' as const)
+            : ('changed' as const),
+      changes,
+      currentActionAllowed: false as const,
+      checkedAt: ctx.clock(),
+    };
+  },
+});
+
+const linkedWatchPayload = (
+  payload: NotificationPayload,
+  triggerIds: readonly string[],
+  publicOrigin?: string,
+): NotificationPayload => {
+  if (publicOrigin === undefined) return payload;
+  const origin = new URL(publicOrigin);
+  if (
+    origin.origin !== publicOrigin ||
+    origin.username ||
+    origin.password ||
+    !['https:', 'http:'].includes(origin.protocol)
+  )
+    throw new Error('invalid notification public origin');
+  const links = triggerIds.map((id) => {
+    const url = new URL('/', origin);
+    url.hash = `alerts?${new URLSearchParams({ triggerId: id })}`;
+    return `[查看最新状态与触发快照](${url.href})`;
+  });
+  return { ...payload, content: `${payload.content}\n\n${links.join('\n')}` };
+};
 
 export const getHostedWatchSettingsTool = defineTool({
   name: 'get_hosted_watch_settings',
@@ -164,6 +297,7 @@ export const finishHostedWatchTickTool = defineTool({
 export const createHostedWatchNotificationManager = (
   ctx: ToolContext,
   authorize: () => Promise<ToolResult<never> | null>,
+  options: { readonly publicOrigin?: string } = {},
 ): NotificationManagerLike => ({
   send: async (input) => {
     const delivery = input.watchDelivery;
@@ -184,6 +318,50 @@ export const createHostedWatchNotificationManager = (
     });
     if (claimed === null) throw new Error('预警投递条件或执行令牌已失效');
     const id = `watch-notification:${attemptId}`;
+    const suppress = async (errorKind: string) => {
+      const result = await sendHostedFeishu(ctx, null, id, input.payload, errorKind);
+      const completed = await ctx.repos.watchDelivery.complete({
+        ...delivery,
+        attemptId,
+        state: 'suppressed',
+        notificationId: id,
+        errorKind,
+        now: ctx.clock(),
+      });
+      if (!completed) throw new Error('预警投递抑制结果等待核对');
+      return { notification: result.notification };
+    };
+    for (const triggerId of delivery.triggerIds) {
+      const trigger = await ctx.repos.watchTrigger.findById(triggerId);
+      if (trigger === null) throw new Error('预警触发记录已不可用');
+      const source = hostedTradingPlanTriggerSource(trigger);
+      if (source === null) continue;
+      const state = await tradingPlanState(trigger, ctx);
+      const eventAge =
+        trigger.quote === undefined
+          ? Number.POSITIVE_INFINITY
+          : ctx.clock().getTime() - trigger.quote.ts.getTime();
+      if (
+        state === null ||
+        state.monitoring.status !== 'ready' ||
+        state.plan.accountFactsDigest !== source.accountFactsDigest ||
+        tradingPlanVersionId(state.plan) !== source.planVersionId ||
+        eventAge < 0 ||
+        eventAge > 10 * 60_000 ||
+        !isAshareTradingSession(ctx.clock())
+      ) {
+        return suppress('conditions-changed');
+      }
+    }
+    const currentSettings = await ctx.repos.watchDelivery.settings();
+    if (
+      (await authorize()) !== null ||
+      !currentSettings.enabled ||
+      currentSettings.bindingVersion !== claimed[0]?.bindingVersion ||
+      currentSettings.webhookUrl !== settings.webhookUrl ||
+      hostedQuietUntil(currentSettings.quietHours, ctx.clock()) !== null
+    )
+      return suppress('recipient-unavailable');
     if (settings.webhookUrl === null)
       ctx.logger.info('watch notification fallback-log', {
         notificationId: id,
@@ -193,7 +371,7 @@ export const createHostedWatchNotificationManager = (
       ctx,
       settings.webhookUrl,
       id,
-      input.payload,
+      linkedWatchPayload(input.payload, delivery.triggerIds, options.publicOrigin),
     );
     const completed = await ctx.repos.watchDelivery.complete({
       ...delivery,

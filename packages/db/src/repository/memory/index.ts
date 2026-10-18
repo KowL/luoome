@@ -47,6 +47,7 @@ import {
   InMemoryFundamentalScoreVersionRepository,
 } from './fundamental-score.js';
 import { InMemoryHoldingRepository } from './holding.js';
+import { InMemoryInvestmentWorkspaceRepository } from './investment-workspace.js';
 import { InMemoryLedgerRepository } from './ledger.js';
 import { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 import { InMemoryMinuteBarRepository } from './minute-bar.js';
@@ -95,6 +96,7 @@ export {
   InMemoryFundamentalScoreVersionRepository,
 } from './fundamental-score.js';
 export { InMemoryHoldingRepository } from './holding.js';
+export { InMemoryInvestmentWorkspaceRepository } from './investment-workspace.js';
 export { InMemoryLimitUpLadderSnapshotRepository } from './limit-up-ladder-snapshot.js';
 export { InMemoryMinuteBarRepository } from './minute-bar.js';
 export { InMemoryNotificationRepository } from './notification.js';
@@ -301,6 +303,7 @@ export const createInMemoryRepos = (seed?: InMemorySeed): RepositoryRegistry => 
     feedback: hostedTenant.snapshotPersonalFeedbackForExport(),
   }));
   return {
+    investmentWorkspace: new InMemoryInvestmentWorkspaceRepository(),
     hostedTenant,
     hostedExports,
     watchDelivery,

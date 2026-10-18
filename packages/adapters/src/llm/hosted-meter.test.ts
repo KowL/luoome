@@ -155,6 +155,21 @@ afterEach(() => {
 });
 
 describe('hosted metered real AI SDK with fake HTTP', () => {
+  it('方向研究使用真实计量模型栈且记录供应商用量', async () => {
+    const h = await setup(async () =>
+      response({ value: 'direction-research' }, 'direction-receipt'),
+    );
+    const result = await h.execution.run(
+      'research_investment_directions',
+      { requestId: 'direction-request', question: 'fixture' },
+      h.ctx,
+      (scoped) => scoped.adapters.llm.generate<{ value: string }>(h.request),
+    );
+    expect(result.value).toBe('direction-research');
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+    const costs = await h.platform.ctx.repos.llm.costs();
+    expect(costs[0]).toMatchObject({ confirmedAttempts: 1, inputTokens: 1000, outputTokens: 500 });
+  });
   it('真实 SDK 输出校验失败修复的两次 HTTP 分别计量，业务额度只扣一次，重建上下文/跨日复用结果', async () => {
     let calls = 0;
     const h = await setup(async () =>

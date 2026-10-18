@@ -1,4 +1,7 @@
-import { FixtureHostedNotificationAdapter } from '@luoome/adapters/hosted';
+import {
+  FixtureHostedNotificationAdapter,
+  SmtpHostedNotificationAdapter,
+} from '@luoome/adapters/hosted';
 import type { HostedJob, PlatformResultEvent } from '@luoome/core';
 import { describe, expect, it, vi } from 'vitest';
 import { buildPlatformContext } from './context.js';
@@ -149,6 +152,82 @@ const finish = async (
 };
 
 describe('hosted notification tools', () => {
+  it('keeps SMTP acceptance unknown after a persistence interruption because SMTP cannot query the send', async () => {
+    const fixture = await setup();
+    await save(fixture);
+    const email = (await finish(fixture)).find((intent) => intent.channel === 'email');
+    if (email === undefined) throw new Error('email intent missing');
+    const transport = {
+      sendMail: vi.fn().mockResolvedValue({
+        accepted: [fixture.user.user.email],
+        rejected: [],
+        messageId: '<accepted@example.test>',
+        response: '250 Queued',
+      }),
+    };
+    const provider = new SmtpHostedNotificationAdapter(
+      {
+        host: 'smtp.example.test',
+        port: 465,
+        secure: true,
+        from: 'notification@example.test',
+        publicOrigin: 'https://fixture.example.test',
+      },
+      { transport },
+    );
+    const context = buildPlatformContext({ ...fixture.worker, notification: provider });
+    vi.spyOn(fixture.ctx.repos.deliveries, 'complete').mockRejectedValueOnce(
+      new Error('interrupted persistence'),
+    );
+    expect(await sendHostedDeliveryTool.execute({ deliveryId: email.id }, context)).toMatchObject({
+      ok: false,
+      error: { kind: 'adapter_error', cause: 'delivery_persistence_unknown' },
+    });
+    fixture.setNow(new Date(PLATFORM_TEST_NOW.getTime() + 360_000));
+    expect(
+      await reconcileHostedDeliveryTool.execute({ deliveryId: email.id }, context),
+    ).toMatchObject({ ok: true, data: { state: 'unknown', attempt: 1, deliveredAt: null } });
+    await sendHostedDeliveryTool.execute({ deliveryId: email.id }, context);
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+  });
+  it('persists a real SMTP ambiguous result and never resends it during repeated dispatch or reconciliation', async () => {
+    const fixture = await setup();
+    await save(fixture);
+    const email = (await finish(fixture)).find((intent) => intent.channel === 'email');
+    if (email === undefined) throw new Error('email intent missing');
+    const transport = {
+      sendMail: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('private SMTP details'), { code: 'ESOCKET' })),
+    };
+    const provider = new SmtpHostedNotificationAdapter(
+      {
+        host: 'smtp.example.test',
+        port: 465,
+        secure: true,
+        from: 'notification@example.test',
+        publicOrigin: 'https://fixture.example.test',
+      },
+      { transport },
+    );
+    const context = buildPlatformContext({ ...fixture.worker, notification: provider });
+    expect(await sendHostedDeliveryTool.execute({ deliveryId: email.id }, context)).toMatchObject({
+      ok: true,
+      data: { state: 'unknown', attempt: 1, deliveredAt: null },
+    });
+    fixture.setNow(new Date(PLATFORM_TEST_NOW.getTime() + 360_000));
+    expect(
+      await reconcileHostedDeliveryTool.execute({ deliveryId: email.id }, context),
+    ).toMatchObject({ ok: true, data: { state: 'unknown', attempt: 1 } });
+    await sendHostedDeliveryTool.execute({ deliveryId: email.id }, context);
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+    expect(transport.sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: [{ address: fixture.user.user.email, name: '' }],
+        text: expect.stringContaining('需要登录'),
+      }),
+    );
+  });
   it('uses disabled defaults, compare-and-save preferences and a server-owned recipient binding', async () => {
     const fixture = await setup();
     const defaults = await getHostedNotificationPreferencesTool.execute({}, fixture.user.ctx);
@@ -221,7 +300,7 @@ describe('hosted notification tools', () => {
     expect(request?.destination).toBe(fixture.user.user.email);
     expect(request?.message).not.toContain('private stock summary');
     expect(request?.authenticatedUrl).toBe(
-      'https://fixture.example.test/#watchlist?resultRef=fixture-report',
+      'https://fixture.example.test/#reports?reportId=fixture-report',
     );
     expect(request).not.toHaveProperty('sessionToken');
   });
@@ -229,13 +308,18 @@ describe('hosted notification tools', () => {
   it('allows a bounded summary only after the user explicitly enables it', async () => {
     const fixture = await setup();
     await save(fixture, { detail: 'summary' });
-    const email = (await finish(fixture)).find((intent) => intent.channel === 'email');
+    const email = (
+      await finish(fixture, { businessKey: 'watch-trigger:fixture-report' }, 'watch-alerts')
+    ).find((intent) => intent.channel === 'email');
     if (email === undefined) throw new Error('Fixture email intent missing');
     await sendHostedDeliveryTool.execute(
       { deliveryId: email.id, summary: 'fixture fact summary' },
       fixture.worker,
     );
     expect(fixture.provider.getRequest(email.id)?.message).toContain('fixture fact summary');
+    expect(fixture.provider.getRequest(email.id)?.authenticatedUrl).toBe(
+      'https://fixture.example.test/#alerts?triggerId=fixture-report',
+    );
   });
 
   it('defers quiet-hour email without consuming an attempt while in-app remains available', async () => {

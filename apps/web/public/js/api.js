@@ -20,6 +20,7 @@ const clearHostedSession = () => {
   sessionEpoch += 1;
   hostedSession = null;
   hostedAccountId = '';
+  globalThis.document?.dispatchEvent?.(new Event('luoome:identity-cleared'));
 };
 const configureHostedSession = (session) => {
   if (hostedSession?.user.id !== session.user.id) clearHostedSession();
@@ -66,8 +67,11 @@ const getAccountId = () => {
 
 /** 写当前账户 id。 */
 const setAccountId = (accountId) => {
+  const previousAccountId = getAccountId();
   if (isHostedMode()) {
     hostedAccountId = accountId;
+    if (previousAccountId !== accountId)
+      globalThis.document?.dispatchEvent?.(new Event('luoome:identity-cleared'));
     return;
   }
   try {
@@ -76,6 +80,8 @@ const setAccountId = (accountId) => {
   } catch {
     /* 忽略：隐私模式或 quota */
   }
+  if (previousAccountId !== accountId)
+    globalThis.document?.dispatchEvent?.(new Event('luoome:identity-cleared'));
 };
 
 const apiHeaders = (init, accountId = getAccountId()) => {
