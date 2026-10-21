@@ -157,7 +157,8 @@ const setup = (envExtras: Record<string, string> = {}) => {
       onUniverse = callback;
     },
     privateRepos,
-    pass: (id: string) => runHostedStrategyPass(service, id),
+    pass: (id: string, signal?: AbortSignal) =>
+      runHostedStrategyPass(service, id, () => signal?.aborted ?? false, signal),
     service: () => service,
     advance: (ms: number) => {
       now = new Date(now.getTime() + ms);
@@ -233,6 +234,82 @@ const enable = async (
     ).result.ok,
   ).toBe(true);
 };
+
+test('worker shutdown releases an interrupted strategy without publishing or advancing its schedule', async () => {
+  const h = setup();
+  const user = await h.login('shutdown@example.invalid');
+  await enable(h, user);
+  h.advance(60_000);
+  const controller = new AbortController();
+  h.beforeUniverse(() => controller.abort());
+  await h.pass('stopping-worker', controller.signal);
+  const lease = await h.privateRepos(user.tenantId);
+  try {
+    expect(await lease.runtime.repos.strategyRun.listRuns()).toHaveLength(0);
+    const schedule = await lease.runtime.repos.strategySchedule.findByStrategyId('same-strategy');
+    expect(schedule?.nextRunAt).toEqual(h.service().clock());
+    const audits = await lease.runtime.repos.workflowRun.listStrategyDailyCycleAudits();
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.status).toBe('failed');
+    expect(h.service().maintenance.state().activities).toBe(0);
+  } finally {
+    lease.release();
+  }
+  h.beforeUniverse(() => {});
+  h.advance(60_000);
+  const retried = await h.pass('replacement-worker');
+  expect(retried.runs).toBe(1);
+});
+
+test('shutdown drains an atomic run and a restarted worker recovers observations without duplicate publication', async () => {
+  const h = setup();
+  const user = await h.login('shutdown-during-run@example.invalid');
+  await enable(h, user);
+  h.advance(60_000);
+  const controller = new AbortController();
+  const lease = await h.privateRepos(user.tenantId);
+  const repository = lease.runtime.repos.strategyRun;
+  const saveStartedRun = repository.saveStartedRun.bind(repository);
+  repository.saveStartedRun = async (run) => {
+    await saveStartedRun(run);
+    controller.abort();
+  };
+  let runId: string | undefined;
+  try {
+    await h.pass('stopping-during-run', controller.signal);
+    const runs = await repository.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe('complete');
+    expect(runs[0]?.publication?.status).toBe('published');
+    runId = runs[0]?.id;
+    expect(
+      await lease.runtime.repos.signalObservation.list({ sourceKind: 'strategy-signal' }),
+    ).toHaveLength(0);
+    const audits = await lease.runtime.repos.workflowRun.listStrategyDailyCycleAudits();
+    expect(audits[0]?.status).toBe('failed');
+    expect(h.service().maintenance.state().activities).toBe(0);
+  } finally {
+    repository.saveStartedRun = saveStartedRun;
+    lease.release();
+  }
+  h.restart();
+  h.advance(60_000);
+  await h.pass('restarted-after-drain');
+  const recovered = await h.privateRepos(user.tenantId);
+  try {
+    const runs = await recovered.runtime.repos.strategyRun.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.id).toBe(runId);
+    expect(
+      await recovered.runtime.repos.signalObservation.list({ sourceKind: 'strategy-signal' }),
+    ).toHaveLength(3);
+    const schedule =
+      await recovered.runtime.repos.strategySchedule.findByStrategyId('same-strategy');
+    expect(schedule?.nextRunAt?.getTime()).toBeGreaterThan(h.service().clock().getTime());
+  } finally {
+    recovered.release();
+  }
+});
 
 test('Web 已有 schedule 接入 worker；并发和重启不串租户，不重复运行或扣额', async () => {
   const h = setup();

@@ -43,6 +43,64 @@ const revisionFor = (input: DailyBar, recordedAt: Date): DailyBarRevision => ({
 });
 
 describe('prepare_strategy_data freshness and vintage', () => {
+  it('drains an active request on cancellation and finalizes the checkpoint without starting queued members', async () => {
+    const now = new Date('2026-08-12T09:00:00.000Z');
+    const base = await buildTestContext({ clock: () => now });
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<DailyBar[]>();
+    const calls: string[] = [];
+    const ctx = {
+      ...base,
+      abortSignal: controller.signal,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (stockId: string) => {
+            calls.push(stockId);
+            started.resolve();
+            return response.promise;
+          },
+        },
+      },
+    };
+    let settled = false;
+    const pending = prepareStrategyDataTool
+      .execute(
+        { strategyId: 'strategy-1', stockIds: ['000001.SZ', '600519.SH'], concurrency: 1 },
+        ctx,
+      )
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    await started.promise;
+    controller.abort();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    response.resolve([{ ...bar(new Date('2026-08-11T00:00:00.000Z')), stockId: '000001.SZ' }]);
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(calls).toEqual(['000001.SZ']);
+    expect(result.data.checkpoint).toMatchObject({
+      status: 'partial',
+      availableCount: 1,
+      failedCount: 1,
+      finishedAt: now,
+    });
+    expect(result.data.members[1]).toMatchObject({
+      stockId: '600519.SH',
+      status: 'failed',
+      errorKind: 'operation_cancelled',
+    });
+    expect(await base.repos.dailyBar.latestBefore('000001.SZ', now, 1)).toHaveLength(1);
+    expect(await base.repos.strategyDataCheckpoint.findById(result.data.checkpoint.id)).toEqual(
+      result.data.checkpoint,
+    );
+  });
+
   it('honors the bounded provider concurrency', async () => {
     const now = new Date('2026-08-12T09:00:00.000Z');
     const base = await buildTestContext({ clock: () => now });

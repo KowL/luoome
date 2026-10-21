@@ -17,6 +17,44 @@ const qfqBar = (stockId: string, date: string) => ({
 });
 
 describe('tool/sync_daily_bars', () => {
+  it('cancellation stops provider retries and the remaining queued stocks', async () => {
+    const base = await buildTestContext();
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const ctx = {
+      ...base,
+      abortSignal: controller.signal,
+      adapters: {
+        ...base.adapters,
+        market: {
+          ...base.adapters.market,
+          fetchDailyBars: async (stockId: string) => {
+            calls.push(stockId);
+            controller.abort();
+            throw new Error('provider_timeout');
+          },
+        },
+      },
+    };
+    const result = await syncDailyBarsTool.execute(
+      {
+        scope: 'explicit',
+        stockIds: ['600519.SH', '000001.SZ'],
+        concurrency: 1,
+        maxRetries: 2,
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(calls).toEqual(['600519.SH']);
+    expect(result.data.status).toBe('failed');
+    expect(result.data.items).toEqual([
+      { stockId: '600519.SH', status: 'failed', reason: 'operation_cancelled' },
+      { stockId: '000001.SZ', status: 'failed', reason: 'operation_cancelled' },
+    ]);
+  });
+
   it('explicit 范围逐股拉取并持久化 qfq 日线', async () => {
     const calls: Array<{ stockId: string; range: DateRange }> = [];
     const base = await buildTestContext({

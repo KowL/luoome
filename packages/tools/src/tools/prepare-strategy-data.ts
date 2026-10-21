@@ -101,7 +101,7 @@ export const PrepareStrategyDataOutput = z.object({
 const providerErrorKind = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
   const stable = message.match(
-    /\b(provider_timeout|no_data|unsupported_[a-z_]+|invalid[_-]payload|rate[_-]?limit)\b/i,
+    /\b(operation_cancelled|provider_timeout|no_data|unsupported_[a-z_]+|invalid[_-]payload|rate[_-]?limit)\b/i,
   )?.[1];
   return stable?.toLowerCase() ?? (error instanceof Error ? error.name : 'provider_error');
 };
@@ -204,6 +204,7 @@ export const prepareStrategyDataTool = defineTool({
       async (stockId): Promise<CheckpointMemberInput> => {
         const memberStartedAt = monotonicNow();
         try {
+          if (ctx.abortSignal?.aborted) throw new Error('operation_cancelled');
           const range = {
             start: new Date(asOf.getTime() - input.lookbackDays * DAY_MS),
             end: asOf,

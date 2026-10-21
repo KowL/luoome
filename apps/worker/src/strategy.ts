@@ -22,6 +22,7 @@ export const runHostedStrategyPass = async (
   service: HostedService,
   workerId: string,
   stopped: () => boolean = () => false,
+  abortSignal?: AbortSignal,
 ) => {
   const summary = { tenants: 0, acquired: 0, runs: 0, completedObservations: 0 };
   if (
@@ -40,7 +41,7 @@ export const runHostedStrategyPass = async (
   });
   try {
     for (const tenant of data(await listWorkerHostedTenantsTool.execute({}, platform))) {
-      if (stopped()) break;
+      if (stopped() || abortSignal?.aborted) break;
       if (tenant.status !== 'active') continue;
       let lease: ReturnType<HostedService['runtimes']['acquire']>;
       try {
@@ -104,7 +105,13 @@ export const runHostedStrategyPass = async (
         if (!entitled || (await authorizeHostedWebRequest(invocation, true)) !== null) {
           continue;
         }
-        const result = await hostedStrategyWorkflow.run({}, contextForHostedWebTools(invocation));
+        const result = await hostedStrategyWorkflow.run(
+          {},
+          {
+            ...contextForHostedWebTools(invocation),
+            ...(abortSignal === undefined ? {} : { abortSignal }),
+          },
+        );
         summary.tenants += 1;
         if (result.ok) {
           summary.acquired += Number(result.data.acquired);

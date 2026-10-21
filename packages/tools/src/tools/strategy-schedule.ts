@@ -142,7 +142,11 @@ export const finishStrategyScheduleClaimTool = defineTool({
       id: schedule.id,
       owner: input.owner,
       ...(input.fence === undefined ? {} : { fence: input.fence }),
-      nextRunAt: nextCronOccurrence(schedule.cron, schedule.timezone, now),
+      // 停机中断不能消耗本次到期任务；后继 worker 仍需补跑。
+      nextRunAt:
+        ctx.abortSignal?.aborted && schedule.nextRunAt !== undefined
+          ? schedule.nextRunAt
+          : nextCronOccurrence(schedule.cron, schedule.timezone, now),
       updatedAt: now,
       ...(input.lastRunId === undefined ? {} : { lastRunId: input.lastRunId }),
     });

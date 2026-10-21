@@ -29,6 +29,7 @@ export const hostedStrategyWorkflow = defineWorkflow<
       };
       const now = ctx.clock();
       if (
+        ctx.abortSignal?.aborted ||
         isWeekend(now) ||
         isHoliday(now) ||
         now < new Date(`${dateInShanghai(now)}T16:30:00+08:00`)
@@ -51,6 +52,25 @@ export const hostedStrategyWorkflow = defineWorkflow<
       const guarded: ToolContext = {
         ...ctx,
         hostedAuthorization: async (name, input, capabilities) => {
+          // run_strategy 会在提交前再次鉴权；已开始的原子运行必须能提交终态。
+          // 日循环在调用前检查取消，收尾工具仍遵循原有权限和 fencing。
+          if (
+            ctx.abortSignal?.aborted &&
+            name !== 'record_workflow_run' &&
+            name !== 'run_strategy' &&
+            name !== 'finish_account_plan_batch' &&
+            name !== 'finish_strategy_schedule_claim' &&
+            name !== 'renew_strategy_schedule_claim'
+          )
+            return {
+              ok: false,
+              error: {
+                kind: 'adapter_error',
+                adapter: 'hosted-strategy',
+                cause: 'operation_cancelled',
+                recoverable: true,
+              },
+            };
           if (!(await renew()))
             return {
               ok: false,
@@ -75,6 +95,7 @@ export const hostedStrategyWorkflow = defineWorkflow<
         );
         if (!cycle.ok) return cycle;
         output.cycle = cycle.data;
+        if (ctx.abortSignal?.aborted) return HostedStrategyOutput.parse(output);
         // 观察成熟与 schedule 是否到期无关；停用调度也不能丢失已有信号的后续事实。
         const observations = await completeStrategyObservationsWorkflow.run({}, guarded);
         if (!observations.ok) return observations;

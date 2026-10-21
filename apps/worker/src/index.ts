@@ -26,6 +26,7 @@ export const startHostedWorker = async () => {
       JSON.stringify({ lastLoopAt: Date.now(), stopped }),
     );
   let stopped = false;
+  const shutdown = new AbortController();
   const heartbeat = setInterval(() => health(stopped), 10_000);
   const finished = (async () => {
     try {
@@ -33,7 +34,7 @@ export const startHostedWorker = async () => {
       while (!stopped) {
         const result = await runHostedWorkerOnce(service, workerId);
         await runHostedWatchPass(service, workerId, () => stopped);
-        await runHostedStrategyPass(service, workerId, () => stopped);
+        await runHostedStrategyPass(service, workerId, () => stopped, shutdown.signal);
         await runHostedReportPass(service, workerId, () => stopped);
         health(false);
         if (!result.processed) await Bun.sleep(1_000);
@@ -48,6 +49,7 @@ export const startHostedWorker = async () => {
     finished,
     stop: () => {
       stopped = true;
+      shutdown.abort();
     },
   };
 };

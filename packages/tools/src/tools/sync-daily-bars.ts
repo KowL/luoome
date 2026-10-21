@@ -118,6 +118,7 @@ export const syncDailyBarsTool = defineTool({
     const now = ctx.clock();
     const items = await mapWithConcurrency(stockIds, input.concurrency, async (stockId) => {
       try {
+        if (ctx.abortSignal?.aborted) throw new Error('operation_cancelled');
         const latest = (await ctx.repos.dailyBar.latestBefore(stockId, now, 1)).at(-1);
         const lookbackDays =
           latest === undefined ? INITIAL_LOOKBACK_DAYS : input.correctionWindowDays;

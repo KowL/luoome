@@ -116,13 +116,16 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
   // caller's limit controls the first claim batch, then the loop drains any remaining due rows.
   const claims: ClaimedScheduleItem[] = [];
   let claimLimit = input.limit;
-  while (true) {
+  while (!ctx.abortSignal?.aborted) {
     const claimed = await ctx.tools.claim_due_strategy_schedules.execute({
       owner,
       limit: claimLimit,
       leaseMinutes: input.leaseMinutes,
     });
-    if (!claimed.ok) return claimed;
+    if (!claimed.ok) {
+      if (ctx.abortSignal?.aborted) break;
+      return claimed;
+    }
     claims.push(
       ...claimed.data.items.map(
         (item): ClaimedScheduleItem => ({
@@ -300,7 +303,22 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         providerStatuses: [],
       },
     });
+    let claimFinished = false;
+    const finishClaim = async (lastRunId?: string) => {
+      const result = await ctx.tools.finish_strategy_schedule_claim.execute({
+        scheduleId: schedule.id,
+        owner,
+        fence: lease.fence,
+        ...(lastRunId === undefined ? {} : { lastRunId }),
+      });
+      claimFinished ||= result.ok;
+      return result;
+    };
     const finishAudit = async (item: z.infer<typeof CycleItemSchema>): Promise<void> => {
+      if (ctx.abortSignal?.aborted) {
+        if (!claimFinished) await finishClaim(runId);
+        item = { ...item, status: 'failed', reason: 'operation_cancelled' };
+      }
       const auditStatus =
         item.status === 'failed'
           ? ('failed' as const)
@@ -411,11 +429,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         phase = 'finish';
         reason = 'schedule-day-duplicate';
         stopHeartbeat();
-        const finished = await ctx.tools.finish_strategy_schedule_claim.execute({
-          scheduleId: schedule.id,
-          owner,
-          fence: lease.fence,
-        });
+        const finished = await finishClaim();
         if (!finished.ok) {
           status = 'failed';
           reason = errorText(finished.error);
@@ -431,11 +445,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       }
     }
     if (!claim.eligible) {
-      const finished = await ctx.tools.finish_strategy_schedule_claim.execute({
-        scheduleId: schedule.id,
-        owner,
-        fence: lease.fence,
-      });
+      const finished = await finishClaim();
       if (!finished.ok) {
         status = 'failed';
         phase = 'finish';
@@ -453,11 +463,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     const now = auditDataAsOf;
     if (isWeekend(now) || isHoliday(now)) {
       reason = '非 A 股交易日，本次跳过并推进下一次运行';
-      const finished = await ctx.tools.finish_strategy_schedule_claim.execute({
-        scheduleId: schedule.id,
-        owner,
-        fence: lease.fence,
-      });
+      const finished = await finishClaim();
       if (!finished.ok) {
         status = 'failed';
         phase = 'finish';
@@ -533,11 +539,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
     if (status === 'failed') {
       beginPhase('finish');
       stopHeartbeat();
-      const finished = await ctx.tools.finish_strategy_schedule_claim.execute({
-        scheduleId: schedule.id,
-        owner,
-        fence: lease.fence,
-      });
+      const finished = await finishClaim();
       if (!finished.ok) reason = errorText(finished.error);
       await finishAudit({
         strategyId: schedule.strategyId,
@@ -597,7 +599,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
         reason = 'lease_lost_before_commit';
       }
     }
-    if (status !== 'failed' && checkpointId !== undefined) {
+    if (status !== 'failed' && checkpointId !== undefined && !ctx.abortSignal?.aborted) {
       beginPhase('run');
       const run = await ctx.tools.run_strategy.execute({
         strategyId: schedule.strategyId,
@@ -829,12 +831,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
       continue;
     }
     stopHeartbeat();
-    const finished = await ctx.tools.finish_strategy_schedule_claim.execute({
-      scheduleId: schedule.id,
-      owner,
-      fence: lease.fence,
-      ...(runId === undefined ? {} : { lastRunId: runId }),
-    });
+    const finished = await finishClaim(runId);
     if (!finished.ok) {
       status = 'failed';
       reason = errorText(finished.error);
@@ -859,6 +856,7 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
   const planStart = new Date(`${reportDate}T16:30:00+08:00`);
   let cutoff: Awaited<ReturnType<typeof closingReportCutoffWorkflow.run>> | undefined;
   if (
+    !ctx.abortSignal?.aborted &&
     input.asOf === undefined &&
     reportNow >= planStart &&
     !isWeekend(planStart) &&
