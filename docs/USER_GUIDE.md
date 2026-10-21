@@ -599,7 +599,10 @@ brew uninstall luoome     # 卸载 brew 安装的 luoome
 管理员登录后可打开“管理 → AI 服务配置”，选择供应商并填写 API 地址、模型名和密钥。
 展开“模型参数与费用预算”，按供应商填写 Token 费率、模型参数及预算，勾选启用并保存。
 支持 OpenAI 兼容的 Chat Completions 接口；保存后后续对话与研究使用新配置，无需重启。
+MiniMax 选择“其他 OpenAI 兼容服务”，使用 OpenAI 兼容基础地址（例如 `https://api.minimax.cn/v1`），
+不要填写 `/anthropic` 地址。地址和模型名以 [MiniMax 官方文档](https://platform.minimax.cn/docs/api-reference/text-openai-api)为准。
 密钥不回显，留空保留原密钥；更换供应商或 API 地址时需重新填写。清除密钥前先取消启用。
+保存失败时页面会提示具体的地址、密钥、费率或预算问题，原配置保持不变；本次填写的新密钥会清空，重试时需重新填写。
 保存成功仅表示配置已保存，供应商鉴权、模型支持和用量返回由实际请求验证。费用记录按手动费率计算，订阅会员配额不能视作按 Token 计价。
 
 DSH 插件版 AI 对话目前仅供开发环境显式验证，默认对话仍使用原 AI SDK。

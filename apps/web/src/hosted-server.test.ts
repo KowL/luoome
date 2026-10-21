@@ -1897,6 +1897,65 @@ describe('hosted admin console boundary', () => {
 });
 
 describe('administrator AI configuration', () => {
+  test('reports actionable validation errors without echoing input or changing saved settings', async () => {
+    const h = harness({ adminEmails: 'admin-ai@example.invalid' });
+    const admin = await h.login('admin-ai@example.invalid');
+    const path = '/api/admin/ai-settings';
+    const settings = { ...h.aiSettings.read().settings, enabled: true };
+    h.aiSettings.save({ settings, apiKey: 'fixture-original-key' });
+    const minimax = {
+      ...settings,
+      provider: 'openai-compatible',
+      model: 'MiniMax-M3.1-Flash',
+      baseURL: 'https://api.minimax.cn/v1',
+    };
+    for (const [input, message] of [
+      [{ settings: minimax, apiKey: '' }, '供应商或 API 地址已更改，请重新填写 API 密钥'],
+      [
+        {
+          settings: { ...minimax, baseURL: 'https://api.minimaxi.com/anthropic' },
+          apiKey: 'fixture-new-key',
+        },
+        '此处使用 OpenAI 兼容接口，不能填写 Anthropic 地址',
+      ],
+      [
+        { settings: { ...settings, inputPrice: 0, cachedInputPrice: 0 } },
+        '启用前请填写输入和输出费率',
+      ],
+      [{ settings: { ...settings, callBudget: 100, periodBudget: 1 } }, '单次预算不能大于周期预算'],
+      [{ settings: { ...settings, cachedInputPrice: 3 } }, '缓存输入费率不能大于输入费率'],
+      [{ settings: { ...settings, model: '' } }, '模型名称格式或取值范围不正确'],
+      [
+        { settings: { ...settings, baseURL: 'fixture-secret-invalid-url' } },
+        'API 地址格式或取值范围不正确',
+      ],
+      [{ settings, apiKey: 'fixture-secret\nvalue' }, '密钥不能包含换行'],
+      [{ settings, 'fixture-secret-field': true }, '配置字段不完整或格式不正确'],
+    ] as const) {
+      const failed = await h.request(path, 'POST', input, admin.cookie, admin.csrf);
+      expect(failed.response.status).toBe(400);
+      expect(failed.result.ok).toBe(false);
+      expect(
+        !failed.result.ok &&
+          failed.result.error.kind === 'invalid_input' &&
+          failed.result.error.message,
+      ).toContain(message);
+      expect(JSON.stringify(failed.result)).not.toContain('fixture-');
+      expect(h.aiSettings.read().settings).toEqual(settings);
+      expect(h.aiSettings.snapshot()?.env.HOSTED_AI_API_KEY).toBe('fixture-original-key');
+    }
+    const saved = await h.request(
+      path,
+      'POST',
+      { settings: minimax, apiKey: 'fixture-new-key' },
+      admin.cookie,
+      admin.csrf,
+    );
+    expect(saved.response.status).toBe(200);
+    expect(h.aiSettings.snapshot()?.endpoint).toBe('https://api.minimax.cn/v1/chat/completions');
+    expect(JSON.stringify(saved.result)).not.toContain('fixture-new-key');
+  });
+
   test('only administrators can read or save, with Origin and CSRF protection and no secret echo', async () => {
     const h = harness({ adminEmails: 'admin-ai@example.invalid' });
     const member = await h.login('member-ai@example.invalid');

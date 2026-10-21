@@ -28,7 +28,7 @@ export const renderHostedAISettings = async (box) => {
         <div class="hosted-ai-grid">
           <label class="field">供应商<select name="provider"><option value="deepseek">DeepSeek</option><option value="kimi">Kimi</option><option value="openai-compatible">其他 OpenAI 兼容服务</option></select></label>
           <label class="field">模型名称<input name="model" required maxlength="200" placeholder="供应商提供的模型 ID"></label>
-          <label class="field hosted-ai-wide">API 地址<input name="baseURL" type="url" required placeholder="https://…/v1" spellcheck="false"></label>
+          <label class="field hosted-ai-wide">API 地址（OpenAI 兼容）<input name="baseURL" type="url" required placeholder="https://…/v1" spellcheck="false"><small class="muted">请填写 OpenAI 兼容基础地址，不要填写 Anthropic 接口。MiniMax 示例：https://api.minimax.cn/v1</small></label>
           <label class="field hosted-ai-wide">API 密钥<input name="apiKey" type="password" autocomplete="new-password" maxlength="1000" spellcheck="false"><small class="muted" data-key-status></small></label>
         </div>
         <label class="hosted-check"><input name="clearApiKey" type="checkbox">清除已保存的密钥</label>
@@ -71,7 +71,7 @@ export const renderHostedAISettings = async (box) => {
     }
     fields.namedItem('apiKey').value = '';
     fields.namedItem('apiKey').placeholder = view.apiKeyConfigured
-      ? '已配置；留空保留原密钥'
+      ? '已配置；供应商和地址不变时可留空'
       : '请输入 API 密钥';
     fields.namedItem('clearApiKey').checked = false;
     box.querySelector('[data-key-status]').textContent = view.apiKeyConfigured
@@ -135,7 +135,7 @@ export const renderHostedAISettings = async (box) => {
       });
       if (!current()) return;
       if (!saved.ok) {
-        status.textContent = saved.error?.message ?? '保存失败，请稍后重试。';
+        status.textContent = `${saved.error?.message ?? '保存失败，请稍后重试。'}${input.apiKey ? '；本次填写的密钥已清空，请重新填写后重试。' : ''}`;
         return;
       }
       view = saved.data;

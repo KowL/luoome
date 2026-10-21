@@ -60,7 +60,10 @@ import {
 } from '@luoome/tools/platform';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
-import type { HostedAISettingsStore } from './hosted-ai-settings.js';
+import {
+  type HostedAISettingsStore,
+  HostedAISettingsValidationError,
+} from './hosted-ai-settings.js';
 import type { HostedConfig } from './hosted-config.js';
 import { bindHostedDefaultAccount } from './hosted-context.js';
 import type { TenantRuntimeLease, TenantRuntimeManager } from './hosted-runtime.js';
@@ -754,12 +757,15 @@ export const createHostedWebApp = (
       if (!options.aiSettings) return hostedJsonResult(denied('hosted:ai-settings-unavailable'));
       try {
         return hostedJsonResult({ ok: true, data: options.aiSettings.save(input) });
-      } catch {
+      } catch (error) {
         return hostedJsonResult({
           ok: false,
           error: {
             kind: 'invalid_input',
-            message: '保存失败，请检查模型地址、密钥、费率和预算；更换供应商地址需重新填写密钥。',
+            message:
+              error instanceof HostedAISettingsValidationError
+                ? error.message
+                : '配置保存失败，请稍后重试或联系管理员检查配置存储',
             issues: [],
           },
         });

@@ -12,6 +12,7 @@ const SettingsSchema = z
     provider: z.enum(['deepseek', 'kimi', 'openai-compatible']),
     model: z.string().trim().min(1).max(200),
     baseURL: z.url().refine((value) => {
+      if (!URL.canParse(value)) return false;
       const url = new URL(value);
       return (
         url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
@@ -38,7 +39,7 @@ const ApiKeySchema = z
   .string()
   .trim()
   .max(1000)
-  .refine((value) => !/[\r\n]/.test(value));
+  .refine((value) => !/[\r\n]/.test(value), '密钥不能包含换行，请重新粘贴完整 API 密钥');
 export const SaveHostedAISettingsSchema = z
   .object({
     settings: SettingsSchema,
@@ -50,6 +51,26 @@ const StoredSchema = z
   .object({ version: z.literal(1), settings: SettingsSchema, apiKey: ApiKeySchema })
   .strict();
 type Settings = z.infer<typeof SettingsSchema>;
+
+export class HostedAISettingsValidationError extends Error {}
+
+const fieldLabels: Record<string, string> = {
+  enabled: 'AI 开关',
+  provider: '供应商',
+  model: '模型名称',
+  baseURL: 'API 地址',
+  temperature: '温度',
+  reasoningEffort: '推理强度',
+  timeoutSeconds: '请求超时',
+  maxOutputTokens: '最大输出 Token',
+  inputPrice: '输入费率',
+  cachedInputPrice: '缓存输入费率',
+  outputPrice: '输出费率',
+  callBudget: '单次预算',
+  periodBudget: '周期预算',
+  apiKey: 'API 密钥',
+  clearApiKey: '清除密钥选项',
+};
 
 const defaults: Settings = {
   enabled: false,
@@ -130,10 +151,29 @@ export class HostedAISettingsStore {
   }
 
   save(value: unknown) {
-    const input = SaveHostedAISettingsSchema.parse(value);
+    const parsed = SaveHostedAISettingsSchema.safeParse(value);
+    if (!parsed.success) {
+      const messages = parsed.error.issues.map((issue) => {
+        const field = String(issue.path.at(-1));
+        const label = Object.hasOwn(fieldLabels, field) ? fieldLabels[field] : undefined;
+        return issue.code === 'custom'
+          ? issue.message
+          : label
+            ? `${label}格式或取值范围不正确，请检查后重试`
+            : '配置字段不完整或格式不正确，请检查后重试';
+      });
+      throw new HostedAISettingsValidationError([...new Set(messages)].join('；'));
+    }
+    const input = parsed.data;
+    const url = new URL(input.settings.baseURL);
+    if (input.settings.enabled && /(?:^|\/)anthropic(?:\/v1)?\/?$/i.test(url.pathname)) {
+      throw new HostedAISettingsValidationError(
+        '此处使用 OpenAI 兼容接口，不能填写 Anthropic 地址；请填写供应商的 OpenAI 兼容基础地址',
+      );
+    }
     const settings = {
       ...input.settings,
-      baseURL: new URL(input.settings.baseURL).href.replace(/\/+$/, ''),
+      baseURL: url.href.replace(/\/+$/, ''),
     };
     const previous = this.stored();
     const legacy = previous ? undefined : this.legacy();
@@ -141,11 +181,19 @@ export class HostedAISettingsStore {
     const sameProvider =
       previousSettings.provider === settings.provider &&
       previousSettings.baseURL === settings.baseURL;
-    if (input.clearApiKey && input.apiKey) throw new Error('请勿同时填写和清除密钥');
+    if (input.clearApiKey && input.apiKey)
+      throw new HostedAISettingsValidationError('请勿同时填写和清除密钥');
     const apiKey = input.clearApiKey
       ? ''
       : input.apiKey || (sameProvider ? (previous?.apiKey ?? legacy?.apiKey ?? '') : '');
-    if (settings.enabled && !apiKey) throw new Error('启用 AI 或更换供应商地址时，请填写 API 密钥');
+    if (settings.enabled && !apiKey)
+      throw new HostedAISettingsValidationError(
+        input.clearApiKey
+          ? '请先停用 AI，再清除密钥'
+          : sameProvider
+            ? '启用 AI 时，请填写 API 密钥'
+            : '供应商或 API 地址已更改，请重新填写 API 密钥；原配置未修改',
+      );
     const payload = StoredSchema.parse({ version: 1, settings, apiKey });
     const temporary = `${this.path}.${randomUUID()}.tmp`;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });

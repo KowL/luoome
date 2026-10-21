@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HostedAISettingsStore } from './hosted-ai-settings.js';
@@ -73,4 +73,37 @@ test('invalid edits are atomic and changing provider address never reuses an old
     inputMicroPerMillion: 20_000_000,
     outputMicroPerMillion: 100_000_000,
   });
+});
+
+test('an existing Anthropic address remains readable and can be corrected with a new key', () => {
+  const { root, store } = setup();
+  const settings = {
+    ...store.read().settings,
+    enabled: true,
+    provider: 'openai-compatible' as const,
+    model: 'MiniMax-M3.1-Flash',
+    baseURL: 'https://api.minimax.cn/v1',
+  };
+  store.save({ settings, apiKey: 'fixture-original-key' });
+  const path = join(root, 'operator', 'ai-settings.json');
+  writeFileSync(
+    path,
+    JSON.stringify({
+      version: 1,
+      settings: { ...settings, baseURL: 'https://api.minimaxi.com/anthropic' },
+      apiKey: 'fixture-original-key',
+    }),
+  );
+  const restarted = new HostedAISettingsStore(root, {});
+  expect(restarted.read().apiKeyConfigured).toBe(true);
+  expect(() => restarted.save({ settings })).toThrow('请重新填写 API 密钥');
+  restarted.save({
+    settings: { ...restarted.read().settings, enabled: false },
+    clearApiKey: true,
+  });
+  expect(restarted.snapshot()).toBeUndefined();
+  expect(restarted.read().apiKeyConfigured).toBe(false);
+  restarted.save({ settings, apiKey: 'fixture-reentered-key' });
+  expect(restarted.snapshot()?.endpoint).toBe('https://api.minimax.cn/v1/chat/completions');
+  expect(restarted.snapshot()?.env.HOSTED_AI_API_KEY).toBe('fixture-reentered-key');
 });
