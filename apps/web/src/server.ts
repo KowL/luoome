@@ -399,6 +399,8 @@ export interface CreateWebAppOptions {
   readonly aiSettingsStore?: AISettingsStore;
   /** 行情源设置持久化；保存后立即替换当前 Web 进程的 market adapter。 */
   readonly marketSettingsStore?: MarketSettingsStore;
+  /** Hosted 模式保存行情源设置后重建共享行情栈（替代本地进程的 ctxRef 替换）。 */
+  readonly marketSettingsReload?: () => void;
   /**
    * 进程级共享 SourceSet（§4.7）：行情源热更新只改来源顺序时复用同一 EastmoneySource
    * 实例，只重建 market 与直接依赖 market 的 sentiment manager，不产生第二个实例。
@@ -1087,6 +1089,26 @@ export const createWebApp = (
     }
     try {
       const input = SaveMarketSettingsSchema.parse(await c.req.json());
+      if (options.hosted !== undefined) {
+        // 托管模式行情栈由 providers 共享持有；保存委托给 reload 回调重建。
+        const saved = marketSettingsStore.save(input);
+        try {
+          options.marketSettingsReload?.();
+        } catch (error) {
+          return jsonResult({
+            ok: false,
+            error: {
+              kind: 'invalid_input',
+              message: `设置已保存但行情栈重建失败：${error instanceof Error ? error.message : String(error)}`,
+              issues: [],
+            },
+          });
+        }
+        return jsonResult({
+          ok: true,
+          data: { ...saved, applied: options.marketSettingsReload !== undefined },
+        });
+      }
       const candidateEnv = {
         ...marketSettingsStore.runtimeEnv(),
         LUOOME_MARKET_SOURCES: input.sources.join(','),

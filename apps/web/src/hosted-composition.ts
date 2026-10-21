@@ -27,12 +27,19 @@ import {
   type PlatformContext,
   type PlatformPrincipal,
 } from '@luoome/tools/platform';
+import type { HostedAISettingsStore } from './hosted-ai-settings.js';
 import type { HostedConfig } from './hosted-config.js';
 import { prepareDeletionLedger } from './hosted-privacy.js';
 import { createHostedProviders } from './hosted-providers.js';
 import { prepareHostedDataRoot, TenantRuntimeManager } from './hosted-runtime.js';
 
 export interface HostedProviders {
+  readonly aiSettings?: HostedAISettingsStore;
+  /** 全站行情数据源设置；保存后通过 reloadMarketSettings 重建共享行情栈。 */
+  readonly marketSettings?: import('./market-settings.js').MarketSettingsStore;
+  readonly reloadMarketSettings?: () => void;
+  /** worker 进程在每个批次前调用：设置文件变化时重建共享行情栈。 */
+  readonly syncMarketSettings?: () => void;
   readonly bindPlatform?: (repos: PlatformRepositoryRegistry) => void;
   readonly emailOtp: EmailOtpPort;
   readonly notification: HostedNotificationPort;

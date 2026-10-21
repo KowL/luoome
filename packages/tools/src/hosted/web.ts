@@ -341,6 +341,7 @@ export const authorizeHostedWebRequest = async (
     return denied('hosted:tenant-active');
   if (!paid) return null;
   if (!invocation.capabilities.write) return denied('capability:write');
+  if ((invocation.entitlementRequired ?? true) === false) return null;
   const entitlement =
     invocation.currentEntitlement === undefined
       ? invocation.entitlement

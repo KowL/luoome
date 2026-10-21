@@ -43,6 +43,7 @@
 
 | 文档 | 范围 |
 |---|---|
+| [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与托管边界；首批已通过受控开发验收，后续能力按设计验证 |
 | [个人订阅托管版详细设计](./ddd/hosted-personal-subscription-detailed-design.md) | 原 Web 增量登录、单默认账户、用户隔离、支付订阅与后台恢复契约 |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
@@ -75,6 +76,8 @@
 
 | 文档 | 范围 |
 |---|---|
+| [DSH 插件平台开发任务](./dsh-plugin-platform-development-plan.md) | 四线程交付、D01–D07 统一集成与验收结果、后续 D08–D10 范围；开发使用 GPT-6.1 Sol / max |
+| [DSH 插件平台详细研究与验证计划](./dsh-plugin-platform-research-plan.md) | 固定上游基线、插件候选评估、启动/流式/确认/计量/隔离实验、阶段依赖与逐项验收证据 |
 | [AI 投资协作首页开发任务](./ai-investment-workspace-development-plan.md) | PRD 任务拆分、依赖、并行线程文件边界与验收交接 |
 | [个人订阅托管版开发改造计划](./hosted-personal-subscription-development-plan.md) | 原页面复用改造切片、旧工程证据与新业务验收、外部前置条件 |
 | [luoome 开发计划](./development-plan.md) | 按“真实生产证据 → 已设计功能收口 → 新需求立项”排序的当前总计划、依赖与验收门槛 |

@@ -1,16 +1,19 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   dateInShanghai,
   HostedLLMError,
   type HostedLLMPricing,
-  HostedLLMTokensSchema,
-  hostedLLMCost,
   isHoliday,
   isWeekend,
   type PlatformLLMRepository,
   type ToolContext,
 } from '@luoome/core';
-import { z } from 'zod';
+import {
+  createHostedModelTransport,
+  type HostedModelProvider,
+  hostedLLMHash as hash,
+  readHostedModelUsage as readUsage,
+} from './hosted-model-transport.js';
 import type { AIStack } from './stack.js';
 
 export const hostedDeepSeekPricing = (now: Date): HostedLLMPricing => {
@@ -27,21 +30,6 @@ export const hostedDeepSeekPricing = (now: Date): HostedLLMPricing => {
     outputMicroPerMillion: peak ? 8_000_000 : 4_000_000,
   };
 };
-const canonical = (value: unknown): unknown => {
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value !== null && typeof value === 'object')
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, item]) => [key, canonical(item)]),
-    );
-  return value;
-};
-const hash = (input: unknown) =>
-  createHash('sha256')
-    .update(JSON.stringify(canonical(input)))
-    .digest('hex');
 export const hostedLLMToolNames: ReadonlySet<string> = new Set([
   'research_investment_directions',
   'analyze_stock',
@@ -54,49 +42,8 @@ export const hostedLLMToolNames: ReadonlySet<string> = new Set([
   'hosted_chat_stream',
 ]);
 const forever = new Date('9999-01-01T00:00:00Z');
-const usageSchema = z.object({
-  id: z.string().min(1),
-  usage: z.object({
-    prompt_tokens: z.number().int().nonnegative().safe(),
-    completion_tokens: z.number().int().nonnegative().safe(),
-    prompt_cache_hit_tokens: z.number().int().nonnegative().safe().optional(),
-    prompt_tokens_details: z
-      .object({ cached_tokens: z.number().int().nonnegative().safe().optional() })
-      .optional(),
-  }),
-});
-const readUsage = (body: string, stream: boolean) => {
-  const frames: unknown[] = stream
-    ? body
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith('data: ') && line !== 'data: [DONE]')
-        .map((line) => JSON.parse(line.slice(6)))
-    : [JSON.parse(body)];
-  for (const value of frames.reverse()) {
-    const parsed = usageSchema.safeParse(value);
-    if (!parsed.success) continue;
-    if (
-      parsed.data.usage.prompt_cache_hit_tokens === undefined &&
-      parsed.data.usage.prompt_tokens_details?.cached_tokens === undefined
-    )
-      throw new HostedLLMError('usage_unknown');
-    return {
-      receiptId: parsed.data.id,
-      tokens: HostedLLMTokensSchema.parse({
-        input: parsed.data.usage.prompt_tokens,
-        cachedInput:
-          parsed.data.usage.prompt_cache_hit_tokens ??
-          parsed.data.usage.prompt_tokens_details?.cached_tokens ??
-          0,
-        output: parsed.data.usage.completion_tokens,
-      }),
-    };
-  }
-  throw new HostedLLMError('usage_unknown');
-};
-
 export const createHostedLLMExecution = (options: {
+  readonly provider?: HostedModelProvider;
   readonly ledger: PlatformLLMRepository;
   readonly createStack: (fetchImpl: typeof fetch) => AIStack;
   readonly fetchImpl?: typeof fetch;
@@ -154,7 +101,12 @@ export const createHostedLLMExecution = (options: {
             if (attempt?.usageState !== 'unknown') continue;
             let usage: ReturnType<typeof readUsage>;
             try {
-              usage = readUsage(cached.body, cached.stream === true);
+              usage = readUsage(
+                cached.body,
+                cached.stream === true,
+                attempt.pricing?.inputMicroPerMillion !==
+                  attempt.pricing?.cachedInputMicroPerMillion,
+              );
             } catch {
               continue;
             }
@@ -219,167 +171,86 @@ export const createHostedLLMExecution = (options: {
         lost = true;
       });
     }, 30_000);
-    let ordinal = 0;
     let committed = false;
-    const meteredFetch = (async (
-      url: Parameters<typeof fetch>[0],
-      init?: Parameters<typeof fetch>[1],
-    ) => {
-      if (!(await renew())) throw new HostedLLMError('lease_lost');
-      if (
-        !(await options.ledger.authorized(
-          identity.tenantId,
-          identity.tenantGeneration,
-          ctx.clock(),
-        ))
-      )
-        throw new HostedLLMError('operation_closed');
-      const address = new URL(url instanceof Request ? url.url : String(url));
-      if (address.origin !== 'https://api.deepseek.com' || address.pathname !== '/chat/completions')
-        throw new HostedLLMError('provider_failed');
-      if (typeof init?.body !== 'string') throw new HostedLLMError('provider_failed');
-      const body = JSON.parse(init.body) as {
-        model?: string;
-        max_tokens?: number;
-        stream?: boolean;
-        stream_options?: unknown;
-      };
-      if (
-        body.model !== 'deepseek-flash' ||
-        !Number.isSafeInteger(body.max_tokens) ||
-        (body.max_tokens ?? 0) <= 0
-      )
-        throw new HostedLLMError('provider_failed');
-      if (body.stream) body.stream_options = { include_usage: true };
-      const requestHash = hash(body);
-      const cacheId = `${id}:http:${ordinal++}`;
-      const cached = (await repository.findById(cacheId))?.outputSummary;
-      const complete = async (attemptId: string, responseBody: string) => {
-        let usage: ReturnType<typeof readUsage>;
-        try {
-          usage = readUsage(responseBody, body.stream === true);
-        } catch {
-          if (
-            (await options.ledger.attempts(operationId)).some(
-              (row) => row.id === attemptId && row.usageState === 'confirmed',
-            )
-          )
-            return;
-          throw new HostedLLMError('usage_unknown');
-        }
-        await options.ledger.complete({ id: attemptId, operationId, ...usage, now: ctx.clock() });
-      };
-      if (cached?.requestHash !== undefined && cached.requestHash !== requestHash)
-        throw new HostedLLMError('operation_closed');
-      if (
-        cached?.requestHash === requestHash &&
-        typeof cached.body === 'string' &&
-        typeof cached.attemptId === 'string'
-      ) {
-        await complete(cached.attemptId, cached.body);
-        return new Response(cached.body, {
-          status: 200,
-          headers: { 'content-type': body.stream ? 'text/event-stream' : 'application/json' },
-        });
-      }
-      const pricing = hostedDeepSeekPricing(ctx.clock());
-      await options.ledger.reserve({
+    const transport = createHostedModelTransport({
+      ledger: options.ledger,
+      scope: {
         operationId,
         tenantId: identity.tenantId,
         generation: identity.tenantGeneration,
         inputHash,
         owner,
-        leaseUntil: new Date(ctx.clock().getTime() + 120_000),
-        pricing,
-        budgetMicro: options.budgetMicro,
-        periodBudgetMicro: options.periodBudgetMicro,
-        now: ctx.clock(),
-      });
-      const rows = await options.ledger.attempts(operationId);
-      const attemptId = `${operationId}:${rows.length + 1}`;
-      // HTTP JSON 的字节数加 framing 余量是保守输入上界；输出由实际请求的 max_tokens 限定。
-      const reservedCostMicro = hostedLLMCost(
-        {
-          input: new TextEncoder().encode(JSON.stringify(body)).length + 1024,
-          cachedInput: 0,
-          output: body.max_tokens!,
+      },
+      provider: options.provider ?? {
+        endpoint: 'https://api.deepseek.com/chat/completions',
+        model: 'deepseek-flash',
+        pricing: hostedDeepSeekPricing,
+        reservationPricing: {
+          ...hostedDeepSeekPricing(ctx.clock()),
+          inputMicroPerMillion: 2_000_000,
+          outputMicroPerMillion: 8_000_000,
         },
-        { ...pricing, inputMicroPerMillion: 2_000_000, outputMicroPerMillion: 8_000_000 },
-      );
-      await options.ledger.begin({
-        operationId,
-        owner,
-        id: attemptId,
-        requestHash,
-        reservedCostMicro,
-        pricing,
-        now: ctx.clock(),
-      });
-      let response: Response;
-      let responseBody: string;
-      try {
-        response = await (options.fetchImpl ?? globalThis.fetch)(url, {
-          ...init,
-          body: JSON.stringify(body),
-          signal: AbortSignal.any([
-            ...(init.signal ? [init.signal] : []),
-            (options.timeoutSignal ?? AbortSignal.timeout)(options.timeoutMs),
-          ]),
-        });
-        responseBody = await response.text();
-      } catch {
-        throw new HostedLLMError('usage_unknown');
-      }
-      if ([400, 401, 403, 404, 429].includes(response.status)) {
-        await options.ledger.complete({
-          id: attemptId,
-          operationId,
-          tokens: { input: 0, cachedInput: 0, output: 0 },
-          receiptId: `http-rejected:${response.status}:${attemptId}`,
-          now: ctx.clock(),
-        });
-        return new Response('{"error":{"message":"provider_request_rejected"}}', {
-          status: response.status,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (!response.ok) throw new HostedLLMError('usage_unknown');
-      if (!(await renew())) throw new HostedLLMError('lease_lost');
-      const cacheOwner = randomUUID();
-      const now = ctx.clock();
-      if (
-        !(await repository.execution({
-          id: cacheId,
-          workflowName: 'hosted-llm-http',
-          action: 'acquire',
-          owner: cacheOwner,
-          now,
-          leaseUntil: new Date(now.getTime() + 120_000),
-          nextRunAt: forever,
-        }))
-      )
-        throw new HostedLLMError('busy');
-      if (
-        !(await repository.execution({
-          id: cacheId,
-          workflowName: 'hosted-llm-http',
-          action: 'release',
-          owner: cacheOwner,
-          now: ctx.clock(),
-          leaseUntil: new Date(ctx.clock().getTime() + 120_000),
-          nextRunAt: forever,
-          output: { requestHash, body: responseBody, attemptId, stream: body.stream === true },
-        }))
-      )
-        throw new HostedLLMError('lease_lost');
-      await complete(attemptId, responseBody);
-      return new Response(responseBody, {
-        status: response.status,
-        headers: { 'content-type': body.stream ? 'text/event-stream' : 'application/json' },
-      });
-    }) as typeof fetch;
+      },
+      budgetMicro: options.budgetMicro,
+      periodBudgetMicro: options.periodBudgetMicro,
+      timeoutMs: options.timeoutMs,
+      clock: ctx.clock,
+      renew,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.timeoutSignal ? { timeoutSignal: options.timeoutSignal } : {}),
+      receipts: {
+        async read(request) {
+          const cached = (await repository.findById(`${id}:http:${request.ordinal}`))
+            ?.outputSummary;
+          if (cached?.requestHash === undefined) return null;
+          const legacy =
+            cached.endpoint === undefined && cached.requestHash === request.legacyRequestHash;
+          if (cached.requestHash !== request.requestHash && !legacy)
+            throw new HostedLLMError('operation_closed');
+          if (typeof cached.body !== 'string' || typeof cached.attemptId !== 'string')
+            throw new HostedLLMError('usage_unknown');
+          return { ...request, body: cached.body, attemptId: cached.attemptId };
+        },
+        async save(receipt) {
+          const cacheId = `${id}:http:${receipt.ordinal}`;
+          const cacheOwner = randomUUID();
+          if (
+            !(await repository.execution({
+              id: cacheId,
+              workflowName: 'hosted-llm-http',
+              action: 'acquire',
+              owner: cacheOwner,
+              now: ctx.clock(),
+              leaseUntil: new Date(ctx.clock().getTime() + 120_000),
+              nextRunAt: forever,
+            }))
+          )
+            throw new HostedLLMError('busy');
+          if (
+            !(await repository.execution({
+              id: cacheId,
+              workflowName: 'hosted-llm-http',
+              action: 'release',
+              owner: cacheOwner,
+              now: ctx.clock(),
+              leaseUntil: new Date(ctx.clock().getTime() + 120_000),
+              nextRunAt: forever,
+              output: {
+                requestHash: receipt.requestHash,
+                endpoint: receipt.endpoint,
+                model: receipt.model,
+                body: receipt.body,
+                attemptId: receipt.attemptId,
+                stream: receipt.stream,
+              },
+            }))
+          )
+            throw new HostedLLMError('lease_lost');
+        },
+      },
+    });
     try {
-      const stack = options.createStack(meteredFetch);
+      const stack = options.createStack(transport.fetch);
       const { llmExecution: _execution, ...base } = ctx;
       const guardedLLM = {
         name: stack.llm.name,
@@ -415,6 +286,7 @@ export const createHostedLLMExecution = (options: {
         ))
       )
         throw new HostedLLMError('operation_closed');
+      await transport.finish();
       const actual = await options.ledger.attempts(operationId);
       const capture =
         !(typeof result === 'object' && result !== null && 'ok' in result && result.ok === false) &&
@@ -431,7 +303,7 @@ export const createHostedLLMExecution = (options: {
           inputHash,
           capture,
           result,
-          httpCount: ordinal,
+          httpCount: transport.requestCount,
         }))
       )
         throw new HostedLLMError('lease_lost');
@@ -439,6 +311,7 @@ export const createHostedLLMExecution = (options: {
       await settle(capture);
       return result;
     } catch (error) {
+      await transport.cancel();
       if (committed || lost || !(await renew())) throw error;
       await settle(false, owner);
       await lease('release', { inputHash }, ctx.clock());

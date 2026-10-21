@@ -344,7 +344,8 @@ export const initializeHostedSession = async () => {
     document.querySelector('.topbar-meta').append(logout);
     document.getElementById('btn-account-create')?.closest('.card').remove();
     document.querySelector('.vault-settings-card')?.remove();
-    for (const tab of ['ai', 'market', 'data']) {
+    // 数据源是全站共享配置，仅管理员保留入口；AI/数据面板仍不对租户开放。
+    for (const tab of me.data.admin === true ? ['ai', 'data'] : ['ai', 'market', 'data']) {
       document.querySelector(`[data-settings-tab="${tab}"]`)?.remove();
       document.querySelector(`[data-settings-pane="${tab}"]`)?.remove();
     }

@@ -107,6 +107,8 @@ const resetChatIdentity = () => {
 };
 
 const TOOL_LABELS = {
+  fetch_quote: '读取行情',
+  web_fetch: '读取网页',
   research_investment_directions: '参与方向研究',
   save_investment_consensus: '保存参与共识',
   set_investment_tracking: '调整方向跟踪',
@@ -396,7 +398,11 @@ const draftCard = (draft) => {
 const usedActionsNode = (usedActions) => {
   const details = el('details', 'chat-used-actions');
   details.append(
-    el('summary', null, `本轮动作：${usedActions.map((action) => action.tool).join('、')}`),
+    el(
+      'summary',
+      null,
+      `本轮动作：${usedActions.map((action) => toolLabel(action.tool)).join('、')}`,
+    ),
   );
   details.append(
     el(
@@ -406,7 +412,7 @@ const usedActionsNode = (usedActions) => {
         el(
           'li',
           null,
-          `${action.tool} — ${
+          `${toolLabel(action.tool)} — ${
             action.status === 'running'
               ? '处理中…'
               : action.ok
@@ -484,7 +490,9 @@ const renderChat = () => {
     feed.length === 0
       ? [emptyState()]
       : feed.map((entry) => {
-          const signature = JSON.stringify(entry);
+          const signature = JSON.stringify(
+            entry.type === 'drafts' ? [entry, sending, settling] : entry,
+          );
           let rendered = renderedEntries.get(entry);
           if (rendered?.signature !== signature) {
             rendered = { signature, node: renderEntry(entry) };
@@ -624,6 +632,8 @@ const persistedFeed = (messages, context = {}) => {
     const actions = [];
     const drafts = [];
     for (const part of message.parts) {
+      if (part.type === 'data-luoome-runtime' && typeof part.data?.notice === 'string')
+        result.push({ type: 'note', text: part.data.notice });
       if (part.type === 'data-luoome-usage') result.push({ type: 'usage', metadata: part.data });
       if (part.type === 'data-luoome-stream-error') {
         result.push({ type: 'note', text: String(part.data?.message ?? 'AI 响应失败，请重试') });
@@ -855,6 +865,8 @@ const send = async (requestedText) => {
         }
       } else if (part.type === 'finish' && part.messageMetadata?.usage !== undefined) {
         feed.push({ type: 'usage', metadata: part.messageMetadata });
+      } else if (part.type === 'data-luoome-runtime' && typeof part.data?.notice === 'string') {
+        feed.push({ type: 'note', text: part.data.notice });
       } else if (part.type === 'data-luoome-usage') {
         feed.push({ type: 'usage', metadata: part.data });
       } else if (part.type === 'abort') {
@@ -886,10 +898,9 @@ const send = async (requestedText) => {
     const status = feed.findLast((entry) => entry.type === 'status');
     if (status !== undefined) removeEntry(status);
     if (controller.signal.aborted) {
-      // 主动取消：保留已接收的文本与工具轨迹，标注「已取消」，不伪造完整回答。
       if (assistantEntry !== null) {
-        assistantEntry.cancelled = true;
         if (!feed.includes(assistantEntry)) feed.push(assistantEntry);
+        feed.push({ type: 'note', text: '已请求停止，执行结果以重新打开会话后的服务端记录为准。' });
         renderChat();
         await refreshSessions();
       }

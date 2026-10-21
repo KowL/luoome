@@ -30,6 +30,7 @@ export * from './limit-up-ladder/types.js';
 export * from './llm/agent-runtime.js';
 export * from './llm/ai-sdk-adapter.js';
 export * from './llm/hosted-meter.js';
+export * from './llm/hosted-model-transport.js';
 export * from './llm/manager.js';
 export * from './llm/model-catalog.js';
 export * from './llm/provider-quirks.js';

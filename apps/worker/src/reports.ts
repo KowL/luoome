@@ -32,6 +32,7 @@ export const runHostedReportPass = async (
     service.config.productPolicyVersion !== 'hosted-web-v2'
   )
     return summary;
+  service.providers.syncMarketSettings?.();
   const activity = service.maintenance.enter('worker-reports');
   if (activity === null) return summary;
   const platform = service.platformContext({
@@ -82,13 +83,16 @@ export const runHostedReportPass = async (
         const entitlement = data(
           await getWorkerHostedEntitlementTool.execute({ tenantId: tenant.id }, platform),
         );
+        const entitlementRequired = service.config.entitlementRequired;
+        const entitled = entitlement !== null || !entitlementRequired;
         const invocation: HostedInvocation = {
           context:
-            tenant.status === 'active' && entitlement !== null
+            tenant.status === 'active' && entitled
               ? await bindHostedDefaultAccount(base, service.providers.createTenantContext)
               : base,
           identity,
           entitlement: null,
+          entitlementRequired,
           capabilities: {
             write: service.config.exposeWrite,
             external: service.config.exposeExternal,
@@ -102,7 +106,7 @@ export const runHostedReportPass = async (
         };
         if (
           tenant.status !== 'active' ||
-          entitlement === null ||
+          !entitled ||
           (await authorizeHostedWebRequest(invocation, true)) !== null
         ) {
           await suppressHostedReportDeliveriesTool.execute(

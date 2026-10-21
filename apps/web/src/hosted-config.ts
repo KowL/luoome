@@ -35,6 +35,8 @@ export interface HostedConfig {
   readonly registrationEnabled: boolean;
   readonly trustedProxyIp: string | null;
   readonly adminEmails: readonly string[];
+  /** 订阅流程未开放时可关闭权益门禁；关闭后写操作与后台任务不再要求有效服务期。 */
+  readonly entitlementRequired: boolean;
 }
 
 const ConfigSchema = z.object({
@@ -129,5 +131,6 @@ export const loadHostedConfig = (
     exposeWrite: env.LUOOME_EXPOSE_WRITE === 'true',
     exposeExternal: env.LUOOME_EXPOSE_EXTERNAL === 'true',
     registrationEnabled: env.HOSTED_REGISTRATION_ENABLED === 'true',
+    entitlementRequired: env.HOSTED_ENTITLEMENT_REQUIRED !== 'false',
   });
 };

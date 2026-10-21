@@ -12,6 +12,7 @@
     "test": "vitest run --passWithNoTests",
     "test:db": "bun test packages/db",
     "test:web": "bun test apps/web",
+    "test:dsh": "vitest run packages/dsh-bridge apps/agent-runtime",
     "test:all": "bun run test && bun run test:db && bun run test:web",
     "mcp:smoke": "bun packages/mcp/src/smoke.ts",
     "web": "bun --no-env-file apps/web/src/index.ts",
@@ -20,7 +21,8 @@
     "typecheck": "for d in packages/* apps/*; do if find \"$d\" -maxdepth 4 -name '*.ts' -not -path '*/node_modules/*' | grep -q .; then echo \"== typecheck $d\"; (cd \"$d\" && tsc --noEmit) || exit 1; fi; done",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "build": "for d in packages/* apps/*; do if [ -f \"$d/src/index.ts\" ]; then echo \"== build $d\"; bun build \"$d/src/index.ts\" --outdir \"$d/dist\" --target bun --packages external || exit 1; fi; done"
+    "build": "for d in packages/* apps/*; do if [ \"$d\" != apps/agent-runtime ] && [ -f \"$d/src/index.ts\" ]; then echo \"== build $d\"; bun --no-env-file build \"$d/src/index.ts\" --outdir \"$d/dist\" --target bun --packages external || exit 1; fi; done && bun --no-env-file infra/dsh/build.ts",
+    "build:dsh": "bun --no-env-file infra/dsh/build.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",

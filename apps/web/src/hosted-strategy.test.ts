@@ -22,7 +22,7 @@ const cleanup: Array<() => void> = [];
 afterEach(() => {
   for (const close of cleanup.splice(0).reverse()) close();
 });
-const setup = () => {
+const setup = (envExtras: Record<string, string> = {}) => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-ds5-'));
   cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   let now = new Date('2026-10-15T09:59:00Z');
@@ -37,6 +37,7 @@ const setup = () => {
     HOSTED_REGISTRATION_ENABLED: 'true',
     LUOOME_EXPOSE_WRITE: 'true',
     LUOOME_EXPOSE_EXTERNAL: 'true',
+    ...envExtras,
   });
   const initial = openHostedService(config, undefined, () => now);
   const defaults = initial.providers;
@@ -289,6 +290,27 @@ test('Web 已有 schedule 接入 worker；并发和重启不串租户，不重�
     } finally {
       lease.release();
     }
+  }
+});
+
+test('订阅门禁关闭后试用到期不影响日循环运行', async () => {
+  const h = setup({ HOSTED_ENTITLEMENT_REQUIRED: 'false' });
+  const user = await h.login('ds5-free@example.invalid');
+  await enable(h, user);
+  h.advance(8 * 86_400_000);
+  expect(
+    await h.service().repos.subscriptions.currentEntitlement({
+      tenantId: user.tenantId,
+      now: h.service().clock(),
+    }),
+  ).toBeNull();
+  const result = await h.pass('worker-free');
+  expect(result.runs).toBe(1);
+  const lease = await h.privateRepos(user.tenantId);
+  try {
+    expect(await lease.runtime.repos.strategyRun.listRuns()).toHaveLength(1);
+  } finally {
+    lease.release();
   }
 });
 

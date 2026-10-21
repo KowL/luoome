@@ -29,6 +29,13 @@ export const startHostedWeb = async (options: {
     const addresses = new WeakMap<Request, string>();
     const app = createHostedWebApp({
       config,
+      ...(service.providers.aiSettings ? { aiSettings: service.providers.aiSettings } : {}),
+      ...(service.providers.marketSettings
+        ? { marketSettings: service.providers.marketSettings }
+        : {}),
+      ...(service.providers.reloadMarketSettings
+        ? { marketSettingsReload: service.providers.reloadMarketSettings }
+        : {}),
       repos: service.repos,
       runtimes: service.runtimes,
       maintenance: service.maintenance,

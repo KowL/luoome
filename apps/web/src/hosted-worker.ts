@@ -124,6 +124,7 @@ const workerInvocation = async (
     context,
     identity,
     entitlement: null,
+    entitlementRequired: service.config.entitlementRequired,
     capabilities: { write: service.config.exposeWrite, external: service.config.exposeExternal },
     currentTenant: () => service.repos.tenants.findById(tenant.id),
     ...(operation === undefined
@@ -207,6 +208,7 @@ export const reconcileHostedTenantOutbox = async (
 };
 
 const reconcileAndSchedule = async (service: HostedService, platform: PlatformContext) => {
+  service.providers.syncMarketSettings?.();
   const tenants = value(await listWorkerHostedTenantsTool.execute({}, platform));
   for (const tenant of tenants) {
     if (!['active', 'suspended'].includes(tenant.status)) continue;
@@ -230,7 +232,7 @@ const reconcileAndSchedule = async (service: HostedService, platform: PlatformCo
       const entitlement = value(
         await getWorkerHostedEntitlementTool.execute({ tenantId: tenant.id }, platform),
       );
-      if (entitlement === null) continue;
+      if (entitlement === null && service.config.entitlementRequired) continue;
       const scheduling = contextForHostedTools(
         { ...invocation, entitlement },
         new Set([

@@ -45,6 +45,7 @@ export const runHostedWatchPass = async (
     service.config.productPolicyVersion !== 'hosted-web-v2'
   )
     return summary;
+  service.providers.syncMarketSettings?.();
   const activity = service.maintenance.enter('worker-watch');
   if (activity === null) return summary;
   const platform = service.platformContext({
@@ -96,11 +97,13 @@ export const runHostedWatchPass = async (
         const entitlement = data(
           await getWorkerHostedEntitlementTool.execute({ tenantId: tenant.id }, platform),
         );
-        if (tenant.status !== 'active' || entitlement === null) {
+        const entitlementRequired = service.config.entitlementRequired;
+        if (tenant.status !== 'active' || (entitlement === null && entitlementRequired)) {
           const cleanupInvocation: HostedInvocation = {
             context: base,
             identity,
             entitlement: null,
+            entitlementRequired,
             capabilities: { write: true, external: true },
             currentTenant: async () =>
               data(await getWorkerTenantTool.execute({ tenantId: tenant.id }, platform)),
@@ -120,6 +123,7 @@ export const runHostedWatchPass = async (
           context,
           identity,
           entitlement: null,
+          entitlementRequired,
           capabilities: {
             write: service.config.exposeWrite,
             external: service.config.exposeExternal,

@@ -1,4 +1,5 @@
-import { callApi, getHostedSession, randomRequestId } from './api.js';
+import { callApi, getHostedSession, getSessionEpoch, randomRequestId } from './api.js';
+import { renderHostedAISettings } from './hosted-admin-ai.js';
 
 const node = (tag, text, className) => {
   const result = document.createElement(tag);
@@ -168,11 +169,18 @@ export const renderHostedAdmin = async (setStatus, options = {}) => {
     box.replaceChildren(node('h2', '管理'), node('p', '当前账号不是管理员。'));
     return;
   }
+  const epoch = getSessionEpoch();
   const { users } = await read('/api/admin/users');
+  if (getSessionEpoch() !== epoch || !getHostedSession()?.admin) return;
   box.replaceChildren(
     node('h2', '用户与订阅管理'),
     node('p', `共 ${users.length} 个用户`, 'muted'),
   );
+  const ai = node('section');
+  box.append(ai);
+  void renderHostedAISettings(ai).catch(() => {
+    if (getSessionEpoch() === epoch) ai.textContent = '无法读取 AI 配置，请刷新后重试。';
+  });
   for (const row of users) {
     const card = node('section', undefined, 'hosted-admin-user');
     const head = node('div', undefined, 'hosted-admin-user-head');

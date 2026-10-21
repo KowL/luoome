@@ -128,6 +128,9 @@ export const createHostedBackup = async (input: {
     privateDirectory(canonicalDestination);
     const paths = [
       'control.sqlite',
+      ...['operator/ai-settings.json', 'operator/market.env'].filter((path) =>
+        existsSync(join(root, path)),
+      ),
       ...walk(join(root, 'tenants')).map((path) => `tenants/${path}`),
     ].filter((path) => !/^tenants\/[A-Za-z0-9_-]+\/luoome\.db-(wal|shm)$/.test(path));
     const files: HostedBackupManifest['files'] = [];

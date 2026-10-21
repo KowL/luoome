@@ -1,7 +1,6 @@
 import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import {
-  AIModelCatalogConfigSchema,
   createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
   createDragonTigerManagerFromEnv,
@@ -38,9 +37,14 @@ import {
 } from '@luoome/core';
 import { createDrizzlePublicMarketStore } from '@luoome/db';
 import { z } from 'zod';
+import { DshChatRuntime, type DshChatRuntimeOptions } from './dsh/chat-runtime.js';
+import { loadDshDevelopmentConfig } from './dsh/config.js';
+import { createHostedChatStreamResponse } from './dsh/hosted-stream.js';
+import { HostedAISettingsStore } from './hosted-ai-settings.js';
 import type { HostedProviders } from './hosted-composition.js';
 import type { HostedConfig } from './hosted-config.js';
 import { prepareHostedDataRoot } from './hosted-runtime.js';
+import { MarketSettingsStore } from './market-settings.js';
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -117,8 +121,15 @@ export const createHostedNotificationFromEnv = (
 export const createHostedProviders = (
   config: HostedConfig,
   env: Environment = process.env,
-  options: { readonly fetchImpl?: typeof fetch; readonly smtpTransport?: SmtpEmailTransport } = {},
+  options: {
+    readonly fetchImpl?: typeof fetch;
+    readonly smtpTransport?: SmtpEmailTransport;
+    readonly dshNative?: DshChatRuntimeOptions['native'];
+  } = {},
 ): HostedProviders => {
+  const dsh = loadDshDevelopmentConfig(env, config.environment);
+  if (options.dshNative !== undefined && dsh === undefined)
+    throw new Error('DSH native fixtures require explicit DSH development opt-in');
   if (!env.HOSTED_PLAN_FILE) throw new Error('HOSTED_PLAN_FILE must specify the operator plan');
   const trialPlan = PlanVersionSchema.parse(
     JSON.parse(readConfigurationFile(env.HOSTED_PLAN_FILE, 65536)),
@@ -151,23 +162,17 @@ export const createHostedProviders = (
     .safe()
     .parse(env.HOSTED_LLM_PERIOD_BUDGET_MICRO ?? '20000000');
   if (callBudget > periodBudget) throw new Error('LLM call budget exceeds period budget');
-  if (aiEnabled) {
-    const catalog = AIModelCatalogConfigSchema.parse(
-      JSON.parse(readConfigurationFile(env.LUOOME_AI_CONFIG!, 65536)),
-    );
-    if (
-      Object.keys(catalog.providers).length !== 1 ||
-      catalog.providers.deepseek?.type !== 'openai-compatible' ||
-      catalog.providers.deepseek.baseURL !== 'https://api.deepseek.com' ||
-      Object.values(catalog.profiles).some((profile) => profile.model !== 'deepseek:deepseek-flash')
-    )
-      throw new Error(
-        'hosted metered AI requires deepseek:deepseek-flash at the official API endpoint',
-      );
-    createAIStackFromEnv(env, { logger: console, fallback: 'throw' });
-  }
+  const aiSettings = new HostedAISettingsStore(config.dataRoot, env);
+  const initialAI = aiSettings.snapshot();
+  if (initialAI)
+    createAIStackFromEnv(initialAI.env, {
+      readFile: () => JSON.stringify(initialAI.catalog),
+      logger: console,
+      fallback: 'throw',
+    });
   const scopedAI = (base: ToolContext): Partial<ToolContext> => {
-    if (!aiEnabled)
+    const activeAI = aiSettings.snapshot();
+    if (!activeAI)
       return {
         llmExecution: {
           run: async (name, _input, context, work) => {
@@ -198,14 +203,17 @@ export const createHostedProviders = (
         },
       };
     if (!ledger) throw new Error('hosted LLM ledger is not bound');
+    const scopedLedger = ledger;
     const execution = createHostedLLMExecution({
       ledger,
-      budgetMicro: callBudget,
-      periodBudgetMicro: periodBudget,
-      timeoutMs: 60_000,
+      budgetMicro: activeAI.budgetMicro,
+      periodBudgetMicro: activeAI.periodBudgetMicro,
+      timeoutMs: activeAI.timeoutMs,
+      provider: { endpoint: activeAI.endpoint, model: activeAI.model, pricing: activeAI.pricing },
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-      createStack: (fetchImpl) =>
-        createAIStackFromEnv(env, {
+      createStack: (fetchImpl) => {
+        const stack = createAIStackFromEnv(activeAI.env, {
+          readFile: () => JSON.stringify(activeAI.catalog),
           fetchImpl,
           fallback: 'throw',
           logger: {
@@ -214,10 +222,41 @@ export const createHostedProviders = (
             warn: (message) => base.logger.warn(message),
             error: (message) => base.logger.error(message),
           },
-        }),
+        });
+        if (dsh !== undefined) {
+          const provider = Object.values(activeAI.catalog.providers)[0];
+          if (provider === undefined || provider.type !== 'openai-compatible')
+            throw new Error('DSH development requires a metered Chat Completions provider');
+          const runtimeEnv: Environment = activeAI.env;
+          const key = runtimeEnv[provider.apiKeyEnv];
+          if (!key) throw new HostedLLMError('unconfigured');
+          const native = options.dshNative ?? dsh.native;
+          const runtime = new DshChatRuntime({
+            ...dsh,
+            model: {
+              endpoint: activeAI.endpoint,
+              model: activeAI.model,
+              maxTokens: activeAI.catalog.profiles.agent.maxOutputTokens,
+              headers: { authorization: `Bearer ${key}` },
+              fetch: fetchImpl,
+            },
+            ...(native === undefined ? {} : { native }),
+            authorized: async () =>
+              base.identity?.mode === 'hosted' &&
+              (await scopedLedger.authorized(
+                base.identity.tenantId,
+                base.identity.tenantGeneration,
+                base.clock(),
+              )),
+          });
+          stack.agent.createUIMessageStreamResponse = (request) =>
+            runtime.createUIMessageStreamResponse(request);
+        }
+        return stack;
+      },
     });
     const agent = {
-      name: 'hosted-metered:deepseek-flash',
+      name: `hosted-metered:${activeAI.model}`,
       run: (request: Parameters<NonNullable<ToolContext['agent']>['run']>[0]) =>
         execution.run(
           'agent_run',
@@ -227,33 +266,7 @@ export const createHostedProviders = (
         ),
       createUIMessageStreamResponse: async (
         request: import('@luoome/adapters').AgentUIStreamRequest,
-      ) => {
-        const result = await execution.run(
-          'hosted_chat_stream',
-          { instructions: request.instructions, uiMessages: request.uiMessages },
-          base,
-          async (ctx) => {
-            const runtime = ctx.agent as import('@luoome/adapters').AISDKAgentRuntime;
-            const response = await runtime.createUIMessageStreamResponse(request);
-            const body = await response.text();
-            if (
-              body
-                .split('\n')
-                .some((line) => line.startsWith('data: ') && line.includes('"type":"error"'))
-            )
-              throw new HostedLLMError('provider_failed');
-            return {
-              body,
-              status: response.status,
-              contentType: response.headers.get('content-type') ?? 'text/event-stream',
-            };
-          },
-        );
-        return new Response(result.body, {
-          status: result.status,
-          headers: { 'content-type': result.contentType, 'x-vercel-ai-ui-message-stream': 'v1' },
-        });
-      },
+      ) => createHostedChatStreamResponse(execution, base, request),
     };
     return {
       llmExecution: execution,
@@ -261,7 +274,7 @@ export const createHostedProviders = (
       adapters: {
         ...base.adapters,
         llm: {
-          name: 'hosted-metered:deepseek-flash',
+          name: `hosted-metered:${activeAI.model}`,
           generate: async () => {
             throw new HostedLLMError('operation_closed');
           },
@@ -281,19 +294,58 @@ export const createHostedProviders = (
   };
   const marketDeps = { clock, sources, logger: console };
   const deps = { ...marketDeps, fetchImpl: requestCoordinator.fetchFor('eastmoney') };
-  const market = createMarketAdapterFromEnv(env, {
-    ...marketDeps,
-    requestCoordinator,
-    quoteCacheTtlMs: requestCoordinator.config.cacheTtlMs,
+  // 行情数据源设置是运营方全站配置：持久卷 operator/market.env 优先于启动环境，
+  // Web 保存后立即重建共享 market/sentiment，worker 每个批次按文件 mtime 同步。
+  const marketSettings = new MarketSettingsStore(env, {
+    secretPath: join(config.dataRoot, 'operator', 'market.env'),
   });
+  const buildMarketStack = (stackEnv: Environment) => {
+    const market = createMarketAdapterFromEnv(stackEnv, {
+      ...marketDeps,
+      requestCoordinator,
+      quoteCacheTtlMs: requestCoordinator.config.cacheTtlMs,
+    });
+    return {
+      market,
+      ashareSentiment: createAShareSentimentManagerFromEnv(stackEnv, { ...deps, market }),
+    };
+  };
+  const marketSettingsStamp = () => {
+    try {
+      return statSync(marketSettings.secretPath).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  let marketStamp = marketSettingsStamp();
+  let marketStack = buildMarketStack(marketSettings.runtimeEnv());
+  const reloadMarketSettings = () => {
+    const next = buildMarketStack(marketSettings.runtimeEnv());
+    marketStack = next;
+    marketStamp = marketSettingsStamp();
+  };
+  const syncMarketSettings = () => {
+    if (marketSettingsStamp() !== marketStamp) reloadMarketSettings();
+  };
+  // 代理转发到当前行情栈实例；方法绑定到真实实例，避免私有字段在代理 this 上失效。
+  const market = new Proxy(marketStack.market as object, {
+    get: (_target, property) => {
+      syncMarketSettings();
+      const value = Reflect.get(marketStack.market as object, property);
+      return typeof value === 'function' ? value.bind(marketStack.market) : value;
+    },
+  }) as typeof marketStack.market;
   const stockUniverse = createStockUniverseManagerFromEnv(env, deps);
   const limitUpLadder = createLimitUpLadderManagerFromEnv(env, deps);
   const dragonTiger = createDragonTigerManagerFromEnv(env, deps);
   const northboundFlow = createNorthboundFlowManagerFromEnv(env, deps);
   const news = createNewsManagerFromEnv(env, deps);
   const sectorQuote = createSectorQuoteManagerFromEnv(env, deps);
-  const ashareSentiment = createAShareSentimentManagerFromEnv(env, { ...deps, market });
   return {
+    aiSettings,
+    marketSettings,
+    reloadMarketSettings,
+    syncMarketSettings,
     bindPlatform: (repos) => {
       ledger = repos.llm;
     },
@@ -319,6 +371,7 @@ export const createHostedProviders = (
       },
     },
     createTenantContext: (base) => {
+      syncMarketSettings();
       const aiContext = scopedAI(base);
       const { agent: _agent, llmExecution: _execution, ...context } = base;
       return {
@@ -335,7 +388,7 @@ export const createHostedProviders = (
         northboundFlow,
         news,
         sectorQuote,
-        ashareSentiment,
+        ashareSentiment: marketStack.ashareSentiment,
         researchRemote: createResearchRemoteDocumentAdapter(),
         // Do not route different users' notifications to an operator's shared webhook.
         notification: createNotificationManagerFromEnv(

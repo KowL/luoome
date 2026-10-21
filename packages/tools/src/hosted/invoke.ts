@@ -53,6 +53,8 @@ export interface HostedInvocation {
   readonly currentEntitlement?: () => Promise<HostedEntitlement | null>;
   readonly currentReadWindow?: () => Promise<boolean>;
   readonly acceptedOperation?: { readonly deadlineAt: Date; readonly operationId: string };
+  /** 订阅流程未开放时运营方可显式关闭权益门禁；缺省保持要求有效服务期。 */
+  readonly entitlementRequired?: boolean;
 }
 
 const denied = (required: string): ToolResult<never> => ({
@@ -95,7 +97,9 @@ export const authorizeHostedInvocation = async (
     }
   }
   const now = context.clock();
+  const entitlementRequired = invocation.entitlementRequired ?? true;
   if (
+    entitlementRequired &&
     !paid &&
     identity.actor === 'user' &&
     invocation.currentReadWindow !== undefined &&
@@ -112,6 +116,7 @@ export const authorizeHostedInvocation = async (
     identity.operationId === invocation.acceptedOperation.operationId &&
     invocation.acceptedOperation.deadlineAt > now;
   if (
+    entitlementRequired &&
     paid &&
     !accepted &&
     (entitlement === null ||

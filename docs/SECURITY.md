@@ -359,6 +359,34 @@ hosted已有身份/隔离/支付/恢复基础设施；本次在其上复用原We
   `update_account`只收名称，不能覆盖本金/现金/币种；内部初始化不对普通用户/模型开放。local多账户行为不变。
 - 保留原AI/研究入口，但模型只能使用当前Tenant/Account与已授权工具，消耗受订阅及预算约束。
   provider未装配明确不可用，不伪造模型输出。平台LLM/数据源密钥、任意Vault路径/Git凭据/整库恢复不是租户设置权限。
+
+### 管理员 AI 配置
+
+`/api/admin/ai-settings` 仅允许 `HOSTED_ADMIN_EMAILS` 中的已登录管理员访问；POST 还要求同源、CSRF 和 write opt-in。普通租户的 `/api/settings/*` 封锁不变。
+配置适用于全站，以单文件原子替换写入持久卷的 `operator/ai-settings.json`（0600），不读取个人 home 配置。
+接口仅返回密钥是否配置，不返回密钥、路径或供应商原始错误。留空保留同一供应商地址的密钥；更换供应商或地址必须重新填写；清除密钥时必须关闭 AI。
+每次请求固定模型目录、凭据与费率快照，执行仍经过租户授权、额度预占、单次/周期预算和用量结算。计量层只允许该快照的确切 Chat Completions 地址和模型，禁止跟随重定向。
+费率由管理员配置，缓存优惠所需用量缺失时保持 unknown；输入同价时无需缓存细分即可结算。
+浏览器不将密钥写入 localStorage，保存后或身份切换时清空输入。恢复集包含该私密配置，不得公开分享。
+
+### 管理员行情数据源配置
+
+托管模式下 `/api/settings/market*`（行情源开关、排序与连通性测试）仅允许 `HOSTED_ADMIN_EMAILS` 中的已登录管理员访问，POST 同样要求同源、CSRF 和 write opt-in；普通租户的其余 `/api/settings/*` 封锁不变。
+配置适用于全站，原子写入持久卷的 `operator/market.env`（0600），保存后立即重建共享行情栈；worker 按文件 mtime 在任务批次前同步，无需重启。恢复集包含该文件，须按密钥文件保护。
+
+### DSH 开发运行时
+
+DSH Chat 只接受 development 环境下的显式启用，production 配置拒绝启动该路径。
+Node Host 使用固定受信插件、私有临时 home、最小环境和核验后的工具库存；不加载 Shell、通用写文件、动态安装、MCP、子 Agent 或额外日志上传。
+业务调用绑定服务端 run/tenant/generation/account/manifest，经过本轮 callable 和最新授权；草案不能通过直接 registry 执行变成写入。
+工具、模型、原生网页的内部接口各用独立凭证；模型输入不能指定执行身份，供应商密钥不交给 DSH。
+当前 Web 原生网页能力仅允许显式授权的 fixture；受信插件与 Cordis scope 不构成恶意代码沙箱。
+断流、取消或缺少真实 usage 保留未知费用，执行停止事实与费用状态分开。无法证明排空或保存失败时阻断继续执行，不自动重放。
+真实供应商、生产网络/进程隔离、删除恢复与持久 Session 尚需后续验收，详见 [DSH 研究计划](./dsh-plugin-platform-research-plan.md)。
+
+### 订阅门禁运营开关
+
+`HOSTED_ENTITLEMENT_REQUIRED=false` 时，试用窗口与付费权益缺失/过期不再阻断租户业务写和 worker 后台任务（策略运行、报告生成、盯盘）；身份、租户隔离、配额与预算约束不变。默认 `true`，仅在没有启用订阅收费的部署中显式关闭。
 - 建议与交易继续分离；自动证券交易禁止，trade不进入MCP/模型/通用Web路由；人工登记已完成成交仍走既有专用契约。
 - Tenant目录使用opaque ID、owner/generation/schema manifest与私有权限，拒绝符号链接越界。
   应用进程可访问挂载的多个租户，因此不将此当作用户代码OS沙箱。

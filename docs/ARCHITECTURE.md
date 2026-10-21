@@ -400,7 +400,8 @@ binding 用必填 `observationOf(result, input)` 把已 resolve 的结果分类�
 HTTP 管道在 `eastmoney/client.ts`，URL 模板与字段映射保留在各域目录的纯函数中，本类只做
 方法委托。CLI/MCP/Web 三个组装根先创建一次实例，再经各 factory 的 `deps.sources.eastmoney`
 分发共享；Web 行情源热更新只改来源顺序时复用同一实例，仅重建 market manager 与直接依赖
-market 的 sentiment manager。
+market 的 sentiment manager。托管部署的全站数据源配置由管理员写入持久卷
+`operator/market.env`：Web 保存后立即重建共享行情栈，worker 按文件 mtime 在任务批次前同步。
 
 `MarketDataManager` 构造时必须传入 `MarketSourceRegistry`，不存在接受 provider 宽接口的兼容
 构造路径，也不得在 Registry 之外临时实例化隐藏来源。新增或替换来源时，在
@@ -456,7 +457,7 @@ GET 只返回 provider、模型参数及 `apiKeyConfigured`，永不返回密钥
 配置损坏时 Web 使用 `ai-unconfigured` 占位端口启动，允许用户从设置页修复；其它
 surface 仍保持启动期快速失败。
 
-Web 对话复用同一个 `AISDKAgentRuntime`，由 adapters 内部
+Web 对话默认复用同一个 `AISDKAgentRuntime`，由 adapters 内部
 `ToolLoopAgent.stream()` + `createAgentUIStreamResponse()` 生成 AI SDK UI Message
 SSE；Web 只提供从 registry 派生的显式工具白名单并消费标准 Web `Response`，core
 不依赖 AI SDK 类型。写工具在聊天中是仅返回待确认描述的虚拟草案调用，只有用户在
@@ -470,6 +471,19 @@ tools 读写当前账户的持久化历史，`POST /api/chat` 只接收本轮 us
 执行结果随原消息传回模型，用户文本中的“已执行”不作为凭据。对话和确认都要求 write + external
 显式开启，流与确认请求沿用所选账户 header。SDK 服务端消费流以保存取消后的部分回答，完成时记录用量。
 多个 Watchlist 成员统一由 `add_watchlist_members` 生成单个原子草案，避免重复确认和部分写入。
+
+托管开发环境另有显式启用的 DSH Chat 路径：Bun Web → 独立 Node Host → DSH/Cordis。
+`packages/dsh-bridge` 提供纯协议入口和 Node 插件入口，`apps/agent-runtime` 管理受限 Profile 与子进程；
+业务工具回到 Web 的私有 Gateway 执行本轮 callable closures，保持原白名单、草案与错误语义。
+官方网页工具在 Runtime 内执行，Web 首批仅授权受控网页 fixture。此接入不使用 MCP，也不加载 DSH Web UI。
+DSH 模型请求通过独立鉴权的 Bun 代理复用 hosted ledger；共享模型传输逐块转发 SSE 并读取尾部 usage，
+未知费用不记零。主模型、工具和原生能力使用不同 audience 的本轮凭证，真实供应商密钥留在 Bun。
+
+DSH 当前每轮从 Luoome 的可信历史重建临时 Session，历史超过既有窗口时明确拒绝，尚无持久 Session 恢复。
+实时事件和持久消息按 Agent/message/attempt 身份合并为现有 UI Message Stream；同会话在执行及回答保存期间保持占用。
+停止必须核对 Host 退出、Gateway 实际调用排空，再收尾保存与费用；失败不自动切换运行时重跑。
+开发开关、固定产物与启动命令见 [DSH 运行底座](../infra/dsh/README.md)，任务与验收边界见
+[开发任务](./dsh-plugin-platform-development-plan.md)。生产配置拒绝启用此路径，不能把受控集成通过当作生产隔离或真实供应商验收。
 
 AI 协作首页通过 `/api/workspace` 聚合独立 ToolResult，区分事实摘要、方向研究、共识与实际跟踪。
 聊天主体经服务端 tools 核对当前账户、持仓内容哈希、不可变计划版本与时效；已核验引用和时间随问题持久化，
@@ -1164,6 +1178,11 @@ Web 启动不再按 `LUOOME_MODE` 分流，统一通过身份、control/Tenant �
 浏览器按实际请求 Host（含端口）与配置的传输协议校验同源 Origin，代理保留原始 Host；PUBLIC_ORIGIN 用于通知链接，不限定访问域名或端口。
 CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
 登录页通过匿名只读 `/api/auth/config` 获取邮件配置、注册及传输开关，不读取用户身份或部署凭证。
+
+HostedAISettingsStore 在托管持久卷保存全站 AI 配置，不复用读取个人 home 的单机 AISettingsStore。
+认证入口提供管理员专用配置路由，普通用户不能访问。配置保存不调用供应商。
+每次 Web 请求和 worker 任务在 createTenantContext 中固定配置快照，再创建 AI SDK stack 与计量器。
+管理员设置 OpenAI 兼容端点、模型和费率；计量层检查确切端点和模型并禁止重定向，按真实 usage 结算，保留额度和租户隔离。
 
 身份、订阅、Job、用量、投递和支付放在 `control.sqlite`；私人业务分别落入各Tenant的SQLite。
 core的`hosted/`只定义实体与不变量；db的memory/Drizzle实现共享contract tests。每个hosted Tenant

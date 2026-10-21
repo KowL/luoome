@@ -8,6 +8,7 @@ import { money, reportScopeKey, type ToolContext, type ToolResult } from '@luoom
 import { hashSessionToken } from '@luoome/tools/platform';
 import { runHostedOperations } from '../../worker/src/operations.js';
 import type { ChatStreamRuntime } from './chat.js';
+import { HostedAISettingsStore } from './hosted-ai-settings.js';
 import { createHostedBackup } from './hosted-backup.js';
 import { openHostedService } from './hosted-composition.js';
 import { loadHostedConfig } from './hosted-config.js';
@@ -37,6 +38,9 @@ const harness = (
     transportOrigin?: string;
     registrationEnabled?: boolean;
     adminEmails?: string;
+    entitlementRequired?: boolean;
+    marketSettings?: import('./market-settings.js').MarketSettingsStore;
+    marketSettingsReload?: () => void;
   } = {},
 ) => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-hosted-http-'));
@@ -58,11 +62,18 @@ const harness = (
     LUOOME_EXPOSE_EXTERNAL: input.exposeExternal === false ? 'false' : 'true',
     HOSTED_REGISTRATION_ENABLED: input.registrationEnabled === false ? 'false' : 'true',
     ...(input.adminEmails === undefined ? {} : { HOSTED_ADMIN_EMAILS: input.adminEmails }),
+    ...(input.entitlementRequired === false ? { HOSTED_ENTITLEMENT_REQUIRED: 'false' } : {}),
   });
   const service = openHostedService(config, undefined, () => now);
   cleanups.push(service.close);
+  const aiSettings = new HostedAISettingsStore(root, {});
   const app = createHostedWebApp({
     config,
+    aiSettings,
+    ...(input.marketSettings === undefined ? {} : { marketSettings: input.marketSettings }),
+    ...(input.marketSettingsReload === undefined
+      ? {}
+      : { marketSettingsReload: input.marketSettingsReload }),
     repos: service.repos,
     runtimes: service.runtimes,
     maintenance: service.maintenance,
@@ -147,6 +158,7 @@ const harness = (
   };
   return {
     service,
+    aiSettings,
     app,
     config,
     root,
@@ -1606,6 +1618,82 @@ describe('hosted original Web subscription integration', () => {
       (await h.request('/api/subscription/orders', 'GET', undefined, current.cookie)).result.ok,
     ).toBe(true);
   });
+
+  test('operator-disabled entitlement gate keeps business writes open after trial expiry', async () => {
+    const h = harness({ productPolicy: 'hosted-web-v2', entitlementRequired: false });
+    const auth = await h.login('free@example.invalid');
+    await runHostedWorkerOnce(h.service);
+    const original = await h.service.repos.subscriptions.currentEntitlement({
+      tenantId: auth.tenant.id,
+      now: h.now(),
+    });
+    if (original === null) throw new Error('missing trial');
+    h.advance(original.period.endsAt.getTime() - h.now().getTime() + 1);
+    const current = await h.relogin('free@example.invalid');
+    expect(
+      await h.service.repos.subscriptions.currentEntitlement({
+        tenantId: auth.tenant.id,
+        now: h.now(),
+      }),
+    ).toBeNull();
+    const write = await h.request(
+      '/api/tools/update_account/call',
+      'POST',
+      { input: { name: 'still open' } },
+      current.cookie,
+      current.csrf,
+    );
+    expect(write.result).toMatchObject({ ok: true });
+  });
+
+  test('hosted web v2 opens market settings to admins and applies saves through reload', async () => {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'luoome-hosted-market-'));
+    cleanups.push(() => rmSync(storeRoot, { recursive: true, force: true }));
+    const { MarketSettingsStore } = await import('./market-settings.js');
+    let reloaded = 0;
+    const h = harness({
+      productPolicy: 'hosted-web-v2',
+      adminEmails: 'admin@example.invalid',
+      marketSettings: new MarketSettingsStore(
+        {},
+        { secretPath: join(storeRoot, 'operator', 'market.env') },
+      ),
+      marketSettingsReload: () => {
+        reloaded += 1;
+      },
+    });
+    const admin = await h.login('admin@example.invalid');
+    const member = await h.login('member@example.invalid');
+    await runHostedWorkerOnce(h.service);
+    await runHostedWorkerOnce(h.service);
+    const deniedRead = await h.request('/api/settings/market', 'GET', undefined, member.cookie);
+    expect(deniedRead.response.status).toBe(403);
+    expect(deniedRead.result).toMatchObject({ ok: false, error: { required: 'hosted:admin' } });
+    const view = await h.request('/api/settings/market', 'GET', undefined, admin.cookie);
+    expect(view.result.ok).toBe(true);
+    expect(view.result.ok && Array.isArray(view.result.data.sources)).toBe(true);
+    const saved = await h.request(
+      '/api/settings/market',
+      'POST',
+      { sources: ['eastmoney'] },
+      admin.cookie,
+      admin.csrf,
+    );
+    expect(saved.result).toMatchObject({ ok: true, data: { applied: true } });
+    expect(saved.result.ok && (saved.result.data as { activeOrder: string[] }).activeOrder).toEqual(
+      ['eastmoney'],
+    );
+    expect(reloaded).toBe(1);
+    const deniedWrite = await h.request(
+      '/api/settings/market',
+      'POST',
+      { sources: ['eastmoney'] },
+      member.cookie,
+      member.csrf,
+    );
+    expect(deniedWrite.response.status).toBe(403);
+    expect(reloaded).toBe(1);
+  });
 });
 
 test.each(['completion', 'client cancellation'] as const)(
@@ -1805,5 +1893,61 @@ describe('hosted admin console boundary', () => {
       boss.cookie,
     );
     expect(csrfMissing.response.status).toBe(403);
+  });
+});
+
+describe('administrator AI configuration', () => {
+  test('only administrators can read or save, with Origin and CSRF protection and no secret echo', async () => {
+    const h = harness({ adminEmails: 'admin-ai@example.invalid' });
+    const member = await h.login('member-ai@example.invalid');
+    const admin = await h.login('admin-ai@example.invalid');
+    const path = '/api/admin/ai-settings';
+    const input = {
+      settings: { ...h.aiSettings.read().settings, enabled: true },
+      apiKey: 'fixture-route-secret',
+    };
+    expect((await h.request(path)).response.status).toBe(401);
+    expect((await h.request(path, 'GET', undefined, member.cookie)).response.status).toBe(403);
+    expect((await h.request(path, 'POST', input, member.cookie, member.csrf)).response.status).toBe(
+      403,
+    );
+    expect((await h.request(path, 'POST', input, admin.cookie)).response.status).toBe(403);
+    expect(
+      (
+        await h.request(path, 'POST', input, admin.cookie, admin.csrf, {
+          origin: 'https://foreign.invalid',
+        })
+      ).response.status,
+    ).toBe(403);
+    expect(h.aiSettings.snapshot()).toBeUndefined();
+    const saved = await h.request(path, 'POST', input, admin.cookie, admin.csrf);
+    expect(saved.response.status).toBe(200);
+    expect(JSON.stringify(saved.result)).not.toContain(input.apiKey);
+    const read = await h.request(path, 'GET', undefined, admin.cookie);
+    expect(read.result.ok && read.result.data.apiKeyConfigured).toBe(true);
+    expect(JSON.stringify(read.result)).not.toContain(input.apiKey);
+    expect(read.response.headers.get('cache-control')).toBe('no-store');
+    const bad = await h.request(
+      path,
+      'POST',
+      { ...input, settings: { ...input.settings, baseURL: 'invalid-secret-value' } },
+      admin.cookie,
+      admin.csrf,
+    );
+    expect(bad.response.status).toBe(400);
+    expect(JSON.stringify(bad.result)).not.toContain('invalid-secret-value');
+    expect(JSON.stringify(bad.result)).not.toContain(input.apiKey);
+    expect(h.aiSettings.snapshot()?.model).toBe(input.settings.model);
+    const backup = `${h.root}-ai-backup`;
+    cleanups.push(() => rmSync(backup, { recursive: true, force: true }));
+    await createHostedBackup({
+      dataRoot: h.root,
+      destination: backup,
+      gate: h.service.maintenance,
+      clock: h.now,
+    });
+    const restored = new HostedAISettingsStore(backup, {});
+    expect(restored.read().apiKeyConfigured).toBe(true);
+    expect(restored.snapshot()?.model).toBe(input.settings.model);
   });
 });

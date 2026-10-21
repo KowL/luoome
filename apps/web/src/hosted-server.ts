@@ -60,6 +60,7 @@ import {
 } from '@luoome/tools/platform';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
+import type { HostedAISettingsStore } from './hosted-ai-settings.js';
 import type { HostedConfig } from './hosted-config.js';
 import { bindHostedDefaultAccount } from './hosted-context.js';
 import type { TenantRuntimeLease, TenantRuntimeManager } from './hosted-runtime.js';
@@ -83,6 +84,9 @@ type Variables = {
 };
 
 export interface CreateHostedWebAppOptions {
+  readonly aiSettings?: HostedAISettingsStore;
+  readonly marketSettings?: import('./market-settings.js').MarketSettingsStore;
+  readonly marketSettingsReload?: () => void;
   readonly config: HostedConfig;
   readonly repos: PlatformRepositoryRegistry;
   readonly runtimes: TenantRuntimeManager;
@@ -414,6 +418,7 @@ export const createHostedWebApp = (
       c.set('invocation', {
         context,
         identity,
+        entitlementRequired: config.entitlementRequired,
         entitlement: await options.repos.subscriptions.currentEntitlement({
           tenantId: tenant.id,
           now: clock(),
@@ -736,6 +741,31 @@ export const createHostedWebApp = (
       );
     }),
   );
+  app.get('/api/admin/ai-settings', (c) => {
+    if (adminPlatform(c) === null) return hostedJsonResult(denied('hosted:admin'));
+    if (!options.aiSettings) return hostedJsonResult(denied('hosted:ai-settings-unavailable'));
+    return hostedJsonResult({ ok: true, data: options.aiSettings.read() });
+  });
+  app.post(
+    '/api/admin/ai-settings',
+    post(async (input, c) => {
+      if (adminPlatform(c) === null) return hostedJsonResult(denied('hosted:admin'));
+      if (!config.exposeWrite) return hostedJsonResult(denied('capability:write'));
+      if (!options.aiSettings) return hostedJsonResult(denied('hosted:ai-settings-unavailable'));
+      try {
+        return hostedJsonResult({ ok: true, data: options.aiSettings.save(input) });
+      } catch {
+        return hostedJsonResult({
+          ok: false,
+          error: {
+            kind: 'invalid_input',
+            message: '保存失败，请检查模型地址、密钥、费率和预算；更换供应商地址需重新填写密钥。',
+            issues: [],
+          },
+        });
+      }
+    }),
+  );
   app.get('/api/admin/users', async (c) => {
     const ctx = adminPlatform(c);
     if (ctx === null) return hostedJsonResult(denied('hosted:admin'));
@@ -937,7 +967,11 @@ export const createHostedWebApp = (
   );
   if (config.productPolicyVersion === 'hosted-web-v2') {
     app.use('/api/*', async (c, next) => {
-      if (
+      // 数据源设置对管理员放开（全站共享配置）；其余平台级设置仍不向租户开放。
+      if (/^\/api\/settings\/market(?:\/|$)/.test(c.req.path)) {
+        if (!config.adminEmails.includes(c.get('auth').user.emailKey))
+          return hostedJsonResult(denied('hosted:admin'));
+      } else if (
         /^\/api\/(?:settings(?:\/|$)|data\/(?:categories|import|export)$|account\/select$)/.test(
           c.req.path,
         )
@@ -962,6 +996,12 @@ export const createHostedWebApp = (
     const businessApp = createWebApp(undefined, {
       exposeWrite: config.exposeWrite,
       exposeExternal: config.exposeExternal,
+      ...(options.marketSettings === undefined
+        ? {}
+        : { marketSettingsStore: options.marketSettings }),
+      ...(options.marketSettingsReload === undefined
+        ? {}
+        : { marketSettingsReload: options.marketSettingsReload }),
       hosted: {
         request: (c) => ({
           context: contextForHostedWebTools(c.get('invocation'), {

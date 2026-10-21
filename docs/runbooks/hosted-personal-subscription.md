@@ -31,6 +31,7 @@ CLI 在存在 `HOSTED_DATA_ROOT` 时拒绝打开单机业务库；单机工具�
 | `HOSTED_PRODUCT_POLICY` | 默认且公开启动只接受 `hosted-web-v2`，无需设置 |
 | `HOSTED_PROVIDER_MODE` | `fixture` 仅开发；生产必须 `configured` |
 | `HOSTED_PLAN_FILE` | 内置装配必填，绝对 JSON 路径，符合 `PlanVersionSchema`；套餐由运营审核 |
+| `HOSTED_ENTITLEMENT_REQUIRED` | 默认 `true`；未启用订阅收费的部署可显式 `false`，权益缺失/过期不再阻断业务写与后台任务 |
 | `HOSTED_JOB_BUDGET_MICRO` | 内置装配必填，单任务成本预算，正整数微元 |
 | `HOSTED_PROVIDERS_MODULE` | 可选可信运营代码的绝对路径；覆盖内置装配 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_FROM` | SMTP 主机、端口（默认 465）、单一发件邮箱 |
@@ -82,6 +83,10 @@ v2 通过可选 `createTenantContext(base)` 补全租户专用的 LLM/Agent、�
 ```text
 HOSTED_DATA_ROOT/
   control.sqlite                 身份、订阅、任务、计量、投递和支付元数据
+  operator/
+    plan.json                    套餐定义（部署提供）
+    ai-settings.json             管理员 AI 配置（含密钥）
+    market.env                   管理员行情数据源配置（含密钥）
   tenants/<opaque-tenant-id>/
     identity.json                owner、generation、schemaVersion
     luoome.db                    私人业务事实、输入、回执和 outbox
@@ -100,11 +105,24 @@ HOSTED_DELETION_LEDGER_ROOT/      不随业务备份回退的删除 tombstone
 配置位于 [deploy/hosted](../../deploy/hosted/compose.yaml)。生产参考文件为
 [production.env.example](../../deploy/hosted/production.env.example)，需由运营替换占位符、审核并固定镜像版本。
 `operator/plan.json`、`secrets/hosted-auth-key` 与 `secrets/smtp-password` 由部署管理提供，均不进入 Git。
-SMTP 尚未配置时提供空密码文件并保持 `SMTP_HOST` 为空。AI 如需开启，应额外挂载只读模型文件、
-设置 `LUOOME_AI_CONFIG` 并注入相应供应商密钥；仅修改开关不会自动发现个人配置。
+SMTP 尚未配置时提供空密码文件并保持 `SMTP_HOST` 为空。管理员可登录“管理 → AI 服务配置”，
+填写 OpenAI 兼容 API 地址、模型、密钥、人民币 Token 费率和预算，并启用服务。
+配置原子写入持久卷的 `operator/ai-settings.json`（目录 0700、文件 0600），包含密钥，不得复制到 Git 或日志。
+管理员配置优先于环境 AI 开关；Web 和 worker 在新请求或任务上下文中读取，无需重启。运行中的调用保留原配置快照。
+尚无管理员配置时保留环境装配：显式模型文件与凭据，仅支持既有 DeepSeek Flash 计量。
+保存配置不会测试连接或自动调用模型。费用按管理员填写的费率和真实用量记录，不代表供应商账单；订阅会员配额不适用按 Token 的人民币费率。
+供应商缺少缓存用量时，仅在缓存与普通输入同价时可结算；缺失必需用量仍保留 unknown。
+管理员还可在“设置 → 数据源”调整全站行情源开关与排序并测试连通性；配置原子写入持久卷的
+`operator/market.env`（0600），保存后立即重建共享行情栈，worker 按文件 mtime 同步，均无需重启。
+该文件包含数据源密钥，不得复制到 Git 或日志。
+股票目录（stock universe）不读 `operator/market.env`，仍由启动环境装配：默认 `LUOOME_STOCK_UNIVERSE_SOURCES=eastmoney,sina`，
+可选 `tushare`（需在部署 env 提供 `TUSHARE_TOKEN`，可选 `TUSHARE_URL`）；生产如遇单一源不可达，按实际出口调整顺序。
+全市场盘后数据准备受请求协调器限流：`LUOOME_MARKET_REQUESTS_PER_WINDOW`（默认 30/分钟/源）与
+`LUOOME_MARKET_FAILURE_COOLDOWN_MS`（默认 60000）按出口与供应商配额调整；冷启动全市场缓存需要多轮周期逐步预热。
+恢复集包含管理员 AI 配置与行情数据源配置文件，须按密钥文件保护。
 应用进程为 UID/GID 1000，根文件系统只读、移除 Linux capabilities，只有 Caddy 发布 80/443。
 80 端口用于 ACME HTTP 校验与 HTTPS 跳转，业务请求通过 443 反向代理；应用 5173 不对外发布。
-真实 provider 的凭证应由其部署 secret 管理读取，不能写在 providers 源码或浏览器设置里。
+真实 provider 的凭证由部署 secret 或管理员专属配置提供，不能写在 providers 源码中；普通用户无权查看或修改。
 
 ```sh
 docker compose --env-file /absolute/operator/production.env -f deploy/hosted/compose.yaml config --quiet

@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json bun.lock tsconfig.base.json ./
 COPY packages ./packages
 COPY apps ./apps
+COPY infra/dsh ./infra/dsh
 RUN bun --no-env-file install --frozen-lockfile --ignore-scripts
 RUN bun --no-env-file run build
 

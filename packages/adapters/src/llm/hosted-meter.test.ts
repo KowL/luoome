@@ -14,6 +14,7 @@ import {
 import { buildTestContext } from '../../../tools/src/testing/context.js';
 import type { AISDKAgentRuntime } from './agent-runtime.js';
 import { createHostedLLMExecution, hostedDeepSeekPricing } from './hosted-meter.js';
+import { hostedLLMHash } from './hosted-model-transport.js';
 import { createAIStackFromEnv } from './stack.js';
 
 export const fixtureCatalog = {
@@ -57,6 +58,7 @@ const setup = async (
     init?: Parameters<typeof fetch>[1],
   ) => Promise<Response>,
   budgets: Partial<Parameters<typeof createHostedLLMExecution>[0]> = {},
+  catalog: unknown = fixtureCatalog,
 ) => {
   let now = new Date('2026-10-10T01:00:00Z');
   const clock = () => now;
@@ -119,7 +121,7 @@ const setup = async (
         { LUOOME_AI_CONFIG: '/fixture/models.json', DEEPSEEK_API_KEY: 'fixture-only-not-a-secret' },
         {
           fetchImpl,
-          readFile: () => JSON.stringify(fixtureCatalog),
+          readFile: () => JSON.stringify(catalog),
           logger: ctx.logger,
           fallback: 'throw',
         },
@@ -205,6 +207,84 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
     ]);
     const reservation = await h.platform.ctx.repos.jobs.findReservation(entries[0]!.operationId);
     expect(JSON.stringify(reservation)).not.toContain('private-investment-marker');
+  });
+  it('真实 SDK Agent 工具往返保留 function 声明、tool_calls 与 tool 消息，逐请求结算', async () => {
+    let calls = 0;
+    const execute = vi.fn(async (input: unknown) => ({ ok: true, output: { input, price: 100 } }));
+    const h = await setup(async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      if (++calls === 1) {
+        expect(request.tools).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: 'function',
+              function: expect.objectContaining({ name: 'lookup' }),
+            }),
+          ]),
+        );
+        const body = (await response({}, 'fixture-tool-receipt').json()) as Record<string, unknown>;
+        return Response.json({
+          ...body,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'fixture-call',
+                    type: 'function',
+                    function: { name: 'lookup', arguments: '{"stockId":"600519.SH"}' },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        });
+      }
+      expect(request.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: 'assistant',
+            tool_calls: expect.arrayContaining([expect.objectContaining({ id: 'fixture-call' })]),
+          }),
+          expect.objectContaining({ role: 'tool', tool_call_id: 'fixture-call' }),
+        ]),
+      );
+      return response({ value: 'tool-complete' }, 'fixture-final-receipt');
+    });
+    const result = await h.execution.run(
+      'agent_run',
+      { message: 'fixture-tool-roundtrip' },
+      h.ctx,
+      async (scoped) => {
+        if (!scoped.agent) throw new Error('fixture agent missing');
+        return scoped.agent.run({
+          instructions: 'Query the fixture once and return JSON.',
+          prompt: 'Use lookup.',
+          outputSchema: z.object({ value: z.string() }),
+          tools: [
+            {
+              name: 'lookup',
+              description: 'Fixture quote',
+              inputSchema: z.object({ stockId: z.string() }),
+              execute,
+            },
+          ],
+        });
+      },
+    );
+    expect(result.output).toEqual({ value: 'tool-complete' });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(h.fetchImpl).toHaveBeenCalledTimes(2);
+    expect((await h.platform.ctx.repos.llm.costs())[0]).toMatchObject({
+      confirmedAttempts: 2,
+      confirmedMicro: 5608,
+      unknownAttempts: 0,
+    });
+    expect(await h.platform.ctx.repos.jobs.listUsage({ tenantId: h.tenant.id })).toHaveLength(1);
   });
   it('供应商 429 的 SDK 重试每次记录，拒绝成本为零不伪装模型成功', async () => {
     let calls = 0;
@@ -321,6 +401,23 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
     expect(await h.platform.ctx.repos.jobs.listUsage({ tenantId: h.tenant.id })).toHaveLength(0);
     expect(await h.run()).toMatchObject({ value: 'ok' });
     expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(await h.platform.ctx.repos.jobs.listUsage({ tenantId: h.tenant.id })).toHaveLength(1);
+  });
+  it('HTTP 回放先保存、usage 写入失败时保留 unknown，重启补全回执而不重复发送', async () => {
+    const h = await setup(async () => response());
+    const complete = vi.spyOn(h.platform.ctx.repos.llm, 'complete');
+    complete.mockRejectedValueOnce(new Error('fixture usage storage unavailable'));
+    await expect(h.run()).rejects.toThrow('usage_unknown');
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+    expect((await h.platform.ctx.repos.llm.costs())[0]?.unknownAttempts).toBe(1);
+    expect(await h.platform.ctx.repos.jobs.listUsage({ tenantId: h.tenant.id })).toHaveLength(0);
+    expect(await h.run()).toMatchObject({ value: 'ok' });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+    expect((await h.platform.ctx.repos.llm.costs())[0]).toMatchObject({
+      unknownAttempts: 0,
+      confirmedAttempts: 1,
+      confirmedMicro: 2804,
+    });
     expect(await h.platform.ctx.repos.jobs.listUsage({ tenantId: h.tenant.id })).toHaveLength(1);
   });
   it('已确认 token 缺失时成本保持 unknown，不按零 tokens 结算', async () => {
@@ -639,5 +736,124 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
     expect(hostedDeepSeekPricing(new Date('2026-10-10T02:00:00Z')).inputMicroPerMillion).toBe(
       1_000_000,
     );
+  });
+});
+
+describe('operator-configured OpenAI-compatible models', () => {
+  const pricing = () => ({
+    version: 'fixture-operator-v1',
+    provider: 'kimi',
+    model: 'kimi-fixture',
+    currency: 'CNY' as const,
+    inputMicroPerMillion: 20_000_000,
+    cachedInputMicroPerMillion: 20_000_000,
+    outputMicroPerMillion: 100_000_000,
+  });
+  const catalog = {
+    ...fixtureCatalog,
+    providers: {
+      kimi: {
+        ...fixtureCatalog.providers.deepseek,
+        baseURL: 'https://provider.example.invalid/v1',
+      },
+    },
+    profiles: {
+      generation: { ...fixtureCatalog.profiles.generation, model: 'kimi:kimi-fixture' },
+      agent: { ...fixtureCatalog.profiles.agent, model: 'kimi:kimi-fixture' },
+    },
+  };
+  const provider = {
+    endpoint: 'https://provider.example.invalid/v1/chat/completions',
+    model: 'kimi-fixture',
+    pricing,
+  };
+  it('uses configured endpoint/model and frozen tariff without inventing cache discounts', async () => {
+    const h = await setup(
+      async (url, init) => {
+        expect(String(url)).toBe(provider.endpoint);
+        expect(JSON.parse(init!.body as string).model).toBe(provider.model);
+        expect(init?.redirect).toBe('error');
+        const body = (await response().json()) as {
+          usage: { prompt_cache_hit_tokens?: number };
+          [key: string]: unknown;
+        };
+        delete body.usage.prompt_cache_hit_tokens;
+        return Response.json({ ...body, model: provider.model });
+      },
+      { provider },
+      catalog,
+    );
+    expect((await h.run()).value).toBe('ok');
+    const costs = await h.platform.ctx.repos.llm.costs();
+    expect(costs[0]).toMatchObject({
+      confirmedMicro: 70000,
+      inputTokens: 1000,
+      outputTokens: 500,
+      unknownAttempts: 0,
+    });
+  });
+  it('recovers legacy operator HTTP receipts using their saved attempt tariff without sending again', async () => {
+    const h = await setup(async () => response(), { provider }, catalog);
+    vi.spyOn(h.platform.ctx.repos.llm, 'complete').mockRejectedValueOnce(
+      new Error('fixture storage failure'),
+    );
+    await expect(h.run()).rejects.toThrow('usage_unknown');
+    const body = h.fetchImpl.mock.calls[0]?.[1]?.body;
+    if (typeof body !== 'string') throw new Error('fixture request missing');
+    const legacyRequestHash = hostedLLMHash(JSON.parse(body));
+    const find = h.ctx.repos.workflowRun.findById.bind(h.ctx.repos.workflowRun);
+    vi.spyOn(h.ctx.repos.workflowRun, 'findById').mockImplementation(async (id) => {
+      const row = await find(id);
+      if (!row?.outputSummary || !id.includes(':http:')) return row;
+      const outputSummary: Record<string, unknown> = {
+        ...row.outputSummary,
+        requestHash: legacyRequestHash,
+      };
+      delete outputSummary.endpoint;
+      delete outputSummary.model;
+      return { ...row, outputSummary };
+    });
+    expect(await h.run()).toMatchObject({ value: 'ok' });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+    expect((await h.platform.ctx.repos.llm.costs())[0]).toMatchObject({
+      unknownAttempts: 0,
+      confirmedAttempts: 1,
+      confirmedMicro: 70000,
+    });
+  });
+  it('keeps missing cache usage unknown when the configured tariff distinguishes cache tokens', async () => {
+    const h = await setup(
+      async () => {
+        const body = (await response().json()) as {
+          usage: { prompt_cache_hit_tokens?: number };
+          [key: string]: unknown;
+        };
+        delete body.usage.prompt_cache_hit_tokens;
+        return Response.json(body);
+      },
+      {
+        provider: {
+          ...provider,
+          pricing: () => ({ ...pricing(), cachedInputMicroPerMillion: 1_000_000 }),
+        },
+      },
+      catalog,
+    );
+    await expect(h.run()).rejects.toThrow('hosted_llm:usage_unknown');
+    expect((await h.platform.ctx.repos.llm.costs())[0]?.unknownAttempts).toBe(1);
+  });
+  it('rejects a model or endpoint outside the captured configuration before network access', async () => {
+    for (const change of [
+      { model: 'other-model' },
+      { endpoint: 'https://different.invalid/chat/completions' },
+    ]) {
+      const h = await setup(
+        async () => response(),
+        { provider: { ...provider, ...change } },
+        catalog,
+      );
+      await expect(h.run()).rejects.toThrow('hosted_llm:provider_failed');
+      expect(h.fetchImpl).not.toHaveBeenCalled();
+    }
   });
 });

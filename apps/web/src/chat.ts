@@ -49,14 +49,32 @@ export interface ChatStreamRuntime {
     readonly instructions: string;
     readonly uiMessages: readonly unknown[];
     readonly tools: readonly AgentCallableTool[];
+    readonly execution?: {
+      readonly context: ToolContext;
+      readonly runId: string;
+      readonly conversationId: string;
+      readonly scenario: AgentScenario;
+      readonly historyTruncated: boolean;
+      readonly retainRuntime?: () => () => void;
+    };
     readonly abortSignal?: AbortSignal;
     readonly onFinish?: (message: {
       readonly id: string;
       readonly parts: readonly Record<string, unknown>[];
       /** 流被中断（客户端取消/断开）时为 true；parts 为已收到的部分。 */
       readonly cancelled: boolean;
+      readonly executionStopped?: boolean;
     }) => Promise<void> | void;
   }): Promise<Response>;
+}
+
+export class ChatRuntimeRejection extends Error {
+  constructor(
+    message: string,
+    readonly status = 409,
+  ) {
+    super(message);
+  }
 }
 
 interface ChatContextSummary {
@@ -423,6 +441,14 @@ const createChatStreamResponseImpl = async (
       instructions: buildInstructions(context, scenario, resolved.data),
       uiMessages,
       tools,
+      execution: {
+        context: ctx,
+        runId: crypto.randomUUID(),
+        conversationId: parsed.data.sessionId,
+        scenario,
+        historyTruncated: previousMessages.length + 1 > MAX_MESSAGES,
+        ...(retainRuntime === undefined ? {} : { retainRuntime }),
+      },
       ...(abortSignal === undefined ? {} : { abortSignal }),
       onFinish: async (message) => {
         try {
@@ -452,27 +478,43 @@ const createChatStreamResponseImpl = async (
               messageIdLength: message.id.length,
               partTypes: parts.map((part) => part.type),
             });
+            throw new Error('助手回答保存失败；请读取会话核对，未保存草案不可确认。');
           }
         } finally {
-          release?.();
+          if (message.executionStopped !== false) release?.();
         }
       },
     });
   } catch (error) {
-    release?.();
-    await appendTool.execute(
-      {
-        sessionId: parsed.data.sessionId,
-        role: 'assistant',
-        parts: [
-          {
-            type: 'data-luoome-stream-error',
-            data: { message: '模型未完成回答，请显式重试或继续讨论；不代表没有机会。' },
-          },
-        ],
-      },
-      ctx,
-    );
+    const message =
+      error instanceof ChatRuntimeRejection
+        ? error.message
+        : '模型未完成回答，请显式重试或继续讨论；不代表没有机会。';
+    try {
+      await appendTool.execute(
+        {
+          sessionId: parsed.data.sessionId,
+          role: 'assistant',
+          parts: [
+            {
+              type: 'data-luoome-stream-error',
+              data: { message },
+            },
+          ],
+        },
+        ctx,
+      );
+    } finally {
+      release?.();
+    }
+    if (error instanceof ChatRuntimeRejection)
+      return Response.json(
+        {
+          ok: false,
+          error: { kind: 'llm_error', provider: 'dsh', cause: message, retryable: false },
+        },
+        { status: error.status },
+      );
     throw error;
   }
   response.headers.set('x-luoome-chat-session-id', parsed.data.sessionId);

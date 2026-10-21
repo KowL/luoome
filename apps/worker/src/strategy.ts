@@ -30,6 +30,7 @@ export const runHostedStrategyPass = async (
     service.config.productPolicyVersion !== 'hosted-web-v2'
   )
     return summary;
+  service.providers.syncMarketSettings?.();
   const activity = service.maintenance.enter('worker-strategy');
   if (activity === null) return summary;
   const platform = service.platformContext({
@@ -80,13 +81,15 @@ export const runHostedStrategyPass = async (
         const entitlement = data(
           await getWorkerHostedEntitlementTool.execute({ tenantId: tenant.id }, platform),
         );
+        const entitlementRequired = service.config.entitlementRequired;
+        const entitled = entitlement !== null || !entitlementRequired;
         const invocation: HostedInvocation = {
-          context:
-            entitlement !== null
-              ? await bindHostedDefaultAccount(base, service.providers.createTenantContext)
-              : base,
+          context: entitled
+            ? await bindHostedDefaultAccount(base, service.providers.createTenantContext)
+            : base,
           identity,
           entitlement: null,
+          entitlementRequired,
           capabilities: {
             write: service.config.exposeWrite,
             external: service.config.exposeExternal,
@@ -98,7 +101,7 @@ export const runHostedStrategyPass = async (
           currentEntitlement: async () =>
             data(await getWorkerHostedEntitlementTool.execute({ tenantId: tenant.id }, platform)),
         };
-        if (entitlement === null || (await authorizeHostedWebRequest(invocation, true)) !== null) {
+        if (!entitled || (await authorizeHostedWebRequest(invocation, true)) !== null) {
           continue;
         }
         const result = await hostedStrategyWorkflow.run({}, contextForHostedWebTools(invocation));

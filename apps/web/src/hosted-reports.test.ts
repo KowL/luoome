@@ -14,7 +14,7 @@ const cleanup: Array<() => void> = [];
 afterEach(() => {
   for (const close of cleanup.splice(0).reverse()) close();
 });
-const setup = () => {
+const setup = (envExtras: Record<string, string> = {}) => {
   const root = mkdtempSync(join(tmpdir(), 'luoome-ds3-'));
   cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   let now = new Date('2026-10-15T01:00:00Z');
@@ -29,6 +29,7 @@ const setup = () => {
     HOSTED_REGISTRATION_ENABLED: 'true',
     LUOOME_EXPOSE_WRITE: 'true',
     LUOOME_EXPOSE_EXTERNAL: 'true',
+    ...envExtras,
   });
   let service = openHostedService(config, undefined, () => now);
   cleanup.push(() => service.close());
@@ -166,6 +167,28 @@ test('concurrent report workers and a service restart preserve private reports, 
   h.advance(60_000);
   expect(await h.pass('after-restart')).toMatchObject({ created: 0, accepted: 0 });
   expect(calls).toHaveLength(1);
+});
+
+test('订阅门禁关闭后试用到期仍生成报告', async () => {
+  const h = setup({ HOSTED_ENTITLEMENT_REQUIRED: 'false' });
+  const auth = await h.login('ds3-free@example.invalid');
+  h.advance(8 * 86_400_000);
+  expect(
+    await h.service().repos.subscriptions.currentEntitlement({
+      tenantId: auth.tenantId,
+      now: h.service().clock(),
+    }),
+  ).toBeNull();
+  const result = await h.pass('worker-free');
+  expect(result.created).toBe(1);
+  const lease = await h.privateRepos(auth.tenantId);
+  try {
+    const reports = await lease.runtime.repos.report.list({});
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.kind).toBe('opening');
+  } finally {
+    lease.release();
+  }
 });
 
 test.each(['expired', 'suspended'] as const)(

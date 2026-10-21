@@ -4,7 +4,7 @@
 'use strict';
 
 import { initAISettings, renderAISettings } from './ai-settings.js';
-import { callApi, getAccountId, isHostedMode, setAccountId } from './api.js';
+import { callApi, getAccountId, getHostedSession, isHostedMode, setAccountId } from './api.js';
 import { initChat, refreshChat } from './chat.js';
 import { invalidateDashboardMarket, renderDashboardMarketBlocks } from './dashboard-market.js';
 import { initDataTransfer, renderDataTransfer } from './data-transfer.js';
@@ -308,7 +308,12 @@ const settingsTab = (hash = window.location.hash) => {
   const tab =
     new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ??
     (isHostedMode() ? 'subscription' : 'ai');
-  if (isHostedMode() && !['subscription', 'notify', 'system'].includes(tab)) return 'subscription';
+  // 托管模式仅开放订阅/通知/系统；管理员额外开放全站数据源设置。
+  const hostedTabs =
+    getHostedSession()?.admin === true
+      ? ['subscription', 'notify', 'system', 'market']
+      : ['subscription', 'notify', 'system'];
+  if (isHostedMode() && !hostedTabs.includes(tab)) return 'subscription';
   return SETTINGS_TABS.includes(tab) ? tab : 'ai';
 };
 

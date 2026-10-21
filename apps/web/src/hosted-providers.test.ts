@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -123,6 +123,41 @@ describe('production Web providers', () => {
     expect(() => createHostedProviders({ ...config, registrationEnabled: true }, env)).toThrow(
       'SMTP',
     );
+  });
+
+  it('rebuilds the shared market stack when operator market settings change', async () => {
+    const { config, env } = setup();
+    // 请求协调器在装配时捕获 fetch，必须先装 mock 再建 providers。
+    const hosts: string[] = [];
+    const fetchMock = spyOn(globalThis, 'fetch').mockImplementation((async (
+      input: Parameters<typeof fetch>[0],
+    ) => {
+      hosts.push(new URL(input instanceof Request ? input.url : String(input)).hostname);
+      return new Response('not-a-quote-payload', { status: 200 });
+    }) as unknown as typeof fetch);
+    try {
+      const providers = createHostedProviders(config, {
+        ...env,
+        LUOOME_MARKET_SOURCES: 'eastmoney',
+      });
+      if (
+        providers.marketSettings === undefined ||
+        providers.reloadMarketSettings === undefined ||
+        providers.syncMarketSettings === undefined
+      )
+        throw new Error('market settings surface missing');
+      expect(providers.marketSettings.read().activeOrder).toEqual(['eastmoney']);
+      await providers.market.fetchQuote('002594.SZ').catch(() => {});
+      providers.marketSettings.save({ sources: ['tencent'] });
+      providers.reloadMarketSettings();
+      expect(providers.marketSettings.read().activeOrder).toEqual(['tencent']);
+      // 不同股票避开协调器缓存/冷却，确保第二次真正发起上游请求
+      await providers.market.fetchQuote('600519.SH').catch(() => {});
+      expect(hosts.some((host) => host.endsWith('eastmoney.com'))).toBe(true);
+      expect(hosts.some((host) => host.endsWith('gtimg.cn') || host.endsWith('qq.com'))).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('keeps tenant repositories and identity while leaving absent AI explicitly unavailable', async () => {
@@ -260,4 +295,40 @@ describe('SMTP environment boundary', () => {
       }),
     ).toThrow('invalid service configuration');
   });
+});
+
+test('administrator changes apply to existing Web and worker providers without restart', async () => {
+  const { config, env } = setup();
+  const configured = { ...config, exposeWrite: true, exposeExternal: true };
+  const web = createHostedProviders(configured, env);
+  const worker = createHostedProviders(configured, env);
+  const service = openHostedService(configured, web);
+  const otherService = openHostedService(configured, worker);
+  try {
+    const base = buildContext({
+      repos: createInMemoryRepos(),
+      adapters: {
+        market: web.market,
+        llm: {
+          name: 'unused',
+          generate: async () => {
+            throw new Error('unused');
+          },
+        },
+      },
+      user: { id: 'fixture', defaultAccountId: '' },
+    });
+    expect(web.createTenantContext?.(base).adapters.llm.name).toBe('ai-unconfigured');
+    web.aiSettings!.save({
+      settings: { ...web.aiSettings!.read().settings, enabled: true },
+      apiKey: 'fixture-live-reload-key',
+    });
+    expect(web.createTenantContext?.(base).agent?.name).toBe('hosted-metered:deepseek-flash');
+    expect(worker.createTenantContext?.(base).agent?.name).toBe('hosted-metered:deepseek-flash');
+    web.aiSettings!.save({ settings: { ...web.aiSettings!.read().settings, enabled: false } });
+    expect(worker.createTenantContext?.(base).agent).toBeUndefined();
+  } finally {
+    otherService.close();
+    service.close();
+  }
 });
