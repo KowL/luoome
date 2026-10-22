@@ -4,14 +4,13 @@
 //   LUOOME_HOME（默认 ~/.luoome）/luoome.db
 //   → createDrizzleRepos（bun:sqlite driver，仅 Bun 运行时可加载本模块）
 //   → 空库保持为空
-//   → 真实行情 adapter + 真实 LLM（均要求显式 env 配置）
+//   → 真实行情 adapter（要求显式 env 配置；LLM 已随 DSH 改造移出单机）
 //   → buildContext
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
   createDragonTigerManagerFromEnv,
   createFileAuditLogger,
@@ -94,18 +93,14 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
     sources,
   });
   const fundamentalData = createFundamentalDataAdapterFromEnv(process.env);
-  let ai: ReturnType<typeof createAIStackFromEnv> | undefined;
-  try {
-    ai = createAIStackFromEnv(process.env, { logger });
-  } catch (error) {
-    logger.warn('AI 模型尚未配置；CLI 将以配置模式继续（需要 AI 的命令会明确失败）', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  // DSH 改造（docs/ddd/luoome-dsh-transformation-detailed-design.md 线 B）：单机不再内置
+  // 模型推理，分析类 tool 在 CLI 明确失败；推理由 DSH 消费端经事实包契约执行。
   const unavailableLLM = {
-    name: 'ai-unconfigured',
+    name: 'local-ai-removed',
     generate: async (): Promise<never> => {
-      throw new Error('AI 模型尚未配置，请先配置 LUOOME_AI_CONFIG 与对应密钥');
+      throw new Error(
+        '单机不再内置模型推理（DSH 改造）：请通过 DSH 会话/待分析队列执行分析，本 tool 仅提供事实与写回',
+      );
     },
   };
   const limitUpLadder = createLimitUpLadderManagerFromEnv(process.env, {
@@ -160,9 +155,8 @@ export const createCliContext = async (): Promise<CliContextHandle> => {
         clock: now,
         logger,
       }),
-      llm: ai?.llm ?? unavailableLLM,
+      llm: unavailableLLM,
     },
-    ...(ai === undefined ? {} : { agent: ai.agent }),
     portfolioBenchmark: {
       stockId:
         process.env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() ||

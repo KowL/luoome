@@ -123,7 +123,6 @@ const setup = async (
           fetchImpl,
           readFile: () => JSON.stringify(catalog),
           logger: ctx.logger,
-          fallback: 'throw',
         },
       ),
   });
@@ -316,7 +315,6 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
             fetchImpl,
             readFile: () => JSON.stringify(catalog),
             logger: h.ctx.logger,
-            fallback: 'throw',
           },
         ),
     });

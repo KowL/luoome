@@ -1,13 +1,13 @@
 // @luoome/tui 入口：startTuiApp(ctx?)（CLI 懒加载调用的契约名，startTui 为别名）+ 直接运行启动。
 // ctx 缺省构造与其他 surface 一致：LUOOME_HOME/luoome.db（默认 ~/.luoome）+
-// createDrizzleRepos（空库保持为空）+ 真实行情 factory + 真实 LLM + buildContext。
+// createDrizzleRepos（空库保持为空）+ 真实行情 factory + buildContext。
+// DSH 改造后单机不再内置模型推理（llm 为明确失败的 stub）。
 
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  createAIStackFromEnv,
   createFileAuditLogger,
   createMarketAdapterFromEnv,
   createResearchRemoteDocumentAdapter,
@@ -39,15 +39,23 @@ interface DefaultContextHandle {
 }
 
 /**
- * 默认 ctx：真实 SQLite（LUOOME_HOME/luoome.db）+ 显式配置的真实行情/LLM。
+ * 默认 ctx：真实 SQLite（LUOOME_HOME/luoome.db）+ 显式配置的真实行情。
  * 空数据库保持为空，不自动插入示例记录。
+ * DSH 改造后单机不再内置模型推理：llm 为明确失败的 stub，分析交给 DSH 消费端。
  */
 const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
   const home = process.env.LUOOME_HOME ?? join(homedir(), '.luoome');
   mkdirSync(home, { recursive: true });
   const handle = createDrizzleRepos(join(home, 'luoome.db'));
   const logger = createSilentLogger();
-  const ai = createAIStackFromEnv(process.env, { logger });
+  const unavailableLLM = {
+    name: 'local-ai-removed',
+    generate: async (): Promise<never> => {
+      throw new Error(
+        '单机不再内置模型推理（DSH 改造）：请通过 DSH 会话/待分析队列执行分析，本 tool 仅提供事实与写回',
+      );
+    },
+  };
   const accounts = await handle.repos.account.list();
   const defaultAccountId = process.env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const ctx = buildContext({
@@ -59,9 +67,8 @@ const buildDefaultContext = async (): Promise<DefaultContextHandle> => {
       stockUniverse: createStockUniverseManagerFromEnv(process.env, {
         logger,
       }),
-      llm: ai.llm,
+      llm: unavailableLLM,
     },
-    agent: ai.agent,
     portfolioBenchmark: {
       stockId:
         process.env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() ||

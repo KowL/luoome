@@ -1,7 +1,9 @@
 // @luoome/mcp —— MCP server 的 ToolContext 组装（docs/archive/plan.md 跨包契约 + docs/archive/MVP-TASK.md §2.6）。
 //
 // 数据路径：LUOOME_HOME 环境变量（默认 ~/.luoome）下的 luoome.db。
-// 空库保持为空；行情与 LLM 均要求显式配置真实 provider。
+// 空库保持为空；行情要求显式配置真实 provider。
+// DSH 改造后单机不再内置模型推理：llm 为明确失败的 stub，MCP 可在零 AI 配置下启动
+// （docs/ddd/luoome-dsh-transformation-detailed-design.md §4.3 只读面）。
 //
 // 运行时约束：本模块 import @luoome/db 桶导出（传递引用 bun:sqlite driver），
 // 只允许在纯 Bun 运行时下加载（MCP server 正是如此）。
@@ -11,7 +13,6 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  createAIStackFromEnv,
   createAShareSentimentManagerFromEnv,
   createFileAuditLogger,
   createMarketAdapterFromEnv,
@@ -54,7 +55,7 @@ const createStderrLogger = (): Logger => {
 /**
  * 组装 server 用 ToolContext：
  * createDrizzleRepos（内部已 ensureSchema，这里再显式调一次保持幂等可见）
- * → 真实行情 factory + LLMManager → buildContext（from @luoome/tools）。
+ * → 真实行情 factory + LLM stub → buildContext（from @luoome/tools）。
  */
 export const createServerContext = async (
   env: NodeJS.ProcessEnv = process.env,
@@ -66,7 +67,15 @@ export const createServerContext = async (
   // 幂等（CREATE TABLE IF NOT EXISTS）；createDrizzleRepos 内部已调一次，重复调用安全。
   ensureSchema(handle.db);
   const logger = createStderrLogger();
-  const ai = createAIStackFromEnv(env, { logger });
+  // DSH 改造线 B：单机不再内置模型推理；MCP 只读面不依赖 AI 配置即可启动。
+  const unavailableLLM = {
+    name: 'local-ai-removed',
+    generate: async (): Promise<never> => {
+      throw new Error(
+        '单机不再内置模型推理（DSH 改造）：请通过 DSH 会话/待分析队列执行分析，本 tool 仅提供事实与写回',
+      );
+    },
+  };
   const accounts = await handle.repos.account.list();
   const defaultAccountId = env.LUOOME_DEFAULT_ACCOUNT_ID?.trim() || accounts[0]?.id || '';
   const now = (): Date => new Date();
@@ -100,9 +109,8 @@ export const createServerContext = async (
         clock: now,
         logger,
       }),
-      llm: ai.llm,
+      llm: unavailableLLM,
     },
-    agent: ai.agent,
     portfolioBenchmark: {
       stockId:
         env.LUOOME_PORTFOLIO_BENCHMARK_STOCK_ID?.trim() || DEFAULT_PORTFOLIO_BENCHMARK_STOCK_ID,

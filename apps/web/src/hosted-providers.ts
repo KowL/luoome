@@ -168,7 +168,6 @@ export const createHostedProviders = (
     createAIStackFromEnv(initialAI.env, {
       readFile: () => JSON.stringify(initialAI.catalog),
       logger: console,
-      fallback: 'throw',
     });
   const scopedAI = (base: ToolContext): Partial<ToolContext> => {
     const activeAI = aiSettings.snapshot();
@@ -215,7 +214,6 @@ export const createHostedProviders = (
         const stack = createAIStackFromEnv(activeAI.env, {
           readFile: () => JSON.stringify(activeAI.catalog),
           fetchImpl,
-          fallback: 'throw',
           logger: {
             debug: () => {},
             info: () => {},
