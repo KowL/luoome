@@ -107,3 +107,133 @@ test('an existing Anthropic address remains readable and can be corrected with a
   expect(restarted.snapshot()?.endpoint).toBe('https://api.minimax.cn/v1/chat/completions');
   expect(restarted.snapshot()?.env.HOSTED_AI_API_KEY).toBe('fixture-reentered-key');
 });
+
+test('provider drafts preserve the active model, credentials and concurrent edits across restarts', () => {
+  const { root, store } = setup();
+  store.save({ settings: { ...store.read().settings, enabled: true }, apiKey: 'fixture-deepseek' });
+  const initial = store.read();
+  const model = {
+    ...initial.providers[0]?.models[0],
+    id: 'MiniMax-M3.1-Flash',
+    name: 'MiniMax Flash',
+  };
+  const added = store.mutate({
+    action: 'save-provider',
+    revision: initial.revision,
+    provider: {
+      id: 'minimax',
+      name: 'MiniMax',
+      baseURL: 'https://api.minimax.cn/v1',
+      models: [model],
+    },
+    apiKey: 'fixture-minimax',
+  });
+  expect(added.providers).toHaveLength(2);
+  expect(store.snapshot()?.model).toBe('deepseek-flash');
+  expect(JSON.stringify(added)).not.toContain('fixture-minimax');
+  expect(() =>
+    store.mutate({ action: 'remove-provider', revision: initial.revision, providerId: 'minimax' }),
+  ).toThrow('其他页面');
+  store.mutate({
+    action: 'select-model',
+    revision: added.revision,
+    providerId: 'minimax',
+    modelId: model.id,
+    enabled: true,
+    callBudget: 1,
+    periodBudget: 20,
+  });
+  const restarted = new HostedAISettingsStore(root, {});
+  expect(restarted.snapshot()?.model).toBe(model.id);
+  expect(restarted.snapshot()?.env.HOSTED_AI_API_KEY).toBe('fixture-minimax');
+  expect(restarted.read().providers).toHaveLength(2);
+  expect(() =>
+    restarted.mutate({
+      action: 'remove-provider',
+      revision: restarted.read().revision,
+      providerId: 'minimax',
+    }),
+  ).toThrow('正在使用');
+});
+
+test('provider edits require a new key for a changed host and keep invalid writes atomic', () => {
+  const { root, store } = setup();
+  store.save({ settings: { ...store.read().settings, enabled: true }, apiKey: 'fixture-old-key' });
+  const view = store.read();
+  const first = view.providers[0];
+  if (!first) throw new Error('Expected saved provider');
+  const { apiKeyConfigured: _, ...provider } = first;
+  const before = readFileSync(join(root, 'operator', 'ai-settings.json'), 'utf8');
+  for (const edited of [
+    { ...provider, baseURL: 'https://different.invalid/v1' },
+    { ...provider, models: [...provider.models, provider.models[0]] },
+    { ...provider, models: [] },
+  ]) {
+    expect(() =>
+      store.mutate({ action: 'save-provider', revision: view.revision, provider: edited }),
+    ).toThrow();
+    expect(readFileSync(join(root, 'operator', 'ai-settings.json'), 'utf8')).toBe(before);
+  }
+  store.mutate({
+    action: 'save-provider',
+    revision: view.revision,
+    provider: { ...provider, name: 'Renamed' },
+  });
+  expect(store.snapshot()?.env.HOSTED_AI_API_KEY).toBe('fixture-old-key');
+});
+
+test('model discovery uses the draft endpoint without saving and never forwards a stored key to another host', async () => {
+  const { root } = setup();
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  const store = new HostedAISettingsStore(root, {}, async (url, init) => {
+    requests.push({ url, init });
+    return Response.json({
+      data: [{ id: 'model-a', name: 'Model A' }, { id: 'model-a' }, { id: 'model-b' }],
+    });
+  });
+  store.save({
+    settings: { ...store.read().settings, enabled: true },
+    apiKey: 'fixture-discovery-key',
+  });
+  const revision = store.read().revision;
+  expect(
+    await store.discoverModels({ providerId: 'deepseek', baseURL: 'https://api.deepseek.com' }),
+  ).toEqual({
+    models: [
+      { id: 'model-a', name: 'model-a' },
+      { id: 'model-b', name: 'model-b' },
+    ],
+  });
+  expect(requests[0]?.url).toBe('https://api.deepseek.com/models');
+  expect(requests[0]?.init.redirect).toBe('error');
+  expect(new Headers(requests[0]?.init.headers).get('authorization')).toBe(
+    'Bearer fixture-discovery-key',
+  );
+  await expect(
+    store.discoverModels({ providerId: 'deepseek', baseURL: 'https://other.invalid/v1' }),
+  ).rejects.toThrow('当前 API 地址');
+  expect(requests).toHaveLength(1);
+  await store.discoverModels({ baseURL: 'https://other.invalid/v1', apiKey: 'fixture-draft-key' });
+  expect(requests[1]?.url).toBe('https://other.invalid/v1/models');
+  expect(store.read().revision).toBe(revision);
+  expect(store.read().providers).toHaveLength(1);
+});
+
+test('discovery rejects oversized, malformed and secret-bearing responses without echoing provider data', async () => {
+  const { root } = setup();
+  for (const response of [
+    () => Response.json({ data: [{ id: 'fixture-echo-key' }] }),
+    () =>
+      new Response(
+        JSON.stringify({ data: [{ id: 'fixture-echo-key' }] }).replace('fixture', '\\u0066ixture'),
+      ),
+    () => new Response('fixture-echo-key', { status: 401 }),
+    () => new Response('x'.repeat(1_048_577)),
+    () => Response.json({ error: 'private upstream detail' }),
+  ]) {
+    const store = new HostedAISettingsStore(root, {}, async () => response());
+    await expect(
+      store.discoverModels({ baseURL: 'https://models.invalid/v1', apiKey: 'fixture-echo-key' }),
+    ).rejects.not.toThrow('fixture-echo-key');
+  }
+});

@@ -772,6 +772,37 @@ export const createHostedWebApp = (
       }
     }),
   );
+  for (const action of ['catalog', 'models'] as const) {
+    app.post(
+      `/api/admin/ai-settings/${action}`,
+      post(async (input, c) => {
+        if (adminPlatform(c) === null) return hostedJsonResult(denied('hosted:admin'));
+        if (!config.exposeWrite) return hostedJsonResult(denied('capability:write'));
+        if (action === 'models' && !config.exposeExternal)
+          return hostedJsonResult(denied('capability:external'));
+        if (!options.aiSettings) return hostedJsonResult(denied('hosted:ai-settings-unavailable'));
+        try {
+          const data =
+            action === 'models'
+              ? await options.aiSettings.discoverModels(input)
+              : options.aiSettings.mutate(input);
+          return hostedJsonResult({ ok: true, data });
+        } catch (error) {
+          return hostedJsonResult({
+            ok: false,
+            error: {
+              kind: 'invalid_input',
+              message:
+                error instanceof HostedAISettingsValidationError
+                  ? error.message
+                  : '配置处理失败，请稍后重试',
+              issues: [],
+            },
+          });
+        }
+      }),
+    );
+  }
   app.get('/api/admin/users', async (c) => {
     const ctx = adminPlatform(c);
     if (ctx === null) return hostedJsonResult(denied('hosted:admin'));

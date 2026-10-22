@@ -344,10 +344,17 @@ export const initializeHostedSession = async () => {
     document.querySelector('.topbar-meta').append(logout);
     document.getElementById('btn-account-create')?.closest('.card').remove();
     document.querySelector('.vault-settings-card')?.remove();
-    // 数据源是全站共享配置，仅管理员保留入口；AI/数据面板仍不对租户开放。
-    for (const tab of me.data.admin === true ? ['ai', 'data'] : ['ai', 'market', 'data']) {
+    // 模型和数据源属于全站配置，普通租户不能读取供应商与密钥状态。
+    for (const tab of me.data.admin === true ? ['data'] : ['ai', 'market', 'data']) {
       document.querySelector(`[data-settings-tab="${tab}"]`)?.remove();
       document.querySelector(`[data-settings-pane="${tab}"]`)?.remove();
+    }
+    if (me.data.admin === true) {
+      const models = document.createElement('section');
+      models.id = 'hosted-ai-models';
+      models.dataset.settingsPane = 'ai';
+      models.hidden = true;
+      document.getElementById('ai-settings-form').replaceWith(models);
     }
     const subscriptionNav = document.createElement('a');
     subscriptionNav.href = '#settings?tab=subscription';

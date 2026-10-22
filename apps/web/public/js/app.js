@@ -12,6 +12,7 @@ import { renderDragonTiger, teardownDragonTiger } from './dragon-tiger.js';
 import { initFeishuSettings, renderFeishuSettings } from './feishu-settings.js';
 import { initHoldingsActions, openAddHoldingModal } from './holdings-actions.js';
 import { renderHostedAdmin } from './hosted-admin.js';
+import { renderHostedAISettings } from './hosted-admin-ai.js';
 import { initializeHostedSession } from './hosted-session.js';
 import { renderHostedNotifications, renderHostedSubscription } from './hosted-settings.js';
 import { renderIndicesPage, teardownIndices } from './indices.js';
@@ -308,10 +309,10 @@ const settingsTab = (hash = window.location.hash) => {
   const tab =
     new URLSearchParams(hash.split('?')[1] ?? '').get('tab') ??
     (isHostedMode() ? 'subscription' : 'ai');
-  // 托管模式仅开放订阅/通知/系统；管理员额外开放全站数据源设置。
+  // 全站模型和数据源配置仅向管理员开放。
   const hostedTabs =
     getHostedSession()?.admin === true
-      ? ['subscription', 'notify', 'system', 'market']
+      ? ['subscription', 'notify', 'system', 'market', 'ai']
       : ['subscription', 'notify', 'system'];
   if (isHostedMode() && !hostedTabs.includes(tab)) return 'subscription';
   return SETTINGS_TABS.includes(tab) ? tab : 'ai';
@@ -332,6 +333,8 @@ const renderSettingsTab = async (setStatus, tab) => {
     await renderHostedSubscription(setStatus);
   } else if (isHostedMode() && tab === 'notify') {
     await renderHostedNotifications(setStatus);
+  } else if (isHostedMode() && tab === 'ai') {
+    await renderHostedAISettings(document.getElementById('hosted-ai-models'));
   } else if (tab === 'ai') {
     initAISettings(setStatus);
     await renderAISettings(setStatus);

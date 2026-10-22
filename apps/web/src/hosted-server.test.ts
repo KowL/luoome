@@ -1897,6 +1897,44 @@ describe('hosted admin console boundary', () => {
 });
 
 describe('administrator AI configuration', () => {
+  test('catalog and model discovery endpoints enforce administrator, Origin and CSRF boundaries', async () => {
+    const h = harness({ adminEmails: 'catalog-admin@example.invalid' });
+    const member = await h.login('catalog-member@example.invalid');
+    const admin = await h.login('catalog-admin@example.invalid');
+    for (const action of ['catalog', 'models']) {
+      const path = `/api/admin/ai-settings/${action}`;
+      expect((await h.request(path, 'POST', {})).response.status).toBe(401);
+      expect((await h.request(path, 'POST', {}, member.cookie, member.csrf)).response.status).toBe(
+        403,
+      );
+      expect((await h.request(path, 'POST', {}, admin.cookie)).response.status).toBe(403);
+      expect(
+        (
+          await h.request(path, 'POST', {}, admin.cookie, admin.csrf, {
+            origin: 'https://foreign.invalid',
+          })
+        ).response.status,
+      ).toBe(403);
+    }
+    const result = await h.request(
+      '/api/admin/ai-settings/catalog',
+      'POST',
+      {
+        action: 'select-model',
+        revision: h.aiSettings.read().revision,
+        providerId: '',
+        modelId: '',
+        enabled: false,
+        callBudget: 1,
+        periodBudget: 20,
+      },
+      admin.cookie,
+      admin.csrf,
+    );
+    expect(result.response.status).toBe(200);
+    expect(result.response.headers.get('cache-control')).toBe('no-store');
+  });
+
   test('reports actionable validation errors without echoing input or changing saved settings', async () => {
     const h = harness({ adminEmails: 'admin-ai@example.invalid' });
     const admin = await h.login('admin-ai@example.invalid');
