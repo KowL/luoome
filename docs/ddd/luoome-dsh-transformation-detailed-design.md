@@ -912,6 +912,12 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | Q8 | provenance 是否记录完整生成参数 | A. 只记 model；B. 记完整参数快照 | B 利于复盘，schema 会膨胀 |
 | Q9 | 线 A 的插件包放哪 | A. 独立仓库；B. luoome 仓库 `plugins/`；C. 用户配置目录 | A，避免与领域仓库耦合 |
 | Q10 | 托管 Chat 是否也切内嵌 DSH Runtime | A. 先保留 AI SDK；B. 同步切换 | A，先验证分析消费者 |
+| Q11 | 消费者面（L1）的写面收窄机制 | A. 维持 `LUOOME_EXPOSE_WRITE=true` + allowlist；B. 消费者实例默认 deny + 显式 allow；C. 队列工具声明独立 capability，不占 write 组 | B 或 C；A 漏配即写面全开，默认方向不对（评审 §13.3-1） |
+| Q12 | 交互式建议的审计等价物（Q2/Q3 对齐） | A. 不建 job，但交互 context 持久化、不随 30 分钟过期清理；B. 交互式也建轻量 job | A；否则 context 过期后 provenance 审计链断裂（评审 §13.3-3） |
+| Q13 | 双消费者（DSH skill / 托管 worker）同账户竞争 claim 的分工 | A. 先到先得；B. 按 kind 或来源划分配额 | A，claim 互斥已保证不重复消费，但需在 §5.6 写明这是期望语义（评审 §13.3-7） |
+| Q14 | 托管 Chat 直连 `ai-runtime` 的架构例外 | A. 作为显式例外写入 `docs/ARCHITECTURE.md` 与 `check-layers.ts` 白名单；B. Chat 也改经 `ToolContext` | A，Chat 是托管产品能力，例外合理但必须落笔（评审 §13.3-8） |
+| Q15 | `enqueue_analysis_job`「只进 `WorkflowToolMap`、不进 `toolRegistry`」的注册机制 | A. P2 前置 spike 验证现有 tools 包能否支持；B. 直接进 registry，MCP 侧再过滤 | A，该机制不存在时 P2 的 1.5–2 周估算偏紧（评审 §13.3-5） |
+| Q16 | 线 A 验收的前置条件 | A. 验收条款写明宿主常驻与 DSH 版本下限，节假日静默退出纳入判定口径；B. 维持现状 | A，否则「连续 3 交易日产出」与「非交易日零输出」无法同周同时满足（评审 §13.3-4） |
 
 ## 12. 附录
 
@@ -1011,7 +1017,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 - §7 P0 写「确认 Q1/Q4/Q5（已完成）」，但 §1.4 中 Q5 的表述是「P5 删除」，两处口径一致即可，建议 P0 行补一句「Q2/Q3/Q6/Q7/Q8 沿用默认值进入实施」。（已落实：§7 P0 行已补充。）
 - §12.2 术语表建议补「消费者面 / 只读面」两个词，§4.3 与 §5.4.4 都在用但没有定义条目。（已落实：§12.2 已补充两条。）
 
-另：§13.3 中三条可在文档层面直接落实的意见也已并入正文——§5.6.5 增加 `claimExpiredNotRecycled` 指标说明（对应 §13.3-2），§8 contract 测试表增加「complete 与 enqueue 并发竞争」用例（对应 §13.3-6），§4.6 增加 skill 的 `context_expired` 重试约定（对应 §13.3-9）。其余意见（消费者面默认 deny、Q2/Q3 默认值对齐、双消费者分工、ARCHITECTURE.md 例外条款、P2 注册机制验证、线 A 验收前置条件）涉及设计取舍或排期，仍需文档 owner 决策后落笔。
+另：§13.3 中三条可在文档层面直接落实的意见也已并入正文——§5.6.5 增加 `claimExpiredNotRecycled` 指标说明（对应 §13.3-2），§8 contract 测试表增加「complete 与 enqueue 并发竞争」用例（对应 §13.3-6），§4.6 增加 skill 的 `context_expired` 重试约定（对应 §13.3-9）。其余 6 条涉及设计取舍或排期的意见已整理为 §11 待决问题 Q11–Q16（消费者面默认 deny、Q2/Q3 默认值对齐、双消费者分工、ARCHITECTURE.md 例外条款、P2 注册机制验证、线 A 验收前置条件），待文档 owner 逐条拍板。
 
 ### 13.5 评审结论
 
@@ -1022,6 +1028,6 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 数据模型与状态机（§5.3、§5.7） | 通过，补 §13.3-6 的并发测试用例 |
 | Tool 契约（§5.4） | 通过，建议落实 §13.3-1 的消费者暴露机制 |
 | 实施分期（§7） | 通过，P2 增加注册机制验证任务 |
-| 待决问题默认值 | Q2/Q3 默认值需按 §13.3-3 对齐后再进入 P2 |
+| 待决问题默认值 | Q2/Q3 默认值需对齐后再进入 P2（已并入 Q12 待拍板） |
 
 评审人：Kimi（代码 Agent），评审日期：2026-10-22，评审基线：`main` 分支工作树（`b8b2318`）。
