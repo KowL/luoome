@@ -6,7 +6,7 @@
 > 上位设计：[Luoome × DSH 插件能力平台设计](./dsh-plugin-platform-design.md)（DSH 负责 Agent 执行，Luoome 拥有业务事实、身份、权限、确认、任务与成本账本）。
 > 本文定位：把「单机接入 DSH」「领域层去 AI」「托管消费」三件事整合成一份可评审、可排期的改造总设计。
 > 取代关系：本文整合并取代此前的「DSH 集成设计」草稿与「内置 AI 外置与待分析队列详细设计」；实施完成后，[AI SDK 接入与 LLM 重构设计](./ai-sdk-llm-refactor-design.md) 中「领域内 LLM 调用点不变」的部分退役。
-> 评审状态：Kimi 评审通过（§13），遗留意见已于 2026-10-22 拍板（§14）；二轮复核见 §15（1 个新发现问题待处理）。
+> 评审状态：Kimi 评审通过（§13），遗留意见已于 2026-10-22 拍板（§14）；二轮复核见 §15，新发现问题已由 Kimi 按 owner 授权拍板为 Q17 并落实。
 > 关联：[Agent Loop 技术选型分析](./agent-loop-tech-selection.md)、[Web 对话助手设计](./web-chat-design.md)、[托管个人订阅详细设计](./hosted-personal-subscription-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)、[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)。
 > 影响范围：`core` / `db` / `tools` / `adapters` / `workflows` / `mcp` / `cli` / `tui` / `apps/web` / `apps/worker` / `apps/agent-runtime` / 测试与文档。
 
@@ -75,6 +75,7 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 | Q14 | 托管 Chat 直连 `ai-runtime` 作为显式例外写入 ARCHITECTURE | **已确认（A）** |
 | Q15 | `enqueue_analysis_job` 复用 internal tool 机制（只导出、不进 registry） | **已确认（A，机制已验证）** |
 | Q16 | 线 A 验收写明宿主常驻、DSH 版本下限、节假日静默口径 | **已确认（A）** |
+| Q17 | context 的写回窗口（`write_until`）与审计保留期（`expires_at`）拆分为两个字段 | **已确认（§15.2，Kimi 代为拍板）** |
 
 ### 1.5 目标
 
@@ -441,7 +442,8 @@ research_directions / strategy_version_proposal / strategy_insight_narrative
 | `data_as_of` | integer ms | 事实截止 |
 | `facts_json` / `fact_ids_json` | text json | 结构化事实 / 可引用事实 id |
 | `context_hash` | text | `sha256(canonical(facts_json) + data_as_of)` |
-| `expires_at` | integer ms | 批量：任务终态 + 30 天；交互：180 天（Q12） |
+| `write_until` | integer ms | 写回接受截止：交互 = min（装配后 30 分钟，当交易日 15:00）；批量 = 任务终态（Q17） |
+| `expires_at` | integer ms | 审计保留期，过期后可物理清理；批量：任务终态 + 30 天；交互：180 天（Q12/Q17） |
 | `created_at` | integer ms | — |
 
 事实包通用形状：
@@ -465,7 +467,7 @@ research_directions / strategy_version_proposal / strategy_insight_narrative
 - 每个事实有稳定 `id`，跨多次生成可比较。
 - `dataAsOf` 反映最旧关键事实的时点，而不是装配时刻。
 - `limitations` 必填，至少列出数据缺失/降级。
-- 过期语义：`expires_at` 之后不再接受新的写回，但审计读取仍可按 id 读；交互式 context 不随会话结束清理（Q12）。
+- 过期语义（Q17 拆分）：`write_until` 之后不再接受新的写回（返回 `context_expired`，skill 按 §4.6 重取约定处理）；`expires_at` 只约束审计保留与物理清理，保留期内可按 id 读取。批量任务终态后，`record_advice(contextId)` 直传路径同样拒绝写回（不只靠 job 状态机拦截）。交互式 context 不随会话结束清理（Q12）。
 
 #### 5.3.3 `AnalysisProvenance`
 
@@ -572,7 +574,7 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 
 `SideEffect` 在 P2 从 5 值扩为 6 值（新增 `queue`），P5 删除 `advice` 后回到 5 值。
 
-影响：`resolveAllowedSideEffects` 默认集 `{read, advice}` → `{read}`；需要同步 `packages/core/src/types/side-effect.ts`、`packages/mcp/src/exposure.ts`、`docs/SECURITY.md`、`docs/ARCHITECTURE.md`、`AGENTS.md` 与测试。
+影响：`resolveAllowedSideEffects` 默认集 `{read, advice}` → `{read}`；需要同步 `packages/core/src/types/side-effect.ts`、`packages/mcp/src/exposure.ts`、`docs/SECURITY.md`、`docs/ARCHITECTURE.md`、`AGENTS.md` 与测试。注意 P2 先行一步：新增 `queue` 值时就要同步 `side-effect.ts` 与 `exposure.ts`（解析 `LUOOME_EXPOSE_QUEUE`），不要等到 P5 一起改。
 
 #### 5.4.4 消费者身份与 MCP 实例
 
@@ -590,7 +592,7 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 | job 不存在 | `not_found{entity:'AnalysisJob'}` |
 | job 已终态/不可领 | `invalid_input{message:'job_not_claimable'}` |
 | claim token 或租约失效 | `lease_lost_before_commit` |
-| context 过期/hash 不符 | `invalid_input{message:'context_expired' | 'context_mismatch'}` |
+| context `write_until` 已过/hash 不符 | `invalid_input{message:'context_expired' | 'context_mismatch'}` |
 | 证据 id 不在 `context.factIds` | `invalid_input{message:'unknown_fact_reference', issues}` |
 | advice 不变量不满足 | `invariant_violation` |
 | 重复提交且结果不同 | `invalid_input{message:'duplicate_result'}` |
@@ -740,6 +742,7 @@ CREATE TABLE IF NOT EXISTS analysis_contexts (
   facts_json TEXT NOT NULL,
   fact_ids_json TEXT NOT NULL,
   context_hash TEXT NOT NULL,
+  write_until INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -785,7 +788,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 
 #### 5.8.1 结果校验（领域侧强制）
 
-1. `contextId` 存在、未过期、kind/subject/account 一致；
+1. `contextId` 存在、`write_until` 未过、审计保留期内、kind/subject/account 一致；
 2. 证据 `factIds ⊆ context.fact_ids`；
 3. `dataAsOf` 取 `context.data_as_of`，不采信调用方；
 4. `disclaimers` 由领域注入 `STANDARD_DISCLAIMERS`，调用方多余免责声明保留但不可替换标准三条；
@@ -815,7 +818,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 边界 | 落地 |
 |---|---|
 | trade 永不暴露 | 保持现状；队列 kind 不含 trade；`record_*` 不接受 trade |
-| 写面最小化 | 两个 MCP 实例 + allowlist；消费者实例只开 6 个工具 |
+| 写面最小化 | 两个 MCP 实例；消费者实例默认 deny，只暴露 `queue` capability 工具（当前 7 个，Q11） |
 | 提示词注入 | 事实包中的新闻/研报文本只作为 data，不作为指令 |
 | 数据最小化 | context 只含分析必需字段；账户号、密钥、完整成交明细不进 context |
 | 托管租户隔离 | `account_id` + tenant DB；claim 带租户上下文；worker 不跨租户合并结果 |
@@ -947,6 +950,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | Q14 | 托管 Chat 直连 `ai-runtime` 的架构例外 | A. 作为显式例外写入 `docs/ARCHITECTURE.md` 与 `check-layers.ts` 白名单；B. Chat 也改经 `ToolContext` | **已拍板 A**：ARCHITECTURE 例外条款已落笔（§14） |
 | Q15 | `enqueue_analysis_job`「只进 `WorkflowToolMap`、不进 `toolRegistry`」的注册机制 | A. P2 前置 spike 验证现有 tools 包能否支持；B. 直接进 registry，MCP 侧再过滤 | **已拍板 A**：机制已验证存在（`save_watch_trigger` 先例 + `WorkflowToolMap`）（§14） |
 | Q16 | 线 A 验收的前置条件 | A. 验收条款写明宿主常驻与 DSH 版本下限，节假日静默退出纳入判定口径；B. 维持现状 | **已拍板 A**：已写入 §4.9（§14） |
+| Q17 | context 的写回窗口与审计保留期是否拆分 | A. 合并在一个 `expires_at`；B. 拆为 `write_until`（写回截止）+ `expires_at`（审计保留/清理） | **已拍板 B**（§15.2 指出合并后交互式 180 天内可写回旧事实，与 `stale_context` 意图冲突；由 Kimi 按 owner 授权代为拍板，落笔 §5.3.2/§5.4.5/§5.7.1/§5.8.1） |
 
 ## 12. 附录
 
@@ -975,7 +979,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | provenance | 建议/结果的生成来源元数据 |
 | 死信 | 超过重试上限、不再自动调度的任务 |
 | 只读面 | 默认 MCP 实例（serverName `luoome`），只暴露 read 面，供聊天、看板、研究使用（§4.3、§5.4.4） |
-| 消费者面 | 单独 MCP 实例（serverName `luoome-worker`），按 allowlist 暴露队列消费工具（§4.3、§5.4.4） |
+| 消费者面 | 单独 MCP 实例（serverName `luoome-worker`），按 `queue` capability 暴露队列工具，`LUOOME_EXPOSE_TOOLS` 仅二次收窄（§4.3、§5.4.4，Q11） |
 
 ### 12.3 关键证据索引
 
@@ -1148,7 +1152,16 @@ Q12 的原意是「审计链不因 30 分钟过期而断裂」，要的是**保�
 |---|---|
 | Q11–Q16 拍板与落笔 | 通过 |
 | §14 事实断言 | 抽查全部属实 |
-| 新发现问题 | 1 项（§15.2，写回窗口与审计保留期需拆分），建议作为 Q17 进入 §11 或直接修正 §5.3.2 |
-| 轻微不一致 | 3 处（§15.3），不阻塞 |
+| 新发现问题 | 1 项（§15.2，写回窗口与审计保留期需拆分）——**已拍板为 Q17（拆分为 `write_until` + `expires_at`）并落实**，见 §15.5 |
+| 轻微不一致 | 3 处（§15.3）——已全部修正，见 §15.5 |
 
 评审人：Kimi（代码 Agent），评审日期：2026-10-22，评审基线：`main` 分支工作树（`f6d66f6`）。
+
+### 15.5 处理结果（2026-10-22，Kimi 按 owner 授权代为拍板）
+
+- **Q17 拍板为 B（拆分）**：`AnalysisContext` 新增 `write_until`（写回截止：交互 = min（装配后 30 分钟，当交易日 15:00）；批量 = 任务终态），`expires_at` 回归纯审计保留/清理语义（交互 180 天、批量终态 + 30 天）。落点：§5.3.2 字段表与过期语义、§5.4.5 错误映射、§5.7.1 DDL、§5.8.1 校验第 1 条；§1.4 与 §11 已同步登记 Q17。批量任务终态后的 `record_advice(contextId)` 直传路径也在 §5.3.2 显式拒绝。
+- **§15.3-1 已修正**：§5.9 安全表改为「消费者实例默认 deny，只暴露 `queue` capability 工具（当前 7 个，Q11）」。
+- **§15.3-2 已修正**：§12.2「消费者面」定义改为按 `queue` capability 暴露、allowlist 仅二次收窄。
+- **§15.3-3 已修正**：§5.4.3 影响段落补充 P2 新增 `queue` 值需同步 `side-effect.ts` 与 `exposure.ts`（解析 `LUOOME_EXPOSE_QUEUE`）。
+
+至此 §13 + §15 两轮评审意见全部闭环，文档可进入 P1。
