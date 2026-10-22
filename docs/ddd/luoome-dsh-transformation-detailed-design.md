@@ -106,7 +106,7 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 | `analyze-strategy-candidate.ts:275` | `analyze_strategy_candidate` | advice | `generate-strategy-recommendations.ts:470`、`:616` | preflight 之后才调用 |
 | `strategy-insight.ts:704` | `generate_strategy_insight` | external | `strategy-daily-cycle.ts:759`、`weekly-report.ts:539`、`strategy-autonomy-weekly.ts:325`、`:493` | 2 次生成，失败降级 facts-only |
 | `strategy-proposal.ts:137` | `generate_strategy_version_proposal` | external | `strategy-autonomy-weekly.ts` | workflow-only；2 次生成 |
-| `investment-workspace.ts:206`、`:454` | `research_investment_directions` | advice（组合 write/external） | 用户对话/草案确认 | 研究共识生成 |
+| `investment-workspace.ts:206`、`:454` | `research_investment_directions` | advice | 用户对话/草案确认 | 研究共识生成（内部组合写库与外部数据读取，tool 声明仍为单一 sideEffect） |
 | `agent-run.ts:154` | `agent_run` | external | 用户对话 | `ctx.agent.run`，自定义 agent loop |
 
 ### 2.3 批量管线
@@ -311,6 +311,8 @@ DSH 侧至少注入以下约束（保留原文，便于评审）：
 | `decision-journal` | 用户记录决策 | 落 DecisionReview，保留当时依据与失效条件 |
 
 技能文件放工作区 `.dsh/skills/<name>/SKILL.md`，frontmatter 必填 `name`、`description`；技能正文用 git 管理，版本号用 blob hash 记录进 provenance。
+
+写回约定：凡调用 `record_advice` / `record_analysis_result` / `complete_analysis_job` 的 skill，遇到 `context_expired` / `stale_context` 时必须先用 `get_analysis_context` 重取事实包并重试一次，不得直接放弃或沿用旧事实；重试仍失败才向用户报告。该流程固化在技能正文里，不留给模型自由发挥。
 
 ### 4.7 日程、事件与常驻
 
@@ -660,6 +662,8 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 
 `get_analysis_metrics` 至少返回：`pending/claimed/deadLetter`、`oldestPendingAgeMs`、`completed24h/failed24h`、`byKind`、`avgClaimToCompleteMs`、`deduped24h`、`byGenerator`。
 
+由于租约回收只发生在 `claim` 内（§5.3.5），消费者全部离线时「`claimed` 但租约已过期」的任务不会自动回到 `pending`，`oldestPendingAgeMs` 会低估真实积压。因此 metrics 必须另返回 `claimExpiredNotRecycled`（租约已过期但尚未回收的任务数与最老年龄），看板与告警以该指标覆盖「消费者不在线」场景（§10）。
+
 ### 5.7 数据模型与迁移
 
 #### 5.7.1 DDL（`packages/db/src/client.ts` 的 `ensureSchema`，与 `packages/db/src/schema/index.ts` 手工对齐）
@@ -837,7 +841,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 
 | 阶段 | 范围 | 产出 | 验收 | 回滚 |
 |---|---|---|---|---|
-| **P0 决策冻结（0.5 周）** | 确认 Q1/Q4/Q5（已完成）；冻结新增 `ctx.adapters.llm` 调用；本文评审 | 决策记录、评审意见 | 评审通过 | — |
+| **P0 决策冻结（0.5 周）** | 确认 Q1/Q4/Q5（已完成）；Q2/Q3/Q6/Q7/Q8 沿用 §11 默认值进入实施；冻结新增 `ctx.adapters.llm` 调用；本文评审 | 决策记录、评审意见 | 评审通过 | — |
 | **P1 线 A 最小闭环（1–2 天）** | MCP 只读接入、系统提示、看板面板、工作区分离 | 插件/配置、面板 | §4.9 第 1、4、5 条 | 移除插件行 |
 | **P2 领域实体与工具（1.5–2 周）** | `analysis_job`/`analysis_context` 实体、repo、DDL、12 个 tool、provenance 列 | 新表、双实现、contract tests | §5.10 第 1 条 | 不切换生产者，旧路径不变 |
 | **P3 生产者切换（1–1.5 周）** | daily-advice、recommendations、daily-cycle、weekly-report、autonomy；`LUOOME_ANALYSIS_MODE=inline|queue` | workflow 改造 + 测试 | §5.10 第 2、5 条 | flag 回 inline |
@@ -852,7 +856,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 
 | 类别 | 用例 |
 |---|---|
-| contract（db） | job claim 互斥、租约过期回收、attempts 递增、dedupe 唯一、context 过期、provenance 往返 |
+| contract（db） | job claim 互斥、租约过期回收、attempts 递增、dedupe 唯一、complete 与 enqueue 对同 dedupe_key 的并发竞争、context 过期、provenance 往返 |
 | tool 单元 | enqueue 去重、claim 返回 context、complete 幂等/重复结果冲突、fail 退避、超限 dead_letter、requeue、cancel |
 | 校验 | 未知 factId 拒绝、context 过期拒绝、dataAsOf 不匹配拒绝、免责声明不可替换、validUntil 计算、价格不变量 |
 | workflow | `flag=queue` 时模型调用为 0、入队数正确；cycle 产 job 且状态 pending；report `narrativePending` |
@@ -935,6 +939,8 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 写回 | 把消费者结果经校验后落库的路径 |
 | provenance | 建议/结果的生成来源元数据 |
 | 死信 | 超过重试上限、不再自动调度的任务 |
+| 只读面 | 默认 MCP 实例（serverName `luoome`），只暴露 read 面，供聊天、看板、研究使用（§4.3、§5.4.4） |
+| 消费者面 | 单独 MCP 实例（serverName `luoome-worker`），按 allowlist 暴露队列消费工具（§4.3、§5.4.4） |
 
 ### 12.3 关键证据索引
 
@@ -1001,9 +1007,11 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 
 ### 13.4 微小问题（不阻塞，顺手改）
 
-- §2.2 表中 `investment-workspace.ts` 的 sideEffect 标注为「advice（组合 write/external）」，与该 tool 实测的单一 sideEffect 声明方式不一致，建议注明这是组合语义的口头描述，避免读者去代码里找一个不存在的复合声明。
-- §7 P0 写「确认 Q1/Q4/Q5（已完成）」，但 §1.4 中 Q5 的表述是「P5 删除」，两处口径一致即可，建议 P0 行补一句「Q2/Q3/Q6/Q7/Q8 沿用默认值进入实施」。
-- §12.2 术语表建议补「消费者面 / 只读面」两个词，§4.3 与 §5.4.4 都在用但没有定义条目。
+- §2.2 表中 `investment-workspace.ts` 的 sideEffect 标注为「advice（组合 write/external）」，与该 tool 实测的单一 sideEffect 声明方式不一致，建议注明这是组合语义的口头描述，避免读者去代码里找一个不存在的复合声明。（已落实：§2.2 该行已改为单一 `advice` 声明并在备注说明组合语义。）
+- §7 P0 写「确认 Q1/Q4/Q5（已完成）」，但 §1.4 中 Q5 的表述是「P5 删除」，两处口径一致即可，建议 P0 行补一句「Q2/Q3/Q6/Q7/Q8 沿用默认值进入实施」。（已落实：§7 P0 行已补充。）
+- §12.2 术语表建议补「消费者面 / 只读面」两个词，§4.3 与 §5.4.4 都在用但没有定义条目。（已落实：§12.2 已补充两条。）
+
+另：§13.3 中三条可在文档层面直接落实的意见也已并入正文——§5.6.5 增加 `claimExpiredNotRecycled` 指标说明（对应 §13.3-2），§8 contract 测试表增加「complete 与 enqueue 并发竞争」用例（对应 §13.3-6），§4.6 增加 skill 的 `context_expired` 重试约定（对应 §13.3-9）。其余意见（消费者面默认 deny、Q2/Q3 默认值对齐、双消费者分工、ARCHITECTURE.md 例外条款、P2 注册机制验证、线 A 验收前置条件）涉及设计取舍或排期，仍需文档 owner 决策后落笔。
 
 ### 13.5 评审结论
 
