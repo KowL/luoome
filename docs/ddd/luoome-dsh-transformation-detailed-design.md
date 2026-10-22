@@ -6,7 +6,7 @@
 > 上位设计：[Luoome × DSH 插件能力平台设计](./dsh-plugin-platform-design.md)（DSH 负责 Agent 执行，Luoome 拥有业务事实、身份、权限、确认、任务与成本账本）。
 > 本文定位：把「单机接入 DSH」「领域层去 AI」「托管消费」三件事整合成一份可评审、可排期的改造总设计。
 > 取代关系：本文整合并取代此前的「DSH 集成设计」草稿与「内置 AI 外置与待分析队列详细设计」；实施完成后，[AI SDK 接入与 LLM 重构设计](./ai-sdk-llm-refactor-design.md) 中「领域内 LLM 调用点不变」的部分退役。
-> 评审状态：Kimi 评审通过（§13），遗留意见已于 2026-10-22 拍板（§14）。
+> 评审状态：Kimi 评审通过（§13），遗留意见已于 2026-10-22 拍板（§14）；二轮复核见 §15（1 个新发现问题待处理）。
 > 关联：[Agent Loop 技术选型分析](./agent-loop-tech-selection.md)、[Web 对话助手设计](./web-chat-design.md)、[托管个人订阅详细设计](./hosted-personal-subscription-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)、[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)。
 > 影响范围：`core` / `db` / `tools` / `adapters` / `workflows` / `mcp` / `cli` / `tui` / `apps/web` / `apps/worker` / `apps/agent-runtime` / 测试与文档。
 
@@ -1104,3 +1104,51 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 - [x] `docs/ARCHITECTURE.md` 已补托管 Chat 的 `ai-runtime` 例外条款。
 - [x] Q11–Q16 在 §1.4、§11 与 §14 三处状态一致。
 - [x] 文档相对链接与 `git diff --check` 通过。
+
+## 15. 二轮评审意见（2026-10-22，针对 §14 处理后版本）
+
+> 评审方式：复核 `f6d66f6` 相对 `1e3387c` 的全部改动，核对 Q11–Q16 落笔的一致性，并对 §14 中可验证的事实断言做了代码抽查。
+
+### 15.1 总体结论
+
+**通过。** §14 的处理质量高：Q11–Q16 逐条有结论、有理由、有落点，§14.3 复核清单各项经抽查属实。以下事实断言验证无误：
+
+1. **Q15 的机制声明属实**：`save_watch_trigger` 确实不在 `toolRegistry`（registry.ts / index.ts 无该 tool），workflow 经 `WorkflowToolMap`（`define-workflow.ts:306` 接口声明、`:666` 该 tool 的访问器声明、`:757` `buildWorkflowTools` 定义、`:789` 手工追加访问器）访问，与 §5.4.1 的描述完全一致。行号准确。
+2. **Q11 落笔一致**：`queue` capability 在 §4.3（L1）、§5.4.1（表格 + 注释）、§5.4.3、§5.4.4（默认 deny 语义）、§4.9（验收 4）、§1.4/§11/§14 七处口径一致；「allowlist 漏配只会让工具更少」的默认 deny 语义正确。
+3. **Q16 三条前置**（DSH 版本下限、宿主常驻、节假日静默口径）已完整进入 §4.9，且「连续 3 个交易日」与「非交易日零输出」的计数口径冲突已消解。
+4. **`docs/ARCHITECTURE.md` 例外条款**与 §3.3 的白名单表述一致，例外边界（仅 `apps/*` 可导入、Chat 不复制领域逻辑）写得清楚。
+
+### 15.2 新发现问题（1 项，建议 P2 前处理）
+
+**Q12 的落笔把「写回接受窗口」与「审计保留期」合并进了同一个 `expires_at`**（§5.3.2、§5.3.3、§1.4 Q3）。
+
+现状文本：交互式 `expires_at` = 180 天，且「`expires_at` 之后不再接受新的写回，但审计读取仍可按 id 读」。这意味着一个交互式 context 在 **180 天内都可被 `record_advice` 接受**——一个月前装配的事实仍可产出新 Advice。这与两处既有设计意图冲突：
+
+- §5.4.5 的 `stale_context`（数据时点过旧拒绝写回）变得没有触发场景：对交互式路径，文档没有定义任何短于 180 天的写回新鲜度窗口（§5.5.7 的 1 个交易日窗口只约束批量 claim）。
+- §4.6 刚固化的 `context_expired` 重试约定对交互式路径几乎成为死代码（180 天内不会触发）。
+
+Q12 的原意是「审计链不因 30 分钟过期而断裂」，要的是**保留**，不是**接受写回**。建议把两个语义拆开：
+
+| 字段 | 语义 | 建议取值 |
+|---|---|---|
+| `write_until` | `record_*` / `complete` 接受写回的截止 | 交互：装配后 30 分钟（或当交易日收盘）；批量：任务终态 |
+| `retain_until`（可复用 `expires_at`） | 审计读取保留期，过期后可物理清理 | 交互：180 天；批量：终态 + 30 天 |
+
+校验规则随之改为：写回校验 `write_until` + `stale_context` 窗口；审计读取不校验时效。批量路径还需补一句：job 终态后 `record_advice(contextId)` 直传路径同样拒绝（目前只隐含在 job 状态机里）。
+
+### 15.3 轻微不一致（3 处，顺手改）
+
+1. **§5.9 安全表**仍写「消费者实例只开 6 个工具」，Q11 拍板后 §4.3 L1 已是 7 个（含 `record_advice`、`record_analysis_result`），§5.4.4 的可选二次收窄名单是 9 个。建议改为「消费者实例只暴露 `queue` capability 工具（当前 7 个）」。
+2. **§12.2 术语表**「消费者面」定义仍写「按 allowlist 暴露队列消费工具」，应改为「按 `queue` capability 暴露，`LUOOME_EXPOSE_TOOLS` 仅二次收窄」（Q11）。
+3. **§5.4.3 影响段落**只列了 P5 删除 `advice` 的同步点；P2 新增 `queue` 值同样需要同步 `packages/core/src/types/side-effect.ts` 与 `packages/mcp/src/exposure.ts`（解析 `LUOOME_EXPOSE_QUEUE`），建议在该段补一句，避免 P2 实施时漏改暴露解析。
+
+### 15.4 结论
+
+| 项 | 结论 |
+|---|---|
+| Q11–Q16 拍板与落笔 | 通过 |
+| §14 事实断言 | 抽查全部属实 |
+| 新发现问题 | 1 项（§15.2，写回窗口与审计保留期需拆分），建议作为 Q17 进入 §11 或直接修正 §5.3.2 |
+| 轻微不一致 | 3 处（§15.3），不阻塞 |
+
+评审人：Kimi（代码 Agent），评审日期：2026-10-22，评审基线：`main` 分支工作树（`f6d66f6`）。
