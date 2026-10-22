@@ -44,6 +44,7 @@
 | 文档 | 范围 |
 |---|---|
 | [Luoome × DSH 插件能力平台设计](./ddd/dsh-plugin-platform-design.md) | 投资能力插件化、通用能力复用、SDK/Cordis 接口与托管边界；首批已通过受控开发验收，后续能力按设计验证 |
+| [luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) | 单机接入 DSH、领域层去 AI（事实包 + 待分析队列）、托管消费与内嵌 DSH 演进；含契约、DDL、阶段与验收（草案） |
 | [个人订阅托管版详细设计](./ddd/hosted-personal-subscription-detailed-design.md) | 原 Web 增量登录、单默认账户、用户隔离、支付订阅与后台恢复契约 |
 | [AI 投资协作首页详细设计](./ddd/ai-investment-workspace-detailed-design.md) | 首页事实流、主体与版本校验、方向共识、手机讨论恢复、提醒深链接与验收边界 |
 | [研究主题与 Obsidian Vault 详细设计](./ddd/research-vault-detailed-design.md) | Topic/Document 多主体研究、Obsidian 正文源、SQLite 投影、全文检索与研究时间线 |
