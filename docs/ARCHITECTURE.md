@@ -134,6 +134,17 @@ web ──┤        │
 
 **禁止反向依赖**：core 不知道 db / tools 的存在；tools 不知道 cli / tui 的存在；adapters 不知道 workflows 的存在。
 
+### 托管 Chat 的 AI 运行时例外
+
+`apps/web` 的托管 Chat 可以直接构造 `packages/ai-runtime` 的模型运行时，不经过 `ToolContext`。
+这是**显式例外**，不是新的通用规则：
+
+- `ai-runtime` 只允许 `apps/*` 导入；`core` / `db` / `tools` / `workflows` / `mcp` / `adapters` 不得依赖它。
+- 领域能力仍统一经 tools 使用；Chat 只是模型执行宿主，不复制领域逻辑。
+- `scripts/check-layers.ts` 的白名单必须逐条列出 `apps/web` 与 `apps/worker`，其余包命中即失败。
+
+设计依据：[luoome 的 DSH 改造详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) §5.1、§5.7.4、Q14。
+
 ### packages/core 内部依赖
 
 ```

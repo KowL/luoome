@@ -6,6 +6,7 @@
 > 上位设计：[Luoome × DSH 插件能力平台设计](./dsh-plugin-platform-design.md)（DSH 负责 Agent 执行，Luoome 拥有业务事实、身份、权限、确认、任务与成本账本）。
 > 本文定位：把「单机接入 DSH」「领域层去 AI」「托管消费」三件事整合成一份可评审、可排期的改造总设计。
 > 取代关系：本文整合并取代此前的「DSH 集成设计」草稿与「内置 AI 外置与待分析队列详细设计」；实施完成后，[AI SDK 接入与 LLM 重构设计](./ai-sdk-llm-refactor-design.md) 中「领域内 LLM 调用点不变」的部分退役。
+> 评审状态：Kimi 评审通过（§13），遗留意见已于 2026-10-22 拍板（§14）。
 > 关联：[Agent Loop 技术选型分析](./agent-loop-tech-selection.md)、[Web 对话助手设计](./web-chat-design.md)、[托管个人订阅详细设计](./hosted-personal-subscription-detailed-design.md)、[Strategy 日运行与历史评估可靠性详细设计](./strategy-daily-cycle-and-replay-detailed-design.md)、[Strategy AI 生命周期管理详细设计](./strategy-ai-lifecycle-detailed-design.md)、[Strategy 实验、晋级与反馈闭环详细设计](./strategy-experiment-feedback-detailed-design.md)、[账户绩效与组合归因详细设计](./account-performance-detailed-design.md)。
 > 影响范围：`core` / `db` / `tools` / `adapters` / `workflows` / `mcp` / `cli` / `tui` / `apps/web` / `apps/worker` / `apps/agent-runtime` / 测试与文档。
 
@@ -61,11 +62,19 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 | Q1 | 托管消费者先用 `ai-runtime`，接口不变，后续再切内嵌 DSH Runtime | **已确认** |
 | Q4 | 任务完成后的通知由消费者显式调用，领域不触达外部 | **已确认** |
 | Q5 | `advice` sideEffect 在 P5 删除 | **已确认** |
-| Q2 | 交互式建议是否也创建 `analysis_job` | 待定，本文默认不创建 |
-| Q3 | `analysis_context` 保留期 | 待定，本文默认「批量到终态 / 交互 30 分钟」 |
-| Q6 | 存量 Chat 会话是否迁出领域 | 待定，本期不动 |
-| Q7 | skill 版本标识 | 待定，倾向 git blob hash |
-| Q8 | provenance 是否记录完整生成参数 | 待定，倾向只记 model + skillVersion |
+| Q2 | 交互式建议**不创建** `analysis_job`，以持久化 context 作为审计等价物 | **已确认（与 Q12 对齐）** |
+| Q3 | `analysis_context` 保留期：批量到终态 + 30 天；交互 180 天 | **已确认（与 Q12 对齐）** |
+| Q6 | 存量 Chat 会话本期不迁出领域 | 待定（本期不动） |
+| Q7 | skill 版本标识用 git blob hash | 待定（倾向已定） |
+| Q8 | provenance 记录 model + skillVersion，不记完整参数 | 待定（倾向已定） |
+| Q9 | 线 A 插件包放独立仓库 | 待定 |
+| Q10 | 托管 Chat 先保留 AI SDK | 待定 |
+| Q11 | 消费者面：队列工具声明独立 `queue` capability，由 `LUOOME_EXPOSE_QUEUE` 控制 | **已确认（C）** |
+| Q12 | 交互式 context 持久化 180 天，不随 30 分钟清理 | **已确认（A）** |
+| Q13 | 双消费者先到先得，`claimed_by` 前缀仅用于观测 | **已确认（A）** |
+| Q14 | 托管 Chat 直连 `ai-runtime` 作为显式例外写入 ARCHITECTURE | **已确认（A）** |
+| Q15 | `enqueue_analysis_job` 复用 internal tool 机制（只导出、不进 registry） | **已确认（A，机制已验证）** |
+| Q16 | 线 A 验收写明宿主常驻、DSH 版本下限、节假日静默口径 | **已确认（A）** |
 
 ### 1.5 目标
 
@@ -209,6 +218,8 @@ core / db / tools / workflows / mcp / adapters  ⟂  ai-runtime, ai, @ai-sdk/*, 
 
 计划在仓库根新增 `scripts/check-layers.ts`（扫描 import），并接入 `bun run lint` 或独立 `bun run check:layers`。这比依赖人工 review 可靠。
 
+白名单：`apps/web`、`apps/worker` 允许 import `@luoome/ai-runtime`；领域包零容忍。托管 Chat 直连 `ai-runtime` 是显式例外，已写入 `docs/ARCHITECTURE.md`（Q14）。
+
 ### 3.4 三条线的顺序
 
 ```text
@@ -255,7 +266,7 @@ P0 决策冻结
 | 层 | 暴露内容 | 说明 |
 |---|---|---|
 | L0 只读 | read 面 | 聊天、看板、研究 |
-| L1 消费者 | `claim_analysis_jobs`、`complete_analysis_job`、`fail_analysis_job`、`get_analysis_context`、`get_analysis_metrics` | 单独 MCP 实例；`LUOOME_EXPOSE_WRITE=true` + `LUOOME_EXPOSE_TOOLS` |
+| L1 消费者 | `claim_analysis_jobs`、`complete_analysis_job`、`fail_analysis_job`、`record_advice`、`record_analysis_result`、`get_analysis_context`、`get_analysis_metrics` | 单独 MCP 实例；`LUOOME_EXPOSE_QUEUE=true`（Q11） |
 | L2 写面 | 64 个 write | 默认关；按需开，依赖 DSH approval |
 | L3 external | 26 个 | 拆组：行情/同步可开；`send_notification`、外部导入不开 |
 | L4 trade | 0 | luoome 服务端硬卡，DSH 无绕过 |
@@ -346,8 +357,14 @@ DSH 侧至少注入以下约束（保留原文，便于评审）：
 1. 新会话问「我的持仓和今日盈亏」，数字全部来自 tool 且带 `dataAsOf`；面板同源。
 2. 连续 3 个交易日自动产出晨报/复盘；非交易日零输出。
 3. 盘中触发 60 秒内出现在会话或面板；同一触发不重复。
-4. 写工具在只读实例中不可见；消费者实例只看到 allowlist 中的工具。
+4. 写工具在只读实例中不可见；消费者实例只看到 `queue` capability 的队列工具。
 5. 面板/技能失效不影响聊天读事实。
+
+验收前置条件（Q16）：
+
+- DSH 固定为 `0.2.1-rc.2`（或经评审的更高版本），升级后重跑本组验收。
+- 宿主常驻（`dsh web` 后台进程或 launchd 守护）；休眠导致漏触发时按“最近一次补发”记录，不视为失败。
+- 节假日判定：skill 在交易日检查失败时静默退出并记录 `skipped: non-trading-day`，该次计入“非交易日零输出”，不占用“连续 3 个交易日”的计数。
 
 ## 5. 改造线 B：领域层去 AI
 
@@ -424,7 +441,7 @@ research_directions / strategy_version_proposal / strategy_insight_narrative
 | `data_as_of` | integer ms | 事实截止 |
 | `facts_json` / `fact_ids_json` | text json | 结构化事实 / 可引用事实 id |
 | `context_hash` | text | `sha256(canonical(facts_json) + data_as_of)` |
-| `expires_at` | integer ms | 批量：任务终态前有效；交互：默认 30 分钟 |
+| `expires_at` | integer ms | 批量：任务终态 + 30 天；交互：180 天（Q12） |
 | `created_at` | integer ms | — |
 
 事实包通用形状：
@@ -448,6 +465,7 @@ research_directions / strategy_version_proposal / strategy_insight_narrative
 - 每个事实有稳定 `id`，跨多次生成可比较。
 - `dataAsOf` 反映最旧关键事实的时点，而不是装配时刻。
 - `limitations` 必填，至少列出数据缺失/降级。
+- 过期语义：`expires_at` 之后不再接受新的写回，但审计读取仍可按 id 读；交互式 context 不随会话结束清理（Q12）。
 
 #### 5.3.3 `AnalysisProvenance`
 
@@ -466,6 +484,8 @@ interface AnalysisProvenance {
 ```
 
 挂在 `Advice`、`InvestmentResearch`、`StrategyAutonomyAction`、报告正文上。`generatorKind='legacy-ai'` 用于存量回填。`model`/`skillVersion` 用于校准分组；缺失时校准页必须显示「来源未知」。
+
+交互式建议没有 `jobId`，审计链依赖 `contextId`；对应 context 保留 180 天（Q12），因此不会因 30 分钟过期而断裂。
 
 #### 5.3.4 结果落点
 
@@ -507,18 +527,20 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 | `list_analysis_jobs` | read | status?、kinds?、limit、since? | job 列表 | 消费端/看板 |
 | `get_analysis_job` | read | jobId | job + 结果摘要 | 消费端/运维 |
 | `get_analysis_metrics` | read | windowDays? | 队列深度、最老 pending、完成/失败率、按 kind 统计 | 看板/运维 |
-| `claim_analysis_jobs` | write | owner、kinds?、limit(1–10)、leaseSeconds | `[{job, claimToken, context}]` | 消费端 |
-| `complete_analysis_job` | write | jobId、claimToken、result | `{jobId, status, resultRef}` | 消费端 |
-| `fail_analysis_job` | write | jobId、claimToken、error、retryAfterSeconds? | `{status}` | 消费端 |
-| `requeue_analysis_job` | write | jobId | `{status}` | 运维 |
-| `cancel_analysis_job` | write | jobId | `{status}` | 人类 |
+| `claim_analysis_jobs` | queue | owner、kinds?、limit(1–10)、leaseSeconds | `[{job, claimToken, context}]` | 消费端 |
+| `complete_analysis_job` | queue | jobId、claimToken、result | `{jobId, status, resultRef}` | 消费端 |
+| `fail_analysis_job` | queue | jobId、claimToken、error、retryAfterSeconds? | `{status}` | 消费端 |
+| `requeue_analysis_job` | write | jobId | `{status}` | 运维（管理实例） |
+| `cancel_analysis_job` | write | jobId | `{status}` | 人类（管理实例） |
 | `get_analysis_context` | read | kind、subject、accountId?、options? | `{contextId, facts, factIds, dataAsOf, limitations, expiresAt}` | 交互式 |
-| `record_advice` | write | contextId、decision、confidence、horizon、价位、reasoning、risks、provenance、requestId? | `Advice` | DSH/托管 |
-| `record_analysis_result` | write | contextId、kind、result、provenance、requestId? | 结果引用 | DSH/托管 |
+| `record_advice` | queue | contextId、decision、confidence、horizon、价位、reasoning、risks、provenance、requestId? | `Advice` | DSH/托管 |
+| `record_analysis_result` | queue | contextId、kind、result、provenance、requestId? | 结果引用 | DSH/托管 |
+
+`queue` 是 P2 新增的 capability（`SideEffect` 从 5 值扩为 6 值，P5 删除 `advice` 后回到 5 值），表示「消费待分析队列」：`claim` / `complete` / `fail` / `record_*`。运维类 `requeue` / `cancel` 仍归 `write`，只在管理实例可见。消费者实例不再依赖 `LUOOME_EXPOSE_WRITE`，只认 `LUOOME_EXPOSE_QUEUE=true`（Q11）。
 
 约定：
 
-- `enqueue_analysis_job` 是内部 tool：只导出给 `WorkflowToolMap`，不进 `toolRegistry`，因此不出现在 MCP。
+- `enqueue_analysis_job` 是内部 tool：只导出给 `WorkflowToolMap`，不进 `toolRegistry`，因此不出现在 MCP。该机制已存在——`save_watch_trigger` 等 internal tool 采用同一模式，workflow 经 `WorkflowToolMap`（`packages/workflows/src/define-workflow.ts:306`、`:757`）访问；P2 直接复用，无需 spike（Q15）。
 - `claim_analysis_jobs` 返回的 `context` 与 `get_analysis_context` 同形；消费者不需要二次取事实。
 - `record_advice` 与 `complete_analysis_job(kind=advice_*)` 共用同一套校验与落库函数。
 - 所有校验失败返回 `invalid_input`（带 `issues`），不落半成品。
@@ -545,8 +567,10 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 |---|---|
 | `analyze_*` / `generate_*`：`advice` | 删除 |
 | `get_advice` / `get_advice_stats`：`read`（现状） | 不变 |
-| `record_advice` / `complete_analysis_job` | `write` |
+| `record_advice` / `complete_analysis_job` | `queue`（Q11） |
 | `advice` 枚举值 | P5 从 `SideEffect` 删除 |
+
+`SideEffect` 在 P2 从 5 值扩为 6 值（新增 `queue`），P5 删除 `advice` 后回到 5 值。
 
 影响：`resolveAllowedSideEffects` 默认集 `{read, advice}` → `{read}`；需要同步 `packages/core/src/types/side-effect.ts`、`packages/mcp/src/exposure.ts`、`docs/SECURITY.md`、`docs/ARCHITECTURE.md`、`AGENTS.md` 与测试。
 
@@ -555,7 +579,9 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 | 实例 | serverName | env | 用途 |
 |---|---|---|---|
 | 只读面 | `luoome` | `LUOOME_EXPOSE_WRITE=false` | 聊天、看板、研究 |
-| 消费者面 | `luoome-worker` | `LUOOME_EXPOSE_WRITE=true` + `LUOOME_EXPOSE_TOOLS=claim_analysis_jobs,complete_analysis_job,fail_analysis_job,get_analysis_context,get_analysis_metrics` | 队列消费 |
+| 消费者面 | `luoome-worker` | `LUOOME_EXPOSE_QUEUE=true`（可选 `LUOOME_EXPOSE_TOOLS=claim_analysis_jobs,complete_analysis_job,fail_analysis_job,record_advice,record_analysis_result,get_analysis_context,get_analysis_metrics,list_analysis_jobs,get_analysis_job` 二次收窄） | 队列消费 |
+
+消费者面默认 deny：未设置 `LUOOME_EXPOSE_QUEUE` 时队列工具一律不可见；`LUOOME_EXPOSE_TOOLS` 漏配或拼写错误只会让工具更少，不会把写面打开（Q11）。
 
 #### 5.4.5 错误映射
 
@@ -657,6 +683,7 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 - 队列积压不影响领域事实：面板显示 pending 数与最老任务年龄；超过阈值时报告标记 `narrativePending`。
 - `claim` 使用单条 `UPDATE ... RETURNING`（SQLite）保证互斥；内存实现同语义。
 - 不允许「先写结果再 claim」。
+- 双消费者（DSH skill / 托管 worker）并存时**先到先得**：claim 互斥保证同一任务只被一个消费者取走；`claimed_by` 前缀（`dsh:` / `hosted:`）只用于观测，不做配额或按 kind 路由（Q13）。
 
 #### 5.6.5 可观测性
 
@@ -841,13 +868,13 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 
 | 阶段 | 范围 | 产出 | 验收 | 回滚 |
 |---|---|---|---|---|
-| **P0 决策冻结（0.5 周）** | 确认 Q1/Q4/Q5（已完成）；Q2/Q3/Q6/Q7/Q8 沿用 §11 默认值进入实施；冻结新增 `ctx.adapters.llm` 调用；本文评审 | 决策记录、评审意见 | 评审通过 | — |
+| **P0 决策冻结（0.5 周）** | Q1/Q4/Q5 与 Q11–Q16 已拍板（§14）；Q2/Q3 按 §14 调整；Q6–Q10 沿用 §11 默认值；冻结新增 `ctx.adapters.llm` 调用；本文评审 | 决策记录、评审意见、§14 | 评审通过 + §14 复核清单 | — |
 | **P1 线 A 最小闭环（1–2 天）** | MCP 只读接入、系统提示、看板面板、工作区分离 | 插件/配置、面板 | §4.9 第 1、4、5 条 | 移除插件行 |
-| **P2 领域实体与工具（1.5–2 周）** | `analysis_job`/`analysis_context` 实体、repo、DDL、12 个 tool、provenance 列 | 新表、双实现、contract tests | §5.10 第 1 条 | 不切换生产者，旧路径不变 |
+| **P2 领域实体与工具（1.5–2 周）** | `analysis_job`/`analysis_context` 实体、repo、DDL、12 个 tool、provenance 列、`queue` capability 与消费者暴露（Q11） | 新表、双实现、contract tests | §5.10 第 1 条 | 不切换生产者，旧路径不变 |
 | **P3 生产者切换（1–1.5 周）** | daily-advice、recommendations、daily-cycle、weekly-report、autonomy；`LUOOME_ANALYSIS_MODE=inline|queue` | workflow 改造 + 测试 | §5.10 第 2、5 条 | flag 回 inline |
 | **P4 消费者（1–1.5 周）** | 单机 DSH skill + host plugin 唤醒；托管 worker `analysis` pass；端到端 | skill、worker pass、e2e | §4.9 第 2、3 条；§5.10 第 3 条 | 停消费者，任务留 pending |
 | **P5 摘除领域 AI（1 周）** | 删除 8+1 个 AI tool、`ToolContext` 端口、`adapters/llm` 迁出、CLI/TUI/MCP 配置 | 清理提交 | §5.10 第 4 条；`advice` 删除 | 回退版本（旧代码忽略新表） |
-| **P6 收口（0.5 周）** | 文档同步、校准分组、CI 守卫、旧测试清理 | 文档 + 守卫 | 链接检查、`git diff --check`、全量测试 | — |
+| **P6 收口（0.5 周）** | 文档同步、校准分组、CI 守卫、旧测试清理、ARCHITECTURE 例外条款复核（Q14 已提前落笔） | 文档 + 守卫 | 链接检查、`git diff --check`、全量测试 | — |
 | **后续** | 线 C 切换内嵌 DSH Runtime | 消费者替换 | D01–D10 + 生产评审 | 保留 ai-runtime 消费者 |
 
 总量约 7–9 周（单人，含线 A）。
@@ -903,21 +930,23 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 
 ## 11. 待决问题
 
+> Q11–Q16 已于 2026-10-22 拍板，结论见 §14；下表保留原始问题记录。
+
 | 编号 | 问题 | 选项 | 建议 |
 |---|---|---|---|
-| Q2 | 交互式建议是否也创建 `analysis_job` | A. 不创建；B. 创建以便审计/重放 | A + provenance 已足够 |
-| Q3 | `analysis_context` 保留期 | A. 批量到终态；B. 交互 30 分钟；C. 统一 7 天 | A/B；C 利于复盘但存储上升 |
+| Q2 | 交互式建议是否也创建 `analysis_job` | A. 不创建；B. 创建以便审计/重放 | **已拍板 A**，以持久化 context 作审计等价物（§14） |
+| Q3 | `analysis_context` 保留期 | A. 批量到终态；B. 交互 30 分钟；C. 统一 7 天 | **已拍板**：批量到终态 + 30 天；交互 180 天（§14） |
 | Q6 | 存量 Chat 会话是否迁出领域 | A. 本期不动；B. P6 迁移 | A，本期只处理 AI |
 | Q7 | skill 版本标识 | git blob hash / frontmatter version / 文本 hash | git blob hash 最可复现 |
 | Q8 | provenance 是否记录完整生成参数 | A. 只记 model；B. 记完整参数快照 | B 利于复盘，schema 会膨胀 |
 | Q9 | 线 A 的插件包放哪 | A. 独立仓库；B. luoome 仓库 `plugins/`；C. 用户配置目录 | A，避免与领域仓库耦合 |
 | Q10 | 托管 Chat 是否也切内嵌 DSH Runtime | A. 先保留 AI SDK；B. 同步切换 | A，先验证分析消费者 |
-| Q11 | 消费者面（L1）的写面收窄机制 | A. 维持 `LUOOME_EXPOSE_WRITE=true` + allowlist；B. 消费者实例默认 deny + 显式 allow；C. 队列工具声明独立 capability，不占 write 组 | B 或 C；A 漏配即写面全开，默认方向不对（评审 §13.3-1） |
-| Q12 | 交互式建议的审计等价物（Q2/Q3 对齐） | A. 不建 job，但交互 context 持久化、不随 30 分钟过期清理；B. 交互式也建轻量 job | A；否则 context 过期后 provenance 审计链断裂（评审 §13.3-3） |
-| Q13 | 双消费者（DSH skill / 托管 worker）同账户竞争 claim 的分工 | A. 先到先得；B. 按 kind 或来源划分配额 | A，claim 互斥已保证不重复消费，但需在 §5.6 写明这是期望语义（评审 §13.3-7） |
-| Q14 | 托管 Chat 直连 `ai-runtime` 的架构例外 | A. 作为显式例外写入 `docs/ARCHITECTURE.md` 与 `check-layers.ts` 白名单；B. Chat 也改经 `ToolContext` | A，Chat 是托管产品能力，例外合理但必须落笔（评审 §13.3-8） |
-| Q15 | `enqueue_analysis_job`「只进 `WorkflowToolMap`、不进 `toolRegistry`」的注册机制 | A. P2 前置 spike 验证现有 tools 包能否支持；B. 直接进 registry，MCP 侧再过滤 | A，该机制不存在时 P2 的 1.5–2 周估算偏紧（评审 §13.3-5） |
-| Q16 | 线 A 验收的前置条件 | A. 验收条款写明宿主常驻与 DSH 版本下限，节假日静默退出纳入判定口径；B. 维持现状 | A，否则「连续 3 交易日产出」与「非交易日零输出」无法同周同时满足（评审 §13.3-4） |
+| Q11 | 消费者面（L1）的写面收窄机制 | A. 维持 `LUOOME_EXPOSE_WRITE=true` + allowlist；B. 消费者实例默认 deny + 显式 allow；C. 队列工具声明独立 capability，不占 write 组 | **已拍板 C**：队列工具声明 `queue` capability；allowlist 仅二次收窄（§14） |
+| Q12 | 交互式建议的审计等价物（Q2/Q3 对齐） | A. 不建 job，但交互 context 持久化、不随 30 分钟过期清理；B. 交互式也建轻量 job | **已拍板 A**：交互 context 持久化 180 天（§14） |
+| Q13 | 双消费者（DSH skill / 托管 worker）同账户竞争 claim 的分工 | A. 先到先得；B. 按 kind 或来源划分配额 | **已拍板 A**：先到先得，`claimed_by` 仅观测（§14） |
+| Q14 | 托管 Chat 直连 `ai-runtime` 的架构例外 | A. 作为显式例外写入 `docs/ARCHITECTURE.md` 与 `check-layers.ts` 白名单；B. Chat 也改经 `ToolContext` | **已拍板 A**：ARCHITECTURE 例外条款已落笔（§14） |
+| Q15 | `enqueue_analysis_job`「只进 `WorkflowToolMap`、不进 `toolRegistry`」的注册机制 | A. P2 前置 spike 验证现有 tools 包能否支持；B. 直接进 registry，MCP 侧再过滤 | **已拍板 A**：机制已验证存在（`save_watch_trigger` 先例 + `WorkflowToolMap`）（§14） |
+| Q16 | 线 A 验收的前置条件 | A. 验收条款写明宿主常驻与 DSH 版本下限，节假日静默退出纳入判定口径；B. 维持现状 | **已拍板 A**：已写入 §4.9（§14） |
 
 ## 12. 附录
 
@@ -1017,7 +1046,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 - §7 P0 写「确认 Q1/Q4/Q5（已完成）」，但 §1.4 中 Q5 的表述是「P5 删除」，两处口径一致即可，建议 P0 行补一句「Q2/Q3/Q6/Q7/Q8 沿用默认值进入实施」。（已落实：§7 P0 行已补充。）
 - §12.2 术语表建议补「消费者面 / 只读面」两个词，§4.3 与 §5.4.4 都在用但没有定义条目。（已落实：§12.2 已补充两条。）
 
-另：§13.3 中三条可在文档层面直接落实的意见也已并入正文——§5.6.5 增加 `claimExpiredNotRecycled` 指标说明（对应 §13.3-2），§8 contract 测试表增加「complete 与 enqueue 并发竞争」用例（对应 §13.3-6），§4.6 增加 skill 的 `context_expired` 重试约定（对应 §13.3-9）。其余 6 条涉及设计取舍或排期的意见已整理为 §11 待决问题 Q11–Q16（消费者面默认 deny、Q2/Q3 默认值对齐、双消费者分工、ARCHITECTURE.md 例外条款、P2 注册机制验证、线 A 验收前置条件），待文档 owner 逐条拍板。
+另：§13.3 中三条可在文档层面直接落实的意见也已并入正文——§5.6.5 增加 `claimExpiredNotRecycled` 指标说明（对应 §13.3-2），§8 contract 测试表增加「complete 与 enqueue 并发竞争」用例（对应 §13.3-6），§4.6 增加 skill 的 `context_expired` 重试约定（对应 §13.3-9）。其余 6 条涉及设计取舍或排期的意见已整理为 §11 待决问题 Q11–Q16（消费者面默认 deny、Q2/Q3 默认值对齐、双消费者分工、ARCHITECTURE.md 例外条款、P2 注册机制验证、线 A 验收前置条件），待文档 owner 逐条拍板。（处理结果见 §14。）
 
 ### 13.5 评审结论
 
@@ -1028,6 +1057,50 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 数据模型与状态机（§5.3、§5.7） | 通过，补 §13.3-6 的并发测试用例 |
 | Tool 契约（§5.4） | 通过，建议落实 §13.3-1 的消费者暴露机制 |
 | 实施分期（§7） | 通过，P2 增加注册机制验证任务 |
-| 待决问题默认值 | Q2/Q3 默认值需对齐后再进入 P2（已并入 Q12 待拍板） |
+| 待决问题默认值 | 已对齐（Q2/Q3 见 §14） |
 
 评审人：Kimi（代码 Agent），评审日期：2026-10-22，评审基线：`main` 分支工作树（`b8b2318`）。
+
+> 评审遗留问题的处理结果见 §14。
+
+## 14. 评审意见处理结果（2026-10-22）
+
+> 评审基线：§13（评审人 Kimi）；处理人：文档 owner；处理方式：文档层拍板与修正，本阶段不改实现代码。
+
+### 14.1 逐条处理
+
+| 评审条目 | 结论 | 落点 |
+|---|---|---|
+| §13.2 事实基线（186 / 89-64-26-6-1；默认暴露 95/83） | 已复核，与 `bun packages/cli/src/index.ts tools list --json`（2026-10-22）一致 | §4.3 |
+| §13.2 规则兜底标记写法 | 改用常量名 `RULE_FALLBACK_PREMISE_MARKER` / `RULE_FALLBACK_EVIDENCE_MARKER` 与 `isRuleFallbackAdvice` 判定 | §2.4 |
+| §13.3-1 消费者写面默认 deny | 采纳 C：队列工具声明独立 `queue` capability，`LUOOME_EXPOSE_QUEUE=true` 才暴露；allowlist 仅二次收窄 | §4.3、§5.4.1、§5.4.4、Q11 |
+| §13.3-2 租约惰性回收 metrics | 已增加 `claimExpiredNotRecycled` 指标 | §5.6.5 |
+| §13.3-3 Q2/Q3 审计链断裂 | 拍板 Q12=A：交互 context 持久化 180 天；Q2 不建 job；Q3 批量到终态 + 30 天 | §1.4、§5.3.2、§5.3.3 |
+| §13.3-4 线 A 验收前置 | 写入 DSH 版本下限、宿主常驻、节假日静默判定，并调整「连续 3 个交易日」口径 | §4.9 |
+| §13.3-5 注册机制 | 已确认机制存在（internal tool 只导出、不进 registry，workflow 走 `WorkflowToolMap`），无需 P2 spike | §5.4.1、Q15 |
+| §13.3-6 并发 contract test | 已补「complete 与 enqueue 并发竞争」用例 | §8 |
+| §13.3-7 双消费者分工 | 拍板 Q13=A：先到先得；`claimed_by` 前缀仅观测，不做配额 | §5.6.4、Q13 |
+| §13.3-8 托管 Chat 架构例外 | 拍板 Q14=A：写入 `docs/ARCHITECTURE.md` §3 例外条款与 `check-layers` 白名单 | `docs/ARCHITECTURE.md`、§3.3 |
+| §13.3-9 context_expired 重试 | 已固化进 skill 写回约定 | §4.6 |
+| §13.4 三处小问题 | 已落实（sideEffect 注释、P0 口径、术语表） | §2.2、§7、§12.2 |
+
+### 14.2 Q11–Q16 拍板
+
+| 编号 | 结论 | 关键理由 |
+|---|---|---|
+| Q11 | C：队列工具独立 `queue` capability；`LUOOME_EXPOSE_QUEUE=true` 才暴露；allowlist 只做二次收窄 | 默认 deny；不依赖运维配置正确；与 `write` 组解耦 |
+| Q12 | A：交互式不建 job，context 持久化 180 天 | 审计链不因 30 分钟过期断裂；与 Advice 校准窗口一致 |
+| Q13 | A：双消费者先到先得 | claim 互斥已保证不重复消费；配额是后续优化，不是本期必需 |
+| Q14 | A：ARCHITECTURE 显式例外 + `check-layers` 白名单 | 例外合理但必须落笔，否则守卫脚本误报 |
+| Q15 | A：复用 internal tool 机制 | 机制已验证存在（`save_watch_trigger` 先例 + `WorkflowToolMap`） |
+| Q16 | A：验收写明前置条件与节假日口径 | 否则「连续 3 个交易日」与「非交易日零输出」无法同周同时成立 |
+
+### 14.3 复核清单
+
+- [x] §2.4 不再出现「在 `reasoning.evidence` 标记 `RULE_FALLBACK_*`」的杜撰格式。
+- [x] §4.3 基数与实测一致，并标注取数命令与日期。
+- [x] §5.4.4 消费者实例不依赖 `LUOOME_EXPOSE_WRITE`。
+- [x] §4.9 含宿主常驻、DSH 版本、节假日三条前置。
+- [x] `docs/ARCHITECTURE.md` 已补托管 Chat 的 `ai-runtime` 例外条款。
+- [x] Q11–Q16 在 §1.4、§11 与 §14 三处状态一致。
+- [x] 文档相对链接与 `git diff --check` 通过。
