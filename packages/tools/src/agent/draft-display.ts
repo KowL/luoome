@@ -83,23 +83,6 @@ const CASH_FLOW_LABELS: Readonly<Record<PortfolioCashFlowKind, string>> = {
 };
 
 const SUMMARIZERS: Readonly<Record<string, DraftSummarizer>> = {
-  research_investment_directions: (raw, parsed) => ({
-    targetObject: '参与方向研究（使用模型）',
-    fields: [
-      field(raw, parsed, 'question', '研究问题'),
-      field(
-        raw,
-        parsed,
-        'strategyIds',
-        '比较范围',
-        parsed.strategyIds ?? '合格策略或实际市场事实（无预设策略也可研究）',
-      ),
-    ],
-    unsupported: [
-      '按市场事实或明确选择的已发布策略研究方向；不代表全市场个股筛选。没有策略映射的市场方向只讨论与保存，不能开启个股跟踪。',
-    ],
-    ambiguous: ['研究结果仅用于讨论；不保存共识、开启持续付费研究或通知。'],
-  }),
   save_investment_consensus: (raw, parsed) => ({
     targetObject: '参与方向共识（仅未来研究）',
     fields: [
@@ -337,28 +320,6 @@ const SUMMARIZERS: Readonly<Record<string, DraftSummarizer>> = {
       ...(parsed.notes === undefined ? [] : [field(raw, parsed, 'notes', '复盘备注')]),
     ],
   }),
-  analyze_stock: (raw, parsed) => ({
-    targetObject: `个股 Advice（${text(parsed.stockId)}）`,
-    fields: [
-      field(raw, parsed, 'stockId', '股票'),
-      ...(parsed.notes !== undefined ? [field(raw, parsed, 'notes', '备注')] : []),
-    ],
-  }),
-  analyze_position: (raw, parsed) => ({
-    targetObject: `持仓 Advice（${text(parsed.holdingId)}）`,
-    fields: [field(raw, parsed, 'holdingId', '持仓')],
-  }),
-  market_outlook: (raw, parsed) => {
-    const theme = text(parsed.theme);
-    return {
-      targetObject: theme.length > 0 ? `市场观点 Advice（${theme}）` : '市场观点 Advice（全市场）',
-      fields: [
-        ...(parsed.theme !== undefined ? [field(raw, parsed, 'theme', '板块/主题')] : []),
-        ...(parsed.notes !== undefined ? [field(raw, parsed, 'notes', '备注')] : []),
-      ],
-      ambiguous: theme.length > 0 ? [] : ['未指定板块或主题，将按全市场评估'],
-    };
-  },
 };
 
 export interface SummarizeDraftArgs {

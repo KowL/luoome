@@ -1,6 +1,12 @@
 import {
-  type LLMAdapterLike,
+  type InvestmentDirection,
+  type InvestmentEvidence,
+  type InvestmentResearch,
+  investmentEvidenceValidUntil,
+  readStrategyRunSnapshot,
+  STANDARD_DISCLAIMERS,
   type StrategyDslV1,
+  type StrategyInvestmentDirection,
   type StrategyRun,
   strategyDefinitionHash,
   type ToolContext,
@@ -10,7 +16,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   getInvestmentCandidatesTool,
   getInvestmentWorkspaceTool,
-  researchInvestmentDirectionsTool,
   saveInvestmentConsensusTool,
   setInvestmentTrackingTool,
 } from './investment-workspace.js';
@@ -31,13 +36,13 @@ const definition: StrategyDslV1 = {
 };
 const modelAnswer = (strategyId: string) => ({
   strategyId,
-  stance: 'observe',
+  stance: 'observe' as const,
   rationale: '仅观察规则覆盖范围内的机会。',
   comparisonReason: '覆盖事实合格，但没有收益证据，先观察。',
   evidenceIds: [`${strategyId}-run:coverage`],
   objections: [
     {
-      kind: 'known-risk',
+      kind: 'known-risk' as const,
       conclusion: '反对据此立即买入。',
       evidenceIds: [`${strategyId}-run:selection`],
       risks: ['规则入选不代表未来收益。'],
@@ -50,8 +55,15 @@ const modelAnswer = (strategyId: string) => ({
   waitFor: ['等待逐股建议的有效条件。'],
   abandonWhen: ['规则事实不再支持。'],
   reviewWhen: ['新事实或策略版本变化。'],
-  horizon: 'short',
+  horizon: 'short' as const,
 });
+
+const LIMITATIONS = [
+  '方向只解释明确覆盖的市场事实或已发布策略，不代表全市场个股机会排序或收益概率。',
+  '未核验完整公告、新闻与真实财务PIT；缺失维度不能作为支持理由。',
+  '账户登记完整性与实时资金尚未核验；方向仅供研究，不含仓位、买卖授权或自动交易。',
+  '事实时点与研究生成时间分开；盘后事实不能当作实时行动条件。',
+];
 
 const seedStrategy = async (
   ctx: ToolContext,
@@ -111,43 +123,133 @@ const seedStrategy = async (
   });
 };
 
+// 研究方向由外部消费者（DSH）经 record_analysis_result 写入；测试直接落库等效记录。
+const seedResearch = async (
+  ctx: ToolContext,
+  options: { requestId?: string; strategyIds?: string[]; planConflict?: boolean } = {},
+): Promise<InvestmentResearch> => {
+  const requestId = options.requestId ?? 'research-1';
+  const question = '比较已发布的方向';
+  const owner = { ownerUserId: ctx.user.id, accountId: ctx.user.defaultAccountId };
+  const consensus =
+    (await ctx.repos.investmentWorkspace.listConsensus({ ...owner, limit: 1 }))[0] ?? null;
+  const evidence: InvestmentEvidence[] = [];
+  const directions: InvestmentDirection[] = [];
+  let rank = 0;
+  for (const strategyId of options.strategyIds ?? ['direction-a']) {
+    const strategy = await ctx.repos.strategy.findById(strategyId);
+    const run = await ctx.repos.strategyRun.findLatestPublishedRun(strategyId);
+    if (strategy === null || run === null) continue;
+    const version = await ctx.repos.strategy.findVersionById(run.strategyVersionId);
+    if (version === null) continue;
+    const results = await ctx.repos.strategyRun.listResults(run.id);
+    const selected = results.filter((result) => result.selected);
+    const view = readStrategyRunSnapshot(run.inputSnapshot);
+    const coverage: StrategyInvestmentDirection['coverage'] = {
+      kind: view.universeKind === 'full' ? 'strategy-universe' : 'explicit-subset',
+      universeCount: view.stockIds.length,
+      evaluatedCount: results.length,
+      selectedCount: selected.length,
+      dataHealth: 'complete',
+      description: `Strategy ${strategy.name} 的已记录运行覆盖 ${view.stockIds.length} 只，结果 ${results.length} 只，入选 ${selected.length} 只；仅解释此策略范围。`,
+    };
+    evidence.push(
+      {
+        id: `${run.id}:coverage`,
+        strategyId,
+        strategyVersionId: version.id,
+        runId: run.id,
+        dataAsOf: run.dataAsOf,
+        kind: 'coverage',
+        text: coverage.description,
+      },
+      {
+        id: `${run.id}:selection`,
+        strategyId,
+        strategyVersionId: version.id,
+        runId: run.id,
+        dataAsOf: run.dataAsOf,
+        kind: 'selection',
+        text: `规则入选 ${selected.length} 只；入选不是 Advice、回测胜率或买入条件。`,
+      },
+    );
+    if (consensus !== null)
+      evidence.push({
+        id: `${run.id}:consensus:${consensus.version}`,
+        strategyId,
+        strategyVersionId: version.id,
+        runId: run.id,
+        dataAsOf: consensus.createdAt,
+        kind: 'consensus',
+        text: `已确认共识 v${consensus.version}。`,
+      });
+    const answer = modelAnswer(strategyId);
+    const objections: InvestmentDirection['objections'] = [...answer.objections];
+    if (options.planConflict === true && consensus !== null)
+      objections.push({
+        kind: 'plan-conflict',
+        conclusion: '此方向与当前已确认的回避选择或暂停新机会意愿冲突，不能据此直接开启跟踪。',
+        evidenceIds: [`${run.id}:consensus:${consensus.version}`],
+        risks: ['未经明确修订就开启新候选同步会超出当前共识范围。'],
+        unknowns: ['用户是否愿意修改已确认选择尚未确认。'],
+        reconsiderWhen: ['用户查看新证据、保留分歧并明确确认新的共识版本。'],
+        alternatives: ['维持原共识、仅讨论比较，或生成范围明确的修订草案。'],
+      });
+    objections.push({
+      kind: 'missing-evidence',
+      conclusion: '暂不支持个性化买入判断。',
+      evidenceIds: [],
+      risks: ['公司事件、真实财务PIT及账户适配尚未核验。'],
+      unknowns: ['未覆盖维度不能视作没有风险。'],
+      reconsiderWhen: ['补齐可核验事件、财务与账户事实后重新研究。'],
+      alternatives: ['先观察已记录的量价规则，不生成交易指令。'],
+    });
+    rank += 1;
+    directions.push({
+      ...answer,
+      id: `direction-research-${requestId}:${strategyId}`,
+      name: strategy.name,
+      opportunityType: 'strategy-selection',
+      strategyVersionId: version.id,
+      runId: run.id,
+      coverage,
+      rank,
+      objections,
+      accountFit: 'research-only',
+      dataAsOf: run.dataAsOf,
+      validUntil: investmentEvidenceValidUntil(run.dataAsOf),
+    });
+  }
+  return ctx.repos.investmentWorkspace.createResearch({
+    id: `direction-research-${requestId}`,
+    ...owner,
+    requestId,
+    requestHash: `hash-${requestId}`,
+    question,
+    status: 'complete',
+    source: { userText: question },
+    directions,
+    evidence,
+    limitations: [...LIMITATIONS],
+    disclaimers: [...STANDARD_DISCLAIMERS],
+    createdAt: ctx.clock(),
+  });
+};
+
 const fixture = async (ids = ['direction-a']) => {
-  const base = await buildTestContext({ clock: () => now });
-  for (const id of ids) await seedStrategy(base, id);
-  const generate: LLMAdapterLike['generate'] = async <T>({
-    data,
-  }: Parameters<LLMAdapterLike['generate']>[0]): Promise<T> => {
-    const supplied = data as { strategies: { id: string }[] };
-    return { directions: supplied.strategies.map((strategy) => modelAnswer(strategy.id)) } as T;
-  };
-  const tracked = vi.fn(generate);
-  const ctx: ToolContext = {
-    ...base,
-    adapters: {
-      ...base.adapters,
-      llm: { name: 'test-only', generate: tracked as LLMAdapterLike['generate'] },
-    },
-  };
+  const ctx = await buildTestContext({ clock: () => now });
+  for (const id of ids) await seedStrategy(ctx, id);
   return ctx;
 };
 
-const research = async (ctx: ToolContext) => {
-  const result = await researchInvestmentDirectionsTool.execute(
-    { requestId: 'research-1', question: '比较已发布的方向' },
-    ctx,
-  );
-  if (!result.ok) throw new Error(JSON.stringify(result.error));
-  expect(result.data.research.status).toBe('complete');
-  return result.data.research;
-};
-const saveInput = (result: Awaited<ReturnType<typeof research>>) => ({
+const saveInput = (result: InvestmentResearch) => ({
   requestId: 'confirm-1',
   expectedVersion: 0,
   changes: {
     selections: result.directions.map((direction, index) => ({
       researchId: result.id,
       directionId: direction.id,
-      role: index === 0 ? 'primary' : 'observe',
+      role: index === 0 ? ('primary' as const) : ('observe' as const),
       userReason: '保留反对，先观察。',
     })),
     constraints: ['不自动交易'],
@@ -159,9 +261,9 @@ const saveInput = (result: Awaited<ReturnType<typeof research>>) => ({
 });
 
 describe('investment directions and consensus tools', () => {
-  it('grounds directions and objections in the actual published scope, preserves dissent, and replays without another model call', async () => {
+  it('grounds directions and objections in the actual published scope and preserves dissent', async () => {
     const ctx = await fixture();
-    const result = await research(ctx);
+    const result = await seedResearch(ctx);
     expect(result.directions[0]?.coverage).toMatchObject({
       kind: 'explicit-subset',
       universeCount: 2,
@@ -170,15 +272,6 @@ describe('investment directions and consensus tools', () => {
     expect(result.directions[0]?.objections.map((item) => item.kind)).toContain('missing-evidence');
     expect(result.directions[0]?.accountFit).toBe('research-only');
     expect(result.createdAt).toEqual(now);
-    const replay = await researchInvestmentDirectionsTool.execute(
-      { requestId: 'research-1', question: '比较已发布的方向' },
-      ctx,
-    );
-    expect(replay).toMatchObject({
-      ok: true,
-      data: { replayed: true, research: { id: result.id } },
-    });
-    expect(ctx.adapters.llm.generate).toHaveBeenCalledTimes(1);
     const saved = await saveInvestmentConsensusTool.execute(saveInput(result), ctx);
     expect(saved).toMatchObject({
       ok: true,
@@ -192,89 +285,33 @@ describe('investment directions and consensus tools', () => {
     expect(await ctx.repos.tradingPlan.list({ accountId: ctx.user.defaultAccountId })).toEqual([]);
   });
 
-  it('does not invoke the model for stale, withheld or unavailable facts; never turns no-data into no-opportunity', async () => {
+  it('keeps a failed research record readable in the workspace without a conclusion', async () => {
     const ctx = await buildTestContext({ clock: () => now });
-    await seedStrategy(ctx, 'stale-direction', ['002594.SZ'], {
-      dataAsOf: new Date('2026-10-12T08:00:00Z'),
+    await ctx.repos.investmentWorkspace.createResearch({
+      id: 'direction-research-failed',
+      ownerUserId: ctx.user.id,
+      accountId: ctx.user.defaultAccountId,
+      requestId: 'bad-model',
+      requestHash: 'hash-bad-model',
+      question: '有何方向',
+      status: 'failed',
+      source: { userText: '有何方向' },
+      directions: [],
+      evidence: [],
+      limitations: ['模型研究失败或引用不合格；没有生成方向结论。'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      createdAt: now,
     });
-    const spy = vi.spyOn(ctx.adapters.llm, 'generate');
-    const result = await researchInvestmentDirectionsTool.execute(
-      { requestId: 'no-data', question: '研究', strategyIds: ['stale-direction'] },
-      ctx,
-    );
-    expect(result).toMatchObject({
+    const state = await getInvestmentWorkspaceTool.execute({}, ctx);
+    expect(state).toMatchObject({
       ok: true,
-      data: { research: { status: 'unavailable', directions: [] } },
+      data: { research: { status: 'failed', question: '有何方向' } },
     });
-    if (result.ok)
-      expect(result.data.research.limitations.join(' ')).toContain('不代表没有市场机会');
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it('uses the complete recorded strategy scope even when it exceeds fifty stocks', async () => {
-    const base = await buildTestContext({ clock: () => now });
-    const stockIds = Array.from(
-      { length: 60 },
-      (_, index) => `${String(index + 1).padStart(6, '0')}.SZ`,
-    );
-    await seedStrategy(base, 'large-direction', stockIds);
-    const generate: LLMAdapterLike['generate'] = async <T>() =>
-      ({ directions: [modelAnswer('large-direction')] }) as T;
-    const ctx = { ...base, adapters: { ...base.adapters, llm: { name: 'test-only', generate } } };
-    const result = await researchInvestmentDirectionsTool.execute(
-      { requestId: 'complete-scope', question: '研究显式范围', strategyIds: ['large-direction'] },
-      ctx,
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      data: {
-        research: {
-          status: 'complete',
-          directions: [
-            {
-              coverage: {
-                kind: 'explicit-subset',
-                universeCount: 60,
-                evaluatedCount: 60,
-                selectedCount: 60,
-              },
-            },
-          ],
-        },
-      },
-    });
-  });
-
-  it('saves the question and actual facts on model failure or fabricated evidence, without returning a conclusion', async () => {
-    const ctx = await fixture();
-    const bad: ToolContext = {
-      ...ctx,
-      adapters: {
-        ...ctx.adapters,
-        llm: {
-          name: 'test-only',
-          generate: async <T>() =>
-            ({
-              directions: [{ ...modelAnswer('direction-a'), evidenceIds: ['fabricated-fact'] }],
-            }) as T,
-        },
-      },
-    };
-    const result = await researchInvestmentDirectionsTool.execute(
-      { requestId: 'bad-model', question: '有何方向' },
-      bad,
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      data: { research: { status: 'failed', question: '有何方向', directions: [] } },
-    });
-    const state = await getInvestmentWorkspaceTool.execute({}, bad);
-    expect(state).toMatchObject({ ok: true, data: { research: { status: 'failed' } } });
   });
 
   it('rejects foreign research and forged discussion sources, with no consensus write', async () => {
     const ctx = await fixture();
-    const result = await research(ctx);
+    const result = await seedResearch(ctx);
     const foreign = { ...ctx, user: { ...ctx.user, id: 'foreign-user' } };
     expect(await saveInvestmentConsensusTool.execute(saveInput(result), foreign)).toMatchObject({
       ok: false,
@@ -303,7 +340,7 @@ describe('investment directions and consensus tools', () => {
 
   it('preserves omitted fields, rejects stale confirmation and restores confirmed memory after deleting chat', async () => {
     const ctx = await fixture();
-    const result = await research(ctx);
+    const result = await seedResearch(ctx);
     const source = { userText: '先观察', sessionId: 'chat-one', messageId: 'user-one' };
     await ctx.repos.chat.saveSession({
       id: source.sessionId,
@@ -371,7 +408,7 @@ describe('investment directions and consensus tools', () => {
 
   it('merges the same stock from multiple directions and provides real existing research inputs', async () => {
     const ctx = await fixture(['direction-a', 'direction-b']);
-    const result = await research(ctx);
+    const result = await seedResearch(ctx, { strategyIds: ['direction-a', 'direction-b'] });
     expect((await saveInvestmentConsensusTool.execute(saveInput(result), ctx)).ok).toBe(true);
     const candidates = await getInvestmentCandidatesTool.execute({ limit: 1 }, ctx);
     expect(candidates).toMatchObject({
@@ -389,28 +426,26 @@ describe('investment directions and consensus tools', () => {
 
   it('keeps confirmed plan conflicts distinct from known risks and missing evidence when the user insists', async () => {
     const ctx = await fixture();
-    const initial = await research(ctx);
+    const initial = await seedResearch(ctx);
     const input = saveInput(initial);
     const avoid = {
       ...input,
       changes: {
         ...input.changes,
-        selections: input.changes.selections.map((selection) => ({ ...selection, role: 'avoid' })),
+        selections: input.changes.selections.map((selection) => ({
+          ...selection,
+          role: 'avoid' as const,
+        })),
       },
     };
     expect((await saveInvestmentConsensusTool.execute(avoid, ctx)).ok).toBe(true);
-    const proposed = await researchInvestmentDirectionsTool.execute(
-      { requestId: 'reconsider', question: '我仍希望观察，重新比较证据' },
-      ctx,
+    const proposed = await seedResearch(ctx, { requestId: 'reconsider', planConflict: true });
+    expect(proposed.status).toBe('complete');
+    expect(proposed.directions[0]?.objections.map((objection) => objection.kind)).toEqual(
+      expect.arrayContaining(['known-risk', 'missing-evidence', 'plan-conflict']),
     );
-    expect(proposed.ok).toBe(true);
-    if (!proposed.ok) return;
-    expect(proposed.data.research.status).toBe('complete');
-    expect(
-      proposed.data.research.directions[0]?.objections.map((objection) => objection.kind),
-    ).toEqual(expect.arrayContaining(['known-risk', 'missing-evidence', 'plan-conflict']));
     const revision = {
-      ...saveInput(proposed.data.research),
+      ...saveInput(proposed),
       requestId: 'insist-confirmed',
       expectedVersion: 1,
       source: { userText: '保留你的反对，但我选择继续观察' },
@@ -437,7 +472,7 @@ describe('investment directions and consensus tools', () => {
 
   it('separates a saved consensus from failed tracking, retries idempotently, and pauses only its own candidates', async () => {
     const ctx = await fixture();
-    const result = await research(ctx);
+    const result = await seedResearch(ctx);
     expect((await saveInvestmentConsensusTool.execute(saveInput(result), ctx)).ok).toBe(true);
     const holdings = await ctx.repos.holding.listByAccount(ctx.user.defaultAccountId);
     const failure = vi
@@ -516,7 +551,7 @@ describe('investment directions and consensus tools', () => {
 
   it('binds background sync to the confirmed owner, version and review deadline, and reports current schedule drift', async () => {
     const ctx = await fixture();
-    const result = await research(ctx);
+    const result = await seedResearch(ctx);
     await saveInvestmentConsensusTool.execute(saveInput(result), ctx);
     const schedule = {
       id: 'direction-schedule',
@@ -587,7 +622,7 @@ describe('investment directions and consensus tools', () => {
 
   it('allows explicit pause to recover an audited stale starting attempt, while blocking blind or early replay', async () => {
     const ctx = await fixture();
-    const result = await research(ctx);
+    const result = await seedResearch(ctx);
     await saveInvestmentConsensusTool.execute(saveInput(result), ctx);
     const attempt = {
       id: 'interrupted-attempt',

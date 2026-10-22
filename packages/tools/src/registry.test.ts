@@ -4,13 +4,11 @@ import { createRegistry, toolRegistry } from './registry.js';
 
 // 工具库存快照：新增 tool 时同步本列表与下方 sideEffect 断言。
 const EXPECTED_TOOL_NAMES = [
-  'research_investment_directions',
   'get_investment_workspace',
   'save_investment_consensus',
   'set_investment_tracking',
   'get_investment_candidates',
   // v0.1
-  'agent_run',
   'list_accounts',
   'create_account',
   'update_account',
@@ -29,9 +27,6 @@ const EXPECTED_TOOL_NAMES = [
   'get_strategy_decision_cycles',
   'get_financial_facts',
   'get_fundamental_score',
-  'analyze_stock',
-  'analyze_strategy_candidate',
-  'analyze_position',
   // v0.2 新增
   'fetch_quote',
   'batch_quote',
@@ -86,14 +81,12 @@ const EXPECTED_TOOL_NAMES = [
   'run_local_selector_research',
   'assess_adaptive_personality',
   'strategy_signals_by_stock',
-  // Strategy Phase B：调度、真实表现补全与事实型 AI 洞察
+  // Strategy Phase B：调度、真实表现补全与确定性事实
   'list_pending_strategy_observations',
   'complete_strategy_observations',
   'get_signal_observation_stats',
   'create_strategy_observation_candidates',
   'get_strategy_insight_facts',
-  'generate_strategy_insight',
-  'generate_strategy_recommendations',
   'get_strategy_schedule',
   'set_strategy_schedule',
   'renew_strategy_schedule_claim',
@@ -119,7 +112,6 @@ const EXPECTED_TOOL_NAMES = [
   'record_advice_outcome',
   'delete_advice',
   'send_notification',
-  'market_outlook',
   // v0.5 新增
   'add_trade',
   'add_holding',
@@ -222,7 +214,6 @@ describe('toolRegistry', () => {
   });
 
   it('get(name) 命中 / 未命中', () => {
-    expect(toolRegistry.get('analyze_stock')?.sideEffect).toBe('advice');
     expect(toolRegistry.get('fetch_quote')?.sideEffect).toBe('external');
     expect(toolRegistry.get('compute_indicators')?.sideEffect).toBe('read');
     expect(toolRegistry.get('get_intraday_delivery_audit')?.sideEffect).toBe('read');
@@ -306,35 +297,19 @@ describe('toolRegistry', () => {
 
   it('AUDIT：成交登记明确声明 trade 副作用', () => {
     const sideEffects = new Set(toolRegistry.all().map((t) => t.sideEffect));
-    // v0.2 末态：read / write / external / advice / trade
-    // 当前注册表：read / advice / external
-    expect([...sideEffects].sort()).toEqual(['advice', 'external', 'read', 'trade', 'write']);
-    const adviceTools = toolRegistry
-      .all()
-      .filter((t) => t.sideEffect === 'advice')
-      .map((t) => t.name)
-      .sort();
-    expect(adviceTools).toEqual([
-      'analyze_position',
-      'analyze_stock',
-      'analyze_strategy_candidate',
-      'generate_strategy_recommendations',
-      'market_outlook',
-      'research_investment_directions',
-    ]);
+    // DSH 瘦身后：内置 AI advice 类工具全部下线，注册表只剩 read / write / external / trade
+    expect([...sideEffects].sort()).toEqual(['external', 'read', 'trade', 'write']);
     const externalTools = toolRegistry
       .all()
       .filter((t) => t.sideEffect === 'external')
       .map((t) => t.name)
       .sort();
     expect(externalTools).toEqual([
-      'agent_run',
       'batch_quote',
       'evaluate_research_embeddings',
       'fetch_index_quotes',
       'fetch_intraday_minutes',
       'fetch_quote',
-      'generate_strategy_insight',
       'get_account_performance',
       'get_ashare_sentiment',
       'get_stock_market_view',

@@ -1387,9 +1387,16 @@ describe('hosted original Web subscription integration', () => {
     const sessionId = (session.result.data.session as { id: string }).id;
     const draft = {
       sessionId,
-      tool: 'research_investment_directions',
-      userText: '研究已有范围',
-      input: { requestId: 'private-research', question: '研究已有范围' },
+      tool: 'save_investment_consensus',
+      userText: '先管理持仓',
+      input: {
+        requestId: 'private-consensus',
+        expectedVersion: 0,
+        changes: { constraints: ['不放宽持仓退出条件'] },
+        changeNote: '先管理持仓',
+        reviewAt: '2026-10-19T01:00:00.000Z',
+        validUntil: '2026-10-20T08:00:00.000Z',
+      },
     };
     expect(
       (await h.request('/api/workspace/drafts', 'POST', draft, first.cookie)).response.status,

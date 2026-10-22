@@ -5,16 +5,12 @@ import { getAccountFactsTool, reconcileAccountCashTool } from './tools/account-f
 import { addHoldingTool } from './tools/add-holding.js';
 import { addStockEventTool } from './tools/add-stock-event.js';
 import { addTradeTool } from './tools/add-trade.js';
-import { agentRunTool } from './tools/agent-run.js';
 import {
   createAlertPlanTool,
   deleteAlertPlanTool,
   listAlertPlansTool,
   updateAlertPlanTool,
 } from './tools/alert-plan.js';
-import { analyzePositionTool } from './tools/analyze-position.js';
-import { analyzeStockTool } from './tools/analyze-stock.js';
-import { analyzeStrategyCandidateTool } from './tools/analyze-strategy-candidate.js';
 import { batchQuoteTool } from './tools/batch-quote.js';
 import {
   appendChatMessageTool,
@@ -43,7 +39,6 @@ import { fetchIntradayMinutesTool } from './tools/fetch-intraday-minutes.js';
 import { fetchQuoteTool } from './tools/fetch-quote.js';
 import { getFinancialFactsTool, syncFinancialFactsTool } from './tools/financial-facts.js';
 import { getFundamentalScoreTool, runFundamentalScoreTool } from './tools/fundamental-score.js';
-import { generateStrategyRecommendationsTool } from './tools/generate-strategy-recommendations.js';
 import { getAccountTool } from './tools/get-account.js';
 import { getAdviceTool } from './tools/get-advice.js';
 import { getAdviceStatsTool } from './tools/get-advice-stats.js';
@@ -67,7 +62,6 @@ import { getWatchStatusTool } from './tools/get-watch-status.js';
 import {
   getInvestmentCandidatesTool,
   getInvestmentWorkspaceTool,
-  researchInvestmentDirectionsTool,
   saveInvestmentConsensusTool,
   setInvestmentTrackingTool,
 } from './tools/investment-workspace.js';
@@ -79,7 +73,6 @@ import { listStockEventsTool } from './tools/list-stock-events.js';
 import { listTradesTool } from './tools/list-trades.js';
 import { listWatchTriggersTool } from './tools/list-watch-triggers.js';
 import { listWorkflowRunsTool } from './tools/list-workflow-runs.js';
-import { marketOutlookTool } from './tools/market-outlook.js';
 import { fetchNewsTool } from './tools/news.js';
 import { northboundFlowTool } from './tools/northbound-flow.js';
 import {
@@ -160,10 +153,7 @@ import {
   getStrategyDslCatalogTool,
   getStrategyExperimentContextTool,
 } from './tools/strategy-experiment.js';
-import {
-  generateStrategyInsightTool,
-  getStrategyInsightFactsTool,
-} from './tools/strategy-insight.js';
+import { getStrategyInsightFactsTool } from './tools/strategy-insight.js';
 import {
   archiveStrategyTool,
   createStrategyTool,
@@ -280,7 +270,7 @@ const renderTypeScript = (tools: readonly Tool[]): string => {
 export type LuoomeToolName =
 ${names};
 
-export type LuoomeSideEffect = 'read' | 'write' | 'external' | 'advice' | 'trade';
+export type LuoomeSideEffect = 'read' | 'write' | 'external' | 'trade';
 
 export interface LuoomeToolMeta {
   readonly description: string;
@@ -339,7 +329,6 @@ export const toolRegistry: Registry = createRegistry([
   renameChatSessionTool,
   deleteChatSessionTool,
   appendChatMessageTool,
-  agentRunTool,
   listAccountsTool,
   createAccountTool,
   updateAccountTool,
@@ -365,9 +354,6 @@ export const toolRegistry: Registry = createRegistry([
   getFinancialFactsTool,
   getFundamentalScoreTool,
   getWatchStatusTool,
-  analyzeStockTool,
-  analyzeStrategyCandidateTool,
-  analyzePositionTool,
   saveTradingPlanTool,
   getTradingPlanTool,
   listTradingPlansTool,
@@ -435,13 +421,11 @@ export const toolRegistry: Registry = createRegistry([
   getSignalObservationStatsTool,
   createStrategyObservationCandidatesTool,
   getStrategyInsightFactsTool,
-  generateStrategyInsightTool,
   // M2：Strategy 自主管理动作（list 只读；confirm/reject 为 blocked 人工队列写入口；
   // 创建/转移为 workflow-only，不进公共 registry）
   listStrategyAutonomyActionsTool,
   confirmStrategyAutonomyActionTool,
   rejectStrategyAutonomyActionTool,
-  generateStrategyRecommendationsTool,
   getStrategyScheduleTool,
   setStrategyScheduleTool,
   renewStrategyScheduleClaimTool,
@@ -464,8 +448,6 @@ export const toolRegistry: Registry = createRegistry([
   deleteAlertPlanTool,
   recordAdviceOutcomeTool,
   sendNotificationTool,
-  marketOutlookTool,
-  researchInvestmentDirectionsTool,
   getInvestmentWorkspaceTool,
   saveInvestmentConsensusTool,
   setInvestmentTrackingTool,

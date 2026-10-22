@@ -30,22 +30,15 @@ describe('agent 场景目录', () => {
   });
 
   it('草案清单全部已注册、kind 合法；Phase 2 草案按场景收窄', () => {
-    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(33);
-    expect(AGENT_DRAFT_TOOL_KINDS.research_investment_directions).toBe('research');
+    expect(Object.keys(AGENT_DRAFT_TOOL_KINDS)).toHaveLength(29);
     expect(AGENT_DRAFT_TOOL_KINDS.save_investment_consensus).toBe('research');
     expect(AGENT_DRAFT_TOOL_KINDS.set_investment_tracking).toBe('watchlist');
-    expect(AGENT_DRAFT_TOOL_KINDS.analyze_stock).toBe('advice');
-    expect(AGENT_DRAFT_TOOL_KINDS.analyze_position).toBe('advice');
-    expect(AGENT_DRAFT_TOOL_KINDS.market_outlook).toBe('advice');
     expect(AGENT_DRAFT_TOOL_KINDS.record_advice_outcome).toBe('review');
     expect(AGENT_DRAFT_TOOL_KINDS.create_research_hypothesis_version).toBe('research');
     expect(AGENT_DRAFT_TOOL_KINDS.trial_strategy).toBe('strategy');
-    for (const [name, kind] of Object.entries(AGENT_DRAFT_TOOL_KINDS)) {
+    for (const [name] of Object.entries(AGENT_DRAFT_TOOL_KINDS)) {
       const registered = toolRegistry.get(name);
       expect(registered, name).toBeDefined();
-      if (kind === 'advice') {
-        expect(registered?.sideEffect, name).toBe('advice');
-      }
     }
     expect(AGENT_SCENARIOS.general.draftToolKinds).toBe(AGENT_DRAFT_TOOL_KINDS);
     expect(AGENT_SCENARIOS.review.draftToolKinds.record_advice_outcome).toBe('review');

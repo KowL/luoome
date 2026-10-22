@@ -7,27 +7,11 @@ import type {
 import type { LLMAdapter, LLMGenerateResult } from '../llm/types.js';
 import { hashString, mulberry32, pickDeterministic } from './deterministic.js';
 
-/** system prompt 标识（ARCHITECTURE §6.3 的两种 advice 场景）。 */
-export const TEST_LLM_SYSTEM_ANALYZE_STOCK = 'analyze_stock';
-export const TEST_LLM_SYSTEM_ANALYZE_POSITION = 'analyze_position';
-export const TEST_LLM_SYSTEM_MARKET_OUTLOOK = 'market_outlook';
+/** system prompt 标识（仅保留存活链路：chat、信号精排与分组解析）。 */
 export const TEST_LLM_SYSTEM_SCORE_SIGNALS = 'score_signals';
 export const TEST_LLM_SYSTEM_RESOLVE_LLM_GROUP = 'resolve_llm_group';
 export const TEST_LLM_SYSTEM_CHAT_PLAN = 'chat_plan';
 export const TEST_LLM_SYSTEM_CHAT_REPLY = 'chat_reply';
-export const TEST_LLM_SYSTEM_STRATEGY_INSIGHT = 'strategy_insight';
-export const TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL = 'strategy_version_proposal';
-
-/**
- * strategy_version_proposal 测试注入标记（放在 data.strategy.description 中）：
- * - 'proposal-fixture:schema-error'  → 输出非 DSL 结构（tool 侧 schema 校验失败）
- * - 'proposal-fixture:unknown-field' → 输出引用未注册字段的定义（validate 阶段判 invalid）
- * - 'proposal-fixture:unchanged'     → 原样返回基线定义（unchanged 分支）
- * - 'proposal-fixture:new-strategy'  → 返回 kind=new-strategy 的全新策略提议（M2 §9.2）
- * 无标记时默认返回 kind=parameter-tuning：在基线每条 selection rule 的 when 后追加
- * ' && quote.close > 0'（无 selection rule 时改 metadata.style），保证 definitionHash
- * 与基线不同且可通过校验。
- */
 
 /**
  * web chat 测试注入前缀（docs/ddd/web-chat-design.md §6）：
@@ -39,7 +23,7 @@ export const TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL = 'strategy_version_propo
  */
 export const TEST_CHAT_FIXTURE_PREFIX = 'chat-fixture:';
 
-/** FakeLLMAdapter 输出的结构化分析结果（analyze_stock / analyze_position 共用形状）。 */
+/** FakeLLMAdapter generic 模式输出的结构化分析结果形状。 */
 export interface FakeAnalysisOutput {
   readonly decision: AdviceDecision;
   readonly confidence: number;
@@ -48,17 +32,7 @@ export interface FakeAnalysisOutput {
   readonly risks: readonly string[];
 }
 
-type TestMode =
-  | 'analyze_stock'
-  | 'analyze_position'
-  | 'market_outlook'
-  | 'score_signals'
-  | 'resolve_llm_group'
-  | 'chat_plan'
-  | 'chat_reply'
-  | 'strategy_insight'
-  | 'strategy_version_proposal'
-  | 'generic';
+type TestMode = 'score_signals' | 'resolve_llm_group' | 'chat_plan' | 'chat_reply' | 'generic';
 
 /** 仅依赖 safeParse 的最小 schema 投影（zod schema 天然满足）。 */
 interface SchemaLike {
@@ -173,17 +147,9 @@ export class FakeLLMAdapter implements LLMAdapter {
   readonly name = 'fake-llm';
 
   private detectMode(system: string): TestMode {
-    // chat 最先判定：chat 的 system prompt 会提及其它 tool 名（如引导文案中的
-    // analyze_stock），若按内容包含匹配会被误判。
+    // chat 最先判定：chat 的 system prompt 可能提及其它标识词，若按内容包含匹配会被误判。
     if (system.includes(TEST_LLM_SYSTEM_CHAT_PLAN)) return 'chat_plan';
     if (system.includes(TEST_LLM_SYSTEM_CHAT_REPLY)) return 'chat_reply';
-    if (system.includes(TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL)) {
-      return 'strategy_version_proposal';
-    }
-    if (system.includes(TEST_LLM_SYSTEM_STRATEGY_INSIGHT)) return 'strategy_insight';
-    if (system.includes(TEST_LLM_SYSTEM_ANALYZE_POSITION)) return 'analyze_position';
-    if (system.includes(TEST_LLM_SYSTEM_ANALYZE_STOCK)) return 'analyze_stock';
-    if (system.includes(TEST_LLM_SYSTEM_MARKET_OUTLOOK)) return 'market_outlook';
     if (system.includes(TEST_LLM_SYSTEM_SCORE_SIGNALS)) return 'score_signals';
     if (system.includes(TEST_LLM_SYSTEM_RESOLVE_LLM_GROUP)) return 'resolve_llm_group';
     return 'generic';
@@ -226,149 +192,7 @@ export class FakeLLMAdapter implements LLMAdapter {
       }
       return Promise.resolve(asGenerateResult<T>(out, raw));
     }
-    if (mode === 'strategy_insight') {
-      const out = this.buildStrategyInsight(request.data);
-      const raw = JSON.stringify({ fixture: true, mode });
-      const schema = request.schema;
-      if (isSchemaLike(schema)) {
-        const parsed = schema.safeParse(out);
-        if (parsed.success) return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
-      }
-      return Promise.resolve(asGenerateResult<T>(out, raw));
-    }
-    if (mode === 'strategy_version_proposal') {
-      const out = this.buildStrategyVersionProposal(request.data);
-      const raw = JSON.stringify({ fixture: true, mode });
-      const schema = request.schema;
-      if (isSchemaLike(schema)) {
-        const parsed = schema.safeParse(out);
-        if (parsed.success) return Promise.resolve(asGenerateResult<T>(parsed.data, raw));
-      }
-      return Promise.resolve(asGenerateResult<T>(out, raw));
-    }
     return Promise.resolve(this.buildStandardAnalysis(mode, request, request.schema));
-  }
-
-  private buildStrategyInsight(data: unknown): Record<string, unknown> {
-    const record = asRecord(data);
-    const facts = Array.isArray(record?.facts) ? (record.facts as readonly unknown[]) : [];
-    const refs = facts
-      .map((fact) => readString(asRecord(fact), 'id'))
-      .filter((id): id is string => id !== null);
-    const firstRef = refs[0] ?? 'runs:window';
-    return {
-      headline: '策略事实观察',
-      summary: '依据当前运行记录与事后观察汇总，仅描述已有数据，不构成投资建议。',
-      findings: [
-        {
-          kind: 'trend',
-          title: '近期运行概览',
-          detail: '当前结论来自已落库的策略运行与信号观察。',
-          factRefs: [firstRef],
-        },
-      ],
-      risks: ['数据缺失和样本量会影响描述的稳定性。'],
-      limitations: ['这是事实观察，不是包含交易成本与成交假设的回测。'],
-      disclaimer: '仅供研究记录，不构成投资建议。',
-    };
-  }
-
-  /**
-   * 版本提议 测试输出（M2-S2）：默认把基线定义的每条 selection rule 追加
-   * ' && quote.close > 0'（无 rule 时改 metadata.style），保证 hash 变化且可校验；
-   * 标记注入见 TEST_LLM_SYSTEM_STRATEGY_VERSION_PROPOSAL 上方注释。
-   */
-  private buildStrategyVersionProposal(data: unknown): Record<string, unknown> {
-    const record = asRecord(data);
-    const description = readString(asRecord(record?.strategy), 'description') ?? '';
-    const facts = Array.isArray(record?.facts) ? (record.facts as readonly unknown[]) : [];
-    const firstFactId =
-      facts
-        .map((fact) => readString(asRecord(fact), 'id'))
-        .find((id): id is string => id !== null) ?? 'runs:window';
-    if (description.includes('proposal-fixture:schema-error')) {
-      return {
-        definition: 'not-a-dsl-object',
-        changeSummary: '测试：非结构化输出',
-        factReferences: [firstFactId],
-      };
-    }
-    if (description.includes('proposal-fixture:new-strategy')) {
-      // 全新策略分支（M2 §9.2）：独立定义，不基于基线调参。
-      return {
-        kind: 'new-strategy',
-        name: 'fixture 全新策略',
-        description: '测试：AI 基于 DSL catalog 提议的全新策略',
-        definition: {
-          schemaVersion: 1,
-          metadata: { style: 'fixture-new', horizon: 'short' },
-          universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
-          selection: {
-            logic: 'all',
-            rules: [
-              {
-                id: 'fixture-new',
-                name: '新策略规则',
-                when: 'quote.close > 0',
-                evidence: ['收盘价'],
-              },
-            ],
-          },
-          signals: { entry: [], exit: [], risk: [] },
-        },
-        changeSummary: '测试提议：创造全新策略',
-        factReferences: [firstFactId],
-      };
-    }
-    const base = asRecord(asRecord(record?.baseVersion)?.definition);
-    const definition: Record<string, unknown> =
-      base === null
-        ? {
-            schemaVersion: 1,
-            metadata: { style: 'fixture' },
-            universe: { coverage: 'CN_A_SHARES_SH_SZ', excludeStockIds: [] },
-            selection: {
-              logic: 'all',
-              rules: [
-                { id: 'fixture', name: '测试规则', when: 'quote.close > 0', evidence: ['收盘价'] },
-              ],
-            },
-            signals: { entry: [], exit: [], risk: [] },
-          }
-        : (JSON.parse(JSON.stringify(base)) as Record<string, unknown>);
-    if (description.includes('proposal-fixture:unchanged')) {
-      return {
-        kind: 'parameter-tuning',
-        definition,
-        changeSummary: '测试：与基线一致',
-        factReferences: [firstFactId],
-      };
-    }
-    const selection = asRecord(definition.selection);
-    const rules = Array.isArray(selection?.rules) ? (selection.rules as unknown[]) : [];
-    const suffix = description.includes('proposal-fixture:unknown-field')
-      ? ' && quote.fixtureUnknown > 0'
-      : ' && quote.close > 0';
-    if (rules.length > 0) {
-      definition.selection = {
-        ...(selection ?? {}),
-        rules: rules.map((rule) => {
-          const record2 = asRecord(rule) ?? {};
-          return {
-            ...record2,
-            when: `${readString(record2, 'when') ?? 'quote.close > 0'}${suffix}`,
-          };
-        }),
-      };
-    } else {
-      definition.metadata = { ...(asRecord(definition.metadata) ?? {}), style: 'fixture-tuned' };
-    }
-    return {
-      kind: 'parameter-tuning',
-      definition,
-      changeSummary: '测试提议：在基线规则上追加收敛条件',
-      factReferences: [firstFactId],
-    };
   }
 
   /**
@@ -469,8 +293,6 @@ export class FakeLLMAdapter implements LLMAdapter {
   }
 
   private buildAnalysis(mode: TestMode, stockId: string, data: unknown): FakeAnalysisOutput {
-    if (mode === 'market_outlook') return this.buildMarketOutlook(data);
-
     const seed = hashString(`${mode}|${stockId}`);
     const rand = mulberry32(seed);
 
@@ -511,35 +333,6 @@ export class FakeLLMAdapter implements LLMAdapter {
     ];
 
     return { decision, confidence, horizon, reasoning, risks };
-  }
-
-  /**
-   * 市场 / 板块观点 测试输出：
-   * - avgChangePct ≥ +1% → bullish（buy / avoid 都不会是真实选择）
-   * - avgChangePct ≤ -1% → bearish
-   * - 其它 → neutral (hold)
-   */
-  private buildMarketOutlook(data: unknown): FakeAnalysisOutput {
-    const record = asRecord(data);
-    const avgChangePct = readNumber(record, 'avgChangePct') ?? 0;
-    const evaluatedStocks = readNumber(record, 'evaluatedStocks') ?? 0;
-    const decision: AdviceDecision =
-      avgChangePct >= 0.01 ? 'buy' : avgChangePct <= -0.01 ? 'sell' : 'hold';
-    const confidence = Math.min(85, 50 + Math.floor(Math.abs(avgChangePct) * 1000));
-    return {
-      decision,
-      confidence,
-      horizon: 'short',
-      reasoning: {
-        premise: `测试市场观点：评估 ${evaluatedStocks} 只股票，平均涨跌 ${(avgChangePct * 100).toFixed(2)}%`,
-        evidence: [
-          `市场宽度：${avgChangePct >= 0 ? '上涨家数居多' : '下跌家数居多'}`,
-          `平均涨跌幅 ${(avgChangePct * 100).toFixed(2)}%`,
-        ],
-        counterEvidence: ['样本可能含板块偏好，结论非全市场'],
-      },
-      risks: ['系统性风险', '板块集中度风险'],
-    };
   }
 
   /**

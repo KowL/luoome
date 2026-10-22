@@ -32,7 +32,7 @@ const frame = (): string => setup.captureCharFrame();
 
 const done = createTuiApp(renderer, ctx);
 
-// 1) 等待首屏数据加载完成（list_holdings + get_advice / analyze_stock）。
+// 1) 等待首屏数据加载完成（list_holdings + get_advice）。
 await setup.waitFor(
   () => frame().includes('比亚迪') && DECISION_WORDS.some((w) => frame().includes(w)),
   { maxPasses: 200 },

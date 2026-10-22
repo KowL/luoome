@@ -19,7 +19,6 @@ import {
   transitionStrategyAutonomyActionTool,
 } from '../tools/strategy-autonomy-action.js';
 import { executeStrictStrategyBacktestTool } from '../tools/strategy-backtest.js';
-import { generateStrategyVersionProposalTool } from '../tools/strategy-proposal.js';
 import {
   claimDueStrategySchedulesTool,
   finishStrategyScheduleClaimTool,
@@ -54,7 +53,6 @@ export const HOSTED_WEB_POLICY_VERSION = 'hosted-web-v2' as const;
 
 // 新 registry 项必须逐项审核；新增工具不会自动获得托管权限。
 export const hostedWebPublicToolNames: readonly string[] = Object.freeze([
-  'research_investment_directions',
   'get_investment_workspace',
   'save_investment_consensus',
   'set_investment_tracking',
@@ -65,7 +63,6 @@ export const hostedWebPublicToolNames: readonly string[] = Object.freeze([
   'rename_chat_session',
   'delete_chat_session',
   'append_chat_message',
-  'agent_run',
   'list_accounts',
   'update_account',
   'get_account',
@@ -90,9 +87,6 @@ export const hostedWebPublicToolNames: readonly string[] = Object.freeze([
   'get_financial_facts',
   'get_fundamental_score',
   'get_watch_status',
-  'analyze_stock',
-  'analyze_strategy_candidate',
-  'analyze_position',
   'save_trading_plan',
   'get_trading_plan',
   'list_trading_plans',
@@ -159,11 +153,9 @@ export const hostedWebPublicToolNames: readonly string[] = Object.freeze([
   'get_signal_observation_stats',
   'create_strategy_observation_candidates',
   'get_strategy_insight_facts',
-  'generate_strategy_insight',
   'list_strategy_autonomy_actions',
   'confirm_strategy_autonomy_action',
   'reject_strategy_autonomy_action',
-  'generate_strategy_recommendations',
   'get_strategy_schedule',
   'set_strategy_schedule',
   'renew_strategy_schedule_claim',
@@ -186,7 +178,6 @@ export const hostedWebPublicToolNames: readonly string[] = Object.freeze([
   'delete_alert_plan',
   'record_advice_outcome',
   'send_notification',
-  'market_outlook',
   'limit_up_ladder',
   'limit_up_ladder_compare',
   'dragon_tiger_list',
@@ -265,7 +256,6 @@ const internalTools: readonly Tool[] = [
   createStrategyAutonomyActionTool,
   transitionStrategyAutonomyActionTool,
   executeStrictStrategyBacktestTool,
-  generateStrategyVersionProposalTool,
   claimDueStrategySchedulesTool,
   finishStrategyScheduleClaimTool,
   syncStrategyWatchlistSubscriptionsTool,
@@ -410,11 +400,10 @@ export const contextForHostedWebTools = (
       capabilities.delete('trade');
       capabilities.add('write');
     }
-    if (capabilities.has('advice') || refreshingReads.has(name)) capabilities.add('external');
+    if (refreshingReads.has(name)) capabilities.add('external');
     // 外部查询可能持久化行情/派生缓存；统一保留完整写入授权。
     if (capabilities.has('external')) capabilities.add('write');
-    const paid =
-      capabilities.has('write') || capabilities.has('external') || capabilities.has('advice');
+    const paid = capabilities.has('write') || capabilities.has('external');
     const authorization = await authorizeHostedWebRequest(invocation, paid);
     if (authorization !== null) return authorization;
     if (capabilities.has('external') && !invocation.capabilities.external)

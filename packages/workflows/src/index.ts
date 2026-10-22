@@ -3,7 +3,6 @@
 export * from './closing-report.js';
 export * from './closing-report-cutoff.js';
 export * from './complete-strategy-observations.js';
-export * from './daily-advice.js';
 export * from './daily-review.js';
 export * from './define-workflow.js';
 export * from './evaluate-event-rules.js';
@@ -21,7 +20,6 @@ export * from './run-strategy-schedules.js';
 export * from './snapshot-account-performance.js';
 export * from './strategy-autonomy-weekly.js';
 export * from './strategy-daily-cycle.js';
-export * from './strategy-recommendations.js';
 export * from './sync-portfolio-watchlists.js';
 export * from './sync-quotes.js';
 export * from './sync-research-vault.js';

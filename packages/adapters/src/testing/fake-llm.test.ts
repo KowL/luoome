@@ -46,11 +46,11 @@ const AdviceLLMSchema: SafeParseSchema = {
 
 const makeAdapter = () => new FakeLLMAdapter();
 
-describe('FakeLLMAdapter.generate / analyze_stock', () => {
+describe('FakeLLMAdapter.generate / generic', () => {
   it('输出通过传入 zod schema parse，且带 raw 文本', async () => {
     const llm = makeAdapter();
     const result = await llm.generate<FakeAnalysisOutput>({
-      system: '你是 analyze_stock 投顾分析助手',
+      system: 'fixture 分析助手',
       schema: AdviceLLMSchema,
       data: { stockId: '002594.SZ' },
     });
@@ -63,7 +63,7 @@ describe('FakeLLMAdapter.generate / analyze_stock', () => {
   it('deterministic：同一输入同一输出', async () => {
     const llm = makeAdapter();
     const req = {
-      system: 'analyze_stock',
+      system: 'fixture-generic',
       schema: AdviceLLMSchema,
       data: { stockId: '00700.HK' },
     } as const;
@@ -76,7 +76,7 @@ describe('FakeLLMAdapter.generate / analyze_stock', () => {
     const llm = makeAdapter();
     for (const stockId of ['600519.SH', 'AAPL.US', 'NVDA.US', '00941.HK']) {
       const result = await llm.generate<FakeAnalysisOutput>({
-        system: 'analyze_stock',
+        system: 'fixture-generic',
         schema: AdviceLLMSchema,
         data: { stockId },
       });
@@ -85,15 +85,13 @@ describe('FakeLLMAdapter.generate / analyze_stock', () => {
       expect(result.reasoning.premise).toContain(stockId);
     }
   });
-});
 
-describe('FakeLLMAdapter.generate / analyze_position', () => {
-  it('识别 analyze_position 标识，输出过 schema', async () => {
+  it('识别持仓上下文，输出过 schema', async () => {
     const llm = makeAdapter();
     const holding = TEST_HOLDINGS.find((h) => h.stockId === '002594.SZ');
     expect(holding).toBeDefined();
     const result = await llm.generate<FakeAnalysisOutput>({
-      system: '你是 analyze_position 持仓诊断助手',
+      system: 'fixture 持仓诊断助手',
       schema: AdviceLLMSchema,
       data: {
         holding,
@@ -107,7 +105,7 @@ describe('FakeLLMAdapter.generate / analyze_position', () => {
   it('持仓上下文生效：浮盈 ≥15% → sell 且 confidence ≥70', async () => {
     const llm = makeAdapter();
     const result = await llm.generate<FakeAnalysisOutput>({
-      system: 'analyze_position',
+      system: 'fixture-position',
       schema: AdviceLLMSchema,
       data: {
         holding: { stockId: '002594.SZ', avgCost: money(100), quantity: 1000 },
@@ -122,7 +120,7 @@ describe('FakeLLMAdapter.generate / analyze_position', () => {
   it('持仓上下文生效：浮亏 ≥10% → hold', async () => {
     const llm = makeAdapter();
     const result = await llm.generate<FakeAnalysisOutput>({
-      system: 'analyze_position',
+      system: 'fixture-position',
       schema: AdviceLLMSchema,
       data: {
         holding: { stockId: '600519.SH', avgCost: money(100), quantity: 100 },
@@ -141,7 +139,7 @@ describe('FakeLLMAdapter.generate / fallback', () => {
       safeParse: () => ({ success: false, error: 'always fails' }),
     };
     const req = {
-      system: 'analyze_stock',
+      system: 'fixture-generic',
       schema: impossibleSchema,
       data: { stockId: '002594.SZ' },
     } as const;
@@ -156,7 +154,7 @@ describe('FakeLLMAdapter.generate / fallback', () => {
   it('不传 schema 时原样返回候选输出', async () => {
     const llm = makeAdapter();
     const result = await llm.generate<FakeAnalysisOutput>({
-      system: 'analyze_stock',
+      system: 'fixture-generic',
       data: { stockId: 'AAPL.US' },
     });
     expect(result.decision).toBeDefined();

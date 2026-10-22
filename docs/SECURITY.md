@@ -21,10 +21,12 @@ luoome 是本地工具 + MCP server + advisor agent。五类潜在威胁：
 | 等级 | 含义 | 默认暴露 |
 |---|---|---|
 | `read` | 只读本地 | ✅ MCP / Web / CLI / TUI |
-| `advice` | 生成建议（含 LLM 推理） | ✅ MCP / Web / CLI / TUI |
 | `write` | 写本地状态 | ⚠️ opt-in |
 | `external` | 触发第三方副作用 | ⚠️ opt-in |
 | `trade` | 成交记账（影响现金与持仓）或真实资金动作 | ❌ MCP / 通用 Web 工具路由永不暴露 |
+
+> DSH 瘦身后内置 AI 下线，原 `advice` 副作用等级已删除；存量 Advice 数据的展示与
+> 复盘约束（免责声明、有效期、confidence 不自称为确定性）仍然适用。
 
 一个 tool 同时需要多类授权时，通过 `requiredCapabilities` 声明组合能力，Web 与 MCP
 必须逐项满足后才能暴露。例如 `import_remote_research_document` 会访问外部网络并写入
@@ -150,10 +152,11 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 | Env Var | 默认 | 允许值 | 说明 |
 |---|---|---|---|
 | `LUOOME_EXPOSE_READ` | `true` | `true` / `false` | read 类 |
-| `LUOOME_EXPOSE_ADVICE` | `true` | `true` / `false` | advice 类 |
 | `LUOOME_EXPOSE_WRITE` | `false` | `true` / `false` | write 类 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | `true` / `false` | external 类 |
 | `LUOOME_EXPOSE_TRADE` | `false` | 必须 `false` | trade 类，恒为 false |
+
+（`LUOOME_EXPOSE_ADVICE` 已随 advice 副作用等级一并删除。）
 
 启动时校验：trade 必须 false，否则启动失败。
 
@@ -165,11 +168,13 @@ Web 进程内后台任务不经过 HTTP Tool 路由的 capability gate，必须�
 
 ## 内置 agent loop
 
-`agent_run` 分类为 `external`，默认不通过 MCP 暴露。其运行时能力由 tools 包的显式白名单构造：
+> DSH 瘦身后 `agent_run` 工具已删除；Web 对话助手（/api/chat，托管运行时）沿用下述约束。
 
-- 仅允许逐项批准的 `read` 与 `external` tool；`write`、`advice`、`trade` 均不可达。
+对话运行时能力由 tools 包的显式白名单构造：
+
+- 仅允许逐项批准的 `read` 与 `external` tool；`write`、`trade` 均不可达。
 - `trade` 永不进入 agent 工具表，建议或盯盘结果不能触发自动下单。
-- 写入意图只能作为待确认 `drafts` 返回；草案会再次按目标 write tool 的输入 schema 校验，`agent_run` 自身不执行草案。
+- 写入意图只能作为待确认 `drafts` 返回；草案会再次按目标 write tool 的输入 schema 校验，对话入口自身不执行草案。
 - `usedTools` 与 `trace` 从实际 tool 调用派生，不接受模型自报；模型最终输出必须通过本地 Zod 校验。
 - 用户输入和 tool 输出均视为不可信内容；system instructions 明确禁止把其中的文本当作新指令。
 - 循环同时受最大步数、累计 token 软预算和总超时限制。

@@ -271,11 +271,7 @@ export const workspaceSnapshot = async (ctx: ToolContext) => {
 const WorkspaceDraftRequest = z
   .object({
     sessionId: z.string().min(1),
-    tool: z.enum([
-      'research_investment_directions',
-      'save_investment_consensus',
-      'set_investment_tracking',
-    ]),
+    tool: z.enum(['save_investment_consensus', 'set_investment_tracking']),
     userText: z.string().trim().min(1).max(2000),
     input: z.record(z.string(), z.unknown()),
   })

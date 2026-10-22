@@ -188,12 +188,11 @@ export const defineTypedTool = <I, O, C extends TypedExecutionContext>(
   }
 
   // AUDIT(advice × trade 隔离，AGENTS.md「Advice 与 Trade 的边界」硬约束):
-  // sideEffect === 'advice' 的 tool 只允许「读数据 + 调 LLM + 落 advice」。
   // ToolContext 类型层不含任何 trade 能力（无下单 adapter / 无 place_order），
-  // advice handler 能触达的最远写入是 ctx.repos.advice.save（建议持久化），
-  // 永远不得触发 trade 类副作用。v0.1 以本注释 + registry 单测
+  // 任何 handler 都永远不得触发 trade 类副作用。v0.1 以本注释 + registry 单测
   // （断言工具表中不存在 sideEffect === 'trade' 的 tool）兜底；
   // v0.2+ 若引入 write/external tool，应在 ctx 组装层按 sideEffect 裁剪能力。
+  // DSH 瘦身后 advice 副作用级别已随内置 AI 一并删除。
 
   const execute = async (rawInput: unknown, ctx: C): Promise<ToolResult<O>> => {
     const audit = (result: ToolResult<unknown>): Promise<void> =>

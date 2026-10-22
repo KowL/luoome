@@ -1,11 +1,5 @@
 import { InvariantError, type ToolContext, type ToolResult } from '@luoome/core';
 import type {
-  AnalyzePositionInput,
-  AnalyzePositionOutput,
-  AnalyzeStockInput,
-  AnalyzeStockOutput,
-  AnalyzeStrategyCandidateInput,
-  AnalyzeStrategyCandidateOutput,
   ArchiveStrategyInput,
   ArchiveStrategyOutput,
   BatchQuoteInput,
@@ -48,12 +42,6 @@ import type {
   FinishStrategyEvaluationSessionOutput,
   FinishStrategyScheduleClaimInput,
   FinishStrategyScheduleClaimOutput,
-  GenerateStrategyInsightInput,
-  GenerateStrategyInsightOutput,
-  GenerateStrategyRecommendationsInput,
-  GenerateStrategyRecommendationsOutput,
-  GenerateStrategyVersionProposalInput,
-  GenerateStrategyVersionProposalOutput,
   GetAccountFactsInput,
   GetAccountFactsOutput,
   GetAccountInput,
@@ -158,8 +146,6 @@ import type {
   ListWatchTriggersOutput,
   ListWorkflowRunsInput,
   ListWorkflowRunsOutput,
-  MarketOutlookInput,
-  MarketOutlookOutput,
   NorthboundFlowInput,
   NorthboundFlowOutput,
   PauseStrategyInput,
@@ -184,8 +170,6 @@ import type {
   RenderReportOutput,
   RenewStrategyScheduleClaimInput,
   RenewStrategyScheduleClaimOutput,
-  ResearchInvestmentDirectionsInput,
-  ResearchInvestmentDirectionsOutput,
   ResumeStrategyEvaluationSessionInput,
   ResumeStrategyEvaluationSessionOutput,
   RunStrategyInput,
@@ -259,7 +243,6 @@ import {
   createStrategyAutonomyActionTool,
   finishAccountPlanBatchTool,
   finishStrategyScheduleClaimTool,
-  generateStrategyVersionProposalTool,
   getAccountPlanBatchTool,
   getWatchTriggerDeliveryStatsTool,
   listWatchDeliveryRetriesTool,
@@ -304,10 +287,6 @@ export interface ToolAccessor<In extends z.ZodType, Out extends z.ZodType> {
  * 新增 tool 时在此补一行，类型层即对全部 workflow 生效。
  */
 export interface WorkflowToolMap {
-  readonly research_investment_directions: ToolAccessor<
-    typeof ResearchInvestmentDirectionsInput,
-    typeof ResearchInvestmentDirectionsOutput
-  >;
   readonly get_investment_workspace: ToolAccessor<
     typeof GetInvestmentWorkspaceInput,
     typeof GetInvestmentWorkspaceOutput
@@ -422,15 +401,6 @@ export interface WorkflowToolMap {
     typeof GetDecisionReviewSnapshotInput,
     typeof GetDecisionReviewSnapshotOutput
   >;
-  readonly analyze_stock: ToolAccessor<typeof AnalyzeStockInput, typeof AnalyzeStockOutput>;
-  readonly analyze_strategy_candidate: ToolAccessor<
-    typeof AnalyzeStrategyCandidateInput,
-    typeof AnalyzeStrategyCandidateOutput
-  >;
-  readonly analyze_position: ToolAccessor<
-    typeof AnalyzePositionInput,
-    typeof AnalyzePositionOutput
-  >;
   readonly save_trading_plan: ToolAccessor<
     typeof SaveTradingPlanInput,
     typeof SaveTradingPlanOutput
@@ -499,11 +469,6 @@ export interface WorkflowToolMap {
     typeof TransitionStrategyAutonomyActionInput,
     typeof TransitionStrategyAutonomyActionOutput
   >;
-  /** workflow-only（M2-S2）；AI 版本提议只读事实 + 调 LLM，不持久化。 */
-  readonly generate_strategy_version_proposal: ToolAccessor<
-    typeof GenerateStrategyVersionProposalInput,
-    typeof GenerateStrategyVersionProposalOutput
-  >;
   readonly get_strategy: ToolAccessor<typeof GetStrategyInput, typeof GetStrategyOutput>;
   readonly get_strategy_experiment_context: ToolAccessor<
     typeof GetStrategyExperimentContextInput,
@@ -553,14 +518,6 @@ export interface WorkflowToolMap {
   readonly get_strategy_insight_facts: ToolAccessor<
     typeof GetStrategyInsightFactsInput,
     typeof GetStrategyInsightFactsOutput
-  >;
-  readonly generate_strategy_insight: ToolAccessor<
-    typeof GenerateStrategyInsightInput,
-    typeof GenerateStrategyInsightOutput
-  >;
-  readonly generate_strategy_recommendations: ToolAccessor<
-    typeof GenerateStrategyRecommendationsInput,
-    typeof GenerateStrategyRecommendationsOutput
   >;
   readonly get_strategy_pit_universe: ToolAccessor<
     typeof GetStrategyPitUniverseInput,
@@ -661,7 +618,6 @@ export interface WorkflowToolMap {
     typeof SendNotificationInput,
     typeof SendNotificationOutput
   >;
-  readonly market_outlook: ToolAccessor<typeof MarketOutlookInput, typeof MarketOutlookOutput>;
   // v0.6 起：股票池触发落库（workflow 内部使用 save_watch_trigger）
   readonly save_watch_trigger: ToolAccessor<
     typeof SaveWatchTriggerInput,
@@ -797,7 +753,6 @@ export const buildWorkflowTools = (ctx: ToolContext): WorkflowToolMap => {
     syncStrategyWatchlistSubscriptionsTool,
     createStrategyAutonomyActionTool,
     transitionStrategyAutonomyActionTool,
-    generateStrategyVersionProposalTool,
   ]) {
     accessors[internalTool.name] = {
       execute: (input) => internalTool.execute(input, ctx),

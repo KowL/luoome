@@ -121,30 +121,6 @@ describe('summarizeDraft', () => {
     });
   });
 
-  it('market_outlook：无主题时标注全市场歧义', () => {
-    const display = summarizeDraft({
-      tool: 'market_outlook',
-      kind: 'advice',
-      input: {},
-      parsed: {},
-      description: '大盘 / 板块观点',
-    });
-    expect(display.targetObject).toBe('市场观点 Advice（全市场）');
-    expect(display.ambiguous).toEqual(['未指定板块或主题，将按全市场评估']);
-  });
-
-  it('analyze_stock：advice 草案投影股票与备注', () => {
-    const display = summarizeDraft({
-      tool: 'analyze_stock',
-      kind: 'advice',
-      input: { stockId: 'SZ300857', notes: '关注量能' },
-      parsed: { stockId: 'SZ300857', notes: '关注量能' },
-      description: '对指定股票做综合分析',
-    });
-    expect(display.targetObject).toBe('个股 Advice（SZ300857）');
-    expect(display.fields.map((f) => f.name)).toEqual(['股票', '备注']);
-  });
-
   it('record_advice_outcome：保留部分采纳、交易关联与盈亏未知性', () => {
     const display = summarizeDraft({
       tool: 'record_advice_outcome',

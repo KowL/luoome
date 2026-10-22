@@ -146,7 +146,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
       const result = await ctx.hostedAuthorization?.(
         call.toolName,
         call.input,
-        tool.requiredCapabilities as ('read' | 'write' | 'external' | 'advice')[],
+        tool.requiredCapabilities as ('read' | 'write' | 'external')[],
       );
       return result !== undefined && result !== null && !result.ok ? result.error : null;
     };
@@ -243,7 +243,7 @@ export class DshChatRuntime implements ChatStreamRuntime {
           manifestHash: manifest.manifest.manifestHash,
           scenario: scenario.id,
           expiresAt,
-          allowedCapabilities: ['read', 'write', 'advice', 'external'],
+          allowedCapabilities: ['read', 'write', 'external'],
         },
         manifest,
         authorize,

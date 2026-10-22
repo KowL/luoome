@@ -30,17 +30,8 @@ export const hostedDeepSeekPricing = (now: Date): HostedLLMPricing => {
     outputMicroPerMillion: peak ? 8_000_000 : 4_000_000,
   };
 };
-export const hostedLLMToolNames: ReadonlySet<string> = new Set([
-  'research_investment_directions',
-  'analyze_stock',
-  'analyze_position',
-  'analyze_strategy_candidate',
-  'market_outlook',
-  'generate_strategy_insight',
-  'generate_strategy_version_proposal',
-  'agent_run',
-  'hosted_chat_stream',
-]);
+// 领域 AI 工具已随内置 AI 下线删除；计量只覆盖托管 Chat 链路（Q14 例外）。
+export const hostedLLMToolNames: ReadonlySet<string> = new Set(['agent_run', 'hosted_chat_stream']);
 const forever = new Date('9999-01-01T00:00:00Z');
 export const createHostedLLMExecution = (options: {
   readonly provider?: HostedModelProvider;

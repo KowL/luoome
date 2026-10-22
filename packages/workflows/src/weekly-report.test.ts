@@ -686,7 +686,7 @@ describe('weekly-report workflow', () => {
     });
     const text = section?.blocks.find((block) => block.kind === 'text');
     const textValue = text?.kind === 'text' ? text.text : '';
-    expect(textValue).toContain('策略事实观察');
+    expect(textValue).toContain('确定性事实摘要');
     expect(textValue).toContain('样本不足');
     expect(textValue).toContain('benchmark 不可用');
     const serialized = JSON.stringify(section?.blocks);
@@ -730,7 +730,7 @@ describe('weekly-report workflow', () => {
     );
   });
 
-  it('AI 不可用时策略复盘退化为 facts-only 摘要且 section 保持 complete', async () => {
+  it('策略复盘输出确定性事实摘要且 section 保持 complete', async () => {
     const baseCtx = await buildTestContext({ clock: () => now });
     await seedStrategyWithPublishedRun(baseCtx);
     const failingCtx: ToolContext = {
@@ -761,8 +761,7 @@ describe('weekly-report workflow', () => {
     });
     const text = section?.blocks.find((block) => block.kind === 'text');
     const textValue = text?.kind === 'text' ? text.text : '';
-    expect(textValue).toContain('事实摘要');
-    expect(textValue).toContain('AI 不可用');
+    expect(textValue).toContain('确定性事实摘要');
   });
 
   it('策略运行读取失败时策略复盘 section unavailable，且不改变整份报告状态', async () => {

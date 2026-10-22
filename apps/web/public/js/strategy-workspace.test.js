@@ -1487,31 +1487,11 @@ describe('严格回测', () => {
 });
 
 describe('Phase B 洞察与调度', () => {
-  it('先展示确定性事实，再由显式按钮生成带事实引用的 AI 解读', async () => {
-    globalThis.fetch = async (path, init) => {
+  it('只展示确定性事实（内置 AI 已下线，不再提供生成按钮）', async () => {
+    globalThis.fetch = async (path) => {
       const url = String(path);
-      if (url.includes('/insights/generate') && init?.method === 'POST') {
-        return jsonResponse({
-          ok: true,
-          data: {
-            provider: 'fixture',
-            insight: {
-              headline: '策略事实观察',
-              summary: '只解释已有事实。',
-              findings: [
-                {
-                  kind: 'trend',
-                  title: '运行稳定',
-                  detail: '近期有一条可用运行。',
-                  factRefs: ['runs:window'],
-                },
-              ],
-              risks: ['样本少'],
-              limitations: ['不是回测'],
-              disclaimer: '仅供研究，不构成投资建议。',
-            },
-          },
-        });
+      if (url.includes('/insights/generate')) {
+        throw new Error('insights/generate 路由已删除，不应被调用');
       }
       return jsonResponse({
         ok: true,
@@ -1545,18 +1525,9 @@ describe('Phase B 洞察与调度', () => {
     expect(node.textContent).toContain('真实信号观察');
     expect(node.textContent).toContain('5.00%');
     expect(node.textContent).toContain('质量门槛');
-    expect(node.textContent).not.toContain('运行稳定');
-
-    node
-      .querySelectorAll('button')
-      .find((button) => button.textContent === '生成 AI 解读')
-      .click();
-    await flush();
-    expect(node.textContent).toContain('运行稳定');
-    expect(node.textContent).toContain('已引用 1 项已核验事实');
-    expect(node.textContent).not.toContain('runs:window');
-    expect(node.textContent).not.toContain('quality');
-    expect(statuses.at(-1)).toContain('fixture');
+    expect(node.querySelectorAll('button').find((b) => b.textContent === '生成 AI 解读')).toBe(
+      undefined,
+    );
   });
 
   it('设置页展示并保存调度与自动推荐政策', async () => {

@@ -7,7 +7,6 @@ import {
   fmtDateTime,
   fmtNum,
   metric,
-  post,
 } from './strategy-workspace-shared.js';
 
 const featureCache = createFeatureCache();
@@ -16,37 +15,9 @@ export const invalidateInsightsCache = () => featureCache.clear();
 
 const pct = (value) => (value === undefined ? '--' : `${String(fmtNum(value * 100, 2))}%`);
 
-const renderInsightNarrative = (insight) =>
-  el('section', 'strategy-insight-narrative', [
-    el('span', 'section-kicker', 'AI EXPLANATION'),
-    el('h3', null, insight.headline),
-    el('p', null, insight.summary),
-    ...(insight.findings ?? []).map((finding) =>
-      el('article', 'strategy-insight-finding', [
-        el('div', 'flex gap-2', [
-          el('strong', null, finding.title),
-          badge(
-            finding.kind === 'risk'
-              ? ['风险', 'badge-important']
-              : finding.kind === 'limitation'
-                ? ['限制', 'badge-neutral']
-                : ['趋势', 'badge-active'],
-            finding.kind,
-          ),
-        ]),
-        el('p', null, finding.detail),
-        el('small', 'muted', `已引用 ${finding.factRefs.length} 项已核验事实`),
-      ]),
-    ),
-    ...(insight.risks?.length
-      ? [el('p', 'status warning', `风险：${insight.risks.join('；')}`)]
-      : []),
-    el('p', 'muted', insight.disclaimer),
-  ]);
-
 export const renderInsights = async (
   strategyId,
-  setStatus = () => {},
+  _setStatus = () => {},
   scope = 'operational',
   state = parseStrategyHash(typeof window === 'undefined' ? '' : window.location.hash),
 ) => {
@@ -54,24 +25,6 @@ export const renderInsights = async (
   const result = await cachedGet(path);
   if (!result.ok) return el('p', 'status error', errorText(result));
   const facts = result.data;
-  const output = el('div', 'strategy-insight-output');
-  const generate = el('button', 'btn btn-primary btn-sm', '生成 AI 解读');
-  generate.type = 'button';
-  generate.addEventListener('click', async () => {
-    generate.disabled = true;
-    setStatus('正在基于已核验事实生成解读…');
-    const generated = await post(
-      `/api/strategies/${encodeURIComponent(strategyId)}/insights/generate`,
-      { windowDays: facts.window.days, scope },
-    );
-    generate.disabled = false;
-    if (!generated.ok) {
-      setStatus(errorText(generated), true);
-      return;
-    }
-    output.replaceChildren(renderInsightNarrative(generated.data.insight));
-    setStatus(`AI 解读已生成 · ${generated.data.provider}`);
-  });
   const observationRows = facts.observations.map((item) =>
     el('tr', null, [
       el('td', 'mono', item.horizon.toUpperCase()),
@@ -133,7 +86,6 @@ export const renderInsights = async (
           });
           return button;
         }),
-        generate,
       ]),
     ]),
     el('div', 'strategy-summary-grid', [
@@ -261,6 +213,5 @@ export const renderInsights = async (
       'strategy-health-banner warning',
       facts.limitations.map((limitation) => el('p', null, limitation)),
     ),
-    output,
   ]);
 };

@@ -1165,3 +1165,17 @@ Q12 的原意是「审计链不因 30 分钟过期而断裂」，要的是**保�
 - **§15.3-3 已修正**：§5.4.3 影响段落补充 P2 新增 `queue` 值需同步 `side-effect.ts` 与 `exposure.ts`（解析 `LUOOME_EXPOSE_QUEUE`）。
 
 至此 §13 + §15 两轮评审意见全部闭环，文档可进入 P1。
+
+## 16. 实施进度：单机去内置 AI 瘦身（2026-10-22，dsh 分支）
+
+按本文「删除内置 AI、外部分析写入」方向完成第一轮代码瘦身，范围与拍板如下：
+
+- **删除 9 个内置 AI 工具及其测试**：`analyze_stock`、`analyze_position`、`analyze_strategy_candidate`、`market_outlook`、`generate_strategy_insight`、`generate_strategy_recommendations`、`generate_strategy_version_proposal`、`research_investment_directions`、`agent_run`；registry、桶导出、hosted/web 白名单、MCP smoke 同步清理。
+- **workflow 改造**：`daily-advice`、`strategy-recommendations` 两个纯 AI 建议包装 workflow 整体删除；`risk-report` 移除 market_outlook 步骤（大盘背景改固定文案）；`trading-plan-daily-cycle` 的持仓复核改为 `sync_quotes` + 读取当日已落库建议（外部分析写入路径）；`strategy-daily-cycle`/`weekly-report` 的洞察阶段改为直接取 `get_strategy_insight_facts` 确定性事实；`complete-strategy-observations`、`strategy-autonomy-weekly` 的推荐/提议生成块删除，存量 validating 动作仍由人工队列处理。
+- **Web/Chat**：`/api/strategies/:id/insights/generate` 路由与「生成 AI 解读」按钮删除，洞察页只展示确定性事实；`research_investment_directions` 退出工作区草案枚举与 Agent 场景草案清单（存量历史草案的客户端渲染保留）；chat 场景 BASE_INSTRUCTIONS 同步去除已删工具引用。
+- **副作用面**：`SideEffect` 删除 `advice` 值（`read | write | external | trade`），MCP 默认暴露面收窄为 `{read}`，Web `EXPOSED_SIDE_EFFECTS` 去掉 `advice`；`hostedLLMToolNames` 收窄为 `agent_run`（托管 Chat 计量标签）与 `hosted_chat_stream`。
+- **测试假件**：`FakeLLMAdapter` 删除 analyze/market_outlook/strategy_insight/strategy_version_proposal 分支，保留 chat、score_signals、resolve_llm_group 与 generic 路径。
+
+**明确保留（不属于本轮删除）**：`ToolContext.adapters.llm` 端口与 `ctx.agent`（托管 Chat 依赖）；core 的 `RULE_FALLBACK_*` 标记与 `isRuleFallbackAdvice`（过滤存量数据用）；Advice 实体、复盘与免责声明约束；TUI/CLI daemon/`ai-models.json`（`adapters/llm → ai-runtime` 迁移属重构，留待后续）。
+
+验证：`bun run typecheck` 全绿；`bun run test` / `test:db` / `test:web` 通过（仅余存量 DSH 集成环境失败，与 main 基线一致，非本轮回归）；`bun run lint` 无新增警告。

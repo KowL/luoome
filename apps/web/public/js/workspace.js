@@ -107,30 +107,6 @@ const directionCoverageText = (coverage) => {
   return `${scope} · ${coverage.observedCount} ${unit} · ${coverage.dataHealth === 'partial' ? '部分数据' : '来源数据完整'}。${coverage.description}`;
 };
 
-const requestResearch = async () => {
-  const isCurrent = captureIdentity();
-  const values = await promptDialog({
-    title: '提出方向研究草案',
-    fields: [
-      {
-        key: 'question',
-        label: '这次想比较什么方向？',
-        value: '比较当前可研究的短线波段参与方向，说明证据、覆盖范围、反对意见、等待和放弃条件。',
-        multiline: true,
-        rows: 3,
-      },
-    ],
-    confirmLabel: '生成待确认草案',
-    note: '确认草案后才使用模型研究。有合格策略时比较策略事实，否则读取可用市场事实；市场方向没有个股映射时不能开启个股跟踪。不会开启持续付费研究或通知。',
-  });
-  if (!isCurrent() || !values?.question) return;
-  await prepareDraft(
-    'research_investment_directions',
-    { requestId: randomRequestId(), question: values.question },
-    values.question,
-  );
-};
-
 const proposeConsensus = async (investment, selectedDirection) => {
   const isCurrent = captureIdentity();
   const research = investment.research;
@@ -270,7 +246,6 @@ const renderInvestment = (data) => {
             : '本次未完成方向判断。保留已有事实，不把失败写成没有机会。',
         ),
         ...(research?.limitations ?? []).map((text) => el('p', 'workspace-caption', text)),
-        action('提出研究草案 ↗', () => void requestResearch()),
         action(
           '先聊一聊',
           () => void openWorkspaceDiscussion([], '先说明当前可用的方向研究事实与覆盖范围。'),
@@ -356,7 +331,6 @@ const renderInvestment = (data) => {
     mount(host, [
       el('div', 'workspace-card-grid', cards),
       el('div', 'workspace-card-actions', [
-        action('重新研究（另行确认）', () => void requestResearch(), 'workspace-action secondary'),
         ...research.limitations.map((text) => el('p', 'workspace-caption', text)),
       ]),
     ]);

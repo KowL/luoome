@@ -6,7 +6,7 @@ import type {
   StrategyVersion,
   ToolContext,
 } from '@luoome/core';
-import { money, strategyDefinitionHash } from '@luoome/core';
+import { money, STANDARD_DISCLAIMERS, strategyDefinitionHash } from '@luoome/core';
 import {
   addHoldingTool,
   addTradeTool,
@@ -220,9 +220,8 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(await ctx.repos.notification.listRecent()).toHaveLength(3);
   });
 
-  it('AI 恢复到计划、次日投递重试、登记交易和隔日复盘保持同一事实链', async () => {
+  it('外部建议落库后，计划、次日投递重试、登记交易和隔日复盘保持同一事实链', async () => {
     let currentTime = NOW;
-    let failAI = true;
     let failNotification = false;
     let riskPrice: number | undefined;
     const accountId = 'a1b2c3d4-0001-4000-8000-000000000001';
@@ -246,28 +245,6 @@ describe('strategy-daily-cycle reliability matrix', () => {
         ts: observedAt,
       };
     };
-    const generate = ctx.adapters.llm.generate.bind(ctx.adapters.llm);
-    ctx.adapters.llm.generate = async <T = unknown>(
-      request: Parameters<typeof generate>[0],
-    ): Promise<T> => {
-      if (!request.system.startsWith('analyze_position')) return generate<T>(request);
-      if (failAI) throw new Error('fixture AI unavailable');
-      const { quote } = request.data as { quote: { close: number } };
-      return {
-        decision: 'hold',
-        confidence: 60,
-        horizon: 'short',
-        entryPrice: quote.close,
-        stopLoss: money(quote.close * 0.95),
-        targetPrice: money(quote.close * 1.1),
-        reasoning: {
-          premise: '测试持仓复核完成',
-          evidence: ['固定行情事实'],
-          counterEvidence: ['价格可能跌破风险条件'],
-        },
-        risks: ['测试波动风险'],
-      } as T;
-    };
     const notification = ctx.notification;
     if (notification === undefined) throw new Error('notification fixture missing');
     const send = notification.send.bind(notification);
@@ -288,18 +265,36 @@ describe('strategy-daily-cycle reliability matrix', () => {
       await addHoldingTool.execute({ accountId, stockId, quantity: 100, avgCost: 100 }, ctx),
     ).toMatchObject({ ok: true });
 
-    const failedCycle = await strategyDailyCycleWorkflow.run({ owner: 'journey-failed-ai' }, ctx);
-    expect(failedCycle.ok).toBe(true);
+    // 内置 AI 已下线：建议由外部消费者产出并经 record_advice 落库；这里直接落一条
+    // analyze_position 建议，验证后续计划/投递/交易/复盘事实链不依赖本地模型。
+    const holding = await ctx.repos.holding.findByAccountAndStock(accountId, stockId);
+    if (holding === null) throw new Error('holding fixture missing');
+    await ctx.repos.advice.save({
+      id: 'journey-position-advice',
+      subjectKind: 'position',
+      subjectId: holding.id,
+      stockName: '测试持仓股',
+      decision: 'hold',
+      confidence: 60,
+      horizon: 'short',
+      entryPrice: money(100),
+      stopLoss: money(95),
+      targetPrice: money(110),
+      reasoning: {
+        premise: '测试持仓复核完成',
+        evidence: ['固定行情事实'],
+        counterEvidence: ['价格可能跌破风险条件'],
+      },
+      risks: ['测试波动风险'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_position',
+      basedOn: { dataAsOf: currentTime },
+      validFrom: currentTime,
+      validUntil: new Date('2026-08-17T07:00:00.000Z'),
+      createdAt: currentTime,
+    });
     expect(
-      (await ctx.repos.report.list({ kind: 'closing' })).some(
-        (report) => report.scope.kind === 'account' && report.scope.accountId === accountId,
-      ),
-    ).toBe(false);
-
-    currentTime = new Date(NOW.getTime() + 16 * 60_000);
-    failAI = false;
-    expect(
-      await strategyDailyCycleWorkflow.run({ owner: 'journey-ai-restored' }, ctx),
+      await strategyDailyCycleWorkflow.run({ owner: 'journey-advice-seeded' }, ctx),
     ).toMatchObject({ ok: true });
     const main = (await ctx.repos.report.list({ kind: 'closing' })).find(
       (report) => report.scope.kind === 'account' && report.scope.accountId === accountId,
@@ -372,6 +367,33 @@ describe('strategy-daily-cycle reliability matrix', () => {
     const stale = await intradayTradingPlanWatchWorkflow.run({ accountId }, ctx);
     expect(stale).toMatchObject({ ok: true, data: { stalePlans: 1, triggers: [], notified: 0 } });
 
+    currentTime = new Date('2026-08-11T09:59:00.000Z');
+    // 次日外部消费者再次落库一条新建议（价格随当日行情），驱动计划产生新版本。
+    if (riskPrice === undefined) throw new Error('risk price missing');
+    await ctx.repos.advice.save({
+      id: 'journey-position-advice-day2',
+      subjectKind: 'position',
+      subjectId: holding.id,
+      stockName: '测试持仓股',
+      decision: 'hold',
+      confidence: 60,
+      horizon: 'short',
+      entryPrice: money(riskPrice),
+      stopLoss: money(riskPrice * 0.95),
+      targetPrice: money(riskPrice * 1.1),
+      reasoning: {
+        premise: '次日持仓复核完成',
+        evidence: ['固定行情事实'],
+        counterEvidence: ['价格可能跌破风险条件'],
+      },
+      risks: ['测试波动风险'],
+      disclaimers: [...STANDARD_DISCLAIMERS],
+      sourceTool: 'analyze_position',
+      basedOn: { dataAsOf: currentTime },
+      validFrom: currentTime,
+      validUntil: new Date('2026-08-18T07:00:00.000Z'),
+      createdAt: currentTime,
+    });
     currentTime = new Date('2026-08-11T10:00:00.000Z');
     expect(
       await strategyDailyCycleWorkflow.run({ owner: 'journey-next-close' }, ctx),
@@ -429,7 +451,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     ).toHaveLength(1);
   });
 
-  it('AI 失败时保留已发布事实并返回 facts-only partial 周期', async () => {
+  it('LLM 不可用不再影响周期：保留已发布事实并返回 facts-only complete 周期', async () => {
     const base = await buildTestContext({
       clock: () => NOW,
       logger: { debug() {}, info() {}, warn() {}, error() {} },
@@ -454,7 +476,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.items[0]).toMatchObject({
-      status: 'partial',
+      status: 'complete',
       insightProvider: 'facts-only',
     });
     const runId = result.data.items[0]?.runId;
@@ -1276,14 +1298,7 @@ describe('strategy-daily-cycle reliability matrix', () => {
     const batches = await ctx.repos.workflowRun.listRecent({ workflowName: 'account-plan-batch' });
     expect(batches).toHaveLength(3);
     expect(batches.every((batch) => batch.status !== 'running')).toBe(true);
-    expect(
-      batches.some(
-        (batch) =>
-          typeof batch.outputSummary?.draftPlans === 'number' &&
-          batch.outputSummary.draftPlans > 0 &&
-          batch.outputSummary.status === 'partial',
-      ),
-    ).toBe(true);
+    expect(batches.every((batch) => batch.outputSummary?.status === 'complete')).toBe(true);
 
     currentTime = NOW;
     const cutoff = await closingReportCutoffWorkflow.run({}, ctx);

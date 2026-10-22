@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { type LLMAdapterLike, money, type ToolContext } from '@luoome/core';
+import {
+  type AShareSentimentSnapshot,
+  investmentMarketEvidenceValidUntil,
+  STANDARD_DISCLAIMERS,
+  type ToolContext,
+} from '@luoome/core';
 import { buildTestContext } from '@luoome/tools/testing';
 import { type ChatStreamRuntime, createChatStreamResponse } from './chat.js';
 import { createWebApp } from './server.js';
@@ -40,66 +45,148 @@ const setup = async (options?: Parameters<typeof buildTestContext>[0]) => {
   return { ctx, runtime, messages, body };
 };
 
-describe('投资协作首页与主体信任', () => {
-  it('无策略用户经确认研究市场方向，保存共识后跨请求恢复并明确不能跟踪个股', async () => {
-    const now = new Date('2026-10-16T08:00:00Z');
-    const { ctx: base } = await setup({ clock: () => now });
-    let modelCalls = 0;
-    const generate = async ({ data }: Parameters<LLMAdapterLike['generate']>[0]) => {
-      modelCalls += 1;
-      const [proposal] = (data as { proposals: { id: string; evidenceIds: string[] }[] }).proposals;
-      if (!proposal) throw new Error('fixture has no qualified market evidence');
-      return {
-        directions: [
+// 内置 AI 研究方向工具已下线；测试直接落库一条等效的市场方向研究记录。
+const MARKET_OBSERVED_AT = new Date('2026-10-16T07:00:00Z');
+const marketSnapshot = (): AShareSentimentSnapshot => {
+  const provenance = [
+    {
+      provider: 'injected-market-source',
+      observedAt: MARKET_OBSERVED_AT,
+      fetchedAt: new Date('2026-10-16T08:00:00Z'),
+      freshness: 'fresh' as const,
+    },
+  ];
+  const missing = {
+    status: 'unavailable' as const,
+    provenance: [
+      {
+        provider: 'unconfigured',
+        observedAt: new Date('2026-10-16T08:00:00Z'),
+        fetchedAt: new Date('2026-10-16T08:00:00Z'),
+        freshness: 'unavailable' as const,
+      },
+    ],
+    warnings: ['not-configured'],
+  };
+  return {
+    date: '2026-10-16',
+    coverage: 'CN_A_SHARES_SH_SZ',
+    dataAsOf: MARKET_OBSERVED_AT,
+    indexes: missing,
+    breadth: {
+      status: 'complete',
+      provenance,
+      warnings: [],
+      value: { advancing: 3000, declining: 1700, unchanged: 300, total: 5000 },
+    },
+    limitUp: {
+      status: 'complete',
+      provenance,
+      warnings: [],
+      value: {
+        sealedCount: 30,
+        brokenCount: 10,
+        brokenRate: 0.25,
+        maxLadderLevel: 4,
+        totalSealAmount: 1000000,
+        boardDistribution: { main: 30 },
+        leaders: [],
+      },
+    },
+    themes: {
+      status: 'partial',
+      provenance,
+      warnings: ['only-provider-pool-industries'],
+      value: { industries: [{ name: '软件开发', count: 10 }], concepts: [] },
+    },
+  };
+};
+
+const seedMarketResearch = async (ctx: ToolContext, createdAt: Date) => {
+  const snapshotId = 'snapshot-market-1';
+  const source = { kind: 'market-snapshot' as const, snapshotId, subject: 'cn-equity-indexes' };
+  const evidence = [
+    {
+      id: 'market:indexes',
+      source,
+      dataAsOf: MARKET_OBSERVED_AT,
+      kind: 'market-indexes' as const,
+      text: '上证指数收 3600 点，涨 0.33%；仅描述指数事实。',
+      value: { close: 3600, changePct: 0.33 },
+      provenance: [
+        {
+          provider: 'injected-market-source',
+          observedAt: MARKET_OBSERVED_AT,
+          fetchedAt: createdAt,
+          freshness: 'fresh' as const,
+        },
+      ],
+    },
+  ];
+  const research = {
+    id: 'market-research-1',
+    ownerUserId: ctx.user.id,
+    accountId: ctx.user.defaultAccountId,
+    requestId: 'market-http',
+    requestHash: 'hash-market-http',
+    question: '没有预设策略，先研究什么？',
+    status: 'complete' as const,
+    source: { userText: '没有预设策略，先研究什么？' },
+    directions: [
+      {
+        id: 'direction-market-1',
+        name: '指数层面观察',
+        rank: 1,
+        stance: 'observe' as const,
+        rationale: '仅讨论已取得的指数事实',
+        comparisonReason: '只有指数可用，个股机会未知',
+        evidenceIds: ['market:indexes'],
+        objections: [
           {
-            proposalId: proposal.id,
-            stance: 'observe',
-            rationale: '仅讨论已取得的指数事实',
-            comparisonReason: '只有指数可用，个股机会未知',
-            evidenceIds: proposal.evidenceIds,
-            objections: [
-              {
-                kind: 'known-risk',
-                conclusion: '指数不能作为个股买入理由',
-                evidenceIds: proposal.evidenceIds,
-                risks: ['市场可能反转'],
-                unknowns: ['公司事件未知'],
-                reconsiderWhen: ['补充个股证据'],
-                alternatives: ['等待'],
-              },
-            ],
-            risks: ['波动风险'],
-            waitFor: ['具体证据'],
-            abandonWhen: ['事实到期'],
-            reviewWhen: ['下次开盘'],
-            horizon: 'short',
+            kind: 'known-risk' as const,
+            conclusion: '指数不能作为个股买入理由',
+            evidenceIds: ['market:indexes'],
+            risks: ['市场可能反转'],
+            unknowns: ['公司事件未知'],
+            reconsiderWhen: ['补充个股证据'],
+            alternatives: ['等待'],
           },
         ],
-      };
-    };
-    const ctx: ToolContext = {
-      ...base,
-      clock: () => now,
-      adapters: {
-        ...base.adapters,
-        market: {
-          ...base.adapters.market,
-          fetchIndexQuotes: async () => [
-            {
-              code: '000001',
-              name: '上证指数',
-              close: money(3600),
-              change: 12,
-              changePct: 0.33,
-              ts: new Date('2026-10-16T07:00:00Z'),
-              timestampSource: 'upstream',
-              source: 'fixture-index',
-            },
-          ],
+        risks: ['波动风险'],
+        waitFor: ['具体证据'],
+        abandonWhen: ['事实到期'],
+        reviewWhen: ['下次开盘'],
+        horizon: 'short' as const,
+        accountFit: 'research-only' as const,
+        dataAsOf: MARKET_OBSERVED_AT,
+        validUntil: investmentMarketEvidenceValidUntil(MARKET_OBSERVED_AT),
+        opportunityType: 'market-participation' as const,
+        source,
+        coverage: {
+          kind: 'market-facts' as const,
+          scope: 'cn-equity-indexes' as const,
+          observedCount: 1,
+          unit: 'indexes' as const,
+          dataHealth: 'partial' as const,
+          description: '仅覆盖注入的指数事实，不代表全市场。',
         },
-        llm: { name: 'fixture-only', generate: generate as LLMAdapterLike['generate'] },
+        tracking: { eligible: false as const, reason: '市场方向没有真实策略映射，不能跟踪个股。' },
       },
-    };
+    ],
+    evidence,
+    limitations: ['只有指数事实可用。'],
+    disclaimers: [...STANDARD_DISCLAIMERS],
+    createdAt,
+    marketSnapshot: { id: snapshotId, snapshot: marketSnapshot() },
+  };
+  await ctx.repos.investmentWorkspace.createResearch(research);
+  return research;
+};
+
+describe('投资协作首页与主体信任', () => {
+  it('无策略用户基于已有研究保存共识，跨请求恢复并明确不能跟踪个股', async () => {
+    const now = new Date('2026-10-16T08:00:00Z');
+    const { ctx } = await setup({ clock: () => now });
     const app = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
     const stage = async (tool: string, input: unknown, userText: string) => {
       const response = await app.fetch(
@@ -126,17 +213,24 @@ describe('投资协作首页与主体信任', () => {
       );
       return response.json();
     };
-    const draft = await stage(
-      'research_investment_directions',
-      {
-        requestId: 'market-http',
-        question: '没有预设策略，先研究什么？',
-      },
-      '没有预设策略，先研究什么？',
-    );
-    expect(modelCalls).toBe(0);
-    expect(await confirm(draft)).toMatchObject({ ok: true, data: { status: 'succeeded' } });
-    expect(modelCalls).toBe(1);
+    // 已删除的 AI 研究工具不能再生成草案
+    expect(
+      (
+        await app.fetch(
+          new Request('http://test/api/workspace/drafts', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: 'workspace-chat',
+              tool: 'research_investment_directions',
+              input: { requestId: 'removed', question: '还能研究吗？' },
+              userText: '还能研究吗？',
+            }),
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    const seeded = await seedMarketResearch(ctx, now);
     const research = (
       await ctx.repos.investmentWorkspace.listResearch({
         ownerUserId: ctx.user.id,
@@ -146,6 +240,7 @@ describe('投资协作首页与主体信任', () => {
     )[0];
     expect(research?.directions[0]).toMatchObject({ opportunityType: 'market-participation' });
     if (!research?.directions[0]) throw new Error('fixture research missing');
+    expect(research.id).toBe(seeded.id);
     const direction = research.directions[0];
     const consensusDraft = await stage(
       'save_investment_consensus',
@@ -202,59 +297,6 @@ describe('投资协作首页与主体信任', () => {
     });
     expect(await ctx.repos.strategy.list()).toEqual([]);
     expect(await ctx.repos.watchlist.list()).toEqual([]);
-  });
-
-  it('首页产生的研究草案只保存用户输入，确认后才执行实际工具', async () => {
-    const { ctx } = await setup();
-    const staged = await createWorkspaceDraft(
-      {
-        sessionId: 'workspace-chat',
-        tool: 'research_investment_directions',
-        userText: '先研究已有范围',
-        input: {
-          requestId: 'home-research',
-          question: '先研究已有范围',
-          source: { sessionId: 'forged', messageId: 'forged' },
-        },
-      },
-      ctx,
-    );
-    expect(staged.ok).toBe(true);
-    expect(
-      await ctx.repos.investmentWorkspace.listResearch({
-        ownerUserId: ctx.user.id,
-        accountId: ctx.user.defaultAccountId,
-        limit: 10,
-      }),
-    ).toHaveLength(0);
-    const stored = await ctx.repos.chat.listMessages('workspace-chat');
-    const part = stored[1]?.parts.find(
-      (item) => item.type === 'tool-research_investment_directions',
-    );
-    expect(part?.output).toMatchObject({
-      draft: {
-        kind: 'research',
-        input: { source: { sessionId: 'workspace-chat', messageId: stored[0]?.id } },
-      },
-    });
-    const app = createWebApp(ctx, { exposeWrite: true, exposeExternal: true });
-    const response = await app.fetch(
-      new Request(
-        `http://test/api/chat/sessions/workspace-chat/drafts/${stored[1]?.id}/${part?.toolCallId}`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ approved: true }),
-        },
-      ),
-    );
-    expect(await response.json()).toMatchObject({
-      ok: true,
-      data: {
-        status: 'succeeded',
-        result: { ok: true, data: { research: { status: 'unavailable', directions: [] } } },
-      },
-    });
   });
 
   it('共识草案按确切版本确认，并发旧版本失败而不覆盖最新共识', async () => {

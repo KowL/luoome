@@ -132,7 +132,7 @@ const setup = async (
     data: { premise: 'private-investment-marker' },
   };
   const run = (context = ctx) =>
-    execution.run('generate_strategy_insight', { strategyId: 'fixture' }, context, (scoped) =>
+    execution.run('agent_run', { message: 'fixture' }, context, (scoped) =>
       scoped.adapters.llm.generate<{ value: string }>(request),
     );
   return {
@@ -156,13 +156,13 @@ afterEach(() => {
 });
 
 describe('hosted metered real AI SDK with fake HTTP', () => {
-  it('方向研究使用真实计量模型栈且记录供应商用量', async () => {
+  it('托管计量使用真实计量模型栈且记录供应商用量', async () => {
     const h = await setup(async () =>
       response({ value: 'direction-research' }, 'direction-receipt'),
     );
     const result = await h.execution.run(
-      'research_investment_directions',
-      { requestId: 'direction-request', question: 'fixture' },
+      'agent_run',
+      { message: 'direction-request' },
       h.ctx,
       (scoped) => scoped.adapters.llm.generate<{ value: string }>(h.request),
     );
@@ -318,7 +318,7 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
           },
         ),
     });
-    await execution.run('analyze_stock', { stockId: '600519.SH' }, h.ctx, (ctx) =>
+    await execution.run('agent_run', { message: 'fixture-429' }, h.ctx, (ctx) =>
       ctx.adapters.llm.generate(h.request),
     );
     expect(calls).toBe(2);
@@ -368,11 +368,11 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
     expect(await h.platform.ctx.repos.jobs.listUsage({ tenantId: h.tenant.id })).toHaveLength(0);
     expect(await h.platform.ctx.repos.llm.costs()).toEqual([]);
   });
-  it('领域 facts-only 降级不把预算阻断记成一次成功 LLM 消费', async () => {
+  it('降级路径不把预算阻断记成一次成功 LLM 消费', async () => {
     const h = await setup(async () => response(), { budgetMicro: 1, periodBudgetMicro: 1 });
     const result = await h.execution.run(
-      'generate_strategy_insight',
-      { strategyId: 'fixture' },
+      'agent_run',
+      { message: 'fixture-degrade' },
       h.ctx,
       async (ctx) => {
         try {
@@ -475,17 +475,12 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
     const gate = new Promise<void>((resolve) => {
       resume = resolve;
     });
-    const original = h.execution.run(
-      'generate_strategy_insight',
-      { strategyId: 'fixture' },
-      h.ctx,
-      async (ctx) => {
-        const result = await ctx.adapters.llm.generate(h.request);
-        ready();
-        await gate;
-        return result;
-      },
-    );
+    const original = h.execution.run('agent_run', { message: 'fixture' }, h.ctx, async (ctx) => {
+      const result = await ctx.adapters.llm.generate(h.request);
+      ready();
+      await gate;
+      return result;
+    });
     await started;
     const run = (await h.ctx.repos.workflowRun.listRecent({ workflowName: 'hosted-llm' }))[0]!;
     const operationId = run.id.slice('hosted-llm:'.length);
@@ -550,17 +545,12 @@ describe('hosted metered real AI SDK with fake HTTP', () => {
     const gate = new Promise<void>((resolve) => {
       resume = resolve;
     });
-    const original = h.execution.run(
-      'generate_strategy_insight',
-      { strategyId: 'fixture' },
-      h.ctx,
-      async (ctx) => {
-        const result = await ctx.adapters.llm.generate(h.request);
-        ready();
-        await gate;
-        return result;
-      },
-    );
+    const original = h.execution.run('agent_run', { message: 'fixture' }, h.ctx, async (ctx) => {
+      const result = await ctx.adapters.llm.generate(h.request);
+      ready();
+      await gate;
+      return result;
+    });
     await started;
     const execution = h.platform.ctx.repos.llm.execution.bind(h.platform.ctx.repos.llm);
     const fault = vi

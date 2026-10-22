@@ -168,19 +168,19 @@ const LIGHTWEIGHT_CHARTS_FILE = join(
 );
 
 /**
- * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认只放行 read + advice。
+ * Web 端暴露面（对齐 ARCHITECTURE §7.1）：默认只放行 read。
  * write 需 LUOOME_EXPOSE_WRITE=true、external 需 LUOOME_EXPOSE_EXTERNAL=true 且命中
  * WEB_ALLOWED_EXTERNAL 白名单才放行（见 /api/tools/:name/call 的门控）；
  * MCP 暴露面同样默认只读（write 需 LUOOME_EXPOSE_WRITE）。
+ * （DSH 瘦身后 advice 副作用级别已删除。）
  */
-const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'advice', 'write']);
+const EXPOSED_SIDE_EFFECTS: ReadonlySet<SideEffect> = new Set(['read', 'write']);
 
 /**
  * external 白名单仅包含目标模型运行、行情读取与显式同步；
  * sync_quotes / send_notification 等仍不对通用 Web tool call 开放。
  */
 const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
-  'agent_run',
   'fetch_quote',
   'batch_quote',
   'fetch_index_quotes',
@@ -195,7 +195,6 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'run_strategy',
   'trial_strategy',
   'prepare_strategy_data',
-  'generate_strategy_insight',
   'search_research_documents_hybrid',
   'rebuild_research_embeddings',
   'evaluate_research_embeddings',
@@ -2014,11 +2013,6 @@ export const createWebApp = (
       ...(c.req.query('toVersionId') === undefined
         ? {}
         : { toVersionId: c.req.query('toVersionId') }),
-    }),
-  );
-  app.post('/api/strategies/:id/insights/generate', (c) =>
-    targetMutation(c.req.raw, 'external', 'generate_strategy_insight', {
-      strategyId: c.req.param('id'),
     }),
   );
   app.get('/api/strategies/:id/schedule', (c) =>

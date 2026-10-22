@@ -1,7 +1,7 @@
 // @luoome/tui —— opentui 应用主体（布局 + 交互 + 数据加载）。
 // 布局按 docs/archive/MVP-TASK.md §2.7：顶部固定免责声明横幅；左栏「持仓」表格；右栏「今日建议」；
 // 底部快捷键栏；[d]/[s] 弹层。数据流按 ARCHITECTURE §11 场景 B：
-// list_holdings → get_advice（已有建议）→ 缺失标的并发 analyze_stock。
+// list_holdings → get_advice（已有建议）。内置 AI 已下线，缺失建议不再本地生成。
 //
 // 注意：@opentui/core 是命令式 API（new Renderable / renderer.root.add），
 // 不是 React 式声明式 API。本文件不 import 任何 React 概念。
@@ -15,7 +15,6 @@ import {
   type ToolContext,
 } from '@luoome/core';
 import {
-  AnalyzeStockOutput,
   GetAdviceOutput,
   GetAdviceStatsOutput,
   GetConfidenceCalibrationOutput,
@@ -587,19 +586,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       },
     );
 
-    // 3) 没有有效建议的标的：并发 analyze_stock 生成并持久化
-    await Promise.all(
-      rows.map(async (row) => {
-        if (row.advice !== null) return;
-        try {
-          const raw = await callTool('analyze_stock', { stockId: row.stockId }, ctxRef.current);
-          row.advice = AnalyzeStockOutput.parse(raw).advice;
-        } catch {
-          // 单标的分析失败不拖垮整屏：该行显示 '--'。
-          row.advice = null;
-        }
-      }),
-    );
+    // 内置 AI 已下线：没有有效建议的标的保持空缺，等待外部消费者经 record_advice 落库。
 
     state.rows = rows;
     state.totals = holdingsData.success
@@ -668,7 +655,7 @@ export const createTuiApp = (renderer: CliRenderer, ctx: ToolContext): Promise<v
       openOverlay('建议详情', [
         `${row.stockId} ${row.name} 暂无有效建议。`,
         '',
-        '（analyze_stock 未产出或已有建议均已过期；可按 r 刷新重试）',
+        '（暂无已落库建议；外部分析写入后可按 r 刷新）',
         '',
         '[esc] 关闭',
       ]);

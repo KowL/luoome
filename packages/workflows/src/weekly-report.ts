@@ -536,17 +536,18 @@ const strategyReviewWeekSection = async (
   const rows: Record<string, string | number | boolean | null>[] = [];
   const narratives: string[] = [];
   for (const strategy of reviewed) {
-    const insight = await ctx.tools.generate_strategy_insight.execute({
+    // 内置 AI 已下线：策略复盘只取确定性事实，不再生成叙述。
+    const facts = await ctx.tools.get_strategy_insight_facts.execute({
       strategyId: strategy.id,
       since: new Date(`${periodStart}T00:00:00+08:00`),
       until: new Date(`${periodEnd}T23:59:59.999+08:00`),
     });
-    if (!insight.ok) {
+    if (!facts.ok) {
       missingDimensions.push(
         missing(
           `strategy-review.insight.${strategy.id}`,
-          `${strategy.name} 的策略洞察不可用`,
-          insight.error.kind,
+          `${strategy.name} 的策略洞察事实不可用`,
+          facts.error.kind,
         ),
       );
       continue;
@@ -556,14 +557,11 @@ const strategyReviewWeekSection = async (
         `strategy-review:insight:${strategy.id}`,
         `strategy-review.insight.${strategy.id}`,
         now,
-        'tool:generate_strategy_insight',
+        'tool:get_strategy_insight_facts',
       ),
     );
     const notes: string[] = [];
-    if (insight.data.provider === 'facts-only') {
-      notes.push('AI 不可用，以下为确定性事实摘要');
-    }
-    for (const observation of insight.data.facts.observations) {
+    for (const observation of facts.data.observations) {
       rows.push({
         strategy: strategy.name,
         horizon: observation.horizon,
@@ -590,7 +588,7 @@ const strategyReviewWeekSection = async (
       }
     }
     narratives.push(
-      `【${strategy.name}】${insight.data.insight.headline}：${insight.data.insight.summary}${
+      `【${strategy.name}】以下为确定性事实摘要（内置 AI 已下线，不再生成叙述）${
         notes.length === 0 ? '' : `（${notes.join('；')}）`
       }`,
     );

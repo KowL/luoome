@@ -157,23 +157,21 @@ describe('run-strategy-schedules workflow', () => {
     });
   });
 
-  it('启用推荐政策时，定时运行后为每个入选股票生成 Advice 并通知', async () => {
+  it('启用推荐政策也不再本地生成建议（内置 AI 已下线），定时运行照常完成', async () => {
     const ctx = await seedScheduled('active', true, 2);
     const result = await runStrategySchedulesWorkflow.run({ owner: 'worker-recommend' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.items[0]).toMatchObject({ status: 'ran', adviceCount: 2 });
+    expect(result.data.items[0]).toMatchObject({ status: 'ran' });
+    expect(result.data.items[0]?.adviceCount).toBeUndefined();
     const advices = await ctx.repos.advice.query({
       sourceTool: 'analyze_strategy_candidate',
       includeExpired: true,
     });
-    expect(advices).toHaveLength(2);
-    for (const advice of advices) {
-      expect(await ctx.repos.notification.listByAdvice(advice.id)).toHaveLength(1);
-    }
+    expect(advices).toHaveLength(0);
   });
 
-  it('AI 不可用时保留事实发布并把 facts-only 映射为 partial，而不是 failed', async () => {
+  it('LLM 不可用不再影响调度周期：保留事实发布，facts-only 正常完成', async () => {
     const base = await seedScheduled();
     const ctx = {
       ...base,
@@ -190,10 +188,7 @@ describe('run-strategy-schedules workflow', () => {
     const result = await runStrategySchedulesWorkflow.run({ owner: 'worker-ai-failure' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data).toMatchObject({ ran: 0, partial: 1, skipped: 0, failed: 0 });
-    expect(result.data.items[0]).toMatchObject({
-      status: 'partial',
-      recommendationError: 'strategy-daily-cycle partial',
-    });
+    expect(result.data).toMatchObject({ ran: 1, partial: 0, skipped: 0, failed: 0 });
+    expect(result.data.items[0]).toMatchObject({ status: 'ran' });
   });
 });

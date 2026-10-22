@@ -245,8 +245,8 @@ const toolsListAndCall = async (client: McpStdioClient, full: boolean): Promise<
     `tools/list 默认暴露面符合 selection policy（实际 ${actualNames.length}，预期 ${expectedNames.length}）`,
   );
   check(
-    actualNames.includes('list_holdings') && actualNames.includes('analyze_stock'),
-    'tools/list 含 list_holdings 与 analyze_stock',
+    actualNames.includes('list_holdings') && actualNames.includes('get_advice'),
+    'tools/list 含 list_holdings 与 get_advice',
   );
 
   if (!full) return;
@@ -264,17 +264,16 @@ const toolsListAndCall = async (client: McpStdioClient, full: boolean): Promise<
     '空库 list_holdings 明确返回 Account not_found',
   );
 
-  const analyzeResult = asRecord(
+  const getAccountResult = asRecord(
     await client.request('tools/call', {
-      name: 'analyze_stock',
-      arguments: { stockId: '002594.SZ' },
+      name: 'get_account',
+      arguments: { accountId: 'missing-account' },
     }),
   );
   check(
-    analyzeResult.isError === true &&
-      JSON.stringify(analyzeResult.content).includes('Stock') &&
-      JSON.stringify(analyzeResult.content).includes('not_found'),
-    '空库 analyze_stock 明确返回 Stock not_found（不注入样例股票）',
+    getAccountResult.isError === true &&
+      JSON.stringify(getAccountResult.content).includes('not_found'),
+    '空库 get_account 明确返回 not_found（不注入样例账户）',
   );
 };
 

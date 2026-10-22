@@ -712,7 +712,7 @@ const cmdWorkflowRun = async (
     }
     input = { ...input, mode };
   }
-  // workflow 注册表：v0.2 起 sync-quotes / daily-advice。
+  // workflow 注册表：sync-quotes 等内置 workflow。
   const workflows = await import('@luoome/workflows');
   type Wf = {
     run: (
@@ -726,7 +726,7 @@ const cmdWorkflowRun = async (
   const wf: Wf | undefined = reg[`${camel}Workflow`];
   if (wf === undefined) {
     throw new CliUsageError(
-      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / daily-advice / run-strategies / run-strategy-schedules / strategy-daily-cycle / trading-plan-daily-cycle / replay-strategy-range / strategy-recommendations / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / sync-research-vault-remote / risk-report / daily-review / intraday-watch / intraday-trading-plan-watch / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report / strategy-autonomy-weekly）`,
+      `未知 workflow: "${name}"（支持 sync-quotes / sync-stock-universe / post-market-data / run-strategies / run-strategy-schedules / strategy-daily-cycle / trading-plan-daily-cycle / replay-strategy-range / complete-strategy-observations / snapshot-account-performance / sync-portfolio-watchlists / sync-research-vault-remote / risk-report / daily-review / intraday-watch / intraday-trading-plan-watch / sync-stock-events / evaluate-event-rules / opening-report / closing-report / weekly-report / strategy-autonomy-weekly）`,
     );
   }
   const handle = await createCliContext();

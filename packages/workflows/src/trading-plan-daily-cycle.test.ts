@@ -434,36 +434,40 @@ describe('trading plan daily cycle', () => {
     );
     expect(seeded.ok).toBe(true);
     if (!seeded.ok) return;
-    let positionCalls = 0;
-    let observedHolding: Record<string, unknown> | undefined;
-    const llm = ctx.adapters.llm;
-    const observedCtx = {
-      ...ctx,
-      adapters: {
-        ...ctx.adapters,
-        llm: {
-          name: llm.name,
-          generate: async <T = unknown>(
-            request: Parameters<typeof llm.generate>[0],
-          ): Promise<T> => {
-            if (request.system === 'analyze_position') {
-              positionCalls += 1;
-              observedHolding = (request.data as { holding: Record<string, unknown> }).holding;
-            }
-            return llm.generate<T>(request);
-          },
+    // 内置 AI 已下线：持仓建议由外部消费者落库；这里直接持久化一条 analyze_position 建议。
+    const holding = await ctx.repos.holding.findByAccountAndStock(EMPTY_ACCOUNT_ID, '000858.SZ');
+    if (holding === null) throw new Error('holding fixture missing');
+    await ctx.repos.advice.save(
+      AdviceSchema.parse({
+        id: 'position-review-advice',
+        subjectKind: 'position',
+        subjectId: holding.id,
+        stockName: '五粮液',
+        decision: 'hold',
+        confidence: 60,
+        horizon: 'short',
+        entryPrice: 100,
+        stopLoss: 95,
+        targetPrice: 110,
+        reasoning: {
+          premise: '测试持仓复核',
+          evidence: ['测试事实'],
+          counterEvidence: ['仍需验证'],
         },
-      },
-    };
-    const result = await tradingPlanDailyCycleWorkflow.run(
-      { accountId: EMPTY_ACCOUNT_ID },
-      observedCtx,
+        risks: ['测试风险'],
+        disclaimers: [...STANDARD_DISCLAIMERS],
+        sourceTool: 'analyze_position',
+        basedOn: { dataAsOf: now },
+        validFrom: now,
+        validUntil: new Date('2026-07-20T07:00:00.000Z'),
+        createdAt: now,
+      }) as Advice,
     );
+    const result = await tradingPlanDailyCycleWorkflow.run({ accountId: EMPTY_ACCOUNT_ID }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.holdingReviews).toBe(1);
-    expect(positionCalls).toBe(1);
-    expect(observedHolding).toMatchObject({ quantity: 100 });
+    expect(result.data.plans.some((plan) => plan.stockId === '000858.SZ')).toBe(true);
   });
 
   it('拒绝把其它账户的策略 Advice 变成目标账户的交易计划', async () => {

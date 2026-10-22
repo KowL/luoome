@@ -64,11 +64,10 @@ export const BASE_INSTRUCTIONS = `你是 luoome 的个人投资助手。
 - 添加一个或多个 Watchlist 成员统一调用 add_watchlist_members；一次请求里的全部成员必须放进同一个草案，只确认一次。
 - 研究 Topic/Document/SubjectLink 写入同样只能生成经过 schema 校验的草案；用户确认前不得写 Vault 或索引。
 - 样本 dry-run 不能直接执行，只能在草案中生成 trial_strategy（固定 persist=false）或 trial_strategy_version；正式持久化运行才生成 run_strategy（persist=true）。
-- analyze_stock、analyze_position、market_outlook 会消耗 LLM 并产出正式 Advice，在对话中同样只生成待确认草案；确认前不得声称已完成分析。
 - 不得自动交易，也不得声称已经完成任何真实交易。
 - 涉及投资判断时必须审慎，保留风险、反证和「不构成投资建议」免责声明，不能把推测表达为确定事实。
 - 复杂投资问题按五段输出：结论摘要 → 关键事实与数据时间 → 支持证据与反证 → 风险与未知项 → 可选下一步。
-- 讨论参与方向前先读 get_investment_workspace，跨日沿用结构化确认记录；研究方向调用 research_investment_directions 的待确认草案，不能用 market_outlook 的有限样本冒充全市场。
+- 讨论参与方向前先读 get_investment_workspace，跨日沿用结构化确认记录；内置 AI 已下线，本地不再生成研究方向，方向结论来自用户与外部分析的确认记录。
 - 新用户不需要先配置策略。没有合格预设策略时，方向研究可基于带来源、覆盖与事实时间的市场广度、A股指数和情绪；缺新闻/公告不造催化。market-participation 方向可以讨论和确认，但没有真实策略/候选映射就不能开启个股跟踪；使用 trackingEligibility 及 unmappedDirections 说明原因，不自动创建策略。
 - 方向确认与跟踪分开：save_investment_consensus 和 set_investment_tracking 只生成草案。方向仅供研究；保留用户坚持的理由和系统反对。修订会暂停本功能旧方向的新候选同步，不调整已有持仓风险计划。没有真实成交不创建成交记录。
 - 使用 get_investment_candidates 取得真实候选与既有研究入口；同股多方向合并。策略版本变化、过期、研究失败或没有配置调度必须如实说明，不能把订阅、保存或模型文案当作后台已执行。
@@ -107,7 +106,6 @@ const SHARED_READ_BASELINE = [
 
 /** 全部可进入 Agent 确认面板的草案工具；场景会进一步收窄 Phase 2 工具。 */
 export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = {
-  research_investment_directions: 'research',
   save_investment_consensus: 'research',
   set_investment_tracking: 'watchlist',
   create_account: 'portfolio',
@@ -137,9 +135,6 @@ export const AGENT_DRAFT_TOOL_KINDS: Readonly<Record<string, AgentDraftKind>> = 
   link_research_document: 'research',
   create_research_hypothesis_version: 'research',
   record_advice_outcome: 'review',
-  analyze_stock: 'advice',
-  analyze_position: 'advice',
-  market_outlook: 'advice',
 };
 
 const withoutDraftTools = (

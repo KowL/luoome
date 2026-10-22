@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { FakeLLMAdapter, TEST_ACCOUNT } from '@luoome/adapters/testing';
 import type { ToolContext } from '@luoome/core';
 import { createDrizzlePlatformRepos, createDrizzleRepos, ensurePlatformSchema } from '@luoome/db';
-import { buildContext, generateStrategyInsightTool } from '@luoome/tools';
+import { buildContext, defineTool } from '@luoome/tools';
 import { getHostedLLMCostsTool } from '@luoome/tools/platform';
+import { z } from 'zod';
 import {
   buildPlatformTestContext,
   buildPlatformWorkerTestContext,
@@ -15,6 +16,31 @@ import {
 } from '../../../packages/tools/src/platform/testing-context.js';
 import { loadHostedConfig } from './hosted-config.js';
 import { createHostedProviders } from './hosted-providers.js';
+
+// 领域 AI 工具已下线；用挂在计量名单（agent_run）上的夹具 tool 直接驱动托管 LLM 计量链路。
+const HostedMeterFixtureSchema = z.object({
+  headline: z.string(),
+  summary: z.string(),
+  findings: z.array(z.unknown()),
+  risks: z.array(z.unknown()),
+  limitations: z.array(z.string()),
+  disclaimer: z.string(),
+});
+const hostedMeterFixtureTool = defineTool({
+  name: 'agent_run',
+  description: 'hosted LLM 计量夹具',
+  sideEffect: 'external',
+  input: z.object({ strategyId: z.string() }),
+  output: z.object({ provider: z.string() }),
+  handler: async (_input, ctx) => {
+    await ctx.adapters.llm.generate({
+      system: 'hosted-meter-fixture',
+      schema: HostedMeterFixtureSchema,
+      data: {},
+    });
+    return { provider: ctx.adapters.llm.name };
+  },
+});
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -187,7 +213,7 @@ const setup = async (enabled = true) => {
     transport,
     context,
     ledger: () => control.repos,
-    run: () => generateStrategyInsightTool.execute({ strategyId: 'ds7-strategy' }, context()),
+    run: () => hostedMeterFixtureTool.execute({ strategyId: 'ds7-strategy' }, context()),
     restart: () => {
       control.close();
       privateDB.close();

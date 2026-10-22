@@ -306,17 +306,17 @@ describe('defineTool execute 错误模型', () => {
       output: z.object({ saved: z.boolean() }),
       handler: () => ({ saved: true }),
     });
-    const adviceTool = defineTool({
-      name: 'test_advice',
+    const externalTool = defineTool({
+      name: 'test_external',
       description: 't',
-      sideEffect: 'advice',
+      sideEffect: 'external',
       input: z.object({ id: z.string() }),
       output: z.object({ ok: z.boolean() }),
-      handler: (input) => errNotFound('Advice', input.id),
+      handler: (input) => errNotFound('Quote', input.id),
     });
 
     await writeTool.execute({ id: 'a-1' }, ctx);
-    await adviceTool.execute({ id: 'a-2' }, ctx);
+    await externalTool.execute({ id: 'a-2' }, ctx);
     await doubleTool.execute({ n: 2 }, ctx);
 
     expect(events).toHaveLength(2);
@@ -329,8 +329,8 @@ describe('defineTool execute 错误模型', () => {
     expect(events[0]).not.toHaveProperty('input');
     expect(events[0]).not.toHaveProperty('output');
     expect(events[1]).toMatchObject({
-      tool: 'test_advice',
-      sideEffect: 'advice',
+      tool: 'test_external',
+      sideEffect: 'external',
       result: 'error',
       errorKind: 'not_found',
       caller: 'test',

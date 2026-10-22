@@ -248,47 +248,6 @@ describe('hosted Strategy daily worker', () => {
     expect(await h.ctx.repos.strategyRun.listResults(original.id)).toEqual(results);
   });
 
-  it('长洞察生成期间每 30 秒续租，原过期点不能被另一执行者接管', async () => {
-    vi.useFakeTimers();
-    const h = await fixture();
-    let entered = () => {};
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let unblock = () => {};
-    const gate = new Promise<void>((resolve) => {
-      unblock = resolve;
-    });
-    vi.spyOn(h.ctx.adapters.llm, 'generate').mockImplementation(async () => {
-      entered();
-      await gate;
-      throw new Error('fixture offline');
-    });
-    const pass = h.pass();
-    await started;
-    try {
-      h.setTime('2026-08-10T10:00:30Z');
-      await vi.advanceTimersByTimeAsync(30_000);
-      const lease = await h.ctx.repos.workflowRun.findById('hosted-strategy-execution');
-      expect(lease?.inputSummary?.heartbeatAtMs).toBe(h.now().getTime());
-      h.setTime('2026-08-10T10:02:01Z');
-      expect(
-        await h.ctx.repos.workflowRun.execution({
-          id: 'hosted-strategy-execution',
-          workflowName: 'hosted-strategy-execution',
-          action: 'acquire',
-          owner: 'contender',
-          now: h.now(),
-          leaseUntil: new Date(h.now().getTime() + 120_000),
-          nextRunAt: h.now(),
-        }),
-      ).toBe(false);
-    } finally {
-      unblock();
-    }
-    expect((await pass).ok).toBe(true);
-  });
-
   it('旧 startedAt 的执行槽有有效续租时，通用 stale 审计收敛不会覆盖它', async () => {
     const h = await fixture();
     const now = h.now();

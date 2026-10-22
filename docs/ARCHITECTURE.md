@@ -89,10 +89,11 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 | `read` | 只读本地 | `list_holdings`, `get_advice` | ✅ |
 | `write` | 写本地状态 | `add_holding` | ⚠️ 可配置 |
 | `external` | 调用第三方 | `fetch_quote`, `send_notification` | ⚠️ 可配置 |
-| `advice` | 生成建议（含 LLM 推理） | `analyze_stock`, `daily_advice` | ✅ |
 | `trade` | 触发真实资金动作 | `place_order` | ❌ 永不 |
 
-**新增 `advice` 等级**：advice tool 本质是只读 + LLM 推理，但产出有"建议"性质，需要独立标记。它有自己特殊的安全约束（详见 §11）。
+> DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后：原 `advice` 等级
+> （只读 + LLM 推理 + 落建议）随内置 AI 工具一并删除，`SideEffect` 只剩上表 4 级；
+> Advice 实体与存量数据保留，新建议由外部分析写入。
 
 `sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
 所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。

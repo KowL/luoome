@@ -127,8 +127,6 @@ describe('hosted original Web business policy', () => {
     for (const name of [
       'create_strategy',
       'run_strategy',
-      'analyze_stock',
-      'generate_strategy_recommendations',
       'create_watchlist',
       'create_alert_plan',
       'save_decision_review',

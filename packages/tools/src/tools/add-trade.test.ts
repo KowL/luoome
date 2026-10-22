@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { buildTestContext } from '../testing/context.js';
 import { addTradeTool } from './add-trade.js';
-import { analyzePositionTool } from './analyze-position.js';
 import { listTradesTool } from './list-trades.js';
 
 describe('add_trade', () => {
@@ -314,17 +313,5 @@ describe('add_trade', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('invalid_input');
-  });
-
-  it('联动：新开仓后 analyze_position 可用（stock stub 生效）', async () => {
-    const ctx = await buildTestContext();
-    const added = await addTradeTool.execute(
-      { stockId: '601398.SH', side: 'buy', quantity: 500, price: 70.25 },
-      ctx,
-    );
-    expect(added.ok).toBe(true);
-    if (!added.ok) return;
-    const analyzed = await analyzePositionTool.execute({ holdingId: added.data.holding.id }, ctx);
-    expect(analyzed.ok).toBe(true);
   });
 });

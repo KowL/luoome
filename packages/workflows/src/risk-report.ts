@@ -4,7 +4,7 @@ import { defineWorkflow, type WorkflowStep } from './define-workflow.js';
 
 /**
  * risk-report（v0.3，plan-v0.2-v0.3 §3.5）：
- * list_holdings + 集中度 + VaR 估算 + market_outlook 拼成风险日报。
+ * list_holdings + 集中度 + VaR 估算拼成风险日报；大盘背景随内置 AI 下线移除。
  */
 
 export const RiskReportInput = z.object({
@@ -169,34 +169,21 @@ const stepCompute: WorkflowStep = async (prev, ctx) => {
   return state;
 };
 
-const stepMarket: WorkflowStep = async (prev, ctx) => {
-  const state = prev as ComputeState;
-  const r = await ctx.tools.market_outlook.execute({});
-  if (!r.ok) {
-    return { ...state, marketSummary: '（大盘数据暂不可用）' };
-  }
-  const avgChangePct = (r.data.advice.basedOn as { avgChangePct?: number }).avgChangePct ?? 0;
-  return {
-    ...state,
-    marketSummary: `市场平均涨跌 ${(avgChangePct * 100).toFixed(2)}%（${r.data.advice.decision}）`,
-  };
-};
-
 const stepFinalize: WorkflowStep = async (prev) => {
-  const state = prev as ComputeState & { marketSummary: string };
+  const state = prev as ComputeState;
   return RiskReportOutput.parse({
     accountId: state.accountId,
     totalValue: state.totalValue,
     holdingsCount: state.holdingsCount,
     metrics: state.metrics,
-    marketSummary: state.marketSummary,
+    marketSummary: '（大盘背景随内置 AI 下线，不再生成本地市场判断）',
     generatedAt: new Date(),
   });
 };
 
 export const riskReportWorkflow = defineWorkflow<RiskReportInputT, RiskReportOutputT>({
   name: 'risk-report',
-  description: '生成账户风险日报（集中度 + VaR + 大盘背景）',
+  description: '生成账户风险日报（集中度 + VaR）',
   input: RiskReportInput,
-  steps: [stepHoldings, stepCompute, stepMarket, stepFinalize],
+  steps: [stepHoldings, stepCompute, stepFinalize],
 });

@@ -756,59 +756,21 @@ const runCycle: WorkflowStep = async (previous, ctx) => {
               reason = 'lease_lost_before_commit';
             } else {
               beginPhase('insight');
-              const insight = await ctx.tools.generate_strategy_insight.execute({
+              // 内置 AI 已下线：洞察只收集事实（facts-only），不再本地生成叙述与建议。
+              const facts = await ctx.tools.get_strategy_insight_facts.execute({
                 strategyId: schedule.strategyId,
-                runId,
                 windowDays: 30,
               });
-              if (insight.ok) {
-                insightProvider = insight.data.provider;
-                insightFacts = insight.data.facts;
-                if (insight.data.provider === 'facts-only') status = 'partial';
+              if (facts.ok) {
+                insightProvider = 'facts-only';
+                insightFacts = facts.data;
               } else {
                 status = 'partial';
-                reason = errorText(insight.error);
-                const facts = await ctx.tools.get_strategy_insight_facts.execute({
-                  strategyId: schedule.strategyId,
-                  windowDays: 30,
-                });
-                if (facts.ok) {
-                  insightProvider = 'facts-only';
-                  insightFacts = facts.data;
-                }
+                reason = errorText(facts.error);
               }
               if (scheduleLeaseLost) {
-                reason = 'lease_lost_before_commit';
                 status = 'failed';
-              } else if (schedule.recommendationPolicy?.enabled && (await renewScheduleLease())) {
-                const recommendations = await ctx.tools.generate_strategy_recommendations.execute({
-                  strategyId: schedule.strategyId,
-                  runId,
-                  policy: schedule.recommendationPolicy,
-                  mode: 'scheduled',
-                });
-                if (!recommendations.ok) {
-                  status = 'partial';
-                  reason = errorText(recommendations.error);
-                } else if (
-                  recommendations.data.notificationFailed > 0 ||
-                  recommendations.data.generationFailed > 0 ||
-                  (recommendations.data.preflight?.unavailable ?? 0) > 0
-                ) {
-                  adviceCount = recommendations.data.advices.length;
-                  notificationFailed = recommendations.data.notificationFailed;
-                  preflight = recommendations.data.preflight;
-                  status = 'partial';
-                  reason = `${recommendations.data.preflight?.unavailable ?? 0} 条数据不可用；${recommendations.data.generationFailed} 条建议生成失败；${recommendations.data.notificationFailed} 条通知发送失败`;
-                } else {
-                  adviceCount = recommendations.data.advices.length;
-                  notificationFailed = recommendations.data.notificationFailed;
-                  preflight = recommendations.data.preflight;
-                }
-                if (scheduleLeaseLost) {
-                  status = 'failed';
-                  reason = 'lease_lost_before_commit';
-                }
+                reason = 'lease_lost_before_commit';
               }
             }
           }

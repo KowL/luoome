@@ -489,23 +489,39 @@ const run = async (
   }
   const existing = existingResult.data.plans;
   const advices: Array<{ advice: Advice; holding?: TradingPlanHoldingContext }> = [];
-  const positionResults = await Promise.all(
-    holdings.map(async (holding) => ({
-      holding,
-      result: await ctx.tools.analyze_position.execute({ holdingId: holding.holding.id }),
-    })),
-  );
-  for (const item of positionResults) {
-    if (item.result.ok)
-      advices.push({ advice: item.result.data.advice as Advice, holding: item.holding });
-    else
-      errors.push({
-        stockId: item.holding.holding.stockId,
-        stage: 'holding',
-        reason: errorText(item.result.error),
-      });
+  // 内置 AI 已下线：当日行情落库改由 sync_quotes 承担；持仓建议只读取当日已持久化的
+  // analyze_position 记录（无队列期不本地产生新建议，未来由外部消费者经 record_advice 写入）。
+  const dayStart = new Date(`${date}T00:00:00+08:00`);
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000 - 1);
+  const syncResult = await ctx.tools.sync_quotes.execute({ accountId });
+  if (!syncResult.ok) {
+    errors.push({ stockId: accountId, stage: 'holding', reason: errorText(syncResult.error) });
   }
-  // 每个持仓的 analyze_position 已把当日行情落库；现在派生账户事实（现金字段 + 持仓 × 行情）。
+  const positionAdvicesResult = await ctx.tools.get_advice.execute({
+    sourceTool: 'analyze_position',
+    since: dayStart,
+    until: dayEnd,
+    includeExpired: true,
+    limit: 500,
+  });
+  let holdingReviews = 0;
+  if (positionAdvicesResult.ok) {
+    const latestBySubject = new Map<string, Advice>();
+    for (const adviceValue of positionAdvicesResult.data.advices) {
+      const advice = adviceValue as Advice;
+      const prior = latestBySubject.get(advice.subjectId);
+      if (prior === undefined || advice.createdAt > prior.createdAt)
+        latestBySubject.set(advice.subjectId, advice);
+    }
+    for (const holding of holdings) {
+      const advice =
+        latestBySubject.get(holding.holding.id) ?? latestBySubject.get(holding.holding.stockId);
+      if (advice === undefined) continue;
+      advices.push({ advice, holding });
+      holdingReviews += 1;
+    }
+  }
+  // 当日行情已由 sync_quotes 落库；现在派生账户事实（现金字段 + 持仓 × 行情）。
   const accountFactsResult = await ctx.tools.get_account_facts.execute({ accountId });
   if (!accountFactsResult.ok) {
     return TradingPlanDailyCycleOutput.parse({
@@ -513,7 +529,7 @@ const run = async (
       date,
       status: 'blocked',
       plans: [],
-      holdingReviews: positionResults.length,
+      holdingReviews,
       candidateReviews: 0,
       errors: [
         { stockId: accountId, stage: 'holding', reason: errorText(accountFactsResult.error) },
@@ -523,8 +539,6 @@ const run = async (
   const accountFacts = accountFactsResult.data.facts;
 
   let candidateReviews = 0;
-  const dayStart = new Date(`${date}T00:00:00+08:00`);
-  const dayEnd = new Date(dayStart.getTime() + 86_400_000 - 1);
   const candidatesResult = await ctx.tools.get_advice.execute({
     sourceTool: 'analyze_strategy_candidate',
     since: dayStart,
@@ -696,7 +710,7 @@ const run = async (
       ? {}
       : { accountFactsAsOf: accountFacts.asOf, accountFactsDigest: accountFacts.digest }),
     plans,
-    holdingReviews: positionResults.length,
+    holdingReviews,
     candidateReviews,
     errors,
     reviews,

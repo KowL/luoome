@@ -85,7 +85,7 @@ export const authorizeHostedInvocation = async (
     (tenant.status !== 'active' && !(tenant.status === 'suspended' && !paid))
   )
     return denied('hosted:tenant-active');
-  if (capabilities.includes('trade') || capabilities.includes('advice')) {
+  if (capabilities.includes('trade')) {
     return denied('hosted-facts-v1');
   }
   for (const capability of capabilities) {

@@ -32,7 +32,7 @@ export const resolveAllowedSideEffects = (
         '(AGENTS.md「副作用与权限」硬约束)。',
     );
   }
-  const allowed = new Set<SideEffect>(['read', 'advice']);
+  const allowed = new Set<SideEffect>(['read']);
   if (env.LUOOME_EXPOSE_WRITE === 'true') allowed.add('write');
   if (env.LUOOME_EXPOSE_EXTERNAL === 'true') allowed.add('external');
   return allowed;

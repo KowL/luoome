@@ -2437,14 +2437,16 @@ describe('Strategy / Watchlist / AlertPlan API', () => {
       data: { strategy: { id: strategyId, status: 'active' } },
     });
 
-    const insight = await app.fetch(
+    // 内置 AI 下线后只剩确定性事实端点；/insights/generate 已删除
+    const insights = await app.fetch(
+      new Request(`http://test/api/strategies/${strategyId}/insights`),
+    );
+    expect(insights.status).toBe(200);
+    expect(await insights.json()).toMatchObject({ ok: true });
+    const generate = await app.fetch(
       targetRequest(`/api/strategies/${strategyId}/insights/generate`, {}),
     );
-    expect(insight.status).toBe(200);
-    expect(await insight.json()).toMatchObject({
-      ok: true,
-      data: { provider: 'fake-llm', insight: { findings: [{ factRefs: ['runs:window'] }] } },
-    });
+    expect(generate.status).toBe(404);
   });
 
   it('POST /api/strategies/:id/backtests 持久化隔离的历史模拟并返回区间汇总', async () => {
@@ -3534,22 +3536,17 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     });
   });
 
-  it('agent_run 进入 external 白名单，但仍要求 runtime', async () => {
-    const withoutRuntime = await app.fetch(
+  it('agent_run 已随内置 AI 下线，web 闸口返回 not_found', async () => {
+    const response = await app.fetch(
       new Request('http://test/api/tools/agent_run/call', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ input: { message: '检查持仓' } }),
       }),
     );
-    expect(withoutRuntime.status).toBe(403);
-    const body = (await json(withoutRuntime)) as {
-      error?: { kind: string; required?: string };
-    };
-    expect(body.error).toEqual({
-      kind: 'permission_denied',
-      required: 'agent runtime 未配置',
-    });
+    expect(response.status).toBe(404);
+    const body = (await json(response)) as { error?: { kind: string } };
+    expect(body.error?.kind).toBe('not_found');
   });
 
   it('fetch_quote（白名单）→ 200', async () => {
@@ -4178,7 +4175,7 @@ describe('/api/chat：对话助手', () => {
     expect(await chatCtx.repos.strategy.findById('chat-draft-strategy')).toBeNull();
   });
 
-  it('advice 草案 tool 只生成带 display 的待确认草案，不执行 LLM 分析', async () => {
+  it('已下线的内置 AI 分析工具不再进入 chat 工具面', async () => {
     await createSession('advice-draft-tool');
     await chat(chatApp, {
       sessionId: 'advice-draft-tool',
@@ -4186,18 +4183,19 @@ describe('/api/chat：对话助手', () => {
         { id: 'user-1', role: 'user', parts: [{ type: 'text', text: '帮我分析 300857' }] },
       ],
     });
-    const draftTool = captured?.tools.find((item) => item.name === 'analyze_stock');
-    expect(draftTool?.description).toContain('不会执行分析');
-    const result = await draftTool?.execute({ stockId: 'SZ300857' });
-    expect(result?.ok).toBe(true);
-    expect(result?.output).toMatchObject({
-      __luoomeDraft: true,
-      draft: { kind: 'advice', tool: 'analyze_stock' },
-    });
-    const output = result?.output as { draft: { display?: { targetObject: string } } } | undefined;
-    expect(output?.draft.display?.targetObject).toBe('个股 Advice（SZ300857）');
-    // 草案路径不触发真实分析：库里不应产生 Advice 记录
-    expect(await chatCtx.repos.advice.query({})).toEqual([]);
+    const names = captured?.tools.map((item) => item.name) ?? [];
+    for (const removed of [
+      'analyze_stock',
+      'analyze_position',
+      'market_outlook',
+      'analyze_strategy_candidate',
+      'research_investment_directions',
+      'generate_strategy_insight',
+      'generate_strategy_recommendations',
+      'agent_run',
+    ]) {
+      expect(names).not.toContain(removed);
+    }
   });
 
   it('review chat 暴露 AdviceOutcome 草案但不暴露研究假设或 trade 工具', async () => {
