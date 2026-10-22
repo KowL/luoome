@@ -121,7 +121,7 @@ TUI、Web 看板、自定义 chat session、4 个 `setInterval` 调度器、通�
 
 ### 2.4 静默降级路径（必须一并处置）
 
-`LLMManager` 默认 `fallback: 'rules'`（`packages/adapters/src/llm/manager.ts:33`、`:145`）：两次生成失败后返回 MA5/MA20 规则模板，`analyze_stock` 照常落库为 Advice，只在 `reasoning.evidence` 标记 `RULE_FALLBACK_*`（`packages/core/src/entity/advice.ts:364`）。托管模式用 `fallback: 'throw'`（`apps/web/src/hosted-providers.ts:171`）。
+`LLMManager` 默认 `fallback: 'rules'`（`packages/adapters/src/llm/manager.ts:33`、`:145`）：两次生成失败后返回 MA5/MA20 规则模板，`analyze_stock` 照常落库为 Advice，仅以中文文本常量标记——`RULE_FALLBACK_PREMISE_MARKER='LLM 推理不可用'` 与 `RULE_FALLBACK_EVIDENCE_MARKER='规则 fallback'`，由 `isRuleFallbackAdvice` 按 premise 或 evidence 任一命中判定（`packages/core/src/entity/advice.ts:364`）。托管模式用 `fallback: 'throw'`（`apps/web/src/hosted-providers.ts:171`）。
 
 后果：调用方无法区分「模型建议」与「规则兜底」，confidence 校准与命中率统计被污染。改造要求：**没有消费者就不要产生结果**；结果失败必须显式失败，不允许把降级模板当 AI 结论。
 
@@ -250,13 +250,13 @@ P0 决策冻结
 
 ### 4.3 MCP 暴露面
 
-当前 inventory：180 个 tool，`read 87 / write 61 / external 26 / advice 5 / trade 1`。默认暴露 `read + advice`（约 80 个，扣除 research 名）。目标：
+当前 inventory（2026-10-22 工作树实测，`bun packages/cli/src/index.ts tools list --json`）：186 个 tool，`read 89 / write 64 / external 26 / advice 6 / trade 1`。默认暴露 `read + advice`（95 个，扣除 research 名后 83 个）。目标：
 
 | 层 | 暴露内容 | 说明 |
 |---|---|---|
 | L0 只读 | read 面 | 聊天、看板、研究 |
 | L1 消费者 | `claim_analysis_jobs`、`complete_analysis_job`、`fail_analysis_job`、`get_analysis_context`、`get_analysis_metrics` | 单独 MCP 实例；`LUOOME_EXPOSE_WRITE=true` + `LUOOME_EXPOSE_TOOLS` |
-| L2 写面 | 61 个 write | 默认关；按需开，依赖 DSH approval |
+| L2 写面 | 64 个 write | 默认关；按需开，依赖 DSH approval |
 | L3 external | 26 个 | 拆组：行情/同步可开；`send_notification`、外部导入不开 |
 | L4 trade | 0 | luoome 服务端硬卡，DSH 无绕过 |
 
@@ -968,16 +968,16 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 4. **阶段划分可回滚**：P1 先用 1–2 天验证「聊天就是入口」的假设再投入线 B，是这份文档最务实的一笔；每个阶段都带验收条款与回滚路径。
 5. **抽查的行号引用基本准确**：`analyze-stock.ts:80`、`manager.ts:33`、`hosted-meter.ts:33`、`context.ts` 的 `ToolContext.adapters.llm` 必填定义、`exposure.ts` 的 `LUOOME_EXPOSE_TRADE` 硬卡、`server.ts` 的 research 子串特判均与代码一致；§12.3 引用的关联文档全部存在。
 
-### 13.2 必须修正：事实基线数字与实测不符（§4.3）
+### 13.2 必须修正：事实基线数字与实测不符（§4.3）——**已于 2026-10-22 修正**
 
-§4.3 称「180 个 tool，`read 87 / write 61 / external 26 / advice 5 / trade 1`」，实测（2026-10-22 工作树）为 **186 个 tool，`read 89 / write 64 / external 26 / advice 6 / trade 1`**。两个具体偏差：
+§4.3 原称「180 个 tool，`read 87 / write 61 / external 26 / advice 5 / trade 1`」，实测（2026-10-22 工作树）为 **186 个 tool，`read 89 / write 64 / external 26 / advice 6 / trade 1`**。两个具体偏差：
 
 - `advice` 实为 6 个而非 5 个，漏计了 `generate_strategy_recommendations`（它本身在 §5.4.2 的删除清单里，基数却漏了它，自相矛盾）。
 - 「默认暴露 `read + advice`（约 80 个，扣除 research 名）」实测为 95 个，扣除 research 名后 83 个。
 
-这不是吹毛求疵：L2/L3 层的暴露面估算、P5 删除清单的完整性、验收条款 4 的断言基数都建立在这组数字上。**建议修正数字，并注明取数命令与日期快照**，避免文档与代码漂移后无人察觉。
+这不是吹毛求疵：L2/L3 层的暴露面估算、P5 删除清单的完整性、验收条款 4 的断言基数都建立在这组数字上。**修正要求：数字改为实测值，并注明取数命令与日期快照**，避免文档与代码漂移后无人察觉。（已落实：§4.3 正文已更新为实测数字并标注取数命令与日期。）
 
-另外一处小的事实出入：§2.4 称规则兜底「在 `reasoning.evidence` 标记 `RULE_FALLBACK_*`」，实际代码是中文文本常量 `RULE_FALLBACK_PREMISE_MARKER='LLM 推理不可用'` 与 `RULE_FALLBACK_EVIDENCE_MARKER='规则 fallback'`，判定走 premise 或 evidence 任一命中（`advice.ts` 的 `isRuleFallbackAdvice`）。建议改为引用常量名而非杜撰标记格式。
+另外一处小的事实出入：§2.4 原称规则兜底「在 `reasoning.evidence` 标记 `RULE_FALLBACK_*`」，实际代码是中文文本常量 `RULE_FALLBACK_PREMISE_MARKER='LLM 推理不可用'` 与 `RULE_FALLBACK_EVIDENCE_MARKER='规则 fallback'`，判定走 premise 或 evidence 任一命中（`advice.ts` 的 `isRuleFallbackAdvice`）。应引用常量名而非杜撰标记格式。（已落实：§2.4 正文已改为常量名与判定方式。）
 
 ### 13.3 设计层面的意见（按重要度排序）
 
@@ -1010,7 +1010,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 项 | 结论 |
 |---|---|
 | 总体方向 | 通过 |
-| 事实基线（§2、§4.3） | 需按 §13.2 修正后再冻结 |
+| 事实基线（§2、§4.3） | 通过（§13.2 所指偏差已于 2026-10-22 修正） |
 | 数据模型与状态机（§5.3、§5.7） | 通过，补 §13.3-6 的并发测试用例 |
 | Tool 契约（§5.4） | 通过，建议落实 §13.3-1 的消费者暴露机制 |
 | 实施分期（§7） | 通过，P2 增加注册机制验证任务 |
