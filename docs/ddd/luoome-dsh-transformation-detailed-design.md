@@ -951,3 +951,69 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 托管计量 | `packages/adapters/src/llm/hosted-meter.ts:33`、`hosted-model-transport.ts` |
 | 订阅中 AI 的价值 | `docs/prd/subscription-pricing-v1.md` §3.1 |
 | 平台基线 | `docs/ddd/dsh-plugin-platform-design.md` |
+
+## 13. 评审意见（2026-10-22）
+
+> 评审方式：通读全文，并对事实基线章节的关键断言做了代码抽查（`packages/core`、`packages/tools`、`packages/adapters`、`packages/mcp`、`apps/agent-runtime`、`packages/dsh-bridge`，以及 `bun packages/cli/src/index.ts tools list --json` 实测快照）。
+
+### 13.1 总体结论
+
+**通过，建议按 §7 排期进入 P1，但需先修正 §13.2 的事实基线偏差。**
+
+设计的核心判断是对的：把「事实是什么」与「结论是什么」分开，用 `context → 推理 → record` 一条契约统一三条改造线，方向、边界和分期都成立。以下几点尤其值得肯定：
+
+1. **静默降级的处置**（§2.4、§5.8.3）抓住了现有系统最伤的问题——规则兜底污染 confidence 校准，「没有消费者就不要产生结果」是正确的原则。
+2. **队列机制设计扎实**：fencing token、完成幂等（同 token + 同结果 hash）、部分唯一索引做活动态去重、租约回收不起后台守护，都是与现有 `strategy_run_leases` 一致的成熟模式，没有重新发明轮子。
+3. **错误映射克制**（§5.4.5）：不新增 `ToolErrorKind`，避免协议面扩散。
+4. **阶段划分可回滚**：P1 先用 1–2 天验证「聊天就是入口」的假设再投入线 B，是这份文档最务实的一笔；每个阶段都带验收条款与回滚路径。
+5. **抽查的行号引用基本准确**：`analyze-stock.ts:80`、`manager.ts:33`、`hosted-meter.ts:33`、`context.ts` 的 `ToolContext.adapters.llm` 必填定义、`exposure.ts` 的 `LUOOME_EXPOSE_TRADE` 硬卡、`server.ts` 的 research 子串特判均与代码一致；§12.3 引用的关联文档全部存在。
+
+### 13.2 必须修正：事实基线数字与实测不符（§4.3）
+
+§4.3 称「180 个 tool，`read 87 / write 61 / external 26 / advice 5 / trade 1`」，实测（2026-10-22 工作树）为 **186 个 tool，`read 89 / write 64 / external 26 / advice 6 / trade 1`**。两个具体偏差：
+
+- `advice` 实为 6 个而非 5 个，漏计了 `generate_strategy_recommendations`（它本身在 §5.4.2 的删除清单里，基数却漏了它，自相矛盾）。
+- 「默认暴露 `read + advice`（约 80 个，扣除 research 名）」实测为 95 个，扣除 research 名后 83 个。
+
+这不是吹毛求疵：L2/L3 层的暴露面估算、P5 删除清单的完整性、验收条款 4 的断言基数都建立在这组数字上。**建议修正数字，并注明取数命令与日期快照**，避免文档与代码漂移后无人察觉。
+
+另外一处小的事实出入：§2.4 称规则兜底「在 `reasoning.evidence` 标记 `RULE_FALLBACK_*`」，实际代码是中文文本常量 `RULE_FALLBACK_PREMISE_MARKER='LLM 推理不可用'` 与 `RULE_FALLBACK_EVIDENCE_MARKER='规则 fallback'`，判定走 premise 或 evidence 任一命中（`advice.ts` 的 `isRuleFallbackAdvice`）。建议改为引用常量名而非杜撰标记格式。
+
+### 13.3 设计层面的意见（按重要度排序）
+
+1. **L1 消费者实例的写面收窄机制不够硬**（§4.3、§5.4.4）。当前方案是 `LUOOME_EXPOSE_WRITE=true` 打开整个 write 组（64 个），再靠 `LUOOME_EXPOSE_TOOLS` allowlist 收窄到 6 个。这意味着 allowlist 漏配或拼写错误时写面全开——默认是「开」而不是「关」。建议：消费者实例改为默认 deny + 显式 allow，或为队列工具声明独立的 capability（不占用 write 组），让「消费者身份」本身成为暴露依据，而不是依赖运维配置正确。
+
+2. **租约惰性回收会让 metrics 失真**（§5.3.5、§5.6.5）。租约回收只发生在 `claim` 内，意味着消费者全部离线时，`claimed` 且租约已过期的任务既不自动回到 `pending`，也不会体现在 `oldestPendingAgeMs` 里——而这恰好是最需要告警的场景（§10「消费者不在线」）。建议在 `list_analysis_jobs` / `get_analysis_metrics` 的读路径也做惰性回收，或在 metrics 中单列 `claimExpiredNotRecycled` 指标。
+
+3. **Q2 的默认答案与审计目标有张力**（§1.4、§5.3.3）。目标 4 要求每条建议可审计，但交互式建议不建 job 时 `provenance.jobId` 为空，审计链只剩 `contextId`，而交互式 context 默认 30 分钟过期（Q3）——过期清理后审计链断裂。建议：要么明确交互路径以 `contextId` + 持久化 context（而非 30 分钟过期）作为审计等价物，要么交互式也建轻量 job。现状是「待定 + 默认不创建」叠加「30 分钟过期」，两个默认值互相打架。
+
+4. **线 A 验收依赖的上游能力是 rc 版本**（§4.7、§4.9）。schedule 绑定会话、无交易日历、headless 不能挂 schedule，这些限制都来自 DSH 0.2.1-rc.2；验收条款 2「连续 3 个交易日自动产出晨报」还要求用户机器常驻。建议在线 A 验收中显式写明前置条件（宿主常驻、DSH 版本下限），并把「节假日静默退出」的 skill 行为纳入验收条款 2 的判定口径，否则「非交易日零输出」与「连续 3 个交易日」在同一周可能无法同时满足。
+
+5. **`enqueue_analysis_job` 的「只进 WorkflowToolMap、不进 toolRegistry」是新机制**（§5.4.1），现有 tools 包是否支持「注册但不进 registry」需要确认；若需要新增注册路径，P2 的 1.5–2 周估算可能偏紧。建议 P2 任务清单里单列这一项的技术验证。
+
+6. **部分唯一索引的并发边界值得一个显式 contract test**（§5.7.1）。`complete`（status 离开活动集）与并发 `enqueue`（同 dedupe_key 进入活动集）之间的 TOCTOU 依赖 SQLite 串行写保证，理论上安全，但这是整个去重语义的根基，建议 §8 contract 测试表中显式补上「complete 与 enqueue 并发竞争」用例，而不只写「dedupe 唯一」。
+
+7. **双消费者并存时缺少分工约定**（§5.6.1、§5.6.2）。P4 之后同一账户可能同时有 DSH skill 和托管 worker 两类消费者竞争 claim；`claimed_by` 前缀能区分来源，但没有配额或分工策略。低风险（claim 互斥保证不会重复消费），但文档应有一句说明：先到先得是否就是期望语义。
+
+8. **`apps/web` 的 AI 例外要在架构文档中显式落笔**（§5.1、§5.7.4）。「Chat 运行时从 `ai-runtime` 直接构造，不再经 `ToolContext`」打破了 AGENTS.md「surface 统一经 tools 使用业务能力」的分层规则。这个例外本身合理（Chat 本来就是托管产品能力），但 §3.3 的 `check-layers.ts` 扫描规则必须把它写成白名单条款，否则守卫脚本会误报；同时 `docs/ARCHITECTURE.md` 需要同步记录这个例外，不能只活在这篇 DDD 里。
+
+9. **交互式 30 分钟 context 过期的用户体感**（Q3 默认值）。用户在 DSH 会话中讨论超过 30 分钟后再决定落 advice，会吃到 `context_expired`，skill 需要重新取 context 再生成。语义正确（事实确实可能过时），但 §4.6 的 skill 行为表应注明「遇 `context_expired` 自动重取 context 重试一次」，把重试流程固化进技能而不是留给模型自由发挥。
+
+### 13.4 微小问题（不阻塞，顺手改）
+
+- §2.2 表中 `investment-workspace.ts` 的 sideEffect 标注为「advice（组合 write/external）」，与该 tool 实测的单一 sideEffect 声明方式不一致，建议注明这是组合语义的口头描述，避免读者去代码里找一个不存在的复合声明。
+- §7 P0 写「确认 Q1/Q4/Q5（已完成）」，但 §1.4 中 Q5 的表述是「P5 删除」，两处口径一致即可，建议 P0 行补一句「Q2/Q3/Q6/Q7/Q8 沿用默认值进入实施」。
+- §12.2 术语表建议补「消费者面 / 只读面」两个词，§4.3 与 §5.4.4 都在用但没有定义条目。
+
+### 13.5 评审结论
+
+| 项 | 结论 |
+|---|---|
+| 总体方向 | 通过 |
+| 事实基线（§2、§4.3） | 需按 §13.2 修正后再冻结 |
+| 数据模型与状态机（§5.3、§5.7） | 通过，补 §13.3-6 的并发测试用例 |
+| Tool 契约（§5.4） | 通过，建议落实 §13.3-1 的消费者暴露机制 |
+| 实施分期（§7） | 通过，P2 增加注册机制验证任务 |
+| 待决问题默认值 | Q2/Q3 默认值需按 §13.3-3 对齐后再进入 P2 |
+
+评审人：Kimi（代码 Agent），评审日期：2026-10-22，评审基线：`main` 分支工作树（`b8b2318`）。
