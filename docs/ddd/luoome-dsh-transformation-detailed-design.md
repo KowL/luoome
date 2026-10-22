@@ -262,7 +262,7 @@ P0 决策冻结
 
 ### 4.3 MCP 暴露面
 
-当前 inventory（2026-10-22 工作树实测，`bun packages/cli/src/index.ts tools list --json`）：186 个 tool，`read 89 / write 64 / external 26 / advice 6 / trade 1`。默认暴露 `read + advice`（95 个，扣除 research 名后 83 个）。目标：
+当前 inventory（2026-10-22 瘦身后实测，`bun packages/cli/src/index.ts tools list --json`）：178 个 tool，`read 89 / write 64 / external 24 / trade 1`（`advice` 已删除，见 §16）。默认仅暴露 `read`（89 个，按现行 research 子串特判扣除后 78 个）。目标：
 
 | 层 | 暴露内容 | 说明 |
 |---|---|---|
@@ -602,7 +602,14 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 
 ### 5.5 生产者改造
 
-#### 5.5.1 `daily-advice`
+> **修订（2026-10-22 瘦身轮，`a21ed87`）**：本节原方案「把存量 workflow 改为 enqueue-only 生产者」已随单机瘦身（§16）废止——`daily-advice`、`strategy-recommendations` 整体删除，其余 workflow 的 AI 生成块全部移除，`LUOOME_ANALYSIS_MODE=inline|queue` 双模式不再存在。修订后的生产者分工：
+>
+> - **单机**：不保留任何本地生产者。交互式与主动分析由个人 DSH 直接读取事实、推理后经 `record_advice` 写回（线 A）；`analysis_job` 队列在单机不部署生产者，面板显示无积压即正常。
+> - **托管**：由 `apps/worker` 的 `analysis` pass **自产自销**——先按租户扫描持仓与策略候选、装配 context 并 `enqueue_analysis_job`，随后在同一调度周期内 claim 消费。§5.5.1–§5.5.6 中的确定性前置逻辑（preflight、facts 组装、冷却与去重）原样保留，但落点从 workflow 改为 worker pass 的组装函数；workflow 层不再改动。
+>
+> 以下小节保留作为「消费者/生产者共享的确定性前置逻辑」的规格参考，不再代表 workflow 层的待办改造。
+
+#### 5.5.1 `daily-advice`（已删除，逻辑迁移到托管 worker）
 
 - 保留「列出持仓」的确定性部分。
 - 对每个持仓 `enqueue_analysis_job(kind='advice_stock')`。
@@ -610,13 +617,16 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 - 顺带修复：无上限并发 → 由队列与消费者 limit 控制；WorkflowRun 审计记录入队数。
 - CLI 命令语义从「立即生成」变为「生成待办」。
 
-#### 5.5.2 `generate_strategy_recommendations`
+#### 5.5.2 `generate_strategy_recommendations`（已删除，preflight 逻辑迁移到托管 worker）
 
 - 保留全部确定性部分：`list_strategy_result_views`、rank/score 过滤、`evaluateStrategyRecommendationPreflight`（账户/持仓/行业暴露/流动性/信号冲突/冷却/数据年龄）、`maxPerRun`。
 - 对通过 preflight 的候选 `enqueue_analysis_job(kind='advice_strategy_candidate')`，context 带 preflight 事实、信号/观察、quote/indicators、可选 position。
 - 立即返回 `{enqueued, skippedPreflight, skippedCooldown}`；通知改由消费者在完成后调用（Q4）。
 
-#### 5.5.3 `strategy-daily-cycle`
+#### 5.5.3 `strategy-daily-cycle`（AI 生成块已移除，洞察恒为 facts-only）
+
+- 单机现状（§16）：`insight` 直接落 `get_strategy_insight_facts` 确定性事实，**不再**把 facts-only 映射为 `partial`；`recommendations` 块已删除。
+- 托管 worker 自生产时可选恢复下述入队语义：
 
 - `insight`：调 `get_strategy_insight_facts` 产事实，`enqueue_analysis_job(kind='strategy_insight_narrative')`；周期状态 `partial`，不等待模型。
 - `recommendations`：改为入队，不再同步生成。
@@ -629,15 +639,18 @@ claimed ──lease 到期（claim 内回收）──► pending（attempts 已�
 - weekly-report 的策略洞察段落改为 facts-only + 入队（`target=reportId`）。
 - 报告状态增加 `narrativePending`；缺失维度继续显式标注。
 
-#### 5.5.5 `strategy-autonomy-weekly`
+#### 5.5.5 `strategy-autonomy-weekly`（AI 叙述与提议块已移除）
+
+- 单机现状（§16）：暂停/归档判定、冷却、确定性 runId、`validate → publish` 门禁保持；AI 叙述固定为空，提议步骤透传（不再本地生成版本提议），存量 validating 动作仍走人工队列。
+- 托管 worker 自生产时可选恢复下述入队语义：
 
 - 暂停/归档判定、提议冷却、每周确定性 runId、`validate → publish` 门禁保持确定性。
 - 原本 3 次同步生成改为入队（暂停/归档 insight、proposal）。
 - 自动发布仍只在「提议已落库 + 确定性验证通过 + 晋级门满足」后发生；消费者缺席时当周不发布，AutonomyAction 记录 `pending`，不允许空成功。
 
-#### 5.5.6 `research_investment_directions`
+#### 5.5.6 `research_investment_directions`（已删除）
 
-- tool 从领域移除；交互式对话改用 `get_analysis_context(kind='research_directions')` + `record_analysis_result`。
+- tool 已从领域移除（§16）；交互式对话改用 `get_analysis_context(kind='research_directions')` + `record_analysis_result`。
 - 托管 Chat 的草案确认（`settle_chat_draft`）从「执行 tool」改为「提交结果」，写路径仍经过同一校验。
 
 #### 5.5.7 入队与去重规则
@@ -828,7 +841,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 ### 5.10 线 B 验收
 
 1. 双实现 contract 通过；claim/lease/幂等/证据校验测试通过；MCP 默认仍只读。
-2. `flag=queue` 时批量管线模型调用为 0（用 fake LLM 计数器断言）；`flag=inline` 保持旧行为。
+2. 本地批量管线模型调用恒为 0（registry 中不存在任何 LLM 工具；`FakeLLMAdapter` 计数器断言）；托管 worker 自生产路径完成「入队 → claim → 写回」闭环。
 3. 入队 → claim → record → `get_advice` 可见；超时进 dead_letter。
 4. 领域包无 AI import；`bun run typecheck`、`bun run test:all` 通过。
 5. 存量建议带 `legacy-ai`，校准页正确分组。
@@ -874,9 +887,10 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | **P0 决策冻结（0.5 周）** | Q1/Q4/Q5 与 Q11–Q16 已拍板（§14）；Q2/Q3 按 §14 调整；Q6–Q10 沿用 §11 默认值；冻结新增 `ctx.adapters.llm` 调用；本文评审 | 决策记录、评审意见、§14 | 评审通过 + §14 复核清单 | — |
 | **P1 线 A 最小闭环（1–2 天）** | MCP 只读接入、系统提示、看板面板、工作区分离 | 插件/配置、面板 | §4.9 第 1、4、5 条 | 移除插件行 |
 | **P2 领域实体与工具（1.5–2 周）** | `analysis_job`/`analysis_context` 实体、repo、DDL、12 个 tool、provenance 列、`queue` capability 与消费者暴露（Q11） | 新表、双实现、contract tests | §5.10 第 1 条 | 不切换生产者，旧路径不变 |
-| **P3 生产者切换（1–1.5 周）** | daily-advice、recommendations、daily-cycle、weekly-report、autonomy；`LUOOME_ANALYSIS_MODE=inline|queue` | workflow 改造 + 测试 | §5.10 第 2、5 条 | flag 回 inline |
+| **P3 生产者切换（1–1.5 周）** | ~~daily-advice、recommendations、daily-cycle、weekly-report、autonomy；`LUOOME_ANALYSIS_MODE=inline|queue`~~ **已修订（§5.5）**：单机生产者已在瘦身轮删除，不再恢复；本阶段只剩托管 worker `analysis` pass 的自生产组装（复用 preflight/facts 逻辑） | worker 组装函数 + 测试 | §5.10 第 2、5 条 | 停托管 worker pass |
 | **P4 消费者（1–1.5 周）** | 单机 DSH skill + host plugin 唤醒；托管 worker `analysis` pass；端到端 | skill、worker pass、e2e | §4.9 第 2、3 条；§5.10 第 3 条 | 停消费者，任务留 pending |
-| **P5 摘除领域 AI（1 周）** | 删除 8+1 个 AI tool、`ToolContext` 端口、`adapters/llm` 迁出、CLI/TUI/MCP 配置 | 清理提交 | §5.10 第 4 条；`advice` 删除 | 回退版本（旧代码忽略新表） |
+| **P5 摘除领域 AI（已完成，`a21ed87`）** | 已删 9 个 AI tool、`advice` sideEffect、MCP/Web 暴露面收窄（§16）；**范围修订**：`ToolContext.adapters.llm` 与 `ctx.agent` 因托管 Chat 依赖暂保留，删除行动并入 P5b | 清理提交 | §5.10 第 4 条已满足 | 回退版本（旧代码忽略新表） |
+| **P5b 端口收口（0.5–1 周）** | 托管 Chat 按 Q14 例外迁到直连 `ai-runtime`；随后删除 `ToolContext.adapters.llm/agent` 端口、`packages/adapters/src/llm/` 整体迁出、CLI/TUI/`ai-models.json` 清理 | 重构提交 | 领域包无 AI import 守卫通过；全量测试 | 回退版本 |
 | **P6 收口（0.5 周）** | 文档同步、校准分组、CI 守卫、旧测试清理、ARCHITECTURE 例外条款复核（Q14 已提前落笔） | 文档 + 守卫 | 链接检查、`git diff --check`、全量测试 | — |
 | **后续** | 线 C 切换内嵌 DSH Runtime | 消费者替换 | D01–D10 + 生产评审 | 保留 ai-runtime 消费者 |
 
@@ -973,7 +987,7 @@ CREATE INDEX IF NOT EXISTS advices_generator_kind_idx ON advices (generator_kind
 | 术语 | 含义 |
 |---|---|
 | 事实包 / context | 由领域装配、带 `factIds` 与 `dataAsOf` 的确定性数据快照 |
-| 生产者 | 领域内决定「要分析什么」的代码（workflow/tool） |
+| 生产者 | 决定「要分析什么」并组装入队 context 的代码（托管 worker 的 analysis pass / 历史 workflow） |
 | 消费者 | 唯一允许调用模型、产出结论的进程或会话 |
 | 写回 | 把消费者结果经校验后落库的路径 |
 | provenance | 建议/结果的生成来源元数据 |
@@ -1179,3 +1193,69 @@ Q12 的原意是「审计链不因 30 分钟过期而断裂」，要的是**保�
 **明确保留（不属于本轮删除）**：`ToolContext.adapters.llm` 端口与 `ctx.agent`（托管 Chat 依赖）；core 的 `RULE_FALLBACK_*` 标记与 `isRuleFallbackAdvice`（过滤存量数据用）；Advice 实体、复盘与免责声明约束；TUI/CLI daemon/`ai-models.json`（`adapters/llm → ai-runtime` 迁移属重构，留待后续）。
 
 验证：`bun run typecheck` 全绿；`bun run test` / `test:db` / `test:web` 通过（仅余存量 DSH 集成环境失败，与 main 基线一致，非本轮回归）；`bun run lint` 无新增警告。
+
+## 17. 开发任务拆分（2026-10-22，基于瘦身完成后的现实）
+
+> 与 §7 阶段表一一对应，每张卡可独立认领。依赖关系：**P2 是 P3/P4 的前置；P5b 依赖 P4 托管链路稳定**；线 A（T-A\*）与线 B（T-B\*）可并行。估算为单人工作日。
+
+### 17.1 线 A：单机接入 DSH（P1，1–2 天）
+
+| ID | 内容 | 关键文件 / 位置 | 依赖 | 验收 | 估算 |
+|---|---|---|---|---|---|
+| T-A1 | MCP 通用暴露开关：新增 `LUOOME_EXPOSE_TOOLS`（allowlist）/ `LUOOME_EXPOSE_DENY`（denylist）解析，替代 `server.ts` 中的 research 子串特判 | `packages/mcp/src/exposure.ts`、`packages/mcp/src/server.ts` | — | §4.9 第 4 条；子串特判删除后行为等价 | 0.5d |
+| T-A2 | DSH 只读面板 ×3：盯盘、建议、复盘（Client 插件 `ctx.slots` 渲染，只读） | `.dsh/` 插件目录（§4.5） | T-A1 | §4.9 第 1 条 | 0.5d |
+| T-A3 | 系统提示词 6 条注入（只读面定位、写回路径、免责声明等） | `.dsh/` 配置（§4.4） | T-A1 | 新会话首条回复符合提示词约束 | 0.25d |
+| T-A4 | 技能目录 5 个 skill（晨报、盯盘复核、持仓复盘、研究、写回），含 `context_expired` 自动重取重试一次的写回约定 | `.dsh/skills/`（§4.6） | T-A3 | skill 逐一 dry-run 通过；重试约定可演示 | 0.5d |
+| T-A5 | 日程/事件宿主常驻方案与 launchd 兜底脚本 | `infra/dsh/`（§4.7） | — | 宿主重启后日程自动恢复 | 0.25d |
+| T-A6 | 线 A 整体验收 | — | T-A2~T-A5 | §4.9 五条全过（含 Q16 前置：DSH 版本下限、宿主常驻、节假日静默口径） | 0.5d |
+
+### 17.2 线 B：领域实体与队列工具（P2，1.5–2 周）
+
+| ID | 内容 | 关键文件 / 位置 | 依赖 | 验收 | 估算 |
+|---|---|---|---|---|---|
+| T-B1 | 新实体：`AnalysisJob`、`AnalysisContext`（含 `write_until`/`expires_at` 拆分，Q17）、`AnalysisProvenance` 值对象；repository 接口 + 不变量 | `packages/core/src/entity/`、`packages/core/src/repository/index.ts` | — | core 单测覆盖状态机与不变量 | 2d |
+| T-B2 | drizzle + in-memory 双实现 + contract tests；`ensureSchema` DDL（幂等，含部分唯一索引与 fencing token 列） | `packages/db/src/schema/`、`packages/db/src/client.ts`、`packages/db/src/memory/` | T-B1 | contract tests 双实现全绿；存量库启动迁移幂等 | 2d |
+| T-B3 | 12 个 queue tool：`enqueue_analysis_job`（internal，只进 `WorkflowToolMap`，Q15 机制已验证）+ `list_analysis_jobs`/`get_analysis_job`/`get_analysis_metrics`/`claim_analysis_job`/`complete_analysis_job`/`fail_analysis_job`/`requeue_analysis_job`/`cancel_analysis_job`/`get_analysis_context`/`record_advice`/`record_analysis_result` | `packages/tools/src/queue/`、registry、桶导出 | T-B2 | tool 契约测试；Zod schema 派生三端一致 | 3d |
+| T-B4 | `queue` capability 加入 `SideEffect` 联合类型；`LUOOME_EXPOSE_QUEUE=true` 解析；消费者实例（serverName `luoome-worker`）默认 deny 暴露 | `packages/core/src/types/side-effect.ts`、`packages/mcp/src/exposure.ts`、`packages/mcp/src/server.ts` | T-B3 | Q11 语义：allowlist 漏配只让工具更少；§15.3-3 两处同步点均已改 | 1d |
+| T-B5 | Advice/AnalysisResult 的 provenance 列与写回校验（`write_until` + `stale_context` 窗口；审计读取不校验时效；job 终态后直传拒绝） | `packages/core/src/entity/advice.ts`、queue tool 校验层 | T-B1、T-B3 | §5.8.1 校验清单逐条有测试 | 1.5d |
+
+### 17.3 生产者组装（P3 修订版，0.5–1 周）
+
+| ID | 内容 | 关键文件 / 位置 | 依赖 | 验收 | 估算 |
+|---|---|---|---|---|---|
+| T-C1 | 托管 worker `analysis` pass 的自生产组装函数：扫描租户 → preflight（确定性检查）→ 组装 facts context → enqueue；同 pass 内 claim 消费写回（自产自销，§5.5 修订块） | `apps/agent-runtime/`（worker pass） | T-B3 | §5.10 第 2、5 条：本地批量管线模型调用恒为 0；托管完成入队→claim→写回闭环 | 3d |
+
+### 17.4 消费者（P4，1–1.5 周）
+
+| ID | 内容 | 关键文件 / 位置 | 依赖 | 验收 | 估算 |
+|---|---|---|---|---|---|
+| T-D1 | 单机 DSH skill 消费循环：schedule 唤醒 → claim → `get_analysis_context` → 模型 → `complete` 写回；host plugin 唤醒兜底 | `.dsh/skills/`（§5.6.1） | T-B3、T-A4 | 本地 e2e：enqueue 后 skill 一轮内完成写回 | 2d |
+| T-D2 | 托管 worker 消费 + 计量：`hostedLLMToolNames` 改 run 级标签（`agent_run`/`hosted_chat_stream` 存量不动，analysis run 新增标签） | `apps/agent-runtime/`、`packages/adapters/src/llm/hosted-meter.ts`（§6.3） | T-C1 | 计量记录可按 job/run 维度归集 | 2d |
+| T-D3 | 端到端验收：双消费者先到先得（Q13）、失败重试与死信、metrics 观测（含 `claimExpiredNotRecycled`） | — | T-D1、T-D2 | §4.9 第 2、3 条；§5.10 第 3 条 | 1.5d |
+
+### 17.5 端口收口（P5b，0.5–1 周，依赖 P4 托管链路稳定）
+
+| ID | 内容 | 关键文件 / 位置 | 依赖 | 验收 | 估算 |
+|---|---|---|---|---|---|
+| T-E1 | 托管 Chat 按 Q14 例外迁到直连 `ai-runtime`（不经 `ToolContext`） | `apps/web/`（Chat 运行时构造点） | T-D2 稳定运行 | Chat 功能回归通过；计量标签不变 | 2d |
+| T-E2 | 删除 `ToolContext.adapters.llm` / `ctx.agent` 端口；`packages/adapters/src/llm/` 整体迁出；CLI/TUI/`ai-models.json` 清理 | `packages/core/src/context.ts`、`packages/adapters/`、`packages/cli/`、`packages/tui/` | T-E1 | 「领域包无 AI import」守卫通过；typecheck + 全量测试绿 | 2d |
+
+### 17.6 收口（P6，0.5 周）
+
+| ID | 内容 | 关键文件 / 位置 | 依赖 | 验收 | 估算 |
+|---|---|---|---|---|---|
+| T-F1 | 文档同步：README、USER_GUIDE、CONTEXT.md 更新为新现实；校准 `legacy-ai` 分组；CI 导入扫描守卫；旧 AI tool 残留测试清理 | 各文档、CI 配置 | T-E2 | 链接检查 + `git diff --check` + 全量测试；ARCHITECTURE 例外条款复核 | 2d |
+
+### 17.7 排期视图
+
+```text
+线 A（P1）:  T-A1 → T-A2/A3 → T-A4 → T-A6        ┐ 可与线 B 并行
+             T-A5（独立）                        ┘
+线 B（P2）:  T-B1 → T-B2 → T-B3 → T-B4 → T-B5
+P3:          T-C1（依赖 T-B3）
+P4:          T-D1 → T-D2 → T-D3
+P5b:         T-E1 → T-E2（依赖 P4 托管链路稳定）
+P6:          T-F1（最后）
+```
+
+总量与 §7 一致：约 7–9 周（单人，含线 A）。
