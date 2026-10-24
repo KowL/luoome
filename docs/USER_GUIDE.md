@@ -658,7 +658,7 @@ Web 端确认当前路由已 reload（页面状态行的「账户已切换」提
 
 ### 12.8 Advice 看不到 / 全部过期
 
-`validUntil` 已过：默认 `get_advice` 不返回过期 advice（`includeExpired=true` 可强行列）。`analyze_stock` 会自动重新生成。
+`validUntil` 已过：默认 `get_advice` 不返回过期 advice（`includeExpired=true` 可强行列）。内置 `analyze_stock` 工具已随 DSH 瘦身上下线，新建议由分析队列消费者写入，不会自动重新生成。
 
 ### 12.9 如何卸载？
 

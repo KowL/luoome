@@ -89,11 +89,13 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 | `read` | 只读本地 | `list_holdings`, `get_advice` | ✅ |
 | `write` | 写本地状态 | `add_holding` | ⚠️ 可配置 |
 | `external` | 调用第三方 | `fetch_quote`, `send_notification` | ⚠️ 可配置 |
+| `queue` | 消费分析队列并写回结果 | `claim_analysis_jobs`, `complete_analysis_job` | ⚠️ 可配置 |
 | `trade` | 登记系统外已完成的资金动作 | `record_decision_trade` | ❌ 永不 |
 
 > DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后：原 `advice` 等级
-> （只读 + LLM 推理 + 落建议）随内置 AI 工具一并删除，`SideEffect` 只剩上表 4 级；
-> Advice 实体与存量数据保留，新建议由外部分析写入。
+> （只读 + LLM 推理 + 落建议）随内置 AI 工具一并删除，`SideEffect` 为上表 5 级；
+> Advice 实体与存量数据保留，新建议由外部分析写入。`queue` 级随分析队列引入，
+> 默认关闭，须由消费者实例显式 opt-in（`LUOOME_EXPOSE_QUEUE=true`）。
 
 `sideEffect` 表示主副作用；跨越多个能力边界的 tool 还需声明 `requiredCapabilities`。
 所有 surface 按组合能力逐项门控，例如远程资料导入要求 `write + external`。
@@ -874,11 +876,15 @@ Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源�
 
 | 等级 | tool 例 | MCP 默认 | Web 默认 | CLI/TUI 默认 |
 |---|---|---|---|---|
-| `read` | `list_holdings`, `get_quote`, `get_advice` | ✅ | ✅ | ✅ |
+| `read` | `list_holdings`, `get_advice` | ✅ | ✅ | ✅ |
 | `write` | `add_holding`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
-| `external` | `fetch_quote`, `send_notify` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
-| `advice` | `analyze_stock`, `daily_advice` | ✅ | ✅ | ✅ |
-| `trade` | `record_decision_trade` | ❌ | ❌ | ⚠️ opt-in |
+| `external` | `fetch_quote`, `send_notification` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
+| `queue` | `claim_analysis_jobs`, `complete_analysis_job` | ⚠️ opt-in | ❌ | ✅ |
+| `trade` | `record_decision_trade` | ❌ | ❌ | ✅ |
+
+MCP 与 Web 是模型/远端可调用面，trade 类工具由 `selectExposedTools` 按类型过滤掉，
+`requiredCapabilities` 含 `trade` 的工具一并拒绝。CLI 与 TUI 是本机可信操作员入口，
+`tools call <name>` 直接取注册表执行、不设副作用闸口，由人显式指名调用即视为人工确认。
 
 ### 7.2 Schema 推导
 

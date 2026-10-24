@@ -66,41 +66,41 @@ Research embedding 默认关闭。只有 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true
 
 ### advice 永远不直接触发 trade
 
-代码层硬卡：
+代码层硬卡按类型过滤，不依赖运行时名单（`packages/tools/src/exposure.ts`）：
 
 ```ts
-// advice tool handler 内禁止调 trade tool
-const FORBIDDEN_TOOLS_IN_ADVICE = new Set(['place_order', 'cancel_order', 'submit_order']);
-
-function assertAdviceDoesNotTriggerTrade(toolName: string) {
-  if (FORBIDDEN_TOOLS_IN_ADVICE.has(toolName)) {
-    throw new SecurityError(`advice tool cannot trigger trade tool: ${toolName}`);
-  }
-}
-
-// 所有 advice 类 tool 的 ctx.adapters / ctx.tools 调用都走这个 assert
+// trade 类工具不进模型可调用面；同时挡「主副作用声明成别的等级、
+// 但 requiredCapabilities 含 trade」的绕过写法。
+tool.sideEffect !== 'trade' && !tool.requiredCapabilities?.includes('trade')
 ```
+
+配套三道闸，任一命中即拒绝：
+
+- `packages/mcp/src/exposure.ts`：`LUOOME_EXPOSE_TRADE=true` 在解析暴露面时直接抛错，MCP 启动失败
+- `packages/dsh-luoome/src/host/read-surface.ts`：DSH 插件装配时同样抛错
+- `packages/tools/src/plugin-operations.ts`：确认门策略不接受 `trade` / `queue` 能力，人工确认通道也到不了 trade
+
+因此 trade 只能由人经专用人工入口触发。`record_decision_trade` 另走 Web 的
+`POST /api/decision-trades`（write opt-in + 同源校验 + 账户绑定 + 明确的未入账确认）。
 
 ### disclaimers 必填
 
 ```ts
-const STANDARD_DISCLAIMERS = [
+export const STANDARD_DISCLAIMERS = [
   '本建议由 AI 生成，基于历史数据与技术指标，不构成投资建议。',
   '投资有风险，决策需自行承担。',
   '市场有不可预测性，过往表现不代表未来收益。',
-];
+] as const;
 
-// 不变量：advice.disclaimers 至少包含 STANDARD_DISCLAIMERS 的全部内容
-function assertAdviceDisclaimers(advice: Advice) {
-  for (const d of STANDARD_DISCLAIMERS) {
-    if (!advice.disclaimers.includes(d)) {
-      throw new InvariantError(`missing required disclaimer: ${d}`);
-    }
+// packages/core/src/entity/invariants.ts：Advice 不变量校验
+for (const required of STANDARD_DISCLAIMERS) {
+  if (!a.disclaimers.includes(required)) {
+    throw new InvariantError(`missing disclaimer: ${required}`);
   }
 }
 ```
 
-LLM 不能"忘了"带 disclaimer——输出校验失败时整个 advice 被丢弃，重新生成。
+建议写入前由仓储层强制该不变量（`assertAdviceInvariants`），缺任一条直接拒绝写入；分析队列的写入路径直接填入 `STANDARD_DISCLAIMERS`，调用方无法省略。
 
 ### confidence 校准
 
