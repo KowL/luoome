@@ -166,17 +166,18 @@ export const sanitizeAdviceReasoning = (reasoning: AdviceReasoning): AdviceReaso
 export const sanitizeAdviceRisks = (risks: readonly string[]): readonly string[] => ...;
 ```
 
-**当前 Advice 写回路径不经过该清理**，这是已知缺口：
+**Advice 写回路径经过该清理**：
 
-- 分析队列写回（`record_advice` / `complete_analysis_job` → `AdviceSchema.parse`）只做结构校验，
-  不过文本清理；`sanitizeAdviceText` 目前只有 `strategy-autonomy-action` 一个调用方
-- 内置 `analyze_stock` 路径删除后，Advice 落库已无此防线
+- 分析队列写回（`record_advice` / `complete_analysis_job` → `AdviceSchema.parse`）在组装 Advice 时
+  对 `reasoning`（premise / evidence / counterEvidence）与 `risks` 逐条清理，命中模式的片段替换为
+  `[redacted]`；实现见 `packages/tools/src/internal/sanitize-advice.ts`
 - 写回只接受 `StrategyAdviceAnalysisSchema`（decision / confidence / horizon / 价位 / reasoning / risks），
   `basedOn` 由工具重建为 `{ dataAsOf }`；`AdviceDataSnapshot.llmReasoning` 只保留给存量数据读取，
   新写回不写该字段
+- `provenance` 的 model / skillVersion 等是标识符而非散文，不做清理
 
-因此消费者写入的 reasoning / risks 必须在**展示侧**当作不可信文本处理（只读展示，不自动回灌
-system prompt），或由消费者在提交前自行清理。
+清理只覆盖文本层，**不等于**消费者输出可信：展示侧仍按不可信文本处理（只读展示，不自动回灌
+system prompt）。
 
 ## MCP 暴露配置
 
@@ -344,15 +345,15 @@ Tool 的业务输入、业务输出和错误详情不写入 audit log；失败�
 `$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
 目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
 可选错误类别和调用方，从源头避免私人投资数据进入 sink。
-Advice 的 `reasoning` / `risks` 的 prompt-injection 文本清理目前**不在写回路径上**
-（见「输出反 prompt injection」）；`basedOn.llmReasoning` 只保留给存量数据读取。
+Advice 的 `reasoning` / `risks` 在写回前过 prompt-injection 文本清理（见「输出反 prompt injection」）；
+`basedOn.llmReasoning` 只保留给存量数据读取。
 审计 sink 故障只产生 warning，不改变 ToolResult 协议或伪造业务成功。
 
 ## 上游信任
 
 - **数据源**：Eastmoney / Tencent 等外部 API 返回的数据视为不可信，输入 db 前校验
-- **模型输出**：写回时经 Zod 校验（`AdviceSchema.parse`），不直接执行；文本级注入清理目前
-  不在写回路径上，见「输出反 prompt injection」
+- **模型输出**：写回时经 Zod 校验（`AdviceSchema.parse`）+ prompt-injection 文本清理，不直接执行；
+  见「输出反 prompt injection」
 - **研究 embedding 模型目录**：`LUOOME_RESEARCH_EMBEDDING_CONFIG` 只允许用 `apiKeyEnv` 引用凭证
   环境变量，不保存 API key；配置解析错误和日志不得输出凭证值
 - **advice 回填**：`record_advice_outcome` 调用记录到 audit，但 outcome 数据本身不强制校验（用户主观回填）
@@ -377,6 +378,7 @@ Advice 的 `reasoning` / `risks` 的 prompt-injection 文本清理目前**不在
 - [x] Advice 与 trade 边界仍在（`trade` 不进入 MCP / 模型可调用工具表）
 - [x] advice 必含 disclaimers（不变量测试覆盖）
 - [x] advice 有效期限逻辑正确
+- [x] Advice 写回路径对 reasoning / risks 做 prompt-injection 文本清理
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
 - [x] 三个 MCP 实例白名单不重叠，且部署传入的 `LUOOME_EXPOSE_*` 一律丢弃

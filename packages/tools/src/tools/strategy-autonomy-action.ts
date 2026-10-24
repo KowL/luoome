@@ -9,7 +9,7 @@ import {
 import { z } from 'zod';
 
 import { defineTool, errInvalidInput, errNotFound } from '../define-tool.js';
-import { sanitizeAdviceText } from '../internal/build-advice.js';
+import { sanitizeAdviceText } from '../internal/sanitize-advice.js';
 import { publishStrategyVersionTool } from './strategy-lifecycle.js';
 
 export const ListStrategyAutonomyActionsInput = z.object({

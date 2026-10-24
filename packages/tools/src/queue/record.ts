@@ -16,6 +16,7 @@ import {
   errLeaseLostBeforeCommit,
   errNotFound,
 } from '../define-tool.js';
+import { sanitizeAdviceReasoning, sanitizeAdviceRisks } from '../internal/sanitize-advice.js';
 import { analysisHash } from './context.js';
 import { AnalysisPublicationDraftSchema, recordAnalysisPublication } from './publication.js';
 
@@ -49,6 +50,8 @@ const recordAdvice = async (
   }
   const advice = AdviceSchema.parse({
     ...input.result,
+    reasoning: sanitizeAdviceReasoning(input.result.reasoning),
+    risks: sanitizeAdviceRisks(input.result.risks),
     id: `analysis:${context.id}`,
     subjectKind: context.subject.kind,
     subjectId: context.subject.id,

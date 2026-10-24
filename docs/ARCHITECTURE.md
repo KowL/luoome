@@ -830,6 +830,8 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 - `provenance.evidenceFactIds` 必须全部落在事实包的 `factIds` 内，否则 `unknown_fact_reference`
 - 超过 `writeUntil` / `expiresAt` → `context_expired`；事实包 `dataAsOf` 距今超过 30 分钟 → `stale_context`
 - `AdviceSchema.parse` 校验结构，`disclaimers` 由工具直接填入 `STANDARD_DISCLAIMERS`，调用方无法省略
+- `reasoning`（premise / evidence / counterEvidence）与 `risks` 逐条过 prompt-injection 文本清理，
+  命中模式的片段替换为 `[redacted]`（`packages/tools/src/internal/sanitize-advice.ts`）
 - `validUntil` 由工具按 horizon 计算：intraday 取当日 15:00，其余取 `adviceExpiryDays[horizon]` 个交易日
 
 ### 6.4 复盘层
