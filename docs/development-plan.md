@@ -809,6 +809,10 @@ Tool 本身不落库，确认后复用既有 `create_strategy_version` 写入，
 
 **预计：3～5 日；依赖：M2**
 
+> 后续变更：DSH 瘦身后 `market_outlook` tool 已随内置 AI 一并下线，`market-outlook` workflow
+> 同期不存在。下列范围条目保留为当时的设计记录；天梯事实本身仍在
+> （`limit_up_ladder` / `limit_up_ladder_compare` tool），现由 `daily-review` 等 workflow 消费。
+
 #### 本期范围
 
 - `market_outlook` 消费结构化天梯事实；
@@ -836,6 +840,11 @@ replay 只读取该快照，缺失时保持 unknown，不直接把当前快照�
 M7A～M7D 四切片均已交付：场景目录与确定性路由、计划卡、`agent_run` 部分失败契约、
 草案 display 投影与 Advice 确认卡、数据健康注入与 chat 取消链路；全量门禁与真实浏览器
 验收通过，实施偏差记录在设计文档 §11。
+
+> 后续变更：DSH 瘦身（[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)）后
+> `agent_run` 已删除，单机 Web 对话助手改为不依赖模型的「起草 → 明确确认 → 原子执行」链路；
+> `analyze_stock` / `analyze_position` / `market_outlook` 等内置 AI 工具同时下线。
+> 下列切片与验收条目保留为当时的设计记录，工具名不再代表当前可用能力。
 
 #### 切片
 

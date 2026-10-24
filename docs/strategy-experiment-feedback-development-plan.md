@@ -230,6 +230,13 @@ production feedback 只接受已发布版本，evaluator identity 缺失不会�
 
 **实施状态：已完成（2026-08-31）。** 在已验收的 X4 事实口径上独立完成，不与实验 UI 混合修改。
 
+> 现状：X5 的预检部分仍然存在 —— 版本化 policy、`eligible/skipped` reason code、输入 fact refs，
+> 以及 `get_strategy_recommendation_preflight_history` 读取面。第 4 步的 `analyze_strategy_candidate`
+> 与第 5 步的仓内 Advice 生成已随 DSH 瘦身
+> （[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)）下线：
+> `StrategyRecommendationPolicy` 仍在 core，`strategy-daily-cycle` 只输出 facts-only 的
+> `preflight` 摘要，Advice 由外部消费者经分析队列 `record_advice` 写入。
+
 任务：
 
 1. 在 core 扩展版本化 policy，保留 V1 读取兼容；

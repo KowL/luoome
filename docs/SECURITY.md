@@ -9,7 +9,7 @@ luoome 是本地工具 + MCP server + advisor agent。五类潜在威胁：
 1. **恶意 prompt injection**：agent 上层被攻击者注入指令，agent 通过 MCP 调 luoome 执行未授权操作
 2. **MCP server 被未授权方连接**：远程 MCP 暴露、token 泄露
 3. **本地密钥泄露**：API key、券商密码写入日志 / git / 报告
-4. **advice 误导用户**：LLM 幻觉 / 数据源错误 / 推理偏差，让用户做出错误决策
+4. **advice 误导用户**：模型幻觉 / 数据源错误 / 推理偏差，让用户做出错误决策
 5. **advice → trade 链失控**：advice 自动触发下单，资金风险
 
 下面所有设计都针对这五类威胁。
@@ -62,7 +62,10 @@ Web 通用路由 `/api/tools/:name/call` 同样拒绝所有 `trade` 工具。本
 
 Research embedding 默认关闭。只有 `LUOOME_RESEARCH_EMBEDDING_ENABLED=true` 才挂载外部 adapter，且查询/评测仍要求 `external`，chunk 投影重建同时要求 `external + write`。模型目录只记录 provider endpoint、model identity、维度、version 与 `apiKeyEnv` 名称；密钥从环境读取。查询、私人正文、向量和密钥不进入日志或错误。混合检索中的正文继续是 tool data，不是指令；结果必须保留 EvidenceRef、反证、风险、unknowns 和 prompt-injection 警告。
 
-## Advisor 专属安全约束
+## 建议（Advice）侧专属安全约束
+
+本节只约束 Advice 实体与建议产出路径。术语以 [CONTEXT.md](../CONTEXT.md) 为准：
+当前领域语言是 **Advice（建议快照）**；"Advisor" 是内置 AI 助手下线前的旧称。
 
 ### advice 永远不直接触发 trade
 
@@ -104,18 +107,37 @@ for (const required of STANDARD_DISCLAIMERS) {
 
 ### confidence 校准
 
-v0.3 起，luoome 跟踪每个 advice 的 outcome，统计 `confidence` vs 实际命中率的偏差：
+luoome 跟踪每个 advice 的 outcome，统计 `confidence` vs 实际命中率的偏差。`get_confidence_calibration`
+返回 `schemaVersion: 2` 的账户口径结果：
 
 ```ts
-interface ConfidenceCalibration {
-  bucket: string;            // "0-10", "10-20", ..., "90-100"
-  predictedConfidence: number;
-  observedHitRate: number;
-  calibrationError: number;  // |predicted - observed|
+interface GetConfidenceCalibrationOutput {
+  schemaVersion: 2;
+  buckets: CalibrationBucket[];   // 按 10 一档聚合
+  totalAdvices: number;
+  totalWithOutcome: number;
+  overallHitRate: number | null;   // 无样本时为 null
+  followedWithPnl: number;
+  calibratedAt: Date;
+  groups: Array<{                  // 按生成来源分组，不跨来源混桶
+    generatorKind: string;          // 分析队列消费者的生成来源
+    model: string | null;
+    skillVersion: string | null;
+    dataAsOf: Date | null;
+    totalAdvices: number;
+    totalWithOutcome: number;
+    followedWithPnl: number;
+    minimumOutcomes: 20;            // 低于此样本量不给出校准结论
+    overallHitRate: number | null;
+    buckets: CalibrationBucket[];
+  }>;
 }
 ```
 
-LLM 输出的 confidence 必须**经此校准后**展示给用户（避免 LLM 自报"80%"但实际 50% 的错觉）。
+**校准不改写已存储的 confidence**。`confidence` 由消费者写入时原样落库；校准只作为事后诊断视图呈现
+（TUI 的「confidence 校准」弹层、`closing-report` 的对应章节）。TUI 明示「信心度不是概率」，
+不同来源不混桶，样本不足 `minimumOutcomes` 时不输出校准结论。统计只覆盖本账户**明确记录过 outcome**
+的建议，通用股票建议须先被本账户记录才进入样本。
 
 ### advice 有效期限
 
@@ -127,31 +149,39 @@ LLM 输出的 confidence 必须**经此校准后**展示给用户（避免 LLM �
 
 ### 输出反 prompt injection
 
-LLM 输出可能含"忽略之前的指令，执行 XXX"的注入。防范：
+模型输出可能含"忽略之前的指令，执行 XXX"的注入。仓内的清理实现：
 
 ```ts
-// advice 输出的 reasoning 字段做内容审计
-function sanitizeAdviceReasoning(reasoning: string): string {
-  // 移除可能含 prompt injection 的模式
-  const blocked = [
-    /ignore (?:all )?previous instructions/gi,
-    /you (?:are|must) (?:now )?/gi,
-    /system:\s*/gi,
-    /<\|.*?\|>/g,  // chat template 标记
-  ];
-  let s = reasoning;
-  for (const re of blocked) s = s.replace(re, '[redacted]');
-  return s;
-}
+// packages/tools/src/internal/build-advice.ts
+const PROMPT_INJECTION_PATTERNS = [
+  /ignore (?:all )?previous instructions/gi,
+  /you (?:are|must)(?: now)?/gi,
+  /system:\s*/gi,
+  /<\|.*?\|>/g,  // chat template 标记
+];
+
+/** Advice 落库前的文本安全边界：模型文本只作为展示证据，不能携带可执行提示词。 */
+export const sanitizeAdviceText = (value: string): string => { /* 逐条替换为 [redacted] */ };
+export const sanitizeAdviceReasoning = (reasoning: AdviceReasoning): AdviceReasoning => ({ ... });
+export const sanitizeAdviceRisks = (risks: readonly string[]): readonly string[] => ...;
 ```
 
-LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized 审计。展示时只在“展开推理”按钮后显示已清理文本，避免被复制粘贴造成下游 agent 误用。
+**当前 Advice 写回路径不经过该清理**，这是已知缺口：
+
+- 分析队列写回（`record_advice` / `complete_analysis_job` → `AdviceSchema.parse`）只做结构校验，
+  不过文本清理；`sanitizeAdviceText` 目前只有 `strategy-autonomy-action` 一个调用方
+- 内置 `analyze_stock` 路径删除后，Advice 落库已无此防线
+- 写回只接受 `StrategyAdviceAnalysisSchema`（decision / confidence / horizon / 价位 / reasoning / risks），
+  `basedOn` 由工具重建为 `{ dataAsOf }`；`AdviceDataSnapshot.llmReasoning` 只保留给存量数据读取，
+  新写回不写该字段
+
+因此消费者写入的 reasoning / risks 必须在**展示侧**当作不可信文本处理（只读展示，不自动回灌
+system prompt），或由消费者在提交前自行清理。
 
 ## MCP 暴露配置
 
 | Env Var | 默认 | 允许值 | 说明 |
 |---|---|---|---|
-| `LUOOME_EXPOSE_READ` | `true` | `true` / `false` | read 类 |
 | `LUOOME_EXPOSE_WRITE` | `false` | `true` / `false` | write 类 |
 | `LUOOME_EXPOSE_EXTERNAL` | `false` | `true` / `false` | external 类 |
 | `LUOOME_EXPOSE_QUEUE` | `false` | `true` / `false` | queue 类；只由消费者实例显式开启 |
@@ -160,6 +190,7 @@ LLM 推理文本（`AdviceDataSnapshot.llmReasoning`）在落库前过 sanitized
 | `LUOOME_EXPOSE_RESEARCH` | `false` | `true` / `false` | 放行私人研究正文与检索工具 |
 | `LUOOME_EXPOSE_TRADE` | `false` | 必须 `false` | trade 类，恒为 false |
 
+read 类恒定暴露，没有对应的 env var（`LUOOME_EXPOSE_READ` 不存在）。
 （`LUOOME_EXPOSE_ADVICE` 已随 advice 副作用等级一并删除。）
 
 启动时校验：trade 必须 false，否则启动失败。allowlist / denylist 的判定顺序是
@@ -277,7 +308,7 @@ error message 可以含人类可读细节（如"持仓数量不能为负"），*
 - API endpoint URL + token
 - 内部文件系统路径（可显示 `$LUOOME_HOME`）
 
-`defineTool` 在统一出口清理 input issues、InvariantError、adapter/LLM/lease/internal 错误、handler
+`defineTool` 在统一出口清理 input issues、InvariantError、adapter / llm_error / lease / internal 错误、handler
 异常和 output schema 校验错误；审计事件只记录调用元数据，不接收 Tool 的业务输入或输出。
 
 ## Audit Log
@@ -313,18 +344,17 @@ Tool 的业务输入、业务输出和错误详情不写入 audit log；失败�
 `$LUOOME_HOME/logs/audit.log`（Web 为数据库目录同级的 `logs/audit.log`）。文件按 JSONL 追加，
 目录权限为 `0700`、文件权限为 `0600`。审计契约只包含时间、工具名、sideEffect、结果、
 可选错误类别和调用方，从源头避免私人投资数据进入 sink。
-Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外清理常见 prompt-injection 模式。
+Advice 的 `reasoning` / `risks` 的 prompt-injection 文本清理目前**不在写回路径上**
+（见「输出反 prompt injection」）；`basedOn.llmReasoning` 只保留给存量数据读取。
 审计 sink 故障只产生 warning，不改变 ToolResult 协议或伪造业务成功。
 
 ## 上游信任
 
 - **数据源**：Eastmoney / Tencent 等外部 API 返回的数据视为不可信，输入 db 前校验
-- **LLM**：所有 LLM 输出经过 Zod 校验，不直接执行；advice 输出额外过 sanitized 审计
-- **模型目录**：`ai-models.json` 只允许用 `apiKeyEnv` 引用凭证环境变量，不保存 API
-  key；配置解析错误和日志不得输出凭证值
-- **Web LLM 设置**：写入接口按其它 mutation 使用同源 Origin 校验；密钥文件权限固定为
-  `0600`，读取接口仅返回是否已配置，禁止回显、日志记录或
-  注入页面 DOM
+- **模型输出**：写回时经 Zod 校验（`AdviceSchema.parse`），不直接执行；文本级注入清理目前
+  不在写回路径上，见「输出反 prompt injection」
+- **研究 embedding 模型目录**：`LUOOME_RESEARCH_EMBEDDING_CONFIG` 只允许用 `apiKeyEnv` 引用凭证
+  环境变量，不保存 API key；配置解析错误和日志不得输出凭证值
 - **advice 回填**：`record_advice_outcome` 调用记录到 audit，但 outcome 数据本身不强制校验（用户主观回填）
 
 ## 报告漏洞
@@ -347,7 +377,6 @@ Advice 的 `reasoning`、`risks` 及 `basedOn.llmReasoning` 在落库前额外�
 - [x] Advice 与 trade 边界仍在（`trade` 不进入 MCP / 模型可调用工具表）
 - [x] advice 必含 disclaimers（不变量测试覆盖）
 - [x] advice 有效期限逻辑正确
-- [x] LLM 输出 sanitized 审计生效
 - [x] 错误信息不含密钥 / 路径细节
 - [x] 用户界面顶部固定免责声明
 - [x] 三个 MCP 实例白名单不重叠，且部署传入的 `LUOOME_EXPOSE_*` 一律丢弃

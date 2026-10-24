@@ -179,6 +179,12 @@ StrategyRecommendationPolicy 的使用范围。
 
 ### R2：日运行闭环与 AI 降级
 
+> 现状：R2 已完成，交付形态是**可审计周期 + facts-only**。下列任务 1 的编排链与任务 6～8 是
+> 当时的原始设计；DSH 瘦身（[详细设计](./ddd/luoome-dsh-transformation-detailed-design.md)）
+> 后内置 AI 洞察与仓内推荐已下线：`generate_strategy_insight` tool 不再存在，
+> `strategy-daily-cycle` 不再生成 insight 或 Advice，改为输出 facts-only 的 `preflight` 摘要与
+> `adviceCount`；Advice 由外部消费者经分析队列 `record_advice` 写入。
+
 #### 任务
 
 1. 新增深的 workflow 模块 `strategy-daily-cycle`，通过 `ctx.tools.*` 依次编排：

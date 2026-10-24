@@ -8,6 +8,12 @@
 > 和 [CONTEXT.md](../CONTEXT.md) 为准；当前执行顺序以
 > [开发计划](./development-plan.md) 和
 > [Strategy 可靠性开发计划](./strategy-reliability-development-plan.md) 为准。
+>
+> 历史章节出现的 `analyze_stock`、`daily-advice`、`market_outlook` 等内置 AI 能力已随
+> [DSH 瘦身详细设计](./ddd/luoome-dsh-transformation-detailed-design.md) 下线；战法（tactic）
+> 相关能力已在 strategy-watchlist 迁移中下线。这些名称只作为当时版本的事实记录保留，
+> 当前工具与 workflow 清单以 [ARCHITECTURE.md](./ARCHITECTURE.md) §8.1 与
+> `luoome tools list --json` 为准。
 
 ## v0.1 — Foundation ✅（已完成）
 
@@ -19,7 +25,7 @@
 - db 包：Drizzle schema + SQLite + in-memory repo（双实现）+ Advice 存储
 - tools 包：Tool registry + Zod → TS/MCP/OpenAI 自动推导 + 8 个最小工具：
   - read: `list_accounts`, `get_account`, `list_holdings`, `get_holding`, `get_advice`, `get_advice_stats`
-  - advice: `analyze_stock`（mock LLM，输出结构化 Advice + disclaimers + validUntil）
+  - advice: `analyze_stock`（mock LLM，输出结构化 Advice + disclaimers + validUntil；该 tool 已随 DSH 瘦身上下线）
 - mcp 包：stdio server，暴露 read + advice 类
 - cli 包：`luoome` 命令入口，至少 `tools list`, `tools call`, `advice list`, `advice stats`, `mcp serve`
 - tui 包：opentui 应用，`luoome tui` 显示持仓列表 + 今日建议（mock 数据）
@@ -27,7 +33,7 @@
 
 **验收**：
 - ✅ `bun run tui` 在终端显示 mock 持仓表格 + mock 建议列表
-- ✅ `bun run mcp` 起 stdio server，client 能 list tools + call `analyze_stock` 拿 mock advice
+- ✅ `bun run mcp` 起 stdio server，client 能 list tools + call `analyze_stock` 拿 mock advice（v0.1 验收时记录；`analyze_stock` 已随 DSH 瘦身上下线）
 - ✅ `bun test` 全绿
 - ✅ README + ARCHITECTURE + AGENTS + ROADMAP + SECURITY 齐备且反映 advisor 定位
 - ✅ Advice 实体的 6 个不变量都被 assert 覆盖
@@ -54,7 +60,7 @@
   缺 key 自动降级 mock；schema parse 失败重试 + 规则 fallback
 - ✅ TUI / Web 5 秒自动刷新（不卡顿，setInterval + onDestroy clear）
 - ✅ 缓存命中率日志可见（`QuoteCache.stats()` + `DailyBarCache.stats()`）
-- ✅ 13 个 tool 全部加载 + 2 个 workflow（sync-quotes / daily-advice）端到端跑通
+- ✅ 13 个 tool 全部加载 + 2 个 workflow（sync-quotes / daily-advice）端到端跑通（v0.2 验收时记录；`daily-advice` 已随 DSH 瘦身上下线）
 
 详细验证脚本与日志见各 commit message。
 
@@ -77,7 +83,8 @@
   `record_advice_outcome`, `send_notification`。
 - workflows 增量：`tacticScanWorkflow` / `riskReportWorkflow` / `dailyReviewWorkflow`。
 - cli 增量：`advice outcome <id> --followed true|false --pnl N --notes "..."`
-  + workflow 子命令（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）。
+  + workflow 子命令（sync-quotes / daily-advice / tactic-scan / risk-report / daily-review）
+  （v0.3 验收时记录；`daily-advice` 已随 DSH 瘦身上下线，`tactic-scan` 已在 strategy-watchlist 迁移中被 `run-strategies` 取代）。
 - tui 增量：[t] 战法扫描弹层（list_tactics → run_tactic × N → score_signals 精排 top 10）+
   [o] outcome 复盘弹层（近 20 条 advice + outcome 状态 + 回填指引）。
 - web 增量：hash 路由 `#dashboard` / `#tactics` / `#review` + 新 API

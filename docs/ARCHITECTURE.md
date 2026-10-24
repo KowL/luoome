@@ -1238,8 +1238,9 @@ Web 启动只有一种形态：本地单机装配（`apps/web/src/local-start.ts
 CSRF、验证码限流及租户隔离不随传输开关关闭；切回 HTTPS 后不复用 HTTP 会话。
 登录页通过匿名只读 `/api/auth/config` 获取邮件配置、注册及传输开关，不读取用户身份或部署凭证。
 
-模型配置只有一份：`$LUOOME_HOME/ai-models.json`，由本地 CLI/TUI/MCP 读取，密钥从环境取；
-模型推理由 DSH 承担，luoome 侧没有模型设置页，也不做用量计量。
+模型推理由 DSH 承担，luoome 侧没有模型设置页，也不做用量计量。仓内已无模型目录文件
+（原 `$LUOOME_HOME/ai-models.json` 随 `packages/adapters/src/llm/` 一并删除）；
+现存唯一的模型目录是研究 embedding 的 `LUOOME_RESEARCH_EMBEDDING_CONFIG`，密钥从环境取。
 
 没有 control.sqlite、没有租户：全部事实落在单机 `luoome.db`。
 core 的 `personal/` 只定义实体与不变量；db 的 memory/Drizzle 实现共享 contract tests。
