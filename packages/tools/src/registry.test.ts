@@ -1,3 +1,4 @@
+import { SIDE_EFFECTS } from '@luoome/core';
 import { describe, expect, it } from 'vitest';
 
 import { createRegistry, toolRegistry } from './registry.js';
@@ -470,6 +471,8 @@ describe('toolRegistry', () => {
     const dts = toolRegistry.toTypeScript();
     expect(dts).toContain('export type LuoomeToolName');
     expect(dts).toContain('export declare const luoomeToolMeta');
+    const union = /export type LuoomeSideEffect = ([^;]+);/.exec(dts)?.[1] ?? '';
+    expect(union).toBe(SIDE_EFFECTS.map((effect) => `'${effect}'`).join(' | '));
     for (const name of EXPECTED_TOOL_NAMES) {
       expect(dts).toContain(`'${name}'`);
     }

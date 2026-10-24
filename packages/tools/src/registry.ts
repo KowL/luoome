@@ -1,3 +1,4 @@
+import { SIDE_EFFECTS } from '@luoome/core';
 import { z } from 'zod';
 import type { Tool } from './define-tool.js';
 import {
@@ -283,7 +284,7 @@ const renderTypeScript = (tools: readonly Tool[]): string => {
 export type LuoomeToolName =
 ${names};
 
-export type LuoomeSideEffect = 'read' | 'write' | 'external' | 'trade';
+export type LuoomeSideEffect = ${SIDE_EFFECTS.map((effect) => `'${effect}'`).join(' | ')};
 
 export interface LuoomeToolMeta {
   readonly description: string;

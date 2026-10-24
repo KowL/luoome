@@ -89,7 +89,7 @@ core 包定义 repository **接口**，db 包用 Drizzle 实现。tools/workflow
 | `read` | 只读本地 | `list_holdings`, `get_advice` | ✅ |
 | `write` | 写本地状态 | `add_holding` | ⚠️ 可配置 |
 | `external` | 调用第三方 | `fetch_quote`, `send_notification` | ⚠️ 可配置 |
-| `trade` | 触发真实资金动作 | `place_order` | ❌ 永不 |
+| `trade` | 登记系统外已完成的资金动作 | `record_decision_trade` | ❌ 永不 |
 
 > DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后：原 `advice` 等级
 > （只读 + LLM 推理 + 落建议）随内置 AI 工具一并删除，`SideEffect` 只剩上表 4 级；
@@ -878,7 +878,7 @@ Web 的复盘、成交录入与补充报告端点沿用 write opt-in 和同源�
 | `write` | `add_holding`, `add_trade` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
 | `external` | `fetch_quote`, `send_notify` | ⚠️ opt-in | ⚠️ opt-in | ✅ |
 | `advice` | `analyze_stock`, `daily_advice` | ✅ | ✅ | ✅ |
-| `trade` | `place_order` | ❌ | ❌ | ⚠️ opt-in |
+| `trade` | `record_decision_trade` | ❌ | ❌ | ⚠️ opt-in |
 
 ### 7.2 Schema 推导
 

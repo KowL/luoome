@@ -3605,9 +3605,11 @@ describe('web tool 闸口：external 白名单与拒绝面', () => {
     }
   });
 
-  it('place_order（trade，契约未实现）→ 403 permission_denied', async () => {
+  it('未实现的 trade 类契约名（place_order）→ 404 not_found', async () => {
     const r = await callTool('place_order', {});
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);
+    const body = (await json(r)) as { ok: boolean; error?: { kind: string } };
+    expect(body.error?.kind).toBe('not_found');
   });
 
   it('不存在的 tool → 404 not_found', async () => {

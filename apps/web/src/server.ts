@@ -194,20 +194,6 @@ const WEB_ALLOWED_EXTERNAL: ReadonlySet<string> = new Set([
   'import_remote_research_document',
 ]);
 
-/**
- * external（白名单外）/trade tool 不通过 web 暴露：已在 registry 实现的被
- * sideEffect 门拦截（403 文案准确）；本表覆盖「契约里有名字但尚未实现」的
- * tool——同样按契约返回 403 permission_denied，而不是 404 not_found。
- * （write 默认不放行；未实现的 write 类契约 tool 走 not_found。）
- */
-const KNOWN_UNEXPOSED_TOOLS: Readonly<Record<string, SideEffect>> = {
-  sync_quotes: 'external',
-  send_notification: 'external',
-  generate_report: 'external',
-  place_order: 'trade',
-  cancel_order: 'trade',
-};
-
 /** Asia/Shanghai 当日 00:00 的 Date（web 与 workflow 用同口径）。 */
 const startOfTodayShanghai = (now: Date): Date => new Date(`${dateInShanghai(now)}T00:00:00+08:00`);
 
@@ -3271,13 +3257,7 @@ export const createWebApp = (
     const name = c.req.param('name');
     const tool = toolRegistry.get(name);
 
-    if (tool === undefined) {
-      const known = KNOWN_UNEXPOSED_TOOLS[name];
-      if (known !== undefined) {
-        return jsonResult(permissionDenied(`sideEffect=${known} 的 tool 不通过 web 暴露`));
-      }
-      return jsonResult(notFound('Tool', name));
-    }
+    if (tool === undefined) return jsonResult(notFound('Tool', name));
     const primaryAllowed =
       (EXPOSED_SIDE_EFFECTS.has(tool.sideEffect) && (tool.sideEffect !== 'write' || exposeWrite)) ||
       (tool.sideEffect === 'external' && exposeExternal && WEB_ALLOWED_EXTERNAL.has(name));
