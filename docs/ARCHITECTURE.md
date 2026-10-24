@@ -27,7 +27,7 @@ luoome = 织机 + 罗网：**罗**进来所有有价值的数据，**织**成一
 ### 1.3 显式要做的事
 
 - ✅ **生成可执行的投资建议**（buy / sell / hold / watch / avoid），带理由 + 证据 + 风险 + 信心度 + 免责声明
-- ✅ **建议可追溯**：每条建议都能回到当时的数据快照、StrategySignal、LLM 推理
+- ✅ **建议可追溯**：每条建议都能回到当时的数据快照、策略证据与生成来源（provenance）
 - ✅ **建议可复盘**：事后能验证"按这个建议做，结果如何"
 - ✅ 把建议当作数据存储在本地 SQLite，可被任意 tool / workflow / agent 检索
 
@@ -47,7 +47,7 @@ luoome = 织机 + 罗网：**罗**进来所有有价值的数据，**织**成一
 - ✅ 查询持仓 → tool
 - ✅ 添加持仓 → tool
 - ✅ 校验、发布和试跑 Strategy → tool
-- ✅ 生成建议 → tool / workflow
+- ✅ 生成建议 → 分析队列消费者（经 `record_advice` 写入）
 - ✅ 查看历史建议 → tool
 - ❌ 隐藏在 UI 菜单里、没有 tool 对应的功能 → 不允许
 
@@ -65,12 +65,12 @@ Tool 不允许"裸手写函数签名"。每个 tool 必须从 Zod schema 推导�
 ### 2.4 Workflow ≠ Tool
 
 - **Tool**：原子能力，无编排。可独立测试，可独立暴露给上层 agent。
-- **Workflow**：组合多个 tool + 可选 LLM 推理。有顺序、有循环、有条件分支。Workflow **不作为 tool 暴露**给上层 agent（避免循环编排），但可被人手动触发（CLI/TUI/Web）。
+- **Workflow**：组合多个 tool。有顺序、有循环、有条件分支。Workflow **不作为 tool 暴露**给上层 agent（避免循环编排），但可被人手动触发（CLI/TUI/Web）。
 
 例如：
-- `compute_pnl`（tool）= 纯计算
-- `analyze_stock`（tool）= 拉行情 + 算指标 + LLM 分析 → 输出结构化建议
-- `daily-advice`（workflow）= 扫所有持仓 + 调 `analyze_stock` 拿建议 + 排序 + 推送
+- `compute_indicators`（tool）= 纯计算
+- `get_account_facts`（tool）= 汇总账户现金、持仓与账本事实
+- `daily-review`（workflow）= 读当日建议 → 读准确率统计 → 读天梯 → 汇总成结构化日报
 
 ### 2.5 Repository Pattern
 
@@ -112,13 +112,13 @@ luoome/
 │   ├── core/           纯领域类型 + 不变量 + advice 模型
 │   ├── db/             Drizzle schema + repository 实现
 │   ├── tools/          Tool 注册表 + schema 生成
-│   ├── adapters/       行情 / LLM / 通知 / 券商 适配
-│   ├── workflows/      内置编排：review / scan / diagnose / advise
+│   ├── adapters/       行情 / 通知 / 事件 / 研究库 适配
+│   ├── workflows/      内置编排：review / report / watch / plan / strategy
 │   ├── mcp/            MCP server
 │   ├── cli/            命令行入口
 │   └── tui/            opentui 应用
 └── apps/
-    └── web/            Web 端（v0.4 起）
+    └── web/            Web 端
 ```
 
 ### 依赖方向（强约束）
@@ -275,43 +275,47 @@ const openApiSpec = toolRegistry.toOpenAPI();
 ### 4.6 Workflow（workflows 包）
 
 ```ts
-// workflows/daily-advice.ts
-export const dailyAdviceWorkflow = defineWorkflow({
-  name: 'daily-advice',
-  description: '为所有持仓股生成当日建议',
-  input: z.object({ accountId: z.string().uuid() }),
+// packages/workflows/src/daily-review.ts
+export const dailyReviewWorkflow = defineWorkflow({
+  name: 'daily-review',
+  description: '汇总当日建议、准确率统计与连板天梯，产出结构化日报',
+  input: DailyReviewInput,          // { timezoneOffsetHours }
   steps: [
-    step('fetch-holdings', (input, ctx) => ctx.tools.list_holdings.execute({ accountId: input.accountId })),
-    step('fetch-quotes', (holdings, ctx) => ctx.adapters.market.batchQuote(holdings.map(h => h.stockId))),
-    step('compute-pnl', ([holdings, quotes], ctx) => ctx.tools.compute_pnl.execute({ holdings, quotes })),
-    step('run-strategies', (data, ctx) => ctx.tools.run_strategy.execute({
-      strategyId: data.strategyId,
-      persist: true,
-    })),
-    step('analyze-each', (data, ctx) => parallel(data.holdings.map(h =>
-      ctx.tools.analyze_stock.execute({ stockId: h.stockId, context: data })
-    ))),
-    step('persist', (advices, ctx) => Promise.all(advices.map(a => ctx.repos.advice.save(a)))),
-    step('notify', (advices, ctx) => ctx.tools.send_notification.execute({
-      title: '今日持仓建议',
-      summary: `${advices.length} 条建议，其中 ${advices.filter(a => a.confidence >= 70).length} 条高信心度`,
-    })),
+    // 1. 读当日建议（日报要能看到已过期的）
+    async (prev, ctx) => {
+      const input = prev as DailyReviewInputT;
+      const res = await ctx.tools.get_advice.execute({
+        since: computeTodayStart(ctx.clock(), input.timezoneOffsetHours),
+        includeExpired: true,
+        limit: 500,
+      });
+      if (!res.ok) return res;       // 返回 ToolResult error 即短路
+      return { advices: res.data.advices, stats: null, input, ladder: null };
+    },
+    // 2. 读近 7 日准确率
+    async (prev, ctx) => {
+      const state = prev as ReviewState;
+      const r = await ctx.tools.get_advice_stats.execute({ since: sevenDaysAgo(ctx.clock()) });
+      if (!r.ok) return r;
+      return { ...state, stats: r.data };
+    },
+    // 3. 读当日 + 上一日天梯并算 diff（上游不可用 → ladder=null，不阻断日报）
+    ...
   ],
 });
 ```
 
-Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**（advice 持久化通过专用 `persist` tool 暴露，不绕过层级）。
+Workflow 通过 `ctx.tools.xxx.execute()` 调用 tool，**不允许直接调 repository 或 adapter**。写建议统一走 `record_advice`（分析队列写入路径），不绕过层级。步骤返回 `ToolResult` error 会短路整条 workflow；步骤抛 `InvariantError` 归为 `invariant_violation`，其它异常归为 `internal`，`run` 永不外抛。
 
-策略 Phase B 使用三个相关 workflow：
+策略相关 workflow：
 
 - `run-strategy-schedules` 原子抢占到期 `StrategySchedule`，再调用 `run_strategy`；调度租约负责
-  多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行。若调度
-  启用了 `StrategyRecommendationPolicy`，运行提交后继续调用 `strategy-recommendations`；
-- `strategy-recommendations` 从指定持久化 StrategyRun 的 selected 结果按评分、排名、每轮上限和
-  冷却政策筛选，通过 `analyze_strategy_candidate` 生成 Advice，并可经 notification tool 投递；
+  多实例 tick 防重，`strategyId + strategyVersionId` 运行租约同时覆盖手工与自动正式运行。
+  运行提交后只产出 facts-only 的 `preflight` 摘要与 `adviceCount`，仓内不再生成 Advice；
 - `complete-strategy-observations` 先通过 tool 同步 qfq 日线，再通过 tool 补齐到期的
-  SignalObservation。样本未到期保持 pending，不阻塞其他样本；配置的 T+n 节点完成后只对受影响
-  股票调用 `strategy-recommendations`。
+  SignalObservation。样本未到期保持 pending，不阻塞其他样本。
+- 候选建议由外部消费者经 `record_advice` 写入（见 §6.3 分析队列）；仓内已无
+  `strategy-recommendations` workflow 与 `analyze_strategy_candidate` tool。
 
 `luoome start` / `luoome web serve` 在进程内每分钟唤醒 `strategy-daily-cycle`，启动时也立即
 检查一次，不要求用户配置外部 cron；多 Web 实例仍由 lease 防重。观察补全等低频任务的外部 cron
@@ -388,7 +392,7 @@ Adapter manager 提供：
   原生批量空返回记 `no_data`，部分返回记 `partial_data`，完整结果用最早的可信上游时间
   表达 `dataAsOf`；含 retrieval 时间时不声明数据新鲜度。结果按请求 key 回写缓存，允许
   裸代码请求匹配带后缀响应，但不同交易所后缀不能相互匹配。
-- 全市场快照路由（为扫描候选补充可选快照价，也供 LLM 分组生成候选上下文；
+- 全市场快照路由（为扫描候选补充可选快照价，也供消费者按标的分组拼装事实包；
   `run_strategy` 全市场扫描的候选身份全集必须来自
   `StockUniverse coverage='CN_A_SHARES_SH_SZ' status='active'`，快照不得增删候选。
   Manager 只路由注册了 `market-snapshot` 的源，带 TTL 缓存默认 5 分钟；
@@ -498,23 +502,32 @@ interface ToolContext {
   repos: RepositoryRegistry;
   adapters: {
     market: MarketDataAdapterLike;
-    llm: LLMAdapterLike;
+    stockUniverse?: StockUniverseManagerLike;
   };
-  agent?: AgentRuntimeLike;
+  notification?: NotificationManagerLike;
+  eventProviders?: readonly StockEventProviderLike[];
   limitUpLadder?: LimitUpLadderManagerLike;
   dragonTiger?: DragonTigerManagerLike;
   northboundFlow?: NorthboundFlowManagerLike;
   news?: NewsManagerLike;
+  sectorQuote?: SectorQuoteManagerLike;
   ashareSentiment?: AShareSentimentManagerLike;
+  researchVault?: ResearchVaultAdapterLike;
+  researchRemote?: ResearchRemoteImportAdapterLike;
+  researchEmbedding?: ResearchEmbeddingAdapterLike;
+  researchVaultGitSync?: ResearchVaultGitSyncAdapterLike;
+  fundamentalData?: FundamentalDataAdapterLike;
   user: { id: string; defaultAccountId: string };
   clock: () => Date;
   logger: Logger;
+  auditLog?: AuditLoggerLike;
+  abortSignal?: AbortSignal;
 }
 ```
 
-`ctx` 是唯一被允许注入依赖的方式。`AgentRuntimeLike` 是 SDK 无关投影；AI SDK 的
-`LanguageModel` / `ToolLoopAgent` 类型只存在于 adapters。`agent_run` 从 registry
-构造显式只读能力白名单，不能绕过 tool 契约直接访问 repository 或 adapter。
+`ctx` 是唯一被允许注入依赖的方式。**仓内不注入模型 SDK**：`ToolContext` 没有 LLM / Agent
+槽位，模型推理在 DSH 宿主侧完成，经分析队列写回（§6.3）。各 manager 缺失时对应能力
+按 `unavailable` 降级，不静默回落到别的数据源。
 `limitUpLadder` 等非行情 manager 是日级批量快照端口，保持为顶层可选字段，
 不混入逐标的实时行情 Gateway；各 manager 的必填 `status()` 是统一观测端口，
 直接委托各自 registry 的进程内健康观测（见 §4.7）。
@@ -560,8 +573,8 @@ ensureSchema 只保留活表的幂等启动迁移（加列 / 结构演进），�
 最新版，列表先按周期收敛再应用状态和条数筛选，历史版本仍可按 ID 或指定 version 读取。正文只允许受限
 section/block，明确区分 `generatedAt` 与 `dataAsOf`，required 维度缺失时必须为
 `partial` 并保存原因。`ReportRepository` 同时提供 in-memory 与 Drizzle 实现；
-`get_report` / `list_reports` / `render_report` 为 read，`save_report` /
-`set_report_delivery_status` 为 write。Web 报告历史、详情和导出统一调用这些 tool，
+`get_report` / `list_reports` / `render_report` 为 read 且在公共 registry 内；`save_report` /
+`set_report_delivery_status` 为 write，属 workflow 内部 tool，不进公共 registry。Web 报告历史、详情和导出统一调用这些 tool，
 不复制 partial 判定或 renderer。详细设计见
 [Vibe A 股市场报告与策略研究迁移详细设计](./ddd/vibe-ashare-report-and-strategy-research-detailed-design.md)。
 
@@ -671,29 +684,39 @@ export interface AdviceReasoning {
 }
 
 export interface Advice {
+  readonly provenance?: AnalysisProvenance; // 分析队列写回时的生成来源（模型 / 会话 / 技能版本）
   readonly id: string;
   readonly subjectKind: AdviceSubjectKind;
   readonly subjectId: string;          // stockId / accountId / sectorName ...
+  readonly stockName?: string;          // 标的名称快照，历史建议回显不依赖外部查询
   readonly decision: AdviceDecision;
   readonly confidence: number;          // 0-100
   readonly horizon: AdviceHorizon;
+  readonly entryPrice?: Money;          // 建议买点
+  readonly entryPriceLow?: Money;       // 入场区间下沿
+  readonly entryPriceHigh?: Money;      // 入场区间上沿
+  readonly targetPositionPct?: number;  // 目标仓位（按账户总资产）
+  readonly targetPrice?: Money;         // 目标价 / 卖点
+  readonly stopLoss?: Money;            // 止损价
   readonly reasoning: AdviceReasoning;
   readonly risks: readonly string[];   // 风险点
   readonly disclaimers: readonly string[]; // 必填，至少包含基础免责声明
   readonly sourceTool?: string;         // 哪个 tool 产出
   readonly sourceWorkflow?: string;    // 哪个 workflow 产出
-  readonly basedOn: AdviceDataSnapshot; // 当时的数据快照引用（行情、信号、LLM 推理文本）
+  readonly basedOn: AdviceDataSnapshot; // 当时的数据快照引用（行情、指标、天梯、策略证据）
   readonly validFrom: Date;
   readonly validUntil: Date;            // 过期时间（不再被采纳）
   readonly createdAt: Date;
+  readonly outcome?: AdviceOutcome;     // v0.3 起：可选的回填结果（事后复盘）
 }
 
 // 数据快照（可被 advice 引用，事后能复盘）
 export interface AdviceDataSnapshot {
   readonly quotes?: Record<string, Quote>;
   readonly indicators?: Record<string, TechnicalIndicators>;
-  readonly strategySignals?: readonly StrategySignal[];
-  readonly llmReasoning?: string;        // LLM 原始推理（用于审计）
+  readonly llmReasoning?: string;        // 经过 sanitized 的 LLM 推理文本（用于审计）
+  readonly ladder?: AdviceLadderSnapshot;  // 连板天梯摘要
+  readonly strategy?: StrategyAdviceEvidence; // 策略证据（版本、运行、信号、观察）
   readonly dataAsOf: Date;               // 数据截止时间
 }
 
@@ -727,6 +750,10 @@ export interface AdviceOutcome {
 
 luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步走。每一步都有 tool / workflow / 数据对应。
 
+**当前形态**：仓内不跑模型推理。core / tools / workflows / db / adapters 不依赖任何模型 SDK；
+推理由 DSH 宿主的消费者实例承担，经分析队列把结论写回本仓（见 §6.3）。仓内保留的
+全是确定性事实计算与状态读写。
+
 ### 6.1 数据层
 
 来源：
@@ -737,85 +764,73 @@ luoome 的 advisor 系统按"**数据 → 分析 → 建议 → 复盘**"四步�
 - **AlertPlan**：引用 Watchlist 的提醒规则与送达策略
 - **持仓**：自己的交易历史、成本、盈亏
 - **笔记 / RAG**：用户自己的研究笔记 + 公开资料
-- **LLM**：综合推理（受控输入，Zod 校验输出）
+- **分析队列**：事实包冻结、租约认领与结论写回（见 §6.3）
 
 ### 6.2 分析层
 
-工具化的纯计算 + LLM 推理：
+工具化的确定性计算与事实读取（不含模型推理）：
 
 | 工具 | 输入 | 输出 |
 |---|---|---|
-| `compute_pnl` | holdings + quotes | PnL breakdown |
-| `compute_risk_metrics` | holdings + history | VaR / Sharpe / 最大回撤 |
 | `compute_indicators` | daily bars | MA / RSI / MACD / BOLL |
 | `run_strategy` | StrategyVersion + universe | StrategyRun + results + signals |
+| `get_account_facts` | 账户 + 持仓 + 行情 | 账户事实（现金、持仓市值、账本指纹） |
+| `evaluate_trading_plan_budget` | 账户事实 + 候选计划 | 预算校验结果 |
 | `run_local_selector_research` | PIT StockUniverse + batch qfq DailyBar revisions + versioned params | deterministic cross-sectional score/evidence/unavailable（read-only research） |
 | `assess_adaptive_personality` | StrategyVersion + isolated evaluation sessions + observations/benchmark | versioned credibility gate；insufficient evidence is unavailable（never publishes） |
 | `get_stock_research_view` | explicit ResearchTopic/Document links + structured facts | stock research profile with evidence/counter-evidence/unknown（not probability/Advice） |
 | `get_strategy_insight_facts` | Strategy runs + signals + observations | 可引用的确定性 facts |
-| `generate_strategy_insight` | 已校验 facts | 带 factRefs 的解释性洞察（非 Advice） |
-| `analyze_strategy_candidate` | selected StrategyResult + signals + observations | 可追溯 **Advice** |
-| `sync_watchlist_source` | source candidates | membership diff + sync audit |
-| `analyze_stock` | stock + 上下文 | **Advice[]**（buy/sell/hold/...） |
 
 ### 6.3 建议层
 
-`analyze_stock` 是核心 advice tool：
+仓内不再有 `analyze_stock` 这类内置推理 tool。建议由**分析队列**产生：外部消费者
+（DSH headless 实例）认领 job、读取冻结事实包、用宿主模型推理，再经队列工具把结论写回。
 
-```ts
-export const analyzeStockTool = defineTool({
-  name: 'analyze_stock',
-  description: '对指定股票做综合分析并产出结构化投资建议',
-  sideEffect: 'advice',
-  input: AnalyzeStockInput,
-  output: AnalyzeStockOutput,  // { advice: Advice, evidence: DataSnapshot }
-  handler: async (input, ctx) => {
-    // 1. 拉行情 + 指标
-    const quote = await ctx.adapters.market.fetchQuote(input.stockId);
-    const bars = await ctx.adapters.market.fetchDailyBars(input.stockId, last60Days);
-    const indicators = computeIndicators(bars);
+队列工具（写工具需 `LUOOME_EXPOSE_QUEUE=true`；读工具随 read 默认暴露。部署侧按
+`QUEUE_TOOL_NAMES` 名单二次收窄，漏配只会让工具更少）：
 
-    // 2. 读取已持久化的 StrategySignal
-    const signals = await ctx.repos.strategyRun.signalsByStock(input.stockId);
+| 工具 | 副作用 | 用途 |
+|---|---|---|
+| `claim_analysis_jobs` | queue | 按 kind/subject 认领待分析 job，取回租约 `claimToken` 与绑定的冻结事实包 |
+| `complete_analysis_job` | queue | 成功写回：结论 + provenance，原子完成 job |
+| `record_advice` | queue | 把结论落成 Advice 实体（`sourceTool` 记为 `complete_analysis_job` 或 `record_advice`） |
+| `record_analysis_result` | queue | 落非 Advice 的分析结果 |
+| `fail_analysis_job` | queue | 失败写回：错误码 + 是否可重试 + 退避秒数 |
+| `get_analysis_context` | read | 读取该事实包快照（`context.id` + `contextHash`），审计读取不等于刷新 |
+| `get_analysis_job` | read | 读取分析任务及终态摘要 |
+| `list_analysis_jobs` | read | 列出分析任务 |
+| `get_analysis_metrics` | read | 读取队列运行指标 |
 
-    // 3. 拉持仓上下文（如有）
-    const position = await ctx.repos.holding.findByAccountAndStock(ctx.user.accountId, input.stockId);
+写入路径：
 
-    // 4. LLM 推理（schema-constrained decoding）
-    const llmOutput = await ctx.adapters.llm.generate({
-      system: ANALYZE_SYSTEM_PROMPT,
-      schema: AdviceLLMSchema,
-      data: { quote, indicators, signals, position, notes: input.notes },
-    });
-
-    // 5. 组装 Advice 实体
-    const advice: Advice = {
-      id: crypto.randomUUID(),
-      subjectKind: 'stock',
-      subjectId: input.stockId,
-      decision: llmOutput.decision,
-      confidence: llmOutput.confidence,
-      horizon: llmOutput.horizon,
-      reasoning: llmOutput.reasoning,
-      risks: llmOutput.risks,
-      disclaimers: STANDARD_DISCLAIMERS,
-      sourceTool: 'analyze_stock',
-      basedOn: { quotes: { [input.stockId]: quote }, indicators: { [input.stockId]: indicators }, llmReasoning: llmOutput.raw, dataAsOf: ctx.clock() },
-      validFrom: ctx.clock(),
-      validUntil: addDays(ctx.clock(), adviceExpiryDays[llmOutput.horizon]),
-      createdAt: ctx.clock(),
-    };
-
-    // 6. 校验 + 持久化
-    assertAdviceInvariants(advice);
-    await ctx.repos.advice.save(advice);
-
-    return { advice, evidence: advice.basedOn };
-  },
-});
+```txt
+[DSH 消费者]  claim_analysis_jobs ──► { job, claimToken, context }
+      │
+      ▼
+             get_analysis_context(contextId) ──► 冻结事实包（行情/持仓/策略证据）
+      │
+      ▼
+             宿主模型推理（模型不在本仓，provenance 记模型与技能版本）
+      │
+      ▼
+             complete_analysis_job(jobId, claimToken, result, provenance)
+                    ├─► record_advice ──► Advice 落库（含 provenance）
+                    └─► record_analysis_result ──► 分析结果落库
 ```
 
-LLM 推理部分用 schema-constrained decoding（OpenAI structured outputs / Anthropic tool use / Zod 校验 + retry），保证输出符合 Advice 结构。
+事实包过期时（`complete` 返回 `context_expired` / `stale_context`），消费者重新取事实包，
+再用 `claim_analysis_jobs({ owner, refresh: { jobId, claimToken, contextId } })` 刷新一次绑定；
+旧快照仍可审计但不能写回，同一有效租约只允许刷新一次。租约保证同一 job 只被一个消费者
+完成；租约超时的 job 被回收后可重新认领。
+
+写回路径的校验（`packages/tools/src/queue/record.ts`）：
+
+- 事实包必须存在且 `kind` 以 `advice_` 开头，否则 `context_mismatch`
+- `contextHash` 必须等于 `analysisHash({ facts, dataAsOf })`，否则 `context_mismatch`
+- `provenance.evidenceFactIds` 必须全部落在事实包的 `factIds` 内，否则 `unknown_fact_reference`
+- 超过 `writeUntil` / `expiresAt` → `context_expired`；事实包 `dataAsOf` 距今超过 30 分钟 → `stale_context`
+- `AdviceSchema.parse` 校验结构，`disclaimers` 由工具直接填入 `STANDARD_DISCLAIMERS`，调用方无法省略
+- `validUntil` 由工具按 horizon 计算：intraday 取当日 15:00，其余取 `adviceExpiryDays[horizon]` 个交易日
 
 ### 6.4 复盘层
 
@@ -904,6 +919,7 @@ type ToolError =
   | { kind: 'adapter_error'; adapter: string; cause: string; recoverable: boolean }
   | { kind: 'permission_denied'; required: string }
   | { kind: 'llm_error'; provider: string; cause: string; retryable: boolean }
+  | { kind: 'lease_lost_before_commit'; message: string }
   | { kind: 'internal'; cause: string };
 ```
 
@@ -915,31 +931,46 @@ type ToolError =
 - 单元测试：mock ctx，正常路径 + 错误路径
 - Zod schema 测试：合法输入通过、非法输入报错
 - 不变量测试：违反不变量时返回 `invariant_violation`
-- advice 类额外：LLM mock，验证输出结构 + disclaimers 必填 + validUntil 正确
+- 写建议类额外：disclaimers 必填 + validUntil 按 horizon 正确计算 + 事实包 contextHash 校验
 
 ## 8. Workflow 系统
 
 ### 8.1 内置 workflow
 
-- `daily-advice`：每个持仓股 → `analyze_stock` → 持久化 → 推送高分建议（v0.2）
-- `run-strategies`：运行已发布 Strategy，并按 active 显式订阅投影到目标 Watchlist；只有 published operational run 可投影
+- `daily-review`：当日建议 + 7 日准确率 + 连板天梯 → 结构化日报
+- `opening-report`：生成并幂等保存指定交易日的结构化开盘简报
+- `closing-report`：生成并幂等保存指定交易日的结构化收盘复盘
+- `closing-report-cutoff`：收盘截止时点核对各账户批次状态；批次未完成也按账户发布并显式标 partial
+- `weekly-report`：按本周真实交易日生成并幂等保存结构化周报
+- `risk-report`：持仓 + 集中度 + VaR 估算拼成风险日报（大盘背景随内置 AI 下线移除）
+- `snapshot-account-performance`：按账户快照绩效指标（基准未配置时保持 unavailable）
+- `strategy-autonomy-weekly`：周度评估策略自动发布资格与自治动作
+- `replay-strategy-range`：在指定区间重放策略运行
+- `evaluate-event-rules`：按 AlertPlan 规则对股票事件求值并产出提醒
+- `run-strategies`：顺序运行 active Strategies，并按 active 显式订阅投影到目标 Watchlist；只有 published operational run 可投影
+- `run-strategy-schedules`：原子抢占到期 `StrategySchedule` 并触发策略日循环
+- `complete-strategy-observations`：同步 qfq 日线并补齐到期的 SignalObservation
+- `strategy-daily-cycle`：策略日循环（交易日判定、运行发布、观察补齐、账户计划批次）
+- `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot
+- `sync-stock-universe`：同步股票目录与覆盖范围
+- `sync-stock-events`：盘后同步公司事件
 - `sync-portfolio-watchlists`：按账户同步 portfolio 来源
-- `market-outlook`：拉大盘指数 + 板块涨跌 → LLM 综合 → 市场观点（v0.3）
-- `risk-report`：风控指标 + 持仓建议（v0.3）
-- `sync-quotes`：拉所有持仓的最新行情 → 写 PriceSnapshot（v0.2）
+- `sync-research-vault`：同步本地研究 Vault 索引
+- `sync-research-vault-remote`：安全 fast-forward Git Research Vault，并通过既有流程重建本地索引
 - `post-market-data`：交易日盘后同步股票目录与相关股票 qfq 日线，目录或单股失败时保留成功项并返回 partial
-- `daily-review`：持仓 + 行情 + PnL + LLM 总结 → Markdown 报告（v0.3）
 - `intraday-watch`：AlertPlan → Watchlist members → quote/previous close/persisted
   StrategySignal/event → edge/cooldown/daily limit → WatchTrigger → notification
 - `trading-plan-daily-cycle`：账户级盘后计划批次 —— **以当前持仓（账本 Holding）为唯一复核来源**，
-  逐个跑 `analyze_position`（同时把当日行情落库）后再派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
+  先用 `sync_quotes` 把当日行情落库，再读取当日已持久化的 Advice（`sourceTool='analyze_position'`
+  的持仓建议与 `sourceTool='analyze_strategy_candidate'` 的候选）派生「账户事实」（现金字段 + 持仓 × 行情 + 指纹），
   候选建议 → `TradingPlan` 不可变版本 → 组合预算校验；账户事实不可用（缺合格行情或账本未对齐）时不激活精确仓位计划。
+  **仓内不产生新建议**：无对应 Advice 时只留复核痕迹，未来由外部消费者经 `record_advice` 写入。
   盘中持仓估值与行动候选复用 core 的行情资格判断：须有上游事件时间，事件与当前时点均在交易时段，
   抓取完成不晚于判断时点且事件距判断不超过 120 秒。盘外实时报价仍须有上游时间；规范日线的收盘价
   按既有交易日口径使用。缺合格行情时，最近报价只保留参考估值和限制说明，账户事实为 `unavailable`，
   `totalAssets` / `stockMarketValue` 为 `null`，不能借参考价激活其它股票的精确预算或行动计划。
-  候选（`analyze_strategy_candidate`）的 `watch` 也必须给出条件性价格计划（区间/买点/目标仓位/目标价/止损），
-  缺价位时计划标为草案并写明原因；规则兜底建议（AI 不可用）同样只留草案。
+  候选的 `watch` 也必须给出条件性价格计划（区间/买点/目标仓位/目标价/止损），
+  缺价位时计划标为草案并写明原因。
   生效计划按 horizon 的最长持有交易日独立设置硬期限，来源 Advice 在构建时必须有效；
   草案最多两个交易日，连续草案继承截止时间，重复或已过期且仍受阻的草案不新增版本。
   条件、账户前提、反证和风险未变化时维持尚未过期的原生效版，复核结果及本次 Advice 引用
@@ -972,7 +1003,7 @@ type ToolError =
 - 预警执行：`intraday-watch` 与 `evaluate-event-rules` 共用 SQLite 租约（120 秒有效期、30 秒心跳，
   工具调用前检查所有权）；并发调用返回可重试错误。所有优先级都进入投递：normal 与 urgent 同样受冷却
   和每日上限约束，优先级只决定消息 level 与标题前缀；`notifyOnRecovery` 未开启的 recovered 与试跑
-  仍为 `not-requested`。`commit_watch_evaluation` 在同一事务校验 owner
+  仍为 `not-requested`。workflow-only 的 `commit_watch_evaluation` 在同一事务校验 owner
   并提交 Trigger + WatchRuleState，试跑不进入提交。通知前保存 deliveryAttempts/lastDeliveryAttemptAt，
   后续轮次补偿当日 failed/pending（最多三次，退避 1/5 分钟，停用计划/移除成员/额度不足时不发送）。
   每日额度包含重试和已开始发送的 pending；WatchRun 本轮触发列表可以包含同 id 的补偿投递。
@@ -987,8 +1018,9 @@ type ToolError =
   正文空指标聚合说明，全空表格列省略，诊断缺口去重后集中展示；结构化快照保留原始 null 和缺失原因。
   单日账户绩效向前取一个交易日作为收益基点；未配置基准不输出空指标，多账户 TWR/回撤不做算术聚合。
   情绪指数按请求交易日逐条筛选，混合日期仅使该维度 partial，不丢弃同日行情；空返回仍为 unavailable。
-  推荐 V1/V2 共用建议摘要，规则兜底按单批合并提示，仍保存逐股 Advice 和推荐批次审计。
-- **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` / `market-outlook` 通过
+  规则兜底标记（`RULE_FALLBACK_PREMISE_MARKER` / `RULE_FALLBACK_EVIDENCE_MARKER`）只用于识别
+  存量数据：带标记的建议不是模型研究结论，通知中合并提示且不形成交易判断。
+- **Phase 2/3 已实施**：连板天梯联动 workflow —— `daily-review` 通过
   `limit_up_ladder` 与 `limit_up_ladder_compare` tool 消费结构化事实，报告、行情和研究视图复用同一
   日期/股票快照；Strategy scan/scheduled 另写 PIT 快照，replay 只读历史表（设计：[docs/ddd/limit-up-ladder-detailed-design.md](./ddd/limit-up-ladder-detailed-design.md)）。
 
@@ -1003,12 +1035,17 @@ type ToolError =
 | 必须有 Zod schema | ✅ | ✅ |
 | 必须可测试 | ✅ | ✅ |
 
-### 8.3 LLM in workflow
+### 8.3 模型推理不在 workflow 内
 
-Workflow 可选 LLM 步骤。LLM 步骤必须：
+DSH 瘦身（docs/ddd/luoome-dsh-transformation-detailed-design.md）后，仓内 workflow **不含模型推理步骤**：
+core / tools / workflows / db / adapters 不依赖任何模型 SDK，`ToolContext` 也没有 LLM 槽位。
+需要模型结论的流程走**分析队列**：外部消费者推理后经 `record_advice` / `record_analysis_result`
+写回本仓（§6.3），workflow 只消费已落库的事实与 Advice。
+
+因此 workflow 步骤的约束是：
 - 输入是结构化数据（不是字符串拼接）
-- 输出经过 Zod 校验（schema-constrained decoding 或 JSON mode）
-- 失败 fallback：纯数据输出 + 标注"无 LLM 摘要"
+- 只经 `ctx.tools.*.execute()` 取事实与写入，不直接访问 repository / adapter
+- 步骤返回 `ToolResult` error 即短路；抛 `InvariantError` 归 `invariant_violation`，其它异常归 `internal`
 
 ## 9. MCP Server
 
@@ -1020,17 +1057,31 @@ v0.3+：HTTP/SSE（远程、移动）。
 ### 9.2 暴露策略
 
 ```ts
-const mcpServer = createMcpServer({
-  registry: toolRegistry,
-  exposure: {
-    allowSideEffects: ['read', 'advice'],  // 默认 read + advice 全部暴露
-    denySideEffects: ['trade'],             // trade 永远禁
-    tagFilter: ['finance', 'portfolio', 'advice'],
-  },
-});
+// packages/mcp/src/exposure.ts
+export const resolveAllowedSideEffects = (
+  env: NodeJS.ProcessEnv = process.env,
+): ReadonlySet<SideEffect> => {
+  if (env.LUOOME_EXPOSE_TRADE === 'true') {
+    throw new Error(
+      'LUOOME_EXPOSE_TRADE=true is not allowed: trade tools are never exposed over MCP ' +
+        '(AGENTS.md「副作用与权限」硬约束)。',
+    );
+  }
+  const allowed = new Set<SideEffect>(['read']);
+  if (env.LUOOME_EXPOSE_WRITE === 'true') allowed.add('write');
+  if (env.LUOOME_EXPOSE_EXTERNAL === 'true') allowed.add('external');
+  if (env.LUOOME_EXPOSE_QUEUE === 'true') allowed.add('queue');
+  return allowed;
+};
 ```
 
-read + advice 是默认暴露的（它们都是只读，不会破坏数据完整性）。write / external / trade 必须 opt-in。
+read 默认暴露；write / external / queue 须显式 opt-in。trade 没有 opt-in 通道 ——
+`LUOOME_EXPOSE_TRADE=true` 直接让 MCP 启动失败，trade 类工具同时被 `selectExposedTools`
+按类型过滤掉（`sideEffect === 'trade'` 或 `requiredCapabilities` 含 `'trade'` 都拒绝）。
+
+工具名单另有两层收窄：`LUOOME_EXPOSE_TOOLS` 是显式白名单（**显式设为空即 fail closed**，
+只有不设该变量才表示全部允许）；`LUOOME_EXPOSE_DENY` 是黑名单。私有研究类 tool
+（`privateResearchTools`）默认进黑名单，需 `LUOOME_EXPOSE_RESEARCH=true` 才放行。
 
 ### 9.3 MCP tool 命名
 
@@ -1040,79 +1091,85 @@ luoome 内部 snake_case，MCP 同样 snake_case，OpenAI 同样 snake_case。**
 
 | 消费者 | 入口 | 暴露范围 |
 |---|---|---|
-| CLI | `bin/luoome <cmd>` | 全量 |
+| CLI | `bin/luoome <cmd>` | 全量（`tools call` 不设副作用闸口） |
 | TUI | opentui app | 全量（含交互） |
-| Web | Bun.serve HTTP | 全量（除 trade，需 2FA） |
-| MCP | stdio server | 白名单（read + advice 默认） |
+| Web | Hono HTTP API | read 默认；write 需 opt-in + 同源校验；trade 仅走专用人工路由 |
+| MCP | stdio server | read 默认；write / external / queue 需 opt-in；trade 永不 |
 
 Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 ## 11. 数据流示例
 
-### 场景 A：Claude Desktop 问"今天盈亏 + 建议"
+### 场景 A：MCP 客户端问"今天盈亏 + 已有建议"
 
 ```txt
-[Claude Desktop LLM]
-      │  决策：调 compute_pnl + analyze_stock for each holding
+[MCP 客户端 LLM]
+      │  决策：调 get_account_facts + get_advice
       ▼
 [MCP stdio] ───► luoome MCP Server
                     │
-                    ├──► list_holdings (read)         ──► HoldingRepo ──► SQLite
-                    ├──► batch_quote (read)           ──► MarketAdapter ──► Eastmoney
-                    ├──► compute_pnl (read)           ──► 纯计算
-                    └──► analyze_stock (advice) ×N    ──► LLM + StrategySignal + 数据
+                    ├──► list_holdings (read)        ──► HoldingRepo ──► SQLite
+                    ├──► get_account_facts (read)    ──► 现金 + 持仓市值 + 账本指纹
+                    └──► get_advice (read)           ──► AdviceRepo ──► SQLite（已落库的建议）
                     │
                     ▼
-[MCP stdio] ◄── { pnl: {...}, advices: [Advice, ...] }
+[MCP stdio] ◄── { facts: {...}, advices: [Advice, ...] }
       │
       ▼
-[Claude Desktop LLM]  整合生成自然语言答复（含免责声明）
+[MCP 客户端 LLM]  整合生成自然语言答复（保留反证、风险、免责声明、有效期）
 ```
 
-### 场景 B：TUI 看今日建议
+默认暴露面只有 read；要取实时行情需另开 `LUOOME_EXPOSE_EXTERNAL=true` 才能用 `batch_quote`。
+**客户端拿不到本仓现场生成的建议** —— 建议只能来自已落库的 Advice（由分析队列消费者写入）。
+
+### 场景 B：TUI 看持仓与已有建议
 
 ```txt
 [TUI 启动]
    │
    ▼
-[opentui] ───► ctx.workflows.daily_advice.execute({ accountId })
+[opentui] ───► list_holdings + get_advice
                   │
-                  ├──► list_holdings
-                  ├──► batch_quote
-                  ├──► run_strategy (持仓范围)
-                  └──► analyze_stock ×N (并发)
+                  ├──► list_holdings  ──► HoldingRepo
+                  └──► get_advice     ──► AdviceRepo（已落库建议，按 subjectId 取最新）
                   │
                   ▼
-              [opentui 渲染建议面板：标的 / 决策 / 信心度 / 理由摘要]
-              [按 r 键：手动刷新重跑 workflow]
+              [opentui 渲染持仓面板：决策 / 信心度 / 有效期 / 理由 / 证据 / 反证 / 风险]
+              [无对应建议时显示「（暂无建议）」—— 内置 AI 已下线，不再本地生成]
 ```
 
-### 场景 C：cron 推送每日建议
+### 场景 C：DSH 消费者处理待分析队列
 
 ```txt
-[launchd / cron] 每天 8:30
+[DSH 定时任务 / 队列唤醒]
       │
       ▼
-[luoome run daily-advice]  ──► CLI 入口
-                                  │
-                                  ▼
-                            workflows/daily-advice
-                                  │
-                                  ├──► tools.list_holdings
-                                  ├──► tools.batch_quote
-                                  ├──► tools.run_strategy
-                                  ├──► tools.analyze_stock ×N
-                                  └──► tools.send_notification
-                                  │
-                                  ▼
-                            [飞书 Webhook 推送建议卡片]
+[luoome-worker 消费者实例] ───► claim_analysis_jobs (queue)
+      │                                   │
+      │                                   ▼
+      │                         { job, claimToken, context }
+      │                                   │
+      │                                   ▼
+      │                         get_analysis_context (read) ──► 冻结事实包
+      │                                   │
+      │                                   ▼
+      │                         宿主模型推理（不在本仓，模型信息记进 provenance）
+      │                                   │
+      │                                   ▼
+      └──► complete_analysis_job (queue) ─┴─► record_advice (queue) ──► Advice 落库
+                                                   │
+                                                   ▼
+                                          [TUI / MCP / Web 读到新 Advice]
 ```
+
+事实包过期时消费者重新取事实包并用 `claim_analysis_jobs(refresh=...)` 刷新绑定；
+租约超时未完成的 job 回收后可被重新认领。
 
 ## 12. 安全模型
 
 详见 [SECURITY.md](./SECURITY.md)。要点：
 
-- 5 级副作用：`read / write / external / advice / trade`，trade 永不暴露
+- 5 级副作用：`read / write / external / queue / trade`，trade 永不暴露
 - advice 永远不直接触发 trade，trade 永远需要 human-in-the-loop
 - advice 输出必含 disclaimers
 - advice 可被 outcome 验证，准确率可统计
@@ -1132,9 +1189,12 @@ Web 端最小方案：Hono HTTP API + 同源 SPA。前后端共享 Zod schema。
 
 ### 13.2 加新 advice workflow
 
-1. 在 `workflows/<name>-advice.ts` 用 `defineWorkflow` 定义
-2. 通过 `ctx.tools.analyze_stock.execute()` 拿建议
-3. 通过 `ctx.tools.*.execute()` 获取事实和写入结果，不直接访问 repository 或 adapter
+仓内 workflow 不再生成 advice；新增 workflow 只编排已有事实与已落库 Advice：
+
+1. 在 `packages/workflows/src/<name>.ts` 用 `defineWorkflow` 定义
+2. 通过 `ctx.tools.get_advice.execute()` / `ctx.tools.get_advice_stats.execute()` 读取已有建议，
+   通过 `ctx.tools.*.execute()` 获取事实和写入结果，不直接访问 repository 或 adapter
+3. 需要产生新建议时，交给分析队列消费者（`record_advice`），不要在 workflow 内引入模型调用
 4. 加 workflow 集成测试；测试替身只限测试边界，生产路径不注入 mock 数据
 
 ### 13.3 加新数据源
